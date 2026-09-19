@@ -59,8 +59,10 @@ class ElementWrapper:
             return []
 
     def text_content(self) -> str:
-        """Get all text content from this element."""
-        return self._root.text or ""
+        """Full text of this element AND all descendants (matches lxml's native
+        .text_content()). The previous `.text or ""` returned only the element's
+        own leading text node, silently dropping nested children."""
+        return "".join(self._root.itertext())
 
 
 class Response:

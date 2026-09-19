@@ -1,5 +1,6 @@
 """Tests for new features: fetch_content, schema auto, batch structured extraction."""
 
+import pytest
 
 from hound_mcp.structured import extract_structured
 
@@ -109,6 +110,41 @@ class TestFetchContentSchema:
         resp = SearchResponseModel(query="test", results=[])
         assert hasattr(resp, "fetched_pages")
         assert resp.fetched_pages == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_content_failure_is_visible_in_fetched_pages(self, monkeypatch):
+        """回归：fetch_content=true 时 smart_fetch 抛错曾被静默吞掉——agent 看到
+        fetched_pages 缺一条却不知道为什么。现在失败也占位，带 error 字段。"""
+        from unittest.mock import AsyncMock
+        from hound_mcp import search as search_mod
+        from hound_mcp.search_engines import RawResult, EngineReport
+        from hound_mcp.server import MasterFetchServer
+
+        async def fake_multi_search(query, max_results, **kwargs):
+            return (
+                [RawResult(title="Doc about widgets",
+                           url="https://docs.example.test/widgets",
+                           snippet="widgets", source="brave", position=1)],
+                [EngineReport(name="brave", ok=True)],
+            )
+
+        async def fake_ensure_reranker():
+            return None
+
+        monkeypatch.setattr(search_mod, "multi_search", fake_multi_search)
+        monkeypatch.setattr(search_mod, "ensure_reranker", fake_ensure_reranker)
+
+        server = MasterFetchServer()
+        server.smart_fetch = AsyncMock(side_effect=RuntimeError("boom: network down"))
+
+        resp = await server.smart_search("widgets doc", fetch_content=True, cache_ttl=0)
+
+        assert len(resp.fetched_pages) == 1
+        page = resp.fetched_pages[0]
+        assert page["url"] == "https://docs.example.test/widgets"
+        assert page["content_ok"] is False
+        assert page["content"] == ""
+        assert "boom" in page["error"]
 
 
 # ─── source_type detection ────────────────────────────────────────────────────

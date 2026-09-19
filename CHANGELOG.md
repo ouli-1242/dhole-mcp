@@ -10,7 +10,57 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 > own and are not comparable to upstream's. `__version__` in
 > `src/hound_mcp/__init__.py` is the single source of truth.
 
-## [Unreleased]
+## [13.15] - 2026-09-19
+
+### Fixed
+- **`links.py` `_norm_host` mangled hosts starting with `w`.** It stripped the
+  cosmetic `www.` prefix with `lstrip("www.")`, which strips a CHAR SET, not a
+  prefix: `wikipedia.org` became `ikipedia.org`, `web.example.com` became
+  `eb.example.com`, `www.wikipedia.org` became `ikipedia.org`. Every host
+  comparison and `.{domain}` suffix match (external-link classification,
+  primary-source detection) was wrong for such hosts. Now `startswith("www.")`
+  + slice, with userinfo/port handled by `urlparse().hostname`.
+- **`fetcher.py` `ElementWrapper.text_content()` returned only the element's
+  own leading text node** (`.text`), silently dropping the text of nested child
+  elements. It now joins `itertext()`, matching lxml's native
+  `.text_content()` semantics. (The three pre-existing tests happened to use
+  leaf elements, so both implementations passed them — a nested-content
+  regression test now pins the correct behavior.)
+- **`smart_search(fetch_content=true)` silently swallowed per-page fetch
+  errors.** A top result whose fetch failed just vanished from `fetched_pages`.
+  Failures now occupy their slot with `content_ok=false` and a redacted
+  `error` field, so the agent sees the hole and the reason.
+
+### Changed
+- **`auth` / `proxy_auth` on `get()`/`bulk_get()` now actually apply** (this
+  closes the known gap recorded in 13.x): `auth` becomes a Basic
+  `Authorization` header (never clobbers an explicit one), `proxy_auth` is
+  embedded (URL-quoted) into the proxy URL the HTTP tier receives, and an
+  explicit `proxy_auth` wins over credentials already embedded in the proxy
+  string. Dict proxies (`{server, username, password}`) now reach the HTTP
+  tier too — previously they were silently ignored by every
+  `proxy if isinstance(proxy, str) else None` expression, so `smart_fetch`
+  with a dict proxy only proxied the browser tier and sent the HTTP tier
+  direct.
+- **Dependency refresh, verified at both constraint ends:** mcp 2.0 → 2.2,
+  pydantic 2.13.5, trafilatura 2.2, httpx 0.27 → 0.28 (hound already used the
+  new `proxy=` API), anyio/starlette/uvicorn/lxml/beautifulsoup4/cssselect/
+  h2/markdownify latest, and primp 1.3 → **2.0** (major). primp 2.0 removed
+  the response `.reason` attribute — `fetcher.py` already guarded that with
+  `hasattr`, and the full suite plus a live smoke test (constructor kwargs,
+  `headers_update`, `follow_redirects=False` redirect-hop parsing, cookies)
+  pass on both 1.3.1 and 2.0.1. patchright/playwright stay on 1.61 to match
+  the locally installed browsers.
+- README environment-variable table now lists every variable the code reads
+  (`HOUND_SEARCH_DEADLINE`, `HOUND_BRIGHTDATA_*`, `HOUND_SSRF_DNS_RECHECK`,
+  `HOUND_UPDATE_*`).
+
+### Added
+- `include_media` now also picks up lazy-loaded images: when `src` is empty or
+  a `data:` placeholder, `data-src` is read from the same `<img>` tag (src
+  still wins when it is a real URL).
+
+## [13.14] - 2026-09-10
 
 ### Fixed
 - **Credential leak in logs.** `fetcher.py` wrote raw exception text into

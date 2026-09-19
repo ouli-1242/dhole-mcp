@@ -23,7 +23,6 @@ import logging
 import os
 import re
 from collections import Counter
-from datetime import datetime
 from time import time
 from typing import Optional
 from urllib.parse import urlparse
@@ -795,8 +794,6 @@ def _expand_query(query: str, intent: str) -> str:
     # Don't expand very long queries — could exceed engine query-length limits.
     if len(query.split()) >= 15:
         return query
-    if intent == "news":
-        expansion = expansion.replace("{year}", str(datetime.now().year))
     q_lower = query.lower()
     new_terms = [t for t in expansion.split() if t.lower() not in q_lower]
     if not new_terms:

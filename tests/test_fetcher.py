@@ -113,6 +113,19 @@ class TestCSSSelectors:
         el = r.css(".x")[0]
         assert el.url == "https://example.com/page"
 
+    def test_text_content_includes_descendants(self):
+        """回归：text_content() 曾只返回元素自身首段文本（.text），丢弃嵌套
+        子元素的文本。现在与 lxml 原生 .text_content() 语义一致。"""
+        html = (b'<html><body><div class="x">Hello <b>bold</b>'
+                b' <a href="/l">link</a> world</div></body></html>')
+        r = Response(url="https://x.com", body=html, status=200)
+        assert r.css(".x")[0].text_content() == "Hello bold link world"
+
+    def test_text_content_on_leaf_unchanged(self):
+        html = b'<html><body><div class="main">Text</div></body></html>'
+        r = Response(url="https://x.com", body=html, status=200)
+        assert r.css(".main")[0].text_content() == "Text"
+
 
 # ─── Cross-platform HTML parsing ──────────────────────────────────
 

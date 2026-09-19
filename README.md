@@ -162,8 +162,13 @@ rm -rf ~/.hound                       # Linux/Mac
 
 | 变量 | 用途 |
 |------|------|
-| `HOUND_SEARCH_PROXY` | 搜索引擎代理（也自动读取 `HTTPS_PROXY`/`ALL_PROXY`） |
+| `HOUND_SEARCH_PROXY` | 搜索引擎代理，逗号分隔可配多个轮换（也自动读取 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`；`~/.hound/search_proxies.json` 亦可配置） |
 | `HOUND_BROWSER_IDLE_TIMEOUT` | 浏览器空闲关闭时间（默认 300 秒，`0` = 永不关闭） |
+| `HOUND_SEARCH_DEADLINE` | 单次搜索整体截止秒数（默认 16；引擎并行 + 仲裁提前返回，健康搜索 1-2 秒内完成） |
+| `HOUND_BRIGHTDATA_API_KEY` | 可选 Bright Data SERP 付费后端（设置后启用并优先；未设置只跑免费引擎） |
+| `HOUND_BRIGHTDATA_ZONE` / `HOUND_BRIGHTDATA_COUNTRY` | Bright Data zone 名（默认 `hound`）与 Google 结果区域（默认 `us`） |
+| `HOUND_SSRF_DNS_RECHECK` | 设 `1` 开启域名 DNS 解析内网复查（默认关闭；DNS 污染环境会误伤，见"已知限制"） |
+| `HOUND_UPDATE_PACKAGE` / `HOUND_UPDATE_INDEX_URL` | 自更新源（本 fork 默认关闭自更新；发布自己的发行版后设置以启用） |
 
 ### MCP 配置
 

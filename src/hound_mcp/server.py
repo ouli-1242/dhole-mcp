@@ -14,6 +14,7 @@ auto-routing only uses http -> stealthy; open_session creates a stealthy session
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -28,7 +29,7 @@ from datetime import datetime, timezone
 from time import time as now
 from dataclasses import dataclass, field
 from typing import Annotated, Mapping, Sequence, Optional, Literal, Dict, List, Any, TYPE_CHECKING
-from urllib.parse import urlparse
+from urllib.parse import quote as _url_quote, urlparse, urlunparse
 import warnings as _warnings
 import traceback as _traceback
 
@@ -1231,6 +1232,68 @@ def _normalize_credentials(credentials: Optional[Dict[str, str]]) -> Optional[tu
     return username, password
 
 
+def _proxy_to_url(
+    proxy: Optional[str | Dict[str, str]],
+    proxy_auth: Optional[Dict[str, str]],
+) -> Optional[str]:
+    """Normalize a proxy (URL string or {server, username, password} dict) plus
+    an optional proxy_auth dict into ONE credential-embedded proxy URL for the
+    HTTP tier (primp accepts user:pass@host proxies).
+
+    Closes the audit gap where get()/bulk_get() validated auth / proxy_auth but
+    never applied them. Rules:
+    - dict proxy: username/password come from the dict itself.
+    - explicit proxy_auth param wins over credentials already embedded in a
+      proxy URL string (the explicit parameter is the caller's last word).
+    - No credentials to merge -> the proxy string is returned unchanged.
+    - proxy=None -> None.
+    """
+    creds = _normalize_credentials(proxy_auth)  # validates type/length/newlines
+    username = creds[0] if creds else None
+    password = creds[1] if creds else None
+
+    if proxy is None:
+        return None
+
+    if isinstance(proxy, dict):
+        server = (proxy.get("server") or "").strip()
+        if not server:
+            return None
+        if username is None:
+            username = proxy.get("username")
+            password = proxy.get("password")
+        proxy = server
+
+    parsed = urlparse(proxy)
+    # validate_proxy already enforced the scheme set; skip merging for anything
+    # unexpected rather than mangling it.
+    if parsed.scheme not in ("http", "https", "socks5", "socks5h"):
+        return proxy
+    host_port = parsed.netloc.rsplit("@", 1)[-1]  # drop any embedded userinfo
+    if username is None or password is None:
+        return proxy
+    netloc = f"{_url_quote(str(username), safe='')}:{_url_quote(str(password), safe='')}@{host_port}"
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
+def _basic_auth_header(
+    auth: Optional[Dict[str, str]],
+    headers: Optional[Mapping[str, Optional[str]]],
+) -> Optional[Dict[str, str]]:
+    """Build a Basic-Authorization header dict from an auth credential dict.
+
+    Returns None when auth is empty or the caller already set an Authorization
+    header (an explicit header is the caller's explicit choice — never clobbered).
+    """
+    creds = _normalize_credentials(auth)
+    if creds is None:
+        return None
+    if any((k or "").lower() == "authorization" for k in (headers or {})):
+        return None
+    token = base64.b64encode(f"{creds[0]}:{creds[1]}".encode()).decode()
+    return {"Authorization": f"Basic {token}"}
+
+
 def _safe_cookie_dict(cookies: Sequence[SetCookieParam] | None) -> Optional[Dict[str, str]]:
     """Safely convert MCP cookie param list to {name: value} dict.
 
@@ -1997,16 +2060,18 @@ class MasterFetchServer:
         validate_css_selector(css_selector)
         validate_proxy(proxy)
 
-        # 凭据只做校验（非法时抛 ValueError / SecurityError）。
-        # 已知缺口：HTTPSession / http_get 目前不接受 auth / proxy_auth，
-        # 所以这两个参数校验后并不会真正作用到请求上（历史遗留，未在本次
-        # 审计中改动请求行为）。此处保留校验以维持既有语义。
-        _normalize_credentials(proxy_auth)
-        _normalize_credentials(auth)
+        # Credentials now actually apply (audit gap closed): auth -> Basic
+        # Authorization header; proxy_auth + dict-proxy credentials -> embedded
+        # in the proxy URL primp receives. Validation errors raise before any
+        # request is made, preserving the old validate-only semantics for
+        # malformed input.
+        auth_header = _basic_auth_header(auth, headers)
+        if auth_header:
+            headers = {**(headers or {}), **auth_header}
+        http_proxy = _proxy_to_url(proxy, proxy_auth)
         use_tf = use_trafilatura and extraction_type in ("markdown", "text", "article", "structured")
 
         from hound_mcp.fetcher import HTTPSession
-        http_proxy = proxy if isinstance(proxy, str) else None
         async with HTTPSession(
             impersonate=impersonate or "chrome",
             proxy=http_proxy,
@@ -2558,7 +2623,7 @@ class MasterFetchServer:
             result = await self.get(
                 url, extraction_type=extraction_type, css_selector=css_selector,
                 main_content_only=main_content_only, use_trafilatura=use_trafilatura,
-                proxy=proxy if isinstance(proxy, str) else None,
+                proxy=_proxy_to_url(proxy, None),
                 headers=extra_headers, cookies=http_cookies, timeout=http_timeout,
                 stealthy_headers=True,
             )
@@ -2602,7 +2667,7 @@ class MasterFetchServer:
         """
         try:
             # 1. Query the Wayback Availability API for the closest snapshot
-            from urllib.parse import quote as _url_quote
+            # (_url_quote is imported at module level).
             api_url = f"https://archive.org/wayback/available?url={_url_quote(url, safe='')}"
             api_resp = await _fallback_http_get(api_url, timeout=10)
             if api_resp.status != 200 or not api_resp.body:
@@ -2704,7 +2769,7 @@ class MasterFetchServer:
             url, extraction_type=extraction_type,
             css_selector=css_selector, main_content_only=main_content_only,
             use_trafilatura=use_trafilatura,
-            proxy=proxy if isinstance(proxy, str) else None,
+            proxy=_proxy_to_url(proxy, None),
             headers=extra_headers, cookies=http_cookies, stealthy_headers=True,
             timeout=_effective_http_timeout,
         )
@@ -3089,8 +3154,15 @@ class MasterFetchServer:
                     if page_result.content_ok:
                         from hound_mcp.search import record_search_feedback
                         record_search_feedback(sr.url)
-                except Exception:
-                    pass  # silently skip failed fetches
+                except Exception as e:
+                    # Surface the failure instead of silently dropping the page,
+                    # so the agent sees a hole in fetched_pages (with the reason)
+                    # rather than wondering why a top result has no content.
+                    fetched_pages.append({
+                        "url": sr.url, "title": sr.title, "content": "",
+                        "content_ok": False,
+                        "error": redact_api_key(str(e)[:200]),
+                    })
             result.fetched_pages = fetched_pages
 
         return result

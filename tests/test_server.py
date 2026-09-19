@@ -17,6 +17,7 @@ from hound_mcp.server import (
     _browser_deps_available,
     _strict_options, _SF_OPTIONS_ALLOWED, _SF_OPTIONS_FORWARDED,
     _SHOT_OPTIONS,
+    _proxy_to_url, _basic_auth_header,
 )
 
 
@@ -625,6 +626,158 @@ class TestBulkGetEnvelope:
         result = bulk.results[0]
         assert result.source_type == "github"
         assert result.is_official is True
+
+
+# ─── Credentials actually apply (audit gap closed) ─────────────────
+
+class TestProxyToUrl:
+    """_proxy_to_url：把 str/dict 代理 + proxy_auth 合成一个带凭据的代理 URL
+    给 HTTP 层（primp）。此前 auth/proxy_auth 只被校验、从不生效。"""
+
+    def test_none_proxy_returns_none(self):
+        assert _proxy_to_url(None, None) is None
+        assert _proxy_to_url(None, {"username": "u", "password": "p"}) is None
+
+    def test_plain_string_proxy_unchanged(self):
+        assert _proxy_to_url("http://proxy.example.com:3128", None) == \
+            "http://proxy.example.com:3128"
+
+    def test_proxy_auth_embedded_and_quoted(self):
+        out = _proxy_to_url(
+            "http://proxy.example.com:3128",
+            {"username": "user@x", "password": "p@ss"},
+        )
+        assert out == "http://user%40x:p%40ss@proxy.example.com:3128"
+
+    def test_proxy_auth_wins_over_embedded_credentials(self):
+        out = _proxy_to_url(
+            "http://old:cred@proxy.example.com:3128",
+            {"username": "new", "password": "q"},
+        )
+        assert out == "http://new:q@proxy.example.com:3128"
+
+    def test_embedded_credentials_pass_through_untouched(self):
+        out = _proxy_to_url("http://u:p@proxy.example.com:3128", None)
+        assert out == "http://u:p@proxy.example.com:3128"
+
+    def test_dict_proxy_uses_its_own_credentials(self):
+        out = _proxy_to_url({
+            "server": "http://proxy.example.com:3128",
+            "username": "u", "password": "p p",
+        }, None)
+        assert out == "http://u:p%20p@proxy.example.com:3128"
+
+    def test_dict_proxy_without_credentials_unchanged(self):
+        out = _proxy_to_url({"server": "socks5://proxy.example.com:1080"}, None)
+        assert out == "socks5://proxy.example.com:1080"
+
+    def test_dict_proxy_server_missing_returns_none(self):
+        assert _proxy_to_url({"username": "u", "password": "p"}, None) is None
+
+    def test_socks5h_supported(self):
+        out = _proxy_to_url("socks5h://proxy.example.com:1080",
+                            {"username": "u", "password": "p"})
+        assert out == "socks5h://u:p@proxy.example.com:1080"
+
+    def test_invalid_credentials_raise(self):
+        from hound_mcp.security import SecurityError
+        with pytest.raises(SecurityError):
+            _proxy_to_url("http://proxy.example.com:3128",
+                          {"username": "u\n", "password": "p"})
+
+
+class TestBasicAuthHeader:
+    def test_returns_basic_header(self):
+        out = _basic_auth_header({"username": "u", "password": "p"}, None)
+        assert out == {"Authorization": "Basic dTpw"}  # base64("u:p")
+
+    def test_no_auth_returns_none(self):
+        assert _basic_auth_header(None, None) is None
+        assert _basic_auth_header({}, None) is None
+
+    def test_existing_authorization_not_clobbered(self):
+        out = _basic_auth_header(
+            {"username": "u", "password": "p"},
+            {"Authorization": "Bearer xyz"},
+        )
+        assert out is None
+
+    def test_existing_authorization_case_insensitive(self):
+        out = _basic_auth_header(
+            {"username": "u", "password": "p"},
+            {"authorization": "Bearer xyz"},
+        )
+        assert out is None
+
+    def test_invalid_credentials_raise(self):
+        from hound_mcp.security import SecurityError
+        with pytest.raises(SecurityError):
+            _basic_auth_header({"username": "u", "password": "p\n"}, None)
+
+
+class TestBulkGetCredentialsWiring:
+    """端到端：auth/proxy_auth/dict proxy 真正传到 HTTPSession / session.get。"""
+
+    @staticmethod
+    def _mock_http_response(status=200, body=b"<html><body><p>Test</p></body></html>",
+                            content_type="text/html", url="https://example.com"):
+        m = MagicMock()
+        m.status = status
+        m.body = body
+        m.headers = {"content-type": content_type}
+        m.url = url
+        m.encoding = "utf-8"
+        return m
+
+    @pytest.mark.asyncio
+    @patch("hound_mcp.fetcher.HTTPSession")
+    async def test_auth_becomes_basic_authorization_header(self, mock_http_session):
+        import base64
+        mock_session = AsyncMock()
+        mock_session.get.return_value = self._mock_http_response()
+        mock_http_session.return_value.__aenter__.return_value = mock_session
+        mock_http_session.return_value.__aexit__.return_value = None
+
+        await MasterFetchServer.bulk_get(
+            urls=["https://example.com"],
+            auth={"username": "u", "password": "p"},
+        )
+        headers = mock_session.get.call_args.kwargs["headers"]
+        expected = "Basic " + base64.b64encode(b"u:p").decode()
+        assert headers["Authorization"] == expected
+
+    @pytest.mark.asyncio
+    @patch("hound_mcp.fetcher.HTTPSession")
+    async def test_proxy_auth_reaches_session_proxy(self, mock_http_session):
+        mock_session = AsyncMock()
+        mock_session.get.return_value = self._mock_http_response()
+        mock_http_session.return_value.__aenter__.return_value = mock_session
+        mock_http_session.return_value.__aexit__.return_value = None
+
+        await MasterFetchServer.bulk_get(
+            urls=["https://example.com"],
+            proxy="http://proxy.example.com:3128",
+            proxy_auth={"username": "u", "password": "p"},
+        )
+        proxy_arg = mock_http_session.call_args.kwargs["proxy"]
+        assert proxy_arg == "http://u:p@proxy.example.com:3128"
+
+    @pytest.mark.asyncio
+    @patch("hound_mcp.fetcher.HTTPSession")
+    async def test_dict_proxy_reaches_http_tier(self, mock_http_session):
+        """回归：dict 代理此前在 HTTP 层被静默忽略（proxy if isinstance(str)）。"""
+        mock_session = AsyncMock()
+        mock_session.get.return_value = self._mock_http_response()
+        mock_http_session.return_value.__aenter__.return_value = mock_session
+        mock_http_session.return_value.__aexit__.return_value = None
+
+        await MasterFetchServer.bulk_get(
+            urls=["https://example.com"],
+            proxy={"server": "http://proxy.example.com:3128",
+                   "username": "u", "password": "p"},
+        )
+        proxy_arg = mock_http_session.call_args.kwargs["proxy"]
+        assert proxy_arg == "http://u:p@proxy.example.com:3128"
 
 
 # ─── Stealthy proxy bypass ─────────────

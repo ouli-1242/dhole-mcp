@@ -50,10 +50,17 @@ _MAX_EXTERNAL = 20
 
 
 def _norm_host(u: str) -> str:
+    """Hostname for host comparisons: lowercase, userinfo/port stripped via
+    urlparse().hostname, cosmetic leading ``www.`` removed. Uses startswith
+    (NOT lstrip — lstrip strips a CHAR SET, so 'wikipedia.org' would lose its
+    leading 'w' and 'web.example.com' would become 'eb.example.com')."""
     try:
-        return (urlparse(u).netloc or "").lower().lstrip("www.")
+        host = (urlparse(u).hostname or "").lower()
     except Exception:
         return ""
+    if host.startswith("www."):
+        host = host[4:]
+    return host
 
 
 def _clean_text(s: str) -> str:

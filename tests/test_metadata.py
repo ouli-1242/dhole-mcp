@@ -127,3 +127,37 @@ class TestExtractImageUrls:
 
     def test_empty_html_returns_empty_list(self):
         assert extract_image_urls("", "https://example.com/") == []
+
+    def test_lazy_data_src_used_when_src_is_placeholder(self):
+        """懒加载页：src 是 data: 占位图、真实图片在 data-src。"""
+        html = ('<img src="data:image/gif;base64,AAAA" data-src="/lazy/real.png">'
+                '<img src="/normal.png">')
+
+        assert extract_image_urls(html, "https://example.com/") == [
+            "https://example.com/lazy/real.png",
+            "https://example.com/normal.png",
+        ]
+
+    def test_data_src_only_tag_is_included(self):
+        html = '<img class="lazy" data-src="/only/data-src.png">'
+
+        assert extract_image_urls(html, "https://example.com/") == [
+            "https://example.com/only/data-src.png"
+        ]
+
+    def test_real_src_wins_over_data_src(self):
+        html = '<img src="/first.png" data-src="/second.png">'
+
+        assert extract_image_urls(html, "https://example.com/") == [
+            "https://example.com/first.png"
+        ]
+
+    def test_data_src_data_uri_still_skipped(self):
+        html = '<img data-src="data:image/png;base64,AAAA">'
+
+        assert extract_image_urls(html, "https://example.com/") == []
+
+    def test_srcset_alone_does_not_match(self):
+        html = '<img srcset="/a.png 1x, /b.png 2x">'
+
+        assert extract_image_urls(html, "https://example.com/") == []

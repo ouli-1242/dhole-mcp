@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from hound_mcp.links import extract_links
+from hound_mcp.links import _norm_host, extract_links
 
 PAGE = "https://example.com/blog/post"
 
@@ -127,3 +127,41 @@ class TestPrimarySource:
         )
 
         assert out["primary_source"] == ""
+
+
+class TestNormHost:
+    """回归：_norm_host 曾用 lstrip("www.") 剥前缀——lstrip 按字符集剥离，
+    会把 wikipedia.org 变成 ipedia.org、web.example.com 变成 eb.example.com，
+    导致 w 开头域名的比较与 .wikipedia.org 一类后缀匹配全部失效。"""
+
+    def test_host_starting_with_w_is_not_mangled(self):
+        assert _norm_host("https://wikipedia.org/wiki/Foo") == "wikipedia.org"
+        assert _norm_host("https://web.example.com/x") == "web.example.com"
+        assert _norm_host("https://weather.com/forecast") == "weather.com"
+
+    def test_www_prefix_still_stripped(self):
+        assert _norm_host("https://www.example.com/x") == "example.com"
+        # 旧 lstrip 会把 "www.wikipedia.org" 剥成 "ikipedia.org"
+        assert _norm_host("https://www.wikipedia.org/wiki/Foo") == "wikipedia.org"
+
+    def test_userinfo_and_port_stripped(self):
+        assert _norm_host("https://user:pass@example.com:8080/x") == "example.com"
+
+    def test_non_www_subdomain_kept(self):
+        assert _norm_host("https://en.wikipedia.org/wiki/Foo") == "en.wikipedia.org"
+
+
+class TestPrimarySourceWwwSubdomain:
+    """集成：wikipedia 系一手来源识别（旧 lstrip bug 下 www 子域失效）。"""
+
+    def test_www_wikipedia_citation_is_primary_source(self):
+        out = extract_links(
+            '<p><a href="https://www.wikipedia.org/wiki/X">wiki</a></p>', PAGE
+        )
+        assert out["primary_source"] == "https://www.wikipedia.org/wiki/X"
+
+    def test_en_wikipedia_citation_is_primary_source(self):
+        out = extract_links(
+            '<p><a href="https://en.wikipedia.org/wiki/X">wiki</a></p>', PAGE
+        )
+        assert out["primary_source"] == "https://en.wikipedia.org/wiki/X"

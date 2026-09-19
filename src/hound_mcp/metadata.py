@@ -38,10 +38,14 @@ _LD_RE = re.compile(
     r'<script\b[^>]*?type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
     re.IGNORECASE | re.DOTALL,
 )
-_IMG_RE = re.compile(
-    r'<img\b[^>]*?\bsrc=["\']([^"\']+)["\']',
-    re.IGNORECASE,
-)
+# Lazy-loaded pages often put a placeholder (or a tiny data: URI) in src and
+# the real image in data-src. Match whole <img> tags so both attributes can be
+# read from the same tag; src wins, data-src is the fallback.
+_IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+# (?<!-) keeps \bsrc= from matching inside "data-src=" ('-' is a non-word char,
+# so a bare \b WOULD match there).
+_IMG_SRC_RE = re.compile(r'(?<!-)\bsrc=["\']([^"\']+)["\']', re.IGNORECASE)
+_IMG_DATASRC_RE = re.compile(r'\bdata-src=["\']([^"\']+)["\']', re.IGNORECASE)
 _ASSET_SKIP = ("data:image",)
 
 # Map meta keys to our flat field names. First match wins per field (OpenGraph
@@ -141,15 +145,25 @@ def extract_metadata(html: str, url: str) -> dict[str, Any]:
 
 
 def extract_image_urls(html: str, url: str, max_n: int = 20) -> list[str]:
-    """Extract absolute image URLs from <img src=...> tags. Deduped, order-
-    preserving, capped at max_n. Skips data: URIs. Used by smart_fetch's opt-in
-    include_media flag so a multimodal agent can pull the page's images."""
+    """Extract absolute image URLs from <img> tags. Deduped, order-preserving,
+    capped at max_n. Skips data: URIs. Prefers src; falls back to data-src for
+    lazy-loaded pages (placeholder in src, real image in data-src). Used by
+    smart_fetch's opt-in include_media flag so a multimodal agent can pull the
+    page's images."""
     if not html:
         return []
     out: list[str] = []
     seen: set[str] = set()
-    for m in _IMG_RE.finditer(html):
-        src = (m.group(1) or "").strip()
+    for tag in _IMG_TAG_RE.finditer(html):
+        tag_html = tag.group(0)
+        src = ""
+        m = _IMG_SRC_RE.search(tag_html)
+        if m:
+            src = (m.group(1) or "").strip()
+        if not src or src.lower().startswith(_ASSET_SKIP):
+            m = _IMG_DATASRC_RE.search(tag_html)
+            if m:
+                src = (m.group(1) or "").strip()
         if not src or src.lower().startswith(_ASSET_SKIP):
             continue
         try:
