@@ -112,7 +112,7 @@ dhole -u    # 自更新（本 fork 默认关闭）
 请求 `google.com/search` 的结果页（`data_format=parsed_light`），与免费引擎**并行**执行。
 
 - **配额按次消耗**：每次真正发起的搜索都会附带一次付费调用；命中搜索缓存则直接返回，不调用
-- **`engines=` 选不到它**：可选项只有 `duckduckgo`/`ddg`、`bing`、`yahoo`、`wikipedia`、`brave`、`yandex`、`grokipedia`，全部免密；传 `brightdata` 会被丢弃并回落到默认引擎池
+- **`engines=["brightdata"]` 可单独选它**：只跑付费后端；未配 key 时报错直指 `DHOLE_BRIGHTDATA_API_KEY`，不会把你引去查代理。可选引擎名全部来自 `_DHOLE_TO_BACKEND` 这一张表 —— 8 个免密的加它
 - **不拉高共识门槛**：`min_engines = min(3, 免费引擎数)` 只按免费引擎计算，它不计入
 - **提前返回时不取消**：免费引擎凑够结果触发早退时，其余任务被 cancel，但 Bright Data 会等它跑完，避免已花出去的配额白花
 - **失败静默**：非 200 或任何异常都返回空列表、只记 debug 日志，不影响本次搜索结果
