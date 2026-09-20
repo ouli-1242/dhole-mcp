@@ -53,3 +53,45 @@ class TestBrightdataSelectedWithKey:
 
         assert [r["href"] for r in results] == ["https://example.com/a"]
         assert status.get("brightdata") == "ok"
+
+
+class TestBrightdataAuthError:
+    """A wrong/expired key must not look like 'Google returned nothing'."""
+
+    @pytest.mark.asyncio
+    async def test_401_is_distinguishable_from_empty(self, monkeypatch):
+        import httpx
+
+        from dhole_mcp import search_metasearch as m
+
+        class _Denied:
+            status_code = 401
+            text = "invalid api key"
+
+        monkeypatch.setattr(m, "_BRIGHTDATA_API_KEY", "wrong-key")
+        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
+        monkeypatch.setattr(httpx, "post", lambda *a, **k: _Denied())
+
+        results, status = await m.metasearch("test query", 3, engines=["brightdata"])
+
+        assert results == []
+        assert status["brightdata"] == "error:BrightDataAuthError"
+
+    @pytest.mark.asyncio
+    async def test_401_does_not_trip_the_circuit_breaker(self, monkeypatch):
+        """A bad key is permanent -- cooling it down for 60s fixes nothing."""
+        import httpx
+
+        from dhole_mcp import search_metasearch as m
+
+        class _Denied:
+            status_code = 403
+            text = "zone not authorized"
+
+        monkeypatch.setattr(m, "_BRIGHTDATA_API_KEY", "wrong-key")
+        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
+        monkeypatch.setattr(httpx, "post", lambda *a, **k: _Denied())
+
+        await m.metasearch("test query", 3, engines=["brightdata"])
+
+        assert m._is_circuit_open("brightdata") is False

@@ -98,6 +98,15 @@ class MetaTimeoutException(MetaSearchException):
     """A backend or the whole search timed out."""
 
 
+class BrightDataAuthError(MetaSearchException):
+    """Bright Data rejected the credentials (bad/expired key, unauthorized zone).
+
+    Deliberately NOT a MetaBlockedException: a wrong key is permanent, so routing
+    it through the circuit breaker would cool the backend down for 60s and surface
+    the failure as a silent empty result -- indistinguishable from 'no hits'.
+    """
+
+
 class MetaBlockedException(MetaSearchException):
     """A backend refused us (CAPTCHA / 403 / rate-limit). The caller should
     circuit-open that backend for a cooldown so we don't keep hammering a host
@@ -695,6 +704,10 @@ def _brightdata_serp_search(query: str, max_results: int = 10) -> list:
             },
             timeout=20.0,
         )
+        if resp.status_code in (401, 403):
+            raise BrightDataAuthError(
+                f"Bright Data rejected the credentials (HTTP {resp.status_code})"
+            )
         if resp.status_code != 200:
             logger.debug("BrightData SERP HTTP %d: %s", resp.status_code, resp.text[:200])
             return []
@@ -717,6 +730,8 @@ def _brightdata_serp_search(query: str, max_results: int = 10) -> list:
                 from types import SimpleNamespace
                 results.append(SimpleNamespace(title=title, href=href, body=snippet))
         return results
+    except BrightDataAuthError:
+        raise
     except Exception as e:
         logger.debug("BrightData SERP error: %r", e)
         return []

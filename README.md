@@ -115,7 +115,7 @@ dhole -u    # 自更新（本 fork 默认关闭）
 - **`engines=["brightdata"]` 可单独选它**：只跑付费后端；未配 key 时报错直指 `DHOLE_BRIGHTDATA_API_KEY`，不会把你引去查代理。可选引擎名全部来自 `_DHOLE_TO_BACKEND` 这一张表 —— 8 个免密的加它
 - **不拉高共识门槛**：`min_engines = min(3, 免费引擎数)` 只按免费引擎计算，它不计入
 - **提前返回时不取消**：免费引擎凑够结果触发早退时，其余任务被 cancel，但 Bright Data 会等它跑完，避免已花出去的配额白花
-- **失败静默**：非 200 或任何异常都返回空列表、只记 debug 日志，不影响本次搜索结果
+- **失败大多静默**：非 200 或任何异常都返回空列表、只记 debug 日志，不影响本次搜索结果。**401/403 除外** —— key 错误或过期会抛 `BrightDataAuthError`，在 `status` 里显示为 `error:BrightDataAuthError`，不会伪装成「没有结果」；它也不触发熔断（key 错了冷却 60 秒毫无意义）
 - 单次 HTTP 超时 20 秒（硬编码），比 `DHOLE_SEARCH_DEADLINE`（默认 16 秒）长
 
 ## 已知限制
