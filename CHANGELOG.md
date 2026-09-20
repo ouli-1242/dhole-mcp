@@ -9,6 +9,40 @@
 > 版本号是自己的，与上游版本不可比。`src/dhole_mcp/__init__.py` 中的
 > `__version__` 是版本的唯一权威来源。
 
+## [14.2] - 2026-09-20
+
+### 新增
+- **KeyedApiEngine 抽象 + 三个新 keyed 引擎：`tavily` / `exa` / `bocha`。**
+  均为 POST JSON + 密钥的 API 后端，`engines=` 按名选择，**默认不跑**
+  （每次调用都消耗真实配额）。博查国内裸网直连、Bing 同源索引，`timelimit`
+  自动映射 `freshness`（oneDay/oneWeek/oneMonth/oneYear），`summary` 默认关；
+  Tavily 自带 content 正文，默认 basic 深度（1 credit）；Exa 无 key/欠费
+  实测回 402，归入鉴权失败。密钥：`DHOLE_TAVILY_API_KEY` /
+  `DHOLE_EXA_API_KEY` / `DHOLE_BOCHA_API_KEY`
+- **搜狗微信引擎 `sogou_weixin`**：免费、国内裸网直连（实测 ~0.2s）、独家
+  微信公众号内容池，纯 HTTP GET 无需浏览器层；结果 href 为搜狗 /link
+  跳转包装，如实返回（会过期）
+- **`DHOLE_DEFAULT_ENGINES`**：覆盖免密默认池（逗号分隔），国内用户可收敛
+  到直连可达引擎；未设用上游默认 5 个，未知名忽略并告警
+- **免密引擎连接失败连续冷却**：连续 3 次 DNS/拒连/超时（通常是被墙）冷却
+  10 分钟并持久化，任何一次成功清零——被墙引擎不再每轮搜索陪跑
+
+### 修复
+- **Bright Data 的 401/403 不再伪装成「没有结果」**：抛 `BrightDataAuthError`
+  进 status（`error:BrightDataAuthError`），且不触发 60 秒熔断——key 错了
+  冷却不会变好
+- **失败响应体写日志前脱敏**：`redact_api_key()` 的正则认不出各家的 key
+  形状，额外用已知 key 定向替换
+- **Bright Data HTTP 超时跟随 `DHOLE_SEARCH_DEADLINE`**（原硬编码 20s，
+  调高 deadline 对它无效），下限仍 20 秒
+
+### 变更
+- **keyed 引擎策略：显式点名才执行**。Bright Data 原先是「设了 key 每次
+  搜索必调」；三个付费引擎并存后隐式全开等于每搜三笔配额，故统一为
+  `engines=` 点名才调用，免费默认池不变
+- `engines=` 合法名单改为从 `_DHOLE_TO_BACKEND` 单一来源派生（原先两份
+  手工名单靠人肉同步）
+
 ## [14.1] - 2026-09-20
 
 ### 移除
