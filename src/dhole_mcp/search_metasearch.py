@@ -82,10 +82,8 @@ def _get_search_proxy() -> str | None:
 _SEARCH_DEADLINE = float(os.environ.get("DHOLE_SEARCH_DEADLINE", "16") or "16")
 _ua = UserAgent()
 
-# Bright Data SERP API (priority backend when configured)
-# 需自行配置：设置 DHOLE_BRIGHTDATA_API_KEY 启用，未设置（或置空）则禁用该后端。
+# Bright Data SERP API（keyed 引擎之一，见下方 KeyedApiEngine）
 # 此仓库为公开仓库，密钥只从环境变量读取，严禁硬编码进源码。
-_BRIGHTDATA_API_KEY = os.environ.get("DHOLE_BRIGHTDATA_API_KEY") or ""
 _BRIGHTDATA_ZONE = os.environ.get("DHOLE_BRIGHTDATA_ZONE", "dhole")
 _BRIGHTDATA_ENDPOINT = "https://api.brightdata.com/request"
 _BRIGHTDATA_COUNTRY = os.environ.get("DHOLE_BRIGHTDATA_COUNTRY", "us")  # Google result region
@@ -107,6 +105,18 @@ class BrightDataAuthError(MetaSearchException):
     it through the circuit breaker would cool the backend down for 60s and surface
     the failure as a silent empty result -- indistinguishable from 'no hits'.
     """
+
+
+class TavilyAuthError(MetaSearchException):
+    """Tavily rejected the credentials (bad/expired key, out of credits)."""
+
+
+class ExaAuthError(MetaSearchException):
+    """Exa rejected the credentials. 实测无 key/欠费回 402 Payment required."""
+
+
+class BochaAuthError(MetaSearchException):
+    """博查拒绝凭据（key 无效或欠费）。"""
 
 
 class MetaBlockedException(MetaSearchException):
@@ -666,89 +676,227 @@ _DHOLE_TO_BACKEND = {
     "yahoo": "yahoo", "wikipedia": "wikipedia",
     "brave": "brave", "yandex": "yandex",
     "grokipedia": "grokipedia",
-    # Paid SERP backend: selectable by name, but it runs on its own track in
-    # multi_search (JSON API, not the HTML-scraping BaseSearchEngine contract),
-    # so it is deliberately absent from _TEXT_ENGINES.
+    # Paid JSON backends: selectable by name, run on their own track (see
+    # KeyedApiEngine) -- absent from _TEXT_ENGINES by design.
     "brightdata": "brightdata",
+    "tavily": "tavily",
+    "exa": "exa",
+    "bocha": "bocha",
 }
 # 国内网默认池：bing/yandex 可达无需 VPN；ddg/brave/yahoo 需 VPN。
 # 保留完整池（VPN 时更多信号），但 bing 排首位作为国内稳定兜底。
 _DEFAULT_BACKENDS = ["bing", "duckduckgo", "brave", "yahoo", "yandex"]
 
 
-# ─── Bright Data SERP API (priority backend) ────────────────────────────────
-
-def _mask_brightdata_secrets(text: str) -> str:
-    """Bright Data keys are not sk-/pk- shaped, so redact_api_key's patterns miss
-    them -- mask the known value directly as well. The empty-key guard matters:
-    str.replace("", x) would otherwise interleave the marker through the text."""
-    masked = redact_api_key(text)
-    if _BRIGHTDATA_API_KEY:
-        masked = masked.replace(_BRIGHTDATA_API_KEY, "[API_KEY_REDACTED]")
-    return masked
+# ─── keyed JSON search APIs (Bright Data / Tavily / Exa / Bocha) ────────────
+# 这些后端不走 BaseSearchEngine 的 HTML 抓取契约：都是 POST JSON + Bearer key。
+# 策略：**默认不跑**，只有 engines= 显式点名才执行 —— 每次调用都是真金白银。
 
 
-def _brightdata_serp_search(query: str, max_results: int = 10) -> list:
-    """Call Bright Data SERP API. Returns list of result objects with .title/.href/.body.
+class KeyedApiEngine:
+    """带密钥 JSON 搜索 API 的公共骨架。
 
-    Synchronous (blocking HTTP) — call from a thread via asyncio.to_thread().
-    Returns empty list on any failure (never raises).
+    子类只实现 build_request/parse_response；鉴权失败、超时、日志脱敏、
+    「非 200 静默返回空」都由 search_json 统一处理。
     """
-    if not _BRIGHTDATA_API_KEY:
-        return []
-    try:
-        import httpx
+
+    name: ClassVar[str]
+    env_var: ClassVar[str]
+    endpoint: ClassVar[str]
+    auth_codes: ClassVar[tuple] = (401, 403)
+    timeout_floor: ClassVar[float] = 20.0
+
+    AuthError: ClassVar[type] = MetaSearchException
+
+    @classmethod
+    def api_key(cls) -> str:
+        return os.environ.get(cls.env_var) or ""
+
+    @classmethod
+    def mask(cls, text: str) -> str:
+        """redact_api_key 的正则只认 sk-/pk-/api_key- 前缀，盖不住各家 key 的
+        形状，所以用已知值做定向替换。空 key 时 str.replace("", x) 会把标记
+        插进每个字符之间，必须防。"""
+        masked = redact_api_key(text)
+        key = cls.api_key()
+        if key:
+            masked = masked.replace(key, "[API_KEY_REDACTED]")
+        return masked
+
+    def build_request(self, query: str, max_results: int, timelimit: Optional[str]) -> tuple:
+        raise NotImplementedError
+
+    def parse_response(self, data: Any) -> list:
+        raise NotImplementedError
+
+    def search_json(self, query: str, max_results: int, timelimit: Optional[str] = None) -> list:
+        key = self.api_key()
+        if not key:
+            raise self.AuthError(f"{self.name} requires {self.env_var}, which is not set")
+        try:
+            url, headers, payload = self.build_request(query, max_results, timelimit)
+            resp = httpx.post(
+                url, json=payload, headers=headers,
+                timeout=max(_SEARCH_DEADLINE, self.timeout_floor),
+            )
+            if resp.status_code in self.auth_codes:
+                raise self.AuthError(
+                    f"{self.name} rejected the credentials (HTTP {resp.status_code})"
+                )
+            if resp.status_code != 200:
+                logger.debug(
+                    "%s SERP HTTP %d: %s", self.name, resp.status_code,
+                    self.mask(resp.text[:200]),
+                )
+                return []
+            out = []
+            for item in self.parse_response(resp.json())[:max_results]:
+                if getattr(item, "title", "") and getattr(item, "href", ""):
+                    out.append(item)
+            return out
+        except self.AuthError:
+            raise
+        except Exception as e:
+            logger.debug("%s API error: %s", self.name, self.mask(repr(e)))
+            return []
+
+
+def _ns(title: str, href: str, body: str):
+    """SimpleNamespace(title, href, body) —— 与 metasearch 的属性访问兼容。"""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(title=title, href=href, body=body)
+
+
+class _Brightdata(KeyedApiEngine):
+    name = "brightdata"
+    env_var = "DHOLE_BRIGHTDATA_API_KEY"
+    endpoint = _BRIGHTDATA_ENDPOINT
+    AuthError = BrightDataAuthError
+
+    def build_request(self, query, max_results, timelimit):
         from urllib.parse import quote_plus
-        url = f"https://www.google.com/search?q={quote_plus(query)}"
+
         payload = {
             "zone": _BRIGHTDATA_ZONE,
-            "url": url,
+            "url": f"https://www.google.com/search?q={quote_plus(query)}",
             "format": "json",
             "data_format": "parsed_light",
             "country": _BRIGHTDATA_COUNTRY,
         }
-        resp = httpx.post(
-            _BRIGHTDATA_ENDPOINT,
-            json=payload,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {_BRIGHTDATA_API_KEY}",
-            },
-            # Never below the historical 20s (a SERP render needs it and the
-            # credit is spent either way), but grow with an explicit deadline.
-            timeout=max(_SEARCH_DEADLINE, 20.0),
+        return (
+            self.endpoint,
+            {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key()}"},
+            payload,
         )
-        if resp.status_code in (401, 403):
-            raise BrightDataAuthError(
-                f"Bright Data rejected the credentials (HTTP {resp.status_code})"
-            )
-        if resp.status_code != 200:
-            logger.debug("BrightData SERP HTTP %d: %s", resp.status_code, _mask_brightdata_secrets(resp.text[:200]))
-            return []
-        data = resp.json()
-        # Bright Data wraps the SERP content in a JSON string inside "body".
-        # body = '{"organic": [...], "general": {...}}' (parsed_light format).
+
+    def parse_response(self, data):
+        # 响应体里再包一层 JSON 字符串：body = '{"organic": [...]}'
         body_str = data.get("body", "{}") if isinstance(data, dict) else "{}"
         body = json.loads(body_str) if isinstance(body_str, str) else body_str
         items = body.get("organic", body.get("organic_results", body.get("results", [])))
         if not items and isinstance(body, list):
             items = body
-        results = []
-        for item in items[:max_results]:
+        out = []
+        for item in items:
             title = item.get("title", "")
             href = item.get("url", item.get("link", item.get("href", "")))
             snippet = item.get("snippet", item.get("description", item.get("body", "")))
             if title and href:
-                # Use SimpleNamespace for attribute access compatibility with
-                # the metasearch result processing loop (getattr(r, 'href')).
-                from types import SimpleNamespace
-                results.append(SimpleNamespace(title=title, href=href, body=snippet))
-        return results
-    except BrightDataAuthError:
-        raise
-    except Exception as e:
-        logger.debug("BrightData SERP error: %s", _mask_brightdata_secrets(repr(e)))
-        return []
+                out.append(_ns(title, href, snippet))
+        return out
+
+
+class _Tavily(KeyedApiEngine):
+    name = "tavily"
+    env_var = "DHOLE_TAVILY_API_KEY"
+    AuthError = TavilyAuthError
+    endpoint = "https://api.tavily.com/"
+    # basic=1 credit；advanced=2 credits，默认不替用户花钱
+
+    def build_request(self, query, max_results, timelimit):
+        payload = {"query": query, "max_results": max_results, "search_depth": "basic"}
+        if timelimit in ("day", "week", "month", "year"):
+            payload["time_range"] = timelimit
+        return (
+            self.endpoint,
+            {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key()}"},
+            payload,
+        )
+
+    def parse_response(self, data):
+        out = []
+        for item in data.get("results", []):
+            if item.get("title") and item.get("url"):
+                out.append(_ns(item["title"], item["url"], item.get("content", "")))
+        return out
+
+
+class _Exa(KeyedApiEngine):
+    name = "exa"
+    env_var = "DHOLE_EXA_API_KEY"
+    AuthError = ExaAuthError
+    endpoint = "https://api.exa.ai/search"
+    # 实测：无 key/欠费返回 402 "Payment required"，归入鉴权类失败
+    auth_codes = (401, 402, 403)
+
+    def build_request(self, query, max_results, timelimit):
+        payload = {"query": query, "numResults": max_results}
+        if timelimit == "year":
+            from datetime import date, timedelta
+
+            payload["startPublishedDate"] = (date.today() - timedelta(days=365)).isoformat()
+        return (
+            self.endpoint,
+            {"Content-Type": "application/json", "x-api-key": self.api_key()},
+            payload,
+        )
+
+    def parse_response(self, data):
+        out = []
+        for item in data.get("results", []):
+            if item.get("title") and item.get("url"):
+                snippet = item.get("text") or " ".join(item.get("highlights") or [])
+                out.append(_ns(item["title"], item["url"], snippet))
+        return out
+
+
+class _Bocha(KeyedApiEngine):
+    name = "bocha"
+    env_var = "DHOLE_BOCHA_API_KEY"
+    AuthError = BochaAuthError
+    endpoint = "https://api.bochaai.com/v1/web-search"
+    # 国内裸网直连；索引与 Bing 同源。summary=true 才有全文摘要（更贵更慢），默认关。
+
+    _FRESHNESS = {"day": "oneDay", "week": "oneWeek", "month": "oneMonth", "year": "oneYear"}
+
+    def build_request(self, query, max_results, timelimit):
+        payload = {"query": query, "count": max_results, "summary": False}
+        if timelimit in self._FRESHNESS:
+            payload["freshness"] = self._FRESHNESS[timelimit]
+        return (
+            self.endpoint,
+            {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key()}"},
+            payload,
+        )
+
+    def parse_response(self, data):
+        pages = (data.get("data") or {}).get("webPages") or {}
+        out = []
+        for item in pages.get("value", []):
+            if item.get("name") and item.get("url"):
+                snippet = item.get("summary") or item.get("snippet", "")
+                out.append(_ns(item["name"], item["url"], snippet))
+        return out
+
+
+# keyed 引擎注册表：engines= 按名字选择；不设 key 时选中会得到可诊断的报错
+KEYED_ENGINES: dict[str, type[KeyedApiEngine]] = {
+    _Brightdata.name: _Brightdata,
+    _Tavily.name: _Tavily,
+    _Exa.name: _Exa,
+    _Bocha.name: _Bocha,
+}
 
 
 # ─── circuit breaker (per-backend block cooldown) ───────────────────────────
@@ -960,17 +1108,25 @@ async def metasearch(
             logger.debug("engine %s init failed: %r", b, ex)
             status[b] = f"init_error:{type(ex).__name__}"
 
-    if not instances and not _BRIGHTDATA_API_KEY:
-        if backends == ["brightdata"]:
-            # Nothing free was asked for, so the proxy is not the suspect here.
+    keyed_selected = [b for b in backends if b in KEYED_ENGINES]
+    keyed_ready = [b for b in keyed_selected if KEYED_ENGINES[b].api_key()]
+    for b in keyed_selected:
+        if not KEYED_ENGINES[b].api_key():
+            status[b] = f"no_key:{KEYED_ENGINES[b].env_var}"
+
+    if not instances and not keyed_ready:
+        if len(keyed_selected) == 1:
+            cls = KEYED_ENGINES[keyed_selected[0]]
+            # Only a keyed engine was asked for, so the proxy is not the suspect.
             raise MetaSearchException(
-                "Engine 'brightdata' requires DHOLE_BRIGHTDATA_API_KEY, which is not set."
+                f"Engine '{cls.name}' requires {cls.env_var}, which is not set."
             )
         proxy_note = f" (proxy in use: {_search_proxy})" if _search_proxy else ""
         raise MetaSearchException(
             f"No search engines could start{proxy_note}. "
             f"Engine status: {status}. "
-            f"Check DHOLE_SEARCH_PROXY or set DHOLE_BRIGHTDATA_API_KEY."
+            f"Check DHOLE_SEARCH_PROXY, or pick keyed engines (brightdata/tavily/"
+            f"exa/bocha) via engines= and set their API key env."
         )
 
     seen: dict[str, dict[str, Any]] = {}
@@ -1001,13 +1157,17 @@ async def metasearch(
 
     tasks = {asyncio.ensure_future(_run(n, e)): n for n, e in instances.items()}
 
-    # Bright Data SERP API: priority backend (runs in parallel with free engines).
-    # When configured, it almost always returns results (no rate-limiting).
-    if _BRIGHTDATA_API_KEY:
-        async def _run_brightdata():
-            res = await asyncio.to_thread(_brightdata_serp_search, query, max_results + 4)
-            return "brightdata", res
-        tasks[asyncio.ensure_future(_run_brightdata())] = "brightdata"
+    # Keyed JSON engines: run ONLY when explicitly selected (each call costs
+    # real money), and only when their key is present.
+    for b in keyed_ready:
+        eng = KEYED_ENGINES[b]()
+
+        async def _run_keyed(name=b, _eng=eng):
+            q = (query_map or {}).get(name, query)
+            res = await asyncio.to_thread(_eng.search_json, q, max_results + 4, timelimit)
+            return name, res
+
+        tasks[asyncio.ensure_future(_run_keyed())] = b
 
     pending = set(tasks)
     deadline = time() + _SEARCH_DEADLINE

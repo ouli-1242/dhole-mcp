@@ -446,8 +446,8 @@ class TestSearchProxyValidation:
                 raise RuntimeError("simulated construction failure")
 
         original = dict(m._TEXT_ENGINES)
-        original_bd_key = m._BRIGHTDATA_API_KEY
-        m._BRIGHTDATA_API_KEY = ""  # disable the brightdata fallback for this test
+        original_keyed = dict(m.KEYED_ENGINES)
+        m.KEYED_ENGINES.clear()  # disable keyed backends for this test
         for name in m._TEXT_ENGINES:
             m._TEXT_ENGINES[name] = type(
                 f"Broken{name}", (BrokenEngine,),
@@ -459,7 +459,8 @@ class TestSearchProxyValidation:
         finally:
             m._TEXT_ENGINES.clear()
             m._TEXT_ENGINES.update(original)
-            m._BRIGHTDATA_API_KEY = original_bd_key
+            m.KEYED_ENGINES.clear()
+            m.KEYED_ENGINES.update(original_keyed)
 
 
 # ─── Result diversity ──────────────────────────

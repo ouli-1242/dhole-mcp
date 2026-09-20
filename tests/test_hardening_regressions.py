@@ -124,7 +124,7 @@ class TestBrightDataErrorBodyRedaction:
             status_code = 500
             text = f'{{"error":"unauthorized, key {_BRIGHTDATA_KEY} rejected"}}'
 
-        monkeypatch.setattr(m, "_BRIGHTDATA_API_KEY", _BRIGHTDATA_KEY)
+        monkeypatch.setenv("DHOLE_BRIGHTDATA_API_KEY", _BRIGHTDATA_KEY)
         monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
         monkeypatch.setattr(httpx, "post", lambda *a, **k: _ServerError())
 

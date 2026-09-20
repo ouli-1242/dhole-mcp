@@ -105,13 +105,14 @@ dhole -u    # 自更新（本 fork 默认关闭）
 | `DHOLE_SSRF_DNS_RECHECK` | 设 `1` 开启 DNS 解析内网复查（默认关闭） |
 | `DHOLE_UPDATE_PACKAGE` | 自更新目标发行名（发布自己的发行版后设置以启用） |
 | `DHOLE_UPDATE_INDEX_URL` | 自更新/自愈时传给 pip 的 `--index-url`（不设则用 pip 默认源） |
+| `DHOLE_TAVILY_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_BOCHA_API_KEY` | 对应 keyed 引擎的密钥（均默认不跑，`engines=` 点名才调用） |
 
-### Bright Data SERP 后端
+### Keyed 搜索后端（brightdata / tavily / exa / bocha）
 
 设了 `DHOLE_BRIGHTDATA_API_KEY` 即启用，没有额外开关。它向 `api.brightdata.com/request`
 请求 `google.com/search` 的结果页（`data_format=parsed_light`），与免费引擎**并行**执行。
 
-- **配额按次消耗**：每次真正发起的搜索都会附带一次付费调用；命中搜索缓存则直接返回，不调用
+- **按次消耗，且默认不跑**：keyed 引擎只有 `engines=` 显式点名才执行（命中搜索缓存则连调用都不发）
 - **`engines=["brightdata"]` 可单独选它**：只跑付费后端；未配 key 时报错直指 `DHOLE_BRIGHTDATA_API_KEY`，不会把你引去查代理。可选引擎名全部来自 `_DHOLE_TO_BACKEND` 这一张表 —— 8 个免密的加它
 - **不拉高共识门槛**：`min_engines = min(3, 免费引擎数)` 只按免费引擎计算，它不计入
 - **提前返回时不取消**：免费引擎凑够结果触发早退时，其余任务被 cancel，但 Bright Data 会等它跑完，避免已花出去的配额白花
