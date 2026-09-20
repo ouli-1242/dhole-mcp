@@ -456,7 +456,9 @@ def _validate_engines(engines):
         raise SecurityError("engines must be a non-empty list")
     if len(engines) > 9:
         raise SecurityError("engines list too long (max 9)")
-    valid = set(DEFAULT_ENGINES) | {"wikipedia", "grokipedia", "yahoo", "bing", "ddg"}
+    # Single source of truth: a name is selectable iff _resolve_backends maps it.
+    from dhole_mcp.search_metasearch import _DHOLE_TO_BACKEND
+    valid = set(_DHOLE_TO_BACKEND)
     for e in engines:
         if not isinstance(e, str) or e.lower() not in valid:
             raise SecurityError(f"Invalid engine: {e!r} (one of {sorted(valid)})")

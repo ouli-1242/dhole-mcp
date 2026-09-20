@@ -655,6 +655,10 @@ _DHOLE_TO_BACKEND = {
     "yahoo": "yahoo", "wikipedia": "wikipedia",
     "brave": "brave", "yandex": "yandex",
     "grokipedia": "grokipedia",
+    # Paid SERP backend: selectable by name, but it runs on its own track in
+    # multi_search (JSON API, not the HTML-scraping BaseSearchEngine contract),
+    # so it is deliberately absent from _TEXT_ENGINES.
+    "brightdata": "brightdata",
 }
 # 国内网默认池：bing/yandex 可达无需 VPN；ddg/brave/yahoo 需 VPN。
 # 保留完整池（VPN 时更多信号），但 bing 排首位作为国内稳定兜底。
@@ -928,6 +932,11 @@ async def metasearch(
             status[b] = f"init_error:{type(ex).__name__}"
 
     if not instances and not _BRIGHTDATA_API_KEY:
+        if backends == ["brightdata"]:
+            # Nothing free was asked for, so the proxy is not the suspect here.
+            raise MetaSearchException(
+                "Engine 'brightdata' requires DHOLE_BRIGHTDATA_API_KEY, which is not set."
+            )
         proxy_note = f" (proxy in use: {_search_proxy})" if _search_proxy else ""
         raise MetaSearchException(
             f"No search engines could start{proxy_note}. "
