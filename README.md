@@ -4,7 +4,10 @@
 
 **让 AI 代理访问互联网：抓取 · 爬取 · 搜索，内置反爬，$0 无密钥。**
 
-[MIT](LICENSE) · Python 3.11+
+<a href="https://pypi.org/project/dhole-mcp/"><img src="https://img.shields.io/pypi/v/dhole-mcp.svg" alt="PyPI version"></a>
+<img src="https://img.shields.io/pypi/pyversions/dhole-mcp.svg" alt="Python 3.11+">
+<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License"></a>
+<img src="https://img.shields.io/badge/transport-stdio-blueviolet.svg" alt="MCP stdio transport">
 
 </div>
 
