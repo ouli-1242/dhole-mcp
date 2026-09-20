@@ -22,13 +22,26 @@ Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器，为 AI 代理
 
 ## 安装
 
-未发布到 PyPI，从源码安装。需要 Python 3.11+。
+需要 Python 3.11+。
+
+```bash
+pip install "dhole-mcp[all]"    # 完整版（含反爬浏览器、PDF/OCR、解析器）
+playwright install chromium      # 反检测浏览器引擎（~150MB，完整版需要）
+```
+
+精简版（纯 HTTP + 搜索，无浏览器依赖）：
+
+```bash
+pip install dhole-mcp
+```
+
+从源码安装：
 
 ```bash
 git clone https://github.com/ouli-1242/dhole-mcp.git
 cd dhole-mcp
-pip install .[all]              # 完整版；精简版（纯 HTTP + 搜索）用 pip install .
-playwright install chromium     # 反检测浏览器引擎（~150MB，完整版需要）
+pip install .[all]
+playwright install chromium
 ```
 
 卸载：
