@@ -2,34 +2,61 @@
 
 Tests the real cli.py module structure and updater functions. No network
 calls for version probing (PyPI fetch is mocked). The self-heal flow is
-tested via the actual module structure (stdlib-only at module level).
+tested BEHAVIORALLY: a subprocess blocks every heavy dependency and then
+imports hound_mcp.cli — the whole point of the entry point is that it must
+import (and self-heal) even on a broken install.
 """
 
 import os
-from hound_mcp.cli import _run_repair
+import subprocess
+import sys
+from pathlib import Path
+
 from hound_mcp.updater import check_version, pad_version, _at_or_ahead
 
+_SRC = str(Path(__file__).resolve().parent.parent / "src")
 
-# ─── CLI self-heal structure ───────────────────────────────────────
+_BLOCK_HEAVY_DEPS = """
+import sys, importlib.abc
+
+BLOCK = {"mcp", "primp", "patchright", "playwright", "pydantic",
+         "trafilatura", "aiosqlite", "httpx", "lxml", "onnxruntime"}
+
+class _Blocker(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split(".")[0] in BLOCK:
+            raise ImportError(f"blocked: {fullname}")
+        return None
+
+sys.meta_path.insert(0, _Blocker())
+import hound_mcp.cli
+assert callable(hound_mcp.cli.main)
+print("CLI_IMPORT_OK")
+"""
+
+
+# ─── CLI self-heal behaviour ───────────────────────────────────────
 
 class TestCLIStructure:
 
-    def test_cli_module_imports_only_stdlib(self):
-        """cli.py must be importable without heavy deps (self-heal requirement)."""
-        import hound_mcp.cli as cli
-        # The module should not have imported server.py at module level
-        # (it's imported lazily inside main())
-        assert hasattr(cli, "main")
-        assert hasattr(cli, "_run_repair")
+    def test_cli_imports_without_heavy_deps(self):
+        """cli.py 必须在重依赖全部不可导入时仍可导入（自愈前提）。
 
-    def test_main_catches_import_error(self, monkeypatch):
-        """main() must self-heal when server import fails."""
-        # Instead of patching __import__ (breaks pytest internals),
-        # just verify main() returns an int and doesn't crash with a normal import.
-        # The real self-heal is tested by the module structure test above.
-        # Don't call main() with a live server (it would start the MCP server).
-        # Just verify _run_repair exists and is callable.
-        assert callable(_run_repair)
+        行为测试：子进程中用 import hook 把 mcp/primp/patchright/...
+        全部变成 ImportError，再导入 hound_mcp.cli。若有人给 cli.py
+        加了模块级重依赖导入，坏安装下 hound 命令会彻底报废——这个
+        测试会在那时真实失败。（旧的 hasattr 存在性检查做不到这一点，
+        已删。）"""
+        result = subprocess.run(
+            [sys.executable, "-c", _BLOCK_HEAVY_DEPS],
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, "PYTHONPATH": _SRC},
+        )
+        assert result.returncode == 0, (
+            f"cli import failed with heavy deps blocked:\n"
+            f"{result.stdout}\n{result.stderr}"
+        )
+        assert "CLI_IMPORT_OK" in result.stdout
 
 
 # ─── Repair script ─────────────────────────────────────────────────

@@ -72,44 +72,11 @@ class TestSchemaAuto:
         assert result.get("_mode") == "auto"
 
 
-# ─── Batch structured extraction (urls + schema) ──────────────────────────────
-
-class TestBatchStructured:
-    """Test that schema parameter works in bulk mode (urls + schema)."""
-
-    def test_schema_passed_to_bulk(self):
-        """Verify _smart_fetch_bulk accepts schema parameter."""
-        import inspect
-        from hound_mcp.server import MasterFetchServer
-        sig = inspect.signature(MasterFetchServer._smart_fetch_bulk)
-        assert "schema" in sig.parameters
-
-    def test_smart_fetch_accepts_schema_and_urls(self):
-        """Verify smart_fetch signature has both urls and schema."""
-        import inspect
-        from hound_mcp.server import MasterFetchServer
-        sig = inspect.signature(MasterFetchServer.smart_fetch)
-        assert "urls" in sig.parameters
-        assert "schema" in sig.parameters
-
-
 # ─── fetch_content + fetch_schema in smart_search ─────────────────────────────
 
 class TestFetchContentSchema:
-    """Test that smart_search supports fetch_content and fetch_schema."""
-
-    def test_smart_search_has_fetch_schema_param(self):
-        import inspect
-        from hound_mcp.server import MasterFetchServer
-        sig = inspect.signature(MasterFetchServer.smart_search)
-        assert "fetch_content" in sig.parameters
-        assert "fetch_schema" in sig.parameters
-
-    def test_search_response_has_fetched_pages(self):
-        from hound_mcp.search import SearchResponseModel
-        resp = SearchResponseModel(query="test", results=[])
-        assert hasattr(resp, "fetched_pages")
-        assert resp.fetched_pages == []
+    """fetch_content=true 的行为测试（签名/属性存在性快照测试已删：
+    它们只在参数改名时报警，抓不到任何行为 bug）。"""
 
     @pytest.mark.asyncio
     async def test_fetch_content_failure_is_visible_in_fetched_pages(self, monkeypatch):

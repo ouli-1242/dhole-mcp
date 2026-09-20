@@ -17,21 +17,14 @@ from hound_mcp.browser import (
 # ─── Browser args ──────────────────────────────────────────────────
 
 class TestBrowserArgs:
-
-    def test_memory_optimization_flags_present(self):
-        assert "--renderer-process-limit=1" in DEFAULT_ARGS
-        assert "--js-flags=--max-old-space-size=512" in DEFAULT_ARGS
-
-    def test_harmful_automation_flag_suppressed(self):
-        assert "--enable-automation" in HARMFUL_ARGS
+    """单个魔法参数的成员断言（内存调优值、某个 stealth flag）已删——
+    参数表是随检测手段演进持续调优的数据，冻结它只会让正常调参报假警。
+    保留关系型不变量：我们自己的参数列表永不包含有害的自动化信号参数。"""
 
     def test_no_headless_flag_in_default_args(self):
         # --headless is not in DEFAULT_ARGS (added conditionally at launch)
         for arg in DEFAULT_ARGS:
             assert not arg.startswith("--headless")
-
-    def test_disable_blink_automation_in_stealth_args(self):
-        assert "--disable-blink-features=AutomationControlled" in STEALTH_ARGS
 
     def test_stealth_args_does_not_contain_harmful(self):
         # No harmful args should appear in stealth args
@@ -43,9 +36,9 @@ class TestBrowserArgs:
 # ─── Fingerprint profiles ─────────────────────────────────────────
 
 class TestFingerprintProfiles:
-
-    def test_has_four_profiles(self):
-        assert len(_FINGERPRINT_PROFILES) == 4
+    """数量断言（4 个档案、3 个 Win32、5 个插件、设备内存枚举）已删——
+    增删档案属正常演进。保留的是反检测的核心契约：档案结构完整、
+    内部自洽（平台与 WebGL 厂商匹配）、GPU 厂商有多样性。"""
 
     def test_all_profiles_have_required_fields(self):
         required = {"platform", "languages", "hardware_concurrency",
@@ -54,34 +47,29 @@ class TestFingerprintProfiles:
             missing = required - set(profile.keys())
             assert not missing, f"Profile missing fields: {missing}"
 
-    def test_win32_profiles_have_nvidia_or_intel_or_amd(self):
+    def test_win32_profiles_cover_major_gpu_vendors(self):
+        """GPU 厂商多样性：会话不能全部声称同一款显卡。"""
         win32_profiles = [p for p in _FINGERPRINT_PROFILES if p["platform"] == "Win32"]
-        assert len(win32_profiles) == 3
         renderers = [p["webgl_vendor"] for p in win32_profiles]
         assert any("NVIDIA" in r for r in renderers)
         assert any("Intel" in r for r in renderers)
         assert any("AMD" in r for r in renderers)
 
-    def test_macintel_profile_has_apple_webgl(self):
+    def test_macintel_profiles_have_apple_webgl(self):
+        """自洽：MacIntel 平台必须配 Apple GPU（检测器做交叉验证）。"""
         mac_profiles = [p for p in _FINGERPRINT_PROFILES if p["platform"] == "MacIntel"]
-        assert len(mac_profiles) == 1
-        assert "Apple" in mac_profiles[0]["webgl_vendor"]
+        assert mac_profiles, "no MacIntel profile"
+        for profile in mac_profiles:
+            assert "Apple" in profile["webgl_vendor"]
 
-    def test_all_profiles_have_five_plugins(self):
+    def test_all_profiles_have_plugins(self):
+        """headless 下 navigator.plugins 为空是机器人信号——档案必须伪造。"""
         for profile in _FINGERPRINT_PROFILES:
-            assert len(profile["plugins"]) == 5
-
-    def test_all_profiles_have_en_us_languages(self):
-        for profile in _FINGERPRINT_PROFILES:
-            assert "en-US" in profile["languages"]
+            assert len(profile["plugins"]) >= 1
 
     def test_hardware_concurrency_reasonable(self):
         for profile in _FINGERPRINT_PROFILES:
             assert 4 <= profile["hardware_concurrency"] <= 16
-
-    def test_device_memory_reasonable(self):
-        for profile in _FINGERPRINT_PROFILES:
-            assert profile["device_memory"] in (4, 8, 16)
 
 
 # ─── Fingerprint generation ───────────────────────────────────────

@@ -13,7 +13,7 @@ from hound_mcp import search as search
 from hound_mcp import search_engines as se
 from hound_mcp.search_engines import (
     _passes_site_filter, _normalize_domain, RawResult, EngineReport, multi_search,
-    DEFAULT_ENGINES, _INDEX_FAMILY,
+    _INDEX_FAMILY,
 )
 
 
@@ -374,16 +374,13 @@ class TestMultiSearchMapping:
         assert "-site:pinterest.com" in captured["query"]
 
 
-# ─── DEFAULT_ENGINES and index family ─────────────────────────────
+# ─── Index family (consensus semantics) ───────────────────────────
 
 class TestEngineConfig:
-
-    def test_default_engines_has_five(self):
-        assert len(DEFAULT_ENGINES) == 5
-
-    def test_default_engines_contains_key_backends(self):
-        for engine in ("bing", "duckduckgo", "brave", "yahoo", "yandex"):
-            assert engine in DEFAULT_ENGINES
+    """引擎池的成员/数量快照测试已删（DEFAULT_ENGINES 是数据不是逻辑，
+    增删引擎属正常演进）。保留 index-family 映射——它是跨引擎共识
+    权威信号的正确性契约：DDG 与 Yahoo 共用 Bing 索引，必须算作一个
+    家族，否则共识会虚高。"""
 
     def test_index_family_mapping(self):
         # DDG and Yahoo share Bing's index
