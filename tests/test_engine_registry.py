@@ -287,3 +287,111 @@ class TestNewKeyedEngines:
             await m.metasearch("q", engines=["bocha"])
 
         assert "DHOLE_BOCHA_API_KEY" in str(ei.value)
+
+
+class TestDefaultPoolEnv:
+    """DHOLE_DEFAULT_ENGINES：国内用户可把默认池收敛到直连可达的引擎。"""
+
+    def test_env_override(self, monkeypatch):
+        from dhole_mcp import search_metasearch as m
+
+        monkeypatch.setenv("DHOLE_DEFAULT_ENGINES", "bing, sogou_weixin")
+        assert m._resolve_backends(None) == ["bing", "sogou_weixin"]
+
+    def test_unknown_names_dropped_not_fatal(self, monkeypatch):
+        from dhole_mcp import search_metasearch as m
+
+        monkeypatch.setenv("DHOLE_DEFAULT_ENGINES", "bing, brvae")
+        assert m._resolve_backends(None) == ["bing"]
+
+    def test_unset_keeps_upstream_default(self, monkeypatch):
+        from dhole_mcp import search_metasearch as m
+
+        monkeypatch.delenv("DHOLE_DEFAULT_ENGINES", raising=False)
+        assert m._resolve_backends(None) == list(m._DEFAULT_BACKENDS)
+        assert m._DEFAULT_BACKENDS == ["bing", "duckduckgo", "brave", "yahoo", "yandex"]
+
+
+class TestConnectionFailureCooldown:
+    """被墙引擎连接失败不应每轮陪跑：连续失败 3 次后冷却 10 分钟。"""
+
+    @staticmethod
+    def _install_failing_bing(monkeypatch):
+        from dhole_mcp import search_metasearch as m
+
+        calls = {"constructed": 0, "searched": 0}
+
+        class _Broken:
+            disabled = False
+
+            def __init__(self, **kwargs):
+                calls["constructed"] += 1
+
+            def search(self, *a, **k):
+                calls["searched"] += 1
+                raise OSError("connection refused")
+
+        monkeypatch.setitem(m._TEXT_ENGINES, "bing", _Broken)
+        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
+        monkeypatch.setattr(m, "_SEARCH_DEADLINE", 1.5)
+        return calls
+
+    @pytest.mark.asyncio
+    async def test_third_consecutive_failure_cools_the_backend(self, monkeypatch):
+        from dhole_mcp import search_metasearch as m
+
+        calls = self._install_failing_bing(monkeypatch)
+        monkeypatch.setattr(m, "_BACKEND_HEALTH", {})
+
+        for _ in range(3):
+            results, status = await m.metasearch("q", 3, engines=["bing"])
+            assert results == []
+            assert status["bing"].startswith("error:")
+        assert calls["searched"] == 3
+
+        # 第 4 次：bing 已被冷却，不再构造/请求 -> 实例为空触发整体报错
+        with pytest.raises(m.MetaSearchException) as ei:
+            await m.metasearch("q", 3, engines=["bing"])
+        assert calls["constructed"] == 3, "冷却期内不得再构造实例"
+        assert "circuit_open" in str(ei.value)
+
+    @pytest.mark.asyncio
+    async def test_success_resets_the_failure_count(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from dhole_mcp import search_metasearch as m
+
+        calls = {"constructed": 0, "searched": 0}
+
+        class _Flaky:
+            disabled = False
+            fail = True
+
+            def __init__(self, **kwargs):
+                calls["constructed"] += 1
+
+            def search(self, *a, **k):
+                calls["searched"] += 1
+                if type(self).fail:
+                    raise OSError("connection refused")
+                return [SimpleNamespace(title="T", href="https://x.com/1", body="b")]
+
+        monkeypatch.setitem(m._TEXT_ENGINES, "bing", _Flaky)
+        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
+        monkeypatch.setattr(m, "_SEARCH_DEADLINE", 1.5)
+        monkeypatch.setattr(m, "_BACKEND_HEALTH", {})
+
+        for _ in range(2):
+            results, status = await m.metasearch("q", 3, engines=["bing"])
+            assert results == []
+            assert status["bing"].startswith("error:")
+
+        _Flaky.fail = False  # 第 3 次成功 -> 计数清零
+        await m.metasearch("q", 3, engines=["bing"])
+
+        _Flaky.fail = True
+        for _ in range(2):  # 只有 2 次连续失败，不应触发冷却
+            results, status = await m.metasearch("q", 3, engines=["bing"])
+            assert status["bing"].startswith("error:")
+
+        assert calls["constructed"] == 5, "成功应清零失败计数，2 次失败不足以冷却"

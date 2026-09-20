@@ -1004,22 +1004,54 @@ def _record_block(name: str) -> None:
     _save_circuit_state()
 
 
+# 连接失败（DNS/拒连/超时）与被反爬封不同：前者往往是持续性的（引擎被墙），
+# 却不会触发上面的熔断。连续失败达阈值后冷却更久，避免每轮搜索陪跑。
+_CONN_FAIL_THRESHOLD = 3
+_CONN_FAIL_COOLDOWN = 600.0
+_CONN_FAIL_COUNTS: dict[str, int] = {}
+
+
+def _record_conn_failure(name: str) -> None:
+    _CONN_FAIL_COUNTS[name] = _CONN_FAIL_COUNTS.get(name, 0) + 1
+    if _CONN_FAIL_COUNTS[name] >= _CONN_FAIL_THRESHOLD:
+        _BACKEND_HEALTH[name] = time() + _CONN_FAIL_COOLDOWN
+        _CONN_FAIL_COUNTS.pop(name, None)
+        _save_circuit_state()
+
+
 def _record_success(name: str) -> None:
+    _CONN_FAIL_COUNTS.pop(name, None)
     if name in _BACKEND_HEALTH:
         _BACKEND_HEALTH.pop(name, None)
         _save_circuit_state()
 
 
+def _configured_default_backends() -> list[str]:
+    """DHOLE_DEFAULT_ENGINES 覆盖默认池（逗号分隔）。国内用户可收敛到直连可达的
+    引擎，被墙的三个不再每轮陪跑。未知名忽略并告警；全无效则回落上游默认。"""
+    raw = os.environ.get("DHOLE_DEFAULT_ENGINES", "")
+    if not raw.strip():
+        return list(_DEFAULT_BACKENDS)
+    out: list[str] = []
+    for name in (x.strip().lower() for x in raw.split(",")):
+        b = _DHOLE_TO_BACKEND.get(name)
+        if b and b not in out:
+            out.append(b)
+        elif not b:
+            logger.warning("DHOLE_DEFAULT_ENGINES: unknown engine %r skipped", name)
+    return out or list(_DEFAULT_BACKENDS)
+
+
 def _resolve_backends(engines: Optional[list[str]]) -> list[str]:
     """Map dhole engine names (or 'auto'/None) to ddgs backend names, dropping dups/unknowns."""
     if not engines:
-        return list(_DEFAULT_BACKENDS)
+        return _configured_default_backends()
     out: list[str] = []
     for e in engines:
         b = _DHOLE_TO_BACKEND.get(e)
         if b and b not in out:
             out.append(b)
-    return out or list(_DEFAULT_BACKENDS)
+    return out or _configured_default_backends()
 
 
 _SEARCH_TRACKING_PARAMS = {
@@ -1230,6 +1262,7 @@ async def metasearch(
                 continue
             except BaseException as ex:  # CancelledError is BaseException in py3.11+
                 status[name] = f"error:{type(ex).__name__}"
+                _record_conn_failure(name)
                 continue
             added = 0
             touched = False  # returned a valid result that matched an existing key (dupe)

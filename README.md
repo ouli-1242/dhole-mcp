@@ -106,6 +106,9 @@ dhole -u    # 自更新（本 fork 默认关闭）
 | `DHOLE_UPDATE_PACKAGE` | 自更新目标发行名（发布自己的发行版后设置以启用） |
 | `DHOLE_UPDATE_INDEX_URL` | 自更新/自愈时传给 pip 的 `--index-url`（不设则用 pip 默认源） |
 | `DHOLE_TAVILY_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_BOCHA_API_KEY` | 对应 keyed 引擎的密钥（均默认不跑，`engines=` 点名才调用） |
+| `DHOLE_DEFAULT_ENGINES` | 覆盖免密默认池，逗号分隔（如 `bing,yandex,sogou_weixin`；被墙引擎不再每轮陪跑）。未设用上游默认 5 个 |
+
+免密引擎连续 3 次连接失败（DNS/拒连/超时，通常是被墙）会自动冷却 10 分钟并持久化，期间不再参与搜索；任何一次成功即清零。被反爬封（403/503）的冷却仍是 60 秒。 |
 
 ### Keyed 搜索后端（brightdata / tavily / exa / bocha）
 
