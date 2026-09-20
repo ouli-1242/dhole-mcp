@@ -85,9 +85,6 @@ Issues = "https://github.com/ouli-1242/dhole-mcp/issues"
 
 [project.scripts]
 dhole = "dhole_mcp.cli:main"
-# 迁移期兼容：14.0 改名前客户端已经在用 hound 命令启动服务器，保留别名指向
-# 同一 CLI，旧 client 配置零改动可用。确认全部迁移后可删除这一行。
-hound = "dhole_mcp.cli:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -9,6 +9,16 @@
 > 版本号是自己的，与上游版本不可比。`src/dhole_mcp/__init__.py` 中的
 > `__version__` 是版本的唯一权威来源。
 
+## [14.1] - 2026-09-20
+
+### 移除
+- **下线 14.0 的全部改名兼容层。** 确认所有 client 配置均已迁移到
+  `dhole` / `dhole_mcp` / `DHOLE_*`：
+  - 删除 `hound` CLI 命令别名（`[project.scripts]`）
+  - 删除 `hound_mcp` 兼容模块（`python -m hound_mcp` 不再可用）
+  - 删除包导入时的 `HOUND_*` → `DHOLE_*` 环境变量自动迁移；client 配置
+    里若仍写着 `HOUND_*`，现在会被直接忽略，需改为 `DHOLE_*`
+
 ## [14.0] - 2026-09-20
 
 ### 重大变更（破坏性）
