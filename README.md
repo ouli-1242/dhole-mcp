@@ -79,6 +79,17 @@ dhole -u    # 自更新（本 fork 默认关闭）
 | `resolve_url` | 解析 URL 最终地址（跟随重定向，不下载页面体） |
 | `cache_clear` | 清除抓取缓存 |
 
+### smart_search 常用参数
+
+| 参数 | 作用 |
+|------|------|
+| `max_results` | 最多返回条数，1–50，默认 6（超出范围**静默钳制**，不报错） |
+| `site` | 只保留该域名的结果（按最终 URL 的域名匹配） |
+| `exclude_sites` | 排除这些域名，传列表 |
+| `freshness` | 时效过滤，仅接受 `day` / `week` / `month` / `year`，其他值**直接报错** |
+| `page` | 翻页，0–10，默认 0，超范围**直接报错** |
+| `fetch_content` | `true` 时自动抓回正文：取相关性 `high` 的前 3 条（无 `high` 则退化为前 3 条），每条截断 8000 字符，并按 `focus=query` 做聚焦提取 |
+
 ## 配置
 
 所有环境变量均可选，默认零配置可用：
@@ -88,9 +99,24 @@ dhole -u    # 自更新（本 fork 默认关闭）
 | `DHOLE_SEARCH_PROXY` | 搜索引擎代理，逗号分隔可轮换（也自动读取 `HTTPS_PROXY` 等） |
 | `DHOLE_BROWSER_IDLE_TIMEOUT` | 浏览器空闲关闭秒数（默认 300，`0` 永不关闭） |
 | `DHOLE_SEARCH_DEADLINE` | 单次搜索整体截止秒数（默认 16） |
-| `DHOLE_BRIGHTDATA_API_KEY` | 启用 Bright Data SERP 付费后端（可选） |
+| `DHOLE_BRIGHTDATA_API_KEY` | 启用 Bright Data SERP 后端 —— **唯一需要密钥的搜索引擎**，行为见下节 |
+| `DHOLE_BRIGHTDATA_ZONE` | Bright Data zone 名（默认 `dhole`） |
+| `DHOLE_BRIGHTDATA_COUNTRY` | Google 结果地区（默认 `us`） |
 | `DHOLE_SSRF_DNS_RECHECK` | 设 `1` 开启 DNS 解析内网复查（默认关闭） |
 | `DHOLE_UPDATE_PACKAGE` | 自更新目标发行名（发布自己的发行版后设置以启用） |
+| `DHOLE_UPDATE_INDEX_URL` | 自更新/自愈时传给 pip 的 `--index-url`（不设则用 pip 默认源） |
+
+### Bright Data SERP 后端
+
+设了 `DHOLE_BRIGHTDATA_API_KEY` 即启用，没有额外开关。它向 `api.brightdata.com/request`
+请求 `google.com/search` 的结果页（`data_format=parsed_light`），与免费引擎**并行**执行。
+
+- **配额按次消耗**：每次真正发起的搜索都会附带一次付费调用；命中搜索缓存则直接返回，不调用
+- **`engines=` 选不到它**：可选项只有 `duckduckgo`/`ddg`、`bing`、`yahoo`、`wikipedia`、`brave`、`yandex`、`grokipedia`，全部免密；传 `brightdata` 会被丢弃并回落到默认引擎池
+- **不拉高共识门槛**：`min_engines = min(3, 免费引擎数)` 只按免费引擎计算，它不计入
+- **提前返回时不取消**：免费引擎凑够结果触发早退时，其余任务被 cancel，但 Bright Data 会等它跑完，避免已花出去的配额白花
+- **失败静默**：非 200 或任何异常都返回空列表、只记 debug 日志，不影响本次搜索结果
+- 单次 HTTP 超时 20 秒（硬编码），比 `DHOLE_SEARCH_DEADLINE`（默认 16 秒）长
 
 ## 已知限制
 
