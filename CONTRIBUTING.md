@@ -44,8 +44,8 @@ Two things worth knowing before you debug a "test doesn't see my change":
 ruff check src tests      # config lives in pyproject.toml [tool.ruff]
 ```
 
-CI runs `pytest` (Ubuntu 3.11–3.14, Windows 3.11) and `ruff check` on every push
-to `master` and every pull request.
+Run `pytest` and `ruff check src tests` locally before pushing — this fork has
+no CI, checks are run by hand.
 
 ## Layout
 
