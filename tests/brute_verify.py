@@ -1,9 +1,9 @@
-"""Hound 暴力验证脚本（手动运行，非 pytest）。
+"""Dhole 暴力验证脚本（手动运行，非 pytest）。
 
 覆盖：SSRF 变体矩阵、输入边界、feed_fetch 崩溃回归、重定向 SSRF。
 用法：python tests/brute_verify.py
 """
-from hound_mcp.security import SecurityError, validate_url, validate_search_query, validate_headers
+from dhole_mcp.security import SecurityError, validate_url, validate_search_query, validate_headers
 
 FAIL = []
 PASS = []

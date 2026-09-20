@@ -19,7 +19,7 @@ import warnings
 
 import pytest
 
-from hound_mcp.fetcher import HTTPSession
+from dhole_mcp.fetcher import HTTPSession
 
 
 class _CredentialLeakingClient:
@@ -38,7 +38,7 @@ async def test_retry_warning_redacts_proxy_credentials(caplog):
     session = HTTPSession(stealthy_headers=False, retries=1, retry_delay=0)
     session._client = _CredentialLeakingClient()
 
-    with caplog.at_level(logging.WARNING, logger="hound_mcp.fetcher"):
+    with caplog.at_level(logging.WARNING, logger="dhole_mcp.fetcher"):
         with pytest.raises(RuntimeError):
             await session.get("https://example.com/", retries=1)
 
@@ -53,7 +53,7 @@ async def test_retry_warning_still_mentions_the_url_and_attempt(caplog):
     session = HTTPSession(stealthy_headers=False, retries=1, retry_delay=0)
     session._client = _CredentialLeakingClient()
 
-    with caplog.at_level(logging.WARNING, logger="hound_mcp.fetcher"):
+    with caplog.at_level(logging.WARNING, logger="dhole_mcp.fetcher"):
         with pytest.raises(RuntimeError):
             await session.get("https://example.com/page", retries=1)
 
@@ -74,7 +74,7 @@ class TestKickHealthCheckWithoutEventLoop:
 
     def test_pool_is_not_touched_without_event_loop(self, monkeypatch):
         """必须先判断事件循环再创建协程，否则会留下未 await 的协程对象。"""
-        from hound_mcp import search_proxy
+        from dhole_mcp import search_proxy
 
         touched: list[int] = []
         monkeypatch.setattr(search_proxy, "get_proxy_pool", lambda: touched.append(1))
@@ -87,7 +87,7 @@ class TestKickHealthCheckWithoutEventLoop:
 
     def test_no_unawaited_coroutine_warning(self, monkeypatch):
         """直接复现历史症状：不应产生 RuntimeWarning。"""
-        from hound_mcp import search_proxy
+        from dhole_mcp import search_proxy
 
         pool = _RecordingPool()
         monkeypatch.setattr(search_proxy, "get_proxy_pool", lambda: pool)

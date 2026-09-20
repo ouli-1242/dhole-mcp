@@ -30,8 +30,8 @@ Thumbs.db
 credentials.json
 
 # Project caches (runtime)
-.hound_mcp_cache/
-.hound_cache/
+.dhole_mcp_cache/
+.dhole_cache/
 *.log
 
 # Test artifacts
@@ -55,7 +55,7 @@ scratch/
 .claude/
 .cursor/
 keys.md
-hound-mcp-bug-report.md
+dhole-mcp-bug-report.md
 
 # Local-only temp helper scripts (one-off fixes, release-note drafts).
 /.fix_*.py
@@ -67,7 +67,7 @@ hound-mcp-bug-report.md
 /.release_notes*.md
 V7-SEARCH-PLAN.md
 V10_PLAN.md
-docs/hound-demo.mp4
+docs/dhole-demo.mp4
 pi-extension/.npmrc
 node_modules/
 package-lock.json

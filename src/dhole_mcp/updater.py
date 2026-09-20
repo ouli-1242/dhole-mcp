@@ -1,38 +1,38 @@
-"""Reliable, brick-proof self-update for the hound CLI. Cross-platform.
+"""Reliable, brick-proof self-update for the dhole CLI. Cross-platform.
 
 This module owns the entire update lifecycle. The previous updater could brick
-the install: `pip install --upgrade hound-mcp[all]` pulled the heavy `[all]`
+the install: `pip install --upgrade dhole-mcp[all]` pulled the heavy `[all]`
 extra (onnxruntime, tokenizers, rapidocr) which is slow and fails mid-install
-(leaving hound_mcp deleted and hound.exe orphaned -> every `hound` command
-crashes with ModuleNotFoundError, including `hound -u` itself, so the tool
+(leaving dhole_mcp deleted and dhole.exe orphaned -> every `dhole` command
+crashes with ModuleNotFoundError, including `dhole -u` itself, so the tool
 cannot self-heal). The recovery messages told users to run a bare
-`pip install --force-reinstall` while a hound server held the launcher, which
+`pip install --force-reinstall` while a dhole server held the launcher, which
 is the exact command that bricks it.
 
 This rewrite fixes all of that:
 
-- **Core deps installed, no extras.** The self-update installs hound-mcp
+- **Core deps installed, no extras.** The self-update installs dhole-mcp
   WITH its core deps (so new core deps introduced in major versions are
   installed), but WITHOUT the `[all]` extra (so the heavy onnxruntime /
   tokenizers / rapidocr are NOT pulled). Fast, deterministic, cannot fail on
   a heavy dep. Existing deps already satisfied are left alone by pip.
 - **Windows: a detached helper runs pip after the launcher exits.** The running
-  `hound -u` command IS hound.exe, which Windows locks against overwrite. The
-  helper is a standalone `python -c` (no hound_mcp dependency) that waits
+  `dhole -u` command IS dhole.exe, which Windows locks against overwrite. The
+  helper is a standalone `python -c` (no dhole_mcp dependency) that waits
   for the parent launcher to exit, stages the launcher aside via the rename
   trick (Windows permits renaming a running .exe, just not overwriting it), then
-  runs pip with the launcher free. A still-running hound server is handled by
+  runs pip with the launcher free. A still-running dhole server is handled by
   the rename trick (it keeps the old code in memory until restarted); a stale
   locked `.old` is cleared by stopping that server. Never refuses, never bricks.
 - **Self-heal.** If pip's first pass leaves the version unchanged or broken, a
   `--force-reinstall --no-deps` pass runs (the launcher is free by then) and
   re-verifies. Catches a half-failed install automatically.
-- **Surviving repair.** `~/.hound/repair.py` (pure stdlib, outside site-packages)
-  is written on every update. If hound is ever bricked (e.g. a manual pip while
-  a server held the launcher), `python ~/.hound/repair.py` stops hound and
-  force-reinstalls. It survives because it is not part of the hound-mcp package.
+- **Surviving repair.** `~/.dhole/repair.py` (pure stdlib, outside site-packages)
+  is written on every update. If dhole is ever bricked (e.g. a manual pip while
+  a server held the launcher), `python ~/.dhole/repair.py` stops dhole and
+  force-reinstalls. It survives because it is not part of the dhole-mcp package.
 - **Safe messages.** Every failure prints ONE clean error plus the safe
-  recovery (`python ~/.hound/repair.py`), never a bare destructive pip command.
+  recovery (`python ~/.dhole/repair.py`), never a bare destructive pip command.
 """
 
 from __future__ import annotations
@@ -47,21 +47,19 @@ __all__ = [
 
 
 # ─── self-update source ────────────────────────────────────────────────────
-# This is a personal derivative work. The ``hound-mcp`` distribution on PyPI
-# belongs to the *upstream* project, so the historical self-update path
-# (``pip install hound-mcp==<latest>``) would install upstream code over this
-# fork. Self-update is therefore OFF by default, and ``hound -u`` points at the
-# source tree instead.
-#
-# Re-enable it only after publishing your own distribution:
-#   HOUND_UPDATE_PACKAGE=<distribution name on PyPI>
-#   HOUND_UPDATE_INDEX_URL=<optional index url>
-_DIST_NAME = "hound-mcp"   # the distribution this fork is installed as
+# This is a personal derivative work (of dondai1234/master-fetch). The project
+# was renamed hound-mcp -> dhole-mcp in 14.0 because the old name collided on
+# PyPI; ``dhole-mcp`` is now the distribution name of THIS fork. Self-update
+# stays OFF by default until the fork is actually published under the new name
+# (until then ``dhole -u`` reports from the source tree only):
+#   DHOLE_UPDATE_PACKAGE=<distribution name on PyPI>
+#   DHOLE_UPDATE_INDEX_URL=<optional index url>
+_DIST_NAME = "dhole-mcp"   # the distribution this fork is installed as
 
 
 def update_package() -> str:
     """Distribution to self-update FROM; empty string means self-update is off."""
-    return (os.environ.get("HOUND_UPDATE_PACKAGE") or "").strip()
+    return (os.environ.get("DHOLE_UPDATE_PACKAGE") or "").strip()
 
 
 def _dist() -> str:
@@ -71,7 +69,7 @@ def _dist() -> str:
 
 def update_index_url() -> str | None:
     """Optional index url for the self-update pip call."""
-    return (os.environ.get("HOUND_UPDATE_INDEX_URL") or "").strip() or None
+    return (os.environ.get("DHOLE_UPDATE_INDEX_URL") or "").strip() or None
 
 
 # ─── version probing ───────────────────────────────────────────────────────
@@ -93,8 +91,8 @@ def check_version() -> tuple[str, str | None, bool | None]:
     dist = update_package()
     if not dist:
         # Self-update is disabled in this fork: do not even hit the network.
-        # Querying `hound-mcp` on PyPI would advertise the upstream project's
-        # release as an update for this fork.
+        # Until dhole-mcp is published there is nothing to compare against;
+        # once it is, DHOLE_UPDATE_PACKAGE is the gate that turns this on.
         return installed, None, None
 
     latest: str | None = None
@@ -103,7 +101,7 @@ def check_version() -> tuple[str, str | None, bool | None]:
         from urllib.request import urlopen, Request
         req = Request(
             f"https://pypi.org/pypi/{dist}/json",
-            headers={"User-Agent": "Hound/" + installed},
+            headers={"User-Agent": "Dhole/" + installed},
         )
         with urlopen(req, timeout=5) as resp:
             latest = json.loads(resp.read().decode()).get("info", {}).get("version")
@@ -140,19 +138,19 @@ def _advanced(new_ver: str, target: str) -> bool:
 
 # ─── launcher + process helpers (Windows file-lock handling) ───────────────
 
-def _hound_launcher_path() -> str | None:
-    """Locate the hound launcher (hound.exe on Windows, `hound` on POSIX)."""
+def _dhole_launcher_path() -> str | None:
+    """Locate the dhole launcher (dhole.exe on Windows, `dhole` on POSIX)."""
     import shutil
-    candidate = shutil.which("hound")
+    candidate = shutil.which("dhole")
     if candidate and os.path.exists(candidate):
         return candidate
     scripts_dir = os.path.join(os.path.dirname(sys.executable), "Scripts")
-    for name in ("hound.exe", "hound"):
+    for name in ("dhole.exe", "dhole"):
         fb = os.path.join(scripts_dir, name)
         if os.path.exists(fb):
             return fb
     posix_bin = os.path.dirname(sys.executable)
-    posix_fallback = os.path.join(posix_bin, "hound")
+    posix_fallback = os.path.join(posix_bin, "dhole")
     if os.path.exists(posix_fallback):
         return posix_fallback
     return None
@@ -163,23 +161,23 @@ def _looks_like_file_lock_error(stderr: str) -> bool:
         return False
     s = stderr.lower()
     return ("winerror 32" in s or "being used by another process" in s
-            or ("permission denied" in s and "hound" in s))
+            or ("permission denied" in s and "dhole" in s))
 
 
-def _other_hound_pids() -> list[int]:
-    """PIDs of OTHER running hound launcher processes (excludes this one)."""
+def _other_dhole_pids() -> list[int]:
+    """PIDs of OTHER running dhole launcher processes (excludes this one)."""
     import subprocess
     my_pid = os.getpid()
     pids: list[int] = []
     try:
         if sys.platform == "win32":
             out = subprocess.check_output(
-                ["tasklist", "/FI", "IMAGENAME eq hound.exe", "/FO", "CSV", "/NH"],
+                ["tasklist", "/FI", "IMAGENAME eq dhole.exe", "/FO", "CSV", "/NH"],
                 text=True, timeout=10, creationflags=0x08000000,  # CREATE_NO_WINDOW
             )
             for line in out.splitlines():
                 parts = [p.strip().strip('"') for p in line.split('","')]
-                if len(parts) >= 2 and parts[0].lower() == "hound.exe":
+                if len(parts) >= 2 and parts[0].lower() == "dhole.exe":
                     try:
                         pid = int(parts[1])
                     except ValueError:
@@ -197,22 +195,22 @@ def _other_hound_pids() -> list[int]:
                     pid = int(pid_s)
                 except ValueError:
                     continue
-                if os.path.basename(comm.strip()) == "hound" and pid != my_pid:
+                if os.path.basename(comm.strip()) == "dhole" and pid != my_pid:
                     pids.append(pid)
     except Exception:
         return []
     return pids
 
 
-def _stop_all_hound() -> None:
-    """Kill all running hound launcher processes (except this one)."""
+def _stop_all_dhole() -> None:
+    """Kill all running dhole launcher processes (except this one)."""
     import subprocess
-    pids = _other_hound_pids()
+    pids = _other_dhole_pids()
     if not pids:
         return
     try:
         if sys.platform == "win32":
-            subprocess.run(["taskkill", "/IM", "hound.exe", "/F"],
+            subprocess.run(["taskkill", "/IM", "dhole.exe", "/F"],
                          capture_output=True, timeout=10,
                          creationflags=0x08000000)
         else:
@@ -226,37 +224,37 @@ def _stop_all_hound() -> None:
 
 
 
-def _hound_home() -> str:
-    p = os.path.join(os.path.expanduser("~"), ".hound")
+def _dhole_home() -> str:
+    p = os.path.join(os.path.expanduser("~"), ".dhole")
     os.makedirs(p, exist_ok=True)
     return p
 
 
 def repair_script_path() -> str:
-    return os.path.join(_hound_home(), "repair.py")
+    return os.path.join(_dhole_home(), "repair.py")
 
 
 def _state_path(name: str) -> str:
-    return os.path.join(_hound_home(), name)
+    return os.path.join(_dhole_home(), name)
 
 
 _REPAIR_SCRIPT = '''#!/usr/bin/env python3
-r"""Hound repair - recover from a broken hound install (failed update, brick).
+r"""Dhole repair - recover from a broken dhole install (failed update, brick).
 
 Run with:  python __REPAIR__
-Stops any running hound process, force-reinstalls hound-mcp from PyPI, verifies.
-Pure standard library - works even when the hound-mcp package is gone, because
-this file lives in ~/.hound (outside site-packages), so a failed pip uninstall
-of hound-mcp never touches it.
+Stops any running dhole process, force-reinstalls dhole-mcp from PyPI, verifies.
+Pure standard library - works even when the dhole-mcp package is gone, because
+this file lives in ~/.dhole (outside site-packages), so a failed pip uninstall
+of dhole-mcp never touches it.
 """
 import subprocess, sys
 
 def _stop():
     if sys.platform == "win32":
-        subprocess.run(["taskkill", "/IM", "hound.exe", "/F"], capture_output=True)
+        subprocess.run(["taskkill", "/IM", "dhole.exe", "/F"], capture_output=True)
     else:
-        # -x matches the process name exactly ("hound"), not this script ("python").
-        subprocess.run(["pkill", "-x", "hound"], capture_output=True)
+        # -x matches the process name exactly ("dhole"), not this script ("python").
+        subprocess.run(["pkill", "-x", "dhole"], capture_output=True)
 
 def _pip(*extra):
     return subprocess.run(
@@ -264,21 +262,21 @@ def _pip(*extra):
          "--disable-pip-version-check"])
 
 def main():
-    print("Hound repair: stopping any running hound...")
+    print("Dhole repair: stopping any running dhole...")
     _stop()
-    print("Hound repair: force-reinstalling hound-mcp from PyPI...")
-    r = _pip("--force-reinstall", "--upgrade", "hound-mcp")
+    print("Dhole repair: force-reinstalling dhole-mcp from PyPI...")
+    r = _pip("--force-reinstall", "--upgrade", "dhole-mcp")
     if r.returncode != 0:
-        print("Hound repair: reinstall failed (pip exit %d)." % r.returncode)
-        print("  Try manually:  %s -m pip install --force-reinstall hound-mcp" % sys.executable)
+        print("Dhole repair: reinstall failed (pip exit %d)." % r.returncode)
+        print("  Try manually:  %s -m pip install --force-reinstall dhole-mcp" % sys.executable)
         return r.returncode
     try:
         from importlib.metadata import version as _v
-        print("Hound " + _v("hound-mcp") + "  repaired")
+        print("Dhole " + _v("dhole-mcp") + "  repaired")
         return 0
     except Exception as e:
-        print("Hound repair: still broken after reinstall: " + str(e))
-        print("  Reinstall all deps:  %s -m pip install --force-reinstall hound-mcp" % sys.executable)
+        print("Dhole repair: still broken after reinstall: " + str(e))
+        print("  Reinstall all deps:  %s -m pip install --force-reinstall dhole-mcp" % sys.executable)
         return 1
 
 if __name__ == "__main__":
@@ -287,7 +285,7 @@ if __name__ == "__main__":
 
 
 def _write_repair_script() -> None:
-    """(Re)write ~/.hound/repair.py so the brick-recovery safety net exists."""
+    """(Re)write ~/.dhole/repair.py so the brick-recovery safety net exists."""
     try:
         with open(repair_script_path(), "w", encoding="utf-8") as f:
             f.write(
@@ -359,7 +357,7 @@ def _run_pip(cmd: list[str]) -> tuple[int, str]:
 
 def _diagnose(stderr: str) -> str:
     if _looks_like_file_lock_error(stderr):
-        return "a running hound server holds the launcher"
+        return "a running dhole server holds the launcher"
     s = (stderr or "").lower()
     if "no matching distribution" in s or "could not find a version" in s:
         return "version not found on PyPI"
@@ -371,7 +369,7 @@ def _diagnose(stderr: str) -> str:
 # ─── the detached Windows helper (standalone python -c, survives brick) ────
 
 def _build_helper_source(target: str, repair_path: str, parent_pid: int, full: bool = False) -> str:
-    """Build the standalone helper source. Pure stdlib, no hound_mcp import,
+    """Build the standalone helper source. Pure stdlib, no dhole_mcp import,
     so it runs even if the package is mid-replacement or bricked.
 
     The helper: waits for the parent launcher to exit, stages the launcher aside
@@ -402,20 +400,20 @@ def _wait_parent_exit(timeout=15):
             break
     time.sleep(2)  # fallback: give the launcher time to release the file
 
-def _hound_pids():
+def _dhole_pids():
     out = []
     if not WIN:
         return out
     my = os.getpid()
     try:
         o = subprocess.check_output(
-            ["tasklist", "/FI", "IMAGENAME eq hound.exe", "/FO", "CSV", "/NH"],
+            ["tasklist", "/FI", "IMAGENAME eq dhole.exe", "/FO", "CSV", "/NH"],
             text=True, timeout=10, creationflags=0x08000000)
     except Exception:
         return out
     for ln in o.splitlines():
         ps = [x.strip().strip(chr(34)) for x in ln.split(chr(34) + "," + chr(34))]
-        if len(ps) >= 2 and ps[0].lower() == "hound.exe":
+        if len(ps) >= 2 and ps[0].lower() == "dhole.exe":
             try:
                 pid = int(ps[1])
             except ValueError:
@@ -424,14 +422,14 @@ def _hound_pids():
                 out.append(pid)
     return out
 
-def _stop_all_hound():
+def _stop_all_dhole():
     if WIN:
-        subprocess.run(["taskkill", "/IM", "hound.exe", "/F"], capture_output=True)
+        subprocess.run(["taskkill", "/IM", "dhole.exe", "/F"], capture_output=True)
     else:
-        subprocess.run(["pkill", "-x", "hound"], capture_output=True)
+        subprocess.run(["pkill", "-x", "dhole"], capture_output=True)
 
 def _stage():
-    # Rename the live hound.exe -> hound.exe.old so pip can write a fresh one
+    # Rename the live dhole.exe -> dhole.exe.old so pip can write a fresh one
     # to the now-free path. Windows permits RENAMING a running .exe (it only
     # forbids overwrite/delete), so a server keeps running from the .old until
     # it restarts - no need to stop it. The only stop is for a stale .old left
@@ -445,8 +443,8 @@ def _stage():
                 os.remove(old)
                 break
             except OSError:
-                print("  a stale hound.exe.old is locked - stopping the old hound server...")
-                _stop_all_hound()
+                print("  a stale dhole.exe.old is locked - stopping the old dhole server...")
+                _stop_all_dhole()
                 time.sleep(2)
     try:
         os.rename(EXE, old)
@@ -466,7 +464,7 @@ def _pip(*extra):
 def _ver():
     try:
         from importlib.metadata import version as _v
-        return _v("hound-mcp")
+        return _v("dhole-mcp")
     except Exception:
         return "unknown"
 
@@ -491,26 +489,26 @@ try:
 except Exception:
     pass
 
-servers_before = _hound_pids()
+servers_before = _dhole_pids()
 if servers_before:
-    print("  stopping " + str(len(servers_before)) + " running hound server(s)...")
-    _stop_all_hound()
+    print("  stopping " + str(len(servers_before)) + " running dhole server(s)...")
+    _stop_all_dhole()
     time.sleep(1)
     servers_before = []
 _stage()
 
 if FULL:
-    rc, stderr = _pip("--force-reinstall", "--no-deps", "hound-mcp[all]==" + TARGET)
+    rc, stderr = _pip("--force-reinstall", "--no-deps", "dhole-mcp[all]==" + TARGET)
 else:
-    rc, stderr = _pip("hound-mcp==" + TARGET)
+    rc, stderr = _pip("dhole-mcp==" + TARGET)
 if not _advanced(_ver()):
     print("  first pass did not complete - recovering...")
     if FULL:
-        rc2, stderr2 = _pip("--force-reinstall", "--no-deps", "hound-mcp[all]==" + TARGET)
+        rc2, stderr2 = _pip("--force-reinstall", "--no-deps", "dhole-mcp[all]==" + TARGET)
     else:
-        rc2, stderr2 = _pip("--force-reinstall", "hound-mcp==" + TARGET)
+        rc2, stderr2 = _pip("--force-reinstall", "dhole-mcp==" + TARGET)
     if not _advanced(_ver()):
-        print("  Hound  " + ("reinstall" if FULL else "update") + " failed - " + (stderr2 or stderr or "pip failed").strip().splitlines()[-1:][0] if (stderr2 or stderr) else "pip failed")
+        print("  Dhole  " + ("reinstall" if FULL else "update") + " failed - " + (stderr2 or stderr or "pip failed").strip().splitlines()[-1:][0] if (stderr2 or stderr) else "pip failed")
         print("  recover with:  python \\"" + REPAIR + "\\"")
         sys.exit(1)
 
@@ -528,10 +526,10 @@ except OSError:
     pass
 
 new = _ver()
-print("  Hound  v" + new + "  " + ("reinstalled" if FULL else "updated"))
+print("  Dhole  v" + new + "  " + ("reinstalled" if FULL else "updated"))
 if servers_before:
-    print("  restart your running hound server (PID " + ", ".join(str(p) for p in servers_before) + ") to use it")
-'''.replace("__PARENT_PID__", str(parent_pid)).replace("__TARGET__", repr(target)).replace("__REPAIR__", repr(repair_path)).replace("__EXE__", repr(_hound_launcher_path())).replace("__FULL__", str(full)).replace(_DIST_NAME, _dist())
+    print("  restart your running dhole server (PID " + ", ".join(str(p) for p in servers_before) + ") to use it")
+'''.replace("__PARENT_PID__", str(parent_pid)).replace("__TARGET__", repr(target)).replace("__REPAIR__", repr(repair_path)).replace("__EXE__", repr(_dhole_launcher_path())).replace("__FULL__", str(full)).replace(_DIST_NAME, _dist())
 
 
 def _spawn_helper(target: str, repair_path: str, parent_pid: int, full: bool = False) -> bool:
@@ -552,10 +550,10 @@ def _spawn_helper(target: str, repair_path: str, parent_pid: int, full: bool = F
 def do_update(target: str | None = None) -> None:
     """Reliable, brick-proof self-update. `target` pins a version (rollback);
     None means the latest on PyPI. See the module docstring for the design."""
-    from hound_mcp import cli_ui as ui
+    from dhole_mcp import cli_ui as ui
     installed, latest, _is_current = check_version()
     if not update_package():
-        # Refuse even an explicit target: `pip install hound-mcp==X` pulls the
+        # Refuse even an explicit target: `pip install dhole-mcp==X` pulls the
         # UPSTREAM distribution, which is not this fork.
         print(ui.branded(ui.ver(installed), ui.dim("self-update off")))
         print("  " + ui.dim(f"personal fork - refusing to install {_dist()} from PyPI over it."))
@@ -568,7 +566,7 @@ def do_update(target: str | None = None) -> None:
     if not target:
         print(ui.branded(ui.ver(installed if installed != "unknown" else "?"),
                          ui.dim("couldn't reach PyPI")))
-        print("  " + ui.warn("check your connection, then") + "  " + ui.cmd("hound -u"))
+        print("  " + ui.warn("check your connection, then") + "  " + ui.cmd("dhole -u"))
         return
 
     if _at_or_ahead(installed, target):
@@ -588,7 +586,7 @@ def do_update(target: str | None = None) -> None:
     if sys.platform == "win32":
         # Detached helper: waits for this launcher to exit, frees it via the
         # rename trick, runs pip, self-heals, prints the result. The parent
-        # must exit so hound.exe is releasable.
+        # must exit so dhole.exe is releasable.
         if _spawn_helper(target, repair, os.getpid()):
             print("  " + ui.dim("(completes in this window once this command exits)"))
             return
@@ -598,10 +596,10 @@ def do_update(target: str | None = None) -> None:
         return
 
     # POSIX: no file lock. Kill stale servers, run pip with self-heal + verify.
-    others = _other_hound_pids()
+    others = _other_dhole_pids()
     if others:
-        print("  " + ui.dim(f"stopping {len(others)} hound server(s)..."))
-        _stop_all_hound()
+        print("  " + ui.dim(f"stopping {len(others)} dhole server(s)..."))
+        _stop_all_dhole()
     rc, stderr = _run_pip(_pip_cmd(target))
     if not _advanced(check_version()[0], target):
         print("  " + ui.dim("first pass did not complete - recovering..."))
@@ -616,9 +614,9 @@ def do_update(target: str | None = None) -> None:
 
 
 def print_version() -> None:
-    """Render `hound -v`: a compact bordered version panel (or a clean error
+    """Render `dhole -v`: a compact bordered version panel (or a clean error
     panel when the install is corrupted, pointing at the safe repair path)."""
-    from hound_mcp import cli_ui as ui
+    from dhole_mcp import cli_ui as ui
     W = 50
     inner = W - 4
     installed, latest, is_current = check_version()
@@ -630,7 +628,7 @@ def print_version() -> None:
             "",
             ui.dim("recover with:"),
             "  " + ui.cmd(f'python "{repair}"'),
-            ui.dim("or:  hound -u  (reinstalls the latest version)"),
+            ui.dim("or:  dhole -u  (reinstalls the latest version)"),
         ]
         print(ui.panel([ui.err("install corrupted")] + body, 62))
         return
@@ -649,7 +647,7 @@ def print_version() -> None:
             ui.lr(ui.wordmark(), "", inner),
             ui.lr(ui.ver(installed), ui.dim("couldn't reach PyPI"), inner),
         ], W))
-        print("  " + ui.warn("check your connection, then") + "  " + ui.cmd("hound -v"))
+        print("  " + ui.warn("check your connection, then") + "  " + ui.cmd("dhole -v"))
         return
     try:
         up_to_date = pad_version(installed) >= pad_version(latest)
@@ -665,6 +663,6 @@ def print_version() -> None:
             ui.lr(ui.wordmark(), "", inner),
             ui.lr(ui.ver(installed), ui.magenta(f"v{latest} available"), inner),
         ], W))
-        print("  " + ui.warn("update with") + "  " + ui.cmd("hound -u"))
+        print("  " + ui.warn("update with") + "  " + ui.cmd("dhole -u"))
 
 

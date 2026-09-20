@@ -1,7 +1,7 @@
-"""Hound metasearch engine layer.
+"""Dhole metasearch engine layer.
 
 Vendored + stripped from ddgs (https://github.com/deedy5/ddgs), MIT-licensed,
-(c) Pragmatic School / deedy5. Adapted for hound-mcp: text search only,
+(c) Pragmatic School / deedy5. Adapted for dhole-mcp: text search only,
 async-native parallel aggregation with early-return-on-quorum, no CLI / API
 server / MCP / images / videos / news / books / extract / cache / network bloat.
 See the ddgs LICENSE notice in NOTICE.ddgs.txt for full attribution.
@@ -10,11 +10,11 @@ Backends (all keyless, no API key, no account): duckduckgo, brave,
 grokipedia, wikipedia, yahoo, yandex. They run in PARALLEL; a backend that
 CAPTCHAs / rate-limits / has no topic-match simply yields
 nothing and the others carry - so search is robust without any single point of
-failure. This is the robustness hound's hand-rolled 3-engine scraper never had.
+failure. This is the robustness dhole's hand-rolled 3-engine scraper never had.
 
 Transport: primp (Rust HTTP client with browser TLS/header impersonation) for
 most backends; httpx (HTTP/2 + randomized cipher/SETTINGS frame) for DuckDuckGo.
-HOUND_SEARCH_PROXY env var (http/https/socks5) is the power-user rotating-proxy
+DHOLE_SEARCH_PROXY env var (http/https/socks5) is the power-user rotating-proxy
 escape hatch for per-IP throttling - the one thing no scraper, browser or not,
 can escape from a single IP.
 """
@@ -48,9 +48,9 @@ random = SystemRandom()
 
 T = TypeVar("T")
 
-# Proxy rotation: env var HOUND_SEARCH_PROXY (comma-separated for multiple),
+# Proxy rotation: env var DHOLE_SEARCH_PROXY (comma-separated for multiple),
 # HTTPS_PROXY/HTTP_PROXY/ALL_PROXY fallbacks, or config file
-# ~/.hound/search_proxies.json. See search_proxy.py.
+# ~/.dhole/search_proxies.json. See search_proxy.py.
 # _PROXY is set dynamically per search call by _get_search_proxy() below.
 _PROXY: str | None = None  # current proxy for this search call (set by metasearch)
 _proxy_pool = None  # lazily initialized ProxyPool (see _get_search_proxy)
@@ -64,7 +64,7 @@ def _get_search_proxy() -> str | None:
     ``search_engines.py`` lazy imports see the current proxy.
     """
     global _PROXY, _proxy_pool
-    from hound_mcp.search_proxy import get_proxy_pool, _kick_health_check
+    from dhole_mcp.search_proxy import get_proxy_pool, _kick_health_check
     pool = get_proxy_pool()
     if pool is None:
         _PROXY = None
@@ -77,16 +77,16 @@ def _get_search_proxy() -> str | None:
 
 # Per-engine + overall deadline. Engines run in parallel + we early-return on
 # quorum, so a healthy search is ~1-2s; this bounds a fully-throttled one.
-_SEARCH_DEADLINE = float(os.environ.get("HOUND_SEARCH_DEADLINE", "16") or "16")
+_SEARCH_DEADLINE = float(os.environ.get("DHOLE_SEARCH_DEADLINE", "16") or "16")
 _ua = UserAgent()
 
 # Bright Data SERP API (priority backend when configured)
-# 需自行配置：设置 HOUND_BRIGHTDATA_API_KEY 启用，未设置（或置空）则禁用该后端。
+# 需自行配置：设置 DHOLE_BRIGHTDATA_API_KEY 启用，未设置（或置空）则禁用该后端。
 # 此仓库为公开仓库，密钥只从环境变量读取，严禁硬编码进源码。
-_BRIGHTDATA_API_KEY = os.environ.get("HOUND_BRIGHTDATA_API_KEY") or ""
-_BRIGHTDATA_ZONE = os.environ.get("HOUND_BRIGHTDATA_ZONE", "hound")
+_BRIGHTDATA_API_KEY = os.environ.get("DHOLE_BRIGHTDATA_API_KEY") or ""
+_BRIGHTDATA_ZONE = os.environ.get("DHOLE_BRIGHTDATA_ZONE", "dhole")
 _BRIGHTDATA_ENDPOINT = "https://api.brightdata.com/request"
-_BRIGHTDATA_COUNTRY = os.environ.get("HOUND_BRIGHTDATA_COUNTRY", "us")  # Google result region
+_BRIGHTDATA_COUNTRY = os.environ.get("DHOLE_BRIGHTDATA_COUNTRY", "us")  # Google result region
 
 
 # ─── exceptions ──────────────────────────────────────────────────────────────
@@ -648,8 +648,8 @@ _TEXT_ENGINES: dict[str, type[BaseSearchEngine]] = {
     "yandex": Yandex,
     "bing": Bing,
 }
-# Map hound's public engine names -> metasearch backends.
-_HOUND_TO_BACKEND = {
+# Map dhole's public engine names -> metasearch backends.
+_DHOLE_TO_BACKEND = {
     "duckduckgo": "duckduckgo", "ddg": "duckduckgo",  # ddg is a common alias
     "bing": "bing",
     "yahoo": "yahoo", "wikipedia": "wikipedia",
@@ -726,7 +726,7 @@ def _brightdata_serp_search(query: str, max_results: int = 10) -> list:
 # are transient and do NOT trip the breaker. Cleared on the next success.
 _CIRCUIT_COOLDOWN = 60.0  # seconds
 _BACKEND_HEALTH: dict[str, float] = {}  # name -> block-until timestamp
-_CIRCUIT_STATE_FILE = os.path.join(os.path.expanduser("~"), ".hound", "circuit_breaker.json")
+_CIRCUIT_STATE_FILE = os.path.join(os.path.expanduser("~"), ".dhole", "circuit_breaker.json")
 
 
 def _load_circuit_state() -> None:
@@ -794,12 +794,12 @@ def _record_success(name: str) -> None:
 
 
 def _resolve_backends(engines: Optional[list[str]]) -> list[str]:
-    """Map hound engine names (or 'auto'/None) to ddgs backend names, dropping dups/unknowns."""
+    """Map dhole engine names (or 'auto'/None) to ddgs backend names, dropping dups/unknowns."""
     if not engines:
         return list(_DEFAULT_BACKENDS)
     out: list[str] = []
     for e in engines:
-        b = _HOUND_TO_BACKEND.get(e)
+        b = _DHOLE_TO_BACKEND.get(e)
         if b and b not in out:
             out.append(b)
     return out or list(_DEFAULT_BACKENDS)
@@ -932,7 +932,7 @@ async def metasearch(
         raise MetaSearchException(
             f"No search engines could start{proxy_note}. "
             f"Engine status: {status}. "
-            f"Check HOUND_SEARCH_PROXY or set HOUND_BRIGHTDATA_API_KEY."
+            f"Check DHOLE_SEARCH_PROXY or set DHOLE_BRIGHTDATA_API_KEY."
         )
 
     seen: dict[str, dict[str, Any]] = {}
@@ -1068,7 +1068,7 @@ async def metasearch(
     # (not just empty), the proxy is bad - cool it. If any engine succeeded,
     # the proxy is healthy - mark success. Only track when a proxy was used.
     if _search_proxy:
-        from hound_mcp.search_proxy import get_proxy_pool
+        from dhole_mcp.search_proxy import get_proxy_pool
         pool = get_proxy_pool()
         if pool is not None:
             has_connection_errors = any(

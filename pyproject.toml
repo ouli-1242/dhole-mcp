@@ -1,17 +1,17 @@
 [project]
-name = "hound-mcp"
-# 版本单一来源：src/hound_mcp/__init__.py 的 __version__。
+name = "dhole-mcp"
+# 版本单一来源：src/dhole_mcp/__init__.py 的 __version__。
 # 历史上这里有硬编码的哨兵值 99.0.0，与 CLI 报的版本 / PyPI 上的版本三处不一致。
 dynamic = ["version"]
-description = "Web research for AI agents. Fetch any page with anti-bot bypass plus web search. $0 forever. No scrapling dependency: hound uses primp + patchright directly. Graceful degradation when browser deps are unavailable (HTTP-only mode on Termux/Android). Token-optimized tool definitions, polished cross-platform CLI, brick-proof self-update with hound doctor + rollback."
+description = "Web research for AI agents. Fetch any page with anti-bot bypass plus web search. $0 forever. No scrapling dependency: dhole uses primp + patchright directly. Graceful degradation when browser deps are unavailable (HTTP-only mode on Termux/Android). Token-optimized tool definitions, polished cross-platform CLI, brick-proof self-update with dhole doctor + rollback."
 readme = "README.md"
 authors = [{name = "ouli-1242", email = "ouli1242@gmail.com"}]
 requires-python = ">=3.11"
 dependencies = [
-    # hound uses primp for HTTP TLS impersonation and patchright for browser.
+    # dhole uses primp for HTTP TLS impersonation and patchright for browser.
     # No scrapling dependency. Core deps all have universal wheels.
     # Browser deps (patchright, playwright, browserforge) are in [all] extra.
-    # When browser deps are missing, hound runs in HTTP-only mode
+    # When browser deps are missing, dhole runs in HTTP-only mode
     # (see _scrapling_available + _fallback_http_get in server.py).
     # Core deps:
     "mcp>=2.0,<3",
@@ -63,7 +63,7 @@ all = [
     # Browser deps (patchright for anti-detect browser, playwright for JS
     # rendering, browserforge for fingerprint generation). These may not
     # install on all platforms (e.g. playwright has no aarch64/Termux wheels).
-    # When missing, hound runs in HTTP-only mode.
+    # When missing, dhole runs in HTTP-only mode.
     "patchright>=1.50",
     "playwright>=1.50",
     "browserforge>=1.2.4",
@@ -80,33 +80,36 @@ all = [
 ]
 
 [project.urls]
-Repository = "https://github.com/ouli-1242/hound-mcp"
-Issues = "https://github.com/ouli-1242/hound-mcp/issues"
+Repository = "https://github.com/ouli-1242/dhole-mcp"
+Issues = "https://github.com/ouli-1242/dhole-mcp/issues"
 
 [project.scripts]
-hound = "hound_mcp.cli:main"
+dhole = "dhole_mcp.cli:main"
+# 迁移期兼容：14.0 改名前客户端已经在用 hound 命令启动服务器，保留别名指向
+# 同一 CLI，旧 client 配置零改动可用。确认全部迁移后可删除这一行。
+hound = "dhole_mcp.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
-# 唯一的版本定义处：CLI 的 hound -v、pip show、PyPI 元数据都读它
-path = "src/hound_mcp/__init__.py"
+# 唯一的版本定义处：CLI 的 dhole -v、pip show、PyPI 元数据都读它
+path = "src/dhole_mcp/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/hound_mcp"]
+packages = ["src/dhole_mcp", "src/hound_mcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Always import hound_mcp from src/, never from a built wheel installed in
+# Always import dhole_mcp from src/, never from a built wheel installed in
 # .venv. The dev venv ships a BUILT wheel (not editable); without this, pytest
 # silently runs the stale installed copy and src/ edits go untested. This has
 # bitten the project 4+ times. pythonpath (pytest 7+) wins over install.
 pythonpath = ["src"]
 addopts = ["-m", "not e2e"]
 markers = [
-    "e2e: end-to-end tests that spawn a real hound.exe subprocess. Skip by default in CI; run manually with `pytest -m e2e`.",
+    "e2e: end-to-end tests that spawn a real dhole.exe subprocess. Skip by default in CI; run manually with `pytest -m e2e`.",
 ]
 
 [tool.ruff]

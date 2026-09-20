@@ -7,7 +7,7 @@ contain essential patches, canvas noise must intercept both toDataURL
 and getImageData, HeadlessChrome must not appear in the UA.
 """
 
-from hound_mcp.browser import (
+from dhole_mcp.browser import (
     DEFAULT_ARGS, HARMFUL_ARGS, STEALTH_ARGS,
     _FINGERPRINT_PROFILES, _generate_fingerprint_profile,
     _build_stealth_init_script,

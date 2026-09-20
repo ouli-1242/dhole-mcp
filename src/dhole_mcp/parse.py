@@ -1,4 +1,4 @@
-"""Local file parsing for Hound MCP.
+"""Local file parsing for Dhole MCP.
 
 Converts local files (.html, .docx, .xlsx, .csv) to Markdown so agents can
 read documents without a web fetch. Part of the [all] extra (python-docx,
@@ -18,7 +18,7 @@ import csv
 import logging
 import os
 
-logger = logging.getLogger("hound_mcp.parse")
+logger = logging.getLogger("dhole_mcp.parse")
 
 # Supported extensions
 SUPPORTED_EXTENSIONS = {".html", ".htm", ".xhtml", ".docx", ".xlsx", ".csv", ".pdf"}
@@ -78,7 +78,7 @@ def parse_file(file_path: str) -> tuple[str, str]:
     except ImportError as e:
         return "", (
             f"Missing dependency for {ext} parsing: {e}. "
-            f"Install with: pip install hound-mcp[all]"
+            f"Install with: pip install dhole-mcp[all]"
         )
     except Exception as e:
         return "", f"Parse error ({ext}): {type(e).__name__}: {str(e)[:200]}"
@@ -90,7 +90,7 @@ def _parse_html(file_path: str) -> str:
     """Parse HTML file using trafilatura + markdownify (existing chain)."""
     with open(file_path, "r", encoding="utf-8", errors="replace") as f:
         html = f.read()
-    from hound_mcp.trafilatura_extractor import extract_content_from_html
+    from dhole_mcp.trafilatura_extractor import extract_content_from_html
     result = extract_content_from_html(html, file_path, "markdown")
     if result:
         return result

@@ -1,4 +1,4 @@
-"""Pytest fixtures for Hound tests."""
+"""Pytest fixtures for Dhole tests."""
 
 import pytest
 import tempfile

@@ -1,4 +1,4 @@
-"""OCR for Hound — turns image-only PDFs and image pages into text an agent
+"""OCR for Dhole — turns image-only PDFs and image pages into text an agent
 can read, using only pure-pip deps (no system binaries).
 
 Two engines, both pip-installable with bundled native libs / models:
@@ -9,7 +9,7 @@ Two engines, both pip-installable with bundled native libs / models:
     Falls back to the legacy ``rapidocr-onnxruntime`` v1 if that's what's
     installed. No system binary, no model download.
 
-Why this exists: hound's ``pdf_extractor`` returns an honest ``scanned_pdf``
+Why this exists: dhole's ``pdf_extractor`` returns an honest ``scanned_pdf``
 dead-end for image-only PDFs ("no extractable text"). That is correct but
 useless to the agent. When the OCR extras are installed, the PDF path falls
 back to rendering + OCR so the agent actually gets the text. Image-only web
@@ -36,9 +36,9 @@ from typing import TYPE_CHECKING, Any, Optional
 if TYPE_CHECKING:  # pragma: no cover - annotation-only import
     # pdf_extractor is imported lazily inside ocr_pdf() to keep this module
     # importable without the PDF extras; the annotation needs the name here.
-    from hound_mcp.pdf_extractor import PdfResult
+    from dhole_mcp.pdf_extractor import PdfResult
 
-logger = logging.getLogger("hound-mcp.ocr")
+logger = logging.getLogger("dhole-mcp.ocr")
 
 # Cap OCR to this many pages when the caller did not specify a page range.
 # Prevents a huge scanned PDF from hanging the call for minutes. An explicit
@@ -57,7 +57,7 @@ def _get_pdfium():
         return pdfium
     except ImportError as e:
         raise ImportError(
-            "OCR requires pypdfium2. Run: pip install hound-mcp[all]"
+            "OCR requires pypdfium2. Run: pip install dhole-mcp[all]"
         ) from e
 
 
@@ -75,7 +75,7 @@ def _get_rapidocr():
         return RapidOCR()
     except ImportError as e:
         raise ImportError(
-            "OCR requires rapidocr. Run: pip install hound-mcp[all]"
+            "OCR requires rapidocr. Run: pip install dhole-mcp[all]"
         ) from e
 
 
@@ -149,7 +149,7 @@ def ocr_pdf(
     the header tells the agent how to fetch the next batch.
     On failure: ``error`` is set and ``content`` is a human-readable explanation.
     """
-    from hound_mcp.pdf_extractor import PdfResult, _parse_pages  # reuse
+    from dhole_mcp.pdf_extractor import PdfResult, _parse_pages  # reuse
 
     if not body or not body[:5].startswith(b"%PDF"):
         return PdfResult(error="not_a_pdf: body does not start with %PDF",

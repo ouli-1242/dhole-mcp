@@ -1,4 +1,4 @@
-"""``hound_mcp.extractor`` 冒烟测试。
+"""``dhole_mcp.extractor`` 冒烟测试。
 
 提取链路是 trafilatura（主）→ markdownify（备）→ 正则剥标签（兜底），
 此前无测试覆盖。这里只锁「返回形状」与「不抛异常」这两个契约：
@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from hound_mcp.extractor import extract_content
+from dhole_mcp.extractor import extract_content
 
 _ARTICLE_HTML = """<!doctype html>
 <html lang="en"><head><title>Test Article</title></head>

@@ -2,7 +2,7 @@
 
 import pytest
 
-from hound_mcp.structured import extract_structured
+from dhole_mcp.structured import extract_structured
 
 
 # ─── Schema auto mode ─────────────────────────────────────────────────────────
@@ -83,9 +83,9 @@ class TestFetchContentSchema:
         """回归：fetch_content=true 时 smart_fetch 抛错曾被静默吞掉——agent 看到
         fetched_pages 缺一条却不知道为什么。现在失败也占位，带 error 字段。"""
         from unittest.mock import AsyncMock
-        from hound_mcp import search as search_mod
-        from hound_mcp.search_engines import RawResult, EngineReport
-        from hound_mcp.server import MasterFetchServer
+        from dhole_mcp import search as search_mod
+        from dhole_mcp.search_engines import RawResult, EngineReport
+        from dhole_mcp.server import MasterFetchServer
 
         async def fake_multi_search(query, max_results, **kwargs):
             return (
@@ -120,43 +120,43 @@ class TestSourceType:
     """Test _source_type domain classification."""
 
     def test_docs_domains(self):
-        from hound_mcp.search import _source_type
+        from dhole_mcp.search import _source_type
         assert _source_type("https://docs.python.org/3/tutorial") == "docs"
         assert _source_type("https://huggingface.co/models") == "docs"
         assert _source_type("https://kubernetes.io/docs/") == "docs"
 
     def test_paper_domains(self):
-        from hound_mcp.search import _source_type
+        from dhole_mcp.search import _source_type
         assert _source_type("https://arxiv.org/abs/2301.00001") == "paper"
         assert _source_type("https://nature.com/articles/xyz") == "paper"
 
     def test_repo_domains(self):
-        from hound_mcp.search import _source_type
+        from dhole_mcp.search import _source_type
         assert _source_type("https://github.com/user/repo") == "repo"
-        assert _source_type("https://pypi.org/project/hound-mcp/") == "repo"
+        assert _source_type("https://pypi.org/project/dhole-mcp/") == "repo"
 
     def test_forum_domains(self):
-        from hound_mcp.search import _source_type
+        from dhole_mcp.search import _source_type
         assert _source_type("https://stackoverflow.com/questions/123") == "forum"
         assert _source_type("https://zhihu.com/question/456") == "forum"
 
     def test_news_domains(self):
-        from hound_mcp.search import _source_type
+        from dhole_mcp.search import _source_type
         assert _source_type("https://bbc.com/news/article") == "news"
         assert _source_type("https://36kr.com/p/123") == "news"
 
     def test_blog_domains(self):
-        from hound_mcp.search import _source_type
+        from dhole_mcp.search import _source_type
         assert _source_type("https://medium.com/@user/post") == "blog"
         assert _source_type("https://csdn.net/article/123") == "blog"
 
     def test_path_heuristic(self):
-        from hound_mcp.search import _source_type
+        from dhole_mcp.search import _source_type
         assert _source_type("https://example.com/docs/api") == "docs"
         assert _source_type("https://example.com/blog/post-1") == "blog"
 
     def test_unknown_returns_other(self):
-        from hound_mcp.search import _source_type
+        from dhole_mcp.search import _source_type
         assert _source_type("https://randomsite12345.com/page") == "other"
 
 
@@ -166,11 +166,11 @@ class TestDdgAlias:
     """Test that 'ddg' is accepted as engine name."""
 
     def test_ddg_in_validate_engines(self):
-        from hound_mcp.search import _validate_engines
+        from dhole_mcp.search import _validate_engines
         # Should not raise
         result = _validate_engines(["ddg"])
         assert result == ["ddg"]
 
     def test_ddg_maps_to_duckduckgo(self):
-        from hound_mcp.search_metasearch import _HOUND_TO_BACKEND
-        assert _HOUND_TO_BACKEND["ddg"] == "duckduckgo"
+        from dhole_mcp.search_metasearch import _DHOLE_TO_BACKEND
+        assert _DHOLE_TO_BACKEND["ddg"] == "duckduckgo"

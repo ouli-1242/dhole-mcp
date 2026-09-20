@@ -1,7 +1,7 @@
-"""Hound local web search (v7 flagship: keyless, no-account, fully local).
+"""Dhole local web search (v7 flagship: keyless, no-account, fully local).
 
 Scrapes public search engines (DuckDuckGo, Bing, Qwant, Wikipedia) via the
-hound-native engine layer in search_engines.py - no third-party API, no key, no
+dhole-native engine layer in search_engines.py - no third-party API, no key, no
 account. Results are merged across engines, deduped by normalized URL, and
 ranked. Merging INDEPENDENT indexes gives a free authority signal: a URL
 returned by several engines is a consensus hit (engines_consensus field) and
@@ -29,33 +29,33 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
-from hound_mcp.cache import get_cached, set_cached
-from hound_mcp.security import validate_search_query, validate_url, redact_api_key, SecurityError
-from hound_mcp.search_engines import (
+from dhole_mcp.cache import get_cached, set_cached
+from dhole_mcp.security import validate_search_query, validate_url, redact_api_key, SecurityError
+from dhole_mcp.search_engines import (
     RawResult, multi_search, EngineReport, DEFAULT_ENGINES,
     fetch_source_for_similar, _INDEX_FAMILY,
 )
 
-logger = logging.getLogger("hound-mcp.search")
+logger = logging.getLogger("dhole-mcp.search")
 
 
 def neural_rerank(query: str, ranked: list[RawResult]):
-    from hound_mcp.reranker import rerank
+    from dhole_mcp.reranker import rerank
     return rerank(query, ranked)
 
 
 def unavailable_reason() -> str:
-    from hound_mcp.reranker import unavailable_reason as _unavailable_reason
+    from dhole_mcp.reranker import unavailable_reason as _unavailable_reason
     return _unavailable_reason()
 
 
 def get_reranker():
-    from hound_mcp.reranker import get_reranker as _get_reranker
+    from dhole_mcp.reranker import get_reranker as _get_reranker
     return _get_reranker()
 
 
 async def ensure_reranker(*, download: bool = True):
-    from hound_mcp.reranker import ensure_reranker as _ensure_reranker
+    from dhole_mcp.reranker import ensure_reranker as _ensure_reranker
     return await _ensure_reranker(download=download)
 
 
@@ -63,7 +63,7 @@ SEARCH_CACHE_TTL = 300  # 5 minutes
 
 
 # ─── related-query mining (extractive, no LLM) ──────────────────────────────
-# Mine follow-up queries from the result titles + snippets hound already has.
+# Mine follow-up queries from the result titles + snippets dhole already has.
 # Engine-agnostic and robust: no dependence on fragile per-engine "related
 # searches" SERP markup (which changes often). Ranks bigrams by document
 # frequency across the result set, drops ones that overlap the original query,
@@ -403,7 +403,7 @@ def _search_next_action(results: list[SearchResult], engine_blocked: list[str],
     if not results:
         if error and ("rate-limited" in error.lower() or "timed out" in error.lower() or engine_blocked):
             return ("No results (engines rate-limited/timed out). Retry in a moment, "
-                    "or set HOUND_SEARCH_PROXY for sustained heavy use.")
+                    "or set DHOLE_SEARCH_PROXY for sustained heavy use.")
         return "No results. Rephrase (more specific / different terms) or try mode=neural for semantic matching."
     high = [r for r in results if r.fetch_relevance == "high"]
     base = ("Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). "
@@ -418,7 +418,7 @@ def _search_next_action(results: list[SearchResult], engine_blocked: list[str],
             base += (f" WARNING: {len(engine_blocked)} of {total_engines} "
                     f"engines were rate-limited/blocked - results have LOW diversity "
                     f"(only from {', '.join(engines_used or ['unknown'])}). "
-                    f"For better recall: set HOUND_SEARCH_PROXY, retry in 60s, or rephrase the query.")
+                    f"For better recall: set DHOLE_SEARCH_PROXY, retry in 60s, or rephrase the query.")
         else:
             base += " Some engines didn't contribute; retry shortly for more recall."
     return base
@@ -490,7 +490,7 @@ def _rank(query: str, ranked: list[RawResult], mode: str):
     mode_used, note).
 
     mode='auto'/'neural': use the local ONNX cross-encoder if available
-    (hound-mcp[all] + model cached), else fall back to cross-engine consensus +
+    (dhole-mcp[all] + model cached), else fall back to cross-engine consensus +
     engine-position order (no lexical rerank). 'neural' surfaces a note when
     unavailable; 'auto' is silent (expected on lean installs).
     """
@@ -501,7 +501,7 @@ def _rank(query: str, ranked: list[RawResult], mode: str):
             return [r for r, _ in pairs], [s for _, s in pairs], "neural", note
         if mode == "neural":
             note = ("neural rerank unavailable - using consensus + engine-position order. " +
-                    (unavailable_reason() or "install hound-mcp[all] and retry"))
+                    (unavailable_reason() or "install dhole-mcp[all] and retry"))
     # Fallback (lean install / model missing): no lexical rerank. Score by position
     # so tiers derive sensibly; the caller's consensus boost adds the authority
     # signal on top.
@@ -613,7 +613,7 @@ def _domain_boost(url: str, query: str, is_technical: bool) -> float:
 
 # ─── search feedback (implicit domain preference learning) ───────────────────
 
-_FEEDBACK_FILE = os.path.join(os.path.expanduser("~"), ".hound", "search_feedback.json")
+_FEEDBACK_FILE = os.path.join(os.path.expanduser("~"), ".dhole", "search_feedback.json")
 _feedback_cache: Optional[frozenset] = None
 _feedback_mtime: float = 0.0
 
@@ -815,7 +815,7 @@ def _generate_query_map(query: str, intent: str, engines: list[str] | None) -> d
     engs = engines or []
     query_map: dict[str, str] = {}
     for eng in engs:
-        # Map hound engine name to its backend name before matching.
+        # Map dhole engine name to its backend name before matching.
         query_map[eng] = query if eng in core else expanded
     return query_map
 
@@ -1007,7 +1007,7 @@ async def smart_search(
             rerank_used = "find_similar"
             if ranked and get_reranker() is None:
                 rerank_note = ("find_similar used consensus + position order (neural unavailable). " +
-                               (unavailable_reason() or "install hound-mcp[all]"))
+                               (unavailable_reason() or "install dhole-mcp[all]"))
         _efams = {_INDEX_FAMILY.get(r.name, r.name) for r in reports if r.ok}
         total_families = len(_efams) or 1
         ranked_list, scores = _apply_quality_boost(ranked_list, scores, query)
@@ -1064,7 +1064,7 @@ async def smart_search(
             if not ranked and not error:
                 error = (
                     "No results from any engine. " +
-                    ("Engines were rate-limited/CAPTCHA'd; retry in a moment, rephrase, or set HOUND_SEARCH_PROXY for sustained heavy use. "
+                    ("Engines were rate-limited/CAPTCHA'd; retry in a moment, rephrase, or set DHOLE_SEARCH_PROXY for sustained heavy use. "
                      if blocked_any else "Try rephrasing the query.")
                 )
 

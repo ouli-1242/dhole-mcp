@@ -66,8 +66,8 @@ threading.Thread(target=internal.serve_forever, daemon=True).start()
 
 
 async def main():
-    from hound_mcp.fetcher import HTTPSession
-    from hound_mcp.security import SecurityError
+    from dhole_mcp.fetcher import HTTPSession
+    from dhole_mcp.security import SecurityError
 
     print("=" * 60)
     print("修复验证 1: 公网 302 -> 内网 应被拒绝")

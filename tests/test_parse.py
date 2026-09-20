@@ -4,7 +4,7 @@ import os
 import tempfile
 
 
-from hound_mcp.parse import parse_file, SUPPORTED_EXTENSIONS, MAX_PARSE_FILE_SIZE
+from dhole_mcp.parse import parse_file, SUPPORTED_EXTENSIONS, MAX_PARSE_FILE_SIZE
 
 
 class TestParseFileBasic:

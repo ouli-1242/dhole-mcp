@@ -1,9 +1,9 @@
-"""Hound search engine layer (v7.5: vendored ddgs metasearch backbone).
+"""Dhole search engine layer (v7.5: vendored ddgs metasearch backbone).
 
 No API key, no account, no third-party service at runtime. The actual multi-
 backend scraping + parsing + rotation lives in `search_metasearch.py` (vendored
 + stripped from ddgs, MIT, attributed in NOTICE.ddgs.txt). This module is the
-thin hound-side adapter: maps hound's smart_search params (engines, freshness,
+thin dhole-side adapter: maps dhole's smart_search params (engines, freshness,
 site, region, page) onto the metasearch, maps results back to RawResult with
 cross-backend consensus, and builds the per-engine reports.
 
@@ -13,7 +13,7 @@ its index). They run in PARALLEL; a backend that CAPTCHAs / rate-limits / has
 no topic-match just yields nothing and the others carry. Search is 100% HTTP
 (no browser) - the single Patchright browser stays for smart_fetch only.
 
-HOUND_SEARCH_PROXY (http/https/socks5) is the power-user rotating-proxy escape
+DHOLE_SEARCH_PROXY (http/https/socks5) is the power-user rotating-proxy escape
 hatch for per-IP throttling - the one thing no scraper can escape from one IP.
 """
 
@@ -38,7 +38,7 @@ def _get_metasearch():
     """
     global _metasearch
     if _metasearch is None:
-        from hound_mcp.search_metasearch import metasearch as loaded
+        from dhole_mcp.search_metasearch import metasearch as loaded
         _metasearch = loaded
     return _metasearch
 
@@ -117,8 +117,8 @@ async def fetch_source_for_similar(url: str, *, timeout: int = 10, max_chars: in
     impersonated HTTP fetch (primp) - a single arbitrary page, not a repeated
     engine hit, so the metasearch's backend rotation does not apply."""
     try:
-        from hound_mcp.fetcher import HTTPSession
-        from hound_mcp.search_metasearch import _PROXY as _p
+        from dhole_mcp.fetcher import HTTPSession
+        from dhole_mcp.search_metasearch import _PROXY as _p
         from bs4 import BeautifulSoup
         # rotation pool kept here (not imported from the removed SERL module)
         _pool = ["chrome", "safari", "firefox", "edge"]
@@ -170,7 +170,7 @@ async def multi_search(
     `engines` selects backends (None = the full default pool). `freshness` maps
     to the engines' time filter. `site` / `exclude_sites` are applied both as a
     query prefix (so backends that honor site: filter upstream) and on the final
-    URL (a safety net for backends that do not). `page` is 0-indexed (hound API)
+    URL (a safety net for backends that do not). `page` is 0-indexed (dhole API)
     -> 1-indexed for the backends. `server` is unused (kept for call-site compat;
     search never touches the browser).
     """
@@ -187,9 +187,9 @@ async def multi_search(
     if query_map:
         query_map = {eng: _apply_site(qq) for eng, qq in query_map.items()}
     timelimit = _FRESHNESS_TO_TIMELIMIT.get(freshness) if freshness else None
-    backend_page = page + 1  # hound 0-indexed -> backends 1-indexed
+    backend_page = page + 1  # dhole 0-indexed -> backends 1-indexed
 
-    # Map hound engine names -> metasearch backends (it handles 'auto'/None/legacy).
+    # Map dhole engine names -> metasearch backends (it handles 'auto'/None/legacy).
     mapped = list(engines) if engines else None
 
     metasearch = _get_metasearch()

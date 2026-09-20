@@ -1,1 +1,1 @@
-"""Tests for Hound MCP Server."""
+"""Tests for Dhole MCP Server."""

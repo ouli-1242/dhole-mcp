@@ -1,9 +1,9 @@
 """End-to-end MCP protocol tests — RUN MANUALLY, not in CI.
 
-These tests spawn a real `hound.exe` subprocess as a stdio MCP server
+These tests spawn a real `dhole.exe` subprocess as a stdio MCP server
 and verify the wire protocol against it. They are NOT pytest-discovered
 on CI because:
-  - Spawning hound per test in 6 matrix cells costs ~1 minute per cell.
+  - Spawning dhole per test in 6 matrix cells costs ~1 minute per cell.
   - The subprocess side-effects (live HTTP fetches) cost time and money.
   - Unit tests in test_server.py already cover the underlying handlers
     with mocks and are the canonical regression net.
@@ -14,7 +14,7 @@ Or run as a smoke script:
     python tests/e2e_mcp_test.py
 
 If a regression lands in the MCP stdio wire protocol, run the e2e
-tests against the local hound binary before tagging a release.
+tests against the local dhole binary before tagging a release.
 """
 import json
 import subprocess
@@ -38,7 +38,7 @@ _MAX_EMPTY_READS = 50
 class MCPClient:
     def __init__(self):
         self.proc = subprocess.Popen(
-            ["hound"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            ["dhole"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env={**__import__("os").environ},
         )
@@ -213,7 +213,7 @@ def _extract_data(result: dict) -> dict:
 
 
 if __name__ == "__main__":
-    print("End-to-end MCP protocol tests for Hound\n")
+    print("End-to-end MCP protocol tests for Dhole\n")
     print("(Subprocess-per-test; pass 1+/cell takes ~30s)\n")
     exit_code = pytest.main([__file__, "-v", "-x"])
     sys.exit(exit_code)

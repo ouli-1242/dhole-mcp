@@ -6,10 +6,10 @@ the next search uses the next proxy, cycling through the pool. Unhealthy
 proxies (connection errors) are cooled for 60s and skipped.
 
 Config sources (merged, deduped):
-  1. CLI: ``hound proxy add/list/remove/clear``
-  2. Config file: ``~/.hound/search_proxies.json``
+  1. CLI: ``dhole proxy add/list/remove/clear``
+  2. Config file: ``~/.dhole/search_proxies.json``
      ``{"proxies": ["http://user:pass@ip:port", ...]}``
-  3. Env var: ``HOUND_SEARCH_PROXY`` (comma-separated for multiple), with
+  3. Env var: ``DHOLE_SEARCH_PROXY`` (comma-separated for multiple), with
      HTTPS_PROXY / HTTP_PROXY / ALL_PROXY as single-proxy fallbacks.
 
 A single proxy string in the env var is fully backward-compatible (pool of 1).
@@ -33,8 +33,8 @@ _VALID_SCHEMES = ("http", "https", "socks5", "socks5h")
 
 
 def _config_path() -> Path:
-    """Return the path to ~/.hound/search_proxies.json."""
-    return Path.home() / ".hound" / "search_proxies.json"
+    """Return the path to ~/.dhole/search_proxies.json."""
+    return Path.home() / ".dhole" / "search_proxies.json"
 
 
 def _validate_proxy(proxy: str) -> str | None:
@@ -72,11 +72,11 @@ def _read_config_file() -> list[str]:
 
 
 def _read_env_var() -> list[str]:
-    """Read proxies from HOUND_SEARCH_PROXY (comma-separated), with the
+    """Read proxies from DHOLE_SEARCH_PROXY (comma-separated), with the
     standard HTTPS_PROXY / HTTP_PROXY / ALL_PROXY vars as single-proxy
-    fallbacks when HOUND_SEARCH_PROXY is unset."""
+    fallbacks when DHOLE_SEARCH_PROXY is unset."""
     raw = (
-        os.environ.get("HOUND_SEARCH_PROXY", "")
+        os.environ.get("DHOLE_SEARCH_PROXY", "")
         or os.environ.get("HTTPS_PROXY", "")
         or os.environ.get("HTTP_PROXY", "")
         or os.environ.get("ALL_PROXY", "")
@@ -196,7 +196,7 @@ class ProxyPool:
         NOT marked dead — a single probe failure is not proof of death.
         """
         import asyncio
-        from hound_mcp.fetcher import HTTPSession
+        from dhole_mcp.fetcher import HTTPSession
 
         async def _probe(proxy: str) -> tuple[str, bool]:
             try:

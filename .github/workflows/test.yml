@@ -37,5 +37,5 @@ jobs:
           python -m pip install -e ".[dev]"
 
       - name: Run tests
-        # e2e 测试会真实拉起 hound.exe 子进程，默认跳过（见 pyproject 的 addopts）
+        # e2e 测试会真实拉起 dhole.exe 子进程，默认跳过（见 pyproject 的 addopts）
         run: python -m pytest -q

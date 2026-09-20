@@ -4,7 +4,7 @@ Runs an ONNX cross-encoder (Apache-2.0 `cross-encoder/ms-marco-MiniLM-L-6-v2`,
 22.7M params, trained on MS MARCO passage reranking = query/document relevance)
 on the `onnxruntime` we ALREADY ship for OCR. No new runtime. The model + tokenizer
 are downloaded ONCE on first neural search into
-`~/.hound_mcp_cache/models/msmarco-minilm-l6-v2/` (pinned to a specific HF
+`~/.dhole_mcp_cache/models/msmarco-minilm-l6-v2/` (pinned to a specific HF
 revision + hash-checked), NOT bundled in the wheel, so the lean install stays small.
 
 Graceful fallback: if onnxruntime/tokenizers are missing (lean install) or the
@@ -24,7 +24,7 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
-logger = logging.getLogger("hound-mcp.reranker")
+logger = logging.getLogger("dhole-mcp.reranker")
 
 MODEL_ID = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 # Pinned revision for reproducibility (downloaded files never shift under us).
@@ -35,7 +35,7 @@ MODEL_FILES = {
     "tokenizer.json": f"{_BASE}/tokenizer.json",
     "vocab.txt": f"{_BASE}/vocab.txt",
 }
-MODEL_DIR = Path.home() / ".hound_mcp_cache" / "models" / "msmarco-minilm-l6-v2"
+MODEL_DIR = Path.home() / ".dhole_mcp_cache" / "models" / "msmarco-minilm-l6-v2"
 MAX_SEQ = 512
 # Sanity floor so a truncated/failed download is rejected (real onnx is ~80MB).
 MIN_MODEL_BYTES = 50_000_000
@@ -120,7 +120,7 @@ def _download_file(url: str, dest: Path) -> bool:
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(dest.suffix + ".part")
-        req = urllib.request.Request(url, headers={"User-Agent": "hound-mcp/7"})
+        req = urllib.request.Request(url, headers={"User-Agent": "dhole-mcp/7"})
         with urllib.request.urlopen(req, timeout=120) as r, open(tmp, "wb") as f:
             total = int(r.headers.get("Content-Length", 0) or 0)
             done = 0
@@ -163,7 +163,7 @@ def _ensure_model() -> Optional[tuple[Path, Path]]:
 
     if need:
         logger.info(
-            "Hound: downloading the local search reranker model (one-time, ~80MB)..."
+            "Dhole: downloading the local search reranker model (one-time, ~80MB)..."
         )
         for name in need:
             if not _download_file(MODEL_FILES[name], MODEL_DIR / name):
@@ -204,7 +204,7 @@ def _load_reranker() -> Optional[_Reranker]:
         import numpy  # noqa: F401
     except ImportError as e:
         _reranker_unavailable_reason = (
-            f"neural rerank needs hound-mcp[all] ({e.__class__.__name__}: {e})"
+            f"neural rerank needs dhole-mcp[all] ({e.__class__.__name__}: {e})"
         )
         return None
     try:
@@ -221,7 +221,7 @@ def _load_reranker() -> Optional[_Reranker]:
             from tokenizers import BertWordPieceTokenizer
             tok = BertWordPieceTokenizer(str(MODEL_DIR / "vocab.txt"), lowercase=True)
         _reranker = _Reranker(onnx_path, tok)
-        logger.info("Hound: neural reranker ready (ms-marco-MiniLM-L-6-v2, ONNX).")
+        logger.info("Dhole: neural reranker ready (ms-marco-MiniLM-L-6-v2, ONNX).")
         return _reranker
     except Exception as e:
         _reranker_unavailable_reason = f"reranker init failed: {e}"

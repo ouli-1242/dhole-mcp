@@ -1,4 +1,4 @@
-"""``hound_mcp.metadata`` 单元测试（纯函数：正则 + json，无网络）。
+"""``dhole_mcp.metadata`` 单元测试（纯函数：正则 + json，无网络）。
 
 该模块此前无测试覆盖。它给每个 HTML 抓取结果补齐 title/description/
 canonical/lang/published_time 等字段，agent 据此判断相关性与引用来源，
@@ -7,7 +7,7 @@ canonical/lang/published_time 等字段，agent 据此判断相关性与引用�
 
 from __future__ import annotations
 
-from hound_mcp.metadata import extract_image_urls, extract_metadata
+from dhole_mcp.metadata import extract_image_urls, extract_metadata
 
 
 class TestExtractMetadata:

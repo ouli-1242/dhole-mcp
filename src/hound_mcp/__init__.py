@@ -1,43 +1,31 @@
-"""Hound — Web research for AI agents.
+"""Deprecated compatibility alias: this package was renamed to ``dhole_mcp``.
 
-$0 forever. Fetch any page with anti-bot bypass plus web search.
+Kept through the 14.0 rename so existing MCP client configs that launch
+``python -m hound_mcp`` or import ``hound_mcp`` keep working unchanged.
+Importing emits a DeprecationWarning. Remove this shim package once every
+client config points at dhole / dhole_mcp.
 """
 
-__version__ = "13.16"
+from __future__ import annotations
 
-# Lazy imports — server pulls in heavy deps (patchright, playwright, etc.)
-# Other modules (cache, security) are lightweight and can be imported directly
-# for testing without the full dependency chain.
+import warnings
 
+warnings.warn(
+    "hound_mcp was renamed to dhole_mcp; update your launch command / imports",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
-def __getattr__(name: str):
-    """Lazy attribute access for server-level exports."""
-    _lazy_exports = {
-        "MasterFetchServer",
-        "ResponseModel",
-        "BulkResponseModel",
-        "SessionInfo",
-        "SessionCreatedModel",
-        "SessionClosedModel",
-        "CacheInfoModel",
-        "main",
-    }
-    if name in _lazy_exports:
-        # F401：这些名字通过下方 locals()[name] 返回，是刻意的惰性再导出，
-        # ruff 看不到用法，故显式豁免。
-        from hound_mcp.server import (  # noqa: F401
-            MasterFetchServer,
-            ResponseModel,
-            BulkResponseModel,
-            SessionInfo,
-            SessionCreatedModel,
-            SessionClosedModel,
-            CacheInfoModel,
-            main,
-        )
-        return locals()[name]
-    raise AttributeError(f"module 'hound_mcp' has no attribute '{name}'")
-
+from dhole_mcp.server import (  # noqa: E402,F401
+    BulkResponseModel,
+    CacheInfoModel,
+    MasterFetchServer,
+    ResponseModel,
+    SessionClosedModel,
+    SessionCreatedModel,
+    SessionInfo,
+    main,
+)
 
 __all__ = [
     "MasterFetchServer",

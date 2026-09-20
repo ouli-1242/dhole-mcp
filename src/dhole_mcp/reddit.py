@@ -1,4 +1,4 @@
-"""Reddit optimization for Hound.
+"""Reddit optimization for Dhole.
 
 Rewrites Reddit listing URLs to old.reddit.com, which serves the same content
 with ~7x smaller page size (134KB vs 1MB) and ~2x faster fetches. Post pages
@@ -19,7 +19,7 @@ import logging
 import re
 from urllib.parse import urlparse, urlunparse
 
-logger = logging.getLogger("hound-mcp.reddit")
+logger = logging.getLogger("dhole-mcp.reddit")
 
 # A "thing" block opens with class="... thing ...". Real old.reddit.com HTML
 # writes it as `class=" thing id-t3_..."` (LEADING SPACE), so the pattern allows

@@ -1,7 +1,7 @@
 """Tests for structured data extraction (structured.py)."""
 
 
-from hound_mcp.structured import extract_structured
+from dhole_mcp.structured import extract_structured
 
 
 SAMPLE_HTML = """

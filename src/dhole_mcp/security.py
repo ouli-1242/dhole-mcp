@@ -1,4 +1,4 @@
-"""Input validation and security utilities for Hound.
+"""Input validation and security utilities for Dhole.
 
 URL validation with SSRF protection, input sanitization,
 and safe defaults for all external-facing parameters.
@@ -62,13 +62,13 @@ class SecurityError(ValueError):
 
 
 def _dns_recheck_enabled() -> bool:
-    """是否开启域名 DNS 解析内网复查（HOUND_SSRF_DNS_RECHECK=1）。
+    """是否开启域名 DNS 解析内网复查（DHOLE_SSRF_DNS_RECHECK=1）。
 
     默认关闭：DNS 污染/分流环境（公网域名被解析到保留地址）会误伤合法请求。
     模块启动时读取一次并缓存。
     """
     import os
-    return os.environ.get("HOUND_SSRF_DNS_RECHECK", "").strip() in ("1", "true", "True")
+    return os.environ.get("DHOLE_SSRF_DNS_RECHECK", "").strip() in ("1", "true", "True")
 
 
 def _normalize_ip_notation(host: str) -> str | None:
@@ -289,7 +289,7 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
             if hostname_lower.endswith(_DNS_REBINDING_SUFFIXES):
                 raise SecurityError(f"URL uses DNS rebinding service: {hostname}")
             # 纵深防御（报告声明 4）：域名经 DNS 解析到的内网 IP 复查。
-            # 默认关闭（HOUND_SSRF_DNS_RECHECK=1 开启）：在 DNS 污染/分流环境
+            # 默认关闭（DHOLE_SSRF_DNS_RECHECK=1 开启）：在 DNS 污染/分流环境
             # （如被墙地区公网域名被解析到 198.18.0.0/15 等保留地址）会误伤
             # 所有合法公网请求。开启后只对"解析成功且命中内网"拒绝；
             # 解析失败（gaierror/超时）容忍。注意存在 DNS rebinding TOCTOU

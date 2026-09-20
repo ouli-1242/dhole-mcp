@@ -1,17 +1,17 @@
-"""Self-healing CLI entry point for hound.
+"""Self-healing CLI entry point for dhole.
 
-This module is the pip entry point (hound = hound_mcp.cli:main). It is
-deliberately lightweight: NO heavy imports at module level. When hound.exe
-runs, it does `from hound_mcp.cli import main` which imports
-`hound_mcp.__init__` (just __version__, no deps) and this module (stdlib
+This module is the pip entry point (dhole = dhole_mcp.cli:main). It is
+deliberately lightweight: NO heavy imports at module level. When dhole.exe
+runs, it does `from dhole_mcp.cli import main` which imports
+`dhole_mcp.__init__` (just __version__, no deps) and this module (stdlib
 only). The heavy server import happens lazily inside main(), wrapped in a
 try/except that auto-recovers from a broken install.
 
 Self-heal flow:
-1. User runs `hound` (any command) after a broken update/dep change
-2. `from hound_mcp.server import main` fails (ImportError/ModuleNotFoundError)
-3. cli.py catches it, checks if ~/.hound/repair.py exists
-4. If yes: runs it automatically (stops hound + force-reinstalls)
+1. User runs `dhole` (any command) after a broken update/dep change
+2. `from dhole_mcp.server import main` fails (ImportError/ModuleNotFoundError)
+3. cli.py catches it, checks if ~/.dhole/repair.py exists
+4. If yes: runs it automatically (stops dhole + force-reinstalls)
 5. If no: prints a clean one-line error (not a traceback) with the fix command
 """
 
@@ -22,34 +22,34 @@ import sys
 
 
 def _run_repair() -> int:
-    """Run ~/.hound/repair.py to auto-recover a broken install.
+    """Run ~/.dhole/repair.py to auto-recover a broken install.
 
     If repair.py doesn't exist, writes a minimal one inline and runs it.
     Never leaves the user stranded with a traceback.
     """
-    repair = os.path.join(os.path.expanduser("~"), ".hound", "repair.py")
+    repair = os.path.join(os.path.expanduser("~"), ".dhole", "repair.py")
     if not os.path.exists(repair):
         # Write a minimal repair script (same logic as updater._write_repair_script
         # but standalone so we don't need to import the updater module).
         os.makedirs(os.path.dirname(repair), exist_ok=True)
         script = '''import os, sys, subprocess
-print("Hound repair: stopping any running hound...")
+print("Dhole repair: stopping any running dhole...")
 if sys.platform == "win32":
-    subprocess.run(["taskkill", "/IM", "hound.exe", "/F"], capture_output=True)
+    subprocess.run(["taskkill", "/IM", "dhole.exe", "/F"], capture_output=True)
 else:
-    subprocess.run(["pkill", "-x", "hound"], capture_output=True)
-print("Hound repair: force-reinstalling hound-mcp from PyPI...")
-r = subprocess.run([sys.executable, "-m", "pip", "install", "--force-reinstall", "hound-mcp",
+    subprocess.run(["pkill", "-x", "dhole"], capture_output=True)
+print("Dhole repair: force-reinstalling dhole-mcp from PyPI...")
+r = subprocess.run([sys.executable, "-m", "pip", "install", "--force-reinstall", "dhole-mcp",
                     "--quiet", "--disable-pip-version-check"])
 if r.returncode != 0:
-    print("Hound repair: reinstall failed (pip exit %d)." % r.returncode)
-    print("  Try manually: %s -m pip install --force-reinstall hound-mcp" % sys.executable)
+    print("Dhole repair: reinstall failed (pip exit %d)." % r.returncode)
+    print("  Try manually: %s -m pip install --force-reinstall dhole-mcp" % sys.executable)
     sys.exit(1)
 try:
     from importlib.metadata import version as _v
-    print("Hound " + _v("hound-mcp") + "  repaired")
+    print("Dhole " + _v("dhole-mcp") + "  repaired")
 except Exception:
-    print("Hound repair: reinstalled (version check skipped)")
+    print("Dhole repair: reinstalled (version check skipped)")
 '''
         try:
             with open(repair, "w") as f:
@@ -59,10 +59,10 @@ except Exception:
             print("  recovering (direct reinstall)...")
             import subprocess
             subprocess.run([sys.executable, "-m", "pip", "install",
-                           "--force-reinstall", "hound-mcp",
+                           "--force-reinstall", "dhole-mcp",
                            "--quiet", "--disable-pip-version-check"],
                           timeout=120)
-            print("  Hound recovered. Re-run your command.")
+            print("  Dhole recovered. Re-run your command.")
             return 0
     import subprocess
     print("  recovering...")
@@ -73,7 +73,7 @@ except Exception:
             capture_output=False,
         )
         if result.returncode == 0:
-            print("  Hound recovered. Re-run your command.")
+            print("  Dhole recovered. Re-run your command.")
             return 0
         print("  Recovery failed. Run manually: "
               f'python "{repair}"')
@@ -87,16 +87,16 @@ except Exception:
 def main() -> int:
     """Entry point that self-heals on broken imports."""
     try:
-        from hound_mcp.server import main as _server_main
+        from dhole_mcp.server import main as _server_main
         return _server_main() or 0
     except (ImportError, ModuleNotFoundError) as e:
         # Broken install: missing dep, half-failed update, etc.
         # Don't crash with a traceback - auto-recover.
         mod_name = getattr(e, "name", "") or str(e)
-        print(f"  Hound install broken: {mod_name}")
+        print(f"  Dhole install broken: {mod_name}")
         rc = _run_repair()
         if rc != 0:
-            print("  If recovery failed, run: pip install --force-reinstall hound-mcp")
+            print("  If recovery failed, run: pip install --force-reinstall dhole-mcp")
         return rc
     except Exception:
         # Any other import-time crash (not a missing module) - re-raise

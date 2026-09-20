@@ -1,4 +1,4 @@
-"""Flagship PDF extraction for Hound — optimized for AI agents, v6.
+"""Flagship PDF extraction for Dhole — optimized for AI agents, v6.
 
 Turns a PDF's bytes into clean, structured markdown that an agent can reason
 over, with HONEST quality signals so the agent can trust the output and a
@@ -15,8 +15,8 @@ The flagship trick — auto-OCR for CID-corrupted pages:
   ``(cid:71)(cid:302)...`` garbage for those fonts (architecture diagrams,
   figures, math). But the glyphs RENDER correctly visually — only the
   text-to-unicode map is broken. So when a page's CID-garbage ratio is high,
-  hound renders that page to an image via pypdfium2 and OCRs it with rapidocr,
-  recovering the real text. This reuses the OCR deps hound already ships and
+  dhole renders that page to an image via pypdfium2 and OCRs it with rapidocr,
+  recovering the real text. This reuses the OCR deps dhole already ships and
   turns the #1 PDF-extraction failure mode (CID garbage) into readable content.
   If OCR extras aren't installed, the page keeps a low quality_score + an honest
   marker so the agent knows to use a vision tool.
@@ -46,7 +46,7 @@ import statistics
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
-logger = logging.getLogger("hound-mcp.pdf")
+logger = logging.getLogger("dhole-mcp.pdf")
 
 # A page is considered scanned/image-only if it yields fewer than this many
 # characters of extractable text on average.
@@ -65,7 +65,7 @@ _HEADING_MAX_LEN = 200
 _SENTENCE_END = ". , ; : ? ! ) ]".split()
 
 # CID font garbage: pdfplumber emits "(cid:NN)" for glyphs whose embedded font
-# lacks a ToUnicode CMap. When a page's CID-garbage ratio exceeds this, hound
+# lacks a ToUnicode CMap. When a page's CID-garbage ratio exceeds this, dhole
 # renders + OCRs that page to recover the real visible text.
 _CID_RE = re.compile(r"\(cid:\d+\)")
 _CID_RATIO_THRESHOLD = 0.30
@@ -104,7 +104,7 @@ def _get_pdfplumber():
         return pdfplumber
     except ImportError as e:
         raise ImportError(
-            "PDF extraction requires pdfplumber. Run: pip install hound-mcp[all]"
+            "PDF extraction requires pdfplumber. Run: pip install dhole-mcp[all]"
         ) from e
 
 
@@ -368,7 +368,7 @@ def _ocr_pages(body: bytes, page_nums: list[int], password: Optional[str]) -> di
     if not page_nums:
         return {}
     try:
-        from hound_mcp.ocr import ocr_pdf, ocr_available
+        from dhole_mcp.ocr import ocr_pdf, ocr_available
     except Exception:
         return {}
     if not ocr_available():
@@ -517,9 +517,9 @@ def extract_pdf(
                 pages_total=total_pages, pages_extracted=page_nums, scanned=True,
                 metadata=meta_dict, table_of_contents=toc,
                 error="scanned_pdf: this PDF is image-only (no extractable text). "
-                      "Install OCR support with `pip install hound-mcp[all]` and hound "
+                      "Install OCR support with `pip install dhole-mcp[all]` and dhole "
                       "will auto-OCR scanned PDFs; or use a vision-capable tool.",
-                content=["[Scanned/image-only PDF - no extractable text. Install hound-mcp[all] for OCR.]"],
+                content=["[Scanned/image-only PDF - no extractable text. Install dhole-mcp[all] for OCR.]"],
             )
 
         # --- Per-page auto-OCR fallback: CID garbage + scanned pages (mixed PDFs) ---
@@ -554,7 +554,7 @@ def extract_pdf(
                 rendered[n] = (
                     f"[Page {n}: {int(_cid_ratio(rendered[n])[0]*100)}% of this page "
                     f"is CID font garbage (embedded font without a Unicode map). "
-                    f"Install OCR with `pip install hound-mcp[all]` to auto-recover it, "
+                    f"Install OCR with `pip install dhole-mcp[all]` to auto-recover it, "
                     f"or smart_fetch this page with screenshot / a vision tool.]\n\n"
                     + rendered[n]
                 )
@@ -568,7 +568,7 @@ def extract_pdf(
             else:
                 rendered[n] = (
                     f"[Page {n}: scanned image page with no extractable text layer. "
-                    f"Install OCR with `pip install hound-mcp[all]` to auto-recover it, "
+                    f"Install OCR with `pip install dhole-mcp[all]` to auto-recover it, "
                     f"or use a vision tool / screenshot.]\n\n" + rendered[n]
                 )
 

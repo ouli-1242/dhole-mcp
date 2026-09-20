@@ -1,4 +1,4 @@
-"""Hound's own HTTP fetcher and Response class.
+"""Dhole's own HTTP fetcher and Response class.
 
 Replaces scrapling's FetcherSession (which wraps curl_cffi) with a direct
 primp-based implementation. primp provides the same TLS impersonation
@@ -19,9 +19,9 @@ from urllib.parse import urljoin, urlparse
 
 import primp
 
-from hound_mcp.security import redact_api_key
+from dhole_mcp.security import redact_api_key
 
-logger = logging.getLogger("hound_mcp.fetcher")
+logger = logging.getLogger("dhole_mcp.fetcher")
 
 
 def _urljoin(base: str, location: str) -> str:
@@ -456,7 +456,7 @@ class HTTPSession:
                                 break
                         if not location:
                             return resp, current
-                        from hound_mcp.security import SecurityError, validate_url
+                        from dhole_mcp.security import SecurityError, validate_url
                         try:
                             next_url = _urljoin(current, location)
                             validate_url(next_url, allow_internal=allow_internal)

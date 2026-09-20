@@ -1,4 +1,4 @@
-"""``hound_mcp.links`` 单元测试（纯函数：lxml 解析，无网络）。
+"""``dhole_mcp.links`` 单元测试（纯函数：lxml 解析，无网络）。
 
 该模块把页面外链分类为 citations / navigation / external / primary_source，
 此前无测试覆盖。分类错了会让 agent 把站点导航当成引用来源，或漏掉真正的
@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from hound_mcp.links import _norm_host, extract_links
+from dhole_mcp.links import _norm_host, extract_links
 
 PAGE = "https://example.com/blog/post"
 

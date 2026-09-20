@@ -1,13 +1,13 @@
 # Contributing
 
-Thanks for looking at Hound. This is a small, opinionated MCP server; the notes
+Thanks for looking at Dhole. This is a small, opinionated MCP server; the notes
 below are what you need to get a green local run.
 
 ## Setup
 
 ```bash
-git clone https://github.com/ouli-1242/hound-mcp.git
-cd hound-mcp
+git clone https://github.com/ouli-1242/dhole-mcp.git
+cd dhole-mcp
 python -m pip install -e ".[dev]"
 ```
 
@@ -18,14 +18,14 @@ python -m pip install -e ".[dev,all]"
 playwright install chromium          # required for the anti-bot browser path
 ```
 
-Without `[all]`, hound degrades to HTTP-only mode instead of failing — that
+Without `[all]`, dhole degrades to HTTP-only mode instead of failing — that
 degradation is a supported configuration and is covered by tests.
 
 ## Tests
 
 ```bash
 pytest                    # default run; e2e tests are deselected
-pytest -m e2e             # spawns a real hound.exe subprocess
+pytest -m e2e             # spawns a real dhole.exe subprocess
 pytest tests/test_search.py -q
 ```
 
@@ -50,7 +50,7 @@ to `master` and every pull request.
 ## Layout
 
 ```
-src/hound_mcp/
+src/dhole_mcp/
   server.py              MCP tool schemas + dispatch + orchestration
   fetcher.py             primp-based HTTP session and Response
   browser.py             patchright stealth browser
@@ -68,7 +68,7 @@ tests/                   unit + integration tests (no live network by default)
 - Commit messages follow `type(scope): summary` — e.g. `fix(search): ...`,
   `feat(server): ...`, `docs: ...`, `chore: ...`.
 - Never commit credentials. API keys are read from environment variables only;
-  see the note in `src/hound_mcp/search_metasearch.py`. Error text and logs must
+  see the note in `src/dhole_mcp/search_metasearch.py`. Error text and logs must
   go through `security.redact_api_key()` before being surfaced.
 - Every behaviour change ships with a test that fails without it.
 - Keep tool definitions token-lean — the tool descriptions are part of the
@@ -76,5 +76,5 @@ tests/                   unit + integration tests (no live network by default)
 
 ## Reporting bugs
 
-Include the `hound -v` output, the exact tool call, and whether the browser
-extras were installed. `HOUND_DEBUG=1` (or `-v`) increases log verbosity.
+Include the `dhole -v` output, the exact tool call, and whether the browser
+extras were installed. `DHOLE_DEBUG=1` (or `-v`) increases log verbosity.

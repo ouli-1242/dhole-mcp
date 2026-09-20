@@ -1,4 +1,4 @@
-"""Page metadata extraction for Hound.
+"""Page metadata extraction for Dhole.
 
 Enriches every HTML fetch response with structured metadata an agent can use to
 judge relevance and cite sources: title, description, site name, type, image,
@@ -17,7 +17,7 @@ import re
 from typing import Any
 from urllib.parse import urljoin
 
-logger = logging.getLogger("hound-mcp.metadata")
+logger = logging.getLogger("dhole-mcp.metadata")
 
 # Match <meta property/name="KEY" content="VAL"> in either attribute order.
 _META_RE = re.compile(

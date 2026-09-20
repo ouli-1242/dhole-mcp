@@ -1,6 +1,6 @@
 {
-  "name": "hound-mcp",
-  "version": "13.16",
+  "name": "dhole-mcp",
+  "version": "14.0",
   "private": true,
-  "description": "Hound MCP - keyless web research for AI agents. Free, no API key."
+  "description": "Dhole MCP - keyless web research for AI agents. Free, no API key."
 }

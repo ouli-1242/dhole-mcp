@@ -1,4 +1,4 @@
-"""Hound's own content extraction.
+"""Dhole's own content extraction.
 
 Replaces scrapling's Convertor._extract_content with direct trafilatura +
 markdownify + lxml usage. The extraction chain:
@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-logger = logging.getLogger("hound_mcp.extractor")
+logger = logging.getLogger("dhole_mcp.extractor")
 
 
 def extract_content(
@@ -26,7 +26,7 @@ def extract_content(
     """Extract content from a Response object.
 
     Args:
-        page: A Response object (hound_mcp.fetcher.Response) or compatible
+        page: A Response object (dhole_mcp.fetcher.Response) or compatible
               object with .body, .encoding, .url, .css()
         extraction_type: 'markdown', 'html', 'text', 'article', 'structured'
         css_selector: CSS selector to narrow extraction scope
@@ -34,7 +34,7 @@ def extract_content(
     Returns:
         List of extracted content strings (usually one element).
     """
-    from hound_mcp.trafilatura_extractor import extract_with_trafilatura, _fallback_extract
+    from dhole_mcp.trafilatura_extractor import extract_with_trafilatura, _fallback_extract
 
     # Trafilatura is the primary extractor for all text-like types
     if extraction_type in ("markdown", "text", "article", "structured"):

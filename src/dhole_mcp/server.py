@@ -1,4 +1,4 @@
-"""Hound MCP Server.
+"""Dhole MCP Server.
 
 Forks Scrapling's built-in MCP server and adds:
 - Trafilatura article extraction (cleaner than markdownify)
@@ -48,7 +48,7 @@ _warnings.filterwarnings("ignore", message="unclosed .*transport", category=Reso
 # __del__ during GC — after the loop is gone, so they can't be caught. Override
 # the hook to swallow ONLY that benign asyncio-transport teardown noise; every
 # other unraisable exception still goes to the original hook (real bugs stay
-# visible). This is what keeps `python -m hound_mcp` stderr clean on exit.
+# visible). This is what keeps `python -m dhole_mcp` stderr clean on exit.
 _ORIG_UNRAISABLEHOOK = getattr(sys, "unraisablehook", None)
 
 def _quiet_asyncio_del_hook(args):
@@ -78,17 +78,17 @@ try:
 except Exception:
     pass
 
-logger = logging.getLogger("hound-mcp.server")
+logger = logging.getLogger("dhole-mcp.server")
 
 
 
-from hound_mcp import __version__
+from dhole_mcp import __version__
 from pydantic import BaseModel, Field
 
 # Lazy imports: browser deps (patchright) pull in playwright (~5s load). Defer
 # until first use so the MCP server responds to initialize immediately.
 # Set when browser import fails (e.g. patchright not installable on Termux).
-# When set, hound runs in HTTP-only mode: fetch + search + crawl work via primp
+# When set, dhole runs in HTTP-only mode: fetch + search + crawl work via primp
 # + httpx + trafilatura, but stealthy browser escalation and screenshot are disabled.
 _browser_import_error: Optional[str] = None
 
@@ -111,7 +111,7 @@ def _browser_deps_available() -> bool:
     gracefully if patchright isn't installed, and the error is caught
     by the tool handler.
     """
-    from hound_mcp.browser import is_browser_available_cached, browser_import_error
+    from dhole_mcp.browser import is_browser_available_cached, browser_import_error
     global _browser_import_error
     cached = is_browser_available_cached()
     if cached is True:
@@ -135,25 +135,25 @@ async def _fallback_http_get(
 ):
     """HTTP fetch via primp (TLS impersonation). Used as the HTTP tier.
 
-    Returns a Response object from hound_mcp.fetcher.
+    Returns a Response object from dhole_mcp.fetcher.
     """
-    from hound_mcp.fetcher import http_get
+    from dhole_mcp.fetcher import http_get
     return await http_get(
         url, proxy=proxy, headers=headers, cookies=cookies, timeout=timeout,
     )
 
 if TYPE_CHECKING:
-    from hound_mcp.fetcher import Response as _HoundResponse
-    from hound_mcp.crawl import CrawlResponseModel
-    from hound_mcp.search import SearchResponseModel
+    from dhole_mcp.fetcher import Response as _DholeResponse
+    from dhole_mcp.crawl import CrawlResponseModel
+    from dhole_mcp.search import SearchResponseModel
     from mcp.types import ImageContent, TextContent
 
-from hound_mcp.cache import get_cached, set_cached, clear_cache, clear_all_cache, DEFAULT_TTL
-from hound_mcp.reddit import is_reddit_url, rewrite_to_old_reddit, parse_old_reddit_listing
-from hound_mcp.envelope import (
+from dhole_mcp.cache import get_cached, set_cached, clear_cache, clear_all_cache, DEFAULT_TTL
+from dhole_mcp.reddit import is_reddit_url, rewrite_to_old_reddit, parse_old_reddit_listing
+from dhole_mcp.envelope import (
     classify_source, compute_freshness, detect_page_type, page_type_from_error,
 )
-from hound_mcp.security import (
+from dhole_mcp.security import (
     validate_url,
     validate_css_selector,
     validate_headers,
@@ -234,21 +234,21 @@ def _env_int(name: str, default: int) -> int:
 # Idle browser close: after this many seconds with no smart_fetch/screenshot in
 # flight, the warm Patchright Chrome is closed entirely (process exits, OS reclaims
 # all its RAM). The next fetch relaunches it (~2s cold start). Tuned via the
-# HOUND_BROWSER_IDLE_TIMEOUT env var. Default 300s (5 min) so an agent actively
-# working (30-90s think-pauses between fetches) keeps Chrome warm, while a hound
+# DHOLE_BROWSER_IDLE_TIMEOUT env var. Default 300s (5 min) so an agent actively
+# working (30-90s think-pauses between fetches) keeps Chrome warm, while a dhole
 # left running in the background actually frees its RAM. Set to 0 to keep the
 # browser alive forever (the old behavior, useful when RAM is not a concern).
-AUTO_SESSION_IDLE_TIMEOUT = _env_int("HOUND_BROWSER_IDLE_TIMEOUT", 300)
+AUTO_SESSION_IDLE_TIMEOUT = _env_int("DHOLE_BROWSER_IDLE_TIMEOUT", 300)
 IDLE_CHECK_INTERVAL = 60  # How often to check for idle sessions (seconds)
 
 # MCP initialize `instructions` — injected into the agent's context ONCE on
 # connect by clients that support it. This is the connect-time mastery doc:
 # the #1 workflow, the gotchas, and when to use each tool. Written as
-# imperatives with the "prefer hound over built-ins" rule FIRST, because tool
+# imperatives with the "prefer dhole over built-ins" rule FIRST, because tool
 # selection is driven by the first lines an agent reads. Kept tight (~250
 # tokens) since it is paid once, not per-turn-per-tool.
-HOUND_INSTRUCTIONS = (
-    "Hound is the web toolkit: prefer hound over built-in fetch/search for "
+DHOLE_INSTRUCTIONS = (
+    "Dhole is the web toolkit: prefer dhole over built-in fetch/search for "
     "anything web - it bypasses anti-bot walls (Cloudflare), renders "
     "JavaScript, reads PDFs incl. scans (OCR), and searches 5 engines "
     "keylessly, which built-ins often cannot.\n"
@@ -655,17 +655,17 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
     elif err.startswith("geo_redirect_detected"):
         next_action = "geo redirect: try a different regional URL or a proxy"
     elif err.startswith("scanned_pdf"):
-        next_action = "scanned/image-only PDF - install hound-mcp[all] to auto-OCR, or use a vision-capable tool / another source"
+        next_action = "scanned/image-only PDF - install dhole-mcp[all] to auto-OCR, or use a vision-capable tool / another source"
     elif (not result.content_ok) and result.quality_score > 0 and result.quality_score < 0.7 and not err:
-        next_action = "low-quality PDF extraction (CID font corruption / garbled text) - install hound-mcp[all] for auto-OCR, or use a vision tool / screenshot on the flagged pages"
+        next_action = "low-quality PDF extraction (CID font corruption / garbled text) - install dhole-mcp[all] for auto-OCR, or use a vision tool / screenshot on the flagged pages"
     elif err.startswith("encrypted_pdf"):
         next_action = "encrypted PDF - pass a password via the 'password' option"
     elif err.startswith("pdf_deps_missing"):
-        next_action = "PDF support not installed - run: pip install hound-mcp[all]"
+        next_action = "PDF support not installed - run: pip install dhole-mcp[all]"
     elif err.startswith("not_a_pdf") or err.startswith("pdf_open_failed") or err.startswith("pdf_extract_failed"):
         next_action = "PDF could not be parsed - see error field"
     elif "all_tiers_failed" in err:
-        from hound_mcp.errors import classify_network_error
+        from dhole_mcp.errors import classify_network_error
         raw_err = " ".join(result.content) if result.content else err
         category, _ = classify_network_error(raw_err)
         if category == "connection_refused":
@@ -685,7 +685,7 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             next_action = ("All fetch tiers failed. The site may use unbypassable protection "
                           "(DataDome/Akamai/Turnstile) or is unreachable - switch sources.")
     elif result.status == 0 or result.status >= 400:
-        from hound_mcp.errors import classify_network_error
+        from dhole_mcp.errors import classify_network_error
         _, hint = classify_network_error(err)
         next_action = hint
 
@@ -805,7 +805,7 @@ def _apply_chunking(result: ResponseModel, max_chars: int = MAX_CONTENT_CHARS, o
     focus_q = _FOCUS.get()
     if focus_q and result.extracted_type in ("markdown", "text", "article", "structured"):
         try:
-            from hound_mcp.focus import focus_content
+            from dhole_mcp.focus import focus_content
             full_text = focus_content(full_text, focus_q)
         except Exception as e:
             logger.debug("focus filter failed: %s", e)
@@ -908,13 +908,13 @@ def _extract_pdf_response(body: bytes, raw_ct: str, total_size: int, url: str,
     password = _PDF_PASSWORD.get()
     include_media = _INCLUDE_MEDIA.get()
     try:
-        from hound_mcp.pdf_extractor import extract_pdf, PdfResult
+        from dhole_mcp.pdf_extractor import extract_pdf, PdfResult
         result: PdfResult = extract_pdf(body, extraction_type=extraction_type,
                                         pages=pages, password=password,
                                         include_media=include_media)
     except ImportError as e:
         return ResponseModel(
-            status=200, content=[f"[PDF extraction requires hound-mcp[all]. {e}]"],
+            status=200, content=[f"[PDF extraction requires dhole-mcp[all]. {e}]"],
             url=url, fetcher_used=fetcher_used, duration_ms=duration_ms,
             content_type=raw_ct, total_size_bytes=total_size,
             extracted_type="markdown", error=f"pdf_deps_missing: {e}",
@@ -934,7 +934,7 @@ def _extract_pdf_response(body: bytes, raw_ct: str, total_size: int, url: str,
     # Scanned / image-only PDF: fall back to OCR if the OCR extras are installed.
     if result.scanned and not result.encrypted:
         try:
-            from hound_mcp.ocr import ocr_pdf, ocr_available
+            from dhole_mcp.ocr import ocr_pdf, ocr_available
             if ocr_available():
                 ocr_result = ocr_pdf(body, pages=pages, password=password)
                 if ocr_result.content and not ocr_result.error:
@@ -967,7 +967,7 @@ def _extract_pdf_response(body: bytes, raw_ct: str, total_size: int, url: str,
 
 
 def _translate_response(
-    page: _HoundResponse,
+    page: _DholeResponse,
     extraction_type: str,
     css_selector: Optional[str],
     main_content_only: bool,
@@ -1041,7 +1041,7 @@ def _translate_response(
     is_image = raw_ct.startswith('image/') and bool(raw_body)
     if is_image and raw_body:
         try:
-            from hound_mcp.ocr import ocr_image_bytes, ocr_available
+            from dhole_mcp.ocr import ocr_image_bytes, ocr_available
             if ocr_available():
                 text = ocr_image_bytes(raw_body)
                 if text:
@@ -1060,7 +1060,7 @@ def _translate_response(
                 )
             return ResponseModel(
                 status=page.status,
-                content=["[Image page (content-type image/*). Install hound-mcp[all] for OCR text extraction.]"],
+                content=["[Image page (content-type image/*). Install dhole-mcp[all] for OCR text extraction.]"],
                 url=page.url, fetcher_used=fetcher_used, duration_ms=duration_ms,
                 content_type=raw_ct, total_size_bytes=total_size,
                 extracted_type="text", error="image_ocr_unavailable",
@@ -1084,9 +1084,9 @@ def _translate_response(
         and extraction_type in ("markdown", "text")
     )
 
-    def _hound_extract():
-        """Extract content via hound's own extractor (trafilatura + markdownify)."""
-        from hound_mcp.extractor import extract_content
+    def _dhole_extract():
+        """Extract content via dhole's own extractor (trafilatura + markdownify)."""
+        from dhole_mcp.extractor import extract_content
         return extract_content(
             page, extraction_type=extraction_type,
             css_selector=css_selector,
@@ -1094,7 +1094,7 @@ def _translate_response(
 
     def _trafilatura_extract():
         """Extract content via trafilatura."""
-        from hound_mcp.trafilatura_extractor import extract_with_trafilatura
+        from dhole_mcp.trafilatura_extractor import extract_with_trafilatura
         return extract_with_trafilatura(page, extraction_type=extraction_type, css_selector=css_selector)
 
     if is_old_reddit_listing and raw_body:
@@ -1104,17 +1104,17 @@ def _translate_response(
             if parsed:  # parser found real posts -> use structured markdown
                 content = [parsed]
             else:
-                content = _hound_extract()
+                content = _dhole_extract()
         except Exception:
-            content = _hound_extract()
+            content = _dhole_extract()
     elif use_trafilatura and extraction_type in ("markdown", "text", "article", "structured"):
         # Trafilatura-first path
         content = _trafilatura_extract()
         if (not content or content == [""] or content == ["\n"]):
-            content = _hound_extract()
+            content = _dhole_extract()
     else:
-        # Non-trafilatura path: use hound extractor (markdownify + lxml)
-        content = _hound_extract()
+        # Non-trafilatura path: use dhole extractor (markdownify + lxml)
+        content = _dhole_extract()
 
     if page.status == 503 and fetcher_used == "stealthy":
         note = "[503 via stealthy fetcher. The target server may block headless browser fingerprints. Try smart_fetch or http/dynamic fetcher instead.]"
@@ -1131,13 +1131,13 @@ def _translate_response(
         try:
             _html = raw_body.decode(getattr(page, 'encoding', None) or 'utf-8', errors='replace')
             page_html = _html
-            from hound_mcp.metadata import extract_metadata, extract_image_urls
+            from dhole_mcp.metadata import extract_metadata, extract_image_urls
             page_metadata = extract_metadata(_html, page_url)
             if _INCLUDE_MEDIA.get():
                 page_media = extract_image_urls(_html, page_url)
             if _INCLUDE_LINKS.get():
                 try:
-                    from hound_mcp.links import extract_links
+                    from dhole_mcp.links import extract_links
                     page_links = extract_links(_html, page_url, page_metadata)
                 except Exception as e:
                     logger.debug("links extraction failed for %s: %s", page_url, e)
@@ -1163,7 +1163,7 @@ def _translate_response(
     )
 
 
-def _check_response_size(page: _HoundResponse) -> None:
+def _check_response_size(page: _DholeResponse) -> None:
     """Raise if response body exceeds safety limit."""
     body = getattr(page, 'body', None)
     if body and isinstance(body, bytes) and len(body) > MAX_RESPONSE_BYTES:
@@ -1428,7 +1428,7 @@ class MasterFetchServer:
         if not _browser_deps_available():
             raise RuntimeError(
                 f"Browser unavailable: {_browser_import_error or 'patchright not importable'}. "
-                "Install browser deps: pip install hound-mcp[all] "
+                "Install browser deps: pip install dhole-mcp[all] "
                 "(or pip install playwright patchright)."
             )
         attr = "_auto_stealthy_id"
@@ -1479,7 +1479,7 @@ class MasterFetchServer:
 
         Scheduled when the MCP server starts so the browser is warm by the time
         the agent first needs a stealthy fetch or screenshot, skipping the
-        ~3-5s cold start. Closes after HOUND_BROWSER_IDLE_TIMEOUT of inactivity,
+        ~3-5s cold start. Closes after DHOLE_BROWSER_IDLE_TIMEOUT of inactivity,
         then relaunches on the next fetch. Idempotent: _ensure_auto_session
         reuses any existing session.
 
@@ -1516,7 +1516,7 @@ class MasterFetchServer:
             # result. After this, the cache-only reader returns instantly
             # without touching the event loop.
             def _check_and_import():
-                from hound_mcp.browser import check_browser_available
+                from dhole_mcp.browser import check_browser_available
                 return check_browser_available()
             if not await asyncio.to_thread(_check_and_import):
                 return  # HTTP-only mode, no browser to prewarm
@@ -1795,7 +1795,7 @@ class MasterFetchServer:
             raise RuntimeError(
                 f"Browser sessions require browser deps which are unavailable: "
                 f"{_browser_import_error or 'patchright not importable'}. "
-                "Install with: pip install hound-mcp[all]"
+                "Install with: pip install dhole-mcp[all]"
             )
         session_id = session_id or uuid4().hex[:12]
         async with self._sessions_lock:
@@ -1810,7 +1810,7 @@ class MasterFetchServer:
         validate_headers(extra_headers)
         validate_css_selector(wait_selector)
 
-        from hound_mcp.browser import StealthyBrowser
+        from dhole_mcp.browser import StealthyBrowser
         common_kwargs: Dict[str, Any] = dict(
             wait=wait, proxy=proxy, locale=locale, timeout=timeout, cookies=cookies,
             cdp_url=cdp_url, headless=headless,
@@ -1897,7 +1897,7 @@ class MasterFetchServer:
             raise RuntimeError(
                 f"Screenshot requires browser deps which are unavailable: "
                 f"{_browser_import_error or 'patchright not importable'}. "
-                "Install with: pip install hound-mcp[all]"
+                "Install with: pip install dhole-mcp[all]"
             )
 
         if quality is not None and image_type != "jpeg":
@@ -2075,7 +2075,7 @@ class MasterFetchServer:
         http_proxy = _proxy_to_url(proxy, proxy_auth)
         use_tf = use_trafilatura and extraction_type in ("markdown", "text", "article", "structured")
 
-        from hound_mcp.fetcher import HTTPSession
+        from dhole_mcp.fetcher import HTTPSession
         async with HTTPSession(
             impersonate=impersonate or "chrome",
             proxy=http_proxy,
@@ -2195,7 +2195,7 @@ class MasterFetchServer:
             raise RuntimeError(
                 f"Stealthy fetch requires browser deps which are unavailable: "
                 f"{_browser_import_error or 'patchright not importable'}. "
-                "Install with: pip install hound-mcp[all]"
+                "Install with: pip install dhole-mcp[all]"
             )
 
         t0 = now()
@@ -2288,7 +2288,7 @@ class MasterFetchServer:
             raise RuntimeError(
                 f"Stealthy fetch requires browser deps which are unavailable: "
                 f"{_browser_import_error or 'patchright not importable'}. "
-                "Install with: pip install hound-mcp[all]"
+                "Install with: pip install dhole-mcp[all]"
             )
 
         use_tf = use_trafilatura and extraction_type in ("markdown", "text", "article", "structured")
@@ -2307,7 +2307,7 @@ class MasterFetchServer:
             ]
             timed_responses = await gather(*timed_tasks, return_exceptions=True)
         else:
-            from hound_mcp.browser import StealthyBrowser
+            from dhole_mcp.browser import StealthyBrowser
             async with StealthyBrowser(
                 wait=wait, proxy=proxy, locale=locale, cdp_url=cdp_url,
                 timeout=timeout, cookies=cookies, headless=headless,
@@ -2445,7 +2445,7 @@ class MasterFetchServer:
         # results where schema has data but focus-filtered content is empty).
         if schema and isinstance(schema, dict) and (schema.get("properties") or schema.get("type") == "auto" or schema.get("mode") == "auto"):
             # Security: validate all CSS selectors in the schema before use
-            from hound_mcp.security import validate_css_selector, SecurityError
+            from dhole_mcp.security import validate_css_selector, SecurityError
             try:
                 for _fn, _fs in schema.get("properties", {}).items():
                     if isinstance(_fs, dict) and _fs.get("selector"):
@@ -2464,7 +2464,7 @@ class MasterFetchServer:
             )
             html_content = "\n".join(html_result.content) if html_result.content else ""
             if html_content and html_result.status < 400:
-                from hound_mcp.structured import extract_structured
+                from dhole_mcp.structured import extract_structured
                 structured = await asyncio_to_thread(
                     extract_structured, html_content, schema, url,
                     html_result.metadata or {},
@@ -2513,7 +2513,7 @@ class MasterFetchServer:
         if actions:
             if force_fetcher == "http":
                 raise ValueError("actions require the browser tier; use force_fetcher='stealthy' or omit it")
-            from hound_mcp.actions import build_page_action
+            from dhole_mcp.actions import build_page_action
             page_action = build_page_action(actions)  # validates; raises on bad input
             if page_action is None:
                 raise ValueError("actions must be a non-empty list of action dicts")
@@ -2732,9 +2732,9 @@ class MasterFetchServer:
         # (connection_refused, dns_failure); timeout/unknown still try HTTP.
         # 代理感知：配置了代理（HTTP 请求走代理而非直连）时跳过 preflight——
         # 直连探测会误报 connection_refused/dns_failure，跳过以避免误判。
-        _env_proxy = os.environ.get("HOUND_SEARCH_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("ALL_PROXY")
+        _env_proxy = os.environ.get("DHOLE_SEARCH_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("ALL_PROXY")
         if not (proxy or _env_proxy):
-            from hound_mcp.fetcher import tcp_preflight
+            from dhole_mcp.fetcher import tcp_preflight
             reachable, preflight_category = await asyncio_to_thread(tcp_preflight, url, 2.0)
             if not reachable and preflight_category in ("connection_refused", "dns_failure"):
                 elapsed = (now() - start_time) * 1000
@@ -2856,7 +2856,7 @@ class MasterFetchServer:
         # All tiers failed
         errors.append(f"Stealthy failed (status {result.status})")
         # Classify the failure for agent-actionable tips
-        from hound_mcp.errors import classify_network_error
+        from dhole_mcp.errors import classify_network_error
         raw_error = result.error or " ".join(errors)
         category, _ = classify_network_error(raw_error)
         if category in ("connection_refused", "dns_failure"):
@@ -2977,7 +2977,7 @@ class MasterFetchServer:
                     fetcher_used="parse",
                     error=f"Access denied: path is in a restricted system directory ({blocked})",
                 )
-        from hound_mcp.parse import parse_file
+        from dhole_mcp.parse import parse_file
         content, error = await asyncio_to_thread(parse_file, resolved)
         if error:
             return ResponseModel(
@@ -3008,8 +3008,8 @@ class MasterFetchServer:
         WHEN TO USE: following changelogs, docs updates, release notes, news
         sites, or any source with a feed URL. For a single page, use smart_fetch.
         """
-        from hound_mcp.feed import fetch_feeds
-        from hound_mcp.security import SecurityError, validate_url
+        from dhole_mcp.feed import fetch_feeds
+        from dhole_mcp.security import SecurityError, validate_url
         urls = [u for u in urls if u and u.strip()]
         if not urls:
             raise ValueError("feed_fetch requires at least one URL")
@@ -3048,8 +3048,8 @@ class MasterFetchServer:
         WHEN TO USE: t.co/bit.ly short links, redirect-heavy search results,
         checking whether a link is alive (200) or dead (404/410) before fetching.
         """
-        from hound_mcp.fetcher import HTTPSession
-        from hound_mcp.security import validate_url, SecurityError
+        from dhole_mcp.fetcher import HTTPSession
+        from dhole_mcp.security import validate_url, SecurityError
         try:
             url = validate_url(url)
         except SecurityError as se:
@@ -3110,7 +3110,7 @@ class MasterFetchServer:
         location/language/region (geo), page (0-10), freshness
         (day|week|month|year). Results cached 5min.
         """
-        from hound_mcp.search import SearchResponseModel  # lazy: search.py pulls the metasearch engine chain
+        from dhole_mcp.search import SearchResponseModel  # lazy: search.py pulls the metasearch engine chain
         try:
             query = validate_search_query(query)
         except SecurityError as e:
@@ -3120,7 +3120,7 @@ class MasterFetchServer:
             )
 
         try:
-            from hound_mcp.search import smart_search as _smart_search
+            from dhole_mcp.search import smart_search as _smart_search
             result = await _smart_search(
                 self, query, max_results, cache_ttl,
                 mode=mode, engines=engines, url=url,
@@ -3156,7 +3156,7 @@ class MasterFetchServer:
                     })
                     # Implicit feedback: record domain as useful
                     if page_result.content_ok:
-                        from hound_mcp.search import record_search_feedback
+                        from dhole_mcp.search import record_search_feedback
                         record_search_feedback(sr.url)
                 except Exception as e:
                     # Surface the failure instead of silently dropping the page,
@@ -3210,7 +3210,7 @@ class MasterFetchServer:
             # Lazy import to break circular dependency (crawl.py imports
             # ResponseModel from server.py; server.py imports smart_crawl
             # from crawl.py). Function-level import avoids import-time cycle.
-            from hound_mcp.crawl import smart_crawl as _smart_crawl, CrawlResponseModel as _CRM
+            from dhole_mcp.crawl import smart_crawl as _smart_crawl, CrawlResponseModel as _CRM
             return await _smart_crawl(
                 self, url, max_pages=max_pages, max_depth=max_depth,
                 path_include=path_include, path_exclude=path_exclude,
@@ -3222,7 +3222,7 @@ class MasterFetchServer:
                 deadline_ms=deadline_ms, sitemap=sitemap, search=search,
             )
         except Exception as e:
-            from hound_mcp.crawl import CrawlResponseModel as _CRM
+            from dhole_mcp.crawl import CrawlResponseModel as _CRM
             return _CRM(start_url=url, pages=[], error=redact_api_key(str(e)[:200]))
 
     # ─── Serve ─────────────────────────────────────────────────────
@@ -3232,7 +3232,7 @@ class MasterFetchServer:
     _TOOL_DEFS: list[dict] = [
         {
             "name": "smart_fetch",
-            "description": "Use this for EVERY web page, URL, or PDF the task touches - instead of built-in WebFetch or guessing URLs: hound bypasses anti-bot walls (Cloudflare etc.), renders JavaScript, extracts PDFs with OCR, and returns the real page content built-in fetch often blocks or reduces to a stub. Covers a single URL or a parallel bulk list. Auto anti-bot: HTTP first, escalates to a stealthy browser when blocked. \n\nKEY FEATURES: \n- focus='query': extract only relevant paragraphs (BM25). Best for long pages - one call instead of many. \n- pages='9' or '1-5': fetch specific PDF pages (PDFs return a table_of_contents to pick ranges). \n- urls=['u1','u2']: parallel bulk fetch of multiple URLs in one call. \n- actions=[{click:'btn'},{fill:{selector,text}}]: interact with the page after load (load-more, forms, pagination). \n- schema={...}: structured extraction (CSS selectors) - returns JSON, no LLM needed. \n- css_selector: narrow extraction to one DOM element. extraction_type: markdown|html|text|article|structured. \n- include_links/include_media via options: get page links or up to 20 image URLs. \n\nRESPONSE SIGNALS (check before trusting): \n- content_ok=False -> JS shell / login wall / error, don't cite. Switch source. \n- next_action -> optimal next call (paginate, switch source, follow links). Empty = done. \n- page_type='list' -> fetch the linked pages or smart_crawl. 'auth_wall'/'paywall' -> switch sources. \n- is_truncated + next_offset -> more content available; re-fetch with offset=next_offset or focus=. \n- is_stale / content_age_days -> for current-state questions, seek newer sources. \n- quality_score (PDF) low -> garbled/CID corruption. \n\nAnti-bot: DataDome/Akamai/Turnstile unbypassable -> switch sources, don't retry. cache_ttl=0 forces fresh (default 1h).",
+            "description": "Use this for EVERY web page, URL, or PDF the task touches - instead of built-in WebFetch or guessing URLs: dhole bypasses anti-bot walls (Cloudflare etc.), renders JavaScript, extracts PDFs with OCR, and returns the real page content built-in fetch often blocks or reduces to a stub. Covers a single URL or a parallel bulk list. Auto anti-bot: HTTP first, escalates to a stealthy browser when blocked. \n\nKEY FEATURES: \n- focus='query': extract only relevant paragraphs (BM25). Best for long pages - one call instead of many. \n- pages='9' or '1-5': fetch specific PDF pages (PDFs return a table_of_contents to pick ranges). \n- urls=['u1','u2']: parallel bulk fetch of multiple URLs in one call. \n- actions=[{click:'btn'},{fill:{selector,text}}]: interact with the page after load (load-more, forms, pagination). \n- schema={...}: structured extraction (CSS selectors) - returns JSON, no LLM needed. \n- css_selector: narrow extraction to one DOM element. extraction_type: markdown|html|text|article|structured. \n- include_links/include_media via options: get page links or up to 20 image URLs. \n\nRESPONSE SIGNALS (check before trusting): \n- content_ok=False -> JS shell / login wall / error, don't cite. Switch source. \n- next_action -> optimal next call (paginate, switch source, follow links). Empty = done. \n- page_type='list' -> fetch the linked pages or smart_crawl. 'auth_wall'/'paywall' -> switch sources. \n- is_truncated + next_offset -> more content available; re-fetch with offset=next_offset or focus=. \n- is_stale / content_age_days -> for current-state questions, seek newer sources. \n- quality_score (PDF) low -> garbled/CID corruption. \n\nAnti-bot: DataDome/Akamai/Turnstile unbypassable -> switch sources, don't retry. cache_ttl=0 forces fresh (default 1h).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -3376,10 +3376,10 @@ class MasterFetchServer:
                 )
 
         server = Server(
-            "Hound",
+            "Dhole",
             version=__version__,
-            instructions=HOUND_INSTRUCTIONS,
-            website_url="https://github.com/ouli-1242/hound-mcp",
+            instructions=DHOLE_INSTRUCTIONS,
+            website_url="https://github.com/ouli-1242/dhole-mcp",
             on_list_tools=list_tools,
             on_call_tool=call_tool,
         )
@@ -3391,13 +3391,13 @@ class MasterFetchServer:
             async def _run():
                 # Warm the single stealthy browser at startup so it's ready before
                 # the agent's first stealthy fetch/screenshot. It stays alive until
-                # the idle monitor closes it after HOUND_BROWSER_IDLE_TIMEOUT of
+                # the idle monitor closes it after DHOLE_BROWSER_IDLE_TIMEOUT of
                 # inactivity (default 300s), then relaunches on the next fetch.
                 # Best-effort, runs in the background while the server handles the
                 # initialize handshake.
                 warm = asyncio.create_task(self._prewarm_stealthy())
                 warm_reranker = asyncio.create_task(
-                    _safe_imported_prewarm("hound_mcp.reranker", "prewarm_reranker")
+                    _safe_imported_prewarm("dhole_mcp.reranker", "prewarm_reranker")
                 )
                 try:
                     async with stdio_server() as (read, write):
@@ -3444,7 +3444,7 @@ class MasterFetchServer:
             async def lifespan(app):
                 warm = asyncio.create_task(self._prewarm_stealthy())
                 warm_reranker = asyncio.create_task(
-                    _safe_imported_prewarm("hound_mcp.reranker", "prewarm_reranker")
+                    _safe_imported_prewarm("dhole_mcp.reranker", "prewarm_reranker")
                 )
                 try:
                     async with manager.run():
@@ -3561,26 +3561,26 @@ class MasterFetchServer:
 
 
 def _help_epilog() -> str:
-    """Styled epilog for `hound --help`: the command cheat-sheet + docs link."""
-    from hound_mcp import cli_ui as ui
+    """Styled epilog for `dhole --help`: the command cheat-sheet + docs link."""
+    from dhole_mcp import cli_ui as ui
     return "\n".join([
         ui.dim("commands:"),
-        f"  {ui.cyan('hound')}              {ui.dim('serve · stdio MCP (Claude Code, Cursor, OpenCode, Pi)')}",
-        f"  {ui.cyan('hound --http')}       {ui.dim('serve · streamable HTTP (Open WebUI), use --host/--port')}",
-        f"  {ui.cyan('hound -v')}           {ui.dim('version + update check')}",
-        f"  {ui.cyan('hound -u')}           {ui.dim('update to the latest version')}",
+        f"  {ui.cyan('dhole')}              {ui.dim('serve · stdio MCP (Claude Code, Cursor, OpenCode, Pi)')}",
+        f"  {ui.cyan('dhole --http')}       {ui.dim('serve · streamable HTTP (Open WebUI), use --host/--port')}",
+        f"  {ui.cyan('dhole -v')}           {ui.dim('version + update check')}",
+        f"  {ui.cyan('dhole -u')}           {ui.dim('update to the latest version')}",
         "",
-        ui.dim("docs:") + "  " + ui.cyan("https://github.com/ouli-1242/hound-mcp"),
+        ui.dim("docs:") + "  " + ui.cyan("https://github.com/ouli-1242/dhole-mcp"),
     ])
 
 
 def main():
-    """Entry point for the hound CLI."""
-    from hound_mcp import cli_ui as ui
-    from hound_mcp import updater
+    """Entry point for the dhole CLI."""
+    from dhole_mcp import cli_ui as ui
+    from dhole_mcp import updater
     import argparse
     parser = argparse.ArgumentParser(
-        prog="hound",
+        prog="dhole",
         description=ui.branded(ui.dim("web research for AI agents · $0 · no keys"), ""),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_help_epilog(),
@@ -3596,7 +3596,7 @@ def main():
     parser.add_argument("-v", "--version", action="store_true",
                         help="show version + update status")
     parser.add_argument("-u", "--update", action="store_true",
-                        help="update hound to the latest version")
+                        help="update dhole to the latest version")
     args = parser.parse_args()
 
     if args.update:

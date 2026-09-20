@@ -1,11 +1,11 @@
 NOTICE — vendored ddgs metasearch code
 
-The file `src/hound_mcp/search_metasearch.py` in this project is derived
+The file `src/dhole_mcp/search_metasearch.py` in this project is derived
 from ddgs (https://github.com/deedy5/ddgs), a metasearch library aggregating
 diverse web search services. ddgs is distributed under the MIT License
 (see below). It has been vendored, stripped to text search only, and adapted
-(async-native parallel aggregation with early-return-on-quorum, hound-specific
-tuning) for use inside hound-mcp.
+(async-native parallel aggregation with early-return-on-quorum, dhole-specific
+tuning) for use inside dhole-mcp.
 
 Per the MIT terms, the original copyright notice + permission notice are
 reproduced here and the ddgs LICENSE is preserved alongside this notice.

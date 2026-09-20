@@ -9,9 +9,9 @@ real search results.
 
 import asyncio
 import pytest
-from hound_mcp import search as search
-from hound_mcp import search_engines as se
-from hound_mcp.search_engines import (
+from dhole_mcp import search as search
+from dhole_mcp import search_engines as se
+from dhole_mcp.search_engines import (
     _passes_site_filter, _normalize_domain, RawResult, EngineReport, multi_search,
     _INDEX_FAMILY,
 )
@@ -185,25 +185,25 @@ class TestNormalizeDomain:
 class TestGitHubCaseFolding:
 
     def test_owner_repo_casefolded(self):
-        from hound_mcp.search_metasearch import _normalize_url
+        from dhole_mcp.search_metasearch import _normalize_url
         a = _normalize_url("https://github.com/nousresearch/hermes-agent")
         b = _normalize_url("https://github.com/NousResearch/hermes-agent")
         assert a == b
 
     def test_branch_case_preserved(self):
-        from hound_mcp.search_metasearch import _normalize_url
+        from dhole_mcp.search_metasearch import _normalize_url
         a = _normalize_url("https://github.com/NousResearch/Hermes-Agent/tree/Main")
         b = _normalize_url("https://github.com/nousresearch/hermes-agent/tree/main")
         assert a != b
 
     def test_non_github_paths_case_sensitive(self):
-        from hound_mcp.search_metasearch import _normalize_url
+        from dhole_mcp.search_metasearch import _normalize_url
         a = _normalize_url("https://example.com/Docs/Readme")
         b = _normalize_url("https://example.com/docs/readme")
         assert a != b
 
     def test_credential_urls_skip_folding(self):
-        from hound_mcp.search_metasearch import _normalize_url
+        from dhole_mcp.search_metasearch import _normalize_url
         a = _normalize_url("https://User:Secret@github.com/NousResearch/Hermes-Agent")
         b = _normalize_url("https://user:secret@github.com/nousresearch/hermes-agent")
         assert a != b
@@ -215,37 +215,37 @@ class TestGitHubReservedRoutes:
     and case can carry meaning (e.g. /topics/Python vs /topics/python)."""
 
     def test_reserved_route_not_folded(self):
-        from hound_mcp.search_metasearch import _normalize_url
+        from dhole_mcp.search_metasearch import _normalize_url
         a = _normalize_url("https://github.com/Settings/Keys")
         b = _normalize_url("https://github.com/settings/keys")
         assert a != b
 
     def test_topics_route_case_preserved(self):
-        from hound_mcp.search_metasearch import _normalize_url
+        from dhole_mcp.search_metasearch import _normalize_url
         a = _normalize_url("https://github.com/topics/Python")
         b = _normalize_url("https://github.com/topics/python")
         assert a != b
 
     def test_explore_route_case_preserved(self):
-        from hound_mcp.search_metasearch import _normalize_url
+        from dhole_mcp.search_metasearch import _normalize_url
         a = _normalize_url("https://github.com/Explore/Rust")
         b = _normalize_url("https://github.com/explore/rust")
         assert a != b
 
     def test_repo_still_folded_after_fix(self):
-        from hound_mcp.search_metasearch import _normalize_url
+        from dhole_mcp.search_metasearch import _normalize_url
         a = _normalize_url("https://github.com/NousResearch/Hermes-Agent")
         b = _normalize_url("https://github.com/nousresearch/hermes-agent")
         assert a == b
 
     def test_reserved_route_lowercased_unchanged(self):
         """Already-lowercase reserved routes should be unchanged."""
-        from hound_mcp.search_metasearch import _normalize_url
+        from dhole_mcp.search_metasearch import _normalize_url
         assert _normalize_url("https://github.com/topics/python") == \
                "https://github.com/topics/python"
 
     def test_multiple_reserved_routes(self):
-        from hound_mcp.search_metasearch import _normalize_url
+        from dhole_mcp.search_metasearch import _normalize_url
         for route in ["settings", "topics", "explore", "dashboard", "notifications",
                       "marketplace", "sponsors", "collections", "trending", "search"]:
             a = _normalize_url(f"https://github.com/{route.title()}/Sub")
@@ -396,11 +396,11 @@ class TestEngineConfig:
 class TestSearchProxyValidation:
     def _load_with(self, monkeypatch, tmp_path, env_value):
         """Load proxies from the env var + an empty config file (isolated)."""
-        from hound_mcp import search_proxy as sp
+        from dhole_mcp import search_proxy as sp
         if env_value is None:
-            monkeypatch.delenv("HOUND_SEARCH_PROXY", raising=False)
+            monkeypatch.delenv("DHOLE_SEARCH_PROXY", raising=False)
         else:
-            monkeypatch.setenv("HOUND_SEARCH_PROXY", env_value)
+            monkeypatch.setenv("DHOLE_SEARCH_PROXY", env_value)
         monkeypatch.setattr(sp, "_config_path", lambda: tmp_path / "no_such_proxies.json")
         sp._pool = None
         return sp.load_proxies()
@@ -438,7 +438,7 @@ class TestSearchProxyValidation:
     def test_all_engines_construction_failure_raises(self):
         """If every engine fails to construct (bad deps, etc), raise an error
         instead of silently returning 0 results."""
-        import hound_mcp.search_metasearch as m
+        import dhole_mcp.search_metasearch as m
 
         class BrokenEngine:
             disabled = False

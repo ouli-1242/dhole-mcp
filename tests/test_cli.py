@@ -3,7 +3,7 @@
 Tests the real cli.py module structure and updater functions. No network
 calls for version probing (PyPI fetch is mocked). The self-heal flow is
 tested BEHAVIORALLY: a subprocess blocks every heavy dependency and then
-imports hound_mcp.cli — the whole point of the entry point is that it must
+imports dhole_mcp.cli — the whole point of the entry point is that it must
 import (and self-heal) even on a broken install.
 """
 
@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from hound_mcp.updater import check_version, pad_version, _at_or_ahead
+from dhole_mcp.updater import check_version, pad_version, _at_or_ahead
 
 _SRC = str(Path(__file__).resolve().parent.parent / "src")
 
@@ -29,8 +29,8 @@ class _Blocker(importlib.abc.MetaPathFinder):
         return None
 
 sys.meta_path.insert(0, _Blocker())
-import hound_mcp.cli
-assert callable(hound_mcp.cli.main)
+import dhole_mcp.cli
+assert callable(dhole_mcp.cli.main)
 print("CLI_IMPORT_OK")
 """
 
@@ -43,8 +43,8 @@ class TestCLIStructure:
         """cli.py 必须在重依赖全部不可导入时仍可导入（自愈前提）。
 
         行为测试：子进程中用 import hook 把 mcp/primp/patchright/...
-        全部变成 ImportError，再导入 hound_mcp.cli。若有人给 cli.py
-        加了模块级重依赖导入，坏安装下 hound 命令会彻底报废——这个
+        全部变成 ImportError，再导入 dhole_mcp.cli。若有人给 cli.py
+        加了模块级重依赖导入，坏安装下 dhole 命令会彻底报废——这个
         测试会在那时真实失败。（旧的 hasattr 存在性检查做不到这一点，
         已删。）"""
         result = subprocess.run(
@@ -64,12 +64,12 @@ class TestCLIStructure:
 class TestRepairScript:
 
     def test_repair_script_path(self, tmp_path, monkeypatch):
-        """repair.py should be at ~/.hound/repair.py"""
-        import hound_mcp.updater as updater
+        """repair.py should be at ~/.dhole/repair.py"""
+        import dhole_mcp.updater as updater
         home = str(tmp_path)
         monkeypatch.setattr(os.path, "expanduser", lambda x: home)
         path = updater.repair_script_path()
-        assert ".hound" in path
+        assert ".dhole" in path
         assert "repair.py" in path
 
 

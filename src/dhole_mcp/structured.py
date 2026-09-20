@@ -1,4 +1,4 @@
-"""Rule-based structured data extraction for Hound MCP.
+"""Rule-based structured data extraction for Dhole MCP.
 
 Extracts structured JSON from HTML using CSS selectors, metadata, tables,
 and repeated element patterns. No LLM required — pure rules + lxml.
@@ -23,7 +23,7 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
-logger = logging.getLogger("hound_mcp.structured")
+logger = logging.getLogger("dhole_mcp.structured")
 
 
 def extract_structured(

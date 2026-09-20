@@ -1,4 +1,4 @@
-"""Hound's own browser sessions using patchright directly.
+"""Dhole's own browser sessions using patchright directly.
 
 Replaces scrapling's AsyncStealthySession and AsyncDynamicSession with direct
 patchright async API usage. Includes the Cloudflare Turnstile solver ported
@@ -22,7 +22,7 @@ from random import randint
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
-logger = logging.getLogger("hound_mcp.browser")
+logger = logging.getLogger("dhole_mcp.browser")
 
 # ─── Browser flags (ported from scrapling's constants.py) ─────────────────────
 
@@ -994,7 +994,7 @@ class BrowserSession:
                 self._context = await self._browser.new_context(**context_options)
             else:
                 # Use persistent context (temp dir)
-                self._user_data_dir = tempfile.mkdtemp(prefix="hound_browser_")
+                self._user_data_dir = tempfile.mkdtemp(prefix="dhole_browser_")
                 persistent_opts = {**browser_options, **context_options, "user_data_dir": self._user_data_dir}
                 self._context = await self._playwright.chromium.launch_persistent_context(
                     **persistent_opts
@@ -1222,7 +1222,7 @@ class BrowserSession:
                         logger.debug(f"Human behavior simulation error: {e}")
 
                 # Build response
-                from hound_mcp.fetcher import response_from_browser_page
+                from dhole_mcp.fetcher import response_from_browser_page
                 response = await response_from_browser_page(
                     page, first_response, final_response[0]
                 )
@@ -1259,7 +1259,7 @@ class BrowserSession:
                     # Classify the network error for agent-actionable diagnostics.
                     # Prepend a category tag so downstream (server.py _agent_hints)
                     # can identify the failure type without re-parsing.
-                    from hound_mcp.errors import classify_network_error
+                    from dhole_mcp.errors import classify_network_error
                     err_str = str(e)
                     category, _ = classify_network_error(err_str)
                     if category != "unknown":

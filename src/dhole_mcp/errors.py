@@ -91,7 +91,7 @@ _HINTS: dict[str, str] = {
         "interception. Do NOT retry without changing network/proxy."
     ),
     "proxy_error": (
-        "Proxy connection failed. Check HOUND_SEARCH_PROXY or the proxy parameter."
+        "Proxy connection failed. Check DHOLE_SEARCH_PROXY or the proxy parameter."
     ),
     "unknown": (
         "Fetch failed. Check the error field for details; try a different "

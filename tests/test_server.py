@@ -8,7 +8,7 @@ against real ResponseModel objects. No mocks of the functions themselves.
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from hound_mcp.server import (
+from dhole_mcp.server import (
     MasterFetchServer,
     ResponseModel, BulkResponseModel, _is_js_shell, _detect_content_issue, _is_cacheable,
     _agent_hints, _apply_chunking, _is_cloudflare_from_response,
@@ -481,7 +481,7 @@ class TestFinalizeResult:
     """_finalize_result() orchestrates _annotate_quality + cache + chunking."""
 
     @pytest.mark.asyncio
-    @patch("hound_mcp.server.set_cached", new_callable=AsyncMock)
+    @patch("dhole_mcp.server.set_cached", new_callable=AsyncMock)
     async def test_sets_envelope_fields(self, mock_set_cached):
         srv = MasterFetchServer(cache_ttl=0)
         result = _make_result()
@@ -495,7 +495,7 @@ class TestFinalizeResult:
         mock_set_cached.assert_not_called()  # cache_ttl=0 → no cache write
 
     @pytest.mark.asyncio
-    @patch("hound_mcp.server.set_cached", new_callable=AsyncMock)
+    @patch("dhole_mcp.server.set_cached", new_callable=AsyncMock)
     async def test_cacheable_writes_cache(self, mock_set_cached):
         srv = MasterFetchServer(cache_ttl=3600)
         result = _make_result()
@@ -506,7 +506,7 @@ class TestFinalizeResult:
         mock_set_cached.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("hound_mcp.server.set_cached", new_callable=AsyncMock)
+    @patch("dhole_mcp.server.set_cached", new_callable=AsyncMock)
     async def test_annotate_quality_runs(self, mock_set_cached):
         """JS shell content should be detected before caching."""
         srv = MasterFetchServer(cache_ttl=3600)
@@ -519,7 +519,7 @@ class TestFinalizeResult:
         mock_set_cached.assert_not_called()  # JS shell not cacheable
 
     @pytest.mark.asyncio
-    @patch("hound_mcp.server.set_cached", new_callable=AsyncMock)
+    @patch("dhole_mcp.server.set_cached", new_callable=AsyncMock)
     async def test_chunking_applied(self, mock_set_cached):
         srv = MasterFetchServer(cache_ttl=0)
         long = "A" * (MAX_CONTENT_CHARS + 1000)
@@ -551,7 +551,7 @@ class TestBulkGetEnvelope:
         return m
 
     @pytest.mark.asyncio
-    @patch("hound_mcp.fetcher.HTTPSession")
+    @patch("dhole_mcp.fetcher.HTTPSession")
     async def test_success_path_has_envelope(self, mock_http_session):
         """A successful bulk_get() result must have content_ok, summary, fetched_at."""
         mock_session = AsyncMock()
@@ -571,7 +571,7 @@ class TestBulkGetEnvelope:
         assert result.url == "https://example.com"
 
     @pytest.mark.asyncio
-    @patch("hound_mcp.fetcher.HTTPSession")
+    @patch("dhole_mcp.fetcher.HTTPSession")
     async def test_error_path_has_envelope(self, mock_http_session):
         """A network error from bulk_get() must still have summary + content_ok."""
         mock_session = AsyncMock()
@@ -592,7 +592,7 @@ class TestBulkGetEnvelope:
         assert "Connection refused" in result.error
 
     @pytest.mark.asyncio
-    @patch("hound_mcp.fetcher.HTTPSession")
+    @patch("dhole_mcp.fetcher.HTTPSession")
     async def test_page_type_detected(self, mock_http_session):
         """page_type should be detected from HTML content."""
         mock_session = AsyncMock()
@@ -611,7 +611,7 @@ class TestBulkGetEnvelope:
         assert result.page_type == "article", f"expected article, got {result.page_type}"
 
     @pytest.mark.asyncio
-    @patch("hound_mcp.fetcher.HTTPSession")
+    @patch("dhole_mcp.fetcher.HTTPSession")
     async def test_source_type_from_url(self, mock_http_session):
         """source_type should be classified from URL."""
         mock_session = AsyncMock()
@@ -680,7 +680,7 @@ class TestProxyToUrl:
         assert out == "socks5h://u:p@proxy.example.com:1080"
 
     def test_invalid_credentials_raise(self):
-        from hound_mcp.security import SecurityError
+        from dhole_mcp.security import SecurityError
         with pytest.raises(SecurityError):
             _proxy_to_url("http://proxy.example.com:3128",
                           {"username": "u\n", "password": "p"})
@@ -710,7 +710,7 @@ class TestBasicAuthHeader:
         assert out is None
 
     def test_invalid_credentials_raise(self):
-        from hound_mcp.security import SecurityError
+        from dhole_mcp.security import SecurityError
         with pytest.raises(SecurityError):
             _basic_auth_header({"username": "u", "password": "p\n"}, None)
 
@@ -730,7 +730,7 @@ class TestBulkGetCredentialsWiring:
         return m
 
     @pytest.mark.asyncio
-    @patch("hound_mcp.fetcher.HTTPSession")
+    @patch("dhole_mcp.fetcher.HTTPSession")
     async def test_auth_becomes_basic_authorization_header(self, mock_http_session):
         import base64
         mock_session = AsyncMock()
@@ -747,7 +747,7 @@ class TestBulkGetCredentialsWiring:
         assert headers["Authorization"] == expected
 
     @pytest.mark.asyncio
-    @patch("hound_mcp.fetcher.HTTPSession")
+    @patch("dhole_mcp.fetcher.HTTPSession")
     async def test_proxy_auth_reaches_session_proxy(self, mock_http_session):
         mock_session = AsyncMock()
         mock_session.get.return_value = self._mock_http_response()
@@ -763,7 +763,7 @@ class TestBulkGetCredentialsWiring:
         assert proxy_arg == "http://u:p@proxy.example.com:3128"
 
     @pytest.mark.asyncio
-    @patch("hound_mcp.fetcher.HTTPSession")
+    @patch("dhole_mcp.fetcher.HTTPSession")
     async def test_dict_proxy_reaches_http_tier(self, mock_http_session):
         """回归：dict 代理此前在 HTTP 层被静默忽略（proxy if isinstance(str)）。"""
         mock_session = AsyncMock()
@@ -815,7 +815,7 @@ class TestSmartFetchProxy:
         )
         server._finalize_result = AsyncMock(side_effect=lambda result, *args: result)
 
-        with patch("hound_mcp.server._browser_deps_available", return_value=True):
+        with patch("dhole_mcp.server._browser_deps_available", return_value=True):
             await server.smart_fetch(
                 "https://example.com",
                 proxy="http://127.0.0.1:8080",
@@ -914,7 +914,7 @@ class TestConstants:
 # The fix: _browser_deps_available() reads only the cache (never imports).
 # The prewarm thread populates the cache via check_browser_available().
 
-from hound_mcp.browser import check_browser_available, is_browser_available_cached
+from dhole_mcp.browser import check_browser_available, is_browser_available_cached
 import time as _time
 
 
@@ -928,8 +928,8 @@ class TestBrowserDepsNonBlocking:
         browser operation will raise ImportError and the tool handler catches
         it. But the availability check itself never blocks.
         """
-        import hound_mcp.browser as bmod
-        import hound_mcp.server as srv
+        import dhole_mcp.browser as bmod
+        import dhole_mcp.server as srv
         original = bmod._browser_available
         bmod._browser_available = None
         srv._browser_import_error = None
@@ -944,7 +944,7 @@ class TestBrowserDepsNonBlocking:
 
     def test_returns_cached_true_instantly(self):
         """When cache is True, return True instantly without re-importing."""
-        import hound_mcp.browser as bmod
+        import dhole_mcp.browser as bmod
         original = bmod._browser_available
         bmod._browser_available = True
         try:
@@ -958,8 +958,8 @@ class TestBrowserDepsNonBlocking:
 
     def test_returns_cached_false_instantly(self):
         """When cache is False, return False and set error, instantly."""
-        import hound_mcp.browser as bmod
-        import hound_mcp.server as srv
+        import dhole_mcp.browser as bmod
+        import dhole_mcp.server as srv
         original_avail = bmod._browser_available
         original_err = bmod._browser_import_error
         bmod._browser_available = False
@@ -978,7 +978,7 @@ class TestBrowserDepsNonBlocking:
 
     def test_is_browser_available_cached_reads_without_import(self):
         """is_browser_available_cached() returns the cache or None, never imports."""
-        import hound_mcp.browser as bmod
+        import dhole_mcp.browser as bmod
         original = bmod._browser_available
         bmod._browser_available = None
         try:
@@ -1000,7 +1000,7 @@ class TestBrowserDepsNonBlocking:
 
     def test_check_browser_available_caches_result(self):
         """check_browser_available() populates the cache (first call does import)."""
-        import hound_mcp.browser as bmod
+        import dhole_mcp.browser as bmod
         original = bmod._browser_available
         bmod._browser_available = None
         try:
@@ -1019,7 +1019,7 @@ class TestBrowserDepsNonBlocking:
         which blocked the loop. The fix moves the entire check into the thread.
         """
         import inspect
-        from hound_mcp.server import MasterFetchServer
+        from dhole_mcp.server import MasterFetchServer
         src = inspect.getsource(MasterFetchServer._prewarm_stealthy)
         # The _warm inner function must use asyncio.to_thread for the browser check
         warm_body = src.split("async def _warm")[1] if "async def _warm" in src else src

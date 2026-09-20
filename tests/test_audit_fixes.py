@@ -1,11 +1,11 @@
-"""Hound 审查修复回归测试。
+"""Dhole 审查修复回归测试。
 
 覆盖：
 - P0: feed_fetch 不再崩溃（structured_content 合法 dict）+ URL 校验
 - P1: 重定向链逐跳 SSRF 校验（fetcher 层）
 - P1: max_redirects 生效
 - P2: search_proxy._kick_health_check 重置（不再 no-op）
-- P2: 域名 DNS 解析内网复查（HOUND_SSRF_DNS_RECHECK=1 开启时）
+- P2: 域名 DNS 解析内网复查（DHOLE_SSRF_DNS_RECHECK=1 开启时）
 """
 
 from __future__ import annotations
@@ -14,9 +14,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from hound_mcp.fetcher import HTTPSession
-from hound_mcp.security import SecurityError, validate_url
-from hound_mcp.server import MasterFetchServer
+from dhole_mcp.fetcher import HTTPSession
+from dhole_mcp.security import SecurityError, validate_url
+from dhole_mcp.server import MasterFetchServer
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +37,7 @@ async def test_feed_fetch_returns_dict_structured(mock_logger=None):
         error = ""
         items = []
 
-    with patch("hound_mcp.feed.fetch_feeds", new=AsyncMock(return_value=[_FakeResp()])):
+    with patch("dhole_mcp.feed.fetch_feeds", new=AsyncMock(return_value=[_FakeResp()])):
         with patch("socket.getaddrinfo",
                    return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
             result = await srv.feed_fetch(urls=args["urls"], max_items=3)
@@ -117,7 +117,7 @@ async def test_max_redirects_bounded():
 def test_health_check_done_resets_task():
     """health_check 完成后 _health_task 应重置为 None，可再触发。"""
     import asyncio
-    import hound_mcp.search_proxy as sp
+    import dhole_mcp.search_proxy as sp
 
     async def scenario():
         pool = MagicMock()
@@ -146,9 +146,9 @@ def test_health_check_done_resets_task():
 
 
 def test_dns_recheck_rejects_internal_resolution(monkeypatch):
-    """HOUND_SSRF_DNS_RECHECK=1 时，域名解析到内网应拒绝。"""
-    monkeypatch.setenv("HOUND_SSRF_DNS_RECHECK", "1")
-    sp = __import__("hound_mcp.security", fromlist=["_dns_recheck_enabled"])
+    """DHOLE_SSRF_DNS_RECHECK=1 时，域名解析到内网应拒绝。"""
+    monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", "1")
+    sp = __import__("dhole_mcp.security", fromlist=["_dns_recheck_enabled"])
     assert sp._dns_recheck_enabled() is True
     with patch("socket.getaddrinfo",
                return_value=[(2, 1, 6, "", ("192.168.1.10", 0))]):
@@ -158,13 +158,13 @@ def test_dns_recheck_rejects_internal_resolution(monkeypatch):
 
 def test_dns_recheck_off_by_default(monkeypatch):
     """默认关闭 DNS 复查（不误伤 DNS 污染环境）。"""
-    sp = __import__("hound_mcp.security", fromlist=["_dns_recheck_enabled"])
+    sp = __import__("dhole_mcp.security", fromlist=["_dns_recheck_enabled"])
     assert sp._dns_recheck_enabled() is False
 
 
 def test_dns_recheck_accepts_public_resolution(monkeypatch):
     """开启时解析到公网 IP 应放行。"""
-    monkeypatch.setenv("HOUND_SSRF_DNS_RECHECK", "1")
+    monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", "1")
     with patch("socket.getaddrinfo",
                return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
         assert validate_url("https://example.com/x") == "https://example.com/x"
@@ -176,7 +176,7 @@ def test_dns_recheck_accepts_public_resolution(monkeypatch):
 
 def test_robots_sitemap_internal_rejected(monkeypatch):
     """robots.txt 声明的内网 Sitemap 地址应被过滤。"""
-    from hound_mcp.sitemap import _robots_sitemaps
+    from dhole_mcp.sitemap import _robots_sitemaps
 
     robots_body = (
         b"User-agent: *\n"
@@ -195,7 +195,7 @@ def test_robots_sitemap_internal_rejected(monkeypatch):
 
 def test_robots_sitemap_accepts_public(monkeypatch):
     """公网 Sitemap 地址应保留。"""
-    from hound_mcp.sitemap import _robots_sitemaps
+    from dhole_mcp.sitemap import _robots_sitemaps
 
     robots_body = b"User-agent: *\nSitemap: https://example.com/sitemap.xml\n"
 

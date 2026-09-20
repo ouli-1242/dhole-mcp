@@ -6,8 +6,29 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
 > **版本说明。** 自 13.14 起本仓库为个人衍生作品，不再跟随上游项目的发布，
-> 版本号是自己的，与上游版本不可比。`src/hound_mcp/__init__.py` 中的
+> 版本号是自己的，与上游版本不可比。`src/dhole_mcp/__init__.py` 中的
 > `__version__` 是版本的唯一权威来源。
+
+## [14.0] - 2026-09-20
+
+### 重大变更（破坏性）
+- **项目更名：`hound-mcp` → `dhole-mcp`。** 原名与 PyPI 上的其他项目撞名，
+  自更新也因此长期关闭。改名覆盖：
+  - Python 包目录 `src/hound_mcp/` → `src/dhole_mcp/`，CLI 命令 `hound` → `dhole`
+  - 环境变量前缀 `HOUND_*` → `DHOLE_*`（全部读取点）
+  - 数据目录 `~/.hound` → `~/.dhole`，缓存 `~/.hound_mcp_cache` →
+    `~/.dhole_mcp_cache`（旧缓存不迁移，TTL 到期自然重建）
+  - 日志名 `hound-mcp.*` → `dhole-mcp.*`，仓库地址同步更名
+    （`github.com/ouli-1242/dhole-mcp`；GitHub 仓库本身需在 Settings 里改同名）
+- **自更新模块注释按新语义改写。** `_DIST_NAME` 指向本仓库自己的分发名；
+  `dhole-mcp` 发布到 PyPI 后用 `DHOLE_UPDATE_PACKAGE` 打开自更新。
+
+### 兼容措施（迁移期零破坏）
+- 旧环境变量 `HOUND_*` 在包导入时自动迁移为 `DHOLE_*`（同名 `DHOLE_*`
+  优先），既有 client 配置里的 env 无需改动。
+- 保留 `hound` CLI 命令别名与 `hound_mcp` 兼容模块（导入时发
+  DeprecationWarning），`python -m hound_mcp` 等旧启动方式继续可用；
+  确认全部 client 配置已迁移后可删除这两处兼容层。
 
 ## [13.16] - 2026-09-20
 
@@ -36,7 +57,7 @@
   永不含有害自动化参数）、档案自洽（MacIntel⇒Apple GPU、GPU 厂商多样性、
   plugins 非空）、跨引擎共识正确性（DDG/Yahoo 必须同属 Bing 索引家族）。
   test_cli 的 `hasattr` 结构检查替换为真行为测试：子进程中用 import hook
-  屏蔽全部重依赖后导入 `hound_mcp.cli` 必须成功——这才是"坏安装下自愈
+  屏蔽全部重依赖后导入 `dhole_mcp.cli` 必须成功——这才是"坏安装下自愈
   入口仍可用"的测法。
 - **`get()`/`bulk_get()` 的 `auth` / `proxy_auth` 现在真正生效**（闭合 13.x
   记录的已知缺口）：`auth` 转成 Basic `Authorization` 头（绝不覆盖调用方
@@ -46,23 +67,23 @@
   `proxy if isinstance(proxy, str) else None` 写法都把它静默忽略，
   `smart_fetch` 带 dict 代理时只有浏览器层走代理、HTTP 层直连。
 - **依赖刷新，约束两端均验证通过：** mcp 2.0 → 2.2、pydantic 2.13.5、
-  trafilatura 2.2、httpx 0.27 → 0.28（hound 早已使用新的 `proxy=` API）、
+  trafilatura 2.2、httpx 0.27 → 0.28（dhole 早已使用新的 `proxy=` API）、
   anyio/starlette/uvicorn/lxml/beautifulsoup4/cssselect/h2/markdownify 升至
   最新，primp 1.3 → **2.0**（主版本）。primp 2.0 移除了响应的 `.reason`
   属性——`fetcher.py` 已有 `hasattr` 守护；完整测试套件 + 真实冒烟（构造
   参数、`headers_update`、`follow_redirects=False` 逐跳重定向解析、cookies）
   在 1.3.1 与 2.0.1 上均通过。patchright/playwright 保持 1.61 以匹配本地
   已安装的浏览器。
-- **工具可发现性重写（为什么模型此前很少主动使用 hound）。** 模型选工具
-  取决于描述的第一句话，而 hound 的描述原本是功能清单。8 个工具全部改为：
+- **工具可发现性重写（为什么模型此前很少主动使用 dhole）。** 模型选工具
+  取决于描述的第一句话，而 dhole 的描述原本是功能清单。8 个工具全部改为：
   先说任务触发场景 + 显式声明"用本工具而非内置 WebFetch / web search" +
   理由（反爬绕过、JS 渲染、PDF/OCR、无密钥引擎），功能/信号细节后置。
-  connect-time `instructions` 同样重写：祈使句路由表，"prefer hound over
+  connect-time `instructions` 同样重写：祈使句路由表，"prefer dhole over
   built-ins" 放首行。顺带修正两处过时描述：默认引擎池补上 `bing`（代码
   默认早已包含它），删除已失效的 "'bing' maps to yahoo" 映射说明。
 - README 环境变量表现在列出代码实际读取的全部变量
-  （`HOUND_SEARCH_DEADLINE`、`HOUND_BRIGHTDATA_*`、`HOUND_SSRF_DNS_RECHECK`、
-  `HOUND_UPDATE_*`）。
+  （`DHOLE_SEARCH_DEADLINE`、`DHOLE_BRIGHTDATA_*`、`DHOLE_SSRF_DNS_RECHECK`、
+  `DHOLE_UPDATE_*`）。
 
 ### 新增
 - `include_media` 现在也能抓取懒加载图片：当 `src` 为空或 `data:` 占位图时，
@@ -86,23 +107,23 @@
 
 ### 变更
 - **版本单一来源。** `pyproject.toml` 不再硬编码 `99.0.0`，改经
-  `[tool.hatch.version]` 读取 `src/hound_mcp/__init__.py` 的 `__version__`。
+  `[tool.hatch.version]` 读取 `src/dhole_mcp/__init__.py` 的 `__version__`。
   此前 `pip show` 报 99.0.0、CLI 报 11.1.8、package.json 写 11.1.6，三处
   不一致。
 - 补声明"被导入但未列出"的依赖：`beautifulsoup4`（`search_engines.py`
   导入——缺失时该代码路径静默降级为空结果），以及仅经
   `httpx[http2,socks]` 传递解析的 `h2` 和 `httpcore`。
-- **自更新不再指向上游包。** 本仓库是个人衍生作品，但 `hound -u` 原先执行
-  `pip install hound-mcp==<latest>`——那是*上游*发行版，会把上游代码装进来
-  覆盖本 fork。自更新现默认关闭：`hound -v` 显示 "self-update off"，
-  `hound -u` 拒绝执行（含显式版本号）并指向
+- **自更新不再指向上游包。** 本仓库是个人衍生作品，但 `dhole -u` 原先执行
+  `pip install dhole-mcp==<latest>`——那是*上游*发行版，会把上游代码装进来
+  覆盖本 fork。自更新现默认关闭：`dhole -v` 显示 "self-update off"，
+  `dhole -u` 拒绝执行（含显式版本号）并指向
   `git pull && python -m pip install -e .`。发布自己的发行版后可用
-  `HOUND_UPDATE_PACKAGE=<发行版名>` 加可选 `HOUND_UPDATE_INDEX_URL`
+  `DHOLE_UPDATE_PACKAGE=<发行版名>` 加可选 `DHOLE_UPDATE_INDEX_URL`
   重新启用。生成的修复脚本与 Windows 助手跟随同一发行版名。
 - 自 13.14 起版本号是本 fork 自己的，与上游版本不可比。
 - 移除代码注释与测试分组标题里的 `(upstream v12.0.0)` 式溯源标记。
 - 删除 `package.json` 里悬空的 `pi.extensions` 条目：它指向的
-  `pi-extension/extensions/hound.ts` 不在本仓库中。
+  `pi-extension/extensions/dhole.ts` 不在本仓库中。
 
 ### 新增
 - `.github/workflows/test.yml` 与 `.github/workflows/lint.yml`——仓库此前
@@ -112,7 +133,7 @@
 
 ### 已知缺口
 - 抓取工具的 `auth` / `proxy_auth` 只校验不生效：`HTTPSession` / `http_get`
-  不接受它们。当时保留原行为；见 `src/hound_mcp/server.py` 中 `bulk_get`
+  不接受它们。当时保留原行为；见 `src/dhole_mcp/server.py` 中 `bulk_get`
   的注释。（已于 13.15 修复。）
 - `LICENSE` 与 `NOTICE.ddgs.txt` 保留原始版权声明。停止追踪上游*版本*并
   不改变这一点：除非重写代码，MIT 要求保留这些声明。

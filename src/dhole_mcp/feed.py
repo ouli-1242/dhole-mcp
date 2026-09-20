@@ -1,4 +1,4 @@
-"""RSS/Atom feed fetching for Hound.
+"""RSS/Atom feed fetching for Dhole.
 
 Fetches and parses RSS 2.0 / Atom feeds so an agent can track what a source
 *has published* (fresh items), as opposed to fetching a page and reading it.
@@ -19,7 +19,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-logger = logging.getLogger("hound_mcp.feed")
+logger = logging.getLogger("dhole_mcp.feed")
 
 _MAX_FEED_BYTES = 2 * 1024 * 1024  # 2MB cap — feeds are small text; larger is junk
 
@@ -125,7 +125,7 @@ async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20) -> FeedRe
     field carries the reason and items is empty.
     """
     try:
-        from hound_mcp.fetcher import HTTPSession
+        from dhole_mcp.fetcher import HTTPSession
         async with HTTPSession(stealthy_headers=False, retries=1, timeout=timeout) as session:
             resp = await session.get(url, follow_redirects="safe")
         body = getattr(resp, "body", b"") or b""

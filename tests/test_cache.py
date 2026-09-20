@@ -7,7 +7,7 @@ All async, real SQLite operations. No mocks.
 
 import asyncio
 import pytest
-from hound_mcp.cache import (
+from dhole_mcp.cache import (
     get_cached, set_cached, clear_cache, clear_all_cache,
     _cache_key,
 )
@@ -161,7 +161,7 @@ class TestCacheEviction:
     @pytest.mark.asyncio
     async def test_eviction_when_over_cap(self, cache_dir, monkeypatch):
         # Lower the cap for testing
-        monkeypatch.setattr("hound_mcp.cache.MAX_CACHE_ENTRIES", 20)
+        monkeypatch.setattr("dhole_mcp.cache.MAX_CACHE_ENTRIES", 20)
         # Insert 25 entries
         for i in range(25):
             await set_cached(f"https://example.com/{i}", "markdown", [f"content-{i}"],

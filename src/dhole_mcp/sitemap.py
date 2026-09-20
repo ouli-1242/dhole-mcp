@@ -37,7 +37,7 @@ from urllib.parse import urljoin, urlparse
 
 from lxml import etree
 
-logger = logging.getLogger("hound-mcp.sitemap")
+logger = logging.getLogger("dhole-mcp.sitemap")
 
 # A transport callable: url -> (status:int, body:bytes) | None
 HttpGet = Callable[[str], Optional[tuple[int, bytes]]]
@@ -162,7 +162,7 @@ def _robots_sitemaps(start_url: str, http_get: HttpGet) -> tuple[list[str], bool
                 candidate = urljoin(robots_url, val)
                 # SSRF：拒绝指向内网/保留地址的 sitemap URL
                 try:
-                    from hound_mcp.security import validate_url
+                    from dhole_mcp.security import validate_url
                     validate_url(candidate)
                 except Exception:
                     continue
@@ -215,7 +215,7 @@ def discover_sitemap(start_url: str, *, http_get: HttpGet,
         visited_sitemaps.add(sitemap_url)
         # SSRF：sitemapindex 子 URL 可能指向内网，抓取前校验
         try:
-            from hound_mcp.security import validate_url
+            from dhole_mcp.security import validate_url
             validate_url(sitemap_url)
         except Exception:
             return

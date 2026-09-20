@@ -1,7 +1,7 @@
-"""Zero-dependency ANSI renderer for the hound CLI.
+"""Zero-dependency ANSI renderer for the dhole CLI.
 
-Gives hound's commands a clean, professional, cross-platform look WITHOUT
-pulling in rich (hound stays lean  -  works in air-gapped/Docker-scratch envs).
+Gives dhole's commands a clean, professional, cross-platform look WITHOUT
+pulling in rich (dhole stays lean  -  works in air-gapped/Docker-scratch envs).
 Handles:
 
 - Color support: respects ``NO_COLOR`` (any value disables) and ``FORCE_COLOR``;
@@ -120,7 +120,7 @@ def _borders() -> tuple[str, str, str, str, str, str]:
 # ── Styled fragments ────────────────────────────────────────────────
 
 def wordmark() -> str:
-    return _sty("Hound", _BOLD, _MAGENTA)
+    return _sty("Dhole", _BOLD, _MAGENTA)
 
 
 def ver(v: str) -> str:
@@ -205,7 +205,7 @@ def panel(rows: list[str], width: int = 50, indent: int = 2) -> str:
 
 
 def branded(label: str, meta: str = "") -> str:
-    """A branded one-liner: `  Hound  <label>  <dim meta>`."""
+    """A branded one-liner: `  Dhole  <label>  <dim meta>`."""
     s = f"  {wordmark()}  {label}"
     if meta:
         s += f"  {meta}"
