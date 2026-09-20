@@ -95,3 +95,53 @@ class TestBrightdataAuthError:
         await m.metasearch("test query", 3, engines=["brightdata"])
 
         assert m._is_circuit_open("brightdata") is False
+
+
+class _OkEmpty:
+    status_code = 200
+    text = "{}"
+
+    def json(self):
+        return {}
+
+
+class TestBrightdataTimeout:
+    """The paid call must honour DHOLE_SEARCH_DEADLINE instead of a fixed 20s."""
+
+    @staticmethod
+    def _capture(monkeypatch, deadline):
+        import httpx
+
+        from dhole_mcp import search_metasearch as m
+
+        seen: dict = {}
+
+        def fake_post(*args, **kwargs):
+            seen["timeout"] = kwargs.get("timeout")
+            return _OkEmpty()
+
+        monkeypatch.setattr(m, "_BRIGHTDATA_API_KEY", "fake-key")
+        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
+        monkeypatch.setattr(m, "_SEARCH_DEADLINE", deadline)
+        monkeypatch.setattr(httpx, "post", fake_post)
+        return seen
+
+    @pytest.mark.asyncio
+    async def test_raised_deadline_reaches_http_timeout(self, monkeypatch):
+        from dhole_mcp import search_metasearch as m
+
+        seen = self._capture(monkeypatch, 30.0)
+
+        await m.metasearch("test query", 3, engines=["brightdata"])
+        assert seen["timeout"] == 30.0
+
+    @pytest.mark.asyncio
+    async def test_tight_deadline_keeps_the_paid_call_viable(self, monkeypatch):
+        """Floor: a 5s overall deadline must not cut the SERP render short --
+        the credit is spent the moment the request goes out."""
+        from dhole_mcp import search_metasearch as m
+
+        seen = self._capture(monkeypatch, 5.0)
+
+        await m.metasearch("test query", 3, engines=["brightdata"])
+        assert seen["timeout"] == 20.0

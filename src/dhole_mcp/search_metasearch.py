@@ -43,6 +43,8 @@ from fake_useragent import UserAgent
 from lxml import html
 from lxml.etree import HTMLParser as LHTMLParser
 
+from dhole_mcp.security import redact_api_key
+
 logger = logging.getLogger(__name__)
 random = SystemRandom()
 
@@ -676,6 +678,16 @@ _DEFAULT_BACKENDS = ["bing", "duckduckgo", "brave", "yahoo", "yandex"]
 
 # ─── Bright Data SERP API (priority backend) ────────────────────────────────
 
+def _mask_brightdata_secrets(text: str) -> str:
+    """Bright Data keys are not sk-/pk- shaped, so redact_api_key's patterns miss
+    them -- mask the known value directly as well. The empty-key guard matters:
+    str.replace("", x) would otherwise interleave the marker through the text."""
+    masked = redact_api_key(text)
+    if _BRIGHTDATA_API_KEY:
+        masked = masked.replace(_BRIGHTDATA_API_KEY, "[API_KEY_REDACTED]")
+    return masked
+
+
 def _brightdata_serp_search(query: str, max_results: int = 10) -> list:
     """Call Bright Data SERP API. Returns list of result objects with .title/.href/.body.
 
@@ -702,14 +714,16 @@ def _brightdata_serp_search(query: str, max_results: int = 10) -> list:
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {_BRIGHTDATA_API_KEY}",
             },
-            timeout=20.0,
+            # Never below the historical 20s (a SERP render needs it and the
+            # credit is spent either way), but grow with an explicit deadline.
+            timeout=max(_SEARCH_DEADLINE, 20.0),
         )
         if resp.status_code in (401, 403):
             raise BrightDataAuthError(
                 f"Bright Data rejected the credentials (HTTP {resp.status_code})"
             )
         if resp.status_code != 200:
-            logger.debug("BrightData SERP HTTP %d: %s", resp.status_code, resp.text[:200])
+            logger.debug("BrightData SERP HTTP %d: %s", resp.status_code, _mask_brightdata_secrets(resp.text[:200]))
             return []
         data = resp.json()
         # Bright Data wraps the SERP content in a JSON string inside "body".
@@ -733,7 +747,7 @@ def _brightdata_serp_search(query: str, max_results: int = 10) -> list:
     except BrightDataAuthError:
         raise
     except Exception as e:
-        logger.debug("BrightData SERP error: %r", e)
+        logger.debug("BrightData SERP error: %s", _mask_brightdata_secrets(repr(e)))
         return []
 
 

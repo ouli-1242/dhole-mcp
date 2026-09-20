@@ -1,6 +1,6 @@
 """回归测试：日志凭据脱敏 + 代理健康探测的未 await 协程。
 
-两个缺陷都来自「看起来无害、实际有副作用」的写法：
+三个缺陷都来自「看起来无害、实际有副作用」的写法：
 
 1. ``fetcher.py`` 在重试告警里直接写入原始异常文本。primp/httpx 的异常会
    带上完整代理 URL（形如 ``http://user:pass@host``），于是代理凭据落进
@@ -9,6 +9,10 @@
    写在一行：协程对象先被求值，若 ``create_task`` 因「无运行中的事件循环」
    抛 RuntimeError，那个协程已被创建却从未 await，触发
    ``coroutine 'ProxyPool.health_check' was never awaited``。
+3. ``search_metasearch._brightdata_serp_search`` 把失败响应体原样写进 debug
+   日志。注意 ``redact_api_key`` 的正则只认 ``sk-tinyfish-`` / ``sk|pk|api_key``
+   前缀和带凭据的代理 URL，**盖不住 Bright Data 自己的 key 形状**，所以这里
+   用的是「拿已知 key 做定向替换」，与格式无关。
 """
 
 from __future__ import annotations
@@ -101,3 +105,32 @@ class TestKickHealthCheckWithoutEventLoop:
         leaked = [w for w in caught if issubclass(w.category, RuntimeWarning)]
         assert not leaked, f"产生了未 await 的协程警告: {[str(w.message) for w in leaked]}"
         assert pool.health_check_calls == 0
+
+
+_BRIGHTDATA_KEY = "brd-customer-0123-zone-dhole-SECRETDONOTLOG"
+
+
+class TestBrightDataErrorBodyRedaction:
+    """Bright Data 的失败响应体不得把 key 原样写进日志。"""
+
+    @pytest.mark.asyncio
+    async def test_key_in_error_body_does_not_reach_log(self, monkeypatch, caplog):
+        import httpx
+        import logging
+
+        from dhole_mcp import search_metasearch as m
+
+        class _ServerError:
+            status_code = 500
+            text = f'{{"error":"unauthorized, key {_BRIGHTDATA_KEY} rejected"}}'
+
+        monkeypatch.setattr(m, "_BRIGHTDATA_API_KEY", _BRIGHTDATA_KEY)
+        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
+        monkeypatch.setattr(httpx, "post", lambda *a, **k: _ServerError())
+
+        with caplog.at_level(logging.DEBUG, logger="dhole_mcp.search_metasearch"):
+            results, _status = await m.metasearch("q", 3, engines=["brightdata"])
+
+        assert results == []
+        assert _BRIGHTDATA_KEY not in caplog.text, "Bright Data key 泄漏到了日志"
+        assert "500" in caplog.text, "脱敏不能把状态码这个排障线索一起抹掉"
