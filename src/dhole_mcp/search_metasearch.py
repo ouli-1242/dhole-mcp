@@ -33,7 +33,7 @@ from functools import cached_property
 from random import SystemRandom
 from time import time
 from typing import Any, ClassVar, Optional, TypeVar
-from urllib.parse import quote, unquote_plus, urlparse
+from urllib.parse import quote, unquote_plus, urljoin, urlparse
 
 import h2
 import httpcore
@@ -674,7 +674,7 @@ _DHOLE_TO_BACKEND = {
     "duckduckgo": "duckduckgo", "ddg": "duckduckgo",  # ddg is a common alias
     "bing": "bing",
     "yahoo": "yahoo", "wikipedia": "wikipedia",
-    "brave": "brave", "yandex": "yandex",
+    "brave": "brave", "yandex": "yandex", "sogou_weixin": "sogou_weixin",
     "grokipedia": "grokipedia",
     # Paid JSON backends: selectable by name, run on their own track (see
     # KeyedApiEngine) -- absent from _TEXT_ENGINES by design.
@@ -687,6 +687,42 @@ _DHOLE_TO_BACKEND = {
 # 保留完整池（VPN 时更多信号），但 bing 排首位作为国内稳定兜底。
 _DEFAULT_BACKENDS = ["bing", "duckduckgo", "brave", "yahoo", "yandex"]
 
+
+class SogouWeixin(BaseSearchEngine):
+    """搜狗微信搜索（weixin.sogou.com）：免费、国内裸网直连（实测 ~0.2s），
+    独家内容池 —— 微信公众号文章在 Bing/百度里搜不全。
+
+    结果 href 是搜狗的 /link?url=... 跳转包装（带 token，会过期），不是文章
+    原始 URL；如实返回包装链接，浏览器可直接打开。
+    """
+
+    name = "sogou_weixin"
+    provider = "sogou"
+    search_url = "https://weixin.sogou.com/weixin"
+    # 摘要 txt-info 与标题 txt-box 是 li 下的兄弟节点，必须切在 li 层
+    items_xpath = '//ul[contains(@class,"news-list")]//li[div[@class="txt-box"]]'
+    elements_xpath: ClassVar[Mapping[str, str]] = {
+        "title": ".//div[contains(@class,'txt-box')]//h3/a//text()",
+        "href": ".//div[contains(@class,'txt-box')]//h3/a/@href",
+        "body": ".//*[contains(@class,'txt-info')]//text()",
+    }
+
+    def build_payload(self, query: str, region: str, safesearch: str,
+                      timelimit: str | None, page: int = 1, **kwargs: str) -> dict[str, Any]:
+        return {"type": "2", "query": query}
+
+    def extract_results(self, html_text: str) -> list[Any]:
+        results = super().extract_results(html_text)
+        for r in results:
+            # 去掉高亮标记残留；/link 相对路径补全为可打开的绝对链接
+            r.title = r.title.replace("red_beg", "").replace("red_end", "").strip()
+            if r.href.startswith("/"):
+                r.href = urljoin("https://weixin.sogou.com", r.href.replace("&amp;", "&"))
+        return results
+
+
+# 搜狗微信注册（类定义在其上方）
+_TEXT_ENGINES["sogou_weixin"] = SogouWeixin
 
 # ─── keyed JSON search APIs (Bright Data / Tavily / Exa / Bocha) ────────────
 # 这些后端不走 BaseSearchEngine 的 HTML 抓取契约：都是 POST JSON + Bearer key。
