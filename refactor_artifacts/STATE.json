@@ -3,69 +3,79 @@
   "task": "行为保持重构 Dhole MCP 服务器",
   "repo_root": "D:\\tools\\dhole-mcp",
   "branch": "refactor/dhole-mcp-behavior-preserving",
-  "updated_at": "2026-09-21T17:20:00Z",
-  "current_stage": "阶段 0/1（安全隔离与基线）→ 即将进入阶段 2",
+  "updated_at": "2026-09-21T17:34:00Z",
+  "status": "COMPLETED",
+  "current_stage": "阶段 5（交付物）已完成",
   "stage_status": {
-    "stage0_safety_and_baseline": "in_progress",
-    "stage1_first_principles": "in_progress",
-    "stage2_refactor": "not_started",
-    "stage3_verification_matrix": "not_started",
-    "stage4_adversarial_review": "not_started",
-    "stage5_deliverables": "not_started"
+    "stage0_safety_and_baseline": "completed",
+    "stage1_first_principles": "completed",
+    "stage2_refactor": "completed",
+    "stage3_verification_matrix": "completed_with_documented_gaps",
+    "stage4_adversarial_review": "completed",
+    "stage5_deliverables": "completed"
   },
   "git": {
     "branches_present": [
+      "master",
       "wip-before-refactor",
-      "refactor/dhole-mcp-behavior-preserving",
-      "master"
+      "refactor/dhole-mcp-behavior-preserving"
     ],
     "baseline_commit": "74524dc575d39d2269e7268113dff9cf0b391208",
-    "baseline_commit_branch": "wip-before-refactor",
-    "baseline_commit_message": "chore: snapshot working tree before behavior-preserving refactor",
-    "initial_repo_state": "仓库此前没有任何提交（unborn HEAD），95 个文件全部处于已暂存未提交状态，当前分支名为 fix/silent-degradation-hardening。已按阶段 0 第 2 步要求先做完整提交保全。",
-    "last_green_commit": "74524dc575d39d2269e7268113dff9cf0b391208",
-    "note": "refactor 分支从 74524dc 创建，尚无新增提交。"
+    "last_green_commit": "9391ca0",
+    "production_code_commits": [
+      { "hash": "ebc51dc", "what": "删除 updater.py::_reranker_model_present（零引用死代码，18 行）" },
+      { "hash": "6e248fe", "what": "修正 4 处描述不存在代码的注释/docstring（纯注释，零可执行语句变更）" },
+      { "hash": "9391ca0", "what": "删除 links.py::_MAIN_XPATH 与 fetcher.py::_IMPERSONATE_POOL（各零引用）；修正 links.py citations docstring" }
+    ],
+    "artifact_commits": [
+      { "hash": "f27a0b1", "what": "TOOLING / STATE / FIRST_PRINCIPLES / CONTRACTS + AST 分析工具" },
+      { "hash": "0d81f3e", "what": "BASELINE / DECISIONS / 源码级 payload 测量" },
+      { "hash": "d334fd9", "what": "分析脚本与原始输出；修掉脚本自身引入的 2 个 ruff 报错" }
+    ],
+    "not_done_by_design": [
+      "未合并到 master / 默认分支",
+      "未推送到远程",
+      "未删除任何分支",
+      "未 amend、未 force push、未 reset --hard"
+    ]
   },
   "baseline_evidence": {
-    "pytest": {
-      "command": "python -m pytest -q --tb=short -p no:cacheprovider",
-      "result": "1128 passed, 2 skipped, 15 deselected in 63.33s",
-      "exit_code": 0,
-      "raw_output": "refactor_artifacts/baseline/pytest_baseline.txt"
-    },
-    "collection": {
-      "command": "python -m pytest -q --collect-only -p no:cacheprovider",
-      "result": "1130/1145 tests collected (15 deselected) in 2.66s",
-      "raw_output": "refactor_artifacts/baseline/pytest_collect.txt"
-    },
-    "ruff_check": {
-      "command": "python -m ruff check .",
-      "result": "All checks passed!",
-      "exit_code": 0,
-      "raw_output": "refactor_artifacts/baseline/ruff_check_baseline.txt"
-    },
-    "ruff_format_check": {
-      "command": "python -m ruff format --check .",
-      "result": "66 files would be reformatted, 12 files already formatted",
-      "exit_code": 1,
-      "decision": "仓库基线本来就不是 ruff-format 过的。因此本轮重构【禁止】运行 ruff format，否则会产生 66 文件的格式化 diff，属于大爆炸改动。",
-      "raw_output": "refactor_artifacts/baseline/ruff_format_check_baseline.txt"
-    },
-    "version": "14.7 (来自 src/dhole_mcp/__init__.py 的 __version__，即版本单一来源)"
+    "pytest": "1128 passed, 2 skipped, 15 deselected in 63.33s (exit 0) -> baseline/pytest_baseline.txt",
+    "pytest_after_changes": "1128 passed, 2 skipped, 15 deselected in 61.66s (exit 0) -> baseline/pytest_after_stage2b.txt",
+    "ruff_check": "All checks passed! -> baseline/ruff_check_baseline.txt",
+    "ruff_format_check": "66 files would be reformatted（基线即不通过）-> baseline/ruff_format_check_baseline.txt；已决策本轮禁跑 format",
+    "version": "14.7（唯一来源 src/dhole_mcp/__init__.py::__version__）",
+    "mcp_snapshot": "tools/list 键排序后逐字节相同（11875==11875）；tools/call 34 次 / isError=true 16 / false 18 / 0 超时"
   },
-  "pending": [
-    "阶段 0 第 7 步：tools/list + 每个工具 tools/call 的原始 JSON 快照（子代理进行中，落盘到 refactor_artifacts/baseline/）",
-    "阶段 1：FIRST_PRINCIPLES.md、CONTRACTS.md",
-    "DOC_CODE_DRIFT.md（子代理进行中）",
-    "阶段 2：原子重构 + 每个绿色步骤单独 commit"
+  "deliverables": [
+    "refactor_artifacts/TOOLING.md",
+    "refactor_artifacts/BASELINE.md",
+    "refactor_artifacts/FIRST_PRINCIPLES.md",
+    "refactor_artifacts/CONTRACTS.md",
+    "refactor_artifacts/DECISIONS.md",
+    "refactor_artifacts/DOC_CODE_DRIFT.md",
+    "refactor_artifacts/STAGE_2_REVIEW.md",
+    "refactor_artifacts/ADVERSARIAL_REVIEW.md",
+    "refactor_artifacts/KNOWN_BUGS.md",
+    "refactor_artifacts/REFACTOR_REPORT.md",
+    "refactor_artifacts/STATE.json",
+    "refactor_artifacts/baseline/  (冻结的原始证据)",
+    "refactor_artifacts/analysis/  (AST 分析原始输出)",
+    "refactor_artifacts/tools/     (可重跑脚本：mcp_snapshot.py / tool_payload_measure.py / module_inventory.py / stale_reference_scan.py)"
   ],
+  "next_step": "无。任务已完成；若需继续，见 REFACTOR_REPORT.md 第 10 节的建议人工检查点。",
   "unresolved": [
-    "refactor_artifacts/tools/mcp_snapshot.py 与被测服务器交互的真实结论尚未回收（子代理进行中）",
-    "README 与代码的漂移清单尚未回收（子代理进行中）"
+    "README 中未独立核对的承诺：robots 正面行为、SSRF 残余面、PDF 口令三态细节、sogou_weixin 排序与早退、CLI 各命令逐字段输出、'4 个索引家族'计数",
+    "测试盲区（非本轮引入）：429、gzip/brotli/zstd、shift_jis、按异常类名的超时/连接错误、<base href>、爬虫端到端、MCP 层并发/取消",
+    "已知缺陷 9 条（KB-1..KB-9）全部只记录未修，其中 KB-6（明文凭据未 0600）建议单开分支修",
+    "DOC_CODE_DRIFT.md 附录中 5 条发现（D-01/D-02/D-03/D-04/D-05/D-06/D-07）来自独立子代理、待人工复核",
+    "我覆盖了该子代理 659 行的 DOC_CODE_DRIFT.md（操作失误），原正文不可恢复；已完成报告中的要点已转述保留"
   ],
   "stop_conditions_triggered": [],
   "notes": [
-    "备份目录 .refactor_backup/ 已建立（src/ tests/ 与根文档副本），并已写入 .git/info/exclude，确保 git add -A 不会把备份提交进仓库。",
-    "未提交任何 git 配置修改；未改动 .gitignore 之外的仓库文件。"
+    "本轮未新增任何网络访问；所有 MCP 实测都在 socket 守卫下进行，DHOLE_HOME 指向 tmp_home。",
+    "未修改 .gitignore；备份目录用 .git/info/exclude 隔离。",
+    "未修改 README.md / CHANGELOG.md（按任务要求，不一致只记录）。",
+    "未修改 tests/ 下任何文件（测试守卫未被削弱）。"
   ]
 }

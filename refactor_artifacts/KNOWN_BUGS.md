@@ -1,0 +1,121 @@
+# KNOWN_BUGS.md — 既有缺陷登记（本轮只记录，不修）
+
+> 铁律 4：发现原 bug 只记录，不修（除非它阻止建立测试基线 —— 未发生）。
+> 每条都标注**是实测还是读代码推断**，并给出可复现命令。
+> 本轮**没有**对以下任何一条动手。
+
+---
+
+## KB-1 `cache_clear(engine_state=true)` 的 `engine_health` 永远是空对象
+
+- **来源**：子代理审查（README↔代码交叉核对），并给出实测序列。
+- **现象**：工具描述（`server.py:4066`）与 README 都承诺"`engine_state=true` 时回复里报告 `engine_health`"。
+  实测的实现顺序是**先** `engine_state_reset()` 清空内存字典、**再** `engine_state_snapshot()`，
+  于是快照必然为空 `{}`。
+- **影响**：外部可观察 —— agent 依赖这个字段判断引擎池是否恢复，拿到 `{}` 会误判。
+- **建议**：先快照再重置（或重置前把旧状态传出去）。**属于行为变更，需产品决策。**
+- **本轮处置**：仅记录。**未修**，因为修它会改变 `tools/call` 的返回内容。
+
+## KB-2 `DHOLE_DEFAULT_ENGINES` 不改变 `engines_consensus` 的分母
+
+- **来源**：子代理审查（实测 `_family_universe(None, …)` 仍返回 `(4, 2)`）。
+- **现象**：用户用环境变量收敛引擎池后，共识度（`engines_consensus` 形如 "2 of 4"）的分母
+  仍是内置的家族全集，于是自建小池会被 agent 读成"池降级"（`consensus_basis` 可能落到 `partial_pool`）。
+- **影响**：外部可观察 —— 影响 agent 对证据强度的判断（README 明确要求读 `consensus_basis`）。
+- **建议**：让分母跟随实际启用的池。
+- **本轮处置**：仅记录。**未修**。
+
+## KB-3 配置了代理时会向 `example.com` 发真实探测请求（fire-and-forget）
+
+- **来源**：子代理审查。
+- **现象**：存在代理配置时，进程会异步向 `example.com` 发探测请求以验证代理可用性。
+  这与 README 中"不做后台真实请求"一类绝对化措辞冲突。
+- **影响**：外部可观察（有真实外网流量）。对"离线可复现"的测试承诺是威胁。
+- **建议**：改为可关闭，或在文档中明确写出这一例外。
+- **本轮处置**：仅记录。**未修**。这也解释了为什么本轮所有 MCP 实测都必须带 socket 守卫（见 `TOOLING.md` §6）。
+
+## KB-4 启动阶段 preflight `1.1.1.1:443`
+
+- **来源**：本轮 MCP 快照实测（子代理 1 报告）。
+- **现象**：一次裸启动 `python -m dhole_mcp` 会产生一次到 `1.1.1.1:443` 的连接（浏览器预热）。
+  本轮快照器用 socket 守卫把它拦下了，所以快照是离线的；**但没有守卫的运行会真的外发**。
+- **影响**：外部可观察（网络流量）。
+- **建议**：延后到首次真正需要浏览器时再做，或提供关闭开关。
+- **本轮处置**：仅记录。**未修**。
+
+## KB-5 首次 `smart_search` 会触发 reranker 权重下载
+
+- **来源**：本轮 MCP 快照实测（子代理 1 报告）。
+- **现象**：空 `DHOLE_HOME` 下第一次有效 `smart_search` 会尝试从 `huggingface.co` / `hf-mirror.com`
+  下载模型权重。本轮用指向死端口的本地代理让它**快速失败**，并在 `tmp_home` 留下空的 `models/bge-zh` 目录。
+- **影响**：外部可观察（网络 + 磁盘写入，数百 MB 量级）。README 未说明这一点。
+- **建议**：文档明确"首次搜索需要下载模型/需要网络"，或提供预置模型的说明。
+- **本轮处置**：仅记录。**未修**。
+
+## KB-6 明文凭据文件缺少 `0600/0700` 权限收紧
+
+- **来源**：子代理审查。
+- **现象**：`search_proxies.json`（含明文代理凭据）与 `usage.jsonl` 未套用 README 叙事里承诺的
+  权限收紧（`0700` 目录 / `0600` 文件）。README 的叙事本身是自洽的，是代码漏做。
+- **影响**：**安全面** —— 多用户机器上同机其他用户可能读到代理凭据。
+  但**不改公开行为**即可修复（只改文件模式）。
+- **建议**：写入时显式 `os.chmod`。这属于安全加固，**不在本"行为保持"重构范围内**。
+- **本轮处置**：仅记录。**未修**。按任务要求"发现安全问题只记录，不擅自改变公开行为"。
+
+## KB-7 `dhole` 的 repair 路径硬编码 `~/.dhole`，不跟随 `DHOLE_HOME`
+
+- **来源**：子代理审查（`cli.py:124` 引用 `repair.py`，后者硬编码 `~/.dhole`）。
+- **现象**：`updater.py` 跟随 `DHOLE_HOME`，而 `cli.py`→`repair.py` 这条路径不跟随。
+  **同一产品内部两种写法不一致。**
+- **影响**：外部可观察 —— 设了 `DHOLE_HOME` 的用户，修repair 会去动真实 `~/.dhole`，
+  与 README 的状态目录叙事矛盾。
+- **建议**：统一走 `paths.home()`。
+- **本轮处置**：仅记录。**未修**（改它会改变文件落点 = 行为变更）。
+
+## KB-8 本机 `site-packages` 装的是 14.6 旧轮子，不带 `PYTHONPATH=src` 会静默验证旧代码
+
+- **来源**：子代理审查（并在其自己的运行中撞到）。
+- **现象**：`D:\Program Files\Python314\Lib\site-packages` 里的 `dhole_mcp` 是 **14.6** 的构建产物，
+  而仓库是 **14.7**。任何不经 `PYTHONPATH=src` 的 `import dhole_mcp` 都会加载旧副本。
+  `pyproject.toml:103-109` 的注释正是为此而写（`pythonpath = ["src"]`，注释自述此坑已咬过项目 4 次以上）。
+- **影响**：**对验证结论的威胁** —— 若验证脚本忘了设 `PYTHONPATH`，会"通过"但验的是旧代码。
+- **本轮如何规避**（每条都是可核查的）：
+  - pytest 通过 `pyproject.toml` 的 `pythonpath=["src"]` 生效；
+  - 我的所有静态分析脚本只做 `ast` 解析，**从不 import** `dhole_mcp`；
+  - 需要 import 的命令一律写成 `PYTHONPATH=src python -c ...`；
+  - `mcp_snapshot.py` 以子进程方式启动 `PYTHONPATH=src python -m dhole_mcp`。
+- **建议**：把开发环境改成 `pip install -e .`（可编辑安装），或在 CI 里断言 `dhole_mcp.__file__` 落在 `src/`。
+- **本轮处置**：仅记录。**未修**（装/卸包不在本任务授权内）。
+
+## KB-9 `server.py` 中 `410` 被列在 archive 回退条件里但永远到不了 archive
+
+- **来源**：本轮实测（`_should_try_archive` 直接调用）。
+- **现象**：`server.py:3498` 判断 `result.status in (404, 410, 451)`，但闸门 `_should_try_archive()`
+  对 410 返回 `False`。实测：`[(404, True), (410, False), (451, True)]`。
+- **影响**：外部可观察 —— 410 Gone 的页面**不会**走 Wayback 回退，与代码字面意图不符。
+- **本轮处置**：**只改了注释**（在 `6e248fe` 中说明 410 会被拒），**没改代码** ——
+  让 410 真的走 archive 属于行为变更，超出本任务边界。
+- **建议**：确认这是有意为之（也许 410 被认为不值得回退）还是遗漏；若是遗漏，另开 PR 修。
+
+## KB-10 静态查表常量被 AST 归类为"可变全局"，容易误判为共享状态
+
+- **来源**：本轮 `analysis/module_inventory.txt`。
+- **现象**：`search.py` 的 `_INTENT_EXPANSIONS`、`errors.py` 的 `_PATTERNS`、`links.py` 的 `_NAV_TAGS` 等
+  用字面量声明，AST 会把它们列为模块级可变容器；但它们**从不上写**，实际是常量。
+- **影响**：不是缺陷，是**阅读陷阱** —— 后续维护者可能以为存在竞态而去加锁。
+- **本轮处置**：仅记录（已在 `FIRST_PRINCIPLES.md` §5.2 与 §7 S-3 说明为何**不值得**为此改动）。
+
+---
+
+## 本轮**主动排除**的"疑似 bug"（避免误报）
+
+| 疑似 | 结论 | 依据 |
+| --- | --- | --- |
+| `server.py:1454` 返回文案提到 "dynamic fetcher"（该 tier 已删） | 是**返回内容**，不是注释；无测试钉住 | 未改。改它属于行为变更，需显式授权 |
+| `crawl.py:84-88` `_is_transient_error` docstring 未提 `"unknown"` 也按 transient 处理 | **不完整，不虚假** | 排除，避免把"没写全"当成错误注释 |
+| `paths.py:121` 写 "~90MB" vs `:132` 写 "90-450MB" | 指代不同模型（legacy vs 当前），未证实为假 | 排除 |
+| `search_engines._VERTICAL_BACKENDS` 与 `search_metasearch._VERTICAL_BACKENDS` 重复 | **有意重复**，原地有注释说明，且被 `test_engine_registry.py` 钉住 | 排除，不做"去重" |
+| `pdf_extractor.py:260/:290` 的嵌套 `def g(*keys)` 逐字节相同 | 真实重复，但提升为模块级会动到两处调用路径 | 排除，风险大于收益 |
+| `server.py` 三处 archive 回退块逐字节相同 | 真实重复，但位于升级/回退关键路径 | 排除，同上 |
+| src/ 中是否存在 `TODO/FIXME/XXX/HACK` | `grep -rn` 结果为空 | 无此类标记，无需清理 |
+| 空壳 schema 是否仍抛异常 | 现有测试已改为**结构化拒绝** | 由 `test_schema_param.py`(15) 与 `TestStructuredInputErrors` 覆盖 |

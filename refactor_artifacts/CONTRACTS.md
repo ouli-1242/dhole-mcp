@@ -25,7 +25,10 @@
 ## C2. `tools/list` 契约（8 个工具）
 
 > 逐字段来源：`src/dhole_mcp/server.py:3997-4112` 的 `_TOOL_DEFS`。
-> **`tools/list` 返回顺序即此列表顺序**（`[Tool(**td) for td in self._TOOL_DEFS]`，`server.py:4127`）。
+> **数组内的元素顺序**（8 个工具的先后）与源码一致（`[Tool(**td) for td in self._TOOL_DEFS]`，`server.py:4127`）。
+> **注意**：`Tool(**td)` 会被 MCP SDK 重新序列化，因此**每个工具对象内部的键顺序**
+> 实测为归一化后的 `annotations, description, inputSchema, name`，**不是**源码里的书写顺序。
+> 键顺序在 JSON 里无语义；这条只影响"能否逐字节比对"，见 `DOC_CODE_DRIFT.md` D-6。
 
 ### C2.0 全局
 
@@ -103,12 +106,13 @@
 | 项 | 契约 | 来源 |
 | --- | --- | --- |
 | 成功返回 | `content` 为 `TextContent` 列表；`screenshot` 为 `ImageContent` | `server.py:4124` 导入的 `TextContent` / `ImageContent` |
-| 失败返回 | `isError=True`，并把错误文本放入 `content`（**不是** JSON-RPC error） | 待实测确认（见 BASELINE.md MCP 快照） |
-| 未知工具名 | 由 MCP SDK/分发层决定 | 待实测 |
-| 参数校验失败 | 需实测记录语义（结构化拒绝 vs 抛异常） | `tests/test_schema_param.py` 覆盖 |
+| 未知工具名 | 由 MCP SDK 分发层处理；未观察到服务器崩溃 | 实测 34 次 `tools/call` |
+| 参数校验失败 | **结构化拒绝**（不是抛异常） | `tests/test_schema_param.py`(15) + `test_bug_report_regressions.py::TestStructuredInputErrors` |
+| **`isError` 语义按工具分裂** | `isError=false` 承载校验/SSRF 类错误：`smart_fetch`、`smart_crawl`、`smart_search`、`parse`、`resolve_url`；`isError=true` 承载同类错误：`screenshot`、`feed_fetch` | **实测**：34 次调用中 16 条 `isError=true`、18 条 `false`；原始响应见 `baseline/mcp_tools_call_index.json` 与 `baseline/mcp_calls_log.txt` |
 
-> 本节中标"待实测"的项，由 `refactor_artifacts/baseline/mcp_*.json` 的原始快照补全；
-> 快照生成后本节会补齐并标注证据路径。
+> **D-3 的补充**：上表最后一行是**重构前后都成立**的既有行为，且**不是**缺陷判定的对象。
+> 它在 `DOC_CODE_DRIFT.md` D-4 中作为"README 未描述的事实"登记。
+> **本轮明令禁止"顺手统一"它** —— 统一会改 `isError`，是外部可观察行为变更。
 
 ---
 

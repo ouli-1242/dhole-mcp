@@ -1,7 +1,7 @@
 {
-  "measured_at": "2026-09-22T01:22:25",
+  "measured_at": "2026-09-22T01:32:12",
   "repo_root": "D:\\tools\\dhole-mcp",
-  "dhole_home_used": "D:\\tools\\dhole-mcp\\refactor_artifacts\\tmp_home\\run-20260922-012214\\state",
+  "dhole_home_used": "D:\\tools\\dhole-mcp\\refactor_artifacts\\tmp_home\\run-20260922-013202\\state",
   "protocol_version_requested": "2025-06-18",
   "protocol_version_returned": "2025-06-18",
   "server_info": {

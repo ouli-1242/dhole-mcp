@@ -1,0 +1,264 @@
+# REFACTOR_REPORT.md — Dhole MCP 服务器"行为保持重构"总报告
+
+分支：`refactor/dhole-mcp-behavior-preserving`（**未合并、未推送、未删除任何分支**）
+基线 commit：`74524dc575d39d2269e7268113dff9cf0b391208`（分支 `wip-before-refactor`）
+产出目录：`refactor_artifacts/`　备份目录：`.refactor_backup/`
+
+---
+
+## 1. 执行摘要
+
+**目标**：在不改变任何外部可观察行为的前提下，让 Dhole MCP 服务器更易维护、注释准确、可验证、可回滚。
+
+**结果**：达成，但**范围刻意做得很小**。4 个生产代码 commit 共
+**删除 27 行、改写 11 行注释/docstring，零可执行语句变更**。
+
+**为什么这么小**：任务的第一铁律是"行为必须不变"，同时禁止大爆炸。而 `FIRST_PRINCIPLES.md`
+的第一性原理推导得出的结论是 —— 在这个代码库里，**绝大多数"看起来该重构"的东西恰恰是会改行为的东西**：
+
+| 想做的"清理" | 为什么不能做 |
+| --- | --- |
+| 拆分 `server.py`（4,587 行 God Module） | 会改变函数内延迟导入的时序 → 改变冷启动与 HTTP-only 降级行为 |
+| 打断 `server.py ⇄ crawl.py` 导入环 | 同上，属导入时序 |
+| 把函数内 `from dhole_mcp.x import y` 提到顶层 | 会改变重依赖（primit/playwright）的加载时机 |
+| 换正文提取器（trafilatura → 别的） | 输出文本直接进 `content`，是可观察行为 |
+| 统一 `timeout` 单位（fetch 是毫秒、feed/resolve 是秒） | 单位不一致本身就是契约（见 `CONTRACTS.md` C2 末注） |
+| "顺手统一"错误封装（有的工具用 `isError`、有的不用） | 实测确认这是既有契约，且被测试钉住 |
+| 跑 `ruff format` | 基线就未格式化过，会产生 66 文件纯格式 diff |
+
+因此阶段 2 的动作面被收敛为四类**结构上不可能改变行为**的改动：
+`S-4 死代码`、`S-6 说谎的类型标注`、`S-7 误导性注释`、`S-5 同模块重复字面量`。
+最终只落了前三类。
+
+**最有价值的产物不是那 27 行删除，而是"什么不能动"的证据链**：
+`CONTRACTS.md`（逐字段的 8 个工具契约）、`mcp_snapshot.py`（可重跑的协议层快照器）、
+`FIRST_PRINCIPLES.md`（I-1…I-15 不变量 vs S-1…S-8 可替换面的分界）。
+
+---
+
+## 2. 使用的 skills 与 MCP 清单
+
+完整清单见 `TOOLING.md`。要点：
+
+**实际调用的 skill**：`python-code-quality`（ruff 规则/行宽/select 集）、
+`verification-before-completion`（无命令输出不得声称通过 —— 全文遵循）、
+`code-review`（每个 commit 后以审查者视角逐条回答 10 问，见 `STAGE_2_REVIEW.md`）、
+`tdd`（改前先确认相关测试为绿）、`writing-plans`（阶段规划）、
+`grilling`（阶段 4 红队自查的替代手段）。
+
+**不存在而必须降级的 skill**（已记录到 `TOOLING.md` §3）：
+`refactoring`、`adversarial-review`、`red-team`、`security-audit`、
+`systematic-debugging`、`root-cause-tracing`、`requesting-code-review`、
+`memory`、`decision-log`、`sequential-thinking`、`first-principles`。
+
+**不存在而必须降级的 MCP**（`TOOLING.md` §5）：
+没有 shell MCP（用内置 `Bash`）、没有 git MCP（用 `git` CLI）、
+没有 **mcp-client / mcp-inspector MCP**（→ **自建** `tools/mcp_snapshot.py`）、
+没有 memory MCP（→ `DECISIONS.md` + `STATE.json`）、
+没有 sequential-thinking MCP（→ 显式推理文档）。
+`playwright` / `browser-use` / `context7` / `github` / `sites` 等会话中可用的 MCP，
+按任务的禁网与禁外传约束**刻意未使用**。
+
+**关键约束遵守**：会话的 MCP 列表里**没有 Dhole**，所以不存在"用被测对象验证自己"的问题；
+验证一律经由独立子进程 + 自建 stdio JSON-RPC 客户端完成。
+
+---
+
+## 3. 基线证据
+
+见 `BASELINE.md`（完整、含原始输出路径）。核心四项：
+
+| 项 | 命令 | 结果 |
+| --- | --- | --- |
+| 单测 | `python -m pytest -q` | **1128 passed, 2 skipped, 15 deselected in 63.33s**，exit 0 |
+| Lint | `python -m ruff check .` | **All checks passed!** |
+| 格式 | `python -m ruff format --check .` | 66 files would be reformatted（**基线即不通过** → 本轮禁跑 format） |
+| 版本 | `import dhole_mcp; __version__` | **14.7** |
+
+**仓库初始处境（必须记录）**：HEAD 是 **unborn**（零提交），95 个文件已 `git add` 但从未提交，
+另有 11 个文件在工作区继续被改。**没有任何回滚点。** 阶段 0 的第一步就是把它提交成 `74524dc`。
+
+**MCP 协议基线**：`tools/mcp_snapshot.py` 启动独立子进程，抓 `initialize` / `tools/list` /
+8 个工具 × {正常, 缺参, 错参} = **34 次 `tools/call`** 的原始 JSON。
+`DHOLE_HOME` 指向 `refactor_artifacts/tmp_home/`，socket 守卫拦住所有外发。
+
+---
+
+## 4. 行为契约清单
+
+见 `CONTRACTS.md`（C1–C7 为契约面，C8 为允许改动面）。摘要：
+
+- **协议面**：stdio 默认 + `--http` 时可用的 `127.0.0.1:8765/mcp`；协议版本 `2025-06-18` 原样回显。
+- **8 个工具**：`smart_fetch`/`smart_crawl`/`screenshot`/`smart_search`/`cache_clear`/`parse`/`feed_fetch`/`resolve_url`，
+  逐工具的 `properties` / `required` / `annotations` 已固定（`cache_clear` 是唯一的
+  `readOnlyHint=False` + `openWorldHint=False`）。
+- **默认值写在 description 文本里而非 schema 里** —— 因此改描述文本 = 改 agent 行为。
+- **单位不一致是契约**：fetch/crawl/screenshot 的 `timeout` 是毫秒，feed_fetch(20)/resolve_url(15) 是秒。
+- **错误面不对称是契约**：5 个工具用 `isError=false` 承载校验/SSRF 错误，`screenshot`/`feed_fetch` 用 `isError=true`。
+- **环境变量**：`src/` 实测读取 24 个；`DHOLE_*` 为产品配置面。
+- **状态文件**：`~/.dhole/` 下 5 个惰性写入文件，全部被测试守卫重定向。
+- **测试守卫**：3 个 autouse fixture（`_no_real_home_migration` / `_offline_dns` / `_no_real_home_state_writes`）。
+- **版本唯一来源**：`src/dhole_mcp/__init__.py::__version__`（`pyproject.toml` 用 hatch dynamic）。
+
+---
+
+## 5. 分阶段变更与 commit hash
+
+| # | commit | 类型 | 内容 |
+| --- | --- | --- | --- |
+| 0 | `74524dc` | 基线 | 把未提交的 95 文件工作区提交为 `wip-before-refactor`（**唯一回滚点**） |
+| 1 | `f27a0b1` | 文档 | `TOOLING.md`、`STATE.json`、`FIRST_PRINCIPLES.md`、`CONTRACTS.md`、AST 依赖图工具与原始输出 |
+| 2 | `0d81f3e` | 文档 | `BASELINE.md`、`DECISIONS.md`、源码级 payload 测量工具与结果 |
+| 3 | `ebc51dc` | **代码** | 删除 `updater.py::_reranker_model_present`（18 行，全仓零引用） |
+| 4 | `d334fd9` | 工具 | 提交分析脚本与原始输出；修掉我自己脚本引入的 2 个 ruff 报错 |
+| 5 | `6e248fe` | **代码** | 修正 4 处描述"不存在的代码"的注释/docstring（`search.py`×2、`search_metasearch.py`、`reranker.py`×2、`server.py`×2） |
+| 6 | `9391ca0` | **代码** | 删除 `links.py::_MAIN_XPATH`、`fetcher.py::_IMPERSONATE_POOL`；修正 `links.py` 的 citations docstring |
+
+**每个 commit 都是"一个关注点"**，且都附了可重跑的验证命令与结果。回滚见第 9 节。
+
+---
+
+## 6. 每阶段验证结果
+
+| 阶段 | 门禁 | 结果 |
+| --- | --- | --- |
+| 0 基线 | `pytest` / `ruff` / `ruff format --check` / 版本 / MCP 快照 | 全绿（格式项按设计不通过，已决策禁跑） |
+| 1 建模 | 模块依赖图（AST）、共享状态清单、env 清单、契约清单 | 产出 4 份文档，结论可复现 |
+| 2 每个原子改动 | 改前相关测试绿 → 改动 → `ruff` + 全量 `pytest` + `import` 冒烟 | 3 个代码 commit 各自：`ruff` All checks passed、**1128 passed / 2 skipped / 15 deselected** |
+| 2 审查 | 审查者模式逐条回答 10 问 | 见 `STAGE_2_REVIEW.md`（R-1…R-6，全部通过） |
+| 3 契约回归 | 重构前后各跑一次 `mcp_snapshot.py`，键排序后 diff | **`tools/list` 逐字节相同**（11875 == 11875）；`tools/call` 计数相同（34 / 16 `isError=true` / 18 `false` / 0 超时） |
+| 3 缺陷注入 | 见 `ADVERSARIAL_REVIEW.md` 第二/三节 | 已覆盖项全绿；**4 类盲区如实登记**（429、gzip/brotli/zstd、shift_jis、按异常类名的超时/连接错误） |
+| 3 性能 | 快照器总耗时 | 10.5 s → 10.4 s，无可测退化 |
+| 4 红队 | 7 个攻击面 + 3 个主动证伪尝试 | **未能证伪"行为未变"**；发现 4 条网络/权限卫生问题（只记录） |
+
+**唯一一次"意外"**：加入我自己的分析脚本后 `ruff check .` 出现 2 个报错。
+核查确认**两条都在我的脚本里**（未用变量、未用 import），`ruff check src tests` 全程全绿。
+已在 `d334fd9` 修复，并把这个教训写进 `STAGE_2_REVIEW.md` R-6。
+
+---
+
+## 7. 对抗性审查发现
+
+完整见 `ADVERSARIAL_REVIEW.md`。要点：
+
+**未能证伪的三条独立证据链**：契约面逐字节相同 / 测试计数与基线完全一致 /
+4 个生产 commit 零可执行语句变更。
+
+**发现但按任务要求未修的问题**（全部登记在 `KNOWN_BUGS.md`）：
+
+| 编号 | 问题 | 影响 |
+| --- | --- | --- |
+| KB-1 | `cache_clear(engine_state=true)` 的 `engine_health` 恒为 `{}`（先 reset 再 snapshot） | 外部可观察：agent 会误判引擎池已恢复 |
+| KB-2 | `DHOLE_DEFAULT_ENGINES` 不改变 `engines_consensus` 分母 | 外部可观察：自建小池被读成"池降级" |
+| KB-3 | 有代理配置时向 `example.com` 发真实 fire-and-forget 探测 | 真实外网流量 |
+| KB-4 | 启动 preflight `1.1.1.1:443` | 真实外网流量 |
+| KB-5 | 首次 `smart_search` 触发 HuggingFace 权重下载 | 网络 + 数百 MB 磁盘 |
+| KB-6 | `search_proxies.json`（**明文代理凭据**）与 `usage.jsonl` 未 0600 | **安全面**；修它不改公开行为，最值得单开 PR |
+| KB-7 | `cli.py`→`repair.py` 硬编码 `~/.dhole`，不跟随 `DHOLE_HOME`（`updater.py` 却跟随） | 产品内部写法分叉 |
+| KB-8 | 本机 `site-packages` 装的是 **14.6 旧轮子** | 不带 `PYTHONPATH=src` 会静默验证旧代码 |
+| KB-9 | `410` 被列在 archive 回退条件里但 `_should_try_archive` 对 410 返回 False | 只改了注释使其与代码一致，**未改代码** |
+
+**主动排除的误报**（避免把"没写全"当错误）：`crawl.py` 的 transient docstring 不完整、
+`paths.py` 两处 MB 数字指代不同模型、两份 `_VERTICAL_BACKENDS` 是有意重复且被测试钉住、
+`pdf_extractor` 与 `server.py` 的重复代码块风险大于收益。
+
+---
+
+## 8. 行为差异
+
+**逐字节级**：`tools/list`（键排序后）、`instructions`（1399 字符）、`tools/call` 错误面计数
+—— **全部一致，无差异**。
+
+**无法做到字节级、已证明语义一致并记录差异的项**：
+1. **token 数无法比对**。README 记的是 token（333 / 2931），本轮只能测字符
+   （1399 / 11499 compact），因为仓库里**没有记录作者用的 tokenizer**，离线也无可用 tokenizer。
+   `字符/4` 粗估为 350 / 2877，与 README 同量级但不等 —— 这与"不同 tokenizer 给出不同数"一致，
+   **不能据此断定负载漂移**。已记入 `DOC_CODE_DRIFT.md` D-2。
+2. **JSON 对象键顺序**。`server.py:4127` 用 `Tool(**td)` 构造，MCP SDK 会重排键为
+   `annotations, description, inputSchema, name`（数组元素顺序不变）。键顺序无语义，已记入 D-6。
+
+**行为差异结论：无。**
+
+---
+
+## 9. 回滚方法（具体命令）
+
+```bash
+cd /d/tools/dhole-mcp
+
+# 方式 A：整体回到重构前（最彻底）
+git switch wip-before-refactor          # 这个分支只有 74524dc 一个提交 = 原样
+# 若想留在重构分支但丢弃全部改动：
+git switch refactor/dhole-mcp-behavior-preserving
+git reset --hard 74524dc                # ⚠ 会丢弃该分支上全部 commit（含 artifacts）
+
+# 方式 B：逐个回滚生产代码改动（推荐，保留 artifacts）
+git revert 9391ca0    # 复活 _MAIN_XPATH / _IMPERSONATE_POOL，并还原 links.py docstring
+git revert 6e248fe    # 还原 4 处注释/docstring
+git revert ebc51dc    # 复活 _reranker_model_present
+
+# 方式 C：只回滚某一个文件到重构前
+git restore --source=74524dc -- src/dhole_mcp/updater.py
+
+# 验证回滚成功（三条都应回到基线值）
+python -m pytest -q                      # 期望 1128 passed, 2 skipped, 15 deselected
+python -m ruff check .                   # 期望 All checks passed!
+git diff --stat 74524dc -- src/          # 期望：无输出
+```
+
+**注意**：`refactor_artifacts/` 与 `.refactor_backup/` 是本任务的产物/备份，
+`.refactor_backup/` 已加入 `.git/info/exclude`（不会进仓库）；`refactor_artifacts/` 是有意提交的。
+回滚生产代码时**不需要**删除它们。
+
+---
+
+## 10. 剩余风险与建议人工检查点
+
+| 风险 | 级别 | 建议的人工检查 |
+| --- | --- | --- |
+| 无测试 gate 的路径（429 / 压缩 / 非 UTF-8 / 并发取消 / `<base href>` / 爬虫端到端） | 中 | 这些路径本轮**未被测试覆盖**，"行为保持"靠"代码未改动"保证。若要更强的保证，先补测试再动代码 |
+| 4 个生产 commit 只改了注释与死代码，但 `server.py` 的 `stealthy_fetch` docstring 是我手改的 | 低 | `git show 6e248fe` 复核那 9 行；确认没有误伤 `_TOOL_DEFS` 里的 `smart_fetch` description（已用逐字节 diff 证明没有） |
+| KB-6 明文凭据未 0600 | **高（安全）** | 建议单开分支修（仅 `os.chmod`，不改公开行为），**不要并入本重构分支** |
+| KB-3/4/5 真实外网流量与模型下载 | 中 | 决定是"文档说明"还是"改成惰性/可关闭"；后者是行为变更，需产品决策 |
+| KB-1/KB-2 的语义缺陷 | 中 | 两者都会误导 agent；修它们会改 `tools/call` 内容，必须单独评审 |
+| 本机装的是 14.6 旧轮子（KB-8） | 中 | 建议 `pip install -e .`，或在 CI 断言 `dhole_mcp.__file__` 落在 `src/` |
+| README/CHANGELOG 仍与代码有 6 处不一致 | 低 | 见 `DOC_CODE_DRIFT.md`；**本轮按任务要求一律不改文档** |
+| `python -m pytest -m live` 一次都没跑 | 中 | 在有网环境由维护者跑 `-m live --engine-fixtures check`，验证真实 SERP 解析未退化 |
+
+---
+
+## 11. 未解决问题
+
+1. **README 中未被本轮独立核对的承诺**（时间不足，已在 `DOC_CODE_DRIFT.md` 明确标出"未独立验证"）：
+   robots.txt 的正面行为、SSRF 残余覆盖面、PDF 口令三态的实现细节、
+   sogou_weixin 的排序与早退规则、`dhole proxy/engines/model/--doctor/-v` 的逐字段输出、
+   "4 个索引家族"的家族计数。
+2. **CHANGELOG 完全未被用作检查清单**（按任务要求）。因此若 CHANGELOG 声称修过而代码未修，
+   本轮不负责发现。
+3. **`refactor_artifacts/tmp_home/` 与 `tools/` 下的一次性守卫脚本**（`pyshim/sitecustomize.py`）
+   是快照器的运行残留，属于工具产物，未清理（保留以便复现）。
+4. **子代理产物被覆盖的事件**：一个独立 README↔代码审查子代理原本写了 659 行、21 条发现
+   （D-01…D-21）到 `DOC_CODE_DRIFT.md`；我在它完成前用自己 124 行的版本**覆盖了它**
+   （`Write` 报告"updated"而非"created"，我当下未察觉文件已存在）。原正文不可恢复，
+   已把其**完成报告中的 5 条最高优先级发现 + 1 条环境发现**转述到 `DOC_CODE_DRIFT.md` 的附录，
+   并明确标注"来自独立审查，待复核"。**这是我的操作失误，需要下一轮人工复核这 5 条。**
+5. **阶段 2 的第 5/6 项（爬虫队列、搜索后端）没有做任何改动**，因为它们没有离线 gate
+   （见 `ADVERSARIAL_REVIEW.md` 第五节）。这不是遗漏，是 `FIRST_PRINCIPLES.md` §7 的明确决定。
+
+---
+
+## 附：本报告的核验入口
+
+```bash
+cd /d/tools/dhole-mcp
+git log --oneline --decorate -8
+python -m pytest -q
+python -m ruff check .
+python refactor_artifacts/tools/mcp_snapshot.py      # 重跑协议快照，与 baseline/ 对比
+python refactor_artifacts/tools/tool_payload_measure.py
+```
+
+`refactor_artifacts/` 内共 11 份交付文档：`TOOLING.md`、`BASELINE.md`、`FIRST_PRINCIPLES.md`、
+`CONTRACTS.md`、`DECISIONS.md`、`DOC_CODE_DRIFT.md`、`STAGE_2_REVIEW.md`、
+`ADVERSARIAL_REVIEW.md`、`KNOWN_BUGS.md`、`REFACTOR_REPORT.md`、`STATE.json`，
+外加 `baseline/`（冻结的原始证据）、`analysis/`（AST 分析原始输出）、`tools/`（可重跑脚本）。
