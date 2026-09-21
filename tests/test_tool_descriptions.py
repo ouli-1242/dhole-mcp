@@ -172,7 +172,7 @@ CHAR_BUDGET = {
     "feed_fetch": 900,
     "resolve_url": 700,
     "parse": 700,
-    # 14.7: 550 -> 860. cache_clear gained the engine_state lever (reset engine
+    # 14.6: 550 -> 860. cache_clear gained the engine_state lever (reset engine
     # cooldowns / yield) plus its "when to use it" line. Without a tool-visible
     # reset, a user whose network changed had only "delete files under ~/.dhole
     # and restart" - which is exactly how a working VPN got misdiagnosed as

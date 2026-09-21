@@ -140,7 +140,7 @@ Dhole 的差异化不是「每项都最强」，而是**在同一个本地进程
 
 ### 上下文开销
 
-MCP 客户端每次连接（新会话或重连）都要先付一笔固定 token：`instructions`（握手时注入一次）+ 全部工具 schema。用 `cl100k_base` 对客户端实际收到的 wire JSON 计数，本仓库 14.6 实测（14.7 给 `cache_clear` 加了 `engine_state`、给 `parse` 加了路径说明，字符预算已同步，token 数字待重测，两行会小幅上移）：
+MCP 客户端每次连接（新会话或重连）都要先付一笔固定 token：`instructions`（握手时注入一次）+ 全部工具 schema。用 `cl100k_base` 对客户端实际收到的 wire JSON 计数，本仓库 14.6 实测（`cache_clear` 后来又加了 `engine_state`、`parse` 加了路径说明，字符预算已同步，token 数字待重测，两行会小幅上移）：
 
 | 项目 | tokens |
 | --- | --- |

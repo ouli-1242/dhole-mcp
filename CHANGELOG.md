@@ -9,9 +9,13 @@
 > 版本号是自己的，与上游版本不可比。`src/dhole_mcp/__init__.py` 中的
 > `__version__` 是版本的唯一权威来源。
 
-## [14.7] - 2026-09-22
+## [14.6] - 2026-09-22
 
-一份外部全量测试报告（两轮：无 VPN / 有 VPN，8 个工具，7 个显著 + 1 个间歇 + 8 个轻微）逐条复验后的修复批次。复验结果：报告的显著/轻微项里 **BUG-1/2/4/5/6/8/9/10/12/13/14/15/16 确认并已修**，**BUG-11（冷启动慢）由超时预算收敛**，**BUG-19 未复现但把产生它的代码路径堵了**，**BUG-17 的根因判断被证据推翻**（改的是它真实剩下的三个缺口）；另外测出 **4 项报告里没有的问题（NEW-1…NEW-4）**并一并修掉。这一批的共同主题是**失败要说自己是失败**：正文里不许夹错误文本，被 dhole 自己丢掉的结果要说出来，超时要在预算内给出结构化答复。
+四批改动。前三批的共同毛病是**调用看起来成功了，但实际没做它承诺的事**。
+
+**修复**：schema 静默降级、首调 -32001 超时、描述与代码不一致、进程扫描的编码问题。
+**新增**：补齐三项用户能感知的能力 —— 代理池管理入口、安装体检、上手文档。
+**变更**：收敛工具描述，让 agent 在该用的时候选对工具，同时降低 connect-time 成本。
 
 ### 修复（响应契约）
 
@@ -34,7 +38,7 @@
 - **`max_results` 越界被静默钳制（BUG-13）。** `max_results=100` 现在在 `fetch_hint` 里说明"超出 1–50 支持范围，按 50 返回"，不会读成"只有 50 条结果"。
 - **`content_age_days` 用 -1 表示未知（BUG-2）。** 负数与"未来一天的内容"混淆，而后者是另一种断言。未知/日期在未来（脏数据）现在都返回 `null`，字段描述同步说明"null 不是负龄"。
 - **list 页的下一步指向导航栏（NEW-3）。** 实测 theverge.com/news 的 `next_action` 是 `Top targets: /, /auth/login, /subscribe`——按 DOM 顺序取前三条引用，取到的是站点头。新增 `_best_list_targets()`：排除 chrome/登录/订阅/源站首页/静态资源，偏好深层路径与带锚文本的链接，同域加分。
-- **`options` 被逐字符解析（BUG-19，未稳定复现）。** 报告的重启后首轮 `['{','"','m',…]` 在 14.7 上没能复现（字符串形态的 options 现在能正确解析），但产生它的代码路径确实存在：`set(options)` 对 str 就是字符集合。`_dispatch` 现在统一走 `_coerce_options()`（字符串按 JSON 解析、非对象如实报错），`_strict_options` 也加了同形的护栏——不再依赖"客户端总是发对象"。
+- **`options` 被逐字符解析（BUG-19，未稳定复现）。** 报告的重启后首轮 `['{','"','m',…]` 复验时没能复现（字符串形态的 options 现在能正确解析），但产生它的代码路径确实存在：`set(options)` 对 str 就是字符集合。`_dispatch` 现在统一走 `_coerce_options()`（字符串按 JSON 解析、非对象如实报错），`_strict_options` 也加了同形的护栏——不再依赖"客户端总是发对象"。
 
 ### 修复（审计遗留六条）
 
@@ -60,17 +64,6 @@
 - **`dhole engines list|reset`** 是同一件事的命令行入口（纯 stdlib 读状态文件，半坏安装上也能跑）；`dhole -v` 的能力面板新增 `engine cooldowns` 行，显示还剩多少秒。
 - **`circuit_open` 的报告现在带上重试倒计时**（`…skipped; retried in 90s`），把"永久被墙"和"90 秒后重试"分开；`preempted` 的文案明说"不是拦截、不是失败、不涉及网络"——第一轮测试者正是把它读成"dhole 没走 VPN"。
 
-### 测试
-
-`tests/test_bug_report_regressions.py`（68 例）按报告的编号逐条钉住复现证据与修复后的契约。全量：`1128 passed, 2 skipped`，`ruff` 干净。`tests/test_tool_descriptions.py` 的 `cache_clear` 体积预算 550 → 860（该工具新增了 `engine_state` 与使用时机说明），`tools/list` 实测字符数 11809（预算 12500）；README 的 token 表尚未按 14.7 重新测（需要 `tiktoken`，数字会小幅上移）。
-
-## [14.6] - 2026-09-22
-
-三批改动。前两批的共同毛病是**调用看起来成功了，但实际没做它承诺的事**。
-
-**修复**：schema 静默降级、首调 -32001 超时、描述与代码不一致、进程扫描的编码问题。
-**新增**：补齐三项用户能感知的能力 —— 代理池管理入口、安装体检、上手文档。
-**变更**：收敛工具描述，让 agent 在该用的时候选对工具，同时降低 connect-time 成本。
 
 ### 修复（schema 参数静默失效）
 
@@ -218,6 +211,12 @@
   同步更新为 3,264；并注明其中约三成是 schema 的结构开销，压措辞对它无效。
 - 配置表补上 `search_proxies.json` 状态文件，以及 Windows 大小写那一坑的说明。
 
+### 修复（复验后追加）
+
+
+- **`cache_clear(engine_state=true)` 的 `engine_health` 恒为空对象。** 不是竞态也不是偶发：`engine_state_reset()` 会清空 `_BACKEND_HEALTH` 与 `_ENGINE_YIELD`，而快照就取在它**之后**，所以这个字段结构上不可能有值 —— 而它正是本版新加的、让调用方看"重置释放了什么"的字段。快照改到重置**之前**；`engine_state=true/false` 现在报告的是同一件事（调用当刻的池子）。释放的冷却原先只在 `message` 文本里，信息没丢，只是没落在被指引去读的那个字段上。
+- **`dhole` 的 repair 脚本写进真实 home，不跟随 `DHOLE_HOME`。** `cli._run_repair()` 把路径写成`expanduser("~")/.dhole/repair.py`，而 `updater.repair_script_path()` 走 `paths.home()` —— 同一个产品对"我的状态在哪"给了两个答案：改了状态目录的用户，其余状态都跟着走，只有 repair 脚本落到真实 home 并从那里执行。现在两条路都走 `paths.home()`。
+
 ### 测试
 
 - 新增 `tests/test_tool_descriptions.py`（35 例），把描述当契约来钉：
@@ -236,8 +235,10 @@
   smart_fetch 描述` 与 `"cache" in smart_search 描述`。前者改为断言现描述里的稳定
   特征，后者改挂在 `options.cache_ttl` 这个**公开选项**上而不是散文上；并补一条
   `schema` 必须同时出现在描述与 `inputSchema` 里的守卫。
+- `tests/test_bug_report_regressions.py`（68 例）按报告的编号逐条钉住复现证据与修复后的契约。`tests/test_tool_descriptions.py` 的 `cache_clear` 体积预算 550 → 860（该工具新增了 `engine_state` 与使用时机说明），`tools/list` 实测字符数 11809（预算 12500）；README 的 token 表尚未按本版重新测（需要 `tiktoken`，数字会小幅上移）。
 
-测试 949 → 1060，全部离线（默认运行零网络）；`-m e2e` 9 例全绿。
+测试 949 → 1129，全部离线（默认运行零网络）；`-m e2e` 9 例全绿。
+
 
 ## [14.5] - 2026-09-21
 
