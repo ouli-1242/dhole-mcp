@@ -728,24 +728,6 @@ def _has_module(name: str) -> bool:
         return False
 
 
-def _reranker_model_present() -> bool:
-    """True if the ACTIVE reranker model is already cached locally.
-
-    Never imports the reranker (which pulls onnxruntime/torch-adjacent deps);
-    the check is pure filesystem on the registry entry. Diagnose via
-    ``dhole -v``.
-    """
-    try:
-        from dhole_mcp.reranker import active_model, active_model_dir
-        model = active_model()
-        d = active_model_dir()
-        return ((d / "model.onnx").exists()
-                and (d / "model.onnx").stat().st_size >= model.min_bytes
-                and (d / "tokenizer.json").exists())
-    except Exception:
-        return False
-
-
 def _engine_yield_row() -> tuple[str, str, bool] | None:
     """每个引擎最近一轮的产出 —— 静默降级唯一能被看见的地方。
 
