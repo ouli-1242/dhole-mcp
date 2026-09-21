@@ -214,15 +214,35 @@ def test_publisher_digest_accepts_the_published_bytes(tiny_env, monkeypatch):
 
 
 def test_no_publisher_digest_still_records_self_hash(tiny_env, monkeypatch):
-    """拿不到权威摘要时保持原行为（完整性），但注册表里空着就是空着。"""
+    """拿不到权威摘要时保持原行为（完整性），但摘要只许来自核对过的字节。"""
     holder, model_dir = tiny_env
-    assert all(not m.publisher_sha256 for m in reranker.MODELS.values()), \
-        "未经发布方元数据核对前，不许往注册表里填摘要值"
     log: list = []
     monkeypatch.setattr(reranker, "_download_model_file", _fake_download(b"Q" * 40, log))
     onnx, _tok = reranker._ensure_model()
     assert onnx.exists()
     assert (model_dir / "model.sha256").exists()
+
+
+def test_registry_digests_are_well_formed_and_verifiable():
+    """注册表里填了的摘要必须能核对：64 位小写十六进制。
+
+    值本身来自仓库元数据（LFS oid），没法在离线测试里重新推导 —— 这里钉的是"别写坏
+    格式"，以及"该字段的用途只有一个"：填错一个字符 = 所有下载都被拒用。默认模型必须
+    有摘要（它是真实性的唯一来源）；没有摘要的模型只许是那些**从未在本机核对过**的
+    （目前只有 zh-full）。
+    """
+    import re
+    hex64 = re.compile(r"^[0-9a-f]{64}$")
+    for name, m in reranker.MODELS.items():
+        for fname, digest in (m.publisher_sha256 or {}).items():
+            assert hex64.match(digest), f"{name}/{fname} 的摘要不是 64 位十六进制: {digest!r}"
+            assert fname in m.relpaths, f"{name} 的摘要指向一个不下载的文件: {fname}"
+    assert reranker.MODELS["bge-zh"].publisher_sha256, \
+        "默认模型的摘要不能空着 —— 空了等于没有真实性校验"
+    assert set(reranker.MODELS) - {"zh-full"} == {
+        n for n, m in reranker.MODELS.items() if m.publisher_sha256}, \
+        "只有 zh-full 允许留空（未在本机下载过，无从核对）；其余模型请按 raw LFS " \
+        "指针取值并逐位核对后填上"
 
 
 def test_vocab_txt_is_fetched_best_effort(tiny_env, monkeypatch):

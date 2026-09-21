@@ -58,6 +58,9 @@ dev = [
     "pytest-asyncio>=0.24",
     "pytest-mock>=3.14",
     "ruff>=0.6",
+    # 仅测试用：tests/test_pdf_real.py 现场生成加密 PDF 样本（不往仓库里塞二进制件）。
+    # 运行时不需要它 —— PDF 提取走 pdfplumber（见 all extra）。
+    "pypdf>=5.0",
 ]
 all = [
     # Browser deps (patchright for anti-detect browser, playwright for JS

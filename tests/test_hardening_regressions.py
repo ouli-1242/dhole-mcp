@@ -728,11 +728,11 @@ class TestServerCacheTtlFlagIsLive:
 
 
 class TestPdfPasswordReachesTheExtractorAndTheCache:
-    """口令链上最后一环：选项 → _PDF_PASSWORD → extract_pdf(password=…) → 写缓存用带口令的指纹。
+    """口令链的接线：选项 → _PDF_PASSWORD → extract_pdf(password=…) → 写缓存用带口令的指纹。
 
-    这条补上之后，"匿名请求能否复读口径解出的 PDF 正文"就只剩 pdfplumber 自身的解密
-    行为没有覆盖（那是库的契约，不是本项目的代码）。本机拿不到加密 PDF 样本
-    （pypdf 未安装，无法现场生成），所以用打桩把链路的**接线**验穿。
+    这条验的是**接线**（用打桩，能指出"口令没传下去"这类错）；pdfplumber 真解密那份
+    行为由 tests/test_pdf_real.py 用真加密字节验（pypdf 现场生成样本）。两条合起来
+    才闭合：一条证"传到了"，一条证"传到了就真解得开"。
     """
 
     def test_option_flows_to_the_extractor_and_the_cache_key(self, monkeypatch):
@@ -746,8 +746,10 @@ class TestPdfPasswordReachesTheExtractorAndTheCache:
         def fake_extract_pdf(body, extraction_type="markdown", pages=None,
                              password=None, include_media=False):
             seen["password"] = password
+            # 真实现解开口令后 encrypted 是 False（加密标志只在"打开失败/被拒"时立起，
+            # server 用它来决定还该不该走 OCR）—— 桩要跟真行为一致，否则测试在教错事。
             return pdf_extractor.PdfResult(
-                content=["DECRYPTED BODY"], encrypted=True, content_ok=True)
+                content=["DECRYPTED BODY"], encrypted=False, content_ok=True)
 
         monkeypatch.setattr(pdf_extractor, "extract_pdf", fake_extract_pdf)
 

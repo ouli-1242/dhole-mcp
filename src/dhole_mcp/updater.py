@@ -866,7 +866,8 @@ def capabilities() -> list[tuple[str, str, bool]]:
     caps.append((
         "search pool",
         pool if pool
-        else "bing,duckduckgo,brave,yahoo,yandex (default; ddg/brave/yahoo need VPN in CN)",
+        else "bing,duckduckgo,brave,yahoo,yandex,sogou_weixin "
+             "(default; ddg/brave/yahoo need VPN in CN)",
         bool(pool),
     ))
     _append_engine_yield(caps)

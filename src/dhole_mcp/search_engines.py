@@ -9,7 +9,7 @@ cross-backend consensus, and builds the per-engine reports.
 
 Backends (all keyless, 8 in the registry): bing, duckduckgo, brave, yahoo,
 yandex, sogou_weixin, wikipedia, grokipedia. The default pool is DEFAULT_ENGINES
-below (5; bing first because it is reachable from CN without a VPN — Bing was
+below (6; bing first because it is reachable from CN without a VPN — Bing was
 re-enabled in 14.x, this paragraph used to claim it was disabled). wikipedia and
 grokipedia are JSON APIs and opt-in only. Engines run in PARALLEL; one that
 CAPTCHAs / rate-limits / has no topic-match just yields nothing and the others
@@ -49,11 +49,15 @@ def _get_metasearch():
 # Public default engine pool (order = rough preference). `engines=None` in
 # smart_search uses this via the metasearch.
 # bing 排首位：国内网无需 VPN 即可用（cn.bing.com），其余受网络环境影响。
+# sogou_weixin 也国内直连（weixin.sogou.com，实测 ~0.2-0.9s），且是独家内容池 ——
+# 它进来后国内自然可达的引擎有 3 个（bing/yandex/sogou_weixin），恰好够
+# min_engines=3 的多样性门槛，不必为了凑引擎数去挂 VPN。代价是它是**垂直索引**
+# （只覆盖公众号文章），见 _VERTICAL_BACKENDS。
 # NOTE 双份定义：search_metasearch._DEFAULT_BACKENDS 是同一份列表的 backend 名
 # 版本。合成一处需要 search_engines 在模块顶层 import metasearch 链（primp/lxml），
 # 而这里的惰性导入正是为了避免拖重依赖 —— 所以留两份 + 由
 # tests/test_engine_registry.py::test_default_pool_definitions_agree 钉住一致性。
-DEFAULT_ENGINES = ("bing", "duckduckgo", "brave", "yahoo", "yandex")
+DEFAULT_ENGINES = ("bing", "duckduckgo", "brave", "yahoo", "yandex", "sogou_weixin")
 
 # Index family per backend (by the underlying index/provider, for consensus).
 # A URL returned by duckduckgo AND yahoo is ONE family (both Bing's index);
@@ -61,8 +65,15 @@ DEFAULT_ENGINES = ("bing", "duckduckgo", "brave", "yahoo", "yandex")
 _INDEX_FAMILY = {
     "duckduckgo": "bing", "yahoo": "bing", "bing": "bing",
     "brave": "brave", "grokipedia": "grokipedia", "wikipedia": "wikipedia",
-    "yandex": "yandex",
+    "yandex": "yandex", "sogou_weixin": "sogou_weixin",
 }
+
+# 垂直索引：只覆盖某一类内容（sogou_weixin = 微信公众号文章），不是通用网络索引。
+# 唯一的用处是**没有相关性模型时的兜底排序**（见 search._rank）：那时先验只能是
+# "覆盖面"，通用索引对任意查询都更可能相关。而垂直索引往往响应最快，纯按完成顺序
+# 会把它的结果顶到最前 —— 实测 sogou 0.2-0.9s，bing 1.3s、yandex 3.1s。
+# 新增垂直引擎必须登记在这里，否则它在无重排器时享受通用索引的先验。
+_VERTICAL_BACKENDS = frozenset({"sogou_weixin"})
 
 _FRESHNESS_TO_TIMELIMIT = {"day": "d", "week": "w", "month": "m", "year": "y"}
 

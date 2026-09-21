@@ -44,6 +44,12 @@ CONTRACTS = [
     Contract("bing", "bing_variant_b.html", "li[class*='b_algo']",
              must_not_start=("https://www.bing.com/ck/a",)),
     Contract("yandex", "yandex.html", "li[class*='serp-item']"),
+    # sogou_weixin 的结果 href **就是**搜狗的 /link?url=... 跳转包装（那个 token 要在
+    # 浏览器里换真链，离线解不开），所以这里锁的是"不许留下相对路径"——绝对化是它在
+    # extract_results 里唯一的后处理，漏了它浏览器打不开结果。
+    Contract("sogou_weixin", "sogou_weixin.html",
+             "ul[class*='news-list'] li:has(div.txt-box)",
+             must_not_start=("/link?",)),
 ]
 
 JS_SHELL = ("<html><body><div id='root'></div>"
@@ -215,9 +221,14 @@ class TestFixtureAntiRot:
             date.fromisoformat(raw)   # 抛异常即失败
 
     def test_no_secret_shaped_query_params(self):
-        """fixture 会进仓库：不该留着 cookie / token / 签名会话参数。"""
+        """fixture 会进仓库：不该留着 cookie / token / 签名会话参数。
+
+        分隔符要同时认裸 `&` 与 HTML 转义后的 `&amp;`：搜狗结果链接里的会话 token
+        长这样 `...&amp;token=50F4...`，只按裸 `&` 匹配会整片漏过 —— 这条守卫原先
+        就是漏的，收 sogou fixture 时才发现。
+        """
         import re
-        bad = re.compile(r"[?&](Cookie|token|sig|auth|session|apikey|key)="
+        bad = re.compile(r"(?:[?&]|&amp;)(?:Cookie|token|sig|auth|session|apikey|key)="
                          r"(?![Rr][Ee][Dd][Aa][Cc][Tt][Ee][Dd])[^&\"'\s<>]{8,}")
         offenders = []
         for p in FIXTURE_DIR.glob("*.html"):

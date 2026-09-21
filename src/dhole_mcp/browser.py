@@ -154,27 +154,107 @@ def _is_domain_blocked(hostname: str, blocked_domains: frozenset) -> bool:
     return False
 
 
+def _landed_url_refused(landed: str, entry_url: str) -> bool:
+    """落地 URL 本身指向内网、且不是入口站点 → 这一页的正文不能交出去。"""
+    if not (landed or "").lower().startswith(("http://", "https://")):
+        return False
+    if _is_entry_target(landed, entry_url):
+        return False
+    from dhole_mcp.security import url_targets_internal
+    return url_targets_internal(landed)
+
+
 # ─── Resource blocking handler ───────────────────────────────────────────────
+
+class BrowserSSRFBlockedError(RuntimeError):
+    """浏览器被指到一个内网/回环/元数据地址 —— 已拦下，且不会重试。
+
+    单独一个类型是为了让 fetch() 的重试循环**不要重试**：这不是网络抖动，重试
+    只会把同一个内网目标再打三次。
+    """
+
+
+def _effective_port(parsed: Any) -> int:
+    if parsed.port:
+        return parsed.port
+    return 443 if (parsed.scheme or "").lower() == "https" else 80
+
+
+def _is_entry_target(request_url: str, entry_url: str) -> bool:
+    """这次请求是不是"入口站点自己" —— 同主机，且同端口或 http↔https 默认端口升级。
+
+    入口 URL 在 MCP 边界已过 validate_url（含 DNS 复查、hosts 钉位策略），浏览器层
+    不重复否决它；但**只豁免同一个站点**：内网跳板最常见的形态就是
+    `localhost:8080` 页面把浏览器引向 `localhost:9222`（同主机、异端口），那一类必须拦。
+    """
+    try:
+        req = urlparse(request_url)
+        entry = urlparse(entry_url)
+    except Exception:
+        return False
+    if (req.hostname or "").lower() != (entry.hostname or "").lower():
+        return False
+    rp, ep = _effective_port(req), _effective_port(entry)
+    if rp == ep:
+        return True
+    return {rp, ep} == {80, 443}
+
 
 def _create_route_handler(
     disable_resources: bool,
     blocked_domains: Optional[Set[str]] = None,
+    ssrf_watch: Optional[list] = None,
+    entry_url: str = "",
+    main_frame: Any = None,
 ) -> Callable[[Any], Awaitable[None]]:
-    """Create an async route handler for resource blocking."""
+    """Create an async route handler for resource blocking + SSRF guarding.
+
+    ssrf_watch（传入时启用）：每个 http(s) 请求先问一次"目标是内网吗"，
+    是就 abort 并把 (host, 是否主文档) 记进这个 list 交给调用方判定。
+    子资源（图片/脚本/XHR）与重定向都在这里过一道 —— 浏览器内部这些请求不走
+    validate_url，而页面 JS 自己发起的 fetch 更是只有这条路能拦。
+    """
     disabled = DISABLED_RESOURCE_TYPES if disable_resources else set()
     domains = frozenset(blocked_domains) if blocked_domains else frozenset()
 
     async def handler(route: Any) -> None:
         try:
+            request_url = route.request.url
             rt = route.request.resource_type
             if rt in disabled:
                 await route.abort()
                 return
             if domains:
-                hostname = urlparse(route.request.url).hostname or ""
+                hostname = urlparse(request_url).hostname or ""
                 if _is_domain_blocked(hostname, domains):
                     await route.abort()
                     return
+            if ssrf_watch is not None:
+                parsed = urlparse(request_url)
+                # 只查真正会发起网络连接的 scheme：data:/blob:/about: 之类不是网络
+                # 请求，拒掉它们只会弄坏页面（Cloudflare 的挑战页自己就用 blob:/data:）。
+                if (parsed.scheme or "").lower() in ("http", "https") \
+                        and not _is_entry_target(request_url, entry_url):
+                    from dhole_mcp.security import url_targets_internal
+                    # DNS 解析是阻塞调用，route handler 跑在事件循环上 —— 挪到线程里，
+                    # 别让一次判定卡住整个浏览器（同一个答案由 validate_url 缓存兜底）。
+                    if await asyncio.to_thread(url_targets_internal, request_url):
+                        is_main_doc = False
+                        try:
+                            is_main_doc = bool(
+                                rt == "document"
+                                and route.request.is_navigation_request()
+                                and (main_frame is None or route.request.frame == main_frame)
+                            )
+                        except Exception:
+                            pass
+                        ssrf_watch.append(
+                            ((parsed.netloc or parsed.hostname or "").lower(), is_main_doc))
+                        logger.warning(
+                            "browser layer blocked a request to an internal target: %s",
+                            parsed.netloc or "?")
+                        await route.abort()
+                        return
             await route.continue_()
         except Exception:
             try:
@@ -1120,7 +1200,12 @@ class BrowserSession:
         if actual_google and "referer" not in request_headers:
             referer = "https://www.google.com/"
 
+        # SSRF 守卫的记录本：route handler 往里追加 (host, 是否主文档)，重试之间清空。
+        # 声明在循环外，这样 except 分支读它永远有定义（否则早失败会变成 NameError，
+        # 把真正的错误盖掉）。
+        ssrf_watch: list = []
         for attempt in range(actual_retries):
+            ssrf_watch.clear()
             try:
                 page = await self._context.new_page()
                 page.set_default_navigation_timeout(actual_timeout)
@@ -1135,9 +1220,15 @@ class BrowserSession:
                 if actual_extra_headers:
                     await page.set_extra_http_headers(actual_extra_headers)
 
-                # Route handler for resource blocking
-                if actual_disable_resources:
-                    await page.route("**/*", _create_route_handler(True, None))
+                # Route handler: 资源拦截 + SSRF 守卫（每条路径都装 —— 截图/交互
+                # session 里浏览器同样会被重定向走，那条路径此前一道防线都没有）。
+                await page.route(
+                    "**/*",
+                    _create_route_handler(
+                        actual_disable_resources, None, ssrf_watch, entry_url=url,
+                        main_frame=page.main_frame,
+                    ),
+                )
 
                 # Response capture
                 final_response: List[Any] = [None]
@@ -1221,6 +1312,20 @@ class BrowserSession:
                     except Exception as e:
                         logger.debug(f"Human behavior simulation error: {e}")
 
+                # SSRF 终检：主文档被拦下（页面把我们重定向/导航到内网），或落地 URL
+                # 本身就是内网（服务端 3xx 之外的换址、rebinding 之类）—— 这一页的正文
+                # 不能交出去。宁可报错，也不回传内网内容。
+                blocked_main = any(is_main for _, is_main in ssrf_watch)
+                landed = getattr(page, "url", "") or ""
+                if blocked_main or _landed_url_refused(landed, url):
+                    hosts = sorted({h for h, _ in ssrf_watch}) or [urlparse(landed).netloc or landed]
+                    raise BrowserSSRFBlockedError(
+                        "ssrf_blocked: the entry page sent the browser to an internal/"
+                        f"loopback/metadata address ({', '.join(h for h in hosts if h)}); "
+                        "refused to load it. The entry URL was validated, but a redirect or a "
+                        "page-script request pointed inside - nothing was fetched from it."
+                    )
+
                 # Build response
                 from dhole_mcp.fetcher import response_from_browser_page
                 response = await response_from_browser_page(
@@ -1244,11 +1349,28 @@ class BrowserSession:
                 await page.close()
                 return response
 
+            except BrowserSSRFBlockedError:
+                # 安全拒绝不是网络抖动：不重试，原样抛（消息里已经说明了原因）。
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+                raise
             except Exception as e:
                 try:
                     await page.close()
                 except Exception:
                     pass
+                # 主文档被 SSRF 守卫拦下时，goto 会以 ERR_ABORTED 之类的形式报出来 ——
+                # 别把它当可重试的网络抖动（那会朝同一个内网目标再打三次），也别让
+                # 最终错误丢掉"这是被拦下的内网跳转"这个信息。
+                if any(is_main for _, is_main in ssrf_watch):
+                    hosts = sorted({h for h, _ in ssrf_watch})
+                    raise BrowserSSRFBlockedError(
+                        "ssrf_blocked: the browser was redirected to an internal/loopback/"
+                        f"metadata address ({', '.join(h for h in hosts if h)}) from {url}; "
+                        "refused to load it."
+                    ) from e
                 if attempt < actual_retries - 1:
                     logger.warning(
                         f"Browser fetch attempt {attempt + 1} failed for {url}: {str(e)[:200]}. "

@@ -683,19 +683,22 @@ class TestIrrelevantFilter:
 
 class TestFamilyUniverse:
 
-    def test_default_pool_all_healthy_is_three_families(self):
-        # bing/duckduckgo/yahoo 共用一个索引 -> 默认 5 引擎池的满分是 3，不是 5
-        reports = [EngineReport(name=n, ok=True) for n in
-                   ("bing", "duckduckgo", "brave", "yahoo", "yandex")]
+    def test_default_pool_all_healthy_is_every_family(self):
+        # 分母 = 池中独立索引家族数，不是引擎数（bing/ddg/yahoo 共用一个索引）。
+        # 具体几个由 test_engine_registry 钉住；这里钉的是"全员健康 = 满分"。
+        reports = [EngineReport(name=n, ok=True) for n in se.DEFAULT_ENGINES]
         m, c, basis = search._family_universe(None, reports)
-        assert (m, c, basis) == (3, 3, "full")
+        n_families = len({se._INDEX_FAMILY.get(n, n) for n in se.DEFAULT_ENGINES})
+        assert (m, c, basis) == (n_families, n_families, "full")
+        assert m < len(se.DEFAULT_ENGINES), "池里至少有两条引擎共用一个索引"
 
     def test_denominator_survives_a_degraded_pool(self):
         # 只有 bing 活着：旧实现会渲染 "1 of 1"（与全员一致不可区分）
         reports = [EngineReport(name="bing", ok=True)] + [
             EngineReport(name=n, blocked=True) for n in ("brave", "yandex")]
         m, c, basis = search._family_universe(None, reports)
-        assert m == 3, "分母不该因为别的引擎挂掉而缩水"
+        assert m == len({se._INDEX_FAMILY.get(n, n) for n in se.DEFAULT_ENGINES}), \
+            "分母不该因为别的引擎挂掉而缩水"
         assert c == 1
         assert basis == "degraded_pool"
 
@@ -781,7 +784,9 @@ class TestDegradedPoolIsHonest:
     @pytest.mark.asyncio
     async def test_consensus_counts_the_universe_not_the_survivors(self, degraded_pool):
         r = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
-        assert r.results and r.results[0].engines_consensus == "1 of 3"
+        n_families = len({se._INDEX_FAMILY.get(n, n) for n in se.DEFAULT_ENGINES})
+        # 只有一个家族活着，分母仍是整个池子的家族数（否则 "1 of 1" 与全员一致同形）
+        assert r.results and r.results[0].engines_consensus == f"1 of {n_families}"
         assert r.consensus_basis == "degraded_pool"
 
     @pytest.mark.asyncio
@@ -1086,6 +1091,45 @@ class TestRerankFallbackNote:
         assert used == "neural" and note == ""
 
 
+class TestVerticalEnginesLoseTheTieBreakWithoutAReranker:
+    """没有相关性模型时的兜底顺序：垂直索引不能靠"答得快"顶到最前。
+
+    sogou_weixin 实测 0.2-0.9s 返回，bing 1.3s、yandex 3.1s —— 兜底排序就是完成
+    顺序，于是通用索引还没答完，公众号结果已经占了前几名。有神经重排时不介入
+    （判相关性是它的活，覆盖面前验只在没有模型时才成立）。
+    """
+
+    @staticmethod
+    def _raw(*sources):
+        return [RawResult(title=f"r{i}", url=f"https://a{i}.test", snippet="s",
+                          source=s[0], sources=tuple(s), position=i + 1)
+                for i, s in enumerate(sources)]
+
+    def test_vertical_only_results_go_last(self, monkeypatch):
+        monkeypatch.setattr(search, "neural_rerank", lambda q, r: None)
+        raw = self._raw(("sogou_weixin",), ("bing",), ("sogou_weixin",), ("yandex",))
+        ranked, scores, used, _ = search._rank("q", raw, "auto")
+        assert used == "merge"
+        assert [r.source for r in ranked] == ["bing", "yandex", "sogou_weixin", "sogou_weixin"]
+        assert scores[0] > scores[-1], "分数要按最终顺序给，不能留一个分数更高的头名"
+
+    def test_corroborated_by_a_general_engine_is_not_vertical(self, monkeypatch):
+        """同一个 URL 被 bing 也返回过 = 有通用索引佐证，不当垂直结果降级。"""
+        monkeypatch.setattr(search, "neural_rerank", lambda q, r: None)
+        raw = self._raw(("sogou_weixin", "bing"), ("bing",))
+        ranked, _, _, _ = search._rank("q", raw, "auto")
+        assert [r.source for r in ranked] == ["sogou_weixin", "bing"]
+
+    def test_neural_order_is_not_touched(self, monkeypatch):
+        """重排器在场时这条规则不介入 —— 相关性由模型判，不是覆盖面先验。"""
+        raw = self._raw(("sogou_weixin",), ("bing",))
+        monkeypatch.setattr(search, "neural_rerank",
+                            lambda q, r: [(r[1], 0.9), (r[0], 0.1)])
+        ranked, _, used, _ = search._rank("q", raw, "auto")
+        assert used == "neural"
+        assert [r.source for r in ranked] == ["bing", "sogou_weixin"]
+
+
 class TestQueryMapNamesAreReal:
     """手工维护的引擎名单会腐烂：这个集合里原先有三个不存在的引擎。
 
@@ -1117,3 +1161,12 @@ class TestQueryMapNamesAreReal:
         q = "transformer attention mechanism research"
         qm = search._generate_query_map(q, intent, list(se.DEFAULT_ENGINES))
         assert set(qm) == set(se.DEFAULT_ENGINES)
+
+    def test_sogou_weixin_keeps_the_original_query(self):
+        """展开词只有两串英文（paper arxiv... / specifications...），对几乎全中文的
+        公众号索引只有反作用 —— 它必须留在核心集合里拿原始 query。"""
+        intent = search._detect_intent("transformer attention mechanism research")
+        q = "transformer attention mechanism research"
+        qm = search._generate_query_map(q, intent, list(se.DEFAULT_ENGINES))
+        assert qm, "research 意图应当展开（否则这条测试什么也没测到）"
+        assert qm["sogou_weixin"] == q

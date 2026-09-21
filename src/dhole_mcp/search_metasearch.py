@@ -81,6 +81,9 @@ def _get_search_proxy() -> str | None:
 # Per-engine + overall deadline. Engines run in parallel + we early-return on
 # quorum, so a healthy search is ~1-2s; this bounds a fully-throttled one.
 _SEARCH_DEADLINE = float(os.environ.get("DHOLE_SEARCH_DEADLINE", "16") or "16")
+# 软截止：结果凑够就早退，不为慢/死的引擎等到硬截止。提成模块常量只为了让测试能
+# 把它压到毫秒级（否则验早退归属的测试每条都要真睡 2s）。
+_SOFT_DEADLINE = 2.0
 _ua = UserAgent()
 
 # Bright Data SERP API（keyed 引擎之一，见下方 KeyedApiEngine）
@@ -728,17 +731,31 @@ _DHOLE_TO_BACKEND = {
     "exa": "exa",
     "bocha": "bocha",
 }
-# 国内网默认池：bing/yandex 可达无需 VPN；ddg/brave/yahoo 需 VPN。
+# 国内网默认池：bing/yandex/sogou_weixin 可达无需 VPN；ddg/brave/yahoo 需 VPN。
 # 保留完整池（VPN 时更多信号），但 bing 排首位作为国内稳定兜底。
-_DEFAULT_BACKENDS = ["bing", "duckduckgo", "brave", "yahoo", "yandex"]
+_DEFAULT_BACKENDS = ["bing", "duckduckgo", "brave", "yahoo", "yandex", "sogou_weixin"]
+
+# 垂直索引：只覆盖某一类内容（sogou_weixin = 微信公众号文章），不是通用网络索引。
+# 这里用它的地方只有一处 —— 早退配额的归属（见 multi_search 里 general_n 那段）。
+# NOTE 双份定义：search_engines._VERTICAL_BACKENDS 是同一份名单（那边给排序用），
+# 同样的惰性导入理由，由 tests/test_engine_registry.py::test_vertical_sets_agree 钉住。
+_VERTICAL_BACKENDS = frozenset({"sogou_weixin"})
+
+
+def _is_vertical_entry(entry: dict[str, Any]) -> bool:
+    """这条**合并后**的结果是不是只来自垂直索引（没有任何通用引擎也返回过它）。"""
+    srcs = entry.get("backends") or {entry.get("backend", "")}
+    return bool(srcs) and all(b in _VERTICAL_BACKENDS for b in srcs)
 
 
 class SogouWeixin(BaseSearchEngine):
-    """搜狗微信搜索（weixin.sogou.com）：免费、国内裸网直连（实测 ~0.2s），
-    独家内容池 —— 微信公众号文章在 Bing/百度里搜不全。
+    """搜狗微信搜索（weixin.sogou.com）：免费、国内裸网直连（实测 ~0.2-0.9s），
+    默认池成员（14.5 起）。独家内容池 —— 微信公众号文章在 Bing/百度里搜不全。
 
     结果 href 是搜狗的 /link?url=... 跳转包装（带 token，会过期），不是文章
-    原始 URL；如实返回包装链接，浏览器可直接打开。
+    原始 URL；如实返回包装链接，浏览器可直接打开。它是**垂直索引**（只覆盖公众号
+    文章），在无神经重排时的兜底排序里会被排到通用索引之后 —— 见
+    search_engines._VERTICAL_BACKENDS。
     """
 
     name = "sogou_weixin"
@@ -1411,7 +1428,7 @@ async def metasearch(
     # fallback returns at SOFT_DEADLINE once we have enough results even if some
     # backends are dead/captcha'd (don't wait the full deadline for them).
     min_engines = min(3, len(instances))
-    soft_deadline = 2.0
+    soft_deadline = _SOFT_DEADLINE
     quorum_results = max_results + 4  # a little extra for the neural reranker
 
     async def _run(name: str, eng: BaseSearchEngine) -> tuple[str, list[Any]]:
@@ -1502,7 +1519,15 @@ async def metasearch(
         # early-return: enough engines contributed enough results, OR enough
         # results after the soft deadline (don't hold for dead backends).
         elapsed = time() - start
-        if len(order) >= quorum_results and (
+        # "结果够多了"只认**通用**引擎的产出：垂直索引一次就能回满配额（实测 sogou
+        # 0.2-0.9s 回 10 条），让它算进来，2s 软截止一到就会把还在跑的通用引擎全 cancel
+        # —— 本机实测 yandex(3.1s) 就是这样被砍掉的，而它恰是另一个国内可达的通用索引：
+        # 为了加宽池子而加入的引擎，反而把池子变窄了。通用引擎全都不再运行时（被墙/已
+        # 结束），垂直结果当然可以自己触发早退。
+        general_n = sum(1 for e in order if not _is_vertical_entry(e))
+        general_running = any(tasks[t] not in _VERTICAL_BACKENDS for t in pending)
+        enough_results = general_n >= quorum_results or (bool(order) and not general_running)
+        if enough_results and (
             engines_ok >= min_engines or elapsed >= soft_deadline
         ):
             for pt in pending:

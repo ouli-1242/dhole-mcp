@@ -108,6 +108,36 @@ def _get_pdfplumber():
         ) from e
 
 
+def _encryption_problem(exc: BaseException) -> str | None:
+    """把"打不开"分成 口令问题 / 加密方案不支持 / 其他，返回 'password'/'unsupported'/None。
+
+    判据必须落在**类型**上：pdfplumber 把 pdfminer 的 PDFPasswordIncorrect 包成
+    `PdfminerException` 且 str() 是空串（实测），所以原来那句按消息文字匹配的
+    `"password" in msg or "encrypt" in msg` 在真机上永远命不中 —— 结果是一条
+    `pdf_open_failed: `（连原因都没有）加 `encrypted=False`：口令保护看起来像文件损坏。
+    异常链要一起看：原始类型藏在 args/__context__ 里。
+    """
+    chain: list[BaseException] = [exc]
+    for e in chain:
+        for cand in list(getattr(e, "args", ()) or ()) + [getattr(e, "__context__", None)]:
+            if isinstance(cand, BaseException) and cand not in chain:
+                chain.append(cand)
+        if len(chain) > 8:
+            break
+    for e in chain:
+        name = type(e).__name__.lower()
+        if "password" in name:
+            return "password"
+        if "encrypt" in name:
+            return "unsupported"
+        msg = str(e).lower()
+        if "password" in msg:
+            return "password"
+        if "encrypt" in msg or "not supported" in msg:
+            return "unsupported"
+    return None
+
+
 def _parse_pages(spec: str | None, total: int) -> list[int]:
     """Parse a page spec like '1-5', '1,3,5-7', '1, 2' into a sorted unique
     list of 1-indexed page numbers clamped to [1, total]. None -> all pages."""
@@ -439,14 +469,24 @@ def extract_pdf(
     try:
         pdf = pdfplumber.open(io.BytesIO(body), password=password or "")
     except Exception as e:
-        msg = str(e).lower()
-        if "password" in msg or "encrypt" in msg or "not supported" in msg:
+        kind = _encryption_problem(e)
+        if kind == "password":
+            detail = ("the supplied password was rejected" if password
+                      else "no password was supplied")
             return PdfResult(encrypted=True,
-                             error="encrypted_pdf: this PDF is password-protected; "
-                                   "pass a password via the 'password' option",
+                             error=f"encrypted_pdf: this PDF is password-protected; {detail} "
+                                   "- pass the correct one via the 'password' option",
                              content=["[Encrypted PDF - pass a password to extract.]"])
-        return PdfResult(error=f"pdf_open_failed: {str(e)[:200]}",
-                         content=[f"[Could not open PDF: {str(e)[:200]}]"])
+        if kind == "unsupported":
+            return PdfResult(encrypted=True,
+                             error="encrypted_pdf: this PDF's encryption scheme is not "
+                                   "supported by the installed PDF stack",
+                             content=["[Encrypted PDF - unsupported encryption scheme.]"])
+        # 消息可能是空串（pdfminer 不少异常 str() 为空）—— 那就至少把类型名报出来，
+        # 留一条 "pdf_open_failed: " 等于什么也没说。
+        msg = str(e)[:200] or type(e).__name__
+        return PdfResult(error=f"pdf_open_failed: {msg}",
+                         content=[f"[Could not open PDF: {msg}]"])
 
     try:
         total_pages = len(pdf.pages)

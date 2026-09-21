@@ -50,8 +50,9 @@ class RerankerModel:
     label: str = ""               # short human description for -v / docs
     # 发布方记录的 sha256（本地文件名 -> 摘要）。**空 = 没有权威摘要可用**，此时
     # 下载后只是"算自己刚下的字节再写盘"，那是完整性不是真实性。填了才谈得上验证
-    # 镜像给的就是作者发布的那份。填法：从模型仓库的发布方元数据（不是同一下载端点）
-    # 取 sha256，逐文件核对后写进这里 —— 拿不到就留空，别编。
+    # 镜像给的就是作者发布的那份。填法：`<endpoint>/<repo>/raw/<rev>/<relpath>` 拿到
+    # 的是 git 里提交的 LFS 指针（`oid sha256:...`，与下载端点不同的路径），取值后
+    # **必须与本机已下载的字节逐位核对**再写进来 —— 拿不到就留空，别编。
     publisher_sha256: dict[str, str] = field(default_factory=dict)
 
 
@@ -72,6 +73,12 @@ MODELS: dict[str, RerankerModel] = {
         approx_bytes=279_000_000,
         min_bytes=100_000_000,
         label="bilingual BGE reranker int8 (BAAI, zh+en), default",
+        # LFS oid @ 上面的 rev，取自 hf-mirror 的仓库元数据；与本机下载的
+        # onnx/model_int8.onnx（278,825,308 字节）逐位核对一致（2026-09-21）。
+        publisher_sha256={
+            "model.onnx":
+                "2059d8ef0b6e935b4845e11b38c9af9e9e2e7b91f69fc99efe03254e0a7da8d3",
+        },
     ),
     # Cross-lingual MiniLM distilled from XLM-R Large on mMARCO (incl. Chinese),
     # fp32. Apache-2.0, ~117M params / ~450MB. Only worth it when you want the
@@ -88,6 +95,8 @@ MODELS: dict[str, RerankerModel] = {
         approx_bytes=450_000_000,
         min_bytes=300_000_000,
         label="cross-lingual MiniLM fp32 (mMARCO, incl. Chinese) - heavier",
+        # 未填：本机没下载过这个模型，拿不到可用于核对的字节 —— 机制对它是惰性的
+        # （只做自记哈希防损坏）。填之前必须先在真机上下一份并逐位核对。
     ),
     # The 14.x default until now: English MS MARCO MiniLM. Apache-2.0,
     # ~22.7M params / ~91MB ONNX. Kept for EN-heavy users + backward compat.
@@ -103,6 +112,12 @@ MODELS: dict[str, RerankerModel] = {
         approx_bytes=91_000_000,
         min_bytes=50_000_000,
         label="English MS MARCO MiniLM (legacy default)",
+        # 同上（仓库已改名：ms-marco-MiniLM-L-6-v2 -> ...L6-v2，rev 保留）。与本机
+        # 下载的 onnx/model.onnx（91,011,230 字节）逐位核对一致（2026-09-21）。
+        publisher_sha256={
+            "model.onnx":
+                "5d3e70fd0c9ff14b9b5169a51e957b7a9c74897afd0a35ce4bd318150c1d4d4a",
+        },
     ),
 }
 

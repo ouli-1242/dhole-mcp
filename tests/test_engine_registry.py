@@ -3,6 +3,8 @@
 策略：keyed 引擎默认不跑，只有 engines= 显式点名才执行 —— 每次调用都花钱。
 """
 
+import time
+
 import httpx
 import pytest
 
@@ -309,7 +311,8 @@ class TestDefaultPoolEnv:
 
         monkeypatch.delenv("DHOLE_DEFAULT_ENGINES", raising=False)
         assert m._resolve_backends(None) == list(m._DEFAULT_BACKENDS)
-        assert m._DEFAULT_BACKENDS == ["bing", "duckduckgo", "brave", "yahoo", "yandex"]
+        assert m._DEFAULT_BACKENDS == ["bing", "duckduckgo", "brave", "yahoo",
+                                      "yandex", "sogou_weixin"]
 
 
 class TestConnectionFailureCooldown:
@@ -433,6 +436,104 @@ def test_index_family_map_covers_the_default_pool():
     missing = [n for n in DEFAULT_ENGINES
                if ms._DHOLE_TO_BACKEND.get(n, n) not in _INDEX_FAMILY]
     assert not missing, f"这些默认引擎不在 _INDEX_FAMILY 里: {missing}"
-    # 默认池确实只有 3 个家族（"3 of 5" 这种字符串不可能出现）
+    # 默认池 6 引擎 / 4 家族：渲染出来只可能是 "x of 4"，"x of 6" 不可能出现
     families = {_INDEX_FAMILY[ms._DHOLE_TO_BACKEND.get(n, n)] for n in DEFAULT_ENGINES}
-    assert families == {"bing", "brave", "yandex"}, families
+    assert families == {"bing", "brave", "yandex", "sogou_weixin"}, families
+
+
+def test_vertical_set_only_names_real_engines():
+    """_VERTICAL_BACKENDS 是手工维护的第二张名单 —— 它得指着真实存在的引擎。
+
+    名单本身只有一处定义（不是类属性），所以这里钉的是"别腐烂"：
+    名字写错时，那条兜底排序规则会静默失效（垂直引擎又回到靠"答得快"霸榜）。
+    """
+    from dhole_mcp import search_metasearch as ms
+    from dhole_mcp.search_engines import _VERTICAL_BACKENDS
+
+    ghost = {n for n in _VERTICAL_BACKENDS if n not in ms._TEXT_ENGINES}
+    assert not ghost, f"_VERTICAL_BACKENDS 里有不存在的引擎: {sorted(ghost)}"
+    assert "sogou_weixin" in _VERTICAL_BACKENDS, (
+        "sogou_weixin 是垂直索引（只覆盖公众号）—— 摘掉它，无重排器的兜底顺序里"
+        "它会靠 0.2s 的响应速度排在 bing/yandex 前面")
+    # 垂直引擎仍然要有索引家族（共识分母靠它），否则会静默虚报分母
+    from dhole_mcp.search_engines import _INDEX_FAMILY
+    assert not (_VERTICAL_BACKENDS - set(_INDEX_FAMILY))
+
+
+def test_vertical_sets_agree():
+    """同一张垂直名单在两层各有一份（search_engines 给排序用，search_metasearch 给
+    早退配额用），必须同步 —— 与默认池那两份同一个惰性导入理由。"""
+    from dhole_mcp import search_metasearch as ms
+    from dhole_mcp.search_engines import _VERTICAL_BACKENDS as adapter_side
+
+    assert set(adapter_side) == set(ms._VERTICAL_BACKENDS), (
+        f"垂直名单两处定义不一致: {sorted(adapter_side)} vs {sorted(ms._VERTICAL_BACKENDS)}")
+
+
+class TestVerticalResultsCannotFillTheQuota:
+    """早退配额只算通用引擎的产出，否则"加宽池子"的垂直引擎反而把池子变窄。
+
+    实测（2026-09-21 本机默认池）：sogou_weixin 0.2-0.9s 回 10 条，2s 软截止一到就把
+    还在跑的 yandex（3.1s）cancel 掉了。这里把软截止压到 0 复现同一形状。
+
+    时钟：快引擎 0s / 慢引擎 0.3s，软截止 0 秒 —— 判据只依赖"谁先完成"，不依赖真实秒数。
+    """
+
+    @staticmethod
+    def _install(monkeypatch, spec: dict):
+        """spec: backend -> (delay_seconds, result_count)。"""
+        from types import SimpleNamespace
+
+        from dhole_mcp import search_metasearch as m
+
+        for name, (delay, count) in spec.items():
+            # 逐个绑定：直接写内层 class 会闭包到循环变量，两个假引擎会变成同一个。
+            def _make(name=name, delay=delay, count=count):
+                class _Fake:
+                    disabled = False
+
+                    def __init__(self, **kwargs):
+                        pass
+
+                    def search(self, *a, **k):
+                        time.sleep(delay)
+                        return [SimpleNamespace(title=f"{name}-{i}",
+                                                href=f"https://{name}.test/{i}", body="b")
+                                for i in range(count)]
+                _Fake.name = name
+                return _Fake
+            monkeypatch.setitem(m._TEXT_ENGINES, name, _make())
+        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
+        monkeypatch.setattr(m, "_BACKEND_HEALTH", {})
+        monkeypatch.setattr(m, "_SOFT_DEADLINE", 0.0)
+
+    @pytest.mark.asyncio
+    async def test_slow_general_engine_survives_a_fast_vertical_flood(self, monkeypatch):
+        from dhole_mcp import search_metasearch as m
+
+        self._install(monkeypatch, {"sogou_weixin": (0.0, 10), "yandex": (0.3, 14)})
+        results, status = await m.metasearch("q", 6, engines=["sogou_weixin", "yandex"])
+
+        assert status["yandex"] == "ok", f"通用引擎被垂直结果的配额挤掉了: {status}"
+        assert sum(1 for r in results if r["backend"] == "yandex") == 14
+
+    @pytest.mark.asyncio
+    async def test_general_engine_filling_the_quota_still_preempts(self, monkeypatch):
+        """对照组：通用引擎独自填满配额时早退行为不变（既有行为不许被这次改动带走）。"""
+        from dhole_mcp import search_metasearch as m
+
+        self._install(monkeypatch, {"bing": (0.0, 10), "yandex": (5.0, 14)})
+        results, status = await m.metasearch("q", 6, engines=["bing", "yandex"])
+
+        assert status["yandex"] == "preempted", status
+        assert all(r["backend"] != "yandex" for r in results)
+
+    @pytest.mark.asyncio
+    async def test_vertical_only_pool_still_returns_early(self, monkeypatch):
+        """通用引擎根本不在池子里时，垂直结果自己就能触发早退（别把这条堵死）。"""
+        from dhole_mcp import search_metasearch as m
+
+        self._install(monkeypatch, {"sogou_weixin": (0.0, 10)})
+        results, status = await m.metasearch("q", 6, engines=["sogou_weixin"])
+
+        assert results and status["sogou_weixin"] == "ok"

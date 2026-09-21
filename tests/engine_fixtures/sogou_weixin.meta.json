@@ -1,0 +1,12 @@
+{
+  "engine": "sogou_weixin",
+  "fixture": "sogou_weixin.html",
+  "captured_at": "2026-09-21",
+  "captured_from_url": "https://weixin.sogou.com/weixin",
+  "query": "SQLite WAL 模式",
+  "sha256": "33c15d5c2c12a0ef",
+  "item_nodes": 4,
+  "usable_in_fixture": 4,
+  "usable_on_live_page": 10,
+  "note": "真页面裁剪件：只留前若干结果容器，已剥 cookie/token/会话参数"
+}
