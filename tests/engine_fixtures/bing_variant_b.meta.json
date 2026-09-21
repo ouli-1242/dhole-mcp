@@ -1,0 +1,10 @@
+{
+  "engine": "bing",
+  "fixture_variant": "bing_variant_b.html",
+  "captured_at": "2026-09-21",
+  "captured_from_url": "https://cn.bing.com/search",
+  "query": "how does sqlite WAL mode work",
+  "sha256": "3c7ac526bf0f0490",
+  "note": "Bing B 版版面：<a class=tilk>…<h2>文本</h2></a>（链接在 h2 的祖先上）。2026-09-21 实测：只查后代的 href xpath 在这一版上 5 条容器全部读不出链接，整轮结果被丢光、引擎记成 empty 且此前在响应里完全不可见",
+  "scrubbed": "会话/签名参数（p=、fclid=）已替换为 REDACTED；解码契约所需的 u= 保留"
+}

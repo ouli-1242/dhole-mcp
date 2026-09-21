@@ -104,9 +104,10 @@ testpaths = ["tests"]
 # silently runs the stale installed copy and src/ edits go untested. This has
 # bitten the project 4+ times. pythonpath (pytest 7+) wins over install.
 pythonpath = ["src"]
-addopts = ["-m", "not e2e"]
+addopts = ["-m", "not e2e and not live"]
 markers = [
     "e2e: end-to-end tests that spawn a real dhole.exe subprocess. Skip by default in CI; run manually with `pytest -m e2e`.",
+    "live: tests that hit the real search engines. Never in the default run; opt in with `-m live` and additionally pass --engine-fixtures. Used to capture/diff SERP fixtures.",
 ]
 
 [tool.ruff]

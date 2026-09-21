@@ -23,7 +23,7 @@ def _no_real_home_migration(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _offline_dns(monkeypatch):
+def _offline_dns(monkeypatch, request):
     """Keep the suite independent of the machine's resolver.
 
     validate_url() rechecks DNS by default, so a developer whose hosts file (or a
@@ -31,7 +31,17 @@ def _offline_dns(monkeypatch):
     fail — this machine pins github.com and huggingface.co to 127.0.0.1, and both
     appear in tests and in the product's own model download. Tests that exercise
     the check itself patch getaddrinfo locally, which overrides this.
+
+    ``live``-marked tests are the exception: they hit real engines, and a fake
+    resolver would make them assert nothing (validate_url would judge a made-up
+    public IP instead of the real answer).
     """
+    if request.node.get_closest_marker("live"):
+        from dhole_mcp import security as _security
+        _security._DNS_CHECK_CACHE.clear()
+        yield
+        _security._DNS_CHECK_CACHE.clear()
+        return
     monkeypatch.setattr(
         socket, "getaddrinfo",
         lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "",
@@ -40,6 +50,19 @@ def _offline_dns(monkeypatch):
     from dhole_mcp import security as _security
     _security._DNS_CHECK_CACHE.clear()
     yield
+
+
+def pytest_addoption(parser):
+    """Engine-fixture controls. Deliberately opt-in twice over: ``-m live`` AND
+    ``--engine-fixtures``, so a bare ``pytest -m live`` can never hammer five
+    search engines from an unsuspecting laptop."""
+    parser.addoption(
+        "--engine-fixtures", action="store", default=None,
+        choices=[None, "check", "capture"],
+        help="check = compare live SERP parses against the captured fixtures; "
+             "capture = (re)write tests/engine_fixtures/*.html from live engines. "
+             "Both require -m live.",
+    )
 
 
 @pytest.fixture
