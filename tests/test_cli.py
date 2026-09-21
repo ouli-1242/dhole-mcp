@@ -72,6 +72,34 @@ class TestRepairScript:
         assert ".dhole" in path
         assert "repair.py" in path
 
+    def test_run_repair_writes_under_dhole_home(self, tmp_path, monkeypatch):
+        """KB-7：cli 的 repair 也要跟随 DHOLE_HOME，不能写进真实 home。
+
+        这里同时把 ``expanduser("~")`` 指向另一个目录：如果代码退回硬编码
+        ``~/.dhole``，文件会落在那里，第二条断言就会抓到。
+        """
+        import dhole_mcp.cli as cli
+
+        state = tmp_path / "moved_state"
+        real_home = tmp_path / "real_home"
+        monkeypatch.setenv("DHOLE_HOME", str(state))
+        monkeypatch.setattr(os.path, "expanduser", lambda x: str(real_home))
+
+        launched: list[list[str]] = []
+
+        class _Done:
+            returncode = 0
+
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda cmd, **k: (launched.append(cmd), _Done())[1],
+        )
+
+        assert cli._run_repair() == 0
+        assert (state / "repair.py").exists(), "repair.py 该落在 DHOLE_HOME 下"
+        assert not real_home.exists(), "不许在真实 home 下建任何东西"
+        assert launched and launched[0][1] == str(state / "repair.py")
+
 
 # ─── Version probing ──────────────────────────────────────────────
 

@@ -10,7 +10,8 @@ try/except that auto-recovers from a broken install.
 Self-heal flow:
 1. User runs `dhole` (any command) after a broken update/dep change
 2. `from dhole_mcp.server import main` fails (ImportError/ModuleNotFoundError)
-3. cli.py writes ~/.dhole/repair.py and runs it: stop dhole, force-reinstall,
+3. cli.py writes repair.py under the state dir (`paths.home()`, i.e. `DHOLE_HOME`
+   when set) and runs it: stop dhole, force-reinstall,
    verify. The script follows DHOLE_UPDATE_PACKAGE / DHOLE_UPDATE_INDEX_URL so a
    fork is repaired from its OWN distribution, never from a name baked in at
    release time (that is how a repair once installed the wrong package over
@@ -70,7 +71,7 @@ def _pip_spec(dist: str) -> str:
 
 
 def _repair_script_text(dist: str, index_url: str) -> str:
-    """Standalone repair script written to ~/.dhole/repair.py.
+    """Standalone repair script written into the state dir as ``repair.py``.
 
     Stdlib-only and path-independent on purpose: it must still run when the dhole
     package (or its metadata) is gone, which is the whole point of the file.
@@ -114,19 +115,25 @@ if __name__ == "__main__":
 
 
 def _run_repair() -> int:
-    """(Re)write ~/.dhole/repair.py and run it to auto-recover a broken install.
+    """(Re)write repair.py under the state dir and run it to auto-recover.
 
     The script is rewritten on every repair so it always follows the configured
     distribution and index, rather than a name baked in at release time.
+
+    The location comes from ``paths.home()`` (``DHOLE_HOME`` when set), which is
+    where ``updater.repair_script_path()`` already pointed. It used to be spelled
+    ``expanduser("~")/.dhole`` here, so a user who had moved their state dir got
+    the repair written into the real home while everything else honoured the
+    override - one product, two answers to "where is my state?".
     """
     dist = _dist_name()
     index_url = _index_url()
-    repair = os.path.join(os.path.expanduser("~"), ".dhole", "repair.py")
+    from dhole_mcp import paths as _paths
+    repair = str(_paths.file("repair.py"))
     try:
         os.makedirs(os.path.dirname(repair), exist_ok=True)
         with open(repair, "w", encoding="utf-8") as f:
             f.write(_repair_script_text(dist, index_url))
-        from dhole_mcp import paths as _paths
         _paths.harden_file(repair)
     except Exception:
         # Can't write repair.py - run pip directly as a last resort
