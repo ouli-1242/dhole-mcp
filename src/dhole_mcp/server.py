@@ -3701,6 +3701,21 @@ class MasterFetchServer:
             message = f"Cleared {count} expired cache entries."
 
         note = ""
+
+        # Snapshot BEFORE any reset. ``engine_state_reset()`` empties the very
+        # dicts this reads, so taking it afterwards could only ever return {}
+        # while the field's whole purpose is to say what the pool was doing (and,
+        # with engine_state=true, what the reset just released). Read through
+        # sys.modules rather than importing: a call that came only to clear cached
+        # pages must not pull the scraping stack.
+        health: Dict[str, Any] = {}
+        ms = sys.modules.get("dhole_mcp.search_metasearch")
+        if ms is not None:
+            try:
+                health = ms.engine_state_snapshot()
+            except Exception:
+                health = {}
+
         if engine_state:
             try:
                 # Lazy: this pulls the scraping stack (primp/lxml), and only the
@@ -3714,15 +3729,6 @@ class MasterFetchServer:
             except Exception as e:
                 note = f" Engine state could not be reset: {str(e)[:120]}"
 
-        health: Dict[str, Any] = {}
-        ms = sys.modules.get("dhole_mcp.search_metasearch")
-        if ms is not None:
-            # Reading pool health must not import the scraping stack for a call
-            # that came only to clear cached pages.
-            try:
-                health = ms.engine_state_snapshot()
-            except Exception:
-                health = {}
         return CacheInfoModel(message=message + note, purged=count,
                               engine_state_reset=engine_state, engine_health=health)
 

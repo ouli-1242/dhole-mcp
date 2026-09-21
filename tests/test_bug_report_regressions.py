@@ -706,7 +706,11 @@ class TestEngineState:
         assert out.engine_state_reset is True
         assert "cooldown" in out.message.lower()
         assert _ms.cooldowns() == {}
-        assert "brave" in out.engine_health or out.engine_health == {}
+        # The snapshot is taken BEFORE the reset, so it reports what was just
+        # released. It used to be taken after, which made the field provably
+        # always {} - previously hidden by an "or == {}" escape hatch here.
+        assert "brave" in out.engine_health, out.engine_health
+        assert out.engine_health["brave"]["cooldown_seconds_left"] > 0
 
     def test_cli_engines_reset_clears_the_files(self, _ms):
         from dhole_mcp.server import _cmd_engines
