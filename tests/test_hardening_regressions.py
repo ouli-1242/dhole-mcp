@@ -669,3 +669,59 @@ class TestRepairIsPinnedToTheInstalledVersion:
         monkeypatch.setattr(subprocess, "run", fake_run)
         cli._run_repair()
         assert "dhole-mcp==9.9.9" in seen.get("cmd", [])
+
+
+class TestServerCacheTtlFlagIsLive:
+    """`dhole --cache-ttl N` 必须是真旋钮。
+
+    它此前是死的：smart_fetch 的默认值在函数定义时就把模块常量 DEFAULT_TTL 焊进了
+    签名，self._cache_ttl 赋值后没有任何读取点。用户唯一能表达"别存这么久"的开关
+    不生效，而 README 还列着它。
+    """
+
+    class _Stop(Exception):
+        """读到 ttl 之后立刻停住 —— 绝不放行到真正的抓取路径（测试必须零网络）。"""
+
+    def _read_ttl(self, monkeypatch, srv, **kw):
+        import asyncio
+
+        from dhole_mcp import server as server_mod
+        seen: dict = {}
+
+        async def fake_get(url, extraction_type, css_selector, **kwargs):
+            seen["read_ttl"] = kwargs.get("ttl")
+            return None
+
+        async def stop(*a, **kwargs):
+            raise self._Stop()
+
+        monkeypatch.setattr(server_mod, "get_cached", fake_get)
+        monkeypatch.setattr(server_mod.MasterFetchServer, "_auto_escalate", stop)
+        monkeypatch.setattr(server_mod.MasterFetchServer, "_force_fetch", stop)
+        with pytest.raises(self._Stop):
+            asyncio.run(srv.smart_fetch(url="https://example.com/x", **kw))
+        return seen
+
+    def test_instance_default_reaches_the_cache_lookup(self, monkeypatch):
+        from dhole_mcp import server as server_mod
+        srv = server_mod.MasterFetchServer(cache_ttl=99)
+        seen = self._read_ttl(monkeypatch, srv)
+        assert seen.get("read_ttl") == 99, "读取用的 TTL 应来自实例，而非被焊死的 DEFAULT_TTL"
+
+    def test_explicit_argument_still_wins(self, monkeypatch):
+        from dhole_mcp import server as server_mod
+        srv = server_mod.MasterFetchServer(cache_ttl=99)
+        assert self._read_ttl(monkeypatch, srv, cache_ttl=5).get("read_ttl") == 5
+
+    def test_unset_flag_keeps_the_documented_hour(self, monkeypatch):
+        from dhole_mcp.cache import DEFAULT_TTL
+        from dhole_mcp import server as server_mod
+        srv = server_mod.MasterFetchServer()
+        assert srv._cache_ttl == DEFAULT_TTL
+        assert self._read_ttl(monkeypatch, srv).get("read_ttl") == DEFAULT_TTL
+
+    def test_zero_still_skips_the_cache_lookup(self, monkeypatch):
+        """cache_ttl=0 = 完全绕开缓存，这条既有语义不能被哨兵改动弄丢。"""
+        from dhole_mcp import server as server_mod
+        srv = server_mod.MasterFetchServer()
+        assert "read_ttl" not in self._read_ttl(monkeypatch, srv, cache_ttl=0)

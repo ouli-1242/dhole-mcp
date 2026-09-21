@@ -2464,7 +2464,7 @@ class MasterFetchServer:
         css_selector: Annotated[Optional[str], Field(description="CSS selector to narrow extracted content (e.g. 'article', '.main-content').")] = None,
         main_content_only: Annotated[bool, Field(description="Strip nav, ads, footers (default True).")] = True,
         use_trafilatura: Annotated[bool, Field(description="Use Trafilatura for cleaner article extraction (default True).")] = True,
-        cache_ttl: Annotated[int, Field(description="Cache duration in seconds. Default 3600 (1 hour). Set 0 to skip cache and force a fresh fetch.")] = DEFAULT_TTL,
+        cache_ttl: Annotated[Optional[int], Field(description="Cache duration in seconds. Default 3600 (1 hour). Set 0 to skip cache and force a fresh fetch.")] = None,
         force_fetcher: Annotated[Optional[Literal["http", "dynamic", "stealthy"]], Field(description="Lock to one fetcher tier, skip auto-escalation. 'http' = fast HTTP-only (fails on JS/bot walls). 'stealthy' = anti-detect browser (Patchright). 'dynamic' is a legacy alias for 'stealthy'. Exposed to clients as: ['http', 'stealthy'].")] = None,
         headless: Annotated[bool, Field(description="Run browser without visible window (default True).")] = True,
         real_chrome: Annotated[bool, Field(description="Use installed Chrome instead of bundled browser.")] = False,
@@ -2513,6 +2513,12 @@ class MasterFetchServer:
         (suggested next call), summary, page_type (article/docs/list/forum/auth_wall/paywall/...),
         content_age_days + is_stale, source_type + is_official, source + archived_at.
         """
+        # `--cache-ttl` 之前是死参数：默认值在函数定义时就把模块常量焊进了签名，
+        # 实例上的 self._cache_ttl 永远读不到。用 None 当哨兵，在这里解析。
+        # 未显式设置时 self._cache_ttl == DEFAULT_TTL，所以除真正用了该旗标之外
+        # 行为与原来完全一致。
+        if cache_ttl is None:
+            cache_ttl = self._cache_ttl
         # Bulk mode: fetch multiple URLs in parallel
         if urls is not None:
             if actions:
