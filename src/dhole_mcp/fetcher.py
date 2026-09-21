@@ -277,15 +277,6 @@ def _extract_encoding(content_type: str) -> str:
 
 # ─── HTTP fetcher (primp-based) ────────────────────────────────────────────────
 
-# Default impersonation targets for the primp client
-# primp supports: chrome, safari, firefox, edge, random
-# (primp falls back to 'random' for unknown targets)
-_IMPERSONATE_POOL = [
-    "chrome",
-    "safari",
-    "firefox",
-    "edge",
-]
 
 
 class HTTPSession:

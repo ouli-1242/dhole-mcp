@@ -4,9 +4,11 @@ Given a page's HTML, return its outgoing links classified by context so an
 agent can follow a page's source chain in one step instead of eyeballing
 markdown links:
 
-  citations   - links inside the main-content area (<article>/<main>/<section>/
-                <p>/<li>). These are the page's referenced sources (papers,
-                primary documents, related reads) - the highest-value links.
+  citations   - same-domain links that are NOT site chrome. Classification is by
+                exclusion (see _NAV_TAGS, plus role=navigation/menu/menubar),
+                not by a main-content match; no such check exists. These are the
+                page's referenced sources (papers, primary documents, related
+                reads) - the highest-value links.
   navigation  - links inside <nav>/<header>/<footer>/<aside>/role=navigation.
                 Site chrome, rarely useful to follow.
   external    - links to a different domain than the page (split out from the
@@ -31,8 +33,6 @@ from lxml import html as lxml_html
 
 logger = logging.getLogger("dhole-mcp.links")
 
-# Containers that count as "main content" -> links inside are citations.
-_MAIN_XPATH = ".//ancestor::article | .//ancestor::main | .//ancestor::section | .//ancestor::p | .//ancestor::li"
 # Containers that count as site chrome -> links inside are navigation.
 _NAV_TAGS = {"nav", "header", "footer", "aside"}
 # Hosts that are very often the primary source a secondary article references.
