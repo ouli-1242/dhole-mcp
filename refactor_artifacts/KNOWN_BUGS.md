@@ -151,3 +151,35 @@
 | `server.py` 三处 archive 回退块逐字节相同 | 真实重复，但位于升级/回退关键路径 | 排除，同上 |
 | src/ 中是否存在 `TODO/FIXME/XXX/HACK` | `grep -rn` 结果为空 | 无此类标记，无需清理 |
 | 空壳 schema 是否仍抛异常 | 现有测试已改为**结构化拒绝** | 由 `test_schema_param.py`(15) 与 `TestStructuredInputErrors` 覆盖 |
+
+## KB-11 `test_every_fixture_is_content_addressed` 在任何全新克隆上都必然失败
+
+- **来源**：本轮**跨分支集成验证时实测发现**（不是从文档或子代理来的）。
+- **现象**：`tests/test_engine_parsers.py::TestFixtureAntiRot::test_every_fixture_is_content_addressed`
+  把 `sha256(fixture 的字节)[:16]` 与 `.meta.json` 里记录的 `sha256` 对比。记录的哈希
+  **是按 CRLF 字节算的**，而 git 里存的 blob 是 **LF**（`.gitattributes` 的 `* text=auto eol=lf`
+  在提交时把行尾归一化了）。于是**全新克隆/全新 worktree 一checkout 就失败**。
+- **实测数据**（`bing_variant_a.html` 为例）：
+
+  | 位置 | 字节 | sha256[:16] |
+  | --- | --- | --- |
+  | 本机主工作树（CRLF，`.gitattributes` 之前的残留） | `crlf=3 lf=3` | `aab4462b07e0e5b3` ← 与 `.meta.json` 记录一致 |
+  | git 里的 blob（已归一化） | `crlf=0 lf=3` | `3deddbc6ff9df2fc` ← 与记录不一致，测试失败 |
+
+  四个 fixture 在主工作树全部 `OK`（4/4），在全新 worktree 上该测试**失败**。
+- **决定性实验**：在一个**不含任何合并**、直接指向同一分支的干净 detached worktree 里，
+  这条测试同样失败 → **与我的合并无关**，纯粹是 checkout 行尾问题。
+- **根因与来历（含我自己的责任）**：该仓库在本轮之前**没有任何提交**（unborn HEAD）。
+  我在阶段 0 用 `74524dc` 把工作树快照成首次提交，git 按 `.gitattributes` 把 fixture 的
+  blob 归一化成 LF，而 `.meta.json` 里的哈希是更早按 CRLF 工作树算的。
+  **提交前"全新克隆"这个场景从未被走过**，所以这个不一致是被我的首次提交固化下来的。
+- **影响**：
+  1. **假绿**：本项目"fixture 不许烂"的守卫只在**保留着 CRLF 残留的这个工作树**上为真；
+     换任何新环境（新同事、CI、`git clean` 后重checkout）整套测试会红。
+  2. **对本轮结论的限定**：报告里"1128 passed"这类基线数字，**其有效性绑定在这个工作树**上。
+     这一条应随基线数字一起读。
+- **建议**（两条选一，都需产品决策，本轮**未动**）：
+  - `tests/engine_fixtures/*.html -text`（禁止行尾转换）——让 checkout 逐字节复现记录哈希时的字节；
+  - 或按 LF 字节**重新记录**四个 `.meta.json` 的 sha256。
+- **本轮处置**：**仅记录，未修**。改 `.gitattributes` 或改 fixture 哈希都属于改仓库跟踪内容，
+  超出"行为保持重构"与 KB-6 的授权范围。

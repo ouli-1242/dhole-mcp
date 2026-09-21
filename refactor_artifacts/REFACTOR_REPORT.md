@@ -324,3 +324,22 @@ git log --oneline fix/kb-6-state-file-permissions -3                        # KB
   因此验证链是：mock `os.chmod` 断言调用与参数（平台无关）→ 反向验证证明非空转 →
   真实 mode 断言标 `skipif`，**待 Linux/macOS 上首次执行**。本报告不声称已实测后者。
 - **回滚**：`git branch -D fix/kb-6-state-file-permissions`（该分支未合并、未推送）。
+
+## 追加 3：跨分支集成验证（两条线合并后是否仍绿）
+
+- **做法**：临时 `git worktree`（detached）指向重构分支 HEAD，`git merge --no-commit --no-ff`
+  合入 KB-6 分支，跑全量与 ruff，然后销毁 worktree。**重构分支本身没有被写入任何合并提交。**
+- **冲突探测**：`git merge-tree --write-tree` 退出码 `0`，无冲突；真合并时
+  `search_metasearch.py` / `server.py` / `updater.py` 自动合并成功（两边的改动在不同行）。
+- **结果**：`ruff check .` → `All checks passed!`；
+  `pytest -q` → **1142 passed, 5 skipped, 1 failed**。
+- **那 1 条失败不是合并引入的，是 KB-11**：`test_every_fixture_is_content_addressed`。
+  我做了决定性实验：在**不含合并**、直接指向同一分支的干净 worktree 上，它**同样失败**。
+  根因是 fixture 的行尾：git blob 已按 `.gitattributes` 归一化为 LF，而 `.meta.json` 里
+  记录的 sha256 是按 CRLF 字节算的；只有本机这个保留了 CRLF 残留的主工作树才通过。
+  **取证与来历已登记为 `KNOWN_BUGS.md` KB-11（含我自己的责任：该仓库此前无提交，
+  是我在阶段 0 的首次提交把归一化固化下来的）。**
+- **净结论**：**合并是干净的、无回归** —— 1142 = 1143（KB-6 分支全绿数）− 1（KB-11 那条）。
+- **顺带得到的一条限定**：本报告所有 `1128 passed` 之类的基线数字，
+  **有效性绑定在本机这个主工作树**上；KB-11 会让任何全新克隆跑出不同的红。
+  读基线数字时请连同这一条一起读。

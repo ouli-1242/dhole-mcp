@@ -85,6 +85,7 @@
   "next_step": "两项追加工作均已完成并提交。KB-6 分支未合并、未推送，等用户决定合并方式。",
   "unresolved": [
     "KB-6 分支上 3 条 POSIX 真实 mode 断言尚未在任何 POSIX 环境执行过（本机无 POSIX、无 CI），待 Linux/macOS 首次运行",
+    "KB-11：fixture 的 sha256 按 CRLF 记录、git blob 已是 LF，任何全新克隆上 test_every_fixture_is_content_addressed 必然失败；连带限定所有基线数字的适用范围",
     "README 中未独立核对的承诺：robots 正面行为、SSRF 残余面、PDF 口令三态细节、sogou_weixin 排序与早退、CLI 各命令逐字段输出、'4 个索引家族'计数",
     "测试盲区（非本轮引入）：429、gzip/brotli/zstd、shift_jis、按异常类名的超时/连接错误、<base href>、爬虫端到端、MCP 层并发/取消",
     "已知缺陷 9 条（KB-1..KB-9）中，KB-6 已授权动手修复；其余八条仍只记录未修"
@@ -114,6 +115,13 @@
       "ruff": "All checks passed!",
       "negative_check": "新测试跑在修复前源码上：9 failed, 6 passed, 3 skipped（失败=新行为，通过=行为保持）-> analysis/kb6_negative_check.txt",
       "honest_gap": "POSIX 真实权限位未在本机实测（无 POSIX 环境、无 CI）；真实 mode 断言标 skipif 待 Linux 执行"
+    },
+    "cross-branch-merge": {
+      "what": "在临时 detached worktree 里把 KB-6 分支合入重构分支并跑全量（不写入任何合并提交）",
+      "conflicts": "无（git merge-tree exit=0；三个文件自动合并成功）",
+      "result": "ruff All checks passed!；pytest 1142 passed, 5 skipped, 1 failed",
+      "the_one_failure": "test_every_fixture_is_content_addressed —— 与合并无关，是 KB-11 行尾问题；干净 worktree 上同样失败已验证",
+      "caveat": "所有基线数字（1128 passed 等）有效性绑定在本机主工作树；见 KB-11"
     }
   }
 }
