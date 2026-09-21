@@ -63,13 +63,12 @@
     "refactor_artifacts/analysis/  (AST 分析原始输出)",
     "refactor_artifacts/tools/     (可重跑脚本：mcp_snapshot.py / tool_payload_measure.py / module_inventory.py / stale_reference_scan.py)"
   ],
-  "next_step": "无。任务已完成；若需继续，见 REFACTOR_REPORT.md 第 10 节的建议人工检查点。",
+  "next_step": "无。原任务已完成。后续追加：D-01..D-07 复核已完成（全部证实），KB-6 权限修复进行中。",
   "unresolved": [
     "README 中未独立核对的承诺：robots 正面行为、SSRF 残余面、PDF 口令三态细节、sogou_weixin 排序与早退、CLI 各命令逐字段输出、'4 个索引家族'计数",
     "测试盲区（非本轮引入）：429、gzip/brotli/zstd、shift_jis、按异常类名的超时/连接错误、<base href>、爬虫端到端、MCP 层并发/取消",
-    "已知缺陷 9 条（KB-1..KB-9）全部只记录未修，其中 KB-6（明文凭据未 0600）建议单开分支修",
-    "DOC_CODE_DRIFT.md 附录中 5 条发现（D-01/D-02/D-03/D-04/D-05/D-06/D-07）来自独立子代理、待人工复核",
-    "我覆盖了该子代理 659 行的 DOC_CODE_DRIFT.md（操作失误），原正文不可恢复；已完成报告中的要点已转述保留"
+    "已知缺陷 9 条（KB-1..KB-9）中，KB-6 已授权动手修复；其余八条仍只记录未修",
+    "我覆盖了子代理 659 行的 DOC_CODE_DRIFT.md（操作失误），原正文不可恢复；但其中转述的 D-01..D-07 已于 2026-09-22 全部独立复核并证实，两处出处错误已更正"
   ],
   "stop_conditions_triggered": [],
   "notes": [

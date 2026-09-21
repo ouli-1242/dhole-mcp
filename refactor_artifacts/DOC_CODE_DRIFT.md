@@ -131,18 +131,23 @@ PDF 口令三态的实现细节、sogou_weixin 的排序与早退规则、`dhole
 > （D-01…D-21，659 行）写进了本文件；我在它完成**之前**用自己那份 124 行的版本覆盖了它
 > （`Write` 报告"updated"而非"created"，我当下未察觉文件已被创建）。**这是我的操作失误**，
 > 原始 659 行正文已不可恢复（子代理的原始输出文件是本会话的 transcript，按规则不读取）。
-> 下面是从该子代理**完成报告**中原样转述的 5 条最高优先级发现与 1 条环境发现；
-> 它们**未经我逐条复核**，标注为"来自独立审查，待复核"。
+> 下面是从该子代理**完成报告**中原样转述的 5 条最高优先级发现与 1 条环境发现。
+
+> **复核状态（2026-09-22 更新）**：D-01…D-07 已由 `tools/verify_d_findings.py` **逐条实测复核完毕**，
+> 原始输出见 `analysis/verify_d_findings.txt`。结论：**7 条全部证实**，其中 D-07 的**出处描述有误**
+> （见下），D-04 的缺口比转述的更大。复核脚本本身不联网（socket 守卫拦截非回环连接，
+> 实测外发尝试记录为 `[]`），`DHOLE_HOME` 指向临时目录，不触碰真实 `~/.dhole`。
+> 复核命令：`PYTHONPATH=src python refactor_artifacts/tools/verify_d_findings.py`
 
 | 编号 | 文档声称 | 代码/实测 | 影响 | 建议 |
 | --- | --- | --- | --- | --- |
-| D-01（待复核） | README#L125 与 `cache_clear` 工具描述都承诺：`engine_state=true` 时响应回报 `engine_health` | 实测实现顺序是**先** `engine_state_reset()` 清空内存字典、**再** `engine_state_snapshot()`，因此 `engine_health` 恒为 `{}` | **外部可观察**（agent 会误判引擎池已恢复） | 改代码（先快照后重置）；已登记 `KNOWN_BUGS.md` KB-1 |
-| D-02（待复核） | README 让 agent 读 `engines_consensus` / `consensus_basis` 判断池是否降级 | `DHOLE_DEFAULT_ENGINES` 只换执行引擎，不改 `engines_consensus` 分母（实测 `_family_universe(None,…)` 仍返回 `(4,2)`） | **外部可观察**（自建小池会被读成"池降级"） | 改代码；已登记 KB-2 |
-| D-03（待复核） | README#L172 称 `max_results` 越界是"静默钳制" | 代码会把 `max_results=100 is outside the supported 1-50 range…` 追加进 `fetch_hint` | 影响 agent 看到的提示文本（属内容，非结构） | 改文档 |
-| D-04（待复核） | README#L122 的 `parse` 行只列部分扩展名 | 代码 `SUPPORTED_EXTENSIONS` 还含 `.pdf/.htm/.xhtml`；且 `tests/test_tool_descriptions.py` **专门钉住"描述必须写 .pdf"** | README 是唯一说"本地 PDF 不行"的地方；改 README 可能破测试 | 改文档（谨慎：先跑 `test_tool_descriptions.py`） |
-| D-05（待复核） | README 有"不发后台真实请求"一类绝对措辞 | 有代理配置时进程会 fire-and-forget 真实探测 `example.com` | **外部可观察**（真实外网流量） | 改文档或改代码；已登记 KB-3 |
-| D-06（待复核） | README 的状态文件权限叙事（`0700` 目录 / `0600` 文件）自洽 | `search_proxies.json`（**明文代理凭据**）与 `usage.jsonl` 未套用权限收紧 | **安全面**；不改公开行为即可修（仅 chmod） | 改代码（安全加固，另开 PR）；已登记 KB-6 |
-| D-07（待复核） | README 的 `DHOLE_HOME` 叙事 | `cli.py:124`→`repair.py` 硬编码 `~/.dhole`，不跟随 `DHOLE_HOME`（而 `updater.py` 跟随）——**产品内部两种写法不一致** | **外部可观察**（修repair 会动真实 `~/.dhole`） | 改代码；已登记 KB-7 |
+| D-01 ✅**已证实** | README#L125 与 `cache_clear` 工具描述都承诺：`engine_state=true` 时响应回报 `engine_health` | 实测驱动真实 `MasterFetchServer.cache_clear(engine_state=True)`：重置前 snapshot 非空 `['bing','duckduckgo']`，重置后 `engine_health={}`。`engine_state_reset()` 先清空 `_BACKEND_HEALTH`/`_ENGINE_YIELD`，`engine_state_snapshot()` 再读同一批 dict，**结构上恒为空**。释放的冷却改由 `message` 文本承载（实测：`Engine state forgotten: 1 engine record(s), 1 cooldown(s) released (bing).`） | **外部可观察**：字段存在但恒空；信息没丢，只是不在 agent 被告知去读的那个字段里 | 改代码（先快照后重置）；已登记 `KNOWN_BUGS.md` KB-1 |
+| D-02 ✅**已证实** | README 让 agent 读 `engines_consensus` / `consensus_basis` 判断池是否降级 | 实测：`DHOLE_DEFAULT_ENGINES=bing` 时 `_configured_default_backends()` 确实收敛为 `['bing']`，但 `_family_universe(None, [])` 前后都是 `(4, 0, 'single_family')` —— **分母 4 纹丝不动**。`_family_universe` 走的是 `search_engines.DEFAULT_ENGINES` 这个固定 tuple，不是 env 覆盖后的池 | **外部可观察**：自建小池会被读成"池降级" | 改代码；已登记 KB-2 |
+| D-03 ✅**已证实** | README#L172 称 `max_results` 越界是"静默钳制" | `search.py:1087` 构造 `_clamp_note = f"max_results={_requested_max} is outside the supported 1-50 range; returning at most {max_results}"`，随后并入 `fetch_hint` | 属**返回内容**差异（README 措辞落后于实现），非结构差异 | 改文档 |
+| D-04 ✅**已证实（缺口更大）** | README#L122 的 `parse` 行只列部分扩展名 | 实测 `SUPPORTED_EXTENSIONS = {.html,.htm,.xhtml,.docx,.xlsx,.csv,.pdf}`，而 `_TOOL_DEFS` 给 agent 的描述是 `Supported: .html, .docx, .xlsx, .csv, .pdf` —— **`.htm` 与 `.xhtml` 两个都缺席**（转述只提到 `.pdf` 相关）。`tests/test_tool_descriptions.py` 只钉住 `'.pdf'` 必须出现，所以这个缺口不会被现有守卫发现 | agent 可能因此放弃一个真能用的本地文件格式 | 改文档（谨慎：先跑 `test_tool_descriptions.py`） |
+| D-05 ✅**已证实** | README 有"不发后台真实请求"一类绝对措辞 | `search_proxy.py:271` 定义 `health_check(probe_url="https://example.com")`，由 `_kick_health_check()` → `loop.create_task(pool.health_check())` 自动触发。**但它是有条件触发**（存在代理池且需要探活时），不是无条件启动流量 | **外部可观察**（真实外网流量） | 改文档或改代码；已登记 KB-3 |
+| D-06 ✅**已证实** | README 的状态文件权限叙事（`0700` 目录 / `0600` 文件）自洽 | 实测调 `save_proxies()` 落盘，`search_proxies.json` 的 mode 是 `0o666`（受 umask 影响），内容含明文凭据。该写入点走裸 `mkdir` + `open(...,'w')`，**没有** `harden_file`。对照：`circuit_breaker.json` / `engine_stats.json` 是在 `os.replace` 之后补 `paths.harden_file(path)` 的。未加固的还有 `usage.jsonl`、`search_feedback.json` | **安全面**；不改公开行为即可修（仅 chmod） | 改代码（安全加固，另开 PR）；已登记 KB-6。**本轮已作为唯一动手项处理** |
+| D-07 ✅**已证实（出处描述有误）** | README 的 `DHOLE_HOME` 叙事 | 事实成立：`cli.py:124` 是 `os.path.join(os.path.expanduser("~"), ".dhole", "repair.py")` —— 硬编码真实 home，不看 `DHOLE_HOME`；同包 `updater.py` 走 `paths.home()`。**但转述的出处错了**：`src/dhole_mcp/repair.py` 这个模块**不存在**（实测 `exists=False`），它引用的是另一路的模块名；`repair.py` 是运行时**生成**到 `~/.dhole/` 的脚本 | **外部可观察**（repair 会动真实 `~/.dhole`） | 改代码；已登记 KB-7 |
 
 **环境发现（此条我已用自己的证据独立确认过）**：本机 `site-packages` 里装的是 **14.6 的旧轮子**，
 而仓库是 14.7。**任何不带 `PYTHONPATH=src` 的 `import dhole_mcp` 都会静默加载旧代码**——
@@ -150,5 +155,7 @@ PDF 口令三态的实现细节、sogou_weixin 的排序与早退规则、`dhole
 本轮所有验证都规避了它（pytest 走 `pythonpath=["src"]`；我的分析脚本只做 AST 不 import；
 需要 import 的命令一律显式 `PYTHONPATH=src`），详见 `KNOWN_BUGS.md` KB-8。
 
-**子代理的判断（供参考，非结论）**：它认为 D-01、D-02 看起来是**代码瑕疵**（README 的描述更合理），
-D-06、D-07 则是 README 自洽而代码两处漏做/写法分叉。**这些都需要人工确认后才应动手**。
+**复核后的判断**：该子代理的方向判断是对的 —— D-01、D-02 是**代码瑕疵**（文档描述更合理），
+D-06、D-07 是 README 自洽而代码漏做/写法分叉。四条我都独立复现了。但它的**出处引用不能直接采信**：
+D-07 指了一个不存在的模块，D-04 漏掉了 `.htm` 与 `.xhtml` 两个具体缺口。
+**结论：该子代理可作为线索来源，其定位与引用必须逐条复核后才可行动。**

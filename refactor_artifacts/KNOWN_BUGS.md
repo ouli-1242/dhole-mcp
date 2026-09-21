@@ -8,31 +8,46 @@
 
 ## KB-1 `cache_clear(engine_state=true)` 的 `engine_health` 永远是空对象
 
-- **来源**：子代理审查（README↔代码交叉核对），并给出实测序列。
-- **现象**：工具描述（`server.py:4066`）与 README 都承诺"`engine_state=true` 时回复里报告 `engine_health`"。
+- **来源**：子代理审查（README↔代码交叉核对），**2026-09-22 已独立实测复核（D-01 已证实）**。
+- **现象**：工具描述（`server.py:4068`）与 README 都承诺"`engine_state=true` 时回复里报告 `engine_health`"。
   实测的实现顺序是**先** `engine_state_reset()` 清空内存字典、**再** `engine_state_snapshot()`，
   于是快照必然为空 `{}`。
+- **复核证据**（`analysis/verify_d_findings.txt`）：驱动真实 `MasterFetchServer.cache_clear(engine_state=True)`，
+  重置前 snapshot 非空 `['bing','duckduckgo']`，重置后 `engine_health={}`，
+  而 message 里确实带了 `Engine state forgotten: 1 engine record(s), 1 cooldown(s) released (bing).`
+  ——**信息没丢，只是不在 agent 被指引去读的那个字段里。**
 - **影响**：外部可观察 —— agent 依赖这个字段判断引擎池是否恢复，拿到 `{}` 会误判。
 - **建议**：先快照再重置（或重置前把旧状态传出去）。**属于行为变更，需产品决策。**
 - **本轮处置**：仅记录。**未修**，因为修它会改变 `tools/call` 的返回内容。
 
 ## KB-2 `DHOLE_DEFAULT_ENGINES` 不改变 `engines_consensus` 的分母
 
-- **来源**：子代理审查（实测 `_family_universe(None, …)` 仍返回 `(4, 2)`）。
+- **来源**：子代理审查，**2026-09-22 已独立实测复核（D-02 已证实）**。
 - **现象**：用户用环境变量收敛引擎池后，共识度（`engines_consensus` 形如 "2 of 4"）的分母
   仍是内置的家族全集，于是自建小池会被 agent 读成"池降级"（`consensus_basis` 可能落到 `partial_pool`）。
+- **复核证据**（`analysis/verify_d_findings.txt`）：`DHOLE_DEFAULT_ENGINES=bing` 时
+  `_configured_default_backends()` 确实收敛为 `['bing']`（执行池生效），
+  但 `_family_universe(None, [])` 在设 env 前后**都是** `(4, 0, 'single_family')` —— 分母 4 纹丝不动。
+  根因：`_family_universe` 读的是 `search_engines.DEFAULT_ENGINES`（固定 tuple），
+  不是 env 覆盖后的池；它只对**工具参数** `engines=[...]` 敏感。
 - **影响**：外部可观察 —— 影响 agent 对证据强度的判断（README 明确要求读 `consensus_basis`）。
 - **建议**：让分母跟随实际启用的池。
 - **本轮处置**：仅记录。**未修**。
 
 ## KB-3 配置了代理时会向 `example.com` 发真实探测请求（fire-and-forget）
 
-- **来源**：子代理审查。
+- **来源**：子代理审查，**2026-09-22 已独立实测复核（D-05 已证实，附条件限定）**。
 - **现象**：存在代理配置时，进程会异步向 `example.com` 发探测请求以验证代理可用性。
   这与 README 中"不做后台真实请求"一类绝对化措辞冲突。
+- **复核证据**（`analysis/verify_d_findings.txt`）：`search_proxy.py:271` 定义
+  `health_check(probe_url="https://example.com", timeout=10)`，由 `_kick_health_check()`
+  → `loop.create_task(pool.health_check())` 自动调度。
+- **条件限定（比转述更准）**：它是**条件触发**（存在代理池且需要探活时），
+  **不是**无条件启动流量。本轮 MCP 快照未配置代理，所以在 socket 守卫下未观测到这条流量 ——
+  这解释得通，不构成反证。
 - **影响**：外部可观察（有真实外网流量）。对"离线可复现"的测试承诺是威胁。
 - **建议**：改为可关闭，或在文档中明确写出这一例外。
-- **本轮处置**：仅记录。**未修**。这也解释了为什么本轮所有 MCP 实测都必须带 socket 守卫（见 `TOOLING.md` §6）。
+- **本轮处置**：仅记录。**未修**。这也是为什么本轮所有 MCP 实测都必须带 socket 守卫（见 `TOOLING.md` §6）。
 
 ## KB-4 启动阶段 preflight `1.1.1.1:443`
 
@@ -54,20 +69,36 @@
 
 ## KB-6 明文凭据文件缺少 `0600/0700` 权限收紧
 
-- **来源**：子代理审查。
-- **现象**：`search_proxies.json`（含明文代理凭据）与 `usage.jsonl` 未套用 README 叙事里承诺的
-  权限收紧（`0700` 目录 / `0600` 文件）。README 的叙事本身是自洽的，是代码漏做。
+- **来源**：子代理审查，**2026-09-22 已独立实测复核（D-06 已证实）**。
+- **现象**：`search_proxies.json`（含明文代理凭据）与 `usage.jsonl`、`search_feedback.json`
+  未套用 README 叙事里承诺的权限收紧（`0700` 目录 / `0600` 文件）。
+- **复核证据**（`analysis/verify_d_findings.txt`）：调 `save_proxies(["http://user:secret@10.0.0.1:8080"])`
+  落盘后 `search_proxies.json` 的 mode 是 **`0o666`**（受 umask 影响），文件内容就是明文凭据。
+  该写入点走裸 `path.parent.mkdir(...)` + `open(path, "w")`，**没有** `harden_file`。
+- **重要限定（比转述更准）**：这不是"README 全篇虚构"——`paths.py` 里
+  `ensure_private_dir()`（0700）与 `harden_file()`（0600）**确实存在且被使用**，
+  `circuit_breaker.json` / `engine_stats.json` 就在 `os.replace` 之后补了 `paths.harden_file(path)`。
+  **缺口是覆盖不全**：恰好漏掉了含真实凭据的那一个文件（以及另外两个状态文件），
+  且 `save_proxies` 的父目录 `mkdir` 也没走 `ensure_private_dir`。README#269 的表述是对**全部**状态文件的。
 - **影响**：**安全面** —— 多用户机器上同机其他用户可能读到代理凭据。
   但**不改公开行为**即可修复（只改文件模式）。
-- **建议**：写入时显式 `os.chmod`。这属于安全加固，**不在本"行为保持"重构范围内**。
-- **本轮处置**：仅记录。**未修**。按任务要求"发现安全问题只记录，不擅自改变公开行为"。
+- **建议**：写入时显式 `os.chmod`。这属于安全加固，**不在"行为保持"重构范围内**。
+- **本轮处置**：原计划只记录；**经用户授权后已动手**（见 `REFACTOR_REPORT.md` 后续章节与
+  `DECISIONS.md` D-8）。实施方式与验证证据记在那一处，本条保留为缺陷登记原文。
 
 ## KB-7 `dhole` 的 repair 路径硬编码 `~/.dhole`，不跟随 `DHOLE_HOME`
 
-- **来源**：子代理审查（`cli.py:124` 引用 `repair.py`，后者硬编码 `~/.dhole`）。
-- **现象**：`updater.py` 跟随 `DHOLE_HOME`，而 `cli.py`→`repair.py` 这条路径不跟随。
+- **来源**：子代理审查，**2026-09-22 已独立实测复核（D-07 已证实，但转述的出处有误）**。
+- **现象**：`updater.py` 跟随 `DHOLE_HOME`，而 `cli.py` 里 `_run_repair()` 这条路径不跟随。
   **同一产品内部两种写法不一致。**
-- **影响**：外部可观察 —— 设了 `DHOLE_HOME` 的用户，修repair 会去动真实 `~/.dhole`，
+- **复核证据**（`analysis/verify_d_findings.txt`）：`cli.py:124` 是
+  `repair = os.path.join(os.path.expanduser("~"), ".dhole", "repair.py")` ——
+  句柄是**字面量拼出来的**，完全不看 `DHOLE_HOME`；`_run_repair` 函数体内
+  `paths.home()` / `DHOLE_HOME` 出现次数为 **0**，而 `updater.py` 使用 `paths.home()` 为 `True`。
+- **更正转述**：原转述写"`cli.py:124` 引用 `repair.py`，后者硬编码 `~/.dhole`"。
+  实测 `src/dhole_mcp/repair.py` **不存在**（`exists=False`）——`repair.py` 是
+  **运行时生成到 `~/.dhole/` 的脚本**，不是包内模块。事实成立，出处指错了地方。
+- **影响**：外部可观察 —— 设了 `DHOLE_HOME` 的用户，repair 会去动真实 `~/.dhole`，
   与 README 的状态目录叙事矛盾。
 - **建议**：统一走 `paths.home()`。
 - **本轮处置**：仅记录。**未修**（改它会改变文件落点 = 行为变更）。
