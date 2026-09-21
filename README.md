@@ -170,8 +170,8 @@ dhole model use bge-zh         # 切回默认
 
 | 位置 | 内容 | 何时产生 |
 |------|------|----------|
-| `~/.dhole/cache.db` | 抓到的正文（明文 SQLite）。**按请求上下文分区**：带 cookies / 自定义头 / UA / 代理或改动内容开关的抓取，不会与匿名请求共享缓存条目 | 每次成功抓取 |
-| `~/.dhole/models/<model>/` | 神经重排序模型（3 个文件，来自 HuggingFace 固定 revision，做哈希校验）。默认 `bge-zh`（跨语言，~450MB），可切 `ms-marco`（英文，~91MB） | 首次神经搜索时下载 |
+| `~/.dhole/cache.db` | 抓到的正文（明文 SQLite）。**按请求上下文分区**：带 cookies / 自定义头 / UA / 代理 / PDF 口令或改动内容开关的抓取，不会与匿名请求共享缓存条目（口令这一维早前缺席，用 `password=` 解出的正文可能被匿名请求复读；受影响的是 PDF 行，首次打开时清一次，不动其余缓存） | 每次成功抓取 |
+| `~/.dhole/models/<model>/` | 神经重排序模型（3 个文件 + 一份 `model.sha256`，来自 HuggingFace 固定 revision）。默认 `bge-zh`（中英双语 int8，~279MB），可换 `zh-full`（~450MB）/ `ms-marco`（英文，~91MB） | 首次神经搜索时下载 |
 | `~/.dhole/config/reranker.json` | 重排模型选择（`{"model": "..."}`），`dhole model use` 也写这里 | 切换模型时 |
 | `~/.dhole/circuit_breaker.json` | 引擎熔断/冷却状态 | 引擎被限速/被墙时 |
 | `~/.dhole/search_feedback.json` | 隐式域名偏好 | 仅 `DHOLE_SEARCH_FEEDBACK=1` |

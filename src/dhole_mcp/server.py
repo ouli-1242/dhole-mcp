@@ -924,6 +924,14 @@ def _cache_context(options: dict) -> str:
             except Exception:
                 bits.append(f"px={proxy!r}")
 
+    # PDF 口令：改变"能不能解出正文"，因此必须进指纹 —— 同一 URL 用口令解出来的
+    # 正文，不能被之后的匿名请求回放。取的是值而不是布尔，因为不同口令解出的内容
+    # 也不同（口令探测场景）。明文不进键：这里拼进去的字符串随后就被 sha256 截断，
+    # 而能读到 cache.db 的人本来就能读到明文正文，口令并不构成额外的暴露类别。
+    password = options.get("password")
+    if isinstance(password, str) and password:
+        bits.append(f"pw={password}")
+
     # Content-shaping flags: their defaults are the "plain" answer.
     if options.get("main_content_only") is False:
         bits.append("mc=0")

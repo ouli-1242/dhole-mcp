@@ -23,6 +23,15 @@ _DB_NAME = "cache.db"
 DEFAULT_TTL = 3600  # 1 hour
 MAX_CACHE_ENTRIES = 10000  # hard cap so a long-lived agent's cache DB can't grow unbounded
 
+# Key version, stored in SQLite's per-file PRAGMA user_version slot (no extra
+# state file). Bump it when _cache_key's *inputs* change in a way that makes
+# already-written rows unsafe to serve; the upgrade below then deletes only the
+# affected subset rather than invalidating the whole cache, because for this tool
+# a wiped cache can be unrecoverable on some networks (see
+# paths.migrate_legacy_cache_dir). v2: the ctx fingerprint gained the PDF
+# password (server._cache_context).
+_KEY_VERSION = 2
+
 # Shared DB path cache — avoids re-running PRAGMA on every operation
 _db_initialized: dict[Path, bool] = {}
 _db_init_lock: asyncio.Lock | None = None
@@ -47,7 +56,8 @@ def _cache_key(url: str, extraction_type: str, css_selector: str | None = None,
     ``scope`` separates fetch entries from search-result entries (search.py
     stores query strings + serialized params in the same table).
     ``ctx`` is a request-context fingerprint (cookies / headers / user agent /
-    proxy / content-shaping flags, built by ``server._cache_context``). It exists
+    proxy / PDF password / content-shaping flags, built by
+    ``server._cache_context``). It exists
     because the DB is shared by every session on the machine: a body fetched WITH
     credentials must never be replayed to a request that carried none, and a page
     extracted with include_media=false must not masquerade as the include_media
@@ -121,6 +131,20 @@ async def _ensure_db(cache_dir: Path | None = None) -> Path:
                 except sqlite3.OperationalError as exc:
                     if "duplicate column" not in str(exc):
                         raise
+
+            # 键版本升级：ctx 指纹此前不含 PDF 口令，所以用 password= 解出来的正文
+            # 会和同一 URL 的匿名行撞同一个键 —— 之后的匿名请求能直接复读解密结果。
+            # 只清唯一可能受影响的子集（PDF 行），不作废整个缓存。
+            # 判据用 content_type/url 而不是 extraction_type：后者是调用方传进来的
+            # 取值（默认 markdown），PDF 走的却是响应里的 MIME，两者不对应。
+            # user_version 不能参数绑定，这里拼的是模块级整数常量，非外部可控。
+            (ver,) = await (await db.execute("PRAGMA user_version")).fetchone()
+            if (ver or 0) < _KEY_VERSION:
+                await db.execute(
+                    "DELETE FROM cache WHERE scope = 'fetch' AND ("
+                    "lower(url) LIKE '%.pdf%' OR lower(content_type) LIKE '%pdf%')"
+                )
+                await db.execute(f"PRAGMA user_version={_KEY_VERSION}")
 
             await db.commit()
 

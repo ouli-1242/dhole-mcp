@@ -252,6 +252,115 @@ class TestCacheContextIsolation:
         assert seen.get("url") == "https://example.com/x"
         assert seen.get("ctx") == "ctx123"
 
+    # ─── PDF 口令维度（14.3 的凭据修复漏了它）────────────────────────
+
+    def test_pdf_password_changes_the_fingerprint(self):
+        """口令改变"能不能解出正文"，因此必须进缓存指纹。
+
+        14.3 把 cookies/headers/UA/proxy 四维补进了键，password 却仍是裸的：
+        用 password= 解出来的 PDF 正文与同一 URL 的匿名行撞同一个键。
+        """
+        from dhole_mcp.server import _cache_context
+
+        plain = _cache_context({})
+        pw = _cache_context({"password": "s3cret"})
+        assert plain == ""
+        assert pw and pw != plain
+        # 同一口令 → 同一指纹，否则带口令的缓存永不命中
+        assert pw == _cache_context({"password": "s3cret"})
+        # 明文口令不得出现在指纹里（指纹本身就是缓存键的一部分）
+        assert "s3cret" not in pw
+        assert _cache_context({"password": ""}) == ""
+        assert _cache_context({"password": None}) == ""
+
+    @pytest.mark.asyncio
+    async def test_two_passwords_do_not_share_a_row(self, temp_dir):
+        from dhole_mcp.server import _cache_context
+        from dhole_mcp.cache import get_cached, set_cached
+
+        url = "https://example.com/doc.pdf"
+        a = _cache_context({"password": "alpha"})
+        b = _cache_context({"password": "bravo"})
+        assert a != b
+        await set_cached(url, "markdown", ["alpha body"], 200, cache_dir=temp_dir, ctx=a)
+        assert await get_cached(url, "markdown", cache_dir=temp_dir, ctx=b) is None
+        assert (await get_cached(url, "markdown", cache_dir=temp_dir, ctx=a))["content"] == ["alpha body"]
+
+    @pytest.mark.asyncio
+    async def test_decrypted_pdf_body_is_not_served_to_a_passwordless_refetch(self, temp_dir):
+        """端到端那一格的缓存侧：匿名请求不能读到别人用口令解出来的正文。"""
+        from dhole_mcp.server import _cache_context
+        from dhole_mcp.cache import get_cached, set_cached
+
+        url = "https://example.com/financials.pdf"
+        ctx = _cache_context({"password": "board-only"})
+        await set_cached(url, "markdown", ["DECRYPTED CONFIDENTIAL"], 200,
+                         cache_dir=temp_dir, ctx=ctx)
+        assert await get_cached(url, "markdown", cache_dir=temp_dir) is None,             "口令解出的正文被匿名请求回放了"
+
+    def test_password_flows_through_the_request_context_decorator(self):
+        """接线：password 是真参数，必须真的进指纹（纯函数测试看不到这点）。"""
+        import asyncio
+
+        from dhole_mcp import server as server_mod
+
+        captured: dict = {}
+
+        @server_mod._smart_fetch_request_context
+        async def fake(self, url="", password=None, pages=None, focus=None,
+                       include_media=False, include_links=False, cookies=None,
+                       extra_headers=None, useragent=None, proxy=None,
+                       main_content_only=True, use_trafilatura=True):
+            captured["ctx"] = server_mod._CACHE_CTX.get()
+
+        asyncio.run(fake(None, url="https://x/a.pdf", password="s3cret"))
+        with_pw = captured["ctx"]
+        assert with_pw != ""
+        asyncio.run(fake(None, url="https://x/a.pdf"))
+        assert captured["ctx"] == "", "指纹必须随调用重置"
+        asyncio.run(fake(None, url="https://x/a.pdf", password="s3cret"))
+        assert captured["ctx"] == with_pw
+
+    @pytest.mark.asyncio
+    async def test_legacy_pdf_rows_are_purged_once_and_nothing_else_dies(self, temp_dir):
+        """升级只清唯一可能受影响的子集，其余命中照旧。
+
+        整体作废缓存对这个工具有实代价：某些网络上被拦的页面抓不回来
+        （见 paths.migrate_legacy_cache_dir 的理由）。
+        """
+        import aiosqlite
+
+        from dhole_mcp import cache as cache_mod
+        from dhole_mcp.cache import get_cached, set_cached
+
+        await set_cached("https://x/a.pdf", "markdown", ["decrypted secret"], 200,
+                         cache_dir=temp_dir, css_selector=None, content_type="application/pdf")
+        await set_cached("https://x/other.pdf?v=2", "markdown", ["second pdf"], 200,
+                         cache_dir=temp_dir)
+        await set_cached("https://x/page.html", "markdown", ["normal page"], 200,
+                         cache_dir=temp_dir)
+
+        # 假装这是升级前写的库：键版本退回 1
+        db = await aiosqlite.connect(temp_dir / "cache.db")
+        await db.execute("PRAGMA user_version=1")
+        await db.commit()
+        await db.close()
+        cache_mod._db_initialized.clear()
+        await cache_mod._ensure_db(temp_dir)
+
+        assert await get_cached("https://x/a.pdf", "markdown", cache_dir=temp_dir) is None
+        assert await get_cached("https://x/other.pdf?v=2", "markdown",
+                                cache_dir=temp_dir) is None
+        hit = await get_cached("https://x/page.html", "markdown", cache_dir=temp_dir)
+        assert hit is not None and hit["content"] == ["normal page"], "误伤了非 PDF 行"
+
+        # 幂等：版本已到位后，新写的 PDF 行不能再被清掉
+        await set_cached("https://x/new.pdf", "markdown", ["fresh pdf"], 200, cache_dir=temp_dir)
+        cache_mod._db_initialized.clear()
+        await cache_mod._ensure_db(temp_dir)
+        fresh = await get_cached("https://x/new.pdf", "markdown", cache_dir=temp_dir)
+        assert fresh is not None and fresh["content"] == ["fresh pdf"]
+
 
 
 # ---------------------------------------------------------------------------
