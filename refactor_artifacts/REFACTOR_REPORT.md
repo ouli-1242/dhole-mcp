@@ -396,3 +396,16 @@ git log --oneline fix/kb-6-state-file-permissions -3                        # KB
 - **仍未覆盖**：容器里只跑了 `test_state_file_permissions.py` 与 `TestFixtureAntiRot`，
   **没有**在 Linux 上跑全量 `pytest`。全套在 Linux 上的状态仍然未知。
 - **证据**：`analysis/kb6_posix_before_after.txt`、`analysis/kb6_posix_pytest.txt`（A/B/C 三段）。
+
+## 追加 6：三条分支的最终集成验证
+
+- **做法**：临时 detached worktree → 依次合入 `fix/kb-6-state-file-permissions` 与 `release/14.6`
+  （每次都提交合并，worktree 用完即销毁，**四个分支本身都没有被写入合并提交**）。
+- **冲突**：**无**。三个文件自动合并（`updater.py` / `server.py` / `search_metasearch.py` 等改在不相邻区域）。
+- **合并后核对**：`__version__` = **14.6**；`paths.harden_dir` 存在；`cli.py` 里有 2 处 `paths.home()`；
+  `server.py` 的快照前置注释在位。
+- **全量**：`1143 passed, 5 skipped, 1 failed`，`ruff check .` → `All checks passed!`
+  - 账目对得上：1128（基线）+ 15（KB-6 新增）+ 1（KB-7 新增）− 1（KB-11 那条失败）= 1143；
+    5 skipped = 2（基线）+ 3（KB-6 的 POSIX 断言在 Windows 上跳过）。
+  - **那 1 条失败就是 KB-11**（fixture 行尾哈希），与本轮任何改动无关，在干净 worktree 上同样失败，已在 Linux 上复现。
+- **仍未做**：没有把任何分支合并进 DEFAULT 分支、没有推送、没有删分支（按任务禁令）。

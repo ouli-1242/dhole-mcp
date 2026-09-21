@@ -152,6 +152,15 @@
       "KB-11_cross_platform": "Linux 上 TestFixtureAntiRot 同样失败（1 failed, 3 passed）—— 假绿只在保留 CRLF 残留的本机工作树成立",
       "not_covered": "容器里没有跑全量 pytest；全套在 Linux 上的状态仍未验证",
       "evidence": "analysis/kb6_posix_before_after.txt, analysis/kb6_posix_pytest.txt, tools/check_posix_modes.py"
+    },
+    "final-three-branch-integration": {
+      "method": "临时 detached worktree 依次合入 kb6 与 release/14.6（合并提交只存在于临时 worktree，用完销毁）",
+      "conflicts": "无",
+      "post_merge_checks": "__version__=14.6；paths.harden_dir 在位；cli.py 有 2 处 paths.home()；server.py 快照前置注释在位",
+      "result": "1143 passed, 5 skipped, 1 failed；ruff All checks passed!",
+      "accounting": "1128 基线 + 15 KB-6 + 1 KB-7 − 1 KB-11 = 1143；5 skipped = 2 基线 + 3 KB-6 的 POSIX 断言（Windows）",
+      "the_one_failure": "tests/test_engine_parsers.py::TestFixtureAntiRot::test_every_fixture_is_content_addressed —— 即 KB-11，与本次合并无关",
+      "not_done": "未合并进 DEFAULT 分支、未推送、未删分支"
     }
   }
 }
