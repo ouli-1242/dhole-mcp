@@ -318,11 +318,11 @@ git log --oneline fix/kb-6-state-file-permissions -3                        # KB
     失败的 9 条正是"新行为"断言，通过的 6 条正是"行为保持"断言，分组与设计吻合。
     证据：`analysis/kb6_negative_check.txt`
   - before/after 调用计数：`harden_file` 1 → 4，`harden_dir` — → 3。证据：`analysis/kb6_before.txt`、`analysis/kb6_after.txt`
-- **诚实边界（重要）**：**POSIX 真实权限位没有被本机实测过。** 本机是 Windows，实测连
-  已有的 `harden_file` 对照组都读作 `0o666`；本机也没有可用 POSIX 环境（WSL 的
-  `docker-desktop` 发行版无 python3，Docker 守护进程未运行，仓库无 CI）。
-  因此验证链是：mock `os.chmod` 断言调用与参数（平台无关）→ 反向验证证明非空转 →
-  真实 mode 断言标 `skipif`，**待 Linux/macOS 上首次执行**。本报告不声称已实测后者。
+- **诚实边界（2026-09-22 已关闭）**：当时写的是"POSIX 真实权限位没有被本机实测过"——本机是 Windows，
+  实测连已有的 `harden_file` 对照组都读作 `0o666`，且没有可用 POSIX 环境。
+  **用户随后启动了 Docker，这个缺口已经补上**，见追加章节 5。原先的验证链
+  （mock `os.chmod` 断言调用与参数 → 反向验证证明非空转 → 真实 mode 断言标 `skipif`）
+  现在最后一环也执行了：**Linux 上 18 passed，修复前的树上 12 failed, 6 passed**。
 - **回滚**：`git branch -D fix/kb-6-state-file-permissions`（该分支未合并、未推送）。
 
 ## 追加 3：跨分支集成验证（两条线合并后是否仍绿）
@@ -343,3 +343,56 @@ git log --oneline fix/kb-6-state-file-permissions -3                        # KB
 - **顺带得到的一条限定**：本报告所有 `1128 passed` 之类的基线数字，
   **有效性绑定在本机这个主工作树**上；KB-11 会让任何全新克隆跑出不同的红。
   读基线数字时请连同这一条一起读。
+
+## 追加 4：KB-1 + KB-7 修复，以及把版本折回 14.6（分支 `release/14.6`）
+
+- **分支**：`release/14.6`，从 `wip-before-refactor`（`74524dc`）切出 —— 与 KB-6 分开，
+  因为这三件事（两个行为修复 + 版本折叠）都不属于"行为保持"。
+- **为什么会有这一批**：用户在同一次对话里给了三个判断：① 按建议把 KB-1/KB-7 合起来修；
+  ② KB-2 结案为设计取舍；③ **14.7 从未发布**（tag 只到 `v14.6`，14.7 的提交从未推送），
+  所以把 14.7 的内容并进 14.6、版本号也改回 14.6。
+
+| commit | 内容 |
+| --- | --- |
+| `791e061` | **KB-1**：`cache_clear(engine_state=true)` 的 `engine_health` 恒为空 —— 把快照移到 `engine_state_reset()` **之前**。同时收紧 `test_bug_report_regressions.py` 里 `... or out.engine_health == {}` 这个逃生口 |
+| `debf82c` | **KB-7**：`cli._run_repair()` 改走 `paths.home()`，与 `updater.repair_script_path()` 一致；两处 docstring 与模块自愈流程说明同步 |
+| `c8f11c7` | **版本折叠**：`__version__` 14.7 → 14.6；CHANGELOG 的 `[14.7]` 段并入 `[14.6]`（两个 `### 测试` 合并为一个、正文里的版本引用改写、新增 `### 修复（复验后追加）` 记这两个修复）；README 与 `test_tool_descriptions.py` 里残留的旧版本号同步 |
+
+- **KB-1 的语义选择**：字段描述说的是"dhole 当前看到的池子状态"，而 reset 之后"当前"已经什么都没有了 ——
+  所以"取重置后"也能自我辩解。但那样这个字段在 `engine_state=true` 时**结构上只能是空**，
+  而它被加进来的目的正是让调用方看到"重置释放了什么"（14.7 自己的说明）。
+  取重置前还让 `engine_state=true/false` 报告同一件事（调用当刻的池子）。释放的冷却原本就在 `message` 文本里，信息没丢。
+- **验证**：`1129 passed, 2 skipped`（基线 1128 + KB-7 的 1 例）；`ruff` 全绿；
+  `tests/test_tool_descriptions.py` 35 例全绿（README 那处改动只换了版本号，没有拿它去对齐代码）。
+  全仓 `14.7` 残留为 0。
+- **诚实边界**：CHANGELOG 按本任务的规则只是背景材料，我引它只为说明发布惯例。另：
+  **KB-6 的 CHANGELOG 条目没有写** —— 那条修复不在这个分支的代码里，等它合并时再补，
+  否则会写出一条代码里并不存在的东西。
+
+## 追加 5：用 Docker 补上 POSIX 真实权限实证（关闭 KB-6 的最后一个缺口）
+
+- **网络请求记录**（按任务要求）：`docker pull python:3.12-slim`（179MB，Docker Hub，一次）。
+  容器内 `pip install` 一次性拉了 mcp/pydantic/trafilatura/aiosqlite/primp/httpx/lxml/cssselect/
+  markdownify/beautifulsoup4/h2/httpcore/pytest 等测试所需依赖。此外无任何外网请求。
+- **做法**：`git archive` 出**修复前后两棵源码树**（`74524dc` vs KB-6 分支），
+  用同一个 harness（`tools/check_posix_modes.py`，只依赖 stdlib + `paths`，所以裸镜像即可）
+  在 `python:3.12-slim`（`os.name=posix`，umask 固定 022）里各跑一遍。
+- **结果（真实 POSIX mode）**：
+
+  | 场景 | 修复前 | 修复后 |
+  | --- | --- | --- |
+  | 全新 home | 目录 `0o755` / 文件 `0o644` | 目录 `0o700` / 文件 `0o600` |
+  | 已存在的松目录 `0777` | 保持 `0o777` | 收紧为 `0o700` |
+  | 已存在的松文件 `0666` | 保持 `0o666` | 收紧为 `0o600` |
+
+  → **修复前，那台 Linux 上含明文代理凭据的 `search_proxies.json` 是 0644，同机任何用户可读。**
+  这不再是推断，是实测。文件内容前后逐字节一致（只改模式）。
+- **pytest 端**：同一测试文件在 Linux 上 **修复后 18 passed（0 skipped）**、
+  **修复前 12 failed, 6 passed** —— 那 3 条在 Windows 上被 `skipif` 跳过的真实 mode 断言，
+  这次真的跑了，而且真的能区分修复前后。
+- **附带确认 KB-11 与平台无关**：`git archive` 出来的树即"新克隆"的样子（blob 原样 = LF），
+  在 Linux 上 `TestFixtureAntiRot` 同样失败（`yandex.html be8729f06d59112e → 6aa68cc8433ab2f1`），
+  4 条里 1 失败 3 通过。**假绿只在保留 CRLF 残留的本机工作树成立**，这条现在有跨平台证据。
+- **仍未覆盖**：容器里只跑了 `test_state_file_permissions.py` 与 `TestFixtureAntiRot`，
+  **没有**在 Linux 上跑全量 `pytest`。全套在 Linux 上的状态仍然未知。
+- **证据**：`analysis/kb6_posix_before_after.txt`、`analysis/kb6_posix_pytest.txt`（A/B/C 三段）。

@@ -1,0 +1,59 @@
+################ 修复后（KB-6 分支）################
+python 3.12.14  os.name=posix  源码=fixed/src
+
+--- 场景 1  全新 DHOLE_HOME ---
+  home                0o700
+  search_proxies.json 0o600
+
+--- 场景 2  已存在的松目录 0777 ---
+  写入前 home         0o777
+  写入后 home         0o700
+
+--- 场景 3  已存在的松文件 0666 ---
+  写入前 文件         0o666
+  写入后 文件         0o600
+
+--- 内容（只改模式，不改字节） ---
+  {
+    "proxies": [
+      "http://user:secret@10.0.0.1:8080"
+    ]
+  }
+  解析结果: {'proxies': ['http://user:secret@10.0.0.1:8080']}
+
+--- paths.ensure_private_dir / harden_dir / harden_file ---
+  ensure_private_dir -> 0o700
+  harden_file        -> 0o600
+  harden_dir         -> 0o700
+
+################ 修复前（74524dc）################
+python 3.12.14  os.name=posix  源码=broken/src
+
+--- 场景 1  全新 DHOLE_HOME ---
+  home                0o755
+  search_proxies.json 0o644
+
+--- 场景 2  已存在的松目录 0777 ---
+  写入前 home         0o777
+  写入后 home         0o777
+
+--- 场景 3  已存在的松文件 0666 ---
+  写入前 文件         0o666
+  写入后 文件         0o666
+
+--- 内容（只改模式，不改字节） ---
+  {
+    "proxies": [
+      "http://user:secret@10.0.0.1:8080"
+    ]
+  }
+  解析结果: {'proxies': ['http://user:secret@10.0.0.1:8080']}
+
+--- paths.ensure_private_dir / harden_dir / harden_file ---
+  ensure_private_dir -> 0o700
+  harden_file        -> 0o600
+Traceback (most recent call last):
+  File "/w/check_posix_modes.py", line 94, in <module>
+    paths.harden_dir(d)
+    ^^^^^^^^^^^^^^^^
+AttributeError: module 'dhole_mcp.paths' has no attribute 'harden_dir'. Did you mean: 'harden_file'?

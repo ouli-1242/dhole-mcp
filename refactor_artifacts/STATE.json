@@ -3,7 +3,7 @@
   "task": "行为保持重构 Dhole MCP 服务器",
   "repo_root": "D:\\tools\\dhole-mcp",
   "branch": "refactor/dhole-mcp-behavior-preserving",
-  "updated_at": "2026-09-22T00:00:00Z",
+  "updated_at": "2026-09-22T12:00:00Z",
   "status": "COMPLETED_WITH_FOLLOWUPS",
   "current_stage": "阶段 5（交付物）已完成",
   "stage_status": {
@@ -19,7 +19,8 @@
       "master",
       "wip-before-refactor",
       "refactor/dhole-mcp-behavior-preserving",
-      "fix/kb-6-state-file-permissions"
+      "fix/kb-6-state-file-permissions",
+      "release/14.6"
     ],
     "baseline_commit": "74524dc575d39d2269e7268113dff9cf0b391208",
     "last_green_commit": "9391ca0",
@@ -56,7 +57,8 @@
       "未推送到远程",
       "未删除任何分支",
       "未 amend、未 force push、未 reset --hard"
-    ]
+    ],
+    "version": "14.6（原 14.7 从未发布：tag 只到 v14.6、那批提交从未推送；经用户指示折回 14.6，见 DECISIONS.md D-16）"
   },
   "baseline_evidence": {
     "pytest": "1128 passed, 2 skipped, 15 deselected in 63.33s (exit 0) -> baseline/pytest_baseline.txt",
@@ -82,10 +84,12 @@
     "refactor_artifacts/analysis/  (AST 分析原始输出)",
     "refactor_artifacts/tools/     (可重跑脚本：mcp_snapshot.py / tool_payload_measure.py / module_inventory.py / stale_reference_scan.py)"
   ],
-  "next_step": "两项追加工作均已完成并提交。KB-6 分支未合并、未推送，等用户决定合并方式。",
+  "next_step": "两项追加工作完成；KB-1/KB-7/版本折叠在 release/14.6。四个分支（refactor / kb6 / release-14.6 / wip-baseline）都未合并、未推送，等用户决定合并方式。",
   "unresolved": [
-    "KB-2 已从缺陷降级为设计取舍（原判断被实测推翻）；仍未决的是 KB-1、KB-7 要不要修，以及是否需要为它们发一次 minor 版本（版本方案为 MAJOR.MINOR，无补丁位）",
-    "KB-6 分支上 3 条 POSIX 真实 mode 断言尚未在任何 POSIX 环境执行过（本机无 POSIX、无 CI），待 Linux/macOS 首次运行",
+    "全套 pytest 尚未在 Linux 上跑过（容器里只跑了 KB-6 权限测试与 TestFixtureAntiRot）",
+    "KB-6 的 CHANGELOG 条目待其合并时补写",
+    "tag 只是本地证据：PyPI 上是否已有 14.7 未联网确认；若有，14.6 折叠会与已发布同名",
+    "KB-11：fixture 的 sha256 按 CRLF 记录、git blob 已是 LF，任何全新克隆上 test_every_fixture_is_content_addressed 必然失败（已跨平台确认）",
     "KB-11：fixture 的 sha256 按 CRLF 记录、git blob 已是 LF，任何全新克隆上 test_every_fixture_is_content_addressed 必然失败；连带限定所有基线数字的适用范围",
     "README 中未独立核对的承诺：robots 正面行为、SSRF 残余面、PDF 口令三态细节、sogou_weixin 排序与早退、CLI 各命令逐字段输出、'4 个索引家族'计数",
     "测试盲区（非本轮引入）：429、gzip/brotli/zstd、shift_jis、按异常类名的超时/连接错误、<base href>、爬虫端到端、MCP 层并发/取消"
@@ -126,8 +130,28 @@
     "KB-2-reclass": {
       "what": "KB-2 二次复核：实测推翻了它自己的影响判断与建议",
       "measured": "小池(bing-only) -> basis=single_family（不是 partial_pool）；partial_pool 需真有家族被 preempted；6 引擎映射到 4 个索引家族(bing/brave/yandex/sogou_weixin)",
-      "conclusion": "不是缺陷，是设计取舍。按原建议修会产出 '1 of 1'，而那正是 _family_universe docstring 明确要避免的字符串。已改写 KNOWN_BUGS.md KB-2 与 DOC_CODE_DRIFT.md D-02",
+      "conclusion": "不是缺陷，是设计取舍。按原建议修会产出 '1 of 1'，而那正是 _family_universe docstring 明确要避免的字符串。已改写 KNOWN_BUGS.md KB-2 与 DOC_CODE_DRIFT.md D-02（D-15：按原建议修会产出 '1 of 1'，即 docstring 明确要避免的字符串，故不改代码）",
       "code_changed": false
+    },
+    "KB-1+KB-7+version-fold": {
+      "branch": "release/14.6",
+      "base": "74524dc (wip-before-refactor)",
+      "commits": {
+        "791e061": "KB-1 快照移到 reset 之前（并收紧那条 or == {} 逃生口）",
+        "debf82c": "KB-7 repair 路径改走 paths.home()",
+        "c8f11c7": "版本 14.7->14.6；CHANGELOG 的 14.7 段并入 14.6"
+      },
+      "tests": "1129 passed, 2 skipped, 15 deselected；ruff 全绿；test_tool_descriptions 35 例全绿；全仓 14.7 残留 0",
+      "not_done": "KB-6 的 CHANGELOG 条目没写（那条修复不在本分支的代码里，等合并时再补）"
+    },
+    "docker-posix-verification": {
+      "what": "用 python:3.12-slim 在真实 POSIX 上补 KB-6 的实证（用户启动 Docker 后）",
+      "network": "docker pull python:3.12-slim（179MB，一次）+ 容器内一次性 pip install 测试依赖",
+      "before_vs_after": "修复前 目录0755/文件0644，且已存在的 0777/0666 不会被收紧；修复后 0700/0600 且都会收紧",
+      "pytest_on_linux": "修复后 18 passed 0 skipped；修复前 12 failed, 6 passed",
+      "KB-11_cross_platform": "Linux 上 TestFixtureAntiRot 同样失败（1 failed, 3 passed）—— 假绿只在保留 CRLF 残留的本机工作树成立",
+      "not_covered": "容器里没有跑全量 pytest；全套在 Linux 上的状态仍未验证",
+      "evidence": "analysis/kb6_posix_before_after.txt, analysis/kb6_posix_pytest.txt, tools/check_posix_modes.py"
     }
   }
 }

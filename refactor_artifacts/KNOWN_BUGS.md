@@ -18,7 +18,9 @@
   ——**信息没丢，只是不在 agent 被指引去读的那个字段里。**
 - **影响**：外部可观察 —— agent 依赖这个字段判断引擎池是否恢复，拿到 `{}` 会误判。
 - **建议**：先快照再重置（或重置前把旧状态传出去）。**属于行为变更，需产品决策。**
-- **本轮处置**：仅记录。**未修**，因为修它会改变 `tools/call` 的返回内容。
+- **本轮处置**：原为"仅记录"。**2026-09-22 经用户授权后已修** —— 分支 `release/14.6`，
+  commit `791e061`：快照移到 reset 之前；同时把 `tests/test_bug_report_regressions.py` 里
+  `... or out.engine_health == {}` 这个掩盖了它的逃生口收紧为"必须非空"。
 
 ## KB-2 `DHOLE_DEFAULT_ENGINES` 不改变 `engines_consensus` 的分母
 
@@ -109,6 +111,20 @@
 - **本轮处置**：原计划只记录；**经用户授权后已在独立分支动手修复**
   （分支 `fix/kb-6-state-file-permissions`，commit `8dfd6a9`；决策见 `DECISIONS.md` D-12/D-13/D-14，
   实施与验证证据见 `REFACTOR_REPORT.md` 追加章节 2）。本条保留为缺陷登记原文。
+- **✅ POSIX 真实权限已实测（2026-09-22，Docker）**：原先"POSIX 真实 mode 未实测"的缺口**已关闭**。
+  在 `python:3.12-slim`（`os.name=posix`，umask 固定 022）里用同一个 harness 跑修复前后两棵树：
+
+  | 场景 | 修复前（`74524dc`） | 修复后（KB-6 分支） |
+  | --- | --- | --- |
+  | 全新 home | 目录 `0o755` / 文件 **`0o644`** | 目录 `0o700` / 文件 **`0o600`** |
+  | 已存在的松目录 `0777` | 保持 `0o777`（不收紧） | 收紧为 `0o700` |
+  | 已存在的松文件 `0666` | 保持 `0o666`（不收紧） | 收紧为 `0o600` |
+
+  **即：修复前那台 Linux 上含明文凭据的 `search_proxies.json` 是 0644 —— 同机任何用户可读。**
+  文件内容在修复前后逐字节一致（只改模式）。
+  另有 pytest 端证据：同一测试文件在 Linux 上 **修复后 18 passed / 修复前 12 failed, 6 passed**。
+  证据：`analysis/kb6_posix_before_after.txt`、`analysis/kb6_posix_pytest.txt`；
+  harness：`tools/check_posix_modes.py`。
 
 ## KB-7 `dhole` 的 repair 路径硬编码 `~/.dhole`，不跟随 `DHOLE_HOME`
 
@@ -125,7 +141,8 @@
 - **影响**：外部可观察 —— 设了 `DHOLE_HOME` 的用户，repair 会去动真实 `~/.dhole`，
   与 README 的状态目录叙事矛盾。
 - **建议**：统一走 `paths.home()`。
-- **本轮处置**：仅记录。**未修**（改它会改变文件落点 = 行为变更）。
+- **本轮处置**：原为"仅记录"。**2026-09-22 经用户授权后已修** —— 分支 `release/14.6`，
+  commit `debf82c`：改走 `paths.home()`；新增测试同时钉住"落在 DHOLE_HOME 下"与"不在真实 home 建任何东西"。
 
 ## KB-8 本机 `site-packages` 装的是 14.6 旧轮子，不带 `PYTHONPATH=src` 会静默验证旧代码
 
@@ -204,5 +221,10 @@
 - **建议**（两条选一，都需产品决策，本轮**未动**）：
   - `tests/engine_fixtures/*.html -text`（禁止行尾转换）——让 checkout 逐字节复现记录哈希时的字节；
   - 或按 LF 字节**重新记录**四个 `.meta.json` 的 sha256。
+- **Linux 复现（2026-09-22，Docker）**：`git archive` 出来的树就是"新克隆"的样子（blob 原样 = LF），
+  在 `python:3.12-slim` 上跑 `TestFixtureAntiRot` 得到同一条失败：
+  `yandex.html 被改动过（be8729f06d59112e → 6aa68cc8433ab2f1）`，
+  **4 条里失败 1 条、通过 3 条** —— 证明它与 Windows 无关，就是"记录的哈希按 CRLF、入库的是 LF"。
+  证据：`analysis/kb6_posix_pytest.txt` 的 C 段。
 - **本轮处置**：**仅记录，未修**。改 `.gitattributes` 或改 fixture 哈希都属于改仓库跟踪内容，
   超出"行为保持重构"与 KB-6 的授权范围。

@@ -1,0 +1,36 @@
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+################ A. Linux 修复后（KB-6 分支）################
+..................                                                       [100%]
+18 passed in 0.53s
+
+################ B. Linux 修复前（74524dc src + 新测试）################
+
+tests/test_state_file_permissions.py:260: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_state_file_permissions.py::TestHardenDir::test_requests_owner_only_mode
+FAILED tests/test_state_file_permissions.py::TestHardenDir::test_does_not_create_the_directory
+FAILED tests/test_state_file_permissions.py::TestHardenDir::test_never_raises
+FAILED tests/test_state_file_permissions.py::TestProxyConfigPermissions::test_save_proxies_tightens_both_dir_and_file
+FAILED tests/test_state_file_permissions.py::TestUsageLogPermissions::test_owned_log_tightens_home_and_file
+FAILED tests/test_state_file_permissions.py::TestOtherStateFiles::test_search_feedback_tightens_both
+FAILED tests/test_state_file_permissions.py::TestOtherStateFiles::test_circuit_state_tightens_dir
+FAILED tests/test_state_file_permissions.py::TestOtherStateFiles::test_engine_stats_tightens_dir
+FAILED tests/test_state_file_permissions.py::TestOtherStateFiles::test_last_version_is_tightened
+FAILED tests/test_state_file_permissions.py::TestRealModeOnPosix::test_proxy_config_lands_0600
+FAILED tests/test_state_file_permissions.py::TestRealModeOnPosix::test_usage_log_lands_0600
+FAILED tests/test_state_file_permissions.py::TestRealModeOnPosix::test_search_feedback_lands_0600
+12 failed, 6 passed in 0.61s
+
+################ C. KB-11 在 Linux 上的复现（git archive 出来的树 = 新克隆的 LF）################
+                f"{p.name} 被改动过（{want} → {got}）。改 fixture 必须同时重新"
+                f"记录 sha256，否则'契约'就只是看起来存在")
+E           AssertionError: yandex.html 被改动过（be8729f06d59112e → 6aa68cc8433ab2f1）。改 fixture 必须同时重新记录 sha256，否则'契约'就只是看起来存在
+E           assert 'be8729f06d59112e' == '6aa68cc8433ab2f1'
+E             
+E             - 6aa68cc8433ab2f1
+E             + be8729f06d59112e
+
+tests/test_engine_parsers.py:206: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_engine_parsers.py::TestFixtureAntiRot::test_every_fixture_is_content_addressed
+1 failed, 3 passed in 0.44s

@@ -93,7 +93,7 @@
 
 | 项 | 实测值 | 命令 |
 | --- | --- | --- |
-| 包版本 | **14.7** | `python -c "import sys;sys.path.insert(0,'src');import dhole_mcp;print(dhole_mcp.__version__)"` |
+| 包版本 | **14.7**（后经用户指示折回 14.6，见文末注） | `python -c "import sys;sys.path.insert(0,'src');import dhole_mcp;print(dhole_mcp.__version__)"` |
 | 版本唯一来源 | `src/dhole_mcp/__init__.py::__version__`；`pyproject.toml` 用 `dynamic=["version"]` + `[tool.hatch.version] path=...` | `Read pyproject.toml:5,96-98` |
 | fork 身份 | `LICENSE`、`NOTICE.ddgs.txt` 存在于仓库根；`NOTICE.ddgs.txt` 在 `.gitattributes` 标记 `linguist-vendored` | `ls`、`git show-ref --tags`（tags 到 v14.6） |
 
@@ -137,3 +137,16 @@ python -m ruff check .                     # 期望 All checks passed!
 python -m ruff format --check .            # 期望 66 files would be reformatted（基线即如此）
 python -c "import sys;sys.path.insert(0,'src');import dhole_mcp;print(dhole_mcp.__version__)"   # 期望 14.7
 ```
+
+---
+
+## 注：版本号后来变了（2026-09-22，追加）
+
+本文档冻结时 `__version__` 是 **14.7**。之后确认 **14.7 从未发布**
+（tag 只到 `v14.6`，那批提交从未推送），用户指示把 14.7 的内容并入 14.6、版本号改回 **14.6**，
+落在分支 `release/14.6` 的 `c8f11c7`。见 `DECISIONS.md` D-16。
+
+**对本文档的影响**：上面"包版本 14.7"是**当时的实测值，不改写**；
+但"期望 14.7" 那类可复跑命令的期望输出现在应是 **14.6**。
+其余基线数字（pytest / ruff / payload 体积 / MCP 快照）**不受影响** ——
+版本号不在这几条的测量面里。
