@@ -45,7 +45,36 @@ ruff check src tests      # config lives in pyproject.toml [tool.ruff]
 ```
 
 Run `pytest` and `ruff check src tests` locally before pushing — this fork has
-no CI, checks are run by hand.
+no CI, checks are run by hand. The default run makes **no network calls**
+(`tests/conftest.py` also redirects every state file to a temp dir, so running
+the suite never rewrites a real `~/.dhole`).
+
+## Engine fixtures and parser drift
+
+The keyless engines are scraped HTML, so their parsers are snapshots of
+somebody else's markup. `tests/test_engine_parsers.py` locks each parser against
+a trimmed **real** SERP capture, and the expected item count comes from an
+independent oracle (bs4 + `html.parser`, a different parser and query language
+from the lxml/XPath under test) so the test can't just agree with itself.
+
+Fixtures go stale when an engine redesigns. To re-capture or diff them (needs the
+network, and for duckduckgo/brave/yahoo a VPN on a CN connection):
+
+```bash
+python -m pytest -m live --engine-fixtures=capture tests/test_engine_fixtures_live.py -rs
+python -m pytest -m live --engine-fixtures=check  tests/test_engine_fixtures_live.py -rs
+```
+
+Both are deliberately opt-in twice over, so a bare `pytest -m live` cannot
+hammer five engines by accident. `check` only fails on a **confirmed** drift
+(fixture parses, live page has result containers, live yields nothing usable);
+a live SERP that legitimately returns zero results is weather, not a red test,
+and is reported + skipped.
+
+Two rules worth keeping: never assert that a fixture is *recent* (that turns the
+suite red on a random Tuesday with no code change, and the maintainer learns to
+delete tests), and never hand-write a fixture to make a test pass — a fixture
+that no engine can produce is a gap to report, not to paper over.
 
 ## Layout
 
