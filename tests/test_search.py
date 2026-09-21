@@ -971,3 +971,82 @@ class TestEngineEmptyIsVisible:
         assert live.engine_empty == ["brave"] and live.engine_preempted == ["yandex"]
         assert hit.engine_empty == live.engine_empty
         assert hit.engine_preempted == live.engine_preempted
+
+
+# ─── 全沉默时的改写 gate（S4b）：只对"真太窄"改写，不对"解析器坏了"重复加压 ───
+
+class TestSilentPoolRewriteGate:
+    """should_rewrite 此前同时救两类完全不同的情况，单次搜索里又无法区分。
+
+    有了 item_nodes/usable 就能分：容器在而可用为 0 = 我们的 xpath 坏了，再打一轮
+    全量 fan-out 只会在上游正改版那天把请求量翻倍；全 0 容器更像查询太窄，改写照旧。
+    """
+
+    def _calls(self, monkeypatch, first_reports, second_results=None):
+        calls: list[dict] = []
+
+        async def fake_multi(query_, max_results, **kwargs):
+            calls.append({"query": query_, "engines": kwargs.get("engines")})
+            if len(calls) == 1:
+                return [], first_reports
+            return (second_results or []), [EngineReport(name="brave", ok=True, status="ok")]
+
+        async def _none():
+            return None
+
+        async def no_get(*a, **kwargs):
+            return None
+
+        async def no_set(*a, **kwargs):
+            return None
+
+        monkeypatch.setattr(search, "multi_search", fake_multi)
+        monkeypatch.setattr(search, "ensure_reranker", _none)
+        monkeypatch.setattr(search, "get_cached", no_get)
+        monkeypatch.setattr(search, "set_cached", no_set)
+        return calls
+
+    @pytest.mark.asyncio
+    async def test_confirmed_drift_does_not_double_the_fanout(self, monkeypatch):
+        reports = [EngineReport(name=n, status="empty", error="no results",
+                                item_nodes=8, usable=0, yield_verdict="parser_drift")
+                   for n in ("bing", "brave", "yandex")]
+        calls = self._calls(monkeypatch, reports)
+        r = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        assert len(calls) == 1, "解析器确认坏了，不该再打第二轮全量 fan-out"
+        assert "parsed 0 usable results" in r.error
+        assert "dhole -v" in r.error
+        assert "Try rephrasing" not in r.error, "不该把自家故障诊断成用户的查询问题"
+
+    @pytest.mark.asyncio
+    async def test_genuinely_narrow_query_still_gets_the_rewrite(self, monkeypatch):
+        """全 0 容器 = 更像查询太窄 —— 改写救回必须原样保留，否则这次修复就是在降召回。"""
+        reports = [EngineReport(name=n, status="empty", error="no results",
+                                item_nodes=0, usable=0, yield_verdict="unknown_empty")
+                   for n in ("bing", "brave", "yandex")]
+        calls = self._calls(monkeypatch, reports, second_results=[RawResult(
+            title="sqlite", url="https://sqlite.org", snippet="s", source="brave", position=1)])
+        r = await search.smart_search(None, "zzzqqx sqlite WAL mode", max_results=6, mode="auto")
+        assert len(calls) == 2, "窄查询的改写救回被剥夺了"
+        assert r.results, "改写后应当拿到结果"
+
+    @pytest.mark.asyncio
+    async def test_partial_drift_rewrites_only_the_healthy_engines(self, monkeypatch):
+        reports = [
+            EngineReport(name="bing", status="empty", error="no results",
+                         item_nodes=9, usable=0, yield_verdict="parser_drift"),
+            EngineReport(name="brave", status="empty", error="no results",
+                         item_nodes=0, usable=0, yield_verdict="unknown_empty"),
+        ]
+        calls = self._calls(monkeypatch, reports)
+        await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        assert len(calls) == 2
+        assert calls[1]["engines"] == ["brave"], calls[1]["engines"]
+
+    @pytest.mark.asyncio
+    async def test_blocked_pool_message_is_unchanged(self, monkeypatch):
+        """被墙那条路径的文案不受本阶段影响。"""
+        reports = [EngineReport(name="bing", blocked=True, status="timeout", error="timed out")]
+        self._calls(monkeypatch, reports)
+        r = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        assert "rate-limited" in r.error or "rephrase" in r.error, r.error

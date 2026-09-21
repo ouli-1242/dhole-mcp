@@ -84,6 +84,20 @@ class EngineReport:
     # engines_used / engine_blocked 两个列表里同时消失 —— 解析器坏了的形态正是
     # 这样。留着原 token 让下游能把它单独报出来，而不必再发明第四个布尔。
     status: str = ""
+    # 该引擎最近一轮的解析产出（来自 metasearch 的产出统计）。gate 需要它们才能把
+    # "这个查询真没结果"和"我们的解析器跟不上页面了"分开 —— 前者改写查询有用，
+    # 后者再打一轮只是给同一个坏掉的解析器重复加压。-1 = 没观测。
+    item_nodes: int = -1
+    usable: int = -1
+    yield_verdict: str = ""
+
+
+def _engine_yield() -> dict:
+    """metasearch 层的每引擎产出快照。惰性取，拿不到就当作无观测。"""
+    try:
+        return _get_metasearch().engine_health()  # type: ignore[attr-defined]
+    except Exception:
+        return {}
 
 
 def _normalize_domain(value: str) -> str:
@@ -224,24 +238,41 @@ async def multi_search(
 
     # Per-backend reports from the metasearch status. 每个分支都带上原始 token：
     # 布尔是有损折叠，empty 就是被折掉的那一格。
+    yield_rows = _engine_yield()
     reports: list[EngineReport] = []
     for name, st in status.items():
+        y = yield_rows.get(name, {}) if isinstance(yield_rows, dict) else {}
+
+        def _y(key: str, default: int) -> int:
+            # 不能用 `y.get(k) or default`：0 条容器 / 0 条可用正是这里的信号本身，
+            # `or` 会把它变成"没观测"，判据就永远看不到漂移。
+            try:
+                return int(y[key])  # type: ignore[literal-required]
+            except (KeyError, TypeError, ValueError):
+                return default
+
+        common = {
+            "status": st,
+            "item_nodes": _y("last_nodes", -1),
+            "usable": _y("last", -1),
+            "yield_verdict": str(y.get("verdict", "") or ""),
+        }
         if st == "ok":
-            reports.append(EngineReport(name=name, ok=True, status=st))
+            reports.append(EngineReport(name=name, ok=True, **common))
         elif st == "preempted":
-            reports.append(EngineReport(name=name, preempted=True, status=st,
-                                        error="preempted (enough backends delivered)"))
+            reports.append(EngineReport(name=name, preempted=True,
+                                        error="preempted (enough backends delivered)", **common))
         elif st == "blocked":
-            reports.append(EngineReport(name=name, blocked=True, status=st,
-                                        error="blocked/captcha (circuit opened)"))
+            reports.append(EngineReport(name=name, blocked=True,
+                                        error="blocked/captcha (circuit opened)", **common))
         elif st == "circuit_open":
-            reports.append(EngineReport(name=name, blocked=True, status=st,
-                                        error="circuit open (recently blocked; skipped)"))
+            reports.append(EngineReport(name=name, blocked=True,
+                                        error="circuit open (recently blocked; skipped)", **common))
         elif st == "timeout":
-            reports.append(EngineReport(name=name, blocked=True, status=st, error="timed out"))
+            reports.append(EngineReport(name=name, blocked=True, error="timed out", **common))
         elif st.startswith("error") or st.startswith("init_error") or st.startswith("no_key"):
-            reports.append(EngineReport(name=name, blocked=True, status=st, error=st))
+            reports.append(EngineReport(name=name, blocked=True, error=st, **common))
         else:  # "empty" —— 引擎答了但一条可用结果都没解析出来
-            reports.append(EngineReport(name=name, status=st, error="no results"))
+            reports.append(EngineReport(name=name, error="no results", **common))
 
     return ranked, reports

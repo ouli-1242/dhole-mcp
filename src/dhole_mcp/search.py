@@ -1148,16 +1148,29 @@ async def smart_search(
         if not ranked and not error:
             blocked_any = bool([r for r in reports if r.blocked])
             all_blocked = blocked_any and not bool([r for r in reports if r.ok])
+            # 池子"全沉默"（都答了、都没产出）时，坏的是解析器还是查询，用产出计数分：
+            # item_nodes>0 而 usable==0 = 结果容器还在、子元素 xpath 已经错位 = 我们的
+            # 问题 —— 对同一批坏掉的解析器再打一轮全量 fan-out，只会在上游正改版的那天
+            # 把请求量翻倍。全部 0 容器则更像查询太窄，改写救回原样保留（窄查询的召回
+            # 不能因为这次"让降级可见"的修复而退化）。
+            drifted = [r.name for r in reports if r.item_nodes > 0 and r.usable == 0]
+            all_silent = bool(reports) and not any(r.ok or r.blocked for r in reports)
+            probe = [r.name for r in reports if r.name not in drifted]
+            skip_retry = all_silent and bool(drifted) and not probe
             # Auto query rewrite: when zero results, try a simplified query.
             # Always try when site filter is set (site may not exist);
             # otherwise only try when NOT all engines are blocked.
-            should_rewrite = (not all_blocked) or (site is not None)
+            should_rewrite = ((not all_blocked) or (site is not None)) and not skip_retry
             if should_rewrite:
                 rewritten = _rewrite_query(query)
                 if rewritten and rewritten != query:
                     try:
                         ranked2, reports2 = await multi_search(
-                            rewritten, max_results, engines=engines, site=None,
+                            rewritten, max_results,
+                            # 部分引擎坏了就只问还活着的那些，别再全员陪跑。
+                            engines=(list(probe) if (all_silent and drifted and probe)
+                                     else engines),
+                            site=None,
                             exclude_sites=exclude_sites, region=region,
                             freshness=freshness, page=page, server=server,
                         )
@@ -1171,11 +1184,19 @@ async def smart_search(
                     except Exception:
                         pass
             if not ranked and not error:
-                error = (
-                    "No results from any engine. " +
-                    ("Engines were rate-limited/CAPTCHA'd; retry in a moment, rephrase, or set DHOLE_SEARCH_PROXY for sustained heavy use. "
-                     if blocked_any else "Try rephrasing the query.")
-                )
+                if skip_retry:
+                    error = (
+                        f"Engines answered but parsed 0 usable results ({', '.join(drifted)} "
+                        "saw result containers it could not read). That is usually our parser "
+                        "falling out of sync with the engine's page structure, not the query "
+                        "being wrong - no second round was issued. Run `dhole -v` for "
+                        "per-engine yield, or rephrase with different terms.")
+                else:
+                    error = (
+                        "No results from any engine. " +
+                        ("Engines were rate-limited/CAPTCHA'd; retry in a moment, rephrase, or set DHOLE_SEARCH_PROXY for sustained heavy use. "
+                         if blocked_any else "Try rephrasing the query.")
+                    )
 
         if _rerank_task:
             try:
