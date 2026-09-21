@@ -42,7 +42,7 @@
 
 **实际调用的 skill**：`python-code-quality`（ruff 规则/行宽/select 集）、
 `verification-before-completion`（无命令输出不得声称通过 —— 全文遵循）、
-`code-review`（每个 commit 后以审查者视角逐条回答 10 问，见 `STAGE_2_REVIEW.md`）、
+`code-review`（每个 commit 后以审查者视角逐条回答 10 问，见 `STAGE_X_REVIEW.md`）、
 `tdd`（改前先确认相关测试为绿）、`writing-plans`（阶段规划）、
 `grilling`（阶段 4 红队自查的替代手段）。
 
@@ -125,7 +125,7 @@
 | 0 基线 | `pytest` / `ruff` / `ruff format --check` / 版本 / MCP 快照 | 全绿（格式项按设计不通过，已决策禁跑） |
 | 1 建模 | 模块依赖图（AST）、共享状态清单、env 清单、契约清单 | 产出 4 份文档，结论可复现 |
 | 2 每个原子改动 | 改前相关测试绿 → 改动 → `ruff` + 全量 `pytest` + `import` 冒烟 | 3 个代码 commit 各自：`ruff` All checks passed、**1128 passed / 2 skipped / 15 deselected** |
-| 2 审查 | 审查者模式逐条回答 10 问 | 见 `STAGE_2_REVIEW.md`（R-1…R-6，全部通过） |
+| 2 审查 | 审查者模式逐条回答 10 问 | 见 `STAGE_X_REVIEW.md`（R-1…R-6，全部通过） |
 | 3 契约回归 | 重构前后各跑一次 `mcp_snapshot.py`，键排序后 diff | **`tools/list` 逐字节相同**（11875 == 11875）；`tools/call` 计数相同（34 / 16 `isError=true` / 18 `false` / 0 超时） |
 | 3 缺陷注入 | 见 `ADVERSARIAL_REVIEW.md` 第二/三节 | 已覆盖项全绿；**4 类盲区如实登记**（429、gzip/brotli/zstd、shift_jis、按异常类名的超时/连接错误） |
 | 3 性能 | 快照器总耗时 | 10.5 s → 10.4 s，无可测退化 |
@@ -133,7 +133,7 @@
 
 **唯一一次"意外"**：加入我自己的分析脚本后 `ruff check .` 出现 2 个报错。
 核查确认**两条都在我的脚本里**（未用变量、未用 import），`ruff check src tests` 全程全绿。
-已在 `d334fd9` 修复，并把这个教训写进 `STAGE_2_REVIEW.md` R-6。
+已在 `d334fd9` 修复，并把这个教训写进 `STAGE_X_REVIEW.md` R-6。
 
 ---
 
@@ -259,6 +259,6 @@ python refactor_artifacts/tools/tool_payload_measure.py
 ```
 
 `refactor_artifacts/` 内共 11 份交付文档：`TOOLING.md`、`BASELINE.md`、`FIRST_PRINCIPLES.md`、
-`CONTRACTS.md`、`DECISIONS.md`、`DOC_CODE_DRIFT.md`、`STAGE_2_REVIEW.md`、
+`CONTRACTS.md`、`DECISIONS.md`、`DOC_CODE_DRIFT.md`、`STAGE_X_REVIEW.md`、
 `ADVERSARIAL_REVIEW.md`、`KNOWN_BUGS.md`、`REFACTOR_REPORT.md`、`STATE.json`，
 外加 `baseline/`（冻结的原始证据）、`analysis/`（AST 分析原始输出）、`tools/`（可重跑脚本）。

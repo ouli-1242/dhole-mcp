@@ -128,7 +128,7 @@
 | 对象 | 结果 | 证据 |
 | --- | --- | --- |
 | `tools/list` 逐字节 | **键排序后逐字节相同**（11875 == 11875） | **[实测-我]** 重构前后各跑一次 `mcp_snapshot.py` |
-| 工具数 / 名字 / 顺序 / required / annotations | 相同 | 同上（见 `STAGE_2_REVIEW.md` R-5） |
+| 工具数 / 名字 / 顺序 / required / annotations | 相同 | 同上（见 `STAGE_X_REVIEW.md` R-5） |
 | `tools/call` 错误面计数 | 相同（34 / 16 / 18 / 0 超时） | 同上 |
 | `instructions` 文本 | 未改动（1399 字符，前后一致） | **[实测-我]** `tool_payload_measure.py` 与协议层互证 |
 | 协议版本协商 | 未改动（`2025-06-18` 原样回显） | `baseline/mcp_initialize.json` |
