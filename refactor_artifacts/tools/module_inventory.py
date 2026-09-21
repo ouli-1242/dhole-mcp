@@ -58,7 +58,6 @@ def main() -> None:
     globals_mutable: dict[str, list[str]] = {}
     env_by_module: dict[str, set[str]] = {}
     sizes: dict[str, tuple[int, int, int]] = {}
-    getattr_imports: dict[str, set[str]] = {}
 
     for p in paths:
         mod = module_name(p)

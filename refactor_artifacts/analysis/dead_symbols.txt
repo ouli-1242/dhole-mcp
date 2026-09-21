@@ -1,0 +1,3 @@
+# private top-level/class-level symbols: 357
+# symbols with NO reference in src (count<=1) and NO reference in tests: 1
+updater.py:731	_reranker_model_present	src_refs=1	test_refs=0
