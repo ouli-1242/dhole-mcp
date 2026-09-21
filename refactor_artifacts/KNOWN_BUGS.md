@@ -22,17 +22,40 @@
 
 ## KB-2 `DHOLE_DEFAULT_ENGINES` 不改变 `engines_consensus` 的分母
 
-- **来源**：子代理审查，**2026-09-22 已独立实测复核（D-02 已证实）**。
-- **现象**：用户用环境变量收敛引擎池后，共识度（`engines_consensus` 形如 "2 of 4"）的分母
-  仍是内置的家族全集，于是自建小池会被 agent 读成"池降级"（`consensus_basis` 可能落到 `partial_pool`）。
-- **复核证据**（`analysis/verify_d_findings.txt`）：`DHOLE_DEFAULT_ENGINES=bing` 时
-  `_configured_default_backends()` 确实收敛为 `['bing']`（执行池生效），
-  但 `_family_universe(None, [])` 在设 env 前后**都是** `(4, 0, 'single_family')` —— 分母 4 纹丝不动。
-  根因：`_family_universe` 读的是 `search_engines.DEFAULT_ENGINES`（固定 tuple），
-  不是 env 覆盖后的池；它只对**工具参数** `engines=[...]` 敏感。
-- **影响**：外部可观察 —— 影响 agent 对证据强度的判断（README 明确要求读 `consensus_basis`）。
-- **建议**：让分母跟随实际启用的池。
-- **本轮处置**：仅记录。**未修**。
+> **2026-09-22 二次复核：本条**不是缺陷**，是设计取舍。原判据已被自己的实测推翻，保留原文并附更正。**
+> 触发更正的测量：构造各场景的 `EngineReport` 直接调 `_family_universe()`（命令见文末）。
+
+- **来源**：子代理审查，**2026-09-22 已独立实测复核（D-02 的"机制"部分已证实）**。
+- **已证实的事实**：`DHOLE_DEFAULT_ENGINES=bing` 时 `_configured_default_backends()` 确实收敛为 `['bing']`
+  （执行池生效），但 `_family_universe(None, [])` 在设 env 前后**都是** `(4, 0, 'single_family')` ——
+  分母 4 纹丝不动。根因：`_family_universe` 读的是 `search_engines.DEFAULT_ENGINES`（固定 tuple），
+  只对**工具参数** `engines=[...]` 敏感，对 env 不敏感。
+- **❌ 被推翻的判断（原文保留以示更正）**：原文写"自建小池会被 agent 读成'池降级'
+  （`consensus_basis` 可能落到 `partial_pool`）"。**实测不成立**：
+  - 只看 bing → `basis=single_family`（不是 `partial_pool`）。**安全信号本来就生效**：
+    agent 已被明确告知"只有一家在说话"。
+  - `partial_pool` 需要真有家族被 preempted；`degraded_pool` 需要真有引擎被 blocked。两者的判据
+    都取自 `reports`（实际轮次），**与分母用哪个池无关**。
+  - 分母是**按家族**算的（6 引擎 → 4 家族：bing←bing/duckduckgo/yahoo），不是按引擎，这个折叠是有意的。
+- **❌ 建议也被推翻**：原文建议"让分母跟随实际启用的池"。按此实现，1 引擎的池会输出
+  **"1 of 1"** —— 而 `_family_universe` 的 docstring 明确说这正是它要避免的字符串
+  （"1 of 1 与全员一致在字符串上完全不可区分"）。**按建议修会比现状更糟。**
+  docstring 里"分母 = 本轮**本该**表态的家族数"这个定义是自洽的；env 收窄池属于
+  "用户主动缩小了本该表态的范围"，而这件事由 `consensus_basis=single_family` 如实标出。
+- **结论**：**不是缺陷。**若仍想动，正确方向是**在文档里说明分母的含义**
+  （"默认池的索引家族数"），而不是改分母。属于文档改动 = 改 `tools/list`，仍需产品决策。
+- **实测命令**（可复现；用真实 `EngineReport` 构造各场景）：
+  ```bash
+  PYTHONPATH=src python -c "
+  from dhole_mcp.search import _family_universe
+  from dhole_mcp.search_engines import EngineReport, DEFAULT_ENGINES
+  for label, r in {
+    '默认 6 引擎全答': [EngineReport(name=e, ok=True) for e in DEFAULT_ENGINES],
+    '只看 bing':      [EngineReport(name='bing', ok=True)],
+  }.items(): print(label, _family_universe(None, r))
+  "
+  ```
+- **本轮处置**：更正记录，**未改代码**。
 
 ## KB-3 配置了代理时会向 `example.com` 发真实探测请求（fire-and-forget）
 

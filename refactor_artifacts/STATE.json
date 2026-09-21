@@ -84,11 +84,11 @@
   ],
   "next_step": "两项追加工作均已完成并提交。KB-6 分支未合并、未推送，等用户决定合并方式。",
   "unresolved": [
+    "KB-2 已从缺陷降级为设计取舍（原判断被实测推翻）；仍未决的是 KB-1、KB-7 要不要修，以及是否需要为它们发一次 minor 版本（版本方案为 MAJOR.MINOR，无补丁位）",
     "KB-6 分支上 3 条 POSIX 真实 mode 断言尚未在任何 POSIX 环境执行过（本机无 POSIX、无 CI），待 Linux/macOS 首次运行",
     "KB-11：fixture 的 sha256 按 CRLF 记录、git blob 已是 LF，任何全新克隆上 test_every_fixture_is_content_addressed 必然失败；连带限定所有基线数字的适用范围",
     "README 中未独立核对的承诺：robots 正面行为、SSRF 残余面、PDF 口令三态细节、sogou_weixin 排序与早退、CLI 各命令逐字段输出、'4 个索引家族'计数",
-    "测试盲区（非本轮引入）：429、gzip/brotli/zstd、shift_jis、按异常类名的超时/连接错误、<base href>、爬虫端到端、MCP 层并发/取消",
-    "已知缺陷 9 条（KB-1..KB-9）中，KB-6 已授权动手修复；其余八条仍只记录未修"
+    "测试盲区（非本轮引入）：429、gzip/brotli/zstd、shift_jis、按异常类名的超时/连接错误、<base href>、爬虫端到端、MCP 层并发/取消"
   ],
   "stop_conditions_triggered": [],
   "notes": [
@@ -122,6 +122,12 @@
       "result": "ruff All checks passed!；pytest 1142 passed, 5 skipped, 1 failed",
       "the_one_failure": "test_every_fixture_is_content_addressed —— 与合并无关，是 KB-11 行尾问题；干净 worktree 上同样失败已验证",
       "caveat": "所有基线数字（1128 passed 等）有效性绑定在本机主工作树；见 KB-11"
+    },
+    "KB-2-reclass": {
+      "what": "KB-2 二次复核：实测推翻了它自己的影响判断与建议",
+      "measured": "小池(bing-only) -> basis=single_family（不是 partial_pool）；partial_pool 需真有家族被 preempted；6 引擎映射到 4 个索引家族(bing/brave/yandex/sogou_weixin)",
+      "conclusion": "不是缺陷，是设计取舍。按原建议修会产出 '1 of 1'，而那正是 _family_universe docstring 明确要避免的字符串。已改写 KNOWN_BUGS.md KB-2 与 DOC_CODE_DRIFT.md D-02",
+      "code_changed": false
     }
   }
 }
