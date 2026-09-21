@@ -296,6 +296,20 @@ class TextResult:
     body: str = ""
 
 
+# ─── 结果可用性谓词 ──────────────────────────────────────────────────────────
+def _is_usable(row: Any) -> bool:
+    """一条结果是否真的能用：href 与 title 都得有。
+
+    观测计数与聚合侧的取舍必须用同一个谓词，否则"引擎产出"和"为什么结果为空"
+    会各说各话 —— 一个说引擎产出了 8 条、另一个说一条都没收下。
+    """
+    return bool(getattr(row, "href", None)) and bool(getattr(row, "title", None))
+
+
+def _usable_count(rows: Any) -> int:
+    return sum(1 for r in rows if _is_usable(r))
+
+
 # ─── base search engine (text-only, XPath-driven) ────────────────────────────
 class BaseSearchEngine:
     """Abstract base: build_payload -> fetch -> extract via XPath -> post-process."""
@@ -312,6 +326,17 @@ class BaseSearchEngine:
     items_xpath: ClassVar[str]
     elements_xpath: ClassVar[Mapping[str, str]]
 
+    # ── 引擎产出计数（静默降级的唯一观测面）────────────────────────────
+    # 免密搜索顶部那个失败模式是"引擎还在跑，但解析不出东西"，而它在响应里
+    # 完全不可见（empty 既不进 engines_used 也不进 engine_blocked）。下面三个
+    # 整数就是用来把它逼出来的。
+    # 刻意用类属性做默认值而不是在 __init__ 里赋值：Duckduckgo.__init__ 覆盖了
+    # 父类且不调 super()，写在 __init__ 里的话最常用的一些引擎会没有这些字段。
+    # -1 / None = 没走到那一步（未解析、被跳过、或该引擎根本不吃 HTML）。
+    last_extract: tuple[int, int] = (-1, -1)
+    kept_after_filter: int = -1
+    http_status: int | None = None
+
     def __init__(self, proxy: str | None = None, timeout: int | None = None, *, verify: bool = True) -> None:
         self.http_client = _PrimpClient(proxy=proxy, timeout=timeout, verify=verify)
         self.http_client.client.headers_update(self.headers_update)
@@ -327,6 +352,7 @@ class BaseSearchEngine:
 
     def request(self, *args: Any, **kwargs: Any) -> str | None:
         resp = self.http_client.request(*args, **kwargs)
+        self.http_status = resp.status_code
         if resp.status_code in (403, 503):
             # Bot challenge / access denied -> circuit-open this backend rather
             # than treat it as a normal empty result (which would retry every call
@@ -348,13 +374,17 @@ class BaseSearchEngine:
     def extract_results(self, html_text: str) -> list[Any]:
         html_text = self.pre_process_html(html_text)
         tree = self.extract_tree(html_text)
+        nodes = tree.xpath(self.items_xpath)
         results = []
-        for item in tree.xpath(self.items_xpath):
+        for item in nodes:
             result = self.result_type()
             for key, value in self.elements_xpath.items():
                 data = " ".join("".join(item.xpath(value)).split())
                 result.__setattr__(key, data)
             results.append(result)
+        # item_nodes>0 而 usable==0 = 容器还在、子元素 xpath 已经错位 —— 这就是
+        # 解析器漂移，且它不需要任何历史基线就能判定。
+        self.last_extract = (len(nodes), _usable_count(results))
         return results
 
     def post_extract_results(self, results: list[Any]) -> list[Any]:
@@ -370,7 +400,12 @@ class BaseSearchEngine:
             html_text = self.request(self.search_method, self.search_url, data=payload)
         if not html_text:
             return None
-        return self.post_extract_results(self.extract_results(html_text))
+        kept = self.post_extract_results(self.extract_results(html_text)) or []
+        # 记的是条数而非可用数：usable 已由 last_extract 承载。两者分开才能分出
+        # "解析器坏了"（usable==0）与"过滤器把结果吃光了"（bing 的 ck/a、ddg 的
+        # y.js）—— 前者要修 xpath，后者要修解码，是两类不同的故障。
+        self.kept_after_filter = len(kept)
+        return kept
 
 
 # ─── DuckDuckGo (httpx transport) ────────────────────────────────────────────
@@ -405,6 +440,7 @@ class Duckduckgo(BaseSearchEngine):
         method = args[0] if args else kwargs.pop("method", "GET")
         url = args[1] if len(args) > 1 else kwargs.pop("url", "")
         resp = self.http_client.request(method=method, url=url, **kwargs)  # type: ignore[attr-defined]
+        self.http_status = resp.status_code
         if resp.status_code in (403, 503):
             raise MetaBlockedException(f"HTTP {resp.status_code}")
         return resp.text if resp.status_code == 200 else None
@@ -1027,6 +1063,152 @@ def _record_success(name: str) -> None:
         _save_circuit_state()
 
 
+# ─── 引擎产出统计（静默降级唯一能看见的地方）────────────────────────────────
+# 熔断器记的是"引擎拒不拒绝我们"，它记不到另一种失败：引擎 200 好好答了，我们的
+# xpath 却解析出 0 条。那种失败在响应里完全隐形（empty 既不进 engines_used 也不
+# 进 engine_blocked），表现是"结果变少"而不是报错 —— 免密搜索最贵的那个失败模式。
+# 这里记的就是那一格。开销：每引擎每轮一次 dict 更新 + 至多 60s 一次的原子落盘。
+# 判据只用当轮的结构量，不依赖历史基线：新装机器第一次搜索就能判"容器在、条目空"。
+_YIELD_EWMA = 0.3            # 新样本权重
+_MIN_SAMPLES_FOR_BASELINE = 8  # 少于此数不下"这引擎平时有多少产出"的结论
+_DRIFT_STREAK = 2            # 连续几轮 item_nodes>0 而 usable==0 才算确认漂移
+_ENGINE_YIELD: dict[str, dict] = {}
+_ENGINE_STATS_SAVE_INTERVAL = 60.0
+# verdict 的有效期：超过这个时间没再跑过搜索，上一轮的结论就不该再被当作现状。
+_ENGINE_YIELD_TTL = 3600.0
+_engine_stats_last_save = 0.0
+
+
+def _engine_stats_file() -> str:
+    """惰性取路径（不是 import 期常量）：让测试能把状态文件指到临时目录。"""
+    return str(paths.file("engine_stats.json"))
+
+
+def _load_engine_stats() -> None:
+    """进程启动时读回历史产出统计。尽力而为，永不抛。"""
+    global _ENGINE_YIELD
+    try:
+        path = _engine_stats_file()
+        if os.path.exists(path):
+            import json
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                _ENGINE_YIELD = {k: v for k, v in data.items() if isinstance(v, dict)}
+    except Exception:
+        _ENGINE_YIELD = {}
+
+
+def _save_engine_stats() -> None:
+    """原子落盘，防抖到至多 60s 一次。尽力而为，永不抛。"""
+    global _engine_stats_last_save
+    now = time()
+    if now - _engine_stats_last_save < _ENGINE_STATS_SAVE_INTERVAL:
+        return
+    _engine_stats_last_save = now
+    try:
+        import json
+        path = _engine_stats_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(_ENGINE_YIELD, f)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def _classify_yield(stats: dict, status: str, nodes: int, usable: int) -> str:
+    """这一轮该引擎的健康判定。关键是区分"上游真的没结果"和"我们的解析器坏了"。
+
+    只有 item_nodes==0 且 HTTP 200 那一格是真正含糊的（可能是查询本身在该索引里
+    就没东西），它需要基线才可能收窄 —— 样本不够时如实报 unknown，不猜。
+    """
+    if status == "preempted":
+        return "not_asked"          # 够数了被取消，本轮无观测
+    if status in ("blocked", "circuit_open"):
+        return "blocked"
+    if status == "timeout":
+        return "timeout"
+    if status.startswith(("error", "init_error", "no_key")):
+        return "unreachable"
+    if nodes < 0:
+        return "not_instrumented"   # JSON API 引擎，或这轮没走到解析
+    if nodes > 0 and usable == 0:
+        return "parser_drift" if stats.get("drift", 0) >= _DRIFT_STREAK else "parser_suspect"
+    if nodes == 0 and usable == 0:
+        if stats.get("n", 0) >= _MIN_SAMPLES_FOR_BASELINE and stats.get("mean", 0) >= 1.0:
+            return "upstream_empty"  # 平时有产出、这轮容器都没了
+        return "unknown_empty"
+    return "healthy"
+
+
+def _record_engine_outcomes(status: dict[str, str],
+                            instances: dict[str, "BaseSearchEngine"]) -> None:
+    """每轮 metasearch 结束调用一次。永不抛 —— 观测面不能把搜索弄坏。"""
+    try:
+        now = time()
+        for name, st in status.items():
+            eng = instances.get(name)
+            nodes, usable = getattr(eng, "last_extract", (-1, -1)) if eng else (-1, -1)
+            kept = getattr(eng, "kept_after_filter", -1) if eng else -1
+            st_dict = _ENGINE_YIELD.setdefault(name, {})
+            n = int(st_dict.get("n", 0)) + 1
+            observed = st != "preempted" and nodes >= 0
+            mean = float(st_dict.get("mean", 0.0))
+            if observed:
+                mean = float(usable) if n <= 1 else mean * (1 - _YIELD_EWMA) + usable * _YIELD_EWMA
+            drift = int(st_dict.get("drift", 0))
+            if nodes > 0 and usable == 0:
+                drift += 1
+            elif nodes >= 0:
+                drift = 0
+            zero = int(st_dict.get("zero", 0))
+            if observed and usable == 0 and nodes == 0:
+                zero += 1
+            elif usable > 0:
+                zero = 0
+            _ENGINE_YIELD[name] = {
+                "n": n,
+                "mean": round(mean, 2),
+                "last": int(usable),
+                "last_nodes": int(nodes),
+                "last_kept": int(kept),
+                "zero": int(zero),
+                "drift": int(drift),
+                "status": st,
+                "http": getattr(eng, "http_status", None) if eng else None,
+                "ts": now,
+            }
+        _save_engine_stats()
+    except Exception:
+        logger.debug("engine yield stats recording failed", exc_info=True)
+
+
+def engine_health() -> dict[str, dict]:
+    """每引擎产出的只读快照（含 verdict），给诊断命令用。
+
+    verdict 只描述**最近一轮**：超过 _ENGINE_YIELD_TTL 没再出现的引擎标成
+    "stale"，否则上一次运行的结论会被当成当前状态 —— 那正是这次要修的毛病。
+    """
+    now = time()
+    out: dict[str, dict] = {}
+    for name, stats in _ENGINE_YIELD.items():
+        row = dict(stats)
+        status = str(row.get("status", ""))
+        nodes = int(row.get("last_nodes", -1))
+        usable = int(row.get("last", -1))
+        if now - float(row.get("ts", 0.0)) > _ENGINE_YIELD_TTL:
+            row["verdict"] = "stale"
+        else:
+            row["verdict"] = _classify_yield(row, status, nodes, usable)
+        out[name] = row
+    return out
+
+
+_load_engine_stats()
+
+
 def _configured_default_backends() -> list[str]:
     """DHOLE_DEFAULT_ENGINES 覆盖默认池（逗号分隔）。国内用户可收敛到直连可达的
     引擎，被墙的三个不再每轮陪跑。未知名忽略并告警；全无效则回落上游默认。"""
@@ -1268,7 +1450,7 @@ async def metasearch(
             added = 0
             touched = False  # returned a valid result that matched an existing key (dupe)
             for r in res:
-                if not getattr(r, "href", None) or not getattr(r, "title", None):
+                if not _is_usable(r):
                     continue
                 key = _normalize_url(r.href)
                 if not key:
@@ -1327,6 +1509,11 @@ async def metasearch(
             await pt
         except BaseException:
             pass
+
+    # 产出统计：一处覆盖全部终态 token（ok/empty/blocked/circuit_open/timeout/
+    # error:*/init_error:*/no_key:*/preempted），含那些根本没拿到 instance 就被跳过
+    # 的引擎。这是 empty（引擎答了、解析出 0 条）唯一的可见机会。
+    _record_engine_outcomes(status, instances)
 
     # freeze backends sets to sorted lists for the caller
     for e in order:

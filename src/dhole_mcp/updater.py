@@ -718,6 +718,82 @@ def _reranker_model_present() -> bool:
         return False
 
 
+def _engine_yield_row() -> tuple[str, str, bool] | None:
+    """每个引擎最近一轮的产出 —— 静默降级唯一能被看见的地方。
+
+    刻意不 import 搜索层：诊断命令要在精简安装 / 半坏安装上也能跑（那时才最需要
+    看它），而 search_metasearch 会拉 primp/lxml/httpx/fake_useragent。这里只做
+    文件系统读，判据与 _classify_yield 保持同构。
+    """
+    try:
+        import json
+
+        from dhole_mcp import paths
+        path = paths.file("engine_stats.json")
+        if not os.path.exists(path):
+            return ("engine yield", "no data yet (run a search first)", True)
+        with open(path, "r", encoding="utf-8") as f:
+            stats = json.load(f)
+        if not isinstance(stats, dict) or not stats:
+            return ("engine yield", "no data yet (run a search first)", True)
+        import time as _t
+        now = _t.time()
+
+        def _num(key: str, default: float) -> float:
+            # 不能用 `st.get(k) or default`：0 在这里是**最有意义**的值（0 条可用
+            # 产出正是漂移），`or` 会把它悄悄变成"没有观测"。
+            try:
+                return float(st.get(key, default))  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                return default
+
+        parts: list[str] = []
+        suspect = False
+        for name in sorted(stats):
+            st = stats[name]
+            if not isinstance(st, dict):
+                continue
+            status = str(st.get("status", ""))
+            nodes = int(_num("last_nodes", -1))
+            usable = int(_num("last", -1))
+            mean = _num("mean", 0.0)
+            drift = int(_num("drift", 0))
+            if now - _num("ts", 0.0) > 3600:
+                parts.append(f"{name}: no recent run")
+                continue
+            if status in ("blocked", "circuit_open"):
+                parts.append(f"{name}: blocked/cooled")
+            elif status == "timeout":
+                parts.append(f"{name}: timeout")
+            elif status.startswith(("error", "init_error", "no_key")):
+                parts.append(f"{name}: unreachable")
+            elif status == "preempted":
+                parts.append(f"{name}: not asked")
+            elif nodes < 0:
+                parts.append(f"{name}: {usable if usable >= 0 else 0} results")
+            elif nodes > 0 and usable == 0:
+                suspect = True
+                parts.append(f"{name}: PARSER BROKEN ({nodes} item nodes, 0 usable)"
+                             + (" [confirmed]" if drift >= 2 else " [suspect]"))
+            elif nodes == 0 and usable == 0:
+                parts.append(f"{name}: 0 nodes (usually {mean:.1f}/run)" if mean >= 1
+                             else f"{name}: 0 this query")
+            else:
+                parts.append(f"{name}: {usable} usable ({mean:.1f}/run avg)")
+        if not parts:
+            return None
+        return ("engine yield", " | ".join(parts), not suspect)
+    except Exception:
+        return None
+
+
+def _append_engine_yield(caps: list[tuple[str, str, bool]]) -> None:
+    """capabilities() 有三条提前返回的分支，产出行每条都得看到。"""
+    row = _engine_yield_row()
+    if row:
+        caps.append(row)
+
+
 def capabilities() -> list[tuple[str, str, bool]]:
     """[(label, state, ok)] for the optional capabilities that degrade silently."""
     caps: list[tuple[str, str, bool]] = []
@@ -739,6 +815,7 @@ def capabilities() -> list[tuple[str, str, bool]]:
 
     if not (_has_module("onnxruntime") and _has_module("tokenizers")):
         caps.append(("neural rerank", "missing (pip install 'dhole-mcp[all]')", False))
+        _append_engine_yield(caps)
         return caps
     try:
         from dhole_mcp.reranker import active_model, active_model_dir
@@ -748,6 +825,7 @@ def capabilities() -> list[tuple[str, str, bool]]:
                  and (d / "tokenizer.json").exists())
     except Exception:
         caps.append(("neural rerank", "config unreadable - check ~/.dhole/config/reranker.json", False))
+        _append_engine_yield(caps)
         return caps
     if ready:
         caps.append((
@@ -771,6 +849,7 @@ def capabilities() -> list[tuple[str, str, bool]]:
         else "bing,duckduckgo,brave,yahoo,yandex (default; ddg/brave/yahoo need VPN in CN)",
         bool(pool),
     ))
+    _append_engine_yield(caps)
     return caps
 
 

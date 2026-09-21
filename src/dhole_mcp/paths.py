@@ -10,6 +10,7 @@ single source of truth for those paths:
       cache.db                 content cache (SQLite; + -wal/-shm sidecars)
       models/                  downloaded model files (neural reranker)
       circuit_breaker.json     engine cooldown state
+      engine_stats.json        per-engine parse yield (who returned 0 usable results)
       search_feedback.json     opt-in implicit domain preference
       usage.jsonl              opt-in local call log
       last_version             last version offered by the updater

@@ -174,6 +174,7 @@ dhole model use bge-zh         # 切回默认
 | `~/.dhole/models/<model>/` | 神经重排序模型（3 个文件 + 一份 `model.sha256`，来自 HuggingFace 固定 revision）。默认 `bge-zh`（中英双语 int8，~279MB），可换 `zh-full`（~450MB）/ `ms-marco`（英文，~91MB） | 首次神经搜索时下载 |
 | `~/.dhole/config/reranker.json` | 重排模型选择（`{"model": "..."}`），`dhole model use` 也写这里 | 切换模型时 |
 | `~/.dhole/circuit_breaker.json` | 引擎熔断/冷却状态 | 引擎被限速/被墙时 |
+| `~/.dhole/engine_stats.json` | 每个引擎最近一轮的解析产出（容器条数 / 可用条数 / 均值），用来把"引擎答了但解析出 0 条"这种静默降级变可见；`dhole -v` 读它 | 每次真实搜索（至多 60s 写一次） |
 | `~/.dhole/search_feedback.json` | 隐式域名偏好 | 仅 `DHOLE_SEARCH_FEEDBACK=1` |
 | `~/.dhole/usage.jsonl` | 本地调用日志（工具名/结果/耗时/脱敏错误，无参数值） | 仅 `DHOLE_USAGE_LOG` 开启 |
 | `~/.dhole/repair.py` | 自愈脚本（跟随 `DHOLE_UPDATE_PACKAGE` / `DHOLE_UPDATE_INDEX_URL`） | 首次自愈时写入 |
