@@ -3217,9 +3217,9 @@ class MasterFetchServer:
     ) -> SearchResponseModel:
         """Local keyless web search (no API key, no account, no third-party service).
 
-        Runs 6 keyless backends in parallel (duckduckgo, brave, yahoo,
-        yandex, wikipedia, grokipedia; default: duckduckgo, brave, yahoo,
-        yandex - engines= to choose), merges + dedups + ranks by neural
+        Runs keyless backends in parallel (8 registered; default pool:
+        bing, duckduckgo, brave, yahoo, yandex - engines= to choose, opt-in:
+        sogou_weixin, wikipedia, grokipedia), merges + dedups + ranks by neural
         relevance + cross-backend
         consensus (a URL returned by several independent indexes is an authority
         signal). Returns URLs + ranking, not page content - smart_fetch the

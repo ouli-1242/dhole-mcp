@@ -7,11 +7,14 @@ thin dhole-side adapter: maps dhole's smart_search params (engines, freshness,
 site, region, page) onto the metasearch, maps results back to RawResult with
 cross-backend consensus, and builds the per-engine reports.
 
-Backends (all keyless): duckduckgo, brave, grokipedia,
-wikipedia, yahoo, yandex. Bing is disabled (DDG + Yahoo already serve
-its index). They run in PARALLEL; a backend that CAPTCHAs / rate-limits / has
-no topic-match just yields nothing and the others carry. Search is 100% HTTP
-(no browser) - the single Patchright browser stays for smart_fetch only.
+Backends (all keyless, 8 in the registry): bing, duckduckgo, brave, yahoo,
+yandex, sogou_weixin, wikipedia, grokipedia. The default pool is DEFAULT_ENGINES
+below (5; bing first because it is reachable from CN without a VPN — Bing was
+re-enabled in 14.x, this paragraph used to claim it was disabled). wikipedia and
+grokipedia are JSON APIs and opt-in only. Engines run in PARALLEL; one that
+CAPTCHAs / rate-limits / has no topic-match just yields nothing and the others
+carry. Search is 100% HTTP (no browser) - the single Patchright browser stays
+for smart_fetch only.
 
 DHOLE_SEARCH_PROXY (http/https/socks5) is the power-user rotating-proxy escape
 hatch for per-IP throttling - the one thing no scraper can escape from one IP.
@@ -43,9 +46,13 @@ def _get_metasearch():
     return _metasearch
 
 
-# Public default engine pool (the full keyless backend set; order = rough
-# preference). `engines=None` in smart_search uses this via the metasearch.
+# Public default engine pool (order = rough preference). `engines=None` in
+# smart_search uses this via the metasearch.
 # bing 排首位：国内网无需 VPN 即可用（cn.bing.com），其余受网络环境影响。
+# NOTE 双份定义：search_metasearch._DEFAULT_BACKENDS 是同一份列表的 backend 名
+# 版本。合成一处需要 search_engines 在模块顶层 import metasearch 链（primp/lxml），
+# 而这里的惰性导入正是为了避免拖重依赖 —— 所以留两份 + 由
+# tests/test_engine_registry.py::test_default_pool_definitions_agree 钉住一致性。
 DEFAULT_ENGINES = ("bing", "duckduckgo", "brave", "yahoo", "yandex")
 
 # Index family per backend (by the underlying index/provider, for consensus).

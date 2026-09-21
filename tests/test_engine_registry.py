@@ -395,3 +395,44 @@ class TestConnectionFailureCooldown:
             assert status["bing"].startswith("error:")
 
         assert calls["constructed"] == 5, "成功应清零失败计数，2 次失败不足以冷却"
+
+
+def test_default_pool_definitions_agree():
+    """默认池在两个模块里各有一份，必须同步。
+
+    search_engines.DEFAULT_ENGINES 是 dhole 侧名字，search_metasearch._DEFAULT_BACKENDS
+    是 backend 侧名字。合成一处需要 search_engines 顶层 import metasearch 链
+    （primp/lxml），会破坏它刻意保留的惰性导入 —— 所以留两份、由这条测试钉住。
+    历史上这里漂移过一次：test_default_engines_has_four 是个过时的快照，已删。
+    """
+    from dhole_mcp import search_metasearch as ms
+    from dhole_mcp.search_engines import DEFAULT_ENGINES
+
+    as_backends = [ms._DHOLE_TO_BACKEND.get(n, n) for n in DEFAULT_ENGINES]
+    assert as_backends == list(ms._DEFAULT_BACKENDS), (
+        f"默认池两处定义不一致: {as_backends} vs {list(ms._DEFAULT_BACKENDS)}")
+
+
+def test_every_default_pool_engine_is_registered_and_enabled():
+    """默认池里不许出现未注册或被禁用的引擎 —— core 集合那个 bug 的同类。"""
+    from dhole_mcp import search_metasearch as ms
+    from dhole_mcp.search_engines import DEFAULT_ENGINES
+
+    for name in DEFAULT_ENGINES:
+        backend = ms._DHOLE_TO_BACKEND.get(name, name)
+        cls = ms._TEXT_ENGINES.get(backend)
+        assert cls is not None, f"默认池里的 {name} 没有对应 backend ({backend})"
+        assert not cls.disabled, f"默认池包含已禁用引擎 {name}"
+
+
+def test_index_family_map_covers_the_default_pool():
+    """_INDEX_FAMILY 漏一个名字，那个引擎就会被当成独立家族、把共识分母虚报。"""
+    from dhole_mcp import search_metasearch as ms
+    from dhole_mcp.search_engines import DEFAULT_ENGINES, _INDEX_FAMILY
+
+    missing = [n for n in DEFAULT_ENGINES
+               if ms._DHOLE_TO_BACKEND.get(n, n) not in _INDEX_FAMILY]
+    assert not missing, f"这些默认引擎不在 _INDEX_FAMILY 里: {missing}"
+    # 默认池确实只有 3 个家族（"3 of 5" 这种字符串不可能出现）
+    families = {_INDEX_FAMILY[ms._DHOLE_TO_BACKEND.get(n, n)] for n in DEFAULT_ENGINES}
+    assert families == {"bing", "brave", "yandex"}, families
