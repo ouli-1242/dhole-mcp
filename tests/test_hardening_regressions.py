@@ -725,3 +725,54 @@ class TestServerCacheTtlFlagIsLive:
         from dhole_mcp import server as server_mod
         srv = server_mod.MasterFetchServer()
         assert "read_ttl" not in self._read_ttl(monkeypatch, srv, cache_ttl=0)
+
+
+class TestPdfPasswordReachesTheExtractorAndTheCache:
+    """口令链上最后一环：选项 → _PDF_PASSWORD → extract_pdf(password=…) → 写缓存用带口令的指纹。
+
+    这条补上之后，"匿名请求能否复读口径解出的 PDF 正文"就只剩 pdfplumber 自身的解密
+    行为没有覆盖（那是库的契约，不是本项目的代码）。本机拿不到加密 PDF 样本
+    （pypdf 未安装，无法现场生成），所以用打桩把链路的**接线**验穿。
+    """
+
+    def test_option_flows_to_the_extractor_and_the_cache_key(self, monkeypatch):
+        import asyncio
+
+        from dhole_mcp import pdf_extractor
+        from dhole_mcp import server as sm
+
+        seen: dict = {}
+
+        def fake_extract_pdf(body, extraction_type="markdown", pages=None,
+                             password=None, include_media=False):
+            seen["password"] = password
+            return pdf_extractor.PdfResult(
+                content=["DECRYPTED BODY"], encrypted=True, content_ok=True)
+
+        monkeypatch.setattr(pdf_extractor, "extract_pdf", fake_extract_pdf)
+
+        writes: dict = {}
+
+        async def fake_set_cached(url, extraction_type, content, status, css_selector,
+                                  ttl, **kwargs):
+            writes["ctx"] = kwargs.get("ctx")
+            writes["content"] = content
+
+        monkeypatch.setattr(sm, "set_cached", fake_set_cached)
+
+        srv = sm.MasterFetchServer(cache_ttl=3600)
+        pw_token = sm._PDF_PASSWORD.set("s3cret")
+        ctx_token = sm._CACHE_CTX.set(sm._cache_context({"password": "s3cret"}))
+        try:
+            res = sm._extract_pdf_response(b"%PDF-1.4 fake", "application/pdf", 13,
+                                           "https://x/a.pdf", "markdown", "http", 5.0)
+            assert seen["password"] == "s3cret", "口令没传到 extract_pdf"
+            assert sm._cache_context({"password": "s3cret"}) != ""
+            asyncio.run(srv._finalize_result(res, "https://x/a.pdf", "markdown", None, 3600))
+        finally:
+            sm._PDF_PASSWORD.reset(pw_token)
+            sm._CACHE_CTX.reset(ctx_token)
+
+        assert writes.get("content") == ["DECRYPTED BODY"], "解密正文没进写缓存路径"
+        assert writes.get("ctx") == sm._cache_context({"password": "s3cret"}), \
+            "带口令解出的正文必须以带口令的指纹写入，否则匿名请求可以复读"
