@@ -456,10 +456,22 @@ class TestRerankerDownloadEndpoints:
         """换端点不换内容：revision 固定，任何来源的字节一致。"""
         from dhole_mcp import reranker
 
-        urls = reranker._model_urls("model.onnx")
-        assert len(urls) >= 2
-        assert all(reranker.MODEL_REV in u for u in urls)
-        assert all(u.endswith("/onnx/model.onnx") for u in urls)
+        for name, model in reranker.MODELS.items():
+            urls = reranker._model_urls(model, "model.onnx")
+            assert len(urls) >= 2, name
+            assert all(model.rev in u for u in urls), name
+            assert all(u.endswith("/" + model.relpaths["model.onnx"]) for u in urls), name
+            assert all(f"/{model.repo}/" in u for u in urls), name
+
+    def test_default_bge_zh_is_the_int8_bilingual_model(self):
+        """450MB fp32 太重：默认必须落在小一号的中英双语 int8 上。"""
+        from dhole_mcp import reranker
+
+        default = reranker.MODELS[reranker.DEFAULT_MODEL]
+        assert default.name == "bge-zh"
+        assert default.relpaths["model.onnx"].endswith("int8.onnx")
+        assert default.approx_bytes < 300_000_000
+        assert "zh" in default.label or "bilingual" in default.label
 
     def test_download_model_file_falls_back_to_the_next_endpoint(self, monkeypatch):
         """第一个端点失败必须继续试下一个，而不是直接放弃。"""

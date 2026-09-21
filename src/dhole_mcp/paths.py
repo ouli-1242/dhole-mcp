@@ -123,6 +123,47 @@ def migrate_legacy_cache_dir() -> None:
     if _legacy_migrated:
         return
     _legacy_migrated = True
+    rename_legacy_model_dirs()
+    _migrate_legacy_cache_dir_impl()
+    # Also after the move: a legacy root can itself contain a pre-registry model
+    # dir name (msmarco-minilm-l6-v2), which only exists post-move.
+    rename_legacy_model_dirs()
+
+
+def rename_legacy_model_dirs() -> None:
+    """Rename pre-registry model dirs to their registry names.
+
+    ``models/msmarco-minilm-l6-v2`` -> ``models/ms-marco`` (14.4 registry). Same
+    bytes, new key — renaming avoids re-downloading ~90MB just because the
+    directory was named after the repo instead of the model key.
+
+    A plain rename when the destination is missing; if the destination already
+    exists, only the MISSING children are merged in (never overwritten) and the
+    emptied legacy dir is removed, so no stray duplicate directory survives.
+    """
+    legacy_map = {"msmarco-minilm-l6-v2": "ms-marco"}
+    try:
+        base = models_dir()
+        if not base.is_dir():
+            return
+        for old, new in legacy_map.items():
+            src, dst = base / old, base / new
+            if not src.is_dir():
+                continue
+            if not dst.exists():
+                try:
+                    os.replace(src, dst)
+                    logger.info("renamed model dir %s -> %s", src, dst)
+                    continue
+                except OSError:
+                    pass
+            dst.mkdir(parents=True, exist_ok=True)
+            _merge_tree(src, dst)
+    except Exception:
+        pass
+
+
+def _migrate_legacy_cache_dir_impl() -> None:
     try:
         legacy = Path.home() / _LEGACY_CACHE_DIR_NAME
         if not legacy.is_dir():

@@ -9,6 +9,40 @@
 > 版本号是自己的，与上游版本不可比。`src/dhole_mcp/__init__.py` 中的
 > `__version__` 是版本的唯一权威来源。
 
+## [14.4] - 2026-09-21
+
+### 新增
+- **重排模型可选，默认换成中英双语的 `bge-zh`。** 相关性排序用一个
+  本地 cross-encoder——它回答的是「这条结果跟问题真有关吗」，引擎自己的排名给
+  不了这个信息。注册三个模型：
+  - **`bge-zh`（默认）**：BAAI `bge-reranker-base` 的 int8 版
+    （`Xenova/bge-reranker-base`，中英双语训练，~279MB）——中文 ranking 比多语
+    蒸馏好，体积也比 fp32 小 38%。
+  - **`zh-full`**：`cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`（fp32，~450MB，
+    跨语言）——想要极限多语精度、且带宽够时用。
+  - **`ms-marco`**：英文 MS MARCO MiniLM（~91MB，14.x 默认，保留兼容）。
+  - **选择方式**：`dhole model`（列出 + 标注当前生效）/
+    `dhole model use <name>`，或直接编辑
+    `~/.dhole/config/reranker.json`（`{"model": "..."}`）。CLI 写的是同一个
+    文件，不是第二份事实来源。
+  - **未注册的名字一律拒绝**：`dhole model use` 报错并不写文件；文件里写了
+    未知名则回退默认 + 告警——绝不静默换个模型给结果打分。
+  - **模型各自独立目录**（`~/.dhole/models/<name>/`），切换不覆盖对方；
+    14.x 已下载的英文模型目录会自动改名保留（`msmarco-minilm-l6-v2` →
+    `ms-marco`），**不会因为改名重下 91MB**。
+  - **下载可断点续传**：HF CDN 首字节慢、字节流会卡。现在下载失败保留
+    `.part`，下次从断点续传；连续 90s 无字节则主动中止而不是挂着；文件写完前
+    有 100MB/300MB/50MB 的尺寸下限，截断的下载不会被当真。
+  - `dhole -v` 的 neural rerank 行现在报出**生效的模型名 + 描述**，未下载时
+    报出该模型的体积与配置文件位置。
+- 新增 `tests/test_reranker_models.py`：注册表完整性（每个条目都可下载可加载）、
+  默认值、配置文件选择、未知名拒绝/回退、`model_present()` 跟随生效模型、
+  目录改名不覆盖、配置路径落在同一根下。
+
+### 变更
+- `reranker.MODEL_ID` / `MODEL_REV` / `MODEL_DIR` 保留为兼容别名（指向默认
+  模型）；运行时取模型请用 `active_model()` / `active_model_dir()`。
+
 ## [14.3] - 2026-09-21
 
 ### 修复（信任信号）

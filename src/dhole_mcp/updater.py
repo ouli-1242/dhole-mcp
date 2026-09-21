@@ -701,9 +701,21 @@ def _has_module(name: str) -> bool:
 
 
 def _reranker_model_present() -> bool:
-    """True if the neural reranker model is already cached locally."""
-    d = paths.models_dir() / "msmarco-minilm-l6-v2"
-    return ((d / "model.onnx").exists() and (d / "tokenizer.json").exists())
+    """True if the ACTIVE reranker model is already cached locally.
+
+    Never imports the reranker (which pulls onnxruntime/torch-adjacent deps);
+    the check is pure filesystem on the registry entry. Diagnose via
+    ``dhole -v``.
+    """
+    try:
+        from dhole_mcp.reranker import active_model, active_model_dir
+        model = active_model()
+        d = active_model_dir()
+        return ((d / "model.onnx").exists()
+                and (d / "model.onnx").stat().st_size >= model.min_bytes
+                and (d / "tokenizer.json").exists())
+    except Exception:
+        return False
 
 
 def capabilities() -> list[tuple[str, str, bool]]:
@@ -727,12 +739,28 @@ def capabilities() -> list[tuple[str, str, bool]]:
 
     if not (_has_module("onnxruntime") and _has_module("tokenizers")):
         caps.append(("neural rerank", "missing (pip install 'dhole-mcp[all]')", False))
-    elif _reranker_model_present():
-        caps.append(("neural rerank", "ready", True))
+        return caps
+    try:
+        from dhole_mcp.reranker import active_model, active_model_dir
+        model = active_model()
+        d = active_model_dir()
+        ready = ((d / "model.onnx").exists()
+                 and (d / "tokenizer.json").exists())
+    except Exception:
+        caps.append(("neural rerank", "config unreadable - check ~/.dhole/config/reranker.json", False))
+        return caps
+    if ready:
+        caps.append((
+            "neural rerank",
+            f"ready ({model.name}: {model.label})",
+            True,
+        ))
     else:
         caps.append((
             "neural rerank",
-            "model not downloaded yet (~90MB on first neural search)",
+            f"{model.name} not downloaded yet "
+            f"(~{model.approx_bytes // 1_000_000}MB, resumable; "
+            "~/.dhole/config/reranker.json switches model)",
             False,
         ))
 

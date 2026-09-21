@@ -63,9 +63,11 @@ class TestLegacyMigration:
 
         assert paths.db_path().read_bytes() == b"sqlite"
         assert (fake_home / ".dhole" / "cache.db-wal").read_bytes() == b"wal"
-        assert (paths.models_dir() / "msmarco-minilm-l6-v2"
-                / "model.onnx").read_bytes() == b"onnx"
+        # The pre-registry dir name is renamed to its model key in the same pass
+        # (msmarco-minilm-l6-v2 -> ms-marco), so the weights are not re-fetched.
+        assert (paths.models_dir() / "ms-marco" / "model.onnx").read_bytes() == b"onnx"
         assert not legacy.exists(), "搬空之后旧目录应当消失"
+        assert not (paths.models_dir() / "msmarco-minilm-l6-v2").exists()
 
     def test_never_overwrites_the_destination(self, fake_home):
         legacy = self._make_legacy(fake_home)
@@ -78,7 +80,7 @@ class TestLegacyMigration:
 
     def test_merges_model_children_when_models_dir_exists(self, fake_home):
         self._make_legacy(fake_home)
-        dest_model_dir = paths.models_dir() / "msmarco-minilm-l6-v2"
+        dest_model_dir = paths.models_dir() / "ms-marco"
         dest_model_dir.mkdir(parents=True)
         (dest_model_dir / "tokenizer.json").write_bytes(b"tok")
 

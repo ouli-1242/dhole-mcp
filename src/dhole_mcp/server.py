@@ -3677,9 +3677,51 @@ def _help_epilog() -> str:
         f"  {ui.cyan('dhole --http')}       {ui.dim('serve · streamable HTTP (Open WebUI), use --host/--port')}",
         f"  {ui.cyan('dhole -v')}           {ui.dim('version + capability check')}",
         f"  {ui.cyan('dhole -u')}           {ui.dim('update to the latest version')}",
+        f"  {ui.cyan('dhole model')}        {ui.dim('list reranker models')}",
+        f"  {ui.cyan('dhole model use X')}  {ui.dim('select the reranker model (persisted in ~/.dhole/config/reranker.json)')}",
         "",
         ui.dim("docs:") + "  " + ui.cyan("https://github.com/ouli-1242/dhole-mcp"),
     ])
+
+
+def _cmd_model(argv: list[str]) -> int:
+    """`dhole model [list|use <name>]` — inspect / select the reranker model.
+
+    Writes the same file a user can edit by hand; the CLI is a convenience, not
+    a second source of truth.
+    """
+    from dhole_mcp import cli_ui as ui
+    from dhole_mcp import reranker, reranker_config
+
+    action = argv[0].lower() if argv else "list"
+    if action in ("list", "ls", ""):
+        active = reranker.active_model().name
+        print("  " + ui.dim(f"reranker models (config: {reranker_config._path()})"))
+        for name, model in reranker.MODELS.items():
+            mark = ui.ok("active") if name == active else ""
+            print(f"    {name.ljust(10)} {ui.dim(model.label)} {mark}")
+            print("      " + ui.dim(f"{model.repo} @ {model.rev[:12]}"))
+        print("  " + ui.dim("switch with") + "  " + ui.cmd(f"dhole model use {reranker.DEFAULT_MODEL}"))
+        return 0
+    if action == "use":
+        if len(argv) < 2:
+            print(ui.err("usage: dhole model use <name>"))
+            return 2
+        name = argv[1].strip()
+        try:
+            path = reranker_config.set_selected(name)
+        except ValueError as e:
+            print(ui.err(str(e)))
+            return 2
+        model = reranker.MODELS[name]
+        print(ui.branded(ui.cyan(name), ui.ok("selected")))
+        print("  " + ui.dim(f"{model.label}"))
+        print("  " + ui.dim("written to") + "  " + ui.cmd(str(path)))
+        print("  " + ui.dim("the model downloads on the next neural search "
+                            f"(~{model.approx_bytes // 1_000_000}MB, resumable)"))
+        return 0
+    print(ui.err(f"unknown subcommand: {action} (try: dhole model list|use <name>)"))
+    return 2
 
 
 def main():
@@ -3687,6 +3729,11 @@ def main():
     from dhole_mcp import cli_ui as ui
     from dhole_mcp import updater
     import argparse
+    import sys as _sys
+    # `dhole model ...` is handled before argparse: a bare `model` positional
+    # would collide with the serve-by-default behavior (no args = start server).
+    if len(_sys.argv) > 1 and _sys.argv[1].lower() == "model":
+        raise SystemExit(_cmd_model(_sys.argv[2:]))
     parser = argparse.ArgumentParser(
         prog="dhole",
         description=ui.branded(ui.dim("web research for AI agents · $0 · no keys"), ""),

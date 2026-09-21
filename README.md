@@ -16,7 +16,7 @@ Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器，为 AI 代理
 ## 功能特性
 
 - **智能抓取**：HTTP 优先（~1 秒），被拦截或遇到 JS 空壳时自动升级 Patchright 隐身浏览器并求解 Cloudflare 验证；全部失败时回退 Wayback Machine 快照
-- **网页搜索**：多引擎并行（bing / duckduckgo / brave / yahoo / yandex 等），本地 ONNX 神经重排序，跨引擎共识排名；`fetch_content=true` 直接抓回 top3 全文（神经重排序属 `[all]`：缺依赖或模型未下载时自动退回共识排序，不报错；`dhole -v` 会告诉你现在是哪种）
+- **网页搜索**：多引擎并行（bing / duckduckgo / brave / yahoo / yandex 等），本地 ONNX 神经重排序，跨引擎共识排名；`fetch_content=true` 直接抓回 top3 全文。重排模型默认跨语言（含中文），可用 `dhole model use` 或 `~/.dhole/config/reranker.json` 换成英文优先的旧模型；缺依赖或模型没下载时自动退回共识排序，不报错——`dhole -v` 会告诉你现在是哪种
 - **整站爬取**：同域最佳优先遍历，内容自适应提取，sitemap 模式，页数 / 深度 / token 预算控制
 - **PDF + OCR**：结构化 Markdown 输出，扫描件与 CID 损坏自动 OCR
 - **结构化提取**：CSS 选择器 / JSON-LD / 自动模式 schema，支持多 URL 批量并行
@@ -114,6 +114,7 @@ dhole -u    # 自更新（本 fork 默认关闭）
 | `DHOLE_USAGE_LOG` | 设 `1`（或一个路径）写本地调用日志（JSONL）：工具名、成功与否、耗时、脱敏后的错误。**只记这些，不记参数值**，也不联网上传。用来回答「我的客户端到底有没有调用 dhole」 |
 | `DHOLE_NO_AUTO_REPAIR` | 设 `1` 后，`dhole` 入口遇到 ImportError 不再自动 `pip install --force-reinstall`（只打印修复命令）。默认开启自动修复 |
 | `DHOLE_HF_ENDPOINT`（或 `HF_ENDPOINT`） | 神经重排模型的下载源。默认先试 `huggingface.co`、失败自动回退 `hf-mirror.com`（revision 固定，字节一致）；设了就只用这一个 |
+| `DHOLE_DEFAULT_ENGINES` 之外 | 重排模型选择见下节（配置文件，非环境变量） |
 
 免密引擎连续 3 次连接失败（DNS/拒连/超时，通常是被墙）会自动冷却 10 分钟并持久化，期间不再参与搜索；任何一次成功即清零。被反爬封（403/503）的冷却仍是 60 秒。 |
 
@@ -130,6 +131,33 @@ dhole -u    # 自更新（本 fork 默认关闭）
 - 单次 HTTP 超时取 `max(DHOLE_SEARCH_DEADLINE, 20)`：默认（deadline 16 秒）下仍是 20 秒 —— SERP 渲染要时间，且配额在请求发出那一刻就已花掉；但你调高 deadline 它会跟着涨
 - 失败响应体写日志前会先脱敏。注意 `security.redact_api_key()` 的正则只认 `sk-`/`pk-`/`api_key-` 前缀和带凭据的代理 URL，**盖不住 Bright Data 自己的 key 形状**，所以额外拿已知 key 做了定向替换
 
+### 重排模型选择（默认跨语言，含中文）
+
+搜索结果的相关性排序由一个本地 cross-encoder 负责——它回答的是「这条结果跟你的问题真有关吗」，这是各个引擎自己的排名给不了的信息。模型不进 wheel，首次神经搜索时下载到 `~/.dhole/models/<名字>/`。
+
+**默认用 `bge-zh`**（BAAI 双语重排器 `bge-reranker-base` 的 int8 版，`Xenova/bge-reranker-base`，中英双语训练，~279MB）：中文 ranking 比多语蒸馏模型更好，体积也小 38%。想更重/更准可以换 `zh-full`（跨语言 MiniLM fp32，~450MB），英文优先用 `ms-marco`（~91MB）：
+
+```bash
+dhole model                    # 列出可用模型 + 当前生效的那个
+dhole model use ms-marco       # 切到英文 MS MARCO MiniLM（~90MB）
+dhole model use bge-zh         # 切回默认
+```
+
+也可以直接编辑配置文件（与 CLI 写的是同一个文件，CLI 只是便捷入口）：
+
+```json
+// ~/.dhole/config/reranker.json
+{ "model": "ms-marco" }
+```
+
+| 名字 | 模型 | 语言 | 体积 |
+|------|------|------|------|
+| `bge-zh`（默认） | `Xenova/bge-reranker-base`（BAAI，int8） | 中英双语 | ~279MB |
+| `zh-full` | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`（fp32） | 跨语言（含中文/多语） | ~450MB |
+| `ms-marco` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | 英文优先 | ~91MB |
+
+两边都是 Apache-2.0、revision 固定（换了端点也不会换字节）。写明未注册的名字会被**拒绝并回退默认**并告警——不会静默换个模型给结果打分。模型各自独立目录，切换不会覆盖对方；14.x 已下过的英文模型目录会被自动改名保留，不会重下。下载**可断点续传**（中断不重来）；`dhole -v` 会报告当前生效的模型。int8 量化对重排质量影响很小（BAAI 原厂量化），但如果你要极限精度，`zh-full` 的 fp32 随时可切。
+
 ## 边界、状态与前提
 
 这一节说明「$0 无密钥」到底意味着什么，以及它会在这台机器上留下什么——README 的其余部分只谈能力。
@@ -143,7 +171,8 @@ dhole -u    # 自更新（本 fork 默认关闭）
 | 位置 | 内容 | 何时产生 |
 |------|------|----------|
 | `~/.dhole/cache.db` | 抓到的正文（明文 SQLite）。**按请求上下文分区**：带 cookies / 自定义头 / UA / 代理或改动内容开关的抓取，不会与匿名请求共享缓存条目 | 每次成功抓取 |
-| `~/.dhole/models/msmarco-minilm-l6-v2/` | 神经重排序模型（3 个文件，约 90MB，来自 HuggingFace 固定 revision，做哈希校验） | 首次神经搜索时下载 |
+| `~/.dhole/models/<model>/` | 神经重排序模型（3 个文件，来自 HuggingFace 固定 revision，做哈希校验）。默认 `bge-zh`（跨语言，~450MB），可切 `ms-marco`（英文，~91MB） | 首次神经搜索时下载 |
+| `~/.dhole/config/reranker.json` | 重排模型选择（`{"model": "..."}`），`dhole model use` 也写这里 | 切换模型时 |
 | `~/.dhole/circuit_breaker.json` | 引擎熔断/冷却状态 | 引擎被限速/被墙时 |
 | `~/.dhole/search_feedback.json` | 隐式域名偏好 | 仅 `DHOLE_SEARCH_FEEDBACK=1` |
 | `~/.dhole/usage.jsonl` | 本地调用日志（工具名/结果/耗时/脱敏错误，无参数值） | 仅 `DHOLE_USAGE_LOG` 开启 |

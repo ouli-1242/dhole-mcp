@@ -1,17 +1,17 @@
-"""Local neural reranker (v7 Phase 2).
+"""Local neural reranker: a semantic relevance scorer for search results.
 
-Runs an ONNX cross-encoder (Apache-2.0 `cross-encoder/ms-marco-MiniLM-L-6-v2`,
-22.7M params, trained on MS MARCO passage reranking = query/document relevance)
-on the `onnxruntime` we ALREADY ship for OCR. No new runtime. The model + tokenizer
-are downloaded ONCE on first neural search into
-`~/.dhole/models/msmarco-minilm-l6-v2/` (pinned to a specific HF
-revision + hash-checked), NOT bundled in the wheel, so the lean install stays small.
+Runs a cross-encoder (query, title+snippet) -> relevance score, in-process via
+ONNX. It answers "does this result actually match the query?" — something the
+source engines cannot tell you, since each engine only returns its own order.
+
+Two models are registered (see MODELS below); the ACTIVE one is chosen by
+``~/.dhole/config/reranker.json`` (``{"model": "<name>"}``), default
+``bge-zh``. Unknown names are rejected, never silently mapped.
 
 Graceful fallback: if onnxruntime/tokenizers are missing (lean install) or the
 model download fails / is offline, `get_reranker()` returns None and the caller
-falls back to cross-engine consensus + engine-position order (no lexical rerank
-- BM25 was removed as redundant; neural matches its speed and ranks better).
-Neural rerank is an `[all]` extra; lean installs get consensus-ordered search.
+falls back to cross-engine consensus + engine-position order. Neural rerank is
+an `[all]` extra; lean installs get consensus-ordered search.
 """
 
 from __future__ import annotations
@@ -21,7 +21,9 @@ import hashlib
 import logging
 import math
 import os
+import time
 import urllib.request
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -29,21 +31,109 @@ from dhole_mcp import paths
 
 logger = logging.getLogger("dhole-mcp.reranker")
 
-MODEL_ID = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-# Pinned revision for reproducibility (downloaded files never shift under us).
-MODEL_REV = "c5ee24cb16019beea0893ab7796b1df96625c6b8"
-# Download endpoints, tried in order. huggingface.co is DNS-blocked on a lot of
-# CN desktops (hosts-file pins like `127.0.0.1 huggingface.co`), so a mirror is
-# tried as a fallback — silently skipping the download would downgrade search
-# ranking forever with no error anywhere. Override with DHOLE_HF_ENDPOINT
-# (or HF_ENDPOINT) to force a single endpoint.
-_MODEL_RELPATHS = {
-    "model.onnx": "onnx/model.onnx",
-    "tokenizer.json": "tokenizer.json",
-    "vocab.txt": "vocab.txt",
+
+@dataclass(frozen=True)
+class RerankerModel:
+    """One downloadable cross-encoder.
+
+    relpaths maps the LOCAL filename dhole stores to the repo-relative HF path
+    under ``<endpoint>/<repo>/resolve/<rev>/``. min_bytes is a sanity floor so
+    a truncated download is rejected, NOT trusted.
+    """
+
+    name: str                     # registry key + local dir name
+    repo: str                     # HuggingFace repo id
+    rev: str                      # pinned commit: bytes are identical everywhere
+    relpaths: dict[str, str] = field(default_factory=dict)
+    approx_bytes: int = 90_000_000   # expected ONNX size, for honest UI text
+    min_bytes: int = 50_000_000   # sanity floor; smaller = truncated, not trusted
+    label: str = ""               # short human description for -v / docs
+
+
+# Registry (key order = display order). The default is DEFAULT_MODEL below.
+MODELS: dict[str, RerankerModel] = {
+    # Bilingual BGE reranker (BAAI), int8. Trained on zh+en pairs — better
+    # Chinese ranking than a multilingual distillation, and 38% smaller than
+    # the fp32 alternative. Standard int8 ops, runs anywhere onnxruntime does.
+    "bge-zh": RerankerModel(
+        name="bge-zh",
+        repo="Xenova/bge-reranker-base",
+        rev="280bcc27a84e0b898c251e06fddb25171bd9b101",
+        relpaths={
+            "model.onnx": "onnx/model_int8.onnx",
+            "tokenizer.json": "tokenizer.json",
+            "vocab.txt": "sentencepiece.bpe.model",
+        },
+        approx_bytes=279_000_000,
+        min_bytes=100_000_000,
+        label="bilingual BGE reranker int8 (BAAI, zh+en), default",
+    ),
+    # Cross-lingual MiniLM distilled from XLM-R Large on mMARCO (incl. Chinese),
+    # fp32. Apache-2.0, ~117M params / ~450MB. Only worth it when you want the
+    # best multilingual ranking and have the bandwidth for the heavier file.
+    "zh-full": RerankerModel(
+        name="zh-full",
+        repo="cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+        rev="1427fd652930e4ba29e8149678df786c240d8825",
+        relpaths={
+            "model.onnx": "onnx/model.onnx",
+            "tokenizer.json": "tokenizer.json",
+            "vocab.txt": "sentencepiece.bpe.model",
+        },
+        approx_bytes=450_000_000,
+        min_bytes=300_000_000,
+        label="cross-lingual MiniLM fp32 (mMARCO, incl. Chinese) - heavier",
+    ),
+    # The 14.x default until now: English MS MARCO MiniLM. Apache-2.0,
+    # ~22.7M params / ~91MB ONNX. Kept for EN-heavy users + backward compat.
+    "ms-marco": RerankerModel(
+        name="ms-marco",
+        repo="cross-encoder/ms-marco-MiniLM-L-6-v2",
+        rev="c5ee24cb16019beea0893ab7796b1df96625c6b8",
+        relpaths={
+            "model.onnx": "onnx/model.onnx",
+            "tokenizer.json": "tokenizer.json",
+            "vocab.txt": "vocab.txt",
+        },
+        approx_bytes=91_000_000,
+        min_bytes=50_000_000,
+        label="English MS MARCO MiniLM (legacy default)",
+    ),
 }
 
-MODEL_DIR = paths.models_dir() / "msmarco-minilm-l6-v2"
+DEFAULT_MODEL = "bge-zh"
+
+# Backward-compat aliases for the pre-registry constants (tests + external
+# callers may still import them). They track the DEFAULT model (registry
+# constants are import-time snapshots; the live answer is active_model()).
+MODEL_ID = MODELS[DEFAULT_MODEL].repo
+MODEL_REV = MODELS[DEFAULT_MODEL].rev
+MODEL_DIR = paths.models_dir() / DEFAULT_MODEL
+
+
+def active_model() -> RerankerModel:
+    """The model the search path actually uses: config file wins, else default.
+
+    Unknown names in the config are IGNORED (with a warning), never mapped:
+    silently scoring with the wrong model would be worse than scoring with the
+    default one, and the note tells the user exactly what happened.
+    """
+    from dhole_mcp import reranker_config
+
+    name = reranker_config.get_selected() or DEFAULT_MODEL
+    model = MODELS.get(name)
+    if model is None:
+        logger.warning(
+            f"reranker config names unknown model {name!r} - using default "
+            f"{DEFAULT_MODEL}. Known: {', '.join(sorted(MODELS))}."
+        )
+        return MODELS[DEFAULT_MODEL]
+    return model
+
+
+def active_model_dir() -> Path:
+    """Local directory for the active model (created on download)."""
+    return paths.models_dir() / active_model().name
 MAX_SEQ = 512
 # Sanity floor so a truncated/failed download is rejected (real onnx is ~80MB).
 MIN_MODEL_BYTES = 50_000_000
@@ -57,19 +147,19 @@ def _hf_endpoints() -> list[str]:
     return ["https://huggingface.co", "https://hf-mirror.com"]
 
 
-def _model_urls(name: str) -> list[str]:
+def _model_urls(model: RerankerModel, name: str) -> list[str]:
     """Candidate URLs for one model file, in fallback order.
 
     The revision is pinned, so the bytes are identical from any endpoint — the
     fallback changes where they come from, never what they are.
     """
-    return [f"{ep}/{MODEL_ID}/resolve/{MODEL_REV}/{_MODEL_RELPATHS[name]}"
+    return [f"{ep}/{model.repo}/resolve/{model.rev}/{model.relpaths[name]}"
             for ep in _hf_endpoints()]
 
 
 def _download_model_file(name: str, dest: Path) -> bool:
     """Download one model file, trying every configured endpoint."""
-    for url in _model_urls(name):
+    for url in _model_urls(active_model(), name):
         if _download_file(url, dest):
             return True
     return False
@@ -149,33 +239,53 @@ class _Reranker:
         return scores
 
 
+_IDLE_TIMEOUT = 90.0  # abort a download that produced no byte for this long
+
+
 def _download_file(url: str, dest: Path) -> bool:
-    """Stream a file to disk. Returns True on success."""
+    """Stream a file to disk. Returns True on success.
+
+    Resilient to this network's worst property: HF's CDN dribbles bytes slowly
+    and stalls. We (a) RESUME from a leftover ``.part`` (a 449MB download that
+    dies at 60% does not restart), (b) abort if no byte arrives for 60s instead
+    of hanging on a dead socket forever, and (c) remove the partial file on
+    failure so the next attempt starts clean or resumes only when we know how.
+    """
+    tmp = dest.with_suffix(dest.suffix + ".part")
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_suffix(dest.suffix + ".part")
         # A plain python UA gets 403'd by some HF mirrors; keep dhole's identity
         # in the string but keep it browser-shaped.
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (compatible; dhole-mcp)"
-        })
-        with urllib.request.urlopen(req, timeout=120) as r, open(tmp, "wb") as f:
-            total = int(r.headers.get("Content-Length", 0) or 0)
-            done = 0
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; dhole-mcp)"}
+        resume_at = tmp.stat().st_size if tmp.exists() else 0
+        if resume_at:
+            headers["Range"] = f"bytes={resume_at}-"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "ab") as f:
+            total_hdr = r.headers.get("Content-Length")
+            total = (int(total_hdr) + resume_at) if total_hdr else 0
+            done = resume_at
+            last_byte = time.monotonic()
             while True:
                 chunk = r.read(1 << 16)
                 if not chunk:
                     break
                 f.write(chunk)
                 done += len(chunk)
+                last_byte = time.monotonic()
+                if done % (1 << 24) == 0:
+                    logger.info(f"  ... {dest.name}: {done:,} bytes")
+                if time.monotonic() - last_byte > _IDLE_TIMEOUT:
+                    raise TimeoutError(f"no bytes for {_IDLE_TIMEOUT:.0f}s")
         if total and done < total:
-            logger.warning(f"short download for {dest.name}: {done}/{total} bytes")
+            logger.warning(f"short download for {dest.name}: {done:,}/{total:,} bytes")
             tmp.unlink(missing_ok=True)
             return False
         tmp.replace(dest)
         return True
     except Exception as e:
-        logger.warning(f"download failed for {url}: {e}")
+        # Leave the partial file (next attempt resumes from it) but surface why.
+        logger.warning(f"download failed for {url} ({tmp.stat().st_size if tmp.exists() else 0:,} bytes so far): {e}")
         return False
 
 
@@ -192,22 +302,26 @@ def _ensure_model() -> Optional[tuple[Path, Path]]:
     # A pre-14.3 ~/.dhole_mcp_cache may already hold this ~90MB model; move it
     # before deciding it has to be downloaded (on some networks it cannot be).
     paths.migrate_legacy_cache_dir()
-    onnx = MODEL_DIR / "model.onnx"
-    tokjson = MODEL_DIR / "tokenizer.json"
-    sha_file = MODEL_DIR / "model.sha256"
+    model = active_model()
+    model_dir = active_model_dir()
+    onnx = model_dir / "model.onnx"
+    tokjson = model_dir / "tokenizer.json"
+    sha_file = model_dir / "model.sha256"
 
     need = []
-    if not onnx.exists() or onnx.stat().st_size < MIN_MODEL_BYTES:
+    if not onnx.exists() or onnx.stat().st_size < model.min_bytes:
         need.append("model.onnx")
     if not tokjson.exists():
         need.append("tokenizer.json")
 
     if need:
         logger.info(
-            "Dhole: downloading the local search reranker model (one-time, ~80MB)..."
+            f"Dhole: downloading the local search reranker model "
+            f"{model.name} (one-time, ~{model.approx_bytes // 1_000_000}MB, "
+            "resumable)..."
         )
         for name in need:
-            if not _download_model_file(name, MODEL_DIR / name):
+            if not _download_model_file(name, model_dir / name):
                 return None
         if onnx.stat().st_size < MIN_MODEL_BYTES:
             logger.warning("downloaded model.onnx is too small; rejecting")
@@ -260,9 +374,9 @@ def _load_reranker() -> Optional[_Reranker]:
         except Exception:
             # Fallback: build a BERT WordPiece tokenizer from vocab.txt.
             from tokenizers import BertWordPieceTokenizer
-            tok = BertWordPieceTokenizer(str(MODEL_DIR / "vocab.txt"), lowercase=True)
+            tok = BertWordPieceTokenizer(str(active_model_dir() / "vocab.txt"), lowercase=True)
         _reranker = _Reranker(onnx_path, tok)
-        logger.info("Dhole: neural reranker ready (ms-marco-MiniLM-L-6-v2, ONNX).")
+        logger.info(f"Dhole: neural reranker ready ({active_model().name}, ONNX).")
         return _reranker
     except Exception as e:
         _reranker_unavailable_reason = f"reranker init failed: {e}"
@@ -350,14 +464,15 @@ def unavailable_reason() -> str:
 
 
 def model_present() -> bool:
-    """True if the reranker model + tokenizer are already cached locally (so
+    """True if the ACTIVE model's files are already cached locally (so
     get_reranker() will NOT trigger a download). Used by startup prewarm to warm
     the ONNX session only when it is free to do so.
     """
     paths.migrate_legacy_cache_dir()
-    onnx = MODEL_DIR / "model.onnx"
-    tokjson = MODEL_DIR / "tokenizer.json"
-    return (onnx.exists() and onnx.stat().st_size >= MIN_MODEL_BYTES
+    model = active_model()
+    onnx = active_model_dir() / "model.onnx"
+    tokjson = active_model_dir() / "tokenizer.json"
+    return (onnx.exists() and onnx.stat().st_size >= model.min_bytes
             and tokjson.exists())
 
 
