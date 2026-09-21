@@ -65,6 +65,33 @@ def pytest_addoption(parser):
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_real_home_state_writes(request, monkeypatch, tmp_path):
+    """测试绝不把产品状态写进真实的 ``~/.dhole``。
+
+    驱动真 ``metasearch()`` 的用例（连接冷却、产出统计）会落盘。实测抓到过：测试把
+    一条 brightdata 记录写进了用户真实的 ``~/.dhole/engine_stats.json``。
+
+    三个状态文件都是惰性求值（函数而非常量），所以在这里指到临时目录就能整体接管。
+    也不动 ``paths.home`` 本身：DHOLE_HOME 那组用例要在它的语义上断言。
+
+    ``real_state_paths`` 标记的用例是**故意**验这些路径由 paths.py 派生的，接管理会
+    让它们验不到东西 —— 让它们选择退出。
+    """
+    if request.node.get_closest_marker("real_state_paths"):
+        yield
+        return
+    from dhole_mcp import search_metasearch as ms
+
+    monkeypatch.setattr(ms, "_engine_stats_file", lambda: str(tmp_path / "engine_stats.json"))
+    monkeypatch.setattr(ms, "_circuit_state_file", lambda: str(tmp_path / "circuit_breaker.json"))
+    from dhole_mcp import search as _search
+    monkeypatch.setattr(_search, "_feedback_file", lambda: str(tmp_path / "search_feedback.json"))
+    monkeypatch.setattr(ms, "_ENGINE_YIELD", {})
+    monkeypatch.setattr(ms, "_engine_stats_last_save", 0.0)
+    yield
+
+
 @pytest.fixture
 def temp_dir():
     """Create a temporary directory for test artifacts."""

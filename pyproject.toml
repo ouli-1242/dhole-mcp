@@ -107,6 +107,7 @@ pythonpath = ["src"]
 addopts = ["-m", "not e2e and not live"]
 markers = [
     "e2e: end-to-end tests that spawn a real dhole.exe subprocess. Skip by default in CI; run manually with `pytest -m e2e`.",
+    "real_state_paths: opt out of the autouse state-file isolation; the test asserts where paths.py resolves state files, so redirecting them would make it verify nothing.",
     "live: tests that hit the real search engines. Never in the default run; opt in with `-m live` and additionally pass --engine-fixtures. Used to capture/diff SERP fixtures.",
 ]
 

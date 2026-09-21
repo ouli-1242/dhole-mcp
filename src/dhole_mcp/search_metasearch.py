@@ -988,17 +988,27 @@ KEYED_ENGINES: dict[str, type[KeyedApiEngine]] = {
 # are transient and do NOT trip the breaker. Cleared on the next success.
 _CIRCUIT_COOLDOWN = 60.0  # seconds
 _BACKEND_HEALTH: dict[str, float] = {}  # name -> block-until timestamp
-_CIRCUIT_STATE_FILE = str(paths.file("circuit_breaker.json"))
+
+
+def _circuit_state_file() -> str:
+    """惰性取路径，与 `_engine_stats_file()` 同理。
+
+    原先是 import 期的字符串常量，于是 `DHOLE_HOME` 对这个文件半失效——换 home 后
+    熔断状态仍写回旧的 `~/.dhole`。惰性求值也让测试能把状态指到临时目录，而不是让
+    跑一次套件就改掉用户真实的引擎冷却状态。
+    """
+    return str(paths.file("circuit_breaker.json"))
 
 
 def _load_circuit_state() -> None:
     """Load persisted circuit breaker state from disk (survives restarts).
     Expired entries are discarded. Called once at module load."""
     global _BACKEND_HEALTH
+    path = _circuit_state_file()
     try:
-        if os.path.exists(_CIRCUIT_STATE_FILE):
+        if os.path.exists(path):
             import json
-            with open(_CIRCUIT_STATE_FILE, "r") as f:
+            with open(path, "r") as f:
                 data = json.load(f)
             now_ts = time()
             # Only restore entries that haven't expired yet
@@ -1012,8 +1022,8 @@ def _save_circuit_state() -> None:
     Uses atomic write (tmpfile + os.replace) to prevent corruption from
     concurrent processes."""
     try:
-        os.makedirs(os.path.dirname(_CIRCUIT_STATE_FILE), exist_ok=True)
-        paths.harden_file(_CIRCUIT_STATE_FILE)
+        path = _circuit_state_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         import json
         import tempfile
         now_ts = time()
@@ -1021,12 +1031,15 @@ def _save_circuit_state() -> None:
         active = {k: v for k, v in _BACKEND_HEALTH.items() if v > now_ts}
         # Atomic write: write to temp file then rename (prevents partial writes)
         fd, tmp_path = tempfile.mkstemp(
-            dir=os.path.dirname(_CIRCUIT_STATE_FILE), suffix=".tmp"
+            dir=os.path.dirname(path), suffix=".tmp"
         )
         try:
             with os.fdopen(fd, "w") as f:
                 json.dump(active, f)
-            os.replace(tmp_path, _CIRCUIT_STATE_FILE)
+            os.replace(tmp_path, path)
+            # 收紧放在 replace 之后：mkstemp 的 0600 会被 rename 带过来，但目录
+            # 可能新建、且以后再写时目标已存在——在这里补一次才覆盖两条路径。
+            paths.harden_file(path)
         except Exception:
             # Clean up temp file on failure
             try:

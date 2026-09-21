@@ -32,16 +32,23 @@ def test_layout_is_one_root(fake_home):
         fake_home / ".dhole" / "circuit_breaker.json"
 
 
-def test_every_writer_agrees_on_the_layout():
+@pytest.mark.real_state_paths   # 本用例验的就是 paths.py 的落点，不能被隔离 fixture 接管
+def test_every_writer_agrees_on_the_layout(monkeypatch, tmp_path):
     """所有落盘模块都必须走 paths.py，不允许各自 expanduser 再拼一个根。"""
     from dhole_mcp import cache, reranker, search, search_metasearch, search_proxy
 
     assert cache._CACHE_DIR == paths.cache_dir()
     assert str(reranker.MODEL_DIR).startswith(str(paths.models_dir()))
-    assert search._FEEDBACK_FILE == str(paths.file("search_feedback.json"))
-    assert search_metasearch._CIRCUIT_STATE_FILE == \
-        str(paths.file("circuit_breaker.json"))
+    # 三个 metasearch/search 状态文件都必须是**惰性**派生（函数而非 import 期常量）：
+    # 否则 DHOLE_HOME 只对其中一部分生效（半失效的开关比没有开关更糟），而测试也指
+    # 不动它们 —— 跑一次套件就会改掉用户真实的引擎冷却状态/域名偏好。
+    monkeypatch.setenv("DHOLE_HOME", str(tmp_path / "moved"))
+    moved = tmp_path / "moved"
+    assert search._feedback_file() == str(moved / "search_feedback.json")
+    assert search_metasearch._circuit_state_file() == str(moved / "circuit_breaker.json")
+    assert search_metasearch._engine_stats_file() == str(moved / "engine_stats.json")
     assert search_proxy._config_path() == paths.file("search_proxies.json")
+
 
 
 class TestLegacyMigration:

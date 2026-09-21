@@ -703,7 +703,13 @@ def _domain_boost(url: str, query: str, is_technical: bool) -> float:
 # consensus ordering the user thinks they are seeing, and it writes state the
 # user never asked for.
 
-_FEEDBACK_FILE = str(paths.file("search_feedback.json"))
+def _feedback_file() -> str:
+    """惰性取路径，与 metasearch 的两个状态文件同一约定。
+
+    import 期常量的话，`DHOLE_HOME` 就只对部分状态文件生效（半失效的开关比没有更
+    糟），测试也指不动它。
+    """
+    return str(paths.file("search_feedback.json"))
 
 
 def _feedback_enabled() -> bool:
@@ -723,13 +729,13 @@ def _feedback_domains() -> frozenset:
         return frozenset()
     try:
         import os as _os
-        if not _os.path.exists(_FEEDBACK_FILE):
+        if not _os.path.exists(_feedback_file()):
             return frozenset()
-        mt = _os.path.getmtime(_FEEDBACK_FILE)
+        mt = _os.path.getmtime(_feedback_file())
         if _feedback_cache is not None and mt == _feedback_mtime:
             return _feedback_cache
         import json as _json
-        with open(_FEEDBACK_FILE, "r") as f:
+        with open(_feedback_file(), "r") as f:
             data = _json.load(f)
         _feedback_cache = frozenset(data.get("domains", []))
         _feedback_mtime = mt
@@ -750,22 +756,22 @@ def record_search_feedback(url: str) -> None:
             return
         import json as _json
         import tempfile
-        os.makedirs(os.path.dirname(_FEEDBACK_FILE), exist_ok=True)
+        os.makedirs(os.path.dirname(_feedback_file()), exist_ok=True)
         # Load existing
         domains = set()
-        if os.path.exists(_FEEDBACK_FILE):
-            with open(_FEEDBACK_FILE, "r") as f:
+        if os.path.exists(_feedback_file()):
+            with open(_feedback_file(), "r") as f:
                 domains = set(_json.load(f).get("domains", []))
         domains.add(domain)
         # Cap at 500 domains
         if len(domains) > 500:
             domains = set(list(domains)[-500:])
         # Atomic write
-        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(_FEEDBACK_FILE), suffix=".tmp")
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(_feedback_file()), suffix=".tmp")
         try:
             with os.fdopen(fd, "w") as f:
                 _json.dump({"domains": sorted(domains)}, f)
-            os.replace(tmp, _FEEDBACK_FILE)
+            os.replace(tmp, _feedback_file())
         except Exception:
             try:
                 os.unlink(tmp)

@@ -376,7 +376,7 @@ class TestSearchFeedbackIsOptIn:
         from dhole_mcp import search
 
         monkeypatch.delenv("DHOLE_SEARCH_FEEDBACK", raising=False)
-        monkeypatch.setattr(search, "_FEEDBACK_FILE", str(temp_dir / "search_feedback.json"))
+        monkeypatch.setattr(search, "_feedback_file", lambda: str(temp_dir / "search_feedback.json"))
         monkeypatch.setattr(search, "_feedback_cache", None)
         assert search._feedback_enabled() is False
         assert search._feedback_domains() == frozenset()
@@ -388,7 +388,7 @@ class TestSearchFeedbackIsOptIn:
         from dhole_mcp import search
 
         monkeypatch.setenv("DHOLE_SEARCH_FEEDBACK", "1")
-        monkeypatch.setattr(search, "_FEEDBACK_FILE", str(temp_dir / "search_feedback.json"))
+        monkeypatch.setattr(search, "_feedback_file", lambda: str(temp_dir / "search_feedback.json"))
         monkeypatch.setattr(search, "_feedback_cache", None)
         monkeypatch.setattr(search, "_feedback_mtime", 0.0)
         search.record_search_feedback("https://useful.example/page")
