@@ -6,8 +6,9 @@ async-native parallel aggregation with early-return-on-quorum, no CLI / API
 server / MCP / images / videos / news / books / extract / cache / network bloat.
 See the ddgs LICENSE notice in NOTICE.ddgs.txt for full attribution.
 
-Backends (all keyless, no API key, no account): duckduckgo, brave,
-grokipedia, wikipedia, yahoo, yandex. They run in PARALLEL; a backend that
+Backends (all keyless, no API key, no account): the default pool is bing,
+duckduckgo, brave, yahoo, yandex, sogou_weixin, with wikipedia and grokipedia
+opt-in; see search_engines.py. They run in PARALLEL; a backend that
 CAPTCHAs / rate-limits / has no topic-match simply yields
 nothing and the others carry - so search is robust without any single point of
 failure. This is the robustness dhole's hand-rolled 3-engine scraper never had.
@@ -1488,11 +1489,11 @@ async def metasearch(
 
     seen: dict[str, dict[str, Any]] = {}
     order: list[dict[str, str]] = []
-    # Diversity quorum: wait for at least MIN_ENGINES backends to contribute
+    # Diversity quorum: wait for at least `min_engines` backends to contribute
     # (not just enough results from one) so a single backend's bias/rate-limit
     # can't dominate - the cross-backend diversity is the robustness. A soft
-    # fallback returns at SOFT_DEADLINE once we have enough results even if some
-    # backends are dead/captcha'd (don't wait the full deadline for them).
+    # fallback returns at `_SOFT_DEADLINE` once we have enough results even if
+    # some backends are dead/captcha'd (don't wait the full deadline for them).
     min_engines = min(3, len(instances))
     soft_deadline = _SOFT_DEADLINE
     quorum_results = max_results + 4  # a little extra for the neural reranker

@@ -4,7 +4,7 @@ Runs a cross-encoder (query, title+snippet) -> relevance score, in-process via
 ONNX. It answers "does this result actually match the query?" — something the
 source engines cannot tell you, since each engine only returns its own order.
 
-Two models are registered (see MODELS below); the ACTIVE one is chosen by
+Three models are registered (see MODELS below); the ACTIVE one is chosen by
 ``~/.dhole/config/reranker.json`` (``{"model": "<name>"}``), default
 ``bge-zh``. Unknown names are rejected, never silently mapped.
 
@@ -155,7 +155,8 @@ def active_model_dir() -> Path:
     """Local directory for the active model (created on download)."""
     return paths.models_dir() / active_model().name
 MAX_SEQ = 512
-# Sanity floor so a truncated/failed download is rejected (real onnx is ~80MB).
+# Sanity floor so a truncated/failed download is rejected; each model's own
+# 'min_bytes' is the precise check (this global value is the loose outer bound).
 MIN_MODEL_BYTES = 50_000_000
 
 

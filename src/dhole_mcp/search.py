@@ -1,7 +1,8 @@
 """Dhole local web search (v7 flagship: keyless, no-account, fully local).
 
-Scrapes public search engines (DuckDuckGo, Bing, Qwant, Wikipedia) via the
-dhole-native engine layer in search_engines.py - no third-party API, no key, no
+Scrapes public search engines (default pool: bing, duckduckgo, brave, yahoo,
+yandex, sogou_weixin; opt-in: wikipedia, grokipedia) via the dhole-native
+engine layer in search_engines.py - no third-party API, no key, no
 account. Results are merged across engines, deduped by normalized URL, and
 ranked. Merging INDEPENDENT indexes gives a free authority signal: a URL
 returned by several engines is a consensus hit (engines_consensus field) and
@@ -886,8 +887,8 @@ def _url_relevance(query: str, url: str) -> float:
 
 
 # ─── intent-aware multi-query fan-out ────────────────
-# Detect query intent and give the diversity engines (Yandex, Startpage, Google,
-# Qwant) an expanded query variant while core engines keep the original. Same
+# Detect query intent and give every engine NOT in _CORE_QUERY_ENGINES an
+# expanded query variant while the core engines keep the original. Same
 # request count, zero added latency (all parallel), but higher recall because
 # different query variants surface different pages. Cross-variant consensus: a URL
 # surfaced by different queries from different engines is a STRONGER authority

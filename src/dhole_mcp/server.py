@@ -2748,7 +2748,8 @@ class MasterFetchServer:
         - DataDome (behavioral analysis — detects headless browsers via timing)
         - Akamai Bot Manager (advanced fingerprinting beyond Patchright's scope)
 
-        For the 3-tier auto-escalation that tries HTTP→dynamic→stealthy, use smart_fetch instead.
+        For the auto-escalation that tries HTTP then stealthy, use smart_fetch instead
+        (the dynamic/Playwright tier was removed in v3.5.0; old logs may still show it).
 
         :param url: The URL to fetch.
         :param extraction_type: Content format: 'markdown', 'html', 'text', 'article', 'structured'.
@@ -3493,8 +3494,9 @@ class MasterFetchServer:
             or result.status in (403, 429, 500, 502, 503)
         )
         if not should_escalate:
-            # Archive.org fallback for hard-blocks (404/410/451): the page is
-            # gone or legally removed, but the Wayback Machine may have a snapshot.
+            # Archive.org fallback for hard-blocks: the page is gone or legally
+            # removed, but the Wayback Machine may have a snapshot. 410 is listed
+            # below but _should_try_archive() rejects it, so only 404/451 get here.
             if result.status in (404, 410, 451) and _should_try_archive(result):
                 archive_result = await _with_budget(self._fetch_from_archive(
                     url, extraction_type, css_selector, main_content_only,
