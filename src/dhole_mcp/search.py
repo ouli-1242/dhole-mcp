@@ -510,17 +510,23 @@ def _rank(query: str, ranked: list[RawResult], mode: str):
 
     mode='auto'/'neural': use the local ONNX cross-encoder if available
     (dhole-mcp[all] + model cached), else fall back to cross-engine consensus +
-    engine-position order (no lexical rerank). 'neural' surfaces a note when
-    unavailable; 'auto' is silent (expected on lean installs).
+    engine-position order (no lexical rerank). 'neural' always surfaces a note.
+    'auto' stays silent on a lean install (that's the expected shape, and saying
+    so on every response would be noise), but it does report the surprising case:
+    deps present and the model still missing or failing to load.
     """
     note = ""
     if mode in ("neural", "auto"):
         pairs = neural_rerank(query, ranked)
         if pairs is not None:
             return [r for r, _ in pairs], [s for _, s in pairs], "neural", note
+        reason = unavailable_reason() or "install dhole-mcp[all] and retry"
         if mode == "neural":
-            note = ("neural rerank unavailable - using consensus + engine-position order. " +
-                    (unavailable_reason() or "install dhole-mcp[all] and retry"))
+            note = "neural rerank unavailable - using consensus + engine-position order. " + reason
+        elif not reason.startswith("neural rerank needs dhole-mcp[all]"):
+            # 依赖装了却仍然没有重排 = 模型没下下来或加载失败，这是该被看到的
+            note = ("neural rerank is NOT active despite its deps being installed "
+                    f"- using consensus + engine-position order. {reason}")
     # Fallback (lean install / model missing): no lexical rerank. Score by position
     # so tiers derive sensibly; the caller's consensus boost adds the authority
     # signal on top.

@@ -1050,3 +1050,37 @@ class TestSilentPoolRewriteGate:
         self._calls(monkeypatch, reports)
         r = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
         assert "rate-limited" in r.error or "rephrase" in r.error, r.error
+
+
+class TestRerankFallbackNote:
+    """auto 模式的分寸：精简安装别啰嗦，依赖齐了却没重排必须说。"""
+
+    @pytest.mark.parametrize("mode", ["auto", "neural"])
+    def test_note_appears_only_when_deps_are_present(self, monkeypatch, mode):
+        raw = [RawResult(title=f"r{i}", url=f"https://a{i}.test", snippet="s",
+                         source="bing", position=i + 1) for i in range(3)]
+        monkeypatch.setattr(search, "neural_rerank", lambda q, r: None)
+        # 精简安装：缺依赖是预期形态，auto 不该每次解释
+        monkeypatch.setattr(search, "unavailable_reason",
+                            lambda: "neural rerank needs dhole-mcp[all] (ModuleNotFoundError: onnxruntime)")
+        _, _, used, note = search._rank("q", raw, mode)
+        assert used == "merge"
+        assert (note != "") is (mode == "neural")
+        # 依赖装了但模型没下下来 = 意外形态，auto 也要报
+        monkeypatch.setattr(search, "unavailable_reason",
+                            lambda: "reranker model download failed (offline?)")
+        _, _, _used, note2 = search._rank("q", raw, mode)
+        assert "download failed" in note2, note2
+        # 两种模式都要说，但措辞不同：neural 是"你要的用不了"，
+        # auto 是"依赖装了却居然没启用"——后者才需要点明这很意外。
+        if mode == "auto":
+            assert "NOT active despite its deps being installed" in note2, note2
+        else:
+            assert "neural rerank unavailable" in note2, note2
+
+    def test_no_note_when_the_reranker_actually_ran(self, monkeypatch):
+        raw = [RawResult(title="r", url="https://a.test", snippet="s",
+                         source="bing", position=1)]
+        monkeypatch.setattr(search, "neural_rerank", lambda q, r: [(r[0], 0.9)])
+        _, _, used, note = search._rank("q", raw, "auto")
+        assert used == "neural" and note == ""
