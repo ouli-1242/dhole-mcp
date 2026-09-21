@@ -19,7 +19,7 @@ def _no_real_home_migration(monkeypatch):
     against a fake home.
     """
     from dhole_mcp import paths
-    monkeypatch.setattr(paths, "_legacy_migrated", True)
+    monkeypatch.setattr(paths, "_legacy_migrate_done", True)
 
 
 @pytest.fixture(autouse=True)
@@ -89,6 +89,11 @@ def _no_real_home_state_writes(request, monkeypatch, tmp_path):
     monkeypatch.setattr(_search, "_feedback_file", lambda: str(tmp_path / "search_feedback.json"))
     monkeypatch.setattr(ms, "_ENGINE_YIELD", {})
     monkeypatch.setattr(ms, "_engine_stats_last_save", 0.0)
+    # The proxy pool config is the fourth writable state file. `dhole proxy add`
+    # and any test that exercises add/remove/clear would otherwise write real
+    # credentials into the user's ~/.dhole/search_proxies.json.
+    from dhole_mcp import search_proxy as _proxy
+    monkeypatch.setattr(_proxy, "_config_path", lambda: tmp_path / "search_proxies.json")
     yield
 
 

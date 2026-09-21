@@ -9,6 +9,99 @@
 > 版本号是自己的，与上游版本不可比。`src/dhole_mcp/__init__.py` 中的
 > `__version__` 是版本的唯一权威来源。
 
+## [未发布]
+
+补齐三项「用户能感知」的能力：**代理池管理入口、安装体检、上手文档**。
+
+### 新增（`dhole proxy` 子命令）
+- **代理池此前只能靠手写配置文件或环境变量维护，而 `search_proxy.py` 的模块
+  docstring 却宣称有 `dhole proxy add/list/remove/clear`** —— 文档承诺了一个不存在的
+  命令（实测 `dhole proxy list` 报 `unrecognized arguments`）。轮换核心一直是完整的，
+  缺的只是写入侧：`add_proxy` / `remove_proxy` / `clear_proxies` / `list_proxies` /
+  `save_proxies` / `reset_pool` 从未进过本仓库（`git log -S 'def add_proxy'` 为空，
+  不是后来删掉的），本次补齐并接到 CLI。
+- 失败一律出声：重复、不支持的 scheme、索引越界、池满（20）都报错并给非零退出码，
+  不再有「以为加上了、三轮搜索后才发现没有」这种状态。
+- **凭据永不上终端**：配置文件按文档是明文存储，但 `list` / `add` 的输出一律走
+  `_redact()`；`tests/test_proxy_cli.py` 有两条断言专门盯着密码不出现在 stdout。
+- 新增 `_env_proxy_source()`：`list` 与 `--doctor` 会说明当前生效的是哪个环境变量。
+  这解决本机真实踩到的一个坑 —— **Windows 上 `os.environ` 大小写不敏感**，沙箱/CI 设的
+  小写 `https_proxy` 会被 `HTTPS_PROXY` 查到并静默进池（那 13 个 proxy 测试误红的根因）。
+
+### 新增（`dhole --doctor`）
+- `-v` 只报告「能做什么」，doctor 补上「装得对不对」：启动器是否在 PATH、**模块实际从
+  哪个文件加载**、发行元数据与模块版本是否一致、启动器残留、残留进程、核心依赖、状态
+  目录可写性、代理池，最后附能力面板。每项失败都打印可直接复制的修复命令，并以退出码
+  `1` 结束，可用于脚本或 CI。
+- `module loaded from` 一行是刻意的：装的是构建好的 wheel 而非 editable 时，pytest 会
+  静默跑 site-packages 里的旧副本 —— 那行让这件事一眼可见。
+- doctor 永不抛异常（它正是用户在「已经坏了」时才跑的命令）：`repair_script_path()`
+  同样依赖状态目录，在目录不可用时也会失败，已一并收进 try 保护，并有测试覆盖。
+- 复用了 `updater.py` 里既有但未接线的 `_heal_cmd` / `_diagnose` / `_write_repair_script`。
+
+### 文档
+- README 补三块上手内容：**让 agent 自己装**（一段可直接粘贴的 prompt）、
+  **和谁比、不跟谁比**（按场景划分的定位表，不对其他项目的能力细节下断言）、
+  **上下文开销**（实测 `instructions` 324 + `tools/list` 3,454 = **连接时合计 3,778
+  tokens**，含逐工具拆分与复现方法）。
+- 配置表补上 `search_proxies.json` 状态文件，以及 Windows 大小写那一坑的说明。
+
+### 测试
+- 新增 `tests/test_proxy_cli.py` 与 `tests/test_doctor.py`，共 49 例。
+- `conftest.py` 的 `_no_real_home_state_writes` 增补第四个可写状态文件
+  （`search_proxies.json`）的路径接管 —— 否则测试会把真实凭据写进用户的 `~/.dhole`。
+
+测试 970 → 1019，ruff 通过，e2e 9 passed。
+
+## [14.6] - 2026-09-21
+
+两处用户反馈的缺陷。两条都属同一类毛病：**调用看起来成功了，但实际没做它承诺的事**。
+
+### 修复（schema 参数静默失效）
+- **`smart_fetch` 传 `schema` 仍返回 markdown（结构化提取不可用）。** 门条件写的是
+  `if schema and isinstance(schema, dict) and (schema.get("properties") or ...)`，于是
+  两个形态都会**静默退回 markdown 并返回 200**：① `schema` 以 JSON **字符串**送达
+  （部分 MCP 客户端会序列化嵌套对象，agent 也会）被 `isinstance(..., dict)` 挡掉；
+  ② `schema` 是 dict 但没有非空 `properties`（如 `{"type": "object"}`）。调用方完全
+  无从知道 schema 被丢掉了 —— 这正是 `_strict_options` 存在的意义要防的那类失败。
+  现在新增 `_normalize_schema()`：字符串形式被解析成 dict；**空壳 schema 直接报错**
+  并给出可用示例，不再静默降级。校验前移到 `smart_fetch` 入口（single 与 bulk 两条
+  路径共用），并给 `options.schema` 补上与其他提升参数一致的兜底（顶层优先）。
+  补 `tests/test_schema_param.py`（15 例，含「字符串 schema 不得被丢弃」「空壳 schema
+  必须在发起任何抓取前报错」两条回归）。
+
+### 修复（首次调用 -32001 超时）
+- **`smart_fetch` 偶发 MCP timeout（-32001），首次报错、重试即恢复。** 根因是**一次性
+  的旧状态目录搬移同步跑在事件循环上**：`cache._ensure_db()` 在首次缓存访问时调用
+  `paths.migrate_legacy_cache_dir()`，而它会搬 `cache.db` 加整个 `models/`（90–450MB；
+  跨卷时 `shutil.move` 退化为复制+删除）。实测搬 120MB 模型就把事件循环**完全停摆
+  2.09s**（心跳间隔本该 0.05s），期间 MCP 服务发不出任何响应，首个工具调用被判超时；
+  重试时一次性标志已置位，于是瞬间成功。修复：新增
+  `paths.migrate_legacy_cache_dir_async()`（走 `asyncio.to_thread`），`cache._ensure_db`
+  与 `reranker.ensure_reranker`（`model_present()`）改用它；并把该搬移提到启动预热
+  （`_prewarm_state_dir`）里跑，让成本落在启动窗口而不是首个工具调用上。实测同一场景
+  事件循环停滞 **2.09s → 0.06s**。
+- **同一搬移的并发语义顺带修正。** 原先用「先置位再干活」的普通 bool，第二个调用者会
+  立刻返回、然后去读一个**正在被搬移**的 `cache.db`。改为 `threading.Lock` 串行化：
+  第二个调用者等待第一个搬完再返回。
+- **浏览器会话获取纳入调用预算。** `_auto_escalate` 里 `_ensure_auto_session()` 会排队
+  等 `_auto_session_lock`，而启动预热持锁跑完整个浏览器启动（上限 30s）——这是该调用
+  路径上**最后一个无界步骤**，足以把调用推过客户端请求超时。现在按本次调用的剩余预算
+  限时等待（只限等待，**不取消**已在进行的启动，避免留下半开的浏览器），拿不到就降级
+  返回 HTTP 层结果并标注 `escalation_path=http(browser_busy)` 与可操作提示。不传
+  `lock_wait` 的调用方（`screenshot` 等）行为不变。
+  补 `tests/test_paths.py::TestMigrationNeverBlocksTheEventLoop`（3 例）与
+  `tests/test_server.py::TestStealthySessionBudget`（3 例）。
+
+### 测试（顺带修掉两条早已失效的 e2e 断言）
+- `tests/e2e_mcp_test.py::test_tool_definitions` 里两条断言在 13.16 重写工具描述
+  之后就再没成立过（`pytest -m e2e` 默认不跑，所以一直没暴露）：`"Fetch any URL" in
+  smart_fetch 描述` 与 `"cache" in smart_search 描述`。前者改为断言现描述里的稳定
+  特征，后者改挂在 `options.cache_ttl` 这个**公开选项**上而不是散文上；并补一条
+  `schema` 必须同时出现在描述与 `inputSchema` 里的守卫。
+
+测试 949 → 970，仍然全部离线（默认运行零网络）；`-m e2e` 9 例全绿。
+
 ## [14.5] - 2026-09-21
 
 一次以「让静默降级可被观测、把说得太满的地方改准」为主的版本。测试 755 → 949，

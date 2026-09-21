@@ -159,14 +159,21 @@ def test_tool_definitions(mcp):
     tool_map = {t["name"]: t for t in tools}
 
     fetch_desc = tool_map["smart_fetch"]["description"]
-    assert "Fetch any URL" in fetch_desc
+    assert "EVERY web page" in fetch_desc
     assert "offset" in fetch_desc.lower() and "html" in fetch_desc.lower()
+    # schema 是结构化提取的唯一入口，此前会被静默丢弃（传了也照样返回 markdown），
+    # 所以这里把它钉在 e2e 层面：既要在描述里露脸，也要在 inputSchema 里真实存在。
+    assert "schema" in fetch_desc
+    assert "schema" in tool_map["smart_fetch"]["inputSchema"]["properties"]
 
     offset_desc = tool_map["smart_fetch"]["inputSchema"]["properties"]["offset"]["description"]
     assert "next_offset" in offset_desc
 
-    assert "cache" in tool_map["smart_search"]["description"].lower() or \
-        "cached" in tool_map["smart_search"]["description"].lower()
+    # 搜索缓存：13.16 重写描述后这句提示只在 cache_clear 里，smart_search 的散文
+    # 不再提它 —— 但 cache_ttl 仍是它的公开选项，所以断言挂在选项上而不是散文上。
+    assert "cache_ttl" in (
+        tool_map["smart_search"]["inputSchema"]["properties"]["options"]["description"]
+    )
 
     cache_desc = tool_map["cache_clear"]["description"]
     assert "TTL" in cache_desc or "ttl" in cache_desc or "cache stores" in cache_desc.lower()

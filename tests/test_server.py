@@ -16,6 +16,7 @@ from dhole_mcp.server import (
     _JS_SHELL_SIGNALS, _CF_CHALLENGE_SIGNALS, MAX_RESPONSE_BYTES,
     _browser_deps_available,
     _strict_options, _SF_OPTIONS_ALLOWED, _SF_OPTIONS_FORWARDED,
+    _SessionBusy,
     _SHOT_OPTIONS,
     _proxy_to_url, _basic_auth_header,
 )
@@ -779,6 +780,64 @@ class TestBulkGetCredentialsWiring:
         )
         proxy_arg = mock_http_session.call_args.kwargs["proxy"]
         assert proxy_arg == "http://u:p@proxy.example.com:3128"
+
+
+# ─── Stealthy session budget ─────────────
+
+class TestStealthySessionBudget:
+    """获取浏览器会话必须有预算，不能无界排队在启动预热后面。
+
+    回归：``_ensure_auto_session()`` 会排队等 ``_auto_session_lock``，而启动预热
+    持锁跑完整个浏览器启动（上限 30s）。在那里无界等待会把调用推过 MCP 客户端的
+    请求超时（-32001），调用方拿不到任何诊断；重试时浏览器已热，于是成功。
+    """
+
+    @pytest.mark.asyncio
+    async def test_lock_wait_raises_session_busy_when_the_lock_is_held(self):
+        server = MasterFetchServer()
+        with patch("dhole_mcp.server._browser_deps_available", return_value=True):
+            async with server._auto_session_lock:      # 模拟启动预热正持锁
+                with pytest.raises(_SessionBusy):
+                    await server._ensure_auto_session(lock_wait=0.1)
+
+    @pytest.mark.asyncio
+    async def test_omitting_lock_wait_keeps_the_wait_forever_behaviour(self):
+        """不传 lock_wait 的调用方（screenshot 等）行为不变。"""
+        import asyncio
+        from types import SimpleNamespace
+
+        server = MasterFetchServer()
+        server.open_session = AsyncMock(return_value=SimpleNamespace(session_id="s1"))
+        server._ensure_idle_monitor = MagicMock()
+
+        with patch("dhole_mcp.server._browser_deps_available", return_value=True):
+            async with server._auto_session_lock:
+                waiter = asyncio.create_task(server._ensure_auto_session())
+                await asyncio.sleep(0.1)
+                assert not waiter.done(), "无预算时应当继续等待，而不是抛错"
+            assert await waiter == "s1"
+
+    @pytest.mark.asyncio
+    async def test_busy_session_degrades_to_the_http_result(self):
+        """拿不到会话时降级为 HTTP 结果 + 明确诊断，而不是把调用挂死。"""
+        server = MasterFetchServer()
+        server.get = AsyncMock(
+            return_value=_make_result(status=403, content=["Forbidden"])
+        )
+        server._ensure_auto_session = AsyncMock(
+            side_effect=_SessionBusy("another task held the creation lock")
+        )
+        server.stealthy_fetch = AsyncMock(
+            return_value=_make_result(fetcher_used="stealthy")
+        )
+        server._finalize_result = AsyncMock(side_effect=lambda result, *args: result)
+
+        with patch("dhole_mcp.server._browser_deps_available", return_value=True):
+            out = await server.smart_fetch("https://example.com", cache_ttl=0)
+
+        assert out.escalation_path == "http(browser_busy)"
+        assert "browser_busy" in (out.error or "")
+        server.stealthy_fetch.assert_not_awaited()
 
 
 # ─── Stealthy proxy bypass ─────────────

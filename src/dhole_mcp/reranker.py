@@ -469,7 +469,9 @@ async def ensure_reranker(*, download: bool = True) -> Optional[_Reranker]:
     global _reranker_lock
     if _reranker is not None:
         return _reranker  # type: ignore[return-value]  # warm fast path (no lock)
-    if not download and not model_present():
+    # model_present() is blocking: on first use it can move a pre-14.3 legacy
+    # cache/model tree (see paths.migrate_legacy_cache_dir). Keep it off the loop.
+    if not download and not await asyncio.to_thread(model_present):
         return None
     if _reranker_lock is None:
         _reranker_lock = asyncio.Lock()
@@ -483,7 +485,7 @@ async def ensure_reranker(*, download: bool = True) -> Optional[_Reranker]:
             return _reranker  # type: ignore[return-value]
         if _reranker_tried:
             return None  # a previous load FINISHED and failed; don't retry this process
-        if not download and not model_present():
+        if not download and not await asyncio.to_thread(model_present):
             return None
         return await asyncio.to_thread(_load_reranker)
 

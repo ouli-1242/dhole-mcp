@@ -19,7 +19,7 @@ def fake_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setattr(Path, "home", lambda: home)
-    monkeypatch.setattr(paths, "_legacy_migrated", False)
+    monkeypatch.setattr(paths, "_legacy_migrate_done", False)
     return home
 
 
@@ -107,6 +107,110 @@ class TestLegacyMigration:
         paths.migrate_legacy_cache_dir()  # 幂等：第二次什么都不动
         assert paths.db_path().read_bytes() == first
         assert not legacy.exists()
+
+
+class TestMigrationNeverBlocksTheEventLoop:
+    """首次缓存写入会触发旧目录搬移 —— 它必须在工作线程里跑。
+
+    回归：这个搬移此前是**同步跑在事件循环上**的。实测搬一个 120MB 模型就把事件
+    循环完全停摆 2.09s（心跳间隔本该 0.05s），期间 MCP 服务发不出任何响应，于是
+    首个工具调用（如 smart_fetch cache_ttl=0）被客户端判为 -32001 超时；而重试
+    ——一次性标志此时已置位——瞬间成功。用户看到的就是「首次报错、重试即恢复」。
+    """
+
+    def _make_legacy(self, fake_home):
+        legacy = fake_home / ".dhole_mcp_cache"
+        (legacy / "models" / "bge-zh").mkdir(parents=True)
+        (legacy / "models" / "bge-zh" / "model.onnx").write_bytes(b"onnx")
+        (legacy / "cache.db").write_bytes(b"sqlite")
+        return legacy
+
+    def test_async_wrapper_keeps_the_loop_responsive(self, fake_home, monkeypatch):
+        import asyncio
+        import time
+
+        self._make_legacy(fake_home)
+        real_impl = paths._migrate_legacy_cache_dir_impl
+
+        def slow_impl():
+            time.sleep(0.6)          # 模拟跨卷复制 90-450MB 模型
+            real_impl()
+
+        monkeypatch.setattr(paths, "_migrate_legacy_cache_dir_impl", slow_impl)
+
+        async def run():
+            lags: list[float] = []
+            stop = False
+
+            async def heartbeat():
+                prev = time.perf_counter()
+                while not stop:
+                    await asyncio.sleep(0.02)
+                    t = time.perf_counter()
+                    lags.append(t - prev)
+                    prev = t
+
+            hb = asyncio.create_task(heartbeat())
+            await asyncio.sleep(0.05)
+            t0 = time.perf_counter()
+            await paths.migrate_legacy_cache_dir_async()
+            elapsed = time.perf_counter() - t0
+            stop = True
+            await hb
+            return max(lags), elapsed
+
+        worst, elapsed = asyncio.run(run())
+
+        assert elapsed >= 0.6, "搬移确实发生了（否则本用例什么都没验到）"
+        assert worst < 0.3, f"事件循环被搬移阻塞了 {worst:.2f}s（应远小于 0.6s）"
+        assert paths.db_path().read_bytes() == b"sqlite"
+
+    def test_async_wrapper_is_a_noop_once_done(self, fake_home):
+        import asyncio
+
+        self._make_legacy(fake_home)
+        asyncio.run(paths.migrate_legacy_cache_dir_async())
+        # 第二次调用不该再动任何东西（幂等），也不该抛。
+        asyncio.run(paths.migrate_legacy_cache_dir_async())
+        assert paths.db_path().read_bytes() == b"sqlite"
+
+    def test_concurrent_callers_wait_instead_of_reading_a_half_moved_db(
+        self, fake_home, monkeypatch,
+    ):
+        """第二个调用者必须等第一个搬完，而不是提前返回。
+
+        旧实现先置位再干活（普通 bool），第二个调用者会立刻返回、然后去读一个
+        正在被搬移的 cache.db —— 拿到半个数据库比等一会儿糟得多。
+        """
+        import threading
+        import time
+
+        self._make_legacy(fake_home)
+        real_impl = paths._migrate_legacy_cache_dir_impl
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_impl():
+            started.set()
+            release.wait(10)
+            real_impl()
+
+        monkeypatch.setattr(paths, "_migrate_legacy_cache_dir_impl", slow_impl)
+
+        first = threading.Thread(target=paths.migrate_legacy_cache_dir)
+        first.start()
+        assert started.wait(10), "第一个调用者没能开始"
+
+        second = threading.Thread(target=paths.migrate_legacy_cache_dir)
+        second.start()
+        time.sleep(0.2)
+        assert second.is_alive(), "第二个调用者不得在搬移完成前返回"
+
+        release.set()
+        first.join(10)
+        second.join(10)
+        assert not first.is_alive() and not second.is_alive()
+        assert paths.db_path().read_bytes() == b"sqlite"
 
 
 class TestDholeHomeOverride:

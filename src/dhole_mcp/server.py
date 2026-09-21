@@ -25,6 +25,7 @@ import asyncio
 import contextvars
 import inspect
 from asyncio import gather, Lock, sleep as asyncio_sleep, to_thread as asyncio_to_thread
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from time import time as now
 from dataclasses import dataclass, field
@@ -1326,6 +1327,60 @@ async def _safe_imported_prewarm(module_name: str, attr: str, timeout: float = 2
     await _safe_prewarm(coro_fn, timeout=timeout)
 
 
+class _SessionBusy(RuntimeError):
+    """The auto browser session could not be acquired within the call budget.
+
+    Raised when another task (typically the startup pre-warm) holds the session
+    creation lock past the caller's deadline. Distinct from a launch failure:
+    the browser may come up fine a moment later, so the caller degrades to the
+    HTTP-tier result instead of reporting the site as unreachable.
+    """
+
+
+@asynccontextmanager
+async def _lock_within(lock, timeout: Optional[float]):
+    """Hold ``lock``, waiting at most ``timeout`` seconds to acquire it.
+
+    ``timeout=None`` waits indefinitely (the historical behaviour). Only the
+    *wait* is bounded — an in-flight holder is never cancelled, so a browser
+    launch that already started is left to finish and be reused by the next call.
+    """
+    if timeout is None:
+        await lock.acquire()
+    else:
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise _SessionBusy(
+                f"browser session busy: another task held the creation lock for "
+                f"more than {timeout:.1f}s"
+            ) from None
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+async def _prewarm_state_dir() -> None:
+    """Run the one-time legacy state-dir move at startup, off the request path.
+
+    A pre-14.3 ``~/.dhole_mcp_cache`` is folded into ``~/.dhole`` on first use.
+    That is real filesystem work (cache.db + a 90-450MB model tree, copy+delete
+    when the two roots are on different volumes) and it used to happen inline on
+    the event loop during the first cache write — so the first tool call timed
+    out (-32001) and the retry succeeded.
+
+    Doing it here means the cost lands in the startup window instead. The
+    off-loop call in cache._ensure_db still covers the case where a request
+    arrives before this finishes (and both are serialized by the lock in
+    paths.migrate_legacy_cache_dir). Never raises.
+    """
+    try:
+        await paths.migrate_legacy_cache_dir_async()
+    except BaseException:
+        pass
+
+
 def _normalize_credentials(credentials: Optional[Dict[str, str]]) -> Optional[tuple]:
     """Convert a credentials dictionary to a tuple accepted by fetchers.
 
@@ -1443,6 +1498,7 @@ def _safe_cookie_dict(cookies: Sequence[SetCookieParam] | None) -> Optional[Dict
 # re-forwarding them via **kw would raise a duplicate-keyword TypeError).
 _SF_OPTIONS_ALLOWED = frozenset({
     "css_selector", "max_content_chars", "timeout", "pages", "password",
+    "schema",
     "proxy", "cookies", "extra_headers", "useragent", "wait", "network_idle",
     "headless", "real_chrome", "main_content_only", "use_trafilatura",
     "solve_cloudflare", "block_webrtc", "hide_canvas",
@@ -1450,7 +1506,7 @@ _SF_OPTIONS_ALLOWED = frozenset({
 })
 _SF_OPTIONS_FORWARDED = frozenset(
     _SF_OPTIONS_ALLOWED
-    - {"css_selector", "max_content_chars", "timeout", "pages", "password"}
+    - {"css_selector", "max_content_chars", "timeout", "pages", "password", "schema"}
 )
 _SC_OPTIONS = frozenset({
     "max_pages", "max_depth", "path_include", "path_exclude",
@@ -1482,6 +1538,54 @@ def _strict_options(options: dict, allowed: frozenset, forwarded: frozenset, too
             f"Supported keys: {sorted(allowed)}"
         )
     return {k: v for k, v in options.items() if k in forwarded}
+
+
+# ─── extraction schema normalization ───────────────────────────────
+# The tool contract is "pass schema -> get structured JSON back". The old gate
+# (`if schema and isinstance(schema, dict) and (schema.get("properties") or ...)`)
+# broke that contract in two ways that BOTH returned markdown with a 200 status
+# and no warning:
+#   1. a schema that arrived as a JSON *string* (several MCP clients serialize
+#      nested objects; agents also stringify) failed `isinstance(schema, dict)`
+#   2. a schema dict with no non-empty `properties` (e.g. {"type": "object"})
+# In both cases the caller had no way to tell the schema had been dropped — the
+# worst failure mode for an agent, and the same one _strict_options exists to
+# prevent for option keys. Now a supplied-but-unusable schema raises, so the
+# agent sees the problem instead of silently getting markdown.
+def _normalize_schema(schema: Any) -> Optional[dict]:
+    """Coerce a caller-supplied extraction schema to a usable dict.
+
+    Returns None when no schema was supplied (the caller wants markdown).
+    Raises ValueError when a schema WAS supplied but cannot be used.
+    """
+    if schema is None:
+        return None
+    if isinstance(schema, str):
+        text = schema.strip()
+        if not text:
+            return None
+        try:
+            schema = json.loads(text)
+        except (ValueError, TypeError) as e:
+            raise ValueError(
+                f"schema was passed as a string but is not valid JSON ({e}). "
+                'Pass it as an object: {"properties": {"title": {"selector": "h1"}}}'
+            ) from None
+    if not isinstance(schema, dict):
+        raise ValueError(
+            f"schema must be a JSON object, got {type(schema).__name__}. "
+            'Example: {"properties": {"title": {"selector": "h1"}}}'
+        )
+    if not schema:
+        return None
+    if schema.get("properties") or schema.get("type") == "auto" or schema.get("mode") == "auto":
+        return schema
+    raise ValueError(
+        "schema was supplied but has nothing to extract: it needs a non-empty "
+        "'properties' map (or type/mode = 'auto'). Refusing to silently return "
+        'markdown. Example: {"properties": {"title": {"selector": "h1"}}}. '
+        "Omit schema entirely to get markdown."
+    )
 
 
 # ─── Main server class ─────────────────────────────────────────────
@@ -1526,7 +1630,7 @@ class MasterFetchServer:
                 )
             return entry
 
-    async def _ensure_auto_session(self) -> str:
+    async def _ensure_auto_session(self, *, lock_wait: Optional[float] = None) -> str:
         """Get or create an auto-persistent browser session. Avoids browser startup on every fetch.
 
         Race-safe: if two concurrent calls both pass the initial check,
@@ -1535,6 +1639,13 @@ class MasterFetchServer:
         Idle timeout: when AUTO_SESSION_IDLE_TIMEOUT > 0, auto sessions close
         after that many seconds of inactivity. When it is 0 (default), the
         browser is kept alive forever and no idle monitor is started.
+
+        ``lock_wait`` bounds only the wait for the creation lock (seconds). The
+        startup pre-warm holds that lock across the whole browser launch, so a
+        first fetch that needs the stealthy tier can otherwise queue behind it
+        for up to 30s — past the MCP client's request timeout. Pass a budget to
+        get ``_SessionBusy`` instead of an unbounded wait; None keeps the old
+        wait-forever behaviour.
         """
         if not _browser_deps_available():
             raise RuntimeError(
@@ -1558,7 +1669,7 @@ class MasterFetchServer:
         # browser instance. (The previous close-the-orphan race can no longer
         # happen in production, but the final guard below still defends against
         # any path that sets the attr out-of-band.)
-        async with self._auto_session_lock:
+        async with _lock_within(self._auto_session_lock, lock_wait):
             # Re-check: another creator may have finished while we waited.
             async with self._sessions_lock:
                 existing_id = getattr(self, attr)
@@ -2486,7 +2597,7 @@ class MasterFetchServer:
         actions: Annotated[Optional[List[Dict[str, Any]]], Field(description="Page interactions run on the stealthy browser AFTER load, BEFORE extraction: [{click:'button.load-more'}, {fill:{selector:'#q', text:'x'}}, {press:'Enter'}, {wait:500}, {scroll:3}, {wait_selector:'.item'}]. Forces the stealthy tier; bypasses cache. Reaches content behind a click/form/infinite scroll.")] = None,
         include_media: Annotated[bool, Field(description="If true, populate the response .media field with up to 20 image URLs found on the page (for multimodal agents). Default false (keeps responses lean).")] = False,
         include_links: Annotated[bool, Field(description="If true, populate the response .links field with the page's outgoing links classified as citations/navigation/external + a primary_source hint. Default false. Use when you want to follow a page's referenced sources in one step.")] = False,
-        schema: Annotated[Optional[Dict[str, Any]], Field(description="JSON schema for structured data extraction. Each property can have a 'selector' (CSS) for direct DOM extraction. Returns structured JSON instead of markdown. No LLM needed.")] = None,
+        schema: Annotated[Optional[Dict[str, Any]], Field(description="JSON schema for structured data extraction. Each property can have a 'selector' (CSS) for direct DOM extraction. Returns structured JSON instead of markdown. No LLM needed. Needs a non-empty 'properties' map (a JSON string is also accepted); an unusable schema raises instead of silently returning markdown.")] = None,
     ) -> ResponseModel:
         """Fetch a URL (or multiple URLs) with automatic anti-bot escalation.
 
@@ -2519,6 +2630,10 @@ class MasterFetchServer:
         # 行为与原来完全一致。
         if cache_ttl is None:
             cache_ttl = self._cache_ttl
+        # Normalize/validate the extraction schema BEFORE either path runs, so a
+        # stringified or empty schema raises here instead of silently degrading
+        # to markdown (see _normalize_schema).
+        schema = _normalize_schema(schema)
         # Bulk mode: fetch multiple URLs in parallel
         if urls is not None:
             if actions:
@@ -2562,7 +2677,8 @@ class MasterFetchServer:
         # NOTE: When schema is active, focus is IGNORED (schema extracts from raw
         # HTML; focus filters markdown output — combining them produces inconsistent
         # results where schema has data but focus-filtered content is empty).
-        if schema and isinstance(schema, dict) and (schema.get("properties") or schema.get("type") == "auto" or schema.get("mode") == "auto"):
+        # `schema` is already normalized above: non-None means usable.
+        if schema is not None:
             # Security: validate all CSS selectors in the schema before use
             from dhole_mcp.security import validate_css_selector, SecurityError
             try:
@@ -2952,7 +3068,31 @@ class MasterFetchServer:
         remaining = max(timeout - int((now() - start_time) * 1000), 5000)
         # Playwright fixes the proxy when the browser context starts. Do not
         # route a proxied request through the shared direct auto-session.
-        ssid = None if proxy else await self._ensure_auto_session()
+        #
+        # Acquiring the session is the last unbounded step in this call: it queues
+        # on the creation lock, which the startup pre-warm holds for the whole
+        # browser launch (up to 30s). Waiting there pushes the call past the MCP
+        # client's request timeout, and the client reports -32001 with no
+        # diagnosis while the retry — browser now warm — succeeds. Cap the wait at
+        # this call's remaining budget and degrade to the HTTP-tier result instead.
+        if proxy:
+            ssid = None
+        else:
+            try:
+                ssid = await self._ensure_auto_session(
+                    lock_wait=max(1.0, min(remaining / 1000.0, 20.0))
+                )
+            except _SessionBusy as busy:
+                result.duration_ms = (now() - start_time) * 1000
+                result.escalation_path = "http(browser_busy)"
+                note = (
+                    f"browser_busy: {busy}; gave up on the stealthy tier to stay within "
+                    f"the {timeout}ms call budget. HTTP tier returned status {result.status}. "
+                    "A browser session is starting up (usual on the first call after launch) - "
+                    "retry in a few seconds, or pass force_fetcher='http' to skip the browser."
+                )
+                result.error = f"{result.error}; {note}" if result.error else note
+                return await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
         result = await self.stealthy_fetch(
             url, extraction_type=extraction_type,
             css_selector=css_selector, main_content_only=main_content_only,
@@ -3368,7 +3508,7 @@ class MasterFetchServer:
                     "password": {"type": "string", "description": "PDF only: password for an encrypted PDF."},
                     "focus": {"type": "string", "description": "Query-focused extraction: only BM25-relevant blocks returned. Context saver on long pages. Post-cache (no re-fetch). Re-pass same focus when paginating."},
                     "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "Page interactions on stealthy browser AFTER load, BEFORE extraction. Forces stealthy + bypasses cache. Each item: {click:'css'}, {fill:{selector:'css',text:'x'}}, {press:'Enter'}, {wait:500}, {scroll:3}, {wait_selector:'css'}. Use for load-more, search forms, pagination, infinite scroll."},
-                    "schema": {"type": "object", "description": "JSON schema for structured data extraction. Each property can have a 'selector' (CSS) for direct DOM extraction. Returns structured JSON instead of markdown. No LLM needed.", "additionalProperties": True},
+                    "schema": {"type": "object", "description": "JSON schema for structured data extraction. Each property can have a 'selector' (CSS) for direct DOM extraction. Returns structured JSON instead of markdown. No LLM needed. Requires a non-empty 'properties' map; a JSON string is also accepted. An unusable schema raises an error rather than silently returning markdown.", "additionalProperties": True},
                     "options": {"type": "object", "description": "include_links (bool,false: response.links=citations/navigation/external+primary_source), include_media (bool,false: up to 20 page image URLs), proxy (str|dict), cookies (list), extra_headers (dict), useragent (str), wait (ms,0), network_idle (bool,SPAs), headless (bool,true), real_chrome/solve_cloudflare/block_webrtc/hide_canvas/main_content_only/use_trafilatura (anti-detect tuning, good defaults, rarely needed).", "additionalProperties": True},
                 },
             },
@@ -3521,6 +3661,8 @@ class MasterFetchServer:
                 warm_reranker = asyncio.create_task(
                     _safe_imported_prewarm("dhole_mcp.reranker", "prewarm_reranker")
                 )
+                # One-time legacy state-dir move: keep it off the first tool call.
+                warm_state = asyncio.create_task(_prewarm_state_dir())
                 try:
                     async with stdio_server() as (read, write):
                         await server.run(read, write, server.create_initialization_options())
@@ -3530,12 +3672,12 @@ class MasterFetchServer:
                     # BaseException) so the process always exits cleanly. A noisy
                     # teardown traceback must never look like a server crash to the
                     # MCP client (which reports it as 'failed to load').
-                    for _t in (warm, warm_reranker):
+                    for _t in (warm, warm_reranker, warm_state):
                         try:
                             _t.cancel()
                         except BaseException:
                             pass
-                    for _t in (warm, warm_reranker):
+                    for _t in (warm, warm_reranker, warm_state):
                         try:
                             await _t
                         except BaseException:
@@ -3568,16 +3710,18 @@ class MasterFetchServer:
                 warm_reranker = asyncio.create_task(
                     _safe_imported_prewarm("dhole_mcp.reranker", "prewarm_reranker")
                 )
+                # One-time legacy state-dir move: keep it off the first tool call.
+                warm_state = asyncio.create_task(_prewarm_state_dir())
                 try:
                     async with manager.run():
                         yield
                 finally:
-                    for _t in (warm, warm_reranker):
+                    for _t in (warm, warm_reranker, warm_state):
                         try:
                             _t.cancel()
                         except BaseException:
                             pass
-                    for _t in (warm, warm_reranker):
+                    for _t in (warm, warm_reranker, warm_state):
                         try:
                             await _t
                         except BaseException:
@@ -3613,6 +3757,9 @@ class MasterFetchServer:
             timeout = args.get("timeout") if args.get("timeout") is not None else options.get("timeout")
             pages = args.get("pages") if args.get("pages") is not None else options.get("pages")
             password = args.get("password") if args.get("password") is not None else options.get("password")
+            # schema is promoted like the others: top-level wins, options bag is
+            # accepted as a fallback (some clients only surface the options bag).
+            schema = args.get("schema") if args.get("schema") is not None else options.get("schema")
             kw = _strict_options(options, _SF_OPTIONS_ALLOWED, _SF_OPTIONS_FORWARDED, "smart_fetch")
             result = await self.smart_fetch(
                 url=url, urls=urls,
@@ -3627,7 +3774,7 @@ class MasterFetchServer:
                 offset=args.get("offset", 0),
                 focus=args.get("focus"),
                 actions=args.get("actions"),
-                schema=args.get("schema"), **kw,
+                schema=schema, **kw,
             )
             return [TextContent(type="text", text=result.model_dump_json())], result.model_dump()
 
@@ -3690,9 +3837,11 @@ def _help_epilog() -> str:
         f"  {ui.cyan('dhole')}              {ui.dim('serve · stdio MCP (Claude Code, Cursor, OpenCode, Pi)')}",
         f"  {ui.cyan('dhole --http')}       {ui.dim('serve · streamable HTTP (Open WebUI), use --host/--port')}",
         f"  {ui.cyan('dhole -v')}           {ui.dim('version + capability check')}",
+        f"  {ui.cyan('dhole --doctor')}     {ui.dim('diagnose the install and suggest fixes')}",
         f"  {ui.cyan('dhole -u')}           {ui.dim('update to the latest version')}",
         f"  {ui.cyan('dhole model')}        {ui.dim('list reranker models')}",
         f"  {ui.cyan('dhole model use X')}  {ui.dim('select the reranker model (persisted in ~/.dhole/config/reranker.json)')}",
+        f"  {ui.cyan('dhole proxy')}        {ui.dim('manage the search proxy pool (list|add|remove|clear)')}",
         "",
         ui.dim("docs:") + "  " + ui.cyan("https://github.com/ouli-1242/dhole-mcp"),
     ])
@@ -3738,16 +3887,100 @@ def _cmd_model(argv: list[str]) -> int:
     return 2
 
 
+def _cmd_proxy(argv: list[str]) -> int:
+    """`dhole proxy [list|add|remove|clear]` - manage the search proxy pool.
+
+    Writes the same file a user can edit by hand (~/.dhole/search_proxies.json);
+    the CLI is a convenience, not a second source of truth. A proxy supplied via
+    DHOLE_SEARCH_PROXY stays env-owned and is never copied into that file.
+    """
+    from dhole_mcp import cli_ui as ui
+    from dhole_mcp import search_proxy
+
+    action = argv[0].lower() if argv else "list"
+    rest = argv[1:]
+
+    if action in ("list", "ls", ""):
+        print("  " + ui.dim(f"proxy pool (config: {search_proxy._config_path()})"))
+        proxies = search_proxy.list_proxies()
+        if proxies:
+            for i, p in enumerate(proxies):
+                print(f"    {str(i).ljust(3)} {search_proxy._redact(p)}")
+        else:
+            print("    " + ui.dim("none configured - searches go out over your own IP"))
+        env = search_proxy._read_env_var()
+        if env:
+            src = search_proxy._env_proxy_source() or "environment"
+            print("  " + ui.dim(f"from {src} (env-owned, not written to the file):"))
+            for p in env:
+                print("    " + ui.dim(search_proxy._redact(p)))
+        print("  " + ui.dim("add with") + "  "
+              + ui.cmd('dhole proxy add "socks5://ip:port"'))
+        return 0
+
+    if action == "add":
+        if not rest:
+            print(ui.err("usage: dhole proxy add <proxy> [<proxy> ...]"))
+            return 2
+        added = 0
+        for raw in rest:
+            try:
+                total = search_proxy.add_proxy(raw)
+            except ValueError as exc:
+                print(ui.err(str(exc)))
+                continue
+            added += 1
+            print(ui.ok(f"added {search_proxy._redact(raw)}") + "  "
+                  + ui.dim(f"({total}/{search_proxy.MAX_PROXIES})"))
+        if added:
+            search_proxy.reset_pool()
+            print("  " + ui.dim("rotation is per search call - new proxies apply "
+                                "to the next search"))
+        return 0 if added else 2
+
+    if action == "remove":
+        if not rest:
+            print(ui.err("usage: dhole proxy remove <index>"))
+            return 2
+        try:
+            index = int(rest[0])
+        except ValueError:
+            print(ui.err(f"index must be a number, got: {rest[0]}"))
+            return 2
+        try:
+            removed = search_proxy.remove_proxy(index)
+        except IndexError as exc:
+            print(ui.err(str(exc)))
+            return 2
+        search_proxy.reset_pool()
+        print(ui.ok(f"removed {search_proxy._redact(removed)}"))
+        return 0
+
+    if action == "clear":
+        n = search_proxy.clear_proxies()
+        search_proxy.reset_pool()
+        print(ui.ok(f"cleared {n} proxy(ies)") if n
+              else "  " + ui.dim("nothing to clear"))
+        return 0
+
+    print(ui.err(f"unknown subcommand: {action} "
+                 f"(try: dhole proxy list|add|remove|clear)"))
+    return 2
+
+
 def main():
     """Entry point for the dhole CLI."""
     from dhole_mcp import cli_ui as ui
     from dhole_mcp import updater
     import argparse
     import sys as _sys
-    # `dhole model ...` is handled before argparse: a bare `model` positional
-    # would collide with the serve-by-default behavior (no args = start server).
+    # `dhole model ...` / `dhole proxy ...` are handled before argparse: a bare
+    # positional would collide with the serve-by-default behavior (no args =
+    # start the server).
     if len(_sys.argv) > 1 and _sys.argv[1].lower() == "model":
         raise SystemExit(_cmd_model(_sys.argv[2:]))
+    if len(_sys.argv) > 1 and _sys.argv[1].lower() == "proxy":
+        raise SystemExit(_cmd_proxy(_sys.argv[2:]))
     parser = argparse.ArgumentParser(
         prog="dhole",
         description=ui.branded(ui.dim("web research for AI agents · $0 · no keys"), ""),
@@ -3766,6 +3999,8 @@ def main():
                         help="show version + update status")
     parser.add_argument("-u", "--update", action="store_true",
                         help="update dhole to the latest version")
+    parser.add_argument("--doctor", action="store_true",
+                        help="diagnose the install and suggest fixes")
     args = parser.parse_args()
 
     if args.update:
@@ -3774,6 +4009,8 @@ def main():
     if args.version:
         updater.print_version()
         return
+    if args.doctor:
+        raise SystemExit(updater.doctor())
 
     # HTTP mode: stdout is free (not an MCP stdio pipe), so a one-line banner is
     # safe. uvicorn follows with its own URL line. Stdio mode stays silent - any

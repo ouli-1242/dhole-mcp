@@ -25,7 +25,7 @@ Not in here, on purpose:
 * ``rapidocr``'s OCR models — bundled with that package, not downloaded here.
 
 Stdlib only, and imported by cache/reranker/search/updater, so it must never
-import anything heavier than ``os``/``pathlib``.
+import a third-party dependency.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import threading
 from pathlib import Path
 
 logger = logging.getLogger("dhole-mcp.paths")
@@ -107,7 +108,67 @@ def file(name: str) -> Path:
     return home() / name
 
 
-_legacy_migrated = False
+_legacy_migrate_lock = threading.Lock()
+_legacy_migrate_done = False
+
+
+def migrate_legacy_cache_dir() -> None:
+    """Move a pre-14.3 ``~/.dhole_mcp_cache`` under ``~/.dhole``.
+
+    Old: ``~/.dhole_mcp_cache/cache.db``  + ``~/.dhole_mcp_cache/models/**``
+    New: ``~/.dhole/cache.db``            + ``~/.dhole/models/**``
+
+    Why bother instead of letting the cache rebuild: the reranker model is ~90MB
+    and on some networks (CN hosts-file blocks, proxies) it cannot be re-fetched
+    at all, so silently starting from an empty directory would quietly downgrade
+    search ranking forever.
+
+    Idempotent and best-effort: only moves entries that are MISSING at the
+    destination, never overwrites, never deletes a non-empty legacy directory,
+    never raises. A partial/failed move costs at most a re-download, never data
+    that existed only in the new location. Called on first cache access and on
+    reranker lookup.
+
+    BLOCKING: this does real filesystem work (``cache.db`` plus a 90-450MB model
+    tree; a cross-device move falls back to copy+delete). It can take seconds to
+    minutes and it must NEVER run on the event loop — an MCP server stalled here
+    cannot answer the in-flight tool call, and the client reports -32001
+    REQUEST_TIMEOUT. Callers on the event loop must use
+    ``await migrate_legacy_cache_dir_async()`` instead.
+
+    Concurrency: a second caller waits for the first to finish rather than
+    returning early. Returning early used to be the behaviour (a plain bool set
+    before the work started), which let a concurrent request read ``cache.db``
+    while it was still being moved.
+    """
+    global _legacy_migrate_done
+    if _legacy_migrate_done:
+        return
+    with _legacy_migrate_lock:
+        if _legacy_migrate_done:
+            return
+        try:
+            rename_legacy_model_dirs()
+            _migrate_legacy_cache_dir_impl()
+            # Also after the move: a legacy root can itself contain a pre-registry
+            # model dir name (msmarco-minilm-l6-v2), which only exists post-move.
+            rename_legacy_model_dirs()
+        finally:
+            _legacy_migrate_done = True
+
+
+async def migrate_legacy_cache_dir_async() -> None:
+    """Event-loop-safe wrapper around :func:`migrate_legacy_cache_dir`.
+
+    Use this from any async caller. The work happens in a worker thread, so a
+    slow (or cross-device) move of the legacy cache/model tree cannot stall the
+    event loop and time out the tool call that triggered it.
+    """
+    if _legacy_migrate_done:
+        return
+    import asyncio
+
+    await asyncio.to_thread(migrate_legacy_cache_dir)
 
 
 def _merge_tree(src: Path, dst: Path) -> None:
@@ -141,34 +202,6 @@ def _merge_tree(src: Path, dst: Path) -> None:
             src.rmdir()
     except OSError:
         pass
-
-
-def migrate_legacy_cache_dir() -> None:
-    """Move a pre-14.3 ``~/.dhole_mcp_cache`` under ``~/.dhole``.
-
-    Old: ``~/.dhole_mcp_cache/cache.db``  + ``~/.dhole_mcp_cache/models/**``
-    New: ``~/.dhole/cache.db``            + ``~/.dhole/models/**``
-
-    Why bother instead of letting the cache rebuild: the reranker model is ~90MB
-    and on some networks (CN hosts-file blocks, proxies) it cannot be re-fetched
-    at all, so silently starting from an empty directory would quietly downgrade
-    search ranking forever.
-
-    Idempotent and best-effort: only moves entries that are MISSING at the
-    destination, never overwrites, never deletes a non-empty legacy directory,
-    never raises. A partial/failed move costs at most a re-download, never data
-    that existed only in the new location. Called on first cache access and on
-    reranker lookup.
-    """
-    global _legacy_migrated
-    if _legacy_migrated:
-        return
-    _legacy_migrated = True
-    rename_legacy_model_dirs()
-    _migrate_legacy_cache_dir_impl()
-    # Also after the move: a legacy root can itself contain a pre-registry model
-    # dir name (msmarco-minilm-l6-v2), which only exists post-move.
-    rename_legacy_model_dirs()
 
 
 def rename_legacy_model_dirs() -> None:

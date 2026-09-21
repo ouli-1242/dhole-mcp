@@ -54,6 +54,30 @@ pip uninstall dhole-mcp
 rm -rf ~/.dhole                 # 全部运行时数据：缓存 / 模型 / 状态（Windows: rd /s /q %USERPROFILE%\.dhole）
 ```
 
+### 让 agent 自己装
+
+把下面整块粘给你的编码 agent，它会自己完成安装与配置：
+
+```
+在这台机器上安装 Dhole MCP 服务器。逐步执行，不要跳步。
+
+1. 先判断你运行在哪个 agent 宿主（Claude Code / Cursor / OpenCode / Pi 等），
+   找出 (a) MCP 配置文件的位置，(b) 它添加本地 MCP 服务器所需的格式。
+   必要时读宿主文档。不要猜。
+
+2. 运行：pip install "dhole-mcp[all]"
+   再运行：playwright install chromium（先确认是否已装，已装则跳过）。
+   任一步失败就停下并告诉用户，不要继续。
+
+3. 备份第 1 步找到的 MCP 配置文件，再按该宿主要求的格式添加一个名为
+   "dhole" 的服务器，命令为 "dhole"，不带参数。不需要 API key，也不需要
+   任何环境变量（搜索免密钥、全部本地运行）。
+
+4. 保存文件，让用户重启 agent。重启后应能看到 smart_fetch、smart_search、
+   smart_crawl、screenshot、parse、feed_fetch、resolve_url、cache_clear
+   这八个工具。最后运行 `dhole --doctor` 确认所有检查项通过。
+```
+
 ## 使用
 
 在 MCP 客户端（Claude Code / Cursor / OpenCode 等）配置中添加：
@@ -62,12 +86,29 @@ rm -rf ~/.dhole                 # 全部运行时数据：缓存 / 模型 / 状�
 { "mcpServers": { "dhole": { "command": "dhole" } } }
 ```
 
-无需参数、无需密钥、无需环境变量。CLI 自带诊断命令：
+无需参数、无需密钥、无需环境变量。CLI 自带诊断与配置命令：
 
 ```bash
-dhole -v    # 查看版本 + 更新状态
-dhole -u    # 自更新（本 fork 默认关闭）
+dhole -v          # 版本 + 能力面板（浏览器 / PDF / 重排 / 引擎产出）
+dhole --doctor    # 安装体检：逐项定位问题并给出修复命令
+dhole proxy       # 管理搜索代理池（list | add | remove | clear）
+dhole model       # 查看 / 切换重排模型
+dhole -u          # 自更新（本 fork 默认关闭）
 ```
+
+`--doctor` 检查安装完整性（启动器、模块实际加载路径、元数据一致性、残留进程、核心依赖、状态目录可写性、代理池），任何一项失败都会打印可直接复制的修复命令，并以退出码 `1` 结束（可用于脚本或 CI）。实际输出（已略去部分行）：
+
+```
+  Dhole  ✓ all healthy
+  ✓ launcher resolves     D:\Program Files\Python314\Scripts\dhole.exe
+  ✓ package imports       14.6
+  ! module loaded from    D:\tools\dhole-mcp\src\dhole_mcp\__init__.py
+  ✓ metadata consistent   14.6
+  ✓ state dir writable    ~/.dhole
+  ! proxy pool            2 configured (env: HTTPS_PROXY)
+```
+
+其中 `module loaded from` 是刻意保留的一行：**如果它指向 `site-packages` 而你正在改 `src/`，说明装的是构建好的 wheel 而非 editable 安装** —— 这时 `pytest` 会静默地跑旧副本，改代码却看不到效果。
 
 ## 工具
 
@@ -81,6 +122,43 @@ dhole -u    # 自更新（本 fork 默认关闭）
 | `feed_fetch`   | 批量抓取 RSS/Atom feed 最新条目                                           |
 | `resolve_url`  | 解析 URL 最终地址（跟随重定向，不下载页面体）                             |
 | `cache_clear`  | 清除抓取缓存                                                              |
+
+### 和谁比、不跟谁比
+
+Dhole 的差异化不是「每项都最强」，而是**在同一个本地进程里同时具备**：免密钥搜索 + 内置反爬 + 整站爬取 + PDF/OCR + 结构化提取 + agent 信号。下表按**你要做的事**划分，只描述定位与取舍，不对其他项目的能力细节下断言。
+
+| 你要做的事 | 代表项目 | 它更适合的场景 | 它给不了的 |
+| --- | --- | --- | --- |
+| 精细控制单站抓取 | Crawl4AI | 自己写爬取流程、深度定制解析 | 网页搜索；MCP 原生接入 |
+| 单页转 Markdown | Jina Reader | 快速把一页变成可读文本 | 本地运行；不受远程限速 |
+| 大规模 / 企业级反爬 | Firecrawl、Bright Data、ZenRows | 需要住宅代理网络、SLA、超大规模 | $0；数据不出本机 |
+| 托管神经搜索 | Tavily、Exa | 需要稳定的托管搜索质量 | 免密钥；无账号 |
+| **一次配齐、全本地** | **Dhole** | 一个 MCP 服务器覆盖抓取 / 爬取 / 搜索 / OCR / 结构化提取 | 超大规模；DataDome / Akamai 这类不可绕过的反爬 |
+
+付费服务在「最难的反爬」和「超大规模」上确实更强，代价是 $16–$500+/月、需要账号与 API key，且查询与内容都要过它们的服务器。Dhole 走的是另一条路：$0、无账号、无密钥、内容不离开本机——代价见下方[边界、状态与前提](#边界状态与前提)。
+
+### 上下文开销
+
+MCP 客户端每次连接（新会话或重连）都要先付一笔固定 token：`instructions`（握手时注入一次）+ 全部工具 schema。用 `cl100k_base` 对客户端实际收到的 wire JSON 计数，本仓库 14.6 实测：
+
+| 项目 | tokens |
+| --- | --- |
+| `instructions`（`initialize` 注入一次） | 324 |
+| `tools/list`（8 个工具，含描述 + `inputSchema`） | 3,454 |
+| **连接时合计** | **3,778** |
+
+逐工具拆分：
+
+| 工具 | tokens | 工具 | tokens |
+| --- | --- | --- | --- |
+| `smart_fetch` | 1,268 | `feed_fetch` | 215 |
+| `smart_search` | 686 | `resolve_url` | 148 |
+| `smart_crawl` | 633 | `cache_clear` | 144 |
+| `screenshot` | 217 | `parse` | 139 |
+
+这笔开销只在连接时付一次，不会每轮重复。`smart_fetch` 之所以最贵，是因为它一个工具承担了抓取 / PDF / OCR / 批量 / 聚焦提取 / 页面交互 / 结构化提取的全部参数——拆成多个工具反而会让总开销更高。
+
+> 复现方式：`tiktoken.get_encoding("cl100k_base")` 对 `mcp.types.Tool(**td).model_dump(exclude_none=True)` 序列化后的 JSON 计数（±5%，与更新版本的 Claude / GPT tokenizer 略有差异）。
 
 ### smart_search 常用参数
 
@@ -99,7 +177,7 @@ dhole -u    # 自更新（本 fork 默认关闭）
 
 | 变量                                                                 | 用途                                                                                                                                                                                                                                                                                                                                                                          |
 | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DHOLE_SEARCH_PROXY`                                                 | 搜索引擎代理，逗号分隔可轮换（也自动读取 `HTTPS_PROXY` 等）                                                                                                                                                                                                                                                                                                                   |
+| `DHOLE_SEARCH_PROXY`                                                 | 搜索引擎代理，逗号分隔可轮换（也自动读取 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` 作为单代理回退）。**Windows 上 `os.environ` 大小写不敏感，小写 `https_proxy`（沙箱 / CI 常见）同样会被采纳**——所以环境里一个无关的沙箱代理会悄悄进池；`dhole proxy list` 与 `dhole --doctor` 都会告诉你当前生效的是哪个变量。也可用 `dhole proxy add/list/remove/clear` 写入配置文件，两种来源合并去重、上限 20 个 |
 | `DHOLE_BROWSER_IDLE_TIMEOUT`                                         | 浏览器空闲关闭秒数（默认 300，`0` 永不关闭）                                                                                                                                                                                                                                                                                                                                  |
 | `DHOLE_SEARCH_DEADLINE`                                              | 单次搜索整体截止秒数（默认 16）                                                                                                                                                                                                                                                                                                                                               |
 | `DHOLE_BRIGHTDATA_API_KEY`                                           | 启用 Bright Data SERP 后端                                                                                                                                                                                                                                                                                                                                                    |
@@ -117,7 +195,7 @@ dhole -u    # 自更新（本 fork 默认关闭）
 | `DHOLE_HF_ENDPOINT`（或 `HF_ENDPOINT`）                              | 神经重排模型的下载源。默认先试 `huggingface.co`、失败自动回退 `hf-mirror.com`（revision 固定；设了就只用这一个）。回退改的是**从哪取字节**，不改取到什么——两个端点是否真给同一份字节，取决于镜像 fidelity；注册表里填了发布方 sha256 的模型（当前 `bge-zh` / `ms-marco`，取自仓库元数据的 LFS oid 并与本机字节核对过）不符即拒用，`zh-full` 该字段仍为空（未在本机下载过，无从核对） |
 | `DHOLE_DEFAULT_ENGINES` 之外                                         | 重排模型选择见下节（配置文件，非环境变量）                                                                                                                                                                                                                                                                                                                                    |
 
-免密引擎连续 3 次连接失败（DNS/拒连/超时，通常是被墙）会自动冷却 10 分钟并持久化，期间不再参与搜索；任何一次成功即清零。被反爬封（403/503）的冷却仍是 60 秒。 |
+免密引擎连续 3 次连接失败（DNS/拒连/超时，通常是被墙）会自动冷却 10 分钟并持久化，期间不再参与搜索；任何一次成功即清零。被反爬封（403/503）的冷却仍是 60 秒。
 
 ### Keyed 搜索后端（brightdata / tavily / exa / bocha）
 
@@ -193,6 +271,7 @@ dhole model use bge-zh         # 切回默认
 | `~/.dhole/config/reranker.json` | 重排模型选择（`{"model": "..."}`），`dhole model use` 也写这里                                                                                                                                                                                                      | 切换模型时                      |
 | `~/.dhole/circuit_breaker.json` | 引擎熔断/冷却状态                                                                                                                                                                                                                                                   | 引擎被限速/被墙时               |
 | `~/.dhole/engine_stats.json`    | 每个引擎最近一轮的解析产出（容器条数 / 可用条数 / 均值），用来把"引擎答了但解析出 0 条"这种静默降级变可见；`dhole -v` 读它                                                                                                                                          | 每次真实搜索（至多 60s 写一次） |
+| `~/.dhole/search_proxies.json`  | 搜索代理池（`dhole proxy add` 写入；凭据以**明文**存储，`dhole proxy list` 显示时打码）                                                                                                                                                                            | 配置代理时                      |
 | `~/.dhole/search_feedback.json` | 隐式域名偏好                                                                                                                                                                                                                                                        | 仅 `DHOLE_SEARCH_FEEDBACK=1`    |
 | `~/.dhole/usage.jsonl`          | 本地调用日志（工具名/结果/耗时/脱敏错误，无参数值）                                                                                                                                                                                                                 | 仅 `DHOLE_USAGE_LOG` 开启       |
 | `~/.dhole/repair.py`            | 自愈脚本（跟随 `DHOLE_UPDATE_PACKAGE` / `DHOLE_UPDATE_INDEX_URL`）                                                                                                                                                                                                  | 首次自愈时写入                  |

@@ -76,7 +76,13 @@ def _read_config_file() -> list[str]:
 def _read_env_var() -> list[str]:
     """Read proxies from DHOLE_SEARCH_PROXY (comma-separated), with the
     standard HTTPS_PROXY / HTTP_PROXY / ALL_PROXY vars as single-proxy
-    fallbacks when DHOLE_SEARCH_PROXY is unset."""
+    fallbacks when DHOLE_SEARCH_PROXY is unset.
+
+    On Windows ``os.environ`` is case-insensitive, so a lowercase
+    ``https_proxy`` (set by many sandboxes/CI runners) is picked up here too -
+    that is intentional, but it is why a stray sandbox proxy can end up in the
+    pool. ``_env_proxy_source`` names the variable that actually won.
+    """
     raw = (
         os.environ.get("DHOLE_SEARCH_PROXY", "")
         or os.environ.get("HTTPS_PROXY", "")
@@ -86,6 +92,14 @@ def _read_env_var() -> list[str]:
     if not raw:
         return []
     return [p for p in (_validate_proxy(x) for x in raw.split(",")) if p]
+
+
+def _env_proxy_source() -> str:
+    """Name of the env var the pool is actually reading, or '' when none is set."""
+    for name in ("DHOLE_SEARCH_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"):
+        if (os.environ.get(name) or "").strip():
+            return name
+    return ""
 
 
 def load_proxies() -> list[str]:
@@ -104,6 +118,70 @@ def load_proxies() -> list[str]:
             merged.append(p)
     return merged[:MAX_PROXIES]
 
+
+def save_proxies(proxies: list[str]) -> None:
+    """Write proxies to the config file, creating the dhole home dir if needed.
+
+    Invalid entries are dropped silently (``_validate_proxy`` logs a warning) -
+    the file is the source of truth, so it must never hold something the loader
+    would then refuse to use.
+    """
+    path = _config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    validated = [p for p in (_validate_proxy(x) for x in proxies) if p]
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"proxies": validated}, f, indent=2)
+
+
+def add_proxy(proxy: str) -> int:
+    """Add a proxy to the config file. Returns total count after adding.
+
+    Raises ValueError if the proxy is invalid, already present, or the pool is
+    full. Writes only to the config file - a proxy set via DHOLE_SEARCH_PROXY
+    stays env-owned and is not copied here.
+    """
+    p = _validate_proxy(proxy)
+    if not p:
+        raise ValueError(
+            f"Invalid proxy '{proxy}'. Expected format: http://ip:port, "
+            f"https://ip:port, socks5://ip:port (or with user:pass@)."
+        )
+    existing = _read_config_file()
+    if p in existing:
+        raise ValueError(f"Proxy already configured: {p}")
+    if len(existing) >= MAX_PROXIES:
+        raise ValueError(f"Proxy pool is full ({MAX_PROXIES} max). Remove one first.")
+    existing.append(p)
+    save_proxies(existing)
+    return len(existing)
+
+
+def remove_proxy(index: int) -> str:
+    """Remove a proxy by index from the config file. Returns the removed proxy.
+
+    Raises IndexError if the index is out of range.
+    """
+    existing = _read_config_file()
+    if not existing:
+        raise IndexError("No proxies configured.")
+    if index < 0 or index >= len(existing):
+        raise IndexError(f"Index {index} out of range (0-{len(existing) - 1}).")
+    removed = existing.pop(index)
+    save_proxies(existing)
+    return removed
+
+
+def clear_proxies() -> int:
+    """Remove all proxies from the config file. Returns the count removed."""
+    existing = _read_config_file()
+    if existing:
+        save_proxies([])
+    return len(existing)
+
+
+def list_proxies() -> list[str]:
+    """List proxies from the config file (not the env var)."""
+    return _read_config_file()
 
 
 def _redact(proxy: str) -> str:
@@ -265,6 +343,16 @@ def get_next_proxy() -> str | None:
     if pool is None:
         return None
     return pool.get_proxy()
+
+
+def reset_pool() -> None:
+    """Drop the cached pool so the next access re-reads config + env.
+
+    Needed after a CLI edit: the singleton is keyed on the loaded proxy list, so
+    without this a running process would keep serving the pre-edit pool.
+    """
+    global _pool
+    _pool = None
 
 
 # Fire-and-forget probe: after the first pool creation, kick off a background

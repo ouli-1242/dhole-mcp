@@ -82,7 +82,14 @@ async def _ensure_db(cache_dir: Path | None = None) -> Path:
         # ~/.dhole so an existing install keeps its cache DB and (more
         # importantly) its ~90MB reranker model instead of re-downloading it —
         # which on some networks is impossible.
-        paths.migrate_legacy_cache_dir()
+        #
+        # MUST go through the async wrapper: the move touches cache.db plus a
+        # 90-450MB model tree and can take seconds to minutes. Running it inline
+        # blocked the event loop, so the very first cache-writing tool call (e.g.
+        # smart_fetch with cache_ttl=0) stalled past the MCP client's request
+        # timeout and came back as -32001, while the retry — by then the
+        # one-shot guard was set — succeeded instantly.
+        await paths.migrate_legacy_cache_dir_async()
     paths.ensure_private_dir(d)
     db_path = d / _DB_NAME
 
