@@ -143,6 +143,38 @@ def _hosts_cache_reset_dns() -> None:
     _DNS_CHECK_CACHE.clear()
 
 
+def url_targets_internal(url: str, allow_internal: bool = False) -> bool:
+    """这个 URL 是否指向内网 / 回环 / 元数据端点。不抛异常，只答是或否。
+
+    刻意复用 validate_url 本体而不是另写一份判定：内网判据已经有 IP 字面量、八/十
+    六进制变体、IPv4-mapped、被拦主机名表、DNS 复查五层，复制一份必然和原件漂移 ——
+    而调用方（tcp_preflight 的裸 socket、浏览器的落地 URL 复校验）要的正是"和主路径
+    同一个答案"。代价是畸形 URL 也算"是"（宁可拒掉裸连接）。
+    """
+    try:
+        validate_url(url, allow_internal=allow_internal)
+        return False
+    except SecurityError:
+        return True
+    except Exception:
+        # 解析不了的东西不该被当成"安全的内网目标"放过去做直连。
+        return True
+
+
+def _is_blackhole_pin(ip: str) -> bool:
+    """hosts 里的"黑洞"钉位：0.0.0.0 / :: 这一类"哪儿也不去"的占位地址。
+
+    它们作为**连接目标**时并不什么都不做 —— Windows 与 macOS 的栈把 0.0.0.0 当回环
+    处理，Linux 上则多半直接失败 —— 所以"钉到 0.0.0.0"的屏蔽语义在至少两个平台上
+    其实是"钉到本机"。判据用 is_unspecified，覆盖 0.0.0.0 / :: / ::0 / 0::0；
+    裸 "0" 不是 hosts 文件里会出现的写法，ipaddress 也不接受，故不特殊处理。
+    """
+    try:
+        return ipaddress.ip_address((ip or "").strip()).is_unspecified
+    except ValueError:
+        return False
+
+
 def _resolves_to_internal(hostname: str) -> str | None:
     """Return a description of the internal address `hostname` resolves to, else None.
 
@@ -156,7 +188,17 @@ def _resolves_to_internal(hostname: str) -> str | None:
     if cached is not None and now < cached[0]:
         return cached[1]
 
-    if _hosts_file_pin(hostname) is not None:
+    pin = _hosts_file_pin(hostname)
+    if pin is not None:
+        # 豁免要看钉到**哪个值**，不能只看"在不在 hosts 里"。广告/跟踪屏蔽类的
+        # hosts 会把上千个域名钉到 0.0.0.0，而 0.0.0.0 作为连接目标在
+        # Windows/macOS 上等同回环 —— 按存在性豁免等于把这一整批域名变成访问本机
+        # 服务的入口，且攻击者不需要能写 hosts，只需要挑一个已经在里面的名字。
+        # 黑洞钉位的语义是"这里什么都没有"，照连并把结果回报才真正违背用户意图。
+        # 钉到 127.0.0.1 之类的本地开发覆盖仍按原样豁免：那是"我要打到本机这个服务"
+        # 的显式决定，与黑洞的意图相反。
+        if _is_blackhole_pin(pin):
+            return f"hosts-pinned blackhole ({pin}) - treated as internal"
         _DNS_CHECK_CACHE[hostname] = (now + _DNS_ALLOW_TTL, None)
         return None
 

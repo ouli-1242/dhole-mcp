@@ -105,7 +105,7 @@ dhole -u    # 自更新（本 fork 默认关闭）
 | `DHOLE_BRIGHTDATA_API_KEY` | 启用 Bright Data SERP 后端 —— **唯一需要密钥的搜索引擎**，行为见下节 |
 | `DHOLE_BRIGHTDATA_ZONE` | Bright Data zone 名（默认 `dhole`） |
 | `DHOLE_BRIGHTDATA_COUNTRY` | Google 结果地区（默认 `us`） |
-| `DHOLE_SSRF_DNS_RECHECK` | DNS 解析内网复查，**默认开启**；设 `0` 关闭。解析到内网段即拒绝（错误信息里带上开关名）。hosts 文件里显式钉住的域名始终放行——那是本机用户的故意决定（阻断/mirror/分流），攻击者改不了你的 hosts 文件 |
+| `DHOLE_SSRF_DNS_RECHECK` | DNS 解析内网复查，**默认开启**；设 `0` 关闭。解析到内网段即拒绝（错误信息里带上开关名）。hosts 文件里钉住的域名按**钉到的值**放行（阻断/mirror/分流是本机用户的故意决定，攻击者改不了你的 hosts）：钉到 `127.0.0.1`/`172.16.x` 这类地址仍放行，钉到 `0.0.0.0`/`::` 这种黑洞占位则拒绝——屏蔽类 hosts 会把上千个域名钉到 `0.0.0.0`，而它作为连接目标在 Windows/macOS 上等同回环 |
 | `DHOLE_UPDATE_PACKAGE` | 自更新目标发行名（发布自己的发行版后设置以启用） |
 | `DHOLE_UPDATE_INDEX_URL` | 自更新/自愈时传给 pip 的 `--index-url`（不设则用 pip 默认源） |
 | `DHOLE_TAVILY_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_BOCHA_API_KEY` | 对应 keyed 引擎的密钥（均默认不跑，`engines=` 点名才调用） |

@@ -566,6 +566,13 @@ def tcp_preflight(url: str, timeout: float = 2.0) -> tuple[bool, str]:
     """
     import socket
     try:
+        from dhole_mcp.security import url_targets_internal
+        # 这个"快速可达性探测"本身就是一次对内网的裸 TCP 连接，而且它的分类结果会
+        # 原样回报给 agent（connection_refused vs dns_failure = 端口开/关的信号），
+        # 等于一个内网端口扫描 oracle。先判一次，命中内网时返回与"真的不可达"**同形**
+        # 的类别，不给指纹留下可区分的东西。
+        if url_targets_internal(url):
+            return False, "dns_failure"
         parsed = urlparse(url)
         host = parsed.hostname
         if not host:
