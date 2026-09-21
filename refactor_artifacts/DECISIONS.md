@@ -161,3 +161,21 @@
   **真的能测出漏洞**（Linux 12 failed）。只声称"调用发生了"与"权限位真的落上了"是两种强度的结论。
 - **范围限制**：容器里只跑了 `test_state_file_permissions.py` 与 `TestFixtureAntiRot`，
   **没有**跑全量 `pytest`（依赖更重）。"全套在 Linux 上是否全绿"仍然是未知项，已记进遗留问题。
+
+## D-18 清理：删 `dist/`、`after/`、`tmp_home/`，保留 `refactor_artifacts/`
+
+- **背景**：用户问 `refactor_artifacts/` 与 `dist/` 还有没有用，没用就删。
+- **判定与处置**：
+  | 对象 | 判定 | 处置 |
+  | --- | --- | --- |
+  | `refactor_artifacts/`（11 份交付文档 + `baseline/` 冻结证据 + `analysis/` 原始输出 + `tools/` 可重跑脚本） | **有用** —— 它是本任务全部结论的依据，删掉等于把"凭什么说没改行为"一起删掉 | **保留** |
+  | `refactor_artifacts/tmp_home/`（7 个跟踪文件：`cache.db`×2、`circuit_breaker.json`×2、`engine_stats.json`×2、`pyshim/sitecustomize.py`） | **工具产物** —— `tools/mcp_snapshot.py:376,380` 运行时自己会写 shim 与 `run-*` 目录，重跑即重建；两轮的 state 文件字节相同 | **删除**（`git rm -r`） |
+  | `refactor_artifacts/after/snapshot_run.log` | 未被任何文档引用的一次性运行日志，且已被 `*.log` 忽略 | **删除** |
+  | `dist/`（`dhole_mcp-14.6-py3-none-any.whl` + `.tar.gz`，872K） | **无用** —— gitignored 构建产物；构建于 09-21 22:51，**早于 14.7 那批改动**，与当前代码不符，且 `hatch build` 可再生 | **删除** |
+- **为什么 `dist/` 是"陈旧"而不是"待发布"**：它虽然叫 14.6，但里面**不含** 14.7 那批改动，
+  而用户的要求恰恰是"14.7 的内容并进 14.6"。拿它去发布等于发一份旧的。
+  要可发布的 14.6 制品，应从 `release/14.6` 重新构建（`python -m hatchling build` / `python -m build`）。
+- **不可恢复性提示**：`dist/` 与 `after/` **不在 git 里**，删除后无法用 git 找回（但都可再生）；
+  `tmp_home/` 是跟踪文件，可从历史里恢复（`git checkout <hash> -- refactor_artifacts/tmp_home`）。
+- **顺带**：`REFACTOR_REPORT.md` 第 11 节第 3 条原文写着"未清理（保留以便复现）"，已同步改写为"已清理"，
+  并注明其可再生 —— **文档不能停在已经不再成立的说法上**。

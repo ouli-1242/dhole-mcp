@@ -236,7 +236,10 @@ git diff --stat 74524dc -- src/          # 期望：无输出
 2. **CHANGELOG 完全未被用作检查清单**（按任务要求）。因此若 CHANGELOG 声称修过而代码未修，
    本轮不负责发现。
 3. **`refactor_artifacts/tmp_home/` 与 `tools/` 下的一次性守卫脚本**（`pyshim/sitecustomize.py`）
-   是快照器的运行残留，属于工具产物，未清理（保留以便复现）。
+   是快照器的运行残留，属于工具产物。**2026-09-22 已清理** —— 二者都由
+   `tools/mcp_snapshot.py` 自己在运行时生成（`:376` 写 shim、`:380` 建 `run-*`），
+   所以删掉不影响复现，重跑该脚本即可重建。`dist/`（gitignored 构建产物）也已删除，
+   见 `DECISIONS.md` D-18。
 4. **子代理产物被覆盖的事件**：一个独立 README↔代码审查子代理原本写了 659 行、21 条发现
    （D-01…D-21）到 `DOC_CODE_DRIFT.md`；我在它完成前用自己 124 行的版本**覆盖了它**
    （`Write` 报告"updated"而非"created"，我当下未察觉文件已存在）。原正文不可恢复。
