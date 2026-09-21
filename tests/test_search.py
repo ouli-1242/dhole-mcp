@@ -11,6 +11,7 @@ import asyncio
 import json
 import pytest
 from dhole_mcp import search as search
+from dhole_mcp.search import SearchResult
 from dhole_mcp import search_engines as se
 from dhole_mcp.search_engines import (
     _passes_site_filter, _normalize_domain, RawResult, EngineReport, multi_search,
@@ -848,3 +849,125 @@ class TestDegradedPoolIsHonest:
             assert r.consensus_basis == "full"
             assert "LOW CONFIDENCE" not in r.fetch_hint
             assert "didn't contribute" not in r.fetch_hint
+
+
+# ─── empty 可见性（S4a）：引擎答了但解析出 0 条，此前在两个列表里同时消失 ───
+
+async def _search_with(monkeypatch, reports, results=None, query="sqlite WAL mode",
+                     store=None, **kw):
+    """用给定的 reports 跑一次真 smart_search（引擎层与缓存都是假的）。"""
+    ranked = results if results is not None else [RawResult(
+        title="sqlite WAL mode explained", url="https://sqlite.org/wal",
+        snippet="sqlite WAL journaling", source="bing", position=1)]
+
+    async def fake_multi(query_, max_results, **kwargs):
+        return ranked, reports
+
+    async def _none():
+        return None
+
+    if store is None:
+        async def no_get(*a, **kwargs):
+            return None
+
+        async def no_set(*a, **kwargs):
+            return None
+    else:
+        async def no_get(key_, cache_type, css_selector, **kwargs):
+            return store.get((key_, cache_type))
+
+        async def no_set(key_, cache_type, content, status, css_selector, ttl, **kwargs):
+            store[(key_, cache_type)] = {"content": content}
+
+    monkeypatch.setattr(search, "multi_search", fake_multi)
+    monkeypatch.setattr(search, "ensure_reranker", _none)
+    monkeypatch.setattr(search, "get_cached", no_get)
+    monkeypatch.setattr(search, "set_cached", no_set)
+    return await search.smart_search(None, query, max_results=6, mode="auto", **kw)
+
+
+class TestEngineEmptyIsVisible:
+
+    @pytest.mark.asyncio
+    async def test_empty_status_is_carried_through_the_report(self, monkeypatch):
+        async def fake_metasearch(q, n, **kw):
+            return [], {"brave": "empty", "bing": "ok", "yahoo": "circuit_open"}
+        monkeypatch.setattr(se, "_metasearch", fake_metasearch)
+        _, reports = await multi_search("test", 6)
+        by = {r.name: r for r in reports}
+        # empty 既不是 ok 也不是 blocked —— 正因如此它此前哪儿都不出现
+        assert by["brave"].ok is False and by["brave"].blocked is False
+        assert by["brave"].status == "empty"
+        assert by["yahoo"].status == "circuit_open"
+
+    @pytest.mark.asyncio
+    async def test_init_and_no_key_failures_count_as_blocked(self, monkeypatch):
+        """构造失败 / 缺 key 不是"这个查询没结果"，不能落到 empty 分支。"""
+        async def fake_metasearch(q, n, **kw):
+            return [], {"bing": "init_error:RuntimeError", "tavily": "no_key:TAVILY_API_KEY"}
+        monkeypatch.setattr(se, "_metasearch", fake_metasearch)
+        _, reports = await multi_search("test", 6)
+        assert all(r.blocked for r in reports), [r.status for r in reports]
+
+    @pytest.mark.asyncio
+    async def test_response_separates_empty_from_blocked_and_preempted(self, monkeypatch):
+        reports = ([EngineReport(name="bing", ok=True, status="ok")]
+                   + [EngineReport(name=n, status="empty", error="no results")
+                      for n in ("brave", "yandex")]
+                   + [EngineReport(name="yahoo", blocked=True, status="timeout", error="timed out")]
+                   + [EngineReport(name="duckduckgo", preempted=True, status="preempted")])
+        r = await _search_with(monkeypatch, reports)
+        assert r.engines_used == ["bing"]
+        assert r.engine_blocked == ["yahoo"]
+        assert r.engine_empty == ["brave", "yandex"]
+        assert r.engine_preempted == ["duckduckgo"]
+
+    @pytest.mark.asyncio
+    async def test_all_silent_pool_warns_about_diversity(self):
+        """全体 empty 时要说"引擎没产出"，而不是把 1/1 当健康然后闭嘴。
+
+        _search_next_action 的分母此前只算 blocked：4/5 解析器坏了会被读成
+        blocked=0/total=1 → 警告永不触发。
+        """
+        r = search._search_next_action(
+            [SearchResult(title="t", url="https://a.test", fetch_relevance="high")],
+            [], "", ["bing"],
+            engine_empty=["brave", "yandex", "yahoo", "duckduckgo"],
+        )
+        assert "didn't contribute" in r and "LOW diversity" in r, r
+
+    @pytest.mark.asyncio
+    async def test_next_action_names_the_two_failure_kinds_separately(self):
+        """"被墙"和"答了但解析不出东西"要分开说 —— 修法完全不同。"""
+        r = search._search_next_action(
+            [SearchResult(title="t", url="https://a.test", fetch_relevance="high")],
+            ["bing"], "", ["yandex"], engine_empty=["brave", "yahoo", "duckduckgo"],
+        )
+        assert "1 blocked" in r and "3 answered but parsed nothing usable" in r, r
+
+    @pytest.mark.asyncio
+    async def test_pool_health_notes_cover_empty_engines_too(self):
+        got = search._pool_health_notes(
+            [SearchResult(title="t", url="https://a.test")], ["brave", "yandex"], 1)
+        assert "didn't contribute" in got and "LOW CONFIDENCE" in got
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_keeps_empty_visible(self, monkeypatch):
+        store: dict = {}
+
+        async def fake_get(query_, cache_type, css_selector, **kwargs):
+            return store.get((query_, cache_type))
+
+        async def fake_set(query_, cache_type, content, status, css_selector, ttl, **kwargs):
+            store[(query_, cache_type)] = {"content": content}
+
+        store: dict = {}
+        reports = [EngineReport(name="bing", ok=True, status="ok"),
+                   EngineReport(name="brave", status="empty", error="no results"),
+                   EngineReport(name="yandex", preempted=True, status="preempted")]
+        live = await _search_with(monkeypatch, reports, store=store)
+        hit = await _search_with(monkeypatch, reports, store=store)
+        assert hit.cached is True
+        assert live.engine_empty == ["brave"] and live.engine_preempted == ["yandex"]
+        assert hit.engine_empty == live.engine_empty
+        assert hit.engine_preempted == live.engine_preempted

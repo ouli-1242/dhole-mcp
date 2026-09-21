@@ -213,7 +213,9 @@ class SearchResponseModel(BaseModel):
     results: list[SearchResult] = Field(description="Ranked search results (URLs + ranking, not page content)")
     total_results: int = Field(default=0, description="Results returned")
     engines_used: list[str] = Field(default=[], description="Engines that returned results")
-    engine_blocked: list[str] = Field(default=[], description="Engines that did NOT contribute (rate-limited/CAPTCHA'd/timed out/parsed no results). Results still came from engines_used; retry shortly for more recall.")
+    engine_blocked: list[str] = Field(default=[], description="Engines that were rate-limited / CAPTCHA'd / timed out / errored - they could not answer. See engine_empty for the different case of an engine that DID answer but yielded nothing usable.")
+    engine_empty: list[str] = Field(default=[], description="Engines that answered (HTTP 200) but parsed zero usable results. NOT rate-limiting: either this query genuinely has nothing in that index, or that engine's parser has drifted out of sync with its page structure. Cross-check the 'engine yield' row of `dhole -v`.")
+    engine_preempted: list[str] = Field(default=[], description="Engines cancelled because enough results had already arrived. Normal on a healthy fast pool - this is NOT a failure or a block.")
     rerank_mode: str = Field(default="merge", description="Rerank used: merge|neural|find_similar.")
     consensus_basis: str = Field(default="", description="Whether engines_consensus can be trusted on this response: full | single_family | partial_pool | degraded_pool. 'degraded_pool' = at least one engine didn't answer, so a low consensus number may reflect the pool being down rather than the URL being weak. 'single_family' = no corroboration was possible at all.")
     cached: bool = Field(default=False, description="Served from cache?")
@@ -396,12 +398,17 @@ def _search_summary(query: str, results: list[SearchResult], engines_used: list[
 
 
 def _search_next_action(results: list[SearchResult], engine_blocked: list[str],
-                         error: str, engines_used: list[str] | None = None) -> str:
+                         error: str, engines_used: list[str] | None = None, *,
+                         engine_empty: list[str] | None = None,
+                         engine_preempted: list[str] | None = None,
+                         total_engines: int | None = None) -> str:
     """A judgment-empowering nudge, not a rigid directive. The ranking is a HINT:
     the agent may legitimately need a lower-ranked result, so we point it at the
     signals (relevance_score + fetch_relevance) and trust it to pick, instead of
     prescribing 'fetch N'. This avoids the LLM stressing over whether to 'break'
     the instruction when a lower-ranked result is the one it actually needs."""
+    engine_empty = engine_empty or []
+    engine_preempted = engine_preempted or []
     if not results:
         if error and ("rate-limited" in error.lower() or "timed out" in error.lower() or engine_blocked):
             return ("No results (engines rate-limited/timed out). Retry in a moment, "
@@ -413,14 +420,22 @@ def _search_next_action(results: list[SearchResult], engine_blocked: list[str],
             "not a directive; a lower-ranked result can be the right one, so trust your judgment.")
     if not high:
         base += " No 'high' matches - if none of these fit, rephrase (more specific) or try mode=neural."
-    if engine_blocked:
-        total_engines = len(engine_blocked) + len(engines_used or [])
-        blocked_ratio = len(engine_blocked) / max(1, total_engines)
+    # 分母要算上 empty：只看 blocked 时，"5 个引擎里 4 个解析器坏了"会被读成
+    # 1/1 = 健康，多样性警告永远不触发。
+    silent = [n for n in engine_blocked if n] + [n for n in engine_empty if n]
+    silent = list(dict.fromkeys(silent))
+    if total_engines is None:
+        total_engines = len(silent) + len(engine_preempted) + len(engines_used or [])
+    if silent:
+        blocked_ratio = len(silent) / max(1, total_engines)
         if blocked_ratio >= 0.6:
-            base += (f" WARNING: {len(engine_blocked)} of {total_engines} "
-                    f"engines were rate-limited/blocked - results have LOW diversity "
-                    f"(only from {', '.join(engines_used or ['unknown'])}). "
-                    f"For better recall: set DHOLE_SEARCH_PROXY, retry in 60s, or rephrase the query.")
+            base += (f" WARNING: {len(silent)} of {total_engines} engines didn't contribute"
+                     + (f" ({len(engine_blocked)} blocked"
+                        + (f", {len(engine_empty)} answered but parsed nothing usable" if engine_empty else "")
+                        + ")" if engine_blocked else " (parsed nothing usable)")
+                     + f" - results have LOW diversity "
+                       f"(only from {', '.join(engines_used or ['unknown'])}). "
+                       f"For better recall: set DHOLE_SEARCH_PROXY, retry in 60s, or rephrase the query.")
         else:
             base += " Some engines didn't contribute; retry shortly for more recall."
     return base
@@ -1015,6 +1030,8 @@ async def smart_search(
                 results_list = [SearchResult(**r) for r in data.get("results", [])]
                 _eu = data.get("engines_used", [])
                 _eb = data.get("engine_blocked", [])
+                _ee = data.get("engine_empty", [])
+                _ep = data.get("engine_preempted", [])
                 _rm = data.get("rerank_mode", "merge")
                 _rq = data.get("related_queries", [])
                 # Rows written before consensus_basis existed fall back to
@@ -1022,7 +1039,7 @@ async def smart_search(
                 _fam = {_INDEX_FAMILY.get(e, e) for e in _eu}
                 _contrib_c = data.get("families_contributing", len(_fam) or 1)
                 _hint = compute_fetch_hint(results_list)
-                _notes = _pool_health_notes(results_list, _eb, _contrib_c)
+                _notes = _pool_health_notes(results_list, _eb + _ee, _contrib_c)
                 if _notes:
                     _hint = (f"{_hint} | {_notes}" if _hint else _notes)
                 return SearchResponseModel(
@@ -1030,13 +1047,16 @@ async def smart_search(
                     total_results=len(results_list), cached=True,
                     engines_used=_eu,
                     engine_blocked=_eb,
+                    engine_empty=_ee,
+                    engine_preempted=_ep,
                     rerank_mode=_rm,
                     consensus_basis=data.get("consensus_basis", ""),
                     related_queries=_rq,
                     duration_ms=(time() - t0) * 1000,
                     fetch_hint=_hint,
                     summary=_search_summary(cache_query, results_list, _eu, _rm),
-                    next_action=_search_next_action(results_list, _eb, "", _eu),
+                    next_action=_search_next_action(results_list, _eb, "", _eu,
+                                                    engine_empty=_ee, engine_preempted=_ep),
                 )
             except (json.JSONDecodeError, KeyError, TypeError) as e:
                 logger.warning(f"Corrupt search cache for '{cache_query[:50]}': {e}")
@@ -1177,16 +1197,22 @@ async def smart_search(
             fetch_hint = (fetch_hint + " | " + rerank_note) if fetch_hint else rerank_note
         main_related = _related_queries(query, results_list)
 
-    # engines_used = contributed; engine_blocked = did NOT contribute (blocked /
-    # timed out / consent page). Engines that answered but parsed zero usable
-    # results are currently in neither list — see engine_empty (S4).
+    # engines_used = contributed. 没贡献的引擎分成三类，各自含义不同：
+    #   engine_blocked    拒答/被墙/超时/出错（含构造失败、缺 key）
+    #   engine_empty      答了但解析出 0 条可用 —— 查询真没结果，或解析器漂移
+    #   engine_preempted  够数了被取消，健康快池的正常现象
+    # 此前只有 blocked 可见：empty 的 ok/blocked 都是 False，于是它同时不在任何
+    # 列表里，解析器坏了与"这个查询确实没东西"在响应上完全同形。
     engines_used = list(dict.fromkeys(r.name for r in reports if r.ok))
     engine_blocked = list(dict.fromkeys(r.name for r in reports if r.blocked))
+    engine_empty = list(dict.fromkeys(r.name for r in reports if r.status == "empty"))
+    engine_preempted = list(dict.fromkeys(r.name for r in reports if r.preempted))
+    not_contributing = engine_blocked + engine_empty
 
     # Pool-health notes (partial pool / no corroboration). Same helper the cache
     # hit uses, so a repeated query inside the TTL reports the same thing a fresh
     # one does.
-    _notes = _pool_health_notes(results_list, engine_blocked, _contrib)
+    _notes = _pool_health_notes(results_list, not_contributing, _contrib)
     if _notes:
         fetch_hint = (fetch_hint + " | " + _notes) if fetch_hint else _notes
 
@@ -1197,6 +1223,8 @@ async def smart_search(
             "results": [r.model_dump() for r in results_list],
             "engines_used": engines_used,
             "engine_blocked": engine_blocked,
+            "engine_empty": engine_empty,
+            "engine_preempted": engine_preempted,
             "rerank_mode": rerank_used,
             "related_queries": _rq_cache,
             "consensus_basis": _basis,
@@ -1208,10 +1236,13 @@ async def smart_search(
     return SearchResponseModel(
         query=cache_query, results=results_list, total_results=len(results_list),
         engines_used=engines_used, engine_blocked=engine_blocked,
+        engine_empty=engine_empty, engine_preempted=engine_preempted,
         rerank_mode=rerank_used, consensus_basis=_basis,
         related_queries=(sim_related if mode == "find_similar" else main_related),
         duration_ms=(time() - t0) * 1000, error=error,
         fetch_hint=fetch_hint,
         summary=_search_summary(cache_query, results_list, engines_used, rerank_used),
-        next_action=_search_next_action(results_list, engine_blocked, error, engines_used),
+        next_action=_search_next_action(results_list, engine_blocked, error, engines_used,
+                                        engine_empty=engine_empty,
+                                        engine_preempted=engine_preempted),
     )

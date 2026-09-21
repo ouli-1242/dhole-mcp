@@ -78,6 +78,12 @@ class EngineReport:
     blocked: bool = False   # rate-limited / CAPTCHA'd / refused / timed out / errored
     preempted: bool = False # cancelled because enough backends delivered (NOT blocked)
     error: str = ""
+    # 上游 metasearch 的原始状态 token（ok/empty/blocked/circuit_open/timeout/
+    # error:*/init_error:*/no_key:*/preempted）。三个布尔把它有损地折叠过：
+    # "empty"（引擎答了、解析出 0 条）此前既不进 ok 也不进 blocked，于是在
+    # engines_used / engine_blocked 两个列表里同时消失 —— 解析器坏了的形态正是
+    # 这样。留着原 token 让下游能把它单独报出来，而不必再发明第四个布尔。
+    status: str = ""
 
 
 def _normalize_domain(value: str) -> str:
@@ -216,25 +222,26 @@ async def multi_search(
             sources=tuple(backends),
         ))
 
-    # Per-backend reports from the metasearch status.
+    # Per-backend reports from the metasearch status. 每个分支都带上原始 token：
+    # 布尔是有损折叠，empty 就是被折掉的那一格。
     reports: list[EngineReport] = []
     for name, st in status.items():
         if st == "ok":
-            reports.append(EngineReport(name=name, ok=True))
+            reports.append(EngineReport(name=name, ok=True, status=st))
         elif st == "preempted":
-            reports.append(EngineReport(name=name, preempted=True,
+            reports.append(EngineReport(name=name, preempted=True, status=st,
                                         error="preempted (enough backends delivered)"))
         elif st == "blocked":
-            reports.append(EngineReport(name=name, blocked=True,
+            reports.append(EngineReport(name=name, blocked=True, status=st,
                                         error="blocked/captcha (circuit opened)"))
         elif st == "circuit_open":
-            reports.append(EngineReport(name=name, blocked=True,
+            reports.append(EngineReport(name=name, blocked=True, status=st,
                                         error="circuit open (recently blocked; skipped)"))
         elif st == "timeout":
-            reports.append(EngineReport(name=name, blocked=True, error="timed out"))
-        elif st.startswith("error"):
-            reports.append(EngineReport(name=name, blocked=True, error=st))
-        else:  # "empty"
-            reports.append(EngineReport(name=name, error="no results"))
+            reports.append(EngineReport(name=name, blocked=True, status=st, error="timed out"))
+        elif st.startswith("error") or st.startswith("init_error") or st.startswith("no_key"):
+            reports.append(EngineReport(name=name, blocked=True, status=st, error=st))
+        else:  # "empty" —— 引擎答了但一条可用结果都没解析出来
+            reports.append(EngineReport(name=name, status=st, error="no results"))
 
     return ranked, reports
