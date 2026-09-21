@@ -634,7 +634,15 @@ class Bing(BaseSearchEngine):
     search_method = "GET"
     items_xpath = "//li[contains(@class, 'b_algo')]"
     elements_xpath: ClassVar[Mapping[str, str]] = {
-        "title": ".//h2//text()", "href": ".//h2/a/@href", "body": ".//p//text()",
+        "title": ".//h2//text()",
+        # Bing 同时在跑两种标题链接版面：A 版 `<h2><a href=ck/a>…</a></h2>`，B 版
+        # `<a class="tilk">…<h2>文本</h2></a>`（链接在 h2 的**祖先**上）。只查后代的
+        # 那版实测 5 条容器全部读不出 href —— 整轮 bing 结果为空、引擎状态记成
+        # empty，且在响应里哪儿都不出现。并集 + [1] 取文档序第一个：A 版命中 h2 内的
+        # a，B 版回退到祖先 a。用祖先轴而不是 `@class='tilk'`：后者把这个修复和 Bing
+        # 的一个样式类名绑在一起，改名就会再烂一次。
+        "href": "(.//h2/a/@href | .//h2/ancestor::a/@href)[1]",
+        "body": ".//p//text()",
     }
     # Bing 对单 IP 高频请求随机限流（连接重置/空结果），重试可显著提高命中率
     _retries = 2

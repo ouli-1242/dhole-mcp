@@ -93,9 +93,15 @@ class EngineReport:
 
 
 def _engine_yield() -> dict:
-    """metasearch 层的每引擎产出快照。惰性取，拿不到就当作无观测。"""
+    """metasearch 层的每引擎产出快照。惰性取，拿不到就当作无观测。
+
+    注意 `_metasearch` 缓存的是**函数**不是模块（`from … import metasearch`），
+    在它身上找 engine_health 只会静默拿到空字典 —— 那样 gate 就永远看不到产出，
+    且因为异常被吞掉，看起来"什么都没坏"。所以这里直接 import 模块。
+    """
     try:
-        return _get_metasearch().engine_health()  # type: ignore[attr-defined]
+        from dhole_mcp import search_metasearch
+        return search_metasearch.engine_health()
     except Exception:
         return {}
 
