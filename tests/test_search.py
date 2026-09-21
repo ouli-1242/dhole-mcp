@@ -8,6 +8,7 @@ real search results.
 """
 
 import asyncio
+import json
 import pytest
 from dhole_mcp import search as search
 from dhole_mcp import search_engines as se
@@ -675,3 +676,175 @@ class TestIrrelevantFilter:
         results = [self._res("The", "https://example.com/")]
         # 'how to' -> terms empty (stopwords) -> keep
         assert search._filter_irrelevant_results(results, "how to") == results
+
+
+# ─── 共识诚实化（S1）：分母是"本该表态的家族数"，不是"实际返回结果的家族数" ───
+
+class TestFamilyUniverse:
+
+    def test_default_pool_all_healthy_is_three_families(self):
+        # bing/duckduckgo/yahoo 共用一个索引 -> 默认 5 引擎池的满分是 3，不是 5
+        reports = [EngineReport(name=n, ok=True) for n in
+                   ("bing", "duckduckgo", "brave", "yahoo", "yandex")]
+        m, c, basis = search._family_universe(None, reports)
+        assert (m, c, basis) == (3, 3, "full")
+
+    def test_denominator_survives_a_degraded_pool(self):
+        # 只有 bing 活着：旧实现会渲染 "1 of 1"（与全员一致不可区分）
+        reports = [EngineReport(name="bing", ok=True)] + [
+            EngineReport(name=n, blocked=True) for n in ("brave", "yandex")]
+        m, c, basis = search._family_universe(None, reports)
+        assert m == 3, "分母不该因为别的引擎挂掉而缩水"
+        assert c == 1
+        assert basis == "degraded_pool"
+
+    def test_whole_family_preempted_leaves_the_denominator(self):
+        # brave 全家（只有它自己）被抢占 = 根本没机会表态，不该占分母
+        reports = [EngineReport(name="bing", ok=True), EngineReport(name="brave", preempted=True)]
+        m, c, basis = search._family_universe(["bing", "brave"], reports)
+        assert (m, c) == (1, 1)
+        assert basis == "single_family"
+
+    def test_partial_preemption_within_a_family_keeps_it(self):
+        # bing 家族里 ddg 被抢占但 bing 答了 -> 家族仍有发言权，留在分母
+        reports = [EngineReport(name="bing", ok=True),
+                   EngineReport(name="duckduckgo", preempted=True),
+                   EngineReport(name="brave", ok=True)]
+        m, c, basis = search._family_universe(["bing", "duckduckgo", "brave"], reports)
+        assert (m, c, basis) == (2, 2, "full")
+
+    def test_single_engine_pool_has_no_corroboration(self):
+        reports = [EngineReport(name="yandex", ok=True)]
+        m, c, basis = search._family_universe(["yandex"], reports)
+        assert (m, c, basis) == (1, 1, "single_family")
+
+
+class TestConsensusRendering:
+
+    def _one(self, consensus: int) -> str:
+        raw = RawResult(title="T", url="https://example.com/a", snippet="s",
+                        source="bing", position=1, consensus=consensus)
+        return search._build_results("q", [raw], [0.9], 3)[0].engines_consensus
+
+    def test_renders_against_the_universe(self):
+        assert self._one(1) == "1 of 3"
+        assert self._one(2) == "2 of 3"
+
+    def test_numerator_is_clamped_to_the_denominator(self):
+        # 家族数缩水后 consensus 可能大于分母，不能渲染出 "5 of 3"
+        assert self._one(5) == "3 of 3"
+
+    def test_single_family_is_not_rendered_as_a_ratio(self):
+        raw = RawResult(title="T", url="https://example.com/a", snippet="s",
+                        source="yandex", position=1, consensus=1)
+        got = search._build_results("q", [raw], [0.9], 1)[0].engines_consensus
+        assert got == "1 of 1 (no corroboration)"
+
+
+@pytest.fixture
+def degraded_pool(monkeypatch):
+    """一个引擎有产出、四个被墙的固定场景，缓存与引擎层都是假的。"""
+    cache: dict = {}
+
+    async def fake_multi_search(query, max_results, **kwargs):
+        return [RawResult(
+            title="sqlite WAL mode explained", url="https://sqlite.org/wal",
+            snippet="sqlite WAL mode journaling", source="bing", position=1,
+        )], ([EngineReport(name="bing", ok=True)]
+             + [EngineReport(name=n, blocked=True)
+                for n in ("duckduckgo", "brave", "yahoo", "yandex")])
+
+    async def fake_ensure_reranker():
+        return None
+
+    async def fake_get_cached(query, cache_type, css_selector, **kwargs):
+        return cache.get((query, cache_type))
+
+    async def fake_set_cached(query, cache_type, content, status, css_selector, ttl, **kwargs):
+        cache[(query, cache_type)] = {"content": content}
+
+    monkeypatch.setattr(search, "multi_search", fake_multi_search)
+    monkeypatch.setattr(search, "ensure_reranker", fake_ensure_reranker)
+    monkeypatch.setattr(search, "get_cached", fake_get_cached)
+    monkeypatch.setattr(search, "set_cached", fake_set_cached)
+    return cache
+
+
+class TestDegradedPoolIsHonest:
+    """降级池的标注必须在 live 与缓存命中两条路径上一致。
+
+    以前只有 live 路径往 fetch_hint 上追加，TTL 内的重复查询（agent 的常态）
+    一条提示都不带 —— 同一份降级结果，第二次问就被包装成干净结果。
+    """
+
+    @pytest.mark.asyncio
+    async def test_consensus_counts_the_universe_not_the_survivors(self, degraded_pool):
+        r = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        assert r.results and r.results[0].engines_consensus == "1 of 3"
+        assert r.consensus_basis == "degraded_pool"
+
+    @pytest.mark.asyncio
+    async def test_live_response_carries_the_low_confidence_note(self, degraded_pool):
+        r = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        assert "LOW CONFIDENCE" in r.fetch_hint
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_reports_the_same_degradation_as_live(self, degraded_pool):
+        live = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        hit = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        assert hit.cached is True, "第二次应当命中缓存"
+        assert hit.consensus_basis == live.consensus_basis
+        assert "LOW CONFIDENCE" in hit.fetch_hint
+        assert hit.results[0].engines_consensus == live.results[0].engines_consensus
+
+    @pytest.mark.asyncio
+    async def test_pre_s1_cache_row_still_warns(self, degraded_pool):
+        """升级前写入的缓存行没有新字段，也不能变成"看起来干净"。
+
+        旧行的 engines_consensus 字符串是写盘时渲染的（"1 of 1"），改不动；
+        但降级标注是从 engines_used/engine_blocked 现推的，必须照旧出现。
+        """
+        await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        (key, payload), = degraded_pool.items()
+        row = json.loads(payload["content"][0])
+        for gone in ("consensus_basis", "families_contributing", "family_universe"):
+            row.pop(gone, None)
+        row["results"][0]["engines_consensus"] = "1 of 1"  # 旧版渲染
+        payload["content"] = [json.dumps(row)]
+
+        hit = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        assert hit.cached is True
+        assert hit.consensus_basis == ""      # 旧行无从得知，不猜
+        assert "LOW CONFIDENCE" in hit.fetch_hint
+        assert "1 of 1" in hit.results[0].engines_consensus
+
+    @pytest.mark.asyncio
+    async def test_healthy_pool_cache_hit_adds_no_warning(self, monkeypatch):
+        cache: dict = {}
+
+        async def fake_multi_search(query, max_results, **kwargs):
+            return [RawResult(
+                title="sqlite WAL mode explained", url="https://sqlite.org/wal",
+                snippet="sqlite WAL mode", source="bing", position=1)], [
+                EngineReport(name="bing", ok=True), EngineReport(name="brave", ok=True),
+                EngineReport(name="yandex", ok=True)]
+
+        async def fake_get_cached(query, cache_type, css_selector, **kwargs):
+            return cache.get((query, cache_type))
+
+        async def fake_set_cached(query, cache_type, content, status, css_selector, ttl, **kwargs):
+            cache[(query, cache_type)] = {"content": content}
+
+        monkeypatch.setattr(search, "multi_search", fake_multi_search)
+        monkeypatch.setattr(search, "ensure_reranker", lambda *a, **k: None)
+        async def _none():
+            return None
+        monkeypatch.setattr(search, "ensure_reranker", _none)
+        monkeypatch.setattr(search, "get_cached", fake_get_cached)
+        monkeypatch.setattr(search, "set_cached", fake_set_cached)
+
+        for _ in range(2):
+            r = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+            assert r.consensus_basis == "full"
+            assert "LOW CONFIDENCE" not in r.fetch_hint
+            assert "didn't contribute" not in r.fetch_hint
