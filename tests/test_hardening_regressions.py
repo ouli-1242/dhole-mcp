@@ -599,3 +599,73 @@ class TestRerankerDownloadEndpoints:
         assert tried == ["huggingface.co", "hf-mirror.com"]
 
 
+
+
+class TestRepairIsPinnedToTheInstalledVersion:
+    """自愈重装必须钉在当前版本上。
+
+    不钉的话，一次由**任意** ImportError 触发的无人值守重装会去拉"索引上当前的最
+    新版"—— 信任根等于包名字空间本身。这个 fork 的名字改过两次，CHANGELOG 里就记着
+    自愈曾因解析到上游发行名而把本 fork 覆盖掉。
+    """
+
+    def test_pip_spec_pins_when_metadata_is_readable(self, monkeypatch):
+        from dhole_mcp import cli
+        monkeypatch.setattr(cli, "_installed_version", lambda d: "14.4")
+        assert cli._pip_spec("dhole-mcp") == "dhole-mcp==14.4"
+
+    def test_pip_spec_falls_back_to_bare_name_when_metadata_is_gone(self, monkeypatch):
+        """metadata 缺失时只能不钉 —— 而那恰好就是安装已损坏的场景。"""
+        from dhole_mcp import cli
+        monkeypatch.setattr(cli, "_installed_version", lambda d: "")
+        assert cli._pip_spec("dhole-mcp") == "dhole-mcp"
+
+    def test_generated_repair_script_carries_the_pin(self, monkeypatch):
+        from dhole_mcp import cli
+        monkeypatch.setattr(cli, "_installed_version", lambda d: "14.4")
+        text = cli._repair_script_text("dhole-mcp", "")
+        assert "SPEC = 'dhole-mcp==14.4'" in text
+        assert 'args = ["--force-reinstall", SPEC]' in text
+        # 生成物必须是能独立跑的合法 Python（它在半坏环境里被执行）
+        compile(text, "<repair.py>", "exec")
+
+    def test_generated_repair_script_still_compiles_without_metadata(self, monkeypatch):
+        from dhole_mcp import cli
+        monkeypatch.setattr(cli, "_installed_version", lambda d: "")
+        compile(cli._repair_script_text("dhole-mcp", ""), "<repair.py>", "exec")
+
+    def test_updater_repair_script_is_pinned_too(self, tmp_path, monkeypatch):
+        """同一份修复脚本有**两个生成器**（cli 与 updater），只钉一个等于没钉。"""
+        from dhole_mcp import updater
+        target = tmp_path / "repair.py"
+        monkeypatch.setattr(updater, "repair_script_path", lambda: str(target))
+        monkeypatch.setattr(updater, "_dist_spec", lambda: "dhole-mcp==14.4")
+        updater._write_repair_script()
+        text = target.read_text(encoding="utf-8")
+        assert '"dhole-mcp==14.4"' in text
+        # 钉住时不能再带 --upgrade（意图相反）
+        assert '_pinned = "==" in "dhole-mcp==14.4"' in text
+        compile(text, "<repair.py>", "exec")
+
+    def test_direct_reinstall_fallback_is_pinned(self, monkeypatch):
+        """写不出 repair.py 时的内联兜底也走同一个 spec。"""
+        from dhole_mcp import cli
+        seen = {}
+
+        class _R:
+            returncode = 0
+
+        def fake_run(cmd, *a, **k):
+            seen["cmd"] = cmd
+            return _R()
+
+        monkeypatch.setattr(cli, "_installed_version", lambda d: "9.9.9")
+        # 只让建目录失败，逼出"写不出 repair.py 就内联跑 pip"那条兜底分支
+        import os as _os
+        def _boom(*a, **k):
+            raise OSError("read-only home")
+        monkeypatch.setattr(_os, "makedirs", _boom)
+        import subprocess
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        cli._run_repair()
+        assert "dhole-mcp==9.9.9" in seen.get("cmd", [])

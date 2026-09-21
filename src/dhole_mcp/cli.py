@@ -48,6 +48,27 @@ def _auto_repair_enabled() -> bool:
     )
 
 
+def _installed_version(dist: str) -> str:
+    """当前已装的发行版版本，取不到就返回 ""。
+
+    自愈路径用它把重装**钉死在现有版本**上。不钉的话，一个由任意 ImportError
+    触发的无人值守重装会从索引拉取"当时的最新版" —— 那等于把信任根交给包名字空间
+    （这个名字已经被改过两次，CHANGELOG 里就记着自愈曾因解析到上游发行名而覆盖掉本
+    fork）。metadata 缺失时只能不钉，而那恰好就是安装已损坏的场景，故保留兜底。
+    """
+    try:
+        from importlib.metadata import version as _v
+        return (_v(dist) or "").strip()
+    except Exception:
+        return ""
+
+
+def _pip_spec(dist: str) -> str:
+    """pip 参数：能确定版本就钉住，否则退回裸包名。"""
+    ver = _installed_version(dist)
+    return f"{dist}=={ver}" if ver else dist
+
+
 def _repair_script_text(dist: str, index_url: str) -> str:
     """Standalone repair script written to ~/.dhole/repair.py.
 
@@ -60,6 +81,7 @@ def _repair_script_text(dist: str, index_url: str) -> str:
     return '''import sys, subprocess
 
 DIST = %r
+SPEC = %r
 
 def _stop():
     print("Dhole repair: stopping any running dhole...")
@@ -71,13 +93,13 @@ def _stop():
 
 def main():
     _stop()
-    print("Dhole repair: force-reinstalling %%s ..." %% DIST)
-    args = ["--force-reinstall", DIST]%s
+    print("Dhole repair: force-reinstalling %%s ..." %% SPEC)
+    args = ["--force-reinstall", SPEC]%s
     r = subprocess.run([sys.executable, "-m", "pip", "install", *args,
                         "--quiet", "--disable-pip-version-check"])
     if r.returncode != 0:
         print("Dhole repair: reinstall failed (pip exit %%d)." %% r.returncode)
-        print("  Try manually: %%s -m pip install --force-reinstall %%s" %% (sys.executable, DIST))
+        print("  Try manually: %%s -m pip install --force-reinstall %%s" %% (sys.executable, SPEC))
         return r.returncode
     try:
         from importlib.metadata import version as _v
@@ -88,7 +110,7 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-''' % (dist, index_args)
+''' % (dist, _pip_spec(dist), index_args)
 
 
 def _run_repair() -> int:
@@ -109,7 +131,7 @@ def _run_repair() -> int:
         print("  recovering (direct reinstall)...")
         import subprocess
         cmd = [sys.executable, "-m", "pip", "install",
-               "--force-reinstall", dist, "--quiet", "--disable-pip-version-check"]
+               "--force-reinstall", _pip_spec(dist), "--quiet", "--disable-pip-version-check"]
         if index_url:
             cmd += ["--index-url", index_url]
         try:
@@ -151,11 +173,11 @@ def main() -> int:
         print(f"  Dhole install broken: {mod_name}")
         if not _auto_repair_enabled():
             print("  Auto-repair disabled (DHOLE_NO_AUTO_REPAIR=1).")
-            print(f"  Fix manually: {sys.executable} -m pip install --force-reinstall {_dist_name()}")
+            print(f"  Fix manually: {sys.executable} -m pip install --force-reinstall '{_pip_spec(_dist_name())}'")
             return 1
         rc = _run_repair()
         if rc != 0:
-            print(f"  If recovery failed, run: pip install --force-reinstall {_dist_name()}")
+            print(f"  If recovery failed, run: pip install --force-reinstall '{_pip_spec(_dist_name())}'")
         return rc
     except Exception:
         # Any other import-time crash (not a missing module) - re-raise

@@ -69,6 +69,22 @@ def _dist() -> str:
     return update_package() or _DIST_NAME
 
 
+def _dist_spec() -> str:
+    """pip 目标：能确定当前版本就钉住，否则裸包名。
+
+    与 cli._pip_spec 同一意图 —— 自愈/自更新都不该在无人值守时拉"索引上当前的最新
+    版"。这里不复用 cli 的那个函数是为了避免 updater←→cli 的导入环（cli 只在
+    main() 里惰性导入 server，而 server 导入 updater）。
+    """
+    dist = _dist()
+    try:
+        from importlib.metadata import version as _v
+        ver = (_v(dist) or "").strip()
+    except Exception:
+        ver = ""
+    return f"{dist}=={ver}" if ver else dist
+
+
 def update_index_url() -> str | None:
     """Optional index url for the self-update pip call."""
     return (os.environ.get("DHOLE_UPDATE_INDEX_URL") or "").strip() or None
@@ -269,11 +285,13 @@ def _pip(*extra):
 def main():
     print("Dhole repair: stopping any running dhole...")
     _stop()
-    print("Dhole repair: force-reinstalling dhole-mcp from PyPI...")
-    r = _pip("--force-reinstall", "--upgrade", "dhole-mcp")
+    print("Dhole repair: force-reinstalling __SPEC__ ...")
+    # 钉到当前已装版本时不能再带 --upgrade（两者意图相反），故按 SPEC 形态选参数。
+    _pinned = "==" in "__SPEC__"
+    r = _pip("--force-reinstall", *([] if _pinned else ["--upgrade"]), "__SPEC__")
     if r.returncode != 0:
         print("Dhole repair: reinstall failed (pip exit %d)." % r.returncode)
-        print("  Try manually:  %s -m pip install --force-reinstall dhole-mcp" % sys.executable)
+        print("  Try manually:  %s -m pip install --force-reinstall __SPEC__" % sys.executable)
         return r.returncode
     try:
         from importlib.metadata import version as _v
@@ -302,6 +320,8 @@ def _write_repair_script() -> None:
                 .replace(_DIST_NAME, _dist())
                 # 索引源同理：否则自愈会悄悄从默认 PyPI 拉包
                 .replace("__INDEX_ARGS__", repr(index_args))
+                # 重装目标钉在当前已装版本（取不到版本时才退回裸包名）
+                .replace("__SPEC__", _dist_spec())
             )
     except OSError:
         pass  # home dir not writable; not fatal - the update can still proceed
