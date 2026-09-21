@@ -1,0 +1,32 @@
+=== KB-6 现状测量 [after] ===
+os.name = nt  (POSIX 才真正吃 chmod)
+umask   = 0o0 (读取时会被重置为 0o022)
+
+[1] search_proxy.save_proxies()  -- 含明文凭据
+  
+    home dir     0o777  C:\Users\ouli\AppData\Local\Temp\dhole_perms_w3uvjh4_\fresh_home
+    file         0o666  search_proxies.json
+
+[2] server._log_tool_call()  -- DHOLE_USAGE_LOG=1
+  
+    home dir     0o777  C:\Users\ouli\AppData\Local\Temp\dhole_perms_3u7lfb2p\fresh_home
+    file         0o666  usage.jsonl
+
+[3] search.record_search_feedback()  -- DHOLE_SEARCH_FEEDBACK=1
+  
+    home dir     0o777  C:\Users\ouli\AppData\Local\Temp\dhole_perms_dgg8_7x4\fresh_home
+    file         0o666  search_feedback.json
+
+[4] 对照组：ensure_private_dir + harden_file（circuit_breaker 走的就是这条）
+  
+    home dir     0o777  C:\Users\ouli\AppData\Local\Temp\dhole_perms_u19wtaof\fresh_home
+    file         0o666  circuit_breaker.json
+
+harden_file 被调用的次数: 4  明细: ['search_proxies.json', 'usage.jsonl', 'search_feedback.json', 'circuit_breaker.json']
+harden_dir  被调用的次数: 3  明细: ['fresh_home', 'fresh_home', 'fresh_home']
+
+读法：
+  - [1][2] 的 home 若是 0o755 / 文件是 0o644，说明裸 mkdir + 裸 open 没套权限收紧。
+  - [3] 用 mkstemp+os.replace，POSIX 下 tmp 自带 0600，会被 rename 带过来 —— 需实测确认。
+  - [4] 是对照组：同机同 umask 下，走了收紧路径应该拿到 0o700 / 0o600。
+  - Windows 上所有 mode 都不可信，只能看 harden_file 有没有被调用。

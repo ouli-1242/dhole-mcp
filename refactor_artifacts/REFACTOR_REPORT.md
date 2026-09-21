@@ -239,9 +239,10 @@ git diff --stat 74524dc -- src/          # 期望：无输出
    是快照器的运行残留，属于工具产物，未清理（保留以便复现）。
 4. **子代理产物被覆盖的事件**：一个独立 README↔代码审查子代理原本写了 659 行、21 条发现
    （D-01…D-21）到 `DOC_CODE_DRIFT.md`；我在它完成前用自己 124 行的版本**覆盖了它**
-   （`Write` 报告"updated"而非"created"，我当下未察觉文件已存在）。原正文不可恢复，
-   已把其**完成报告中的 5 条最高优先级发现 + 1 条环境发现**转述到 `DOC_CODE_DRIFT.md` 的附录，
-   并明确标注"来自独立审查，待复核"。**这是我的操作失误，需要下一轮人工复核这 5 条。**
+   （`Write` 报告"updated"而非"created"，我当下未察觉文件已存在）。原正文不可恢复。
+   **后续处理**：其完成报告中的 5 条最高优先级发现 + 1 条环境发现已转述保留，
+   并已于追加章节 1 **逐条实测复核完毕（7 条全部证实，其中 2 条转述有误已更正）**；
+   未转述的其余条目（D-08…D-21）仍随原正文丢失，不可恢复。
 5. **阶段 2 的第 5/6 项（爬虫队列、搜索后端）没有做任何改动**，因为它们没有离线 gate
    （见 `ADVERSARIAL_REVIEW.md` 第五节）。这不是遗漏，是 `FIRST_PRINCIPLES.md` §7 的明确决定。
 
@@ -256,9 +257,70 @@ python -m pytest -q
 python -m ruff check .
 python refactor_artifacts/tools/mcp_snapshot.py      # 重跑协议快照，与 baseline/ 对比
 python refactor_artifacts/tools/tool_payload_measure.py
+
+# 追加工作的复核入口
+PYTHONPATH=src python refactor_artifacts/tools/verify_d_findings.py          # D-01…D-07
+PYTHONPATH=src python refactor_artifacts/tools/measure_state_perms.py check  # KB-6 现状
+git log --oneline fix/kb-6-state-file-permissions -3                        # KB-6 的修复分支
 ```
 
 `refactor_artifacts/` 内共 11 份交付文档：`TOOLING.md`、`BASELINE.md`、`FIRST_PRINCIPLES.md`、
 `CONTRACTS.md`、`DECISIONS.md`、`DOC_CODE_DRIFT.md`、`STAGE_X_REVIEW.md`、
 `ADVERSARIAL_REVIEW.md`、`KNOWN_BUGS.md`、`REFACTOR_REPORT.md`、`STATE.json`，
 外加 `baseline/`（冻结的原始证据）、`analysis/`（AST 分析原始输出）、`tools/`（可重跑脚本）。
+
+---
+
+# 追加章节：原任务完成后的两项后续工作
+
+> 本任务（行为保持重构）已在阶段 5 收尾。以下两项是**用户在原任务完成后新授权**的工作，
+> 记录在此以保持证据链完整。它们**不在**"行为保持"的范围内，也**不在**重构分支的代码里。
+
+## 追加 1：D-01…D-07 逐条复核（**7 条全部证实**）
+
+- **做了什么**：新增 `tools/verify_d_findings.py`，把 `DOC_CODE_DRIFT.md` 附录里 7 条"待复核"
+  的转述发现逐条实测。脚本自带 socket 守卫（只放行回环）与 `DHOLE_HOME` 重定向，
+  实测外发尝试记录为 `[]`。
+- **命令**：`PYTHONPATH=src python refactor_artifacts/tools/verify_d_findings.py`
+- **结果**：`analysis/verify_d_findings.txt`
+
+| 编号 | 判定 | 关键实测 |
+| --- | --- | --- |
+| D-01 | 已证实 | 驱动真实 `cache_clear(engine_state=True)`：重置前 snapshot `['bing','duckduckgo']`，重置后 `engine_health={}`；释放的冷却改由 `message` 文本承载 |
+| D-02 | 已证实 | `DHOLE_DEFAULT_ENGINES=bing` → 执行池 `['bing']`，但 `_family_universe(None,[])` 前后都是 `(4, 0, 'single_family')`，分母不动 |
+| D-03 | 已证实 | `search.py:1087` 的 `_clamp_note` 确实并入 `fetch_hint`（README 的"静默钳制"已过时） |
+| D-04 | 已证实**且缺口更大** | 描述只列 `.html/.docx/.xlsx/.csv/.pdf`，`.htm` 与 `.xhtml` **两个都缺席**（转述只说漏了 `.pdf` 相关） |
+| D-05 | 已证实 | `search_proxy.py:271` 的 `health_check` 由 `_kick_health_check()` 自动调度；但**是条件触发**（有代理池时才探活），非无条件启动流量 |
+| D-06 | 已证实 | `save_proxies()` 落盘后文件 mode 读作 `0o666`，写入点无 `harden_file`；对照 `circuit_breaker.json` 有 |
+| D-07 | 已证实，**但出处描述有误** | `cli.py:124` 硬编码 `expanduser("~")/.dhole` 为真；但 `src/dhole_mcp/repair.py` **这个模块不存在**（`exists=False`），它是运行时生成到 `~/.dhole/` 的脚本 |
+
+- **复核本身抓到的两处转述错误**：D-07 的模块引用是错的；D-04 的范围是漏的。
+  **结论：独立子代理可作线索来源，其定位与引用必须复核后才可行动。**
+- **落点**：结论已写回 `DOC_CODE_DRIFT.md`（附录表格逐条加"已证实"与实测依据）与
+  `KNOWN_BUGS.md`（KB-1/KB-2/KB-3/KB-6/KB-7 补上复核证据与更正）。
+
+## 追加 2：KB-6 权限加固（**单开分支** `fix/kb-6-state-file-permissions`）
+
+- **为什么单开分支**：它是安全加固，**会改变文件模式**，不属于行为保持；且重构分支的
+  全部价值就是"可证明不改任何可观察行为"，把 chmod 挂上去会毁掉这个前提。见 `DECISIONS.md` D-12。
+- **基线**：从 `wip-before-refactor`（`74524dc`）切出，**不是** `master` ——
+  `master` 比 `origin/master` 落后 22 个提交、与工作树差 59 个文件，不是"当前代码"。
+- **改动**：新增 39 行、删除 2 行，涉及 6 个 `src/` 文件 + 1 个新测试文件。
+  新增 `paths.harden_dir()`（只 chmod、不 mkdir，`harden_file` 的 0700 镜像）；
+  在 proxy 配置、`usage.jsonl`、`search_feedback.json`、两个引擎状态文件、`last_version`
+  与 updater 的 home 创建处补上收紧调用。
+  **零处修改 `mkdir`/`open` 的调用与顺序** —— 建目录失败仍旧照原样抛错（见 `DECISIONS.md` D-13）。
+- **commit**：`8dfd6a9`
+- **验证**：
+  - 全量 `pytest -q` → `1143 passed, 5 skipped, 15 deselected`（基线 1128 + 新增 15）
+  - `ruff check .` → `All checks passed!`
+  - **反向验证**（新测试拿到修复前源码上跑）：`9 failed, 6 passed, 3 skipped` ——
+    失败的 9 条正是"新行为"断言，通过的 6 条正是"行为保持"断言，分组与设计吻合。
+    证据：`analysis/kb6_negative_check.txt`
+  - before/after 调用计数：`harden_file` 1 → 4，`harden_dir` — → 3。证据：`analysis/kb6_before.txt`、`analysis/kb6_after.txt`
+- **诚实边界（重要）**：**POSIX 真实权限位没有被本机实测过。** 本机是 Windows，实测连
+  已有的 `harden_file` 对照组都读作 `0o666`；本机也没有可用 POSIX 环境（WSL 的
+  `docker-desktop` 发行版无 python3，Docker 守护进程未运行，仓库无 CI）。
+  因此验证链是：mock `os.chmod` 断言调用与参数（平台无关）→ 反向验证证明非空转 →
+  真实 mode 断言标 `skipif`，**待 Linux/macOS 上首次执行**。本报告不声称已实测后者。
+- **回滚**：`git branch -D fix/kb-6-state-file-permissions`（该分支未合并、未推送）。

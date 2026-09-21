@@ -3,8 +3,8 @@
   "task": "行为保持重构 Dhole MCP 服务器",
   "repo_root": "D:\\tools\\dhole-mcp",
   "branch": "refactor/dhole-mcp-behavior-preserving",
-  "updated_at": "2026-09-21T17:34:00Z",
-  "status": "COMPLETED",
+  "updated_at": "2026-09-22T00:00:00Z",
+  "status": "COMPLETED_WITH_FOLLOWUPS",
   "current_stage": "阶段 5（交付物）已完成",
   "stage_status": {
     "stage0_safety_and_baseline": "completed",
@@ -18,19 +18,38 @@
     "branches_present": [
       "master",
       "wip-before-refactor",
-      "refactor/dhole-mcp-behavior-preserving"
+      "refactor/dhole-mcp-behavior-preserving",
+      "fix/kb-6-state-file-permissions"
     ],
     "baseline_commit": "74524dc575d39d2269e7268113dff9cf0b391208",
     "last_green_commit": "9391ca0",
     "production_code_commits": [
-      { "hash": "ebc51dc", "what": "删除 updater.py::_reranker_model_present（零引用死代码，18 行）" },
-      { "hash": "6e248fe", "what": "修正 4 处描述不存在代码的注释/docstring（纯注释，零可执行语句变更）" },
-      { "hash": "9391ca0", "what": "删除 links.py::_MAIN_XPATH 与 fetcher.py::_IMPERSONATE_POOL（各零引用）；修正 links.py citations docstring" }
+      {
+        "hash": "ebc51dc",
+        "what": "删除 updater.py::_reranker_model_present（零引用死代码，18 行）"
+      },
+      {
+        "hash": "6e248fe",
+        "what": "修正 4 处描述不存在代码的注释/docstring（纯注释，零可执行语句变更）"
+      },
+      {
+        "hash": "9391ca0",
+        "what": "删除 links.py::_MAIN_XPATH 与 fetcher.py::_IMPERSONATE_POOL（各零引用）；修正 links.py citations docstring"
+      }
     ],
     "artifact_commits": [
-      { "hash": "f27a0b1", "what": "TOOLING / STATE / FIRST_PRINCIPLES / CONTRACTS + AST 分析工具" },
-      { "hash": "0d81f3e", "what": "BASELINE / DECISIONS / 源码级 payload 测量" },
-      { "hash": "d334fd9", "what": "分析脚本与原始输出；修掉脚本自身引入的 2 个 ruff 报错" }
+      {
+        "hash": "f27a0b1",
+        "what": "TOOLING / STATE / FIRST_PRINCIPLES / CONTRACTS + AST 分析工具"
+      },
+      {
+        "hash": "0d81f3e",
+        "what": "BASELINE / DECISIONS / 源码级 payload 测量"
+      },
+      {
+        "hash": "d334fd9",
+        "what": "分析脚本与原始输出；修掉脚本自身引入的 2 个 ruff 报错"
+      }
     ],
     "not_done_by_design": [
       "未合并到 master / 默认分支",
@@ -63,12 +82,12 @@
     "refactor_artifacts/analysis/  (AST 分析原始输出)",
     "refactor_artifacts/tools/     (可重跑脚本：mcp_snapshot.py / tool_payload_measure.py / module_inventory.py / stale_reference_scan.py)"
   ],
-  "next_step": "无。原任务已完成。后续追加：D-01..D-07 复核已完成（全部证实），KB-6 权限修复进行中。",
+  "next_step": "两项追加工作均已完成并提交。KB-6 分支未合并、未推送，等用户决定合并方式。",
   "unresolved": [
+    "KB-6 分支上 3 条 POSIX 真实 mode 断言尚未在任何 POSIX 环境执行过（本机无 POSIX、无 CI），待 Linux/macOS 首次运行",
     "README 中未独立核对的承诺：robots 正面行为、SSRF 残余面、PDF 口令三态细节、sogou_weixin 排序与早退、CLI 各命令逐字段输出、'4 个索引家族'计数",
     "测试盲区（非本轮引入）：429、gzip/brotli/zstd、shift_jis、按异常类名的超时/连接错误、<base href>、爬虫端到端、MCP 层并发/取消",
-    "已知缺陷 9 条（KB-1..KB-9）中，KB-6 已授权动手修复；其余八条仍只记录未修",
-    "我覆盖了子代理 659 行的 DOC_CODE_DRIFT.md（操作失误），原正文不可恢复；但其中转述的 D-01..D-07 已于 2026-09-22 全部独立复核并证实，两处出处错误已更正"
+    "已知缺陷 9 条（KB-1..KB-9）中，KB-6 已授权动手修复；其余八条仍只记录未修"
   ],
   "stop_conditions_triggered": [],
   "notes": [
@@ -76,5 +95,25 @@
     "未修改 .gitignore；备份目录用 .git/info/exclude 隔离。",
     "未修改 README.md / CHANGELOG.md（按任务要求，不一致只记录）。",
     "未修改 tests/ 下任何文件（测试守卫未被削弱）。"
-  ]
+  ],
+  "followups": {
+    "D-recheck": {
+      "what": "D-01..D-07 逐条实测复核",
+      "result": "7 条全部证实；D-07 出处描述有误、D-04 范围漏报，均已更正",
+      "commit": "c2b0b4c",
+      "evidence": "analysis/verify_d_findings.txt",
+      "tool": "tools/verify_d_findings.py"
+    },
+    "KB-6": {
+      "what": "明文凭据等状态文件的权限收紧（单开分支）",
+      "branch": "fix/kb-6-state-file-permissions",
+      "base": "74524dc (wip-before-refactor) — 不是 master，master 落后 origin/master 22 个提交",
+      "commit": "8dfd6a9",
+      "diff": "6 个 src 文件 + 1 个新测试文件，+39 / -2 行，零处修改 mkdir/open",
+      "tests": "1143 passed, 5 skipped, 15 deselected（基线 1128 + 新增 15）",
+      "ruff": "All checks passed!",
+      "negative_check": "新测试跑在修复前源码上：9 failed, 6 passed, 3 skipped（失败=新行为，通过=行为保持）-> analysis/kb6_negative_check.txt",
+      "honest_gap": "POSIX 真实权限位未在本机实测（无 POSIX 环境、无 CI）；真实 mode 断言标 skipif 待 Linux 执行"
+    }
+  }
 }

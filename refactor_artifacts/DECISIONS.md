@@ -81,3 +81,39 @@
 - **实测**：`__version__` = **14.7**；`pyproject.toml` 确为 `dynamic=["version"]` + `[tool.hatch.version] path="src/dhole_mcp/__init__.py"`。
 - **选定**：不动版本号，不动 `LICENSE` / `NOTICE.ddgs.txt`，不动自更新默认值。
 - **理由**：三者都在 I 系列的对外身份面里；改动它们没有任何"易维护性"收益，只有风险。
+
+---
+
+# 追加决策（原任务完成之后，用户授权的新工作）
+
+## D-11 复核 D-01…D-07：先证实/证伪，再谈动不动手
+
+- **背景**：`DOC_CODE_DRIFT.md` 附录里 7 条发现来自被我覆盖掉的子代理报告，只是**转述**，我从未逐条验证。任务铁律 6 要求"没有证据不许下结论"，所以它们在文档里一直标着"待复核"。
+- **选定**：写 `tools/verify_d_findings.py`，把每条都用**可复现的实测**跑一遍再定论。D-01 直接驱动真实 `MasterFetchServer.cache_clear()`，D-02 对比 env 前后 `_family_universe()` 的返回值，D-06 真调 `save_proxies()` 再 stat 文件，D-07 检查 `paths.home()` 在 `_run_repair` 里的出现次数。
+- **理由**：转述的发现不能直接当事实用——**实测立刻抓到两处转述错误**：D-07 引用了一个根本不存在的模块 `src/dhole_mcp/repair.py`；D-04 漏报了 `.htm` 与 `.xhtml` 两个具体缺口。若不做这一步，后续可能照着错的定位去改代码。
+- **证据**：`analysis/verify_d_findings.txt`（脚本自带 socket 守卫，实测外发尝试 `[]`）。
+- **结论**：7 条**全部证实**，两处出处/范围更正后写入 `DOC_CODE_DRIFT.md` 与 `KNOWN_BUGS.md`。
+
+## D-12 KB-6 单开分支修，且**不放在重构分支上**
+
+- **背景**：KB-6（明文凭据文件未收紧权限）是安全加固，**会改变文件模式**，因此不属于"行为保持重构"。用户授权单独处理。
+- **选定**：从 `wip-before-refactor`（`74524dc`，即重构前的真实代码状态）切出 `fix/kb-6-state-file-permissions`，只在该分支上动 `src/` 与 `tests/`。
+- **理由**：
+  1. **不该从 `master` 切** —— `master`（`699197a`）比 `origin/master` 落后 22 个提交，且与工作树差 59 个文件，它不是"当前代码"。
+  2. **不该放在重构分支上** —— 那条分支的全部价值就是"可证明不改任何可观察行为"。把 chmod 改动挂上去，等于亲手毁掉这个前提。
+- **影响**：两个分支各自成立、互不依赖。`refactor_artifacts/` 只存在于重构分支；KB-6 分支只含 `src/` + `tests/`，不复制文档进历史。合并验证见 `REFACTOR_REPORT.md` 的追加章节。
+
+## D-13 KB-6 的实现口径："只加收紧调用，不碰 mkdir/open"
+
+- **背景**：最自然的写法是把 `os.makedirs(...)` 换成现成的 `paths.ensure_private_dir()`。但那会**改变错误语义** —— `ensure_private_dir` 吞掉所有异常，而 `os.makedirs` 会抛。`save_proxies` 没有外层 try，换了之后"建目录失败"会从 `OSError` 变成后面 `open()` 抛的 `FileNotFoundError`。
+- **选定**：新增与 `harden_file` 对称的 `paths.harden_dir()`——**只 chmod，不 mkdir**。所有调用点保留原来的 `mkdir` 原样不动，只在其后追加收紧。
+- **理由**：行为保持的边界要划在"可观察行为"上，错误类型与错误时机都是可观察的。收紧调用自身 never-raise，所以它们不会新增异常面。
+- **影响**：新增 39 行、删除 2 行，零处修改 `mkdir`/`open` 的调用与顺序。范围限制也写进了实现：`DHOLE_USAGE_LOG` 指向 home 之外时**一个 chmod 都不发**（那是用户的文件）。
+
+## D-14 KB-6 的验证：反向验证证明测试不是空转
+
+- **背景**：新加的权限测试在本机（Windows）读到的 mode 全是 `0o777`/`0o666`，**连已有 `harden_file` 的对照组也一样** —— 这台机器根本无法验证 POSIX 权限位。那么"测试通过"会不会只是空转？
+- **选定**：三道证据。① mock `os.chmod` 断言"调用发生了、参数是 0o700/0o600"（平台无关，沿用 `tests/test_paths.py` 既有范式）；② 把新测试拿到**修复前的源码**（临时 `git worktree` 指向 `HEAD^`）上跑，必须失败；③ POSIX 真权限位断言加 `skipif`，等 Linux/macOS 上执行。
+- **实测**：反向验证结果为 **9 failed, 6 passed, 3 skipped** —— 失败的 9 条正是"新行为"，通过的 6 条正是"行为保持"断言（内容不变、错误照抛、追加不截断、外部路径不碰、`add/remove/clear` 都走 `save_proxies`）。分组与设计完全吻合。
+- **证据**：`analysis/kb6_negative_check.txt`、`analysis/kb6_before.txt`、`analysis/kb6_after.txt`。
+- **诚实边界**：**POSIX 上的真实 mode 没有被本机实测过** —— 本机没有 POSIX 文件系统（WSL 的 `docker-desktop` 发行版无 python3，Docker 守护进程未运行，仓库也没有 CI）。这条链的最后一环靠 Linux 上的 `test_real_mode_on_posix` 补，**本报告不声称已实测**。
