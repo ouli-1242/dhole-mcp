@@ -48,6 +48,11 @@ class RerankerModel:
     approx_bytes: int = 90_000_000   # expected ONNX size, for honest UI text
     min_bytes: int = 50_000_000   # sanity floor; smaller = truncated, not trusted
     label: str = ""               # short human description for -v / docs
+    # 发布方记录的 sha256（本地文件名 -> 摘要）。**空 = 没有权威摘要可用**，此时
+    # 下载后只是"算自己刚下的字节再写盘"，那是完整性不是真实性。填了才谈得上验证
+    # 镜像给的就是作者发布的那份。填法：从模型仓库的发布方元数据（不是同一下载端点）
+    # 取 sha256，逐文件核对后写进这里 —— 拿不到就留空，别编。
+    publisher_sha256: dict[str, str] = field(default_factory=dict)
 
 
 # Registry (key order = display order). The default is DEFAULT_MODEL below.
@@ -297,6 +302,16 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _reject(reason: str) -> None:
+    """让"因为摘要不符而拒用"在诊断里说得出原因。
+
+    否则调用方只会填 "reranker model download failed (offline?)"，把一次真实性拒绝
+    报成网络问题 —— 那是这次要修的同一类毛病。
+    """
+    global _reranker_unavailable_reason
+    _reranker_unavailable_reason = reason
+
+
 def _ensure_model() -> Optional[tuple[Path, Path]]:
     """Ensure model.onnx + tokenizer.json are present + valid. Returns paths or None."""
     # A pre-14.3 ~/.dhole_mcp_cache may already hold this ~90MB model; move it
@@ -314,6 +329,8 @@ def _ensure_model() -> Optional[tuple[Path, Path]]:
     if not tokjson.exists():
         need.append("tokenizer.json")
 
+    pub = (model.publisher_sha256 or {}).get("model.onnx", "")
+
     if need:
         logger.info(
             f"Dhole: downloading the local search reranker model "
@@ -323,21 +340,50 @@ def _ensure_model() -> Optional[tuple[Path, Path]]:
         for name in need:
             if not _download_model_file(name, model_dir / name):
                 return None
+        # vocab.txt 被 :375 那个 BERT WordPiece 回退路径使用，却不在必需列表里 ——
+        # 新装机上它从来不会被下载，回退一触发就是文件不在。刻意做成"尽力补下、失败
+        # 不致命"：列为必需项的话，任何仓库里该文件缺失都会让本来能用的重排整体失效，
+        # 那比它要修的 bug 更糟。
+        if "vocab.txt" in model.relpaths and not (model_dir / "vocab.txt").exists():
+            _download_model_file("vocab.txt", model_dir / "vocab.txt")
         if onnx.stat().st_size < MIN_MODEL_BYTES:
             logger.warning("downloaded model.onnx is too small; rejecting")
             return None
-        # Record the hash so a later corrupt/partial file is detected.
+        if pub and _sha256(onnx) != pub:
+            # 镜像/CDN 给的不是作者发布的那份。删掉重来一次；仍不一致就拒绝加载，
+            # 而不是拿一份来源存疑的权重去给用户的检索打分。
+            logger.warning("model.onnx does not match the publisher sha256; "
+                           "discarding and retrying once")
+            onnx.unlink(missing_ok=True)
+            if not _download_model_file("model.onnx", onnx) or _sha256(onnx) != pub:
+                logger.warning("model.onnx still does not match the publisher digest; "
+                               "refusing to score with it")
+                onnx.unlink(missing_ok=True)
+                _reject("model.onnx failed publisher sha256 verification")
+                return None
+        # 没有权威摘要时只记下"刚下到的字节"的哈希：那用于日后发现文件损坏，
+        # 不构成对来源的验证（见 RerankerModel.publisher_sha256）。
         try:
             sha_file.write_text(_sha256(onnx))
+            paths.harden_file(sha_file)
         except Exception:
             pass
 
-    # Verify the onnx still matches its recorded hash (detect corruption).
+    # Verify the onnx still matches its recorded hash (detect corruption). When a
+    # publisher digest exists it is the standard; the self-recorded sidecar is the
+    # fallback and only proves "unchanged since we fetched it".
     if sha_file.exists():
         try:
-            if _sha256(onnx) != sha_file.read_text().strip():
+            want = pub or sha_file.read_text().strip()
+            if _sha256(onnx) != want:
                 logger.warning("model.onnx hash mismatch; re-downloading")
                 if _download_model_file("model.onnx", onnx):
+                    if pub and _sha256(onnx) != pub:
+                        logger.warning("re-downloaded model.onnx still does not match "
+                                       "the publisher digest; refusing to use it")
+                        onnx.unlink(missing_ok=True)
+                        _reject("model.onnx failed publisher sha256 verification")
+                        return None
                     sha_file.write_text(_sha256(onnx))
                 else:
                     return None

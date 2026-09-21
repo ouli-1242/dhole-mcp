@@ -143,3 +143,100 @@ def test_config_path_is_inside_the_dhole_home(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     assert reranker_config._path() == \
         tmp_path / ".dhole" / "config" / "reranker.json"
+
+# ─── 发布方摘要校验（真实性）与自记哈希（仅完整性）─────────────────────────
+
+def _tiny_model(publisher=None, tmp=None):
+    return reranker.RerankerModel(
+        name="tiny", repo="someone/tiny", rev="deadbeef",
+        relpaths={"model.onnx": "onnx/model.onnx", "tokenizer.json": "tokenizer.json",
+                  "vocab.txt": "vocab.txt"},
+        approx_bytes=10, min_bytes=1,
+        publisher_sha256=publisher or {},
+    )
+
+
+@pytest.fixture
+def tiny_env(monkeypatch, tmp_path):
+    """把 active_model/目录指向一个 1 字节的假模型，避免为测试写 100MB 文件。"""
+    model_dir = tmp_path / "models" / "tiny"
+    model_dir.mkdir(parents=True)
+    holder = {"model": _tiny_model()}
+    monkeypatch.setattr(reranker, "active_model", lambda: holder["model"])
+    monkeypatch.setattr(reranker, "active_model_dir", lambda: model_dir)
+    monkeypatch.setattr(reranker.paths, "migrate_legacy_cache_dir", lambda: None)
+    monkeypatch.setattr(reranker, "_reranker_unavailable_reason", "")
+    # 与摘要逻辑无关的尺寸下限（真模型 50MB）放宽，否则测试要先写出 50MB 文件
+    monkeypatch.setattr(reranker, "MIN_MODEL_BYTES", 1)
+    return holder, model_dir
+
+
+def _fake_download(content: bytes, log: list):
+    def _f(name, dest):
+        log.append(name)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(content)
+        return True
+    return _f
+
+
+def test_publisher_digest_rejects_a_foreign_payload(tiny_env, monkeypatch):
+    """镜像给了不同字节时必须拒用，而不是悄悄拿它打分。
+
+    修前的行为是：下载完算**自己刚下的字节**的哈希写盘 —— 那只证明以后没损坏，
+    任何端点给什么就"验证"通过什么。
+    """
+    holder, model_dir = tiny_env
+    import hashlib
+    bad = b"C" * 40                      # 与发布方摘要不符
+    want = hashlib.sha256(b"R" * 40).hexdigest()   # 作者实际发布的那份
+    holder["model"] = _tiny_model(publisher={"model.onnx": want})
+    log: list = []
+    monkeypatch.setattr(reranker, "_download_model_file", _fake_download(bad, log))
+
+    assert reranker._ensure_model() is None
+    assert not (model_dir / "model.onnx").exists(), "拒用后不该留下那份权重"
+    assert "publisher sha256" in reranker._reranker_unavailable_reason, \
+        "拒绝原因要能和'网络问题'区分开"
+
+
+def test_publisher_digest_accepts_the_published_bytes(tiny_env, monkeypatch):
+    holder, model_dir = tiny_env
+    import hashlib
+    good = b"R" * 40
+    holder["model"] = _tiny_model(publisher={"model.onnx": hashlib.sha256(good).hexdigest()})
+    log: list = []
+    monkeypatch.setattr(reranker, "_download_model_file", _fake_download(good, log))
+    onnx, tok = reranker._ensure_model()
+    assert onnx.exists() and tok.exists()
+    # sidecar 记的就是发布方那份字节
+    assert (model_dir / "model.sha256").read_text().strip() == hashlib.sha256(good).hexdigest()
+
+
+def test_no_publisher_digest_still_records_self_hash(tiny_env, monkeypatch):
+    """拿不到权威摘要时保持原行为（完整性），但注册表里空着就是空着。"""
+    holder, model_dir = tiny_env
+    assert all(not m.publisher_sha256 for m in reranker.MODELS.values()), \
+        "未经发布方元数据核对前，不许往注册表里填摘要值"
+    log: list = []
+    monkeypatch.setattr(reranker, "_download_model_file", _fake_download(b"Q" * 40, log))
+    onnx, _tok = reranker._ensure_model()
+    assert onnx.exists()
+    assert (model_dir / "model.sha256").exists()
+
+
+def test_vocab_txt_is_fetched_best_effort(tiny_env, monkeypatch):
+    """回退分词器要用的 vocab.txt 此前从不下发；列为必需项反而更危险。"""
+    holder, model_dir = tiny_env
+    log: list = []
+    monkeypatch.setattr(reranker, "_download_model_file", _fake_download(b"Z" * 40, log))
+    reranker._ensure_model()
+    assert "vocab.txt" in log, "缺失时应尝试补下"
+
+    # 下载失败也不能让整体失效
+    def _fail(name, dest):
+        return name != "vocab.txt"
+    monkeypatch.setattr(reranker, "_download_model_file", _fail)
+    (model_dir / "vocab.txt").unlink(missing_ok=True)
+    onnx, tok = reranker._ensure_model()
+    assert onnx is not None and tok is not None, "vocab.txt 缺失不该弄死本来能用的重排"
