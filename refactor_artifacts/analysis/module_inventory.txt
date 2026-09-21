@@ -1,0 +1,120 @@
+== SIZES (lines, top-level funcs, classes) ==
+server                     lines= 4587 funcs= 50 classes= 9
+search_metasearch          lines= 1651 funcs= 29 classes=28
+browser                    lines= 1469 funcs= 19 classes= 3
+search                     lines= 1402 funcs= 42 classes= 2
+updater                    lines= 1084 funcs= 34 classes= 0
+crawl                      lines=  864 funcs= 14 classes= 2
+pdf_extractor              lines=  781 funcs= 23 classes= 1
+security                   lines=  707 funcs= 15 classes= 1
+fetcher                    lines=  599 funcs=  5 classes= 3
+reranker                   lines=  552 funcs= 16 classes= 2
+envelope                   lines=  445 funcs=  7 classes= 1
+search_proxy               lines=  392 funcs= 16 classes= 1
+trafilatura_extractor      lines=  375 funcs= 12 classes= 0
+structured                 lines=  322 funcs= 11 classes= 0
+search_engines             lines=  320 funcs=  8 classes= 2
+paths                      lines=  287 funcs= 12 classes= 0
+parse                      lines=  278 funcs=  7 classes= 0
+cache                      lines=  274 funcs=  7 classes= 0
+ocr                        lines=  252 funcs=  6 classes= 0
+sitemap                    lines=  246 funcs=  6 classes= 2
+cli_ui                     lines=  212 funcs= 21 classes= 0
+focus                      lines=  199 funcs=  7 classes= 0
+reddit                     lines=  191 funcs=  5 classes= 0
+cli                        lines=  188 funcs=  8 classes= 0
+links                      lines=  184 funcs=  4 classes= 0
+metadata                   lines=  181 funcs=  2 classes= 0
+feed                       lines=  161 funcs=  6 classes= 2
+actions                    lines=  142 funcs=  2 classes= 0
+errors                     lines=  132 funcs=  2 classes= 0
+__init__                   lines=   52 funcs=  1 classes= 0
+extractor                  lines=   49 funcs=  1 classes= 0
+reranker_config            lines=   45 funcs=  3 classes= 0
+__main__                   lines=    4 funcs=  0 classes= 0
+
+== INTRA-PACKAGE IMPORT EDGES (importer -> imported) ==
+__init__                   -> server
+__main__                   -> server
+actions                    -> security
+browser                    -> errors, fetcher, security
+cli                        -> server
+crawl                      -> errors, focus, search_proxy, security, server, sitemap, trafilatura_extractor
+extractor                  -> trafilatura_extractor
+feed                       -> fetcher
+fetcher                    -> security
+ocr                        -> pdf_extractor
+parse                      -> pdf_extractor, trafilatura_extractor
+pdf_extractor              -> ocr
+reranker_config            -> reranker
+search                     -> cache, reranker, search_engines, search_metasearch, security
+search_engines             -> fetcher, search_metasearch
+search_metasearch          -> search_proxy, security
+search_proxy               -> fetcher
+server                     -> actions, browser, cache, crawl, envelope, errors, extractor, feed, fetcher, focus, links, metadata, ocr, parse, pdf_extractor, reddit, search, search_metasearch, security, structured, trafilatura_extractor, updater
+sitemap                    -> security
+updater                    -> reranker
+
+== FAN-IN (how many modules import this one) ==
+security                   imported_by=8
+fetcher                    imported_by=5
+server                     imported_by=4
+trafilatura_extractor      imported_by=4
+errors                     imported_by=3
+reranker                   imported_by=3
+pdf_extractor              imported_by=3
+search_metasearch          imported_by=3
+search_proxy               imported_by=2
+ocr                        imported_by=2
+cache                      imported_by=2
+focus                      imported_by=2
+sitemap                    imported_by=1
+updater                    imported_by=1
+parse                      imported_by=1
+search                     imported_by=1
+crawl                      imported_by=1
+browser                    imported_by=1
+extractor                  imported_by=1
+reddit                     imported_by=1
+metadata                   imported_by=1
+envelope                   imported_by=1
+links                      imported_by=1
+actions                    imported_by=1
+search_engines             imported_by=1
+structured                 imported_by=1
+feed                       imported_by=1
+
+== MODULE-LEVEL MUTABLE STATE (candidate shared state) ==
+__init__                   __all__
+actions                    _VALID_KEYS
+browser                    DISABLED_RESOURCE_TYPES, _FINGERPRINT_PROFILES
+cache                      _db_initialized
+crawl                      _TRACKING_PARAMS
+errors                     _HINTS, _PATTERNS
+fetcher                    _IMPERSONATE_POOL
+links                      _NAV_TAGS
+metadata                   _KEY_MAP
+parse                      SUPPORTED_EXTENSIONS
+reranker                   MODELS
+search                     _INTENT_EXPANSIONS, _INTENT_PATTERNS, _STOPWORDS
+search_engines             _FRESHNESS_TO_TIMELIMIT, _INDEX_FAMILY
+search_metasearch          KEYED_ENGINES, _BACKEND_HEALTH, _CONN_FAIL_COUNTS, _DEFAULT_BACKENDS, _DEFAULT_CIPHERS, _DHOLE_TO_BACKEND, _ENGINE_YIELD, _GITHUB_REPO_HOSTS, _SEARCH_TRACKING_PARAMS, _TEXT_ENGINES
+security                   _DNS_CHECK_CACHE, _PRIVATE_NETWORKS
+server                     _CF_CHALLENGE_SIGNALS, _DOMAIN_LATENCY, _GEO_REDIRECT_SIGNALS, _JS_SHELL_SIGNALS, _PARSE_CONTENT_TYPES
+updater                    __all__
+
+== ENV VARS READ, BY MODULE ==
+browser                    LOCALAPPDATA, PROGRAMFILES, PROGRAMFILES(X86)
+cli                        DHOLE_NO_AUTO_REPAIR, DHOLE_UPDATE_INDEX_URL, DHOLE_UPDATE_PACKAGE
+cli_ui                     FORCE_COLOR, NO_COLOR
+paths                      DHOLE_HOME
+reranker                   DHOLE_HF_ENDPOINT, HF_ENDPOINT
+search                     DHOLE_SEARCH_FEEDBACK
+search_metasearch          DHOLE_BRIGHTDATA_COUNTRY, DHOLE_BRIGHTDATA_ZONE, DHOLE_DEFAULT_ENGINES, DHOLE_SEARCH_DEADLINE
+search_proxy               ALL_PROXY, DHOLE_SEARCH_PROXY, HTTPS_PROXY, HTTP_PROXY
+security                   DHOLE_SSRF_DNS_RECHECK, SystemRoot
+server                     ALL_PROXY, DHOLE_SEARCH_PROXY, DHOLE_USAGE_LOG, DHOLE_WORKDIR, HTTPS_PROXY, HTTP_PROXY
+updater                    DHOLE_DEFAULT_ENGINES, DHOLE_UPDATE_INDEX_URL, DHOLE_UPDATE_PACKAGE
+
+TOTAL distinct env vars read in src/: 24
+ALL_PROXY, DHOLE_BRIGHTDATA_COUNTRY, DHOLE_BRIGHTDATA_ZONE, DHOLE_DEFAULT_ENGINES, DHOLE_HF_ENDPOINT, DHOLE_HOME, DHOLE_NO_AUTO_REPAIR, DHOLE_SEARCH_DEADLINE, DHOLE_SEARCH_FEEDBACK, DHOLE_SEARCH_PROXY, DHOLE_SSRF_DNS_RECHECK, DHOLE_UPDATE_INDEX_URL, DHOLE_UPDATE_PACKAGE, DHOLE_USAGE_LOG, DHOLE_WORKDIR, FORCE_COLOR, HF_ENDPOINT, HTTPS_PROXY, HTTP_PROXY, LOCALAPPDATA, NO_COLOR, PROGRAMFILES, PROGRAMFILES(X86), SystemRoot

@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "task": "行为保持重构 Dhole MCP 服务器",
+  "repo_root": "D:\\tools\\dhole-mcp",
+  "branch": "refactor/dhole-mcp-behavior-preserving",
+  "updated_at": "2026-09-21T17:20:00Z",
+  "current_stage": "阶段 0/1（安全隔离与基线）→ 即将进入阶段 2",
+  "stage_status": {
+    "stage0_safety_and_baseline": "in_progress",
+    "stage1_first_principles": "in_progress",
+    "stage2_refactor": "not_started",
+    "stage3_verification_matrix": "not_started",
+    "stage4_adversarial_review": "not_started",
+    "stage5_deliverables": "not_started"
+  },
+  "git": {
+    "branches_present": [
+      "wip-before-refactor",
+      "refactor/dhole-mcp-behavior-preserving",
+      "master"
+    ],
+    "baseline_commit": "74524dc575d39d2269e7268113dff9cf0b391208",
+    "baseline_commit_branch": "wip-before-refactor",
+    "baseline_commit_message": "chore: snapshot working tree before behavior-preserving refactor",
+    "initial_repo_state": "仓库此前没有任何提交（unborn HEAD），95 个文件全部处于已暂存未提交状态，当前分支名为 fix/silent-degradation-hardening。已按阶段 0 第 2 步要求先做完整提交保全。",
+    "last_green_commit": "74524dc575d39d2269e7268113dff9cf0b391208",
+    "note": "refactor 分支从 74524dc 创建，尚无新增提交。"
+  },
+  "baseline_evidence": {
+    "pytest": {
+      "command": "python -m pytest -q --tb=short -p no:cacheprovider",
+      "result": "1128 passed, 2 skipped, 15 deselected in 63.33s",
+      "exit_code": 0,
+      "raw_output": "refactor_artifacts/baseline/pytest_baseline.txt"
+    },
+    "collection": {
+      "command": "python -m pytest -q --collect-only -p no:cacheprovider",
+      "result": "1130/1145 tests collected (15 deselected) in 2.66s",
+      "raw_output": "refactor_artifacts/baseline/pytest_collect.txt"
+    },
+    "ruff_check": {
+      "command": "python -m ruff check .",
+      "result": "All checks passed!",
+      "exit_code": 0,
+      "raw_output": "refactor_artifacts/baseline/ruff_check_baseline.txt"
+    },
+    "ruff_format_check": {
+      "command": "python -m ruff format --check .",
+      "result": "66 files would be reformatted, 12 files already formatted",
+      "exit_code": 1,
+      "decision": "仓库基线本来就不是 ruff-format 过的。因此本轮重构【禁止】运行 ruff format，否则会产生 66 文件的格式化 diff，属于大爆炸改动。",
+      "raw_output": "refactor_artifacts/baseline/ruff_format_check_baseline.txt"
+    },
+    "version": "14.7 (来自 src/dhole_mcp/__init__.py 的 __version__，即版本单一来源)"
+  },
+  "pending": [
+    "阶段 0 第 7 步：tools/list + 每个工具 tools/call 的原始 JSON 快照（子代理进行中，落盘到 refactor_artifacts/baseline/）",
+    "阶段 1：FIRST_PRINCIPLES.md、CONTRACTS.md",
+    "DOC_CODE_DRIFT.md（子代理进行中）",
+    "阶段 2：原子重构 + 每个绿色步骤单独 commit"
+  ],
+  "unresolved": [
+    "refactor_artifacts/tools/mcp_snapshot.py 与被测服务器交互的真实结论尚未回收（子代理进行中）",
+    "README 与代码的漂移清单尚未回收（子代理进行中）"
+  ],
+  "stop_conditions_triggered": [],
+  "notes": [
+    "备份目录 .refactor_backup/ 已建立（src/ tests/ 与根文档副本），并已写入 .git/info/exclude，确保 git add -A 不会把备份提交进仓库。",
+    "未提交任何 git 配置修改；未改动 .gitignore 之外的仓库文件。"
+  ]
+}
