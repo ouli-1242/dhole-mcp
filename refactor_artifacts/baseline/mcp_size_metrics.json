@@ -1,0 +1,47 @@
+{
+  "measured_at": "2026-09-22T01:22:25",
+  "repo_root": "D:\\tools\\dhole-mcp",
+  "dhole_home_used": "D:\\tools\\dhole-mcp\\refactor_artifacts\\tmp_home\\run-20260922-012214\\state",
+  "protocol_version_requested": "2025-06-18",
+  "protocol_version_returned": "2025-06-18",
+  "server_info": {
+    "name": "Dhole",
+    "version": "14.7",
+    "websiteUrl": "https://github.com/ouli-1242/dhole-mcp"
+  },
+  "tool_count": 8,
+  "tool_names": [
+    "smart_fetch",
+    "smart_crawl",
+    "screenshot",
+    "smart_search",
+    "cache_clear",
+    "parse",
+    "feed_fetch",
+    "resolve_url"
+  ],
+  "instructions_raw_string_chars": 1399,
+  "instructions": {
+    "chars": 1399,
+    "json_default_chars": 1407,
+    "json_compact_chars": 1407,
+    "json_compact_ensure_ascii_false_chars": 1407,
+    "naive_chars_div_4_default": 351.8,
+    "naive_chars_div_4_compact": 351.8
+  },
+  "tools_list_result": {
+    "chars": null,
+    "json_default_chars": 11846,
+    "json_compact_chars": 11509,
+    "json_compact_ensure_ascii_false_chars": 11499,
+    "naive_chars_div_4_default": 2961.5,
+    "naive_chars_div_4_compact": 2877.2
+  },
+  "tools_list_full_envelope_chars": 11533,
+  "notes": [
+    "Character counts only - no tokenizer is available offline. The README (v14.6, not re-measured since) claims 333 + 2931 = 3264 cl100k_base tokens; that exact tokenizer/count is NOT reproduced here.",
+    "chars_raw_string_chars is the literal Python string length of result.instructions.",
+    "json_* sizes are json.dumps of the value (default ensure_ascii=True escapes non-ASCII); compact uses separators=(',',':').",
+    "All traffic was offline-safe: loopback/metadata/file URLs rejected by the server SSRF guard, a nonexistent local path for parse, and search engines routed to a dead loopback proxy."
+  ]
+}
