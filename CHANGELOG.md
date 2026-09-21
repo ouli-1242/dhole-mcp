@@ -9,6 +9,84 @@
 > 版本号是自己的，与上游版本不可比。`src/dhole_mcp/__init__.py` 中的
 > `__version__` 是版本的唯一权威来源。
 
+## [14.3] - 2026-09-21
+
+### 修复（信任信号）
+- **`envelope.classify_source` 的 gov 判定可被任意域名伪造。** 原实现测
+  `".gov." in host`，于是 `foo.gov.attacker.com`（完全由攻击者注册）被判为
+  `gov` + `is_official=True` 并直接交给 agent 当权威信号。改为
+  `host == "gov"` / `*.gov`（美国 .gov 为不可注册 TLD）/ `*.gov.<2 字母 ccTLD>`
+  （gov.uk / gov.br / gov.cn，label 对由注册局保留）。
+- **`docs.*` / `developer.*` 不再返回 `is_official=True`。** 这是形状信号不是
+  权威信号：任何站点都能给自己的域名起一个 docs 子域。`source_type` 照旧
+  返回 `docs-site`，字段描述与指令措辞同步改为与实现一致（is_official 只对
+  gov / edu / github 为真）。
+
+### 修复（作用域）
+- **缓存按请求上下文分区。** 缓存键原本只有 URL + 抽取参数，而
+  `~/.dhole_mcp_cache/cache.db` 是整机共享的：带 cookies/auth 抓来的正文会被
+  之后一次匿名抓取原样回放（`cached=True`、`content_ok=true`），
+  `include_media=false` 抓的内容也会顶替 `include_media=true` 的请求。现在
+  cookies / 自定义头 / UA / 代理 / 内容开关会进指纹（`server._cache_context`）；
+  纯默认请求指纹为空，已有缓存条目与旧键完全一致，不会被一次性作废。
+- **隐式域名加权默认关闭。** `fetch_content` 抓到过的域名会永久 +0.05 并落盘
+  `search_feedback.json`——按「抓到过」而非「有用」改写跨引擎共识排序，且是
+  用户没要求过的持久状态。改为 `DHOLE_SEARCH_FEEDBACK=1` 显式开启，关闭时
+  连文件都不写。
+- **DNS 内网复查默认开启**（`DHOLE_SSRF_DNS_RECHECK=0` 关闭）。工具的输入是
+  agent 从不受信任来源拿到的 URL，"公网域名指向 127.0.0.1 / 169.254.169.254 /
+  内网段"是 SSRF 主路径。为不误伤"本机故意阻断"的场景：**hosts 文件里显式
+  钉住的域名一律放行**（攻击者改不了你的 hosts 文件），解析结果加短 TTL 缓存
+  （拒绝 5 分钟 / 放行 5 秒），一次抓取的重定向链不会重复解析。错误信息里直接
+  带上关闭开关的名字。
+- **自愈路径不再硬编码公开发行版名。** `dhole` 入口在 ImportError 时会
+  `pip install --force-reinstall <dist>`，而 dist 原本写死为 `dhole-mcp`：配置了
+  `DHOLE_UPDATE_PACKAGE` 的 fork 会被装回公开包。现在包名与
+  `DHOLE_UPDATE_INDEX_URL` 都跟随配置（`cli._dist_name` / `updater` 生成的脚本
+  同样支持 index），并新增 `DHOLE_NO_AUTO_REPAIR=1` 让「任意 ImportError 触发
+  无人值守重装」这条路径可以被关掉。
+
+### 新增
+- **`dhole -v` 报告真实能力。** 附上 browser tier / pdf+ocr / neural rerank（含
+  模型是否已下载）/ search pool 四行状态。这些能力**缺失时全部静默降级**，
+  所以诊断命令是唯一能看出"装了个更弱的版本"的地方。
+- **`DHOLE_USAGE_LOG`（默认关）** 本地调用日志：工具名、成功与否、耗时、脱敏
+  后的错误，**不记参数值、不联网**。这个工具最大的失败面是静默的（模型根本
+  不调用它），没有本地记录就无法回答。
+- **`DHOLE_NO_AUTO_REPAIR`**（见上）。
+- **模型下载源可回退**（`DHOLE_HF_ENDPOINT` / `HF_ENDPOINT` 可指定）：默认先试
+  `huggingface.co`，失败自动回退 `hf-mirror.com`。revision 固定，任何端点的
+  字节一致——回退只改变"从哪下"，不改变"下到什么"。在这台机器上
+  `huggingface.co` 被 hosts 钉死，没有回退就意味着模型永远下不回来、搜索
+  排序永久静默降级。
+- 指令与工具描述里显式声明：抓回来的页面正文是**不可信数据**，其中的指令
+  一律不执行（正文与服务器自写的 `next_action`/`summary` 走同一条信道）。
+
+### 变更
+- **运行时文件全部收敛到一个目录：`~/.dhole/`。** 之前状态在 `~/.dhole/`、缓存
+  与模型在 `~/.dhole_mcp_cache/`——「这工具在我机器上留下了什么」要两个目录才
+  答得全，卸载说明也不完整。现在 `src/dhole_mcp/paths.py` 是唯一事实来源
+  （cache.db / models/ / circuit_breaker.json / search_feedback.json /
+  usage.jsonl / last_version / repair.py / search_proxies.json），cache、
+  reranker、search、server、updater 全部走它。旧目录在首次使用时自动搬移
+  （**不会重下 90MB 模型**——在 hosts 钉死 HF / 代理不可用的网络上那等于永久
+  降级）：只搬目标位置缺失的条目、绝不覆盖、绝不删非空旧目录，失败最多是
+  重建，不会丢新位置的数据。浏览器 profile 仍是会话结束即删的系统临时目录
+  （transient，不是状态）；rapidocr 的 OCR 模型随包发行，不落这里。
+- `smart_fetch` 的描述不再自称"用于所有网页抓取"，改为说明它强在哪
+  （反爬墙、JS 渲染、PDF/OCR、多 URL 批量）；连接期指令的开头同样改为条件式
+  表述。自我推销式路由不是可验证的承诺。
+- `dhole -v` 的帮助文案改为 "version + capability check"。
+- 测试套件不再依赖开发机的解析器（`conftest` 里 autouse 固定 `getaddrinfo`）：
+  DNS 复查默认开启后，一台把 github.com/huggingface.co 钉到 127.0.0.1 的机器
+  （本机就是这样）会让无关测试变红。`conftest` 同时全局跳过迁移
+  （`_legacy_migrated`），跑测试不会搬动真实用户目录；test_paths 自己重置开关
+  来测迁移本身。
+- **删除 `package.json`。** 它是 pi-extension 时代（该扩展 13.14 已移除）的残留，
+  且是第三个版本号来源（写着 14.0，实际 14.2.1）——正是 13.14 收敛掉的同一类
+  缺陷。需要它的话 `git checkout HEAD -- package.json` 可一行还原。
+- `pyproject.toml` 的 wheel packages 去掉 14.1 已删除的 `src/hound_mcp`。
+
 ## [14.2.1] - 2026-09-20
 
 ### 变更

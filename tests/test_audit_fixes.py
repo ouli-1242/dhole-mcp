@@ -141,13 +141,13 @@ def test_health_check_done_resets_task():
 
 
 # ---------------------------------------------------------------------------
-# P2: DNS 复查（开启时生效）
+# P2: DNS 复查（默认开启）
 # ---------------------------------------------------------------------------
 
 
 def test_dns_recheck_rejects_internal_resolution(monkeypatch):
-    """DHOLE_SSRF_DNS_RECHECK=1 时，域名解析到内网应拒绝。"""
-    monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", "1")
+    """域名解析到内网应拒绝（默认开启，不需要设任何环境变量）。"""
+    monkeypatch.delenv("DHOLE_SSRF_DNS_RECHECK", raising=False)
     sp = __import__("dhole_mcp.security", fromlist=["_dns_recheck_enabled"])
     assert sp._dns_recheck_enabled() is True
     with patch("socket.getaddrinfo",
@@ -156,10 +156,24 @@ def test_dns_recheck_rejects_internal_resolution(monkeypatch):
             validate_url("https://mycorp.internal/x")
 
 
-def test_dns_recheck_off_by_default(monkeypatch):
-    """默认关闭 DNS 复查（不误伤 DNS 污染环境）。"""
+def test_dns_recheck_on_by_default(monkeypatch):
+    """默认开启（fail-closed）：agent 抓来的 URL 不受信任，内网解析是主路径。"""
+    monkeypatch.delenv("DHOLE_SSRF_DNS_RECHECK", raising=False)
     sp = __import__("dhole_mcp.security", fromlist=["_dns_recheck_enabled"])
-    assert sp._dns_recheck_enabled() is False
+    assert sp._dns_recheck_enabled() is True
+
+
+def test_dns_recheck_can_be_disabled(monkeypatch):
+    """DHOLE_SSRF_DNS_RECHECK=0 关闭（DNS 污染/分流环境的逃生口）。"""
+    sp = __import__("dhole_mcp.security", fromlist=["_dns_recheck_enabled"])
+    for value in ("0", "false", "off", "no"):
+        monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", value)
+        assert sp._dns_recheck_enabled() is False
+    monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", "0")
+    sp._DNS_CHECK_CACHE.clear()
+    with patch("socket.getaddrinfo",
+               return_value=[(2, 1, 6, "", ("192.168.1.10", 0))]):
+        assert validate_url("https://mycorp.internal/x") == "https://mycorp.internal/x"
 
 
 def test_dns_recheck_accepts_public_resolution(monkeypatch):
@@ -168,6 +182,40 @@ def test_dns_recheck_accepts_public_resolution(monkeypatch):
     with patch("socket.getaddrinfo",
                return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
         assert validate_url("https://example.com/x") == "https://example.com/x"
+
+
+def test_dns_recheck_honors_hosts_file_pin(monkeypatch):
+    """hosts 文件里显式钉住的域名放行：那是本机用户的故意决定（阻断/mirror/
+    分流），攻击者改不了 hosts 文件，所以不该被当成攻击者的 DNS 答案。
+
+    这台机器就把 github.com / huggingface.co 钉到 127.0.0.1。
+    """
+    sp = __import__("dhole_mcp.security", fromlist=["_hosts_file_pin", "_resolves_to_internal"])
+    monkeypatch.setattr(sp, "_hosts_file_pin", lambda host: "127.0.0.1")
+    sp._DNS_CHECK_CACHE.clear()
+    with patch("socket.getaddrinfo",
+               return_value=[(2, 1, 6, "", ("127.0.0.1", 0))]):
+        assert sp._resolves_to_internal("pinned.example") is None
+        assert validate_url("https://pinned.example/x") == "https://pinned.example/x"
+
+
+def test_hosts_file_parser_reads_real_file(tmp_path, monkeypatch):
+    """解析器本身：注释/多主机名/大小写/尾点。"""
+    hosts = tmp_path / "hosts"
+    hosts.write_text(
+        "# comment line\n"
+        "127.0.0.1   pinned.example  SECOND.example.\n"
+        "0.0.0.0 ad.example # trailing comment\n"
+        "malformed-line\n",
+        encoding="utf-8",
+    )
+    sp = __import__("dhole_mcp.security", fromlist=["_hosts_file_pin"])
+    monkeypatch.setattr(sp, "_hosts_file_path", lambda: str(hosts))
+    monkeypatch.setattr(sp, "_hosts_cache", None)
+    assert sp._hosts_file_pin("pinned.example") == "127.0.0.1"
+    assert sp._hosts_file_pin("second.example") == "127.0.0.1"
+    assert sp._hosts_file_pin("AD.EXAMPLE") == "0.0.0.0"
+    assert sp._hosts_file_pin("not-pinned.example") is None
 
 # ---------------------------------------------------------------------------
 # P1: sitemap SSRF（深挖发现）

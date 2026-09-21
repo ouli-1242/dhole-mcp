@@ -43,6 +43,7 @@ from fake_useragent import UserAgent
 from lxml import html
 from lxml.etree import HTMLParser as LHTMLParser
 
+from dhole_mcp import paths
 from dhole_mcp.security import redact_api_key
 
 logger = logging.getLogger(__name__)
@@ -943,7 +944,7 @@ KEYED_ENGINES: dict[str, type[KeyedApiEngine]] = {
 # are transient and do NOT trip the breaker. Cleared on the next success.
 _CIRCUIT_COOLDOWN = 60.0  # seconds
 _BACKEND_HEALTH: dict[str, float] = {}  # name -> block-until timestamp
-_CIRCUIT_STATE_FILE = os.path.join(os.path.expanduser("~"), ".dhole", "circuit_breaker.json")
+_CIRCUIT_STATE_FILE = str(paths.file("circuit_breaker.json"))
 
 
 def _load_circuit_state() -> None:

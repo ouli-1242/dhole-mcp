@@ -48,13 +48,23 @@ _GITHUB_DOMAINS = (
     "github.com", "raw.githubusercontent.com", "gist.github.com",
 )
 
+# Country-code government/academic forms: "<x>.gov.<cc>" / "<x>.ac.<cc>"
+# (gov.br, gov.cn, gov.uk, ac.uk). The label pair is reserved by the ccTLD
+# registry, so a third party cannot own it. The 2-letter tail is what makes the
+# match safe: "foo.gov.attacker.com" ends in ".com", not ".gov.<cc>".
+_CC_GOV_RE = re.compile(r"\.gov\.[a-z]{2}$")
+_CC_AC_RE = re.compile(r"\.ac\.[a-z]{2}$")
+
 
 def classify_source(url: str) -> tuple[str, bool]:
     """Classify a URL's domain into a source_type + is_official flag.
 
-    Returns (source_type, is_official). is_official is True ONLY on a strong
-    signal that this is the canonical owner of the subject (gov, edu, github,
-    the vendor's own docs subdomain). Everything else is False (conservative).
+    Returns (source_type, is_official). is_official is True ONLY for
+    registry-controlled namespaces a third party cannot register (gov, edu,
+    github) — i.e. the name cannot be bought. Subdomain shapes such as
+    "docs.*" / "developer.*" are reported as source_type="docs-site" but are
+    NOT official: they only say the site named a subdomain "docs". Everything
+    else is False (conservative).
     """
     if not url:
         return "unknown", False
@@ -70,18 +80,25 @@ def classify_source(url: str) -> tuple[str, bool]:
     if not host:
         return "unknown", False
 
-    # Government / education / github: canonical, official.
-    if host.endswith(".gov") or host == "gov" or ".gov." in host:
+    # Government / education / github: the only classes where the NAME ITSELF
+    # cannot be bought by a third party (registry-controlled namespaces).
+    #
+    # NOTE: this used to test ".gov." in host, which any attacker-registrable
+    # domain satisfies — "foo.gov.attacker.com" was classified gov/is_official
+    # and handed straight to the agent as an authority signal.
+    if host == "gov" or host.endswith(".gov") or _CC_GOV_RE.search(host):
         return "gov", True
-    if host.endswith(".edu") or host.endswith(".ac.uk") or re.search(r"\.ac\.[a-z]{2}$", host):
+    if host.endswith(".edu") or host.endswith(".ac.uk") or _CC_AC_RE.search(host):
         return "edu", True
     if host in _GITHUB_DOMAINS or host.endswith(".github.io"):
         return "github", True
 
-    # Vendor / official docs subdomains. docs.* / developer.* are almost always
-    # the product owner's own docs (strong official signal).
+    # Vendor docs subdomains (docs.* / developer.*). This is a SHAPE signal, not
+    # an authority one: any site can name a subdomain "docs." — including one
+    # whose whole purpose is to look authoritative. So it is NOT is_official:
+    # the agent must not treat it as the canonical source for a subject.
     if host.startswith("docs.") or host.startswith("developer.") or host.startswith("developers."):
-        return "docs-site", True
+        return "docs-site", False
 
     # Q&A sites.
     if host in _QA_DOMAINS or host.endswith(".stackexchange.com") or host.endswith(".stackoverflow.com"):

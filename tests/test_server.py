@@ -430,7 +430,8 @@ class TestWithAgentHints:
     def test_classifies_source(self):
         result = _with_agent_hints(_make_result(url="https://docs.python.org/3/"))
         assert result.source_type == "docs-site"
-        assert result.is_official is True
+        # docs.* is a shape ("the site named a subdomain docs"), not authority
+        assert result.is_official is False
 
     def test_github_is_official(self):
         result = _with_agent_hints(_make_result(url="https://github.com/python/cpython"))

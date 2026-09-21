@@ -40,9 +40,11 @@ from __future__ import annotations
 import os
 import sys
 
+from dhole_mcp import paths
+
 __all__ = [
     "check_version", "pad_version",
-    "do_update", "print_version",
+    "do_update", "print_version", "print_capabilities", "capabilities",
 ]
 
 
@@ -225,7 +227,7 @@ def _stop_all_dhole() -> None:
 
 
 def _dhole_home() -> str:
-    p = os.path.join(os.path.expanduser("~"), ".dhole")
+    p = str(paths.home())
     os.makedirs(p, exist_ok=True)
     return p
 
@@ -249,6 +251,9 @@ of dhole-mcp never touches it.
 """
 import subprocess, sys
 
+# DHOLE_UPDATE_INDEX_URL baked in at write time (empty list = pip's default index).
+_INDEX_ARGS = __INDEX_ARGS__
+
 def _stop():
     if sys.platform == "win32":
         subprocess.run(["taskkill", "/IM", "dhole.exe", "/F"], capture_output=True)
@@ -258,7 +263,7 @@ def _stop():
 
 def _pip(*extra):
     return subprocess.run(
-        [sys.executable, "-m", "pip", "install", *extra, "--quiet",
+        [sys.executable, "-m", "pip", "install", *extra, *_INDEX_ARGS, "--quiet",
          "--disable-pip-version-check"])
 
 def main():
@@ -286,6 +291,8 @@ if __name__ == "__main__":
 
 def _write_repair_script() -> None:
     """(Re)write ~/.dhole/repair.py so the brick-recovery safety net exists."""
+    index = update_index_url()
+    index_args = ["--index-url", index] if index else []
     try:
         with open(repair_script_path(), "w", encoding="utf-8") as f:
             f.write(
@@ -293,6 +300,8 @@ def _write_repair_script() -> None:
                 .replace("__REPAIR__", repair_script_path())
                 # 生成脚本里的包名跟随自更新源，避免把上游包名写死
                 .replace(_DIST_NAME, _dist())
+                # 索引源同理：否则自愈会悄悄从默认 PyPI 拉包
+                .replace("__INDEX_ARGS__", repr(index_args))
             )
     except OSError:
         pass  # home dir not writable; not fatal - the update can still proceed
@@ -614,8 +623,14 @@ def do_update(target: str | None = None) -> None:
 
 
 def print_version() -> None:
-    """Render `dhole -v`: a compact bordered version panel (or a clean error
-    panel when the install is corrupted, pointing at the safe repair path)."""
+    """Render `dhole -v`: the version panel, then what this install can actually do."""
+    _print_version_panel()
+    print_capabilities()
+
+
+def _print_version_panel() -> None:
+    """A compact bordered version panel (or a clean error panel when the install
+    is corrupted, pointing at the safe repair path)."""
     from dhole_mcp import cli_ui as ui
     W = 50
     inner = W - 4
@@ -664,5 +679,83 @@ def print_version() -> None:
             ui.lr(ui.ver(installed), ui.magenta(f"v{latest} available"), inner),
         ], W))
         print("  " + ui.warn("update with") + "  " + ui.cmd("dhole -u"))
+
+
+# ─── capability report (`dhole -v`) ─────────────────────────────────────────
+#
+# Every optional piece below turns a headline feature OFF WITHOUT AN ERROR:
+# without patchright/playwright the fetch pipeline is HTTP-only, without
+# onnxruntime/tokenizers (or before the ~90MB model is downloaded) search falls
+# back to consensus order, and all of them live in the [all] extra only. In a
+# silent-degradation design the diagnostics command is the one place a user can
+# see which parts are actually in place - otherwise the tool just looks "fine
+# but worse" forever.
+
+def _has_module(name: str) -> bool:
+    """True if `name` is importable, without importing it."""
+    try:
+        import importlib.util
+        return importlib.util.find_spec(name) is not None
+    except Exception:
+        return False
+
+
+def _reranker_model_present() -> bool:
+    """True if the neural reranker model is already cached locally."""
+    d = paths.models_dir() / "msmarco-minilm-l6-v2"
+    return ((d / "model.onnx").exists() and (d / "tokenizer.json").exists())
+
+
+def capabilities() -> list[tuple[str, str, bool]]:
+    """[(label, state, ok)] for the optional capabilities that degrade silently."""
+    caps: list[tuple[str, str, bool]] = []
+
+    browser = _has_module("patchright") and _has_module("playwright")
+    caps.append((
+        "browser tier",
+        "ready (anti-bot / JS rendering / screenshot)" if browser
+        else "missing - HTTP-only (pip install 'dhole-mcp[all]', playwright install chromium)",
+        browser,
+    ))
+
+    pdf = _has_module("pdfplumber") or _has_module("pypdfium2")
+    caps.append((
+        "pdf / ocr",
+        "ready" if pdf else "missing (pip install 'dhole-mcp[all]')",
+        pdf,
+    ))
+
+    if not (_has_module("onnxruntime") and _has_module("tokenizers")):
+        caps.append(("neural rerank", "missing (pip install 'dhole-mcp[all]')", False))
+    elif _reranker_model_present():
+        caps.append(("neural rerank", "ready", True))
+    else:
+        caps.append((
+            "neural rerank",
+            "model not downloaded yet (~90MB on first neural search)",
+            False,
+        ))
+
+    pool = (os.environ.get("DHOLE_DEFAULT_ENGINES") or "").strip()
+    caps.append((
+        "search pool",
+        pool if pool
+        else "bing,duckduckgo,brave,yahoo,yandex (default; ddg/brave/yahoo need VPN in CN)",
+        bool(pool),
+    ))
+    return caps
+
+
+def print_capabilities() -> None:
+    """Print one line per optional capability. Never raises - diagnostics must
+    not be the thing that crashes when an install is half-broken."""
+    try:
+        from dhole_mcp import cli_ui as ui
+        print("  " + ui.dim("capabilities (each missing row degrades silently):"))
+        for label, state, ok in capabilities():
+            mark = ui.ok(state) if ok else ui.warn(state)
+            print("    " + label.ljust(15) + " " + mark)
+    except Exception:
+        pass
 
 

@@ -5,7 +5,9 @@ and safe defaults for all external-facing parameters.
 """
 
 import ipaddress
+import os
 import re
+import time
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -62,13 +64,128 @@ class SecurityError(ValueError):
 
 
 def _dns_recheck_enabled() -> bool:
-    """是否开启域名 DNS 解析内网复查（DHOLE_SSRF_DNS_RECHECK=1）。
+    """是否开启域名 DNS 解析内网复查。
 
-    默认关闭：DNS 污染/分流环境（公网域名被解析到保留地址）会误伤合法请求。
-    模块启动时读取一次并缓存。
+    默认**开启**（fail-closed）：这个工具的输入是 agent 从不受信任来源拿到的
+    URL，"公网域名指向 127.0.0.1 / 169.254.169.254 / 内网段" 是 SSRF 的主路径。
+    两点例外都对着"误伤"设计：hosts 文件里显式钉住的域名放行（那是本机用户的
+    故意决定，攻击者改不了你的 hosts 文件，见 ``_hosts_file_pin``）；
+    ``DHOLE_SSRF_DNS_RECHECK=0`` 可整体关闭 —— DNS 污染/分流环境（公网域名被
+    解析到保留地址且未写进 hosts）下合法公网请求会被误伤。
     """
-    import os
-    return os.environ.get("DHOLE_SSRF_DNS_RECHECK", "").strip() in ("1", "true", "True")
+    raw = (os.environ.get("DHOLE_SSRF_DNS_RECHECK") or "").strip().lower()
+    return raw not in ("0", "false", "off", "no")
+
+
+# DNS 复查结果短缓存：一次抓取会对初始 URL + 每一跳重定向各调一次
+# validate_url，而 validate_url 会从异步路径被调用 —— 不能每跳都做一次
+# 阻塞式解析。被判定为内网的答案缓存久一点（重试时快速失败），放行的答案
+# 只缓存几秒（覆盖一条重定向链，又不至于把 DNS rebinding 的 TOCTOU 窗口
+# 拉长）。无论如何这只是纵深防御，不是唯一防线。
+_DNS_BLOCK_TTL = 300.0
+_DNS_ALLOW_TTL = 5.0
+_DNS_CACHE_MAX = 1024
+_DNS_CHECK_CACHE: dict[str, tuple[float, str | None]] = {}
+
+
+def _hosts_file_path() -> str:
+    """Path of the OS hosts file."""
+    if os.name == "nt":
+        root = os.environ.get("SystemRoot") or r"C:\Windows"
+        return os.path.join(root, "System32", "drivers", "etc", "hosts")
+    return "/etc/hosts"
+
+
+_hosts_cache: tuple[float, dict[str, str]] | None = None
+
+
+def _hosts_file_pin(hostname: str) -> str | None:
+    """Return the IP the OS hosts file pins `hostname` to, else None.
+
+    A hosts-file entry is a DELIBERATE local decision — ad/tracker blockers,
+    mirrors, split-horizon overrides and (on many CN desktops) plain
+    "don't let this resolve" pins. They look exactly like an attacker's DNS
+    answer, so with the recheck on they must not be read as one: an attacker
+    cannot write your hosts file, so honoring the pin keeps the protection where
+    it matters while not breaking a machine that Google-DNS-blocks some domains
+    on purpose.
+
+    Parsed once per file change (mtime), never raises.
+    """
+    global _hosts_cache
+    try:
+        path = _hosts_file_path()
+        mtime = os.path.getmtime(path)
+        if _hosts_cache is not None and _hosts_cache[0] == mtime:
+            table = _hosts_cache[1]
+        else:
+            table: dict[str, str] = {}
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.split("#", 1)[0].strip()
+                    if not line:
+                        continue
+                    parts = line.split()
+                    if len(parts) < 2:
+                        continue
+                    ip = parts[0]
+                    for name in parts[1:]:
+                        table[name.rstrip(".").lower()] = ip
+            _hosts_cache = (mtime, table)
+            _hosts_cache_reset_dns()
+        return table.get(hostname.rstrip(".").lower())
+    except Exception:
+        return None
+
+
+def _hosts_cache_reset_dns() -> None:
+    """Drop DNS verdicts when the hosts file changes (it changes the answers)."""
+    _DNS_CHECK_CACHE.clear()
+
+
+def _resolves_to_internal(hostname: str) -> str | None:
+    """Return a description of the internal address `hostname` resolves to, else None.
+
+    A hosts-file pin short-circuits the check (see ``_hosts_file_pin``).
+    Resolution failure (gaierror/timeout) is tolerated — treated as "not
+    internal" — so an offline or polluted resolver does not turn into a hard
+    error for every URL.
+    """
+    now = time.monotonic()
+    cached = _DNS_CHECK_CACHE.get(hostname)
+    if cached is not None and now < cached[0]:
+        return cached[1]
+
+    if _hosts_file_pin(hostname) is not None:
+        _DNS_CHECK_CACHE[hostname] = (now + _DNS_ALLOW_TTL, None)
+        return None
+
+    verdict: str | None = None
+    try:
+        import socket as _socket
+        infos = _socket.getaddrinfo(hostname, None)
+    except Exception:
+        infos = []
+    for info in infos:
+        info_ip = info[4][0]
+        try:
+            resolved = ipaddress.ip_address(info_ip.split("%")[0])
+        except ValueError:
+            continue
+        for network in _PRIVATE_NETWORKS:
+            try:
+                if resolved in network:
+                    verdict = f"{info_ip} in {network}"
+                    break
+            except TypeError:
+                pass  # IPv4/IPv6 type mismatch, skip
+        if verdict:
+            break
+
+    if len(_DNS_CHECK_CACHE) >= _DNS_CACHE_MAX:
+        _DNS_CHECK_CACHE.clear()
+    _DNS_CHECK_CACHE[hostname] = (now + (_DNS_BLOCK_TTL if verdict else _DNS_ALLOW_TTL), verdict)
+    return verdict
 
 
 def _normalize_ip_notation(host: str) -> str | None:
@@ -289,31 +406,18 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
             if hostname_lower.endswith(_DNS_REBINDING_SUFFIXES):
                 raise SecurityError(f"URL uses DNS rebinding service: {hostname}")
             # 纵深防御（报告声明 4）：域名经 DNS 解析到的内网 IP 复查。
-            # 默认关闭（DHOLE_SSRF_DNS_RECHECK=1 开启）：在 DNS 污染/分流环境
-            # （如被墙地区公网域名被解析到 198.18.0.0/15 等保留地址）会误伤
-            # 所有合法公网请求。开启后只对"解析成功且命中内网"拒绝；
-            # 解析失败（gaierror/超时）容忍。注意存在 DNS rebinding TOCTOU
-            # 竞态，作为纵深防御而非唯一防线。
+            # 默认开启；DHOLE_SSRF_DNS_RECHECK=0 关闭（见 _dns_recheck_enabled）。
+            # 只拒绝"解析成功且命中内网"；解析失败（gaierror/超时）容忍。
+            # 存在 DNS rebinding TOCTOU 竞态，作为纵深防御而非唯一防线。
             if _dns_recheck_enabled():
-                try:
-                    import socket as _socket
-                    infos = _socket.getaddrinfo(hostname, None)
-                except Exception:
-                    infos = []
-                for info in infos:
-                    info_ip = info[4][0]
-                    try:
-                        resolved = ipaddress.ip_address(info_ip.split("%")[0])
-                    except ValueError:
-                        continue
-                    for network in _PRIVATE_NETWORKS:
-                        try:
-                            if resolved in network:
-                                raise SecurityError(
-                                    f"URL hostname {hostname} resolves to internal/private IP ({info_ip} in {network})"
-                                )
-                        except TypeError:
-                            pass
+                internal = _resolves_to_internal(hostname)
+                if internal:
+                    raise SecurityError(
+                        f"URL hostname {hostname} resolves to internal/private IP ({internal}). "
+                        "If your resolver maps public domains to reserved addresses (DNS "
+                        "pollution / split-horizon), set DHOLE_SSRF_DNS_RECHECK=0 to disable "
+                        "this check."
+                    )
 
     return url
 

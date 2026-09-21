@@ -13,8 +13,11 @@ from pathlib import Path
 
 import aiosqlite
 
-# Default cache dir: next to the project
-_CACHE_DIR = Path.home() / ".dhole_mcp_cache"
+from dhole_mcp import paths
+
+# Cache lives in the dhole home (paths.py is the single source of truth for
+# every file dhole writes: ~/.dhole/cache.db, ~/.dhole/models/, ...).
+_CACHE_DIR = paths.cache_dir()
 _DB_NAME = "cache.db"
 
 DEFAULT_TTL = 3600  # 1 hour
@@ -35,15 +38,23 @@ def _get_db_lock() -> asyncio.Lock:
 
 
 def _cache_key(url: str, extraction_type: str, css_selector: str | None = None,
-               pages: str | None = None, source: str = "live", scope: str = "fetch") -> str:
+               pages: str | None = None, source: str = "live", scope: str = "fetch",
+               ctx: str = "") -> str:
     """Deterministic cache key from fetch params.
 
     ``source`` separates live vs archive.org entries so a page that gets unblocked
     within TTL isn't served a stale archive snapshot (and vice versa).
     ``scope`` separates fetch entries from search-result entries (search.py
     stores query strings + serialized params in the same table).
+    ``ctx`` is a request-context fingerprint (cookies / headers / user agent /
+    proxy / content-shaping flags, built by ``server._cache_context``). It exists
+    because the DB is shared by every session on the machine: a body fetched WITH
+    credentials must never be replayed to a request that carried none, and a page
+    extracted with include_media=false must not masquerade as the include_media
+    answer. Default "" keeps plain requests (and pre-existing entries) on exactly
+    the same key as before.
     """
-    raw = f"{scope}|{url}|{extraction_type}|{css_selector or ''}|{pages or ''}|{source or 'live'}"
+    raw = f"{scope}|{url}|{extraction_type}|{css_selector or ''}|{pages or ''}|{source or 'live'}|{ctx}"
     return hashlib.sha256(raw.encode()).hexdigest()[:24]
 
 
@@ -56,6 +67,12 @@ async def _ensure_db(cache_dir: Path | None = None) -> Path:
     Lock-protected to prevent races during concurrent first-access.
     """
     d = cache_dir or _CACHE_DIR
+    if cache_dir is None:
+        # One-time, best-effort: pull a pre-14.3 ~/.dhole_mcp_cache into
+        # ~/.dhole so an existing install keeps its cache DB and (more
+        # importantly) its ~90MB reranker model instead of re-downloading it —
+        # which on some networks is impossible.
+        paths.migrate_legacy_cache_dir()
     d.mkdir(parents=True, exist_ok=True)
     db_path = d / _DB_NAME
 
@@ -120,13 +137,17 @@ async def get_cached(
     pages: str | None = None,
     source: str = "live",
     scope: str = "fetch",
+    ctx: str = "",
 ) -> dict | None:
     """Return cached response if fresh, else None.
 
     Uses the *lesser* of the stored TTL and the caller-requested TTL.
     This prevents serving stale cache when caller wants a fresher window.
+
+    ``ctx`` must match the value used on the write side (see ``_cache_key``):
+    without it, credentialed and anonymous fetches of the same URL share a slot.
     """
-    key = _cache_key(url, extraction_type, css_selector, pages, source, scope)
+    key = _cache_key(url, extraction_type, css_selector, pages, source, scope, ctx)
     db_path = await _ensure_db(cache_dir)
 
     async with aiosqlite.connect(db_path) as db:
@@ -164,6 +185,7 @@ async def set_cached(
     source: str = "live",
     envelope: dict | None = None,
     scope: str = "fetch",
+    ctx: str = "",
 ) -> None:
     """Store a response in cache.
 
@@ -173,7 +195,7 @@ async def set_cached(
     source/archived_at so cache hits restore the full research-grade response
     (previously these fields were silently dropped on cache hits).
     """
-    key = _cache_key(url, extraction_type, css_selector, pages, source, scope)
+    key = _cache_key(url, extraction_type, css_selector, pages, source, scope, ctx)
     db_path = await _ensure_db(cache_dir)
     env_json = json.dumps(envelope) if envelope else "{}"
 

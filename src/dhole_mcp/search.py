@@ -29,6 +29,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
+from dhole_mcp import paths
 from dhole_mcp.cache import get_cached, set_cached
 from dhole_mcp.security import validate_search_query, validate_url, redact_api_key, SecurityError
 from dhole_mcp.search_engines import (
@@ -593,7 +594,7 @@ def _query_terms(query: str) -> set:
 
 
 def _domain_boost(url: str, query: str, is_technical: bool) -> float:
-    """Boost authoritative domains. +0.15 tech domains, +0.05 reference, +0.05 feedback. Not a blocklist."""
+    """Boost authoritative domains. +0.15 tech domains, +0.05 reference, +0.05 feedback (opt-in). Not a blocklist."""
     host = _get_domain(url)
     if not host:
         return 0.0
@@ -607,15 +608,31 @@ def _domain_boost(url: str, query: str, is_technical: bool) -> float:
             boost += 0.08
     if _matches(_REFERENCE_DOMAINS):
         boost += 0.05
-    # Feedback boost: domains the agent previously found useful
-    if host in _feedback_domains():
+    # Feedback boost: domains the agent previously found useful (opt-in only —
+    # DHOLE_SEARCH_FEEDBACK=1; off by default, see the section comment below).
+    if _feedback_enabled() and host in _feedback_domains():
         boost += 0.05
     return boost
 
 
 # ─── search feedback (implicit domain preference learning) ───────────────────
+#
+# OFF by default (DHOLE_SEARCH_FEEDBACK=1 opts in). It is a persistent ranking
+# mutation with no quality signal behind it: record_search_feedback() fires
+# whenever a top result is successfully fetched with fetch_content=true, and
+# every such domain keeps a +0.05 boost for the life of the file (500 domains),
+# reinforcing itself over time. That silently rewrites the cross-engine
+# consensus ordering the user thinks they are seeing, and it writes state the
+# user never asked for.
 
-_FEEDBACK_FILE = os.path.join(os.path.expanduser("~"), ".dhole", "search_feedback.json")
+_FEEDBACK_FILE = str(paths.file("search_feedback.json"))
+
+
+def _feedback_enabled() -> bool:
+    """True only when the user opted in with DHOLE_SEARCH_FEEDBACK=1."""
+    return (os.environ.get("DHOLE_SEARCH_FEEDBACK") or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 _feedback_cache: Optional[frozenset] = None
 _feedback_mtime: float = 0.0
 
@@ -624,6 +641,8 @@ def _feedback_domains() -> frozenset:
     """Load domains the agent found useful (from fetch_content successes).
     Cached in memory; re-reads file only if modified."""
     global _feedback_cache, _feedback_mtime
+    if not _feedback_enabled():
+        return frozenset()
     try:
         import os as _os
         if not _os.path.exists(_FEEDBACK_FILE):
@@ -643,7 +662,10 @@ def _feedback_domains() -> frozenset:
 
 def record_search_feedback(url: str) -> None:
     """Record a domain as useful (called when fetch_content successfully fetches a page).
-    Best-effort, never raises. Atomic write."""
+    Best-effort, never raises. Atomic write. No-op unless DHOLE_SEARCH_FEEDBACK=1
+    (see the section comment above: the boost is opt-in)."""
+    if not _feedback_enabled():
+        return
     try:
         domain = _get_domain(url)
         if not domain:

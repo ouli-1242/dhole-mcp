@@ -26,6 +26,8 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
+from dhole_mcp import paths
+
 logger = logging.getLogger(__name__)
 
 MAX_PROXIES = 20
@@ -34,7 +36,7 @@ _VALID_SCHEMES = ("http", "https", "socks5", "socks5h")
 
 def _config_path() -> Path:
     """Return the path to ~/.dhole/search_proxies.json."""
-    return Path.home() / ".dhole" / "search_proxies.json"
+    return paths.file("search_proxies.json")
 
 
 def _validate_proxy(proxy: str) -> str | None:

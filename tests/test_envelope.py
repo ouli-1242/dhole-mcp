@@ -203,13 +203,38 @@ class TestClassifySource:
         st, off = classify_source("https://www.mit.edu/research")
         assert st == "edu" and off is True
 
-    def test_docs_subdomain_is_official(self):
+    def test_docs_subdomain_is_not_official(self):
+        """docs.* is a SHAPE signal, not authority: any site can name a subdomain
+        "docs.", so it must not come back as is_official."""
         st, off = classify_source("https://docs.python.org/3/")
-        assert st == "docs-site" and off is True
+        assert st == "docs-site" and off is False
 
-    def test_developer_subdomain_is_official(self):
+    def test_developer_subdomain_is_not_official(self):
         st, off = classify_source("https://developer.mozilla.org/en-US/")
-        assert st == "docs-site" and off is True
+        assert st == "docs-site" and off is False
+
+    def test_gov_inside_an_attacker_domain_is_not_official(self):
+        """Regression: this used to test ".gov." in host, so any registrable
+        domain could mint a gov/is_official label for itself."""
+        st, off = classify_source("https://foo.gov.attacker.com/a")
+        assert off is False
+        assert st != "gov"
+
+    def test_gov_under_a_third_party_tld_is_not_official(self):
+        for url in ("https://evil.gov.com/x", "https://gov.example.net/x"):
+            st, off = classify_source(url)
+            assert off is False, url
+            assert st != "gov", url
+
+    def test_cc_gov_domains_are_official(self):
+        """Registry-controlled ccTLD forms (label pair reserved by the registry)."""
+        for url in ("https://www.gov.uk/x", "https://servicos.gov.br/x", "https://www.gov.cn/x"):
+            st, off = classify_source(url)
+            assert (st, off) == ("gov", True), url
+
+    def test_subdomain_of_a_gov_domain_is_official(self):
+        st, off = classify_source("https://data.nasa.gov/mission")
+        assert st == "gov" and off is True
 
     def test_stackoverflow_is_qa_not_official(self):
         st, off = classify_source("https://stackoverflow.com/q/123")

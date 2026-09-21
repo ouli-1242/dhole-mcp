@@ -95,7 +95,7 @@ build-backend = "hatchling.build"
 path = "src/dhole_mcp/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/dhole_mcp", "src/hound_mcp"]
+packages = ["src/dhole_mcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

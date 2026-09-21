@@ -4,7 +4,7 @@ Runs an ONNX cross-encoder (Apache-2.0 `cross-encoder/ms-marco-MiniLM-L-6-v2`,
 22.7M params, trained on MS MARCO passage reranking = query/document relevance)
 on the `onnxruntime` we ALREADY ship for OCR. No new runtime. The model + tokenizer
 are downloaded ONCE on first neural search into
-`~/.dhole_mcp_cache/models/msmarco-minilm-l6-v2/` (pinned to a specific HF
+`~/.dhole/models/msmarco-minilm-l6-v2/` (pinned to a specific HF
 revision + hash-checked), NOT bundled in the wheel, so the lean install stays small.
 
 Graceful fallback: if onnxruntime/tokenizers are missing (lean install) or the
@@ -16,29 +16,63 @@ Neural rerank is an `[all]` extra; lean installs get consensus-ordered search.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import math
-import asyncio
+import os
 import urllib.request
 from pathlib import Path
 from typing import Optional
+
+from dhole_mcp import paths
 
 logger = logging.getLogger("dhole-mcp.reranker")
 
 MODEL_ID = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 # Pinned revision for reproducibility (downloaded files never shift under us).
 MODEL_REV = "c5ee24cb16019beea0893ab7796b1df96625c6b8"
-_BASE = f"https://huggingface.co/{MODEL_ID}/resolve/{MODEL_REV}"
-MODEL_FILES = {
-    "model.onnx": f"{_BASE}/onnx/model.onnx",
-    "tokenizer.json": f"{_BASE}/tokenizer.json",
-    "vocab.txt": f"{_BASE}/vocab.txt",
+# Download endpoints, tried in order. huggingface.co is DNS-blocked on a lot of
+# CN desktops (hosts-file pins like `127.0.0.1 huggingface.co`), so a mirror is
+# tried as a fallback — silently skipping the download would downgrade search
+# ranking forever with no error anywhere. Override with DHOLE_HF_ENDPOINT
+# (or HF_ENDPOINT) to force a single endpoint.
+_MODEL_RELPATHS = {
+    "model.onnx": "onnx/model.onnx",
+    "tokenizer.json": "tokenizer.json",
+    "vocab.txt": "vocab.txt",
 }
-MODEL_DIR = Path.home() / ".dhole_mcp_cache" / "models" / "msmarco-minilm-l6-v2"
+
+MODEL_DIR = paths.models_dir() / "msmarco-minilm-l6-v2"
 MAX_SEQ = 512
 # Sanity floor so a truncated/failed download is rejected (real onnx is ~80MB).
 MIN_MODEL_BYTES = 50_000_000
+
+
+def _hf_endpoints() -> list[str]:
+    custom = (os.environ.get("DHOLE_HF_ENDPOINT")
+              or os.environ.get("HF_ENDPOINT") or "").strip().rstrip("/")
+    if custom:
+        return [custom]
+    return ["https://huggingface.co", "https://hf-mirror.com"]
+
+
+def _model_urls(name: str) -> list[str]:
+    """Candidate URLs for one model file, in fallback order.
+
+    The revision is pinned, so the bytes are identical from any endpoint — the
+    fallback changes where they come from, never what they are.
+    """
+    return [f"{ep}/{MODEL_ID}/resolve/{MODEL_REV}/{_MODEL_RELPATHS[name]}"
+            for ep in _hf_endpoints()]
+
+
+def _download_model_file(name: str, dest: Path) -> bool:
+    """Download one model file, trying every configured endpoint."""
+    for url in _model_urls(name):
+        if _download_file(url, dest):
+            return True
+    return False
 
 _reranker: Optional[object] = None
 _reranker_tried: bool = False
@@ -120,7 +154,11 @@ def _download_file(url: str, dest: Path) -> bool:
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(dest.suffix + ".part")
-        req = urllib.request.Request(url, headers={"User-Agent": "dhole-mcp/7"})
+        # A plain python UA gets 403'd by some HF mirrors; keep dhole's identity
+        # in the string but keep it browser-shaped.
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; dhole-mcp)"
+        })
         with urllib.request.urlopen(req, timeout=120) as r, open(tmp, "wb") as f:
             total = int(r.headers.get("Content-Length", 0) or 0)
             done = 0
@@ -151,6 +189,9 @@ def _sha256(path: Path) -> str:
 
 def _ensure_model() -> Optional[tuple[Path, Path]]:
     """Ensure model.onnx + tokenizer.json are present + valid. Returns paths or None."""
+    # A pre-14.3 ~/.dhole_mcp_cache may already hold this ~90MB model; move it
+    # before deciding it has to be downloaded (on some networks it cannot be).
+    paths.migrate_legacy_cache_dir()
     onnx = MODEL_DIR / "model.onnx"
     tokjson = MODEL_DIR / "tokenizer.json"
     sha_file = MODEL_DIR / "model.sha256"
@@ -166,7 +207,7 @@ def _ensure_model() -> Optional[tuple[Path, Path]]:
             "Dhole: downloading the local search reranker model (one-time, ~80MB)..."
         )
         for name in need:
-            if not _download_file(MODEL_FILES[name], MODEL_DIR / name):
+            if not _download_model_file(name, MODEL_DIR / name):
                 return None
         if onnx.stat().st_size < MIN_MODEL_BYTES:
             logger.warning("downloaded model.onnx is too small; rejecting")
@@ -182,7 +223,7 @@ def _ensure_model() -> Optional[tuple[Path, Path]]:
         try:
             if _sha256(onnx) != sha_file.read_text().strip():
                 logger.warning("model.onnx hash mismatch; re-downloading")
-                if _download_file(MODEL_FILES["model.onnx"], onnx):
+                if _download_model_file("model.onnx", onnx):
                     sha_file.write_text(_sha256(onnx))
                 else:
                     return None
@@ -311,7 +352,9 @@ def unavailable_reason() -> str:
 def model_present() -> bool:
     """True if the reranker model + tokenizer are already cached locally (so
     get_reranker() will NOT trigger a download). Used by startup prewarm to warm
-    the ONNX session only when it is free to do so."""
+    the ONNX session only when it is free to do so.
+    """
+    paths.migrate_legacy_cache_dir()
     onnx = MODEL_DIR / "model.onnx"
     tokjson = MODEL_DIR / "tokenizer.json"
     return (onnx.exists() and onnx.stat().st_size >= MIN_MODEL_BYTES
