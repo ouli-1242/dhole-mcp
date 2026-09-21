@@ -1084,3 +1084,36 @@ class TestRerankFallbackNote:
         monkeypatch.setattr(search, "neural_rerank", lambda q, r: [(r[0], 0.9)])
         _, _, used, note = search._rank("q", raw, "auto")
         assert used == "neural" and note == ""
+
+
+class TestQueryMapNamesAreReal:
+    """手工维护的引擎名单会腐烂：这个集合里原先有三个不存在的引擎。
+
+    旧值是 {duckduckgo, brave, mojeek, yahoo} —— mojeek/startpage/google/qwant 从未
+    在本项目存在过，而 bing（默认池首位、国内免 VPN）不在集合里，于是它成了唯一被
+    改写提问的默认引擎。上面那组测试全都不含 bing，所以抓不到。
+    """
+
+    def test_core_set_only_names_existing_engines(self):
+        from dhole_mcp.search_engines import DEFAULT_ENGINES
+        from dhole_mcp.search_metasearch import _DHOLE_TO_BACKEND, _TEXT_ENGINES
+        known = set(DEFAULT_ENGINES) | set(_DHOLE_TO_BACKEND) | set(_TEXT_ENGINES)
+        ghost = set(search._CORE_QUERY_ENGINES) - known
+        assert not ghost, f"core 集合里有不存在的引擎名: {sorted(ghost)}"
+
+    def test_bing_gets_the_original_query(self):
+        intent = search._detect_intent("transformer attention mechanism research")
+        assert intent == "research"
+        q = "transformer attention mechanism research"
+        qm = search._generate_query_map(q, intent, list(se.DEFAULT_ENGINES))
+        assert qm, "research 意图应当展开"
+        assert qm["bing"] == q, "bing 是默认池首位，不该是被改写提问的那一个"
+        assert qm["duckduckgo"] == q and qm["brave"] == q and qm["yahoo"] == q
+        assert qm["yandex"] != q, "yandex 才是指定的多样性引擎"
+
+    def test_every_default_engine_is_classified(self):
+        """默认池里每个引擎都必须有明确归属，不能靠集合漏项来"恰好"生效。"""
+        intent = search._detect_intent("transformer attention mechanism research")
+        q = "transformer attention mechanism research"
+        qm = search._generate_query_map(q, intent, list(se.DEFAULT_ENGINES))
+        assert set(qm) == set(se.DEFAULT_ENGINES)
