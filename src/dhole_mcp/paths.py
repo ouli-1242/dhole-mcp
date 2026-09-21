@@ -88,6 +88,19 @@ def harden_file(path: Path | str) -> None:
         pass
 
 
+def harden_dir(path: Path | str) -> None:
+    """Best-effort 0700 on a directory dhole owns. Never raises.
+
+    Deliberately does NOT create the directory, unlike :func:`ensure_private_dir`:
+    callers keep their own ``mkdir`` so a failure to create it still raises the
+    way it always did, and this only tightens what already exists.
+    """
+    try:
+        os.chmod(str(path), 0o700)
+    except Exception:
+        pass
+
+
 def cache_dir() -> Path:
     """Directory holding the content cache DB (the dhole home itself)."""
     return home()

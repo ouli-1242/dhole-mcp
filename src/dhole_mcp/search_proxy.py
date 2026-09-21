@@ -125,12 +125,18 @@ def save_proxies(proxies: list[str]) -> None:
     Invalid entries are dropped silently (``_validate_proxy`` logs a warning) -
     the file is the source of truth, so it must never hold something the loader
     would then refuse to use.
+
+    The file holds proxy credentials in plaintext, so both it and its directory
+    are tightened to 0600/0700 after writing (same helpers the other state files
+    use). POSIX only in effect; see ``paths.harden_file``.
     """
     path = _config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     validated = [p for p in (_validate_proxy(x) for x in proxies) if p]
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"proxies": validated}, f, indent=2)
+    paths.harden_dir(path.parent)
+    paths.harden_file(path)
 
 
 def add_proxy(proxy: str) -> int:

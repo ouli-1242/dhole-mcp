@@ -826,6 +826,11 @@ def record_search_feedback(url: str) -> None:
             with os.fdopen(fd, "w") as f:
                 _json.dump({"domains": sorted(domains)}, f)
             os.replace(tmp, _feedback_file())
+            # mkstemp's 0600 rides along with the rename, but the directory may be
+            # new here, and the same explicit-after-replace pass the engine state
+            # files do keeps all three writers on one rule.
+            paths.harden_dir(os.path.dirname(_feedback_file()))
+            paths.harden_file(_feedback_file())
         except Exception:
             try:
                 os.unlink(tmp)

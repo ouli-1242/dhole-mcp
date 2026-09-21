@@ -1145,11 +1145,16 @@ def _log_tool_call(name: str, ok: bool, duration_ms: float, error: str = "") -> 
     - "does my client actually route here, and does it hold up?" - cannot be
     answered without a local record. Argument VALUES are never written, only the
     tool name and the outcome. Best-effort: never raises, never blocks startup.
+
+    When the log lives under the dhole home (the ``=1`` form) that home and the
+    log are tightened to 0700/0600 like the other state files. A path the user
+    chose via the environment is left exactly as they set it up.
     """
     target = (os.environ.get("DHOLE_USAGE_LOG") or "").strip()
     if not target:
         return
-    if target.lower() in ("1", "true", "yes", "on"):
+    owned = target.lower() in ("1", "true", "yes", "on")
+    if owned:
         target = str(paths.file("usage.jsonl"))
     try:
         parent = os.path.dirname(os.path.abspath(target))
@@ -1165,6 +1170,9 @@ def _log_tool_call(name: str, ok: bool, duration_ms: float, error: str = "") -> 
             entry["error"] = redact_api_key(str(error)[:200])
         with open(target, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        if owned:
+            paths.harden_dir(parent)
+            paths.harden_file(target)
     except Exception:
         pass
 

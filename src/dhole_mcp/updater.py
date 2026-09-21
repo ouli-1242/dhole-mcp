@@ -253,6 +253,7 @@ def _stop_all_dhole() -> None:
 def _dhole_home() -> str:
     p = str(paths.home())
     os.makedirs(p, exist_ok=True)
+    paths.harden_dir(p)
     return p
 
 
@@ -339,8 +340,10 @@ def _write_last_version(v: str) -> None:
     if not v or v == "unknown":
         return
     try:
-        with open(_state_path("last_version"), "w", encoding="utf-8") as f:
+        path = _state_path("last_version")
+        with open(path, "w", encoding="utf-8") as f:
             f.write(v.strip())
+        paths.harden_file(path)
     except OSError:
         pass
 

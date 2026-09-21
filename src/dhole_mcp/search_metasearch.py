@@ -1062,6 +1062,7 @@ def _save_circuit_state() -> None:
             os.replace(tmp_path, path)
             # 收紧放在 replace 之后：mkstemp 的 0600 会被 rename 带过来，但目录
             # 可能新建、且以后再写时目标已存在——在这里补一次才覆盖两条路径。
+            paths.harden_dir(os.path.dirname(path))
             paths.harden_file(path)
         except Exception:
             # Clean up temp file on failure
@@ -1217,6 +1218,7 @@ def _save_engine_stats() -> None:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(_ENGINE_YIELD, f)
         os.replace(tmp, path)
+        paths.harden_dir(os.path.dirname(path))
         paths.harden_file(path)
     except Exception:
         pass
