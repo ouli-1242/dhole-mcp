@@ -253,7 +253,7 @@ def _download_file(url: str, dest: Path) -> bool:
     """
     tmp = dest.with_suffix(dest.suffix + ".part")
     try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        paths.ensure_private_dir(dest.parent)
         # A plain python UA gets 403'd by some HF mirrors; keep dhole's identity
         # in the string but keep it browser-shaped.
         headers = {"User-Agent": "Mozilla/5.0 (compatible; dhole-mcp)"}

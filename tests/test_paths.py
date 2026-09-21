@@ -100,3 +100,86 @@ class TestLegacyMigration:
         paths.migrate_legacy_cache_dir()  # 幂等：第二次什么都不动
         assert paths.db_path().read_bytes() == first
         assert not legacy.exists()
+
+
+class TestDholeHomeOverride:
+    """状态目录此前不可移动：cache.db 里是全部抓到的正文明文。
+
+    共享机器上用户应能把它指到别处；顺带也让测试/沙箱能指向一次性目录。
+    """
+
+    def test_unset_uses_the_default_dotdir(self, monkeypatch):
+        import pathlib
+        monkeypatch.delenv("DHOLE_HOME", raising=False)
+        monkeypatch.setattr(pathlib.Path, "home", classmethod(lambda cls: pathlib.Path("/fake/home")))
+        assert paths.home() == pathlib.Path("/fake/home/.dhole")
+
+    @pytest.mark.parametrize("raw", ["/srv/dhole-data", "  /srv/dhole-data  "])
+    def test_env_override_is_honoured_everywhere(self, monkeypatch, raw):
+        import pathlib
+        monkeypatch.setenv("DHOLE_HOME", raw)
+        want = pathlib.Path(raw.strip())
+        assert paths.home() == want
+        assert paths.cache_dir() == want
+        assert paths.db_path() == want / "cache.db"
+        assert paths.models_dir() == want / "models"
+        assert paths.file("engine_stats.json") == want / "engine_stats.json"
+
+    def test_tilde_is_expanded(self, monkeypatch):
+        monkeypatch.setenv("DHOLE_HOME", "~/dhole-x")
+        assert "~" not in str(paths.home())
+        assert str(paths.home()).endswith("dhole-x")
+
+    def test_migration_targets_the_custom_home(self, monkeypatch, tmp_path):
+        """旧目录迁移的目的端必须是 home()，否则设了 DHOLE_HOME 反而丢缓存。"""
+        monkeypatch.setenv("DHOLE_HOME", str(tmp_path / "dh"))
+        assert (tmp_path / "dh") == paths.home()
+
+
+class TestPrivateModeHelpers:
+    """权限位：POSIX 上真生效，Windows 上 chmod 基本是摆设。
+
+    这台机器实测目录 0o777 / 文件 0o666，所以本平台能验证的只有"调用发生了"；
+    真正的 Windows 手段是 DHOLE_HOME。docstring 与 README 都按这个口径写，
+    不假装权限位设上了。
+    """
+
+    def test_ensure_private_dir_requests_owner_only_mode(self, tmp_path, monkeypatch):
+        import os
+        calls = []
+        monkeypatch.setattr(os, "chmod", lambda p, m: calls.append((str(p), oct(m))))
+        d = tmp_path / "sub" / "dir"
+        got = paths.ensure_private_dir(d)
+        assert got == d and d.is_dir()
+        assert calls and calls[-1] == (str(d), oct(0o700))
+
+    def test_harden_file_requests_owner_only_rw(self, tmp_path, monkeypatch):
+        import os
+        calls = []
+        monkeypatch.setattr(os, "chmod", lambda p, m: calls.append((str(p), oct(m))))
+        f = tmp_path / "cache.db"
+        f.write_text("x", encoding="utf-8")
+        paths.harden_file(f)
+        assert calls == [(str(f), oct(0o600))]
+
+    def test_helpers_never_raise(self, tmp_path, monkeypatch):
+        import os
+        def _boom(*a, **k):
+            raise OSError("no posix here")
+        monkeypatch.setattr(os, "chmod", _boom)
+        paths.harden_file(tmp_path / "missing.db")          # 不存在也不抛
+        paths.ensure_private_dir(tmp_path / "ok")           # 建目录成功
+        assert (tmp_path / "ok").is_dir()
+
+    def test_cache_dir_creation_goes_through_the_helper(self, tmp_path, monkeypatch):
+        """缓存目录必须经 ensure_private_dir，否则权限随手就漏在一次 mkdir 上。"""
+        import asyncio
+        import os
+        from dhole_mcp import cache
+
+        calls = []
+        monkeypatch.setattr(os, "chmod", lambda p, m: calls.append((str(p), oct(m))))
+        d = tmp_path / "cachedir"
+        asyncio.run(cache.set_cached("https://x/a", "markdown", ["b"], 200, cache_dir=d))
+        assert (d / "cache.db").exists()
+        assert (str(d), oct(0o700)) in calls, calls

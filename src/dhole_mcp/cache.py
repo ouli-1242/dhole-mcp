@@ -83,7 +83,7 @@ async def _ensure_db(cache_dir: Path | None = None) -> Path:
         # importantly) its ~90MB reranker model instead of re-downloading it —
         # which on some networks is impossible.
         paths.migrate_legacy_cache_dir()
-    d.mkdir(parents=True, exist_ok=True)
+    paths.ensure_private_dir(d)
     db_path = d / _DB_NAME
 
     # Fast path: already initialized, no lock needed

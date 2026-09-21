@@ -37,7 +37,7 @@ def set_selected(name: str) -> Path:
             f"unknown reranker model {name!r} (known: {', '.join(sorted(MODELS))})"
         )
     p = _path()
-    p.parent.mkdir(parents=True, exist_ok=True)
+    paths.ensure_private_dir(p.parent)
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps({"model": name}, ensure_ascii=False, indent=2)
                    + "\n", encoding="utf-8")

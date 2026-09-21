@@ -112,7 +112,8 @@ dhole -u    # 自更新（本 fork 默认关闭）
 | `DHOLE_DEFAULT_ENGINES` | 覆盖免密默认池，逗号分隔（如 `bing,yandex,sogou_weixin`；被墙引擎不再每轮陪跑）。未设用上游默认 5 个 |
 | `DHOLE_SEARCH_FEEDBACK` | 设 `1` 开启隐式域名偏好：`fetch_content` 抓成功的域名**永久** +0.05 排序加权（落盘 `~/.dhole/search_feedback.json`，上限 500 域）。默认关闭——它按「抓到过」而非「有用」改写跨引擎共识排序 |
 | `DHOLE_USAGE_LOG` | 设 `1`（或一个路径）写本地调用日志（JSONL）：工具名、成功与否、耗时、脱敏后的错误。**只记这些，不记参数值**，也不联网上传。用来回答「我的客户端到底有没有调用 dhole」 |
-| `DHOLE_NO_AUTO_REPAIR` | 设 `1` 后，`dhole` 入口遇到 ImportError 不再自动 `pip install --force-reinstall`（只打印修复命令）。默认开启自动修复 |
+| `DHOLE_NO_AUTO_REPAIR` | 设 `1` 后，`dhole` 入口遇到 ImportError 不再自动 `pip install --force-reinstall`（只打印修复命令）。默认开启自动修复；重装目标**钉在当前已装版本**（读不到版本元数据时才退回裸包名） |
+| `DHOLE_HOME` | 状态目录位置（默认 `~/.dhole`）。这里装着**抓到的正文明文**、搜索词与模型；共享机器上可指到别处。POSIX 下目录建为 0700、状态文件 0600；**Windows 上 chmod 基本无效（NTFS ACL 说了算），那边的实际手段就是这个变量** |
 | `DHOLE_HF_ENDPOINT`（或 `HF_ENDPOINT`） | 神经重排模型的下载源。默认先试 `huggingface.co`、失败自动回退 `hf-mirror.com`（revision 固定，字节一致）；设了就只用这一个 |
 | `DHOLE_DEFAULT_ENGINES` 之外 | 重排模型选择见下节（配置文件，非环境变量） |
 
@@ -166,7 +167,7 @@ dhole model use bge-zh         # 切回默认
 
 **抓取的合规边界。** 抓取与爬取**不检查 `robots.txt` 的 Disallow**（只在 sitemap 发现时读它的 `Sitemap:` 指令）；HTTP 层的 UA 与 TLS 指纹是伪装的，被拦截时会升级到隐身浏览器求解 Cloudflare 验证。目标站点的 ToS 与所在司法辖区的法律由使用者自负。
 
-**本机会留下什么。** 全部都在一个目录 `~/.dhole/`（14.3 之前缓存与模型在 `~/.dhole_mcp_cache/`，首次使用时自动搬移合并，不会重下 90MB 模型）：
+**本机会留下什么。** 全部都在一个目录 `~/.dhole/`（14.3 之前缓存与模型在 `~/.dhole_mcp_cache/`，首次使用时自动搬移合并，不会重下 90MB 模型；整个目录可用 `DHOLE_HOME` 换位置，换位置后旧目录仍会自动迁过去）：
 
 | 位置 | 内容 | 何时产生 |
 |------|------|----------|

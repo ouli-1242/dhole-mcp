@@ -1013,6 +1013,7 @@ def _save_circuit_state() -> None:
     concurrent processes."""
     try:
         os.makedirs(os.path.dirname(_CIRCUIT_STATE_FILE), exist_ok=True)
+        paths.harden_file(_CIRCUIT_STATE_FILE)
         import json
         import tempfile
         now_ts = time()
@@ -1122,6 +1123,7 @@ def _save_engine_stats() -> None:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(_ENGINE_YIELD, f)
         os.replace(tmp, path)
+        paths.harden_file(path)
     except Exception:
         pass
 

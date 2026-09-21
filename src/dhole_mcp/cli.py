@@ -126,6 +126,8 @@ def _run_repair() -> int:
         os.makedirs(os.path.dirname(repair), exist_ok=True)
         with open(repair, "w", encoding="utf-8") as f:
             f.write(_repair_script_text(dist, index_url))
+        from dhole_mcp import paths as _paths
+        _paths.harden_file(repair)
     except Exception:
         # Can't write repair.py - run pip directly as a last resort
         print("  recovering (direct reinstall)...")

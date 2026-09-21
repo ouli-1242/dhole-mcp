@@ -43,8 +43,48 @@ _LEGACY_CACHE_DIR_NAME = ".dhole_mcp_cache"
 
 
 def home() -> Path:
-    """``~/.dhole`` — the one directory dhole owns."""
+    """The one directory dhole owns: ``~/.dhole``, or ``DHOLE_HOME`` when set.
+
+    Why the override exists: this directory holds every fetched page body in
+    plaintext (cache.db), the search queries, and the reranker models. On a shared
+    machine that is content the user may not want next to their other files, and
+    the location used to be unmovable. ``DHOLE_HOME`` also lets a test or a
+    sandbox point everything at a throwaway directory.
+
+    The pre-14.3 migration below targets this same function, so a custom home
+    receives the migrated cache instead of a fresh ``~/.dhole``.
+    """
+    raw = (os.environ.get("DHOLE_HOME") or "").strip()
+    if raw:
+        return Path(raw).expanduser()
     return Path.home() / _HOME_DIR_NAME
+
+
+def ensure_private_dir(path: Path) -> Path:
+    """mkdir -p + best-effort owner-only mode. Never raises.
+
+    POSIX gets a real 0700. Windows largely ignores chmod (NTFS ACLs govern), so
+    there this is a no-op and ``DHOLE_HOME`` is the actual lever — said out loud
+    rather than pretending the bit was set.
+    """
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        os.chmod(path, 0o700)
+    except Exception:
+        pass
+    return path
+
+
+def harden_file(path: Path | str) -> None:
+    """Best-effort 0600 on a state file we just wrote. Never raises.
+
+    Applied after the atomic-replace so a temp file can't linger world-readable
+    with page content in it.
+    """
+    try:
+        os.chmod(str(path), 0o600)
+    except Exception:
+        pass
 
 
 def cache_dir() -> Path:
