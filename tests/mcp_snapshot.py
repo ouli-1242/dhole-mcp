@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Offline MCP protocol baseline snapshot for dhole-mcp (refactor pre-flight).
+"""Offline MCP protocol snapshot for dhole-mcp.
 
 Self-contained, stdlib only. Spawns ``python -m dhole_mcp`` over stdio with
 
-  * a throwaway ``DHOLE_HOME`` (fresh directory per run, under
-    ``refactor_artifacts/tmp_home/``), and
+  * a throwaway ``DHOLE_HOME`` (fresh directory per run), and
   * an offline socket guard loaded via ``sitecustomize`` (its directory is
     spliced onto the child's ``PYTHONPATH``): every ``connect()`` to a
     non-local address and every ``getaddrinfo()`` for a non-local hostname is
@@ -12,11 +11,16 @@ Self-contained, stdlib only. Spawns ``python -m dhole_mcp`` over stdio with
     outbound internet request even if a code path tries to.
 
 It then records raw JSON-RPC exchanges (initialize / notifications/initialized
-/ tools/list / tools/call) as evidence files under ``refactor_artifacts/
-baseline/``.
+/ tools/list / tools/call) so the agent-facing wire surface can be diffed
+between two runs - the guard for "did the server still start, and did
+``tools/list`` change shape or size?".
 
-Usage (from the repo root):
-    python refactor_artifacts/tools/mcp_snapshot.py
+Nothing is written into the repo: the output directory defaults to a fresh
+temp dir and is printed at the end. Pass ``--out DIR`` to keep it somewhere
+stable when you want to diff two runs.
+
+Usage (from anywhere):
+    python tests/mcp_snapshot.py [--out DIR]
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -34,10 +39,22 @@ import time
 # Paths / constants
 # --------------------------------------------------------------------------
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
-ARTIFACTS = REPO_ROOT / "refactor_artifacts"
-BASELINE = ARTIFACTS / "baseline"
-TMP_ROOT = ARTIFACTS / "tmp_home"
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def _output_root(argv: list[str]) -> pathlib.Path:
+    """``--out DIR`` if given, else a fresh temp dir (never the repo)."""
+    if "--out" in argv:
+        i = argv.index("--out")
+        if i + 1 >= len(argv):
+            raise SystemExit("--out needs a directory")
+        return pathlib.Path(argv[i + 1]).expanduser().resolve()
+    return pathlib.Path(tempfile.mkdtemp(prefix="dhole_snapshot_"))
+
+
+OUT_ROOT = _output_root(sys.argv[1:])
+BASELINE = OUT_ROOT / "baseline"
+TMP_ROOT = OUT_ROOT / "tmp_home"
 SHIM_DIR = TMP_ROOT / "pyshim"
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -57,7 +74,7 @@ DEAD_LOCAL_PROXY = "http://127.0.0.1:9"
 # The offline shim written to SHIM_DIR/sitecustomize.py and auto-imported by
 # the child interpreter (its dir is on PYTHONPATH).
 OFFLINE_SHIM = '''\
-"""Offline socket guard installed by refactor_artifacts/tools/mcp_snapshot.py.
+"""Offline socket guard installed by tests/mcp_snapshot.py.
 
 Auto-loaded by CPython as ``sitecustomize`` because this directory is on
 PYTHONPATH for the snapshot run. It refuses every connect() to a non-local
@@ -131,7 +148,7 @@ socket.getaddrinfo = _guarded_getaddrinfo
 # tools/list schema at runtime (see build_call_plan).
 # --------------------------------------------------------------------------
 
-NONEXISTENT_FILE = str(ARTIFACTS / "does-not-exist-snapshot-probe.html")
+NONEXISTENT_FILE = str(TMP_ROOT / "does-not-exist-snapshot-probe.html")
 
 PLAUSIBLE_CASES = {
     "smart_fetch": [

@@ -2,10 +2,10 @@
 
 Why this exists: the README publishes a token table (instructions 333 / tools/list
 2,931 / total 3,264, measured at v14.6) and admits it has not been re-measured since.
-The refactor must report the real numbers. There are two independent ways to get them:
+There are two independent ways to get the real numbers:
 
   1. bind to the server over stdio and read the raw `initialize` / `tools/list`
-     responses  -> tools/mcp_snapshot.py
+     responses  -> tests/mcp_snapshot.py
   2. read the source constants directly -> this file
 
 Method 2 deliberately does NOT import `dhole_mcp`: importing the package runs module
@@ -14,20 +14,44 @@ finds the module-level `DHOLE_INSTRUCTIONS` assignment and the `_TOOL_DEFS`
 assignment, and reconstructs the exact payload with `ast.literal_eval` + `json.dumps`.
 That makes this measurement independent of runtime state, HOME, env vars and network.
 
+This is the diagnostic for the wire-size budgets in `tests/test_tool_descriptions.py`:
+when a budget fails, this prints the exact per-tool numbers it is comparing.
+
 Reported sizes:
   - character counts (exact, reproducible)
   - `len/4` as a rough token estimate
 Token counts are NOT reported as authoritative because the tokenizer the README
 author used is not recorded anywhere in the repo; only characters are comparable.
+
+Usage (from anywhere):
+    python tests/tool_payload_measure.py [--out DIR]
+
+Without ``--out`` it only prints; nothing is written into the repo.
 """
 
 from __future__ import annotations
 
 import ast
 import json
-from pathlib import Path
+import pathlib
+import sys
 
-SERVER = Path("src/dhole_mcp/server.py")
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+SERVER = REPO_ROOT / "src" / "dhole_mcp" / "server.py"
+
+
+def _output_dir(argv: list[str]) -> pathlib.Path | None:
+    if "--out" not in argv:
+        return None
+    i = argv.index("--out")
+    if i + 1 >= len(argv):
+        raise SystemExit("--out needs a directory")
+    d = pathlib.Path(argv[i + 1]).expanduser().resolve()
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+OUT = _output_dir(sys.argv[1:])
 
 
 def find_assignment(tree: ast.Module, name: str) -> ast.AST | None:
@@ -91,13 +115,9 @@ def main() -> None:
         out.append(f"compact chars/4       : {compact_chars / 4:.1f}")
         out.append(f"indent=2 json chars   : {pretty_chars}")
         out.append("")
-        if label == "mcp-minimal payload":
-            Path("refactor_artifacts/baseline/tools_list_from_source.min.json").write_text(
-                compact_text, encoding="utf-8"
-            )
-            Path("refactor_artifacts/baseline/tools_list_from_source.pretty.json").write_text(
-                pretty_text, encoding="utf-8"
-            )
+        if label == "mcp-minimal payload" and OUT is not None:
+            (OUT / "tools_list_from_source.min.json").write_text(compact_text, encoding="utf-8")
+            (OUT / "tools_list_from_source.pretty.json").write_text(pretty_text, encoding="utf-8")
     out.append("-- per-tool compact size (mcp-minimal shape) --")
     total = 0
     for td in minimal_payload["tools"]:
@@ -109,7 +129,9 @@ def main() -> None:
     out.append(f"sum(per-tool)         : {total}")
 
     text = "\n".join(out) + "\n"
-    Path("refactor_artifacts/baseline/tool_payload_measure.txt").write_text(text, encoding="utf-8")
+    if OUT is not None:
+        (OUT / "tool_payload_measure.txt").write_text(text, encoding="utf-8")
+        print("written under %s" % OUT)
     print(text)
 
 
