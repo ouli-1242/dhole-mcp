@@ -9,6 +9,49 @@
 > 版本号是自己的，与上游版本不可比。`src/dhole_mcp/__init__.py` 中的
 > `__version__` 是版本的唯一权威来源。
 
+## [14.7] - 2026-09-22
+
+第二轮外部测试报告的处置（10 条）。该报告用**自己的** BUG-1..BUG-10 编号，与 14.6 那批同名不同物——它的 BUG-5 是 cookies，14.6 的 BUG-5 是正文里的错误文本。下文一律写作「报告2-BUG-n」。
+
+**逐条实测的结论**：7 条为真、1 条半真、1 条已修、1 条误判（误判的那条按实测出的真因修了）。
+
+描述改写后又做了一轮真网络多角度实测（18 个调用），另挖出并修掉两条报告里没有的缺陷，见「修复（实测复核）」。
+
+### 修复（请求选项）
+
+- **`options.cookies` 传 Cookie 字符串时被静默丢弃（报告2-BUG-5）。** 实测 `options={cookies:"sessionid=abc123"}` 抓 httpbin/cookies 得到 `{"cookies":{}}`，而调用照样 200 且 `content_ok:true`。根因：`_safe_cookie_dict()` 只认文档里的 `[{name,value,domain}]` 列表，收到字符串后按**逐字符**迭代，每个字符都不是 dict，于是整条 cookie 被丢掉。现在三种形态都接受——文档列表、`{name: value}` 字典、`Cookie` 头字符串（`"a=1; b=2"`）；字符串/字典形态进浏览器层时按目标 URL 补作用域（`add_cookies` 需要有 url 或 domain），调用方自己传的列表原样透传。工具 schema 的 `options` 描述把三种写法写明了。
+- **`options.useragent` 在 HTTP 层完全不生效（报告2-BUG-4）。** 实测自定义 UA 抓到 httpbin/user-agent 仍是 browserforge 轮换出的 iPhone Safari；浏览器层是好的，所以同一个选项的效果取决于哪一层应答。现在 UA 一路穿到 `HTTPSession._build_headers()`，显式值覆盖生成值。顺带修掉同一处的头名大小写问题：`extra_headers` 里写 `"User-Agent"` 会与生成的 `"user-agent"` 并排成两个头，现在按大小写不敏感替换，且 `useragent` 选项优先级最高。
+
+### 修复（结构化提取）
+
+- **schema 标量字段只取首个匹配，首个匹配是纯图片链接时返回空串（报告2-BUG-3）。** 报告的根因判断（"schema 路径的解析器对复杂/较大 HTML 解析失败"）不成立：同一棵树上 `type:"array"` 能取回 HN 的 40+ 条锚文本，`.score` 也正常；真因是标量路径返回 `elements[0]` 的文本，而 HN/iana 的第一个 `<a>` 是包着 `<img>` 的 logo，没有文本节点——`{"selector":"a"}` 由此看起来"对复杂页面失效"。标量现在取**第一个非空**匹配，example.com 那类页面行为不变。
+- **schema 的 `attribute` 从未实现（报告2-BUG-9）。** 全 `src/` 对 `attribute` 零匹配：`{"selector":"a","attribute":"href"}` 返回的是元素文本。现在标量/数组都按属性取值（数组跳过空值），元素没有该属性时回落默认空值，`count` 语义不变。
+
+### 修复（crawl）
+
+- **`path_include`/`path_exclude` 传字符串会静默清空整站（报告2-BUG-6）。** `for p in path_exclude` 拿到字符串就是逐字符迭代，而 `startswith("/")` 对每个路径都成立，于是所有 URL 被过滤光，列表写法正常。入口处把字符串收敛为单元素列表；include 方向的同款 bug 一并修掉（字符串曾让 include 恒真，过滤器等于不存在）。
+- **`search` 放进 `options` 报 `Unsupported option key(s)`（报告2-BUG-7）。** 顶层 `search` 一直是实现过的，只有走 options 这条路才被拒——描述里两处都提到它。现在两处都接受，顶层优先。
+- **过滤后 summary 仍报过滤前的统计（报告2-BUG-7 同批发现）。** 实测 `search='no-such-term'` 匹配 0 页时，`pages_crawled:0`、`pages:[]`，summary 却写着 "crawled 1 page(s) … 1 content_ok"。summary 改为按**过滤后**的页面重算，并且全被过滤掉时 `next_action` 说明 search 只匹配 URL path + title、给出放宽或改用 `focus=` 的路径。
+
+### 修复（本地解析与调用预算）
+
+- **parse 本地 PDF 丢掉 ToC 与 metadata（报告2-BUG-8）。** 同一份 PDF：smart_fetch（URL）给出完整 `table_of_contents`（level/page/end_page）与 metadata，parse（本地）给出 `[]` 与 `{}`——`pdf_extractor` 早就产出了这两个字段，是 `_parse_pdf()` 只取了 `title/author/content`，而它的 docstring 还宣称"与 URL 路径一致"。新增 `parse_file_detailed()` 把 ToC / metadata / quality_score 带进信封，`parse_file()` 保持二元组签名不变，本地 PDF 现在报告与 URL 抓取相同的信封。**同一个信封里必须带上提取器的 `content_ok`**：`_agent_hints` 一旦看到 `quality_score > 0` 就改判"以提取器的结论为准"，只补 quality_score 而不补 content_ok，会让健康的 PDF 报 `content_ok:false`（agent 读到的意思是"不许引用"）——这正是补测时发现的回归，扫描版 PDF 仍然如实报 false。
+- **actions 沿用 HTTP 档的 30s 默认预算（报告2-BUG-2）。** 实测 `actions=[{scroll:300}]` 抓 example.com 在 30012ms 耗尽预算并返回 `content_ok:false`；actions 必然走浏览器层，冷启动本身就很贵。未显式传 `timeout` 时 actions 调用的预算改为 60000ms（其余调用仍是 30000ms），显式值照旧优先；MCP 派发层不再替调用方预填 30000——否则这档默认值永远生效不了。修复后同一调用 42.4s 成功，即旧默认值下必然失败。
+
+### 修复（实测复核）
+
+- **`schema` 和 `max_content_chars` 同用时，抽取器只看得到被截断的 HTML。** 实测 HN 首页同一份 schema：不传 `max_content_chars` 得到 `{"n":30,"first":"Xiaomi MiMo v2.6",…}`，传 400（钳到 500）得到三个空字符串——而回包 `content_ok:true`、`total_extracted_chars:34155`，`next_action` 还建议 `offset=500` 继续翻页（那段 JSON 只有 40 字符）。根因：schema 分支把调用方的**返回**上限当成抓取层的 `max_chars`，选择器于是跑在 `<head>` 上。现在抓取上限固定为 `_SCHEMA_SOURCE_MAX_CHARS`（200k，与 `max_content_chars` 的钳制上限同值），`max_content_chars` 只作用于**返回的 JSON**，`is_truncated`/`next_offset`/`total_extracted_chars` 随之描述 JSON；重排 chunking 时显式清掉 `focus`，否则 `_apply_chunking` 会把 `structured` 当文本做 BM25，违背「schema 生效时 focus 被忽略」的承诺。另外：一个字段都没抽到时不再报成功，改为 `schema_no_match` + 可执行的 `next_action`（部分命中仍是成功）。
+- **空 body 的 4xx 被判成 JS shell。** 实测 `httpbin.org/status/404`（该端点本就不返回 body）得到 `error: js_shell_detected`、`page_type:js_shell`、`next_action: "re-fetch auto-escalates to the stealthy browser"`——没有 JS 可渲染，agent 照办只白烧一次 30–40s 的浏览器升级。`_is_js_shell` 的空内容分支现在只在 `status < 400` 时成立（200 空壳照旧升级；403/429/5xx 的升级由 `_auto_escalate` 里显式的状态码列表驱动，不受影响），404 空 body 如实报 `http_error_404`。以上两条由 `tests/test_live_audit_regressions.py`（11 条，先红后绿）钉住。
+
+### 已修 / 误判（无代码改动）
+
+- **报告2-BUG-1（parse 相对路径解析到 `$HOME`）**：14.6 已改为依次尝试 cwd → `DHOLE_WORKDIR` → 家目录并列出全部试过的路径。实测报错里 `D:\Program Files\Qoder\…` 排在 `C:\Users\ouli\…` 之前，cwd 已在首位——它只是 MCP 宿主自己的安装目录，`DHOLE_WORKDIR` 是唯一杠杆。
+- **报告2-BUG-10（related_queries 碎片）**：报告举的例子早于 14.6 的"按域名计证据 + 丢弃功能词/动名词开头"；重跑 `how to build reliable software` 得到 `["software development","system reliable"]`，不含报告里的虚词碎片。
+
+### 变更（工具描述）
+
+- **描述正文按"删除后会影响选择/调用/判断才保留"重写，desc 合计 4711 → 3625 字符（-23%），`tools/list` 字符数（`tests/test_tool_descriptions.py` 的预算口径）11986 → 10898（-9.1%，紧凑序列化下 10588）；`cl100k_base` 计数 `tools/list` 3024 → 2831 tokens，连接时合计 3363 → 3170（README「上下文开销」已同步为实测值）。** 删掉的是营销词（`Use for EVERY`、`big token saver`、`most efficient`、`INSTEAD of built-in`）、纯实现细节（BM25、HTTP→stealthy 升级链、神经重排序）、环境假设（"替代内置 WebFetch/WebSearch""文本 agent 用 smart_fetch"）和重复表述；保留的是工具用途与让位规则、关键参数、返回必检字段（`content_ok`/`page_type`/`is_truncated`/`next_offset`/`is_stale`/`quality_score`/`next_action`/`fetch_relevance`/`engines_consensus`/`consensus_basis`）和 `content_ok=false` 不许引用这类硬规则。描述是**每次连接都要付的上下文税**，所以这条同时是一次省 token 的改动。`screenshot` 未动——它已是满足路由契约的最短形态（必须含 `smart_fetch`，否则文本 agent 会去调截图），默认引擎池清单同理（`test_search_description_lists_the_real_default_pool` 钉住它要和 `DEFAULT_ENGINES` 一致）。`CHAR_BUDGET`/`TOOLS_TOTAL_BUDGET` 按新实测值重新推导（仍留 ~10% 余量）；不重推的话，删掉的话可以被原样加回来而不触发任何守卫。
+
 ## [14.6] - 2026-09-22
 
 四批改动。前三批的共同毛病是**调用看起来成功了，但实际没做它承诺的事**。

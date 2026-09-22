@@ -342,8 +342,16 @@ class HTTPSession:
         # primp.Client doesn't have an explicit close, but we drop the reference
         self._client = None
 
+    @staticmethod
+    def _drop_header(headers: Dict[str, str], name: str) -> None:
+        """Remove every spelling of ``name`` (HTTP header names are case-insensitive)."""
+        for existing in [k for k in headers if k.lower() == name]:
+            del headers[existing]
+
     def _build_headers(
-        self, headers: Optional[Dict[str, str]] = None
+        self,
+        headers: Optional[Dict[str, str]] = None,
+        useragent: Optional[str] = None,
     ) -> Dict[str, str]:
         """Build request headers with stealthy defaults."""
         final_headers: Dict[str, str] = {}
@@ -362,7 +370,16 @@ class HTTPSession:
         # User-supplied headers override defaults
         if headers:
             for k, v in headers.items():
+                if k.lower() == "user-agent":
+                    # browserforge already set "user-agent"; a caller's
+                    # "User-Agent" would otherwise ride along as a second header.
+                    self._drop_header(final_headers, "user-agent")
                 final_headers[k] = v
+        # The useragent option outranks everything, including a user-agent
+        # passed through extra_headers.
+        if useragent:
+            self._drop_header(final_headers, "user-agent")
+            final_headers["user-agent"] = useragent
         return final_headers
 
     async def get(
@@ -371,6 +388,7 @@ class HTTPSession:
         *,
         headers: Optional[Dict[str, str]] = None,
         cookies: Optional[Dict[str, str]] = None,
+        useragent: Optional[str] = None,
         timeout: Optional[int] = None,
         retries: Optional[int] = None,
         proxy: Optional[str] = None,
@@ -406,7 +424,7 @@ class HTTPSession:
                 return primp.Client(impersonate=impersonate, proxy=proxy)
             client = await asyncio.to_thread(_create_proxy_client)
 
-        final_headers = self._build_headers(headers)
+        final_headers = self._build_headers(headers, useragent)
         if cookies:
             final_headers["cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
 
@@ -520,6 +538,7 @@ async def http_get(
     proxy: Optional[str] = None,
     headers: Optional[Dict[str, str]] = None,
     cookies: Optional[Dict[str, str]] = None,
+    useragent: Optional[str] = None,
     timeout: int = 30,
     stealthy_headers: bool = True,
     retries: int = 1,
@@ -540,6 +559,7 @@ async def http_get(
             url,
             headers=headers,
             cookies=cookies,
+            useragent=useragent,
             timeout=timeout,
         )
 

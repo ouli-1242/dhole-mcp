@@ -536,6 +536,14 @@ async def smart_crawl(
         max_total_chars = max_pages * max_content_chars_per
     max_total_chars = max(max_content_chars_per, min(int(max_total_chars), 500000))
     focus = focus.strip() if isinstance(focus, str) and focus.strip() else None
+    # A bare string was iterated character-by-character by the prefix filters
+    # (`path.startswith(p) for p in "/what/"`), and startswith("/") holds for
+    # every path - so one string silently filtered the whole crawl away. Treat
+    # it as the single-prefix list the caller meant.
+    if isinstance(path_include, str):
+        path_include = [path_include]
+    if isinstance(path_exclude, str):
+        path_exclude = [path_exclude]
     selective = bool(crawl_urls)
 
     # Normalize the sitemap flag: True/'auto'/False. 'auto' = use sitemap if
@@ -784,26 +792,37 @@ async def smart_crawl(
     if pages_crawled >= max_pages and pages_discovered > pages_crawled:
         truncated_maxpages = True
 
+    def _summary_for(pages_now: list) -> str:
+        """Stats line for ``pages_now``.
+
+        Called once before and once after the `search` filter. The post-filter
+        call has to describe the pages actually returned: prefixing the
+        pre-filter stats produced "crawled 1 page(s); 1 content_ok" sitting next
+        to pages_crawled=0 and pages=[].
+        """
+        ok_now = sum(1 for p in pages_now if p.content_ok)
+        by_type_now: dict[str, int] = {}
+        for p in pages_now:
+            if p.page_type:
+                by_type_now[p.page_type] = by_type_now.get(p.page_type, 0) + 1
+        type_bits_now = ", ".join(f"{k}:{v}" for k, v in sorted(by_type_now.items()) if k != "discover_only") or ""
+        bits_now = [f"crawled {len(pages_now)} page(s) at {root} (depth <= {max_depth})",
+                    f"{ok_now} content_ok"]
+        if type_bits_now:
+            bits_now.append(type_bits_now)
+        if discover_only:
+            bits_now[0] = f"mapped {pages_discovered} URL(s) at {root} (depth <= {max_depth})"
+        if truncated_budget:
+            bits_now.append("stopped: token budget reached")
+        if truncated_maxpages:
+            bits_now.append("stopped: max_pages reached")
+        if truncated_time:
+            bits_now.append("stopped: time deadline reached")
+        return "; ".join(bits_now)
+
     # Build a concise summary + next_action.
     ok = sum(1 for p in pages if p.content_ok)
-    by_type: dict[str, int] = {}
-    for p in pages:
-        if p.page_type:
-            by_type[p.page_type] = by_type.get(p.page_type, 0) + 1
-    type_bits = ", ".join(f"{k}:{v}" for k, v in sorted(by_type.items()) if k != "discover_only") or ""
-    bits = [f"crawled {pages_crawled} page(s) at {root} (depth <= {max_depth})",
-            f"{ok} content_ok"]
-    if type_bits:
-        bits.append(type_bits)
-    if discover_only:
-        bits[0] = f"mapped {pages_discovered} URL(s) at {root} (depth <= {max_depth})"
-    if truncated_budget:
-        bits.append("stopped: token budget reached")
-    if truncated_maxpages:
-        bits.append("stopped: max_pages reached")
-    if truncated_time:
-        bits.append("stopped: time deadline reached")
-    summary = "; ".join(bits)
+    summary = _summary_for(pages)
 
     next_action = ""
     if truncated_budget or truncated_maxpages or truncated_time:
@@ -859,6 +878,13 @@ async def smart_crawl(
             for t in _terms
         )]
         result.pages_crawled = len(result.pages)
-        result.summary = f"search='{search}' filtered to {len(result.pages)} URL(s); " + result.summary
+        result.summary = (f"search='{search}' filtered to {len(result.pages)} URL(s); "
+                          + _summary_for(result.pages))
+        if not result.pages:
+            result.next_action = (
+                f"search='{search}' matched none of the crawled pages. It matches "
+                "URL path + title only - widen it, drop it, or pass focus= to "
+                "prioritize relevant links instead of filtering."
+            )
 
     return result

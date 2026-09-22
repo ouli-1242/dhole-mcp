@@ -1,7 +1,8 @@
 """Independently measure the MCP wire payload from the SOURCE, without importing it.
 
-Why this exists: the README publishes a token table (instructions 333 / tools/list
-2,931 / total 3,264, measured at v14.6) and admits it has not been re-measured since.
+Why this exists: the README publishes a token table (v14.7: instructions 339 /
+tools/list 2,831 / total 3,170, cl100k_base) that drifts whenever a description or
+schema changes, and chars are the comparable half.
 There are two independent ways to get the real numbers:
 
   1. bind to the server over stdio and read the raw `initialize` / `tools/list`
@@ -20,8 +21,9 @@ when a budget fails, this prints the exact per-tool numbers it is comparing.
 Reported sizes:
   - character counts (exact, reproducible)
   - `len/4` as a rough token estimate
-Token counts are NOT reported as authoritative because the tokenizer the README
-author used is not recorded anywhere in the repo; only characters are comparable.
+Token counts are NOT reported as authoritative because this script has no
+tokenizer (the README's numbers come from a separate cl100k_base run); only
+characters are exactly comparable.
 
 Usage (from anywhere):
     python tests/tool_payload_measure.py [--out DIR]

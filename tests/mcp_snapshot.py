@@ -536,7 +536,7 @@ def main() -> int:
             "tools_list_result": _sizes(tools_result) if tools_result else None,
             "tools_list_full_envelope_chars": len(phases[2][1]["response_raw"]) if len(phases) > 2 and phases[2][1]["response_raw"] else None,
             "notes": [
-                "Character counts only - no tokenizer is available offline. The README (v14.6, not re-measured since) claims 333 + 2931 = 3264 cl100k_base tokens; that exact tokenizer/count is NOT reproduced here.",
+                "Character counts only - no tokenizer is available offline. The README (v14.7) reports 339 + 2831 = 3170 cl100k_base tokens; that exact tokenizer/count is NOT reproduced here.",
                 "chars_raw_string_chars is the literal Python string length of result.instructions.",
                 "json_* sizes are json.dumps of the value (default ensure_ascii=True escapes non-ASCII); compact uses separators=(',',':').",
                 "All traffic was offline-safe: loopback/metadata/file URLs rejected by the server SSRF guard, a nonexistent local path for parse, and search engines routed to a dead loopback proxy.",

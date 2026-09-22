@@ -165,21 +165,24 @@ def test_params_named_in_description_exist(tools, name):
 # 显式改这个表 —— 让「描述变胖」变成一个有意识的动作。
 
 CHAR_BUDGET = {
-    "smart_fetch": 4400,
-    "smart_crawl": 2500,
-    "smart_search": 2400,
-    "screenshot": 900,
-    "feed_fetch": 900,
-    "resolve_url": 700,
+    # 14.7：描述重写（营销词/实现细节/环境假设出清，desc 正文 4711 -> 3625
+    # 字符）后，整表按新实测值重新推导，仍保持 ~10% 余量。不重新推导的话，
+    # 下一个 agent 能把删掉的话原样加回来而不触发任何守卫。
+    "smart_fetch": 4100,
+    "smart_crawl": 2250,
+    "smart_search": 1800,
+    "screenshot": 880,
+    "feed_fetch": 870,
+    "resolve_url": 590,
     "parse": 700,
     # 14.6: 550 -> 860. cache_clear gained the engine_state lever (reset engine
     # cooldowns / yield) plus its "when to use it" line. Without a tool-visible
     # reset, a user whose network changed had only "delete files under ~/.dhole
     # and restart" - which is exactly how a working VPN got misdiagnosed as
     # ignored. parse's 700 was already enough for its path-resolution note.
-    "cache_clear": 860,
+    "cache_clear": 840,
 }
-TOOLS_TOTAL_BUDGET = 12500
+TOOLS_TOTAL_BUDGET = 12000
 INSTRUCTIONS_BUDGET = 1500
 CONNECT_TOTAL_BUDGET = 14000
 

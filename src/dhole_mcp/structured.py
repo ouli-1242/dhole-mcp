@@ -35,7 +35,8 @@ def extract_structured(
     """Extract structured data from HTML according to a JSON schema.
 
     Strategy per field:
-    1. If field has 'selector': use CSS selector on the DOM
+    1. If field has 'selector': use CSS selector on the DOM ('attribute' picks an
+       attribute value instead of the element's text)
     2. If field name matches metadata keys: use page metadata (OG/JSON-LD)
     3. If field type is 'array' without selector: detect repeated elements
     4. Fallback: regex search in extracted text
@@ -66,12 +67,13 @@ def extract_structured(
 
         field_type = field_spec.get("type", "string")
         selector = field_spec.get("selector", "")
+        attribute = field_spec.get("attribute") or ""
 
         value = None
 
         # Strategy 1: CSS selector
         if selector and root is not None:
-            value = _extract_by_selector(root, selector, field_type)
+            value = _extract_by_selector(root, selector, field_type, attribute)
 
         # Strategy 2: metadata match
         if value is None and metadata:
@@ -113,8 +115,16 @@ def _parse_html(html: str):
             return None
 
 
-def _extract_by_selector(root, selector: str, field_type: str) -> Any:
-    """Extract text content using a CSS selector."""
+def _extract_by_selector(
+    root, selector: str, field_type: str, attribute: str = ""
+) -> Any:
+    """Extract text - or ``attribute`` values - using a CSS selector.
+
+    A scalar field returns the first NON-EMPTY match. Returning elements[0]'s
+    text made {"selector": "a"} look broken on any page whose first anchor wraps
+    an <img> (an image-only logo has no text nodes), which read as "the schema
+    parser cannot handle this page".
+    """
     try:
         from lxml.cssselect import CSSSelector
         sel = CSSSelector(selector)
@@ -122,14 +132,24 @@ def _extract_by_selector(root, selector: str, field_type: str) -> Any:
         if not elements:
             return None
 
+        def _value(el) -> str:
+            if attribute:
+                got = el.get(attribute)
+                # Attribute values are exact (a URL keeps its encoding); only
+                # the surrounding whitespace is noise.
+                return got.strip() if isinstance(got, str) else ""
+            return _element_text(el)
+
         if field_type == "array":
-            return [text for el in elements if (text := _element_text(el))]
+            return [v for el in elements if (v := _value(el))]
         elif field_type == "count":
             # Count of matching elements, not their text.
             return len(elements)
-        else:
-            # Return first match text
-            return _element_text(elements[0]) or None
+        for el in elements:
+            v = _value(el)
+            if v:
+                return v
+        return None
     except Exception as e:
         logger.debug("Selector '%s' failed: %s", selector, e)
         return None

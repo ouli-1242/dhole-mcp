@@ -140,30 +140,30 @@ Dhole 的差异化不是「每项都最强」，而是**在同一个本地进程
 
 ### 上下文开销
 
-MCP 客户端每次连接（新会话或重连）都要先付一笔固定 token：`instructions`（握手时注入一次）+ 全部工具 schema。用 `cl100k_base` 对客户端实际收到的 wire JSON 计数，本仓库 14.6 实测（`cache_clear` 后来又加了 `engine_state`、`parse` 加了路径说明，字符预算已同步，token 数字待重测，两行会小幅上移）：
+MCP 客户端每次连接（新会话或重连）都要先付一笔固定 token：`instructions`（握手时注入一次）+ 全部工具 schema。用 `cl100k_base` 对客户端实际收到的 wire JSON 计数，14.6 → 14.7 实测：
 
-| 项目 | tokens |
-| --- | --- |
-| `instructions`（`initialize` 注入一次） | 333 |
-| `tools/list`（8 个工具，含描述 + `inputSchema`） | 2,931 |
-| **连接时合计** | **3,264** |
+| 项目 | 14.6 | 14.7 |
+| --- | --- | --- |
+| `instructions`（`initialize` 注入一次） | 339 | 339 |
+| `tools/list`（8 个工具，含描述 + `inputSchema`） | 3,024 | 2,831 |
+| **连接时合计** | **3,363** | **3,170** |
 
-逐工具拆分：
+14.7 逐工具拆分：
 
 | 工具 | tokens | 工具 | tokens |
 | --- | --- | --- | --- |
-| `smart_fetch` | 981 | `feed_fetch` | 213 |
-| `smart_crawl` | 570 | `parse` | 160 |
-| `smart_search` | 519 | `resolve_url` | 147 |
-| `screenshot` | 213 | `cache_clear` | 128 |
+| `smart_fetch` | 970 | `feed_fetch` | 208 |
+| `smart_crawl` | 528 | `parse` | 171 |
+| `smart_search` | 419 | `resolve_url` | 138 |
+| `screenshot` | 213 | `cache_clear` | 184 |
 
 这笔开销只在连接时付一次，不会每轮重复。`smart_fetch` 之所以最贵，是因为它一个工具承担了抓取 / PDF / OCR / 批量 / 聚焦提取 / 页面交互 / 结构化提取的全部参数——拆成多个工具反而会让总开销更高。
 
-其中约三成是 schema 的**结构开销**（参数名、`type`、`description` 这些键在 JSON 里逐参数重复），只有减少参数或工具才能降，压缩措辞对它无效。
+其中约四成是 schema 的**结构开销**（参数名、`type`、`description` 这些键在 JSON 里逐参数重复——把全部描述正文抽空后仍有 1,064 tokens），只有减少参数或工具才能降，压缩措辞对它无效。14.7 的描述重写（营销词 / 实现细节 / 环境假设出清，desc 正文 4,711 → 3,625 字符）动的正是另外那六成。
 
 描述与 `instructions` 的措辞是被测试钉住的（`tests/test_tool_descriptions.py`）：路由规则、与代码常量的一致性、以及本表的体积预算，改动超出预算会直接失败。所以上表数字若要变，是有意识的动作，不会无声漂移。
 
-> 复现方式：`tiktoken.get_encoding("cl100k_base")` 对 `mcp.types.Tool(**td).model_dump(exclude_none=True)` 序列化后的 JSON 计数（±5%，与更新版本的 Claude / GPT tokenizer 略有差异）。
+> 复现方式：`tiktoken.get_encoding("cl100k_base")` 对 `mcp.types.Tool(**td).model_dump(by_alias=True, exclude_none=True)` 序列化后的 JSON 计数（±5%，与更新版本的 Claude / GPT tokenizer 略有差异）。
 
 ### smart_search 常用参数
 

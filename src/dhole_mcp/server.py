@@ -134,6 +134,7 @@ async def _fallback_http_get(
     *, proxy: Optional[str] = None,
     headers: Optional[Dict[str, str]] = None,
     cookies: Optional[Dict[str, str]] = None,
+    useragent: Optional[str] = None,
     timeout: int = 30,
     verify: bool = True,
 ):
@@ -143,7 +144,8 @@ async def _fallback_http_get(
     """
     from dhole_mcp.fetcher import http_get
     return await http_get(
-        url, proxy=proxy, headers=headers, cookies=cookies, timeout=timeout,
+        url, proxy=proxy, headers=headers, cookies=cookies,
+        useragent=useragent, timeout=timeout,
     )
 
 if TYPE_CHECKING:
@@ -174,6 +176,12 @@ SessionType = Literal["dynamic", "stealthy"]
 ScreenshotType = Literal["png", "jpeg"]
 
 MAX_CONTENT_CHARS = 40000
+# smart_fetch `schema` runs CSS selectors over the raw markup, so the document
+# fed to the extractor must NOT be capped by the caller's `max_content_chars`
+# (that cap is about what goes back to the caller). A 500-char cap used to leave
+# the extractor with nothing but <head>, so every selector missed and the call
+# still reported success. Ceiling matches the max_content_chars clamp.
+_SCHEMA_SOURCE_MAX_CHARS = 200000
 MIN_CHUNK_CHARS = 500  # if remaining < this, merge into current chunk (avoids wasteful round-trips)
 MAX_RESPONSE_BYTES = 50 * 1024 * 1024  # 50MB hard cap for response bodies
 MAX_BULK_URLS = 100  # hard cap to prevent DoS via unbounded parallel requests
@@ -209,6 +217,15 @@ def _record_latency(url: str, elapsed_ms: float) -> None:
             _DOMAIN_LATENCY[domain] = 0.8 * old + 0.2 * elapsed_ms  # EMA
     except Exception:
         pass
+
+
+# smart_fetch's call budget when the caller does not pass `timeout`.
+# `actions` force the stealthy tier, where the browser cold start alone can
+# outlast the HTTP-era default: measured on this machine, the 30000ms budget ran
+# out before example.com finished loading, while the 60000ms budget let the same
+# call finish in 42.4s.
+DEFAULT_CALL_TIMEOUT_MS = 30000
+ACTIONS_DEFAULT_TIMEOUT_MS = 60000
 
 
 def _adaptive_timeout(url: str, default_ms: int = 30000) -> int:
@@ -520,7 +537,13 @@ def _is_js_shell(result: ResponseModel) -> bool:
     """
     content_str = " ".join(result.content).lower().strip()
     if not content_str:
-        return True  # Empty content after extraction = JS shell or blank page
+        # Empty content on a success status = JS shell (or a genuinely blank
+        # page). On a 4xx/5xx it is an HTTP error, not a rendering problem:
+        # httpbin /status/404 answers with an empty body, and calling that a
+        # "JS shell" told agents to burn a 40s browser escalation that cannot
+        # change the outcome. status 0 (network/local failure) keeps the old
+        # answer - 0 < 400.
+        return result.status < 400
     if any(signal in content_str for signal in _JS_SHELL_SIGNALS):
         return True
     # Cloudflare challenge pages can return 200 with large HTML (Turnstile
@@ -541,6 +564,21 @@ def _is_js_shell(result: ResponseModel) -> bool:
         if text_len < _JS_SHELL_MIN_TEXT_CHARS:
             return True
     return False
+
+
+def _schema_value_empty(value: Any) -> bool:
+    """True when a schema field did not answer: '', [], {}, 0, None.
+
+    Used to tell "the extractor ran and matched nothing" (a failure the caller
+    must see) from "some optional field was absent" (a normal partial result).
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, dict)):
+        return not value
+    return value == 0
 
 
 def _detect_content_issue(result: ResponseModel) -> str:
@@ -774,6 +812,9 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         next_action = ("page is an anti-bot/CAPTCHA challenge, not content - do NOT cite it. "
                        "Retry once with force_fetcher='stealthy' (renders the challenge), "
                        "otherwise switch source")
+    elif err.startswith("schema_no_match"):
+        next_action = ("no selector matched this page - re-check the selectors, or fetch "
+                       "with extraction_type='html' to inspect the markup yourself")
     elif err.startswith("geo_redirect_detected"):
         next_action = "geo redirect: try a different regional URL or a proxy"
     elif err.startswith("scanned_pdf"):
@@ -1730,14 +1771,35 @@ def _basic_auth_header(
     return {"Authorization": f"Basic {token}"}
 
 
-def _safe_cookie_dict(cookies: Sequence[SetCookieParam] | None) -> Optional[Dict[str, str]]:
-    """Safely convert MCP cookie param list to {name: value} dict.
+def _parse_cookie_header(raw: str) -> Optional[Dict[str, str]]:
+    """Parse a Cookie header value ("a=1; b=2") into {name: value}."""
+    out: Dict[str, str] = {}
+    for part in raw.split(";"):
+        name, sep, value = part.partition("=")
+        name = name.strip()
+        if sep and name:
+            out[name] = value.strip()
+    return out or None
 
-    Handles missing keys gracefully and logs warnings.
-    Returns None for empty/None input.
+
+def _safe_cookie_dict(cookies: Any) -> Optional[Dict[str, str]]:
+    """Convert the `cookies` option to a {name: value} dict for the HTTP tier.
+
+    Three shapes arrive in practice and all three are accepted: the documented
+    list of ``{name, value, domain}`` dicts, a plain ``{name: value}`` dict, and
+    a raw Cookie header string. A string used to be iterated as a sequence of
+    characters, so every cookie was dropped and the request went out without
+    them while the call still reported success.
+
+    Returns None for empty/None input. Values are never logged - a cookie is a
+    credential.
     """
     if not cookies:
         return None
+    if isinstance(cookies, str):
+        return _parse_cookie_header(cookies)
+    if isinstance(cookies, dict):
+        return {str(k): str(v) for k, v in cookies.items()} or None
     result: Dict[str, str] = {}
     for c in cookies:
         if isinstance(c, dict):
@@ -1749,6 +1811,19 @@ def _safe_cookie_dict(cookies: Sequence[SetCookieParam] | None) -> Optional[Dict
                 # Don't log the dict — it may contain a sensitive cookie value.
                 logger.warning("Cookie dict missing 'name' key, skipping")
     return result or None
+
+
+def _browser_cookies(cookies: Any, url: str) -> Any:
+    """Cookie jar for the browser tier (playwright ``add_cookies`` shape).
+
+    A caller-supplied list passes through untouched - it carries its own
+    domain/path scope. The string and plain-dict forms carry no scope, so each
+    cookie is tied to the URL being fetched.
+    """
+    if isinstance(cookies, (str, dict)):
+        pairs = _safe_cookie_dict(cookies) or {}
+        return [{"name": n, "value": v, "url": url} for n, v in pairs.items()] or None
+    return cookies
 
 
 # ─── options bag validation ────────────────────────────────────────
@@ -1778,7 +1853,11 @@ _SC_OPTIONS = frozenset({
     "max_pages", "max_depth", "path_include", "path_exclude",
     "max_content_chars_per", "max_total_chars", "concurrency",
     "cache_ttl", "force_fetcher", "timeout", "deadline_ms", "sitemap",
+    "search",
 })
+# `search` lives in options for callers who read the docs that way, but it is
+# promoted to an explicit argument below - forwarding it twice is a TypeError.
+_SC_OPTIONS_FORWARDED = frozenset(_SC_OPTIONS - {"search"})
 _SHOT_OPTIONS = frozenset({
     "full_page", "image_type", "quality", "wait", "wait_selector",
     "network_idle", "timeout",
@@ -2575,6 +2654,7 @@ class MasterFetchServer:
         params: Optional[Dict] = None,
         headers: Optional[Mapping[str, Optional[str]]] = None,
         cookies: Optional[Dict[str, str]] = None,
+        useragent: Optional[str] = None,
         timeout: Optional[int | float] = 30,
         follow_redirects: FollowRedirects = "safe",
         max_redirects: int = 30,
@@ -2600,6 +2680,7 @@ class MasterFetchServer:
         :param params: Query string parameters.
         :param headers: Request headers.
         :param cookies: Request cookies.
+        :param useragent: Override the generated User-Agent for this request.
         :param timeout: Timeout in seconds (default 30).
         :param follow_redirects: Redirect policy: 'safe', True, or False.
         :param max_redirects: Max redirects (default 30).
@@ -2621,7 +2702,8 @@ class MasterFetchServer:
             urls=[url], impersonate=impersonate, extraction_type=extraction_type,
             css_selector=css_selector, main_content_only=main_content_only,
             use_trafilatura=use_trafilatura, params=params, headers=headers,
-            cookies=cookies, timeout=timeout, follow_redirects=follow_redirects,
+            cookies=cookies, useragent=useragent, timeout=timeout,
+            follow_redirects=follow_redirects,
             max_redirects=max_redirects, retries=retries, retry_delay=retry_delay,
             proxy=proxy, proxy_auth=proxy_auth, auth=auth, verify=verify,
             http3=http3, stealthy_headers=stealthy_headers,
@@ -2641,6 +2723,7 @@ class MasterFetchServer:
         params: Optional[Dict] = None,
         headers: Optional[Mapping[str, Optional[str]]] = None,
         cookies: Optional[Dict[str, str]] = None,
+        useragent: Optional[str] = None,
         timeout: Optional[int | float] = 30,
         follow_redirects: FollowRedirects = "safe",
         max_redirects: int = 30,
@@ -2665,6 +2748,7 @@ class MasterFetchServer:
         :param params: Query parameters.
         :param headers: Request headers.
         :param cookies: Request cookies.
+        :param useragent: Override the generated User-Agent for this request.
         :param timeout: Timeout in seconds (default 30).
         :param follow_redirects: Redirect policy.
         :param max_redirects: Max redirects (default 30).
@@ -2707,6 +2791,7 @@ class MasterFetchServer:
             timed_tasks = [
                 _timed(session.get(
                     url, headers=headers, cookies=cookies if isinstance(cookies, dict) else None,
+                    useragent=useragent,
                     timeout=max(1, min(int(timeout), 30)), retries=retries,
                     proxy=http_proxy, follow_redirects=follow_redirects,
                     max_redirects=max_redirects, params=params,
@@ -2985,14 +3070,14 @@ class MasterFetchServer:
         real_chrome: Annotated[bool, Field(description="Use installed Chrome instead of bundled browser.")] = False,
         wait: Annotated[int | float, Field(description="Extra milliseconds to wait after page load for JS rendering.")] = 0,
         proxy: Annotated[Optional[str | Dict[str, str]], Field(description="Proxy URL or dict with server/username/password.")] = None,
-        timeout: Annotated[int | float, Field(description="Max request time in milliseconds (default 30000).")] = 30000,
+        timeout: Annotated[Optional[int | float], Field(description="Max request time in milliseconds (default 30000; 60000 when actions are used).")] = None,
         network_idle: Annotated[bool, Field(description="Wait until network is idle for 500ms before capturing (good for SPAs).")] = False,
         solve_cloudflare: Annotated[bool, Field(description="Attempt Cloudflare bypass in stealthy mode (default True).")] = True,
         block_webrtc: Annotated[bool, Field(description="Prevent WebRTC IP leak in stealthy mode (default True).")] = True,
         hide_canvas: Annotated[bool, Field(description="Randomize canvas fingerprint in stealthy mode (default True).")] = True,
         extra_headers: Annotated[Optional[Dict[str, str]], Field(description="Additional HTTP headers as {name: value} dict.")] = None,
-        useragent: Annotated[Optional[str], Field(description="Override browser user agent string.")] = None,
-        cookies: Annotated[Sequence[SetCookieParam] | None, Field(description="Cookies as list of {name, value, domain} dicts.")] = None,
+        useragent: Annotated[Optional[str], Field(description="Override the user agent for both tiers (default: a realistic rotating browser UA).")] = None,
+        cookies: Annotated[Sequence[SetCookieParam] | None, Field(description="Cookies for the request: list of {name, value, domain} dicts, a plain {name: value} dict, or a Cookie header string.")] = None,
         offset: Annotated[int, Field(description="Resume from this character offset when content was truncated. The response tells you the next offset to use.")] = 0,
         max_content_chars: Annotated[Optional[int], Field(description="Max chars of extracted content to return (default 40000). Lower this to save context tokens on big pages; the rest is paginated via offset/next_offset.")] = None,
         pages: Annotated[Optional[str], Field(description="PDF only: page spec like '1-5' or '1,3,5-7' to extract a subset of pages (saves tokens/time on big PDFs). None = all pages.")] = None,
@@ -3034,6 +3119,11 @@ class MasterFetchServer:
         # 行为与原来完全一致。
         if cache_ttl is None:
             cache_ttl = self._cache_ttl
+        # `timeout` uses the same sentinel: an actions call always drives the
+        # stealthy tier, so it gets a budget that covers a cold browser start.
+        # An explicit value still wins.
+        if timeout is None:
+            timeout = ACTIONS_DEFAULT_TIMEOUT_MS if actions else DEFAULT_CALL_TIMEOUT_MS
         # Normalize/validate the extraction schema BEFORE either path runs, so a
         # stringified or empty schema is reported instead of silently degrading
         # to markdown (see _normalize_schema). Rejections return a FetchResult,
@@ -3105,12 +3195,16 @@ class MasterFetchServer:
                     url=url, status=0, content=[],
                     fetcher_used="none", error=f"schema validation error: {se}",
                 )
-            # Robots.txt compliance (must check before fetching)
+            # Robots.txt compliance (must check before fetching). `mc` is NOT the
+            # cap here: the selectors run over the whole document, and the
+            # caller's cap applies to the JSON that comes back (see re-chunk
+            # below).
             html_result = await self._auto_escalate(
                 url, "html", css_selector, main_content_only,
                 use_trafilatura, cache_ttl, 0, headless, real_chrome, wait,
                 proxy, timeout, network_idle, solve_cloudflare, block_webrtc,
-                hide_canvas, extra_headers, useragent, cookies, mc,
+                hide_canvas, extra_headers, useragent, cookies,
+                _SCHEMA_SOURCE_MAX_CHARS,
             )
             html_content = "\n".join(html_result.content) if html_result.content else ""
             if html_content and html_result.status < 400:
@@ -3122,6 +3216,26 @@ class MasterFetchServer:
                 import json as _json_mod
                 html_result.content = [_json_mod.dumps(structured, ensure_ascii=False, indent=2)]
                 html_result.extracted_type = "structured"
+                if isinstance(structured, dict) and structured and all(
+                    _schema_value_empty(v) for v in structured.values()
+                ):
+                    # A schema that matched nothing is a failed extraction, not a
+                    # successful one with empty strings: content_ok must say so.
+                    html_result.error = (
+                        "schema_no_match: every selector returned empty - check the "
+                        "selectors against this page's markup"
+                    )
+                # The chunking done upstream described the HTML - a payload the
+                # caller never sees (it left a next_offset pointing into a
+                # document we just replaced with a small JSON object). Re-chunk
+                # on the JSON. `focus` is documented as ignored while schema is
+                # active, and _apply_chunking would otherwise BM25-filter the
+                # JSON (it treats extracted_type='structured' as text).
+                _focus_token = _FOCUS.set(None)
+                try:
+                    return _apply_chunking(html_result, max_chars=mc, offset=offset)
+                finally:
+                    _FOCUS.reset(_focus_token)
             return html_result
 
         # 2. Check cache
@@ -3301,7 +3415,8 @@ class MasterFetchServer:
                 url, extraction_type=extraction_type, css_selector=css_selector,
                 main_content_only=main_content_only, use_trafilatura=use_trafilatura,
                 proxy=_proxy_to_url(proxy, None),
-                headers=extra_headers, cookies=http_cookies, timeout=http_timeout,
+                headers=extra_headers, cookies=http_cookies,
+                useragent=useragent, timeout=http_timeout,
                 stealthy_headers=True,
             )
             result.escalation_path = "direct:http"
@@ -3322,7 +3437,7 @@ class MasterFetchServer:
                 disable_resources=True,
                 solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
                 hide_canvas=hide_canvas, extra_headers=extra_headers,
-                useragent=useragent, cookies=cookies,
+                useragent=useragent, cookies=_browser_cookies(cookies, url),
                 session_id=ssid,
                 page_action=page_action,
             )
@@ -3495,7 +3610,8 @@ class MasterFetchServer:
             css_selector=css_selector, main_content_only=main_content_only,
             use_trafilatura=use_trafilatura,
             proxy=_proxy_to_url(proxy, None),
-            headers=extra_headers, cookies=http_cookies, stealthy_headers=True,
+            headers=extra_headers, cookies=http_cookies,
+            useragent=useragent, stealthy_headers=True,
             timeout=_effective_http_timeout,
         ), "HTTP tier", "http")
         if result is None or _is_over_budget(result):
@@ -3609,7 +3725,7 @@ class MasterFetchServer:
             disable_resources=True,
             solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
             hide_canvas=hide_canvas, extra_headers=extra_headers,
-            useragent=useragent, cookies=cookies,
+            useragent=useragent, cookies=_browser_cookies(cookies, url),
             session_id=ssid,
         ), "stealthy browser tier", "http→stealthy")
         if result is None or _is_over_budget(result):
@@ -3755,7 +3871,7 @@ class MasterFetchServer:
         """
         import os as _os
         from pathlib import Path
-        from dhole_mcp.parse import parse_file
+        from dhole_mcp.parse import parse_file_detailed
 
         t0 = now()
         target, candidates = _resolve_local_path(file_path)
@@ -3782,7 +3898,7 @@ class MasterFetchServer:
                          "directory relative paths should resolve against."),
             ))
 
-        content, error = await asyncio_to_thread(parse_file, target)
+        content, error, extras = await asyncio_to_thread(parse_file_detailed, target)
         result = ResponseModel(
             url=Path(target).as_uri(),
             status=0 if error else 200,
@@ -3793,6 +3909,15 @@ class MasterFetchServer:
             total_size_bytes=Path(target).stat().st_size,
             duration_ms=(now() - t0) * 1000,
             error=error,
+            # A local PDF carries the same envelope as a fetched one: the
+            # extractor already produced these, the parse path dropped them.
+            # content_ok has to travel with them - _agent_hints defers to it as
+            # soon as quality_score is set, and a default False would flag a
+            # perfectly good PDF as "do not cite".
+            content_ok=bool(extras.get("content_ok", False)),
+            table_of_contents=extras.get("table_of_contents", []),
+            metadata=extras.get("metadata", {}),
+            quality_score=extras.get("quality_score", 0.0),
         )
         # Chunking, not just hints: it fills total_extracted_chars /
         # is_truncated / next_offset, which a successful parse left empty, and it
@@ -4041,7 +4166,7 @@ class MasterFetchServer:
     _TOOL_DEFS: list[dict] = [
         {
             "name": "smart_fetch",
-            "description": "Use for EVERY web page, URL, or PDF the task touches, instead of built-in WebFetch: it bypasses anti-bot walls, renders JS, reads PDFs with OCR. One URL, or a known list via urls=[...]. HTTP first, escalates to a stealthy browser when blocked.\n\nDECIDE AT CALL TIME: focus='question' returns only the relevant paragraphs (BM25 - the big token saver on long pages; re-pass it when paginating). urls=[...] bulk-fetches several pages in one call. schema={properties:{...}} returns structured JSON via CSS selectors, no LLM. extraction_type=html gives raw markup. Also available: pages= (PDF ranges), actions= (click/fill/scroll for load-more and forms), css_selector, include_links/include_media via options.\n\nCHECK BEFORE CITING: content_ok (false = JS shell / login or CAPTCHA wall - don't cite), page_type ('list' -> the linked pages or smart_crawl; 'auth_wall'/'paywall'/'captcha' -> switch source), is_truncated + next_offset, is_stale / content_age_days, quality_score (PDF; low = garbled/CID), next_action (empty = done).",
+            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too. Handles JS/anti-bot pages.\n- focus='question' returns only the relevant paragraphs (re-pass it when paginating with next_offset).\n- schema={properties:{...}} (CSS selectors) returns structured JSON; extraction_type=html returns raw markup; pages= for PDF ranges; actions=[click/fill/scroll] for load-more and forms; css_selector; options: include_links, include_media; cache_ttl=0 bypasses the cache.\n- CHECK BEFORE CITING: content_ok (false = JS shell / login / CAPTCHA wall - don't cite); page_type ('list' -> the linked pages or smart_crawl; 'auth_wall'/'paywall'/'captcha' -> switch source); is_truncated + next_offset; is_stale / content_age_days; quality_score (PDF; low = garbled); next_action (empty = done).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -4050,7 +4175,7 @@ class MasterFetchServer:
                     "extraction_type": {"type": "string", "enum": ["markdown", "html", "text", "article", "structured"], "description": "Content format (default markdown). html = raw HTML."},
                     "css_selector": {"type": "string", "description": "CSS selector to narrow extracted content (e.g. 'article', '.main'). Token saver."},
                     "max_content_chars": {"type": "integer", "description": "Max chars of extracted content (default 40000, min 500). Lower = less context; rest paginated via offset/next_offset."},
-                    "timeout": {"type": "integer", "description": "Max request time in ms (default 30000)."},
+                    "timeout": {"type": "integer", "description": "Max request time in ms (default 30000; 60000 with actions)."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds (default 3600). 0 = force fresh."},
                     "force_fetcher": {"type": "string", "enum": ["http", "stealthy"], "description": "Skip auto-escalation and pin one tier: 'http' = fast, no JS/bot walls; 'stealthy' = anti-detect browser. Default = auto."},
                     "offset": {"type": "integer", "description": "Char offset into extracted text to resume a truncated page. Use next_offset from previous response."},
@@ -4058,15 +4183,15 @@ class MasterFetchServer:
                     "password": {"type": "string", "description": "PDF only: password for an encrypted PDF."},
                     "focus": {"type": "string", "description": "Return only blocks matching this query (BM25) - big saver on long pages. Post-cache (no re-fetch). Re-pass the same focus when paginating."},
                     "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "Interactions on the stealthy browser after load, before extraction (forces stealthy, bypasses cache). Items: {click:'css'}, {fill:{selector,text}}, {press:'Enter'}, {wait:ms}, {scroll:n}, {wait_selector:'css'} - for load-more, forms, pagination, infinite scroll."},
-                    "schema": {"type": "object", "description": "Structured extraction schema. Each property may carry a 'selector' (CSS) for direct DOM extraction. Must be {properties: {...}} (a JSON string is accepted); returns structured JSON instead of markdown, no LLM.", "additionalProperties": True},
-                    "options": {"type": "object", "description": "include_links (response.links: citations/navigation/external + primary_source), include_media (up to 20 image URLs), proxy, cookies, extra_headers, useragent, wait (ms), network_idle (SPAs), headless. Anti-detect keys exist with good defaults - leave them alone.", "additionalProperties": True},
+                    "schema": {"type": "object", "description": "Structured extraction schema. Each property may carry a 'selector' (CSS) and/or 'attribute' (return that attribute's value instead of the text). Must be {properties: {...}} (a JSON string is accepted); returns structured JSON instead of markdown, no LLM.", "additionalProperties": True},
+                    "options": {"type": "object", "description": "include_links (response.links: citations/navigation/external + primary_source), include_media (up to 20 image URLs), proxy, cookies (list of {name,value,domain} | {name:value} | 'a=1; b=2'), extra_headers, useragent, wait (ms), network_idle (SPAs), headless. Anti-detect keys exist with good defaults - leave them alone.", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
         },
         {
             "name": "smart_crawl",
-            "description": "Use when the task needs MANY pages from one site (docs, API references, wikis, directories, listing pages) and you don't already have the URL list: best-first same-domain walk, one crawl instead of many fetches. Each page comes back as markdown + content_ok + page_type; list pages come back as a structured link list. If you DO have the exact URLs, smart_fetch(urls=[...]) fetches them directly - no crawl needed.\n\nTWO-PHASE (most efficient): options sitemap=true maps every URL from sitemap.xml in one fetch -> read the list -> crawl_urls=[the ones you need] fetches only those, skipping irrelevant pages. discover_only=true = URL map only. focus='query' prioritizes relevant links AND focus-filters each page (big saver on large doc sites). Caps: max_pages(10), max_depth(2), max_total_chars, deadline_ms. Shares smart_fetch's anti-bot + cache.",
+            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you don't have the URL list. If you do have the exact URLs, smart_fetch(urls=[...]) fetches them directly - no crawl needed.\n- options sitemap=true maps every URL from sitemap.xml in one fetch; crawl_urls=[the ones you need] then fetches only those. discover_only=true = URL map only.\n- focus='query' prioritizes relevant links and focus-filters each page.\n- Caps: max_pages(10), max_depth(2), max_total_chars, deadline_ms.\n- Each page returns markdown + content_ok + page_type; list pages come back as a structured link list.",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
@@ -4075,7 +4200,7 @@ class MasterFetchServer:
                     "focus": {"type": "string", "description": "Query: prioritize crawling links relevant to this + focus-filter each page. Token saver on doc sites."},
                     "crawl_urls": {"type": "array", "items": {"type": "string"}, "description": "Chosen subset of URLs to fetch (second-phase selective crawl, no re-discovery). Use after sitemap=true or discover_only=true."},
                     "search": {"type": "string", "description": "Filter discovered/crawled URLs by keyword match (URL path + title). Use with discover_only=true for fast URL discovery on large sites."},
-                    "options": {"type": "object", "description": "sitemap (true|'auto'|false,false: true=map from sitemap.xml in one fetch), max_pages (1-100,10), max_depth (0-5,2), path_include (path prefixes), path_exclude, max_content_chars_per (8000), max_total_chars (token budget), concurrency (1-5,3), cache_ttl (3600;0=fresh), force_fetcher ('http'|'stealthy'), timeout (ms,30000), deadline_ms (120000).", "additionalProperties": True},
+                    "options": {"type": "object", "description": "sitemap (true|'auto'|false,false: true=map from sitemap.xml in one fetch), max_pages (1-100,10), max_depth (0-5,2), path_include (path prefixes), path_exclude, search (same as top-level), max_content_chars_per (8000), max_total_chars (token budget), concurrency (1-5,3), cache_ttl (3600;0=fresh), force_fetcher ('http'|'stealthy'), timeout (ms,30000), deadline_ms (120000).", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -4095,7 +4220,7 @@ class MasterFetchServer:
         },
         {
             "name": "smart_search",
-            "description": "Use this INSTEAD of built-in web search for every lookup / research / 'search the web' / 'find out' / '最新' request: keyless multi-engine search (default pool: bing,duckduckgo,brave,yahoo,yandex,sogou_weixin; opt-in wikipedia/grokipedia) with neural reranking and cross-engine consensus - no API key, runs locally. Returns ranked URLs + relevance, NOT page content.\n\nTHEN GET THE CONTENT - never answer from snippets alone. Pass fetch_content=true to have this same call auto-fetch the top 3 with focus=query; otherwise smart_fetch the high fetch_relevance hits with focus='your question', or urls=[...] to bulk-fetch several at once. Don't search for a URL you already have - smart_fetch it directly.\n\nFILTERS (in options): site=, exclude_sites=[], freshness=day|week|month|year (use week or month for recent info), page=, location/language/region, engines=[].\n\nREAD THE RESULT FIELDS: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus '2 of 4' counts independent index families, so a low number can mean a DEGRADED pool rather than weak evidence - check consensus_basis (full|single_family|partial_pool|degraded_pool) before reading it that way. sogou_weixin returns weixin.sogou.com wrapper links, not the article's canonical URL. related_queries suggests better search terms.",
+            "description": "Keyless multi-engine web search (default pool: bing,duckduckgo,brave,yahoo,yandex,sogou_weixin; opt-in wikipedia/grokipedia). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- Pass fetch_content=true to have this call auto-fetch the top 3 with focus=query; otherwise smart_fetch the high fetch_relevance hits with focus='your question', or urls=[...] to bulk-fetch. Don't search for a URL you already have - smart_fetch it directly.\n- FILTERS (in options): site=, exclude_sites=[], freshness=day|week|month|year (use week or month for recent info), page=, location/language/region, engines=[].\n- READ THE RESULT FIELDS: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index families, not raw hits, so a low value can mean a degraded pool - check consensus_basis. sogou_weixin gives wrapper links, not canonical URLs.",
             "inputSchema": {
                 "type": "object", "required": ["query"],
                 "properties": {
@@ -4107,7 +4232,7 @@ class MasterFetchServer:
         },
         {
             "name": "cache_clear",
-            "description": "Clear the fetch cache: all=true wipes everything, the default removes only expired entries. To re-fetch ONE URL fresh, pass cache_ttl=0 to smart_fetch/smart_crawl instead - no need to clear. Default TTL 1h.\n\nengine_state=true also forgets engine cooldowns + yield history - use it when the same engines keep getting skipped after the network changed (VPN on). The reply reports engine_health.",
+            "description": "Clear the fetch cache: all=true wipes everything, the default removes only expired entries. To re-fetch one URL fresh, pass cache_ttl=0 to smart_fetch/smart_crawl instead. Default TTL 1h.\nengine_state=true also forgets engine cooldowns + yield history - use it when the same engines keep getting skipped after the network changed (VPN on). The reply reports engine_health.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -4119,7 +4244,7 @@ class MasterFetchServer:
         },
         {
             "name": "parse",
-            "description": "Use for LOCAL files the task references: .html/.htm, .docx, .xlsx, .csv, .pdf -> Markdown, no web fetch. A PDF that has a URL is better served by smart_fetch (page ranges, password, table_of_contents).\n\nRelative paths are tried against the process cwd, $DHOLE_WORKDIR and home; a miss lists what it tried, so pass an absolute path when in doubt.",
+            "description": "Use for LOCAL files the task references: .html/.htm, .docx, .xlsx, .csv, .pdf -> Markdown, no web fetch. A PDF that has a URL is better served by smart_fetch (page ranges, password, table_of_contents).\nRelative paths resolve against cwd/$DHOLE_WORKDIR/home - prefer an absolute path when in doubt.",
             "inputSchema": {
                 "type": "object", "required": ["file_path"],
                 "properties": {
@@ -4130,7 +4255,7 @@ class MasterFetchServer:
         },
         {
             "name": "feed_fetch",
-            "description": "Use to track what a source has PUBLISHED - changelogs, release notes, blogs, news feeds: batch-fetch RSS/Atom feeds newest-first (title/url/published/summary). Pass several feed URLs in one call; feeds are parsed independently, so a dead feed never fails the batch. NOT a general page fetcher - use smart_fetch for that.",
+            "description": "Batch-fetch RSS/Atom feeds newest-first (title/url/published/summary) to track what a source has PUBLISHED - changelogs, release notes, blogs, news. Pass several feed URLs in one call; feeds parse independently, so a dead feed never fails the batch. NOT a general page fetcher - use smart_fetch.",
             "inputSchema": {
                 "type": "object", "required": ["urls"],
                 "properties": {
@@ -4143,7 +4268,7 @@ class MasterFetchServer:
         },
         {
             "name": "resolve_url",
-            "description": "Use to check where a short/redirected link (t.co, bit.ly, tracking URLs) actually lands BEFORE fetching it: follows redirects without downloading the page body, returns final_url + status + content_type. Cheap pre-screen for search results and suspicious links.",
+            "description": "Follow a short/redirected link (t.co, bit.ly, tracking URLs) without downloading the page body: returns final_url + status + content_type. Use it to check where a link lands BEFORE fetching it.",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
@@ -4318,7 +4443,7 @@ class MasterFetchServer:
                 extraction_type=args.get("extraction_type", "markdown"),
                 css_selector=css_selector,
                 max_content_chars=max_content_chars,
-                timeout=timeout if timeout is not None else 30000,
+                timeout=timeout,
                 pages=pages,
                 password=password,
                 cache_ttl=args.get("cache_ttl", DEFAULT_TTL),
@@ -4331,11 +4456,16 @@ class MasterFetchServer:
             return [TextContent(type="text", text=result.model_dump_json())], result.model_dump()
 
         elif name == "smart_crawl":
-            kw = _strict_options(options, _SC_OPTIONS, _SC_OPTIONS, "smart_crawl")
+            # search is promoted like smart_fetch's schema: top-level wins, the
+            # options bag is accepted as a fallback (the option description
+            # lists it, and passing it in options used to be rejected outright).
+            search = (args.get("search") if args.get("search") is not None
+                      else options.get("search"))
+            kw = _strict_options(options, _SC_OPTIONS, _SC_OPTIONS_FORWARDED, "smart_crawl")
             result = await self.smart_crawl(
                 url=args["url"], discover_only=args.get("discover_only", False),
                 focus=args.get("focus"), crawl_urls=args.get("crawl_urls"),
-                search=args.get("search"), **kw,
+                search=search, **kw,
             )
             return [TextContent(type="text", text=result.model_dump_json())], result.model_dump()
 

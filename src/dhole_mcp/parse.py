@@ -36,8 +36,21 @@ def parse_file(file_path: str) -> tuple[str, str]:
     On failure content is empty and error explains what went wrong.
     Never raises.
     """
+    content, error, _extras = parse_file_detailed(file_path)
+    return content, error
+
+
+def parse_file_detailed(file_path: str) -> tuple[str, str, dict]:
+    """Parse a local file to Markdown, plus the envelope fields it can fill.
+
+    Returns (content, error, extras). ``extras`` is empty for every format but
+    PDF, where the extractor also yields table_of_contents / metadata /
+    quality_score / content_ok - a local PDF should report the same envelope as
+    one fetched by URL, and used to report toc=[] and metadata={} while the URL
+    path reported both. Never raises.
+    """
     if not file_path:
-        return "", "file_path is required"
+        return "", "file_path is required", {}
 
     # Expand ~ and resolve to absolute
     file_path = os.path.expanduser(file_path)
@@ -45,7 +58,7 @@ def parse_file(file_path: str) -> tuple[str, str]:
         file_path = os.path.abspath(file_path)
 
     if not os.path.exists(file_path):
-        return "", f"File not found: {file_path}"
+        return "", f"File not found: {file_path}", {}
 
     # Guard against OOM: reject files larger than 50 MB
     file_size = os.path.getsize(file_path)
@@ -53,35 +66,35 @@ def parse_file(file_path: str) -> tuple[str, str]:
         return "", (
             f"File too large ({file_size / 1024 / 1024:.1f} MB). "
             f"Maximum supported size is {MAX_PARSE_FILE_SIZE // 1024 // 1024} MB."
-        )
+        ), {}
 
     ext = os.path.splitext(file_path)[1].lower()
     if ext not in SUPPORTED_EXTENSIONS:
         return "", (
             f"Unsupported file type '{ext}'. Supported: "
             f"{', '.join(sorted(SUPPORTED_EXTENSIONS))}"
-        )
+        ), {}
 
     try:
         if ext in (".html", ".htm", ".xhtml"):
-            return _parse_html(file_path), ""
+            return _parse_html(file_path), "", {}
         elif ext == ".docx":
-            return _parse_docx(file_path), ""
+            return _parse_docx(file_path), "", {}
         elif ext == ".xlsx":
-            return _parse_xlsx(file_path), ""
+            return _parse_xlsx(file_path), "", {}
         elif ext == ".csv":
-            return _parse_csv(file_path), ""
+            return _parse_csv(file_path), "", {}
         elif ext == ".pdf":
             return _parse_pdf(file_path)
     except ImportError as e:
         return "", (
             f"Missing dependency for {ext} parsing: {e}. "
             f"Install with: pip install dhole-mcp[all]"
-        )
+        ), {}
     except Exception as e:
-        return "", f"Parse error ({ext}): {type(e).__name__}: {str(e)[:200]}"
+        return "", f"Parse error ({ext}): {type(e).__name__}: {str(e)[:200]}", {}
 
-    return "", f"Unsupported format: {ext}"
+    return "", f"Unsupported format: {ext}", {}
 
 
 def _parse_html(file_path: str) -> str:
@@ -211,20 +224,23 @@ def _parse_csv(file_path: str) -> str:
     return result
 
 
-def _parse_pdf(file_path: str) -> tuple[str, str]:
+def _parse_pdf(file_path: str) -> tuple[str, str, dict]:
     """Parse a local .pdf to Markdown, reusing the URL path's extractor.
 
     Same pipeline smart_fetch uses for PDF URLs - layout-aware markdown,
-    table_of_contents, per-page CID-garbage OCR fallback, quality score - so a
-    local file behaves identically to a fetched one.
+    per-page CID-garbage OCR fallback - so a local file behaves identically to a
+    fetched one, envelope included: the extractor's table_of_contents,
+    metadata and quality_score are handed back to the caller instead of being
+    dropped here.
 
     Why not just hand it to smart_fetch as ``file://``: that tool's URL
     validator is an SSRF guard and rejects non-http(s) schemes by design.
     Reading a path the caller supplied is a different trust boundary - the same
     one this module already crosses for .docx/.xlsx/.csv/.html.
 
-    Returns (content, error) rather than just content, because a PDF can fail
-    in ways the other formats cannot (encrypted, scanned with no text layer).
+    Returns (content, error, extras) rather than just content, because a PDF
+    can fail in ways the other formats cannot (encrypted, scanned with no text
+    layer) and because it carries an envelope of its own.
     """
     from dhole_mcp.pdf_extractor import extract_pdf
 
@@ -234,7 +250,17 @@ def _parse_pdf(file_path: str) -> tuple[str, str]:
     result = extract_pdf(body, extraction_type="markdown")
 
     if not result.content_ok:
-        return "", f"PDF extraction failed: {result.error or 'no extractable content'}"
+        return "", f"PDF extraction failed: {result.error or 'no extractable content'}", {}
+
+    extras = {
+        "table_of_contents": result.table_of_contents or [],
+        "metadata": result.metadata or {},
+        "quality_score": result.quality_score or 0.0,
+        # The extractor's own verdict, not a guess: _agent_hints defers to it
+        # once quality_score is set, so a healthy PDF that reported
+        # content_ok=False here would be flagged "do not cite".
+        "content_ok": bool(result.content_ok),
+    }
 
     parts: list[str] = []
     if result.title:
@@ -252,7 +278,7 @@ def _parse_pdf(file_path: str) -> tuple[str, str]:
     if notes:
         parts.append("> " + "; ".join(notes))
 
-    return "\n\n".join(p for p in parts if p).strip(), ""
+    return "\n\n".join(p for p in parts if p).strip(), "", extras
 
 
 def _table_to_markdown(table) -> str:
