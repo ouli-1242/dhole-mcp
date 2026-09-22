@@ -253,6 +253,28 @@ def test_vocab_txt_is_fetched_best_effort(tiny_env, monkeypatch):
     reranker._ensure_model()
     assert "vocab.txt" in log, "缺失时应尝试补下"
 
+
+def test_preprovisioned_model_dir_downloads_nothing(tiny_env, monkeypatch):
+    """文件齐了就不许再联网：README 让用户「整个目录拷过去」，这条钉住那句话。
+
+    KB-5 的另一半：行为（首次搜索下载）是有意的、也已在 README 写明；缺的是
+    "离线/多机怎么办"的说明 —— 那句话只有在这个不变量成立时才敢写。
+    """
+    holder, model_dir = tiny_env
+    for name, blob in (("model.onnx", b"M" * 8), ("tokenizer.json", b"{}"),
+                       ("vocab.txt", b"v")):
+        (model_dir / name).write_bytes(blob)
+    attempted: list[str] = []
+
+    def _record(name, dest):
+        attempted.append(name)
+        return True
+
+    monkeypatch.setattr(reranker, "_download_model_file", _record)
+    assert reranker.model_present() is True
+    assert reranker._ensure_model() is not None
+    assert attempted == [], "预置齐全时不该发起任何下载"
+
     # 下载失败也不能让整体失效
     def _fail(name, dest):
         return name != "vocab.txt"
