@@ -7,14 +7,14 @@ thin dhole-side adapter: maps dhole's smart_search params (engines, freshness,
 site, region, page) onto the metasearch, maps results back to RawResult with
 cross-backend consensus, and builds the per-engine reports.
 
-Backends (all keyless, 8 in the registry): bing, duckduckgo, brave, yahoo,
-yandex, sogou_weixin, wikipedia, grokipedia. The default pool is DEFAULT_ENGINES
-below (6; bing first because it is reachable from CN without a VPN — Bing was
-re-enabled in 14.x, this paragraph used to claim it was disabled). wikipedia and
-grokipedia are JSON APIs and opt-in only. Engines run in PARALLEL; one that
-CAPTCHAs / rate-limits / has no topic-match just yields nothing and the others
-carry. Search is 100% HTTP (no browser) - the single Patchright browser stays
-for smart_fetch only.
+Backends (all keyless, 14 in the registry): baidu, bing, bing_global, yandex, brave,
+duckduckgo, yahoo, sogou_weixin, sogou, so360, baidu_baike, mwmbl, wikipedia,
+grokipedia. The default pool is DEFAULT_ENGINES below (6: baidu first - reachable from
+CN without a VPN and an independent index). wikipedia / grokipedia / baidu_baike are
+knowledge bases and opt-in only; bing_global / mwmbl / so360 / sogou are opt-in too.
+Engines run in PARALLEL; one that CAPTCHAs / rate-limits /
+has no topic-match just yields nothing and the others carry. Search is 100%
+HTTP (no browser) - the single Patchright browser stays for smart_fetch only.
 
 DHOLE_SEARCH_PROXY (http/https/socks5) is the power-user rotating-proxy escape
 hatch for per-IP throttling - the one thing no scraper can escape from one IP.
@@ -48,24 +48,41 @@ def _get_metasearch():
 
 # Public default engine pool (order = rough preference). `engines=None` in
 # smart_search uses this via the metasearch.
-# bing 排首位：国内网无需 VPN 即可用（cn.bing.com），其余受网络环境影响。
-# sogou_weixin 也国内直连（weixin.sogou.com，实测 ~0.2-0.9s），且是独家内容池 ——
-# 它进来后国内自然可达的引擎有 3 个（bing/yandex/sogou_weixin），恰好够
-# min_engines=3 的多样性门槛，不必为了凑引擎数去挂 VPN。代价是它是**垂直索引**
-# （只覆盖公众号文章），见 _VERTICAL_BACKENDS。
+# 组合：国内裸网直连 3（baidu/bing/yandex）+ 国外 3（brave/duckduckgo/yahoo）。
+# baidu 排首位：国内直连、独立索引（百度自家索引，非 bing/google 代理），实测无反爬。
+# bing 走 cn.bing.com，同样无需 VPN；yandex 国内可达（速度看网络）。
+# 共识家族：ddg/yahoo 与 bing 同源（b-bing 家族 3 席），brave/baidu/yandex 各自独立
+# —— 池子 6 引擎 / 4 家族，"x of 4" 是共识上限。
+# 不在默认池（显式 engines=[...] 才跑）：baidu_baike（百科条目，知识库覆盖窄）、
+# wikipedia/grokipedia（JSON 知识库）、sogou_weixin（微信公众号垂直索引）、
+# so360/sogou（国内独立索引）、bing_global（www.bing.com 国际索引，与 cn 版几乎不
+# 重合但国内直连常需代理）、mwmbl（社区小型独立索引，覆盖窄）。
 # NOTE 双份定义：search_metasearch._DEFAULT_BACKENDS 是同一份列表的 backend 名
 # 版本。合成一处需要 search_engines 在模块顶层 import metasearch 链（primp/lxml），
 # 而这里的惰性导入正是为了避免拖重依赖 —— 所以留两份 + 由
 # tests/test_engine_registry.py::test_default_pool_definitions_agree 钉住一致性。
-DEFAULT_ENGINES = ("bing", "duckduckgo", "brave", "yahoo", "yandex", "sogou_weixin")
+DEFAULT_ENGINES = ("baidu", "bing", "yandex", "brave", "duckduckgo", "yahoo")
+
+# 国内裸网可达的默认引擎（其余要 VPN/代理）。只用于 `dhole -v` 那行说明与文档措辞 ——
+# 网络可达性是环境问题（实测 brave 有时直连也通），所以别把它当抓取策略用。
+_CN_DIRECT = frozenset({"baidu", "bing", "yandex"})
 
 # Index family per backend (by the underlying index/provider, for consensus).
 # A URL returned by duckduckgo AND yahoo is ONE family (both Bing's index);
 # returned by duckduckgo AND brave is TWO families = a stronger authority signal.
 _INDEX_FAMILY = {
     "duckduckgo": "bing", "yahoo": "bing", "bing": "bing",
+    # bing_global 是 bing 的国际索引：同一家族的第二个入口。家族按**底层索引**归，
+    # 不按入口归 —— 与 bing 同源的 URL 同时出现在两边时必须算一个家族。
+    "bing_global": "bing",
     "brave": "brave", "grokipedia": "grokipedia", "wikipedia": "wikipedia",
-    "yandex": "yandex", "sogou_weixin": "sogou_weixin",
+    "mwmbl": "mwmbl",
+    "yandex": "yandex",
+    # 搜狗两家同一个家族：sogou_weixin（公众号垂直）与 sogou（通用网页）都是搜狗的
+    # 索引，同一 URL 同时出现在两边时只算一个家族 —— 家族标错只允许往"少报共识"
+    # 的方向错，不许虚报。
+    "sogou_weixin": "sogou", "sogou": "sogou",
+    "baidu": "baidu", "baidu_baike": "baidu_baike", "so360": "so360",
 }
 
 # 垂直索引：只覆盖某一类内容（sogou_weixin = 微信公众号文章），不是通用网络索引。

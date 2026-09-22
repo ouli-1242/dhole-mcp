@@ -31,6 +31,27 @@ class TestParseFileBasic:
         finally:
             os.unlink(path)
 
+    def test_plain_text_rejection_points_at_the_right_tool(self):
+        """不支持纯文本是**有意的**，但报错不能只列支持集。
+
+        实测场景：agent 手里是 /path/notes.txt。若报错只说「支持的扩展名是
+        .csv/.docx/...」，它读到的意思是「这个文件读不了」——而正确做法是
+        用它自己的文件读取工具直读。所以每一种拒绝路径都必须带上这句指路，
+        `.txt` 只是其中最常撞到的一次。
+        """
+        for suffix in (".txt", ".md", ".log", ".py"):
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+                f.write(b"hello")
+                path = f.name
+            try:
+                content, error = parse_file(path)
+            finally:
+                os.unlink(path)
+            assert content == ""
+            assert "Unsupported" in error and suffix in error
+            assert "needs no conversion" in error, f"{suffix} 的报错缺少「直读」指引"
+            assert "your own file tool" in error, f"{suffix} 的报错没说是谁去读"
+
     def test_pdf_with_text_is_parsed(self):
         """本地 PDF 走 smart_fetch 用的同一个提取器，不再是「给个提示」。"""
         path = os.path.join(os.path.dirname(__file__), "background_checks.pdf")
@@ -160,6 +181,7 @@ class TestSupportedExtensions:
     def test_expected_extensions(self):
         assert ".html" in SUPPORTED_EXTENSIONS
         assert ".htm" in SUPPORTED_EXTENSIONS
+        assert ".xhtml" in SUPPORTED_EXTENSIONS
         assert ".docx" in SUPPORTED_EXTENSIONS
         assert ".xlsx" in SUPPORTED_EXTENSIONS
         assert ".csv" in SUPPORTED_EXTENSIONS

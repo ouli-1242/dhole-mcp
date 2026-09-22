@@ -1164,9 +1164,22 @@ class TestQueryMapNamesAreReal:
 
     def test_sogou_weixin_keeps_the_original_query(self):
         """展开词只有两串英文（paper arxiv... / specifications...），对几乎全中文的
-        公众号索引只有反作用 —— 它必须留在核心集合里拿原始 query。"""
+        公众号索引只有反作用 —— 它必须留在核心集合里拿原始 query。
+
+        sogou_weixin 自 15.0 起不在默认池（垂直索引，opt-in），所以这里显式把它
+        加回列表：钉的是它的分类，不是它在池里。
+        """
         intent = search._detect_intent("transformer attention mechanism research")
         q = "transformer attention mechanism research"
-        qm = search._generate_query_map(q, intent, list(se.DEFAULT_ENGINES))
+        qm = search._generate_query_map(q, intent, [*se.DEFAULT_ENGINES, "sogou_weixin"])
         assert qm, "research 意图应当展开（否则这条测试什么也没测到）"
         assert qm["sogou_weixin"] == q
+
+    def test_baidu_engines_keep_the_original_query(self):
+        """baidu 是中文索引占优；baidu_baike 拿 query 当条目名查（/item/{query}），
+        追加英文展开词等于查一个不存在的条目名。"""
+        intent = search._detect_intent("transformer attention mechanism research")
+        q = "transformer attention mechanism research"
+        qm = search._generate_query_map(q, intent, ["baidu", "baidu_baike", "yandex"])
+        assert qm and qm["yandex"] != q, "对照组：yandex 才是被改写的那一个"
+        assert qm["baidu"] == q and qm["baidu_baike"] == q

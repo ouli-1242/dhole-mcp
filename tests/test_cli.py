@@ -59,6 +59,38 @@ class TestCLIStructure:
         assert "CLI_IMPORT_OK" in result.stdout
 
 
+class TestSearchPoolRow:
+    """`dhole -v` 的 search pool 行曾经是写死的字面量，15.0 换引擎池时漏改，面板里
+    报的还是旧池（bing,duckduckgo,…,sogou_weixin）。现在从 DEFAULT_ENGINES 推导，
+    这条钉住它不许再漂 —— 与 instructions 那条 `searches N engines` 同一类守卫。
+    """
+
+    @staticmethod
+    def _pool_row(monkeypatch, env_value: str | None) -> str:
+        from dhole_mcp import updater
+
+        if env_value is None:
+            monkeypatch.delenv("DHOLE_DEFAULT_ENGINES", raising=False)
+        else:
+            monkeypatch.setenv("DHOLE_DEFAULT_ENGINES", env_value)
+        rows = {label: state for label, state, _ok in updater.capabilities()}
+        return rows["search pool"]
+
+    def test_row_lists_the_real_pool_and_nothing_else(self, monkeypatch):
+        from dhole_mcp.search_engines import DEFAULT_ENGINES
+
+        row = self._pool_row(monkeypatch, None)
+        for eng in DEFAULT_ENGINES:
+            assert eng in row, f"{eng} 不在 search pool 行里: {row}"
+        # 不在池里的名字一个都不许出现（旧池的 sogou_weixin 就是这么漏进来的）
+        for gone in ("sogou_weixin", "wikipedia", "grokipedia", "baidu_baike"):
+            assert gone not in row, f"{gone} 已不在默认池，却还印在: {row}"
+
+    def test_env_override_still_wins(self, monkeypatch):
+        row = self._pool_row(monkeypatch, "bing,yandex")
+        assert row == "bing,yandex"
+
+
 # ─── Repair script ─────────────────────────────────────────────────
 
 class TestRepairScript:

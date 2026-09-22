@@ -1,11 +1,12 @@
 """Local file parsing for Dhole MCP.
 
-Converts local files (.html, .docx, .xlsx, .csv, .pdf) to Markdown so agents
-can read documents without a web fetch. Part of the [all] extra (python-docx,
-openpyxl). Graceful degradation: if deps are missing, returns a clear error.
+Converts local files (.html, .htm, .xhtml, .docx, .xlsx, .csv, .pdf) to Markdown
+so agents can read documents without a web fetch. Part of the [all] extra
+(python-docx, openpyxl). Graceful degradation: if deps are missing, returns a
+clear error.
 
 Supported formats:
-- .html / .htm  → trafilatura + markdownify (reuses existing extraction)
+- .html / .htm / .xhtml → trafilatura + markdownify (reuses existing extraction)
 - .docx         → python-docx: headings, paragraphs, tables → Markdown
 - .xlsx         → openpyxl: sheets → Markdown tables
 - .csv          → stdlib csv: → Markdown table
@@ -70,9 +71,15 @@ def parse_file_detailed(file_path: str) -> tuple[str, str, dict]:
 
     ext = os.path.splitext(file_path)[1].lower()
     if ext not in SUPPORTED_EXTENSIONS:
+        # 纯文本是唯一「不该来这里」的一类：它不需要转换，agent 自己就能读。
+        # 报错只列支持集的话，agent 会以为这条路走不通而放弃读文件；所以点名
+        # 下一步。刻意不维护「哪些扩展名算纯文本」的清单 —— 任何清单都会漏，
+        # 而漏掉的正是最需要这句话的那次。
         return "", (
             f"Unsupported file type '{ext}'. Supported: "
-            f"{', '.join(sorted(SUPPORTED_EXTENSIONS))}"
+            f"{', '.join(sorted(SUPPORTED_EXTENSIONS))}. "
+            f"Plain text (.txt/.md/.log/source/config/data) needs no conversion - "
+            f"read it directly with your own file tool instead of parse."
         ), {}
 
     try:

@@ -1,0 +1,11 @@
+{
+  "engine": "baidu",
+  "captured_at": "2026-09-22",
+  "captured_from_url": "https://www.baidu.com/s?wd=Rust+async+runtime",
+  "query": "Rust async runtime",
+  "sha256": "3d8c09a712e88a1a",
+  "item_nodes": 6,
+  "usable": 6,
+  "note": "真页面裁剪件：百度 B 版面（div.c-result，无 mu 属性），只留 6 个有机结果容器",
+  "scrubbed": "剥掉埋点/脚本/样式；真链保留在 data-log 的 mu 字段（解析契约就取它）"
+}

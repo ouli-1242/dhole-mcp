@@ -1,8 +1,15 @@
 """Independently measure the MCP wire payload from the SOURCE, without importing it.
 
-Why this exists: the README publishes a token table (v14.7: instructions 339 /
-tools/list 2,831 / total 3,170, cl100k_base) that drifts whenever a description or
-schema changes, and chars are the comparable half.
+Why this exists: the wire payload size is published (CHANGELOG 15.0: instructions
+339 / tools/list 2,911 / connect 3,250 cl100k_base; README keeps the one-line
+summary) and drifts whenever a description or schema changes, and chars are the
+comparable half.
+The published token counts use a specific rendering - reproduce them exactly as:
+per tool, ``len(tiktoken.get_encoding("cl100k_base").encode(json.dumps(tool)))``
+with **json.dumps defaults** (separators ", "/": ", ensure_ascii=True), summed;
+instructions counted once the same way. Compact / indent=2 renderings give
+different numbers (2,561 / 3,266 for the same payload), so an unstated rendering
+is not reproducible.
 There are two independent ways to get the real numbers:
 
   1. bind to the server over stdio and read the raw `initialize` / `tools/list`

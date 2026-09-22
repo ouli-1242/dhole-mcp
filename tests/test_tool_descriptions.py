@@ -101,6 +101,35 @@ def test_parse_advertises_local_pdf(tools):
     assert ".pdf" in props["file_path"]["description"]
 
 
+def _extensions_mentioned(text: str) -> set[str]:
+    """从描述里取出被提到的扩展名。
+
+    不能用 `".htm" in text` —— `.htm` 是 `.html` 的子串，只写 `.html` 的描述
+    会被判成「提过 .htm」（`.xhtml` 同理在放宽的匹配下会互相冒充）。按 token
+    切出来比较，才不会被前缀吞掉。
+    """
+    return set(re.findall(r"\.[a-z0-9]{1,8}", text))
+
+
+def test_parse_advertises_every_supported_extension(tools):
+    """扩展名清单在 parse.py 与描述里各写一份 —— 又一处「同一份名单多处定义」。
+
+    实测漂移：`SUPPORTED_EXTENSIONS` 含 `.htm`/`.xhtml`，工具描述只写到 `.html`，
+    file_path 的说明连 `.htm` 都没有。用户手里是 `.xhtml` 文件时会以为 parse 读不了。
+    守卫按**代码里的集合**反查描述，而不是比对两份人手写的清单。
+    """
+    from dhole_mcp.parse import SUPPORTED_EXTENSIONS
+
+    # 机制自检：`.html` 不该顶替 `.htm`（子串匹配在这里会静默失效）
+    assert _extensions_mentioned("only .html here") == {".html"}
+
+    desc = _desc(tools, "parse")
+    prop = tools["parse"]["inputSchema"]["properties"]["file_path"]["description"]
+    for where, text in (("描述", desc), ("file_path 说明", prop)):
+        missing = sorted(SUPPORTED_EXTENSIONS - _extensions_mentioned(text))
+        assert not missing, f"parse 的{where}未列出支持的扩展名: {missing}"
+
+
 def test_no_description_recommends_the_file_scheme(tools):
     """file:// 在 security._BLOCKED_SCHEMES 里，任何把 agent 往那儿引的措辞都是 bug。"""
     offenders = [name for name, t in tools.items() if "file://" in t["description"]]
@@ -174,7 +203,13 @@ CHAR_BUDGET = {
     "screenshot": 880,
     "feed_fetch": 870,
     "resolve_url": 590,
-    "parse": 700,
+    # 15.0: 700 -> 960. parse gained the `cwd` arg (a schema property plus the
+    # resolution-order sentence). It is the only channel a caller can use without
+    # host support - roots is deprecated in the SDK (SEP-2577) and DHOLE_WORKDIR
+    # needs host config - so the sentence stays, and the older text was actively
+    # misleading: "resolves against cwd" meant the *server process* cwd, i.e. the
+    # host's install directory. Measured 874 chars, ~10% headroom kept.
+    "parse": 960,
     # 14.6: 550 -> 860. cache_clear gained the engine_state lever (reset engine
     # cooldowns / yield) plus its "when to use it" line. Without a tool-visible
     # reset, a user whose network changed had only "delete files under ~/.dhole

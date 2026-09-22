@@ -1,0 +1,11 @@
+{
+  "engine": "baidu_baike",
+  "captured_at": "2026-09-22",
+  "captured_from_url": "https://baike.baidu.com/item/人工智能",
+  "query": "人工智能",
+  "sha256": "bfa802e5dbe295da",
+  "item_nodes": 1,
+  "usable": 1,
+  "note": "真页面裁剪件：只留 h1 标题 + 首段 lemmaSummary 摘要",
+  "scrubbed": "无会话参数；canonical 是条目本身的规范 URL"
+}

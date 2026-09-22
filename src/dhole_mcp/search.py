@@ -1,7 +1,8 @@
 """Dhole local web search (v7 flagship: keyless, no-account, fully local).
 
-Scrapes public search engines (default pool: bing, duckduckgo, brave, yahoo,
-yandex, sogou_weixin; opt-in: wikipedia, grokipedia) via the dhole-native
+Scrapes public search engines (default pool: baidu, bing, yandex, brave,
+duckduckgo, yahoo; opt-in: baidu_baike, bing_global, mwmbl, so360, sogou,
+sogou_weixin, wikipedia, grokipedia) via the dhole-native
 engine layer in search_engines.py - no third-party API, no key, no
 account. Results are merged across engines, deduped by normalized URL, and
 ranked. Merging INDEPENDENT indexes gives a free authority signal: a URL
@@ -223,7 +224,7 @@ class SearchResult(BaseModel):
     title: str = Field(description="Result title")
     url: str = Field(description="Result URL")
     snippet: str = Field(default="", description="Result snippet from the engine")
-    source: str = Field(default="", description="Backend(s) that returned this result (bing/duckduckgo/brave/yahoo/yandex/sogou_weixin/wikipedia/grokipedia). Multiple = cross-backend consensus. sogou_weixin hits are weixin.sogou.com /link wrappers, not canonical article URLs.")
+    source: str = Field(default="", description="Backend(s) that returned this result (baidu/bing/bing_global/duckduckgo/brave/yahoo/yandex/mwmbl/wikipedia/grokipedia). Multiple = cross-backend consensus. sogou_weixin hits are weixin.sogou.com /link wrappers, not canonical article URLs.")
     position: int = Field(default=0, description="1-indexed rank after merge + rerank")
     relevance_score: float = Field(default=0.0, description="0.0-1.0 relevance to the query (neural cross-encoder score in neural mode, min-max normalized), boosted by cross-backend consensus. 1.0 = most relevant in this set.")
     fetch_relevance: str = Field(default="", description="high|med|low - relative relevance hint. smart_fetch what matches your need; the tiers rank results but a lower tier can be the right one - use your judgment.")
@@ -968,7 +969,8 @@ def _expand_query(query: str, intent: str) -> str:
     return query + " " + " ".join(new_terms)
 
 
-_CORE_QUERY_ENGINES = frozenset({"bing", "duckduckgo", "brave", "yahoo", "sogou_weixin"})
+_CORE_QUERY_ENGINES = frozenset({"baidu", "bing", "duckduckgo", "brave", "yahoo",
+                                 "baidu_baike", "sogou_weixin", "sogou", "so360"})
 """这些引擎拿**原始** query，其余拿展开后的变体。
 
 原先这个集合写的是 {duckduckgo, brave, mojeek, yahoo}：mojeek 从来没在本项目里存在过
@@ -980,6 +982,10 @@ sogou_weixin 也在核心集合里：_INTENT_EXPANSIONS 只有两串**英文**�
 benchmark results" / " specifications table data parameters"），而它的索引几乎全是
 中文公众号文章 —— 把英文术语追加进去只会让它更搜不到东西。
 
+baidu / baidu_baike 同理：baidu 是中文索引占优，baidu_baike 更极端 —— query 直接当
+条目名去查（/item/{query}），追加英文展开词等于换了个不存在的条目名，只会空。
+so360 / sogou（都是中文索引，opt-in）同理。
+
 注意一个已知局限（不在本次修）：不同引擎被问不同 query 时，URL 重合度里混进了"跨
 query 变体也重合"这一层（见 _expand_query 上方注释，那是有意设计的好处，但也确实如
 此）。engines_consensus 的分母已经如实反映池子健康度，这个语义残留留在此处说明。
@@ -989,10 +995,10 @@ query 变体也重合"这一层（见 _expand_query 上方注释，那是有意�
 def _generate_query_map(query: str, intent: str, engines: list[str] | None) -> dict[str, str]:
     """Assign per-engine query variants for multi-query fan-out.
 
-    Core engines (bing, duckduckgo, brave, yahoo, sogou_weixin) get the original
-    query; diversity engines (yandex, and the opt-in wikipedia/grokipedia) get
-    the expanded query. Returns {} if no expansion applies (all engines get the
-    same query = backward-compatible).
+    Core engines (baidu, bing, duckduckgo, brave, yahoo, baidu_baike, sogou_weixin,
+    sogou, so360) get the original query; diversity engines (yandex, bing_global,
+    mwmbl, and the opt-in wikipedia/grokipedia) get the expanded query. Returns {}
+    if no expansion applies (all engines get the same query = backward-compatible).
     """
     expanded = _expand_query(query, intent)
     if expanded == query:
@@ -1052,8 +1058,9 @@ async def smart_search(
     freshness: Optional[str] = None,
 ) -> SearchResponseModel:
     """Local keyless web search (no API key, no account). The default pool
-    (bing, duckduckgo, brave, yahoo, yandex, sogou_weixin - all HTTP, no browser;
-    opt-in: wikipedia, grokipedia) is scraped in parallel, merged, deduped,
+    (baidu, bing, yandex, brave, duckduckgo, yahoo - all HTTP, no browser;
+    opt-in: baidu_baike, bing_global, mwmbl, so360, sogou, sogou_weixin,
+    wikipedia, grokipedia) is scraped in parallel, merged, deduped,
     and ranked. A URL returned by several **independent index families** is a
     consensus hit (engines_consensus field) and gets a ranking boost - a free
     authority signal. Note the pool has 6 engines but only 4 families
@@ -1299,12 +1306,20 @@ async def smart_search(
                         "being wrong - no second round was issued. Run `dhole -v` for "
                         "per-engine yield, or rephrase with different terms.")
                 elif site:
-                    error = (
-                        f"No results for this query inside site={site}. The site filter was "
-                        "kept on the rewritten query too, so these are genuinely absent rather "
-                        "than off-domain. Try the query without site=, or check the domain is "
-                        "indexed (a landing page alone often is not)."
-                    )
+                    if blocked_any:
+                        names = ", ".join(r.name for r in reports if r.blocked)
+                        error = (
+                            f"No results for this query inside site={site} - but {names} was "
+                            "blocked/CAPTCHA'd this round, so this is not proof the query is "
+                            "absent. Retry in a moment, or drop site= and filter the results "
+                            "yourself.")
+                    else:
+                        error = (
+                            f"No results for this query inside site={site}. The site filter was "
+                            "kept on the rewritten query too, so these are genuinely absent rather "
+                            "than off-domain. Try the query without site=, or check the domain is "
+                            "indexed (a landing page alone often is not)."
+                        )
                 else:
                     error = (
                         "No results from any engine. " +

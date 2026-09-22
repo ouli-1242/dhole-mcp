@@ -529,6 +529,25 @@ def _is_cloudflare_from_response(result: ResponseModel) -> bool:
     return any(signal in content_str for signal in all_signals)
 
 
+def _never_escalate(result: ResponseModel, url: str) -> bool:
+    """True when a browser render cannot change the outcome, so don't spend one.
+
+    .pdf URLs: the body is binary - either %PDF or a login/error redirect.
+    image/* responses: same reasoning - a stealthy render of a PNG adds no text
+    (patchright gets a synthetic HTML document, not the bytes), and the OCR
+    verdict from _translate_response is final. This guard is load bearing: the
+    image branches return content=[] on a 200 when OCR is missing, failed or
+    found nothing, and an empty 200 body is exactly the shape _is_js_shell()
+    escalates on - 30-40s for the same picture.
+
+    Deliberately NOT applied to the archive fallback: a gone image URL should
+    still get a Wayback snapshot, so this only gates the browser tier.
+    """
+    if url.lower().split("?")[0].endswith(".pdf"):
+        return True
+    return (result.content_type or "").lower().startswith("image/")
+
+
 def _is_js_shell(result: ResponseModel) -> bool:
     """Check if a response contains only a JS-only placeholder, not real content.
 
@@ -819,6 +838,14 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         next_action = "geo redirect: try a different regional URL or a proxy"
     elif err.startswith("scanned_pdf"):
         next_action = "scanned/image-only PDF - install dhole-mcp[all] to auto-OCR, or use a vision-capable tool / another source"
+    elif err.startswith("image_ocr"):
+        # The image branches return content=[] (the placeholder text they used to
+        # carry was an error message in the page body), so the recovery step has
+        # to live here. Gated on the error, not on page_type=="image": a
+        # successfully OCR'd image is also page_type image, and telling its reader
+        # "text cannot be read" would be false.
+        next_action = ("no text could be read from this image - "
+                       "use a vision-capable model or the screenshot tool, or switch source")
     elif (not result.content_ok) and result.quality_score > 0 and result.quality_score < 0.7 and not err:
         next_action = "low-quality PDF extraction (CID font corruption / garbled text) - install dhole-mcp[all] for auto-OCR, or use a vision tool / screenshot on the flagged pages"
     elif err.startswith("encrypted_pdf"):
@@ -852,8 +879,8 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         # up the network hints the status==0 branch below would otherwise give.
         next_action = (
             "See the error field for the paths that were tried. Pass an absolute "
-            "path, or set DHOLE_WORKDIR to the directory relative paths should "
-            "resolve against."
+            "path, or pass cwd=<your working directory> so relative paths resolve "
+            "against it (DHOLE_WORKDIR does the same for every call)."
         )
     elif err.startswith("timeout: the ") and result.next_action:
         # The budget result already names which tier ran out and what to change.
@@ -1420,7 +1447,7 @@ def _translate_response(
         else:
             err = ("not_a_pdf: URL ends in .pdf but the response is HTML, not a PDF "
                    "(possibly a redirect/error page). Try the direct PDF link.")
-        return ResponseModel(status=getattr(page, 'status', 200), content=[f"[{err}]"],
+        return ResponseModel(status=getattr(page, 'status', 200), content=[],
                              url=page.url, fetcher_used=fetcher_used,
                              duration_ms=duration_ms, content_type=raw_ct,
                              total_size_bytes=total_size, extracted_type="markdown",
@@ -1429,6 +1456,12 @@ def _translate_response(
     # Image-only page (content-type image/*): OCR it to text if the OCR extras
     # are installed. Many pages are just a PNG/JPEG (screenshots, scans, memes,
     # image-of-text); without OCR the agent gets nothing useful.
+    #
+    # All three failure branches below return content=[] with the reason in
+    # `error` (14.6 BUG-5: a failed fetch must not put error/placeholder text in
+    # content - an agent reading content[0] takes it for the page's body and
+    # counts its length as page size). _never_escalate() keeps the empty content
+    # from looking like a JS shell and buying a wasted browser run.
     is_image = raw_ct.startswith('image/') and bool(raw_body)
     if is_image and raw_body:
         try:
@@ -1444,22 +1477,25 @@ def _translate_response(
                     )
                 return ResponseModel(
                     status=page.status,
-                    content=["[Image page - OCR detected no extractable text.]"],
+                    content=[],
                     url=page.url, fetcher_used=fetcher_used, duration_ms=duration_ms,
                     content_type=raw_ct, total_size_bytes=total_size,
-                    extracted_type="text", error="image_ocr_empty",
+                    extracted_type="text",
+                    error="image_ocr_empty: OCR ran but found no text in this image",
                 )
             return ResponseModel(
                 status=page.status,
-                content=["[Image page (content-type image/*). Install dhole-mcp[all] for OCR text extraction.]"],
+                content=[],
                 url=page.url, fetcher_used=fetcher_used, duration_ms=duration_ms,
                 content_type=raw_ct, total_size_bytes=total_size,
-                extracted_type="text", error="image_ocr_unavailable",
+                extracted_type="text",
+                error=("image_ocr_unavailable: OCR extras not installed - install "
+                       "dhole-mcp[all] to read text from images"),
             )
         except Exception as e:
             return ResponseModel(
                 status=page.status,
-                content=[f"[Image page - OCR failed: {str(e)[:160]}]"],
+                content=[],
                 url=page.url, fetcher_used=fetcher_used, duration_ms=duration_ms,
                 content_type=raw_ct, total_size_bytes=total_size,
                 extracted_type="text", error=f"image_ocr_failed: {str(e)[:160]}",
@@ -1867,6 +1903,27 @@ _SS_OPTIONS = frozenset({
     "site", "exclude_sites", "location", "language", "region", "page",
     "freshness", "fetch_content", "fetch_schema",
 })
+# Every top-level argument name a tool accepts. Params that live in the options
+# bag are listed here too (and promoted by _promote_options): the descriptions
+# name them without saying "in options" - smart_crawl says "Caps: max_pages(10),
+# max_depth(2)..." - and a key the dispatcher never read used to be dropped on
+# the floor, so a top-level max_pages=3 crawled 10 pages with no warning at all.
+_TOP_LEVEL_ARGS: dict[str, frozenset] = {
+    "smart_fetch": frozenset({
+        "url", "urls", "extraction_type", "css_selector", "max_content_chars",
+        "timeout", "pages", "password", "schema", "cache_ttl", "force_fetcher",
+        "offset", "focus", "actions", "options",
+    }) | _SF_OPTIONS_ALLOWED,
+    "smart_crawl": frozenset({
+        "url", "discover_only", "focus", "crawl_urls", "search", "options",
+    }) | _SC_OPTIONS,
+    "screenshot": frozenset({"url", "session_id", "options"}) | _SHOT_OPTIONS,
+    "smart_search": frozenset({"query", "options"}) | _SS_OPTIONS,
+    "cache_clear": frozenset({"all", "engine_state"}),
+    "parse": frozenset({"file_path", "cwd"}),
+    "feed_fetch": frozenset({"urls", "max_items", "timeout"}),
+    "resolve_url": frozenset({"url", "timeout"}),
+}
 
 
 def _coerce_options(options) -> dict:
@@ -1920,6 +1977,36 @@ def _strict_options(options: dict, allowed: frozenset, forwarded: frozenset, too
             f"Supported keys: {sorted(allowed)}"
         )
     return {k: v for k, v in options.items() if k in forwarded}
+
+
+def _reject_unknown_args(tool: str, args: dict) -> None:
+    """Raise when a tool is called with a top-level key it does not accept.
+
+    Same principle as _strict_options, one level up: a key that is dropped
+    silently lets the caller believe a cap or filter applied when it did not.
+    None-valued keys are ignored - clients that echo every schema property as
+    null mean "not set", not "unsupported".
+    """
+    allowed = _TOP_LEVEL_ARGS[tool]
+    unknown = sorted(k for k, v in args.items() if v is not None and k not in allowed)
+    if unknown:
+        raise ValueError(
+            f"Unsupported argument(s) for {tool}: {unknown}. "
+            f"Supported: {sorted(allowed)}"
+        )
+
+
+def _promote_options(args: dict, options: dict, forwarded: frozenset) -> dict:
+    """Merge top-level copies of options-bag keys into the bag (top-level wins).
+
+    Same param, same fetch, whichever way it arrives; the options bag stays the
+    documented home. Mirrors the explicit promotions the branches already do.
+    """
+    merged = dict(options)
+    for k in forwarded:
+        if args.get(k) is not None:
+            merged[k] = args[k]
+    return merged
 
 
 # ─── extraction schema normalization ───────────────────────────────
@@ -1983,21 +2070,29 @@ _PARSE_CONTENT_TYPES = {
 }
 
 
-def _relative_path_roots() -> list[str]:
-    """Directories a relative ``file_path`` may resolve against, in priority order."""
-    roots = [os.getcwd()]
+def _relative_path_roots(cwd: str | None = None) -> list[str]:
+    """Directories a relative ``file_path`` may resolve against, in priority order.
+
+    Order is by how much the caller controls the answer: the ``cwd`` argument is
+    per-call and host-independent, DHOLE_WORKDIR is one line of host config, and
+    the process cwd — the host's own install directory under an MCP host, which
+    is why relative paths failed in the first place — sits below both.
+    """
+    roots: list[str] = []
+    if cwd and str(cwd).strip():
+        roots.append(os.path.abspath(os.path.expanduser(str(cwd).strip())))
     # DHOLE_WORKDIR is the lever for an MCP host whose cwd is its own install
     # directory (the reason relative paths failed here in the first place).
     env = (os.environ.get("DHOLE_WORKDIR") or "").strip()
     if env:
         roots.append(os.path.expanduser(env))
-    home = os.path.expanduser("~")
-    if home not in roots:
-        roots.append(home)
+    for fallback in (os.getcwd(), os.path.expanduser("~")):
+        if fallback not in roots:
+            roots.append(fallback)
     return roots
 
 
-def _resolve_local_path(file_path: str) -> tuple[str, list[str]]:
+def _resolve_local_path(file_path: str, cwd: str | None = None) -> tuple[str, list[str]]:
     """Find the file the caller meant. Returns (existing absolute path, candidates tried).
 
     Relative paths used to resolve against the SERVER PROCESS cwd, which under an
@@ -2013,7 +2108,7 @@ def _resolve_local_path(file_path: str) -> tuple[str, list[str]]:
     if os.path.isabs(expanded):
         return (expanded if os.path.isfile(expanded) else ""), [expanded]
     candidates: list[str] = []
-    for root in _relative_path_roots():
+    for root in _relative_path_roots(cwd):
         cand = os.path.normpath(os.path.join(root, expanded))
         if cand not in candidates:
             candidates.append(cand)
@@ -3642,7 +3737,7 @@ class MasterFetchServer:
         should_escalate = (
             (result.status < 400 and _is_js_shell(result))
             or result.status in (403, 429, 500, 502, 503)
-        )
+        ) and not _never_escalate(result, url)
         if not should_escalate:
             # Archive.org fallback for hard-blocks: the page is gone or legally
             # removed, but the Wayback Machine may have a snapshot. The tuple is
@@ -3860,9 +3955,10 @@ class MasterFetchServer:
 
     async def parse(
         self,
-        file_path: Annotated[str, Field(description="Absolute or relative path to a local file. Supported: .html, .docx, .xlsx, .csv, .pdf")],
+        file_path: Annotated[str, Field(description="Absolute or relative path to a local file. Supported: .html, .htm, .xhtml, .docx, .xlsx, .csv, .pdf")],
+        cwd: Annotated[Optional[str], Field(description="Base directory for a relative file_path (e.g. your working directory). Ignored for absolute paths.")] = None,
     ) -> ResponseModel:
-        """Parse a local file to Markdown. Supports .html, .docx, .xlsx, .csv, .pdf.
+        """Parse a local file to Markdown. Supports .html, .htm, .xhtml, .docx, .xlsx, .csv, .pdf.
 
         PDFs go through the same extractor smart_fetch uses for PDF URLs, so a
         local file gets identical handling (OCR fallback, quality signals).
@@ -3874,7 +3970,7 @@ class MasterFetchServer:
         from dhole_mcp.parse import parse_file_detailed
 
         t0 = now()
-        target, candidates = _resolve_local_path(file_path)
+        target, candidates = _resolve_local_path(file_path, cwd)
 
         # Security: validate file path to prevent path traversal attacks.
         # Resolve symlinks and block access to sensitive system directories.
@@ -3894,8 +3990,9 @@ class MasterFetchServer:
                 url=f"file://{file_path}", status=0, content=[],
                 fetcher_used="parse",
                 error=("File not found: " + ", ".join(candidates)
-                       + ". Pass an absolute path, or set DHOLE_WORKDIR to the "
-                         "directory relative paths should resolve against."),
+                       + ". Pass an absolute path, or pass cwd=<working directory> "
+                         "so relative paths resolve against it (DHOLE_WORKDIR does "
+                         "the same for every call)."),
             ))
 
         content, error, extras = await asyncio_to_thread(parse_file_detailed, target)
@@ -4032,9 +4129,10 @@ class MasterFetchServer:
     ) -> SearchResponseModel:
         """Local keyless web search (no API key, no account, no third-party service).
 
-        Runs keyless backends in parallel (8 registered; default pool:
-        bing, duckduckgo, brave, yahoo, yandex, sogou_weixin - engines= to choose,
-        opt-in: wikipedia, grokipedia), merges + dedups + ranks by neural
+        Runs keyless backends in parallel (14 registered; default pool:
+        baidu, bing, yandex, brave, duckduckgo, yahoo - engines= to choose,
+        opt-in: baidu_baike, bing_global, mwmbl, so360, sogou, sogou_weixin,
+        wikipedia, grokipedia), merges + dedups + ranks by neural
         relevance + cross-backend
         consensus (a URL returned by several independent indexes is an authority
         signal). Returns URLs + ranking, not page content - smart_fetch the
@@ -4220,12 +4318,12 @@ class MasterFetchServer:
         },
         {
             "name": "smart_search",
-            "description": "Keyless multi-engine web search (default pool: bing,duckduckgo,brave,yahoo,yandex,sogou_weixin; opt-in wikipedia/grokipedia). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- Pass fetch_content=true to have this call auto-fetch the top 3 with focus=query; otherwise smart_fetch the high fetch_relevance hits with focus='your question', or urls=[...] to bulk-fetch. Don't search for a URL you already have - smart_fetch it directly.\n- FILTERS (in options): site=, exclude_sites=[], freshness=day|week|month|year (use week or month for recent info), page=, location/language/region, engines=[].\n- READ THE RESULT FIELDS: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index families, not raw hits, so a low value can mean a degraded pool - check consensus_basis. sogou_weixin gives wrapper links, not canonical URLs.",
+            "description": "Keyless multi-engine web search (default pool: baidu,bing,yandex,brave,duckduckgo,yahoo; opt-in baidu_baike,bing_global,mwmbl,wikipedia,grokipedia). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- Pass fetch_content=true to have this call auto-fetch the top 3 with focus=query; otherwise smart_fetch the high fetch_relevance hits with focus='your question', or urls=[...] to bulk-fetch. Don't search for a URL you already have - smart_fetch it directly.\n- FILTERS (in options): site=, exclude_sites=[], freshness=day|week|month|year (use week or month for recent info), page=, location/language/region, engines=[].\n- READ THE RESULT FIELDS: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index families, not raw hits, so a low value can mean a degraded pool - check consensus_basis.",
             "inputSchema": {
                 "type": "object", "required": ["query"],
                 "properties": {
                     "query": {"type": "string", "description": "Search query"},
-                    "options": {"type": "object", "description": "max_results (1-50,6), cache_ttl (300), mode (auto|neural|find_similar; find_similar needs url=), engines (override the pool, max 9; +'wikipedia'/'grokipedia'), site (domain restrict), exclude_sites (list), location, language (2-letter), region, page (0-10), freshness (day|week|month|year), url (find_similar), fetch_content (bool,false: auto-fetch the top 3 with focus=query).", "additionalProperties": True},
+                    "options": {"type": "object", "description": "max_results (1-50,6), cache_ttl (300), mode (auto|neural|find_similar; find_similar needs url=), engines (override the pool, max 9; opt-in: baidu_baike,bing_global,mwmbl,so360,sogou,sogou_weixin,wikipedia,grokipedia), site (domain restrict), exclude_sites (list), location, language (2-letter), region, page (0-10), freshness (day|week|month|year), url (find_similar), fetch_content (bool,false: auto-fetch the top 3 with focus=query).", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -4244,11 +4342,12 @@ class MasterFetchServer:
         },
         {
             "name": "parse",
-            "description": "Use for LOCAL files the task references: .html/.htm, .docx, .xlsx, .csv, .pdf -> Markdown, no web fetch. A PDF that has a URL is better served by smart_fetch (page ranges, password, table_of_contents).\nRelative paths resolve against cwd/$DHOLE_WORKDIR/home - prefer an absolute path when in doubt.",
+            "description": "Use for LOCAL files the task references: .html/.htm/.xhtml, .docx, .xlsx, .csv, .pdf -> Markdown, no web fetch. A PDF that has a URL is better served by smart_fetch (page ranges, password, table_of_contents).\nRelative paths resolve against the cwd arg, then $DHOLE_WORKDIR, the server process cwd, then home - pass cwd when the host doesn't tell the server the working directory.",
             "inputSchema": {
                 "type": "object", "required": ["file_path"],
                 "properties": {
-                    "file_path": {"type": "string", "description": "Absolute or relative path to a local file. Supported: .html, .docx, .xlsx, .csv, .pdf"},
+                    "file_path": {"type": "string", "description": "Absolute or relative path to a local file. Supported: .html/.htm/.xhtml, .docx, .xlsx, .csv, .pdf"},
+                    "cwd": {"type": "string", "description": "Base directory for a relative file_path (e.g. your working directory). Ignored for absolute paths."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False},
@@ -4419,6 +4518,9 @@ class MasterFetchServer:
         """
         from mcp.types import TextContent
 
+        if name not in _TOP_LEVEL_ARGS:
+            raise ValueError(f"Unknown tool: {name}")
+        _reject_unknown_args(name, args)
         options = _coerce_options(args.get("options"))
 
         if name == "smart_fetch":
@@ -4437,7 +4539,8 @@ class MasterFetchServer:
             # schema is promoted like the others: top-level wins, options bag is
             # accepted as a fallback (some clients only surface the options bag).
             schema = args.get("schema") if args.get("schema") is not None else options.get("schema")
-            kw = _strict_options(options, _SF_OPTIONS_ALLOWED, _SF_OPTIONS_FORWARDED, "smart_fetch")
+            kw = _strict_options(_promote_options(args, options, _SF_OPTIONS_FORWARDED),
+                                 _SF_OPTIONS_ALLOWED, _SF_OPTIONS_FORWARDED, "smart_fetch")
             result = await self.smart_fetch(
                 url=url, urls=urls,
                 extraction_type=args.get("extraction_type", "markdown"),
@@ -4461,7 +4564,8 @@ class MasterFetchServer:
             # lists it, and passing it in options used to be rejected outright).
             search = (args.get("search") if args.get("search") is not None
                       else options.get("search"))
-            kw = _strict_options(options, _SC_OPTIONS, _SC_OPTIONS_FORWARDED, "smart_crawl")
+            kw = _strict_options(_promote_options(args, options, _SC_OPTIONS_FORWARDED),
+                                 _SC_OPTIONS, _SC_OPTIONS_FORWARDED, "smart_crawl")
             result = await self.smart_crawl(
                 url=args["url"], discover_only=args.get("discover_only", False),
                 focus=args.get("focus"), crawl_urls=args.get("crawl_urls"),
@@ -4470,12 +4574,14 @@ class MasterFetchServer:
             return [TextContent(type="text", text=result.model_dump_json())], result.model_dump()
 
         elif name == "screenshot":
-            kw = _strict_options(options, _SHOT_OPTIONS, _SHOT_OPTIONS, "screenshot")
+            kw = _strict_options(_promote_options(args, options, _SHOT_OPTIONS),
+                                 _SHOT_OPTIONS, _SHOT_OPTIONS, "screenshot")
             result = await self.screenshot(url=args["url"], session_id=args.get("session_id"), **kw)
             return result  # already list[ImageContent|TextContent]
 
         elif name == "smart_search":
-            kw = _strict_options(options, _SS_OPTIONS, _SS_OPTIONS, "smart_search")
+            kw = _strict_options(_promote_options(args, options, _SS_OPTIONS),
+                                 _SS_OPTIONS, _SS_OPTIONS, "smart_search")
             result = await self.smart_search(query=args["query"], **kw)
             return [TextContent(type="text", text=result.model_dump_json())], result.model_dump()
 
@@ -4485,7 +4591,7 @@ class MasterFetchServer:
             return [TextContent(type="text", text=result.model_dump_json())], result.model_dump()
 
         elif name == "parse":
-            result = await self.parse(file_path=args["file_path"])
+            result = await self.parse(file_path=args["file_path"], cwd=args.get("cwd"))
             return [TextContent(type="text", text=result.model_dump_json())], result.model_dump()
 
         elif name == "feed_fetch":

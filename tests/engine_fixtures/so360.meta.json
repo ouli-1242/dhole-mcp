@@ -1,0 +1,11 @@
+{
+  "engine": "so360",
+  "captured_at": "2026-09-22",
+  "captured_from_url": "https://www.so.com/s?q=python+asyncio",
+  "query": "python asyncio",
+  "sha256": "ac5d62efd180862f",
+  "item_nodes": 7,
+  "usable": 7,
+  "note": "真页面裁剪件：只留 360 有机结果卡片（li.res-list），真链在 data-mdurl 里",
+  "scrubbed": "剥掉埋点/脚本/样式；真链保留在 data-* 属性（解析契约就取它）"
+}

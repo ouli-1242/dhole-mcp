@@ -14,7 +14,8 @@ from dhole_mcp.server import (
     ResponseModel, MasterFetchServer, _ARCHIVE_FALLBACK_STATUSES,
     _agent_hints, _apply_chunking, _annotate_quality, _with_agent_hints,
     _backfill_article_json, _blocked_path_prefix, _coerce_options,
-    _detect_content_issue, _invalid_request_result, _is_bot_wall,
+    _detect_content_issue, _invalid_request_result, _is_bot_wall, _is_js_shell,
+    _never_escalate,
     _resolve_local_path, _should_try_archive, _strict_options, _translate_response,
     _SF_OPTIONS_ALLOWED, _SF_OPTIONS_FORWARDED,
 )
@@ -53,6 +54,171 @@ class TestFailureContentIsEmpty:
         assert out.total_extracted_chars == 0
         assert out.content_ok is False
 
+    # 15.0 实测（软 404 频率探针顺带挖到）：图片与「.pdf 却回了 HTML」两条分支
+    # 仍在把占位文本写进 content。content_ok 是 false、error 也有说明，但正文里
+    # 不该有错误文本 —— 调用方读 content[0] 就会把 "[Image page - OCR failed: ...]"
+    # 当成页面正文（BUG-5 的同类，遗留在这两条分支）。
+
+    @staticmethod
+    def _image_page(content_type: str = "image/svg+xml", body: bytes = b"<svg/>"):
+        class FakePage:
+            status = 200
+            body = b""
+            encoding = "utf-8"
+            headers = {"content-type": content_type}
+        page = FakePage()
+        page.body = body
+        page.url = "https://cdn.example.com/logo.svg"
+        return page
+
+    def test_image_ocr_failure_leaves_the_body_empty(self, monkeypatch):
+        import dhole_mcp.ocr as ocr
+
+        monkeypatch.setattr(ocr, "ocr_available", lambda: True)
+        monkeypatch.setattr(ocr, "ocr_image_bytes",
+                            lambda b: (_ for _ in ()).throw(ValueError("cannot identify image file")))
+        r = _translate_response(self._image_page(), "markdown", None, False, False, "http", 1)
+        assert r.content == [], "OCR 失败的占位文本又回到正文里了"
+        assert r.content_ok is False
+        assert r.error.startswith("image_ocr_failed")
+        assert "OCR failed" not in " ".join(r.content)
+
+    def test_image_without_ocr_extras_keeps_the_advice_in_the_error(self, monkeypatch):
+        """正文清空后，「装 OCR 依赖」这句指路必须留在 error 里 —— 否则调用方
+        只拿到一个 image_ocr_unavailable 代码，不知道该做什么。"""
+        import dhole_mcp.ocr as ocr
+
+        monkeypatch.setattr(ocr, "ocr_available", lambda: False)
+        r = _translate_response(self._image_page(), "markdown", None, False, False, "http", 1)
+        assert r.content == []
+        assert "image_ocr_unavailable" in r.error
+        assert "dhole-mcp[all]" in r.error
+
+    def test_image_with_no_text_leaves_the_body_empty(self, monkeypatch):
+        import dhole_mcp.ocr as ocr
+
+        monkeypatch.setattr(ocr, "ocr_available", lambda: True)
+        monkeypatch.setattr(ocr, "ocr_image_bytes", lambda b: "")
+        r = _translate_response(self._image_page(), "markdown", None, False, False, "http", 1)
+        assert r.content == []
+        assert r.error.startswith("image_ocr_empty")
+
+    def test_pdf_url_that_returned_html_leaves_the_body_empty(self):
+        """URL 以 .pdf 结尾却回了 HTML（登录/错误页）：那页 HTML 不是正文，也不是
+        一个可以引用的错误说明。"""
+        class FakePage:
+            status = 200
+            encoding = "utf-8"
+            headers = {"content-type": "text/html; charset=utf-8"}
+        page = FakePage()
+        page.body = b"<html><body>Please sign in to download</body></html>"
+        page.url = "https://example.com/paper.pdf"
+        r = _translate_response(page, "markdown", None, False, False, "http", 1)
+        assert r.content == []
+        assert r.error.startswith("auth_required")
+        assert "not_a_pdf" not in " ".join(r.content)
+
+    def test_empty_image_body_is_not_a_js_shell_worth_a_browser(self):
+        """空正文 + 200 正是 _is_js_shell 升级的条件 —— 图片页必须被排除在外，
+        否则 OCR 失败会换来一次 30~40s 的浏览器渲染，结果还是同一张图。"""
+        assert _is_js_shell(_result(status=200, content=[], content_type="image/svg+xml")) is True, \
+            "前提变了：空 200 正文已不再触发升级，这条守卫可以退休了"
+        assert _never_escalate(_result(status=200, content=[], content_type="image/svg+xml"),
+                               "https://cdn.example.com/logo.svg") is True
+
+    @pytest.mark.asyncio
+    async def test_empty_ocr_image_does_not_trigger_a_browser_run(self, monkeypatch):
+        """正文清空后的 200 图片 = 空壳形态，必须挡在升级之前。
+
+        没有这道守卫时这条会红：空正文 + 200 让 _is_js_shell 返回 True，
+        should_escalate 成立，于是 agent 等 30~40s 换来同一张图（还可能是空结果）。
+        """
+        import dhole_mcp.fetcher as fetcher
+
+        async def http_image(*a, **k):
+            return _result(status=200, content=[], content_type="image/png",
+                           fetcher_used="http", total_size_bytes=4096,
+                           error="image_ocr_failed: cannot identify image file")
+
+        async def browser(*a, **k):
+            raise AssertionError("空正文的图片响应不该升级浏览器")
+
+        monkeypatch.setattr(fetcher, "tcp_preflight", lambda url, timeout=2.0: (True, ""))
+        server = MasterFetchServer()
+        server.get = http_image
+        server.stealthy_fetch = browser
+        out = await server._auto_escalate(
+            "https://cdn.example.com/logo.svg", "markdown", None, True, True, 0, 0,
+            True, False, 0, None, 20000, False, False, False, False,
+            None, None, None,
+        )
+        assert out.error.startswith("image_ocr_failed")
+        assert out.fetcher_used == "http", "结果应该仍是 HTTP 层的，说明没走浏览器"
+
+    @pytest.mark.asyncio
+    async def test_gone_image_url_skips_the_browser_but_still_tries_the_archive(self, monkeypatch):
+        """守卫只该挡住浏览器层，不该顺手没收 archive 回退。
+
+        图片分支清空正文后，空正文 + 200 会被 _is_js_shell 判成壳 → 白烧一次浏览器。
+        但如果把守卫写成「早期返回」，404 的图片 URL 就连 Wayback 也不查了 —— 而
+        失效的图片链接正是最需要快照的那种。
+        """
+        import dhole_mcp.fetcher as fetcher
+
+        async def http_404(*a, **k):
+            return _result(status=404, content=[], content_type="image/png",
+                           fetcher_used="http", total_size_bytes=0)
+
+        async def browser(*a, **k):
+            raise AssertionError("图片响应不该升级浏览器")
+
+        asked: list[str] = []
+
+        async def fake_archive(url, *a, **k):
+            asked.append(url)
+            return _result(status=200, content=["snapshot body from 2019"],
+                           content_type="text/html", source="archive")
+
+        monkeypatch.setattr(fetcher, "tcp_preflight", lambda url, timeout=2.0: (True, ""))
+        server = MasterFetchServer()
+        server.get = http_404
+        server.stealthy_fetch = browser
+        monkeypatch.setattr(server, "_fetch_from_archive", fake_archive)
+        out = await server._auto_escalate(
+            "https://cdn.example.com/gone.png", "markdown", None, True, True, 0, 0,
+            True, False, 0, None, 20000, False, False, False, False,
+            None, None, None,
+        )
+        assert asked == ["https://cdn.example.com/gone.png"], "404 的图片 URL 没去查 Wayback"
+        assert "snapshot body" in "\n".join(out.content)
+
+    def test_image_ocr_failure_tells_the_agent_what_to_do_next(self):
+        """正文清空后恢复建议落在 next_action —— 而且只挂在这条错误上。
+
+        OCR 成功的图片同样 page_type="image"：按 page_type 分流会对着一段真读出来的
+        文字说「这图读不出字」。
+        """
+        failed = _with_agent_hints(_result(status=200, content=[], content_type="image/png",
+                                           error="image_ocr_failed: cannot identify image file"))
+        assert failed.content_ok is False
+        assert "vision-capable" in failed.next_action
+
+        ok = _with_agent_hints(_result(status=200, content=["recognized text here"],
+                                       content_type="image/png", page_type="image"))
+        assert ok.content_ok is True
+        assert "vision-capable" not in (ok.next_action or "")
+
+    def test_never_escalate_only_covers_binary_responses(self):
+        assert _never_escalate(_result(content_type="image/png"), "https://x.test/a") is True
+        # .pdf 判定看 URL（体是 HTML 的情况也要拦住），图片判定看 content-type
+        assert _never_escalate(_result(content_type="text/html"),
+                               "https://x.test/paper.pdf?v=2") is True
+        assert _never_escalate(_result(content_type="text/html"),
+                               "https://x.test/page") is False
+        # 扫描件 PDF 不在内：它的正文里带着明确说明（test_pdf_real 钉住了这条有意行为），
+        # 本来就不满足升级条件。
+        assert _never_escalate(_result(content_type="application/pdf"), "https://x.test/scan") is False
+
     @pytest.mark.asyncio
     async def test_all_tiers_failed_keeps_the_advice_out_of_the_body(self, monkeypatch):
         """The both-tiers-failed path used to write a six-line advisory block into
@@ -68,6 +234,19 @@ class TestFailureContentIsEmpty:
 
         monkeypatch.setattr(fetcher, "tcp_preflight", lambda url, timeout=2.0: (True, ""))
         monkeypatch.setattr("dhole_mcp.server._browser_deps_available", lambda: True)
+
+        # archive.org 是这条路径的最后一跳，原来真的打网络：2026-09-22 的一次运行里
+        # 它超时了，于是错误文本变成 "timeout: ... during the archive.org lookup"，
+        # 断言随网络抖动而红。桩掉快照查询（返回非 200 = 没有快照），这条测的才是
+        # "两层都失败时提示写进 error 字段而不是正文"。
+        class _NoSnapshot:
+            status = 502
+            body = b""
+
+        async def no_snapshot(*a, **k):
+            return _NoSnapshot()
+
+        monkeypatch.setattr("dhole_mcp.server._fallback_http_get", no_snapshot)
         server = MasterFetchServer()
         server.get = http_fail
         server.stealthy_fetch = browser_fail
@@ -833,6 +1012,52 @@ class TestParsePathResolution:
         target, _ = _resolve_local_path(str(f))
         assert target == str(f)
 
+    def test_cwd_argument_wins_over_every_other_root(self, tmp_path, monkeypatch):
+        """cwd 是唯一不依赖 host 的通道，所以它必须最优先。
+
+        背景：宿主进程的 cwd 是它自己的安装目录（实测 D:\\Program Files\\Qoder），
+        DHOLE_WORKDIR 要 host 配置，MCP roots 在 SDK 里已弃用（SEP-2577）。剩下
+        「agent 从 system prompt 读到工作目录再传进来」这条路 —— 传了就必须赢过
+        环境变量和进程 cwd，否则这个参数等于没加。
+        """
+        session = tmp_path / "session"
+        elsewhere = tmp_path / "elsewhere"
+        for d, body in ((session, "session\n"), (elsewhere, "elsewhere\n")):
+            d.mkdir()
+            (d / "notes.csv").write_text(body, encoding="utf-8")
+        monkeypatch.chdir(elsewhere)
+        monkeypatch.setenv("DHOLE_WORKDIR", str(elsewhere))
+        target, tried = _resolve_local_path("notes.csv", cwd=str(session))
+        assert target == str(session / "notes.csv")
+        assert tried[0] == target, "cwd 的候选必须排在最前，否则报错信息会误导"
+
+    def test_cwd_without_the_file_falls_through_and_is_still_listed(self, tmp_path, monkeypatch):
+        """cwd 指错地方不是错误 —— 继续按既有顺序找，并且把试过的路径都列出来。"""
+        work = tmp_path / "project"
+        work.mkdir()
+        (work / "notes.html").write_text("<h1>x</h1>", encoding="utf-8")
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("DHOLE_WORKDIR", str(work))
+        target, tried = _resolve_local_path("notes.html", cwd=str(empty))
+        assert target == str(work / "notes.html")
+        assert str(empty / "notes.html") in tried
+
+    def test_absolute_path_ignores_cwd(self, tmp_path):
+        """绝对路径不受 cwd 影响（cwd 只描述相对路径的基准）。"""
+        f = tmp_path / "x.csv"
+        f.write_text("a\n", encoding="utf-8")
+        target, tried = _resolve_local_path(str(f), cwd=str(tmp_path / "nowhere"))
+        assert target == str(f)
+        assert tried == [str(f)]
+
+    def test_nonexistent_cwd_is_not_fatal(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "here.csv").write_text("a\n", encoding="utf-8")
+        target, _ = _resolve_local_path("here.csv", cwd=str(tmp_path / "deleted-mid-session"))
+        assert target == str(tmp_path / "here.csv")
+
     def test_blocked_prefix_still_applies(self, tmp_path, monkeypatch):
         monkeypatch.setattr(os.path, "expanduser", lambda p: str(tmp_path / p.replace("~/", "")))
         assert _blocked_path_prefix(str(tmp_path / ".ssh" / "id_rsa")) != ""
@@ -869,6 +1094,25 @@ class TestParseEnvelope:
         assert r.content == []
         assert "DHOLE_WORKDIR" in r.error
         assert "missing.html" in r.error
+
+    @pytest.mark.asyncio
+    async def test_cwd_argument_changes_which_file_is_parsed(self, tmp_path, monkeypatch):
+        """端到端：同一个相对名，两个目录里内容不同 —— cwd 决定读到哪一份。
+
+        这是这个参数存在的全部意义（宿主进程 cwd 是安装目录时，相对路径本无解），
+        所以断言正文而不只是「没报错」。
+        """
+        session = tmp_path / "session"
+        session.mkdir()
+        (session / "doc.html").write_text(
+            "<html><body><h1>Session copy</h1><p>Body text from the session dir.</p>"
+            "</body></html>", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        server = MasterFetchServer()
+        r = await server.parse("doc.html", cwd=str(session))
+        assert r.status == 200, r.error
+        assert "Session copy" in "\n".join(r.content)
+        assert r.url.startswith("file:///")
 
 
 # ─── KB-9: 410 真的走 archive 回退（元组与 gate 不许再漂移） ────────────────

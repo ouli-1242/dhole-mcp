@@ -311,8 +311,10 @@ class TestDefaultPoolEnv:
 
         monkeypatch.delenv("DHOLE_DEFAULT_ENGINES", raising=False)
         assert m._resolve_backends(None) == list(m._DEFAULT_BACKENDS)
-        assert m._DEFAULT_BACKENDS == ["bing", "duckduckgo", "brave", "yahoo",
-                                      "yandex", "sogou_weixin"]
+        # 这一行是默认池的快照，不是逻辑：池子换组合时跟着改（两处定义的一致性由
+        # test_default_pool_definitions_agree 保证，这里只钉住"env 没设时用的是它"）。
+        assert m._DEFAULT_BACKENDS == ["baidu", "bing", "yandex", "brave",
+                                      "duckduckgo", "yahoo"]
 
 
 class TestConnectionFailureCooldown:
@@ -416,6 +418,43 @@ def test_default_pool_definitions_agree():
         f"默认池两处定义不一致: {as_backends} vs {list(ms._DEFAULT_BACKENDS)}")
 
 
+def test_opt_in_engines_are_registered_but_not_pooled():
+    """360 / 搜狗主站 / 百科 / 公众号 / bing 国际版 / mwmbl 是**显式点名**的 opt-in：
+    注册表里有、默认池里没有。
+
+    默认池决定每轮真实打哪些站点 —— 误加进去会平白多一份限流风险（360、搜狗、百度
+    都按 IP 限流），而且中文索引的覆盖面与 bing 家族高度重合，加进池子换不来家族数。
+    bing_global/mwmbl 同理：一个是同家族的第二入口（不增加家族数），一个是覆盖很窄
+    的小索引，都不该替用户默认打开。
+    """
+    from dhole_mcp import search_metasearch as ms
+    from dhole_mcp.search_engines import DEFAULT_ENGINES
+
+    for name in ("so360", "sogou", "baidu_baike", "sogou_weixin",
+                 "bing_global", "mwmbl"):
+        assert name in ms._TEXT_ENGINES, f"{name} 应当是注册过的 opt-in 引擎"
+        assert name not in DEFAULT_ENGINES, f"{name} 不许进默认池"
+    # 别名也走同一条路（"360" 是 so360 的顺手写法）
+    assert ms._DHOLE_TO_BACKEND["360"] == "so360"
+
+
+def test_readme_documents_every_selectable_engine():
+    """README 的「可选的搜索引擎」表是用户挑引擎的唯一出处 —— 漏一个名字，那个引擎
+    在对用户来说就等于不存在（默认池那次漏改 `dhole -v` 是同一类漂移：同一份名单
+    多处手抄，总有一处先烂）。别名也算：`ddg` / `360` 写在 README 里才敢让人用。
+    """
+    from pathlib import Path
+
+    from dhole_mcp import search_metasearch as ms
+
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    missing = [name for name in sorted(set(ms._DHOLE_TO_BACKEND))
+               if f"`{name}`" not in readme]
+    assert not missing, (
+        f"README 没写这些可选引擎（含别名）: {missing} —— "
+        f"新增/改名引擎时同步「可选的搜索引擎」表")
+
+
 def test_every_default_pool_engine_is_registered_and_enabled():
     """默认池里不许出现未注册或被禁用的引擎 —— core 集合那个 bug 的同类。"""
     from dhole_mcp import search_metasearch as ms
@@ -438,7 +477,7 @@ def test_index_family_map_covers_the_default_pool():
     assert not missing, f"这些默认引擎不在 _INDEX_FAMILY 里: {missing}"
     # 默认池 6 引擎 / 4 家族：渲染出来只可能是 "x of 4"，"x of 6" 不可能出现
     families = {_INDEX_FAMILY[ms._DHOLE_TO_BACKEND.get(n, n)] for n in DEFAULT_ENGINES}
-    assert families == {"bing", "brave", "yandex", "sogou_weixin"}, families
+    assert families == {"baidu", "bing", "brave", "yandex"}, families
 
 
 def test_vertical_set_only_names_real_engines():

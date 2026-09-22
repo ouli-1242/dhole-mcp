@@ -6,9 +6,10 @@ async-native parallel aggregation with early-return-on-quorum, no CLI / API
 server / MCP / images / videos / news / books / extract / cache / network bloat.
 See the ddgs LICENSE notice in NOTICE.ddgs.txt for full attribution.
 
-Backends (all keyless, no API key, no account): the default pool is bing,
-duckduckgo, brave, yahoo, yandex, sogou_weixin, with wikipedia and grokipedia
-opt-in; see search_engines.py. They run in PARALLEL; a backend that
+Backends (all keyless, no API key, no account): the default pool is baidu, bing,
+yandex, brave, duckduckgo, yahoo, with sogou_weixin / sogou / so360 / baidu_baike /
+bing_global / mwmbl / wikipedia / grokipedia available by name as opt-in backends.
+They run in PARALLEL; a backend that
 CAPTCHAs / rate-limits / has no topic-match simply yields
 nothing and the others carry - so search is robust without any single point of
 failure. This is the robustness dhole's hand-rolled 3-engine scraper never had.
@@ -147,12 +148,13 @@ class _PrimpClient:
     """primp-based HTTP client with random browser impersonation (anti-bot)."""
 
     def __init__(self, proxy: str | None = None, timeout: int | None = 10, *,
-                 verify: bool = True, impersonate: str = "random") -> None:
+                 verify: bool = True, impersonate: str = "random",
+                 impersonate_os: str = "random") -> None:
         self.client = primp.Client(
             proxy=proxy,
             timeout=timeout,
             impersonate=impersonate,
-            impersonate_os="random",
+            impersonate_os=impersonate_os,
             verify=verify,
         )
 
@@ -329,6 +331,16 @@ class BaseSearchEngine:
     headers_update: ClassVar[Mapping[str, str]] = {}
     items_xpath: ClassVar[str]
     elements_xpath: ClassVar[Mapping[str, str]]
+    # 视为"被拦"（进熔断冷却）的 HTTP 状态。202 只属于 DuckDuckGo：它的 html 端点
+    # 限流时回 202 + "Please complete the following challenge…"，与 403/503 同类；
+    # 其它引擎的 202 语义未观测，不擅自推广（对它们仍按非 200 -> 无结果处理）。
+    # 429 与 202 不同：它的含义是 RFC 6585 定死的"Too Many Requests"，不属于要观测
+    # 的引擎私货。实测 brave 在新出口 IP 上回 429 + 反爬壳，旧行为把它记成 empty
+    # （"这个查询没结果"），既不冷却也不在报告里留痕 —— 引擎在限流却装成没结果。
+    _challenge_statuses: ClassVar[tuple[int, ...]] = (403, 429, 503)
+    # 200 拦截页判定（几 KB 的壳 + 校验字样）。默认关闭：只在国内引擎上观测到这种
+    # 形态，不拿它去猜别家的语义 —— 误判成"被拦"会让一个健康引擎进冷却。
+    _detect_challenge_shell: ClassVar[bool] = False
 
     # ── 引擎产出计数（静默降级的唯一观测面）────────────────────────────
     # 免密搜索顶部那个失败模式是"引擎还在跑，但解析不出东西"，而它在响应里
@@ -357,7 +369,7 @@ class BaseSearchEngine:
     def request(self, *args: Any, **kwargs: Any) -> str | None:
         resp = self.http_client.request(*args, **kwargs)
         self.http_status = resp.status_code
-        if resp.status_code in (403, 503):
+        if resp.status_code in self._challenge_statuses:
             # Bot challenge / access denied -> circuit-open this backend rather
             # than treat it as a normal empty result (which would retry every call
             # and risk escalating the block). Empty/timeout stay non-fatal.
@@ -394,6 +406,15 @@ class BaseSearchEngine:
     def post_extract_results(self, results: list[Any]) -> list[Any]:
         return results
 
+    def _check_challenge(self, html_text: str) -> None:
+        """解析前调用：几 KB 的 200 校验页 = 被拦，不是"没有结果"。
+
+        记成 empty 会被读成"这个查询没结果"，`dhole -v` 的产出面板还会把它算成解析器
+        漂移 —— 两种误判都比"被拦，等会儿再试"更糟。
+        """
+        if _is_challenge_shell(html_text):
+            raise MetaBlockedException(f"{self.name} 校验页 (HTTP 200 challenge)")
+
     def search(self, query: str, region: str = "us-en", safesearch: str = "moderate",
                timelimit: str | None = None, page: int = 1, **kwargs: str) -> list[Any] | None:
         payload = self.build_payload(query=query, region=region, safesearch=safesearch,
@@ -404,6 +425,8 @@ class BaseSearchEngine:
             html_text = self.request(self.search_method, self.search_url, data=payload)
         if not html_text:
             return None
+        if self._detect_challenge_shell:
+            self._check_challenge(html_text)
         kept = self.post_extract_results(self.extract_results(html_text)) or []
         # 记的是条数而非可用数：usable 已由 last_extract 承载。两者分开才能分出
         # "解析器坏了"（usable==0）与"过滤器把结果吃光了"（bing 的 ck/a、ddg 的
@@ -418,6 +441,10 @@ class Duckduckgo(BaseSearchEngine):
     provider = "bing"
     search_url = "https://html.duckduckgo.com/html/"
     search_method = "POST"
+    # 实测：限流时回 202 + 反爬挑战页（"Unfortunately, bots use DuckDuckGo too…
+    # Select all squares containing a duck"），不是 403。记成 empty 会被读成"这个
+    # 查询没结果"，所以归到被拦这边。
+    _challenge_statuses = (403, 429, 503, 202)
     items_xpath = "//div[contains(@class, 'body')]"
     elements_xpath: ClassVar[Mapping[str, str]] = {
         "title": ".//h2//text()", "href": "./a/@href", "body": "./a//text()",
@@ -445,7 +472,9 @@ class Duckduckgo(BaseSearchEngine):
         url = args[1] if len(args) > 1 else kwargs.pop("url", "")
         resp = self.http_client.request(method=method, url=url, **kwargs)  # type: ignore[attr-defined]
         self.http_status = resp.status_code
-        if resp.status_code in (403, 503):
+        # 走类的 _challenge_statuses（DDG 是 (403, 429, 503, 202)），别在这里另写一份 ——
+        # 上一版就是复制了基类的 (403, 503)，于是 202 的挑战页悄悄漏成 empty。
+        if resp.status_code in self._challenge_statuses:
             raise MetaBlockedException(f"HTTP {resp.status_code}")
         return resp.text if resp.status_code == 200 else None
 
@@ -706,6 +735,263 @@ class Bing(BaseSearchEngine):
         return out
 
 
+class BingGlobal(Bing):
+    """国际版 Bing（www.bing.com）：与 cn.bing.com 同一家、**另一套索引**。
+
+    实测（同一查询 "kubernetes ingress 配置"）：两边结果标题只有 1/17 重合 —— cn 版
+    给百度百科 / CSDN 这类中文内容，国际版给全球索引（kubernetes.io / en.wikipedia）。
+    所以它不是 cn 版的别名，是给"想要国际结果"的用户的一个选择。国内无代理时
+    www.bing.com 会绕道/超时，因此 opt-in 不进默认池。provider 沿用 bing：结果 URL
+    与 bing/ddg/yahoo 同源，共识家族合并时不会虚报（见 search_engines._INDEX_FAMILY）。
+    """
+
+    name = "bing_global"
+    search_url = "https://www.bing.com/search"
+
+
+class Mwmbl(BaseSearchEngine):
+    """MWMBL：社区自建的小型通用索引，免密 JSON API，实测无反爬。
+
+    与 bing/google 家族完全不同的来源（自有爬虫的独立索引，偏技术/独立站点），
+    作为 opt-in 提供一个"非大厂"视角。实测约 1s 回一个 JSON 数组（EN 查询 85 条），
+    覆盖窄且相关度参差 —— 交给重排器/共识排序，不假装它和通用大索引等价。
+    """
+
+    name = "mwmbl"
+    provider = "mwmbl"
+    search_url = "https://api.mwmbl.org/api/v1/search/"
+    search_method = "GET"
+
+    def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
+                      timelimit: str | None, page: int = 1,  # noqa: ARG002
+                      **kwargs: str) -> dict[str, Any]:
+        return {"s": query}
+
+    def search(self, query: str, region: str = "us-en", safesearch: str = "moderate",
+               timelimit: str | None = None, page: int = 1, **kwargs: str) -> list[Any] | None:
+        # API 没有翻页参数（传了也不变结果）：page>1 直接空，不打网络。
+        if page > 1:
+            return []
+        return super().search(query, region=region, safesearch=safesearch,
+                              timelimit=timelimit, page=page, **kwargs)
+
+    @staticmethod
+    def _seg_text(segments: Any) -> str:
+        """``[{value, is_bold}]`` 分词数组 -> 纯文本。
+
+        title 与 extract 是同一个形状（实测：extract 也是分词数组，不是字符串
+        列表）—— 只 join ``isinstance(x, str)`` 的话，摘要会**静默全空**，而
+        usable 只看 title+href，整条结果照样"可用"。
+        """
+        if isinstance(segments, list):
+            return "".join(str(seg.get("value", "")) for seg in segments
+                           if isinstance(seg, dict)).strip()
+        return str(segments or "").strip()
+
+    def extract_results(self, html_text: str) -> list[Any]:
+        data = json.loads(html_text)
+        rows: list[Any] = []
+        for item in (data if isinstance(data, list) else []):
+            if not isinstance(item, dict):
+                continue
+            r = TextResult()
+            # 高亮词在数组里被切成多段（"asyncio"/" from ground up"…），拼起来才是
+            # 完整标题；只取 [0] 会得到半句话。
+            r.title = self._seg_text(item.get("title"))
+            r.href = str(item.get("url") or "").strip()
+            r.body = self._seg_text(item.get("extract"))
+            rows.append(r)
+        # base.extract_results 才会写 last_extract；这里自己解析 JSON，得自己记 ——
+        # 否则产出面板永远显示"没观测"，解析器漂移就又变成不可见的了。
+        self.last_extract = (len(rows), _usable_count(rows))
+        return rows
+
+
+# ─── Baidu (CN, free, keyless, no cookies needed) ────────────────────────────
+def _is_challenge_shell(html_text: str) -> bool:
+    """200 拦截页：**只有几 KB 的壳** + 校验字样。
+
+    正常 SERP / 条目页是几百 KB（360 360KB、sogou 540KB、百度 1MB+），所以用体积做
+    第一道闸门 —— 只按关键字匹配的话，正常页面里内嵌的脚本文案（前端 bundle 里就写
+    着"安全校验"）会把真页面误判成拦截页。实测形态：百度搜索 1.4KB、百科 4.4KB
+    （「安全校验中…」）、搜狗 5.4KB（含"验证"）。
+    """
+    if len(html_text) >= 20000:
+        return False
+    return any(marker in html_text for marker in
+               ("百度安全验证", "安全校验", "请输入验证码", "验证码", "访问过于频繁"))
+
+
+def _clean_result_href(raw: str, drop_hosts: tuple[str, ...]) -> str:
+    """从 ``mu`` / ``data-mdurl`` / ``data-url`` 里取出的目标 URL 的卫生检查。
+
+    实测坑（360）：视频聚合卡把多个 URL 拼在同一个 ``data-mdurl`` 里
+    （``...&srcg=...https://www.douyin.com/video/…https://www.bilibili.com/video/…``），
+    原样交出去会得到一个打不开的链接。规则：单个 http(s) URL、不含空白、不含第二个
+    scheme、且不指向引擎自己 —— 不满足就返回空串（调用方丢掉这条）。
+    """
+    href = (raw or "").strip()
+    if not href.startswith(("http://", "https://")):
+        return ""
+    if href.count("://") > 1 or any(c.isspace() for c in href):
+        return ""
+    try:
+        host = (urlparse(href).netloc or "").lower().rstrip(".")
+    except ValueError:
+        return ""
+    if not host:
+        return ""
+    for h in drop_hosts:
+        if host == h or host.endswith("." + h):
+            return ""
+    return href
+
+
+class Baidu(BaseSearchEngine):
+    """百度搜索（www.baidu.com/s?wd=）：国内裸网直连，实测无反爬（1.6s / 1MB 真 SERP，
+    无需 stealthy/cookie）。
+
+    百度同时跑两套版面（和 bing 那次真事故同类）：
+    * A 版：容器 ``div.result.c-container``，真链在容器的 ``mu`` 属性里；
+    * B 版：容器 ``div.c-result``，**没有 mu**，真链埋在 ``data-log`` 的 JSON 里
+      （``{"fm":"alop",…,"mu":"https://tokio.rs/"}``）。
+    两版的标题都是 ``h3``、摘要都叫 ``summary-text_<构建 hash>``，所以两个容器各出一份
+    XPath，href 取 ``(@mu | @data-log)[1]`` 再在后处理里解 JSON。
+
+    结果链接本身是 ``baidu.com/link?url=<token>`` 跳转包装（token 会过期），真实目标
+    URL 才是要交出去的东西；拿不到真链、或真链指向百度自家占位（``nourl.ubs.
+    baidu.com`` / ``recommend_list.baidu.com`` 等信息流卡片）的一律丢掉 —— 宁可少
+    几条，也不能把不可用的 wrapper / 占位链接当成结果 URL。
+    """
+
+    name = "baidu"
+    provider = "baidu"  # 独立索引家族（既不是 bing 也不是 google 代理）
+    search_url = "https://www.baidu.com/s"
+    search_method = "GET"
+    # 精确类名匹配（concat/normalize-space 是 XPath 里判断"类名列表里含某一项"的写法：
+    # contains(@class,'c-result') 会把 c-result-content 也算进来）。
+    items_xpath = ("//div[contains(concat(' ', normalize-space(@class), ' '), ' c-container ')"
+                   " or contains(concat(' ', normalize-space(@class), ' '), ' c-result ')]")
+    elements_xpath: ClassVar[Mapping[str, str]] = {
+        "title": ".//h3//text()",
+        "href": "(./@mu | ./@data-log)[1]",
+        # 摘要：新版叫 summary-text_<构建 hash>（hash 会变，所以按前缀取），
+        # 旧版版面叫 c-abstract。两个都不在时该条摘要是空串（不是解析器漂移）。
+        "body": (".//*[contains(@class,'summary-text') "
+                 "or contains(@class,'c-abstract')]//text()"),
+    }
+    headers_update: ClassVar[Mapping[str, str]] = {"Accept-Language": "zh-CN,zh;q=0.9"}
+    _detect_challenge_shell = True
+
+    def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
+                      timelimit: str | None,  # noqa: ARG002 - 时间过滤（gpc/stf）未实现
+                      page: int = 1, **kwargs: str) -> dict[str, Any]:
+        payload = {"wd": query, "ie": "utf-8"}
+        if page > 1:
+            payload["pn"] = f"{(page - 1) * 10}"
+        return payload
+
+    @staticmethod
+    def _mu_from_data_log(blob: str) -> str:
+        """B 版面的真链藏在 data-log 的 JSON 里：{"fm":"alop",…,"mu":"<url>"}。"""
+        try:
+            return str(json.loads(blob).get("mu") or "")
+        except (ValueError, TypeError, AttributeError):
+            return ""
+
+    def search(self, query: str, region: str = "us-en", safesearch: str = "moderate",
+               timelimit: str | None = None, page: int = 1, **kwargs: str) -> list[Any] | None:
+        """百度偶尔回 200 + 1.4KB 拦截页（实测约 1/16，突发/并发请求时更容易出现）。
+
+        重试一次（拦截页很小，代价极低）；两次都被拦就抛 MetaBlockedException 进熔断
+        冷却 —— 0 条结果的形态会被读成「这个查询百度没结果」，而 `dhole -v` 的产出
+        面板还会把它算成解析器漂移，两种误判都比"被拦，等会儿再试"更糟。
+        """
+        import time as _time
+
+        payload = self.build_payload(query=query, region=region, safesearch=safesearch,
+                                     timelimit=timelimit, page=page, **kwargs)
+        for attempt in range(2):
+            html_text = self.request(self.search_method, self.search_url, params=payload)
+            if not html_text:
+                return None
+            if not _is_challenge_shell(html_text):
+                kept = self.post_extract_results(self.extract_results(html_text)) or []
+                self.kept_after_filter = len(kept)
+                return kept
+            if attempt == 0:
+                _time.sleep(0.5)
+        raise MetaBlockedException("baidu 拦截页 (HTTP 200 challenge page)")
+
+    def post_extract_results(self, results: list[Any]) -> list[Any]:
+        out = []
+        for r in results:
+            href = (r.href or "").strip()
+            if href.startswith("{"):
+                href = self._mu_from_data_log(href)
+            href = _clean_result_href(href, ("baidu.com",))
+            if not href:
+                continue  # 自家占位/包装/拼接垃圾：没有可用目标 URL
+            r.href = href
+            out.append(r)
+        return out
+
+
+# ─── 百度百科（知识库，opt-in） ──────────────────────────────────────────────
+class BaiduBaike(BaseSearchEngine):
+    """百度百科条目页：``/item/{query}`` 直接取条目，不走搜索页（那个是 JS 渲染，
+    静态 HTML 里没有结果）。一个查询最多产出一条结果（条目本身）。
+
+    **必须带 Referer**：裸请求实测被「百度安全验证」403（按 IP 限流），带上
+    ``https://www.baidu.com/`` 的 Referer 才是 200 真页面。403 会由 request() 抛
+    MetaBlockedException → 进 circuit breaker 冷却，不算静默空。
+
+    覆盖窄（名词/概念/人物有效，教程、实时信息常空），所以与 wikipedia 一样是
+    opt-in，不进默认池。
+    """
+
+    name = "baidu_baike"
+    provider = "baidu_baike"
+    search_url = "https://baike.baidu.com/item/"
+    search_method = "GET"
+    items_xpath = "//div[contains(@class,'lemmaSummary')]"
+    elements_xpath: ClassVar[Mapping[str, str]] = {
+        # 标题与条目 URL 都不在摘要容器里：h1 在页面顶部，条目 URL 就是页面自己的
+        # canonical 链接（比请求 URL 更规范，带数字 id）。
+        "title": "(//h1[contains(@class,'lemma-title')]//text())[1]",
+        "href": "(//link[@rel='canonical']/@href)[1]",
+        "body": ".//text()",
+    }
+    headers_update: ClassVar[Mapping[str, str]] = {"Referer": "https://www.baidu.com/"}
+    _detect_challenge_shell = True
+
+    def search(self, query: str, region: str = "us-en", safesearch: str = "moderate",
+               timelimit: str | None = None, page: int = 1, **kwargs: str) -> list[Any] | None:
+        q = (query or "").strip()
+        if not q or page > 1:  # 单条目引擎没有第二页
+            return []
+        html_text = self.request("GET", self.search_url + quote(q, safe=""))
+        if not html_text:
+            return None
+        # 200 + 「安全校验中…」拦截页（实测形态，按 IP 限流）= 被拦，不是"条目不存在"。
+        # 与搜索页不同，条目页的拦截是**持续性**的（实测连续多次都是校验页），所以不重试。
+        self._check_challenge(html_text)
+        kept = self.post_extract_results(self.extract_results(html_text)) or []
+        self.kept_after_filter = len(kept)
+        return kept
+
+    def post_extract_results(self, results: list[Any]) -> list[Any]:
+        """消歧义/验证页/空壳页：容器在但标题是验证字样的一律不返回。"""
+        out = []
+        for r in results:
+            title = (r.title or "").strip()
+            if not title or "验证" in title:
+                continue
+            r.body = (r.body or "").strip()[:300]
+            out.append(r)
+        return out
+
+
 # ─── registry ────────────────────────────────────────────────────────────────
 # All enabled text backends. Bing is enabled (free/keyless, reachable from
 # mainland CN without VPN). Order = rough preference; run all in parallel.
@@ -717,6 +1003,10 @@ _TEXT_ENGINES: dict[str, type[BaseSearchEngine]] = {
     "yahoo": Yahoo,
     "yandex": Yandex,
     "bing": Bing,
+    "bing_global": BingGlobal,
+    "mwmbl": Mwmbl,
+    "baidu": Baidu,
+    "baidu_baike": BaiduBaike,
 }
 # Map dhole's public engine names -> metasearch backends.
 _DHOLE_TO_BACKEND = {
@@ -725,6 +1015,13 @@ _DHOLE_TO_BACKEND = {
     "yahoo": "yahoo", "wikipedia": "wikipedia",
     "brave": "brave", "yandex": "yandex", "sogou_weixin": "sogou_weixin",
     "grokipedia": "grokipedia",
+    "baidu": "baidu", "baidu_baike": "baidu_baike",
+    # 国内 opt-in（不进默认池）：360 与搜狗主站都是服务端渲染的独立索引。
+    # "360" 是 so360 的顺手别名（引擎名以数字开头不合本项目的命名习惯）。
+    "so360": "so360", "360": "so360", "sogou": "sogou",
+    # 国外 opt-in（不进默认池）：bing_global 是 www.bing.com 那套国际索引（与 cn 版
+    # 结果几乎不重合，但国内直连常需代理）；mwmbl 是社区自建的小型独立索引。
+    "bing_global": "bing_global", "mwmbl": "mwmbl",
     # Paid JSON backends: selectable by name, run on their own track (see
     # KeyedApiEngine) -- absent from _TEXT_ENGINES by design.
     "brightdata": "brightdata",
@@ -732,9 +1029,11 @@ _DHOLE_TO_BACKEND = {
     "exa": "exa",
     "bocha": "bocha",
 }
-# 国内网默认池：bing/yandex/sogou_weixin 可达无需 VPN；ddg/brave/yahoo 需 VPN。
-# 保留完整池（VPN 时更多信号），但 bing 排首位作为国内稳定兜底。
-_DEFAULT_BACKENDS = ["bing", "duckduckgo", "brave", "yahoo", "yandex", "sogou_weixin"]
+# 默认池 = 国内直连 3（baidu/bing/yandex）+ 国外 3（brave/ddg/yahoo），http 稳定 keyless。
+# sogou_weixin 是垂直索引（只覆盖公众号），从默认池移出但保留注册：显式
+# engines=["sogou_weixin"] 仍可搜公众号。baidu_baike 同 wikipedia 一样是知识库
+# 覆盖窄（名词/概念有效，教程/实时信息常空），也 opt-in。
+_DEFAULT_BACKENDS = ["baidu", "bing", "yandex", "brave", "duckduckgo", "yahoo"]
 
 # 垂直索引：只覆盖某一类内容（sogou_weixin = 微信公众号文章），不是通用网络索引。
 # 这里用它的地方只有一处 —— 早退配额的归属（见 multi_search 里 general_n 那段）。
@@ -786,6 +1085,117 @@ class SogouWeixin(BaseSearchEngine):
 
 # 搜狗微信注册（类定义在其上方）
 _TEXT_ENGINES["sogou_weixin"] = SogouWeixin
+
+
+# ─── 360 搜索（so.com，独立索引，opt-in） ────────────────────────────────────
+class So360(BaseSearchEngine):
+    """360 搜索（www.so.com/s?q=）：国内直连、服务端渲染，独立索引（360 自家爬虫）。
+
+    结果 href 是 ``so.com/link?m=<token>`` 跳转包装，真实 URL 在卡片的
+    ``data-mdurl`` 属性里（实测直接可读）—— 与百度 ``mu`` 同一套思路：只交真链，
+    拿不到真链的卡片丢掉。分页 ``&pn=<页码>``（实测 page1∩page2 = 0）。
+    **opt-in，不进默认池**：默认池只放国内三件通用索引（baidu/bing/yandex）。
+    """
+
+    name = "so360"
+    provider = "so360"
+    search_url = "https://www.so.com/s"
+    search_method = "GET"
+    items_xpath = "//li[contains(@class,'res-list')]"
+    elements_xpath: ClassVar[Mapping[str, str]] = {
+        "title": ".//h3//text()",
+        "href": ".//@data-mdurl",
+        "body": (".//*[contains(@class,'res-desc') "
+                 "or contains(@class,'res-list-summary')]//text()"),
+    }
+    headers_update: ClassVar[Mapping[str, str]] = {"Accept-Language": "zh-CN,zh;q=0.9"}
+    _detect_challenge_shell = True
+
+    def __init__(self, proxy: str | None = None, timeout: int | None = None, *,
+                 verify: bool = True) -> None:
+        # 固定桌面指纹：360 对移动档指纹会换一套没有 li.res-list 的版面 —— 实测
+        # impersonate_os="random" 时 3 次里 2 次读不到结果容器（静默 empty），而
+        # windows 档 3/3 稳定拿到 7 个容器。
+        self.http_client = _PrimpClient(proxy=proxy, timeout=timeout, verify=verify,
+                                        impersonate="chrome", impersonate_os="windows")
+        self.http_client.client.headers_update(self.headers_update)
+        self.results: list[Any] = []
+
+    def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
+                      timelimit: str | None,  # noqa: ARG002 - 未实现时间过滤
+                      page: int = 1, **kwargs: str) -> dict[str, Any]:
+        payload = {"q": query}
+        if page > 1:
+            payload["pn"] = str(page)
+        return payload
+
+    def post_extract_results(self, results: list[Any]) -> list[Any]:
+        out = []
+        for r in results:
+            href = _clean_result_href(r.href, ("so.com",))
+            if not href:
+                continue  # 自家跳转包装 / 站内页 / 拼接垃圾（见 _clean_result_href）
+            r.href = href
+            out.append(r)
+        return out
+
+
+# ─── 搜狗主站（sogou.com/web，独立索引，opt-in） ─────────────────────────────
+class Sogou(BaseSearchEngine):
+    """搜狗网页搜索（www.sogou.com/web?query=）：国内直连、服务端渲染。
+
+    结果 href 是 ``/link?url=<token>`` 相对包装，真实 URL 在卡片的 ``data-url``
+    属性里。选择器带 ``[.//@data-url]`` 不是装饰：同一个 ``div.vrwrap`` 类名也被
+    「相关搜索」聚合块复用（实测 9 个里 2 个是它们），没有 data-url 就没有结果目标。
+
+    索引家族与 sogou_weixin 合并为 ``sogou`` —— 同属搜狗（一个公众号垂直 + 一个
+    通用），同一 URL 被两者同时返回只算一个家族：宁可少报共识，也不虚报。
+    **opt-in，不进默认池**。分页 ``&page=<页码>``（实测 page1∩page2 = 0）。
+    """
+
+    name = "sogou"
+    provider = "sogou"
+    search_url = "https://www.sogou.com/web"
+    search_method = "GET"
+    items_xpath = "//div[contains(@class,'vrwrap')][.//@data-url]"
+    elements_xpath: ClassVar[Mapping[str, str]] = {
+        "title": ".//h3//text()",
+        "href": ".//@data-url",
+        "body": ".//*[contains(@class,'fz-mid')]//text()",
+    }
+    headers_update: ClassVar[Mapping[str, str]] = {"Accept-Language": "zh-CN,zh;q=0.9"}
+    _detect_challenge_shell = True
+
+    def __init__(self, proxy: str | None = None, timeout: int | None = None, *,
+                 verify: bool = True) -> None:
+        # 与 360 同样的理由（同属国内 SSR 版面家族）：固定桌面指纹，别让移动档指纹
+        # 把结果换成一套没有 vrwrap 的版面。
+        self.http_client = _PrimpClient(proxy=proxy, timeout=timeout, verify=verify,
+                                        impersonate="chrome", impersonate_os="windows")
+        self.http_client.client.headers_update(self.headers_update)
+        self.results: list[Any] = []
+
+    def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
+                      timelimit: str | None,  # noqa: ARG002 - 未实现时间过滤
+                      page: int = 1, **kwargs: str) -> dict[str, Any]:
+        payload = {"query": query}
+        if page > 1:
+            payload["page"] = str(page)
+        return payload
+
+    def post_extract_results(self, results: list[Any]) -> list[Any]:
+        out = []
+        for r in results:
+            href = _clean_result_href(r.href, ("sogou.com",))
+            if not href:
+                continue  # /link?url=... 包装或站内页
+            r.href = href
+            out.append(r)
+        return out
+
+
+_TEXT_ENGINES["so360"] = So360
+_TEXT_ENGINES["sogou"] = Sogou
 
 # ─── keyed JSON search APIs (Bright Data / Tavily / Exa / Bocha) ────────────
 # 这些后端不走 BaseSearchEngine 的 HTML 抓取契约：都是 POST JSON + Bearer key。

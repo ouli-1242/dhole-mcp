@@ -1,0 +1,11 @@
+{
+  "engine": "baidu",
+  "captured_at": "2026-09-22",
+  "captured_from_url": "https://www.baidu.com/s?wd=python+asyncio",
+  "query": "python asyncio",
+  "sha256": "c7ec6547bbd55590",
+  "item_nodes": 5,
+  "usable": 5,
+  "note": "真页面裁剪件：只留前 5 个有机结果容器，剥掉 data-* 埋点/脚本/样式",
+  "scrubbed": "结果链接的 baidu.com/link?url= token 换成 REDACTED（解析契约取容器 mu 属性，不依赖它）"
+}

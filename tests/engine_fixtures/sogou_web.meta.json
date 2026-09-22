@@ -1,0 +1,11 @@
+{
+  "engine": "sogou",
+  "captured_at": "2026-09-22",
+  "captured_from_url": "https://www.sogou.com/web?query=python+asyncio",
+  "query": "python asyncio",
+  "sha256": "4e8c0d2badbdae4f",
+  "item_nodes": 8,
+  "usable": 8,
+  "note": "真页面裁剪件：只留搜狗带 data-url 的结果卡（聚合块/相关搜索已排除）",
+  "scrubbed": "剥掉埋点/脚本/样式；真链保留在 data-* 属性（解析契约就取它）"
+}

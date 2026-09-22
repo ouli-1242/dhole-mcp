@@ -1,0 +1,11 @@
+{
+  "engine": "bing_global",
+  "captured_at": "2026-09-22",
+  "captured_from_url": "https://www.bing.com/search?q=python+asyncio&count=20",
+  "query": "python asyncio",
+  "sha256": "daf7fd732a100d18",
+  "item_nodes": 10,
+  "usable": 10,
+  "note": "真页面裁剪件：只留 b_algo 结果卡片（含 ck/a 跳转链接与 cite/p 摘要）",
+  "scrubbed": "剥掉脚本/样式/图片与埋点属性；ck/a 跳转链接保留（解析契约就解它）"
+}

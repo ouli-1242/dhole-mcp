@@ -887,14 +887,20 @@ def capabilities() -> list[tuple[str, str, bool]]:
             False,
         ))
 
+    # 这行以前是写死的字面量，换引擎池时漏改过一次（`dhole -v` 报旧池）——现在从
+    # DEFAULT_ENGINES 推导，由 tests/test_cli.py 的 pool 断言钉住。
     pool = (os.environ.get("DHOLE_DEFAULT_ENGINES") or "").strip()
-    caps.append((
-        "search pool",
-        pool if pool
-        else "bing,duckduckgo,brave,yahoo,yandex,sogou_weixin "
-             "(default; ddg/brave/yahoo need VPN in CN)",
-        bool(pool),
-    ))
+    if pool:
+        caps.append(("search pool", pool, True))
+    else:
+        try:
+            from dhole_mcp.search_engines import DEFAULT_ENGINES, _CN_DIRECT
+            vpn = [e for e in DEFAULT_ENGINES if e not in _CN_DIRECT]
+            note = f" (default; {','.join(vpn)} need VPN in CN)" if vpn else " (default)"
+            pool_line = ",".join(DEFAULT_ENGINES) + note
+        except Exception:
+            pool_line = "unreadable - check dhole_mcp.search_engines"
+        caps.append(("search pool", pool_line, False))
     _append_engine_yield(caps)
     return caps
 
