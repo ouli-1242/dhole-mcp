@@ -36,17 +36,6 @@
 - **list 页的下一步指向导航栏（NEW-3）。** 实测 theverge.com/news 的 `next_action` 是 `Top targets: /, /auth/login, /subscribe`——按 DOM 顺序取前三条引用，取到的是站点头。新增 `_best_list_targets()`：排除 chrome/登录/订阅/源站首页/静态资源，偏好深层路径与带锚文本的链接，同域加分。
 - **`options` 被逐字符解析（BUG-19，未稳定复现）。** 报告的重启后首轮 `['{','"','m',…]` 在 14.7 上没能复现（字符串形态的 options 现在能正确解析），但产生它的代码路径确实存在：`set(options)` 对 str 就是字符集合。`_dispatch` 现在统一走 `_coerce_options()`（字符串按 JSON 解析、非对象如实报错），`_strict_options` 也加了同形的护栏——不再依赖"客户端总是发对象"。
 
-### 新增（引擎健康状态可见 + 可重置）
-
-报告的 BUG-17 把"冷却状态持久化且无自动恢复"当成最严重的问题。**这条被推翻**：`_load_circuit_state()` 读盘时就过滤过期项、`_is_circuit_open()` 实时比时钟、`_record_success()` 立即清除，冷却本来就自动到期；`engine_stats.json` 只被 `engine_health()` 和诊断读取，**没有任何代码用它 gate 引擎**，`engine_preempted` 是当轮早退配额取消而非持久状态。对照组里"清文件才恢复"是把时间先后当成了因果（实测清空状态前的默认池搜索里 brave 就已经在 `engines_used` 中了）。
-
-真正剩下的三个缺口按建议修掉：
-
-- **过期记录不再留在磁盘上误导人。** 加载时若丢弃了过期项就回写文件；每轮搜索再 `sweep_expired_cooldowns()` 清一次，让 `circuit_breaker.json` 与池子的真实行为说的是同一件事。
-- **`cache_clear(engine_state=true)`** 立即忘掉冷却与产出记录（内存 + 两个文件），响应新增 `engine_state_reset` 与 `engine_health`（每个引擎的判定 + `cooldown_seconds_left`）——不需要再"手动删文件 + 重启进程"，也不用换会话。
-- **`dhole engines list|reset`** 是同一件事的命令行入口（纯 stdlib 读状态文件，半坏安装上也能跑）；`dhole -v` 的能力面板新增 `engine cooldowns` 行，显示还剩多少秒。
-- **`circuit_open` 的报告现在带上重试倒计时**（`…skipped; retried in 90s`），把"永久被墙"和"90 秒后重试"分开；`preempted` 的文案明说"不是拦截、不是失败、不涉及网络"——第一轮测试者正是把它读成"dhole 没走 VPN"。
-
 ### 修复（审计遗留六条）
 
 审计阶段登记的六条既有缺陷（当时只记录、未修）这次一并修掉；每条都先在**修复前**的 `git archive HEAD` 树上跑出对照数据，再在修复后复测。这六条里只有一个新增开关（KB-4 的环境变量），其余都是在把"代码实际做的事"和"它说出口的话"对齐。
@@ -59,6 +48,17 @@
 - **fixture 哈希改按仓库字节记录（KB-11）。** `tests/engine_fixtures` 里 bing A/B 与 yandex 的 `sha256` 记的是**工作树 CRLF 字节**的哈希，而 git 存的是 LF（`.gitattributes` 的 `* text=auto eol=lf`）：本机因为还留着 `.gitattributes` 生效之前的 CRLF 残留而通过，换任何全新克隆 / 新 worktree 一 checkout 就失败。现在工作树字节与记录值都以仓库字节为准（`sogou_weixin.html` 的 blob 是 `-text`、行尾原样入库，本就与检出方式无关）；四个 fixture 在"全新克隆模拟"里逐个核对全部 MATCH。此前记录里"全新检出只失败 1 条"是断言在第一个不匹配处就停了，四个都得单独核对。
 
 本批新增/加强的测试：`tests/test_proxy.py`（探活门控）、`tests/test_server.py`（预热开关与解析）、`tests/test_bug_report_regressions.py::TestArchiveFallback`、`tests/test_import_provenance.py`、`tests/test_reranker_models.py`（预置不下载）、`tests/test_engine_parsers.py`（哈希不变式）。四分支合并后全量 **1157 passed, 5 skipped**（默认套件，0 失败），`ruff check .` 干净。
+
+### 新增（引擎健康状态可见 + 可重置）
+
+报告的 BUG-17 把"冷却状态持久化且无自动恢复"当成最严重的问题。**这条被推翻**：`_load_circuit_state()` 读盘时就过滤过期项、`_is_circuit_open()` 实时比时钟、`_record_success()` 立即清除，冷却本来就自动到期；`engine_stats.json` 只被 `engine_health()` 和诊断读取，**没有任何代码用它 gate 引擎**，`engine_preempted` 是当轮早退配额取消而非持久状态。对照组里"清文件才恢复"是把时间先后当成了因果（实测清空状态前的默认池搜索里 brave 就已经在 `engines_used` 中了）。
+
+真正剩下的三个缺口按建议修掉：
+
+- **过期记录不再留在磁盘上误导人。** 加载时若丢弃了过期项就回写文件；每轮搜索再 `sweep_expired_cooldowns()` 清一次，让 `circuit_breaker.json` 与池子的真实行为说的是同一件事。
+- **`cache_clear(engine_state=true)`** 立即忘掉冷却与产出记录（内存 + 两个文件），响应新增 `engine_state_reset` 与 `engine_health`（每个引擎的判定 + `cooldown_seconds_left`）——不需要再"手动删文件 + 重启进程"，也不用换会话。
+- **`dhole engines list|reset`** 是同一件事的命令行入口（纯 stdlib 读状态文件，半坏安装上也能跑）；`dhole -v` 的能力面板新增 `engine cooldowns` 行，显示还剩多少秒。
+- **`circuit_open` 的报告现在带上重试倒计时**（`…skipped; retried in 90s`），把"永久被墙"和"90 秒后重试"分开；`preempted` 的文案明说"不是拦截、不是失败、不涉及网络"——第一轮测试者正是把它读成"dhole 没走 VPN"。
 
 ### 测试
 
