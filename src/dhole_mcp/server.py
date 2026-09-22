@@ -1626,6 +1626,19 @@ async def _prewarm_state_dir() -> None:
         pass
 
 
+def _browser_prewarm_enabled() -> bool:
+    """DHOLE_NO_BROWSER_PREWARM=1 skips the startup browser warm-up.
+
+    The warm-up hides a 3-5s cold start, and its first step is a TCP preflight
+    to 1.1.1.1:443 — a real outbound connection before the agent has asked for
+    anything. Offline boxes, metered links and strict egress policies opt out
+    here; the browser then simply launches lazily on the first stealthy fetch.
+    """
+    return (os.environ.get("DHOLE_NO_BROWSER_PREWARM") or "").strip().lower() not in (
+        "1", "true", "yes", "on",
+    )
+
+
 def _normalize_credentials(credentials: Optional[Dict[str, str]]) -> Optional[tuple]:
     """Convert a credentials dictionary to a tuple accepted by fetchers.
 
@@ -2074,7 +2087,8 @@ class MasterFetchServer:
         the agent first needs a stealthy fetch or screenshot, skipping the
         ~3-5s cold start. Closes after DHOLE_BROWSER_IDLE_TIMEOUT of inactivity,
         then relaunches on the next fetch. Idempotent: _ensure_auto_session
-        reuses any existing session.
+        reuses any existing session. Opt out with DHOLE_NO_BROWSER_PREWARM=1
+        (see _browser_prewarm_enabled) — the lazy path is unchanged.
 
         Robustness: fully isolated — catches BaseException (so a
         CancelledError or any launch failure can NEVER crash the server) and is
@@ -2090,6 +2104,10 @@ class MasterFetchServer:
         reply out (client reported -32001 REQUEST_TIMEOUT). Now the entire
         check+import is off the event loop.
         """
+        if not _browser_prewarm_enabled():
+            logger.debug("DHOLE_NO_BROWSER_PREWARM set; skipping the startup warm-up")
+            return
+
         async def _warm():
             # Quick network preflight: skip browser prewarm if the network is
             # unreachable (saves 2-5s launching a browser that can't connect).

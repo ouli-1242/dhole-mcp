@@ -1089,6 +1089,39 @@ class TestBrowserDepsNonBlocking:
         assert "_browser_deps_available" not in before_thread, \
             "_browser_deps_available must not be called before to_thread (blocks event loop)"
 
+    # — KB-4: 启动预热可以被关掉（关掉时一个包都不发）—
+
+    def test_prewarm_env_flag_variants(self, monkeypatch):
+        from dhole_mcp.server import _browser_prewarm_enabled
+        monkeypatch.delenv("DHOLE_NO_BROWSER_PREWARM", raising=False)
+        assert _browser_prewarm_enabled() is True
+        for raw in ("1", "true", "YES", " on "):
+            monkeypatch.setenv("DHOLE_NO_BROWSER_PREWARM", raw)
+            assert _browser_prewarm_enabled() is False, raw
+        for raw in ("0", "false", ""):
+            monkeypatch.setenv("DHOLE_NO_BROWSER_PREWARM", raw)
+            assert _browser_prewarm_enabled() is True, raw
+
+    def test_prewarm_disabled_sends_nothing_and_launches_nothing(self, monkeypatch):
+        """DHOLE_NO_BROWSER_PREWARM=1：TCP preflight 与浏览器启动都不发生。"""
+        import asyncio
+        import socket
+
+        from dhole_mcp.server import MasterFetchServer
+
+        monkeypatch.setenv("DHOLE_NO_BROWSER_PREWARM", "1")
+
+        def _no_connect(*args, **kwargs):
+            raise AssertionError("DHOLE_NO_BROWSER_PREWARM=1 时不该发起 TCP preflight")
+
+        async def _no_launch(*args, **kwargs):
+            raise AssertionError("DHOLE_NO_BROWSER_PREWARM=1 时不该拉起浏览器")
+
+        monkeypatch.setattr(socket, "create_connection", _no_connect)
+        monkeypatch.setattr(MasterFetchServer, "_ensure_auto_session", _no_launch)
+        # 不该抛，也不该做任何事
+        asyncio.run(MasterFetchServer()._prewarm_stealthy())
+
 
 # ─── options bag validation ───────────────────────────────────────
 
