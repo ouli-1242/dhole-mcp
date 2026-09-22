@@ -219,7 +219,7 @@
 - 日志凭据泄漏（重试时把含 `user:pass@` 的代理 URL 写进日志）、`ProxyPool.health_check` 未 await 的 RuntimeWarning、过期的类型标注与死赋值。
 - 已知缺口（13.15 已修）：抓取工具的 `auth` / `proxy_auth` 当时只校验不生效。
 
-[15.0]: https://github.com/ouli-1242/dhole-mcp/compare/v14.7...HEAD
+[15.0]: https://github.com/ouli-1242/dhole-mcp/compare/v14.7...v15.0
 [14.7]: https://github.com/ouli-1242/dhole-mcp/compare/v14.6...v14.7
 [14.6]: https://github.com/ouli-1242/dhole-mcp/compare/v14.5...v14.6
 [14.5]: https://github.com/ouli-1242/dhole-mcp/compare/v14.4...v14.5
