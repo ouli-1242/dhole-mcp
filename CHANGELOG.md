@@ -47,6 +47,19 @@
 - **`dhole engines list|reset`** 是同一件事的命令行入口（纯 stdlib 读状态文件，半坏安装上也能跑）；`dhole -v` 的能力面板新增 `engine cooldowns` 行，显示还剩多少秒。
 - **`circuit_open` 的报告现在带上重试倒计时**（`…skipped; retried in 90s`），把"永久被墙"和"90 秒后重试"分开；`preempted` 的文案明说"不是拦截、不是失败、不涉及网络"——第一轮测试者正是把它读成"dhole 没走 VPN"。
 
+### 修复（审计遗留六条）
+
+审计阶段登记的六条既有缺陷（当时只记录、未修）这次一并修掉；每条都先在**修复前**的 `git archive HEAD` 树上跑出对照数据，再在修复后复测。这六条里只有一个新增开关（KB-4 的环境变量），其余都是在把"代码实际做的事"和"它说出口的话"对齐。
+
+- **代理探活不再无条件外发（KB-3）。** 配了代理池时，第一次搜索就会后台向 `https://example.com` 逐个代理发探活请求 —— 哪怕池子全健康、没有任何冷却或死代理，而探活唯一的作用是复活失败过的代理。`ProxyPool.needs_probe()` 只在真有 cooled/dead 时为真，`_kick_health_check()` 据此提前返回；"冷却中的代理仍会被提前复活"这半边单独钉了测试。对照：修复前健康池 `probe task created: True | health_check calls: 1`，修复后 `False | 0`。
+- **410 Gone 真的走 archive 回退（KB-9）。** `_should_try_archive()` 对 410 返回 False，而调用点的状态元组写着 `(404, 410, 451)` —— 410 那一项永远为假：410 的页面从不去 Wayback 找快照（404/451 都会）。gate 现在认 410；元组提成 `_ARCHIVE_FALLBACK_STATUSES` 常量，并写明它**故意**比 gate 窄（网络失败走到这里仍应升级到浏览器层）。对照：修复前 `gate(410)=False`、`archive asked: []`、返回空的 410；修复后 `gate(410)=True`、`archive asked: ['https://gone.example.com/x']`、返回快照正文。
+- **启动浏览器预热可关闭（KB-4，新环境变量 `DHOLE_NO_BROWSER_PREWARM`）。** 裸启动会先向 `1.1.1.1:443` 发一次 TCP preflight 再把隐身浏览器拉起来 —— 那时 agent 还什么都没问。预热本身是有意的（省 3-5 秒冷启动），但此前没有任何开关能关掉它，离线机器/计费网络/严格出网策略只能接受这笔账。设 `1` 后整段预热跳过（一个包都不发），浏览器回到"第一次真正需要时懒加载"；默认行为不变。对照：设了开关再跑修复前的代码，`connect ('1.1.1.1', 443)` 照发；修复后 `socket attempts: []`。
+- **首次搜索下模型的说明补齐（KB-5）。** "首次神经搜索会下载 ~279MB 模型"这事 README 早已写明（重排模型一节与状态表都标着"首次神经搜索时下载"），缺的是断网/多机怎么办 —— 现在补上"把 `~/.dhole/models/<名字>/` 整个目录（三个文件）拷过去就不再联网"，并用测试钉住这个不变量：文件齐了 `_ensure_model()` 一个字节都不下载。
+- **"验的是哪份代码"有了守卫（KB-8）。** 本机 `site-packages` 里装着一份旧构建的 `dhole_mcp`，pytest 之所以验到 src 全靠 `pyproject.toml` 的 `pythonpath = ["src"]`；绕开它（直接 `python -c`、装了旧轮的 venv、改坏配置）时断言会"通过"但验的是旧代码。新增 `tests/test_import_provenance.py`：导入必须落在本 checkout 的 `src/` 下、不许命中 site-packages —— 把 pythonpath 关掉跑，这条会红（`-o pythonpath=` 实测 1 failed）。
+- **fixture 哈希改按仓库字节记录（KB-11）。** `tests/engine_fixtures` 里 bing A/B 与 yandex 的 `sha256` 记的是**工作树 CRLF 字节**的哈希，而 git 存的是 LF（`.gitattributes` 的 `* text=auto eol=lf`）：本机因为还留着 `.gitattributes` 生效之前的 CRLF 残留而通过，换任何全新克隆 / 新 worktree 一 checkout 就失败。现在工作树字节与记录值都以仓库字节为准（`sogou_weixin.html` 的 blob 是 `-text`、行尾原样入库，本就与检出方式无关）；四个 fixture 在"全新克隆模拟"里逐个核对全部 MATCH。此前记录里"全新检出只失败 1 条"是断言在第一个不匹配处就停了，四个都得单独核对。
+
+本批新增/加强的测试：`tests/test_proxy.py`（探活门控）、`tests/test_server.py`（预热开关与解析）、`tests/test_bug_report_regressions.py::TestArchiveFallback`、`tests/test_import_provenance.py`、`tests/test_reranker_models.py`（预置不下载）、`tests/test_engine_parsers.py`（哈希不变式）。四分支合并后全量 **1157 passed, 5 skipped**（默认套件，0 失败），`ruff check .` 干净。
+
 ### 测试
 
 `tests/test_bug_report_regressions.py`（68 例）按报告的编号逐条钉住复现证据与修复后的契约。全量：`1128 passed, 2 skipped`，`ruff` 干净。`tests/test_tool_descriptions.py` 的 `cache_clear` 体积预算 550 → 860（该工具新增了 `engine_state` 与使用时机说明），`tools/list` 实测字符数 11809（预算 12500）；README 的 token 表尚未按 14.7 重新测（需要 `tiktoken`，数字会小幅上移）。
