@@ -92,6 +92,7 @@ rm -rf ~/.dhole                 # 全部运行时数据：缓存 / 模型 / 状�
 dhole -v          # 版本 + 能力面板（浏览器 / PDF / 重排 / 引擎产出）
 dhole --doctor    # 安装体检：逐项定位问题并给出修复命令
 dhole proxy       # 管理搜索代理池（list | add | remove | clear）
+dhole engines     # 查看 / 重置引擎健康状态（list | reset）
 dhole model       # 查看 / 切换重排模型
 dhole -u          # 自更新（本 fork 默认关闭）
 ```
@@ -118,10 +119,10 @@ dhole -u          # 自更新（本 fork 默认关闭）
 | `smart_search` | 无密钥网页搜索：多引擎并行、神经重排序、可同时抓回全文                    |
 | `smart_crawl`  | 同域最佳优先爬取，支持 sitemap 模式与关键词过滤                           |
 | `screenshot`   | 页面截图（多模态代理专用）                                                |
-| `parse`        | 本地文件解析（.html/.docx/.xlsx/.csv → Markdown）                         |
+| `parse`        | 本地文件解析（.html/.docx/.xlsx/.csv → Markdown）；相对路径按 cwd → `DHOLE_WORKDIR` → 家目录依次尝试 |
 | `feed_fetch`   | 批量抓取 RSS/Atom feed 最新条目                                           |
 | `resolve_url`  | 解析 URL 最终地址（跟随重定向，不下载页面体）                             |
-| `cache_clear`  | 清除抓取缓存                                                              |
+| `cache_clear`  | 清除抓取缓存；`engine_state=true` 同时重置引擎冷却与产出记录，响应回报 `engine_health` |
 
 ### 和谁比、不跟谁比
 
@@ -139,24 +140,28 @@ Dhole 的差异化不是「每项都最强」，而是**在同一个本地进程
 
 ### 上下文开销
 
-MCP 客户端每次连接（新会话或重连）都要先付一笔固定 token：`instructions`（握手时注入一次）+ 全部工具 schema。用 `cl100k_base` 对客户端实际收到的 wire JSON 计数，本仓库 14.6 实测：
+MCP 客户端每次连接（新会话或重连）都要先付一笔固定 token：`instructions`（握手时注入一次）+ 全部工具 schema。用 `cl100k_base` 对客户端实际收到的 wire JSON 计数，本仓库 14.6 实测（14.7 给 `cache_clear` 加了 `engine_state`、给 `parse` 加了路径说明，字符预算已同步，token 数字待重测，两行会小幅上移）：
 
 | 项目 | tokens |
 | --- | --- |
-| `instructions`（`initialize` 注入一次） | 324 |
-| `tools/list`（8 个工具，含描述 + `inputSchema`） | 3,454 |
-| **连接时合计** | **3,778** |
+| `instructions`（`initialize` 注入一次） | 333 |
+| `tools/list`（8 个工具，含描述 + `inputSchema`） | 2,931 |
+| **连接时合计** | **3,264** |
 
 逐工具拆分：
 
 | 工具 | tokens | 工具 | tokens |
 | --- | --- | --- | --- |
-| `smart_fetch` | 1,268 | `feed_fetch` | 215 |
-| `smart_search` | 686 | `resolve_url` | 148 |
-| `smart_crawl` | 633 | `cache_clear` | 144 |
-| `screenshot` | 217 | `parse` | 139 |
+| `smart_fetch` | 981 | `feed_fetch` | 213 |
+| `smart_crawl` | 570 | `parse` | 160 |
+| `smart_search` | 519 | `resolve_url` | 147 |
+| `screenshot` | 213 | `cache_clear` | 128 |
 
 这笔开销只在连接时付一次，不会每轮重复。`smart_fetch` 之所以最贵，是因为它一个工具承担了抓取 / PDF / OCR / 批量 / 聚焦提取 / 页面交互 / 结构化提取的全部参数——拆成多个工具反而会让总开销更高。
+
+其中约三成是 schema 的**结构开销**（参数名、`type`、`description` 这些键在 JSON 里逐参数重复），只有减少参数或工具才能降，压缩措辞对它无效。
+
+描述与 `instructions` 的措辞是被测试钉住的（`tests/test_tool_descriptions.py`）：路由规则、与代码常量的一致性、以及本表的体积预算，改动超出预算会直接失败。所以上表数字若要变，是有意识的动作，不会无声漂移。
 
 > 复现方式：`tiktoken.get_encoding("cl100k_base")` 对 `mcp.types.Tool(**td).model_dump(exclude_none=True)` 序列化后的 JSON 计数（±5%，与更新版本的 Claude / GPT tokenizer 略有差异）。
 
@@ -192,10 +197,11 @@ MCP 客户端每次连接（新会话或重连）都要先付一笔固定 token�
 | `DHOLE_USAGE_LOG`                                                    | 设 `1`（或一个路径）写本地调用日志（JSONL）：工具名、成功与否、耗时、脱敏后的错误。**只记这些，不记参数值**，也不联网上传。用来回答「我的客户端到底有没有调用 dhole」                                                                                                                                                                                                         |
 | `DHOLE_NO_AUTO_REPAIR`                                               | 设 `1` 后，`dhole` 入口遇到 ImportError 不再自动 `pip install --force-reinstall`（只打印修复命令）。默认开启自动修复；重装目标**钉在当前已装版本**（读不到版本元数据时才退回裸包名）                                                                                                                                                                                          |
 | `DHOLE_HOME`                                                         | 状态目录位置（默认 `~/.dhole`）。这里装着**抓到的正文明文**、搜索词与模型；共享机器上可指到别处。POSIX 下目录建为 0700、状态文件 0600；**Windows 上 chmod 基本无效（NTFS ACL 说了算），那边的实际手段就是这个变量**                                                                                                                                                           |
+| `DHOLE_WORKDIR`                                                      | `parse` 解析相对路径时额外尝试的目录。MCP 宿主进程常常把自己的安装目录当作 cwd（实测 `D:\Program Files\Qoder\`），此时相对路径必须靠这个变量指向项目目录；顺序是 cwd → `DHOLE_WORKDIR` → 家目录，找不到时错误里会列出全部试过的路径                                                                                                                                            |
 | `DHOLE_HF_ENDPOINT`（或 `HF_ENDPOINT`）                              | 神经重排模型的下载源。默认先试 `huggingface.co`、失败自动回退 `hf-mirror.com`（revision 固定；设了就只用这一个）。回退改的是**从哪取字节**，不改取到什么——两个端点是否真给同一份字节，取决于镜像 fidelity；注册表里填了发布方 sha256 的模型（当前 `bge-zh` / `ms-marco`，取自仓库元数据的 LFS oid 并与本机字节核对过）不符即拒用，`zh-full` 该字段仍为空（未在本机下载过，无从核对） |
 | `DHOLE_DEFAULT_ENGINES` 之外                                         | 重排模型选择见下节（配置文件，非环境变量）                                                                                                                                                                                                                                                                                                                                    |
 
-免密引擎连续 3 次连接失败（DNS/拒连/超时，通常是被墙）会自动冷却 10 分钟并持久化，期间不再参与搜索；任何一次成功即清零。被反爬封（403/503）的冷却仍是 60 秒。
+免密引擎连续 3 次连接失败（DNS/拒连/超时，通常是被墙）会自动冷却 10 分钟并持久化，期间不再参与搜索；任何一次成功即清零。被反爬封（403/503）的冷却仍是 60 秒。冷却**到期即自动放行**（不需要重启进程），过期记录也会在下一轮搜索时从状态文件里清掉；如果想立刻放行全部引擎，`dhole engines reset` 或 `cache_clear(engine_state=true)`，想看当前每个引擎的判定与剩余冷却秒数，`dhole engines list` 或 `dhole -v`。注意 `engine_preempted` 不是冷却：那是"够数的引擎先答完，这一路被取消"，健康快池下是常态。
 
 ### Keyed 搜索后端（brightdata / tavily / exa / bocha）
 
@@ -269,8 +275,8 @@ dhole model use bge-zh         # 切回默认
 | `~/.dhole/cache.db`             | 抓到的正文（明文 SQLite）。**按请求上下文分区**：带 cookies / 自定义头 / UA / 代理 / PDF 口令或改动内容开关的抓取，不会与匿名请求共享缓存条目（口令这一维早前缺席，用 `password=` 解出的正文可能被匿名请求复读；受影响的是 PDF 行，首次打开时清一次，不动其余缓存） | 每次成功抓取                    |
 | `~/.dhole/models/<model>/`      | 神经重排序模型（3 个文件 + 一份 `model.sha256`，来自 HuggingFace 固定 revision）。默认 `bge-zh`（中英双语 int8，~279MB），可换 `zh-full`（~450MB）/ `ms-marco`（英文，~91MB）                                                                                       | 首次神经搜索时下载              |
 | `~/.dhole/config/reranker.json` | 重排模型选择（`{"model": "..."}`），`dhole model use` 也写这里                                                                                                                                                                                                      | 切换模型时                      |
-| `~/.dhole/circuit_breaker.json` | 引擎熔断/冷却状态                                                                                                                                                                                                                                                   | 引擎被限速/被墙时               |
-| `~/.dhole/engine_stats.json`    | 每个引擎最近一轮的解析产出（容器条数 / 可用条数 / 均值），用来把"引擎答了但解析出 0 条"这种静默降级变可见；`dhole -v` 读它                                                                                                                                          | 每次真实搜索（至多 60s 写一次） |
+| `~/.dhole/circuit_breaker.json` | 引擎熔断/冷却状态（到期自动放行，并在下一轮搜索时把过期记录从文件里清掉）；`dhole engines reset` / `cache_clear(engine_state=true)` 立即清空                                                                                                              | 引擎被限速/被墙时               |
+| `~/.dhole/engine_stats.json`    | 每个引擎最近一轮的解析产出（容器条数 / 可用条数 / 均值），用来把"引擎答了但解析出 0 条"这种静默降级变可见；`dhole -v` 与 `dhole engines list` 读它（它只记录状态，**不参与**决定引擎是否被使用）                                                               | 每次真实搜索（至多 60s 写一次） |
 | `~/.dhole/search_proxies.json`  | 搜索代理池（`dhole proxy add` 写入；凭据以**明文**存储，`dhole proxy list` 显示时打码）                                                                                                                                                                            | 配置代理时                      |
 | `~/.dhole/search_feedback.json` | 隐式域名偏好                                                                                                                                                                                                                                                        | 仅 `DHOLE_SEARCH_FEEDBACK=1`    |
 | `~/.dhole/usage.jsonl`          | 本地调用日志（工具名/结果/耗时/脱敏错误，无参数值）                                                                                                                                                                                                                 | 仅 `DHOLE_USAGE_LOG` 开启       |

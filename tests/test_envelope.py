@@ -290,15 +290,16 @@ class TestFreshness:
         assert age == 2
         assert stale is False
 
-    def test_no_date_returns_negative(self):
+    def test_no_date_returns_none(self):
+        """BUG-2: -1 as the "unknown" sentinel reads as a negative age."""
         age, stale = compute_freshness({}, "2026-07-22T00:00:00Z")
-        assert age == -1
+        assert age is None
         assert stale is False
 
-    def test_future_date_returns_negative(self):
+    def test_future_date_returns_none(self):
         meta = {"published_time": "2030-01-01T00:00:00Z"}
         age, stale = compute_freshness(meta, "2026-07-22T00:00:00Z")
-        assert age == -1
+        assert age is None
         assert stale is False
 
     def test_compact_date_format(self):

@@ -83,28 +83,55 @@ def _query_tokens(query: str) -> set[str]:
     return {w.lower() for w in _WORD_RE.findall(query or "") if w.lower() not in _STOPWORDS}
 
 
+# A phrase that OPENS with one of these is a sentence fragment, not something a
+# person would type as a follow-up query ("before joining", "according to",
+# "compared with"). Measured live: related_queries returned exactly these from
+# snippet text - ["benedetto profile", "before joining", "covering laptops",
+# "deals writer", "gadget spent"].
+_PHRASE_LEAD_FUNCTION_WORDS = _STOPWORDS | {
+    "before", "after", "during", "within", "without", "across", "around",
+    "against", "between", "onto", "over", "under", "per", "than", "above",
+    "below", "plus", "minus", "like", "unlike", "according", "based",
+    "called", "named", "using", "used", "made", "makes", "getting", "got",
+    "has", "have", "had", "is", "are", "was", "were", "be", "been", "being",
+    "its", "their", "there", "here", "when", "where", "then", "so", "if",
+    "as", "of", "in", "on", "at", "to", "by", "or", "and", "but", "nor",
+}
+
+
+def _registrable_domain(url: str) -> str:
+    """Host minus www., used to count INDEPENDENT sources for a phrase."""
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
 def _related_queries(query: str, results: list["SearchResult"], *, n: int = 6) -> list[str]:
     """Mine follow-up queries from result titles + snippets.
 
-    Ranks bigrams by document frequency (in how many results they appear),
-    drops bigrams that overlap the original query or duplicate each other, and
-    falls back to high-frequency unigrams if too few bigrams. Returns up to n
-    phrases. Robust + cheap; never raises.
+    A phrase counts once per *domain*, so "appears in 2 results" means two
+    independent sources used it. Counting per result let one site's repeated
+    boilerplate (an author bio appearing under five articles) mint a suggestion,
+    which is most of what made the output look like random snippet shrapnel.
+    Phrases opening with a function word are dropped for the same reason: they
+    are sentence fragments. Too little evidence returns too few phrases - the
+    field is optional, padding it is not.
     """
     if not results:
         return []
     q_tokens = _query_tokens(query)
-    docs: list[list[str]] = []
+    docs: list[tuple[str, list[str]]] = []
     for r in results:
         text = (f"{r.title} {r.snippet}").lower()
         words = [w for w in _WORD_RE.findall(text) if w not in _STOPWORDS]
-        docs.append(words)
+        docs.append((_registrable_domain(r.url) or r.url.lower(), words))
     if not docs:
         return []
 
-    bigram_docfreq: Counter[str] = Counter()
-    unigram_docfreq: Counter[str] = Counter()
-    for words in docs:
+    bigram_domains: dict[str, set[str]] = {}
+    for domain, words in docs:
         uniq_bi = set()
         for i in range(len(words) - 1):
             a, b = words[i], words[i + 1]
@@ -112,10 +139,7 @@ def _related_queries(query: str, results: list["SearchResult"], *, n: int = 6) -
                 continue
             uniq_bi.add(f"{a} {b}")
         for bi in uniq_bi:
-            bigram_docfreq[bi] += 1
-        for w in set(words):
-            if len(w) >= 3:
-                unigram_docfreq[w] += 1
+            bigram_domains.setdefault(bi, set()).add(domain)
 
     def _overlaps_query(phrase: str) -> bool:
         toks = phrase.split()
@@ -128,13 +152,20 @@ def _related_queries(query: str, results: list["SearchResult"], *, n: int = 6) -
             return True
         return False
 
+    def _is_sentence_fragment(phrase: str) -> bool:
+        """A phrase nobody types as a query: function word or verb-form lead."""
+        lead = phrase.split()[0]
+        return lead in _PHRASE_LEAD_FUNCTION_WORDS or lead.endswith("ing")
+
     scored = []
-    for bi, df in bigram_docfreq.items():
-        if df < 2:  # appears in only one result -> not a pattern
+    for bi, domains in bigram_domains.items():
+        if len(domains) < 2:  # one source's wording is not a topic
+            continue
+        if _is_sentence_fragment(bi):
             continue
         if _overlaps_query(bi):
             continue
-        scored.append((df, bi))
+        scored.append((len(domains), bi))
     scored.sort(key=lambda x: (-x[0], x[1]))
 
     out: list[str] = []
@@ -147,15 +178,6 @@ def _related_queries(query: str, results: list["SearchResult"], *, n: int = 6) -
         seen_words.update(toks)
         if len(out) >= n:
             break
-
-    if len(out) < n:  # fall back to unigrams
-        for w, df in unigram_docfreq.most_common():
-            if df < 2 or w in q_tokens or w in seen_words:
-                continue
-            out.append(w)
-            seen_words.add(w)
-            if len(out) >= n:
-                break
     return out[:n]
 
 
@@ -503,6 +525,23 @@ def _validate_mode(mode):
     return mode.lower()
 
 
+def _rerank_absent_reason() -> str:
+    """Why neural rerank did not run, phrased so the caller can act on it.
+
+    The old fallback said "install dhole-mcp[all] and retry" whenever no reason
+    had been recorded - including on installs that DO have the extras, where the
+    reranker simply had not loaded yet. Measured in a live response: "neural
+    rerank is NOT active despite its deps being installed ... install
+    dhole-mcp[all] and retry" - advice that contradicts its own first clause.
+    """
+    reason = unavailable_reason()
+    if reason:
+        return reason
+    return ("no reason recorded - the reranker has not run in this process yet "
+            "(the first search may still be loading it). `dhole -v` shows whether "
+            "the model is installed and cached.")
+
+
 def _rank(query: str, ranked: list[RawResult], mode: str):
     """Apply neural rerank (the ONLY reranker; BM25 was removed as redundant -
     neural matches its speed and ranks better). Returns (ranked_list, scores,
@@ -520,7 +559,7 @@ def _rank(query: str, ranked: list[RawResult], mode: str):
         pairs = neural_rerank(query, ranked)
         if pairs is not None:
             return [r for r, _ in pairs], [s for _, s in pairs], "neural", note
-        reason = unavailable_reason() or "install dhole-mcp[all] and retry"
+        reason = _rerank_absent_reason()
         if mode == "neural":
             note = "neural rerank unavailable - using consensus + engine-position order. " + reason
         elif not reason.startswith("neural rerank needs dhole-mcp[all]"):
@@ -1038,7 +1077,14 @@ async def smart_search(
             duration_ms=0, error=str(e),
         )
 
+    _requested_max = max_results
     max_results = max(1, min(max_results, 50))
+    # 越界的 max_results 此前被静默钳制：调用方要 100 条、拿到 50 条，响应里没有任何
+    # 一处说明这 50 是上限而不是"只有 50 条结果"。
+    _clamp_note = ""
+    if _requested_max != max_results:
+        _clamp_note = (f"max_results={_requested_max} is outside the supported 1-50 "
+                       f"range; returning at most {max_results}")
 
     # find_similar: the target is a URL, not a query. Derive it early so the cache
     # key is keyed on the source URL.
@@ -1166,7 +1212,7 @@ async def smart_search(
             rerank_used = "find_similar"
             if ranked and get_reranker() is None:
                 rerank_note = ("find_similar used consensus + position order (neural unavailable). " +
-                               (unavailable_reason() or "install dhole-mcp[all]"))
+                               _rerank_absent_reason())
         total_families, _contrib, _basis = _family_universe(engines, reports)
         ranked_list, scores = _apply_quality_boost(ranked_list, scores, query)
         ranked_list, scores = ranked_list[:max_results], scores[:max_results]
@@ -1219,7 +1265,11 @@ async def smart_search(
                             # 部分引擎坏了就只问还活着的那些，别再全员陪跑。
                             engines=(list(probe) if (all_silent and drifted and probe)
                                      else engines),
-                            site=None,
+                            # site 在改写这一轮**保留**。此前写死 site=None，于是
+                            # engines=[...] + site=theverge.com 实测返回的全是
+                            # trustpilot/g2 —— 用户明确的域名约束被静默放弃，回答的是
+                            # 另一个问题。域名不存在时宁可如实报 0，并说明约束被遵守了。
+                            site=site,
                             exclude_sites=exclude_sites, region=region,
                             freshness=freshness, page=page, server=server,
                         )
@@ -1230,6 +1280,8 @@ async def smart_search(
                             # so the agent knows these may be less precise.
                             query = rewritten  # update query for downstream (related_queries, summary)
                             error = f"NOTE: Original query returned 0 results. Showing results for rewritten query: '{rewritten}'"
+                            if site:
+                                error += f" (still restricted to site={site})"
                     except Exception:
                         pass
             if not ranked and not error:
@@ -1240,6 +1292,13 @@ async def smart_search(
                         "falling out of sync with the engine's page structure, not the query "
                         "being wrong - no second round was issued. Run `dhole -v` for "
                         "per-engine yield, or rephrase with different terms.")
+                elif site:
+                    error = (
+                        f"No results for this query inside site={site}. The site filter was "
+                        "kept on the rewritten query too, so these are genuinely absent rather "
+                        "than off-domain. Try the query without site=, or check the domain is "
+                        "indexed (a landing page alone often is not)."
+                    )
                 else:
                     error = (
                         "No results from any engine. " +
@@ -1260,11 +1319,34 @@ async def smart_search(
             ranked_list, scores = _diversify(ranked_list, scores, max_per_domain=2)
         ranked_list, scores = ranked_list[:max_results], scores[:max_results]
         results_list = _build_results(query, ranked_list, scores, total_families)
+        _delivered = len(results_list)
         results_list = _quality_filter(results_list)
+        _dropped_low = _delivered - len(results_list)
+        _before_topic_filter = len(results_list)
         results_list = _filter_irrelevant_results(results_list, query)
+        _off_topic = _before_topic_filter - len(results_list)
+        _dropped_total = _dropped_low + _off_topic
         fetch_hint = compute_fetch_hint(results_list)
         if rerank_note:
             fetch_hint = (fetch_hint + " | " + rerank_note) if fetch_hint else rerank_note
+        # 引擎确实给了结果、是 dhole 自己把结果丢掉时，必须说出来。否则响应同时写着
+        # engines_used=[bing]、engine_empty=[]、error=""、results=[]，读起来像"这个
+        # 查询没有结果"，next_action 还让人换个说法重试——实测本机 bing 对 DNS 查询回的
+        # 全是 bilibili 首页（网络层拿走了回答），改查询不会有任何用。部分丢弃同样要留痕，
+        # 否则"结果比预期少"又变回隐形降级。
+        if _dropped_total and not results_list:
+            _why = ("matched no query term" if _off_topic and not _dropped_low
+                    else "scored below the relevance floor")
+            error = (
+                f"Engines delivered {_delivered} results, but all {_dropped_total} "
+                f"{_why}, so dhole dropped them rather than return noise. Off-topic "
+                "results on a normal query usually mean a captive portal, DNS hijack "
+                "or proxy answered on the engine's behalf - rephrasing will not help; "
+                "check the network, or retry with engines=[...] to ask a different index."
+            )
+        elif _dropped_total:
+            _drop_note = f"{_dropped_total} engine results were dropped as off-topic/low-relevance"
+            fetch_hint = f"{fetch_hint} | {_drop_note}" if fetch_hint else _drop_note
         main_related = _related_queries(query, results_list)
 
     # engines_used = contributed. 没贡献的引擎分成三类，各自含义不同：
@@ -1285,6 +1367,8 @@ async def smart_search(
     _notes = _pool_health_notes(results_list, not_contributing, _contrib)
     if _notes:
         fetch_hint = (fetch_hint + " | " + _notes) if fetch_hint else _notes
+    if _clamp_note:
+        fetch_hint = (fetch_hint + " | " + _clamp_note) if fetch_hint else _clamp_note
 
     # Cache successful results (+ engine metadata + related queries for cache hits)
     if cache_ttl > 0 and results_list:

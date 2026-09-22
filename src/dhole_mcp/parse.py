@@ -1,7 +1,7 @@
 """Local file parsing for Dhole MCP.
 
-Converts local files (.html, .docx, .xlsx, .csv) to Markdown so agents can
-read documents without a web fetch. Part of the [all] extra (python-docx,
+Converts local files (.html, .docx, .xlsx, .csv, .pdf) to Markdown so agents
+can read documents without a web fetch. Part of the [all] extra (python-docx,
 openpyxl). Graceful degradation: if deps are missing, returns a clear error.
 
 Supported formats:
@@ -9,7 +9,8 @@ Supported formats:
 - .docx         → python-docx: headings, paragraphs, tables → Markdown
 - .xlsx         → openpyxl: sheets → Markdown tables
 - .csv          → stdlib csv: → Markdown table
-- .pdf          → hint to use smart_fetch (already handles PDFs)
+- .pdf          → pdf_extractor (same pipeline smart_fetch uses for PDF URLs:
+                  layout-aware markdown, OCR fallback for scans, quality score)
 """
 
 from __future__ import annotations
@@ -71,10 +72,7 @@ def parse_file(file_path: str) -> tuple[str, str]:
         elif ext == ".csv":
             return _parse_csv(file_path), ""
         elif ext == ".pdf":
-            return "", (
-                "PDF files are handled by smart_fetch (with OCR support). "
-                "Use: smart_fetch(url='file:///path/to/file.pdf') or pass the PDF URL."
-            )
+            return _parse_pdf(file_path)
     except ImportError as e:
         return "", (
             f"Missing dependency for {ext} parsing: {e}. "
@@ -211,6 +209,50 @@ def _parse_csv(file_path: str) -> str:
     if has_more:
         result += "\n\n... (100+ rows, truncated for display)"
     return result
+
+
+def _parse_pdf(file_path: str) -> tuple[str, str]:
+    """Parse a local .pdf to Markdown, reusing the URL path's extractor.
+
+    Same pipeline smart_fetch uses for PDF URLs - layout-aware markdown,
+    table_of_contents, per-page CID-garbage OCR fallback, quality score - so a
+    local file behaves identically to a fetched one.
+
+    Why not just hand it to smart_fetch as ``file://``: that tool's URL
+    validator is an SSRF guard and rejects non-http(s) schemes by design.
+    Reading a path the caller supplied is a different trust boundary - the same
+    one this module already crosses for .docx/.xlsx/.csv/.html.
+
+    Returns (content, error) rather than just content, because a PDF can fail
+    in ways the other formats cannot (encrypted, scanned with no text layer).
+    """
+    from dhole_mcp.pdf_extractor import extract_pdf
+
+    with open(file_path, "rb") as fh:
+        body = fh.read()
+
+    result = extract_pdf(body, extraction_type="markdown")
+
+    if not result.content_ok:
+        return "", f"PDF extraction failed: {result.error or 'no extractable content'}"
+
+    parts: list[str] = []
+    if result.title:
+        parts.append(f"# {result.title}")
+    if result.author:
+        parts.append(f"*{result.author}*")
+    parts.append("\n\n".join(result.content))
+
+    # Only annotate when something is off - a clean PDF gets no extra noise.
+    notes: list[str] = []
+    if result.ocr_fallback_used:
+        notes.append("OCR fallback used (scanned or CID-garbled pages)")
+    if result.quality_score and result.quality_score < 0.6:
+        notes.append(f"low extraction quality ({result.quality_score:.2f})")
+    if notes:
+        parts.append("> " + "; ".join(notes))
+
+    return "\n\n".join(p for p in parts if p).strip(), ""
 
 
 def _table_to_markdown(table) -> str:

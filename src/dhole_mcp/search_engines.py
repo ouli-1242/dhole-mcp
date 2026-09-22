@@ -124,6 +124,15 @@ def _engine_yield() -> dict:
         return {}
 
 
+def _cooldowns() -> dict:
+    """Active engine cooldowns ({backend: seconds left}); no observation -> {}."""
+    try:
+        from dhole_mcp import search_metasearch
+        return search_metasearch.cooldowns()
+    except Exception:
+        return {}
+
+
 def _normalize_domain(value: str) -> str:
     """Return a comparable hostname without a cosmetic leading ``www.``."""
     value = value.strip()
@@ -263,6 +272,7 @@ async def multi_search(
     # Per-backend reports from the metasearch status. 每个分支都带上原始 token：
     # 布尔是有损折叠，empty 就是被折掉的那一格。
     yield_rows = _engine_yield()
+    cooldowns = _cooldowns()
     reports: list[EngineReport] = []
     for name, st in status.items():
         y = yield_rows.get(name, {}) if isinstance(yield_rows, dict) else {}
@@ -284,14 +294,22 @@ async def multi_search(
         if st == "ok":
             reports.append(EngineReport(name=name, ok=True, **common))
         elif st == "preempted":
+            # 被取消 ≠ 被拦。第一轮的测试者正是把这一格读成"引擎被墙"，进而误判
+            # dhole 没有走 VPN。写清楚它不是失败，也不涉及网络。
             reports.append(EngineReport(name=name, preempted=True,
-                                        error="preempted (enough backends delivered)", **common))
+                                        error="preempted - other engines met the result "
+                                              "quota first, so this one was cancelled "
+                                              "mid-flight (not a block, not a failure)",
+                                        **common))
         elif st == "blocked":
             reports.append(EngineReport(name=name, blocked=True,
                                         error="blocked/captcha (circuit opened)", **common))
         elif st == "circuit_open":
+            left = cooldowns.get(name, 0)
+            retry = f"; retried in {int(round(left))}s" if left else ""
             reports.append(EngineReport(name=name, blocked=True,
-                                        error="circuit open (recently blocked; skipped)", **common))
+                                        error="circuit open (recently blocked; skipped" + retry + ")",
+                                        **common))
         elif st == "timeout":
             reports.append(EngineReport(name=name, blocked=True, error="timed out", **common))
         elif st.startswith("error") or st.startswith("init_error") or st.startswith("no_key"):

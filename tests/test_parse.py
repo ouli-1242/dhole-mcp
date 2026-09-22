@@ -31,16 +31,38 @@ class TestParseFileBasic:
         finally:
             os.unlink(path)
 
-    def test_pdf_hint(self):
+    def test_pdf_with_text_is_parsed(self):
+        """本地 PDF 走 smart_fetch 用的同一个提取器，不再是「给个提示」。"""
+        path = os.path.join(os.path.dirname(__file__), "background_checks.pdf")
+        content, error = parse_file(path)
+        assert error == ""
+        assert "--- Page 1 ---" in content
+        assert "NICS Firearm Background Checks" in content
+
+    def test_image_only_pdf_reports_why(self):
+        """扫描件没有文字层时必须说明原因，而不是静默返回空内容。"""
+        path = os.path.join(os.path.dirname(__file__), "dummy.pdf")
+        content, error = parse_file(path)
+        assert content == ""
+        assert "no extractable text" in error.lower() or "scanned" in error.lower()
+
+    def test_malformed_pdf_does_not_raise(self):
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(b"%PDF-1.4")
             path = f.name
         try:
             content, error = parse_file(path)
             assert content == ""
-            assert "smart_fetch" in error
+            assert error
         finally:
             os.unlink(path)
+
+    def test_pdf_never_hints_at_the_file_scheme(self):
+        """回归：这里曾返回「用 smart_fetch(url='file://...')」，而 file:// 被
+        SSRF 守卫硬拦 —— agent 照做必然失败，且失败前已经白花两次调用。"""
+        path = os.path.join(os.path.dirname(__file__), "dummy.pdf")
+        _, error = parse_file(path)
+        assert "file://" not in error
 
 
 class TestParseHtml:

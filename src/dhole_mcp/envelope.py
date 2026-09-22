@@ -161,15 +161,19 @@ def _parse_date(s: str) -> date | None:
     return None
 
 
-def compute_freshness(metadata: dict[str, Any], fetched_at_iso: str) -> tuple[int, bool]:
+def compute_freshness(metadata: dict[str, Any], fetched_at_iso: str) -> tuple[int | None, bool]:
     """Return (content_age_days, is_stale) from the page's own dates.
 
     Prefers the modified/updated date over the published date (a page updated
-    last week is current even if first published in 2014). Returns (-1, False)
+    last week is current even if first published in 2014). Returns (None, False)
     when no date is recoverable or the date is in the future (bad data).
+
+    None, not -1: a negative age reads as "two days in the future", which is a
+    different claim than "the page published no date". Agents that arithmetic on
+    the value were silently comparing against a sentinel.
     """
     if not metadata:
-        return -1, False
+        return None, False
     # Prefer modified > published > created > generic 'date'.
     date_str = (
         metadata.get("modified_time")
@@ -181,7 +185,7 @@ def compute_freshness(metadata: dict[str, Any], fetched_at_iso: str) -> tuple[in
     )
     content_date = _parse_date(date_str) if date_str else None
     if content_date is None:
-        return -1, False
+        return None, False
     fetched_date = _parse_date(fetched_at_iso) if fetched_at_iso else None
     if fetched_date is None:
         # Fall back to today (UTC) so freshness still works if fetched_at missing.
@@ -189,7 +193,7 @@ def compute_freshness(metadata: dict[str, Any], fetched_at_iso: str) -> tuple[in
     delta = (fetched_date - content_date).days
     if delta < 0:
         # Future-dated content = bad metadata; can't trust the age signal.
-        return -1, False
+        return None, False
     return delta, delta > STALE_DAYS
 
 
@@ -427,8 +431,15 @@ def page_type_from_error(error: str) -> str:
     e = error.lower()
     if e.startswith("js_shell_detected"):
         return "js_shell"
-    if e.startswith("auth_required") or (e.startswith("not_a_pdf") and "auth" in e):
+    # auth_wall_detected comes from _is_auth_wall on the extracted content;
+    # auth_required/not_a_pdf+auth from the PDF pipeline. Both were expected to
+    # set page_type="auth_wall" and only the second one did, so a login wall
+    # reported error="auth_wall_detected" with page_type="unknown" and agents
+    # kept citing the sign-in form.
+    if e.startswith(("auth_required", "auth_wall_detected")) or (e.startswith("not_a_pdf") and "auth" in e):
         return "auth_wall"
+    if e.startswith(("bot_challenge_detected", "bot_wall_detected")):
+        return "captcha"
     if e.startswith("geo_redirect_detected"):
         return "redirect"
     return ""

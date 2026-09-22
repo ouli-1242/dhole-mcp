@@ -102,3 +102,40 @@ class TestDoctorFailuresAreLoud:
 
         assert updater.doctor() == 0
         assert "all healthy" in capsys.readouterr().out
+
+
+class TestProcessScanIsEncodingSafe:
+    """`_other_dhole_pids` 通过外部命令列进程，输出编码由系统决定。
+
+    中文 Windows 上 tasklist 按 GBK 输出，而 Python 的 UTF-8 模式会把
+    text=True 的解码器设成 utf-8 —— 于是「没有匹配进程」时那条中文提示会
+    解码失败，异常还发生在读取线程里（check_output 只会抛出无关的
+    TypeError），被 except 吞掉后 doctor 永远报「none running」。
+
+    这是静默假阴性：有残留进程也看不出来。修法是 errors="replace" —— 我们
+    要的 dhole.exe 和 PID 都是 ASCII，坏字节替换掉不影响解析。
+    """
+
+    def test_never_raises_on_this_platform(self):
+        assert isinstance(updater._other_dhole_pids(), list)
+
+    def test_never_raises_when_output_is_undecodable(self, monkeypatch):
+        """注入一段无法解码的输出，确认函数不把异常漏出去。"""
+        import subprocess
+
+        def boom(*a, **kw):
+            raise UnicodeDecodeError("utf-8", b"\xd0", 0, 1, "invalid start byte")
+
+        monkeypatch.setattr(subprocess, "check_output", boom)
+        assert updater._other_dhole_pids() == []
+
+    def test_subprocess_call_requests_lenient_decoding(self):
+        """源码级守卫：这两处调用必须带 errors="replace"，否则回归即静默。"""
+        import inspect
+        import re
+
+        src = inspect.getsource(updater._other_dhole_pids)
+        calls = re.findall(r"check_output\((.*?)\n\s*\)", src, re.S)
+        assert calls, "未找到 check_output 调用"
+        for call in calls:
+            assert 'errors="replace"' in call, f"缺少 errors=\"replace\": {call[:120]}"

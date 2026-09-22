@@ -193,6 +193,12 @@ def _other_dhole_pids() -> list[int]:
             out = subprocess.check_output(
                 ["tasklist", "/FI", "IMAGENAME eq dhole.exe", "/FO", "CSV", "/NH"],
                 text=True, timeout=10, creationflags=0x08000000,  # CREATE_NO_WINDOW
+                # Windows 控制台程序按 OEM 代码页输出，中文系统上是 GBK，而
+                # Python 的 UTF-8 模式会把 text=True 的解码器设成 utf-8 —— 于是
+                # 「没有匹配进程」时 tasklist 的中文提示会解码失败。失败点在读
+                # 取线程里，check_output 只会抛出无关的 TypeError。我们要的
+                # dhole.exe 和 PID 全是 ASCII，所以替换掉坏字节即可。
+                errors="replace",
             )
             for line in out.splitlines():
                 parts = [p.strip().strip('"') for p in line.split('","')]
@@ -204,7 +210,8 @@ def _other_dhole_pids() -> list[int]:
                     if pid != my_pid:
                         pids.append(pid)
         else:
-            out = subprocess.check_output(["ps", "-eo", "pid=,comm="], text=True, timeout=10)
+            out = subprocess.check_output(["ps", "-eo", "pid=,comm="], text=True,
+                                          timeout=10, errors="replace")
             for line in out.splitlines():
                 line = line.strip()
                 if not line:
@@ -808,11 +815,43 @@ def _engine_yield_row() -> tuple[str, str, bool] | None:
         return None
 
 
+def _engine_cooldowns() -> dict[str, float]:
+    """{engine: seconds left} from circuit_breaker.json, expired entries dropped.
+
+    Stdlib-only on purpose (like _engine_yield_row): the doctor has to run on a
+    half-broken install, and importing the search layer pulls primp/lxml/httpx.
+    """
+    try:
+        import json
+        import time
+
+        from dhole_mcp import paths
+        path = paths.file("circuit_breaker.json")
+        if not os.path.exists(path):
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        now_ts = time.time()
+        return {k: round(v - now_ts, 1) for k, v in data.items()
+                if isinstance(v, (int, float)) and v > now_ts}
+    except Exception:
+        return {}
+
+
 def _append_engine_yield(caps: list[tuple[str, str, bool]]) -> None:
     """capabilities() 有三条提前返回的分支，产出行每条都得看到。"""
     row = _engine_yield_row()
     if row:
         caps.append(row)
+    cooldowns = _engine_cooldowns()
+    if cooldowns:
+        caps.append((
+            "engine cooldowns",
+            " | ".join(f"{n}: {int(s)}s left" for n, s in sorted(cooldowns.items()))
+            + " - they expire on their own; `dhole reset-engines` (or cache_clear "
+              "engine_state=true) clears them now",
+            True,
+        ))
 
 
 def capabilities() -> list[tuple[str, str, bool]]:

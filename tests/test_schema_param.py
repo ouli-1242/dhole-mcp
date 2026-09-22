@@ -106,13 +106,20 @@ class TestSchemaReachesStructuredExtraction:
         assert json.loads(out.content[0])["price"] == "$29.99"
 
     @pytest.mark.asyncio
-    async def test_unusable_schema_raises_before_any_fetch(self):
-        """回归：无 properties 的 schema 此前会静默退回 markdown。"""
+    async def test_unusable_schema_is_rejected_before_any_fetch(self):
+        """回归：无 properties 的 schema 此前会静默退回 markdown。
+
+        拒绝的形式也进了契约：抛异常会被兜底成 is_error 的 MCP 结果，与 resolve_url
+        之类返回结构化错误的做法不一致（BUG-16）。现在是 status=0 + error，且仍然
+        不发请求、不返回 markdown。
+        """
         server = self._server()
-        with pytest.raises(ValueError, match="nothing to extract"):
-            await server.smart_fetch(
-                "https://example.com", schema={"type": "object"}, cache_ttl=0,
-            )
+        out = await server.smart_fetch(
+            "https://example.com", schema={"type": "object"}, cache_ttl=0,
+        )
+        assert out.status == 0
+        assert out.content == []
+        assert "nothing to extract" in out.error
         server._auto_escalate.assert_not_awaited()
 
     @pytest.mark.asyncio

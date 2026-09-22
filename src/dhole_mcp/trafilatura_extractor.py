@@ -279,6 +279,34 @@ def _fallback_extract(page, extraction_type: str, css_selector: Optional[str]) -
         return [html]
 
 
+def _narrow_html_to_selector(html: str, css_selector: str) -> Optional[str]:
+    """Return the markup of every node matching ``css_selector``, else None.
+
+    Works on the raw HTML string with lxml + CSSSelector, because the fetchers'
+    Response objects do not expose a .css() API. The old code gated on
+    ``hasattr(page, 'css')``, silently got False, and fell through to whole-page
+    extraction — which is why css_selector appeared to work only with
+    extraction_type='html' (that path narrows separately in _fallback_extract).
+    """
+    try:
+        from lxml import html as lxml_html
+        from lxml.cssselect import CSSSelector
+        tree = lxml_html.fromstring(html)
+        matches = CSSSelector(css_selector)(tree)
+    except Exception as e:
+        logger.debug(f"CSS selector '{css_selector}' failed: {e}")
+        return None
+    if not matches:
+        return None
+    # The fragments are re-wrapped as a document on purpose: trafilatura returns
+    # nothing for a bare fragment (`_extract_type("<h1>X</h1>", ...) -> None`),
+    # which made the caller fall back to the WHOLE page — the exact silent no-op
+    # this function exists to fix.
+    return "<html><body>" + "\n".join(
+        tostring(m, encoding="unicode") for m in matches
+    ) + "</body></html>"
+
+
 def extract_content_from_html(html: str, url: str = "", extraction_type: str = "markdown") -> str | None:
     """Extract content from a raw HTML string (used by smart_crawl, which fetches
     pages as html once and derives both links and markdown from the same body)."""
@@ -315,21 +343,15 @@ def extract_with_trafilatura(
 
         page_url = page.url if hasattr(page, 'url') else ""
 
-        # If css_selector specified, narrow the HTML first
+        # If css_selector specified, narrow the HTML first (all extraction
+        # types, not just html — see _narrow_html_to_selector).
         if css_selector:
-            selected = page.css(css_selector) if hasattr(page, 'css') else [page]
-            parts = []
-            for el in selected:
-                try:
-                    el_html = tostring(el._root if hasattr(el, '_root') else el, encoding='unicode')
-                    part = _extract_type(el_html, page_url, extraction_type)
-                    if part:
-                        parts.append(part)
-                except Exception:
-                    continue
-            if parts:
-                return parts
-            # CSS selector found nothing: try full page instead
+            narrowed = _narrow_html_to_selector(html, css_selector)
+            if narrowed:
+                part = _extract_type(narrowed, page_url, extraction_type)
+                if part:
+                    return [part]
+            # CSS selector found nothing usable: try full page instead
             logger.info(f"CSS selector '{css_selector}' found nothing, trying full page extraction")
 
         result = _extract_type(html, page_url, extraction_type)
