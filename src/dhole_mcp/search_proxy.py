@@ -206,7 +206,8 @@ class ProxyPool:
     its consecutive-failure counter increments. Proxies with >= 3 consecutive
     failures are treated as dead and skipped until a probe (``health_check``)
     or a successful call revives them. ``health_check`` actively probes every
-    proxy once so a pool with stale dead entries heals by itself.
+    proxy once so a pool with stale dead entries heals by itself; it is only
+    kicked when such an entry exists (``needs_probe``).
 
     State is in-memory only (not persisted). Resets on restart.
     """
@@ -230,6 +231,22 @@ class ProxyPool:
 
     def _is_dead(self, proxy: str) -> bool:
         return self._stats.get(proxy, {}).get("consecutive_fails", 0) >= self.MAX_CONSECUTIVE_FAILS
+
+    def needs_probe(self) -> bool:
+        """True when at least one proxy is cooled or counted dead.
+
+        The probe sends a real request through every proxy, and its only effect
+        is reviving proxies that failed — so a fully healthy pool has nothing to
+        gain from it (KB-3: it used to fire on every first search regardless).
+        """
+        now = time.time()
+        for p in self._proxies:
+            until = self._state.get(p, {}).get("cooled_until", 0)
+            if isinstance(until, (int, float)) and until > now:
+                return True
+            if self._is_dead(p):
+                return True
+        return False
 
     def get_proxy(self) -> str | None:
         """Return the next available (non-cooled, not-dead) proxy.
@@ -357,11 +374,17 @@ def reset_pool() -> None:
 
 # Fire-and-forget probe: after the first pool creation, kick off a background
 # health check so dead proxies are detected without blocking the first search.
+# Only when there is something to revive — see ProxyPool.needs_probe().
 _health_task: "asyncio.Task | None" = None
 
 
 def _kick_health_check() -> None:
-    """Start the background proxy health probe once per process (no-op after)."""
+    """Start the background proxy health probe once per process (no-op after).
+
+    Returns without doing anything when the pool has nothing cooled or dead:
+    the probe goes out through every configured proxy, and a pool that is fully
+    healthy has nothing to gain from it.
+    """
     global _health_task
     if _health_task is not None:
         return
@@ -377,6 +400,8 @@ def _kick_health_check() -> None:
         return
     pool = get_proxy_pool()
     if pool is None:
+        return
+    if not pool.needs_probe():
         return
 
     _health_task = loop.create_task(pool.health_check())

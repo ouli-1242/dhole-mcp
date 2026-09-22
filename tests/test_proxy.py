@@ -147,6 +147,77 @@ class TestProxyDeadDetection:
         assert statuses[0]["dead"] is True
         assert statuses[0]["fail"] == ProxyPool.MAX_CONSECUTIVE_FAILS
 
+    # — KB-3: 探活只在真有代理需要复活时启动（健康池不发后台真实请求）—
+
+    def test_healthy_pool_needs_no_probe(self):
+        pool = ProxyPool(["http://p1:80", "http://p2:80"])
+        assert pool.needs_probe() is False
+
+    def test_cooled_proxy_needs_a_probe(self):
+        pool = ProxyPool(["http://p1:80", "http://p2:80"])
+        pool.mark_failed("http://p1:80")  # 冷却 + fail streak 1
+        assert pool.needs_probe() is True
+
+    def test_dead_proxy_needs_a_probe(self):
+        pool = ProxyPool(["http://p1:80", "http://p2:80"])
+        for _ in range(ProxyPool.MAX_CONSECUTIVE_FAILS):
+            pool.mark_failed("http://p1:80")
+        assert pool.needs_probe() is True
+        pool.mark_success("http://p1:80")
+        assert pool.needs_probe() is False
+
+    def test_expired_cooldown_alone_needs_no_probe(self):
+        """冷却自然到期（不需要复活）不等于需要探活。"""
+        pool = ProxyPool(["http://p1:80"])
+        pool.mark_failed("http://p1:80")
+        pool._state["http://p1:80"]["cooled_until"] = time.time() - 1
+        assert pool.needs_probe() is False
+
+    def test_kick_health_check_skips_a_healthy_pool(self, monkeypatch):
+        """健康池：``_kick_health_check`` 不创建任何任务（KB-3）。"""
+        import asyncio
+        from dhole_mcp import search_proxy as sp
+
+        pool = ProxyPool(["http://p1:80"])
+
+        async def _never():
+            raise AssertionError("健康池不该被探活")
+
+        pool.health_check = _never
+
+        async def scenario():
+            monkeypatch.setattr(sp, "get_proxy_pool", lambda: pool)
+            monkeypatch.setattr(sp, "_health_task", None)
+            sp._kick_health_check()
+            assert sp._health_task is None
+
+        asyncio.run(scenario())
+
+    def test_kick_health_check_probes_when_something_is_cooled(self, monkeypatch):
+        """有冷却中的代理：探活照常启动（这条门不能把功能一起关掉）。"""
+        import asyncio
+        from dhole_mcp import search_proxy as sp
+
+        pool = ProxyPool(["http://p1:80"])
+        pool.mark_failed("http://p1:80")
+        probed: list[int] = []
+
+        async def _probe():
+            probed.append(1)
+
+        pool.health_check = _probe
+
+        async def scenario():
+            monkeypatch.setattr(sp, "get_proxy_pool", lambda: pool)
+            monkeypatch.setattr(sp, "_health_task", None)
+            sp._kick_health_check()
+            assert sp._health_task is not None
+            await asyncio.gather(sp._health_task)
+            sp._health_task = None
+
+        asyncio.run(scenario())
+        assert probed == [1]
+
     @pytest.mark.asyncio
     async def test_health_check_revives_and_marks_dead(self, monkeypatch):
         pool = ProxyPool(["http://alive:80", "http://dead:80"])
