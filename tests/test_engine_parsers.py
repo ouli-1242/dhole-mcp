@@ -194,6 +194,12 @@ class TestFixtureAntiRot:
     """fixture 自己也会烂：tests/old_reddit_real.html 就是已经烂过一次的那一个。"""
 
     def test_every_fixture_is_content_addressed(self):
+        """记录的 sha256 按 **git 里的字节** 算，行尾以仓库为准（`* text=auto eol=lf`）。
+
+        所以它只在工作树与仓库字节一致时成立 —— 一份 CRLF 残留的工作树会红，
+        而那并不代表"fixture 被改过"。这条 2026-09-22 修过一次同类烂法：记录值
+        按 CRLF 算、blob 是 LF，于是任何全新克隆一 checkout 就失败。
+        """
         missing = [p.name for p in FIXTURE_DIR.glob("*.html")
                    if not _meta_of(p.name).exists()]
         assert not missing, f"这些 fixture 没有 .meta.json: {missing}"
