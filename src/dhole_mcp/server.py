@@ -625,15 +625,23 @@ def _is_cacheable(result: ResponseModel) -> bool:
     return bool(result.content) and any(c.strip() for c in result.content)
 
 
+# Statuses the HTTP tier hands straight to the archive fallback: the page is gone
+# or legally removed, and the browser tier is explicitly not tried (a browser gets
+# the same 404/410/451). A module constant rather than an inline tuple so it can't
+# drift out of sync with _should_try_archive(): 410 used to sit in the tuple while
+# the gate rejected it, which made that branch unreachable (KB-9).
+_ARCHIVE_FALLBACK_STATUSES = (404, 410, 451)
+
+
 def _should_try_archive(result: ResponseModel) -> bool:
     """True when the Internet Archive may have a usable snapshot of the URL.
 
-    Fires on hard-blocks (404/451), network failures (status 0), server errors
+    Fires on hard-blocks (404/410/451), network failures (status 0), server errors
     (5xx), bot challenges, and all_tiers_failed. Does NOT fire on auth_required
     (archive won't have login-gated content either).
     """
     err = (result.error or "").lower()
-    if result.status == 404:      # page gone/deleted — archive goldmine
+    if result.status in (404, 410):   # page gone/deleted, or gone for good
         return True
     if result.status == 451:      # legal block
         return True
@@ -3495,9 +3503,11 @@ class MasterFetchServer:
         )
         if not should_escalate:
             # Archive.org fallback for hard-blocks: the page is gone or legally
-            # removed, but the Wayback Machine may have a snapshot. 410 is listed
-            # below but _should_try_archive() rejects it, so only 404/451 get here.
-            if result.status in (404, 410, 451) and _should_try_archive(result):
+            # removed, but the Wayback Machine may have a snapshot. The tuple is
+            # deliberately narrower than the gate: a network failure (status 0)
+            # reaching this branch must still escalate to the browser instead of
+            # settling for an old snapshot.
+            if result.status in _ARCHIVE_FALLBACK_STATUSES and _should_try_archive(result):
                 archive_result = await _with_budget(self._fetch_from_archive(
                     url, extraction_type, css_selector, main_content_only,
                     use_trafilatura, offset, max_chars,

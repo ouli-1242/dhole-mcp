@@ -11,11 +11,11 @@ import os
 import pytest
 
 from dhole_mcp.server import (
-    ResponseModel, MasterFetchServer,
+    ResponseModel, MasterFetchServer, _ARCHIVE_FALLBACK_STATUSES,
     _agent_hints, _apply_chunking, _annotate_quality, _with_agent_hints,
     _backfill_article_json, _blocked_path_prefix, _coerce_options,
     _detect_content_issue, _invalid_request_result, _is_bot_wall,
-    _resolve_local_path, _strict_options, _translate_response,
+    _resolve_local_path, _should_try_archive, _strict_options, _translate_response,
     _SF_OPTIONS_ALLOWED, _SF_OPTIONS_FORWARDED,
 )
 
@@ -865,3 +865,54 @@ class TestParseEnvelope:
         assert r.content == []
         assert "DHOLE_WORKDIR" in r.error
         assert "missing.html" in r.error
+
+
+# ─── KB-9: 410 真的走 archive 回退（元组与 gate 不许再漂移） ────────────────
+
+class TestArchiveFallback:
+
+    def test_every_fallback_status_is_accepted_by_the_gate(self):
+        """元组里的每个状态都必须过 gate：被 gate 拒绝的状态 = 永远走不到的分支。
+
+        KB-9：410 曾列在元组里而 ``_should_try_archive()`` 一直返回 False，
+        于是 410 Gone 的页面从不去 Wayback 找快照，与代码的字面意图不符。
+        """
+        for status in _ARCHIVE_FALLBACK_STATUSES:
+            assert _should_try_archive(_result(status=status, content=[])), (
+                f"{status} 在 _ARCHIVE_FALLBACK_STATUSES 里却被 gate 拒绝")
+
+    def test_network_failure_is_not_short_circuited_to_archive(self):
+        """status=0 不在元组里：它该升级到浏览器层，而不是在这里拿旧快照了事。"""
+        assert 0 not in _ARCHIVE_FALLBACK_STATUSES
+        assert _should_try_archive(
+            _result(status=0, content=[], fetcher_used="none",
+                    error="network_error: dns_failure (TCP preflight)"))
+
+    @pytest.mark.asyncio
+    async def test_410_is_answered_from_the_archive(self, monkeypatch):
+        """端到端：HTTP 层拿到 410 时，回退确实会去取 archive 快照。"""
+        import dhole_mcp.fetcher as fetcher
+        monkeypatch.setattr(fetcher, "tcp_preflight", lambda url, timeout=2.0: (True, ""))
+        server = MasterFetchServer()
+
+        async def gone(*args, **kwargs):
+            return _result(status=410, content=[], fetcher_used="http",
+                           error="HTTP status 410")
+
+        server.get = gone
+        asked: list[str] = []
+
+        async def fake_archive(url, *args, **kwargs):
+            asked.append(url)
+            return _result(status=200, content=["Archived snapshot body."],
+                           fetcher_used="archive.org", url=url)
+
+        monkeypatch.setattr(server, "_fetch_from_archive", fake_archive)
+        out = await server._auto_escalate(
+            "https://gone.example.com/x", "markdown", None, True, True, 0, 0,
+            True, False, 0, None, 8000, False, False, False, False,
+            None, None, None,
+        )
+        assert asked == ["https://gone.example.com/x"], "410 没走到 archive 回退"
+        assert out.content == ["Archived snapshot body."]
+        assert out.content_ok is True
