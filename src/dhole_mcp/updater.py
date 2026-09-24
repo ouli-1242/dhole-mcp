@@ -833,7 +833,7 @@ def _append_engine_yield(caps: list[tuple[str, str, bool]]) -> None:
         caps.append((
             "engine cooldowns",
             " | ".join(f"{n}: {int(s)}s left" for n, s in sorted(cooldowns.items()))
-            + " - they expire on their own; `dhole reset-engines` (or cache_clear "
+            + " - they expire on their own; `dhole engines reset` (or cache_clear "
               "engine_state=true) clears them now",
             True,
         ))

@@ -196,25 +196,65 @@ _SLOW_HTTP_DOMAINS = frozenset({
 # Adaptive timeout: track per-domain response latency (EMA) so slow domains
 # get a longer timeout and fast domains fail sooner. In-memory only (resets on
 # restart, which is fine — it re-learns within 1-2 fetches).
-_DOMAIN_LATENCY: Dict[str, float] = {}  # domain -> avg response time (ms)
+#
+# Pages and documents are learned SEPARATELY. One table for both is what made
+# every large PDF fail: a 0.8s fetch of a host's HTML page put that domain's
+# budget at max(5s, 3x0.8s) = 5s, and a 40MB PDF on the same host then had five
+# seconds to arrive — with `timeout=60000` unable to help, because the learned
+# term was applied through a min(). Two contaminations, one per direction: the
+# page habit capping a download (fixed in _http_tier_budget, which lets
+# documents opt out of the ceiling), and a 40s download inflating the budget for
+# the next page (fixed by recording into the table that matches what was fetched).
+_DOMAIN_LATENCY: Dict[str, float] = {}       # domain -> avg PAGE response time (ms)
+_DOMAIN_DOC_LATENCY: Dict[str, float] = {}   # domain -> avg DOCUMENT download time (ms)
+
+# What this tool treats as a download rather than a render: the bodies it reads
+# after they are fully in memory. Deliberately only the formats it can actually
+# extract — a .zip is a download too, but there is nothing here to make of it.
+_DOCUMENT_EXTENSIONS = (".pdf",)
 
 
-def _record_latency(url: str, elapsed_ms: float) -> None:
-    """Record a domain's response time for adaptive timeout."""
+def _is_document_url(url: str) -> bool:
+    """True for a document download rather than a page render, from the URL alone.
+
+    One predicate for the three rules that hang off it (never escalate a PDF URL
+    to the browser, never cap it by the learned page latency, gate it on the size
+    preflight). Each used to re-derive `.pdf` by hand, with its own idea of where
+    the query string ends.
+
+    This is the only class judgement available BEFORE the request. Once there is a
+    response, use _is_document: arxiv-style URLs (`/pdf/2103.00020`) serve a PDF
+    with no extension to see, and classing those as pages is what let a 26-second
+    download set the page budget for a whole host.
+    """
+    try:
+        return urlparse(url).path.lower().endswith(_DOCUMENT_EXTENSIONS)
+    except (ValueError, AttributeError):
+        return False
+
+
+def _is_document(result: ResponseModel) -> bool:
+    """Whether what came BACK was a document — content type, or the URL's say so."""
+    return "application/pdf" in (result.content_type or "").lower() or _is_document_url(result.url or "")
+
+
+def _record_latency(url: str, elapsed_ms: float, *, document: bool = False) -> None:
+    """Record how long a domain took, in the table for the kind of thing fetched."""
     try:
         domain = urlparse(url).netloc
         if not domain:
             return
+        table = _DOMAIN_DOC_LATENCY if document else _DOMAIN_LATENCY
         # Cap dict size to prevent unbounded growth (LRU-like: clear oldest half)
-        if len(_DOMAIN_LATENCY) > 1000:
-            keys = list(_DOMAIN_LATENCY.keys())
+        if len(table) > 1000:
+            keys = list(table)
             for k in keys[:500]:
-                _DOMAIN_LATENCY.pop(k, None)
-        old = _DOMAIN_LATENCY.get(domain)
+                table.pop(k, None)
+        old = table.get(domain)
         if old is None:
-            _DOMAIN_LATENCY[domain] = elapsed_ms
+            table[domain] = elapsed_ms
         else:
-            _DOMAIN_LATENCY[domain] = 0.8 * old + 0.2 * elapsed_ms  # EMA
+            table[domain] = 0.8 * old + 0.2 * elapsed_ms  # EMA
     except Exception:
         pass
 
@@ -229,10 +269,15 @@ ACTIONS_DEFAULT_TIMEOUT_MS = 60000
 
 
 def _adaptive_timeout(url: str, default_ms: int = 30000) -> int:
-    """Get an adaptive timeout for a URL based on historical domain latency.
+    """How long this domain may take for a PAGE, from what its pages took before.
 
-    Returns 3x the EMA latency, clamped to [5s, 60s]. Falls back to default_ms
-    for unknown domains.
+    Returns 3x the EMA latency, clamped to [5s, 60s]; `default_ms` for a domain
+    that has not been seen.
+
+    This is a CEILING, and it is only ever consulted for pages: a host's habit of
+    answering HTML in 0.8s says nothing about how long a 40MB file takes to
+    arrive, and applying it to documents is what produced the five-second PDF that
+    `timeout=60000` could not lift (_http_tier_budget is where that is opted out).
     """
     try:
         domain = urlparse(url).netloc
@@ -242,6 +287,156 @@ def _adaptive_timeout(url: str, default_ms: int = 30000) -> int:
         return max(5000, min(60000, int(latency * 3)))
     except Exception:
         return default_ms
+
+
+# `get()` retries by default, and its timeout is PER ATTEMPT: primp's timeout is
+# a whole-request total (not an idle timeout), and the redirect loop hands the
+# same figure to every hop. So the old HTTP tier could ask for four attempts of
+# 30s inside a 30s call, and `_with_budget` killed it mid-retry — "4 attempts"
+# was mostly a name. The rule below keeps each attempt as long as the host needs
+# (shrinking an attempt to buy more attempts would fail a slow-but-healthy site in
+# order to insure against a stalled one) and keeps only as many attempts as FIT.
+_HTTP_ATTEMPTS = 4      # get()'s default: 1 try + 3 retries
+MAX_HTTP_TIMEOUT_S = 120  # validate_timeout's own ceiling, restated as a bound here
+
+
+def _http_tier_budget(url: str, budget_ms: float, left_s: float, *,
+                      document: bool = False, slow_domain: bool = False) -> tuple[int, int]:
+    """(per-attempt seconds, retries) for one HTTP tier inside this call budget.
+
+    The caller's budget is the contract, and the tier used to break it in both
+    directions: a learned 5s undercut a 60s call, and "at least 20s for a slow
+    domain" overstated a 5s one. Both are bounded by what is left here.
+
+    A document opts out of the learned page ceiling — a host's habit of answering
+    HTML in 0.8s says nothing about a 40MB file — and takes the whole remaining
+    budget in ONE attempt, because a retry restarts its download from byte zero:
+    splitting the budget across attempts would guarantee that none of them finish.
+    """
+    left = max(1.0, min(float(left_s), MAX_HTTP_TIMEOUT_S))
+    allowance_s = min(max(1.0, budget_ms / 1000.0), left)
+    if not document:
+        allowance_s = min(allowance_s,
+                          max(1.0, _adaptive_timeout(url, int(budget_ms)) / 1000.0))
+    if slow_domain:
+        # Known slow-but-plainly-HTTP sites get at least 20s, which is still never
+        # more than what is left of this call.
+        allowance_s = min(left, max(allowance_s, 20.0))
+
+    attempts = 1 if document else _HTTP_ATTEMPTS
+    while attempts > 1 and allowance_s * attempts > left:
+        attempts -= 1
+    return max(1, int(allowance_s)), attempts - 1
+
+
+def _human_bytes(n: int) -> str:
+    """Bytes as the caller will read them: one decimal, no false precision."""
+    for unit, div in (("GB", 1024 ** 3), ("MB", 1024 ** 2), ("KB", 1024)):
+        if n >= div:
+            return f"{n / div:.1f}{unit}"
+    return f"{n}B"
+
+
+async def _document_size(url: str, proxy: Optional[str],
+                         headers: Optional[Dict[str, str]] = None,
+                         cookies: Optional[Dict[str, str]] = None,
+                         useragent: Optional[str] = None,
+                         budget_s: float = 3.0) -> tuple[Optional[int], str]:
+    """Ask the host how big this document is, without downloading it.
+
+    A one-byte range request answers that in one round trip. It exists because
+    ``MAX_RESPONSE_BYTES`` used to be checked only once the body was already in
+    memory: a 200MB PDF was DOWNLOADED for as long as the call budget allowed and
+    then reported a TIMEOUT, which is both the wrong diagnosis and the expensive
+    way to find out the answer was never going to fit.
+
+    Returns (total_bytes or None, note). ``note`` says why a size could not be
+    learned, so the caller can be honest instead of guessing. Never raises: an
+    unknown size is the status quo, not a failure.
+    """
+    from dhole_mcp.fetcher import http_get
+
+    probe_headers = dict(headers or {})
+    probe_headers["Range"] = "bytes=0-0"
+    try:
+        resp = await http_get(url, proxy=proxy, headers=probe_headers, cookies=cookies,
+                              useragent=useragent, timeout=max(1, int(budget_s)), retries=0)
+    except Exception as e:
+        return None, f"size probe failed ({type(e).__name__})"
+
+    hdrs = {str(k).lower(): str(v) for k, v in (getattr(resp, "headers", None) or {}).items()}
+    total: Optional[int] = None
+    cr = hdrs.get("content-range", "")
+    # "bytes 0-0/118234012" — the part after the slash is the whole document.
+    if "/" in cr:
+        try:
+            total = int(cr.rsplit("/", 1)[1].strip())
+        except ValueError:
+            total = None
+    if total is None:
+        # No range support: a 200 carries the whole length in Content-Length.
+        try:
+            total = int(hdrs.get("content-length", ""))
+        except ValueError:
+            total = None
+    if total is None:
+        return None, "host reported no size (chunked or range refused)"
+    if not total:
+        # A 200 that ignored the Range can describe an error page rather than the
+        # document (measured live: 243B from a host serving a bot block, and a 0
+        # from another). Nothing is refused on a size we did not really learn.
+        return None, "host reported an empty body for the range probe"
+    return total, ""
+
+
+def _oversized_document_result(url: str, doc_size: Optional[int]) -> Optional[ResponseModel]:
+    """A refusal to download a document that cannot fit, or None when it can.
+
+    Only a KNOWN oversize refuses anything: an unknown size is not evidence, and
+    treating it as one would turn every chunked-response host into a hard failure.
+
+    Same wording as the post-download check in _check_response_size, because the
+    caller has one fact to learn ("this body is over the cap") and should not have
+    to recognize it in two shapes depending on which side of the download dhole
+    happened to notice it.
+    """
+    if not doc_size or doc_size <= MAX_RESPONSE_BYTES:
+        return None
+    return ResponseModel(
+        url=url, status=0, content=[], fetcher_used="http",
+        error=(f"Response body too large ({doc_size:,} bytes = {_human_bytes(doc_size)}, "
+               f"max {MAX_RESPONSE_BYTES:,} bytes) - the host says so, and nothing was "
+               "downloaded"),
+    )
+
+
+def _document_budget_advice(url: str, size_bytes: Optional[int], size_note: str,
+                            budget_ms: float, stage: str) -> str:
+    """What to tell the caller about a document that did not arrive in time.
+
+    The generic timeout advice — "raise timeout" — is what the last report filed
+    as an unfixable server limit. It is only actionable once the caller can see
+    what the file costs: its size, this host's observed document time, and
+    whether dhole would accept the body at all (MAX_RESPONSE_BYTES).
+    """
+    bits = [f"{stage} on a document download"]
+    if size_bytes is None and size_note:
+        bits.append(size_note)
+    elif size_bytes is not None:
+        bits.insert(0, f"the file is {_human_bytes(size_bytes)}")
+    rate = _DOMAIN_DOC_LATENCY.get(urlparse(url).netloc)
+    if rate:
+        bits.append(f"this host has taken {max(1, int(rate / 1000))}s for documents "
+                    f"here before, against your {int(budget_ms / 1000)}s budget")
+    ceiling = MAX_HTTP_TIMEOUT_S * 1000
+    if budget_ms < ceiling:
+        bits.append(f"raise timeout (e.g. timeout={min(int(budget_ms * 2), ceiling)}, "
+                    f"max {ceiling})")
+    else:
+        bits.append("this is already the maximum budget - switch source, or fetch the "
+                    "file outside dhole and hand it to parse")
+    bits.append("pages=<range> narrows what gets EXTRACTED, not what gets downloaded")
+    return "; ".join(bits)
 def _env_int(name: str, default: int) -> int:
     """Read an integer env var, falling back to default on missing/invalid."""
     raw = os.environ.get(name)
@@ -957,6 +1152,14 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                        "with extraction_type='html' to inspect the markup yourself")
     elif err.startswith("geo_redirect_detected"):
         next_action = "geo redirect: try a different regional URL or a proxy"
+    elif err.startswith("Response body too large"):
+        # This rejection is dhole's own verdict, not the host's, and the
+        # classifier's generic "check the error field, try another source" would
+        # answer a question nobody asked: no timeout, tier or retry changes a cap
+        # on the body size.
+        next_action = ("the body is over dhole's size cap - no timeout or fetcher "
+                       "changes that. Fetch the page that links the file instead, or "
+                       "download it yourself and hand it to parse")
     elif err.startswith("scanned_pdf"):
         next_action = "scanned/image-only PDF - install dhole-mcp[all] to auto-OCR, or use a vision-capable tool / another source"
     elif err.startswith("image_ocr"):
@@ -1135,23 +1338,30 @@ def _with_agent_hints(result: ResponseModel) -> ResponseModel:
 
 
 def _over_budget_result(url: str, budget_ms: float, elapsed_ms: float,
-                        stage: str, fetcher_used: str) -> ResponseModel:
+                        stage: str, fetcher_used: str,
+                        diagnosis: str = "") -> ResponseModel:
     """The "call budget ran out" FetchResult - a normal response, not an exception.
 
     The caller asked for an answer inside `timeout`; this is the honest one. It
     used to be possible only in theory: the budget was applied per tier, so a
     slow host could run past it and the MCP client killed the request (-32001)
     with no FetchResult at all.
+
+    ``diagnosis`` replaces the generic advice when the tier knows something the
+    generic sentence would get wrong — a document download that was told to
+    "pass force_fetcher='http' to skip browser rendering" when it never touched
+    a browser.
     """
+    head = f"Budget exhausted after {int(elapsed_ms)}ms at the {stage}."
     return ResponseModel(
         url=url, status=0, content=[], fetcher_used=fetcher_used,
         duration_ms=elapsed_ms,
         error=(f"timeout: the {int(budget_ms)}ms call budget ran out during "
                f"the {stage}. No content was extracted."),
         next_action=(
-            f"Budget exhausted after {int(elapsed_ms)}ms at the {stage}. Raise timeout "
-            "(e.g. timeout=60000) for a slow host, pass force_fetcher='http' to skip "
-            "browser rendering, or switch source."),
+            f"{head} {diagnosis}" if diagnosis else
+            f"{head} Raise timeout (e.g. timeout=60000) for a slow host, pass "
+            "force_fetcher='http' to skip browser rendering, or switch source."),
     )
 
 
@@ -1193,7 +1403,8 @@ def _invalid_request_result(url: str, msg: str, next_action: str = "") -> Respon
 
 
 def _coerce_int_arg(
-    value: Any, name: str, *, lo: int, hi: int, default: int, clamp: bool = True,
+    value: Any, name: str, *, lo: Optional[int] = None, hi: Optional[int] = None,
+    default: int, clamp: bool = True, allow_float: bool = False,
 ) -> int:
     """Normalize an integer tool argument; never silently swap in the default.
 
@@ -1212,30 +1423,59 @@ def _coerce_int_arg(
       * out of ``[lo, hi]`` -> clamp when ``clamp`` (a resource cap, which is
         documented on the wire so it is a known bound rather than a surprise),
         otherwise raise (a nonsense value with no sensible reading).
+
+    ``lo``/``hi`` are optional because the wire-boundary pass
+    (:func:`_coerce_arg_types`) converts types ONLY and leaves the range to the
+    tool: every documented cap is already applied where it is enforced, with the
+    note that tells the caller it was applied. Repeating the bounds here would
+    clamp in silence one layer above that note.
+
+    ``allow_float`` accepts a float as well as an int, for the arguments whose
+    own annotation is ``int | float`` (timeouts, waits) — where 1500.5 ms is a
+    value the caller meant, not a type error.
     """
     if value is None:
         return default
+    # Every rejection below points at a concrete correct value. For an argument
+    # whose own default is None ("not set") there is no number to suggest, so the
+    # suggestion is to omit it.
+    example = (f"e.g. {name}={default}" if default is not None
+               else f"or omit {name} to use the tool default")
     if isinstance(value, bool):
         raise ValueError(
             f"{name} must be an integer, got a boolean. "
-            f"Pass {name}={int(value)} or omit it (default {default})."
+            f"Pass {name}={int(value)} ({example})."
         )
+    number_types: tuple = (int, float) if allow_float else (int,)
     if isinstance(value, str):
+        text = value.strip()
         try:
-            value = int(value.strip())
+            value = int(text)
         except ValueError:
-            raise ValueError(
-                f"{name} must be an integer, got {value!r}. "
-                f"Pass a number (e.g. {name}={default})."
-            ) from None
-    if not isinstance(value, int):
+            if not allow_float:
+                raise ValueError(
+                    f"{name} must be an integer, got {value!r}. "
+                    f"Pass a number ({example})."
+                ) from None
+            try:
+                value = float(text)
+            except ValueError:
+                raise ValueError(
+                    f"{name} must be a number, got {value!r}. "
+                    f"Pass a number ({example})."
+                ) from None
+    if not isinstance(value, number_types):
         raise ValueError(
-            f"{name} must be an integer, got {type(value).__name__}. "
-            f"Pass a number (e.g. {name}={default})."
+            f"{name} must be {'a number' if allow_float else 'an integer'}, got "
+            f"{type(value).__name__}. Pass a number ({example})."
         )
-    if value < lo or value > hi:
+    if (lo is not None and value < lo) or (hi is not None and value > hi):
         if clamp:
-            return max(lo, min(value, hi))
+            if lo is not None:
+                value = max(lo, value)
+            if hi is not None:
+                value = min(hi, value)
+            return value
         raise ValueError(
             f"{name} must be between {lo} and {hi}, got {value}."
         )
@@ -1366,6 +1606,164 @@ def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Option
             "Valid values: 'http', 'stealthy' ('dynamic' is a legacy alias for 'stealthy')."
         )
     return key
+
+
+# ─── wire argument types ───────────────────────────────────────────
+# smart_fetch and cache_clear had per-argument coercers; the other six tools had
+# none, so everything the dispatcher forwarded was whatever JSON happened to
+# carry. Two client behaviors reach that gap on ordinary machines:
+#
+#   * a client that serializes numbers ("max_results": "6"). search.py then ran
+#     `max(1, min("6", 50))`, and min() compares the SECOND operand against the
+#     first: `'<' not supported between instances of 'int' and 'str'`. The tool
+#     answered with that bare Python traceback as its `error` field, which is
+#     what an external test report filed as "smart_search 完全崩溃，重启不恢复"
+#     and misdiagnosed as engine-cooldown state. The state files were innocent —
+#     the same call succeeds once the number arrives as an int.
+#   * a client that echoes every schema property as null. A null in the OPTIONS
+#     bag is forwarded by _strict_options (unlike a top-level null, which
+#     _promote_options skips), so `options={"cache_ttl":null}` reached
+#     `if cache_ttl > 0` and raised on a NoneType comparison.
+#
+# A bare string where a list was meant is the same gap with a worse outcome:
+# `crawl_urls="https://x"` iterates character by character.
+#
+# So: convert TYPES at the boundary, for both channels, before any branch reads
+# them. Ranges deliberately are NOT checked here — every documented cap is
+# already enforced where it is applied (search clamps max_results and says so,
+# crawl clamps max_pages, _validate_filters rejects page>10), usually with a note
+# telling the caller the value moved. Clamping a second time above those notes
+# would produce the silent version of the bug this table exists to close.
+_ARG_TYPES: dict[str, dict[str, str]] = {
+    "smart_fetch": {
+        "urls": "list",
+        "main_content_only": "bool", "use_trafilatura": "bool", "headless": "bool",
+        "real_chrome": "bool", "network_idle": "bool", "solve_cloudflare": "bool",
+        "block_webrtc": "bool", "hide_canvas": "bool", "include_media": "bool",
+        "include_links": "bool",
+        "cache_ttl": "int", "offset": "int", "max_content_chars": "int",
+        "timeout": "number", "wait": "number",
+        # A numeric PDF page request ("pages": 3) is unambiguous; reading it only
+        # as a string used to drop the range silently and return the whole file.
+        "pages": "strnum", "password": "strnum",
+        "actions": "rawlist",
+    },
+    "smart_crawl": {
+        "max_pages": "int", "max_depth": "int", "max_content_chars_per": "int",
+        "max_total_chars": "int", "cache_ttl": "int",
+        "concurrency": "int", "timeout": "number", "deadline_ms": "number",
+        "discover_only": "bool",
+        "crawl_urls": "list",
+        # path_include/path_exclude are NOT here: a bare string is already read
+        # as the one-prefix list it means, and crawl.py does that at the point
+        # where it can still say so before any page is fetched.
+        # sitemap is not here either: it is a tri-state (true|'auto'|false) and
+        # crawl.py already normalizes every spelling of it, including the strings
+        # a serialized client sends. Forcing it through _coerce_bool_arg here is
+        # the one spelling 'auto' would not survive.
+    },
+    "screenshot": {
+        "full_page": "bool", "network_idle": "bool",
+        "quality": "int", "wait": "number", "timeout": "number",
+    },
+    "smart_search": {
+        "max_results": "int", "cache_ttl": "int", "page": "int",
+        "engines": "list", "exclude_sites": "list", "fetch_content": "bool",
+    },
+    "feed_fetch": {"max_items": "int", "timeout": "int"},
+    "resolve_url": {"timeout": "number"},
+    # cache_clear already normalizes its two booleans in _validate_tool_args;
+    # parse takes three strings and has nothing to convert.
+}
+
+_ARG_DEFAULTS: dict[Any, dict[str, Any]] = {}
+
+
+def _arg_defaults(tool: str) -> dict[str, Any]:
+    """Each typed argument's own default, read off the method signature.
+
+    Copied defaults drift; the signature is where the tool already states them.
+
+    Keyed by the function it read, not by tool name: the test suite replaces
+    these methods with stubs, and a cache keyed on the tool would keep serving
+    whatever the first caller happened to see as that tool's signature.
+    """
+    fn = getattr(MasterFetchServer, tool)
+    cached = _ARG_DEFAULTS.get(fn)
+    if cached is not None:
+        return cached
+    params = inspect.signature(fn).parameters
+    empty = inspect.Parameter.empty
+    defaults = {name: p.default for name, p in params.items()
+                if p.default is not empty and name in _ARG_TYPES.get(tool, {})}
+    _ARG_DEFAULTS[fn] = defaults
+    return defaults
+
+
+def _coerce_one_arg(kind: str, name: str, value: Any, default: Any) -> Any:
+    """Apply one table entry to one value."""
+    if kind == "int":
+        return _coerce_int_arg(value, name, default=default)
+    if kind == "number":
+        return _coerce_int_arg(value, name, default=default, allow_float=True)
+    if kind == "bool":
+        return _coerce_bool_arg(value, name, default=bool(default))
+    if kind == "list":
+        return _coerce_str_list_arg(value, name)
+    if kind == "rawlist":
+        # Elements belong to the consumer (actions._validate_actions knows the
+        # per-action shapes); the boundary only fixes the container.
+        if isinstance(value, str):
+            text = value.strip()
+            try:
+                parsed = json.loads(text) if text.startswith("[") else None
+            except (ValueError, TypeError):
+                parsed = None
+            if isinstance(parsed, list):
+                return parsed
+            raise ValueError(
+                f"{name} must be an array of objects, got {value!r}. "
+                f"Pass {name}=[{{...}}, {{...}}]."
+            )
+        if value is None or isinstance(value, (list, tuple)):
+            return value
+        raise ValueError(
+            f"{name} must be an array of objects, got {type(value).__name__}. "
+            f"Pass {name}=[{{...}}, {{...}}]."
+        )
+    if kind == "strnum":
+        # An argument the tool only reads as a string, where an integer is the
+        # same value: PDF `pages: 3` is page 3, and `password: 1234` is "1234".
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+        return value
+    return value
+
+
+def _coerce_arg_types(tool: str, args: dict, options: dict) -> tuple[dict, dict]:
+    """Normalize both argument channels of one call to the types the tool reads.
+
+    Both, because every promoted parameter can arrive either way (`page=1` or
+    `options={"page":1}`), and top-level-wins is decided downstream of here.
+    Keys the caller never sent stay absent so the tool's own default applies;
+    keys sent as null take that same default, which is already what a
+    top-level null means to _promote_options.
+    """
+    spec = _ARG_TYPES.get(tool)
+    if not spec:
+        return args, options
+    defaults = _arg_defaults(tool)
+
+    def one(store: dict) -> dict:
+        if not any(k in store for k in spec):
+            return store
+        out = dict(store)
+        for key in spec:
+            if key in out:
+                out[key] = _coerce_one_arg(spec[key], key, out[key], defaults.get(key))
+        return out
+
+    return one(args), one(options)
 
 
 def _validate_tool_args(name: str, args: dict) -> dict:
@@ -3701,7 +4099,7 @@ class MasterFetchServer:
         real_chrome: Annotated[bool, Field(description="Use installed Chrome instead of bundled browser.")] = False,
         wait: Annotated[int | float, Field(description="Extra milliseconds to wait after page load for JS rendering.")] = 0,
         proxy: Annotated[Optional[str | Dict[str, str]], Field(description="Proxy URL or dict with server/username/password.")] = None,
-        timeout: Annotated[Optional[int | float], Field(description="Max request time in milliseconds (default 30000; 60000 when actions are used).")] = None,
+        timeout: Annotated[Optional[int | float], Field(description="Whole-call budget in milliseconds (default 30000; 60000 when actions are used; max 120000). Shared by the HTTP retries, and a document URL spends it on the download.")] = None,
         network_idle: Annotated[bool, Field(description="Wait until network is idle for 500ms before capturing (good for SPAs).")] = False,
         solve_cloudflare: Annotated[bool, Field(description="Attempt Cloudflare bypass in stealthy mode (default True).")] = True,
         block_webrtc: Annotated[bool, Field(description="Prevent WebRTC IP leak in stealthy mode (default True).")] = True,
@@ -3711,7 +4109,7 @@ class MasterFetchServer:
         cookies: Annotated[Sequence[SetCookieParam] | None, Field(description="Cookies for the request: list of {name, value, domain} dicts, a plain {name: value} dict, or a Cookie header string.")] = None,
         offset: Annotated[int, Field(description="Resume from this character offset when content was truncated. The response tells you the next offset to use.")] = 0,
         max_content_chars: Annotated[Optional[int], Field(description="Max chars of extracted content to return (default 40000). Lower this to save context tokens on big pages; the rest is paginated via offset/next_offset.")] = None,
-        pages: Annotated[Optional[str], Field(description="PDF only: page spec like '1-5' or '1,3,5-7' to extract a subset of pages (saves tokens/time on big PDFs). None = all pages.")] = None,
+        pages: Annotated[Optional[str], Field(description="PDF only: page spec like '1-5' or '1,3,5-7' to extract a subset of pages. Saves tokens on big PDFs, NOT download time - the file is fetched in full before any page is picked. None = all pages.")] = None,
         password: Annotated[Optional[str], Field(description="PDF only: password for an encrypted PDF.")] = None,
         focus: Annotated[Optional[str], Field(description="Query-focused extraction: pass a query and only the BM25-relevant blocks (paragraphs/headings/tables) are returned, saving context on long pages. Works post-cache, so it never triggers a re-fetch. Re-pass the same focus when paginating with offset. Empty = full page.")] = None,
         actions: Annotated[Optional[List[Dict[str, Any]]], Field(description="Page interactions run on the stealthy browser AFTER load, BEFORE extraction: [{click:'button.load-more'}, {fill:{selector:'#q', text:'x'}}, {press:'Enter'}, {wait:500}, {scroll:3}, {wait_selector:'.item'}]. Forces the stealthy tier; bypasses cache. Reaches content behind a click/form/infinite scroll.")] = None,
@@ -4056,16 +4454,34 @@ class MasterFetchServer:
         page_action=None,
     ) -> ResponseModel:
         """Execute a forced fetcher tier and finalize the result."""
-        # HTTP fetcher takes seconds; browser timeout is ms. Cap at 30s.
-        http_timeout = max(1, min(int(timeout / 1000), 30))
+        # The HTTP fetcher takes SECONDS (per attempt) and the browser takes ms.
+        # The old line here was `min(timeout/1000, 30)`, which meant a caller who
+        # asked for timeout=120000 to fetch a large PDF still got thirty seconds —
+        # and then the timeout message told them to raise timeout. _http_tier_budget
+        # bounds the tier by the caller's own budget instead, up to the ceiling
+        # validate_timeout already enforces on that budget.
+        document = _is_document_url(url)
+        http_timeout, http_retries = _http_tier_budget(
+            url, timeout, float(timeout) / 1000.0, document=document)
         if force_fetcher == "http":
             http_cookies = _safe_cookie_dict(cookies)
+            proxy_url = _proxy_to_url(proxy, None)
+            if document:
+                doc_size, _note = await _document_size(
+                    url, proxy_url, extra_headers, http_cookies, useragent,
+                    budget_s=min(3.0, float(http_timeout)))
+                too_big = _oversized_document_result(url, doc_size)
+                if too_big is not None:
+                    too_big.escalation_path = "direct:http(size preflight)"
+                    return await self._finalize_result(
+                        too_big, url, extraction_type, css_selector, cache_ttl,
+                        offset, max_chars)
             result = await self.get(
                 url, extraction_type=extraction_type, css_selector=css_selector,
                 main_content_only=main_content_only, use_trafilatura=use_trafilatura,
-                proxy=_proxy_to_url(proxy, None),
+                proxy=proxy_url,
                 headers=extra_headers, cookies=http_cookies,
-                useragent=useragent, timeout=http_timeout,
+                useragent=useragent, timeout=http_timeout, retries=http_retries,
                 stealthy_headers=True,
             )
             result.escalation_path = "direct:http"
@@ -4161,34 +4577,40 @@ class MasterFetchServer:
         errors = []
         http_cookies = _safe_cookie_dict(cookies)
         # ─── the call budget ─────────────────────────────────────────
-        # `timeout` is the caller's wall-clock budget for the WHOLE call, and it
-        # used to be applied per tier only: HTTP ran up to 30s (adaptive, and up
-        # to 60s once a domain was learned) with 4 attempts and a fresh timeout
-        # per redirect hop, and the browser tier then got `timeout - elapsed`
-        # floored at 5s - so a slow host could run far past what was asked and
-        # the MCP client killed the request (-32001) instead of dhole returning a
-        # FetchResult. Everything below is bounded by this deadline.
+        # `timeout` is the caller's wall-clock budget for the WHOLE call. It used
+        # to be applied per tier only: HTTP ran up to 30s (adaptive, and up to 60s
+        # once a domain was learned) with 4 attempts and a fresh timeout per
+        # redirect hop, and the browser tier then got `timeout - elapsed` floored
+        # at 5s - so a slow host could run far past what was asked and the MCP
+        # client killed the request (-32001) instead of dhole returning a
+        # FetchResult. Everything below is bounded by this deadline, and the HTTP
+        # tier's share of it comes from _http_tier_budget, which divides what is
+        # left between the attempts it actually asks for.
         budget_ms = max(1000.0, float(timeout or 30000))
         deadline = start_time + budget_ms / 1000.0
 
         def _left_s() -> float:
             return max(0.0, deadline - now())
 
-        async def _over_budget(stage: str, fetcher_used: str):
+        async def _over_budget(stage: str, fetcher_used: str, diagnosis: str = ""):
             """Finalized 'budget ran out' result, with this call's timings filled in."""
             elapsed = (now() - start_time) * 1000
-            result = _over_budget_result(url, budget_ms, elapsed, stage, fetcher_used)
+            result = _over_budget_result(url, budget_ms, elapsed, stage, fetcher_used,
+                                         diagnosis)
             result.escalation_path = (f"{fetcher_used}(timeout)" if fetcher_used
                                       else "timeout")
             return await self._finalize_result(
                 result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
 
-        async def _with_budget(coro, stage: str, fetcher_used: str):
+        async def _with_budget(coro, stage: str, fetcher_used: str, diagnosis: str = ""):
             """Await ``coro`` but never past the call budget.
 
             Returns the over-budget FetchResult when time runs out, or None when
             there was no budget left to start with (callers treat None as "skip
             this step", which is also what "no archive snapshot" means).
+
+            ``diagnosis`` goes into that result, for the tiers that know why this
+            one ran out and can say something better than "raise timeout".
             """
             left = _left_s()
             if left <= 0:
@@ -4197,14 +4619,11 @@ class MasterFetchServer:
             try:
                 return await asyncio.wait_for(coro, timeout=left)
             except TimeoutError:
-                return await _over_budget(stage, fetcher_used)
+                return await _over_budget(stage, fetcher_used, diagnosis)
 
-        # HTTP fetcher takes seconds; browser timeout is ms. Never more than what
-        # is left of this call's budget, and never more than the learned latency
-        # for this domain (a domain that answers in 5s should not hold a 30s call).
-        http_timeout = max(1, min(int(budget_ms / 1000), int(_left_s()) or 1))
-        http_timeout = max(1, min(
-            http_timeout, int(_adaptive_timeout(url, budget_ms) / 1000) or 1))
+        # The HTTP tier's own timeout is computed AT the tier, not here: it is a
+        # share of what is left of this budget, so it has to read `_left_s()` after
+        # the TCP preflight below has spent some of it.
 
         # TCP preflight: fail fast (2s) if the host is unreachable, saving
         # 30-60s of HTTP+Stealthy timeouts. Only for definitive failures
@@ -4246,14 +4665,29 @@ class MasterFetchServer:
         # Domain-specific timeout boost: known slow-but-HTTP-accessible sites
         # (Q&A, docs) get a longer HTTP timeout so they don't prematurely
         # escalate to stealthy (which may also timeout in restricted networks).
-        # Capped by what is left of THIS call: "at least 20s" used to mean a call
-        # that asked for 5s could spend 20 in tier 1 alone.
         _domain = urlparse(url).netloc.lower()
-        _left = int(_left_s()) or 1
-        if _domain in _SLOW_HTTP_DOMAINS or any(_domain.endswith("." + d) for d in _SLOW_HTTP_DOMAINS):
-            _effective_http_timeout = max(1, min(max(http_timeout, 20), _left))
-        else:
-            _effective_http_timeout = max(1, min(http_timeout, _left))
+        slow_domain = (_domain in _SLOW_HTTP_DOMAINS
+                       or any(_domain.endswith("." + d) for d in _SLOW_HTTP_DOMAINS))
+        document = _is_document_url(url)
+        http_timeout, http_retries = _http_tier_budget(
+            url, budget_ms, _left_s(), document=document, slow_domain=slow_domain)
+
+        # A document is read only once the whole body is in memory, so ask its
+        # size first: refusing a 200MB PDF in one round trip beats spending the
+        # entire budget downloading it and then calling the result a timeout.
+        doc_size: Optional[int] = None
+        doc_size_note = ""
+        if document:
+            doc_size, doc_size_note = await _document_size(
+                url, _proxy_to_url(proxy, None), extra_headers, http_cookies, useragent,
+                budget_s=min(3.0, max(1.0, _left_s())))
+            too_big = _oversized_document_result(url, doc_size)
+            if too_big is not None:
+                too_big.escalation_path = "http(size preflight)"
+                return await self._finalize_result(
+                    too_big, url, extraction_type, css_selector, cache_ttl, offset,
+                    max_chars)
+
         result = await _with_budget(self.get(
             url, extraction_type=extraction_type,
             css_selector=css_selector, main_content_only=main_content_only,
@@ -4261,19 +4695,38 @@ class MasterFetchServer:
             proxy=_proxy_to_url(proxy, None),
             headers=extra_headers, cookies=http_cookies,
             useragent=useragent, stealthy_headers=True,
-            timeout=_effective_http_timeout,
-        ), "HTTP tier", "http")
+            timeout=http_timeout, retries=http_retries,
+        ), "HTTP tier", "http",
+            diagnosis=(_document_budget_advice(url, doc_size, doc_size_note, budget_ms,
+                                               "HTTP tier") if document else ""))
         if result is None or _is_over_budget(result):
-            return result or await _over_budget("HTTP tier", "none")
+            return result or await _over_budget(
+                "HTTP tier", "none",
+                diagnosis=(_document_budget_advice(url, doc_size, doc_size_note, budget_ms,
+                                                   "HTTP tier") if document else ""))
         elapsed = (now() - start_time) * 1000
         result.duration_ms = elapsed
 
-        # PDF-intent URLs (.pdf) are binary; never escalate to a JS browser
-        # (a stealthy render of a PDF URL is always wasted, and the body is
-        # either %PDF or a login/error redirect handled in _translate_response).
-        if url.lower().split('?')[0].endswith('.pdf'):
+        # A PDF is binary whether or not its URL says so (arxiv serves them at
+        # /pdf/<id>): never escalate one to a JS browser — a stealthy render of a
+        # PDF is always wasted, and the body is either %PDF or a login/error
+        # redirect handled in _translate_response — and record it as a DOWNLOAD,
+        # so 26s of file does not become this host's page budget.
+        came_as_document = document or _is_document(result)
+        if came_as_document:
             result.escalation_path = "direct:http"
-            return await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
+            _record_latency(url, elapsed, document=True)
+            result = await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
+            # The download itself failed (status 0 = no response at all). A PDF
+            # that DID arrive but extracted badly — scanned, CID-corrupted — keeps
+            # its own advice, which is about the file's contents, not the clock.
+            if result.status == 0 and not result.content:
+                # The classifier's generic "retry with a longer timeout" is the
+                # sentence that sent the last report hunting for a server-side
+                # limit. Here the size and the budget are both known, so say them.
+                result.next_action = _document_budget_advice(
+                    url, doc_size, doc_size_note, budget_ms, "the HTTP tier")
+            return result
 
         # Accept if status is OK and content is real (not a JS shell).
         if result.status < 400 and not _is_js_shell(result):
@@ -4719,9 +5172,9 @@ class MasterFetchServer:
         """Local keyless web search (no API key, no account, no third-party service).
 
         Runs keyless backends in parallel (14 registered; default pool:
-        baidu, bing, yandex, brave, duckduckgo, yahoo - engines= to choose,
-        opt-in: baidu_baike, bing_global, mwmbl, so360, sogou, sogou_weixin,
-        wikipedia, grokipedia), merges + dedups + ranks by cross-backend
+        baidu, bing, so360, bing_global, yandex, brave - engines= to choose,
+        opt-in: baidu_baike, duckduckgo, mwmbl, sogou, sogou_weixin,
+        wikipedia, grokipedia, yahoo), merges + dedups + ranks by cross-backend
         consensus (a URL returned by several independent indexes is an authority
         signal). With dhole-mcp[all] installed an ONNX cross-encoder also reranks
         them by neural relevance; on a lean install (or offline) that step is
@@ -4753,9 +5206,19 @@ class MasterFetchServer:
                 page=page, freshness=freshness,
             )
         except Exception as e:
+            # An unexpected raise used to reach the caller as a bare Python
+            # message with nothing saying what to do about it — which is how one
+            # stringified `max_results` came to be reported as "smart_search is
+            # completely broken, and a restart does not fix it". The traceback
+            # belongs in the log; the caller gets a next step.
+            logger.exception("smart_search raised")
             return SearchResponseModel(
                 query=query, results=[], total_results=0,
                 error=redact_api_key(str(e)[:200]),
+                next_action=("Internal error, not a wrong query: retry the same call once. "
+                             "If it repeats, retry with only query= (drop the optional "
+                             "arguments) and check `dhole --doctor` output — the traceback "
+                             "is in the server log."),
             )
 
         # P0: auto-fetch top results' content when fetch_content=true
@@ -4847,7 +5310,12 @@ class MasterFetchServer:
             )
         except Exception as e:
             from dhole_mcp.crawl import CrawlResponseModel as _CRM
-            return _CRM(start_url=url, pages=[], error=redact_api_key(str(e)[:200]))
+            logger.exception("smart_crawl raised")
+            return _CRM(start_url=url, pages=[],
+                        error=redact_api_key(str(e)[:200]),
+                        next_action=("Internal error, not a blocked site: retry the same "
+                                     "call once, then with only url=. The traceback is in "
+                                     "the server log."))
 
     # ─── Serve ─────────────────────────────────────────────────────
 
@@ -4879,14 +5347,14 @@ class MasterFetchServer:
                     "extraction_type": {"type": "string", "enum": ["markdown", "html", "text", "article", "structured"], "description": "Content format (default markdown)."},
                     "css_selector": {"type": "string", "description": "CSS selector to narrow extracted content (e.g. 'article', '.main'). Token saver."},
                     "max_content_chars": {"type": "integer", "description": "Max chars of extracted content (default 40000, range 500-200000). Lower = less context; rest paginated via offset/next_offset."},
-                    "timeout": {"type": "integer", "description": "Max request time in ms (default 30000; 60000 with actions)."},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000; 60000 with actions; max 120000). It is shared by the HTTP retries and, for a document URL, spent on the DOWNLOAD - a big PDF needs budget for bytes, not for parsing."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds (default 3600). 0 = force fresh."},
                     "force_fetcher": {"type": "string", "enum": ["http", "stealthy"], "description": "Skip auto-escalation and pin one tier: 'http' = fast, no JS/bot walls; 'stealthy' = anti-detect browser. Default = auto."},
                     "offset": {"type": "integer", "description": "Char offset into extracted text to resume a truncated page; use next_offset."},
-                    "pages": {"type": "string", "description": "PDF only: '1-5' or '1,3,5-7'. Use table_of_contents page/end_page to pick. Omit = all pages."},
+                    "pages": {"type": "string", "description": "PDF only: '1-5' or '1,3,5-7'. Narrows what is EXTRACTED, not what is downloaded - the file arrives whole either way. Use table_of_contents page/end_page to pick. Omit = all pages."},
                     "password": {"type": "string", "description": "PDF only: password for an encrypted PDF."},
                     "focus": {"type": "string", "description": "Return only blocks matching this query (BM25) - big saver on long pages. Post-cache (no re-fetch). Re-pass the same focus when paginating."},
-                    "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "Interactions on the stealthy browser after load, before extraction (forces stealthy, bypasses cache). Items: {click:'css'}, {fill:{selector,text}}, {press:'Enter'}, {wait:ms}, {scroll:n}, {wait_selector:'css'} - for load-more, forms, pagination, infinite scroll."},
+                    "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "Interactions on the stealthy browser after load, before extraction (forces stealthy, bypasses cache). ONE action key per object: [{scroll:3},{wait:1000}], not {scroll:3,wait:1000}. Items: {click:'css'}, {fill:{selector,text}}, {press:'Enter'}, {wait:ms}, {scroll:n}, {wait_selector:'css'} - for load-more, forms, pagination, infinite scroll."},
                     "schema": {"type": "object", "description": "Structured extraction schema. Each property may carry a 'selector' (CSS) and/or 'attribute' (return that attribute's value instead of the text). Must be {properties: {...}} (a JSON string is accepted); returns structured JSON instead of markdown. A property without \"type\" returns the FIRST match; add \"type\": \"array\" for all of them (e.g. every href).", "additionalProperties": True},
                     "options": {"type": "object", "description": "include_links (response.links: citations/navigation/external + primary_source), include_media (up to 20 image URLs), proxy, cookies (list of {name,value} or 'a=1; b=2'), extra_headers, useragent, wait (ms), network_idle (SPAs), headless. Anti-detect keys are pre-tuned - don't override.", "additionalProperties": True},
                 },
@@ -4924,12 +5392,12 @@ class MasterFetchServer:
         },
         {
             "name": "smart_search",
-            "description": "Keyless multi-engine web search (default pool: baidu,bing,yandex,brave,duckduckgo,yahoo; opt-in engines are listed under options.engines). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- fetch_content=true auto-fetches the top 3; otherwise smart_fetch the high fetch_relevance hits with focus=. Don't search for a URL you already have - smart_fetch it directly.\n- Filters (site, exclude_sites, freshness, engines, ...) live in options.\n- READ THE RESULT FIELDS: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index families, not raw hits, so a low value can mean a degraded pool - check consensus_basis.",
+            "description": "Keyless multi-engine web search (default pool: baidu,bing,so360,bing_global,yandex,brave; opt-in engines are listed under options.engines). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- fetch_content=true auto-fetches the top 3; otherwise smart_fetch the high fetch_relevance hits with focus=. Don't search for a URL you already have - smart_fetch it directly.\n- Filters (site, exclude_sites, freshness, engines, ...) live in options.\n- READ THE RESULT FIELDS: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index families, not raw hits, so a low value can mean a degraded pool - check consensus_basis.",
             "inputSchema": {
                 "type": "object", "required": ["query"],
                 "properties": {
                     "query": {"type": "string", "description": "Search query"},
-                    "options": {"type": "object", "description": "max_results (1-50,6), cache_ttl (300), mode (auto|neural|find_similar; find_similar needs url=), engines (override the pool, max 9; opt-in: baidu_baike,bing_global,mwmbl,so360,sogou,sogou_weixin,wikipedia,grokipedia), site (domain restrict), exclude_sites (list), location, language (2-letter), region, page (0-10), freshness (day|week|month|year), url (find_similar), fetch_content (bool,false).", "additionalProperties": True},
+                    "options": {"type": "object", "description": "max_results (1-50,6), cache_ttl (300), mode (auto|neural|find_similar; find_similar needs url=), engines (override the pool, max 9; opt-in: baidu_baike,duckduckgo,mwmbl,sogou,sogou_weixin,wikipedia,grokipedia,yahoo), site (domain restrict), exclude_sites (list), location, language (2-letter), region, page (0-10), freshness (day|week|month|year), url (find_similar), fetch_content (bool,false).", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -5147,6 +5615,11 @@ class MasterFetchServer:
         _reject_unknown_args(name, args)
         try:
             args = _validate_tool_args(name, args)
+            # Parsed and coerced inside the SAME guard: a bad number has to come
+            # back as the invalid_request envelope a bad `urls` already gets, not
+            # as an is_error result of a second shape.
+            options = _coerce_options(args.get("options"))
+            args, options = _coerce_arg_types(name, args, options)
         except ValueError as e:
             # smart_fetch answers a bad argument with the same envelope every
             # other outcome uses (see _invalid_request_result); letting it raise
@@ -5154,16 +5627,20 @@ class MasterFetchServer:
             # no next_action.
             if name != "smart_fetch":
                 raise
+            # Every coercer opens with the offending argument name ("<name> must
+            # be ..."), which is the one thing the caller can act on. Quoting it
+            # keeps the advice about the argument that was wrong instead of
+            # falling back to advice about the URL, which was already right.
+            bad_arg = str(e).split(" ", 1)[0].rstrip(".")
             result = _invalid_request_result(
                 args.get("url") or "", str(e),
                 next_action=(
-                    "Fix that argument and call again - no request was made. "
+                    f"Fix {bad_arg} and call again - no request was made. "
                     "Argument types are checked rather than guessed at: a "
                     "misread `urls` would otherwise come back looking like a "
                     "successful 19-URL fetch."),
             )
             return [TextContent(type="text", text=result.model_dump_json())], result.model_dump()
-        options = _coerce_options(args.get("options"))
 
         if name == "smart_fetch":
             url = args.get("url", "")
@@ -5304,7 +5781,7 @@ def _help_epilog() -> str:
         f"  {ui.cyan('dhole model')}        {ui.dim('list reranker models')}",
         f"  {ui.cyan('dhole model use X')}  {ui.dim('select the reranker model (persisted in ~/.dhole/config/reranker.json)')}",
         f"  {ui.cyan('dhole proxy')}        {ui.dim('manage the search proxy pool (list|add|remove|clear)')}",
-        f"  {ui.cyan('dhole engines')}      {ui.dim('show / reset engine health (list|reset) - cooldowns and per-engine yield')}",
+        f"  {ui.cyan('dhole engines')}      {ui.dim('show / reset / live-test engine health (list|reset|probe)')}",
         "",
         ui.dim("docs:") + "  " + ui.cyan("https://github.com/ouli-1242/dhole-mcp"),
     ])
@@ -5351,11 +5828,13 @@ def _cmd_model(argv: list[str]) -> int:
 
 
 def _cmd_engines(argv: list[str]) -> int:
-    """`dhole engines [list|reset]` — look at / clear the search pool's memory.
+    """`dhole engines [list|reset|probe]` — look at / clear / live-test the pool.
 
     Which engines got skipped recently, and why. Both facts live in two files
     under the dhole home, and until now reading them meant opening JSON by hand
-    and clearing them meant deleting files plus restarting the process.
+    and clearing them meant deleting files plus restarting the process. `probe`
+    is the third thing those files cannot tell you: whether an engine answers
+    *right now* (list only remembers the last round someone else ran).
     """
     from dhole_mcp import cli_ui as ui
     from dhole_mcp.updater import _engine_cooldowns, _engine_yield_row
@@ -5395,8 +5874,131 @@ def _cmd_engines(argv: list[str]) -> int:
                             "one without restarting, call the cache_clear tool with "
                             "engine_state=true"))
         return 0
-    print(ui.err(f"unknown subcommand: {action} (try: dhole engines list|reset)"))
+    if action in ("probe", "check", "test"):
+        return _engines_probe(argv[1:])
+    print(ui.err(f"unknown subcommand: {action} (try: dhole engines list|reset|probe)"))
     return 2
+
+
+_PROBE_QUERY_DEFAULT = "python asyncio tutorial"
+"""默认探针查询：中英混排站点都有的通用技术词。换查询是为了让"这家能不能用"不被
+缓存和一个恰好无结果的查询干扰 —— 所以它必须能改。"""
+
+
+def _engines_probe(args: list[str]) -> int:
+    """`dhole engines probe` - one live query per engine, and say what each one did.
+
+    为什么必须一家一次：并跑时有早退配额，答得慢的引擎会被取消（preempted），于是
+    "这家今天到底能不能用"在真实搜索里根本没有答案。点名单引擎才拿得到它自己的耗时、
+    状态与解析产出。走 `multi_search` —— 与 smart_search 同一条链，诊断的不是另一套代码。
+    """
+    import asyncio
+    import time
+
+    from dhole_mcp import cli_ui as ui
+
+    query = _PROBE_QUERY_DEFAULT
+    names: list[str] = []
+    everything = False
+    for a in args:
+        if a.startswith("--query="):
+            query = a.split("=", 1)[1].strip() or query
+        elif a in ("--all", "-a"):
+            everything = True
+        elif a.startswith("-"):
+            print(ui.err(f"unknown flag: {a} (try: dhole engines probe [--all] "
+                         f"[--query=...] [engine ...])"))
+            return 2
+        else:
+            names.append(a.lower())
+
+    from dhole_mcp.search_engines import DEFAULT_ENGINES, _cooldowns, multi_search
+    try:
+        from dhole_mcp.search_metasearch import _DHOLE_TO_BACKEND, _TEXT_ENGINES
+    except Exception as e:
+        print(ui.err(f"cannot load the search layer to probe it: {str(e)[:160]}"))
+        return 1
+
+    if everything:
+        names = [n for n in _DHOLE_TO_BACKEND if n in _TEXT_ENGINES]
+    elif not names:
+        names = list(DEFAULT_ENGINES)
+    unknown = [n for n in names if n not in _DHOLE_TO_BACKEND]
+    if unknown:
+        print(ui.err(f"unknown engine(s): {', '.join(sorted(unknown))} "
+                     f"(list them with: dhole engines probe --all)"))
+        return 2
+
+    async def _run() -> int:
+        print("  " + ui.dim(f"probing {len(names)} engine(s), one at a time")
+              + "  " + ui.cmd(f"--query={query!r}"))
+        usable = 0
+        for name in names:
+            # 冷却中的引擎必须**先自己判**：点名单引擎时它是整个池子，metasearch 会
+            # 因为"所有引擎都在冷却"直接抛 No search engines could start，于是这里印成
+            # error 而不是"冷却中"—— 恰恰丢掉了探针最该说的那句话。
+            backend = _DHOLE_TO_BACKEND.get(name, name)
+            left = _cooldowns().get(backend, 0.0)
+            if left > 0:
+                print(f"    {name.ljust(14)} " + ui.dim(
+                    f"cooling         -       -  {int(left)}s left (not asked; "
+                    f"`dhole engines reset` to force)"))
+                continue
+            t0 = time.perf_counter()
+            try:
+                results, reports = await asyncio.wait_for(
+                    multi_search(query, 6, engines=[name]), timeout=30)
+            except asyncio.TimeoutError:
+                print(f"    {name.ljust(14)} " + ui.err("timeout      -     >30s"))
+                continue
+            except Exception as e:
+                print(f"    {name.ljust(14)} " + ui.err(
+                    f"error        -    {str(e)[:60]}"))
+                continue
+            elapsed = (time.perf_counter() - t0)  # seconds
+            rep = reports[0] if reports else None
+            status = getattr(rep, "status", "") or "?"
+            nodes = getattr(rep, "item_nodes", -1)
+            got = getattr(rep, "usable", -1)
+            verdict = getattr(rep, "yield_verdict", "") or ""
+            err = (getattr(rep, "error", "") or "").strip()
+            if rep is not None and rep.ok:
+                usable += 1
+                print(f"    {name.ljust(14)} " + ui.ok("ok") + f"    "
+                      f"{str(len(results)) + ' hits':>9}  {elapsed:6.1f}s  "
+                      + ui.dim(f"parsed {got}/{nodes} items"))
+            elif status == "circuit_open":
+                print(f"    {name.ljust(14)} " + ui.dim(
+                    f"cooling        -       -  {err[:48] or 'on cooldown'}"))
+            elif rep is not None and rep.preempted:
+                print(f"    {name.ljust(14)} " + ui.dim("not asked      -       -"))
+            elif status == "empty":
+                # error 里带的是原因（"no parsable results (HTTP 302, redirect not
+                # followed)" 之类），比再报一次"没结果"有用得多。
+                detail = err or "no results"
+                if nodes > 0:
+                    detail += f" - {nodes} item nodes survived, usable={got} ({verdict})"
+                print(f"    {name.ljust(14)} " + ui.err("empty")
+                      + f"        -  {elapsed:6.1f}s  " + ui.dim(detail[:74]))
+            else:
+                # 出错时 status 本身就是最具体的信息（"error:MetaSearchException: …"），
+                # 别把同一个字符串再印一遍当原因 —— 但列宽截掉的那一截要挪到原因栏，
+                # 不然异常类型留下了、真正有用的尾巴（哪个 OSError）反而丢了。
+                detail = "" if err == status else err
+                if err == status and len(status) > 18:
+                    detail = status[18:]
+                print(f"    {name.ljust(14)} " + ui.err(
+                    f"{status[:18].ljust(18)}  -  {elapsed:5.1f}s  {detail[:52]}"))
+        print("  " + (ui.ok(f"{usable} of {len(names)} engine(s) usable right now")
+                      if usable else ui.err(f"no engine answered {query!r}"))
+              + ui.dim("  (cooldowns are honored here; `dhole engines reset` clears them)"))
+        return 0 if usable else 1
+
+    try:
+        return asyncio.run(_run())
+    except KeyboardInterrupt:
+        print(ui.err("\nprobe interrupted"))
+        return 130
 
 
 def _cmd_proxy(argv: list[str]) -> int:

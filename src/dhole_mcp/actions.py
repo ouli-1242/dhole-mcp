@@ -89,14 +89,23 @@ def _validate_actions(actions) -> list[dict]:
                 out.append({key: {"selector": sel, "key": k[:50]}})
             else:
                 raise ValueError(f"action {i} 'press' must be a key string or {{selector, key}}")
-        elif key == "wait":
-            if isinstance(val, bool) or not isinstance(val, int):
-                raise ValueError(f"action {i} 'wait' must be an int (ms)")
-            out.append({key: max(0, min(val, MAX_WAIT_MS))})
-        elif key == "scroll":
-            if isinstance(val, bool) or not isinstance(val, int):
-                raise ValueError(f"action {i} 'scroll' must be an int (viewport steps)")
-            out.append({key: max(0, min(val, MAX_SCROLL))})
+        elif key in ("wait", "scroll"):
+            # A digit STRING is accepted because that is how a client that
+            # serializes numbers spells {"wait": 1000} — as {"wait": "1000"} —
+            # and rejecting it failed the whole fetch over a formatting detail.
+            cap = MAX_WAIT_MS if key == "wait" else MAX_SCROLL
+            unit = "ms" if key == "wait" else "viewport steps"
+            n: int | None = None
+            if isinstance(val, int) and not isinstance(val, bool):
+                n = val
+            elif isinstance(val, str):
+                try:
+                    n = int(val.strip())
+                except ValueError:
+                    n = None
+            if n is None:
+                raise ValueError(f"action {i} {key!r} must be an int ({unit})")
+            out.append({key: max(0, min(n, cap))})
     return out
 
 

@@ -193,3 +193,78 @@ class TestVersionComparison:
 
     def test_malformed_installed(self):
         assert _at_or_ahead("not-a-version", "11.1.6") is False
+
+
+class TestEnginesProbe:
+    """`dhole engines probe` —— 逐引擎实测的那个子命令。
+
+    它存在的理由是"这家今天到底能不能用"在真实搜索里问不出来（早退配额会把慢的
+    引擎取消掉），所以它必须**一家一次**地打、并且把 metasearch 的原始状态如实
+    印出来。下面几条钉的都是它的输出契约，不碰网络。
+    """
+
+    @staticmethod
+    def _run(monkeypatch, capsys, args, reports=None, cooldowns=None):
+        from dhole_mcp import search_engines as se
+        from dhole_mcp import server as srv
+        from dhole_mcp.search_engines import EngineReport
+
+        given = reports or {}
+        asked: list[str] = []
+
+        async def fake_multi(query, max_results=10, *, engines=None, **kw):
+            name = list(engines or [])[0]
+            asked.append(name)
+            rep = given.get(name) or EngineReport(name=name, ok=True, status="ok",
+                                                  item_nodes=5, usable=5)
+            return ([object()] * 3 if rep.ok else []), [rep]
+
+        monkeypatch.setattr(se, "multi_search", fake_multi)
+        monkeypatch.setattr(se, "_cooldowns", lambda: dict(cooldowns or {}))
+        code = srv._engines_probe(args)
+        return code, capsys.readouterr().out, asked
+
+    def test_probes_every_default_engine_one_at_a_time(self, monkeypatch, capsys):
+        from dhole_mcp.search_engines import DEFAULT_ENGINES
+
+        code, out, asked = self._run(monkeypatch, capsys, [])
+        assert asked == list(DEFAULT_ENGINES), "一家一次，顺序就是池子顺序"
+        assert f"{len(DEFAULT_ENGINES)} of {len(DEFAULT_ENGINES)}" in out
+        assert code == 0
+
+    def test_names_the_status_code_instead_of_saying_no_results(self, monkeypatch, capsys):
+        """302 没跟进 = 没看到结果页，输出里必须说得出是哪个状态码。"""
+        from dhole_mcp.search_engines import EngineReport
+
+        _, out, _ = self._run(
+            monkeypatch, capsys, ["bing_global"],
+            reports={"bing_global": EngineReport(
+                name="bing_global", status="empty",
+                error="no parsable results (HTTP 302, redirect not followed)")})
+        assert "HTTP 302" in out and "redirect not followed" in out
+
+    def test_does_not_knock_on_a_cooling_engine(self, monkeypatch, capsys):
+        """点名单引擎时它在冷却里的话，metasearch 会抛"No engines could start"，
+        输出就变成一个看不懂的 error —— 所以冷却要自己先判、干脆不发请求。"""
+        code, out, asked = self._run(monkeypatch, capsys, ["so360"],
+                                     cooldowns={"so360": 55.0})
+        assert asked == [], "冷却中的引擎不许被探针敲"
+        assert "cooling" in out and "55s left" in out
+        assert code == 1, "没有任何引擎答话时退出码非零（脚本里能用）"
+
+    def test_alias_resolves_to_the_backend_the_cooldown_is_keyed_by(self, monkeypatch, capsys):
+        _, out, asked = self._run(monkeypatch, capsys, ["360"],
+                                  cooldowns={"so360": 40.0})
+        assert asked == [] and "cooling" in out, "别名 360 要认得 so360 的冷却表"
+
+    def test_unknown_engine_name_is_rejected_with_a_way_to_list_them(self, monkeypatch, capsys):
+        code, out, asked = self._run(monkeypatch, capsys, ["goole"])
+        assert code == 2 and asked == []
+        assert "goole" in out and "--all" in out
+
+    def test_all_flag_covers_every_registered_keyless_engine(self, monkeypatch, capsys):
+        from dhole_mcp.search_metasearch import _TEXT_ENGINES
+
+        _, _, asked = self._run(monkeypatch, capsys, ["--all"])
+        assert len(asked) == len(_TEXT_ENGINES), \
+            f"--all 应当问遍 {len(_TEXT_ENGINES)} 个免密引擎，实际 {len(asked)}"

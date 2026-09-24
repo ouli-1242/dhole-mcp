@@ -7,8 +7,8 @@ server / MCP / images / videos / news / books / extract / cache / network bloat.
 See the ddgs LICENSE notice in NOTICE.ddgs.txt for full attribution.
 
 Backends (all keyless, no API key, no account): the default pool is baidu, bing,
-yandex, brave, duckduckgo, yahoo, with sogou_weixin / sogou / so360 / baidu_baike /
-bing_global / mwmbl / wikipedia / grokipedia available by name as opt-in backends.
+so360, bing_global, yandex, brave, with duckduckgo / yahoo / sogou_weixin / sogou /
+baidu_baike / mwmbl / wikipedia / grokipedia available by name as opt-in backends.
 They run in PARALLEL; a backend that
 CAPTCHAs / rate-limits / has no topic-match simply yields
 nothing and the others carry - so search is robust without any single point of
@@ -128,7 +128,15 @@ class BochaAuthError(MetaSearchException):
 class MetaBlockedException(MetaSearchException):
     """A backend refused us (CAPTCHA / 403 / rate-limit). The caller should
     circuit-open that backend for a cooldown so we don't keep hammering a host
-    that is actively blocking our IP (which risks escalating to a longer IP ban)."""
+    that is actively blocking our IP (which risks escalating to a longer IP ban).
+
+    ``challenge=True`` 说的是另一类拒绝：上游回的是 HTTP 200 的反爬壳（校验页），
+    意思是"我们知道你是谁了"，而不是"这会儿忙"。冷却时长因此分开算 —— 见
+    `_record_block`。"""
+
+    def __init__(self, *args: Any, challenge: bool = False) -> None:
+        super().__init__(*args)
+        self.challenge = challenge
 
 
 # ─── transport: primp (browser-impersonated TLS) ─────────────────────────────
@@ -413,7 +421,8 @@ class BaseSearchEngine:
         漂移 —— 两种误判都比"被拦，等会儿再试"更糟。
         """
         if _is_challenge_shell(html_text):
-            raise MetaBlockedException(f"{self.name} 校验页 (HTTP 200 challenge)")
+            raise MetaBlockedException(f"{self.name} 校验页 (HTTP 200 challenge)",
+                                       challenge=True)
 
     def search(self, query: str, region: str = "us-en", safesearch: str = "moderate",
                timelimit: str | None = None, page: int = 1, **kwargs: str) -> list[Any] | None:
@@ -690,13 +699,22 @@ class Bing(BaseSearchEngine):
 
     def search(self, query: str, region: str = "us-en", safesearch: str = "moderate",
                timelimit: str | None = None, page: int = 1, **kwargs: str) -> list[Any] | None:
-        """Bing 网络抖动/限流时重试（连接重置或空结果都重试）。"""
+        """Bing 网络抖动/限流时重试（连接重置或空结果都重试）。
+
+        但 `MetaBlockedException` 必须往外走：它是"这家正在拦我们"的判定，冷却的
+        唯一触发点就在调用方（metasearch 捕到它就 `_record_block`）。上一版把它和
+        普通异常一起吞成 `last = None`，于是被 403/校验页拒绝时不但**重试满 3 次**
+        （正是 MetaBlockedException 文档里说的那种 hammering），而且这一轮状态记成
+        empty、熔断永远不触发 —— 冷却从我们的角度看等于不存在。
+        """
         import time as _time
         last: list[Any] | None = None
         for attempt in range(self._retries + 1):
             try:
                 last = super().search(query, region=region, safesearch=safesearch,
                                       timelimit=timelimit, page=page, **kwargs)
+            except MetaBlockedException:
+                raise
             except Exception:
                 last = None
             if last:
@@ -741,7 +759,8 @@ class BingGlobal(Bing):
     实测（同一查询 "kubernetes ingress 配置"）：两边结果标题只有 1/17 重合 —— cn 版
     给百度百科 / CSDN 这类中文内容，国际版给全球索引（kubernetes.io / en.wikipedia）。
     所以它不是 cn 版的别名，是给"想要国际结果"的用户的一个选择。国内无代理时
-    www.bing.com 会绕道/超时，因此 opt-in 不进默认池。provider 沿用 bing：结果 URL
+    www.bing.com 会绕道/超时 —— 默认池仍收它（国际 3 席之一），被墙时由连接失败冷却
+    兜住（连续 3 次 → 10 分钟），不会每轮陪跑。provider 沿用 bing：结果 URL
     与 bing/ddg/yahoo 同源，共识家族合并时不会虚报（见 search_engines._INDEX_FAMILY）。
     """
 
@@ -921,7 +940,8 @@ class Baidu(BaseSearchEngine):
                 return kept
             if attempt == 0:
                 _time.sleep(0.5)
-        raise MetaBlockedException("baidu 拦截页 (HTTP 200 challenge page)")
+        raise MetaBlockedException("baidu 拦截页 (HTTP 200 challenge page)",
+                                   challenge=True)
 
     def post_extract_results(self, results: list[Any]) -> list[Any]:
         out = []
@@ -1016,11 +1036,11 @@ _DHOLE_TO_BACKEND = {
     "brave": "brave", "yandex": "yandex", "sogou_weixin": "sogou_weixin",
     "grokipedia": "grokipedia",
     "baidu": "baidu", "baidu_baike": "baidu_baike",
-    # 国内 opt-in（不进默认池）：360 与搜狗主站都是服务端渲染的独立索引。
-    # "360" 是 so360 的顺手别名（引擎名以数字开头不合本项目的命名习惯）。
+    # 国内独立索引：so360 在默认池里，sogou 是 opt-in（同生态位，两家都按 IP 限流，
+    # 默认池只点一家）。"360" 是 so360 的顺手别名（引擎名以数字开头不合本项目的命名习惯）。
     "so360": "so360", "360": "so360", "sogou": "sogou",
-    # 国外 opt-in（不进默认池）：bing_global 是 www.bing.com 那套国际索引（与 cn 版
-    # 结果几乎不重合，但国内直连常需代理）；mwmbl 是社区自建的小型独立索引。
+    # bing_global 是 www.bing.com 那套国际索引（与 cn 版结果几乎不重合，但国内直连常需
+    # 代理），在默认池的国际 3 席里；mwmbl 是社区自建的小型独立索引，仍为 opt-in。
     "bing_global": "bing_global", "mwmbl": "mwmbl",
     # Paid JSON backends: selectable by name, run on their own track (see
     # KeyedApiEngine) -- absent from _TEXT_ENGINES by design.
@@ -1029,11 +1049,13 @@ _DHOLE_TO_BACKEND = {
     "exa": "exa",
     "bocha": "bocha",
 }
-# 默认池 = 国内直连 3（baidu/bing/yandex）+ 国外 3（brave/ddg/yahoo），http 稳定 keyless。
+# 默认池 = 国内 3（baidu/bing/so360）+ 国际 3（bing_global/yandex/brave），全 keyless。
+# 让出席位的 duckduckgo/yahoo 仍是注册引擎、可显式点名：它们与 bing 同一个索引家族，
+# 在池里只多入口不多家族（共识分母不变），而 so360 是第三个国内独立索引。
 # sogou_weixin 是垂直索引（只覆盖公众号），从默认池移出但保留注册：显式
 # engines=["sogou_weixin"] 仍可搜公众号。baidu_baike 同 wikipedia 一样是知识库
 # 覆盖窄（名词/概念有效，教程/实时信息常空），也 opt-in。
-_DEFAULT_BACKENDS = ["baidu", "bing", "yandex", "brave", "duckduckgo", "yahoo"]
+_DEFAULT_BACKENDS = ["baidu", "bing", "so360", "bing_global", "yandex", "brave"]
 
 # 垂直索引：只覆盖某一类内容（sogou_weixin = 微信公众号文章），不是通用网络索引。
 # 这里用它的地方只有一处 —— 早退配额的归属（见 multi_search 里 general_n 那段）。
@@ -1050,7 +1072,8 @@ def _is_vertical_entry(entry: dict[str, Any]) -> bool:
 
 class SogouWeixin(BaseSearchEngine):
     """搜狗微信搜索（weixin.sogou.com）：免费、国内裸网直连（实测 ~0.2-0.9s），
-    默认池成员（14.5 起）。独家内容池 —— 微信公众号文章在 Bing/百度里搜不全。
+    默认池成员（14.5 起），后因覆盖面窄移出为 opt-in（15.x）—— 注册仍在，显式
+    engines=["sogou_weixin"] 可搜。独家内容池 —— 微信公众号文章在 Bing/百度里搜不全。
 
     结果 href 是搜狗的 /link?url=... 跳转包装（带 token，会过期），不是文章
     原始 URL；如实返回包装链接，浏览器可直接打开。它是**垂直索引**（只覆盖公众号
@@ -1087,14 +1110,15 @@ class SogouWeixin(BaseSearchEngine):
 _TEXT_ENGINES["sogou_weixin"] = SogouWeixin
 
 
-# ─── 360 搜索（so.com，独立索引，opt-in） ────────────────────────────────────
+# ─── 360 搜索（so.com，独立索引，默认池） ────────────────────────────────────
 class So360(BaseSearchEngine):
     """360 搜索（www.so.com/s?q=）：国内直连、服务端渲染，独立索引（360 自家爬虫）。
 
     结果 href 是 ``so.com/link?m=<token>`` 跳转包装，真实 URL 在卡片的
     ``data-mdurl`` 属性里（实测直接可读）—— 与百度 ``mu`` 同一套思路：只交真链，
     拿不到真链的卡片丢掉。分页 ``&pn=<页码>``（实测 page1∩page2 = 0）。
-    **opt-in，不进默认池**：默认池只放国内三件通用索引（baidu/bing/yandex）。
+    **在默认池的国内 3 席里**：baidu/bing 之外第三个国内可达的独立索引。与 sogou 同
+    生态位（两家都按 IP 限流），所以默认池只点这一家，sogou 仍为 opt-in。
     """
 
     name = "so360"
@@ -1415,6 +1439,16 @@ KEYED_ENGINES: dict[str, type[KeyedApiEngine]] = {
 # waiting on a backend that will not contribute). Empty results and timeouts
 # are transient and do NOT trip the breaker. Cleared on the next success.
 _CIRCUIT_COOLDOWN = 60.0  # seconds
+# 校验页（HTTP 200 的反爬壳）不是瞬时限流：上游已经把这个 IP 记进观察名单。本机实测
+# so.com 在**完全零请求**静默 20 分钟后仍回同一张「访问异常页面」—— 此前那版"每 3 分钟
+# 探一次，可能是自己把惩罚续了"的混淆已被这个对照排除。所以 60 秒后再敲一次对这种窗口
+# 只等于替它续期，正是 MetaBlockedException 文档说要避免的 hammering。校验页因此按
+# **连续次数**递增：前两次仍按 60 秒（单次误判不该把国内主力引擎关掉十分钟），第三次起
+# 改用与被墙同档的 10 分钟。10 分钟是**故意短于实测窗口**的：so360 撞墙只花 0.4 秒，
+# 而且现在会如实进 engine_blocked；反过来把 baidu 这类主力误关三十分钟的代价大得多。
+_CHALLENGE_THRESHOLD = 3
+_CHALLENGE_COOLDOWN = 600.0
+_CHALLENGE_COUNTS: dict[str, int] = {}
 _BACKEND_HEALTH: dict[str, float] = {}  # name -> block-until timestamp
 
 
@@ -1492,8 +1526,14 @@ def _is_circuit_open(name: str) -> bool:
     return _BACKEND_HEALTH.get(name, 0.0) > time()
 
 
-def _record_block(name: str) -> None:
-    _BACKEND_HEALTH[name] = time() + _CIRCUIT_COOLDOWN
+def _record_block(name: str, *, challenge: bool = False) -> None:
+    """被拒后把这家冷却掉，时长按拒绝的**形态**分档（见 `_CHALLENGE_THRESHOLD`）。"""
+    seconds = _CIRCUIT_COOLDOWN
+    if challenge:
+        n = _CHALLENGE_COUNTS[name] = _CHALLENGE_COUNTS.get(name, 0) + 1
+        if n >= _CHALLENGE_THRESHOLD:
+            seconds = _CHALLENGE_COOLDOWN
+    _BACKEND_HEALTH[name] = time() + seconds
     _save_circuit_state()
 
 
@@ -1514,6 +1554,7 @@ def _record_conn_failure(name: str) -> None:
 
 def _record_success(name: str) -> None:
     _CONN_FAIL_COUNTS.pop(name, None)
+    _CHALLENGE_COUNTS.pop(name, None)
     if name in _BACKEND_HEALTH:
         _BACKEND_HEALTH.pop(name, None)
         _save_circuit_state()
@@ -1885,6 +1926,14 @@ async def metasearch(
             status[b] = f"no_key:{KEYED_ENGINES[b].env_var}"
 
     if not instances and not keyed_ready:
+        if status and all(v == "circuit_open" for v in status.values()):
+            # 每一家都在冷却，不是一个"起不来"的故障：它有期限、原因已经写在
+            # status 里，而上面那条注释承诺的就是 `circuit_open -> engine_blocked`。
+            # 抛裸异常会把这条承诺整个抹掉：实测 engines=["so360"] 撞上冷却时
+            # error 是一串 Python 字典、engine_blocked 是空列表、consensus_basis
+            # 说 single_family，而 next_action 叫用户"改写查询" —— 于是没人会去
+            # 等那 20 秒，大家去改一个本来没问题的查询。
+            return [], status
         if len(keyed_selected) == 1:
             cls = KEYED_ENGINES[keyed_selected[0]]
             # Only a keyed engine was asked for, so the proxy is not the suspect.
@@ -1956,10 +2005,10 @@ async def metasearch(
             name = tasks[t]
             try:
                 _, res = t.result()
-            except MetaBlockedException:
+            except MetaBlockedException as ex:
                 # Backend refused us (CAPTCHA/403/rate-limit) -> circuit-open it
                 # for the cooldown so we stop hammering it.
-                _record_block(name)
+                _record_block(name, challenge=getattr(ex, "challenge", False))
                 status[name] = "blocked"
                 continue
             except BaseException as ex:  # CancelledError is BaseException in py3.11+

@@ -223,7 +223,9 @@ class TestNewKeyedEngines:
             monkeypatch.setenv(var, "key-set")
         monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
         monkeypatch.setattr(httpx, "post", fake_post)
-        monkeypatch.setattr(m, "_is_circuit_open", lambda name: True)
+        # 用"没有可用的免密引擎"来制造"什么都起不来"，而不是把全体塞进冷却：
+        # 后者现在是一条正常返回（circuit_open -> engine_blocked），不是报错路径。
+        monkeypatch.setattr(m, "_TEXT_ENGINES", {})
 
         with pytest.raises(m.MetaSearchException) as ei:
             await m.metasearch("test query", 3)
@@ -313,8 +315,8 @@ class TestDefaultPoolEnv:
         assert m._resolve_backends(None) == list(m._DEFAULT_BACKENDS)
         # 这一行是默认池的快照，不是逻辑：池子换组合时跟着改（两处定义的一致性由
         # test_default_pool_definitions_agree 保证，这里只钉住"env 没设时用的是它"）。
-        assert m._DEFAULT_BACKENDS == ["baidu", "bing", "yandex", "brave",
-                                      "duckduckgo", "yahoo"]
+        assert m._DEFAULT_BACKENDS == ["baidu", "bing", "so360",
+                                       "bing_global", "yandex", "brave"]
 
 
 class TestConnectionFailureCooldown:
@@ -354,11 +356,12 @@ class TestConnectionFailureCooldown:
             assert status["bing"].startswith("error:")
         assert calls["searched"] == 3
 
-        # 第 4 次：bing 已被冷却，不再构造/请求 -> 实例为空触发整体报错
-        with pytest.raises(m.MetaSearchException) as ei:
-            await m.metasearch("q", 3, engines=["bing"])
+        # 第 4 次：bing 已被冷却，不再构造/请求。整池都在冷却时**不抛异常**：冷却是
+        # 一个有期限、原因已写进 status 的状态，抛异常会让 engine_blocked 与
+        # "稍后重试"那条既有链整个失效（实测 next_action 反而叫用户改写查询）。
+        results, status = await m.metasearch("q", 3, engines=["bing"])
+        assert results == [] and status == {"bing": "circuit_open"}
         assert calls["constructed"] == 3, "冷却期内不得再构造实例"
-        assert "circuit_open" in str(ei.value)
 
     @pytest.mark.asyncio
     async def test_success_resets_the_failure_count(self, monkeypatch):
@@ -419,19 +422,23 @@ def test_default_pool_definitions_agree():
 
 
 def test_opt_in_engines_are_registered_but_not_pooled():
-    """360 / 搜狗主站 / 百科 / 公众号 / bing 国际版 / mwmbl 是**显式点名**的 opt-in：
+    """百科 / 公众号 / 搜狗主站 / mwmbl / duckduckgo / yahoo 是**显式点名**的 opt-in：
     注册表里有、默认池里没有。
 
     默认池决定每轮真实打哪些站点 —— 误加进去会平白多一份限流风险（360、搜狗、百度
-    都按 IP 限流），而且中文索引的覆盖面与 bing 家族高度重合，加进池子换不来家族数。
-    bing_global/mwmbl 同理：一个是同家族的第二入口（不增加家族数），一个是覆盖很窄
-    的小索引，都不该替用户默认打开。
+    都按 IP 限流）。duckduckgo/yahoo 与 bing 同一个索引家族，进池只多入口不多家族，
+    所以它们腾出的席位给了 so360（第三个国内独立索引）。sogou 与 so360 同生态位，
+    默认只点一家。baidu_baike/wikipedia/grokipedia 是知识库、mwmbl 覆盖窄，都不该
+    替用户默认打开。
+
+    bing_global 是**有意**留在池里的例外：它与 bing 同家族（不增加分母），补的是
+    覆盖面 —— 实测 cn 版与国际版结果标题只 1/17 重合，同一个索引的两套入口。
     """
     from dhole_mcp import search_metasearch as ms
     from dhole_mcp.search_engines import DEFAULT_ENGINES
 
-    for name in ("so360", "sogou", "baidu_baike", "sogou_weixin",
-                 "bing_global", "mwmbl"):
+    for name in ("sogou", "baidu_baike", "sogou_weixin",
+                 "mwmbl", "duckduckgo", "yahoo"):
         assert name in ms._TEXT_ENGINES, f"{name} 应当是注册过的 opt-in 引擎"
         assert name not in DEFAULT_ENGINES, f"{name} 不许进默认池"
     # 别名也走同一条路（"360" 是 so360 的顺手写法）
@@ -475,9 +482,10 @@ def test_index_family_map_covers_the_default_pool():
     missing = [n for n in DEFAULT_ENGINES
                if ms._DHOLE_TO_BACKEND.get(n, n) not in _INDEX_FAMILY]
     assert not missing, f"这些默认引擎不在 _INDEX_FAMILY 里: {missing}"
-    # 默认池 6 引擎 / 4 家族：渲染出来只可能是 "x of 4"，"x of 6" 不可能出现
+    # 默认池 6 引擎 / 5 家族（bing 与 bing_global 同家族）：渲染出来只可能是
+    # "x of 5"，"x of 6" 不可能出现
     families = {_INDEX_FAMILY[ms._DHOLE_TO_BACKEND.get(n, n)] for n in DEFAULT_ENGINES}
-    assert families == {"baidu", "bing", "brave", "yandex"}, families
+    assert families == {"baidu", "bing", "so360", "yandex", "brave"}, families
 
 
 def test_vertical_set_only_names_real_engines():
@@ -576,3 +584,165 @@ class TestVerticalResultsCannotFillTheQuota:
         results, status = await m.metasearch("q", 6, engines=["sogou_weixin"])
 
         assert results and status["sogou_weixin"] == "ok"
+
+
+class TestChallengePageCooldown:
+    """HTTP 200 的校验页不是一次性限流。
+
+    实测 so.com 在完全零请求静默 20 分钟后仍回「访问异常页面」，而默认冷却只有 60 秒 ——
+    那等于替上游把惩罚续期，正是 MetaBlockedException 文档说要避免的 hammering。状态码
+    拒绝（403/429/503）仍然按瞬时处理，所以两类的时长必须分开，且校验页要按**连续次数**
+    递增：单次误判不该把国内主力引擎停十分钟。
+    """
+
+    @pytest.fixture
+    def ms(self, monkeypatch, tmp_path):
+        from dhole_mcp import search_metasearch as m
+
+        monkeypatch.setattr(m, "_circuit_state_file", lambda: str(tmp_path / "cb.json"))
+        monkeypatch.setattr(m, "_BACKEND_HEALTH", {}, raising=False)
+        monkeypatch.setattr(m, "_CHALLENGE_COUNTS", {}, raising=False)
+        return m
+
+    def test_the_two_rejection_kinds_are_distinguishable_on_the_exception(self, ms):
+        """冷却分档的依据必须由异常自己带着，不能靠 parse 文案猜。"""
+        assert ms.MetaBlockedException("HTTP 403").challenge is False
+        assert ms.MetaBlockedException("so360 校验页", challenge=True).challenge is True
+
+    def test_status_code_block_stays_at_sixty_seconds(self, ms):
+        ms._record_block("brave")
+        left = ms._BACKEND_HEALTH["brave"] - time.time()
+        assert 50 < left <= 60.5, left
+
+    def test_challenge_escalates_on_the_third_consecutive_strike(self, ms):
+        for _ in range(2):
+            ms._record_block("so360", challenge=True)
+            left = ms._BACKEND_HEALTH["so360"] - time.time()
+            assert left <= 60.5, f"前两次只该关 60 秒，实际 {left:.0f}s"
+        ms._record_block("so360", challenge=True)
+        left = ms._BACKEND_HEALTH["so360"] - time.time()
+        assert left > 500, f"第三次连续校验页应升到与被墙同档，实际 {left:.0f}s"
+
+    def test_a_good_round_resets_the_streak(self, ms):
+        for _ in range(3):
+            ms._record_block("so360", challenge=True)
+        ms._record_success("so360")
+        ms._record_block("so360", challenge=True)
+        assert ms._BACKEND_HEALTH["so360"] - time.time() <= 60.5
+
+
+class TestBingBlockIsNotSwallowed:
+    """Bing 家族的重试循环原先把 MetaBlockedException 一起吞成"空结果"。
+
+    后果有两层：被 403/校验页拒绝时反而**连敲三次**（与 MetaBlockedException 的
+    用途正相反），且 metasearch 那一轮看到的是普通空结果 -> 状态 empty、熔断永不
+    触发。实测 bing_global 直连被地域跳转挡掉时就是这样每轮白等。
+    """
+
+    @pytest.fixture
+    def eng(self, monkeypatch):
+        from dhole_mcp import search_metasearch as m
+
+        calls = {"n": 0}
+
+        def fake(self, *a, **k):
+            calls["n"] += 1
+            raise self._boom  # type: ignore[attr-defined]
+
+        monkeypatch.setattr(m.BaseSearchEngine, "search", fake)
+        e = m.Bing(proxy=None, timeout=5)
+        # BingGlobal 继承同一份 search，这条修复对两个入口同时生效
+        return e, calls
+
+    def test_block_propagates_without_retrying(self, eng):
+        from dhole_mcp import search_metasearch as m
+
+        e, calls = eng
+        e._boom = m.MetaBlockedException("HTTP 403")
+        with pytest.raises(m.MetaBlockedException):
+            e.search("q")
+        assert calls["n"] == 1, "被拦不该重试：立刻上抛给熔断器"
+
+    def test_transient_failure_still_retries(self, eng):
+        e, calls = eng
+        e._boom = OSError("[WinError 10054] 远程主机强迫关闭了一个现有的连接")
+        assert e.search("q") is None
+        assert calls["n"] == e._retries + 1, "网络抖动重试是这条循环存在的理由，不许一起删掉"
+
+
+@pytest.mark.asyncio
+async def test_empty_report_says_which_status_code_we_actually_saw(monkeypatch):
+    """302 没跟随时我们根本没看到结果页，但那与"上游查了、答案是空"共用一个 empty。
+
+    读的人只能看到 "no results"，于是把"这家不给这个 IP 看"当成"这个查询没东西"。
+    状态 token 不许动（它同时是 engine_empty 的判据），原因写进 error。
+    """
+    from dhole_mcp import search_engines as se
+    from dhole_mcp import search_metasearch as ms
+
+    async def fake_meta(query, max_results, **kwargs):
+        return [], {"bing_global": "empty"}
+
+    monkeypatch.setattr(se, "_metasearch", fake_meta)
+    monkeypatch.setattr(ms, "engine_health", lambda: {
+        "bing_global": {"http": 302, "last_nodes": 0, "last": 0,
+                        "verdict": "not_instrumented"}})
+    _, reports = await se.multi_search("q", 5, engines=["bing_global"])  # type: ignore[misc]
+    assert reports[0].status == "empty"
+    assert "HTTP 302" in reports[0].error
+    assert "redirect not followed" in reports[0].error
+
+
+@pytest.mark.asyncio
+async def test_a_real_200_with_nothing_parsable_still_says_no_results(monkeypatch):
+    """反向守卫：不许把 200 的空页也包装成状态码问题。"""
+    from dhole_mcp import search_engines as se
+    from dhole_mcp import search_metasearch as ms
+
+    async def fake_meta(query, max_results, **kwargs):
+        return [], {"baidu": "empty"}
+
+    monkeypatch.setattr(se, "_metasearch", fake_meta)
+    monkeypatch.setattr(ms, "engine_health", lambda: {
+        "baidu": {"http": 200, "last_nodes": 0, "last": 0, "verdict": "unknown_empty"}})
+    _, reports = await se.multi_search("q", 5, engines=["baidu"])  # type: ignore[misc]
+    assert reports[0].error == "no results"
+
+
+@pytest.mark.asyncio
+async def test_everything_on_cooldown_reports_blocked_instead_of_raising(monkeypatch):
+    """"每家都在冷却"是一个有期限、且原因已写进 status 的状态，不是"搜索起不来"。
+
+    实测原形态（engines=["so360"] 撞上冷却）：`error` 是一串裸 Python 字典、
+    `engine_blocked` 是**空列表**、`consensus_basis` 说 `single_family`，而
+    `next_action` 叫用户"改写查询或试 mode=neural"。metasearch 上面那条注释承诺的
+    `circuit_open -> engine_blocked` 整个被抛掉的异常抹掉了，读起来像查询的问题。
+    """
+    from dhole_mcp import search_engines as se
+    from dhole_mcp import search_metasearch as m
+
+    monkeypatch.setattr(m, "_is_circuit_open", lambda b: True)
+    results, status = await m.metasearch("q", 5, engines=["so360"])
+    assert results == [] and status == {"so360": "circuit_open"}, \
+        f"冷却应当作为状态交回上层，而不是抛异常: {status}"
+
+    async def fake_meta(query, max_results, **kwargs):
+        return [], {"so360": "circuit_open"}
+
+    monkeypatch.setattr(se, "_metasearch", fake_meta)
+    _, reports = await se.multi_search("q", 5, engines=["so360"])  # type: ignore[misc]
+    assert reports[0].blocked, "circuit_open 必须落进 engine_blocked"
+    assert "circuit open" in reports[0].error
+
+
+@pytest.mark.asyncio
+async def test_a_broken_install_still_gets_the_proxy_advice(monkeypatch):
+    """反向守卫：不许把"一家都起不来"（primp 没装、引擎被禁用）也咽成空结果 ——
+    那种情况没有期限可等，DHOLE_SEARCH_PROXY 那句建议要留在 error 里。"""
+    from dhole_mcp import search_metasearch as m
+    from dhole_mcp.search_metasearch import MetaSearchException
+
+    monkeypatch.setattr(m, "_TEXT_ENGINES", {})
+    monkeypatch.setattr(m, "_resolve_backends", lambda engines: ["nonexistent"])
+    with pytest.raises(MetaSearchException, match="No search engines could start"):
+        await m.metasearch("q", 5, engines=["nonexistent"])

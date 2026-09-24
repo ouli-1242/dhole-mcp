@@ -1149,11 +1149,16 @@ class TestQueryMapNamesAreReal:
         intent = search._detect_intent("transformer attention mechanism research")
         assert intent == "research"
         q = "transformer attention mechanism research"
-        qm = search._generate_query_map(q, intent, list(se.DEFAULT_ENGINES))
+        # duckduckgo / yahoo 自 15.2 起不在默认池，显式加回来：钉的是它们的归类。
+        qm = search._generate_query_map(
+            q, intent, [*se.DEFAULT_ENGINES, "duckduckgo", "yahoo"])
         assert qm, "research 意图应当展开"
-        assert qm["bing"] == q, "bing 是默认池首位，不该是被改写提问的那一个"
+        assert qm["bing"] == q, "bing 在默认池里，不该是被改写提问的那一个"
+        assert qm["so360"] == q, "so360 是中文索引，英文展开词只会让它搜不到东西"
         assert qm["duckduckgo"] == q and qm["brave"] == q and qm["yahoo"] == q
         assert qm["yandex"] != q, "yandex 才是指定的多样性引擎"
+        # bing_global 也是多样性引擎：国际索引正该拿英文展开词
+        assert qm["bing_global"] != q
 
     def test_every_default_engine_is_classified(self):
         """默认池里每个引擎都必须有明确归属，不能靠集合漏项来"恰好"生效。"""

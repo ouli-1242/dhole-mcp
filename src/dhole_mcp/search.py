@@ -1,8 +1,8 @@
 """Dhole local web search (v7 flagship: keyless, no-account, fully local).
 
-Scrapes public search engines (default pool: baidu, bing, yandex, brave,
-duckduckgo, yahoo; opt-in: baidu_baike, bing_global, mwmbl, so360, sogou,
-sogou_weixin, wikipedia, grokipedia) via the dhole-native
+Scrapes public search engines (default pool: baidu, bing, so360, bing_global,
+yandex, brave; opt-in: baidu_baike, duckduckgo, mwmbl, sogou,
+sogou_weixin, wikipedia, grokipedia, yahoo) via the dhole-native
 engine layer in search_engines.py - no third-party API, no key, no
 account. Results are merged across engines, deduped by normalized URL, and
 ranked. Merging INDEPENDENT indexes gives a free authority signal: a URL
@@ -63,6 +63,7 @@ async def ensure_reranker(*, download: bool = True):
 
 
 SEARCH_CACHE_TTL = 300  # 5 minutes
+DEFAULT_MAX_RESULTS = 6  # what an unset max_results means, and its fallback
 
 
 # ─── related-query mining (extractive, no LLM) ──────────────────────────────
@@ -224,11 +225,11 @@ class SearchResult(BaseModel):
     title: str = Field(description="Result title")
     url: str = Field(description="Result URL")
     snippet: str = Field(default="", description="Result snippet from the engine")
-    source: str = Field(default="", description="Backend(s) that returned this result (baidu/bing/bing_global/duckduckgo/brave/yahoo/yandex/mwmbl/wikipedia/grokipedia). Multiple = cross-backend consensus. sogou_weixin hits are weixin.sogou.com /link wrappers, not canonical article URLs.")
+    source: str = Field(default="", description="Backend(s) that returned this result (baidu/bing/bing_global/so360/brave/yandex/duckduckgo/yahoo/mwmbl/wikipedia/grokipedia). Multiple = cross-backend consensus. sogou_weixin hits are weixin.sogou.com /link wrappers, not canonical article URLs.")
     position: int = Field(default=0, description="1-indexed rank after merge + rerank")
     relevance_score: float = Field(default=0.0, description="0.0-1.0 relevance to the query (neural cross-encoder score in neural mode, min-max normalized), boosted by cross-backend consensus. 1.0 = most relevant in this set.")
     fetch_relevance: str = Field(default="", description="high|med|low - relative relevance hint. smart_fetch what matches your need; the tiers rank results but a lower tier can be the right one - use your judgment.")
-    engines_consensus: str = Field(default="", description="How many independent index families returned this URL over how many could have (e.g. '2 of 4'; the default 6-engine pool is only 4 families since bing/duckduckgo/yahoo share one index). '1 of 1 (no corroboration)' means a single family contributed at all - that is a degraded or tiny pool, NOT agreement. A free authority signal only when the denominator is >1.")
+    engines_consensus: str = Field(default="", description="How many independent index families returned this URL over how many could have (e.g. '2 of 5'; the default 6-engine pool is 5 families since bing and bing_global share one index). '1 of 1 (no corroboration)' means a single family contributed at all - that is a degraded or tiny pool, NOT agreement. A free authority signal only when the denominator is >1.")
     source_type: str = Field(default="", description="Source type from URL pattern: docs|paper|repo|blog|forum|reference|news|other. Helps pick the right source.")
 
 
@@ -467,7 +468,28 @@ def _search_next_action(results: list[SearchResult], engine_blocked: list[str],
 
 # ─── filter validation (site/exclude/location/language/page) ─────────────────
 
+def _as_int(value, default: int) -> int:
+    """int() for a number or a digit string, `default` for anything else.
+
+    The wire boundary coerces argument types (_coerce_arg_types); this is the
+    same belt inside the module, where `min("6", 50)` raised the TypeError an
+    external report filed as "smart_search is completely broken" because
+    `max_results` arrived as a string.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _validate_filters(site, exclude_sites, location, language, page):
+    """Validate the geo/pagination filters; returns the page as an int.
+
+    page is the one argument here that also has to be NORMALIZED, not just
+    judged: a client that serializes numbers sends "2", which is the second page
+    and not a type error, and downstream it becomes `page + 1` for the backends.
+    Rejecting it was what made an ordinary paged search read as a crash.
+    """
     import re
     _domain_re = re.compile(r"^(?!-)[A-Za-z0-9.-]{1,253}(?<!-)$")
     if site is not None:
@@ -481,13 +503,22 @@ def _validate_filters(site, exclude_sites, location, language, page):
                 raise SecurityError(f"Invalid exclude_sites entry: {d!r}")
     if location is not None:
         if not isinstance(location, str) or not re.match(r"^[A-Za-z]{2}(-[A-Za-z]{2})?$", location):
-            raise SecurityError(f"Invalid location: {location!r} (e.g. 'US' or 'us-en')")
+            raise SecurityError(
+                f"Invalid location: {location!r} - an ISO country code ('US') or "
+                "country-language ('us-en'). There is no 'worldwide' value: omit "
+                "location for the global index.")
     if language is not None:
         if not isinstance(language, str) or not re.match(r"^[a-z]{2}$", language):
             raise SecurityError(f"Invalid language: {language!r} (2-letter code, e.g. 'en')")
     if page is not None:
+        if isinstance(page, str):
+            try:
+                page = int(page.strip())
+            except ValueError:
+                raise SecurityError(f"Invalid page: {page!r} (0-10)")
         if isinstance(page, bool) or not isinstance(page, int) or page < 0 or page > 10:
             raise SecurityError(f"Invalid page: {page!r} (0-10)")
+    return page
 
 
 def _validate_engines(engines):
@@ -984,7 +1015,8 @@ benchmark results" / " specifications table data parameters"），而它的索�
 
 baidu / baidu_baike 同理：baidu 是中文索引占优，baidu_baike 更极端 —— query 直接当
 条目名去查（/item/{query}），追加英文展开词等于换了个不存在的条目名，只会空。
-so360 / sogou（都是中文索引，opt-in）同理。
+so360 / sogou（都是中文索引）同理。so360 现在在默认池里，这条更要紧：给它的英文
+展开词等于换了个查询，中文索引上只会空。
 
 注意一个已知局限（不在本次修）：不同引擎被问不同 query 时，URL 重合度里混进了"跨
 query 变体也重合"这一层（见 _expand_query 上方注释，那是有意设计的好处，但也确实如
@@ -1044,7 +1076,7 @@ def _apply_quality_boost(ranked: list, scores: list[float], query: str
 async def smart_search(
     server,
     query: str,
-    max_results: int = 6,
+    max_results: int = DEFAULT_MAX_RESULTS,
     cache_ttl: int = SEARCH_CACHE_TTL,
     mode: str = "auto",
     engines: Optional[list[str]] = None,
@@ -1058,13 +1090,14 @@ async def smart_search(
     freshness: Optional[str] = None,
 ) -> SearchResponseModel:
     """Local keyless web search (no API key, no account). The default pool
-    (baidu, bing, yandex, brave, duckduckgo, yahoo - all HTTP, no browser;
-    opt-in: baidu_baike, bing_global, mwmbl, so360, sogou, sogou_weixin,
-    wikipedia, grokipedia) is scraped in parallel, merged, deduped,
+    (baidu, bing, so360, bing_global, yandex, brave - all HTTP, no browser;
+    opt-in: baidu_baike, duckduckgo, mwmbl, sogou, sogou_weixin,
+    wikipedia, grokipedia, yahoo) is scraped in parallel, merged, deduped,
     and ranked. A URL returned by several **independent index families** is a
     consensus hit (engines_consensus field) and gets a ranking boost - a free
-    authority signal. Note the pool has 6 engines but only 4 families
-    (bing/duckduckgo/yahoo all sit on Bing's index), so '4 of 4' is the max.
+    authority signal. Note the pool has 6 engines but only 5 families
+    (bing and bing_global sit on the same Bing index, just different entries),
+    so '5 of 5' is the max.
     sogou_weixin is a vertical (WeChat-articles-only) index: relevance decides its
     place when the reranker runs, and without one it is demoted behind the
     general-web engines (see _general_first).
@@ -1080,7 +1113,7 @@ async def smart_search(
 
     try:
         query = validate_search_query(query)
-        _validate_filters(site, exclude_sites, location, language, page)
+        page = _validate_filters(site, exclude_sites, location, language, page)
         engines = _validate_engines(engines)
         freshness = _validate_freshness(freshness)
         mode = _validate_mode(mode)
@@ -1090,8 +1123,9 @@ async def smart_search(
             duration_ms=0, error=str(e),
         )
 
-    _requested_max = max_results
+    _requested_max = max_results = _as_int(max_results, DEFAULT_MAX_RESULTS)
     max_results = max(1, min(max_results, 50))
+    cache_ttl = _as_int(cache_ttl, SEARCH_CACHE_TTL)
     # 越界的 max_results 此前被静默钳制：调用方要 100 条、拿到 50 条，响应里没有任何
     # 一处说明这 50 是上限而不是"只有 50 条结果"。
     _clamp_note = ""

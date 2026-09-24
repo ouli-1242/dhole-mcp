@@ -9,9 +9,10 @@ cross-backend consensus, and builds the per-engine reports.
 
 Backends (all keyless, 14 in the registry): baidu, bing, bing_global, yandex, brave,
 duckduckgo, yahoo, sogou_weixin, sogou, so360, baidu_baike, mwmbl, wikipedia,
-grokipedia. The default pool is DEFAULT_ENGINES below (6: baidu first - reachable from
-CN without a VPN and an independent index). wikipedia / grokipedia / baidu_baike are
-knowledge bases and opt-in only; bing_global / mwmbl / so360 / sogou are opt-in too.
+grokipedia. The default pool is DEFAULT_ENGINES below (6: domestic baidu/bing/so360 +
+international bing_global/yandex/brave; baidu first - reachable from CN without a VPN
+and an independent index). wikipedia / grokipedia / baidu_baike are knowledge bases and
+opt-in only; so are sogou / sogou_weixin / mwmbl / duckduckgo / yahoo.
 Engines run in PARALLEL; one that CAPTCHAs / rate-limits /
 has no topic-match just yields nothing and the others carry. Search is 100%
 HTTP (no browser) - the single Patchright browser stays for smart_fetch only.
@@ -48,24 +49,28 @@ def _get_metasearch():
 
 # Public default engine pool (order = rough preference). `engines=None` in
 # smart_search uses this via the metasearch.
-# 组合：国内裸网直连 3（baidu/bing/yandex）+ 国外 3（brave/duckduckgo/yahoo）。
+# 组合：国内 3（baidu/bing/so360）+ 国际 3（bing_global/yandex/brave）。
 # baidu 排首位：国内直连、独立索引（百度自家索引，非 bing/google 代理），实测无反爬。
-# bing 走 cn.bing.com，同样无需 VPN；yandex 国内可达（速度看网络）。
-# 共识家族：ddg/yahoo 与 bing 同源（b-bing 家族 3 席），brave/baidu/yandex 各自独立
-# —— 池子 6 引擎 / 4 家族，"x of 4" 是共识上限。
-# 不在默认池（显式 engines=[...] 才跑）：baidu_baike（百科条目，知识库覆盖窄）、
-# wikipedia/grokipedia（JSON 知识库）、sogou_weixin（微信公众号垂直索引）、
-# so360/sogou（国内独立索引）、bing_global（www.bing.com 国际索引，与 cn 版几乎不
-# 重合但国内直连常需代理）、mwmbl（社区小型独立索引，覆盖窄）。
+# bing 走 cn.bing.com，同样无需 VPN；so360 是第三家国内独立索引（服务端渲染，直连可达）。
+# bing_global 是 www.bing.com 那套国际索引：与 cn 版结果几乎不重合，所以它补的是**覆盖面**
+# 而不是家族数（家族按底层索引归，两者同属 bing）。国内直连常需代理，被墙时由引擎冷却
+# （连续 3 次连接失败 → 冷却 10 分钟）兜住，不会每轮陪跑。
+# 共识家族：6 引擎 / 5 家族（baidu、bing+bing_global、so360、yandex、brave）—— 渲染出来
+# 是 "x of 5"。旧的 baidu/bing/yandex/brave/ddg/yahoo 是 6 引擎 / 4 家族：让出的 ddg、
+# yahoo 都是 bing 家族的第二、三入口（家族数不变），换给 so360 才真的多一个独立索引。
+# 不在默认池（显式 engines=[...] 才跑）：duckduckgo/yahoo（bing 家族的另两个入口，且
+# ddg 国内直连常不通）、baidu_baike（百科条目，知识库覆盖窄）、wikipedia/grokipedia
+# （JSON 知识库）、sogou_weixin（微信公众号垂直索引）、sogou（国内独立索引，与 so360
+# 同生态位，两家都按 IP 限流，默认池只留一家）、mwmbl（社区小型独立索引，覆盖窄）。
 # NOTE 双份定义：search_metasearch._DEFAULT_BACKENDS 是同一份列表的 backend 名
 # 版本。合成一处需要 search_engines 在模块顶层 import metasearch 链（primp/lxml），
 # 而这里的惰性导入正是为了避免拖重依赖 —— 所以留两份 + 由
 # tests/test_engine_registry.py::test_default_pool_definitions_agree 钉住一致性。
-DEFAULT_ENGINES = ("baidu", "bing", "yandex", "brave", "duckduckgo", "yahoo")
+DEFAULT_ENGINES = ("baidu", "bing", "so360", "bing_global", "yandex", "brave")
 
 # 国内裸网可达的默认引擎（其余要 VPN/代理）。只用于 `dhole -v` 那行说明与文档措辞 ——
 # 网络可达性是环境问题（实测 brave 有时直连也通），所以别把它当抓取策略用。
-_CN_DIRECT = frozenset({"baidu", "bing", "yandex"})
+_CN_DIRECT = frozenset({"baidu", "bing", "so360", "yandex"})
 
 # Index family per backend (by the underlying index/provider, for consensus).
 # A URL returned by duckduckgo AND yahoo is ONE family (both Bing's index);
@@ -332,6 +337,16 @@ async def multi_search(
         elif st.startswith("error") or st.startswith("init_error") or st.startswith("no_key"):
             reports.append(EngineReport(name=name, blocked=True, error=st, **common))
         else:  # "empty" —— 引擎答了但一条可用结果都没解析出来
-            reports.append(EngineReport(name=name, error="no results", **common))
+            # "查了，没有" 与 "根本没看到结果页" 是两件事：状态码是 3xx 时上游没给
+            # 正文，而 metasearch 把这两种一起记成 empty（实测 bing_global 直连被
+            # www.bing.com 地域跳转挡掉，每轮白等 1-5 秒，读起来却是"这个查询没结果"）。
+            # token 保持 "empty" 不动（它同时是 engine_empty 的判据），只把原因写进
+            # error —— 分类不许为了换个字符串而把引擎从两个列表里同时抹掉。
+            code = y.get("http")
+            why = "no results"
+            if isinstance(code, int) and code >= 300:
+                why = f"no parsable results (HTTP {code}"
+                why += ", redirect not followed)" if code < 400 else ")"
+            reports.append(EngineReport(name=name, error=why, **common))
 
     return ranked, reports
