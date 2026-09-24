@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from time import time as now
 from dataclasses import dataclass, field
 from typing import Annotated, Mapping, Sequence, Optional, Literal, Dict, List, Any, TYPE_CHECKING
-from urllib.parse import quote as _url_quote, urlparse, urlunparse
+from urllib.parse import quote as _url_quote, urlparse, urlsplit, urlunparse, urlunsplit
 import warnings as _warnings
 import traceback as _traceback
 
@@ -298,6 +298,7 @@ class ResponseModel(BaseModel):
     status: int = Field(description="HTTP status (0=network error)")
     content: list[str] = Field(description="Extracted text (truncated if is_truncated)")
     url: str = Field(description="Final URL")
+    original_url: str = Field(default="", description="The URL you passed, set ONLY when the fetch ended somewhere else (redirect or canonical rewrite). Empty = url is the URL you asked for, so comparing the two is how you detect a redirect.")
     cached: bool = Field(default=False, description="From cache")
     fetcher_used: str = Field(default="", description="http/dynamic/stealthy/cache/none")
     extracted_type: str = Field(default="markdown", description="markdown|html|text|article|structured")
@@ -372,7 +373,7 @@ class CacheInfoModel(BaseModel):
     message: str = Field(description="Result message")
     purged: int = Field(default=0, description="Entries purged")
     engine_state_reset: bool = Field(default=False, description="True when engine_state=true also forgot engine cooldowns + yield history (circuit_breaker.json, engine_stats.json).")
-    engine_health: Dict[str, Any] = Field(default_factory=dict, description="Per-engine pool health as dhole currently sees it: last status, yield verdict, and cooldown_seconds_left while an engine is on cooldown. Empty when no search has run in this process.")
+    engine_health: Dict[str, Any] = Field(default_factory=dict, description="Per-engine pool health as dhole currently sees it: last status, yield verdict, and cooldown_seconds_left while an engine is on cooldown. Populated ONLY when engine_state=true; empty on a plain cache_clear (which is about the content cache and does not pay ~1KB for search-pool state).")
 
 
 @dataclass
@@ -1045,6 +1046,12 @@ def _with_agent_hints(result: ResponseModel) -> ResponseModel:
     result.fetched_at = datetime.now(timezone.utc).isoformat()
     _apply_envelope(result)
     summary, next_action, content_ok = _agent_hints(result)
+    # Argument notes (a value clamped to a documented bound) belong in the
+    # one-line status: they describe THIS response, and next_action has to stay
+    # "empty = nothing to do".
+    notes = _ARG_NOTES.get()
+    if notes:
+        summary = " · ".join([summary, *notes]) if summary else " · ".join(notes)
     result.summary = summary
     result.content_ok = content_ok
     result.next_action = next_action
@@ -1159,6 +1166,168 @@ def _coerce_int_arg(
     return value
 
 
+# The strings a client can legitimately send for a boolean. Listed explicitly
+# because the defect this closes was caused by truthiness: `if all:` treats ANY
+# non-empty string as True, so cache_clear(all="false") wiped the whole cache.
+# A whitelist is the only version of this that cannot be wrong in that
+# direction — an unlisted string raises instead of guessing.
+_BOOL_LITERALS: dict[str, bool] = {
+    "true": True, "1": True, "yes": True, "on": True,
+    "false": False, "0": False, "no": False, "off": False,
+}
+
+# Fetcher tiers accepted on the wire. 'dynamic' is the documented legacy alias
+# for 'stealthy' and is kept as-is (normalizing it would rewrite the
+# escalation_path callers already parse).
+_FORCE_FETCHER_VALUES = frozenset({"http", "stealthy", "dynamic"})
+
+
+def _coerce_bool_arg(value: Any, name: str, *, default: bool = False) -> bool:
+    """Normalize a boolean tool argument; never let truthiness decide.
+
+    Same policy as ``_coerce_int_arg``: ``None`` means "not set" (-> ``default``),
+    a real ``bool`` passes through, ``0``/``1`` pass through as ``False``/``True``
+    (how a number-typed client spells them), and a string is honoured only when
+    it is one of ``_BOOL_LITERALS``. Everything else raises, naming what actually
+    arrived.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    # 0/1 are how a number-typed client says false/true. They have exactly one
+    # reading, so they are honoured; any other int is a mistake and raises
+    # (unlike _coerce_int_arg, which rejects bools outright because `True` there
+    # would silently mean "1 character").
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        key = value.strip().lower()
+        if key in _BOOL_LITERALS:
+            return _BOOL_LITERALS[key]
+        raise ValueError(
+            f"{name} must be a boolean, got {value!r}. "
+            f"Pass true or false (default {str(default).lower()})."
+        )
+    raise ValueError(
+        f"{name} must be a boolean, got {type(value).__name__}. "
+        f"Pass true or false (default {str(default).lower()})."
+    )
+
+
+def _coerce_str_list_arg(
+    value: Any, name: str, *, single_hint: str = "",
+) -> Optional[List[str]]:
+    """Normalize a list-of-strings argument; a bare string is an error.
+
+    A string IS iterable, which is why ``smart_fetch(urls="https://example.com")``
+    used to answer with ``total=19, successful=19`` and nineteen one-character
+    "results" — the bulk path took ``len(urls)`` and iterated it, and nothing
+    downstream could tell that apart from a real 19-URL request.
+
+    Wrapping the string would be a guess (is a comma a separator? a newline?),
+    so it raises and names the argument that already means "one URL". A
+    JSON-encoded array is accepted because several clients stringify nested
+    structures (the same behaviour ``_coerce_options`` exists for) and an array
+    literal has exactly one reading.
+
+    Elements are checked too: ``urls=["https://a", 123]`` used to reach
+    ``ResponseModel(url=123)`` and come back as a bare Pydantic
+    "1 validation error for ResponseModel" with no recovery hint.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        parsed = None
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+            except (ValueError, TypeError):
+                parsed = None
+        if isinstance(parsed, list):
+            return _coerce_str_list_arg(parsed, name, single_hint=single_hint)
+        raise ValueError(
+            f"{name} must be an array of strings, got a single string. "
+            + (single_hint or f'Pass {name}=["...", "..."] instead.')
+        )
+    if isinstance(value, (list, tuple)):
+        out: List[str] = []
+        for i, item in enumerate(value):
+            if not isinstance(item, str):
+                raise ValueError(
+                    f"{name}[{i}] must be a string, got {type(item).__name__} "
+                    f"({item!r}). Every element of {name} has to be a URL string."
+                )
+            out.append(item)
+        return out
+    raise ValueError(
+        f"{name} must be an array of strings, got {type(value).__name__}. "
+        + (single_hint or f'Pass {name}=["...", "..."] instead.')
+    )
+
+
+def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Optional[str]:
+    """Validate the force_fetcher enum instead of falling through to stealthy.
+
+    ``Literal[...]`` on the method signature is documentation only — the
+    dispatcher reads arguments with ``args.get()``, so ``force_fetcher="magic"``
+    used to miss every ``== "http"`` branch and land in the stealthy ``else``:
+    the heaviest tier (~5s plus anti-detect overhead) with no error saying the
+    value was wrong. Returns ``None`` for "not set".
+    """
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{name} must be a string, got {type(value).__name__}. "
+            "Valid values: 'http', 'stealthy' ('dynamic' is a legacy alias for 'stealthy')."
+        )
+    key = value.strip().lower()
+    if key not in _FORCE_FETCHER_VALUES:
+        raise ValueError(
+            f"{name}={value!r} is not a fetcher tier. "
+            "Valid values: 'http', 'stealthy' ('dynamic' is a legacy alias for 'stealthy')."
+        )
+    return key
+
+
+def _validate_tool_args(name: str, args: dict) -> dict:
+    """Type-check the arguments the manual dispatcher is about to read.
+
+    This server runs on the low-level ``mcp.server.Server`` with a hand-written
+    ``on_call_tool``, so the ``Annotated``/``Literal`` annotations on the tool
+    methods only ever reach clients as wire schema — nothing validates at
+    runtime, and every argument is read with ``args.get()``. Three defects lived
+    in that gap, all silent and all delivered as an ordinary 200:
+    ``smart_fetch(urls="https://x")`` iterated the string into nineteen
+    one-character results; ``cache_clear(all="false")`` cleared the entire cache
+    because a non-empty string is truthy; ``smart_fetch(force_fetcher="magic")``
+    fell through to the stealthy browser tier.
+
+    Returning a normalized copy here means every branch below reads a value that
+    already has exactly one reading. Raises ValueError; the smart_fetch branch
+    converts it to the ordinary invalid_request envelope, and anything else
+    surfaces through ``call_tool`` as an is_error result.
+    """
+    out = dict(args)
+    if name == "smart_fetch":
+        out["urls"] = _coerce_str_list_arg(
+            args.get("urls"), "urls",
+            single_hint=('Pass urls=["https://a", "https://b"], or use url= '
+                         "for a single URL."),
+        )
+        out["force_fetcher"] = _coerce_force_fetcher_arg(args.get("force_fetcher"))
+    elif name == "cache_clear":
+        out["all"] = _coerce_bool_arg(args.get("all"), "all", default=False)
+        out["engine_state"] = _coerce_bool_arg(
+            args.get("engine_state"), "engine_state", default=False,
+        )
+    elif name == "feed_fetch":
+        out["urls"] = _coerce_str_list_arg(args.get("urls"), "urls")
+    return out
+
+
 def _apply_chunking(result: ResponseModel, max_chars: int = MAX_CONTENT_CHARS, offset: int = 0) -> ResponseModel:
     """Truncate content if it exceeds max_chars, starting from offset.
 
@@ -1257,6 +1426,34 @@ _INCLUDE_LINKS: contextvars.ContextVar[bool] = contextvars.ContextVar("_include_
 # plain fetches (and pre-existing cache entries) keep hitting as before.
 _CACHE_CTX: contextvars.ContextVar[str] = contextvars.ContextVar("_cache_ctx", default="")
 
+# Notes about THIS call's arguments that the caller has to be told about — right
+# now, values that were clamped to a documented bound. Scoped per invocation by
+# _smart_fetch_request_context exactly like _FOCUS, and folded into the response
+# summary by _with_agent_hints. None (not an empty list) means "not inside a
+# smart_fetch call", which keeps the wrapper a no-op everywhere else.
+_ARG_NOTES: contextvars.ContextVar[Optional[list]] = contextvars.ContextVar("_arg_notes", default=None)
+
+
+def _note_clamped(name: str, requested: Any, applied: int, *, lo: int, hi: int) -> None:
+    """Record that a numeric argument was clamped to its documented bound.
+
+    ``max_content_chars=499`` became 500 with no signal anywhere in the response,
+    while the sibling search tool does tell the caller its ``max_results`` was
+    clamped. Both bounds are on the wire, so the clamp is a known limit rather
+    than a surprise — but "documented limit" is not the same as "you were told",
+    and the caller here was measuring its own context budget.
+    """
+    notes = _ARG_NOTES.get()
+    if notes is None or requested is None:
+        return
+    try:
+        asked = int(str(requested).strip())
+    except (TypeError, ValueError):
+        # _coerce_int_arg already raised for anything unparseable.
+        return
+    if asked != applied:
+        notes.append(f"{name} clamped {asked}->{applied} (supported range {lo}-{hi})")
+
 
 def _cache_context(options: dict) -> str:
     """Short stable fingerprint of the request bits that change WHAT comes back.
@@ -1317,6 +1514,17 @@ def _cache_context(options: dict) -> str:
         bits.append("im=1")
     if options.get("include_links"):
         bits.append("il=1")
+
+    # Fetcher pin: it decides WHICH tier produced the body, so a pinned request
+    # must never replay another tier's answer. It was missing from the key, so
+    # force_fetcher="http" hit the stealthy entry written moments earlier and
+    # came back cached=true / content_ok=true — the pin silently ignored. The
+    # dangerous direction is the reverse: an http-tier JS shell (content_ok
+    # false) gets cached, then an auto/stealthy request is served that bad body
+    # from cache and never escalates.
+    force_fetcher = options.get("force_fetcher")
+    if force_fetcher:
+        bits.append(f"ff={force_fetcher}")
 
     if not bits:
         return ""
@@ -1413,6 +1621,11 @@ def _smart_fetch_request_context(func):
     lower-level fetchers through ContextVars. Setting them inline lets a stale
     value from a previous call leak into the next when the dispatch reuses a
     task; the reset in ``finally`` guarantees each invocation starts clean.
+
+    Also the single choke point where the requested URL is still known after the
+    fetch has rewritten it: every return path (and every per-URL call made by
+    the bulk path) passes through here, so ``original_url`` is stamped once
+    rather than at each of the eight returns inside ``smart_fetch``.
     """
     signature = inspect.signature(func)
 
@@ -1421,6 +1634,9 @@ def _smart_fetch_request_context(func):
         values = signature.bind(*args, **kwargs)
         values.apply_defaults()
         options = values.arguments
+        # Fresh list per invocation: _note_clamped appends to it, _with_agent_hints
+        # reads it, and the reset below guarantees the next call starts empty.
+        notes: list[str] = []
         tokens = [
             (_PDF_PAGES, _PDF_PAGES.set(options["pages"] if isinstance(options["pages"], str) else None)),
             (_PDF_PASSWORD, _PDF_PASSWORD.set(options["password"] if isinstance(options["password"], str) else None)),
@@ -1428,14 +1644,54 @@ def _smart_fetch_request_context(func):
             (_INCLUDE_MEDIA, _INCLUDE_MEDIA.set(bool(options["include_media"]))),
             (_INCLUDE_LINKS, _INCLUDE_LINKS.set(bool(options["include_links"]))),
             (_CACHE_CTX, _CACHE_CTX.set(_cache_context(options))),
+            (_ARG_NOTES, _ARG_NOTES.set(notes)),
         ]
         try:
-            return await func(*args, **kwargs)
+            result = await func(*args, **kwargs)
+            return _stamp_original_url(result, options.get("url") or "")
         finally:
             for variable, token in reversed(tokens):
                 variable.reset(token)
 
     return wrapped
+
+
+def _same_url(a: str, b: str) -> bool:
+    """True when two URLs address the same resource for redirect purposes.
+
+    Only scheme/host case and a trailing slash are normalized: those are what a
+    fetcher adds on its own. Anything else (path, query) counts as a change,
+    because that is exactly the case the caller needs to see.
+    """
+    def norm(u: str) -> str:
+        u = (u or "").strip()
+        try:
+            parts = urlsplit(u)
+        except ValueError:
+            return u
+        return urlunsplit((
+            parts.scheme.lower(), parts.netloc.lower(),
+            parts.path.rstrip("/"), parts.query, "",
+        ))
+
+    return norm(a) == norm(b)
+
+
+def _stamp_original_url(result, requested: str):
+    """Record the requested URL when the fetch ended somewhere else.
+
+    ``smart_fetch`` rewrites ``url`` to the final address, so a redirect left no
+    trace at all — the caller's only clue was a URL it had not typed, and a
+    wrong-but-plausible one reads as "the site moved" at best and "you fetched
+    the wrong page" at worst. ``original_url`` is set ONLY when the two differ,
+    so the common path pays nothing and an empty value unambiguously means "the
+    URL you passed is the URL that answered".
+    """
+    if not isinstance(result, ResponseModel) or not requested:
+        return result
+    if not _same_url(result.url, requested):
+        result.original_url = requested
+    return result
 
 
 def _extract_pdf_response(body: bytes, raw_ct: str, total_size: int, url: str,
@@ -3444,6 +3700,9 @@ class MasterFetchServer:
                     "40000 default); offset takes a non-negative character position "
                     "- use next_offset from the previous response."),
             )
+        # A value outside the range is still clamped (a hard cap beats an ugly
+        # parse error), but the caller is now told which way it moved.
+        _note_clamped("max_content_chars", max_content_chars, mc, lo=500, hi=200000)
 
         # Request options flow to lower-level fetchers through ContextVars. The
         # _smart_fetch_request_context decorator scopes them to this call so
@@ -4101,22 +4360,27 @@ class MasterFetchServer:
             message = f"Cleared {count} expired cache entries."
 
         note = ""
-
-        # Snapshot BEFORE any reset. ``engine_state_reset()`` empties the very
-        # dicts this reads, so taking it afterwards could only ever return {}
-        # while the field's whole purpose is to say what the pool was doing (and,
-        # with engine_state=true, what the reset just released). Read through
-        # sys.modules rather than importing: a call that came only to clear cached
-        # pages must not pull the scraping stack.
         health: Dict[str, Any] = {}
-        ms = sys.modules.get("dhole_mcp.search_metasearch")
-        if ms is not None:
-            try:
-                health = ms.engine_state_snapshot()
-            except Exception:
-                health = {}
 
         if engine_state:
+            # Snapshot BEFORE any reset. ``engine_state_reset()`` empties the very
+            # dicts this reads, so taking it afterwards could only ever return {}
+            # while the field's whole purpose is to say what the pool was doing
+            # (and what the reset just released). Read through sys.modules rather
+            # than importing: a call that came only to clear cached pages must not
+            # pull the scraping stack.
+            #
+            # Both the snapshot and the reset are gated on engine_state. The reply
+            # used to carry the full per-engine pool health (~1KB: n/mean/status/
+            # verdict per engine) on EVERY cache_clear, including the default
+            # "drop expired entries" call — noise for a caller that asked about
+            # the content cache and said nothing about the search pool.
+            ms = sys.modules.get("dhole_mcp.search_metasearch")
+            if ms is not None:
+                try:
+                    health = ms.engine_state_snapshot()
+                except Exception:
+                    health = {}
             try:
                 # Lazy: this pulls the scraping stack (primp/lxml), and only the
                 # admin path that actually asks for it should pay.
@@ -4486,9 +4750,15 @@ class MasterFetchServer:
     _TOOL_DEFS: list[dict] = [
         {
             "name": "smart_fetch",
-            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too. Handles JS/anti-bot pages.\n- focus='question' returns only the relevant paragraphs.\n- schema={properties:{...}} (CSS selectors) returns structured JSON; extraction_type=html raw markup; pages= for PDF ranges; actions=[...] for load-more/forms; css_selector; options: include_links, include_media; cache_ttl=0 bypasses cache.\n- Third escalation tier is archive.org: when the live site hard-blocks, content_ok can be true of a dated Wayback snapshot - check metadata.source + archived_at before citing recent facts; no parameter disables it; costs 10-30s.\n- CHECK BEFORE CITING: content_ok (false = JS shell / login / CAPTCHA wall - don't cite); page_type ('list' -> the linked pages or smart_crawl; 'auth_wall'/'paywall'/'captcha' -> switch source); is_truncated + next_offset; is_stale / content_age_days; escalation_path; source_type/is_official; quality_score (PDF; low = garbled); next_action (empty = done).",
+            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too. Handles JS/anti-bot pages.\n- focus='question' returns only the relevant paragraphs.\n- schema={properties:{...}} (CSS selectors) returns structured JSON; extraction_type=html raw markup; pages= for PDF ranges; actions=[...] for load-more/forms; css_selector; options: include_links, include_media; cache_ttl=0 bypasses cache.\n- Third escalation tier is archive.org: when the live site hard-blocks, content_ok can be true of a dated Wayback snapshot - check metadata.source + archived_at before citing recent facts; no parameter disables it; costs 10-30s.\n- CHECK BEFORE CITING: content_ok (false = JS shell / login / CAPTCHA wall - don't cite); page_type ('list' -> the linked pages or smart_crawl; 'auth_wall'/'paywall'/'captcha' -> switch source); is_truncated + next_offset; is_stale / content_age_days; escalation_path; source_type/is_official; quality_score (PDF; low = garbled); original_url (set only when the fetch redirected); next_action (empty = done).",
             "inputSchema": {
                 "type": "object",
+                # smart_fetch needs one of the two; the schema said nothing at
+                # all, so a client could not tell before calling. anyOf (not
+                # required) because either one satisfies it, and they are not
+                # used together: url wins for a single page, urls switches to
+                # the parallel bulk path.
+                "anyOf": [{"required": ["url"]}, {"required": ["urls"]}],
                 "properties": {
                     "url": {"type": "string", "description": "URL to fetch"},
                     "urls": {"type": "array", "items": {"type": "string"}, "description": "Multiple URLs (parallel; returns per-URL results)"},
@@ -4503,7 +4773,7 @@ class MasterFetchServer:
                     "password": {"type": "string", "description": "PDF only: password for an encrypted PDF."},
                     "focus": {"type": "string", "description": "Return only blocks matching this query (BM25) - big saver on long pages. Post-cache (no re-fetch). Re-pass the same focus when paginating."},
                     "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "Interactions on the stealthy browser after load, before extraction (forces stealthy, bypasses cache). Items: {click:'css'}, {fill:{selector,text}}, {press:'Enter'}, {wait:ms}, {scroll:n}, {wait_selector:'css'} - for load-more, forms, pagination, infinite scroll."},
-                    "schema": {"type": "object", "description": "Structured extraction schema. Each property may carry a 'selector' (CSS) and/or 'attribute' (return that attribute's value instead of the text). Must be {properties: {...}} (a JSON string is accepted); returns structured JSON instead of markdown.", "additionalProperties": True},
+                    "schema": {"type": "object", "description": "Structured extraction schema. Each property may carry a 'selector' (CSS) and/or 'attribute' (return that attribute's value instead of the text). Must be {properties: {...}} (a JSON string is accepted); returns structured JSON instead of markdown. A property without \"type\" returns the FIRST match; add \"type\": \"array\" for all of them (e.g. every href).", "additionalProperties": True},
                     "options": {"type": "object", "description": "include_links (response.links: citations/navigation/external + primary_source), include_media (up to 20 image URLs), proxy, cookies (list of {name,value} or 'a=1; b=2'), extra_headers, useragent, wait (ms), network_idle (SPAs), headless. Anti-detect keys are pre-tuned - don't override.", "additionalProperties": True},
                 },
             },
@@ -4552,7 +4822,7 @@ class MasterFetchServer:
         },
         {
             "name": "cache_clear",
-            "description": "Clear the fetch cache: all=true wipes everything, the default removes only expired entries. To re-fetch one URL fresh, pass cache_ttl=0 to smart_fetch/smart_crawl instead.\nengine_state=true also forgets engine cooldowns + yield history - use it when the same engines keep getting skipped after the network changed (VPN on). The reply reports engine_health.",
+            "description": "Clear the fetch cache: all=true wipes everything, the default removes only expired entries. To re-fetch one URL fresh, pass cache_ttl=0 to smart_fetch/smart_crawl instead.\nengine_state=true also forgets engine cooldowns + yield history - use it when the same engines keep getting skipped after the network changed (VPN on) - and makes the reply include engine_health. A plain call reports counts only.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -4577,7 +4847,7 @@ class MasterFetchServer:
         },
         {
             "name": "feed_fetch",
-            "description": "Batch-fetch RSS/Atom feeds newest-first (title/url/published/summary) to track what a source has PUBLISHED - changelogs, release notes, blogs, news. Feeds parse independently, so a dead feed never fails the batch. NOT a general page fetcher - use smart_fetch.",
+            "description": "Batch-fetch RSS/Atom feeds newest-first (title/url/published/summary) to track what a source has PUBLISHED - changelogs, release notes, blogs, news. Feeds parse independently, so a dead feed never fails the batch. NOT a general page fetcher - use smart_fetch.\nReply {feeds: [...]}; a bad call returns {feeds: [], error, next_action}.",
             "inputSchema": {
                 "type": "object", "required": ["urls"],
                 "properties": {
@@ -4744,6 +5014,24 @@ class MasterFetchServer:
         if name not in _TOP_LEVEL_ARGS:
             raise ValueError(f"Unknown tool: {name}")
         _reject_unknown_args(name, args)
+        try:
+            args = _validate_tool_args(name, args)
+        except ValueError as e:
+            # smart_fetch answers a bad argument with the same envelope every
+            # other outcome uses (see _invalid_request_result); letting it raise
+            # would hand the caller an is_error result of a different shape with
+            # no next_action.
+            if name != "smart_fetch":
+                raise
+            result = _invalid_request_result(
+                args.get("url") or "", str(e),
+                next_action=(
+                    "Fix that argument and call again - no request was made. "
+                    "Argument types are checked rather than guessed at: a "
+                    "misread `urls` would otherwise come back looking like a "
+                    "successful 19-URL fetch."),
+            )
+            return [TextContent(type="text", text=result.model_dump_json())], result.model_dump()
         options = _coerce_options(args.get("options"))
 
         if name == "smart_fetch":
@@ -4773,6 +5061,9 @@ class MasterFetchServer:
                 pages=pages,
                 password=password,
                 cache_ttl=args.get("cache_ttl", DEFAULT_TTL),
+                # Already normalized by _validate_tool_args: an unlisted value
+                # was rejected before this point, so nothing here can fall
+                # through to the stealthy tier by accident.
                 force_fetcher=args.get("force_fetcher"),
                 offset=args.get("offset", 0),
                 focus=args.get("focus"),
@@ -4789,6 +5080,11 @@ class MasterFetchServer:
                       else options.get("search"))
             kw = _strict_options(_promote_options(args, options, _SC_OPTIONS_FORWARDED),
                                  _SC_OPTIONS, _SC_OPTIONS_FORWARDED, "smart_crawl")
+            # Same enum as smart_fetch's, and the same failure mode: crawl.py
+            # forwards it straight to smart_fetch, so an unlisted value would
+            # pin the crawl to the stealthy tier without saying so.
+            if "force_fetcher" in kw:
+                kw["force_fetcher"] = _coerce_force_fetcher_arg(kw["force_fetcher"])
             result = await self.smart_crawl(
                 url=args["url"], discover_only=args.get("discover_only", False),
                 focus=args.get("focus"), crawl_urls=args.get("crawl_urls"),
@@ -4809,6 +5105,9 @@ class MasterFetchServer:
             return [TextContent(type="text", text=result.model_dump_json())], result.model_dump()
 
         elif name == "cache_clear":
+            # Both flags arrive already normalized to real booleans by
+            # _validate_tool_args. Reading them raw is what made
+            # all="false" truthy and wipe the whole cache.
             result = await self.cache_clear(all=args.get("all", False),
                                             engine_state=args.get("engine_state", False))
             return [TextContent(type="text", text=result.model_dump_json())], result.model_dump()
@@ -4823,14 +5122,30 @@ class MasterFetchServer:
 
         elif name == "feed_fetch":
             import json as _j
-            result = await self.feed_fetch(
-                urls=args["urls"],
-                max_items=args.get("max_items", 20),
-                timeout=args.get("timeout", 20),
-            )
-            # structured_content 只接受 dict，list 会触发 MCP SDK 校验错误
-            # （-32603 Handler returned an invalid result）。包一层 dict。
-            return [TextContent(type="text", text=_j.dumps(result, ensure_ascii=False))], {"feeds": result}
+            try:
+                feeds = await self.feed_fetch(
+                    urls=args.get("urls") or [],
+                    max_items=args.get("max_items", 20),
+                    timeout=args.get("timeout", 20),
+                )
+            except ValueError as e:
+                # feed_fetch used to raise, and call_tool turned that into an
+                # is_error result whose payload was a bare {"error": ...}: a
+                # second error shape for callers to detect, with no next_action.
+                # Every other tool answers with an envelope, so this one does too.
+                payload = {
+                    "feeds": [],
+                    "error": str(e),
+                    "next_action": ("Pass urls=[...] with 1-50 absolute http(s) "
+                                    "RSS/Atom feed URLs. localhost and other "
+                                    "internal addresses are rejected."),
+                }
+                return [TextContent(type="text", text=_j.dumps(payload, ensure_ascii=False))], payload
+            # One shape on both channels. content[0].text used to be a bare array
+            # while structured_content was {"feeds": [...]}, so the same call had
+            # two types depending on which field the client read.
+            payload = {"feeds": feeds}
+            return [TextContent(type="text", text=_j.dumps(payload, ensure_ascii=False))], payload
 
         elif name == "resolve_url":
             import json as _j

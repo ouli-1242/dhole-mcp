@@ -6,7 +6,7 @@
 
 ## [15.1] - 未发布
 
-第四轮（约 60 次调用、8 工具全覆盖，记作「报告4」）与第五轮（`dhole_fix_prompt.md`，记作「报告5」）外部实测的处置。两份报告各用**自己的**编号体系、与前几批同名不同物，所以回归测试按**症状**命名而不是照抄编号（`test_bug_report2_regressions.py` 的文件头说明了理由）。
+第四轮（约 60 次调用、8 工具全覆盖，记作「报告4」）与第五轮（`dhole_fix_prompt.md`，记作「报告5」）外部实测的处置。两份报告各用**自己的**编号体系、与前几批同名不同物，所以回归测试按**症状**命名而不是照抄编号（`test_bug_report2_regressions.py` 的文件头说明了理由）。第六轮（`2026-09-24-dhole压测`，91 场景 / 8 工具全覆盖，记作「报告6」）同样按症状命名（`test_loadtest_report_regressions.py`），并在文件头记下三处**报告本身判断有误**的地方。
 
 ### 修复
 
@@ -41,6 +41,35 @@
 
 - **声明的 charset 与字节不符时不再产出 mojibake**。实测 `you’ve → youâ€™ve`、`· → ??`。根因是 encoding **只**从 Content-Type header 取、页面自己的 `<meta charset>` 完全不参与、也没有一致性校验 —— Apache 默认发 `ISO-8859-1` 而内容是 UTF-8 时声明编码无条件获胜（复现：写了 `<meta charset="utf-8">` 也照样乱码）。修法不是猜字符集，而是**两种解码各打一次分、取更干净的**（`_decode_html_bytes`）：错声明的 UTF-8 会留下 U+FFFD 或 `Â/Ã/â€` 前缀，而真·非 UTF-8 内容按 UTF-8 解码会产生**更多**替换符，因此被保留。接进 HTML 主体路径与 JSON / old-reddit 两处直解路径；`feed.py` 与 `search_engines.py` 的解码点本轮**未动**（输入形态不同，需要各自的样本）。两个方向的变异都做过：去掉回退 3 红；改成无条件 UTF-8 2 红 —— 后者是这条修复最该防的事，中文站改坏比不改严重得多。
 
+**报告6**
+
+- **`smart_fetch(urls="https://example.com")` 按字符迭代，返回 19 条垃圾结果**（D-01，P1）。`urls is not None` 不校验类型，字符串进 `_smart_fetch_bulk` 后 `len(urls)=19`、`for u in urls` 逐字符迭代，于是调用方拿到 `total=19, successful=19`、每条 result 的 url 是单个字符 —— **没有任何错误信号**。
+  - 修法不是把字符串包成 `[s]`（逗号算不算分隔符？无从判断），而是**报错并指向 `url=`**：单 URL 已经有专门的参数。JSON 数组字面量仍被接受（`'["a","b"]'`），因为那是若干 MCP 客户端序列化嵌套结构的真实行为，也是 `_coerce_options` 存在的同一个理由。
+
+- **`cache_clear(all="false")` 清空全部缓存**（D-03，P1，数据丢失）。`args.get("all", False)` 把字符串原样交给 `if all:`，而**任何非空字符串都是真值** —— 意图「只清过期」的调用方得到全清。
+  - 新增 `_coerce_bool_arg`，策略与既有的 `_coerce_int_arg` 一致：`None` 取默认、`bool` 直通、`0`/`1` 直通（数字型客户端就是这么写布尔的）、**字符串只认白名单**（`true/false/yes/no/on/off/1/0`，大小写不敏感），其余报错。白名单是唯一不可能在「看起来像假值」方向出错的做法。
+
+- **`force_fetcher="magic"` 静默跑隐身浏览器**（D-02，P2）。签名声明 `Literal["http","dynamic","stealthy"]`，但手动分发器用 `args.get()` 取值，`Literal` 从不参与运行时校验；值只要不等于 `"http"` 就落进 stealthy 的 `else` —— 最重的一层（~5s + 反检测开销），以普通 200 交付。
+  - `smart_crawl` 的 `options.force_fetcher` 同样补了校验：它直接转发给 `smart_fetch`，是同一个失败模式。
+
+- **中文 `focus` 完全 no-op**（D-04，P2）。`_TOKEN_RE = re.compile(r"[a-z0-9]+")` 只匹配 ASCII，中文 query 的 token 集是**空集**，`focus_content` 于是原样返回全文 —— 无错误、无注记，与「每个块都相关」不可区分。
+  - 分词改为 Unicode 感知：一般文字按 `\w` 词元（顺带救回西里尔/希腊/阿拉伯等此前被整体丢弃的文字），**无空格文字（汉字 / 假名 / 泰文等）按字符二元组展开**（`如何创建任务` → `如何,何创,创建,建任,任务`）。整段当一 token 几乎匹配不到任何东西，单字又会匹配到几乎所有东西，二元组是不引入分词器的中间解。混排（`Python教程`）在文字边界切开，得到 `python` + CJK 二元组，而不是一个谁也用不上的 token。
+  - 边界写在 `focus.py` 的模块 docstring 里：**不是语言分词器**，无词干化、无词典。
+
+- **`force_fetcher` 不在缓存键**（D-05，P2）。`_cache_key` 的 raw 串与 `_cache_context` 都不含它，于是 force=http 命中了片刻之前 stealthy 写入的条目（`cached=true, content_ok=true`），pin 被静默忽略。**危险方向是反的**：http 层抓到的 JS 壳（`content_ok=false`）一旦入缓存，后续 auto/stealthy 请求会拿到这个坏正文而**不再升级**。现在 `ff=<值>` 进指纹。
+
+- **`max_results` 的钳制注记在缓存命中时丢失**（D-07，P3）。`_clamp_note` 由**本次请求**推导、不写进缓存行，缓存命中路径只恢复了 `_pool_health_notes`。调用方看到 50 条结果，没有任何一处说明 50 是上限而不是总数。
+
+- **`max_content_chars` 越界静默钳制**（D-08，P3）。499 被钳到 500，响应里没有任何信号 —— 而姊妹工具 `smart_search` 是会报的。钳制本身**保留**（有文档的硬顶优于难看的 parse error，且 `range 500-200000` 已写在 wire 上），但调用方现在会在 `summary` 里看到 `max_content_chars clamped 499->500 (supported range 500-200000)`。注记走 `_ARG_NOTES` ContextVar（与 `_FOCUS` 同一套作用域机制），不新增字段，也不动 `next_action` 的「空 = 无事可做」契约。
+
+- **`urls=["https://...", 123]` 泄漏裸 Pydantic 错误文本**（D-09，P3）。它一路走到 `ResponseModel(url=123)`，回来的是 `1 validation error for ResponseModel` —— 框架内部文本，既不说哪个元素错了，也不给恢复提示。现在元素逐个校验，报 `urls[1] must be a string, got int`。
+
+- **`cache_clear` 每次都带完整 `engine_health`**（D-10，P3）。默认的「清过期条目」是高频运维操作，却要为搜索池的逐引擎状态（n/mean/status/verdict，~1KB）付费 —— 而它问的是内容缓存。现在只在 `engine_state=true` 时取快照，字段描述同步说明。
+
+- **`feed_fetch` 的错误风格与信封不一致**（D-12，P3）。它抛 `ValueError`，`call_tool` 把它变成 `is_error` 结果、payload 只有 `{"error": ...}`：调用方要维护两套错误检测逻辑，且这条路径**丢掉了 `next_action`**。现在与其他 7 个工具一致，返回 `{"feeds": [], "error": ..., "next_action": ...}`，`is_error` 为假。
+
+- **`smart_fetch` 重定向后 url 被静默改写**（D-14，P3）。调用方唯一的线索是一个自己没输过的 URL。新增 `original_url`，**只在确实不同时**才写（空 = 你传的就是应答的），所以常规路径不付费；比较时只归一化 scheme/host 大小写与结尾斜杠 —— 那正是 fetcher 自己会加的东西，其余（路径、查询串）都算变化。
+
 ### 边界（实测记录，不改代码）
 
 - **`focus` 的过滤强度随查询词在页面里的分布剧烈摆动**，两个方向都会出问题。274 block 的合成页实测：`focus='zebraqnix'`（词只出现在 1 个 block）保留 **1/274**；`focus='artificial intelligence'`（页面主题词，半数 block 都含）保留 **135/274**；`focus='systems'`（单词查询）只保留 **7/274**。根因是阈值是**绝对值** `threshold=1.0`，而 BM25 得分随查询词个数、词频、block 长度大幅变化，单词查询下典型 block 得分约 0.9~1.1，正好卡在阈值两侧。
@@ -63,6 +92,14 @@
 - **`smart_crawl` 描述写明 500000 字符硬顶**：`max_total_chars` 被钳在 500000，而 `max_pages` 只在未显式给出 `max_total_chars` 时参与推导 —— 撞上钳制后**再调大 `max_pages` 没有效果**，实测传 100 只抓到 31 页。
 
 - wire 体积（`json.dumps` 默认渲染的字符数，非 token）：15.1 新增描述把 `parse` 874 → 1335（预算 960 → 1480）、`smart_crawl` 2147 → 2213、`smart_fetch` 3719 → 4009、instructions 1399 → 1473，连接合计 12,562 → 13,605 —— 把 15.0 留的余量吃光了。两个预算的上调都**写明理由**，而不是从别处砍描述来付账：`parse` 的 `encoding` 是调用方从乱码里恢复的**唯一**通道，`smart_crawl` 那句子树说明替换掉的 `(path prefixes)` 本身就是 bug 的成因。**随后的去重裁剪把整表压回 11,270（连接 12,610）**，15.1 对 wire 的净效果是 −843 字符。
+
+- **`smart_fetch` 的 inputSchema 现在声明 `anyOf: [{required:[url]}, {required:[urls]}]`**（D-13）。此前 `required` 完全缺席，客户端无法在调用前判断必填。`cache_clear` 同样被报告列为「required 为空」，但它两个参数**本来就都可选**，所以保持为空 —— 给它编一个必填才是 bug。
+- **`smart_fetch` 的 `schema` 描述写清 scalar/array 契约**（D-06）。报告读成「`attribute` 只返回第一个匹配」，实际上 `"type": "array"` 就会返回全部 —— 缺的是文档而不是能力，报告建议的 `{"all": true}` 会变成 `"type": "array"` 的同义写法。现在描述里写明：不带 `type` 返回**首个**匹配，带 `"type": "array"` 返回全部。
+- **`feed_fetch` 的 `content[0].text` 与 `structured_content` 统一为 `{"feeds": [...]}`**（D-11）。此前文本通道是裸数组、结构化通道是 dict —— 同一次调用，客户端读哪个字段就得到哪个类型。
+
+### 安全
+
+- **README 补 fake-IP TUN 环境的说明**（E-01）。Clash / sing-box 的 fake-IP 模式把公网域名解析到 `198.18.0.0/15` / `fc00::/7`，SSRF 的「解析到内网即拒」于是把**所有**公网站点判成内网，`smart_fetch` / `resolve_url` / `feed_fetch` 全部被拦。工具的错误信息已经点出了诊断与逃生口（`DHOLE_SSRF_DNS_RECHECK=0`），README 此前没写。逃生口是**全量开关**、不是白名单，这一点也写明了。
 
 ## [15.0] - 2026-09-22
 

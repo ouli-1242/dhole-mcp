@@ -1150,6 +1150,12 @@ async def smart_search(
                 _notes = _pool_health_notes(results_list, _eb + _ee, _contrib_c)
                 if _notes:
                     _hint = (f"{_hint} | {_notes}" if _hint else _notes)
+                # _clamp_note is derived from THIS request (requested vs applied
+                # max_results), not stored in the cache row, so a cache hit used
+                # to drop it: the caller saw 50 results with nothing saying 50 was
+                # the ceiling rather than the count.
+                if _clamp_note:
+                    _hint = (f"{_hint} | {_clamp_note}" if _hint else _clamp_note)
                 return SearchResponseModel(
                     query=cache_query, results=results_list,
                     total_results=len(results_list), cached=True,

@@ -17,6 +17,10 @@ so a block with a single query-term occurrence gets a positive score and is
 kept at the default threshold. A heading immediately preceding a kept block is
 preserved for context. If nothing clears the threshold, the closest blocks are
 kept so the agent gets something to judge instead of an empty page.
+
+Tokenization is Unicode-aware and covers spaceless scripts (Han, kana, Thai) by
+bigramming — see ``_tokens``. It is not a language-specific segmenter: there is
+no stemming and no dictionary, so a CJK query matches on character bigrams.
 """
 
 from __future__ import annotations
@@ -24,11 +28,66 @@ from __future__ import annotations
 import math
 import re
 
-_TOKEN_RE = re.compile(r"[a-z0-9]+")
+# A "word run": letters/digits of any script, split at underscores and
+# punctuation. Unicode-aware (\w) rather than [a-z0-9], so Cyrillic / Greek /
+# Arabic / Korean queries are tokenized at all instead of silently yielding an
+# empty term set.
+_WORD_RUN_RE = re.compile(r"[^\W_]+", re.UNICODE)
+
+# Scripts that are written without spaces between words. A run in one of these
+# is a phrase, not a word, so it gets bigrammed (see _tokens).
+_SPACELESS_CHAR_RE = re.compile(
+    r"[\u0e00-\u0e7f"          # Thai
+    r"\u1000-\u109f"           # Myanmar
+    r"\u1780-\u17ff"           # Khmer
+    r"\u3040-\u30ff"           # Hiragana + Katakana
+    r"\u3400-\u4dbf"           # CJK ext A
+    r"\u4e00-\u9fff"           # CJK unified
+    r"\uf900-\ufaff"           # CJK compatibility
+    r"\uff66-\uff9f]"          # halfwidth Katakana
+)
+
+
+def _is_spaceless(ch: str) -> bool:
+    return bool(_SPACELESS_CHAR_RE.match(ch))
 
 
 def _tokens(text: str) -> list[str]:
-    return [t for t in _TOKEN_RE.findall((text or "").lower()) if len(t) >= 2]
+    """Tokenize for BM25: Unicode word runs, spaceless scripts bigrammed.
+
+    ``[a-z0-9]+`` only ever matched ASCII, so a Chinese query produced an EMPTY
+    term set and ``focus_content`` returned the page unchanged — no error, no
+    note, just the full text the caller was passing ``focus`` to avoid. Nothing
+    downstream could tell that apart from "every block is relevant".
+
+    Han / kana / Thai runs have no word boundaries to split on and no segmenter
+    is bundled, so each run is expanded into overlapping character bigrams
+    ("如何创建任务" -> 如何, 何创, 创建, 建任, 任务). One token per run would match
+    almost nothing (a whole sentence is not a term), and single characters would
+    match almost everything. Bigrams are the standard segmenter-free middle.
+
+    Boundaries are respected per script, so a mixed run like "Python教程" yields
+    the word "python" plus the CJK bigrams instead of one unusable token.
+    ASCII behaviour is unchanged: runs shorter than 2 characters are dropped.
+    """
+    out: list[str] = []
+    for run in _WORD_RUN_RE.findall((text or "").lower()):
+        i, n = 0, len(run)
+        while i < n:
+            spaceless = _is_spaceless(run[i])
+            j = i
+            while j < n and _is_spaceless(run[j]) == spaceless:
+                j += 1
+            piece = run[i:j]
+            if spaceless:
+                if len(piece) == 1:
+                    out.append(piece)
+                else:
+                    out.extend(piece[k:k + 2] for k in range(len(piece) - 1))
+            elif len(piece) >= 2:
+                out.append(piece)
+            i = j
+    return out
 
 
 def _is_heading(block: str) -> bool:
