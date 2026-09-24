@@ -266,7 +266,7 @@ def test_params_named_in_description_exist(tools, name):
 # 2. **文本 needle**（改措辞就可能红）：ROUTING_CONTRACT、
 #    test_instructions_routes_known_url_list_to_fetch、以及各 report 回归文件里
 #    「描述必须出现 X」的断言。它们锁的是**路由规则和对外事实**（比如
-#    max_total_chars 的 500000 硬顶必须写出来），措辞变了要人工判断是不是
+#    max_total_chars 的硬顶必须写出来，值由 crawl.py 常量反查），措辞变了要人工判断是不是
 #    真丢了这条信息 —— 这是有意的摩擦，不是刻舟求剑，故保留。
 
 

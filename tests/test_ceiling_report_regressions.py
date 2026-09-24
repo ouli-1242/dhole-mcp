@@ -7,13 +7,16 @@
    都以 HTTP 200 返回且 content_ok=true，agent 会把失败页当正文引用。
 2. archive.org 第三层降级在工具描述与 README 里都不存在 —— agent 调用前
    无从得知内容可能是存档快照。
-3. smart_crawl 的 max_total_chars 被硬钳到 500000，文档没写，于是
-   "调大 max_pages 就能多爬" 是错的预期。
+3. smart_crawl 的 max_total_chars 被硬钳在一个固定上限（当前 1,000,000），
+   文档没写，于是 "调大 max_pages 就能多爬" 是错的预期。
 """
+
+import asyncio
 
 import pytest
 from mcp.types import Tool
 
+from dhole_mcp import crawl as crawl_mod
 from dhole_mcp.server import (
     DHOLE_INSTRUCTIONS,
     MasterFetchServer,
@@ -155,20 +158,64 @@ class TestArchiveTierDocumented:
             "instructions 里 content_ok=true 的例外情况没写清楚")
 
 
-# ─── 3. crawl 的 500000 字符硬顶 ────────────────────────────────────────
+# ─── 3. crawl 的总字符硬顶 ────────────────────────────────────────────────
 
 
 class TestCrawlBudgetDocumented:
-    """实测：max_pages=100 仍只抓 31 页。
+    """实测：max_pages=100 仍只抓 31 页（当时的钳制值 500000）。
 
-    根因是 crawl.py 把 max_total_chars 钳在 500000，而 max_pages 只在
+    根因是 crawl.py 把 max_total_chars 钳在一个固定上限，而 max_pages 只在
     max_total_chars 未显式给出时才参与推导 —— 撞上钳制后调 max_pages
     不再有任何效果。这是文档必须说的，否则 agent 会一直加参数。
+    钳制值以 crawl.py 的 MAX_TOTAL_CHARS 为准，本测试从常量反查描述，
+    代码与文档不可能双双漂移。钳制行为本身由 TestHardClampBehavior 钉住。
     """
 
     def test_crawl_documents_the_hard_clamp(self, tools):
         desc = _desc(tools, "smart_crawl")
-        assert "500000" in desc, "max_total_chars 的硬顶没写进描述"
+        assert str(crawl_mod.MAX_TOTAL_CHARS) in desc, (
+            "max_total_chars 的硬顶没写进描述（应与 crawl.py 的 MAX_TOTAL_CHARS 同值）")
+
+
+class TestHardClampBehavior:
+    """钉钳制本身（上面的类钉的是文档）。
+
+    只钉文档的守卫拦不住「代码改了钳制值、文档跟着改」的双双漂移 ——
+    必须跑一次真实爬取（stub 掉网络层），证明显式 max_total_chars 被钳在
+    MAX_TOTAL_CHARS。预算消耗点：crawl.py 每页累加 content_chars，越过预算
+    置 truncated_by_budget；concurrency=1 时末页最多超出一个
+    max_content_chars_per，所以总量落在 [MAX_TOTAL_CHARS, MAX_TOTAL_CHARS + per)。
+    """
+
+    def test_explicit_budget_clamps_at_constant(self, monkeypatch):
+        per = 50000  # max_content_chars_per 的上限，单页内容被切到这个值
+        big_page = (
+            "<html><head><title>t</title></head><body><p>"
+            + " ".join(f"sentence {i} of the crawl budget page" for i in range(6000))
+            + "</p>"
+            + "".join(f'<a href="/p{i}">p{i}</a>' for i in range(60))
+            + "</body></html>"
+        )
+
+        async def fake_smart_fetch(self, url=None, **ignored):
+            return ResponseModel(
+                url=url or "", status=200, content=[big_page],
+                fetcher_used="http", content_ok=True, content_type="text/html",
+            )
+
+        monkeypatch.setattr(MasterFetchServer, "smart_fetch", fake_smart_fetch)
+        srv = MasterFetchServer()
+        result = asyncio.run(srv.smart_crawl(
+            "https://example.com/", max_pages=40, cache_ttl=0,
+            max_content_chars_per=per, max_total_chars=10**9, concurrency=1,
+        ))
+
+        assert result.truncated_by_budget is True, (
+            "传了 10^9 的 max_total_chars 却没触发预算截断 —— 钳制不在了")
+        total = sum(p.content_chars for p in result.pages)
+        assert crawl_mod.MAX_TOTAL_CHARS <= total < crawl_mod.MAX_TOTAL_CHARS + per, (
+            f"总字符 {total} 不在 [{crawl_mod.MAX_TOTAL_CHARS}, "
+            f"{crawl_mod.MAX_TOTAL_CHARS + per}) —— 钳制值不是 MAX_TOTAL_CHARS")
 
 
 # ─── 4. 错误状态的 next_action 不许被「截断」抢走 ────────────────────────

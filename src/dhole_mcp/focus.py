@@ -14,9 +14,14 @@ fetches, cache hits, and bulk results alike.
 
 BM25 (k1=1.5, b=0.75) with an always-positive IDF (the ``+1`` inside the log)
 so a block with a single query-term occurrence gets a positive score and is
-kept at the default threshold. A heading immediately preceding a kept block is
-preserved for context. If nothing clears the threshold, the closest blocks are
-kept so the agent gets something to judge instead of an empty page.
+kept. Selection is ANCHORED TO THE BEST BLOCK (``relative_threshold``), not to
+the absolute score alone: with only an absolute cut, a natural-language question
+kept 55-76% of a docs page because its ubiquitous terms ("what", "is", "the")
+score positively in nearly every block — i.e. the documented usage
+(``focus='question'``) was the case that saved the least context. A heading
+immediately preceding a kept block is preserved for context. If nothing clears
+the threshold, the closest blocks are kept so the agent gets something to judge
+instead of an empty page.
 
 Tokenization is Unicode-aware and covers spaceless scripts (Han, kana, Thai) by
 bigramming — see ``_tokens``. It is not a language-specific segmenter: there is
@@ -162,8 +167,18 @@ def focus_content(
     k1: float = 1.5,
     b: float = 0.75,
     fallback_top: int = 5,
+    relative_threshold: float = 0.33,
 ) -> str:
     """Return the blocks of ``text`` most relevant to ``query`` (BM25).
+
+    Two cuts apply, and a block must clear BOTH: an absolute ``threshold``
+    score, and ``relative_threshold`` x the best block's score. The relative
+    cut exists because the absolute one alone cannot tell "this block is about
+    the query" from "this block contains the word 'the'": BM25+ keeps IDF
+    positive for every term, so a question's stopwords accumulate a small
+    positive score in nearly every block (measured: 55-76% of a docs page kept,
+    against 9% for a keyword query). ``threshold`` therefore acts as a floor —
+    a page whose best block is itself weak keeps the old, permissive behaviour.
 
     If ``query`` is empty, the text has <= 1 block, or the query yields no
     usable terms, the original text is returned unchanged (focus is a no-op).
@@ -238,7 +253,28 @@ def focus_content(
                 preserved.add(i)
 
     # ── Selection ───────────────────────────────────────────────────────
-    keep = [i for i in range(n) if scores[i] >= threshold]
+    # A block must clear BOTH cuts. The relative one is what makes a SENTENCE
+    # query work: BM25+ keeps idf > 0 for every term, so each ubiquitous word
+    # ("what", "is", "the", "with") adds a small positive score to nearly every
+    # block, and the sum clears an absolute threshold almost everywhere.
+    # Measured on docs.python.org/3/library/asyncio-task.html (88 blocks):
+    #   'TaskGroup'                                                ->  9% kept
+    #   "How do I run tasks concurrently with gather?"              -> 55% kept
+    #   "What is the difference between asyncio.gather and TaskGroup?" -> 76% kept
+    # i.e. the documented usage (a question) saved the least context. Anchoring
+    # to the best block's score keeps what the query is ABOUT and drops the
+    # blocks that merely share its stopwords, without touching the keyword case
+    # (there the best block IS the one clearing the threshold).
+    # The anchor is the best CONTENT block, not the best block overall: a
+    # heading is boosted 1.5x (Pass 2) and matches the query by being its
+    # title, so anchoring on it can put `best/3` above the actual answer block
+    # and drop it - TestHeadingAwareBM25 caught exactly that (the "##
+    # Training Details" heading outscored the "Adam optimizer" paragraph it
+    # introduces, which is the one carrying the query's rare term).
+    content_scores = [s for i, s in enumerate(scores) if not _is_heading(blocks[i])]
+    best = max(content_scores) if content_scores else (max(scores) if scores else 0.0)
+    cut = max(threshold, best * relative_threshold)
+    keep = [i for i in range(n) if scores[i] >= cut]
     if not keep:
         # Nothing cleared the threshold — keep the closest blocks so the agent
         # has something to judge rather than an empty response.

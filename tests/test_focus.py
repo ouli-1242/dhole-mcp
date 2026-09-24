@@ -5,6 +5,8 @@ Adversarial: empty query is no-op, single block is no-op, no matching terms
 returns fallback blocks, heading context preserved.
 """
 
+import re
+
 from dhole_mcp.focus import (
     focus_content, _split_blocks, _tokens, _is_heading, _is_table, _is_code,
 )
@@ -212,3 +214,74 @@ class TestTableCodeDetection:
 
     def test_is_code_not_prose(self):
         assert _is_code("This is a normal paragraph.") is False
+
+
+# ─── Anchoring the cut to the best block ───────────────────────────────
+#
+# A SENTENCE query used to keep most of the page. BM25+ keeps idf > 0 for every
+# term, so each of a question's ubiquitous words adds a small positive score to
+# nearly every block and the sum clears the absolute threshold. Measured on
+# docs.python.org/3/library/asyncio-task.html (88 blocks): 'TaskGroup' kept 9%
+# of blocks while "What is the difference between asyncio.gather and
+# asyncio.TaskGroup?" kept 76% — i.e. the documented usage (focus='question')
+# was the case that saved the least context. The cut is therefore anchored to
+# the best CONTENT block's score.
+#
+# The corpus below has GRADED relevance (the four query terms appear in 4, 2
+# and 1 of 20 blocks), which is what a real page looks like. Uniform filler
+# cannot reproduce the defect at all: with df == n the idf collapses to ~0.5/n,
+# so even the absolute cut drops it — measured while writing this test.
+
+
+class TestFocusIsAnchoredToTheBestBlock:
+
+    QUERY = "TaskGroup cancel timeout shield"
+
+    @classmethod
+    def _graded_page(cls) -> str:
+        return "\n\n".join(
+            ["TaskGroup cancel timeout shield."]      # all four terms
+            + ["TaskGroup cancel."] * 3               # two
+            + ["TaskGroup."] * 6                      # one
+            + ["Unrelated paragraph about something else."] * 10)
+
+    @staticmethod
+    def _kept(result: str) -> int:
+        """The count the agent itself reads in the Focus header."""
+        return int(re.search(r"showing (\d+) of (\d+) blocks", result).group(1))
+
+    def test_a_sentence_query_no_longer_keeps_half_the_page(self):
+        page = self._graded_page()
+        absolute_only = focus_content(page, self.QUERY, relative_threshold=0.0)
+        anchored = focus_content(page, self.QUERY)
+        assert self._kept(absolute_only) == 10, "锚定前的行为（复现缺陷形状）"
+        assert self._kept(anchored) == 4
+        assert self._kept(anchored) < self._kept(absolute_only)
+
+    def test_the_best_block_always_survives(self):
+        """The cut must never remove the block that IS the answer."""
+        for relative in (0.0, 0.33, 0.9):
+            out = focus_content(self._graded_page(), self.QUERY,
+                                relative_threshold=relative)
+            assert "timeout shield" in out
+            assert self._kept(out) >= 1
+
+    def test_a_keyword_query_keeps_everything_it_kept_before(self):
+        """No regression on the case that already worked: with identical
+        relevant blocks the best score IS the threshold-clearing score, so the
+        relative cut cannot drop any of them."""
+        page = "\n\n".join(["TaskGroup timeout."] * 3
+                           + ["Unrelated paragraph about something else."] * 10)
+        for relative in (0.0, 0.33, 0.9):
+            out = focus_content(page, "timeout", relative_threshold=relative)
+            assert self._kept(out) == 3
+            assert out.count("TaskGroup timeout.") == 3
+
+    def test_the_absolute_threshold_is_still_a_floor(self):
+        """A page whose best block is itself weak keeps the permissive
+        behaviour — the relative cut may not turn a weak match into an empty
+        page."""
+        page = self._graded_page()
+        everything = focus_content(page, self.QUERY, threshold=0.0,
+                                   relative_threshold=0.0)
+        assert self._kept(everything) == 20

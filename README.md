@@ -132,6 +132,8 @@ playwright install chromium      # 反检测浏览器引擎（~150MB，完整版
 | `DHOLE_SEARCH_FEEDBACK`                                              | 设 `1` 开启隐式域名偏好：抓成功的域名永久 +0.05 排序加权。默认关闭——它按「抓到过」而非「有用」改写共识排序                                                                                                                                         |
 | `DHOLE_BROWSER_IDLE_TIMEOUT`                                         | 浏览器空闲关闭秒数（默认 300，`0` 永不关闭）                                                                                                                                                                                                       |
 | `DHOLE_NO_BROWSER_PREWARM`                                           | 设 `1` 后启动不预热隐身浏览器（默认预热，为首次 stealthy 抓取省 3-5 秒冷启动）                                                                                                                                                                     |
+| `DHOLE_TOOLS`                                                        | 只注册列出的工具（逗号分隔，默认全部 8 个），连接期 token 随之减（`smart_fetch,smart_search` ≈ −49%）；拼错的名字启动期直接报错并列出合法名                                                                                                        |
+| `DHOLE_DEFAULT_CONTENT_CHARS`                                        | 没传 `max_content_chars` 时的默认正文预算（默认 40000，区间 500–200000，无法解析回落默认）；截断走 `offset` / `next_offset` 续取，上限不变                                                                                                         |
 | `DHOLE_SSRF_DNS_RECHECK`                                             | DNS 解析内网复查，**默认开启**；设 `0` 关闭。**fake-IP TUN 代理（Clash / sing-box 等）必须关**，否则所有公网站点都会被判成内网（详见「边界与前提」）                                                                                                |
 | `DHOLE_HOME`                                                         | 状态目录位置（默认 `~/.dhole`）。这里装着**抓到的正文明文**与搜索词，共享机器上可指到别处。POSIX 下建为 0700 / 文件 0600                                                                                                                           |
 | `DHOLE_WORKDIR`                                                      | `parse` 解析相对路径时额外尝试的目录（排在 `cwd` 参数之后）。MCP 宿主常把安装目录当 cwd，此时靠它指向项目目录                                                                                                                                      |
@@ -167,26 +169,17 @@ dhole model use ms-marco     # 切换
 
 ## 边界与前提
 
-- **搜索能力的来源**：免密引擎是**对公开搜索结果的直接抓取**——没有授权、没有配额、没有 SLA。所以「免费」的确切含义是「用不受许可的读取替代付费授权」，代价由可用性承担：对方改版、封 IP 或收紧反爬时只表现为**静默降级**（熔断/冷却/退回共识排序），不会报错。需要可靠性请用 `DHOLE_SEARCH_PROXY` 或 keyed 后端。
-- **合规边界**：抓取与爬取**不检查 `s.txt` 的 Disallow**（只在 sitemap 发现时读它的 `Sitemap:` 指令）；UA 与 TLS 指纹是伪装的，被拦截时会升级到隐身浏览器求解 Cloudflare 验证。目标站点的 ToS 与当地法律由使用者自负。
-- **SSRF 防护**（前提：本工具跑在自己的机器上、单用户使用；共享机器请自行收紧）：
-  - **HTTP 层**：入口 URL 与**每一跳重定向**都过 `validate_url` —— scheme 白名单、各种 IP 变体记法、IPv4-mapped IPv6、云元数据主机名、DNS rebinding 服务名，以及默认开启的「域名解析到内网即拒」。hosts 里钉到 `127.0.0.1` 这类本机开发覆盖按**钉到的值**放行，钉到 `0.0.0.0` 这种屏蔽占位则拒绝。
-  - **浏览器层**：请求前拦截（页面 JS 发起的 fetch/XHR、iframe、JS 跳转都先判定是否解析到内网）；落地后若是内网则抛 `ssrf_blocked` 且**不返回任何正文**。入口站点豁免（已过校验），异端口不豁免。
-  - **fake-IP TUN 环境会全线误报（实测）**：Clash / sing-box 等的 fake-IP 模式把公网域名解析到保留段（`198.18.0.0/15`、`fc00::/7`），「域名解析到内网即拒」于是把**每一个**公网站点判成内网 —— `smart_fetch` / `resolve_url` / `feed_fetch` 全部被拦。错误信息会点名解析到了哪个地址并给出逃生口：
-    > `invalid_request: URL hostname docs.python.org resolves to internal/private IP (fd00::6 in fc00::/7). If your resolver maps public domains to reserved addresses (DNS pollution / split-horizon), set DHOLE_SSRF_DNS_RECHECK=0 to disable this check.`
-    
-    确认是这种环境时设 `DHOLE_SSRF_DNS_RECHECK=0`。注意这个逃生口是**全量开关**，关掉后连"公网域名解析到内网"这条也不再判（字面 IP、主机名、重定向逐跳的检查照旧），不是按域名白名单 —— 粒度更细的 allowlist 还没有。
-  - **残余**：校验用一次 DNS、连接时再解析一次，存在 TOCTOU 窗口（纵深防御，不是边界）；HTTP 3xx 重定向的目标仍会发出一次请求（内容不回流，但"打一下"还在）；浏览器层为通过真实站点的残缺证书链设了 `ignore_https_errors`，代价是同网络位置的中间人可给这一层伪造内容（HTTP 层不做此让步）。
-- **archive.org 第三层降级**（`smart_fetch` 专属，文档此前完全没写）：自动升级实际是三层，不是两层 —— `http → stealthy → archive.org`。第三层只在**站点硬阻断**时触发（`404/410/451`、网络失败、`5xx`、`403/503` 且是 bot challenge、`all_tiers_failed`），代价是 **10–30 秒**，且返回的是**某个日期的快照**。响应里 `metadata.source == "archive.org"`、`metadata.archived_at` 给出快照日期，`escalation_path` 会是 `http→stealthy→archive.org`。**没有任何参数能关掉这一层**，所以对时效敏感的问题，引用前必须先看 `source`——`content_ok` 仍然是 `true`，它只回答"拿到了内容"，不回答"内容是今天的"。
-- **内容可用性不等于 `content_ok=true`**：`content_ok` 的判定是 `2xx/3xx + 无 error + 正文非空`。已知会漏掉两类：`content_ok=true` 但正文是失败/占位页（已加"软失败"检测，覆盖 `Try reloading` / `Please wait...` 这类，但检测是**词表 + 长度门限**，仍是打地鼠），以及 `content_ok=true` 但内容来自存档（见上一条）。引用前顺手看一眼字符量，几百字符的"成功"大概率是壳。
-- **`parse` 的字符集探测**：本地文件没有 HTTP 头可依据，所以 `.html`/`.csv` 按 **BOM → `encoding` 参数 → UTF-8 → GB18030** 依次**严格**试解（GB18030 覆盖 GBK/GB2312，即中文 Windows 上 Excel 的默认导出格式；UTF-16/32 无 BOM 时按头部 NUL 字节识别），`metadata.encoding` 给出实际生效的字符集。解出来仍带损伤（替换字符、`Ã`/`Â` 类错码、PUA 私有区字符）时**不当作成功**：正文照常返回，但 `error` 为 `encoding_undecodable`、`content_ok=false`、`next_action` 让你带 `encoding=` 重试。
-  - **已知缺口（实测，不是推测）**：GB18030 能把其它 CJK 老编码"严格解出来"。Big5 会落进 PUA 因此**能**被检出并标记；而 **Shift_JIS / EUC-KR 会解成"看起来合理的中文"且损伤为 0**（`名前` → `柤慜`）——没有廉价的字节特征能把它们和真 GBK 分开，只能显式传 `encoding=shift_jis` / `encoding=euc-kr`。Latin-1/cp1252 文件同理会被解成 GB18030 并标记为有损伤，`encoding=cp1252` 可解。
-  - 刻意**不**把 cp1252 放进自动链：它能把**任何**字节解成零损伤的拉丁文本，那会让损伤信号彻底失效——看得见的失败优于看不见的错误。
-  - `parse` 单独 import 时不依赖抓取栈（探测逻辑在 `charset.py`，不 import `primp`），缺 `[all]` extra 时降级路径不会 ImportError。
-- **提示注入**：抓回来的正文是**不可信数据**，指令里已要求模型不要执行页面里的"指令"，但那是提示、不是强制；页面里出现工具调用、密钥、上传指令时都应按提示注入处理。同理 `is_official` 只对 gov / edu / github 这类第三方注册不走的命名空间为真，`docs.*` 子域不构成权威。
-- **上下文开销**：MCP 客户端每次连接要付一次固定 token（`instructions` + 8 个工具 schema），合计约 3.3k（cl100k_base），之后不再重复。15.1 对 wire 做了一轮去重裁剪（13,605 → 12,601 字符，**-7.4%**）：删掉的是**同一事实写两遍**（描述 ↔ `options` 包 ↔ `instructions` 三处重复）、agent 无法据此行动的机制细节（archive.org 的触发状态码清单、相对路径的四步解析顺序），以及一处**错误的**引擎清单 —— `smart_search` 的描述只列了 5 个 opt-in 引擎而注册表里是 8 个（漏 `so360`/`sogou`/`sogou_weixin`），现在改为指向 `options.engines`，两份手写清单只留一份。**参数、类型、枚举、`required`、`annotations` 一个没动**；`tests/test_tool_descriptions.py` 的预算同时**下调**（12,300 / 1,465 / 13,800），让省下的额度不会被下一个改动自动吃掉。报告6 的处置又加了 341 字符（连接期 12,610 → **12,951**），全部花在**新契约**上而不是散文：`smart_fetch` 的 `anyOf`（必填声明）与 scalar/array 契约、`original_url` 字段，`feed_fetch` 的响应信封（`{feeds: [...]}` / `{feeds: [], error, next_action}`）。首稿多写了 ~95 字符，被那条预算守卫拦下来压掉了。
-- **真正的大头是响应正文，不是工具表**：连接期固定成本约 12.6k 字符（≈3.3k token，一次性），而单次 `smart_fetch` 默认最多返回 **40,000 字符**（`max_content_chars`，≈10k token）、单次 `smart_crawl` 默认最多 **500,000 字符**（`max_total_chars` 硬顶）—— **一次抓取就能超过整张工具表**。压总消耗的杠杆在 `max_content_chars` / `max_total_chars` / `focus=`，不在描述里。
-- **每个响应的固定信封**：`ResponseModel` 有 30 个字段，服务端用 `model_dump_json()` 整体序列化，所以**空值与默认值也照发**（`"error":""`、`"media":[]`、`"content_age_days":null`、`"archived_at":""` …）。实测一次普通抓取的响应 3,869 字符里有 667 字符是信封，其中约 370 字符（55%）在该场景下不携带任何信息。另外同一份 JSON 会同时出现在 `content`（文本，为不读结构化输出的客户端保留）和 `structuredContent`（结构化）两处 —— 服务端确实发了两份（`_dispatch` → `CallToolResult(content=..., structured_content=...)`），**客户端是否把两份都喂给模型未验证** `[unverified]`。
+- **搜索没有 SLA**：免密引擎是对公开搜索结果的直接抓取（无授权、无配额），对方改版、封 IP、收紧反爬时只会**静默降级**（熔断 / 冷却 / 退回共识排序），不报错。要可靠性用 `DHOLE_SEARCH_PROXY` 或 keyed 后端。
+- **合规自负**：不检查 `robots.txt` 的 Disallow（只读 sitemap 里的 `Sitemap:` 指令）；UA / TLS 指纹伪装、Cloudflare 验证求解是默认行为。目标站点 ToS 与当地法律由使用者承担。
+- **SSRF 防护**（前提：自己的机器、单用户）：入口 URL 与每一跳重定向都过 `validate_url`（IP 变体、云元数据、DNS rebinding、域名解析到内网即拒）；浏览器层拦截 JS 发起的请求，落地内网返回 `ssrf_blocked` 且不带正文，只豁免已过校验的入口站点（同主机异端口不豁免）；hosts 钉 `127.0.0.1` 放行、钉 `0.0.0.0` 拒绝。
+- **fake-IP TUN 会全线误报**：Clash / sing-box 的 fake-IP 把公网域名解析到保留段（`198.18.0.0/15`、`fc00::/7`），于是每个公网站点都被判成内网（报错会点名解析到的地址）。确认是这种环境设 `DHOLE_SSRF_DNS_RECHECK=0`；这是**全量开关**，不是域名白名单。
+- **残余风险**：DNS 校验与连接之间有 TOCTOU 窗口；3xx 目标仍会被请求一次（内容不回流）；浏览器层设了 `ignore_https_errors`，同网络位置的中间人可伪造这一层的内容（HTTP 层无此让步）。
+- **archive.org 第三层**（`smart_fetch` 专属）：升级链是 `http → stealthy → archive.org`，第三层只在硬阻断（404/410/451、网络失败、5xx、bot challenge）时触发，慢 10–30 秒且返回**某个日期的快照**（`metadata.source` / `metadata.archived_at`），**没有参数能关**。时效敏感的内容引用前先看 `source`。
+- **`content_ok=true` ≠ 内容可用**：判定只是 `2xx/3xx + 无 error + 正文非空`。占位页有软检测（词表 + 长度门限）但仍是打地鼠，存档内容见上条。几百字符的「成功」大概率是壳，引用前先看一眼字符量。
+- **字符集探测**：本地文件按 **BOM → `encoding=` → UTF-8 → GB18030** 严格试解，生效值见 `metadata.encoding`；带损伤（U+FFFD / 错码 / PUA）不算成功——正文照返，报 `encoding_undecodable` 并指 `encoding=` 重试。**缺口**：Shift_JIS / EUC-KR 会被解成「看似合理且零损伤的中文」，只能显式传 `encoding=shift_jis` / `euc-kr`；Latin-1 传 `encoding=cp1252`。
+- **提示注入**：抓回的正文是不可信数据，指令层已要求模型不执行页面里的「指令」（提示，非强制）；页面出现工具调用、密钥、上传指令时按提示注入处理。`is_official` 只对 gov / edu / github 为真，`docs.*` 子域不构成权威。
+- **上下文开销**：连接期固定成本 ≈12.6k 字符（≈3.3k token，每次连接付一次），`DHOLE_TOOLS` 只注册常用工具可省约一半。单次调用的正文才是大头（`smart_fetch` 默认 40k 字符、`smart_crawl` 硬顶 1M），杠杆在 `max_content_chars` / `max_total_chars` / `focus=` 和配置表的 `DHOLE_DEFAULT_CONTENT_CHARS`。**未改的缺口**：`smart_fetch(urls=[...])` 限 100 个 URL 但不限输出总量（满额外推 ≈1M token 单次调用），止损靠自己传 `max_content_chars`。
+- **响应信封固定**：30 个字段空值也照发（实测一次普通抓取 3,869 字符里 667 是信封，过半当场无信息），且 `content` 与 `structuredContent` 双发——客户端两种偏好都真实存在，砍掉哪份都会打断一批。
 
 **本机会留下什么**（全在 `~/.dhole/`，可用 `DHOLE_HOME` 换位置；POSIX 下目录 0700、文件 0600，Windows 上靠换位置 + NTFS ACL）：
 
@@ -208,7 +201,7 @@ dhole model use ms-marco     # 切换
 - 引擎可达性：`baidu` / `bing` / `yandex` 国内直连；`brave` / `duckduckgo` / `yahoo` 与 opt-in 的 `bing_global` / `mwmbl` 需要 VPN 或代理；`so360` / `sogou` 是国内直连的 opt-in
 - 引擎被限速时自动熔断冷却（60 秒），重度使用建议配置代理
 - PDF 口令：用 `password=` 选项；没给或给错时会**明确说是口令问题**，不混进「文件打不开」
-- 单次 `smart_crawl` 存在 **500000 字符总预算硬顶**（`max_total_chars` 被钳在这个值）：`max_pages` 只在未显式给出 `max_total_chars` 时参与推导，所以撞上钳制后**再调大 `max_pages` 没有效果**（实测传 100 只抓到 31 页）。要更多内容得同时抬 `max_total_chars`，或用 `crawl_urls=[...]` 分阶段取
+- 单次 `smart_crawl` 存在 **1,000,000 字符总预算硬顶**（`max_total_chars` 被钳在这个值）：不显式给 `max_total_chars` 时按 `max_pages × max_content_chars_per` 推导（默认 80,000）；**显式给了之后调 `max_pages` 不再影响预算**。要更多内容得抬 `max_total_chars`（≈25 万 token 一个响应，先想想值不值），或用 `crawl_urls=[...]` 分阶段取
 - `smart_crawl` 的 `path_include`/`path_exclude` 按**路径子树**匹配，不是字符串前缀：`'/docs'`（`'docs'`、`'/docs/'`、`'/docs/*'` 等价）命中 `/docs` 及其下全部，但**不**命中 `/docs-old`、`/docsomething`；`'/'` 或 `'*'` 表示全部。**只接受尾部 `/*` 这一种通配写法**，其余（如 `'/api/*/v1'`）会直接报错 —— 早期版本用 `startswith` 匹配，上面四种写法里两种会**静默**过滤掉整个爬取、一种会多抓兄弟目录、一种完全不生效，都是「看起来成功」的失败
 - YouTube 仅能获取少量文本
 - 引擎存活不做主动巡检，但每轮真实搜索都会记下解析产出（`dhole -v` 的 `engine yield` 行能区分「被墙」与「答了但解析不出来」）；opt-in 引擎里垂直索引（`sogou_weixin`）在无重排器时排在通用引擎之后，也不能独自填满早退配额

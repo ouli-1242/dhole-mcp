@@ -77,6 +77,16 @@ _TRACKING_PARAMS = {
     "fbclid", "gclid", "ref", "ref_src", "source", "_ga", "mc_cid", "mc_eid",
 }
 
+# Single-call content ceiling: an explicit max_total_chars is clamped here.
+# Deliberately a capability ceiling, not a default - the derived default budget
+# stays max_pages * max_content_chars_per (80,000 at defaults), so callers who
+# never ask see zero change. 1M chars is ~250k tokens in one response; past it
+# the sane delivery unit is crawl_urls=[...] in phases, but an explicit ask is
+# granted rather than forbidden.
+MAX_TOTAL_CHARS = 1_000_000
+
+
+
 # Content-likelihood path tokens. Boost content pages, penalize app/admin noise
 # so the priority queue crawls docs before login/submit/cart.
 _CONTENT_BOOST = ("doc", "docs", "guide", "tutorial", "api", "reference",
@@ -651,7 +661,7 @@ async def smart_crawl(
     max_content_chars_per = max(500, min(int(max_content_chars_per), 50000))
     if max_total_chars is None:
         max_total_chars = max_pages * max_content_chars_per
-    max_total_chars = max(max_content_chars_per, min(int(max_total_chars), 500000))
+    max_total_chars = max(max_content_chars_per, min(int(max_total_chars), MAX_TOTAL_CHARS))
     focus = focus.strip() if isinstance(focus, str) and focus.strip() else None
     # A bare string was iterated character-by-character by the prefix filters
     # (`path.startswith(p) for p in "/what/"`), and startswith("/") holds for
