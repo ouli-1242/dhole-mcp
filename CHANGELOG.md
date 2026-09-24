@@ -79,7 +79,7 @@
 
 - **wire 去重裁剪：13,605 → 12,601 字符（−7.4%，≈250 token/连接）**，起因是「每次启动这个 MCP 很费 token」的反馈。先量再改：连接期固定成本 = `instructions` + 8 个工具 schema，其中 **62% 是散文**（工具描述 4,361 + 参数说明约 3,960），其余是 JSON 骨架与 `annotations`。只动散文，三类：**同一事实写两遍**（描述 ↔ `options` 包 ↔ `instructions` 三处重复，−340）；**agent 无法据此行动的机制**（archive.org 的触发状态码清单、相对路径的四步解析顺序，−190）；**顺带修掉一处真错误** —— `smart_search` 的描述只列了 5 个 opt-in 引擎而注册表里是 8 个（漏 `so360`/`sogou`/`sogou_weixin`），改为指向 `options.engines`，两份手写清单只留一份。
   - **明确不动**：每个属性的 `type` 与 `enum`（删掉会诱发错误类型的调用）、`annotations`（`readOnlyHint` 决定客户端是否免确认，是能力不是冗余）、`CHECK BEFORE CITING` 那行、全部路由规则。
-  - **预算同轮下调，规则是「只降不升」**：`tools/list` 13300→12300、`instructions` 1500→1465、连接 14000→13800，各工具上限也按「实测 + ~10% 余量」重推并封顶为不高于旧值 —— 否则裁剪会变成一次免费的额度膨胀。`smart_fetch` 是唯一不动的：旧上限相对当时的实测只有 1.1% 余量，按 10% 重推反而会把天花板抬到 4216，那是放松守卫。
+  - **体积预算守卫已删除（刻舟求剑）**：裁剪期间逐工具上限按「实测 + ~10% 余量」重推过一轮（`tools/list` 13300→12300、`instructions` 1500→1465、连接 14000→13800），但这类断言的期望值是**人手在每次改描述后重新推导的实测值** —— 正常改一句话就会红，红完只能去改常量，拦下的不是缺陷而是「描述和上次不一样」。已连同 `test_ceiling_report_regressions.py` 里的同源副本一并删除（−12 条用例）。**代价**：失去「描述缓慢变胖」的自动告警，需要人工看 connect-time 总量。**保留**的是从代码反查描述的那几条守卫（引擎清单、扩展名清单、参数引用），它们改描述零成本。
   - **边界**：这轮只砍 7.4%。连接期成本本身不是大头 —— 单次 `smart_fetch` 默认最多返回 **40,000 字符**（≈10k token）、`smart_crawl` 硬顶 **500,000 字符**，**一次抓取就超过整张工具表**。杠杆在 `max_content_chars` / `max_total_chars` / `focus=`，以及每个响应里那 ~667 字符的固定信封（`ResponseModel` 30 个字段整体 `model_dump_json()`，空值与默认值照发）。这两项本轮**未改** —— 改默认值会改变默认行为，需要单独决策。
 
 - **三处新增守卫**：
@@ -87,11 +87,13 @@
   - **同一个名字不许定义两次**（`test_import_provenance.py::test_no_definition_is_shadowed_by_a_duplicate`）：本轮真实踩到 —— 一个测试类被追加了两次，**第二次定义静默遮蔽第一次**，pytest 照常收集、照常全绿，但 24 条只跑了一半。守卫扫 `src/dhole_mcp` 与 `tests` 全部模块的**直接**子节点是否重名（不看 `if`/`try` 内部 —— 条件定义是合法写法，遮蔽是无条件的）。
   - **docstring / wire 的漂移**：客户端收到的是 `_TOOL_DEFS` 里的 `description`，工具方法的 docstring **不上 wire**（全项目零处消费 `__doc__`）。两边没有同步机制，于是 docstring 必然腐坏 —— 本次实测两处：`screenshot` 的 `:param:` 把早已搬进 `options` 的键描述成顶层参数，还列了 `wait_selector_state`，而它**根本不被接受**（不在 `_SHOT_OPTIONS` 白名单里）；`smart_search` 的 docstring 说 "ranks by neural relevance"，而神经重排是**可选**的（lean install 或离线时回落到 consensus + 引擎位置序）。**三个实例方向一致：docstring 错、wire 对** —— 所以「docstring 更详细 = 更权威」这个默认假设是错的，改之前要拿 wire 和实现各对一次。守卫：docstring 里的 snake_case 标识符若在整个 wire 载荷里找不到，必须登记进 `_DOCSTRING_ONLY_*` 白名单并写明理由；另一条防白名单长草（本次抓到 3 个已失效条目）。
 
+- **删掉一个假测试文件**：`tests/fetcher_redirect_test.py` 匹配 pytest 默认的 `*_test.py` 收集规则，但文件里 **0 个 `test_` 函数** —— 它在 **import 期**就绑 `18765`/`18766` 端口、起两个 `ThreadingTCPServer`，然后 `asyncio.run(main())` 跑真实网络断言。后果有两层：pytest 收集它是**纯开销**（0 条用例），而环境里若有 `HTTP_PROXY` 残留（本机 `HTTPS_PROXY` 指向沙箱代理），回环请求被塞进代理 → 502 → import 期断言炸 → **整个 suite 收集失败**，报的还是重写过的怪路径。它覆盖的 4 个场景（重定向逐跳 SSRF 校验 / `max_redirects` 边界 / `follow_redirects` 转换 / 内网跳转拒绝）**已由 `test_audit_fixes.py` 用 mock 完整覆盖**，净贡献为 0 条用例。删除后全量回归不再需要 `--ignore`。
+
 - **archive.org 第三层降级写进工具描述与 README**：升级实际是三层（`http → stealthy → archive.org`），此前只存在于响应字段 `source` / `archived_at` 的 Field description 里 —— agent 拿到响应后能看懂，**调用前**完全不知道。现在 `smart_fetch` 的 wire 描述写明触发条件、代价（10–30s）、辨认方法（`metadata.source` + `archived_at`）以及**没有任何参数能关闭它**。顺带补上 3 个可见性缺口：`escalation_path`、`source_type` / `is_official` 此前只存在于 docstring，而它们直接影响「要不要引用这份内容」，已搬进 wire 的 CHECK 行；`content_type` / `duration_ms` / `total_size_bytes` 判定为诊断字段，刻意不暴露并登记在白名单。
 
 - **`smart_crawl` 描述写明 500000 字符硬顶**：`max_total_chars` 被钳在 500000，而 `max_pages` 只在未显式给出 `max_total_chars` 时参与推导 —— 撞上钳制后**再调大 `max_pages` 没有效果**，实测传 100 只抓到 31 页。
 
-- wire 体积（`json.dumps` 默认渲染的字符数，非 token）：15.1 新增描述把 `parse` 874 → 1335（预算 960 → 1480）、`smart_crawl` 2147 → 2213、`smart_fetch` 3719 → 4009、instructions 1399 → 1473，连接合计 12,562 → 13,605 —— 把 15.0 留的余量吃光了。两个预算的上调都**写明理由**，而不是从别处砍描述来付账：`parse` 的 `encoding` 是调用方从乱码里恢复的**唯一**通道，`smart_crawl` 那句子树说明替换掉的 `(path prefixes)` 本身就是 bug 的成因。**随后的去重裁剪把整表压回 11,270（连接 12,610）**，15.1 对 wire 的净效果是 −843 字符。
+- wire 体积（`json.dumps` 默认渲染的字符数，非 token）：15.1 新增描述把 `parse` 874 → 1335（当时上限 960 → 1480）、`smart_crawl` 2147 → 2213、`smart_fetch` 3719 → 4009、instructions 1399 → 1473，连接合计 12,562 → 13,605 —— 把 15.0 留的余量吃光了。两次上限上调都**写明理由**，而不是从别处砍描述来付账：`parse` 的 `encoding` 是调用方从乱码里恢复的**唯一**通道，`smart_crawl` 那句子树说明替换掉的 `(path prefixes)` 本身就是 bug 的成因。**随后的去重裁剪把整表压回 11,270（连接 12,610）**，15.1 对 wire 的净效果是 −843 字符。（这些上限本身随后被删除，见上。）
 
 - **`smart_fetch` 的 inputSchema 现在声明 `anyOf: [{required:[url]}, {required:[urls]}]`**（D-13）。此前 `required` 完全缺席，客户端无法在调用前判断必填。`cache_clear` 同样被报告列为「required 为空」，但它两个参数**本来就都可选**，所以保持为空 —— 给它编一个必填才是 bug。
 - **`smart_fetch` 的 `schema` 描述写清 scalar/array 契约**（D-06）。报告读成「`attribute` 只返回第一个匹配」，实际上 `"type": "array"` 就会返回全部 —— 缺的是文档而不是能力，报告建议的 `{"all": true}` 会变成 `"type": "array"` 的同义写法。现在描述里写明：不带 `type` 返回**首个**匹配，带 `"type": "array"` 返回全部。

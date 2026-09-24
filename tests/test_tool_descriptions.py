@@ -245,86 +245,29 @@ def test_params_named_in_description_exist(tools, name):
     assert not unknown, f"{name} 描述引用了不存在的参数: {unknown}"
 
 
-# ─── 预算：描述不能悄悄变胖 ────────────────────────────────────────────
+# ─── 体积：不再设守卫 ──────────────────────────────────────────────────
 #
-# 上限设在当前值之上留约 10% 余量：正常改动用不着调，真要加东西就得
-# 显式改这个表 —— 让「描述变胖」变成一个有意识的动作。
-
-CHAR_BUDGET = {
-    # 14.7：描述重写（营销词/实现细节/环境假设出清，desc 正文 4711 -> 3625
-    # 字符）后，整表按新实测值重新推导，仍保持 ~10% 余量。不重新推导的话，
-    # 下一个 agent 能把删掉的话原样加回来而不触发任何守卫。
-    #
-    # 15.1（wire 裁剪）：按同一条规则对整表重推一次，并且**只降不升** ——
-    # 裁掉文字之后上限必须更紧，否则「删除」会变成一次免费的额度膨胀。
-    # 唯一的例外是 smart_fetch：旧上限 4100 相对当时的实测 4056 只有 1.1%
-    # 余量，按 10% 重推会把天花板抬到 4216，那是放松守卫。它保持 4100 不动，
-    # 实测已降到 3833（绝对余量 267 字符）。
-    "smart_fetch": 4100,
-    "smart_crawl": 2150,
-    "smart_search": 1575,
-    "screenshot": 840,
-    "feed_fetch": 825,
-    "resolve_url": 590,
-    # 15.0: 700 -> 960. parse gained the `cwd` arg (a schema property plus the
-    # resolution-order sentence). It is the only channel a caller can use without
-    # host support - roots is deprecated in the SDK (SEP-2577) and DHOLE_WORKDIR
-    # needs host config - so the sentence stays, and the older text was actively
-    # misleading: "resolves against cwd" meant the *server process* cwd, i.e. the
-    # host's install directory.
-    #
-    # 15.1: 960 -> 1480. parse gained the `encoding` arg plus the sentence
-    # explaining why it exists. Both are load-bearing: without a tool-visible
-    # encoding, a caller that receives mojibake has no way to ask for the right
-    # charset, and a GBK CSV - Excel's default export on Chinese Windows - used
-    # to come back as U+FFFD soup with content_ok=true.
-    #
-    # 15.1（wire 裁剪）: 1480 -> 1380. 15.1 那次上调是对「新增能力」付费，
-    # 不是给散文涨价；裁剪后句子改成先说可执行的一半（"pass cwd"），不再
-    # 罗列四步解析顺序，cwd 属性也去掉了 "(e.g. your working directory)" 举例。
-    # 实测 1257。
-    "parse": 1380,
-    # 14.6: 550 -> 860. cache_clear gained the engine_state lever (reset engine
-    # cooldowns / yield) plus its "when to use it" line. Without a tool-visible
-    # reset, a user whose network changed had only "delete files under ~/.dhole
-    # and restart" - which is exactly how a working VPN got misdiagnosed as
-    # ignored. parse's 700 was already enough for its path-resolution note.
-    #
-    # 15.1（wire 裁剪）: 840 -> 815. "Default TTL 1h" 与 DHOLE_INSTRUCTIONS 里的
-    # "responses are cached 1h" 是同一事实写了两遍，这里删掉。实测 741。
-    "cache_clear": 815,
-}
-# 15.1（wire 裁剪）: 13300 -> 12300，这一项是**下调**。每个上限都取「实测值
-# 之上最小且仍留 ~10% 余量」的整数，并封顶为不高于旧值 —— 裁剪必须让守卫更
-# 紧，而不是把省下来的字符变成新的可用额度。实测 11270。
-TOOLS_TOTAL_BUDGET = 12300
-INSTRUCTIONS_BUDGET = 1465
-CONNECT_TOTAL_BUDGET = 13800
-
-
-@pytest.mark.parametrize("name", sorted(CHAR_BUDGET))
-def test_tool_within_char_budget(tools, name):
-    size = len(json.dumps(tools[name], ensure_ascii=False))
-    assert size <= CHAR_BUDGET[name], (
-        f"{name} 的 wire 体积 {size} 超过预算 {CHAR_BUDGET[name]}。"
-        f"要么精简，要么显式上调 CHAR_BUDGET 并说明理由。"
-    )
-
-
-def test_tools_list_within_char_budget(tools):
-    total = sum(len(json.dumps(t, ensure_ascii=False)) for t in tools.values())
-    assert total <= TOOLS_TOTAL_BUDGET, f"tools/list 合计 {total} > {TOOLS_TOTAL_BUDGET}"
-
-
-def test_instructions_within_char_budget():
-    assert len(DHOLE_INSTRUCTIONS) <= INSTRUCTIONS_BUDGET
-
-
-def test_connect_time_total_within_char_budget(tools):
-    """每次 MCP 连接都要付的成本：instructions + 全部工具定义。"""
-    total = sum(len(json.dumps(t, ensure_ascii=False)) for t in tools.values())
-    total += len(DHOLE_INSTRUCTIONS)
-    assert total <= CONNECT_TOTAL_BUDGET, f"connect-time 合计 {total} > {CONNECT_TOTAL_BUDGET}"
+# 这里曾有 CHAR_BUDGET（逐工具字符上限）+ TOOLS_TOTAL_BUDGET /
+# INSTRUCTIONS_BUDGET / CONNECT_TOTAL_BUDGET 四道预算。已删除。
+#
+# 删除理由：它们的期望值是**人手在每次改描述后重新推导的实测值**，属于
+# 刻舟求剑 —— 正常改一句描述就会红，红完只能去改常量。守卫拦下的不是
+# 缺陷，是「描述和上次不一样」。代价则由每次编辑承担，收益（防缓慢变胖）
+# 远低于成本。要防变胖，看 connect-time 总量的量级即可，不必钉死数字。
+#
+# 保留下来的描述守卫分两类，改描述时的代价完全不同：
+#
+# 1. **从代码反查描述**（期望值由常量算出，改描述零成本）：
+#    test_search_engine_list_is_never_partial、
+#    test_parse_advertises_every_supported_extension、
+#    test_engine_count_in_instructions_matches_real_pool、
+#    test_params_named_in_description_exist。这类是纯收益，留着。
+#
+# 2. **文本 needle**（改措辞就可能红）：ROUTING_CONTRACT、
+#    test_instructions_routes_known_url_list_to_fetch、以及各 report 回归文件里
+#    「描述必须出现 X」的断言。它们锁的是**路由规则和对外事实**（比如
+#    max_total_chars 的 500000 硬顶必须写出来），措辞变了要人工判断是不是
+#    真丢了这条信息 —— 这是有意的摩擦，不是刻舟求剑，故保留。
 
 
 # ─── 基本卫生 ──────────────────────────────────────────────────────────

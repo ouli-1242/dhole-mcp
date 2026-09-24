@@ -11,8 +11,6 @@
    "调大 max_pages 就能多爬" 是错的预期。
 """
 
-import json
-
 import pytest
 from mcp.types import Tool
 
@@ -265,17 +263,3 @@ class TestDeclaredCharsetLies:
     def test_unknown_charset_name_falls_back_to_utf8(self):
         from dhole_mcp.fetcher import _decode_html_bytes
         assert _decode_html_bytes("中文".encode("utf-8"), "not-a-real-charset") == "中文"
-
-
-# ─── 预算：这一轮新增的描述不许挤爆 connect-time 成本 ────────────────────
-
-
-def test_connect_time_total_still_within_budget(tools):
-    """与 test_tool_descriptions 的预算同源，这里再钉一次是为了让本轮改动
-    自己就能被发现：新增描述若把总量推过 13800，这条会先红。
-
-    15.1（wire 裁剪）：14000 -> 13800。裁剪后实测 12601，上限跟着下调，
-    让省下来的 1004 字符不能变成新的可用额度。"""
-    total = sum(len(json.dumps(t, ensure_ascii=False)) for t in tools.values())
-    total += len(DHOLE_INSTRUCTIONS)
-    assert total <= 13800, f"connect-time 合计 {total} > 13800"
