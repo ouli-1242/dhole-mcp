@@ -15,6 +15,11 @@
 *.svg text
 *.pdf binary
 
+# A GBK-encoded fixture: git sees no NUL byte, so `text=auto` would classify it
+# as text and rewrite line endings on checkout. The decode tests assert exact
+# Chinese characters, so the bytes have to survive a round trip untouched.
+tests/gbk_sample.csv binary
+
 # Vendored / generated code shouldn't skew the language bar.
 NOTICE.ddgs.txt linguist-vendored
 src/dhole_mcp/search_metasearch.py linguist-vendored=true

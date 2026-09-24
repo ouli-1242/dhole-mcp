@@ -149,6 +149,9 @@ socket.getaddrinfo = _guarded_getaddrinfo
 # --------------------------------------------------------------------------
 
 NONEXISTENT_FILE = str(TMP_ROOT / "does-not-exist-snapshot-probe.html")
+# A real GBK-encoded CSV (not valid UTF-8), so the snapshot exercises parse's
+# charset detection end to end over the protocol rather than only in-process.
+GBK_CSV_FILE = str(REPO_ROOT / "tests" / "gbk_sample.csv")
 
 PLAUSIBLE_CASES = {
     "smart_fetch": [
@@ -176,6 +179,7 @@ PLAUSIBLE_CASES = {
     ],
     "parse": [
         ("minimal: nonexistent local path", {"file_path": NONEXISTENT_FILE}),
+        ("plausible: GBK CSV (charset detection)", {"file_path": GBK_CSV_FILE}),
     ],
     "feed_fetch": [
         ("minimal: loopback feed url (SSRF-blocked)", {"urls": ["http://127.0.0.1/feed.xml"]}),

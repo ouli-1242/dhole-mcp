@@ -17,8 +17,10 @@ Supported formats:
 from __future__ import annotations
 
 import csv
+import io
 import logging
 import os
+import re
 
 logger = logging.getLogger("dhole_mcp.parse")
 
@@ -30,25 +32,75 @@ SUPPORTED_EXTENSIONS = {".html", ".htm", ".xhtml", ".docx", ".xlsx", ".csv", ".p
 MAX_PARSE_FILE_SIZE = 50 * 1024 * 1024
 
 
-def parse_file(file_path: str) -> tuple[str, str]:
+# ─── Byte-level decoding ──────────────────────────────────────────────────────
+#
+# A local file carries no HTTP header to declare its charset, and .csv/.html
+# used to be read as UTF-8 with errors="replace". Measured live through the MCP
+# server: a 90-byte GBK CSV - what Excel's "CSV (逗号分隔)" writes on a Chinese
+# Windows box - parsed to "| ���� | ���� |" and still reported content_ok=true,
+# error="". Mojibake that looks like success is the worst outcome available.
+#
+# The candidate order and the damage score live in dhole_mcp.charset, next to
+# the HTTP path's version of the same decision, so the two cannot drift.
+
+_HTML_CHARSET_RE = re.compile(rb"""charset\s*=\s*["']?\s*([A-Za-z0-9_\-]+)""", re.IGNORECASE)
+
+
+def _html_declared_charset(body: bytes) -> str:
+    """The charset the document names for itself, or '' when it names none.
+
+    Only the head is scanned: browsers require <meta charset> within the first
+    1024 bytes for it to count, and scanning the whole file risks matching prose
+    that happens to contain "charset=". A declaration that contradicts the bytes
+    is harmless - charset.decode_file_bytes falls through to detection when the
+    declared name fails to decode strictly.
+    """
+    match = _HTML_CHARSET_RE.search(body[:2048])
+    return match.group(1).decode("ascii", errors="ignore") if match else ""
+
+
+def _decode_body(body: bytes, declared: str = "") -> tuple[str, dict]:
+    """Decode file bytes and package the envelope fields. See charset.decode_file_bytes."""
+    from dhole_mcp.charset import decode_file_bytes
+
+    text, used, damage = decode_file_bytes(body, declared)
+    extras: dict = {"encoding": used}
+    if damage:
+        extras["decode_damage"] = damage
+    return text, extras
+
+
+def _read_text_file(file_path: str, declared: str = "") -> tuple[str, dict]:
+    """Read a local file as bytes and decode it. See charset.decode_file_bytes."""
+    with open(file_path, "rb") as f:
+        body = f.read()
+    return _decode_body(body, declared)
+
+
+def parse_file(file_path: str, encoding: str = "") -> tuple[str, str]:
     """Parse a local file to Markdown.
 
     Returns (content: str, error: str). On success error is empty.
     On failure content is empty and error explains what went wrong.
     Never raises.
     """
-    content, error, _extras = parse_file_detailed(file_path)
+    content, error, _extras = parse_file_detailed(file_path, encoding)
     return content, error
 
 
-def parse_file_detailed(file_path: str) -> tuple[str, str, dict]:
+def parse_file_detailed(file_path: str, encoding: str = "") -> tuple[str, str, dict]:
     """Parse a local file to Markdown, plus the envelope fields it can fill.
 
-    Returns (content, error, extras). ``extras`` is empty for every format but
-    PDF, where the extractor also yields table_of_contents / metadata /
-    quality_score / content_ok - a local PDF should report the same envelope as
-    one fetched by URL, and used to report toc=[] and metadata={} while the URL
-    path reported both. Never raises.
+    Returns (content, error, extras). For PDFs ``extras`` carries
+    table_of_contents / metadata / quality_score / content_ok - a local PDF
+    should report the same envelope as one fetched by URL, and used to report
+    toc=[] and metadata={} while the URL path reported both. For .html/.csv it
+    carries ``encoding`` (the charset the bytes were decoded as) and, when the
+    text came out damaged, ``decode_damage``. Empty for the other formats.
+    Never raises.
+
+    ``encoding`` overrides auto-detection; leave it empty unless the caller
+    knows better than the bytes do.
     """
     if not file_path:
         return "", "file_path is required", {}
@@ -84,13 +136,15 @@ def parse_file_detailed(file_path: str) -> tuple[str, str, dict]:
 
     try:
         if ext in (".html", ".htm", ".xhtml"):
-            return _parse_html(file_path), "", {}
+            content, extras = _parse_html(file_path, encoding)
+            return content, "", extras
         elif ext == ".docx":
             return _parse_docx(file_path), "", {}
         elif ext == ".xlsx":
             return _parse_xlsx(file_path), "", {}
         elif ext == ".csv":
-            return _parse_csv(file_path), "", {}
+            content, extras = _parse_csv(file_path, encoding)
+            return content, "", extras
         elif ext == ".pdf":
             return _parse_pdf(file_path)
     except ImportError as e:
@@ -104,20 +158,26 @@ def parse_file_detailed(file_path: str) -> tuple[str, str, dict]:
     return "", f"Unsupported format: {ext}", {}
 
 
-def _parse_html(file_path: str) -> str:
-    """Parse HTML file using trafilatura + markdownify (existing chain)."""
-    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-        html = f.read()
+def _parse_html(file_path: str, encoding: str = "") -> tuple[str, dict]:
+    """Parse HTML file using trafilatura + markdownify (existing chain).
+
+    Returns (content, extras); see _decode_body for the encoding fields.
+    """
+    with open(file_path, "rb") as f:
+        body = f.read()
+    # The document's own <meta charset> is a hint; an explicit caller encoding
+    # outranks it. decode_file_bytes falls back to detection if either fails.
+    html, extras = _decode_body(body, encoding or _html_declared_charset(body))
     from dhole_mcp.trafilatura_extractor import extract_content_from_html
     result = extract_content_from_html(html, file_path, "markdown")
     if result:
-        return result
+        return result, extras
     # Fallback: markdownify on the raw HTML
     try:
         from markdownify import markdownify
-        return markdownify(html, heading_style="ATX").strip()
+        return markdownify(html, heading_style="ATX").strip(), extras
     except Exception:
-        return html[:50000]  # last resort: raw HTML truncated
+        return html[:50000], extras  # last resort: raw HTML truncated
 
 
 def _parse_docx(file_path: str) -> str:
@@ -198,23 +258,45 @@ def _parse_xlsx(file_path: str) -> str:
     return "\n\n".join(sections) if sections else "(empty workbook)"
 
 
-def _parse_csv(file_path: str) -> str:
+def _sniff_delimiter(text: str) -> str:
+    """Guess the field separator, defaulting to ','.
+
+    Excel in a comma-decimal locale writes ';', and a semicolon CSV parsed as
+    comma-separated puts every row in column 1 - a table that is silently wrong
+    rather than visibly empty. Measured against the stdlib sniffer on 24
+    samples (single-column, ragged, CRLF, quoted commas, and text containing
+    ; | and tab): it only ever raises on genuinely ambiguous single-column
+    input, which renders identically whatever the delimiter, so the ',' default
+    is safe. Never raises.
+    """
+    sample = text[:8192]
+    if not sample.strip():
+        return ","
+    try:
+        return csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+    except csv.Error:
+        return ","
+
+
+def _parse_csv(file_path: str, encoding: str = "") -> tuple[str, dict]:
     """Parse .csv to a Markdown table using stdlib csv.
 
     Streams rows with a cap (101) to prevent OOM on huge CSV files.
+    Returns (content, extras); see _decode_body for the encoding fields.
     """
+    text, extras = _read_text_file(file_path, encoding)
+
     rows = []
     has_more = False
-    with open(file_path, "r", encoding="utf-8", errors="replace", newline="") as f:
-        reader = csv.reader(f)
-        for i, row in enumerate(reader):
-            if i >= 101:  # header + 100 data rows
-                has_more = True
-                break
-            rows.append(row)
+    reader = csv.reader(io.StringIO(text), delimiter=_sniff_delimiter(text))
+    for i, row in enumerate(reader):
+        if i >= 101:  # header + 100 data rows
+            has_more = True
+            break
+        rows.append(row)
 
     if not rows:
-        return "(empty CSV)"
+        return "(empty CSV)", extras
 
     header = rows[0]
     col_count = len(header)
@@ -228,7 +310,7 @@ def _parse_csv(file_path: str) -> str:
     result = "\n".join([header_str, sep_str] + data_strs)
     if has_more:
         result += "\n\n... (100+ rows, truncated for display)"
-    return result
+    return result, extras
 
 
 def _parse_pdf(file_path: str) -> tuple[str, str, dict]:

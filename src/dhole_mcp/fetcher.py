@@ -19,6 +19,7 @@ from urllib.parse import urljoin, urlparse
 
 import primp
 
+from dhole_mcp.charset import misdecode_score as _misdecode_score
 from dhole_mcp.security import redact_api_key
 
 logger = logging.getLogger("dhole_mcp.fetcher")
@@ -273,6 +274,45 @@ def _extract_encoding(content_type: str) -> str:
         if part.startswith("charset="):
             return part.split("=", 1)[1].strip().strip('"').strip("'")
     return "utf-8"
+
+
+# ─── Decoding: the declared charset lies often enough to matter ────────────
+#
+# Measured on a ~60-call ceiling test: pages declared ISO-8859-1 (Apache's
+# default) while sending UTF-8, so "you’ve · café" came back as
+# "youâ€™ve Â· cafÃ©"; a us-ascii declaration turned the same bytes into
+# U+FFFD runs ("you???ve"). The page's own <meta charset="utf-8"> was ignored
+# because the header won unconditionally.
+#
+# Rather than guess a charset, decode twice and keep the cleaner result: a
+# wrong single-byte decode of UTF-8 leaves either replacement chars or the
+# Â/Ã prefixes below, and a genuine non-UTF-8 body is left alone because
+# decoding *it* as UTF-8 produces far more replacement chars.
+#
+# The markers and the score live in dhole_mcp.charset (imported at the top),
+# shared with the local-file path in parse.py so the two definitions of "this
+# looks like mojibake" cannot drift apart.
+
+
+def _decode_html_bytes(body: bytes, declared: str) -> str:
+    """Decode a response body, falling back to UTF-8 when the declared charset
+    is contradicted by the bytes themselves.
+
+    Never raises. Callers get a str either way.
+    """
+    enc = (declared or "").strip() or "utf-8"
+    try:
+        text = body.decode(enc, errors="replace")
+    except (LookupError, UnicodeError):
+        # Unknown/nonsense charset name in the header.
+        return body.decode("utf-8", errors="replace")
+    if enc.replace("-", "").replace("_", "").lower() in ("utf8", "utf8sig"):
+        return text
+    try:
+        utf8_text = body.decode("utf-8", errors="replace")
+    except UnicodeError:  # pragma: no cover - decode with replace cannot raise
+        return text
+    return utf8_text if _misdecode_score(utf8_text) < _misdecode_score(text) else text
 
 
 # ─── HTTP fetcher (primp-based) ────────────────────────────────────────────────

@@ -263,7 +263,10 @@ class TestAgentHints:
         result = _make_result(status=404, error="http_error_404")
         summary, next_action, content_ok = _agent_hints(result)
         assert content_ok is False
-        assert "failed" in next_action.lower()
+        # 15.1: 404 有了自己的指引（查 URL / 重新搜），不再落到网络错误的
+        # "Fetch failed..." 兜底文案。这里钉的是「有可行动的指引」，不是
+        # 某个具体的词 —— 后者会把改进行为卡死在旧措辞上。
+        assert "404" in next_action
         assert next_action  # should have actionable guidance
 
     def test_network_error_summary(self):

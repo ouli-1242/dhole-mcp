@@ -79,9 +79,9 @@ playwright install chromium      # 反检测浏览器引擎（~150MB，完整版
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `smart_fetch`  | 抓取任意 URL：自动反爬升级、PDF/OCR、批量、聚焦提取、页面交互、结构化提取                                                                     |
 | `smart_search` | 无密钥网页搜索：多引擎并行、神经重排序、可同时抓回全文                                                                                        |
-| `smart_crawl`  | 同域最佳优先爬取，支持 sitemap 模式与关键词过滤                                                                                               |
+| `smart_crawl`  | 同域最佳优先爬取，支持 sitemap 模式、关键词过滤与 `path_include`/`path_exclude` 子树限定（`'/docs'` 含 `/docs` 及其下全部，**不含** `/docs-old`）                                                                                               |
 | `screenshot`   | 页面截图（多模态代理专用）                                                                                                                    |
-| `parse`        | 本地文件解析（.html/.htm/.xhtml/.docx/.xlsx/.csv/.pdf → Markdown）；相对路径按 `cwd` 参数 → `DHOLE_WORKDIR` → 服务器进程 cwd → 主目录依次尝试 |
+| `parse`        | 本地文件解析（.html/.htm/.xhtml/.docx/.xlsx/.csv/.pdf → Markdown）；`.html`/`.csv` 按字节探测字符集（`encoding=` 可覆盖）；相对路径按 `cwd` 参数 → `DHOLE_WORKDIR` → 服务器进程 cwd → 主目录依次尝试 |
 | `feed_fetch`   | 批量抓取 RSS/Atom feed 最新条目                                                                                                               |
 | `resolve_url`  | 解析 URL 最终地址（跟随重定向，不下载页面体）                                                                                                 |
 | `cache_clear`  | 清除抓取缓存；`engine_state=true` 同时重置引擎冷却与产出记录，响应回报 `engine_health`                                                        |
@@ -173,8 +173,16 @@ dhole model use ms-marco     # 切换
   - **HTTP 层**：入口 URL 与**每一跳重定向**都过 `validate_url` —— scheme 白名单、各种 IP 变体记法、IPv4-mapped IPv6、云元数据主机名、DNS rebinding 服务名，以及默认开启的「域名解析到内网即拒」。hosts 里钉到 `127.0.0.1` 这类本机开发覆盖按**钉到的值**放行，钉到 `0.0.0.0` 这种屏蔽占位则拒绝。
   - **浏览器层**：请求前拦截（页面 JS 发起的 fetch/XHR、iframe、JS 跳转都先判定是否解析到内网）；落地后若是内网则抛 `ssrf_blocked` 且**不返回任何正文**。入口站点豁免（已过校验），异端口不豁免。
   - **残余**：校验用一次 DNS、连接时再解析一次，存在 TOCTOU 窗口（纵深防御，不是边界）；HTTP 3xx 重定向的目标仍会发出一次请求（内容不回流，但"打一下"还在）；浏览器层为通过真实站点的残缺证书链设了 `ignore_https_errors`，代价是同网络位置的中间人可给这一层伪造内容（HTTP 层不做此让步）。
+- **archive.org 第三层降级**（`smart_fetch` 专属，文档此前完全没写）：自动升级实际是三层，不是两层 —— `http → stealthy → archive.org`。第三层只在**站点硬阻断**时触发（`404/410/451`、网络失败、`5xx`、`403/503` 且是 bot challenge、`all_tiers_failed`），代价是 **10–30 秒**，且返回的是**某个日期的快照**。响应里 `metadata.source == "archive.org"`、`metadata.archived_at` 给出快照日期，`escalation_path` 会是 `http→stealthy→archive.org`。**没有任何参数能关掉这一层**，所以对时效敏感的问题，引用前必须先看 `source`——`content_ok` 仍然是 `true`，它只回答"拿到了内容"，不回答"内容是今天的"。
+- **内容可用性不等于 `content_ok=true`**：`content_ok` 的判定是 `2xx/3xx + 无 error + 正文非空`。已知会漏掉两类：`content_ok=true` 但正文是失败/占位页（已加"软失败"检测，覆盖 `Try reloading` / `Please wait...` 这类，但检测是**词表 + 长度门限**，仍是打地鼠），以及 `content_ok=true` 但内容来自存档（见上一条）。引用前顺手看一眼字符量，几百字符的"成功"大概率是壳。
+- **`parse` 的字符集探测**：本地文件没有 HTTP 头可依据，所以 `.html`/`.csv` 按 **BOM → `encoding` 参数 → UTF-8 → GB18030** 依次**严格**试解（GB18030 覆盖 GBK/GB2312，即中文 Windows 上 Excel 的默认导出格式；UTF-16/32 无 BOM 时按头部 NUL 字节识别），`metadata.encoding` 给出实际生效的字符集。解出来仍带损伤（替换字符、`Ã`/`Â` 类错码、PUA 私有区字符）时**不当作成功**：正文照常返回，但 `error` 为 `encoding_undecodable`、`content_ok=false`、`next_action` 让你带 `encoding=` 重试。
+  - **已知缺口（实测，不是推测）**：GB18030 能把其它 CJK 老编码"严格解出来"。Big5 会落进 PUA 因此**能**被检出并标记；而 **Shift_JIS / EUC-KR 会解成"看起来合理的中文"且损伤为 0**（`名前` → `柤慜`）——没有廉价的字节特征能把它们和真 GBK 分开，只能显式传 `encoding=shift_jis` / `encoding=euc-kr`。Latin-1/cp1252 文件同理会被解成 GB18030 并标记为有损伤，`encoding=cp1252` 可解。
+  - 刻意**不**把 cp1252 放进自动链：它能把**任何**字节解成零损伤的拉丁文本，那会让损伤信号彻底失效——看得见的失败优于看不见的错误。
+  - `parse` 单独 import 时不依赖抓取栈（探测逻辑在 `charset.py`，不 import `primp`），缺 `[all]` extra 时降级路径不会 ImportError。
 - **提示注入**：抓回来的正文是**不可信数据**，指令里已要求模型不要执行页面里的"指令"，但那是提示、不是强制；页面里出现工具调用、密钥、上传指令时都应按提示注入处理。同理 `is_official` 只对 gov / edu / github 这类第三方注册不走的命名空间为真，`docs.*` 子域不构成权威。
-- **上下文开销**：MCP 客户端每次连接要付一次固定 token（`instructions` + 8 个工具 schema），合计约 3.3k（cl100k_base），之后不再重复。
+- **上下文开销**：MCP 客户端每次连接要付一次固定 token（`instructions` + 8 个工具 schema），合计约 3.3k（cl100k_base），之后不再重复。15.1 对 wire 做了一轮去重裁剪（13,605 → 12,601 字符，**-7.4%**）：删掉的是**同一事实写两遍**（描述 ↔ `options` 包 ↔ `instructions` 三处重复）、agent 无法据此行动的机制细节（archive.org 的触发状态码清单、相对路径的四步解析顺序），以及一处**错误的**引擎清单 —— `smart_search` 的描述只列了 5 个 opt-in 引擎而注册表里是 8 个（漏 `so360`/`sogou`/`sogou_weixin`），现在改为指向 `options.engines`，两份手写清单只留一份。**参数、类型、枚举、`required`、`annotations` 一个没动**；`tests/test_tool_descriptions.py` 的预算同时**下调**（12,300 / 1,465 / 13,800），让省下的额度不会被下一个改动自动吃掉。
+- **真正的大头是响应正文，不是工具表**：连接期固定成本约 12.6k 字符（≈3.3k token，一次性），而单次 `smart_fetch` 默认最多返回 **40,000 字符**（`max_content_chars`，≈10k token）、单次 `smart_crawl` 默认最多 **500,000 字符**（`max_total_chars` 硬顶）—— **一次抓取就能超过整张工具表**。压总消耗的杠杆在 `max_content_chars` / `max_total_chars` / `focus=`，不在描述里。
+- **每个响应的固定信封**：`ResponseModel` 有 30 个字段，服务端用 `model_dump_json()` 整体序列化，所以**空值与默认值也照发**（`"error":""`、`"media":[]`、`"content_age_days":null`、`"archived_at":""` …）。实测一次普通抓取的响应 3,869 字符里有 667 字符是信封，其中约 370 字符（55%）在该场景下不携带任何信息。另外同一份 JSON 会同时出现在 `content`（文本，为不读结构化输出的客户端保留）和 `structuredContent`（结构化）两处 —— 服务端确实发了两份（`_dispatch` → `CallToolResult(content=..., structured_content=...)`），**客户端是否把两份都喂给模型未验证** `[unverified]`。
 
 **本机会留下什么**（全在 `~/.dhole/`，可用 `DHOLE_HOME` 换位置；POSIX 下目录 0700、文件 0600，Windows 上靠换位置 + NTFS ACL）：
 
@@ -196,6 +204,8 @@ dhole model use ms-marco     # 切换
 - 引擎可达性：`baidu` / `bing` / `yandex` 国内直连；`brave` / `duckduckgo` / `yahoo` 与 opt-in 的 `bing_global` / `mwmbl` 需要 VPN 或代理；`so360` / `sogou` 是国内直连的 opt-in
 - 引擎被限速时自动熔断冷却（60 秒），重度使用建议配置代理
 - PDF 口令：用 `password=` 选项；没给或给错时会**明确说是口令问题**，不混进「文件打不开」
+- 单次 `smart_crawl` 存在 **500000 字符总预算硬顶**（`max_total_chars` 被钳在这个值）：`max_pages` 只在未显式给出 `max_total_chars` 时参与推导，所以撞上钳制后**再调大 `max_pages` 没有效果**（实测传 100 只抓到 31 页）。要更多内容得同时抬 `max_total_chars`，或用 `crawl_urls=[...]` 分阶段取
+- `smart_crawl` 的 `path_include`/`path_exclude` 按**路径子树**匹配，不是字符串前缀：`'/docs'`（`'docs'`、`'/docs/'`、`'/docs/*'` 等价）命中 `/docs` 及其下全部，但**不**命中 `/docs-old`、`/docsomething`；`'/'` 或 `'*'` 表示全部。**只接受尾部 `/*` 这一种通配写法**，其余（如 `'/api/*/v1'`）会直接报错 —— 早期版本用 `startswith` 匹配，上面四种写法里两种会**静默**过滤掉整个爬取、一种会多抓兄弟目录、一种完全不生效，都是「看起来成功」的失败
 - YouTube 仅能获取少量文本
 - 引擎存活不做主动巡检，但每轮真实搜索都会记下解析产出（`dhole -v` 的 `engine yield` 行能区分「被墙」与「答了但解析不出来」）；opt-in 引擎里垂直索引（`sogou_weixin`）在无重排器时排在通用引擎之后，也不能独自填满早退配额
 

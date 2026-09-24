@@ -34,7 +34,10 @@ def _get_html_from_page(page) -> str | None:
     """Extract raw HTML string from a Response object."""
     if hasattr(page, 'body') and page.body:
         html_bytes = page.body
-        return html_bytes.decode(page.encoding or 'utf-8', errors='replace')
+        # Imported here, not at module scope: fetcher and this module reference
+        # each other, and a top-level import resolves to a cycle.
+        from dhole_mcp.fetcher import _decode_html_bytes
+        return _decode_html_bytes(html_bytes, getattr(page, 'encoding', None) or 'utf-8')
     elif hasattr(page, 'html_content') and page.html_content:
         return page.html_content
     else:

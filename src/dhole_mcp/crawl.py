@@ -280,6 +280,121 @@ def _classify_and_extract(html: str, url: str, start_url: str, focus: Optional[s
     return md, kind, content_ok
 
 
+# ─── Path scoping (path_include / path_exclude) ───────────────────────────────
+#
+# Measured before this was rewritten: a raw `path.startswith(p)` against the
+# caller's string. Four failure modes, all of them silent:
+#
+#   path_include=["docs"]     -> 0 links kept. URL paths start with "/", so the
+#                                most natural spelling scoped the entire crawl
+#                                away and the call returned an empty result.
+#   path_include=["/docs/*"]  -> 0 links kept. A glob is not a startswith string.
+#   path_include=["/docs"]    -> kept "/docs-old/legacy" and "/docsomething".
+#                                A shared prefix is not a subtree.
+#   path_exclude=["docs"]     -> excluded nothing, so the caller believed it had
+#                                scoped a crawl that it had not.
+#
+# The contract is now: a pattern names a path SUBTREE. It matches the section
+# itself and everything beneath it at a segment boundary, never a sibling whose
+# name merely starts with the same characters.
+#
+#   "docs"  "/docs"  "/docs/"  "/docs/*"   -> the /docs subtree
+#   "/"     "*"      "/*"                   -> everything
+#   "/api/*/v1"                             -> rejected, see below
+#
+# A trailing "/*" is accepted because it is what a caller writes when they mean
+# "everything under here"; it is stripped rather than honoured as a glob, since
+# the documented contract is a prefix scope and not a pattern language. Anything
+# still holding a wildcard after that is REJECTED instead of quietly matching
+# nothing: a crawl that returns zero pages for a reason the caller cannot see is
+# the exact failure this rewrite exists to remove.
+
+_WILDCARD_CHARS = ("*", "?", "[")
+
+
+def normalize_path_pattern(pattern) -> str:
+    """Normalize one include/exclude pattern to a path prefix.
+
+    Raises ValueError on a non-string, an empty pattern, or an unsupported glob.
+    """
+    if not isinstance(pattern, str):
+        raise ValueError(
+            f"path_include/path_exclude entries must be strings, "
+            f"got {type(pattern).__name__}: {pattern!r}"
+        )
+    p = pattern.strip()
+    if not p:
+        raise ValueError("path_include/path_exclude entries cannot be empty strings")
+    if p in ("*", "/*"):
+        return "/"
+    if p.endswith("/*"):
+        p = p[:-2]  # "/docs/*" is the subtree, spelled the way a caller writes it
+    p = p.rstrip("/")
+    if not p:
+        return "/"
+    if not p.startswith("/"):
+        p = "/" + p  # "docs" and "/docs" are the same subtree
+    bad = [c for c in _WILDCARD_CHARS if c in p]
+    if bad:
+        raise ValueError(
+            f"path pattern {pattern!r} contains {''.join(bad)!r}, which is not supported. "
+            f"path_include/path_exclude name a path subtree (e.g. '/docs', or '/docs/*' "
+            f"for everything under it); the only wildcard form accepted is a trailing '/*'."
+        )
+    return p
+
+
+def normalize_path_patterns(patterns) -> list[str]:
+    """Normalize a caller's include/exclude list. Raises ValueError on a bad entry.
+
+    A bare string is treated as the single pattern the caller meant - iterating
+    it character by character made every path match, which is how
+    ``path_exclude="/what/"`` used to filter the whole crawl away.
+    """
+    if not patterns:
+        return []
+    if isinstance(patterns, str):
+        patterns = [patterns]
+    return [normalize_path_pattern(p) for p in patterns]
+
+
+def _normalize_url_path(path: str) -> str:
+    """URL path -> the comparable form: leading slash, no trailing slash."""
+    p = (path or "/").strip()
+    if not p.startswith("/"):
+        p = "/" + p
+    p = p.rstrip("/")
+    return p or "/"
+
+
+def _path_in_scope(path: str, pattern: str) -> bool:
+    """True when `path` IS the pattern's subtree, at a segment boundary.
+
+    Both arguments must already be normalized (see _normalize_url_path /
+    normalize_path_pattern).
+    """
+    if pattern == "/":
+        return True
+    return path == pattern or path.startswith(pattern + "/")
+
+
+def path_allowed(path: str, path_include=None, path_exclude=None) -> bool:
+    """The single decision point for BFS link discovery and the sitemap map.
+
+    Patterns may be raw (they are normalized here) or pre-normalized; a bad
+    pattern raises ValueError. Keeping one implementation is the point: the two
+    call sites had drifted into carrying the same defect twice.
+    """
+    p = _normalize_url_path(path)
+    include = normalize_path_patterns(path_include)
+    exclude = normalize_path_patterns(path_exclude)
+    if include and not any(_path_in_scope(p, pat) for pat in include):
+        return False
+    if exclude and any(_path_in_scope(p, pat) for pat in exclude):
+        return False
+    return True
+
+
 def extract_same_domain_links(
     html: str,
     base_url: str,
@@ -291,14 +406,17 @@ def extract_same_domain_links(
 
     Resolves relative URLs against base_url, keeps only links on the start URL's
     netloc, drops fragments/assets/non-http schemes, applies path include/exclude
-    prefixes, and dedupes by the NORMALIZED URL (so `/docs` and `/docs/` collapse
-    to one). Order-preserving.
+    subtree scoping (see path_allowed), and dedupes by the NORMALIZED URL (so
+    `/docs` and `/docs/` collapse to one). Order-preserving.
     """
     root_netloc = urlparse(start_url).netloc
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
     if not html:
         return out
+    # Normalized once per page rather than per link.
+    include = normalize_path_patterns(path_include)
+    exclude = normalize_path_patterns(path_exclude)
     for m in _LINK_RE.finditer(html):
         href = (m.group(1) or "").strip()
         if not href or href.lower().startswith(_SKIP_SCHEMES):
@@ -312,10 +430,10 @@ def extract_same_domain_links(
             continue
         if parsed.netloc != root_netloc:
             continue  # external -> dropped (same_domain_only default)
-        path = parsed.path or "/"
-        if path_include and not any(path.startswith(p) for p in path_include):
+        path = _normalize_url_path(parsed.path or "/")
+        if include and not any(_path_in_scope(path, pat) for pat in include):
             continue
-        if path_exclude and any(path.startswith(p) for p in path_exclude):
+        if exclude and any(_path_in_scope(path, pat) for pat in exclude):
             continue
         if _ASSET_RE.search(path):
             continue
@@ -374,11 +492,9 @@ def _error_status(resp) -> int:
 
 def _sitemap_passes_filters(path: str, path_include: Optional[list[str]],
                             path_exclude: Optional[list[str]]) -> bool:
-    if path_include and not any(path.startswith(p) for p in path_include):
-        return False
-    if path_exclude and any(path.startswith(p) for p in path_exclude):
-        return False
-    return True
+    """Kept as a named call site for the sitemap map; the decision itself lives
+    in path_allowed so the two scoping paths cannot drift apart again."""
+    return path_allowed(path, path_include, path_exclude)
 
 
 async def _sitemap_map(url: str, path_include: Optional[list[str]],
@@ -514,9 +630,10 @@ async def smart_crawl(
     t0 = time()
     deadline_t = t0 + (deadline_ms / 1000.0)
 
-    def _err(msg: str, start: str = "") -> CrawlResponseModel:
+    def _err(msg: str, start: str = "", hint: str = "") -> CrawlResponseModel:
         from dhole_mcp.errors import classify_network_error
-        _, hint = classify_network_error(msg)
+        if not hint:
+            _, hint = classify_network_error(msg)
         return CrawlResponseModel(start_url=start or url, pages=[], error=msg[:200],
                                   duration_ms=(time() - t0) * 1000,
                                   summary=f"crawl failed: {msg[:120]}",
@@ -540,10 +657,26 @@ async def smart_crawl(
     # (`path.startswith(p) for p in "/what/"`), and startswith("/") holds for
     # every path - so one string silently filtered the whole crawl away. Treat
     # it as the single-prefix list the caller meant.
+    #
+    # Validated HERE, before any network work: a pattern the matcher cannot
+    # honour used to surface as "0 pages crawled" after a full crawl, which
+    # reads as "the site has nothing" rather than "your pattern was wrong".
     if isinstance(path_include, str):
         path_include = [path_include]
     if isinstance(path_exclude, str):
         path_exclude = [path_exclude]
+    try:
+        path_include = normalize_path_patterns(path_include)
+        path_exclude = normalize_path_patterns(path_exclude)
+    except ValueError as e:
+        # Not a fetch failure: nothing was fetched. The generic classify hint
+        # ("try a different source") would send the caller somewhere useless.
+        return _err(
+            f"invalid path filter: {e}",
+            hint=("Fix the path_include/path_exclude pattern and retry. A pattern names a "
+                  "path subtree: '/docs' (or '/docs/*') keeps /docs and everything under it; "
+                  "'/' or '*' keeps everything. Drop the pattern to crawl unfiltered."),
+        )
     selective = bool(crawl_urls)
 
     # Normalize the sitemap flag: True/'auto'/False. 'auto' = use sitemap if
@@ -830,9 +963,9 @@ async def smart_crawl(
                "token budget" if truncated_budget else "max_pages")
         next_action = (
             f"crawl stopped early ({why}); re-run smart_crawl with a higher "
-            f"max_pages / max_total_chars / deadline_ms, or scope with "
-            f"path_include. {pages_discovered - pages_crawled} URL(s) were "
-            f"discovered but not fetched."
+            f"max_pages / max_total_chars / deadline_ms, or scope it with "
+            f"path_include=['/docs'] (a path subtree, not a string prefix). "
+            f"{pages_discovered - pages_crawled} URL(s) were discovered but not fetched."
         )
     elif discover_only and pages_discovered > pages_crawled:
         next_action = (

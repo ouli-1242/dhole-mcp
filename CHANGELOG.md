@@ -4,6 +4,66 @@
 
 > 自 13.14 起本仓库为个人衍生作品，版本号是自己的序号、不承诺语义化版本，与上游版本不可比；`src/dhole_mcp/__init__.py` 的 `__version__` 是唯一权威来源。
 
+## [15.1] - 未发布
+
+第四轮（约 60 次调用、8 工具全覆盖，记作「报告4」）与第五轮（`dhole_fix_prompt.md`，记作「报告5」）外部实测的处置。两份报告各用**自己的**编号体系、与前几批同名不同物，所以回归测试按**症状**命名而不是照抄编号（`test_bug_report2_regressions.py` 的文件头说明了理由）。
+
+### 修复
+
+**报告5**
+
+- **`smart_crawl` 的 `path_include`/`path_exclude` 把字符串前缀当成了路径子树**（P0）。两处调用点都是 `path.startswith(p)`，同一组链接实测四种失败、**全部静默**：`"docs"` 与 `"/docs/*"` 把整站过滤成 0 条；`"/docs"` 多留了 `/docs-old/legacy`、`/docsomething`；`path_exclude=["docs"]` 什么都没排除。最糟的是第一种 —— 起点页永远会被抓，所以现象是「抓了 1 页、`error` 为空、`summary` 说 `1 content_ok`」，调用方只能读成「这站就一页」，而 `docs` 恰好是最自然的写法。
+  - 新契约：模式命名一个**路径子树**，在路径段边界上匹配（`/docs` 与 `/docs-old` 是两棵不同的树）；`'docs'`/`'/docs'`/`'/docs/'`/`'/docs/*'` 等价。只接受尾部 `/*` 这一种通配，其余（`'/docs?'`、`'/api/*/v1'`）**直接报错** —— 把通配符当字面量匹配的结果就是上面第一种失败，报错能让调用方一次改对。校验前移到任何网络动作之前，并配一条专门的 `next_action`（不能复用 `classify_network_error` 的「try a different source」，这次一个请求都没发）。
+  - 两处调用点合并为一个实现（`path_allowed`）。wire 描述从 `(path prefixes)` 改成 `(path subtree: '/docs' keeps /docs and everything under it, NOT /docs-old)` —— **「prefix」这个词本身就在教调用方用 `startswith` 思考**，而那个心智模型正是 bug 的来源。测试 12 条，变异 3 组全红。
+
+- **`parse` 读 GBK 文件返回乱码却报 `content_ok=true`**（P0）。`.csv`/`.html` 硬编码 `utf-8, errors="replace"`，中文 Windows 上 Excel 默认导出的 CSV（GBK/GB18030）解出来是一串 U+FFFD，而 `content_ok` 仍是 true、`error` 仍是空 —— 引用它必然出错。复现：90 字节 GBK CSV → `"| ���� | ���� |"` + `content_ok:true`。
+  - 修法不是再猜一次编码，而是把**候选顺序**与**损伤判定**显式化，落在新的 `charset.py`：BOM → `encoding` 参数 → 头部 NUL → 严格 UTF-8 → 严格 GB18030，都不严格通过时按损伤打分取较小者。`metadata.encoding` 回报实际生效的字符集；**解出来仍带损伤时不当作成功** —— 正文照常返回（那正是调用方要看的），但 `error` 置 `encoding_undecodable`、`content_ok=false`、`next_action` 指向 `encoding=` 重试。
+  - 边界是量出来的：GB18030 是 GBK/GB2312 的超集，7/7 个 GBK 样本零损伤。**Big5 可检出**（落 PUA 私有区），**Shift_JIS / EUC-KR 不可** —— 它们被 GB18030 严格解成「看起来合理的中文且损伤为 0」，没有廉价字节特征能区分，只能靠 `encoding=` 显式指定；这条缺口写进 README。**cp1252 刻意不进链**：它能把任何字节解成零损伤的拉丁文本，一进链损伤信号就彻底失效（Big5 会被洗白），代价是 Latin-1 文件会被解成 GB18030 并标记有损伤 —— 取舍方向是**看得见的失败优于看不见的错误**。
+  - 顺带修掉一个此前无人发现的脆弱点：`parse.py` 的降级路径曾 `from dhole_mcp.fetcher import _misdecode_score`，而 `fetcher` 顶层 import `primp` —— 「`parse` 不依赖抓取栈」这个承诺在没装 primp 的环境会直接 ImportError（本轮实测撞到）；损伤打分与错码标记现归 `charset.py`，由 AST 守卫钉住。CSV 分隔符也顺带探测（Excel 在部分地区写 `;`，按逗号解会让整行挤进第一列 —— 静默错误，不是空表）。测试 14 条。
+
+- **`max_content_chars` 静默忽略调用方的值**（P1-5）。旧代码 `if not isinstance(v, int): v = MAX_CONTENT_CHARS` —— 非 int 一律静默换成 40000。而「客户端把数字字符串化」是真实行为，于是 `max_content_chars="2000"` 静默拿到 40000：**20 倍上下文超额，以普通 200 的形式交付**。姊妹缺陷 `offset` 负数会 `text[-5:]` 从末尾切片，即「返回错误结果却报 200」。
+  - 处置与 `_coerce_options` / `_strict_options` 已在上一层用过的规则一致：**转换能转换的、报出不能转换的**。`None` → 默认值；bool → 报错（`True` 是 `int` 子类，不拦就静默变成「1 个字符」）；能解析成 int 的字符串 → 转换并照调用方意图执行；其余 → 报错并写出实际类型。新增 `_coerce_int_arg` 承载这条策略。
+  - 钳制保留但不再无据可依：`[500, 200000]` 上限刻意保留（硬顶优于给调用方一个难看的 parse error），但 200000 **此前从未写进 wire**（描述只说 `min 500`），现在写成 `range 500-200000`（+9 字符，连接期总量 12,601 → 12,610）。`offset` 负数**改成报错而不是钳到 0** —— 钳到 0 是静默纠正一个没有合理解读的值。`next_action` 不再张冠李戴：参数错误此前复用「smart_fetch 要传绝对 URL」那句，把调用方指向唯一本来就正确的那个参数。
+  - 测试 20 条，变异 3 组全红。**同类但未动**：`cache_ttl`/`timeout` 传字符串会抛 TypeError（响，但不可行动）；`max_content_chars_per`/`max_total_chars` 由 `crawl.py` 的 `int()` 转换。是否把 `_coerce_int_arg` 铺到这几处，单独决定。
+
+- **`screenshot` 把 Playwright 的原始日志原样发给 agent**（P1-3）。`raise captured["error"]` 直接抛出，`call_tool` 把它 `str(e)[:300]` 后发出去，agent 收到的是 `Timeout 30000ms exceeded` 加一整块 `Call log:`（`waiting for fonts to load...`）。这是 `is_error` 结果，调用方拿它的唯一用途就是决定下一步 —— 而日志块描述的是**驱动内部**的步骤，没有任何参数能影响它，还占满截断预算、把唯一命名了故障的那一行挤在中间。截断本身又多一层：`[:300]` 会切在日志中途，产出「看起来完整、实则半句」的错误。
+  - 新增 `_screenshot_error_message`：保留**异常类型 + 首行**，丢掉日志块，按首行给一条可行动的提示（超时 → `options.timeout` / `options.wait_selector`；会话已死 → 重调或 `close_session`；缺二进制 → `playwright install chromium`）。**提示只匹配首行**：日志里出现 `timeout` 而首行不是超时时给超时建议，是自信的错误指引，比不给更糟。原始异常不丢，抛出点先 `logger.debug` 留给运维侧。
+  - 长度是契约的一部分：`call_tool` 发 `[:300]`，最坏形状实测 267 字符，不会被切在半句。空消息回退为 `(no message)` 而非重复类型名。wire 一字未改，预算不受影响。测试 12 条（含一条走 `_dispatch` 的端到端），变异 6 组全红 —— 其中「空消息不回退」第一版**漏网**：原断言只查 `startswith("Exception:")`，而字段留空时输出是 `"Exception:  - ..."`，照样以 `Exception:` 开头，测的是错的东西。
+  - **同类但未动**：`smart_fetch` 走 stealthy tier 时 `error` 同样是原始 Playwright 文本（7 个 `redact_api_key(str(resp)[:200])` 落点），实测 200 字符且切在半句。但它比 P1-3 轻：`next_action` 仍可用（`classify_network_error` 匹配**首行**，首行在截断中幸存），可行动的通道没坏。不改的原因是该文本参与 `classify_network_error` → `_agent_hints` 的分支选择，牵动一整片既有断言，需要单独评审。
+
+**报告4**
+
+- **`content_ok=true` 但正文是失败页**。x.com 回 200 + `Try reloading`、douyin.com 回 200 + `Please wait...`（249 字符），两者 `content_ok` 都是 true —— 判据只有 `2xx/3xx + 无 error + 正文非空`，而这类页面不含任何验证/登录措辞，`_is_bot_wall` 与 `_is_auth_wall` 都够不到。新增 `_is_soft_failure`（明确失败措辞表 + 600 字符门限），命中时把 `soft_failure_detected` 写进 `error`、`content_ok` 变 false。
+  - 与 15.0「软 404 检测评估后不做」的关系：那次判据是「200 + 正文 <1KB」，62 条样本里 0 例、朴素判据 80% 误报；这次窄得多（**必须命中具体失败措辞**，长度门限从 1KB 收到 600），且有了两例真实反例。它仍是词表驱动 = 打地鼠，**不覆盖**本次同时发现的 Google 法语屏蔽页（无失败措辞、只有地域屏蔽措辞），那条维持现状等更多样本。
+  - 必须排在 `_is_js_shell` 之前，否则这两页会被判成 JS shell，`next_action` 就让 agent 去烧 30~40s 的浏览器升级换回同一个错误页；且不触发 archive 回退（新 error 不以 `all_tiers_failed` 开头、status 200 不在回退状态码里），失败页不会被悄悄换成 Wayback 的旧版本。
+
+- **错误状态的 `next_action` 被「截断」抢走**。实测 Wikipedia 404 页返回 `page truncated... offset=...` —— 根因是截断提示排在 `_agent_hints` 的 elif 链最前，而 404 页的正文足够长会被 `max_content_chars` 截断，于是 agent 被引导去翻一个不存在的页面的下一页。现在截断提示加 `status < 400` 约束，404/410、403、429 各有自己的指引。顺带换了一处契约测试的锚点：`test_error_result_content_ok_false` 原断言 `next_action` 含 "failed"（那是网络错误兜底文案的措辞），改为断言含 "404" —— 钉的是「有可行动的指引」这个行为，不是某个恰好出现过的词。
+
+- **声明的 charset 与字节不符时不再产出 mojibake**。实测 `you’ve → youâ€™ve`、`· → ??`。根因是 encoding **只**从 Content-Type header 取、页面自己的 `<meta charset>` 完全不参与、也没有一致性校验 —— Apache 默认发 `ISO-8859-1` 而内容是 UTF-8 时声明编码无条件获胜（复现：写了 `<meta charset="utf-8">` 也照样乱码）。修法不是猜字符集，而是**两种解码各打一次分、取更干净的**（`_decode_html_bytes`）：错声明的 UTF-8 会留下 U+FFFD 或 `Â/Ã/â€` 前缀，而真·非 UTF-8 内容按 UTF-8 解码会产生**更多**替换符，因此被保留。接进 HTML 主体路径与 JSON / old-reddit 两处直解路径；`feed.py` 与 `search_engines.py` 的解码点本轮**未动**（输入形态不同，需要各自的样本）。两个方向的变异都做过：去掉回退 3 红；改成无条件 UTF-8 2 红 —— 后者是这条修复最该防的事，中文站改坏比不改严重得多。
+
+### 边界（实测记录，不改代码）
+
+- **`focus` 的过滤强度随查询词在页面里的分布剧烈摆动**，两个方向都会出问题。274 block 的合成页实测：`focus='zebraqnix'`（词只出现在 1 个 block）保留 **1/274**；`focus='artificial intelligence'`（页面主题词，半数 block 都含）保留 **135/274**；`focus='systems'`（单词查询）只保留 **7/274**。根因是阈值是**绝对值** `threshold=1.0`，而 BM25 得分随查询词个数、词频、block 长度大幅变化，单词查询下典型 block 得分约 0.9~1.1，正好卡在阈值两侧。
+  - **不改**：把阈值调高只是把「几乎不过滤」变成「漏召回」，调低反之 —— 省 token 与保召回是同一根杠杆的两端，这是产品取舍不是 bug。用 `focus` 时把头部那句 `showing N of M blocks` 当**子集**看，要全量就 `focus=''`。
+
+### 变更
+
+- **wire 去重裁剪：13,605 → 12,601 字符（−7.4%，≈250 token/连接）**，起因是「每次启动这个 MCP 很费 token」的反馈。先量再改：连接期固定成本 = `instructions` + 8 个工具 schema，其中 **62% 是散文**（工具描述 4,361 + 参数说明约 3,960），其余是 JSON 骨架与 `annotations`。只动散文，三类：**同一事实写两遍**（描述 ↔ `options` 包 ↔ `instructions` 三处重复，−340）；**agent 无法据此行动的机制**（archive.org 的触发状态码清单、相对路径的四步解析顺序，−190）；**顺带修掉一处真错误** —— `smart_search` 的描述只列了 5 个 opt-in 引擎而注册表里是 8 个（漏 `so360`/`sogou`/`sogou_weixin`），改为指向 `options.engines`，两份手写清单只留一份。
+  - **明确不动**：每个属性的 `type` 与 `enum`（删掉会诱发错误类型的调用）、`annotations`（`readOnlyHint` 决定客户端是否免确认，是能力不是冗余）、`CHECK BEFORE CITING` 那行、全部路由规则。
+  - **预算同轮下调，规则是「只降不升」**：`tools/list` 13300→12300、`instructions` 1500→1465、连接 14000→13800，各工具上限也按「实测 + ~10% 余量」重推并封顶为不高于旧值 —— 否则裁剪会变成一次免费的额度膨胀。`smart_fetch` 是唯一不动的：旧上限相对当时的实测只有 1.1% 余量，按 10% 重推反而会把天花板抬到 4216，那是放松守卫。
+  - **边界**：这轮只砍 7.4%。连接期成本本身不是大头 —— 单次 `smart_fetch` 默认最多返回 **40,000 字符**（≈10k token）、`smart_crawl` 硬顶 **500,000 字符**，**一次抓取就超过整张工具表**。杠杆在 `max_content_chars` / `max_total_chars` / `focus=`，以及每个响应里那 ~667 字符的固定信封（`ResponseModel` 30 个字段整体 `model_dump_json()`，空值与默认值照发）。这两项本轮**未改** —— 改默认值会改变默认行为，需要单独决策。
+
+- **三处新增守卫**：
+  - **引擎清单不许只写一半**（`test_search_engine_list_is_never_partial`）：从 `search_engines._INDEX_FAMILY`（14 个后端）反查 `smart_search` 的**每一处**引擎清单，每处要么为空、要么等于真实的 opt-in 集合。**第一版写错过** —— 把整份载荷当一个字符串扫，于是 `options` 包里那份完整清单把描述里缺的 3 个「补」成了 8，对原始 bug **静默通过**，变异实验当场揭穿。整词匹配也是刻意的：`sogou` 是 `sogou_weixin` 的子串。
+  - **同一个名字不许定义两次**（`test_import_provenance.py::test_no_definition_is_shadowed_by_a_duplicate`）：本轮真实踩到 —— 一个测试类被追加了两次，**第二次定义静默遮蔽第一次**，pytest 照常收集、照常全绿，但 24 条只跑了一半。守卫扫 `src/dhole_mcp` 与 `tests` 全部模块的**直接**子节点是否重名（不看 `if`/`try` 内部 —— 条件定义是合法写法，遮蔽是无条件的）。
+  - **docstring / wire 的漂移**：客户端收到的是 `_TOOL_DEFS` 里的 `description`，工具方法的 docstring **不上 wire**（全项目零处消费 `__doc__`）。两边没有同步机制，于是 docstring 必然腐坏 —— 本次实测两处：`screenshot` 的 `:param:` 把早已搬进 `options` 的键描述成顶层参数，还列了 `wait_selector_state`，而它**根本不被接受**（不在 `_SHOT_OPTIONS` 白名单里）；`smart_search` 的 docstring 说 "ranks by neural relevance"，而神经重排是**可选**的（lean install 或离线时回落到 consensus + 引擎位置序）。**三个实例方向一致：docstring 错、wire 对** —— 所以「docstring 更详细 = 更权威」这个默认假设是错的，改之前要拿 wire 和实现各对一次。守卫：docstring 里的 snake_case 标识符若在整个 wire 载荷里找不到，必须登记进 `_DOCSTRING_ONLY_*` 白名单并写明理由；另一条防白名单长草（本次抓到 3 个已失效条目）。
+
+- **archive.org 第三层降级写进工具描述与 README**：升级实际是三层（`http → stealthy → archive.org`），此前只存在于响应字段 `source` / `archived_at` 的 Field description 里 —— agent 拿到响应后能看懂，**调用前**完全不知道。现在 `smart_fetch` 的 wire 描述写明触发条件、代价（10–30s）、辨认方法（`metadata.source` + `archived_at`）以及**没有任何参数能关闭它**。顺带补上 3 个可见性缺口：`escalation_path`、`source_type` / `is_official` 此前只存在于 docstring，而它们直接影响「要不要引用这份内容」，已搬进 wire 的 CHECK 行；`content_type` / `duration_ms` / `total_size_bytes` 判定为诊断字段，刻意不暴露并登记在白名单。
+
+- **`smart_crawl` 描述写明 500000 字符硬顶**：`max_total_chars` 被钳在 500000，而 `max_pages` 只在未显式给出 `max_total_chars` 时参与推导 —— 撞上钳制后**再调大 `max_pages` 没有效果**，实测传 100 只抓到 31 页。
+
+- wire 体积（`json.dumps` 默认渲染的字符数，非 token）：15.1 新增描述把 `parse` 874 → 1335（预算 960 → 1480）、`smart_crawl` 2147 → 2213、`smart_fetch` 3719 → 4009、instructions 1399 → 1473，连接合计 12,562 → 13,605 —— 把 15.0 留的余量吃光了。两个预算的上调都**写明理由**，而不是从别处砍描述来付账：`parse` 的 `encoding` 是调用方从乱码里恢复的**唯一**通道，`smart_crawl` 那句子树说明替换掉的 `(path prefixes)` 本身就是 bug 的成因。**随后的去重裁剪把整表压回 11,270（连接 12,610）**，15.1 对 wire 的净效果是 −843 字符。
+
 ## [15.0] - 2026-09-22
 
 搜索引擎重编组（默认池 6 + opt-in 8）、第三轮外部复测处置、工具入口修复。
