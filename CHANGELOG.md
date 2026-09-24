@@ -4,7 +4,7 @@
 
 > 自 13.14 起本仓库为个人衍生作品，版本号是自己的序号、不承诺语义化版本，与上游版本不可比；`src/dhole_mcp/__init__.py` 的 `__version__` 是唯一权威来源。
 
-## [15.1] - 未发布
+## [15.1] - 2026-09-24
 
 第四至第六轮外部实测的处置（第六轮为 91 场景 / 8 工具全覆盖压测）。
 
@@ -20,6 +20,8 @@
 - 描述与 README 补写两处此前只存在于代码里的事实：archive.org 第三层降级（`http → stealthy → archive.org`，代价 10–30s，无参数可关闭）、`smart_crawl` 的 500000 硬顶（撞顶后调大 `max_pages` 无效）。
 - `smart_fetch` 的 inputSchema 补 `anyOf: [{required:[url]}, {required:[urls]}]`；`schema` 描述写明不带 `type` 返回首个匹配、`"type": "array"` 返回全部。
 - `feed_fetch` 的 `content[0].text` 与 `structured_content` 统一为 `{"feeds": [...]}`。
+- `focus` 的过滤强度随查询词在页面里的分布摆动（本轮未改）：`Focus:` 头的 `showing N of M blocks` 要当**子集**看，取全量用 `focus=''`。
+- `smart_fetch(urls=[...])` 只限 URL 个数（100），对正文总量没有上限（本轮未改），止损靠调用方自己传 `max_content_chars`。
 
 ### 修复
 
@@ -44,11 +46,6 @@
 ### 安全
 
 - README 补 fake-IP TUN 环境（Clash / sing-box）说明：SSRF 的「解析到内网即拒」会把公网域名全部判成内网，逃生口 `DHOLE_SSRF_DNS_RECHECK=0` 是全量开关而非白名单。
-
-### 已知边界
-
-- `focus` 的过滤强度随查询词在页面里的分布摆动；`Focus:` 头的 `showing N of M blocks` 要当**子集**看，取全量用 `focus=''`。
-- `smart_fetch(urls=[...])` 只限 URL 个数（100），对正文总量没有上限，止损靠调用方自己传 `max_content_chars`。
 
 ## [15.0] - 2026-09-22
 
@@ -259,6 +256,7 @@
 - 日志凭据泄漏（重试时把含 `user:pass@` 的代理 URL 写进日志）、`ProxyPool.health_check` 未 await 的 RuntimeWarning、过期的类型标注与死赋值。
 - 已知缺口（13.15 已修）：抓取工具的 `auth` / `proxy_auth` 当时只校验不生效。
 
+[15.1]: https://github.com/ouli-1242/dhole-mcp/compare/v15.0...v15.1
 [15.0]: https://github.com/ouli-1242/dhole-mcp/compare/v14.7...v15.0
 [14.7]: https://github.com/ouli-1242/dhole-mcp/compare/v14.6...v14.7
 [14.6]: https://github.com/ouli-1242/dhole-mcp/compare/v14.5...v14.6
