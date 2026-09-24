@@ -15,12 +15,12 @@ Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器，为 AI 代理
 
 ## 功能特性
 
-- **智能抓取**：HTTP 优先（~1 秒），被拦截或遇到 JS 空壳时自动升级 Patchright 隐身浏览器并求解 Cloudflare 验证；全部失败时回退 Wayback Machine 快照
-- **网页搜索**：并行抓取多个公开搜索引擎（免密 14 个可选、6 个默认，见[可选的搜索引擎](#可选的搜索引擎)），本地 ONNX 神经重排序 + 跨引擎共识排名，`fetch_content=true` 直接抓回 top3 全文
+- **智能抓取**：HTTP 优先（~1 秒），被拦截或遇到 JS 空壳时自动升级隐身浏览器，仍失败则回退 Wayback Machine 快照
+- **网页搜索**：免密引擎 14 个可选、6 个默认并行，本地神经重排序 + 跨引擎共识排名；`fetch_content=true` 直接抓回 top3 全文
 - **整站爬取**：同域最佳优先遍历，sitemap 模式，页数 / 深度 / token 预算控制
 - **PDF + OCR**：结构化 Markdown 输出，扫描件与 CID 损坏自动 OCR
 - **结构化提取**：CSS 选择器 / JSON-LD / 自动模式 schema，多 URL 批量并行
-- **Agent 友好**：返回 `next_action` 建议与来源分类；超长内容自动分页；SQLite 缓存加速重复抓取
+- **Agent 友好**：返回 `next_action` 建议；超长内容自动分页；SQLite 缓存加速重复抓取
 - **优雅降级**：浏览器依赖缺失时自动切换纯 HTTP 模式（Termux / 精简容器可用）
 
 ## 安装
@@ -64,95 +64,96 @@ playwright install chromium      # 反检测浏览器引擎（~150MB，完整版
 
 无需参数、无需密钥、无需环境变量。CLI 自带诊断与配置命令：
 
-| 命令             | 用途                                                             |
-| ---------------- | ---------------------------------------------------------------- |
-| `dhole -v`       | 版本 + 能力面板（浏览器 / PDF / 重排 / 引擎产出）                |
-| `dhole --doctor` | 安装体检：逐项定位问题并给出可直接复制的修复命令（失败退出码 1） |
-| `dhole proxy`    | 管理搜索代理池（list / add / remove / clear）                    |
-| `dhole engines`  | 查看 / 重置引擎健康状态（list / reset）                          |
-| `dhole model`    | 查看 / 切换重排模型                                              |
-| `dhole -u`       | 自更新（本 fork 默认关闭）                                       |
+| 命令                   | 用途                                                             |
+| ---------------------- | ---------------------------------------------------------------- |
+| `dhole -v`             | 版本 + 能力面板（浏览器 / PDF / 重排 / 引擎产出）                |
+| `dhole --doctor`       | 安装体检：逐项定位问题并给出可直接复制的修复命令（失败退出码 1） |
+| `dhole proxy`          | 管理搜索代理池（list / add / remove / clear）                    |
+| `dhole engines list`   | 每个引擎的冷却判定与剩余秒数（`dhole engines` 即 list）          |
+| `dhole engines reset`  | 立即清空引擎冷却，不等自然到期                                   |
+| `dhole engines probe`  | 逐个实测引擎健康：一家一次真查询，印命中数 / 耗时 / 被拦原因     |
+| `dhole model`          | 查看 / 切换重排模型                                              |
+| `dhole -u`             | 自更新（本 fork 默认关闭）                                       |
 
 ## 工具
 
-| 工具           | 功能                                                                                                                                          |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `smart_fetch`  | 抓取任意 URL：自动反爬升级、PDF/OCR、批量、聚焦提取、页面交互、结构化提取                                                                     |
-| `smart_search` | 无密钥网页搜索：多引擎并行、神经重排序、可同时抓回全文                                                                                        |
-| `smart_crawl`  | 同域最佳优先爬取，支持 sitemap 模式、关键词过滤与 `path_include`/`path_exclude` 子树限定（`'/docs'` 含 `/docs` 及其下全部，**不含** `/docs-old`）                                                                                               |
-| `screenshot`   | 页面截图（多模态代理专用）                                                                                                                    |
-| `parse`        | 本地文件解析（.html/.htm/.xhtml/.docx/.xlsx/.csv/.pdf → Markdown）；`.html`/`.csv` 按字节探测字符集（`encoding=` 可覆盖）；相对路径按 `cwd` 参数 → `DHOLE_WORKDIR` → 服务器进程 cwd → 主目录依次尝试 |
-| `feed_fetch`   | 批量抓取 RSS/Atom feed 最新条目                                                                                                               |
-| `resolve_url`  | 解析 URL 最终地址（跟随重定向，不下载页面体）                                                                                                 |
-| `cache_clear`  | 清除抓取缓存；`engine_state=true` 同时重置引擎冷却与产出记录，响应回报 `engine_health`                                                        |
+| 工具           | 功能                                                                                                     |
+| -------------- | -------------------------------------------------------------------------------------------------------- |
+| `smart_fetch`  | 抓取任意 URL：自动反爬升级、PDF/OCR、批量、聚焦提取、页面交互、结构化提取                                |
+| `smart_search` | 无密钥网页搜索：多引擎并行、神经重排序、可同时抓回全文                                                   |
+| `smart_crawl`  | 同域最佳优先爬取，支持 sitemap 模式、关键词过滤与 `path_include` / `path_exclude` 子树限定               |
+| `screenshot`   | 页面截图（多模态代理专用）                                                                               |
+| `parse`        | 本地文件解析（.html/.htm/.xhtml/.docx/.xlsx/.csv/.pdf → Markdown）；相对路径按 `cwd` → `DHOLE_WORKDIR` → 服务器进程 cwd → 主目录依次尝试 |
+| `feed_fetch`   | 批量抓取 RSS/Atom feed 最新条目                                                                          |
+| `resolve_url`  | 解析 URL 最终地址（跟随重定向，不下载页面体）                                                            |
+| `cache_clear`  | 清除抓取缓存；`engine_state=true` 同时重置引擎冷却与产出记录                                             |
 
 ### smart_search 常用参数
 
-| 参数            | 作用                                                                                                                             |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `max_results`   | 最多返回条数，1–50，默认 6（超出范围**静默钳制**，不报错）                                                                       |
-| `site`          | 只保留该域名的结果（按最终 URL 的域名匹配）                                                                                      |
-| `exclude_sites` | 排除这些域名，传列表                                                                                                             |
-| `freshness`     | 时效过滤，仅接受 `day` / `week` / `month` / `year`，其他值**直接报错**                                                           |
-| `page`          | 翻页，0–10，默认 0，超范围**直接报错**                                                                                           |
-| `fetch_content` | `true` 时自动抓回正文：取相关性 `high` 的前 3 条（无 `high` 则退化为前 3 条），每条截断 8000 字符，并按 `focus=query` 做聚焦提取 |
+| 参数            | 作用                                                             |
+| --------------- | ---------------------------------------------------------------- |
+| `max_results`   | 最多返回条数，1–50，默认 6（超出范围静默钳制）                   |
+| `site`          | 只保留该域名的结果                                               |
+| `exclude_sites` | 排除这些域名，传列表                                             |
+| `freshness`     | 时效过滤，仅接受 `day` / `week` / `month` / `year`（其他值报错） |
+| `page`          | 翻页，0–10，默认 0（超范围报错）                                 |
+| `fetch_content` | `true` 时抓回正文：相关性最高的前 3 条，每条截断 8000 字符       |
 
 ## 可选的搜索引擎
 
-免密引擎共 **14 个**：6 个在默认池（每轮都跑），8 个是 opt-in（`engines=["bing_global","mwmbl"]` 点名才跑，单次最多 9 个）。
+免密引擎共 **14 个**：6 个在默认池，8 个是 opt-in（`engines=["duckduckgo","mwmbl"]` 点名才跑，单次最多 9 个）。另有 4 个付费 keyed 后端 `brightdata` / `tavily` / `exa` / `bocha`（需 key，默认不跑，见[配置](#配置)）。
 
-| 引擎           | 索引 / 内容                                                     | 默认池 | 国内直连 |
-| -------------- | --------------------------------------------------------------- | ------ | -------- |
-| `baidu`        | 百度搜索（独立索引）                                            | ✔      | ✔        |
-| `bing`         | Bing 中国版 `cn.bing.com`（bing 家族）                          | ✔      | ✔        |
-| `yandex`       | Yandex（独立索引）                                              | ✔      | ✔        |
-| `brave`        | Brave（独立索引）                                               | ✔      | 需代理   |
-| `duckduckgo`   | DuckDuckGo（bing 家族，别名 `ddg`）                             | ✔      | 需代理   |
-| `yahoo`        | Yahoo（bing 家族）                                              | ✔      | 需代理   |
-| `baidu_baike`  | 百度百科条目页（知识库，覆盖窄）                                | opt-in | ✔        |
-| `bing_global`  | Bing 国际版 `www.bing.com`（bing 家族；与 cn 版结果几乎不重合） | opt-in | 需代理   |
-| `so360`        | 360 搜索（独立索引，别名 `360`）                                | opt-in | ✔        |
-| `sogou`        | 搜狗主站（sogou 家族）                                          | opt-in | ✔        |
-| `sogou_weixin` | 搜狗微信·公众号文章（垂直索引）                                 | opt-in | ✔        |
-| `wikipedia`    | 维基百科（知识库）                                              | opt-in | 需代理   |
-| `grokipedia`   | Grokipedia（知识库）                                            | opt-in | 需代理   |
-| `mwmbl`        | MWMBL 社区小型独立索引（覆盖窄、相关度参差）                    | opt-in | 需代理   |
+| 引擎           | 索引 / 内容                                          | 默认池 | 国内直连 |
+| -------------- | ---------------------------------------------------- | ------ | -------- |
+| `baidu`        | 百度搜索（独立索引）                                 | ✔      | ✔        |
+| `bing`         | Bing 中国版 `cn.bing.com`                            | ✔      | ✔        |
+| `so360`        | 360 搜索（独立索引，别名 `360`）                     | ✔      | ✔        |
+| `bing_global`  | Bing 国际版 `www.bing.com`（与 cn 版结果几乎不重合） | ✔      | 需代理   |
+| `yandex`       | Yandex（独立索引）                                   | ✔      | ✔        |
+| `brave`        | Brave（独立索引）                                    | ✔      | 需代理   |
+| `duckduckgo`   | DuckDuckGo（别名 `ddg`）                             | opt-in | 需代理   |
+| `yahoo`        | Yahoo                                                | opt-in | 需代理   |
+| `baidu_baike`  | 百度百科条目页（知识库，覆盖窄）                     | opt-in | ✔        |
+| `sogou`        | 搜狗主站                                             | opt-in | ✔        |
+| `sogou_weixin` | 搜狗微信·公众号文章（垂直索引）                      | opt-in | ✔        |
+| `wikipedia`    | 维基百科（知识库）                                   | opt-in | 需代理   |
+| `grokipedia`   | Grokipedia（知识库）                                 | opt-in | 需代理   |
+| `mwmbl`        | MWMBL 社区小型独立索引（覆盖窄、相关度参差）         | opt-in | 需代理   |
 
-共识按**索引家族**算，不按入口算：bing 家族有 4 个入口（`bing` / `bing_global` / `duckduckgo` / `yahoo`），同一 URL 被它们同时返回仍只算一个家族 —— 所以默认池 6 个引擎的共识上限是 **"4 of 4"**（baidu / bing / brave / yandex）。另有 4 个付费 keyed 后端 `brightdata` / `tavily` / `exa` / `bocha`（需 key，见下）；`DHOLE_DEFAULT_ENGINES` 可以改默认池，opt-in 名字也能写进去。
+换默认池用 `DHOLE_DEFAULT_ENGINES`（见下），opt-in 的名字也能写进去。
 
 ## 配置
 
 所有环境变量均可选，默认零配置可用。
 
-| 变量                                                                 | 用途                                                                                                                                                                                                                                               |
-| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DHOLE_SEARCH_PROXY`                                                 | 搜索引擎代理，逗号分隔可轮换；也自动读取 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` 作为单代理回退（Windows 上环境变量大小写不敏感，沙箱里的小写 `https_proxy` 同样会被采纳）。也可用 `dhole proxy add` 写入配置文件，两种来源合并去重、上限 20 个 |
-| `DHOLE_DEFAULT_ENGINES`                                              | 覆盖免密默认池，逗号分隔（默认 `baidu,bing,yandex,brave,duckduckgo,yahoo`）；候选引擎见[可选的搜索引擎](#可选的搜索引擎)                                                                                                                           |
-| `DHOLE_SEARCH_DEADLINE`                                              | 单次搜索整体截止秒数（默认 16）                                                                                                                                                                                                                    |
-| `DHOLE_SEARCH_FEEDBACK`                                              | 设 `1` 开启隐式域名偏好：抓成功的域名永久 +0.05 排序加权。默认关闭——它按「抓到过」而非「有用」改写共识排序                                                                                                                                         |
-| `DHOLE_BROWSER_IDLE_TIMEOUT`                                         | 浏览器空闲关闭秒数（默认 300，`0` 永不关闭）                                                                                                                                                                                                       |
-| `DHOLE_NO_BROWSER_PREWARM`                                           | 设 `1` 后启动不预热隐身浏览器（默认预热，为首次 stealthy 抓取省 3-5 秒冷启动）                                                                                                                                                                     |
-| `DHOLE_TOOLS`                                                        | 只注册列出的工具（逗号分隔，默认全部 8 个），连接期 token 随之减（`smart_fetch,smart_search` ≈ −49%）；拼错的名字启动期直接报错并列出合法名                                                                                                        |
-| `DHOLE_DEFAULT_CONTENT_CHARS`                                        | 没传 `max_content_chars` 时的默认正文预算（默认 40000，区间 500–200000，无法解析回落默认）；截断走 `offset` / `next_offset` 续取，上限不变                                                                                                         |
-| `DHOLE_SSRF_DNS_RECHECK`                                             | DNS 解析内网复查，**默认开启**；设 `0` 关闭。**fake-IP TUN 代理（Clash / sing-box 等）必须关**，否则所有公网站点都会被判成内网（详见「边界与前提」）                                                                                                |
-| `DHOLE_HOME`                                                         | 状态目录位置（默认 `~/.dhole`）。这里装着**抓到的正文明文**与搜索词，共享机器上可指到别处。POSIX 下建为 0700 / 文件 0600                                                                                                                           |
-| `DHOLE_WORKDIR`                                                      | `parse` 解析相对路径时额外尝试的目录（排在 `cwd` 参数之后）。MCP 宿主常把安装目录当 cwd，此时靠它指向项目目录                                                                                                                                      |
-| `DHOLE_HF_ENDPOINT`（或 `HF_ENDPOINT`）                              | 重排模型下载源。默认先试 `huggingface.co`、失败回退 `hf-mirror.com`；设了就只用这一个                                                                                                                                                              |
-| `DHOLE_BRIGHTDATA_API_KEY` / `_ZONE` / `_COUNTRY`                    | Bright Data SERP 后端（zone 默认 `dhole`，地区默认 `us`）                                                                                                                                                                                          |
-| `DHOLE_TAVILY_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_BOCHA_API_KEY` | 对应 keyed 引擎的密钥（均默认不跑）                                                                                                                                                                                                                |
-| `DHOLE_USAGE_LOG`                                                    | 设 `1`（或一个路径）写本地调用日志（JSONL）：工具名、成功与否、耗时、脱敏后的错误；**不记参数值**、不联网                                                                                                                                          |
-| `DHOLE_NO_AUTO_REPAIR`                                               | 设 `1` 后 `dhole` 入口遇到 ImportError 不再自动 `pip install --force-reinstall`（只打印修复命令）                                                                                                                                                  |
-| `DHOLE_UPDATE_PACKAGE` / `DHOLE_UPDATE_INDEX_URL`                    | 自更新的发行名与 `--index-url`（发布自己的发行版后设置）                                                                                                                                                                                           |
+| 变量                                                                 | 用途                                                                                                                          |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `DHOLE_SEARCH_PROXY`                                                 | 搜索引擎代理，逗号分隔可轮换；也自动读 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`。也可用 `dhole proxy add` 写入配置          |
+| `DHOLE_DEFAULT_ENGINES`                                              | 覆盖免密默认池，逗号分隔（默认 `baidu,bing,so360,bing_global,yandex,brave`）                                                  |
+| `DHOLE_SEARCH_DEADLINE`                                              | 单次搜索整体截止秒数（默认 16）                                                                                               |
+| `DHOLE_SEARCH_FEEDBACK`                                              | 设 `1` 开启域名偏好：抓成功的域名获得排序加权。默认关闭                                                                       |
+| `DHOLE_BROWSER_IDLE_TIMEOUT`                                         | 浏览器空闲关闭秒数（默认 300，`0` 永不关闭）                                                                                  |
+| `DHOLE_NO_BROWSER_PREWARM`                                           | 设 `1` 后启动不预热隐身浏览器（默认预热，为首次抓取省 3-5 秒冷启动）                                                          |
+| `DHOLE_TOOLS`                                                        | 只注册列出的工具，省连接期开销（`smart_fetch,smart_search` ≈ −49%）                                                           |
+| `DHOLE_DEFAULT_CONTENT_CHARS`                                        | 默认正文预算（40000，区间 500–200000）                                                                                        |
+| `DHOLE_SSRF_DNS_RECHECK`                                             | DNS 解析内网复查，**默认开启**；设 `0` 关闭。**fake-IP TUN 代理（Clash / sing-box 等）必须关**，否则所有公网站点都会被判成内网 |
+| `DHOLE_HOME`                                                         | 状态目录（默认 `~/.dhole`），装着抓到的正文明文与搜索词；共享机器上可指到别处                                                 |
+| `DHOLE_WORKDIR`                                                      | `parse` 解析相对路径时额外尝试的目录（排在 `cwd` 参数之后）                                                                   |
+| `DHOLE_HF_ENDPOINT`（或 `HF_ENDPOINT`）                              | 重排模型下载源；默认先试 `huggingface.co`、失败回退 `hf-mirror.com`，设了就只用这一个                                         |
+| `DHOLE_BRIGHTDATA_API_KEY` / `_ZONE` / `_COUNTRY`                    | Bright Data SERP 后端（zone 默认 `dhole`，地区默认 `us`）                                                                     |
+| `DHOLE_TAVILY_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_BOCHA_API_KEY` | 对应 keyed 引擎的密钥（均默认不跑）                                                                                           |
+| `DHOLE_USAGE_LOG`                                                    | 设 `1` 写本地调用日志（工具名 / 耗时 / 脱敏错误），不记参数值、不联网                                                         |
+| `DHOLE_NO_AUTO_REPAIR`                                               | 设 `1` 后入口遇到 ImportError 只打印修复命令，不自动重装                                                                      |
 
-**引擎冷却**：免密引擎连续 3 次连接失败（通常是被墙）冷却 10 分钟；被反爬封（403/429/503）冷却 60 秒。冷却**到期即自动放行**，也可 `dhole engines reset` / `cache_clear(engine_state=true)` 立即清空，`dhole engines list` 看每家的判定与剩余秒数。`engine_preempted` 不是冷却：那是"够数的引擎先答完、这一路被取消"，健康快池下是常态。
+**引擎冷却**：引擎连续失败会自动冷却（60 秒起，最多 10 分钟），一次成功即清零，到期自动放行。`dhole engines reset` 立即清空，`dhole engines list` 看每家的判定与剩余秒数。
 
 ### Keyed 搜索后端（brightdata / tavily / exa / bocha）
 
-配了 key 即启用，与免费引擎**并行**执行，但**默认不跑**：只有 `engines=[...]` 显式点名才调用（命中搜索缓存则连请求都不发），也不计入共识门槛。失败大多静默返回空（不影响本次搜索），**key 错误/过期除外** —— 会如实报 `error:...AuthError`，不伪装成「没有结果」，也不触发熔断。按次计费：请求发出即扣配额，所以提前返回时不会取消它。
+配了 key 即启用，与免费引擎**并行**执行，但**默认不跑**：只有 `engines=[...]` 显式点名才调用。按次计费，请求发出即扣配额。
 
-### 重排模型
+## 重排模型
 
-搜索排序由一个本地 cross-encoder 负责（「这条结果跟你的问题真有关吗」）。模型不进 wheel，首次神经搜索时下载到 `~/.dhole/models/<名字>/`；缺依赖或下载失败时自动退回跨引擎共识排序、不报错。
+搜索排序由一个本地 cross-encoder 负责。模型不进 wheel，首次神经搜索时下载到 `~/.dhole/models/<名字>/`；缺依赖或下载失败时自动退回共识排序、不报错。
 
 | 名字             | 语言                  | 体积   |
 | ---------------- | --------------------- | ------ |
@@ -165,46 +166,49 @@ dhole model                  # 列出可用模型 + 当前生效的那个
 dhole model use ms-marco     # 切换
 ```
 
-也可以直接编辑 `~/.dhole/config/reranker.json`（`{ "model": "ms-marco" }`）。未注册的名字会被拒绝并回退默认，不会静默换模型。下载可断点续传；**离线 / 多机复用**：把 `~/.dhole/models/<名字>/` 整个目录拷到目标机同一路径即可，之后不再联网。
+也可以直接编辑 `~/.dhole/config/reranker.json`（`{ "model": "ms-marco" }`）。未注册的名字会被拒绝并回退默认。下载可断点续传；**离线 / 多机复用**：把 `~/.dhole/models/<名字>/` 整个目录拷到目标机同一路径即可，之后不再联网。
 
-## 边界与前提
+## 故障排查
 
-- **搜索没有 SLA**：免密引擎是对公开搜索结果的直接抓取（无授权、无配额），对方改版、封 IP、收紧反爬时只会**静默降级**（熔断 / 冷却 / 退回共识排序），不报错。要可靠性用 `DHOLE_SEARCH_PROXY` 或 keyed 后端。
-- **合规自负**：不检查 `robots.txt` 的 Disallow（只读 sitemap 里的 `Sitemap:` 指令）；UA / TLS 指纹伪装、Cloudflare 验证求解是默认行为。目标站点 ToS 与当地法律由使用者承担。
-- **SSRF 防护**（前提：自己的机器、单用户）：入口 URL 与每一跳重定向都过 `validate_url`（IP 变体、云元数据、DNS rebinding、域名解析到内网即拒）；浏览器层拦截 JS 发起的请求，落地内网返回 `ssrf_blocked` 且不带正文，只豁免已过校验的入口站点（同主机异端口不豁免）；hosts 钉 `127.0.0.1` 放行、钉 `0.0.0.0` 拒绝。
-- **fake-IP TUN 会全线误报**：Clash / sing-box 的 fake-IP 把公网域名解析到保留段（`198.18.0.0/15`、`fc00::/7`），于是每个公网站点都被判成内网（报错会点名解析到的地址）。确认是这种环境设 `DHOLE_SSRF_DNS_RECHECK=0`；这是**全量开关**，不是域名白名单。
-- **残余风险**：DNS 校验与连接之间有 TOCTOU 窗口；3xx 目标仍会被请求一次（内容不回流）；浏览器层设了 `ignore_https_errors`，同网络位置的中间人可伪造这一层的内容（HTTP 层无此让步）。
-- **archive.org 第三层**（`smart_fetch` 专属）：升级链是 `http → stealthy → archive.org`，第三层只在硬阻断（404/410/451、网络失败、5xx、bot challenge）时触发，慢 10–30 秒且返回**某个日期的快照**（`metadata.source` / `metadata.archived_at`），**没有参数能关**。时效敏感的内容引用前先看 `source`。
-- **`content_ok=true` ≠ 内容可用**：判定只是 `2xx/3xx + 无 error + 正文非空`。占位页有软检测（词表 + 长度门限）但仍是打地鼠，存档内容见上条。几百字符的「成功」大概率是壳，引用前先看一眼字符量。
-- **字符集探测**：本地文件按 **BOM → `encoding=` → UTF-8 → GB18030** 严格试解，生效值见 `metadata.encoding`；带损伤（U+FFFD / 错码 / PUA）不算成功——正文照返，报 `encoding_undecodable` 并指 `encoding=` 重试。**缺口**：Shift_JIS / EUC-KR 会被解成「看似合理且零损伤的中文」，只能显式传 `encoding=shift_jis` / `euc-kr`；Latin-1 传 `encoding=cp1252`。
-- **提示注入**：抓回的正文是不可信数据，指令层已要求模型不执行页面里的「指令」（提示，非强制）；页面出现工具调用、密钥、上传指令时按提示注入处理。`is_official` 只对 gov / edu / github 为真，`docs.*` 子域不构成权威。
-- **上下文开销**：连接期固定成本 ≈12.6k 字符（≈3.3k token，每次连接付一次），`DHOLE_TOOLS` 只注册常用工具可省约一半。单次调用的正文才是大头（`smart_fetch` 默认 40k 字符、`smart_crawl` 硬顶 1M），杠杆在 `max_content_chars` / `max_total_chars` / `focus=` 和配置表的 `DHOLE_DEFAULT_CONTENT_CHARS`。**未改的缺口**：`smart_fetch(urls=[...])` 限 100 个 URL 但不限输出总量（满额外推 ≈1M token 单次调用），止损靠自己传 `max_content_chars`。
-- **响应信封固定**：30 个字段空值也照发（实测一次普通抓取 3,869 字符里 667 是信封，过半当场无信息），且 `content` 与 `structuredContent` 双发——客户端两种偏好都真实存在，砍掉哪份都会打断一批。
-
-**本机会留下什么**（全在 `~/.dhole/`，可用 `DHOLE_HOME` 换位置；POSIX 下目录 0700、文件 0600，Windows 上靠换位置 + NTFS ACL）：
-
-| 位置                                                 | 内容                                                                                                                |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `cache.db`                                           | 抓到的正文（明文 SQLite）。按请求上下文分区：带 cookies / 自定义头 / UA / 代理 / PDF 口令的抓取不与匿名请求共享缓存 |
-| `models/<model>/`                                    | 重排模型（3 个文件 + `model.sha256`）                                                                               |
-| `config/reranker.json`                               | 重排模型选择                                                                                                        |
-| `circuit_breaker.json`                               | 引擎熔断/冷却状态（到期自动放行）                                                                                   |
-| `engine_stats.json`                                  | 每个引擎最近一轮的解析产出（`dhole -v` 的 `engine yield` 读它）                                                     |
-| `search_proxies.json`                                | 代理池（凭据**明文**存储，`dhole proxy list` 显示时打码）                                                           |
-| `search_feedback.json` / `usage.jsonl` / `repair.py` | 域名偏好 / 调用日志 / 自愈脚本，分别对应上面三个开关                                                                |
-
-缓存 TTL 默认 1 小时；用默认值时 docs 页自动抬到 24h、article 页 6h；`cache_ttl=0` 完全绕过缓存。
+| 症状                     | 怎么办                                                                                                   |
+| ------------------------ | -------------------------------------------------------------------------------------------------------- |
+| 搜索结果很少或为空       | 引擎被限流或被墙。重试，或设 `DHOLE_SEARCH_PROXY`；`dhole engines probe` 看当下哪家能用                   |
+| 所有公网站点都报内网地址 | fake-IP TUN 代理（Clash / sing-box 等），设 `DHOLE_SSRF_DNS_RECHECK=0`                                   |
+| 抓取超时                 | `timeout` 是整次调用的墙钟预算，文档下载全额计入；大 PDF 请调大 `timeout`（默认 30000ms，上限 120000ms） |
+| 正文被截断               | 用 `offset` / `next_offset` 续取，或调大 `max_content_chars`（上限 200000）                              |
+| 返回了内容但明显是壳     | `content_ok=true` 只表示「2xx + 无错 + 正文非空」，先看字符量；几百字符的「成功」大概率是占位页           |
+| 本地文件解析成乱码       | 显式传 `encoding=`。Shift_JIS / EUC-KR 会被解成看似合理的中文，不在自动探测范围内                        |
+| 装不上 / 工具没注册      | 跑 `dhole --doctor`，它会逐项定位并给出可直接复制的修复命令                                              |
 
 ## 已知限制
 
 - 无法绕过 DataDome / Akamai / 交互式 Turnstile；需要登录的网站不在设计范围内
-- 引擎可达性：`baidu` / `bing` / `yandex` 国内直连；`brave` / `duckduckgo` / `yahoo` 与 opt-in 的 `bing_global` / `mwmbl` 需要 VPN 或代理；`so360` / `sogou` 是国内直连的 opt-in
-- 引擎被限速时自动熔断冷却（60 秒），重度使用建议配置代理
-- PDF 口令：用 `password=` 选项；没给或给错时会**明确说是口令问题**，不混进「文件打不开」
-- 单次 `smart_crawl` 存在 **1,000,000 字符总预算硬顶**（`max_total_chars` 被钳在这个值）：不显式给 `max_total_chars` 时按 `max_pages × max_content_chars_per` 推导（默认 80,000）；**显式给了之后调 `max_pages` 不再影响预算**。要更多内容得抬 `max_total_chars`（≈25 万 token 一个响应，先想想值不值），或用 `crawl_urls=[...]` 分阶段取
-- `smart_crawl` 的 `path_include`/`path_exclude` 按**路径子树**匹配，不是字符串前缀：`'/docs'`（`'docs'`、`'/docs/'`、`'/docs/*'` 等价）命中 `/docs` 及其下全部，但**不**命中 `/docs-old`、`/docsomething`；`'/'` 或 `'*'` 表示全部。**只接受尾部 `/*` 这一种通配写法**，其余（如 `'/api/*/v1'`）会直接报错 —— 早期版本用 `startswith` 匹配，上面四种写法里两种会**静默**过滤掉整个爬取、一种会多抓兄弟目录、一种完全不生效，都是「看起来成功」的失败
+- **搜索没有 SLA**：免密引擎是对公开搜索结果的直接抓取（无授权、无配额），对方改版或封 IP 时只会静默降级，不报错。要可靠性用 `DHOLE_SEARCH_PROXY` 或 keyed 后端
+- 引擎可达性：默认池里 `baidu` / `bing` / `yandex` 国内直连稳定；`so360` 按 IP 频次限流，`bing_global` / `brave` 无代理时不稳，任何时刻都可能有引擎不答话
+- **合规自负**：不检查 `robots.txt` 的 Disallow；UA / TLS 指纹伪装、Cloudflare 验证求解是默认行为。目标站点 ToS 与当地法律由使用者承担
+- 抓回的正文是**不可信数据**：页面里出现工具调用、密钥、上传指令时按提示注入处理
+- `archive.org` 回退会返回**某个日期的快照**（看 `metadata.source` / `metadata.archived_at`），时效敏感的内容引用前先确认
+- `pages=` 只减少 PDF **抽取**的内容，文件仍然整个下载
+- 正文 **50MB 硬顶**，且在下载**之前**守门：装不下的直接报 `Response body too large`，抬 `timeout` 没用
+- `smart_crawl` 总预算硬顶 1,000,000 字符；显式给了 `max_total_chars` 之后，调 `max_pages` 不再影响预算
+- `path_include` / `path_exclude` 按**路径子树**匹配：`'/docs'` 命中 `/docs` 及其下全部，但**不**命中 `/docs-old`；只接受尾部 `/*` 一种通配写法
+- 连接期固定开销 ≈12.6k 字符（≈3.3k token，每次连接付一次），`DHOLE_TOOLS` 只注册常用工具可省约一半
 - YouTube 仅能获取少量文本
-- 引擎存活不做主动巡检，但每轮真实搜索都会记下解析产出（`dhole -v` 的 `engine yield` 行能区分「被墙」与「答了但解析不出来」）；opt-in 引擎里垂直索引（`sogou_weixin`）在无重排器时排在通用引擎之后，也不能独自填满早退配额
+
+## 本地数据
+
+全在 `~/.dhole/`（可用 `DHOLE_HOME` 换位置；POSIX 下目录 0700、文件 0600）：
+
+| 位置                                                 | 内容                                                      |
+| ---------------------------------------------------- | --------------------------------------------------------- |
+| `cache.db`                                           | 抓到的正文（明文 SQLite），TTL 默认 1 小时                |
+| `models/<model>/`                                    | 重排模型                                                  |
+| `config/reranker.json`                               | 重排模型选择                                              |
+| `circuit_breaker.json` / `engine_stats.json`         | 引擎冷却状态 / 各引擎解析产出                             |
+| `search_proxies.json`                                | 代理池（凭据**明文**存储，`dhole proxy list` 显示时打码） |
+| `search_feedback.json` / `usage.jsonl` / `repair.py` | 域名偏好 / 调用日志 / 自愈脚本                            |
+
+`cache_ttl=0` 完全绕过缓存；用默认值时 docs 页自动抬到 24h、article 页 6h。
 
 ## 贡献
 
