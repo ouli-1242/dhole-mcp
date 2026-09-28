@@ -485,7 +485,7 @@ _STRUCTURED_CONTENT = _env_flag("DHOLE_STRUCTURED_CONTENT")
 # what our responses guarantee rather than read the instructions and trust it.
 # Off by default because it is not free - the schema rides on tools/list, the
 # same connect-time payload the token audit spent this session shrinking:
-# measured on the wire, 3,101 extra chars (tools/list 19,585 -> 22,686).
+# measured on the wire, 3,101 extra chars (tools/list 19,141 -> 22,242).
 #
 # Declaring it and emitting structuredContent are ONE decision, not two: the
 # spec makes the payload mandatory where a schema exists, so a configuration
@@ -532,7 +532,7 @@ IDLE_CHECK_INTERVAL = 60  # How often to check for idle sessions (seconds)
 # Why it is tunable at all: ONE fetch at the 40,000 default returns more context
 # than the entire tools/list table costs on EVERY connect - measured on
 # docs.python.org/3/library/asyncio-task.html, 42,037 chars against the table's
-# 19,585 (~4.7k cl100k tokens). The per-call body, not the schemas, is where the
+# 19,141 (~4.6k cl100k tokens). The per-call body, not the schemas, is where the
 # tokens go; the same page at 8,000 costs ~9,500 chars with no content lost
 # (next_offset continues).
 # Clamped to the documented range so an env typo cannot produce a 1-char budget
@@ -773,7 +773,7 @@ class CacheInfoModel(BaseModel):
     message: str = Field(description="Result message")
     purged: int = Field(default=0, description="Entries purged")
     engine_state_reset: bool = Field(default=False, description="True when engine_state=true also forgot engine cooldowns + yield history (circuit_breaker.json, engine_stats.json).")
-    engine_health: Dict[str, Any] = Field(default_factory=dict, description="Per-engine pool health as dhole currently sees it: last status, yield verdict, and cooldown_seconds_left while an engine is on cooldown. Populated ONLY when engine_state=true; empty on a plain cache_clear (which is about the content cache and does not pay ~1KB for search-pool state).")
+    engine_health: Dict[str, Any] = Field(default_factory=dict, description="Per-engine pool health as dhole currently sees it: last status, yield verdict, and cooldown_seconds_left while an engine is on cooldown. Populated ONLY when engine_state=true; empty on a plain cache_clear.")
 
 
 # ─── Wire compaction (tokens paid on EVERY call, not once) ──────────────────
@@ -4293,10 +4293,10 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
 # Which tools this server registers and dispatches. Default: ALL of them.
 # DHOLE_TOOLS takes a comma-separated subset ("smart_fetch,smart_search") for
 # clients that pay the connect-time table on every conversation even when dhole
-# is never called: measured on the wire, 19,585 chars of tool schemas + 2,141 of
-# instructions = 21,726 on connect (~5.2k tokens at cl100k - chars is the half
-# that reproduces; the usual chars/4 rule of thumb reads 5.4k and chars/3.88
-# reads 5.6k, both high), with smart_fetch alone accounting for
+# is never called: measured on the wire, 19,141 chars of tool schemas + 2,141 of
+# instructions = 21,282 on connect (~5.1k tokens at cl100k - chars is the half
+# that reproduces; the usual chars/4 rule of thumb reads 5.3k and chars/3.88
+# reads 5.5k, both high), with smart_fetch alone accounting for
 # 6,508 - fetch+search covers the daily-driver cases at roughly half the cost,
 # and the rest is one env-edit away. A name that is not a real tool RAISES at
 # import: a typo must never silently drop a capability the operator believes is
@@ -7285,8 +7285,8 @@ class MasterFetchServer:
         """Local keyless web search (no API key, no account, no third-party service).
 
         Runs keyless backends in parallel (14 registered; default pool:
-        baidu, bing, so360, bing_global, yandex, brave - engines= to choose,
-        opt-in: baidu_baike, duckduckgo, mwmbl, sogou, sogou_weixin,
+        baidu, bing, sogou, bing_global, yandex, brave - engines= to choose,
+        opt-in: baidu_baike, duckduckgo, mwmbl, so360, sogou_weixin,
         wikipedia, grokipedia, yahoo), merges + dedups + ranks by cross-backend
         consensus (a URL returned by several independent indexes is an authority
         signal). With dhole-mcp[all] installed an ONNX cross-encoder also reranks
@@ -7524,19 +7524,19 @@ class MasterFetchServer:
         },
         {
             "name": "smart_search",
-            "description": "Keyless multi-engine web search (default pool: baidu,bing,so360,bing_global,yandex,brave; opt-in engines are listed under options.engines). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- fetch_content=true auto-fetches the top 3; otherwise smart_fetch the high fetch_relevance hits with focus=. Don't search for a URL you already have - smart_fetch it directly.\n- min_relevance (0-1) cuts results the neural reranker scored below it on the NORMALIZED score (top = 1.0 by definition): it trims off-topic filler from a spread set, it cannot reject a whole bad round. min_raw_relevance floors the RAW score and is the one that answers 'was any of this relevant'.\n- Result fields: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index FAMILIES, not raw hits, so a low value can mean a degraded pool - check consensus_basis.",
+            "description": "Keyless multi-engine web search (default pool: baidu,bing,sogou,bing_global,yandex,brave; opt-in engines are listed under options.engines). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- fetch_content=true auto-fetches the top 3; otherwise smart_fetch the high fetch_relevance hits with focus=. Don't search for a URL you already have - smart_fetch it directly.\n- min_relevance (0-1) cuts results the neural reranker scored below it on the NORMALIZED score (top = 1.0 by definition): it trims off-topic filler from a spread set, it cannot reject a whole bad round. min_raw_relevance floors the RAW score and is the one that answers 'was any of this relevant'.\n- Result fields: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index FAMILIES, not raw hits, so a low value can mean a degraded pool - check consensus_basis.",
             "inputSchema": {
                 "type": "object", "required": ["query"],
                 "properties": {
                     "query": {"type": "string", "description": "Search query"},
-                    "options": {"type": "object", "description": "max_results: 1-50 (default 6). page: 0-10. cache_ttl: seconds (300).\nengines: override the pool, max 9. Opt-in: baidu_baike, duckduckgo, mwmbl, sogou, sogou_weixin, wikipedia, grokipedia, yahoo.\nsite: restrict to one domain. exclude_sites: list. location, language (2-letter), region.\nfreshness: day|week|month|year. after: a date, 'newer than' - no engine takes an absolute range, so it is widened to the narrowest preset covering it and date_filter reports what was actually sent. before: refused rather than ignored (presets only bound 'not older than' and results carry no publish date); for dated items use feed_fetch(since=).\nmode: auto|neural|find_similar (find_similar needs url=). fetch_content (bool, false).\nmin_relevance: 0-1 cutoff on the NORMALIZED rerank score - needs the [all] extra + model, ignored when no reranker is available.\nmin_raw_relevance: 0-1 floor on the reranker's RAW score instead, so a whole round can be called irrelevant - normalization pins the top hit at 1.0, which a normalized floor can never reject. Off-topic scores ~0.0001, on-topic 0.93+, so 0.1 is the starting point; when it filters, fetch_hint reports the raw span this round had.", "additionalProperties": True},
+                    "options": {"type": "object", "description": "max_results: 1-50 (default 6). page: 0-10. cache_ttl: seconds (300).\nengines: override the pool, max 9. Opt-in: baidu_baike, duckduckgo, mwmbl, so360, sogou_weixin, wikipedia, grokipedia, yahoo.\nsite: restrict to one domain. exclude_sites: list. location, language (2-letter), region.\nfreshness: day|week|month|year. after: a date, 'newer than' - no engine takes an absolute range, so it is widened to the narrowest preset covering it and date_filter reports what was actually sent. before: refused rather than ignored (presets only bound 'not older than' and results carry no publish date); for dated items use feed_fetch(since=).\nmode: auto|neural|find_similar (find_similar needs url=). fetch_content (bool, false).\nmin_relevance: 0-1 cutoff on the NORMALIZED rerank score - needs the [all] extra + model, ignored when no reranker is available.\nmin_raw_relevance: 0-1 floor on the reranker's RAW score instead, so a whole round can be called irrelevant - normalization pins the top hit at 1.0, which a normalized floor can never reject. Off-topic scores ~0.0001, on-topic 0.93+, so 0.1 is the starting point; when it filters, fetch_hint reports the raw span this round had.", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
         },
         {
             "name": "cache_clear",
-            "description": "Clear the fetch cache: all=true wipes everything, the default removes only expired entries. To re-fetch one URL fresh, pass cache_ttl=0 to smart_fetch/smart_crawl instead.\nengine_state=true also forgets engine cooldowns + yield history - use it when the same engines keep getting skipped after the network changed (VPN on) - and makes the reply include engine_health. A plain call reports counts only.",
+            "description": "Clear the fetch cache: all=true wipes everything, the default removes only expired entries. To re-fetch one URL fresh, pass cache_ttl=0 to smart_fetch/smart_crawl instead.\nAlso forgotten: robots.txt verdicts, and every session's cookie jar - close_session drops one session and keeps the cache.\nengine_state=true additionally forgets engine cooldowns + yield history - use it when the same engines keep getting skipped after the network changed (VPN on) - and adds engine_health to the reply.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -7589,12 +7589,12 @@ class MasterFetchServer:
         },
         {
             "name": "close_session",
-            "description": "See which sessions hold site credentials, or forget one (all=true: every one). A session_id from options.session_id keeps the cookies a host set for 24h and may also have a browser running; a login you no longer need is a live credential until this drops it or it expires. Values are NEVER returned, only names + hosts + how long until they lapse.\n- No arguments = the census (nothing is closed): every id, its hosts and cookie names, the soonest expiry, whether a browser is open. An id that holds nothing is an error naming the ids that do.\n- cache_clear wipes jars too, but with the whole content cache; this is the targeted one.\n- all=true also gives up the pre-warmed browser, so the next stealthy fetch pays a 3-5s cold start - the reply says when it did. Refused together with session_id.",
+            "description": "See which sessions still hold site credentials, or forget one.\n- No arguments = the census, closing nothing: every id with its hosts, cookie names (values are never returned), soonest expiry, and whether a browser is open under it.\n- session_id='<name>' drops that one; all=true drops every one; both also close any browser under the id. Naming both is refused.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "session_id": {"type": "string", "description": "The session to forget (its cookie jar plus any browser under that id). Omit to list what is open."},
-                    "all": {"type": "boolean", "description": "true = forget every session, jars and browsers alike (false = only the one named)."},
+                    "session_id": {"type": "string", "description": "The options.session_id to forget."},
+                    "all": {"type": "boolean", "description": "true = every session, not just the one named."},
                 },
             },
             "annotations": {"readOnlyHint": False, "destructiveHint": True,

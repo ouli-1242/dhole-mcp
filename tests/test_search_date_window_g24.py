@@ -60,7 +60,7 @@ class TestTheTableIsTheEngines:
     def test_the_default_pool_split_is_what_the_report_measured(self):
         filtered, unfiltered = date_support(POOL)
         assert filtered == ["bing", "bing_global", "brave"]
-        assert unfiltered == ["baidu", "so360", "yandex"]
+        assert unfiltered == ["baidu", "sogou", "yandex"]
 
     def test_an_unknown_engine_counts_as_unfiltered(self):
         assert date_support(["newengine"]) == ([], ["newengine"])

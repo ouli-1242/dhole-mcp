@@ -7,7 +7,7 @@ server / MCP / images / videos / news / books / extract / cache / network bloat.
 See the ddgs LICENSE notice in NOTICE.ddgs.txt for full attribution.
 
 Backends (all keyless, no API key, no account): the default pool is baidu, bing,
-so360, bing_global, yandex, brave, with duckduckgo / yahoo / sogou_weixin / sogou /
+sogou, bing_global, yandex, brave, with duckduckgo / yahoo / sogou_weixin / so360 /
 baidu_baike / mwmbl / wikipedia / grokipedia available by name as opt-in backends.
 They run in PARALLEL; a backend that
 CAPTCHAs / rate-limits / has no topic-match simply yields
@@ -1093,7 +1093,7 @@ _DHOLE_TO_BACKEND = {
     "brave": "brave", "yandex": "yandex", "sogou_weixin": "sogou_weixin",
     "grokipedia": "grokipedia",
     "baidu": "baidu", "baidu_baike": "baidu_baike",
-    # 国内独立索引：so360 在默认池里，sogou 是 opt-in（同生态位，两家都按 IP 限流，
+    # 国内独立索引：sogou 在默认池里，so360 是 opt-in（同生态位，两家都按 IP 限流，
     # 默认池只点一家）。"360" 是 so360 的顺手别名（引擎名以数字开头不合本项目的命名习惯）。
     "so360": "so360", "360": "so360", "sogou": "sogou",
     # bing_global 是 www.bing.com 那套国际索引（与 cn 版结果几乎不重合，但国内直连常需
@@ -1106,13 +1106,14 @@ _DHOLE_TO_BACKEND = {
     "exa": "exa",
     "bocha": "bocha",
 }
-# 默认池 = 国内 3（baidu/bing/so360）+ 国际 3（bing_global/yandex/brave），全 keyless。
+# 默认池 = 国内 3（baidu/bing/sogou）+ 国际 3（bing_global/yandex/brave），全 keyless。
 # 让出席位的 duckduckgo/yahoo 仍是注册引擎、可显式点名：它们与 bing 同一个索引家族，
-# 在池里只多入口不多家族（共识分母不变），而 so360 是第三个国内独立索引。
+# 在池里只多入口不多家族（共识分母不变），而占这一席的得是独立索引才多一个家族
+# （16.1 前是 so360，现在换成同生态位的 sogou）。
 # sogou_weixin 是垂直索引（只覆盖公众号），从默认池移出但保留注册：显式
 # engines=["sogou_weixin"] 仍可搜公众号。baidu_baike 同 wikipedia 一样是知识库
 # 覆盖窄（名词/概念有效，教程/实时信息常空），也 opt-in。
-_DEFAULT_BACKENDS = ["baidu", "bing", "so360", "bing_global", "yandex", "brave"]
+_DEFAULT_BACKENDS = ["baidu", "bing", "sogou", "bing_global", "yandex", "brave"]
 
 # 垂直索引：只覆盖某一类内容（sogou_weixin = 微信公众号文章），不是通用网络索引。
 # 这里用它的地方只有一处 —— 早退配额的归属（见 multi_search 里 general_n 那段）。
@@ -1167,15 +1168,15 @@ class SogouWeixin(BaseSearchEngine):
 _TEXT_ENGINES["sogou_weixin"] = SogouWeixin
 
 
-# ─── 360 搜索（so.com，独立索引，默认池） ────────────────────────────────────
+# ─── 360 搜索（so.com，独立索引，opt-in） ────────────────────────────────────
 class So360(BaseSearchEngine):
     """360 搜索（www.so.com/s?q=）：国内直连、服务端渲染，独立索引（360 自家爬虫）。
 
     结果 href 是 ``so.com/link?m=<token>`` 跳转包装，真实 URL 在卡片的
     ``data-mdurl`` 属性里（实测直接可读）—— 与百度 ``mu`` 同一套思路：只交真链，
     拿不到真链的卡片丢掉。分页 ``&pn=<页码>``（实测 page1∩page2 = 0）。
-    **在默认池的国内 3 席里**：baidu/bing 之外第三个国内可达的独立索引。与 sogou 同
-    生态位（两家都按 IP 限流），所以默认池只点这一家，sogou 仍为 opt-in。
+    **opt-in，不进默认池**：与 sogou 同生态位（国内第三个可达的独立索引，两家都按
+    IP 限流），默认池的国内 3 席只点这一家，16.1 起那一家是 sogou。
     """
 
     name = "so360"
@@ -1221,7 +1222,7 @@ class So360(BaseSearchEngine):
         return out
 
 
-# ─── 搜狗主站（sogou.com/web，独立索引，opt-in） ─────────────────────────────
+# ─── 搜狗主站（sogou.com/web，独立索引，默认池） ─────────────────────────────
 class Sogou(BaseSearchEngine):
     """搜狗网页搜索（www.sogou.com/web?query=）：国内直连、服务端渲染。
 
@@ -1231,7 +1232,8 @@ class Sogou(BaseSearchEngine):
 
     索引家族与 sogou_weixin 合并为 ``sogou`` —— 同属搜狗（一个公众号垂直 + 一个
     通用），同一 URL 被两者同时返回只算一个家族：宁可少报共识，也不虚报。
-    **opt-in，不进默认池**。分页 ``&page=<页码>``（实测 page1∩page2 = 0）。
+    **在默认池的国内 3 席里**（16.1 前这一席是 so360，两家同生态位、都按 IP 限流，
+    默认池只点一家）。分页 ``&page=<页码>``（实测 page1∩page2 = 0）。
     """
 
     name = "sogou"

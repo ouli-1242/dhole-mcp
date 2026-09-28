@@ -1159,11 +1159,13 @@ class TestQueryMapNamesAreReal:
         assert intent == "research"
         q = "transformer attention mechanism research"
         # duckduckgo / yahoo 自 15.2 起不在默认池，显式加回来：钉的是它们的归类。
+        # so360 自 16.1 起同理（席位换给了同生态位的 sogou）。
         qm = search._generate_query_map(
-            q, intent, [*se.DEFAULT_ENGINES, "duckduckgo", "yahoo"])
+            q, intent, [*se.DEFAULT_ENGINES, "duckduckgo", "yahoo", "so360"])
         assert qm, "research 意图应当展开"
         assert qm["bing"] == q, "bing 在默认池里，不该是被改写提问的那一个"
-        assert qm["so360"] == q, "so360 是中文索引，英文展开词只会让它搜不到东西"
+        assert qm["sogou"] == q, "sogou 是中文索引，英文展开词只会让它搜不到东西"
+        assert qm["so360"] == q, "换下席位的 so360 归类不变：同样是中文索引"
         assert qm["duckduckgo"] == q and qm["brave"] == q and qm["yahoo"] == q
         assert qm["yandex"] != q, "yandex 才是指定的多样性引擎"
         # bing_global 也是多样性引擎：国际索引正该拿英文展开词

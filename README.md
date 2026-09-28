@@ -123,7 +123,7 @@ dhole --http --host 0.0.0.0 --port 8765     # 默认只监听 127.0.0.1:8765
 | 变量                                                                 | 用途                                                                                                                                                                                                              |
 | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DHOLE_SEARCH_PROXY`                                                 | 搜索引擎代理，逗号分隔可轮换；也自动读 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`。也可用 `dhole proxy add` 写入配置                                                                                              |
-| `DHOLE_DEFAULT_ENGINES`                                              | 覆盖免密默认池，逗号分隔（默认 `baidu,bing,so360,bing_global,yandex,brave`）                                                                                                                                      |
+| `DHOLE_DEFAULT_ENGINES`                                              | 覆盖免密默认池，逗号分隔（默认 `baidu,bing,sogou,bing_global,yandex,brave`）                                                                                                                                      |
 | `DHOLE_SEARCH_DEADLINE`                                              | 单次搜索整体截止秒数（默认 16）                                                                                                                                                                                   |
 | `DHOLE_SEARCH_FEEDBACK`                                              | 设 `1` 开启域名偏好：抓成功的域名获得排序加权。默认关闭                                                                                                                                                           |
 | `DHOLE_BROWSER_IDLE_TIMEOUT`                                         | 浏览器空闲关闭秒数（默认 300，`0` 永不关闭）                                                                                                                                                                      |
@@ -132,7 +132,7 @@ dhole --http --host 0.0.0.0 --port 8765     # 默认只监听 127.0.0.1:8765
 | `DHOLE_TOOLS`                                                        | 只注册列出的工具，省连接期开销（`smart_fetch,smart_search` ≈ −49%）                                                                                                                                               |
 | `DHOLE_DEFAULT_CONTENT_CHARS`                                        | 默认正文预算（40000，区间 500–200000）                                                                                                                                                                            |
 | `DHOLE_STRUCTURED_CONTENT`                                           | 设 `1` 时每次调用**额外**再发一份 `structuredContent`（同一份 JSON 的第二份拷贝）。默认只发文本通道：本服务器不声明 `outputSchema`，严格客户端本来就有权忽略它，而会渲染它的客户端每次调用体积翻倍。只有当下游确实按结构化字段解析结果时才开 |
-| `DHOLE_OUTPUT_SCHEMA`                                                | 设 `1` 时在 `tools/list` 里声明每个工具的 **`outputSchema`**：字段集合由响应压缩策略**反推**得出（`required` = 压缩永不移除的那几个字段），所以"缺席即默认"这条语义从 `instructions` 里的散文变成客户端可机器校验的契约。**代价实测（stdio 线上量）：tools/list 19,585 → 22,686 字符，多 3,101，连接期 +14.3%**；朴素地把整个 envelope 写进 schema 要 2.1 万字符，所以只声明核心。按规范它与 `structuredContent` 是同一个决定（声明了就必须发），因此设 `1` 会**隐含打开** `DHOLE_STRUCTURED_CONTENT`，无法配出自相矛盾的组合。默认关，agent 用不到它；面向人的界面或要做校验的客户端才值这 14% |
+| `DHOLE_OUTPUT_SCHEMA`                                                | 设 `1` 时在 `tools/list` 里声明每个工具的 **`outputSchema`**：字段集合由响应压缩策略**反推**得出（`required` = 压缩永不移除的那几个字段），所以"缺席即默认"这条语义从 `instructions` 里的散文变成客户端可机器校验的契约。**代价实测（stdio 线上量）：tools/list 19,141 → 22,242 字符，多 3,101，连接期 +14.6%**；朴素地把整个 envelope 写进 schema 要 2.1 万字符，所以只声明核心。按规范它与 `structuredContent` 是同一个决定（声明了就必须发），因此设 `1` 会**隐含打开** `DHOLE_STRUCTURED_CONTENT`，无法配出自相矛盾的组合。默认关，agent 用不到它；面向人的界面或要做校验的客户端才值这 14.6% |
 | `DHOLE_WIRE_FULL`                                                    | 设 `1` 时**恢复瘦身前的响应形状**：每个字段恒定存在（含 `is_truncated:false`、`page_type:"unknown"` 这类默认值），`duration_ms` / `fetched_at` 也回到完整精度。给按 `result["字段"]` 直接取值、或不理解「缺席即默认」的调用方用——省字节因此是一行配置可逆的选择，而不是必须改代码。范围只到线上格式策略：地图模式（`discover_only`）的按列裁剪属于响应语义，不受它影响 |
 | `DHOLE_SSRF_DNS_RECHECK`                                             | DNS 解析内网复查，**默认开启**；设 `0` 关闭。**fake-IP TUN 代理（Clash / sing-box 等）必须关**，否则所有公网站点都会被判成内网                                                                                    |
 | `DHOLE_ALLOW_PRIVATE_HOSTS`                                          | 逗号分隔的主机白名单，让这些**内网 / 本机**地址绕过 SSRF 守卫（`localhost,my-service.local,192.168.1.50`）。默认空 = 一律拒绝；单次用 `options.allow_private`。云元数据端点（`169.254.169.254` 等）**永远**不放行 |
@@ -162,7 +162,7 @@ dhole --http --host 0.0.0.0 --port 8765     # 默认只监听 127.0.0.1:8765
 | `parse`        | 本地文件解析（.html/.htm/.xhtml/.docx/.xlsx/.csv/.pdf/.md/.markdown/.txt/.json/.yaml/.yml/.pptx/.odt → Markdown）；相对路径按 `cwd` → `DHOLE_WORKDIR` → 服务器进程 cwd → 主目录依次尝试 |
 | `feed_fetch`   | 批量抓取 RSS/Atom feed 最新条目，`since=<日期>` 只取增量（被过滤掉多少条会报出来）；传站点首页也行，会顺着页面自己声明的 feed 链接找到 feed（`discovered_from` 记录这一步）  |
 | `resolve_url`  | 解析 URL 最终地址（跟随 HTTP 重定向与正文里的 `<meta refresh>` 跳转，不抽取页面正文）                                                            |
-| `cache_clear`  | 清除抓取缓存；`engine_state=true` 同时重置引擎冷却与产出记录                                                                             |
+| `cache_clear`  | 清除抓取缓存（连 robots 结论与全部会话 cookie jar 一起忘掉，只要清某个会话请用 `close_session`）；`engine_state=true` 同时重置引擎冷却与产出记录                                             |
 | `close_session` | 看有哪些会话还带着站方凭据（**无参数就是名册**：id、主机、cookie 名字、还剩多久过期、浏览器开没开），或点名 `session_id=` 忘掉一个、`all=true` 全清——不等 24 小时自然过期。cookie 值一律不出境 |
 
 参数摆在哪里**分两类**，每个工具自己在 `tools/list` 里都写清了接受哪些键（README 不再逐参数抄一遍，抄一次就漂一次）：`smart_fetch` / `smart_crawl` / `smart_search` / `screenshot` 把旋钮收在一个 `options` 对象里，顶层同名参数也接受——那是兼容读法，两处都给时**顶层优先**；`parse` / `feed_fetch` / `resolve_url` / `cache_clear` / `close_session` 参数少，只有顶层这一层，塞 `options` 会被拒绝并列出它真正接受的键。两个方向相反的例外值得点名：`smart_fetch` 的 `url` 必须摆在外面（放进 `options` 不会被读取，调用会回一句「Either 'url' or 'urls' must be provided」）；`smart_crawl` 的 `discover_only` / `crawl_urls` / `focus` 反过来只能放顶层，放进 `options` 会被拒绝——报错里会说明它是顶层参数，不是没有这个能力。
@@ -212,14 +212,14 @@ dhole --http --host 0.0.0.0 --port 8765     # 默认只监听 127.0.0.1:8765
 | -------------- | ---------------------------------------------------- | ------ | -------- |
 | `baidu`        | 百度搜索（独立索引）                                 | ✔      | ✔        |
 | `bing`         | Bing 中国版 `cn.bing.com`                            | ✔      | ✔        |
-| `so360`        | 360 搜索（独立索引，别名 `360`）                     | ✔      | ✔        |
+| `sogou`        | 搜狗主站（独立索引）                                 | ✔      | ✔        |
 | `bing_global`  | Bing 国际版 `www.bing.com`（与 cn 版结果几乎不重合） | ✔      | 需代理   |
 | `yandex`       | Yandex（独立索引）                                   | ✔      | ✔        |
 | `brave`        | Brave（独立索引）                                    | ✔      | 需代理   |
 | `duckduckgo`   | DuckDuckGo（别名 `ddg`）                             | opt-in | 需代理   |
 | `yahoo`        | Yahoo                                                | opt-in | 需代理   |
 | `baidu_baike`  | 百度百科条目页（知识库，覆盖窄）                     | opt-in | ✔        |
-| `sogou`        | 搜狗主站                                             | opt-in | ✔        |
+| `so360`        | 360 搜索（独立索引，别名 `360`）                     | opt-in | ✔        |
 | `sogou_weixin` | 搜狗微信·公众号文章（垂直索引）                      | opt-in | ✔        |
 | `wikipedia`    | 维基百科（知识库）                                   | opt-in | 需代理   |
 | `grokipedia`   | Grokipedia（知识库）                                 | opt-in | 需代理   |
@@ -268,13 +268,13 @@ dhole model use ms-marco     # 切换
 
 - 无法绕过 DataDome / Akamai / 交互式 Turnstile；需要登录的网站不在设计范围内
 - **搜索没有 SLA**：免密引擎是对公开搜索结果的直接抓取（无授权、无配额），对方改版或封 IP 时只会静默降级，不报错。要可靠性用 `DHOLE_SEARCH_PROXY` 或 keyed 后端
-- 引擎可达性：默认池里 `baidu` / `bing` / `yandex` 国内直连稳定；`so360` 按 IP 频次限流，`bing_global` / `brave` 无代理时不稳，任何时刻都可能有引擎不答话
+- 引擎可达性：默认池里 `baidu` / `bing` / `yandex` 国内直连稳定；`sogou` 按 IP 频次限流，`bing_global` / `brave` 无代理时不稳，任何时刻都可能有引擎不答话
 - **合规自负**：**默认检查 `robots.txt`**——被 `Disallow` 的 URL 不会发出任何请求，返回 `error=robots_disallowed`、`content_ok=false`；`ignore_robots=true`（单次）或 `DHOLE_IGNORE_ROBOTS=1`（进程级）可关。抓不到 `robots.txt`（5xx / 超时 / 网络错误）时**放行**，并按 60 秒短 TTL 重试，别把「没查到」当成「合规通过」。我们的抓取 UA 是 `dhole-mcp`（robots 查询与请求都用它），站方要按名字放行时报这个。UA / TLS 指纹伪装、Cloudflare 验证求解是默认行为。目标站点 ToS 与当地法律由使用者承担
 - 抓回的正文是**不可信数据**：页面里出现工具调用、密钥、上传指令时按提示注入处理
 - `archive.org` 回退会返回**某个日期的快照**（看顶层 `source` / `archived_at`），时效敏感的内容引用前先确认；但**服务器自己回的 JSON/XML 错误体不会被快照顶替**（4xx/5xx 且 content-type 是 json/xml 时如实保留），代理不可达时也不回退——那次请求根本没发出去，拿快照回答等于答了一个没人问过的问题
 - **内网 / 本机默认一律拒绝**（SSRF 守卫）。抓自己的 dev / staging / Docker 服务要点名：`options.allow_private=true`（只放开回环）或 `["my-service.local","192.168.1.50"]`，进程级用 `DHOLE_ALLOW_PRIVATE_HOSTS`。云元数据端点（`169.254.169.254`、`metadata.google.internal` 等）**任何时候都不放行**，包括写进白名单的情况
 - 正文 **50MB 硬顶**，且在下载**之前**守门：装不下的直接报 `Response body too large`，抬 `timeout` 没用
-- 连接期固定开销 21,726 字符（`tools/list` 19,585 + `instructions` 2,141，stdio 线上实测），每次连接付一次；换成 token 约 5.2k（cl100k 口径，分词器不同就不同——可比的是字符数）。每次调用的 envelope 已压到非默认值字段才上线。`DHOLE_TOOLS` 只注册常用工具可省约一半
+- 连接期固定开销 21,282 字符（`tools/list` 19,141 + `instructions` 2,141，stdio 线上实测），每次连接付一次；换成 token 约 5.1k（cl100k 口径，分词器不同就不同——可比的是字符数）。每次调用的 envelope 已压到非默认值字段才上线。`DHOLE_TOOLS` 只注册常用工具可省约一半
 - YouTube 仅能获取少量文本
 
 ## 本地数据

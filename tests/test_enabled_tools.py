@@ -1,10 +1,10 @@
 """Connect-time token spend: DHOLE_TOOLS registers only a subset of the 9 tools.
 
 Why this file exists: the tools/list table plus instructions is paid on EVERY
-connect, even when dhole is never called. Measured after the token audit: 19,585
-chars of tool schemas + 2,141 chars of instructions per conversation = 21,726
-chars, which that tokenizer run counts as ~5.2k cl100k tokens (4.16 chars per
-token for this payload; the repo's older 3.88 divisor read 5.6k and was high),
+connect, even when dhole is never called. Measured after the token audit: 19,141
+chars of tool schemas + 2,141 chars of instructions per conversation = 21,282
+chars, which that tokenizer run counts as ~5.1k cl100k tokens (4.16 chars per
+token for this payload; the repo's older 3.88 divisor read 5.5k and was high),
 with smart_fetch alone at 6,508 chars.
 ``DHOLE_TOOLS=smart_fetch,smart_search`` keeps the daily drivers at roughly half
 that cost; everything else stays one env-edit away.

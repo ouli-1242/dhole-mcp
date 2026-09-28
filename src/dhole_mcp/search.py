@@ -1,7 +1,7 @@
 """Dhole local web search (v7 flagship: keyless, no-account, fully local).
 
-Scrapes public search engines (default pool: baidu, bing, so360, bing_global,
-yandex, brave; opt-in: baidu_baike, duckduckgo, mwmbl, sogou,
+Scrapes public search engines (default pool: baidu, bing, sogou, bing_global,
+yandex, brave; opt-in: baidu_baike, duckduckgo, mwmbl, so360,
 sogou_weixin, wikipedia, grokipedia, yahoo) via the dhole-native
 engine layer in search_engines.py - no third-party API, no key, no
 account. Results are merged across engines, deduped by normalized URL, and
@@ -234,7 +234,7 @@ class SearchResult(BaseModel):
     title: str = Field(description="Result title")
     url: str = Field(description="Result URL")
     snippet: str = Field(default="", description="Result snippet from the engine")
-    source: str = Field(default="", description="Backend(s) that returned this result (baidu/bing/bing_global/so360/brave/yandex/duckduckgo/yahoo/mwmbl/wikipedia/grokipedia). Multiple = cross-backend consensus. sogou_weixin hits are weixin.sogou.com /link wrappers, not canonical article URLs.")
+    source: str = Field(default="", description="Backend(s) that returned this result (baidu/bing/bing_global/sogou/baidu_baike/so360/brave/yandex/duckduckgo/yahoo/mwmbl/wikipedia/grokipedia). Multiple = cross-backend consensus. sogou_weixin hits are weixin.sogou.com /link wrappers, not canonical article URLs.")
     position: int = Field(default=0, description="1-indexed rank after merge + rerank")
     relevance_score: float = Field(default=0.0, description="0.0-1.0 relevance to the query (neural cross-encoder score in neural mode, min-max normalized), boosted by cross-backend consensus. 1.0 = most relevant in this set.")
     fetch_relevance: str = Field(default="", description="high|med|low - relative relevance hint. smart_fetch what matches your need; the tiers rank results but a lower tier can be the right one - use your judgment.")
@@ -1176,7 +1176,7 @@ benchmark results" / " specifications table data parameters"），而它的索�
 
 baidu / baidu_baike 同理：baidu 是中文索引占优，baidu_baike 更极端 —— query 直接当
 条目名去查（/item/{query}），追加英文展开词等于换了个不存在的条目名，只会空。
-so360 / sogou（都是中文索引）同理。so360 现在在默认池里，这条更要紧：给它的英文
+so360 / sogou（都是中文索引）同理。sogou 现在在默认池里，这条更要紧：给它的英文
 展开词等于换了个查询，中文索引上只会空。
 
 注意一个已知局限（不在本次修）：不同引擎被问不同 query 时，URL 重合度里混进了"跨
@@ -1255,8 +1255,8 @@ async def smart_search(
     min_raw_relevance: float = 0.0,
 ) -> SearchResponseModel:
     """Local keyless web search (no API key, no account). The default pool
-    (baidu, bing, so360, bing_global, yandex, brave - all HTTP, no browser;
-    opt-in: baidu_baike, duckduckgo, mwmbl, sogou, sogou_weixin,
+    (baidu, bing, sogou, bing_global, yandex, brave - all HTTP, no browser;
+    opt-in: baidu_baike, duckduckgo, mwmbl, so360, sogou_weixin,
     wikipedia, grokipedia, yahoo) is scraped in parallel, merged, deduped,
     and ranked. A URL returned by several **independent index families** is a
     consensus hit (engines_consensus field) and gets a ranking boost - a free

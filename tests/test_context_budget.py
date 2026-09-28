@@ -3,8 +3,8 @@
 Why this file exists: the per-call BODY — not the tools/list table — is where an
 agent's tokens go. Measured on docs.python.org/3/library/asyncio-task.html: one
 smart_fetch at the shipped 40,000-char default returned 42,037 chars, more than
-the whole connect-time table: the 9 inputSchemas together are 11,667 chars and
-the full tools/list payload 19,585 (cl100k ≈4.16 chars/token, so ~2.8k and ~4.7k
+the whole connect-time table: the 9 inputSchemas together are 11,566 chars and
+the full tools/list payload 19,141 (cl100k ≈4.16 chars/token, so ~2.8k and ~4.6k
 respectively).
 
 ``DHOLE_DEFAULT_CONTENT_CHARS`` changes what a caller gets when it does NOT pass

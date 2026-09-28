@@ -9,8 +9,8 @@ this script can produce offline; where the table has since grown, the token
 figures quoted in the docs are estimates at that measured ratio, and this file
 says so rather than re-quoting a count nobody re-measured.
 Token counts are rendering-dependent, so the rendering is part of the number:
-today's table is 19,585 chars as the wire's compact ``{"tools":[...]}``, 19,956
-summed per-tool ``json.dumps`` defaults, 23,659 with ``indent=2``. An unstated
+today's table is 19,141 chars as the wire's compact ``{"tools":[...]}``, 19,512
+summed per-tool ``json.dumps`` defaults, 23,215 with ``indent=2``. An unstated
 rendering is not reproducible.
 There are two independent ways to get the real numbers:
 

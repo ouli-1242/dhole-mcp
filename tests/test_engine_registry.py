@@ -315,7 +315,7 @@ class TestDefaultPoolEnv:
         assert m._resolve_backends(None) == list(m._DEFAULT_BACKENDS)
         # 这一行是默认池的快照，不是逻辑：池子换组合时跟着改（两处定义的一致性由
         # test_default_pool_definitions_agree 保证，这里只钉住"env 没设时用的是它"）。
-        assert m._DEFAULT_BACKENDS == ["baidu", "bing", "so360",
+        assert m._DEFAULT_BACKENDS == ["baidu", "bing", "sogou",
                                        "bing_global", "yandex", "brave"]
 
 
@@ -422,14 +422,14 @@ def test_default_pool_definitions_agree():
 
 
 def test_opt_in_engines_are_registered_but_not_pooled():
-    """百科 / 公众号 / 搜狗主站 / mwmbl / duckduckgo / yahoo 是**显式点名**的 opt-in：
+    """百科 / 公众号 / 360 搜索 / mwmbl / duckduckgo / yahoo 是**显式点名**的 opt-in：
     注册表里有、默认池里没有。
 
     默认池决定每轮真实打哪些站点 —— 误加进去会平白多一份限流风险（360、搜狗、百度
     都按 IP 限流）。duckduckgo/yahoo 与 bing 同一个索引家族，进池只多入口不多家族，
-    所以它们腾出的席位给了 so360（第三个国内独立索引）。sogou 与 so360 同生态位，
-    默认只点一家。baidu_baike/wikipedia/grokipedia 是知识库、mwmbl 覆盖窄，都不该
-    替用户默认打开。
+    所以它们腾出的席位一直给独立索引（16.1 前是 so360，现在是 sogou）；so360 与
+    sogou 同生态位，默认只点一家。baidu_baike/wikipedia/grokipedia 是知识库、mwmbl
+    覆盖窄，都不该替用户默认打开。
 
     bing_global 是**有意**留在池里的例外：它与 bing 同家族（不增加分母），补的是
     覆盖面 —— 实测 cn 版与国际版结果标题只 1/17 重合，同一个索引的两套入口。
@@ -437,7 +437,7 @@ def test_opt_in_engines_are_registered_but_not_pooled():
     from dhole_mcp import search_metasearch as ms
     from dhole_mcp.search_engines import DEFAULT_ENGINES
 
-    for name in ("sogou", "baidu_baike", "sogou_weixin",
+    for name in ("so360", "baidu_baike", "sogou_weixin",
                  "mwmbl", "duckduckgo", "yahoo"):
         assert name in ms._TEXT_ENGINES, f"{name} 应当是注册过的 opt-in 引擎"
         assert name not in DEFAULT_ENGINES, f"{name} 不许进默认池"
@@ -485,7 +485,7 @@ def test_index_family_map_covers_the_default_pool():
     # 默认池 6 引擎 / 5 家族（bing 与 bing_global 同家族）：渲染出来只可能是
     # "x of 5"，"x of 6" 不可能出现
     families = {_INDEX_FAMILY[ms._DHOLE_TO_BACKEND.get(n, n)] for n in DEFAULT_ENGINES}
-    assert families == {"baidu", "bing", "so360", "yandex", "brave"}, families
+    assert families == {"baidu", "bing", "sogou", "yandex", "brave"}, families
 
 
 def test_vertical_set_only_names_real_engines():

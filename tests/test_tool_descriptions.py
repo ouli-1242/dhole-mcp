@@ -332,8 +332,12 @@ _DOCSTRING_ONLY_IMPLEMENTATION = {
 }
 
 # 跨工具引用：指向别处，不是本工具的契约。
+# `cache_clear` 属于这类：close_session 的 docstring 拿它说明「那个是连正文缓存
+# 一起清、这个是指名清」，而这条对比只写在 cache_clear 自己的描述里（警告长在
+# 会动手的那个工具上才有用 —— 拿着「清缓存」意图的 agent 才是需要知道会掉登录
+# 的人）。两边各写一遍就是两个工具描述互为副本，删掉任一侧都会漂。
 _DOCSTRING_ONLY_CROSS_REFERENCE = {
-    "smart_fetch", "smart_search",
+    "smart_fetch", "smart_search", "cache_clear",
 }
 
 # 刻意不在 wire 暴露的诊断字段：暴露的边际价值低于其 token 成本（agent 基本
