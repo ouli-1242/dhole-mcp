@@ -345,6 +345,10 @@
 
 - **日志凭据泄漏**：重试时会把含 `user:pass@` 的代理 URL 写进日志。
 
+[16.0]: https://github.com/ouli-1242/dhole-mcp/compare/v15.2...v16.0
+
+[15.2]: https://github.com/ouli-1242/dhole-mcp/compare/v15.1...v15.2
+
 [15.1]: https://github.com/ouli-1242/dhole-mcp/compare/v15.0...v15.1
 
 [15.0]: https://github.com/ouli-1242/dhole-mcp/compare/v14.7...v15.0
