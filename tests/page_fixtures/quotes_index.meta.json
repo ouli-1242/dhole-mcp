@@ -1,0 +1,13 @@
+{
+  "captured_at": "2026-09-27",
+  "captured_from_url": "https://quotes.toscrape.com/",
+  "sha256": "efdc2605a2062dce",
+  "kind": "list",
+  "content_links": 52,
+  "extracted_markdown_chars": 2179,
+  "visible_text_chars": 1681,
+  "label_share": 0.264,
+  "longest_nonlabel_run_chars": 148,
+  "note": "真列表页（正文就是「名言 + 标签链接」），是收紧判据后必须仍然判 list 的对照件。",
+  "scrubbed": "否：判定的证据就是整页的链接/文本分布，裁剪会让测量失真"
+}

@@ -67,20 +67,109 @@ def _extract_html_title(html: str) -> str:
     return ""
 
 
+def _table_to_markdown_tokens(html: str) -> tuple[str, list]:
+    """Swap every ``<table>`` for a placeholder word; return (html, [(token, md)]).
+
+    trafilatura's markdown writer puts each cell on its own line, so a 3x3 table
+    leaves the document as nine loose lines — the shape (which value belongs to
+    which row/column) is what gets thrown away, and this same tool renders DOCX
+    and XLSX tables as real GFM tables. markdownify renders the table correctly,
+    but running it over the whole document would trade trafilatura's boilerplate
+    filtering for nav noise. So: take the tables out, let trafilatura do what it
+    is good at with the prose, and put each finished table back where it was.
+
+    Returns the input unchanged when the swap cannot be done (no lxml / no
+    markdownify / malformed markup / no tables) — the flattened-lines behaviour
+    is the fallback, not a regression.
+    """
+    if "<table" not in html.lower():
+        return html, []
+    try:
+        from lxml import html as _lh
+        from markdownify import markdownify as _md
+    except ImportError:
+        return html, []
+    try:
+        doc = _lh.fromstring(html)
+        tables = doc.xpath("//table")
+    except Exception:
+        return html, []
+    if not tables:
+        return html, []
+    import secrets
+
+    out: list = []
+    for n, tbl in enumerate(tables):
+        try:
+            rendered = _md(_lh.tostring(tbl).decode("utf-8", "replace"),
+                           heading_style="ATX", strip=["img"]).strip()
+        except Exception:
+            continue
+        if "|" not in rendered:
+            continue  # nothing table-shaped came out; leave the node alone
+        token = f"DHOLE-TBL-{n}-{secrets.token_hex(3)}"
+        holder = _lh.Element("p")
+        holder.text = token
+        parent = tbl.getparent()
+        if parent is None:
+            continue
+        parent.insert(parent.index(tbl), holder)
+        parent.remove(tbl)
+        out.append((token, rendered))
+    if not out:
+        return html, []
+    try:
+        return _lh.tostring(doc, encoding="unicode"), out
+    except Exception:
+        return html, []
+
+
+def _restore_table_markdown(text: str, tokens: list) -> str | None:
+    """Put each rendered table back at its placeholder. None = a placeholder did
+    not survive extraction, so the caller must fall back rather than silently
+    lose a table it had a copy of."""
+    if not tokens:
+        return text
+    import re as _re
+
+    for token, table in tokens:
+        hit = _re.search(r"[ \t]*" + _re.escape(token) + r"[ \t]*\n?", text)
+        if not hit:
+            return None
+        text = text[:hit.start()] + table + "\n" + text[hit.end():]
+    return text
+
+
 def _trafilatura_markdown(html: str, url: str = "") -> str | None:
     """Best-effort markdown extraction using trafilatura.extract().
 
     Strategy: trafilatura identifies main content (filtering nav/ads), then
     markdownify converts to markdown preserving [text](url) links. This hybrid
     gives trafilatura's content quality + markdownify's link preservation.
+
+    Tables ride a placeholder round-trip (see _table_to_markdown_tokens) because
+    trafilatura flattens them; when the placeholders do not come back, the
+    untaken route is used instead of returning text that lost a table.
     """
+    html_for_traf, tokens = _table_to_markdown_tokens(html)
     # First: try trafilatura's native markdown (fast, good content filtering)
     result = trafilatura.extract(
-        html, url=url,
+        html_for_traf, url=url,
         include_comments=False, include_tables=True,
         include_links=True,
         output_format="markdown",
     )
+    if result and tokens:
+        restored = _restore_table_markdown(result, tokens)
+        if restored is not None:
+            result = restored
+        else:
+            # A table would have been dropped: redo the extraction from the
+            # original markup so the page at least keeps its flattened cells.
+            result = trafilatura.extract(
+                html, url=url, include_comments=False, include_tables=True,
+                include_links=True, output_format="markdown") or result
+            tokens = []
     # If trafilatura produced content WITH links, use it directly
     if result and "](" in result:
         return result

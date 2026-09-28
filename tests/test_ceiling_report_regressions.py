@@ -146,15 +146,18 @@ class TestArchiveTierDocumented:
     def test_smart_fetch_names_the_third_tier(self, tools):
         desc = _desc(tools, "smart_fetch").lower()
         assert "archive.org" in desc, "第三层降级在工具描述里不存在"
-        assert "metadata.source" in desc, "没告诉 agent 去哪里辨认存档来源"
+        # 辨认存档来源的字段是**顶层** source / archived_at（server.py 的
+        # BulkResponseModel 投影可证），不是 metadata.source —— 旧 needle 钉在
+        # 一个不存在的字段路径上，描述照它写反而会教错读法。
+        assert "archived_at" in desc, "没告诉 agent 去哪里辨认存档来源"
 
     def test_smart_fetch_says_it_cannot_be_disabled(self, tools):
         desc = _desc(tools, "smart_fetch").lower()
         assert "disabl" in desc, "没说明这一层无法关闭（实测无开关可关）"
 
-    def test_instructions_point_at_metadata_source(self):
+    def test_instructions_point_at_the_archive_receipt(self):
         low = DHOLE_INSTRUCTIONS.lower()
-        assert "metadata.source" in low, (
+        assert "archived_at" in low, (
             "instructions 里 content_ok=true 的例外情况没写清楚")
 
 

@@ -57,6 +57,7 @@ class SitemapURL:
 class SitemapResult:
     urls: list[SitemapURL] = field(default_factory=list)
     sitemaps_used: list[str] = field(default_factory=list)   # the sitemap URLs that actually parsed
+    capped: bool = False  # the URL list stopped AT max_urls (P2-9)
     via: str = ""                                             # "robots" | "conventional" | ""
     robots_checked: bool = False
 
@@ -243,4 +244,8 @@ def discover_sitemap(start_url: str, *, http_get: HttpGet,
         _drain(c, 0)
 
     result.urls = flat
+    # Reaching the cap is not proof the sitemap ended there — a site with exactly
+    # max_urls entries looks identical to one with ten times that. So the flag says
+    # "stopped at the cap", and the caller's wording has to stay at "at least".
+    result.capped = bool(max_urls) and len(flat) >= max_urls
     return result

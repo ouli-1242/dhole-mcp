@@ -191,11 +191,11 @@ class TestFollowRedirectsCoercion:
         mock_resp.url = "https://example.com"
         mock_resp.reason = "OK"
         mock_resp.cookies = []
-        session._client.get = MagicMock(return_value=mock_resp)
+        session._client.request = MagicMock(return_value=mock_resp)
 
         await session.get("https://example.com", follow_redirects="safe")
         # primp 收到 False（手动跟随由本层实现，重定向目标逐跳 SSRF 校验）
-        call_kwargs = session._client.get.call_args
+        call_kwargs = session._client.request.call_args
         assert call_kwargs.kwargs.get("follow_redirects") is False
 
     @pytest.mark.asyncio
@@ -209,10 +209,10 @@ class TestFollowRedirectsCoercion:
         mock_resp.url = "https://example.com"
         mock_resp.reason = "OK"
         mock_resp.cookies = []
-        session._client.get = MagicMock(return_value=mock_resp)
+        session._client.request = MagicMock(return_value=mock_resp)
 
         await session.get("https://example.com", follow_redirects="never")
-        call_kwargs = session._client.get.call_args
+        call_kwargs = session._client.request.call_args
         assert call_kwargs.kwargs.get("follow_redirects") is False
 
     @pytest.mark.asyncio
@@ -226,8 +226,8 @@ class TestFollowRedirectsCoercion:
         mock_resp.url = "https://example.com"
         mock_resp.reason = "OK"
         mock_resp.cookies = []
-        session._client.get = MagicMock(return_value=mock_resp)
+        session._client.request = MagicMock(return_value=mock_resp)
 
         await session.get("https://example.com", follow_redirects=False)
-        call_kwargs = session._client.get.call_args
+        call_kwargs = session._client.request.call_args
         assert call_kwargs.kwargs.get("follow_redirects") is False

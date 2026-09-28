@@ -540,7 +540,7 @@ def main() -> int:
             "tools_list_result": _sizes(tools_result) if tools_result else None,
             "tools_list_full_envelope_chars": len(phases[2][1]["response_raw"]) if len(phases) > 2 and phases[2][1]["response_raw"] else None,
             "notes": [
-                "Character counts only - no tokenizer is available offline. CHANGELOG 15.0 reports 339 + 2911 = 3250 cl100k_base tokens (per-tool json.dumps defaults rendering; see tests/tool_payload_measure.py); that exact tokenizer/count is NOT reproduced here.",
+                "Character counts are what this run measures; no tokenizer is available offline. README and CHANGELOG 16.0 quote cl100k_base counts from the one tokenizer run made at the 16.0 audit (2,141 + 19,254 chars = 514 + 4,631 tokens, ratio 4.16). Where this run's char counts differ from those, the docs' token figures are estimates at that ratio, not measurements - see tests/tool_payload_measure.py for the rendering each number belongs to.",
                 "chars_raw_string_chars is the literal Python string length of result.instructions.",
                 "json_* sizes are json.dumps of the value (default ensure_ascii=True escapes non-ASCII); compact uses separators=(',',':').",
                 "All traffic was offline-safe: loopback/metadata/file URLs rejected by the server SSRF guard, a nonexistent local path for parse, and search engines routed to a dead loopback proxy.",

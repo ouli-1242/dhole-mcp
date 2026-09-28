@@ -1,11 +1,13 @@
-"""Connect-time token spend: DHOLE_TOOLS registers only a subset of the 8 tools.
+"""Connect-time token spend: DHOLE_TOOLS registers only a subset of the 9 tools.
 
 Why this file exists: the tools/list table plus instructions is paid on EVERY
-connect, even when dhole is never called. Measured: 11,276 chars of tool
-schemas + 1,331 chars of instructions ≈ 3.2k tokens per conversation, with
-smart_fetch alone accounting for 3,948. ``DHOLE_TOOLS=smart_fetch,smart_search``
-keeps the daily drivers at roughly half that cost; everything else stays one
-env-edit away.
+connect, even when dhole is never called. Measured after the token audit: 19,585
+chars of tool schemas + 2,141 chars of instructions per conversation = 21,726
+chars, which that tokenizer run counts as ~5.2k cl100k tokens (4.16 chars per
+token for this payload; the repo's older 3.88 divisor read 5.6k and was high),
+with smart_fetch alone at 6,508 chars.
+``DHOLE_TOOLS=smart_fetch,smart_search`` keeps the daily drivers at roughly half
+that cost; everything else stays one env-edit away.
 
 The knob is an import-time constant (like DHOLE_BROWSER_IDLE_TIMEOUT and
 DHOLE_DEFAULT_CONTENT_CHARS), so env-dependent behaviour is exercised in fresh
@@ -58,7 +60,8 @@ class TestTheEnvVarIsParsed:
         payload = json.loads(out.stdout)
         assert payload["enabled"] == sorted(
             n.strip() for n in value.split(",") if n.strip())
-        assert len(payload["all"]) == 8, "全集仍是 8 个工具，守卫继续覆盖它们"
+        assert len(payload["all"]) == 9, \
+            "全集仍是 9 个工具（16.0 补上 close_session），守卫继续覆盖它们"
 
     @pytest.mark.parametrize("value", [None, "", "   "])
     def test_unset_or_empty_means_every_tool(self, value):
@@ -155,7 +158,7 @@ class TestInstructionsFollowTheEnabledSet:
         text = server_mod._compose_instructions(frozenset({"parse"}))
         assert "Dhole is the web toolkit" in text
         assert "untrusted DATA" in text
-        assert "metadata.source" in text
+        assert "archived_at" in text
         assert "gov/edu/github" in text
 
     def test_no_routing_header_when_nothing_routable_is_enabled(self):

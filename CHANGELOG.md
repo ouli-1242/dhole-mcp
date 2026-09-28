@@ -6,6 +6,82 @@
 
 > 自 13.14 起本仓库为个人衍生作品，版本号是自己的序号、不承诺语义化版本，与上游版本不可比；包内的 `__version__` 是唯一权威来源。
 
+## [16.0] - 2026-09-28
+
+能力面的一次整体扩张：robots 遵从、非 GET 请求、凭据与跨调用会话、内容再验证、增量 feed、整站与搜索的账；同时把每次调用的响应与连接期的工具表压小。
+
+### 新增
+
+- **`robots.txt` 遵从**（默认开启）：被 Disallow 的 URL 一个请求都不发（`error=robots_disallowed`）；单次豁免 `options.ignore_robots=true`，进程级 `DHOLE_IGNORE_ROBOTS=1`；`smart_crawl` 逐页遵从，已知被禁的链接入队前就丢掉
+- **非 GET 请求**：`options.method` / `body` / `content_type`（POST / PUT / DELETE / PATCH / HEAD）。写请求不重试、不进缓存、不升浏览器、不用快照作答
+- **凭据**：`options.auth` 支持 basic / bearer / API-key 三种形状，形状读不懂就在发出任何请求之前拒绝，值永不回显
+- **跨调用会话**：`options.session_id` 的 cookie jar（按主机、24 小时），登录之后的页面抓得到；响应只报 cookie 名字（`session_cookie_names`），不报值
+- **`close_session` 工具**：不带参数=会话名册（id、主机、cookie 名字、还剩多久过期、浏览器是否开着），`session_id=` 点名关一个，`all=true` 全关
+- **内容再验证**：`if_none_match` / `if_modified_since`，每次答复回吐 `cache_validators`；304 按成功处理（`not_modified=true`、空正文、无 error）
+- **内网取回**：`options.allow_private` 与 `DHOLE_ALLOW_PRIVATE_HOSTS`，按名字放行 dev / staging / Docker 主机；云元数据端点永不放行
+- **截图落盘**：`options.save_to` 写文件并回报绝对路径与字节数，纯文本 agent 也用得上这张图
+- **页面交互**：`scroll` 能触发懒加载（等 DOM 停止变长，上限 20 秒）；`wait_selector` 支持 `{selector,count,state,timeout_ms}`；每个动作在 `metadata.actions` 留一行收执
+- **结构化提取**：`schema` 支持嵌套与重复记录，子选择器在容器内求值，一个容器一条记录
+- **feed**：`since=<日期>` 增量轮询；`cache_validators` + 条件请求；可直接传站点首页（顺页面自己声明的 alternate 链接找 feed，`discovered_from` 记下这一步）；零条目时 `note` 给出归因
+- **整站**：`options.sitemap=true` 一次拿到全站 URL 图；`options.delay` 控制同一主机的请求间隔（站方 `Crawl-delay` 会抬高它）；`crawl_urls` 被丢掉的条目如实报数（`urls_supplied` / `urls_deduped` / `urls_dropped_off_domain` / `urls_dropped_over_max_pages`）
+- **搜索**：`after=<日期>` 与 `freshness` 走同一条路，`date_filter` 说明实际发到哪一档、哪几家根本不接受日期；`min_relevance` / `min_raw_relevance` 相关性下限，`fetch_hint` 报出这一轮的原始分跨度
+- **链接**：`max_links`（每类 1–100）；`links.total_found` / `is_truncated` 报告被裁掉多少
+- **代理预检**：显式代理不应答时返回 `error=proxy_unreachable`，5 秒内失败、不发请求、不回退快照
+- **本地文件**：`parse` 新增 `.md` / `.markdown` / `.txt` / `.json` / `.yaml` / `.yml` / `.pptx` / `.odt`，不引入新依赖；JSON / YAML 会校验；文本工具带不动的部分写在输出首行
+- **源类型**：`source_type` 新增 `reference`（百科 / 标准 / 规范）与 `paper`（期刊 / 预印本）
+- **引擎池**：三档冷却时长可调（`DHOLE_ENGINE_COOLDOWN` / `DHOLE_ENGINE_CHALLENGE_COOLDOWN` / `DHOLE_ENGINE_CONN_COOLDOWN`）；`DHOLE_ENGINE_HEARTBEAT` 主动巡检仍在冷却中的引擎，答得上来当场解除
+- **开销开关**：`DHOLE_STRUCTURED_CONTENT`（是否额外发一份结构化拷贝）、`DHOLE_WIRE_FULL`（把响应退回未压缩形状）、`DHOLE_OUTPUT_SCHEMA`（声明可机器校验的 `outputSchema`）
+
+### 变更
+
+- **响应只发偏离默认值的字段**：一次调用 −45%~−49%，`duration_ms` / `fetched_at` 砍到有效位；`instructions` 写明「缺席即默认」的读法；`DHOLE_WIRE_FULL=1` 整体退回旧形状
+- **工具描述与 `instructions` 精简**：连接期 23,084 → 21,726 字符（cl100k 口径 ≈5.2k token）
+- **500 / 502 不再升级隐身浏览器**，改走 archive 回退或如实报错；数据文档（XML / 图片 / PDF）一律不送浏览器渲染
+- **`is_stale` 按源类型判定**：新闻 30 天、`reference` / `paper` / `docs` / 仓库 / Q&A 730 天、其余 365 天；持续编辑类站点没有修改时间时 `content_age_days=null`
+- **非 PDF 的 `quality_score` 改为 `null`**
+- **`page_type` 判据换掉**：列表页看非链接正文的占比与绝对长度，正文页第一次能判成 `article`；抓取失败的页不再被说成 JS 壳
+- **`smart_crawl` 的 `discover_only=true`** 如实报告（`content_ok=false`、每页一次的代价可见、`next_action` 给出一次拿全图的两条路）；地图模式的每行只留说出区别的字段
+- **`is_official`** 覆盖命名空间的运营方（iana / rfc-editor / w3 / unicode / pypi / npm / crates.io …）
+- **`metadata.robots`** 按真实判定分档，且每次返回按当前进程重算；缓存里的历史许可并列写出
+- **`smart_fetch` 除 `url` 外的每个参数两处都接受**（顶层与 `options` 袋，顶层优先）
+- **`cache_clear`** 同时忘掉 robots 结论与 cookie jar；引擎健康表只在 `engine_state=true` 时回
+- nature.com / science.org 由 `news` 归入 `paper`
+- `schema` 参数的说明补上一句：只有 `selector` / `attribute` / `type` / `properties` / `items` 会被读取，别的 JSON-Schema 键一律不起作用——自己发明 `repeat` 然后把首条当成全部的那种误读从此有明确出处
+- 服务器自己回的 JSON / XML 错误体不再被 archive 快照顶替；`css_selector` 对非 HTML 不再静默忽略（`summary` 明说没应用）
+
+### 修复
+
+- `feed_fetch` 的条目摘要被裁到 500 字符却不吭声：现在被裁的那条带 `summary_truncated=true`，工具描述也写明这个上限与拿全文的路
+- 参数放错通道时的报错现在会说清它该去哪：`smart_crawl` 的 `discover_only` 放进 `options` 被拒时，会补一句「它是顶层参数，请挪出去」——此前唯一的读法是「这工具没有地图模式」
+- `DHOLE_OUTPUT_SCHEMA=1` 打开后 `tools/list` 整张表消失（客户端看到 0 个工具）：`smart_fetch` 声明的 `outputSchema` 顶层只有 `anyOf`，缺线协议要求的 `type:"object"`，SDK 判定整个结果非法
+- HTML 同一份字节被解码两次导致的乱码（`Saturn's` → `Saturnâs`）
+- `parse` 把「文档引用了乱码样例」判成字符集猜错：按 UTF-8 一字不差的干净文件回 `encoding_undecodable`
+- 缓存命中丢掉 `cache_validators` 与抽取器的 `content_ok`
+- `feed_fetch` 的 `since` 从未到达过滤器；feed 里不带时区的日期被按本机时区解读；无日期条目被排在最新之前
+- 文档 URL 的 304 不回 `not_modified`；`force_fetcher` 钉层时绕过死代理预检
+- `smart_fetch` 的 wire schema 拒掉了描述承诺的 `options.urls`
+- 带 `schema` 的调用全线失败（取回层参数错位）；`smart_crawl` 的 `ignore_robots` 从未通过；`--cache-ttl` 在 MCP 这条路上是死的
+- 非英文的 JS 墙被判成正文；`actions` 的 click 不等它自己造成的导航，动作失败此前只写日志
+- `Response.cookies` 恒为空（映射形状没处理）；表单实体不发 `Content-Type` 就收不到；`HEAD` 的 `total_size_bytes` 恒为 0
+- SSRF 的拒绝被当成可重试错误（会把源站再敲一次）；跳数预算耗尽时 `url` 报的是从没向任何服务器要过的那一跳
+- `<meta http-equiv=refresh>` 的跳转不跟随；无引号的 `REFRESH` 连「这是跳转页」都判不出
+- `robots.txt` 的 5xx / 429 曾被按 1 小时缓存（策略写明 60 秒）；注入的抓取器返回文本时规则体被静默丢空（fail-open）
+- `links.total_found` / `is_truncated` 之前无从得知截断；`smart_crawl` 的 `is_truncated` 恒为 false
+- URL 地图按页收费（1000 条 sitemap 序列化成 353 KB 装 70 KB 的 URL）；错误页附带整份导航的引用图
+- 搜索空结果的 `error` 与 `next_action` 互相拆台；引擎有产出但被自家相关性过滤全丢时零解释
+- 本地解析把内容问题（坏 JSON、坏 YAML、假 PDF、未知扩展名）说成路径问题
+- 预算耗尽时把内层已经查出的真凶丢掉，并把连接重置引导成「调大 timeout」
+- PDF 正文混进页边旋转文本；`schema` 的「数组」漏写父 `selector` 时静默产出混合分组
+- `wikipedia` / `grokipedia` 的产出计数从未写过，因而被误判成「引擎未接入」
+- `401` 的建议分话：「你给的凭据被拒」与「这个 URL 要凭据而你没给」修法相反
+
+### 安全
+
+- **凭据不再跟跨源重定向走**：每跳重建请求头，跨源时摘掉 `Cookie` / `Authorization` / `Proxy-Authorization`，含调用方自己命名的 API-key 头
+- **带凭据的正文按凭据分别进缓存**，不会被之后的匿名请求回放出去
+- **会话凭据可清、且从不外流**：cookie 值不进响应（只有名字），`close_session` / `cache_clear` 立刻忘掉，不等 24 小时自然过期
+- **SSRF 白名单点名生效**：`allow_private=true` 只放开回环，云元数据端点写进白名单也不放行；页面「自动发现」的 feed 地址同样过守卫
+
 ## [15.2] - 2026-09-25
 
 默认搜索池重组 + 第七轮外部实测的处置。
@@ -260,6 +336,8 @@
 
 ### 变更
 
+- **`parse` 不再拒绝纯文本**（G30 带来的立场变化，写下来是因为有人会依赖它）。过去的报错是「.txt/.md 不需要转换，用你自己的文件工具读」——那句话预设调用方**有**文件工具，而只会说 MCP 的客户端只有一个入口。现在这些扩展名直接给内容，未列出的扩展名（.log/.rst/.ini）在报错里被告知改名成 .txt 再解析。
+- **`smart_crawl` 与 `smart_fetch` 对同一页给同一份正文**（G20）。报告记录的分叉（同一 URL，一边是干净 markdown、一边是带大量空白的原始 HTML）在当前实现里已经不复现：crawl 的正文本来就调同一个抽取入口。这一项没有改代码，改的是**把等式钉住**——两条入口（HTML 字符串 / Response 对象）的输出逐字节相同由测试守着，联网再证一次工具层等价；唯一的有意分叉（列表页给结构化链接清单）也留了名字，免得下次「统一」把它一起统一掉。
 - **版本号单一来源**：此前三处版本号互不一致，现在统一读包内的 `__version__`。
 - **自更新不再指向上游包**（会把上游代码装进来覆盖本 fork）：默认关闭，`DHOLE_UPDATE_PACKAGE` 可重新启用；补声明 `beautifulsoup4` / `h2` / `httpcore` 依赖；移除 `(upstream v12.0.0)` 式溯源标记。
 
@@ -268,14 +346,25 @@
 - **日志凭据泄漏**：重试时会把含 `user:pass@` 的代理 URL 写进日志。
 
 [15.1]: https://github.com/ouli-1242/dhole-mcp/compare/v15.0...v15.1
+
 [15.0]: https://github.com/ouli-1242/dhole-mcp/compare/v14.7...v15.0
+
 [14.7]: https://github.com/ouli-1242/dhole-mcp/compare/v14.6...v14.7
+
 [14.6]: https://github.com/ouli-1242/dhole-mcp/compare/v14.5...v14.6
+
 [14.5]: https://github.com/ouli-1242/dhole-mcp/compare/v14.4...v14.5
+
 [14.4]: https://github.com/ouli-1242/dhole-mcp/compare/v14.3...v14.4
+
 [14.3]: https://github.com/ouli-1242/dhole-mcp/compare/v14.2.1...v14.3
+
 [14.2.1]: https://github.com/ouli-1242/dhole-mcp/compare/v14.2...v14.2.1
+
 [14.2]: https://github.com/ouli-1242/dhole-mcp/compare/v14.1...v14.2
+
 [14.1]: https://github.com/ouli-1242/dhole-mcp/compare/v14.0...v14.1
+
 [14.0]: https://github.com/ouli-1242/dhole-mcp/compare/v13.16...v14.0
+
 [13.16]: https://github.com/ouli-1242/dhole-mcp/compare/v13.15...v13.16

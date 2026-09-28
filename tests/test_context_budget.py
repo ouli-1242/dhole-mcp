@@ -2,8 +2,10 @@
 
 Why this file exists: the per-call BODY — not the tools/list table — is where an
 agent's tokens go. Measured on docs.python.org/3/library/asyncio-task.html: one
-smart_fetch at the shipped 40,000-char default returned 42,037 chars (~10.5k
-tokens), more than all 8 tool schemas together (11,295 chars / ~2.8k tokens).
+smart_fetch at the shipped 40,000-char default returned 42,037 chars, more than
+the whole connect-time table: the 9 inputSchemas together are 11,667 chars and
+the full tools/list payload 19,585 (cl100k ≈4.16 chars/token, so ~2.8k and ~4.7k
+respectively).
 
 ``DHOLE_DEFAULT_CONTENT_CHARS`` changes what a caller gets when it does NOT pass
 ``max_content_chars``. It is deliberately not the ceiling: the 500-200000 range
@@ -32,15 +34,24 @@ WAY_OVER = 5000  # chars: longer than any budget under test
 def _stub_fetch(monkeypatch, body: str) -> None:
     """Replace the fetch tiers with one canned body.
 
-    The stub passes the budget it RECEIVES (the positional ``max_chars``) to the
-    real ``_apply_chunking``, so the test observes the value ``smart_fetch``
-    computed from the default — stubbing the tool method instead would test the
-    stub rather than the wiring.
+    The stub passes the budget it RECEIVES to the real ``_apply_chunking``, so the
+    test observes the value ``smart_fetch`` computed from the default — stubbing
+    the tool method instead would test the stub rather than the wiring.
+
+    It reads that budget by PARAMETER NAME rather than by position. A positional
+    read is what let G14 ship: the schema branch dropped one argument and every
+    later slot moved up, and a stub that just takes ``*a`` cannot notice. Binding
+    against the real signature notices, because the name has to exist.
     """
+    import inspect
+
+    sig = inspect.signature(server_mod.MasterFetchServer._auto_escalate)
     result = ResponseModel(url="https://example.com/", status=200, content=[body])
 
-    async def fake(self, url, *a, **kw):
-        return server_mod._apply_chunking(result, max_chars=a[-1])
+    async def fake(self, *a, **kw):
+        bound = sig.bind(self, *a, **kw).arguments
+        return server_mod._apply_chunking(
+            result, max_chars=bound.get("max_chars", server_mod.DEFAULT_MAX_CONTENT_CHARS))
 
     monkeypatch.setattr(server_mod.MasterFetchServer, "_auto_escalate", fake)
 
@@ -78,7 +89,7 @@ class TestTheDefaultBudgetIsWired:
         _stub_fetch(monkeypatch, "B" * 200)
         payload = _fetch({"url": "https://example.com/", "cache_ttl": 0,
                           "max_content_chars": 200000})
-        assert payload["is_truncated"] is False
+        assert not payload.get("is_truncated", False)
 
     def test_a_truncated_default_still_names_the_way_back(self, monkeypatch):
         """Pagination is what makes the lower default lossless, so the response

@@ -26,7 +26,7 @@ import os
 import re
 from collections import Counter
 from time import time
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
@@ -36,15 +36,24 @@ from dhole_mcp.cache import get_cached, set_cached
 from dhole_mcp.security import validate_search_query, validate_url, redact_api_key, SecurityError
 from dhole_mcp.search_engines import (
     RawResult, multi_search, EngineReport, DEFAULT_ENGINES,
-    fetch_source_for_similar, _INDEX_FAMILY, _VERTICAL_BACKENDS,
+    fetch_source_for_similar, _INDEX_FAMILY, _VERTICAL_BACKENDS, date_support,
 )
+from dhole_mcp.search_metasearch import schedule_engine_heartbeat
 
 logger = logging.getLogger("dhole-mcp.search")
 
 
-def neural_rerank(query: str, ranked: list[RawResult]):
+def neural_rerank(query: str, ranked: list[RawResult], min_relevance: float = 0.0,
+                  min_raw_relevance: float = 0.0, stats: dict | None = None):
+    """Score candidates with the neural cross-encoder (see reranker.rerank).
+
+    The import stays inside the function: reranker.py is an optional extra
+    ([all]) and importing it at module load would make search.py unimportable
+    on a lean install.
+    """
     from dhole_mcp.reranker import rerank
-    return rerank(query, ranked)
+    return rerank(query, ranked, min_relevance=min_relevance,
+                  min_raw_relevance=min_raw_relevance, stats=stats)
 
 
 def unavailable_reason() -> str:
@@ -242,6 +251,7 @@ class SearchResponseModel(BaseModel):
     engine_empty: list[str] = Field(default=[], description="Engines that answered (HTTP 200) but parsed zero usable results. NOT rate-limiting: either this query genuinely has nothing in that index, or that engine's parser has drifted out of sync with its page structure. Cross-check the 'engine yield' row of `dhole -v`.")
     engine_preempted: list[str] = Field(default=[], description="Engines cancelled because enough results had already arrived. Normal on a healthy fast pool - this is NOT a failure or a block.")
     rerank_mode: str = Field(default="merge", description="Rerank used: merge|neural|find_similar.")
+    date_filter: dict = Field(default_factory=dict, description="What the engines were actually asked about dates, when you asked (freshness= or after=): {requested, sent, exact, engines_filtered, engines_unfiltered, note}. {} = no date constraint was requested. READ THIS BEFORE TRUSTING FRESHNESS: the engines offer day/week/month/year and nothing finer, so after=<a date> is widened to the narrowest preset that covers it - 'exact: false' means the window on the wire is broader than what you named. engines_unfiltered names the engines that cannot be date-filtered at all and answered anyway, so a mixed round is NOT a date-limited result set. before= is refused rather than ignored: search results carry no publish date, so 'older than' could neither be asked nor verified.")
     consensus_basis: str = Field(default="", description="Whether engines_consensus can be trusted on this response: full | single_family | partial_pool | degraded_pool. 'degraded_pool' = at least one engine didn't answer, so a low consensus number may reflect the pool being down rather than the URL being weak. 'single_family' = no corroboration was possible at all.")
     cached: bool = Field(default=False, description="Served from cache?")
     duration_ms: float = Field(default=0, description="Duration ms")
@@ -426,7 +436,8 @@ def _search_next_action(results: list[SearchResult], engine_blocked: list[str],
                          error: str, engines_used: list[str] | None = None, *,
                          engine_empty: list[str] | None = None,
                          engine_preempted: list[str] | None = None,
-                         total_engines: int | None = None) -> str:
+                         total_engines: int | None = None,
+                         rerank_mode: str = "") -> str:
     """A judgment-empowering nudge, not a rigid directive. The ranking is a HINT:
     the agent may legitimately need a lower-ranked result, so we point it at the
     signals (relevance_score + fetch_relevance) and trust it to pick, instead of
@@ -435,16 +446,34 @@ def _search_next_action(results: list[SearchResult], engine_blocked: list[str],
     engine_empty = engine_empty or []
     engine_preempted = engine_preempted or []
     if not results:
+        # `error` and `next_action` are read as one instruction, so they cannot
+        # disagree. Measured: the error said "rephrasing will not help; check the
+        # network" while next_action said "Rephrase (more specific / different
+        # terms) or try mode=neural" - on a call that had ALREADY passed
+        # mode=neural. Two wrong turns, both in the field agents follow.
+        if error and "matched no query term" in error:
+            return ("No results: the engines answered, and dhole discarded every "
+                    "answer because it held none of the query's terms. On a normal "
+                    "query that means something on this network replied on the "
+                    "engine's behalf - rephrasing cannot fix it. Check the "
+                    "connection, or retry with engines=[...] to ask a different "
+                    "index. The discarded titles are named in `error` so you can "
+                    "judge for yourself whether the discard was right.")
         if error and ("rate-limited" in error.lower() or "timed out" in error.lower() or engine_blocked):
             return ("No results (engines rate-limited/timed out). Retry in a moment, "
                     "or set DHOLE_SEARCH_PROXY for sustained heavy use.")
+        if rerank_mode == "neural":
+            return ("No results. Rephrase with more specific / different terms "
+                    "(mode=neural is already the semantic matcher this call used).")
         return "No results. Rephrase (more specific / different terms) or try mode=neural for semantic matching."
     high = [r for r in results if r.fetch_relevance == "high"]
     base = ("Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). "
             "smart_fetch the ones that match what you actually need - the ranking is a hint, "
             "not a directive; a lower-ranked result can be the right one, so trust your judgment.")
     if not high:
-        base += " No 'high' matches - if none of these fit, rephrase (more specific) or try mode=neural."
+        base += (" No 'high' matches - if none of these fit, rephrase (more specific)."
+                 if rerank_mode == "neural" else
+                 " No 'high' matches - if none of these fit, rephrase (more specific) or try mode=neural.")
     # 分母要算上 empty：只看 blocked 时，"5 个引擎里 4 个解析器坏了"会被读成
     # 1/1 = 健康，多样性警告永远不触发。
     silent = [n for n in engine_blocked if n] + [n for n in engine_empty if n]
@@ -545,6 +574,126 @@ def _validate_freshness(freshness):
     return freshness
 
 
+# How many days back each preset reaches. The engines' own granularity (measured:
+# every date-aware backend exposes exactly these four, none exposes an absolute
+# range), so a window that is not one of these widths has to be widened to the
+# next preset and said out loud.
+_PRESET_DAYS = {"day": 1, "week": 7, "month": 31, "year": 366}
+
+
+def _parse_date_arg(value: Any, name: str):
+    """Parse a user-supplied date argument into an aware UTC datetime."""
+    from datetime import datetime, timezone
+    from email.utils import parsedate_to_datetime
+
+    if not isinstance(value, str) or not value.strip():
+        raise SecurityError(f"{name} must be a date string like '2026-09-20' or "
+                            f"'2026-09-20T08:00:00Z'")
+    raw = value.strip()
+    dt = None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            dt = parsedate_to_datetime(raw)
+        except (TypeError, ValueError):
+            dt = None
+    if dt is None:
+        raise SecurityError(f"{name}={raw[:40]!r} is not a date (ISO-8601 or an "
+                            f"RFC-822 timestamp)")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _date_window(after: Any, before: Any, freshness: Any, engines: list[str]) -> tuple:
+    """Resolve what the caller asked about dates into what the pool can do.
+
+    Returns ``(effective_freshness, date_filter, rejection)``.
+
+    ``after`` is widened to the narrowest preset that COVERS it: asking for the
+    last 3 days gets the WEEK filter, because no engine in the pool takes an
+    absolute range (measured — the date-aware ones expose day/week/month/year and
+    nothing else). Narrower than the request is impossible; wider is the only
+    option, and the difference is reported rather than hidden.
+
+    ``before`` is refused. Presets only bound results from one side ("not older
+    than"), and search results carry no publish date, so dhole can neither ask for
+    "older than X" nor verify a posted date after the fact. A parameter that
+    silently does nothing is the thing this project was audited for.
+    """
+    applied = freshness
+    info: dict = {}
+    rejection = ""
+
+    if before not in (None, "", False):
+        _parse_date_arg(before, "before")  # raises on an unreadable value
+        rejection = ("before is not supported: no engine in the pool can bound "
+                     "results to older-than-a-date (the ones that filter at all "
+                     "offer day/week/month/year only), and search results carry no "
+                     "publish date for dhole to filter on either. Use after=<date> "
+                     "for 'newer than', or feed_fetch(since=) for dated items from "
+                     "a source that publishes them.")
+        return applied, info, rejection
+
+    filtered, unfiltered = date_support(engines)
+    if after in (None, "", False):
+        if freshness:
+            info = {
+                "requested": f"freshness={freshness}",
+                "sent": f"freshness={freshness}",
+                "exact": True,
+                "engines_filtered": filtered,
+                "engines_unfiltered": unfiltered,
+            }
+        return applied, info, ""
+
+    cutoff = _parse_date_arg(after, "after")
+    from datetime import datetime, timezone
+    age_days = max(0.0, (datetime.now(timezone.utc) - cutoff).total_seconds() / 86400.0)
+    cover = next((p for p in ("day", "week", "month", "year")
+                  if age_days <= _PRESET_DAYS[p]), None)
+    if cover is None:
+        # Older than any preset reaches: filtering to "year" would be *narrower*
+        # than what was asked and drop pages the caller wanted. Send nothing.
+        info = {
+            "requested": f"after={after}",
+            "sent": "nothing (wider than the engines' coarsest window)",
+            "exact": False,
+            "engines_filtered": [],
+            "engines_unfiltered": sorted(engines),
+            "note": (f"after={after} is {age_days:.0f} days back; no engine answers "
+                     "beyond a year, so none of the results are date-filtered - "
+                     "verify dates yourself before citing freshness."),
+        }
+        return applied, info, ""
+
+    if freshness and _PRESET_DAYS[freshness] <= _PRESET_DAYS[cover]:
+        applied = freshness  # the caller's own preset is at least as tight: honour it
+    else:
+        applied = cover
+    # "exact" means the wire request is the NARROWEST preset that still covers the
+    # window. Anything else (a caller-set preset that is tighter, or engines that
+    # cannot be filtered at all) sends the results a little wider or a little
+    # narrower than asked, which is why the note spells out both directions.
+    exact = applied == cover
+    info = {
+        "requested": f"after={after}",
+        "sent": f"freshness={applied}",
+        "exact": exact,
+        "engines_filtered": filtered,
+        "engines_unfiltered": unfiltered,
+        "note": ("" if exact and not unfiltered else
+                 f"{applied} ({_PRESET_DAYS[applied]} days) is what the engines were "
+                 f"asked for, which covers your window rather than matching it"
+                 + (f"; {', '.join(unfiltered)} cannot be date-filtered at all and "
+                    "answered unfiltered" if unfiltered else "")
+                 + ". Results may therefore sit outside the dates you named, and they "
+                   "carry no publish date, so dhole cannot check."),
+    }
+    return applied, info, ""
+
+
 # Implemented rerank modes (find_similar = URL->similar). Unknown modes are
 # rejected so the schema does not advertise a mode that is not wired.
 _IMPLEMENTED_MODES = ("auto", "neural", "find_similar")
@@ -575,7 +724,8 @@ def _rerank_absent_reason() -> str:
             "the model is installed and cached.")
 
 
-def _rank(query: str, ranked: list[RawResult], mode: str):
+def _rank(query: str, ranked: list[RawResult], mode: str, min_relevance: float = 0.0,
+          min_raw_relevance: float = 0.0, stats: dict | None = None):
     """Apply neural rerank (the ONLY reranker; BM25 was removed as redundant -
     neural matches its speed and ranks better). Returns (ranked_list, scores,
     mode_used, note).
@@ -586,10 +736,21 @@ def _rank(query: str, ranked: list[RawResult], mode: str):
     'auto' stays silent on a lean install (that's the expected shape, and saying
     so on every response would be noise), but it does report the surprising case:
     deps present and the model still missing or failing to load.
+
+    ``min_relevance`` (G5) is the floor on the NORMALIZED score and
+    ``min_raw_relevance`` (B2) the floor on the raw cross-encoder sigmoid; 0.0 on
+    either keeps everything. When a floor rejects every candidate the neural
+    branch returns an EMPTY ranked_list (not None - the model did run and did
+    answer), and the caller is responsible for reporting that as "delivered but
+    dropped" rather than as "no results". This function deliberately does not
+    swallow the empty case: the count lives with the caller's _dropped_total
+    accounting. ``stats`` passes through to reranker.rerank for the observed raw
+    span.
     """
     note = ""
     if mode in ("neural", "auto"):
-        pairs = neural_rerank(query, ranked)
+        pairs = neural_rerank(query, ranked, min_relevance=min_relevance,
+                              min_raw_relevance=min_raw_relevance, stats=stats)
         if pairs is not None:
             return [r for r, _ in pairs], [s for _, s in pairs], "neural", note
         reason = _rerank_absent_reason()
@@ -1088,6 +1249,10 @@ async def smart_search(
     region: Optional[str] = None,
     page: int = 0,
     freshness: Optional[str] = None,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    min_relevance: float = 0.0,
+    min_raw_relevance: float = 0.0,
 ) -> SearchResponseModel:
     """Local keyless web search (no API key, no account). The default pool
     (baidu, bing, so360, bing_global, yandex, brave - all HTTP, no browser;
@@ -1108,6 +1273,33 @@ async def smart_search(
     position order), neural (same, explicit - surfaces a note if unavailable),
     find_similar (pass url=; fetches the source page, derives a query, and reranks
     candidates against the source content - Exa find-similar, local).
+
+    min_relevance (G5): relevance floor for the neural reranker, 0.0-1.0 on the
+    NORMALIZED score (top result = 1.0). Results below it are dropped instead of
+    being returned as filler; when every candidate is below it the response says
+    so in `error` and drops them rather than returning noise. 0.0 (default) keeps
+    everything. Only meaningful when the neural reranker is active - with no
+    reranker there is no relevance signal to threshold on, and the note says so.
+    Applied to the mode=auto/neural ranking path; find_similar scores candidates
+    against the SOURCE PAGE on a different scale, so the floor is not applied
+    there and the response says so when both are requested.
+
+    min_raw_relevance (B2): a floor on the cross-encoder's RAW sigmoid (0.0-1.0,
+    default 0.0 = off) instead of the normalized score. It is the one that can say
+    "nothing in this round is relevant": normalization defines the top hit as 1.0,
+    so a normalized floor can trim a spread-out set but can never reject the whole
+    of a bad one. Measured on live results with bge-zh, off-topic scores sit at
+    ~1e-4 and on-topic ones at 0.93+, so 0.1 is a safe starting point; when it
+    filters, the note reports this round's observed raw span. Same ranking path,
+    same find_similar exception.
+
+    after/before (G24) are the date window. `after` is widened to the narrowest
+    preset the engines actually offer (day/week/month/year — measured: none of
+    them accepts an absolute range) and `date_filter` in the response says what was
+    sent, which engines could apply it and which answered unfiltered. `before` is
+    refused: presets only bound one side, and results carry no publish date, so an
+    older-than limit could neither be asked nor checked — see the module note in
+    search_engines._DATE_AWARE_ENGINES.
     """
     t0 = time()
 
@@ -1123,15 +1315,87 @@ async def smart_search(
             duration_ms=0, error=str(e),
         )
 
+    # G24: the date window is resolved against the pool that is about to run,
+    # because "did the dates get applied?" is a question about these engines, not
+    # about dhole in general.
+    try:
+        freshness, date_filter, date_rejected = _date_window(
+            after, before, freshness, engines or list(DEFAULT_ENGINES))
+    except Exception as e:
+        return SearchResponseModel(
+            query=query, results=[], total_results=0, duration_ms=0, error=str(e))
+    if date_rejected:
+        return SearchResponseModel(
+            query=query, results=[], total_results=0, duration_ms=0,
+            error=date_rejected,
+            next_action=("Drop before= and use after=<date>, or fetch the source's "
+                         "feed with feed_fetch(since=<date>) when it publishes one - "
+                         "a feed carries per-item dates, which search results do not."),
+        )
+
     _requested_max = max_results = _as_int(max_results, DEFAULT_MAX_RESULTS)
     max_results = max(1, min(max_results, 50))
     cache_ttl = _as_int(cache_ttl, SEARCH_CACHE_TTL)
+
+    def _hint_with(base: str, note: str) -> str:
+        """Append one clause to the fetch_hint sentence-assembly below.
+
+        Named rather than repeated as an inline ternary: the assembly at the end of
+        the function now has five optional clauses, and a fifth copy of
+        ``x = f"{x} | {n}" if x and n else (n or x)`` is how the notes used to drift
+        apart (each copy handled "empty base" slightly differently).
+        """
+        return f"{base} | {note}" if base and note else (note or base)
+
+    # G24: a date window that the engines could not match exactly has to be read
+    # where the agent looks first. `_clamp_note` is added later in the function, so
+    # this builds its own and both survive.
+    _date_note = ""
+    if date_filter and not date_filter.get("exact", True):
+        _date_note = date_filter.get("note") or (
+            f"the engines were asked for {date_filter.get('sent', '')}, which covers "
+            "your date window rather than matching it")
+    fetch_hint = _date_note
     # 越界的 max_results 此前被静默钳制：调用方要 100 条、拿到 50 条，响应里没有任何
     # 一处说明这 50 是上限而不是"只有 50 条结果"。
     _clamp_note = ""
     if _requested_max != max_results:
         _clamp_note = (f"max_results={_requested_max} is outside the supported 1-50 "
                        f"range; returning at most {max_results}")
+
+    # min_relevance (G5): a 0-1 floor for the neural reranker. A string from the
+    # wire is already normalized to a number by _ARG_TYPES; the float() here
+    # covers direct callers. Out-of-range is clamped (never raised) so a sloppy
+    # caller still gets results, but the adjustment is reported - silently
+    # applying 1.0 when the caller asked for 5 would look like "everything was
+    # irrelevant".
+    try:
+        _req_min_rel = float(min_relevance)
+    except (TypeError, ValueError):
+        _req_min_rel = 0.0
+    if _req_min_rel != _req_min_rel:  # NaN
+        _req_min_rel = 0.0
+    min_relevance = max(0.0, min(1.0, _req_min_rel))
+    if min_relevance != _req_min_rel:
+        _min_rel_note = (f"min_relevance={_req_min_rel} is outside 0-1; using "
+                         f"{min_relevance}")
+        _clamp_note = (f"{_clamp_note} | {_min_rel_note}" if _clamp_note
+                       else _min_rel_note)
+
+    # min_raw_relevance (B2): same parse, same "clamped and said so" rule. A value
+    # that cannot be read must not quietly mean "no floor" - the caller asked the
+    # question "was any of this relevant", and the answer depends on the number.
+    try:
+        _req_min_raw = float(min_raw_relevance)
+    except (TypeError, ValueError):
+        _req_min_raw = 0.0
+    if _req_min_raw != _req_min_raw:  # NaN
+        _req_min_raw = 0.0
+    min_raw_relevance = max(0.0, min(1.0, _req_min_raw))
+    if min_raw_relevance != _req_min_raw:
+        _raw_note = (f"min_raw_relevance={_req_min_raw} is outside 0-1; using "
+                     f"{min_raw_relevance}")
+        _clamp_note = (f"{_clamp_note} | {_raw_note}" if _clamp_note else _raw_note)
 
     # find_similar: the target is a URL, not a query. Derive it early so the cache
     # key is keyed on the source URL.
@@ -1159,11 +1423,19 @@ async def smart_search(
         region = f"{loc}-{lang}" if len(loc) == 2 else "us-en"
 
     cache_query = find_sim_url or query
-    cache_type = (f"search:v5:{max_results}:{site or ''}:{','.join(exclude_sites or [])}:"f"{location or ''}:{language or ''}:{page or 0}:{','.join(engines or [])}:"f"{freshness or ''}:{mode}:{cache_query}")
+    cache_type = (f"search:v6:{max_results}:{site or ''}:{','.join(exclude_sites or [])}:"f"{location or ''}:{language or ''}:{page or 0}:{','.join(engines or [])}:"f"{freshness or ''}:{after or ''}:{mode}:{cache_query}")
     # An explicit region is passed through to the engines, so keep it in the
     # cache identity. Omitted regions retain the existing cache key behavior.
     if cache_region is not None:
         cache_type = f"{cache_type}:region={cache_region}"
+    # A relevance floor changes WHICH results the response contains, so it is part
+    # of the cache identity - otherwise a floor=0.3 call could be served a payload
+    # ranked without any floor. Only appended when non-default, so the common case
+    # keeps the existing key and previously cached entries stay valid.
+    if min_relevance > 0.0:
+        cache_type = f"{cache_type}:minrel={min_relevance}"
+    if min_raw_relevance > 0.0:
+        cache_type = f"{cache_type}:minraw={min_raw_relevance}"
     if cache_ttl > 0:
         cached = await get_cached(cache_query, cache_type, None, ttl=cache_ttl, scope="search")
         if cached and cached.get("content"):
@@ -1199,12 +1471,14 @@ async def smart_search(
                     engine_preempted=_ep,
                     rerank_mode=_rm,
                     consensus_basis=data.get("consensus_basis", ""),
+                    date_filter=data.get("date_filter", {}) or {},
                     related_queries=_rq,
                     duration_ms=(time() - t0) * 1000,
                     fetch_hint=_hint,
                     summary=_search_summary(cache_query, results_list, _eu, _rm),
                     next_action=_search_next_action(results_list, _eb, "", _eu,
-                                                    engine_empty=_ee, engine_preempted=_ep),
+                                                    engine_empty=_ee, engine_preempted=_ep,
+                                                    rerank_mode=_rm),
                 )
             except (json.JSONDecodeError, KeyError, TypeError) as e:
                 logger.warning(f"Corrupt search cache for '{cache_query[:50]}': {e}")
@@ -1277,6 +1551,21 @@ async def smart_search(
         if rerank_note:
             fetch_hint = (fetch_hint + " | " + rerank_note) if fetch_hint else rerank_note
         sim_related = _related_queries(derived_query, results_list)
+        if min_relevance > 0.0 or min_raw_relevance > 0.0:
+            # Say it out loud rather than let the parameter silently do nothing:
+            # this mode scores candidates against the source PAGE, on a different
+            # scale, so a query-relevance floor has no consistent meaning here.
+            _asked = ", ".join(
+                f"{name}={value}" for name, value in
+                (("min_relevance", min_relevance), ("min_raw_relevance", min_raw_relevance))
+                if value > 0.0)
+            _floor_note = (
+                f"{_asked} {'was' if ',' not in _asked else 'were'} NOT applied "
+                "(find_similar ranks "
+                "against the source page, not the query) - use mode=auto/neural if "
+                "you want a relevance floor"
+            )
+            fetch_hint = (fetch_hint + " | " + _floor_note) if fetch_hint else _floor_note
     else:
         # Intent-aware multi-query fan-out: detect intent
         # and give diversity engines an expanded query variant while core engines
@@ -1372,7 +1661,19 @@ async def smart_search(
                 await _rerank_task
             except Exception:
                 pass
-        ranked_list, scores, rerank_used, rerank_note = _rank(query, ranked[:max(2 * max_results, 12)], mode)
+        _rank_candidates = ranked[:max(2 * max_results, 12)]
+        _rank_stats: dict = {}
+        ranked_list, scores, rerank_used, rerank_note = _rank(
+            query, _rank_candidates, mode, min_relevance=min_relevance,
+            min_raw_relevance=min_raw_relevance, stats=_rank_stats)
+        # How many candidates the relevance floor rejected outright (G5). They are
+        # not part of _delivered - they never reached _build_results - so without
+        # this the "all results were dropped" branch below would see
+        # _dropped_total == 0 and the response would read as "this query has no
+        # results", which is the exact silent degradation min_relevance exists to
+        # prevent. The fallback branch of _rank returns every candidate, so this
+        # is 0 whenever no reranker ran.
+        _rank_dropped = len(_rank_candidates) - len(ranked_list)
         total_families, _contrib, _basis = _family_universe(engines, reports)
         ranked_list, scores = _apply_quality_boost(ranked_list, scores, query)
         # Diversity: cap same-domain results at 2 in top positions
@@ -1384,29 +1685,64 @@ async def smart_search(
         results_list = _quality_filter(results_list)
         _dropped_low = _delivered - len(results_list)
         _before_topic_filter = len(results_list)
-        results_list = _filter_irrelevant_results(results_list, query)
-        _off_topic = _before_topic_filter - len(results_list)
-        _dropped_total = _dropped_low + _off_topic
-        fetch_hint = compute_fetch_hint(results_list)
+        _kept = _filter_irrelevant_results(results_list, query)
+        _off_topic = _before_topic_filter - len(_kept)
+        # A discard the caller cannot inspect is just an assertion. Naming what the
+        # engines actually sent settles the only question that matters here - "did
+        # dhole throw away real results, or did something on this network answer
+        # instead of the engine?" - without the caller having to re-run the query
+        # against another index to find out.
+        _discarded = ([] if _kept else
+                      [(r.title or r.url or "")[:60] for r in results_list[:3]])
+        results_list = _kept
+        _dropped_total = _dropped_low + _off_topic + _rank_dropped
+        fetch_hint = _hint_with(_date_note, compute_fetch_hint(results_list))
         if rerank_note:
-            fetch_hint = (fetch_hint + " | " + rerank_note) if fetch_hint else rerank_note
+            fetch_hint = _hint_with(fetch_hint, rerank_note)
         # 引擎确实给了结果、是 dhole 自己把结果丢掉时，必须说出来。否则响应同时写着
         # engines_used=[bing]、engine_empty=[]、error=""、results=[]，读起来像"这个
         # 查询没有结果"，next_action 还让人换个说法重试——实测本机 bing 对 DNS 查询回的
         # 全是 bilibili 首页（网络层拿走了回答），改查询不会有任何用。部分丢弃同样要留痕，
         # 否则"结果比预期少"又变回隐形降级。
         if _dropped_total and not results_list:
-            _why = ("matched no query term" if _off_topic and not _dropped_low
-                    else "scored below the relevance floor")
+            _causes = []
+            if _rank_dropped:
+                _floors = [f"min_relevance={min_relevance}"] if min_relevance > 0.0 else []
+                if min_raw_relevance > 0.0:
+                    _floors.append(f"min_raw_relevance={min_raw_relevance}")
+                # The raw span is the calibration feedback: without it a caller
+                # who emptied the list has to guess the next number.
+                if _rank_stats.get("raw_max") is not None:
+                    _floors.append(f"(raw scores here spanned {_rank_stats['raw_min']:.4f}"
+                                   f"-{_rank_stats['raw_max']:.4f})")
+                _causes.append("scored below " + (" ".join(_floors) or "the relevance floor"))
+            if _dropped_low:
+                _causes.append("scored below the relevance floor")
+            if _off_topic:
+                _causes.append("matched no query term")
+            _why = " and ".join(_causes) or "were dropped"
+            # When the floor alone emptied the list, _delivered is 0 (nothing
+            # survived to be built) and quoting it would read as "the engines found
+            # nothing" - the opposite of what happened. Quote the candidate count
+            # the floor actually saw instead.
+            _seen = len(_rank_candidates) if _rank_dropped else _delivered
             error = (
-                f"Engines delivered {_delivered} results, but all {_dropped_total} "
-                f"{_why}, so dhole dropped them rather than return noise. Off-topic "
+                f"Engines delivered {_seen} results, but all {_dropped_total} {_why}, "
+                "so dhole dropped them rather than return noise. Off-topic "
                 "results on a normal query usually mean a captive portal, DNS hijack "
                 "or proxy answered on the engine's behalf - rephrasing will not help; "
                 "check the network, or retry with engines=[...] to ask a different index."
             )
+            if _discarded:
+                error += (" What the engines sent instead: "
+                          + " | ".join(f"'{t}'" for t in _discarded) + ".")
         elif _dropped_total:
             _drop_note = f"{_dropped_total} engine results were dropped as off-topic/low-relevance"
+            if min_raw_relevance > 0.0 and _rank_stats.get("raw_max") is not None:
+                _drop_note += (f" (min_raw_relevance={min_raw_relevance} rejected "
+                               f"{_rank_stats.get('dropped_raw', _rank_dropped)} of "
+                               f"{len(_rank_candidates)}; raw scores here spanned "
+                               f"{_rank_stats['raw_min']:.4f}-{_rank_stats['raw_max']:.4f})")
             fetch_hint = f"{fetch_hint} | {_drop_note}" if fetch_hint else _drop_note
         main_related = _related_queries(query, results_list)
 
@@ -1420,6 +1756,13 @@ async def smart_search(
     engine_blocked = list(dict.fromkeys(r.name for r in reports if r.blocked))
     engine_empty = list(dict.fromkeys(r.name for r in reports if r.status == "empty"))
     engine_preempted = list(dict.fromkeys(r.name for r in reports if r.preempted))
+
+    # G6: this round just told us the pool is worth asking, and it is the natural
+    # moment to check whether an engine that is sitting out a backoff would answer
+    # now. Scheduled, not awaited: a diagnostic must not add latency to a search
+    # that already has its answer, and it is a no-op unless something is cooling
+    # and the probe interval has elapsed.
+    schedule_engine_heartbeat()
     not_contributing = engine_blocked + engine_empty
 
     # Pool-health notes (partial pool / no corroboration). Same helper the cache
@@ -1427,9 +1770,9 @@ async def smart_search(
     # one does.
     _notes = _pool_health_notes(results_list, not_contributing, _contrib)
     if _notes:
-        fetch_hint = (fetch_hint + " | " + _notes) if fetch_hint else _notes
+        fetch_hint = _hint_with(fetch_hint, _notes)
     if _clamp_note:
-        fetch_hint = (fetch_hint + " | " + _clamp_note) if fetch_hint else _clamp_note
+        fetch_hint = _hint_with(fetch_hint, _clamp_note)
 
     # Cache successful results (+ engine metadata + related queries for cache hits)
     if cache_ttl > 0 and results_list:
@@ -1445,6 +1788,10 @@ async def smart_search(
             "consensus_basis": _basis,
             "family_universe": total_families,
             "families_contributing": _contrib,
+            # A cache key carries the date window (v6), so every row written from
+            # now on has one; rows from before it do not, and reporting {} there is
+            # honest - the round may or may not have been date-limited.
+            "date_filter": date_filter,
         })
         await set_cached(cache_query, cache_type, [cache_data], 200, None, cache_ttl, scope="search")
 
@@ -1453,11 +1800,13 @@ async def smart_search(
         engines_used=engines_used, engine_blocked=engine_blocked,
         engine_empty=engine_empty, engine_preempted=engine_preempted,
         rerank_mode=rerank_used, consensus_basis=_basis,
+        date_filter=date_filter,
         related_queries=(sim_related if mode == "find_similar" else main_related),
         duration_ms=(time() - t0) * 1000, error=error,
         fetch_hint=fetch_hint,
         summary=_search_summary(cache_query, results_list, engines_used, rerank_used),
         next_action=_search_next_action(results_list, engine_blocked, error, engines_used,
                                         engine_empty=engine_empty,
-                                        engine_preempted=engine_preempted),
+                                        engine_preempted=engine_preempted,
+                                        rerank_mode=rerank_used),
     )

@@ -47,6 +47,11 @@ _PRIMARY_HOSTS = (
 _MAX_CITATIONS = 30
 _MAX_NAV = 20
 _MAX_EXTERNAL = 20
+# Bounds for the caller-facing `max_links` cap (smart_fetch). Same numbers the
+# tool description quotes; anything outside is clamped here, at the point where
+# the cap is actually applied, so the documented range cannot drift from it.
+MAX_LINKS_FLOOR = 1
+MAX_LINKS_CEILING = 100
 
 
 def _norm_host(u: str) -> str:
@@ -67,16 +72,45 @@ def _clean_text(s: str) -> str:
     return " ".join((s or "").split())
 
 
-def extract_links(html_text: str, page_url: str, metadata: dict[str, Any] | None = None
-                  ) -> dict[str, Any]:
+def _caps(max_links: int | None) -> tuple[int, int, int]:
+    """(citations, navigation, external) caps for this call.
+
+    ``None`` = the module defaults (30/20/20). An explicit ``max_links`` sets
+    all three, clamped to the documented 1-100 range. The cap is per list: an
+    agent that asked for 5 links does not want 90 of them because the page
+    happened to have three categories.
+    """
+    if max_links is None:
+        return _MAX_CITATIONS, _MAX_NAV, _MAX_EXTERNAL
+    try:
+        cap = int(max_links)
+    except (TypeError, ValueError):
+        return _MAX_CITATIONS, _MAX_NAV, _MAX_EXTERNAL
+    if cap <= 0:
+        return _MAX_CITATIONS, _MAX_NAV, _MAX_EXTERNAL
+    cap = max(MAX_LINKS_FLOOR, min(cap, MAX_LINKS_CEILING))
+    return cap, cap, cap
+
+
+def extract_links(html_text: str, page_url: str, metadata: dict[str, Any] | None = None,
+                  max_links: int | None = None) -> dict[str, Any]:
     """Classify a page's outgoing links.
 
-    Returns {citations, navigation, external, primary_source}. Each list item
-    is {url, text}. Never raises; on any error returns empty lists.
+    Returns {citations, navigation, external, primary_source, total_found,
+    is_truncated}. Each list item is {url, text}. ``total_found`` counts every
+    distinct http(s) link seen on the page (before the caps), and
+    ``is_truncated`` is True when the caps dropped at least one of them - the
+    agent can tell "this page links to 3 things" from "this page links to 300
+    things, here are 30", and ask for a different slice. Never raises; on any
+    error returns empty lists with zero totals.
     """
-    out: dict[str, Any] = {"citations": [], "navigation": [], "external": [], "primary_source": ""}
+    out: dict[str, Any] = {
+        "citations": [], "navigation": [], "external": [],
+        "primary_source": "", "total_found": 0, "is_truncated": False,
+    }
     if not html_text or not page_url:
         return out
+    cap_cit, cap_nav, cap_ext = _caps(max_links)
     try:
         tree = lxml_html.fromstring(html_text)
     except Exception:
@@ -91,6 +125,7 @@ def extract_links(html_text: str, page_url: str, metadata: dict[str, Any] | None
     navigation: list[dict[str, str]] = []
     external: list[dict[str, str]] = []
     content_externals: list[dict[str, str]] = []  # off-domain links in main-content area (real references) - for primary_source
+    total_found = 0
 
     try:
         anchors = tree.xpath('//a[@href]')
@@ -117,6 +152,7 @@ def extract_links(html_text: str, page_url: str, metadata: dict[str, Any] | None
         if key in seen:
             continue
         seen.add(key)
+        total_found += 1
         try:
             text = _clean_text(a.text_content() or "")
         except Exception:
@@ -138,23 +174,27 @@ def extract_links(html_text: str, page_url: str, metadata: dict[str, Any] | None
 
         is_external = host != page_host
         if is_external:
-            if len(external) < _MAX_EXTERNAL:
+            if len(external) < cap_ext:
                 external.append(entry)
             if not in_nav:
                 content_externals.append(entry)  # off-domain reference in main content
             continue
         # Same-domain: nav chrome vs main-content citation.
         if in_nav:
-            if len(navigation) < _MAX_NAV:
+            if len(navigation) < cap_nav:
                 navigation.append(entry)
         else:
-            if len(citations) < _MAX_CITATIONS:
+            if len(citations) < cap_cit:
                 citations.append(entry)
 
     out["citations"] = citations
     out["navigation"] = navigation
     out["external"] = external
     out["primary_source"] = _primary_source(page_url, metadata or {}, content_externals)
+    # Transparency (G1): the caps used to be invisible, so a page with 300
+    # in-content links looked exactly like a page with 30.
+    out["total_found"] = total_found
+    out["is_truncated"] = total_found > (len(citations) + len(navigation) + len(external))
     return out
 
 

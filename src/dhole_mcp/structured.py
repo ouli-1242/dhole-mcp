@@ -9,11 +9,27 @@ Usage:
         "properties": {
             "title": {"type": "string", "selector": "h1"},
             "price": {"type": "string", "selector": ".price"},
-            "features": {"type": "array", "selector": ".feature-list li"}
+            "features": {"type": "array", "selector": ".feature-list li"},
+            # G14: a property with its own sub-schema + a selector is one record
+            # per matched container, child selectors evaluated INSIDE it. Without
+            # this, `.tag` below answers with every tag on the page and the
+            # grouping (which tags belong to which quote) is gone.
+            "quotes": {
+                "type": "array", "selector": ".quote",
+                "properties": {
+                    "text": {"selector": ".text"},
+                    "author": {"selector": ".author"},
+                    "tags": {"type": "array", "selector": ".tag"},
+                },
+            },
         }
     }
     result = extract_structured(html, schema, url="https://...")
-    # {"title": "...", "price": "$29", "features": ["...", "..."]}
+    # {"title": "...", "price": "$29", "features": ["...", "..."],
+    #  "quotes": [{"text": "...", "author": "...", "tags": ["a", "b"]}, ...]}
+
+"items": {"properties": {...}} is accepted as the JSON-Schema spelling of the
+same thing.
 """
 
 from __future__ import annotations
@@ -71,6 +87,14 @@ def extract_structured(
 
         value = None
 
+        # G14: a field carrying a sub-schema describes RECORDS, not a text value.
+        # Checked before everything else, because a nested field with a selector
+        # would otherwise be read as one flattened string.
+        nested = _sub_properties(field_spec)
+        if nested and root is not None:
+            result[field_name] = _extract_records(root, selector, field_spec, nested)
+            continue
+
         # Strategy 1: CSS selector
         if selector and root is not None:
             value = _extract_by_selector(root, selector, field_type, attribute)
@@ -98,6 +122,100 @@ def extract_structured(
     return result
 
 
+# Records per repeated field. A list page can hold 5,000 items and the response
+# must not become 5,000 objects; the cap is named in the tool description and the
+# array length is visible in the output, so a truncated answer can be noticed
+# rather than being mistaken for the whole page.
+MAX_RECORDS_PER_FIELD = 200
+
+
+def _sub_properties(field_spec: dict) -> Dict[str, Any]:
+    """The nested property map of a field, from either spelling.
+
+    ``{"selector": ".quote", "properties": {...}}`` is the short form;
+    ``{"selector": ".quote", "items": {"properties": {...}}}`` is the JSON-Schema
+    spelling a caller arrives with after writing a real schema elsewhere. Both
+    mean "one record per matched container".
+    """
+    nested = field_spec.get("properties")
+    if isinstance(nested, dict) and nested:
+        return nested
+    items = field_spec.get("items")
+    if isinstance(items, dict):
+        nested = items.get("properties")
+        if isinstance(nested, dict) and nested:
+            return nested
+    return {}
+
+
+def _select_nodes(root, selector: str) -> list:
+    """Elements matching ``selector`` below ``root`` (never raises)."""
+    if not selector or root is None:
+        return []
+    try:
+        from lxml.cssselect import CSSSelector
+        return list(CSSSelector(selector)(root))
+    except Exception as e:
+        logger.debug("selector '%s' failed: %s", selector, e)
+        return []
+
+
+def _is_repeating(field_spec: dict) -> bool:
+    return field_spec.get("type") == "array" or isinstance(field_spec.get("items"), dict)
+
+
+def _extract_records(root, selector: str, field_spec: dict,
+                     nested: Dict[str, Any]) -> Any:
+    """Apply a sub-schema to each container the field's selector matches.
+
+    Without this, a nested ``selector`` is evaluated against the WHOLE document,
+    which is exactly the flattening the 16.0 report measured: ten quotes' tags
+    came back as one 40-element array, and the grouping the caller asked for had
+    quietly become the page's aggregate.
+    """
+    if not selector:
+        # No container to iterate: the field just groups its children under a
+        # name, in the same scope as its parent.
+        return _extract_record(root, nested)
+    nodes = _select_nodes(root, selector)
+    if _is_repeating(field_spec):
+        return [_extract_record(n, props) for n, props in
+                ((node, nested) for node in nodes[:MAX_RECORDS_PER_FIELD])]
+    return _extract_record(nodes[0], nested) if nodes else {}
+
+
+def _extract_record(node, properties: Dict[str, Any]) -> Dict[str, Any]:
+    """One record: every field evaluated INSIDE ``node``, recursively.
+
+    Deliberately without the page-level fallbacks the top level has (metadata,
+    JSON-LD, regex-in-text): those answer "what did this field get called on the
+    page", and inside a record they would fill a missed selector with something
+    from elsewhere on the page — a value that looks found but is not this row's.
+    """
+    out: Dict[str, Any] = {}
+    for name, spec in properties.items():
+        if not isinstance(spec, dict):
+            spec = {"type": "string"}
+        nested = _sub_properties(spec)
+        selector = spec.get("selector", "") or ""
+        field_type = spec.get("type", "string")
+        if nested:
+            out[name] = _extract_records(node, selector, spec, nested)
+            continue
+        if selector:
+            out[name] = _extract_by_selector(node, selector, field_type,
+                                             spec.get("attribute") or "")
+        elif field_type == "count":
+            out[name] = 1 if node is not None else 0
+        else:
+            # No selector inside a record: the container's own text. Predictable
+            # beats clever here — the caller pointed at this element.
+            out[name] = _element_text(node)
+        if out[name] is None:
+            out[name] = [] if field_type == "array" else ""
+    return out
+
+
 def _parse_html(html: str):
     """Parse HTML into an lxml tree. Returns None on failure."""
     if not html:
@@ -105,7 +223,17 @@ def _parse_html(html: str):
     try:
         from lxml import html as lxml_html
         from io import BytesIO
-        tree = lxml_html.parse(BytesIO(html.encode("utf-8", errors="replace")))
+        # encoding="utf-8" is not a default made explicit: these bytes came from
+        # `html.encode("utf-8")` two lines up, so utf-8 is the only charset that
+        # can be right. Without it libxml2 reads the document's own <meta
+        # charset> (or, when it declares none, the machine's locale) and
+        # re-decodes the body we already decoded correctly — which is how an
+        # apostrophe U+2019 turned into "â" in a schema extraction (BUG-1).
+        # It has to be lxml.html's parser, not lxml.etree's: the etree one builds
+        # bare _Element nodes, which have no .text_content() and would empty
+        # every field through the except in _element_text.
+        tree = lxml_html.parse(BytesIO(html.encode("utf-8", errors="replace")),
+                               parser=lxml_html.HTMLParser(encoding="utf-8"))
         return tree.getroot()
     except Exception:
         try:
@@ -159,9 +287,15 @@ def _element_text(el) -> str:
     """Get clean text content from an lxml element."""
     try:
         text = el.text_content()
-        return " ".join(text.split()).strip()
+    except AttributeError:
+        # Only lxml.html.HtmlElement has text_content(); a tree parsed by
+        # lxml.etree's HTMLParser holds bare _Element nodes. Without this the
+        # except below files that off as "this field has no text", which is how
+        # a whole extraction silently goes empty.
+        text = "".join(el.itertext())
     except Exception:
         return ""
+    return " ".join(text.split()).strip()
 
 
 def _match_metadata_key(field_name: str, metadata: Dict[str, str]) -> Optional[str]:

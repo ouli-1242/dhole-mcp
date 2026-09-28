@@ -23,6 +23,28 @@ def _no_real_home_migration(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_robots_fetch(monkeypatch):
+    """Keep the suite off the network for robots.txt.
+
+    v16.0 made ``smart_fetch`` consult robots.txt before every tier. Any test
+    that monkeypatches the tier functions (the usual way to test the fetch
+    pipeline) would otherwise add a REAL ``GET /robots.txt`` per origin — slow,
+    network-dependent, and a source of flakes. ``DHOLE_IGNORE_ROBOTS=1`` makes
+    ``robots.check()`` short-circuit to "allowed", which is exactly the
+    pre-v16.0 behaviour those tests were written against.
+
+    ``tests/test_robots.py`` owns the compliance behaviour itself: it deletes
+    this env var locally and injects a fake fetcher into ``RobotsCache``. The
+    cache is reset on teardown so a test that primed it cannot leak rules into
+    an unrelated test.
+    """
+    monkeypatch.setenv("DHOLE_IGNORE_ROBOTS", "1")
+    yield
+    from dhole_mcp.robots import reset_robots_cache
+    reset_robots_cache()
+
+
+@pytest.fixture(autouse=True)
 def _offline_dns(monkeypatch, request):
     """Keep the suite independent of the machine's resolver.
 
@@ -94,7 +116,32 @@ def _no_real_home_state_writes(request, monkeypatch, tmp_path):
     # credentials into the user's ~/.dhole/search_proxies.json.
     from dhole_mcp import search_proxy as _proxy
     monkeypatch.setattr(_proxy, "_config_path", lambda: tmp_path / "search_proxies.json")
+    # The cookie jar (G7) is the fifth state file, and the only one holding
+    # credentials: without this, a test that fetches with options.session_id
+    # writes a real Set-Cookie value into the real ~/.dhole/sessions.db, where it
+    # then outlives the test and gets sent by the next unrelated call.
+    # reset_for_tests() closes the module-level connection because the DB path is
+    # resolved lazily — a connection opened before this redirect would keep
+    # writing to the real file.
+    from dhole_mcp import sessions as _sessions
+    _sessions.reset_for_tests()
+    monkeypatch.setattr(_sessions, "_db_path", lambda: str(tmp_path / "sessions.db"))
+    # The fetch cache is the sixth state file, and it broke from the other
+    # direction: not written by tests so much as READ by them. Ordinary live use
+    # fills ~/.dhole/cache.db with real pages, so a test that stubs the fetcher for
+    # https://example.com/ gets a cache HIT and never reaches its own stub — two
+    # tests in test_bug_report2_regressions flipped exactly that way once the DB
+    # happened to hold an example.com entry. A test's view of the cache should
+    # depend only on what that test put into it.
+    #
+    # No connection to close here (unlike sessions.db): every cache operation opens
+    # aiosqlite fresh and _db_initialized is keyed by path, and tmp_path is unique
+    # per test. Models live under paths.cache_dir() by a separate route, so this
+    # does not move the ~90MB reranker tree.
+    from dhole_mcp import cache as _cache
+    monkeypatch.setattr(_cache, "_CACHE_DIR", tmp_path)
     yield
+    _sessions.reset_for_tests()
 
 
 @pytest.fixture

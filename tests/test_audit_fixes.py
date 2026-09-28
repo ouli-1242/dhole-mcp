@@ -36,6 +36,13 @@ async def test_feed_fetch_returns_dict_structured(mock_logger=None):
         source_title = "t"
         error = ""
         items = []
+        discovered_from = ""
+        since = ""
+        items_older_than_since = 0
+        items_without_date = 0
+        cache_validators = {}
+        not_modified = False
+        note = ""
 
     with patch("dhole_mcp.feed.fetch_feeds", new=AsyncMock(return_value=[_FakeResp()])):
         with patch("socket.getaddrinfo",
@@ -46,6 +53,19 @@ async def test_feed_fetch_returns_dict_structured(mock_logger=None):
     assert isinstance(result[0], dict)
     assert "source_url" in result[0]
     assert "items" in result[0]
+    # G19: the projection has to carry the discovery hop, or a caller that passed
+    # a site page sees a feed URL it never named and no explanation why.
+    assert "discovered_from" in result[0]
+    # G23, and the durable form of it: this tool returns a hand-built dict, so any
+    # model field not projected here does not exist for the caller. Comparing the
+    # projection against FeedResult's own fields makes that invisible: a field
+    # added to the model fails here until it is projected (the hand-written list
+    # of names is what let `note` slip through).
+    from dhole_mcp.feed import FeedResult
+    assert set(result[0]) == set(FeedResult.model_fields), (
+        "feed_fetch 的投影与 FeedResult 的字段已经不一致："
+        f"少 {set(FeedResult.model_fields) - set(result[0])}，"
+        f"多 {set(result[0]) - set(FeedResult.model_fields)}")
 
 
 @pytest.mark.asyncio
@@ -67,7 +87,7 @@ async def test_redirect_to_internal_rejected():
     session = HTTPSession(stealthy_headers=False, retries=0)
     session._client = MagicMock()
 
-    def fake_get(url, headers=None, timeout=None, follow_redirects=False):
+    def fake_get(method, url, headers=None, timeout=None, follow_redirects=False, **kw):
         resp = MagicMock()
         resp.status_code = 302
         resp.headers = {"location": "http://127.0.0.1:8080/internal.png"}
@@ -77,7 +97,7 @@ async def test_redirect_to_internal_rejected():
         resp.url = url
         return resp
 
-    session._client.get = MagicMock(side_effect=fake_get)
+    session._client.request = MagicMock(side_effect=fake_get)
     with pytest.raises(SecurityError, match="internal/private IP"):
         await session.get("https://example.com/x.png", follow_redirects=True)
 
@@ -89,7 +109,7 @@ async def test_max_redirects_bounded():
     session._client = MagicMock()
     calls = {"n": 0}
 
-    def fake_get(url, headers=None, timeout=None, follow_redirects=False):
+    def fake_get(method, url, headers=None, timeout=None, follow_redirects=False, **kw):
         calls["n"] += 1
         resp = MagicMock()
         resp.status_code = 302
@@ -100,7 +120,7 @@ async def test_max_redirects_bounded():
         resp.url = url
         return resp
 
-    session._client.get = MagicMock(side_effect=fake_get)
+    session._client.request = MagicMock(side_effect=fake_get)
     # allow_internal=True 让重定向目标通过校验；max_redirects=2 应限制为
     # 初始 + 2 跳 = 3 次请求，第 4 次不再跟随（返回 302 而非继续）
     r = await session.get("http://127.0.0.1:9/x", follow_redirects=True,

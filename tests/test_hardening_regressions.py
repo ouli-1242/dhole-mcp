@@ -27,13 +27,21 @@ from dhole_mcp.fetcher import HTTPSession
 
 
 class _CredentialLeakingClient:
-    """模拟 primp：异常文本里带出完整的带凭据代理 URL。"""
+    """模拟 primp：异常文本里带出完整的带凭据代理 URL。
 
-    def get(self, *args, **kwargs):
+    两个入口都实现，因为 primp 本来就有两个：``get(url, ...)`` 是
+    ``request("GET", url, ...)`` 的便捷写法，而抓取层统一走 ``request``（要发
+    POST/PUT/HEAD）。只桩一个的话，测试会在与凭据无关的地方红。
+    """
+
+    def request(self, *args, **kwargs):
         raise RuntimeError(
             "connection failed via http://alice:s3cret@proxy.test:8080 "
             "(proxy rejected)"
         )
+
+    def get(self, *args, **kwargs):
+        return self.request(*args, **kwargs)
 
 
 @pytest.mark.asyncio
@@ -212,7 +220,7 @@ class TestCacheContextIsolation:
                        hide_canvas=True, extra_headers=None, useragent=None, cookies=None,
                        offset=0, max_content_chars=None, pages=None, password=None,
                        focus=None, actions=None, include_media=False, include_links=False,
-                       schema=None):
+                       max_links=None, ignore_robots=False, schema=None):
             captured["ctx"] = server_mod._CACHE_CTX.get()
 
         asyncio.run(fake(None, url="https://x/y", cookies=[{"name": "s", "value": "1"}]))
@@ -308,9 +316,10 @@ class TestCacheContextIsolation:
 
         @server_mod._smart_fetch_request_context
         async def fake(self, url="", password=None, pages=None, focus=None,
-                       include_media=False, include_links=False, cookies=None,
-                       extra_headers=None, useragent=None, proxy=None,
-                       main_content_only=True, use_trafilatura=True):
+                       include_media=False, include_links=False, max_links=None,
+                       css_selector=None, cookies=None, extra_headers=None,
+                       useragent=None, proxy=None, main_content_only=True,
+                       use_trafilatura=True):
             captured["ctx"] = server_mod._CACHE_CTX.get()
 
         asyncio.run(fake(None, url="https://x/a.pdf", password="s3cret"))

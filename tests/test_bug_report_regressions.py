@@ -619,7 +619,8 @@ def _patch_engines(monkeypatch, results, reports=None, calls=None):
     monkeypatch.setattr(S, "ensure_reranker", fake_ensure_reranker)
     monkeypatch.setattr(
         S, "_rank",
-        lambda q, ranked, mode: (ranked, [1.0] * len(ranked), "merge", ""),
+        lambda q, ranked, mode, **kw: (
+            ranked, [1.0] * len(ranked), "merge", ""),
     )
     return S
 
@@ -651,7 +652,8 @@ class TestOffTopicFilterIsVisible:
         scores = [1.0, 0.4, 0.3, 0.05, 0.02]
         monkeypatch.setattr(
             S, "_rank",
-            lambda q, ranked, mode: (ranked, scores[:len(ranked)], "merge", ""),
+            lambda q, ranked, mode, **kw: (
+                ranked, scores[:len(ranked)], "merge", ""),
         )
         out = await S.smart_search(None, "dns resolution", 6)
         assert len(out.results) < len(rows)

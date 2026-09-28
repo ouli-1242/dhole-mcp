@@ -166,6 +166,18 @@ def _landed_url_refused(landed: str, entry_url: str) -> bool:
 
 # ─── Resource blocking handler ───────────────────────────────────────────────
 
+# Header names that ARE a credential, so they belong to one origin only. Kept in
+# step with fetcher._CREDENTIAL_HEADERS, plus the API-key spellings callers
+# actually use — those are the ones whose name is chosen by the caller, so they
+# cannot be recognised from a built-in list at the HTTP layer either.
+# `cookie` is deliberately absent: the browser's own jar is already domain-scoped,
+# and rewriting a Cookie header here would fight that model instead of protecting
+# anything (carry cookies with session_id/cookies=, which is scoped per host).
+_BROWSER_CREDENTIAL_HEADERS = frozenset({
+    "authorization", "proxy-authorization",
+    "x-api-key", "api-key", "x-goog-api-key", "x-auth-token", "x-access-token",
+})
+
 class BrowserSSRFBlockedError(RuntimeError):
     """浏览器被指到一个内网/回环/元数据地址 —— 已拦下，且不会重试。
 
@@ -206,6 +218,7 @@ def _create_route_handler(
     ssrf_watch: Optional[list] = None,
     entry_url: str = "",
     main_frame: Any = None,
+    sent_headers: Optional[Dict[str, str]] = None,
 ) -> Callable[[Any], Awaitable[None]]:
     """Create an async route handler for resource blocking + SSRF guarding.
 
@@ -213,9 +226,21 @@ def _create_route_handler(
     是就 abort 并把 (host, 是否主文档) 记进这个 list 交给调用方判定。
     子资源（图片/脚本/XHR）与重定向都在这里过一道 —— 浏览器内部这些请求不走
     validate_url，而页面 JS 自己发起的 fetch 更是只有这条路能拦。
+
+    sent_headers（传入时启用）：把调用方挂上来的**凭据**头绑在入口主机上。
+    `page.set_extra_http_headers` 的语义是「这个页面发出的每个请求都带上这些头」，
+    于是一个 staging 站点的 `Authorization: Basic …` 会跟着它的图片、脚本、字体和
+    分析端点一起发给每一个第三方 origin。HTTP 层在跨源重定向时已经不分发凭据了
+    （fetcher._hop_headers）；两层口径不一致的话，「升级到隐身浏览器」就等于「把
+    凭据撒出去」，而那恰恰是隐身层存在的理由。只动调用方自己声明过的那几个头名，
+    页面 JS 自己设的 Authorization 一律不碰。
     """
     disabled = DISABLED_RESOURCE_TYPES if disable_resources else set()
     domains = frozenset(blocked_domains) if blocked_domains else frozenset()
+    credential_names = frozenset(
+        k.lower() for k in (sent_headers or {})
+        if k.lower() in _BROWSER_CREDENTIAL_HEADERS)
+    entry_host = (urlparse(entry_url).hostname or "").lower() if credential_names else ""
 
     async def handler(route: Any) -> None:
         try:
@@ -255,6 +280,20 @@ def _create_route_handler(
                             parsed.netloc or "?")
                         await route.abort()
                         return
+            if credential_names and entry_host:
+                host = (urlparse(request_url).hostname or "").lower()
+                if host and host != entry_host:
+                    mine = dict(route.request.headers or {})
+                    kept = {k: v for k, v in mine.items() if k not in credential_names}
+                    if len(kept) != len(mine):
+                        try:
+                            await route.continue_(headers=kept)
+                            return
+                        except Exception:
+                            # 覆盖失败也不能把请求挂掉：宁可放行（凭据可能被带出去），
+                            # 也不要用一次抓取的中断来惩罚一个本来就配置了凭据的调用。
+                            logger.warning(
+                                "could not rebind credential headers for %s", host)
             await route.continue_()
         except Exception:
             try:
@@ -1227,6 +1266,7 @@ class BrowserSession:
                     _create_route_handler(
                         actual_disable_resources, None, ssrf_watch, entry_url=url,
                         main_frame=page.main_frame,
+                        sent_headers=actual_extra_headers,
                     ),
                 )
 

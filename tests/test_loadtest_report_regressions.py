@@ -256,10 +256,28 @@ class TestToolSchemaRequired:
         raise AssertionError(f"no tool def for {name}")
 
     def test_smart_fetch_declares_one_of_url_or_urls(self):
-        """The schema said nothing; the tool rejects a call with neither."""
+        """The schema said nothing; the tool rejects a call with neither.
+
+        Asserted by VALIDATING the shapes the tool documents rather than by
+        comparing the literal to a literal: the options bag is a documented home
+        for `urls` (its description says so, and the dispatcher promotes it),
+        and a hand-matched anyOf stayed green while the protocol layer rejected
+        exactly that call - the gate and the promise had drifted, and only the
+        promise was being read.
+        """
+        import jsonschema
+
         schema = self._schema("smart_fetch")
         assert "required" not in schema, "either one alone satisfies the call"
-        assert schema["anyOf"] == [{"required": ["url"]}, {"required": ["urls"]}]
+        for documented in (
+            {"url": "https://example.com/"},
+            {"urls": ["https://example.com/"]},
+            {"options": {"urls": ["https://example.com/"], "max_content_chars": 500}},
+        ):
+            jsonschema.validate(instance=documented, schema=schema)
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(instance={"options": {"max_content_chars": 500}},
+                                schema=schema)
 
     def test_cache_clear_requires_nothing(self):
         """The report listed cache_clear here too; both its args are optional."""
@@ -487,7 +505,8 @@ class TestCacheClearPayload:
         monkeypatch.setattr(server_mod, "clear_cache", fake_clear_cache)
 
         _content, structured = _dispatch("cache_clear", {})
-        assert structured["engine_health"] == {}
+        assert "engine_health" not in structured, \
+            "the plain call must not carry pool state, not even as an empty {}"
         assert called == [], "the pool snapshot must not even be taken"
 
     def test_engine_state_true_still_reports_health(self, monkeypatch):
@@ -602,3 +621,19 @@ class TestStructuredAttributeContract:
         )
         assert "FIRST match" in schema_desc
         assert "array" in schema_desc
+        # 实测里 agent 会自己发明 `repeat`/`multiple` 这类键，然后拿着首条以为
+        # 拿到了全部 —— 所以「除了这几个键别的都不起作用」必须和上面两句同处。
+        assert "does nothing" in schema_desc
+
+    def test_an_invented_keyword_stays_an_invented_keyword(self):
+        """`repeat` 不在被读的键里：它被忽略，字段仍是首条，而不是变成列表。
+
+        这条给上面那句描述提供事实依据 —— 描述说的「不起作用」必须真的不起作用。
+        """
+        out = extract_structured(
+            _PAGE_WITH_THREE_LINKS,
+            {"properties": {"links": {
+                "selector": "a", "attribute": "href", "repeat": True,
+            }}},
+        )
+        assert out["links"] == "https://example.test/one"

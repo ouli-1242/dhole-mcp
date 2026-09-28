@@ -800,6 +800,49 @@ def _engine_yield_row() -> tuple[str, str, bool] | None:
         return None
 
 
+def _cooldown_config() -> dict:
+    """The backoff tiers + heartbeat in force (G6), read straight from the env.
+
+    Stdlib-only for the same reason as `_engine_cooldowns`: `dhole engines list`
+    has to run on a half-broken install, which is exactly when someone wants to
+    know what the pool's timeouts are set to. Defaults mirror
+    search_metasearch._cooldown_tiers(); a comment there points back here.
+    """
+    tiers = {
+        "block": ("DHOLE_ENGINE_COOLDOWN", 60.0, 5.0, 1800.0),
+        "challenge": ("DHOLE_ENGINE_CHALLENGE_COOLDOWN", 600.0, 60.0, 7200.0),
+        "connection": ("DHOLE_ENGINE_CONN_COOLDOWN", 600.0, 60.0, 7200.0),
+    }
+
+    def _one(env: str, default: float, lo: float, hi: float) -> tuple[float, str]:
+        raw = os.environ.get(env)
+        if raw is None or not str(raw).strip():
+            return default, ""
+        try:
+            asked = float(raw)
+        except (TypeError, ValueError):
+            return default, f"{env}={raw!r} is not a number; using {default:g}s"
+        value = min(max(asked, lo), hi)
+        if value != asked:
+            return value, f"{env}={asked:g}s clamped to {value:g}s (range {lo:g}-{hi:g}s)"
+        return value, ""
+
+    out = {"tiers": {}, "heartbeat": 300.0, "note": ""}
+    notes = []
+    for kind, (env, default, lo, hi) in tiers.items():
+        value, note = _one(env, default, lo, hi)
+        out["tiers"][kind] = value
+        if note:
+            notes.append(note)
+    hb, note = _one("DHOLE_ENGINE_HEARTBEAT", 300.0, 0.0, 86400.0)
+    out["heartbeat"] = hb
+    if note:
+        notes.append(note)
+    if notes:
+        out["note"] = "; ".join(notes)
+    return out
+
+
 def _engine_cooldowns() -> dict[str, float]:
     """{engine: seconds left} from circuit_breaker.json, expired entries dropped.
 

@@ -491,7 +491,9 @@ async def ensure_reranker(*, download: bool = True) -> Optional[_Reranker]:
         return await asyncio.to_thread(_load_reranker)
 
 
-def rerank(query: str, results: list) -> Optional[list[tuple]]:
+def rerank(query: str, results: list, *, min_relevance: float = 0.0,
+           min_raw_relevance: float = 0.0,
+           stats: Optional[dict] = None) -> Optional[list[tuple]]:
     """Rerank RawResults with the neural cross-encoder. Returns (result, score)
     pairs sorted desc, or None if the reranker is unavailable (caller falls back
     to consensus + engine-position order).
@@ -501,6 +503,45 @@ def rerank(query: str, results: list) -> Optional[list[tuple]]:
     cluster tightly and can't discriminate among good results; normalizing
     restores meaningful spread (top=1.0, worst=0.0) for the relevance_score field
     + tier derivation. Ranking ORDER is unchanged (normalization is monotonic).
+
+    ``min_relevance`` (G5) drops every pair scoring below it on that NORMALIZED
+    scale, so a query whose engine results are mostly off-topic does not return
+    the off-topic ones just because they were the best of a bad set. Defaults to
+    0.0 = keep everything (the pre-16.0 behaviour).
+
+    Known limit of the normalized scale: because the top result is *defined* to
+    be 1.0 and the worst 0.0, a normalized floor can never reject a WHOLE set —
+    the best member of an entirely irrelevant set still normalizes to 1.0, and
+    when every raw score is identical they all normalize to 1.0. It trims the
+    tail of a set that HAS spread; it cannot certify that a set is good.
+
+    ``min_raw_relevance`` is the floor on the raw cross-encoder sigmoid instead,
+    and that is what makes "nothing in this round is relevant" expressible.
+    Measured on live search results (bge-zh, the model a multilingual/Chinese
+    query selects): an off-topic document scores ~1e-4 (p90 0.0001 across 621
+    cross-topic pairs, max 0.0104) while an on-topic one sits at 0.93-0.9996,
+    so the two populations barely touch — the junk tail of engine results is the
+    ~0.0001 band, not a low percentile of the good ones. Same-topic-different-
+    aspect pairs (the hard case) land at p50 0.005 / p90 0.18, above which a
+    floor stops being safe, which is why this is opt-in with no default value
+    baked in and why 0.1 is the recommended starting point rather than 0.5.
+    Distributions differ per model, so a number calibrated on one is not
+    automatically right for the other: ``stats`` reports what this round actually
+    spanned so a caller can calibrate instead of guessing.
+
+    ``stats`` (optional dict) is filled with ``{"raw_min", "raw_max", "kept",
+    "dropped_raw"}`` — the observed raw span of this candidate set. It is an
+    out-param rather than a richer return type so every existing caller unpacking
+    ``(result, score)`` pairs keeps working.
+
+    **When a floor removes everything, the result is an EMPTY list, not None.**
+    The two mean different things and the caller must not conflate them: None =
+    "no reranker, fall back to consensus order" (no information was produced);
+    [] = "the reranker ran and rejected every candidate" (information was
+    produced, and the honest answer is that none of them cleared the floor).
+    Callers are expected to report the [] case rather than silently show zero
+    results - search.py folds the count into its "engines delivered N results,
+    all dropped rather than return noise" accounting.
     """
     rer = get_reranker()
     if rer is None or not results:
@@ -514,11 +555,31 @@ def rerank(query: str, results: list) -> Optional[list[tuple]]:
     if len(raw) != len(results):
         return None
     mn, mx = min(raw), max(raw)
+    if stats is not None:
+        stats["raw_min"], stats["raw_max"] = mn, mx
     if mx > mn:
         scores = [(s - mn) / (mx - mn) for s in raw]
     else:
         scores = [1.0 for _ in raw]  # all equal -> no spread to normalize -> all top
-    pairs = list(zip(results, scores))
+    # (result, normalized, raw) — the raw score has to travel with its pair, or a
+    # raw floor cannot be applied after the first filter without re-deriving it.
+    rows = list(zip(results, scores, raw))
+    if min_relevance > 0.0:
+        kept = [r for r in rows if r[1] >= min_relevance]
+        if len(kept) != len(rows):
+            logger.info(f"rerank: min_relevance={min_relevance} dropped "
+                        f"{len(rows) - len(kept)}/{len(rows)} result(s)")
+        rows = kept
+    if min_raw_relevance > 0.0:
+        kept = [r for r in rows if r[2] >= min_raw_relevance]
+        if len(kept) != len(rows):
+            logger.info(f"rerank: min_raw_relevance={min_raw_relevance} dropped "
+                        f"{len(rows) - len(kept)}/{len(rows)} result(s)")
+        rows = kept
+    if stats is not None:
+        stats["kept"] = len(rows)
+        stats["dropped_raw"] = (len(results) - len(rows)) if min_raw_relevance > 0.0 else 0
+    pairs = [(r, s) for r, s, _ in rows]
     pairs.sort(key=lambda rs: (-rs[1], rs[0].position))
     return pairs
 

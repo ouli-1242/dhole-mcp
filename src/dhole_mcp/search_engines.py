@@ -99,6 +99,27 @@ _VERTICAL_BACKENDS = frozenset({"sogou_weixin"})
 
 _FRESHNESS_TO_TIMELIMIT = {"day": "d", "week": "w", "month": "m", "year": "y"}
 
+# Which backends actually put a date constraint on the wire. Measured (16.0) by
+# diffing each engine's build_payload(timelimit=None) against
+# build_payload(timelimit='w'); a test asserts this table against those payloads so
+# it cannot drift when an engine gains or loses the parameter. Everything not
+# listed accepts `timelimit` and ignores it — which is why the response names who
+# was filtered rather than claiming the round was.
+_DATE_AWARE_ENGINES = frozenset({
+    "bing", "bing_global",     # filters=ex1:"ez{d|w|m|y}"
+    "brave",                   # tf=p{d|w|m|y}
+    "duckduckgo",              # df={d|w|m|y}
+    "yahoo",                   # btf={d|w|m|y}
+    "bocha",                   # keyed: freshness=oneWeek
+    "tavily",                  # keyed: time_range=week
+})
+
+
+def date_support(engines) -> tuple:
+    """``(can_be_filtered, cannot_be_filtered)`` for one round's pool."""
+    pool = set(engines or ())
+    return sorted(pool & _DATE_AWARE_ENGINES), sorted(pool - _DATE_AWARE_ENGINES)
+
 
 @dataclass
 class RawResult:

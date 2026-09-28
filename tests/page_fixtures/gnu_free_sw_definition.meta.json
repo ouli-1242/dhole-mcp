@@ -1,0 +1,13 @@
+{
+  "captured_at": "2026-09-27",
+  "captured_from_url": "https://www.gnu.org/philosophy/free-sw.html",
+  "sha256": "0459a78c1793e00b",
+  "kind": "article",
+  "content_links": 112,
+  "extracted_markdown_chars": 25785,
+  "visible_text_chars": 25245,
+  "label_share": 0.051,
+  "longest_nonlabel_run_chars": 756,
+  "note": "长篇正文页，链接密集（112 条同域内容链接）且没有 <article> 标签 —— 报告 G16 的形态（Wikipedia 词条同类）。",
+  "scrubbed": "否：判定的证据就是整页的链接/文本分布，裁剪会让测量失真"
+}

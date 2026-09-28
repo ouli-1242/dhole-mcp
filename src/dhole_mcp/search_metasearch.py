@@ -324,6 +324,26 @@ def _usable_count(rows: Any) -> int:
     return sum(1 for r in rows if _is_usable(r))
 
 
+def _split_region(region: str) -> tuple[str, str]:
+    """``"us-en"`` -> ``("us", "en")``，对调用方能送进来的形状都不炸。
+
+    region 是 dhole 的公开参数（`smart_search(region=)`，也由 location+language 派生），
+    所以 "cn"、"zh-Hans-CN"、空串都会走到这里。原先两处用户写的是
+    `country, lang = region.lower().split("-")` —— 段数不对就 ValueError，而 metasearch
+    把它记成 `error:ValueError`，engine_health 报 blocked。一个 region 字符串能让一家
+    引擎「被拦」，这是把调用方的笔误升级成基础设施故障。
+
+    单个词按国家处理（本项目其它地方都这么读它），语言默认 en：把 "cn" 当成语言会去
+    找 cn.wikipedia.org 这种不存在的站。
+    """
+    parts = [p for p in (region or "").strip().lower().split("-") if p]
+    if len(parts) >= 2:
+        return parts[0], parts[-1]
+    if len(parts) == 1:
+        return parts[0], "en"
+    return "us", "en"
+
+
 # ─── base search engine (text-only, XPath-driven) ────────────────────────────
 class BaseSearchEngine:
     """Abstract base: build_payload -> fetch -> extract via XPath -> post-process."""
@@ -507,7 +527,7 @@ class Brave(BaseSearchEngine):
     def build_payload(self, query: str, region: str, safesearch: str,
                       timelimit: str | None, page: int = 1, **kwargs: str) -> dict[str, Any]:
         payload = {"q": query, "source": "web"}
-        country, _lang = region.lower().split("-")
+        country, _lang = _split_region(region)
         cookies = {country: country, "useLocation": "0"}
         if safesearch != "moderate":
             cookies["safesearch"] = "strict" if safesearch == "on" else "off"
@@ -536,17 +556,38 @@ class Grokipedia(BaseSearchEngine):
         data = json.loads(html_text)
         items = data.get("results", [])
         if not items:
+            # Same reason as Wikipedia: this parser never reaches
+            # BaseSearchEngine.extract_results, so the yield counters have to be
+            # written here or the health panel can only ever say "not
+            # instrumented" for this engine.
+            self.last_extract = (0, 0)
             return []
         r = TextResult()
         r.title = items[0].get("title", "").strip("_")
         body = items[0].get("snippet", "")
         r.body = body.split("\n\n", 1)[1] if "\n\n" in body else body
         r.href = f"https://grokipedia.com/page/{items[0]['slug']}"
-        return [r]
+        rows = [r]
+        self.last_extract = (len(rows), _usable_count(rows))
+        return rows
 
 
 # ─── Wikipedia (opensearch API; encyclopedic/topic queries) ──────────────────
 class Wikipedia(BaseSearchEngine):
+    """维基百科知识库检索（opensearch API，免密 JSON）。
+
+    两个实测行为，都会伪装成"引擎坏了"，所以写在这里：
+
+    * **版本按 region 的语言选**（`cn-zh` -> zh 站）。opensearch 是标题前缀/模糊匹配，
+      不是全文检索，所以「英文查询 + zh 站」和「中文查询 + en 站」都回 0 条 —— 这是
+      覆盖面对不上，不是解析器坏了。空手而归时再问一次 en 站（同一个词条多数有英文条目），
+      并把两次的结果都记进产出计数，健康判定看最终这一答。
+    * 它自己解析 JSON，**不会**走到 `BaseSearchEngine.extract_results`，所以
+      `last_extract` 必须自己写。不写的话 `_classify_yield` 落在 `nodes < 0` 那格，
+      engine_health 显示 `not_instrumented` —— 「没观测」被读成「没接入」（扩展报告 N2
+      就是这么误判的）。
+    """
+
     name = "wikipedia"
     provider = "wikipedia"
     priority = 2.0
@@ -556,15 +597,31 @@ class Wikipedia(BaseSearchEngine):
     def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
                       timelimit: str | None, page: int = 1,  # noqa: ARG002
                       **kwargs: str) -> dict[str, Any]:
-        _country, lang = region.lower().split("-")
+        _country, lang = _split_region(region)
         self.search_url = (f"https://{lang}.wikipedia.org/w/api.php?action=opensearch"
                            f"&profile=fuzzy&limit=1&search={quote(query)}")
         self.lang = lang
         return {}
 
+    def search(self, query: str, region: str = "us-en", safesearch: str = "moderate",
+               timelimit: str | None = None, page: int = 1, **kwargs: str) -> list[Any] | None:
+        rows = super().search(query, region=region, safesearch=safesearch,
+                              timelimit=timelimit, page=page, **kwargs)
+        if rows:
+            return rows
+        country, lang = _split_region(region)
+        if lang == "en":
+            return rows
+        # The region's own edition had nothing under its own title index; the
+        # entity usually still has an English article, and the caller asked for
+        # "wikipedia", not for one edition of it.
+        return super().search(query, region=f"{country}-en", safesearch=safesearch,
+                              timelimit=timelimit, page=page, **kwargs)
+
     def extract_results(self, html_text: str) -> list[Any]:
         data = json.loads(html_text)
         if not data[1]:
+            self.last_extract = (0, 0)
             return []
         r = TextResult()
         r.title = data[1][0]
@@ -574,9 +631,9 @@ class Wikipedia(BaseSearchEngine):
         if resp:
             pages = json.loads(resp).get("query", {}).get("pages", {})
             r.body = next(iter(pages.values())).get("extract", "")
-        if "may refer to:" in r.body:
-            return []
-        return [r]
+        rows = [] if "may refer to:" in r.body else [r]
+        self.last_extract = (len(rows), _usable_count(rows))
+        return rows
 
 
 # ─── Yahoo (Bing-index from a different server; RU= redirect decode) ─────────
@@ -1526,13 +1583,69 @@ def _is_circuit_open(name: str) -> bool:
     return _BACKEND_HEALTH.get(name, 0.0) > time()
 
 
+# G6: the backoff was welded to the source, and the measured spread of real
+# situations is wide — a public IP that got briefly rate-limited wants 15s, a
+# host behind a hard anti-bot wall wants an hour, and a shared machine running
+# two agents at once wants to stop probing entirely. Env-tunable, read per
+# recording (so `dhole engines reset`-style tooling does not need a restart), and
+# CLAMPED: a typo like DHOLE_ENGINE_COOLDOWN=60000 is 16 hours of a dead pool,
+# which is not what anyone meant to ask for. The clamp is reported in
+# cooldown_settings() so `dhole engines list` can show what is actually in force.
+def _cooldown_tiers() -> dict:
+    """The three backoff tiers, read lazily.
+
+    A function rather than a module constant because this block sits ABOVE the
+    connection-failure constants: building the table at import time would name
+    `_CONN_FAIL_COOLDOWN` before it exists.
+    """
+    return {
+        "block": ("DHOLE_ENGINE_COOLDOWN", _CIRCUIT_COOLDOWN, 5.0, 1800.0),
+        "challenge": ("DHOLE_ENGINE_CHALLENGE_COOLDOWN", _CHALLENGE_COOLDOWN, 60.0, 7200.0),
+        "connection": ("DHOLE_ENGINE_CONN_COOLDOWN", _CONN_FAIL_COOLDOWN, 60.0, 7200.0),
+    }
+
+
+def _cooldown_seconds(kind: str) -> tuple[float, str]:
+    """(effective seconds, note) for one backoff tier, honouring its env var."""
+    env_name, default, lo, hi = _cooldown_tiers()[kind]
+    raw = os.environ.get(env_name)
+    if raw is None or not str(raw).strip():
+        return default, ""
+    try:
+        asked = float(raw)
+    except (TypeError, ValueError):
+        return default, (f"{env_name}={raw!r} is not a number; using "
+                         f"{default:g}s")
+    value = min(max(asked, lo), hi)
+    if value != asked:
+        return value, (f"{env_name}={asked:g}s is outside the supported "
+                       f"{lo:g}-{hi:g}s range; using {value:g}s")
+    return value, ""
+
+
+def cooldown_settings() -> dict:
+    """The backoff tiers currently in force, for reporting (G6)."""
+    out: dict = {}
+    for kind, (env_name, _default, _lo, _hi) in _cooldown_tiers().items():
+        seconds, note = _cooldown_seconds(kind)
+        entry = {"seconds": seconds, "env": env_name}
+        if note:
+            entry["note"] = note
+        out[kind] = entry
+    return out
+
+
 def _record_block(name: str, *, challenge: bool = False) -> None:
     """被拒后把这家冷却掉，时长按拒绝的**形态**分档（见 `_CHALLENGE_THRESHOLD`）。"""
-    seconds = _CIRCUIT_COOLDOWN
+    seconds, note = _cooldown_seconds("block")
+    if note:
+        logger.warning(note)
     if challenge:
         n = _CHALLENGE_COUNTS[name] = _CHALLENGE_COUNTS.get(name, 0) + 1
         if n >= _CHALLENGE_THRESHOLD:
-            seconds = _CHALLENGE_COOLDOWN
+            seconds, note = _cooldown_seconds("challenge")
+            if note:
+                logger.warning(note)
     _BACKEND_HEALTH[name] = time() + seconds
     _save_circuit_state()
 
@@ -1547,7 +1660,10 @@ _CONN_FAIL_COUNTS: dict[str, int] = {}
 def _record_conn_failure(name: str) -> None:
     _CONN_FAIL_COUNTS[name] = _CONN_FAIL_COUNTS.get(name, 0) + 1
     if _CONN_FAIL_COUNTS[name] >= _CONN_FAIL_THRESHOLD:
-        _BACKEND_HEALTH[name] = time() + _CONN_FAIL_COOLDOWN
+        seconds, note = _cooldown_seconds("connection")
+        if note:
+            logger.warning(note)
+        _BACKEND_HEALTH[name] = time() + seconds
         _CONN_FAIL_COUNTS.pop(name, None)
         _save_circuit_state()
 
@@ -1582,6 +1698,143 @@ def cooldowns() -> dict[str, float]:
     """Active cooldowns as {engine: seconds remaining}."""
     now_ts = time()
     return {k: round(v - now_ts, 1) for k, v in _BACKEND_HEALTH.items() if v > now_ts}
+
+
+# ─── proactive pool heartbeat (G6) ───────────────────────────────────────────
+# The breaker above is passive: an engine comes back only when somebody happens to
+# search again after its window ends, and a wrongly-cooled main engine can stay out
+# for the full 10 minutes even on a network that stopped blocking it an hour ago.
+# `dhole engines probe` (15.2) answers that question, but only when a human
+# remembers to ask it. This is the same probe, run by the server itself, and — the
+# part that matters — it does NOT hand out new punishment: a probe that fails
+# restores the ORIGINAL expiry, so checking cannot extend it. That rule is what
+# keeps this from being the "每 3 分钟敲一次，可能是自己把惩罚续了" pattern the
+# measured so.com window showed; the interval exists for the same reason.
+_HEARTBEAT_DEFAULT_S = 300.0
+_HEARTBEAT_PROBE_TIMEOUT_S = 12.0
+_heartbeat_running = False
+_heartbeat_last_at = 0.0
+_heartbeat_log: list[dict] = []
+
+
+def _heartbeat_interval() -> tuple[float, str]:
+    """Seconds between proactive probes (0 = never; env DHOLE_ENGINE_HEARTBEAT)."""
+    raw = os.environ.get("DHOLE_ENGINE_HEARTBEAT")
+    if raw is None or not str(raw).strip():
+        return _HEARTBEAT_DEFAULT_S, ""
+    try:
+        asked = float(raw)
+    except (TypeError, ValueError):
+        return _HEARTBEAT_DEFAULT_S, f"DHOLE_ENGINE_HEARTBEAT={raw!r} is not a number; using {_HEARTBEAT_DEFAULT_S:g}s"
+    if asked <= 0:
+        return 0.0, ""  # an explicit "never" is a choice, not a clamp
+    value = min(asked, 86400.0)
+    if value != asked:
+        return value, f"DHOLE_ENGINE_HEARTBEAT={asked:g}s capped at {value:g}s"
+    return value, ""
+
+
+def heartbeat_settings() -> dict:
+    """What the heartbeat is currently configured to do (for `engines list`)."""
+    seconds, note = _heartbeat_interval()
+    out = {"interval_s": seconds, "enabled": seconds > 0,
+           "running": _heartbeat_running, "last_result": _heartbeat_log[-1] if _heartbeat_log else {}}
+    if note:
+        out["note"] = note
+    return out
+
+
+async def engine_heartbeat(query: str = "python asyncio tutorial") -> dict:
+    """Ask every cooling engine, directly and once, whether it answers right now.
+
+    Returns ``{"checked": [...], "recovered": [...], "still_cooling": [...]}``.
+    Never raises: this runs unattended behind a search, and a broken diagnostic must
+    not become a failed search.
+    """
+    global _heartbeat_running
+    _heartbeat_running = True
+    result: dict = {"checked": [], "recovered": [], "still_cooling": []}
+    try:
+        cooling = {name: until for name, until in list(_BACKEND_HEALTH.items())
+                   if until > time()}
+        for name, until in cooling.items():
+            cls = _TEXT_ENGINES.get(name)
+            if cls is None or getattr(cls, "disabled", False):
+                result["still_cooling"].append(name)
+                continue
+            # Lift the breaker for the duration of THIS probe only. The engine is
+            # called directly, not through metasearch, so there is no quorum, no
+            # preemption and no second engine involved: the answer is about this one.
+            _BACKEND_HEALTH.pop(name, None)
+            ok = False
+            try:
+                got = await asyncio.wait_for(
+                    asyncio.to_thread(_probe_one_engine, cls, query),
+                    timeout=_HEARTBEAT_PROBE_TIMEOUT_S)
+                ok = bool(got)
+            except Exception:
+                ok = False
+            result["checked"].append(name)
+            if ok:
+                _record_success(name)  # clears the cooldown: the pool gains it back now
+                result["recovered"].append(name)
+            else:
+                # Restore the expiry that was in force BEFORE the probe. Not a fresh
+                # one: a check that found the wall still standing must not have
+                # lengthened the wait behind it.
+                _BACKEND_HEALTH[name] = until
+                result["still_cooling"].append(name)
+        if result["checked"]:
+            _heartbeat_log.append({"at": time(), **result})
+            del _heartbeat_log[:-8]
+            _save_circuit_state()
+    except Exception as e:  # a heartbeat that cannot run must stay quiet, but logged
+        logger.debug("engine heartbeat skipped: %s", str(e)[:160])
+        result["error"] = str(e)[:120]
+    finally:
+        _heartbeat_running = False
+    return result
+
+
+def _probe_one_engine(cls, query: str) -> list:
+    """One live query through the engine's own fetch+parse path, built the same
+    way metasearch builds it (same proxy, same deadline) so the heartbeat probes
+    the engine as the pool will actually use it."""
+    eng = cls(proxy=_get_search_proxy(), timeout=int(_SEARCH_DEADLINE), verify=True)
+    return eng.search(query) or []
+
+
+def schedule_engine_heartbeat() -> None:
+    """Fire the heartbeat if it is due (called after a search round, never before).
+
+    Three conditions, all of them cheap: the interval has elapsed, no probe is
+    already running, and at least one engine is actually cooling. With a healthy
+    pool this costs one clock comparison.
+    """
+    global _heartbeat_last_at
+    interval, note = _heartbeat_interval()
+    if note:
+        logger.warning(note)
+    if interval <= 0 or _heartbeat_running:
+        return
+    if not any(until > time() for until in _BACKEND_HEALTH.values()):
+        return
+    if time() - _heartbeat_last_at < interval:
+        return
+    _heartbeat_last_at = time()
+    try:
+        import asyncio
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # no loop (CLI / sync caller): nothing to schedule on
+    task = loop.create_task(engine_heartbeat())
+    # Keep a reference: a bare task can be garbage-collected mid-flight, and the
+    # failure mode is a heartbeat that silently never runs.
+    _heartbeat_tasks.add(task)
+    task.add_done_callback(_heartbeat_tasks.discard)
+
+
+_heartbeat_tasks: set = set()
 
 
 def engine_state_reset() -> dict:

@@ -209,23 +209,46 @@ def test_parse_implements_pdf_locally():
 
 # ─── 一致性：描述里提到的参数必须真的存在 ──────────────────────────────
 
-# `foo=` 形式出现、但属于响应字段或其它工具参数的名字，不算「参数引用」。
+# `foo=` 形式出现、但不算「参数引用」的名字。响应字段现在**从模型推出来**
+# （见 _response_field_names），这里只留推导看不见的两类：非模型的子对象字段
+# （table_of_contents 的条目是手搓 dict）与文档用词。
 _NOT_A_PARAM = {
-    "next_offset",     # 响应字段
     "end_page",        # table_of_contents 的字段
     "page",            # 同上（PDF 目录项字段，非本工具参数）
     "example",         # 文档用词
 }
 
+
+def _response_field_names() -> set[str]:
+    """回包模型声明过的每一个字段名。
+
+    描述里写 `error='robots_disallowed'`、`summary_truncated=true` 是在说
+    「回包长这样」，不是「有这么一个入参」。这个集合从模型推导而不是列清单，
+    理由与 _wire_core_schema 的 required 一样：第二份手抄的字段名清单就是
+    下一次漂移的来源。
+    """
+    from pydantic import BaseModel as _BM
+
+    from dhole_mcp import crawl, feed, search, server
+    out: set[str] = set()
+    for mod in (server, crawl, feed, search):
+        for obj in vars(mod).values():
+            if isinstance(obj, type) and issubclass(obj, _BM) and obj is not _BM:
+                out |= set(obj.model_fields)
+    return out
+
 _PARAM_REF = re.compile(r"\b([a-z][a-z0-9_]{2,})=")
-_OPTION_KEY = re.compile(r"\b([a-z][a-z0-9_]{2,})\s*[,(]")
+# 袋子有两种写法：旧的同段列举 "sitemap (true|false)"，新的**一行一键**
+# "sitemap: true | 'auto' | false"。只认前者的话，后者的键一律推导不出来，
+# 于是描述里提到 sitemap= 就被当成"承诺了不存在的参数"——假阳性。
+_OPTION_KEY = re.compile(r"\b([a-z][a-z0-9_]{2,})\s*[,(]|(?<![\w/])([a-z][a-z0-9_]{2,}):")
 
 
 def _option_bag_keys(tool: dict) -> set[str]:
     opts = tool["inputSchema"].get("properties", {}).get("options")
     if not opts:
         return set()
-    return set(_OPTION_KEY.findall(opts.get("description", "")))
+    return {m.group(1) or m.group(2) for m in _OPTION_KEY.finditer(opts.get("description", ""))}
 
 
 @pytest.mark.parametrize("name", sorted(_tools()))
@@ -236,7 +259,9 @@ def test_params_named_in_description_exist(tools, name):
     _strict_options 拒绝或静默忽略。跨工具引用是合法的（smart_crawl 的
     描述里写 smart_fetch(urls=[...])），所以已知集合取全部工具的并集。
     """
-    known = set(_NOT_A_PARAM)
+    known = set(_NOT_A_PARAM) | _response_field_names()
+    assert "summary_truncated" in known and "next_offset" in known, \
+        "响应字段推导空了：这条守卫会退化成把每个描述都判为通过"
     for other in tools.values():
         known |= set(other["inputSchema"].get("properties", {}))
         known |= _option_bag_keys(other)
@@ -335,10 +360,16 @@ def test_docstring_identifiers_are_on_the_wire_or_registered(tools):
 
     拦截场景：往 docstring 里写了一个新参数/新字段，以为客户端能看到 ——
     实际看不到。要么搬进 _TOOL_DEFS，要么登记并说明为什么它是内部细节。
+
+    agent 看得见的界面有两个，都算：tools/list 里该工具的那一条，以及
+    initialize 的 instructions。envelope 的读法集中写在 instructions（八
+    个工具共用一份，不在每个描述里各抄一遍），只查 tools/list 会把这种
+    「上收到公共层」误判成信息丢失。
     """
+    instructions = DHOLE_INSTRUCTIONS.lower()
     unregistered: dict[str, list[str]] = {}
     for name, t in tools.items():
-        on_wire = json.dumps(t, ensure_ascii=False).lower()
+        on_wire = json.dumps(t, ensure_ascii=False).lower() + instructions
         stray = sorted(i for i in _docstring_identifiers(name)
                        if i not in on_wire and i not in _ALLOWED_DOCSTRING_ONLY)
         if stray:
@@ -358,3 +389,44 @@ def test_allowlist_has_no_dead_entries(tools):
         used |= _docstring_identifiers(name)
     dead = sorted(i for i in _ALLOWED_DOCSTRING_ONLY if i not in used)
     assert not dead, f"白名单里这些标识符已无人使用，应删除: {dead}"
+
+
+# ─── 声音：操作面是写给代理的说明书，不是给人看的变化日志 ──────────────
+#
+# 这个 MCP 的使用者只有 agent。`tools/list` 与 `instructions` 里的每个字符都是它
+# 每次连接要付的上下文（实测 17k 字符），所以那里不该出现两类东西：
+#   · 作者口吻（"Measured:"、"until now"、"reported rather than hidden"）——它在向
+#     读者解释设计为什么好，而 agent 要的是下一步做什么；
+#   · 内部编号（G21 / P2-7 / BUG-1）——代码里指得清，对 agent 是无意义 token。
+# 事实照留（阈值校准数字、条件→动作），删的只是叙述来源的那层皮。同一个理由不适用于
+# docstring 与 CHANGELOG：它们不进上下文，写给人看是它们的本职。
+
+_WIRE_VOICE = re.compile(
+    r"\bmeasured\b|\buntil now\b|\bused to\b|\bpreviously\b|\bthe report\b"
+    r"|\bdeliberat|\bwe (?:now|added|removed|don'?t|didn'?t)\b"
+    r"|\bthis version\b|\bv1[0-9]\.", re.I)
+_INTERNAL_LABEL = re.compile(r"\bG\d{1,2}\b|\bP2-\d|\bBUG-\d|\bSEP-\d")
+
+
+def _wire_text_parts(tools: dict[str, dict]) -> list:
+    parts = [("instructions", DHOLE_INSTRUCTIONS)]
+    for name, t in tools.items():
+        parts.append((f"desc:{name}", t["description"]))
+        for key, spec in t["inputSchema"].get("properties", {}).items():
+            if isinstance(spec, dict) and isinstance(spec.get("description"), str):
+                parts.append((f"{name}.{key}", spec["description"]))
+    return parts
+
+
+@pytest.mark.parametrize("which,pattern", [
+    ("作者口吻", _WIRE_VOICE),
+    ("内部编号", _INTERNAL_LABEL),
+])
+def test_the_wire_never_becomes_a_changelog(tools, which, pattern):
+    offenders = []
+    for name, text in _wire_text_parts(tools):
+        for match in pattern.finditer(text):
+            i = match.start()
+            offenders.append(f"{name}: …{text[max(0, i - 45):i + 55]}…")
+    assert not offenders, (
+        f"{which}不该出现在 agent 每次连接都要读的文本里：\n" + "\n".join(offenders))

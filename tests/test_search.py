@@ -51,7 +51,8 @@ def smart_search_cache(monkeypatch):
     monkeypatch.setattr(search, "ensure_reranker", fake_ensure_reranker)
     monkeypatch.setattr(
         search, "_rank",
-        lambda query, ranked, mode: (ranked, [1.0] * len(ranked), "merge", ""),
+        lambda query, ranked, mode, **kw: (
+            ranked, [1.0] * len(ranked), "merge", ""),
     )
     return cache, live_regions
 
@@ -102,8 +103,12 @@ class TestSmartSearchRegionCache:
             None, "regional cache test", engines=["brave"],
         )
 
+        # v6: the key gained the `after` segment (G24) — a date window changes what
+        # is on the wire, so two windows must not share a row. An OMITTED window
+        # still contributes an empty slot, which is the point of this test: nothing
+        # extra is appended for parameters the caller did not pass.
         assert list(cache) == [
-            ("regional cache test", "search:v5:6:::::0:brave::auto:regional cache test"),
+            ("regional cache test", "search:v6:6:::::0:brave:::auto:regional cache test"),
         ]
 
 
@@ -1064,7 +1069,8 @@ class TestRerankFallbackNote:
     def test_note_appears_only_when_deps_are_present(self, monkeypatch, mode):
         raw = [RawResult(title=f"r{i}", url=f"https://a{i}.test", snippet="s",
                          source="bing", position=i + 1) for i in range(3)]
-        monkeypatch.setattr(search, "neural_rerank", lambda q, r: None)
+        monkeypatch.setattr(search, "neural_rerank",
+                            lambda q, r, **kw: None)
         # 精简安装：缺依赖是预期形态，auto 不该每次解释
         monkeypatch.setattr(search, "unavailable_reason",
                             lambda: "neural rerank needs dhole-mcp[all] (ModuleNotFoundError: onnxruntime)")
@@ -1086,7 +1092,8 @@ class TestRerankFallbackNote:
     def test_no_note_when_the_reranker_actually_ran(self, monkeypatch):
         raw = [RawResult(title="r", url="https://a.test", snippet="s",
                          source="bing", position=1)]
-        monkeypatch.setattr(search, "neural_rerank", lambda q, r: [(r[0], 0.9)])
+        monkeypatch.setattr(search, "neural_rerank",
+                            lambda q, r, **kw: [(r[0], 0.9)])
         _, _, used, note = search._rank("q", raw, "auto")
         assert used == "neural" and note == ""
 
@@ -1106,7 +1113,8 @@ class TestVerticalEnginesLoseTheTieBreakWithoutAReranker:
                 for i, s in enumerate(sources)]
 
     def test_vertical_only_results_go_last(self, monkeypatch):
-        monkeypatch.setattr(search, "neural_rerank", lambda q, r: None)
+        monkeypatch.setattr(search, "neural_rerank",
+                            lambda q, r, **kw: None)
         raw = self._raw(("sogou_weixin",), ("bing",), ("sogou_weixin",), ("yandex",))
         ranked, scores, used, _ = search._rank("q", raw, "auto")
         assert used == "merge"
@@ -1115,7 +1123,8 @@ class TestVerticalEnginesLoseTheTieBreakWithoutAReranker:
 
     def test_corroborated_by_a_general_engine_is_not_vertical(self, monkeypatch):
         """同一个 URL 被 bing 也返回过 = 有通用索引佐证，不当垂直结果降级。"""
-        monkeypatch.setattr(search, "neural_rerank", lambda q, r: None)
+        monkeypatch.setattr(search, "neural_rerank",
+                            lambda q, r, **kw: None)
         raw = self._raw(("sogou_weixin", "bing"), ("bing",))
         ranked, _, _, _ = search._rank("q", raw, "auto")
         assert [r.source for r in ranked] == ["sogou_weixin", "bing"]
@@ -1124,7 +1133,7 @@ class TestVerticalEnginesLoseTheTieBreakWithoutAReranker:
         """重排器在场时这条规则不介入 —— 相关性由模型判，不是覆盖面先验。"""
         raw = self._raw(("sogou_weixin",), ("bing",))
         monkeypatch.setattr(search, "neural_rerank",
-                            lambda q, r: [(r[1], 0.9), (r[0], 0.1)])
+                            lambda q, r, **kw: [(r[1], 0.9), (r[0], 0.1)])
         ranked, _, used, _ = search._rank("q", raw, "auto")
         assert used == "neural"
         assert [r.source for r in ranked] == ["bing", "sogou_weixin"]

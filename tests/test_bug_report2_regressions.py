@@ -378,7 +378,8 @@ class TestActionsTierBudget:
                                      offset, headless, real_chrome, wait, proxy,
                                      timeout, network_idle, solve_cloudflare,
                                      block_webrtc, hide_canvas, extra_headers,
-                                     useragent, cookies, max_chars=None):
+                                     useragent, cookies, max_chars=None,
+                                     conditional=None):
             seen["timeout"] = timeout
             raise _Stop()
 
@@ -402,7 +403,10 @@ class TestActionsTierBudget:
         monkeypatch.setattr(server_mod.MasterFetchServer, "smart_fetch", fake_smart_fetch)
         asyncio.run(server_mod.MasterFetchServer()._dispatch(
             "smart_fetch", {"url": "https://example.com/"}))
-        assert seen["timeout"] is None
+        # Absent or None both mean the same thing here — the tool decides — and the
+        # dispatcher now leaves it absent rather than handing over an explicit None.
+        # What must never come back is a number substituted at this layer.
+        assert seen.get("timeout") is None
 
 
 class TestParseDecodesLegacyEncodings:
@@ -531,6 +535,57 @@ class TestParseDecodesLegacyEncodings:
         start leaking an empty string as content."""
         out = asyncio.run(MasterFetchServer().parse(file_path=str(tmp_path / "nope.csv")))
         assert out.status == 0 and out.content == [] and out.content_ok is False
+
+    def test_prose_that_QUOTES_mojibake_is_not_an_undecodable_file(self, tmp_path):
+        """A damage COUNT cannot tell a wrong charset from text that shows what a
+        wrong charset looks like. Measured on this repo's own CHANGELOG: it
+        documents the `â€™` failure mode once, and a 43k-character file that
+        decodes byte-perfect as UTF-8 came back `encoding_undecodable` with
+        content_ok=false - a false accusation against a clean file, and one the
+        caller can do nothing about, since `encoding=` cannot un-quote it.
+        """
+        from dhole_mcp.parse import parse_file_detailed
+
+        path = tmp_path / "quotes.md"
+        path.write_bytes(("本仓库的更新日志正文。" * 400
+                          + " 反例写法：â€™ 两个字符。\n").encode("utf-8"))
+        content, error, extras = parse_file_detailed(str(path))
+        assert extras["encoding"] == "utf-8"
+        assert extras.get("decode_damage", 0) == 0, \
+            "one quoted marker is not evidence that the charset guess was wrong"
+        assert error == "" and "â€™" in content
+
+        out = asyncio.run(MasterFetchServer().parse(file_path=str(path)))
+        assert out.content_ok is True and out.error == ""
+
+    def test_a_file_that_MOSTLY_is_mojibake_is_still_flagged(self, tmp_path):
+        """The bound the other way, on the rule itself: a real misdecode hits
+        every non-ASCII character, so its markers are a share of the document
+        rather than a quotation.
+
+        Measured, not assumed: this cannot be tested through a file, because
+        UTF-8 bytes of double-encoded Latin text decode as GB18030 into
+        plausible Chinese with zero damage - the boundary charset.py documents
+        (Shift_JIS/EUC-KR behave the same way), which is what `encoding=` is
+        for. The marker branch decides the VERDICT, so that is where it is
+        tested.
+        """
+        from dhole_mcp.charset import charset_is_in_doubt
+
+        assert charset_is_in_doubt("Ã©Ã¨ " * 600), "a share of the text is markers"
+        assert charset_is_in_doubt("x\ufffdy"), "a replacement char is a lost byte"
+        assert charset_is_in_doubt("\ue000"), "PUA means GB18030 ate foreign bytes"
+        assert not charset_is_in_doubt("正文" * 500 + " 反例写法：â€™")
+
+    def test_the_message_names_the_charset_it_actually_used(self, tmp_path):
+        """The old wording contradicted the same response's own metadata: the
+        error said "could not determine this file's charset" while
+        metadata.encoding named one."""
+        path = self._write(tmp_path, "big5.csv", "姓名,年齡,備註\n張三,30\n", "big5")
+        out = asyncio.run(MasterFetchServer().parse(file_path=str(path)))
+        assert out.error.startswith("encoding_undecodable")
+        assert "could not determine" not in out.error
+        assert out.metadata["encoding"] in out.error
 
     # ── the caller can correct it ───────────────────────────────────────
 

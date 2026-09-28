@@ -4,15 +4,132 @@ URL validation with SSRF protection, input sanitization,
 and safe defaults for all external-facing parameters.
 """
 
+import contextvars
 import ipaddress
 import os
 import re
 import time
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 # Maximum URL length to prevent DoS via oversized URLs
 MAX_URL_LENGTH = 8192
+
+# ─── 私网 / 本机 allowlist（G9，默认关闭）─────────────────────────────
+#
+# 开发者要抓自己的 dev / staging / Docker 服务，这些地址本来就被 SSRF 守卫挡住。
+# 放开必须是**点名**：一个布尔开关把整个局域网（路由器、NAS、打印机）和云元数据
+# 一起打开，不是「显式开启」能覆盖的风险。
+#
+#   DHOLE_ALLOW_PRIVATE_HOSTS=localhost,my-service.local   （进程级）
+#   options: {allow_private: ["my-service.local"]}          （单次）
+#
+# 匹配用的是 URL 里的**字面**主机名，不做归一化：allowlist 里写了 127.0.0.1，
+# 不代表 0177.0.0.1（八进制写法）也被放行 —— 那条路是给绕过准备的。
+ALLOW_PRIVATE_ENV = "DHOLE_ALLOW_PRIVATE_HOSTS"
+
+# `allow_private: true` 的语义。本机 dev 服务是最常见的诉求，而回环**不是**整个
+# 局域网：它有明确的边界（只有本机），放行它不会把路由器 / NAS / 云元数据一起打开。
+_LOOPBACK_ALLOWED = frozenset({"localhost", "127.0.0.1", "::1", "0:0:0:0:0:0:0:1"})
+
+# 云元数据端点：无论 allowlist 怎么写都不放行。它是 SSRF 的第一目标，一次误判就把
+# 整机凭据交出去了，不属于「我的 dev 服务」这类诉求。
+_METADATA_HOSTS = frozenset({
+    "169.254.169.254", "metadata.google.internal", "metadata",
+    "fd00:ec2::254", "100.100.100.200",
+})
+
+# 单次调用的 allowlist（smart_fetch 的 options.allow_private）。放在这里而不是当作
+# 参数层层下传，是为了让**每一个** validate_url 调用点 —— 包括抓取循环里的重定向
+# 复校验、robots.txt 那条旁路、tcp_preflight 的裸连接预检（它走
+# url_targets_internal -> validate_url）—— 共用同一个答案，不会出现
+# 「主路径放行、复校验又拒」。
+# 值是 (点名的主机集合, 是否放开整个 127.0.0.0/8)。
+_ALLOW_PRIVATE: contextvars.ContextVar[tuple] = contextvars.ContextVar(
+    "_allow_private", default=(frozenset(), False))
+
+_TRUE_WORDS = frozenset({"1", "true", "yes", "on"})
+
+
+def _env_private_hosts() -> frozenset[str]:
+    """DHOLE_ALLOW_PRIVATE_HOSTS，逗号分隔。默认空 = 不放行任何私网地址。"""
+    raw = (os.environ.get(ALLOW_PRIVATE_ENV) or "").strip()
+    if not raw:
+        return frozenset()
+    return frozenset(h.strip().lower().strip("[]") for h in raw.split(",") if h.strip())
+
+
+def parse_allow_private(value) -> tuple[frozenset, bool]:
+    """Normalize ``options.allow_private`` into ``(hosts, loopback_net)``.
+
+    ``true``  -> 只放开回环。**不是整个局域网**：一次布尔开关把 RFC1918 全打开，
+    等于把路由器、NAS、打印机和云元数据一起打开，那是「允许我的 dev 服务」没有
+    请求的风险。回环有明确边界（只有本机），所以它是布尔开关能覆盖的唯一范围。
+
+    列表 / 逗号分隔字符串 -> 点名那些主机。匹配用 URL 里的字面主机名，不做 IP
+    归一化：allowlist 里有 127.0.0.1 不代表 0177.0.0.1（八进制写法）也被放行，
+    那条路本来就是给绕过准备的。
+
+    不抛异常：无法理解的值返回空集，调用方通过 _ARG_NOTES 把「这个值没生效」
+    写进 summary —— 安全相关的选项被静默忽略是最糟的形态。
+    """
+    if value is None or value is False or value == "":
+        return frozenset(), False
+    if isinstance(value, bool):  # True
+        return frozenset(_LOOPBACK_ALLOWED), True
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _TRUE_WORDS:
+            return frozenset(_LOOPBACK_ALLOWED), True
+        return frozenset(h.strip().lower().strip("[]") for h in value.split(",") if h.strip()), False
+    if isinstance(value, (list, tuple, set, frozenset)):
+        hosts = frozenset(str(h).strip().lower().strip("[]") for h in value if str(h).strip())
+        if hosts and hosts <= _TRUE_WORDS:
+            return frozenset(_LOOPBACK_ALLOWED), True
+        return hosts, False
+    return frozenset(), False
+
+
+def set_allow_private(value) -> Any:
+    """Push the per-call private-host policy. Returns a reset token."""
+    return _ALLOW_PRIVATE.set(parse_allow_private(value))
+
+
+def private_hosts_allowed() -> tuple[frozenset, bool]:
+    """``(hosts, loopback_net)``：环境变量名单 并上 本次调用的选项。"""
+    hosts, loopback = _ALLOW_PRIVATE.get()
+    hosts = hosts | _env_private_hosts()
+    if loopback:
+        hosts = hosts | _LOOPBACK_ALLOWED
+    return hosts, loopback
+
+
+def _private_host_allowed(hostname: str, addr=None) -> bool:
+    """Whether this internal target was explicitly allowed (G9).
+
+    云元数据端点（169.254.169.254 等）**永远**不在这里返回 True：它是 SSRF 的第一
+    目标，一次误判就把整机凭据交出去，不属于「我的 dev 服务」这类诉求。
+    """
+    hosts, loopback = private_hosts_allowed()
+    if not hosts and not loopback:
+        return False
+    host = (hostname or "").strip().lower()
+    if host in _METADATA_HOSTS:
+        return False
+    if host in hosts:
+        return True
+    # `true` 按**解析后的地址**判定：它放开的是整个 127.0.0.0/8，那一段里的每个
+    # 地址都是同一台机器，所以 0177.0.0.1（八进制写法）在这里也放行 —— 并不比
+    # 放开 127.0.0.1 更宽。点名名单才是字面匹配（见 parse_allow_private）。
+    if loopback and addr is not None:
+        try:
+            if addr in ipaddress.ip_network("127.0.0.0/8"):
+                return True
+            if addr == ipaddress.ip_address("::1"):
+                return True
+        except Exception:
+            return False
+    return False
 
 # Blocked URL schemes (SSRF, local file access, etc.)
 _BLOCKED_SCHEMES = frozenset({
@@ -423,17 +540,25 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
                     pass  # Not resolvable to a valid IP after normalization
 
         if is_ip:
+            # G9: an internal target the operator named in DHOLE_ALLOW_PRIVATE_HOSTS
+            # or options.allow_private is fetched instead of refused. Cloud metadata
+            # is never allowed (see _private_host_allowed).
+            _allowed = _private_host_allowed(hostname, addr)
             # Check IPv4-mapped IPv6: extract the mapped IPv4 and re-check it
             if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
                 ipv4_addr = addr.ipv4_mapped
                 for network in _PRIVATE_NETWORKS:
                     if isinstance(network, ipaddress.IPv4Network) and ipv4_addr in network:
+                        if _allowed and _private_host_allowed(hostname, ipv4_addr):
+                            break
                         raise SecurityError(
                             f"URL targets internal/private IP (IPv4-mapped {hostname} → {ipv4_addr} in {network})"
                         )
             for network in _PRIVATE_NETWORKS:
                 try:
                     if addr in network:
+                        if _allowed:
+                            break
                         raise SecurityError(
                             f"URL targets internal/private IP ({hostname} in {network})"
                         )
@@ -442,16 +567,19 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
         else:
             # Block known internal hostnames (cloud metadata, localhost, DNS rebinding services)
             hostname_lower = hostname.lower()
-            if hostname_lower in _BLOCKED_HOSTNAMES:
+            if hostname_lower in _BLOCKED_HOSTNAMES and not _private_host_allowed(hostname_lower):
                 raise SecurityError(f"URL targets internal service: {hostname}")
-            # Block DNS rebinding services that resolve to internal IPs
+            # Block DNS rebinding services that resolve to internal IPs.
+            # 没有 allowlist 出口：这类服务把任意域名解析到任意 IP，放行它就等于
+            # 把整份内网判定交给了外部解析器。
             if hostname_lower.endswith(_DNS_REBINDING_SUFFIXES):
                 raise SecurityError(f"URL uses DNS rebinding service: {hostname}")
             # 纵深防御（报告声明 4）：域名经 DNS 解析到的内网 IP 复查。
             # 默认开启；DHOLE_SSRF_DNS_RECHECK=0 关闭（见 _dns_recheck_enabled）。
             # 只拒绝"解析成功且命中内网"；解析失败（gaierror/超时）容忍。
             # 存在 DNS rebinding TOCTOU 竞态，作为纵深防御而非唯一防线。
-            if _dns_recheck_enabled():
+            # 点名放行的主机跳过这一条：它本来就该解析到内网。
+            if _dns_recheck_enabled() and not _private_host_allowed(hostname_lower):
                 internal = _resolves_to_internal(hostname)
                 if internal:
                     raise SecurityError(

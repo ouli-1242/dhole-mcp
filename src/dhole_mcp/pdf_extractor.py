@@ -683,6 +683,30 @@ def _heading_outline(headings: list[dict], page_nums: list[int], total_pages: in
     return toc
 
 
+def _rotated_is_artifact(page: Any) -> bool:
+    """Should non-upright characters be dropped from this page's text?
+
+    Measured on arXiv 2609.25021 (the PDF behind the report's P2-8): page 1 carries
+    39 non-upright chars out of ~3.1k, and they are exactly the noise the report
+    quoted — the sidebar "arXiv:2609.25021v1  [cs.LG]  9 Aug 2026" is drawn rotated
+    90°, so the extractor walks it in reading order and emits
+    "1v12052.9062:viXra", "]GL.sc[", "guA".
+
+    The flip side is a page where rotation IS the content — vertical CJK typesetting,
+    or a whole page scanned sideways. There, dropping non-upright chars deletes the
+    document, so the rule is a ratio, not a blanket: past half the characters on the
+    page, the rotation is kept.
+    """
+    try:
+        chars = page.chars
+        tilted = sum(1 for c in chars if not c.get("upright", True))
+    except Exception:
+        return False
+    if not chars:
+        return False
+    return tilted <= len(chars) / 2
+
+
 def _render_page(page: Any, body_size: float, text_mode: bool,
                  page_num: int | None = None, headings: list[dict] | None = None) -> str:
     """Render one page to markdown: layout-aware text + tables merged by y-position."""
@@ -692,11 +716,16 @@ def _render_page(page: Any, body_size: float, text_mode: bool,
         tables = []
     table_bboxes = [t.bbox for t in tables] if tables else []
 
-    if table_bboxes:
-        filtered = page.filter(
-            lambda obj: obj.get("object_type") != "char"
-            or not any(_in_bbox(obj, b) for b in table_bboxes)
-        )
+    drop_rotated = _rotated_is_artifact(page)
+    if table_bboxes or drop_rotated:
+        def _keep(obj: Any) -> bool:
+            if obj.get("object_type") != "char":
+                return True
+            if drop_rotated and not obj.get("upright", True):
+                return False
+            return not (table_bboxes and any(_in_bbox(obj, b) for b in table_bboxes))
+
+        filtered = page.filter(_keep)
     else:
         filtered = page
 

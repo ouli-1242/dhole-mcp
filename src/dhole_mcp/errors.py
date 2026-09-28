@@ -120,6 +120,23 @@ def classify_network_error(error_str: str) -> Tuple[str, str]:
     if not error_str:
         return "unknown", _HINTS["unknown"]
 
+    # Match dhole's OWN category labels before pattern-guessing at someone else's.
+    # The regexes below are written for the spellings an OS or browser emits
+    # ("getaddrinfo failed", "ERR_NAME_NOT_RESOLVED"), and the cheap TCP probe
+    # labels a failure with the snake_case token instead - `network_error:
+    # dns_failure (TCP preflight)`. Measured: that string matched none of them, so
+    # a domain that cannot exist got the "unknown" hint, "try a different source or
+    # retry with different parameters", while the correct hint two lines below it
+    # says "do NOT retry". Retrying a dead hostname is the one action that cannot
+    # work, and the response recommended it.
+    #
+    # "timeout" is deliberately absent: `timed? ?out` already catches it.
+    _lc = error_str.lower()
+    for _token in ("connection_refused", "connection_reset", "tls_error",
+                   "proxy_error", "dns_failure"):
+        if _token in _lc:
+            return _token, _HINTS[_token]
+
     for pattern, category in _PATTERNS:
         if pattern.search(error_str):
             return category, _HINTS[category]

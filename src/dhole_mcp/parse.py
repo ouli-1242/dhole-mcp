@@ -1,9 +1,8 @@
 """Local file parsing for Dhole MCP.
 
-Converts local files (.html, .htm, .xhtml, .docx, .xlsx, .csv, .pdf) to Markdown
-so agents can read documents without a web fetch. Part of the [all] extra
-(python-docx, openpyxl). Graceful degradation: if deps are missing, returns a
-clear error.
+Converts local files to Markdown so agents can read documents without a web
+fetch. Part of the [all] extra (python-docx, openpyxl). Graceful degradation: if
+deps are missing, returns a clear error.
 
 Supported formats:
 - .html / .htm / .xhtml → trafilatura + markdownify (reuses existing extraction)
@@ -12,6 +11,16 @@ Supported formats:
 - .csv          → stdlib csv: → Markdown table
 - .pdf          → pdf_extractor (same pipeline smart_fetch uses for PDF URLs:
                   layout-aware markdown, OCR fallback for scans, quality score)
+- .md / .markdown / .txt → as-is, through the same charset detection .csv uses
+- .json / .yaml / .yml   → as-is, but validated (an unparseable file is an error)
+- .pptx / .odt  → stdlib zip + XML, no python-pptx / odfpy: the text of each
+                  slide / each paragraph, with what a text reader cannot carry
+                  named in the first line of the output
+
+Text formats used to be refused with "read it with your own file tool", which
+presupposes a caller that has one. A client that only speaks MCP reaches a local
+document through this tool or not at all, so the refusal was a rule for us rather
+than a service to the caller.
 """
 
 from __future__ import annotations
@@ -25,7 +34,16 @@ import re
 logger = logging.getLogger("dhole_mcp.parse")
 
 # Supported extensions
-SUPPORTED_EXTENSIONS = {".html", ".htm", ".xhtml", ".docx", ".xlsx", ".csv", ".pdf"}
+SUPPORTED_EXTENSIONS = {".html", ".htm", ".xhtml", ".docx", ".xlsx", ".csv", ".pdf",
+                        ".md", ".markdown", ".txt", ".json", ".yaml", ".yml",
+                        ".pptx", ".odt"}
+# Formats that need no conversion at all. They used to be refused with "read the
+# file yourself", which assumed the caller HAS a file tool: a client that only
+# speaks MCP has exactly one way to reach a local document, and it is this one.
+# Refusing it there was a rule for ourselves, not for the user.
+TEXTUAL_EXTENSIONS = {".md", ".markdown", ".txt"}
+# Text the caller may want validated rather than just read.
+STRUCTURED_TEXT_EXTENSIONS = {".json", ".yaml", ".yml"}
 
 
 # Maximum file size for parsing (50 MB) to prevent OOM on huge files
@@ -123,15 +141,13 @@ def parse_file_detailed(file_path: str, encoding: str = "") -> tuple[str, str, d
 
     ext = os.path.splitext(file_path)[1].lower()
     if ext not in SUPPORTED_EXTENSIONS:
-        # 纯文本是唯一「不该来这里」的一类：它不需要转换，agent 自己就能读。
-        # 报错只列支持集的话，agent 会以为这条路走不通而放弃读文件；所以点名
-        # 下一步。刻意不维护「哪些扩展名算纯文本」的清单 —— 任何清单都会漏，
-        # 而漏掉的正是最需要这句话的那次。
+        # 报错点名支持集，再给一条下一步。只写「不支持」的话，agent 会以为这条路
+        # 整个走不通而放弃读文件——而它手里那份 .log/.rst/.ini 多半就是文本。
         return "", (
             f"Unsupported file type '{ext}'. Supported: "
-            f"{', '.join(sorted(SUPPORTED_EXTENSIONS))}. "
-            f"Plain text (.txt/.md/.log/source/config/data) needs no conversion - "
-            f"read it directly with your own file tool instead of parse."
+            f"{', '.join(sorted(SUPPORTED_EXTENSIONS))}. If the file is plain "
+            "text under another extension, copy or rename it to .txt (or .md) "
+            "and parse that."
         ), {}
 
     try:
@@ -147,6 +163,15 @@ def parse_file_detailed(file_path: str, encoding: str = "") -> tuple[str, str, d
             return content, "", extras
         elif ext == ".pdf":
             return _parse_pdf(file_path)
+        elif ext in TEXTUAL_EXTENSIONS:
+            text, extras = _read_text_file(file_path, encoding)
+            return text, "", extras
+        elif ext in STRUCTURED_TEXT_EXTENSIONS:
+            return _parse_structured_text(file_path, ext, encoding)
+        elif ext == ".pptx":
+            return _parse_pptx(file_path), "", {}
+        elif ext == ".odt":
+            return _parse_odt(file_path), "", {}
     except ImportError as e:
         return "", (
             f"Missing dependency for {ext} parsing: {e}. "
@@ -178,6 +203,126 @@ def _parse_html(file_path: str, encoding: str = "") -> tuple[str, dict]:
         return markdownify(html, heading_style="ATX").strip(), extras
     except Exception:
         return html[:50000], extras  # last resort: raw HTML truncated
+
+
+def _parse_structured_text(file_path: str, ext: str,
+                           encoding: str = "") -> tuple[str, str, dict]:
+    """Read a .json/.yaml/.yml file, and say so when it is not what it claims.
+
+    There is no conversion to do — the text is already readable — so the only
+    thing worth adding over a file read is the check. "this .json is not valid
+    JSON, here is the parser's complaint" answers the question the caller had
+    when they handed a config file to a document tool; returning the bytes with a
+    shrug would answer nothing.
+    """
+    text, extras = _read_text_file(file_path, encoding)
+    if ext == ".json":
+        import json as _json
+
+        try:
+            _json.loads(text)
+        except ValueError as e:
+            return "", f"{ext} file is not valid JSON: {str(e)[:180]}", extras
+        return text, "", extras
+
+    try:
+        import yaml
+    except ImportError:
+        # PyYAML is not a declared dependency of this package. Without it the
+        # file is still returned (reading it is the caller's goal) — only the
+        # validity check is skipped, so the absence costs a check, not a file.
+        return text, "", extras
+    try:
+        list(yaml.safe_load_all(text))  # a generator: errors surface on iteration
+    except Exception as e:
+        return "", f"{ext} file is not valid YAML: {str(e)[:180]}", extras
+    return text, "", extras
+
+
+_A_T_RE = re.compile(r"<a:t(?:\s[^>]*)?>(.*?)</a:t>", re.DOTALL)
+_ENTITIES = {"&quot;": '"', "&apos;": "'"}
+
+
+def _pptx_paragraphs(xml: str) -> list[str]:
+    """Text runs grouped per paragraph (`</a:p>`), entities decoded."""
+    from xml.sax.saxutils import unescape
+
+    out: list[str] = []
+    for chunk in xml.split("</a:p>"):
+        runs = _A_T_RE.findall(chunk)
+        if runs:
+            text = unescape("".join(runs), _ENTITIES).strip()
+            if text:
+                out.append(text)
+    return out
+
+
+def _parse_pptx(file_path: str) -> str:
+    """.pptx → 每页的文字，靠它本来就是的东西：一个装着 OOXML 的 zip。
+
+    python-pptx 会是第二个依赖，只为读回文本工具本来就能读的那一层（`<a:t>` 里的
+    run）。页序取部件名里的数字（slide1、slide2…）。版式、备注页与 SmartArt 不进来
+    ——这一点写在输出的第一行里，而不是一句 `Parse error`：一份少了备注的稿件看起来
+    和一份完整的稿件长得一样，读的人有权知道自己拿到的是哪种。
+    """
+    import zipfile
+
+    with zipfile.ZipFile(file_path) as zf:
+        names = [n for n in zf.namelist()
+                 if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)]
+        names.sort(key=lambda n: int(re.search(r"(\d+)", n.rsplit("/", 1)[-1]).group(1)))
+        if not names:
+            return "(no slides found in this .pptx)"
+        lines = [f"[{len(names)} slide(s); text only - speaker notes, layout and "
+                 "diagram text are not included]"]
+        for n in names:
+            xml = zf.read(n).decode("utf-8", "replace")
+            lines.append(f"\n## {n.rsplit('/', 1)[-1]}")
+            body = _pptx_paragraphs(xml)
+            lines.extend(body or ["(no text on this slide)"])
+    return "\n".join(lines)
+
+
+_ODT_TEXT_NS = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+
+
+def _parse_odt(file_path: str) -> str:
+    """.odt → 段落与标题，用 stdlib 解 content.xml。
+
+    ODF 也是一个 zip，正文在 content.xml 的 `text:p` / `text:h` 里；为此引 odfpy
+    不值。标题的层级取 `text:outline-level`，表格单元里的段落按段落读出（它们本来就是
+    段落）。样式、图片与批注不进来，同样写在第一行里。
+    """
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    with zipfile.ZipFile(file_path) as zf:
+        raw = zf.read("content.xml") if "content.xml" in zf.namelist() else b""
+    if not raw:
+        return "(no content.xml in this .odt - is it an OpenDocument text file?)"
+
+    root = ET.fromstring(raw)
+    lines: list[str] = []
+    for el in root.iter():
+        name = el.tag.rsplit("}", 1)[-1]
+        if name not in ("p", "h"):
+            continue
+        text = "".join(el.itertext()).strip()
+        if not text:
+            continue
+        if name == "h":
+            lvl = el.get(f"{{{_ODT_TEXT_NS}}}outline-level") or "1"
+            try:
+                depth = max(1, min(int(lvl) + 1, 6))
+            except ValueError:
+                depth = 2
+            lines.append("#" * depth + " " + text)
+        else:
+            lines.append(text)
+    if not lines:
+        return "(the document has no text blocks)"
+    return "\n".join(["[OpenDocument text; styles, images and comments are not "
+                      f"included - {len(lines)} text block(s) read]"] + lines)
 
 
 def _parse_docx(file_path: str) -> str:
@@ -344,7 +489,7 @@ def _parse_pdf(file_path: str) -> tuple[str, str, dict]:
     extras = {
         "table_of_contents": result.table_of_contents or [],
         "metadata": result.metadata or {},
-        "quality_score": result.quality_score or 0.0,
+        "quality_score": result.quality_score,
         # The extractor's own verdict, not a guess: _agent_hints defers to it
         # once quality_score is set, so a healthy PDF that reported
         # content_ok=False here would be flagged "do not cite".

@@ -21,18 +21,26 @@ class TestGuards:
             "navigation": [],
             "external": [],
             "primary_source": "",
+            # Transparency keys (G1) exist on the early-return path too, so a
+            # caller can read them unconditionally.
+            "total_found": 0,
+            "is_truncated": False,
         }
 
     def test_empty_page_url_returns_empty_lists(self):
         out = extract_links('<a href="/x">x</a>', "")
 
         assert out["citations"] == [] and out["external"] == []
+        assert out["total_found"] == 0 and out["is_truncated"] is False
 
     def test_broken_markup_never_raises(self):
         out = extract_links("<a href=", PAGE)
 
         assert isinstance(out, dict)
-        assert set(out) == {"citations", "navigation", "external", "primary_source"}
+        assert set(out) == {
+            "citations", "navigation", "external", "primary_source",
+            "total_found", "is_truncated",
+        }
 
 
 class TestSchemeFiltering:

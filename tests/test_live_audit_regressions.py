@@ -47,6 +47,7 @@ def _stub_tier(monkeypatch, html: str, captured: dict) -> None:
         proxy, timeout, network_idle, solve_cloudflare, block_webrtc,
         hide_canvas, extra_headers, useragent, cookies,
         max_chars: int = server_mod.MAX_CONTENT_CHARS,
+        conditional: dict | None = None,
     ) -> ResponseModel:
         captured["max_chars"] = max_chars
         body = html[:max_chars]

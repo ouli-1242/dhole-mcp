@@ -59,6 +59,42 @@ def decode_damage(text: str) -> int:
     return score
 
 
+# How many characters per mojibake marker make the markers a real share of the
+# text rather than an example quoted inside it. Looser than any actual misdecode
+# (every non-ASCII character gets hit, and each yields 2-3 marker chars), tight
+# enough to stop a documentation file that shows one wrong charset.
+_MARKER_PER_CHAR = 50
+
+
+def charset_is_in_doubt(text: str) -> bool:
+    """Whether the damage in a decode says the CHARSET was the wrong guess.
+
+    `decode_damage` is a comparison score: lower is better, and 0 is clean.
+    Turning it into a verdict was the mistake - it cannot tell a wrong charset
+    from text that QUOTES one. Measured on this repo's own CHANGELOG, which
+    documents the `â€™` failure mode: one marker in 43,559 characters that
+    decoded byte-perfect as UTF-8, reported as an undecodable file.
+
+    So the two signals are read apart:
+
+    * a replacement char or a PUA char is anywhere damning - a lost byte and a
+      GB18030 pair that landed outside every alphabet cannot survive a correct
+      decode of the same bytes;
+    * Latin mojibake markers (`Ã©`, `â€™`) are valid characters in their own
+      right, so they only mean a wrong charset when they account for a share of
+      the document, which is exactly how a real misdecode scales.
+    """
+    if "\ufffd" in text:
+        return True
+    for ch in text:
+        if _PUA_START <= ord(ch) <= _PUA_END:
+            return True
+    markers = 0
+    for marker in _MOJIBAKE_MARKERS:
+        markers += text.count(marker)
+    return markers >= 2 and markers * _MARKER_PER_CHAR >= len(text)
+
+
 # ─── Local-file decoding ──────────────────────────────────────────────────────
 #
 # A local file carries no header to declare its charset. Candidate order:
@@ -106,11 +142,16 @@ _SCORED_ENCODINGS = ("utf-8", "gb18030")
 def decode_file_bytes(body: bytes, declared: str = "") -> tuple[str, str, int]:
     """Decode local-file bytes. Returns ``(text, encoding_used, damage)``.
 
-    ``damage`` counts the replacement chars, mojibake markers and PUA
-    characters left in the chosen decode - 0 means the text is clean. Never
-    raises: a caller always gets text, an encoding name and a damage score, so
-    it can report an unreliable decode instead of having to infer it from the
-    characters themselves.
+    ``damage`` is the count from :func:`decode_damage` for a decode that is
+    actually in doubt, and 0 for one that is not: a strict UTF-8 or GB18030
+    decode whose only blemish is a quoted mojibake example is a CORRECT read of
+    the bytes, and the caller's only use for this number is the verdict, so it
+    gets 0 and nothing else. Reaching the scored comparison means both strict
+    decodes failed, so there the damage always carries a lost byte.
+
+    Never raises: a caller always gets text, an encoding name and a damage
+    score, so it can report an unreliable decode instead of having to infer it
+    from the characters themselves.
     """
     for bom, enc in _BOM_ENCODINGS:
         if body.startswith(bom):
@@ -139,7 +180,7 @@ def decode_file_bytes(body: bytes, declared: str = "") -> tuple[str, str, int]:
             text = body.decode(enc)
         except UnicodeDecodeError:
             continue
-        if decode_damage(text) == 0:
+        if not charset_is_in_doubt(text):
             return text, enc, 0
         # Decoded strictly but came out damaged (GB18030 does this to Big5).
         # Fall through to the scored comparison instead of returning it as a

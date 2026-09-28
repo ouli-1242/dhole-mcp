@@ -230,7 +230,11 @@ class TestActionsAndEngineState:
         """
         out = actions_mod._validate_actions(json.loads('[{"scroll": "2"}, {"wait": 500}]'))
 
-        assert out == [{"scroll": 2}, {"wait": 500}]
+        # scroll normalizes to one shape (steps/selector/ms_per_step) so the
+        # executor has a single path; assert the digit STRING landed, not the
+        # defaults that came with it.
+        assert out[0]["scroll"]["steps"] == 2
+        assert out[1] == {"wait": 500}
         assert actions_mod._validate_actions([{"wait": "1000"}]) == [{"wait": 1000}]
 
     def test_actions_still_want_one_key_per_object_and_say_so(self):
