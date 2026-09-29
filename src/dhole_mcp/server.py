@@ -6394,6 +6394,54 @@ class MasterFetchServer:
         successful = sum(1 for r in results if r.status > 0 and r.status < 400 and not r.error)
         return BulkResponseModel(results=results, total=len(results), successful=successful)
 
+    @staticmethod
+    def _target_is_private(url: str) -> bool:
+        """Geography, not permission: does this URL name a loopback/private target?
+
+        Independent of the allowlist — "allowed" and "private" are different
+        questions, and a caller may legitimately allow what is private. Hostnames
+        answer False (geography unknown without a DNS roundtrip; the real attempt
+        decides those). Never raises.
+        """
+        from ipaddress import ip_address
+        try:
+            host = (urlparse(url).hostname or "").strip("[]").lower()
+        except Exception:
+            return False
+        if not host:
+            return False
+        if host == "localhost" or host.endswith(".localhost"):
+            return True
+        try:
+            addr = ip_address(host)
+        except ValueError:
+            return False
+        return addr.is_loopback or addr.is_private
+
+    async def _private_health_probe(self, url, extra_headers, useragent, cookies, t0):
+        """HTTP-level liveness probe for a private target before the forced
+        stealthy tier. Returns a finished ResponseModel when the target is dead
+        or answering 5xx — the browser cannot improve on either, so the probe
+        result becomes the answer instead of a full-budget hang. Returns None
+        when the target looks alive (2xx/3xx/4xx), letting the browser proceed.
+
+        Direct, 3s, no retries — a loopback/LAN answer is immediate. A probe
+        that itself blows up never decides anything: the real attempt goes ahead.
+        """
+        try:
+            probe = await self.get(
+                url, proxy=None, headers=extra_headers,
+                cookies=_safe_cookie_dict(cookies), useragent=useragent,
+                timeout=3.0, retries=0, stealthy_headers=False,
+            )
+        except Exception:
+            return None
+        if probe.error or (probe.status or 0) >= 500:
+            probe.escalation_path = "private-probe:target-unhealthy(skipped_stealthy)"
+            probe.duration_ms = (now() - t0) * 1000
+            return probe
+        return None
+
     async def _force_fetch(
         self, url, force_fetcher, extraction_type, css_selector,
         main_content_only, use_trafilatura, cache_ttl, offset,
@@ -6446,6 +6494,72 @@ class MasterFetchServer:
             # The shared auto-session is direct, so a proxied request must use
             # the one-off path where stealthy_fetch constructs the browser
             # with the requested proxy.
+            #
+            # G31 后续：浏览器导航不把 connection-refused 浮出成快速失败，不可达
+            # 目标照样烧满整个 timeout（实测本机死端口 127.0.0.1:1 烧掉 45s）。自动
+            # 路径在 HTTP 层之前有 tcp_preflight 快失败，但强制调用不走那条路——
+            # 这里补上同一条预检，规则一致：只有**定论性**失败（connection_refused /
+            # dns_failure）跳层，timeout 仍然交给浏览器。显式代理在函数入口已探测，
+            # 且此时目标不由我们直连，不再探目标；环境代理在场时只探私网/回环目标
+            # ——G31 之后它们不再走环境代理，直连探测重新准确，公网目标仍由真实
+            # 尝试决定（机器配置不该替一次抓取下结论）。
+            if not proxy:
+                _env_proxy = (os.environ.get("DHOLE_SEARCH_PROXY")
+                              or os.environ.get("HTTPS_PROXY")
+                              or os.environ.get("HTTP_PROXY")
+                              or os.environ.get("ALL_PROXY"))
+                _private = self._target_is_private(url)
+                if not _env_proxy or _private:
+                    from dhole_mcp.fetcher import tcp_preflight
+                    _t0 = now()
+                    reachable, preflight_category = await asyncio.to_thread(tcp_preflight, url, 2.0)
+                    definitive = ("connection_refused", "dns_failure")
+                    if _private:
+                        # 回环 / 私网地址不存在「2 秒才应答」的合法服务：connect
+                        # 超时在那里就是"没东西在听"（实测：防火墙 DROP 型栈把
+                        # refused 变成 timeout，结果一样是死端口）。公网目标保持
+                        # timeout=继续——filtered port 在公网上是常态。
+                        definitive = definitive + ("timeout",)
+                    if not reachable and preflight_category in definitive:
+                        result = ResponseModel(
+                            url=url, status=0, content=[],
+                            fetcher_used="none",
+                            error=f"network_error: {preflight_category} (TCP preflight)",
+                            duration_ms=(now() - _t0) * 1000,
+                        )
+                        result.escalation_path = f"preflight:{preflight_category}(skipped_stealthy)"
+                        finalized = await self._finalize_result(
+                            result, url, extraction_type, css_selector, cache_ttl,
+                            offset, max_chars)
+                        if _private:
+                            # _finalize_result 会按错误类别写通用 next_action
+                            # （「站点可能挂了」），对回环 / 私网目标是误导——
+                            # 那里的问题从来不是站点慢，是服务没起。
+                            finalized.next_action = (
+                                "this private target never answered a direct TCP probe "
+                                "(refused or timed out) - no request reached any server. "
+                                "Is the local service actually running, and on this port?")
+                        return finalized
+                    # G31 后续之二：TCP 探测不够——有的网络栈（透明代理 / 沙箱
+                    # broker）对**任何**连接都先应答再失败，死端口在它眼里"可达"，
+                    # 浏览器照样烧满预算（实测 30s）。私网目标在启动浏览器前再做
+                    # 一次 HTTP 级健康探测（直连、3 秒、不重试、不留缓存）：网络层
+                    # 失败或 5xx ⇒ 目标死了，浏览器层不可能更好，把探测结果直接
+                    # 作为答案返回；2xx / 3xx / 4xx ⇒ 活着，照常进浏览器。
+                    if _private:
+                        probe = await self._private_health_probe(
+                            url, extra_headers, useragent, cookies, _t0)
+                        if probe is not None:
+                            finalized = await self._finalize_result(
+                                probe, url, extraction_type, css_selector, cache_ttl,
+                                offset, max_chars)
+                            finalized.next_action = (
+                                "this private target answered a direct probe with "
+                                f"{finalized.error or f'HTTP {finalized.status}'} - the "
+                                "browser tier is skipped (it cannot reach a dead backend "
+                                "either). Is the local service actually running, and on "
+                                "this port?")
+                            return finalized
             ssid = None if proxy else await self._ensure_auto_session()
             result = await self.stealthy_fetch(
                 url, extraction_type=extraction_type,
@@ -7952,9 +8066,93 @@ def _help_epilog() -> str:
         f"  {ui.cyan('dhole model use X')}  {ui.dim('select the reranker model (persisted in ~/.dhole/config/reranker.json)')}",
         f"  {ui.cyan('dhole proxy')}        {ui.dim('manage the search proxy pool (list|add|remove|clear)')}",
         f"  {ui.cyan('dhole engines')}      {ui.dim('show / reset / live-test engine health (list|reset|probe)')}",
+        f"  {ui.cyan('dhole skill')}        {ui.dim('install the bundled agent skill (status|install)')}",
         "",
         ui.dim("docs:") + "  " + ui.cyan("https://github.com/ouli-1242/dhole-mcp"),
     ])
+
+
+def _skill_manifest(root) -> dict:
+    """relpath -> sha256[:16] for every file under a skill directory."""
+    import hashlib
+    out = {}
+    for p in sorted(root.rglob("*")):
+        if p.is_file():
+            out[p.relative_to(root).as_posix()] = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+    return out
+
+
+def _cmd_skill(argv: list[str], target=None) -> int:
+    """`dhole skill [status|install [--force]]` — install / inspect the bundled agent skill.
+
+    The skill ships inside the package (dhole_mcp/skills/dhole-web/) and teaches
+    the agent how to drive dhole: call patterns, response-field dictionary,
+    troubleshooting, configuration, recipes. Installing copies it to
+    ~/.agents/skills/dhole-web where agent hosts discover user-level skills.
+    The CLI is a convenience, not a second source of truth — the bundled copy is.
+    """
+    from dhole_mcp import cli_ui as ui
+    from pathlib import Path
+    import shutil
+
+    bundled = Path(__file__).resolve().parent / "skills" / "dhole-web"
+    target = Path(target) if target is not None else Path.home() / ".agents" / "skills" / "dhole-web"
+
+    args = [a for a in argv if a and a.strip()]
+    force = any(a.lower() in ("--force", "-f") for a in args)
+    positional = [a for a in args if not a.startswith("-")]
+    action = positional[0].lower() if positional else "status"
+    if action not in ("status", "install"):
+        print(ui.err(f"unknown subcommand: {action} (try: dhole skill status|install [--force])"))
+        return 2
+    if not bundled.is_dir():
+        print(ui.err(f"bundled skill not found at {bundled} (reinstall dhole-mcp)"))
+        return 1
+    bundled_files = _skill_manifest(bundled)
+
+    if action == "status":
+        print("  " + ui.dim("bundled") + "  " + ui.cmd(str(bundled))
+              + "  " + ui.dim(f"({len(bundled_files)} files)"))
+        if not target.is_dir():
+            print("  " + ui.dim("installed") + "  " + ui.dim("not installed"))
+            print("  " + ui.dim("install with") + "  " + ui.cmd("dhole skill install"))
+        else:
+            installed = _skill_manifest(target)
+            if installed == bundled_files:
+                print("  " + ui.ok("installed & up to date") + "  " + ui.dim(str(target)))
+            else:
+                changed = [f for f in sorted(set(installed) | set(bundled_files))
+                           if installed.get(f) != bundled_files.get(f)]
+                print("  " + ui.warn("installed, differs from bundled") + "  " + ui.dim(str(target)))
+                for f in changed[:8]:
+                    print("      " + ui.dim(f))
+                if len(changed) > 8:
+                    print("      " + ui.dim(f"... and {len(changed) - 8} more"))
+                print("  " + ui.dim("re-sync with") + "  " + ui.cmd("dhole skill install --force"))
+        return 0
+
+    # install
+    if target.exists() and not target.is_dir():
+        print(ui.err(f"{target} exists and is not a directory; remove it first"))
+        return 2
+    if target.is_dir():
+        installed = _skill_manifest(target)
+        if installed == bundled_files:
+            print(ui.ok("already up to date") + "  " + ui.dim(str(target)))
+            return 0
+        if installed and not force:
+            print(ui.err("installed skill differs from the bundled one:"))
+            for f in sorted(set(installed) | set(bundled_files)):
+                if installed.get(f) != bundled_files.get(f):
+                    print("  " + ui.dim(f))
+            print("  " + ui.dim("re-install over it with") + "  " + ui.cmd("dhole skill install --force"))
+            return 2
+        shutil.rmtree(target)
+    shutil.copytree(bundled, target)
+    print(ui.branded(ui.ok("skill installed"), ui.dim(str(target))))
+    print("  " + ui.dim(f"{len(bundled_files)} files · skills load at session start, so restart your agent to pick it up"))
+    print("  " + ui.dim("hosts that only read ~/.zcode/skills can point at the installed folder the same way"))
+    return 0
 
 
 def _cmd_model(argv: list[str]) -> int:
@@ -8282,6 +8480,8 @@ def main():
         raise SystemExit(_cmd_proxy(_sys.argv[2:]))
     if len(_sys.argv) > 1 and _sys.argv[1].lower() == "engines":
         raise SystemExit(_cmd_engines(_sys.argv[2:]))
+    if len(_sys.argv) > 1 and _sys.argv[1].lower() == "skill":
+        raise SystemExit(_cmd_skill(_sys.argv[2:]))
     parser = argparse.ArgumentParser(
         prog="dhole",
         description=ui.branded(ui.dim("web research for AI agents · $0 · no keys"), ""),

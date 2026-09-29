@@ -52,6 +52,8 @@ playwright install chromium      # 反检测浏览器引擎（~150MB，完整版
 4. 让用户重启 agent。重启后应能看到 smart_fetch / smart_search / smart_crawl /
    screenshot / parse / feed_fetch / resolve_url / cache_clear / close_session 九个工具，
    最后运行 dhole --doctor 确认检查项通过。
+5. 可选：运行 dhole skill install 把随包分发的 agent 技能装到 ~/.agents/skills/dhole-web
+   （教 agent 怎么选工具、防坑与排查的手册；宿主重启后生效）。
 ```
 
 ## 使用
@@ -92,6 +94,7 @@ CLI 自带诊断与配置命令：
 | `dhole engines reset` | 立即清空引擎冷却，不等自然到期                                   |
 | `dhole engines probe` | 逐个实测引擎健康：一家一次真查询，印命中数 / 耗时 / 被拦原因     |
 | `dhole model`         | 查看 / 切换重排模型                                              |
+| `dhole skill`         | 安装 / 查看随包分发的 agent 技能（status / install [--force]）   |
 | `dhole -u`            | 自更新（本 fork 默认关闭）                                       |
 | `dhole --http`        | 改用 streamable HTTP 传输对外 serve（默认是 stdio，见下方「传输方式」） |
 
@@ -196,7 +199,7 @@ dhole --http --host 0.0.0.0 --port 8765     # 默认只监听 127.0.0.1:8765
 
 ### 网页搜索（`smart_search`）
 
-- **搜索的日期窗口只能放宽，不能收紧**：引擎只给 day/week/month/year 四档（实测：没有任何一家接受绝对区间），`after` 因此被放大到覆盖它的最窄一档，`date_filter.exact=false` 就是这个放大在说话；`before` 直接拒绝而不是静默忽略。`total_estimate` 也**没有实现**——六个引擎的解析器都不读「共约 N 条结果」，拿不到一个自己验不了的数字就不摆一个字段冒充
+- **搜索的日期窗口只能放宽，不能收紧**：引擎只给 day/week/month/year 四档（实测：没有任何一家接受绝对区间），`after` 因此被放大到覆盖它的最窄一档，实际发了哪档、哪几家压根没被问日期，都在响应的 `date_filter` 里——其中 `exact` 的含义是「**发出的档位 == 覆盖窗口的最窄一档**」，不是「没被放宽」：`after=2026-09-01`（28 天窗口）发 month 档时 `exact` 就是 `true`。人话解释以 `date_filter.note` 为准；`before` 直接拒绝而不是静默忽略。`total_estimate` 也**没有实现**——六个引擎的解析器都不读「共约 N 条结果」，拿不到一个自己验不了的数字就不摆一个字段冒充
 
 ### 本地文件与 feed（`parse` / `feed_fetch`）
 

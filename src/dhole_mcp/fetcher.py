@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 from typing import Any, Dict, List, Optional, Sequence, Union
 from urllib.parse import urljoin, urlparse
@@ -25,6 +26,45 @@ from dhole_mcp import sessions
 from dhole_mcp.security import SecurityError, redact_api_key
 
 logger = logging.getLogger("dhole_mcp.fetcher")
+
+# ─── 回环目标不走代理（G31）───────────────────────────────────────────────────
+#
+# primp（reqwest 底座）、httpx（trust_env 默认开）和浏览器都会读环境里的
+# HTTPS_PROXY / HTTP_PROXY / ALL_PROXY。系统代理或 fake-IP TUN 在场时，抓
+# 127.0.0.1 / localhost 的请求会被交给代理——而代理**不可能**到达调用方自己的
+# 回环，实测只回 502（本机活着的 dev 服务、无监听的端口，一律同一句
+# "server returned error status"）。代理 reach 不到别人的回环是定义使然，所以把
+# 回环排除出代理是**无条件安全**的：已写的 NO_PROXY 条目原样保留并合并，只补缺。
+# 条目里没有 `[::1]`（带括号写法）：httpx 的 trust_env 把 NO_PROXY 条目按
+# host:port 拆，`[::1]` 被拆出端口 `1]` 直接 InvalidURL，**毒化进程里每一个
+# trust_env 的 httpx.Client**（实测）。裸 `::1` 对 httpx 与 reqwest 都安全。
+_LOOPBACK_NO_PROXY_ENTRIES = ("localhost", "127.0.0.1", "::1")
+
+
+def _ensure_loopback_no_proxy() -> None:
+    """Merge loopback hosts into NO_PROXY so no tier proxies them. Never raises."""
+    try:
+        existing: list[str] = []
+        for name in ("NO_PROXY", "no_proxy"):
+            for part in os.environ.get(name, "").split(","):
+                part = part.strip()
+                if part and part.lower() not in (p.lower() for p in existing):
+                    existing.append(part)
+        merged = list(existing)
+        for entry in _LOOPBACK_NO_PROXY_ENTRIES:
+            if entry.lower() not in (p.lower() for p in merged):
+                merged.append(entry)
+        if merged != existing:
+            value = ",".join(merged)
+            # 两种拼写都写：POSIX 下是两个变量（有的工具只认小写），Windows 下
+            # 是同一个（大小写不敏感，同值覆写无副作用）。
+            os.environ["NO_PROXY"] = value
+            os.environ["no_proxy"] = value
+    except Exception:  # pragma: no cover - env mutation must never break startup
+        pass
+
+
+_ensure_loopback_no_proxy()
 
 
 def _urljoin(base: str, location: str) -> str:

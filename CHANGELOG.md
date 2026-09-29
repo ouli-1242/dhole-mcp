@@ -6,6 +6,21 @@
 
 > 自 13.14 起本仓库为个人衍生作品，版本号是自己的序号、不承诺语义化版本，与上游版本不可比；包内的 `__version__` 是唯一权威来源。
 
+## [16.2] - 2026-09-29
+
+agent 技能随包分发；修掉「代理环境下抓不了本机服务」这一个真实缺陷家族。
+
+### 新增
+
+- **`dhole skill` 子命令：skill 随包分发**。skill 正本（`SKILL.md` + `references/` 七个文件，教 agent 怎么选工具、防坑、排查与配置的手册）打进 wheel（`dhole_mcp/skills/dhole-web/`），`dhole skill install` 拷到 `~/.agents/skills/dhole-web/`（agent 宿主的用户级技能目录），`dhole skill status` 报告 bundled / installed 是否一致。目标已存在且内容不同时不覆盖（列出漂移文件），`--force` 重同步——升级 dhole 即升级 skill，不再需要为 skill 单独发版。`--help` 尾单与 README 的 CLI 表同步收录
+
+### 修复
+
+- **回环 / localhost 目标不再走环境代理（G31）**：primp（reqwest 底座）、httpx 与浏览器都会读 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`——系统代理或 fake-IP TUN 在场时，抓 `127.0.0.1` / `localhost` 的请求被交给代理，而代理**不可能**到达调用方自己的回环，一律回 502，本机 dev 服务全灭且报因误导（实测：设了死代理后，本机活着的 HTTP 服务从「连接失败」恢复 200）。修复是启动时把 `localhost,127.0.0.1,::1,[::1]` 合并进 `NO_PROXY`（已有条目两种拼写都保留、只补缺、幂等）
+- **强制 `force_fetcher='stealthy'` 遇不可达目标快速失败（G31 后续）**：浏览器导航不把 connection-refused 浮出成错误，本机死端口实测烧满整个 timeout（45 秒）。`_force_fetch` 的 stealthy 分支补上与自动路径同一条 TCP 预检：`connection_refused` / `dns_failure` 跳层；回环 / 私网目标的 connect 超时也算定论（回环不存在「2 秒才应答」的合法服务，实测 DROP 型防火墙栈把 refused 变成 timeout）；公网目标的 timeout 仍交给真实尝试。实测死端口 45s → 2s，活的本机服务照常 200。显式代理照旧在函数入口探测（G21），环境代理在场时只探私网 / 回环目标（G31 之后它们不走环境代理，直连探测重新准确）。TCP 预检之外还有第二层：对「先应答再失败」的网络栈（透明代理 / 沙箱 broker，TCP 探不出死活），私网目标在启动浏览器前再做一次 HTTP 级健康探测（直连、3 秒、不重试）——网络层失败或 5xx 直接把探测结果作为答案返回，2xx/3xx/4xx 才进浏览器
+- **`dhole -v` 横幅在 editable 安装下说谎**：版本号读的是安装那一刻的 dist-info，源码升版后横幅停在旧号（实测 16.2 的代码显示 16.1）。改为优先读 `dhole_mcp.__version__`（pyproject 与 CHANGELOG 头部声明的唯一权威），元数据只作兜底
+- README 里 `date_filter.exact` 的含义写反了：它表示「**发出的档位 == 覆盖窗口的最窄一档**」，不是「没被放宽」——`after=2026-09-01`（28 天窗口）发 month 档时 `exact` 就是 `true`。人话解释以 `date_filter.note` 为准
+
 ## [16.1] - 2026-09-29
 
 默认搜索池换掉国内第三席，顺带把连接期的工具描述再压一遍。

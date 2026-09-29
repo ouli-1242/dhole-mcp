@@ -106,6 +106,15 @@ def check_version() -> tuple[str, str | None, bool | None]:
         installed = _get_version(_DIST_NAME)
     except Exception:
         installed = "unknown"
+    # `__init__.__version__` 是唯一权威（pyproject 与 CHANGELOG 头部都这么声明）；
+    # importlib.metadata 读的是安装那一刻的 dist-info，editable 安装下源码升版后
+    # 它会说谎——实测 16.2 的代码横幅显示 16.1。元数据只作兜底。
+    try:
+        from dhole_mcp import __version__ as _runtime_version
+        if _runtime_version and _runtime_version != installed:
+            installed = _runtime_version
+    except Exception:
+        pass
 
     dist = update_package()
     if not dist:
