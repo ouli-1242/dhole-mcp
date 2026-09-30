@@ -51,7 +51,14 @@ Starting routes for multi-step tasks. Each recipe marks where to pivot on failur
 
 ## Sites behind login
 
-Out of scope; two paths: user-supplied cookies (`options.cookies` + `options.session_id` keeps the jar, 24h) or an API token (`options.auth`: basic/bearer/header). Cookies live in the HTTP tier only and do not share with the browser tier; credentials don't survive cross-origin redirects; values are never echoed. Ask the user for credentials first — never guess login endpoints yourself.
+Four paths, cheapest first: (1) user-supplied cookies (`options.cookies` + `options.session_id` keeps the jar, 24h) or an API token (`options.auth`: basic/bearer/header). (2) **No-password browser flow (17.0)**: pass the same named `session_id` to browser-tier calls — the jar bridges into that session's dedicated browser and back; verify with `check_login`, act with snapshot + index actions, and let `{"submit": ...}` pause for the user's confirmation. (3) CDP attach (user's real Chrome, one-time setup — configuration.md). (4) DataDome / Akamai / interactive Turnstile / 2FA remain hand-offs. Cookies and tokens don't survive cross-origin redirects; values are never echoed. **Never handle the user's password yourself** — ask them to log in via their browser or the attach window instead.
+
+## Operate a page (form, settings, checkout)
+
+1. `smart_fetch` with `actions: [{"snapshot": true}]` (+ `force_fetcher='stealthy'`) — read the numbered element list
+2. Address by index with `expect`: `{"fill": {"index": 3, "text": ...}}`, `{"click": {"index": 12, "expect": "Save"}}`; an `expect` mismatch = the page changed → re-snapshot, never retry a stale index
+3. Submission: `{"submit": {...}}` without `confirm` pauses (`pending_approval`, nothing sent) — describe what will be submitted to the user; only on their explicit yes re-run the **whole chain** with `confirm: true`. Every submit (paused or confirmed) is audit-logged
+4. Captchas / 2FA / sliders: ≤3 tries on image captchas (needs `DHOLE_MULTIMODAL=1` to see them at all), then hand off — see SKILL.md constraint 12
 
 ## Overhead compression (long sessions / bulk jobs)
 

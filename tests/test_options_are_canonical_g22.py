@@ -75,6 +75,7 @@ VALUES: dict[str, object] = {
     "if_modified_since": "2026-09-20",
     "if_none_match": "probe-etag",
     "focus": "topic",
+    "focus_mode": "best",
     "actions": [{"wait": 1}],
     "cache_ttl": 300,
     # Probes that a dropped value would still pass are no probe: an
@@ -85,6 +86,9 @@ VALUES: dict[str, object] = {
     "offset": 100,
     # Bulk mode: the one parameter whose drop changes which code runs at all.
     "urls": [URL + "a", URL + "b"],
+    # G33/G35: CDP attach + the model-free login check (probe values only —
+    # the tool methods are mocked in the forms-agree tests, nothing attaches).
+    "cdp_url": "http://127.0.0.1:9222",
     # smart_crawl
     "max_pages": 3,
     "max_depth": 1,
@@ -122,13 +126,16 @@ VALUES: dict[str, object] = {
     "image_type": "png",
     "wait_selector": ".item",
     "full_page": True,
+    # 17.0 多模态开关（probe 值只验证两通道等价，工具方法被 mock，不真截屏）
+    "selector": ".qr",
+    "decode_qr": True,
 }
 # Plain booleans share one value; listing them keeps the coverage check honest.
 BOOL_KEYS = {
     "network_idle", "headless", "real_chrome", "main_content_only", "use_trafilatura",
     "solve_cloudflare", "block_webrtc", "hide_canvas", "include_media",
     "include_links", "ignore_robots", "allow_private", "discover_only",
-    "full_page", "sitemap",
+    "full_page", "sitemap", "check_login",
 }
 for _k in BOOL_KEYS:
     VALUES.setdefault(_k, True)

@@ -51,6 +51,7 @@ from __future__ import annotations
 import asyncio
 import heapq
 import logging
+import os
 import re
 from time import time
 from typing import Optional
@@ -64,6 +65,44 @@ from pydantic import BaseModel, Field, model_serializer
 from dhole_mcp.robots import check as check_robots, get_robots_cache
 
 logger = logging.getLogger("dhole-mcp.crawl")
+
+# ─── M-1/M-2：神经 focus（DHOLE_NEURAL_FOCUS，默认关）────────────────────────
+# 与 server.py / focus.py 的开关语义一致：flag 只声明"focus 用本地 cross-encoder
+# 打分"；模型缺失在工具入口显式报错（smart_crawl 的闸），这里只 peek，拿不到就
+# fail open（保留页面 / 退回 BM25），绝不在爬取中途静默下载。
+
+# 实测分布（rerank，bge-zh）：明显跑题 ~0.0001（p90 0.0104），对题 0.93+；
+# 同题不同侧面 p50 0.005。0.03 在跑题带之上、对题带之下——错杀的是"同题不同
+# 侧面"里偏远的那些，summary 会把丢弃数报出来，误伤可被看见并可用 flag 关掉。
+_CRAWL_FILTER_FLOOR = 0.03
+
+_OFF_VALUES = frozenset({"", "0", "false", "no", "off", "none", "null"})
+
+
+def _neural_focus_enabled() -> bool:
+    raw = (os.environ.get("DHOLE_NEURAL_FOCUS") or "").strip().lower()
+    return raw not in _OFF_VALUES
+
+
+def _page_relevant(md: str, goal: str) -> Optional[bool]:
+    """页面摘要 vs crawl 目标的 cross-encoder 判定。
+
+    True = 相关（保留），False = 落在跑题带（丢），None = 过滤不可用或打分
+    失败（保留——fail open）。摘要取前 600 字符：判断"这页讲什么"足够，且
+    是 cross-encoder 一个窗口内的量。
+    """
+    try:
+        from dhole_mcp.reranker import get_reranker
+        rer = get_reranker()
+        if rer is None:
+            return None
+        scores = rer.score(goal, [md[:600]])
+        if not scores:
+            return None
+        return float(scores[0]) >= _CRAWL_FILTER_FLOOR
+    except Exception as e:
+        logger.debug("crawl focus filter failed: %s", e)
+        return None
 
 # Match <a ... href="..."> and capture the href + the anchor's visible text.
 _LINK_RE = re.compile(
@@ -320,7 +359,9 @@ def _classify_and_extract(html: str, url: str, start_url: str, focus: Optional[s
     elif md and len(md) >= 200:
         if focus:
             try:
-                md = focus_content(md, focus)
+                from dhole_mcp.reranker import get_reranker
+                rer = get_reranker() if _neural_focus_enabled() else None
+                md = focus_content(md, focus, reranker=rer)
             except Exception:
                 pass
         kind = "article"
@@ -883,6 +924,7 @@ async def smart_crawl(
     pages: list[CrawlPage] = []
     total_chars = 0
     robots_skipped = 0
+    focus_dropped = 0
     truncated_budget = False
     truncated_maxpages = False
     truncated_time = False
@@ -1086,6 +1128,16 @@ async def smart_crawl(
                 # because "which of these URLs are dead" is a real answer.
                 content_ok = False
 
+            # M-2 爬取相关性过滤（DHOLE_NEURAL_FOCUS=1 + focus=）：页面摘要与
+            # crawl 目标做 cross-encoder 打分，落在实测跑题带（< 0.03）的页面
+            # 整页丢弃——爬 100 页可能只 30 相关，省掉的正是这些页的 token。
+            # 用户点名的 URL（depth 0）永不丢；过滤不可用（模型缺失/打分失败）
+            # 时 fail open 保留页面——宁多给一页，不错杀一页。
+            if (content_md and focus and depth > 0 and _neural_focus_enabled()):
+                if _page_relevant(content_md, focus) is False:
+                    focus_dropped += 1
+                    continue
+
             page = CrawlPage(
                 url=u_norm, depth=depth, status=_error_status(resp),
                 content_ok=content_ok, fetcher_used=resp.fetcher_used,
@@ -1210,6 +1262,11 @@ async def smart_crawl(
             bits_now.append("stopped: time deadline reached")
         if robots_skipped:
             bits_now.append(f"{robots_skipped} URL(s) skipped by robots.txt")
+        if focus_dropped:
+            bits_now.append(
+                f"{focus_dropped} page(s) dropped by the neural focus filter "
+                f"(score < {_CRAWL_FILTER_FLOOR} on the focus query; unset "
+                "DHOLE_NEURAL_FOCUS to keep everything)")
         if urls_dropped_note:
             bits_now.append(urls_dropped_note)
         if _chars_per_clamp:

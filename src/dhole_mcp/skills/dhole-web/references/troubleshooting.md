@@ -29,7 +29,7 @@ This IP is being watched. The three cooldown tiers default to 60s / 600s / 600s 
 
 1. Check `total_extracted_chars` and `page_type`: a few hundred chars plus a wrong `page_type` = placeholder
 2. Retry with `force_fetcher='stealthy'`
-3. Still thin: the site needs login (out of scope) or runs DataDome / Akamai / interactive Turnstile (unbeatable) — **say so honestly**; never answer from the shell
+3. Still thin: the site needs login (→ "Sites behind login" below) or runs DataDome / Akamai / interactive Turnstile (unbeatable) — **say so honestly**; never answer from the shell
 4. Tell the user: "This site blocks plain scraping; what I got is the pre-login shell. For real content I'd need your session cookie, or we use a public source."
 
 ### `robots_disallowed`
@@ -62,7 +62,25 @@ The response distinguishes "credentials rejected" (supply a fresh token) from "n
 
 ### Sites behind login
 
-Out of scope, but two paths: the user supplies cookies (`options.cookies` + `options.session_id` to keep the jar, 24h) or an API token (`options.auth`: basic/bearer/header). Remember the jar is HTTP-tier only and does not share with the browser tier.
+Four paths, cheapest first: (1) HTTP tier — user-supplied cookies (`options.cookies` + `options.session_id` to keep the jar) or an API token (`options.auth`: basic/bearer/header). (2) The **no-password browser fallback (17.0)**: a named `session_id` bridges the jar into that session's dedicated stealthy browser (and harvests back), so HTTP-tier login state rides browser calls; combine with `check_login` + snapshot actions + gated submit to operate the site without ever touching a password. (3) CDP attach (17.0) — `smart_fetch` with `options.cdp_url` (+ `check_login=true`) runs the fetch inside the user's real logged-in Chrome; requires one-time user setup (configuration.md "CDP attach"). (4) Still impossible: DataDome / Akamai / interactive Turnstile walls and 2FA — neither the bridge nor attach defeats challenges; say so honestly.
+
+Attach-specific failures:
+- `cdp_attach_disabled` — the gate is off by default. The user must add `DHOLE_CDP_ATTACH=1` + `DHOLE_CDP_HOSTS` to the dhole server env and restart the host. No request was sent; retrying changes nothing
+- `cdp_host_not_allowed` — the host is outside `DHOLE_CDP_HOSTS`. Ask the user to allowlist it; never work around by fetching a different host with the user's login state
+- `login_check.logged_in: false` — session expired in the attached Chrome; the user re-logs in their window, then re-run the call
+- `logged_in: null` — the page's DOM shape wasn't enough to decide (pure-JSON endpoints, odd layouts); read `signals` and say what's uncertain instead of guessing
+
+### Page-action failures (snapshot / index actions / submit)
+
+- `pending_approval: true` in `metadata.actions` — not a failure: the submit PAUSED before acting, nothing was sent. Describe the submission to the user; on a clear yes re-run the **whole chain** with `confirm: true` on that submit (each call reloads the page, so prior fill/click steps must be redone)
+- An error naming the element index ("beyond this page's N interactive elements", or an `expect` mismatch reporting what the element reads now) — the page changed under you. Re-run `{"snapshot": true}` and re-address; don't retry the stale index
+- The snapshot came back empty / `could not enumerate` — the document was still loading; add `{"wait_selector": ...}` before the snapshot
+- `screenshot` selector / decode options refused, error names `DHOLE_MULTIMODAL` — the multimodal gate is off. That flag declares the calling agent can see images; adding it is the user's env decision (constraint 9). `decode_qr` alone never needs the flag
+
+### Focus behaves differently than expected
+
+- `neural_focus_model_missing` — `DHOLE_NEURAL_FOCUS=1` is set but the reranker model isn't downloaded; no request was made. Either the user unsets the flag (plain BM25 focus) or downloads once: any neural `smart_search`, or `dhole model use bge-zh`
+- A weak-hit note in `next_action` ("best block scored below the intent floor") — the fetch succeeded but the page likely doesn't answer the focus query; `content_ok` stays true by design. Pivot: search for a better source instead of re-reading this page
 
 ## Local services
 

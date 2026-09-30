@@ -1,6 +1,6 @@
 # Call Pattern Handbook (copy-ready)
 
-Every pattern below is live-tested. **Read section 0 first** — misplaced parameters are the single most common way to fumble this MCP.
+Every pattern below is live-tested (16.1 full pass) or wire-test verified (the 17.0 additions: snapshot / index actions / submit gate / element screenshot / `focus_mode`). **Read section 0 first** — misplaced parameters are the single most common way to fumble this MCP.
 
 ## 0. Parameter placement rules (correct vs incorrect)
 
@@ -65,6 +65,40 @@ Rejections list the keys the tool actually accepts — follow the error.
 ]}}
 ```
 
+**Act without selectors — snapshot, then index addressing** (step 1 lists interactive elements numbered in document order; step 2 acts by index; `expect` verifies the element's visible name, so a stale index fails loudly instead of clicking the wrong thing — re-snapshot when it fires):
+```json
+{"url": "https://example.com/settings", "options": {"force_fetcher": "stealthy", "actions": [{"snapshot": true}]}}
+{"url": "https://example.com/settings", "options": {"force_fetcher": "stealthy", "actions": [
+  {"fill": {"index": 3, "text": "new value"}},
+  {"click": {"index": 12, "expect": "Save"}}
+]}}
+```
+
+**Form submission goes through the approval gate** (without `confirm`, the submit PAUSES with a `pending_approval` receipt and nothing is sent — describe the submission to the user, then re-run the **whole chain** with `confirm: true` only after they said yes; each call reloads the page, so the re-run must redo every prior step; paused and confirmed runs both land in the audit log):
+```json
+{"url": "https://shop.example.com/checkout", "options": {"force_fetcher": "stealthy", "actions": [
+  {"fill": {"index": 3, "text": "note to seller"}},
+  {"submit": {"index": 8}}
+]}}
+// after the user confirmed:
+{"url": "https://shop.example.com/checkout", "options": {"force_fetcher": "stealthy", "actions": [
+  {"fill": {"index": 3, "text": "note to seller"}},
+  {"submit": {"index": 8, "confirm": true}}
+]}}
+```
+
+**Element screenshot + QR decode** (needs `DHOLE_MULTIMODAL=1` in the server env — the flag declares that the calling agent can see images; `decode_qr` itself works without the flag and lists decoded texts in the receipt):
+```json
+{"url": "https://example.com/ticket", "options": {"force_fetcher": "stealthy", "actions": [
+  {"screenshot": {"selector": ".qr-panel", "decode_qr": true}}
+]}}
+```
+
+**Answer located to one paragraph** (`focus_mode="best"` returns the single highest-scoring block plus its heading instead of a block list; picking is semantic with `DHOLE_NEURAL_FOCUS=1`, BM25 otherwise):
+```json
+{"url": "https://docs.example.com/guide", "options": {"focus": "retry policy", "focus_mode": "best"}}
+```
+
 **Structured extraction** (repeated records REQUIRE a "container selector + sub-schema": sub-selectors evaluate inside each container, one record per container; a bare top-level selector returns a page-wide union with no record attribution):
 ```json
 {"url": "https://quotes.toscrape.com", "options": {"schema": {"properties": {"quotes": {
@@ -86,6 +120,11 @@ Rejections list the keys the tool actually accepts — follow the error.
 **Force the browser tier** (once a site has shown escalation, skip the chain):
 ```json
 {"url": "https://hard-site.com/page", "options": {"force_fetcher": "stealthy"}}
+```
+
+**CDP attach — login-walled page via the user's real Chrome** (requires the user's one-time setup: copy-profile Chrome with `--remote-debugging-port=9222` + `DHOLE_CDP_ATTACH=1` / `DHOLE_CDP_HOSTS` in the server env — configuration.md "CDP attach"). `check_login` returns `{logged_in: true/false/null, signals, cookie_names}` — cookie names only, never values; `schema=` cannot combine with `cdp_url`:
+```json
+{"url": "https://portal.example.com/dashboard", "options": {"cdp_url": "http://127.0.0.1:9222", "check_login": true}}
 ```
 
 **Explicit proxy** (5s TCP precheck; an unreachable proxy returns `proxy_unreachable` before any request):
@@ -129,7 +168,7 @@ List pages return a structured link listing (`page_type=list`), not body text �
 ```json
 {"url": "https://example.com", "options": {"save_to": "C:/tmp/page.png", "full_page": true}}
 ```
-Multimodal agents receive the image inline; text-only agents read the absolute path from `save_to` and open it with their own image tool.
+Multimodal agents receive the image inline; text-only agents read the absolute path from `save_to` and open it with their own image tool. With `DHOLE_MULTIMODAL=1` the tool also takes `options.selector` (element crop) and `options.decode_qr: true` (local QR decode; works without the flag) — refused with an explanation while the flag is off.
 
 ## The remaining four (top-level parameters only)
 

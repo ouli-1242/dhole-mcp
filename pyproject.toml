@@ -77,6 +77,9 @@ all = [
     "rapidocr>=3.0",
     "onnxruntime>=1.16",
     "tokenizers>=0.20",
+    # QR 解码（screenshot 的 decode_qr）：确定性本地解码，不是视觉任务。
+    # headless 变体不拖 GUI 依赖；懒加载在 qr.py，缺失时报错并给出本命令。
+    "opencv-python-headless>=4.8",
     # Local file parsing (parse tool):
     "python-docx>=1.0",
     "openpyxl>=3.1",

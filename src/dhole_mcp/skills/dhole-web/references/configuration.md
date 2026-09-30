@@ -41,6 +41,37 @@ Users rarely read READMEs, but many problems (blocked engines, internal-host fal
 - **Cloud metadata endpoints (169.254.169.254, metadata.google.internal, …) are never allowed**, allowlist or not
 - With a proxy running, loopback traffic may be intercepted by the proxy itself (502 instead of connection-refused) — `NO_PROXY` needs `127.0.0.1,localhost` (see troubleshooting)
 
+### Scenario: pages behind a login wall — CDP attach (17.0)
+
+One-time user setup, two steps. (1) Launch a **copy-profile** Chrome with remote debugging (Chrome 136+ refuses debugging on the default profile):
+
+```
+chrome.exe --user-data-dir=D:\dhole-chrome --remote-debugging-port=9222
+```
+
+Log into the target site in that window once. (2) Add the gate env vars to the dhole server's `env` block and restart the host:
+
+- `DHOLE_CDP_ATTACH=1` — master switch, **default off**. Attaching = handing dhole read access to every site logged into that Chrome, so it is deliberately gated: without it every `cdp_url` call is refused (`cdp_attach_disabled`, no request sent)
+- `DHOLE_CDP_HOSTS` — comma-separated host allowlist (e.g. `portal.example.com,mail.example.com`). Enforced at the route level (including page-JS subresource requests) and at the fetch entry; a non-listed host fails with `cdp_host_not_allowed`
+
+The call itself is per-call, no restart needed afterwards:
+
+```json
+{"url": "https://portal.example.com/dashboard", "options": {"cdp_url": "http://127.0.0.1:9222", "check_login": true}}
+```
+
+- The response marks `cdp_attached: true`; attach events go to the audit log (`DHOLE_USAGE_LOG=1`). Every attach is visible
+- `check_login` returns a three-state verdict from DOM shape + cookie **names** (values never leave the browser — no model involved). `false` = session expired, ask the user to re-login in that Chrome window
+- `cdp_url` forces the browser tier, bypasses the public cache and HTTP tier, and cannot combine with `schema=`
+- Attach reuses the user's existing session — it does **not** solve DataDome / Akamai / interactive Turnstile, and 2FA still needs the user
+
+Related knobs (not the attach path itself): `DHOLE_BROWSER_PROFILE` — persist dhole's own stealthy-browser profile under `~/.dhole/profiles/<name>/` instead of a temp dir; `DHOLE_COOKIE_TTL_S` — HTTP-tier session-cookie lifetime (default 86400, clamped 60s–30d) so a working HTTP login outlives a day. Since 17.0 a **named** `session_id` also bridges the jar into that session's dedicated stealthy browser (seeded before navigation, harvested after) — no env var needed, just pass the same `session_id` to browser-tier calls; the shared auto session and CDP attach never bridge.
+
+### Scenario: page operation, screenshots an agent can see, semantic focus (17.0)
+
+- `DHOLE_MULTIMODAL=1` — declare that **the calling agent can see images** (dhole stays zero-model; recognition is yours). Unlocks `options.selector` element crops on the `screenshot` tool and `{"screenshot": {...}}` actions (element shots ride the response as image blocks), and appends the captcha discipline (≤3 tries then hand off; DataDome / Akamai / interactive Turnstile / 2FA / sliders always hand off) to the tool descriptions. Off by default; with it off those options are refused with an explanation. `decode_qr` (local OpenCV QR decode, in the `[all]` extra) is deterministic local work and needs no flag
+- `DHOLE_NEURAL_FOCUS=1` — `focus` block-picking (`smart_fetch`) and focus page-filtering (`smart_crawl`) score semantically with the local reranker instead of BM25 keyword overlap; default off (BM25). Model missing = explicit error (`neural_focus_model_missing`), never a silent downgrade. Same model as search ranking: `dhole model use <name>` swaps it; `options.focus_mode="best"` (per call, no config) returns the single top block + heading
+
 ### Scenario: poor search results / want a different pool
 
 - `DHOLE_DEFAULT_ENGINES` — override the keyless default pool (default `baidu,bing,sogou,bing_global,yandex,brave`); opt-in names may be included

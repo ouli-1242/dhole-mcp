@@ -30,8 +30,12 @@ no stemming and no dictionary, so a CJK query matches on character bigrams.
 
 from __future__ import annotations
 
+import logging
 import math
 import re
+from typing import Optional
+
+logger = logging.getLogger("dhole-mcp.focus")
 
 # A "word run": letters/digits of any script, split at underscores and
 # punctuation. Unicode-aware (\w) rather than [a-z0-9], so Cyrillic / Greek /
@@ -160,39 +164,18 @@ def _split_blocks(text: str) -> list[str]:
     return blocks
 
 
-def focus_content(
-    text: str,
-    query: str,
-    threshold: float = 1.0,
-    k1: float = 1.5,
-    b: float = 0.75,
-    fallback_top: int = 5,
-    relative_threshold: float = 0.33,
-) -> str:
-    """Return the blocks of ``text`` most relevant to ``query`` (BM25).
+def _bm25_scores(
+    blocks: list[str], block_tokens: list[list[str]], qterms: set, k1: float, b: float
+) -> list[float]:
+    """BM25+ block scores, including the heading-aware boost (pass 2).
 
-    Two cuts apply, and a block must clear BOTH: an absolute ``threshold``
-    score, and ``relative_threshold`` x the best block's score. The relative
-    cut exists because the absolute one alone cannot tell "this block is about
-    the query" from "this block contains the word 'the'": BM25+ keeps IDF
-    positive for every term, so a question's stopwords accumulate a small
-    positive score in nearly every block (measured: 55-76% of a docs page kept,
-    against 9% for a keyword query). ``threshold`` therefore acts as a floor —
-    a page whose best block is itself weak keeps the old, permissive behaviour.
-
-    If ``query`` is empty, the text has <= 1 block, or the query yields no
-    usable terms, the original text is returned unchanged (focus is a no-op).
+    Extracted from ``focus_content`` so the neural scorer (M-1) can replace
+    exactly the scoring step and inherit the rest of the pipeline — selection,
+    table/code preservation, heading context — unchanged. The heading boost
+    stays BM25-only: it is a band-aid for lexical matching, and a
+    cross-encoder that reads the whole pair does not need heading terms
+    inflating the blocks beneath them.
     """
-    if not query or not text or not text.strip():
-        return text
-    blocks = _split_blocks(text)
-    if len(blocks) <= 1:
-        return text
-    qterms = set(_tokens(query))
-    if not qterms:
-        return text
-
-    block_tokens = [_tokens(bl) for bl in blocks]
     n = len(blocks)
     avgdl = (sum(len(t) for t in block_tokens) / n) if n else 0.0 or 1.0
     if avgdl == 0:
@@ -228,9 +211,8 @@ def focus_content(
 
     scores = [score(i) for i in range(n)]
 
-    # ── Pass 2: heading-aware boosting ──────────────────────────────────
-    # When a heading contains query terms, boost all blocks under it (1.5x)
-    # until the next heading at the same or higher level.
+    # Heading-aware boosting: when a heading contains query terms, boost all
+    # blocks under it (1.5x) until the next heading at the same or higher level.
     for i in range(n):
         if not _is_heading(blocks[i]):
             continue
@@ -244,36 +226,178 @@ def focus_content(
                 break
             scores[j] *= 1.5
 
-    # ── Pass 3: table/code preservation ─────────────────────────────────
-    # Tables/code containing ANY query term are always kept (high-value).
+    return scores
+
+
+# A (query, doc) pair is truncated at the cross-encoder's MAX_SEQ=512, so a
+# block longer than the window gets scored on its opening and its tail is
+# invisible to the model. The BM25 block size was tuned for lexical overlap;
+# the encoder needs its own bound. ~300 chars is the safe ceiling: the default
+# model's worst case is Han at ~1 token/char, which still leaves the query
+# itself room inside 512.
+_NEURAL_MAX_CHARS = 300
+
+
+def _split_for_encoder(block: str, cap: int = _NEURAL_MAX_CHARS) -> list[str]:
+    """Split a block into pieces that fit the encoder window (long-line aware).
+
+    Minified single-line documents must hard-wrap, or one piece still carries
+    the whole line. Line-based accumulation keeps normal markdown blocks
+    unsplit where they already fit.
+    """
+    if len(block) <= cap:
+        return [block]
+    pieces: list[str] = []
+    cur = ""
+
+    def _flush() -> None:
+        nonlocal cur
+        if cur.strip():
+            pieces.append(cur)
+        cur = ""
+
+    for line in block.splitlines():
+        while len(line) > cap:
+            _flush()
+            pieces.append(line[:cap])
+            line = line[cap:]
+        if cur and len(cur) + len(line) + 1 > cap:
+            _flush()
+        cur = f"{cur}\n{line}" if cur else line
+    _flush()
+    return pieces or [block[:cap]]
+
+
+def _neural_block_scores(reranker, query: str, blocks: list[str]) -> Optional[list[float]]:
+    """Cross-encoder score per block; None = the scorer itself failed.
+
+    score() already answers an inference hiccup with all-zeros and a shape
+    mismatch with a shorter list; both read as "the model is not answering"
+    here, so they map to None and the caller falls back to BM25 instead of
+    serving a page emptied by a broken scorer. Per-block score is the MAX over
+    its chunks — a block is as relevant as its most relevant part.
+    """
+    try:
+        chunk_map: list[tuple[int, str]] = []
+        for i, bl in enumerate(blocks):
+            for piece in _split_for_encoder(bl):
+                chunk_map.append((i, piece))
+        raw = reranker.score(query, [c for _, c in chunk_map])
+        if len(raw) != len(chunk_map):
+            return None
+        out = [0.0] * len(blocks)
+        for (i, _piece), s in zip(chunk_map, raw):
+            if s > out[i]:
+                out[i] = float(s)
+        if all(s == 0.0 for s in out):
+            return None
+        return out
+    except Exception as e:
+        logger.warning("neural focus scoring failed: %s", e)
+        return None
+
+
+def _neural_scorer_note() -> str:
+    try:
+        from dhole_mcp.reranker import active_model
+        return f"neural relevance ({active_model().name} cross-encoder)"
+    except Exception:
+        return "neural relevance (cross-encoder)"
+
+
+def focus_content(
+    text: str,
+    query: str,
+    threshold: float = 1.0,
+    k1: float = 1.5,
+    b: float = 0.75,
+    fallback_top: int = 5,
+    relative_threshold: float = 0.33,
+    reranker=None,
+    mode: str = "filter",
+    stats: Optional[dict] = None,
+) -> str:
+    """Return the blocks of ``text`` most relevant to ``query``.
+
+    Two cuts apply to the FILTER mode, and a block must clear BOTH: an absolute
+    ``threshold`` score, and ``relative_threshold`` x the best block's score.
+    The relative cut exists because the absolute one alone cannot tell "this
+    block is about the query" from "this block contains the word 'the'": BM25+
+    keeps IDF positive for every term, so a question's stopwords accumulate a
+    small positive score in nearly every block (measured: 55-76% of a docs page
+    kept, against 9% for a keyword query). ``threshold`` therefore acts as a
+    floor — a page whose best block is itself weak keeps the old, permissive
+    behaviour.
+
+    If ``query`` is empty, the text has <= 1 block, or the query yields no
+    usable terms, the original text is returned unchanged (focus is a no-op).
+
+    ``reranker`` (M-1, neural focus): when a warm ``_Reranker`` is passed, every
+    block is scored by the local cross-encoder instead of BM25. The scorer
+    never loads a model and never downloads — callers (``_apply_chunking``)
+    peek ``get_reranker()`` under the ``DHOLE_NEURAL_FOCUS`` flag and arrange
+    the load at the tool entry; a None/failed scorer here falls back to BM25
+    with the header saying so. The cross-encoder does not need the heading
+    boost (it reads the pair, not term overlap), and the absolute ``threshold``
+    does not apply — the sigmoid scale has its own geometry (on-topic ~0.9+,
+    off-topic ~0.001), so only the best-anchored relative cut is used.
+
+    ``mode="best"`` (M-2): return only the single highest-scoring block plus
+    its immediately preceding heading — "which part of this page answers the
+    question" — instead of every block past the cut.
+
+    ``stats`` (out-param, M-3): ``{"scorer": "neural"|"bm25", "best_score": ...}``
+    lets the caller report an intent-miss hint without reparsing the output.
+    ``best_score`` is filled only for the neural scorer — BM25's unbounded
+    scale has no calibrated reading.
+    """
+    if not query or not text or not text.strip():
+        return text
+    blocks = _split_blocks(text)
+    if len(blocks) <= 1:
+        return text
+    qterms = set(_tokens(query))
+    if not qterms:
+        return text
+
+    block_tokens = [_tokens(bl) for bl in blocks]
+    n = len(blocks)
+
+    stats_out = stats if isinstance(stats, dict) else None
+
+    scorer_note = "BM25 relevance"
+    neural_used = False
+    scores: Optional[list[float]] = None
+    if reranker is not None:
+        neural = _neural_block_scores(reranker, query, blocks)
+        if neural is not None:
+            scores = neural
+            neural_used = True
+            scorer_note = _neural_scorer_note()
+    if scores is None:
+        scores = _bm25_scores(blocks, block_tokens, qterms, k1, b)
+
+    # Tables/code containing ANY query term are always kept (high-value) —
+    # this deterministic safety net covers both scorers.
     preserved: set = set()
     for i in range(n):
         if _is_table(blocks[i]) or _is_code(blocks[i]):
             if set(block_tokens[i]) & qterms:
                 preserved.add(i)
 
-    # ── Selection ───────────────────────────────────────────────────────
-    # A block must clear BOTH cuts. The relative one is what makes a SENTENCE
-    # query work: BM25+ keeps idf > 0 for every term, so each ubiquitous word
-    # ("what", "is", "the", "with") adds a small positive score to nearly every
-    # block, and the sum clears an absolute threshold almost everywhere.
-    # Measured on docs.python.org/3/library/asyncio-task.html (88 blocks):
-    #   'TaskGroup'                                                ->  9% kept
-    #   "How do I run tasks concurrently with gather?"              -> 55% kept
-    #   "What is the difference between asyncio.gather and TaskGroup?" -> 76% kept
-    # i.e. the documented usage (a question) saved the least context. Anchoring
-    # to the best block's score keeps what the query is ABOUT and drops the
-    # blocks that merely share its stopwords, without touching the keyword case
-    # (there the best block IS the one clearing the threshold).
-    # The anchor is the best CONTENT block, not the best block overall: a
-    # heading is boosted 1.5x (Pass 2) and matches the query by being its
-    # title, so anchoring on it can put `best/3` above the actual answer block
-    # and drop it - TestHeadingAwareBM25 caught exactly that (the "##
-    # Training Details" heading outscored the "Adam optimizer" paragraph it
-    # introduces, which is the one carrying the query's rare term).
+    # Selection: anchored to the best CONTENT block, not the best block overall
+    # (a heading is boosted 1.5x under BM25 and matches the query by being its
+    # title — anchoring on it can drop the answer block it introduces). The
+    # neural path skips the absolute threshold: the sigmoid scale has no
+    # BM25-style floor, and the relative cut already drops the 0.0001 tail.
     content_scores = [s for i, s in enumerate(scores) if not _is_heading(blocks[i])]
     best = max(content_scores) if content_scores else (max(scores) if scores else 0.0)
-    cut = max(threshold, best * relative_threshold)
+    if stats_out is not None:
+        stats_out["scorer"] = "neural" if neural_used else "bm25"
+        stats_out["best_score"] = round(best, 4) if neural_used else None
+    cut = best * relative_threshold
+    if not neural_used:
+        cut = max(threshold, cut)
     keep = [i for i in range(n) if scores[i] >= cut]
     if not keep:
         # Nothing cleared the threshold — keep the closest blocks so the agent
@@ -286,9 +410,20 @@ def focus_content(
         if i > 0 and _is_heading(blocks[i - 1]) and not _is_heading(blocks[i]):
             keep_set.add(i - 1)
 
+    if mode == "best":
+        top = max(keep, key=lambda i: scores[i])
+        top_set = {top}
+        if top > 0 and _is_heading(blocks[top - 1]) and not _is_heading(blocks[top]):
+            top_set.add(top - 1)
+        header = (
+            f"[Focus best block: {query!r}; top of {n} by {scorer_note}. "
+            f"Pass focus='' for the full page, or keep mode unset for the filtered page.]"
+        )
+        return header + "\n\n" + "\n\n".join(blocks[i] for i in range(n) if i in top_set)
+
     kept = "\n\n".join(blocks[i] for i in range(n) if i in keep_set)
     header = (
         f"[Focus: {query!r}; showing {len(keep_set)} of {n} blocks "
-        f"by BM25 relevance. Pass focus='' for the full page.]"
+        f"by {scorer_note}. Pass focus='' for the full page.]"
     )
     return header + "\n\n" + kept

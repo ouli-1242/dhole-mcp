@@ -6,6 +6,42 @@
 
 > 自 13.14 起本仓库为个人衍生作品，版本号是自己的序号、不承诺语义化版本，与上游版本不可比；包内的 `__version__` 是唯一权威来源。
 
+## [17.0] - 2026-10-01
+
+从「网页研究工具」迈向「agent 的个人 Web 操作助手」的第一块：**带登录态抓取**与**页面操作**——CDP 接管你已登录的 Chrome，让已登录页面第一次可读；元素快照 + 索引化动作让 agent 能点、能填、能提交（提交默认暂停，等人确认）。边界不变：识别与决策归外层 agent，dhole 是零模型、零密钥的确定性工具层。
+
+### 新增
+
+- **带登录态抓取（CDP attach）**：`smart_fetch` 新增 `options.cdp_url`（指向开了 remote debugging 的本机 Chrome，如 `http://127.0.0.1:9222`），抓取在你的真实浏览器里执行，已登录站点的页面直接可读。此前浏览器层每次都 `new_context()` 新建隔离上下文——attach 能连上 Chrome，但登录态永远是空的；现在复用浏览器已存在的默认上下文（`contexts[0]`）。attach 是最高路由优先级：强制浏览器层、绕过公开缓存与 HTTP 层，与 `schema=` 互斥（显式报错，不静默丢一个）；响应带 `cdp_attached: true` 标记。前置是用户的一次性设置：Chrome 136+ 不允许默认 profile 开调试，需用 `--user-data-dir` 指向副本目录启动并在那里登录一次（README「带登录态抓取」一节有完整三步）
+- **登录态判定 `check_login`**：响应新增 `login_check`，三态 `{logged_in: true/false/null, signals, cookie_names, method: "dom+cookie-names"}`——DOM 形状 + cookie 名字聚合，无模型、无密钥；`null` 表示页面形状不足以定论，信号交回调用方判断。cookie 只报名字，值不出境（与 sessions 同纪律）
+- **持久 profile**：`DHOLE_BROWSER_PROFILE` 把 dhole 自家隐身浏览器的上下文落到 `~/.dhole/profiles/<name>/`（名字限字母数字点横线下划线），持久模式关闭时不再删除目录——自己登录过的浏览器会话跨重启存活（attach 路径用不到它，它服务 HTTP/隐身层）
+- **会话 cookie TTL 可配**：`DHOLE_COOKIE_TTL_S`（默认 86400 秒，区间 60 秒–30 天，越界夹紧并警告），HTTP 层「登录一次、长期复用」不再一天就断。照旧：活跃使用不续期，到期即失效
+- **元素索引快照 + 索引化动作**：`smart_fetch` 的 `actions` 新增 `{"snapshot": true}`——把页面上可交互元素（链接 / 按钮 / 输入框 / 带 role 的控件）按文档序列成编号清单（index / tag / role / name，最多 80 条，超出如实报 `elements_truncated` 与总数）。之后 `click` / `fill` / `press` / `screenshot` / `submit` 都可按 `{"index": N, "expect": "名字片段"}` 寻址，不必写选择器；快照与动作用**同一个**交互元素选择器的文档序，索引跨两次页面加载可复现；`expect` 让过期的索引大声失败（报出该位置现在读的是什么），而不是点到别的东西上。dhole 不做 `act(prompt)`——「这个按钮是干嘛的」由外层 agent 的语言能力回答，dhole 保持零模型
+- **submit 审批闸**：`actions` 新增 `{"submit": {...}}`（显式动作；`click` 到提交按钮不触发它）。没有 `confirm: true` 时**暂停**：动作行标记 `pending_approval`、什么都没有提交，summary 与 `next_action` 被它接管——提醒 agent 把提交内容转述给用户，得到肯定后带 `{"confirm": true}` 重跑同一条 actions 链（页面停在提交前的状态）。暂停与放行都进写操作审计。`confirm: true` 是 agent 对「用户已确认」的断言，dhole 无从验证——闸门的意义正是把不可逆的一步变成要过明面的决定
+- **多模态开关 `DHOLE_MULTIMODAL=1`**：声明**调用方** agent 能看图（不是 dhole 长了眼睛）。开着时：`screenshot` 工具与 `{"screenshot": ...}` 动作接受 `selector` / `index` 做元素裁剪截图（上限 2MB），图片作为图片块随响应走、不塞 JSON（base64 会给 transcript 与缓存的每一份拷贝加税），`metadata.actions` 只留收执（`image: true`）；工具描述同时追加看图纪律——图形验证码 ≤3 次就转交用户，DataDome / Akamai / 交互式 Turnstile / 2FA / 滑块一律转交。不开时这些参数显式报错（报错里说明怎么开），整页截图不受影响
+- **`decode_qr`（确定性本地解码）**：`screenshot` 工具与截图动作传 `decode_qr: true`，用 OpenCV（`opencv-python-headless`，随 `pip install "dhole-mcp[all]"`）在本地解二维码，解出的文本列进收执；元素裁剪天然缺静区，解码前自动补白边 / 放大重试；页面里没有码也照常回图，只在收执里说明。它**不**归多模态开关管——这是确定性的本地计算，不是视觉任务；缺依赖时报安装命令而不是静默失败
+- **神经 focus（`DHOLE_NEURAL_FOCUS=1`）**：`smart_fetch` 带 `focus` 时不再只按 BM25 关键词重合挑块，改用本地重排模型按**语义**给块打分选段（分块自动适配编码器窗口）。开关默认关；开了而模型还没下载时**显式报错**（报错里给下载方法），绝不静默降级——要 BM25 就明说关掉开关。运行中途模型出错才回退 BM25，并在 focus 头部注明
+- **`focus_mode="best"`**：`smart_fetch` 传 `options.focus_mode="best"` 时不再返回一堆片段，而是返回**单个**得分最高的块加它前面的标题——「答案在哪一段」的直接回答。BM25 与神经两档都可用
+- **整站爬取的相关性过滤**：`smart_crawl` 带 `focus` 且开了神经开关时，每页正文先按焦点查询打分，低于 0.03（实测离题带）的页面不再入队扩展——预算花在相关的子树上。模型缺席时放行（fail-open：爬取不该被一个可选增强卡死），调用方点名的起始 URL 永不丢，丢了多少页在 summary 报数
+- **意图命中提示**：神经 focus 下最高分块低于 0.05 时，`next_action` 提示「抓回的内容对焦点查询命中很弱」——页面是真的，但答案大概率不在这页上。`content_ok` 不因此变脸：内容为真与答了所问是两个问题
+- **会话 cookie 双向桥**：点名的 `session_id` 走浏览器层时（`force_fetcher='stealthy'` 或自动升级到隐身层），该会话的专用隐身浏览器在导航前从 HTTP 层 jar **播种** cookie、响应后**回写**新增的——登录态第一次跨两层共用。边界收得很窄：只有调用方点名的会话桥（共享的自动会话永不播种，那等于把 A 会话的登录态倒进 B）；CDP attach 永不桥（那是你的真实 profile，只读不写）；桥只发生在「这个会话自己的浏览器」上。配合 `check_login`、元素快照与提交闸，不写密码的登录流兜底路径成立：HTTP 层攒 cookie → 桥进浏览器 → 快照认字段 → 提交走审批闸（独立登录工具要等凭据源，明文密码进 transcript 不做）
+- **写操作审计**：`DHOLE_USAGE_LOG` 的审计通道现在也记**写**：HTTP 层所有非 GET（`channel=http`，不重试是写请求的既有纪律）与浏览器 submit（`channel=browser_submit`），记 method / url / session_id / 是否 pending。读和写从此都看得见
+
+### 变更
+
+- **`cdp_url` 默认拒绝（breaking-adjacent）**：此前 `cdp_url` 是 agent 可自由传的参数——这正是要收口的洞：attach 你的真实 Chrome 等于交出其中**所有**已登录站点的读权限，而外层 agent 的规划循环不可预测。现在必须 `DHOLE_CDP_ATTACH=1` 显式开启；未开启时带 `cdp_url` 的调用返回 `cdp_attach_disabled`，一个请求都不发。受影响的是「给 cdp_url 传值但没设开关」的既有调用：以前是静默跑通但登录态为空（`new_context()` 的旧 bug），现在是明确失败——修法是设开关，或者本来就不该传
+
+### 修复
+
+- **`actions` 在两条车道上被静默丢弃**：`cdp_url` 与 `actions` 同传时动作从来不会执行（attach 车道与隐身车道各建各的动作对象，attach 那份没接上）；`schema` 与 `actions` 同传同样被静默忽略。前者修为两条车道都执行动作，后者修为显式报错——静默忽略一个调用方声明的参数比拒绝更糟
+
+### 安全
+
+- **host 白名单落到机制而非配置**：`DHOLE_CDP_HOSTS`（逗号分隔）在 route 层执行——attach 后页面 JS 发起的子资源请求同样被拦，不只是导航；抓取入口再快失败一次（`cdp_host_not_allowed`）。白名单外的导航拿不到你的认证 cookie
+- **attach 事件全部留痕**：写进 `DHOLE_USAGE_LOG` 的审计通道，响应回带 `cdp_attached: true`——每次借用你的登录态都可见
+- **attach 不碰你的浏览器指纹**：跳过 stealth 注入 / cookie 写入 / 拟人行为（往真实 Chrome 里注入指纹脚本反而制造与真实指纹不一致的暴露点）；`close()` 只断开连接，不关你的浏览器
+- attach 走一次性会话，不进自动会话池，不与其他调用混用
+
 ## [16.2] - 2026-09-29
 
 agent 技能随包分发；修掉「代理环境下抓不了本机服务」这一个真实缺陷家族。

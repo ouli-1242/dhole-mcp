@@ -22,7 +22,8 @@ Scope, and what is deliberately NOT here:
   is a credential, and tool output lands in the agent's transcript — and in the
   SQLite content cache, and possibly in a log. An agent that needs to know
   "did my login survive?" is answered by the name list.
-* **Expires after :data:`COOKIE_TTL_S`.** Written once per ``Set-Cookie``, not
+* **Expires after** the effective TTL (:data:`COOKIE_TTL_S`, or
+  ``DHOLE_COOKIE_TTL_S`` when set). Written once per ``Set-Cookie``, not
   refreshed on send, so a forgotten session cannot accumulate credentials
   forever. ``cache_clear`` (the tool) and ``close_session`` drop the jar.
 
@@ -44,7 +45,27 @@ from urllib.parse import urlparse
 logger = logging.getLogger("dhole-mcp.sessions")
 
 # A stored cookie lives this long from when the site set it.
+# Overridable via ``DHOLE_COOKIE_TTL_S`` (seconds; clamped 60s..30d). The plan
+# ("登录一次、长期复用") needs more than the 24h default on quiet sites — but the
+# expiry still exists, so an abandoned session cannot hold credentials forever.
 COOKIE_TTL_S = 24 * 3600.0
+_COOKIE_TTL_MIN_S = 60.0
+_COOKIE_TTL_MAX_S = 30 * 24 * 3600.0
+
+
+def _cookie_ttl() -> float:
+    """Effective TTL in seconds: ``DHOLE_COOKIE_TTL_S`` when parseable, else
+    :data:`COOKIE_TTL_S`. Read per call (cheap) so tests and long-lived servers
+    pick up env changes without a reload."""
+    raw = (os.environ.get("DHOLE_COOKIE_TTL_S") or "").strip()
+    if not raw:
+        return COOKIE_TTL_S
+    try:
+        val = float(raw)
+    except ValueError:
+        logger.warning("DHOLE_COOKIE_TTL_S=%r is not a number; using the default", raw)
+        return COOKIE_TTL_S
+    return max(_COOKIE_TTL_MIN_S, min(val, _COOKIE_TTL_MAX_S))
 # Bound on the jar, so a crawl that hops through 500 hosts cannot grow it
 # without limit. Oldest-expiring rows go first.
 MAX_COOKIES = 2000
@@ -129,7 +150,7 @@ def store(session_id: str, url: str, cookies: dict, now: float | None = None) ->
     if not sid or not host or not cookies:
         return 0
     ts = time.time() if now is None else now
-    expires = ts + COOKIE_TTL_S
+    expires = ts + _cookie_ttl()
     stored = 0
     with _lock:
         try:

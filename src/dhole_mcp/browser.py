@@ -212,6 +212,103 @@ def _is_entry_target(request_url: str, entry_url: str) -> bool:
     return {rp, ep} == {80, 443}
 
 
+class CDPHostNotAllowedError(RuntimeError):
+    """CDP attach 模式下，目标 host 不在 DHOLE_CDP_HOSTS 白名单里。
+
+    与 SSRF 拦截同类：这是用户设的授权边界，不是网络错误——不重试，原样抛。
+    """
+
+
+_PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def _env_profile_name() -> Optional[str]:
+    """``DHOLE_BROWSER_PROFILE=<name>``：launch 路径改用
+    ``~/.dhole/profiles/<name>/`` 持久 profile 而不是临时目录（storage-state
+    持久化：close 不删、重启重登不需要）。非法名字直接抛——打错的字绝不能
+    静默回落到一次性 profile，那会让"以为存了登录态"的调用方拿到空会话。
+    """
+    raw = (os.environ.get("DHOLE_BROWSER_PROFILE") or "").strip()
+    if not raw:
+        return None
+    if not _PROFILE_NAME_RE.match(raw):
+        raise ValueError(
+            f"DHOLE_BROWSER_PROFILE={raw!r} is not a valid profile name "
+            "(letters/digits/._-, starting with a letter or digit, max 64 chars)")
+    return raw
+
+
+async def _resolve_cdp_context(browser: Any, context_options: Dict[str, Any]) -> Tuple[Any, bool]:
+    """attach 语义的核心（G33）：复用 CDP 端点已有的 default context。
+
+    Playwright 语义：``connect_over_cdp`` 之后 ``browser.contexts[0]`` 是远端
+    浏览器的 default context——用户 profile 的 cookie / storage 都在那里；
+    ``new_context()`` 则新建一个隔离 profile，什么登录态都拿不到（"跑通、返回
+    200、但登录态是空的"）。MVP-0 证伪实验（tests/e2e_cdp_attach_test.py）
+    验证的正是这个差别。
+
+    Returns ``(context, reused_default)``。端点没有任何 context 时（罕见的裸
+    headless 端点）退回 ``new_context()``——此时拿不到登录态，调用方的
+    cdp_attached 标记会如实反映。
+    """
+    contexts = list(getattr(browser, "contexts", None) or [])
+    if contexts:
+        return contexts[0], True
+    return await browser.new_context(**context_options), False
+
+
+# 登录探测（G35 check_login）。判定全在页面形状与 cookie 名上，不引入任何模型、
+# 不读取任何 cookie 值。三态结论在 _login_verdict 里聚合成纯函数。
+_LOGIN_PROBE_JS = """() => {
+  const q = (sel) => { try { return !!document.querySelector(sel); } catch (e) { return false; } };
+  const text = ((document.body && document.body.innerText) || '').toLowerCase();
+  return {
+    password_field: q('input[type=password]'),
+    login_form: q('form[action*="login" i], form[action*="signin" i], form[action*="auth" i]'),
+    logout_control: /\\bsign out\\b|\\blog ?out\\b|\\bsignout\\b|\\blogout\\b/.test(text)
+                    || text.includes('退出登录') || text.includes('注销登录') || text.includes('退出账号'),
+    login_control: /\\bsign in\\b|\\blog ?in\\b|\\bsignin\\b|\\blogin\\b/.test(text)
+                   || text.includes('登录') || text.includes('登入'),
+  };
+}"""
+
+
+def _login_verdict(probe: dict, cookie_names: List[str]) -> dict:
+    """把 DOM 信号与 cookie 名聚合成可判读的结论（纯函数，可单测）。
+
+    logged_in 三态：True / False / None——None 表示页面形状不足以定论，把
+    信号交回外层 agent 判断（它有语言能力，dhole 没有，也不该有）。cookie
+    只出 NAMES：值是凭据，工具输出会进 transcript 与缓存（sessions.py 同纪律）。
+    """
+    probe = probe if isinstance(probe, dict) else {}
+    logout = bool(probe.get("logout_control"))
+    password = bool(probe.get("password_field"))
+    login_form = bool(probe.get("login_form"))
+    signals: List[str] = []
+    if logout:
+        signals.append("logout_control_present")
+    if password:
+        signals.append("password_field_present")
+    if login_form:
+        signals.append("login_form_present")
+    if probe.get("login_control"):
+        signals.append("login_control_present")
+    if not password and not login_form:
+        signals.append("no_login_form")
+    if logout and not password:
+        verdict: Optional[bool] = True
+    elif password and login_form and not logout:
+        verdict = False
+    else:
+        verdict = None
+    return {
+        "logged_in": verdict,
+        "signals": signals,
+        "cookie_names": sorted({str(n) for n in (cookie_names or []) if n}),
+        "method": "dom+cookie-names",
+    }
+
+
 def _create_route_handler(
     disable_resources: bool,
     blocked_domains: Optional[Set[str]] = None,
@@ -219,6 +316,7 @@ def _create_route_handler(
     entry_url: str = "",
     main_frame: Any = None,
     sent_headers: Optional[Dict[str, str]] = None,
+    allowed_hosts: Optional[frozenset] = None,
 ) -> Callable[[Any], Awaitable[None]]:
     """Create an async route handler for resource blocking + SSRF guarding.
 
@@ -234,6 +332,11 @@ def _create_route_handler(
     （fetcher._hop_headers）；两层口径不一致的话，「升级到隐身浏览器」就等于「把
     凭据撒出去」，而那恰恰是隐身层存在的理由。只动调用方自己声明过的那几个头名，
     页面 JS 自己设的 Authorization 一律不碰。
+
+    allowed_hosts（传入时启用，G33 host scope）：CDP attach 模式下浏览器的每个
+    请求都带着用户 profile 的已认证 cookie，所以白名单外的导航必须在**机制层**
+    拦下——entry URL 的检查只挡得住入口，重定向和页面 JS 发起的跨站请求只有
+    route 这一条路能拦。「有白名单配置但没人执行它」不是实现，是摆设。
     """
     disabled = DISABLED_RESOURCE_TYPES if disable_resources else set()
     domains = frozenset(blocked_domains) if blocked_domains else frozenset()
@@ -249,6 +352,19 @@ def _create_route_handler(
             if rt in disabled:
                 await route.abort()
                 return
+            if allowed_hosts is not None:
+                ap = urlparse(request_url)
+                if (ap.scheme or "").lower() in ("http", "https"):
+                    ahost = (ap.hostname or "").lower()
+                    if ahost not in allowed_hosts:
+                        logger.warning(
+                            "host scope blocked a request in CDP-attach mode: %s",
+                            ap.netloc or "?")
+                        try:
+                            await route.abort()
+                        except Exception:
+                            pass
+                        return
             if domains:
                 hostname = urlparse(request_url).hostname or ""
                 if _is_domain_blocked(hostname, domains):
@@ -966,6 +1082,8 @@ class BrowserSession:
         extra_headers: Optional[Dict[str, str]] = None,
         google_search: bool = True,
         cdp_url: Optional[str] = None,
+        allowed_hosts: Optional[frozenset] = None,
+        profile_name: Optional[str] = None,
         real_chrome: bool = True,
         wait_selector: Optional[str] = None,
         wait_selector_state: str = "attached",
@@ -994,6 +1112,10 @@ class BrowserSession:
         self._extra_headers = extra_headers
         self._google_search = google_search
         self._cdp_url = cdp_url
+        # G33 host scope：None = 不限制（launch 模式）；frozenset = attach 模式
+        # 白名单，entry URL 与 route 层双层执行。
+        self._allowed_hosts = allowed_hosts
+        self._profile_name = profile_name or _env_profile_name()
         self._real_chrome = real_chrome
         self._wait_selector = wait_selector
         self._wait_selector_state = wait_selector_state
@@ -1015,6 +1137,14 @@ class BrowserSession:
         self._user_data_dir: Optional[str] = None
         self._is_alive: bool = False
         self._fingerprint_profile: Optional[Dict[str, Any]] = None
+        # True when connect_over_cdp reused the endpoint's own default context
+        # (the one holding the user's login state). Gates every invasive
+        # behavior: no cookie writes into the user's profile, no stealth
+        # patches on the user's pages, no context.close() on detach.
+        self._cdp_attached: bool = False
+        # True when the launch path runs on a named persistent profile that
+        # must survive close (DHOLE_BROWSER_PROFILE / profile_name).
+        self._persistent_profile: bool = False
 
     # ── Lifecycle ─────────────────────────────────────────────────
 
@@ -1110,17 +1240,32 @@ class BrowserSession:
                 self._browser = await self._playwright.chromium.connect_over_cdp(
                     endpoint_url=self._cdp_url
                 )
-                self._context = await self._browser.new_context(**context_options)
+                # G33：复用端点自己的 default context（contexts[0]）——它带着
+                # 用户 profile 的全部 cookie / storage。此前这里调 new_context()，
+                # 那是新建隔离 profile："连上已登录的 Chrome"实际拿到的永远是
+                # 空登录态（请求会通、内容是真的，就是没登录——最难发现的 bug）。
+                self._context, self._cdp_attached = await _resolve_cdp_context(
+                    self._browser, context_options)
             else:
-                # Use persistent context (temp dir)
-                self._user_data_dir = tempfile.mkdtemp(prefix="dhole_browser_")
+                # Persistent context: temp dir by default; a named profile under
+                # ~/.dhole/profiles/<name>/ when the caller (or
+                # DHOLE_BROWSER_PROFILE) opts into storage-state persistence.
+                if self._profile_name:
+                    from dhole_mcp import paths as _paths
+                    pdir = _paths.profiles_dir() / self._profile_name
+                    _paths.ensure_private_dir(pdir)
+                    self._user_data_dir = str(pdir)
+                    self._persistent_profile = True
+                else:
+                    self._user_data_dir = tempfile.mkdtemp(prefix="dhole_browser_")
                 persistent_opts = {**browser_options, **context_options, "user_data_dir": self._user_data_dir}
                 self._context = await self._playwright.chromium.launch_persistent_context(
                     **persistent_opts
                 )
 
-            # Initialize context
-            if self._cookies:
+            # Initialize context. attach 模式不注入：cookies 会写进用户的真实
+            # profile，等于替用户改登录态。
+            if self._cookies and not self._cdp_attached:
                 await self._context.add_cookies(self._cookies)
 
             # Generate stealth init script (stealthy only) for JS-layer patches
@@ -1128,7 +1273,9 @@ class BrowserSession:
             # Page.addScriptToEvaluateOnNewDocument (not context.add_init_script,
             # which uses Routes and breaks DNS resolution with patchright).
             self._init_script: Optional[str] = None
-            if self._is_stealthy:
+            # attach 模式不做 stealth 注入：补丁会落在用户自己开着的页面上，
+            # 制造与真实指纹的差异（修订二⑪——attach 下 _is_stealthy 视为 False）。
+            if self._is_stealthy and not self._cdp_attached:
                 self._fingerprint_profile = _generate_fingerprint_profile()
                 # Full patches only for bundled Chromium; system Chrome already
                 # has correct WebGL, plugins, platform, window.chrome.
@@ -1141,7 +1288,8 @@ class BrowserSession:
                             not is_chrome_channel)
 
             self._is_alive = True
-            logger.info(f"Browser session started (stealthy={self._is_stealthy})")
+            logger.info(f"Browser session started (stealthy={self._is_stealthy}, "
+                        f"cdp_attached={self._cdp_attached})")
         except Exception as e:
             logger.error(f"Browser session start failed: {e}")
             await self._cleanup_playwright()
@@ -1154,7 +1302,11 @@ class BrowserSession:
 
         try:
             if self._context:
-                await self._context.close()
+                # attach 模式绝不能 close 这个 context——那是用户 Chrome 的
+                # default context，close 会带走用户自己开着的页面。对
+                # connect_over_cdp，browser.close() 只断开连接，不动用户进程。
+                if not self._cdp_attached:
+                    await self._context.close()
                 self._context = None
             if self._browser:
                 await self._browser.close()
@@ -1165,14 +1317,14 @@ class BrowserSession:
             await self._cleanup_playwright()
             self._is_alive = False
 
-            # Cleanup temp dir
-            if self._user_data_dir:
+            # Cleanup temp dir (a named persistent profile survives close)
+            if self._user_data_dir and not self._persistent_profile:
                 try:
                     import shutil
                     shutil.rmtree(self._user_data_dir, ignore_errors=True)
                 except Exception:
                     pass
-                self._user_data_dir = None
+            self._user_data_dir = None
 
     async def _cleanup_playwright(self) -> None:
         """Stop the playwright instance."""
@@ -1184,6 +1336,41 @@ class BrowserSession:
             self._playwright = None
 
     # ── Fetch ─────────────────────────────────────────────────────
+
+    async def seed_cookies(self, url: str, cookies: Dict[str, str]) -> None:
+        """MVP-3 cookie 双向桥（播种向）：把 HTTP jar 中该 host 的 cookie 灌进
+        本 context，浏览器导航即携带 HTTP 层拿到的登录态。
+
+        只允许在**会话专用**的浏览器上调用（server 侧保证）：共享 auto 会话的
+        context 为所有匿名调用共用，往里灌某个 session 的 cookie 等于跨会话
+        泄露。cookie 值不出进程（jar → context），只在这个方向存在。
+        """
+        if not cookies or not self._is_alive or self._context is None:
+            return
+        payload = [{"name": str(n), "value": str(v), "url": url}
+                   for n, v in cookies.items() if n]
+        if payload:
+            try:
+                await self._context.add_cookies(payload)
+            except Exception as e:
+                logger.debug("cookie seeding failed for %s: %s", url, e)
+
+    async def harvest_cookies(self, url: str) -> Dict[str, str]:
+        """MVP-3 cookie 双向桥（回写向）：读本 context 在该 URL host 上的
+        cookie，交由调用方写回 jar（按 session_id 隔离存储）。值只进 jar，
+        不进任何响应或日志。"""
+        if not self._is_alive or self._context is None:
+            return {}
+        try:
+            jar = await self._context.cookies(url)
+        except Exception as e:
+            logger.debug("cookie harvest failed for %s: %s", url, e)
+            return {}
+        out: Dict[str, str] = {}
+        for c in jar or []:
+            if isinstance(c, dict) and c.get("name") and c.get("value") is not None:
+                out[str(c["name"])] = str(c["value"])
+        return out
 
     async def fetch(
         self,
@@ -1202,12 +1389,16 @@ class BrowserSession:
         page_action: Optional[Callable] = None,
         page_setup: Optional[Callable] = None,
         retries: Optional[int] = None,
+        probe_out: Optional[dict] = None,
         **kwargs: Any,
     ) -> "Any":
         """Navigate to a URL and return a Response object.
 
         Parameters override session defaults for this request only. Proxy is
         fixed at session startup and cannot be changed here.
+
+        probe_out（G35 check_login）：传入一个 dict，导航稳定后在页面上做一次
+        登录探测（DOM 形状 + cookie 名，无模型、无值出境），结果写进这个 dict。
         """
         if not self._is_alive:
             raise RuntimeError("Session not started")
@@ -1216,6 +1407,19 @@ class BrowserSession:
                 "Proxy is fixed when a browser session starts; "
                 "open a new session to use a different proxy"
             )
+
+        # host scope（G33，attach 模式）第一层：入口 URL 快失败。白名单外的
+        # 重定向 / 页面 JS 请求由 route handler 拦——那才是机制层，这里只是
+        # 让错误早一点、可读一点。
+        if self._allowed_hosts is not None:
+            _entry_host = (urlparse(url).hostname or "").lower()
+            if _entry_host not in self._allowed_hosts:
+                raise CDPHostNotAllowedError(
+                    f"cdp_host_not_allowed: '{_entry_host or url}' is outside "
+                    "DHOLE_CDP_HOSTS. In CDP-attach mode every request carries "
+                    "the authenticated cookies of the attached profile, so "
+                    "navigation is fenced to the hosts the user allowed."
+                )
 
         # Resolve per-request overrides
         actual_wait = wait if wait is not None else self._wait
@@ -1267,6 +1471,7 @@ class BrowserSession:
                         actual_disable_resources, None, ssrf_watch, entry_url=url,
                         main_frame=page.main_frame,
                         sent_headers=actual_extra_headers,
+                        allowed_hosts=self._allowed_hosts,
                     ),
                 )
 
@@ -1346,7 +1551,8 @@ class BrowserSession:
                 # Human behavior simulation (stealthy only, if enabled)
                 # Adds ~1.5-2.5s of mouse movement + scroll + dwell.
                 # Passes Cloudflare v9 behavioral scoring.
-                if self._is_stealthy and self._humanize:
+                # attach 模式不做：那是在驱动用户自己的浏览器。
+                if self._is_stealthy and self._humanize and not self._cdp_attached:
                     try:
                         await _simulate_human_behavior(page)
                     except Exception as e:
@@ -1365,6 +1571,20 @@ class BrowserSession:
                         "refused to load it. The entry URL was validated, but a redirect or a "
                         "page-script request pointed inside - nothing was fetched from it."
                     )
+
+                # 登录探测（G35 check_login）：SSRF 终检之后——被拦的页面没有
+                # 探测价值；构建响应之前——探测的是导航稳定后的最终页面。
+                if probe_out is not None:
+                    try:
+                        raw = await page.evaluate(_LOGIN_PROBE_JS)
+                        jar = await self._context.cookies(page.url)
+                        names = [str(c.get("name")) for c in (jar or [])
+                                 if isinstance(c, dict) and c.get("name")]
+                        probe_out.clear()
+                        probe_out.update(_login_verdict(
+                            raw if isinstance(raw, dict) else {}, names))
+                    except Exception as e:
+                        logger.debug(f"login probe failed: {e}")
 
                 # Build response
                 from dhole_mcp.fetcher import response_from_browser_page
@@ -1456,6 +1676,14 @@ class BrowserSession:
     @property
     def is_alive(self) -> bool:
         return self._is_alive
+
+    @property
+    def cdp_attached(self) -> bool:
+        """True when this session attached to an existing CDP endpoint and is
+        driving the endpoint's own default context — the one holding the user's
+        login state. Response payloads surface this (cdp_attached=true) so every
+        attach is visible to the caller, not just to the audit log."""
+        return self._cdp_attached
 
 
 class StealthyBrowser(BrowserSession):

@@ -85,7 +85,7 @@ logger = logging.getLogger("dhole-mcp.server")
 
 
 from dhole_mcp import __version__
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from dhole_mcp import paths
 
@@ -711,6 +711,16 @@ class ResponseModel(BaseModel):
     # real page. Honest marking so the agent knows it may be a dated snapshot.
     source: str = Field(default="live", description="'live' (default) = fetched from the real URL. 'archive.org' = the live site hard-blocked and this content was recovered from the Internet Archive's closest snapshot (see archived_at for the snapshot date).")
     archived_at: str = Field(default="", description="ISO date of the archive.org snapshot when source='archive.org'. Empty when source='live'. The content reflects the page as it was on this date.")
+    # ─── G33/G35: CDP attach 可见性 + 无模型登录判定 ───
+    cdp_attached: bool = Field(default=False, description="True when this response was fetched through an attached real browser (cdp_url): every request rode the attached profile's authenticated cookies. Default false - attach is refused unless DHOLE_CDP_ATTACH=1, and every attach attempt is audited. Never treat content from an attached profile like public content: it is the user's logged-in view.")
+    login_check: Optional[Dict[str, Any]] = Field(default=None, description="Only when check_login=true AND the fetch ran on the browser tier: {logged_in: true|false|null, signals: [...], cookie_names: [...], method: 'dom+cookie-names'}. Model-free: DOM shape (logout control / password field / login form) plus cookie NAMES - values are never returned. null when not requested, when the fetch never reached the browser tier, or on cache hits (the probe is live-only).")
+
+    # Element captures from {\"screenshot\"} actions (multimodal flag): pixels
+    # ride the CONTENT list as ImageContent, never this model — a base64 blob
+    # in the JSON payload would bloat every transcript/cache copy of the
+    # response for clients that cannot render it anyway. PrivateAttr keeps it
+    # out of model_dump()/serialization by construction.
+    _action_images: List[Dict[str, str]] = PrivateAttr(default_factory=list)
 
 
 class BulkResponseModel(BaseModel):
@@ -807,6 +817,9 @@ _WIRE_OMIT: dict = {
         "archived_at", "quality_score", "total_size_bytes",
         "total_extracted_chars", "media", "links", "table_of_contents",
         "cache_validators", "metadata", "fetcher_used", "content_type",
+        # G33/G35: 默认 False/None（无人 attach、未要求登录判定）时省略；
+        # 非 default 的值（attach 过、probe 出结果）照常上线。
+        "cdp_attached", "login_check",
     }),
     "CrawlPage": frozenset({
         "depth", "fetcher_used", "title", "page_type", "content_chars",
@@ -1114,11 +1127,25 @@ def _wire_dump(obj) -> dict:
     return obj
 
 
-def _wire_result(obj) -> tuple:
-    """The (content_list, structured_dict) pair every tool call returns."""
-    from mcp.types import TextContent
+def _wire_result(obj, images: Optional[list] = None) -> tuple:
+    """The (content_list, structured_dict) pair every tool call returns.
+
+    ``images`` (element captures from smart_fetch {\"screenshot\"} actions) are
+    prepended as ImageContent blocks: the text channel keeps the full JSON
+    payload, and the pixels ride alongside it so a multimodal client sees them
+    without any base64 flowing through the JSON itself.
+    """
+    from mcp.types import ImageContent, TextContent
     text, payload = _wire_json(obj)
-    return [TextContent(type="text", text=text)], payload
+    content: list = []
+    for img in (images or []):
+        data = (img or {}).get("data")
+        if data:
+            content.append(ImageContent(
+                type="image", data=data,
+                mime_type=(img or {}).get("mime_type", "image/png")))
+    content.append(TextContent(type="text", text=text))
+    return content, payload
 
 
 def _call_result(result):
@@ -2185,13 +2212,51 @@ def _report_action_outcomes(result: ResponseModel, page_action: Any) -> None:
     asked for a wait, which the code already had. A receipt per action, plus a
     line in the summary when one refused to run, sends the reader at the selector
     instead of at the timing.
+
+    Element captures ({\"screenshot\"} actions) split in two here: the JSON
+    payload keeps a name-only receipt (`image: true`, plus the decoded `qr`
+    strings, which are small and useful to every client), while the pixels move
+    to ``result._action_images`` for the content list — base64 in the payload
+    would tax every text-only transcript the response lands in.
     """
     outcomes = list(getattr(page_action, "outcomes", None) or [])
     if not outcomes:
         return
+    wire_rows: list = []
+    images: list = []
+    for o in outcomes:
+        row = {k: v for k, v in o.items() if k != "image_b64"}
+        if "image_b64" in o:
+            row["image"] = True
+            images.append({"data": o["image_b64"],
+                           "mime_type": o.get("image_mime", "image/png")})
+        wire_rows.append(row)
+    result._action_images = images
     failed = [o for o in outcomes if not o.get("ok")]
-    result.metadata = {**(result.metadata or {}), "actions": outcomes}
-    if failed:
+    pending = [o for o in outcomes if o.get("pending_approval")]
+    result.metadata = {**(result.metadata or {}), "actions": wire_rows}
+    # 写操作审计（安全闸剩余项 2，DHOLE_USAGE_LOG 打开时落盘）：浏览器的
+    # submit 是"哪个 session 对哪个站做了什么写操作"的典型——已确认的提交和
+    # 被闸拦下的尝试都值得留痕。
+    for o in outcomes:
+        if o.get("submitted") or o.get("pending_approval"):
+            _audit_event("write", channel="browser_submit",
+                         url=(result.url or "")[:200],
+                         session_id=_SESSION_ID.get() or "",
+                         pending=bool(o.get("pending_approval")),
+                         action=str(o.get("action", ""))[:80])
+    if pending:
+        # 审批闸（安全红线 3）的回应面：暂停要成为整个响应的头号信号，next_action
+        # 直接指向"去问用户"，不能淹没在普通失败提示里。
+        names = "; ".join(str(o.get("action", "submit")) for o in pending)
+        result.summary = (f"{result.summary} · {len(pending)} action(s) waiting "
+                          f"for user approval ({names})")
+        result.next_action = (
+            "a submit action is PAUSED for user approval (pending_approval in "
+            "metadata.actions) - describe the submission to the user and ask for "
+            "confirmation; on a yes, re-run the same actions with "
+            '{"confirm": true} on that submit. Nothing irreversible was done.')
+    elif failed:
         detail = "; ".join(
             f"{o['action']}: {str(o.get('error', ''))[:120]}" for o in failed)
         result.summary = (f"{result.summary} · {len(failed)} of {len(outcomes)} "
@@ -2473,6 +2538,7 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         "cache_ttl": "int", "offset": "int", "max_content_chars": "int",
         "max_links": "int",
         "method": "str", "content_type": "str",
+        "focus_mode": "str",
         "timeout": "number", "wait": "number",
         # A numeric PDF page request ("pages": 3) is unambiguous; reading it only
         # as a string used to drop the range silently and return the whole file.
@@ -2494,7 +2560,7 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         # the one spelling 'auto' would not survive.
     },
     "screenshot": {
-        "full_page": "bool", "network_idle": "bool",
+        "full_page": "bool", "network_idle": "bool", "decode_qr": "bool",
         "quality": "int", "wait": "number", "timeout": "number",
     },
     "smart_search": {
@@ -2675,6 +2741,30 @@ def _normalize_promoted_copies(name: str, args: dict, options: dict) -> dict:
     return out
 
 
+def _focus_intent_hint(finalized: ResponseModel, focus_q: Optional[str],
+                       stats: Optional[dict]) -> ResponseModel:
+    """M-3 意图命中检查：神经分落在实测跑题带（< ``_INTENT_MISS_FLOOR``）时，
+    往 next_action 里放一句诚实的提示。
+
+    不翻转 content_ok——content_ok 说的是"拿到的是真内容"，意图命中说的是
+    "这内容答没答那个问题"；两件事挤进一个布尔，任何一边都会开始说谎。
+    只在神经分存在时工作：BM25 的分没有校准过的读数，套用这条线是胡说。
+    """
+    if not focus_q or not isinstance(stats, dict):
+        return finalized
+    if stats.get("scorer") != "neural":
+        return finalized
+    best = stats.get("best_score")
+    if not isinstance(best, (int, float)) or best >= _INTENT_MISS_FLOOR:
+        return finalized
+    hint = (f"focus match is weak: the best block scored {best:.3f} on the focus "
+            f"query, below the {_INTENT_MISS_FLOOR} off-topic floor - this page may "
+            "not answer it. Verify before citing, or search for a page that does.")
+    finalized.next_action = (f"{finalized.next_action} {hint}".strip()
+                             if finalized.next_action else hint)
+    return finalized
+
+
 def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_CHARS, offset: int = 0) -> ResponseModel:
     """Truncate content if it exceeds max_chars, starting from offset.
 
@@ -2688,15 +2778,26 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
     """
     full_text = "\n".join(result.content)
     # Query-focused filter (post-cache): if the caller passed `focus`, keep only
-    # the BM25-relevant blocks so the agent loads less context on long pages.
+    # the relevant blocks so the agent loads less context on long pages.
     # Only applies to text-like extractions (not raw html). Runs before chunking
     # so offset/next_offset page through the FOCUSED content.
+    # M-1: under DHOLE_NEURAL_FOCUS the blocks are scored by the warm local
+    # cross-encoder instead of BM25 (peek only — the load happened at the
+    # smart_fetch entry; a missing scorer falls back to BM25 inside
+    # focus_content). M-2: focus_mode='best' returns only the answer block.
     focus_q = _FOCUS.get()
+    focus_stats: Optional[dict] = None
     if focus_q and result.extracted_type in ("markdown", "text", "article", "structured"):
         try:
             from dhole_mcp.focus import focus_content
-            full_text = focus_content(full_text, focus_q)
+            from dhole_mcp.reranker import get_reranker
+            reranker = get_reranker() if _neural_focus_enabled() else None
+            focus_stats = {}
+            full_text = focus_content(
+                full_text, focus_q, reranker=reranker,
+                mode=_FOCUS_MODE.get() or "filter", stats=focus_stats)
         except Exception as e:
+            focus_stats = None
             logger.debug("focus filter failed: %s", e)
     total_len = len(full_text)
 
@@ -2712,12 +2813,12 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
         # (metadata/links/page_type/source_type/quality_score/toc/...). The
         # old hand-written constructor dropped any field not listed, so every
         # new envelope field silently vanished on the no-more-content branch.
-        return _with_agent_hints(result.model_copy(update={
+        return _focus_intent_hint(_with_agent_hints(result.model_copy(update={
             "content": [exhausted] if exhausted else [],
             "total_extracted_chars": total_len,
             "is_truncated": False,
             "next_offset": 0,
-        }))
+        })), focus_q, focus_stats)
 
     chunk = full_text[offset:offset + max_chars]
     chunk_len = len(chunk)
@@ -2742,12 +2843,12 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
     # model_copy(update=...) preserves every field by construction — no more
     # hand-maintained field list that silently dropped envelope fields on
     # truncation. Add a field to ResponseModel and it survives chunking free.
-    return _with_agent_hints(result.model_copy(update={
+    return _focus_intent_hint(_with_agent_hints(result.model_copy(update={
         "content": [chunk],
         "total_extracted_chars": total_len,
         "is_truncated": truncated,
         "next_offset": next_off,
-    }))
+    })), focus_q, focus_stats)
 
 
 # ─── Response translation helpers ──────────────────────────────────
@@ -2761,6 +2862,8 @@ _PDF_PASSWORD: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_
 # inside _apply_chunking: the full extracted text is cached once, and different
 # focus queries are just different BM25 views over the same cached content.
 _FOCUS: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_focus", default=None)
+# focus 的形态（M-2）：filter（默认，现有行为）| best（只回打分最高的答案块）。
+_FOCUS_MODE: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_focus_mode", default=None)
 # Opt-in: populate ResponseModel.media with the page's image URLs (multimodal).
 _INCLUDE_MEDIA: contextvars.ContextVar[bool] = contextvars.ContextVar("_include_media", default=False)
 _INCLUDE_LINKS: contextvars.ContextVar[bool] = contextvars.ContextVar("_include_links", default=False)
@@ -3064,6 +3167,145 @@ def _screenshot_error_message(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {flat} - {hint}"
 
 
+def _cdp_attach_gate(cdp_url: Optional[str]) -> tuple[Optional[str], Optional[frozenset]]:
+    """安全闸 1/2（G33）：CDP attach 默认关 + host scope。
+
+    attach 用户真实 Chrome = 一次交出**所有已登录站点**的已认证读权限，比
+    "写操作要确认"严重一个数量级（后者管已知的写，前者泄露未知站点的已认证
+    读）。所以 cdp_url 参数默认**拒绝**：必须显式 ``DHOLE_CDP_ATTACH=1`` 才
+    放行。``DHOLE_CDP_HOSTS=a.com,b.com``（可选）把 attach 模式的导航圈进
+    白名单——机制层执行在 browser.py 的 route handler（拦重定向与页面 JS
+    请求），这里只负责解析与透传。
+
+    Returns ``(error, allowed_hosts)``：error 非 None 时调用方 raise；
+    allowed_hosts 为 None 表示未设白名单（显式开启这一闸仍然要过）。
+    """
+    if not cdp_url:
+        return None, None
+    enabled = (os.environ.get("DHOLE_CDP_ATTACH") or "").strip().lower() in ("1", "true", "yes", "on")
+    if not enabled:
+        return (
+            "cdp_attach_disabled: cdp_url is refused by default - attaching your "
+            "real Chrome hands over the authenticated session of EVERY site you "
+            "are logged into. Enable it deliberately with DHOLE_CDP_ATTACH=1, and "
+            "fence the blast radius with DHOLE_CDP_HOSTS=host1,host2 (navigation "
+            "outside those hosts is aborted at the route level).",
+            None,
+        )
+    raw = (os.environ.get("DHOLE_CDP_HOSTS") or "").strip()
+    if not raw:
+        return None, None
+    hosts = frozenset(
+        h.strip().lower() for h in raw.replace(";", ",").split(",") if h.strip())
+    return None, (hosts or None)
+
+
+def _multimodal_enabled() -> bool:
+    """多模态开关（17.0）：``DHOLE_MULTIMODAL=1`` 声明**调用方 agent 是多模态的**。
+
+    不是「dhole 启用视觉模型」——识别永远发生在 agent 侧，dhole 核心路径保持
+    零模型零密钥。flag 只开三样：元素级截图（screenshot 的 options.selector、
+    smart_fetch 的 {screenshot} 动作）、工具描述内嵌的验证码试读纪律、降级链的
+    第三级。二维码解码（decode_qr）是确定性工作，**不在门控内**。
+
+    actions.py 里有一份语义完全相同的读取（`multimodal_enabled`）——server 懒
+    加载 actions，反向导入会把整个 server 拖进每个轻量进程，所以各自读 env；
+    改任何一处时两处语义必须一起改。
+    """
+    from dhole_mcp.actions import multimodal_enabled
+    return multimodal_enabled()
+
+
+def _multimodal_gate_error(where: str) -> str:
+    """元素级截图被拒时的报错：说清门控语义与两条出路（设 flag / 走 decode_qr）。"""
+    return (
+        f"element_screenshot_disabled: {where} is refused because DHOLE_MULTIMODAL "
+        "is not set - element captures exist to be read by a multimodal agent, and "
+        "without the flag dhole must assume the caller cannot see images. Set "
+        "DHOLE_MULTIMODAL=1 in the dhole server env and restart (it declares the "
+        "calling agent is multimodal; dhole itself ships no vision model). "
+        "Text-only agents: QR codes are NOT gated - use the screenshot tool with "
+        "options.decode_qr=true."
+    )
+
+
+# DHOLE_MULTIMODAL=1 时追加进 screenshot / smart_fetch 描述的两段话：能力子句 +
+# 试读纪律。纪律只跟着 flag 上线（关着 flag 的调用方看不见像素，纪律对它是噪声，
+# 还白占 connect tokens）；≤3 次的数字是纪律的"≤N"，转交是终点——dhole 不引入
+# 视觉模型，识别发生在 agent 侧（安全红线 6）。
+_MULTIMODAL_SHOT_CLAUSE = (
+    "\n\nVISUAL ASSIST (DHOLE_MULTIMODAL=1): options.selector crops the capture "
+    "to ONE element (CSS selector; full_page cannot combine with it) and returns "
+    "it inline - for CAPTCHAs, QR codes, forms. Discipline: a simple text/grid "
+    "image CAPTCHA may be read and tried at most 3 times, then STOP and hand off "
+    "to the user; behavioral/fingerprint walls (DataDome, Akamai, interactive "
+    "Turnstile) have nothing to look at - hand off immediately; 2FA codes are "
+    "never on the page - hand off; sliders need drag primitives dhole does not "
+    "have - hand off. dhole ships no vision model: the reading happens in you."
+)
+_MULTIMODAL_SF_CLAUSE = (
+    "\n\nVISUAL ASSIST (DHOLE_MULTIMODAL=1): actions gains {\"screenshot\": "
+    "{\"selector\": \"css\", \"decode_qr\": true}} - crops one element on the "
+    "SAME page instance as the surrounding fill/click actions and returns it "
+    "inline (metadata.actions keeps a name-only receipt; decoded QR text rides "
+    "with it). Use it to read a CAPTCHA you are about to answer in the same "
+    "action chain. Discipline: simple text/grid image CAPTCHAs - at most 3 "
+    "read-and-retry rounds, then hand off to the user; DataDome/Akamai/"
+    "interactive Turnstile walls, 2FA factors, and sliders are always handed "
+    "off (nothing readable on the page, or outside dhole's action primitives). "
+    "dhole ships no vision model: the reading happens in you."
+)
+
+
+def _neural_focus_enabled() -> bool:
+    """M-1 神经 focus 开关：``DHOLE_NEURAL_FOCUS=1`` 时 focus 用本地
+    cross-encoder 打分（BM25 回退只在打分器**中途失败**时发生；模型缺失是在
+    工具入口显式报错的，见 smart_fetch 的闸）。默认关：focus 是所有抓取路径的
+    公共节点，每页 × 每 block 的 CPU 推理延迟不能默认发生（计划第六章坑②）。"""
+    return _env_flag("DHOLE_NEURAL_FOCUS")
+
+
+_NEURAL_FOCUS_UNAVAILABLE = (
+    "neural_focus_model_missing: DHOLE_NEURAL_FOCUS=1 needs the local reranker "
+    "model, which is not downloaded yet. No request was made."
+)
+
+# M-3：神经分低于这条线 = 落在实测的"明显跑题"带（off-topic ~0.0001，on-topic
+# 0.93+，rerank 的实测分布）——提示"这页多半没答 focus 的问题"，不翻转 content_ok
+# （页面内容是真实的，问题在于它答没答）。
+_INTENT_MISS_FLOOR = 0.05
+
+
+def _audit_event(event: str, **fields: Any) -> None:
+    """Security-relevant events (CDP attach attempts) into the opt-in local
+    audit channel. Same file as ``_log_tool_call`` (DHOLE_USAGE_LOG), same
+    discipline: opt-in, local-only, best-effort, never raises. Attach attempts
+    are recorded whether or not they succeed — a refused attach is exactly the
+    event worth seeing in the log."""
+    target = (os.environ.get("DHOLE_USAGE_LOG") or "").strip()
+    if not target:
+        return
+    owned = target.lower() in ("1", "true", "yes", "on")
+    if owned:
+        target = str(paths.file("usage.jsonl"))
+    try:
+        parent = os.path.dirname(os.path.abspath(target))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        entry: dict = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "event": event,
+        }
+        entry.update(fields)
+        with open(target, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        if owned:
+            paths.harden_dir(parent)
+            paths.harden_file(target)
+    except Exception:
+        pass
+
+
 def _log_tool_call(name: str, ok: bool, duration_ms: float, error: str = "") -> None:
     """Append one line to the opt-in local call log (DHOLE_USAGE_LOG=1 or a path).
 
@@ -3132,6 +3374,10 @@ def _smart_fetch_request_context(func):
             (_PDF_PAGES, _PDF_PAGES.set(options["pages"] if isinstance(options["pages"], str) else None)),
             (_PDF_PASSWORD, _PDF_PASSWORD.set(options["password"] if isinstance(options["password"], str) else None)),
             (_FOCUS, _FOCUS.set(options["focus"] if isinstance(options["focus"], str) and options["focus"].strip() else None)),
+            (_FOCUS_MODE, _FOCUS_MODE.set(
+                options.get("focus_mode")
+                if isinstance(options.get("focus_mode"), str)
+                and options.get("focus_mode") in ("filter", "best") else None)),
             (_INCLUDE_MEDIA, _INCLUDE_MEDIA.set(bool(options["include_media"]))),
             (_INCLUDE_LINKS, _INCLUDE_LINKS.set(bool(options["include_links"]))),
             (_MAX_LINKS, _MAX_LINKS.set(
@@ -4223,6 +4469,8 @@ _SF_OPTIONS_ALLOWED = frozenset({
     "include_media", "include_links", "max_links", "ignore_robots",
     "allow_private", "session_id", "method", "body", "content_type", "auth",
     "if_modified_since", "if_none_match",
+    # G33/G35：CDP attach 与无模型登录判定。top-level 与 options bag 双收。
+    "check_login", "cdp_url",
     # G22's other half, non-breaking: these were top-level ONLY, and putting them
     # in the bag raised "Unsupported option key" — so the tool really did have two
     # shapes for one call, and an agent reading the option descriptions could not
@@ -4230,6 +4478,8 @@ _SF_OPTIONS_ALLOWED = frozenset({
     # about, and a bag copy would compete with it.
     "cache_ttl", "offset", "focus", "actions", "extraction_type",
     "force_fetcher", "urls",
+    # M-2：focus 的形态（filter | best）。与 focus 同走 promoted 通道。
+    "focus_mode",
 })
 # Keys the smart_fetch branch reads by name (top-level wins over the bag copy).
 # They are excluded from the forwarded set on purpose: forwarding one as well
@@ -4237,7 +4487,7 @@ _SF_OPTIONS_ALLOWED = frozenset({
 _SF_PROMOTED = frozenset({
     "css_selector", "max_content_chars", "timeout", "pages", "password", "schema",
     "cache_ttl", "offset", "focus", "actions", "extraction_type",
-    "force_fetcher", "urls",
+    "force_fetcher", "urls", "focus_mode",
 })
 _SF_OPTIONS_FORWARDED = frozenset(_SF_OPTIONS_ALLOWED - _SF_PROMOTED)
 _SC_OPTIONS = frozenset({
@@ -4252,6 +4502,9 @@ _SC_OPTIONS_FORWARDED = frozenset(_SC_OPTIONS - {"search"})
 _SHOT_OPTIONS = frozenset({
     "full_page", "image_type", "quality", "wait", "wait_selector",
     "network_idle", "timeout", "save_to",
+    # 17.0 多模态开关：selector = 元素级裁剪（DHOLE_MULTIMODAL 门控）；
+    # decode_qr = 本地二维码解码（确定性工作，不设门控）。
+    "selector", "decode_qr",
 })
 _SS_OPTIONS = frozenset({
     "max_results", "cache_ttl", "mode", "engines", "url",
@@ -5108,10 +5361,20 @@ class MasterFetchServer:
         validate_headers(extra_headers)
         validate_css_selector(wait_selector)
 
+        # 安全闸 1/2（G33）：cdp attach 默认关；白名单在这里解析、在浏览器层
+        # 的 route handler 机制执行。
+        gate_err, cdp_allowed = _cdp_attach_gate(cdp_url)
+        if gate_err:
+            raise ValueError(gate_err)
+        if cdp_url:
+            _audit_event("cdp_attach", via="open_session",
+                         endpoint=str(cdp_url)[:120],
+                         allowed_hosts=sorted(cdp_allowed) if cdp_allowed else ["*"])
+
         from dhole_mcp.browser import StealthyBrowser
         common_kwargs: Dict[str, Any] = dict(
             wait=wait, proxy=proxy, locale=locale, timeout=timeout, cookies=cookies,
-            cdp_url=cdp_url, headless=headless,
+            cdp_url=cdp_url, headless=headless, allowed_hosts=cdp_allowed,
             useragent=useragent, timezone_id=timezone_id, real_chrome=real_chrome,
             network_idle=network_idle, wait_selector=wait_selector, google_search=google_search,
             extra_headers=extra_headers, disable_resources=disable_resources,
@@ -5168,6 +5431,90 @@ class MasterFetchServer:
                 browser_created=(entry.created_at if (entry and alive) else ""),
             ))
         return rows
+
+    async def _ensure_session_browser(self, sid: str, *, headless: bool = True) -> str:
+        """session_id 专用的 stealthy 浏览器会话（MVP-3 cookie 双向桥的载体）。
+
+        存在且活着就复用——登录后的 context 跨调用存活，登录流兜底路径才有
+        "会话"可言；否则以调用方的 session_id 建专用会话。专用会话不进 auto
+        池、不吃 idle 回收，靠 close_session 显式关闭（census 会如实报它）。
+        """
+        async with self._sessions_lock:
+            entry = self._sessions.get(sid)
+            alive = (entry is not None and entry.session_type == "stealthy"
+                     and getattr(entry.session, "_is_alive", False))
+        if alive:
+            return sid
+        if entry is not None:
+            # 死会话占着名字：摘掉让 open_session 能重建（cookie jar 在
+            # sessions.db 里、按 sid 键存，重建不丢 jar）。
+            async with self._sessions_lock:
+                if self._sessions.get(sid) is entry:
+                    self._sessions.pop(sid, None)
+                    entry._alive = False
+        try:
+            await self.open_session(session_id=sid, headless=headless)
+        except ValueError as e:
+            if "already exists" in str(e):
+                # 并发竞争下另一个调用刚建好——直接复用。
+                await self._get_session(sid, "stealthy")
+                return sid
+            raise
+        return sid
+
+    async def _bridge_seed(self, session, urls: List[str], session_id: str) -> None:
+        """MVP-3 cookie 双向桥（播种向）：jar → 专用浏览器 context。
+
+        浏览器导航由此带上 HTTP 层拿到的登录态——"HTTP 登录、浏览器看页"这条
+        兜底路径的左半边。只在会话专用的浏览器上调用（调用方保证）：共享 auto
+        会话的 context 是所有匿名调用共用的，灌进去就是跨会话泄露；attach 的
+        context 是用户真实 profile（写进去等于替用户改登录态）。
+        """
+        from dhole_mcp.sessions import header_for as jar_header_for
+        seed = getattr(session, "seed_cookies", None)
+        if seed is None or not session_id:
+            return
+        seen: set = set()
+        for u in urls:
+            host = (urlparse(u).hostname or "").lower()
+            if not host or host in seen:
+                continue
+            seen.add(host)
+            try:
+                jar = jar_header_for(session_id, u)
+            except Exception:
+                jar = {}
+            if jar:
+                logger.debug("seeding %d cookie(s) into the session browser for %s",
+                             len(jar), host)
+                await seed(u, jar)
+
+    async def _bridge_harvest(self, session, urls: List[str], session_id: str) -> None:
+        """MVP-3 cookie 双向桥（回写向）：专用浏览器 context → jar。
+
+        "浏览器登录、HTTP 层快取"的右半边：登录流在浏览器里做完后，该 host
+        的 cookie 进 jar（按 session_id 隔离、值不出进程），后续 HTTP 层调用
+        直接带着会话走快路。
+        """
+        from dhole_mcp.sessions import store as jar_store
+        harvest = getattr(session, "harvest_cookies", None)
+        if harvest is None or not session_id:
+            return
+        seen: set = set()
+        for u in urls:
+            host = (urlparse(u).hostname or "").lower()
+            if not host or host in seen:
+                continue
+            seen.add(host)
+            try:
+                jar = await harvest(u)
+            except Exception:
+                jar = {}
+            if jar:
+                try:
+                    jar_store(session_id, u, jar)
+                except Exception as e:
+                    logger.debug("cookie harvest store failed for %s: %s", host, e)
 
     async def _close_one_session(self, sid: str) -> tuple:
         """Close one session: its browser (if any) then its jar. Returns
@@ -5283,6 +5630,8 @@ class MasterFetchServer:
         network_idle: bool = False,
         timeout: int | float = 30000,
         save_to: Optional[str] = None,
+        selector: Optional[str] = None,
+        decode_qr: bool = False,
     ) -> List[ImageContent | TextContent]:
         """        Capture a screenshot of a web page.
 
@@ -5299,6 +5648,10 @@ class MasterFetchServer:
         save_to writes the bytes to that path and reports the absolute path in
         the text part, which is the only form a text-only client can use.
 
+        `selector` (multimodal flag) crops the capture to one element;
+        `decode_qr` decodes QR payloads from the capture over the text channel
+        (deterministic local decoding - no flag, no model).
+
         NOTE: clients never receive this docstring. The authoritative
         agent-facing contract is the "description" in _TOOL_DEFS.
         """
@@ -5307,6 +5660,15 @@ class MasterFetchServer:
         # Resolved up front: a bad save_to must cost an instant refusal, not a
         # browser cold start and then nothing on disk.
         shot_target = _resolve_save_to(save_to, image_type) if save_to else None
+
+        if selector:
+            validate_css_selector(selector)
+            if not _multimodal_enabled():
+                raise ValueError(_multimodal_gate_error("screenshot(options.selector)"))
+            if full_page:
+                raise ValueError(
+                    "'full_page' cannot combine with 'selector' - an element "
+                    "crop is already bounded by the element's own box")
 
         if not _browser_deps_available():
             raise RuntimeError(
@@ -5332,7 +5694,15 @@ class MasterFetchServer:
 
         async def _capture(page: Any) -> None:
             try:
-                captured["bytes"] = await page.screenshot(**screenshot_kwargs)
+                if selector:
+                    # Element crop: locator.screenshot() has no full_page
+                    # (bounded by the element's own box), so drop it.
+                    shot_kwargs = {k: v for k, v in screenshot_kwargs.items()
+                                   if k != "full_page"}
+                    captured["bytes"] = await page.locator(selector).first.screenshot(
+                        **shot_kwargs)
+                else:
+                    captured["bytes"] = await page.screenshot(**screenshot_kwargs)
                 captured["url"] = page.url
             except Exception as exc:
                 captured["error"] = exc
@@ -5358,13 +5728,35 @@ class MasterFetchServer:
             mime_type=f"image/{image_type.lower()}",
         )
         text = captured["url"]
+        if selector:
+            text += f"\nelement crop: {selector}"
+        if decode_qr:
+            # Deterministic local decoding (opencv, an [all] extra) - NOT gated
+            # by DHOLE_MULTIMODAL: a QR payload travels as text, so a text-only
+            # agent reads a login QR / check-in URL without ever seeing pixels.
+            try:
+                from dhole_mcp.qr import decode_qr_bytes
+                found = decode_qr_bytes(captured["bytes"])
+            except ImportError as e:
+                raise RuntimeError(str(e)) from None
+            except ValueError as e:
+                # The capture itself is fine and still rides the content list;
+                # undecodable bytes (or an oversized frame) are a note, not a
+                # reason to throw away a successful screenshot.
+                found = None
+                text += f"\ndecode_qr: unavailable on this capture ({str(e)[:120]})"
+            else:
+                if found:
+                    text += "\ndecode_qr:\n" + "\n".join(f"- {p}" for p in found)
+                else:
+                    text += "\ndecode_qr: no QR code found in the capture"
         if shot_target is not None:
             saved = _write_screenshot(captured["bytes"], shot_target)
             # The path line is the part a text-only client can act on, so it goes
             # in the text block rather than only in a log: that model cannot see
             # the image at all, and "where is it" is its whole question.
-            text = (f"{captured['url']}\nsaved: {saved} "
-                    f"({len(captured['bytes'])} bytes, {image_type.lower()})")
+            text += (f"\nsaved: {saved} "
+                     f"({len(captured['bytes'])} bytes, {image_type.lower()})")
         return [image, TextContent(type="text", text=text)]
 
     # ─── HTTP Fetcher (curl_cffi) ─────────────────────────────────
@@ -5514,6 +5906,14 @@ class MasterFetchServer:
         use_tf = use_trafilatura and extraction_type in ("markdown", "text", "article", "structured")
 
         from dhole_mcp.fetcher import HTTPSession
+        # 写操作审计（安全闸剩余项 2）：所有 HTTP 写的必经点——force-http 与
+        # auto-escalation 都汇到这里。非 GET 按"哪个 session 对哪个站做了什么
+        # 写"留痕（DHOLE_USAGE_LOG 打开时；尽力而为，失败不影响请求本身）。
+        _verb = _METHOD.get() or "GET"
+        if _verb not in ("GET", "HEAD"):
+            for u in urls:
+                _audit_event("write", channel="http", method=_verb,
+                             url=u[:200], session_id=_SESSION_ID.get() or "")
         async with HTTPSession(
             impersonate=impersonate or "chrome",
             proxy=http_proxy,
@@ -5592,6 +5992,7 @@ class MasterFetchServer:
         additional_args: Optional[Dict] = None,
         session_id: Optional[str] = None,
         page_action=None,
+        probe_out: Optional[dict] = None,
     ) -> ResponseModel:
         """Stealthy fetcher with anti-bot bypass via Patchright (rebrowser-playwright fork).
 
@@ -5658,7 +6059,7 @@ class MasterFetchServer:
             wait_selector_state=wait_selector_state, block_webrtc=block_webrtc,
             allow_webgl=allow_webgl, solve_cloudflare=solve_cloudflare,
             additional_args=additional_args, session_id=session_id,
-            page_action=page_action,
+            page_action=page_action, probe_out=probe_out,
         )
         result = bulk.results[0]
         result.duration_ms = (now() - t0) * 1000
@@ -5694,6 +6095,7 @@ class MasterFetchServer:
         additional_args: Optional[Dict] = None,
         session_id: Optional[str] = None,
         page_action=None,
+        probe_out: Optional[dict] = None,
     ) -> BulkResponseModel:
         """Async parallel stealthy fetch with browser fingerprint randomization.
 
@@ -5732,6 +6134,16 @@ class MasterFetchServer:
         validate_proxy(proxy)
         validate_css_selector(wait_selector)
 
+        # 安全闸 1/2（G33）：cdp attach 默认关（DHOLE_CDP_ATTACH=1 显式放行）；
+        # DHOLE_CDP_HOSTS 白名单在这里解析、在浏览器层 route handler 机制执行。
+        gate_err, cdp_allowed = _cdp_attach_gate(cdp_url)
+        if gate_err:
+            raise ValueError(gate_err)
+        if cdp_url:
+            _audit_event("cdp_attach", via="bulk_stealthy_fetch",
+                         endpoint=str(cdp_url)[:120],
+                         allowed_hosts=sorted(cdp_allowed) if cdp_allowed else ["*"])
+
         if not _browser_deps_available():
             raise RuntimeError(
                 f"Stealthy fetch requires browser deps which are unavailable: "
@@ -5741,19 +6153,32 @@ class MasterFetchServer:
 
         use_tf = use_trafilatura and extraction_type in ("markdown", "text", "article", "structured")
 
+        attached = False
+        _probe = probe_out if len(urls) == 1 else None
+        # MVP-3 cookie 双向桥的开关：只有调用方**显式命名**的 session_id 才桥。
+        # auto 会话的 id 不是调用方的会话（桥它会往 jar 里灌匿名浏览的 cookie）；
+        # attach 的 context 是用户真实 profile（绝不能写入）。
+        bridge_sid = _SESSION_ID.get() or ""
         if session_id:
             entry = await self._get_session(session_id, "stealthy")
+            attached = bool(getattr(entry.session, "cdp_attached", False))
+            bridged = bool(bridge_sid) and not attached \
+                and not getattr(entry.session, "cdp_attached", False)
+            if bridged:
+                await self._bridge_seed(entry.session, urls, bridge_sid)
             timed_tasks = [
                 _timed(entry.session.fetch(
                     url, wait=wait, timeout=timeout, google_search=google_search,
                     extra_headers=extra_headers, disable_resources=disable_resources,
                     wait_selector=wait_selector, wait_selector_state=wait_selector_state,
                     network_idle=network_idle, proxy=proxy, solve_cloudflare=solve_cloudflare,
-                    page_action=page_action,
+                    page_action=page_action, probe_out=_probe,
                 ))
                 for url in urls
             ]
             timed_responses = await gather(*timed_tasks, return_exceptions=True)
+            if bridged:
+                await self._bridge_harvest(entry.session, urls, bridge_sid)
         else:
             from dhole_mcp.browser import StealthyBrowser
             async with StealthyBrowser(
@@ -5767,8 +6192,13 @@ class MasterFetchServer:
                 additional_args=additional_args, solve_cloudflare=solve_cloudflare,
                 disable_resources=disable_resources,
                 wait_selector_state=wait_selector_state,
+                allowed_hosts=cdp_allowed,
             ) as session:
-                timed_tasks = [_timed(session.fetch(url, page_action=page_action)) for url in urls]
+                attached = session.cdp_attached
+                timed_tasks = [
+                    _timed(session.fetch(url, page_action=page_action, probe_out=_probe))
+                    for url in urls
+                ]
                 timed_responses = await gather(*timed_tasks, return_exceptions=True)
 
         results = []
@@ -5787,6 +6217,11 @@ class MasterFetchServer:
                             page, extraction_type, css_selector, main_content_only, use_tf, "stealthy", elapsed,
                         )
                     )))
+        if attached:
+            # G33：attach 过真实浏览器的响应必须可见地标出——这是用户已认证
+            # 视角下的页面，不是公共内容，外层 agent 拿到就要按这个口径用。
+            for r in results:
+                r.cdp_attached = True
         successful = sum(1 for r in results if r.status < 400 and not r.error)
         return BulkResponseModel(results=results, total=len(results), successful=successful)
 
@@ -5820,13 +6255,16 @@ class MasterFetchServer:
         pages: Annotated[Optional[str], Field(description="PDF only: page spec like '1-5' or '1,3,5-7' to extract a subset of pages. Saves tokens on big PDFs, NOT download time - the file is fetched in full before any page is picked. None = all pages.")] = None,
         password: Annotated[Optional[str], Field(description="PDF only: password for an encrypted PDF.")] = None,
         focus: Annotated[Optional[str], Field(description="Query-focused extraction: pass a query and only the BM25-relevant blocks (paragraphs/headings/tables) are returned, saving context on long pages. Works post-cache, so it never triggers a re-fetch. Re-pass the same focus when paginating with offset. Empty = full page.")] = None,
+        focus_mode: Annotated[Optional[str], Field(description="Shape of the focus answer: 'filter' (default) keeps every block past the relevance cut; 'best' returns only the single highest-scoring block plus its heading - 'which part of this page answers the question'. Requires focus.")] = None,
         actions: Annotated[Optional[List[Dict[str, Any]]], Field(description="Page interactions run on the stealthy browser AFTER load, BEFORE extraction: [{click:'button.load-more'}, {fill:{selector:'#q', text:'x'}}, {press:'Enter'}, {wait:500}, {scroll:3} or {scroll:{steps:5,selector:'.feed'}}, {wait_selector:'.item'} or {wait_selector:{selector:'.quote', count:40, state:'visible'}}]. Forces the stealthy tier; bypasses cache. Reaches content behind a click/form/infinite scroll: scroll re-reaches the bottom as the page grows instead of assuming one viewport plus a fixed pause is enough.")] = None,
         include_media: Annotated[bool, Field(description="If true, populate the response .media field with up to 20 image URLs found on the page (for multimodal agents). Default false (keeps responses lean).")] = False,
         include_links: Annotated[bool, Field(description="If true, populate the response .links field with the page's outgoing links classified as citations/navigation/external + a primary_source hint. Default false. Use when you want to follow a page's referenced sources in one step.")] = False,
         max_links: Annotated[Optional[int], Field(description="Cap for EACH links list (citations/navigation/external) when include_links=true; range 1-100. Omit for the documented defaults (30/20/20). links.total_found + links.is_truncated tell you what the cap hid.")] = None,
         ignore_robots: Annotated[bool, Field(description="Skip the robots.txt check for this call (default false = comply). When robots.txt disallows the URL, dhole makes NO request and returns error='robots_disallowed' with content_ok false. Set true only when you have the site's permission to fetch regardless; DHOLE_IGNORE_ROBOTS=1 disables the check process-wide.")] = False,
         allow_private: Annotated[Optional[Any], Field(description="Fetch a host the SSRF guard otherwise blocks (your own dev / staging / Docker service). true = loopback only (127.0.0.0/8, ::1, localhost); a list names the hosts to allow, e.g. ['my-service.local','192.168.1.50']. Cloud metadata endpoints (169.254.169.254 etc.) are never allowed. DHOLE_ALLOW_PRIVATE_HOSTS does the same process-wide. Default: nothing is allowed.")] = None,
-        session_id: Annotated[Optional[str], Field(description="Reuse cookies across calls under this name (1-64 chars: letters, digits, '.', '_', '-'). Cookies a site sets are kept for that exact host and sent back on the next call naming the same session_id, so a login (or a form POST) can be followed by the pages behind it. Default: no session - cookies live for one call only. Covers the HTTP tier (the fast path); a stealthy browser keeps cookies inside its own warm session and is not seeded from the jar. session_cookie_names reports what the jar holds; cookie VALUES are never returned.")] = None,
+        check_login: Annotated[bool, Field(description="After the page settles on the browser tier, run a model-free login probe and return login_check: {logged_in: true|false|null, signals: [...], cookie_names: [...]}. DOM shape (logout control / password field / login form) + cookie NAMES only - values are never returned, no model involved. Null on HTTP-tier results and on cache hits (the probe is live-only, so pass check_login again with cache_ttl=0).")] = False,
+        cdp_url: Annotated[Optional[str], Field(description="Attach the user's real Chrome via CDP for THIS call: browser tier forced, HTTP tier and the public cache are skipped, and the fetch rides the attached profile's logged-in cookies. Refused by default - set DHOLE_CDP_ATTACH=1 to enable, and fence the blast radius with DHOLE_CDP_HOSTS=host1,host2 (navigation outside those hosts is aborted at the route level). Every response fetched this way returns cdp_attached=true; attach attempts are audited. Cannot be combined with schema=.")] = None,
+        session_id: Annotated[Optional[str], Field(description="Reuse cookies across calls under this name (1-64 chars: letters, digits, '.', '_', '-'). Cookies a site sets are kept for that exact host and sent back on the next call naming the same session_id, so a login (or a form POST) can be followed by the pages behind it. Default: no session - cookies live for one call only. Covers BOTH tiers: the HTTP tier reads/writes the jar per host, and browser-tier calls under a session_id run in a dedicated browser seeded from the jar and written back after each call (cookie two-way bridge) - an HTTP login is visible to the browser, a browser login survives to the HTTP tier. Values never leave the process and are never returned; session_cookie_names reports names only.")] = None,
         method: Annotated[Optional[str], Field(description="HTTP verb for the request: GET (default), HEAD, POST, PUT, DELETE or PATCH. HEAD asks for status + size + content-type only and returns no body (size is the server's Content-Length, so 0 when the server omits it - example.com does). A non-GET is sent once (not retried, not cached, not escalated to the browser or the archive): a write must not be repeated, and a browser replay would answer about a GET to the same URL, not about your POST.")] = None,
         body: Annotated[Optional[Any], Field(description="Request body for POST/PUT/DELETE/PATCH (max 256 KB). A dict is sent as a form; with content_type=application/json it is sent as JSON; a string is sent as-is. Ignored for GET/HEAD (said so in the summary).")] = None,
         content_type: Annotated[Optional[str], Field(description="Content-Type for the body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json.")] = None,
@@ -5880,6 +6318,26 @@ class MasterFetchServer:
             schema = _normalize_schema(schema)
         except (ValueError, SecurityError) as e:
             return _invalid_request_result(url or "", str(e))
+        # M-1 神经 focus（DHOLE_NEURAL_FOCUS，默认关）：flag 开着且本次带 focus
+        # 时，在 async 上下文里把重排模型确保加载一次——focus_content 是同步
+        # peek，加载只能在这里做。模型文件缺失时**显式报错**：不静默下载
+        # （~280MB 的意外下载不是回退，是惊吓），也不静默降回 BM25（把 flag
+        # 打开的意思就是"我要神经分"，静默回退会让神经/BM25 的差异变成不可
+        # 解释的玄学）。bulk 与单 URL 两条路都过这里：bulk 的每个任务经
+        # _apply_chunking 应用 focus。
+        if _FOCUS.get() and _neural_focus_enabled():
+            from dhole_mcp.reranker import ensure_reranker, get_reranker
+            if get_reranker() is None:
+                rer = await ensure_reranker(download=False)
+                if rer is None:
+                    return _invalid_request_result(
+                        url or "", _NEURAL_FOCUS_UNAVAILABLE,
+                        next_action=(
+                            "The reranker model is not downloaded yet. It downloads "
+                            "automatically on the first neural smart_search (one-time, "
+                            "resumable), or select it with `dhole model use bge-zh`. "
+                            "Unset DHOLE_NEURAL_FOCUS to keep plain BM25 focus."))
+
         # Bulk mode: fetch multiple URLs in parallel
         if urls is not None:
             if actions:
@@ -6081,6 +6539,51 @@ class MasterFetchServer:
         if actions:
             cache_ttl = 0
 
+        # actions are browser-tier by definition, so the validated page_action
+        # is built ONCE here and handed to BOTH lanes that can run it: the
+        # cdp-attach express lane below and the stealthy actions lane further
+        # down. (It used to be built only in the latter - cdp_url + actions
+        # together silently dropped every action, and a capture/click the agent
+        # believed it had queued never ran.)
+        page_action = None
+        if actions:
+            if force_fetcher == "http":
+                raise ValueError("actions require the browser tier; use force_fetcher='stealthy' or omit it")
+            from dhole_mcp.actions import build_page_action
+            page_action = build_page_action(actions)  # validates; raises on bad input
+            if page_action is None:
+                raise ValueError("actions must be a non-empty list of action dicts")
+
+        # CDP attach（G33）拥有最高路由优先级：显式 cdp_url = 调用方要的是
+        # "用户已认证视角下的这个页面"。HTTP 层给不了这个视角，公开缓存（匿名
+        # 抓取的正文）更不能顶上来，所以绕过 schema / 缓存 / auto-escalate，
+        # 直接进浏览器层；cache_ttl 视同 0（不读也不写公开缓存）。
+        if cdp_url:
+            if schema is not None:
+                raise ValueError(
+                    "schema= and cdp_url= cannot be combined yet: the schema path "
+                    "runs its own fetch without the attached browser. Use one, "
+                    "then extract from that response.")
+            cdp_result = await self._within_call_budget(
+                self._force_fetch(
+                    url, "stealthy", extraction_type=extraction_type,
+                    css_selector=css_selector,
+                    main_content_only=main_content_only,
+                    use_trafilatura=use_trafilatura, cache_ttl=0,
+                    offset=offset, headless=headless, real_chrome=real_chrome,
+                    wait=wait, proxy=proxy, timeout=timeout,
+                    network_idle=network_idle,
+                    solve_cloudflare=solve_cloudflare,
+                    block_webrtc=block_webrtc, hide_canvas=hide_canvas,
+                    extra_headers=extra_headers, useragent=useragent,
+                    cookies=cookies, max_chars=mc,
+                    check_login=check_login, cdp_url=cdp_url,
+                    page_action=page_action,
+                ), url, timeout, "cdp-attach stealthy tier")
+            if page_action is not None:
+                _report_action_outcomes(cdp_result, page_action)
+            return cdp_result
+
         # 0. Schema-based structured extraction: fetch as HTML, then extract
         # structured JSON using CSS selectors + metadata + JSON-LD (no LLM).
         # NOTE: When schema is active, focus is IGNORED (schema extracts from raw
@@ -6088,6 +6591,11 @@ class MasterFetchServer:
         # results where schema has data but focus-filtered content is empty).
         # `schema` is already normalized above: non-None means usable.
         if schema is not None:
+            if actions:
+                raise ValueError(
+                    "schema= and actions= cannot be combined yet: the schema path "
+                    "runs its own fetch without the action chain. Run the actions "
+                    "first, then extract from that response.")
             # Security: validate all CSS selectors in the schema before use,
             # including the nested ones G14 introduced.
             try:
@@ -6215,14 +6723,9 @@ class MasterFetchServer:
 
         # 3.5. actions: page interactions (click/fill/press/wait/scroll) require
         # the stealthy browser tier. Force it, bypass cache (post-action content
-        # is unique to the action sequence), and pass a page_action callable.
+        # is unique to the action sequence), and pass the page_action built and
+        # validated before the lane selection above.
         if actions:
-            if force_fetcher == "http":
-                raise ValueError("actions require the browser tier; use force_fetcher='stealthy' or omit it")
-            from dhole_mcp.actions import build_page_action
-            page_action = build_page_action(actions)  # validates; raises on bad input
-            if page_action is None:
-                raise ValueError("actions must be a non-empty list of action dicts")
             result = await self._within_call_budget(
                 self._force_fetch(
                     url, "stealthy", extraction_type=extraction_type,
@@ -6237,6 +6740,7 @@ class MasterFetchServer:
                     extra_headers=extra_headers, useragent=useragent,
                     cookies=cookies, max_chars=mc,
                     page_action=page_action,
+                    check_login=check_login,
                 ), url, timeout, "actions (stealthy) tier")
             _report_action_outcomes(result, page_action)
             return result
@@ -6256,6 +6760,7 @@ class MasterFetchServer:
                     block_webrtc=block_webrtc, hide_canvas=hide_canvas,
                     extra_headers=extra_headers, useragent=useragent,
                     cookies=cookies, max_chars=mc,
+                    check_login=check_login,
                 ), url, timeout, f"forced {force_fetcher} tier")
 
         # 5. Reddit default: skip HTTP, go straight to stealthy. www.reddit.com
@@ -6278,6 +6783,7 @@ class MasterFetchServer:
                     block_webrtc=block_webrtc, hide_canvas=hide_canvas,
                     extra_headers=extra_headers, useragent=useragent,
                     cookies=cookies, max_chars=mc,
+                    check_login=check_login,
                 ), url, timeout, "stealthy tier (reddit)")
 
         # 6. Auto-escalation (HTTP -> stealthy) for everything else
@@ -6449,6 +6955,8 @@ class MasterFetchServer:
         solve_cloudflare, block_webrtc, hide_canvas, extra_headers,
         useragent, cookies, max_chars: int = DEFAULT_MAX_CONTENT_CHARS,
         page_action=None,
+        check_login: bool = False,
+        cdp_url: Optional[str] = None,
     ) -> ResponseModel:
         """Execute a forced fetcher tier and finalize the result."""
         dead = await _dead_explicit_proxy(proxy, url)
@@ -6560,7 +7068,20 @@ class MasterFetchServer:
                                 "either). Is the local service actually running, and on "
                                 "this port?")
                             return finalized
-            ssid = None if proxy else await self._ensure_auto_session()
+            # cdp_url 走一次性 attach 会话：不借用自动会话池——那是公共已启动
+            # 浏览器，attach 的生命周期必须独立、可见、可审计。
+            # MVP-3：调用方命名了 session_id 时换**专用**会话——cookie 双向桥只
+            # 在专用 context 上安全（共享 auto 会话灌 cookie = 跨会话泄露），且
+            # 专用 context 让登录态跨调用存活（登录流兜底路径的载体）。
+            caller_sid = _SESSION_ID.get() or ""
+            if proxy or cdp_url:
+                ssid = None
+            elif caller_sid:
+                ssid = await self._ensure_session_browser(caller_sid,
+                                                          headless=headless)
+            else:
+                ssid = await self._ensure_auto_session()
+            _login_probe: dict = {}
             result = await self.stealthy_fetch(
                 url, extraction_type=extraction_type,
                 css_selector=css_selector, main_content_only=main_content_only,
@@ -6573,9 +7094,14 @@ class MasterFetchServer:
                 useragent=useragent, cookies=_browser_cookies(cookies, url),
                 session_id=ssid,
                 page_action=page_action,
+                probe_out=_login_probe if check_login else None,
+                cdp_url=cdp_url,
             )
-            result.escalation_path = "direct:stealthy"
-            return await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
+            result.escalation_path = "cdp-attach:stealthy" if cdp_url else "direct:stealthy"
+            finalized = await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
+            if check_login and _login_probe:
+                finalized.login_check = _login_probe
+            return finalized
 
     async def _fetch_from_archive(
         self, url: str, extraction_type: str, css_selector: Optional[str],
@@ -7530,6 +8056,22 @@ class MasterFetchServer:
             how often one server is hit; a host's robots.txt Crawl-delay raises
             this per host, and the summary names the interval that was used.
         """
+        # M-1 闸：flag 开着且带 focus 时模型必须在场（缺模型显式报错，见
+        # smart_fetch 同款注释）；爬取中途（sync 循环里）没有 async 入口可加载。
+        from dhole_mcp.crawl import CrawlResponseModel as _CRM
+        if focus and isinstance(focus, str) and focus.strip() \
+                and _neural_focus_enabled():
+            from dhole_mcp.reranker import ensure_reranker, get_reranker
+            if get_reranker() is None:
+                rer = await ensure_reranker(download=False)
+                if rer is None:
+                    return _CRM(start_url=url, pages=[],
+                                error=_NEURAL_FOCUS_UNAVAILABLE,
+                                next_action=(
+                                    "The reranker model is not downloaded yet. It downloads "
+                                    "automatically on the first neural smart_search (one-time, "
+                                    "resumable), or select it with `dhole model use bge-zh`. "
+                                    "Unset DHOLE_NEURAL_FOCUS to keep plain BM25 focus."))
         try:
             # Lazy import to break circular dependency (crawl.py imports
             # ResponseModel from server.py; server.py imports smart_crawl
@@ -7600,9 +8142,10 @@ class MasterFetchServer:
                     "pages": {"type": "string", "description": "PDF only: '1-5' or '1,3,5-7'. Narrows what is EXTRACTED, not what is downloaded. Pick ranges from table_of_contents page/end_page."},
                     "password": {"type": "string", "description": "PDF only: password for an encrypted PDF."},
                     "focus": {"type": "string", "description": "Return only blocks matching this query (BM25) - the big token saver on long pages. Applied after the cache, so it does not re-fetch. Re-pass the same focus when paginating."},
-                    "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "Interactions on the stealthy browser after load, before extraction (forces stealthy, bypasses cache). ONE action key per object: [{scroll:3},{wait:1000}], not {scroll:3,wait:1000}. Items: {click:'css'}, {fill:{selector,text}}, {press:'Enter'}, {wait:ms}, {scroll:n} or {scroll:{steps:5,selector:'.feed',ms_per_step:3000}}, {wait_selector:'css'} or {wait_selector:{selector:'.quote',count:40,state:'visible'}}. scroll reaches the bottom then waits for the page to STOP GROWING (a lazy feed moves the bottom each time it loads); max 20s of the budget. wait_selector.count waits for that many matches, not just the first."},
+                    "focus_mode": {"type": "string", "enum": ["filter", "best"], "description": "Shape of the focus answer. 'filter' (default) keeps every block past the relevance cut; 'best' returns only the single highest-scoring block plus its heading - 'which part of this page answers the question'. Requires focus. With DHOLE_NEURAL_FOCUS=1 the scoring is the local cross-encoder (falls back to BM25 when unavailable)."},
+                    "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "Interactions on the stealthy browser after load, before extraction (forces stealthy, bypasses cache). ONE action key per object: [{scroll:3},{wait:1000}], not {scroll:3,wait:1000}. Items: {click:'css'} or {click:{index:N}}, {fill:{selector,text}} or {fill:{index,text}}, {press:'Enter'}, {press:{selector,key}} or {press:{index,key}}, {wait:ms}, {scroll:n} or {scroll:{steps:5,selector:'.feed',ms_per_step:3000}}, {wait_selector:'css'} or {wait_selector:{selector:'.quote',count:40,state:'visible'}}, {snapshot:true}, {screenshot:{selector:'css',decode_qr:true}} (needs DHOLE_MULTIMODAL=1), {submit:{selector|index, confirm?}}.\nsnapshot returns a numbered interactive-element list (index/tag/role/name, capped + truncated flag) in metadata.actions; act on it with {click:{index:N,expect:'name'}} - expect verifies the element's name before acting, so a stale index fails loudly instead of clicking the wrong thing.\nsubmit is an explicit irreversible step: without confirm:true it PAUSES (pending_approval row, nothing submitted) until you ask the user and re-run with confirm:true. scroll reaches the bottom then waits for the page to STOP GROWING (a lazy feed moves the bottom each time it loads); max 20s of the budget. wait_selector.count waits for that many matches, not just the first."},
                     "schema": {"type": "object", "description": "{properties: {...}} (a JSON string is accepted): CSS-driven structured extraction, returned instead of markdown. Each property may carry 'selector' (CSS) and/or 'attribute' (that attribute's value instead of the text). Without \"type\" a property returns the FIRST match; \"type\": \"array\" returns all of them. A property with its OWN 'properties' (or items.properties) plus a selector extracts one record PER MATCHED ELEMENT, child selectors evaluated inside it - that keeps a repeated list grouped instead of flattened. Up to 200 records per field. A nested field that also says \"type\": \"array\" MUST give that selector, naming the container being iterated, or the call is rejected. Only those keys are read - any other JSON-Schema keyword is accepted and does nothing, so one value where you wanted all means a missing \"type\": \"array\", not a different keyword.", "additionalProperties": True},
-                    "options": {"type": "object", "description": "Every parameter of this tool except url may go here; cache_ttl, offset, focus, actions, extraction_type, force_fetcher, pages, schema and urls are accepted in the bag too (top level still wins when both are given).\ninclude_links: response.links = {citations, navigation, external, primary_source, total_found, is_truncated}; citations are the page's own source chain.\nmax_links: cap per links list, 1-100 (default 30/20/20). include_media: up to 20 image URLs.\nignore_robots: skip the robots.txt check for this call.\nsession_id: names a cookie jar (1-64 chars); that host's cookies carry to the next call naming the same id, so a login can be followed by the pages behind it. session_cookie_names lists the names, never the values.\nallow_private: fetch hosts the SSRF guard blocks; true = loopback only, or a list like ['my-service.local']. Cloud metadata endpoints are never allowed.\nmethod: GET|HEAD|POST|PUT|DELETE|PATCH. HEAD asks for status+size+type with no body. A write is sent once: never retried, cached, browser-escalated or archive-answered.\nbody: max 256KB; a dict is sent as a form, or as JSON when content_type says json, a string as-is. content_type: the body's media type.\nauth: {type:'basic',username,password} | {type:'bearer',token} | {type:'header',name,value}. Bound to the host you named: a redirect or a third-party subresource never receives it, and a credentialed answer is cached per credential rather than publicly.\nif_modified_since / if_none_match: conditional GET - a date (HTTP-date or ISO-8601; a bare date = midnight UTC) or an etag from response.cache_validators (quotes optional, '*' = any current version). HTTP tier only; it neither reads nor fills dhole's cache.\nproxy: an unreachable one returns error='proxy_unreachable' before any request.\ncookies: [{name,value}] or 'a=1; b=2'. Also extra_headers, useragent, wait (ms), network_idle (SPAs), headless. Anti-detect keys are pre-tuned - do not override them.", "additionalProperties": True},
+                    "options": {"type": "object", "description": "Every parameter of this tool except url may go here; cache_ttl, offset, focus, actions, extraction_type, force_fetcher, pages, schema and urls are accepted in the bag too (top level still wins when both are given).\ninclude_links: response.links = {citations, navigation, external, primary_source, total_found, is_truncated}; citations are the page's own source chain.\nmax_links: cap per links list, 1-100 (default 30/20/20). include_media: up to 20 image URLs.\nignore_robots: skip the robots.txt check for this call.\nsession_id: names a cookie jar (1-64 chars); that host's cookies carry to the next call naming the same id, so a login can be followed by the pages behind it. Covers both tiers: browser-tier calls under a session_id run in a DEDICATED browser seeded from the jar and written back after each call (cookie two-way bridge), so an HTTP login is visible to the browser and a browser login survives to the HTTP tier. session_cookie_names lists the names, never the values.\nallow_private: fetch hosts the SSRF guard blocks; true = loopback only, or a list like ['my-service.local']. Cloud metadata endpoints are never allowed.\nmethod: GET|HEAD|POST|PUT|DELETE|PATCH. HEAD asks for status+size+type with no body. A write is sent once: never retried, cached, browser-escalated or archive-answered.\nbody: max 256KB; a dict is sent as a form, or as JSON when content_type says json, a string as-is. content_type: the body's media type.\nauth: {type:'basic',username,password} | {type:'bearer',token} | {type:'header',name,value}. Bound to the host you named: a redirect or a third-party subresource never receives it, and a credentialed answer is cached per credential rather than publicly.\nif_modified_since / if_none_match: conditional GET - a date (HTTP-date or ISO-8601; a bare date = midnight UTC) or an etag from response.cache_validators (quotes optional, '*' = any current version). HTTP tier only; it neither reads nor fills dhole's cache.\nproxy: an unreachable one returns error='proxy_unreachable' before any request.\ncookies: [{name,value}] or 'a=1; b=2'. Also extra_headers, useragent, wait (ms), network_idle (SPAs), headless. Anti-detect keys are pre-tuned - do not override them.\ncdp_url: attach the user's real Chrome for THIS call (browser tier forced, cache bypassed). Requires DHOLE_CDP_ATTACH=1 and is fenced by DHOLE_CDP_HOSTS; the reply says cdp_attached=true.\ncheck_login: true adds login_check = {logged_in: true|false|null, signals, cookie_names} - DOM shape + cookie NAMES, no model, no values.", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -7631,7 +8174,7 @@ class MasterFetchServer:
                 "properties": {
                     "url": {"type": "string", "description": "URL to screenshot"},
                     "session_id": {"type": "string", "description": "Reuse a specific open browser session. Omit to auto-manage."},
-                    "options": {"type": "object", "description": "save_to: a path - the image is written there and the text part reports the absolute path + byte size (parents created; an existing file not named like an image is refused).\nfull_page: bool (false). image_type: png|jpeg. quality: 0-100 (jpeg). wait: ms. wait_selector: css. network_idle: bool. timeout: ms (30000).", "additionalProperties": True},
+                    "options": {"type": "object", "description": "save_to: a path - the image is written there and the text part reports the absolute path + byte size (parents created; an existing file not named like an image is refused).\nfull_page: bool (false). image_type: png|jpeg. quality: 0-100 (jpeg). wait: ms. wait_selector: css. network_idle: bool. timeout: ms (30000).\ndecode_qr: bool - decode QR payloads from the capture and report them in the text part (local deterministic decoding, opencv; NOT gated by DHOLE_MULTIMODAL - a text-only agent can read a login QR / check-in URL this way). Empty list = no code found.", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -7729,6 +8272,14 @@ class MasterFetchServer:
         adds the derived core contract per tool, and only here - the class
         literal stays what the token audit measures and what the tests read, so
         the opt-in cannot quietly change the baseline either way.
+
+        The multimodal flag (17.0) composes here too: DHOLE_MULTIMODAL=1 adds
+        the element-capture clauses and the challenge discipline to the
+        screenshot / smart_fetch descriptions. OFF keeps the base literal byte
+        for byte - the gated features are refused at call time, so advertising
+        them to a caller that declared itself text-only would spend connect
+        tokens on shapes it can never use, and the discipline lines exist to
+        be read by an agent that is ABOUT to see pixels.
         """
         defs = []
         for td in cls._TOOL_DEFS:
@@ -7736,6 +8287,16 @@ class MasterFetchServer:
                 continue
             schema = _output_schema_for(td["name"]) if _OUTPUT_SCHEMA else None
             defs.append({**td, "outputSchema": schema} if schema else td)
+        if _env_flag("DHOLE_MULTIMODAL"):
+            # Copies, never in-place: the class literal is the token-audit
+            # baseline and a shared object - one mutated description would
+            # leak into every later list_tools call and every test that reads it.
+            defs = [dict(td) for td in defs]
+            for td in defs:
+                if td["name"] == "screenshot":
+                    td["description"] += _MULTIMODAL_SHOT_CLAUSE
+                elif td["name"] == "smart_fetch":
+                    td["description"] += _MULTIMODAL_SF_CLAUSE
         return defs
 
     def serve(self, http: bool = False, host: str = "127.0.0.1", port: int = 8765):
@@ -7939,7 +8500,7 @@ class MasterFetchServer:
             kw = _strict_options(_promote_options(args, options, _SF_OPTIONS_FORWARDED),
                                  _SF_OPTIONS_ALLOWED, _SF_OPTIONS_FORWARDED, "smart_fetch")
             result = await self.smart_fetch(url=url, **picked, **kw)
-            return _wire_result(result)
+            return _wire_result(result, images=result._action_images or None)
 
         elif name == "smart_crawl":
             # search is promoted like smart_fetch's schema: top-level wins, the

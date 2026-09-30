@@ -122,6 +122,20 @@ def file(name: str) -> Path:
     return home() / name
 
 
+def profiles_dir() -> Path:
+    """Parent of named persistent browser profiles (``~/.dhole/profiles/``).
+
+    Each profile is a full Chrome user-data-dir: cookies, localStorage, login
+    state. It exists ONLY when the user opts in via ``DHOLE_BROWSER_PROFILE``
+    (or a per-call profile_name) — the default launch path is still a
+    ``tempfile.mkdtemp`` scratch dir that dies on close, so an opt-in profile
+    is an explicit "keep me signed in" decision, and everything it holds is
+    credentials-grade: created 0700 (owner-only on POSIX; on Windows the
+    profile ACL under the user's home directory is the real boundary).
+    """
+    return ensure_private_dir(home() / "profiles")
+
+
 _legacy_migrate_lock = threading.Lock()
 _legacy_migrate_done = False
 
