@@ -18,6 +18,7 @@ Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器，为 AI 代理
 - **智能抓取**：HTTP 优先（~1 秒），被拦截或遇到 JS 空壳时自动升级隐身浏览器，仍失败则回退 Wayback Machine 快照
 - **CDP 接管**：连接你已登录的 Chrome，直接带着登录态抓页面（`cdp_url`），免自动化登录；默认关闭，需显式开启 + host 白名单；`check_login` 无模型判定"到底登录了没"
 - **页面操作**：元素快照 + 索引化动作——`{"snapshot": true}` 列出可交互元素编号，动作按 index 寻址（`expect` 防点错位），`submit` 默认暂停等用户确认；`DHOLE_MULTIMODAL=1` 解锁元素裁剪截图与本地 QR 解码；写操作进审计日志
+- **重复任务**：`DHOLE_TASKS=1` 打开 `recipe`（把一条抓取路径录下来重放，动作在录制时就过执行器同一套验证）与 `watch`（盯一个 URL 的变化，与上次快照做 diff；首跑只建基线、`changed` 是 `null`，抓取失败不动基线）
 - **语义聚焦**：`DHOLE_NEURAL_FOCUS=1` 时 `focus` 挑块与整站爬取过滤从 BM25 关键词重合升级为本地重排模型的语义打分；`focus_mode="best"` 直接定位答案段
 - **网页搜索**：免密引擎 14 个可选、6 个默认并行，本地神经重排序 + 跨引擎共识排名；也可以顺带抓回前三条全文
 - **整站爬取**：同域最佳优先遍历，sitemap 模式，页数 / 深度 / token 预算控制
@@ -99,7 +100,7 @@ playwright install chromium      # 反检测浏览器引擎（~150MB，完整版
 - `DHOLE_CDP_ATTACH=1` + `DHOLE_CDP_HOSTS`：打开[带登录态抓取](#带登录态抓取cdp-attach)——让 agent 借你已登录的 Chrome 读登录后的页面，白名单限定哪些域名能用你的登录态；不用这功能就整行删掉（默认关）
 - `DHOLE_USAGE_LOG=1`：本地调用日志（工具名 / 耗时 / 脱敏错误，不记参数值、不联网），出问题时有账可查
 
-其他常用的：`DHOLE_TOOLS=smart_fetch,smart_search` 只注册常用工具、连接期开销约省一半；`DHOLE_ALLOW_PRIVATE_HOSTS` 放行内网 / 本机地址（抓自己的 dev 服务）。全表见[配置](#配置)。
+其他常用的：`DHOLE_TOOLS=smart_fetch,smart_search` 只注册常用工具、连接期开销约省一半；`DHOLE_TASKS=1` 打开重复任务工具（`recipe` / `watch`）；`DHOLE_ALLOW_PRIVATE_HOSTS` 放行内网 / 本机地址（抓自己的 dev 服务）。全表见[配置](#配置)。
 
 能调的东西大致管七件事，逐条在下面的[配置](#配置)：**搜索池与引擎冷却退避**、**代理**、**token 开销**（正文预算 / 只注册常用工具 / 响应形状退回旧写法）、**robots 与 SSRF 的豁免边界**、**带登录态抓取**（CDP attach / 持久 profile / cookie TTL）、**隐身浏览器的预热与空闲关闭**、**状态目录与本地调用日志**。
 
@@ -153,6 +154,7 @@ dhole --http --host 0.0.0.0 --port 8765     # 默认只监听 127.0.0.1:8765
 | `DHOLE_NO_BROWSER_PREWARM`                                           | 设 `1` 后启动不预热隐身浏览器（默认预热，为首次抓取省 3-5 秒冷启动）                                                                                                                                              |
 | `DHOLE_IGNORE_ROBOTS`                                                | 设 `1` 后不再检查 `robots.txt`（默认检查，见[已知限制](#已知限制)）；单次豁免用 `ignore_robots=true`                                                                                                              |
 | `DHOLE_TOOLS`                                                        | 只注册列出的工具，省连接期开销（`smart_fetch,smart_search` ≈ −49%）                                                                                                                                               |
+| `DHOLE_TASKS`                                                        | 设 `1` 注册 `recipe` / `watch`（[重复任务](#重复任务recipe--watch默认关)）。**默认关**：这两个的 schema 合计 3,597 字符 + 路由行 191 字符 = 连接期 +3,788（用 `tests/tool_payload_measure.py` 可复现，它会分别报默认集与全集）。也可以在 `DHOLE_TOOLS` 里直接点名 |
 | `DHOLE_DEFAULT_CONTENT_CHARS`                                        | 默认正文预算（40000，区间 500–200000）                                                                                                                                                                            |
 | `DHOLE_STRUCTURED_CONTENT`                                           | 设 `1` 时每次调用**额外**再发一份 `structuredContent`（同一份 JSON 的第二份拷贝）。默认只发文本通道：本服务器不声明 `outputSchema`，严格客户端本来就有权忽略它，而会渲染它的客户端每次调用体积翻倍。只有当下游确实按结构化字段解析结果时才开 |
 | `DHOLE_OUTPUT_SCHEMA`                                                | 设 `1` 时在 `tools/list` 里声明每个工具的 **`outputSchema`**：字段集合由响应压缩策略**反推**得出（`required` = 压缩永不移除的那几个字段），所以"缺席即默认"这条语义从 `instructions` 里的散文变成客户端可机器校验的契约。**代价实测（stdio 线上量，用 `tests/tool_payload_measure.py --with-output-schema` 可复现）：tools/list 20,676 → 23,783 字符，多 3,107，连接期 +13.6%**；朴素地把整个 envelope 写进 schema 要 2.1 万字符，所以只声明核心。按规范它与 `structuredContent` 是同一个决定（声明了就必须发），因此设 `1` 会**隐含打开** `DHOLE_STRUCTURED_CONTENT`，无法配出自相矛盾的组合。默认关，agent 用不到它；面向人的界面或要做校验的客户端才值这 13.6% |
@@ -193,8 +195,10 @@ dhole --http --host 0.0.0.0 --port 8765     # 默认只监听 127.0.0.1:8765
 | `resolve_url`  | 解析 URL 最终地址（跟随 HTTP 重定向与正文里的 `<meta refresh>` 跳转，不抽取页面正文）                                                            |
 | `cache_clear`  | 清除抓取缓存（连 robots 结论与全部会话 cookie jar 一起忘掉，只要清某个会话请用 `close_session`）；`engine_state=true` 同时重置引擎冷却与产出记录                                             |
 | `close_session` | 看有哪些会话还带着站方凭据（**无参数就是名册**：id、主机、cookie 名字、还剩多久过期、浏览器开没开），或点名 `session_id=` 忘掉一个、`all=true` 全清——不等 24 小时自然过期。cookie 值一律不出境 |
+| `recipe`（默认关） | 把「怎么到这个页面」记一次、以后一次调用重放：`op=save` 存 `{url, actions}`，`op=run` 用它抓取，`op=list` / `op=delete` 管理。动作在**录制时**就过执行器的同一套验证，跑不通的链存不进去；重放返回每条动作的收执，`actions_failed` 非零说明页面变了、该重录。`DHOLE_TASKS=1` 打开 |
+| `watch`（默认关） | 盯一个 URL 有没有变：`op=add` 登记，`op=check` 强制新鲜抓取并与上次快照做 diff（返回 `changed`、增删行数与限长 unified diff），`op=list` / `op=remove` 管理。**首跑只建基线、`changed` 是 `null`**——没有基线不等于没有变化；抓取失败**不动基线**。`focus` 让 diff 只落在相关内容上。`DHOLE_TASKS=1` 打开 |
 
-参数摆在哪里**分两类**，每个工具自己在 `tools/list` 里都写清了接受哪些键（README 不再逐参数抄一遍，抄一次就漂一次）：`smart_fetch` / `smart_crawl` / `smart_search` / `screenshot` 把旋钮收在一个 `options` 对象里，顶层同名参数也接受——那是兼容读法，两处都给时**顶层优先**；`parse` / `feed_fetch` / `resolve_url` / `cache_clear` / `close_session` 参数少，只有顶层这一层，塞 `options` 会被拒绝并列出它真正接受的键。两个方向相反的例外值得点名：`smart_fetch` 的 `url` 必须摆在外面（放进 `options` 不会被读取，调用会回一句「Either 'url' or 'urls' must be provided」）；`smart_crawl` 的 `discover_only` / `crawl_urls` / `focus` 反过来只能放顶层，放进 `options` 会被拒绝——报错里会说明它是顶层参数，不是没有这个能力。
+参数摆在哪里**分两类**，每个工具自己在 `tools/list` 里都写清了接受哪些键（README 不再逐参数抄一遍，抄一次就漂一次）：`smart_fetch` / `smart_crawl` / `smart_search` / `screenshot` 把旋钮收在一个 `options` 对象里，顶层同名参数也接受——那是兼容读法，两处都给时**顶层优先**；`parse` / `feed_fetch` / `resolve_url` / `cache_clear` / `close_session` / `recipe` / `watch` 参数少，只有顶层这一层，塞 `options` 会被拒绝并列出它真正接受的键。两个方向相反的例外值得点名：`smart_fetch` 的 `url` 必须摆在外面（放进 `options` 不会被读取，调用会回一句「Either 'url' or 'urls' must be provided」）；`smart_crawl` 的 `discover_only` / `crawl_urls` / `focus` 反过来只能放顶层，放进 `options` 会被拒绝——报错里会说明它是顶层参数，不是没有这个能力。
 
 ## 使用要点
 
@@ -261,6 +265,15 @@ dhole 不做 `act(prompt)`：认元素、决定点哪个是外层 agent 的语�
 - **`parse` 也吃 .md/.txt/.json/.yaml/.pptx/.odt**：本地文档只有这一个入口——只会说 MCP 的客户端没有文件工具，「用你自己的文件工具读」那句话对它们不成立。.pptx / .odt 用 stdlib 的 zip + XML 读，**不引入新依赖**；文本工具拿不到的部分（备注页、版式、样式、图片、批注）写在输出的第一行里，而不是悄悄消失——一份少了备注的稿件和一份完整的稿件长得一样。`.json` / `.yaml` 除了返回原文还会**校验**：坏文件是一句错误，不是一堆读不懂的字节。未列出的扩展名（.log/.rst/.ini…）会拒绝，并提示改名成 .txt 再解析
 - **HTML 表格在三个入口给出同一个 markdown 表格**：`parse`、`smart_fetch`、`smart_crawl` 共用同一个抽取函数，所以同一份 HTML 抽出的正文逐字节相同（此前 `parse` 把表格打成「Region / Q1 / 12」九行散落单元格，而同一工具对 DOCX / XLSX 给的是真表格）。`smart_crawl` 唯一有意的分叉是列表页：那里给的是结构化链接清单而不是正文，`page_type=list` 就是这个信号的字段
 - **feed 读不懂时给一句人话**：站点首页也可以直接递给 `feed_fetch`，工具会顺着页面自己的 alternate 链接（最多两个候选）去找 feed；全都失败才报错，而且是一句能读懂的判定（不是 `XMLSyntaxError: Opening and ending tag mismatch: meta line 5`）加上试过哪些候选。发现到的地址**同样过 SSRF 守卫**：一个恶意页面不能借「自动发现」把工具指向内网或云元数据端点
+
+### 重复任务（`recipe` / `watch`，默认关）
+
+计划第九章编排轴的最后两级：**复现**与**监控**。两个工具默认不注册，`DHOLE_TASKS=1`（或直接列进 `DHOLE_TOOLS`）打开——它们的 schema 合计约 3.6k 字符，而连接期开销是每次会话都要付的，不常用的能力没理由让默认连接替它买单。
+
+- **`recipe` 存的是「怎么做」，不是「拿到了什么」**：`recipe(op="save", name=..., url=..., actions=[...])` 记下一条抓取路径，之后 `recipe(op="run", name=...)` 一次调用重放，不必重新推导选择器。动作在**录制时**就过 `actions.validate_actions`——和 `smart_fetch` 执行时**同一个**验证器，所以库里不可能存在一条执行器会拒绝的链：存一个永远跑不通的配方比不存更糟，调用方会以为「存下来了就是对的」。重放返回完整的抓取结果，外加每条动作的收执与 `actions_failed`；**非零就说明页面变了**，`next_action` 直接让你重录。配方里**不存凭据**，`session_id` 每次 `run` 现传
+- **`watch` 的 `changed` 是 `null`、不是 `false`（首跑）**：`watch(op="add", ...)` 登记，`watch(op="check", ...)` 强制新鲜抓取（`cache_ttl=0`——读自己缓存的监控没有在监控）并与上次快照做行级 diff。**第一次 check 只建立基线**，`changed` 是 `null`：没有基线不等于没有变化，把首跑报成「无变化」是凭空造一个事实。**抓取失败不动基线**——否则一次网络故障会被写成「页面清空了」。`focus` 让 diff 只落在相关内容上，这是长页面的正确用法：页眉页脚的时间戳、广告位、访问计数每加载一次就变，不限定范围的话每次 check 都在报「有变化」
+- **库在 `~/.dhole/tasks.db`**（0600，与 `sessions.db` 同信任级别），各 200 条上限、快照 200k 字符上限，超限**如实报数**（`baseline_cut`）。`cache_clear` 不碰它：那不是缓存，是你自己存的东西
+- **端到端场景**：`evals/tasks_l3l4.py`（需要靶站在跑）验 7 条判据，包括「页面变了之后重放大声失败」与「抓取失败不动基线」
 
 ## 可选的搜索引擎
 
@@ -343,7 +356,7 @@ dhole model use ms-marco     # 切换
 - `archive.org` 回退会返回**某个日期的快照**（看顶层 `source` / `archived_at`），时效敏感的内容引用前先确认；但**服务器自己回的 JSON/XML 错误体不会被快照顶替**（4xx/5xx 且 content-type 是 json/xml 时如实保留），代理不可达时也不回退——那次请求根本没发出去，拿快照回答等于答了一个没人问过的问题
 - **内网 / 本机默认一律拒绝**（SSRF 守卫）。抓自己的 dev / staging / Docker 服务要点名：`allow_private=true`（只放开回环）或 `["my-service.local","192.168.1.50"]`，进程级用 `DHOLE_ALLOW_PRIVATE_HOSTS`。三个工具同一套口径：`smart_fetch`（`options.allow_private`）、`screenshot`（`options.allow_private`，作用域盖住导航——回环页面自己的图片 / 样式同样要放行）、`feed_fetch`（顶层 `allow_private`）。云元数据端点（`169.254.169.254`、`metadata.google.internal` 等）**任何时候都不放行**，包括写进白名单的情况
 - 正文 **50MB 硬顶**，且在下载**之前**守门：装不下的直接报 `Response body too large`，抬 `timeout` 没用
-- 连接期固定开销 22,968 字符（`tools/list` 20,827 + `instructions` 2,141，stdio 线上口径；用 `tests/tool_payload_measure.py` 从源码独立测得），每次连接付一次；换成 token 约 5.5k（cl100k 口径，分词器不同就不同——可比的是字符数）。其中 `actions` 的快照 / 索引寻址 / 提交闸契约、`session_id` 的 cookie 双向桥说明与 `focus_mode` 合计 ~2.0k。多模态纪律条款只在 `DHOLE_MULTIMODAL=1` 时追加，不计入默认开销。每次调用的 envelope 已压到非默认值字段才上线。`DHOLE_TOOLS` 只注册常用工具可省约一半
+- 连接期固定开销 22,968 字符（`tools/list` 20,827 + `instructions` 2,141，stdio 线上口径；用 `tests/tool_payload_measure.py` 从源码独立测得，它同时报默认集与全集两个数），每次连接付一次；换成 token 约 5.5k（cl100k 口径，分词器不同就不同——可比的是字符数）。其中 `actions` 的快照 / 索引寻址 / 提交闸契约、`session_id` 的 cookie 双向桥说明与 `focus_mode` 合计 ~2.0k。**条件追加的条款不计入默认开销**：多模态纪律只在 `DHOLE_MULTIMODAL=1` 时追加，`recipe` / `watch` 只在 `DHOLE_TASKS=1` 时注册（+3,788）。每次调用的 envelope 已压到非默认值字段才上线。`DHOLE_TOOLS` 只注册常用工具可省约一半
 - YouTube 仅能获取少量文本
 
 ## 本地数据

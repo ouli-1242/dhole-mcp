@@ -28,9 +28,11 @@ from dhole_mcp.search import SearchResponseModel, SearchResult
 from dhole_mcp.server import (
     BulkResponseModel,
     CacheInfoModel,
+    RecipeModel,
     ResponseModel,
     SessionCensusRow,
     SessionClosedModel,
+    WatchModel,
     _WIRE_OMIT,
     _wire_dump,
     _wire_json,
@@ -414,7 +416,9 @@ class TestThePolicyTableItself:
                   "CrawlResponseModel": CrawlResponseModel,
                   "SearchResult": SearchResult,
                   "SearchResponseModel": SearchResponseModel,
-                  "CacheInfoModel": CacheInfoModel}
+                  "CacheInfoModel": CacheInfoModel,
+                  "RecipeModel": RecipeModel,
+                  "WatchModel": WatchModel}
         from dhole_mcp.feed import FeedItem, FeedResult
         models.update({"FeedItem": FeedItem, "FeedResult": FeedResult,
                        "SessionCensusRow": SessionCensusRow,

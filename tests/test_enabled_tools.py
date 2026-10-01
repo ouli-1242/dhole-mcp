@@ -60,12 +60,34 @@ class TestTheEnvVarIsParsed:
         payload = json.loads(out.stdout)
         assert payload["enabled"] == sorted(
             n.strip() for n in value.split(",") if n.strip())
-        assert len(payload["all"]) == 9, \
-            "全集仍是 9 个工具（16.0 补上 close_session），守卫继续覆盖它们"
+        assert len(payload["all"]) == 11, \
+            "全集是 11 个工具（16.0 补上 close_session，L3/L4 补上 recipe/watch）；" \
+            "默认关闭的也留在这里，守卫继续覆盖它们"
 
     @pytest.mark.parametrize("value", [None, "", "   "])
-    def test_unset_or_empty_means_every_tool(self, value):
+    def test_unset_means_every_tool_except_the_opt_in_ones(self, value):
+        """未设 DHOLE_TOOLS = 全集 **减去** _OPT_IN_TOOLS。
+
+        18.0 起 recipe / watch 是 opt-in：它们的 schema 合计约 3.6k 字符，
+        而连接期预算是这个项目反复量过的东西。默认 wire 必须与它们落地之前
+        逐字节相同——「默认就是全部」这条老断言随之下线，换成下面这条。
+        """
         out = _run_fresh(_ENABLED_SNIPPET, value)
+        assert out.returncode == 0, out.stderr[-600:]
+        payload = json.loads(out.stdout)
+        opt_in = {"recipe", "watch"}
+        assert set(payload["enabled"]) == set(payload["all"]) - opt_in
+        assert opt_in.isdisjoint(payload["enabled"])
+
+    def test_dhole_tasks_1_puts_the_opt_in_tools_back(self):
+        code = _ENABLED_SNIPPET.replace(
+            "import json, dhole_mcp.server as s;",
+            "import json, dhole_mcp.server as s;")
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("DHOLE_TOOLS", "DHOLE_TASKS")}
+        env["DHOLE_TASKS"] = "1"
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                             text=True, env=env, timeout=180)
         assert out.returncode == 0, out.stderr[-600:]
         payload = json.loads(out.stdout)
         assert payload["enabled"] == payload["all"]
@@ -178,9 +200,24 @@ class TestInstructionsFollowTheEnabledSet:
         assert out.stdout.strip() == "False True", (
             "wire 发的是 ACTIVE_INSTRUCTIONS，不是全量字面量")
 
-    def test_the_default_wire_instructions_are_the_full_text(self):
-        code = ("import dhole_mcp.server as s;"
-                "print(s.ACTIVE_INSTRUCTIONS == s.DHOLE_INSTRUCTIONS)")
+    def test_the_default_wire_instructions_are_the_literal_minus_the_opt_in_lines(self):
+        """默认 wire 与全集字面量**只**差 recipe/watch 两行路由。
+
+        断言写成「差集恰好是那两行」而不是「两者相等」：后者在这个改动之后
+        已经是废话（ACTIVE_INSTRUCTIONS 就是按默认集组合出来的），而前者能
+        同时抓住两种错误——opt-in 的行漏进默认 wire（默认开销白涨），以及
+        别的行被顺手改掉。
+        """
+        code = (
+            "import dhole_mcp.server as s;"
+            "optin=''.join(v for k,v in s._INSTRUCTIONS_ROUTING.items()"
+            " if k in s._OPT_IN_TOOLS);"
+            "print(repr(s.DHOLE_INSTRUCTIONS.replace(optin,'')"
+            " == s.ACTIVE_INSTRUCTIONS));"
+            "print(len(optin))"
+        )
         out = _run_fresh(code, None)
         assert out.returncode == 0, out.stderr[-600:]
-        assert out.stdout.strip() == "True"
+        same, n = out.stdout.strip().splitlines()
+        assert same == "True", "默认 instructions 必须恰好是全集字面量减去 opt-in 两行"
+        assert int(n) > 0, "opt-in 的行不能是空串，否则这条断言什么都没验"

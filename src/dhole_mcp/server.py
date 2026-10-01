@@ -475,6 +475,24 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return raw.strip().lower() not in ("", "0", "false", "no", "off", "none", "null")
 
 
+def _iso_from_ts(ts) -> str:
+    """A stored epoch float as the ISO-8601 UTC string the wire uses.
+
+    Same shape the responses already use for ``fetched_at`` (seconds precision,
+    trailing Z), so a watch's baseline age reads like every other timestamp
+    instead of as a raw 1.7e9. Empty in, empty out - a watch with no baseline
+    has no timestamp to print.
+    """
+    try:
+        t = float(ts or 0)
+    except (TypeError, ValueError):
+        return ""
+    if t <= 0:
+        return ""
+    return datetime.fromtimestamp(t, timezone.utc).replace(
+        microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 # MCP's structuredContent is a SECOND copy of the same response JSON. With the
 # flags off this server declares no outputSchema, so a strict client is entitled
 # to ignore it - while a client that does render it pays the whole envelope twice
@@ -576,6 +594,10 @@ DHOLE_INSTRUCTIONS = (
     "- Check a short link: resolve_url.\n"
     "- Cookies a site kept behind options.session_id: close_session (no arguments "
     "= what is open; session_id= or all=true to forget them).\n"
+    "- A page you already worked out how to reach: recipe (save the url+actions "
+    "once, then run it).\n"
+    "- Watching a page for changes: watch (add it, then check - it diffs against "
+    "the last snapshot).\n"
     "Reading any response:\n"
     "- A field that is ABSENT is at its default: no is_truncated means not "
     "truncated, no cached means not cached. Only what changed or what you must "
@@ -621,6 +643,13 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "resolve_url": "- Check a short link: resolve_url.\n",
     "close_session": "- Cookies a site kept behind options.session_id: close_session "
     "(no arguments = what is open; session_id= or all=true to forget them).\n",
+    # Opt-in（DHOLE_TASKS=1，见 _OPT_IN_TOOLS）。行还留在这里：flag 打开时
+    # instructions 必须路由得到它们，否则 connect-time 那份"怎么选工具"的说明
+    # 会漏掉两个刚被启用的工具。默认集合里没有它们，所以默认 wire 一个字符不变。
+    "recipe": "- A page you already worked out how to reach: recipe (save the "
+    "url+actions once, then run it).\n",
+    "watch": "- Watching a page for changes: watch (add it, then check - it diffs "
+    "against the last snapshot).\n",
 }
 _INSTRUCTIONS_RULES = (
     "Reading any response:\n"
@@ -789,6 +818,52 @@ class CacheInfoModel(BaseModel):
     engine_health: Dict[str, Any] = Field(default_factory=dict, description="Per-engine pool health as dhole currently sees it: last status, yield verdict, and cooldown_seconds_left while an engine is on cooldown. Populated ONLY when engine_state=true; empty on a plain cache_clear.")
 
 
+class RecipeModel(BaseModel):
+    """Response from `recipe`: save / list / run / delete of a recorded action chain.
+
+    `run` carries the whole fetch back in `result` (the same ResponseModel
+    smart_fetch returns, same wire compaction), because a replay whose answer you
+    cannot read is not a replay. `outcomes` repeats the per-action receipts so a
+    broken step is visible without digging into result.metadata.
+    """
+    op: str = Field(description="What this call did: save|list|run|delete.")
+    message: str = Field(default="", description="One line: what was stored/removed/ran.")
+    name: str = Field(default="", description="The recipe this call named.")
+    url: str = Field(default="", description="The URL the recipe replays.")
+    recipes: List[Dict[str, Any]] = Field(default_factory=list, description="Every stored recipe (op=list), newest-used first, with use_count / last_ok so a stale one is visible without running it.")
+    recipe: Dict[str, Any] = Field(default_factory=dict, description="The stored recipe itself (op=save): url, action count, note, created_at.")
+    result: Optional[ResponseModel] = Field(default=None, description="op=run: the fetch this recipe produced, in full.")
+    outcomes: List[Dict[str, Any]] = Field(default_factory=list, description="op=run: one row per action, ok or why not - the same receipts smart_fetch reports, surfaced here so a broken step is obvious.")
+    actions_failed: int = Field(default=0, description="op=run: how many of the recipe's actions failed. Non-zero means the page changed under the recipe; re-record it with recipe(op='save', ...).")
+    error: str = Field(default="", description="Set when the recipe could not be stored or replayed; it names what exists rather than saying 'not found'.")
+    next_action: str = Field(default="", description="What to do next, empty when there is nothing to do")
+
+
+class WatchModel(BaseModel):
+    """Response from `watch`: add / list / check / remove of a monitored URL.
+
+    The one field to read carefully is `changed`: it is **null on the first
+    check**, because a missing baseline is not the same as "nothing changed" —
+    reporting the first run as "no change" invents a fact.
+    """
+    op: str = Field(description="What this call did: add|list|check|remove.")
+    message: str = Field(default="", description="One line: what was stored/removed/compared.")
+    name: str = Field(default="", description="The watch this call named.")
+    url: str = Field(default="", description="The URL this watch monitors.")
+    watches: List[Dict[str, Any]] = Field(default_factory=list, description="Every stored watch (op=list) with its baseline age, check_count and change_count.")
+    changed: Optional[bool] = Field(default=None, description="op=check: true/false when compared against a baseline, NULL when this check only created the baseline (a missing baseline is not 'no change').")
+    baseline_created: bool = Field(default=False, description="op=check: true when this call stored the first snapshot. changed is null in that case, by design.")
+    baseline_at: str = Field(default="", description="ISO-8601 UTC of the snapshot this check compared against (empty when none existed).")
+    added: int = Field(default=0, description="op=check: lines present now and not before.")
+    removed: int = Field(default=0, description="op=check: lines that were there and are gone.")
+    diff: List[str] = Field(default_factory=list, description="op=check: unified-diff lines (+added/-removed, one line of context).")
+    diff_truncated: bool = Field(default=False, description="op=check: true when the diff was cut at the line cap - `added`/`removed` still count the whole change.")
+    baseline_cut: bool = Field(default=False, description="op=check: true when the stored snapshot was cut at the size cap, so a later diff may miss content past the cut.")
+    result: Optional[ResponseModel] = Field(default=None, description="op=check: the fetch this check made. A failed fetch leaves the baseline untouched and puts the reason in `error`.")
+    error: str = Field(default="", description="Set when the watch could not be stored, or the fetch failed; the baseline is left untouched on a failed fetch.")
+    next_action: str = Field(default="", description="What to do next, empty when there is nothing to do")
+
+
 # ─── Wire compaction (tokens paid on EVERY call, not once) ──────────────────
 #
 # Measured on this server: a 404 with zero content returned 927 chars, and 33%
@@ -862,6 +937,18 @@ _WIRE_OMIT: dict = {
     "SessionClosedModel": frozenset({
         "sessions", "open_count", "session_id", "cookies_forgotten",
         "browser_closed", "closed", "prewarm_closed", "error", "next_action",
+    }),
+    # recipe / watch（L3/L4）：清单与回执都在"默认值"上时省略，但 `changed`
+    # 刻意不在这个集合里 —— 首跑时它是 null，而 null≠false 正是这条 watch
+    # 唯一想说的话（没有基线不等于没有变化），省掉它就把结论一起省掉了。
+    "RecipeModel": frozenset({
+        "recipes", "recipe", "result", "outcomes", "actions_failed",
+        "error", "next_action", "url", "name",
+    }),
+    "WatchModel": frozenset({
+        "watches", "baseline_at", "added", "removed", "diff",
+        "diff_truncated", "baseline_cut", "baseline_created",
+        "error", "next_action", "url", "name", "result",
     }),
 }
 
@@ -2579,6 +2666,11 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
     "resolve_url": {"timeout": "number"},
     # cache_clear already normalizes its two booleans in _validate_tool_args;
     # parse takes three strings and has nothing to convert.
+    # L3/L4: `actions` goes through the same rawlist path as smart_fetch's (the
+    # chain validator owns its shape); the numbers are the same coercions.
+    "recipe": {"actions": "rawlist", "timeout": "number",
+               "max_content_chars": "int"},
+    "watch": {"max_chars": "int", "timeout": "number"},
 }
 
 _ARG_DEFAULTS: dict[Any, dict[str, Any]] = {}
@@ -4583,7 +4675,21 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     # known tool names (`_dispatch` refuses anything outside it), which is how a
     # method can exist, be documented, and still be unreachable on the wire.
     "close_session": frozenset({"session_id", "all"}),
+    # L3 / L4（计划第九章）：录制回放与监控 diff。默认**不**在连接期表里 ——
+    # 见 _OPT_IN_TOOLS。
+    "recipe": frozenset({"op", "name", "url", "actions", "note",
+                         "timeout", "max_content_chars", "focus",
+                         "extraction_type", "session_id", "allow_private"}),
+    "watch": frozenset({"op", "name", "url", "focus", "max_chars", "note",
+                        "timeout", "session_id", "allow_private"}),
 }
+
+
+# 默认关闭的工具。它们的描述加起来约 2.6k 字符，而连接期预算是这个项目反复
+# 量过的东西（见 README「连接期开销」）：一个不是每次会话都要用的能力，没有
+# 理由让每个会话都替它付 token。打开方式两种 —— DHOLE_TASKS=1（保留默认工具
+# 集再加这两个），或直接在 DHOLE_TOOLS 里点名。
+_OPT_IN_TOOLS = frozenset({"recipe", "watch"})
 
 
 # Which tools this server registers and dispatches. Default: ALL of them.
@@ -4603,7 +4709,10 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
 def _parse_enabled_tools() -> frozenset:
     raw = os.environ.get("DHOLE_TOOLS")
     if raw is None or not raw.strip():
-        return frozenset(_TOP_LEVEL_ARGS)
+        names = frozenset(_TOP_LEVEL_ARGS)
+        # recipe / watch are opt-in (see _OPT_IN_TOOLS): the default connect
+        # table stays exactly what it was before L3/L4 landed.
+        return names if _env_flag("DHOLE_TASKS") else names - _OPT_IN_TOOLS
     names = frozenset(part.strip() for part in raw.split(",") if part.strip())
     if not names:
         raise ValueError(
@@ -5656,6 +5765,292 @@ class MasterFetchServer:
             message=message, session_id=sid, cookies_forgotten=forgotten,
             browser_closed=bool(browser_closed), closed=len(targets),
             prewarm_closed=bool(prewarm), open_count=len(rows_after), sessions=rows_after,
+        )
+
+    # ─── L3 / L4：录制回放与监控（计划第九章）───────────────────────────
+    #
+    # 两个工具共用 ~/.dhole/tasks.db，默认不在连接期表里（server._OPT_IN_TOOLS）。
+    # recipe 的动作在**录制时**就过 actions.validate_actions，所以库里不可能
+    # 存在一个执行器会拒绝的配方 —— 存一个永远跑不通的配方比不存更糟，调用方
+    # 会以为"存下来了就是对的"。
+    #
+    # 两者都不存凭据：session_id 每次 run/check 现传（与 sessions.py 的
+    # "值不出境"同纪律）。
+
+    async def recipe(
+        self,
+        op: Annotated[str, Field(description="save = record a {url, actions} pair; run = replay it; list = show every stored recipe; delete = forget one.")],
+        name: Annotated[Optional[str], Field(description="Recipe name (1-64 chars). Required for save / run / delete.")] = None,
+        url: Annotated[Optional[str], Field(description="op=save: the URL to replay.")] = None,
+        actions: Annotated[Optional[List[Dict[str, Any]]], Field(description="op=save: the action chain, same schema as smart_fetch's actions. Validated now by the same validator the executor uses, so a chain that would be refused at run time cannot be stored.")] = None,
+        note: Annotated[str, Field(description="op=save: what this recipe is for (max 500 chars).")] = "",
+        timeout: Annotated[Optional[int], Field(description="op=run: whole-call budget in ms (default 60000 with actions).")] = None,
+        max_content_chars: Annotated[Optional[int], Field(description="op=run: cap the returned content chars (default 40000).")] = None,
+        focus: Annotated[Optional[str], Field(description="op=run: query-focused extraction over the replayed page. The recipe stores the how, not the question, so this is per-run.")] = None,
+        extraction_type: Annotated[Optional[str], Field(description="op=run: markdown (default) | html | text | article | structured.")] = None,
+        session_id: Annotated[Optional[str], Field(description="op=run: reuse cookies under this name. Deliberately not stored in the recipe.")] = None,
+        allow_private: Annotated[Optional[Any], Field(description="op=run: replay a recipe that points at loopback (your own dev server). Same semantics as smart_fetch's.")] = None,
+    ) -> RecipeModel:
+        """Record / replay a stored (url, actions) pair. See the tool description."""
+        from dhole_mcp import tasks
+
+        o = (op or "").strip().lower()
+        if o not in ("save", "run", "list", "delete"):
+            return RecipeModel(
+                op=o or "?",
+                error=f"unknown op {op!r}",
+                next_action=("Pass op='save' (name+url+actions), 'run' (name), "
+                             "'list' (no other argument) or 'delete' (name)."),
+            )
+
+        if o == "list":
+            rows = tasks.list_recipes()
+            return RecipeModel(
+                op=o,
+                message=(f"{len(rows)} recipe(s) stored." if rows
+                         else "No recipes are stored."),
+                recipes=rows,
+                next_action=("recipe(op='run', name='<name>') replays one."
+                             if rows else
+                             "recipe(op='save', name=..., url=..., actions=[...]) "
+                             "records one."),
+            )
+
+        nm = (name or "").strip()
+        if not nm:
+            return RecipeModel(
+                op=o, error="name is required for this op.",
+                next_action=("Pass name='<recipe name>'. "
+                             + ("recipe(op='list') shows what exists."
+                                if o in ("run", "delete") else
+                                "Pick any short name you will remember.")),
+            )
+
+        if o == "save":
+            try:
+                saved = tasks.save_recipe(nm, url, actions, note)
+            except ValueError as e:
+                # Record-time refusal, not a run-time surprise: the message is
+                # the validator's own, which names the offending action.
+                return RecipeModel(
+                    op=o, name=nm, error=str(e),
+                    next_action=("Nothing was stored. Fix the chain and save again - "
+                                 "`actions` is the same list smart_fetch takes."),
+                )
+            return RecipeModel(
+                op=o, name=saved["name"], url=saved["url"], recipe=saved,
+                message=(f"Recipe '{saved['name']}' "
+                         + ("updated" if saved["updated"] else "saved")
+                         + f" ({saved['actions']} actions)."),
+                next_action=(f"recipe(op='run', name='{saved['name']}') replays it."),
+            )
+
+        if o == "delete":
+            gone = tasks.delete_recipe(nm)
+            names = [r["name"] for r in tasks.list_recipes()]
+            return RecipeModel(
+                op=o, name=nm,
+                message=(f"Recipe '{nm}' forgotten." if gone
+                         else f"No recipe named '{nm}' - nothing was deleted."),
+                next_action=("" if gone else
+                             ("Stored: " + ", ".join(names) + "." if names
+                              else "No recipes are stored.")),
+            )
+
+        # op == "run"
+        rec = tasks.get_recipe(nm)
+        if rec is None:
+            names = [r["name"] for r in tasks.list_recipes()]
+            return RecipeModel(
+                op=o, name=nm,
+                error=f"No recipe named '{nm}'.",
+                next_action=("Nothing was run. Stored: " + ", ".join(names) + "."
+                             if names else
+                             "Nothing was run - no recipes are stored. Record one "
+                             "with recipe(op='save', ...)."),
+            )
+
+        kw: dict = {}
+        if timeout is not None:
+            kw["timeout"] = timeout
+        if max_content_chars is not None:
+            kw["max_content_chars"] = max_content_chars
+        if focus:
+            kw["focus"] = focus
+        if extraction_type:
+            kw["extraction_type"] = extraction_type
+        if session_id:
+            kw["session_id"] = session_id
+        if allow_private is not None:
+            kw["allow_private"] = allow_private
+
+        result = await self.smart_fetch(url=rec["url"], actions=rec["actions"], **kw)
+        outcomes = list((result.metadata or {}).get("actions") or [])
+        failed = [row for row in outcomes if not row.get("ok")]
+
+        # 记账：一次重放的结果决定这条配方下次还值不值得信。写统计是尽力而为，
+        # 绝不因为它失败把一次成功的抓取变成失败的调用。
+        tasks.note_use(rec["name"], ok=(not failed and bool(result.content_ok)),
+                       error=result.error)
+
+        if failed:
+            nxt = (f"{len(failed)} of {len(outcomes)} action(s) failed - the page "
+                   "changed under this recipe. Re-record it with recipe(op='save', "
+                   "name='" + rec["name"] + "', ...) after re-checking the page.")
+        elif not result.content_ok:
+            nxt = result.next_action or "The replay ran but returned no usable content."
+        else:
+            nxt = ""
+        return RecipeModel(
+            op=o, name=rec["name"], url=rec["url"], result=result,
+            outcomes=outcomes, actions_failed=len(failed),
+            message=(f"Replayed '{rec['name']}' ({len(outcomes)} actions"
+                     + (f", {len(failed)} failed" if failed else "")
+                     + f"): {result.summary or ''}").strip(),
+            next_action=nxt,
+        )
+
+    async def watch(
+        self,
+        op: Annotated[str, Field(description="add = start monitoring a URL; check = fetch it fresh and diff against the last snapshot; list = show every watch; remove = stop.")],
+        name: Annotated[Optional[str], Field(description="Watch name (1-64 chars). Required for add / check / remove.")] = None,
+        url: Annotated[Optional[str], Field(description="op=add: the URL to monitor.")] = None,
+        focus: Annotated[Optional[str], Field(description="op=add: diff only the blocks relevant to this query. The right setting for a long page whose chrome (timestamps, ads, counters) changes on every load - without it every check reports a change.")] = None,
+        max_chars: Annotated[Optional[int], Field(description="op=add: cap the stored snapshot (default 200000). Past the cap the snapshot is cut and the watch says so.")] = 0,
+        note: Annotated[str, Field(description="op=add: what you are watching for (max 500 chars).")] = "",
+        timeout: Annotated[Optional[int], Field(description="op=check: whole-call budget in ms.")] = None,
+        session_id: Annotated[Optional[str], Field(description="op=check: reuse cookies under this name (a watch behind a login). Deliberately not stored.")] = None,
+        allow_private: Annotated[Optional[Any], Field(description="op=check: monitor a loopback URL (your own dev server). Same semantics as smart_fetch's.")] = None,
+    ) -> WatchModel:
+        """Start / check / list / stop a monitored URL. See the tool description."""
+        from dhole_mcp import tasks
+
+        o = (op or "").strip().lower()
+        if o not in ("add", "check", "list", "remove"):
+            return WatchModel(
+                op=o or "?",
+                error=f"unknown op {op!r}",
+                next_action=("Pass op='add' (name+url), 'check' (name), "
+                             "'list' (no other argument) or 'remove' (name)."),
+            )
+
+        if o == "list":
+            rows = tasks.list_watches()
+            return WatchModel(
+                op=o,
+                message=(f"{len(rows)} watch(es) stored." if rows
+                         else "No watches are stored."),
+                watches=rows,
+                next_action=("watch(op='check', name='<name>') fetches and diffs one."
+                             if rows else
+                             "watch(op='add', name=..., url=...) starts one."),
+            )
+
+        nm = (name or "").strip()
+        if not nm:
+            return WatchModel(
+                op=o, error="name is required for this op.",
+                next_action=("Pass name='<watch name>'. "
+                             + ("watch(op='list') shows what exists."
+                                if o in ("check", "remove") else
+                                "Pick any short name you will remember.")),
+            )
+
+        if o == "add":
+            try:
+                saved = tasks.save_watch(nm, url, focus or "",
+                                         max_chars or 0, note)
+            except ValueError as e:
+                return WatchModel(op=o, name=nm, error=str(e),
+                                  next_action="Nothing was stored. Fix the argument "
+                                              "and add again.")
+            msg = (f"Watch '{saved['name']}' "
+                   + ("updated" if saved["updated"] else "added")
+                   + f" on {saved['url']}.")
+            if saved["updated"] and not saved["baseline_kept"]:
+                msg += (" The target changed, so the old baseline was dropped - "
+                        "the next check creates a new one.")
+            return WatchModel(
+                op=o, name=saved["name"], url=saved["url"],
+                baseline_created=bool(saved["baseline_kept"]),
+                message=msg,
+                next_action=(f"watch(op='check', name='{saved['name']}') takes the "
+                             "first snapshot."),
+            )
+
+        if o == "remove":
+            gone = tasks.delete_watch(nm)
+            return WatchModel(
+                op=o, name=nm,
+                message=(f"Watch '{nm}' removed." if gone
+                         else f"No watch named '{nm}' - nothing was removed."),
+                next_action="" if gone else "watch(op='list') shows what exists.",
+            )
+
+        # op == "check"
+        w = tasks.get_watch(nm)
+        if w is None:
+            names = [r["name"] for r in tasks.list_watches()]
+            return WatchModel(
+                op=o, name=nm, error=f"No watch named '{nm}'.",
+                next_action=("Nothing was checked. Stored: " + ", ".join(names) + "."
+                             if names else
+                             "Nothing was checked - no watches are stored. Start one "
+                             "with watch(op='add', ...)."),
+            )
+
+        kw: dict = {"cache_ttl": 0}          # a monitor that reads its own cache
+        if timeout is not None:              # is not monitoring anything
+            kw["timeout"] = timeout
+        if w["focus"]:
+            kw["focus"] = w["focus"]
+        if session_id:
+            kw["session_id"] = session_id
+        if allow_private is not None:
+            kw["allow_private"] = allow_private
+
+        result = await self.smart_fetch(url=w["url"], **kw)
+        if not result.content_ok:
+            # 失败的抓取**不动基线**：把一次网络故障写成"页面清空了"，是让
+            # 监控自己造出一个假变化。
+            tasks.note_check(nm, changed=None, error=result.error or "no content")
+            return WatchModel(
+                op=o, name=nm, url=w["url"], result=result,
+                error=result.error or "the fetch returned no usable content",
+                next_action=("The baseline was left untouched, so the next check still "
+                             "compares against the last good snapshot."
+                             + (" " + result.next_action if result.next_action else "")),
+            )
+
+        text = "\n".join(result.content or [])
+        cut = len(text) > (w["max_chars"] or tasks.MAX_SNAPSHOT_CHARS)
+        text = text[: (w["max_chars"] or tasks.MAX_SNAPSHOT_CHARS)]
+
+        if not w["baseline"]:
+            tasks.set_baseline(nm, text, cut=cut)
+            tasks.note_check(nm, changed=None)
+            return WatchModel(
+                op=o, name=nm, url=w["url"], result=result,
+                changed=None, baseline_created=True, baseline_cut=cut,
+                message=f"Baseline for '{nm}' created ({len(text):,} chars).",
+                next_action=("Nothing to compare against yet - changed is null on "
+                             "purpose, because no baseline is not the same as no "
+                             "change. Check again later."),
+            )
+
+        d = tasks.diff_text(w["baseline"], text)
+        changed = bool(d["added"] or d["removed"])
+        tasks.set_baseline(nm, text, cut=cut)
+        tasks.note_check(nm, changed=changed)
+        return WatchModel(
+            op=o, name=nm, url=w["url"], result=result,
+            changed=changed, baseline_at=_iso_from_ts(w["baseline_at"]),
+            baseline_cut=cut, **d,
+            message=(f"'{nm}' changed: +{d['added']} / -{d['removed']} lines."
+                     if changed else f"'{nm}' is unchanged."),
+            next_action=("" if changed else
+                         "Nothing moved since the last check. The baseline was "
+                         "refreshed either way."),
         )
 
     # ─── Screenshot ───────────────────────────────────────────────
@@ -8327,6 +8722,48 @@ class MasterFetchServer:
             "annotations": {"readOnlyHint": False, "destructiveHint": True,
                             "idempotentHint": False, "openWorldHint": False},
         },
+        {
+            "name": "recipe",
+            "description": "Record how to reach a page once, replay it later: op=save stores a {url, actions} pair, op=run fetches that url with those actions, op=list shows what is stored with use_count/last_ok, op=delete forgets one. Actions are validated at save time by the same validator the executor uses, so a chain that would be refused at run time cannot be stored. run returns the full fetch plus one receipt per action; a non-zero actions_failed means the page changed under the recipe - re-save it. Stored in ~/.dhole/tasks.db; holds no credentials (pass session_id on each run).",
+            "inputSchema": {
+                "type": "object", "required": ["op"],
+                "properties": {
+                    "op": {"type": "string", "enum": ["save", "run", "list", "delete"], "description": "save = record; run = replay; list = show all; delete = forget one."},
+                    "name": {"type": "string", "description": "Recipe name (1-64 chars). Required for save/run/delete."},
+                    "url": {"type": "string", "description": "op=save: the URL to replay."},
+                    "actions": {"type": "array", "items": {"type": "object"}, "description": "op=save: the action chain, same schema as smart_fetch's actions."},
+                    "note": {"type": "string", "description": "op=save: what this recipe is for (max 500 chars)."},
+                    "timeout": {"type": "integer", "description": "op=run: whole-call budget in ms."},
+                    "max_content_chars": {"type": "integer", "description": "op=run: cap on returned content chars."},
+                    "focus": {"type": "string", "description": "op=run: query-focused extraction over the replayed page."},
+                    "extraction_type": {"type": "string", "description": "op=run: markdown (default) | html | text | article | structured."},
+                    "session_id": {"type": "string", "description": "op=run: reuse cookies under this name. Not stored in the recipe."},
+                    "allow_private": {"type": "boolean", "description": "op=run: replay a recipe pointing at loopback (your own dev server)."},
+                },
+            },
+            "annotations": {"readOnlyHint": False, "destructiveHint": True,
+                            "idempotentHint": False, "openWorldHint": True},
+        },
+        {
+            "name": "watch",
+            "description": "Monitor a URL for changes: op=add stores it, op=check fetches it fresh and diffs the text against the last stored snapshot, op=list / op=remove manage them. check answers changed=true/false with added/removed line counts and a capped unified diff. The FIRST check only creates the baseline and answers changed=null - no baseline is not the same as no change. A failed fetch leaves the baseline untouched. Pass focus to diff only the relevant part of a long page. Stored in ~/.dhole/tasks.db.",
+            "inputSchema": {
+                "type": "object", "required": ["op"],
+                "properties": {
+                    "op": {"type": "string", "enum": ["add", "check", "list", "remove"], "description": "add = start watching; check = fetch + diff; list = show all; remove = stop."},
+                    "name": {"type": "string", "description": "Watch name (1-64 chars). Required for add/check/remove."},
+                    "url": {"type": "string", "description": "op=add: the URL to monitor."},
+                    "focus": {"type": "string", "description": "op=add: diff only the blocks relevant to this query - the right setting for a long page whose chrome changes every load."},
+                    "max_chars": {"type": "integer", "description": "op=add: cap the stored snapshot (default 200000)."},
+                    "note": {"type": "string", "description": "op=add: what you are watching for (max 500 chars)."},
+                    "timeout": {"type": "integer", "description": "op=check: whole-call budget in ms."},
+                    "session_id": {"type": "string", "description": "op=check: reuse cookies under this name (a watch behind a login). Not stored."},
+                    "allow_private": {"type": "boolean", "description": "op=check: monitor a loopback URL (your own dev server)."},
+                },
+            },
+            "annotations": {"readOnlyHint": False, "destructiveHint": True,
+                            "idempotentHint": False, "openWorldHint": True},
+        },
     ]
 
     @classmethod
@@ -8682,6 +9119,41 @@ class MasterFetchServer:
             result = await self.close_session(
                 session_id=args.get("session_id"),
                 all=args.get("all", False),
+            )
+            return _wire_result(result)
+
+        elif name == "recipe":
+            # Images ride along like they do for smart_fetch: a recipe whose
+            # chain ends in an element capture is the same capture, and putting
+            # base64 in the JSON would tax every text-only transcript instead.
+            result = await self.recipe(
+                op=args.get("op", ""),
+                name=args.get("name"),
+                url=args.get("url"),
+                actions=args.get("actions"),
+                note=args.get("note", ""),
+                timeout=args.get("timeout"),
+                max_content_chars=args.get("max_content_chars"),
+                focus=args.get("focus"),
+                extraction_type=args.get("extraction_type"),
+                session_id=args.get("session_id"),
+                allow_private=args.get("allow_private"),
+            )
+            inner = getattr(result, "result", None)
+            return _wire_result(result,
+                                images=getattr(inner, "_action_images", None))
+
+        elif name == "watch":
+            result = await self.watch(
+                op=args.get("op", ""),
+                name=args.get("name"),
+                url=args.get("url"),
+                focus=args.get("focus"),
+                max_chars=args.get("max_chars", 0) or 0,
+                note=args.get("note", ""),
+                timeout=args.get("timeout"),
+                session_id=args.get("session_id"),
+                allow_private=args.get("allow_private"),
             )
             return _wire_result(result)
 

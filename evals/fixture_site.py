@@ -18,6 +18,7 @@
 /private/secret      robots 合规靶（应被合规模式拦下）
 /feed.xml            6 条带 pubDate（0/1/2/3/5/10 天前）+ 2 条无 pubDate 的 RSS
 /article             多段落长文（focus / focus_mode=best 靶）
+/changing            每次请求正文都不同的页（watch / diff 靶）
 /captcha             HTML 页，内嵌 <img src="/captcha.png?token=..."> + 提交表单
 /captcha.png         扭曲文字验证码 PNG（逐字旋转 + 正弦位移 + 干扰线；?level=hard 加码）
 /captcha/verify      POST token+answer；对错分别回不同页，每次尝试落盘
@@ -128,6 +129,23 @@ QR_DONE = _page("订单已提交", """
 <h1>订单已提交</h1>
 <p>服务端已写入订单日志。</p>
 """)
+
+
+# /changing 的请求计数：watch 需要一个**真会变**的页，否则 diff 那一半只能靠
+# 单测覆盖。每次请求把计数写进正文，两次抓取之间必定有新增行。
+_CHANGING_HITS = {"n": 0}
+
+
+def _changing() -> bytes:
+    _CHANGING_HITS["n"] += 1
+    n = _CHANGING_HITS["n"]
+    body = (
+        "<h1>会变的页面</h1>"
+        f"<p>第 {n} 次请求。</p>"
+        "<p>这一段每次都在，用来给 diff 提供上下文。</p>"
+        + "".join(f"<p>仅在本次出现的行 {n}-{i}</p>" for i in range(n))
+    )
+    return _page("会变的页面", body)
 
 
 def _article() -> bytes:
@@ -441,6 +459,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, _feed(), "application/rss+xml; charset=utf-8")
         if path == "/article":
             return self._html(_article())
+        if path == "/changing":
+            return self._html(_changing())
         return self._html(_page("404", "<h1>404</h1>"), 404)
 
     def do_POST(self) -> None:  # noqa: N802

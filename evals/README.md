@@ -35,6 +35,9 @@ python evals/captcha_baseline.py
 #    验证码试读：出题 -> 多模态 agent 读图 -> 判卷
 python evals/captcha_baseline.py --emit 8 --level normal
 python evals/captcha_baseline.py --score evals/.runtime/captcha/answers.txt
+
+# 7. L3/L4 重复任务（需要靶站在跑；会自己起一次性 DHOLE_HOME，不碰你的 ~/.dhole）
+DHOLE_TASKS=1 python evals/tasks_l3l4.py
 ```
 
 场景 1/2/5/6 由**外层 agent 直接调 dhole 工具**执行，逐条调用见下。
@@ -176,6 +179,47 @@ connect tokens。
 
 不变式由 `tests/test_captcha_fixture.py`（9 个用例）钉住——重点是"答案只由 token
 决定、与难度档无关"，这条一旦悄悄破掉，基体会变成"用错的键判对的卷"且不报错。
+
+---
+
+## L3 / L4 重复任务（recipe 录制回放 / watch 监控 diff）
+
+计划第九章编排轴的最后两级，实现落在 `src/dhole_mcp/tasks.py` + 两个 opt-in 工具
+（`DHOLE_TASKS=1`）。单元测试（`tests/test_tasks_l3l4.py`，41 例）钉语义；
+`evals/tasks_l3l4.py` 走**完整工具调用**，验那些语义在真页面上还成立：
+
+```
+[通过] 录制时坏链被拒，且什么都没存
+    error="action 0 'click' must be a non-empty CSS selector string" 库里=False
+[通过] 重放点进长文：动作全过且拿到目标页
+    actions_failed=0 title='本地抓取工具配置指南' url=http://127.0.0.1:8399/article
+[通过] 页面变了之后重放大声失败并让人重录
+    actions_failed=1 next_action='1 of 1 action(s) failed - the page changed under this recipe. Re-recor'
+[通过] watch 首跑只建基线，changed 是 null 而不是 false
+    baseline_created=True changed=None
+[通过] 静态页第二次 check：changed=false
+    changed=False added=0 removed=0
+[通过] 会变的页：changed=true 且 diff 有行
+    changed=True added=4 removed=3 diff_lines=7
+[通过] 抓取失败不动基线（网络故障 ≠ 页面清空）
+    error='timeout: the 30000ms call budget ran out during the stealthy' baseline='' changed=None
+
+7/7 项通过
+```
+
+三条判据值得单独说，因为它们都是**"看起来成功"那类失败**的解药：
+
+1. **重放失败要响**（第 3 条）。一条静默返回旧页面的配方，比一条报错的配方危险
+   得多——调用方会拿旧内容当真。这里把选择器改成不存在的 `a[href='/does-not-exist']`，
+   动作行如实记 `ok: false`，`next_action` 直接让人重录。
+2. **首跑不是变化**（第 4 条）。`changed` 是 `null` 而非 `false`：没有基线不等于
+   没有变化，把首跑报成"无变化"是凭空造一个事实。
+3. **抓取失败不动基线**（第 7 条）。指向一个没人监听的端口，`error` 有值、
+   `changed` 为 `null`、基线**原样保留**——否则一次网络故障会被写成"页面清空了"，
+   下一次 check 会把整页报成新增。
+
+靶站为此新增 `/changing`（每次请求正文都多几行）：watch 的 diff 那一半需要一个
+**真会变**的页，否则只能靠单测覆盖。
 
 ---
 

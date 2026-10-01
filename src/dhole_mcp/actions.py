@@ -448,6 +448,14 @@ def _validate_actions(actions) -> list[dict]:
 _WAIT_STATES = frozenset({"attached", "visible", "hidden", "detached"})
 
 
+# Public alias for record-time validation. A recipe (tasks.py, L3) has to be
+# validated by the SAME validator the executor uses: a stored chain that the
+# executor would refuse is a recipe that can never succeed, and the caller who
+# saved it has no way to tell — which is worse than no recipe at all. Exposed as
+# a name rather than reaching across modules for the underscore version.
+validate_actions = _validate_actions
+
+
 def _int_arg(val, where: str, unit: str, cap: int) -> int:
     """Coerce an int-or-digit-string action argument into a clamped int."""
     n: int | None = None
