@@ -519,6 +519,45 @@ class Handler(BaseHTTPRequestHandler):
         return self._html(_page("404", "<h1>404</h1>"), 404)
 
 
+class QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """客户端中途断开不算靶站故障。
+
+    `ThreadingHTTPServer.handle_error` 会把任何未捕获异常打成整段 traceback。
+    但「对端先走」是**正常**的：隐身浏览器的收尾会掐断连接，一次跑下来能留下
+    六七条 `ConnectionResetError [WinError 10054]`，而每个请求其实都是 200。
+    上一次靶站跑完的输出就是这样——看起来像崩了，实际全部通过。
+
+    这个靶站是判据的来源，它的输出被噪音污染就等于判据被污染：真正的失败会
+    淹在假的失败里（本项目最忌讳的失败形状，只是方向反过来）。所以只压「对端
+    先走」这一类，且**不静默**——照旧打一行，让它可见但不刺眼；其余异常原样
+    交给父类打全栈，否则真故障会变成「没有输出」。
+    """
+
+    CLIENT_GONE = (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)
+
+    def handle_error(self, request, client_address) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(exc, self.CLIENT_GONE):
+            host, port = client_address[0], client_address[1]
+            sys.stdout.write(
+                f"[{datetime.now().strftime('%H:%M:%S')}] client gone "
+                f"({type(exc).__name__}) from {host}:{port}\n")
+            sys.stdout.flush()
+            return
+        super().handle_error(request, client_address)
+
+
+def make_server(host: str, port: int) -> QuietThreadingHTTPServer:
+    """靶站唯一的服务器构造入口 —— `main()` 与测试都走这里。
+
+    单开一个工厂是为了让「跑起来的那个服务器是静音的」这条能被测到，而不是
+    只写在 `main()` 里、靠读代码确认。
+    """
+    srv = QuietThreadingHTTPServer((host, port), Handler)
+    srv.daemon_threads = True
+    return srv
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="dhole 模拟测试靶站")
     ap.add_argument("--port", type=int, default=8399)
@@ -526,8 +565,7 @@ def main() -> int:
     args = ap.parse_args()
 
     RUNTIME.mkdir(parents=True, exist_ok=True)
-    srv = ThreadingHTTPServer((args.host, args.port), Handler)
-    srv.daemon_threads = True
+    srv = make_server(args.host, args.port)
     base = f"http://{args.host}:{args.port}"
     print(f"fixture 靶站已启动: {base}", flush=True)
     print(f"订单日志: {ORDERS}", flush=True)
