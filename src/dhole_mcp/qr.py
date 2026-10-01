@@ -40,9 +40,10 @@ def _get_cv2() -> Any:
         import cv2  # type: ignore
         return cv2
     except ImportError as e:
+        from dhole_mcp import install as _install
         raise ImportError(
-            "decode_qr requires OpenCV (opencv-python-headless). "
-            "Run: pip install dhole-mcp[all]"
+            f"decode_qr requires OpenCV (opencv-python-headless). "
+            f"Run: {_install.full_install_command()}"
         ) from e
 
 

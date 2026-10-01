@@ -56,8 +56,9 @@ def _get_pdfium():
         import pypdfium2 as pdfium  # type: ignore
         return pdfium
     except ImportError as e:
+        from dhole_mcp import install as _install
         raise ImportError(
-            "OCR requires pypdfium2. Run: pip install dhole-mcp[all]"
+            f"OCR requires pypdfium2. Run: {_install.full_install_command()}"
         ) from e
 
 
@@ -74,8 +75,9 @@ def _get_rapidocr():
         from rapidocr_onnxruntime import RapidOCR  # type: ignore  # v1 fallback
         return RapidOCR()
     except ImportError as e:
+        from dhole_mcp import install as _install
         raise ImportError(
-            "OCR requires rapidocr. Run: pip install dhole-mcp[all]"
+            f"OCR requires rapidocr. Run: {_install.full_install_command()}"
         ) from e
 
 

@@ -89,6 +89,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 
 from dhole_mcp import paths
 from dhole_mcp import env_registry
+from dhole_mcp import install as _install
 
 # Lazy imports: browser deps (patchright) pull in playwright (~5s load). Defer
 # until first use so the MCP server responds to initialize immediately.
@@ -2074,7 +2075,7 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
     elif err.startswith("encrypted_pdf"):
         next_action = "encrypted PDF - pass a password via the 'password' option"
     elif err.startswith("pdf_deps_missing"):
-        next_action = "PDF support not installed - run: pip install dhole-mcp[all]"
+        next_action = _install.pdf_install_advice()
     elif err.startswith("not_a_pdf") or err.startswith("pdf_open_failed") or err.startswith("pdf_extract_failed"):
         next_action = "PDF could not be parsed - see error field"
     elif "all_tiers_failed" in err:
@@ -3829,7 +3830,7 @@ def _extract_pdf_response(body: bytes, raw_ct: str, total_size: int, url: str,
                                         include_media=include_media)
     except ImportError as e:
         return ResponseModel(
-            status=200, content=[f"[PDF extraction requires dhole-mcp[all]. {e}]"],
+            status=200, content=[f"[PDF extraction unavailable: {_install.pdf_install_advice()}. {e}]"],
             url=url, fetcher_used=fetcher_used, duration_ms=duration_ms,
             content_type=raw_ct, total_size_bytes=total_size,
             extracted_type="markdown", error=f"pdf_deps_missing: {e}",
@@ -4072,8 +4073,7 @@ def _translate_response_body(
                 url=page.url, fetcher_used=fetcher_used, duration_ms=duration_ms,
                 content_type=raw_ct, total_size_bytes=total_size,
                 extracted_type="text",
-                error=("image_ocr_unavailable: OCR extras not installed - install "
-                       "dhole-mcp[all] to read text from images"),
+                error=("image_ocr_unavailable: " + _install.ocr_install_advice()),
             )
         except Exception as e:
             return ResponseModel(
@@ -5254,8 +5254,7 @@ class MasterFetchServer:
         if not _browser_deps_available():
             raise RuntimeError(
                 f"Browser unavailable: {_browser_import_error or 'patchright not importable'}. "
-                "Install browser deps: pip install dhole-mcp[all] "
-                "(or pip install playwright patchright)."
+                + _install.browser_install_advice()
             )
         attr = "_auto_stealthy_id"
         ts_attr = "_auto_stealthy_last_used"
@@ -5648,7 +5647,7 @@ class MasterFetchServer:
             raise RuntimeError(
                 f"Browser sessions require browser deps which are unavailable: "
                 f"{_browser_import_error or 'patchright not importable'}. "
-                "Install with: pip install dhole-mcp[all]"
+                + _install.browser_install_advice()
             )
         session_id = session_id or uuid4().hex[:12]
         async with self._sessions_lock:
@@ -6526,7 +6525,7 @@ class MasterFetchServer:
             raise RuntimeError(
                 f"Screenshot requires browser deps which are unavailable: "
                 f"{_browser_import_error or 'patchright not importable'}. "
-                "Install with: pip install dhole-mcp[all]"
+                + _install.browser_install_advice()
             )
 
         if quality is not None and image_type != "jpeg":
@@ -6901,7 +6900,7 @@ class MasterFetchServer:
             raise RuntimeError(
                 f"Stealthy fetch requires browser deps which are unavailable: "
                 f"{_browser_import_error or 'patchright not importable'}. "
-                "Install with: pip install dhole-mcp[all]"
+                + _install.browser_install_advice()
             )
 
         t0 = now()
@@ -7005,7 +7004,7 @@ class MasterFetchServer:
             raise RuntimeError(
                 f"Stealthy fetch requires browser deps which are unavailable: "
                 f"{_browser_import_error or 'patchright not importable'}. "
-                "Install with: pip install dhole-mcp[all]"
+                + _install.browser_install_advice()
             )
 
         use_tf = use_trafilatura and extraction_type in ("markdown", "text", "article", "structured")

@@ -119,8 +119,9 @@ def ocr_advice() -> str:
     if ready:
         return ("OCR is installed but recovered no text here - use a vision tool / "
                 "screenshot, or another source.")
-    return ("Install OCR support with `pip install dhole-mcp[all]` and dhole will "
-            "auto-OCR it; or use a vision-capable tool / screenshot.")
+    from dhole_mcp import install as _install
+    return ("Install OCR support with `" + _install.full_install_command() + "` and "
+            "dhole will auto-OCR it; or use a vision-capable tool / screenshot.")
 
 
 def recover_scanned_pdf(
@@ -184,8 +185,9 @@ def _get_pdfplumber():
         import pdfplumber  # type: ignore
         return pdfplumber
     except ImportError as e:
+        from dhole_mcp import install as _install
         raise ImportError(
-            "PDF extraction requires pdfplumber. Run: pip install dhole-mcp[all]"
+            f"PDF extraction requires pdfplumber. Run: {_install.full_install_command()}"
         ) from e
 
 

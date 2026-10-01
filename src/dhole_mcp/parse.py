@@ -173,9 +173,10 @@ def parse_file_detailed(file_path: str, encoding: str = "") -> tuple[str, str, d
         elif ext == ".odt":
             return _parse_odt(file_path), "", {}
     except ImportError as e:
+        from dhole_mcp import install as _install
         return "", (
             f"Missing dependency for {ext} parsing: {e}. "
-            f"Install with: pip install dhole-mcp[all]"
+            f"{_install.docx_install_advice()}"
         ), {}
     except Exception as e:
         return "", f"Parse error ({ext}): {type(e).__name__}: {str(e)[:200]}", {}
