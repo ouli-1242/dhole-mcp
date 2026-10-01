@@ -184,6 +184,9 @@ from dhole_mcp.security import (
     SecurityError,
     # G9: the per-call private-host allowlist (see security.parse_allow_private).
     _ALLOW_PRIVATE, parse_allow_private, set_allow_private,
+    # Same policy, for the two tools that never went through the smart_fetch
+    # options decorator (screenshot / feed_fetch).
+    allow_private_scope,
 )
 
 # Extended extraction types (beyond Scrapling's markdown/html/text)
@@ -3306,6 +3309,35 @@ def _audit_event(event: str, **fields: Any) -> None:
         pass
 
 
+def _result_error(result: Any) -> str:
+    """The application-level error a tool reported, or "" when it reported none.
+
+    ``ok`` in the call log means "the call ran to completion without raising" —
+    a tool that answers with an envelope carrying ``error`` never raises, so
+    without this the log said ``ok: true`` for calls that plainly failed.
+    Measured: a ``feed_fetch`` refused by the SSRF guard logged
+    ``{"tool": "feed_fetch", "ok": true, "ms": 22.0}`` with no trace of the
+    refusal. The question this log exists to answer is "does my client actually
+    route here, and does it hold up?" — and a refusal that reads like a success
+    is the one shape that question cannot survive.
+
+    Additive on purpose: ``ok`` keeps its meaning (a batch that answers with one
+    failed URL is still a completed call), and the reported error rides in the
+    existing ``error`` field, so ``select(.error)`` finds every call a tool
+    itself called a failure.
+    """
+    payload: Any = result
+    if isinstance(result, tuple) and len(result) == 2:
+        payload = result[1]
+    rows = payload if isinstance(payload, list) else [payload]
+    for row in rows:
+        if isinstance(row, dict):
+            err = row.get("error")
+            if err:
+                return str(err)[:200]
+    return ""
+
+
 def _log_tool_call(name: str, ok: bool, duration_ms: float, error: str = "") -> None:
     """Append one line to the opt-in local call log (DHOLE_USAGE_LOG=1 or a path).
 
@@ -3314,7 +3346,13 @@ def _log_tool_call(name: str, ok: bool, duration_ms: float, error: str = "") -> 
     simply never calls it (or calls it and ignores the answer), and that question
     - "does my client actually route here, and does it hold up?" - cannot be
     answered without a local record. Argument VALUES are never written, only the
-    tool name and the outcome. Best-effort: never raises, never blocks startup.
+    tool name and the outcome. ``ok`` means "the call ran to completion without
+    raising" — it is NOT "the tool reported success": a refused or failed call
+    answers with an envelope rather than an exception, so what the tool itself
+    called a failure is recorded in ``error`` (see ``_result_error``). A clean
+    call is ``{"tool": ..., "ok": true, "ms": ...}`` with no ``error`` key; a call
+    that completed but reported a failure carries both, so ``select(.error)``
+    finds every one of them. Best-effort: never raises, never blocks startup.
 
     When the log lives under the dhole home (the ``=1`` form) that home and the
     log are tightened to 0700/0600 like the other state files. A path the user
@@ -4505,6 +4543,10 @@ _SHOT_OPTIONS = frozenset({
     # 17.0 多模态开关：selector = 元素级裁剪（DHOLE_MULTIMODAL 门控）；
     # decode_qr = 本地二维码解码（确定性工作，不设门控）。
     "selector", "decode_qr",
+    # G9 parity: smart_fetch could always name a private target and screenshot
+    # could not, so "my dev server" was fetchable by one tool and refused
+    # outright by the next. Same option, same semantics, same guard.
+    "allow_private",
 })
 _SS_OPTIONS = frozenset({
     "max_results", "cache_ttl", "mode", "engines", "url",
@@ -4534,7 +4576,8 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     "cache_clear": frozenset({"all", "engine_state"}),
     "parse": frozenset({"file_path", "cwd", "encoding"}),
     "feed_fetch": frozenset({"urls", "max_items", "timeout", "since",
-                             "if_none_match", "if_modified_since"}),
+                             "if_none_match", "if_modified_since",
+                             "allow_private"}),
     "resolve_url": frozenset({"url", "timeout"}),
     # Both optional: the bare call is the census. This dict is also the set of
     # known tool names (`_dispatch` refuses anything outside it), which is how a
@@ -5632,6 +5675,7 @@ class MasterFetchServer:
         save_to: Optional[str] = None,
         selector: Optional[str] = None,
         decode_qr: bool = False,
+        allow_private: Optional[Any] = None,
     ) -> List[ImageContent | TextContent]:
         """        Capture a screenshot of a web page.
 
@@ -5652,10 +5696,17 @@ class MasterFetchServer:
         `decode_qr` decodes QR payloads from the capture over the text channel
         (deterministic local decoding - no flag, no model).
 
+        ``allow_private`` (G35) is smart_fetch's option, same semantics: without
+        it a loopback / private URL is refused before the browser starts, so
+        "screenshot my own dev server" used to be impossible while "fetch my own
+        dev server" worked.
+
         NOTE: clients never receive this docstring. The authoritative
         agent-facing contract is the "description" in _TOOL_DEFS.
         """
-        url = validate_url(url)
+        # G35: same option, same guard as smart_fetch.
+        with allow_private_scope(allow_private):
+            url = validate_url(url)
         validate_css_selector(wait_selector)
         # Resolved up front: a bad save_to must cost an instant refusal, not a
         # browser cold start and then nothing on disk.
@@ -5707,11 +5758,16 @@ class MasterFetchServer:
             except Exception as exc:
                 captured["error"] = exc
 
-        await entry.session.fetch(
-            url, wait=wait, timeout=timeout, network_idle=network_idle,
-            wait_selector=wait_selector, wait_selector_state=wait_selector_state,
-            page_action=_capture,
-        )
+        # The scope has to be open for the NAVIGATION too, not just validate_url:
+        # a loopback page's own subresources (the QR / CAPTCHA <img>) are judged
+        # by the browser route handler, which reads this same contextvar. Scoping
+        # only the entry check would load the page and then block its image.
+        with allow_private_scope(allow_private):
+            await entry.session.fetch(
+                url, wait=wait, timeout=timeout, network_idle=network_idle,
+                wait_selector=wait_selector, wait_selector_state=wait_selector_state,
+                page_action=_capture,
+            )
 
         if "error" in captured:
             exc = captured["error"]
@@ -6549,10 +6605,16 @@ class MasterFetchServer:
         if actions:
             if force_fetcher == "http":
                 raise ValueError("actions require the browser tier; use force_fetcher='stealthy' or omit it")
-            from dhole_mcp.actions import build_page_action
+            from dhole_mcp.actions import build_page_action, actions_want_visual
             page_action = build_page_action(actions)  # validates; raises on bad input
             if page_action is None:
                 raise ValueError("actions must be a non-empty list of action dicts")
+            # A screenshot action's product is the RENDERED page, so the speed
+            # shortcut that drops image/stylesheet/font has to be off for it -
+            # under blocking, the <img> is never even requested and the crop is a
+            # broken-image placeholder (decode_qr then answers [] while the action
+            # reports ok). Everything else keeps the shortcut.
+            actions_need_resources = actions_want_visual(actions)
 
         # CDP attach（G33）拥有最高路由优先级：显式 cdp_url = 调用方要的是
         # "用户已认证视角下的这个页面"。HTTP 层给不了这个视角，公开缓存（匿名
@@ -6579,6 +6641,7 @@ class MasterFetchServer:
                     cookies=cookies, max_chars=mc,
                     check_login=check_login, cdp_url=cdp_url,
                     page_action=page_action,
+                    disable_resources=not actions_need_resources,
                 ), url, timeout, "cdp-attach stealthy tier")
             if page_action is not None:
                 _report_action_outcomes(cdp_result, page_action)
@@ -6741,6 +6804,7 @@ class MasterFetchServer:
                     cookies=cookies, max_chars=mc,
                     page_action=page_action,
                     check_login=check_login,
+                    disable_resources=not actions_need_resources,
                 ), url, timeout, "actions (stealthy) tier")
             _report_action_outcomes(result, page_action)
             return result
@@ -6957,6 +7021,7 @@ class MasterFetchServer:
         page_action=None,
         check_login: bool = False,
         cdp_url: Optional[str] = None,
+        disable_resources: bool = True,
     ) -> ResponseModel:
         """Execute a forced fetcher tier and finalize the result."""
         dead = await _dead_explicit_proxy(proxy, url)
@@ -7088,7 +7153,7 @@ class MasterFetchServer:
                 use_trafilatura=use_trafilatura, headless=headless,
                 real_chrome=real_chrome, wait=wait, proxy=proxy,
                 timeout=timeout, network_idle=network_idle,
-                disable_resources=True,
+                disable_resources=disable_resources,
                 solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
                 hide_canvas=hide_canvas, extra_headers=extra_headers,
                 useragent=useragent, cookies=_browser_cookies(cookies, url),
@@ -7780,6 +7845,7 @@ class MasterFetchServer:
         since: Annotated[Optional[str], Field(description="Incremental polling: keep only entries published at or after this date (ISO-8601 like '2026-09-20' / '2026-09-20T08:00:00Z', or an RFC-822 feed timestamp). Store the newest published value from the previous call and pass it back. What the filter removed is reported (items_older_than_since) rather than silently shrinking the list, so 'nothing new' is an answer you can act on; entries with no usable date are KEPT and counted (items_without_date) because an undated feed cannot be filtered honestly. An unreadable date is refused as an error instead of returning the whole feed as if it were new.")] = None,
         if_none_match: Annotated[Optional[str], Field(description="Cheaper poll than `since`: send back a feed's cache_validators.etag and an unchanged feed answers 304, so the whole document is never downloaded. Returns not_modified=true with items=[] and no error - that is 'nothing new', not an empty feed. One URL per call (a batch cannot share one etag).")] = None,
         if_modified_since: Annotated[Optional[str], Field(description="The same question as if_none_match for servers that publish Last-Modified instead of an ETag (HTTP-date or ISO-8601; a bare date means midnight UTC). One URL per call.")] = None,
+        allow_private: Annotated[Optional[Any], Field(description="Poll a feed the SSRF guard otherwise blocks - your own dev / Docker / LAN feed reader. true = loopback only, or a list of hosts. Same option and same semantics as smart_fetch's.")] = None,
     ) -> List[Any]:
         """Fetch RSS/Atom feeds and return their latest entries.
 
@@ -7806,24 +7872,27 @@ class MasterFetchServer:
             raise ValueError("feed_fetch requires at least one URL")
         if len(urls) > 50:
             raise ValueError("feed_fetch supports at most 50 URLs per call")
-        # SSRF 防护：与 resolve_url 一致，每个 feed URL 先经 validate_url 校验
-        try:
-            urls = [validate_url(u) for u in urls]
-        except SecurityError as se:
-            raise ValueError(f"feed_fetch URL 校验失败: {se}") from se
-        # One set of version markers cannot be asked of several feeds: feed B would
-        # be revalidated with feed A's etag, and a 304 there means nothing. Refused
-        # rather than half-applied.
-        if (if_none_match or if_modified_since) and len(urls) > 1:
-            raise ValueError(
-                "if_none_match / if_modified_since describe ONE feed's version; "
-                f"this call names {len(urls)} URLs. Pass a single url, or drop the "
-                "validators and poll with since=.")
-        results = await fetch_feeds(urls, timeout=timeout or 20,
-                                    max_items=max_items if max_items is not None else 20,
-                                    since=since or "",
-                                    if_modified_since=if_modified_since or "",
-                                    if_none_match=if_none_match or "")
+        # SSRF 防护：与 resolve_url 一致，每个 feed URL 先经 validate_url 校验。
+        # allow_private（G35）把作用域开在这里，覆盖校验与真正的抓取两步：只放开
+        # 校验那一步，等于放行了 URL 又在取文档时把它拒掉。
+        with allow_private_scope(allow_private):
+            try:
+                urls = [validate_url(u) for u in urls]
+            except SecurityError as se:
+                raise ValueError(f"feed_fetch URL 校验失败: {se}") from se
+            # One set of version markers cannot be asked of several feeds: feed B
+            # would be revalidated with feed A's etag, and a 304 there means
+            # nothing. Refused rather than half-applied.
+            if (if_none_match or if_modified_since) and len(urls) > 1:
+                raise ValueError(
+                    "if_none_match / if_modified_since describe ONE feed's version; "
+                    f"this call names {len(urls)} URLs. Pass a single url, or drop "
+                    "the validators and poll with since=.")
+            results = await fetch_feeds(urls, timeout=timeout or 20,
+                                        max_items=max_items if max_items is not None else 20,
+                                        since=since or "",
+                                        if_modified_since=if_modified_since or "",
+                                        if_none_match=if_none_match or "")
         return [
             {
                 "source_url": r.source_url,
@@ -8174,7 +8243,7 @@ class MasterFetchServer:
                 "properties": {
                     "url": {"type": "string", "description": "URL to screenshot"},
                     "session_id": {"type": "string", "description": "Reuse a specific open browser session. Omit to auto-manage."},
-                    "options": {"type": "object", "description": "save_to: a path - the image is written there and the text part reports the absolute path + byte size (parents created; an existing file not named like an image is refused).\nfull_page: bool (false). image_type: png|jpeg. quality: 0-100 (jpeg). wait: ms. wait_selector: css. network_idle: bool. timeout: ms (30000).\ndecode_qr: bool - decode QR payloads from the capture and report them in the text part (local deterministic decoding, opencv; NOT gated by DHOLE_MULTIMODAL - a text-only agent can read a login QR / check-in URL this way). Empty list = no code found.", "additionalProperties": True},
+                    "options": {"type": "object", "description": "save_to: a path - the image is written there and the text part reports the absolute path + byte size (parents created; an existing file not named like an image is refused).\nfull_page: bool (false). image_type: png|jpeg. quality: 0-100 (jpeg). wait: ms. wait_selector: css. network_idle: bool. timeout: ms (30000).\ndecode_qr: bool - decode QR payloads from the capture and report them in the text part (local deterministic decoding, opencv; NOT gated by DHOLE_MULTIMODAL - a text-only agent can read a login QR / check-in URL this way). Empty list = no code found.\nallow_private: same as smart_fetch's - true for loopback (127.0.0.0/8, ::1, localhost), or a host list. Without it a private URL is refused before the browser starts.", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -8228,6 +8297,7 @@ class MasterFetchServer:
                     "since": {"type": "string", "description": "Incremental polling: keep only entries published at or after this date (ISO-8601 '2026-09-20' / '2026-09-20T08:00:00Z', or an RFC-822 feed timestamp). Pass the newest published value from the previous call. items_older_than_since reports what it removed; undated entries are kept and counted, not dropped. An unreadable date is an error, not a filter that kept everything."},
                     "if_none_match": {"type": "string", "description": "Cheaper than since when the server publishes an ETag: pass back that feed's cache_validators.etag. An unchanged feed answers 304, so you get not_modified=true with items=[] and no error and the document is never downloaded. Conditional calls take ONE URL."},
                     "if_modified_since": {"type": "string", "description": "The same question for servers that publish Last-Modified instead of an ETag (HTTP-date or ISO-8601; bare date = midnight UTC). ONE URL."},
+                    "allow_private": {"type": "boolean", "description": "Poll a feed the SSRF guard otherwise blocks - your own dev / Docker / LAN feed reader. true = loopback only. Omit and a localhost feed is refused before any request."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -8318,7 +8388,8 @@ class MasterFetchServer:
             started = now()
             try:
                 result = await self._dispatch(params.name, params.arguments or {})
-                _log_tool_call(params.name, True, (now() - started) * 1000)
+                _log_tool_call(params.name, True, (now() - started) * 1000,
+                               _result_error(result))
                 # _dispatch returns (content_list, structured_dict) or just content_list
                 return _call_result(result)
             except Exception as e:
@@ -8557,6 +8628,10 @@ class MasterFetchServer:
                 # an incremental poll got the whole feed back with
                 # items_older_than_since=0 — "nothing new" and "filter dropped"
                 # were indistinguishable, which is the one thing a poller needs.
+                #
+                # allow_private is forwarded like every other advertised
+                # parameter (schema 声明即承诺) - the method opens the scope
+                # itself, where the URLs it guards actually are.
                 feeds = await self.feed_fetch(
                     urls=args.get("urls") or [],
                     max_items=args.get("max_items", 20),
@@ -8564,6 +8639,7 @@ class MasterFetchServer:
                     since=args.get("since"),
                     if_none_match=args.get("if_none_match"),
                     if_modified_since=args.get("if_modified_since"),
+                    allow_private=args.get("allow_private"),
                 )
             except ValueError as e:
                 # feed_fetch used to raise, and call_tool turned that into an
@@ -8574,8 +8650,9 @@ class MasterFetchServer:
                     "feeds": [],
                     "error": str(e),
                     "next_action": ("Pass urls=[...] with 1-50 absolute http(s) "
-                                    "RSS/Atom feed URLs. localhost and other "
-                                    "internal addresses are rejected."),
+                                    "RSS/Atom feed URLs. Internal addresses are "
+                                    "rejected unless you name them with "
+                                    "allow_private=true (loopback) or a host list."),
                 }
                 text, compact = _wire_json(payload)
                 return [TextContent(type="text", text=text)], compact

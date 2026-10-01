@@ -4,6 +4,7 @@ URL validation with SSRF protection, input sanitization,
 and safe defaults for all external-facing parameters.
 """
 
+import contextlib
 import contextvars
 import ipaddress
 import os
@@ -93,6 +94,27 @@ def parse_allow_private(value) -> tuple[frozenset, bool]:
 def set_allow_private(value) -> Any:
     """Push the per-call private-host policy. Returns a reset token."""
     return _ALLOW_PRIVATE.set(parse_allow_private(value))
+
+
+@contextlib.contextmanager
+def allow_private_scope(value):
+    """Run a block under a per-call private-host policy.
+
+    ``smart_fetch`` gets this from its options decorator, which pushes the
+    contextvar for the whole call. Tools that never went through that decorator
+    (``screenshot``, ``feed_fetch``) had no way to name a private target at all,
+    so the same product decision read as "loopback is fetchable" in one tool and
+    "loopback is refused outright" in the next. This gives them the identical
+    mechanism instead of a second policy to keep in sync.
+
+    ``None``/``False``/``""`` is a no-op push (empty allowlist), which is the
+    default state — so an absent option changes nothing.
+    """
+    token = set_allow_private(value)
+    try:
+        yield
+    finally:
+        _ALLOW_PRIVATE.reset(token)
 
 
 def private_hosts_allowed() -> tuple[frozenset, bool]:

@@ -26,6 +26,7 @@
 - **意图命中提示**：神经 focus 下最高分块低于 0.05 时，`next_action` 提示「抓回的内容对焦点查询命中很弱」——页面是真的，但答案大概率不在这页上。`content_ok` 不因此变脸：内容为真与答了所问是两个问题
 - **会话 cookie 双向桥**：点名的 `session_id` 走浏览器层时（`force_fetcher='stealthy'` 或自动升级到隐身层），该会话的专用隐身浏览器在导航前从 HTTP 层 jar **播种** cookie、响应后**回写**新增的——登录态第一次跨两层共用。边界收得很窄：只有调用方点名的会话桥（共享的自动会话永不播种，那等于把 A 会话的登录态倒进 B）；CDP attach 永不桥（那是你的真实 profile，只读不写）；桥只发生在「这个会话自己的浏览器」上。配合 `check_login`、元素快照与提交闸，不写密码的登录流兜底路径成立：HTTP 层攒 cookie → 桥进浏览器 → 快照认字段 → 提交走审批闸（独立登录工具要等凭据源，明文密码进 transcript 不做）
 - **写操作审计**：`DHOLE_USAGE_LOG` 的审计通道现在也记**写**：HTTP 层所有非 GET（`channel=http`，不重试是写请求的既有纪律）与浏览器 submit（`channel=browser_submit`），记 method / url / session_id / 是否 pending。读和写从此都看得见
+- **`allow_private` 覆盖到 `screenshot` 与 `feed_fetch`**：`smart_fetch` 一直能点名私网目标（`options.allow_private`），另两个工具不能——于是「抓我自己的 dev 服务」能跑、「截我自己的 dev 页面」和「轮询我自己的 feed」直接拒，同一个产品决定在两个工具上读出相反的答案。现在三个工具同一套机制、同一套语义：`true` 只放开回环，或给主机名单；云元数据端点照旧永不放开。`screenshot` 的作用域盖住整通调用（含导航），因为回环页面自己的子资源由浏览器路由处理器判定，只放开入口校验等于「页面加载了、图被拦了」
 
 ### 变更
 
@@ -34,6 +35,9 @@
 ### 修复
 
 - **`actions` 在两条车道上被静默丢弃**：`cdp_url` 与 `actions` 同传时动作从来不会执行（attach 车道与隐身车道各建各的动作对象，attach 那份没接上）；`schema` 与 `actions` 同传同样被静默忽略。前者修为两条车道都执行动作，后者修为显式报错——静默忽略一个调用方声明的参数比拒绝更糟
+- **截图动作拿不到图片像素（元素级截图 / `decode_qr` 的主路径失效）**：带 `actions` 的抓取在隐身层硬编码了 `disable_resources=True`（图 / 样式 / 字体全 abort 的提速开关），于是动作链里 `{"screenshot": {...}}` 截到的是**破图占位符**——页面自己的 `<img>` 连请求都没发出过，`decode_qr` 回 `[]`，而动作行照报 `ok: true`：调用方看到的是「这页没有二维码」，不是「我没拿到像素」。修法是截图动作让资源拦截让路（它的产品就是渲染结果，砍掉图与样式本身就是错的），其余动作链照旧提速。A/B 实测单变量确认因果：`disable_resources=True` 时浏览器发出 `GET /qr.png` 0 次，`False` 时 1 次
+- **索引寻址的动作在收执与审计里丢掉目标**：`click` / `submit` 按快照索引寻址（`{"index": N}`）时，动作标签渲染成 `click None` / `submit None (unconfirmed)`——`_act_target` 把索引归一化成不带 `selector` 键的形状，而标签仍按 `selector` 取值。难看是小，泄漏到**写操作审计**是大：`DHOLE_USAGE_LOG` 的 `channel=browser_submit` 行里，`action` 是唯一说明「提交了哪个元素」的字段，它当时写的是 `None`。修法是复用已有的 `_target_label`（它本来就同时认索引与 `expect`）
+- **调用日志把「被拒」记成「成功」**：`usage.jsonl` 的 `ok` 实际含义是「没抛异常」，而工具失败走的是正常 envelope——一次被 SSRF 守卫拒掉的 `feed_fetch` 在日志里是 `{"tool": "feed_fetch", "ok": true, "ms": 22.0}`，拒绝对读者完全不可见。这个日志存在的理由恰恰是回答「我的客户端到底有没有正确路由到这里、扛不扛得住」，而「看起来成功」是它唯一答不了的形状。修法是补记应用层错误：`ok` 保持原义（批量里一个 URL 失败仍是一次跑完的调用），工具自己判为失败的内容进 `error` 字段，`select(.error)` 一网打尽
 
 ### 安全
 

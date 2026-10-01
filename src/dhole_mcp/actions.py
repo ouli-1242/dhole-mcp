@@ -677,13 +677,19 @@ def action_label(a: dict) -> str:
     if key == "snapshot":
         return "snapshot interactive elements"
     if key == "submit":
-        target = val.get("selector") if isinstance(val, dict) else val
-        base = f"submit {_target_label(target)}"
+        # _target_label(val), not val.get("selector"): a submit addressed by
+        # snapshot index normalizes to {"index": N} with NO "selector" key, so
+        # the old .get("selector") produced "submit None (unconfirmed)" - and
+        # that string is what DHOLE_USAGE_LOG's write-audit row recorded, i.e.
+        # the audit trail lost the target of the very step it exists to record.
+        base = f"submit {_target_label(val)}"
         return base + ("" if isinstance(val, dict) and val.get("confirm")
                        else " (unconfirmed)")
-    if key in ("click", "wait_selector"):
+    if key == "click":
+        return f"click {_target_label(val)}"
+    if key == "wait_selector":
         sel = val if isinstance(val, str) else (val or {}).get("selector")
-        return f"{key} {sel!r}"
+        return f"wait_selector {sel!r}"
     return f"{key} {val}"
 
 
@@ -700,6 +706,26 @@ def _action_failure(exc: Exception) -> str:
         return ("the selector matched no element (or none became actionable) before "
                 f"the timeout: {first}")
     return first
+
+
+def actions_want_visual(actions) -> bool:
+    """True when this chain contains a screenshot action.
+
+    A screenshot is the one action whose product IS the rendered page, so the
+    resource blocking that makes a plain fetch fast has to be off for it. The
+    stealthy path disables ``image``/``stylesheet``/``font`` for speed
+    (``DISABLED_RESOURCE_TYPES``), and an element crop taken under that policy is
+    a broken-image placeholder rather than the QR code or CAPTCHA the caller
+    asked to look at — measured: with blocking on, the browser never even issued
+    ``GET`` for the page's ``<img>``, so ``decode_qr`` answered ``[]`` and the
+    action still reported ``ok: true``.
+
+    Scanned on the RAW list with the same key test ``_validate_actions`` uses, so
+    it can run before validation and cannot drift from the parser.
+    """
+    if not isinstance(actions, (list, tuple)):
+        return False
+    return any(isinstance(a, dict) and "screenshot" in a for a in actions)
 
 
 def build_page_action(actions) -> Optional[Callable]:

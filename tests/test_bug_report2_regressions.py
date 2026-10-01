@@ -353,7 +353,8 @@ class TestActionsTierBudget:
                                    proxy, timeout, network_idle, solve_cloudflare,
                                    block_webrtc, hide_canvas, extra_headers,
                                    useragent, cookies, max_chars=None, page_action=None,
-                                   check_login=False):
+                                   check_login=False, cdp_url=None,
+                                   disable_resources=True):
             seen["timeout"] = timeout
             raise _Stop()
 
