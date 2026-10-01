@@ -32,7 +32,8 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 | Many pages on one site | `smart_crawl`: `options.sitemap=true` for a one-request URL map, then `crawl_urls=[...]` for the picks |
 | Track a site's latest updates | `feed_fetch` (pass the site homepage; it finds the feed); poll incrementally with `since=` |
 | Resolve a short/tracking link | `resolve_url` (no body download) |
-| Local file (docx/xlsx/pdf/md/txt/json/yaml/pptx/odt/csv/html) | `parse` — the only entry point for local documents |
+| Local file: `.docx` / `.xlsx` / `.pptx` / `.odt` / `.pdf` / `.csv` / `.html` | `parse` — a docx/xlsx/pptx/odt is a zip and a pdf is a container, so a text reader sees bytes; a non-UTF-8 csv/html decodes to plausible-looking **wrong** text rather than an error |
+| Local file: `.md` / `.txt` / `.json` / `.yaml` | Your own file tool is fine if you have one; `parse` also works (it detects the encoding and validates json/yaml). MCP-only clients have no other path |
 | See rendered layout / verify UI | `screenshot`; if you can't see images, pass `options.save_to` and read the file |
 | Page behind a login wall (user has a logged-in Chrome) | `smart_fetch` with `options.cdp_url` (+ `options.check_login=true` to confirm state) — requires one-time user setup, see `references/configuration.md` "CDP attach" |
 | Act on a page (click / fill / press / submit a form) | `smart_fetch` `actions`: `{"snapshot": true}` first for the numbered element list, then address by `index` — see `references/tools.md` "Page interaction" |

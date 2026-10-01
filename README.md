@@ -175,7 +175,7 @@ CLI 诊断与配置：
 | `smart_search` | 无密钥网页搜索：多引擎并行 + 本地重排，可顺带抓回前三条全文 |
 | `smart_crawl` | 同域爬取：sitemap 模式、关键词过滤、`path_include` / `path_exclude` 子树限定 |
 | `screenshot` | 页面截图；看不见图片的宿主传 `options.save_to` 拿文件路径 |
-| `parse` | 本地文件 → Markdown（docx / xlsx / pdf / pptx / odt / csv / html / json / yaml / md / txt） |
+| `parse` | 本地文件 → Markdown（docx / xlsx / pdf / pptx / odt / csv / html / json / yaml / md / txt）。docx / xlsx / pptx / odt 是 zip、pdf 是容器，**文本工具读到的是字节**；非 UTF-8 的 csv / html 会解成「看着对、其实错」的字而不是报错 |
 | `feed_fetch` | 批量抓 RSS / Atom 最新条目，`since=` 只取增量 |
 | `resolve_url` | 解析 URL 的最终地址（跟随重定向，不抽正文） |
 | `cache_clear` | 清抓取缓存（连 robots 结论与全部会话 cookie jar 一起清） |

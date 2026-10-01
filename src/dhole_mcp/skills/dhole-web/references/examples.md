@@ -173,7 +173,9 @@ Multimodal agents receive the image inline; text-only agents read the absolute p
 ## The remaining four (top-level parameters only)
 
 ```json
-// parse: the only entry point for local documents; pass encoding explicitly for mojibake (Shift_JIS/EUC-KR are outside auto-detection)
+// parse: the entry point for local documents in a client with no file tools of its own, and
+// the only safe one for a zip/container format or any file whose encoding you don't know.
+// Pass encoding explicitly for mojibake (Shift_JIS/EUC-KR are outside auto-detection)
 {"file_path": "C:/docs/report.docx"}
 {"file_path": "C:/docs/japanese.txt", "encoding": "shift_jis"}
 // resolve_url: resolve short links before deciding to fetch
