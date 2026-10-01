@@ -2,6 +2,7 @@
 
 > 2026-10-01 执行　·　被测版本 **17.0**（`24b3aed`）　·　零真实站点流量
 > 2026-10-01 追加：四项缺陷已修复并复验（见文末「修复与复验」）
+> 2026-10-01 追加：补齐两处 eval 缺口 —— `feed_fetch` 的 `since` 增量端到端、视觉辅助基线（见「视觉辅助基线」）
 
 ## 一句话结论
 
@@ -28,6 +29,12 @@ python evals/verify_fixes.py
 
 # 5. feed_fetch 的 since 增量端到端（需要靶站在跑，D3 之后才走得通）
 python evals/feed_since.py
+
+# 6. 视觉辅助基线：二维码解码 + 转交纪律（不需要靶站）
+python evals/captcha_baseline.py
+#    验证码试读：出题 -> 多模态 agent 读图 -> 判卷
+python evals/captcha_baseline.py --emit 8 --level normal
+python evals/captcha_baseline.py --score evals/.runtime/captcha/answers.txt
 ```
 
 场景 1/2/5/6 由**外层 agent 直接调 dhole 工具**执行，逐条调用见下。
@@ -44,7 +51,7 @@ python evals/feed_since.py
 | 1 | 快照 → 索引动作 → submit 闸 | **通过** | 闸门运行只有 GET、**无 POST**，订单日志不变；带 `confirm:true` 重跑后 POST 落地，订单日志恰好 1 行 |
 | 2 | cookie 双向桥 | **通过** | 浏览器层登录 → HTTP 层 32ms 读到"欢迎回来"；HTTP 层登录 → 浏览器层同样读到；`check_login` 三态正确 |
 | 3 | `focus_mode="best"` | **通过** | 10 块中精确定位目标段；`filter` 模式同样正确；页头如实声明打分器 |
-| 4 | `feed_fetch` since / loopback | **暴露限制** | 见 D3：无 `allow_private`，loopback 被 SSRF 拒 |
+| 4 | `feed_fetch` since / loopback | **暴露限制** | 见 D3：无 `allow_private`，loopback 被 SSRF 拒。**D3 修复后已补端到端**（`evals/feed_since.py`，5/5 通过） |
 | 5 | robots 诚实度 | **通过** | `metadata.robots = "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)"` |
 | 6 | 写审计核验 | **通过** | 4 条 write 事件与操作一一对应（闸门 `pending:true` → 确认 `pending:false` → 2 条 HTTP POST） |
 | 7 | `neural_focus_model_missing` | **跳过** | 本机模型已下载，线上分支无法触发；单测已覆盖（`tests/test_neural_focus_m1.py:188/238`） |
@@ -97,6 +104,78 @@ re-run {"snapshot": true} and act on the fresh indices
 3. **计划里的"55~76% 保留率"是修复前的旧数。** 当前代码的锚定相对阈值（`relative_threshold=0.33`）已把 BM25 压到 22%，所以神经的边际收益是 **+10pp 召回 / −9pp 保留**，而不是文档暗示的"从 55~76% 大幅下降"。
 
 > 另注：91 块与 140 块的耗时几乎相同（12.5s vs 12.2s），提示耗时由**固定的分批开销**主导而非块数线性——值得后续单独看，本轮未深挖。
+
+---
+
+## 视觉辅助基线（验证码试读 / 二维码解码）
+
+计划第十章要求："图形验证码试读 ≤N 次通过率与转交率、二维码解码成功率——本地
+fixture 生成扭曲文字与二维码图片，不依赖外站。"靶站新增 `/captcha`、
+`/captcha.png`、`/captcha/verify`；基线脚本 `evals/captcha_baseline.py`。
+
+**答案由 token 确定性派生**（`captcha_text`），靶站无状态、重启后同一 token 的
+答案不变；出题（`--emit`）与判卷（`--score`）分离，出题时**不打印答案**。
+
+### 二维码解码成功率（确定性，9/10）
+
+与 dhole 的 `decode_qr` 同一实现（`cv2.QRCodeDetector`）。基准图 + 9 种常见失真：
+
+| 失真 | 结果 | | 失真 | 结果 |
+|---|---|---|---|---|
+| 原始 | ✓ | | 缩到 0.35x | ✓ |
+| 旋转 5° / 15° / 30° | ✓ ✓ ✓ | | 高斯噪声 σ=25 | ✓ |
+| 缩到 0.5x | ✓ | | 高斯噪声 σ=60 | ✗ |
+| 模糊 5x5 | ✓ | | JPEG q=40 | ✓ |
+
+**9/10。** 唯一未过的是 σ=60 高斯噪声——那个信噪比下二维码在信息层面已不可解，
+属已知上限而非缺陷（判据阈值因此设为 ≥8/10）。
+
+### 验证码一次读对率（agent 侧）
+
+dhole 里没有视觉模型（安全红线 6），读图发生在**外层多模态 agent**。本会话由
+多模态 agent 亲自试读，**判卷前看不到答案**：
+
+| 难度档 | 一次读对 | 一次读对率 |
+|---|---|---|
+| `normal`（逐字旋转 ±30°、正弦振幅 3.5~6.5） | 5/14 | **36%** |
+| `hard`（旋转 ±55°、振幅 5~8 + 长波长、干扰线 5 条、噪点 380、笔画擦除） | 1/8 | **12%** |
+
+错误呈**系统性混淆**，不是随机噪声：Z↔2、A↔4、A↔8、P↔R、W↔H、5↔S、9↔D、
+Q↔D/J、B↔M。即"扭曲把字形推向易混对的另一侧"。
+
+> **方法论警告（本轮踩到的）**：先前一次试读得到 6/6，原因是那时我在图的上方
+> 已经打印了真值——**等于被喂了答案**。把答案从视野里拿掉后同一批难度掉到 36%。
+> 任何"agent 读图率"如果不隔离答案通道，数字都是虚的。
+
+**≤N 次通过率与转交率**：真实站点在提交失败后**换一张**验证码，靶站 `/captcha`
+每次 GET 也确实发新 token，所以 N 次 = N 张独立新图。在独立假设下
+`P(≤N 次通过) = 1 − (1 − p)^N`：
+
+| 难度档 | p | N=3 通过率 | N=3 转交率 |
+|---|---|---|---|
+| `normal` | 0.36 | **73%** | 27% |
+| `hard` | 0.125 | **33%** | 67% |
+
+> **同图重读测不到，而且它本来就不该被算作重试**：本 harness 里图像只投递一次
+> （重复投递相同字节会被去重），重试拿到的不是"新的一眼"，而是模型对同一份
+> 上下文的再推理——信息已经在 context 里，第二次不会真的"重新看"。
+> 所以上表的独立假设是**对的做法**，不是偷懒的近似。
+>
+> 顺带说明 17.0 选 **≤3 次**的合理性：`normal` 档 3 次覆盖 73%，`hard` 档只有
+> 33%——对真读不出的图继续重试只是浪费轮次，转交才是终点。
+
+### 转交纪律在不在 wire 上
+
+| 判据 | 结果 |
+|---|---|
+| `DHOLE_MULTIMODAL=1` 时 `screenshot` / `smart_fetch` 描述变长、关旗时不含 `VISUAL ASSIST` | **通过**（+592 / +689 字符） |
+| 描述写明 "at most 3" 与转交终点 | **通过**（`hand off` 出现 screenshot 4 次 / smart_fetch 1 次） |
+
+纪律**只跟着 flag 上线**：关着 flag 的调用方看不见像素，纪律对它是噪声，还白占
+connect tokens。
+
+不变式由 `tests/test_captcha_fixture.py`（9 个用例）钉住——重点是"答案只由 token
+决定、与难度档无关"，这条一旦悄悄破掉，基体会变成"用错的键判对的卷"且不报错。
 
 ---
 
@@ -170,7 +249,8 @@ re-run {"snapshot": true} and act on the fresh indices
 **未覆盖**：
 - `DHOLE_MULTIMODAL=1` / `DHOLE_NEURAL_FOCUS=1` 的**关闭分支**（本会话四个 flag 全开）；关闭分支的拒绝文案由单测覆盖（`tests/test_multimodal_visual_g34.py:105/281`）。
 - 场景 7 的线上触发（模型已下载）。
-- 视觉验证码试读、2FA / 行为墙转交——需要能生成扭曲文字验证码的 fixture，本轮未搭。
+- **行为墙 / 2FA 的线上转交**：纪律文案已在 wire 上验过（见"视觉辅助基线"），但 DataDome / Akamai / 交互式 Turnstile 这类"无图可看"的墙与 2FA 因子不在页面上，本地靶站造不出真东西，只能靠文案断言，端到端仍未覆盖。
+- 视觉验证码**试读**已覆盖（见上），但**滑块类**需要拖拽原语 + 拟人轨迹，超出 dhole 动作范围，靶站未搭。
 - CDP attach 端到端（`DHOLE_CDP_ATTACH` 未开，需用户真实 Chrome）。
 
 **已知的环境注记**：本机 `HTTPS_PROXY` 指向沙箱代理，跑仓库测试前需 `env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY`。
@@ -211,5 +291,5 @@ re-run {"snapshot": true} and act on the fresh indices
 
 1. ~~**M-1 措辞校准**~~ **已处理**：12.5s/页的量级已写进 README 与 `smart_fetch.focus` 的工具描述（`docs(readme)` / `docs(focus)` 两次提交）；计划文档里"55~76%"已标注为修复前数值。
 2. ~~**神经 focus 的耗时结构**~~ **已查清**：耗时由**分块数**而非块数主导（202 块 14.0s vs 214 块 14.8s，约 69 ms/块）。此前"固定分批开销主导"的读法被推翻。据此还测了一个"按长度分桶"的加速方案：快 37~66%，但模型**不是 padding 不变**的（同块在 300 字批与 71 字批里得分差最大 2.2e-2；四路长度切分让单块得分最多移 0.34、top-20 进出 2~3 条），**已否决**。结论写进 `src/dhole_mcp/focus.py` 的代价模型注释。
-3. **视觉验证码试读 / 2FA 转交**的 fixture 仍待搭（需要能生成扭曲文字验证码的靶站）。
+3. ~~**视觉验证码试读 / 2FA 转交**的 fixture~~ **已搭**：靶站新增 `/captcha` 三端点（扭曲文字、两档难度），`evals/captcha_baseline.py` 量出一次读对率 `normal` 38% / `hard` 12%、二维码解码 9/10、转交纪律在 wire 上（详见"视觉辅助基线"）。**行为墙与 2FA 仍只有文案断言**——本地造不出真东西。
 4. ~~`feed_fetch` 的 loopback 端到端~~ **已补**：`evals/feed_since.py` 走完整工具路径验 5 条判据（无过滤时计数保持 0、`since` 保留更新的并如实报出被丢掉的条数、被过滤时无日期条目仍在返回内容里、`since` 在未来、`since` 不可读时报错而非当成"全是新的"）。5/5 通过。
