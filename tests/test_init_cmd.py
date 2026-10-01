@@ -342,3 +342,91 @@ class TestNeuralFlagAndItsWeights:
         assert "download failed" in capsys.readouterr().out
         # flag 照样写下：模型会在下一次神经搜索重试，用户不必重跑整条 init
         assert er.file_entries() == {"DHOLE_NEURAL_FOCUS": "1"}
+
+
+class TestCdpAttachSetup:
+    """`dhole init --cdp <hosts>`：这条命令交出的是**已登录浏览器**的读权限，
+    比"某个写操作要不要确认"严重一档，所以它有三条不能省：必须点名主机、
+    围栏是合并而不是覆盖、先验证再落笔。
+
+    最后一条是因为半条命令 = 半装的安全边界：`DHOLE_CDP_ATTACH=1` 已经写进
+    文件、主机列表却因为第二个 token 拼错而没写，机器就处在"attach 已开、没有
+    围栏"这个恰好最危险的状态里。
+    """
+
+    @pytest.fixture
+    def probe(self, monkeypatch):
+        """端口探测必须被替换：测试不能真的去连 127.0.0.1:9222 —— 那等于把
+        "这台开发机此刻有没有开着调试端口的 Chrome" 当成测试前置条件。"""
+        seen = {"calls": 0, "returns": False}
+
+        def fake(port=None):
+            seen["calls"] += 1
+            return seen["returns"]
+        monkeypatch.setattr(init_cmd, "_cdp_endpoint_listening", fake)
+        return seen
+
+    def test_requires_at_least_one_host(self, tmp_home, capsys):
+        """无围栏的 attach 不是这条命令提供的形态——交出去的是所有已登录站点。"""
+        for argv in (["--cdp"], ["--cdp", ""], ["--cdp="]):
+            assert init_cmd.run_init(argv) == 2, argv
+            assert "at least one host" in capsys.readouterr().out
+
+    def test_a_pasted_url_becomes_the_exact_hostname(self, tmp_home, probe, capsys):
+        assert init_cmd.run_init(["--cdp", "https://Portal.Example.com/dashboard?x=1"]) == 0
+        out = capsys.readouterr().out
+        assert "portal.example.com" in out
+        assert "subdomains and third-party assets are NOT covered" in out
+        assert "dry-run" in out and "DHOLE_CDP_ATTACH" in out
+
+    def test_yes_writes_both_gates_and_says_no_restart(self, tmp_home, probe, capsys):
+        from dhole_mcp import env_registry as er
+        assert init_cmd.run_init(["--cdp", "portal.example.com", "--yes"]) == 0
+        assert er.file_entries() == {"DHOLE_CDP_ATTACH": "1",
+                                     "DHOLE_CDP_HOSTS": "portal.example.com"}
+        out = capsys.readouterr().out
+        # 两道闸都是 read_at="call"：说"重启宿主"会让人白重启一次
+        assert "no host restart" in out or "next call" in out
+        assert probe["calls"] == 1
+
+    def test_an_existing_allowlist_is_merged_not_clobbered(self, tmp_home, probe, capsys):
+        """覆盖操作者的围栏 = 悄悄改变他设过的边界。这里只做并集。"""
+        from dhole_mcp import env_registry as er
+        er.set_entry("DHOLE_CDP_HOSTS", "old.example.com")
+        assert init_cmd.run_init(["--cdp", "new.example.com", "--yes"]) == 0
+        hosts = er.file_entries()["DHOLE_CDP_HOSTS"].split(",")
+        assert set(hosts) == {"new.example.com", "old.example.com"}
+        assert "merged" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("bad", [
+        "169.254.169.254",              # 云元数据：任何设置下都不放行
+        "*.example.com",                # 通配符不是主机，围栏是精确主机名
+        "https://",                     # 里面根本没有主机名
+    ])
+    def test_a_refused_host_leaves_nothing_half_written(self, tmp_home, probe, bad, capsys):
+        from dhole_mcp import env_registry as er
+        assert init_cmd.run_init(["--cdp", bad, "--yes"]) == 2
+        assert er.file_entries() == {}, "拒绝必须发生在任何写入之前"
+        assert "refused" in capsys.readouterr().out
+
+    def test_attach_already_in_env_is_not_shadowed_by_a_write(self, tmp_home, probe,
+                                                             monkeypatch, capsys):
+        from dhole_mcp import env_registry as er
+        monkeypatch.setenv("DHOLE_CDP_ATTACH", "1")
+        assert init_cmd.run_init(["--cdp", "portal.example.com", "--yes"]) == 0
+        entries = er.file_entries()
+        assert "DHOLE_CDP_ATTACH" not in entries, "env 赢，文件里不该留一份假设置"
+        assert entries.get("DHOLE_CDP_HOSTS") == "portal.example.com"
+        assert "env block" in capsys.readouterr().out
+
+    def test_the_probe_never_runs_without_the_flag(self, tmp_home, probe):
+        assert init_cmd.run_init(["--tasks"]) == 0
+        assert probe["calls"] == 0, "没要求 CDP 就不该去探调试端口"
+
+    def test_a_listening_endpoint_is_reported_as_a_fact(self, tmp_home, probe, capsys):
+        probe["returns"] = True
+        assert init_cmd.run_init(["--cdp", "portal.example.com", "--yes"]) == 0
+        out = capsys.readouterr().out
+        assert "listening on 127.0.0.1:9222" in out
+        assert "--remote-debugging-port=9222" in out
+        assert '"cdp_url"' in out

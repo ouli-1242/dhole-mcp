@@ -98,6 +98,7 @@ playwright install chromium      # 反检测浏览器引擎（~150MB），pip �
 | `DHOLE_SEARCH_PROXY` | 搜索引擎被限流 / 被墙时走这个代理（也自动读 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`） |
 | `DHOLE_MULTIMODAL=1` | **宿主 agent 能看图才设**：解锁元素裁剪截图与本地二维码解码；纯文本宿主不要设 |
 | `DHOLE_NEURAL_FOCUS=1` | 让 `focus` 改用语义打分——更准（答案召回 90% → 100%）但**单页约 12.5 秒 CPU**，默认的 BM25 只要 23ms。它是**许可**：flag 开着之后仍可用 `options.focus_engine='bm25'` 让某一次调用走便宜路，反之 `'neural'` 没有许可时被拒绝而不是悄悄降级。一条命令打开（含那 ~280MB 模型）：`dhole init --neural`，按次读取、不用重启 |
+| `DHOLE_CDP_ATTACH=1` + `DHOLE_CDP_HOSTS` | 交出的是**用户已登录浏览器的读权限**，默认拒绝。别手改这两个：`dhole init --cdp <host>` 一条命令同时写「开」与「围栏圈在哪些主机」（围栏是**精确主机名**，`example.com` 不含 `www.example.com`；已有列表合并而非覆盖）。两个闸都按次读取，不用重启；attach 开着而没有围栏时 `dhole --doctor` 单行说明 |
 | `DHOLE_TASKS=1` | 打开 `recipe` / `watch`（重复任务），默认关 |
 | `DHOLE_VAULT=1` | 打开 `vault` / `login`（凭据与登录流），默认关；需本机装了 Bitwarden CLI（`bw`）或 1Password CLI（`op`）并已解锁 |
 | `DHOLE_CDP_ATTACH=1` + `DHOLE_CDP_HOSTS` | 借你已登录的 Chrome 读登录后的页面，白名单限定哪些域名能用你的登录态，见下节 |
@@ -169,7 +170,7 @@ CLI 诊断与配置：
 | `dhole proxy list` / `add` / `remove` / `clear` | 搜索代理池 |
 | `dhole model` / `dhole model use <name>` | 查看 / 切换重排模型 |
 | `dhole skill` | 安装 / 查看随包分发的 agent 技能（`install` / `status`） |
-| `dhole init` | 一条命令跑完安装与配置（`--yes` 才落盘；`--tasks` / `--vault` 打开默认关的工具组；`--neural` 打开语义 focus 并把重排模型下载好；`--probe` 跑一次真实搜索+抓取确认"从这里能用"） |
+| `dhole init` | 一条命令跑完安装与配置（`--yes` 才落盘；`--tasks` / `--vault` 打开默认关的工具组；`--neural` 打开语义 focus 并把重排模型下载好；`--cdp <host>` 打开 CDP attach **并按主机加围栏**；`--probe` 跑一次真实搜索+抓取确认"从这里能用"） |
 | `dhole config` | 持久化旋钮：`list` / `set <NAME> <value>` / `unset <NAME>`（写 `~/.dhole/config.json`，不用改宿主 JSON、逐次生效的旋钮不用重启） |
 | `dhole --http --host --port` | 改用 streamable HTTP 传输（默认 stdio） |
 

@@ -50,10 +50,18 @@ One-time user setup, two steps. (1) Launch a **copy-profile** Chrome with remote
 chrome.exe --user-data-dir=D:\dhole-chrome --remote-debugging-port=9222
 ```
 
-Log into the target site in that window once. (2) Add the gate env vars to the dhole server's `env` block and restart the host:
+Log into the target site in that window once. (2) Turn the two gates on - one command does it and prints the boundary it is drawing:
+
+```
+dhole init --cdp portal.example.com            # dry-run: shows the hosts, the launch line, the fence rules
+dhole init --cdp portal.example.com --yes      # writes both gates to ~/.dhole/config.json
+```
+
+By hand it is `dhole config set DHOLE_CDP_ATTACH 1` plus `dhole config set DHOLE_CDP_HOSTS portal.example.com`. Both are read **per call**, so neither the file door nor the env block needs a host restart.
 
 - `DHOLE_CDP_ATTACH=1` — master switch, **default off**. Attaching = handing dhole read access to every site logged into that Chrome, so it is deliberately gated: without it every `cdp_url` call is refused (`cdp_attach_disabled`, no request sent)
-- `DHOLE_CDP_HOSTS` — comma-separated host allowlist (e.g. `portal.example.com,mail.example.com`). Enforced at the route level (including page-JS subresource requests) and at the fetch entry; a non-listed host fails with `cdp_host_not_allowed`
+- `DHOLE_CDP_HOSTS` — comma-separated host allowlist (e.g. `portal.example.com,mail.example.com`). Enforced at the route level (including page-JS subresource requests) and at the fetch entry; a non-listed host fails with `cdp_host_not_allowed`. **The match is an EXACT hostname**, not a domain or a suffix: `example.com` does not cover `www.example.com`, and a page that loads scripts from a CDN needs that CDN named too. No wildcards - `dhole init --cdp` reduces a pasted URL to its hostname, merges with any list already set (it never clobbers the user's fence), and prints the reduced form back so nothing is written that the user did not mean
+- `dhole --doctor` prints a `cdp fence` row when attach is on: an empty allowlist is reported as un-fenced (it is a legal choice, so it is info, not a failure) and names the command that fences it
 
 The call itself is per-call, no restart needed afterwards:
 

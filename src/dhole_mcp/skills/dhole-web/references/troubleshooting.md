@@ -83,8 +83,8 @@ Five paths, cheapest first: (1) HTTP tier — user-supplied cookies (`options.co
 - **`watch` keeps reporting noise** — the page's chrome changes every load; re-add with `focus=` to diff only the relevant block, or raise `max_chars` if `baseline_cut` is true
 
 Attach-specific failures:
-- `cdp_attach_disabled` — the gate is off by default. The user must add `DHOLE_CDP_ATTACH=1` + `DHOLE_CDP_HOSTS` to the dhole server env and restart the host. No request was sent; retrying changes nothing
-- `cdp_host_not_allowed` — the host is outside `DHOLE_CDP_HOSTS`. Ask the user to allowlist it; never work around by fetching a different host with the user's login state
+- `cdp_attach_disabled` — the gate is off by default, so this is the user's to grant: `dhole init --cdp <host>` writes both gates (attach + its host fence) through `~/.dhole/config.json`, or by hand `dhole config set DHOLE_CDP_ATTACH 1`. Read per call - no restart needed. No request was sent; retrying changes nothing
+- `cdp_host_not_allowed` — the host is outside `DHOLE_CDP_HOSTS`, and the match is an **exact hostname**: `example.com` in the list does not let `www.example.com` through, and neither does it cover a CDN the page loads assets from. Ask the user to allowlist that host (`dhole init --cdp <host>` merges into the existing fence instead of replacing it); never work around by fetching a different host with the user's login state
 - `login_check.logged_in: false` — session expired in the attached Chrome; the user re-logs in their window, then re-run the call
 - `logged_in: null` — the page's DOM shape wasn't enough to decide (pure-JSON endpoints, odd layouts); read `signals` and say what's uncertain instead of guessing
 

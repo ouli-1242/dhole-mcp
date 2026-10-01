@@ -421,3 +421,49 @@ class TestDoctorResolverReality:
         monkeypatch.setattr(socket, "getaddrinfo", boom)
         # doctor() must still return 0/1 - never raise.
         assert updater.doctor() in (0, 1)
+
+
+class TestTheCdpFenceRow:
+    """W16：attach 开着但没有主机围栏 —— 这是一个"能跑"和"安全"不是一件事的
+    设置。体检沉默就等于把这条边界交给了 README 里的一段小字。
+
+    它**不算 failure**：围栏是操作者的选择，把合法选择标成故障会让 exit code
+    失去意义（`dhole init --cdp` 存在的理由正是让围栏成为默认写法，而不是让
+    没有围栏看起来像坏了）。
+    """
+
+    def test_attach_without_hosts_names_the_gap_and_the_command(self, isolated_home,
+                                                                monkeypatch, capsys):
+        monkeypatch.setenv("DHOLE_CDP_ATTACH", "1")
+        monkeypatch.delenv("DHOLE_CDP_HOSTS", raising=False)
+        assert updater.doctor() == 0
+        out = capsys.readouterr().out
+        assert "cdp fence" in out
+        assert "every attached request carries your logged-in cookies" in out
+        assert "dhole init --cdp" in out
+
+    def test_a_fenced_attach_reports_the_count_in_the_right_form(self, isolated_home,
+                                                                monkeypatch, capsys):
+        monkeypatch.setenv("DHOLE_CDP_ATTACH", "1")
+        for hosts, expected in (("portal.example.com", "1 exact hostname "),
+                                ("a.com,b.com", "2 exact hostnames ")):
+            monkeypatch.setenv("DHOLE_CDP_HOSTS", hosts)
+            updater.doctor()
+            out = capsys.readouterr().out
+            assert expected in out, (hosts, out)
+            assert "hostnams" not in out, "复数是拼出来的，不是 'hostnam' + 's'"
+
+    def test_attach_off_prints_nothing_about_a_fence(self, isolated_home,
+                                                    monkeypatch, capsys):
+        monkeypatch.delenv("DHOLE_CDP_ATTACH", raising=False)
+        updater.doctor()
+        assert "cdp fence" not in capsys.readouterr().out
+
+    def test_a_typo_on_the_gate_does_not_claim_a_fence_is_on(self, isolated_home,
+                                                            monkeypatch, capsys):
+        """fail_safe 读法在这条行上也成立：'flase' 不是 ON，所以围栏行不该出现。"""
+        monkeypatch.setenv("DHOLE_CDP_ATTACH", "flase")
+        updater.doctor()
+        out = capsys.readouterr().out
+        assert "cdp fence" not in out
+        assert "not fenced" not in out

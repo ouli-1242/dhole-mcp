@@ -12,6 +12,10 @@
 
 ### 新增
 
+- **`dhole init --cdp <host>` —— 把最重的那道能力做成一条命令，而且不给无围栏的形状**：CDP attach 交出的是**用户已登录浏览器的读权限**（每一个请求都带着那个 profile 的 cookie），比"某个写操作要不要确认"严重一档，所以过去它故意只肯由 env 块开通。现在 `dhole init --cdp portal.example.com` 一次写好两道闸：`DHOLE_CDP_ATTACH=1` **并且** `DHOLE_CDP_HOSTS` 圈在点名的主机上——**只给 ATTACH 而不给围栏的形态这条命令不提供**（打印的是用法错误，退出 2）。附带三件真事：粘进来的地址会被归约成精确主机名并回显（`https://Portal.Example.com/dashboard` → `portal.example.com`，围栏比的就是这个）；已有白名单是**合并**而不是覆盖（重写别人的围栏不是引导命令该有的手）；`127.0.0.1:9222` 被问一次"有没有在听"——只做 TCP 连接、不发 HTTP，因为 `/json/version` 会把用户标签页的标题交出来。输出里同时打印需要用户自己启动浏览器的那条命令（Chrome 136+ 拒绝在默认 profile 上开调试）与 per-call 的调用形状
+- **`dhole --doctor` 新增 `cdp fence` 一行**：attach 开着而白名单为空时说明"导航没有被圈住，每个已附加请求都带着你的登录 cookie"，并点名那条会修好它的命令；有围栏时报出主机数。**它算 info 不算 failure**——围栏是操作者的选择，把合法配置标成故障只会让退出码失去意义。`DHOLE_CDP_ATTACH=flase` 这种 typo 不会被骗出"围栏已开"（沿用 fail-safe 读法）
+- **一条从未写明的规则现在写明了**：`DHOLE_CDP_HOSTS` 是**精确主机名**匹配（入口检查与 route handler 都只比 `urlparse(...).hostname`），文档以前只说"逗号分隔的白名单"。也就是说 `example.com` **不覆盖** `www.example.com`，也不覆盖页面从 CDN 拉的那些脚本主机——不点名就会被 route 层拦掉。这条现在在 configuration.md、troubleshooting.md（`cdp_host_not_allowed` 那一行）与 SKILL.md 的信号表里都成立
+
 - **`options.focus_engine` —— 语义 focus 从"全局能力"变成"许可 + 这一次要不要"**：取值 `'bm25'` / `'neural'`，`smart_fetch` 与 `smart_crawl` 都收。规则三条：不传 = 完全跟随 `DHOLE_NEURAL_FOCUS`（与以前逐字节相同）；`'bm25'` 在 flag **开着**时也生效——过去想省这一次的 CPU 只能先把机器级的能力关掉；`'neural'` 在没有许可时是**拒绝**（`focus_engine_not_permitted`，一个请求都不发）而不是悄悄降级，因为静默回退会把"神经分与 BM25 的差别"变成不可解释的玄学。爬取尤其需要这句话：每页约 12.5 秒的推理会乘上 `max_pages`。`neural_focus_model_missing` 那条老错误跟着改口：先给"这一次传 `focus_engine='bm25'` 就能继续"，再给下载路径。`dhole init --neural` 是打开它的**一条命令**——写 flag **并且**把模型装上（下载只在 `--yes` 后发生，与 Chromium 同一条纪律：几百 MB 不藏在没人重读的命令背后）；这条 flag 是按次读的，所以那句话是"下一次调用生效"，不再是要你重启宿主
 - **`dhole init` 多了三件事**：`--tasks` / `--vault` 把默认关的工具组打开在 `~/.dhole/config.json` 里（W11 的文件门），不再要求编辑宿主的 MCP JSON——env 块已经设过的组**不写文件**，因为那是操作者已经做过的决定；落盘后照实说明"这是 import 期读的旋钮，重启才注册"。`--probe` 跑一次真实搜索 + 真实抓取，问的是运行中的代码而不是静态体检（从这里搜得到吗、这个链接抓得开吗），每行点名它碰了哪个目标，空结果报成事实并给下一步而不是"安装坏了"。默认关，不发真实流量。未知 flag 现在返回 2 并列出可用的，不再静默忽略
 - **`dhole --doctor` 加两段**：
@@ -36,6 +40,7 @@
 
 ### 修复
 
+- **CDP 那套说明里的"改 env 块 + 重启宿主"是过期的**：W11 的文件门装上后，`dhole init --cdp` / `dhole config set` 就能写这两道闸，而 `DHOLE_CDP_ATTACH` 与 `DHOLE_CDP_HOSTS` 的 `read_at` 都是 `call`——按旧说明去编辑宿主 JSON 并重启，做的是没人需要的工作。configuration.md / troubleshooting.md / SKILL.md 三处一起改成"一条命令 + 按次生效"
 - **README 的连接期字符数已经漂了 233**：README 写 23,654，而把 W15 的改动退回 HEAD 实测是 23,421。这正是 `tests/tool_payload_measure.py` 的 docstring 预言过的那一种失效——某处描述变短了、没有人数，而仓库有意不设尺寸断言（"刻舟求剑"），所以数字不会自己变红。现在 README 与 CHANGELOG 都对齐到重新量出来的数
 - **配置不再静默降级**：`_env_int` 与 `_env_flag`（以及 sessions / robots / security / crawl / actions / search_metasearch 里的 12+ 处独立读者）统一走 `env_registry` 的类型化 helper；非法值进入进程内共享告警列表，`dhole --doctor` 打印。此前 `DHOLE_COOKIE_TTL_S=abc`、`DHOLE_SEARCH_DEADLINE=not-a-number`、`DHOLE_ENGINE_HEARTBEAT=soon` 全都是无声回落
 - **`README.md` 的"零配置即可用"改口**：改成"默认零配置就能跑通最常见的路径" + 明写 Clash / sing-box TUN + fake-ip 例外需要 `DHOLE_SSRF_DNS_RECHECK=0`（`dhole doctor` 会识别这台机器是不是这种环境）；安装段把两条命令（pip + playwright）都列出并说明"两步都跑完浏览器层才可用"

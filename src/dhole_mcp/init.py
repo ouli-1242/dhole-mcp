@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -208,6 +209,192 @@ def _print_manual_instructions() -> None:
 #: one glanceable line rather than a URL buried in a call.
 PROBE_URL = "https://example.com/"
 
+#: Where a debug-enabled Chrome listens by convention. `dhole init --cdp` only
+#: asks this one port a yes/no question, and never sends it an HTTP request.
+CDP_DEFAULT_PORT = 9222
+
+#: Cloud metadata endpoints are never allowed under any setting (the SSRF guard
+#: says so at every layer), so a guided command must not offer to write one into
+#: an allowlist that hands over the user's authenticated browser cookies.
+class CdpHostError(ValueError):
+    """A host the guided command refuses to write into the CDP allowlist."""
+
+_CDP_NEVER_HOSTS = frozenset({
+    "169.254.169.254", "metadata.google.internal", "metadata",
+    "instance.local", "fd00:ec2::254",
+})
+
+
+def _is_link_local(host: str) -> bool:
+    """True for an IP literal in a range the SSRF guard never lets through."""
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved
+
+
+def _take_value(argv: list[str], name: str) -> Optional[str]:
+    """``--cdp host1,host2`` and ``--cdp=host1,host2`` both spell the same thing.
+
+    Returns None when the flag is absent, "" when it is present with nothing
+    after it - the two cases print different messages (an unknown flag versus a
+    command that was cut off mid-typing).
+    """
+    prefix = name + "="
+    for arg in argv:
+        if arg.startswith(prefix):
+            return arg[len(prefix):]
+    if name in argv:
+        i = argv.index(name)
+        if i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+            return argv[i + 1]
+        return ""
+    return None
+
+
+def _cdp_hostnames(raw: str) -> list[str]:
+    """Turn what the user pasted into what ``DHOLE_CDP_HOSTS`` actually holds.
+
+    The fence is an EXACT hostname match (browser.py: entry check and the route
+    handler both compare ``urlparse(...).hostname not in allowed_hosts``), so an
+    address-bar string has to be reduced to its host before it can be written --
+    and the reduced form has to be echoed back. "I allowlisted example.com and it
+    still says cdp_host_not_allowed for www.example.com" is otherwise a support
+    conversation nobody can predict.
+    """
+    from urllib.parse import urlparse
+
+    out: list[str] = []
+    for token in re.split(r"[,;]", raw or ""):
+        token = token.strip().lower()
+        if not token:
+            continue
+        if "*" in token or "?" in token.split("/")[0]:
+            raise CdpHostError(
+                f"{token!r} is a pattern, not a host. The fence is one exact "
+                "hostname per entry - name each host you want reachable "
+                "(www.example.com and example.com are two entries).")
+        parsed = urlparse(token if "://" in token else "//" + token)
+        host = (parsed.hostname or "").strip()
+        if not host:
+            raise CdpHostError(
+                f"{token!r} has no hostname in it - pass a host or a full URL "
+                "like portal.example.com or https://portal.example.com/dashboard")
+        if host in _CDP_NEVER_HOSTS or host.endswith(".internal") or _is_link_local(host):
+            raise CdpHostError(
+                f"{host} is a cloud metadata / link-local address. Those are never "
+                "allowed under any setting, and an attached browser carries your "
+                "logged-in cookies - the guard refuses it, so this command will not "
+                "help you route around it.")
+        if host not in out:
+            out.append(host)
+    return out
+
+
+def _cdp_endpoint_listening(port: int = CDP_DEFAULT_PORT):
+    """Is a Chrome debug endpoint actually listening on loopback? True/False/None.
+
+    A TCP connect, 200ms, and NO HTTP request: ``/json/version`` would hand this
+    process the titles and URLs of the user's open tabs, which is more than a
+    readiness check needs. A refused connection is the honest False; anything
+else (a permission error, an odd sandbox) is None - unknown is reported as
+    unknown, never as "not running".
+    """
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+            return True
+    except ConnectionRefusedError:
+        return False
+    except socket.timeout:
+        return False
+    except OSError:
+        return None
+    except Exception:  # noqa: BLE001 - a readiness probe never raises
+        return None
+
+
+def _cdp_setup(ui, hosts: list[str], yes: bool) -> None:
+    """Write the two gates and print the boundary this command is turning on.
+
+    Attach is the one capability in dhole that hands over *authenticated read
+    access to every site logged into that browser*, which is a bigger deal than
+    the write confirmations elsewhere: those cover a known action, this covers
+    unknown reads. So the command refuses to turn it on without naming hosts --
+    the fence is the point, not an extra.
+    """
+    from dhole_mcp import env_registry as er
+    from dhole_mcp import paths
+
+    print()
+    print(ui.cyan("cdp attach") + ui.dim(
+        " - the fetch runs inside YOUR Chrome, with its logged-in cookies"))
+    print("  " + ui.dim("hosts this command will allow (exact hostnames):"))
+    for host in hosts:
+        print("    " + ui.cmd(host))
+    print("  " + ui.dim("subdomains and third-party assets are NOT covered - a page "
+                        "that loads scripts from cdn.example.net needs that host named "
+                        "too, or those requests are aborted at the route level"))
+
+    # The env block outranks the file, on purpose - so a name already set there is
+    # reported rather than shadowed by a write that would look like a setting.
+    existing_env = {n: er.source_of(n) for n in ("DHOLE_CDP_ATTACH", "DHOLE_CDP_HOSTS")}
+    merged = list(hosts)
+    for host in _cdp_hostnames(er.value_of("DHOLE_CDP_HOSTS") or ""):
+        if host not in merged:
+            merged.append(host)
+    if merged != hosts:
+        print("  " + ui.dim(f"merged with the allowlist already set -> {len(merged)} host(s): ")
+              + ui.cmd(",".join(merged)))
+
+    for name in ("DHOLE_CDP_ATTACH", "DHOLE_CDP_HOSTS"):
+        if existing_env[name] == "env":
+            print("  " + ui.dim(f"{name} already set in the host's env block (env wins) "
+                                "- nothing to write"))
+
+    to_write = {"DHOLE_CDP_HOSTS": ",".join(merged)}
+    if existing_env["DHOLE_CDP_ATTACH"] != "env":
+        to_write["DHOLE_CDP_ATTACH"] = "1"
+    if not yes:
+        print("  " + ui.dim("dry-run: would write ") + ui.cmd(
+            "; ".join(f"{k}={v}" for k, v in to_write.items()))
+              + ui.dim(f" to {er.config_path().name} (add --yes)"))
+    else:
+        for name, value in to_write.items():
+            er.set_entry(name, value)
+            print("  " + ui.ok(f"{name} -> {er.config_path().name}"))
+        print("  " + ui.dim("read per call - no host restart needed"))
+
+    listening = _cdp_endpoint_listening()
+    if listening is True:
+        print("  " + ui.ok(f"a debug endpoint is listening on 127.0.0.1:{CDP_DEFAULT_PORT}")
+              + ui.dim("  (nothing was requested from it - the check is a TCP connect)"))
+    elif listening is None:
+        print("  " + ui.dim(f"could not check 127.0.0.1:{CDP_DEFAULT_PORT} from here - "
+                            "not a verdict, start the browser and try a call"))
+    else:
+        print("  " + ui.warn(f"nothing is listening on 127.0.0.1:{CDP_DEFAULT_PORT} yet"))
+    profile = paths.home() / "cdp-profile"
+    print("  " + ui.dim("the browser has to be started by YOU (Chrome 136+ refuses "
+                        "debugging on the default profile):"))
+    print("    " + ui.cmd(f'chrome --user-data-dir="{profile}" '
+                          f"--remote-debugging-port={CDP_DEFAULT_PORT}"))
+    print("  " + ui.dim("log into the target site in that window once, then the call is "
+                        "per-call, e.g."))
+    print("    " + ui.cmd('{"url": "https://' + (hosts[0] if hosts else "portal.example.com")
+                          + '/dashboard", "options": {"cdp_url": "http://127.0.0.1:'
+                          + str(CDP_DEFAULT_PORT) + '", "check_login": true}}'))
+    print("  " + ui.dim("every attach says cdp_attached=true in its response and is "
+                        "audit-logged; cookie VALUES never leave the browser (check_login "
+                        "reports names only). DataDome / Akamai / interactive Turnstile / "
+                        "2FA are still the user's to solve"))
+    if yes and not listening:
+        print("  " + ui.dim("-> next: start that window, then `dhole init --probe` or one "
+                            "real cdp_url call to prove it end to end"))
+
+
 
 def _ms(value) -> str:
     """A wall-clock duration the way a human reads it.
@@ -325,8 +512,9 @@ def _reranker_model(ui, yes: bool) -> None:
         reranker = asyncio.run(_rr.ensure_reranker(download=True))
     except Exception as exc:  # noqa: BLE001 - a failed fetch is reported, not raised
         print("  " + ui.warn(f"reranker download failed: {type(exc).__name__}: {exc}")
-              + ui.dim("  -> it retries on the next neural search; "
-                       "DHOLE_NEURAL_FOCUS stays off until it lands"))
+              + ui.dim("  -> the flag is written, so neural focus calls will name "
+                       "this gap until the model lands (it retries on the first "
+                       "neural search, or re-run this command with --yes)"))
         return
     if reranker is None:
         print("  " + ui.warn("reranker could not be loaded after the download - "
@@ -346,6 +534,11 @@ def run_init(argv: list[str]) -> int:
       3.5 With --tasks / --vault / --neural, enable the gated capabilities
           through ~/.dhole/config.json (the file door from W11 - no host JSON
           edit). --neural additionally fetches the reranker the flag needs.
+      3.7 With --cdp <host>,host, turn CDP attach on AND fence it to those
+          hosts, print the browser launch line, and check whether a debug
+          endpoint is actually listening. The hosts are validated before
+          anything is written or downloaded: half a command is a half-installed
+          security boundary.
       4. Detect installed MCP clients.
       5. Print the planned JSON (dry-run default).
       6. If ``--yes``, back up + write each config.
@@ -361,15 +554,34 @@ def run_init(argv: list[str]) -> int:
             "--neural": "DHOLE_NEURAL_FOCUS"}
     enable = [env for flag, env in want.items() if flag in argv]
     unknown = [a for a in argv
-               if a.startswith("-") and a not in ("--yes", "-y", "--probe", *want)]
+               if a.startswith("-") and a not in ("--yes", "-y", "--probe", *want)
+               and a != "--cdp" and not a.startswith("--cdp=")]
     if unknown:
         # A flag that is silently ignored is how "I typed --task and nothing
         # happened" becomes a support conversation.
         from dhole_mcp import cli_ui as _ui
         print(_ui.err(f"unknown flag(s): {' '.join(unknown)} "
-                      "(try: --yes, --probe, --tasks, --vault, --neural)"))
+                      "(try: --yes, --probe, --tasks, --vault, --neural, --cdp <host>)"))
         return 2
     from dhole_mcp import cli_ui as ui
+
+    # --cdp is validated up front, before the Chromium download and before any
+    # write: this flag turns on a security boundary, so "it failed at host 2 of
+    # 3, ATTACH is already on" is the one outcome this command must not produce.
+    cdp_raw = _take_value(argv, "--cdp")
+    cdp_hosts: list[str] = []
+    if cdp_raw is not None:
+        if not cdp_raw.strip():
+            print(ui.err("usage: dhole init --cdp <host>[,<host>...] - at least one "
+                         "host is required, because attaching your browser without a "
+                         "host fence is not something this command offers (set the two "
+                         "variables yourself if you really want the un-fenced shape)"))
+            return 2
+        try:
+            cdp_hosts = _cdp_hostnames(cdp_raw)
+        except CdpHostError as exc:
+            print(ui.err(f"refused: {exc}"))
+            return 2
 
     print(ui.branded(ui.cyan("dhole init")))
 
@@ -458,6 +670,10 @@ def run_init(argv: list[str]) -> int:
     # answers neural_focus_model_missing.
     if "--neural" in argv:
         _reranker_model(ui, yes)
+
+    # 3.7 CDP attach: the two gates plus the boundary they draw, said out loud.
+    if cdp_hosts:
+        _cdp_setup(ui, cdp_hosts, yes)
 
     # 4. Client detection.
     found = _existing_client_configs()

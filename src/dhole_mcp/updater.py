@@ -1096,6 +1096,30 @@ def _append_config_audit(checks: list[tuple[str, str, str, str]]) -> None:
             msg = f"{raw!r} is {why} - using default {default}"
             checks.append((name, "fail", msg, _fix_line_for(entry)))
 
+    # The one setting where "it works" and "it is safe" are different
+    # statements: with attach enabled and no host fence, every request the
+    # attached browser makes carries the cookies of every site the user is
+    # logged into. That is a legal configuration, so it is not a failure - but
+    # a health check that stayed silent about it would be checking the wrong
+    # thing.
+    if _reg.read_flag("DHOLE_CDP_ATTACH", default=False, fail_safe=True):
+        if not (_reg.value_of("DHOLE_CDP_HOSTS") or "").strip():
+            checks.append((
+                "cdp fence", "info",
+                "attach is ON with an empty DHOLE_CDP_HOSTS - navigation is not "
+                "fenced, and every attached request carries your logged-in cookies",
+                "dhole init --cdp <host>[,<host>...]  (names the hosts, "
+                "merges the list, exact-hostname match)"))
+        else:
+            n = len([h for h in (_reg.value_of("DHOLE_CDP_HOSTS") or "")
+                     .replace(";", ",").split(",") if h.strip()])
+            checks.append((
+                "cdp fence", "info",
+                f"attach is ON, fenced to {n} exact "
+                f"{'hostname' if n == 1 else 'hostnames'} "
+                "(subdomains and third-party asset hosts need their own entry)",
+                ""))
+
     checks.append((
         "config", "ok",
         f"{len(set_entries)} of {total} variables set "
