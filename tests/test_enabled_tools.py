@@ -60,9 +60,10 @@ class TestTheEnvVarIsParsed:
         payload = json.loads(out.stdout)
         assert payload["enabled"] == sorted(
             n.strip() for n in value.split(",") if n.strip())
-        assert len(payload["all"]) == 13, \
-            "全集是 13 个工具（16.0 补上 close_session，L3/L4 补上 recipe/watch，" \
-            "凭据/登录流补上 vault/login）；默认关闭的也留在这里，守卫继续覆盖它们"
+        assert len(payload["all"]) == 14, \
+            "全集是 14 个工具（16.0 补上 close_session，L3/L4 补上 recipe/watch，" \
+            "凭据/登录流补上 vault/login，文档通道补上 dhole_doc）；" \
+            "默认关闭的也留在这里，守卫继续覆盖它们"
 
     @pytest.mark.parametrize("value", [None, "", "   "])
     def test_unset_means_every_tool_except_the_opt_in_ones(self, value):

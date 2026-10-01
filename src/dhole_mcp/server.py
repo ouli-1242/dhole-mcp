@@ -609,6 +609,9 @@ DHOLE_INSTRUCTIONS = (
     "their password manager holds - never the values.\n"
     "- Signing in with a stored credential: login (call once to see the plan, "
     "again with confirm=true to run it).\n"
+    "- Unsure how to write a call, what a field means, or why something failed: "
+    "dhole_doc(topic) reads dhole's own handbook - one call, no setup, and the "
+    "deep syntax of actions / schema / options lives there.\n"
     "Reading any response:\n"
     "- A field that is ABSENT is at its default: no is_truncated means not "
     "truncated, no cached means not cached. Only what changed or what you must "
@@ -668,6 +671,9 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "lists what their password manager holds - never the values.\n",
     "login": "- Signing in with a stored credential: login (call once to see the "
     "plan, again with confirm=true to run it).\n",
+    "dhole_doc": "- Unsure how to write a call, what a field means, or why something failed: "
+    "dhole_doc(topic) reads dhole's own handbook - one call, no setup, and the deep "
+    "syntax of actions / schema / options lives there.\n",
 }
 _INSTRUCTIONS_RULES = (
     "Reading any response:\n"
@@ -4819,6 +4825,9 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     "login": frozenset({"url", "credential", "source", "session_id",
                         "username_index", "password_index", "submit_index",
                         "confirm", "timeout", "allow_private"}),
+    # 文档通道。总是注册：它不在两个 opt-in 组里，也不该在 —— 一个需要开关才
+    # 能读到的说明书，等于没有说明书。
+    "dhole_doc": frozenset({"topic", "section"}),
 }
 
 
@@ -8984,6 +8993,21 @@ class MasterFetchServer:
 
     # ─── Serve ─────────────────────────────────────────────────────
 
+    async def dhole_doc(self, topic: str = "", section: str = "") -> str:
+        """Serve one handbook volume from the packaged skill corpus.
+
+        Same files ``dhole skill install`` copies to the host's skills
+        directory, and nothing here paraphrases them, so the wire and the
+        installed skill cannot tell an agent two different stories about one
+        parameter. Read-only, no network, no state: an unknown topic or an
+        unmatched section answers with what IS available rather than an error,
+        because the useful result of a wrong guess about documentation is the
+        map.
+        """
+        from dhole_mcp import guide
+        header, body = guide.read(topic, section)
+        return f"{header}\n\n{body}"
+
     # Minimal hand-crafted tool definitions — no Pydantic schema bloat.
     # Saves ~69% tokens vs FastMCP auto-generated schemas.
     # ─── THE WIRE CONTRACT ──────────────────────────────────────────────
@@ -8997,7 +9021,7 @@ class MasterFetchServer:
     _TOOL_DEFS: list[dict] = [
         {
             "name": "smart_fetch",
-            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: smart_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: when the live site hard-blocks, content_ok can be true of a dated Wayback snapshot (check source + archived_at). No parameter disables it; costs 10-30s.\n- Everything but url has a home in options (its description lists them all); a top-level copy is read too, and wins when both are given.",
+            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: smart_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: when the live site hard-blocks, content_ok can be true of a dated Wayback snapshot (check source + archived_at). No parameter disables it; costs 10-30s.\n- Everything but url has a home in options (its description lists them all); a top-level copy is read too, and wins when both are given.\n- The exact shape of actions, schema and the browser/session knobs is NOT in this description: dhole_doc(topic='behavior') reads dhole's own handbook, and dhole_doc(topic='call') the placement traps. Read one before writing the other.",
             "inputSchema": {
                 "type": "object",
                 # smart_fetch needs one of the two; the schema said nothing at
@@ -9028,9 +9052,9 @@ class MasterFetchServer:
                     "password": {"type": "string", "description": "PDF only: password for an encrypted PDF."},
                     "focus": {"type": "string", "description": "Return only blocks matching this query - the big token saver on long pages. Applied after the cache, so it does not re-fetch. Re-pass the same focus when paginating. Scored with BM25, or with a slower local cross-encoder if the operator enabled it - that path costs ~12.5s of CPU PER PAGE, so budget timeout for bulk calls."},
                     "focus_mode": {"type": "string", "enum": ["filter", "best"], "description": "Shape of the focus answer. 'filter' (default) keeps every block past the relevance cut; 'best' returns only the single highest-scoring block plus its heading - 'which part of this page answers the question'. Requires focus."},
-                    "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "Interactions on the stealthy browser after load, before extraction (forces stealthy, bypasses cache). ONE action key per object: [{scroll:3},{wait:1000}], not {scroll:3,wait:1000}. Items: {click:'css'} or {click:{index:N}}, {fill:{selector,text}} or {fill:{index,text}}, {press:'Enter'}, {press:{selector,key}} or {press:{index,key}}, {wait:ms}, {scroll:n} or {scroll:{steps:5,selector:'.feed',ms_per_step:3000}}, {wait_selector:'css'} or {wait_selector:{selector:'.quote',count:40,state:'visible'}}, {snapshot:true}, {screenshot:{selector:'css',decode_qr:true}} (needs DHOLE_MULTIMODAL=1), {submit:{selector|index, confirm?}}.\nsnapshot returns a numbered interactive-element list (index/tag/role/name, capped + truncated flag) in metadata.actions; act on it with {click:{index:N,expect:'name'}} - expect verifies the element's name before acting, so a stale index fails loudly instead of clicking the wrong thing.\nsubmit is an explicit irreversible step: without confirm:true it PAUSES (pending_approval row, nothing submitted) until you ask the user and re-run with confirm:true. scroll reaches the bottom then waits for the page to STOP GROWING (a lazy feed moves the bottom each time it loads); max 20s of the budget. wait_selector.count waits for that many matches, not just the first."},
-                    "schema": {"type": "object", "description": "{properties: {...}} (a JSON string is accepted): CSS-driven structured extraction, returned instead of markdown. Each property may carry 'selector' (CSS) and/or 'attribute' (that attribute's value instead of the text). Without \"type\" a property returns the FIRST match; \"type\": \"array\" returns all of them. A property with its OWN 'properties' (or items.properties) plus a selector extracts one record PER MATCHED ELEMENT, child selectors evaluated inside it - that keeps a repeated list grouped instead of flattened. Up to 200 records per field. A nested field that also says \"type\": \"array\" MUST give that selector, naming the container being iterated, or the call is rejected. Only those keys are read - any other JSON-Schema keyword is accepted and does nothing, so one value where you wanted all means a missing \"type\": \"array\", not a different keyword.", "additionalProperties": True},
-                    "options": {"type": "object", "description": "Every parameter of this tool except url may go here; cache_ttl, offset, focus, actions, extraction_type, force_fetcher, pages, schema and urls are accepted in the bag too (top level still wins when both are given).\ninclude_links: response.links = {citations, navigation, external, primary_source, total_found, is_truncated}; citations are the page's own source chain.\nmax_links: cap per links list, 1-100 (default 30/20/20). include_media: up to 20 image URLs.\nignore_robots: skip the robots.txt check for this call.\nsession_id: names a cookie jar (1-64 chars); that host's cookies carry to the next call naming the same id, so a login can be followed by the pages behind it. A login carries across both tiers. session_cookie_names lists the names, never the values.\nallow_private: fetch hosts the SSRF guard blocks; true = loopback only, or a list like ['my-service.local']. Cloud metadata endpoints are never allowed.\nmethod: GET|HEAD|POST|PUT|DELETE|PATCH. HEAD asks for status+size+type with no body. A write is sent once: never retried, cached, browser-escalated or archive-answered.\nbody: max 256KB; a dict is sent as a form, or as JSON when content_type says json, a string as-is. content_type: the body's media type.\nauth: {type:'basic',username,password} | {type:'bearer',token} | {type:'header',name,value}. Bound to the host you named: a redirect or a third-party subresource never receives it, and a credentialed answer is cached per credential rather than publicly.\nif_modified_since / if_none_match: conditional GET - a date (HTTP-date or ISO-8601; a bare date = midnight UTC) or an etag from response.cache_validators (quotes optional, '*' = any current version). HTTP tier only; it neither reads nor fills dhole's cache.\nproxy: an unreachable one returns error='proxy_unreachable' before any request.\ncookies: [{name,value}] or 'a=1; b=2'. Also extra_headers, useragent, wait (ms), network_idle (SPAs), headless. Anti-detect keys are pre-tuned - do not override them.\ncdp_url: attach the user's real Chrome for THIS call (browser tier forced, cache bypassed). Requires DHOLE_CDP_ATTACH=1 and is fenced by DHOLE_CDP_HOSTS; the reply says cdp_attached=true.\ncheck_login: true adds login_check = {logged_in: true|false|null, signals, cookie_names} - DOM shape + cookie NAMES, no model, no values.", "additionalProperties": True},
+                    "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "Interactions on the stealthy browser after load, before extraction (forces stealthy, bypasses cache). ONE action key per object: [{scroll:3},{wait:1000}], not {scroll:3,wait:1000}. Keys: click, fill, press, wait, scroll, wait_selector, snapshot, screenshot, submit - each takes a CSS selector or a snapshot index; {snapshot:true} returns the numbered interactive-element list (index/tag/role/name) to take indices from, and expect:'name' verifies an element's visible name before acting, so a stale index fails loudly instead of clicking the wrong thing.\nsubmit is the explicit irreversible step: without confirm:true it PAUSES (a pending_approval receipt, nothing submitted) until the user has approved that exact submission. The full shape of each key, the lazy-feed and captcha discipline: dhole_doc(topic='behavior', section='Page interaction')."},
+                    "schema": {"type": "object", "description": "{properties: {...}} (a JSON string is accepted): CSS-driven structured extraction, returned instead of markdown. Only these keys are read - selector, attribute, type, properties, items; any other JSON-Schema keyword is accepted and does nothing. Each property may carry 'selector' (CSS) and/or 'attribute' (that attribute's value instead of the text). Without \"type\" a property returns the FIRST match; \"type\": \"array\" returns all of them. A property with its OWN 'properties' (or items.properties) plus a selector extracts one record PER MATCHED ELEMENT, child selectors evaluated inside it - that keeps a repeated list grouped instead of flattened. Up to 200 records per field; a nested \"type\": \"array\" must name the container it iterates or the call is rejected. The rule and a worked example: dhole_doc(topic='behavior', section='Structured extraction').", "additionalProperties": True},
+                    "options": {"type": "object", "description": "Every parameter of this tool except url may go here. The keys: extraction_type, css_selector, max_content_chars, timeout, cache_ttl, force_fetcher, offset, pages, password, focus, focus_mode, schema, actions, urls, include_links, max_links, include_media, main_content_only, use_trafilatura, method, body, content_type, auth, cookies, extra_headers, proxy, useragent, session_id, check_login, cdp_url, ignore_robots, allow_private, if_modified_since, if_none_match, wait, network_idle, headless, real_chrome, hide_canvas, block_webrtc, solve_cloudflare.\nFive of them carry a trap:\nmethod: a non-GET is sent ONCE - never retried, cached, browser-escalated or archive-answered, because the previous call may already be committed and re-sending writes twice. body cap 256KB; HEAD asks for status+size+type with no body.\nauth / cookies / session_id: credentials go only to the origin you named, and a redirect to another domain strips them. Values are never echoed back, and a credentialed body is cached per credential rather than publicly.\nif_none_match / if_modified_since: conditional GET on the HTTP tier only; a 304 is SUCCESS (not_modified=true, empty body) - do not escalate it to the browser to 'retry'.\nallow_private: true = loopback only, or a host list. Cloud metadata endpoints are never allowed under any setting.\ncdp_url: runs the fetch in the user's own Chrome; needs DHOLE_CDP_ATTACH=1, fenced by DHOLE_CDP_HOSTS, and the answer says cdp_attached=true.\nheadless, useragent, extra_headers, network_idle, real_chrome, hide_canvas, block_webrtc, solve_cloudflare, use_trafilatura, main_content_only are fingerprint and extraction internals, already tuned - overriding them usually makes a site detect you, so leave them unset unless something names one. What every key does and its range: dhole_doc(topic='behavior'). Placement with counterexamples: dhole_doc(topic='call').", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -9221,6 +9245,25 @@ class MasterFetchServer:
             },
             "annotations": {"readOnlyHint": False, "destructiveHint": True,
                             "idempotentHint": False, "openWorldHint": True},
+        },
+        # 文档通道（计划：上手成本）。它的存在理由是这条测量：tools/list +
+        # instructions 每次连接由每个客户端付，一次调用只由问的那个人付。所以
+        # 常驻文本只留路由与硬约束，解释性长文留在随包的 skills/dhole-web/ 里
+        # 由 dhole_doc 原样送出 —— 同一份语料两个门，`dhole skill install` 给
+        # 会加载 skill 的宿主，这个门不要安装、不要配置、不要重启。
+        # 内容源与 topic 注册表由 guide.py 与 tests/test_guide.py 双向钉住。
+        {
+            "name": "dhole_doc",
+            "description": "Read dhole's own handbook, one volume per call: how to write a call, what a response field means, how to fix a failure, which knob to configure. The deep syntax of actions, schema and options lives HERE rather than in the tool descriptions - read it before guessing at those. An empty or wrong topic answers with the topic list instead of an error.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "start = tool choice + hard constraints. call = how to write a call (placement, patterns). fields = response field dictionary. behavior = fetch escalation, page actions, schema extraction, search engines, crawl economics. fix = symptom-indexed troubleshooting. config = every knob by scenario. recipes = multi-step sequences. The volume's own file name is accepted as an alias."},
+                    "section": {"type": "string", "description": "One heading inside the volume, matched case-insensitively (e.g. 'actions', 'PDF', 'engine matrix'). No match answers with the headings that exist."},
+                },
+            },
+            "annotations": {"readOnlyHint": True, "idempotentHint": True,
+                            "openWorldHint": False},
         },
     ]
 
@@ -9651,6 +9694,14 @@ class MasterFetchServer:
                 allow_private=args.get("allow_private"),
             )
             return _wire_result(result)
+
+        elif name == "dhole_doc":
+            # A bare text channel rather than _wire_result: putting markdown
+            # inside JSON escapes every newline (~2 chars each) and buys no
+            # field to read. The document is the answer, so it rides as text.
+            text = await self.dhole_doc(topic=args.get("topic", "") or "",
+                                        section=args.get("section", "") or "")
+            return [TextContent(type="text", text=text)]
 
         else:
             raise ValueError(f"Unknown tool: {name}")
