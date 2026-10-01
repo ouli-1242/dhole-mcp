@@ -40,6 +40,8 @@ from __future__ import annotations
 import os
 import sys
 
+from dhole_mcp import env_registry
+
 from dhole_mcp import paths
 
 __all__ = [
@@ -970,6 +972,121 @@ def print_capabilities() -> None:
         pass
 
 
+def _config_effective_value(entry, raw: str) -> str:
+    """W2 · how to display a value the operator has set, WITHOUT echoing
+    the raw string for kinds where the raw itself is sensitive.
+
+    ``secret`` - the four API keys - never appears in doctor output; only
+    ``set (len=N)``. ``hostlist / path / url / str`` also skip the echo
+    because a hostname / filesystem path / URL / package name is
+    user-specific state that doctor should not lift onto the terminal or
+    into a bug-report paste. ``int``/``float``/``flag`` show the parsed
+    effective value (a number, or ``on``/``off``) - safe, and matches
+    "生效值" in the plan's format.
+
+    A raw string is echoed only for invalid entries (see the ``fail``
+    branch in ``_append_config_audit``), because the operator needs to
+    see the typo to fix it.
+    """
+    from dhole_mcp import env_registry as _reg
+    kind = entry.kind
+    if kind == "secret":
+        return f"set (len={len(raw)})"
+    if kind == "flag":
+        v = raw.strip().lower()
+        if v in _reg.ON_TOKENS:
+            return "on"
+        if v in _reg.OFF_TOKENS or v == "":
+            return "off"
+        return "on"   # non-fail-safe flags still resolve to True (see _env_flag)
+    if kind in ("int", "float"):
+        try:
+            val = float(raw)
+            if kind == "int":
+                return str(int(val))
+            return f"{val:g}"
+        except (TypeError, ValueError):
+            return raw  # invalid path already covered; keep display stable
+    if kind == "hostlist":
+        parts = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
+        return f"{len(parts)} entries" if parts else "empty"
+    # str / path / url / enum: presence indicator only.
+    return "set"
+
+
+def _fix_line_for(entry) -> str:
+    """Actionable repair wording for a config-audit failure.
+
+    Mirrors the plan's W2 example verbatim:
+    ``fix: set DHOLE_DEFAULT_CONTENT_CHARS to an integer in 500..200000, or unset it``
+    """
+    kind = entry.kind
+    if kind == "int":
+        rng = f" in {entry.bounds[0]}..{entry.bounds[1]}" if entry.bounds else ""
+        return f"set {entry.name} to an integer{rng}, or unset it"
+    if kind == "float":
+        rng = (f" in {entry.bounds[0]:g}..{entry.bounds[1]:g}"
+               if entry.bounds else "")
+        return f"set {entry.name} to a number{rng}, or unset it"
+    if kind == "flag":
+        return (f"set {entry.name} to one of 1/true/yes/on or "
+                f"0/false/no/off/none/null, or unset it")
+    return f"unset {entry.name}, or set it to a valid value"
+
+
+def _append_config_audit(checks: list[tuple[str, str, str, str]]) -> None:
+    """W2 · add one row per DHOLE_* variable the operator actually set.
+
+    Unset variables are skipped - 39 rows of "unset" is noise the plan
+    explicitly wants to avoid. Rows are grouped by scenario (env name is
+    secondary sort) so someone debugging "why did my proxy setting not
+    take" reads them in a coherent order rather than in registry order.
+
+    Invalid values go into the shared ``checks`` list with state ``fail``
+    so ``doctor``'s top-line counter and its ``1 if failures else 0``
+    exit code both see them; valid values use state ``info`` (visible,
+    not alarming). A single summary line uses state ``ok`` so a fully
+    clean machine still reads green.
+    """
+    from dhole_mcp import env_registry as _reg
+
+    set_entries: list[tuple[str, str, object, str]] = []
+    for entry in _reg.ALL:
+        raw = os.environ.get(entry.name)
+        if raw is None or raw.strip() == "":
+            continue
+        set_entries.append((entry.scenario, entry.name, entry, raw))
+
+    total = len(_reg.ALL)
+    if not set_entries:
+        checks.append((
+            "config", "ok",
+            f"none set - dhole runs on defaults ({total} available)",
+            "",
+        ))
+        return
+
+    set_entries.sort(key=lambda x: (x[0], x[1]))
+    for _scenario, name, entry, raw in set_entries:
+        ok, why = _reg.is_valid_value(entry, raw)
+        timing = ("  (read at startup - restart the host to change)"
+                  if entry.read_at == "import" else "")
+        if ok:
+            detail = _config_effective_value(entry, raw) + timing
+            checks.append((name, "info", detail, ""))
+        else:
+            default = entry.default or "the default"
+            msg = f"{raw!r} is {why} - using default {default}"
+            checks.append((name, "fail", msg, _fix_line_for(entry)))
+
+    checks.append((
+        "config", "ok",
+        f"{len(set_entries)} of {total} variables set "
+        f"(run dhole --doctor after editing the host's env block)",
+        "",
+    ))
+
+
 def doctor() -> int:
     """Proactive health check: diagnose a half-broken install and name the fix.
 
@@ -1099,11 +1216,23 @@ def doctor() -> int:
     except Exception as exc:  # noqa: BLE001
         checks.append(("proxy pool", "info", f"check failed: {exc}"[:60], ""))
 
+    # ── config audit (W2) ────────────────────────────────────────────────
+    # The whole section runs inside try/except because a doctor() that
+    # raises is worse than a doctor() with a missing section - the tests
+    # test_never_raises_and_returns_an_exit_code and the plan's W2 "doctor
+    # 依然绝不许抛异常" clause both pin this.
+    try:
+        _append_config_audit(checks)
+    except Exception as exc:  # noqa: BLE001
+        checks.append(("config audit", "info", f"skipped: {exc}"[:60], ""))
+
     # ── render ───────────────────────────────────────────────────────────
     failures = [c for c in checks if c[1] == "fail"]
     head = (ui.err(f"{len(failures)} issue(s) found") if failures
             else ui.ok("all healthy"))
     print(ui.branded(head))
+    label_width = max((len(c[0]) for c in checks), default=21)
+    label_width = max(21, min(32, label_width))
     for label, state, detail, fix in checks:
         if state == "ok":
             mark = ui._sty(ui._glyph("\u2713", "+"), ui._GREEN)
@@ -1111,7 +1240,7 @@ def doctor() -> int:
             mark = ui._sty(ui._glyph("\u2717", "x"), ui._RED)
         else:
             mark = ui._sty(ui._glyph("!", "!"), ui._MAGENTA)
-        print(f"  {mark} {label:<21} {ui.dim(_short(detail))}")
+        print(f"  {mark} {label:<{label_width}} {ui.dim(_short(detail, w=180))}")
         if fix:
             print(f"      {ui.dim('fix:')} {ui.cmd(fix)}")
 
