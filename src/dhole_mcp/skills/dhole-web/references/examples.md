@@ -183,3 +183,35 @@ Multimodal agents receive the image inline; text-only agents read the absolute p
 // close_session: no args = session roster; name one to forget it; all=true clears everything
 {"all": true}
 ```
+
+## The opt-in four (registered only when the operator enabled them)
+
+`recipe` / `watch` need `DHOLE_TASKS=1`; `vault` / `login` need `DHOLE_VAULT=1`. All four take **top-level parameters only** — there is no `options` bag.
+
+```json
+// recipe: record a chain once — validated at save time by the same validator the executor uses,
+// so a chain that would be refused at run time cannot be stored
+{"op": "save", "name": "price-watch", "url": "https://shop.example.com/item",
+ "actions": [{"click": {"index": 12, "expect": "Show price"}}], "note": "reveals the member price"}
+// replay it (session_id is per-run and never stored); a non-zero actions_failed means the page changed — re-save
+{"op": "run", "name": "price-watch", "session_id": "sess1"}
+// see what is stored (use_count / last_ok show a stale recipe without running it); forget one
+{"op": "list"}
+{"op": "delete", "name": "price-watch"}
+
+// watch: add, then check. The FIRST check only stores the baseline and answers changed=null
+{"op": "add", "name": "changelog", "url": "https://example.com/changelog", "focus": "release notes"}
+{"op": "check", "name": "changelog"}
+{"op": "list"}
+{"op": "remove", "name": "changelog"}
+
+// vault: which manager answered, then the items that fit a host — metadata only, never values
+{"op": "status"}
+{"op": "match", "url": "https://portal.example.com/login"}
+{"op": "list", "query": "portal", "source": "bitwarden"}
+
+// login: step 1 detects the form and fills NOTHING (pending_approval) — show this plan to the user
+{"url": "https://portal.example.com/login", "credential": "portal", "session_id": "sess1"}
+// step 2, only after the user approves: the SAME arguments plus confirm=true
+{"url": "https://portal.example.com/login", "credential": "portal", "session_id": "sess1", "confirm": true}
+```

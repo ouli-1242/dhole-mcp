@@ -57,6 +57,7 @@ playwright install chromium      # 反检测浏览器引擎（~150MB，完整版
 4. 让用户重启 agent。重启后应能看到 smart_fetch / smart_search / smart_crawl /
    screenshot / parse / feed_fetch / resolve_url / cache_clear / close_session 九个工具，
    最后运行 dhole --doctor 确认检查项通过。
+   （另有 recipe / watch / vault / login 四个工具**默认关闭**，由 DHOLE_TASKS / DHOLE_VAULT 打开，见「配置」。）
 5. 可选：运行 dhole skill install 把随包分发的 agent 技能装到 ~/.agents/skills/dhole-web
    （教 agent 怎么选工具、防坑与排查的手册；宿主重启后生效）。
 ```

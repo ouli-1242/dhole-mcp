@@ -83,6 +83,22 @@ Tool descriptions cover parameters; this volume covers **how the tools actually 
 
 **close_session**: no args = the roster (id, hosts, cookie names, time to expiry, browser open or not); cookie values never leave the process.
 
+## The opt-in tools (recipe / watch / vault / login)
+
+These four exist only when the operator enabled them: `recipe` + `watch` behind `DHOLE_TASKS=1`, `vault` + `login` behind `DHOLE_VAULT=1` (either group may also be named in `DHOLE_TOOLS`). Absent from `tools/list` = off; an error naming one of those vars is the same fact one call later. Their schemas cost ~2.6k + ~3.1k chars at connect time, which is why they are not in the default table. State lives in `~/.dhole/tasks.db` (recipes, watch baselines) and holds no credentials.
+
+**recipe — record a way to reach a page, then replay it.** `op=save` stores a `{url, actions, note}` triple; `op=run` fetches that url with those actions; `op=list` shows every recipe with `use_count` / `last_ok` (a stale one is visible without running it); `op=delete` forgets one. The action chain is validated **at save time** by the same validator the executor uses, so a chain that would be refused at run time cannot be stored — a rejected `save` is a real signal, not a formality. `run` returns the whole fetch in `result` (same wire compaction as `smart_fetch`) plus `outcomes`, one receipt per action, so a broken step is visible without digging into `result.metadata`. **`actions_failed` non-zero = the page changed under the recipe** — re-derive the steps with a snapshot and re-save; do not keep replaying it. `session_id` is a per-run argument, never stored in the recipe (a stored session id would be a stored credential).
+
+**watch — diff a page against its last snapshot.** `op=add` stores the url (+ optional `focus` and `max_chars`), `op=check` fetches it fresh and diffs the text, `op=list` / `op=remove` manage them. Three fields carry the semantics:
+- `changed` is **tri-state**: `true` / `false` when compared, **`null` on the first check** (`baseline_created: true`). A missing baseline is not "no change" — reporting the first run as unchanged invents a fact, so `changed` is deliberately never omitted from the wire.
+- `added` / `removed` count the **whole** change even when `diff_truncated` is set (the diff text is capped, the counts are not).
+- `baseline_cut` means the stored snapshot hit `max_chars`, so a later diff can miss content past the cut — widen `max_chars` and re-baseline for a long page.
+A failed fetch leaves the baseline **untouched** and puts the reason in `error` — a transient outage never silently re-baselines (which would hide the very change you are watching for). Pass `focus` for a long page whose chrome changes on every load.
+
+**vault — read the user's OWN password manager, metadata only.** Reads the Bitwarden (`bw`) / 1Password (`op`) CLIs; it never creates or stores credentials. `op=status` reports per-manager `{available, unlocked, detail, hint}`; `op=list` returns item metadata (`id` / `name` / `username` / `has_password` / `has_totp` / `uris` / `source`, capped at 300); `op=match` returns the items whose stored URI matches the given URL's host (dot-bounded suffix match, so `example.com` does not match `notexample.com`). **There is no field here that can hold a password or a TOTP secret** — the response shape makes leaking one impossible instead of relying on remembering to redact. What it can say is `has_password: true`, which is all that picking a credential needs. A manager that is simply absent is a `notes` entry (carrying its install step), not an `error`. `status`'s `unlocked` is `null` when the CLI is not installed — "not asked" is not "locked".
+
+**login — sign in with a stored credential, in two calls.** Call it **without `confirm`** first: it opens the page, detects the username / password / submit controls, and returns `pending_approval: true` with `fields` + `plan` — **nothing is filled, nothing is submitted**. Re-call with the same arguments plus `confirm=true` after the user approves; only then does it fill and submit. The gate covers *fill* as well as submit, because typing into a page fires its input events and a hostile page can exfiltrate a value the moment it is typed. The password is read server-side from the vault and **never enters the response, the transcript, or any log** — the receipt names the vault item instead. Afterwards `logged_in` is the same model-free DOM + cookie-NAME probe as `smart_fetch`'s `check_login`, and it is **tri-state**: `null` means the probe could not answer, which is not `false`. Cookies are kept under the `session_id` you pass, so later fetches reuse the session. CAPTCHA / 2FA are **not** solved — hand those back to the user. Override detection with `username_index` / `password_index` / `submit_index` when the form is unusual.
+
 ## Local data and privacy (~/.dhole, relocatable via DHOLE_HOME)
 
 | Location | Contents |
@@ -92,6 +108,7 @@ Tool descriptions cover parameters; this volume covers **how the tools actually 
 | `models/<name>/` | Rerank models (copy the whole directory for offline reuse) |
 | `config/reranker.json` | Rerank model selection |
 | `search_proxies.json` | Proxy pool, **credentials stored in plaintext** (masked in `list` output) |
+| `tasks.db` | With `DHOLE_TASKS=1`: recorded recipes (`url` + `actions`) and watch baselines (page text). **No credentials** — a recipe stores the chain, never a session id |
 | `usage.jsonl` | With `DHOLE_USAGE_LOG=1`: call log (tool / duration / redacted errors) plus the audit channel — attach events, HTTP writes (non-GET), browser submits (names and outcome only, never parameter values) |
 
 No telemetry: nothing leaves the process except traffic to the sites you point it at. Nuke `~/.dhole` for a full cleanup.

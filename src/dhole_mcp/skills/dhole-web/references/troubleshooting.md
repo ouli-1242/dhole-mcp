@@ -62,7 +62,25 @@ The response distinguishes "credentials rejected" (supply a fresh token) from "n
 
 ### Sites behind login
 
-Four paths, cheapest first: (1) HTTP tier — user-supplied cookies (`options.cookies` + `options.session_id` to keep the jar) or an API token (`options.auth`: basic/bearer/header). (2) The **no-password browser fallback (17.0)**: a named `session_id` bridges the jar into that session's dedicated stealthy browser (and harvests back), so HTTP-tier login state rides browser calls; combine with `check_login` + snapshot actions + gated submit to operate the site without ever touching a password. (3) CDP attach (17.0) — `smart_fetch` with `options.cdp_url` (+ `check_login=true`) runs the fetch inside the user's real logged-in Chrome; requires one-time user setup (configuration.md "CDP attach"). (4) Still impossible: DataDome / Akamai / interactive Turnstile walls and 2FA — neither the bridge nor attach defeats challenges; say so honestly.
+Five paths, cheapest first: (1) HTTP tier — user-supplied cookies (`options.cookies` + `options.session_id` to keep the jar) or an API token (`options.auth`: basic/bearer/header). (2) The **no-password browser fallback (17.0)**: a named `session_id` bridges the jar into that session's dedicated stealthy browser (and harvests back), so HTTP-tier login state rides browser calls; combine with `check_login` + snapshot actions + gated submit to operate the site without ever touching a password. (3) **Stored-credential login (17.0, opt-in)** — `vault(op='match')` then `login` (needs `DHOLE_VAULT=1`); see "Stored-credential login" below. (4) CDP attach (17.0) — `smart_fetch` with `options.cdp_url` (+ `check_login=true`) runs the fetch inside the user's real logged-in Chrome; requires one-time user setup (configuration.md "CDP attach"). (5) Still impossible: DataDome / Akamai / interactive Turnstile walls and 2FA — none of these paths defeats challenges; say so honestly.
+
+### Stored-credential login (vault / login) fails
+
+- **`vault` / `login` not in `tools/list`, or an error naming `DHOLE_VAULT`** — the opt-in group is off (the default). No request was sent. Enabling it is an env edit (`DHOLE_VAULT=1`, then restart the host) — the user's decision, not a workaround
+- **`vault` `notes` says a manager is not installed** — the `bw` / `op` CLI is missing. Relay the note's install step; this is a note, not an error, and the other manager may still work
+- **`notes` says the vault is locked / not signed in** — the user must unlock it (`bw unlock` / `op signin`). Never ask for a master password
+- **`login` error: no password field found** — the page did not render a `type=password` input (a two-step email-then-password flow, a JS gate, or the page never settled). Pass `username_index` / `password_index` / `submit_index` from a snapshot, or raise `timeout`; if the form is genuinely multi-page, do the steps with `actions` instead
+- **`login` returned `pending_approval: true`** — not a failure: nothing was filled or submitted. Show the user `plan` + `fields`; re-call the **same arguments** with `confirm=true` only on their yes
+- **`login` `logged_in: false`** — the credential was submitted but the session did not take: wrong item, or the site wants 2FA. Check `signals`; do not retry blindly (a second wrong submit can lock the account). `logged_in: null` = the probe could not answer — not "failed"
+- **`login` ran but later fetches are anonymous** — pass the **same `session_id`** to those fetches; the cookies were kept under it. `close_session` shows what is held
+
+### Recipe / watch (opt-in) misbehave
+
+- **`recipe` / `watch` not in `tools/list`, or an error naming `DHOLE_TASKS`** — the group is off (default). Same as above: an env edit is the user's call
+- **`recipe(op='run')` with `actions_failed` > 0** — the page changed under the chain. Re-snapshot, re-derive the steps, `op='save'` again. An `op='save'` that is *rejected* means the chain is invalid (validation runs at save time) — fix the chain, don't retry the save
+- **`watch(op='check')` returns `changed: null`** — that is the FIRST check storing the baseline, not an error and not "no change". The next check answers `true`/`false`
+- **`watch` `error` set, `changed` absent** — the fetch failed; the baseline is **untouched** (by design, so an outage cannot silently re-baseline). Fix the fetch and re-check
+- **`watch` keeps reporting noise** — the page's chrome changes every load; re-add with `focus=` to diff only the relevant block, or raise `max_chars` if `baseline_cut` is true
 
 Attach-specific failures:
 - `cdp_attach_disabled` — the gate is off by default. The user must add `DHOLE_CDP_ATTACH=1` + `DHOLE_CDP_HOSTS` to the dhole server env and restart the host. No request was sent; retrying changes nothing

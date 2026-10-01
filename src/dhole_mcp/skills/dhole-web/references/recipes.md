@@ -51,7 +51,23 @@ Starting routes for multi-step tasks. Each recipe marks where to pivot on failur
 
 ## Sites behind login
 
-Four paths, cheapest first: (1) user-supplied cookies (`options.cookies` + `options.session_id` keeps the jar, 24h) or an API token (`options.auth`: basic/bearer/header). (2) **No-password browser flow (17.0)**: pass the same named `session_id` to browser-tier calls — the jar bridges into that session's dedicated browser and back; verify with `check_login`, act with snapshot + index actions, and let `{"submit": ...}` pause for the user's confirmation. (3) CDP attach (user's real Chrome, one-time setup — configuration.md). (4) DataDome / Akamai / interactive Turnstile / 2FA remain hand-offs. Cookies and tokens don't survive cross-origin redirects; values are never echoed. **Never handle the user's password yourself** — ask them to log in via their browser or the attach window instead.
+Five paths, cheapest first: (1) user-supplied cookies (`options.cookies` + `options.session_id` keeps the jar, 24h) or an API token (`options.auth`: basic/bearer/header). (2) **No-password browser flow (17.0)**: pass the same named `session_id` to browser-tier calls — the jar bridges into that session's dedicated browser and back; verify with `check_login`, act with snapshot + index actions, and let `{"submit": ...}` pause for the user's confirmation. (3) **Stored-credential login (17.0, opt-in)**: `vault(op='match', url=...)` to find the item, then `login` without `confirm` to show the plan and again with `confirm=true` to run it — for a password the user already keeps in Bitwarden / 1Password; the value is read server-side and never enters the transcript. (4) CDP attach (user's real Chrome, one-time setup — configuration.md). (5) DataDome / Akamai / interactive Turnstile / 2FA remain hand-offs. Cookies and tokens don't survive cross-origin redirects; values are never echoed. **Never ask the user to paste a password into the conversation** — route it through path 2, 3, or 4 instead.
+
+## Reach a page that needs steps — record and replay (recipe, opt-in)
+
+1. Derive the chain once: `smart_fetch` with `actions: [{"snapshot": true}]`, then address by index with `expect` (see "Operate a page")
+2. `recipe(op='save', name=..., url=..., actions=[...], note=...)` — validated at save time, so a chain the executor would refuse cannot be stored
+3. Later: `recipe(op='run', name=..., session_id=...)` returns the whole fetch plus one receipt per action. `session_id` is per-run — recipes never store one
+4. Pivot: `actions_failed` non-zero (or `op='list'` showing `last_ok: false`) means the page changed → re-snapshot, re-derive, re-save. Don't keep replaying a broken chain
+- Needs `DHOLE_TASKS=1`. Best for: pages whose content only appears after clicks, or a repeated multi-step fetch
+
+## Watch a page for changes (watch, opt-in)
+
+1. `watch(op='add', name=..., url=..., focus=...)` — add `focus` for a long page whose chrome changes every load
+2. First `watch(op='check', name=...)` **only stores the baseline**: `changed=null`, `baseline_created=true`. Report "baseline stored", NOT "no change"
+3. Later checks answer `changed: true/false` with `added`/`removed` counts and a capped `diff`
+4. Pivot: a failed fetch leaves the baseline untouched and puts the reason in `error` — fix and re-check rather than assuming the page is gone. `baseline_cut=true` means `max_chars` was too small to see the whole page — widen it and re-baseline
+- Needs `DHOLE_TASKS=1`. Best for: changelogs, pricing pages, status pages, docs — a page without a feed
 
 ## Operate a page (form, settings, checkout)
 

@@ -72,6 +72,21 @@ Related knobs (not the attach path itself): `DHOLE_BROWSER_PROFILE` — persist 
 - `DHOLE_MULTIMODAL=1` — declare that **the calling agent can see images** (dhole stays zero-model; recognition is yours). Unlocks `options.selector` element crops on the `screenshot` tool and `{"screenshot": {...}}` actions (element shots ride the response as image blocks), and appends the captcha discipline (≤3 tries then hand off; DataDome / Akamai / interactive Turnstile / 2FA / sliders always hand off) to the tool descriptions. Off by default; with it off those options are refused with an explanation. `decode_qr` (local OpenCV QR decode, in the `[all]` extra) is deterministic local work and needs no flag
 - `DHOLE_NEURAL_FOCUS=1` — `focus` block-picking (`smart_fetch`) and focus page-filtering (`smart_crawl`) score semantically with the local reranker instead of BM25 keyword overlap; default off (BM25). Model missing = explicit error (`neural_focus_model_missing`), never a silent downgrade. Same model as search ranking: `dhole model use <name>` swaps it; `options.focus_mode="best"` (per call, no config) returns the single top block + heading
 
+### Scenario: repeatable tasks and change monitoring (17.0 opt-in)
+
+Two tools that persist state across sessions, off by default because their schemas add ~2.6k chars to every connection:
+
+- `DHOLE_TASKS=1` — registers `recipe` (save a `url` + `actions` chain, replay it later) and `watch` (diff a page against its last snapshot). State lives in `~/.dhole/tasks.db`: action chains and page baselines, **no credentials**. Recipes deliberately store no `session_id` — pass it per run. Forget everything by deleting the file; per-item removal is `recipe(op='delete')` / `watch(op='remove')`
+- Naming either tool in `DHOLE_TOOLS` enables it without the group flag
+
+### Scenario: signing in with a credential the user already stores (17.0 opt-in)
+
+- `DHOLE_VAULT=1` — registers `vault` (read item **metadata** from the user's own Bitwarden `bw` / 1Password `op`) and `login` (assisted sign-in). Off by default: it only does anything if the user actually runs one of those CLIs, and it is the one pair that touches their credentials
+- Prerequisites are the user's: the CLI installed and its vault unlocked (`bw unlock` / `op signin`). `vault(op='status')` reports which manager answered, whether it is unlocked, and the fix when it is not — a missing manager is a note, not an error
+- **Values never leave the process**: `vault` has no field for a password or a TOTP secret, and `login` reads the password server-side and reports the item name instead. Nothing reaches the transcript, the cache, or the log
+- `login` is **gated on approval**: without `confirm=true` it only detects the form and returns the plan. Present that to the user before re-calling with `confirm=true`
+- CAPTCHA / 2FA / DataDome-class walls remain hand-offs; this path logs in, it does not defeat challenges
+
 ### Scenario: poor search results / want a different pool
 
 - `DHOLE_DEFAULT_ENGINES` — override the keyless default pool (default `baidu,bing,sogou,bing_global,yandex,brave`); opt-in names may be included

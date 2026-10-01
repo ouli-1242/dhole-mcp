@@ -72,3 +72,24 @@ Consult this when a response doesn't make sense or a field shows a non-default v
 | `metadata.title` / `lang` / `published_time` / `author` / `canonical` | Page metadata | Prefer `canonical` and `published_time` when citing |
 | `metadata.actions` | One receipt per page-interaction action: `ok`, `error`, and — for rich actions — `image: true` (pixels rode the content list as image blocks), `qr: [...]` (decoded QR texts), `elements` / `elements_total` / `elements_truncated` (snapshot), `submitted: true` | If an action didn't take effect, look here (e.g. wait_selector timed out). A receipt with `pending_approval: true` means a submit PAUSED before acting — nothing was sent; ask the user, then re-run the whole chain with `confirm: true` on that submit. A receipt with `error` naming "element index" beyond the page means the page changed — re-snapshot |
 | `metadata.encoding` | (parse) encoding actually used | On mojibake, compare — if detection guessed wrong, pass `encoding=` explicitly |
+
+## The opt-in tools (recipe / watch / vault / login)
+
+Absent from `tools/list` unless the operator enabled the group (`DHOLE_TASKS=1` / `DHOLE_VAULT=1`). Absence-means-default applies here too.
+
+| Field | Meaning | What to do when non-default |
+|---|---|---|
+| `changed` (watch) | `true` / `false` vs the stored baseline; **`null` when this check only created it** | `null` + `baseline_created: true` = report "baseline stored", never "no change". Deliberately never omitted from the wire |
+| `added` / `removed` (watch) | Lines added / removed vs the baseline | Counted over the whole change even when `diff_truncated` is set |
+| `baseline_cut` (watch) | The stored snapshot hit `max_chars` | A later diff can miss content past the cut — widen `max_chars` and re-baseline |
+| `diff_truncated` (watch) | The `diff` text was cut at the line cap | `added` / `removed` still count the whole change |
+| `outcomes` / `actions_failed` (recipe) | One receipt per replayed action / how many failed | `actions_failed` non-zero = the page changed; re-derive the steps and re-`save` |
+| `recipes[].use_count` / `last_ok` (recipe) | How often it ran / whether it last succeeded | A recipe that never succeeds is stale — re-record it |
+| `sources` (vault) | One row per manager: `available` / `unlocked` / `detail` / `hint` | `unlocked: null` = the CLI is not installed ("not asked" ≠ "locked"); a missing manager is a note, not an error |
+| `items[]` (vault) | Credential **metadata**: `id` / `name` / `username` / `has_password` / `has_totp` / `uris` / `source` | **Never a password or TOTP value** — there is no field for one. `has_password: true` is what picking a credential needs |
+| `notes` (vault) | Per-manager trouble with its fix (not installed / locked / not signed in) | Relay the note verbatim; a locked vault is the user's to unlock |
+| `pending_approval` + `plan` + `fields` (login) | The login ran without `confirm` — **nothing filled, nothing submitted** | Show the plan to the user; re-call the same arguments with `confirm=true` only on approval |
+| `logged_in` (login) | Post-login verdict, same model-free DOM + cookie-NAME probe as `check_login` — **tri-state** | `false` = the session did not take → check the credential; `null` = the probe could not answer, which is **not** "not logged in" |
+| `filled` / `submitted` (login) | How many fields were filled / whether the submit ran | Both `0` / `false` before approval — that is the gate working, not a failure |
+| `credential` / `credential_source` (login) | The vault item **by name** and which manager answered | The password itself never appears; this is the receipt |
+| `cookie_names` (login) | Cookie NAMES the site set | Identifiers, not secrets — values are never returned |

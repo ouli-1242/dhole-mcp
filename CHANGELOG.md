@@ -35,6 +35,7 @@
 
 - **`cdp_url` 默认拒绝（breaking-adjacent）**：此前 `cdp_url` 是 agent 可自由传的参数——这正是要收口的洞：attach 你的真实 Chrome 等于交出其中**所有**已登录站点的读权限，而外层 agent 的规划循环不可预测。现在必须 `DHOLE_CDP_ATTACH=1` 显式开启；未开启时带 `cdp_url` 的调用返回 `cdp_attach_disabled`，一个请求都不发。受影响的是「给 cdp_url 传值但没设开关」的既有调用：以前是静默跑通但登录态为空（`new_context()` 的旧 bug），现在是明确失败——修法是设开关，或者本来就不该传
 - **工具描述收敛到「只写给 agent 看」**：连接期 23,572 → 22,817 字符（`tools/list` 21,431 → 20,676）。删的是**写给读者而非写给 agent** 的那层——`session_id` 的桥接实现细节（agent 要的是「登录态跨两层可用」这个结论，不是它怎么桥的）、`focus_mode` 里的进程级开关（agent 改不了它，且响应头已声明实际打分器）、`smart_crawl` / `smart_search` 里与 `options` 包重复的段落。**条件→动作契约、阈值校准数字、路由规则一条没动**：那些是 agent 做决策的依据，删了省的是字符、赔的是选错工具多花的调用
+- **随包 skill 手册同步到 13 个工具**：`SKILL.md` 与 `references/` 此前只写九个默认工具，且「登录」一行断言密码「只能走 CDP attach 或用户自己的浏览器」——`vault` / `login` 落地后这句已经是错的。现在手册补齐四个 opt-in 工具：默认关与两个独立开关（`DHOLE_TASKS` / `DHOLE_VAULT`）、`vault` 只回元数据（`VaultModel` 没有能装密码的字段）、`login` 的审批闸与三态 `logged_in`、`watch` 首跑 `changed=null` 不等于「无变化」、`recipe` 重放 `actions_failed` 非零即页面已变，都进了「选工具 / 深行为 / 配置 / 样例 / 字段 / 排查」六卷；新增硬约束 13 明确「开关是操作者的决定、凭据值不进 transcript」。升级后重跑 `dhole skill install --force` 生效
 
 ### 修复
 
