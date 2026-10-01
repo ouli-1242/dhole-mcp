@@ -27,9 +27,9 @@ Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器：抓网页、�
 需要 Python 3.11+。
 
 ```bash
-pip install dhole-mcp             # 默认即完整版：反爬浏览器 / PDF / OCR / 解析器 / 神经重排
-playwright install chromium      # 浏览器引擎（~150MB），pip 装不到这一步
-dhole init --yes                  # 或直接用它：拉 chromium + 写客户端配置 + 体检
+pip install dhole-mcp              # 默认即完整版：浏览器 / PDF / OCR / 解析器 / 重排
+playwright install chromium        # 浏览器引擎（~150MB），pip 装不到这一步
+dhole init --yes                   # 或一条搞定上面两步 + 写客户端配置 + 体检
 ```
 
 - `pip install "dhole-mcp[all]"` 依然合法，效果等价于默认安装。
@@ -53,13 +53,32 @@ dhole init --yes                  # 或直接用它：拉 chromium + 写客户�
 
 ## 配置
 
-两条门：**`dhole config set DHOLE_X value`** 写 `~/.dhole/config.json`（按次读取的旋钮下一次调用就生效，不用重启），或宿主 MCP 配置里的 `env` 块（值写成字符串，改完重启）。env 永远优先。`dhole --doctor` 两个门一起审计。
+### 两条门
+
+| 门 | 怎么写 | 什么时候生效 |
+|---|---|---|
+| **文件**（推荐） | `dhole config set DHOLE_X value`，落在 `~/.dhole/config.json` | 按次读取的旋钮下一次调用就生效，不用重启；`dhole config list` 看当前值与来源 |
+| **env 块** | 宿主 MCP 配置里的 `env`，值一律写成字符串 | 重启宿主之后 |
+
+**env 永远优先**——一个文件不会悄悄覆盖你已经做出来的决定。`dhole --doctor` 两个门一起审计。
+
+### 配置形状
 
 ```json
-{"mcpServers": {"dhole": {"command": "dhole", "env": {"DHOLE_SEARCH_PROXY": "http://127.0.0.1:7890"}}}}
+{
+  "mcpServers": {
+    "dhole": {
+      "command": "dhole",
+      "args": [],
+      "env": { "DHOLE_SEARCH_PROXY": "http://127.0.0.1:7890" }
+    }
+  }
+}
 ```
 
-变量名与取值见下表，值一律写成字符串；改完重启宿主。**默认行为通常就是你要的**，不确定就别设。
+变量名与取值见下面两张表。**默认行为通常就是你要的**，不确定就先别设。
+
+### 常用变量
 
 | 变量 | 什么时候设 |
 |---|---|
@@ -75,7 +94,7 @@ dhole init --yes                  # 或直接用它：拉 chromium + 写客户�
 | `DHOLE_SSRF_DNS_RECHECK` | fake-ip 已自动适配；设 `on` 强制恢复 |
 | `DHOLE_TOOLS=smart_fetch,smart_search` | 只注册列出的工具，连接期省约一半；**写这个就等于关掉其余工具** |
 
-其余（都不是必须设的）：
+### 其余变量（都不是必须设的）
 
 | 变量 | 用途 |
 |---|---|
