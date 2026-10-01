@@ -189,7 +189,7 @@ CLI 诊断与配置：
 | `vault` | 读**你自己**密码管理器里的条目元数据（**从不回密码 / TOTP 值**） | `DHOLE_VAULT=1` |
 | `login` | 用其中一条凭据登录：先只回计划待你确认，确认后才填并提交 | `DHOLE_VAULT=1` |
 
-参数怎么摆：`smart_fetch` / `smart_crawl` / `smart_search` / `screenshot` 的旋钮收在 `options` 里（顶层同名参数也接受，两处都给时顶层优先）；其余工具只有顶层一层。每个工具接受哪些键，`tools/list` 里写清了，以它为准。
+参数怎么摆：`smart_fetch` / `smart_crawl` / `smart_search` / `screenshot` 的旋钮收在一个 `options` 对象里，顶层同名参数也接受——那是兼容读法，两处都给时**顶层优先**；其余工具参数少，只有顶层这一层，塞 `options` 会被拒绝并列出它真正接受的键。两个方向相反的例外值得点名：`smart_fetch` 的 `url` 必须摆在外面；`smart_crawl` 的 `discover_only` 只能放顶层（报错会说明它是顶层参数，不是没有这个能力）。每个工具接受哪些键，`tools/list` 里写清了，以它为准。
 
 **更细的调用写法、响应字段含义与失败排查**（agent 侧的手册，不是给你读的）随包分发：跑 `dhole skill install` 装到 `~/.agents/skills/dhole-web`。
 
@@ -210,7 +210,7 @@ CLI 诊断与配置：
 
 ## 搜索引擎与重排
 
-**免密引擎 14 个**：默认池 6 个（`baidu` / `bing` / `sogou` / `bing_global` / `yandex` / `brave`），opt-in 8 个（`duckduckgo` / `yahoo` / `baidu_baike` / `so360` / `sogou_weixin` / `wikipedia` / `grokipedia` / `mwmbl`）——opt-in 的要用 `engines=[...]` 点名才跑，单次最多 9 个。换默认池用 `DHOLE_DEFAULT_ENGINES`。
+**免密引擎 14 个**：默认池 6 个（`baidu` / `bing` / `sogou` / `bing_global` / `yandex` / `brave`），opt-in 8 个（`duckduckgo`（别名 `ddg`）/ `yahoo` / `baidu_baike` / `so360`（别名 `360`）/ `sogou_weixin` / `wikipedia` / `grokipedia` / `mwmbl`）——opt-in 的要用 `engines=[...]` 点名才跑，单次最多 9 个。换默认池用 `DHOLE_DEFAULT_ENGINES`。
 
 另有 4 个付费 keyed 后端（`brightdata` / `tavily` / `exa` / `bocha`）：配了 key 即启用，但**只有点名才调用**，按次计费。
 
