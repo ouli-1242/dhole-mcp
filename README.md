@@ -95,7 +95,7 @@ playwright install chromium      # 反检测浏览器引擎（~150MB，完整版
 - `DHOLE_SSRF_DNS_RECHECK=0`：**Clash / sing-box 的 TUN（fake-IP）模式必设**——不设的话所有公网站点都被判成内网、什么都抓不了；普通 HTTP 代理别设
 - `DHOLE_IGNORE_ROBOTS=1`：关掉默认开启的 `robots.txt` 遵从（进程级）；只想放行某一次请求就在调用时传 `options.ignore_robots=true`，不必改配置
 - `DHOLE_MULTIMODAL=1`：**宿主 agent 能看图才设**（Claude 这类多模态宿主）——解锁 `screenshot` 的元素裁剪与截图动作（图片随响应直达 agent），工具描述随之带上「验证码 ≤3 次转交、2FA / 滑块一律转交」的纪律；纯文本宿主不要设（不开时这些参数显式报错，整页截图不受影响）。`decode_qr` 本地解码不归它管，不设也能用。见[页面操作](#页面操作actionssnapshot索引动作与提交审批闸)
-- `DHOLE_NEURAL_FOCUS=1`：`focus` 挑块与整站爬取过滤从 BM25 关键词重合升级为本地重排模型的**语义**打分（默认关）。模型没下载过会显式报错——跑一次神经搜索或 `dhole model use bge-zh` 即装好；要省这 ~280MB 就别设（见[重排模型](#重排模型)）
+- `DHOLE_NEURAL_FOCUS=1`：`focus` 挑块与整站爬取过滤从 BM25 关键词重合升级为本地重排模型的**语义**打分（默认关）。**代价实测：单页 ~12.5 秒 CPU**——同一页 BM25 只要 23 ms，约 540 倍；换来的是答案召回 90% → 100%、保留率 22% → 13%。所以默认关：别为了"更准"随手打开，长页面批量抓取会成倍变慢。模型没下载过会显式报错——跑一次神经搜索或 `dhole model use bge-zh` 即装好；要省这 ~280MB 就别设（见[重排模型](#重排模型)）
 - `DHOLE_CDP_ATTACH=1` + `DHOLE_CDP_HOSTS`：打开[带登录态抓取](#带登录态抓取cdp-attach)——让 agent 借你已登录的 Chrome 读登录后的页面，白名单限定哪些域名能用你的登录态；不用这功能就整行删掉（默认关）
 - `DHOLE_USAGE_LOG=1`：本地调用日志（工具名 / 耗时 / 脱敏错误，不记参数值、不联网），出问题时有账可查
 
@@ -164,7 +164,7 @@ dhole --http --host 0.0.0.0 --port 8765     # 默认只监听 127.0.0.1:8765
 | `DHOLE_BROWSER_PROFILE`                                              | 设名字后浏览器改用 `~/.dhole/profiles/<name>/` 持久 profile（cookie / 登录态跨重启存活，关闭不删），不设仍是临时目录、关闭即清。profile 是**凭据级数据**：只在你确实要"登录一次、长期复用"时开 |
 | `DHOLE_COOKIE_TTL_S`                                                 | cookie jar 的过期秒数（默认 86400 = 24h，区间 60–2592000；写入时定死、使用不续期）。要"登录一次、长期复用"可调大，遗忘的会话仍会自行过期 |
 | `DHOLE_MULTIMODAL`                                                   | 设 `1` 声明**调用方** agent 能看图（不是 dhole 长了眼睛）：解锁 `screenshot` 与截图动作的 `selector` / `index` 元素裁剪，工具描述追加验证码 ≤3 次转交、2FA / 滑块一律转交的纪律。不开时这些参数显式报错；`decode_qr` 本地解码不归它管，始终可用 |
-| `DHOLE_NEURAL_FOCUS`                                                 | 设 `1` 时 `smart_fetch` 的 `focus` 挑块与 `smart_crawl` 的 `focus` 页面过滤改用本地重排模型按语义打分（默认关，用 BM25 关键词重合）。模型未下载时显式报错而非静默降级；见[重排模型](#重排模型) |
+| `DHOLE_NEURAL_FOCUS`                                                 | 设 `1` 时 `smart_fetch` 的 `focus` 挑块与 `smart_crawl` 的 `focus` 页面过滤改用本地重排模型按语义打分（默认关，用 BM25 关键词重合）。**代价实测：单页 ~12.5 秒 CPU（BM25 同页 23 ms，约 540 倍）**，换答案召回 90% → 100%——批量和长页面场景先掂量。模型未下载时显式报错而非静默降级；见[重排模型](#重排模型) |
 | `DHOLE_ENGINE_COOLDOWN`                                          | 普通被拒的冷却秒数（默认 60，区间 5–1800）。越界会被夹紧并在 `dhole engines list` 里说明                                                                        |
 | `DHOLE_ENGINE_CHALLENGE_COOLDOWN` / `DHOLE_ENGINE_CONN_COOLDOWN`    | 连续 3 次「校验页」/ 连续 3 次「连不上」的冷却秒数（各默认 600，区间 60–7200）                                                                                     |
 | `DHOLE_ENGINE_HEARTBEAT`                                           | 主动巡检还在冷却中的引擎的间隔秒数（默认 300；`0` = 关）。探测失败**不会**延长惩罚，原到期时间原样放回                                                             |
@@ -297,6 +297,15 @@ dhole 不做 `act(prompt)`：认元素、决定点哪个是外层 agent 的语�
 
 **focus 也能用同一个模型（`DHOLE_NEURAL_FOCUS=1`，默认关）**：`smart_fetch` 带 `focus` 挑块、`smart_crawl` 带 `focus` 过滤页面，从 BM25 关键词重合升级为这个 cross-encoder 的语义打分；`options.focus_mode="best"` 干脆只返回得分最高的那一段加它的标题——「答案在哪」的直接回答。与搜索的下限判断同一条分布（离题 ~1e-4、真命中 0.93+）：爬取过滤的离题线定在 0.03、focus 弱命中提示定在 0.05，都取自实测分布的离题带。开关打开而模型还没下载时**显式报错**（附下载方法），绝不静默降级——要 BM25 就把开关去掉。
 
+**代价实测**（`evals/focus_baseline.py`，仓库内 README / CHANGELOG 语料 × 5 个自然语言问句，共 10 个有效用例；判定标准是接地关键词有没有被保留——只报保留率不报召回就是自欺）：
+
+| 打分器 | 保留率 | 答案召回 | 单页均耗时 |
+|---|---|---|---|
+| BM25 | 22% | 90% | **23 ms** |
+| 神经（bge-zh cross-encoder） | 13% | **100%** | **12 483 ms** |
+
+神经更紧（13% vs 22%）**且不漏答案**（100% vs 90%）——BM25 在「神经 focus 用哪个环境变量打开」一题上丢了答案块，神经留住了。这是神经路径的实质价值，不只是"分更高"。但代价是 **约 540 倍**的 CPU 时间，所以它默认关；`DHOLE_NEURAL_FOCUS=1` 只在你确实需要"不漏答案"且不在乎单页十几秒时才开。
+
 | 名字             | 语言                  | 体积   |
 | ---------------- | --------------------- | ------ |
 | `bge-zh`（默认） | 中英双语              | ~279MB |
@@ -334,7 +343,7 @@ dhole model use ms-marco     # 切换
 - `archive.org` 回退会返回**某个日期的快照**（看顶层 `source` / `archived_at`），时效敏感的内容引用前先确认；但**服务器自己回的 JSON/XML 错误体不会被快照顶替**（4xx/5xx 且 content-type 是 json/xml 时如实保留），代理不可达时也不回退——那次请求根本没发出去，拿快照回答等于答了一个没人问过的问题
 - **内网 / 本机默认一律拒绝**（SSRF 守卫）。抓自己的 dev / staging / Docker 服务要点名：`allow_private=true`（只放开回环）或 `["my-service.local","192.168.1.50"]`，进程级用 `DHOLE_ALLOW_PRIVATE_HOSTS`。三个工具同一套口径：`smart_fetch`（`options.allow_private`）、`screenshot`（`options.allow_private`，作用域盖住导航——回环页面自己的图片 / 样式同样要放行）、`feed_fetch`（顶层 `allow_private`）。云元数据端点（`169.254.169.254`、`metadata.google.internal` 等）**任何时候都不放行**，包括写进白名单的情况
 - 正文 **50MB 硬顶**，且在下载**之前**守门：装不下的直接报 `Response body too large`，抬 `timeout` 没用
-- 连接期固定开销 22,817 字符（`tools/list` 20,676 + `instructions` 2,141，stdio 线上口径；用 `tests/tool_payload_measure.py` 从源码独立测得），每次连接付一次；换成 token 约 5.5k（cl100k 口径，分词器不同就不同——可比的是字符数）。其中 `actions` 的快照 / 索引寻址 / 提交闸契约、`session_id` 的 cookie 双向桥说明与 `focus_mode` 合计 ~2.0k。多模态纪律条款只在 `DHOLE_MULTIMODAL=1` 时追加，不计入默认开销。每次调用的 envelope 已压到非默认值字段才上线。`DHOLE_TOOLS` 只注册常用工具可省约一半
+- 连接期固定开销 22,968 字符（`tools/list` 20,827 + `instructions` 2,141，stdio 线上口径；用 `tests/tool_payload_measure.py` 从源码独立测得），每次连接付一次；换成 token 约 5.5k（cl100k 口径，分词器不同就不同——可比的是字符数）。其中 `actions` 的快照 / 索引寻址 / 提交闸契约、`session_id` 的 cookie 双向桥说明与 `focus_mode` 合计 ~2.0k。多模态纪律条款只在 `DHOLE_MULTIMODAL=1` 时追加，不计入默认开销。每次调用的 envelope 已压到非默认值字段才上线。`DHOLE_TOOLS` 只注册常用工具可省约一半
 - YouTube 仅能获取少量文本
 
 ## 本地数据
