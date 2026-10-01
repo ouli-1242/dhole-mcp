@@ -1,0 +1,18 @@
+{
+  "query_id": "q052",
+  "labeler": "agent-a",
+  "sheet_sha256": "44e22214405a3de21096d115ab9cb6e39787090c8b92df2eb074b3158dd470e7",
+  "created_at": "2026-10-02T00:48:59",
+  "judgments": {
+    "https://endoflife.date/ubuntu": 1,
+    "https://ubuntu.com/download/desktop": 1,
+    "https://ubuntu-ve.github.io/download/": 1,
+    "https://www.dreamhost.com/blog/check-ubuntu-version/": 1,
+    "https://linuxize.com/post/how-to-check-your-ubuntu-version/": 1,
+    "https://linuxconfig.org/ubuntu-linux-download": 1,
+    "https://www.digibeatrix.com/ubuntu/en/ubuntu-basics-en/ubuntu-lts-overview-en/": 1,
+    "https://releases.ubuntu.com/": 1,
+    "https://spinupwp.com/doc/what-does-lts-mean-ubuntu/": 1,
+    "https://www.ssdnodes.com/learn/which-os-to-pick-for-your-vps": 0
+  }
+}

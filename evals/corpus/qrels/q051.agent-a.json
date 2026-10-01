@@ -1,0 +1,13 @@
+{
+  "query_id": "q051",
+  "labeler": "agent-a",
+  "sheet_sha256": "bf46f2c02bf5d468b7e71d822a63949a1daee62e6908a5572ae933eb72c7c373",
+  "created_at": "2026-10-02T00:48:58",
+  "judgments": {
+    "https://ubuntu.com/download": 1,
+    "https://ubuntu.com/download/desktop": 1,
+    "https://releases.ubuntu.com/resolute/": 1,
+    "https://www.releases.ubuntu.com/": 1,
+    "https://cn.ubuntu.com/download": 1
+  }
+}

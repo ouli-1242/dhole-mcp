@@ -1,0 +1,14 @@
+{
+  "query_id": "q028",
+  "query": "http etag 304 conditional request",
+  "engine": "duckduckgo",
+  "captured_at": "2026-10-02T00:30:31",
+  "captured_from_url": "https://html.duckduckgo.com/html/",
+  "sha256": "cdbe1f6ba4c5814a9341d3b42aea47d8b1d82c529ded0df4732d5adeecbfaac8",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q027 英文对应"
+}

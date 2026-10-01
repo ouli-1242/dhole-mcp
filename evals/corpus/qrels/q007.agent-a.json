@@ -1,0 +1,11 @@
+{
+  "query_id": "q007",
+  "labeler": "agent-a",
+  "sheet_sha256": "aa7c02440af702482a81459f4286d3320b237c1017885923dab7c617fdf1ad13",
+  "created_at": "2026-10-02T00:47:23",
+  "judgments": {
+    "https://blog.csdn.net/Bruce1114/article/details/125655835": 1,
+    "https://blog.csdn.net/weixin_33819479/article/details/91924190": 1,
+    "https://www.cnblogs.com/testzcy/p/18188729": 1
+  }
+}

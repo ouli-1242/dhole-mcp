@@ -1,0 +1,14 @@
+{
+  "query_id": "q058",
+  "query": "最新 个人养老金 政策",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:33:49",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED 个人养老金 政策",
+  "sha256": "22e744275e72fb315852dbbce37e1efe34c3f01f695dff802570918d581a10fe",
+  "item_nodes": 7,
+  "usable": 7,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类：政策解读需求"
+}

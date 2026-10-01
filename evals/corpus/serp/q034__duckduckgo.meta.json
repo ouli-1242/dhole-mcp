@@ -1,0 +1,14 @@
+{
+  "query_id": "q034",
+  "query": "SSRF cloud metadata 169.254.169.254",
+  "engine": "duckduckgo",
+  "captured_at": "2026-10-02T00:31:11",
+  "captured_from_url": "https://html.duckduckgo.com/html/",
+  "sha256": "74a8eabd1c5124a87d64ecda9df4f505dbb097ef03964e649c34c49a4d6ad26a",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "安全守卫的靶子"
+}

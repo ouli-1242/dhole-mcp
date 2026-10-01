@@ -1,0 +1,14 @@
+{
+  "query_id": "q015",
+  "query": "retrieval augmented generation explained",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:29:02",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED augmented generation explained&ensearch=1",
+  "sha256": "1c0c10eb3662eba37bc13b1d7160af052c5494d2326d6fbf25f79596c78c8032",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q014 英文对应"
+}

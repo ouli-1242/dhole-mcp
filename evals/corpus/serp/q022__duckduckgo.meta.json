@@ -1,0 +1,14 @@
+{
+  "query_id": "q022",
+  "query": "redis rdb vs aof persistence",
+  "engine": "duckduckgo",
+  "captured_at": "2026-10-02T00:29:47",
+  "captured_from_url": "https://html.duckduckgo.com/html/",
+  "sha256": "1d30e9c9f2c5894f392b169bebc78aa2c2b6bc6b073167695019589e65cdddc0",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q021 英文对应"
+}

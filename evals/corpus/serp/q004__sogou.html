@@ -1,0 +1,228 @@
+<html><body><div class="wrap" id="sogou_wrap_id"><div class="wrapper autopage" id="wrapper"><div id="main" class="main"><div class="js-page-results" page="1" uuid="9c785be5-fb4f-4d1d-bbd4-7a72313386e0"><div class="results"><div class="vrwrap" id="sogou_vr_30000000_wrap_1"><h3 class="vr-title"><!--awbg1--><a name="dttl" target="_blank" href="/link?url=hedJjaC291P3yGwc7N55kLSc2ls_Ks2x1Lfffu9eINftGKerw1Vzdjh3ZfoXRJBg" id="sogou_vr_30000000_1" cachestrategy="qcr:-1" bingpb=""><!--awbg1--><em>Sqlite</em>学习笔记(四)&amp;&amp;<em>SQLite</em>-<em>WAL原理</em> - 天士梦 - 博客园</a></h3><div class="fz-mid space-txt base-ellipsis clamp2" id="cacheresult_summary_1"><em>WAL(Write ahead logging)是一种日志模式,它是一种思想,普遍应用于关系型数据库</em>。每个事务执行变更时,修改数据页,同时会产生日志,这样在事务提交后,不需要将修改的脏页刷盘,只需要将事务产生的日志落盘即可返回。WAL保证日志一定先于对应的脏页落盘,就是所谓的WAL</div>  <a class="citeLinkClass" target="_blank" href="/link?url=hedJjaC291P3yGwc7N55kLSc2ls_Ks2x1Lfffu9eINftGKerw1Vzdjh3ZfoXRJBg" id="cacheresult_cite_1"> <img class="footerIcon" src="https://cdn-yb.icon.qq.com/zuowei_dir/www_cnblogs_com.ico" alt="cite"> <span>博客园</span> <span>https://www.cnblogs.com/c...</span>  <span>2015-08-24</span>  </a> <div class="r-sech ext_query r-sech-test_02 click-better-sugg" style="display:none" id="uigs_ext_30000000_sq_ext_1" data-normal="1" data-async="1" data-docid="e8366fd60a39dd7c-90a8d3ae6bc0b0c4-4e0ca58510f9923d8b38e8dd666a37d1" data-url="https://www.cnblogs.com/cchust/p/4754619.html"><span><strong></strong>推荐您搜索</span><i></i><p></p></div></div>
+<div class="vrwrap" id="sogou_vr_30000000_wrap_3"><h3 class="vr-title"><!--awbg3--><a name="dttl" target="_blank" href="/link?url=hedJjaC291NO8Gk_zr4njUJw9U14oc0bh6O4RiYb6h1kbF5Tdgu0vxUfI1Kue5lmSowDhDBtC6s." id="sogou_vr_30000000_3" cachestrategy="qcr:-1" bingpb=""><!--awbg3--><em>SQLite</em>读写同步之<em>WAL</em>机制 - 个人文章 - SegmentFault 思否</a></h3><div class="fz-mid space-txt base-ellipsis clamp2" id="cacheresult_summary_3">WAL工作原理 <em>在引入WAL机制之前,SQLite使用rollback journal机制实现原子事务</em>。 rollback journal机制的原理是: 在修改数据库文件中的数据之前,先将修改所在分页中的数据备份在另外一个地方,然后才将修改写入到数据库文件中;如果事务失败,则将备份数据拷贝回来,撤销修改;如果事务成功,则删除备份数据,提交修改。 WAL机制的原理是: 修改并不直接写入到数据库文件中...</div>  <a class="citeLinkClass" target="_blank" href="/link?url=hedJjaC291NO8Gk_zr4njUJw9U14oc0bh6O4RiYb6h1kbF5Tdgu0vxUfI1Kue5lmSowDhDBtC6s." id="cacheresult_cite_3"> <img class="footerIcon" src="https://cdn-yb.icon.qq.com/zuowei_dir/segmentfault_com.ico" alt="cite"> <span>SegmentFault</span> <span>https://segmentfault.com/a...</span>  <span>2018-12-01</span>  </a> <div class="r-sech ext_query r-sech-test_02 click-better-sugg" style="display:none" id="uigs_ext_30000000_sq_ext_3" data-normal="1" data-async="1" data-docid="3b4b2a39758dfdba-65b70f3119d63317-45b24aad7505d86ef1a0d7a63f25df65" data-url="https://segmentfault.com/a/1190000017216126?sort=votes"><span><strong></strong>推荐您搜索</span><i></i><p></p></div></div>
+<div class="vrwrap" id="sogou_vr_30010092_4">
+    <div class="struct201102">
+          <h3 class="vr-title  " vrcid="title.2b78f56">
+    
+        <a class=" " target="_blank" href="/link?url=hedJjaC291NiO7MhDUZdGN5Pslaa4FLauNogEGG91sGAq7g8nbpR4WWk1WgVhp8S" id="sogou_vr_30010092_4" cachestrategy="qcr:-1"><em><!--red_beg-->Sqlite<!--red_end--></em>使用<em><!--red_beg-->WAL模式<!--red_end--></em>指南本文阐述如何配置<em><!--red_beg-->SQLite<!--red_end--></em>的WAL模式,介绍了...
+        </a>        
+        
+
+      </h3>
+
+        
+  
+
+
+
+      <div class="img-flex " id="sogou_vr_30010092_wzk_jinzhun3_4" vrcid="imgFlex.7e985ea">
+
+      
+      <div class="text-layout ">
+              
+    
+
+    
+
+    
+    
+    
+
+    
+    
+    
+    
+    
+  <div class="step-list " vrcid="stepList.9923fee">
+    <div class="step-item-box ">
+<div class="step-item fz-mid">              <span class="step-num">1.</span>
+<p class="step-cont ellipsis"><em><!--red_beg-->WAL<!--red_end--></em><em><!--red_beg-->模式<!--red_end--></em>初步介绍 1.1 什么情况需要开启<em><!--red_beg-->WAL<!--red_end--></em> 开启<em><!--red_beg-->SQLite<!--red_end--></em>的<em><!--red_beg-->WAL<!--red_end--></em><em><!--red_beg-->模式<!--red_end--></em>(Write-Ahead-Log),多线程的并发性将得到进一步的提升. 此时写操作会先append到<em><!--red_beg-->wal<!--red_end--></em>文件末尾,而不是直接覆盖旧数据.而读操作开始时,会记下当前的<em><!--red_beg-->WAL<!--red_end--></em>文件状态,并且只访问在此之前的数据.这就确保了多线程读与读、读与写之间可以并发地进行. </p></div><div class="step-item fz-mid">              <span class="step-num">2.</span>
+<p class="step-cont ellipsis">开启<em><!--red_beg-->WAL<!--red_end--></em>后必须要设置的参数 ptr-&gt; execute ( ＂PRAGMA journal_mode = <em><!--red_beg-->WAL<!--red_end--></em>＂ ); ptr-&gt; execute ( ＂PRAGMA <em><!--red_beg-->wal<!--red_end--></em>_autocheckpoint=5000;＂ ); ptr-&gt; execute ( ＂PRAGMA SYNCHRONOUS=NORMAL＂ ); if ( sql</p></div>    </div>
+  <div class="slide-down " style="display:none" vrcid="slideDown.601e2b8">
+    <a href="/link?url=hedJjaC291NiO7MhDUZdGN5Pslaa4FLauNogEGG91sGAq7g8nbpR4WWk1WgVhp8S" target="_blank" class="">查看全部<i class="more-arrow"></i>
+    </a>
+    
+  </div>
+</div>
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+<a href="/link?url=hedJjaC291NiO7MhDUZdGN5Pslaa4FLauNogEGG91sGAq7g8nbpR4WWk1WgVhp8S" target="_blank" class="citeLinkClass " vrcid="citeurl.9923fee"><img class="footerIcon" src="https://cdn-yb.icon.qq.com/zuowei_dir/juejin_cn.ico"><span>稀土掘金</span><span class="">https://juejin.cn/p...</span><span class="cite-date">2023-07-27</span>      </a>
+</div>
+      
+    </div>
+
+    </div>
+     <script>
+        require(["//search.sogoucdn.com/vrfly/web/dist/js/vr/tpl5003_80939f7.js"], function (vr) {
+            vr('30010092', '4');
+        }, window.sogou && window.sogou.vr && window.sogou.vr.makeModuleLog && window.sogou.vr.makeModuleLog('30010092'));
+    </script>
+<div class="r-sech ext_query r-sech-test_02 result_list click-better-sugg" style="display:none" id="sogou_vr_30010469_4" data-async="1" data-docid="78a9c4dc037107a1-222b3d779432a73d-b5488b6c5bf47f61e79fea9328745a12" data-url="https://juejin.cn/post/7260308502030286906" data-hint="sugg" data-vrid="30010469" data-rank="4" data-title="%EE%90%8ASqlite%EE%90%8B%E4%BD%BF%E7%94%A8%EE%90%8AWAL%E6%A8%A1%E5%BC%8F%EE%90%8B%E6%8C%87%E5%8D%97%E6%9C%AC%E6%96%87%E9%98%90%E8%BF%B0%E5%A6%82%E4%BD%95%E9%85%8D%E7%BD%AE%EE%90%8ASQLite%EE%90%8B%E7%9A%84WAL%E6%A8%A1%E5%BC%8F%2C%E4%BB%8B%E7%BB%8D%E4%BA%86..." data-prevrid="30010092"><span><strong></strong>推荐您搜索</span><i></i><p></p></div></div>
+
+<div class="vrwrap" id="sogou_vr_30000000_wrap_5"><h3 class="vr-title"><!--awbg5--><a name="dttl" target="_blank" href="/link?url=hedJjaC291NiO7MhDUZdGN5Pslaa4FLaZKP_yHSkYM9eloCcvW6caDGbmfcGlSSc" id="sogou_vr_30000000_5" cachestrategy="qcr:-1" bingpb=""><!--awbg5--><em>sqlite</em> <em>wal</em> 分析本文将介绍<em>wal</em><em>原理</em>,并源码剖析checkpoint过程,同时...</a></h3><div class="fz-mid space-txt base-ellipsis clamp2" id="cacheresult_summary_5"><em>wal</em> <em>原理</em> 1.1 redo log <em>sqlite</em> <em>wal</em> 是一种简单的 redo log 事务实现，redo log 概念... <em>模式</em>同时具有简单的 mvvc 实现，支持文件级别的读写并发，提供了相对 delete(...</div>  <a class="citeLinkClass" target="_blank" href="/link?url=hedJjaC291NiO7MhDUZdGN5Pslaa4FLaZKP_yHSkYM9eloCcvW6caDGbmfcGlSSc" id="cacheresult_cite_5"> <img class="footerIcon" src="https://cdn-yb.icon.qq.com/zuowei_dir/juejin_cn.ico" alt="cite"> <span>稀土掘金</span> <span>https://juejin.cn/p...</span>  <span>2022-12-30</span>  </a> <div class="r-sech ext_query r-sech-test_02 click-better-sugg" style="display:none" id="uigs_ext_30000000_sq_ext_5" data-normal="1" data-async="1" data-docid="78a9c4dc037107a1-222b3d779432a73d-fb6711a6cc854414a6a1568be8ca3661" data-url="https://juejin.cn/post/7182817252012621881"><span><strong></strong>推荐您搜索</span><i></i><p></p></div></div>
+<div class="vrwrap">
+        <div class="struct201102">
+              <h3 class="vr-title  " vrcid="title.b429921">
+    
+        <a class=" " target="_blank" href="http://mp.weixin.qq.com/s?src=11&amp;timestamp=1790872081&amp;ver=7000&amp;signature=REDACTED&amp;new=1" id="sogou_vr_11002601_title_6"><em><!--red_beg-->sqlite<!--red_end--></em><em><!--red_beg-->wal<!--red_end--></em>分析
+        </a>        
+        
+
+      </h3>
+
+            
+  
+
+
+
+      <div class="img-flex " id="component_IvQBOEgy6s" vrcid="imgFlex.5bc63c9">
+
+      
+        <div class="img-layout img-big-rec">
+          <div class="img-height  ">
+				<a target="_blank" href="http://mp.weixin.qq.com/s?src=11&amp;timestamp=1790872081&amp;ver=7000&amp;signature=REDACTED&amp;new=1" class="img-wrap " vrcid="imgHeight.a08dc63" id='"sogou_vr_11002601_image_6"'>
+					
+						<img src="https://img03.sogoucdn.com/v2/thumb/crop/xy/ai/x/0/y/0/w/300/h/200/iw/225/ih/150/t/0/ir/3/retype_exclude_gif/ext/auto/q/75?t=2&amp;appid=200997&amp;url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_jpg%2F5EcwYhllQOiabQ31eu8QVHgJvf2EX3EfNicQLOqOZefkaafSc1nTA4xGmHPPUG1NPWVUcAvbZ0zuHYUEGqx4H3UA%2F0%3Fwx_fmt%3Djpeg&amp;sign=REDACTED" alt="" onerror=" this.style.display='none' " class="" onload="">
+						
+
+	
+
+	
+	
+	
+
+
+					</a>
+			
+
+			
+		</div>
+          
+        </div>
+      <div class="text-layout ">
+              
+    
+
+    
+
+    
+    
+    
+
+    
+    
+    
+<p class="star-wiki base-ellipsis clamp3 space-txt" vrcid="baike.498ee65">write-aheadlog(https://<em><!--red_beg-->sqlite<!--red_end--></em>.org/<em><!--red_beg-->wal<!--red_end--></em>.html).本文将介绍<em><!--red_beg-->wal<!--red_end--></em><em><!--red_beg-->原理<!--red_end--></em>,并源码剖析checkpoint过程,同时讨论下<em><!--red_beg-->wal<!--red_end--></em>使用中的一些注意点....<em><!--red_beg-->wal<!--red_end--></em><em><!--red_beg-->模式<!--red_end--></em>同时具有简单的mvvc实现,支持文件级别的读写并发,提供了相对delete(rollback)<em><!--red_beg-->模式<!--red_end--></em>(undolog事务)...</p>    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+<a href="http://mp.weixin.qq.com/s?src=11&amp;timestamp=1790872081&amp;ver=7000&amp;signature=REDACTED&amp;new=1" target="_blank" class="citeLinkClass " vrcid="citeurl.498ee65"><img class="footerIcon" src="https://cdn-yb.icon.qq.com/zuowei_dir/mp_weixin_qq_com.ico"><span>公众号</span><span class="">http://mp.weixin.qq.com/c...</span><span class="cite-date">2022-12-30</span>      </a>
+</div>
+      
+    </div>
+
+        </div>
+    <div class="r-sech ext_query r-sech-test_02 result_list click-better-sugg" style="display:none" id="sogou_vr_30010469_6" data-async="1" data-docid="ab735a258a90e8e1-6bee54fcbd896b2a-cd18322d546321a107e8eb50c9c76a6b" data-url="http://mp.weixin.qq.com/count/oIWsFt7NXKMRJIDdYgH5U6rc2GLg/2247500931/1&amp;scene=6" data-hint="sugg" data-vrid="30010469" data-rank="6" data-title="%EE%90%8Asqlite%EE%90%8B%EE%90%8Awal%EE%90%8B%E5%88%86%E6%9E%90" data-prevrid="11002601"><span><strong></strong>推荐您搜索</span><i></i><p></p></div></div>
+
+<div class="vrwrap" id="sogou_vr_30010092_7">
+    <div class="struct201102">
+          <h3 class="vr-title  " vrcid="title.2b78f56">
+    
+        <a class=" " target="_blank" href="/link?url=hedJjaC291NNlyaAPdJIG4sgUN9i2J4jcwMJ03YIpCJDieT8IsagZzYuJr_qB9Vk4xQFIwl8Bj0." id="sogou_vr_30010092_7" cachestrategy="qcr:-1"><em><!--red_beg-->Sqlite<!--red_end--></em>使用<em><!--red_beg-->WAL<!--red_end--></em><em><!--red_beg-->模式<!--red_end--></em>指南-腾讯云开发者社区-腾讯云
+        </a>        
+        
+
+      </h3>
+
+        
+  
+
+
+
+      <div class="img-flex " id="sogou_vr_30010092_wzk_jinzhun3_7" vrcid="imgFlex.7e985ea">
+
+      
+      <div class="text-layout ">
+              
+    
+
+    
+
+    
+    
+    
+
+    
+    
+    
+    
+    
+  <div class="step-list " vrcid="stepList.9923fee">
+    <div class="step-item-box ">
+<div class="step-item fz-mid">              <span class="step-num">1.</span>
+<p class="step-cont ellipsis"><em><!--red_beg-->WAL<!--red_end--></em><em><!--red_beg-->模式<!--red_end--></em>初步介绍 1.1 什么情况需要开启<em><!--red_beg-->WAL<!--red_end--></em> 开启 <em><!--red_beg-->SQLite<!--red_end--></em> 的<em><!--red_beg-->WAL<!--red_end--></em><em><!--red_beg-->模式<!--red_end--></em>(Write-Ahead-Log),多线程的并发性将得到进一步的提升. 此时写操作会先append到<em><!--red_beg-->wal<!--red_end--></em>文件末尾,而不是直接覆盖旧数据.而读操作开始时,会记下当前的<em><!--red_beg-->WAL<!--red_end--></em>文件状态,并且只访问在此之前的数据.这就确保了多线程读与读、读与写之间可以并发地进行</p></div><div class="step-item fz-mid">              <span class="step-num">2.</span>
+<p class="step-cont ellipsis">开启<em><!--red_beg-->WAL<!--red_end--></em>后必须要设置的参数 javascript AI代码解释 复制 ptr - &gt; execute ( ＂PRAGMA journal_mode = <em><!--red_beg-->WAL<!--red_end--></em>＂ ) ; ptr - &gt; execute ( ＂PRAGMA <em><!--red_beg-->wal<!--red_end--></em>_autocheckpoint=5000;＂ ) ; ptr - &gt; execute ( ＂PRAGMA SY</p></div>    </div>
+  <div class="slide-down " style="display:none" vrcid="slideDown.601e2b8">
+    <a href="/link?url=hedJjaC291NNlyaAPdJIG4sgUN9i2J4jcwMJ03YIpCJDieT8IsagZzYuJr_qB9Vk4xQFIwl8Bj0." target="_blank" class="">查看全部<i class="more-arrow"></i>
+    </a>
+    
+  </div>
+</div>
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+<a href="/link?url=hedJjaC291NNlyaAPdJIG4sgUN9i2J4jcwMJ03YIpCJDieT8IsagZzYuJr_qB9Vk4xQFIwl8Bj0." target="_blank" class="citeLinkClass " vrcid="citeurl.9923fee"><img class="footerIcon" src="https://cdn-yb.icon.qq.com/zuowei_dir/cloud_tencent_com.ico"><span>腾讯云</span><span class="">https://cloud.tencent.com/d...</span><span class="cite-date">2024-07-23</span>      </a>
+</div>
+      
+    </div>
+
+    </div>
+     <script>
+        require(["//search.sogoucdn.com/vrfly/web/dist/js/vr/tpl5003_80939f7.js"], function (vr) {
+            vr('30010092', '7');
+        }, window.sogou && window.sogou.vr && window.sogou.vr.makeModuleLog && window.sogou.vr.makeModuleLog('30010092'));
+    </script>
+<div class="r-sech ext_query r-sech-test_02 result_list click-better-sugg" style="display:none" id="sogou_vr_30010469_7" data-async="1" data-docid="d58a810afab3591c-825109cdc3775480-200f31d5f3333a54fa5e52e7ee1b94ec" data-url="https://cloud.tencent.com/developer/article/2438300" data-hint="sugg" data-vrid="30010469" data-rank="7" data-title="%EE%90%8ASqlite%EE%90%8B%E4%BD%BF%E7%94%A8%EE%90%8AWAL%EE%90%8B%EE%90%8A%E6%A8%A1%E5%BC%8F%EE%90%8B%E6%8C%87%E5%8D%97-%E8%85%BE%E8%AE%AF%E4%BA%91%E5%BC%80%E5%8F%91%E8%80%85%E7%A4%BE%E5%8C%BA-%E8%85%BE%E8%AE%AF%E4%BA%91" data-prevrid="30010092"><span><strong></strong>推荐您搜索</span><i></i><p></p></div></div>
+
+<div class="vrwrap" id="sogou_vr_30000000_wrap_8"><h3 class="vr-title"><!--awbg8--><a name="dttl" target="_blank" href="/link?url=hedJjaC291OIJTBNRyYefPAPw4iH1vcXUJRZLciShZMvSkD5xSHxgiYhIiU5uIsSss6xxHurxXa7gxwsPvff_A.." id="sogou_vr_30000000_8" cachestrategy="qcr:-1" bingpb=""><!--awbg8--><em>SQLite</em>中的<em>WAL</em>机制详细介绍_java<em>sqlitewal</em>资源-CSDN下载</a></h3><div class="fz-mid space-txt base-ellipsis clamp2" id="cacheresult_summary_8">WAL工作原理<em>在WAL机制下,SQLite首先将改动写入WAL文件,而不是直接修改数据库文件。这样在事务失败时,无需回滚整个数据库,只需忽略WAL中的记录即可</em>。读取数据时,SQLite会检查WAL文件,找到最后的写入点,然后读取所需数据,如果数据未在WAL中,则从主数据库读取。写操作必须独占,以保证数据一致性,而读操作则可以与写操作并发执行。</div>  <a class="citeLinkClass" target="_blank" href="/link?url=hedJjaC291OIJTBNRyYefPAPw4iH1vcXUJRZLciShZMvSkD5xSHxgiYhIiU5uIsSss6xxHurxXa7gxwsPvff_A.." id="cacheresult_cite_8"> <img class="footerIcon" src="https://cdn-yb.icon.qq.com/zuowei_dir/download_csdn_net.ico" alt="cite"> <span>CSDN</span> <span>https://download.csdn.net/d...</span>  <span>2020-09-10</span>  </a> <div class="r-sech ext_query r-sech-test_02 click-better-sugg" style="display:none" id="uigs_ext_30000000_sq_ext_8" data-normal="1" data-async="1" data-docid="5e937446bd287857-bb89f82a6bc86a03-7423faade09a2e602c5331473d3868ef" data-url="https://download.csdn.net/download/weixin_38649657/12831411"><span><strong></strong>推荐您搜索</span><i></i><p></p></div></div>
+<div class="vrwrap" id="sogou_vr_30000000_wrap_9"><h3 class="vr-title"><!--awbg9--><a name="dttl" target="_blank" href="/link?url=hedJjaC291OxuvMrnGVksVZ3-xZ0yUVN" id="sogou_vr_30000000_9" cachestrategy="qcr:-1" bingpb=""><!--awbg9-->邹雷</a></h3><div class="fz-mid space-txt base-ellipsis clamp2" id="cacheresult_summary_9">断点调试的<em>原理</em>评论和共享 volta如何工作 1月06, 2025 发布在 随笔 各个编程语... 将<em>sqlite</em>改成了允许 CS架构 ，并增强了它的 <em>WAL</em>能力 。让它可以多副本同步，...</div>  <a class="citeLinkClass" target="_blank" href="/link?url=hedJjaC291OxuvMrnGVksVZ3-xZ0yUVN" id="cacheresult_cite_9"> <img class="footerIcon" src="https://img04.sogoucdn.com/app/a/200797/7c18cc77-6073-40c3-875c-e3467778f766" alt="cite">  <span>https://www.ficapy.com/</span>  <span>2026-08-07</span>  </a> <div class="r-sech ext_query r-sech-test_02 click-better-sugg" style="display:none" id="uigs_ext_30000000_sq_ext_9" data-normal="1" data-async="1" data-docid="aaf5374a6efdccf1-065a32540ba383d9-a03ba865d107166a2d6879dc13bf5745" data-url="https://www.ficapy.com/"><span><strong></strong>推荐您搜索</span><i></i><p></p></div></div>
+<div class="vrwrap" id="sogou_vr_30000000_wrap_10"><h3 class="vr-title"><!--awbg10--><a name="dttl" target="_blank" href="/link?url=hedJjaC291N7HQ9ilDg3XuuaJA-HPqhZ-NFUW6UnPsi2wKelUak-kA.." id="sogou_vr_30000000_10" cachestrategy="qcr:-1" bingpb=""><!--awbg10-->mysql中<em>WAL</em>机制的<em>原理</em>是什么 - 编程语言 - 亿速云</a></h3><div class="fz-mid space-txt base-ellipsis clamp2" id="cacheresult_summary_10">mysql中<em>WAL</em>机制的<em>原理</em>是什么，很多新手对此不是很清楚，为了帮助大家解决这个难题，下面小编将为大家详细讲解，有这方面需求的人可以来学习下，希望...</div>  <a class="citeLinkClass" target="_blank" href="/link?url=hedJjaC291N7HQ9ilDg3XuuaJA-HPqhZ-NFUW6UnPsi2wKelUak-kA.." id="cacheresult_cite_10"> <img class="footerIcon" src="https://cdn-yb.icon.qq.com/zuowei_dir/www_yisu_com.ico" alt="cite"> <span>亿速云</span> <span>https://www.yisu.com/j...</span>  <span>2021-07-29</span>  </a> <div class="r-sech ext_query r-sech-test_02 click-better-sugg" style="display:none" id="uigs_ext_30000000_sq_ext_10" data-normal="1" data-async="1" data-docid="a51f1d8072e420c1-bf4f5d6d411fd57a-448a97a232d49ce3ae704375c3591e7e" data-url="https://www.yisu.com/jc/607205.html"><span><strong></strong>推荐您搜索</span><i></i><p></p></div></div>
+<div class="vrwrap" id="sogou_vr_30000000_wrap_11"><h3 class="vr-title"><!--awbg11--><a name="dttl" target="_blank" href="/link?url=hedJjaC291N7HQ9ilDg3XmMYd9GpsfiePXgSU-zMdqLQGuHk6xSRXg.." id="sogou_vr_30000000_11" cachestrategy="qcr:-1" bingpb=""><!--awbg11-->描述<em>SQLite</em>中的<em>WAL</em><em>模式</em>及其优点 - 关系型数据库 - 亿速云</a></h3><div class="fz-mid space-txt base-ellipsis clamp2" id="cacheresult_summary_11"><em>WAL</em>(Write-Ahead Logging)<em>模式</em>是<em>SQLite</em>数据库中一种用于持久化数据的技术。在<em>WAL</em><em>模式</em>下，所有的写操作都会先被写入一个称为<em>WAL</em>文件（Write-Ahead ...</div>  <a class="citeLinkClass" target="_blank" href="/link?url=hedJjaC291N7HQ9ilDg3XmMYd9GpsfiePXgSU-zMdqLQGuHk6xSRXg.." id="cacheresult_cite_11"> <img class="footerIcon" src="https://cdn-yb.icon.qq.com/zuowei_dir/www_yisu_com.ico" alt="cite"> <span>亿速云</span> <span>https://www.yisu.com/z...</span>  <span>2024-05-02</span>  </a> <div class="r-sech ext_query r-sech-test_02 click-better-sugg" style="display:none" id="uigs_ext_30000000_sq_ext_11" data-normal="1" data-async="1" data-docid="a51f1d8072e420c1-bf4f5d6d411fd57a-49144a5cd14fbb49118e8dbe9b4e6809" data-url="https://www.yisu.com/zixun/824805.html"><span><strong></strong>推荐您搜索</span><i></i><p></p></div></div></div></div></div></div></div></body></html>

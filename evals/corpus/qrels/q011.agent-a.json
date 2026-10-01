@@ -1,0 +1,10 @@
+{
+  "query_id": "q011",
+  "labeler": "agent-a",
+  "sheet_sha256": "80229f383b159318631f542535c300882ab064c455628c3afe1411773cef3857",
+  "created_at": "2026-10-02T00:47:24",
+  "judgments": {
+    "https://www.jb51.net/database/3422137e0.htm": 1,
+    "https://blog.csdn.net/qq_19320823/article/details/108764466": 1
+  }
+}

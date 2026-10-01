@@ -1,0 +1,14 @@
+{
+  "query_id": "q054",
+  "query": "rust release notes latest",
+  "engine": "duckduckgo",
+  "captured_at": "2026-10-02T00:33:23",
+  "captured_from_url": "https://html.duckduckgo.com/html/",
+  "sha256": "b8311be99451b655fe5a705cea1da8d72493bb49a688522ad09cff3af1729186",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类：q053 英文对应"
+}

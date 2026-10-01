@@ -1,0 +1,14 @@
+{
+  "query_id": "q008",
+  "query": "nginx websocket reverse proxy config",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:28:29",
+  "captured_from_url": "https://yandex.com/search/site/?text=nginx websocket reverse proxy config&web=1&searchid=1849593",
+  "sha256": "31dba12ffb0566a3af6aa29cf85f35a5b4502d45e2913db67a65923b62a1ee5d",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q007 英文对应"
+}

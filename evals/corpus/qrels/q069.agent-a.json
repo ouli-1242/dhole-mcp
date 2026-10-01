@@ -1,0 +1,10 @@
+{
+  "query_id": "q069",
+  "labeler": "agent-a",
+  "sheet_sha256": "164efdd795f35925d49e583e6859a54d395ef86551656f5b302174d833133452",
+  "created_at": "2026-10-02T00:49:01",
+  "judgments": {
+    "https://mp.weixin.qq.com/s?__biz=MzAxNzY2MTYzNA==&mid=2652317890&idx=5&sn=d4dfed463fb70834ef0d510549d26a55&chksm=8147cd87db076d846c7b5d5c637a580e5f9ea4997dbd90330c46685dbc213d4f38c6b7a3fb26&scene=27": 1,
+    "https://mp.weixin.qq.com/s?__biz=MzAxNzY2MTYzNA==&mid=2652317280&idx=5&sn=d6d220c19150537732319f545d447645&chksm=8156b9987ee456a702114d6fdaa2350fbcddb99baadf3f698c26b56b93950fbdd37f119127ce&scene=27": 1
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "query_id": "q054",
+  "labeler": "agent-a",
+  "sheet_sha256": "a631e2f3147822940039c1d850f9c111eff34e126ba636e1766057f1bccabee5",
+  "created_at": "2026-10-02T00:48:59",
+  "judgments": {
+    "https://releases.rs/docs/1.100.0/": 1,
+    "https://azure.github.io/azure-sdk/releases/2025-09/": 0,
+    "https://rust.facepunch.com/news/breach-and-clear": 0,
+    "https://rust.facepunch.com/changes/": 0,
+    "https://fedoraproject.org/wiki/Changes/RustCompiler": 0,
+    "https://steamdb.info/app/252490/patchnotes/": 0,
+    "https://rust.double11.com/news/dev-blog-55": 0,
+    "https://rust.facepunch.com/news/": 0,
+    "https://rust.double11.com/news": 0,
+    "https://github.com/openai/codex/releases": 0,
+    "https://github.com/rust-lang/rust/releases": 1,
+    "https://www.playrustgame.com/rust_game_release_notes/": 0,
+    "https://doc.rust-lang.org/stable/releases.html": 1,
+    "https://docs.ditto.live/sdk/v4/release-notes/rust": 0,
+    "https://www.rust.dev/updates": 1,
+    "https://releases.rs/": 1,
+    "https://store.steampowered.com/app/252490/Rust/": 0,
+    "https://docs.influxdata.com/influxdb3/core/reference/client-libraries/v3/rust/release-notes/": 0
+  }
+}

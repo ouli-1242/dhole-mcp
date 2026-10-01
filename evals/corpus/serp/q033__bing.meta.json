@@ -1,0 +1,14 @@
+{
+  "query_id": "q033",
+  "query": "robots.txt crawl-delay meaning",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:31:02",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED crawl-delay meaning&ensearch=1",
+  "sha256": "091f62b3b762f65d68bd355453fef4dbddb9a921ae68eb0478ae2616ec3982d4",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "爬取礼貌度的依据"
+}

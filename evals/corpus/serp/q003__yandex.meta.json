@@ -1,0 +1,14 @@
+{
+  "query_id": "q003",
+  "query": "how does sqlite WAL mode work",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:28:00",
+  "captured_from_url": "https://yandex.com/search/site/?text=how does sqlite WAL mode work&web=1&searchid=8574148",
+  "sha256": "14f167ec2d857a4d15e2fcc98745b4bcee16aee44b96669e577f79dc60281b0e",
+  "item_nodes": 14,
+  "usable": 14,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "现有 fixture 的锚点题，活集沿用"
+}

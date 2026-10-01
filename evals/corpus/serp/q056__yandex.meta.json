@@ -1,0 +1,14 @@
+{
+  "query_id": "q056",
+  "query": "2026 nobel prize physics winner",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:33:38",
+  "captured_from_url": "https://yandex.com/search/site/?text=2026 nobel prize physics winner&web=1&searchid=3041609",
+  "sha256": "5c807abebe93b1beecfa8203a27911a1aaba20a9f62465a6819cd55416bde084",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类：q055 英文对应"
+}

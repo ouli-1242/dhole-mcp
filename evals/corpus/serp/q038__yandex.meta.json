@@ -1,0 +1,14 @@
+{
+  "query_id": "q038",
+  "query": "MDN fetch API",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:31:45",
+  "captured_from_url": "https://yandex.com/search/site/?text=MDN fetch API&web=1&searchid=3711679",
+  "sha256": "b00662224f5c5983af4c99e958edcfbfd1621c81400b8f330bfe1e1544f21ab0",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "导航类"
+}

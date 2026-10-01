@@ -1,0 +1,14 @@
+{
+  "query_id": "q042",
+  "query": "azure pricing calculator",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:32:07",
+  "captured_from_url": "https://yandex.com/search/site/?text=azure pricing calculator&web=1&searchid=5309035",
+  "sha256": "d284fc6289f45d86b4953eaf90c6f95cc15aaa7c2d95cd43dee391d7b0a24765",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "导航类"
+}

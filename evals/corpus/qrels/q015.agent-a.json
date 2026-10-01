@@ -1,0 +1,31 @@
+{
+  "query_id": "q015",
+  "labeler": "agent-a",
+  "sheet_sha256": "d33eed609d4e382000f90be22cea10342d4b3cb6d4480d6eb846fbff8e750b1d",
+  "created_at": "2026-10-02T00:47:24",
+  "judgments": {
+    "https://www.zhihu.com/question/1973937257695170709": 0,
+    "https://download.bibis.ir/Books/Artificial-Intelligence/LLM/2025/A%20Simple%20Guide%20to%20Retrieval%20Augmented%20Generation%20(Abhinav%20Kimothi)_bibis.ir.pdf": 1,
+    "https://medium.com/@yadav.navya1601/understanding-rag-pipelines-architecture-challenges-and-evaluation-6c28d17b877c": 1,
+    "https://dev.to/chudi_nnorukam/what-is-rag-retrieval-augmented-generation-explained-15hm": 1,
+    "https://medium.com/@harsh0701/retrieval-augmented-generation-rag-explained-architecture-retrieval-and-generation-ba2d7239133e": 1,
+    "https://ahrefs.com/blog/retrieval-augmented-generation/": 1,
+    "https://en.wikipedia.org/wiki/Retrieval-augmented_generation": 1,
+    "https://aiarch.dev/retrieval-augmented-generation": 1,
+    "https://www.aihandbook.io/generative-ai-handbook/what-is-rag/": 1,
+    "https://tokenbyte.co/what-is-rag-retrieval-augmented-generation-explained/": 1,
+    "https://www.yeetcode.in/blogs/ai/what-is-rag-retrieval-augmented-generation": 1,
+    "https://blogs.nvidia.com/blog/what-is-retrieval-augmented-generation/": 1,
+    "https://aws.amazon.com/what-is/retrieval-augmented-generation/": 1,
+    "https://theaiengineer.substack.com/p/what-is-rag-retrieval-augmented-generation": 1,
+    "https://www.darshansachaniya.com/blog/what-is-rag-retrieval-augmented-generation-explained": 1,
+    "https://www.geeksforgeeks.org/nlp/what-is-retrieval-augmented-generation-rag/": 1,
+    "https://www.nvidia.com/en-us/glossary/retrieval-augmented-generation/": 1,
+    "https://www.ibm.com/think/topics/retrieval-augmented-generation": 1,
+    "https://research.ibm.com/blog/retrieval-augmented-generation-RAG": 1,
+    "https://www.zhihu.com/explore": 0,
+    "https://www.zhihu.com/question/356146882": 0,
+    "https://www.zhihu.com/": 0,
+    "https://www.zhihu.com/selection/": 0
+  }
+}

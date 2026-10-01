@@ -1,0 +1,14 @@
+{
+  "query_id": "q016",
+  "query": "向量数据库 选型 对比",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:29:10",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED 选型 对比&ensearch=1",
+  "sha256": "2827b244dd303e96e45d29be92d89c1493f6ecdddc728b601900fbd6a15b05cb",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "B8 语义引擎换型的真实前置调研"
+}

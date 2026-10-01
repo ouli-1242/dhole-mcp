@@ -1,0 +1,18 @@
+{
+  "query_id": "q071",
+  "labeler": "agent-a",
+  "sheet_sha256": "17d38b363665db0a588c0de38e2f959809c6ff4346978d3c7cf3dc07abc5d275",
+  "created_at": "2026-10-02T00:49:01",
+  "judgments": {
+    "https://www.heyuan110.com/posts/ai/2026-03-02-building-mcp-servers-typescript/": 0,
+    "https://hrletsgo.me/en/documents/json-rpc-over-stdio-mcp-protocol": 1,
+    "https://www.jsonrpc.org/specification": 1,
+    "https://mcpstore.co/server/68300c170b63a9cd4a7c73c7": 0,
+    "https://packages.ecosyste.ms/registries/crates.io/packages/trusty-mcp-core": 0,
+    "https://modelcontextprotocol.io/specification/2025-06-18/basic/transports": 1,
+    "https://moongate.top/en/docs/mcp-stdio-traps": 0,
+    "https://deepwiki.com/MoonshotAI/kimi-cli/3.4-wire-communication-protocol": 0,
+    "https://github.com/a2aproject/A2A/issues/2048": 0,
+    "https://paymentauth.org/draft-payment-transport-mcp-00.txt": 0
+  }
+}

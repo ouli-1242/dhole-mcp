@@ -1,0 +1,14 @@
+{
+  "query_id": "q069",
+  "query": "微信 聊天记录 迁移 到新手机",
+  "engine": "baidu",
+  "captured_at": "2026-10-02T00:34:45",
+  "captured_from_url": "https://www.baidu.com/s?wd=微信 聊天记录 迁移 到新手机&ie=utf-8",
+  "sha256": "7625ae585faac45c08286d377c9ce791d7007e1f38c93d2a5d928da5a0145bcc",
+  "item_nodes": 16,
+  "usable": 6,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "任务类：官方帮助文档检索"
+}

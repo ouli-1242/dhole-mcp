@@ -1,0 +1,14 @@
+{
+  "query_id": "q022",
+  "query": "redis rdb vs aof persistence",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:29:49",
+  "captured_from_url": "https://yandex.com/search/site/?text=redis rdb vs aof persistence&web=1&searchid=9537254",
+  "sha256": "11a8a977e5bfcfad737f6f07a1d839fdebf8f0cbf6d5026fdad15331a4a56547",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q021 英文对应"
+}

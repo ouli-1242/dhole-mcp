@@ -1,0 +1,14 @@
+{
+  "query_id": "q011",
+  "query": "MySQL 索引失效 常见 场景",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:28:42",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED 索引失效 常见 场景",
+  "sha256": "fac92d6dffc6e2b04079706acd930331b6b48f023b3eed42ce06fdc6e8f9df28",
+  "item_nodes": 7,
+  "usable": 4,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "常见中文技术问答"
+}

@@ -1,0 +1,13 @@
+{
+  "query_id": "q059",
+  "labeler": "agent-a",
+  "sheet_sha256": "37ebb986eb2d1403e865f720c64c42093fcef5331ba117ceb212f2d6da795cac",
+  "created_at": "2026-10-02T00:49:00",
+  "judgments": {
+    "https://www.163.com/dy/article/L7TT1OS70553TKFR.html?spss=dy_author": 1,
+    "https://cj.sina.com.cn/articles/view/3750110244/df86242402001fids": 1,
+    "https://finance.sina.com.cn/roll/2026-01-27/doc-inhitacz7623134.shtml": 1,
+    "https://finance.sina.com.cn/jjxw/2025-01-04/doc-inecuqec5582476.shtml": 1,
+    "https://www.163.com/dy/article/L7RP8CMS0553TEUB.html?spss=dy_author": 1
+  }
+}

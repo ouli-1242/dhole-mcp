@@ -1,0 +1,14 @@
+{
+  "query_id": "q005",
+  "query": "rust ownership borrowing explained",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:28:13",
+  "captured_from_url": "https://yandex.com/search/site/?text=rust ownership borrowing explained&web=1&searchid=5845666",
+  "sha256": "2afdde44002092e7e6155be057d374fe099cb98524ea6e30fd8a750ef4090c72",
+  "item_nodes": 14,
+  "usable": 14,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "高频英文技术题"
+}

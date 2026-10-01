@@ -1,0 +1,14 @@
+{
+  "query_id": "q030",
+  "query": "trafilatura main content extraction",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:30:46",
+  "captured_from_url": "https://yandex.com/search/site/?text=trafilatura main content extraction&web=1&searchid=3399308",
+  "sha256": "9e049e3cec8f03ed1e38ccda7a466b02d81a1a60abda3b3bb757dbdb12d4800a",
+  "item_nodes": 14,
+  "usable": 14,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "本项目三级提取梯子的第一级"
+}

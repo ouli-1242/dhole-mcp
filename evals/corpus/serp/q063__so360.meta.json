@@ -1,0 +1,14 @@
+{
+  "query_id": "q063",
+  "query": "护照 办理 需要 材料",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:34:13",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED 办理 需要 材料",
+  "sha256": "4dd61f0b098ae41a36ee7aa6d0170220e393e5ee307a9ad8b232976f2c631073",
+  "item_nodes": 7,
+  "usable": 4,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "任务类：政务流程"
+}

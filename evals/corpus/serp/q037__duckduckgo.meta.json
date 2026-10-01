@@ -1,0 +1,14 @@
+{
+  "query_id": "q037",
+  "query": "python documentation asyncio",
+  "engine": "duckduckgo",
+  "captured_at": "2026-10-02T00:31:32",
+  "captured_from_url": "https://html.duckduckgo.com/html/",
+  "sha256": "b9fa54722f355d737fa14862bed5c499a9f23e7595bbd690fe9b4b8693f3d75a",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "导航类"
+}

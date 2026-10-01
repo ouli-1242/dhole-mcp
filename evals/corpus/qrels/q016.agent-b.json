@@ -1,0 +1,17 @@
+{
+  "query_id": "q016",
+  "labeler": "agent-b",
+  "sheet_sha256": "258a068e55735c8921ab491269b634515f2d67bd5ff0b5c633cde0681f17cd41",
+  "created_at": "2026-10-02T00:41:07",
+  "judgments": {
+    "https://zilliz.com.cn/comparison/milvus-vs-qdrant": 1,
+    "https://zilliz.com.cn/comparison/milvus-vs-pgvector": 1,
+    "https://www.crsky.com/soft/728746.html": 0,
+    "https://m.ali213.net/android/368185.html": 0,
+    "https://www.letsgame.com.cn/app/99535.html": 0,
+    "https://cloud.tencent.com/developer/article/2601251": 1,
+    "https://www.tts8.com/zt/mlyqdzn/": 0,
+    "https://m.xp811.com/azgame/162629.html": 0,
+    "https://zhuanlan.zhihu.com/p/1900547262561617000": 1
+  }
+}

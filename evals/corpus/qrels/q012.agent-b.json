@@ -1,0 +1,18 @@
+{
+  "query_id": "q012",
+  "labeler": "agent-b",
+  "sheet_sha256": "ec587ef2cc77352dbf1be9e1f51580fcefb1cf78c2ba2f1bf96059c0074797a6",
+  "created_at": "2026-10-02T00:41:06",
+  "judgments": {
+    "https://bugs.launchpad.net/dbmail/+bug/482121": 1,
+    "https://discourse.hibernate.org/t/difference-in-boolean-condition-generated-sql-between-5-x-and-6-5-3-final-for-equal-operator-causes-mysql-query-not-using-indexed/10731": 0,
+    "https://ahmadflow.com/how-to-fix-slow-mysql-queries-real-fixes-that-work-2026/": 1,
+    "https://www.youtube.com/watch?v=1MgKSHu_SJY": 1,
+    "https://forums.mysql.com/read.php?24,634112,634144": 1,
+    "https://infrarunbook.com/article/mysql-slow-query-troubleshooting": 1,
+    "https://community.spiceworks.com/t/mysql-query-not-using-indexes/269960": 1,
+    "https://github.com/mbleigh/acts-as-taggable-on/issues/270": 1,
+    "https://dba.stackexchange.com/questions/31184/query-not-using-index-when-it-should": 1,
+    "https://stackoverflow.com/questions/5719392/why-isnt-mysql-using-any-of-these-possible-keys": 1
+  }
+}

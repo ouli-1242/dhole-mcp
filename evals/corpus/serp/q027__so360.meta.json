@@ -1,0 +1,14 @@
+{
+  "query_id": "q027",
+  "query": "HTTP 条件请求 ETag 304 原理",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:30:25",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED 条件请求 ETag 304 原理",
+  "sha256": "f99723cc67c7162cb9c2e953037495821efa3aae225b78fe113f94d2b850f566",
+  "item_nodes": 7,
+  "usable": 5,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "本项目 watch/条件请求机制的基础概念"
+}

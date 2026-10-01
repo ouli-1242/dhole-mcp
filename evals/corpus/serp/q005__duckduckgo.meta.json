@@ -1,0 +1,14 @@
+{
+  "query_id": "q005",
+  "query": "rust ownership borrowing explained",
+  "engine": "duckduckgo",
+  "captured_at": "2026-10-02T00:28:10",
+  "captured_from_url": "https://html.duckduckgo.com/html/",
+  "sha256": "e41f377a05fe56f633fd98b2a2b3cf4d5a25c760199c07ef7e139275b09ea220",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "高频英文技术题"
+}

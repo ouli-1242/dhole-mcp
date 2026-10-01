@@ -1,0 +1,14 @@
+{
+  "query_id": "q032",
+  "query": "cloudflare turnstile how it works",
+  "engine": "duckduckgo",
+  "captured_at": "2026-10-02T00:30:59",
+  "captured_from_url": "https://html.duckduckgo.com/html/",
+  "sha256": "98566b037b96403c6bf9e7312cf93ea7997dcd02335edf560952d38aef20031e",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "硬边界：交互式 Turnstile 的判定对象"
+}

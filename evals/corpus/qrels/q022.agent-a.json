@@ -1,0 +1,24 @@
+{
+  "query_id": "q022",
+  "labeler": "agent-a",
+  "sheet_sha256": "7e1a6d56384b1899efcbdf2044b54fa9883aa8ce0d0834c3b3cc5d102f8e7012",
+  "created_at": "2026-10-02T00:56:42",
+  "judgments": {
+    "https://oneuptime.com/blog/post/2026-01-27-rdb-vs-aof-persistence-redis/view": 1,
+    "https://oneuptime.com/blog/post/2026-01-27-redis-persistence-rdb-aof/view": 1,
+    "https://medium.com/@gauravpatilsde/understanding-redis-data-persistence-aof-vs-rdb-58688dda2c32": 1,
+    "https://dev.to/godofgeeks/redis-persistence-rdb-vs-aof-3lk6": 1,
+    "https://dev.to/leapcell/redis-persistence-explained-aof-rdb-1i23": 1,
+    "https://www.leavesnet.com/Contents/220": 1,
+    "https://awjunaid.com/nosql/redis-persistence-options-rdb-snapshots-aof-logs-and-data-recovery-explained/": 1,
+    "https://devops.aibit.im/en/article/redis-persistence-rdb-vs-aof-explained": 1,
+    "https://khimananda.com/blog/redis-persistence-rdb-vs-aof-compared": 1,
+    "https://www.jusdb.com/blog/redis-persistence-rdb-aof-comparison": 1,
+    "https://learn.programmingline.com/learn/redis/redis-rdb-vs-aof": 1,
+    "https://redis.io/tutorials/operate/redis-at-scale/persistence-and-durability/": 1,
+    "https://bfotool.com/blog/redis-persistence-rdb-vs-aof-explained": 1,
+    "https://rafftechnologies.com/learn/guides/redis-persistence-rdb-aof-data-loss-trade-offs": 1,
+    "https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/": 1,
+    "https://redis-doc.netlify.app/docs/management/persistence/": 1
+  }
+}

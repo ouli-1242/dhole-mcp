@@ -1,0 +1,14 @@
+{
+  "query_id": "q064",
+  "query": "二手车 过户 流程",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:34:18",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED 过户 流程",
+  "sha256": "33d9b7e7733787da8c0214c23dd7715366f88fff2b70e879459fa55a22e53559",
+  "item_nodes": 7,
+  "usable": 3,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "任务类：流程检索"
+}

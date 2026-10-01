@@ -1,0 +1,11 @@
+{
+  "query_id": "q023",
+  "labeler": "agent-a",
+  "sheet_sha256": "d76fb142eba9f59a12218dccbc56432d00bf991db43c499f716aaa12c8337ac8",
+  "created_at": "2026-10-02T00:56:42",
+  "judgments": {
+    "https://cloud.tencent.com/developer/article/2661343": 1,
+    "https://blog.csdn.net/weixin_43107715/article/details/160122694": 1,
+    "https://blog.csdn.net/weixin_27024175/article/details/165496567": 1
+  }
+}

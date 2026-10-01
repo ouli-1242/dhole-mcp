@@ -1,6 +1,105 @@
 # 模拟测试（计划第十章 eval 基线）
 
 > 2026-10-01 执行　·　被测版本 **17.0**（`24b3aed`）　·　零真实站点流量
+> 2026-10-02 追加：B0（大众化一刀切的量尺与地基）开工，见「B0 · 排序/去重评测地基」
+
+## B0 · 排序/去重评测地基（2026-10-02 动工）
+
+大众化一刀切（17.0 重构）的硬约束是：**动排序/去重必须先有可复现评测**。B0 就是
+那把尺子。两个集，**各出各的数，永不合并**——合起来会掩盖"模型涨了但解析器拖后腿"。
+
+### 集 A：真实 SERP 冻结语料 + 盲评
+
+- `evals/queries.jsonl`：72 题活集（只增不减）。每条四件：`查询 + 来源`
+  （`repo_evidence`（仓内证据）/ `public_data`（公开常见题）/ `usage_scenario`
+  （真实场景））+ 语言 + 备注；盲评标注与 labeler 在 qrels 侧落盘。
+- `evals/capture_serp.py`：冻结采集器。**确定性分层抽样**（crc32(query_id) 播种，
+  同一天重跑抽到同组；每题 3–4 家引擎、横跨 ≥2 个索引家族——共识分母是家族数；
+  sogou 家族进所有中文题，英文题只给少数派名额，理由见下）；**拒写无结果页**
+  （usable=0 一律跳过并记 `failures.jsonl`）；断点续跑（已有页面跳过，重跑只补缺）。
+- 语料落 `evals/corpus/serp/<qid>__<engine>.html` + `.meta.json`
+  （`captured_from_url / sha256 / item_nodes / usable / scrubbed / labeler`）。
+- `evals/ranking_baseline.py`：整条链重放（引擎 parser → `_normalize_url` 去重 →
+  `_rank(mode="merge")` → `_apply_quality_boost` → `_diversify` → 两级过滤，与
+  `smart_search` 无神经模型路径同序）。有 qrels 的题出 P@5 / P@10 / MRR / nDCG@10。
+  **神经重排不在此处**——它归集 B。
+- **去重准确率**：集 A 的免费副产品，不另造数据集。机械可判两类直接出数：
+  可疑合并（host 不同并成一个 key=必错）、可疑拆分（host+path 相同分成不同 key）；
+  其余等价性判断列清单供人抽查，不冒充自动结论。
+
+### 集 B：纯模型（MIRB / MTEB-zh）
+
+接口只有 `score(query, docs) -> [float]`，与引擎无关、跨版本可比。数据集几百 MB
+**不进 git**：手动放 `evals/.runtime/eval_sets/<name>/qrels.jsonl`（每行
+`{query, positives: [doc], negatives: [doc]}`）后 `ranking_baseline.py` 才跑，
+否则如实报 `not_run`。换型判据（现在定死）：两标一致率 <80% 的题剔除；剔除后
+不足 20 条 → **判"无证据，不换"**；分差不明显 → 不换。
+
+### 标注协议（避开"用旧模型输出当标准答案"）
+
+**盲评**：只给 查询+标题+摘要（截 160 字）；引擎名、返回顺序、URL 一律不给
+（URL 会泄漏引擎，顺序有位置偏置）。**逐条二元**（relevant: 0|1），不让判官排
+十条——LLM 判官的位置偏置与长度偏置在排序式判断里放大。**provenance 落盘**：
+qrels 记 labeler 身份与盲表 sha256，没记录就不可复现，等于没标。
+
+工具：`evals/label_serp.py emit|collect|agree`。标注者两份：作者侧一份
+（labeler=agent-b）+ 一个与本任务无关联上下文的第三方 agent 一份（labeler=agent-a，
+独立上下文、只拿到盲表与判断纪律），逐题算一致率，分歧由作者仲裁。
+
+### 集 A 语料的 robots 例外（显式登记，与 D1–D5 同文体）
+
+搜索引擎的 robots.txt 普遍 Disallow `/search`，而 `robots.py` 默认遵守。造语料
+必须豁免：`evals/capture_serp.py` 顶部显式设 `DHOLE_IGNORE_ROBOTS=1`。这是
+**造评测语料的专用例外**——不进产品路径、不进任何测试、不默认开。（实情：引擎
+抓取走 search_metasearch 的自建 HTTP 客户端，本就不经过 robots.py；这行是纵深
+防御。它**不是** conftest.py 那句 `setenv` 的复用，也不能被产品代码引用。）
+
+### B0 采集现状（2026-10-02，诚实账）
+
+- 110 页入库 / 72 题 / 覆盖 67 题。本网络可达：sogou、baidu、so360、bing、yandex；
+  **duckduckgo、brave 全部被拒（连接层失败），bing_global 返回 0 容器** ——
+  这三家在有 VPN 的环境重跑 `capture_serp.py` 即补齐（断点续跑，只补缺）。
+- 礼貌间隔：每引擎 3–5s，全量 239 次请求一次跑完无封禁。
+- 我的 12 题 qrels 已收（labeler=agent-b）；第三方 agent 的标注与一致率随语料
+  补齐推进。
+- 首批指标（agent-b，n=12，冻结语料重放、无神经重排）：P@5 **0.333** ·
+  P@10 **0.275** · MRR **0.472** · nDCG@10 **0.520**。样本里 5 题（q019/q036/
+  q047/q055/q068）是"整轮无一相关结果"的失败样本——它们正是这把尺子要抓住的
+  对象：引擎返回了站点根页/事件页/日历页，没有一条回答查询意图。语料补齐、
+  双标一致率筛过后再谈这些数字的含义。
+
+### 双标一致率（2026-10-02 首轮，定 B8 换型判据的尺子）
+
+- 覆盖：labeler=**agent-a**（独立上下文第三方 agent，67 题 / 774 条）、
+  labeler=**agent-b**（作者侧，12 题 / 133 条）。
+- 重叠 12 题、119 条判断上的一致率：**118/119 = 99.2%**。唯一分歧：q012 的一条
+  Launchpad 旧 bug 单（agent-a 判 0：太老太偏；agent-b 判 1：主题确实切题）。
+  两份卷各自保留原判；按"拿不准 → 0"的纪律，将来合成 gold 时这条应落 0 ——
+  仲裁在 gold 被真正消费（B8）时落笔，不在这里提前改卷。
+- **没有任何一题低于 80% 线** → 本轮没有因一致率剔除的题。判据重申：剔除后
+  不足 20 条 → "无证据，不换"；分差不明显 → 不换。
+- 两标各自的全量指标同量级（agent-a n=67：P@5 0.373 / MRR 0.559 / nDCG@10
+  0.654；agent-b n=12：P@5 0.333 / MRR 0.472 / nDCG@10 0.520）——尺子本身
+  没有系统分歧。
+
+---
+
+
+## B0 开工基线（2026-10-02，`928d832`，分支 `feat/mainstream-config`）
+
+大众化一刀切（B0–B8）动工前量定的四个数。**后面每批都对照这一条**——没基线就没法证明"没变坏"。复测命令都在仓库根：
+
+| 数 | 值 | 命令 |
+|---|---|---|
+| 全量测试 | **2,923 passed / 7 skipped / 61 deselected**，121s | `env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY python -m pytest -q` |
+| 连接期字符 | **24,030**（instructions 2,345 + tools/list 21,685）；`DHOLE_TASKS=1` → 27,818；`DHOLE_VAULT=1` → 27,327；两旗全开 → 31,115 | `python tests/tool_payload_measure.py` |
+| MCP 快照 | **35 次 tools/call，isError 真 14 / 假 21**，markers=none，11.3s | `python tests/mcp_snapshot.py` |
+| ruff | **All checks passed**（基线原有 8 个 W 批次残留 F401/F541，已在 `928d832` 先修掉） | `python -m ruff check src tests` |
+
+注：交接文档写的 2,398 例是 17.0 早期数字；D1–D5 修复批（+43 例）等把套件推到了现在的 2,923。以本条为准。
+另注（沿用 2026-10-01 的环境注记）：本机 `HTTPS_PROXY` 指向沙箱代理，跑任何真实网络脚本前先摘代理变量。
+
+---
 > 2026-10-01 追加：四项缺陷已修复并复验（见文末「修复与复验」）
 > 2026-10-01 追加：补齐两处 eval 缺口 —— `feed_fetch` 的 `since` 增量端到端、视觉辅助基线（见「视觉辅助基线」）
 > 2026-10-01 追加：L3/L4 重复任务端到端（见「L3 / L4 重复任务」）

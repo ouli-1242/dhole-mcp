@@ -1,0 +1,14 @@
+{
+  "query_id": "q038",
+  "query": "MDN fetch API",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:31:38",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED fetch API&ensearch=1",
+  "sha256": "27473cdc408247ed5bdc48e20c9cff007b3ff90034ce4c86ecc2e9da822f474c",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "导航类"
+}

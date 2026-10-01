@@ -1,0 +1,14 @@
+{
+  "query_id": "q070",
+  "query": "github ouli-1242 dhole-mcp",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:34:49",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED ouli-1242 dhole-mcp&ensearch=1",
+  "sha256": "8f78c75f835d66a0bf49b298ffca307f158883299849ade16d8a8b644034f893",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "本仓库自身（导航/存在性）"
+}

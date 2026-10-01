@@ -1,0 +1,18 @@
+{
+  "query_id": "q035",
+  "labeler": "agent-a",
+  "sheet_sha256": "4d60cb814808f9266309b17c039edde86cb88d3819adb156af4c02e2fd343eca",
+  "created_at": "2026-10-02T00:56:44",
+  "judgments": {
+    "https://dev.to/elsayed85/building-model-context-protocol-mcp-servers-with-stdio-a-complete-guide-513k": 1,
+    "https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-create-new-server": 0,
+    "https://learn.microsoft.com/en-us/microsoft-copilot-studio/agent-extend-action-mcp": 0,
+    "https://github.com/modelcontextprotocol/typescript-sdk": 1,
+    "https://github.com/modelcontextprotocol": 1,
+    "https://openai.github.io/openai-agents-python/mcp/": 1,
+    "https://modelcontextprotocol.io/specification/2025-06-18/basic/transports": 1,
+    "https://modelcontextprotocol.info/docs/concepts/transports/": 1,
+    "https://modelcontextprotocol.info/specification/2024-11-05/basic/transports/": 1,
+    "https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio": 1
+  }
+}

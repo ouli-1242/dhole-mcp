@@ -1,0 +1,13 @@
+{
+  "query_id": "q019",
+  "labeler": "agent-a",
+  "sheet_sha256": "26a5f2fa46ad944ac196be52747d244fba69522f843fccc4276d230a90f5da76",
+  "created_at": "2026-10-02T00:47:25",
+  "judgments": {
+    "https://git-scm.com/install/": 0,
+    "https://git-scm.com/install/windows": 0,
+    "https://gitforwindows.org/": 0,
+    "https://github.com/git-guides": 0,
+    "https://github.com/": 0
+  }
+}

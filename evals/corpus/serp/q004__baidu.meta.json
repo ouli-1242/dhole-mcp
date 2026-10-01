@@ -1,0 +1,14 @@
+{
+  "query_id": "q004",
+  "query": "SQLite WAL 模式 原理",
+  "engine": "baidu",
+  "captured_at": "2026-10-02T00:28:03",
+  "captured_from_url": "https://www.baidu.com/s?wd=SQLite WAL 模式 原理&ie=utf-8",
+  "sha256": "71e643491889bd6afdfcbdb68b0bbc0daddc185f977f1f08e7fe27ad541df74a",
+  "item_nodes": 11,
+  "usable": 9,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q003 的中文对应"
+}

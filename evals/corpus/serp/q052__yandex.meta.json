@@ -1,0 +1,14 @@
+{
+  "query_id": "q052",
+  "query": "current ubuntu lts release",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:33:11",
+  "captured_from_url": "https://yandex.com/search/site/?text=current ubuntu lts release&web=1&searchid=8796609",
+  "sha256": "9431711771b64c700cde21e7f7da648c9cb6a79601f4acc57817145f58e910c9",
+  "item_nodes": 14,
+  "usable": 14,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类：q051 英文对应"
+}

@@ -1,0 +1,21 @@
+{
+  "query_id": "q002",
+  "labeler": "agent-a",
+  "sheet_sha256": "d46de813f38c4cab2e293a3dad80848f956d4e17ae3e91677e2b6e62fb72d462",
+  "created_at": "2026-10-02T00:47:23",
+  "judgments": {
+    "https://blog.gitcode.com/a5cf7b132f4f569c15709a4d0be3cee9.html": 0,
+    "https://blog.gitcode.com/b28472e42b4e2a4d8d2c7dbc0f9702a7.html": 0,
+    "https://blog.gitcode.com/db89576f7aa9cb93d7cb473bfc9bb53e.html": 0,
+    "https://blog.gitcode.com/fde9c552913229f7924d017f4f7cb1d6.html": 0,
+    "http://mp.weixin.qq.com/count/oIWsFt3g1ChdqHM0LLmId4CZ92Gg/2247489672/1&scene=6": 1,
+    "https://www.cnblogs.com/megengine/p/15122926.html": 0,
+    "https://wenku.csdn.net/column/1ha1psjt0d": 0,
+    "https://zhuanlan.zhihu.com/p/517135133": 0,
+    "https://blog.csdn.net/qq_41185868/article/details/136221621": 0,
+    "http://www.haoziyuan.cc/article/262783.html": 0,
+    "https://wenku.csdn.net/column/4uxcn7n137": 0,
+    "https://blog.csdn.net/weixin_30693683/article/details/95452388": 0,
+    "https://www.toutiao.com/article/7487898382283850281/": 0
+  }
+}

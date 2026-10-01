@@ -1,0 +1,28 @@
+{
+  "query_id": "q030",
+  "labeler": "agent-a",
+  "sheet_sha256": "2c333033dfb3b1983c682da0f39640abccc842ca2c7d8f1f724c27046cd205c5",
+  "created_at": "2026-10-02T00:56:43",
+  "judgments": {
+    "https://shop8k.com/": 1,
+    "https://adrien.barbaresi.eu/blog/trafilatura-main-text-content-python.html": 1,
+    "https://medium.com/@viviennecuillerier/extracting-the-main-text-content-from-web-pages-using-python-6b9446a2b184": 1,
+    "https://www.markdownee.com/fetch/": 0,
+    "https://central.yourtext.guru/interview-of-adrien-barbaresi-by-guillaume-pitel/": 1,
+    "https://pypi.org/project/trafilaturacore/0.8.4/": 1,
+    "https://www.trafilaturacore.com/": 1,
+    "https://serp.fast/tools/trafilatura": 1,
+    "https://trafilatura.readthedocs.io/": 1,
+    "https://gist.github.com/phil65/1af7776dc82d6cf3906e7f49218f1999": 1,
+    "http://www.sfsyjx.com/type/dianying.html": 0,
+    "https://m.ixigua.com/video/6679265193756721677": 0,
+    "http://www.jr007.com/": 0,
+    "https://jiakeapp.com/": 0,
+    "https://www.ymk002.com/": 0,
+    "https://sczywd.com/": 0,
+    "https://m.betuoba.com/": 0,
+    "https://www.znzcgc.com/": 0,
+    "https://lybe.com.cn/": 0,
+    "https://tv.sohu.com/v/dXMvMzcwMDc5Nzg1LzIyODMyNDYyMi5zaHRtbA==.html": 0
+  }
+}

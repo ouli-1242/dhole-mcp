@@ -1,0 +1,14 @@
+{
+  "query_id": "q044",
+  "query": "kubernetes service discovery explained",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:32:20",
+  "captured_from_url": "https://yandex.com/search/site/?text=kubernetes service discovery explained&web=1&searchid=1797939",
+  "sha256": "871c54b5a1c511a282df14c5381361c9ae3899bcbe44ad404a9c35c973d6018d",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q043 英文对应"
+}

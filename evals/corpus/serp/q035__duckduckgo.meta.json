@@ -1,0 +1,14 @@
+{
+  "query_id": "q035",
+  "query": "MCP model context protocol stdio",
+  "engine": "duckduckgo",
+  "captured_at": "2026-10-02T00:31:19",
+  "captured_from_url": "https://html.duckduckgo.com/html/",
+  "sha256": "b2be2070c4a14e949cf23359bcd72e6ab267a18ee74d2d2a713055f0637c0c8b",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "本项目所属协议生态"
+}

@@ -1,0 +1,14 @@
+{
+  "query_id": "q054",
+  "query": "rust release notes latest",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:33:25",
+  "captured_from_url": "https://yandex.com/search/site/?text=rust release notes latest&web=1&searchid=3339741",
+  "sha256": "5fda422f1f3dcae9cc74a1449b65261921f24aac21bc1e2bc0a989162ceda8b9",
+  "item_nodes": 14,
+  "usable": 14,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类：q053 英文对应"
+}

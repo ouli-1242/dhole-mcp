@@ -1,0 +1,14 @@
+{
+  "query_id": "q006",
+  "query": "Rust 所有权 与 借用 详解",
+  "engine": "sogou",
+  "captured_at": "2026-10-02T00:28:14",
+  "captured_from_url": "https://www.sogou.com/web?query=REDACTED 所有权 与 借用 详解",
+  "sha256": "af3c2ac999196a88648d0be725b58fead5b3da03979539eb46dbf133302a74a6",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q005 中文对应"
+}

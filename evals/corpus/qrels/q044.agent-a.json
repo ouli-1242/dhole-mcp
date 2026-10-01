@@ -1,0 +1,29 @@
+{
+  "query_id": "q044",
+  "labeler": "agent-a",
+  "sheet_sha256": "44db2869b6c1f9aa150ae05c5e3056e6dbcef3195fe90e595171aef1251342b2",
+  "created_at": "2026-10-02T00:56:46",
+  "judgments": {
+    "https://platform9.com/blog/kubernetes-service-discovery-principles-in-practice/": 1,
+    "https://dev.to/nomzykush/basic-guide-to-kubernetes-service-discovery-dmd": 1,
+    "https://github.com/kubernetes/kubernetes": 0,
+    "https://www.geeksforgeeks.org/devops/introduction-to-kubernetes-k8s/": 0,
+    "https://kubernetes.io/": 0,
+    "https://kubernetes.io/docs/home/": 0,
+    "https://kubex.ai/kubernetes-autoscaling/kubernetes-service-discovery/": 1,
+    "https://last9.io/blog/kubernetes-service-discovery/": 1,
+    "https://daily.dev/posts/kubernetes-service-discovery-explained-with-practical-examples-khjaphfou": 1,
+    "https://www.linkedin.com/posts/deepikamarepally_what-is-service-discovery-in-kubernetes-activity-7468624748516843520-9unY": 1,
+    "https://phoenixnap.com/kb/kubernetes-service-discovery": 1,
+    "https://imzye.com/Cloud/Kubernetes/Kubernetes-Service-Discovery-Explained/": 1,
+    "https://www.plural.sh/blog/kubernetes-service-discovery-guide/": 1,
+    "https://k8s.guru/docs/networking/services/": 1,
+    "https://medium.com/@sudeephs21/microservices-and-service-discovery-explained-with-kubernetes-a-practical-guide-d4e5a4515ec9": 1,
+    "https://kubernetes.io/docs/concepts/services-networking/service/": 1,
+    "https://www.networkershome.com/fundamentals/kubernetes-networking/kubernetes-service-discovery/": 1,
+    "https://iximiuz.com/en/posts/service-discovery-in-kubernetes/": 1,
+    "https://www.slingacademy.com/article/service-discovery-in-kubernetes-methods-and-tools/": 1,
+    "https://www.redhat.com/en/topics/containers/what-is-kubernetes": 0,
+    "https://devopsboys.com/blog/what-is-service-discovery-kubernetes-explained-2026": 1
+  }
+}

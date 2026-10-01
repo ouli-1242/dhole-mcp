@@ -1,0 +1,14 @@
+{
+  "query_id": "q036",
+  "query": "huggingface gte multilingual embeddings",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:31:24",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED gte multilingual embeddings&ensearch=1",
+  "sha256": "296f876b25d1b44c7d3d29069cccbcee594b33d914b77b73f036db22a09605a8",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "B8 候选模型"
+}

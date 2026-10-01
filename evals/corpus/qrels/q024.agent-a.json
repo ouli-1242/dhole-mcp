@@ -1,0 +1,28 @@
+{
+  "query_id": "q024",
+  "labeler": "agent-a",
+  "sheet_sha256": "701c85cca0cd8f1c51c006293ed74b8d947556bab97bf42a00a93a8ce635a10f",
+  "created_at": "2026-10-02T00:56:42",
+  "judgments": {
+    "https://nitropack.io/blog/fix-largest-contentful-paint/": 1,
+    "https://www.infineural.com/fix-largest-contentful-paint-wordpress-elementor/": 1,
+    "https://addyosmani.com/blog/preload-hero-images/?ref=cms.macarthur.me": 1,
+    "https://frontendchecklist.io/rules/performance/lazy-above-fold": 1,
+    "https://www.pagespeedmatters.com/resources/guides/how-to-improve-lcp": 1,
+    "https://eraoftech.medium.com/how-to-fix-this-web-vital-largest-contentful-element-painted-within-the-viewport-in-angular-aa78931f2726": 1,
+    "https://www.linkedin.com/posts/anthony-sidashin_if-you-have-a-js-powered-widget-like-a-calculator-activity-7256730380148305922-mvP2": 0,
+    "https://pantra.io/prompts/improve-lcp-v0": 1,
+    "https://web.dev/articles/lcp": 1,
+    "https://abc.vhrghala.org/p/https/web.dev/articles/lcp": 1,
+    "https://coralogix.com/guides/real-user-monitoring/largest-contentful-paint-improve-score/": 1,
+    "https://generalistprogrammer.com/tutorials/largest-contentful-paint-lcp-complete-guide": 1,
+    "https://loadtime.dev/core-web-vitals/lcp": 1,
+    "https://www.uk2.net/blog/largest-contentful-paint-lcp-what-it-is-and-how-to-improve-it/": 1,
+    "https://www.hostinger.com/tutorials/largest-contentful-paint/": 1,
+    "https://backlinko.com/lcp": 1,
+    "https://web.dev/articles/optimize-lcp": 1,
+    "https://www.debugbear.com/test/website-speed/OpoyG1n5/lighthouse?showLHMetrics=true": 1,
+    "https://ics.media/en/entry/221223/": 1,
+    "https://ahrefs.com/blog/largest-contentful-paint-lcp/": 1
+  }
+}

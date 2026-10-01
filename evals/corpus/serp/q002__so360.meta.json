@@ -1,0 +1,14 @@
+{
+  "query_id": "q002",
+  "query": "pydantic v2 性能 提升 原理",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:27:51",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED v2 性能 提升 原理",
+  "sha256": "22d6d0ad75119f22cee31daba9c3ad375c55a97b8a603866b39886f1ab860771",
+  "item_nodes": 7,
+  "usable": 5,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "常见中文技术问答"
+}

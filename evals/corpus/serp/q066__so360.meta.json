@@ -1,0 +1,14 @@
+{
+  "query_id": "q066",
+  "query": "增值税 发票 开具 流程",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:34:29",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED 发票 开具 流程",
+  "sha256": "9ac1239c0adede2ecac71af61ab76fe69bbace2d8ad14277654c67b9a370b7ba",
+  "item_nodes": 7,
+  "usable": 3,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "任务类：政务流程"
+}

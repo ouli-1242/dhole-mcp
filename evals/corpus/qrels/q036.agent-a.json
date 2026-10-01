@@ -1,0 +1,18 @@
+{
+  "query_id": "q036",
+  "labeler": "agent-a",
+  "sheet_sha256": "3e5baa095d6aa908dd6c14cc467866cee6351ee5ba535c06d658f9e3639124f6",
+  "created_at": "2026-10-02T00:56:44",
+  "judgments": {
+    "https://hf-mirror.com/": 0,
+    "https://huggingface.co/docs": 0,
+    "https://github.com/huggingface": 0,
+    "https://huggingface.co/learn": 0,
+    "https://huggingface.co/docs/hub/index": 0,
+    "https://huggingface.co/": 0,
+    "https://huggingface.co/models": 0,
+    "https://huggingface.co/spaces": 0,
+    "https://huggingface.co/welcome": 0,
+    "https://huggingface.co/huggingface": 0
+  }
+}

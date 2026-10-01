@@ -1,0 +1,14 @@
+{
+  "query_id": "q012",
+  "query": "mysql query not using index causes",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:28:51",
+  "captured_from_url": "https://yandex.com/search/site/?text=mysql query not using index causes&web=1&searchid=6730116",
+  "sha256": "0d52fea6f79bf979dcb31b18474e7247cd1ff06902198a85533884e1349b210d",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q011 英文对应"
+}

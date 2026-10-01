@@ -1,0 +1,28 @@
+{
+  "query_id": "q026",
+  "labeler": "agent-a",
+  "sheet_sha256": "c7377f50c1d8d023a995c95f8086eaf6f82a9a3b70dca638b28c6ceaf1586274",
+  "created_at": "2026-10-02T00:56:43",
+  "judgments": {
+    "https://javascript.info/regexp-greedy-and-lazy": 1,
+    "https://www.toolhq.io/blog/regex-greedy-vs-lazy-quantifiers": 1,
+    "https://tutorialreference.com/javascript/advanced-topics/regular-expressions/javascript-regular-expressions-greedy-and-lazy-quantifiers": 1,
+    "https://regexpro.dev/reference/concept-lazy-vs-greedy": 1,
+    "https://learn.microsoft.com/en-us/dotnet/standard/base-types/quantifiers-in-regular-expressions": 1,
+    "https://regexr.com/": 0,
+    "https://www.rexegg.com/regex-quickstart.php": 0,
+    "https://regexbox.com/cheatsheet": 0,
+    "https://www.irreva.com/regex-greedy-vs-lazy": 1,
+    "https://regexlearn.com/": 0,
+    "https://www.rexegg.com/regex-quantifiers.php": 1,
+    "https://xerobit.dev/blog/regex-quantifiers-guide/": 1,
+    "https://regexregex.com/en/": 0,
+    "https://www.geeksforgeeks.org/dsa/write-regular-expressions/": 0,
+    "https://riptutorial.com/regex/topic/429/greedy-and-lazy-quantifiers": 1,
+    "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_expressions/Cheatsheet": 0,
+    "https://www.regular-expressions.info/": 0,
+    "https://www.simpleregex.org/": 0,
+    "https://stackoverflow.com/questions/2301285/what-do-lazy-and-greedy-mean-in-the-context-of-regular-expressions": 1,
+    "https://regex101.com/": 0
+  }
+}

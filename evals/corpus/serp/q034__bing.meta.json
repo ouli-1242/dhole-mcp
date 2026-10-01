@@ -1,0 +1,14 @@
+{
+  "query_id": "q034",
+  "query": "SSRF cloud metadata 169.254.169.254",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:31:08",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED cloud metadata 169.254.169.254&ensearch=1",
+  "sha256": "2af0bf0d7e4be9be361459d6faed6cb735eb1350250a3237455637f610482a07",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "安全守卫的靶子"
+}

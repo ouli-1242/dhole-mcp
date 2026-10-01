@@ -1,0 +1,14 @@
+{
+  "query_id": "q057",
+  "query": "2026 国庆 高速免费 时间",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:33:47",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED 国庆 高速免费 时间&ensearch=1",
+  "sha256": "114c4bb69f8d807dc4a8e85dc64bbe7b9e02dffa753fcb2aebaa22376dd80953",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类：时令真实问题"
+}

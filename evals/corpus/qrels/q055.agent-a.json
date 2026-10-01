@@ -1,0 +1,17 @@
+{
+  "query_id": "q055",
+  "labeler": "agent-a",
+  "sheet_sha256": "fa8d400ccd6ce2396f52dc3664bc63f98b7fd7642c599e9e06b3d54dfbc479de",
+  "created_at": "2026-10-02T00:48:59",
+  "judgments": {
+    "https://www.calendarlabs.com/2026-calendar": 0,
+    "https://www.calendardate.com/2026.php": 0,
+    "https://www.calendardate.com/year2026_holidays.php": 0,
+    "https://www.thefactsite.com/year/2026/": 0,
+    "https://www.timeanddate.com/calendar/?wno=1": 0,
+    "https://www.calendarr.com/united-states/calendar-2026/": 0,
+    "https://www.britannica.com/topic/Major-Events-of-2026": 0,
+    "https://www.vanityfair.com/culture/story/cultural-calendar-2026": 0,
+    "https://www.timeanddate.com/calendar/?year=2026&country=1": 0
+  }
+}

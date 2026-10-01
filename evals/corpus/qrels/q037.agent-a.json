@@ -1,0 +1,26 @@
+{
+  "query_id": "q037",
+  "labeler": "agent-a",
+  "sheet_sha256": "8892db1c9182fd414ccd6136d111205b1fb4f7b3ee21500c3e561c0f01f220ba",
+  "created_at": "2026-10-02T00:56:45",
+  "judgments": {
+    "https://www.linkedin.com/pulse/asynchronous-programming-asyncio-python-yamil-garcia-ptpoe": 1,
+    "https://cheat.readthedocs.io/en/latest/python/asyncio.html": 1,
+    "https://el-arma.github.io/python.tut.ai/": 1,
+    "https://docs.astral.sh/ruff/rules/asyncio-dangling-task/": 0,
+    "https://removal.eventlet.org/guide/resources/": 0,
+    "https://docs.python.org/3/library/asyncio-task.html": 1,
+    "https://docs.python.org/3/library/asyncio-api-index.html": 1,
+    "https://www.datacamp.com/tutorial/python-async-programming": 1,
+    "https://www.w3schools.com/python/ref_module_asyncio.asp": 1,
+    "https://realpython.com/async-io-python/": 1,
+    "https://documentation.help/python-3-7-3/asyncio-protocol.html": 1,
+    "http://docs.aiohttp.org/en/stable/index.html": 0,
+    "https://docs.python.org/3/library/asyncio-threading.html": 1,
+    "https://www.geeksforgeeks.org/python/asyncio-in-python/": 1,
+    "https://realpython.com/ref/stdlib/asyncio/": 1,
+    "https://docs.pythonlang.net/3/library/asyncio.html": 1,
+    "https://docs.python.org/3/library/asyncio.html": 1,
+    "https://getdocs.org/Python/docs/3.10/library/asyncio": 1
+  }
+}

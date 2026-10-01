@@ -1,0 +1,14 @@
+{
+  "query_id": "q062",
+  "query": "劳动合同 试用期 规定",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:34:10",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED 试用期 规定&ensearch=1",
+  "sha256": "37231927444ac60185916270e129c2d11a0b4be8d8581ee4c69991fd94bced54",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "任务类：法条检索，权威源判定"
+}

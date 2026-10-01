@@ -1,0 +1,14 @@
+{
+  "query_id": "q025",
+  "labeler": "agent-a",
+  "sheet_sha256": "f84dadf128303cd33f380dcb1e2c08877919f634f53f758bc91994315a72c836",
+  "created_at": "2026-10-02T00:56:43",
+  "judgments": {
+    "https://blog.csdn.net/CodeNexus/article/details/154577001": 1,
+    "https://cloud.tencent.com/developer/article/1660522": 1,
+    "https://www.zhihu.com/question/556549441/answer/3380494234": 0,
+    "https://www.cnblogs.com/fangsmile/p/14278324.html": 1,
+    "https://www.jb51.net/article/31491.htm": 1,
+    "https://blog.csdn.net/LiteProceed/article/details/155267619": 1
+  }
+}

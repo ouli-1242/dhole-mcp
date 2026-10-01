@@ -1,0 +1,14 @@
+{
+  "query_id": "q018",
+  "query": "css flexbox center vertically",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:29:19",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED flexbox center vertically&ensearch=1",
+  "sha256": "7db9c871d0a12087285c0881bbc432c32f9886f6f60ac1d5be3909da09e1f3ae",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q017 英文对应"
+}

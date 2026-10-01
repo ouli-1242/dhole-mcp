@@ -1,0 +1,14 @@
+{
+  "query_id": "q043",
+  "query": "Kubernetes 服务发现 机制",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:32:08",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED 服务发现 机制",
+  "sha256": "2081a7212490114659642612a85eab4765147548f3260ccf809cab4e362fb6cc",
+  "item_nodes": 7,
+  "usable": 5,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "常见中文技术问答"
+}

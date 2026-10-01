@@ -1,0 +1,14 @@
+{
+  "query_id": "q071",
+  "query": "json-rpc 2.0 stdio protocol specification",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:35:07",
+  "captured_from_url": "https://yandex.com/search/site/?text=json-rpc 2.0 stdio protocol specification&web=1&searchid=5040317",
+  "sha256": "b065c01b42dbf0cb2256d199c437138bbdff9bdd9eb0e2617f8e38c60ae0381a",
+  "item_nodes": 14,
+  "usable": 14,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "wire 层的协议依据"
+}

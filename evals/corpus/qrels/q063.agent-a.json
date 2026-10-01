@@ -1,0 +1,20 @@
+{
+  "query_id": "q063",
+  "labeler": "agent-a",
+  "sheet_sha256": "e3bbee09d80894be14efdbcdd8d3d49878efc2f0a29c1de52d2a183c75e4bd67",
+  "created_at": "2026-10-02T00:49:00",
+  "judgments": {
+    "https://zhuanlan.zhihu.com/p/27836891916": 1,
+    "https://baike.baidu.com/item/%E4%B8%AD%E5%8D%8E%E4%BA%BA%E6%B0%91%E5%85%B1%E5%92%8C%E5%9B%BD%E6%8A%A4%E7%85%A7/6133676": 0,
+    "https://zhuanlan.zhihu.com/p/1937176738871354908": 1,
+    "https://cs.mfa.gov.cn/": 1,
+    "https://www.zhihu.com/question/19786477": 1,
+    "https://ailegal.baidu.com/legalarticle/qadetail?id=391093222742ac001801": 1,
+    "https://china.findlaw.cn/zhishi/a2107144.html": 1,
+    "https://www.nia.gov.cn/": 0,
+    "https://baike.baidu.com/item/%E6%8A%A4%E7%85%A7/843949": 0,
+    "https://s.nia.gov.cn/mps/bszy/gmcrg/slpthz/201903/t20190313_1011.html": 1,
+    "https://cs.mfa.gov.cn/zggmcg/hz/sbhz/": 1,
+    "https://s.nia.gov.cn/mps/bszy/gmcrg/slpthz/": 1
+  }
+}

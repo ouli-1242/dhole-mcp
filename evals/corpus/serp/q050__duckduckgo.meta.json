@@ -1,0 +1,14 @@
+{
+  "query_id": "q050",
+  "query": "latest chrome stable release",
+  "engine": "duckduckgo",
+  "captured_at": "2026-10-02T00:32:55",
+  "captured_from_url": "https://html.duckduckgo.com/html/",
+  "sha256": "7d45a0ae02413602d9dc94be284afbac6d45841ce6a756d84233b3cef5461193",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类：q049 英文对应"
+}

@@ -1,0 +1,13 @@
+{
+  "query_id": "q072",
+  "labeler": "agent-a",
+  "sheet_sha256": "550c333b39ce04da9f5e640a6245c41a335c574dbae4fe43b321bfff45cb8910",
+  "created_at": "2026-10-02T00:49:02",
+  "judgments": {
+    "https://www.python.org/downloads/": 0,
+    "https://www.online-python.com/": 0,
+    "https://docs.python.org/": 0,
+    "https://www.w3schools.com/python/": 0,
+    "https://www.python.org/": 0
+  }
+}

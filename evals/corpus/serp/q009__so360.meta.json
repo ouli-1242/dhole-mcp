@@ -1,0 +1,14 @@
+{
+  "query_id": "q009",
+  "query": "TypeScript 条件类型 infer 用法",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:28:30",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED 条件类型 infer 用法",
+  "sha256": "98f8d7403ebb0d55bb7038c52feb4742aadca4b258457c586286e1c0955b6bea",
+  "item_nodes": 7,
+  "usable": 5,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "常见中文技术问答"
+}

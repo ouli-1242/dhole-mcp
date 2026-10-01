@@ -1,0 +1,14 @@
+{
+  "query_id": "q007",
+  "query": "nginx 反向代理 websocket 配置",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:28:19",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED 反向代理 websocket 配置",
+  "sha256": "c11336b6f5fdb7d347986f5eaa9a4e33b81486f86b9caed025af5ad5f9c63800",
+  "item_nodes": 7,
+  "usable": 5,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "部署场景真实问题"
+}

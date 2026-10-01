@@ -1,0 +1,18 @@
+{
+  "query_id": "q020",
+  "labeler": "agent-a",
+  "sheet_sha256": "909cdecfa101594a3ebdb82016436dabc38d07615ea985774dfe9ae778175fbe",
+  "created_at": "2026-10-02T00:56:42",
+  "judgments": {
+    "https://www.geeksforgeeks.org/git/git-difference-between-merging-and-rebasing/": 1,
+    "https://git-scm.com/book/en/v2/Git-Branching-Rebasing": 1,
+    "https://www.datacamp.com/blog/git-merge-vs-git-rebase": 1,
+    "https://tutorials.technology/tutorials/git-rebase-vs-merge-vs-squash-2026.html": 1,
+    "https://meshworld.in/blog/devops/git/rebase-vs-merge/": 1,
+    "https://generalistprogrammer.com/tutorials/git-rebase-vs-merge": 1,
+    "https://gitcheatsheet.dev/docs/concepts/merge-vs-rebase/": 1,
+    "https://www.atlassian.com/git/tutorials/merging-vs-rebasing": 1,
+    "https://stackoverflow.com/questions/16666089/whats-the-difference-between-Git-merge-and-git-rebase": 1,
+    "https://stackoverflow.com/questions/804115/when-do-you-use-git-rebase-instead-of-git-merge": 1
+  }
+}

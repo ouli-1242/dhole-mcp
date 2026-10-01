@@ -1,0 +1,14 @@
+{
+  "query_id": "q013",
+  "query": "Docker 容器 端口映射 原理",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:28:53",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED 容器 端口映射 原理",
+  "sha256": "79bf3af396e1ff09a6f596004f01669ed6d07ead14b0446def3523e688530171",
+  "item_nodes": 7,
+  "usable": 4,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "常见中文技术问答"
+}

@@ -1,0 +1,14 @@
+{
+  "query_id": "q001",
+  "query": "python asyncio 并发限制 semaphore 用法",
+  "engine": "sogou",
+  "captured_at": "2026-10-02T00:27:24",
+  "captured_from_url": "https://www.sogou.com/web?query=REDACTED asyncio 并发限制 semaphore 用法",
+  "sha256": "c7afbdced96f6f3a872df868042dbb5e7b092711e0c55143b60ee509b8751cb5",
+  "item_nodes": 9,
+  "usable": 9,
+  "trimmed_items": 9,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "写并发抓取时真实查过的问题"
+}

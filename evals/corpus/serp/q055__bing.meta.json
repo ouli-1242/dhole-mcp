@@ -1,0 +1,14 @@
+{
+  "query_id": "q055",
+  "query": "2026 诺贝尔物理学奖 得主",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:33:31",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED 诺贝尔物理学奖 得主&ensearch=1",
+  "sha256": "07cc6b1c3fcfb91ba8e7b497cf767d140c9ffb3be7a9ba6a88cd76d823a2a880",
+  "item_nodes": 9,
+  "usable": 9,
+  "trimmed_items": 9,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类：十月上旬正值公布期"
+}

@@ -1,0 +1,14 @@
+{
+  "query_id": "q019",
+  "query": "git rebase 和 merge 区别",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:29:24",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED rebase 和 merge 区别",
+  "sha256": "77456ecc6a7e4eb3ce44fb1a098426a7b39c72f0233cac01b6d29ac2553fc140",
+  "item_nodes": 7,
+  "usable": 3,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "高频中文技术问答"
+}

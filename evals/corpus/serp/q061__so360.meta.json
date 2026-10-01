@@ -1,0 +1,14 @@
+{
+  "query_id": "q061",
+  "query": "广州 人才落户 条件 2026",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:34:03",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED 人才落户 条件 2026",
+  "sha256": "783406be4c452e8c41d295315eb457f5413c0ce6a15dc0bf4cc9c5a4dc3edb4f",
+  "item_nodes": 7,
+  "usable": 5,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "任务类：政策+地域"
+}

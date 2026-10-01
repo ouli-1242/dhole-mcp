@@ -1,0 +1,72 @@
+{"id": "q001", "text": "python asyncio 并发限制 semaphore 用法", "lang": "zh", "source": "usage_scenario", "note": "写并发抓取时真实查过的问题"}
+{"id": "q002", "text": "pydantic v2 性能 提升 原理", "lang": "zh", "source": "public_data", "note": "常见中文技术问答"}
+{"id": "q003", "text": "how does sqlite WAL mode work", "lang": "en", "source": "repo_evidence", "note": "现有 fixture 的锚点题，活集沿用"}
+{"id": "q004", "text": "SQLite WAL 模式 原理", "lang": "zh", "source": "repo_evidence", "note": "q003 的中文对应"}
+{"id": "q005", "text": "rust ownership borrowing explained", "lang": "en", "source": "public_data", "note": "高频英文技术题"}
+{"id": "q006", "text": "Rust 所有权 与 借用 详解", "lang": "zh", "source": "public_data", "note": "q005 中文对应"}
+{"id": "q007", "text": "nginx 反向代理 websocket 配置", "lang": "zh", "source": "usage_scenario", "note": "部署场景真实问题"}
+{"id": "q008", "text": "nginx websocket reverse proxy config", "lang": "en", "source": "public_data", "note": "q007 英文对应"}
+{"id": "q009", "text": "TypeScript 条件类型 infer 用法", "lang": "zh", "source": "public_data", "note": "常见中文技术问答"}
+{"id": "q010", "text": "typescript conditional types infer", "lang": "en", "source": "public_data", "note": "q009 英文对应"}
+{"id": "q011", "text": "MySQL 索引失效 常见 场景", "lang": "zh", "source": "public_data", "note": "常见中文技术问答"}
+{"id": "q012", "text": "mysql query not using index causes", "lang": "en", "source": "public_data", "note": "q011 英文对应"}
+{"id": "q013", "text": "Docker 容器 端口映射 原理", "lang": "zh", "source": "public_data", "note": "常见中文技术问答"}
+{"id": "q014", "text": "RAG 检索增强生成 讲解", "lang": "zh", "source": "usage_scenario", "note": "本项目语义引擎相关领域"}
+{"id": "q015", "text": "retrieval augmented generation explained", "lang": "en", "source": "public_data", "note": "q014 英文对应"}
+{"id": "q016", "text": "向量数据库 选型 对比", "lang": "zh", "source": "usage_scenario", "note": "B8 语义引擎换型的真实前置调研"}
+{"id": "q017", "text": "CSS flex 垂直居中 方法", "lang": "zh", "source": "public_data", "note": "高频中文技术问答"}
+{"id": "q018", "text": "css flexbox center vertically", "lang": "en", "source": "public_data", "note": "q017 英文对应"}
+{"id": "q019", "text": "git rebase 和 merge 区别", "lang": "zh", "source": "public_data", "note": "高频中文技术问答"}
+{"id": "q020", "text": "git rebase vs merge when", "lang": "en", "source": "public_data", "note": "q019 英文对应"}
+{"id": "q021", "text": "Redis 持久化 RDB AOF 区别", "lang": "zh", "source": "public_data", "note": "常见中文技术问答"}
+{"id": "q022", "text": "redis rdb vs aof persistence", "lang": "en", "source": "public_data", "note": "q021 英文对应"}
+{"id": "q023", "text": "网页 首屏 性能优化 方法", "lang": "zh", "source": "public_data", "note": "高频中文技术问答"}
+{"id": "q024", "text": "improve LCP largest contentful paint", "lang": "en", "source": "public_data", "note": "q023 英文对应"}
+{"id": "q025", "text": "正则表达式 贪婪匹配 懒惰匹配 区别", "lang": "zh", "source": "public_data", "note": "高频中文技术问答"}
+{"id": "q026", "text": "regex greedy vs lazy quantifiers", "lang": "en", "source": "public_data", "note": "q025 英文对应"}
+{"id": "q027", "text": "HTTP 条件请求 ETag 304 原理", "lang": "zh", "source": "repo_evidence", "note": "本项目 watch/条件请求机制的基础概念"}
+{"id": "q028", "text": "http etag 304 conditional request", "lang": "en", "source": "repo_evidence", "note": "q027 英文对应"}
+{"id": "q029", "text": "primp http client python", "lang": "en", "source": "repo_evidence", "note": "本项目 HTTP 层的依赖库"}
+{"id": "q030", "text": "trafilatura main content extraction", "lang": "en", "source": "repo_evidence", "note": "本项目三级提取梯子的第一级"}
+{"id": "q031", "text": "playwright headless browser detection", "lang": "en", "source": "repo_evidence", "note": "反爬层每日面对的问题"}
+{"id": "q032", "text": "cloudflare turnstile how it works", "lang": "en", "source": "repo_evidence", "note": "硬边界：交互式 Turnstile 的判定对象"}
+{"id": "q033", "text": "robots.txt crawl-delay meaning", "lang": "en", "source": "repo_evidence", "note": "爬取礼貌度的依据"}
+{"id": "q034", "text": "SSRF cloud metadata 169.254.169.254", "lang": "en", "source": "repo_evidence", "note": "安全守卫的靶子"}
+{"id": "q035", "text": "MCP model context protocol stdio", "lang": "en", "source": "repo_evidence", "note": "本项目所属协议生态"}
+{"id": "q036", "text": "huggingface gte multilingual embeddings", "lang": "en", "source": "repo_evidence", "note": "B8 候选模型"}
+{"id": "q037", "text": "python documentation asyncio", "lang": "en", "source": "public_data", "note": "导航类"}
+{"id": "q038", "text": "MDN fetch API", "lang": "en", "source": "public_data", "note": "导航类"}
+{"id": "q039", "text": "sqlite official documentation", "lang": "en", "source": "public_data", "note": "导航类"}
+{"id": "q040", "text": "国家医保服务平台 官网", "lang": "zh", "source": "public_data", "note": "中文导航类"}
+{"id": "q041", "text": "12306 官网 购票", "lang": "zh", "source": "public_data", "note": "中文导航类"}
+{"id": "q042", "text": "azure pricing calculator", "lang": "en", "source": "public_data", "note": "导航类"}
+{"id": "q043", "text": "Kubernetes 服务发现 机制", "lang": "zh", "source": "public_data", "note": "常见中文技术问答"}
+{"id": "q044", "text": "kubernetes service discovery explained", "lang": "en", "source": "public_data", "note": "q043 英文对应"}
+{"id": "q045", "text": "windows 终端 ssh 中文乱码 解决", "lang": "zh", "source": "usage_scenario", "note": "本机开发真实遇到的问题"}
+{"id": "q046", "text": "markdown 表格内 换行 写法", "lang": "zh", "source": "usage_scenario", "note": "写文档时真实查过"}
+{"id": "q047", "text": "最新 稳定版 Python 版本号", "lang": "zh", "source": "usage_scenario", "note": "时效类：--doctor 的 Python 版本判断场景"}
+{"id": "q048", "text": "latest stable python version", "lang": "en", "source": "public_data", "note": "时效类：q047 英文对应"}
+{"id": "q049", "text": "最新 Chrome 稳定版 版本", "lang": "zh", "source": "public_data", "note": "时效类：chromium 自动装的版本对齐场景"}
+{"id": "q050", "text": "latest chrome stable release", "lang": "en", "source": "public_data", "note": "时效类：q049 英文对应"}
+{"id": "q051", "text": "Ubuntu 最新 LTS 版本", "lang": "zh", "source": "public_data", "note": "时效类"}
+{"id": "q052", "text": "current ubuntu lts release", "lang": "en", "source": "public_data", "note": "时效类：q051 英文对应"}
+{"id": "q053", "text": "Rust 最新版本 changelog", "lang": "zh", "source": "public_data", "note": "时效类"}
+{"id": "q054", "text": "rust release notes latest", "lang": "en", "source": "public_data", "note": "时效类：q053 英文对应"}
+{"id": "q055", "text": "2026 诺贝尔物理学奖 得主", "lang": "zh", "source": "public_data", "note": "时效类：十月上旬正值公布期"}
+{"id": "q056", "text": "2026 nobel prize physics winner", "lang": "en", "source": "public_data", "note": "时效类：q055 英文对应"}
+{"id": "q057", "text": "2026 国庆 高速免费 时间", "lang": "zh", "source": "usage_scenario", "note": "时效类：时令真实问题"}
+{"id": "q058", "text": "最新 个人养老金 政策", "lang": "zh", "source": "usage_scenario", "note": "时效类：政策解读需求"}
+{"id": "q059", "text": "最近 高铁 调图 变化", "lang": "zh", "source": "usage_scenario", "note": "时效类：时令真实问题"}
+{"id": "q060", "text": "故宫 门票 预约 官网", "lang": "zh", "source": "usage_scenario", "note": "任务类：需辨官网与代拍站"}
+{"id": "q061", "text": "广州 人才落户 条件 2026", "lang": "zh", "source": "usage_scenario", "note": "任务类：政策+地域"}
+{"id": "q062", "text": "劳动合同 试用期 规定", "lang": "zh", "source": "public_data", "note": "任务类：法条检索，权威源判定"}
+{"id": "q063", "text": "护照 办理 需要 材料", "lang": "zh", "source": "public_data", "note": "任务类：政务流程"}
+{"id": "q064", "text": "二手车 过户 流程", "lang": "zh", "source": "public_data", "note": "任务类：流程检索"}
+{"id": "q065", "text": "房贷 提前还款 违约金 规定", "lang": "zh", "source": "usage_scenario", "note": "任务类：金融政策检索"}
+{"id": "q066", "text": "增值税 发票 开具 流程", "lang": "zh", "source": "public_data", "note": "任务类：政务流程"}
+{"id": "q067", "text": "颈椎病 办公室 体操 动作", "lang": "zh", "source": "usage_scenario", "note": "任务类：健康信息，需辨权威源"}
+{"id": "q068", "text": "马拉松 新手 训练 计划", "lang": "zh", "source": "usage_scenario", "note": "任务类：长文内容质量"}
+{"id": "q069", "text": "微信 聊天记录 迁移 到新手机", "lang": "zh", "source": "usage_scenario", "note": "任务类：官方帮助文档检索"}
+{"id": "q070", "text": "github ouli-1242 dhole-mcp", "lang": "en", "source": "repo_evidence", "note": "本仓库自身（导航/存在性）"}
+{"id": "q071", "text": "json-rpc 2.0 stdio protocol specification", "lang": "en", "source": "repo_evidence", "note": "wire 层的协议依据"}
+{"id": "q072", "text": "python virtualenv vs venv difference", "lang": "en", "source": "public_data", "note": "装机文档相关的常见题"}

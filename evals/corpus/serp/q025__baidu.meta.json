@@ -1,0 +1,14 @@
+{
+  "query_id": "q025",
+  "query": "正则表达式 贪婪匹配 懒惰匹配 区别",
+  "engine": "baidu",
+  "captured_at": "2026-10-02T00:30:12",
+  "captured_from_url": "https://www.baidu.com/s?wd=正则表达式 贪婪匹配 懒惰匹配 区别&ie=utf-8",
+  "sha256": "52879da670abb7983b18fc7ead963edcdd690104cf247bf33b8c546cc4d692e2",
+  "item_nodes": 10,
+  "usable": 8,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "高频中文技术问答"
+}

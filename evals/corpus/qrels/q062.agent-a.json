@@ -1,0 +1,16 @@
+{
+  "query_id": "q062",
+  "labeler": "agent-a",
+  "sheet_sha256": "9936fe616bf31f06b5c61d9a6da70860e947c2f0d43277ffe33154dd5c2ed942",
+  "created_at": "2026-10-02T00:49:00",
+  "judgments": {
+    "https://github.com/copy-manga/copymanga": 0,
+    "https://github.com/fumiama/copymanga/releases": 0,
+    "https://www.66law.cn/topic2012/ldhtbxgdsyqm/": 1,
+    "https://china.findlaw.cn/ask/question_jx_458312.html": 1,
+    "https://www.lawtime.cn/wenda/q_58405994.html": 1,
+    "https://www.9k9k.com/app/94239.html": 0,
+    "https://www.copycomic.com.cn/": 0,
+    "https://blog.csdn.net/2604_94856437/article/details/156641127": 0
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "query_id": "q004",
+  "labeler": "agent-a",
+  "sheet_sha256": "3d10e9cd235201e6af14e871fb2e84c5e4419957685b379878fe27bf58a08320",
+  "created_at": "2026-10-02T00:47:23",
+  "judgments": {
+    "https://blog.csdn.net/weixin_33428613/article/details/164009050": 1,
+    "https://sqlitebrowser.org/": 0,
+    "https://www.runoob.com/sqlite/sqlite-tutorial.html": 0,
+    "https://sqlite.org/download.html": 0,
+    "https://sqlite.org/index.html": 0,
+    "https://www2.sqlite.org/matrix/index.html": 0,
+    "https://m.imooc.com/article/395407": 1,
+    "https://blog.51cto.com/u_15777557/14579291": 1,
+    "https://xiaoyw.blog.csdn.net/article/details/156238463": 1,
+    "https://download.csdn.net/download/weixin_38649657/12831411": 1,
+    "https://my.oschina.net/emacs_9643129/blog/18947569": 1,
+    "https://segmentfault.com/a/1190000017216126?sort=votes": 1,
+    "https://blog.csdn.net/zhaofuguang/article/details/91882073": 1,
+    "https://cloud.tencent.com/developer/article/2438300": 1,
+    "https://juejin.cn/post/7260308502030286906": 1,
+    "https://www.cnblogs.com/cchust/p/4754619.html": 1,
+    "https://www.yisu.com/jc/607205.html": 0,
+    "https://blog.csdn.net/ByteDanceTech/article/details/128502500": 1,
+    "https://juejin.cn/post/7182817252012621881": 1,
+    "https://cloud.tencent.com/developer/article/2180666": 1,
+    "http://mp.weixin.qq.com/count/oIWsFt7NXKMRJIDdYgH5U6rc2GLg/2247500931/1&scene=6": 1,
+    "https://www.yisu.com/zixun/824805.html": 1,
+    "https://www.ficapy.com/": 0
+  }
+}

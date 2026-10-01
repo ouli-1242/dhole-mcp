@@ -1,0 +1,26 @@
+{
+  "query_id": "q005",
+  "labeler": "agent-a",
+  "sheet_sha256": "514de883e52b003d6b4e7fdee5281c95cc6ce22c9b9b5b027a3285212a26f5d1",
+  "created_at": "2026-10-02T00:47:23",
+  "judgments": {
+    "https://leapcell.medium.com/rust-ownership-and-borrowing-explained-2943888942b6": 1,
+    "https://learningrust.org/lessons/06-ownership": 1,
+    "https://web.mit.edu/rust-lang_v1.25/arch/amd64_ubuntu1404/share/doc/rust/html/book/first-edition/ownership.html": 1,
+    "https://rust.codeguides.io/code-reference/ownership-and-borrowing/": 1,
+    "https://soumitrasaha.com/blogs/rust-ownership-and-borrowing/": 1,
+    "https://sharpskill.dev/en/blog/rust/ownership-borrowing-rust-complete-guide": 1,
+    "https://manjushaps.github.io/Rust-Series-Borrowing/": 1,
+    "https://levelup.gitconnected.com/borrowing-in-rust-how-it-works-under-the-hood-and-why-it-matters-7c8d7c942e0f": 1,
+    "https://dev.to/leapcell/rust-ownership-and-borrowing-explained-22l6": 1,
+    "https://rustify.rs/articles/rust-ownership-borrowing-explained": 1,
+    "https://sharpskill.dev/en/blog/rust/rust-ownership-borrowing-demystified": 1,
+    "https://www.youtube.com/watch?v=3BYZmaGeTXY": 1,
+    "https://zetcode.com/rust/ownership/": 1,
+    "https://www.zetcode.com/rust/ownership/": 1,
+    "https://blog.muvon.io/backend/rust-ownership-borrowing-and-lifetimes-explained": 1,
+    "https://doc.rust-lang.org/book/ch04-00-understanding-ownership.html": 1,
+    "https://www.linkedin.com/pulse/understanding-ownership-borrowing-memory-rust-ashish-kumar-rs7ic": 1,
+    "https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html": 1
+  }
+}

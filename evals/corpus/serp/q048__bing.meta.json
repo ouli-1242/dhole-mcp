@@ -1,0 +1,14 @@
+{
+  "query_id": "q048",
+  "query": "latest stable python version",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:32:41",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED stable python version&ensearch=1",
+  "sha256": "c8b5765d2aebdfd3db1d6a0570e7cbba81b24244efcbb2f243a954f570acc300",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类：q047 英文对应"
+}

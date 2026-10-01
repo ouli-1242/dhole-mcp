@@ -1,0 +1,14 @@
+{
+  "query_id": "q008",
+  "query": "nginx websocket reverse proxy config",
+  "engine": "duckduckgo",
+  "captured_at": "2026-10-02T00:28:27",
+  "captured_from_url": "https://html.duckduckgo.com/html/",
+  "sha256": "5255d3fb23487fdd225878f2cbd28d598f82b325d745d2dbf52ee5f347a28599",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q007 英文对应"
+}

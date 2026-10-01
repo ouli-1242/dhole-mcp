@@ -1,0 +1,14 @@
+{
+  "query_id": "q040",
+  "query": "国家医保服务平台 官网",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:31:56",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED 官网&ensearch=1",
+  "sha256": "946d99a4685dce981816044fbc394769833d515afc7ea0072c289b72d9b1dc32",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "中文导航类"
+}

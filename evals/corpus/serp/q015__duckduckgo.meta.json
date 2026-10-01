@@ -1,0 +1,14 @@
+{
+  "query_id": "q015",
+  "query": "retrieval augmented generation explained",
+  "engine": "duckduckgo",
+  "captured_at": "2026-10-02T00:29:04",
+  "captured_from_url": "https://html.duckduckgo.com/html/",
+  "sha256": "c52683325a5faf897880978392caabc49776d5673c984804214d52b7359f42e8",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q014 英文对应"
+}

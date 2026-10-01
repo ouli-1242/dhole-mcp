@@ -1,0 +1,14 @@
+{
+  "query_id": "q048",
+  "query": "latest stable python version",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:32:44",
+  "captured_from_url": "https://yandex.com/search/site/?text=latest stable python version&web=1&searchid=9809207",
+  "sha256": "b9bae6b83a77771f99343efacef106f20fc4cec7712e802e978a9aaed99d2e84",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类：q047 英文对应"
+}

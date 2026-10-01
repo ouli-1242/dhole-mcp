@@ -1,0 +1,28 @@
+{
+  "query_id": "q003",
+  "labeler": "agent-b",
+  "sheet_sha256": "9bda1dc476af036a14dca88d47a646d2438e14703dae981983730a78a0f74578",
+  "created_at": "2026-10-02T00:41:04",
+  "judgments": {
+    "https://owldo.app/elenacross/architecting-local-first-software-sqlite-wal-mode": 1,
+    "https://patterns.totorojam.com/case-studies/sqlite-wal": 1,
+    "https://farshid.co.uk/entry/enabling_wal_mode_for_sqlite_database_files": 1,
+    "https://javascript.plainenglish.io/stop-the-sqlite-performance-wars-your-database-can-be-10x-faster-and-its-not-magic-156022addc75": 1,
+    "https://coddy.tech/docs/sqlite/wal-mode-and-concurrency": 1,
+    "https://systeminternals.dev/sqlite/wal/": 1,
+    "https://www.sqliteforum.com/p/sqlite-wal-internals-frames-commits": 1,
+    "https://adhdecode.com/articles/sqlite/sqlite-wal-mode-explained/": 1,
+    "https://larphof.de/sqlite-wal-edge-telemetry/": 1,
+    "https://sqlitebuilder.com/guides/sqlite-wal-mode/": 1,
+    "https://sqldocs.org/sqlite-write-ahead-logging/": 1,
+    "https://www.slingacademy.com/article/sqlite-write-ahead-logging-wal-explained-in-3-minutes/": 1,
+    "https://turso.tech/blog/something-you-probably-want-to-know-about-if-youre-using-sqlite-in-golang-72547ad625f1": 1,
+    "https://xtom.com/blog/what-is-sqlite/": 0,
+    "https://dev.to/nobody_4fb7fd10637d3b88a3/why-your-sqlite-wal-file-never-shrinks-304f": 1,
+    "https://deepwiki.com/sqlite/sqlite/3.4-write-ahead-logging-(wal)": 1,
+    "https://sqlite.org/wal.html": 1,
+    "https://wizardforcel.gitbooks.io/sqlite-doc-en/content/48.html": 1,
+    "https://medium.com/@reliabledataengineering/write-ahead-logs-the-hidden-engine-behind-every-database-youve-ever-used-d4ca8145d318": 1,
+    "https://news.ycombinator.com/item?id=43089346": 1
+  }
+}

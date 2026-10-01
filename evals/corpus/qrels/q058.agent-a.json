@@ -1,0 +1,13 @@
+{
+  "query_id": "q058",
+  "labeler": "agent-a",
+  "sheet_sha256": "1c83669c37a58591ada40fc67758e7a2a8d9dfddcf3f35ce165e600eb57d3352",
+  "created_at": "2026-10-02T00:49:00",
+  "judgments": {
+    "https://news.qq.com/rain/a/20260917A0CS3000?app=news&id=20260917A0CS3000&path=a&redirect_pc=1&suid": 1,
+    "http://www.yuexiu.gov.cn/ggfw/ztfw/sb/sbxx/content/post_11015603.html": 1,
+    "https://finance.sina.com.cn/wm/2026-06-13/doc-inicfkwz1731601.shtml?cref=cj": 1,
+    "https://news.qq.com/rain/a/20260915A051M400?app=news&id=20260915A051M400&path=a&redirect_pc=1&suid": 0,
+    "https://finance.eastmoney.com/a/202508193488170918.html": 1
+  }
+}

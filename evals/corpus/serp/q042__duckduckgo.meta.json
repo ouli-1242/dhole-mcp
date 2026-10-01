@@ -1,0 +1,14 @@
+{
+  "query_id": "q042",
+  "query": "azure pricing calculator",
+  "engine": "duckduckgo",
+  "captured_at": "2026-10-02T00:32:05",
+  "captured_from_url": "https://html.duckduckgo.com/html/",
+  "sha256": "e4a7c31ed4b9de7c1a8864fe42d565e06a033ae3ddbd2fe62b803d787d5d0a80",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "导航类"
+}

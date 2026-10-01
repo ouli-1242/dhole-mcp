@@ -1,0 +1,14 @@
+{
+  "query_id": "q030",
+  "query": "trafilatura main content extraction",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:30:42",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED main content extraction&ensearch=1",
+  "sha256": "824f18c82b922bba188cafd0b1addafc0442cdcbd21087efcab40ee224c3ac12",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "本项目三级提取梯子的第一级"
+}

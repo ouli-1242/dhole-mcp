@@ -1,0 +1,14 @@
+{
+  "query_id": "q047",
+  "query": "最新 稳定版 Python 版本号",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:32:30",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED 稳定版 Python 版本号",
+  "sha256": "4470c2b2ecc14370bf27addc5b7f129581c9c1c74d457cae50ee72ac01abe34d",
+  "item_nodes": 7,
+  "usable": 5,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类：--doctor 的 Python 版本判断场景"
+}

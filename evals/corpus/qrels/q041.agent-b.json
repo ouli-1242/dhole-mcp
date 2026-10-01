@@ -1,0 +1,15 @@
+{
+  "query_id": "q041",
+  "labeler": "agent-b",
+  "sheet_sha256": "e024239ef10b3dab7aaaf213d08cd2fd7eafa93e4fcbbafc50d72faa32b0dc51",
+  "created_at": "2026-10-02T00:41:11",
+  "judgments": {
+    "https://www.12306.cn/en": 1,
+    "https://www.12306.cn/mormhweb/?sourceChannelId=0&amp;did=7042": 1,
+    "https://kyfw.12306.cn/otn/appDownload/init?100S0": 1,
+    "https://www.12306.cn/index/#/": 1,
+    "https://mobile.12306.cn/mormhweb/zxdt/index_zxdt.html": 1,
+    "https://kyfw.12306.cn/": 1,
+    "https://kyfw.12306.cn/otn/leftTicket/init?fs=%E8%A1%A1%E5%B1%B1,HSQ&ts=%E5%AD%9D%E6%84%9F,XGN&date=2026-09-30": 1
+  }
+}

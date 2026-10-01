@@ -1,0 +1,14 @@
+{
+  "query_id": "q045",
+  "query": "windows 终端 ssh 中文乱码 解决",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:32:24",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED 终端 ssh 中文乱码 解决&ensearch=1",
+  "sha256": "807e87c6a9a9d681596c2356f771d5a095066d36a2eb45465175473e6bbbead9",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "本机开发真实遇到的问题"
+}

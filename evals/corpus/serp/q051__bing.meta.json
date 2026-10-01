@@ -1,0 +1,14 @@
+{
+  "query_id": "q051",
+  "query": "Ubuntu 最新 LTS 版本",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:33:03",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED 最新 LTS 版本&ensearch=1",
+  "sha256": "daa85070fa031205a187839451474307440c4d64dba7cee5e7bad2a417f4be6f",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类"
+}

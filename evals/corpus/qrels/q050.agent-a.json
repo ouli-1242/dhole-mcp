@@ -1,0 +1,23 @@
+{
+  "query_id": "q050",
+  "labeler": "agent-a",
+  "sheet_sha256": "0a099883b68b22397134c434176129d63f23d286790607972ef68141fd630ffc",
+  "created_at": "2026-10-02T00:48:58",
+  "judgments": {
+    "https://yungee.net/": 0,
+    "https://www.17zz.net/posts/details/131": 0,
+    "https://github.com/yukaiji/buildVpn/issues/160": 0,
+    "https://developer.chrome.com/release-notes/140": 1,
+    "https://chromestatus.com/roadmap": 0,
+    "https://releases.sh/google/chrome": 1,
+    "https://chromereleases.googleblog.com/": 1,
+    "https://releases.sh/google/chrome-releases": 1,
+    "https://chromereleases.googleblog.com/2026/": 1,
+    "https://chromereleases.googleblog.com/2026/08/stable-channel-update-for-desktop_0256176589.html": 1,
+    "https://chromereleases.googleblog.com/2026/06/stable-channel-update-for-desktop_0153744567.html": 1,
+    "https://chromereleases.googleblog.com/2026/06/stable-channel-update-for-desktop.html": 1,
+    "https://developer.chrome.com/release-notes": 1,
+    "https://github.com/shadowrocketHelp/help/issues/114": 0,
+    "https://tizizhinan.co/": 0
+  }
+}

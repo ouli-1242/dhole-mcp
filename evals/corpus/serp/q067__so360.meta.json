@@ -1,0 +1,14 @@
+{
+  "query_id": "q067",
+  "query": "颈椎病 办公室 体操 动作",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:34:36",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED 办公室 体操 动作",
+  "sha256": "bf4ffd8cbdb289cb9c8559448397bb3fbe521a5ba9fe202a9658f7ffa880889b",
+  "item_nodes": 7,
+  "usable": 4,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "任务类：健康信息，需辨权威源"
+}

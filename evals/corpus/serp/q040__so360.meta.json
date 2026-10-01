@@ -1,0 +1,14 @@
+{
+  "query_id": "q040",
+  "query": "国家医保服务平台 官网",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:31:54",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED 官网",
+  "sha256": "09947a450c1023a764499446808177e65214a6e360f8ea8361046a8afa2c2885",
+  "item_nodes": 7,
+  "usable": 6,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "中文导航类"
+}

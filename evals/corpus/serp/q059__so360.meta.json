@@ -1,0 +1,14 @@
+{
+  "query_id": "q059",
+  "query": "最近 高铁 调图 变化",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:33:54",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED 高铁 调图 变化",
+  "sha256": "3d40f5571ec840cb677550a222de99525c799e2a58f1a5fc82d01b24ccd2ee7d",
+  "item_nodes": 7,
+  "usable": 6,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类：时令真实问题"
+}

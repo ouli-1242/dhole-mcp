@@ -1,0 +1,28 @@
+{
+  "query_id": "q034",
+  "labeler": "agent-a",
+  "sheet_sha256": "225200814bb6c8cdfeebd34f2683d65704c4e9fb256e791db4faf0acf681e6b8",
+  "created_at": "2026-10-02T00:56:44",
+  "judgments": {
+    "https://tomodahinata.com/en/blog/ssrf-attack-techniques-cloud-metadata-blind-filter-bypass-guide": 1,
+    "https://techearl.com/cloud-metadata-ssrf": 1,
+    "https://hacktricks.wiki/en/pentesting-web/ssrf-server-side-request-forgery/cloud-ssrf.html": 1,
+    "https://www.ssrfpayloads.com/en/blog/ssrf-cloud-metadata-169-254-169-254": 1,
+    "https://www.resecurity.com/blog/article/ssrf-to-aws-metadata-exposure-how-attackers-steal-cloud-credentials": 1,
+    "https://blog.cyberxplore.com/ssrf-cloud-metadata-account-takeover/": 1,
+    "https://thecodeforge.io/security/ssrf-cloud-metadata/": 1,
+    "https://www.startupdefense.io/cyberattacks/ssrf-in-cloud-metadata-service": 1,
+    "https://cybersecpentesting.com/blog/ssrf-cloud-metadata-exploitation.html": 1,
+    "https://hackingthe.cloud/aws/exploitation/ec2-metadata-ssrf/": 1,
+    "https://www.zhihu.com/question/65352585": 0,
+    "https://www.zhihu.com/tardis/bd/ans/2746952080": 0,
+    "https://www.zhihu.com/question/2081814537989371809": 0,
+    "https://www.zhihu.com/question/55914974/answers/updated": 0,
+    "https://www.zhihu.com/question/35685110/answers/updated": 0,
+    "https://www.zhihu.com/question/52072964": 0,
+    "https://www.zhihu.com/question/28209296": 0,
+    "https://www.zhihu.com/pin/1731623402706886657": 0,
+    "https://www.zhihu.com/tardis/bd/art/909099400": 0,
+    "https://www.zhihu.com/question/51066026": 0
+  }
+}

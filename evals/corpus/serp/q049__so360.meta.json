@@ -1,0 +1,14 @@
+{
+  "query_id": "q049",
+  "query": "最新 Chrome 稳定版 版本",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:32:50",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED Chrome 稳定版 版本",
+  "sha256": "20292c22339412cccf669230bbb62ecc81bdf02c4be286896d17f2b6ae5c3083",
+  "item_nodes": 7,
+  "usable": 6,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类：chromium 自动装的版本对齐场景"
+}

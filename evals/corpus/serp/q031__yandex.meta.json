@@ -1,0 +1,14 @@
+{
+  "query_id": "q031",
+  "query": "playwright headless browser detection",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:30:53",
+  "captured_from_url": "https://yandex.com/search/site/?text=playwright headless browser detection&web=1&searchid=1833282",
+  "sha256": "1fb4122489502205f024704c03f8287792919b6d627baf42d9a46a54f7b2f116",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "反爬层每日面对的问题"
+}

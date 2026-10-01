@@ -1,0 +1,14 @@
+{
+  "query_id": "q026",
+  "query": "regex greedy vs lazy quantifiers",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:30:16",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED greedy vs lazy quantifiers&ensearch=1",
+  "sha256": "6ad18a16609b0adc98295e5b5bd94c9e7d0a62b0488b8218ab6b5b95276b37af",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q025 英文对应"
+}

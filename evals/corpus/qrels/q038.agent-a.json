@@ -1,0 +1,23 @@
+{
+  "query_id": "q038",
+  "labeler": "agent-a",
+  "sheet_sha256": "faf9ab18ae067f6b96843e7911cb04a039b92badc47995a0dcdb96bb79d83421",
+  "created_at": "2026-10-02T00:56:45",
+  "judgments": {
+    "https://github.metalevel.tech/js_homework/mdn.study/references/asynchronous.promises/": 0,
+    "https://james-priest.github.io/udacity-nanodegree-mws/course-notes/asynchronous-javascript-requests.html": 1,
+    "https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API": 1,
+    "https://docs.zepp.com/docs/reference/side-service-api/fetch/": 0,
+    "https://github.com/mdn/fetch-examples": 1,
+    "https://javascript.plainenglish.io/how-websites-fetch-data-from-apis-with-javascript-fetch-7b7adf5ab14c": 1,
+    "https://amuesing.medium.com/javascript-crud-functionality-using-fetch-requests-7e1f0a191383": 1,
+    "https://developer.mozilla.org/en-US/": 0,
+    "https://github.com/mdn/": 0,
+    "https://developer.mozilla.org/en-US/docs/MDN/index.html": 0,
+    "https://mdn.org.cn/en-US/": 0,
+    "https://dev.to/connoro7/the-fetch-api-e12": 1,
+    "https://teamtreehouse.com/library/asynchronous-programming-with-javascript/using-fetch": 1,
+    "https://caniuse.com/mdn-api_fetch": 1,
+    "https://mdn.org.cn/en-US/docs/Learn": 0
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "query_id": "q062",
+  "query": "劳动合同 试用期 规定",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:34:08",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED 试用期 规定",
+  "sha256": "fb6dd206a65890390b2c26fff042de97db8bbde3ff3581a1e9ca512033c8e67e",
+  "item_nodes": 7,
+  "usable": 4,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "任务类：法条检索，权威源判定"
+}

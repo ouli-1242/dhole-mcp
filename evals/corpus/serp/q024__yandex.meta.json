@@ -1,0 +1,14 @@
+{
+  "query_id": "q024",
+  "query": "improve LCP largest contentful paint",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:30:06",
+  "captured_from_url": "https://yandex.com/search/site/?text=improve LCP largest contentful paint&web=1&searchid=4304742",
+  "sha256": "cc685cb5eaa46c5ccd83817d42b2856a0a334bbd718c0df9edd4d6c08e51f1f6",
+  "item_nodes": 14,
+  "usable": 14,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q023 英文对应"
+}

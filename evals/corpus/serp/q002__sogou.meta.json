@@ -1,0 +1,14 @@
+{
+  "query_id": "q002",
+  "query": "pydantic v2 性能 提升 原理",
+  "engine": "sogou",
+  "captured_at": "2026-10-02T00:27:50",
+  "captured_from_url": "https://www.sogou.com/web?query=REDACTED v2 性能 提升 原理",
+  "sha256": "9328ee82433d226b70786b2e6aba040c6288ba664e62d3e9eba1213b33e9c3d8",
+  "item_nodes": 9,
+  "usable": 9,
+  "trimmed_items": 9,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "常见中文技术问答"
+}

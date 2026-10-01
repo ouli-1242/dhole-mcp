@@ -1,0 +1,26 @@
+{
+  "query_id": "q008",
+  "labeler": "agent-a",
+  "sheet_sha256": "10ccc3f7ebb60536db742f1b556b86afcabde9f28f6f2cbcfe3ab0af2b34c743",
+  "created_at": "2026-10-02T00:47:23",
+  "judgments": {
+    "https://www.tutorialspoint.com/article/how-to-configure-nginx-as-reverse-proxy-for-websocket": 1,
+    "https://facsiaginsa.com/nginx/configure-nginx-as-websocket-reverse-proxy": 1,
+    "https://oneuptime.com/blog/post/2026-01-24-websocket-nginx-reverse-proxy/view": 1,
+    "https://linuxcapable.com/configure-nginx-websocket-proxy/": 1,
+    "https://stackoverflow.com/questions/53745789/how-to-configure-nginx-to-proxy-ws-websocket-protocol": 1,
+    "https://www.getpagespeed.com/server-setup/nginx/nginx-reverse-proxy": 0,
+    "https://gist.github.com/kerpadw09/7c42c2a193264995bb71c32806285788": 1,
+    "https://trivox.sh/blog/content/nginx-websocket-reverse-proxy/": 1,
+    "https://www.f5.com/company/blog/nginx/websocket-nginx": 1,
+    "https://stackoverflow.com/questions/12102110/nginx-to-reverse-proxy-websockets-and-enable-ssl-wss": 1,
+    "https://crtmgr.com/blog/nginx-websocket-proxy-configuration-the-settings-that-actually-matter/": 1,
+    "https://websocket.org/guides/infrastructure/nginx/": 1,
+    "https://stackharbor.com/en/knowledge-base/nginx-reverse-proxy-websocket/": 1,
+    "https://docs.sanaei.dev/docs/operations/reverse-proxy/": 0,
+    "https://linuxvox.com/blog/setting-up-an-nginx-reverse-proxy/": 0,
+    "https://deepwiki.com/XTLS/Xray-examples/2.5-vless-+-websocket": 0,
+    "https://nginx.org/en/docs/http/websocket.html": 1,
+    "https://stackoverflow.com/questions/17427303/nginx-websocket-reverse-proxy-configuration": 1
+  }
+}

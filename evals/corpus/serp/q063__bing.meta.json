@@ -1,0 +1,14 @@
+{
+  "query_id": "q063",
+  "query": "护照 办理 需要 材料",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:34:15",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED 办理 需要 材料&ensearch=1",
+  "sha256": "a2244fd2fa2ba6fd30742dbb15f7261a859c63946300ece9762aee015dcc4814",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "任务类：政务流程"
+}

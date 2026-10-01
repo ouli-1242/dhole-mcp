@@ -1,0 +1,14 @@
+{
+  "query_id": "q043",
+  "query": "Kubernetes 服务发现 机制",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:32:10",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED 服务发现 机制&ensearch=1",
+  "sha256": "7ff81d94740727a42b775120876e51b82381c7c45adb181c32ae7572560620da",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "常见中文技术问答"
+}

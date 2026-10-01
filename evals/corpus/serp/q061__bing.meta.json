@@ -1,0 +1,14 @@
+{
+  "query_id": "q061",
+  "query": "广州 人才落户 条件 2026",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:34:06",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED 人才落户 条件 2026&ensearch=1",
+  "sha256": "a501dc9b4346601f2e57cb471ed3efd457613be80214ffe320e4277a0ac63947",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "任务类：政策+地域"
+}

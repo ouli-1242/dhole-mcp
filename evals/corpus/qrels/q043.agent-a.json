@@ -1,0 +1,22 @@
+{
+  "query_id": "q043",
+  "labeler": "agent-a",
+  "sheet_sha256": "7b4e24f62763700c1bec3c8a3aa7ae761aaeabf0414ed5acf9edbdbfb07eb9c3",
+  "created_at": "2026-10-02T00:56:45",
+  "judgments": {
+    "https://github.com/kubernetes/kubernetes": 0,
+    "https://www.geeksforgeeks.org/devops/introduction-to-kubernetes-k8s/": 0,
+    "https://kubernetes.io/": 0,
+    "http://blog.kubernetes.io/": 0,
+    "https://kubernetes.io/docs/home/": 0,
+    "https://www.geeksforgeeks.org/devops/kubernetes-tutorial/": 0,
+    "https://www.tutorialspoint.com/kubernetes/index.htm": 0,
+    "https://blog.csdn.net/weixin_33882452/article/details/93280285": 1,
+    "https://blog.csdn.net/xutch/article/details/80726895": 1,
+    "https://blog.csdn.net/2609_95049439/article/details/161080808": 1,
+    "https://blog.csdn.net/gbinsb_404/article/details/162178686": 1,
+    "https://azure.microsoft.com/en-us/resources/cloud-computing-dictionary/what-is-kubernetes/?msockid=2a9f12fa51b369072ca5051f5061685e": 0,
+    "https://www.ibm.com/think/topics/kubernetes": 0,
+    "https://www.redhat.com/en/topics/containers/what-is-kubernetes": 0
+  }
+}

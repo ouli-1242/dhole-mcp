@@ -1,0 +1,17 @@
+{
+  "query_id": "q027",
+  "labeler": "agent-a",
+  "sheet_sha256": "a2e2c1d1e19d1b017808ed851a03e1cf2265503373296fd471ad26dbbee4890e",
+  "created_at": "2026-10-02T00:56:43",
+  "judgments": {
+    "https://developer.mozilla.org/en-US/docs/Web/HTTP": 0,
+    "https://baike.baidu.com/item/http/243074": 0,
+    "https://http.dev/": 0,
+    "https://www.geeksforgeeks.org/html/what-is-http/": 0,
+    "https://blog.csdn.net/hoewang/article/details/80240381": 1,
+    "https://www.geeksforgeeks.org/blogs/http-full-form/": 0,
+    "https://blog.csdn.net/qq_21267705/article/details/70318516": 1,
+    "https://blog.csdn.net/aimeimeiTS/article/details/105731709": 1,
+    "https://blog.csdn.net/xcyuzhen/article/details/6330211": 1
+  }
+}

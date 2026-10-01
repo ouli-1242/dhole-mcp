@@ -1,0 +1,14 @@
+{
+  "query_id": "q019",
+  "query": "git rebase 和 merge 区别",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:29:27",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED rebase 和 merge 区别&ensearch=1",
+  "sha256": "983587eb50d001f40f053a40574e8667efb9b46aab2027d23c59b4c47afe526b",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "高频中文技术问答"
+}

@@ -1,0 +1,14 @@
+{
+  "query_id": "q065",
+  "query": "房贷 提前还款 违约金 规定",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:34:26",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED 提前还款 违约金 规定&ensearch=1",
+  "sha256": "8e340694d4cefb51b45d42d1e1611c58cb9e365579895f19268189be010ad44d",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "任务类：金融政策检索"
+}

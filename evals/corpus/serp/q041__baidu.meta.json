@@ -1,0 +1,14 @@
+{
+  "query_id": "q041",
+  "query": "12306 官网 购票",
+  "engine": "baidu",
+  "captured_at": "2026-10-02T00:31:59",
+  "captured_from_url": "https://www.baidu.com/s?wd=12306 官网 购票&ie=utf-8",
+  "sha256": "f7ca7787a5c23d5bf40b8d702b87e346b74ccecb487da4c1bc3d01516d95023b",
+  "item_nodes": 13,
+  "usable": 9,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "中文导航类"
+}

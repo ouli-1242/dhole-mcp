@@ -1,0 +1,16 @@
+{
+  "query_id": "q057",
+  "labeler": "agent-a",
+  "sheet_sha256": "60b030ee4ec1781e49113735ff8ff32013a96920b8cbe8aa24f7a05aebdcee23",
+  "created_at": "2026-10-02T00:48:59",
+  "judgments": {
+    "https://www.calendardate.com/2026.php": 0,
+    "https://www.thefactsite.com/year/2026/": 0,
+    "https://mp.weixin.qq.com/s?__biz=MzAwOTY1NTI5Ng==&mid=2652693315&idx=2&sn=d89563adc1e775c88e87c976df0d4451&chksm=818804c63b44d2303ecd41edd0b3be675694b1a008aa29338ee7e874b310ec8f1af0714f1dd7&scene=27": 1,
+    "https://wap.cq.gov.cn/ywdt/bmts/202609/t20260924_16130865.html": 1,
+    "https://www.timeanddate.com/calendar/?wno=1": 0,
+    "https://www.britannica.com/topic/Major-Events-of-2026": 0,
+    "https://www.timeanddate.com/calendar/?year=2026&country=1": 0,
+    "https://wap.cq.gov.cn/ywdt/bmts/202609/t20260930_16172360.html": 1
+  }
+}

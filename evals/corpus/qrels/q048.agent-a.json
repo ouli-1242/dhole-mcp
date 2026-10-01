@@ -1,0 +1,30 @@
+{
+  "query_id": "q048",
+  "labeler": "agent-a",
+  "sheet_sha256": "1feaddfbaf2403e1688b9395b004a2e6690bd689584365ae2ccbdb1036b02c6f",
+  "created_at": "2026-10-02T00:56:46",
+  "judgments": {
+    "https://blog.csdn.net/m0_60310271/article/details/127238276": 0,
+    "https://www.python.org/downloads/": 1,
+    "https://www.geeksforgeeks.org/python/download-and-install-python-3-latest-version/": 1,
+    "https://en.wikipedia.org/wiki/History_of_Python": 1,
+    "https://www.pythontutorials.net/blog/finding-versions-of-python-that-are-available-for-pyenv-install/": 0,
+    "https://gist.github.com/chrisribe/c3bbd8d8ca0e07b9f7bfee7c6ef1c3f9": 1,
+    "https://scikit-learn.org/stable/install.html": 0,
+    "https://blog.python.org/2026/10/python-31022-31117/": 1,
+    "https://discuss.python.org/t/python-3-14-0-final-is-here/104210": 1,
+    "https://blog.python.org/2026/06/python-3146-31314/": 1,
+    "https://versionlog.com/python/": 1,
+    "https://www.python.org/downloads/latest/": 1,
+    "https://www.youtube.com/watch?v=KcBd4fyHJvg": 1,
+    "https://docs.astral.sh/uv/concepts/python-versions/": 0,
+    "https://devguide.python.org/versions/": 1,
+    "https://noxasaxon.github.io/the-basics/python/intro/": 0,
+    "https://phoenixnap.com/kb/latest-python-version": 1,
+    "https://docs.python.org/3/whatsnew/3.14.html": 1,
+    "https://resku.cn/": 0,
+    "https://xiaokupan.com/": 0,
+    "https://www.daiguaji.com/": 0,
+    "https://baike.baidu.com/item/%E8%B5%84%E6%BA%90/9089683": 0
+  }
+}

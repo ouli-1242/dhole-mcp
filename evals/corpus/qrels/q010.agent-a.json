@@ -1,0 +1,23 @@
+{
+  "query_id": "q010",
+  "labeler": "agent-a",
+  "sheet_sha256": "c592b577bf61c960c60fd4c4c6e7db32a2effe84c2f99b1f83d8792fa9367a66",
+  "created_at": "2026-10-02T00:47:24",
+  "judgments": {
+    "https://piccalil.li/blog/building-a-typed-fetch-in-typescript-with-conditional-types-and-infer/": 1,
+    "https://www.hackfrontend.com/en/docs/typescript/conditional-types": 1,
+    "https://coddy.tech/docs/typescript/conditional-types": 1,
+    "https://www.geeksforgeeks.org/typescript/typescript-conditional-types/": 1,
+    "https://underwood-inc.github.io/web-patterns/typescript/conditional-types": 1,
+    "https://www.typescriptlang.org/docs/handbook/2/conditional-types.html": 1,
+    "https://medium.com/@saif.adnan/typescript-conditional-types-infer-7ef833394e20": 1,
+    "https://betterstack.com/community/guides/scaling-nodejs/conditional-types/": 1,
+    "https://blog.logrocket.com/understanding-infer-typescript/": 1,
+    "https://derekw.vercel.app/snippets/typescript-conditional": 1,
+    "https://www.dm5.com/search?title=%E6%8C%A0%E8%84%9A%E5%BF%83%20&language=1": 0,
+    "https://naojiaoxinmanhua.com.cn/": 0,
+    "https://cnc.dm5.com/search?title=%E6%8C%A0%E8%84%9A%E5%BF%83&language=1": 0,
+    "https://699pic.com/tupian/naojiaoxinmanhua.html": 0,
+    "https://www.dm5.com/search?title=%E6%8C%A0%E8%84%9A%E5%BF%83%E6%BC%AB%E7%94%BB&language=1": 0
+  }
+}

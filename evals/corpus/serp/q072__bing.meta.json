@@ -1,0 +1,14 @@
+{
+  "query_id": "q072",
+  "query": "python virtualenv vs venv difference",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:35:09",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED virtualenv vs venv difference&ensearch=1",
+  "sha256": "e149fa91af9828a77c71455e215d6e3914b7aaf7755560e82c38f2509056a610",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "装机文档相关的常见题"
+}

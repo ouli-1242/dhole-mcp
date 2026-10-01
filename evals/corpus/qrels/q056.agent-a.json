@@ -1,0 +1,18 @@
+{
+  "query_id": "q056",
+  "labeler": "agent-a",
+  "sheet_sha256": "07103ab1e7d7beb4aee9492b534012db9cc1f3659ef0f432384db20c78c2606c",
+  "created_at": "2026-10-02T00:48:59",
+  "judgments": {
+    "https://eathealthy365.com/who-won-the-2026-nobel-physics-prize-the-full-story/": 1,
+    "https://www.nobelprize.org/prizes/lists/all-nobel-prizes-in-physics/": 1,
+    "https://www.youtube.com/watch?v=TNqf1VTm1Ds": 0,
+    "https://www.superprof.com/blog/nobel-physics-laureates/": 0,
+    "https://physicsworld.com/a/is-this-the-year-for-a-nobel-prize-in-condensed-matter-or-maybe-particle-physics/": 0,
+    "https://www.alphaevents.com/events-quantumtechus/blog/nobel-laureate-john-martinis-and-mits-peter-shor-to-headline-quantumtech-world-2026": 0,
+    "https://mysafeinfo.com/content/datasets/nobelwinnersphysics": 0,
+    "https://en.wikipedia.org/wiki/Nobel_Prize_in_Physics": 1,
+    "https://worldpopulationreview.com/country-rankings/nobel-prizes-by-country": 0,
+    "https://www.linkedin.com/posts/paulmabey_getting-my-prediction-for-the-2026-nobel-activity-7381982678633373697-RE6x": 0
+  }
+}

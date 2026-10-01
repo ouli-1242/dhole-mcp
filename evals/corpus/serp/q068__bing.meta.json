@@ -1,0 +1,14 @@
+{
+  "query_id": "q068",
+  "query": "马拉松 新手 训练 计划",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:34:42",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED 新手 训练 计划&ensearch=1",
+  "sha256": "10e6cf9025b7a5953019ef1a92253f5ec7f5ec2a25e2475184794cc6f9f255bf",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "任务类：长文内容质量"
+}

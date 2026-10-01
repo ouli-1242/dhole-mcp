@@ -1,0 +1,20 @@
+{
+  "query_id": "q013",
+  "labeler": "agent-a",
+  "sheet_sha256": "13ccd1c227bba9686beb179713adabdf06b947af100aadfffaaebfa787bf0936",
+  "created_at": "2026-10-02T00:47:24",
+  "judgments": {
+    "https://blog.csdn.net/qq_36593748/article/details/138536948": 1,
+    "https://developer.baidu.com/article/details/2805304": 1,
+    "https://blog.csdn.net/wangshuminjava/article/details/86610625": 1,
+    "https://eastondev.com/blog/zh/posts/dev/20251217-docker-port-mapping/": 1,
+    "https://juejin.cn/post/7325131507625787401": 1,
+    "https://www.jb51.net/server/295505t94.htm": 1,
+    "https://hsk.oray.com/news/21911.html": 1,
+    "https://www.exception.site/article/2025": 1,
+    "https://www.cnblogs.com/x666-6/p/15433822.html": 1,
+    "https://www.yisu.com/ask/57228353.html": 1,
+    "https://novita.ai/zh/blog/dynamically-adding-port-mappings-to-running-docker-containers/": 1,
+    "https://kaybinwong.gitbooks.io/docker_practice/content/advanced_network/port_mapping.html": 1
+  }
+}

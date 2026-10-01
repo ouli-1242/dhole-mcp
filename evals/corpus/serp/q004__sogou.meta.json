@@ -1,0 +1,14 @@
+{
+  "query_id": "q004",
+  "query": "SQLite WAL 模式 原理",
+  "engine": "sogou",
+  "captured_at": "2026-10-02T00:28:01",
+  "captured_from_url": "https://www.sogou.com/web?query=REDACTED WAL 模式 原理",
+  "sha256": "9999369900934c58df1dc2a1ebabfe138bb13c90bb0efc84810f8224c7c5e8de",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q003 的中文对应"
+}

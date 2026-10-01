@@ -1,0 +1,21 @@
+{
+  "query_id": "q064",
+  "labeler": "agent-a",
+  "sheet_sha256": "7d76772d7198beed89637a517b01fd794ebe38ac59bfad3ff7abedf6e8287ceb",
+  "created_at": "2026-10-02T00:49:00",
+  "judgments": {
+    "https://chejiahao.autohome.com.cn/info/21063092?isfrom=m": 1,
+    "https://zhuanlan.zhihu.com/p/1995317467367616752": 1,
+    "https://news.yiche.com/hao/wenzhang/89033062/": 1,
+    "https://www.toutiao.com/article/7564567905476543010/": 1,
+    "https://m.thepaper.cn/newsDetail_forward_33546287": 1,
+    "https://www.sohu.com/a/1028480101_121123728": 1,
+    "https://zhuanlan.zhihu.com/p/1912903601468203337": 1,
+    "https://auto.sina.cn/2026-07-10/detail-inihhvkf8461328.d.html?vt=4": 1,
+    "https://auto.sina.cn/2026-07-10/detail-inihhvkf8373283.d.html?vt=4": 1,
+    "https://kandian.sina.cn/article_7880068201_1d5b04c6901901qao2.html?subch=oauto": 1,
+    "https://www.pcauto.com.cn/jxwd/4640/46400400.html": 1,
+    "https://www.sohu.com/a/1007376032_121124483": 1,
+    "http://qz.bendibao.com/live/20141226/3093.shtm": 1
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "query_id": "q040",
+  "labeler": "agent-a",
+  "sheet_sha256": "625626d5222e8c0b90c7a04e094f3e1e14f913d57b5eb062124c9533b6972442",
+  "created_at": "2026-10-02T00:56:45",
+  "judgments": {
+    "https://www.kanmanh.com/comic/1160.html": 0,
+    "https://www.manhuazhan.com/comic/450660": 0,
+    "https://fuwu.nhsa.gov.cn/hsafront/#/download": 1,
+    "https://www.95ye.com/shop/35521.html": 0,
+    "http://www.nhsa.gov.cn/col/col14/index.html": 0,
+    "https://tongquet.com/search?keyword=%E6%9E%81%E4%B8%8A%E9%AA%91%E5%A3%AB%E5%9B%A2%E9%95%BF%E7%9A%84%E6%BA%BA%E7%88%B1XATJ%E7%89%B9%E8%AE%AD+%E6%BC%AB%E7%94%BB": 0,
+    "https://www.iqiyi.com/so/q_%E6%9E%81%E4%B8%8A%E9%AA%91%E5%A3%AB%E5%9B%A2%E9%95%BF%E7%9A%84%E6%BA%BA%E7%88%B1XATJ%E7%89%B9%E8%AE%AD+%E6%BC%AB%E7%94%BB": 0,
+    "https://www.baozimh.com/search?q=%E6%9E%81%E4%B8%8A%E9%AA%91%E5%A3%AB%E5%9B%A2%E9%95%BF%E7%9A%84%E6%BA%BA%E7%88%B1XATJ%E7%89%B9%E8%AE%AD%E6%BC%AB%E7%94%BB": 0,
+    "https://www.dm5.com/search?title=%e6%9e%81%e4%b8%8a%e9%aa%91%e5%a3%ab%e5%9b%a2%e9%95%bf%e7%9a%84%e6%ba%ba%e7%88%b1XATJ%e7%89%b9%e8%ae%ad%e6%bc%ab%e7%94%bb&language=1&page=1": 0,
+    "https://www.sjmanhua.com/author/1784/69.html": 0,
+    "https://www.mh250.com/book/645508d0f2/": 0,
+    "https://fuwu.nhsa.gov.cn/": 1,
+    "https://fuwu.nhsa.gov.cn/nationalHallSt/": 1,
+    "https://cnc.dm5.com/search?title=%E9%AA%91%E5%A3%AB%E5%9B%A2%E9%95%BF%E6%BA%BA%E7%88%B1%E7%89%B9%E8%AE%AD&language=1": 0,
+    "https://www.dm5.com/search?title=%E9%AA%91%E5%A3%AB%E5%9B%A2%E9%95%BF%E7%9A%84%E6%BA%BA%E7%88%B1XATJ%E7%89%B9%E8%AE%AD": 0
+  }
+}

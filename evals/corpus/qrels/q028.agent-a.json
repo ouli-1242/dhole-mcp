@@ -1,0 +1,18 @@
+{
+  "query_id": "q028",
+  "labeler": "agent-a",
+  "sheet_sha256": "8f645d07476fe09dafefec83764eb3a5f33d5994f1efab2fc40535b1e5b94a14",
+  "created_at": "2026-10-02T00:56:43",
+  "judgments": {
+    "https://khimananda.com/blog/cache-control-etag-and-conditional-requests": 1,
+    "https://apiguide.dev/guides/conditional-requests/": 1,
+    "https://specification.website/spec/performance/conditional-requests/": 1,
+    "https://docs.varnish-software.com/book/http/conditional-requests/": 1,
+    "https://codes.jarhalab.com/wiki/http-304-caching-etags-and-conditional-requests": 1,
+    "https://prachub.com/resources/http-conditional-request-interview-questions-etags-304s-and-lost-updates": 1,
+    "https://http.dev/conditional-requests": 1,
+    "https://www.packetlab.io/simulator/http-conditional-requests": 1,
+    "https://siteerror.com/blog/understanding-304-not-modified": 1,
+    "https://webhosting.de/en/http-conditional-caching-etag-last-modified-and-performance-guide/": 1
+  }
+}

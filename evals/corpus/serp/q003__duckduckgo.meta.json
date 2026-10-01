@@ -1,0 +1,14 @@
+{
+  "query_id": "q003",
+  "query": "how does sqlite WAL mode work",
+  "engine": "duckduckgo",
+  "captured_at": "2026-10-02T00:27:59",
+  "captured_from_url": "https://html.duckduckgo.com/html/",
+  "sha256": "ee1e52b7eae2cffffb757ff0e21e4aa43ec72df07754bc5beabf8af5f3b44527",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "现有 fixture 的锚点题，活集沿用"
+}

@@ -1,0 +1,30 @@
+{
+  "query_id": "q001",
+  "labeler": "agent-a",
+  "sheet_sha256": "99d5e39bd96b455b6763c47f92b46ec5fd0a6422106ded97d870ff0824557949",
+  "created_at": "2026-10-02T00:47:22",
+  "judgments": {
+    "https://www.python.org/downloads/": 0,
+    "https://www.online-python.com/": 0,
+    "https://www.programiz.com/python-programming/online-compiler/": 0,
+    "https://www.python.org/doc/": 0,
+    "https://docs.python.org/": 0,
+    "https://www.python.org/about/gettingstarted/": 0,
+    "https://www.w3schools.com/python/": 0,
+    "https://www.runoob.com/python/python-tutorial.html": 0,
+    "https://www.jb51.net/article/137681.htm": 1,
+    "https://www.jb51.net/python/361618ybq.htm": 1,
+    "https://www.php.cn/faq/2267749.html": 1,
+    "https://docs.python.org/3/tutorial/index.html": 0,
+    "https://www.python.org/": 0,
+    "https://www.bilibili.com/video/BV1cW4ZeoEvv/?spm_id_from=333.788.recommend_more_video.5": 0,
+    "https://blog.csdn.net/weixin_51229066/article/details/156206824": 1,
+    "http://mp.weixin.qq.com/count/oIWsFty4Z1SjUSDsFrq9zIVg5AdM/2247493144/2&scene=6": 1,
+    "https://segmentfault.com/q/1010000042822933?sort=newest": 1,
+    "https://www.yisu.com/ask/34743534.html": 1,
+    "https://cloud.tencent.com/developer/ask/2123930": 1,
+    "https://bbs.huaweicloud.com/blogs/330663": 1,
+    "https://www.5axxw.com/questions/content/fcqusv": 1,
+    "https://www.cnblogs.com/kcxg/p/15107785.html": 1
+  }
+}

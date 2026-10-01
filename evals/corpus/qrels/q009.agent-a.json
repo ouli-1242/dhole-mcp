@@ -1,0 +1,12 @@
+{
+  "query_id": "q009",
+  "labeler": "agent-a",
+  "sheet_sha256": "09aa08bdd66d47952769bc5c47cadc6a0d7106b4a3bf0837110a098c0929c4aa",
+  "created_at": "2026-10-02T00:47:24",
+  "judgments": {
+    "https://blog.csdn.net/weixin_44051815/article/details/124708072": 1,
+    "https://www.jianshu.com/p/1888a155c31a": 1,
+    "https://blog.csdn.net/weixin_43512977/article/details/135228553": 1,
+    "https://blog.csdn.net/KlausLily/article/details/108878205": 1
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "query_id": "q006",
+  "query": "Rust 所有权 与 借用 详解",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:28:18",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED 所有权 与 借用 详解&ensearch=1",
+  "sha256": "b551fbf9f9be1d10bbfaf99e37bc268f0aa98c4ac09110bb04d0581d7443c57e",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q005 中文对应"
+}

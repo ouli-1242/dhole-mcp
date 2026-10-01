@@ -1,0 +1,32 @@
+{
+  "query_id": "q042",
+  "labeler": "agent-a",
+  "sheet_sha256": "1469063606db9669e955ec195a684d2093537519f07102c0e0025257c234444e",
+  "created_at": "2026-10-02T00:56:45",
+  "judgments": {
+    "https://gcalculate.com/azure-cost-calculator/": 1,
+    "https://costbench.com/software/cloud-infrastructure/azure/calculator/": 1,
+    "https://azure-price-calculator.com/": 1,
+    "https://multicalctool.com/tools/azure-pricing-calculator/": 1,
+    "https://pragmaticworks.com/blog/azure-pricing-calculator": 1,
+    "https://calzye.com/calculators/azurepricing/": 1,
+    "https://easyprotools.com/calculator/azure-pricing-calculator/": 1,
+    "https://www.codeitbro.com/tool/azure-pricing-calculator": 1,
+    "https://www.opslyft.com/blog/azure-pricing-calculator": 1,
+    "https://azure.microsoft.com/en-us/pricing/": 1,
+    "https://www.cloudzero.com/blog/azure-cost-calculator/": 1,
+    "https://azure.microsoft.com/en-us": 0,
+    "https://azure.microsoft.com/": 0,
+    "https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/pricing-calculator": 1,
+    "https://petri.com/azure-pricing-calculator/": 1,
+    "https://techcommunity.microsoft.com/discussions/azure/how-to-use-the-azure-pricing-calculator-effectively-%E2%80%93-a-step-by%E2%80%90step-guide/4469351": 1,
+    "https://portal.azure.com/": 0,
+    "https://azure.microsoft.com/en-us/get-started/azure-portal/": 0,
+    "https://notes.kodekloud.com/docs/AZ900-Microsoft-Azure-Fundamentals/Cost-Management/Pricing-Calculator/page": 1,
+    "https://azure.microsoft.com/en-us/pricing/calculator/": 1,
+    "https://azure.microsoft.com/en-us/pricing/offers/ms-azr-0170/": 1,
+    "https://azure.microsoft.com/nl-nl/pricing/calculator/": 1,
+    "https://portal.azure.com/signin/index": 0,
+    "http://ms.portal.azure.com/": 0
+  }
+}

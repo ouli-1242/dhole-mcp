@@ -1,0 +1,14 @@
+{
+  "query_id": "q048",
+  "query": "latest stable python version",
+  "engine": "duckduckgo",
+  "captured_at": "2026-10-02T00:32:42",
+  "captured_from_url": "https://html.duckduckgo.com/html/",
+  "sha256": "ead9f9bd6a89da6542b73d32abb143a8a04ea3fe46f79e5cba39be07bff4dcf7",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类：q047 英文对应"
+}

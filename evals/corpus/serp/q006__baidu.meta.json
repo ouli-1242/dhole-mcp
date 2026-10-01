@@ -1,0 +1,14 @@
+{
+  "query_id": "q006",
+  "query": "Rust 所有权 与 借用 详解",
+  "engine": "baidu",
+  "captured_at": "2026-10-02T00:28:15",
+  "captured_from_url": "https://www.baidu.com/s?wd=Rust 所有权 与 借用 详解&ie=utf-8",
+  "sha256": "eb9d0ed6bb3acf4c37153f69acbf618a7881f1b63bf244074db7e07bb4e4b5d6",
+  "item_nodes": 12,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q005 中文对应"
+}

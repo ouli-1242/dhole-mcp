@@ -1,0 +1,14 @@
+{
+  "query_id": "q042",
+  "query": "azure pricing calculator",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:32:04",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED pricing calculator&ensearch=1",
+  "sha256": "0a2c2519a3dc7b4996978c6a6122459c62f9005d82ff33f47123200cc8bd3923",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "导航类"
+}

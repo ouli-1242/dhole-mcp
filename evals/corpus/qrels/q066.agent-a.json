@@ -1,0 +1,9 @@
+{
+  "query_id": "q066",
+  "labeler": "agent-a",
+  "sheet_sha256": "9a85f2787e1f0b42bdd4eeec6301a27f30723ee46b2f6a75d7ac5b8f2f4453b6",
+  "created_at": "2026-10-02T00:49:01",
+  "judgments": {
+    "https://cwc.sdau.edu.cn/_t4151/2025/0224/c15071a250451/page.htm": 1
+  }
+}

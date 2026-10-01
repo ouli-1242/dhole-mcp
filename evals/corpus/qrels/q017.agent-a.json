@@ -1,0 +1,15 @@
+{
+  "query_id": "q017",
+  "labeler": "agent-a",
+  "sheet_sha256": "2be26dabe66e24b3f686f631818d4a43a640283eb3053a1c6f3f36c81d567dab",
+  "created_at": "2026-10-02T00:47:25",
+  "judgments": {
+    "https://www.runoob.com/css/css-tutorial.html": 0,
+    "https://cssprofile.collegeboard.org/": 0,
+    "https://www.w3schools.com/Css/": 0,
+    "https://developer.mozilla.org/en-US/docs/Web/CSS": 0,
+    "https://www.w3schools.com/html/html_css.asp": 0,
+    "https://blog.csdn.net/weixin_33236524/article/details/112103268": 1,
+    "https://www.php.cn/faq/1752612.html": 1
+  }
+}

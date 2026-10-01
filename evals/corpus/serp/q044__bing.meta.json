@@ -1,0 +1,14 @@
+{
+  "query_id": "q044",
+  "query": "kubernetes service discovery explained",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:32:15",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED service discovery explained&ensearch=1",
+  "sha256": "e73b222c88db19d99c8bec7d7ada5faf2ecd9fed6192c4f475eb1c22a3ccbbde",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q043 英文对应"
+}

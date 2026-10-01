@@ -1,0 +1,14 @@
+{
+  "query_id": "q047",
+  "query": "最新 稳定版 Python 版本号",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:32:33",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED 稳定版 Python 版本号&ensearch=1",
+  "sha256": "9d0dfd5253e6b66ccb0a743c05efef8226ffc03743ea508aa61eae6db19a7314",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类：--doctor 的 Python 版本判断场景"
+}

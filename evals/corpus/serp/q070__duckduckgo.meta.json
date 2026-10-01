@@ -1,0 +1,14 @@
+{
+  "query_id": "q070",
+  "query": "github ouli-1242 dhole-mcp",
+  "engine": "duckduckgo",
+  "captured_at": "2026-10-02T00:34:51",
+  "captured_from_url": "https://html.duckduckgo.com/html/",
+  "sha256": "4d3796b519a53e0e098074e0f1d815950d257309a8ede637cd331543f6b1055d",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "本仓库自身（导航/存在性）"
+}

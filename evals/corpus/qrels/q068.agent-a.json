@@ -1,0 +1,18 @@
+{
+  "query_id": "q068",
+  "labeler": "agent-a",
+  "sheet_sha256": "911f819cad57353797d319a0c68e4cadfd325f3bb9ccdcce624dc3eb1383121e",
+  "created_at": "2026-10-02T00:49:01",
+  "judgments": {
+    "https://www.hkmarathon.com/": 0,
+    "https://www.hkmarathon.com/zh-hant/": 0,
+    "http://www.runchina.org.cn/": 0,
+    "https://static.shang-ma.com/web/index.html?languageDefault=en-US": 0,
+    "https://chinamarathon.com/": 0,
+    "https://mls.chinaath.com/": 0,
+    "https://tianjin.mararun.com/": 0,
+    "http://www.cqmarathon.com/": 0,
+    "https://www.nowrun.cn/": 0,
+    "https://baike.baidu.com/item/%E9%A9%AC%E6%8B%89%E6%9D%BE/18579": 0
+  }
+}

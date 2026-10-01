@@ -1,0 +1,14 @@
+{
+  "query_id": "q021",
+  "query": "Redis 持久化 RDB AOF 区别",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:29:40",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED 持久化 RDB AOF 区别",
+  "sha256": "c6001b2a240fa640e8d5a20c588fd541a7dadd42555f40e99b81ba71a353c310",
+  "item_nodes": 7,
+  "usable": 4,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "常见中文技术问答"
+}

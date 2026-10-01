@@ -1,0 +1,13 @@
+{
+  "query_id": "q045",
+  "labeler": "agent-a",
+  "sheet_sha256": "245640748e0e7a54ee92848a781186d78d4960b499f20849d1de2f0af2d7363a",
+  "created_at": "2026-10-02T00:56:46",
+  "judgments": {
+    "https://www.microsoft.com/en-us/windows/": 0,
+    "https://www.microsoft.com/en-us/windows/get-windows-11": 0,
+    "https://www.microsoft.com/en-us/software-download/": 0,
+    "https://www.microsoft.com/en-us/download/windows": 0,
+    "https://www.microsoft.com/en-us/windows/windows-11": 0
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "query_id": "q067",
+  "labeler": "agent-a",
+  "sheet_sha256": "4b4ef0ef4a9fe1b840b3934714a99f49a847b9b42f474a3f57fbbe634a93af32",
+  "created_at": "2026-10-02T00:49:01",
+  "judgments": {
+    "https://v.youku.com/v_show/id_XMTY5NDI5OTkwOA==.html": 1
+  }
+}

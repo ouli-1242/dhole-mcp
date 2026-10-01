@@ -1,0 +1,19 @@
+{
+  "query_id": "q061",
+  "labeler": "agent-a",
+  "sheet_sha256": "f9ae2d3a3df667e5c988c204a5003b8c3237b6a61a5728f4dbff2cedad4f03c9",
+  "created_at": "2026-10-02T00:49:00",
+  "judgments": {
+    "https://zhuanlan.zhihu.com/p/1952427868563957075": 0,
+    "https://cn.tripadvisor.com/Tourism-g298555-Guangzhou_Guangdong-Vacations.html": 0,
+    "https://www.kkday.com/zh-my/blog/17575/guangzhou-travel-guide": 0,
+    "https://gz.bendibao.com/z/hukou/2023221/335695.shtml": 1,
+    "https://www.gz.gov.cn/": 0,
+    "https://www.gz.gov.cn/m_index.html": 0,
+    "https://baike.baidu.com/item/%E5%B9%BF%E5%B7%9E%E5%B8%82/21808": 0,
+    "https://daochicar.com/guangzhou-travel/": 0,
+    "https://www.zhihu.com/question/54172066": 0,
+    "https://www.jiuzyoung.com/play-h/play/guangzhou-travel-place-for-tourist-suggestion/": 0,
+    "https://zhuanlan.zhihu.com/p/164834906": 0
+  }
+}

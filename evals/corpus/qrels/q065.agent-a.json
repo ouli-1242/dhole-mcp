@@ -1,0 +1,18 @@
+{
+  "query_id": "q065",
+  "labeler": "agent-a",
+  "sheet_sha256": "36c13139ed60c41ab8ef63bbd100950c387ef767a4badb74d8042f07a3cabf52",
+  "created_at": "2026-10-02T00:49:01",
+  "judgments": {
+    "https://fangdai.huqiu.com/": 0,
+    "https://www.fangdailixi.com/gongjijin.html": 0,
+    "https://mortgage-prism.com/": 0,
+    "https://yqfk.hengyang.gov.cn/cdn/HouseTrading/v1/fdComputer/index.html": 0,
+    "https://upup.li/tools/mortgage": 0,
+    "https://www.fuwa.org/tools/fangdai.html": 0,
+    "https://www.fangdailixi.com/": 0,
+    "https://anjuke.com/calculator/loan": 0,
+    "https://m.fang.com/tools/": 0,
+    "https://baike.baidu.com/item/%E8%B4%AD%E6%88%BF%E8%B4%B7%E6%AC%BE/9896275": 0
+  }
+}

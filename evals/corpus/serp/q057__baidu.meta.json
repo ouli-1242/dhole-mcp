@@ -1,0 +1,14 @@
+{
+  "query_id": "q057",
+  "query": "2026 国庆 高速免费 时间",
+  "engine": "baidu",
+  "captured_at": "2026-10-02T00:33:44",
+  "captured_from_url": "https://www.baidu.com/s?wd=2026 国庆 高速免费 时间&ie=utf-8",
+  "sha256": "53c8a9973a0ec6365813d1830c61dd69ae00bfeec52bc00f3340bc48dca9a78c",
+  "item_nodes": 11,
+  "usable": 8,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类：时令真实问题"
+}

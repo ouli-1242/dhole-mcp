@@ -1,0 +1,18 @@
+{
+  "query_id": "q032",
+  "labeler": "agent-a",
+  "sheet_sha256": "2f3bf35b98dd161ec6b60d28254c6fe1f643f0ff6d9eadd97ea291fb986a704e",
+  "created_at": "2026-10-02T00:56:44",
+  "judgments": {
+    "https://blog.cloudflare.com/turnstile-spin/": 0,
+    "https://www.cloudflare.com/products/turnstile/": 1,
+    "https://blog.rcaptcha.app/articles/cloudflare-turnstile-complete-guide": 1,
+    "https://colaproxy.com/blog/cloudflare-turnstile-explained": 1,
+    "https://www.cloudflare.com/en-gb/application-services/products/turnstile/": 1,
+    "https://webclaw.io/blog/cloudflare-turnstile-2026-guide": 1,
+    "https://developers.cloudflare.com/turnstile/get-started/": 1,
+    "https://www.reddit.com/r/webdev/comments/16gb5i3/how_does_cloudflares_turnstile_work/": 1,
+    "https://developers.cloudflare.com/turnstile/": 1,
+    "https://www.scrapeless.com/en/wiki/what-is-cloudflare-turnstile": 1
+  }
+}

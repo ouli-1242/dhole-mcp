@@ -1,0 +1,14 @@
+{
+  "query_id": "q024",
+  "query": "improve LCP largest contentful paint",
+  "engine": "duckduckgo",
+  "captured_at": "2026-10-02T00:30:04",
+  "captured_from_url": "https://html.duckduckgo.com/html/",
+  "sha256": "3cbd9300d893a6d7db362feb37aeddb07c2a0dc72575b46254015b3a6b1c06ee",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q023 英文对应"
+}

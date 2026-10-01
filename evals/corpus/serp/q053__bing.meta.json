@@ -1,0 +1,14 @@
+{
+  "query_id": "q053",
+  "query": "Rust 最新版本 changelog",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:33:18",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED 最新版本 changelog&ensearch=1",
+  "sha256": "c49d79acfc049ad7f0a90351f7ca936d70dc129df20772751bd575e387312cd4",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "时效类"
+}

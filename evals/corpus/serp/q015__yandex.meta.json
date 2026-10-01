@@ -1,0 +1,14 @@
+{
+  "query_id": "q015",
+  "query": "retrieval augmented generation explained",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:29:05",
+  "captured_from_url": "https://yandex.com/search/site/?text=retrieval augmented generation explained&web=1&searchid=9072281",
+  "sha256": "05f55da057c3cc547bf0974eb35e94f2b1aa5d9825e519035c64a87acea70ad7",
+  "item_nodes": 14,
+  "usable": 14,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q014 英文对应"
+}

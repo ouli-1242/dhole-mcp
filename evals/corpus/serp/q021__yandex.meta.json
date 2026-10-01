@@ -1,0 +1,14 @@
+{
+  "query_id": "q021",
+  "query": "Redis 持久化 RDB AOF 区别",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:29:43",
+  "captured_from_url": "https://yandex.com/search/site/?text=Redis 持久化 RDB AOF 区别&web=1&searchid=3380769",
+  "sha256": "aa36850b46a9dfa3ea70214ba84cf52dc89e2a47b5f10ed6cab842abad8e93cd",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "常见中文技术问答"
+}

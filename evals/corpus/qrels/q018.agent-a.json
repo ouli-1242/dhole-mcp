@@ -1,0 +1,23 @@
+{
+  "query_id": "q018",
+  "labeler": "agent-a",
+  "sheet_sha256": "d1b367253e06b66ecf574b5edf08bb7505ac7278d1bc81ce049d158cedcf30ac",
+  "created_at": "2026-10-02T00:47:25",
+  "judgments": {
+    "https://css-tricks.com/snippets/css/a-guide-to-flexbox/": 1,
+    "https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Flexible_box_layout/Aligning_items": 1,
+    "https://www.runoob.com/css/css-tutorial.html": 0,
+    "https://tooldock.org/css-flexbox-center": 1,
+    "https://www.w3schools.com/css/css3_flexbox_container.asp": 1,
+    "https://www.w3schools.com/css/css3_flexbox_container_align.asp": 1,
+    "https://cssprofile.collegeboard.org/": 0,
+    "https://www.w3schools.com/Css/": 0,
+    "https://developer.mozilla.org/en-US/docs/Web/CSS": 0,
+    "https://www.cssshowcase.com/snippets/layout/center-vertically-with-flexbox": 1,
+    "https://stackoverflow.com/questions/19026884/flexbox-center-horizontally-and-vertically": 1,
+    "https://www.w3schools.com/html/html_css.asp": 0,
+    "https://stackoverflow.com/questions/19063770/how-to-vertically-align-and-stretch-content-using-css-flexbox": 1,
+    "https://www.geeksforgeeks.org/css/how-to-vertically-and-horizontally-align-flexbox-to-center/": 1,
+    "https://philipwalton.github.io/solved-by-flexbox/demos/vertical-centering/": 1
+  }
+}

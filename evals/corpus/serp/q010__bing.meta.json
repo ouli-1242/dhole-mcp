@@ -1,0 +1,14 @@
+{
+  "query_id": "q010",
+  "query": "typescript conditional types infer",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:28:37",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED conditional types infer&ensearch=1",
+  "sha256": "a7c4d17c3139b95fffd344e1929dcbc33f6d7ce93b43ecca94434498da2ef07a",
+  "item_nodes": 5,
+  "usable": 5,
+  "trimmed_items": 5,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "q009 英文对应"
+}

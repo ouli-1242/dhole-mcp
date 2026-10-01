@@ -1,0 +1,14 @@
+{
+  "query_id": "q037",
+  "query": "python documentation asyncio",
+  "engine": "yandex",
+  "captured_at": "2026-10-02T00:31:36",
+  "captured_from_url": "https://yandex.com/search/site/?text=python documentation asyncio&web=1&searchid=9826706",
+  "sha256": "c32b6b33611f79e81e6a3dcdd7a25b0e7862a13223a81ab4f0f94ce4b55fced7",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "导航类"
+}

@@ -1,0 +1,14 @@
+{
+  "query_id": "q001",
+  "query": "python asyncio 并发限制 semaphore 用法",
+  "engine": "so360",
+  "captured_at": "2026-10-02T00:27:47",
+  "captured_from_url": "https://www.so.com/s?q=REDACTED asyncio 并发限制 semaphore 用法",
+  "sha256": "9651495942e6c859b7ebe38413bdc3080843900dcf25021892407b18131a62b3",
+  "item_nodes": 7,
+  "usable": 6,
+  "trimmed_items": 7,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "写并发抓取时真实查过的问题"
+}

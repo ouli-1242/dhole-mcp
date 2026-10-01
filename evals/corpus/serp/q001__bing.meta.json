@@ -1,0 +1,14 @@
+{
+  "query_id": "q001",
+  "query": "python asyncio 并发限制 semaphore 用法",
+  "engine": "bing",
+  "captured_at": "2026-10-02T00:27:49",
+  "captured_from_url": "https://cn.bing.com/search?q=REDACTED asyncio 并发限制 semaphore 用法&ensearch=1",
+  "sha256": "31325fa409834959c6cd6982fd04e3c1847f2c3862549a1fcdbf98f856919898",
+  "item_nodes": 10,
+  "usable": 10,
+  "trimmed_items": 10,
+  "scrubbed": true,
+  "labeler": null,
+  "note": "写并发抓取时真实查过的问题"
+}
