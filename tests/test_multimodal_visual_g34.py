@@ -55,6 +55,13 @@ class _FakeLocator:
     def first(self):
         return self
 
+    async def count(self) -> int:
+        # 真的 Locator 有 count()。元素裁切路径现在先查零匹配再截图（缺陷 5：
+        # `.first` 对零匹配的 locator 会白等满 timeout，然后把「元素不在 DOM 里」
+        # 说成「页面没渲染完」），所以替身也得有。这里的 fail 语义是「元素在、
+        # 截图超时」，因此计数为 1。
+        return 1
+
     async def screenshot(self, **kwargs):
         if self._fail:
             raise TimeoutError(f"waiting for locator({self._sel!r})")

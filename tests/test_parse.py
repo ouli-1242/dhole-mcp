@@ -71,8 +71,24 @@ class TestParseFileBasic:
         assert "--- Page 1 ---" in content
         assert "NICS Firearm Background Checks" in content
 
-    def test_image_only_pdf_reports_why(self):
-        """扫描件没有文字层时必须说明原因，而不是静默返回空内容。"""
+    def test_image_only_pdf_is_ocrd_not_just_explained(self):
+        """装了 [all] 时，扫描件不该只回一句「没有文字层」。
+
+        缺陷 2 之前：同一份字节走 URL（smart_fetch）会自动 OCR，走本地（parse）
+        却答「去装 [all]」——而 [all] 早就装好了。本文件下面那条
+        `test_pdf_with_text_is_parsed` 说的「本地 PDF 走同一个提取器」对扫描件
+        分支当时并不成立，这条钉住它成立。
+        """
+        path = os.path.join(os.path.dirname(__file__), "dummy.pdf")
+        content, error = parse_file(path)
+        assert error == ""
+        assert "OCR-extracted from scanned PDF" in content
+        assert content.count("# dummy") == 1, (
+            "标题被 extractor 的头部与 _parse_pdf 各写一次 —— 同一份字节走 URL 只写一次")
+
+    def test_image_only_pdf_still_reports_why_without_ocr(self, monkeypatch):
+        """没有 OCR 附加包时，「必须说明原因、不许静默返回空内容」仍然成立。"""
+        monkeypatch.setattr("dhole_mcp.ocr.ocr_available", lambda: False)
         path = os.path.join(os.path.dirname(__file__), "dummy.pdf")
         content, error = parse_file(path)
         assert content == ""
@@ -89,11 +105,20 @@ class TestParseFileBasic:
         finally:
             os.unlink(path)
 
-    def test_pdf_never_hints_at_the_file_scheme(self):
+    def test_pdf_never_hints_at_the_file_scheme(self, monkeypatch):
         """回归：这里曾返回「用 smart_fetch(url='file://...')」，而 file:// 被
-        SSRF 守卫硬拦 —— agent 照做必然失败，且失败前已经白花两次调用。"""
+        SSRF 守卫硬拦 —— agent 照做必然失败，且失败前已经白花两次调用。
+
+        缺陷 2 之后本机（装了 [all]）走 OCR 成功分支、`error` 是空串，只跑这一
+        支的话断言**恒真**。那句提示真正出现的地方是没有 OCR 时的那条错误，所以
+        两支都跑。
+        """
         path = os.path.join(os.path.dirname(__file__), "dummy.pdf")
         _, error = parse_file(path)
+        assert "file://" not in error
+        monkeypatch.setattr("dhole_mcp.ocr.ocr_available", lambda: False)
+        content, error = parse_file(path)
+        assert content == "" and error, "没有 OCR 时必须给出原因，而不是空内容"
         assert "file://" not in error
 
 

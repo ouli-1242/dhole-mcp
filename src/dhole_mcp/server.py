@@ -970,8 +970,8 @@ _WIRE_OMIT: dict = {
     }),
     "CrawlResponseModel": frozenset({
         "discover_only", "truncated_by_budget", "truncated_by_max_pages",
-        "truncated_by_time", "sitemaps", "robots_skipped", "urls_supplied",
-        "urls_deduped", "urls_dropped_off_domain",
+        "truncated_by_time", "sitemap_truncated", "sitemaps", "robots_skipped",
+        "urls_supplied", "urls_deduped", "urls_dropped_off_domain",
         "urls_dropped_over_max_pages", "error", "duration_ms",
     }),
     "SearchResult": frozenset({
@@ -1605,6 +1605,25 @@ def _is_js_shell(result: ResponseModel) -> bool:
     Used by smart_fetch to decide whether to escalate from HTTP to stealthy.
     Pre-v3.5 callers may have passed through dynamic as an intermediate step.
     """
+    # Data documents are not JS shells. The "large body, little text" heuristic
+    # below describes an HTML shell; a PDF is a container, and one that OCR
+    # rescued is small-text BY CONSTRUCTION (a single scanned page reads as ~100
+    # chars against a ~10 KB file). _detect_content_issue only guarded its
+    # zero-text branch, so a successfully OCR'd scan fell through to the
+    # heuristic and came back error=js_shell_detected / content_ok=false — the
+    # content was right and the verdict was wrong, on the one path that had just
+    # done the most work to earn trust.
+    #
+    # The guard lives here rather than in _detect_content_issue because this
+    # function also answers the ESCALATION question (see the three call sites in
+    # the fetch pipeline): rendering a PDF in a browser cannot produce anything
+    # the extractor did not already have, which is what the wrong next_action
+    # was telling callers to do. One guard covers both. Early-returning "" from
+    # _detect_content_issue instead would also have swallowed the http_error_4xx
+    # checks that follow it.
+    if "application/pdf" in (result.content_type or "").lower():
+        return False
+
     content_str = " ".join(result.content).lower().strip()
     if not content_str:
         # Empty content on a success status = JS shell (or a genuinely blank
@@ -2029,7 +2048,11 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                        "changes that. Fetch the page that links the file instead, or "
                        "download it yourself and hand it to parse")
     elif err.startswith("scanned_pdf"):
-        next_action = "scanned/image-only PDF - install dhole-mcp[all] to auto-OCR, or use a vision-capable tool / another source"
+        from dhole_mcp.pdf_extractor import ocr_advice
+        # Capability-aware: "install [all] to auto-OCR" is false on a machine
+        # that already has it. Reaching here with OCR installed means the
+        # recovery produced nothing, which is a different sentence.
+        next_action = f"scanned/image-only PDF - {ocr_advice()}"
     elif err.startswith("image_ocr"):
         # The image branches return content=[] (the placeholder text they used to
         # carry was an error message in the page body), so the recovery step has
@@ -2039,7 +2062,9 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         next_action = ("no text could be read from this image - "
                        "use a vision-capable model or the screenshot tool, or switch source")
     elif (not result.content_ok) and (result.quality_score or 0) > 0 and result.quality_score < 0.7 and not err:
-        next_action = "low-quality PDF extraction (CID font corruption / garbled text) - install dhole-mcp[all] for auto-OCR, or use a vision tool / screenshot on the flagged pages"
+        from dhole_mcp.pdf_extractor import ocr_advice
+        next_action = ("low-quality PDF extraction (CID font corruption / garbled "
+                       f"text) - {ocr_advice()}")
     elif err.startswith("encrypted_pdf"):
         next_action = "encrypted PDF - pass a password via the 'password' option"
     elif err.startswith("pdf_deps_missing"):
@@ -3261,6 +3286,13 @@ def _cache_context(options: dict) -> str:
 # First-line substrings -> the move that usually fixes it. Matched
 # case-insensitively against the headline only, never against the call log.
 _BROWSER_ERROR_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    # Must come first: it is the narrow signal. A "matched no element" headline
+    # must not be read as a rendering timeout, which is the whole defect this
+    # entry exists for.
+    (("matched no element",),
+     "the selector matched nothing on the loaded page - check it against the real "
+     "DOM (extraction_type='html', or screenshot the full page first); use "
+     "wait_selector only if the element appears later"),
     (("timeout", "exceeded"),
      "the page never finished rendering - raise options.timeout (ms), or wait for "
      "a specific element with options.wait_selector"),
@@ -3270,6 +3302,28 @@ _BROWSER_ERROR_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("executable doesn't exist", "playwright install"),
      "the browser binary is missing - run: python -m playwright install chromium"),
 )
+
+
+async def _locator_or_raise(page: Any, selector: str) -> Any:
+    """The locator for `selector`, or LookupError when nothing on the page matches.
+
+    Split out of the screenshot capture so the rule it enforces can be tested
+    without a browser: `.first` on a locator that will never match waits the
+    whole call budget out (30s by default) and then reports a TIMEOUT, which
+    the error mapping reads as "the page never finished rendering" - advice
+    (raise `timeout`, add `wait_selector`) that cannot conjure an element that
+    is not in the DOM. Measured: a selector matching nothing and a page that
+    genuinely never rendered produced the same sentence.
+
+    A test can hand this a fake page and assert `.first.screenshot()` was never
+    reached; with the check inlined in the capture closure it could only be
+    observed by actually waiting 30 seconds.
+    """
+    loc = page.locator(selector)
+    if await loc.count() == 0:
+        raise LookupError(
+            f"selector matched no element on the loaded page: {selector!r}")
+    return loc
 
 
 # Suffixes a screenshot may legitimately be written under. The guard below is
@@ -3759,7 +3813,7 @@ def _extract_pdf_response(body: bytes, raw_ct: str, total_size: int, url: str,
     password = _PDF_PASSWORD.get()
     include_media = _INCLUDE_MEDIA.get()
     try:
-        from dhole_mcp.pdf_extractor import extract_pdf, PdfResult
+        from dhole_mcp.pdf_extractor import PdfResult, extract_pdf, recover_scanned_pdf
         result: PdfResult = extract_pdf(body, extraction_type=extraction_type,
                                         pages=pages, password=password,
                                         include_media=include_media)
@@ -3783,29 +3837,10 @@ def _extract_pdf_response(body: bytes, raw_ct: str, total_size: int, url: str,
     base_toc = result.table_of_contents
     base_media = result.media
     # Scanned / image-only PDF: fall back to OCR if the OCR extras are installed.
-    if result.scanned and not result.encrypted:
-        try:
-            from dhole_mcp.ocr import ocr_pdf, ocr_available
-            if ocr_available():
-                ocr_result = ocr_pdf(body, pages=pages, password=password)
-                if ocr_result.content and not ocr_result.error:
-                    # Swap content but keep the text pass's metadata/toc.
-                    result.content = ocr_result.content
-                    result.error = ""
-                    result.scanned = False
-                    result.ocr_fallback_used = True
-                    result.quality_score = max(result.quality_score or 0.0, 0.9)
-                    result.content_ok = True
-                elif ocr_result.error and ocr_result.encrypted:
-                    result = ocr_result  # encrypted surfaced by OCR path too
-                elif ocr_result.error:
-                    result.content = [f"[Scanned PDF - OCR attempted but failed: {ocr_result.error[:160]}]"]
-                    result.error = f"ocr_failed: {ocr_result.error[:160]}"
-            # else: OCR extras not installed -> keep the scanned dead-end below
-        except ImportError:
-            pass
-        except Exception as e:
-            logger.debug("OCR fallback failed for %s: %s", url, e)
+    # The recovery lives in pdf_extractor so the local-file path (parse) can run
+    # the same one — it used to be inlined here, and parse answered "install
+    # [all]" for the same bytes this path OCR'd successfully.
+    result = recover_scanned_pdf(result, body, pages=pages, password=password)
     return ResponseModel(
         status=200, content=result.content, url=url,
         fetcher_used=fetcher_used, duration_ms=duration_ms,
@@ -6503,8 +6538,8 @@ class MasterFetchServer:
                     # (bounded by the element's own box), so drop it.
                     shot_kwargs = {k: v for k, v in screenshot_kwargs.items()
                                    if k != "full_page"}
-                    captured["bytes"] = await page.locator(selector).first.screenshot(
-                        **shot_kwargs)
+                    loc = await _locator_or_raise(page, selector)
+                    captured["bytes"] = await loc.first.screenshot(**shot_kwargs)
                 else:
                     captured["bytes"] = await page.screenshot(**screenshot_kwargs)
                 captured["url"] = page.url
@@ -9419,7 +9454,19 @@ class MasterFetchServer:
             kw = _strict_options(_promote_options(args, options, _SF_OPTIONS_FORWARDED),
                                  _SF_OPTIONS_ALLOWED, _SF_OPTIONS_FORWARDED, "smart_fetch")
             result = await self.smart_fetch(url=url, **picked, **kw)
-            return _wire_result(result, images=result._action_images or None)
+            # `_action_images` is a ResponseModel-only PrivateAttr (element
+            # captures from {"screenshot"} actions). urls=[...] returns a
+            # BulkResponseModel, where the attribute is ABSENT rather than
+            # empty — reading it unguarded raised AttributeError and failed the
+            # whole call, for every bulk form (with options, single-element, no
+            # options at all, and via the options bag).
+            #
+            # No images are lost by not aggregating across results: bulk mode
+            # refuses `actions` outright (see the "actions are not supported in
+            # bulk mode" branch in smart_fetch), and _report_action_outcomes —
+            # the only writer of this attribute — runs on the single-URL path
+            # only. Guarded read, same shape as the recipe branch below.
+            return _wire_result(result, images=getattr(result, "_action_images", None) or None)
 
         elif name == "smart_crawl":
             # search is promoted like smart_fetch's schema: top-level wins, the

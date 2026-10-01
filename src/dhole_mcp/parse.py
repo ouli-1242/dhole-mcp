@@ -476,12 +476,20 @@ def _parse_pdf(file_path: str) -> tuple[str, str, dict]:
     can fail in ways the other formats cannot (encrypted, scanned with no text
     layer) and because it carries an envelope of its own.
     """
-    from dhole_mcp.pdf_extractor import extract_pdf
+    from dhole_mcp.pdf_extractor import extract_pdf, recover_scanned_pdf
 
     with open(file_path, "rb") as fh:
         body = fh.read()
 
     result = extract_pdf(body, extraction_type="markdown")
+
+    # All-scanned document: run the same OCR recovery the URL path runs. The
+    # docstring above promises "a local file behaves identically to a fetched
+    # one", and for this branch it did not: the same bytes came back OCR'd over
+    # HTTP and "install dhole-mcp[all] to auto-OCR" from disk, on a machine
+    # where OCR was installed and working. No password parameter here — the tool
+    # schema has no such argument, so an encrypted PDF keeps its existing error.
+    result = recover_scanned_pdf(result, body)
 
     if not result.content_ok:
         return "", f"PDF extraction failed: {result.error or 'no extractable content'}", {}
@@ -496,12 +504,14 @@ def _parse_pdf(file_path: str) -> tuple[str, str, dict]:
         "content_ok": bool(result.content_ok),
     }
 
-    parts: list[str] = []
-    if result.title:
-        parts.append(f"# {result.title}")
-    if result.author:
-        parts.append(f"*{result.author}*")
-    parts.append("\n\n".join(result.content))
+    # The extractor's content already opens with `# <title>` (and the author in
+    # its metadata header) — `_format_metadata` puts them there, and `ocr_pdf`
+    # does the same. Prepending them again printed the title TWICE on every
+    # titled PDF parsed from disk, while the same bytes over HTTP printed it
+    # once: the two paths disagreed on the same document, which is the one thing
+    # this function's docstring promises they won't. Title and author are still
+    # in `extras["metadata"]` for callers that want them as fields.
+    parts: list[str] = ["\n\n".join(result.content)]
 
     # Only annotate when something is off - a clean PDF gets no extra noise.
     notes: list[str] = []

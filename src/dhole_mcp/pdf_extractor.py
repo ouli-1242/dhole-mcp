@@ -97,6 +97,87 @@ class PdfResult:
     cid_pages_ocr: list[int] = field(default_factory=list)
 
 
+def ocr_advice() -> str:
+    """How to get text OCR did not produce, based on whether OCR is installed.
+
+    "Install dhole-mcp[all]" is a factual claim about the machine, and on a
+    machine that already has the extra it is a false one: it reports "this path
+    produced no OCR text" as "you have not installed OCR". A live run lost its
+    first hour to exactly that — the conclusion recorded was "this machine has
+    no [all]", and the interpreter said otherwise. Real users would reinstall a
+    package they already have.
+
+    One source of truth for every OCR hint in the codebase (the all-scanned
+    dead-end, the two per-page markers, and smart_fetch's next_action), so the
+    four cannot drift into disagreeing about the same machine.
+    """
+    try:
+        from dhole_mcp.ocr import ocr_available
+        ready = bool(ocr_available())
+    except Exception:
+        ready = False
+    if ready:
+        return ("OCR is installed but recovered no text here - use a vision tool / "
+                "screenshot, or another source.")
+    return ("Install OCR support with `pip install dhole-mcp[all]` and dhole will "
+            "auto-OCR it; or use a vision-capable tool / screenshot.")
+
+
+def recover_scanned_pdf(
+    result: PdfResult,
+    body: bytes,
+    *,
+    pages: Optional[str] = None,
+    password: Optional[str] = None,
+) -> PdfResult:
+    """OCR-recover an all-scanned PDF (the ``scanned=True`` dead-end above).
+
+    Shared by the URL path (server.py's PDF branch, i.e. smart_fetch) and the
+    local-file path (parse._parse_pdf) so the two behave identically — which is
+    what ``parse._parse_pdf``'s docstring promises, and what the URL path alone
+    violated: a scanned PDF read from disk answered "install [all] to auto-OCR"
+    while the SAME BYTES over HTTP were OCR'd successfully.
+
+    A no-op unless the extractor already decided this is an all-scanned,
+    unencrypted document, so both call sites can invoke it unconditionally.
+
+    Returns the result to use:
+      * OCR worked -> the same object, content/quality swapped in;
+      * the OCR path surfaced encryption -> the OCR path's own result;
+      * OCR attempted and failed -> the same object carrying ``ocr_failed``;
+      * OCR extras missing, or the document is not an all-scanned one -> unchanged.
+    """
+    if not (result.scanned and not result.encrypted):
+        return result
+    try:
+        from dhole_mcp.ocr import ocr_available, ocr_pdf
+        if not ocr_available():
+            return result
+        ocr_result = ocr_pdf(body, pages=pages, password=password)
+        if ocr_result.content and not ocr_result.error:
+            # Swap content but keep the text pass's metadata/toc.
+            result.content = ocr_result.content
+            result.error = ""
+            result.scanned = False
+            result.ocr_fallback_used = True
+            result.quality_score = max(result.quality_score or 0.0, 0.9)
+            result.content_ok = True
+            return result
+        if ocr_result.error and ocr_result.encrypted:
+            return ocr_result  # encrypted surfaced by OCR path too
+        if ocr_result.error:
+            result.content = [
+                f"[Scanned PDF - OCR attempted but failed: {ocr_result.error[:160]}]"]
+            result.error = f"ocr_failed: {ocr_result.error[:160]}"
+        return result
+    except ImportError:
+        # OCR extras not installed -> keep the scanned dead-end the caller has.
+        return result
+    except Exception as e:
+        logger.debug("OCR fallback failed: %s", e)
+        return result
+
+
 def _get_pdfplumber():
     """Lazy import pdfplumber (optional [all] dependency)."""
     try:
@@ -551,15 +632,17 @@ def extract_pdf(
         # --- All-scanned doc -> honest dead-end (caller runs the scanned-OCR) ---
         scanned = total_chars < _SCANNED_CHARS_PER_PAGE * len(page_nums)
         if scanned:
+            # Capability-aware: reaching this branch with OCR installed means the
+            # recovery path produced nothing, NOT that the user is missing the
+            # extra. Saying "install [all]" there is a false instruction.
+            advice = ocr_advice()
             return PdfResult(
                 title=meta_dict.get("title", ""), author=meta_dict.get("author", ""),
                 subject=meta_dict.get("subject", ""), keywords=meta_dict.get("keywords", ""),
                 pages_total=total_pages, pages_extracted=page_nums, scanned=True,
                 metadata=meta_dict, table_of_contents=toc,
-                error="scanned_pdf: this PDF is image-only (no extractable text). "
-                      "Install OCR support with `pip install dhole-mcp[all]` and dhole "
-                      "will auto-OCR scanned PDFs; or use a vision-capable tool.",
-                content=["[Scanned/image-only PDF - no extractable text. Install dhole-mcp[all] for OCR.]"],
+                error=f"scanned_pdf: this PDF is image-only (no extractable text). {advice}",
+                content=[f"[Scanned/image-only PDF - no extractable text. {advice}]"],
             )
 
         # --- Per-page auto-OCR fallback: CID garbage + scanned pages (mixed PDFs) ---
@@ -594,8 +677,7 @@ def extract_pdf(
                 rendered[n] = (
                     f"[Page {n}: {int(_cid_ratio(rendered[n])[0]*100)}% of this page "
                     f"is CID font garbage (embedded font without a Unicode map). "
-                    f"Install OCR with `pip install dhole-mcp[all]` to auto-recover it, "
-                    f"or smart_fetch this page with screenshot / a vision tool.]\n\n"
+                    f"{ocr_advice()}]\n\n"
                     + rendered[n]
                 )
 
@@ -608,8 +690,7 @@ def extract_pdf(
             else:
                 rendered[n] = (
                     f"[Page {n}: scanned image page with no extractable text layer. "
-                    f"Install OCR with `pip install dhole-mcp[all]` to auto-recover it, "
-                    f"or use a vision tool / screenshot.]\n\n" + rendered[n]
+                    f"{ocr_advice()}]\n\n" + rendered[n]
                 )
 
         # --- Assemble: metadata header + pages ---

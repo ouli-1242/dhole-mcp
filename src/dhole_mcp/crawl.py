@@ -185,6 +185,7 @@ class CrawlResponseModel(BaseModel):
     truncated_by_max_pages: bool = Field(default=False, description="True = stopped early because max_pages was reached.")
     truncated_by_time: bool = Field(default=False, description="True = stopped early because the overall deadline (ms) was reached.")
     sitemap_used: bool = Field(default=False, description="True = the URL map came from the site's sitemap.xml (one fetch), not best-first BFS discovery.")
+    sitemap_truncated: bool = Field(default=False, description="True = the map is SHORT OF THE SITE, not just short of your filters: it stopped at the URL cap, or the walk hit its own sitemap-index limit. pages_discovered is then a LOWER BOUND - the site's sitemap holds at least this many URLs. Absent (False) on a map that read the whole sitemap, but note that still is not a guarantee the sitemap lists every page: a sitemap is an index the site chooses to publish.")
     sitemaps: list[str] = Field(default=[], description="Sitemap.xml URLs that were fetched + parsed (sitemap mode only).")
     robots_skipped: int = Field(default=0, description="Discovered URLs dropped WITHOUT a request because their robots.txt disallows them (dhole matches its own user agent, 'dhole-mcp'). Not an error - those pages were never eligible. Pass ignore_robots=true if you have the site's permission to fetch them anyway.")
     urls_supplied: int = Field(default=0, description="How many URLs the caller passed in crawl_urls (0 unless this was a crawl_urls run). Compare with pages_crawled to see whether entries were dropped.")
@@ -619,9 +620,12 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
                        path_exclude: Optional[list[str]], *,
                        max_pages: int, deadline_t: float) -> Optional[CrawlResponseModel]:
     """Try to map the site via sitemap.xml. Returns a CrawlResponseModel on
-    success (sitemap found + parsed), or None if no sitemap was reachable so the
-    caller can fall back to BFS ('auto'). Same-domain + path filters applied.
-    Caps the returned URL map at max(1000, max_pages*10)."""
+    success (sitemap found + parsed), or None if NO sitemap was reachable so the
+    caller can fall back to BFS ('auto'). A sitemap that was found but produced no
+    rows is NOT None - it returns an empty map that says so, because reporting it
+    as "not found" is a different (and false) answer. Same-domain + path filters
+    applied BEFORE the cap, so max(1000, max_pages*10) is spent on the pages the
+    caller asked for (see discover_sitemap's `accept`)."""
     from dhole_mcp.sitemap import discover_sitemap
 
     def _make_http_get():
@@ -662,29 +666,39 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
     # max_pages the way content does. SITEMAP_MAP_FLOOR is that floor, and the
     # only way past it is a caller who asks for proportionally more.
     cap = min(5000, max(SITEMAP_MAP_FLOOR, max_pages * 10))
+
+    def _eligible(raw: str) -> bool:
+        """Same-domain + path filters, decided on the raw sitemap entry.
+
+        Pushed into the walk so the cap counts eligible URLs: filtering the
+        already-capped list meant `path_include=["/docs/"]` on a site whose docs
+        start at sitemap entry 2000 returned nothing - and `_sitemap_map` then
+        returns None, so the call silently fell back to BFS with no sign that the
+        scope had been applied to the wrong end of the list.
+        """
+        try:
+            parsed = urlparse(raw)
+        except Exception:
+            return False
+        if parsed.scheme not in ("http", "https") or parsed.netloc != root_netloc:
+            return False  # sitemaps can list other hosts; keep same-domain only
+        return _sitemap_passes_filters(parsed.path or "/", path_include, path_exclude)
+
     try:
         result = await asyncio.to_thread(
             discover_sitemap, url, http_get=_make_http_get(), max_urls=cap,
+            accept=_eligible,
         )
     except Exception:
         return None
-    if not result.urls or not result.sitemaps_used:
-        return None
+    if not result.sitemaps_used:
+        return None  # nothing reachable: the caller's "no sitemap here" answer is true
 
     pages: list[CrawlPage] = []
     seen: set[str] = set()
     for su in result.urls:
         if time() > deadline_t:
             break
-        try:
-            parsed = urlparse(su.url)
-        except Exception:
-            continue
-        if parsed.scheme not in ("http", "https") or parsed.netloc != root_netloc:
-            continue  # sitemaps can list other hosts; keep same-domain only
-        path = parsed.path or "/"
-        if not _sitemap_passes_filters(path, path_include, path_exclude):
-            continue
         norm = normalize_url(su.url)
         if norm in seen:
             continue
@@ -697,8 +711,40 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
         if len(pages) >= cap:
             break
 
+    listed = len(result.urls)
     if not pages:
-        return None
+        # The sitemap WAS found and parsed; it just produced no rows. Returning
+        # None here made smart_crawl report "no sitemap.xml found ... /sitemap.xml
+        # returned nothing" - false, and it sends the agent to BFS for a site
+        # whose sitemap dhole has already read. A scope filter that matches
+        # nothing is the usual cause (see `_eligible`), and the answer that helps
+        # is "the sitemap lists N URLs, none in the section you asked for".
+        scoped = [f"{k}={v}" for k, v in (("path_include", path_include),
+                                          ("path_exclude", path_exclude)) if v]
+        scope_desc = " or match ".join(scoped) if scoped else "on this host"
+        if listed:
+            # Eligible, but every one was a repeat after normalization, or the
+            # deadline was already spent before the first row.
+            why = (f"its {listed} URL(s) did not become rows (a repeat after "
+                   f"normalization, or the deadline)")
+            fix = ("Re-run with a larger deadline_ms, or without sitemap=true to "
+                   "discover by links instead.")
+        elif result.filtered_out:
+            why = (f"none of its {result.filtered_out} URL(s) are {scope_desc}")
+            fix = ("Widen or drop the scope if that is not what you meant, or run "
+                   "without sitemap=true to discover by links instead.")
+        else:
+            why = "it lists no URLs"
+            fix = "Run without sitemap=true to discover by links instead."
+        return CrawlResponseModel(
+            start_url=normalize_url(url), pages=[], pages_crawled=0,
+            pages_discovered=0, discover_only=True, sitemap_used=True,
+            sitemaps=list(result.sitemaps_used),
+            duration_ms=(time() - t0) * 1000,
+            summary=(f"sitemap.xml was read at {url} "
+                     f"({len(result.sitemaps_used)} file(s)) but the map is empty: {why}"),
+            next_action=fix,
+        )
 
     ok = len(pages)
     summary = (f"mapped {ok} URL(s) at {url} from sitemap.xml "
@@ -722,9 +768,39 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
         next_action += (f" The map stops at {cap} URLs: scope with "
                         f"path_include/path_exclude to see a subtree in full, or raise "
                         f"max_pages above {SITEMAP_MAP_FLOOR // 10} to widen the cap.")
+    elif result.index_truncated:
+        # The other way to be short of the site, and the counts cannot show it:
+        # the walk reads at most _MAX_SITEMAPS files / _MAX_INDEX_DEPTH levels, so
+        # a <sitemapindex> with more (or deeper) children ends under the cap with
+        # `capped` False. A site that splits 1,200 pages across 30 small child
+        # sitemaps maps 1,000 of them and says nothing about the rest.
+        summary += (" · the sitemap index is bigger than one walk reads, so this map "
+                    "is a prefix of the site")
+        # No knob to name here, and that is the honest answer: neither max_pages
+        # nor the path filters reach the unread files. Saying "raise max_pages"
+        # would be the same dead end P2-9 already fixed on the cap branch.
+        next_action += (" The map covers only the sitemap files this walk reads - there "
+                        "is no knob to read further, so path_include scopes within what "
+                        "is here rather than revealing what is not.")
+    else:
+        # "mapped 349 URL(s)" and no other wording reads as "this is the site", and
+        # the cap branch was the only one that ever said otherwise. NOT reaching the
+        # cap is not evidence of the opposite: a sitemap is an index the site
+        # chooses to publish, and plenty omit whole sections.
+        summary += (" · the sitemap's own list - a sitemap is an index the site "
+                    "publishes, not proof it lists every page")
+        if listed > ok:
+            # Both causes are knowable here, so name them rather than hedging: an
+            # entry the sitemap listed twice under two normalizations (`/a` and
+            # `/a/`), or a walk that ran out of deadline. Off-domain and filtered
+            # entries cannot appear - `_eligible` already dropped them upstream.
+            summary += (f" · {listed - ok} of the sitemap's {listed} eligible entries "
+                        f"did not become rows (a repeat after normalization, or the "
+                        f"deadline)")
     return CrawlResponseModel(
         start_url=normalize_url(url), pages=pages, pages_crawled=0,
         pages_discovered=ok, discover_only=True, sitemap_used=True,
+        sitemap_truncated=bool(result.capped or result.index_truncated),
         sitemaps=list(result.sitemaps_used),
         duration_ms=(time() - t0) * 1000, summary=summary, next_action=next_action,
     )
@@ -873,7 +949,13 @@ async def smart_crawl(
         sm_result = await _sitemap_map(url, path_include, path_exclude,
                                        max_pages=max_pages, deadline_t=deadline_t)
         if sm_result is not None:
-            return sm_result  # sitemap found + mapped (auto/on success)
+            # A found-but-empty map is a real answer ("the sitemap lists N URLs,
+            # none in the section you asked for"), but only for an explicit
+            # sitemap=true. Under 'auto' the caller asked for discovery, and BFS
+            # can reach pages the sitemap never listed, so an empty map falls
+            # through to BFS exactly as a missing sitemap did before.
+            if sm_result.pages or sm_mode == "on":
+                return sm_result  # sitemap found + mapped (auto/on success)
         # auto: no sitemap -> fall through to BFS. on: no sitemap -> honest empty.
         if sm_mode == "on":
             return CrawlResponseModel(
