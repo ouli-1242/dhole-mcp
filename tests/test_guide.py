@@ -16,7 +16,10 @@ from dhole_mcp import guide
 from dhole_mcp.server import (
     DHOLE_INSTRUCTIONS,
     MasterFetchServer,
+    _SC_OPTIONS,
     _SF_OPTIONS_ALLOWED,
+    _SHOT_OPTIONS,
+    _SS_OPTIONS,
     _TOP_LEVEL_ARGS,
 )
 
@@ -155,6 +158,23 @@ def _wire_explanations() -> str:
     return "\n".join(parts)
 
 
+def _tool_text(name: str) -> str:
+    """一个工具的全部 agent 可见文本，**不做 JSON 转义**。
+
+    用 json.dumps 拼会得到 `\\nsite` —— 换行变成两个字符，于是键名前面永远是词
+    字符，下面那些词边界匹配全线失效（实测就是这么让四条守卫一起报「没提过」，
+    而描述里明明写着）。机制自检里钉了这条，防止改回去。
+    """
+    td = _def_of(name)
+    parts = [td["description"], name]
+    for key, spec in td["inputSchema"].get("properties", {}).items():
+        parts.append(key)
+        if isinstance(spec, dict):
+            parts.append(str(spec.get("description") or ""))
+            parts.extend(str(v) for v in (spec.get("enum") or []))
+    return "\n".join(parts)
+
+
 def _mentions(text: str, key: str) -> bool:
     """按词边界找键名：`wait` 不该被 `network_idle` 里的一段算成已解释。"""
     return re.search(rf"(?<![\w.]){re.escape(key)}(?![\w])", text) is not None
@@ -165,6 +185,7 @@ def test_the_mention_matcher_is_not_a_substring_test():
     assert not _mentions("network_idle and waits", "wait")
     assert _mentions("headless, useragent, wait", "wait")
     assert not _mentions("solve_cloudflare", "cloudflare")
+    assert _mentions(_tool_text("smart_search"), "site"), "转义把词边界弄坏了"
     assert len(_corpus()) > 20_000, "语料空了：覆盖率会伪装成通过"
     assert len(_SF_OPTIONS_ALLOWED) > 20, "键集合空了：同上"
 
@@ -176,8 +197,40 @@ def test_every_smart_fetch_key_is_named_on_the_wire():
     assert not silent, f"这些 options 键没进 wire 上的清单: {silent}"
 
 
+# 每个带 options 袋的工具：袋里被接受的键，必须在袋的说明里出现名字。
+# 这一条管住四个工具，因为它是"新键进集合却没人提"的唯一拦截点 —— 常驻文本
+# 有两种合法写法（smart_fetch：列名字 + 细节进语料；其余：袋里逐键内联解释），
+# 但两种都不允许出现一个谁都没提过的键。
+BAGS = {
+    "smart_fetch": _SF_OPTIONS_ALLOWED,
+    "smart_crawl": _SC_OPTIONS,
+    "smart_search": _SS_OPTIONS,
+    "screenshot": _SHOT_OPTIONS,
+}
+
+
+@pytest.mark.parametrize("tool", sorted(BAGS))
+def test_every_accepted_bag_key_is_named_in_its_description(tool):
+    """袋里被接受的键，至少要在**这个工具的 wire 文本**里出现一次名字。
+
+    查整个工具载荷而不是只查袋子，因为放置本身就分两类：`search` 的规范位置是
+    顶层，袋里只是兼容读法；`selector`（截图裁元素）属于 DHOLE_MULTIMODAL 打开
+    后才由 `_MULTIMODAL_*_CLAUSE` 补进描述的能力 —— 关掉时它不可用， refusal 会
+    解释，所以"在开着的那份描述里被点名"已经足够。两种情况都不允许"哪儿都不提"。
+    """
+    from dhole_mcp.server import _MULTIMODAL_SF_CLAUSE, _MULTIMODAL_SHOT_CLAUSE
+
+    text = _tool_text(tool) + _MULTIMODAL_SF_CLAUSE + _MULTIMODAL_SHOT_CLAUSE
+    silent = sorted(k for k in BAGS[tool] if k != "options" and not _mentions(text, k))
+    assert not silent, f"{tool} 接受了这些键却没在任何地方提到它们: {silent}"
+
+
 def test_every_smart_fetch_key_is_explained_somewhere():
-    """键名点了，还得有人解释它是什么 —— 常驻文本或语料，两处之一即可。"""
+    """smart_fetch 把逐键解释搬进了语料，所以这里查的是搬走的落点。
+
+    只有 smart_fetch 用「清单 + 语料」这一写法：其余三个工具的键仍在袋里内联
+    解释，键少、每条一句，改写法省不下什么。所以这条守卫跟着写法走，不摊大饼。
+    """
     surface = _wire_explanations() + "\n" + _corpus()
     undocumented = sorted(k for k in _SF_OPTIONS_ALLOWED if not _mentions(surface, k))
     assert not undocumented, (

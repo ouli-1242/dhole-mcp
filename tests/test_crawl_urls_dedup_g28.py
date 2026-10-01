@@ -139,12 +139,21 @@ class TestTheEmptyResult:
 class TestTheWireText:
 
     def test_crawl_wire_names_the_accounting_fields(self):
-        """新字段不进 wire 文本，调用方就永远不知道可以拿它对账。"""
+        """新字段不进任何 agent 读得到的文本，调用方就永远不知道可以拿它对账。
+
+        W9 之后「agent 读得到」有两个面：`tools/list` 的常驻文本，和 `dhole_doc`
+        送出的语料。这四个计数字段解释的是**回包**而不是「怎么选工具」，所以从常
+        驻层挪进了 `references/tools.md`；守卫跟着改成查两个面之一，而不是继续钉
+        在描述上 —— 它锁的是「有人提过这件事」，不是「提它的那句话住在哪一行」。
+        """
+        from dhole_mcp import guide
+
         tools = {t["name"]: t for t in MasterFetchServer._TOOL_DEFS}
-        text = tools["smart_crawl"]["description"]
+        agent_visible = tools["smart_crawl"]["description"] + "\n" + "\n".join(
+            p.read_text(encoding="utf-8") for p in guide._ROOT.rglob("*.md"))
         for field in ("urls_supplied", "urls_deduped", "urls_dropped_off_domain",
                       "urls_dropped_over_max_pages"):
-            assert field in text, field
+            assert field in agent_visible, field
 
     def test_response_model_documents_the_drop_reasons(self):
         from dhole_mcp.crawl import CrawlResponseModel
