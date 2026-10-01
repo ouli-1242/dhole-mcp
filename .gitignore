@@ -40,6 +40,9 @@ htmlcov/
 .coverage
 coverage.xml
 
+# 模拟测试运行时产物（订单日志 / 请求日志 / 生成的二维码 / 基线结果）
+evals/.runtime/
+
 # --- personal / agent scratch (never commit) ---
 # These are local-only planning, status, and AI-agent working files. They are
 # not for the public audience and stay out of the repo.
