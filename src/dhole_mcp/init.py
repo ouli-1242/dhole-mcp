@@ -697,13 +697,13 @@ def run_init(argv: list[str]) -> int:
         try:
             planned = _planned_write(path, spec)
         except RuntimeError as exc:
-            print(f"  " + ui.err(f"{spec.name}: {exc}"))
+            print("  " + ui.err(f"{spec.name}: {exc}"))
             continue
         if planned is None:
-            print(f"  " + ui.dim(f"{spec.name}: already registered at {path}, skipping"))
+            print("  " + ui.dim(f"{spec.name}: already registered at {path}, skipping"))
             skipped += 1
             continue
-        print(f"  " + ui.cyan(spec.name) + f" -> {path}")
+        print("  " + ui.cyan(spec.name) + f" -> {path}")
         # Print exactly the JSON that would be written so the operator
         # can eyeball the diff before --yes.
         body = json.dumps(planned, indent=2)

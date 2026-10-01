@@ -51,7 +51,6 @@ from __future__ import annotations
 import asyncio
 import heapq
 import logging
-import os
 import re
 from time import time
 from typing import Optional

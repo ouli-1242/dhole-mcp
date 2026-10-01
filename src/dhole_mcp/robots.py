@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 from typing import Callable, NamedTuple, Optional
 from urllib.parse import urlparse

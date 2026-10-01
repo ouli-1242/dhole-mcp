@@ -202,7 +202,7 @@ class TestDoctorConfigAudit:
         for key_env in ("DHOLE_BOCHA_API_KEY", "DHOLE_BRIGHTDATA_API_KEY",
                         "DHOLE_EXA_API_KEY", "DHOLE_TAVILY_API_KEY"):
             assert key_env in out
-            assert f"SENTINEL" not in out
+            assert "SENTINEL" not in out
         assert "set (len=" in out
 
     def test_import_time_env_is_marked_as_restart(self, isolated_home, monkeypatch, capsys):

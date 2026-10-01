@@ -46,7 +46,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import os
 import time
 from typing import Callable, Optional
 
