@@ -1087,6 +1087,118 @@ def _append_config_audit(checks: list[tuple[str, str, str, str]]) -> None:
     ))
 
 
+_FAKE_IP_NETWORK = None  # lazily constructed to keep import cheap
+
+
+def _fake_ip_network():
+    """``198.18.0.0/15`` - the RFC 2544 benchmarking block.
+
+    Clash / mihomo / sing-box TUN with a fake-ip resolver hands every public
+    hostname an address from this range by design; a genuine public resolver
+    never does. That asymmetry makes the block a specific enough signal that
+    doctor can name the environment instead of leaving the user to guess.
+    """
+    global _FAKE_IP_NETWORK
+    if _FAKE_IP_NETWORK is None:
+        import ipaddress
+        _FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
+    return _FAKE_IP_NETWORK
+
+
+def _resolve_probe() -> str:
+    """The domain doctor resolves to sniff for a fake-ip resolver.
+
+    Hard-coded so a change to the probe target has to go through review;
+    a machine that cannot resolve ANY name is offline, and the check falls
+    through to an ``info`` line rather than a failure.
+    """
+    return "example.com"
+
+
+def _append_resolver_reality(checks: list[tuple[str, str, str, str]]) -> None:
+    """W3 · tell the operator they are behind a fake-ip proxy, in the words
+    they can act on.
+
+    This is the fix for the plan §1.5 falsified README claim ("zero-config
+    works by default"). On a Clash TUN + fake-ip resolver, the DNS recheck
+    in ``security._resolves_to_internal`` refuses every public URL because
+    the AAAA record lands in ``fc00::/7`` - the IPv4 answer in
+    ``198.18.0.0/15`` alone would NOT trip it (that block is deliberately
+    absent from ``_PRIVATE_NETWORKS``). The failure looks identical to "the
+    product is broken" from the outside; naming the resolver class and the
+    specific network turns it into a copy-pasteable setting change.
+
+    Never counts as a failure. A machine with no network, a machine with a
+    plain HTTP proxy, and a machine that already set
+    ``DHOLE_SSRF_DNS_RECHECK=0`` all read as either ``ok`` or ``info`` here.
+    """
+    import ipaddress
+    import socket
+
+    probe = _resolve_probe()
+    try:
+        infos = socket.getaddrinfo(probe, None)
+    except Exception as exc:  # noqa: BLE001
+        # Offline / resolver broken: report what we saw, do NOT count as a
+        # failure - "the network is down" is not an install problem.
+        checks.append((
+            "resolver reality", "info",
+            f"probe {probe} unresolved: {type(exc).__name__} (offline?)",
+            "",
+        ))
+        return
+
+    v4_in_fake_ip_block: str | None = None
+    v6_in_ula: str | None = None
+    fake_net = _fake_ip_network()
+    ula = ipaddress.ip_network("fc00::/7")
+    for info in infos:
+        try:
+            addr = ipaddress.ip_address(str(info[4][0]).split("%")[0])
+        except ValueError:
+            continue
+        if isinstance(addr, ipaddress.IPv4Address):
+            if addr in fake_net and v4_in_fake_ip_block is None:
+                v4_in_fake_ip_block = str(addr)
+        else:
+            if addr in ula and v6_in_ula is None:
+                v6_in_ula = str(addr)
+
+    if v4_in_fake_ip_block is None:
+        # Normal public answer. Healthy.
+        checks.append((
+            "resolver reality", "ok",
+            f"{probe} resolves to a public answer",
+            "",
+        ))
+        return
+
+    # fake-ip detected. Say which env gate is on the user's side.
+    recheck_off = (os.environ.get("DHOLE_SSRF_DNS_RECHECK") or "").strip().lower() \
+        in ("0", "false", "off", "no")
+    if recheck_off:
+        checks.append((
+            "resolver reality", "ok",
+            f"fake-ip proxy detected ({probe} -> {v4_in_fake_ip_block} in "
+            f"198.18.0.0/15), DNS recheck already disabled",
+            "",
+        ))
+        return
+
+    detail = (
+        f"fake-ip proxy detected ({probe} -> {v4_in_fake_ip_block} in 198.18.0.0/15)"
+    )
+    if v6_in_ula:
+        detail += f"; the SSRF DNS recheck rejects it via the AAAA record: {v6_in_ula} in fc00::/7"
+    detail += "; every smart_fetch / smart_search URL would fail with 'resolves to internal/private IP'"
+    checks.append((
+        "resolver reality", "info",
+        detail,
+        "set DHOLE_SSRF_DNS_RECHECK=0 in the host's env block, then restart the host "
+        "(disables the DNS-recheck layer only; IP-literal and hostname guards stay on)",
+    ))
+
+
 def doctor() -> int:
     """Proactive health check: diagnose a half-broken install and name the fix.
 
@@ -1226,6 +1338,18 @@ def doctor() -> int:
     except Exception as exc:  # noqa: BLE001
         checks.append(("config audit", "info", f"skipped: {exc}"[:60], ""))
 
+    # ── resolver reality (W3) ────────────────────────────────────────────
+    # The plan's §1.5 - README's "zero-config works" was falsified on a
+    # fake-ip TUN setup, and every URL tool failed with what looked like
+    # a product bug. This check names the environment so the operator
+    # sees "your proxy is set up this way, here is the switch" instead
+    # of an unexplained SecurityError from every fetch. Never counts as
+    # a failure - offline / broken-DNS read as info, not red.
+    try:
+        _append_resolver_reality(checks)
+    except Exception as exc:  # noqa: BLE001
+        checks.append(("resolver reality", "info", f"skipped: {exc}"[:60], ""))
+
     # ── render ───────────────────────────────────────────────────────────
     failures = [c for c in checks if c[1] == "fail"]
     head = (ui.err(f"{len(failures)} issue(s) found") if failures
@@ -1240,7 +1364,7 @@ def doctor() -> int:
             mark = ui._sty(ui._glyph("\u2717", "x"), ui._RED)
         else:
             mark = ui._sty(ui._glyph("!", "!"), ui._MAGENTA)
-        print(f"  {mark} {label:<{label_width}} {ui.dim(_short(detail, w=180))}")
+        print(f"  {mark} {label:<{label_width}} {ui.dim(_short(detail, w=280))}")
         if fix:
             print(f"      {ui.dim('fix:')} {ui.cmd(fix)}")
 

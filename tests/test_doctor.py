@@ -285,3 +285,116 @@ class TestDoctorConfigAudit:
         for line in out.splitlines():
             if "DHOLE_IGNORE_ROBOTS" in line:
                 assert "off" in line
+
+
+class TestDoctorResolverReality:
+    """W3 · fake-ip 代理检测。
+
+    修的是 §1.5 那条被实测证伪的 README 断言："零配置即可用"。真实的拦截链路
+    不是 "fake-ip 被拦" 这种笼统说法：`_PRIVATE_NETWORKS` 里根本没有
+    198.18.0.0/15，是 AAAA 落 fc00::/7 才是拒绝点。测试必须按这条具体链路断言
+    输出包含正确的地址、正确的网段、正确的修法，且不能因"环境就是这样"把
+    doctor 判红。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_dhole_env(self, monkeypatch, isolated_home):
+        from dhole_mcp import env_registry as _reg
+        for e in _reg.ALL:
+            monkeypatch.delenv(e.name, raising=False)
+
+    def _fake_addr(self, monkeypatch, answers):
+        """Patch socket.getaddrinfo to return the given (family, ip) list."""
+        import socket
+
+        def fake(host, port, *args, **kwargs):
+            return [(f, 1, 6, "", (ip, 0)) for (f, ip) in answers]
+
+        monkeypatch.setattr(socket, "getaddrinfo", fake)
+
+    def test_fake_ip_a_record_names_the_network_and_the_remedy(
+            self, isolated_home, monkeypatch, capsys):
+        import socket
+
+        self._fake_addr(monkeypatch, [
+            (socket.AF_INET, "198.18.0.32"),
+            (socket.AF_INET6, "fd00::20"),
+        ])
+        # This is an environment fact, not an install fault - the plan is
+        # explicit that doctor must NOT return 1 here.
+        assert updater.doctor() == 0
+        out = capsys.readouterr().out
+        assert "fake-ip" in out
+        assert "198.18.0.32" in out
+        assert "198.18.0.0/15" in out
+        assert "fc00::/7" in out
+        assert "DHOLE_SSRF_DNS_RECHECK=0" in out
+        # and the note about what disabling actually turns off:
+        assert "IP-literal" in out or "IP literal" in out
+
+    def test_recheck_already_disabled_is_ok_green(
+            self, isolated_home, monkeypatch, capsys):
+        import socket
+
+        monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", "0")
+        self._fake_addr(monkeypatch, [
+            (socket.AF_INET, "198.18.0.127"),
+            (socket.AF_INET6, "fd00::80"),
+        ])
+        assert updater.doctor() == 0
+        out = capsys.readouterr().out
+        assert "fake-ip proxy detected" in out
+        assert "DNS recheck already disabled" in out
+
+    def test_offline_dns_never_counts_as_failure(
+            self, isolated_home, monkeypatch, capsys):
+        import socket
+
+        def boom(*args, **kwargs):
+            raise socket.gaierror("name or service not known")
+
+        monkeypatch.setattr(socket, "getaddrinfo", boom)
+        # doctor must stay 0 on an offline box (assuming nothing else fails)
+        assert updater.doctor() == 0
+        out = capsys.readouterr().out
+        assert "resolver reality" in out
+        # the "info" glyph is "!" not "✗"; the line is present but not red.
+        for line in out.splitlines():
+            if "resolver reality" in line:
+                assert "✗" not in line and "x" not in line[:15]
+
+    def test_public_resolution_is_ok(self, isolated_home, monkeypatch, capsys):
+        import socket
+
+        self._fake_addr(monkeypatch, [
+            (socket.AF_INET, "93.184.216.34"),
+        ])
+        assert updater.doctor() == 0
+        out = capsys.readouterr().out
+        assert "resolver reality" in out
+        assert "public answer" in out
+
+    def test_only_a_record_in_block_still_triggers(self, isolated_home,
+                                                   monkeypatch, capsys):
+        """The plan's chain is: v4 hits 198.18.0.0/15 (which is NOT in
+        _PRIVATE_NETWORKS) but v6 AAAA hits fc00::/7 which is the real
+        reject path. If the AAAA is absent, the v4 signal alone still
+        identifies fake-ip - the operator needs to hear about it."""
+        import socket
+
+        self._fake_addr(monkeypatch, [(socket.AF_INET, "198.18.0.1")])
+        assert updater.doctor() == 0
+        out = capsys.readouterr().out
+        assert "fake-ip" in out
+        assert "DHOLE_SSRF_DNS_RECHECK=0" in out
+
+    def test_resolver_reality_does_not_raise_even_if_patched_bad(
+            self, isolated_home, monkeypatch, capsys):
+        """_append_resolver_reality 内部炸了也不能把 doctor 打挂。"""
+        def boom(*args, **kwargs):
+            raise ValueError("getaddrinfo is on fire")
+
+        import socket
+        monkeypatch.setattr(socket, "getaddrinfo", boom)
+        # doctor() must still return 0/1 - never raise.
+        assert updater.doctor() in (0, 1)
