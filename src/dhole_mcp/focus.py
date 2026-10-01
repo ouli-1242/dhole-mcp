@@ -237,6 +237,23 @@ def _bm25_scores(
 # itself room inside 512.
 _NEURAL_MAX_CHARS = 300
 
+# Cost model (measured 2026-10-01 on README.md 94 blocks / CHANGELOG.md 140):
+# wall time tracks the CHUNK count, not the block count -- 202 chunks 14.0s vs
+# 214 chunks 14.8s, even though the block counts differ by 1.5x. Blocks of
+# different sizes converge once split to <=300 chars, which is why the earlier
+# "91 blocks vs 140 blocks cost about the same" reading looked like fixed
+# overhead: what matched was the chunk counts, not a constant. ~69 ms/chunk for
+# Han text (300 chars ~ 300 tokens, near MAX_SEQ).
+#
+# Do NOT "optimize" this by batching same-length chunks together. score() pads
+# the whole batch to its longest member and the model is NOT padding invariant:
+# the same chunk scores differently in a 300-char batch than in a 71-char one
+# (measured max 2.2e-2), and a 4-way length split moved single scores by up to
+# 0.34 and swapped 2-3 blocks in and out of the top 20. Length bucketing
+# measured 37-66% faster and was REJECTED for changing the answer. Within one
+# page the batch is fixed, so scores stay reproducible; they are simply not
+# comparable ACROSS pages, and changing batch composition is a behaviour change.
+
 
 def _split_for_encoder(block: str, cap: int = _NEURAL_MAX_CHARS) -> list[str]:
     """Split a block into pieces that fit the encoder window (long-line aware).
