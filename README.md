@@ -18,7 +18,7 @@ Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器：给 AI 代理
 - **是什么**：一个给 AI 用的「上网工具包」——AI 自己不会上网、不会读本地文件、不会点网页，装上它就会了。
 - **怎么用**：正常提要求就行，AI 自己决定调哪个工具，你不需要记任何命令。
 - **默认能做什么**：搜网页 · 抓一个网址 · 批量抓一个站 · 截图 · 读本地文件（Word / Excel / PDF / PPT）· 盯 RSS 更新 · 解析短链 · 清缓存 · 查看登录状态 · 读 dhole 自己的说明书——共 **10 个**工具。
-- **另外 4 个默认关**：录制回放 `recipe` 与网页变化监控 `watch` 用 `DHOLE_TASKS=1` 打开；密码管理器查询 `vault` 与辅助登录 `login` 用 `DHOLE_VAULT=1` 打开。默认关是因为工具说明**每次聊天都占额度**，全开白花约 1,700 token。但它们**存在**这件事不用读这份 README 才知道：`dhole_doc(topic='behavior')` 会告诉你这四个是什么、怎么打开。
+- **另外 4 个默认关**：录制回放 `recipe` 与网页变化监控 `watch`；密码管理器查询 `vault` 与辅助登录 `login`。默认关是因为工具说明**每次聊天都占额度**，全开白花约 1,700 token。打开它们不必编辑 JSON：`dhole init --tasks` 或 `--vault`（写 `~/.dhole/config.json`，重启宿主后注册），装了什么、还差什么 `dhole init --probe` 会真跑一次告诉你。但它们**存在**这件事不用读这份 README 才知道：`dhole_doc(topic='behavior')` 会告诉你这四个是什么、怎么打开。
 - **代理环境现在自己适配**：Clash / sing-box 这类 TUN + fake-ip 代理过去要求你**先**设 `DHOLE_SSRF_DNS_RECHECK=0` 才抓得到东西；现在 dhole 第一次需要判定时探测一次，命中就自动跳过那一层——IP 字面量 / 主机名 / 云元数据守卫照旧，且每个受影响的回包都会说明。要强制恢复：`dhole config set DHOLE_SSRF_DNS_RECHECK on`。
 - **要调设置**：见[配置](#配置)。
 
@@ -169,6 +169,7 @@ CLI 诊断与配置：
 | `dhole proxy list` / `add` / `remove` / `clear` | 搜索代理池 |
 | `dhole model` / `dhole model use <name>` | 查看 / 切换重排模型 |
 | `dhole skill` | 安装 / 查看随包分发的 agent 技能（`install` / `status`） |
+| `dhole init` | 一条命令跑完安装与配置（`--yes` 才落盘；`--tasks` / `--vault` 打开默认关的工具组；`--probe` 跑一次真实搜索+抓取确认"从这里能用"） |
 | `dhole config` | 持久化旋钮：`list` / `set <NAME> <value>` / `unset <NAME>`（写 `~/.dhole/config.json`，不用改宿主 JSON、逐次生效的旋钮不用重启） |
 | `dhole --http --host --port` | 改用 streamable HTTP 传输（默认 stdio） |
 

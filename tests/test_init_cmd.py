@@ -180,3 +180,108 @@ def test_init_dispatches_from_main(monkeypatch, tmp_home):
         srv.main()
     assert called == [["--yes"]]
 
+
+
+class TestOptInGroupsThroughTheFileDoor:
+    """--tasks / --vault 把默认关的工具组打开，走 W11 的文件门。
+
+    这两个开关过去只有一种打开方式：编辑宿主的 MCP JSON + 重启。用户看不见
+    文件门，就只能靠读 README 才知道有东西可开 —— 而"打开"这一步必须是命令，
+    不是文档。env 已经设过时**不写文件**：那是操作者已经做过的决定。
+    """
+
+    def test_dry_run_writes_nothing(self, tmp_home, capsys):
+        from dhole_mcp import env_registry as er
+        assert init_cmd.run_init(["--tasks"]) == 0
+        assert er.file_entries() == {}, "dry-run 默认不许落盘"
+        out = capsys.readouterr().out
+        assert "dry-run" in out and "--yes" in out
+
+    def test_yes_enables_both_groups_and_says_the_restart(self, tmp_home, capsys):
+        from dhole_mcp import env_registry as er
+        assert init_cmd.run_init(["--tasks", "--vault", "--yes"]) == 0
+        assert er.file_entries() == {"DHOLE_TASKS": "1", "DHOLE_VAULT": "1"}
+        # 诚实：这两个是 import 期读的旋钮，写了也要重启才注册工具
+        assert "restart the host" in capsys.readouterr().out
+
+    def test_enabling_the_file_does_not_enable_the_tools_this_process(self, tmp_home, monkeypatch):
+        """落盘之后 `_ENABLED_TOOLS` 仍是旧值 —— 这就是那句"要重启"的证据。"""
+        from dhole_mcp import env_registry as er
+        import dhole_mcp.server as srv
+        assert init_cmd.run_init(["--tasks", "--yes"]) == 0
+        assert "recipe" not in srv._ENABLED_TOOLS
+        assert er.value_of("DHOLE_TASKS") == "1"
+
+    def test_env_already_set_means_no_write(self, tmp_home, monkeypatch, capsys):
+        from dhole_mcp import env_registry as er
+        monkeypatch.setenv("DHOLE_TASKS", "1")
+        init_cmd.run_init(["--tasks", "--yes"])
+        assert er.file_entries() == {}, "env 赢，就不该再留一份文件里的副本"
+        assert "env block" in capsys.readouterr().out
+
+    def test_an_unknown_flag_is_refused_not_ignored(self, tmp_home, capsys):
+        assert init_cmd.run_init(["--task"]) == 2
+        assert "unknown flag" in capsys.readouterr().out
+
+
+class TestTheLiveProbe:
+    """--probe 问的是运行中的代码，不是静态体检：从这里搜得到吗、抓得开吗。"""
+
+    @pytest.fixture
+    def stub_dispatch(self, monkeypatch):
+        import asyncio
+
+        import dhole_mcp.server as srv
+        from mcp.types import TextContent
+
+        calls: list[str] = []
+
+        async def fake(self, name, args):
+            calls.append(name)
+            body = {"results": [{"title": "t"}], "engines_consensus": "3 of 5",
+                    "rerank_mode": "neural", "duration_ms": 900}
+            if name == "smart_fetch":
+                body = {"status": 200, "total_extracted_chars": 1234,
+                        "fetcher_used": "http", "duration_ms": 210,
+                        "metadata": {"ssrf_recheck": "auto-skipped on this host"}}
+            return [TextContent(type="text", text="x")], body
+
+        monkeypatch.setattr(srv.MasterFetchServer, "_auto_escalate",
+                            lambda *a, **k: asyncio.sleep(0))
+        monkeypatch.setattr(srv.MasterFetchServer, "_dispatch", fake)
+        return calls
+
+    def test_off_by_default(self, tmp_home, stub_dispatch, capsys):
+        init_cmd.run_init([])
+        assert stub_dispatch == [], "不发真实流量，除非明说 --probe"
+
+    def test_names_both_targets_and_the_posture_note(self, tmp_home, stub_dispatch, capsys):
+        init_cmd.run_init(["--probe"])
+        out = capsys.readouterr().out
+        assert stub_dispatch == ["smart_search", "smart_fetch"]
+        assert "search: 1 results" in out and "engines 0" in out
+        assert "fetch https://example.com/: 200 1234 chars via http" in out
+        assert "auto-skipped on this host" in out
+
+    def test_a_slow_first_search_is_printed_in_seconds(self):
+        """219626ms 读起来像工具坏了，219.6s 读起来像它在说什么。"""
+        assert init_cmd._ms(900) == "900ms"
+        assert init_cmd._ms(219626) == "219.6s"
+        assert init_cmd._ms(None) == "0ms"
+        assert init_cmd._ms("junk") == "?"
+
+    def test_an_empty_pool_is_reported_as_a_fact_with_a_next_step(
+            self, tmp_home, monkeypatch, capsys):
+        import dhole_mcp.server as srv
+        from mcp.types import TextContent
+
+        async def empty(self, name, args):
+            body = {"results": [], "error": None} if name == "smart_search" \
+                else {"error": "resolves to internal/private IP", "next_action": "x"}
+            return [TextContent(type="text", text="x")], body
+
+        monkeypatch.setattr(srv.MasterFetchServer, "_dispatch", empty)
+        init_cmd.run_init(["--probe"])
+        out = capsys.readouterr().out
+        assert "engines probe" in out, "空池要给出下一步，不是只报 0 结果"
+        assert "network fact" in out

@@ -12,6 +12,7 @@
 
 ### 新增
 
+- **`dhole init` 多了三件事**：`--tasks` / `--vault` 把默认关的工具组打开在 `~/.dhole/config.json` 里（W11 的文件门），不再要求编辑宿主的 MCP JSON——env 块已经设过的组**不写文件**，因为那是操作者已经做过的决定；落盘后照实说明"这是 import 期读的旋钮，重启才注册"。`--probe` 跑一次真实搜索 + 真实抓取，问的是运行中的代码而不是静态体检（从这里搜得到吗、这个链接抓得开吗），每行点名它碰了哪个目标，空结果报成事实并给下一步而不是"安装坏了"。默认关，不发真实流量。未知 flag 现在返回 2 并列出可用的，不再静默忽略
 - **`dhole --doctor` 加两段**：
   - **配置审计**：只列本机 `os.environ` 里"已设"的 DHOLE_* 变量，按 scenario 分组、显示生效值 / 读取时机 / 合法性；secret 类永远显示 `set (len=N)` 绝不回显值；`read_at="import"` 的行带 `restart the host to change`；非法值走 `✗` 计入 failures 并附 `fix: set X to an integer in 500..200000, or unset it` 的可复制修法。此前 `_env_int("abc", 40000)` 静默回落、`_env_flag("yes-please")` 悄悄判 ON，没有任何一条输出告诉你设置没生效——现在这一条就是"我设了但没生效"的唯一可见点
   - **环境现实检查（fake-ip 代理）**：解析 `example.com`，A 记录落 `198.18.0.0/15` 判 fake-ip；输出**说清是哪个地址、命中哪个网段**（"the SSRF DNS recheck rejects it via the AAAA record: fd00::20 in fc00::/7"）+ 修法 `DHOLE_SSRF_DNS_RECHECK=0` + "只关 DNS recheck 层，IP-literal / hostname 守卫保留"的说明。修的是 §1.5 那条被实测证伪的 README 断言：Clash TUN + fake-ip 环境下不设 recheck=0 时**所有 URL 工具全部失败**，之前输出里没有任何一处提示这是环境而非产品

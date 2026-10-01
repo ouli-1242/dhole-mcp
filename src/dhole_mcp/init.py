@@ -204,6 +204,93 @@ def _print_manual_instructions() -> None:
           "(§让 agent 自己装) or `dhole doctor` for the launch shape.")
 
 
+#: The two targets ``--probe`` touches. Named here so the flag's blast radius is
+#: one glanceable line rather than a URL buried in a call.
+PROBE_URL = "https://example.com/"
+
+
+def _ms(value) -> str:
+    """A wall-clock duration the way a human reads it.
+
+    A first neural search loads (or downloads) the reranker, which legitimately
+    takes minutes; `219626ms` reads like a bug in the tool, `219.6s` reads like
+    what it is - and the next line of this output is the thing to look at.
+    """
+    try:
+        ms = float(value or 0)
+    except (TypeError, ValueError):
+        return "?"
+    return f"{ms / 1000:.1f}s" if ms >= 3000 else f"{ms:.0f}ms"
+
+
+def _run_probe(ui) -> None:
+    """Ask the live code instead of the static checks: does it work from here?
+
+    ``dhole --doctor`` proves the install is wired correctly. It cannot prove a
+    search returns anything from this IP, or that a public page is fetchable
+    here - and those are the two questions a first-time user actually has. So
+    this runs one real search and one real fetch through the same dispatcher an
+    agent would hit.
+
+    Opt-in because it sends real traffic: every line names the target it touched.
+    An empty or failed result is reported as a fact with the next step, never as
+    "the install is broken" - a machine behind a rate-limited IP or offline is a
+    working install in an unfriendly network.
+    """
+    import asyncio
+
+    print()
+    print(ui.cyan("live probe") + ui.dim(" - real requests; nothing is cached (cache_ttl=0)"))
+    try:
+        from dhole_mcp import server as _server
+    except Exception as exc:  # noqa: BLE001 - a broken import is the finding
+        print("  " + ui.err(f"cannot load the server here: {type(exc).__name__}: {exc}"))
+        return
+    srv = _server.MasterFetchServer(cache_ttl=0)
+
+    async def _call(name: str, args: dict):
+        out = await srv._dispatch(name, args)
+        return out[1] if isinstance(out, tuple) else out
+
+    try:
+        search = asyncio.run(_call("smart_search", {
+            "query": "dhole mcp", "options": {"max_results": 3}}))
+    except Exception as exc:  # noqa: BLE001
+        search = {"error": f"{type(exc).__name__}: {exc}"}
+    hits = search.get("results") or []
+    if search.get("error"):
+        print("  " + ui.warn(f"search: {search['error'][:120]}")
+              + ui.dim("  -> next: dhole engines probe (who is answering from this IP)"))
+    else:
+        used = search.get("engines_used") or []
+        print("  " + ui.ok(f"search: {len(hits)} results for 'dhole mcp'")
+              + ui.dim(f"  engines {len(used)} | rerank {search.get('rerank_mode', '?')}"
+                       f" | {_ms(search.get('duration_ms'))}"))
+        if not hits:
+            print("    " + ui.dim("empty pool: every keyless engine declined or was cooling - "
+                                  "try `dhole engines probe`, or set a search proxy"))
+
+    try:
+        fetch = asyncio.run(_call("smart_fetch", {"url": PROBE_URL}))
+    except Exception as exc:  # noqa: BLE001
+        fetch = {"error": f"{type(exc).__name__}: {exc}"}
+    if fetch.get("error"):
+        print("  " + ui.warn(f"fetch {PROBE_URL}: {str(fetch['error'])[:120]}"))
+        posture = fetch.get("next_action") or ""
+        if posture:
+            print("    " + ui.dim(str(posture)[:200]))
+    else:
+        print("  " + ui.ok(f"fetch {PROBE_URL}: {fetch.get('status')} "
+                           f"{fetch.get('total_extracted_chars', 0)} chars "
+                           f"via {fetch.get('fetcher_used', '?')}")
+              + ui.dim(f"  | {_ms(fetch.get('duration_ms'))}"))
+    note = (fetch.get("metadata") or {}).get("ssrf_recheck")
+    if note:
+        print("  " + ui.dim(str(note)[:170]))
+    print("  " + ui.dim("a failing fetch here is a network fact, not an install fault - "
+                        "`dhole --doctor` above checks the install itself"))
+
+
 def run_init(argv: list[str]) -> int:
     """`dhole init [flags]`. Returns a shell exit code.
 
@@ -212,13 +299,30 @@ def run_init(argv: list[str]) -> int:
       2. Verify the extras are installed (W7 made default = full, so this
          is a `python -c "import patchright"` check, not a pip call).
       3. Install the Chromium binary via playwright if missing.
+      3.5 With --tasks / --vault, enable the opt-in tool groups through
+          ~/.dhole/config.json (the file door from W11 - no host JSON edit).
       4. Detect installed MCP clients.
       5. Print the planned JSON (dry-run default).
       6. If ``--yes``, back up + write each config.
+      6.5 With --probe, run one real search and one real fetch through the
+          same dispatcher an agent uses (it sends traffic; every line names
+          the target).
       7. Run ``dhole doctor`` so the user sees the outcome in the same
          output they already trust.
     """
     yes = "--yes" in argv or "-y" in argv
+    probe = "--probe" in argv
+    want = {"--tasks": "DHOLE_TASKS", "--vault": "DHOLE_VAULT"}
+    enable = [env for flag, env in want.items() if flag in argv]
+    unknown = [a for a in argv
+               if a.startswith("-") and a not in ("--yes", "-y", "--probe", *want)]
+    if unknown:
+        # A flag that is silently ignored is how "I typed --task and nothing
+        # happened" becomes a support conversation.
+        from dhole_mcp import cli_ui as _ui
+        print(_ui.err(f"unknown flag(s): {' '.join(unknown)} "
+                      "(try: --yes, --probe, --tasks, --vault)"))
+        return 2
     from dhole_mcp import cli_ui as ui
 
     print(ui.branded(ui.cyan("dhole init")))
@@ -266,11 +370,44 @@ def run_init(argv: list[str]) -> int:
             print(line + "dry-run: would run " + ui.cmd("playwright install chromium")
                   + " (add --yes to actually fetch it)")
 
+    # 3.5 Opt-in capability groups. These live in ~/.dhole/config.json now that
+    # the file door exists (W11), so turning `recipe` / `watch` or `vault` /
+    # `login` on stopped being an exercise in editing the host's JSON. They are
+    # still read at import, so the restart note is not decoration - and neither
+    # is the consent question: DHOLE_VAULT puts a tool that reads the user's
+    # password manager onto the wire.
+    if enable:
+        from dhole_mcp import env_registry as _reg
+        print()
+        for env_name in enable:
+            current = _reg.source_of(env_name)
+            if current == "env":
+                print("  " + ui.dim(f"{env_name} already set in the host's env block "
+                                    "(env wins) - nothing to write"))
+                continue
+            if current == "file":
+                print("  " + ui.ok(f"{env_name} already enabled in "
+                                   f"{_reg.config_path().name}"))
+                continue
+            if not yes:
+                print("  " + ui.dim(f"dry-run: would write {env_name}=1 to ")
+                      + ui.cmd(str(_reg.config_path()))
+                      + ui.dim(" (add --yes), then restart the host"))
+                continue
+            _reg.set_entry(env_name, "1")
+            print("  " + ui.ok(f"{env_name}=1 -> {_reg.config_path().name}")
+                  + ui.dim("  restart the host so tools/list picks the tools up"))
+
     # 4. Client detection.
     found = _existing_client_configs()
     if not found:
         print()
         _print_manual_instructions()
+        if probe:
+            _run_probe(ui)
+        print()
+        from dhole_mcp import updater
+        updater.doctor()
         return 0
 
     print()
@@ -315,8 +452,10 @@ def run_init(argv: list[str]) -> int:
                             + ui.cmd("--yes")
                             + " to apply the writes above."))
 
-    # 7. Doctor, so the operator sees the shape of the whole system
-    # without typing a second command.
+    # 7. Optional live probe, then doctor - so the operator sees the shape of
+    # the whole system without typing a second command.
+    if probe:
+        _run_probe(ui)
     print()
     from dhole_mcp import updater
     updater.doctor()
