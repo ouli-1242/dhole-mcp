@@ -6,6 +6,30 @@
 
 > 自 13.14 起本仓库为个人衍生作品，版本号是自己的序号、不承诺语义化版本，与上游版本不可比；包内的 `__version__` 是唯一权威来源。
 
+## [Unreleased] - 大众化批次（feat/mainstream-config）
+
+零配置就能正确工作，配置只在需要时可见、可确认生效。八条工作项（W1–W8）与四条决策（D1–D4）的落地见 `git log`；下列只挑使用者能感知的变化。
+
+### 新增
+
+- **`dhole --doctor` 加两段**：
+  - **配置审计**：只列本机 `os.environ` 里"已设"的 DHOLE_* 变量，按 scenario 分组、显示生效值 / 读取时机 / 合法性；secret 类永远显示 `set (len=N)` 绝不回显值；`read_at="import"` 的行带 `restart the host to change`；非法值走 `✗` 计入 failures 并附 `fix: set X to an integer in 500..200000, or unset it` 的可复制修法。此前 `_env_int("abc", 40000)` 静默回落、`_env_flag("yes-please")` 悄悄判 ON，没有任何一条输出告诉你设置没生效——现在这一条就是"我设了但没生效"的唯一可见点
+  - **环境现实检查（fake-ip 代理）**：解析 `example.com`，A 记录落 `198.18.0.0/15` 判 fake-ip；输出**说清是哪个地址、命中哪个网段**（"the SSRF DNS recheck rejects it via the AAAA record: fd00::20 in fc00::/7"）+ 修法 `DHOLE_SSRF_DNS_RECHECK=0` + "只关 DNS recheck 层，IP-literal / hostname 守卫保留"的说明。修的是 §1.5 那条被实测证伪的 README 断言：Clash TUN + fake-ip 环境下不设 recheck=0 时**所有 URL 工具全部失败**，之前输出里没有任何一处提示这是环境而非产品
+- **`dhole init`**：一条命令做完以前三步（装 extras → `playwright install chromium` → 往 MCP 客户端配置写条目）。顺序：launcher 检查 → 浏览器依赖检查 → chromium（已装则跳过）→ 探测 Claude Desktop / Cursor / Windsurf / VS Code → 打印将写入的 JSON（**默认 dry-run**）→ 只有 `--yes` 才落盘，且落盘前 copy2 一份带时间戳的 `.bak-` 备份。没检测到客户端 → 打印手动配置样板、退出 0。幂等：已注册的 dhole 条目不重复写、不新建 backup
+- **`dhole doctor`**（无破折号）与 `dhole --doctor` 等价，stdout 与退出码字节一致。此前四种管理子命令是 argparse 之前手工分派，doctor 却是 flag，混合语法让用户的直觉写法 `dhole doctor` 报 `unrecognized arguments: doctor`。未知子命令现在返回 2 + 输出 `did you mean: dhole doctor?`
+
+### 变更
+
+- **`pip install dhole-mcp` 默认即完整版**（D2 采纳）：原 `[all]` extras 的 12 项重依赖（patchright / playwright / browserforge / requests / pdfplumber / pypdfium2 / rapidocr / onnxruntime / tokenizers / opencv-python-headless / python-docx / openpyxl）并入 `[project].dependencies`。代价每次安装数百 MB，换来"显而易见的那条命令是对的"——旧默认装出来是 HTTP-only 降级版，`-v` 里的 "each missing row degrades silently" 承认了这一点，但用户在踩到之前不会知道。**`[all]` extra 保留、内容不变**（updater 的自愈路径 `_pip("--force-reinstall", "--no-deps", "dhole-mcp[all]==TARGET")` 靠它跑，README / CONTRIBUTING / CHANGELOG / configuration.md / src 提示里 74 处 `[all]` 引用也全都保持为真）；新增 `slim` 作为"名字"存在，注释诚实说明 pip extras 语义只能加不能减、`[slim]` **不是**退回 HTTP-only 的实际开关。**`playwright install chromium` 仍是独立一步**——`pip install dhole-mcp` 装不到浏览器引擎二进制，W7 不改变这一点；把两步合成一步是 `dhole init` 的活
+- **`DHOLE_IGNORE_ROBOTS` 的安全方向改了**（D1 采纳）：未识别的值（`flase` 这种 typo）现在**视为 OFF**（继续合规）并 warn。旧行为：任何不在 off-list 里的值都算 ON，于是一个拼写错误会**静默关掉 robots.txt 合规检查**——唯一一个"typo 朝危险方向失败"的位置。其余 flag（`DHOLE_MULTIMODAL` / `DHOLE_NEURAL_FOCUS` / `DHOLE_TASKS` / `DHOLE_VAULT` / `DHOLE_USAGE_LOG` 等）**语义一字未动**，仍然是"不在 off-list 就算 ON"——把别人正在用的能力静默关掉正是本批次要消灭的那类故障；改的只是"未识别"这一条**被记录**进 doctor 的配置审计
+
+### 修复
+
+- **配置不再静默降级**：`_env_int` 与 `_env_flag`（以及 sessions / robots / security / crawl / actions / search_metasearch 里的 12+ 处独立读者）统一走 `env_registry` 的类型化 helper；非法值进入进程内共享告警列表，`dhole --doctor` 打印。此前 `DHOLE_COOKIE_TTL_S=abc`、`DHOLE_SEARCH_DEADLINE=not-a-number`、`DHOLE_ENGINE_HEARTBEAT=soon` 全都是无声回落
+- **`README.md` 的"零配置即可用"改口**：改成"默认零配置就能跑通最常见的路径" + 明写 Clash / sing-box TUN + fake-ip 例外需要 `DHOLE_SSRF_DNS_RECHECK=0`（`dhole doctor` 会识别这台机器是不是这种环境）；安装段把两条命令（pip + playwright）都列出并说明"两步都跑完浏览器层才可用"
+- **`configuration.md` 补齐**：`DHOLE_UPDATE_PACKAGE` / `DHOLE_UPDATE_INDEX_URL` 之前完全没在 142 行的文档里出现（W1 的文档覆盖测试暴露的），补进"data location / privacy / diagnostics"；`_ZONE` / `_COUNTRY` 简写展开成完整 `DHOLE_BRIGHTDATA_ZONE` / `DHOLE_BRIGHTDATA_COUNTRY` 名并标 import 时机；CLI 表格加 `dhole doctor` 与 `dhole init` 两行
+
+
 ## [17.0] - 2026-10-01
 
 从「网页研究工具」迈向「agent 的个人 Web 操作助手」的第一块：**带登录态抓取**与**页面操作**——CDP 接管你已登录的 Chrome，让已登录页面第一次可读；元素快照 + 索引化动作让 agent 能点、能填、能提交（提交默认暂停，等人确认）。边界不变：识别与决策归外层 agent，dhole 是零模型、零密钥的确定性工具层。
