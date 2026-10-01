@@ -17,6 +17,7 @@
   - **环境现实检查（fake-ip 代理）**：解析 `example.com`，A 记录落 `198.18.0.0/15` 判 fake-ip；输出**说清是哪个地址、命中哪个网段**（"the SSRF DNS recheck rejects it via the AAAA record: fd00::20 in fc00::/7"）+ 修法 `DHOLE_SSRF_DNS_RECHECK=0` + "只关 DNS recheck 层，IP-literal / hostname 守卫保留"的说明。修的是 §1.5 那条被实测证伪的 README 断言：Clash TUN + fake-ip 环境下不设 recheck=0 时**所有 URL 工具全部失败**，之前输出里没有任何一处提示这是环境而非产品
 - **`dhole init`**：一条命令做完以前三步（装 extras → `playwright install chromium` → 往 MCP 客户端配置写条目）。顺序：launcher 检查 → 浏览器依赖检查 → chromium（已装则跳过）→ 探测 Claude Desktop / Cursor / Windsurf / VS Code → 打印将写入的 JSON（**默认 dry-run**）→ 只有 `--yes` 才落盘，且落盘前 copy2 一份带时间戳的 `.bak-` 备份。没检测到客户端 → 打印手动配置样板、退出 0。幂等：已注册的 dhole 条目不重复写、不新建 backup
 - **`dhole doctor`**（无破折号）与 `dhole --doctor` 等价，stdout 与退出码字节一致。此前四种管理子命令是 argparse 之前手工分派，doctor 却是 flag，混合语法让用户的直觉写法 `dhole doctor` 报 `unrecognized arguments: doctor`。未知子命令现在返回 2 + 输出 `did you mean: dhole doctor?`
+- **`dhole_doc` 工具（第 14 个，默认注册）**：agent 现在一次调用就能读到 dhole 自己的说明书，不必先跑 `dhole skill install`、不必读 README、不必重启。七个 topic —— `start`（选工具 + 硬约束）/ `call`（怎么写调用，带反例）/ `fields`（响应字段词典）/ `behavior`（抓取升级链、页面动作语法、结构化抽取规则、搜索引擎矩阵、爬取消率）/ `fix`（按症状排障）/ `config`（每个旋钮对应什么场景）/ `recipes`（多步任务）；`section=` 只取其中一节。猜错 topic 或 section 返回的是「这里有什么」而不是报错，`references/` 里那 930 行语料成为唯一一份说明书。`dhole skill install` 从「能力的入口」降级为「可选加分」
 
 ### 变更
 
@@ -28,6 +29,7 @@
 - **配置不再静默降级**：`_env_int` 与 `_env_flag`（以及 sessions / robots / security / crawl / actions / search_metasearch 里的 12+ 处独立读者）统一走 `env_registry` 的类型化 helper；非法值进入进程内共享告警列表，`dhole --doctor` 打印。此前 `DHOLE_COOKIE_TTL_S=abc`、`DHOLE_SEARCH_DEADLINE=not-a-number`、`DHOLE_ENGINE_HEARTBEAT=soon` 全都是无声回落
 - **`README.md` 的"零配置即可用"改口**：改成"默认零配置就能跑通最常见的路径" + 明写 Clash / sing-box TUN + fake-ip 例外需要 `DHOLE_SSRF_DNS_RECHECK=0`（`dhole doctor` 会识别这台机器是不是这种环境）；安装段把两条命令（pip + playwright）都列出并说明"两步都跑完浏览器层才可用"
 - **`configuration.md` 补齐**：`DHOLE_UPDATE_PACKAGE` / `DHOLE_UPDATE_INDEX_URL` 之前完全没在 142 行的文档里出现（W1 的文档覆盖测试暴露的），补进"data location / privacy / diagnostics"；`_ZONE` / `_COUNTRY` 简写展开成完整 `DHOLE_BRIGHTDATA_ZONE` / `DHOLE_BRIGHTDATA_COUNTRY` 名并标 import 时机；CLI 表格加 `dhole doctor` 与 `dhole init` 两行
+- **`smart_fetch` 的连接期文本改成「路由 + 陷阱 + 键名清单」**：`actions` 从 1,290 字符降到 640、`schema` 858→700、`options` 2,309→约 1,500，逐键解释移进 `dhole_doc(topic='behavior')`。常驻层留下的都是**会导致错误结论或不可逆动作**的那几条：非 GET 只发一次（重发即写两遍）、凭据不跟跨源重定向走、304 是成功不是失败、云元数据端点任何设置都不放行、`submit` 不带 `confirm` 会暂停。同时把 20 个原先在 `options` 清单里没有名字的键全部点名（`if_none_match`、`include_media`、`network_idle`、`real_chrome`、`hide_canvas`、`block_webrtc`、`solve_cloudflare`、`use_trafilatura`、`main_content_only` 等），并按 `_SF_OPTIONS_ALLOWED` 加了反查守卫：以后新增的键若在 wire 没点名、或在语料没解释，测试直接红。净效果是默认连接期 22,948 → 23,654 字符（多注册 `dhole_doc`，+706）
 
 
 ## [17.0] - 2026-10-01
