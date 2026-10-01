@@ -63,29 +63,40 @@ playwright install chromium      # 反检测浏览器引擎（~150MB）
     "dhole": {
       "command": "dhole",
       "env": {
+        "DHOLE_SSRF_DNS_RECHECK": "0",
         "DHOLE_SEARCH_PROXY": "http://127.0.0.1:7890",
-        "DHOLE_SSRF_DNS_RECHECK": "0"
+        "DHOLE_MULTIMODAL": "1",
+        "DHOLE_NEURAL_FOCUS": "1",
+        "DHOLE_TASKS": "1",
+        "DHOLE_VAULT": "1",
+        "DHOLE_CDP_ATTACH": "1",
+        "DHOLE_CDP_HOSTS": "portal.example.com,mail.example.com",
+        "DHOLE_ALLOW_PRIVATE_HOSTS": "localhost,192.168.1.50",
+        "DHOLE_IGNORE_ROBOTS": "1",
+        "DHOLE_USAGE_LOG": "1"
       }
     }
   }
 }
 ```
 
-常用的几个（**不是都要设**，按需挑）：
+> 上面这份是**菜单，不是要照抄的配置**——多数人只会用到其中一两条，不确定就先别设，默认行为通常正是你要的。
+
+常用的几个（顺序与上面示例一致）：
 
 | 变量 | 什么时候设 |
 |---|---|
 | `DHOLE_SSRF_DNS_RECHECK=0` | 用 Clash / sing-box 的 TUN（fake-IP）模式时**必设**，否则每个公网站点都被判成内网、什么都抓不到；普通 HTTP 代理别设 |
 | `DHOLE_SEARCH_PROXY` | 搜索引擎被限流 / 被墙时走这个代理（也自动读 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`） |
-| `DHOLE_TOOLS=smart_fetch,smart_search` | 只注册列出的工具，连接期开销省约一半 |
-| `DHOLE_TASKS=1` | 打开 `recipe` / `watch`（重复任务），默认关 |
-| `DHOLE_VAULT=1` | 打开 `vault` / `login`（凭据与登录流），默认关；需本机装了 Bitwarden CLI（`bw`）或 1Password CLI（`op`）并已解锁 |
-| `DHOLE_ALLOW_PRIVATE_HOSTS` | 逗号分隔的主机白名单，放行内网 / 本机地址（抓自己的 dev 服务），默认一律拒绝 |
-| `DHOLE_IGNORE_ROBOTS=1` | 关掉默认开启的 `robots.txt` 遵从（进程级；单次豁免用 `ignore_robots=true`） |
 | `DHOLE_MULTIMODAL=1` | **宿主 agent 能看图才设**：解锁元素裁剪截图与本地二维码解码；纯文本宿主不要设 |
 | `DHOLE_NEURAL_FOCUS=1` | 让 `focus` 改用语义打分——更准（答案召回 90% → 100%）但**单页约 12.5 秒 CPU**，默认的 BM25 只要 23ms |
+| `DHOLE_TASKS=1` | 打开 `recipe` / `watch`（重复任务），默认关 |
+| `DHOLE_VAULT=1` | 打开 `vault` / `login`（凭据与登录流），默认关；需本机装了 Bitwarden CLI（`bw`）或 1Password CLI（`op`）并已解锁 |
 | `DHOLE_CDP_ATTACH=1` + `DHOLE_CDP_HOSTS` | 借你已登录的 Chrome 读登录后的页面，白名单限定哪些域名能用你的登录态，见下节 |
+| `DHOLE_ALLOW_PRIVATE_HOSTS` | 逗号分隔的主机白名单，放行内网 / 本机地址（抓自己的 dev 服务），默认一律拒绝 |
+| `DHOLE_IGNORE_ROBOTS=1` | 关掉默认开启的 `robots.txt` 遵从（进程级；单次豁免用 `ignore_robots=true`） |
 | `DHOLE_USAGE_LOG=1` | 写本地调用日志（工具名 / 耗时 / 脱敏错误，不记参数值、不联网） |
+| `DHOLE_TOOLS=smart_fetch,smart_search` | 只注册列出的工具，连接期开销省约一半。**没写进上面的示例**——照抄它会静默关掉其余 11 个工具 |
 
 其余变量（都不是必须设的）：
 
