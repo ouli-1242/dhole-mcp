@@ -186,6 +186,9 @@ def test_the_mention_matcher_is_not_a_substring_test():
     assert _mentions("headless, useragent, wait", "wait")
     assert not _mentions("solve_cloudflare", "cloudflare")
     assert _mentions(_tool_text("smart_search"), "site"), "转义把词边界弄坏了"
+    # 反证：把 fetch_schema 的那句说明删掉，覆盖率守卫就该看不见它（W10 的成因）
+    stripped = _tool_text("smart_search").replace("fetch_schema", "")
+    assert not _mentions(stripped, "fetch_schema")
     assert len(_corpus()) > 20_000, "语料空了：覆盖率会伪装成通过"
     assert len(_SF_OPTIONS_ALLOWED) > 20, "键集合空了：同上"
 
@@ -249,3 +252,42 @@ def test_the_opt_in_capability_groups_are_announced_even_when_off():
         assert _mentions(announced, tool), f"{tool} 在 agent 读得到的地方没被提到"
     for flag in ("DHOLE_TASKS", "DHOLE_VAULT"):
         assert flag in announced, f"{flag} 没有出现在任何 agent 读得到的地方"
+
+
+# ─── 整个参数面的覆盖率（不只是 options 袋）──────────────────────────────
+#
+# W10 的守卫抓出了 `fetch_schema`：功能活着、_SS_OPTIONS 接受它、整个 wire 里
+# 没有任何一处提到过它的名字。那种缺陷不会自己冒出来，所以把它变成一条覆盖
+# 全部 14 个工具的断言 —— 参数存在而无人提及，等于这个能力不存在。
+
+#: 名字本身已经说明用途的顶层必填项，一句短说明就够了。
+_OBVIOUS = {
+    ("smart_fetch", "url"), ("smart_fetch", "urls"),
+    ("smart_search", "query"), ("resolve_url", "url"),
+    ("smart_crawl", "url"), ("screenshot", "url"), ("login", "url"),
+}
+
+
+@pytest.mark.parametrize("tool", sorted(_TOP_LEVEL_ARGS))
+def test_every_property_explains_something(tool):
+    """每个参数的说明至少要说清「什么时候用它」，不能只是把名字复读一遍。"""
+    props = _def_of(tool)["inputSchema"].get("properties", {})
+    thin = [f"{tool}.{k}({len(v.get('description') or '')})" for k, v in props.items()
+            if len((v or {}).get("description") or "") < 15
+            and (tool, k) not in _OBVIOUS]
+    assert not thin, f"这些参数几乎没有说明，且不在显然名单里: {thin}"
+
+
+@pytest.mark.parametrize("tool", sorted(_TOP_LEVEL_ARGS))
+def test_no_accepted_parameter_is_unmentioned(tool):
+    """`_TOP_LEVEL_ARGS` 接受的每一个名字，都要在该工具的 wire 文本里出现一次。
+
+    查该工具自己的文本（说明 + 每个属性名与描述 + 两个多模态变体），因为「别的
+    工具提过」不救这个调用：agent 在 `recipe` 的描述里读不到 `note`，就不会给
+    `recipe` 传 `note`。
+    """
+    from dhole_mcp.server import _MULTIMODAL_SF_CLAUSE, _MULTIMODAL_SHOT_CLAUSE
+
+    text = _tool_text(tool) + _MULTIMODAL_SF_CLAUSE + _MULTIMODAL_SHOT_CLAUSE
+    silent = sorted(k for k in _TOP_LEVEL_ARGS[tool] if not _mentions(text, k))
+    assert not silent, f"{tool} 接受但它的 wire 文本从未提到的参数: {silent}"
