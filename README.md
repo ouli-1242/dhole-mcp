@@ -334,7 +334,7 @@ dhole model use ms-marco     # 切换
 - `archive.org` 回退会返回**某个日期的快照**（看顶层 `source` / `archived_at`），时效敏感的内容引用前先确认；但**服务器自己回的 JSON/XML 错误体不会被快照顶替**（4xx/5xx 且 content-type 是 json/xml 时如实保留），代理不可达时也不回退——那次请求根本没发出去，拿快照回答等于答了一个没人问过的问题
 - **内网 / 本机默认一律拒绝**（SSRF 守卫）。抓自己的 dev / staging / Docker 服务要点名：`allow_private=true`（只放开回环）或 `["my-service.local","192.168.1.50"]`，进程级用 `DHOLE_ALLOW_PRIVATE_HOSTS`。三个工具同一套口径：`smart_fetch`（`options.allow_private`）、`screenshot`（`options.allow_private`，作用域盖住导航——回环页面自己的图片 / 样式同样要放行）、`feed_fetch`（顶层 `allow_private`）。云元数据端点（`169.254.169.254`、`metadata.google.internal` 等）**任何时候都不放行**，包括写进白名单的情况
 - 正文 **50MB 硬顶**，且在下载**之前**守门：装不下的直接报 `Response body too large`，抬 `timeout` 没用
-- 连接期固定开销 23,572 字符（`tools/list` 21,431 + `instructions` 2,141，stdio 线上口径；用 `tests/tool_payload_measure.py` 从源码独立测得），每次连接付一次；换成 token 约 5.7k（cl100k 口径，分词器不同就不同——可比的是字符数）。其中 `actions` 的快照 / 索引寻址 / 提交闸契约、`session_id` 的 cookie 双向桥说明与 `focus_mode` 合计 ~2.3k。多模态纪律条款只在 `DHOLE_MULTIMODAL=1` 时追加，不计入默认开销。每次调用的 envelope 已压到非默认值字段才上线。`DHOLE_TOOLS` 只注册常用工具可省约一半
+- 连接期固定开销 22,817 字符（`tools/list` 20,676 + `instructions` 2,141，stdio 线上口径；用 `tests/tool_payload_measure.py` 从源码独立测得），每次连接付一次；换成 token 约 5.5k（cl100k 口径，分词器不同就不同——可比的是字符数）。其中 `actions` 的快照 / 索引寻址 / 提交闸契约、`session_id` 的 cookie 双向桥说明与 `focus_mode` 合计 ~2.0k。多模态纪律条款只在 `DHOLE_MULTIMODAL=1` 时追加，不计入默认开销。每次调用的 envelope 已压到非默认值字段才上线。`DHOLE_TOOLS` 只注册常用工具可省约一半
 - YouTube 仅能获取少量文本
 
 ## 本地数据
