@@ -3,6 +3,8 @@
 > 2026-10-01 执行　·　被测版本 **17.0**（`24b3aed`）　·　零真实站点流量
 > 2026-10-01 追加：四项缺陷已修复并复验（见文末「修复与复验」）
 > 2026-10-01 追加：补齐两处 eval 缺口 —— `feed_fetch` 的 `since` 增量端到端、视觉辅助基线（见「视觉辅助基线」）
+> 2026-10-01 追加：L3/L4 重复任务端到端（见「L3 / L4 重复任务」）
+> 2026-10-01 追加：凭据来源 + 独立登录流端到端（见「凭据来源 + 独立登录流」），并因此挖出缺陷 **D5**（私网健康探针把内容判定读成"目标不健康"）
 
 ## 一句话结论
 
@@ -38,6 +40,10 @@ python evals/captcha_baseline.py --score evals/.runtime/captcha/answers.txt
 
 # 7. L3/L4 重复任务（需要靶站在跑；会自己起一次性 DHOLE_HOME，不碰你的 ~/.dhole）
 DHOLE_TASKS=1 python evals/tasks_l3l4.py
+
+# 8. 凭据来源 + 独立登录流（需要靶站在跑；会自己起一次性 DHOLE_HOME 和一个
+#    临时目录里的「假 bw」，所以不依赖你机器上真的装了密码管理器）
+DHOLE_VAULT=1 python evals/vault_login.py
 ```
 
 场景 1/2/5/6 由**外层 agent 直接调 dhole 工具**执行，逐条调用见下。
@@ -223,6 +229,78 @@ connect tokens。
 
 ---
 
+## 凭据来源 + 独立登录流（`vault` / `login`）
+
+计划第七章「凭据来源」与「独立登录流工具」。单元测试（`tests/test_vault.py` 40 例、
+`tests/test_login_flow.py` 43 例）钉语义；`evals/vault_login.py` 走**完整工具调用链**，
+验那些语义在真页面 + 真 CLI 边界上还成立。
+
+**它不依赖你机器上装了密码管理器**：脚本在一个临时目录里生成一个**真的假 `bw`**
+（Python 脚本 + `bw.cmd` / `bw` 包装，PATH 前置），所以 `vault._run` → 子进程 →
+JSON 解析这条链是真在跑，不是被 monkeypatch 掉的。靶站复用已有的 `/login`
+（GET 表单 + POST 302 到 `/account` 并下发 `sid` cookie）。
+
+```
+靶站 http://127.0.0.1:8399　·　假 bw <临时目录>　·　库 <一次性 DHOLE_HOME>
+
+[通过] vault 认得 PATH 上的管理器并报出未锁定
+    sources=[{'source': 'bitwarden', 'available': True, 'unlocked': True, 'detail': 'unlocked'}]
+[通过] vault(op='match') 按主机找到凭据，且响应里没有密码值
+    total=1 host='127.0.0.1' 含密码值=False （用户名按设计会回：True）
+[通过] login 不带 confirm 时一个字节都不填，只回计划
+    pending=True filled=0 fields={'username': {'index': 0, ...}, 'password': {'index': 1, ...},
+    'submit': {'index': 2, 'name': '登录'}, 'submit_kind': 'element'} 含密码值=False
+    plan: log in to http://127.0.0.1:8399/login with vault credential 'fixture':
+          username -> [0], password -> [1], submit -> [2] (登录)
+[通过] login 带 confirm 时填 + 提交，判定已登录，响应里没有密码值
+    submitted=True filled=2 logged_in=True cookies=['sid'] 含密码值=False
+    message: Signed in to http://127.0.0.1:8399/login with vault credential 'fixture'.
+[通过] 登录态留住了：同 session_id 取登录后页面拿到登录版内容
+    content_ok=True 正文片段='欢迎回来\n这是仅登录用户可见的内容。\n退出登录'
+[通过] confirm=true 但没给 session_id 时被拒
+    error='confirm=true needs session_id.'
+
+===== 6/6 通过 =====
+```
+
+三条判据值得单独说：
+
+1. **密码一次都没出现在响应里**（第 2/3/4 条）。断言不是"某个字段为空"，而是把整个
+   响应对象（`model_dump_json` + wire 形态）序列化后断言那个秘密串**一次都没出现** ——
+   "没有那个字段"和"没有那个值"是两件事，前者会被以后新增的字段悄悄绕过。
+2. **闸是真的闸**（第 3 条）。不带 `confirm` 时 `filled=0` 且只有**一次**只读快照调用，
+   一个字节都没填。填本身也不可逆（页面上的输入事件能把值发出去），所以它和提交
+   一起等在闸后。
+3. **登录态真的留住了**（第 5 条）。浏览器层登录成功后，换回 HTTP 层、带同一个
+   `session_id` 取 `/account` 拿到的是登录版正文——cookie 双向桥在登录流上成立。
+
+### 这个场景挖出的缺陷（D5）
+
+**私网健康探针把"内容判定"读成"目标不健康"，于是本机登录页的浏览器层被跳过。**
+
+第一版跑出来 3/6，`login` 报"这个页面上没有密码框"——而靶站的 `/login` 明明有一个
+`<input type="password">`。根因不在登录流：`smart_fetch` 对回环 / 私网目标在启动
+隐身浏览器前会做一次直连健康探测（3 秒、不重试），判定条件是
+`probe.error or status >= 500`。而 `ResponseModel.error` 同时承载**内容判定**与传输
+失败——`_is_auth_wall` 在 HTTP 层把登录页判成 `auth_wall_detected` 并写进 `error`，
+探针据此认定"目标死了"，跳过浏览器层，把 HTTP 层的结果直接当成答案。于是
+`{"snapshot": true}` 动作**从来没跑过**，而调用方收到的说法是"没有密码框"。
+
+实测对比（靶站 `/login`）：
+
+| | `fetcher_used` | `escalation_path` | `metadata.actions` |
+|---|---|---|---|
+| 修复前 | `http` | `private-probe:target-unhealthy(skipped_stealthy)` | `null` |
+| 修复后 | `stealthy` | `direct:stealthy` | 三个元素（用户名 / 密码 / 登录按钮） |
+
+修法是把健康判定收回传输维度（`status == 0 or status >= 500`），与代码旁边那句
+"2xx / 3xx / 4xx ⇒ 活着"的注释对齐。**这条值得记下来的是它的形状**：单元测试全绿，
+因为没有任何用例覆盖这个探针；而它命中的是"看起来成功了、诊断却是错的"——
+正是这个项目最当回事的那类失败。回归网见
+`tests/test_loopback_no_proxy_g31.py::TestThePrivateHealthProbeReadsTransportNotContent`。
+
+---
+
 ## 缺陷清单
 
 ### D1（严重，命中 17.0 招牌能力）动作链里的元素截图拿不到图片像素
@@ -284,6 +362,30 @@ connect tokens。
 
 `server.py:8321` 传的是 `True`（未抛异常），`8325` 传 `False`（抛异常）。对一个自我定位为"回答我的客户端到底有没有正确路由到这里、扛不扛得住"的日志，应用层失败与成功不可区分是误导。是否算缺陷取决于 `ok` 的定义意图，但它与读者的直觉不一致。
 
+### D5（中，命中"看起来成功但诊断是错的"）私网健康探针把内容判定读成"目标不健康"
+
+回环 / 私网目标的强制隐身抓取，在启动浏览器前会做一次直连健康探测，判定条件写成
+`probe.error or status >= 500`。而 `ResponseModel.error` 同时承载**内容判定**
+（`auth_wall_detected` / `bot_wall_detected` / `js_shell_detected`）与传输失败——
+一个 HTTP 200 的本机登录页被 `_is_auth_wall` 判成登录墙、`error` 被写上，探针据此
+认定目标死了，跳过浏览器层。于是 `{"snapshot": true}` 动作从来没跑过，而调用方
+收到的说法是"这个页面上没有密码框"。
+
+**复现**：对靶站 `/login` 执行 `smart_fetch(actions=[{"snapshot": true}], allow_private=True)`：
+
+```json
+{"fetcher_used": "http",
+ "escalation_path": "private-probe:target-unhealthy(skipped_stealthy)",
+ "metadata": {"title": "登录", "lang": "zh", "robots": "bypassed"},
+ "content_ok": false, "error": "auth_wall_detected: page is a login/sign-in wall, not content"}
+```
+
+`metadata.actions` 为 `null`——动作一次都没跑。代码旁边那句注释本来就写着
+"2xx / 3xx / 4xx ⇒ 活着"，实现却多读了一个字段。修法是把健康判定收回传输维度
+（`status == 0 or status >= 500`）。详见「凭据来源 + 独立登录流 → 这个场景挖出的
+缺陷（D5）」。**这条值得记下来的是它的形状**：单元测试全绿，因为没有任何用例覆盖
+这个探针。
+
 ---
 
 ## 覆盖边界（如实说明）
@@ -337,3 +439,9 @@ connect tokens。
 2. ~~**神经 focus 的耗时结构**~~ **已查清**：耗时由**分块数**而非块数主导（202 块 14.0s vs 214 块 14.8s，约 69 ms/块）。此前"固定分批开销主导"的读法被推翻。据此还测了一个"按长度分桶"的加速方案：快 37~66%，但模型**不是 padding 不变**的（同块在 300 字批与 71 字批里得分差最大 2.2e-2；四路长度切分让单块得分最多移 0.34、top-20 进出 2~3 条），**已否决**。结论写进 `src/dhole_mcp/focus.py` 的代价模型注释。
 3. ~~**视觉验证码试读 / 2FA 转交**的 fixture~~ **已搭**：靶站新增 `/captcha` 三端点（扭曲文字、两档难度），`evals/captcha_baseline.py` 量出一次读对率 `normal` 38% / `hard` 12%、二维码解码 9/10、转交纪律在 wire 上（详见"视觉辅助基线"）。**行为墙与 2FA 仍只有文案断言**——本地造不出真东西。
 4. ~~`feed_fetch` 的 loopback 端到端~~ **已补**：`evals/feed_since.py` 走完整工具路径验 5 条判据（无过滤时计数保持 0、`since` 保留更新的并如实报出被丢掉的条数、被过滤时无日期条目仍在返回内容里、`since` 在未来、`since` 不可读时报错而非当成"全是新的"）。5/5 通过。
+
+> 2026-10-01 追加：计划第九章编排轴的最后两级（L3 `recipe` / L4 `watch`）与第七章的
+> 凭据来源 / 独立登录流已落地并各有端到端场景（`evals/tasks_l3l4.py` 7/7、
+> `evals/vault_login.py` 6/6）。**仍未覆盖的**：登录流的 CAPTCHA / 2FA 分支只有文案
+> 断言（本地造不出真东西，与上面第 3 条同一原因）；`login` 的"按回车提交"分支只有
+> 单测覆盖（靶站的表单有 `<button type="submit">`，走的是元素提交那条路）。

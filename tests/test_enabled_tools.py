@@ -1,4 +1,4 @@
-"""Connect-time token spend: DHOLE_TOOLS registers only a subset of the 9 tools.
+"""Connect-time token spend: DHOLE_TOOLS registers only a subset of the 13 tools.
 
 Why this file exists: the tools/list table plus instructions is paid on EVERY
 connect, even when dhole is never called. Measured after the token audit: 19,141
@@ -60,34 +60,61 @@ class TestTheEnvVarIsParsed:
         payload = json.loads(out.stdout)
         assert payload["enabled"] == sorted(
             n.strip() for n in value.split(",") if n.strip())
-        assert len(payload["all"]) == 11, \
-            "全集是 11 个工具（16.0 补上 close_session，L3/L4 补上 recipe/watch）；" \
-            "默认关闭的也留在这里，守卫继续覆盖它们"
+        assert len(payload["all"]) == 13, \
+            "全集是 13 个工具（16.0 补上 close_session，L3/L4 补上 recipe/watch，" \
+            "凭据/登录流补上 vault/login）；默认关闭的也留在这里，守卫继续覆盖它们"
 
     @pytest.mark.parametrize("value", [None, "", "   "])
     def test_unset_means_every_tool_except_the_opt_in_ones(self, value):
-        """未设 DHOLE_TOOLS = 全集 **减去** _OPT_IN_TOOLS。
+        """未设 DHOLE_TOOLS = 全集 **减去** 两个 opt-in 组。
 
         18.0 起 recipe / watch 是 opt-in：它们的 schema 合计约 3.6k 字符，
-        而连接期预算是这个项目反复量过的东西。默认 wire 必须与它们落地之前
-        逐字节相同——「默认就是全部」这条老断言随之下线，换成下面这条。
+        而连接期预算是这个项目反复量过的东西。凭据 / 登录流（vault / login）
+        是**第二个** opt-in 组，单独一个开关——它要用户装了密码管理器 CLI 才有
+        意义。默认 wire 必须与它们落地之前逐字节相同。
         """
         out = _run_fresh(_ENABLED_SNIPPET, value)
         assert out.returncode == 0, out.stderr[-600:]
         payload = json.loads(out.stdout)
-        opt_in = {"recipe", "watch"}
+        opt_in = {"recipe", "watch", "vault", "login"}
         assert set(payload["enabled"]) == set(payload["all"]) - opt_in
         assert opt_in.isdisjoint(payload["enabled"])
 
-    def test_dhole_tasks_1_puts_the_opt_in_tools_back(self):
-        code = _ENABLED_SNIPPET.replace(
-            "import json, dhole_mcp.server as s;",
-            "import json, dhole_mcp.server as s;")
+    def test_dhole_tasks_1_puts_the_task_opt_in_tools_back(self):
+        """DHOLE_TASKS=1 只放回 recipe / watch —— 不碰凭据那组。
+
+        两个开关两件事：打开「重复任务」不该顺手打开一个能读密码管理器的工具。
+        """
+        code = _ENABLED_SNIPPET
         env = {k: v for k, v in os.environ.items()
-               if k not in ("DHOLE_TOOLS", "DHOLE_TASKS")}
+               if k not in ("DHOLE_TOOLS", "DHOLE_TASKS", "DHOLE_VAULT")}
         env["DHOLE_TASKS"] = "1"
         out = subprocess.run([sys.executable, "-c", code], capture_output=True,
                              text=True, env=env, timeout=180)
+        assert out.returncode == 0, out.stderr[-600:]
+        payload = json.loads(out.stdout)
+        assert set(payload["enabled"]) == set(payload["all"]) - {"vault", "login"}
+        assert {"recipe", "watch"} <= set(payload["enabled"])
+
+    def test_dhole_vault_1_puts_the_credential_tools_back(self):
+        """DHOLE_VAULT=1 只放回 vault / login，不放回 recipe / watch。"""
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("DHOLE_TOOLS", "DHOLE_TASKS", "DHOLE_VAULT")}
+        env["DHOLE_VAULT"] = "1"
+        out = subprocess.run([sys.executable, "-c", _ENABLED_SNIPPET],
+                             capture_output=True, text=True, env=env, timeout=180)
+        assert out.returncode == 0, out.stderr[-600:]
+        payload = json.loads(out.stdout)
+        assert set(payload["enabled"]) == set(payload["all"]) - {"recipe", "watch"}
+        assert {"vault", "login"} <= set(payload["enabled"])
+
+    def test_both_flags_together_enable_everything(self):
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("DHOLE_TOOLS", "DHOLE_TASKS", "DHOLE_VAULT")}
+        env["DHOLE_TASKS"] = "1"
+        env["DHOLE_VAULT"] = "1"
+        out = subprocess.run([sys.executable, "-c", _ENABLED_SNIPPET],
+                             capture_output=True, text=True, env=env, timeout=180)
         assert out.returncode == 0, out.stderr[-600:]
         payload = json.loads(out.stdout)
         assert payload["enabled"] == payload["all"]
@@ -201,9 +228,9 @@ class TestInstructionsFollowTheEnabledSet:
             "wire 发的是 ACTIVE_INSTRUCTIONS，不是全量字面量")
 
     def test_the_default_wire_instructions_are_the_literal_minus_the_opt_in_lines(self):
-        """默认 wire 与全集字面量**只**差 recipe/watch 两行路由。
+        """默认 wire 与全集字面量**只**差两个 opt-in 组的路由行。
 
-        断言写成「差集恰好是那两行」而不是「两者相等」：后者在这个改动之后
+        断言写成「差集恰好是那几行」而不是「两者相等」：后者在这个改动之后
         已经是废话（ACTIVE_INSTRUCTIONS 就是按默认集组合出来的），而前者能
         同时抓住两种错误——opt-in 的行漏进默认 wire（默认开销白涨），以及
         别的行被顺手改掉。
@@ -211,7 +238,7 @@ class TestInstructionsFollowTheEnabledSet:
         code = (
             "import dhole_mcp.server as s;"
             "optin=''.join(v for k,v in s._INSTRUCTIONS_ROUTING.items()"
-            " if k in s._OPT_IN_TOOLS);"
+            " if k in (s._OPT_IN_TOOLS | s._OPT_IN_TOOLS_VAULT));"
             "print(repr(s.DHOLE_INSTRUCTIONS.replace(optin,'')"
             " == s.ACTIVE_INSTRUCTIONS));"
             "print(len(optin))"
@@ -219,5 +246,5 @@ class TestInstructionsFollowTheEnabledSet:
         out = _run_fresh(code, None)
         assert out.returncode == 0, out.stderr[-600:]
         same, n = out.stdout.strip().splitlines()
-        assert same == "True", "默认 instructions 必须恰好是全集字面量减去 opt-in 两行"
+        assert same == "True", "默认 instructions 必须恰好是全集字面量减去 opt-in 路由行"
         assert int(n) > 0, "opt-in 的行不能是空串，否则这条断言什么都没验"

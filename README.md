@@ -19,6 +19,7 @@ Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器，为 AI 代理
 - **CDP 接管**：连接你已登录的 Chrome，直接带着登录态抓页面（`cdp_url`），免自动化登录；默认关闭，需显式开启 + host 白名单；`check_login` 无模型判定"到底登录了没"
 - **页面操作**：元素快照 + 索引化动作——`{"snapshot": true}` 列出可交互元素编号，动作按 index 寻址（`expect` 防点错位），`submit` 默认暂停等用户确认；`DHOLE_MULTIMODAL=1` 解锁元素裁剪截图与本地 QR 解码；写操作进审计日志
 - **重复任务**：`DHOLE_TASKS=1` 打开 `recipe`（把一条抓取路径录下来重放，动作在录制时就过执行器同一套验证）与 `watch`（盯一个 URL 的变化，与上次快照做 diff；首跑只建基线、`changed` 是 `null`，抓取失败不动基线）
+- **凭据与登录流**：`DHOLE_VAULT=1` 打开 `vault`（读**你自己的**密码管理器 CLI —— Bitwarden `bw` / 1Password `op`，只回条目元数据）与 `login`（用其中一条凭据登录：先只回计划待你确认，确认后由服务器侧填入并提交，密码**永不进响应 / 日志 / 缓存**）。**不自造 vault**，也不替你存密码
 - **语义聚焦**：`DHOLE_NEURAL_FOCUS=1` 时 `focus` 挑块与整站爬取过滤从 BM25 关键词重合升级为本地重排模型的语义打分；`focus_mode="best"` 直接定位答案段
 - **网页搜索**：免密引擎 14 个可选、6 个默认并行，本地神经重排序 + 跨引擎共识排名；也可以顺带抓回前三条全文
 - **整站爬取**：同域最佳优先遍历，sitemap 模式，页数 / 深度 / token 预算控制
@@ -100,7 +101,7 @@ playwright install chromium      # 反检测浏览器引擎（~150MB，完整版
 - `DHOLE_CDP_ATTACH=1` + `DHOLE_CDP_HOSTS`：打开[带登录态抓取](#带登录态抓取cdp-attach)——让 agent 借你已登录的 Chrome 读登录后的页面，白名单限定哪些域名能用你的登录态；不用这功能就整行删掉（默认关）
 - `DHOLE_USAGE_LOG=1`：本地调用日志（工具名 / 耗时 / 脱敏错误，不记参数值、不联网），出问题时有账可查
 
-其他常用的：`DHOLE_TOOLS=smart_fetch,smart_search` 只注册常用工具、连接期开销约省一半；`DHOLE_TASKS=1` 打开重复任务工具（`recipe` / `watch`）；`DHOLE_ALLOW_PRIVATE_HOSTS` 放行内网 / 本机地址（抓自己的 dev 服务）。全表见[配置](#配置)。
+其他常用的：`DHOLE_TOOLS=smart_fetch,smart_search` 只注册常用工具、连接期开销约省一半；`DHOLE_TASKS=1` 打开重复任务工具（`recipe` / `watch`）；`DHOLE_VAULT=1` 打开凭据与登录流（`vault` / `login`，需要本机装了 `bw` 或 `op`）；`DHOLE_ALLOW_PRIVATE_HOSTS` 放行内网 / 本机地址（抓自己的 dev 服务）。全表见[配置](#配置)。
 
 能调的东西大致管七件事，逐条在下面的[配置](#配置)：**搜索池与引擎冷却退避**、**代理**、**token 开销**（正文预算 / 只注册常用工具 / 响应形状退回旧写法）、**robots 与 SSRF 的豁免边界**、**带登录态抓取**（CDP attach / 持久 profile / cookie TTL）、**隐身浏览器的预热与空闲关闭**、**状态目录与本地调用日志**。
 
@@ -155,6 +156,7 @@ dhole --http --host 0.0.0.0 --port 8765     # 默认只监听 127.0.0.1:8765
 | `DHOLE_IGNORE_ROBOTS`                                                | 设 `1` 后不再检查 `robots.txt`（默认检查，见[已知限制](#已知限制)）；单次豁免用 `ignore_robots=true`                                                                                                              |
 | `DHOLE_TOOLS`                                                        | 只注册列出的工具，省连接期开销（`smart_fetch,smart_search` ≈ −49%）                                                                                                                                               |
 | `DHOLE_TASKS`                                                        | 设 `1` 注册 `recipe` / `watch`（[重复任务](#重复任务recipe--watch默认关)）。**默认关**：这两个的 schema 合计 3,597 字符 + 路由行 191 字符 = 连接期 +3,788（用 `tests/tool_payload_measure.py` 可复现，它会分别报默认集与全集）。也可以在 `DHOLE_TOOLS` 里直接点名 |
+| `DHOLE_VAULT`                                                        | 设 `1` 注册 `vault` / `login`（[凭据与登录流](#凭据与登录流vault--login默认关)）。**默认关**，且与 `DHOLE_TASKS` **分开**——打开"重复任务"不该顺手打开一个能读你密码管理器的工具。代价：schema 3,063 字符 + 路由行 234 字符 = 连接期 +3,297（同上可复现）。需要本机装了 Bitwarden CLI（`bw`）或 1Password CLI（`op`）并已解锁；没装时工具照常可用，只会如实报"没找到，这样装" |
 | `DHOLE_DEFAULT_CONTENT_CHARS`                                        | 默认正文预算（40000，区间 500–200000）                                                                                                                                                                            |
 | `DHOLE_STRUCTURED_CONTENT`                                           | 设 `1` 时每次调用**额外**再发一份 `structuredContent`（同一份 JSON 的第二份拷贝）。默认只发文本通道：本服务器不声明 `outputSchema`，严格客户端本来就有权忽略它，而会渲染它的客户端每次调用体积翻倍。只有当下游确实按结构化字段解析结果时才开 |
 | `DHOLE_OUTPUT_SCHEMA`                                                | 设 `1` 时在 `tools/list` 里声明每个工具的 **`outputSchema`**：字段集合由响应压缩策略**反推**得出（`required` = 压缩永不移除的那几个字段），所以"缺席即默认"这条语义从 `instructions` 里的散文变成客户端可机器校验的契约。**代价实测（stdio 线上量，用 `tests/tool_payload_measure.py --with-output-schema` 可复现）：tools/list 20,676 → 23,783 字符，多 3,107，连接期 +13.6%**；朴素地把整个 envelope 写进 schema 要 2.1 万字符，所以只声明核心。按规范它与 `structuredContent` 是同一个决定（声明了就必须发），因此设 `1` 会**隐含打开** `DHOLE_STRUCTURED_CONTENT`，无法配出自相矛盾的组合。默认关，agent 用不到它；面向人的界面或要做校验的客户端才值这 13.6% |
@@ -197,8 +199,10 @@ dhole --http --host 0.0.0.0 --port 8765     # 默认只监听 127.0.0.1:8765
 | `close_session` | 看有哪些会话还带着站方凭据（**无参数就是名册**：id、主机、cookie 名字、还剩多久过期、浏览器开没开），或点名 `session_id=` 忘掉一个、`all=true` 全清——不等 24 小时自然过期。cookie 值一律不出境 |
 | `recipe`（默认关） | 把「怎么到这个页面」记一次、以后一次调用重放：`op=save` 存 `{url, actions}`，`op=run` 用它抓取，`op=list` / `op=delete` 管理。动作在**录制时**就过执行器的同一套验证，跑不通的链存不进去；重放返回每条动作的收执，`actions_failed` 非零说明页面变了、该重录。`DHOLE_TASKS=1` 打开 |
 | `watch`（默认关） | 盯一个 URL 有没有变：`op=add` 登记，`op=check` 强制新鲜抓取并与上次快照做 diff（返回 `changed`、增删行数与限长 unified diff），`op=list` / `op=remove` 管理。**首跑只建基线、`changed` 是 `null`**——没有基线不等于没有变化；抓取失败**不动基线**。`focus` 让 diff 只落在相关内容上。`DHOLE_TASKS=1` 打开 |
+| `vault`（默认关） | 读**你自己**的密码管理器：`op=status` 说哪家 CLI 装了 / 解锁了，`op=list` 回条目元数据（名字、用户名、有无密码、关联 URL），`op=match` 按 URL 主机找候选。**密码与 TOTP 的值任何 op 都不回**——这个模型里没有能装它们的字段。用它挑好条目，再把名字交给 `login`。`DHOLE_VAULT=1` 打开 |
+| `login`（默认关） | 用 `vault` 里的一条凭据登录：**不带 `confirm` 时只回计划**（打开页面、按 `type=password` 认出用户名/密码/提交控件、列出索引），一个字节都不填；带 `confirm=true` 才填并提交，之后用无模型的 DOM + cookie **名**判定 `logged_in` 并把 cookie 留在 `session_id` 下。密码由服务器侧读取，**不进 transcript / 响应 / 日志**；回执点名的是 vault 条目名。`confirm=true` 必须给 `session_id`（共享浏览器不能承接登录态）。CAPTCHA / 2FA 不解。`DHOLE_VAULT=1` 打开 |
 
-参数摆在哪里**分两类**，每个工具自己在 `tools/list` 里都写清了接受哪些键（README 不再逐参数抄一遍，抄一次就漂一次）：`smart_fetch` / `smart_crawl` / `smart_search` / `screenshot` 把旋钮收在一个 `options` 对象里，顶层同名参数也接受——那是兼容读法，两处都给时**顶层优先**；`parse` / `feed_fetch` / `resolve_url` / `cache_clear` / `close_session` / `recipe` / `watch` 参数少，只有顶层这一层，塞 `options` 会被拒绝并列出它真正接受的键。两个方向相反的例外值得点名：`smart_fetch` 的 `url` 必须摆在外面（放进 `options` 不会被读取，调用会回一句「Either 'url' or 'urls' must be provided」）；`smart_crawl` 的 `discover_only` / `crawl_urls` / `focus` 反过来只能放顶层，放进 `options` 会被拒绝——报错里会说明它是顶层参数，不是没有这个能力。
+参数摆在哪里**分两类**，每个工具自己在 `tools/list` 里都写清了接受哪些键（README 不再逐参数抄一遍，抄一次就漂一次）：`smart_fetch` / `smart_crawl` / `smart_search` / `screenshot` 把旋钮收在一个 `options` 对象里，顶层同名参数也接受——那是兼容读法，两处都给时**顶层优先**；`parse` / `feed_fetch` / `resolve_url` / `cache_clear` / `close_session` / `recipe` / `watch` / `vault` / `login` 参数少，只有顶层这一层，塞 `options` 会被拒绝并列出它真正接受的键。两个方向相反的例外值得点名：`smart_fetch` 的 `url` 必须摆在外面（放进 `options` 不会被读取，调用会回一句「Either 'url' or 'urls' must be provided」）；`smart_crawl` 的 `discover_only` / `crawl_urls` / `focus` 反过来只能放顶层，放进 `options` 会被拒绝——报错里会说明它是顶层参数，不是没有这个能力。
 
 ## 使用要点
 
@@ -274,6 +278,28 @@ dhole 不做 `act(prompt)`：认元素、决定点哪个是外层 agent 的语�
 - **`watch` 的 `changed` 是 `null`、不是 `false`（首跑）**：`watch(op="add", ...)` 登记，`watch(op="check", ...)` 强制新鲜抓取（`cache_ttl=0`——读自己缓存的监控没有在监控）并与上次快照做行级 diff。**第一次 check 只建立基线**，`changed` 是 `null`：没有基线不等于没有变化，把首跑报成「无变化」是凭空造一个事实。**抓取失败不动基线**——否则一次网络故障会被写成「页面清空了」。`focus` 让 diff 只落在相关内容上，这是长页面的正确用法：页眉页脚的时间戳、广告位、访问计数每加载一次就变，不限定范围的话每次 check 都在报「有变化」
 - **库在 `~/.dhole/tasks.db`**（0600，与 `sessions.db` 同信任级别），各 200 条上限、快照 200k 字符上限，超限**如实报数**（`baseline_cut`）。`cache_clear` 不碰它：那不是缓存，是你自己存的东西
 - **端到端场景**：`evals/tasks_l3l4.py`（需要靶站在跑）验 7 条判据，包括「页面变了之后重放大声失败」与「抓取失败不动基线」
+
+### 凭据与登录流（`vault` / `login`，默认关）
+
+计划第七章的「凭据来源」与「独立登录流工具」。两个工具默认不注册，`DHOLE_VAULT=1`（或直接列进 `DHOLE_TOOLS`）打开。与 `recipe` / `watch` **分开一个开关**是刻意的：打开「重复任务」不该顺手打开一个能读你密码管理器的工具。
+
+**凭据从哪来 —— 不自造 vault。** dhole 不存你的密码，只读**你已有的**密码管理器：
+
+- **Bitwarden**：`bw list items --search` / `bw get item` / `bw status`
+- **1Password**：`op item list --format json` / `op item get --format json` / `op whoami`
+
+解锁令牌（`BW_SESSION` / `OP_SERVICE_ACCOUNT_TOKEN` / `OP_SESSION_*`）从**进程环境继承**，永不进命令行参数——argv 对同机其它进程可见。哪家都没装、或装了没解锁，`vault(op="status")` 会如实说并给出修法，不会静默当成「没有凭据」。
+
+**凭据值不出境 —— 这条由接口形状保证，不靠调用方自觉。** `vault` 只回**元数据**：条目名、用户名、有无密码、有无 TOTP、关联 URL。**密码与 TOTP 的值在任何 op 里都不出现**，`VaultModel` 里根本没有能装它们的字段——以后有人想加一个，测试会红。密码只在 `login` 内部被读一次，直接喂进浏览器输入框，之后用完即弃。
+
+- **边界明说**：用户名**算标识符、不算秘密**，所以 `vault(op="list")` / `op="match"` 会回它——一个没有用户名的凭据选择器没法用（同一个站的两个账号靠它区分）。`login` 的**回执**则连用户名也不回，只点名 vault 条目名
+- **密码能到达的地方只有输入框**：响应回执、`metadata.actions` 收执、`DHOLE_USAGE_LOG` 审计行都只记动作的**目标**（`fill [1]`），不记文本；失败日志同理（这一条顺手修掉了一个既有缺陷：此前 `fill` 动作失败会把整个动作字典打进日志，谁都能把密码喂给 `smart_fetch` 的 `fill` 从而写进日志）
+- **`login` 默认什么都不做**：不带 `confirm` 的第一次调用只做一次**只读**快照，按 `type=password`（事实，不是「请登录」这类文案）认出用户名 / 密码 / 提交控件，返回计划让你转达用户。填本身也是不可逆的（页面上的输入事件能把值发出去），所以它和提交一起等在闸后
+- **`confirm=true` 必须给 `session_id`**：不给就拒绝，且在开浏览器之前拒绝。理由是既有红线——共享的 auto 浏览器会话不能承接登录态，把一个人的 cookie 灌进去等于把登录态借给下一个匿名请求
+- **没有提交控件时按回车**：表单里找不到提交键就在密码框上回车；回车同样不可逆，因此同样在闸后（不带 `confirm` 时整条链根本不构造）
+- **判定不用模型**：登录后复用 `check_login` 的三态探针（DOM 形状 + cookie **名**）。`logged_in=null` 表示探针答不了，**不是**「没登录」——和 `watch` 的 `changed=null` 同一条纪律
+- **CAPTCHA / 2FA 不解**：图形验证码归外层多模态 agent 试读（`DHOLE_MULTIMODAL=1`），行为墙与 2FA 一律转交。`login` 不引入任何模型
+- **端到端场景**：`evals/vault_login.py`（需要靶站在跑）验 6 条判据，包括「响应里没有密码值」与「登录态真的留住了」。它在临时目录里生成一个**真的假 `bw`**，所以 `vault._run` → 子进程 → JSON 解析这条链是真在跑
 
 ## 可选的搜索引擎
 
@@ -356,7 +382,7 @@ dhole model use ms-marco     # 切换
 - `archive.org` 回退会返回**某个日期的快照**（看顶层 `source` / `archived_at`），时效敏感的内容引用前先确认；但**服务器自己回的 JSON/XML 错误体不会被快照顶替**（4xx/5xx 且 content-type 是 json/xml 时如实保留），代理不可达时也不回退——那次请求根本没发出去，拿快照回答等于答了一个没人问过的问题
 - **内网 / 本机默认一律拒绝**（SSRF 守卫）。抓自己的 dev / staging / Docker 服务要点名：`allow_private=true`（只放开回环）或 `["my-service.local","192.168.1.50"]`，进程级用 `DHOLE_ALLOW_PRIVATE_HOSTS`。三个工具同一套口径：`smart_fetch`（`options.allow_private`）、`screenshot`（`options.allow_private`，作用域盖住导航——回环页面自己的图片 / 样式同样要放行）、`feed_fetch`（顶层 `allow_private`）。云元数据端点（`169.254.169.254`、`metadata.google.internal` 等）**任何时候都不放行**，包括写进白名单的情况
 - 正文 **50MB 硬顶**，且在下载**之前**守门：装不下的直接报 `Response body too large`，抬 `timeout` 没用
-- 连接期固定开销 22,968 字符（`tools/list` 20,827 + `instructions` 2,141，stdio 线上口径；用 `tests/tool_payload_measure.py` 从源码独立测得，它同时报默认集与全集两个数），每次连接付一次；换成 token 约 5.5k（cl100k 口径，分词器不同就不同——可比的是字符数）。其中 `actions` 的快照 / 索引寻址 / 提交闸契约、`session_id` 的 cookie 双向桥说明与 `focus_mode` 合计 ~2.0k。**条件追加的条款不计入默认开销**：多模态纪律只在 `DHOLE_MULTIMODAL=1` 时追加，`recipe` / `watch` 只在 `DHOLE_TASKS=1` 时注册（+3,788）。每次调用的 envelope 已压到非默认值字段才上线。`DHOLE_TOOLS` 只注册常用工具可省约一半
+- 连接期固定开销 22,968 字符（`tools/list` 20,827 + `instructions` 2,141，stdio 线上口径；用 `tests/tool_payload_measure.py` 从源码独立测得，它同时报默认集与两个 opt-in 组各自的增量），每次连接付一次；换成 token 约 5.5k（cl100k 口径，分词器不同就不同——可比的是字符数）。其中 `actions` 的快照 / 索引寻址 / 提交闸契约、`session_id` 的 cookie 双向桥说明与 `focus_mode` 合计 ~2.0k。**条件追加的条款不计入默认开销**：多模态纪律只在 `DHOLE_MULTIMODAL=1` 时追加；`recipe` / `watch` 只在 `DHOLE_TASKS=1` 时注册（+3,788），`vault` / `login` 只在 `DHOLE_VAULT=1` 时注册（+3,297）。每次调用的 envelope 已压到非默认值字段才上线。`DHOLE_TOOLS` 只注册常用工具可省约一半
 - YouTube 仅能获取少量文本
 
 ## 本地数据

@@ -168,3 +168,70 @@ async def test_loopback_fetch_survives_env_proxy(monkeypatch):
         assert resp.status == 200
     finally:
         srv.shutdown()
+
+
+# ─── 健康探针读的是传输，不是内容判定 ───────────────────────────────────────
+
+class TestThePrivateHealthProbeReadsTransportNotContent:
+    """`ResponseModel.error` 同时承载**内容判定**与传输失败，所以它不能当健康信号。
+
+    实测（靶站 /login）：HTTP 200、正文是完整的登录表单、服务明明在跑，但内容
+    分类器把 `error` 写成 `auth_wall_detected`。探针把它读成"目标不健康"，于是
+    跳过浏览器层，返回 HTTP 层的结果 —— 一个 `{"snapshot": true}` 动作**从来没
+    跑过**，而调用方收到的说法是"这个页面上没有密码框"。
+
+    这正是这个项目最当回事的那类失败：抓取看起来成功了，而诊断是错的。
+    """
+
+    @staticmethod
+    def _srv():
+        from dhole_mcp.server import MasterFetchServer
+
+        srv = MasterFetchServer(cache_ttl=0)
+
+        def install(probe):
+            async def fake_get(url, **kw):
+                return probe(url)
+            srv.get = fake_get
+            return srv
+
+        return srv, install
+
+    @pytest.mark.asyncio
+    async def test_a_content_verdict_on_a_200_does_not_count_as_unhealthy(self):
+        from dhole_mcp.server import ResponseModel
+
+        _srv, install = self._srv()
+        srv = install(lambda url: ResponseModel(
+            url=url, status=200, content=["请登录"], content_ok=False,
+            error="auth_wall_detected: page is a login/sign-in wall, not content"))
+        got = await srv._private_health_probe(
+            "http://127.0.0.1:8399/login", None, None, None, 0.0)
+        assert got is None, "200 + 内容判定 ≠ 目标不健康；浏览器层必须照常进"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status,error", [
+        (0, "network_error: connection_refused"),
+        (503, "http_error_503: server returned error status"),
+        (500, ""),
+    ])
+    async def test_a_transport_failure_or_a_5xx_still_short_circuits(self, status, error):
+        from dhole_mcp.server import ResponseModel
+
+        _srv, install = self._srv()
+        srv = install(lambda url: ResponseModel(
+            url=url, status=status, content=[], error=error))
+        got = await srv._private_health_probe(
+            "http://127.0.0.1:8399/login", None, None, None, 0.0)
+        assert got is not None and "skipped_stealthy" in got.escalation_path
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [200, 301, 404])
+    async def test_2xx_3xx_4xx_are_alive(self, status):
+        from dhole_mcp.server import ResponseModel
+
+        _srv, install = self._srv()
+        srv = install(lambda url: ResponseModel(
+            url=url, status=status, content=["x"], error=""))
+        assert await srv._private_health_probe(
+            "http://127.0.0.1:8399/login", None, None, None, 0.0) is None

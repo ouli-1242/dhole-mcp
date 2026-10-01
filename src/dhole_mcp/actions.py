@@ -850,7 +850,14 @@ def build_page_action(actions) -> Optional[Callable]:
             except Exception as e:
                 outcomes.append({"action": label, "ok": False,
                                  "error": _action_failure(e)})
-                logger.warning("page action %a failed: %s", a, str(e)[:160])
+                # `label`, never `a`: a fill action's dict carries its `text`,
+                # and that text can be a password (the login flow builds exactly
+                # such a chain). Logging the raw action wrote the secret to the
+                # log while the response, the receipt and the audit row were all
+                # careful not to - the one channel nobody audits was the leak.
+                # The label names the target and never the value, so it is what
+                # every other consumer of this action already records.
+                logger.warning("page action %s failed: %s", label, str(e)[:160])
 
     page_action.outcomes = outcomes  # type: ignore[attr-defined]
     return page_action

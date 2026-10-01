@@ -598,6 +598,10 @@ DHOLE_INSTRUCTIONS = (
     "once, then run it).\n"
     "- Watching a page for changes: watch (add it, then check - it diffs against "
     "the last snapshot).\n"
+    "- A login the user already stores: vault (op=match with the URL) lists what "
+    "their password manager holds - never the values.\n"
+    "- Signing in with a stored credential: login (call once to see the plan, "
+    "again with confirm=true to run it).\n"
     "Reading any response:\n"
     "- A field that is ABSENT is at its default: no is_truncated means not "
     "truncated, no cached means not cached. Only what changed or what you must "
@@ -650,6 +654,13 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "url+actions once, then run it).\n",
     "watch": "- Watching a page for changes: watch (add it, then check - it diffs "
     "against the last snapshot).\n",
+    # 第二个 opt-in 组（DHOLE_VAULT=1，见 _OPT_IN_TOOLS_VAULT）。同 recipe/watch：
+    # 行留在这里，flag 打开时 instructions 路由得到它们，默认集合里没有它们，
+    # 所以默认 wire 一个字符不变。
+    "vault": "- A login the user already stores: vault (op=match with the URL) "
+    "lists what their password manager holds - never the values.\n",
+    "login": "- Signing in with a stored credential: login (call once to see the "
+    "plan, again with confirm=true to run it).\n",
 }
 _INSTRUCTIONS_RULES = (
     "Reading any response:\n"
@@ -864,6 +875,59 @@ class WatchModel(BaseModel):
     next_action: str = Field(default="", description="What to do next, empty when there is nothing to do")
 
 
+class VaultModel(BaseModel):
+    """Response from `vault`: which credential managers are reachable, and the
+    metadata of the items they hold.
+
+    There is deliberately **no field here for a password or a TOTP secret**. The
+    tool cannot return a credential value even if a caller asks for one: values
+    are read only by `login`, server-side, and are never serialised. What this
+    model can say is that a value exists (`has_password`), which is what picking
+    a credential actually needs.
+    """
+    op: str = Field(description="What this call did: status|list|match.")
+    message: str = Field(default="", description="One line: what was found.")
+    host: str = Field(default="", description="op=match: the host the item URIs were matched against.")
+    sources: List[Dict[str, Any]] = Field(default_factory=list, description="op=status: one row per manager (bitwarden / onepassword) - installed?, unlocked?, and what to do when it is not.")
+    items: List[Dict[str, Any]] = Field(default_factory=list, description="Credential metadata: id, name, username, has_password, has_totp, uris, source. NEVER a password or TOTP value.")
+    total: int = Field(default=0, description="How many items matched before the cap.")
+    truncated: bool = Field(default=False, description="True when the item list was cut at the cap.")
+    notes: List[str] = Field(default_factory=list, description="Per-manager trouble (not installed / vault locked / CLI not signed in), each with its fix. A manager that is simply absent is a note, not an error.")
+    error: str = Field(default="", description="Set when the op itself could not run.")
+    next_action: str = Field(default="", description="What to do next, empty when there is nothing to do")
+
+
+class LoginModel(BaseModel):
+    """Response from `login`: the plan (before approval) or the outcome.
+
+    Two fields carry the contract. `pending_approval=true` is the FIRST response
+    a caller sees: with confirm=false nothing is filled and nothing is
+    submitted, and `fields`/`plan` say what a confirmed run would do. `logged_in`
+    is tri-state like smart_fetch's login_check — null is "the probe could not
+    answer", which is not the same as false.
+
+    The credential's password never appears in any field; the receipt names the
+    vault item instead.
+    """
+    op: str = Field(default="login", description="Always 'login'.")
+    message: str = Field(default="", description="One line: what happened, or what is waiting.")
+    url: str = Field(default="", description="The page this login targeted.")
+    credential: str = Field(default="", description="The vault item used, by NAME. The username and password are never returned.")
+    credential_source: str = Field(default="", description="Which manager answered: bitwarden|onepassword.")
+    session_id: str = Field(default="", description="The session the resulting cookies were kept under.")
+    pending_approval: bool = Field(default=False, description="true = nothing was filled or submitted; the detected plan is waiting for the user's yes. Re-call with confirm=true to run it.")
+    plan: str = Field(default="", description="pending_approval: one line naming the detected fields and the submit step.")
+    fields: Dict[str, Any] = Field(default_factory=dict, description="The detected form: username/password/submit element indices with their names, and how submit would happen (element or Enter).")
+    filled: int = Field(default=0, description="How many fields were filled (0 before approval).")
+    submitted: bool = Field(default=False, description="true when the submit step actually ran.")
+    logged_in: Optional[bool] = Field(default=None, description="Post-login verdict from the same model-free DOM + cookie-NAME probe smart_fetch's check_login uses. NULL means the probe could not answer (no browser tier, or the page never settled) - not 'not logged in'.")
+    signals: List[str] = Field(default_factory=list, description="What the probe saw (logout control / password field / login form / session cookie names).")
+    cookie_names: List[str] = Field(default_factory=list, description="Cookie NAMES the site set. Values are never returned.")
+    result: Optional[ResponseModel] = Field(default=None, description="The post-submit fetch, in full.")
+    error: str = Field(default="", description="Set when the login could not run: no manager, no such item, no password field, or a failed fill/submit.")
+    next_action: str = Field(default="", description="What to do next, empty when there is nothing to do")
+
+
 # ─── Wire compaction (tokens paid on EVERY call, not once) ──────────────────
 #
 # Measured on this server: a 404 with zero content returned 927 chars, and 33%
@@ -949,6 +1013,19 @@ _WIRE_OMIT: dict = {
         "watches", "baseline_at", "added", "removed", "diff",
         "diff_truncated", "baseline_cut", "baseline_created",
         "error", "next_action", "url", "name", "result",
+    }),
+    # vault / login（计划第七章）。省略的是空容器与"这次没发生"的标志：
+    # `pending_approval` 缺省即"没有待批准的动作"，`submitted` 缺省即"没有提交"。
+    # `logged_in` 与 WatchModel.changed 同理**不在**省略集里 —— 首跑时它是 null，
+    # 而 null（探针答不了）≠ false（没登录），省掉它就把结论省掉了。
+    "VaultModel": frozenset({
+        "sources", "items", "notes", "host", "total", "truncated",
+        "error", "next_action", "message",
+    }),
+    "LoginModel": frozenset({
+        "message", "url", "credential", "credential_source", "session_id",
+        "pending_approval", "plan", "fields", "filled", "submitted",
+        "signals", "cookie_names", "result", "error", "next_action",
     }),
 }
 
@@ -2671,6 +2748,12 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
     "recipe": {"actions": "rawlist", "timeout": "number",
                "max_content_chars": "int"},
     "watch": {"max_chars": "int", "timeout": "number"},
+    "vault": {"limit": "int"},
+    # The three index overrides come from a snapshot row, so they arrive as
+    # strings from clients that JSON-stringify numbers; `confirm` is the
+    # approval gate and must be a real boolean, never the string "false".
+    "login": {"username_index": "int", "password_index": "int",
+              "submit_index": "int", "confirm": "bool", "timeout": "number"},
 }
 
 _ARG_DEFAULTS: dict[Any, dict[str, Any]] = {}
@@ -4682,6 +4765,12 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
                          "extraction_type", "session_id", "allow_private"}),
     "watch": frozenset({"op", "name", "url", "focus", "max_chars", "note",
                         "timeout", "session_id", "allow_private"}),
+    # 凭据来源 + 独立登录流（计划第七章）。同样默认**不**在连接期表里 ——
+    # 见 _OPT_IN_TOOLS_VAULT。
+    "vault": frozenset({"op", "query", "url", "source", "limit"}),
+    "login": frozenset({"url", "credential", "source", "session_id",
+                        "username_index", "password_index", "submit_index",
+                        "confirm", "timeout", "allow_private"}),
 }
 
 
@@ -4690,6 +4779,13 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
 # 理由让每个会话都替它付 token。打开方式两种 —— DHOLE_TASKS=1（保留默认工具
 # 集再加这两个），或直接在 DHOLE_TOOLS 里点名。
 _OPT_IN_TOOLS = frozenset({"recipe", "watch"})
+
+# 第二个 opt-in 组：凭据来源 + 独立登录流（计划第七章）。单独一个开关，因为它是
+# 另一件事 —— recipe/watch 是"重复任务"，这两个是"用用户密码管理器里的凭据登录"，
+# 而且它要用户机器上真的装了 `bw` / `op` 才有意义。把两组塞进同一个 flag 会让
+# 打开其中一件事的人替另一件事付 token，也会让"我开了 DHOLE_TASKS，怎么多出个
+# 能读我密码的工具"变成一个合理的疑问。
+_OPT_IN_TOOLS_VAULT = frozenset({"vault", "login"})
 
 
 # Which tools this server registers and dispatches. Default: ALL of them.
@@ -4710,9 +4806,15 @@ def _parse_enabled_tools() -> frozenset:
     raw = os.environ.get("DHOLE_TOOLS")
     if raw is None or not raw.strip():
         names = frozenset(_TOP_LEVEL_ARGS)
-        # recipe / watch are opt-in (see _OPT_IN_TOOLS): the default connect
-        # table stays exactly what it was before L3/L4 landed.
-        return names if _env_flag("DHOLE_TASKS") else names - _OPT_IN_TOOLS
+        # Two opt-in groups, two flags (see _OPT_IN_TOOLS / _OPT_IN_TOOLS_VAULT):
+        # the default connect table stays exactly what it was before either
+        # landed, and turning one group on does not drag the other in.
+        off: set = set()
+        if not _env_flag("DHOLE_TASKS"):
+            off |= _OPT_IN_TOOLS
+        if not _env_flag("DHOLE_VAULT"):
+            off |= _OPT_IN_TOOLS_VAULT
+        return names - off
     names = frozenset(part.strip() for part in raw.split(",") if part.strip())
     if not names:
         raise ValueError(
@@ -6053,6 +6155,262 @@ class MasterFetchServer:
                          "refreshed either way."),
         )
 
+    # ─── Vault / login（计划第七章） ──────────────────────────────────
+
+    async def vault(
+        self,
+        op: Annotated[str, Field(description="status = which manager is installed and unlocked; list = item metadata; match = the items whose stored URI is a given URL's host.")],
+        query: Annotated[Optional[str], Field(description="op=list: substring filter on the item name.")] = None,
+        url: Annotated[Optional[str], Field(description="op=match: the URL to find credentials for.")] = None,
+        source: Annotated[str, Field(description="Which manager to read: auto (default) | bitwarden | onepassword.")] = "auto",
+        limit: Annotated[Optional[int], Field(description="op=list: cap on returned items (default 300).")] = None,
+    ) -> VaultModel:
+        """Read credential metadata from the user's password manager. See the tool description."""
+        from dhole_mcp import vault as vault_mod
+
+        o = (op or "").strip().lower()
+
+        if o == "status":
+            rows = vault_mod.status(source)
+            ready = [r for r in rows if r.get("available") and r.get("unlocked")]
+            hints = "; ".join(r["hint"] for r in rows if r.get("hint"))
+            return VaultModel(
+                op=o, sources=rows,
+                message=(f"{len(ready)} credential manager(s) ready."
+                         if ready else
+                         "No unlocked credential manager is available."),
+                next_action=("vault(op='match', url=...) finds a credential for a "
+                             "site." if ready else
+                             hints or "Install the Bitwarden CLI (bw) or the "
+                                      "1Password CLI (op), then unlock it."),
+            )
+
+        if o == "list":
+            got = vault_mod.list_items(query or "", source,
+                                       limit or vault_mod.MAX_ITEMS)
+            n = got["total"]
+            return VaultModel(
+                op=o, items=got["items"], total=n, truncated=got["truncated"],
+                notes=got["notes"],
+                message=((f"{n} credential(s)" + (" (truncated)" if got["truncated"]
+                                                  else "") + ".") if n
+                         else "No credentials matched."),
+                next_action=("login(url=..., credential='<name>') signs in with one."
+                             if got["items"] else
+                             ("vault(op='status') says what is missing."
+                              if got["notes"] else "Nothing matched that query.")),
+            )
+
+        if o == "match":
+            if not (url or "").strip():
+                return VaultModel(
+                    op=o, error="op=match needs url.",
+                    next_action="Pass url='https://the-site.example' - it matches "
+                                "on host.",
+                )
+            got = vault_mod.match_for_url(url, source)
+            return VaultModel(
+                op=o, host=got["host"], items=got["items"], total=got["total"],
+                notes=got["notes"],
+                message=(f"{got['total']} credential(s) for {got['host']}."
+                         if got["items"] else
+                         f"No stored credential is registered for {got['host']}."),
+                next_action=("login(url=..., credential='<name>', "
+                             "session_id='<name>') signs in with one."
+                             if got["items"] else
+                             "vault(op='list') shows everything the manager holds."),
+            )
+
+        return VaultModel(
+            op=o or "?", error=f"unknown op {op!r}",
+            next_action="Pass op='status', 'list' or 'match'.",
+        )
+
+    async def login(
+        self,
+        url: Annotated[str, Field(description="The login page to sign in to.")],
+        credential: Annotated[str, Field(description="Vault item name or id to read the username/password from. Never the password itself.")],
+        source: Annotated[str, Field(description="Which manager to read: auto (default) | bitwarden | onepassword.")] = "auto",
+        session_id: Annotated[Optional[str], Field(description="Where the resulting cookies are kept; reuse it in later fetches. Required once you confirm - a login with nowhere to keep its cookies would land them in the shared browser.")] = None,
+        username_index: Annotated[Optional[int], Field(description="Skip detection: the username field's snapshot index (from a {\"snapshot\": true} fetch you already did).")] = None,
+        password_index: Annotated[Optional[int], Field(description="Skip detection: the password field's snapshot index. Supplying this skips the detection pass entirely.")] = None,
+        submit_index: Annotated[Optional[int], Field(description="Skip detection: the submit control's snapshot index. Omit it to press Enter in the password box instead.")] = None,
+        confirm: Annotated[bool, Field(description="false (default) = detect the form and return the plan without filling anything. true = fill and submit, after the user approved.")] = False,
+        timeout: Annotated[Optional[int], Field(description="Whole-call budget in ms.")] = None,
+        allow_private: Annotated[Optional[Any], Field(description="Sign in to a loopback URL (your own dev server). Same semantics as smart_fetch's.")] = None,
+    ) -> LoginModel:
+        """Sign in with a vault credential. See the tool description."""
+        from dhole_mcp import login as login_mod
+        from dhole_mcp import vault as vault_mod
+
+        page = (url or "").strip()
+        if not page:
+            return LoginModel(error="url is required.",
+                              next_action="Pass the login page's URL.")
+        cred = (credential or "").strip()
+        if not cred:
+            return LoginModel(
+                url=page, error="credential is required.",
+                next_action="Pass the vault item's name - vault(op='match', "
+                            "url=...) lists the candidates.",
+            )
+        sid = (session_id or "").strip()
+        if confirm and not sid:
+            # 共享 auto 会话不能承接登录态：那是所有调用共用的浏览器，把一个人的
+            # cookie 灌进去等于把登录态借给下一个匿名请求（计划第七章的既有红线
+            # "共享 auto 会话与 attach 永不桥"）。所以确认执行时必须点名会话。
+            return LoginModel(
+                url=page, credential=cred, error="confirm=true needs session_id.",
+                next_action="Name a session_id - it is where the cookies are kept "
+                            "and what later fetches pass to reuse them. Without "
+                            "one the login would land in the shared browser, "
+                            "which every other call also uses.",
+            )
+
+        # 1) 凭据。先取 —— 取不到就别开浏览器了。值只在第 4 步构造动作链时用一次。
+        secret = vault_mod.secret_for(cred, source)
+        if secret.get("error"):
+            return LoginModel(
+                url=page, credential=cred, error=secret["error"],
+                next_action="vault(op='status') says what is missing; "
+                            "vault(op='match', url=...) lists candidates.",
+            )
+        item = secret.get("item") or cred
+        src = secret.get("source", "")
+        uname = secret.get("username") or ""
+        password = secret.get("password") or ""
+
+        kw: dict = {}
+        if timeout is not None:
+            kw["timeout"] = timeout
+        if allow_private is not None:
+            kw["allow_private"] = allow_private
+        if sid:
+            kw["session_id"] = sid
+
+        # 2) 认表单。按 type=password 认，不按页面文案猜 —— 前者是事实，后者是
+        #    一句话。快照是只读的，不碰凭据。
+        if password_index is not None:
+            fields = {
+                "found": True, "reason": "",
+                "password": {"index": int(password_index), "name": ""},
+                "username": ({"index": int(username_index), "name": ""}
+                             if username_index is not None else None),
+                "submit": ({"index": int(submit_index), "name": ""}
+                           if submit_index is not None else None),
+                "submit_kind": "element" if submit_index is not None else "enter",
+            }
+            probe = None
+        else:
+            try:
+                probe = await self.smart_fetch(url=page,
+                                               actions=[{"snapshot": True}],
+                                               extraction_type="text", **kw)
+            except Exception as e:
+                return LoginModel(
+                    url=page, credential=item, credential_source=src,
+                    error=f"could not open {page}: {type(e).__name__}: "
+                          f"{str(e)[:160]}",
+                    next_action="Check the URL, or pass username_index / "
+                                "password_index / submit_index from a snapshot "
+                                "you take yourself.",
+                )
+            rows: list = []
+            for row in (probe.metadata or {}).get("actions") or []:
+                rows.extend(row.get("elements") or [])
+            fields = login_mod.find_fields(rows)
+            if not fields["found"]:
+                return LoginModel(
+                    url=page, credential=item, credential_source=src,
+                    result=probe, error=fields["reason"],
+                    next_action="Fetch the page with a {\"snapshot\": true} action "
+                                "to see its interactive elements yourself, then "
+                                "pass username_index / password_index / "
+                                "submit_index - or the page may not be a login "
+                                "form at all.",
+                )
+
+        shown = {k: fields[k] for k in ("username", "password", "submit")
+                 if fields.get(k)}
+        if fields.get("submit_kind"):
+            shown["submit_kind"] = fields["submit_kind"]
+        plan = login_mod.describe_plan(fields, page, item)
+
+        # 3) 审批闸：没有 confirm 就到此为止，一个字节都不填。填也是不可逆的
+        #    （页面上的输入事件能把值发出去），所以它和提交一起等在闸后。
+        if not confirm:
+            return LoginModel(
+                url=page, credential=item, credential_source=src, session_id=sid,
+                pending_approval=True, plan=plan, fields=shown,
+                message=f"Login plan for {page} is ready - nothing was filled.",
+                next_action="Describe this sign-in to the user and ask them to "
+                            "approve it. On a yes, re-run with confirm=true"
+                            + (f" and session_id='{sid}'." if sid else
+                               " and a session_id so the cookies have somewhere "
+                               "to live."),
+            )
+
+        # 4) 执行。动作链带明文密码，但它的每个出口都只记 action_label（记目标
+        #    不记文本）—— 见 login.py 的模块注释与 actions.py 的失败日志。
+        actions = login_mod.build_actions(fields, uname, password, confirm=True)
+        result = await self.smart_fetch(url=page, actions=actions,
+                                        check_login=True, **kw)
+        outcomes = list((result.metadata or {}).get("actions") or [])
+        filled = sum(1 for o in outcomes
+                     if str(o.get("action", "")).startswith("fill") and o.get("ok"))
+        submitted = any(o.get("submitted") for o in outcomes)
+        failed = [o for o in outcomes if not o.get("ok")]
+
+        lc = result.login_check if isinstance(result.login_check, dict) else {}
+        logged_in = lc.get("logged_in")
+        cookie_names = [str(n) for n in (lc.get("cookie_names") or [])]
+        if not cookie_names and sid:
+            try:
+                from dhole_mcp import sessions
+                cookie_names = sessions.names_for(sid, page)
+            except Exception:
+                cookie_names = []
+
+        # 分支顺序是有意的：**成功判定优先**，其次是"有动作没跑成"，最后才是
+        # 探针答不了。一次登录里用户名框可能本来就是预填的（fill 失败）而密码
+        # 填上了、提交也成功 —— 那是一次成功的登录，不该被一条失败的动作盖掉；
+        # 反过来，没成功时失败的动作必须说出来，而不是被"探针答不了"淹没。
+        if logged_in is True:
+            nxt = ""
+        elif failed:
+            nxt = ("these actions did not run: "
+                   + "; ".join(f"{o['action']}: {str(o.get('error', ''))[:120]}"
+                               for o in failed)
+                   + ". Re-run without confirm to re-detect the fields - the page "
+                     "may have changed since the snapshot.")
+        elif logged_in is False:
+            nxt = ("the form was submitted but the page still reads as logged "
+                   "out - the stored credential may be wrong, or the site needs a "
+                   "CAPTCHA / 2FA. Do not retry blindly: fetch the page and look, "
+                   "or hand it back to the user.")
+        elif submitted:
+            nxt = ("the form was submitted but the login probe could not answer "
+                   "(it needs the browser tier and a settled page). Verify with "
+                   "smart_fetch(url=<a page behind the login>, check_login=true).")
+        else:
+            nxt = "Nothing was submitted. Re-run without confirm to re-detect."
+
+        if submitted and logged_in is True:
+            msg = f"Signed in to {page} with vault credential '{item}'."
+        elif submitted:
+            msg = (f"Submitted the login form on {page}; the login probe says "
+                   f"{logged_in!r}.")
+        else:
+            msg = f"Filled {filled} field(s) on {page} but nothing was submitted."
+
+        return LoginModel(
+            op="login", message=msg, url=page, credential=item,
+            credential_source=src, session_id=sid, fields=shown,
+            filled=filled, submitted=submitted, logged_in=logged_in,
+            signals=[str(s) for s in (lc.get("signals") or [])],
+            cookie_names=cookie_names, result=result, next_action=nxt,
+        )
+
     # ─── Screenshot ───────────────────────────────────────────────
 
     async def screenshot(
@@ -7390,6 +7748,21 @@ class MasterFetchServer:
         result becomes the answer instead of a full-budget hang. Returns None
         when the target looks alive (2xx/3xx/4xx), letting the browser proceed.
 
+        Health is a TRANSPORT question, so only the status decides it. The
+        response's ``error`` is deliberately NOT consulted: it carries content
+        verdicts too (``auth_wall_detected``, ``bot_wall_detected``,
+        ``js_shell_detected``), and those describe what the body IS, not whether
+        anything answered. Reading them here meant a loopback login page — HTTP
+        200, valid HTML, a service that is plainly running — was labelled
+        "target-unhealthy" and its browser tier skipped, so a ``{"snapshot":
+        true}`` action on a local login form silently never ran and came back as
+        "no password field among this page's interactive elements". That is the
+        failure this project treats as the worst kind: the fetch looks like it
+        succeeded and the diagnosis is confidently wrong. Measured on the fixture
+        site's /login before this fix: status 200, escalation_path
+        ``private-probe:target-unhealthy(skipped_stealthy)``, metadata.actions
+        null.
+
         Direct, 3s, no retries — a loopback/LAN answer is immediate. A probe
         that itself blows up never decides anything: the real attempt goes ahead.
         """
@@ -7401,7 +7774,8 @@ class MasterFetchServer:
             )
         except Exception:
             return None
-        if probe.error or (probe.status or 0) >= 500:
+        status = probe.status or 0
+        if status == 0 or status >= 500:
             probe.escalation_path = "private-probe:target-unhealthy(skipped_stealthy)"
             probe.duration_ms = (now() - t0) * 1000
             return probe
@@ -8764,6 +9138,43 @@ class MasterFetchServer:
             "annotations": {"readOnlyHint": False, "destructiveHint": True,
                             "idempotentHint": False, "openWorldHint": True},
         },
+        {
+            "name": "vault",
+            "description": "Look up logins in the user's OWN password manager (Bitwarden `bw` / 1Password `op`). op=status: which manager is installed and unlocked, and how to fix it if not. op=list: item metadata (name, username, whether a password exists, URIs). op=match: the items whose stored URI is a given URL's host - use this to pick a credential, then pass its name/id to login. Passwords and TOTP secrets are NEVER returned; this tool has no field for them.",
+            "inputSchema": {
+                "type": "object", "required": ["op"],
+                "properties": {
+                    "op": {"type": "string", "enum": ["status", "list", "match"], "description": "status = is a manager available; list = item metadata; match = items for a URL."},
+                    "query": {"type": "string", "description": "op=list: substring filter on the item name."},
+                    "url": {"type": "string", "description": "op=match: the URL to find credentials for (matched on host)."},
+                    "source": {"type": "string", "enum": ["auto", "bitwarden", "onepassword"], "description": "Which manager to read. Default auto = try both."},
+                    "limit": {"type": "integer", "description": "op=list: cap on returned items (default 300)."},
+                },
+            },
+            "annotations": {"readOnlyHint": True, "destructiveHint": False,
+                            "idempotentHint": True, "openWorldHint": False},
+        },
+        {
+            "name": "login",
+            "description": "Sign in to a page using a credential from the user's password manager. Call it WITHOUT confirm first: it opens the page, finds the username/password/submit controls and returns the plan (fields + plan) for the user to approve - nothing is filled. Call again with confirm=true to fill and submit. The password is read server-side and never enters the transcript, the response, or any log; the receipt names the vault item instead. Afterwards it reports logged_in (model-free DOM + cookie-NAME probe) and keeps the cookies under session_id. CAPTCHA / 2FA are NOT solved - hand those back to the user.",
+            "inputSchema": {
+                "type": "object", "required": ["url", "credential"],
+                "properties": {
+                    "url": {"type": "string", "description": "The login page."},
+                    "credential": {"type": "string", "description": "Vault item name or id (NOT the password). Find it with vault(op='match', url=...)."},
+                    "source": {"type": "string", "enum": ["auto", "bitwarden", "onepassword"], "description": "Which manager to read. Default auto."},
+                    "session_id": {"type": "string", "description": "Where the resulting cookies are kept (reuse it in later fetches)."},
+                    "username_index": {"type": "integer", "description": "Skip detection: the username field's snapshot index."},
+                    "password_index": {"type": "integer", "description": "Skip detection: the password field's snapshot index."},
+                    "submit_index": {"type": "integer", "description": "Skip detection: the submit control's snapshot index."},
+                    "confirm": {"type": "boolean", "description": "false (default) = show the plan only. true = actually fill and submit, after the user approved."},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms."},
+                    "allow_private": {"type": "boolean", "description": "Log in to a loopback URL (your own dev server)."},
+                },
+            },
+            "annotations": {"readOnlyHint": False, "destructiveHint": True,
+                            "idempotentHint": False, "openWorldHint": True},
+        },
     ]
 
     @classmethod
@@ -9153,6 +9564,31 @@ class MasterFetchServer:
                 note=args.get("note", ""),
                 timeout=args.get("timeout"),
                 session_id=args.get("session_id"),
+                allow_private=args.get("allow_private"),
+            )
+            return _wire_result(result)
+
+        elif name == "vault":
+            result = await self.vault(
+                op=args.get("op", ""),
+                query=args.get("query"),
+                url=args.get("url"),
+                source=args.get("source", "auto") or "auto",
+                limit=args.get("limit"),
+            )
+            return _wire_result(result)
+
+        elif name == "login":
+            result = await self.login(
+                url=args.get("url", "") or "",
+                credential=args.get("credential", "") or "",
+                source=args.get("source", "auto") or "auto",
+                session_id=args.get("session_id"),
+                username_index=args.get("username_index"),
+                password_index=args.get("password_index"),
+                submit_index=args.get("submit_index"),
+                confirm=bool(args.get("confirm", False)),
+                timeout=args.get("timeout"),
                 allow_private=args.get("allow_private"),
             )
             return _wire_result(result)
