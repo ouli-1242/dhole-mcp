@@ -492,6 +492,173 @@ def clear_warnings() -> None:
     _warnings.clear()
 
 
+# ─── where a value comes from ────────────────────────────────────────────
+#
+# Two doors to one knob. `env` stays the highest-precedence source because that
+# is what every existing install already configured (and what the README's
+# example block writes), but an env block in an MCP client config means editing
+# JSON and restarting the host to change one number — which is the reason the
+# knobs read per-call stop being configuration and start being infrastructure.
+# `~/.dhole/config.json` is the same knobs without the restart: it is re-read
+# when its mtime changes, so `dhole config set DHOLE_DEFAULT_CONTENT_CHARS 8000`
+# takes effect on the next call.
+#
+# What does NOT move: DHOLE_HOME, because it locates this file (bootstrap), and
+# anything read at import time (DHOLE_TOOLS and friends) — a per-call re-read
+# cannot un-register a tool that was already left off `tools/list`. Those entries
+# stay writable here, but `dhole config` says `restart the host` on them and
+# `dhole --doctor` shows the same note.
+
+_CONFIG_BASENAME = "config.json"
+
+#: Knobs that stay in the environment and are deliberately NOT readable from the
+#: persisted file. Each one is here for a structural reason, not taste:
+#:
+#:   DHOLE_HOME              locates the file, so reading it from the file is a
+#:                           circle (and would silently ignore the override that
+#:                           tests and sandboxes depend on).
+#:   DHOLE_TOOLS             a whitelist: honouring it from a file a caller cannot
+#:                           see would drop tools silently for someone who set one
+#:                           env entry. It belongs to the host's visible env block.
+#:   DHOLE_UPDATE_PACKAGE    the recovery path. The repair script runs before the
+#:   DHOLE_UPDATE_INDEX_URL  package may be importable at all, and it has to know
+#:   DHOLE_NO_AUTO_REPAIR    which distribution to reinstall from a state directory
+#:                           that may itself be the thing that is broken.
+ENV_ONLY = frozenset({
+    "DHOLE_HOME", "DHOLE_TOOLS", "DHOLE_UPDATE_PACKAGE",
+    "DHOLE_UPDATE_INDEX_URL", "DHOLE_NO_AUTO_REPAIR",
+})
+
+_file_cache: dict[str, str] | None = None
+_file_stamp: tuple[float, int] | None = None
+
+
+def config_path():
+    """``~/.dhole/config.json`` (honours DHOLE_HOME). Imported lazily: this module
+    must stay importable before the state directory exists."""
+    from dhole_mcp import paths
+    return paths.home() / _CONFIG_BASENAME
+
+
+def _load_file() -> dict[str, str]:
+    """The file as a flat ``{NAME: "value"}``, re-read when it changes.
+
+    A broken file is a recorded warning, never a crash and never a silent no-op:
+    one stray brace must not disable every knob in it without saying so, and it
+    must not take the server down either.
+    """
+    global _file_cache, _file_stamp
+    import json
+    path = config_path()
+    try:
+        stat = path.stat()
+        stamp = (stat.st_mtime, stat.st_size)
+    except OSError:
+        _file_cache, _file_stamp = {}, None
+        return _file_cache
+    if _file_cache is not None and stamp == _file_stamp:
+        return _file_cache
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - a bad config must not break reads
+        record_warning(_CONFIG_BASENAME, "",
+                       f"{path} is not readable JSON ({type(exc).__name__}) - "
+                       "every value in it is being IGNORED; fix or delete the file")
+        _file_cache, _file_stamp = {}, None
+        return _file_cache
+    flat: dict[str, str] = {}
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if isinstance(value, bool):
+                flat[str(key)] = "1" if value else "0"
+            elif value is None or isinstance(value, (str, int, float)):
+                flat[str(key)] = str(value)
+    _file_cache, _file_stamp = flat, stamp
+    return flat
+
+
+def file_entries() -> dict[str, str]:
+    """Values the persisted config currently contributes (for CLI / doctor)."""
+    return dict(_load_file())
+
+
+def source_of(name: str) -> str:
+    """`env` / `file` / `unset` — which door this knob came out of."""
+    if name in os.environ:
+        return "env"
+    if name in _load_file():
+        return "file"
+    return "unset"
+
+
+def value_of(name: str) -> Optional[str]:
+    """The one lookup every typed reader goes through: env wins, then the file."""
+    value = os.environ.get(name)
+    if value is not None:
+        return value
+    return _load_file().get(name)
+
+
+def set_entry(name: str, value: str):
+    """Persist one knob. Raises on a name that is not a registered knob.
+
+    Refusing an unknown name is the whole point: `DHOLE_DEFUALT_CONTENT_CHARS`
+    written to a file looks exactly like a working setting, and the only honest
+    moment to catch it is the moment it is written.
+    """
+    import difflib
+    import json
+    from dhole_mcp import paths
+
+    if by_name(name) is None:
+        near = difflib.get_close_matches(name, [e.name for e in ALL], n=2, cutoff=0.6)
+        raise ValueError(
+            f"{name!r} is not a dhole configuration variable "
+            f"({len(ALL)} registered - see `dhole config list`)"
+            + (f"; did you mean {', '.join(near)}?" if near else "")
+        )
+    path = config_path()
+    data = {}
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        except Exception:  # noqa: BLE001 - overwrite a broken file, said out loud
+            pass
+    data[name] = value
+    paths.ensure_private_dir(path.parent)
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    paths.harden_file(path)
+    invalidate_file_cache()
+    return path
+
+
+def unset_entry(name: str) -> bool:
+    """Remove one knob from the file. True when something was removed."""
+    import json
+    path = config_path()
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return False
+    if not isinstance(data, dict) or name not in data:
+        return False
+    data.pop(name)
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    invalidate_file_cache()
+    return True
+
+
+def invalidate_file_cache() -> None:
+    """Drop the cached file. Tests point DHOLE_HOME at a throwaway directory, and
+    a cache keyed by mtime alone can survive that on a coarse-grained clock."""
+    global _file_cache, _file_stamp
+    _file_cache, _file_stamp = None, None
+
+
 # ─── typed readers ───────────────────────────────────────────────────────
 #
 # W4.1 keeps every existing semantic unchanged for the non-safety flags - the
@@ -512,7 +679,7 @@ def read_flag(name: str, default: bool = False, *, fail_safe: bool = False) -> b
     ``flase`` on DHOLE_IGNORE_ROBOTS keeps compliance ON instead of turning it
     OFF silently.
     """
-    raw = os.environ.get(name)
+    raw = value_of(name)
     if raw is None:
         return default
     v = raw.strip().lower()
@@ -550,7 +717,7 @@ def read_int(
     returns ``default``. What is new: the failure is recorded so ``doctor``
     can tell the operator instead of leaving them guessing.
     """
-    raw = os.environ.get(name)
+    raw = value_of(name)
     if raw is None or raw.strip() == "":
         return default
     try:
@@ -584,7 +751,7 @@ def read_float(
     hi: Optional[float] = None,
 ) -> float:
     """Float sibling of ``read_int``. Same clamping and warning rules."""
-    raw = os.environ.get(name)
+    raw = value_of(name)
     if raw is None or raw.strip() == "":
         return default
     try:

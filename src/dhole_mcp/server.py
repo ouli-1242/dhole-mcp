@@ -3441,7 +3441,7 @@ def _cdp_attach_gate(cdp_url: Optional[str]) -> tuple[Optional[str], Optional[fr
             "outside those hosts is aborted at the route level).",
             None,
         )
-    raw = (os.environ.get("DHOLE_CDP_HOSTS") or "").strip()
+    raw = (env_registry.value_of("DHOLE_CDP_HOSTS") or "").strip()
     if not raw:
         return None, None
     hosts = frozenset(
@@ -3531,7 +3531,7 @@ def _audit_event(event: str, **fields: Any) -> None:
     discipline: opt-in, local-only, best-effort, never raises. Attach attempts
     are recorded whether or not they succeed — a refused attach is exactly the
     event worth seeing in the log."""
-    target = (os.environ.get("DHOLE_USAGE_LOG") or "").strip()
+    target = (env_registry.value_of("DHOLE_USAGE_LOG") or "").strip()
     if not target:
         return
     owned = target.lower() in ("1", "true", "yes", "on")
@@ -3604,7 +3604,7 @@ def _log_tool_call(name: str, ok: bool, duration_ms: float, error: str = "") -> 
     log are tightened to 0700/0600 like the other state files. A path the user
     chose via the environment is left exactly as they set it up.
     """
-    target = (os.environ.get("DHOLE_USAGE_LOG") or "").strip()
+    target = (env_registry.value_of("DHOLE_USAGE_LOG") or "").strip()
     if not target:
         return
     owned = target.lower() in ("1", "true", "yes", "on")
@@ -5125,7 +5125,7 @@ def _relative_path_roots(cwd: str | None = None) -> list[str]:
         roots.append(os.path.abspath(os.path.expanduser(str(cwd).strip())))
     # DHOLE_WORKDIR is the lever for an MCP host whose cwd is its own install
     # directory (the reason relative paths failed here in the first place).
-    env = (os.environ.get("DHOLE_WORKDIR") or "").strip()
+    env = (env_registry.value_of("DHOLE_WORKDIR") or "").strip()
     if env:
         roots.append(os.path.expanduser(env))
     for fallback in (os.getcwd(), os.path.expanduser("~")):
@@ -7902,7 +7902,7 @@ class MasterFetchServer:
             # ——G31 之后它们不再走环境代理，直连探测重新准确，公网目标仍由真实
             # 尝试决定（机器配置不该替一次抓取下结论）。
             if not proxy:
-                _env_proxy = (os.environ.get("DHOLE_SEARCH_PROXY")
+                _env_proxy = (env_registry.value_of("DHOLE_SEARCH_PROXY")
                               or os.environ.get("HTTPS_PROXY")
                               or os.environ.get("HTTP_PROXY")
                               or os.environ.get("ALL_PROXY"))
@@ -8120,7 +8120,7 @@ class MasterFetchServer:
         # 'http://127.0.0.1:9/' 烧掉整个 30000ms 预算（HTTP 层失败后升级到浏览器，
         # 而浏览器拨的是同一个死代理），最后报成「预算耗尽，慢主机请调大 timeout」——
         # 归因和旋钮都指错了（G21）。
-        _env_proxy = os.environ.get("DHOLE_SEARCH_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("ALL_PROXY")
+        _env_proxy = env_registry.value_of("DHOLE_SEARCH_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("ALL_PROXY")
         from dhole_mcp.fetcher import tcp_preflight
         if proxy or _env_proxy:
             # Only an EXPLICIT proxy is probed: an environment proxy is machine
@@ -9723,6 +9723,7 @@ def _help_epilog() -> str:
         f"  {ui.cyan('dhole model use X')}  {ui.dim('select the reranker model (persisted in ~/.dhole/config/reranker.json)')}",
         f"  {ui.cyan('dhole proxy')}        {ui.dim('manage the search proxy pool (list|add|remove|clear)')}",
         f"  {ui.cyan('dhole engines')}      {ui.dim('show / reset / live-test engine health (list|reset|probe)')}",
+        f"  {ui.cyan('dhole config')}       {ui.dim('list / set / unset persisted knobs in ~/.dhole/config.json (no host restart for per-call knobs)')}",
         f"  {ui.cyan('dhole skill')}        {ui.dim('install the bundled agent skill (status|install)')}",
         f"  {ui.cyan('dhole init')}         {ui.dim('one-shot install + MCP client registration (dry-run by default; --yes to write)')}",
         "",
@@ -9738,6 +9739,95 @@ def _skill_manifest(root) -> dict:
         if p.is_file():
             out[p.relative_to(root).as_posix()] = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
     return out
+
+
+def _cmd_config(argv: list[str]) -> int:
+    """`dhole config list | set NAME VALUE | unset NAME` — the persisted knobs.
+
+    Why this command exists: while env was the only door, changing one number
+    meant editing the host's MCP JSON and restarting it. That is not
+    configuration, that is infrastructure work, and it is why the knobs nobody
+    needed were also the knobs nobody could reach. Values in
+    ``~/.dhole/config.json`` are re-read when the file's mtime changes, so a
+    knob read per call takes effect on the next call.
+
+    ``env`` still wins, on purpose: every existing install configured itself
+    through the host's env block, and a file must never quietly override a
+    decision someone already made. Knobs read at import are writable here too,
+    but said out loud as needing a restart - the same note `dhole doctor` gives.
+    """
+    from dhole_mcp import cli_ui as ui
+    from dhole_mcp import env_registry as er
+
+    args = [a for a in argv if a != ""]
+    action = args[0].lower() if args else "list"
+
+    if action == "list":
+        entries = er.file_entries()
+        print("  " + ui.dim(f"file: {er.config_path()}"))
+        if not entries:
+            print("  " + ui.dim("no persisted values yet") + "  " + ui.dim("|") + "  "
+                  + ui.cmd("dhole config set DHOLE_DEFAULT_CONTENT_CHARS 8000"))
+            print("  " + ui.dim(f"{len(er.ALL)} knobs are registered; env still outranks this "
+                                "file - `dhole doctor` audits both."))
+            return 0
+        for name in sorted(entries):
+            entry = er.by_name(name)
+            if entry is None:
+                print("  " + ui.warn(f"{name} = {entries[name]}")
+                      + ui.dim("  ✗ not a dhole knob - nothing reads it (remove with "
+                               f"dhole config unset {name})"))
+                continue
+            shown = entry.display_value(entries[name])
+            tail = []
+            if name in os.environ:
+                tail.append(f"shadowed by env ({entry.display_value(os.environ.get(name))})")
+            if entry.read_at == "import":
+                tail.append("restart the host to change")
+            print("  " + ui.cmd(f"{name} = {shown}") + ui.dim("  " + entry.summary)
+                  + (ui.dim("  · " + "; ".join(tail)) if tail else ""))
+        return 0
+
+    if action == "set":
+        if len(args) < 3:
+            print(ui.err("usage: dhole config set <NAME> <value>"), file=sys.stderr)
+            return 2
+        name, value = args[1].strip().upper(), " ".join(args[2:]).strip()
+        try:
+            path = er.set_entry(name, value)
+        except ValueError as exc:
+            print(ui.err(str(exc)), file=sys.stderr)
+            return 2
+        entry = er.by_name(name)
+        if name in os.environ and os.environ.get(name) != value:
+            print(ui.warn(f"written to {path.name}, but env already sets {name} - "
+                          "env wins, so this value has no effect until the host's "
+                          "env block drops it"))
+        elif entry is not None and entry.read_at == "import":
+            print(ui.ok(f"{name} = {entry.display_value(value)}") + ui.dim(
+                f"  ({path})  read at import: restart the host to take effect"))
+        else:
+            print(ui.ok(f"{name} = {entry.display_value(value) if entry else value}")
+                  + ui.dim(f"  ({path})  takes effect on the next call"))
+        return 0
+
+    if action == "unset":
+        if len(args) < 2:
+            print(ui.err("usage: dhole config unset <NAME>"), file=sys.stderr)
+            return 2
+        name = args[1].strip().upper()
+        if er.unset_entry(name):
+            print(ui.ok(f"removed {name} from {er.config_path().name}"))
+            if name in os.environ:
+                print(ui.dim(f"  env still sets it to {os.environ.get(name)!r} "
+                             "(that value now decides)"))
+        else:
+            print(ui.dim(f"{name} was not in {er.config_path()}"))
+        return 0
+
+    print(ui.err(f"unknown subcommand: {action} (try: dhole config list|set|unset)"),
+          file=sys.stderr)
+    return 2
 
 
 def _cmd_skill(argv: list[str], target=None) -> int:
@@ -10137,7 +10227,7 @@ def main():
     # through to argparse, which errored with "unrecognized arguments: doctor"
     # and never mentioned --doctor. Both spellings now go through the same
     # `updater.doctor()` call, so their stdout AND exit code are identical.
-    _SUBCOMMANDS = ("model", "proxy", "engines", "skill", "doctor", "init")
+    _SUBCOMMANDS = ("model", "proxy", "engines", "skill", "doctor", "init", "config")
     if len(_sys.argv) > 1:
         first = _sys.argv[1].lower()
         if first == "model":
@@ -10148,6 +10238,8 @@ def main():
             raise SystemExit(_cmd_engines(_sys.argv[2:]))
         if first == "skill":
             raise SystemExit(_cmd_skill(_sys.argv[2:]))
+        if first == "config":
+            raise SystemExit(_cmd_config(_sys.argv[2:]))
         if first == "doctor":
             raise SystemExit(updater.doctor())
         if first == "init":
@@ -10163,7 +10255,7 @@ def main():
             hint = (f"did you mean: dhole {near[0]}?" if near
                     else f"try: dhole {'|'.join(_SUBCOMMANDS)}")
             print(ui.err(f"unknown subcommand: {first} ({hint})"),
-                  file=_sys.stderr)
+                  file=sys.stderr)
             raise SystemExit(2)
     parser = argparse.ArgumentParser(
         prog="dhole",

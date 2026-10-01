@@ -22,6 +22,8 @@ import asyncio
 import json
 import logging
 import os
+
+from dhole_mcp import env_registry
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -84,7 +86,7 @@ def _read_env_var() -> list[str]:
     pool. ``_env_proxy_source`` names the variable that actually won.
     """
     raw = (
-        os.environ.get("DHOLE_SEARCH_PROXY", "")
+        (env_registry.value_of("DHOLE_SEARCH_PROXY") or "")
         or os.environ.get("HTTPS_PROXY", "")
         or os.environ.get("HTTP_PROXY", "")
         or os.environ.get("ALL_PROXY", "")

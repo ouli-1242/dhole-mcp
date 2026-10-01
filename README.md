@@ -61,7 +61,9 @@ playwright install chromium      # 反检测浏览器引擎（~150MB），pip �
 
 ## 配置
 
-**默认零配置就能跑通最常见的路径**（搜 / 抓 / 截图 / PDF / OCR / 解析本地文件），要改行为就在 MCP 客户端配置里加一个 `env` 块——变量名原样，值一律写成字符串，改完重启宿主。**例外**：Clash / sing-box 这类 TUN + fake-ip 代理下，`DHOLE_SSRF_DNS_RECHECK=0` 是必需项，不设所有 URL 工具都会失败（`dhole doctor` 会告诉你这台机器是不是这种环境，见 §3 环境现实检查）。
+**默认零配置就能跑通最常见的路径**（搜 / 抓 / 截图 / PDF / OCR / 解析本地文件）。要改行为有两条路：**`dhole config set DHOLE_X value`** 写进 `~/.dhole/config.json`，按调用时刻重读，逐次生效的旋钮不用重启宿主；或在 MCP 客户端配置里加 `env` 块（变量名原样，值一律写成字符串，改完重启宿主）。env 永远优先——一个文件不会悄悄覆盖你已经做出来的决定。`dhole --doctor` 两个门一起审计。
+
+**例外**：Clash / sing-box 这类 TUN + fake-ip 代理下，`DHOLE_SSRF_DNS_RECHECK=0` 是必需项，不设所有 URL 工具都会失败（`dhole doctor` 会告诉你这台机器是不是这种环境，见 §3 环境现实检查）。
 
 ```json
 {
@@ -167,6 +169,7 @@ CLI 诊断与配置：
 | `dhole proxy list` / `add` / `remove` / `clear` | 搜索代理池 |
 | `dhole model` / `dhole model use <name>` | 查看 / 切换重排模型 |
 | `dhole skill` | 安装 / 查看随包分发的 agent 技能（`install` / `status`） |
+| `dhole config` | 持久化旋钮：`list` / `set <NAME> <value>` / `unset <NAME>`（写 `~/.dhole/config.json`，不用改宿主 JSON、逐次生效的旋钮不用重启） |
 | `dhole --http --host --port` | 改用 streamable HTTP 传输（默认 stdio） |
 
 **传输方式**：默认 stdio，agent 把 `dhole` 当子进程拉起。要让多台机器共用同一个 dhole，用 `dhole --http`，端点是 `http://<host>:<port>/mcp`——**这一层不带任何鉴权**，`--host 0.0.0.0` 等于把「替你抓任意 URL」的能力开放给整个网络，放在共享网络里请自行套上反向代理 / 认证 / 防火墙。
@@ -259,6 +262,7 @@ CLI 诊断与配置：
 | `profiles/<name>/` | 自建持久浏览器 profile（需 `DHOLE_BROWSER_PROFILE`），**含登录态**，删掉目录即注销 |
 | `models/<model>/`、`config/reranker.json` | 重排模型与它的选择 |
 | `search_proxies.json` | 代理池，**凭据明文存储**（`dhole proxy list` 显示时打码） |
+| `config.json` | `dhole config set` 写的旋钮（POSIX 下 0600）。**设 secret 类变量时它同样明文落盘**——不想让密钥进文件就继续用宿主的 `env` 块，那条路永远优先 |
 | `usage.jsonl`、`search_feedback.json`、引擎状态文件 | 调用与写操作审计日志、域名偏好、引擎冷却 |
 
 ## 贡献

@@ -93,9 +93,9 @@ _ua = UserAgent()
 
 # Bright Data SERP API（keyed 引擎之一，见下方 KeyedApiEngine）
 # 此仓库为公开仓库，密钥只从环境变量读取，严禁硬编码进源码。
-_BRIGHTDATA_ZONE = os.environ.get("DHOLE_BRIGHTDATA_ZONE", "dhole")
+_BRIGHTDATA_ZONE = (env_registry.value_of("DHOLE_BRIGHTDATA_ZONE") or "dhole")
 _BRIGHTDATA_ENDPOINT = "https://api.brightdata.com/request"
-_BRIGHTDATA_COUNTRY = os.environ.get("DHOLE_BRIGHTDATA_COUNTRY", "us")  # Google result region
+_BRIGHTDATA_COUNTRY = (env_registry.value_of("DHOLE_BRIGHTDATA_COUNTRY") or "us")  # Google result region
 
 
 # ─── exceptions ──────────────────────────────────────────────────────────────
@@ -1724,7 +1724,7 @@ _heartbeat_log: list[dict] = []
 
 def _heartbeat_interval() -> tuple[float, str]:
     """Seconds between proactive probes (0 = never; env DHOLE_ENGINE_HEARTBEAT)."""
-    raw = os.environ.get("DHOLE_ENGINE_HEARTBEAT")
+    raw = env_registry.value_of("DHOLE_ENGINE_HEARTBEAT")
     if raw is None or not str(raw).strip():
         return _HEARTBEAT_DEFAULT_S, ""
     try:
@@ -2027,7 +2027,7 @@ _load_engine_stats()
 def _configured_default_backends() -> list[str]:
     """DHOLE_DEFAULT_ENGINES 覆盖默认池（逗号分隔）。国内用户可收敛到直连可达的
     引擎，被墙的三个不再每轮陪跑。未知名忽略并告警；全无效则回落上游默认。"""
-    raw = os.environ.get("DHOLE_DEFAULT_ENGINES", "")
+    raw = (env_registry.value_of("DHOLE_DEFAULT_ENGINES") or "")
     if not raw.strip():
         return list(_DEFAULT_BACKENDS)
     out: list[str] = []

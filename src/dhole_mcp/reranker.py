@@ -21,6 +21,8 @@ import hashlib
 import logging
 import math
 import os
+
+from dhole_mcp import env_registry
 import time
 import urllib.request
 from dataclasses import dataclass, field
@@ -161,7 +163,7 @@ MIN_MODEL_BYTES = 50_000_000
 
 
 def _hf_endpoints() -> list[str]:
-    custom = (os.environ.get("DHOLE_HF_ENDPOINT")
+    custom = (env_registry.value_of("DHOLE_HF_ENDPOINT")
               or os.environ.get("HF_ENDPOINT") or "").strip().rstrip("/")
     if custom:
         return [custom]

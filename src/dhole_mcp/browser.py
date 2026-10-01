@@ -15,6 +15,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+
+from dhole_mcp import env_registry
 import re
 import sys
 import tempfile
@@ -228,7 +230,7 @@ def _env_profile_name() -> Optional[str]:
     持久化：close 不删、重启重登不需要）。非法名字直接抛——打错的字绝不能
     静默回落到一次性 profile，那会让"以为存了登录态"的调用方拿到空会话。
     """
-    raw = (os.environ.get("DHOLE_BROWSER_PROFILE") or "").strip()
+    raw = (env_registry.value_of("DHOLE_BROWSER_PROFILE") or "").strip()
     if not raw:
         return None
     if not _PROFILE_NAME_RE.match(raw):

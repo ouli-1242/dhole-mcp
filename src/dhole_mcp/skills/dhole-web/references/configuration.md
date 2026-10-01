@@ -5,7 +5,8 @@ Users rarely read READMEs, but many problems (blocked engines, internal-host fal
 ## The rules of changing things
 
 - **Single-call behavior** → call parameters (`ignore_robots` / `allow_private` / `proxy` / `cache_ttl` …). No config edit, no restart. Prefer this whenever it suffices
-- **Process-wide behavior** → environment variables, in the host's MCP config under the `dhole` server's `env` block, **then restart the host**:
+- **Process-wide behavior, two doors.** `dhole config set DHOLE_X value` writes `~/.dhole/config.json`, which is re-read when the file changes — knobs read per call take effect on the next call, no restart. `dhole config list` shows what the file sets, whether env shadows it, and which values are secret without printing them. The host's `env` block still works and **always wins** (an operator's existing env configuration must never be silently overridden by a file); editing it needs a host restart. Knobs marked "read at startup" need a restart through either door — one tool set cannot be changed after `tools/list` was sent
+- **Process-wide, the old way** → environment variables, in the host's MCP config under the `dhole` server's `env` block, **then restart the host**:
 
 ```json
 {

@@ -220,7 +220,7 @@ def _dns_recheck_enabled() -> bool:
     （既不在 ON 也不在这条短 off-list 里，比如 ``flase``）记入告警列表；
     仍然按 fail-safe 走（recheck 继续开着）。
     """
-    raw = os.environ.get("DHOLE_SSRF_DNS_RECHECK")
+    raw = env_registry.value_of("DHOLE_SSRF_DNS_RECHECK")
     v = (raw or "").strip().lower()
     if v in ("0", "false", "off", "no"):
         return False

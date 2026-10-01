@@ -140,8 +140,18 @@ def _no_real_home_state_writes(request, monkeypatch, tmp_path):
     # does not move the ~90MB reranker tree.
     from dhole_mcp import cache as _cache
     monkeypatch.setattr(_cache, "_CACHE_DIR", tmp_path)
+    # The persisted config file (W11) is the seventh state file, and it leaks in
+    # both directions: READING the real ~/.dhole/config.json lets one machine's
+    # knobs decide what a test asserts, and WRITING it leaves residue in the file
+    # that decides how that user's own dhole behaves. This is not hypothetical -
+    # the first run of tests/test_config_store.py wrote `["DHOLE_USAGE_LOG"]` into
+    # the real home, because this fixture redirects six paths but not paths.home().
+    from dhole_mcp import env_registry as _envreg
+    monkeypatch.setattr(_envreg, "config_path", lambda: tmp_path / "config.json")
+    _envreg.invalidate_file_cache()
     yield
     _sessions.reset_for_tests()
+    _envreg.invalidate_file_cache()
 
 
 @pytest.fixture

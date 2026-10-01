@@ -23,6 +23,8 @@ import asyncio
 import json
 import logging
 import os
+
+from dhole_mcp import env_registry
 import re
 from collections import Counter
 from time import time
@@ -961,7 +963,7 @@ def _feedback_file() -> str:
 
 def _feedback_enabled() -> bool:
     """True only when the user opted in with DHOLE_SEARCH_FEEDBACK=1."""
-    return (os.environ.get("DHOLE_SEARCH_FEEDBACK") or "").strip().lower() in (
+    return (env_registry.value_of("DHOLE_SEARCH_FEEDBACK") or "").strip().lower() in (
         "1", "true", "yes", "on",
     )
 _feedback_cache: Optional[frozenset] = None

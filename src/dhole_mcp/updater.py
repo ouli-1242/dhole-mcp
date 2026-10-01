@@ -943,7 +943,7 @@ def capabilities() -> list[tuple[str, str, bool]]:
 
     # 这行以前是写死的字面量，换引擎池时漏改过一次（`dhole -v` 报旧池）——现在从
     # DEFAULT_ENGINES 推导，由 tests/test_cli.py 的 pool 断言钉住。
-    pool = (os.environ.get("DHOLE_DEFAULT_ENGINES") or "").strip()
+    pool = (env_registry.value_of("DHOLE_DEFAULT_ENGINES") or "").strip()
     if pool:
         caps.append(("search pool", pool, True))
     else:
@@ -1050,12 +1050,27 @@ def _append_config_audit(checks: list[tuple[str, str, str, str]]) -> None:
     """
     from dhole_mcp import env_registry as _reg
 
+    persisted = _reg.file_entries()
     set_entries: list[tuple[str, str, object, str]] = []
     for entry in _reg.ALL:
-        raw = os.environ.get(entry.name)
+        # Two doors, one audit: env wins over ~/.dhole/config.json, and `value_of`
+        # is exactly what the typed readers consult - so what doctor prints is the
+        # value in effect, not the value one of the two doors happens to hold.
+        raw = _reg.value_of(entry.name)
         if raw is None or raw.strip() == "":
             continue
         set_entries.append((entry.scenario, entry.name, entry, raw))
+
+    # A name in the file that no code reads is the loudest kind of silence: it
+    # looks like a setting and does nothing. Nothing above can see it, so it
+    # needs its own row - and it must count as a failure, not a note.
+    for orphan in sorted(k for k in persisted if _reg.by_name(k) is None):
+        checks.append((
+            orphan, "fail",
+            f"{orphan} is written to {_reg.config_path()} but is not a dhole "
+            f"configuration variable - nothing reads it",
+            f"fix: dhole config unset {orphan}",
+        ))
 
     total = len(_reg.ALL)
     if not set_entries:
@@ -1071,6 +1086,8 @@ def _append_config_audit(checks: list[tuple[str, str, str, str]]) -> None:
         ok, why = _reg.is_valid_value(entry, raw)
         timing = ("  (read at startup - restart the host to change)"
                   if entry.read_at == "import" else "")
+        if entry.name not in os.environ and entry.name in persisted:
+            timing += "  (from ~/.dhole/config.json)"
         if ok:
             detail = _config_effective_value(entry, raw) + timing
             checks.append((name, "info", detail, ""))
@@ -1174,7 +1191,7 @@ def _append_resolver_reality(checks: list[tuple[str, str, str, str]]) -> None:
         return
 
     # fake-ip detected. Say which env gate is on the user's side.
-    recheck_off = (os.environ.get("DHOLE_SSRF_DNS_RECHECK") or "").strip().lower() \
+    recheck_off = (env_registry.value_of("DHOLE_SSRF_DNS_RECHECK") or "").strip().lower() \
         in ("0", "false", "off", "no")
     if recheck_off:
         checks.append((
