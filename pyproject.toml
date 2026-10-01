@@ -8,12 +8,25 @@ readme = "README.md"
 authors = [{name = "ouli-1242", email = "ouli1242@gmail.com"}]
 requires-python = ">=3.11"
 dependencies = [
-    # dhole uses primp for HTTP TLS impersonation and patchright for browser.
-    # No scrapling dependency. Core deps all have universal wheels.
-    # Browser deps (patchright, playwright, browserforge) are in [all] extra.
-    # When browser deps are missing, dhole runs in HTTP-only mode
-    # (see _scrapling_available + _fallback_http_get in server.py).
-    # Core deps:
+    # W7 (D2 approved): the previous `[all]` extras are folded in here, so
+    # `pip install dhole-mcp` gets you the FULL tier - browser / PDF / OCR /
+    # reranker / docx / xlsx. The obvious command is now also the correct one.
+    #
+    # Cost: hundreds of MB per install (onnxruntime + opencv-headless +
+    # patchright + playwright + rapidocr dominate). Trade-off accepted:
+    # "heavy but works" beats "lean and silently degraded" - the pre-W7 shape
+    # meant the plain install was HTTP-only and every capability gap only
+    # surfaced as a runtime failure. See §3 W6 for the mirror change on the
+    # hint side; the two together are what "zero-config works" actually
+    # needs.
+    #
+    # NOTE: `playwright install chromium` is STILL a separate step (a browser
+    # binary download). W7 does not change that - the Python packages land
+    # via pip, but the ~150MB Chromium engine that patchright/playwright
+    # drive has to be fetched once per host. W8 (`dhole init`) is what folds
+    # the two together; W7 alone is not "install and go".
+    #
+    # Core HTTP / search / extract (unchanged from the pre-W7 default):
     "mcp>=2.0,<3",
     "pydantic>=2.0",
     "trafilatura>=2.0.0",
@@ -36,6 +49,28 @@ dependencies = [
     # importing them directly without declaring them is a latent break.
     "h2>=4.0",
     "httpcore>=1.0,<2.0",
+    # ─── the pre-W7 `[all]` tier, now default ────────────────────────────
+    # Browser deps (patchright for anti-detect browser, playwright for JS
+    # rendering, browserforge for fingerprint generation). These may not
+    # install on all platforms (e.g. playwright has no aarch64/Termux wheels)
+    # - on such hosts `pip install dhole-mcp` will fail at this block, and
+    # the user must fall back to `pip install dhole-mcp[slim]` (see below).
+    "patchright>=1.50",
+    "playwright>=1.50",
+    "browserforge>=1.2.4",
+    # PDF + OCR deps:
+    "requests>=2.31",
+    "pdfplumber>=0.11.0",
+    "pypdfium2>=4.30",
+    "rapidocr>=3.0",
+    "onnxruntime>=1.16",
+    "tokenizers>=0.20",
+    # QR 解码（screenshot 的 decode_qr）：确定性本地解码，不是视觉任务。
+    # headless 变体不拖 GUI 依赖；懒加载在 qr.py，缺失时报错并给出本命令。
+    "opencv-python-headless>=4.8",
+    # Local file parsing (parse tool):
+    "python-docx>=1.0",
+    "openpyxl>=3.1",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -59,30 +94,55 @@ dev = [
     "pytest-mock>=3.14",
     "ruff>=0.6",
     # 仅测试用：tests/test_pdf_real.py 现场生成加密 PDF 样本（不往仓库里塞二进制件）。
-    # 运行时不需要它 —— PDF 提取走 pdfplumber（见 all extra）。
+    # 运行时不需要它 —— PDF 提取走 pdfplumber（已并入 default deps）。
     "pypdf>=5.0",
 ]
 all = [
-    # Browser deps (patchright for anti-detect browser, playwright for JS
-    # rendering, browserforge for fingerprint generation). These may not
-    # install on all platforms (e.g. playwright has no aarch64/Termux wheels).
-    # When missing, dhole runs in HTTP-only mode.
+    # W7 keeps the `all` extra alive with its pre-W7 contents. Deleting it
+    # breaks two hard dependencies:
+    #   1. updater.py's self-heal path (`_pip("--force-reinstall",
+    #      "--no-deps", "dhole-mcp[all]==" + TARGET)` at 550/556) - the
+    #      repair script literally installs the extra by name;
+    #   2. the 49+ hint strings across docs and code that already say
+    #      `pip install dhole-mcp[all]` (see plan §3 W6.2). Those remain
+    #      valid because installing the `[all]` extra on a full-default
+    #      wheel is idempotent - the deps are already there, pip does
+    #      not complain, and the docs do not need a coordinated edit.
+    # Contents below mirror the block added to [project].dependencies.
     "patchright>=1.50",
     "playwright>=1.50",
     "browserforge>=1.2.4",
-    # PDF + OCR deps:
     "requests>=2.31",
     "pdfplumber>=0.11.0",
     "pypdfium2>=4.30",
     "rapidocr>=3.0",
     "onnxruntime>=1.16",
     "tokenizers>=0.20",
-    # QR 解码（screenshot 的 decode_qr）：确定性本地解码，不是视觉任务。
-    # headless 变体不拖 GUI 依赖；懒加载在 qr.py，缺失时报错并给出本命令。
     "opencv-python-headless>=4.8",
-    # Local file parsing (parse tool):
     "python-docx>=1.0",
     "openpyxl>=3.1",
+]
+slim = [
+    # W7 introduces `slim` as a NAME for the pre-W7 default set (HTTP +
+    # search only, no browser / PDF / OCR / reranker). Two things to know
+    # before you reach for it:
+    #
+    #   1. pip extras can only ADD to `dependencies`, never subtract. Since
+    #      W7 folded the heavy tier INTO `dependencies`, `pip install
+    #      dhole-mcp[slim]` resolves to the same set as plain
+    #      `pip install dhole-mcp` - it is not "back to HTTP-only" the way
+    #      plan §3 W7 test #2 hoped. To actually get a slim install today
+    #      you need `pip install --no-deps dhole-mcp` and hand-pick the
+    #      runtime core; a future release that adds a real slim wheel would
+    #      change that.
+    #   2. Playwright / patchright have no aarch64 or Termux wheels. On
+    #      those hosts `pip install dhole-mcp` fails at the *browser
+    #      block*; the `[slim]` name is what you point at in a build
+    #      script, even if pip currently resolves it the same.
+    #
+    # Kept empty so the name exists in `pip index` metadata and in error
+    # messages ("try `pip install dhole-mcp[slim]`") without pretending
+    # to do something pip cannot do.
 ]
 
 [project.urls]

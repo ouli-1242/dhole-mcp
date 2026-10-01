@@ -27,14 +27,19 @@ Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器：给 AI 代理
 需要 Python 3.11+。
 
 ```bash
-pip install "dhole-mcp[all]"     # 完整版：反爬浏览器 / PDF / OCR / 解析器
-playwright install chromium      # 反检测浏览器引擎（~150MB）
+pip install dhole-mcp             # 默认即完整版：反爬浏览器 / PDF / OCR / 解析器 / 神经重排
+playwright install chromium      # 反检测浏览器引擎（~150MB），pip 装不到这一步
 ```
 
-精简版（纯 HTTP + 搜索，无浏览器依赖）：`pip install dhole-mcp`
+**两步都跑完浏览器层才可用**——`pip install dhole-mcp` 只落 Python 包，Chromium 二进制是 Playwright 独立下载的。W7 把 extras 反转了，但没改变 Playwright 的引擎分发方式。（`dhole init`（W8）会一次跑完这两步 + 写客户端配置，装完就能用。）
+
+`pip install "dhole-mcp[all]"` 依然合法——它现在的效果等价于默认安装（`[all]` extra 保留，是为了 updater 的自愈路径与既有文档 / 用户习惯仍然指向同一个名字，不会失效）。
+
+平台装不上浏览器依赖时的备选（Termux / aarch64 上 Playwright 没有 wheel）：`pip install dhole-mcp[slim]`——这是给这一档**名字**，不是"退回 HTTP-only"的实际开关（pip extras 不能从默认 deps 里减）；真要 HTTP-only 得 `pip install --no-deps dhole-mcp` 再手挑运行时核心，见 troubleshooting。
+
 卸载：`pip uninstall dhole-mcp`；运行时数据全在 `~/.dhole`，删掉该目录即清理干净。
 
-浏览器依赖缺失时会自动降级为纯 HTTP 模式（Termux / 精简容器可用），代价是反爬站点开始失败——那是降级，不是故障。
+浏览器依赖缺失时会自动降级为纯 HTTP 模式（Termux / 精简容器可用），代价是反爬站点开始失败——那是降级，不是故障。降级现在**在使用点提示**（`install.browser_install_advice()` 会给可复制的命令），不再只在 `-v` 的能力面板里静默列一行。
 
 ### 让 agent 自己装
 
@@ -45,17 +50,18 @@ playwright install chromium      # 反检测浏览器引擎（~150MB）
 
 1. 判断你运行在哪个 agent 宿主（Claude Code / Cursor / OpenCode 等），找出 (a) MCP
    配置文件的位置，(b) 添加本地 MCP 服务器所需的格式。必要时读宿主文档，不要猜。
-2. 运行 pip install "dhole-mcp[all]"，再运行 playwright install chromium（已装则跳过）。
+2. 运行 pip install dhole-mcp，再运行 playwright install chromium（已装则跳过）。
    任一步失败就停下并告诉用户，不要继续。
 3. 备份配置文件，按宿主要求的格式添加名为 "dhole" 的服务器，命令为 "dhole"，
    不带参数、不需要 API key、不需要环境变量。
-4. 让用户重启 agent，然后运行 dhole --doctor 确认检查项通过。
+4. 让用户重启 agent，然后运行 dhole doctor 确认检查项通过（`dhole --doctor` 是同
+   一件事的另一种写法）。
 5. 可选：运行 dhole skill install，把随包分发的 agent 技能装到 ~/.agents/skills/dhole-web。
 ```
 
 ## 配置
 
-**零配置即可用。** 要改行为，就在 MCP 客户端配置里加一个 `env` 块——变量名原样，值一律写成字符串，改完重启宿主：
+**默认零配置就能跑通最常见的路径**（搜 / 抓 / 截图 / PDF / OCR / 解析本地文件），要改行为就在 MCP 客户端配置里加一个 `env` 块——变量名原样，值一律写成字符串，改完重启宿主。**例外**：Clash / sing-box 这类 TUN + fake-ip 代理下，`DHOLE_SSRF_DNS_RECHECK=0` 是必需项，不设所有 URL 工具都会失败（`dhole doctor` 会告诉你这台机器是不是这种环境，见 §3 环境现实检查）。
 
 ```json
 {
