@@ -3133,13 +3133,23 @@ def _stamp_robots_mode(result: ResponseModel) -> None:
     permission named as history rather than as now.
     """
     mode = _ROBOTS_MODE.get()
-    if not mode:
-        return
     md = result.metadata or {}
-    prior = md.get("robots")
-    md["robots"] = (f"{mode} (this body was fetched under: {prior})"
-                    if prior and prior != mode else prior or mode)
-    result.metadata = md
+    changed = False
+    if mode:
+        prior = md.get("robots")
+        md["robots"] = (f"{mode} (this body was fetched under: {prior})"
+                        if prior and prior != mode else prior or mode)
+        changed = True
+    # Same reasoning covers the SSRF posture: "was the DNS recheck skipped here?"
+    # is a property of this process, not of the body. It is only said when it
+    # actually happened, so an ordinary host pays nothing on the wire for it.
+    from dhole_mcp import security as _sec
+    note = _sec.recheck_posture_note()
+    if note:
+        md["ssrf_recheck"] = note
+        changed = True
+    if changed:
+        result.metadata = md
 # Per-call credential headers (G25): ``(kind, header_names)`` — "basic"/"bearer"/
 # "header" plus which header names this call treats as credentials. The names go
 # to the HTTP tier so a cross-origin redirect drops them; the kind goes to the

@@ -204,6 +204,103 @@ class SecurityError(ValueError):
     pass
 
 
+# ─── the resolver reality of this machine ────────────────────────────────
+#
+# DNS recheck is the right default: this tool's input is a URL an agent picked up
+# somewhere untrusted, and "public hostname pointing at 169.254.169.254" is the
+# main SSRF path. But a Clash / mihomo / sing-box TUN with a fake-ip resolver
+# hands EVERY public hostname an address from a reserved block by design, so
+# fail-closed here reads to the user as "nothing works" — and the only way out
+# used to be knowing to set an env var before making the first call.
+#
+# The asymmetry makes this detectable rather than configurable: a genuine public
+# resolver never answers 198.18.0.0/15 (RFC 2544 benchmarking) or a ULA
+# fc00::/7 AAAA for example.com. So the environment is asked once, per process,
+# and the answer is said out loud wherever it took effect.
+
+_FAKE_IP_V4 = "198.18.0.0/15"
+_FAKE_IP_V6 = "fc00::/7"
+_PROBE_DOMAIN = "example.com"
+_fake_ip_cache: tuple[str, str, str] | None = None
+_auto_note = ""
+
+
+def _recheck_skipped_by_environment() -> bool:
+    """True when dhole relaxed the recheck on the operator's behalf.
+
+    Only the no-setting case counts: an explicit value is a decision, not an
+    environment, so someone who wrote ``DHOLE_SSRF_DNS_RECHECK=on`` (or ``""``,
+    which this gate has always read as "keep it on") gets the guard they asked
+    for and a note that says nothing happened.
+    """
+    if env_registry.source_of("DHOLE_SSRF_DNS_RECHECK") != "unset":
+        return False
+    return probe_fake_ip()[0] == "fake-ip"
+
+
+def probe_fake_ip() -> tuple[str, str, str]:
+    """``(verdict, address, detail)`` — verdict is public / fake-ip / unprobed.
+
+    Uncertainty is never a reason to relax: an unresolvable probe (offline, or a
+    resolver that hides the answer) returns ``unprobed`` and the recheck stays on.
+    """
+    global _fake_ip_cache, _auto_note
+    if _fake_ip_cache is not None:
+        return _fake_ip_cache
+    import ipaddress
+    import socket
+    try:
+        infos = socket.getaddrinfo(_PROBE_DOMAIN, None)
+    except Exception:  # noqa: BLE001 - offline is not a reason to lower a guard
+        _fake_ip_cache = ("unprobed", "", "")
+        return _fake_ip_cache
+    v4 = v6 = ""
+    net4 = ipaddress.ip_network(_FAKE_IP_V4)
+    net6 = ipaddress.ip_network(_FAKE_IP_V6)
+    for info in infos:
+        try:
+            addr = ipaddress.ip_address(str(info[4][0]).split("%")[0])
+        except ValueError:
+            continue
+        if isinstance(addr, ipaddress.IPv4Address):
+            if addr in net4 and not v4:
+                v4 = str(addr)
+        elif addr in net6 and not v6:
+            v6 = str(addr)
+    if v4 or v6:
+        hit = v4 or v6
+        net = _FAKE_IP_V4 if v4 else _FAKE_IP_V6
+        both = (f" (and the AAAA record {v6} in {_FAKE_IP_V6} is what the recheck "
+                f"actually rejects)" if v4 and v6 else "")
+        _auto_note = (f"ssrf: DNS recheck auto-skipped on this host - {_PROBE_DOMAIN} "
+                      f"resolves to {hit} in {net}{both}, which is what a fake-ip TUN "
+                      f"proxy (Clash / sing-box) does to every public name. Only the DNS "
+                      f"recheck layer is off: IP-literal, hostname and cloud-metadata "
+                      f"guards still apply. Force it back on: "
+                      f"dhole config set DHOLE_SSRF_DNS_RECHECK on")
+        _fake_ip_cache = ("fake-ip", hit, f"{_PROBE_DOMAIN} -> {hit} in {net}")
+    else:
+        _fake_ip_cache = ("public", "", "")
+    return _fake_ip_cache
+
+
+def reset_fake_ip_probe() -> None:
+    """Forget the cached verdict (tests point the probe at a stubbed resolver)."""
+    global _fake_ip_cache, _auto_note
+    _fake_ip_cache, _auto_note = None, ""
+
+
+def recheck_posture_note() -> str:
+    """Non-empty only when the recheck was skipped because of this machine.
+
+    Absent otherwise, so an ordinary host pays nothing on the wire for a note
+    that only means something on a fake-ip one. Runs the probe if nothing has
+    asked yet - a diagnostic that answers "what is this process doing?" has to
+    know the answer, not just the cached one.
+    """
+    return _auto_note if _recheck_skipped_by_environment() else ""
+
+
 def _dns_recheck_enabled() -> bool:
     """是否开启域名 DNS 解析内网复查。
 
@@ -224,6 +321,12 @@ def _dns_recheck_enabled() -> bool:
     v = (raw or "").strip().lower()
     if v in ("0", "false", "off", "no"):
         return False
+    if not v:
+        # 没人设过 —— 于是问这台机器本身。fake-ip TUN 下"默认开启"等于"默认什么都
+        # 抓不到"，而那不是一个用户能配置的默认值，是一个环境问题。探测不确定时
+        # （unprobed）保持开启：放宽守卫需要证据，不需要猜测。
+        if _recheck_skipped_by_environment():
+            return False
     if v and v not in env_registry.ON_TOKENS and v not in ("0", "false", "off", "no"):
         env_registry.record_warning(
             "DHOLE_SSRF_DNS_RECHECK", raw,

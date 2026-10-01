@@ -300,8 +300,15 @@ class TestDoctorResolverReality:
     @pytest.fixture(autouse=True)
     def _clear_dhole_env(self, monkeypatch, isolated_home):
         from dhole_mcp import env_registry as _reg
+        from dhole_mcp import security as _sec
         for e in _reg.ALL:
             monkeypatch.delenv(e.name, raising=False)
+        # W12 的探测结果按进程缓存。体检现在会问它"这台机器是不是已经自动跳过"，
+        # 所以缓存不丢就会让上一个用例的环境泄漏进下一个 —— 顺序一改就闪红的
+        # 那种脆弱。
+        _sec.reset_fake_ip_probe()
+        yield
+        _sec.reset_fake_ip_probe()
 
     def _fake_addr(self, monkeypatch, answers):
         """Patch socket.getaddrinfo to return the given (family, ip) list."""
@@ -328,9 +335,24 @@ class TestDoctorResolverReality:
         assert "198.18.0.32" in out
         assert "198.18.0.0/15" in out
         assert "fc00::/7" in out
-        assert "DHOLE_SSRF_DNS_RECHECK=0" in out
+        # W12: 没人设过这个变量时，dhole 已经自己跳过那一层了。体检再教用户去设
+        # =0 就是在让他修一个已经好了的东西 —— 现在这一行说的是"要强制恢复怎么做"。
+        assert "automatically" in out and "dhole config set DHOLE_SSRF_DNS_RECHECK on" in out
         # and the note about what disabling actually turns off:
         assert "IP-literal" in out or "IP literal" in out
+
+    def test_forced_on_keeps_the_manual_remedy(self, isolated_home, monkeypatch, capsys):
+        """显式说 on 是决定，不是环境：这时"每个 URL 都会失败"重新成为事实，
+        体检必须回到教用户怎么关掉的那句话。"""
+        import socket
+
+        monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", "on")
+        self._fake_addr(monkeypatch, [(socket.AF_INET, "198.18.0.32")])
+        assert updater.doctor() == 0
+        out = capsys.readouterr().out
+        assert "fake-ip proxy detected" in out
+        assert "would fail" in out
+        assert "DHOLE_SSRF_DNS_RECHECK=0" in out
 
     def test_recheck_already_disabled_is_ok_green(
             self, isolated_home, monkeypatch, capsys):
@@ -386,7 +408,8 @@ class TestDoctorResolverReality:
         assert updater.doctor() == 0
         out = capsys.readouterr().out
         assert "fake-ip" in out
-        assert "DHOLE_SSRF_DNS_RECHECK=0" in out
+        # 只有 A 记录命中也认得出来，而这一台机器上 dhole 已经自动跳过了那一层
+        assert "dhole config set DHOLE_SSRF_DNS_RECHECK on" in out
 
     def test_resolver_reality_does_not_raise_even_if_patched_bad(
             self, isolated_home, monkeypatch, capsys):

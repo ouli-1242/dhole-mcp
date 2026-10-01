@@ -19,7 +19,7 @@ Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器：给 AI 代理
 - **怎么用**：正常提要求就行，AI 自己决定调哪个工具，你不需要记任何命令。
 - **默认能做什么**：搜网页 · 抓一个网址 · 批量抓一个站 · 截图 · 读本地文件（Word / Excel / PDF / PPT）· 盯 RSS 更新 · 解析短链 · 清缓存 · 查看登录状态 · 读 dhole 自己的说明书——共 **10 个**工具。
 - **另外 4 个默认关**：录制回放 `recipe` 与网页变化监控 `watch` 用 `DHOLE_TASKS=1` 打开；密码管理器查询 `vault` 与辅助登录 `login` 用 `DHOLE_VAULT=1` 打开。默认关是因为工具说明**每次聊天都占额度**，全开白花约 1,700 token。但它们**存在**这件事不用读这份 README 才知道：`dhole_doc(topic='behavior')` 会告诉你这四个是什么、怎么打开。
-- **最常踩的一个坑**：用 Clash / sing-box 这类代理时必须加 `DHOLE_SSRF_DNS_RECHECK=0`，否则什么都抓不到。
+- **代理环境现在自己适配**：Clash / sing-box 这类 TUN + fake-ip 代理过去要求你**先**设 `DHOLE_SSRF_DNS_RECHECK=0` 才抓得到东西；现在 dhole 第一次需要判定时探测一次，命中就自动跳过那一层——IP 字面量 / 主机名 / 云元数据守卫照旧，且每个受影响的回包都会说明。要强制恢复：`dhole config set DHOLE_SSRF_DNS_RECHECK on`。
 - **要调设置**：见[配置](#配置)。
 
 ## 安装
@@ -63,7 +63,7 @@ playwright install chromium      # 反检测浏览器引擎（~150MB），pip �
 
 **默认零配置就能跑通最常见的路径**（搜 / 抓 / 截图 / PDF / OCR / 解析本地文件）。要改行为有两条路：**`dhole config set DHOLE_X value`** 写进 `~/.dhole/config.json`，按调用时刻重读，逐次生效的旋钮不用重启宿主；或在 MCP 客户端配置里加 `env` 块（变量名原样，值一律写成字符串，改完重启宿主）。env 永远优先——一个文件不会悄悄覆盖你已经做出来的决定。`dhole --doctor` 两个门一起审计。
 
-**例外**：Clash / sing-box 这类 TUN + fake-ip 代理下，`DHOLE_SSRF_DNS_RECHECK=0` 是必需项，不设所有 URL 工具都会失败（`dhole doctor` 会告诉你这台机器是不是这种环境，见 §3 环境现实检查）。
+**例外已经不需要例外**：Clash / sing-box 这类 TUN + fake-ip 代理过去必须设 `DHOLE_SSRF_DNS_RECHECK=0` 才不致于所有 URL 工具全挂，现在 dhole 探测到这种环境就自己跳过那一层（`dhole --doctor` 会说明这台机器命中了什么，回包里也带 `metadata.ssrf_recheck`）。
 
 ```json
 {
@@ -94,7 +94,7 @@ playwright install chromium      # 反检测浏览器引擎（~150MB），pip �
 
 | 变量 | 什么时候设 |
 |---|---|
-| `DHOLE_SSRF_DNS_RECHECK=0` | 用 Clash / sing-box 的 TUN（fake-IP）模式时**必设**，否则每个公网站点都被判成内网、什么都抓不到；普通 HTTP 代理别设 |
+| `DHOLE_SSRF_DNS_RECHECK=0` | 手动关掉 DNS 复检这一层。**一般不用设**：fake-IP TUN 代理（Clash / sing-box）下 dhole 会自己探测并跳过；设 `on` 可以强制恢复。普通 HTTP 代理别设 |
 | `DHOLE_SEARCH_PROXY` | 搜索引擎被限流 / 被墙时走这个代理（也自动读 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`） |
 | `DHOLE_MULTIMODAL=1` | **宿主 agent 能看图才设**：解锁元素裁剪截图与本地二维码解码；纯文本宿主不要设 |
 | `DHOLE_NEURAL_FOCUS=1` | 让 `focus` 改用语义打分——更准（答案召回 90% → 100%）但**单页约 12.5 秒 CPU**，默认的 BM25 只要 23ms |
@@ -234,7 +234,7 @@ CLI 诊断与配置：
 | 症状 | 怎么办 |
 |---|---|
 | 搜索结果很少或为空 | 引擎被限流或被墙。重试，或设 `DHOLE_SEARCH_PROXY`；`dhole engines probe` 看当下哪家能用 |
-| 所有公网站点都报内网地址 | fake-IP TUN 代理（Clash / sing-box 等），设 `DHOLE_SSRF_DNS_RECHECK=0` |
+| 所有公网站点都报内网地址 | fake-IP TUN 代理（Clash / sing-box 等）——正常情况下 dhole 已自动跳过那一层；仍报错说明探测没命中，设 `DHOLE_SSRF_DNS_RECHECK=0`（或 `dhole config set` 后无需重启） |
 | 抓取超时 | `timeout` 是整次调用的墙钟预算，文档下载全额计入；大 PDF 请调大（默认 30s，上限 120s） |
 | 正文被截断 | 用 `offset` / `next_offset` 续取，或调大 `max_content_chars`（上限 200000） |
 | 返回了内容但明显是壳 | 见[注意事项](#注意事项)第一条 |

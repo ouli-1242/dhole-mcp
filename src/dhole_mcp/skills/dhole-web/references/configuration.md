@@ -34,7 +34,7 @@ Users rarely read READMEs, but many problems (blocked engines, internal-host fal
 
 ### Scenario: Clash / sing-box TUN proxy (fake-IP mode)
 
-- `DHOLE_SSRF_DNS_RECHECK=0` — **required**, or the DNS recheck flags every public site as internal and nothing is fetchable. Do not set it for plain HTTP proxies
+- `DHOLE_SSRF_DNS_RECHECK` — **normally not needed**: a fake-IP TUN resolver (Clash / sing-box TUN) is detected at first use and the recheck layer skips itself, with the reason carried in `metadata.ssrf_recheck` and the address/network named by `dhole --doctor`. Set `on` to force the guard back on (then every public site is flagged internal again); set `0` to skip the layer without relying on the probe. Do not set it for plain HTTP proxies, and never set it to make an internal-host target reachable — that is `allow_private` / the host list's job
 
 ### Scenario: fetching intranet / local dev services
 

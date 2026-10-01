@@ -1207,12 +1207,28 @@ def _append_resolver_reality(checks: list[tuple[str, str, str, str]]) -> None:
     )
     if v6_in_ula:
         detail += f"; the SSRF DNS recheck rejects it via the AAAA record: {v6_in_ula} in fc00::/7"
-    detail += "; every smart_fetch / smart_search URL would fail with 'resolves to internal/private IP'"
+
+    # The remedy line must match what dhole actually does here. Since W12 the
+    # recheck layer skips itself on a detected fake-ip host, so telling that
+    # operator to set an env var and restart would send them to fix something
+    # that is already fixed - and worse, the sentence "every URL would fail"
+    # would be false on their machine.
+    from dhole_mcp import security as _sec
+    if _sec.recheck_posture_note():
+        detail += ("; dhole skipped that layer on this host automatically, so URLs "
+                   "work as-is (every affected response says so in "
+                   "metadata.ssrf_recheck)")
+        remedy = ("force it back on: dhole config set DHOLE_SSRF_DNS_RECHECK on "
+                  "(the auto-skip only ever disables the DNS-recheck layer; "
+                  "IP-literal, hostname and cloud-metadata guards stay on)")
+    else:
+        detail += "; every smart_fetch / smart_search URL would fail with 'resolves to internal/private IP'"
+        remedy = ("set DHOLE_SSRF_DNS_RECHECK=0 in the host's env block, then restart the host "
+                  "(disables the DNS-recheck layer only; IP-literal and hostname guards stay on)")
     checks.append((
         "resolver reality", "info",
         detail,
-        "set DHOLE_SSRF_DNS_RECHECK=0 in the host's env block, then restart the host "
-        "(disables the DNS-recheck layer only; IP-literal and hostname guards stay on)",
+        remedy,
     ))
 
 

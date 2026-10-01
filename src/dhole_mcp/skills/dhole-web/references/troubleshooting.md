@@ -38,7 +38,7 @@ Default compliance: **zero requests** were sent for that URL. A one-shot waiver 
 
 ### Every public URL flagged as internal
 
-A fake-IP TUN proxy (Clash / sing-box TUN mode) makes the DNS recheck classify public IPs as internal. Fix: `DHOLE_SSRF_DNS_RECHECK=0` in the MCP config, **then restart the host**. Plain HTTP proxies are unaffected.
+A fake-IP TUN proxy (Clash / sing-box TUN mode) hands every public name an address in `198.18.0.0/15` / a `fc00::/7` AAAA, which the DNS recheck reads as internal. **Since 18.0 this is detected and the recheck layer skips itself** — the response then says so in `metadata.ssrf_recheck` and `dhole --doctor` names the address and the network. If URLs are still being flagged internal, the probe did not fire (an unusual resolver, or the operator pinned the knob): have the user run `dhole config set DHOLE_SSRF_DNS_RECHECK 0` — no host restart — and re-check with `dhole --doctor`. Plain HTTP proxies are unaffected and must not set this.
 
 ### Fetch timeouts
 
