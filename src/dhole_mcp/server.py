@@ -9673,6 +9673,7 @@ def _help_epilog() -> str:
         f"  {ui.cyan('dhole proxy')}        {ui.dim('manage the search proxy pool (list|add|remove|clear)')}",
         f"  {ui.cyan('dhole engines')}      {ui.dim('show / reset / live-test engine health (list|reset|probe)')}",
         f"  {ui.cyan('dhole skill')}        {ui.dim('install the bundled agent skill (status|install)')}",
+        f"  {ui.cyan('dhole init')}         {ui.dim('one-shot install + MCP client registration (dry-run by default; --yes to write)')}",
         "",
         ui.dim("docs:") + "  " + ui.cyan("https://github.com/ouli-1242/dhole-mcp"),
     ])
@@ -10085,7 +10086,7 @@ def main():
     # through to argparse, which errored with "unrecognized arguments: doctor"
     # and never mentioned --doctor. Both spellings now go through the same
     # `updater.doctor()` call, so their stdout AND exit code are identical.
-    _SUBCOMMANDS = ("model", "proxy", "engines", "skill", "doctor")
+    _SUBCOMMANDS = ("model", "proxy", "engines", "skill", "doctor", "init")
     if len(_sys.argv) > 1:
         first = _sys.argv[1].lower()
         if first == "model":
@@ -10098,6 +10099,9 @@ def main():
             raise SystemExit(_cmd_skill(_sys.argv[2:]))
         if first == "doctor":
             raise SystemExit(updater.doctor())
+        if first == "init":
+            from dhole_mcp import init as _init_cmd
+            raise SystemExit(_init_cmd.run_init(_sys.argv[2:]))
         # Anything that is not a flag and not a known subcommand is a typo.
         # The old behaviour (argparse "error: unrecognized arguments") gave
         # no suggestion; "did you mean: dhole doctor?" is what turns a hung
