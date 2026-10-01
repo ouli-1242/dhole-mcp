@@ -11,44 +11,30 @@
 
 </div>
 
-Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器，为 AI 代理提供网页抓取、整站爬取和无密钥网页搜索。HTTP 被拦截时自动升级到反检测浏览器，可读取 PDF（含扫描件 OCR），全部本地运行、无需任何 API key。
+Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器：给 AI 代理装上「上网」的能力——抓网页、爬整站、搜资料、读 PDF、截图、操作页面。全部本地运行，不需要任何 API key。
 
 ## 30 秒理解
 
 - **是什么**：一个给 AI 用的「上网工具包」——AI 自己不会上网、不会读本地文件、不会点网页，装上它就会了。
 - **怎么用**：正常提要求就行，AI 自己决定调哪个工具，你不需要记任何命令。
 - **默认能做什么**：搜网页 · 抓一个网址 · 批量抓一个站 · 截图 · 读本地文件（Word / Excel / PDF / PPT）· 盯 RSS 更新 · 解析短链 · 清缓存 · 查看登录状态——共 **9 个**工具。
-- **另外 4 个默认关**：录制回放 `recipe` 与网页变化监控 `watch` 用 `DHOLE_TASKS=1` 打开；密码管理器查询 `vault` 与辅助登录 `login` 用 `DHOLE_VAULT=1` 打开。默认关是因为工具说明**每次聊天都占额度**，全开白花约 1,700 token（连接期 22,968 → 30,053 字符）。
-- **最常踩的一个坑**：用 Clash / sing-box 这类代理时必须加 `DHOLE_SSRF_DNS_RECHECK=0`，否则每个公网地址都会被误判成内网、什么都抓不到。
-- **要调设置**：见[配置](#配置)；完整的工具清单与各自的行为边界见[工具](#工具)与[使用要点](#使用要点)。
-
-## 功能特性
-
-- **智能抓取**：HTTP 优先（~1 秒），被拦截或遇到 JS 空壳时自动升级隐身浏览器，仍失败则回退 Wayback Machine 快照
-- **CDP 接管**：连接你已登录的 Chrome，直接带着登录态抓页面（`cdp_url`），免自动化登录；默认关闭，需显式开启 + host 白名单；`check_login` 无模型判定"到底登录了没"
-- **页面操作**：元素快照 + 索引化动作——`{"snapshot": true}` 列出可交互元素编号，动作按 index 寻址（`expect` 防点错位），`submit` 默认暂停等用户确认；`DHOLE_MULTIMODAL=1` 解锁元素裁剪截图与本地 QR 解码；写操作进审计日志
-- **重复任务**：`DHOLE_TASKS=1` 打开 `recipe`（把一条抓取路径录下来重放，动作在录制时就过执行器同一套验证）与 `watch`（盯一个 URL 的变化，与上次快照做 diff；首跑只建基线、`changed` 是 `null`，抓取失败不动基线）
-- **凭据与登录流**：`DHOLE_VAULT=1` 打开 `vault`（读**你自己的**密码管理器 CLI —— Bitwarden `bw` / 1Password `op`，只回条目元数据）与 `login`（用其中一条凭据登录：先只回计划待你确认，确认后由服务器侧填入并提交，密码**永不进响应 / 日志 / 缓存**）。**不自造 vault**，也不替你存密码
-- **语义聚焦**：`DHOLE_NEURAL_FOCUS=1` 时 `focus` 挑块与整站爬取过滤从 BM25 关键词重合升级为本地重排模型的语义打分；`focus_mode="best"` 直接定位答案段
-- **网页搜索**：免密引擎 14 个可选、6 个默认并行，本地神经重排序 + 跨引擎共识排名；也可以顺带抓回前三条全文
-- **整站爬取**：同域最佳优先遍历，sitemap 模式，页数 / 深度 / token 预算控制
-- **PDF + OCR**：结构化 Markdown 输出，扫描件与 CID 损坏自动 OCR
-- **结构化提取**：CSS 选择器 / JSON-LD / 自动模式 schema，多 URL 批量并行
-- **Agent 友好**：返回 `next_action` 建议；超长内容自动分页；SQLite 缓存加速重复抓取
-- **优雅降级**：浏览器依赖缺失时自动切换纯 HTTP 模式（Termux / 精简容器可用）
+- **另外 4 个默认关**：录制回放 `recipe` 与网页变化监控 `watch` 用 `DHOLE_TASKS=1` 打开；密码管理器查询 `vault` 与辅助登录 `login` 用 `DHOLE_VAULT=1` 打开。默认关是因为工具说明**每次聊天都占额度**，全开白花约 1,700 token。
+- **最常踩的一个坑**：用 Clash / sing-box 这类代理时必须加 `DHOLE_SSRF_DNS_RECHECK=0`，否则什么都抓不到。
+- **要调设置**：见[配置](#配置)。
 
 ## 安装
 
-需要 Python 3.11+（本版在 Python 3.14 上开发与验证）。
+需要 Python 3.11+。
 
 ```bash
-pip install "dhole-mcp[all]"     # 完整版（反爬浏览器 / PDF / OCR / 解析器）
-playwright install chromium      # 反检测浏览器引擎（~150MB，完整版需要）
+pip install "dhole-mcp[all]"     # 完整版：反爬浏览器 / PDF / OCR / 解析器
+playwright install chromium      # 反检测浏览器引擎（~150MB）
 ```
 
 精简版（纯 HTTP + 搜索，无浏览器依赖）：`pip install dhole-mcp`
-源码安装：`git clone https://github.com/ouli-1242/dhole-mcp.git && cd dhole-mcp && pip install .[all] && playwright install chromium`
-卸载：`pip uninstall dhole-mcp`；运行时数据全在 `~/.dhole`，删掉该目录即清理干净
+卸载：`pip uninstall dhole-mcp`；运行时数据全在 `~/.dhole`，删掉该目录即清理干净。
+
+浏览器依赖缺失时会自动降级为纯 HTTP 模式（Termux / 精简容器可用），代价是反爬站点开始失败——那是降级，不是故障。
 
 ### 让 agent 自己装
 
@@ -57,29 +43,19 @@ playwright install chromium      # 反检测浏览器引擎（~150MB，完整版
 ```
 在这台机器上安装 Dhole MCP 服务器。逐步执行，不要跳步。
 
-1. 先判断你运行在哪个 agent 宿主（Claude Code / Cursor / OpenCode / Pi 等），
-   找出 (a) MCP 配置文件的位置，(b) 它添加本地 MCP 服务器所需的格式。必要时读宿主文档，不要猜。
+1. 判断你运行在哪个 agent 宿主（Claude Code / Cursor / OpenCode 等），找出 (a) MCP
+   配置文件的位置，(b) 添加本地 MCP 服务器所需的格式。必要时读宿主文档，不要猜。
 2. 运行 pip install "dhole-mcp[all]"，再运行 playwright install chromium（已装则跳过）。
    任一步失败就停下并告诉用户，不要继续。
-3. 备份第 1 步找到的配置文件，按宿主要求的格式添加名为 "dhole" 的服务器，
-   命令为 "dhole"，不带参数、不需要 API key、不需要环境变量。
-4. 让用户重启 agent。重启后应能看到 smart_fetch / smart_search / smart_crawl /
-   screenshot / parse / feed_fetch / resolve_url / cache_clear / close_session 九个工具，
-   最后运行 dhole --doctor 确认检查项通过。
-   （另有 recipe / watch / vault / login 四个工具**默认关闭**，由 DHOLE_TASKS / DHOLE_VAULT 打开，见「配置」。）
-5. 可选：运行 dhole skill install 把随包分发的 agent 技能装到 ~/.agents/skills/dhole-web
-   （教 agent 怎么选工具、防坑与排查的手册；宿主重启后生效）。
+3. 备份配置文件，按宿主要求的格式添加名为 "dhole" 的服务器，命令为 "dhole"，
+   不带参数、不需要 API key、不需要环境变量。
+4. 让用户重启 agent，然后运行 dhole --doctor 确认检查项通过。
+5. 可选：运行 dhole skill install，把随包分发的 agent 技能装到 ~/.agents/skills/dhole-web。
 ```
 
-## 使用
+## 配置
 
-在 MCP 客户端（Claude Code / Cursor / OpenCode 等）配置中添加：
-
-```json
-{ "mcpServers": { "dhole": { "command": "dhole" } } }
-```
-
-无需参数、无需密钥、无需环境变量。要改行为就在同一层加 `env`（下面[配置](#配置)表里的任何一个变量都可以写在这里，键名原样、值一律字符串）。比较重要常用的组合：
+**零配置即可用。** 要改行为，就在 MCP 客户端配置里加一个 `env` 块——变量名原样，值一律写成字符串，改完重启宿主：
 
 ```json
 {
@@ -88,333 +64,187 @@ playwright install chromium      # 反检测浏览器引擎（~150MB，完整版
       "command": "dhole",
       "env": {
         "DHOLE_SEARCH_PROXY": "http://127.0.0.1:7890",
-        "DHOLE_SSRF_DNS_RECHECK": "0",
-        "DHOLE_IGNORE_ROBOTS": "1",
-        "DHOLE_MULTIMODAL": "1",
-        "DHOLE_NEURAL_FOCUS": "1",
-        "DHOLE_CDP_ATTACH": "1",
-        "DHOLE_CDP_HOSTS": "portal.example.com,mail.example.com",
-        "DHOLE_USAGE_LOG": "1"
+        "DHOLE_SSRF_DNS_RECHECK": "0"
       }
     }
   }
 }
 ```
 
-逐个说人话（**不是都要设**，按需挑，改完重启宿主）：
+常用的几个（**不是都要设**，按需挑）：
 
-- `DHOLE_SEARCH_PROXY`：搜索引擎被限流 / 被墙时走这个代理（也自动读 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`；只管搜索层，抓取层的代理用每次调用的 `options.proxy`）
-- `DHOLE_SSRF_DNS_RECHECK=0`：**Clash / sing-box 的 TUN（fake-IP）模式必设**——不设的话所有公网站点都被判成内网、什么都抓不了；普通 HTTP 代理别设
-- `DHOLE_IGNORE_ROBOTS=1`：关掉默认开启的 `robots.txt` 遵从（进程级）；只想放行某一次请求就在调用时传 `options.ignore_robots=true`，不必改配置
-- `DHOLE_MULTIMODAL=1`：**宿主 agent 能看图才设**（Claude 这类多模态宿主）——解锁 `screenshot` 的元素裁剪与截图动作（图片随响应直达 agent），工具描述随之带上「验证码 ≤3 次转交、2FA / 滑块一律转交」的纪律；纯文本宿主不要设（不开时这些参数显式报错，整页截图不受影响）。`decode_qr` 本地解码不归它管，不设也能用。见[页面操作](#页面操作actionssnapshot索引动作与提交审批闸)
-- `DHOLE_NEURAL_FOCUS=1`：`focus` 挑块与整站爬取过滤从 BM25 关键词重合升级为本地重排模型的**语义**打分（默认关）。**代价实测：单页 ~12.5 秒 CPU**——同一页 BM25 只要 23 ms，约 540 倍；换来的是答案召回 90% → 100%、保留率 22% → 13%。所以默认关：别为了"更准"随手打开，长页面批量抓取会成倍变慢。模型没下载过会显式报错——跑一次神经搜索或 `dhole model use bge-zh` 即装好；要省这 ~280MB 就别设（见[重排模型](#重排模型)）
-- `DHOLE_CDP_ATTACH=1` + `DHOLE_CDP_HOSTS`：打开[带登录态抓取](#带登录态抓取cdp-attach)——让 agent 借你已登录的 Chrome 读登录后的页面，白名单限定哪些域名能用你的登录态；不用这功能就整行删掉（默认关）
-- `DHOLE_USAGE_LOG=1`：本地调用日志（工具名 / 耗时 / 脱敏错误，不记参数值、不联网），出问题时有账可查
+| 变量 | 什么时候设 |
+|---|---|
+| `DHOLE_SSRF_DNS_RECHECK=0` | 用 Clash / sing-box 的 TUN（fake-IP）模式时**必设**，否则每个公网站点都被判成内网、什么都抓不到；普通 HTTP 代理别设 |
+| `DHOLE_SEARCH_PROXY` | 搜索引擎被限流 / 被墙时走这个代理（也自动读 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`） |
+| `DHOLE_TOOLS=smart_fetch,smart_search` | 只注册列出的工具，连接期开销省约一半 |
+| `DHOLE_TASKS=1` | 打开 `recipe` / `watch`（重复任务），默认关 |
+| `DHOLE_VAULT=1` | 打开 `vault` / `login`（凭据与登录流），默认关；需本机装了 Bitwarden CLI（`bw`）或 1Password CLI（`op`）并已解锁 |
+| `DHOLE_ALLOW_PRIVATE_HOSTS` | 逗号分隔的主机白名单，放行内网 / 本机地址（抓自己的 dev 服务），默认一律拒绝 |
+| `DHOLE_IGNORE_ROBOTS=1` | 关掉默认开启的 `robots.txt` 遵从（进程级；单次豁免用 `ignore_robots=true`） |
+| `DHOLE_MULTIMODAL=1` | **宿主 agent 能看图才设**：解锁元素裁剪截图与本地二维码解码；纯文本宿主不要设 |
+| `DHOLE_NEURAL_FOCUS=1` | 让 `focus` 改用语义打分——更准（答案召回 90% → 100%）但**单页约 12.5 秒 CPU**，默认的 BM25 只要 23ms |
+| `DHOLE_CDP_ATTACH=1` + `DHOLE_CDP_HOSTS` | 借你已登录的 Chrome 读登录后的页面，白名单限定哪些域名能用你的登录态，见下节 |
+| `DHOLE_USAGE_LOG=1` | 写本地调用日志（工具名 / 耗时 / 脱敏错误，不记参数值、不联网） |
 
-其他常用的：`DHOLE_TOOLS=smart_fetch,smart_search` 只注册常用工具、连接期开销约省一半；`DHOLE_TASKS=1` 打开重复任务工具（`recipe` / `watch`）；`DHOLE_VAULT=1` 打开凭据与登录流（`vault` / `login`，需要本机装了 `bw` 或 `op`）；`DHOLE_ALLOW_PRIVATE_HOSTS` 放行内网 / 本机地址（抓自己的 dev 服务）。全表见[配置](#配置)。
+其余变量（都不是必须设的）：
 
-能调的东西大致管七件事，逐条在下面的[配置](#配置)：**搜索池与引擎冷却退避**、**代理**、**token 开销**（正文预算 / 只注册常用工具 / 响应形状退回旧写法）、**robots 与 SSRF 的豁免边界**、**带登录态抓取**（CDP attach / 持久 profile / cookie TTL）、**隐身浏览器的预热与空闲关闭**、**状态目录与本地调用日志**。
+| 变量 | 用途 |
+|---|---|
+| `DHOLE_BROWSER_PROFILE` | 设名字后浏览器改用 `~/.dhole/profiles/<name>/` 持久 profile，cookie / 登录态跨重启存活（关闭不删）；不设仍是临时目录。**这是凭据级数据**，只在确实要「登录一次长期复用」时开 |
+| `DHOLE_COOKIE_TTL_S` | 会话 cookie jar 的过期秒数（默认 86400 = 24h，区间 60–2592000；写入时定死、使用不续期） |
+| `DHOLE_DEFAULT_ENGINES` | 覆盖免密默认搜索池（默认 `baidu,bing,sogou,bing_global,yandex,brave`） |
+| `DHOLE_SEARCH_DEADLINE` | 单次搜索整体截止秒数（默认 16） |
+| `DHOLE_SEARCH_FEEDBACK` | 设 `1` 开启域名偏好：抓成功的域名获得排序加权（默认关） |
+| `DHOLE_DEFAULT_CONTENT_CHARS` | 默认正文预算（默认 40000，区间 500–200000） |
+| `DHOLE_BROWSER_IDLE_TIMEOUT` | 浏览器空闲关闭秒数（默认 300，`0` = 永不关闭） |
+| `DHOLE_NO_BROWSER_PREWARM` | 设 `1` 启动不预热隐身浏览器（默认预热，为首次抓取省 3–5 秒） |
+| `DHOLE_ENGINE_COOLDOWN` | 普通被拒的冷却秒数（默认 60，区间 5–1800；越界会被夹紧并说明） |
+| `DHOLE_ENGINE_CHALLENGE_COOLDOWN` / `DHOLE_ENGINE_CONN_COOLDOWN` | 连续 3 次「校验页」/ 连续 3 次「连不上」的冷却秒数（各默认 600，区间 60–7200） |
+| `DHOLE_ENGINE_HEARTBEAT` | 主动巡检冷却中引擎的间隔秒数（默认 300，`0` = 关）；探测失败不会延长惩罚 |
+| `DHOLE_STRUCTURED_CONTENT` | 设 `1` 时每次调用额外再发一份 `structuredContent`（体积翻倍）；只有下游确实按结构化字段解析时才开 |
+| `DHOLE_OUTPUT_SCHEMA` | 设 `1` 时在 `tools/list` 声明 `outputSchema`（连接期 +13.6%）；会**隐含打开**上面那个。面向人的界面或要做校验的客户端才值 |
+| `DHOLE_WIRE_FULL` | 设 `1` 恢复瘦身前的响应形状（每个字段恒定存在，含默认值）；给按 `result["字段"]` 直接取值、不理解「缺席即默认」的调用方用 |
+| `DHOLE_HOME` | 状态目录（默认 `~/.dhole`，装着抓到的正文明文与搜索词）；共享机器上可指到别处 |
+| `DHOLE_WORKDIR` | `parse` 解析相对路径时额外尝试的目录 |
+| `DHOLE_HF_ENDPOINT`（或 `HF_ENDPOINT`） | 重排模型下载源；默认先试 `huggingface.co`、失败回退 `hf-mirror.com`，设了就只用这一个 |
+| `DHOLE_BRIGHTDATA_API_KEY`（`_ZONE` / `_COUNTRY`） | Bright Data SERP 后端（zone 默认 `dhole`，地区默认 `us`） |
+| `DHOLE_TAVILY_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_BOCHA_API_KEY` | 对应 keyed 引擎的密钥（均默认不跑） |
+| `DHOLE_NO_AUTO_REPAIR` | 设 `1` 后入口遇到 ImportError 只打印修复命令，不自动重装 |
 
-CLI 自带诊断与配置命令：
+配置出问题先跑 `dhole --doctor`——它逐项体检并给出可直接复制的修复命令。
 
-| 命令                  | 用途                                                             |
-| --------------------- | ---------------------------------------------------------------- |
-| `dhole -v`            | 版本 + 能力面板（浏览器 / PDF / 重排 / 引擎产出）                |
-| `dhole --doctor`      | 安装体检：逐项定位问题并给出可直接复制的修复命令（失败退出码 1） |
-| `dhole proxy`         | 管理搜索代理池（list / add / remove / clear）                    |
-| `dhole engines list`  | 每个引擎的冷却判定与剩余秒数（`dhole engines` 即 list）          |
-| `dhole engines reset` | 立即清空引擎冷却，不等自然到期                                   |
-| `dhole engines probe` | 逐个实测引擎健康：一家一次真查询，印命中数 / 耗时 / 被拦原因     |
-| `dhole model`         | 查看 / 切换重排模型                                              |
-| `dhole skill`         | 安装 / 查看随包分发的 agent 技能（status / install [--force]）   |
-| `dhole -u`            | 自更新（本 fork 默认关闭）                                       |
-| `dhole --http`        | 改用 streamable HTTP 传输对外 serve（默认是 stdio，见下方「传输方式」） |
+### 借你已登录的 Chrome（CDP 接管）
 
-### 第一次调用
+有些页面必须登录才看得见。让 dhole 连上你**已经登录**的 Chrome，就不必把密码交给它。三步：
 
-装好并重启宿主后，直接对 agent 说人话就行，由它挑工具：
+1. 用**副本 profile** 启动 Chrome 并开着调试端口（Chrome 136+ 不允许对默认 profile 开调试），在这个窗口里登录你要用的站点（一次性）：
+
+   ```bash
+   chrome.exe --user-data-dir=D:\dhole-chrome --remote-debugging-port=9222
+   ```
+
+2. 在 MCP 配置的 `env` 里加 `DHOLE_CDP_ATTACH=1`（总开关）与 `DHOLE_CDP_HOSTS=github.com,example.com`（导航白名单，**强烈建议设置**），重启客户端。
+
+3. 之后 agent 抓这些站点的页面时，会带上你的登录态。
+
+不用这功能就整行删掉——它默认关闭，不设开关时相关调用直接拒绝。**白名单不设的风险**：attach 后页面的一次重定向、一个第三方脚本请求都可能带着你的已认证 cookie 出门，所以白名单是强制的路线级拦截，不是摆设。
+
+## 用法
+
+装好重启后直接对 agent 说人话：
 
 - 「抓 https://example.com/pricing，把价格列成表」→ `smart_fetch`
 - 「查这个库的官方文档，挑两条最相关的读给我」→ `smart_search` 再 `smart_fetch`
-- 「把 docs.example.com 的 `/guide` 下面都收一遍」→ `smart_crawl`（`path_include=["/guide"]`）
+- 「把 docs.example.com 的 `/guide` 下面都收一遍」→ `smart_crawl`
 - 「这份 report.pdf 讲了什么」→ `parse`（本地文件）或 `smart_fetch`（在线 PDF）
 
-想先确认工具在不在，看宿主的工具列表，或跑 `dhole --doctor`。
+CLI 诊断与配置：
 
-### 传输方式
+| 命令 | 用途 |
+|---|---|
+| `dhole -v` | 版本 + 能力面板 |
+| `dhole --doctor` | 安装体检，逐项给修复命令 |
+| `dhole engines list` / `probe` / `reset` | 引擎冷却状态 / 逐个实测健康 / 立即清空 |
+| `dhole proxy list` / `add` / `remove` / `clear` | 搜索代理池 |
+| `dhole model` / `dhole model use <name>` | 查看 / 切换重排模型 |
+| `dhole skill` | 安装 / 查看随包分发的 agent 技能（`install` / `status`） |
+| `dhole --http --host --port` | 改用 streamable HTTP 传输（默认 stdio） |
 
-默认 **stdio**：agent 把 `dhole` 当子进程拉起来，上面的 `mcpServers` 配置就是这个用法。要让多台机器或几个宿主共用同一个 dhole，用 `--http` 切成 streamable HTTP（MCP 2025-03-26），端点是 `http://<host>:<port>/mcp`：
-
-```bash
-dhole --http --host 0.0.0.0 --port 8765     # 默认只监听 127.0.0.1:8765
-```
-
-这一层**不带任何鉴权**，也不校验来源：`--host 0.0.0.0` 就等于把「替你上网抓任意 URL」的能力开放给网络上任何人（SSRF 守卫只管内网地址，不管它替谁去抓公网）。要放在共享网络里，请先自行套上反向代理 / 认证 / 防火墙规则。
-
-## 配置
-
-所有环境变量均可选，默认零配置可用。
-
-| 变量                                                                 | 用途                                                                                                                                                                                                              |
-| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DHOLE_SEARCH_PROXY`                                                 | 搜索引擎代理，逗号分隔可轮换；也自动读 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`。也可用 `dhole proxy add` 写入配置                                                                                              |
-| `DHOLE_DEFAULT_ENGINES`                                              | 覆盖免密默认池，逗号分隔（默认 `baidu,bing,sogou,bing_global,yandex,brave`）                                                                                                                                      |
-| `DHOLE_SEARCH_DEADLINE`                                              | 单次搜索整体截止秒数（默认 16）                                                                                                                                                                                   |
-| `DHOLE_SEARCH_FEEDBACK`                                              | 设 `1` 开启域名偏好：抓成功的域名获得排序加权。默认关闭                                                                                                                                                           |
-| `DHOLE_BROWSER_IDLE_TIMEOUT`                                         | 浏览器空闲关闭秒数（默认 300，`0` 永不关闭）                                                                                                                                                                      |
-| `DHOLE_NO_BROWSER_PREWARM`                                           | 设 `1` 后启动不预热隐身浏览器（默认预热，为首次抓取省 3-5 秒冷启动）                                                                                                                                              |
-| `DHOLE_IGNORE_ROBOTS`                                                | 设 `1` 后不再检查 `robots.txt`（默认检查，见[已知限制](#已知限制)）；单次豁免用 `ignore_robots=true`                                                                                                              |
-| `DHOLE_TOOLS`                                                        | 只注册列出的工具，省连接期开销（`smart_fetch,smart_search` ≈ −49%）                                                                                                                                               |
-| `DHOLE_TASKS`                                                        | 设 `1` 注册 `recipe` / `watch`（[重复任务](#重复任务recipe--watch默认关)）。**默认关**：这两个的 schema 合计 3,597 字符 + 路由行 191 字符 = 连接期 +3,788（用 `tests/tool_payload_measure.py` 可复现，它会分别报默认集与全集）。也可以在 `DHOLE_TOOLS` 里直接点名 |
-| `DHOLE_VAULT`                                                        | 设 `1` 注册 `vault` / `login`（[凭据与登录流](#凭据与登录流vault--login默认关)）。**默认关**，且与 `DHOLE_TASKS` **分开**——打开"重复任务"不该顺手打开一个能读你密码管理器的工具。代价：schema 3,063 字符 + 路由行 234 字符 = 连接期 +3,297（同上可复现）。需要本机装了 Bitwarden CLI（`bw`）或 1Password CLI（`op`）并已解锁；没装时工具照常可用，只会如实报"没找到，这样装" |
-| `DHOLE_DEFAULT_CONTENT_CHARS`                                        | 默认正文预算（40000，区间 500–200000）                                                                                                                                                                            |
-| `DHOLE_STRUCTURED_CONTENT`                                           | 设 `1` 时每次调用**额外**再发一份 `structuredContent`（同一份 JSON 的第二份拷贝）。默认只发文本通道：本服务器不声明 `outputSchema`，严格客户端本来就有权忽略它，而会渲染它的客户端每次调用体积翻倍。只有当下游确实按结构化字段解析结果时才开 |
-| `DHOLE_OUTPUT_SCHEMA`                                                | 设 `1` 时在 `tools/list` 里声明每个工具的 **`outputSchema`**：字段集合由响应压缩策略**反推**得出（`required` = 压缩永不移除的那几个字段），所以"缺席即默认"这条语义从 `instructions` 里的散文变成客户端可机器校验的契约。**代价实测（stdio 线上量，用 `tests/tool_payload_measure.py --with-output-schema` 可复现）：tools/list 20,676 → 23,783 字符，多 3,107，连接期 +13.6%**；朴素地把整个 envelope 写进 schema 要 2.1 万字符，所以只声明核心。按规范它与 `structuredContent` 是同一个决定（声明了就必须发），因此设 `1` 会**隐含打开** `DHOLE_STRUCTURED_CONTENT`，无法配出自相矛盾的组合。默认关，agent 用不到它；面向人的界面或要做校验的客户端才值这 13.6% |
-| `DHOLE_WIRE_FULL`                                                    | 设 `1` 时**恢复瘦身前的响应形状**：每个字段恒定存在（含 `is_truncated:false`、`page_type:"unknown"` 这类默认值），`duration_ms` / `fetched_at` 也回到完整精度。给按 `result["字段"]` 直接取值、或不理解「缺席即默认」的调用方用——省字节因此是一行配置可逆的选择，而不是必须改代码。范围只到线上格式策略：地图模式（`discover_only`）的按列裁剪属于响应语义，不受它影响 |
-| `DHOLE_SSRF_DNS_RECHECK`                                             | DNS 解析内网复查，**默认开启**；设 `0` 关闭。**fake-IP TUN 代理（Clash / sing-box 等）必须关**，否则所有公网站点都会被判成内网                                                                                    |
-| `DHOLE_ALLOW_PRIVATE_HOSTS`                                          | 逗号分隔的主机白名单，让这些**内网 / 本机**地址绕过 SSRF 守卫（`localhost,my-service.local,192.168.1.50`）。默认空 = 一律拒绝；单次用 `allow_private`（`smart_fetch` / `screenshot` / `feed_fetch` 三个工具都支持，前两个走 `options` 袋）。云元数据端点（`169.254.169.254` 等）**永远**不放行 |
-| `DHOLE_CDP_ATTACH`                                                   | CDP attach 总开关，**默认关**：不设时 `smart_fetch` 传 `cdp_url` 直接拒绝——连接已登录的 Chrome = 交出所有已登录站点的已认证读权限，这个决定必须由人显式做出。设 `1` 放行；每次 attach 尝试进审计日志，成功的响应带 `cdp_attached:true`。见[使用要点](#带登录态抓取cdp-attach) |
-| `DHOLE_CDP_HOSTS`                                                    | attach 模式的**导航白名单**（逗号分隔 host）。attach 后浏览器的每个请求都带着你的登录 cookie，白名单外的重定向 / 页面 JS 请求在 route 层直接拦截。不设 = attach 会话可以带你 cookie 去任何站，强烈建议设置 |
-| `DHOLE_BROWSER_PROFILE`                                              | 设名字后浏览器改用 `~/.dhole/profiles/<name>/` 持久 profile（cookie / 登录态跨重启存活，关闭不删），不设仍是临时目录、关闭即清。profile 是**凭据级数据**：只在你确实要"登录一次、长期复用"时开 |
-| `DHOLE_COOKIE_TTL_S`                                                 | cookie jar 的过期秒数（默认 86400 = 24h，区间 60–2592000；写入时定死、使用不续期）。要"登录一次、长期复用"可调大，遗忘的会话仍会自行过期 |
-| `DHOLE_MULTIMODAL`                                                   | 设 `1` 声明**调用方** agent 能看图（不是 dhole 长了眼睛）：解锁 `screenshot` 与截图动作的 `selector` / `index` 元素裁剪，工具描述追加验证码 ≤3 次转交、2FA / 滑块一律转交的纪律。不开时这些参数显式报错；`decode_qr` 本地解码不归它管，始终可用 |
-| `DHOLE_NEURAL_FOCUS`                                                 | 设 `1` 时 `smart_fetch` 的 `focus` 挑块与 `smart_crawl` 的 `focus` 页面过滤改用本地重排模型按语义打分（默认关，用 BM25 关键词重合）。**代价实测：单页 ~12.5 秒 CPU（BM25 同页 23 ms，约 540 倍）**，换答案召回 90% → 100%——批量和长页面场景先掂量。模型未下载时显式报错而非静默降级；见[重排模型](#重排模型) |
-| `DHOLE_ENGINE_COOLDOWN`                                          | 普通被拒的冷却秒数（默认 60，区间 5–1800）。越界会被夹紧并在 `dhole engines list` 里说明                                                                        |
-| `DHOLE_ENGINE_CHALLENGE_COOLDOWN` / `DHOLE_ENGINE_CONN_COOLDOWN`    | 连续 3 次「校验页」/ 连续 3 次「连不上」的冷却秒数（各默认 600，区间 60–7200）                                                                                     |
-| `DHOLE_ENGINE_HEARTBEAT`                                           | 主动巡检还在冷却中的引擎的间隔秒数（默认 300；`0` = 关）。探测失败**不会**延长惩罚，原到期时间原样放回                                                             |
-| `DHOLE_HOME`                                                         | 状态目录（默认 `~/.dhole`），装着抓到的正文明文与搜索词；共享机器上可指到别处                                                                                                                                     |
-| `DHOLE_WORKDIR`                                                      | `parse` 解析相对路径时额外尝试的目录（排在 `cwd` 参数之后）                                                                                                                                                       |
-| `DHOLE_HF_ENDPOINT`（或 `HF_ENDPOINT`）                              | 重排模型下载源；默认先试 `huggingface.co`、失败回退 `hf-mirror.com`，设了就只用这一个                                                                                                                             |
-| `DHOLE_BRIGHTDATA_API_KEY` / `_ZONE` / `_COUNTRY`                    | Bright Data SERP 后端（zone 默认 `dhole`，地区默认 `us`）                                                                                                                                                         |
-| `DHOLE_TAVILY_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_BOCHA_API_KEY` | 对应 keyed 引擎的密钥（均默认不跑）                                                                                                                                                                               |
-| `DHOLE_USAGE_LOG`                                                    | 设 `1` 写本地调用日志（工具名 / 耗时 / 脱敏错误），不记参数值、不联网；审计通道同时记 attach、HTTP 写请求（非 GET）与浏览器 submit                                                                                                                                             |
-| `DHOLE_NO_AUTO_REPAIR`                                               | 设 `1` 后入口遇到 ImportError 只打印修复命令，不自动重装                                                                                                                                                          |
-
-**引擎冷却与退避**：引擎被拒或连续连不上会自动冷却，一次成功即清零，到期自动放行；`dhole engines list` 印出每家的判定、剩余秒数**以及当前生效的三档退避**，`dhole engines reset` 立即清空。三档都可调（默认值就是过去的硬编码值）：`DHOLE_ENGINE_COOLDOWN`（普通被拒，60 秒，5–1800）、`DHOLE_ENGINE_CHALLENGE_COOLDOWN`（连续 3 次校验页，600，60–7200）、`DHOLE_ENGINE_CONN_COOLDOWN`（连续 3 次连不上，600）。越界的值会被**夹紧并说明**——`DHOLE_ENGINE_COOLDOWN=60000` 是 16 小时的死池，没人是这个意思。
-
-**主动巡检**：`DHOLE_ENGINE_HEARTBEAT`（秒，默认 300，`0` = 关）到点会单独敲一次仍在冷却中的引擎（一家一次查询，不并进搜索轮次），答得上来就当场解除冷却，不必等窗口走完。两条边界：探测**失败绝不延长惩罚**（原到期时间原样放回——否则每几分钟探一次等于替站方的封锁续期，实测有站点静默 20 分钟仍回校验页）；池子健康时一条请求都不发。
+**传输方式**：默认 stdio，agent 把 `dhole` 当子进程拉起。要让多台机器共用同一个 dhole，用 `dhole --http`，端点是 `http://<host>:<port>/mcp`——**这一层不带任何鉴权**，`--host 0.0.0.0` 等于把「替你抓任意 URL」的能力开放给整个网络，放在共享网络里请自行套上反向代理 / 认证 / 防火墙。
 
 ## 工具
 
-| 工具           | 功能                                                                                                                                     |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `smart_fetch`  | 抓取任意 URL：自动反爬升级、PDF/OCR、批量、聚焦提取、页面交互、结构化提取、`method`/`body`（POST/PUT/DELETE/PATCH/HEAD）、`auth`（basic/bearer/API-key 头）、条件请求 `if_none_match`/`if_modified_since`（→ `not_modified`）；正文里的 `<meta refresh>` 跳转会跟着走；`cdp_url`（CDP 接管已登录 Chrome，见[使用要点](#带登录态抓取cdp-attach)）、`check_login`（无模型登录判定）、元素快照与索引化动作 + submit 审批闸（见[页面操作](#页面操作actionssnapshot索引动作与提交审批闸)）与 `options.focus_mode="best"`（答案段定位） |
-| `smart_search` | 无密钥网页搜索：多引擎并行、神经重排序、可同时抓回全文；`after`/`freshness` 日期窗口（`date_filter` 说明实际发到哪一档、哪几家不支持）                    |
-| `smart_crawl`  | 同域最佳优先爬取，支持 sitemap 模式、关键词过滤与 `path_include` / `path_exclude` 子树限定；`options.delay` + 站点 `Crawl-delay` 控节奏，`crawl_urls` 里被丢掉的条目如实报数；开 `DHOLE_NEURAL_FOCUS` 后按 focus 查询把离题页挡在队列外        |
-| `screenshot`   | 页面截图。多模态代理直接收图（`DHOLE_MULTIMODAL=1` 时可加 `options.selector` 裁元素、`decode_qr` 本地解码二维码）；纯文本代理传 `options.save_to` 拿文件路径，再用自己的读图工具接上。截本机 / 内网页面要 `options.allow_private`（与 `smart_fetch` 同一套语义）                                          |
-| `parse`        | 本地文件解析（.html/.htm/.xhtml/.docx/.xlsx/.csv/.pdf/.md/.markdown/.txt/.json/.yaml/.yml/.pptx/.odt → Markdown）；相对路径按 `cwd` → `DHOLE_WORKDIR` → 服务器进程 cwd → 主目录依次尝试 |
-| `feed_fetch`   | 批量抓取 RSS/Atom feed 最新条目，`since=<日期>` 只取增量（被过滤掉多少条会报出来）；传站点首页也行，会顺着页面自己声明的 feed 链接找到 feed（`discovered_from` 记录这一步）；自建 / 局域网 feed 要 `allow_private`（顶层参数，同 `smart_fetch` 语义）  |
-| `resolve_url`  | 解析 URL 最终地址（跟随 HTTP 重定向与正文里的 `<meta refresh>` 跳转，不抽取页面正文）                                                            |
-| `cache_clear`  | 清除抓取缓存（连 robots 结论与全部会话 cookie jar 一起忘掉，只要清某个会话请用 `close_session`）；`engine_state=true` 同时重置引擎冷却与产出记录                                             |
-| `close_session` | 看有哪些会话还带着站方凭据（**无参数就是名册**：id、主机、cookie 名字、还剩多久过期、浏览器开没开），或点名 `session_id=` 忘掉一个、`all=true` 全清——不等 24 小时自然过期。cookie 值一律不出境 |
-| `recipe`（默认关） | 把「怎么到这个页面」记一次、以后一次调用重放：`op=save` 存 `{url, actions}`，`op=run` 用它抓取，`op=list` / `op=delete` 管理。动作在**录制时**就过执行器的同一套验证，跑不通的链存不进去；重放返回每条动作的收执，`actions_failed` 非零说明页面变了、该重录。`DHOLE_TASKS=1` 打开 |
-| `watch`（默认关） | 盯一个 URL 有没有变：`op=add` 登记，`op=check` 强制新鲜抓取并与上次快照做 diff（返回 `changed`、增删行数与限长 unified diff），`op=list` / `op=remove` 管理。**首跑只建基线、`changed` 是 `null`**——没有基线不等于没有变化；抓取失败**不动基线**。`focus` 让 diff 只落在相关内容上。`DHOLE_TASKS=1` 打开 |
-| `vault`（默认关） | 读**你自己**的密码管理器：`op=status` 说哪家 CLI 装了 / 解锁了，`op=list` 回条目元数据（名字、用户名、有无密码、关联 URL），`op=match` 按 URL 主机找候选。**密码与 TOTP 的值任何 op 都不回**——这个模型里没有能装它们的字段。用它挑好条目，再把名字交给 `login`。`DHOLE_VAULT=1` 打开 |
-| `login`（默认关） | 用 `vault` 里的一条凭据登录：**不带 `confirm` 时只回计划**（打开页面、按 `type=password` 认出用户名/密码/提交控件、列出索引），一个字节都不填；带 `confirm=true` 才填并提交，之后用无模型的 DOM + cookie **名**判定 `logged_in` 并把 cookie 留在 `session_id` 下。密码由服务器侧读取，**不进 transcript / 响应 / 日志**；回执点名的是 vault 条目名。`confirm=true` 必须给 `session_id`（共享浏览器不能承接登录态）。CAPTCHA / 2FA 不解。`DHOLE_VAULT=1` 打开 |
+**默认 9 个**：
 
-参数摆在哪里**分两类**，每个工具自己在 `tools/list` 里都写清了接受哪些键（README 不再逐参数抄一遍，抄一次就漂一次）：`smart_fetch` / `smart_crawl` / `smart_search` / `screenshot` 把旋钮收在一个 `options` 对象里，顶层同名参数也接受——那是兼容读法，两处都给时**顶层优先**；`parse` / `feed_fetch` / `resolve_url` / `cache_clear` / `close_session` / `recipe` / `watch` / `vault` / `login` 参数少，只有顶层这一层，塞 `options` 会被拒绝并列出它真正接受的键。两个方向相反的例外值得点名：`smart_fetch` 的 `url` 必须摆在外面（放进 `options` 不会被读取，调用会回一句「Either 'url' or 'urls' must be provided」）；`smart_crawl` 的 `discover_only` / `crawl_urls` / `focus` 反过来只能放顶层，放进 `options` 会被拒绝——报错里会说明它是顶层参数，不是没有这个能力。
+| 工具 | 做什么 |
+|---|---|
+| `smart_fetch` | 抓任意 URL：自动反爬升级、PDF / OCR、批量、聚焦提取、结构化提取、页面交互、`POST/PUT/DELETE/PATCH/HEAD`、`auth`（basic / bearer / API-key 头）、条件请求、CDP 接管 |
+| `smart_search` | 无密钥网页搜索：多引擎并行 + 本地重排，可顺带抓回前三条全文 |
+| `smart_crawl` | 同域爬取：sitemap 模式、关键词过滤、`path_include` / `path_exclude` 子树限定 |
+| `screenshot` | 页面截图；看不见图片的宿主传 `options.save_to` 拿文件路径 |
+| `parse` | 本地文件 → Markdown（docx / xlsx / pdf / pptx / odt / csv / html / json / yaml / md / txt） |
+| `feed_fetch` | 批量抓 RSS / Atom 最新条目，`since=` 只取增量 |
+| `resolve_url` | 解析 URL 的最终地址（跟随重定向，不抽正文） |
+| `cache_clear` | 清抓取缓存（连 robots 结论与全部会话 cookie jar 一起清） |
+| `close_session` | 查看 / 清掉会话 cookie（无参数=名册；cookie 值一律不出境） |
 
-## 使用要点
+**默认关的 4 个**：
 
-以下这些约定**会改变你怎么行动**（字段的含义、什么时候别信答复），所以集中列在这里；参数的定义与取值范围仍以 `tools/list` 为准。
+| 工具 | 做什么 | 开关 |
+|---|---|---|
+| `recipe` | 把一条抓取路径录下来，以后一次调用重放 | `DHOLE_TASKS=1` |
+| `watch` | 盯一个 URL 有没有变，与上次快照做 diff | `DHOLE_TASKS=1` |
+| `vault` | 读**你自己**密码管理器里的条目元数据（**从不回密码 / TOTP 值**） | `DHOLE_VAULT=1` |
+| `login` | 用其中一条凭据登录：先只回计划待你确认，确认后才填并提交 | `DHOLE_VAULT=1` |
 
-### 抓取与请求（`smart_fetch` / `screenshot`）
+参数怎么摆：`smart_fetch` / `smart_crawl` / `smart_search` / `screenshot` 的旋钮收在 `options` 里（顶层同名参数也接受，两处都给时顶层优先）；其余工具只有顶层一层。每个工具接受哪些键，`tools/list` 里写清了，以它为准。
 
-- 显式传 `options.proxy` 时先做 **5 秒 TCP 预检**：代理不应答就返回 `error=proxy_unreachable`（不发请求、不升浏览器、不回退快照）。抬 `timeout` 没用，失败发生在请求之前
-- `css_selector` **只对 HTML 生效**：XML / JSON / 纯文本响应上它匹配不到东西，会原样返回整份文档，并在 `summary` 里明说「selector was NOT applied」——别把整包内容当成你要的那一片
-- `pages=` 只减少 PDF **抽取**的内容，文件仍然整个下载
-- **会话 cookie 跨两层**：`options.session_id='name'` 之后，同一主机的 cookie 在 HTTP 层留住、下一次同名调用带回（默认 24 小时过期、`DHOLE_COOKIE_TTL_S` 可调，响应只报名字不报值）；同名会话走到隐身浏览器层时（强制 `force_fetcher='stealthy'` 或自动升级），该会话的**专用**浏览器导航前从 jar 播种、响应后回写——登录态两层共用。边界：共享的自动会话不参与桥接（不把 A 的登录态倒进 B）；CDP attach 用你的真实 profile，照旧只读不写。cookie 值从头到尾不出境。想知道攒了哪些、或者清掉：`close_session`（无参数=名册，`session_id=` 点名关，`all=true` 全清；`cache_clear(all=true)` 也会清 jar，但连整个正文缓存一起）。要接管**你自己**已登录的 Chrome 仍是 CDP attach（见下一节）
-- **非 GET 是一次性的**：`method=POST/PUT/DELETE/PATCH` 不重试（上一次很可能已经落库，重发就是写两遍）、不进缓存、不升隐身浏览器、不用 archive 快照——浏览器只会导航（GET），快照只是那一天的一次 GET，它们答的都不是你这个写请求。`HEAD` 只回**状态 + 声明长度 + 类型**，正文按定义为空，`content_ok` 就按这个判。body 上限 256 KB：这个工具是取回东西的，不是上传东西的
-- **凭据不跟跨源重定向走**：调用方点名的 `cookies` 与 `Authorization` 只发给请求的那个源站；站点把我们转到别的域时这些头会被摘掉（同域跳转与「那一跳自己主机在 jar 里有 cookie」的情况照带）。抬 `allow_private` 也不会绕过这条
-- **`options.auth` 只是把头替你摆好，不做认证流程**：`{type:'basic',username,password}` / `{type:'bearer',token}` / `{type:'header',name,value}`（`X-API-Key` 这类），`user`/`pass` 是简写、`type` 在形状能自证时可省。没有 OAuth 授权码 / client_credentials 那一套，也不会替你刷新 token——token 过期就换一个再调用。凭据的**值**永远不回显（`error` / `summary` / `metadata` 里都没有），带凭据抓回的正文按凭据分别进缓存（不会把管理员看到的内容回放给匿名请求），浏览器层同样把它绑在源站上（页面的第三方子资源拿不到它）。`401` 会分话说清「凭据被拒」和「没发凭据」，这两件事的修法相反
-- **`<meta http-equiv=refresh>` 会被跟随（HTTP 层）**：这类页面用 200 + 正文里的跳转声明自己是个指针，隐身浏览器本来就会自己跟，于是同一 URL 两层给出不同正文（实测）。现在两层都落到目标页，共用重定向的跳数预算、目标照旧逐跳过 SSRF 校验、凭据照旧不跨源，`original_url` 与 `metadata.meta_refresh` 说明这一步是从哪页跳来的。浏览器层对**带延迟**的刷新跟不跟取决于当时的时序（5 秒档实测就不跟），这条仍未解决；`HEAD` 与带请求体的方法都不跟（HEAD 没有正文可读，跟下去就是一次「说好不下载」的下载）
-- **条件请求只问 HTTP 层**：`if_none_match` / `if_modified_since` 是发给源站的问答，浏览器层不接受这个问题（会把它连同缓存一起丢掉并在 `summary` 里说明）。304 是**成功**：`not_modified=true`、`content_ok=true`、正文为空——把它当失败去开浏览器渲染，只会多烧一次冷启动
-- `include_links=true` 时 `links` 的每类上限是 30 / 20 / 20（`max_links` 可调到 1–100）：`links.total_found` 是截断前的真实条数、`links.is_truncated` 说明上限藏掉了东西，别把默认上限当成「这页只有这么多链接」
-- **重复记录要写「容器选择器 + 子 schema」**：`schema={"properties":{"quotes":{"type":"array","selector":".quote","properties":{"text":{"selector":".text"},"tags":{"type":"array","selector":".tag"}}}}}`——每个匹配容器出一条记录，子选择器**在该容器内**求值。只写顶层 `.tag` 的话拿到的是整页 40 个标签的并集，「哪个标签属于哪条 quote」这个信息在输出里不存在。`items.properties` 是同一件事的 JSON Schema 写法；一个字段最多 200 条记录；嵌套最深 8 层；子选择器同样过注入校验
-- **`scroll` 等的是页面停止变长，不是固定毫秒数**：每一步滚到底再轮询 DOM（增长就追新的底，安静两轮就收），整个动作最多花 20 秒预算——一条永不停止的信息流不能变成一次永不返回的调用。它同时补发一个 `scroll` 事件：视口够高、内容够矮时 `scrollTo` 不会产生任何事件，只听事件的懒加载就不会醒。用 `event.isTrusted` 卡懒加载的站点仍然不动，那种页面要用 `click` 点「加载更多」
-- **截图落盘用 `options.save_to`**：给路径就写文件，并在文本段回报绝对路径 + 字节数（看不见图片的模型只有这一条路），父目录会创建；一个**不是图片命名**的既有文件会被拒绝（打错一个字不该吃掉 notes.txt），同名图片文件则允许覆盖重拍
+**更细的调用写法、响应字段含义与失败排查**（agent 侧的手册，不是给你读的）随包分发：跑 `dhole skill install` 装到 `~/.agents/skills/dhole-web`。
 
-### 页面操作（`actions`：快照、索引动作与提交审批闸）
+## 注意事项
 
-`smart_fetch` 的 `actions` 让一次抓取顺带操作页面（点击后等页面停下来再抽取，`scroll` 追无限流，见上一节）。不用写选择器也能操作：
+这些会改变你怎么用，值得先知道：
 
-1. 先 `{"snapshot": true}`：返回按文档序编号的可交互元素清单（index / tag / role / name，最多 80 条，超出报 `elements_truncated` 与总数）
-2. 再按 index 动作：`{"click": {"index": 12, "expect": "登录"}}`、`{"fill": {"index": 3, "text": "..."}}`、`{"press": {"index": 7, "key": "Enter"}}`、`{"submit": {"index": 2}}`。快照与动作共用同一个交互元素选择器，索引跨两次页面加载可复现；`expect` 让过期的索引大声失败（报出该位置现在读的名字），而不是点到别的东西
-3. 提交走审批闸：`{"submit": ...}` 没有 `"confirm": true` 时**什么都不会提交**——动作行标记 `pending_approval`，响应提醒你把提交内容转述给用户；用户确认后带 `{"confirm": true}` 重跑同一条 actions 链。暂停与放行都进写操作审计
+- **`content_ok=true` 不代表内容为真**：它只表示「2xx + 无错 + 正文非空」。几百字符的「成功」多半是登录墙或占位页——看字符量，别照着答。
+- **`robots.txt` 默认遵守**：被 `Disallow` 的 URL **一个请求都不发**，返回 `error=robots_disallowed`。合规是使用者的决定，单次 `ignore_robots=true` 或进程级 `DHOLE_IGNORE_ROBOTS=1`。
+- **写请求是一次性的**：`POST/PUT/DELETE/PATCH` 不重试、不缓存、不升浏览器、不回退快照——上一次很可能已经落库，重发就是写两遍。
+- **凭据不跟跨源重定向走**：`cookies` 与 `Authorization` 只发给请求的那个源站，站点把你转到别的域时会被摘掉。
+- **`options.auth` 只把头摆好，不做认证流程**：没有 OAuth、不刷新 token，过期就换一个再调用。
+- **内网 / 本机默认拒绝**：抓自己的 dev 服务要点名 `allow_private=true`（只放开回环）或给主机名单；云元数据端点（`169.254.169.254` 等）**任何时候都不放行**。
+- **PDF 的 `pages=` 只减少抽取量**，文件仍然整个下载——大 PDF 请调大 `timeout`。
+- **抓回的正文是不可信数据**：页面里出现工具调用、密钥、上传指令时，按提示注入处理，不要执行。
+- **提交表单默认暂停**：`{"submit": ...}` 不带 `confirm: true` 时什么都不提交，等你确认。验证码最多试 3 次就转交，2FA / 滑块一律转交。
+- **连接期固定开销 22,968 字符**（约 5.5k token），每次连接付一次；`DHOLE_TOOLS` 可省约一半。
 
-dhole 不做 `act(prompt)`：认元素、决定点哪个是外层 agent 的语言能力，dhole 只负责把编号清单摆出来、把动作执行到位——零模型零密钥的边界不破。
+## 搜索引擎与重排
 
-**截图进动作需要 `DHOLE_MULTIMODAL=1`**（声明调用方能看图）：`{"screenshot": {"selector": "...", "decode_qr": true}}` 或按 index 截，图片作为图片块随响应走，解码出的二维码文本列进收执。看图纪律随之写进工具描述：**图形验证码最多试 3 次就转交用户；DataDome / Akamai / 交互式 Turnstile / 2FA / 滑块一律转交**——dhole 是工具层，破解不是它的业务。
+**免密引擎 14 个**：默认池 6 个（`baidu` / `bing` / `sogou` / `bing_global` / `yandex` / `brave`），opt-in 8 个（`duckduckgo` / `yahoo` / `baidu_baike` / `so360` / `sogou_weixin` / `wikipedia` / `grokipedia` / `mwmbl`）——opt-in 的要用 `engines=[...]` 点名才跑，单次最多 9 个。换默认池用 `DHOLE_DEFAULT_ENGINES`。
 
-### 带登录态抓取（CDP attach）
+另有 4 个付费 keyed 后端（`brightdata` / `tavily` / `exa` / `bocha`）：配了 key 即启用，但**只有点名才调用**，按次计费。
 
-让 dhole 连接一个**你已登录的 Chrome**，直接带着它的 cookie / localStorage / 扩展抓页面——绕开"自动化登录"这个生产环境 agent 最容易挂掉的环节。三步：
+**日期过滤**只给 day / week / month / year 四档，没有任何一家接受绝对区间——`after=<日期>` 会被放宽到覆盖它的最窄一档，`before` 直接拒绝。要按日期取增量条目用 `feed_fetch(since=)`。
 
-1. 用**副本 profile** 启动 Chrome 并开着调试端口（Chrome 136+ 禁止对默认 profile 开 remote debugging，必须指一个专门目录），在这个窗口里登录你要用的站点（一次性成本）：
-   `chrome.exe --user-data-dir=D:\dhole-chrome --remote-debugging-port=9222`
-2. 在 MCP 客户端的 dhole 服务器配置里加环境变量：`DHOLE_CDP_ATTACH=1`（总开关，不设时 `cdp_url` 一律被拒）+ `DHOLE_CDP_HOSTS=github.com,example.com`（导航白名单，强烈建议），重启客户端
-3. agent 调 `smart_fetch` 传 `cdp_url: "http://127.0.0.1:9222"`，可选加 `check_login: true`
-
-约定与红线：
-
-- **attach 是最高路由优先级**：强制浏览器层、跳过 HTTP 层与公开缓存（缓存里存的是匿名抓取，顶替不了你的登录视角）；与 `schema=` 互斥（一起传直接报错，不会静默丢 schema）。成功的响应带 `cdp_attached:true`——一眼确认这次走的是你的登录态
-- **`check_login` 不用模型**：返回 `login_check = {logged_in: true|false|null, signals, cookie_names}`——DOM 形状（退出控件 / 密码框 / 登录表单）+ cookie **名**的三态判定，没有任何密钥依赖；`null` 表示页面形状不足以下结论，信号交给外层 agent 判断。cookie 值永远不上线（与 session_id 的纪律相同）
-- **`DHOLE_CDP_HOSTS` 不设的风险**：attach 后页面的一次重定向、一个第三方脚本请求，都会带着你的已认证 cookie 出门。白名单在浏览器 route 层强制拦截（连页面 JS 自己发的请求都拦得住），不是"有配置但没人执行"
-- **attach 会话的生命周期是一次调用**：结束只断开连接——不动你的 Chrome 进程、不碰你开着的页面、不往你的 profile 写任何 cookie；每次 attach 尝试（含被拒的）都进 `DHOLE_USAGE_LOG` 审计
-- **验证码 / 2FA 照旧不解决**：行为/指纹类（DataDome / Akamai / Turnstile）无图可看，2FA 的因子不在页面上——该你出手时还是你出手。CDP 接管解决的是"登录"这一步，不是"反爬全通过"
-
-### 整站爬取（`smart_crawl`）
-
-- `smart_crawl` 的 `discover_only=true` 只出 URL 图、不抽正文（`content_ok` 恒为 `false`），但**展开链接图仍是一页一次请求**（最多 `max_pages` 次）：想要一次请求拿到图，用 `max_pages=1`（起始页的链接）或 `sitemap=true`（整站）
-- `smart_crawl` 总预算硬顶 1,000,000 字符；显式给了 `max_total_chars` 之后，调 `max_pages` 不再影响预算
-- `path_include` / `path_exclude` 按**路径子树**匹配：`'/docs'` 命中 `/docs` 及其下全部，但**不**命中 `/docs-old`；只接受尾部 `/*` 一种通配写法
-- **爬取礼貌度是两个旋钮**：`concurrency` 管同时在飞几个请求，`options.delay` 管**同一台主机**多久被敲一次（秒，上限 60）。站点在 `robots.txt` 里写的 `Crawl-delay` 会把间隔抬高（不会压低你要的值），实际用的值写在 `summary` 里；`ignore_robots=true` 连站方这个要求一起忽略。注意 Python 的 `robotparser` 只认**整秒**，站家写 `Crawl-delay: 0.5` 等于没提要求
-
-### 网页搜索（`smart_search`）
-
-- **搜索的日期窗口只能放宽，不能收紧**：引擎只给 day/week/month/year 四档（实测：没有任何一家接受绝对区间），`after` 因此被放大到覆盖它的最窄一档，实际发了哪档、哪几家压根没被问日期，都在响应的 `date_filter` 里——其中 `exact` 的含义是「**发出的档位 == 覆盖窗口的最窄一档**」，不是「没被放宽」：`after=2026-09-01`（28 天窗口）发 month 档时 `exact` 就是 `true`。人话解释以 `date_filter.note` 为准；`before` 直接拒绝而不是静默忽略。`total_estimate` 也**没有实现**——六个引擎的解析器都不读「共约 N 条结果」，拿不到一个自己验不了的数字就不摆一个字段冒充
-
-### 本地文件与 feed（`parse` / `feed_fetch`）
-
-- **`parse` 也吃 .md/.txt/.json/.yaml/.pptx/.odt**：本地文档只有这一个入口——只会说 MCP 的客户端没有文件工具，「用你自己的文件工具读」那句话对它们不成立。.pptx / .odt 用 stdlib 的 zip + XML 读，**不引入新依赖**；文本工具拿不到的部分（备注页、版式、样式、图片、批注）写在输出的第一行里，而不是悄悄消失——一份少了备注的稿件和一份完整的稿件长得一样。`.json` / `.yaml` 除了返回原文还会**校验**：坏文件是一句错误，不是一堆读不懂的字节。未列出的扩展名（.log/.rst/.ini…）会拒绝，并提示改名成 .txt 再解析
-- **HTML 表格在三个入口给出同一个 markdown 表格**：`parse`、`smart_fetch`、`smart_crawl` 共用同一个抽取函数，所以同一份 HTML 抽出的正文逐字节相同（此前 `parse` 把表格打成「Region / Q1 / 12」九行散落单元格，而同一工具对 DOCX / XLSX 给的是真表格）。`smart_crawl` 唯一有意的分叉是列表页：那里给的是结构化链接清单而不是正文，`page_type=list` 就是这个信号的字段
-- **feed 读不懂时给一句人话**：站点首页也可以直接递给 `feed_fetch`，工具会顺着页面自己的 alternate 链接（最多两个候选）去找 feed；全都失败才报错，而且是一句能读懂的判定（不是 `XMLSyntaxError: Opening and ending tag mismatch: meta line 5`）加上试过哪些候选。发现到的地址**同样过 SSRF 守卫**：一个恶意页面不能借「自动发现」把工具指向内网或云元数据端点
-
-### 重复任务（`recipe` / `watch`，默认关）
-
-计划第九章编排轴的最后两级：**复现**与**监控**。两个工具默认不注册，`DHOLE_TASKS=1`（或直接列进 `DHOLE_TOOLS`）打开——它们的 schema 合计约 3.6k 字符，而连接期开销是每次会话都要付的，不常用的能力没理由让默认连接替它买单。
-
-- **`recipe` 存的是「怎么做」，不是「拿到了什么」**：`recipe(op="save", name=..., url=..., actions=[...])` 记下一条抓取路径，之后 `recipe(op="run", name=...)` 一次调用重放，不必重新推导选择器。动作在**录制时**就过 `actions.validate_actions`——和 `smart_fetch` 执行时**同一个**验证器，所以库里不可能存在一条执行器会拒绝的链：存一个永远跑不通的配方比不存更糟，调用方会以为「存下来了就是对的」。重放返回完整的抓取结果，外加每条动作的收执与 `actions_failed`；**非零就说明页面变了**，`next_action` 直接让你重录。配方里**不存凭据**，`session_id` 每次 `run` 现传
-- **`watch` 的 `changed` 是 `null`、不是 `false`（首跑）**：`watch(op="add", ...)` 登记，`watch(op="check", ...)` 强制新鲜抓取（`cache_ttl=0`——读自己缓存的监控没有在监控）并与上次快照做行级 diff。**第一次 check 只建立基线**，`changed` 是 `null`：没有基线不等于没有变化，把首跑报成「无变化」是凭空造一个事实。**抓取失败不动基线**——否则一次网络故障会被写成「页面清空了」。`focus` 让 diff 只落在相关内容上，这是长页面的正确用法：页眉页脚的时间戳、广告位、访问计数每加载一次就变，不限定范围的话每次 check 都在报「有变化」
-- **库在 `~/.dhole/tasks.db`**（0600，与 `sessions.db` 同信任级别），各 200 条上限、快照 200k 字符上限，超限**如实报数**（`baseline_cut`）。`cache_clear` 不碰它：那不是缓存，是你自己存的东西
-- **端到端场景**：`evals/tasks_l3l4.py`（需要靶站在跑）验 7 条判据，包括「页面变了之后重放大声失败」与「抓取失败不动基线」
-
-### 凭据与登录流（`vault` / `login`，默认关）
-
-计划第七章的「凭据来源」与「独立登录流工具」。两个工具默认不注册，`DHOLE_VAULT=1`（或直接列进 `DHOLE_TOOLS`）打开。与 `recipe` / `watch` **分开一个开关**是刻意的：打开「重复任务」不该顺手打开一个能读你密码管理器的工具。
-
-**凭据从哪来 —— 不自造 vault。** dhole 不存你的密码，只读**你已有的**密码管理器：
-
-- **Bitwarden**：`bw list items --search` / `bw get item` / `bw status`
-- **1Password**：`op item list --format json` / `op item get --format json` / `op whoami`
-
-解锁令牌（`BW_SESSION` / `OP_SERVICE_ACCOUNT_TOKEN` / `OP_SESSION_*`）从**进程环境继承**，永不进命令行参数——argv 对同机其它进程可见。哪家都没装、或装了没解锁，`vault(op="status")` 会如实说并给出修法，不会静默当成「没有凭据」。
-
-**凭据值不出境 —— 这条由接口形状保证，不靠调用方自觉。** `vault` 只回**元数据**：条目名、用户名、有无密码、有无 TOTP、关联 URL。**密码与 TOTP 的值在任何 op 里都不出现**，`VaultModel` 里根本没有能装它们的字段——以后有人想加一个，测试会红。密码只在 `login` 内部被读一次，直接喂进浏览器输入框，之后用完即弃。
-
-- **边界明说**：用户名**算标识符、不算秘密**，所以 `vault(op="list")` / `op="match"` 会回它——一个没有用户名的凭据选择器没法用（同一个站的两个账号靠它区分）。`login` 的**回执**则连用户名也不回，只点名 vault 条目名
-- **密码能到达的地方只有输入框**：响应回执、`metadata.actions` 收执、`DHOLE_USAGE_LOG` 审计行都只记动作的**目标**（`fill [1]`），不记文本；失败日志同理（这一条顺手修掉了一个既有缺陷：此前 `fill` 动作失败会把整个动作字典打进日志，谁都能把密码喂给 `smart_fetch` 的 `fill` 从而写进日志）
-- **`login` 默认什么都不做**：不带 `confirm` 的第一次调用只做一次**只读**快照，按 `type=password`（事实，不是「请登录」这类文案）认出用户名 / 密码 / 提交控件，返回计划让你转达用户。填本身也是不可逆的（页面上的输入事件能把值发出去），所以它和提交一起等在闸后
-- **`confirm=true` 必须给 `session_id`**：不给就拒绝，且在开浏览器之前拒绝。理由是既有红线——共享的 auto 浏览器会话不能承接登录态，把一个人的 cookie 灌进去等于把登录态借给下一个匿名请求
-- **没有提交控件时按回车**：表单里找不到提交键就在密码框上回车；回车同样不可逆，因此同样在闸后（不带 `confirm` 时整条链根本不构造）
-- **判定不用模型**：登录后复用 `check_login` 的三态探针（DOM 形状 + cookie **名**）。`logged_in=null` 表示探针答不了，**不是**「没登录」——和 `watch` 的 `changed=null` 同一条纪律
-- **CAPTCHA / 2FA 不解**：图形验证码归外层多模态 agent 试读（`DHOLE_MULTIMODAL=1`），行为墙与 2FA 一律转交。`login` 不引入任何模型
-- **端到端场景**：`evals/vault_login.py`（需要靶站在跑）验 6 条判据，包括「响应里没有密码值」与「登录态真的留住了」。它在临时目录里生成一个**真的假 `bw`**，所以 `vault._run` → 子进程 → JSON 解析这条链是真在跑
-
-## 可选的搜索引擎
-
-免密引擎共 **14 个**：6 个在默认池，8 个是 opt-in（`engines=["duckduckgo","mwmbl"]` 点名才跑，单次最多 9 个）。另有 4 个付费 keyed 后端 `brightdata` / `tavily` / `exa` / `bocha`（需 key，默认不跑，见[配置](#配置)）。
-
-| 引擎           | 索引 / 内容                                          | 默认池 | 国内直连 |
-| -------------- | ---------------------------------------------------- | ------ | -------- |
-| `baidu`        | 百度搜索（独立索引）                                 | ✔      | ✔        |
-| `bing`         | Bing 中国版 `cn.bing.com`                            | ✔      | ✔        |
-| `sogou`        | 搜狗主站（独立索引）                                 | ✔      | ✔        |
-| `bing_global`  | Bing 国际版 `www.bing.com`（与 cn 版结果几乎不重合） | ✔      | 需代理   |
-| `yandex`       | Yandex（独立索引）                                   | ✔      | ✔        |
-| `brave`        | Brave（独立索引）                                    | ✔      | 需代理   |
-| `duckduckgo`   | DuckDuckGo（别名 `ddg`）                             | opt-in | 需代理   |
-| `yahoo`        | Yahoo                                                | opt-in | 需代理   |
-| `baidu_baike`  | 百度百科条目页（知识库，覆盖窄）                     | opt-in | ✔        |
-| `so360`        | 360 搜索（独立索引，别名 `360`）                     | opt-in | ✔        |
-| `sogou_weixin` | 搜狗微信·公众号文章（垂直索引）                      | opt-in | ✔        |
-| `wikipedia`    | 维基百科（知识库）                                   | opt-in | 需代理   |
-| `grokipedia`   | Grokipedia（知识库）                                 | opt-in | 需代理   |
-| `mwmbl`        | MWMBL 社区小型独立索引（覆盖窄、相关度参差）         | opt-in | 需代理   |
-
-换默认池用 `DHOLE_DEFAULT_ENGINES`（见[配置](#配置)），opt-in 的名字也能写进去。
-
-**日期过滤的能力跟着这张表走**：能被问日期的只有 `bing` / `bing_global` / `brave`（opt-in 的 `duckduckgo` / `yahoo` 与 keyed 的 `bocha` / `tavily` 也能），而且**只给 day / week / month / year 四档，没有任何一家接受绝对区间**。所以 `after=<日期>` 会被放宽到覆盖它的最窄一档，实际发了哪档、哪几家压根没被问日期，都在响应的 `date_filter` 里；`before` 直接拒绝而不是静默忽略（预设只能限定「不早于」，而搜索结果不带发布日期，「不晚于」既问不出来也验不了——要按日期取增量条目用 `feed_fetch(since=)`，feed 的条目是带日期的）。响应总数（`total_estimate`）也没有：这些引擎的页面里那一行「共约 N 条结果」一家都没有解析出来，拿不到又验不了的数字就不摆一个字段冒充。
-
-### Keyed 搜索后端（brightdata / tavily / exa / bocha）
-
-配了 key 即启用，与免费引擎**并行**执行，但**默认不跑**：只有 `engines=[...]` 显式点名才调用。按次计费，请求发出即扣配额。
-
-## 重排模型
-
-搜索排序由一个本地 cross-encoder 负责。模型不进 wheel，首次神经搜索时下载到 `~/.dhole/models/<名字>/`；缺依赖或下载失败时自动退回共识排序、不报错。
-
-**focus 也能用同一个模型（`DHOLE_NEURAL_FOCUS=1`，默认关）**：`smart_fetch` 带 `focus` 挑块、`smart_crawl` 带 `focus` 过滤页面，从 BM25 关键词重合升级为这个 cross-encoder 的语义打分；`options.focus_mode="best"` 干脆只返回得分最高的那一段加它的标题——「答案在哪」的直接回答。与搜索的下限判断同一条分布（离题 ~1e-4、真命中 0.93+）：爬取过滤的离题线定在 0.03、focus 弱命中提示定在 0.05，都取自实测分布的离题带。开关打开而模型还没下载时**显式报错**（附下载方法），绝不静默降级——要 BM25 就把开关去掉。
-
-**代价实测**（`evals/focus_baseline.py`，仓库内 README / CHANGELOG 语料 × 5 个自然语言问句，共 10 个有效用例；判定标准是接地关键词有没有被保留——只报保留率不报召回就是自欺）：
-
-| 打分器 | 保留率 | 答案召回 | 单页均耗时 |
-|---|---|---|---|
-| BM25 | 22% | 90% | **23 ms** |
-| 神经（bge-zh cross-encoder） | 13% | **100%** | **12 483 ms** |
-
-神经更紧（13% vs 22%）**且不漏答案**（100% vs 90%）——BM25 在「神经 focus 用哪个环境变量打开」一题上丢了答案块，神经留住了。这是神经路径的实质价值，不只是"分更高"。但代价是 **约 540 倍**的 CPU 时间，所以它默认关；`DHOLE_NEURAL_FOCUS=1` 只在你确实需要"不漏答案"且不在乎单页十几秒时才开。
-
-| 名字             | 语言                  | 体积   |
-| ---------------- | --------------------- | ------ |
-| `bge-zh`（默认） | 中英双语              | ~279MB |
-| `zh-full`        | 跨语言（含中文/多语） | ~450MB |
-| `ms-marco`       | 英文优先              | ~91MB  |
-
-```bash
-dhole model                  # 列出可用模型 + 当前生效的那个
-dhole model use ms-marco     # 切换
-```
-
-**相关性下限要重排器在场才有意义**。`min_relevance` 作用在归一化分上（top 恒为 1.0），所以它只能削掉「有分布的一组结果」的尾部；`min_raw_relevance` 挂在 cross-encoder 的原始 sigmoid 上，才判断得了「这一轮没有一条相关」。原始分的分布是量出来的（bge-zh、真搜索结果）：离题文档 ~1e-4、勉强相关 0.2 上下、真命中 0.93+，所以**建议起点 0.1**；同主题不同侧面的硬负例 p90 只有 0.18，再往上抬就开始误杀。过滤发生时 `fetch_hint`（整轮被清空时是 `error`）会报这一轮原始分实际跨了多远。分布随模型而变，`dhole model use` 换模型后这个数要重新校准。
-
-也可以直接编辑 `~/.dhole/config/reranker.json`（`{ "model": "ms-marco" }`）。未注册的名字会被拒绝并回退默认。下载可断点续传；**离线 / 多机复用**：把 `~/.dhole/models/<名字>/` 整个目录拷到目标机同一路径即可，之后不再联网。
+**重排模型**：搜索排序由一个本地 cross-encoder 负责，不进 wheel，首次神经搜索时自动下载到 `~/.dhole/models/`。三个可选：`bge-zh`（默认，中英双语，~279MB）、`zh-full`（跨语言，~450MB）、`ms-marco`（英文优先，~91MB），用 `dhole model use <name>` 切换。`min_raw_relevance` 用来判断「这一轮有没有相关结果」，**建议起点 0.1**（实测离题 ~1e-4、勉强相关 0.2、真命中 0.93+）；换了模型这个数要重新校准。离线 / 多机复用：把 `~/.dhole/models/<名字>/` 整个目录拷到目标机同一路径即可。
 
 ## 故障排查
 
-| 症状                     | 怎么办                                                                                                   |
-| ------------------------ | -------------------------------------------------------------------------------------------------------- |
-| 搜索结果很少或为空       | 引擎被限流或被墙。重试，或设 `DHOLE_SEARCH_PROXY`；`dhole engines probe` 看当下哪家能用                  |
-| 所有公网站点都报内网地址 | fake-IP TUN 代理（Clash / sing-box 等），设 `DHOLE_SSRF_DNS_RECHECK=0`                                   |
-| 抓取超时                 | `timeout` 是整次调用的墙钟预算，文档下载全额计入；大 PDF 请调大 `timeout`（默认 30000ms，上限 120000ms） |
-| 正文被截断               | 用 `offset` / `next_offset` 续取，或调大 `max_content_chars`（上限 200000）                              |
-| 返回了内容但明显是壳     | `content_ok=true` 只表示「2xx + 无错 + 正文非空」，先看字符量；几百字符的「成功」大概率是占位页          |
-| 本地文件解析成乱码       | 显式传 `encoding=`。Shift_JIS / EUC-KR 会被解成看似合理的中文，不在自动探测范围内                        |
-| 装不上 / 工具没注册      | 跑 `dhole --doctor`，它会逐项定位并给出可直接复制的修复命令                                              |
+| 症状 | 怎么办 |
+|---|---|
+| 搜索结果很少或为空 | 引擎被限流或被墙。重试，或设 `DHOLE_SEARCH_PROXY`；`dhole engines probe` 看当下哪家能用 |
+| 所有公网站点都报内网地址 | fake-IP TUN 代理（Clash / sing-box 等），设 `DHOLE_SSRF_DNS_RECHECK=0` |
+| 抓取超时 | `timeout` 是整次调用的墙钟预算，文档下载全额计入；大 PDF 请调大（默认 30s，上限 120s） |
+| 正文被截断 | 用 `offset` / `next_offset` 续取，或调大 `max_content_chars`（上限 200000） |
+| 返回了内容但明显是壳 | 见[注意事项](#注意事项)第一条 |
+| 本地文件解析成乱码 | 显式传 `encoding=`（Shift_JIS / EUC-KR 会被解成看似合理的中文，不在自动探测范围内） |
+| 装不上 / 工具没注册 | 跑 `dhole --doctor` |
 
 ## 已知限制
 
-- 无法绕过 DataDome / Akamai / 交互式 Turnstile；2FA / CAPTCHA 不自动解（图形验证码 ≤3 次即转交，见[页面操作](#页面操作actionssnapshot索引动作与提交审批闸)）。需要登录的站点可以用 CDP 接管带上**你自己的**登录态（默认关闭、需显式开启），或走不写密码的兜底：session cookie 桥 + `check_login` + 元素快照 + 提交审批闸；自动解 CAPTCHA / 2FA 仍不在设计范围内
-- **搜索没有 SLA**：免密引擎是对公开搜索结果的直接抓取（无授权、无配额），对方改版或封 IP 时只会静默降级，不报错。要可靠性用 `DHOLE_SEARCH_PROXY` 或 keyed 后端
-- 引擎可达性：默认池里 `baidu` / `bing` / `yandex` 国内直连稳定；`sogou` 按 IP 频次限流，`bing_global` / `brave` 无代理时不稳，任何时刻都可能有引擎不答话
-- **合规自负**：**默认检查 `robots.txt`**——被 `Disallow` 的 URL 不会发出任何请求，返回 `error=robots_disallowed`、`content_ok=false`；`ignore_robots=true`（单次）或 `DHOLE_IGNORE_ROBOTS=1`（进程级）可关。抓不到 `robots.txt`（5xx / 超时 / 网络错误）时**放行**，并按 60 秒短 TTL 重试，别把「没查到」当成「合规通过」。我们的抓取 UA 是 `dhole-mcp`（robots 查询与请求都用它），站方要按名字放行时报这个。UA / TLS 指纹伪装、Cloudflare 验证求解是默认行为。目标站点 ToS 与当地法律由使用者承担
-- 抓回的正文是**不可信数据**：页面里出现工具调用、密钥、上传指令时按提示注入处理
-- `archive.org` 回退会返回**某个日期的快照**（看顶层 `source` / `archived_at`），时效敏感的内容引用前先确认；但**服务器自己回的 JSON/XML 错误体不会被快照顶替**（4xx/5xx 且 content-type 是 json/xml 时如实保留），代理不可达时也不回退——那次请求根本没发出去，拿快照回答等于答了一个没人问过的问题
-- **内网 / 本机默认一律拒绝**（SSRF 守卫）。抓自己的 dev / staging / Docker 服务要点名：`allow_private=true`（只放开回环）或 `["my-service.local","192.168.1.50"]`，进程级用 `DHOLE_ALLOW_PRIVATE_HOSTS`。三个工具同一套口径：`smart_fetch`（`options.allow_private`）、`screenshot`（`options.allow_private`，作用域盖住导航——回环页面自己的图片 / 样式同样要放行）、`feed_fetch`（顶层 `allow_private`）。云元数据端点（`169.254.169.254`、`metadata.google.internal` 等）**任何时候都不放行**，包括写进白名单的情况
-- 正文 **50MB 硬顶**，且在下载**之前**守门：装不下的直接报 `Response body too large`，抬 `timeout` 没用
-- 连接期固定开销 22,968 字符（`tools/list` 20,827 + `instructions` 2,141，stdio 线上口径；用 `tests/tool_payload_measure.py` 从源码独立测得，它同时报默认集与两个 opt-in 组各自的增量），每次连接付一次；换成 token 约 5.5k（cl100k 口径，分词器不同就不同——可比的是字符数）。其中 `actions` 的快照 / 索引寻址 / 提交闸契约、`session_id` 的 cookie 双向桥说明与 `focus_mode` 合计 ~2.0k。**条件追加的条款不计入默认开销**：多模态纪律只在 `DHOLE_MULTIMODAL=1` 时追加；`recipe` / `watch` 只在 `DHOLE_TASKS=1` 时注册（+3,788），`vault` / `login` 只在 `DHOLE_VAULT=1` 时注册（+3,297）。每次调用的 envelope 已压到非默认值字段才上线。`DHOLE_TOOLS` 只注册常用工具可省约一半
-- YouTube 仅能获取少量文本
+- 无法绕过 DataDome / Akamai / 交互式 Turnstile；2FA 与 CAPTCHA 不自动解。需要登录的页面可以借你自己的登录态读——CDP 接管，或用 `vault` / `login` 帮你登。
+- **搜索没有 SLA**：免密引擎是对公开搜索结果的直接抓取（无授权、无配额），对方改版或封 IP 时只会静默降级、不报错。要可靠性用搜索代理或 keyed 后端。
+- 默认池里 `baidu` / `bing` / `yandex` 国内直连稳定；`sogou` 按 IP 频次限流，`bing_global` / `brave` 无代理时不稳，任何时刻都可能有引擎不答话。
+- 正文 **50MB 硬顶**，且在下载**之前**守门——装不下的直接报 `Response body too large`，抬 `timeout` 没用。
+- `archive.org` 回退返回的是**某个日期的快照**（看顶层 `source` / `archived_at`），时效敏感的内容引用前先确认。
+- YouTube 仅能获取少量文本。
+- **合规自负**：目标站点的 ToS 与当地法律由使用者承担。抓取 UA 是 `dhole-mcp`，站方要按名字放行时报这个。
 
 ## 本地数据
 
-全在 `~/.dhole/`（可用 `DHOLE_HOME` 换位置；POSIX 下目录 0700、文件 0600）。**没有任何遥测**：除了你让它抓的目标站点，进程不往外发任何数据，也不上传设备信息。
+全在 `~/.dhole/`（可用 `DHOLE_HOME` 换位置；POSIX 下目录 0700、文件 0600）。**没有任何遥测**——除了你让它抓的目标站点，进程不往外发任何数据。
 
-| 位置                                                 | 内容                                                                                                           |
-| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `cache.db`                                           | 抓到的正文（明文 SQLite），TTL 默认 1 小时                                                                     |
-| `sessions.db`                                        | `options.session_id` 的 cookie jar：**含 cookie 值**（=凭据），默认 24 小时过期（`DHOLE_COOKIE_TTL_S` 可调），`cache_clear` / `close_session` 清 |
-| `profiles/<name>/`                                   | 自建持久浏览器 profile（`DHOLE_BROWSER_PROFILE` 开启才存在）：**含登录态**（=凭据），删掉目录即注销                                        |
-| `models/<model>/`                                    | 重排模型                                                                                                       |
-| `config/reranker.json`                               | 重排模型选择                                                                                                   |
-| `circuit_breaker.json` / `engine_stats.json`         | 引擎冷却状态 / 各引擎解析产出                                                                                  |
-| `search_proxies.json`                                | 代理池（凭据**明文**存储，`dhole proxy list` 显示时打码）                                                      |
-| `search_feedback.json` / `usage.jsonl` / `repair.py` | 域名偏好 / 调用与写操作审计日志 / 自愈脚本                                                                                 |
-
-`cache_ttl=0` 完全绕过缓存；用默认值时 docs 页自动抬到 24h、article 页 6h。
+| 位置 | 内容 |
+|---|---|
+| `cache.db` | 抓到的正文（明文 SQLite），TTL 默认 1 小时（docs 页自动抬到 24h、article 页 6h） |
+| `sessions.db` | 会话 cookie jar，**含 cookie 值（=凭据）**，默认 24 小时过期 |
+| `profiles/<name>/` | 自建持久浏览器 profile（需 `DHOLE_BROWSER_PROFILE`），**含登录态**，删掉目录即注销 |
+| `models/<model>/`、`config/reranker.json` | 重排模型与它的选择 |
+| `search_proxies.json` | 代理池，**凭据明文存储**（`dhole proxy list` 显示时打码） |
+| `usage.jsonl`、`search_feedback.json`、引擎状态文件 | 调用与写操作审计日志、域名偏好、引擎冷却 |
 
 ## 贡献
 
-欢迎 issue 与 PR，规范（开发环境、测试、引擎契约与 fixture）见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+欢迎 issue 与 PR；开发环境、测试与引擎契约见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 致谢
 
