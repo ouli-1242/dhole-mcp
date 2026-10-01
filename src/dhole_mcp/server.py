@@ -2744,6 +2744,7 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         "max_links": "int",
         "method": "str", "content_type": "str",
         "focus_mode": "str",
+        "focus_engine": "str",
         "timeout": "number", "wait": "number",
         # A numeric PDF page request ("pages": 3) is unambiguous; reading it only
         # as a string used to drop the range silently and return the whole file.
@@ -2755,7 +2756,7 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         "max_total_chars": "int", "cache_ttl": "int",
         "concurrency": "int", "timeout": "number", "deadline_ms": "number",
         "discover_only": "bool", "ignore_robots": "bool", "delay": "number",
-        "crawl_urls": "list",
+        "crawl_urls": "list", "focus_engine": "str",
         # path_include/path_exclude are NOT here: a bare string is already read
         # as the one-prefix list it means, and crawl.py does that at the point
         # where it can still say so before any page is fetched.
@@ -2997,17 +2998,20 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
     # the relevant blocks so the agent loads less context on long pages.
     # Only applies to text-like extractions (not raw html). Runs before chunking
     # so offset/next_offset page through the FOCUSED content.
-    # M-1: under DHOLE_NEURAL_FOCUS the blocks are scored by the warm local
-    # cross-encoder instead of BM25 (peek only — the load happened at the
-    # smart_fetch entry; a missing scorer falls back to BM25 inside
-    # focus_content). M-2: focus_mode='best' returns only the answer block.
+    # M-1: when the effective choice for THIS call is neural (operator's flag =
+    # permission, options.focus_engine = willingness — see focus.neural_for_call)
+    # the blocks are scored by the warm local cross-encoder instead of BM25
+    # (peek only — the load happened at the smart_fetch entry; a missing scorer
+    # falls back to BM25 inside focus_content). M-2: focus_mode='best' returns
+    # only the answer block.
     focus_q = _FOCUS.get()
     focus_stats: Optional[dict] = None
     if focus_q and result.extracted_type in ("markdown", "text", "article", "structured"):
         try:
             from dhole_mcp.focus import focus_content
             from dhole_mcp.reranker import get_reranker
-            reranker = get_reranker() if _neural_focus_enabled() else None
+            reranker = (get_reranker()
+                        if _neural_for_this_call(_neural_focus_enabled()) else None)
             focus_stats = {}
             full_text = focus_content(
                 full_text, focus_q, reranker=reranker,
@@ -3080,6 +3084,17 @@ _PDF_PASSWORD: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_
 _FOCUS: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_focus", default=None)
 # focus 的形态（M-2）：filter（默认，现有行为）| best（只回打分最高的答案块）。
 _FOCUS_MODE: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_focus_mode", default=None)
+# 本次调用用哪个 focus 打分器："" = 由操作者的 flag 决定（默认，行为与以前逐字节
+# 相同）；"bm25" = 这一页明确要便宜的那条路；"neural" = 明确要语义分（仅在操作者
+# 开了 DHOLE_NEURAL_FOCUS 时被允许，见 _neural_focus_denied）。
+# 这个 var 定义在 focus.py：crawl 也要按同一条规则判定，而 crawl 不能在模块级
+# import server。这里只是别名，好让 reset token 与两个消费者读到同一个状态。
+from dhole_mcp.focus import (
+    FOCUS_ENGINE as _FOCUS_ENGINE,
+    engine_wants_neural as _neural_focus_requested,
+    neural_for_call as _neural_for_this_call,
+    normalize_engine as _normalize_focus_engine,
+)
 # Opt-in: populate ResponseModel.media with the page's image URLs (multimodal).
 _INCLUDE_MEDIA: contextvars.ContextVar[bool] = contextvars.ContextVar("_include_media", default=False)
 _INCLUDE_LINKS: contextvars.ContextVar[bool] = contextvars.ContextVar("_include_links", default=False)
@@ -3517,16 +3532,38 @@ _MULTIMODAL_SF_CLAUSE = (
 
 
 def _neural_focus_enabled() -> bool:
-    """M-1 神经 focus 开关：``DHOLE_NEURAL_FOCUS=1`` 时 focus 用本地
+    """M-1 神经 focus 的**许可**侧：``DHOLE_NEURAL_FOCUS=1`` 才允许 focus 用本地
     cross-encoder 打分（BM25 回退只在打分器**中途失败**时发生；模型缺失是在
     工具入口显式报错的，见 smart_fetch 的闸）。默认关：focus 是所有抓取路径的
-    公共节点，每页 × 每 block 的 CPU 推理延迟不能默认发生（计划第六章坑②）。"""
+    公共节点，每页 × 每 block 的 CPU 推理延迟不能默认发生（计划第六章坑②）。
+
+    意愿侧是按次的 ``options.focus_engine``（见 focus.py 的 FOCUS_ENGINE）——
+    两个侧各说一件事：flag 决定"能不能"，参数决定"这一次要不要"，
+    而"要 bm25"在 flag 开着时也生效（一次便宜的重读不必全局关掉能力）。"""
     return _env_flag("DHOLE_NEURAL_FOCUS")
 
 
 _NEURAL_FOCUS_UNAVAILABLE = (
     "neural_focus_model_missing: DHOLE_NEURAL_FOCUS=1 needs the local reranker "
     "model, which is not downloaded yet. No request was made."
+)
+
+# 意愿 ≠ 许可：按次参数点名要神经分，而操作者没有打开这道能力。
+_NEURAL_FOCUS_NOT_PERMITTED = (
+    "focus_engine_not_permitted: options.focus_engine='neural' asks the local "
+    "cross-encoder to pick the focus blocks, but neural focus is not permitted on "
+    "this server (DHOLE_NEURAL_FOCUS is off). No request was made, and the call "
+    "was not silently downgraded to BM25 either."
+)
+_NEURAL_FOCUS_PERMIT_HOWTO = (
+    "This is a permission, not a preference: neural focus costs ~12.5s of CPU per "
+    "page and needs the ~280MB reranker, so it is switched on once by the operator "
+    "instead of bought call by call. The one-command version is `dhole init --neural`: "
+    "it sets the flag AND downloads the model (a flag without the file only moves the "
+    "error to neural_focus_model_missing). The manual version is `dhole config set "
+    "DHOLE_NEURAL_FOCUS 1`. Both are read per call - no host restart. To answer now: "
+    "re-run without focus_engine, or with focus_engine='bm25' - keyword-overlap "
+    "focus still filters the page."
 )
 
 # M-3：神经分低于这条线 = 落在实测的"明显跑题"带（off-topic ~0.0001，on-topic
@@ -3672,6 +3709,8 @@ def _smart_fetch_request_context(func):
                 options.get("focus_mode")
                 if isinstance(options.get("focus_mode"), str)
                 and options.get("focus_mode") in ("filter", "best") else None)),
+            (_FOCUS_ENGINE, _FOCUS_ENGINE.set(
+                _normalize_focus_engine(options.get("focus_engine")))),
             (_INCLUDE_MEDIA, _INCLUDE_MEDIA.set(bool(options["include_media"]))),
             (_INCLUDE_LINKS, _INCLUDE_LINKS.set(bool(options["include_links"]))),
             (_MAX_LINKS, _MAX_LINKS.set(
@@ -4757,6 +4796,9 @@ _SF_OPTIONS_ALLOWED = frozenset({
     "force_fetcher", "urls",
     # M-2：focus 的形态（filter | best）。与 focus 同走 promoted 通道。
     "focus_mode",
+    # 按次选打分器（bm25 | neural）。同 focus 走 promoted 通道：它是对同一次
+    # focus 的修饰，不是一个独立入口。
+    "focus_engine",
 })
 # Keys the smart_fetch branch reads by name (top-level wins over the bag copy).
 # They are excluded from the forwarded set on purpose: forwarding one as well
@@ -4764,14 +4806,14 @@ _SF_OPTIONS_ALLOWED = frozenset({
 _SF_PROMOTED = frozenset({
     "css_selector", "max_content_chars", "timeout", "pages", "password", "schema",
     "cache_ttl", "offset", "focus", "actions", "extraction_type",
-    "force_fetcher", "urls", "focus_mode",
+    "force_fetcher", "urls", "focus_mode", "focus_engine",
 })
 _SF_OPTIONS_FORWARDED = frozenset(_SF_OPTIONS_ALLOWED - _SF_PROMOTED)
 _SC_OPTIONS = frozenset({
     "max_pages", "max_depth", "path_include", "path_exclude",
     "max_content_chars_per", "max_total_chars", "concurrency",
     "cache_ttl", "force_fetcher", "timeout", "deadline_ms", "sitemap",
-    "search", "ignore_robots", "delay",
+    "search", "ignore_robots", "delay", "focus_engine",
 })
 # `search` lives in options for callers who read the docs that way, but it is
 # promoted to an explicit argument below - forwarding it twice is a TypeError.
@@ -7131,6 +7173,7 @@ class MasterFetchServer:
         password: Annotated[Optional[str], Field(description="PDF only: password for an encrypted PDF.")] = None,
         focus: Annotated[Optional[str], Field(description="Query-focused extraction: pass a query and only the BM25-relevant blocks (paragraphs/headings/tables) are returned, saving context on long pages. Works post-cache, so it never triggers a re-fetch. Re-pass the same focus when paginating with offset. Empty = full page.")] = None,
         focus_mode: Annotated[Optional[str], Field(description="Shape of the focus answer: 'filter' (default) keeps every block past the relevance cut; 'best' returns only the single highest-scoring block plus its heading - 'which part of this page answers the question'. Requires focus.")] = None,
+        focus_engine: Annotated[Optional[str], Field(description="Which scorer runs this focus: 'bm25' (fast, keyword overlap, ~23ms/page) or 'neural' (semantic, ~12.5s of CPU per page, and it needs the operator's DHOLE_NEURAL_FOCUS). Omit = whatever the operator configured. Asking for 'neural' without that permission is refused rather than silently downgraded.")] = None,
         actions: Annotated[Optional[List[Dict[str, Any]]], Field(description="Page interactions run on the stealthy browser AFTER load, BEFORE extraction: [{click:'button.load-more'}, {fill:{selector:'#q', text:'x'}}, {press:'Enter'}, {wait:500}, {scroll:3} or {scroll:{steps:5,selector:'.feed'}}, {wait_selector:'.item'} or {wait_selector:{selector:'.quote', count:40, state:'visible'}}]. Forces the stealthy tier; bypasses cache. Reaches content behind a click/form/infinite scroll: scroll re-reaches the bottom as the page grows instead of assuming one viewport plus a fixed pause is enough.")] = None,
         include_media: Annotated[bool, Field(description="If true, populate the response .media field with up to 20 image URLs found on the page (for multimodal agents). Default false (keeps responses lean).")] = False,
         include_links: Annotated[bool, Field(description="If true, populate the response .links field with the page's outgoing links classified as citations/navigation/external + a primary_source hint. Default false. Use when you want to follow a page's referenced sources in one step.")] = False,
@@ -7193,25 +7236,35 @@ class MasterFetchServer:
             schema = _normalize_schema(schema)
         except (ValueError, SecurityError) as e:
             return _invalid_request_result(url or "", str(e))
-        # M-1 神经 focus（DHOLE_NEURAL_FOCUS，默认关）：flag 开着且本次带 focus
-        # 时，在 async 上下文里把重排模型确保加载一次——focus_content 是同步
-        # peek，加载只能在这里做。模型文件缺失时**显式报错**：不静默下载
-        # （~280MB 的意外下载不是回退，是惊吓），也不静默降回 BM25（把 flag
-        # 打开的意思就是"我要神经分"，静默回退会让神经/BM25 的差异变成不可
-        # 解释的玄学）。bulk 与单 URL 两条路都过这里：bulk 的每个任务经
-        # _apply_chunking 应用 focus。
-        if _FOCUS.get() and _neural_focus_enabled():
-            from dhole_mcp.reranker import ensure_reranker, get_reranker
-            if get_reranker() is None:
-                rer = await ensure_reranker(download=False)
-                if rer is None:
-                    return _invalid_request_result(
-                        url or "", _NEURAL_FOCUS_UNAVAILABLE,
-                        next_action=(
-                            "The reranker model is not downloaded yet. It downloads "
-                            "automatically on the first neural smart_search (one-time, "
-                            "resumable), or select it with `dhole model use bge-zh`. "
-                            "Unset DHOLE_NEURAL_FOCUS to keep plain BM25 focus."))
+        # M-1 神经 focus：许可 = DHOLE_NEURAL_FOCUS（默认关），意愿 = 按次
+        # focus_engine。带 focus 的调用在这里分三种说法：
+        #   点名要神经但没有许可 → 拒绝并说明怎么打开（不静默降级，也不静默下载）
+        #   有许可（且没被 bm25 否决）→ 在 async 上下文里确保模型加载一次：
+        #     focus_content 只做同步 peek，加载只能发生在这里；模型文件缺失时
+        #     **显式报错**，~280MB 的意外下载不是回退，是惊吓
+        #   只要 bm25 → 根本不碰重排器，即使 flag 开着（一次便宜的重读不该为此
+        #     付 12.5s/页，也不该逼人先关全局能力）
+        # bulk 与单 URL 两条路都过这里：bulk 的每个任务经 _apply_chunking 应用 focus。
+        if _FOCUS.get():
+            permitted = _neural_focus_enabled()
+            if _neural_focus_requested(permitted) and not permitted:
+                return _invalid_request_result(
+                    url or "", _NEURAL_FOCUS_NOT_PERMITTED,
+                    next_action=_NEURAL_FOCUS_PERMIT_HOWTO)
+            if _neural_for_this_call(permitted):
+                from dhole_mcp.reranker import ensure_reranker, get_reranker
+                if get_reranker() is None:
+                    rer = await ensure_reranker(download=False)
+                    if rer is None:
+                        return _invalid_request_result(
+                            url or "", _NEURAL_FOCUS_UNAVAILABLE,
+                            next_action=(
+                                "The reranker model is not downloaded yet. It downloads "
+                                "automatically on the first neural smart_search (one-time, "
+                                "resumable), or select it with `dhole model use bge-zh`. "
+                                "For this call only, pass focus_engine='bm25' to use "
+                                "keyword-overlap focus (or turn the flag off with "
+                                "`dhole config unset DHOLE_NEURAL_FOCUS`)."))
 
         # Bulk mode: fetch multiple URLs in parallel
         if urls is not None:
@@ -8940,6 +8993,7 @@ class MasterFetchServer:
         search: Optional[str] = None,
         ignore_robots: bool = False,
         delay: float = 0.0,
+        focus_engine: Optional[str] = None,
     ) -> CrawlResponseModel:
         """Deep-crawl a site: best-first same-domain from `url`, returning each
         page as markdown with content_ok/summary/page_type. discover_only=true
@@ -8959,47 +9013,73 @@ class MasterFetchServer:
             concurrency caps in-flight requests, which is not the same thing as
             how often one server is hit; a host's robots.txt Crawl-delay raises
             this per host, and the summary names the interval that was used.
+        focus_engine: which scorer runs `focus` ('bm25' | 'neural'). Same rule as
+            smart_fetch: the operator's flag is the permission, this is the
+            willingness for this crawl, and 'bm25' is the cheap path even when
+            the flag is on. Asking for 'neural' without the permission is refused
+            (12.5s of CPU per page multiplied by max_pages is not a silent choice).
         """
-        # M-1 闸：flag 开着且带 focus 时模型必须在场（缺模型显式报错，见
-        # smart_fetch 同款注释）；爬取中途（sync 循环里）没有 async 入口可加载。
+        # M-1 闸：与 smart_fetch 同一套三条规则、同一份文案（许可 = flag，意愿 =
+        # focus_engine）。爬取比抓取更需要这句实话：一页 12.5s 的 CPU 推理会乘上
+        # max_pages，所以"这一次只要 bm25"在这里同样是一等选项，而不是要操作者
+        # 先把全局能力关掉。模型必须在场（缺模型显式报错，不静默下载）：爬取中途
+        # 是同步循环，没有 async 入口可加载。
         from dhole_mcp.crawl import CrawlResponseModel as _CRM
-        if focus and isinstance(focus, str) and focus.strip() \
-                and _neural_focus_enabled():
-            from dhole_mcp.reranker import ensure_reranker, get_reranker
-            if get_reranker() is None:
-                rer = await ensure_reranker(download=False)
-                if rer is None:
-                    return _CRM(start_url=url, pages=[],
-                                error=_NEURAL_FOCUS_UNAVAILABLE,
-                                next_action=(
-                                    "The reranker model is not downloaded yet. It downloads "
-                                    "automatically on the first neural smart_search (one-time, "
-                                    "resumable), or select it with `dhole model use bge-zh`. "
-                                    "Unset DHOLE_NEURAL_FOCUS to keep plain BM25 focus."))
+        # 意愿先落到 contextvar，闸和 crawl 里的两个消费点读的才是同一个值。
+        # （先判闸、后进 try 里 set 的写法第一次跑就自己招了：闸读到上一次调用
+        # 留下的 ""，focus_engine 既没被拒绝也没买到 BM25 豁免——参数成了装饰。）
+        # reset 放在最外层：两个早退的错误分支也不会把这次的意愿漏给下次调用。
+        token = _FOCUS_ENGINE.set(_normalize_focus_engine(focus_engine))
         try:
-            # Lazy import to break circular dependency (crawl.py imports
-            # ResponseModel from server.py; server.py imports smart_crawl
-            # from crawl.py). Function-level import avoids import-time cycle.
-            from dhole_mcp.crawl import smart_crawl as _smart_crawl, CrawlResponseModel as _CRM
-            return await _smart_crawl(
-                self, url, max_pages=max_pages, max_depth=max_depth,
-                path_include=path_include, path_exclude=path_exclude,
-                discover_only=discover_only, focus=focus, crawl_urls=crawl_urls,
-                max_content_chars_per=max_content_chars_per,
-                max_total_chars=max_total_chars, concurrency=concurrency,
-                cache_ttl=cache_ttl,
-                force_fetcher=force_fetcher, timeout=timeout,
-                deadline_ms=deadline_ms, sitemap=sitemap, search=search,
-                ignore_robots=ignore_robots, delay=delay,
-            )
-        except Exception as e:
-            from dhole_mcp.crawl import CrawlResponseModel as _CRM
-            logger.exception("smart_crawl raised")
-            return _CRM(start_url=url, pages=[],
-                        error=redact_api_key(str(e)[:200]),
-                        next_action=("Internal error, not a blocked site: retry the same "
-                                     "call once, then with only url=. The traceback is in "
-                                     "the server log."))
+            if isinstance(focus, str) and focus.strip():
+                permitted = _neural_focus_enabled()
+                if _neural_focus_requested(permitted) and not permitted:
+                    return _CRM(start_url=url, pages=[],
+                                error=_NEURAL_FOCUS_NOT_PERMITTED,
+                                next_action=_NEURAL_FOCUS_PERMIT_HOWTO)
+                if _neural_for_this_call(permitted):
+                    from dhole_mcp.reranker import ensure_reranker, get_reranker
+                    if get_reranker() is None:
+                        rer = await ensure_reranker(download=False)
+                        if rer is None:
+                            return _CRM(start_url=url, pages=[],
+                                        error=_NEURAL_FOCUS_UNAVAILABLE,
+                                        next_action=(
+                                            "The reranker model is not downloaded yet. It downloads "
+                                            "automatically on the first neural smart_search (one-time, "
+                                            "resumable), or select it with `dhole model use bge-zh`. "
+                                            "For this crawl only, pass focus_engine='bm25' to use "
+                                            "keyword-overlap focus (or turn the flag off with "
+                                            "`dhole config unset DHOLE_NEURAL_FOCUS`)."))
+            try:
+                # Lazy import to break circular dependency (crawl.py imports
+                # ResponseModel from server.py; server.py imports smart_crawl
+                # from crawl.py). Function-level import avoids import-time cycle.
+                # 本次的打分器意愿要活到 crawl 里那两个消费点（_classify_and_extract /
+                # _page_relevant），但它们读的是 focus.FOCUS_ENGINE 而不是参数——爬取的
+                # 每页调用链太长，逐层加参数会把签名变成噪音。crawl 内部对 smart_fetch
+                # 的调用自带 token，进出各还原一次，互不污染。
+                from dhole_mcp.crawl import smart_crawl as _smart_crawl
+                return await _smart_crawl(
+                    self, url, max_pages=max_pages, max_depth=max_depth,
+                    path_include=path_include, path_exclude=path_exclude,
+                    discover_only=discover_only, focus=focus, crawl_urls=crawl_urls,
+                    max_content_chars_per=max_content_chars_per,
+                    max_total_chars=max_total_chars, concurrency=concurrency,
+                    cache_ttl=cache_ttl,
+                    force_fetcher=force_fetcher, timeout=timeout,
+                    deadline_ms=deadline_ms, sitemap=sitemap, search=search,
+                    ignore_robots=ignore_robots, delay=delay,
+                )
+            except Exception as e:
+                logger.exception("smart_crawl raised")
+                return _CRM(start_url=url, pages=[],
+                            error=redact_api_key(str(e)[:200]),
+                            next_action=("Internal error, not a blocked site: retry the same "
+                                         "call once, then with only url=. The traceback is in "
+                                         "the server log."))
+        finally:
+            _FOCUS_ENGINE.reset(token)
 
     # ─── Serve ─────────────────────────────────────────────────────
 
@@ -9062,9 +9142,10 @@ class MasterFetchServer:
                     "password": {"type": "string", "description": "PDF only: password for an encrypted PDF."},
                     "focus": {"type": "string", "description": "Return only blocks matching this query - the big token saver on long pages. Applied after the cache, so it does not re-fetch. Re-pass the same focus when paginating. Scored with BM25, or with a slower local cross-encoder if the operator enabled it - that path costs ~12.5s of CPU PER PAGE, so budget timeout for bulk calls."},
                     "focus_mode": {"type": "string", "enum": ["filter", "best"], "description": "Shape of the focus answer. 'filter' (default) keeps every block past the relevance cut; 'best' returns only the single highest-scoring block plus its heading - 'which part of this page answers the question'. Requires focus."},
+                    "focus_engine": {"type": "string", "enum": ["bm25", "neural"], "description": "Which scorer runs focus: 'bm25' (keyword overlap) or 'neural' (semantic, needs the operator's DHOLE_NEURAL_FOCUS - without it the call is refused, not downgraded). Omit = the operator's setting; 'bm25' is honored even with the flag on."},
                     "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "Interactions on the stealthy browser after load, before extraction (forces stealthy, bypasses cache). ONE action key per object: [{scroll:3},{wait:1000}], not {scroll:3,wait:1000}. Keys: click, fill, press, wait, scroll, wait_selector, snapshot, screenshot, submit - each takes a CSS selector or a snapshot index; {snapshot:true} returns the numbered interactive-element list (index/tag/role/name) to take indices from, and expect:'name' verifies an element's visible name before acting, so a stale index fails loudly instead of clicking the wrong thing.\nsubmit is the explicit irreversible step: without confirm:true it PAUSES (a pending_approval receipt, nothing submitted) until the user has approved that exact submission. The full shape of each key, the lazy-feed and captcha discipline: dhole_doc(topic='behavior', section='Page interaction')."},
                     "schema": {"type": "object", "description": "{properties: {...}} (a JSON string is accepted): CSS-driven structured extraction, returned instead of markdown. Only these keys are read - selector, attribute, type, properties, items; any other JSON-Schema keyword is accepted and does nothing. Each property may carry 'selector' (CSS) and/or 'attribute' (that attribute's value instead of the text). Without \"type\" a property returns the FIRST match; \"type\": \"array\" returns all of them. A property with its OWN 'properties' (or items.properties) plus a selector extracts one record PER MATCHED ELEMENT, child selectors evaluated inside it - that keeps a repeated list grouped instead of flattened. Up to 200 records per field; a nested \"type\": \"array\" must name the container it iterates or the call is rejected. The rule and a worked example: dhole_doc(topic='behavior', section='Structured extraction').", "additionalProperties": True},
-                    "options": {"type": "object", "description": "Every parameter of this tool except url may go here. The keys: extraction_type, css_selector, max_content_chars, timeout, cache_ttl, force_fetcher, offset, pages, password, focus, focus_mode, schema, actions, urls, include_links, max_links, include_media, main_content_only, use_trafilatura, method, body, content_type, auth, cookies, extra_headers, proxy, useragent, session_id, check_login, cdp_url, ignore_robots, allow_private, if_modified_since, if_none_match, wait, network_idle, headless, real_chrome, hide_canvas, block_webrtc, solve_cloudflare.\nFive of them carry a trap:\nmethod: a non-GET is sent ONCE - never retried, cached, browser-escalated or archive-answered, because the previous call may already be committed and re-sending writes twice. body cap 256KB; HEAD asks for status+size+type with no body.\nauth / cookies / session_id: credentials go only to the origin you named, and a redirect to another domain strips them. Values are never echoed back, and a credentialed body is cached per credential rather than publicly.\nif_none_match / if_modified_since: conditional GET on the HTTP tier only; a 304 is SUCCESS (not_modified=true, empty body) - do not escalate it to the browser to 'retry'.\nallow_private: true = loopback only, or a host list. Cloud metadata endpoints are never allowed under any setting.\ncdp_url: runs the fetch in the user's own Chrome; needs DHOLE_CDP_ATTACH=1, fenced by DHOLE_CDP_HOSTS, and the answer says cdp_attached=true.\nheadless, useragent, extra_headers, network_idle, real_chrome, hide_canvas, block_webrtc, solve_cloudflare, use_trafilatura, main_content_only are fingerprint and extraction internals, already tuned - overriding them usually makes a site detect you, so leave them unset unless something names one. What every key does and its range: dhole_doc(topic='behavior'). Placement with counterexamples: dhole_doc(topic='call').", "additionalProperties": True},
+                    "options": {"type": "object", "description": "Every parameter of this tool except url may go here. The keys: extraction_type, css_selector, max_content_chars, timeout, cache_ttl, force_fetcher, offset, pages, password, focus, focus_mode, focus_engine, schema, actions, urls, include_links, max_links, include_media, main_content_only, use_trafilatura, method, body, content_type, auth, cookies, extra_headers, proxy, useragent, session_id, check_login, cdp_url, ignore_robots, allow_private, if_modified_since, if_none_match, wait, network_idle, headless, real_chrome, hide_canvas, block_webrtc, solve_cloudflare.\nFive of them carry a trap:\nmethod: a non-GET is sent ONCE - never retried, cached, browser-escalated or archive-answered, because the previous call may already be committed and re-sending writes twice. body cap 256KB; HEAD asks for status+size+type with no body.\nauth / cookies / session_id: credentials go only to the origin you named, and a redirect to another domain strips them. Values are never echoed back, and a credentialed body is cached per credential rather than publicly.\nif_none_match / if_modified_since: conditional GET on the HTTP tier only; a 304 is SUCCESS (not_modified=true, empty body) - do not escalate it to the browser to 'retry'.\nallow_private: true = loopback only, or a host list. Cloud metadata endpoints are never allowed under any setting.\ncdp_url: runs the fetch in the user's own Chrome; needs DHOLE_CDP_ATTACH=1, fenced by DHOLE_CDP_HOSTS, and the answer says cdp_attached=true.\nheadless, useragent, extra_headers, network_idle, real_chrome, hide_canvas, block_webrtc, solve_cloudflare, use_trafilatura, main_content_only are fingerprint and extraction internals, already tuned - overriding them usually makes a site detect you, so leave them unset unless something names one. What every key does and its range: dhole_doc(topic='behavior'). Placement with counterexamples: dhole_doc(topic='call').", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -9080,7 +9161,7 @@ class MasterFetchServer:
                     "focus": {"type": "string", "description": "Query: crawl the links relevant to this and focus-filter each page."},
                     "crawl_urls": {"type": "array", "items": {"type": "string"}, "description": "Chosen subset of URLs to fetch (no re-discovery). Use after sitemap=true or discover_only=true."},
                     "search": {"type": "string", "description": "Filter discovered/crawled URLs by keyword (URL path + title). Use with discover_only=true."},
-                    "options": {"type": "object", "description": "sitemap: true | 'auto' | false (default) - where the URL map comes from.\nmax_pages: 1-100 (default 10). max_depth: 0-5 (default 2). concurrency: 1-5 (default 3) pages in flight.\npath_include / path_exclude: keep or drop a path subtree - '/docs' keeps /docs and everything under it, NOT /docs-old.\nmax_content_chars_per: per-page content cap (8000). max_total_chars: whole-crawl budget.\ncache_ttl: seconds (3600; 0 = fresh). force_fetcher: 'http' | 'stealthy'. timeout: ms (30000). deadline_ms: hard stop (120000).\nignore_robots: skip the robots.txt check and the disallowed-URL skip.\ndelay: 0-60 seconds between requests to the SAME host; a site's robots.txt Crawl-delay can raise it, never lower it. What each knob does and what the counters in the reply mean: dhole_doc(topic='behavior', section='smart_crawl').", "additionalProperties": True},
+                    "options": {"type": "object", "description": "sitemap: true | 'auto' | false (default) - where the URL map comes from.\nmax_pages: 1-100 (default 10). max_depth: 0-5 (default 2). concurrency: 1-5 (default 3) pages in flight.\npath_include / path_exclude: keep or drop a path subtree - '/docs' keeps /docs and everything under it, NOT /docs-old.\nmax_content_chars_per: per-page content cap (8000). max_total_chars: whole-crawl budget.\ncache_ttl: seconds (3600; 0 = fresh). force_fetcher: 'http' | 'stealthy'. timeout: ms (30000). deadline_ms: hard stop (120000).\nignore_robots: skip the robots.txt check and the disallowed-URL skip.\ndelay: 0-60 seconds between requests to the SAME host; a site's robots.txt Crawl-delay can raise it, never lower it.\nfocus_engine: 'bm25' | 'neural' - which scorer runs focus here. Neural costs ~12.5s of CPU per page TIMES max_pages and needs the operator's DHOLE_NEURAL_FOCUS; asking without it is refused, not downgraded. Omit = the operator's setting, and 'bm25' is honored even with the flag on.\nWhat each knob does and what the counters in the reply mean: dhole_doc(topic='behavior', section='smart_crawl').", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},

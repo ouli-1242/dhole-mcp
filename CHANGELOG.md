@@ -12,6 +12,7 @@
 
 ### 新增
 
+- **`options.focus_engine` —— 语义 focus 从"全局能力"变成"许可 + 这一次要不要"**：取值 `'bm25'` / `'neural'`，`smart_fetch` 与 `smart_crawl` 都收。规则三条：不传 = 完全跟随 `DHOLE_NEURAL_FOCUS`（与以前逐字节相同）；`'bm25'` 在 flag **开着**时也生效——过去想省这一次的 CPU 只能先把机器级的能力关掉；`'neural'` 在没有许可时是**拒绝**（`focus_engine_not_permitted`，一个请求都不发）而不是悄悄降级，因为静默回退会把"神经分与 BM25 的差别"变成不可解释的玄学。爬取尤其需要这句话：每页约 12.5 秒的推理会乘上 `max_pages`。`neural_focus_model_missing` 那条老错误跟着改口：先给"这一次传 `focus_engine='bm25'` 就能继续"，再给下载路径。`dhole init --neural` 是打开它的**一条命令**——写 flag **并且**把模型装上（下载只在 `--yes` 后发生，与 Chromium 同一条纪律：几百 MB 不藏在没人重读的命令背后）；这条 flag 是按次读的，所以那句话是"下一次调用生效"，不再是要你重启宿主
 - **`dhole init` 多了三件事**：`--tasks` / `--vault` 把默认关的工具组打开在 `~/.dhole/config.json` 里（W11 的文件门），不再要求编辑宿主的 MCP JSON——env 块已经设过的组**不写文件**，因为那是操作者已经做过的决定；落盘后照实说明"这是 import 期读的旋钮，重启才注册"。`--probe` 跑一次真实搜索 + 真实抓取，问的是运行中的代码而不是静态体检（从这里搜得到吗、这个链接抓得开吗），每行点名它碰了哪个目标，空结果报成事实并给下一步而不是"安装坏了"。默认关，不发真实流量。未知 flag 现在返回 2 并列出可用的，不再静默忽略
 - **`dhole --doctor` 加两段**：
   - **配置审计**：只列本机 `os.environ` 里"已设"的 DHOLE_* 变量，按 scenario 分组、显示生效值 / 读取时机 / 合法性；secret 类永远显示 `set (len=N)` 绝不回显值；`read_at="import"` 的行带 `restart the host to change`；非法值走 `✗` 计入 failures 并附 `fix: set X to an integer in 500..200000, or unset it` 的可复制修法。此前 `_env_int("abc", 40000)` 静默回落、`_env_flag("yes-please")` 悄悄判 ON，没有任何一条输出告诉你设置没生效——现在这一条就是"我设了但没生效"的唯一可见点
@@ -31,9 +32,11 @@
 - **`smart_fetch` 的连接期文本改成「路由 + 陷阱 + 键名清单」**：`actions` 从 1,290 字符降到 640、`schema` 858→700、`options` 2,309→约 1,500，逐键解释移进 `dhole_doc(topic='behavior')`。常驻层留下的都是**会导致错误结论或不可逆动作**的那几条：非 GET 只发一次（重发即写两遍）、凭据不跟跨源重定向走、304 是成功不是失败、云元数据端点任何设置都不放行、`submit` 不带 `confirm` 会暂停。同时把 20 个原先在 `options` 清单里没有名字的键全部点名（`if_none_match`、`include_media`、`network_idle`、`real_chrome`、`hide_canvas`、`block_webrtc`、`solve_cloudflare`、`use_trafilatura`、`main_content_only` 等），并按 `_SF_OPTIONS_ALLOWED` 加了反查守卫：以后新增的键若在 wire 没点名、或在语料没解释，测试直接红。净效果是默认连接期 22,948 → 23,654 字符（多注册 `dhole_doc`，+706）
 - **17 处 `os.environ.get("DHOLE_*")` 直读改走 `env_registry.value_of()`**（browser / reranker / search / search_metasearch / search_proxy / security / updater / server）：语义一字未动（env 优先、默认值与钳制区间不变），但没有这一步，文件门就只对一半旋钮成立 —— 两条长得一模一样的路只有一条管用，正是本批次要消灭的那类故障。由 `tests/test_config_store.py` 扫描源码钉住：新写一处直读会直接红，注释里的例子不算（守卫先跳过 `#` 开头的行）。
 - **`dhole --help` 的能力清单与 CLI 表格补上 `dhole config`**；`README`「配置」一节从「改 env 块 + 重启」改成两条门并列，本地数据表新增 `config.json` 一行并写明 **secret 类变量落同样盘**（不想让密钥进文件就继续用 env 块）。
+- **默认连接期 23,421 → 24,030 字符**（+609，按实测的 4.16 字符/token 约 +146 token）：`smart_fetch` 与 `smart_crawl` 各多一个 `focus_engine` 的说明。本批次的原则一直是"常驻层只留会让人得出错误结论或触发动作的句子"，这里留下的是**拒绝 vs 静默降级**那一条（它会改变 agent 的下一步）；毫秒数、模型名与打开方式移进 `dhole_doc(topic='behavior')` 与错误文本本身
 
 ### 修复
 
+- **README 的连接期字符数已经漂了 233**：README 写 23,654，而把 W15 的改动退回 HEAD 实测是 23,421。这正是 `tests/tool_payload_measure.py` 的 docstring 预言过的那一种失效——某处描述变短了、没有人数，而仓库有意不设尺寸断言（"刻舟求剑"），所以数字不会自己变红。现在 README 与 CHANGELOG 都对齐到重新量出来的数
 - **配置不再静默降级**：`_env_int` 与 `_env_flag`（以及 sessions / robots / security / crawl / actions / search_metasearch 里的 12+ 处独立读者）统一走 `env_registry` 的类型化 helper；非法值进入进程内共享告警列表，`dhole --doctor` 打印。此前 `DHOLE_COOKIE_TTL_S=abc`、`DHOLE_SEARCH_DEADLINE=not-a-number`、`DHOLE_ENGINE_HEARTBEAT=soon` 全都是无声回落
 - **`README.md` 的"零配置即可用"改口**：改成"默认零配置就能跑通最常见的路径" + 明写 Clash / sing-box TUN + fake-ip 例外需要 `DHOLE_SSRF_DNS_RECHECK=0`（`dhole doctor` 会识别这台机器是不是这种环境）；安装段把两条命令（pip + playwright）都列出并说明"两步都跑完浏览器层才可用"
 - **`configuration.md` 补齐**：`DHOLE_UPDATE_PACKAGE` / `DHOLE_UPDATE_INDEX_URL` 之前完全没在 142 行的文档里出现（W1 的文档覆盖测试暴露的），补进"data location / privacy / diagnostics"；`_ZONE` / `_COUNTRY` 简写展开成完整 `DHOLE_BRIGHTDATA_ZONE` / `DHOLE_BRIGHTDATA_COUNTRY` 名并标 import 时机；CLI 表格加 `dhole doctor` 与 `dhole init` 两行

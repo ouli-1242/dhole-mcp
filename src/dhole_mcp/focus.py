@@ -30,12 +30,60 @@ no stemming and no dictionary, so a CJK query matches on character bigrams.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import math
 import re
 from typing import Optional
 
 logger = logging.getLogger("dhole-mcp.focus")
+
+# ─── 本次调用要哪个 focus 打分器（按次参数 focus_engine，W15）───────────────
+# 为什么这个状态住在 focus.py：读它的是两个消费者 —— server 的
+# ``_apply_chunking``（smart_fetch 与 bulk）和 crawl 的 ``_classify_and_extract``
+# /``_page_relevant``，而 crawl 不能在模块级 import server（循环）。focus.py 只
+# 依赖标准库，两边都能 import；contextvar 对 ``asyncio.to_thread`` 也是透传的，
+# 所以爬取线程读到的是发起那次调用的值。
+#
+# 语义：**操作者的 flag 是许可，按次参数是意愿**。
+#   ""       跟随 DHOLE_NEURAL_FOCUS —— 与以前逐字节相同（不传就是这样）
+#   "bm25"   这一页明确走便宜的路（~23ms/页），即使 flag 开着
+#   "neural" 明确要语义分（~12.5s/页），但意愿不能自己造出许可：flag 关着时
+#            在工具入口就被拒绝并说明怎么打开，不是静默降级
+FOCUS_ENGINE: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "dhole.focus_engine", default="")
+ENGINES = ("bm25", "neural")
+
+
+def normalize_engine(value: object) -> str:
+    """把客户端给的东西读成 'bm25' / 'neural' / ''。
+
+    不可识别的值取 ''（跟随 flag），和 ``focus_mode`` 同款宽容：schema 里有
+    enum，拼错的值不该让一次真抓取失败——但它也不会被当成"我要求神经分"。
+    """
+    if isinstance(value, str):
+        candidate = value.strip().lower()
+        if candidate in ENGINES:
+            return candidate
+    return ""
+
+
+def engine_wants_neural(flag_on: bool) -> bool:
+    """意愿侧：本次调用**要求**语义打分吗（不看操作者是否许可）。"""
+    choice = FOCUS_ENGINE.get()
+    if choice:
+        return choice == "neural"
+    return flag_on
+
+
+def neural_for_call(flag_on: bool) -> bool:
+    """语义打分真的会跑 = 要求 ∧ 许可。
+
+    ``flag_on`` 由调用方读自己的开关（server 与 crawl 各有一份，crawl 那份走
+    env_registry 以留下 ``--doctor`` 能报的拼写警告），所以两处判定共用一条规则，
+    而 monkeypatch 那份开关仍然有效。
+    """
+    return engine_wants_neural(flag_on) and flag_on
 
 # A "word run": letters/digits of any script, split at underscores and
 # punctuation. Unicode-aware (\w) rather than [a-z0-9], so Cyrillic / Greek /

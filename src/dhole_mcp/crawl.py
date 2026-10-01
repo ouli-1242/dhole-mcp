@@ -88,6 +88,18 @@ def _neural_focus_enabled() -> bool:
     return env_registry.read_flag("DHOLE_NEURAL_FOCUS")
 
 
+def _neural_for_this_call() -> bool:
+    """这一次爬取真的用语义打分吗 = 许可（``DHOLE_NEURAL_FOCUS``）∧ 意愿
+    （按次 ``focus_engine``，住在 focus.py 的 FOCUS_ENGINE，与 server 同一套规则）。
+
+    意愿的默认值是""（跟随 flag），所以不传参数时行为与从前逐字节相同。
+    ``"bm25"`` 在 flag 开着时也说"这次不要"：爬取把每页 ~12.5s 的推理乘上
+    max_pages，一次便宜的复查不该逼人先关掉全局能力。
+    """
+    from dhole_mcp.focus import neural_for_call
+    return neural_for_call(_neural_focus_enabled())
+
+
 def _page_relevant(md: str, goal: str) -> Optional[bool]:
     """页面摘要 vs crawl 目标的 cross-encoder 判定。
 
@@ -365,7 +377,7 @@ def _classify_and_extract(html: str, url: str, start_url: str, focus: Optional[s
         if focus:
             try:
                 from dhole_mcp.reranker import get_reranker
-                rer = get_reranker() if _neural_focus_enabled() else None
+                rer = get_reranker() if _neural_for_this_call() else None
                 md = focus_content(md, focus, reranker=rer)
             except Exception:
                 pass
@@ -1214,12 +1226,12 @@ async def smart_crawl(
                 # because "which of these URLs are dead" is a real answer.
                 content_ok = False
 
-            # M-2 爬取相关性过滤（DHOLE_NEURAL_FOCUS=1 + focus=）：页面摘要与
+            # M-2 爬取相关性过滤（神经 focus 许可 + 意愿 + focus=）：页面摘要与
             # crawl 目标做 cross-encoder 打分，落在实测跑题带（< 0.03）的页面
             # 整页丢弃——爬 100 页可能只 30 相关，省掉的正是这些页的 token。
             # 用户点名的 URL（depth 0）永不丢；过滤不可用（模型缺失/打分失败）
             # 时 fail open 保留页面——宁多给一页，不错杀一页。
-            if (content_md and focus and depth > 0 and _neural_focus_enabled()):
+            if (content_md and focus and depth > 0 and _neural_for_this_call()):
                 if _page_relevant(content_md, focus) is False:
                     focus_dropped += 1
                     continue

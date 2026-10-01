@@ -285,3 +285,60 @@ class TestTheLiveProbe:
         out = capsys.readouterr().out
         assert "engines probe" in out, "空池要给出下一步，不是只报 0 结果"
         assert "network fact" in out
+
+class TestNeuralFlagAndItsWeights:
+    """--neural 一次把开关和重量都装上：写了 flag 却没有模型，得到的只是每次
+    调用一句 neural_focus_model_missing —— 那不是"打开了能力"，那是另一个错误。
+
+    下载与 Chromium 同一条纪律：只在 --yes 后面发生。几百 MB 藏在一条没人会
+    重读的命令背后，是惊吓而不是回退。
+    """
+
+    @pytest.fixture
+    def stub_reranker(self, monkeypatch):
+        state = {"present": False, "downloaded": 0}
+
+        monkeypatch.setattr("dhole_mcp.reranker.model_present",
+                            lambda: state["present"])
+
+        async def ensure(*a, **kw):
+            state["downloaded"] += 1
+            return object() if state["present"] or kw.get("download") else None
+        monkeypatch.setattr("dhole_mcp.reranker.ensure_reranker", ensure)
+        return state
+
+    def test_dry_run_writes_nothing_and_downloads_nothing(self, tmp_home, stub_reranker, capsys):
+        from dhole_mcp import env_registry as er
+        assert init_cmd.run_init(["--neural"]) == 0
+        assert er.file_entries() == {}
+        assert stub_reranker["downloaded"] == 0, "dry-run 不许动几百 MB"
+        out = capsys.readouterr().out
+        assert "DHOLE_NEURAL_FOCUS" in out and "dry-run" in out
+
+    def test_yes_enables_the_flag_without_a_restart_note(self, tmp_home, stub_reranker, capsys):
+        """这条 flag 是**按次**读的，所以"重启宿主"的说法在这里是假的。"""
+        from dhole_mcp import env_registry as er
+        assert init_cmd.run_init(["--neural", "--yes"]) == 0
+        assert er.file_entries() == {"DHOLE_NEURAL_FOCUS": "1"}
+        assert stub_reranker["downloaded"] == 1
+        out = capsys.readouterr().out
+        assert "next call" in out
+        assert "reranker ready" in out
+
+    def test_an_already_downloaded_model_is_not_fetched_again(self, tmp_home, stub_reranker, capsys):
+        stub_reranker["present"] = True
+        assert init_cmd.run_init(["--neural", "--yes"]) == 0
+        assert stub_reranker["downloaded"] == 0
+        assert "already downloaded" in capsys.readouterr().out
+
+    def test_a_failed_download_is_reported_not_raised(self, tmp_home, monkeypatch, capsys):
+        from dhole_mcp import env_registry as er
+
+        async def broken(*a, **kw):
+            raise ConnectionError("no route to host")
+        monkeypatch.setattr("dhole_mcp.reranker.model_present", lambda: False)
+        monkeypatch.setattr("dhole_mcp.reranker.ensure_reranker", broken)
+        assert init_cmd.run_init(["--neural", "--yes"]) == 0
+        assert "download failed" in capsys.readouterr().out
+        # flag 照样写下：模型会在下一次神经搜索重试，用户不必重跑整条 init
+        assert er.file_entries() == {"DHOLE_NEURAL_FOCUS": "1"}

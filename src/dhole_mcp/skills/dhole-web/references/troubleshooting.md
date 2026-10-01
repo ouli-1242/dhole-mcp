@@ -97,7 +97,8 @@ Attach-specific failures:
 
 ### Focus behaves differently than expected
 
-- `neural_focus_model_missing` — `DHOLE_NEURAL_FOCUS=1` is set but the reranker model isn't downloaded; no request was made. Either the user unsets the flag (plain BM25 focus) or downloads once: any neural `smart_search`, or `dhole model use bge-zh`
+- `neural_focus_model_missing` — `DHOLE_NEURAL_FOCUS=1` is set but the reranker model isn't downloaded; no request was made. For this call pass `focus_engine='bm25'` (plain keyword focus, no model), or have the user download once: `dhole init --neural`, any neural `smart_search`, or `dhole model use bge-zh`
+- `focus_engine_not_permitted` — `options.focus_engine='neural'` was asked on a server whose operator never enabled neural focus; no request was sent, and nothing was quietly downgraded. The permission is the user's to grant (`dhole init --neural` also fetches the model the flag needs); meanwhile re-run with `'bm25'` or without the parameter
 - A weak-hit note in `next_action` ("best block scored below the intent floor") — the fetch succeeded but the page likely doesn't answer the focus query; `content_ok` stays true by design. Pivot: search for a better source instead of re-reading this page
 
 ## Local services

@@ -94,10 +94,16 @@ Rejections list the keys the tool actually accepts — follow the error.
 ]}}
 ```
 
-**Answer located to one paragraph** (`focus_mode="best"` returns the single highest-scoring block plus its heading instead of a block list; picking is semantic with `DHOLE_NEURAL_FOCUS=1`, BM25 otherwise):
+**Answer located to one paragraph** (`focus_mode="best"` returns the single highest-scoring block plus its heading instead of a block list; picking is semantic when the operator enabled `DHOLE_NEURAL_FOCUS`, BM25 otherwise):
 ```json
 {"url": "https://docs.example.com/guide", "options": {"focus": "retry policy", "focus_mode": "best"}}
 ```
+
+**Choosing the focus scorer for one call** (`focus_engine` — the flag is the operator's permission, this is this call's willingness):
+```json
+{"url": "https://docs.example.com/guide", "options": {"focus": "retry policy", "focus_engine": "bm25"}}
+```
+`"bm25"` is honored even with `DHOLE_NEURAL_FOCUS=1` on, so a cheap re-read does not require turning a machine-wide capability off. `"neural"` on a server without that permission is **refused** (`focus_engine_not_permitted`) instead of silently running BM25 — say so and offer `dhole init --neural` as the user's decision. Same key works in `smart_crawl`'s options, where it matters more: the semantic path costs ~12.5s of CPU per page times `max_pages`.
 
 **Structured extraction** (repeated records REQUIRE a "container selector + sub-schema": sub-selectors evaluate inside each container, one record per container; a bare top-level selector returns a page-wide union with no record attribution):
 ```json

@@ -76,6 +76,7 @@ VALUES: dict[str, object] = {
     "if_none_match": "probe-etag",
     "focus": "topic",
     "focus_mode": "best",
+    "focus_engine": "bm25",
     "actions": [{"wait": 1}],
     "cache_ttl": 300,
     # Probes that a dropped value would still pass are no probe: an

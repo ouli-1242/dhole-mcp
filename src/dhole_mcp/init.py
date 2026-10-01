@@ -291,6 +291,50 @@ def _run_probe(ui) -> None:
                         "`dhole --doctor` above checks the install itself"))
 
 
+def _reranker_model(ui, yes: bool) -> None:
+    """The reranker that neural search and neural focus share.
+
+    Downloaded only under ``--yes``, for the same reason Chromium is: a few
+    hundred MB fetched behind a command nobody re-reads is the thing the design
+    notes call a 惊吓, not a fallback. Writing ``DHOLE_NEURAL_FOCUS=1`` without
+    the file present would leave the user holding a switch whose every call is
+    an error naming a model they have never seen, so the flag and the weight
+    belong to one command.
+    """
+    from dhole_mcp import reranker as _rr
+
+    model = _rr.active_model()
+    try:
+        present = _rr.model_present()
+    except Exception:  # noqa: BLE001 - a missing/broken state dir is "not present"
+        present = False
+    if present:
+        print("  " + ui.ok(f"reranker already downloaded ({model.name})"))
+        return
+    approx_mb = max(1, int(model.approx_bytes) // 1_000_000)
+    if not yes:
+        print("  " + ui.dim(f"reranker {_rr.DEFAULT_MODEL} missing; dry-run: would download "
+                            f"(~{approx_mb}MB, resumable) into ")
+              + ui.cmd(str(_rr.active_model_dir()))
+              + ui.dim(" (add --yes)"))
+        return
+    print("  " + ui.cmd(f"downloading reranker {model.name} (~{approx_mb}MB, resumable)")
+          + " ...")
+    import asyncio
+    try:
+        reranker = asyncio.run(_rr.ensure_reranker(download=True))
+    except Exception as exc:  # noqa: BLE001 - a failed fetch is reported, not raised
+        print("  " + ui.warn(f"reranker download failed: {type(exc).__name__}: {exc}")
+              + ui.dim("  -> it retries on the next neural search; "
+                       "DHOLE_NEURAL_FOCUS stays off until it lands"))
+        return
+    if reranker is None:
+        print("  " + ui.warn("reranker could not be loaded after the download - "
+                             "check `dhole --doctor` output below"))
+    else:
+        print("  " + ui.ok(f"reranker ready ({model.name})"))
+
+
 def run_init(argv: list[str]) -> int:
     """`dhole init [flags]`. Returns a shell exit code.
 
@@ -299,8 +343,9 @@ def run_init(argv: list[str]) -> int:
       2. Verify the extras are installed (W7 made default = full, so this
          is a `python -c "import patchright"` check, not a pip call).
       3. Install the Chromium binary via playwright if missing.
-      3.5 With --tasks / --vault, enable the opt-in tool groups through
-          ~/.dhole/config.json (the file door from W11 - no host JSON edit).
+      3.5 With --tasks / --vault / --neural, enable the gated capabilities
+          through ~/.dhole/config.json (the file door from W11 - no host JSON
+          edit). --neural additionally fetches the reranker the flag needs.
       4. Detect installed MCP clients.
       5. Print the planned JSON (dry-run default).
       6. If ``--yes``, back up + write each config.
@@ -312,7 +357,8 @@ def run_init(argv: list[str]) -> int:
     """
     yes = "--yes" in argv or "-y" in argv
     probe = "--probe" in argv
-    want = {"--tasks": "DHOLE_TASKS", "--vault": "DHOLE_VAULT"}
+    want = {"--tasks": "DHOLE_TASKS", "--vault": "DHOLE_VAULT",
+            "--neural": "DHOLE_NEURAL_FOCUS"}
     enable = [env for flag, env in want.items() if flag in argv]
     unknown = [a for a in argv
                if a.startswith("-") and a not in ("--yes", "-y", "--probe", *want)]
@@ -321,7 +367,7 @@ def run_init(argv: list[str]) -> int:
         # happened" becomes a support conversation.
         from dhole_mcp import cli_ui as _ui
         print(_ui.err(f"unknown flag(s): {' '.join(unknown)} "
-                      "(try: --yes, --probe, --tasks, --vault)"))
+                      "(try: --yes, --probe, --tasks, --vault, --neural)"))
         return 2
     from dhole_mcp import cli_ui as ui
 
@@ -380,6 +426,14 @@ def run_init(argv: list[str]) -> int:
         from dhole_mcp import env_registry as _reg
         print()
         for env_name in enable:
+            # Which note is true depends on when the knob is read: the tool
+            # groups are decided at import (so tools/list needs a restart), a
+            # per-call flag takes the next call. Saying "restart" for both is the
+            # kind of advice that gets followed and changes nothing.
+            entry = _reg.by_name(env_name)
+            needs_restart = entry is None or entry.read_at == "import"
+            note = ("restart the host so tools/list picks the tools up" if needs_restart
+                    else "takes effect on the next call")
             current = _reg.source_of(env_name)
             if current == "env":
                 print("  " + ui.dim(f"{env_name} already set in the host's env block "
@@ -387,16 +441,23 @@ def run_init(argv: list[str]) -> int:
                 continue
             if current == "file":
                 print("  " + ui.ok(f"{env_name} already enabled in "
-                                   f"{_reg.config_path().name}"))
+                                   f"{_reg.config_path().name}  · {note}"))
                 continue
             if not yes:
                 print("  " + ui.dim(f"dry-run: would write {env_name}=1 to ")
                       + ui.cmd(str(_reg.config_path()))
-                      + ui.dim(" (add --yes), then restart the host"))
+                      + ui.dim(f" (add --yes), then {'restart the host' if needs_restart else 'it applies to the next call'}"))
                 continue
             _reg.set_entry(env_name, "1")
             print("  " + ui.ok(f"{env_name}=1 -> {_reg.config_path().name}")
-                  + ui.dim("  restart the host so tools/list picks the tools up"))
+                  + ui.dim("  " + note))
+
+    # 3.6 --neural also needs the weights, and DHOLE_NEURAL_FOCUS is read per call,
+    # so unlike the two tool groups above it does not wait on a restart - it waits
+    # on the model file. Fetch it here rather than leaving a flag whose every call
+    # answers neural_focus_model_missing.
+    if "--neural" in argv:
+        _reranker_model(ui, yes)
 
     # 4. Client detection.
     found = _existing_client_configs()
