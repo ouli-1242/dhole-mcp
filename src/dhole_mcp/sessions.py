@@ -42,6 +42,8 @@ import threading
 import time
 from urllib.parse import urlparse
 
+from dhole_mcp import env_registry
+
 logger = logging.getLogger("dhole-mcp.sessions")
 
 # A stored cookie lives this long from when the site set it.
@@ -56,16 +58,16 @@ _COOKIE_TTL_MAX_S = 30 * 24 * 3600.0
 def _cookie_ttl() -> float:
     """Effective TTL in seconds: ``DHOLE_COOKIE_TTL_S`` when parseable, else
     :data:`COOKIE_TTL_S`. Read per call (cheap) so tests and long-lived servers
-    pick up env changes without a reload."""
-    raw = (os.environ.get("DHOLE_COOKIE_TTL_S") or "").strip()
-    if not raw:
-        return COOKIE_TTL_S
-    try:
-        val = float(raw)
-    except ValueError:
-        logger.warning("DHOLE_COOKIE_TTL_S=%r is not a number; using the default", raw)
-        return COOKIE_TTL_S
-    return max(_COOKIE_TTL_MIN_S, min(val, _COOKIE_TTL_MAX_S))
+    pick up env changes without a reload.
+
+    W4: an unparseable value falls back to the default as before, but the
+    failure now lands in ``env_registry.warnings_snapshot()`` — this is the
+    cross-module test target in the plan (a warning recorded by ``sessions.py``
+    must be visible from ``dhole --doctor``, which runs in a different module).
+    """
+    return env_registry.read_float(
+        "DHOLE_COOKIE_TTL_S", COOKIE_TTL_S,
+        lo=_COOKIE_TTL_MIN_S, hi=_COOKIE_TTL_MAX_S)
 # Bound on the jar, so a crawl that hops through 500 hosts cannot grow it
 # without limit. Oldest-expiring rows go first.
 MAX_COOKIES = 2000

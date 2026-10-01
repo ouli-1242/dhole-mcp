@@ -50,6 +50,8 @@ import os
 import time
 from typing import Callable, Optional
 
+from dhole_mcp import env_registry
+
 logger = logging.getLogger("dhole-mcp.actions")
 
 MAX_ACTIONS = 20
@@ -77,13 +79,13 @@ _VALID_KEYS = {"click", "fill", "press", "wait", "scroll", "wait_selector",
 # recognition happens agent-side; dhole ships no vision model). Kept here rather
 # than imported from server.py: server imports actions lazily, and a reverse
 # import would drag the whole server module into every lean process that touches
-# the actions list. Semantics match server._env_flag exactly.
-_OFF_VALUES = frozenset({"", "0", "false", "no", "off", "none", "null"})
-
-
+# the actions list.
+#
+# W4.3: the off/on token lists live in ``env_registry`` so a value that
+# ``server._env_flag`` would recognise reads the same here, and an
+# unrecognised value gets a warning the doctor can name.
 def multimodal_enabled() -> bool:
-    raw = (os.environ.get("DHOLE_MULTIMODAL") or "").strip().lower()
-    return raw not in _OFF_VALUES
+    return env_registry.read_flag("DHOLE_MULTIMODAL")
 
 
 def multimodal_gate_error() -> str:

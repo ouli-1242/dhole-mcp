@@ -35,6 +35,8 @@ from typing import Callable, NamedTuple, Optional
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
 
+from dhole_mcp import env_registry
+
 logger = logging.getLogger("dhole-mcp.robots")
 
 # Set to 1/true to skip robots.txt checking entirely (the documented escape
@@ -79,9 +81,21 @@ class Verdict(NamedTuple):
 
 
 def env_disabled() -> bool:
-    """True when ``DHOLE_IGNORE_ROBOTS`` disables compliance process-wide."""
-    raw = (os.environ.get(ENV_IGNORE_ROBOTS) or "").strip().lower()
-    return raw not in ("", "0", "false", "no", "off", "none", "null")
+    """True when ``DHOLE_IGNORE_ROBOTS`` disables compliance process-wide.
+
+    D1 (fail-safe direction): an unrecognised value - e.g. a typo like
+    ``flase`` - now reads as "do NOT ignore robots" (compliance stays ON),
+    and the failure lands in the ``env_registry`` warning list so
+    ``dhole --doctor`` shows the operator their setting did not take. Before
+    the change, a typo silently flipped the process into a non-compliant
+    state; the operator had no visible signal.
+
+    Values in ``ON_TOKENS`` (1/true/yes/on) still disable compliance, and
+    values in ``OFF_TOKENS`` plus empty string still keep it on - the
+    existing ``test_env_var_disables_the_check_process_wide`` /
+    ``test_env_var_falsey_values_keep_compliance_on`` cases remain true.
+    """
+    return env_registry.read_flag(ENV_IGNORE_ROBOTS, default=False, fail_safe=True)
 
 
 def robots_url_for(url: str) -> str:

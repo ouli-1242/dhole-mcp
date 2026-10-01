@@ -59,6 +59,10 @@ from urllib.parse import urljoin, urlparse, urlunparse
 
 from pydantic import BaseModel, Field, model_serializer
 
+# W4: env_registry is the shared warning recorder - it imports nothing from
+# dhole_mcp so it is cycle-free from any module.
+from dhole_mcp import env_registry
+
 # robots.txt compliance (v16.0). robots.py imports nothing from dhole at module
 # level, so this is cycle-free; the seed check + the discovered-URL peek both
 # need it, and keeping one import point is what makes the cache the shared one.
@@ -76,12 +80,12 @@ logger = logging.getLogger("dhole-mcp.crawl")
 # 侧面"里偏远的那些，summary 会把丢弃数报出来，误伤可被看见并可用 flag 关掉。
 _CRAWL_FILTER_FLOOR = 0.03
 
-_OFF_VALUES = frozenset({"", "0", "false", "no", "off", "none", "null"})
-
 
 def _neural_focus_enabled() -> bool:
-    raw = (os.environ.get("DHOLE_NEURAL_FOCUS") or "").strip().lower()
-    return raw not in _OFF_VALUES
+    # W4.3: read via env_registry so unrecognised values ("flase" typo) get
+    # recorded for ``dhole --doctor``; the return value follows _env_flag's
+    # "not in off-list = ON" semantics so existing behaviour is preserved.
+    return env_registry.read_flag("DHOLE_NEURAL_FOCUS")
 
 
 def _page_relevant(md: str, goal: str) -> Optional[bool]:

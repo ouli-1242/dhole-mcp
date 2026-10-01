@@ -88,6 +88,7 @@ from dhole_mcp import __version__
 from pydantic import BaseModel, Field, PrivateAttr
 
 from dhole_mcp import paths
+from dhole_mcp import env_registry
 
 # Lazy imports: browser deps (patchright) pull in playwright (~5s load). Defer
 # until first use so the MCP server responds to initialize immediately.
@@ -457,22 +458,27 @@ def _document_budget_advice(url: str, size_bytes: Optional[int], size_note: str,
     bits.append("pages=<range> narrows what gets EXTRACTED, not what gets downloaded")
     return "; ".join(bits)
 def _env_int(name: str, default: int) -> int:
-    """Read an integer env var, falling back to default on missing/invalid."""
-    raw = os.environ.get(name)
-    if raw is None or raw.strip() == "":
-        return default
-    try:
-        return int(float(raw))
-    except (TypeError, ValueError):
-        return default
+    """Read an integer env var, falling back to ``default`` on missing/invalid.
+
+    W4: semantics unchanged (an unparseable value still returns ``default``),
+    but the failure is recorded in ``env_registry._warnings`` so
+    ``dhole --doctor`` (W2) can name it. Previously an env typo like
+    ``DHOLE_DEFAULT_CONTENT_CHARS=abc`` silently fell back and no output
+    anywhere told the user their setting had been ignored.
+    """
+    return env_registry.read_int(name, default)
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
-    """Read an on/off env var: any value except empty/0/false/no/off/none/null is on."""
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() not in ("", "0", "false", "no", "off", "none", "null")
+    """Read an on/off env var: any value except empty/0/false/no/off/none/null is on.
+
+    W4.1: this "anything else -> True" behaviour is kept verbatim because
+    flipping it would silently disable capabilities an operator set with
+    ``DHOLE_X=yes-please`` (or, worse, ``DHOLE_X=1please``). What is new is
+    the warning - the reader still returns the same bool, but ``doctor`` can
+    now tell the operator the value was not a recognised token.
+    """
+    return env_registry.read_flag(name, default=default)
 
 
 def _iso_from_ts(ts) -> str:
@@ -3414,7 +3420,11 @@ def _cdp_attach_gate(cdp_url: Optional[str]) -> tuple[Optional[str], Optional[fr
     """
     if not cdp_url:
         return None, None
-    enabled = (os.environ.get("DHOLE_CDP_ATTACH") or "").strip().lower() in ("1", "true", "yes", "on")
+    # W4/D1: the check already goes only on an explicit ON-token value, so
+    # unrecognised inputs (a typo like "flase") silently stayed on the safe
+    # side. What is new is that the typo is now *recorded* - doctor can name
+    # it, and the operator stops wondering why the flag "did not do anything".
+    enabled = env_registry.read_flag("DHOLE_CDP_ATTACH", default=False, fail_safe=True)
     if not enabled:
         return (
             "cdp_attach_disabled: cdp_url is refused by default - attaching your "
@@ -4303,10 +4313,13 @@ def _browser_prewarm_enabled() -> bool:
     to 1.1.1.1:443 — a real outbound connection before the agent has asked for
     anything. Offline boxes, metered links and strict egress policies opt out
     here; the browser then simply launches lazily on the first stealthy fetch.
+
+    W4: the "on" side is already strict (only 1/true/yes/on disable prewarm);
+    this refactor just makes the "typo -> silently keeps prewarm" case visible
+    in ``doctor`` while leaving the return value identical.
     """
-    return (os.environ.get("DHOLE_NO_BROWSER_PREWARM") or "").strip().lower() not in (
-        "1", "true", "yes", "on",
-    )
+    return not env_registry.read_flag(
+        "DHOLE_NO_BROWSER_PREWARM", default=False, fail_safe=True)
 
 
 def _normalize_credentials(credentials: Optional[Dict[str, str]]) -> Optional[tuple]:

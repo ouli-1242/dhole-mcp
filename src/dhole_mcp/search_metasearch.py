@@ -45,6 +45,7 @@ from fake_useragent import UserAgent
 from lxml import html
 from lxml.etree import HTMLParser as LHTMLParser
 
+from dhole_mcp import env_registry
 from dhole_mcp import paths
 from dhole_mcp.security import redact_api_key
 
@@ -82,7 +83,9 @@ def _get_search_proxy() -> str | None:
 
 # Per-engine + overall deadline. Engines run in parallel + we early-return on
 # quorum, so a healthy search is ~1-2s; this bounds a fully-throttled one.
-_SEARCH_DEADLINE = float(os.environ.get("DHOLE_SEARCH_DEADLINE", "16") or "16")
+# W4: env_registry.read_float records the "not a number" case so
+# ``dhole --doctor`` can name it; the fallback value is the same 16s.
+_SEARCH_DEADLINE = env_registry.read_float("DHOLE_SEARCH_DEADLINE", 16.0)
 # 软截止：结果凑够就早退，不为慢/死的引擎等到硬截止。提成模块常量只为了让测试能
 # 把它压到毫秒级（否则验早退归属的测试每条都要真睡 2s）。
 _SOFT_DEADLINE = 2.0

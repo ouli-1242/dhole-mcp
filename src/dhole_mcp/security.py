@@ -13,6 +13,8 @@ import time
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+from dhole_mcp import env_registry
+
 # Maximum URL length to prevent DoS via oversized URLs
 MAX_URL_LENGTH = 8192
 
@@ -211,9 +213,23 @@ def _dns_recheck_enabled() -> bool:
     故意决定，攻击者改不了你的 hosts 文件，见 ``_hosts_file_pin``）；
     ``DHOLE_SSRF_DNS_RECHECK=0`` 可整体关闭 —— DNS 污染/分流环境（公网域名被
     解析到保留地址且未写进 hosts）下合法公网请求会被误伤。
+
+    W4 补的记录：这个 off-list 只有 ``0/false/off/no``，比 ``_env_flag`` 少了
+    ``"" / none / null``——这是历史不对称（W4.3 只统一 tokens 集合的**存在**，
+    不改任何一条判定的**语义**，见 W4.1）。这里保持原判定，只把"未识别的值"
+    （既不在 ON 也不在这条短 off-list 里，比如 ``flase``）记入告警列表；
+    仍然按 fail-safe 走（recheck 继续开着）。
     """
-    raw = (os.environ.get("DHOLE_SSRF_DNS_RECHECK") or "").strip().lower()
-    return raw not in ("0", "false", "off", "no")
+    raw = os.environ.get("DHOLE_SSRF_DNS_RECHECK")
+    v = (raw or "").strip().lower()
+    if v in ("0", "false", "off", "no"):
+        return False
+    if v and v not in env_registry.ON_TOKENS and v not in ("0", "false", "off", "no"):
+        env_registry.record_warning(
+            "DHOLE_SSRF_DNS_RECHECK", raw,
+            f"{raw!r} is not a recognised on/off value - DNS recheck stays enabled",
+        )
+    return True
 
 
 # DNS 复查结果短缓存：一次抓取会对初始 URL + 每一跳重定向各调一次
