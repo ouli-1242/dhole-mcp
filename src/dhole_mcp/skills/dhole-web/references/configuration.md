@@ -92,7 +92,7 @@ Two tools that persist state across sessions, off by default because their schem
 - `DHOLE_DEFAULT_ENGINES` — override the keyless default pool (default `baidu,bing,sogou,bing_global,yandex,brave`); opt-in names may be included
 - `DHOLE_SEARCH_DEADLINE` — whole-search deadline in seconds (default 16)
 - `DHOLE_SEARCH_FEEDBACK=1` — domain preference: domains that fetched well gain ranking weight (off by default)
-- Keyed backends (per-call billing, off by default, only run when named): `DHOLE_BRIGHTDATA_API_KEY` (optional `_ZONE` default `dhole`, `_COUNTRY` default `us`) / `DHOLE_TAVILY_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_BOCHA_API_KEY`
+- Keyed backends (per-call billing, off by default, only run when named): `DHOLE_BRIGHTDATA_API_KEY` (optional `DHOLE_BRIGHTDATA_ZONE` default `dhole` and `DHOLE_BRIGHTDATA_COUNTRY` default `us`, both read at import so a change needs a host restart) / `DHOLE_TAVILY_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_BOCHA_API_KEY`
 
 ### Scenario: cooldowns too frequent / pacing
 
@@ -126,6 +126,8 @@ Three cooldown tiers (defaults 60s / 600s / 600s; out-of-range values are clampe
 - `DHOLE_USAGE_LOG=1` — local call log (tool names / durations / redacted errors; no parameter values, no network)
 - `DHOLE_HF_ENDPOINT` (or `HF_ENDPOINT`) — rerank-model download mirror; default tries huggingface.co then falls back to hf-mirror.com; setting it pins one source (set `https://hf-mirror.com` when downloads stall in CN)
 - `DHOLE_NO_AUTO_REPAIR=1` — on ImportError, print the fix command instead of auto-reinstalling
+- `DHOLE_UPDATE_PACKAGE` — the package name the self-update path installs (`dhole` and `dhole -u`). Defaults to `dhole-mcp`; a fork or a private mirror points it elsewhere. Read per call.
+- `DHOLE_UPDATE_INDEX_URL` — pip index URL used by the self-update path, so a machine with no PyPI access can pull `dhole-mcp` from an internal mirror. Read per call.
 
 ## CLI management commands
 
