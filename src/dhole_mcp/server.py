@@ -9666,7 +9666,8 @@ def _help_epilog() -> str:
         f"  {ui.cyan('dhole')}              {ui.dim('serve · stdio MCP (Claude Code, Cursor, OpenCode, Pi)')}",
         f"  {ui.cyan('dhole --http')}       {ui.dim('serve · streamable HTTP (Open WebUI), use --host/--port')}",
         f"  {ui.cyan('dhole -v')}           {ui.dim('version + capability check')}",
-        f"  {ui.cyan('dhole --doctor')}     {ui.dim('diagnose the install and suggest fixes')}",
+        f"  {ui.cyan('dhole doctor')}       {ui.dim('diagnose the install + config audit + resolver reality')}",
+        f"  {ui.cyan('dhole --doctor')}     {ui.dim('same as `dhole doctor` (accepted for backwards compatibility)')}",
         f"  {ui.cyan('dhole -u')}           {ui.dim('update to the latest version')}",
         f"  {ui.cyan('dhole model')}        {ui.dim('list reranker models')}",
         f"  {ui.cyan('dhole model use X')}  {ui.dim('select the reranker model (persisted in ~/.dhole/config/reranker.json)')}",
@@ -10077,17 +10078,39 @@ def main():
     from dhole_mcp import updater
     import argparse
     import sys as _sys
-    # `dhole model ...` / `dhole proxy ...` are handled before argparse: a bare
-    # positional would collide with the serve-by-default behavior (no args =
-    # start the server).
-    if len(_sys.argv) > 1 and _sys.argv[1].lower() == "model":
-        raise SystemExit(_cmd_model(_sys.argv[2:]))
-    if len(_sys.argv) > 1 and _sys.argv[1].lower() == "proxy":
-        raise SystemExit(_cmd_proxy(_sys.argv[2:]))
-    if len(_sys.argv) > 1 and _sys.argv[1].lower() == "engines":
-        raise SystemExit(_cmd_engines(_sys.argv[2:]))
-    if len(_sys.argv) > 1 and _sys.argv[1].lower() == "skill":
-        raise SystemExit(_cmd_skill(_sys.argv[2:]))
+    # Subcommands dispatched BEFORE argparse: a bare positional would collide
+    # with the serve-by-default behaviour (no args = start the MCP server), so
+    # each management verb is matched by hand and its tail passed to a helper.
+    #
+    # W5: `doctor` joins the list. Before this change `dhole doctor` fell
+    # through to argparse, which errored with "unrecognized arguments: doctor"
+    # and never mentioned --doctor. Both spellings now go through the same
+    # `updater.doctor()` call, so their stdout AND exit code are identical.
+    _SUBCOMMANDS = ("model", "proxy", "engines", "skill", "doctor")
+    if len(_sys.argv) > 1:
+        first = _sys.argv[1].lower()
+        if first == "model":
+            raise SystemExit(_cmd_model(_sys.argv[2:]))
+        if first == "proxy":
+            raise SystemExit(_cmd_proxy(_sys.argv[2:]))
+        if first == "engines":
+            raise SystemExit(_cmd_engines(_sys.argv[2:]))
+        if first == "skill":
+            raise SystemExit(_cmd_skill(_sys.argv[2:]))
+        if first == "doctor":
+            raise SystemExit(updater.doctor())
+        # Anything that is not a flag and not a known subcommand is a typo.
+        # The old behaviour (argparse "error: unrecognized arguments") gave
+        # no suggestion; "did you mean: dhole doctor?" is what turns a hung
+        # first-time user back into a working one.
+        if not first.startswith("-"):
+            import difflib
+            near = difflib.get_close_matches(first, _SUBCOMMANDS, n=1, cutoff=0.4)
+            hint = (f"did you mean: dhole {near[0]}?" if near
+                    else f"try: dhole {'|'.join(_SUBCOMMANDS)}")
+            print(ui.err(f"unknown subcommand: {first} ({hint})"),
+                  file=_sys.stderr)
+            raise SystemExit(2)
     parser = argparse.ArgumentParser(
         prog="dhole",
         description=ui.branded(ui.dim("web research for AI agents · $0 · no keys"), ""),

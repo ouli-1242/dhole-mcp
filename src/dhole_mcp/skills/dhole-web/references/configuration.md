@@ -134,7 +134,8 @@ Three cooldown tiers (defaults 60s / 600s / 600s; out-of-range values are clampe
 | Command | Purpose |
 |---|---|
 | `dhole -v` | Version + capability panel (browser / pdf / rerank / engine yield — each missing row is a degraded tier) |
-| `dhole --doctor` | Install check: item-by-item with copy-pasteable fixes |
+| `dhole --doctor` | Install check: item-by-item with copy-pasteable fixes; also runs the config audit + fake-ip resolver reality check on this machine |
+| `dhole doctor` | Same output and exit code as `dhole --doctor` (W5: the two spellings are equivalent, use whichever matches the other subcommand you already typed) |
 | `dhole engines list` | Per-engine verdict, remaining cooldown, active backoff |
 | `dhole engines probe` | One real query per engine (hits / latency / block reason) |
 | `dhole engines reset` | Clear cooldowns now |

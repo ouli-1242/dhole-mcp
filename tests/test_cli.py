@@ -12,6 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from dhole_mcp.updater import check_version, pad_version, _at_or_ahead
 
 _SRC = str(Path(__file__).resolve().parent.parent / "src")
@@ -193,6 +195,88 @@ class TestVersionComparison:
 
     def test_malformed_installed(self):
         assert _at_or_ahead("not-a-version", "11.1.6") is False
+
+
+# ─── W5 · CLI syntax unification ────────────────────────────────────
+class TestDoctorSubcommandSyntax:
+    """`dhole doctor` == `dhole --doctor`.
+
+    Before W5 the four management subcommands (model / proxy / engines /
+    skill) dispatched manually *before* argparse, but `doctor` was an
+    argparse flag. Result: the intuitive spelling `dhole doctor` fell
+    through to argparse and errored with `unrecognized arguments: doctor`
+    without ever mentioning `--doctor`. These tests pin the fix.
+    """
+
+    @pytest.fixture
+    def env_isolated(self, tmp_path, monkeypatch):
+        from dhole_mcp import env_registry as _reg
+        for e in _reg.ALL:
+            monkeypatch.delenv(e.name, raising=False)
+        monkeypatch.setenv("DHOLE_HOME", str(tmp_path / "home"))
+
+    @pytest.mark.parametrize("argv_tail", [("doctor",), ("--doctor",)])
+    def test_both_spellings_produce_identical_stdout_and_exit(self,
+                                                              env_isolated,
+                                                              monkeypatch,
+                                                              capsys,
+                                                              argv_tail):
+        """Same env, same tmp home, both invocations must yield byte-identical
+        stdout AND the same exit code (0/1 depending on install state)."""
+        from dhole_mcp import server as srv
+
+        monkeypatch.setattr(sys, "argv", ["dhole", *argv_tail])
+        code_a = None
+        out_a = ""
+        try:
+            srv.main()
+        except SystemExit as exc:
+            code_a = exc.code if exc.code is not None else 0
+        out_a = capsys.readouterr().out
+
+        monkeypatch.setattr(sys, "argv", ["dhole", *(("--doctor",) if argv_tail == ("doctor",) else ("doctor",))])
+        try:
+            srv.main()
+        except SystemExit as exc:
+            code_b = exc.code if exc.code is not None else 0
+        out_b = capsys.readouterr().out
+
+        assert code_a == code_b
+        assert out_a == out_b
+        assert "all healthy" in out_a or "issue(s) found" in out_a
+
+    def test_unknown_subcommand_exits_2_and_suggests_the_closest(
+            self, env_isolated, monkeypatch, capsys):
+        """`dhole doctoooor` was a "usage" dump with no hint. Now it says
+        exactly what the plan wanted: `did you mean: dhole doctor?`."""
+        from dhole_mcp import server as srv
+
+        monkeypatch.setattr(sys, "argv", ["dhole", "doctoooor"])
+        try:
+            srv.main()
+        except SystemExit as exc:
+            code = exc.code
+        else:
+            raise AssertionError("main() should exit for an unknown subcommand")
+        err = capsys.readouterr().err
+        assert code == 2
+        assert "unknown subcommand: doctoooor" in err
+        assert "did you mean: dhole doctor" in err
+
+    def test_flag_first_args_still_reach_argparse(self, env_isolated,
+                                                  monkeypatch, capsys):
+        """The unknown-subcommand guard fires only for a bare positional that
+        is not a flag. `-v`, `--http`, `-u` etc. must still parse normally."""
+        from dhole_mcp import server as srv
+
+        monkeypatch.setattr(sys, "argv", ["dhole", "--help"])
+        with pytest.raises(SystemExit) as excinfo:
+            srv.main()
+        # argparse uses exit 0 for --help.
+        assert excinfo.value.code == 0
+        out = capsys.readouterr().out
+        assert "dhole doctor" in out
+        assert "dhole --doctor" in out
 
 
 class TestEnginesProbe:
