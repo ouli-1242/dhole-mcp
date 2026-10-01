@@ -6,51 +6,11 @@
 
 > 自 13.14 起本仓库为个人衍生作品，版本号是自己的序号、不承诺语义化版本，与上游版本不可比；包内的 `__version__` 是唯一权威来源。
 
-## [Unreleased] - 大众化批次（feat/mainstream-config）
-
-零配置就能正确工作，配置只在需要时可见、可确认生效。八条工作项（W1–W8）与四条决策（D1–D4）的落地见 `git log`；下列只挑使用者能感知的变化。
-
-### 新增
-
-- **`dhole init --cdp <host>` —— 把最重的那道能力做成一条命令，而且不给无围栏的形状**：CDP attach 交出的是**用户已登录浏览器的读权限**（每一个请求都带着那个 profile 的 cookie），比"某个写操作要不要确认"严重一档，所以过去它故意只肯由 env 块开通。现在 `dhole init --cdp portal.example.com` 一次写好两道闸：`DHOLE_CDP_ATTACH=1` **并且** `DHOLE_CDP_HOSTS` 圈在点名的主机上——**只给 ATTACH 而不给围栏的形态这条命令不提供**（打印的是用法错误，退出 2）。附带三件真事：粘进来的地址会被归约成精确主机名并回显（`https://Portal.Example.com/dashboard` → `portal.example.com`，围栏比的就是这个）；已有白名单是**合并**而不是覆盖（重写别人的围栏不是引导命令该有的手）；`127.0.0.1:9222` 被问一次"有没有在听"——只做 TCP 连接、不发 HTTP，因为 `/json/version` 会把用户标签页的标题交出来。输出里同时打印需要用户自己启动浏览器的那条命令（Chrome 136+ 拒绝在默认 profile 上开调试）与 per-call 的调用形状
-- **`dhole --doctor` 新增 `cdp fence` 一行**：attach 开着而白名单为空时说明"导航没有被圈住，每个已附加请求都带着你的登录 cookie"，并点名那条会修好它的命令；有围栏时报出主机数。**它算 info 不算 failure**——围栏是操作者的选择，把合法配置标成故障只会让退出码失去意义。`DHOLE_CDP_ATTACH=flase` 这种 typo 不会被骗出"围栏已开"（沿用 fail-safe 读法）
-- **一条从未写明的规则现在写明了**：`DHOLE_CDP_HOSTS` 是**精确主机名**匹配（入口检查与 route handler 都只比 `urlparse(...).hostname`），文档以前只说"逗号分隔的白名单"。也就是说 `example.com` **不覆盖** `www.example.com`，也不覆盖页面从 CDN 拉的那些脚本主机——不点名就会被 route 层拦掉。这条现在在 configuration.md、troubleshooting.md（`cdp_host_not_allowed` 那一行）与 SKILL.md 的信号表里都成立
-
-- **`options.focus_engine` —— 语义 focus 从"全局能力"变成"许可 + 这一次要不要"**：取值 `'bm25'` / `'neural'`，`smart_fetch` 与 `smart_crawl` 都收。规则三条：不传 = 完全跟随 `DHOLE_NEURAL_FOCUS`（与以前逐字节相同）；`'bm25'` 在 flag **开着**时也生效——过去想省这一次的 CPU 只能先把机器级的能力关掉；`'neural'` 在没有许可时是**拒绝**（`focus_engine_not_permitted`，一个请求都不发）而不是悄悄降级，因为静默回退会把"神经分与 BM25 的差别"变成不可解释的玄学。爬取尤其需要这句话：每页约 12.5 秒的推理会乘上 `max_pages`。`neural_focus_model_missing` 那条老错误跟着改口：先给"这一次传 `focus_engine='bm25'` 就能继续"，再给下载路径。`dhole init --neural` 是打开它的**一条命令**——写 flag **并且**把模型装上（下载只在 `--yes` 后发生，与 Chromium 同一条纪律：几百 MB 不藏在没人重读的命令背后）；这条 flag 是按次读的，所以那句话是"下一次调用生效"，不再是要你重启宿主
-- **`dhole init` 多了三件事**：`--tasks` / `--vault` 把默认关的工具组打开在 `~/.dhole/config.json` 里（W11 的文件门），不再要求编辑宿主的 MCP JSON——env 块已经设过的组**不写文件**，因为那是操作者已经做过的决定；落盘后照实说明"这是 import 期读的旋钮，重启才注册"。`--probe` 跑一次真实搜索 + 真实抓取，问的是运行中的代码而不是静态体检（从这里搜得到吗、这个链接抓得开吗），每行点名它碰了哪个目标，空结果报成事实并给下一步而不是"安装坏了"。默认关，不发真实流量。未知 flag 现在返回 2 并列出可用的，不再静默忽略
-- **`dhole --doctor` 加两段**：
-  - **配置审计**：只列本机 `os.environ` 里"已设"的 DHOLE_* 变量，按 scenario 分组、显示生效值 / 读取时机 / 合法性；secret 类永远显示 `set (len=N)` 绝不回显值；`read_at="import"` 的行带 `restart the host to change`；非法值走 `✗` 计入 failures 并附 `fix: set X to an integer in 500..200000, or unset it` 的可复制修法。此前 `_env_int("abc", 40000)` 静默回落、`_env_flag("yes-please")` 悄悄判 ON，没有任何一条输出告诉你设置没生效——现在这一条就是"我设了但没生效"的唯一可见点
-  - **环境现实检查（fake-ip 代理）**：解析 `example.com`，A 记录落 `198.18.0.0/15` 判 fake-ip；输出**说清是哪个地址、命中哪个网段**（"the SSRF DNS recheck rejects it via the AAAA record: fd00::20 in fc00::/7"）+ 修法 `DHOLE_SSRF_DNS_RECHECK=0` + "只关 DNS recheck 层，IP-literal / hostname 守卫保留"的说明。修的是 §1.5 那条被实测证伪的 README 断言：Clash TUN + fake-ip 环境下不设 recheck=0 时**所有 URL 工具全部失败**，之前输出里没有任何一处提示这是环境而非产品
-- **`dhole init`**：一条命令做完以前三步（装 extras → `playwright install chromium` → 往 MCP 客户端配置写条目）。顺序：launcher 检查 → 浏览器依赖检查 → chromium（已装则跳过）→ 探测 Claude Desktop / Cursor / Windsurf / VS Code → 打印将写入的 JSON（**默认 dry-run**）→ 只有 `--yes` 才落盘，且落盘前 copy2 一份带时间戳的 `.bak-` 备份。没检测到客户端 → 打印手动配置样板、退出 0。幂等：已注册的 dhole 条目不重复写、不新建 backup
-- **`dhole doctor`**（无破折号）与 `dhole --doctor` 等价，stdout 与退出码字节一致。此前四种管理子命令是 argparse 之前手工分派，doctor 却是 flag，混合语法让用户的直觉写法 `dhole doctor` 报 `unrecognized arguments: doctor`。未知子命令现在返回 2 + 输出 `did you mean: dhole doctor?`
-- **`dhole config` —— 第二条配置门**：`dhole config list | set <NAME> <value> | unset <NAME>` 读写 `~/.dhole/config.json`，按 mtime 重读，所以 `read_at="call"` 的旋钮（`DHOLE_DEFAULT_CONTENT_CHARS` / `DHOLE_SEARCH_DEADLINE` / `DHOLE_SSRF_DNS_RECHECK` 等 34 个）**下一次调用就生效，不用改宿主 JSON、不用重启**。`set` 拒绝不存在的变量名并给出邻近写法（`DHOLE_DEFUALT_CONTENT_CHARS` 写进文件看着像设置、其实什么都不做，唯一诚实的拦截点是写它的那一刻）；`list` 对 secret 类永远只显示 `set (len=N)`。env 仍然优先，且这条不可协商：现有安装全部通过 env 块配置，一个文件不能悄悄覆盖已经做出来的决定。`read_at="import"` 的旋钮也能写在这里，但当场说明要重启
-- **`dhole --doctor` 的配置审计改成两个门一起读**：审计过去只看 `os.environ`，文件门装上后会出现"我设了但体检说没设"。现在它读的是与各 reader 同一个 `value_of()`，逐行标出值从哪个门来、是否被 env 遮蔽，并把**文件里没人读的名字**单独计为 failure（不是提示）
-- **fake-IP 代理环境自己适配（不再有"必须先设的变量"）**：Clash / mihomo / sing-box 的 TUN + fake-ip 解析器给每个公网域名返回 `198.18.0.0/15`（A）或 `fc00::/7`（AAAA），fail-closed 的 DNS 复检因此把整台机器判成内网 —— 过去唯一的出路是**事先知道**要设 `DHOLE_SSRF_DNS_RECHECK=0`，README 那句"零配置可用"在这种机器上是被实测证伪的。现在第一次需要判定时探测一次（按进程缓存），命中就跳过那一层：**IP 字面量、主机名黑名单、云元数据端点、私网段这些守卫一条都不动**，探测不确定（离线 / 解析不到）时保持原样不放宽。跳过这件事在每个受影响的回包里可见（`metadata.ssrf_recheck`，健康主机不带这个字段），硬回口子是 `dhole config set DHOLE_SSRF_DNS_RECHECK on`
-- **`dhole --doctor` 的 resolver reality 行跟着改了**：没人设过变量而自动跳过已生效时，它不再教用户去设一个已经不需要设的东西，改成说清"已自动跳过 + 想强制恢复怎么做"；显式设成 `on` 时回到原来的那句"每个 URL 都会失败 + 设 0"，因为那时失败重新成为事实
-- **`dhole_doc` 工具（第 14 个，默认注册）**：agent 现在一次调用就能读到 dhole 自己的说明书，不必先跑 `dhole skill install`、不必读 README、不必重启。七个 topic —— `start`（选工具 + 硬约束）/ `call`（怎么写调用，带反例）/ `fields`（响应字段词典）/ `behavior`（抓取升级链、页面动作语法、结构化抽取规则、搜索引擎矩阵、爬取消率）/ `fix`（按症状排障）/ `config`（每个旋钮对应什么场景）/ `recipes`（多步任务）；`section=` 只取其中一节。猜错 topic 或 section 返回的是「这里有什么」而不是报错，`references/` 里那 930 行语料成为唯一一份说明书。`dhole skill install` 从「能力的入口」降级为「可选加分」
-
-### 变更
-
-- **`pip install dhole-mcp` 默认即完整版**（D2 采纳）：原 `[all]` extras 的 12 项重依赖（patchright / playwright / browserforge / requests / pdfplumber / pypdfium2 / rapidocr / onnxruntime / tokenizers / opencv-python-headless / python-docx / openpyxl）并入 `[project].dependencies`。代价每次安装数百 MB，换来"显而易见的那条命令是对的"——旧默认装出来是 HTTP-only 降级版，`-v` 里的 "each missing row degrades silently" 承认了这一点，但用户在踩到之前不会知道。**`[all]` extra 保留、内容不变**（updater 的自愈路径 `_pip("--force-reinstall", "--no-deps", "dhole-mcp[all]==TARGET")` 靠它跑，README / CONTRIBUTING / CHANGELOG / configuration.md / src 提示里 74 处 `[all]` 引用也全都保持为真）；新增 `slim` 作为"名字"存在，注释诚实说明 pip extras 语义只能加不能减、`[slim]` **不是**退回 HTTP-only 的实际开关。**`playwright install chromium` 仍是独立一步**——`pip install dhole-mcp` 装不到浏览器引擎二进制，W7 不改变这一点；把两步合成一步是 `dhole init` 的活
-- **`DHOLE_IGNORE_ROBOTS` 的安全方向改了**（D1 采纳）：未识别的值（`flase` 这种 typo）现在**视为 OFF**（继续合规）并 warn。旧行为：任何不在 off-list 里的值都算 ON，于是一个拼写错误会**静默关掉 robots.txt 合规检查**——唯一一个"typo 朝危险方向失败"的位置。其余 flag（`DHOLE_MULTIMODAL` / `DHOLE_NEURAL_FOCUS` / `DHOLE_TASKS` / `DHOLE_VAULT` / `DHOLE_USAGE_LOG` 等）**语义一字未动**，仍然是"不在 off-list 就算 ON"——把别人正在用的能力静默关掉正是本批次要消灭的那类故障；改的只是"未识别"这一条**被记录**进 doctor 的配置审计
-- **`smart_fetch` 的连接期文本改成「路由 + 陷阱 + 键名清单」**：`actions` 从 1,290 字符降到 640、`schema` 858→700、`options` 2,309→约 1,500，逐键解释移进 `dhole_doc(topic='behavior')`。常驻层留下的都是**会导致错误结论或不可逆动作**的那几条：非 GET 只发一次（重发即写两遍）、凭据不跟跨源重定向走、304 是成功不是失败、云元数据端点任何设置都不放行、`submit` 不带 `confirm` 会暂停。同时把 20 个原先在 `options` 清单里没有名字的键全部点名（`if_none_match`、`include_media`、`network_idle`、`real_chrome`、`hide_canvas`、`block_webrtc`、`solve_cloudflare`、`use_trafilatura`、`main_content_only` 等），并按 `_SF_OPTIONS_ALLOWED` 加了反查守卫：以后新增的键若在 wire 没点名、或在语料没解释，测试直接红。净效果是默认连接期 22,948 → 23,654 字符（多注册 `dhole_doc`，+706）
-- **17 处 `os.environ.get("DHOLE_*")` 直读改走 `env_registry.value_of()`**（browser / reranker / search / search_metasearch / search_proxy / security / updater / server）：语义一字未动（env 优先、默认值与钳制区间不变），但没有这一步，文件门就只对一半旋钮成立 —— 两条长得一模一样的路只有一条管用，正是本批次要消灭的那类故障。由 `tests/test_config_store.py` 扫描源码钉住：新写一处直读会直接红，注释里的例子不算（守卫先跳过 `#` 开头的行）。
-- **`dhole --help` 的能力清单与 CLI 表格补上 `dhole config`**；`README`「配置」一节从「改 env 块 + 重启」改成两条门并列，本地数据表新增 `config.json` 一行并写明 **secret 类变量落同样盘**（不想让密钥进文件就继续用 env 块）。
-- **默认连接期 23,421 → 24,030 字符**（+609，按实测的 4.16 字符/token 约 +146 token）：`smart_fetch` 与 `smart_crawl` 各多一个 `focus_engine` 的说明。本批次的原则一直是"常驻层只留会让人得出错误结论或触发动作的句子"，这里留下的是**拒绝 vs 静默降级**那一条（它会改变 agent 的下一步）；毫秒数、模型名与打开方式移进 `dhole_doc(topic='behavior')` 与错误文本本身
-
-### 修复
-
-- **CDP 那套说明里的"改 env 块 + 重启宿主"是过期的**：W11 的文件门装上后，`dhole init --cdp` / `dhole config set` 就能写这两道闸，而 `DHOLE_CDP_ATTACH` 与 `DHOLE_CDP_HOSTS` 的 `read_at` 都是 `call`——按旧说明去编辑宿主 JSON 并重启，做的是没人需要的工作。configuration.md / troubleshooting.md / SKILL.md 三处一起改成"一条命令 + 按次生效"
-- **README 的连接期字符数已经漂了 233**：README 写 23,654，而把 W15 的改动退回 HEAD 实测是 23,421。这正是 `tests/tool_payload_measure.py` 的 docstring 预言过的那一种失效——某处描述变短了、没有人数，而仓库有意不设尺寸断言（"刻舟求剑"），所以数字不会自己变红。现在 README 与 CHANGELOG 都对齐到重新量出来的数
-- **配置不再静默降级**：`_env_int` 与 `_env_flag`（以及 sessions / robots / security / crawl / actions / search_metasearch 里的 12+ 处独立读者）统一走 `env_registry` 的类型化 helper；非法值进入进程内共享告警列表，`dhole --doctor` 打印。此前 `DHOLE_COOKIE_TTL_S=abc`、`DHOLE_SEARCH_DEADLINE=not-a-number`、`DHOLE_ENGINE_HEARTBEAT=soon` 全都是无声回落
-- **`README.md` 的"零配置即可用"改口**：改成"默认零配置就能跑通最常见的路径" + 明写 Clash / sing-box TUN + fake-ip 例外需要 `DHOLE_SSRF_DNS_RECHECK=0`（`dhole doctor` 会识别这台机器是不是这种环境）；安装段把两条命令（pip + playwright）都列出并说明"两步都跑完浏览器层才可用"
-- **`configuration.md` 补齐**：`DHOLE_UPDATE_PACKAGE` / `DHOLE_UPDATE_INDEX_URL` 之前完全没在 142 行的文档里出现（W1 的文档覆盖测试暴露的），补进"data location / privacy / diagnostics"；`_ZONE` / `_COUNTRY` 简写展开成完整 `DHOLE_BRIGHTDATA_ZONE` / `DHOLE_BRIGHTDATA_COUNTRY` 名并标 import 时机；CLI 表格加 `dhole doctor` 与 `dhole init` 两行
-- **测试不再往真实 `~/.dhole` 写配置**：`tests/conftest.py` 接管了六个状态文件的路径，却没接管 `paths.home()`，于是文件层第一次跑测试时把 `["DHOLE_USAGE_LOG"]` 写进了用户真实的 `~/.dhole/config.json` —— 那正是这个 fixture 存在的理由（它已经为 `sessions.db` 与 `engine_stats.json` 挡过同类事，见其注释）。`config.json` 现在是第七个被接管的路径
-
-
 ## [17.0] - 2026-10-01
 
 从「网页研究工具」迈向「agent 的个人 Web 操作助手」的第一块：**带登录态抓取**与**页面操作**——CDP 接管你已登录的 Chrome，让已登录页面第一次可读；元素快照 + 索引化动作让 agent 能点、能填、能提交（提交默认暂停，等人确认）。边界不变：识别与决策归外层 agent，dhole 是零模型、零密钥的确定性工具层。
+
+同版收尾还有一个「大众化批次」：零配置就跑通最常见的路径，配置只在需要时可见、且能确认生效。
 
 ### 新增
 
@@ -73,11 +33,24 @@
 - **验证码靶站与视觉辅助基线**：靶站新增 `/captcha`、`/captcha.png`（扭曲文字：逐字旋转 + 正弦位移 + 干扰线/噪点/笔画擦除，两档难度）、`/captcha/verify`；答案由 token 确定性派生（无状态、重启后不变），出题与判卷分离（`--emit` 不打印答案）。`evals/captcha_baseline.py` 量出：二维码解码 9/10（唯一未过是 σ=60 高斯噪声，信息层面已不可解）、验证码一次读对率 `normal` 36% / `hard` 12%、`DHOLE_MULTIMODAL=1` 的试读纪律确实只在开旗时进 wire。不变式由 `tests/test_captcha_fixture.py` 钉住（重点：答案只由 token 决定、与难度档无关）
 - **凭据来源 `vault` 与独立登录流 `login`（`DHOLE_VAULT=1`，默认关）**：计划第七章被"凭据源未就位"卡住的两项，随凭据源一起落地。`vault` **不自造保险库**——读用户已有的密码管理器 CLI（Bitwarden `bw` / 1Password `op`），`op=status` 报哪家装了、解锁了，`op=list` 回条目元数据，`op=match` 按 URL 主机找候选；**密码与 TOTP 的值任何 op 都不回**，`VaultModel` 里没有能装它们的字段（"凭据不出境"由接口形状保证，而不是由每个调用点记得脱敏）。解锁令牌从进程环境继承、永不进 argv。`login` 用其中一条凭据登录：**不带 `confirm` 时只做一次只读快照**，按 `type=password`（事实，不是"请登录"这类文案）认出用户名 / 密码 / 提交控件并回计划，**一个字节都不填**——填本身也不可逆（页面上的输入事件能把值发出去），所以它和提交一起等在闸后；带 `confirm=true` 才填并提交，之后复用 `check_login` 的无模型探针判定 `logged_in` 并把 cookie 留在 `session_id` 下。密码由服务器侧读一次、直接喂进输入框，**不进响应 / `metadata.actions` 收执 / `DHOLE_USAGE_LOG` 审计行 / cache.db**——回执点名的是 vault 条目名。`confirm=true` 必须给 `session_id`，否则**在开浏览器之前**拒绝（共享的 auto 会话不能承接登录态，那是既有红线）。没有提交控件时在密码框回车，回车同样在闸后。与 `recipe` / `watch` **分开一个开关**：打开"重复任务"不该顺手打开一个能读你密码管理器的工具。默认关是因为 schema 3,063 字符 + 路由行 234 字符（连接期 +3,297）
 
+- **`dhole_doc` 工具（第 14 个，默认注册）**：agent 一次调用就能读到 dhole 自己的说明书（七个 topic，`section=` 取其中一节），随包语料成为唯一一份说明书，`dhole skill install` 降级为可选加分
+- **`dhole config`（第二条配置门）**：`list | set | unset` 读写 `~/.dhole/config.json`，按次读取的旋钮下一次调用就生效，不用改宿主 JSON、不用重启；env 仍然优先，README 的配置一节同步改成两条门并列
+- **`dhole init` 会打开能力**：`--tasks` / `--vault` / `--neural`（连模型一起装好）/ `--cdp <host>`（连主机围栏一起写好，不提供只开 attach 不加围栏的形状）
+- **`dhole init --probe`**：跑一次真实搜索 + 真实抓取，回答的是"从这里能不能用"而不是"装对了没"
+- **`options.focus_engine`**：`DHOLE_NEURAL_FOCUS` 是许可、这个参数是意愿。`'bm25'` 在开关开着时也生效；`'neural'` 没有许可时被拒绝（`focus_engine_not_permitted`）而不是静默降级
+- **fake-IP 代理环境自己适配**：Clash / sing-box 的 TUN + fake-ip 下不再需要事先知道要设 `DHOLE_SSRF_DNS_RECHECK=0`，IP 字面量 / 主机名黑名单 / 云元数据 / 私网这些守卫一条不动
+- **`dhole --doctor` 多三段体检**：配置审计（env 与文件两个门一起读，非法值计入 failure，孤儿键单独报）、resolver 现实检查、`cdp fence`（attach 开着而没有围栏时说明白，算 info 不算故障）
+
 ### 变更
 
 - **`cdp_url` 默认拒绝（breaking-adjacent）**：此前 `cdp_url` 是 agent 可自由传的参数——这正是要收口的洞：attach 你的真实 Chrome 等于交出其中**所有**已登录站点的读权限，而外层 agent 的规划循环不可预测。现在必须 `DHOLE_CDP_ATTACH=1` 显式开启；未开启时带 `cdp_url` 的调用返回 `cdp_attach_disabled`，一个请求都不发。受影响的是「给 cdp_url 传值但没设开关」的既有调用：以前是静默跑通但登录态为空（`new_context()` 的旧 bug），现在是明确失败——修法是设开关，或者本来就不该传
-- **工具描述收敛到「只写给 agent 看」**：连接期 23,572 → 22,817 字符（`tools/list` 21,431 → 20,676）。删的是**写给读者而非写给 agent** 的那层——`session_id` 的桥接实现细节（agent 要的是「登录态跨两层可用」这个结论，不是它怎么桥的）、`focus_mode` 里的进程级开关（agent 改不了它，且响应头已声明实际打分器）、`smart_crawl` / `smart_search` 里与 `options` 包重复的段落。**条件→动作契约、阈值校准数字、路由规则一条没动**：那些是 agent 做决策的依据，删了省的是字符、赔的是选错工具多花的调用。本版其余改动又补回 151 字符（M-1 把神经 focus 的 12.5 秒/页代价写进 `focus` 参数描述），**17.0 定稿时连接期为 22,968**（`tools/list` 20,827），与 README 一致
+- **工具描述收敛到「只写给 agent 看」**：连接期 23,572 → 22,817 字符（`tools/list` 21,431 → 20,676）。删的是**写给读者而非写给 agent** 的那层——`session_id` 的桥接实现细节（agent 要的是「登录态跨两层可用」这个结论，不是它怎么桥的）、`focus_mode` 里的进程级开关（agent 改不了它，且响应头已声明实际打分器）、`smart_crawl` / `smart_search` 里与 `options` 包重复的段落。**条件→动作契约、阈值校准数字、路由规则一条没动**：那些是 agent 做决策的依据，删了省的是字符、赔的是选错工具多花的调用。本版其余改动又补回 151 字符（M-1 把神经 focus 的 12.5 秒/页代价写进 `focus` 参数描述），**17.0 定稿时连接期为 22,968**（`tools/list` 20,827），大众化批次瘦身后见「变更」末条
 - **随包 skill 手册同步到 13 个工具**：`SKILL.md` 与 `references/` 此前只写九个默认工具，且「登录」一行断言密码「只能走 CDP attach 或用户自己的浏览器」——`vault` / `login` 落地后这句已经是错的。现在手册补齐四个 opt-in 工具：默认关与两个独立开关（`DHOLE_TASKS` / `DHOLE_VAULT`）、`vault` 只回元数据（`VaultModel` 没有能装密码的字段）、`login` 的审批闸与三态 `logged_in`、`watch` 首跑 `changed=null` 不等于「无变化」、`recipe` 重放 `actions_failed` 非零即页面已变，都进了「选工具 / 深行为 / 配置 / 样例 / 字段 / 排查」六卷；新增硬约束 13 明确「开关是操作者的决定、凭据值不进 transcript」。升级后重跑 `dhole skill install --force` 生效
+
+- **`pip install dhole-mcp` 默认即完整版**：`[all]` 的 12 项重依赖并入默认依赖（`[all]` 保留、`slim` 只是个名字），"看起来装好了其实只有 HTTP 层"到此结束
+- **`DHOLE_IGNORE_ROBOTS` 的未识别值改为视为 OFF 并记录**：唯一一个"typo 朝危险方向失败"的开关被收口，其余 flag 语义一字未动
+- **常驻工具说明瘦成「路由 + 陷阱 + 键名清单」**：逐键解释移进 `dhole_doc`，20 个原本没被点名的 `options` 键全部点名；默认连接期 22,948 → **24,030 字符**（10 个工具，含 `dhole_doc` 与 `focus_engine`）
+- **17 处 `os.environ` 直读改走 `env_registry.value_of()`**：文件门对全部旋钮成立，而不是只对一半
 
 ### 修复
 
@@ -93,6 +66,11 @@
 - **`scanned_pdf` 提示硬编码，误导已装 `[all]` 的机器**：扫描件提示一律是「装 `pip install dhole-mcp[all]` 就能自动 OCR」，在已经装了 OCR 的机器上这是事实错误的指引——照做只是重装一遍。提示改由 `pdf_extractor.ocr_advice()` 按本机实际能力给：装了就说「OCR 在这里没读出文字，用视觉工具或换个来源」，没装才给安装命令。四处 OCR 提示（全扫描死胡同、两个逐页标记、`smart_fetch` 的 `next_action`）从此同源，不会对同一台机器给出互相矛盾的答案
 - **零匹配选择器白等 30 秒，并把「元素不在 DOM 里」误诊为「页面没渲染完」**：元素级截图对零匹配的 locator 会等满 `timeout`（默认 30 秒），然后错误映射把超时一律读成「页面没渲染完」——把人引向调大 `timeout` 与加 `wait_selector`，而这两个补救对「选择器根本没匹配到」都无效。现在截图前先查计数，零匹配立即失败并直说「选择器在已加载的页面上没匹配到元素」，给出真正有用的方向（对照真实 DOM 检查选择器，或先整页截图看看）。实测（本地靶站）：修复前与真超时无法区分，修复后 3.6 秒返回，与一次**成功**裁切（2.9 秒）同量级——等待本身消失了，只剩页面加载时间
 - **`discover_only` + `sitemap` 的三处「没人说」**（P2，报告为「无截断上限」，实测上限一直都在：floor 1000、顶 5000，349 条没被截断只是因为 349 < 1000；真正的缺口是下面三处）：① **没触顶的那条分支一个字都不说**，于是「mapped 349 URL(s)」读起来就是「这就是整站」——而 sitemap 是站点**选择发布**的索引，略掉整节是常事，现在这条分支会说清「这是 sitemap 的清单，不是它列全了的证明」；② 走 `<sitemapindex>` 时的**文件数 / 层数上限**（25 个文件 / 3 层）独立于 URL 上限，撞上它 `capped` 仍是 `False`、计数也看不出来——站点把 1,200 页拆进 30 个小 sitemap，这里映射出 1,000 条，剩下 200 条无声消失；现在这条也如实报（且**不**点名任何旋钮：`max_pages` 动不了文件读取上限，指一个点了没反应的旋钮比不指更糟）；③ `path_include` / `path_exclude` 过去在**截断之后**才过滤，于是站点把目标子树排在 cap 之后时一条都进不来——而响应会把它报成「**no sitemap.xml found**（robots.txt 没有 Sitemap 指令、/sitemap.xml 什么也没返回）」，sitemap 明明刚读完。现在过滤在 cap **之前**生效（`discover_sitemap` 新增 `accept` 谓词，`max_pages` 换来的额度花在调用方要的页面上），抓到了但过滤后为空的地图也不再谎报「没找到」，而是回「读到了 N 条、没有一条匹配你的 scope」并给出收窄建议。响应新增 `sitemap_truncated`（只在为真时上线，小 sitemap 的 wire 形状与默认连接期开销 22,968 字符均不变）
+
+- **配置不再静默回落**：非法值（`DHOLE_COOKIE_TTL_S=abc` 这类）进 doctor 的配置审计，"我设了但没生效"第一次成为可见输出
+- **README 两处与事实对齐**：「零配置可用」补上 fake-ip TUN 这个例外（现在已自动适配），连接期字符数重新实测（原数字比实际高 233）
+- **CDP 的说明改口**：不再要求"编辑宿主 env 块 + 重启"（两道闸都按次读取），并第一次写明 `DHOLE_CDP_HOSTS` 是**精确主机名**匹配——`example.com` 不覆盖 `www.example.com`，也不覆盖页面的 CDN 脚本主机
+- **测试不再往真实 `~/.dhole/config.json` 写**：它成为第七个被 fixture 接管的状态路径
 
 ### 安全
 
