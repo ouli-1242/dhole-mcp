@@ -119,9 +119,10 @@ playwright install chromium      # 反检测浏览器引擎（~150MB）
 | `DHOLE_HOME` | 状态目录（默认 `~/.dhole`，装着抓到的正文明文与搜索词）；共享机器上可指到别处 |
 | `DHOLE_WORKDIR` | `parse` 解析相对路径时额外尝试的目录 |
 | `DHOLE_HF_ENDPOINT`（或 `HF_ENDPOINT`） | 重排模型下载源；默认先试 `huggingface.co`、失败回退 `hf-mirror.com`，设了就只用这一个 |
-| `DHOLE_BRIGHTDATA_API_KEY`（`_ZONE` / `_COUNTRY`） | Bright Data SERP 后端（zone 默认 `dhole`，地区默认 `us`） |
+| `DHOLE_BRIGHTDATA_API_KEY` / `DHOLE_BRIGHTDATA_ZONE` / `DHOLE_BRIGHTDATA_COUNTRY` | Bright Data SERP 后端（zone 默认 `dhole`，地区默认 `us`） |
 | `DHOLE_TAVILY_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_BOCHA_API_KEY` | 对应 keyed 引擎的密钥（均默认不跑） |
 | `DHOLE_NO_AUTO_REPAIR` | 设 `1` 后入口遇到 ImportError 只打印修复命令，不自动重装 |
+| `DHOLE_UPDATE_PACKAGE` / `DHOLE_UPDATE_INDEX_URL` | 自动修复与 `dhole -u` 重装时用哪个发行版名 / 哪个索引源（默认 `dhole-mcp` + 官方 PyPI）。**从私有源或改名分发装的话要设**——否则修复会去官方源装同名的另一个包，把这份 fork 覆盖掉 |
 
 配置出问题先跑 `dhole --doctor`——它逐项体检并给出可直接复制的修复命令。
 
