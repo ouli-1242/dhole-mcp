@@ -39,9 +39,14 @@ tokenizer (the published numbers come from a separate cl100k_base run); only
 characters are exactly comparable.
 
 Usage (from anywhere):
-    python tests/tool_payload_measure.py [--out DIR]
+    python tests/tool_payload_measure.py [--out DIR] [--with-output-schema]
 
 Without ``--out`` it only prints; nothing is written into the repo.
+
+``--with-output-schema`` is the one measurement that has to import the package
+(see ``output_schema_report``): ``outputSchema`` is built at runtime from the
+response models, so there is no literal for ``ast.literal_eval`` to read. It is
+off by default so the rest of the run stays independent of runtime state.
 """
 
 from __future__ import annotations
@@ -125,6 +130,37 @@ def duplication_report(tool_defs: list[dict], instructions: str) -> list[str]:
     return lines
 
 
+def output_schema_report(compact_chars: int, instructions_chars: int) -> list[str]:
+    """The connect-time cost of ``DHOLE_OUTPUT_SCHEMA=1``, asked of the server itself.
+
+    Why this one measurement imports when the rest of the file deliberately does
+    not: ``outputSchema`` is built at runtime from the response models
+    (``_output_schema_for``), so there is no literal for ``ast.literal_eval`` to
+    read. That is exactly how the README's ``DHOLE_OUTPUT_SCHEMA`` row went stale
+    - the numbers were taken by hand once and nothing could re-take them.
+
+    A failure to import is REPORTED, never dropped: a silently absent section
+    reads as "the cost is zero", which is the wrong answer to publish.
+    """
+    lines = ["", "-- DHOLE_OUTPUT_SCHEMA=1 (asked of the server, not parsed) --"]
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+    try:
+        from dhole_mcp import server as _server
+    except Exception as exc:  # noqa: BLE001 - report, never hide
+        lines.append(f"SKIPPED: cannot import dhole_mcp.server "
+                     f"({type(exc).__name__}: {exc})")
+        return lines
+    total, per = _server._enabled_output_schema()
+    for tool, n in sorted(per.items(), key=lambda kv: -kv[1]):
+        lines.append(f"  {tool:14s} outputSchema={n}")
+    with_schema = compact_chars + total
+    base = compact_chars + instructions_chars
+    lines.append(f"tools/list  with schema : {with_schema}  (+{total})")
+    lines.append(f"connect total with schema: {with_schema + instructions_chars}  (+{total})")
+    lines.append(f"connect-time delta       : +{total * 100 / base:.1f}%")
+    return lines
+
+
 def main() -> None:
     src = SERVER.read_text(encoding="utf-8")
     tree = ast.parse(src, filename=str(SERVER))
@@ -189,6 +225,9 @@ def main() -> None:
         required = td["inputSchema"].get("required", [])
         out.append(f"{td['name']:14s} chars={n:5d} params={len(params):2d} required={required} ann={td.get('annotations')}")
     out.append(f"sum(per-tool)         : {total}")
+    if "--with-output-schema" in sys.argv[1:]:
+        minimal_compact, _ = size(minimal_payload, None, (",", ":"))
+        out.extend(output_schema_report(minimal_compact, len(instructions)))
     out.extend(duplication_report(tool_defs, instructions))
 
     text = "\n".join(out) + "\n"
