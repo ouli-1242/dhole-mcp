@@ -70,7 +70,9 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
     "dhole": {
       "command": "dhole",
       "args": [],
-      "env": { "DHOLE_SEARCH_PROXY": "http://127.0.0.1:7890" }
+      "env": { 
+        "DHOLE_SEARCH_PROXY": "http://127.0.0.1:7890" 
+      }
     }
   }
 }
