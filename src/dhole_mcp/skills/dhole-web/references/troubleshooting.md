@@ -97,7 +97,7 @@ Attach-specific failures:
 
 ### Focus behaves differently than expected
 
-- `neural_focus_model_missing` — `options.focus_engine='neural'` was asked but the reranker model isn't downloaded; no request was made. For this call pass `focus_engine='bm25'` (plain keyword focus, no model), or let the model download once: any neural `smart_search` (one-time, resumable) or `dhole model use bge-zh`
+- `neural_focus_model_missing` — `options.focus_engine='neural'` was asked but the reranker model isn't downloaded; no request was made. For this call pass `focus_engine='bm25'` (plain keyword focus, no model), or let the model download once: any neural `smart_search` (one-time, resumable) or let a neural `smart_search` fetch it
 - `focus_engine_not_permitted` — 17.0 removed this error (neural focus is a per-call choice now, no license). Seeing it means the installed dhole predates 17.0
 - A weak-hit note in `next_action` ("best block scored below the intent floor") — the fetch succeeded but the page likely doesn't answer the focus query; `content_ok` stays true by design. Pivot: search for a better source instead of re-reading this page
 
@@ -129,6 +129,5 @@ This machine runs a source-installed personal fork with self-update off: `git pu
 | `dhole engines probe` | One real query per engine (hits / latency / block reason) |
 | `dhole engines reset` | Clear all cooldowns now |
 | `dhole proxy list / add / remove / clear` | Search proxy pool management (list masks credentials) |
-| `dhole model` / `dhole model use <name>` | Rerank model: `bge-zh` (default, bilingual, ~279MB) / `zh-full` (cross-lingual ~450MB) / `ms-marco` (English-first ~91MB); recalibrate `min_raw_relevance` after switching |
 | `cache_clear(engine_state=true)` | MCP-side equivalent of engines reset (wipes the body cache too) |
 | `dhole skill install --force` | re-sync the installed agent skill to the one bundled with this dhole version (skill updates ship with dhole releases) |

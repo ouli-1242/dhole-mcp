@@ -66,7 +66,7 @@ Then just call — the first attach asks, the user answers once:
 ### Scenario: screenshots an agent can see / semantic focus
 
 - Element captures are **always on**: `options.selector` crops on the `screenshot` tool and `{"screenshot": {...}}` inside `actions` (element shots ride the response as image blocks). The captcha discipline (≤3 tries then hand off; DataDome / Akamai / interactive Turnstile / 2FA / sliders always hand off) is part of the tool descriptions. `decode_qr` (local OpenCV QR decode, in the `[all]` extra) is deterministic local work
-- `focus` block-picking scores with BM25 by default. `options.focus_engine="neural"` switches that ONE call to the local cross-encoder (~12.5s of CPU per page — budget timeout for bulk); model missing = explicit error (`neural_focus_model_missing`), never a silent download. The model arrives on the first neural smart_search (one-time, resumable) or via `dhole model use <name>`; `options.focus_mode="best"` returns the single top block + heading
+- `focus` block-picking scores with BM25 by default. `options.focus_engine="neural"` switches that ONE call to the local cross-encoder (~12.5s of CPU per page — budget timeout for bulk); model missing = explicit error (`neural_focus_model_missing`), never a silent download. The model arrives on the first neural smart_search (one-time, resumable); `options.focus_mode="best"` returns the single top block + heading
 
 ### Scenario: repeatable tasks, change monitoring, stored credentials
 
@@ -109,11 +109,10 @@ Then just call — the first attach asks, the user answers once:
 | `dhole -v` | Version + capability panel (browser / pdf / rerank / engine yield — each missing row is a degraded tier) |
 | `dhole --doctor` | Install check: item-by-item with copy-pasteable fixes; also runs the config audit + fake-ip resolver reality check on this machine, and names any retired `DHOLE_*` a host still sets |
 | `dhole doctor` | Same output and exit code as `dhole --doctor` (the two spellings are equivalent, use whichever matches the other subcommand you already typed) |
-| `dhole init` | One-shot install + MCP client registration: checks browser deps, offers `playwright install chromium`, detects Claude Desktop / Cursor / Windsurf / VS Code configs, prints the JSON it would add. **Dry-run by default**; only `--yes` writes, and it always leaves a `.bak-<timestamp>` next to every modified file. Exits 0 with manual instructions when no known client is on disk. |
 | `dhole engines list` | Per-engine verdict, remaining cooldown, active backoff |
 | `dhole engines probe` | One real query per engine (hits / latency / block reason) |
 | `dhole engines reset` | Clear cooldowns now |
 | `dhole proxy list/add/remove/clear` | Search proxy pool management |
-| `dhole model` / `dhole model use <name>` | Rerank model: `bge-zh` (default, bilingual, ~279MB) / `zh-full` (cross-lingual ~450MB) / `ms-marco` (English-first ~91MB); recalibrate `min_raw_relevance` after switching |
+| reranker model | No command selects it: `bge-zh` (bilingual, ~279MB) is the default and a neural `smart_search` fetches it on first use (resumable). `~/.dhole/config/reranker.json` (`{"model": "<name>"}`) is still honoured if you wrote one by hand — `min_raw_relevance` is calibrated per model, so recalibrate after switching. A later 17.0 step collapses the registry to one model and this file disappears |
 | `dhole --http --host --port` | Serve over streamable HTTP instead of stdio. **No authentication**: `--host 0.0.0.0` exposes "fetch any URL on your behalf" to the whole network — put a reverse proxy / auth / firewall in front on shared networks |
 | `dhole -u` | Self-update (off in 17.0; update via `git pull && pip install -e .` then restart the host) |

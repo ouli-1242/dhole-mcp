@@ -124,7 +124,7 @@ These signals mean **a problem is happening that the user likely doesn't see**. 
 - `DHOLE_DEFAULT_ENGINES` — swap the default pool (default `baidu,bing,sogou,bing_global,yandex,brave`)
 - 17.0 deleted the old on/off switches (tool groups, multimodal, neural-focus license, wire shape, cooldown tuning, self-update): those capabilities are default-on or fixed, and a stale `DHOLE_…` in the env block does nothing — `--doctor` names what a host still sets that no longer has any effect
 
-CLI: `dhole -v` capability panel · `--doctor` install check (audits env AND `~/.dhole/config.json`) · `config list|set|unset` persisted knobs · `init --yes --probe` one-command setup (`--probe` runs one real search + fetch) · `engines list|probe|reset` engine health · `proxy list|add` proxy pool · `model use <name>` swap reranker · `skill install|status` sync the bundled agent skill (re-run `dhole skill install --force` after upgrading dhole to pick up skill updates).
+CLI: `dhole -v` capability panel · `--doctor` install check (audits env AND `~/.dhole/config.json`) · `config list|set|unset` persisted knobs · `engines list|probe|reset` engine health · `proxy list|add` proxy pool · `skill install|status` sync the bundled agent skill (re-run `dhole skill install --force` after upgrading dhole to pick up skill updates).
 
 ## references index (read on demand — never all at once)
 

@@ -3,12 +3,15 @@
 Holds ``~/.dhole/config/reranker.json``: ``{"model": "<name>"}``. The registry
 of known models lives in ``reranker.MODELS``; unknown names are rejected so a
 typo can never silently decide which model scores your results.
+
+17.0: ``dhole model`` (the CLI verb) is gone —— 写这个文件的手只剩两处：用户自己
+手写，以及 B8 收敛成单模型后彻底删除本模块。``get_selected`` 仍然如实读它：一台
+16.x 上选过模型的机器不该在某个配置批次里被悄悄换掉打分器。
 """
 
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 from dhole_mcp import paths
@@ -26,20 +29,3 @@ def get_selected() -> str | None:
         return name or None
     except Exception:
         return None
-
-
-def set_selected(name: str) -> Path:
-    """Persist the model choice. Raises ValueError on unknown names."""
-    from dhole_mcp.reranker import MODELS
-
-    if name not in MODELS:
-        raise ValueError(
-            f"unknown reranker model {name!r} (known: {', '.join(sorted(MODELS))})"
-        )
-    p = _path()
-    paths.ensure_private_dir(p.parent)
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"model": name}, ensure_ascii=False, indent=2)
-                   + "\n", encoding="utf-8")
-    os.replace(tmp, p)
-    return p

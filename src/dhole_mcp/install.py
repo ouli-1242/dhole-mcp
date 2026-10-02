@@ -101,13 +101,14 @@ def qr_install_advice() -> str:
 
 
 def rerank_install_advice() -> str:
-    """Advice for the neural reranker tier. Model download is a separate step
-    (``dhole model use``); the hint names both."""
+    """Advice for the neural reranker tier. 17.0: 模型不是"选"来的 —— 第一次神经
+    搜索会自己把它下载完（可续传），没有 model 选择命令了。"""
     try:
         import onnxruntime  # noqa: F401
         import tokenizers  # noqa: F401
         return ("reranker packages are installed - the failure was model state, "
-                "not deps; try `dhole model use <name>` to reselect")
+                "not deps; a neural smart_search re-fetches the model, and "
+                "~/.dhole/models holds whatever was already downloaded")
     except Exception:  # noqa: BLE001
         return (f"Install the neural rerank tier with: {full_install_command()}; "
                 "the model (~279MB for bge-zh) is fetched on first use")

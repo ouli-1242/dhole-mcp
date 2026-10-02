@@ -1,12 +1,17 @@
 """Reranker model registry + selection: which cross-encoder scores search
-results, and how the choice is persisted/validated.
+results, and how the choice is read and validated.
 
 The registry itself lives in ``reranker.MODELS`` (that module owns ONNX loading,
 so it owns the model list too). This file covers the parts a user touches:
 ``~/.dhole/config/reranker.json``, the default, and the fact that an unknown
-name is REJECTED rather than silently mapped to something else.
+name is never silently mapped onto some other model.
+
+17.0: ``dhole model`` (the CLI verb) and ``reranker_config.set_selected`` are
+gone, so this file is written only by hand -- which makes the READ side the
+place where a typo has to be caught.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -20,6 +25,17 @@ def config_file(tmp_path, monkeypatch):
     path = tmp_path / "reranker.json"
     monkeypatch.setattr(reranker_config, "_path", lambda: path)
     return path
+
+
+def _select(config_file, name: str) -> None:
+    """Write the selection file the way a user now can only do it by hand.
+
+    ``set_selected`` used to be the writer; with the CLI verb deleted the file
+    stays as the documented manual lever, so the test writes it literally rather
+    than keeping a fake API alive.
+    """
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(json.dumps({"model": name}), encoding="utf-8")
 
 
 def test_default_model_is_the_chinese_capable_one(config_file):
@@ -43,16 +59,18 @@ def test_registry_entries_are_complete():
 
 def test_config_selects_the_model(config_file):
     assert reranker.active_model().name == "bge-zh"
-    reranker_config.set_selected("ms-marco")
+    _select(config_file, "ms-marco")
     assert reranker.active_model().name == "ms-marco"
     assert reranker.active_model_dir() == \
         reranker.paths.models_dir() / "ms-marco"
 
 
-def test_unknown_name_is_rejected_on_write(config_file):
-    with pytest.raises(ValueError, match="unknown reranker model"):
-        reranker_config.set_selected("bge-large-zh")
-    assert reranker.active_model().name == "bge-zh"
+def test_there_is_no_writer_api_left(config_file):
+    """``set_selected`` 随 ``dhole model`` 一起删：剩下的唯一入口是用户手写这个文件。
+
+    留一个"只有测试在用"的写函数，等于给下一条 CLI 动词留好脚手架。
+    """
+    assert not hasattr(reranker_config, "set_selected")
 
 
 def test_unknown_name_in_file_falls_back_to_default(config_file, caplog):
@@ -87,7 +105,7 @@ def test_model_present_follows_the_active_model(config_file, tmp_path, monkeypat
     _populate("bge-zh")
     assert reranker.model_present() is True
     _populate("ms-marco")
-    reranker_config.set_selected("ms-marco")
+    _select(config_file, "ms-marco")
     assert reranker.model_present() is True
     # A truncated active model is NOT "present" (min_bytes floor).
     (models_dir / "ms-marco" / "model.onnx").write_bytes(b"x" * 10)
@@ -102,7 +120,7 @@ def test_capabilities_names_the_active_model(config_file, tmp_path, monkeypatch)
     caps = {label: (state, ok) for label, state, ok in updater.capabilities()}
     state, ok = caps["neural rerank"]
     assert "bge-zh" in state and ok is False       # not downloaded yet
-    reranker_config.set_selected("ms-marco")
+    _select(config_file, "ms-marco")
     caps = {label: (state, ok) for label, state, ok in updater.capabilities()}
     assert "ms-marco" in caps["neural rerank"][0]
 

@@ -103,7 +103,7 @@ Rejections list the keys the tool actually accepts — follow the error.
 ```json
 {"url": "https://docs.example.com/guide", "options": {"focus": "retry policy", "focus_engine": "bm25"}}
 ```
-Same key works in `smart_crawl`'s options, where it matters more: the semantic path costs ~12.5s of CPU per page times `max_pages`, so the cheap default is what runs when nobody names it. `"neural"` with the model missing is **refused** (`neural_focus_model_missing`) instead of silently downloading ~280MB — offer `dhole model use bge-zh` or the automatic download on the first neural `smart_search`.
+Same key works in `smart_crawl`'s options, where it matters more: the semantic path costs ~12.5s of CPU per page times `max_pages`, so the cheap default is what runs when nobody names it. `"neural"` with the model missing is **refused** (`neural_focus_model_missing`) instead of silently downloading ~280MB — the first neural `smart_search` fetches it once (resumable), or re-run with `"bm25"`.
 
 **Structured extraction** (repeated records REQUIRE a "container selector + sub-schema": sub-selectors evaluate inside each container, one record per container; a bare top-level selector returns a page-wide union with no record attribution):
 ```json

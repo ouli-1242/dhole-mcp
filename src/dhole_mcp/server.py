@@ -7031,7 +7031,7 @@ class MasterFetchServer:
                             next_action=(
                                 "The reranker model is not downloaded yet. It downloads "
                                 "automatically on the first neural smart_search (one-time, "
-                                "resumable), or select it with `dhole model use bge-zh`. "
+                                "resumable). "
                                 "For this call only, pass focus_engine='bm25' to use "
                                 "keyword-overlap focus."))
 
@@ -8803,7 +8803,7 @@ class MasterFetchServer:
                                         next_action=(
                                             "The reranker model is not downloaded yet. It downloads "
                                             "automatically on the first neural smart_search (one-time, "
-                                            "resumable), or select it with `dhole model use bge-zh`. "
+                                            "resumable). "
                                             "For this crawl only, pass focus_engine='bm25' to use "
                                             "keyword-overlap focus."))
             try:
@@ -9542,13 +9542,10 @@ def _help_epilog() -> str:
         f"  {ui.cyan('dhole doctor')}       {ui.dim('diagnose the install + config audit + resolver reality')}",
         f"  {ui.cyan('dhole --doctor')}     {ui.dim('same as `dhole doctor` (accepted for backwards compatibility)')}",
         f"  {ui.cyan('dhole -u')}           {ui.dim('update to the latest version')}",
-        f"  {ui.cyan('dhole model')}        {ui.dim('list reranker models')}",
-        f"  {ui.cyan('dhole model use X')}  {ui.dim('select the reranker model (persisted in ~/.dhole/config/reranker.json)')}",
         f"  {ui.cyan('dhole proxy')}        {ui.dim('manage the search proxy pool (list|add|remove|clear)')}",
         f"  {ui.cyan('dhole engines')}      {ui.dim('show / reset / live-test engine health (list|reset|probe)')}",
         f"  {ui.cyan('dhole config')}       {ui.dim('list / set / unset persisted knobs in ~/.dhole/config.json (no host restart for per-call knobs)')}",
         f"  {ui.cyan('dhole skill')}        {ui.dim('install the bundled agent skill (status|install)')}",
-        f"  {ui.cyan('dhole init')}         {ui.dim('one-shot install + MCP client registration (dry-run by default; --yes to write)')}",
         "",
         ui.dim("docs:") + "  " + ui.cyan("https://github.com/ouli-1242/dhole-mcp"),
     ])
@@ -9724,46 +9721,6 @@ def _cmd_skill(argv: list[str], target=None) -> int:
     print("  " + ui.dim(f"{len(bundled_files)} files · skills load at session start, so restart your agent to pick it up"))
     print("  " + ui.dim("hosts that only read ~/.zcode/skills can point at the installed folder the same way"))
     return 0
-
-
-def _cmd_model(argv: list[str]) -> int:
-    """`dhole model [list|use <name>]` — inspect / select the reranker model.
-
-    Writes the same file a user can edit by hand; the CLI is a convenience, not
-    a second source of truth.
-    """
-    from dhole_mcp import cli_ui as ui
-    from dhole_mcp import reranker, reranker_config
-
-    action = argv[0].lower() if argv else "list"
-    if action in ("list", "ls", ""):
-        active = reranker.active_model().name
-        print("  " + ui.dim(f"reranker models (config: {reranker_config._path()})"))
-        for name, model in reranker.MODELS.items():
-            mark = ui.ok("active") if name == active else ""
-            print(f"    {name.ljust(10)} {ui.dim(model.label)} {mark}")
-            print("      " + ui.dim(f"{model.repo} @ {model.rev[:12]}"))
-        print("  " + ui.dim("switch with") + "  " + ui.cmd(f"dhole model use {reranker.DEFAULT_MODEL}"))
-        return 0
-    if action == "use":
-        if len(argv) < 2:
-            print(ui.err("usage: dhole model use <name>"))
-            return 2
-        name = argv[1].strip()
-        try:
-            path = reranker_config.set_selected(name)
-        except ValueError as e:
-            print(ui.err(str(e)))
-            return 2
-        model = reranker.MODELS[name]
-        print(ui.branded(ui.cyan(name), ui.ok("selected")))
-        print("  " + ui.dim(f"{model.label}"))
-        print("  " + ui.dim("written to") + "  " + ui.cmd(str(path)))
-        print("  " + ui.dim("the model downloads on the next neural search "
-                            f"(~{model.approx_bytes // 1_000_000}MB, resumable)"))
-        return 0
-    print(ui.err(f"unknown subcommand: {action} (try: dhole model list|use <name>)"))
-    return 2
 
 
 def _cmd_engines(argv: list[str]) -> int:
@@ -10045,11 +10002,9 @@ def main():
     # through to argparse, which errored with "unrecognized arguments: doctor"
     # and never mentioned --doctor. Both spellings now go through the same
     # `updater.doctor()` call, so their stdout AND exit code are identical.
-    _SUBCOMMANDS = ("model", "proxy", "engines", "skill", "doctor", "init", "config")
+    _SUBCOMMANDS = ("proxy", "engines", "skill", "doctor", "config")
     if len(_sys.argv) > 1:
         first = _sys.argv[1].lower()
-        if first == "model":
-            raise SystemExit(_cmd_model(_sys.argv[2:]))
         if first == "proxy":
             raise SystemExit(_cmd_proxy(_sys.argv[2:]))
         if first == "engines":
@@ -10060,9 +10015,6 @@ def main():
             raise SystemExit(_cmd_config(_sys.argv[2:]))
         if first == "doctor":
             raise SystemExit(updater.doctor())
-        if first == "init":
-            from dhole_mcp import init as _init_cmd
-            raise SystemExit(_init_cmd.run_init(_sys.argv[2:]))
         # Anything that is not a flag and not a known subcommand is a typo.
         # The old behaviour (argparse "error: unrecognized arguments") gave
         # no suggestion; "did you mean: dhole doctor?" is what turns a hung

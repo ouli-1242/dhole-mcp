@@ -25,7 +25,7 @@ import pathlib
 from dhole_mcp import env_registry as er
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-INIT_SRC = REPO / "src" / "dhole_mcp" / "init.py"
+SERVER_SRC = REPO / "src" / "dhole_mcp" / "server.py"
 CORPUS = REPO / "src" / "dhole_mcp" / "skills" / "dhole-web"
 
 #: Flags that gate NO capability a user is trying to reach, each with the reason
@@ -57,32 +57,21 @@ def unexplained_gates(entries=None) -> list[str]:
     return out
 
 
-def _init_enabled_names(src: str | None = None) -> set[str]:
-    """Every env name `dhole init` writes, read out of init.py's own source.
+def _cli_subcommands(src: str) -> set[str]:
+    """`dhole <verb>` 的登记表，从 server.py 的源码里读出来。
 
-    Parsed rather than imported: the question is "which gates can a command
-    open?", and in 17.0 the answer must be none — init registers MCP clients
-    and checks the install, it does not hand out capabilities.
+    解析而不导入：main() 里那个 `_SUBCOMMANDS` 是个函数内局部量，导入路径摸不到它；
+    而"哪个命令能开门"这个问题必须落在真实文本上，否则守卫只是在读自己的假设。
     """
-    tree = ast.parse(src if src is not None else INIT_SRC.read_text(encoding="utf-8"))
-    found: set[str] = set()
+    tree = ast.parse(src)
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if (isinstance(target, ast.Subscript)
-                        and isinstance(target.slice, ast.Constant)
-                        and isinstance(target.slice.value, str)
-                        and target.slice.value.startswith("DHOLE_")):
-                    found.add(target.slice.value)
-            keys = [k.value for k in getattr(node.value, "keys", [])
-                    if isinstance(k, ast.Constant) and isinstance(k.value, str)]
-            found.update(k for k in keys if k.startswith("DHOLE_"))
-        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "set_entry":
-            for arg in node.args:
-                if isinstance(arg, ast.Constant) and isinstance(arg.value, str) \
-                        and arg.value.startswith("DHOLE_"):
-                    found.add(arg.value)
-    return found
+        if (isinstance(node, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "_SUBCOMMANDS"
+                        for t in node.targets)
+                and isinstance(node.value, (ast.Tuple, ast.List))):
+            return {e.value for e in node.value.elts
+                    if isinstance(e, ast.Constant) and isinstance(e.value, str)}
+    return set()
 
 
 class TestNoCapabilityBehindAGate:
@@ -94,11 +83,30 @@ class TestNoCapabilityBehindAGate:
             f"这些默认关的开关只能靠编辑 env 块打开：{unexplained_gates()}。17.0 不收"
             f"新的能力闸 —— 要么默认开，要么在 NOT_A_GATE 里写下它为什么不锁能力。")
 
-    def test_init_opens_no_gate_at_all(self):
-        """17.0 的 init 不写任何 DHOLE_* 能力闸：安装与登记，仅此而已。"""
-        assert _init_enabled_names() == set(), (
-            f"dhole init 仍在写这些变量：{sorted(_init_enabled_names())}。"
-            "能力旋钮已全部注销或改为按次参数 —— 这个命令不该再有开关可写。")
+    def test_no_command_can_open_a_capability_gate(self):
+        """17.0：登记安装用的 `dhole init` 与选模型的 `dhole model` 都删了 —— 现在
+        **没有任何 CLI 动词能写能力闸**，所以这条守卫从"扫 init 写了哪些变量"升级成
+        "init 与 model 根本不存在"。留着扫描一个不存在的文件，等于守一个不存在的门。
+
+        装机流程因此是一句话：pip install → 把 README 那块配置交给宿主 agent 自己写
+        → `dhole doctor`。少一个会改用户机器的命令，就少一次它改错的机会。
+        """
+        import importlib.util
+
+        subcommands = _cli_subcommands(SERVER_SRC.read_text(encoding="utf-8"))
+        assert subcommands, "读不到 _SUBCOMMANDS —— 守卫要扫的东西换了形状，得同步改这里"
+        for gone in ("init", "model"):
+            assert gone not in subcommands, f"dhole {gone} 又回来了：{sorted(subcommands)}"
+        assert importlib.util.find_spec("dhole_mcp.init") is None, \
+            "src/dhole_mcp/init.py 必须整个删除，不是留一个空壳"
+        assert not (REPO / "src" / "dhole_mcp" / "init.py").exists()
+
+    def test_the_subcommand_scan_reacts_to_a_command_that_should_not_exist(self):
+        """机制自检：上一条靠"读不到就红"防不住解析形状变了还返回空集的情形 ——
+        这里喂一段真的有 init 的源码，确认扫描器认得它。"""
+        assert "init" in _cli_subcommands(
+            'def main():\n    _SUBCOMMANDS = ("doctor", "init", "config")\n')
+        assert _cli_subcommands('def main():\n    x = 1\n') == set()
 
     def test_no_stale_excuses(self):
         """Every name in the excuse table must still be a knob dhole reads.
