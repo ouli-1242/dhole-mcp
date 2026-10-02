@@ -572,7 +572,7 @@ DHOLE_INSTRUCTIONS = (
     "once, then run it).\n"
     "- Watching a page for changes: web_watch (add it, then check - it diffs against "
     "the last snapshot).\n"
-    "- A login the user already stores: vault (op=match with the URL) lists what "
+    "- A login the user already stores: cred_vault (op=match with the URL) lists what "
     "their password manager holds - never the values.\n"
     "- Signing in with a stored credential: login (call once to see the plan, "
     "again with confirm=true to run it).\n"
@@ -634,9 +634,9 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "url+actions once, then run it).\n",
     "web_watch": "- Watching a page for changes: web_watch (add it, then check - it diffs "
     "against the last snapshot).\n",
-    # vault/login 同 web_recipe/web_watch：默认注册，行留在 instructions 里路由。
+    # cred_vault/login 同 web_recipe/web_watch：默认注册，行留在 instructions 里路由。
     # 逐次确认闸（login 无 confirm 必暂停）在工具内部，注册面不做许可。
-    "vault": "- A login the user already stores: vault (op=match with the URL) "
+    "cred_vault": "- A login the user already stores: cred_vault (op=match with the URL) "
     "lists what their password manager holds - never the values.\n",
     "login": "- Signing in with a stored credential: login (call once to see the "
     "plan, again with confirm=true to run it).\n",
@@ -866,7 +866,7 @@ class WatchModel(BaseModel):
 
 
 class VaultModel(BaseModel):
-    """Response from `vault`: which credential managers are reachable, and the
+    """Response from `cred_vault`: which credential managers are reachable, and the
     metadata of the items they hold.
 
     There is deliberately **no field here for a password or a TOTP secret**. The
@@ -2638,7 +2638,7 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
     "web_recipe": {"actions": "rawlist", "timeout": "number",
                "max_content_chars": "int"},
     "web_watch": {"max_chars": "int", "timeout": "number"},
-    "vault": {"limit": "int"},
+    "cred_vault": {"limit": "int"},
     # The three index overrides come from a snapshot row, so they arrive as
     # strings from clients that JSON-stringify numbers; `confirm` is the
     # approval gate and must be a real boolean, never the string "false".
@@ -4748,7 +4748,7 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     "web_watch": frozenset({"op", "name", "url", "focus", "max_chars", "note",
                         "timeout", "session_id", "allow_private"}),
     # 凭据来源 + 独立登录流（计划第七章）。17.0 起默认在连接期表里。
-    "vault": frozenset({"op", "query", "url", "source", "limit"}),
+    "cred_vault": frozenset({"op", "query", "url", "source", "limit"}),
     "login": frozenset({"url", "credential", "source", "session_id",
                         "username_index", "password_index", "submit_index",
                         "confirm", "timeout", "allow_private"}),
@@ -4759,8 +4759,8 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
 # （17.0：不存在 opt-in 组 —— 上面的注释是给全量注册做的注脚。）
 
 
-# 17.0: 没有 opt-in 组了 —— web_recipe/web_watch/vault/login 全部默认注册（大众化一刀切：
-# pip install 接上宿主，能力全部默认在线；vault/login 的逐次确认闸在工具内部，
+# 17.0: 没有 opt-in 组了 —— web_recipe/web_watch/cred_vault/login 全部默认注册（大众化一刀切：
+# pip install 接上宿主，能力全部默认在线；cred_vault/login 的逐次确认闸在工具内部，
 # 注册面不再做许可）。DHOLE_TASKS / DHOLE_VAULT 已注销，运行时静默忽略。
 
 
@@ -6093,7 +6093,7 @@ class MasterFetchServer:
 
     # ─── Vault / login（计划第七章） ──────────────────────────────────
 
-    async def vault(
+    async def cred_vault(
         self,
         op: Annotated[str, Field(description="status = which manager is installed and unlocked; list = item metadata; match = the items whose stored URI is a given URL's host.")],
         query: Annotated[Optional[str], Field(description="op=list: substring filter on the item name.")] = None,
@@ -6115,7 +6115,7 @@ class MasterFetchServer:
                 message=(f"{len(ready)} credential manager(s) ready."
                          if ready else
                          "No unlocked credential manager is available."),
-                next_action=("vault(op='match', url=...) finds a credential for a "
+                next_action=("cred_vault(op='match', url=...) finds a credential for a "
                              "site." if ready else
                              hints or "Install the Bitwarden CLI (bw) or the "
                                       "1Password CLI (op), then unlock it."),
@@ -6133,7 +6133,7 @@ class MasterFetchServer:
                          else "No credentials matched."),
                 next_action=("login(url=..., credential='<name>') signs in with one."
                              if got["items"] else
-                             ("vault(op='status') says what is missing."
+                             ("cred_vault(op='status') says what is missing."
                               if got["notes"] else "Nothing matched that query.")),
             )
 
@@ -6154,7 +6154,7 @@ class MasterFetchServer:
                 next_action=("login(url=..., credential='<name>', "
                              "session_id='<name>') signs in with one."
                              if got["items"] else
-                             "vault(op='list') shows everything the manager holds."),
+                             "cred_vault(op='list') shows everything the manager holds."),
             )
 
         return VaultModel(
@@ -6187,7 +6187,7 @@ class MasterFetchServer:
         if not cred:
             return LoginModel(
                 url=page, error="credential is required.",
-                next_action="Pass the vault item's name - vault(op='match', "
+                next_action="Pass the vault item's name - cred_vault(op='match', "
                             "url=...) lists the candidates.",
             )
         sid = (session_id or "").strip()
@@ -6208,8 +6208,8 @@ class MasterFetchServer:
         if secret.get("error"):
             return LoginModel(
                 url=page, credential=cred, error=secret["error"],
-                next_action="vault(op='status') says what is missing; "
-                            "vault(op='match', url=...) lists candidates.",
+                next_action="cred_vault(op='status') says what is missing; "
+                            "cred_vault(op='match', url=...) lists candidates.",
             )
         item = secret.get("item") or cred
         src = secret.get("source", "")
@@ -9106,7 +9106,7 @@ class MasterFetchServer:
                             "idempotentHint": False, "openWorldHint": True},
         },
         {
-            "name": "vault",
+            "name": "cred_vault",
             "description": "Look up logins in the user's OWN password manager (Bitwarden `bw` / 1Password `op`). op=status: which manager is installed and unlocked, and how to fix it if not. op=list: item metadata (name, username, whether a password exists, URIs). op=match: the items whose stored URI is a given URL's host - use this to pick a credential, then pass its name/id to login. Passwords and TOTP secrets are NEVER returned; this tool has no field for them.",
             "inputSchema": {
                 "type": "object", "required": ["op"],
@@ -9128,7 +9128,7 @@ class MasterFetchServer:
                 "type": "object", "required": ["url", "credential"],
                 "properties": {
                     "url": {"type": "string", "description": "The login page."},
-                    "credential": {"type": "string", "description": "Vault item name or id (NOT the password). Find it with vault(op='match', url=...)."},
+                    "credential": {"type": "string", "description": "Vault item name or id (NOT the password). Find it with cred_vault(op='match', url=...)."},
                     "source": {"type": "string", "enum": ["auto", "bitwarden", "onepassword"], "description": "Which manager to read. Default auto."},
                     "session_id": {"type": "string", "description": "Where the resulting cookies are kept (reuse it in later fetches)."},
                     "username_index": {"type": "integer", "description": "Skip detection: the username field's snapshot index."},
@@ -9529,8 +9529,8 @@ class MasterFetchServer:
             )
             return _wire_result(result)
 
-        elif name == "vault":
-            result = await self.vault(
+        elif name == "cred_vault":
+            result = await self.cred_vault(
                 op=args.get("op", ""),
                 query=args.get("query"),
                 url=args.get("url"),

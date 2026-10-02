@@ -432,13 +432,13 @@ class TestWireGating:
         （login 无 confirm 必暂停；值永不回显）。"""
         from dhole_mcp.server import _ENABLED_TOOLS
 
-        assert {"vault", "login"} <= _ENABLED_TOOLS
+        assert {"cred_vault", "login"} <= _ENABLED_TOOLS
 
     def test_the_vault_and_login_tool_defs_are_advertised(self):
         from dhole_mcp.server import MasterFetchServer
 
         names = [td["name"] for td in MasterFetchServer._enabled_tool_defs()]
-        for tool in ("vault", "login"):
+        for tool in ("cred_vault", "login"):
             assert tool in names, f"{tool} 应该出现在默认 wire 里"
 
     def test_every_tool_def_argument_is_a_known_top_level_arg(self):
@@ -446,7 +446,7 @@ class TestWireGating:
         from dhole_mcp.server import _TOP_LEVEL_ARGS, MasterFetchServer
 
         for td in MasterFetchServer._TOOL_DEFS:
-            if td["name"] not in ("vault", "login"):
+            if td["name"] not in ("cred_vault", "login"):
                 continue
             declared = set(td["inputSchema"]["properties"])
             accepted = set(_TOP_LEVEL_ARGS[td["name"]])
@@ -464,7 +464,7 @@ class TestWireGating:
 
         from dhole_mcp.server import _TOP_LEVEL_ARGS
 
-        for tool in ("vault", "login"):
+        for tool in ("cred_vault", "login"):
             sig = set(inspect.signature(getattr(MasterFetchServer, tool)).parameters)
             sig.discard("self")
             assert sig == set(_TOP_LEVEL_ARGS[tool]), \
@@ -483,11 +483,11 @@ class TestDispatchReachesTheTools:
         from dhole_mcp import server as sm
 
         monkeypatch.setattr(sm, "_ENABLED_TOOLS",
-                            sm._ENABLED_TOOLS | {"vault", "login"})
+                            sm._ENABLED_TOOLS | {"cred_vault", "login"})
 
     def test_vault_status_goes_through_dispatch(self, opted_in, wired):
         srv, _, _ = wired()
-        _content, payload = _run(srv._dispatch("vault", {"op": "status"}))
+        _content, payload = _run(srv._dispatch("cred_vault", {"op": "status"}))
         assert payload["op"] == "status"
         assert isinstance(payload.get("sources"), list)
 
@@ -501,7 +501,7 @@ class TestDispatchReachesTheTools:
     def test_an_unknown_argument_is_refused_at_the_entry(self, opted_in, wired):
         srv, _, _ = wired()
         with pytest.raises(ValueError):
-            _run(srv._dispatch("vault", {"op": "status", "password": "x"}))
+            _run(srv._dispatch("cred_vault", {"op": "status", "password": "x"}))
 
     def test_a_disabled_credential_tool_is_refused_with_the_flag(self, wired, monkeypatch):
         """DHOLE_TOOLS 白名单点名之外的工具，入口要拒绝并点名那道白名单。"""
@@ -509,5 +509,5 @@ class TestDispatchReachesTheTools:
         monkeypatch.setattr(sm, "_ENABLED_TOOLS", frozenset({"web_read"}))
         srv, _, _ = wired()
         with pytest.raises(ValueError) as e:
-            _run(srv._dispatch("vault", {"op": "status"}))
+            _run(srv._dispatch("cred_vault", {"op": "status"}))
         assert "not enabled" in str(e.value) and "DHOLE_TOOLS" in str(e.value)

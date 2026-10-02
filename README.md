@@ -18,7 +18,7 @@ Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器：抓网页、�
 - **是什么**：给 AI 用的上网工具包。
 - **怎么用**：正常提要求，AI 自己选工具，你不用记命令。
 - **默认 10 个工具**：搜网页 · 抓网址 · 批量抓 · 爬整站 · 截图 · 读本地文件 · RSS · 短链 · 清缓存 · 读 dhole 自己的说明书。
-- **另外 4 个默认关**：`web_recipe` / `web_watch` / `vault` / `login`；打开用 `dhole init --tasks` / `--vault`，不用编辑 JSON。它们的存在不必读 README：`sys_guide(topic='behavior')` 会说。
+- **另外 4 个默认关**：`web_recipe` / `web_watch` / `cred_vault` / `login`；打开用 `dhole init --tasks` / `--vault`，不用编辑 JSON。它们的存在不必读 README：`sys_guide(topic='behavior')` 会说。
 - **代理环境自己适配**：Clash / sing-box 的 TUN + fake-ip 不再需要先设任何变量。
 - **要调设置**：见[配置](#配置)；出问题先跑 `dhole --doctor`。
 
@@ -88,7 +88,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 | `DHOLE_MULTIMODAL=1` | 宿主 agent 能看图才设（元素裁剪截图、验证码试读纪律） |
 | `DHOLE_NEURAL_FOCUS=1` | `focus` 改用语义打分：更准但单页约 12.5 秒 CPU（BM25 约 23ms）。一条命令打开：`dhole init --neural`；单次想省钱传 `options.focus_engine='bm25'` |
 | `DHOLE_TASKS=1` | 打开 `web_recipe` / `web_watch` |
-| `DHOLE_VAULT=1` | 打开 `vault` / `login`；需本机已装并解锁 Bitwarden（`bw`）或 1Password（`op`）CLI |
+| `DHOLE_VAULT=1` | 打开 `cred_vault` / `login`；需本机已装并解锁 Bitwarden（`bw`）或 1Password（`op`）CLI |
 | `DHOLE_CDP_ATTACH=1` + `DHOLE_CDP_HOSTS` | 用你已登录的 Chrome 读页面，见下节「CDP 接管」；一条命令开：`dhole init --cdp <host>` |
 | `DHOLE_ALLOW_PRIVATE_HOSTS` | 放行内网 / 本机地址，默认一律拒绝 |
 | `DHOLE_IGNORE_ROBOTS=1` | 关掉进程级的 `robots.txt` 遵从（单次豁免用 `ignore_robots=true`） |
@@ -170,7 +170,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 |---|---|---|
 | `web_recipe` | `DHOLE_TASKS=1` | 录下一条抓取路径，以后一次调用重放 |
 | `web_watch` | `DHOLE_TASKS=1` | 盯一个 URL，与上次快照 diff |
-| `vault` | `DHOLE_VAULT=1` | 读**你自己**密码管理器的条目元数据（从不回密码 / TOTP 值） |
+| `cred_vault` | `DHOLE_VAULT=1` | 读**你自己**密码管理器的条目元数据（从不回密码 / TOTP 值） |
 | `login` | `DHOLE_VAULT=1` | 用其中一条凭据登录：先只回计划，确认后才填并提交 |
 
 参数摆放：`web_read` / `web_crawl` / `web_search` / `screenshot` 的旋钮收在一个 `options` 对象里，顶层同名参数也接受（兼容读法，两处都给时**顶层优先**）；其余工具**只有顶层这一层**，塞 `options` 会被拒绝并列出它真正接受的键。反向例外：`web_read` 的 `url` 与 `web_crawl` 的 `discover_only` / `crawl_urls` / `focus` 必须放顶层。以 `tools/list` 为准。
@@ -212,7 +212,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 
 ## 已知限制
 
-- 绕不过 DataDome / Akamai / 交互式 Turnstile；2FA 与 CAPTCHA 不自动解。需要登录的页面可借自己的登录态（CDP，或 `vault` / `login`）。
+- 绕不过 DataDome / Akamai / 交互式 Turnstile；2FA 与 CAPTCHA 不自动解。需要登录的页面可借自己的登录态（CDP，或 `cred_vault` / `login`）。
 - **搜索没有 SLA**：免密引擎是对公开结果的直接抓取，对方改版或封 IP 时静默降级。要可靠性用搜索代理或 keyed 后端。
 - 默认池里 `baidu` / `bing` / `yandex` 国内直连稳定；`sogou` 按 IP 限流，`bing_global` / `brave` 无代理时不稳。
 - 正文 **50MB 硬顶**，在下载之前守门；抬 `timeout` 没用。

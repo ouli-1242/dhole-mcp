@@ -3,8 +3,8 @@
 单元测试（``tests/test_vault.py`` / ``tests/test_login_flow.py``）钉的是语义；
 这个脚本走**完整工具调用链**，验的是那些语义在真页面 + 真 CLI 边界上还成立：
 
-1. `vault(op='status')` 认得装在 PATH 上的管理器，并报出锁没锁；
-2. `vault(op='match')` 按主机找到凭据，**响应里没有密码值**；
+1. `cred_vault(op='status')` 认得装在 PATH 上的管理器，并报出锁没锁；
+2. `cred_vault(op='match')` 按主机找到凭据，**响应里没有密码值**；
 3. `login` 不带 confirm 时**一个字节都不填**，只回计划（含识别出的字段索引）；
 4. `login` 带 confirm 时填 + 提交，`logged_in` 为真、cookie 名回得来，
    **响应里依然没有密码值**；
@@ -118,18 +118,18 @@ async def main() -> int:
     s = MasterFetchServer()
 
     # 1. 状态
-    st = await s.vault(op="status", source="bitwarden")
+    st = await s.cred_vault(op="status", source="bitwarden")
     row = (st.sources or [{}])[0]
     record("vault 认得 PATH 上的管理器并报出未锁定",
            row.get("available") is True and row.get("unlocked") is True,
            f"sources={st.sources}")
 
     # 2. 按主机匹配
-    m = await s.vault(op="match", url=f"{BASE}/login", source="bitwarden")
+    m = await s.cred_vault(op="match", url=f"{BASE}/login", source="bitwarden")
     blob = _blob(m)
     # 密码值绝不出现；用户名**按设计**会出现（标识符，不是秘密 —— 见 vault.py
     # 的模块 docstring）。这条只钉前者。
-    record("vault(op='match') 按主机找到凭据，且响应里没有密码值",
+    record("cred_vault(op='match') 按主机找到凭据，且响应里没有密码值",
            m.total == 1 and SECRET not in blob
            and m.items[0]["has_password"] is True,
            f"total={m.total} host={m.host!r} 含密码值={SECRET in blob} "

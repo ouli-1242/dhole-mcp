@@ -207,7 +207,7 @@ Nothing is nested here either — every parameter of every tool sits at the top 
 {"op": "list"}
 {"op": "remove", "name": "changelog"}
 
-// vault: which manager answered, then the items that fit a host — metadata only, never values
+// cred_vault: which manager answered, then the items that fit a host — metadata only, never values
 {"op": "status"}
 {"op": "match", "url": "https://portal.example.com/login"}
 {"op": "list", "query": "portal", "source": "bitwarden"}
