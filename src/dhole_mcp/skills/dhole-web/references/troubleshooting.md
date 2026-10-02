@@ -74,13 +74,13 @@ Five paths, cheapest first: (1) HTTP tier — user-supplied cookies (`cookies` +
 - **`login` `logged_in: false`** — the credential was submitted but the session did not take: wrong item, or the site wants 2FA. Check `signals`; do not retry blindly (a second wrong submit can lock the account). `logged_in: null` = the probe could not answer — not "failed"
 - **`login` ran but later fetches are anonymous** — pass the **same `session_id`** to those fetches; the cookies were kept under it. `close_session` shows what is held
 
-### Recipe / watch misbehave
+### Recipe / web_watch misbehave
 
-- **`recipe` / `watch` not in `tools/list`** — same as vault/login above: only an explicit `DHOLE_TOOLS` subset removes them in 17.0
+- **`recipe` / `web_watch` not in `tools/list`** — same as vault/login above: only an explicit `DHOLE_TOOLS` subset removes them in 17.0
 - **`recipe(op='run')` with `actions_failed` > 0** — the page changed under the chain. Re-snapshot, re-derive the steps, `op='save'` again. An `op='save'` that is *rejected* means the chain is invalid (validation runs at save time) — fix the chain, don't retry the save
-- **`watch(op='check')` returns `changed: null`** — that is the FIRST check storing the baseline, not an error and not "no change". The next check answers `true`/`false`
-- **`watch` `error` set, `changed` absent** — the fetch failed; the baseline is **untouched** (by design, so an outage cannot silently re-baseline). Fix the fetch and re-check
-- **`watch` keeps reporting noise** — the page's chrome changes every load; re-add with `focus=` to diff only the relevant block, or raise `max_chars` if `baseline_cut` is true
+- **`web_watch(op='check')` returns `changed: null`** — that is the FIRST check storing the baseline, not an error and not "no change". The next check answers `true`/`false`
+- **`web_watch` `error` set, `changed` absent** — the fetch failed; the baseline is **untouched** (by design, so an outage cannot silently re-baseline). Fix the fetch and re-check
+- **`web_watch` keeps reporting noise** — the page's chrome changes every load; re-add with `focus=` to diff only the relevant block, or raise `max_chars` if `baseline_cut` is true
 
 Attach-specific failures:
 - `cdp_authorization_required` — this is the FIRST attach to this host, so nothing was executed. Attaching hands over the authenticated session of every site the user is logged into, and dhole asks once: present it as the user's decision, and only on a clear yes re-call with `confirm=true` (the approval persists to `~/.dhole/cdp_hosts.json`, so later attaches need no ask). Retrying without the user's yes changes nothing

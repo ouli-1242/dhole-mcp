@@ -71,16 +71,16 @@ Consult this when a response doesn't make sense or a field shows a non-default v
 | `metadata.actions` | One receipt per page-interaction action: `ok`, `error`, and — for rich actions — `image: true` (pixels rode the content list as image blocks), `qr: [...]` (decoded QR texts), `elements` / `elements_total` / `elements_truncated` (snapshot), `submitted: true` | If an action didn't take effect, look here (e.g. wait_selector timed out). A receipt with `pending_approval: true` means a submit PAUSED before acting — nothing was sent; ask the user, then re-run the whole chain with `confirm: true` on that submit. A receipt with `error` naming "element index" beyond the page means the page changed — re-snapshot |
 | `metadata.encoding` | (parse) encoding actually used | On mojibake, compare — if detection guessed wrong, pass `encoding=` explicitly |
 
-## The stateful tools (recipe / watch / vault / login)
+## The stateful tools (recipe / web_watch / vault / login)
 
 Registered by default in 17.0; absent from `tools/list` only when the operator named an explicit `DHOLE_TOOLS` subset. Absence-means-default applies here too.
 
 | Field | Meaning | What to do when non-default |
 |---|---|---|
-| `changed` (watch) | `true` / `false` vs the stored baseline; **`null` when this check only created it** | `null` + `baseline_created: true` = report "baseline stored", never "no change". Deliberately never omitted from the wire |
-| `added` / `removed` (watch) | Lines added / removed vs the baseline | Counted over the whole change even when `diff_truncated` is set |
-| `baseline_cut` (watch) | The stored snapshot hit `max_chars` | A later diff can miss content past the cut — widen `max_chars` and re-baseline |
-| `diff_truncated` (watch) | The `diff` text was cut at the line cap | `added` / `removed` still count the whole change |
+| `changed` (web_watch) | `true` / `false` vs the stored baseline; **`null` when this check only created it** | `null` + `baseline_created: true` = report "baseline stored", never "no change". Deliberately never omitted from the wire |
+| `added` / `removed` (web_watch) | Lines added / removed vs the baseline | Counted over the whole change even when `diff_truncated` is set |
+| `baseline_cut` (web_watch) | The stored snapshot hit `max_chars` | A later diff can miss content past the cut — widen `max_chars` and re-baseline |
+| `diff_truncated` (web_watch) | The `diff` text was cut at the line cap | `added` / `removed` still count the whole change |
 | `outcomes` / `actions_failed` (recipe) | One receipt per replayed action / how many failed | `actions_failed` non-zero = the page changed; re-derive the steps and re-`save` |
 | `recipes[].use_count` / `last_ok` (recipe) | How often it ran / whether it last succeeded | A recipe that never succeeds is stale — re-record it |
 | `sources` (vault) | One row per manager: `available` / `unlocked` / `detail` / `hint` | `unlocked: null` = the CLI is not installed ("not asked" ≠ "locked"); a missing manager is a note, not an error |

@@ -223,19 +223,19 @@ class TestOptInWiring:
         monkeypatch.delenv("DHOLE_TOOLS", raising=False)
         monkeypatch.delenv("DHOLE_TASKS", raising=False)
         enabled = server_mod._parse_enabled_tools()
-        assert {"recipe", "watch"} <= set(server_mod._TOP_LEVEL_ARGS)
-        assert {"recipe", "watch"} <= enabled
+        assert {"recipe", "web_watch"} <= set(server_mod._TOP_LEVEL_ARGS)
+        assert {"recipe", "web_watch"} <= enabled
 
     def test_a_stale_tasks_flag_does_nothing(self, monkeypatch):
         """注销的旋钮运行时静默忽略 —— 不许它复活成一道闸。"""
         monkeypatch.delenv("DHOLE_TOOLS", raising=False)
         monkeypatch.setenv("DHOLE_TASKS", "0")
-        assert {"recipe", "watch"} <= server_mod._parse_enabled_tools()
+        assert {"recipe", "web_watch"} <= server_mod._parse_enabled_tools()
 
     def test_naming_them_in_dhole_tools_still_works(self, monkeypatch):
-        monkeypatch.setenv("DHOLE_TOOLS", "web_read,recipe,watch")
+        monkeypatch.setenv("DHOLE_TOOLS", "web_read,recipe,web_watch")
         assert server_mod._parse_enabled_tools() == frozenset(
-            {"web_read", "recipe", "watch"})
+            {"web_read", "recipe", "web_watch"})
 
     def test_the_default_instructions_route_to_them(self, monkeypatch):
         """默认注册的工具必须在默认 instructions 里有路由行——否则连上来
@@ -243,7 +243,7 @@ class TestOptInWiring:
         monkeypatch.delenv("DHOLE_TOOLS", raising=False)
         monkeypatch.delenv("DHOLE_TASKS", raising=False)
         text = server_mod._compose_instructions(server_mod._parse_enabled_tools())
-        assert "recipe" in text and "watch" in text
+        assert "recipe" in text and "web_watch" in text
 
     def test_a_disabled_tool_is_refused_with_a_named_error(self, monkeypatch):
         monkeypatch.setattr(server_mod, "_ENABLED_TOOLS", frozenset({"web_read"}))
@@ -288,16 +288,16 @@ class TestRecipeTool:
 
 class TestWatchTool:
     def test_check_without_a_name_says_so(self, lib):
-        m = _run(MasterFetchServer().watch(op="check"))
+        m = _run(MasterFetchServer().web_watch(op="check"))
         assert "name is required" in m.error
 
     def test_check_of_a_missing_watch_names_what_exists(self, lib):
         lib.save_watch("known", "https://example.com/")
-        m = _run(MasterFetchServer().watch(op="check", name="other"))
+        m = _run(MasterFetchServer().web_watch(op="check", name="other"))
         assert "No watch named 'other'" in m.error and "known" in m.next_action
 
     def test_an_unknown_op_is_answered_not_raised(self, lib):
-        m = _run(MasterFetchServer().watch(op="frobnicate"))
+        m = _run(MasterFetchServer().web_watch(op="frobnicate"))
         assert "unknown op" in m.error
 
     def test_a_failed_fetch_leaves_the_baseline_untouched(self, lib, monkeypatch):
@@ -311,13 +311,13 @@ class TestWatchTool:
                 error="connection reset", next_action="retry later")
 
         monkeypatch.setattr(MasterFetchServer, "web_read", _boom)
-        m = _run(MasterFetchServer().watch(op="check", name="w"))
+        m = _run(MasterFetchServer().web_watch(op="check", name="w"))
         assert m.error and m.changed is None
         assert lib.get_watch("w")["baseline"] == "the good snapshot"
 
     def test_add_reports_that_retargeting_dropped_the_baseline(self, lib):
         lib.save_watch("w", "https://example.com/a")
         lib.set_baseline("w", "old")
-        m = _run(MasterFetchServer().watch(
+        m = _run(MasterFetchServer().web_watch(
             op="add", name="w", url="https://example.com/b"))
         assert "baseline was dropped" in m.message

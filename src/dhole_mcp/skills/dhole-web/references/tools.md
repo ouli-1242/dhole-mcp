@@ -38,7 +38,7 @@ Tool descriptions cover parameters; this volume covers **how the tools actually 
 - The `session_id` cookie jar persists per host (24h expiry; responses report cookie names, never values). Since 17.0 it **spans both tiers**: a NAMED session's dedicated stealthy browser is seeded from the jar before navigation and harvests new cookies back after — HTTP-tier login state rides browser calls too. Boundaries: the shared auto session is never seeded (that would pour session A's login into session B); CDP attach never bridges (it runs your real Chrome profile, read-only). Roster and cleanup: `close_session` (no args = roster, `session_id=` forgets one, `all=true` clears all)
 - `<meta http-equiv=refresh>` is followed on both tiers (the HTTP tier may not follow delayed refreshes; `metadata.meta_refresh` records the hop origin)
 
-**Conditional requests are dhole's own business since 17.0**: no parameter asks them. `watch` stores the origin's version markers next to its baseline and asks "changed?" on every later check, so an unchanged page costs one header. Reading rule that survives: `status=304` with `content=[]` is **success**, never a failed fetch, and must not escalate to the browser (there is no body to render by definition).
+**Conditional requests are dhole's own business since 17.0**: no parameter asks them. `web_watch` stores the origin's version markers next to its baseline and asks "changed?" on every later check, so an unchanged page costs one header. Reading rule that survives: `status=304` with `content=[]` is **success**, never a failed fetch, and must not escalate to the browser (there is no body to render by definition).
 
 **Misc**: `urls=[...]` batches in parallel; `include_links` caps each link class at 30/20/20 (`max_links` up to 100) with `total_found` reporting the pre-truncation count; `include_media` adds up to 20 image URLs to `links`; explicit `proxy` gets a 5s TCP precheck — an unreachable proxy returns `proxy_unreachable` with no request sent; `allow_private` (true = loopback, or an explicit host list) is for local dev services.
 
@@ -95,13 +95,13 @@ too) accept dates, and only as day/week/month/year presets. `after=<date>` is wi
 
 **close_session**: no args = the roster (id, hosts, cookie names, time to expiry, browser open or not); cookie values never leave the process.
 
-## The stateful tools (recipe / watch / vault / login)
+## The stateful tools (recipe / web_watch / vault / login)
 
 All four are registered by default in 17.0 (the opt-in groups were deleted). If one is missing from `tools/list`, the operator named an explicit `DHOLE_TOOLS` subset — widening it is their call. State lives in `~/.dhole/tasks.db` (recipes, watch baselines) and holds no credentials.
 
 **recipe — record a way to reach a page, then replay it.** `op=save` stores a `{url, actions, note}` triple; `op=run` fetches that url with those actions; `op=list` shows every recipe with `use_count` / `last_ok` (a stale one is visible without running it); `op=delete` forgets one. The action chain is validated **at save time** by the same validator the executor uses, so a chain that would be refused at run time cannot be stored — a rejected `save` is a real signal, not a formality. `run` returns the whole fetch in `result` (same wire compaction as `web_read`) plus `outcomes`, one receipt per action, so a broken step is visible without digging into `result.metadata`. **`actions_failed` non-zero = the page changed under the recipe** — re-derive the steps with a snapshot and re-save; do not keep replaying it. `session_id` is a per-run argument, never stored in the recipe (a stored session id would be a stored credential).
 
-**watch — diff a page against its last snapshot.** `op=add` stores the url (+ optional `focus` and `max_chars`), `op=check` fetches it fresh and diffs the text, `op=list` / `op=remove` manage them. Three fields carry the semantics:
+**web_watch — diff a page against its last snapshot.** `op=add` stores the url (+ optional `focus` and `max_chars`), `op=check` fetches it fresh and diffs the text, `op=list` / `op=remove` manage them. Three fields carry the semantics:
 - `changed` is **tri-state**: `true` / `false` when compared, **`null` on the first check** (`baseline_created: true`). A missing baseline is not "no change" — reporting the first run as unchanged invents a fact, so `changed` is deliberately never omitted from the wire.
 - `added` / `removed` count the **whole** change even when `diff_truncated` is set (the diff text is capped, the counts are not).
 - `baseline_cut` means the stored snapshot hit `max_chars`, so a later diff can miss content past the cut — widen `max_chars` and re-baseline for a long page.

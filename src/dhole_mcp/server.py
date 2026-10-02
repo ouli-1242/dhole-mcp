@@ -570,7 +570,7 @@ DHOLE_INSTRUCTIONS = (
     "= what is open; session_id= or all=true to forget them).\n"
     "- A page you already worked out how to reach: recipe (save the url+actions "
     "once, then run it).\n"
-    "- Watching a page for changes: watch (add it, then check - it diffs against "
+    "- Watching a page for changes: web_watch (add it, then check - it diffs against "
     "the last snapshot).\n"
     "- A login the user already stores: vault (op=match with the URL) lists what "
     "their password manager holds - never the values.\n"
@@ -628,13 +628,13 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "web_resolve": "- Check a short link: web_resolve.\n",
     "close_session": "- Cookies a site kept behind session_id=: close_session "
     "(no arguments = what is open; session_id= or all=true to forget them).\n",
-    # 17.0：recipe/watch 全量默认注册（opt-in 组已删），这行 instructions 是
+    # 17.0：recipe/web_watch 全量默认注册（opt-in 组已删），这行 instructions 是
     # 它们唯一的"什么时候用我"，必须留在连接期说明里。
     "recipe": "- A page you already worked out how to reach: recipe (save the "
     "url+actions once, then run it).\n",
-    "watch": "- Watching a page for changes: watch (add it, then check - it diffs "
+    "web_watch": "- Watching a page for changes: web_watch (add it, then check - it diffs "
     "against the last snapshot).\n",
-    # vault/login 同 recipe/watch：默认注册，行留在 instructions 里路由。
+    # vault/login 同 recipe/web_watch：默认注册，行留在 instructions 里路由。
     # 逐次确认闸（login 无 confirm 必暂停）在工具内部，注册面不做许可。
     "vault": "- A login the user already stores: vault (op=match with the URL) "
     "lists what their password manager holds - never the values.\n",
@@ -841,7 +841,7 @@ class RecipeModel(BaseModel):
 
 
 class WatchModel(BaseModel):
-    """Response from `watch`: add / list / check / remove of a monitored URL.
+    """Response from `web_watch`: add / list / check / remove of a monitored URL.
 
     The one field to read carefully is `changed`: it is **null on the first
     check**, because a missing baseline is not the same as "nothing changed" —
@@ -1823,7 +1823,7 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         next_action = ("304 not modified: the origin says this URL still serves the "
                        "version dhole already holds, so no body was transferred - that "
                        "is a successful answer, do NOT report it as a failed fetch. "
-                       "Revalidation is asked by `watch`, not by a caller; to read the "
+                       "Revalidation is asked by `web_watch`, not by a caller; to read the "
                        "body again, make a plain fetch (nothing to compare against).")
     elif err.startswith("js_shell_detected") or err.startswith("bot_challenge_detected"):
         _wall = ("bot challenge page" if err.startswith("bot_challenge_detected")
@@ -2637,7 +2637,7 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
     # chain validator owns its shape); the numbers are the same coercions.
     "recipe": {"actions": "rawlist", "timeout": "number",
                "max_content_chars": "int"},
-    "watch": {"max_chars": "int", "timeout": "number"},
+    "web_watch": {"max_chars": "int", "timeout": "number"},
     "vault": {"limit": "int"},
     # The three index overrides come from a snapshot row, so they arrive as
     # strings from clients that JSON-stringify numbers; `confirm` is the
@@ -4745,7 +4745,7 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     "recipe": frozenset({"op", "name", "url", "actions", "note",
                          "timeout", "max_content_chars", "focus",
                          "extraction_type", "session_id", "allow_private"}),
-    "watch": frozenset({"op", "name", "url", "focus", "max_chars", "note",
+    "web_watch": frozenset({"op", "name", "url", "focus", "max_chars", "note",
                         "timeout", "session_id", "allow_private"}),
     # 凭据来源 + 独立登录流（计划第七章）。17.0 起默认在连接期表里。
     "vault": frozenset({"op", "query", "url", "source", "limit"}),
@@ -5917,7 +5917,7 @@ class MasterFetchServer:
             next_action=nxt,
         )
 
-    async def watch(
+    async def web_watch(
         self,
         op: Annotated[str, Field(description="add = start monitoring a URL; check = fetch it fresh and diff against the last snapshot; list = show every watch; remove = stop.")],
         name: Annotated[Optional[str], Field(description="Watch name (1-64 chars). Required for add / check / remove.")] = None,
@@ -5945,12 +5945,12 @@ class MasterFetchServer:
             rows = tasks.list_watches()
             return WatchModel(
                 op=o,
-                message=(f"{len(rows)} watch(es) stored." if rows
+                message=(f"{len(rows)} watches stored." if rows
                          else "No watches are stored."),
                 watches=rows,
-                next_action=("watch(op='check', name='<name>') fetches and diffs one."
+                next_action=("web_watch(op='check', name='<name>') fetches and diffs one."
                              if rows else
-                             "watch(op='add', name=..., url=...) starts one."),
+                             "web_watch(op='add', name=..., url=...) starts one."),
             )
 
         nm = (name or "").strip()
@@ -5958,7 +5958,7 @@ class MasterFetchServer:
             return WatchModel(
                 op=o, error="name is required for this op.",
                 next_action=("Pass name='<watch name>'. "
-                             + ("watch(op='list') shows what exists."
+                             + ("web_watch(op='list') shows what exists."
                                 if o in ("check", "remove") else
                                 "Pick any short name you will remember.")),
             )
@@ -5981,7 +5981,7 @@ class MasterFetchServer:
                 op=o, name=saved["name"], url=saved["url"],
                 baseline_created=bool(saved["baseline_kept"]),
                 message=msg,
-                next_action=(f"watch(op='check', name='{saved['name']}') takes the "
+                next_action=(f"web_watch(op='check', name='{saved['name']}') takes the "
                              "first snapshot."),
             )
 
@@ -5991,7 +5991,7 @@ class MasterFetchServer:
                 op=o, name=nm,
                 message=(f"Watch '{nm}' removed." if gone
                          else f"No watch named '{nm}' - nothing was removed."),
-                next_action="" if gone else "watch(op='list') shows what exists.",
+                next_action="" if gone else "web_watch(op='list') shows what exists.",
             )
 
         # op == "check"
@@ -6003,7 +6003,7 @@ class MasterFetchServer:
                 next_action=("Nothing was checked. Stored: " + ", ".join(names) + "."
                              if names else
                              "Nothing was checked - no watches are stored. Start one "
-                             "with watch(op='add', ...)."),
+                             "with web_watch(op='add', ...)."),
             )
 
         kw: dict = {"cache_ttl": 0}          # a monitor that reads its own cache
@@ -7142,7 +7142,7 @@ class MasterFetchServer:
                 url or "", f"invalid revalidation marker: {cond_rejected}",
                 next_action=("No request was made: a stored marker the server cannot "
                              "match would come back as 200 and read like 'it changed'. "
-                             "This is dhole's own revalidation bookkeeping (watch), not "
+                             "This is dhole's own revalidation bookkeeping (web_watch), not "
                              "something the caller passes - re-check the watch entry."))
         if conditional and _stealthy_only_call(force_fetcher, actions):
             _ARG_NOTES.get().append(
@@ -9086,7 +9086,7 @@ class MasterFetchServer:
                             "idempotentHint": False, "openWorldHint": True},
         },
         {
-            "name": "watch",
+            "name": "web_watch",
             "description": "Monitor a URL for changes: op=add stores it, op=check fetches it fresh and diffs the text against the last stored snapshot, op=list / op=remove manage them. check answers changed=true/false with added/removed line counts and a capped unified diff. The FIRST check only creates the baseline and answers changed=null - no baseline is not the same as no change. A failed fetch leaves the baseline untouched. Pass focus to diff only the relevant part of a long page. Stored in ~/.dhole/tasks.db.",
             "inputSchema": {
                 "type": "object", "required": ["op"],
@@ -9515,8 +9515,8 @@ class MasterFetchServer:
             return _wire_result(result,
                                 images=getattr(inner, "_action_images", None))
 
-        elif name == "watch":
-            result = await self.watch(
+        elif name == "web_watch":
+            result = await self.web_watch(
                 op=args.get("op", ""),
                 name=args.get("name"),
                 url=args.get("url"),

@@ -83,29 +83,29 @@ async def main() -> int:
     await s.recipe(op="delete", name="idx-article")
 
     # 4/5. watch：首跑建基线，静态页第二次 check 无变化
-    await s.watch(op="add", name="art", url=f"{BASE}/article")
-    c1 = await s.watch(op="check", name="art", allow_private=True)
+    await s.web_watch(op="add", name="art", url=f"{BASE}/article")
+    c1 = await s.web_watch(op="check", name="art", allow_private=True)
     record("watch 首跑只建基线，changed 是 null 而不是 false",
            c1.baseline_created and c1.changed is None,
            f"baseline_created={c1.baseline_created} changed={c1.changed!r}")
-    c2 = await s.watch(op="check", name="art", allow_private=True)
+    c2 = await s.web_watch(op="check", name="art", allow_private=True)
     record("静态页第二次 check：changed=false",
            c2.changed is False and c2.added == 0 and c2.removed == 0,
            f"changed={c2.changed} added={c2.added} removed={c2.removed}")
 
     # 6. 会变的页
-    await s.watch(op="add", name="chg", url=f"{BASE}/changing")
-    await s.watch(op="check", name="chg", allow_private=True)      # 基线
-    c3 = await s.watch(op="check", name="chg", allow_private=True)  # 必变
+    await s.web_watch(op="add", name="chg", url=f"{BASE}/changing")
+    await s.web_watch(op="check", name="chg", allow_private=True)      # 基线
+    c3 = await s.web_watch(op="check", name="chg", allow_private=True)  # 必变
     record("会变的页：changed=true 且 diff 有行",
            c3.changed is True and c3.added > 0 and bool(c3.diff),
            f"changed={c3.changed} added={c3.added} removed={c3.removed} "
            f"diff_lines={len(c3.diff)}")
 
     # 7. 抓取失败不动基线
-    await s.watch(op="add", name="dead", url=f"{DEAD}/")
+    await s.web_watch(op="add", name="dead", url=f"{DEAD}/")
     before = tasks.get_watch("dead")
-    d1 = await s.watch(op="check", name="dead", allow_private=True)
+    d1 = await s.web_watch(op="check", name="dead", allow_private=True)
     after = tasks.get_watch("dead")
     record("抓取失败不动基线（网络故障 ≠ 页面清空）",
            bool(d1.error) and after["baseline"] == before["baseline"] == "",
@@ -114,7 +114,7 @@ async def main() -> int:
 
     # 收尾
     for n in ("art", "chg", "dead"):
-        await s.watch(op="remove", name=n)
+        await s.web_watch(op="remove", name=n)
 
     bad_names = [n for n, ok, _ in results if not ok]
     print(f"\n{len(results) - len(bad_names)}/{len(results)} 项通过")

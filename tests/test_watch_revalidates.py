@@ -64,7 +64,7 @@ def _run(coro):
 
 
 def _watch(srv, **args):
-    return _run(srv.watch(**args))
+    return _run(srv.web_watch(**args))
 
 
 class TestValidatorsRideWithTheBaseline:

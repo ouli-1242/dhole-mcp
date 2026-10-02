@@ -61,7 +61,7 @@ class TestTheEnvVarIsParsed:
         assert payload["enabled"] == sorted(
             n.strip() for n in value.split(",") if n.strip())
         assert len(payload["all"]) == 14, \
-            "全集是 14 个工具（16.0 补上 close_session，L3/L4 补上 recipe/watch，" \
+            "全集是 14 个工具（16.0 补上 close_session，L3/L4 补上 recipe/web_watch，" \
             "凭据/登录流补上 vault/login，文档通道补上 sys_guide）；" \
             "默认关闭的也留在这里，守卫继续覆盖它们"
 

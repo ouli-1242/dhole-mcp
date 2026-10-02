@@ -61,10 +61,10 @@ Five paths, cheapest first: (1) user-supplied cookies (`cookies` + `session_id` 
 4. Pivot: `actions_failed` non-zero (or `op='list'` showing `last_ok: false`) means the page changed → re-snapshot, re-derive, re-save. Don't keep replaying a broken chain
 - Best for: pages whose content only appears after clicks, or a repeated multi-step fetch (always registered in 17.0)
 
-## Watch a page for changes (watch)
+## Watch a page for changes (web_watch)
 
-1. `watch(op='add', name=..., url=..., focus=...)` — add `focus` for a long page whose chrome changes every load
-2. First `watch(op='check', name=...)` **only stores the baseline**: `changed=null`, `baseline_created=true`. Report "baseline stored", NOT "no change"
+1. `web_watch(op='add', name=..., url=..., focus=...)` — add `focus` for a long page whose chrome changes every load
+2. First `web_watch(op='check', name=...)` **only stores the baseline**: `changed=null`, `baseline_created=true`. Report "baseline stored", NOT "no change"
 3. Later checks answer `changed: true/false` with `added`/`removed` counts and a capped `diff`
 4. Pivot: a failed fetch leaves the baseline untouched and puts the reason in `error` — fix and re-check rather than assuming the page is gone. `baseline_cut=true` means `max_chars` was too small to see the whole page — widen it and re-baseline
 - Best for: changelogs, pricing pages, status pages, docs — a page without a feed

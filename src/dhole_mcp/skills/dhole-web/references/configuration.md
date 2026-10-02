@@ -70,7 +70,7 @@ Then just call — the first attach asks, the user answers once:
 
 ### Scenario: repeatable tasks, change monitoring, stored credentials
 
-- `recipe` (save a `url` + `actions` chain, replay it later) and `watch` (diff a page against its last snapshot) are **always registered**. State lives in `~/.dhole/tasks.db`: action chains and page baselines, **no credentials**. Recipes deliberately store no `session_id` — pass it per run. Forget everything by deleting the file; per-item removal is `recipe(op='delete')` / `watch(op='remove')`
+- `recipe` (save a `url` + `actions` chain, replay it later) and `web_watch` (diff a page against its last snapshot) are **always registered**. State lives in `~/.dhole/tasks.db`: action chains and page baselines, **no credentials**. Recipes deliberately store no `session_id` — pass it per run. Forget everything by deleting the file; per-item removal is `recipe(op='delete')` / `web_watch(op='remove')`
 - `vault` (read item **metadata** from the user's own Bitwarden `bw` / 1Password `op`) and `login` (assisted sign-in) are also always registered. Prerequisites are the user's: the CLI installed and its vault unlocked (`bw unlock` / `op signin`). `vault(op='status')` reports which manager answered, whether it is unlocked, and the fix when it is not — a missing manager is a note, not an error
 - **Values never leave the process**: `vault` has no field for a password or a TOTP secret, and `login` reads the password server-side and reports the item name instead. Nothing reaches the transcript, the cache, or the log
 - `login` is **gated on approval**: without `confirm=true` it only detects the form and returns the plan. Present that to the user before re-calling with `confirm=true`

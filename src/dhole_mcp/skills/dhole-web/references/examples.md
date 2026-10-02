@@ -201,7 +201,7 @@ Nothing is nested here either — every parameter of every tool sits at the top 
 {"op": "list"}
 {"op": "delete", "name": "price-watch"}
 
-// watch: add, then check. The FIRST check only stores the baseline and answers changed=null
+// web_watch: add, then check. The FIRST check only stores the baseline and answers changed=null
 {"op": "add", "name": "changelog", "url": "https://example.com/changelog", "focus": "release notes"}
 {"op": "check", "name": "changelog"}
 {"op": "list"}
