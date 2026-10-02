@@ -29,7 +29,7 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 | Web search (no URL known) | `smart_search` → pick `fetch_relevance: high` hits → `smart_fetch` for full text |
 | Already have a URL (incl. online PDFs) | `smart_fetch` — do **not** search for a URL you already hold |
 | Only need one block of a page | `smart_fetch` + `focus="keywords"` (BM25 extraction); HTML can also take `css_selector` |
-| Many pages on one site | `smart_crawl`: `sitemap=true` for a one-request URL map, then `crawl_urls=[...]` for the picks |
+| Many pages on one site | `smart_crawl`: `sitemap=true` for a one-request URL map, then `smart_fetch(urls=[...])` for the picks |
 | Track a site's latest updates | `feed_fetch` (pass the site homepage; it finds the feed); poll incrementally with `since=` |
 | Resolve a short/tracking link | `resolve_url` (no body download) |
 | Local file: `.docx` / `.xlsx` / `.pptx` / `.odt` / `.pdf` / `.csv` / `.html` | `parse` — a docx/xlsx/pptx/odt is a zip and a pdf is a container, so a text reader sees bytes; a non-UTF-8 csv/html decodes to plausible-looking **wrong** text rather than an error |

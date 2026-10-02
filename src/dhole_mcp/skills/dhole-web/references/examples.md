@@ -141,15 +141,15 @@ The same key exists on `smart_crawl`, where it matters more: the semantic path c
 
 When searching without fetching: rank by `relevance_score` / `fetch_relevance` (high first), and treat `engines_consensus: 1 of N` as unverified — `smart_fetch` before citing.
 
-## smart_crawl (three-step method)
+## Big site: map, scope, read (smart_crawl then smart_fetch)
 
 ```json
 // Step 1: whole-site URL map in one request
 {"url": "https://docs.example.com", "discover_only": true, "sitemap": true}
 // Step 2: scope the map to a subtree ('/guide' matches /guide and below, NOT /guide-old; the only wildcard is a trailing /*)
 {"url": "https://docs.example.com", "discover_only": true, "path_include": "/guide", "max_pages": 30}
-// Step 3: fetch the picks (each page is capped by max_content_chars_per; there is no whole-run budget)
-{"url": "https://docs.example.com", "crawl_urls": ["https://docs.example.com/guide/a", "https://docs.example.com/guide/b"], "max_content_chars_per": 8000}
+// Step 3: read the picks - smart_fetch, not a second crawl
+{"urls": ["https://docs.example.com/guide/a", "https://docs.example.com/guide/b"], "max_content_chars": 8000}
 ```
 
 List pages return a structured link listing (`page_type=list`), not body text — follow it to the content pages.

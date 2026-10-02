@@ -29,13 +29,19 @@ Flagship design (v6):
   * **URL normalization + dedup.** Trailing slashes, default ports, lowercase
     host, and tracking query params (utm_*, fbclid, gclid, ref, _) are stripped
     before dedup, so `/docs` and `/docs/` are no longer crawled twice.
-  * **Two-phase crawl.** `discover_only=true` returns the URL map (prefetch);
-    pass `crawl_urls=[...]` to fetch a chosen subset in a second phase without
-    re-discovering (selective deep crawl). Map mode extracts no page content, but
-    it is not free: expanding the map means fetching one page per step, so it
-    costs up to `max_pages` requests (10 by default) and `pages_crawled` reports
-    exactly how many were made. For a one-request map use `max_pages=1` (the
-    start URL's own links) or `sitemap=true` (the whole site, if it has one).
+  * **Map first, then read.** `discover_only=true` returns the URL map (prefetch)
+    and `sitemap=true` returns the whole site's map in one fetch; the URLs picked
+    out of either are read with `smart_fetch(urls=[...])`. Map mode extracts no
+    page content, but it is not free: expanding the map means fetching one page
+    per step, so it costs up to `max_pages` requests (10 by default) and
+    `pages_crawled` reports exactly how many were made. For a one-request map use
+    `max_pages=1` (the start URL's own links) or `sitemap=true` (the whole site,
+    if it has one).
+    The second phase used to live here: `crawl_urls=[...]` fetched a chosen subset
+    without re-discovering. It left in 17.0 (§3 decision 31) because a caller's
+    list had to pass normalization, same-domain checking, dedup and a cap before
+    it became a crawl, and each of those four cuts needed its own counter. Those
+    URLs never needed discovery, so `smart_fetch(urls=[...])` was already home.
   * **same_domain_only=true** default. External links are dropped (not crawled).
   * **Honest status.** Network failures report status -1 (documented) so
     downstream logic can distinguish them from a real HTTP 0 / no response.
@@ -166,10 +172,6 @@ class CrawlResponseModel(BaseModel):
     sitemap_truncated: bool = Field(default=False, description="True = the map is SHORT OF THE SITE, not just short of your filters: it stopped at the URL cap, or the walk hit its own sitemap-index limit. pages_discovered is then a LOWER BOUND - the site's sitemap holds at least this many URLs. Absent (False) on a map that read the whole sitemap, but note that still is not a guarantee the sitemap lists every page: a sitemap is an index the site chooses to publish.")
     sitemaps: list[str] = Field(default=[], description="Sitemap.xml URLs that were fetched + parsed (sitemap mode only).")
     robots_skipped: int = Field(default=0, description="Discovered URLs dropped WITHOUT a request because their robots.txt disallows them (dhole matches its own user agent, 'dhole-mcp'). Not an error - those pages were never eligible. Pass ignore_robots=true if you have the site's permission to fetch them anyway.")
-    urls_supplied: int = Field(default=0, description="How many URLs the caller passed in crawl_urls (0 unless this was a crawl_urls run). Compare with pages_crawled to see whether entries were dropped.")
-    urls_deduped: int = Field(default=0, description="crawl_urls entries dropped as repeats of an earlier entry AFTER normalization, so `/a` and `/a/` count as the same page. Not an error.")
-    urls_dropped_off_domain: int = Field(default=0, description="crawl_urls entries dropped because their host differs from the start URL's (smart_crawl is same-domain). Not an error - use smart_fetch for those URLs. Counting scope, because the name reads broader than it is: this counts ONLY entries the CALLER passed. Links discovered while crawling a page that point off-domain are not counted here and never were candidates - the crawler keeps same-domain links by rule, so they are filtered at extraction, not dropped as an exception worth reporting.")
-    urls_dropped_over_max_pages: int = Field(default=0, description="crawl_urls entries dropped because max_pages capped the list. Raise max_pages or split the list across calls to fetch them.")
     duration_ms: float = Field(default=0, description="Duration ms.")
     error: str = Field(default="", description="Error message (crawl-level).")
     summary: str = Field(default="", description="One-line crawl status.")
@@ -181,7 +183,7 @@ class CrawlResponseModel(BaseModel):
 
         A URL map is the one output whose size is set by the site rather than by
         what the caller asked for, and the flow the tool description recommends
-        (map once with sitemap=true, then choose with crawl_urls) hit it:
+        (map once with sitemap=true, then read the picks) hit it:
         docs.vllm.ai serialized 1000 entries to 353KB of JSON for 70KB of URLs —
         5.0x, because every row restated status/depth/content/content_chars/
         is_truncated/next_offset/fetched_at/error as the same default and
@@ -728,9 +730,10 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
     summary = (f"mapped {ok} URL(s) at {url} from sitemap.xml "
                f"(via {result.via}; {len(result.sitemaps_used)} sitemap file(s)) - one fetch, no BFS")
     next_action = (
-        f"{ok} URLs mapped from the sitemap. smart_fetch the ones you need, or re-run "
-        f"smart_crawl with crawl_urls=[...] (or discover_only=false) to fetch content "
-        f"for a chosen subset. Use path_include/path_exclude to scope."
+        f"{ok} URLs mapped from the sitemap. smart_fetch the ones you need - urls=[] "
+        f"takes the whole subset in one call, no discovery and no re-crawl - or "
+        f"re-run smart_crawl with discover_only=false to crawl content from the "
+        f"start URL. Use path_include/path_exclude to scope."
     )
     if result.capped:
         # P2-9: a sitemap with 50,000 URLs and one with exactly `cap` produce the
@@ -793,7 +796,6 @@ async def smart_crawl(
     path_exclude: Optional[list[str]] = None,
     discover_only: bool = False,
     focus: Optional[str] = None,
-    crawl_urls: Optional[list[str]] = None,
     max_content_chars_per: int = 8000,
     concurrency: int = 3,
     cache_ttl: int = 3600,
@@ -900,7 +902,6 @@ async def smart_crawl(
                   "path subtree: '/docs' (or '/docs/*') keeps /docs and everything under it; "
                   "'/' or '*' keeps everything. Drop the pattern to crawl unfiltered."),
         )
-    selective = bool(crawl_urls)
 
     # Normalize the sitemap flag: True/'auto'/False. 'auto' = use sitemap if
     # present, else BFS. True = sitemap only (return empty if none). Strings are
@@ -915,7 +916,7 @@ async def smart_crawl(
     # ── Sitemap mode: map the site from sitemap.xml in one fetch ───────────
     # Runs before BFS. 'auto' uses the sitemap if found, else falls through to
     # BFS. 'on' returns the sitemap map (or an honest empty if none found).
-    if sm_mode in ("on", "auto") and not selective:
+    if sm_mode in ("on", "auto"):
         sm_result = await _sitemap_map(url, path_include, path_exclude,
                                        max_pages=max_pages, deadline_t=deadline_t)
         if sm_result is not None:
@@ -936,39 +937,6 @@ async def smart_crawl(
                 next_action=("No sitemap found. Re-run smart_crawl with sitemap=false (or omit it) "
                              "to use best-first BFS discovery instead."),
             )
-
-    # Two-phase selective crawl: a caller-supplied URL subset is fetched with no
-    # further discovery (max_depth=0). URLs are normalized + same-domain-checked.
-    #
-    # G28 — every entry that does not survive this culling is COUNTED and
-    # reported. A caller who passes 40 URLs and gets 32 pages has to be able to
-    # tell the difference between "the site has 32 pages" and "I dropped 8 of
-    # yours", because the second answer means a page they asked for is missing
-    # from the result and the first one hides that.
-    selective = bool(crawl_urls)
-    urls_supplied = len(crawl_urls) if selective else 0
-    urls_deduped = urls_off_domain = urls_over_cap = 0
-    if selective:
-        root_netloc = urlparse(url).netloc
-        culled: list[str] = []
-        seen0: set[str] = set()
-        for raw in crawl_urls:
-            try:
-                joined = urljoin(url, raw)
-            except Exception:
-                urls_off_domain += 1  # unparseable: not the start domain either way
-                continue
-            jnorm = normalize_url(joined)
-            if urlparse(joined).netloc != root_netloc:
-                urls_off_domain += 1
-                continue
-            if jnorm in seen0:
-                urls_deduped += 1
-                continue
-            seen0.add(jnorm)
-            culled.append(joined)  # original for fetching; dedup by jnorm
-        crawl_urls = culled[:max_pages]
-        urls_over_cap = len(culled) - len(crawl_urls)
 
     root = _same_root(url)
     visited: set[str] = set()
@@ -1087,12 +1055,7 @@ async def smart_crawl(
         heapq.heappush(heap, (-s, depth, seq, u, text))
         seq += 1
 
-    if selective:
-        for u in crawl_urls:
-            push(u, 0, "")
-        max_depth = 0  # don't expand from a selective crawl
-    else:
-        push(url, 0, "")
+    push(url, 0, "")
 
     # Fetch a batch of up to `concurrency` best URLs from the heap concurrently.
     while heap and len(pages) < max_pages:
@@ -1190,8 +1153,8 @@ async def smart_crawl(
                 force_fetcher = "stealthy"
                 logger.info(f"Crawl: upgrading to stealthy browser (page_type={page.page_type})")
 
-            # Discover links for deeper layers (skip in selective mode).
-            if not selective and depth < max_depth and html:
+            # Discover links for deeper layers.
+            if depth < max_depth and html:
                 try:
                     links = extract_same_domain_links(
                         html, resp.url or u, url, path_include, path_exclude)
@@ -1214,42 +1177,14 @@ async def smart_crawl(
                         push(link_url, depth + 1, link_text)  # fetch original
 
     pages_crawled = len(pages)
-    # In selective mode, "discovered" is just the chosen subset.
-    if selective:
-        pages_discovered = len(crawl_urls)
-    else:
-        # Count any URLs still in the heap as discovered (they were found but not crawled).
-        for _neg, _d, _s, hu, _t in heap:
-            discovered.add(normalize_url(hu))
-        pages_discovered = len(discovered)
+    # Count any URLs still in the heap as discovered (they were found but not crawled).
+    for _neg, _d, _s, hu, _t in heap:
+        discovered.add(normalize_url(hu))
+    pages_discovered = len(discovered)
 
     if pages_crawled >= max_pages and pages_discovered > pages_crawled:
         truncated_maxpages = True
-    # A crawl_urls list longer than max_pages hits the same ceiling from the
-    # other direction: the cap trimmed the caller's own list, so the crawl ran
-    # exactly max_pages deep and stopped with entries still on the table.
-    if urls_over_cap:
-        truncated_maxpages = True
-
-    # What the caller asked for that they did not get, for the stats line. In
-    # selective mode the list was capped BEFORE the loop, so
-    # pages_discovered - pages_crawled is 0 there while `urls_over_cap` counts
-    # the entries the cap actually removed.
-    not_fetched = max(pages_discovered - pages_crawled, urls_over_cap)
-
-    # G28 — the culling tally, in one sentence, so the caller can tell "the site
-    # has N pages" apart from "I dropped M of the N you named".
-    _drop_bits = []
-    if urls_deduped:
-        _drop_bits.append(f"{urls_deduped} already in the list")
-    if urls_off_domain:
-        _drop_bits.append(f"{urls_off_domain} off-domain")
-    if urls_over_cap:
-        _drop_bits.append(f"{urls_over_cap} over max_pages={max_pages}")
-    urls_dropped_note = ""
-    if selective and _drop_bits:
-        urls_dropped_note = (f"crawl_urls: {urls_supplied} supplied, {len(crawl_urls)} "
-                             f"crawled ({', '.join(_drop_bits)} dropped)")
+    not_fetched = max(pages_discovered - pages_crawled, 0)
 
     def _summary_for(pages_now: list) -> str:
         """Stats line for ``pages_now``.
@@ -1286,11 +1221,9 @@ async def smart_crawl(
             bits_now.append("stopped: time deadline reached")
         if robots_skipped:
             bits_now.append(f"{robots_skipped} URL(s) skipped by robots.txt")
-        if urls_dropped_note:
-            bits_now.append(urls_dropped_note)
         if _chars_per_clamp:
             bits_now.append(_chars_per_clamp)
-        if (path_include or path_exclude) and len(pages_now) <= 1 and not selective:
+        if (path_include or path_exclude) and len(pages_now) <= 1:
             # The filters are applied while links are discovered, so a pattern that
             # matches nothing produces a crawl of exactly one page (the start URL is
             # never filtered) and no count anywhere says a filter ran. Measured: a
@@ -1322,12 +1255,6 @@ async def smart_crawl(
             f"path_include=['/docs'] (a path subtree, not a string prefix). "
             f"{not_fetched} URL(s) were discovered but not fetched."
         )
-        if urls_over_cap:
-            next_action += (
-                f" {urls_over_cap} of the crawl_urls you supplied were not fetched "
-                f"because max_pages={max_pages} caps the LIST, not just a crawl: "
-                f"split them across calls or raise max_pages."
-            )
         if discover_only:
             # This is the branch map mode actually lands in whenever the map is
             # incomplete: "discovered > crawled" in map mode always means the loop
@@ -1344,20 +1271,9 @@ async def smart_crawl(
             f"{pages_discovered} URLs mapped at a cost of {pages_crawled} page "
             f"fetch(es) (map mode fetches one page per expansion step to find more "
             f"links). smart_fetch the ones you need, or re-run smart_crawl with "
-            f"discover_only=false (or crawl_urls=[...]) to fetch content for a chosen "
-            f"subset. For a ONE-request map, pass max_pages=1 (start URL's links) or "
+            f"discover_only=false to fetch content from the start URL. For a "
+            f"ONE-request map, pass max_pages=1 (start URL's links) or "
             f"sitemap=true (whole site, if it publishes one)."
-        )
-    elif not next_action and selective and not pages and (urls_deduped or urls_off_domain):
-        # An empty result from a list the caller supplied is the case where
-        # silence hurts most: they cannot tell an empty site from a rejected
-        # list, and the two need opposite fixes.
-        next_action = (
-            f"nothing to crawl: of the {urls_supplied} crawl_urls supplied, "
-            f"{urls_deduped} were repeats of an earlier entry (after normalization) "
-            f"and {urls_off_domain} were on a different host than the start URL. "
-            f"smart_crawl only fetches the start URL's host - smart_fetch the "
-            f"off-domain URLs, or start the crawl from their own site."
         )
 
     # Network failure aggregate diagnosis: when most/all pages failed with
@@ -1387,9 +1303,6 @@ async def smart_crawl(
         truncated_by_max_pages=truncated_maxpages,
         truncated_by_time=truncated_time, duration_ms=(time() - t0) * 1000,
         robots_skipped=robots_skipped,
-        urls_supplied=urls_supplied, urls_deduped=urls_deduped,
-        urls_dropped_off_domain=urls_off_domain,
-        urls_dropped_over_max_pages=urls_over_cap,
         summary=summary, next_action=next_action,
     )
 

@@ -20,7 +20,7 @@ Starting routes for multi-step tasks. Each recipe marks where to pivot on failur
 
 1. `smart_crawl(url=<docs root>, sitemap=true, discover_only=true)` — whole-site URL map in one request (if no sitemap: `discover_only=true`, but map expansion costs one request per page)
 2. `path_include:"/docs"` to scope a subtree (`'/docs'` does not match `/docs-old`), `search:"keywords"` to filter by title/URL
-3. `crawl_urls=[...]` to fetch the picks (named pages always fetch in full; dropped entries are reported); for known URLs you can also go straight to `smart_fetch(urls=[...])`
+3. `smart_fetch(urls=[...])` to read the picks — one call, no re-discovery, no counters to reconcile
 4. List pages return structured link listings (`page_type=list`) — follow them to content pages
 - Budget sense: pages × per-page chars is the entire ceiling; map first, then name pages — don't max `max_pages` blindly
 

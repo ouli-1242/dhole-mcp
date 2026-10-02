@@ -66,7 +66,6 @@ VALUES: dict[str, object] = {
     "max_pages": 3, "max_depth": 1, "path_include": "/a", "path_exclude": "/b",
     "max_content_chars_per": 2000, "concurrency": 2,
     "deadline_ms": 60000, "sitemap": True, "search": "topic",
-    "crawl_urls": [URL + "a"],
     # smart_search
     "max_results": 5, "mode": "auto", "engines": ["bing"], "site": "example.com",
     "exclude_sites": ["other.example"], "location": "cn", "language": "zh",

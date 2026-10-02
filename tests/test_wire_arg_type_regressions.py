@@ -184,19 +184,20 @@ class TestOtherToolsWithTheSameGap:
         assert seen["deadline_ms"] == 90000
         assert seen["discover_only"] is False
 
-    def test_crawl_urls_as_a_bare_string_is_rejected_before_any_fetch(self, monkeypatch):
-        """`crawl_urls="https://x"` iterated into ten one-character URLs.
+    def test_a_list_option_as_a_bare_string_is_rejected_before_any_search(self, monkeypatch):
+        """`engines="bing"` iterates into four one-character engine names.
 
-        The list case with the worst outcome, because each character is handed to
-        the fetcher as a candidate URL.
+        The list case with the worst outcome: every element is a plausible name, so
+        one string becomes four queries against engines that do not exist.
+        (`crawl_urls` was this test's subject until 17.0 §3 decision 31 deleted it;
+        the boundary guard it exercised is what this test is really about.)
         """
-        seen = _record(monkeypatch, "smart_crawl")
+        seen = _record(monkeypatch, "smart_search")
         with pytest.raises(ValueError) as exc:
-            _dispatch("smart_crawl", {"url": "https://example.test",
-                                      "crawl_urls": "https://example.test/a"})
+            _dispatch("smart_search", {"query": "q", "engines": "bing"})
 
-        assert "crawl_urls must be an array of strings" in str(exc.value)
-        assert seen == {}, "a rejected call must not reach the crawl at all"
+        assert "engines must be an array of strings" in str(exc.value)
+        assert seen == {}, "a rejected call must not reach the search at all"
 
     def test_feed_and_resolve_timeouts_arrive_as_numbers(self, monkeypatch):
         seen = _record(monkeypatch, "feed_fetch", [])

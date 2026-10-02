@@ -558,7 +558,7 @@ DHOLE_INSTRUCTIONS = (
     "- Content of a URL you already have (page or PDF): smart_fetch. urls=[...] "
     "for a known list; focus= cuts tokens on long pages; pages= for PDF ranges.\n"
     "- Many pages from one site and you don't have the URLs yet: smart_crawl "
-    "(sitemap=true maps the whole site, then crawl_urls=[...] fetches just the "
+    "(sitemap=true maps the whole site, then smart_fetch(urls=[...]) reads just the "
     "ones you need; a page_type of 'list' points at it too).\n"
     "- Finding what to fetch: smart_search - then smart_fetch the top hits. "
     "NEVER answer from search snippets alone.\n"
@@ -619,7 +619,7 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "smart_fetch": "- Content of a URL you already have (page or PDF): smart_fetch. "
     "urls=[...] for a known list; focus= cuts tokens on long pages; pages= for PDF ranges.\n",
     "smart_crawl": "- Many pages from one site and you don't have the URLs yet: smart_crawl "
-    "(sitemap=true maps the whole site, then crawl_urls=[...] fetches just the ones you need; a page_type of 'list' points at it too).\n",
+    "(sitemap=true maps the whole site, then smart_fetch(urls=[...]) reads just the ones you need; a page_type of 'list' points at it too).\n",
     "smart_search": "- Finding what to fetch: smart_search - then smart_fetch the top hits. "
     "NEVER answer from search snippets alone.\n",
     "feed_fetch": "- RSS/Atom changelogs or release notes: feed_fetch.\n",
@@ -961,8 +961,7 @@ _WIRE_OMIT: dict = {
     "CrawlResponseModel": frozenset({
         "discover_only", "truncated_by_max_pages",
         "truncated_by_time", "sitemap_truncated", "sitemaps", "robots_skipped",
-        "urls_supplied", "urls_deduped", "urls_dropped_off_domain",
-        "urls_dropped_over_max_pages", "error", "duration_ms",
+        "error", "duration_ms",
     }),
     "SearchResult": frozenset({
         "snippet", "source", "position", "fetch_relevance",
@@ -2566,7 +2565,7 @@ def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Option
 #     and letting the tool's own default apply is what the caller meant.
 #
 # A bare string where a list was meant is the same gap with a worse outcome:
-# `crawl_urls="https://x"` iterates character by character.
+# `path_include="/docs"` iterates character by character.
 #
 # So: convert TYPES at the boundary, for both channels, before any branch reads
 # them. Ranges deliberately are NOT checked here — every documented cap is
@@ -2597,7 +2596,7 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         "cache_ttl": "int",
         "concurrency": "int", "timeout": "number", "deadline_ms": "number",
         "discover_only": "bool", "ignore_robots": "bool",
-        "crawl_urls": "list", "focus_engine": "str",
+        "focus_engine": "str",
         # path_include/path_exclude are NOT here: a bare string is already read
         # as the one-prefix list it means, and crawl.py does that at the point
         # where it can still say so before any page is fetched.
@@ -4708,7 +4707,7 @@ _SS_PARAMS = frozenset({
     "min_raw_relevance",
 })
 # The complete set of names each tool accepts at the top level. `url=` and
-# friends that are NOT in *_PARAMS (smart_crawl's discover_only/crawl_urls,
+# friends that are NOT in *_PARAMS (smart_crawl's discover_only,
 # screenshot's session_id, smart_search's query) are the required-ish arguments
 # the branches read by name, so they join here.
 #
@@ -4718,7 +4717,7 @@ _SS_PARAMS = frozenset({
 # and the forwarding below reads nothing but this set.
 _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     "smart_fetch": _SF_PARAMS | {"url"},
-    "smart_crawl": _SC_PARAMS | {"url", "discover_only", "focus", "crawl_urls",
+    "smart_crawl": _SC_PARAMS | {"url", "discover_only", "focus",
                                  "search"},
     "screenshot": _SHOT_PARAMS | {"url", "session_id"},
     "smart_search": _SS_PARAMS | {"query"},
@@ -8726,7 +8725,6 @@ class MasterFetchServer:
         path_exclude: Optional[List[str]] = None,
         discover_only: bool = False,
         focus: Optional[str] = None,
-        crawl_urls: Optional[List[str]] = None,
         max_content_chars_per: int = 8000,
         concurrency: int = 3,
         cache_ttl: int = DEFAULT_TTL,
@@ -8741,8 +8739,9 @@ class MasterFetchServer:
         """Deep-crawl a site: best-first same-domain from `url`, returning each
         page as markdown with content_ok/summary/page_type. discover_only=true
         returns the URL map only. `focus` prioritizes relevant pages AND
-        focus-filters each page's content. crawl_urls=[...] fetches a chosen
-        subset (second-phase selective crawl, no re-discovery). Content-adaptive:
+        focus-filters each page's content. URLs picked out of that map are read
+        with smart_fetch(urls=[...]) - the crawl discovers, it does not fetch a
+        list the caller already has. Content-adaptive:
         article pages -> main content, list/index pages -> structured link list,
         JS shells -> detected + reported honestly. Caps: max_pages, max_depth,
         max_content_chars_per, deadline_ms (overall time). Reuses
@@ -8793,7 +8792,7 @@ class MasterFetchServer:
                 return await _smart_crawl(
                     self, url, max_pages=max_pages, max_depth=max_depth,
                     path_include=path_include, path_exclude=path_exclude,
-                    discover_only=discover_only, focus=focus, crawl_urls=crawl_urls,
+                    discover_only=discover_only, focus=focus,
                     max_content_chars_per=max_content_chars_per,
                     concurrency=concurrency,
                     cache_ttl=cache_ttl,
@@ -8908,14 +8907,13 @@ class MasterFetchServer:
         },
         {
             "name": "smart_crawl",
-            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, smart_fetch(urls=[...]) fetches them directly - no crawl needed.\n- Every parameter is a top-level argument; nothing is nested. url= is required even with crawl_urls (it is the domain root those URLs are checked against).\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed'), discoveries already known to be disallowed are skipped, and robots_skipped says how many. ignore_robots=true overrides.\n- Caps: max_pages (1-40, default 10), max_depth(2), 20000 chars per page, deadline_ms. There is no whole-run character budget.\n- Map-then-fetch (sitemap / discover_only / crawl_urls), what the drop counters mean and how politeness is decided: dhole_doc(topic='behavior', section='smart_crawl'); placement pairs with counterexamples: dhole_doc(topic='call').",
+            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, smart_fetch(urls=[...]) fetches them directly - no crawl needed.\n- Every parameter is a top-level argument; nothing is nested. url= names the site the crawl stays inside.\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed'), discoveries already known to be disallowed are skipped, and robots_skipped says how many. ignore_robots=true overrides.\n- Caps: max_pages (1-40, default 10), max_depth(2), 20000 chars per page, deadline_ms. There is no whole-run character budget.\n- Map-then-fetch: sitemap=true or discover_only=true maps it, smart_fetch(urls=[...]) reads the picks. What the drop counters mean and how politeness is decided: dhole_doc(topic='behavior', section='smart_crawl'); placement pairs with counterexamples: dhole_doc(topic='call').",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
                     "url": {"type": "string", "description": "Start URL (crawl stays on this domain)"},
                     "discover_only": {"type": "boolean", "description": "true = URL map only, no page content."},
                     "focus": {"type": "string", "description": "Query: crawl the links relevant to this and focus-filter each page."},
-                    "crawl_urls": {"type": "array", "items": {"type": "string"}, "description": "Chosen subset of URLs to fetch (no re-discovery). Use after sitemap=true or discover_only=true."},
                     "search": {"type": "string", "description": "Filter discovered/crawled URLs by keyword (URL path + title). Use with discover_only=true."},
                     # 17.0 B4 · 顶层只有一个家（这 15 个键今天也已经能从顶层传进来）。
                     "sitemap": {"anyOf": [{"type": "boolean"}, {"type": "string"}], "description": "Where the URL map comes from: true | 'auto' (default) | false. A tri-state, so the strings a serialized client sends are accepted too."},

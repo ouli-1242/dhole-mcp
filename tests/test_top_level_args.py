@@ -1,7 +1,7 @@
 """Top-level arguments either reach the tool or fail loudly - never vanish.
 
 Found while re-testing the third report's crawl item live. The dispatcher read
-only url/discover_only/focus/crawl_urls/search + the options bag, so every other
+only url/discover_only/focus/search + the options bag, so every other
 top-level key was dropped on the floor: `max_pages=3` crawled 10 pages and
 `path_include="/tag/"` filtered nothing, with no error, no warning and nothing
 in the reply to say the cap never applied. The tool descriptions name those
@@ -140,10 +140,10 @@ class TestUnknownTopLevelArgsRaise:
         """Clients that echo every schema property as null must not be rejected."""
         seen = _stub(monkeypatch, "smart_crawl", _CRAWL_OK)
         _dispatch("smart_crawl", {"url": "https://example.com/", "focus": None,
-                                  "crawl_urls": None, "nonsense": None})
+                                  "path_include": None, "nonsense": None})
         # 没传 = 不写进 kwargs，让方法自己的默认值生效。显式传 None 会盖掉一个
         # 不是 None 的默认值（extraction_type 的教训，见 _dispatch 里的注释）。
-        assert "focus" not in seen and "crawl_urls" not in seen
+        assert "focus" not in seen and "path_include" not in seen
 
     def test_a_null_valued_call_is_not_rejected(self, monkeypatch):
         seen = _stub(monkeypatch, "smart_crawl", _CRAWL_OK)
