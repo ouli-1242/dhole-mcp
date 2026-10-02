@@ -2596,7 +2596,7 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         "max_pages": "int", "max_depth": "int", "max_content_chars_per": "int",
         "cache_ttl": "int",
         "concurrency": "int", "timeout": "number", "deadline_ms": "number",
-        "discover_only": "bool", "ignore_robots": "bool", "delay": "number",
+        "discover_only": "bool", "ignore_robots": "bool",
         "crawl_urls": "list", "focus_engine": "str",
         # path_include/path_exclude are NOT here: a bare string is already read
         # as the one-prefix list it means, and crawl.py does that at the point
@@ -4685,7 +4685,7 @@ _SC_PARAMS = frozenset({
     "max_pages", "max_depth", "path_include", "path_exclude",
     "max_content_chars_per", "concurrency",
     "cache_ttl", "force_fetcher", "timeout", "deadline_ms", "sitemap",
-    "search", "ignore_robots", "delay", "focus_engine",
+    "search", "ignore_robots", "focus_engine",
 })
 _SHOT_PARAMS = frozenset({
     "full_page", "image_type", "quality", "wait", "wait_selector",
@@ -8736,7 +8736,6 @@ class MasterFetchServer:
         sitemap: str | bool = False,
         search: Optional[str] = None,
         ignore_robots: bool = False,
-        delay: float = 0.0,
         focus_engine: Optional[str] = None,
     ) -> CrawlResponseModel:
         """Deep-crawl a site: best-first same-domain from `url`, returning each
@@ -8753,10 +8752,6 @@ class MasterFetchServer:
             Use with discover_only=True for fast URL discovery on large sites.
         ignore_robots: skip robots.txt compliance for the whole crawl (default
             False = comply, per page, through smart_fetch).
-        delay: seconds to keep between requests to the SAME host (0-60).
-            concurrency caps in-flight requests, which is not the same thing as
-            how often one server is hit; a host's robots.txt Crawl-delay raises
-            this per host, and the summary names the interval that was used.
         focus_engine: which scorer runs `focus` ('bm25' | 'neural'). Same rule as
             smart_fetch: omitting it is 'bm25', which is the cheap path and needs
             nothing; 'neural' is what you ask for when keyword overlap is not
@@ -8804,7 +8799,7 @@ class MasterFetchServer:
                     cache_ttl=cache_ttl,
                     force_fetcher=force_fetcher, timeout=timeout,
                     deadline_ms=deadline_ms, sitemap=sitemap, search=search,
-                    ignore_robots=ignore_robots, delay=delay,
+                    ignore_robots=ignore_robots,
                 )
             except Exception as e:
                 logger.exception("smart_crawl raised")
@@ -8926,7 +8921,7 @@ class MasterFetchServer:
                     "sitemap": {"anyOf": [{"type": "boolean"}, {"type": "string"}], "description": "Where the URL map comes from: true | 'auto' (default) | false. A tri-state, so the strings a serialized client sends are accepted too."},
                     "max_pages": {"type": "integer", "description": "Pages to fetch (1-40, default 10). The first budget a crawl hits."},
                     "max_depth": {"type": "integer", "description": "Hops from the start URL (0-5, default 2). 0 = the start page only."},
-                    "concurrency": {"type": "integer", "description": "Pages in flight at once (1-5, default 3). Waiting between requests to the same host is the separate delay= knob."},
+                    "concurrency": {"type": "integer", "description": "Pages in flight at once (1-5, default 3). Waiting between requests to one host is that host's robots.txt Crawl-delay, not a knob here."},
                     "path_include": {"type": "array", "items": {"type": "string"}, "description": "Keep only these path subtrees: '/docs' keeps /docs and everything under it, NOT /docs-old."},
                     "path_exclude": {"type": "array", "items": {"type": "string"}, "description": "Drop these path subtrees: '/docs-old' under an include keeps nothing."},
                     "max_content_chars_per": {"type": "integer", "description": "Per-page content cap (500-20000, default 8000)."},
@@ -8935,7 +8930,6 @@ class MasterFetchServer:
                     "timeout": {"type": "integer", "description": "Per-page budget in ms (default 30000). Not the whole-crawl stop - that is deadline_ms."},
                     "deadline_ms": {"type": "integer", "description": "Hard stop for the whole crawl in ms (default 120000) - the budget that ends the run, unlike timeout= which is per page."},
                     "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check and the disallowed-URL skip (default false = comply per page). Set true only where you have the site's permission."},
-                    "delay": {"type": "number", "description": "Seconds between requests to the SAME host (0-60). A robots.txt Crawl-delay can raise this, never lower it."},
                     "focus_engine": {"type": "string", "enum": ["bm25", "neural"], "description": "Which scorer runs focus here: 'bm25' (default, cheap) or 'neural' (~12.5s of CPU per page TIMES max_pages, needs the local reranker model; asking without it is refused, not downgraded)."},
                 },
             },

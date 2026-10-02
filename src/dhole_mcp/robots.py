@@ -293,8 +293,8 @@ class RobotsCache:
         urllib already prefers our group over ``*`` and returns None when neither
         is set. It also reads only WHOLE seconds (3.14 parses behind an isdigit()
         guard), so a host writing ``Crawl-delay: 0.5`` reads as "asked for
-        nothing" — sub-second spacing is the caller's own ``delay`` knob, not
-        something a site can request.
+        nothing". That has been the whole answer since 17.0 removed the caller's
+        ``delay=``: nothing in dhole spaces requests below a second.
 
         A site asking for hours is not obeyed to the letter: the number is a
         request about load, and an unclamped one turns a crawl into a hang.

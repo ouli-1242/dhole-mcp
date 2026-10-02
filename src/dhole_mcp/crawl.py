@@ -803,7 +803,6 @@ async def smart_crawl(
     sitemap: str | bool = False,
     search: Optional[str] = None,
     ignore_robots: bool = False,
-    delay: float = 0.0,
 ) -> CrawlResponseModel:
     """Best-first same-domain crawl. See module docstring.
 
@@ -818,13 +817,6 @@ async def smart_crawl(
     disallowed URL before any request; this crawl additionally drops the
     discovered URLs it already knows are disallowed (robots_skipped) instead of
     spending budget on a refusal.
-    delay: seconds to keep between requests to the SAME host (G27). concurrency
-    caps how many requests are in flight, which is a different question from how
-    often one server is hit — 3 concurrent requests at a slow host is 3 per
-    second. A host's robots.txt ``Crawl-delay`` raises this per host when it asks
-    for more; it never lowers what the caller asked for, and ignore_robots drops
-    the site's ask too (a caller who opted out of compliance is not then
-    rate-limited by it, silently).
     """
     from dhole_mcp.security import validate_url, SecurityError
     from dhole_mcp.trafilatura_extractor import extract_html_title
@@ -993,28 +985,26 @@ async def smart_crawl(
     # hit: 3 concurrent requests at a slow host is 3 per second, forever. Each
     # host gets a next-allowed slot, so N concurrent lanes at one host collapse
     # into one request per interval while different hosts stay independent.
-    from dhole_mcp.robots import MAX_CRAWL_DELAY_S
-    asked_interval = max(0.0, min(float(delay or 0.0), MAX_CRAWL_DELAY_S))
-    pace_clamped = float(delay or 0.0) > MAX_CRAWL_DELAY_S
+    #
+    # 17.0 §3 第 31 条：这个间隔只剩一个来源 —— 站点自己在 robots.txt 里写的 Crawl-delay。
+    # 调用方的 `delay=` 删了：它不是性能参数，而是对别人服务器的礼貌问题，而这件事
+    # 站方已经用 Crawl-delay 表过态。只升不降仍然成立（没有东西可以被把低了），60s
+    # 的上限也还在，但那是 `robots.crawl_delay()` 对站方要求做的事，不再是调用方
+    # 能推的旋钮。
     next_slot: dict[str, float] = {}
     pace_lock = asyncio.Lock()
     interval_used = 0.0
-    pace_raised_by_robots = False
 
     def _interval_for(u: str) -> float:
-        """The caller's interval, or the host's own Crawl-delay if it asks for more."""
-        nonlocal pace_raised_by_robots
-        interval = asked_interval
-        if not ignore_robots:
-            asked = 0.0
-            try:
-                from dhole_mcp.robots import cached_crawl_delay
-                asked = cached_crawl_delay(u) or 0.0
-            except Exception:
-                asked = 0.0
-            if asked > interval:
-                interval, pace_raised_by_robots = asked, True
-        return interval
+        """How long this host asked to be left alone (0 = it did not ask, or the
+        caller waived robots)."""
+        if ignore_robots:
+            return 0.0
+        try:
+            from dhole_mcp.robots import cached_crawl_delay
+            return cached_crawl_delay(u) or 0.0
+        except Exception:
+            return 0.0
 
     async def _pace(u: str) -> None:
         nonlocal interval_used
@@ -1311,11 +1301,12 @@ async def smart_crawl(
         if interval_used > 0:
             # Saying the interval exists is the point: a crawl that took 40
             # seconds for 10 pages looks like a hang unless the stats line says
-            # it was spacing itself on purpose.
+            # it was spacing itself on purpose. And naming who set it: there is
+            # no caller knob for this any more, so the host's own ask is the
+            # only possible author.
             bits_now.append(
-                f"{interval_used:g}s between requests per host"
-                + (" (raised by a host's robots Crawl-delay)" if pace_raised_by_robots else "")
-                + (" (delay above the 60s ceiling was clamped)" if pace_clamped else ""))
+                f"{interval_used:g}s between requests per host "
+                "(the host's own robots.txt Crawl-delay)")
         return "; ".join(bits_now)
 
     # Build a concise summary + next_action.

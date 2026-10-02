@@ -1,9 +1,10 @@
 """G27 回归：爬取礼貌度 —— 一台主机多久被打一次，和「选项到底有没有到位」。
 
 `concurrency` 限的是**同时在飞**几个请求，它回答不了「同一台服务器每秒被敲几下」：
-3 路并发对着一个慢主机就是每秒 3 发，持续到天荒地老。所以 `delay` 是按主机的请求
-间隔，和并发是两个旋钮。站方在 robots.txt 里写的 `Crawl-delay` 会把间隔**抬高**
-（那是它明确提出的要求），但不会把调用方自己要的间隔压低。
+3 路并发对着一个慢主机就是每秒 3 发，持续到天荒地老。所以「按主机的请求间隔」是
+另一个问题。17.0 §3 第 31 条把这个间隔的来源收成一个：站方自己在 robots.txt 里写的
+`Crawl-delay`。调用方的 `delay=` 删了 —— 给别人的服务器定节奏不是性能选择，而是礼貌
+问题，而这件事站方已经表过态；「只升不降」因此自动成立（没有东西可以被压低）。
 
 顺带这一族里最贵的那个 bug：`ignore_robots` 在 smart_crawl 的选项集合里，却不在
 `MasterFetchServer.smart_crawl` 的形参表里 —— 于是从 wire 上传进来就是 TypeError，
@@ -100,67 +101,65 @@ class TestTheWiringThatWasMissing:
         monkeypatch.setattr(crawl_mod, "smart_crawl", fake_crawl)
 
         await MasterFetchServer().smart_crawl(
-            SEED, ignore_robots=True, delay=2.5)
+            SEED, ignore_robots=True, max_depth=3)
 
         assert seen["ignore_robots"] is True
-        assert seen["delay"] == 2.5
+        assert seen["max_depth"] == 3
 
 
 class TestTheIntervalIsPerHost:
+    """间隔只剩一个作者：站方自己写的 `Crawl-delay`（调用方的 `delay=` 已删）。
+
+    原来这一族测的是「调用方要 0.08s，请求之间就真的隔开 0.08s」。17.0 §3 第 31 条
+    把那个旋钮删了 —— 给别人的服务器定节奏不是性能选择，而站方已经用 Crawl-delay
+    表过态，所以间隔从此只有一个来源。整秒是 robots 层的读法决定的（robotparser 只
+    认整数），所以这里的间隔是 1s，用例也因此比原来贵。
+    """
 
     @pytest.mark.asyncio
-    async def test_a_delay_spaces_the_requests_it_covers(self):
+    async def test_a_hosts_ask_spaces_the_requests_it_covers(self):
+        get_robots_cache().prime(SEED, "User-agent: *\nCrawl-delay: 1\n")
         server = _TimingServer()
 
         out = await crawl_mod.smart_crawl(server, SEED, max_pages=4, max_depth=1,
-                                          concurrency=3, delay=0.08, cache_ttl=0)
+                                          concurrency=3, cache_ttl=0)
 
         # page_times excludes the seed: what is under test is the interval between
         # requests to one host, and three gaps make a min() worth asserting.
         assert len(server.page_times) >= 3, out.summary
-        assert min(_spacings(server.page_times)) >= 0.06, server.page_times
+        assert min(_spacings(server.page_times)) >= 0.9, server.page_times
 
     @pytest.mark.asyncio
-    async def test_without_a_delay_the_crawl_is_not_spaced(self):
+    async def test_a_host_that_asked_for_nothing_is_not_spaced(self):
+        """没有要求就没有间隔：这条钉的是「删了旋钮之后不会凭空多出一个默认限速」。"""
         server = _TimingServer()
 
-        await crawl_mod.smart_crawl(server, SEED, max_pages=4, max_depth=1,
-                                    concurrency=3, cache_ttl=0)
+        out = await crawl_mod.smart_crawl(server, SEED, max_pages=4, max_depth=1,
+                                          concurrency=3, cache_ttl=0)
 
         # The claim is "nothing was inserted between requests", so measure the
         # gaps, not the wall clock: the crawl's own retry path sleeps ~1s on a
         # transient failure, and a total-time bound would blame this feature for
         # that.
         assert max(_spacings(server.page_times), default=0.0) < 0.5, server.page_times
+        assert "between requests per host" not in out.summary
 
     @pytest.mark.asyncio
-    async def test_the_summary_says_the_crawl_was_spacing_itself(self):
-        """一个 10 页 40 秒的 crawl 看起来就像卡住了。不说「这是故意的」，调用方
-        唯一的办法就是调大 deadline 或者砍掉并发 —— 两个都在解决不存在的问题。"""
-        server = _TimingServer()
-
-        out = await crawl_mod.smart_crawl(server, SEED, max_pages=2, max_depth=1,
-                                          delay=0.05, cache_ttl=0)
-
-        assert "between requests per host" in out.summary, out.summary
-        assert "0.05s" in out.summary, out.summary
-
-
-class TestTheSitesOwnAskCounts:
-
-    @pytest.mark.asyncio
-    async def test_a_crawl_delay_in_robots_raises_the_interval(self):
-        # Whole seconds only: urllib reads `Crawl-delay` behind an isdigit() guard
-        # (3.14), so 0.1 would silently mean "the host asked for nothing" and this
-        # test would prove nothing. See robots._delay_of's docstring.
+    async def test_the_summary_names_the_author_of_the_interval(self):
+        """一个 10 页 40 秒的 crawl 看起来就像卡住了。光说「隔开了」还不够——调用方
+        已经没有任何参数能改它，唯一有用的信息是**这是站方要求的**，否则第一反应还是
+        去调 deadline 或砍并发，两个都在解决不存在的问题。"""
         get_robots_cache().prime(SEED, "User-agent: *\nCrawl-delay: 1\n")
         server = _TimingServer()
 
-        out = await crawl_mod.smart_crawl(server, SEED, max_pages=3, max_depth=1,
-                                          concurrency=3, delay=0.0, cache_ttl=0)
+        out = await crawl_mod.smart_crawl(server, SEED, max_pages=2, max_depth=1,
+                                          cache_ttl=0)
 
-        assert min(_spacings(server.page_times)) >= 0.9, server.page_times
-        assert "robots Crawl-delay" in out.summary, out.summary
+        assert "1s between requests per host" in out.summary, out.summary
+        assert "Crawl-delay" in out.summary, out.summary
+
+
+class TestTheSitesOwnAskCounts:
 
     @pytest.mark.asyncio
     async def test_a_caller_who_opted_out_of_compliance_is_not_rate_limited_by_it(self):
@@ -195,13 +194,3 @@ class TestTheSitesOwnAskCounts:
 
         assert cache.cached_delay(SEED) == 1.0
         assert cache.cached_delay("https://never-read.example/") is None
-
-    @pytest.mark.asyncio
-    async def test_a_requested_delay_past_the_ceiling_is_clamped_and_said(self):
-        server = _TimingServer()
-
-        out = await crawl_mod.smart_crawl(server, SEED, max_pages=1, delay=9999,
-                                          cache_ttl=0)
-
-        assert "clamped" in out.summary, out.summary
-        assert f"{MAX_CRAWL_DELAY_S:g}s" in out.summary, out.summary
