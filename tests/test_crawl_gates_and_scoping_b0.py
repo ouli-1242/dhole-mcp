@@ -108,8 +108,7 @@ class TestBudgetGatesReportThemselves:
         out = await crawl_mod.smart_crawl(site, SEED, max_pages=5, max_depth=1,
                                           cache_ttl=0)
 
-        assert (out.truncated_by_max_pages, out.truncated_by_time,
-                out.truncated_by_budget) == (False, False, False)
+        assert (out.truncated_by_max_pages, out.truncated_by_time) == (False, False)
         assert "stopped:" not in out.summary
 
     @pytest.mark.asyncio

@@ -7,8 +7,9 @@
    都以 HTTP 200 返回且 content_ok=true，agent 会把失败页当正文引用。
 2. archive.org 第三层降级在工具描述与 README 里都不存在 —— agent 调用前
    无从得知内容可能是存档快照。
-3. smart_crawl 的 max_total_chars 被硬钳在一个固定上限（当前 1,000,000），
-   文档没写，于是 "调大 max_pages 就能多爬" 是错的预期。
+3. smart_crawl 有一道没写在文档里的钳制，于是 "调大 max_pages 就能多爬" 是错的
+   预期。17.0 §3-31 删掉了那道总字符预算（`max_total_chars` 整个下线），页数与每页
+   字符这两道天花板留着 —— 教训不跟着删：数值由 crawl.py 的常量反查 wire。
 """
 
 import asyncio
@@ -161,40 +162,49 @@ class TestArchiveTierDocumented:
             "instructions 里 content_ok=true 的例外情况没写清楚")
 
 
-# ─── 3. crawl 的总字符硬顶 ────────────────────────────────────────────────
+# ─── 3. crawl 的两道天花板：写在 wire 上，且能被常量反查 ────────────────────
 
 
-class TestCrawlBudgetDocumented:
-    """实测：max_pages=100 仍只抓 31 页（当时的钳制值 500000）。
+class TestCrawlCapsDocumented:
+    """实测原话是「max_pages=100 仍只抓 31 页」—— 一道没写在描述里的钳制，
+    后果是 agent 一直加同一个参数。
 
-    根因是 crawl.py 把 max_total_chars 钳在一个固定上限，而 max_pages 只在
-    max_total_chars 未显式给出时才参与推导 —— 撞上钳制后调 max_pages
-    不再有任何效果。这是文档必须说的，否则 agent 会一直加参数。
-    钳制值以 crawl.py 的 MAX_TOTAL_CHARS 为准，本测试从常量反查描述，
-    代码与文档不可能双双漂移。钳制行为本身由 TestHardClampBehavior 钉住。
+    17.0 §3-31 删掉了这一格的成因之一（总预算 `max_total_chars` 整个下线），留下
+    `max_pages` 与每页 `max_content_chars_per` 两道仍然存在的天花板。教训跟着留下，
+    形式也照旧：**数值从 crawl.py 的常量读出来，再要求 wire 上出现同一个数** ——
+    只钉文档拦不住"代码改了钳制值、描述跟着改"的双双漂移。
     """
 
-    def test_crawl_documents_the_hard_clamp(self, tools):
-        desc = _desc(tools, "smart_crawl")
-        assert str(crawl_mod.MAX_TOTAL_CHARS) in desc, (
-            "max_total_chars 的硬顶没写进描述（应与 crawl.py 的 MAX_TOTAL_CHARS 同值）")
+    @staticmethod
+    def _prop(tools, tool, prop):
+        return tools[tool]["inputSchema"]["properties"][prop]["description"]
+
+    def test_the_page_ceiling_is_on_the_wire(self, tools):
+        asked = str(crawl_mod.MAX_PAGES_CEILING)
+        assert asked in _desc(tools, "smart_crawl"), \
+            "爬取页数的硬顶没写进工具描述"
+        assert asked in self._prop(tools, "smart_crawl", "max_pages"), \
+            "max_pages 自己的描述没写上限"
+
+    def test_the_per_page_ceiling_is_on_the_wire(self, tools):
+        assert str(crawl_mod.PER_PAGE_CHARS_CEILING) in self._prop(
+            tools, "smart_crawl", "max_content_chars_per"), \
+            "每页字符上限没写进参数描述"
 
 
 class TestHardClampBehavior:
-    """钉钳制本身（上面的类钉的是文档）。
+    """钉钳制本身（上面那类钉的是文档）。
 
-    只钉文档的守卫拦不住「代码改了钳制值、文档跟着改」的双双漂移 ——
-    必须跑一次真实爬取（stub 掉网络层），证明显式 max_total_chars 被钳在
-    MAX_TOTAL_CHARS。预算消耗点：crawl.py 每页累加 content_chars，越过预算
-    置 truncated_by_budget；concurrency=1 时末页最多超出一个
-    max_content_chars_per，所以总量落在 [MAX_TOTAL_CHARS, MAX_TOTAL_CHARS + per)。
+    这一类原来跑的是"显式 max_total_chars 被钳在 1,000,000"。总预算下线之后能算的
+    账只剩两道天花板，所以这里跑一次真爬取（stub 掉网络层）证明：要 500 页只会拿到
+    `MAX_PAGES_CEILING` 页、每页不超过 `PER_PAGE_CHARS_CEILING` 字符，而**被钳这件事
+    在 summary 里说得出名字** —— 静默才是这一族原来的 bug。
     """
 
-    def test_explicit_budget_clamps_at_constant(self, monkeypatch):
-        per = 50000  # max_content_chars_per 的上限，单页内容被切到这个值
+    def test_both_ceilings_hold_and_say_so(self, monkeypatch):
         big_page = (
             "<html><head><title>t</title></head><body><p>"
-            + " ".join(f"sentence {i} of the crawl budget page" for i in range(6000))
+            + " ".join(f"sentence {i} of the crawl cap page" for i in range(6000))
             + "</p>"
             + "".join(f'<a href="/p{i}">p{i}</a>' for i in range(60))
             + "</body></html>"
@@ -207,18 +217,18 @@ class TestHardClampBehavior:
             )
 
         monkeypatch.setattr(MasterFetchServer, "smart_fetch", fake_smart_fetch)
-        srv = MasterFetchServer()
-        result = asyncio.run(srv.smart_crawl(
-            "https://example.com/", max_pages=40, cache_ttl=0,
-            max_content_chars_per=per, max_total_chars=10**9, concurrency=1,
+        result = asyncio.run(MasterFetchServer().smart_crawl(
+            "https://example.com/", max_pages=500, cache_ttl=0,
+            max_content_chars_per=999_999, concurrency=1,
         ))
 
-        assert result.truncated_by_budget is True, (
-            "传了 10^9 的 max_total_chars 却没触发预算截断 —— 钳制不在了")
-        total = sum(p.content_chars for p in result.pages)
-        assert crawl_mod.MAX_TOTAL_CHARS <= total < crawl_mod.MAX_TOTAL_CHARS + per, (
-            f"总字符 {total} 不在 [{crawl_mod.MAX_TOTAL_CHARS}, "
-            f"{crawl_mod.MAX_TOTAL_CHARS + per}) —— 钳制值不是 MAX_TOTAL_CHARS")
+        assert len(result.pages) == crawl_mod.MAX_PAGES_CEILING, \
+            f"要了 500 页，拿到 {len(result.pages)} 页"
+        assert all(p.content_chars <= crawl_mod.PER_PAGE_CHARS_CEILING
+                   for p in result.pages), "有一页超出了每页上限"
+        assert "max_content_chars_per clamped" in result.summary, \
+            f"钳了却没说：{result.summary}"
+        assert result.truncated_by_max_pages is True
 
 
 # ─── 4. 错误状态的 next_action 不许被「截断」抢走 ────────────────────────

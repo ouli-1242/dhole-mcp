@@ -66,7 +66,7 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 - `css_selector` applies to HTML only; XML/JSON/plain-text responses come back whole with a summary note that the selector was not applied.
 - Archive fallback: check `source` / `archived_at` — that is a dated snapshot. `is_stale` ages by source type (news 30d, docs/reference/paper 730d, rest 365d).
 - Search date windows are day/week/month/year presets only; `after` is widened to the narrowest preset covering your window — `date_filter.note` is the authoritative plain-language account. There is **no `total_estimate`** field.
-- `max_total_chars` governs discovery-driven crawl progress; pages named in `crawl_urls` are always fetched in full — cap single pages with `max_content_chars_per`.
+- A crawl has **no whole-run character budget**: it is bounded by `max_pages` (1-40) and `max_content_chars_per` on each page. Those two are computable; a total was not.
 - Whether robots are honored in this process: read `metadata.robots` on every response (it may say `bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)`).
 - PDF responses carry `table_of_contents` — pick `pages` from it. `pages` trims extraction only; the file still downloads whole.
 

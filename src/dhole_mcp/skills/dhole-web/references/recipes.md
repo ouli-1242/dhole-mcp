@@ -22,7 +22,7 @@ Starting routes for multi-step tasks. Each recipe marks where to pivot on failur
 2. `path_include:"/docs"` to scope a subtree (`'/docs'` does not match `/docs-old`), `search:"keywords"` to filter by title/URL
 3. `crawl_urls=[...]` to fetch the picks (named pages always fetch in full; dropped entries are reported); for known URLs you can also go straight to `smart_fetch(urls=[...])`
 4. List pages return structured link listings (`page_type=list`) — follow them to content pages
-- Budget sense: `max_total_chars` caps the whole run at 1,000,000; map first, then name pages — don't max `max_pages` blindly
+- Budget sense: pages × per-page chars is the entire ceiling; map first, then name pages — don't max `max_pages` blindly
 
 ## Structured extraction (table/listing page → JSON)
 

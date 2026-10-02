@@ -112,15 +112,12 @@ _TRACKING_PARAMS = {
     "fbclid", "gclid", "ref", "ref_src", "source", "_ga", "mc_cid", "mc_eid",
 }
 
-# Single-call content ceiling: an explicit max_total_chars is clamped here.
-# Deliberately a capability ceiling, not a default - the derived default budget
-# stays max_pages * max_content_chars_per (80,000 at defaults), so callers who
-# never ask see zero change. 1M chars is ~250k tokens in one response; past it
-# the sane delivery unit is crawl_urls=[...] in phases, but an explicit ask is
-# granted rather than forbidden.
-MAX_TOTAL_CHARS = 1_000_000
-
-
+# The two ceilings a crawl answers to (17.0 §3, decision 31). Named, not inline, because
+# the tool description has to state them and a description that drifts from the clamp is
+# exactly the bug this section's tests exist to catch: they read these constants and
+# require the same numbers on the wire.
+MAX_PAGES_CEILING = 40
+PER_PAGE_CHARS_CEILING = 20_000
 
 # Content-likelihood path tokens. Boost content pages, penalize app/admin noise
 # so the priority queue crawls docs before login/submit/cart.
@@ -163,7 +160,6 @@ class CrawlResponseModel(BaseModel):
     pages_crawled: int = Field(default=0, description="Pages actually fetched.")
     pages_discovered: int = Field(default=0, description="Total unique same-domain URLs found (including crawled).")
     discover_only: bool = Field(default=False, description="True = map mode (URLs only, no content).")
-    truncated_by_budget: bool = Field(default=False, description="True = stopped early because the total-char budget was reached.")
     truncated_by_max_pages: bool = Field(default=False, description="True = stopped early because max_pages was reached.")
     truncated_by_time: bool = Field(default=False, description="True = stopped early because the overall deadline (ms) was reached.")
     sitemap_used: bool = Field(default=False, description="True = the URL map came from the site's sitemap.xml (one fetch), not best-first BFS discovery.")
@@ -799,7 +795,6 @@ async def smart_crawl(
     focus: Optional[str] = None,
     crawl_urls: Optional[list[str]] = None,
     max_content_chars_per: int = 8000,
-    max_total_chars: Optional[int] = None,
     concurrency: int = 3,
     cache_ttl: int = 3600,
     force_fetcher: Optional[str] = None,
@@ -873,20 +868,21 @@ async def smart_crawl(
                       "with ignore_robots=true if you have the site's permission."),
             )
 
-    max_pages = max(1, min(int(max_pages), 100))
+    # 17.0 §3 第 31 条：上限收紧，并且**没有总预算**。判据是能算清的才留：一次爬几页、
+    # 每页多少字符都由调用方定；一整趟多少字符要先把每页长度估出来，而那是站点决定
+    # 的数，所以没有人算得清。总量如今由下面那两道上限相乘封顶。
+    max_pages = max(1, min(int(max_pages), MAX_PAGES_CEILING))
     max_depth = max(0, min(int(max_depth), 5))
     concurrency = max(1, min(int(concurrency), 5))
     _chars_per_asked = int(max_content_chars_per)
-    max_content_chars_per = max(500, min(_chars_per_asked, 50000))
+    max_content_chars_per = max(500, min(_chars_per_asked, PER_PAGE_CHARS_CEILING))
     # smart_fetch names its clamp in the summary; a crawl that silently answered
     # 500 chars for a request of 400 named nothing at all, so the two tools
     # described the same event differently depending on which one was called.
     _chars_per_clamp = ("" if max_content_chars_per == _chars_per_asked else
                         f"max_content_chars_per clamped {_chars_per_asked}->"
-                        f"{max_content_chars_per} (supported range 500-50000)")
-    if max_total_chars is None:
-        max_total_chars = max_pages * max_content_chars_per
-    max_total_chars = max(max_content_chars_per, min(int(max_total_chars), MAX_TOTAL_CHARS))
+                        f"{max_content_chars_per} (supported range "
+                        f"500-{PER_PAGE_CHARS_CEILING})")
     focus = focus.strip() if isinstance(focus, str) and focus.strip() else None
     # A bare string was iterated character-by-character by the prefix filters
     # (`path.startswith(p) for p in "/what/"`), and startswith("/") holds for
@@ -986,9 +982,7 @@ async def smart_crawl(
     visited: set[str] = set()
     discovered: set[str] = {start_norm}
     pages: list[CrawlPage] = []
-    total_chars = 0
     robots_skipped = 0
-    truncated_budget = False
     truncated_maxpages = False
     truncated_time = False
 
@@ -1111,7 +1105,7 @@ async def smart_crawl(
         push(url, 0, "")
 
     # Fetch a batch of up to `concurrency` best URLs from the heap concurrently.
-    while heap and len(pages) < max_pages and not truncated_budget:
+    while heap and len(pages) < max_pages:
         if time() > deadline_t:
             truncated_time = True
             break
@@ -1195,9 +1189,6 @@ async def smart_crawl(
                 summary=resp.summary, error=resp.error,
             )
             pages.append(page)
-            total_chars += page.content_chars
-            if total_chars >= max_total_chars and not discover_only:
-                truncated_budget = True
 
             # Browser auto-escalation: if the start page (depth 0) failed with
             # js_shell or bot_challenge, upgrade force_fetcher to "stealthy" for
@@ -1231,8 +1222,6 @@ async def smart_crawl(
                             continue
                         discovered.add(link_norm)
                         push(link_url, depth + 1, link_text)  # fetch original
-            if truncated_budget:
-                break
 
     pages_crawled = len(pages)
     # In selective mode, "discovered" is just the chosen subset.
@@ -1301,8 +1290,6 @@ async def smart_crawl(
                         f"using {len(pages_now)} page fetch(es); no content extracted"]
             if type_bits_now:
                 bits_now.append(type_bits_now)
-        if truncated_budget:
-            bits_now.append("stopped: token budget reached")
         if truncated_maxpages:
             bits_now.append("stopped: max_pages reached")
         if truncated_time:
@@ -1336,12 +1323,11 @@ async def smart_crawl(
     summary = _summary_for(pages)
 
     next_action = ""
-    if truncated_budget or truncated_maxpages or truncated_time:
-        why = ("time deadline" if truncated_time else
-               "token budget" if truncated_budget else "max_pages")
+    if truncated_maxpages or truncated_time:
+        why = "time deadline" if truncated_time else "max_pages"
         next_action = (
             f"crawl stopped early ({why}); re-run smart_crawl with a higher "
-            f"max_pages / max_total_chars / deadline_ms, or scope it with "
+            f"max_pages / deadline_ms, or scope it with "
             f"path_include=['/docs'] (a path subtree, not a string prefix). "
             f"{not_fetched} URL(s) were discovered but not fetched."
         )
@@ -1407,7 +1393,7 @@ async def smart_crawl(
     result = CrawlResponseModel(
         start_url=start_norm, pages=pages, pages_crawled=pages_crawled,
         pages_discovered=pages_discovered, discover_only=discover_only,
-        truncated_by_budget=truncated_budget, truncated_by_max_pages=truncated_maxpages,
+        truncated_by_max_pages=truncated_maxpages,
         truncated_by_time=truncated_time, duration_ms=(time() - t0) * 1000,
         robots_skipped=robots_skipped,
         urls_supplied=urls_supplied, urls_deduped=urls_deduped,

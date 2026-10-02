@@ -959,7 +959,7 @@ _WIRE_OMIT: dict = {
         "error",
     }),
     "CrawlResponseModel": frozenset({
-        "discover_only", "truncated_by_budget", "truncated_by_max_pages",
+        "discover_only", "truncated_by_max_pages",
         "truncated_by_time", "sitemap_truncated", "sitemaps", "robots_skipped",
         "urls_supplied", "urls_deduped", "urls_dropped_off_domain",
         "urls_dropped_over_max_pages", "error", "duration_ms",
@@ -2594,7 +2594,7 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
     },
     "smart_crawl": {
         "max_pages": "int", "max_depth": "int", "max_content_chars_per": "int",
-        "max_total_chars": "int", "cache_ttl": "int",
+        "cache_ttl": "int",
         "concurrency": "int", "timeout": "number", "deadline_ms": "number",
         "discover_only": "bool", "ignore_robots": "bool", "delay": "number",
         "crawl_urls": "list", "focus_engine": "str",
@@ -4683,7 +4683,7 @@ _SF_PARAMS = frozenset({
 })
 _SC_PARAMS = frozenset({
     "max_pages", "max_depth", "path_include", "path_exclude",
-    "max_content_chars_per", "max_total_chars", "concurrency",
+    "max_content_chars_per", "concurrency",
     "cache_ttl", "force_fetcher", "timeout", "deadline_ms", "sitemap",
     "search", "ignore_robots", "delay", "focus_engine",
 })
@@ -8728,7 +8728,6 @@ class MasterFetchServer:
         focus: Optional[str] = None,
         crawl_urls: Optional[List[str]] = None,
         max_content_chars_per: int = 8000,
-        max_total_chars: Optional[int] = None,
         concurrency: int = 3,
         cache_ttl: int = DEFAULT_TTL,
         force_fetcher: Optional[str] = None,
@@ -8747,7 +8746,7 @@ class MasterFetchServer:
         subset (second-phase selective crawl, no re-discovery). Content-adaptive:
         article pages -> main content, list/index pages -> structured link list,
         JS shells -> detected + reported honestly. Caps: max_pages, max_depth,
-        max_total_chars (token budget), deadline_ms (overall time). Reuses
+        max_content_chars_per, deadline_ms (overall time). Reuses
         smart_fetch anti-bot escalation + cache.
 
         search: filter discovered/crawled URLs by keyword match (URL path + title).
@@ -8801,7 +8800,7 @@ class MasterFetchServer:
                     path_include=path_include, path_exclude=path_exclude,
                     discover_only=discover_only, focus=focus, crawl_urls=crawl_urls,
                     max_content_chars_per=max_content_chars_per,
-                    max_total_chars=max_total_chars, concurrency=concurrency,
+                    concurrency=concurrency,
                     cache_ttl=cache_ttl,
                     force_fetcher=force_fetcher, timeout=timeout,
                     deadline_ms=deadline_ms, sitemap=sitemap, search=search,
@@ -8914,7 +8913,7 @@ class MasterFetchServer:
         },
         {
             "name": "smart_crawl",
-            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, smart_fetch(urls=[...]) fetches them directly - no crawl needed.\n- Every parameter is a top-level argument; nothing is nested. url= is required even with crawl_urls (it is the domain root those URLs are checked against).\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed'), discoveries already known to be disallowed are skipped, and robots_skipped says how many. ignore_robots=true overrides.\n- Caps: max_pages(10), max_depth(2), max_total_chars (hard-capped 1000000), deadline_ms.\n- Map-then-fetch (sitemap / discover_only / crawl_urls), what the drop counters mean and how politeness is decided: dhole_doc(topic='behavior', section='smart_crawl'); placement pairs with counterexamples: dhole_doc(topic='call').",
+            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, smart_fetch(urls=[...]) fetches them directly - no crawl needed.\n- Every parameter is a top-level argument; nothing is nested. url= is required even with crawl_urls (it is the domain root those URLs are checked against).\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed'), discoveries already known to be disallowed are skipped, and robots_skipped says how many. ignore_robots=true overrides.\n- Caps: max_pages (1-40, default 10), max_depth(2), 20000 chars per page, deadline_ms. There is no whole-run character budget.\n- Map-then-fetch (sitemap / discover_only / crawl_urls), what the drop counters mean and how politeness is decided: dhole_doc(topic='behavior', section='smart_crawl'); placement pairs with counterexamples: dhole_doc(topic='call').",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
@@ -8925,13 +8924,12 @@ class MasterFetchServer:
                     "search": {"type": "string", "description": "Filter discovered/crawled URLs by keyword (URL path + title). Use with discover_only=true."},
                     # 17.0 B4 · 顶层只有一个家（这 15 个键今天也已经能从顶层传进来）。
                     "sitemap": {"anyOf": [{"type": "boolean"}, {"type": "string"}], "description": "Where the URL map comes from: true | 'auto' (default) | false. A tri-state, so the strings a serialized client sends are accepted too."},
-                    "max_pages": {"type": "integer", "description": "Pages to fetch (1-100, default 10). The first budget a crawl hits."},
+                    "max_pages": {"type": "integer", "description": "Pages to fetch (1-40, default 10). The first budget a crawl hits."},
                     "max_depth": {"type": "integer", "description": "Hops from the start URL (0-5, default 2). 0 = the start page only."},
                     "concurrency": {"type": "integer", "description": "Pages in flight at once (1-5, default 3). Waiting between requests to the same host is the separate delay= knob."},
                     "path_include": {"type": "array", "items": {"type": "string"}, "description": "Keep only these path subtrees: '/docs' keeps /docs and everything under it, NOT /docs-old."},
                     "path_exclude": {"type": "array", "items": {"type": "string"}, "description": "Drop these path subtrees: '/docs-old' under an include keeps nothing."},
-                    "max_content_chars_per": {"type": "integer", "description": "Per-page content cap (default 8000)."},
-                    "max_total_chars": {"type": "integer", "description": "Whole-crawl content budget. The cap that stops the run rather than one page."},
+                    "max_content_chars_per": {"type": "integer", "description": "Per-page content cap (500-20000, default 8000)."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds per page (default 3600). 0 = force fresh."},
                     "force_fetcher": {"type": "string", "enum": ["http", "stealthy"], "description": "Pin one tier for every page, skipping auto-escalation: 'http' fast but no JS/bot walls, 'stealthy' the anti-detect browser."},
                     "timeout": {"type": "integer", "description": "Per-page budget in ms (default 30000). Not the whole-crawl stop - that is deadline_ms."},
