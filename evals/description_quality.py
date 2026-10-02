@@ -12,7 +12,7 @@
                     就是在画这条线）。
 3. **hard_limits**  数值上限/单位写进描述或指向说明书 —— 单位混乱（ms vs 秒）
                     是这个仓库修过的真 bug 类。
-4. **pointer**      深细节指向 dhole_doc/sys_guide 而不是全写在常驻层 —— 与
+4. **pointer**      深细节指向 sys_guide/sys_guide 而不是全写在常驻层 —— 与
                     W9 判据同源：贵的不是工具多，是说明书写在常驻层。
 5. **required_named** 必填参数在描述里被点名 —— schema 的 required 只对"已经
                     决定调用"的 agent 有用，选工具阶段看的是描述。
@@ -37,7 +37,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 BOUNDARY_CUES = re.compile(
     r"use .{0,40}(instead|for)|instead of|not a |NOT |don't|do not|rather than|"
     r"\buse [a-z_]+\b|instead:|if you (have|already)", re.IGNORECASE)
-POINTER_CUES = re.compile(r"dhole_doc|sys_guide|handbook|guide\(")
+POINTER_CUES = re.compile(r"sys_guide|sys_guide|handbook|guide\(")
 UNIT_CUES = re.compile(r"\b(ms|milliseconds|seconds|chars|bytes|items|pages)\b|\bdefault \d", re.IGNORECASE)
 
 

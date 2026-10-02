@@ -1,4 +1,4 @@
-"""The on-demand documentation layer behind the ``dhole_doc`` tool.
+"""The on-demand documentation layer behind the ``sys_guide`` tool.
 
 Division of labour, and why it is drawn here: ``tools/list`` + ``instructions``
 are paid on EVERY connect by EVERY client that registers dhole, while a tool call
@@ -7,7 +7,7 @@ routing and hard constraints, and the explanatory prose lives in the packaged
 handbook volumes (``skills/dhole-web/``), served verbatim from this module.
 
 Two doors to one corpus: ``dhole skill install`` copies these same files to
-``~/.agents/skills`` for hosts that load skills, and ``dhole_doc`` is the door
+``~/.agents/skills`` for hosts that load skills, and ``sys_guide`` is the door
 that needs no install, no configuration and no restart. That is the point — a
 capability an agent cannot discover is a capability that requires a README, and
 an agent does not read the README.
@@ -60,7 +60,7 @@ def index(reason: str = "") -> str:
     """The topic list. Also the answer to a bad topic: a rejected call that does
     not say what was available costs a second round trip for nothing."""
     head = (f"{reason}\n\n" if reason else "")
-    lines = [head + "dhole_doc(topic) returns one handbook volume per call. "
+    lines = [head + "sys_guide(topic) returns one handbook volume per call. "
              "Known topics (aliases in parentheses):"]
     for topic, (path, when) in TOPICS.items():
         alias = "" if ALIASES.get(topic) == topic else f" (aka {ALIASES.get(topic)})"
@@ -93,14 +93,14 @@ def read(topic: str = "", section: str = "") -> tuple[str, str]:
     """
     resolved = _resolve(topic)
     if resolved is None:
-        return "dhole_doc: topics", index(
+        return "sys_guide: topics", index(
             f"unknown topic {topic!r}." if (topic or "").strip() else
             "no topic given.")
 
     rel, when = TOPICS[resolved]
     path = _ROOT / rel
     if not path.is_file():
-        return f"dhole_doc: {rel} missing", index(
+        return f"sys_guide: {rel} missing", index(
             f"topic '{resolved}' points at {rel}, which is not in the installed package "
             "(reinstall dhole-mcp).")
 

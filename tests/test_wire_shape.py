@@ -9,7 +9,7 @@
 
 失败信息**不许写"太长"**（ce8af44：守卫惩罚的是编辑，不是缺陷）。参数超预算
 指向拆分 —— 一个工具带着这么多旋钮，说明它在做两件事；描述超预算指向搬家 ——
-常驻层在替说明书（sys_guide / dhole_doc 语料）干活，细节应该挪过去，而不是把
+常驻层在替说明书（sys_guide / sys_guide 语料）干活，细节应该挪过去，而不是把
 句子压短。
 """
 
@@ -49,6 +49,6 @@ def test_each_param_description_leaves_the_manual_to_the_guide():
                 offenders.append((tool, pname, len(desc)))
     assert not offenders, (
         f"{offenders} —— 上限每条 {DESC_CAP} 字符。这些描述在常驻层替说明书干活："
-        "每一次连接都在为它们付 token。把怎么用的细节搬进 sys_guide（dhole_doc "
+        "每一次连接都在为它们付 token。把怎么用的细节搬进 sys_guide（sys_guide "
         "语料按需取段），常驻层只留路由需要的判断依据 —— 搬家，不是缩写。"
     )

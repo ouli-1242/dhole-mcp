@@ -1,4 +1,4 @@
-"""dhole_doc / guide.py 的契约测试。
+"""sys_guide / guide.py 的契约测试。
 
 为什么这些守卫必须存在：文档通道是「常驻文本瘦身」的前提 —— 只有当说明书能
 被一次调用取到，`tools/list` 才允许只留路由和硬约束。前提塌了（语料没了、
@@ -30,7 +30,7 @@ def _def_of(name: str) -> dict:
 
 @pytest.fixture(scope="module")
 def topic_def() -> dict:
-    return _def_of("dhole_doc")["inputSchema"]["properties"]["topic"]
+    return _def_of("sys_guide")["inputSchema"]["properties"]["topic"]
 
 
 def test_every_volume_on_disk_has_a_topic():
@@ -112,16 +112,16 @@ def test_a_wrong_section_lists_the_ones_that_exist():
 
 def test_topic_and_section_are_the_whole_argument_surface():
     """_TOP_LEVEL_ARGS 也是「已知工具名」的集合：多一个参数就会多一个静默入口。"""
-    assert _TOP_LEVEL_ARGS["dhole_doc"] == frozenset({"topic", "section"})
-    props = set(_def_of("dhole_doc")["inputSchema"]["properties"])
-    assert props == set(_TOP_LEVEL_ARGS["dhole_doc"])
+    assert _TOP_LEVEL_ARGS["sys_guide"] == frozenset({"topic", "section"})
+    props = set(_def_of("sys_guide")["inputSchema"]["properties"])
+    assert props == set(_TOP_LEVEL_ARGS["sys_guide"])
 
 
 def test_dhole_doc_is_not_opt_in():
     """说明书不需要开关才能读到 —— 17.0 起根本没有 opt-in 组。"""
     from dhole_mcp import server as s
     assert not hasattr(s, "_OPT_IN_TOOLS")
-    assert "dhole_doc" in s._ENABLED_TOOLS
+    assert "sys_guide" in s._ENABLED_TOOLS
 
 
 def test_response_is_a_text_channel():
@@ -129,14 +129,14 @@ def test_response_is_a_text_channel():
     from dhole_mcp import server as s
 
     content = asyncio.run(s.MasterFetchServer(cache_ttl=0)._dispatch(
-        "dhole_doc", {"topic": "recipes"}))
+        "sys_guide", {"topic": "recipes"}))
     assert isinstance(content, list) and len(content) == 1
     assert content[0].type == "text"
     assert "\n" in content[0].text
     assert not content[0].text.lstrip().startswith("{"), "text 通道不该是 JSON 信封"
 
 
-# ─── 瘦身的前提：常驻文本删掉的解释，必须能从 dhole_doc 取回来 ───────────
+# ─── 瘦身的前提：常驻文本删掉的解释，必须能从 sys_guide 取回来 ───────────
 #
 # web_read 的 options 袋子从「逐键解释」改成了「列出键名 + 少数几条陷阱」，
 # 细节移进 references/tools.md。这个移动只有在语料真的接住时才是优化而不是丢
@@ -251,7 +251,7 @@ def test_every_smart_fetch_key_is_explained_somewhere():
     surface = _wire_explanations() + "\n" + _corpus()
     undocumented = sorted(k for k in _SF_PARAMS if not _mentions(surface, k))
     assert not undocumented, (
-        f"这些参数没有任何地方解释（既不在常驻文本，也不在 dhole_doc 语料）: "
+        f"这些参数没有任何地方解释（既不在常驻文本，也不在 sys_guide 语料）: "
         f"{undocumented}。补进 references/tools.md，或从 _SF_PARAMS 里删掉。")
 
 

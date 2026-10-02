@@ -9,7 +9,7 @@
 2. **真实 stdio 握手**：子进程拉起 `python -m dhole_mcp`（一次性 DHOLE_HOME），
    initialize → tools/list 各自的响应耗时。跑 **3 遍**取中位数 —— Windows 上
    单次冷启动方差大，单次读数不可比。
-3. **首调用**：`dhole_doc(topic='start')` 的往返耗时 —— 纯本地文件读取，把
+3. **首调用**：`sys_guide(topic='start')` 的往返耗时 —— 纯本地文件读取，把
    "服务器就绪"和"第一个请求能答"分开。
 
 用法：
@@ -157,7 +157,7 @@ def handshake_once() -> dict:
     client.notify("notifications/initialized")
     t_tools = client.request("tools/list", {})
     t_first = client.request("tools/call", {
-        "name": "dhole_doc", "arguments": {"topic": "start"}})
+        "name": "sys_guide", "arguments": {"topic": "start"}})
     client.close()
     return {
         "initialize_s": round(t_init, 3),

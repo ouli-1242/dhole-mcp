@@ -577,7 +577,7 @@ DHOLE_INSTRUCTIONS = (
     "- Signing in with a stored credential: login (call once to see the plan, "
     "again with confirm=true to run it).\n"
     "- Unsure how to write a call, what a field means, or why something failed: "
-    "dhole_doc(topic) reads dhole's own handbook - one call, no setup, and the "
+    "sys_guide(topic) reads dhole's own handbook - one call, no setup, and the "
     "deep syntax of actions / schema lives there.\n"
     "Parameters:\n"
     "- Every parameter is named at the TOP LEVEL of the call: "
@@ -640,8 +640,8 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "lists what their password manager holds - never the values.\n",
     "login": "- Signing in with a stored credential: login (call once to see the "
     "plan, again with confirm=true to run it).\n",
-    "dhole_doc": "- Unsure how to write a call, what a field means, or why something failed: "
-    "dhole_doc(topic) reads dhole's own handbook - one call, no setup, and the deep "
+    "sys_guide": "- Unsure how to write a call, what a field means, or why something failed: "
+    "sys_guide(topic) reads dhole's own handbook - one call, no setup, and the deep "
     "syntax of actions / schema lives there.\n",
 }
 _INSTRUCTIONS_RULES = (
@@ -4754,7 +4754,7 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
                         "confirm", "timeout", "allow_private"}),
     # 文档通道。总是注册：它不在两个 opt-in 组里，也不该在 —— 一个需要开关才
     # 能读到的说明书，等于没有说明书。
-    "dhole_doc": frozenset({"topic", "section"}),
+    "sys_guide": frozenset({"topic", "section"}),
 }
 # （17.0：不存在 opt-in 组 —— 上面的注释是给全量注册做的注脚。）
 
@@ -8823,7 +8823,7 @@ class MasterFetchServer:
 
     # ─── Serve ─────────────────────────────────────────────────────
 
-    async def dhole_doc(self, topic: str = "", section: str = "") -> str:
+    async def sys_guide(self, topic: str = "", section: str = "") -> str:
         """Serve one handbook volume from the packaged skill corpus.
 
         Same files ``dhole skill install`` copies to the host's skills
@@ -8851,7 +8851,7 @@ class MasterFetchServer:
     _TOOL_DEFS: list[dict] = [
         {
             "name": "web_read",
-            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: web_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: when the live site hard-blocks, content_ok can be true of a dated Wayback snapshot (check source + archived_at). No parameter disables it; costs 10-30s.\n- Every parameter has its own top-level name here: pass them beside url=, nothing is nested. A name the tool does not accept raises.\n- The exact shape of actions, schema and the browser/session knobs is NOT in this description: dhole_doc(topic='behavior') reads dhole's own handbook, and dhole_doc(topic='call') the placement traps. Read one before writing the other.\n\nVISUAL ASSIST: actions gains {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} - crops one element on the SAME page instance as the surrounding fill/click actions and returns it inline (metadata.actions keeps a name-only receipt; decoded QR text rides with it). Use it to read a CAPTCHA you are about to answer in the same action chain. Discipline: simple text/grid image CAPTCHAs - at most 3 read-and-retry rounds, then hand off to the user; DataDome/Akamai/interactive Turnstile walls, 2FA factors, and sliders are always handed off (nothing readable on the page, or outside dhole's action primitives). dhole ships no vision model: the reading happens in you.",
+            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: web_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: when the live site hard-blocks, content_ok can be true of a dated Wayback snapshot (check source + archived_at). No parameter disables it; costs 10-30s.\n- Every parameter has its own top-level name here: pass them beside url=, nothing is nested. A name the tool does not accept raises.\n- The exact shape of actions, schema and the browser/session knobs is NOT in this description: sys_guide(topic='behavior') reads dhole's own handbook, and sys_guide(topic='call') the placement traps. Read one before writing the other.\n\nVISUAL ASSIST: actions gains {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} - crops one element on the SAME page instance as the surrounding fill/click actions and returns it inline (metadata.actions keeps a name-only receipt; decoded QR text rides with it). Use it to read a CAPTCHA you are about to answer in the same action chain. Discipline: simple text/grid image CAPTCHAs - at most 3 read-and-retry rounds, then hand off to the user; DataDome/Akamai/interactive Turnstile walls, 2FA factors, and sliders are always handed off (nothing readable on the page, or outside dhole's action primitives). dhole ships no vision model: the reading happens in you.",
             "inputSchema": {
                 "type": "object",
                 # web_read needs one of the two; the schema said nothing at
@@ -8881,14 +8881,14 @@ class MasterFetchServer:
                     "focus": {"type": "string", "description": "Return only blocks matching this query - the big token saver on long pages. Applied after the cache, so it does not re-fetch. Re-pass the same focus when paginating. Scored with BM25 by default; focus_engine='neural' switches to a local cross-encoder - that path costs ~12.5s of CPU PER PAGE, so budget timeout for bulk calls."},
                     "focus_mode": {"type": "string", "enum": ["filter", "best"], "description": "Shape of the focus answer. 'filter' (default) keeps every block past the relevance cut; 'best' returns only the single highest-scoring block plus its heading - 'which part of this page answers the question'. Requires focus."},
                     "focus_engine": {"type": "string", "enum": ["bm25", "neural"], "description": "Which scorer runs focus: 'bm25' (keyword overlap, the default) or 'neural' (a local cross-encoder; needs the reranker model downloaded, and costs ~12.5s of CPU per page). Omit = 'bm25'."},
-                    "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "Interactions on the stealthy browser after load, before extraction (forces stealthy, bypasses cache). ONE action key per object: [{scroll:3},{wait:1000}], not {scroll:3,wait:1000}. Keys: click, fill, press, wait, scroll, wait_selector, snapshot, screenshot, submit - each takes a CSS selector or a snapshot index; {snapshot:true} returns the numbered interactive-element list (index/tag/role/name) to take indices from, and expect:'name' verifies an element's visible name before acting, so a stale index fails loudly instead of clicking the wrong thing.\nsubmit is the explicit irreversible step: without confirm:true it PAUSES (a pending_approval receipt, nothing submitted) until the user has approved that exact submission. The full shape of each key, the lazy-feed and captcha discipline: dhole_doc(topic='behavior', section='Page interaction')."},
-                    "schema": {"type": "object", "description": "{properties: {...}} (a JSON string is accepted): CSS-driven structured extraction, returned instead of markdown. Only these keys are read - selector, attribute, type, properties, items; any other JSON-Schema keyword is accepted and does nothing. Each property may carry 'selector' (CSS) and/or 'attribute' (that attribute's value instead of the text). Without \"type\" a property returns the FIRST match; \"type\": \"array\" returns all of them. A property with its OWN 'properties' (or items.properties) plus a selector extracts one record PER MATCHED ELEMENT, child selectors evaluated inside it - that keeps a repeated list grouped instead of flattened. Up to 200 records per field; a nested \"type\": \"array\" must name the container it iterates or the call is rejected. The rule and a worked example: dhole_doc(topic='behavior', section='Structured extraction').", "additionalProperties": True},
+                    "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "Interactions on the stealthy browser after load, before extraction (forces stealthy, bypasses cache). ONE action key per object: [{scroll:3},{wait:1000}], not {scroll:3,wait:1000}. Keys: click, fill, press, wait, scroll, wait_selector, snapshot, screenshot, submit - each takes a CSS selector or a snapshot index; {snapshot:true} returns the numbered interactive-element list (index/tag/role/name) to take indices from, and expect:'name' verifies an element's visible name before acting, so a stale index fails loudly instead of clicking the wrong thing.\nsubmit is the explicit irreversible step: without confirm:true it PAUSES (a pending_approval receipt, nothing submitted) until the user has approved that exact submission. The full shape of each key, the lazy-feed and captcha discipline: sys_guide(topic='behavior', section='Page interaction')."},
+                    "schema": {"type": "object", "description": "{properties: {...}} (a JSON string is accepted): CSS-driven structured extraction, returned instead of markdown. Only these keys are read - selector, attribute, type, properties, items; any other JSON-Schema keyword is accepted and does nothing. Each property may carry 'selector' (CSS) and/or 'attribute' (that attribute's value instead of the text). Without \"type\" a property returns the FIRST match; \"type\": \"array\" returns all of them. A property with its OWN 'properties' (or items.properties) plus a selector extracts one record PER MATCHED ELEMENT, child selectors evaluated inside it - that keeps a repeated list grouped instead of flattened. Up to 200 records per field; a nested \"type\": \"array\" must name the container it iterates or the call is rejected. The rule and a worked example: sys_guide(topic='behavior', section='Structured extraction').", "additionalProperties": True},
                     "confirm": {"type": "boolean", "description": "Approval for a first-time sensitive action on this call - today that means cdp_url: attaching your real Chrome hands over every logged-in site's cookies, so the FIRST attach to a host is refused with cdp_authorization_required and nothing is executed; re-call with confirm=true to authorize that host (remembered on disk; delete cdp_hosts.json in the dhole state directory to revoke). False (default) approves nothing."},
                     # 17.0 B4 · 下面这 27 个一直都能从顶层传进来（分发器读 args，
                     # _TOP_LEVEL_ARGS 认它们），只是 schema 从没露过脸 —— 而
                     # `options` 那段散文把它们和"袋子的键"绑在了一起。参数只有一个家：
                     # 顶层。描述按 test_wire_shape 的 200 字符目标写，用法细节留在
-                    # dhole_doc 语料里（tools.md 已经逐条写了它们）。
+                    # sys_guide 语料里（tools.md 已经逐条写了它们）。
                     "method": {"type": "string", "description": "HTTP verb: GET (default), HEAD, POST, PUT, DELETE, PATCH - case-insensitive. A non-GET is sent ONCE: never retried, cached, browser-escalated or archive-answered, because a replay writes twice."},
                     "body": {"description": "Request body for POST/PUT/DELETE/PATCH (cap 256KB). A dict is sent as a form, or as JSON when content_type says json; a string is sent as-is. Ignored for GET/HEAD."},
                     "content_type": {"type": "string", "description": "Content-Type for body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json."},
@@ -8918,7 +8918,7 @@ class MasterFetchServer:
         },
         {
             "name": "web_crawl",
-            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, web_read(urls=[...]) fetches them directly - no crawl needed.\n- Every parameter is a top-level argument; nothing is nested. url= names the site the crawl stays inside.\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed'), discoveries already known to be disallowed are skipped, and robots_skipped says how many. ignore_robots=true overrides.\n- Caps: max_pages (1-40, default 10), max_depth(2), 20000 chars per page, deadline_ms. There is no whole-run character budget.\n- Map-then-fetch: sitemap=true or discover_only=true maps it, web_read(urls=[...]) reads the picks. What the drop counters mean and how politeness is decided: dhole_doc(topic='behavior', section='web_crawl'); placement pairs with counterexamples: dhole_doc(topic='call').",
+            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, web_read(urls=[...]) fetches them directly - no crawl needed.\n- Every parameter is a top-level argument; nothing is nested. url= names the site the crawl stays inside.\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed'), discoveries already known to be disallowed are skipped, and robots_skipped says how many. ignore_robots=true overrides.\n- Caps: max_pages (1-40, default 10), max_depth(2), 20000 chars per page, deadline_ms. There is no whole-run character budget.\n- Map-then-fetch: sitemap=true or discover_only=true maps it, web_read(urls=[...]) reads the picks. What the drop counters mean and how politeness is decided: sys_guide(topic='behavior', section='web_crawl'); placement pairs with counterexamples: sys_guide(topic='call').",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
@@ -8981,7 +8981,7 @@ class MasterFetchServer:
                     "max_results": {"type": "integer", "description": "Results to return (1-50, default 6)."},
                     "page": {"type": "integer", "description": "Result page, 0-10 (default 0)."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds (default 300). 0 = force fresh."},
-                    "engines": {"type": "array", "items": {"type": "string"}, "description": "Narrow the pool, max 9 names. The selectable names are exactly the 8 engines above, plus the keyed engines that need an API key (dhole_doc(topic='behavior', section='web_search'))."},
+                    "engines": {"type": "array", "items": {"type": "string"}, "description": "Narrow the pool, max 9 names. The selectable names are exactly the 8 engines above, plus the keyed engines that need an API key (sys_guide(topic='behavior', section='web_search'))."},
                     "site": {"type": "string", "description": "Restrict to one domain."},
                     "exclude_sites": {"type": "array", "items": {"type": "string"}, "description": "Drop results from these domains."},
                     "location": {"type": "string", "description": "ISO country code ('US'), optionally with a region suffix ('US-CN'). Anything else is refused rather than guessed at."},
@@ -9025,7 +9025,7 @@ class MasterFetchServer:
         },
         {
             "name": "feed_read",
-            "description": "Batch-fetch RSS/Atom feeds newest-first (title/url/published/summary) to track what a source has PUBLISHED - changelogs, release notes, blogs, news. Feeds parse independently, so a dead feed never fails the batch. NOT a general page fetcher - use web_read.\n- A site page is accepted: the alternate RSS/Atom link in its own head is followed and the reply says so in discovered_from.\n- since= turns it into a poll for what is new since the last call; items_older_than_since counts what it dropped.\n- An item's summary is a PREVIEW: past 500 chars it is cut and that item says summary_truncated=true. web_read the item url for the whole text.\nWhat an unparseable feed answers with and the reply shape: dhole_doc(topic='behavior', section='remaining tools').",
+            "description": "Batch-fetch RSS/Atom feeds newest-first (title/url/published/summary) to track what a source has PUBLISHED - changelogs, release notes, blogs, news. Feeds parse independently, so a dead feed never fails the batch. NOT a general page fetcher - use web_read.\n- A site page is accepted: the alternate RSS/Atom link in its own head is followed and the reply says so in discovered_from.\n- since= turns it into a poll for what is new since the last call; items_older_than_since counts what it dropped.\n- An item's summary is a PREVIEW: past 500 chars it is cut and that item says summary_truncated=true. web_read the item url for the whole text.\nWhat an unparseable feed answers with and the reply shape: sys_guide(topic='behavior', section='remaining tools').",
             "inputSchema": {
                 "type": "object", "required": ["urls"],
                 "properties": {
@@ -9145,11 +9145,11 @@ class MasterFetchServer:
         # 文档通道（计划：上手成本）。它的存在理由是这条测量：tools/list +
         # instructions 每次连接由每个客户端付，一次调用只由问的那个人付。所以
         # 常驻文本只留路由与硬约束，解释性长文留在随包的 skills/dhole-web/ 里
-        # 由 dhole_doc 原样送出 —— 同一份语料两个门，`dhole skill install` 给
+        # 由 sys_guide 原样送出 —— 同一份语料两个门，`dhole skill install` 给
         # 会加载 skill 的宿主，这个门不要安装、不要配置、不要重启。
         # 内容源与 topic 注册表由 guide.py 与 tests/test_guide.py 双向钉住。
         {
-            "name": "dhole_doc",
+            "name": "sys_guide",
             "description": "Read dhole's own handbook, one volume per call: how to write a call, what a response field means, how to fix a failure, which knob to configure. The deep syntax of actions, schema and the browser knobs lives HERE rather than in the tool descriptions - read it before guessing at those. An empty or wrong topic answers with the topic list instead of an error.",
             "inputSchema": {
                 "type": "object",
@@ -9554,11 +9554,11 @@ class MasterFetchServer:
             )
             return _wire_result(result)
 
-        elif name == "dhole_doc":
+        elif name == "sys_guide":
             # A bare text channel rather than _wire_result: putting markdown
             # inside JSON escapes every newline (~2 chars each) and buys no
             # field to read. The document is the answer, so it rides as text.
-            text = await self.dhole_doc(topic=args.get("topic", "") or "",
+            text = await self.sys_guide(topic=args.get("topic", "") or "",
                                         section=args.get("section", "") or "")
             return [TextContent(type="text", text=text)]
 

@@ -135,7 +135,7 @@ def test_search_engine_list_never_names_a_retired_engine(tools):
     assert not stale, (
         "web_search 点名了 17.0 已删除的引擎，调用方会点到不存在的名字。\n"
         f"  不符处: {stale}\n"
-        "能力损失写在 dhole_doc 语料里（那里可以讲「以前有、现在没了」），"
+        "能力损失写在 sys_guide 语料里（那里可以讲「以前有、现在没了」），"
         "常驻层只写现在能用的。")
 
 
@@ -319,7 +319,7 @@ def test_descriptions_have_no_stray_whitespace(tools):
 # 这正是「改了 docstring 以为生效」的拦截点。
 #
 # agent 可见面有三扇门，不只是 tools/list：initialize 的 instructions、该工具
-# 自己的载荷，以及 ``dhole_doc`` 按需取的语料（17.0 把常驻层装不下的细节搬进
+# 自己的载荷，以及 ``sys_guide`` 按需取的语料（17.0 把常驻层装不下的细节搬进
 # 了第三扇门）。只查前两扇会把「搬进说明书」误判成信息丢失 —— 那正是 B5 瘦身
 # 要做的事。语料里查不到才算 stray，所以搬走必须真的搬过去，不能搬成一句空指针。
 
@@ -361,7 +361,7 @@ def _docstring_identifiers(name: str) -> set[str]:
 
 
 def _handbook_corpus() -> str:
-    """dhole_doc 那扇门的全部文本 —— agent 不用装任何东西就能取到。"""
+    """sys_guide 那扇门的全部文本 —— agent 不用装任何东西就能取到。"""
     from dhole_mcp.guide import TOPICS, _ROOT
 
     return "\n".join((_ROOT / rel).read_text(encoding="utf-8").lower()
@@ -377,7 +377,7 @@ def test_docstring_identifiers_are_on_the_wire_or_registered(tools):
 
     agent 看得见的界面有三扇门，都算：tools/list 里该工具的那一条、
     initialize 的 instructions（envelope 的读法集中写在这里，八个工具共用
-    一份，不在每个描述里各抄一遍），以及 dhole_doc 的语料（17.0 把常驻层
+    一份，不在每个描述里各抄一遍），以及 sys_guide 的语料（17.0 把常驻层
     装不下的细节搬了进去）。少认一扇门会把「上收到公共层 / 搬进说明书」
     误判成信息丢失。
     """

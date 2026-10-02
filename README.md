@@ -18,7 +18,7 @@ Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器：抓网页、�
 - **是什么**：给 AI 用的上网工具包。
 - **怎么用**：正常提要求，AI 自己选工具，你不用记命令。
 - **默认 10 个工具**：搜网页 · 抓网址 · 批量抓 · 爬整站 · 截图 · 读本地文件 · RSS · 短链 · 清缓存 · 读 dhole 自己的说明书。
-- **另外 4 个默认关**：`recipe` / `watch` / `vault` / `login`；打开用 `dhole init --tasks` / `--vault`，不用编辑 JSON。它们的存在不必读 README：`dhole_doc(topic='behavior')` 会说。
+- **另外 4 个默认关**：`recipe` / `watch` / `vault` / `login`；打开用 `dhole init --tasks` / `--vault`，不用编辑 JSON。它们的存在不必读 README：`sys_guide(topic='behavior')` 会说。
 - **代理环境自己适配**：Clash / sing-box 的 TUN + fake-ip 不再需要先设任何变量。
 - **要调设置**：见[配置](#配置)；出问题先跑 `dhole --doctor`。
 
@@ -162,7 +162,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 | `web_resolve` | 解析最终地址，不抽正文 |
 | `cache_clear` | 清缓存（连 robots 结论与全部会话 jar 一起清） |
 | `close_session` | 查看 / 清掉会话 cookie（值一律不出境） |
-| `dhole_doc` | 读 dhole 自己的说明书：选工具、写参数、字段含义、失败怎么修、配置改哪个 |
+| `sys_guide` | 读 dhole 自己的说明书：选工具、写参数、字段含义、失败怎么修、配置改哪个 |
 
 **默认关的 4 个**：
 
@@ -175,7 +175,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 
 参数摆放：`web_read` / `web_crawl` / `web_search` / `screenshot` 的旋钮收在一个 `options` 对象里，顶层同名参数也接受（兼容读法，两处都给时**顶层优先**）；其余工具**只有顶层这一层**，塞 `options` 会被拒绝并列出它真正接受的键。反向例外：`web_read` 的 `url` 与 `web_crawl` 的 `discover_only` / `crawl_urls` / `focus` 必须放顶层。以 `tools/list` 为准。
 
-调用写法、字段含义与排查的手册有两个入口，同一份语料：`dhole_doc(topic=...)`（默认注册，装上就能用）与 `dhole skill install`（宿主原生 skill 形态）。
+调用写法、字段含义与排查的手册有两个入口，同一份语料：`sys_guide(topic=...)`（默认注册，装上就能用）与 `dhole skill install`（宿主原生 skill 形态）。
 
 ## 注意事项
 

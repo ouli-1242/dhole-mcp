@@ -129,7 +129,7 @@ class TestNoCapabilityBehindAGate:
 
     def test_every_surviving_flag_is_described_in_the_corpus(self):
         """A knob nobody can find is a dead end all the same - so the handbook
-        (which is what dhole_doc serves) must name what remains and why."""
+        (which is what sys_guide serves) must name what remains and why."""
         text = ""
         for path in sorted(CORPUS.rglob("*.md")):
             text += path.read_text(encoding="utf-8")
