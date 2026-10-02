@@ -87,8 +87,6 @@ def _dhole_launcher_path() -> str | None:
     return None
 
 
-
-
 def _other_dhole_pids() -> list[int]:
     """PIDs of OTHER running dhole launcher processes (excludes this one)."""
     import subprocess
@@ -134,21 +132,6 @@ def _other_dhole_pids() -> list[int]:
     return pids
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # ─── public commands ───────────────────────────────────────────────────────
 
 def print_version() -> None:
@@ -174,7 +157,6 @@ def _print_version_panel() -> None:
     ], W))
     print("  " + ui.dim("personal fork - update by hand with")
           + "  " + ui.cmd('git pull && python -m pip install -e ".[all]"'))
-
 
 
 # ─── capability report (`dhole -v`) ─────────────────────────────────────────
