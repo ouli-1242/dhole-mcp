@@ -1345,10 +1345,15 @@ class _Tavily(KeyedApiEngine):
     endpoint = "https://api.tavily.com/"
     # basic=1 credit；advanced=2 credits，默认不替用户花钱
 
+    #: dhole hands the builders the short codes `_FRESHNESS_TO_TIMELIMIT`
+    #: produces ("d"/"w"/"m"/"y"); the API wants the whole word. Comparing
+    #: against the long names meant `time_range` was never set on a real call.
+    _TIME_RANGE = {"d": "day", "w": "week", "m": "month", "y": "year"}
+
     def build_request(self, query, max_results, timelimit):
         payload = {"query": query, "max_results": max_results, "search_depth": "basic"}
-        if timelimit in ("day", "week", "month", "year"):
-            payload["time_range"] = timelimit
+        if timelimit in self._TIME_RANGE:
+            payload["time_range"] = self._TIME_RANGE[timelimit]
         return (
             self.endpoint,
             {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key()}"},
@@ -1370,7 +1375,8 @@ class _Bocha(KeyedApiEngine):
     endpoint = "https://api.bochaai.com/v1/web-search"
     # 国内裸网直连；索引与 Bing 同源。summary=true 才有全文摘要（更贵更慢），默认关。
 
-    _FRESHNESS = {"day": "oneDay", "week": "oneWeek", "month": "oneMonth", "year": "oneYear"}
+    # 同 _Tavily：进来的是短码，Bocha 的词汇是 oneDay/oneWeek/...
+    _FRESHNESS = {"d": "oneDay", "w": "oneWeek", "m": "oneMonth", "y": "oneYear"}
 
     def build_request(self, query, max_results, timelimit):
         payload = {"query": query, "count": max_results, "summary": False}
@@ -2015,6 +2021,12 @@ async def metasearch(
     results: list of {title, href, body, backend} deduped by normalized URL,
     preserving first-seen order (the backend that delivered it is its `backend`).
     status: {backend: "ok" | "empty" | "error:..."} for every backend tried.
+
+    `timelimit` is the SHORT code the caller already uses for every backend
+    ("d"/"w"/"m"/"y", from search_engines._FRESHNESS_TO_TIMELIMIT); each backend
+    maps it to whatever its own API spells. Nothing here accepts the long words —
+    a second vocabulary in this layer is how the keyed engines ended up claiming
+    a date filter they never sent.
 
     Early-return-on-quorum: once enough unique results have landed we cancel the
     laggards, so a healthy search returns in ~1-2s while a throttled one still

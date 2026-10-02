@@ -224,7 +224,9 @@ class TestNewKeyedEngines:
         monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
         monkeypatch.setattr(httpx, "post", fake_post)
 
-        results, status = await m.metasearch("q", 3, engines=["bocha"], timelimit="week")
+        # 'w' 是生产路径上真正流下来的值（search_engines 先归一成短码）。这里此前喂
+        # "week"，与被测代码共享同一个错误假设，两边一起绿。
+        results, status = await m.metasearch("q", 3, engines=["bocha"], timelimit="w")
 
         assert payloads[-1]["freshness"] == "oneWeek"
         assert payloads[-1]["summary"] is False

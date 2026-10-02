@@ -51,10 +51,37 @@ class TestTheTableIsTheEngines:
         from dhole_mcp import search_metasearch as ms
 
         for name, cls in sorted(ms.KEYED_ENGINES.items()):
+            # 'w' 而不是 'week'：生产路径上传的是 `multi_search` 归一化之后的短名
+            # （`_FRESHNESS_TO_TIMELIMIT`）。此前这里用长名调用，于是"表说有日期能力、
+            # 实际一个字节都没发"这一族 bug 在测试里看不见 —— 测试与产品共享同一个
+            # 错误假设，两边一起绿。
             _url, _h, plain = cls().build_request("q", 5, None)
-            _url, _h, week = cls().build_request("q", 5, "week")
+            _url, _h, week = cls().build_request("q", 5, "w")
             diff = {k: v for k, v in week.items() if plain.get(k) != v}
             assert bool(diff) == (name in _DATE_AWARE_ENGINES), (name, diff)
+
+    def test_keyed_engines_send_the_date_value_their_api_understands(self):
+        """`bool(diff)` 只问"有没有多个键"，不问"值对不对"。
+
+        两家 keyed 后端的日期参数各有各的词表（tavily: day/week/month/year；
+        bocha: oneDay/oneWeek/...），把内部短名 `w` 原样发出去同样"多了个键"，
+        但上游照样当无效忽略 —— 而报告已经把这家算进 engines_filtered 了。
+        """
+        from dhole_mcp import search_metasearch as ms
+
+        tables = {
+            "tavily": ("time_range", {"d": "day", "w": "week",
+                                      "m": "month", "y": "year"}),
+            "bocha": ("freshness", {"d": "oneDay", "w": "oneWeek",
+                                    "m": "oneMonth", "y": "oneYear"}),
+        }
+        for name, (param, table) in sorted(tables.items()):
+            build = ms.KEYED_ENGINES[name]().build_request
+            _url, _h, plain = build("q", 5, None)
+            assert param not in plain, (name, "没传日期时不该带这个参数")
+            for short, wanted in table.items():
+                _url, _h, payload = build("q", 5, short)
+                assert payload.get(param) == wanted, (name, short, payload)
 
     def test_the_default_pool_split_is_what_the_report_measured(self):
         filtered, unfiltered = date_support(POOL)
