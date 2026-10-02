@@ -97,8 +97,24 @@ def _connect() -> sqlite3.Connection:
         "  check_count INTEGER NOT NULL DEFAULT 0,"
         "  change_count INTEGER NOT NULL DEFAULT 0,"
         "  checked_at REAL NOT NULL DEFAULT 0,"
-        "  last_error TEXT NOT NULL DEFAULT '')"
+        "  last_error TEXT NOT NULL DEFAULT '',"
+        # 源站自己的版本标记（ETag / Last-Modified）。17.0 起条件请求不再是调用方
+        # 能传的参数，而是 watch 内部的常规：下一次 check 带上这两个值去问「变了吗」，
+        # 没变就一个字节正文都不下载。它们与 baseline 同生同死 —— 基线换了正文，
+        # 版本标记也必须是新那一版的，否则「304 = 没变」会指向一份对不上的基线。
+        "  etag TEXT NOT NULL DEFAULT '',"
+        "  last_modified TEXT NOT NULL DEFAULT '')"
     )
+    # 老库升级：CREATE TABLE IF NOT EXISTS 不会给已存在的表补列，所以逐条幂等 ALTER
+    # （与 cache.py 同一个写法，重复列名吞掉）。
+    for ddl in ("ALTER TABLE watches ADD COLUMN etag TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE watches ADD COLUMN last_modified"
+                " TEXT NOT NULL DEFAULT ''"):
+        try:
+            _conn.execute(ddl)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc):
+                raise
     _conn.commit()
     paths.harden_file(db)
     return _conn
@@ -309,7 +325,8 @@ def save_watch(name, url, focus="", max_chars=0, note="") -> dict:
                 conn.execute(
                     "UPDATE watches SET url=?, focus=?, max_chars=?, note=?,"
                     " baseline='', baseline_at=0, baseline_cut=0,"
-                    " check_count=0, change_count=0, checked_at=0, last_error=''"
+                    " check_count=0, change_count=0, checked_at=0, last_error='',"
+                    " etag='', last_modified=''"
                     " WHERE name=?", (u, f, max_chars, _clean_note(note), n))
                 kept = {"baseline_kept": False, "check_count": 0, "change_count": 0}
         _prune(conn, "watches", MAX_WATCHES, "checked_at")
@@ -324,7 +341,8 @@ def get_watch(name) -> dict | None:
         conn = _connect()
         row = conn.execute(
             "SELECT name, url, focus, max_chars, note, baseline, baseline_at,"
-            " baseline_cut, check_count, change_count, checked_at, last_error"
+            " baseline_cut, check_count, change_count, checked_at, last_error,"
+            " etag, last_modified"
             " FROM watches WHERE name=?", (n,)
         ).fetchone()
     if row is None:
@@ -334,6 +352,7 @@ def get_watch(name) -> dict | None:
         "note": row[4], "baseline": row[5], "baseline_at": row[6],
         "baseline_cut": bool(row[7]), "check_count": row[8],
         "change_count": row[9], "checked_at": row[10], "last_error": row[11],
+        "etag": row[12], "last_modified": row[13],
     }
 
 
@@ -362,14 +381,22 @@ def delete_watch(name) -> bool:
         return cur.rowcount > 0
 
 
-def set_baseline(name, text: str, cut: bool = False) -> None:
+def set_baseline(name, text: str, cut: bool = False,
+                 etag: str = "", last_modified: str = "") -> None:
+    """Store a snapshot together with the origin's version markers.
+
+    两者必须同写：下一次 check 带的 If-None-Match 描述的是**这一份**正文。
+    传空串表示源站没给版本标记（多数页面确实不给），那一次 check 就退化成
+    「整页重读 + 逐行比」，与 17.0 之前完全一样。
+    """
     n = clean_name(name)
     with _lock:
         conn = _connect()
         conn.execute(
             "UPDATE watches SET baseline=?, baseline_at=?, baseline_cut=?,"
-            " checked_at=? WHERE name=?",
-            (text[:MAX_SNAPSHOT_CHARS], time.time(), 1 if cut else 0, time.time(), n),
+            " checked_at=?, etag=?, last_modified=? WHERE name=?",
+            (text[:MAX_SNAPSHOT_CHARS], time.time(), 1 if cut else 0, time.time(),
+             (etag or "")[:256], (last_modified or "")[:256], n),
         )
         conn.commit()
 

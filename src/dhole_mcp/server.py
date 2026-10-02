@@ -2996,6 +2996,13 @@ MAX_REQUEST_BODY_BYTES = 262144
 # that carry no credentials and change no flag keep the empty fingerprint, so
 # plain fetches (and pre-existing cache entries) keep hitting as before.
 _CACHE_CTX: contextvars.ContextVar[str] = contextvars.ContextVar("_cache_ctx", default="")
+# 17.0 §6：条件请求不再是 agent 能传的参数，但 ETag 本身要继续用 —— 用它的是
+# `watch`：它已经存着基线，下一次检查真正想问的是"变了吗"，而不是再搬一遍正文。
+# 所以校验子走这条进程内通道，由设置它的那次检查负责复位（try/finally）。
+# 刻意不做成参数：一个"请把你上次存的 etag 再传给我"的参数，等于把保管版本标记
+# 的责任推回调用方，而那正是这次要删掉的合同。
+_REVALIDATE: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "_revalidate", default=None)
 
 # Notes about THIS call's arguments that the caller has to be told about — right
 # now, values that were clamped to a documented bound. Scoped per invocation by
@@ -6009,7 +6016,32 @@ class MasterFetchServer:
         if allow_private is not None:
             kw["allow_private"] = allow_private
 
-        result = await self.smart_fetch(url=w["url"], **kw)
+        # 17.0 §6：条件请求从 agent 能传的参数变成监控自己的常规。基线那一行存着
+        # 源站给过的版本标记（etag / last-modified），下一次检查先问"变了吗"：
+        # 没变就一个字节正文都不搬。第一次没有基线可对应，所以那一趟照常整页读。
+        _rv = {"etag": w["etag"], "last_modified": w["last_modified"]}
+        if not (w["baseline"] and (_rv["etag"] or _rv["last_modified"])):
+            _rv = None
+        _rv_tok = _REVALIDATE.set(_rv)
+        try:
+            result = await self.smart_fetch(url=w["url"], **kw)
+        finally:
+            _REVALIDATE.reset(_rv_tok)
+
+        if _rv and result.status == 304:
+            # 源站答"没变"。基线**不动**：它描述的正是当前版本，把 checked_at 之外
+            # 的东西重写一遍等于假装看过新内容。changed=false 是回答，不是没检查。
+            tasks.note_check(nm, changed=False)
+            return WatchModel(
+                op=o, name=nm, url=w["url"], result=result,
+                changed=False, baseline_at=_iso_from_ts(w["baseline_at"]),
+                message=(f"'{nm}' is unchanged: the origin answered 304, so no "
+                         "body was transferred."),
+                next_action=("The stored baseline is still the current version. "
+                             "Revalidation is automatic on every check - there is "
+                             "nothing to pass back."),
+            )
+
         if not result.content_ok:
             # 失败的抓取**不动基线**：把一次网络故障写成"页面清空了"，是让
             # 监控自己造出一个假变化。
@@ -6023,11 +6055,15 @@ class MasterFetchServer:
             )
 
         text = "\n".join(result.content or [])
+        # 这一版正文对应哪一版本标记：与基线同写一次，下一次检查带出去问"变了吗"。
+        _v = result.cache_validators or {}
         cut = len(text) > (w["max_chars"] or tasks.MAX_SNAPSHOT_CHARS)
         text = text[: (w["max_chars"] or tasks.MAX_SNAPSHOT_CHARS)]
 
         if not w["baseline"]:
-            tasks.set_baseline(nm, text, cut=cut)
+            tasks.set_baseline(nm, text, cut=cut,
+                               etag=str(_v.get("etag") or ""),
+                               last_modified=str(_v.get("last_modified") or ""))
             tasks.note_check(nm, changed=None)
             return WatchModel(
                 op=o, name=nm, url=w["url"], result=result,
@@ -6040,7 +6076,9 @@ class MasterFetchServer:
 
         d = tasks.diff_text(w["baseline"], text)
         changed = bool(d["added"] or d["removed"])
-        tasks.set_baseline(nm, text, cut=cut)
+        tasks.set_baseline(nm, text, cut=cut,
+                           etag=str(_v.get("etag") or ""),
+                           last_modified=str(_v.get("last_modified") or ""))
         tasks.note_check(nm, changed=changed)
         return WatchModel(
             op=o, name=nm, url=w["url"], result=result,
@@ -7101,6 +7139,12 @@ class MasterFetchServer:
         # cached copy must not pre-empt the origin — a caller asking "has this
         # changed?" wants the site's answer, not dhole's memory of it.
         conditional, cond_rejected = _conditional_headers(if_modified_since, if_none_match)
+        if not conditional and not cond_rejected:
+            # 内部复验那一档（§6：调用方的参数在 17.0 下线，watch 是这个机制的
+            # 唯一用户）：没人问"变了吗"的时候，看一眼这次调用是不是替某个监控问的。
+            _rv = _REVALIDATE.get() or {}
+            conditional, cond_rejected = _conditional_headers(
+                _rv.get("last_modified"), _rv.get("etag"))
         if cond_rejected:
             return _invalid_request_result(
                 url or "", f"invalid revalidation option: {cond_rejected}",
