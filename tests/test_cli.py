@@ -79,14 +79,20 @@ class TestSearchPoolRow:
         return rows["search pool"]
 
     def test_row_lists_the_real_pool_and_nothing_else(self, monkeypatch):
+        """池子换成什么样都行，但印出来的必须**恰好**是它 —— 不靠手写退役名单反查。
+
+        旧写法是 `for gone in (sogou_weixin, wikipedia, ...)`：那种名单每次删引擎都要
+        跟着改，改漏一次守卫就静默失效。现在正向比对：主体段 = 池子的逗号串，
+        附注里点名的 VPN 引擎必须是池内名字。
+        """
         from dhole_mcp.search_engines import DEFAULT_ENGINES
 
         row = self._pool_row(monkeypatch, None)
-        for eng in DEFAULT_ENGINES:
-            assert eng in row, f"{eng} 不在 search pool 行里: {row}"
-        # 不在池里的名字一个都不许出现（旧池的 sogou_weixin 就是这么漏进来的）
-        for gone in ("sogou_weixin", "wikipedia", "grokipedia", "baidu_baike"):
-            assert gone not in row, f"{gone} 已不在默认池，却还印在: {row}"
+        assert row.split(" (")[0] == ",".join(DEFAULT_ENGINES), row
+        if " (default; " in row:
+            named = row.split(" (default; ")[1].split(" need VPN")[0]
+            extra = set(named.split(",")) - set(DEFAULT_ENGINES)
+            assert not extra, f"VPN 注记点名了池外引擎: {sorted(extra)}"
 
     def test_env_override_still_wins(self, monkeypatch):
         row = self._pool_row(monkeypatch, "bing,yandex")

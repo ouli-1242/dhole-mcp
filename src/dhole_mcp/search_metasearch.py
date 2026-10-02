@@ -6,9 +6,9 @@ async-native parallel aggregation with early-return-on-quorum, no CLI / API
 server / MCP / images / videos / news / books / extract / cache / network bloat.
 See the ddgs LICENSE notice in NOTICE.ddgs.txt for full attribution.
 
-Backends (all keyless, no API key, no account): the default pool is baidu, bing,
-sogou, bing_global, yandex, brave, with duckduckgo / yahoo / sogou_weixin / so360 /
-baidu_baike / mwmbl / wikipedia / grokipedia available by name as opt-in backends.
+Backends (all keyless, no API key, no account): the pool IS the registry - 8
+names (baidu, bing, sogou, so360, bing_global, yandex, brave, duckduckgo), all
+run every round. There are no opt-in keyless backends since §3-23.
 They run in PARALLEL; a backend that
 CAPTCHAs / rate-limits / has no topic-match simply yields
 nothing and the others carry - so search is robust without any single point of
@@ -35,7 +35,7 @@ from functools import cached_property
 from random import SystemRandom
 from time import time
 from typing import Any, ClassVar, Optional, TypeVar
-from urllib.parse import quote, unquote_plus, urljoin, urlparse
+from urllib.parse import urlparse
 
 import h2
 import httpcore
@@ -83,8 +83,6 @@ _SEARCH_DEADLINE = 16.0  # 17.0 写死：整个搜索的硬期限是能算清的
 # 把它压到毫秒级（否则验早退归属的测试每条都要真睡 2s）。
 _SOFT_DEADLINE = 2.0
 _ua = UserAgent()
-
-
 
 
 # ─── exceptions ──────────────────────────────────────────────────────────────
@@ -518,145 +516,6 @@ class Brave(BaseSearchEngine):
         return payload
 
 
-# ─── Grokipedia (keyless JSON API; encyclopedic/topic queries) ───────────────
-class Grokipedia(BaseSearchEngine):
-    name = "grokipedia"
-    provider = "grokipedia"
-    priority = 1.9
-    search_url = "https://grokipedia.com/api/typeahead"
-    search_method = "GET"
-
-    def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
-                      timelimit: str | None, page: int = 1,  # noqa: ARG002
-                      **kwargs: str) -> dict[str, Any]:
-        return {"query": query, "limit": "1"}
-
-    def extract_results(self, html_text: str) -> list[Any]:
-        data = json.loads(html_text)
-        items = data.get("results", [])
-        if not items:
-            # Same reason as Wikipedia: this parser never reaches
-            # BaseSearchEngine.extract_results, so the yield counters have to be
-            # written here or the health panel can only ever say "not
-            # instrumented" for this engine.
-            self.last_extract = (0, 0)
-            return []
-        r = TextResult()
-        r.title = items[0].get("title", "").strip("_")
-        body = items[0].get("snippet", "")
-        r.body = body.split("\n\n", 1)[1] if "\n\n" in body else body
-        r.href = f"https://grokipedia.com/page/{items[0]['slug']}"
-        rows = [r]
-        self.last_extract = (len(rows), _usable_count(rows))
-        return rows
-
-
-# ─── Wikipedia (opensearch API; encyclopedic/topic queries) ──────────────────
-class Wikipedia(BaseSearchEngine):
-    """维基百科知识库检索（opensearch API，免密 JSON）。
-
-    两个实测行为，都会伪装成"引擎坏了"，所以写在这里：
-
-    * **版本按 region 的语言选**（`cn-zh` -> zh 站）。opensearch 是标题前缀/模糊匹配，
-      不是全文检索，所以「英文查询 + zh 站」和「中文查询 + en 站」都回 0 条 —— 这是
-      覆盖面对不上，不是解析器坏了。空手而归时再问一次 en 站（同一个词条多数有英文条目），
-      并把两次的结果都记进产出计数，健康判定看最终这一答。
-    * 它自己解析 JSON，**不会**走到 `BaseSearchEngine.extract_results`，所以
-      `last_extract` 必须自己写。不写的话 `_classify_yield` 落在 `nodes < 0` 那格，
-      engine_health 显示 `not_instrumented` —— 「没观测」被读成「没接入」（扩展报告 N2
-      就是这么误判的）。
-    """
-
-    name = "wikipedia"
-    provider = "wikipedia"
-    priority = 2.0
-    search_url = "https://{lang}.wikipedia.org/w/api.php?action=opensearch&search={query}"
-    search_method = "GET"
-
-    def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
-                      timelimit: str | None, page: int = 1,  # noqa: ARG002
-                      **kwargs: str) -> dict[str, Any]:
-        _country, lang = _split_region(region)
-        self.search_url = (f"https://{lang}.wikipedia.org/w/api.php?action=opensearch"
-                           f"&profile=fuzzy&limit=1&search={quote(query)}")
-        self.lang = lang
-        return {}
-
-    def search(self, query: str, region: str = "us-en", safesearch: str = "moderate",
-               timelimit: str | None = None, page: int = 1, **kwargs: str) -> list[Any] | None:
-        rows = super().search(query, region=region, safesearch=safesearch,
-                              timelimit=timelimit, page=page, **kwargs)
-        if rows:
-            return rows
-        country, lang = _split_region(region)
-        if lang == "en":
-            return rows
-        # The region's own edition had nothing under its own title index; the
-        # entity usually still has an English article, and the caller asked for
-        # "wikipedia", not for one edition of it.
-        return super().search(query, region=f"{country}-en", safesearch=safesearch,
-                              timelimit=timelimit, page=page, **kwargs)
-
-    def extract_results(self, html_text: str) -> list[Any]:
-        data = json.loads(html_text)
-        if not data[1]:
-            self.last_extract = (0, 0)
-            return []
-        r = TextResult()
-        r.title = data[1][0]
-        r.href = data[3][0]
-        resp = self.request("GET", f"https://{self.lang}.wikipedia.org/w/api.php?action=query"
-                            f"&format=json&prop=extracts&titles={quote(r.title)}&explaintext=0&exintro=0&redirects=1")
-        if resp:
-            pages = json.loads(resp).get("query", {}).get("pages", {})
-            r.body = next(iter(pages.values())).get("extract", "")
-        rows = [] if "may refer to:" in r.body else [r]
-        self.last_extract = (len(rows), _usable_count(rows))
-        return rows
-
-
-# ─── Yahoo (Bing-index from a different server; RU= redirect decode) ─────────
-def _yahoo_extract_url(u: str) -> str:
-    t = u.split("/RU=", 1)[1]
-    return unquote_plus(t.split("/RK=", 1)[0].split("/RS=", 1)[0])
-
-
-class Yahoo(BaseSearchEngine):
-    name = "yahoo"
-    provider = "bing"
-    search_url = "https://search.yahoo.com/search"
-    search_method = "GET"
-    items_xpath = "//div[contains(@class, 'relsrch')]"
-    elements_xpath: ClassVar[Mapping[str, str]] = {
-        "title": ".//div[contains(@class, 'Title')]//h3//text()",
-        "href": ".//div[contains(@class, 'Title')]//a/@href",
-        "body": ".//div[contains(@class, 'Text')]//text()",
-    }
-
-    def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
-                      timelimit: str | None, page: int = 1,  # noqa: ARG002
-                      **kwargs: str) -> dict[str, Any]:
-        from secrets import token_urlsafe
-        self.search_url = (f"https://search.yahoo.com/search;_ylt={token_urlsafe(24 * 3 // 4)}"
-                           f";_ylu={token_urlsafe(47 * 3 // 4)}")
-        payload = {"p": query}
-        if page > 1:
-            payload["b"] = f"{(page - 1) * 7 + 1}"
-        if timelimit:
-            payload["btf"] = timelimit
-        return payload
-
-    def post_extract_results(self, results: list[Any]) -> list[Any]:
-        out = []
-        for r in results:
-            if r.href.startswith("https://www.bing.com/aclick?"):
-                continue
-            if "/RU=" in r.href:
-                r.href = _yahoo_extract_url(r.href)
-            out.append(r)
-        return out
-
-
 # ─── Mojeek (independent index) ──────────────────────────────────────────────
 # ─── Yandex ──────────────────────────────────────────────────────────────────
 class Yandex(BaseSearchEngine):
@@ -680,7 +539,7 @@ class Yandex(BaseSearchEngine):
 
 # ─── Bing (CN + intl; free, keyless, reachable from mainland CN) ─────────────
 # 国内网可用：cn.bing.com 稳定可达；国际版 www.bing.com 作为回退。
-# provider 复用 "bing" 索引家族（与 DuckDuckGo/Yahoo 同源，共识合并）。
+# provider 复用 "bing" 索引家族（与 DuckDuckGo 同源，共识合并）。
 # transport 用 httpx（非 primp）：primp 的浏览器 TLS 指纹与 Bing 协商
 # 偶发 SelectedUnofferedKxGroup 失败，httpx 稳定。
 def _bing_decode_ck_url(href: str) -> str:
@@ -797,69 +656,11 @@ class BingGlobal(Bing):
     所以它不是 cn 版的别名，是给"想要国际结果"的用户的一个选择。国内无代理时
     www.bing.com 会绕道/超时 —— 默认池仍收它（国际 3 席之一），被墙时由连接失败冷却
     兜住（连续 3 次 → 10 分钟），不会每轮陪跑。provider 沿用 bing：结果 URL
-    与 bing/ddg/yahoo 同源，共识家族合并时不会虚报（见 search_engines._INDEX_FAMILY）。
+    与 bing/ddg 同源，共识家族合并时不会虚报（见 search_engines._INDEX_FAMILY）。
     """
 
     name = "bing_global"
     search_url = "https://www.bing.com/search"
-
-
-class Mwmbl(BaseSearchEngine):
-    """MWMBL：社区自建的小型通用索引，免密 JSON API，实测无反爬。
-
-    与 bing/google 家族完全不同的来源（自有爬虫的独立索引，偏技术/独立站点），
-    作为 opt-in 提供一个"非大厂"视角。实测约 1s 回一个 JSON 数组（EN 查询 85 条），
-    覆盖窄且相关度参差 —— 交给重排器/共识排序，不假装它和通用大索引等价。
-    """
-
-    name = "mwmbl"
-    provider = "mwmbl"
-    search_url = "https://api.mwmbl.org/api/v1/search/"
-    search_method = "GET"
-
-    def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
-                      timelimit: str | None, page: int = 1,  # noqa: ARG002
-                      **kwargs: str) -> dict[str, Any]:
-        return {"s": query}
-
-    def search(self, query: str, region: str = "us-en", safesearch: str = "moderate",
-               timelimit: str | None = None, page: int = 1, **kwargs: str) -> list[Any] | None:
-        # API 没有翻页参数（传了也不变结果）：page>1 直接空，不打网络。
-        if page > 1:
-            return []
-        return super().search(query, region=region, safesearch=safesearch,
-                              timelimit=timelimit, page=page, **kwargs)
-
-    @staticmethod
-    def _seg_text(segments: Any) -> str:
-        """``[{value, is_bold}]`` 分词数组 -> 纯文本。
-
-        title 与 extract 是同一个形状（实测：extract 也是分词数组，不是字符串
-        列表）—— 只 join ``isinstance(x, str)`` 的话，摘要会**静默全空**，而
-        usable 只看 title+href，整条结果照样"可用"。
-        """
-        if isinstance(segments, list):
-            return "".join(str(seg.get("value", "")) for seg in segments
-                           if isinstance(seg, dict)).strip()
-        return str(segments or "").strip()
-
-    def extract_results(self, html_text: str) -> list[Any]:
-        data = json.loads(html_text)
-        rows: list[Any] = []
-        for item in (data if isinstance(data, list) else []):
-            if not isinstance(item, dict):
-                continue
-            r = TextResult()
-            # 高亮词在数组里被切成多段（"asyncio"/" from ground up"…），拼起来才是
-            # 完整标题；只取 [0] 会得到半句话。
-            r.title = self._seg_text(item.get("title"))
-            r.href = str(item.get("url") or "").strip()
-            r.body = self._seg_text(item.get("extract"))
-            rows.append(r)
-        # base.extract_results 才会写 last_extract；这里自己解析 JSON，得自己记 ——
-        # 否则产出面板永远显示"没观测"，解析器漂移就又变成不可见的了。
-        self.last_extract = (len(rows), _usable_count(rows))
-        return rows
 
 
 # ─── Baidu (CN, free, keyless, no cookies needed) ────────────────────────────
@@ -993,160 +794,45 @@ class Baidu(BaseSearchEngine):
         return out
 
 
-# ─── 百度百科（知识库，opt-in） ──────────────────────────────────────────────
-class BaiduBaike(BaseSearchEngine):
-    """百度百科条目页：``/item/{query}`` 直接取条目，不走搜索页（那个是 JS 渲染，
-    静态 HTML 里没有结果）。一个查询最多产出一条结果（条目本身）。
-
-    **必须带 Referer**：裸请求实测被「百度安全验证」403（按 IP 限流），带上
-    ``https://www.baidu.com/`` 的 Referer 才是 200 真页面。403 会由 request() 抛
-    MetaBlockedException → 进 circuit breaker 冷却，不算静默空。
-
-    覆盖窄（名词/概念/人物有效，教程、实时信息常空），所以与 wikipedia 一样是
-    opt-in，不进默认池。
-    """
-
-    name = "baidu_baike"
-    provider = "baidu_baike"
-    search_url = "https://baike.baidu.com/item/"
-    search_method = "GET"
-    items_xpath = "//div[contains(@class,'lemmaSummary')]"
-    elements_xpath: ClassVar[Mapping[str, str]] = {
-        # 标题与条目 URL 都不在摘要容器里：h1 在页面顶部，条目 URL 就是页面自己的
-        # canonical 链接（比请求 URL 更规范，带数字 id）。
-        "title": "(//h1[contains(@class,'lemma-title')]//text())[1]",
-        "href": "(//link[@rel='canonical']/@href)[1]",
-        "body": ".//text()",
-    }
-    headers_update: ClassVar[Mapping[str, str]] = {"Referer": "https://www.baidu.com/"}
-    _detect_challenge_shell = True
-
-    def search(self, query: str, region: str = "us-en", safesearch: str = "moderate",
-               timelimit: str | None = None, page: int = 1, **kwargs: str) -> list[Any] | None:
-        q = (query or "").strip()
-        if not q or page > 1:  # 单条目引擎没有第二页
-            return []
-        html_text = self.request("GET", self.search_url + quote(q, safe=""))
-        if not html_text:
-            return None
-        # 200 + 「安全校验中…」拦截页（实测形态，按 IP 限流）= 被拦，不是"条目不存在"。
-        # 与搜索页不同，条目页的拦截是**持续性**的（实测连续多次都是校验页），所以不重试。
-        self._check_challenge(html_text)
-        kept = self.post_extract_results(self.extract_results(html_text)) or []
-        self.kept_after_filter = len(kept)
-        return kept
-
-    def post_extract_results(self, results: list[Any]) -> list[Any]:
-        """消歧义/验证页/空壳页：容器在但标题是验证字样的一律不返回。"""
-        out = []
-        for r in results:
-            title = (r.title or "").strip()
-            if not title or "验证" in title:
-                continue
-            r.body = (r.body or "").strip()[:300]
-            out.append(r)
-        return out
-
-
 # ─── registry ────────────────────────────────────────────────────────────────
 # All enabled text backends. Bing is enabled (free/keyless, reachable from
 # mainland CN without VPN). Order = rough preference; run all in parallel.
 _TEXT_ENGINES: dict[str, type[BaseSearchEngine]] = {
     "duckduckgo": Duckduckgo,
     "brave": Brave,
-    "grokipedia": Grokipedia,
-    "wikipedia": Wikipedia,
-    "yahoo": Yahoo,
     "yandex": Yandex,
     "bing": Bing,
     "bing_global": BingGlobal,
-    "mwmbl": Mwmbl,
     "baidu": Baidu,
-    "baidu_baike": BaiduBaike,
 }
 # Map dhole's public engine names -> metasearch backends.
 _DHOLE_TO_BACKEND = {
     "duckduckgo": "duckduckgo", "ddg": "duckduckgo",  # ddg is a common alias
     "bing": "bing",
-    "yahoo": "yahoo", "wikipedia": "wikipedia",
-    "brave": "brave", "yandex": "yandex", "sogou_weixin": "sogou_weixin",
-    "grokipedia": "grokipedia",
-    "baidu": "baidu", "baidu_baike": "baidu_baike",
-    # 国内独立索引：sogou 在默认池里，so360 是 opt-in（同生态位，两家都按 IP 限流，
-    # 默认池只点一家）。"360" 是 so360 的顺手别名（引擎名以数字开头不合本项目的命名习惯）。
+    "brave": "brave", "yandex": "yandex",
+    "baidu": "baidu",
+    # 国内两家独立索引（sogou / so360 同生态位，都按 IP 限流）都在默认池里。
+    # "360" 是 so360 的顺手别名（引擎名以数字开头不合本项目的命名习惯）。
     "so360": "so360", "360": "so360", "sogou": "sogou",
     # bing_global 是 www.bing.com 那套国际索引（与 cn 版结果几乎不重合，但国内直连常需
-    # 代理），在默认池的国际 3 席里；mwmbl 是社区自建的小型独立索引，仍为 opt-in。
-    "bing_global": "bing_global", "mwmbl": "mwmbl",
+    # 代理），占默认池的国际席位。
+    "bing_global": "bing_global",
     # Paid JSON backends: selectable by name, run on their own track (see
     # KeyedApiEngine) -- absent from _TEXT_ENGINES by design. 名字必须与
     # KEYED_ENGINES 严格一致：留一个没有实现的键，点名它会通过校验却什么都不返回。
     "tavily": "tavily",
     "bocha": "bocha",
 }
-# 默认池 = 国内 3（baidu/bing/sogou）+ 国际 3（bing_global/yandex/brave），全 keyless。
-# 让出席位的 duckduckgo/yahoo 仍是注册引擎、可显式点名：它们与 bing 同一个索引家族，
-# 在池里只多入口不多家族（共识分母不变），而占这一席的得是独立索引才多一个家族
-# （16.1 前是 so360，现在换成同生态位的 sogou）。
-# sogou_weixin 是垂直索引（只覆盖公众号），从默认池移出但保留注册：显式
-# engines=["sogou_weixin"] 仍可搜公众号。baidu_baike 同 wikipedia 一样是知识库
-# 覆盖窄（名词/概念有效，教程/实时信息常空），也 opt-in。
-_DEFAULT_BACKENDS = ["baidu", "bing", "sogou", "bing_global", "yandex", "brave"]
-
-# 垂直索引：只覆盖某一类内容（sogou_weixin = 微信公众号文章），不是通用网络索引。
-# 这里用它的地方只有一处 —— 早退配额的归属（见 multi_search 里 general_n 那段）。
-# NOTE 双份定义：search_engines._VERTICAL_BACKENDS 是同一份名单（那边给排序用），
-# 同样的惰性导入理由，由 tests/test_engine_registry.py::test_vertical_sets_agree 钉住。
-_VERTICAL_BACKENDS = frozenset({"sogou_weixin"})
+# 默认池 = 注册表的全部 8 家 keyless（§3-22）：国内 4（baidu/bing/sogou/so360）+
+# 国际 4（bing_global/yandex/brave/duckduckgo）。不再有"显式点名才跑"的免密引擎：
+# 删掉的 6 家（yahoo/sogou_weixin/wikipedia/grokipedia/mwmbl/baidu_baike）里，
+# 一家是 bing 家族的重复入口（yahoo），五家是知识库、垂直索引或社区小型索引（覆盖窄）。
+# duckduckgo 与 bing 同家族：它在池里多一个入口不多一个家族，家族数固定为 6。
+_DEFAULT_BACKENDS = ["baidu", "bing", "sogou", "so360", "bing_global",
+                     "yandex", "brave", "duckduckgo"]
 
 
-def _is_vertical_entry(entry: dict[str, Any]) -> bool:
-    """这条**合并后**的结果是不是只来自垂直索引（没有任何通用引擎也返回过它）。"""
-    srcs = entry.get("backends") or {entry.get("backend", "")}
-    return bool(srcs) and all(b in _VERTICAL_BACKENDS for b in srcs)
-
-
-class SogouWeixin(BaseSearchEngine):
-    """搜狗微信搜索（weixin.sogou.com）：免费、国内裸网直连（实测 ~0.2-0.9s），
-    默认池成员（14.5 起），后因覆盖面窄移出为 opt-in（15.x）—— 注册仍在，显式
-    engines=["sogou_weixin"] 可搜。独家内容池 —— 微信公众号文章在 Bing/百度里搜不全。
-
-    结果 href 是搜狗的 /link?url=... 跳转包装（带 token，会过期），不是文章
-    原始 URL；如实返回包装链接，浏览器可直接打开。它是**垂直索引**（只覆盖公众号
-    文章），在无神经重排时的兜底排序里会被排到通用索引之后 —— 见
-    search_engines._VERTICAL_BACKENDS。
-    """
-
-    name = "sogou_weixin"
-    provider = "sogou"
-    search_url = "https://weixin.sogou.com/weixin"
-    # 摘要 txt-info 与标题 txt-box 是 li 下的兄弟节点，必须切在 li 层
-    items_xpath = '//ul[contains(@class,"news-list")]//li[div[@class="txt-box"]]'
-    elements_xpath: ClassVar[Mapping[str, str]] = {
-        "title": ".//div[contains(@class,'txt-box')]//h3/a//text()",
-        "href": ".//div[contains(@class,'txt-box')]//h3/a/@href",
-        "body": ".//*[contains(@class,'txt-info')]//text()",
-    }
-
-    def build_payload(self, query: str, region: str, safesearch: str,
-                      timelimit: str | None, page: int = 1, **kwargs: str) -> dict[str, Any]:
-        return {"type": "2", "query": query}
-
-    def extract_results(self, html_text: str) -> list[Any]:
-        results = super().extract_results(html_text)
-        for r in results:
-            # 去掉高亮标记残留；/link 相对路径补全为可打开的绝对链接
-            r.title = r.title.replace("red_beg", "").replace("red_end", "").strip()
-            if r.href.startswith("/"):
-                r.href = urljoin("https://weixin.sogou.com", r.href.replace("&amp;", "&"))
-        return results
-
-
-# 搜狗微信注册（类定义在其上方）
-_TEXT_ENGINES["sogou_weixin"] = SogouWeixin
-
-
-# ─── 360 搜索（so.com，独立索引，opt-in） ────────────────────────────────────
+# ─── 360 搜索（so.com，独立索引，默认池） ────────────────────────────────────
 class So360(BaseSearchEngine):
     """360 搜索（www.so.com/s?q=）：国内直连、服务端渲染，独立索引（360 自家爬虫）。
 
@@ -1208,10 +894,10 @@ class Sogou(BaseSearchEngine):
     属性里。选择器带 ``[.//@data-url]`` 不是装饰：同一个 ``div.vrwrap`` 类名也被
     「相关搜索」聚合块复用（实测 9 个里 2 个是它们），没有 data-url 就没有结果目标。
 
-    索引家族与 sogou_weixin 合并为 ``sogou`` —— 同属搜狗（一个公众号垂直 + 一个
-    通用），同一 URL 被两者同时返回只算一个家族：宁可少报共识，也不虚报。
-    **在默认池的国内 3 席里**（16.1 前这一席是 so360，两家同生态位、都按 IP 限流，
-    默认池只点一家）。分页 ``&page=<页码>``（实测 page1∩page2 = 0）。
+    索引家族是 ``sogou``：17.0 前它还和公众号垂直（sogou_weixin）共用这一家，现在
+    只剩它一家。家族按底层索引归，宁可少报共识也不虚报。
+    **在默认池的国内 4 席里**（so360 与它同生态位、两家都按 IP 限流，16.x 的默认池
+    只点一家，17.0 两家一起进池）。分页 ``&page=<页码>``（实测 page1∩page2 = 0）。
     """
 
     name = "sogou"
@@ -2189,14 +1875,12 @@ async def metasearch(
         # early-return: enough engines contributed enough results, OR enough
         # results after the soft deadline (don't hold for dead backends).
         elapsed = time() - start
-        # "结果够多了"只认**通用**引擎的产出：垂直索引一次就能回满配额（实测 sogou
-        # 0.2-0.9s 回 10 条），让它算进来，2s 软截止一到就会把还在跑的通用引擎全 cancel
-        # —— 本机实测 yandex(3.1s) 就是这样被砍掉的，而它恰是另一个国内可达的通用索引：
-        # 为了加宽池子而加入的引擎，反而把池子变窄了。通用引擎全都不再运行时（被墙/已
-        # 结束），垂直结果当然可以自己触发早退。
-        general_n = sum(1 for e in order if not _is_vertical_entry(e))
-        general_running = any(tasks[t] not in _VERTICAL_BACKENDS for t in pending)
-        enough_results = general_n >= quorum_results or (bool(order) and not general_running)
+        # 配额数的是**合并后**的结果条数；全都跑完了也放行（别陪一个已经没人跑的
+        # 截止时间干等）。这里曾经额外区分"通用 vs 垂直"两条轨：垂直索引（唯一的
+        # 那家实测 0.2-0.9s 回 10 条）一次就够满配额，2s 软截止一到就会把还在跑的
+        # 通用引擎全 cancel，本机实测 yandex(3.1s) 就是这样被砍掉的 —— 而那家已经
+        # 随 §3-23 一起删了，轨也就没有第二条了。
+        enough_results = len(order) >= quorum_results or (bool(order) and not pending)
         if enough_results and (
             engines_ok >= min_engines or elapsed >= soft_deadline
         ):

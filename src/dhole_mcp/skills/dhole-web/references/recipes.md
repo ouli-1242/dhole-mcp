@@ -4,7 +4,7 @@ Starting routes for multi-step tasks. Each recipe marks where to pivot on failur
 
 ## Research a topic and answer
 
-1. `smart_search` (default pool; name verticals: WeChat `sogou_weixin`, encyclopedias `wikipedia`/`baidu_baike`, international add `bing_global`/`brave`/`duckduckgo`)
+1. `smart_search` (default pool = every keyless engine; to lean international, name `bing_global`/`brave`/`duckduckgo`)
 2. Pick 2–3 `fetch_relevance: high` hits (ranking is a hint, not a directive — judge by content), `smart_fetch` with `focus=` for full text
 3. Cross-check, then answer with URLs cited; content that only appeared in snippets and was never fetched does not count as verified
 - Pivot: thin/empty results → troubleshooting "Search"; one shell page → `force_fetcher='stealthy'`
@@ -44,7 +44,7 @@ Starting routes for multi-step tasks. Each recipe marks where to pivot on failur
 
 ## When search fails (pivot in this order)
 
-1. Re-search naming other engines (`dhole engines probe` first to see who's alive; use verticals for vertical content)
+1. Re-search naming other engines (`dhole engines probe` first to see who's alive; 17.0 has no vertical index — name the international engines for international content)
 2. Know the domain? Skip search: `smart_crawl(url=<domain>, discover_only=true)` to map the site directly
 3. Site has a feed? `feed_fetch`
 4. Everything down (blocked, no proxy): tell the user about `DHOLE_SEARCH_PROXY` or a keyed backend (references/configuration.md) — this is a "config change", so present options and wait for the user's decision

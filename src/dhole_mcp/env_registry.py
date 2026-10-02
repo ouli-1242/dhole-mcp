@@ -121,7 +121,7 @@ ALL: tuple[EnvVar, ...] = (
     EnvVar(
         name="DHOLE_DEFAULT_ENGINES",
         kind="hostlist",
-        default="baidu,bing,sogou,bing_global,yandex,brave",
+        default="baidu,bing,sogou,so360,bing_global,yandex,brave,duckduckgo",
         read_at="call",
         scenario="poor search results / want a different pool",
         summary="Override the keyless default engine pool.",

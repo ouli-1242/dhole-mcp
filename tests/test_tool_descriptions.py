@@ -100,48 +100,43 @@ def _engine_tokens(text: str) -> set[str]:
     return set(_ENGINE_TOKEN.findall(text.lower()))
 
 
-def test_search_engine_list_is_never_partial(tools):
-    """`smart_search` 里**每一处**点名的 opt-in 引擎清单，都必须点全。
+def test_search_engine_list_never_names_a_retired_engine(tools):
+    """`smart_search` 的每一处引擎点名都不许指着已经不存在的后端。
 
-    实测漂移（15.1 裁剪时发现）：描述写 "opt-in baidu_baike,bing_global,mwmbl,
-    wikipedia,grokipedia"（**5 个**），而 `search_engines._INDEX_FAMILY` 注册
-    14 个后端 = 6 默认 + **8** opt-in —— 漏了 `so360` / `sogou` /
-    `sogou_weixin`。调用方读描述会以为 opt-in 池只有 5 个。
+    17.0 删了 6 家引擎、并把 opt-in 层一起去掉（池子=注册表），所以这条守卫换了
+    形状：过去它比对「点名的 opt-in 清单别只列一半」，现在比对「点名的名字里不许
+    有退役的那几家」。留着退役名字比漏列更糟 —— 调用方照着点会收到 invalid_request，
+    那句话读起来像是我们坏了。
 
-    这是 `SUPPORTED_EXTENSIONS` 那类「同一份名单手写两遍」的翻版，所以守卫
-    不去比对两份手写清单，而是**从注册表反查载荷**。
-
-    **必须逐个位置判，不能把整份载荷当一个字符串扫** —— 这是写下第一条版本
-    时的真实错误：`options` 包里列全了 8 个，把描述里那 5 个"补"成了 8，
-    于是整载荷扫法对原始 bug 静默通过（变异实验实测）。每个位置各自满足
-    「要么为空，要么等于注册表」才算过。
+    **逐个位置判，不把整份载荷当一个字符串扫**（写下第一条版本时的真实错误：一处
+    列全了就把另一处的漏列"补"成通过，变异实验实测）。
     """
-    from dhole_mcp.search_engines import _INDEX_FAMILY
-
-    registry = set(_INDEX_FAMILY)          # 注册表：14 个后端
-    opt_in = registry - set(DEFAULT_ENGINES)
+    retired = {"sogou_weixin", "baidu_baike", "wikipedia", "grokipedia",
+               "mwmbl", "yahoo"}
 
     # 机制自检：整词匹配不该把 sogou_weixin 读成 sogou
-    assert _engine_tokens("sogou_weixin only") & opt_in == {"sogou_weixin"}
+    assert _engine_tokens("sogou_weixin only") & retired == {"sogou_weixin"}
+    # 结构自检：opt-in 层确实没了 —— 这条守卫的前提就是没有第二张名单
+    from dhole_mcp.search_engines import _INDEX_FAMILY
+
+    assert set(_INDEX_FAMILY) == set(DEFAULT_ENGINES), (
+        "注册表与默认池又不一致了：先修池子，再回来改这条守卫")
 
     t = tools["smart_search"]
     locations = {
         "description": t["description"],
         "engines": t["inputSchema"]["properties"]["engines"]["description"],
     }
-    partial: dict[str, list[str]] = {}
+    stale: dict[str, list[str]] = {}
     for where, text in locations.items():
-        claimed = _engine_tokens(text) & opt_in
-        if claimed and claimed != opt_in:   # 空 = 没写清单，放行
-            partial[where] = sorted(claimed)
-    assert not partial, (
-        "smart_search 有位置点名了 opt-in 引擎清单但与注册表不符"
-        "（漏列会让调用方以为池子更小）。\n"
-        f"  注册表里: {sorted(opt_in)}\n"
-        f"  不符处: {partial}\n"
-        "要么补全，要么删掉该处清单、只留一份名单（推荐 —— 引擎表写在 "
-        "dhole_doc 语料里，常驻层给指针）。"
-    )
+        hit = _engine_tokens(text) & retired
+        if hit:
+            stale[where] = sorted(hit)
+    assert not stale, (
+        "smart_search 点名了 17.0 已删除的引擎，调用方会点到不存在的名字。\n"
+        f"  不符处: {stale}\n"
+        "能力损失写在 dhole_doc 语料里（那里可以讲「以前有、现在没了」），"
+        "常驻层只写现在能用的。")
 
 
 def test_parse_advertises_local_pdf(tools):

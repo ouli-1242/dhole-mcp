@@ -48,19 +48,26 @@ Tool descriptions cover parameters; this volume covers **how the tools actually 
 
 ## smart_search: engines, ranking, dates
 
-**Engine matrix** (14 keyless + 2 keyed; max 9 per search):
+**Engine matrix** (8 keyless + 2 keyed; max 9 names per search). All 8 keyless
+engines are in the default pool — there is no opt-in tier to name:
 
-| Engine | Default pool | Direct from CN | Notes |
-|---|---|---|---|
-| `baidu` / `bing` / `sogou` / `yandex` | ✔ | ✔ | `sogou` is IP-rate-limited |
-| `bing_global` / `brave` | ✔ | proxy needed | Nearly disjoint results from the CN editions |
-| `duckduckgo` (`ddg`) / `yahoo` / `wikipedia` / `grokipedia` / `mwmbl` | opt-in | proxy needed | `mwmbl` has narrow coverage, uneven relevance |
-| `baidu_baike` / `so360` (`360`) / `sogou_weixin` | opt-in | ✔ | `sogou_weixin` is the WeChat-article vertical; `baidu_baike` is narrow |
-| `tavily` / `bocha` | keyed (off by default) | — | **Per-call billing, quota deducted on dispatch** — only when the user names them |
+| Engine | Direct from CN | Notes |
+|---|---|---|
+| `baidu` / `bing` / `sogou` / `so360` (`360`) / `yandex` | ✔ | `sogou` and `so360` are both IP-rate-limited |
+| `bing_global` / `brave` | proxy needed | Nearly disjoint results from the CN editions |
+| `duckduckgo` (`ddg`) | proxy needed | Same Bing-family index as `bing` |
+| `tavily` / `bocha` | keyed (off by default) | **Per-call billing, quota deducted on dispatch** — only when the user names them |
 
-**Ranking**: a local cross-encoder reranks (bge-zh by default); while it's still loading in a fresh process, `rerank_mode=merge` (consensus ordering, slightly weaker) — one retry restores `neural`. `relevance_score` is normalized (top is always 1.0); `min_raw_relevance` is what can judge "the whole round is irrelevant" — the raw-score distribution (bge-zh, measured): off-topic ~1e-4, marginal ~0.2, true hits 0.93+. **Start at 0.1**; hard negatives on the same topic sit at p90 0.18, so higher starts killing good results. Recalibrate after switching models by hand (`~/.dhole/config/reranker.json`). `fetch_hint` reports each round's raw-score span. `engines_consensus` counts independent index FAMILIES (5 total), not raw hits.
+17.0 retired 6 keyless backends, so two abilities are gone: **WeChat-article
+search** (`sogou_weixin` was the only index of that pool — weixin.sogou.com
+content is not fully covered by the general engines) and **encyclopedia lookups as
+structured answers** (`wikipedia` / `grokipedia` / `baidu_baike`; the general
+engines still return those pages, they are just no longer queried as APIs).
 
-**Dates**: only `bing` / `bing_global` / `brave` (plus opt-in `ddg` / `yahoo`, keyed `bocha` / `tavily`) accept dates, and only as day/week/month/year presets. `after=<date>` is widened to the narrowest preset covering the window (`date_filter` reports what was sent and which engines were never asked); `before` is rejected outright — search results carry no publish dates, so "older-than" is both unaskable and unverifiable. Date-bounded increments belong to `feed_fetch(since=)`. There is **no `total_estimate`** — do not look for it, do not invent one.
+**Ranking**: a local cross-encoder reranks (bge-zh by default); while it's still loading in a fresh process, `rerank_mode=merge` (consensus ordering, slightly weaker) — one retry restores `neural`. `relevance_score` is normalized (top is always 1.0); `min_raw_relevance` is what can judge "the whole round is irrelevant" — the raw-score distribution (bge-zh, measured): off-topic ~1e-4, marginal ~0.2, true hits 0.93+. **Start at 0.1**; hard negatives on the same topic sit at p90 0.18, so higher starts killing good results. Recalibrate after switching models by hand (`~/.dhole/config/reranker.json`). `fetch_hint` reports each round's raw-score span. `engines_consensus` counts independent index FAMILIES (6 total — `bing`, `bing_global` and `duckduckgo` are one Bing-family entry, so 8 engines reach 6 families), not raw hits.
+
+**Dates**: only `bing` / `bing_global` / `brave` / `duckduckgo` (keyed `bocha` / `tavily`
+too) accept dates, and only as day/week/month/year presets. `after=<date>` is widened to the narrowest preset covering the window (`date_filter` reports what was sent and which engines were never asked); `before` is rejected outright — search results carry no publish dates, so "older-than" is both unaskable and unverifiable. Date-bounded increments belong to `feed_fetch(since=)`. There is **no `total_estimate`** — do not look for it, do not invent one.
 
 **No SLA**: keyless engines are direct scrapes of public search results (unauthorized, unquota'd) — when providers change layout or ban IPs, they degrade **silently**. For reliability: a different egress (`DHOLE_SEARCH_PROXY`) or a keyed backend.
 

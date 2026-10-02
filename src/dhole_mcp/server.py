@@ -554,7 +554,7 @@ DHOLE_INSTRUCTIONS = (
     "Dhole is the web toolkit: use it when a built-in fetch/search fails or is "
     "blocked, or the page needs JavaScript, PDF/OCR, or multi-URL batching. "
     "Bypasses anti-bot walls (Cloudflare), reads PDFs incl. scans (OCR), and "
-    "searches 6 engines keylessly.\n"
+    "searches 8 engines keylessly.\n"
     "Routing:\n"
     "- Content of a URL you already have (page or PDF): smart_fetch. urls=[...] "
     "for a known list; focus= cuts tokens on long pages; pages= for PDF ranges.\n"
@@ -614,7 +614,7 @@ _INSTRUCTIONS_INTRO = (
     "Dhole is the web toolkit: use it when a built-in fetch/search fails or is "
     "blocked, or the page needs JavaScript, PDF/OCR, or multi-URL batching. "
     "Bypasses anti-bot walls (Cloudflare), reads PDFs incl. scans (OCR), and "
-    "searches 6 engines keylessly.\n"
+    "searches 8 engines keylessly.\n"
 )
 _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "smart_fetch": "- Content of a URL you already have (page or PDF): smart_fetch. "
@@ -8672,10 +8672,10 @@ class MasterFetchServer:
     ) -> SearchResponseModel:
         """Local keyless web search (no API key, no account, no third-party service).
 
-        Runs keyless backends in parallel (14 registered; default pool:
-        baidu, bing, sogou, bing_global, yandex, brave - engines= to choose,
-        opt-in: baidu_baike, duckduckgo, mwmbl, so360, sogou_weixin,
-        wikipedia, grokipedia, yahoo), merges + dedups + ranks by cross-backend
+        Runs keyless backends in parallel (8 registered, all 8 pooled: baidu,
+        bing, sogou, so360, bing_global, yandex, brave, duckduckgo - engines=
+        narrows it, there is no opt-in tier), merges + dedups + ranks by
+        cross-backend
         consensus (a URL returned by several independent indexes is an authority
         signal). With dhole-mcp[all] installed an ONNX cross-encoder also reranks
         them by neural relevance; on a lean install (or offline) that step is
@@ -9013,7 +9013,7 @@ class MasterFetchServer:
         },
         {
             "name": "smart_search",
-            "description": "Keyless multi-engine web search (default pool: baidu,bing,sogou,bing_global,yandex,brave; opt-in engines are listed under engines=). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- fetch_content=true auto-fetches the top 3; otherwise smart_fetch the high fetch_relevance hits with focus=. Don't search for a URL you already have - smart_fetch it directly.\n- min_relevance / min_raw_relevance (0-1) drop low-relevance results - two different scales, read which one you are setting.\n- Result fields: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index FAMILIES, not raw hits, so a low value can mean a degraded pool - check consensus_basis.",
+            "description": "Keyless multi-engine web search (default pool = all 8 engines: baidu,bing,sogou,so360,bing_global,yandex,brave,duckduckgo). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- fetch_content=true auto-fetches the top 3; otherwise smart_fetch the high fetch_relevance hits with focus=. Don't search for a URL you already have - smart_fetch it directly.\n- min_relevance / min_raw_relevance (0-1) drop low-relevance results - two different scales, read which one you are setting.\n- Result fields: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index FAMILIES, not raw hits, so a low value can mean a degraded pool - check consensus_basis.",
             "inputSchema": {
                 "type": "object", "required": ["query"],
                 "properties": {
@@ -9024,7 +9024,7 @@ class MasterFetchServer:
                     "max_results": {"type": "integer", "description": "Results to return (1-50, default 6)."},
                     "page": {"type": "integer", "description": "Result page, 0-10 (default 0)."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds (default 300). 0 = force fresh."},
-                    "engines": {"type": "array", "items": {"type": "string"}, "description": "Override the pool, max 9 names. Opt-in engines (they need nothing but are off by default): dhole_doc(topic='behavior', section='smart_search')."},
+                    "engines": {"type": "array", "items": {"type": "string"}, "description": "Narrow the pool, max 9 names. The selectable names are exactly the 8 engines above, plus the keyed engines that need an API key (dhole_doc(topic='behavior', section='smart_search'))."},
                     "site": {"type": "string", "description": "Restrict to one domain."},
                     "exclude_sites": {"type": "array", "items": {"type": "string"}, "description": "Drop results from these domains."},
                     "location": {"type": "string", "description": "ISO country code ('US'), optionally with a region suffix ('US-CN'). Anything else is refused rather than guessed at."},

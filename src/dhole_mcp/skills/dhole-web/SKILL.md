@@ -76,7 +76,7 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 - Continue truncated reads with `next_offset` instead of raising `max_content_chars` and re-fetching (cap 200000).
 - Fetch `fetch_relevance: high` results first; judge "whole round irrelevant" with `min_raw_relevance` (start at 0.1), not `min_relevance`.
 - First search of a session showing `rerank_mode=merge` = the rerank model is still loading; one retry restores `neural`.
-- Name vertical engines for vertical content: WeChat articles `sogou_weixin`, encyclopedias `wikipedia` / `baidu_baike`, international `bing_global` / `brave` / `duckduckgo` (max 9 engines per search).
+- Narrow the pool when a slice of the web is what you want: international index `bing_global` / `brave` / `duckduckgo`, domestic `baidu` / `sogou` / `so360` (max 9 names per search).
 - Batch known URLs with `smart_fetch`'s `urls=[...]` instead of serial single calls.
 - Map a site before crawling it (`sitemap=true` is one request); don't max out `max_pages` blindly.
 - Repeated fetches hit cache (1h; docs auto-raised to 24h, article 6h); pass `cache_ttl=0` only when freshness matters.
@@ -87,7 +87,7 @@ These signals mean **a problem is happening that the user likely doesn't see**. 
 
 | Signal in the response | What it means | What to do |
 |---|---|---|
-| `engines_consensus: 1 of 5`, sparse results, a long `engine_empty` / `engine_preempted` list | Search pool degraded (rate-limited / blocked / cooling / silent) | Retry once as-is; then `dhole engines probe` to see who's alive and re-search naming live engines; recurring → suggest a search proxy |
+| `engines_consensus: 1 of 6`, sparse results, a long `engine_empty` / `engine_preempted` list | Search pool degraded (rate-limited / blocked / cooling / silent) | Retry once as-is; then `dhole engines probe` to see who's alive and re-search naming live engines; recurring → suggest a search proxy |
 | Whole round empty, `fetch_hint` reports error | Entire pool cooling | `dhole engines list` for remaining seconds; if urgent `cache_clear(engine_state=true)` or `dhole engines reset`, and tell the user engines were rate-limited |
 | `content_ok=true` but only a few hundred chars | Shell/placeholder page | Retry once with `force_fetcher='stealthy'`; if still thin, tell the user it's login-walled or unbeatable — never answer from the shell |
 | `error=robots_disallowed` | Site's robots.txt forbids it | Explain this is default compliance and zero requests were sent; ask before a one-shot `ignore_robots=true` — it's the user's compliance call |
@@ -121,7 +121,7 @@ These signals mean **a problem is happening that the user likely doesn't see**. 
 **Single-call** behavior = call parameters (no config, no restart). **Process-wide** = env vars in the `dhole` server's `env` block in the host's MCP config, **then restart the host**. Full scenario-indexed reference: `references/configuration.md`. The frequent few:
 
 - `DHOLE_SEARCH_PROXY` — search engines blocked/rate-limited (also auto-reads `HTTPS_PROXY` etc.; search layer only — fetch layer uses `proxy`)
-- `DHOLE_DEFAULT_ENGINES` — swap the default pool (default `baidu,bing,sogou,bing_global,yandex,brave`)
+- `DHOLE_DEFAULT_ENGINES` — swap the default pool (default `baidu,bing,sogou,so360,bing_global,yandex,brave,duckduckgo`)
 - 17.0 deleted the old on/off switches (tool groups, multimodal, neural-focus license, wire shape, cooldown tuning, self-update): those capabilities are default-on or fixed, and a stale `DHOLE_…` in the env block does nothing — `--doctor` names what a host still sets that no longer has any effect
 
 CLI: `dhole -v` capability panel · `--doctor` the 12-item install check (audits env AND `~/.dhole/config.json`, then really searches and really fetches once — warn the user, it sends traffic) · `config list|set|unset` persisted knobs · `engines list|probe|reset` engine health · `skill install|status` sync the bundled agent skill (re-run `dhole skill install --force` after upgrading dhole to pick up skill updates).

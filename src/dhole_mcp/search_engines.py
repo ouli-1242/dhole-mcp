@@ -7,12 +7,14 @@ thin dhole-side adapter: maps dhole's smart_search params (engines, freshness,
 site, region, page) onto the metasearch, maps results back to RawResult with
 cross-backend consensus, and builds the per-engine reports.
 
-Backends (all keyless, 14 in the registry): baidu, bing, bing_global, yandex, brave,
-duckduckgo, yahoo, sogou_weixin, sogou, so360, baidu_baike, mwmbl, wikipedia,
-grokipedia. The default pool is DEFAULT_ENGINES below (6: domestic baidu/bing/sogou +
-international bing_global/yandex/brave; baidu first - reachable from CN without a VPN
-and an independent index). wikipedia / grokipedia / baidu_baike are knowledge bases and
-opt-in only; so are so360 / sogou_weixin / mwmbl / duckduckgo / yahoo.
+Backends (all keyless, 8 in the registry, **all 8 in the default pool**): baidu,
+bing, sogou, so360, bing_global, yandex, brave, duckduckgo. No engine is opt-in —
+the pool is the registry, so `engines=` only narrows it, never widens it past a
+name that exists.
+17.0 dropped 6 backends and with them two capabilities the reader may miss:
+**微信公众号文章的检索**（sogou_weixin 是唯一的公众号索引，Bing/百度都搜不全这个池子）
+和**知识库直查**（wikipedia / grokipedia / baidu_baike 的 JSON/词条入口；通用引擎仍能搜到
+这些站点，只是不再把词条当成结构化答案）。yahoo/mwmbl 是覆盖面窄的补充索引。
 Engines run in PARALLEL; one that CAPTCHAs / rate-limits /
 has no topic-match just yields nothing and the others carry. Search is 100%
 HTTP (no browser) - the single Patchright browser stays for smart_fetch only.
@@ -49,55 +51,40 @@ def _get_metasearch():
 
 # Public default engine pool (order = rough preference). `engines=None` in
 # smart_search uses this via the metasearch.
-# 组合：国内 3（baidu/bing/sogou）+ 国际 3（bing_global/yandex/brave）。
+# 组合：国内 4（baidu/bing/sogou/so360）+ 国际 4（bing_global/yandex/brave/duckduckgo），
+# 8 家全部入池 —— 17.0 之后没有 opt-in 引擎，注册表就是默认池。
 # baidu 排首位：国内直连、独立索引（百度自家索引，非 bing/google 代理），实测无反爬。
-# bing 走 cn.bing.com，同样无需 VPN；sogou 是第三家国内独立索引（服务端渲染，直连可达）。
+# bing 走 cn.bing.com，同样无需 VPN；sogou/so360 是另外两家国内独立索引（服务端渲染）。
 # bing_global 是 www.bing.com 那套国际索引：与 cn 版结果几乎不重合，所以它补的是**覆盖面**
 # 而不是家族数（家族按底层索引归，两者同属 bing）。国内直连常需代理，被墙时由引擎冷却
 # （连续 3 次连接失败 → 冷却 10 分钟）兜住，不会每轮陪跑。
-# 共识家族：6 引擎 / 5 家族（baidu、bing+bing_global、sogou、yandex、brave）—— 渲染出来
-# 是 "x of 5"。旧的 baidu/bing/yandex/brave/ddg/yahoo 是 6 引擎 / 4 家族：让出的 ddg、
-# yahoo 都是 bing 家族的第二、三入口（家族数不变），所以占这一席的必须是独立索引
-# （16.1 前是 so360，现在是 sogou —— 两家同生态位，见下）。
-# 不在默认池（显式 engines=[...] 才跑）：duckduckgo/yahoo（bing 家族的另两个入口，且
-# ddg 国内直连常不通）、baidu_baike（百科条目，知识库覆盖窄）、wikipedia/grokipedia
-# （JSON 知识库）、sogou_weixin（微信公众号垂直索引）、so360（国内独立索引，与 sogou
-# 同生态位，两家都按 IP 限流，默认池只留一家）、mwmbl（社区小型独立索引，覆盖窄）。
+# 共识家族：**8 引擎 / 6 家族**（baidu、bing+bing_global+duckduckgo、sogou、so360、
+# yandex、brave），渲染出来是 "x of 6"。分母是**写死的 6**，不是 len(池子)：一个 URL
+# 出现在几家引擎里取决于覆盖面重叠，池子增减时家族数不变，所以分母跟着家族走而不是引擎走。
 # NOTE 双份定义：search_metasearch._DEFAULT_BACKENDS 是同一份列表的 backend 名
 # 版本。合成一处需要 search_engines 在模块顶层 import metasearch 链（primp/lxml），
 # 而这里的惰性导入正是为了避免拖重依赖 —— 所以留两份 + 由
 # tests/test_engine_registry.py::test_default_pool_definitions_agree 钉住一致性。
-DEFAULT_ENGINES = ("baidu", "bing", "sogou", "bing_global", "yandex", "brave")
+DEFAULT_ENGINES = ("baidu", "bing", "sogou", "so360",
+                   "bing_global", "yandex", "brave", "duckduckgo")
 
 # 国内裸网可达的引擎（其余要 VPN/代理）。只用于 `dhole -v` 那行说明与文档措辞 ——
 # 网络可达性是环境问题（实测 brave 有时直连也通），所以别把它当抓取策略用。
-# so360 已不在默认池，但点名时仍是直连可达的那一家，所以留在这里。
 _CN_DIRECT = frozenset({"baidu", "bing", "so360", "sogou", "yandex"})
 
 # Index family per backend (by the underlying index/provider, for consensus).
-# A URL returned by duckduckgo AND yahoo is ONE family (both Bing's index);
+# A URL returned by duckduckgo AND bing is ONE family (both Bing's index);
 # returned by duckduckgo AND brave is TWO families = a stronger authority signal.
 _INDEX_FAMILY = {
-    "duckduckgo": "bing", "yahoo": "bing", "bing": "bing",
+    "duckduckgo": "bing", "bing": "bing",
     # bing_global 是 bing 的国际索引：同一家族的第二个入口。家族按**底层索引**归，
     # 不按入口归 —— 与 bing 同源的 URL 同时出现在两边时必须算一个家族。
     "bing_global": "bing",
-    "brave": "brave", "grokipedia": "grokipedia", "wikipedia": "wikipedia",
-    "mwmbl": "mwmbl",
+    "brave": "brave",
     "yandex": "yandex",
-    # 搜狗两家同一个家族：sogou_weixin（公众号垂直）与 sogou（通用网页）都是搜狗的
-    # 索引，同一 URL 同时出现在两边时只算一个家族 —— 家族标错只允许往"少报共识"
-    # 的方向错，不许虚报。
-    "sogou_weixin": "sogou", "sogou": "sogou",
-    "baidu": "baidu", "baidu_baike": "baidu_baike", "so360": "so360",
+    "sogou": "sogou",
+    "baidu": "baidu", "so360": "so360",
 }
-
-# 垂直索引：只覆盖某一类内容（sogou_weixin = 微信公众号文章），不是通用网络索引。
-# 唯一的用处是**没有相关性模型时的兜底排序**（见 search._rank）：那时先验只能是
-# "覆盖面"，通用索引对任意查询都更可能相关。而垂直索引往往响应最快，纯按完成顺序
-# 会把它的结果顶到最前 —— 实测 sogou 0.2-0.9s，bing 1.3s、yandex 3.1s。
-# 新增垂直引擎必须登记在这里，否则它在无重排器时享受通用索引的先验。
-_VERTICAL_BACKENDS = frozenset({"sogou_weixin"})
 
 _FRESHNESS_TO_TIMELIMIT = {"day": "d", "week": "w", "month": "m", "year": "y"}
 
@@ -111,7 +98,6 @@ _DATE_AWARE_ENGINES = frozenset({
     "bing", "bing_global",     # filters=ex1:"ez{d|w|m|y}"
     "brave",                   # tf=p{d|w|m|y}
     "duckduckgo",              # df={d|w|m|y}
-    "yahoo",                   # btf={d|w|m|y}
     "bocha",                   # keyed: freshness=oneWeek
     "tavily",                  # keyed: time_range=week
 })

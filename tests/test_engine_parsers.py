@@ -44,12 +44,6 @@ CONTRACTS = [
     Contract("bing", "bing_variant_b.html", "li[class*='b_algo']",
              must_not_start=("https://www.bing.com/ck/a",)),
     Contract("yandex", "yandex.html", "li[class*='serp-item']"),
-    # sogou_weixin 的结果 href **就是**搜狗的 /link?url=... 跳转包装（那个 token 要在
-    # 浏览器里换真链，离线解不开），所以这里锁的是"不许留下相对路径"——绝对化是它在
-    # extract_results 里唯一的后处理，漏了它浏览器打不开结果。
-    Contract("sogou_weixin", "sogou_weixin.html",
-             "ul[class*='news-list'] li:has(div.txt-box)",
-             must_not_start=("/link?",)),
     # baidu 的结果 href 是 baidu.com/link?url=<token> 包装，真链在容器的 mu 属性里。
     # 这条锁的就是"交出去的 href 不许是自家跳转包装"（浏览器打开会过期/带 token）。
     Contract("baidu", "baidu_variant_a.html", "div.result.c-container",
@@ -59,10 +53,7 @@ CONTRACTS = [
     Contract("baidu", "baidu_variant_b.html", "div.c-result",
              must_not_start=("http://www.baidu.com/link", "https://www.baidu.com/link",
                              "http://m.baidu.com", "https://m.baidu.com")),
-    # 百科是**单条目**引擎：容器是首段摘要（lemmaSummary），标题取页面 h1、URL 取
-    # 页面自己的 canonical —— 两者都不在摘要容器里，这条同时把那个取法钉住。
-    Contract("baidu_baike", "baidu_baike.html", "div[class*='lemmaSummary']"),
-    # 国内 opt-in 两家。真链都在 data-* 属性里（so.com/link?m= 与 sogou /link?url= 都是
+    # 国内两家。真链都在 data-* 属性里（so.com/link?m= 与 sogou /link?url= 都是
     # 会过期的跳转包装），所以 must_not_start 锁的是"不许把包装当成结果 URL 交出去"。
     Contract("so360", "so360.html", "li.res-list:has([data-mdurl])",
              must_not_start=("https://www.so.com/link", "http://www.so.com/link")),
@@ -269,25 +260,25 @@ class TestFixtureAntiRot:
         assert not offenders, f"fixture 里残留疑似凭据参数: {offenders}"
 
 
-class TestBaiduChallengePagesAreBlocks:
-    """实测形态：被百度限流时回的是 **200 + 几 KB 的校验页**（搜索页 1.4KB、条目页
-    4.4KB「安全校验中…」），静态正文里没有结果也没有条目。它必须记成 blocked（进
+class TestChallengePagesAreBlocks:
+    """实测形态：被限流时回的是 **200 + 几 KB 的校验页**（百度搜索页 1.4KB、360 的
+    「访问异常」页同理），静态正文里没有结果也没有条目。它必须记成 blocked（进
     熔断冷却），不能以 0 条结果的形态混进 engine_empty —— 那会被读成"没有结果"。
     """
 
-    SHELL = ("<html><head><title>百度百科</title></head><body>"
-             "<div>百度百科</div><div>安全校验中…</div></body></html>")
+    SHELL = ("<html><head><title>360搜索</title></head><body>"
+             "<div>访问异常</div><div>安全校验中…</div></body></html>")
     BAIDU_SHELL = ("<html><head><title>百度安全验证</title></head><body>"
                    "<p>请完成安全验证后继续访问</p></body></html>")
 
     def test_challenge_page_raises_blocked(self, monkeypatch):
         from dhole_mcp.search_metasearch import MetaBlockedException
 
-        eng = _engine("baidu_baike")
+        eng = _engine("so360")
         monkeypatch.setattr(eng, "request", lambda *a, **k: self.SHELL)
         with pytest.raises(MetaBlockedException) as exc:
             eng.search("人工智能")
-        assert "校验" in str(exc.value) and "baidu_baike" in str(exc.value)
+        assert "校验" in str(exc.value) and "so360" in str(exc.value)
 
     def test_large_page_mentioning_security_is_not_a_challenge(self):
         """体积闸门：正常页面内嵌的脚本里也写着"安全校验"，只按关键字匹配会把真页面
@@ -328,22 +319,6 @@ class TestBaiduChallengePagesAreBlocks:
         rows = eng.search("python")
         assert rows, "重试拿到真页面后必须交出结果"
         assert all(r.href.startswith(("http://", "https://")) for r in rows)
-
-    def test_real_entry_page_yields_the_entry(self, monkeypatch):
-        """真页面裁剪件上的正路：1 条结果，标题=条目名，URL=页面 canonical。"""
-        eng = _engine("baidu_baike")
-        monkeypatch.setattr(eng, "request", lambda *a, **k:
-                            (FIXTURE_DIR / "baidu_baike.html").read_text(encoding="utf-8"))
-        rows = eng.search("人工智能")
-        assert len(rows) == 1
-        assert rows[0].title == "人工智能"
-        assert rows[0].href.startswith("https://baike.baidu.com/item/")
-        assert rows[0].body
-
-    def test_second_page_is_empty_not_a_refetch(self):
-        """单条目引擎没有第二页：page>1 直接空，不打网络。"""
-        assert _engine("baidu_baike").search("人工智能", page=2) == []
-
 
 class TestResultHrefHygiene:
     """从 data-* 属性里取目标 URL 的卫生规则（360 那个坑是实测出来的）：
@@ -431,55 +406,6 @@ class TestChallengeStatusesAreBlocks:
             eng = self._engine(cls_name, 429)
             with pytest.raises(MetaBlockedException):
                 eng.request("GET", "https://example.test/search")
-
-
-class TestMwmblJsonApi:
-    """MWMBL 是 JSON API（没有 HTML 页面），所以不吃 CONTRACTS 那套 html fixture 契约；
-    但它有一个真踩过的坑要用真形状钉住：title 与 extract **都是** ``[{value,is_bold}]``
-    分词数组（高亮词把标题/摘要切成多段）。只 join 字符串元素的话摘要会静默全空，
-    而 usable 只看 title+href —— 整条结果照样"可用"，坏得无声无息。
-    """
-
-    PAYLOAD = [
-        {"url": "https://github.com/python/asyncio/stargazers", "source": "mwmbl",
-         "title": [{"value": "Stargazers · ", "is_bold": False},
-                   {"value": "python", "is_bold": True},
-                   {"value": "/", "is_bold": False},
-                   {"value": "asyncio", "is_bold": True},
-                   {"value": " · GitHub", "is_bold": False}],
-         "extract": [{"value": " Saved searches Use saved searches ", "is_bold": False},
-                     {"value": "asyncio", "is_bold": True},
-                     {"value": " to filter results", "is_bold": False}]},
-        {"url": "http://leanpub.com/asyncio", "source": "mwmbl",
-         "title": [{"value": "asyncio", "is_bold": True},
-                   {"value": " from ground up", "is_bold": False}],
-         "extract": []},
-    ]
-
-    def test_segments_are_joined_not_dropped(self):
-        eng = _engine("mwmbl")
-        rows = eng.extract_results(json.dumps(self.PAYLOAD))
-        assert [r.href for r in rows] == [i["url"] for i in self.PAYLOAD]
-        assert rows[0].title == "Stargazers · python/asyncio · GitHub"
-        assert rows[0].body == "Saved searches Use saved searches asyncio to filter results"
-        assert eng.last_extract == (2, 2), (
-            "JSON 引擎也要自己记产出 —— 否则'解析出 0 条'在产出面板里永远是没观测")
-
-    def test_plain_string_fields_still_work(self):
-        """保险带：API 若把 title/extract 变回字符串，别把整条结果读成空。"""
-        eng = _engine("mwmbl")
-        rows = eng.extract_results(json.dumps(
-            [{"url": "https://a.test/x", "title": "Plain Title", "extract": "plain body"}]))
-        assert (rows[0].title, rows[0].body) == ("Plain Title", "plain body")
-
-    def test_second_page_is_empty_not_a_refetch(self, monkeypatch):
-        eng = _engine("mwmbl")
-
-        def boom(*a, **k):
-            raise AssertionError("API 没有翻页：page>1 不该打网络")
-
-        monkeypatch.setattr(eng, "request", boom)
-        assert eng.search("python", page=2) == []
 
 
 class TestBingGlobalReusesTheCnParser:

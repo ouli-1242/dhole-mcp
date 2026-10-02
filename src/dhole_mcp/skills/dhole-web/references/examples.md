@@ -141,7 +141,7 @@ The same key exists on `smart_crawl`, where it matters more: the semantic path c
 
 **Vertical + dated + threshold + pull full text** (`before` does not exist; `after` is widened to a day/week/month/year preset — read `date_filter.note`; `fetch_content` also fetches the top 3 results' full text):
 ```json
-{"query": "MCP streamable HTTP spec", "engines": ["bing", "sogou_weixin"], "after": "2026-09-01", "min_raw_relevance": 0.1, "fetch_content": true}
+{"query": "MCP streamable HTTP spec", "engines": ["bing", "so360"], "after": "2026-09-01", "min_raw_relevance": 0.1, "fetch_content": true}
 ```
 
 When searching without fetching: rank by `relevance_score` / `fetch_relevance` (high first), and treat `engines_consensus: 1 of N` as unverified — `smart_fetch` before citing.

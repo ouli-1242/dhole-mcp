@@ -10,7 +10,7 @@ Ground rule: **read the response fields before acting**. Every failure names its
 2. Retry once as-is (transient jitter is common)
 3. Still thin: CLI `dhole engines list` for each engine's verdict and remaining cooldown; `dhole engines probe` for one real query per engine (hits / latency / block reason)
 4. Fix:
-   - Per-call: re-search naming live engines (`engines=["baidu","bing","sogou"]` or a usable opt-in)
+   - Per-call: re-search naming live engines (`engines=["baidu","bing","so360"]`)
    - Urgent: `dhole engines reset` or `cache_clear(engine_state=true)` to clear cooldowns now
    - Process-wide (only if recurring): a different egress via `DHOLE_SEARCH_PROXY` (one URL; `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` are picked up when it is unset), or a keyed backend as fallback
 5. Tell the user: "Search engines were rate-limiting me; I re-searched via X. If this keeps happening we can add a search proxy."

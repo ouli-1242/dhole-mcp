@@ -64,7 +64,7 @@ independent oracle (bs4 + `html.parser`, a different parser and query language
 from the lxml/XPath under test) so the test can't just agree with itself.
 
 Fixtures go stale when an engine redesigns. To re-capture or diff them (needs the
-network, and for duckduckgo/brave/yahoo a VPN on a CN connection):
+network, and for duckduckgo/brave a VPN on a CN connection):
 
 ```bash
 python -m pytest -m live --engine-fixtures=capture tests/test_engine_fixtures_live.py -rs

@@ -211,7 +211,15 @@ def _engine_yield_row() -> tuple[str, str, bool] | None:
 
         parts: list[str] = []
         suspect = False
+        # 只印还存在的引擎。engine_stats.json 是历史累加，17.0 删掉的 6 家后端
+        # 在里面仍各有一条 —— 点名一个已经不存在的引擎，用户会去 `engines=` 里
+        # 指它，然后收到一句看起来像我们坏了的 invalid_request。
+        from dhole_mcp.search_engines import _INDEX_FAMILY
+        known = set(_INDEX_FAMILY)
+        retired = [n for n in sorted(stats) if n not in known]
         for name in sorted(stats):
+            if name not in known:
+                continue
             st = stats[name]
             if not isinstance(st, dict):
                 continue
@@ -242,6 +250,8 @@ def _engine_yield_row() -> tuple[str, str, bool] | None:
                              else f"{name}: 0 this query")
             else:
                 parts.append(f"{name}: {usable} usable ({mean:.1f}/run avg)")
+        if retired:
+            parts.append(f"(+{len(retired)} record(s) from backends 17.0 deleted)")
         if not parts:
             return None
         return ("engine yield", " | ".join(parts), not suspect)
@@ -282,8 +292,10 @@ def _engine_cooldowns() -> dict[str, float]:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         now_ts = time.time()
+        from dhole_mcp.search_engines import _INDEX_FAMILY
+        known = set(_INDEX_FAMILY)
         return {k: round(v - now_ts, 1) for k, v in data.items()
-                if isinstance(v, (int, float)) and v > now_ts}
+                if k in known and isinstance(v, (int, float)) and v > now_ts}
     except Exception:
         return {}
 

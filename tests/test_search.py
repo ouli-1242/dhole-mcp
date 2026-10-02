@@ -311,13 +311,13 @@ class TestMultiSearchMapping:
 
     @pytest.mark.asyncio
     async def test_consensus_same_index_family(self, monkeypatch):
-        # DDG and Yahoo both use Bing's index -> consensus = 1
+        # DDG and bing both use Bing's index -> consensus = 1
         fake_results = [
             {"title": "A", "href": "https://example.com", "body": "b",
-             "backend": "duckduckgo", "backends": ["duckduckgo", "yahoo"]},
+             "backend": "duckduckgo", "backends": ["duckduckgo", "bing"]},
         ]
         async def fake_metasearch(q, n, **kw):
-            return fake_results, {"duckduckgo": "ok", "yahoo": "ok"}
+            return fake_results, {"duckduckgo": "ok", "bing": "ok"}
         monkeypatch.setattr(se, "_metasearch", fake_metasearch)
 
         ranked, _ = await multi_search("test", 6)
@@ -390,8 +390,9 @@ class TestEngineConfig:
     家族，否则共识会虚高。"""
 
     def test_index_family_mapping(self):
-        # DDG and Yahoo share Bing's index
-        assert _INDEX_FAMILY["duckduckgo"] == _INDEX_FAMILY["yahoo"] == "bing"
+        # DDG 与 bing/bing_global 共用 Bing 的索引（8 引擎只算 6 家族的原因）
+        assert (_INDEX_FAMILY["duckduckgo"] == _INDEX_FAMILY["bing_global"]
+                == _INDEX_FAMILY["bing"] == "bing")
         # Brave has its own independent index
         assert _INDEX_FAMILY["brave"] == "brave"
         # Yandex has its own independent index
@@ -655,7 +656,7 @@ class TestIrrelevantFilter:
 class TestFamilyUniverse:
 
     def test_default_pool_all_healthy_is_every_family(self):
-        # 分母 = 池中独立索引家族数，不是引擎数（bing/ddg/yahoo 共用一个索引）。
+        # 分母 = 池中独立索引家族数，不是引擎数（bing/ddg/bing_global 共用一个索引）。
         # 具体几个由 test_engine_registry 钉住；这里钉的是"全员健康 = 满分"。
         reports = [EngineReport(name=n, ok=True) for n in se.DEFAULT_ENGINES]
         m, c, basis = search._family_universe(None, reports)
@@ -1064,12 +1065,12 @@ class TestRerankFallbackNote:
         assert used == "neural" and note == ""
 
 
-class TestVerticalEnginesLoseTheTieBreakWithoutAReranker:
-    """没有相关性模型时的兜底顺序：垂直索引不能靠"答得快"顶到最前。
+class TestNeuralOrderIsAuthoritative:
+    """兜底顺序（完成顺序）只在没有重排器时成立 —— 模型在场就不介入。
 
-    sogou_weixin 实测 0.2-0.9s 返回，bing 1.3s、yandex 3.1s —— 兜底排序就是完成
-    顺序，于是通用索引还没答完，公众号结果已经占了前几名。有神经重排时不介入
-    （判相关性是它的活，覆盖面前验只在没有模型时才成立）。
+    17.0 前这里还有一组"垂直索引靠 0.2s 响应速度霸榜要往后降"的用例，垂直引擎
+    （sogou_weixin）随 §3-23 一起删了，降档规则本身也一起删；留着的是它的边界：
+    有神经相关性判定时，位置先验不许覆盖模型顺序。
     """
 
     @staticmethod
@@ -1078,31 +1079,14 @@ class TestVerticalEnginesLoseTheTieBreakWithoutAReranker:
                           source=s[0], sources=tuple(s), position=i + 1)
                 for i, s in enumerate(sources)]
 
-    def test_vertical_only_results_go_last(self, monkeypatch):
-        monkeypatch.setattr(search, "neural_rerank",
-                            lambda q, r, **kw: None)
-        raw = self._raw(("sogou_weixin",), ("bing",), ("sogou_weixin",), ("yandex",))
-        ranked, scores, used, _ = search._rank("q", raw, "auto")
-        assert used == "merge"
-        assert [r.source for r in ranked] == ["bing", "yandex", "sogou_weixin", "sogou_weixin"]
-        assert scores[0] > scores[-1], "分数要按最终顺序给，不能留一个分数更高的头名"
-
-    def test_corroborated_by_a_general_engine_is_not_vertical(self, monkeypatch):
-        """同一个 URL 被 bing 也返回过 = 有通用索引佐证，不当垂直结果降级。"""
-        monkeypatch.setattr(search, "neural_rerank",
-                            lambda q, r, **kw: None)
-        raw = self._raw(("sogou_weixin", "bing"), ("bing",))
-        ranked, _, _, _ = search._rank("q", raw, "auto")
-        assert [r.source for r in ranked] == ["sogou_weixin", "bing"]
-
     def test_neural_order_is_not_touched(self, monkeypatch):
         """重排器在场时这条规则不介入 —— 相关性由模型判，不是覆盖面先验。"""
-        raw = self._raw(("sogou_weixin",), ("bing",))
+        raw = self._raw(("so360",), ("bing",))
         monkeypatch.setattr(search, "neural_rerank",
                             lambda q, r, **kw: [(r[1], 0.9), (r[0], 0.1)])
         ranked, _, used, _ = search._rank("q", raw, "auto")
         assert used == "neural"
-        assert [r.source for r in ranked] == ["bing", "sogou_weixin"]
+        assert [r.source for r in ranked] == ["bing", "so360"]
 
 
 class TestQueryMapNamesAreReal:
@@ -1124,15 +1108,12 @@ class TestQueryMapNamesAreReal:
         intent = search._detect_intent("transformer attention mechanism research")
         assert intent == "research"
         q = "transformer attention mechanism research"
-        # duckduckgo / yahoo 自 15.2 起不在默认池，显式加回来：钉的是它们的归类。
-        # so360 自 16.1 起同理（席位换给了同生态位的 sogou）。
-        qm = search._generate_query_map(
-            q, intent, [*se.DEFAULT_ENGINES, "duckduckgo", "yahoo", "so360"])
+        qm = search._generate_query_map(q, intent, list(se.DEFAULT_ENGINES))
         assert qm, "research 意图应当展开"
         assert qm["bing"] == q, "bing 在默认池里，不该是被改写提问的那一个"
         assert qm["sogou"] == q, "sogou 是中文索引，英文展开词只会让它搜不到东西"
         assert qm["so360"] == q, "换下席位的 so360 归类不变：同样是中文索引"
-        assert qm["duckduckgo"] == q and qm["brave"] == q and qm["yahoo"] == q
+        assert qm["duckduckgo"] == q and qm["brave"] == q
         assert qm["yandex"] != q, "yandex 才是指定的多样性引擎"
         # bing_global 也是多样性引擎：国际索引正该拿英文展开词
         assert qm["bing_global"] != q
@@ -1144,24 +1125,10 @@ class TestQueryMapNamesAreReal:
         qm = search._generate_query_map(q, intent, list(se.DEFAULT_ENGINES))
         assert set(qm) == set(se.DEFAULT_ENGINES)
 
-    def test_sogou_weixin_keeps_the_original_query(self):
-        """展开词只有两串英文（paper arxiv... / specifications...），对几乎全中文的
-        公众号索引只有反作用 —— 它必须留在核心集合里拿原始 query。
-
-        sogou_weixin 自 15.0 起不在默认池（垂直索引，opt-in），所以这里显式把它
-        加回列表：钉的是它的分类，不是它在池里。
-        """
+    def test_chinese_indexes_keep_the_original_query(self):
+        """baidu / sogou / so360 是中文索引占优 —— 英文展开词等于换了一个查询。"""
         intent = search._detect_intent("transformer attention mechanism research")
         q = "transformer attention mechanism research"
-        qm = search._generate_query_map(q, intent, [*se.DEFAULT_ENGINES, "sogou_weixin"])
-        assert qm, "research 意图应当展开（否则这条测试什么也没测到）"
-        assert qm["sogou_weixin"] == q
-
-    def test_baidu_engines_keep_the_original_query(self):
-        """baidu 是中文索引占优；baidu_baike 拿 query 当条目名查（/item/{query}），
-        追加英文展开词等于查一个不存在的条目名。"""
-        intent = search._detect_intent("transformer attention mechanism research")
-        q = "transformer attention mechanism research"
-        qm = search._generate_query_map(q, intent, ["baidu", "baidu_baike", "yandex"])
+        qm = search._generate_query_map(q, intent, ["baidu", "sogou", "so360", "yandex"])
         assert qm and qm["yandex"] != q, "对照组：yandex 才是被改写的那一个"
-        assert qm["baidu"] == q and qm["baidu_baike"] == q
+        assert qm["baidu"] == q and qm["sogou"] == q and qm["so360"] == q

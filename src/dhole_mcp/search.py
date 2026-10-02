@@ -1,8 +1,8 @@
 """Dhole local web search (v7 flagship: keyless, no-account, fully local).
 
-Scrapes public search engines (default pool: baidu, bing, sogou, bing_global,
-yandex, brave; opt-in: baidu_baike, duckduckgo, mwmbl, so360,
-sogou_weixin, wikipedia, grokipedia, yahoo) via the dhole-native
+Scrapes public search engines (default pool = the whole registry: baidu, bing,
+sogou, so360, bing_global, yandex, brave, duckduckgo - 8 keyless engines, none
+opt-in) via the dhole-native
 engine layer in search_engines.py - no third-party API, no key, no
 account. Results are merged across engines, deduped by normalized URL, and
 ranked. Merging INDEPENDENT indexes gives a free authority signal: a URL
@@ -34,7 +34,7 @@ from dhole_mcp.cache import get_cached, set_cached
 from dhole_mcp.security import validate_search_query, validate_url, redact_api_key, SecurityError
 from dhole_mcp.search_engines import (
     RawResult, multi_search, EngineReport, DEFAULT_ENGINES,
-    fetch_source_for_similar, _INDEX_FAMILY, _VERTICAL_BACKENDS, date_support,
+    fetch_source_for_similar, _INDEX_FAMILY, date_support,
 )
 from dhole_mcp.search_metasearch import schedule_engine_heartbeat
 
@@ -232,11 +232,11 @@ class SearchResult(BaseModel):
     title: str = Field(description="Result title")
     url: str = Field(description="Result URL")
     snippet: str = Field(default="", description="Result snippet from the engine")
-    source: str = Field(default="", description="Backend(s) that returned this result (baidu/bing/bing_global/sogou/baidu_baike/so360/brave/yandex/duckduckgo/yahoo/mwmbl/wikipedia/grokipedia). Multiple = cross-backend consensus. sogou_weixin hits are weixin.sogou.com /link wrappers, not canonical article URLs.")
+    source: str = Field(default="", description="Backend(s) that returned this result (baidu/bing/bing_global/brave/duckduckgo/so360/sogou/yandex). Multiple = cross-backend consensus.")
     position: int = Field(default=0, description="1-indexed rank after merge + rerank")
     relevance_score: float = Field(default=0.0, description="0.0-1.0 relevance to the query (neural cross-encoder score in neural mode, min-max normalized), boosted by cross-backend consensus. 1.0 = most relevant in this set.")
     fetch_relevance: str = Field(default="", description="high|med|low - relative relevance hint. smart_fetch what matches your need; the tiers rank results but a lower tier can be the right one - use your judgment.")
-    engines_consensus: str = Field(default="", description="How many independent index families returned this URL over how many could have (e.g. '2 of 5'; the default 6-engine pool is 5 families since bing and bing_global share one index). '1 of 1 (no corroboration)' means a single family contributed at all - that is a degraded or tiny pool, NOT agreement. A free authority signal only when the denominator is >1.")
+    engines_consensus: str = Field(default="", description="How many independent index families returned this URL over how many could have (e.g. '2 of 6'; the default 8-engine pool is 6 families since bing, bing_global and duckduckgo all sit on the Bing index). '1 of 1 (no corroboration)' means a single family contributed at all - that is a degraded or tiny pool, NOT agreement. A free authority signal only when the denominator is >1.")
     source_type: str = Field(default="", description="Source type from URL pattern: docs|paper|repo|blog|forum|reference|news|other. Helps pick the right source.")
 
 
@@ -761,23 +761,9 @@ def _rank(query: str, ranked: list[RawResult], mode: str, min_relevance: float =
     # Fallback (lean install / model missing): no lexical rerank. Score by position
     # so tiers derive sensibly; the caller's consensus boost adds the authority
     # signal on top.
-    # 顺序先按"覆盖面"分层：垂直索引（只覆盖某一类内容，如 sogou_weixin 的公众号）
-    # 排到通用网络索引之后。没有相关性模型可问时，唯一能用的先验是"通用索引对任意
-    # 查询都更可能相关"；而垂直索引响应最快（实测 0.2-0.9s vs bing 1.3s/yandex 3.1s），
-    # 纯按完成顺序会把它的结果顶到最前。被通用引擎也返回过的 URL 不算垂直（有佐证）。
-    ranked = _general_first(ranked)
     n = len(ranked)
     scores = [1.0 - (i / max(n, 1)) for i in range(n)]
     return list(ranked), scores, "merge", note
-
-
-def _general_first(ranked: list[RawResult]) -> list[RawResult]:
-    """稳定分层：非垂直（或与通用引擎共识）的结果在前，纯垂直结果在后。"""
-    def _vertical_only(r: RawResult) -> bool:
-        srcs = tuple(r.sources) if r.sources else ((r.source,) if r.source else ())
-        return bool(srcs) and all(s in _VERTICAL_BACKENDS for s in srcs)
-
-    return [r for r in ranked if not _vertical_only(r)] + [r for r in ranked if _vertical_only(r)]
 
 
 def _family_universe(engines: Optional[list[str]],
@@ -1062,8 +1048,8 @@ def _expand_query(query: str, intent: str) -> str:
     return query + " " + " ".join(new_terms)
 
 
-_CORE_QUERY_ENGINES = frozenset({"baidu", "bing", "duckduckgo", "brave", "yahoo",
-                                 "baidu_baike", "sogou_weixin", "sogou", "so360"})
+_CORE_QUERY_ENGINES = frozenset({"baidu", "bing", "duckduckgo", "brave",
+                                 "sogou", "so360"})
 """这些引擎拿**原始** query，其余拿展开后的变体。
 
 原先这个集合写的是 {duckduckgo, brave, mojeek, yahoo}：mojeek 从来没在本项目里存在过
@@ -1071,14 +1057,10 @@ _CORE_QUERY_ENGINES = frozenset({"baidu", "bing", "duckduckgo", "brave", "yahoo"
 免 VPN 的两个入口之一，却因为不在集合里而成了**唯一被改写提问**的默认引擎。集合是手
 工维护的、引擎列表改了它不会跟着改 —— 这是本仓库第三次踩同一类"两处定义漂移"。
 
-sogou_weixin 也在核心集合里：_INTENT_EXPANSIONS 只有两串**英文**词（" paper arxiv
-benchmark results" / " specifications table data parameters"），而它的索引几乎全是
-中文公众号文章 —— 把英文术语追加进去只会让它更搜不到东西。
-
-baidu / baidu_baike 同理：baidu 是中文索引占优，baidu_baike 更极端 —— query 直接当
-条目名去查（/item/{query}），追加英文展开词等于换了个不存在的条目名，只会空。
-so360 / sogou（都是中文索引）同理。sogou 现在在默认池里，这条更要紧：给它的英文
-展开词等于换了个查询，中文索引上只会空。
+_INTENT_EXPANSIONS 只有两串**英文**词（" paper arxiv benchmark results" /
+" specifications table data parameters"），而中文索引（baidu / sogou / so360）的内容
+池几乎全是中文 —— 把英文术语追加进去只会让它更搜不到东西。sogou / so360 现在都在
+默认池里，这条更要紧：给它们的英文展开词等于换了个查询，中文索引上只会空。
 
 注意一个已知局限（不在本次修）：不同引擎被问不同 query 时，URL 重合度里混进了"跨
 query 变体也重合"这一层（见 _expand_query 上方注释，那是有意设计的好处，但也确实如
@@ -1089,9 +1071,9 @@ query 变体也重合"这一层（见 _expand_query 上方注释，那是有意�
 def _generate_query_map(query: str, intent: str, engines: list[str] | None) -> dict[str, str]:
     """Assign per-engine query variants for multi-query fan-out.
 
-    Core engines (baidu, bing, duckduckgo, brave, yahoo, baidu_baike, sogou_weixin,
-    sogou, so360) get the original query; diversity engines (yandex, bing_global,
-    mwmbl, and the opt-in wikipedia/grokipedia) get the expanded query. Returns {}
+    Core engines (baidu, bing, duckduckgo, brave, sogou, so360) get the original
+    query; diversity engines (yandex, bing_global) get the expanded query.
+    Returns {}
     if no expansion applies (all engines get the same query = backward-compatible).
     """
     expanded = _expand_query(query, intent)
@@ -1156,17 +1138,14 @@ async def smart_search(
     min_raw_relevance: float = 0.0,
 ) -> SearchResponseModel:
     """Local keyless web search (no API key, no account). The default pool
-    (baidu, bing, sogou, bing_global, yandex, brave - all HTTP, no browser;
-    opt-in: baidu_baike, duckduckgo, mwmbl, so360, sogou_weixin,
-    wikipedia, grokipedia, yahoo) is scraped in parallel, merged, deduped,
+    (baidu, bing, sogou, so360, bing_global, yandex, brave, duckduckgo - all
+    HTTP, no browser, and all 8 registered engines: there is no opt-in tier)
+    is scraped in parallel, merged, deduped,
     and ranked. A URL returned by several **independent index families** is a
     consensus hit (engines_consensus field) and gets a ranking boost - a free
-    authority signal. Note the pool has 6 engines but only 5 families
-    (bing and bing_global sit on the same Bing index, just different entries),
-    so '5 of 5' is the max.
-    sogou_weixin is a vertical (WeChat-articles-only) index: relevance decides its
-    place when the reranker runs, and without one it is demoted behind the
-    general-web engines (see _general_first).
+    authority signal. Note the pool has 8 engines but only 6 families
+    (bing, bing_global and duckduckgo sit on the same Bing index, just
+    different entries), so '6 of 6' is the max.
     Returns URLs + ranking (NOT page content) so the agent smart_fetches the
     ones it wants itself.
 

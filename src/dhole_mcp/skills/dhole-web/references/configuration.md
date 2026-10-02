@@ -78,7 +78,7 @@ Then just call — the first attach asks, the user answers once:
 
 ### Scenario: poor search results / want a different pool
 
-- `DHOLE_DEFAULT_ENGINES` — override the keyless default pool (default `baidu,bing,sogou,bing_global,yandex,brave`); opt-in names may be included
+- `DHOLE_DEFAULT_ENGINES` — override the keyless default pool (default `baidu,bing,sogou,so360,bing_global,yandex,brave,duckduckgo`)
 - Keyed backends (per-call billing, only run when named): `DHOLE_TAVILY_API_KEY` / `DHOLE_BOCHA_API_KEY`. Without a key a named backend answers with a diagnosable `no_key` error instead of silently vanishing
 - The whole search has a fixed 16s deadline; per-engine cooldowns are fixed too (60s after a hard block, 600s after repeated challenge pages or connection failures, 300s patrol heartbeat) — `dhole engines list` shows what is cooling and why, `dhole engines reset` clears it
 

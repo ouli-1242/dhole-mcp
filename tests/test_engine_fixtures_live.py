@@ -19,9 +19,6 @@ import pytest
 
 FIXTURE_DIR = Path(__file__).parent / "engine_fixtures"
 QUERY = "how does sqlite WAL mode work"
-# 垂直/非英文索引得用自己的查询词：拿英文技术词去问公众号搜索，抓到的是"没有结果的
-# 页面"，而那种页面不能当契约基线（capture 模式会拒绝写盘，等于永远覆盖不了它）。
-QUERY_BY_ENGINE = {"sogou_weixin": "SQLite WAL 模式"}
 MAX_ITEMS = 4
 
 pytestmark = pytest.mark.live
@@ -32,7 +29,7 @@ def _mode(request):
 
 
 def _query_for(engine: str) -> str:
-    return QUERY_BY_ENGINE.get(engine, QUERY)
+    return QUERY
 
 
 def _trim_to_items(eng, html_text):
@@ -116,8 +113,7 @@ def _guard(request):
     return mode
 
 
-@pytest.mark.parametrize("engine", ["bing", "duckduckgo", "brave", "yahoo", "yandex",
-                                    "sogou_weixin"])
+@pytest.mark.parametrize("engine", ["bing", "duckduckgo", "brave", "yandex"])
 def test_engine_fixture_contract(engine, _guard):
     mode = _guard
     fixture = FIXTURE_DIR / f"{engine}.html"

@@ -85,8 +85,8 @@ class TestTheTableIsTheEngines:
 
     def test_the_default_pool_split_is_what_the_report_measured(self):
         filtered, unfiltered = date_support(POOL)
-        assert filtered == ["bing", "bing_global", "brave"]
-        assert unfiltered == ["baidu", "sogou", "yandex"]
+        assert filtered == ["bing", "bing_global", "brave", "duckduckgo"]
+        assert unfiltered == ["baidu", "so360", "sogou", "yandex"]
 
     def test_an_unknown_engine_counts_as_unfiltered(self):
         assert date_support(["newengine"]) == ([], ["newengine"])
@@ -98,7 +98,8 @@ class TestTheWindowTranslation:
         applied, info, why = _date_window(days_ago(3), None, None, POOL)
         assert why == ""
         assert (applied, info["sent"], info["exact"]) == ("week", "freshness=week", True)
-        assert info["engines_filtered"] == ["bing", "bing_global", "brave"]
+        assert info["engines_filtered"] == ["bing", "bing_global", "brave",
+                                            "duckduckgo"]
         assert "baidu" in info["engines_unfiltered"]
 
     # Widths are date-only strings, so each means "from midnight UTC that day":
