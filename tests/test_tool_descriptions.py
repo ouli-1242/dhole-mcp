@@ -447,3 +447,68 @@ def test_the_wire_never_becomes_a_changelog(tools, which, pattern):
             offenders.append(f"{name}: …{text[max(0, i - 45):i + 55]}…")
     assert not offenders, (
         f"{which}不该出现在 agent 每次连接都要读的文本里：\n" + "\n".join(offenders))
+
+
+# ─── 改名期的说谎守卫：文案里的工具名必须在注册面上 ────────────────────
+
+# 17.0 的每个工具名都带域前缀，而它要替换掉的旧名（smart_*）正好也是这个形状，
+# 所以「前缀 + 小写」这一个模式就同时抓住了两类错：拼错一个工具名，和改了名没改
+# 文案。后者是 §B5 点名的风险 —— next_action 教 agent 去调一个不存在的工具，
+# 而这条错误文案每次调用都在付钱。
+_TOOL_SHAPED = re.compile(r"\b(?:smart|web|doc|feed|cred|sys)_[a-z][a-z0-9_]*\b")
+
+# 撞同一个形状但不是工具名的东西，逐个说明为什么可以留着。
+_SHAPED_BUT_NOT_A_TOOL = {
+    "feed_url",     # feed_read 的参数名（§4 施工图里就這麼写）
+}
+
+
+def _names_on_the_registry() -> set:
+    """注册面上的工具名，加上每个工具接受的参数名。"""
+    from dhole_mcp.server import _TOP_LEVEL_ARGS
+
+    out = set(_TOP_LEVEL_ARGS)
+    for params in _TOP_LEVEL_ARGS.values():
+        out |= set(params)
+    return out | _SHAPED_BUT_NOT_A_TOOL
+
+
+def _agent_facing_strings() -> list:
+    """agent 读得到的每一段文本：src 里每条字符串字面量 + 说明书语料 + README。
+
+    字符串字面量覆盖了描述、instructions、错误文案和 `_INSTRUCTIONS_ROUTING`；
+    注释不算（那是给开发者的，不是 agent 的界面）。语料和 README 单独读文件，
+    因为它们不是字面量。CHANGELOG 与 evals/*.md 不在内：那两份记的是当时测过的
+    事实，用当时的名字才是如实。
+    """
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    out = []
+    for path in sorted((root / "src" / "dhole_mcp").rglob("*.py")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for node in ast.walk(ast.parse(text)):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                out.append((path.name, node.value))
+    for path in sorted((root / "src" / "dhole_mcp" / "skills").rglob("*.md")):
+        out.append((str(path.relative_to(root)), path.read_text(encoding="utf-8")))
+    out.append(("README.md", (root / "README.md").read_text(encoding="utf-8")))
+    return out
+
+
+def test_nobody_is_told_to_call_a_tool_that_does_not_exist():
+    allowed = _names_on_the_registry()
+    assert "web_read" in allowed and len(allowed) > 20, \
+        "推导空了：这条守卫会退化成把每段文案都判为通过"
+    strings = _agent_facing_strings()
+    assert len(strings) > 400 and any("web_read" in t for _w, t in strings), \
+        "扫描面空了（字面量或语料没读到），守卫同样会永远通过"
+    offenders = {}
+    for where, text in strings:
+        for tok in _TOOL_SHAPED.findall(text):
+            if tok not in allowed:
+                offenders.setdefault(tok, set()).add(where)
+    assert not offenders, (
+        "文案里有注册面之外的工具名（改名没跟上，或名字写错）：\n"
+        + "\n".join(f"  {t} <- {sorted(w)}" for t, w in sorted(offenders.items())))

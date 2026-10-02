@@ -121,7 +121,8 @@ def profiles_dir() -> Path:
 
     Each profile is a full Chrome user-data-dir: cookies, localStorage, login
     state. 17.0 没有任何调用方给它取名（按环境的 ``DHOLE_BROWSER_PROFILE`` 已
-    注销，按次参数在 B5 随 ``cred_defaults`` 回来），所以这个目录通常不存在。
+    注销，按次参数要等 B5 那颗「设一次的默认身份」工具回来才有人传），所以这个
+    目录通常不存在。
     它一旦存在就是"keep me signed in"的产物，里面每一项都是凭据级：created 0700 (owner-only on POSIX; on Windows the
     profile ACL under the user's home directory is the real boundary).
     """

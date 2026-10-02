@@ -3299,8 +3299,8 @@ def _cdp_authorized_hosts() -> frozenset:
 
 
 def _cdp_authorize_host(host: str) -> None:
-    """把一台用户已同意的 CDP 端点主机写进落盘围栏。只增不删；撤销走删除文件
-    （B5 的 sys_state 会给出体面的出口）。"""
+    """把一台用户已同意的 CDP 端点主机写进落盘围栏。只增不删；撤销目前是删这个
+    文件，一个像样的出口要等 B5 把本地状态那颗工具立起来。"""
     import json as _json
     from dhole_mcp import paths
     global _cdp_hosts_cache, _cdp_hosts_stamp

@@ -1118,8 +1118,8 @@ async def web_search(
     authority signal. Note the pool has 8 engines but only 6 families
     (bing, bing_global and duckduckgo sit on the same Bing index, just
     different entries), so '6 of 6' is the max.
-    Returns URLs + ranking (NOT page content) so the agent smart_fetches the
-    ones it wants itself.
+    Returns URLs + ranking (NOT page content) so the agent runs its own
+    web_read over the ones it wants.
 
     mode: auto (neural rerank if [all]+model present, else consensus + engine-
     position order), neural (same, explicit - surfaces a note if unavailable),
