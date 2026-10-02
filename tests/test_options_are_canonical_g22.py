@@ -341,18 +341,19 @@ class _ServedPage:
 
 class TestTheDocumentationSaysWhichIsCanonical:
 
-    def test_the_wire_table_says_options_carries_every_parameter_except_url(self):
-        """`url` 是「这次调用抓哪一页」，不是选项：放进 options 会被当陌生键拒掉。
+    def test_the_bag_says_it_is_the_compatibility_read(self):
+        """B4 之后袋子不再是家，那它就必须把自己说成兼容通道。
 
-        其余顶层参数两处都接受，所以表里必须这么说 —— 这句就是客户端唯一能看到的
-        放置规则说明（逐参数表已删）。
+        这句是客户端在 schema 里能看到的唯一放置说明：键住在顶层，袋子里的副本还读，
+        顶层赢。表里继续列这些键仍然有用（老写法要能查到），但列法不许再冒充"唯一去处"。
         """
         tools = {t["name"]: t for t in MasterFetchServer._TOOL_DEFS}
         bag = tools["smart_fetch"]["inputSchema"]["properties"]["options"]["description"]
         for key in ("cache_ttl", "offset", "focus", "actions", "extraction_type",
                     "force_fetcher", "urls"):
-            assert key in bag, f"options 表里查不到 {key}，调用方就只会继续往顶层放"
-        assert "Every parameter of this tool except url" in bag
+            assert key in bag, f"options 表里查不到 {key}，老写法就没了下文"
+        assert "DEPRECATED COMPATIBILITY CHANNEL" in bag, bag[:120]
+        assert "top-level" in bag, bag[:120]
 
     def test_the_server_default_cache_ttl_survives_the_dispatcher(self, monkeypatch):
         """``--cache-ttl`` 在 MCP 这条路上必须是活的。
@@ -395,10 +396,21 @@ class TestTheDocumentationSaysWhichIsCanonical:
         assert "只有顶层这一层" in text, "另五个工具不接受 options 袋这件事没写"
         assert "discover_only" in text, "只能放顶层的反向例外（smart_crawl）没点名"
 
-    def test_the_wire_text_for_each_tool_points_at_options(self):
+    def test_no_tool_description_still_calls_the_bag_the_home(self):
+        """放置规则只在 instructions 说一份，而任何工具描述都不许再说"参数住在袋子里"。
+
+        这条守的是谎，不是措辞：`options` 还在（拆平那一刀才删），但 "Every parameter
+        has a home in options" 这句必须已经从描述里消失 —— 它现在会让 agent 把已经能
+        平铺的参数继续嵌套回去。`options.<键>` 的指法同理。
+        """
+        from dhole_mcp.server import DHOLE_INSTRUCTIONS
+        assert "TOP LEVEL" in DHOLE_INSTRUCTIONS, "放置规则没上收到 instructions"
+        assert "compatibility" in DHOLE_INSTRUCTIONS, "袋子还读这件事没说清"
         tools = {t["name"]: t for t in MasterFetchServer._TOOL_DEFS}
-        for tool in ("smart_fetch", "smart_crawl", "smart_search"):
-            assert "options" in tools[tool]["description"], tool
+        for tool in ("smart_fetch", "smart_crawl", "smart_search", "screenshot"):
+            desc = tools[tool]["description"]
+            assert "has a home in options" not in desc, tool
+            assert "options." not in desc, f"{tool} 还在用 options.<键> 的指法教路"
 
 
 class TestARejectionNamesTheOtherChannel:

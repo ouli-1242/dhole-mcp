@@ -167,6 +167,20 @@ class TestAcceptedSetCoversTheContract:
             allowed = set(server_mod._TOP_LEVEL_ARGS[td["name"]])
             assert declared <= allowed, td["name"]
 
+    def test_every_accepted_name_is_advertised(self):
+        """17.0 B4 的那半边：能被读的键就必须能在 schema 里看到 —— 参数只有一个家，
+        而家要看得见。
+
+        反过来的事故真实存在过：`options` 的散文写着"method 只发一次"，而顶层的 method
+        一直能用、从来没被声明过，于是任何按 schema 写调用的客户端都不知道自己有这条能力。
+        今天唯一还豁免的名字是 `options` 袋本身（兼容通道，拆平那一刀连着这条豁免一起删）。
+        """
+        for td in MasterFetchServer._TOOL_DEFS:
+            declared = set((td.get("inputSchema") or {}).get("properties") or {})
+            allowed = set(server_mod._TOP_LEVEL_ARGS[td["name"]])
+            hidden = allowed - declared
+            assert hidden <= {"options"}, (td["name"], sorted(hidden))
+
     def test_every_documented_option_is_accepted(self):
         assert server_mod._SC_OPTIONS <= server_mod._TOP_LEVEL_ARGS["smart_crawl"]
         assert server_mod._SS_OPTIONS <= server_mod._TOP_LEVEL_ARGS["smart_search"]

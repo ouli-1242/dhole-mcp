@@ -370,7 +370,7 @@ class TestTheDescriptions:
         shot = defs["screenshot"]["description"]
         sf = defs["smart_fetch"]["description"]
         assert "VISUAL ASSIST" in shot
-        assert "options.selector" in shot
+        assert "selector=" in shot
         assert "VISUAL ASSIST" in sf
         assert '{"screenshot"' in sf
         # 纪律（安全红线 6 的 ≤N 次与一律转交）
