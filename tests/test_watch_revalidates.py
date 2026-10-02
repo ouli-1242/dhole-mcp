@@ -53,9 +53,9 @@ class _FakeFetch:
         out = ResponseModel(url=url or "", status=status, content=content,
                             content_ok=a.get("content_ok", True),
                             error=a.get("error", ""))
-        out.cache_validators = {k: v for k, v in
-                                (("etag", a.get("etag", "")),
-                                 ("last_modified", a.get("last_modified", ""))) if v}
+        out._validators = {k: v for k, v in
+                           (("etag", a.get("etag", "")),
+                            ("last_modified", a.get("last_modified", ""))) if v}
         return out
 
 

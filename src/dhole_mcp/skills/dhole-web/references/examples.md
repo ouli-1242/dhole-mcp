@@ -31,11 +31,6 @@ A rejection names the key and lists the keys that tool accepts — follow the er
 {"urls": ["https://a.com/post/1", "https://b.com/post/2"]}
 ```
 
-**Conditional request** (step 1: plain GET, grab `cache_validators`; step 2: send the etag back — a 304 is SUCCESS, `not_modified=true` with an empty body):
-```json
-{"url": "https://example.com", "if_none_match": "\"6aba938b-2c9\""}
-```
-
 **Write request** (one-shot: no retry, no cache, no browser escalation; body ≤256KB):
 ```json
 {"url": "https://api.example.com/orders", "method": "POST", "body": "{\"item\": 1, \"qty\": 2}", "content_type": "application/json"}

@@ -63,30 +63,18 @@ class FeedResult(BaseModel):
     since: str = Field(default="", description="The cutoff this result was filtered by (normalized to ISO-8601 UTC), empty when no filter was asked for.")
     items_older_than_since: int = Field(default=0, description="Entries dropped because they were published BEFORE `since` - the 'nothing new' half of a poll. Reported rather than hidden: a bare list of items cannot tell 'the feed has 3 items total' apart from '50 were filtered out and 3 are new'.")
     items_without_date: int = Field(default=0, description="Entries KEPT despite having no usable publish date. A feed that does not date its items cannot be filtered honestly, so these are returned and counted instead of silently dropped.")
-    cache_validators: dict = Field(
-        default_factory=dict,
-        description="The feed server's own version markers for this URL: {etag, last_modified} "
-                    "(either may be absent). Save them and pass them back as if_none_match / "
-                    "if_modified_since to ask 'anything new?' without downloading the whole "
-                    "document - an unchanged feed then answers not_modified=true with no items, "
-                    "which is a successful poll, not an empty feed.")
-    not_modified: bool = Field(
-        default=False,
-        description="True = this call sent a conditional request and the feed server answered "
-                    "304 'not modified'. items is empty BY DESIGN (there was no body to parse); "
-                    "error stays empty. Read it as 'nothing new since your last poll'.")
+    # `note` used to carry a second subject as well: "the origin answered our
+    # conditional with 200 + the whole feed, so nothing was compared". That half
+    # lost its subject when conditional polling came off the tool surface (17.0 §6).
     note: str = Field(
         default="",
         description="One line the caller could not otherwise infer from this result. Set "
-                    "when (a) the document parsed as a feed and genuinely carried zero "
+                    "when the document parsed as a feed and genuinely carried zero "
                     "entries - an empty items list with no error cannot tell 'nothing "
                     "published today' from 'our parser stopped matching this feed', so the "
                     "feed's own markers (lastBuildDate / pubDate / skipDays / updated) are "
-                    "quoted; and when (b) a conditional poll was answered with 200 + the "
-                    "whole document instead of a 304, which means nothing was compared and "
-                    "is not evidence of change. Both can appear at once, separated by ' | '. "
-                    "Empty for feeds with items that answered a plain request, for a real "
-                    "304, and wherever `error` or the since-receipts already explain it.")
+                    "quoted. Empty for feeds with items that answered a plain request, and "
+                    "wherever `error` or the since-receipts already explain it.")
 
 
 def _parse_date(value: str) -> str:
@@ -127,16 +115,6 @@ def _text(elem: Any, *tags: str) -> str:
         if _local_name(child.tag) in tags and child.text and child.text.strip():
             return child.text.strip()
     return ""
-
-
-def _add_note(existing: str, extra: str) -> str:
-    """Append a second observation to `note` without losing the first.
-
-    A feed can legitimately carry two at once: the origin ignored our
-    conditional AND the document held no entries. Both explain the same empty
-    list, and dropping either leaves a caller to guess.
-    """
-    return f"{existing} | {extra}" if existing else extra
 
 
 def _empty_feed_note(root: Any) -> str:
@@ -228,9 +206,8 @@ async def _grab(url: str, timeout: int,
                 headers: dict | None = None) -> tuple[bytes, int, str, str, dict]:
     """(body, status, encoding, error, response-headers) for one URL. Never raises.
 
-    The headers come back because a feed's ETag/Last-Modified are the whole point
-    of a poll: without them the only way to ask "anything new?" is to download the
-    whole document and compare it yourself.
+    The response headers come back too (17.0 keeps the tuple's shape; nothing in
+    this module reads them now that conditional polling is off the tool surface).
     """
     try:
         from dhole_mcp.fetcher import HTTPSession
@@ -388,35 +365,8 @@ def _keep_newer(result: FeedResult, cutoff_iso: str, cutoff, max_items: int) -> 
     return result
 
 
-def _feed_conditional_headers(if_modified_since: str,
-                              if_none_match: str) -> tuple[dict, str]:
-    """(headers, rejection) for a conditional poll; same rules smart_fetch uses.
-
-    A bare etag token is the usual thing a caller writes after copying
-    `cache_validators.etag` — the quotes belong to the header, not to the tag.
-    Line breaks are refused: they would let a caller's value become a new request
-    header.
-    """
-    out: dict[str, str] = {}
-    raw = (if_none_match or "").strip()
-    if raw:
-        if len(raw) > 256 or any(c in raw for c in "\r\n"):
-            return {}, ("if_none_match must be an ETag string without line breaks "
-                        "(256 characters max)")
-        if not raw.startswith(('"', "W/")) and raw != "*":
-            raw = f'"{raw}"'
-        out["If-None-Match"] = raw
-    raw = (if_modified_since or "").strip()
-    if raw:
-        if any(c in raw for c in "\r\n"):
-            return {}, "if_modified_since must be a date string without line breaks"
-        out["If-Modified-Since"] = raw
-    return out, ""
-
-
 async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20,
-                     since: str = "", if_modified_since: str = "",
-                     if_none_match: str = "") -> FeedResult:
+                     since: str = "") -> FeedResult:
     """Fetch and parse a single RSS/Atom feed. Never raises.
 
     A URL that turns out to be a web page is not a dead end: the page announces
@@ -433,53 +383,27 @@ async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20,
     ``items_older_than_since`` / ``items_without_date`` instead of shrinking the
     list in silence.
 
-    ``if_none_match`` / ``if_modified_since`` ask the question ``since`` cannot:
-    ``since`` still downloads the whole feed to discover nothing was added, while a
-    conditional GET costs one header and a 304. The server's markers are returned
-    in ``cache_validators`` for the next poll; an unchanged feed is
-    ``not_modified=true`` with no items, which is an answer, not an empty feed.
+    17.0 撤掉了这里的条件轮询参数（``if_none_match`` / ``if_modified_since``）：
+    让调用方保管版本标记，等于把"问对了没有"的责任推给存字符串的人。增量仍然有
+    ``since`` 可问 —— 它按发布日期筛，答案不依赖源站肯不肯答 ETag（实测 arXiv 对
+    自己的 RSS etag 就不答，一次条件请求换回整个文档）。
     """
     from dhole_mcp.security import SecurityError, validate_url
 
     cutoff, cutoff_iso, since_rejected = _since_cutoff(since)
     if since_rejected:
         return FeedResult(source_url=url, error=since_rejected)
-    cond, cond_rejected = _feed_conditional_headers(if_modified_since, if_none_match)
-    if cond_rejected:
-        return FeedResult(source_url=url, error=cond_rejected)
 
     def _shape(result: FeedResult) -> FeedResult:
-        if validators and not result.cache_validators:
-            result.cache_validators = validators
-        if cond and status == 200 and body:
-            # The question was asked and refused. This origin answered our
-            # conditional with 200 + the whole document rather than a 304, so
-            # nothing was compared and "not a 304" is not evidence that anything
-            # changed - the reading a caller is otherwise left with. Measured:
-            # arXiv does exactly this to its RSS ETags, as it does to every PDF
-            # etag (the same disclosure exists on smart_fetch for that reason).
-            result.note = _add_note(
-                result.note,
-                f"the origin answered our {' + '.join(sorted(cond))} with 200 and "
-                "the whole feed instead of a 304, so it does not honour "
-                "conditional requests for this URL. Nothing was compared, so "
-                "this is NOT evidence the content changed; expect to download "
-                "the full document on every poll, or filter with since= instead.")
         if cutoff is not None:
             return _keep_newer(result, cutoff_iso, cutoff, max_items)
         if max_items > 0:
             result.items = result.items[:max_items]
         return result
 
-    body, status, encoding, err, hdrs = await _grab(url, timeout, cond)
-    validators = {k: v for k, v in (("etag", (hdrs or {}).get("etag", "")),
-                                    ("last_modified", (hdrs or {}).get("last-modified", "")))
-                  if v}
-    if status == 304:
-        return FeedResult(source_url=url, not_modified=True,
-                          cache_validators=validators, since=cutoff_iso)
+    body, _status, encoding, err, _hdrs = await _grab(url, timeout)
     if err and not body:
-        return FeedResult(source_url=url, error=err, cache_validators=validators)
+        return FeedResult(source_url=url, error=err)
 
     raw = body.decode(encoding or "utf-8", errors="replace")
     parsed, parse_exc = _parse_or_none(raw, url)
@@ -495,7 +419,7 @@ async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20,
         except SecurityError as se:
             logger.debug("discovered feed target refused: %s", str(se)[:120])
             continue
-        cbody, _cst, cenc, cerr, chdrs = await _grab(feed_url, timeout)
+        cbody, _cst, cenc, cerr, _chdrs = await _grab(feed_url, timeout)
         if cerr and not cbody:
             continue
         cparsed, _cexc = _parse_or_none(
@@ -522,23 +446,15 @@ async def fetch_feeds(
     max_items: int = 20,
     concurrency: int = 5,
     since: str = "",
-    if_modified_since: str = "",
-    if_none_match: str = "",
 ) -> list[FeedResult]:
     """Fetch multiple feeds with bounded concurrency. Per-source errors are
-    isolated (one bad feed never fails the batch).
-
-    The conditional markers are one set for the whole call, so the caller above
-    refuses them together with several URLs (server.feed_fetch): asking feed B
-    with feed A's etag produces a 304 that means nothing.
-    """
+    isolated (one bad feed never fails the batch)."""
     import asyncio
     sem = asyncio.Semaphore(max(1, concurrency))
 
     async def _one(url: str) -> FeedResult:
         async with sem:
             return await fetch_feed(url, timeout=timeout, max_items=max_items,
-                                    since=since, if_modified_since=if_modified_since,
-                                    if_none_match=if_none_match)
+                                    since=since)
 
     return list(await asyncio.gather(*(_one(u) for u in urls)))

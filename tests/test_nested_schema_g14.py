@@ -26,6 +26,7 @@ from dhole_mcp.security import SecurityError
 from dhole_mcp.server import (
     MasterFetchServer,
     ResponseModel,
+    _REVALIDATE,
     _SCHEMA_SOURCE_MAX_CHARS,
     _schema_value_empty,
     _validate_schema_selectors,
@@ -272,12 +273,21 @@ class TestTheSchemaBranchCallsTheTierInOrder:
         assert seen["offset"] == 0
 
     def test_a_conditional_schema_fetch_still_bypasses_the_cache(self, monkeypatch):
+        """带版本标记的那一趟 schema 抓取问的是源站，不是 dhole 的记忆。
+
+        17.0 §6 之后标记不再是参数（`if_modified_since` 下了线），发起者变成 watch，
+        通道是 `_REVALIDATE`。这里改由那条通道驱动 —— 钉的是「条件请求不许读缓存」，
+        与谁发起无关。
+        """
         seen = _stub_tier(monkeypatch, {})
 
-        asyncio.run(MasterFetchServer().smart_fetch(
-            url="https://example.com", schema=NESTED_QUOTES, cache_ttl=3600,
-            if_modified_since="2020-01-01",
-        ))
+        tok = _REVALIDATE.set({"last_modified": "2020-01-01"})
+        try:
+            asyncio.run(MasterFetchServer().smart_fetch(
+                url="https://example.com", schema=NESTED_QUOTES, cache_ttl=3600,
+            ))
+        finally:
+            _REVALIDATE.reset(tok)
 
         assert seen["conditional"]
         assert seen["cache_ttl"] == 0, "条件请求问的是源站，不是 dhole 的记忆"

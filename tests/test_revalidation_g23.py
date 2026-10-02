@@ -5,9 +5,14 @@
 开浏览器渲染一个**定义上没有正文**的响应，最后回 ``all_tiers_failed (HTTP status 0)``
 ——把「站点正常回答了」报成「站点把你挡了」。
 
-现在 304 是一次**成功**：not_modified=true、content_ok=true、error 为空、content
-为空，并且明确说「你手上那份就是最新的」。校验子（etag / last_modified）在每次
-200 上都回吐，监控循环才闭得上。
+现在 304 是一次**成功**：`status=304`、`content_ok=true`、`error` 为空、`content`
+为空，并且明确说「你手上那份就是最新的」。
+
+17.0 §6 把「谁来发起复验」换了人：`if_none_match` / `if_modified_since` 不再是参数，
+校验子改由 `watch` 自己存在基线旁边，经 `_REVALIDATE` 这条进程内通道送进来。这个文件
+因此读起来像一次重排 —— 每条用例测的还是**同一个答复形状**，只是问问题的人从调用方
+变成了 dhole 自己。那些只在"调用方保管标记"合同中才有意义的断言（把标记回吐给调用方、
+批量里只有一个 feed 被问过）随合同一起删了。
 
 feed 的「增量」是同一个问题的另一半：只留下比 since 新的条目，并把被过滤掉的条数
 说出来 —— 空列表既可能是「没有新东西」也可能是「你的日期写错了」。
@@ -23,6 +28,7 @@ import threading
 import pytest
 
 from dhole_mcp import feed as feed_mod
+from dhole_mcp import server as server_mod
 from dhole_mcp.server import (
     MasterFetchServer,
     ResponseModel,
@@ -34,14 +40,30 @@ ETAG = '"v7"'
 LM = "Sun, 27 Sep 2026 00:00:00 GMT"
 
 
+def _hdrs(last_modified=None, etag=None):
+    """翻译器的输入形状：17.0 之后是一整份存下来的标记，不是两个参数。"""
+    return _conditional_headers({"last_modified": last_modified, "etag": etag})
+
+
+async def _ask(url, markers=None, **kw):
+    """经由内部通道发起一次复验 —— 这就是 17.0 之后 `watch` 走的同一条路。"""
+    tok = server_mod._REVALIDATE.set(markers)
+    try:
+        return await MasterFetchServer().smart_fetch(url, allow_private=True, **kw)
+    finally:
+        server_mod._REVALIDATE.reset(tok)
+
+
 class TestTheHeaderTranslation:
 
     def test_nothing_asked_nothing_added(self):
-        assert _conditional_headers(None, None) == ({}, "")
-        assert _conditional_headers("", "") == ({}, "")
+        assert _hdrs() == ({}, "")
+        assert _hdrs("", "") == ({}, "")
+        assert _conditional_headers({}) == ({}, "")
+        assert _conditional_headers(None) == ({}, ""), "没有标记的那一版监控不该炸"
 
     def test_an_http_date_is_passed_through(self):
-        headers, why = _conditional_headers(LM, None)
+        headers, why = _hdrs(LM)
         assert why == ""
         assert headers == {"If-Modified-Since": LM}
 
@@ -51,49 +73,49 @@ class TestTheHeaderTranslation:
         "2026-09-27T00:00:00+00:00",
     ])
     def test_iso_dates_become_an_http_date(self, iso):
-        headers, why = _conditional_headers(iso, None)
+        headers, why = _hdrs(iso)
         assert why == ""
         assert headers == {"If-Modified-Since": LM}
 
     def test_a_timed_iso_keeps_its_time(self):
-        headers, _ = _conditional_headers("2026-09-27T08:30:00Z", None)
+        headers, _ = _hdrs("2026-09-27T08:30:00Z")
         assert headers["If-Modified-Since"] == "Sun, 27 Sep 2026 08:30:00 GMT"
 
     def test_an_unreadable_date_is_refused_with_the_two_accepted_shapes(self):
-        headers, why = _conditional_headers("last tuesday", None)
+        headers, why = _hdrs("last tuesday")
         assert headers == {}
         assert "neither an HTTP-date" in why and "ISO-8601" in why
 
     @pytest.mark.parametrize("bad", [12345, ["2026-09-27"], True])
     def test_a_non_string_date_is_refused(self, bad):
-        headers, why = _conditional_headers(bad, None)
+        headers, why = _hdrs(bad)
         assert headers == {}
         assert why
 
     def test_a_bare_etag_gets_its_quotes(self):
         """调用方从 cache_validators 里拿到的常常是去掉引号的那一半。"""
-        headers, why = _conditional_headers(None, "v7")
+        headers, why = _hdrs(etag="v7")
         assert why == ""
         assert headers == {"If-None-Match": ETAG}
 
     @pytest.mark.parametrize("given", [ETAG, 'W/"v7"', "*"])
     def test_an_etag_already_in_shape_is_left_alone(self, given):
-        headers, why = _conditional_headers(None, given)
+        headers, why = _hdrs(etag=given)
         assert why == ""
         assert headers == {"If-None-Match": given}
 
     def test_header_injection_in_an_etag_is_refused(self):
-        headers, why = _conditional_headers(None, 'x"\r\nX-Evil: y')
+        headers, why = _hdrs(etag='x"\r\nX-Evil: y')
         assert headers == {}
         assert why
 
     def test_an_absurdly_long_etag_is_refused(self):
-        headers, why = _conditional_headers(None, "z" * 300)
+        headers, why = _hdrs(etag="z" * 300)
         assert headers == {}
         assert "too long" in why
 
-    def test_both_options_at_once(self):
-        headers, why = _conditional_headers(LM, ETAG)
+    def test_both_markers_at_once(self):
+        headers, why = _hdrs(LM, ETAG)
         assert why == ""
         assert set(headers) == {"If-Modified-Since", "If-None-Match"}
 
@@ -166,11 +188,16 @@ def _throwaway_cache(tmp_path, monkeypatch):
 class TestTheConditionalCall:
 
     @pytest.mark.asyncio
-    async def test_a_plain_answer_reports_the_validators_it_used(self, origin):
+    async def test_a_plain_answer_hands_the_markers_to_the_internal_poller(self, origin):
+        """200 上采到的版本标记进的是进程内那个落点，不是响应字段。
+
+        `watch` 存基线时读的就是这里；字段下线之后，这条是那个交接唯一的证人。
+        """
         url, srv = origin
         r = await MasterFetchServer().smart_fetch(url, allow_private=True, cache_ttl=0)
         assert r.status == 200
-        assert r.cache_validators == {"etag": ETAG, "last_modified": LM}
+        assert r._validators == {"etag": ETAG, "last_modified": LM}
+        assert "cache_validators" not in r.model_dump(), "内部落点不许上线"
 
     @pytest.mark.asyncio
     async def test_a_cached_answer_still_carries_the_markers_to_revalidate(self, origin):
@@ -184,26 +211,22 @@ class TestTheConditionalCall:
         url, _ = origin
         fresh = await MasterFetchServer().smart_fetch(url, allow_private=True,
                                                       cache_ttl=600)
-        assert fresh.cache_validators == {"etag": ETAG, "last_modified": LM}
+        assert fresh._validators == {"etag": ETAG, "last_modified": LM}
 
         hit = await MasterFetchServer().smart_fetch(url, allow_private=True,
                                                     cache_ttl=600)
         assert hit.cached is True, "这一条测的就是缓存命中那条路径"
-        assert hit.cache_validators == {"etag": ETAG, "last_modified": LM}, \
-            "缓存命中丢掉了版本标记，条件轮询无从下手"
+        assert hit._validators == {"etag": ETAG, "last_modified": LM}, \
+            "缓存命中丢掉了版本标记，下一次复验无从问起"
 
-        again = await MasterFetchServer().smart_fetch(
-            url, allow_private=True, cache_ttl=600,
-            if_none_match=hit.cache_validators["etag"])
-        assert (again.status, again.not_modified) == (304, True)
+        again = await _ask(url, {"etag": hit._validators["etag"]}, cache_ttl=600)
+        assert again.status == 304
 
     @pytest.mark.asyncio
     async def test_a_304_is_a_success_with_no_body(self, origin):
         url, _ = origin
-        r = await MasterFetchServer().smart_fetch(
-            url, allow_private=True, cache_ttl=0, if_none_match=ETAG)
+        r = await _ask(url, {"etag": ETAG}, cache_ttl=0)
         assert r.status == 304
-        assert r.not_modified is True
         assert r.content_ok is True, f"a 304 must not read as a failure: {r.error}"
         assert r.error == ""
         assert r.content == []
@@ -212,26 +235,20 @@ class TestTheConditionalCall:
         assert "unchanged" in r.summary
 
     @pytest.mark.asyncio
-    async def test_a_304_on_a_document_is_still_marked_as_unchanged(self, origin):
-        """Two paths returned before the 304 branch, and the live call hit the
-        second one: the document early-return in `_auto_escalate`, and the pinned
-        tier in `_force_fetch` (measured live against arxiv
-        `/pdf/1706.03762`, where watching a paper for changes is exactly what the
-        etag is for).
+    async def test_a_304_on_a_document_is_still_a_304(self, origin):
+        """两条早退路径都不许把 304 读丢：正文早退（`_auto_escalate` 之前）与
+        pinned 层（根本不进 `_auto_escalate`），实测都撞上过一次。
 
-        The field's own description promises True on a 304, and compaction only
-        ships a field that differs from its default, so the false was the whole
-        answer: a caller reading `not_modified` sees "changed" for the one
-        response that proves it did not. Hence the flag is set in the shared
-        tail, where no path can forget it.
+        当年修的是"标记字段在共享尾部才置真"—— 哪个分支忘了置，答案就正好反了。
+        字段删掉之后这个 bug 类没有消失，只是**只剩一个事实可丢**：`status`。
+        所以这里钉的是每个形状都带回 304 且不当失败。
         """
         url, _ = origin
         pdf = url.replace("/state", "/paper.pdf")
         for pinned in (None, "http"):
-            r = await MasterFetchServer().smart_fetch(
-                pdf, allow_private=True, cache_ttl=0, if_none_match=ETAG,
-                **({"force_fetcher": pinned} if pinned else {}))
-            assert (r.status, r.not_modified) == (304, True), f"force_fetcher={pinned}"
+            r = await _ask(pdf, {"etag": ETAG}, cache_ttl=0,
+                           **({"force_fetcher": pinned} if pinned else {}))
+            assert r.status == 304, f"force_fetcher={pinned}"
             assert r.content_ok is True and r.error == ""
             assert "not modified" in r.next_action
 
@@ -247,16 +264,15 @@ class TestTheConditionalCall:
                                  fetcher_used="stealthy")
 
         monkeypatch.setattr(MasterFetchServer, "stealthy_fetch", fail)
-        await MasterFetchServer().smart_fetch(url, allow_private=True, cache_ttl=0,
-                                              if_modified_since="2026-09-27")
+        await _ask(url, {"last_modified": "2026-09-27"}, cache_ttl=0)
         assert calls == []
 
     @pytest.mark.asyncio
-    async def test_a_bare_etag_from_cache_validators_is_enough(self, origin):
+    async def test_a_bare_stored_etag_is_enough(self, origin):
+        """存下来的是裸 token（引号属于头而不是标记），复验照样要能问出来。"""
         url, _ = origin
-        r = await MasterFetchServer().smart_fetch(
-            url, allow_private=True, cache_ttl=0, if_none_match="v7")
-        assert (r.status, r.not_modified) == (304, True)
+        r = await _ask(url, {"etag": "v7"}, cache_ttl=0)
+        assert r.status == 304
 
     @pytest.mark.asyncio
     async def test_a_conditional_call_asks_the_origin_not_the_cache(self, origin):
@@ -264,20 +280,18 @@ class TestTheConditionalCall:
         url, srv = origin
         await MasterFetchServer().smart_fetch(url, allow_private=True, cache_ttl=600)
         before = srv.hits
-        r = await MasterFetchServer().smart_fetch(
-            url, allow_private=True, cache_ttl=600, if_none_match=ETAG)
+        r = await _ask(url, {"etag": ETAG}, cache_ttl=600)
         assert srv.hits == before + 1, "the conditional question never reached the origin"
         assert r.cached is False
-        assert r.not_modified is True
+        assert r.status == 304
 
     @pytest.mark.asyncio
     async def test_an_unreadable_date_dials_nothing(self, origin):
         url, srv = origin
         before = srv.hits
-        r = await MasterFetchServer().smart_fetch(
-            url, allow_private=True, cache_ttl=0, if_modified_since="someday")
+        r = await _ask(url, {"last_modified": "someday"})
         assert r.error.startswith("invalid_request:")
-        assert "if_modified_since" in r.error
+        assert "last-modified" in r.error
         assert srv.hits == before, "a refused date must not cost a request"
 
     @pytest.mark.asyncio
@@ -292,11 +306,9 @@ class TestTheConditionalCall:
                                  content_type="text/html", fetcher_used="stealthy")
 
         monkeypatch.setattr(MasterFetchServer, "stealthy_fetch", fake_stealthy)
-        r = await MasterFetchServer().smart_fetch(
-            url, allow_private=True, cache_ttl=0, if_none_match=ETAG,
-            force_fetcher="stealthy")
-        assert r.not_modified is False
-        assert "dropped" in r.summary and "force_fetcher='http'" in r.summary
+        r = await _ask(url, {"etag": ETAG}, cache_ttl=0, force_fetcher="stealthy")
+        assert r.status == 200, "浏览器层答不了这个问题，就不许假装复验过"
+        assert "revalidation was dropped" in r.summary
 
 
 # ─── feed 的增量过滤 ─────────────────────────────────────────────────────────
@@ -327,81 +339,6 @@ async def _fetch_with(xml: str, **kw):
         feed_mod._grab = orig
     out._grab_calls = list(calls)  # type: ignore[attr-defined]
     return out
-
-
-async def _poll_with(xml: str, status: int = 200, hdrs: dict | None = None, **kw):
-    """fetch_feed against a canned response, recording the headers we actually sent."""
-    sent: dict = {}
-
-    async def fake_grab(url, timeout, headers=None):
-        sent.update(headers or {})
-        return (b"" if status == 304 else xml.encode()), status, "utf-8", "", (hdrs or {})
-
-    orig = feed_mod._grab
-    feed_mod._grab = fake_grab
-    try:
-        out = await feed_mod.fetch_feed("https://f.example/feed", **kw)
-    finally:
-        feed_mod._grab = orig
-    out._sent = dict(sent)  # type: ignore[attr-defined]
-    return out
-
-
-class TestAConditionalThatWasIgnoredSaysSo:
-    """站方用 200 + 全文回答「变了吗」，等于没回答 —— 而沉默会被读成「变了」。
-
-    smart_fetch 早就为同一件事写了 validators_ignored（它的注释里点名的就是
-    arXiv 对每个 PDF etag 都这样）；feed 这一侧此前什么都没有，于是轮询者分不清
-    "内容变了" 和 "这源站不支持再验证"，而后者意味着每次轮询都要重下整个 feed。
-    """
-
-    QUIET = ('<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>'
-             "<lastBuildDate>Sun, 27 Sep 2026 04:00:00 +0000</lastBuildDate>"
-             "<skipDays><day>Saturday</day></skipDays></channel></rss>")
-
-    @pytest.mark.asyncio
-    async def test_a_200_answer_to_a_conditional_names_the_refusal(self):
-        out = await _poll_with(_feed_xml(["Sat, 27 Sep 2026 10:00:00 +0000"]),
-                               if_none_match="v7")
-        assert out._sent.get("If-None-Match") == '"v7"', "裸 token 要补上引号"
-        assert out.not_modified is False
-        assert "If-None-Match" in out.note
-        assert "does not honour" in out.note
-        assert "NOT evidence" in out.note, "必须说清这不是内容变了的证据"
-
-    @pytest.mark.asyncio
-    async def test_a_real_304_still_needs_no_note(self):
-        out = await _poll_with("", status=304, if_none_match="v7")
-        assert (out.not_modified, out.items, out.note) == (True, [], "")
-
-    @pytest.mark.asyncio
-    async def test_a_plain_request_says_nothing_about_validators(self):
-        out = await _poll_with(_feed_xml(["Sat, 27 Sep 2026 10:00:00 +0000"]))
-        assert out.note == "", "没问过就不该报告答复方式"
-
-    @pytest.mark.asyncio
-    async def test_two_explanations_share_the_field_without_clobbering(self):
-        """空文档 + 被无视的条件请求：两条都是对同一个空列表的解释。"""
-        out = await _poll_with(self.QUIET, if_modified_since="2026-09-20")
-        assert "skipDays=Saturday" in out.note
-        assert "If-Modified-Since" in out.note
-        assert " | " in out.note, "第二条不该把第一条挤掉"
-
-    @pytest.mark.asyncio
-    async def test_the_note_reaches_the_wire_for_one_feed_in_a_batch(self):
-        """批量里只有被问过的那一行该带说明。"""
-        from dhole_mcp.server import _wire_json, _wire_prune
-
-        def row(result):
-            return _wire_prune(
-                {k: getattr(result, k) for k in type(result).model_fields},
-                feed_mod.FeedResult)
-
-        quiet = await _poll_with(self.QUIET, if_none_match="v7")
-        plain = await _poll_with(_feed_xml(["Sat, 27 Sep 2026 10:00:00 +0000"]))
-        _text, payload = _wire_json({"feeds": [row(quiet), row(plain)]})
-        assert "does not honour" in payload["feeds"][0]["note"]
-        assert "note" not in payload["feeds"][1], "空 note 不上线"
 
 
 class TestTheFeedCutoff:

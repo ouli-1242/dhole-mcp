@@ -95,8 +95,7 @@ class TestFetchFeed:
 
     @pytest.mark.asyncio
     async def test_fetch_feeds_batch(self, monkeypatch):
-        async def fake_fetch(url, timeout=20, max_items=20, since="",
-                             if_modified_since="", if_none_match=""):
+        async def fake_fetch(url, timeout=20, max_items=20, since=""):
             return FeedResult(source_url=url, source_title=url, items=[FeedItem(title="x")])
         monkeypatch.setattr("dhole_mcp.feed.fetch_feed", fake_fetch)
         results = await fetch_feeds(["https://a.com/feed", "https://b.com/feed"])

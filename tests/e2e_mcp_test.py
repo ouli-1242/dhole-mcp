@@ -197,8 +197,7 @@ def test_tool_definitions(mcp):
     # 来源。以前它们只活在袋子那段散文里，漏写一个键等于功能在 wire 上不存在；现在
     # 漏声明一个键连调用都发不出去，所以这条查的比原先硬。
     for key in ("session_id", "method", "body", "content_type",
-                "allow_private", "ignore_robots", "max_links", "auth",
-                "if_modified_since", "if_none_match"):
+                "allow_private", "ignore_robots", "max_links", "auth"):
         assert key in props, f"{key} 没被声明，agent 写不出来"
         assert (props[key].get("description") or "").strip(), f"{key} 声明了却没说明"
     # 16.0 的另一半：搜索的日期窗口与 feed 的增量，各自是一个参数。
@@ -264,30 +263,28 @@ def test_method_reaches_the_http_tier(mcp):
     assert "head probe" in data.get("summary", "").lower()
 
 
-def test_revalidation_option_reaches_the_origin(mcp):
-    """if_none_match 走完 wire 到 HTTP 层：一次对真实源站的条件请求。
+def test_revalidation_options_are_off_the_wire(mcp):
+    """条件请求参数在 17.0 下了线（§6），wire 上必须两样都成立：不在 schema 里，
+    传进来还被拒。
 
-    loopback 那组用例答的是可重复的 304，这里要的是真实源站怎么处理这个头：它答
-    304 就必须是「成功、无正文」，它不理条件请求（很多站点就这样）就回普通 200，
-    两种形状都不能被报成失败。
+    这一条原来是「if_none_match 走完 wire 到真实源站」。被删掉的只是**发起权**：
+    复验还在跑，发起者换成了 watch，它经由进程内的 `_REVALIDATE` 带标记，那边由
+    tests/test_revalidation_g23.py 的真 loopback 源站钉 304。wire 这一层能钉的是
+    反面 —— 静默忽略老键会让人以为自己的条件请求发出去了，而实际拿到的是整页。
     """
-    resp = mcp.call_tool("smart_fetch", {
-        "url": "https://httpbin.org/get", "cache_ttl": 0,
-        "if_none_match": "*"})
-    data = _extract_data(resp.get("result", {}))
-    body = "".join(data.get("content") or [])
-    assert data.get("status") in (200, 304), data.get("error")
-    if data.get("status") == 304:
-        assert data.get("not_modified") is True
-        assert data.get("content_ok") is True, "304 是成功，不是失败"
-        assert not body
-    else:
-        # 缺席即默认：not_modified=false 已经不上线（16.0 的响应压缩），读法要跟契约走
-        assert data.get("not_modified", False) is False
-        # 「头真的到达源站」的证据在正文里：httpbin 把收到的请求头回显出来。
-        # cache_validators 不算证据 —— 源站不发 etag/last-modified 时它是 {}，
-        # 而 {} 按同一条规则不上线，所以这条断言在压缩之后只会自证失败。
-        assert "If-None-Match" in body, body[:300]
+    tools = mcp.list_tools().get("result", {}).get("tools", [])
+    by_name = {t["name"]: t for t in tools}
+    for key in ("if_modified_since", "if_none_match"):
+        for tool in ("smart_fetch", "feed_fetch"):
+            assert key not in by_name[tool]["inputSchema"]["properties"], \
+                f"{tool} 还挂着 {key}"
+
+    for key in ("if_none_match", "if_modified_since"):
+        resp = mcp.call_tool("smart_fetch", {
+            "url": "https://httpbin.org/get", key: "*"})
+        blob = json.dumps(resp, ensure_ascii=False)
+        assert "Unsupported argument" in blob, blob[:400]
+        assert key in blob, blob[:400]
 
 
 def test_search_date_window_reaches_the_engines(mcp):

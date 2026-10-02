@@ -51,7 +51,6 @@ VALUES: dict[str, object] = {
     "wait": 100, "max_links": 5, "session_id": "probe-session",
     "method": "GET", "body": {"a": 1}, "content_type": "application/json",
     "auth": {"type": "basic", "username": "u", "password": "p"},
-    "if_modified_since": "2026-09-20", "if_none_match": "probe-etag",
     "focus": "topic", "focus_mode": "best", "focus_engine": "bm25",
     "actions": [{"wait": 1}], "cache_ttl": 300,
     # 探针值不许与工具自己的默认值重合，否则"丢了"和"到了"看起来一样：

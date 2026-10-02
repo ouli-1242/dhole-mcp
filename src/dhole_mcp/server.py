@@ -734,10 +734,12 @@ class ResponseModel(BaseModel):
     # is_stale compares the age against the horizon for THIS KIND of source.
     content_age_days: Optional[int] = Field(default=None, description="Age in days from the page's published/modified date (OpenGraph/JSON-LD/PDF creation_date). null = the page carries no recoverable date (NOT a negative age), or it is a continuously-edited wiki whose only date is its creation date, which says nothing about currency. Pair with is_stale to judge currency.")
     is_stale: bool = Field(default=False, description="True when content_age_days is past the staleness horizon for this kind of source: 30 days for news, 730 for reference/paper/docs/repo/QA, 365 for everything else. So the same age can be stale on a news page and current on a reference page. False when there is no age to judge.")
-    # Revalidation (G23): what the server's own version markers say, and whether
-    # this call was a conditional GET that came back "unchanged".
-    cache_validators: Dict[str, Any] = Field(default_factory=dict, description="The server's own version markers for this exact URL: {etag, last_modified} (either may be absent - many servers send only one). Save them and pass them back as if_none_match / if_modified_since to ask 'has this changed?' without re-downloading the page. {} when the server sends neither, which means revalidation is not available for this URL - a poller should then compare content itself.")
-    not_modified: bool = Field(default=False, description="True = this call sent a conditional request (if_none_match / if_modified_since) and the server answered 304 'not modified'. The content is UNCHANGED, so no body is returned and content=[] is the expected shape: content_ok is true, error is empty. Treat it as 'your copy is current', not as a failed fetch.")
+    # 17.0 §6：条件请求不再是调用方能传的参数，`cache_validators` / `not_modified`
+    # 两个响应字段随之从 wire 上下来。它们存在的唯一理由是"你自己存好再传回来"那个
+    # 合同，而合同删了。版本标记本身还要有个进程内的落点 —— 用它的是 `watch`
+    # （见 _REVALIDATE），PrivateAttr 因此天然不上线。
+    # "没变"这个事实也不再需要一个布尔：`status == 304` 就是它，而 304 早就在响应里。
+    _validators: Dict[str, str] = PrivateAttr(default_factory=dict)
     # source + archived_at: set ONLY when this content came from the Internet
     # Archive (auto-fallback after a live hard-block). 'live' (default) = the
     # real page. Honest marking so the agent knows it may be a dated snapshot.
@@ -944,10 +946,10 @@ _WIRE_OMIT: dict = {
         "original_url", "cached", "session_id", "session_cookie_names",
         "is_truncated", "next_offset", "retry_count", "escalation_path",
         "extracted_type", "page_type", "source_type", "is_official",
-        "content_age_days", "is_stale", "not_modified", "source",
+        "content_age_days", "is_stale", "source",
         "archived_at", "quality_score", "total_size_bytes",
         "total_extracted_chars", "media", "links", "table_of_contents",
-        "cache_validators", "metadata", "fetcher_used", "content_type",
+        "metadata", "fetcher_used", "content_type",
         # G33/G35: 默认 False/None（无人 attach、未要求登录判定）时省略；
         # 非 default 的值（attach 过、probe 出结果）照常上线。
         "cdp_attached", "login_check",
@@ -974,7 +976,7 @@ _WIRE_OMIT: dict = {
     }),
     "FeedResult": frozenset({
         "source_title", "error", "discovered_from", "since",
-        "cache_validators", "not_modified", "note",
+        "note",
     }),
     "FeedItem": frozenset({"title", "published", "summary", "summary_truncated"}),
     "CacheInfoModel": frozenset({"purged", "engine_state_reset",
@@ -1820,10 +1822,11 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
     if result.is_truncated and result.next_offset and result.status < 400:
         next_action = f"page truncated. Use focus='query' to extract only relevant blocks, or offset={result.next_offset} to continue paginating"
     elif unchanged:
-        next_action = ("304 not modified: the page has not changed since the validators "
-                       "you sent, so the copy you already hold is current - do NOT "
-                       "report this as a failed fetch. To read the body again, re-fetch "
-                       "without if_none_match / if_modified_since.")
+        next_action = ("304 not modified: the origin says this URL still serves the "
+                       "version dhole already holds, so no body was transferred - that "
+                       "is a successful answer, do NOT report it as a failed fetch. "
+                       "Revalidation is asked by `watch`, not by a caller; to read the "
+                       "body again, make a plain fetch (nothing to compare against).")
     elif err.startswith("js_shell_detected") or err.startswith("bot_challenge_detected"):
         _wall = ("bot challenge page" if err.startswith("bot_challenge_detected")
                  else "JS shell")
@@ -3068,14 +3071,17 @@ def _cache_context(options: dict) -> str:
         except Exception:
             bits.append(f"au={auth!r}")
 
-    # 条件请求（G23）：If-None-Match / If-Modified-Since 决定服务器答哪一个版本，
-    # 和 cookies / auth 同一类，所以也要进指纹。条件请求本身不读缓存（见 smart_fetch
-    # 里的 cache_ttl=0），这一位守的是反方向：一次带校验子的 200 不能被回放给之后
-    # 没带校验子的调用。
-    for _ck, _tag in (("if_none_match", "nm"), ("if_modified_since", "ms")):
-        _cv = options.get(_ck)
-        if isinstance(_cv, str) and _cv.strip():
-            bits.append(f"{_tag}={_cv.strip()}")
+    # 条件请求：If-None-Match / If-Modified-Since 决定服务器答哪一个版本，和
+    # cookies / auth 同一类，所以也要进指纹。17.0 之后发起者只剩 `watch`，校验子从
+    # `_revalidate` 这一个键进来（由请求上下文注入，见 _smart_fetch_request_context）。
+    # 条件请求本身不读也不写缓存（cache_ttl 被压成 0），这一位守的是反方向：一次带
+    # 校验子的 200 不能被回放给之后没带校验子的调用。
+    _cv = options.get("_revalidate") or {}
+    if isinstance(_cv, dict):
+        for _tag, _key in (("nm", "etag"), ("ms", "last_modified")):
+            _v = _cv.get(_key)
+            if isinstance(_v, str) and _v.strip():
+                bits.append(f"{_tag}={_v.strip()}")
 
     headers = options.get("extra_headers")
     if headers:
@@ -3531,7 +3537,10 @@ def _smart_fetch_request_context(func):
             # — a credential dict that fails validation must leave no trace for
             # the next call to read.
             (_AUTH_SENT, _AUTH_SENT.set(("", ()))),
-            (_CACHE_CTX, _CACHE_CTX.set(_cache_context(options))),
+            (_CACHE_CTX, _CACHE_CTX.set(_cache_context(
+                # 校验子不是参数了，但它是"这一次问的是哪个版本"的一部分，所以仍然
+                # 要进缓存指纹（_cache_context 保持纯函数，值由这里并进去）。
+                {**options, "_revalidate": _REVALIDATE.get()}))),
             (_ROBOTS_MODE, _ROBOTS_MODE.set("")),
             (_ARG_NOTES, _ARG_NOTES.set(notes)),
         ]
@@ -3777,11 +3786,11 @@ def _translate_response(page: _DholeResponse, *args, **kwargs) -> ResponseModel:
     """
     result = _translate_response_body(page, *args, **kwargs)
     headers = getattr(page, "headers", None) or {}
-    if isinstance(headers, dict) and not result.cache_validators:
+    if isinstance(headers, dict) and not result._validators:
         _etag = headers.get("etag") or ""
         _lm = headers.get("last-modified") or ""
         if _etag or _lm:
-            result.cache_validators = {
+            result._validators = {
                 k: str(v).strip() for k, v in (("etag", _etag), ("last_modified", _lm))
                 if str(v or "").strip()}
     return result
@@ -4436,35 +4445,41 @@ def _stealthy_only_call(force_fetcher: Any, actions: Any) -> bool:
     return ff == "stealthy"
 
 
-def _conditional_headers(if_modified_since: Any, if_none_match: Any) -> tuple:
-    """Turn the revalidation options (G23) into conditional-GET request headers.
+def _conditional_headers(markers: Any) -> tuple:
+    """Turn stored version markers ({etag, last_modified}) into request headers.
 
-    Returns ``(headers, rejection_reason)``; the reason is "" when the options are
+    17.0：唯一喂它的人是 `_REVALIDATE`（watch 的复验），不再是 agent 能传的参数。
+    翻译规则一条没改 —— 它防的是注入（换行会变成一个新请求头），以及"源站根本对不上的
+    校验子被答成 200，于是 200 被读成'变了'"。
+
+    Returns ``(headers, rejection_reason)``; the reason is "" when the markers are
     usable. Both are empty on a normal call, so this costs nothing on the common path.
 
-    Why these are first-class options rather than ``extra_headers``: a 304 is not an
+    Why these are translated here rather than passed through ``extra_headers``: a 304 is not an
     error, but it looks like one to anything that judges a response by its body. The
     measured shape of passing ``If-None-Match`` in extra_headers before this existed
     was ``all_tiers_failed (HTTP status 0)`` — the empty 304 body read as a JS shell,
     so dhole launched a 40-second browser to render a response that has no body by
     definition, and reported the site as blocked.
 
-    Dates are normalized, because the caller has no way to know which of the three
-    formats it was supposed to write: an RFC 7231 HTTP-date is sent as-is, an ISO-8601
-    date or datetime is converted (a date means midnight UTC), and anything that is
-    neither is refused before the request goes out — a malformed date in
-    ``If-Modified-Since`` is ignored by servers, which would quietly turn "has it
+    Dates are normalized, because whatever stored the marker last time cannot know
+    which of the three formats the origin wants: an RFC 7231 HTTP-date is sent as-is,
+    an ISO-8601 date or datetime is converted (a date means midnight UTC), and
+    anything that is neither is refused before the request goes out — a malformed date
+    in ``If-Modified-Since`` is ignored by servers, which would quietly turn "has it
     changed?" into "give me the whole page again".
     """
     from email.utils import format_datetime, parsedate_to_datetime
     import re as _re
 
+    markers = markers if isinstance(markers, dict) else {}
     out: dict = {}
 
-    raw = if_modified_since
+    raw = markers.get("last_modified")
     if raw not in (None, "", False):
         if not isinstance(raw, str) or not raw.strip():
-            return {}, "if_modified_since must be a date string (HTTP-date or ISO-8601)"
+            return {}, "the stored last-modified marker must be a date string " \
+                       "(HTTP-date or ISO-8601)"
         raw = raw.strip()
         http_date = ""
         try:
@@ -4480,23 +4495,23 @@ def _conditional_headers(if_modified_since: Any, if_none_match: Any) -> tuple:
                     dt = dt.replace(tzinfo=timezone.utc)
                 http_date = format_datetime(dt, usegmt=True)
             except (TypeError, ValueError):
-                return {}, (f"if_modified_since={raw[:60]!r} is neither an HTTP-date "
-                            "(Sun, 27 Sep 2026 00:00:00 GMT) nor an ISO-8601 date "
-                            "(2026-09-27 or 2026-09-27T00:00:00Z)")
+                return {}, (f"the stored last-modified marker {raw[:60]!r} is neither "
+                            "an HTTP-date (Sun, 27 Sep 2026 00:00:00 GMT) nor an "
+                            "ISO-8601 date (2026-09-27 or 2026-09-27T00:00:00Z)")
         out["If-Modified-Since"] = http_date
 
-    raw = if_none_match
+    raw = markers.get("etag")
     if raw not in (None, "", False):
         if not isinstance(raw, str) or not raw.strip():
-            return {}, "if_none_match must be an ETag string (as returned in cache_validators)"
+            return {}, "the stored etag must be a string"
         raw = raw.strip()
         if len(raw) > 256:
-            return {}, "if_none_match is too long (256 characters max)"
+            return {}, "the stored etag is too long (256 characters max)"
         if _re.search(r"[\r\n]", raw):
-            return {}, "if_none_match must not contain line breaks"
+            return {}, "the stored etag must not contain line breaks"
         if raw != "*" and not raw.startswith(('"', 'W/"')):
-            # A bare token is the usual thing an agent writes after copying
-            # cache_validators.etag; the quotes are part of the header, not the tag.
+            # 存下来的是裸 token 而不是带引号的头值：引号属于头，不属于标记。
+            # （RFC 7232 的 entity-tag 带引号，多数源站发头时才加。）
             raw = f'"{raw}"'
         out["If-None-Match"] = raw
 
@@ -4676,7 +4691,6 @@ _SF_PARAMS = frozenset({
     "solve_cloudflare", "block_webrtc", "hide_canvas",
     "include_media", "include_links", "max_links", "ignore_robots",
     "allow_private", "session_id", "method", "body", "content_type", "auth",
-    "if_modified_since", "if_none_match",
     # G33/G35：CDP attach、无模型登录判定，以及 §3-16 那道先问再记的门
     # （confirm 是门的一部分，不是可选装饰）。
     "check_login", "cdp_url", "confirm",
@@ -4727,7 +4741,6 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     "cache_clear": frozenset({"all", "engine_state"}),
     "parse": frozenset({"file_path", "cwd", "encoding"}),
     "feed_fetch": frozenset({"urls", "max_items", "timeout", "since",
-                             "if_none_match", "if_modified_since",
                              "allow_private"}),
     "resolve_url": frozenset({"url", "timeout"}),
     # Both optional: the bare call is the census. This dict is also the set of
@@ -5347,14 +5360,10 @@ class MasterFetchServer:
         Centralizes the repetitive 'annotate -> cache -> chunk' pattern
         that was duplicated 8+ times across smart_fetch.
         """
-        # A 304 is a 304 however it was reached, so the flag is set in this
-        # shared tail rather than in one branch: the escalation path had a 304
-        # branch, and it still missed two callers - the document early-return
-        # above it and the pinned tier, which never enters `_auto_escalate` at
-        # all. Both measured live, both leaving `not_modified` false on a
-        # response whose whole meaning is "unchanged".
-        if result.status == 304:
-            result.not_modified = True
+        # 304 的读法全在这里定：`status == 304` 就是"没变"这个事实，不再另存一个
+        # 布尔。曾经的 `not_modified` 有过一整类 bug（升级路径里有 304 分支而正文
+        # 早退与 pinned 层没有，两处实测都把"没变"报成了失败），根因都是**把同一个
+        # 事实记在两个地方**。现在只有一个地方。
         result = _annotate_quality(result)
         _stamp_robots_mode(result)
         # Only cache CLEAN content. Caching JS shells / bot challenges / geo
@@ -5393,12 +5402,9 @@ class MasterFetchServer:
                     "page_type": result.page_type,
                     "source": result.source,
                     "archived_at": result.archived_at,
-                    # The origin's own version markers, for the same reason as the
-                    # fields above: a cached page that cannot answer "what is my
-                    # ETag?" cannot be revalidated, so the documented poller flow
-                    # (if_none_match with cache_validators.etag) broke exactly for
-                    # the caller who re-fetches instead of passing cache_ttl=0.
-                    "cache_validators": result.cache_validators,
+                    # 源站的版本标记：缓存里那份正文得知道自己对应哪一版，否则
+                    # 下一次复验无从问起。键名沿用旧拼写，老缓存行仍然读得出来。
+                    "cache_validators": result._validators,
                 },
             )
         return _apply_chunking(result, max_chars=max_chars, offset=offset)
@@ -6056,7 +6062,7 @@ class MasterFetchServer:
 
         text = "\n".join(result.content or [])
         # 这一版正文对应哪一版本标记：与基线同写一次，下一次检查带出去问"变了吗"。
-        _v = result.cache_validators or {}
+        _v = result._validators or {}
         cut = len(text) > (w["max_chars"] or tasks.MAX_SNAPSHOT_CHARS)
         text = text[: (w["max_chars"] or tasks.MAX_SNAPSHOT_CHARS)]
 
@@ -6996,8 +7002,6 @@ class MasterFetchServer:
         body: Annotated[Optional[Any], Field(description="Request body for POST/PUT/DELETE/PATCH (max 256 KB). A dict is sent as a form; with content_type=application/json it is sent as JSON; a string is sent as-is. Ignored for GET/HEAD (said so in the summary).")] = None,
         content_type: Annotated[Optional[str], Field(description="Content-Type for the body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json.")] = None,
         auth: Annotated[Optional[Any], Field(description="Send credentials with the request: {type:'basic',username,password}, {type:'bearer',token}, or {type:'header',name,value} for an API-key header (e.g. name='X-API-Key'). 'user'/'pass' work as shorthand; 'type' may be omitted when the fields already say what it is. The credential goes to THAT host only - a redirect to a different host drops it, so a site that bounces you to a CDN cannot collect your key. Values are never echoed back in the response, and a credentialed answer is cached per credential instead of publicly.")] = None,
-        if_modified_since: Annotated[Optional[str], Field(description="Ask 'has this changed since?' instead of re-downloading: send the server a date (an HTTP-date, or ISO-8601 like '2026-09-27' / '2026-09-27T08:00:00Z'; a bare date means midnight UTC). If the page has not changed the server answers 304, dhole returns not_modified=true with NO content and content_ok stays true - that is a successful answer, not a failure. Pair it with cache_validators.last_modified from an earlier call. HTTP tier only: a conditional request never escalates to the browser, which cannot be asked this question.")] = None,
-        if_none_match: Annotated[Optional[str], Field(description="Stronger revalidation than if_modified_since where the server publishes one: an ETag to check against (from cache_validators.etag; the quotes are added if you leave them off, '*' means 'any current version'). An unchanged page comes back status=304, not_modified=true, content=[] with content_ok true. HTTP tier only, and never cached: a 304 says nothing about the body, so it cannot be stored as one.")] = None,
         schema: Annotated[Optional[Dict[str, Any]], Field(description="JSON schema for structured data extraction. Each property can have a 'selector' (CSS) for direct DOM extraction. Returns structured JSON instead of markdown. No LLM needed. Needs a non-empty 'properties' map (a JSON string is also accepted); an unusable schema raises instead of silently returning markdown. A property carrying its OWN 'properties' (or items.properties) plus a selector extracts one record per matched element, child selectors evaluated inside that element - how a repeated list (quotes, products, rows) keeps its grouping instead of flattening into one array of every tag on the page. Up to 200 records per field.")] = None,
         confirm: Annotated[bool, Field(description="Approval for a first-time sensitive action on this call. Today that means cdp_url: attaching your real Chrome hands over every logged-in site's cookies, so the FIRST attach to a host is refused with cdp_authorization_required and nothing executed - re-call with confirm=true to authorize that host (remembered on disk; delete cdp_hosts.json in the dhole state directory to revoke). False (default) = nothing sensitive is approved.")] = False,
     ) -> ResponseModel:
@@ -7133,30 +7137,24 @@ class MasterFetchServer:
             extra_headers = {**(extra_headers or {}), **auth_headers}
             _AUTH_SENT.set((auth_kind, auth_names))
 
-        # G23: revalidation. Translated to request headers here (like auth), so one
-        # decision covers all three consequences: the HTTP tier sends them, the
-        # browser tier must NOT (it is asked a question it cannot answer), and a
-        # cached copy must not pre-empt the origin — a caller asking "has this
-        # changed?" wants the site's answer, not dhole's memory of it.
-        conditional, cond_rejected = _conditional_headers(if_modified_since, if_none_match)
-        if not conditional and not cond_rejected:
-            # 内部复验那一档（§6：调用方的参数在 17.0 下线，watch 是这个机制的
-            # 唯一用户）：没人问"变了吗"的时候，看一眼这次调用是不是替某个监控问的。
-            _rv = _REVALIDATE.get() or {}
-            conditional, cond_rejected = _conditional_headers(
-                _rv.get("last_modified"), _rv.get("etag"))
+        # 复验（17.0 §6）：这里唯一的发起者是 `watch`，它经由进程内通道 _REVALIDATE
+        # 带来自己存过的版本标记。翻译仍然集中在一个位置（与 auth 同一待遇），因为
+        # 一个决定牵动三处：HTTP 层要发、浏览器层不能发（它答不了这个问题），而一次
+        # 带校验子的调用不许被自己的缓存抢先 —— 问"变了吗"的人要的是站方的回答。
+        _rv = _REVALIDATE.get() or {}
+        conditional, cond_rejected = _conditional_headers(_rv)
         if cond_rejected:
             return _invalid_request_result(
-                url or "", f"invalid revalidation option: {cond_rejected}",
-                next_action=("Pass the value back exactly as cache_validators reported it "
-                             "({etag, last_modified} from an earlier call), or omit the "
-                             "option. No request was made - a validator the server cannot "
-                             "match would come back as 'changed' and read like a real answer."))
+                url or "", f"invalid revalidation marker: {cond_rejected}",
+                next_action=("No request was made: a stored marker the server cannot "
+                             "match would come back as 200 and read like 'it changed'. "
+                             "This is dhole's own revalidation bookkeeping (watch), not "
+                             "something the caller passes - re-check the watch entry."))
         if conditional and _stealthy_only_call(force_fetcher, actions):
             _ARG_NOTES.get().append(
-                "if_modified_since / if_none_match were dropped: this call runs on the "
-                "stealthy browser, which is not given conditional requests (the HTTP "
-                "tier answers them); use force_fetcher='http' to revalidate")
+                "revalidation was dropped: this call runs on the stealthy browser, "
+                "which is not given conditional requests (only the HTTP tier answers "
+                "them), so the whole page was read instead of a 304")
             conditional = {}
         elif conditional:
             extra_headers = {**(extra_headers or {}), **conditional}
@@ -7462,12 +7460,12 @@ class MasterFetchServer:
                     page_type=env.get("page_type", "unknown") or "unknown",
                     source=env.get("source", "live") or "live",
                     archived_at=env.get("archived_at", "") or "",
-                    cache_validators=env.get("cache_validators", {}) or {},
                 )
                 # The restored metadata carries the robots receipt of the fetch that
                 # wrote it, which is a statement about a past process, not this one.
                 # This path returns without going through _finalize_result, so it
                 # needs the same reconciliation the fetch path gets there.
+                hit._validators = env.get("cache_validators", {}) or {}
                 _stamp_robots_mode(hit)
                 return _apply_chunking(hit, max_chars=mc, offset=offset)
 
@@ -8092,25 +8090,6 @@ class MasterFetchServer:
         elapsed = (now() - start_time) * 1000
         result.duration_ms = elapsed
 
-        # The other half of a conditional request: G23 asks "did it change?" and a
-        # 304 answers that. The extended report's N4 is about the answer that
-        # reads like "it changed" but is not: an origin that ignores the validator
-        # sends 200 with the whole body (measured: arxiv does this for every PDF
-        # etag). Nothing was compared, so not_modified=false would be a claim about
-        # the content that this response cannot support. Say which of the two
-        # happened, in the one place that knows a conditional went out.
-        if (conditional and result.status == 200
-                and any(c.strip() for c in result.content or [])):
-            result.metadata = {
-                **(result.metadata or {}),
-                "validators_ignored": (
-                    f"the origin answered our {' + '.join(sorted(conditional))} "
-                    "with 200 and a full body instead of a 304, so it does not "
-                    "honour conditional requests for this URL. That is not "
-                    "evidence the content changed - nothing was compared; "
-                    "compare the body yourself."),
-            }
-
         # ─── 304: the conditional answer (G23) ─────────────────────────
         # A 304 carries no body BY DESIGN, so each test below ("empty content =
         # JS shell", "no content = the site blocked you") reads it as a failure.
@@ -8566,8 +8545,6 @@ class MasterFetchServer:
         max_items: Annotated[Optional[int], Field(description="Max entries per feed (default 20; 0 = all).")] = 20,
         timeout: Annotated[Optional[int], Field(description="Per-feed timeout in seconds (default 20).")] = 20,
         since: Annotated[Optional[str], Field(description="Incremental polling: keep only entries published at or after this date (ISO-8601 like '2026-09-20' / '2026-09-20T08:00:00Z', or an RFC-822 feed timestamp). Store the newest published value from the previous call and pass it back. What the filter removed is reported (items_older_than_since) rather than silently shrinking the list, so 'nothing new' is an answer you can act on; entries with no usable date are KEPT and counted (items_without_date) because an undated feed cannot be filtered honestly. An unreadable date is refused as an error instead of returning the whole feed as if it were new.")] = None,
-        if_none_match: Annotated[Optional[str], Field(description="Cheaper poll than `since`: send back a feed's cache_validators.etag and an unchanged feed answers 304, so the whole document is never downloaded. Returns not_modified=true with items=[] and no error - that is 'nothing new', not an empty feed. One URL per call (a batch cannot share one etag).")] = None,
-        if_modified_since: Annotated[Optional[str], Field(description="The same question as if_none_match for servers that publish Last-Modified instead of an ETag (HTTP-date or ISO-8601; a bare date means midnight UTC). One URL per call.")] = None,
         allow_private: Annotated[Optional[Any], Field(description="Poll a feed the SSRF guard otherwise blocks - your own dev / Docker / LAN feed reader. true = loopback only, or a list of hosts. Same option and same semantics as smart_fetch's.")] = None,
     ) -> List[Any]:
         """Fetch RSS/Atom feeds and return their latest entries.
@@ -8603,19 +8580,9 @@ class MasterFetchServer:
                 urls = [validate_url(u) for u in urls]
             except SecurityError as se:
                 raise ValueError(f"feed_fetch URL 校验失败: {se}") from se
-            # One set of version markers cannot be asked of several feeds: feed B
-            # would be revalidated with feed A's etag, and a 304 there means
-            # nothing. Refused rather than half-applied.
-            if (if_none_match or if_modified_since) and len(urls) > 1:
-                raise ValueError(
-                    "if_none_match / if_modified_since describe ONE feed's version; "
-                    f"this call names {len(urls)} URLs. Pass a single url, or drop "
-                    "the validators and poll with since=.")
             results = await fetch_feeds(urls, timeout=timeout or 20,
                                         max_items=max_items if max_items is not None else 20,
-                                        since=since or "",
-                                        if_modified_since=if_modified_since or "",
-                                        if_none_match=if_none_match or "")
+                                        since=since or "")
         return [
             {
                 "source_url": r.source_url,
@@ -8631,11 +8598,6 @@ class MasterFetchServer:
                 "since": r.since,
                 "items_older_than_since": r.items_older_than_since,
                 "items_without_date": r.items_without_date,
-                # The cheap-poll half: save these and pass them back as
-                # if_none_match, and an unchanged feed costs one header instead of
-                # the whole document.
-                "cache_validators": r.cache_validators,
-                "not_modified": r.not_modified,
                 # The zero-entries-but-no-error case: an empty list cannot tell
                 # "nothing published" from "our parser drifted", and only the
                 # document's own markers can. Absent for any feed with items.
@@ -8982,8 +8944,6 @@ class MasterFetchServer:
                     "useragent": {"type": "string", "description": "Override the user agent, both tiers. A fingerprint internal that is already tuned - overriding it usually makes a site detect you, so leave it unset unless something names it."},
                     "allow_private": {"anyOf": [{"type": "boolean"}, {"type": "array", "items": {"type": "string"}}], "description": "Fetch a host the SSRF guard otherwise blocks (your own dev/staging service): true = loopback only, or name the hosts. Cloud metadata endpoints are never allowed under any setting."},
                     "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check for this call (default false = comply; a disallowed URL makes no request at all). Set true only where you have the site's permission."},
-                    "if_modified_since": {"type": "string", "description": "Conditional GET (HTTP tier only): an HTTP-date or ISO-8601, ideally cache_validators.last_modified from an earlier call. A 304 is SUCCESS - not_modified=true, no content, content_ok still true."},
-                    "if_none_match": {"type": "string", "description": "Conditional GET against an ETag (cache_validators.etag; quotes are added if you leave them off). HTTP tier only, and a 304 is never cached as content. A 304 is SUCCESS, not a failure to retry."},
                     "check_login": {"type": "boolean", "description": "Run the model-free login probe on the settled browser page; returns login_check (DOM signals + cookie NAMES, never values). Live-only: null on HTTP-tier results and on cache hits, so pair it with cache_ttl=0."},
                     "cdp_url": {"type": "string", "description": "Attach the user's own Chrome over CDP for this call - it rides that profile's logged-in cookies, and the HTTP tier and public cache are skipped. The FIRST attach to a host is refused with cdp_authorization_required and executes nothing until confirm=true authorizes it; answers say cdp_attached=true."},
                     "wait": {"type": "number", "description": "Extra milliseconds to wait after page load for JS rendering (browser tier)."},
@@ -9112,7 +9072,7 @@ class MasterFetchServer:
         },
         {
             "name": "feed_fetch",
-            "description": "Batch-fetch RSS/Atom feeds newest-first (title/url/published/summary) to track what a source has PUBLISHED - changelogs, release notes, blogs, news. Feeds parse independently, so a dead feed never fails the batch. NOT a general page fetcher - use smart_fetch.\n- A site page is accepted: the alternate RSS/Atom link in its own head is followed and the reply says so in discovered_from.\n- since= turns it into a poll for what is new since the last call; items_older_than_since counts what it dropped.\n- An item's summary is a PREVIEW: past 500 chars it is cut and that item says summary_truncated=true. smart_fetch the item url for the whole text.\nWhat an unparseable feed answers with, the reply shape and the conditional-poll fields: dhole_doc(topic='behavior', section='remaining tools').",
+            "description": "Batch-fetch RSS/Atom feeds newest-first (title/url/published/summary) to track what a source has PUBLISHED - changelogs, release notes, blogs, news. Feeds parse independently, so a dead feed never fails the batch. NOT a general page fetcher - use smart_fetch.\n- A site page is accepted: the alternate RSS/Atom link in its own head is followed and the reply says so in discovered_from.\n- since= turns it into a poll for what is new since the last call; items_older_than_since counts what it dropped.\n- An item's summary is a PREVIEW: past 500 chars it is cut and that item says summary_truncated=true. smart_fetch the item url for the whole text.\nWhat an unparseable feed answers with and the reply shape: dhole_doc(topic='behavior', section='remaining tools').",
             "inputSchema": {
                 "type": "object", "required": ["urls"],
                 "properties": {
@@ -9120,8 +9080,6 @@ class MasterFetchServer:
                     "max_items": {"type": "integer", "description": "Max entries per feed (default 20; 0 = all)"},
                     "timeout": {"type": "integer", "description": "Per-feed timeout in seconds (default 20)"},
                     "since": {"type": "string", "description": "Incremental polling: keep only entries published at or after this date (ISO-8601 '2026-09-20' / '2026-09-20T08:00:00Z', or an RFC-822 feed timestamp). Pass the newest published value from the previous call. items_older_than_since reports what it removed; undated entries are kept and counted, not dropped. An unreadable date is an error, not a filter that kept everything."},
-                    "if_none_match": {"type": "string", "description": "Cheaper than since when the server publishes an ETag: pass back that feed's cache_validators.etag. An unchanged feed answers 304, so you get not_modified=true with items=[] and no error and the document is never downloaded. Conditional calls take ONE URL."},
-                    "if_modified_since": {"type": "string", "description": "The same question for servers that publish Last-Modified instead of an ETag (HTTP-date or ISO-8601; bare date = midnight UTC). ONE URL."},
                     "allow_private": {"type": "boolean", "description": "Poll a feed the SSRF guard otherwise blocks - your own dev / Docker / LAN feed reader. true = loopback only. Omit and a localhost feed is refused before any request."},
                 },
             },
@@ -9534,8 +9492,6 @@ class MasterFetchServer:
                     max_items=args.get("max_items", 20),
                     timeout=args.get("timeout", 20),
                     since=args.get("since"),
-                    if_none_match=args.get("if_none_match"),
-                    if_modified_since=args.get("if_modified_since"),
                     allow_private=args.get("allow_private"),
                 )
             except ValueError as e:
@@ -9559,8 +9515,9 @@ class MasterFetchServer:
             #
             # These rows are projected dicts, not models; _WIRE_PROJECTED_ROWS
             # tells the compaction which policy they answer to, so a quiet batch
-            # no longer pays for error:"" / since:"" / not_modified:false once per
-            # feed. The two poll receipts are not in that policy and still ship.
+            # no longer pays for error:"" / since:"" once per feed. The two since
+            # receipts (items_older_than_since, items_without_date) are not in that
+            # policy and still ship.
             payload = {"feeds": feeds}
             text, compact = _wire_json(payload)
             return [TextContent(type="text", text=text)], compact

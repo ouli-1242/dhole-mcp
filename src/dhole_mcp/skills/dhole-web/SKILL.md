@@ -50,7 +50,7 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 1. **Snippets are not answers** — a snippet is a 500-char preview; verify factual claims against fetched full text.
 2. **Parameter placement** — every parameter sits at the **top level** of the call; nothing is nested, and a wrapper object is rejected rather than read. Each tool accepts only its own names (`since=` belongs to `feed_fetch`, not to `smart_fetch`), so a wrong name — or a right name on the wrong tool — fails loudly and lists what that tool takes. Correct/incorrect pairs in examples.md.
 3. **Never retry non-GET** — the previous call may already be committed; re-sending writes twice. No cache, no browser escalation, no archive fallback for write methods.
-4. **304 is success** — `not_modified=true` means the copy you already hold is current; do not escalate to the browser to "retry".
+4. **304 is success** — a response with `status=304` and no body means the copy dhole already holds is current; do not escalate to the browser to "retry". You cannot ask for this yourself (17.0): `watch` revalidates on its own, and a plain fetch just gets the body.
 5. **Keyed engines (tavily / bocha) bill per call** — add them only when the user explicitly names them. Never by default.
 6. **Never send `before=`** — no engine supports older-than bounds; the call is rejected. Date-bounded increments go through `feed_fetch(since=)`.
 7. **Never pass off a shell page** — `content_ok=true` with a few hundred characters is a placeholder page; report it honestly instead of answering from it.

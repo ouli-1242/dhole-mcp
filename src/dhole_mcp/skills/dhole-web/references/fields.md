@@ -6,10 +6,9 @@ Consult this when a response doesn't make sense or a field shows a non-default v
 
 | Field | Meaning | What to do when non-default |
 |---|---|---|
-| `status` | HTTP status; `0` = the request never went out (argument validation / SSRF / robots) | On `0`, read `error`; do not retry the same arguments |
+| `status` | HTTP status; `0` = the request never went out (argument validation / SSRF / robots); `304` = the origin says the copy dhole holds is unchanged, so `content=[]` is the expected shape | On `0`, read `error`; do not retry the same arguments. A 304 is **success** - never escalate it to the browser |
 | `content_ok` | `true` = 2xx + no error + non-empty body. **Does NOT mean the content is real** | Pair with `total_extracted_chars`: a few-hundred-char "success" is usually a shell page (troubleshooting "shell pages") |
 | `error` | Failure reason, in plain language | Fix what it says; symptom-indexed fixes in troubleshooting.md |
-| `not_modified` | 304: content unchanged | **Success** — the copy you hold is current; do not re-fetch |
 | `summary` | One-line plain-language conclusion | Quick scan to confirm what the call actually did |
 
 ## Content shape
@@ -59,7 +58,6 @@ Consult this when a response doesn't make sense or a field shows a non-default v
 | Field | Meaning | What to do when non-default |
 |---|---|---|
 | `session_id` + `session_cookie_names` | Session active + cookie NAMES stored for that host (values are never echoed) | Cookies are live credentials — `close_session(session_id=...)` when done |
-| `cache_validators` | `.etag` / `.last_modified` — pass back verbatim as `if_none_match` / `if_modified_since` | Reuse on the next conditional request; 304 = unchanged |
 | `items_older_than_since` | (feed) entries filtered out by `since` | Non-zero means incremental filtering is working |
 | `summary_truncated` | (feed) item summary is a 500-char preview | Fetch the item URL with `smart_fetch` for full text |
 

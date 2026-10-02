@@ -39,8 +39,6 @@ async def test_feed_fetch_returns_dict_structured(mock_logger=None):
         since = ""
         items_older_than_since = 0
         items_without_date = 0
-        cache_validators = {}
-        not_modified = False
         note = ""
 
     with patch("dhole_mcp.feed.fetch_feeds", new=AsyncMock(return_value=[_FakeResp()])):

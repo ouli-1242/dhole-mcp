@@ -1,11 +1,16 @@
 """两轮扩展报告的回归：BUG-1 mojibake、BUG-5 since 掉包、N2 引擎未观测、
-问题-3 缓存丢判定、问题-4 非英文的墙、N1 click 不等导航、N4 验证器被无视。
+问题-3 缓存丢判定、问题-4 非英文的墙、N1 click 不等导航。
 
 每条的根因都不在报告指的地方，而且多数是同一类：**两条路径长得不一样，而只有一条被测过**。
 - BUG-1 / 问题-3 在解码与缓存这两条"另一半没测到"的链上；
 - BUG-5 在 dispatcher 这道缝上（单元测试直调门方法，看不见参数掉包）；
-- N1 / N2 / N4 是把已经存在的信号（引擎产出计数、条件请求、click 的后果）在有界时间内
+- N1 / N2 是把已经存在的信号（引擎产出计数、click 的后果）在有界时间内
   如实报出去。
+
+这份文件原来还钉着 N4「验证器被无视」：源站对 If-None-Match 回 200 + 全文时，响应要
+说出这件事。17.0 把条件请求从工具表面上撤了（§6 那条 −35 用例），于是没有「调用方给
+的验证器」可谈被不被无视 —— 304 那一格改由 `test_revalidation_g23.py` 的内部通道钉
+`status`，那边有一个真打 socket 的源站。
 """
 
 
@@ -407,12 +412,12 @@ class TestAClickWaitsForWhatItCaused:
         assert page.clock.t * 1000 <= actions_mod.CLICK_SETTLE_MIN_MS + 600
 
 
-class _ServedValidator:
-    """A loopback origin with one path that honours If-None-Match and one that doesn't.
+class _ServedPage:
+    """A loopback origin that answers every GET with the same small document.
 
-    arxiv answers every conditional request on a PDF with 200 + the whole file
-    (report N4). Without a second path in the same server, a test of "the flag is
-    absent on a real 304" would be asserting nothing about the 304 branch.
+    17.0 之前这里还有一条 `/honoured` 路径专门回 304，用来钉「验证器被无视」这个
+    标记 —— 那个标记随条件请求参数一起下线了，所以剩下的这一条路径就是全部需要
+    的东西。真实 304 的证人搬到 `test_revalidation_g23.py` 的那个源站上去了。
     """
 
     def __enter__(self):
@@ -426,10 +431,6 @@ class _ServedValidator:
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
-                if self.path.startswith("/honoured") and self.headers.get("if-none-match"):
-                    self.send_response(304)
-                    self.end_headers()
-                    return
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("ETag", '"probe-etag"')
@@ -443,33 +444,12 @@ class _ServedValidator:
         self.srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
         self.srv.daemon_threads = True
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
-        base = f"http://127.0.0.1:{self.srv.server_address[1]}"
-        return f"{base}/ignored", f"{base}/honoured"
+        return f"http://127.0.0.1:{self.srv.server_address[1]}/page"
 
     def __exit__(self, *exc):
         self.srv.shutdown()
         self.srv.server_close()
         return False
-
-
-class TestAValidatorTheOriginIgnoresIsNamed:
-    """N4：验证器被原样无视时，响应不能读成「内容变了」。"""
-
-    def test_a_200_answered_to_a_conditional_says_so(self):
-        with _ServedValidator() as (ignored_url, honoured_url):
-            plain = _fetch(ignored_url)
-            ignored = _fetch(ignored_url, if_none_match="stale-etag")
-            honoured = _fetch(honoured_url, if_none_match="stale-etag")
-
-        assert plain["metadata"].get("validators_ignored") is None, \
-            "没发验证器的普通抓取不该出现这个标记"
-        note = ignored["metadata"].get("validators_ignored")
-        assert note, "200 + 全文就是对 If-None-Match 的无视，这里必须说明"
-        assert "If-None-Match" in note
-        assert not ignored.get("not_modified", False)
-        assert honoured["not_modified"] is True
-        assert honoured["metadata"].get("validators_ignored") is None, \
-            "真 304 是验证器起了作用，不该标成被无视"
 
 
 # 实测抓回来的文本（本机 2026-09-27，问题-4）：
@@ -513,8 +493,7 @@ class TestTheResponseSaysHowRobotsWasDecided:
     """
 
     def test_the_three_ways_to_get_permission_are_distinguishable(self, monkeypatch):
-        with _ServedValidator() as (ignored_url, _honoured):
-            url = ignored_url.split("?")[0]
+        with _ServedPage() as url:
             monkeypatch.setenv("DHOLE_IGNORE_ROBOTS", "1")
             by_env = _fetch(url, include_links=False)
             monkeypatch.delenv("DHOLE_IGNORE_ROBOTS")
@@ -652,73 +631,6 @@ class TestADataXmlDocumentKeepsItsTags:
                                content=["<urlset/>"], content_type="application/xml")
         _apply_envelope(result)
         assert result.page_type == "xml"
-
-
-class TestAPollCanAskAnythingNewWithoutDownloading:
-    """P2-10：轮询者拿不到 feed 自己的 ETag，就只能整份下载后自己比。"""
-
-    FEED = (b'<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>'
-            b'<item><title>new</title><link>https://example.test/n</link>'
-            b'<pubDate>Sun, 27 Sep 2026 12:30:00 +0000</pubDate></item>'
-            b'</channel></rss>')
-
-    def _stub(self, monkeypatch, hdrs, status=200, body=None):
-        from dhole_mcp import feed as feed_mod
-
-        sent: dict = {}
-
-        async def fake_grab(url, timeout, headers=None):
-            sent["headers"] = headers or {}
-            if status == 304:
-                return b"", 304, "", "", hdrs
-            return (self.FEED if body is None else body), status, "utf-8", "", hdrs
-
-        monkeypatch.setattr(feed_mod, "_grab", fake_grab)
-        return sent
-
-    def test_the_servers_validators_travel_back_to_the_caller(self, monkeypatch):
-        self._stub(monkeypatch, {"etag": '"feed-1"', "last-modified": "Sun, 27 Sep 2026 12:00:00 GMT"})
-        _content, structured = _dispatch("feed_fetch", {
-            "urls": ["https://example.test/feed.xml"]})
-
-        feed = structured["feeds"][0]
-        assert feed["cache_validators"] == {"etag": '"feed-1"',
-                                           "last_modified": "Sun, 27 Sep 2026 12:00:00 GMT"}
-        # 线格式不上默认值，所以缺席就是说「不是 304」
-        assert not feed.get("not_modified", False)
-
-    def test_a_304_is_a_successful_poll_not_an_empty_feed(self, monkeypatch):
-        sent = self._stub(monkeypatch, {"etag": '"feed-1"'}, status=304)
-        _content, structured = _dispatch("feed_fetch", {
-            "urls": ["https://example.test/feed.xml"], "if_none_match": "feed-1"})
-
-        assert sent["headers"] == {"If-None-Match": '"feed-1"'}, \
-            "裸 token 要补上引号：引号属于 header，不属于标签"
-        feed = structured["feeds"][0]
-        assert feed["not_modified"] is True
-        assert feed["items"] == [] and feed.get("error", "") == ""
-
-    def test_one_set_of_markers_cannot_be_asked_of_several_feeds(self, monkeypatch):
-        self._stub(monkeypatch, {"etag": '"feed-1"'})
-        _content, structured = _dispatch("feed_fetch", {
-            "urls": ["https://example.test/a.xml", "https://example.test/b.xml"],
-            "if_none_match": "feed-1"})
-
-        assert structured["feeds"] == []
-        assert "ONE feed" in structured["error"]
-
-    def test_a_bare_etag_token_is_quoted_and_a_line_break_is_refused(self):
-        from dhole_mcp.feed import _feed_conditional_headers
-
-        hdrs, why = _feed_conditional_headers("", 'W/"abc"')
-        assert why == "" and hdrs == {"If-None-Match": 'W/"abc"'}, "弱标签原样保留"
-        hdrs, why = _feed_conditional_headers("", "*")
-        assert why == "" and hdrs == {"If-None-Match": "*"}
-
-        _h, why = _feed_conditional_headers("", 'abc\r\nX-Evil: 1')
-        assert why and _h == {}, "换行必须被拒：那是在往请求里塞第二个 header"
-        _h3, why3 = _feed_conditional_headers("Sun, 27 Sep 2026", "")
-        assert why3 == "" and _h3 == {"If-Modified-Since": "Sun, 27 Sep 2026"}
 
 
 class TestRotatedPdfTextIsNotBodyText:

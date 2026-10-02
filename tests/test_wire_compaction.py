@@ -69,9 +69,9 @@ class TestDefaultsLeaveTheWire:
         p = _payload(r)
         for quiet in ("original_url", "cached", "is_truncated", "next_offset",
                       "retry_count", "escalation_path", "page_type",
-                      "source_type", "is_official", "is_stale", "not_modified",
+                      "source_type", "is_official", "is_stale",
                       "source", "archived_at", "quality_score", "media",
-                      "links", "table_of_contents", "cache_validators",
+                      "links", "table_of_contents",
                       "session_id", "session_cookie_names", "extracted_type"):
             assert quiet not in p, f"{quiet} 停在默认值上却仍然上线"
         assert p["status"] == 404 and p["content_ok"] is False
@@ -136,8 +136,14 @@ class TestVerdictsStayOnTheWire:
         assert p["is_official"] is True and p["extracted_type"] == "structured"
 
     def test_a_conditional_hit_is_visible(self):
-        p = _payload(_fetch(not_modified=True, cache_validators={"etag": "E"}))
-        assert p["not_modified"] is True and p["cache_validators"] == {"etag": "E"}
+        """304 是个判定，不是默认值：压缩不许把它当"没什么可说"抹掉。
+
+        17.0 之后没有 `not_modified` 这个字段了 —— 那个事实只有一个载体，就是
+        `status`。所以这条守卫改钉 status：它带着 304 上线，读的人才知道
+        "空正文是答复，不是失败"。
+        """
+        p = _payload(_fetch(status=304, content=[]))
+        assert p["status"] == 304, p
 
 
 class TestNumbersStopPayingRent:
@@ -189,7 +195,7 @@ class TestEveryRowGetsItsOwnPolicy:
 
         容器名登记在 _WIRE_PROJECTED_ROWS 里，策略才落得下去。漏掉它的代价是按
         feed 计费的：一批安静的订阅每行都付 error:"" / since:"" /
-        discovered_from:"" / not_modified:false。而两张轮询收据不在策略里，
+        discovered_from:""。而两张轮询收据不在策略里，
         必须照常出现——0 是它们的默认值，也是它们的含义。
         """
         from dhole_mcp.feed import FeedResult
@@ -200,8 +206,7 @@ class TestEveryRowGetsItsOwnPolicy:
         assert out == {"source_url": "https://x.test/feed.xml",
                        "source_title": "T", "items": [],
                        "items_older_than_since": 0, "items_without_date": 0}, out
-        for quiet in ("error", "since", "discovered_from", "not_modified",
-                      "cache_validators"):
+        for quiet in ("error", "since", "discovered_from"):
             assert quiet not in out
 
     def test_a_stubbed_batch_that_returns_nothing_does_not_crash_the_wire(self):
