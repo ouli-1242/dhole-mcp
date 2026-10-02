@@ -208,7 +208,8 @@ class TestParserContracts:
 
 
 class TestFixtureAntiRot:
-    """fixture 自己也会烂：tests/old_reddit_real.html 就是已经烂过一次的那一个。"""
+    """fixture 自己也会烂：仓库里那份 135KB 的 old.reddit 页面就烂过一次（17.0 随
+    它的解析器一起删了），所以这里钉的是机制，不是某一个人的记性。"""
 
     def test_every_fixture_is_content_addressed(self):
         """记录的 sha256 按 **git 里的字节** 算，行尾以仓库为准（`* text=auto eol=lf`）。

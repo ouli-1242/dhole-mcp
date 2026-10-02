@@ -36,8 +36,8 @@ def _trim_to_items(eng, html_text):
     """只留前 N 个结果容器 + 它们自身需要的子树 + **它们所在的祖先链**。
 
     elements_xpath 全是相对路径（以 . 开头），所以容器子树自带全部依赖；整体保存
-    一份 SERP 会有 100KB+，而 tests/old_reddit_real.html 就是"没人引用的大 fixture
-    烂在仓库里"的现成先例。
+    一份 SERP 会有 100KB+，而仓库里就有过一份 135KB、没人引用的大 fixture，它烂在
+    盘上才被记成教训。
 
     祖先链必须留：items_xpath 里可以带祖先条件（sogou 的
     `//ul[contains(@class,"news-list")]//li[...]` 就是），只把 li 抠出来存盘，解析器

@@ -157,7 +157,6 @@ if TYPE_CHECKING:
     from mcp.types import ImageContent, TextContent
 
 from dhole_mcp.cache import get_cached, set_cached, clear_cache, clear_all_cache, DEFAULT_TTL
-from dhole_mcp.reddit import is_reddit_url, rewrite_to_old_reddit, parse_old_reddit_listing
 from dhole_mcp.envelope import (
     classify_source, compute_freshness, detect_page_type, page_type_from_error,
     _stale_days_for,
@@ -3940,14 +3939,10 @@ def _translate_response_body(
             )
 
     content: list[str]
-    
-    # Reddit optimization: use custom parser for old.reddit.com listings
+
+    # The page this response describes - the metadata / media / link extraction
+    # below all resolve their URLs against it.
     page_url = getattr(page, 'url', '') or ''
-    is_old_reddit_listing = (
-        'old.reddit.com' in page_url
-        and '/comments/' not in page_url  # Not a post page
-        and extraction_type in ("markdown", "text")
-    )
 
     def _dhole_extract():
         """Extract content via dhole's own extractor (trafilatura + markdownify)."""
@@ -3962,18 +3957,7 @@ def _translate_response_body(
         from dhole_mcp.trafilatura_extractor import extract_with_trafilatura
         return extract_with_trafilatura(page, extraction_type=extraction_type, css_selector=css_selector)
 
-    if is_old_reddit_listing and raw_body:
-        try:
-            from dhole_mcp.fetcher import _decode_html_bytes
-            html_text = _decode_html_bytes(raw_body, getattr(page, 'encoding', None) or 'utf-8')
-            parsed = parse_old_reddit_listing(html_text)
-            if parsed:  # parser found real posts -> use structured markdown
-                content = [parsed]
-            else:
-                content = _dhole_extract()
-        except Exception:
-            content = _dhole_extract()
-    elif extraction_type in ("markdown", "text", "article", "structured"):
+    if extraction_type in ("markdown", "text", "article", "structured"):
         # Trafilatura-first path
         content = _trafilatura_extract()
         if (not content or content == [""] or content == ["\n"]):
@@ -7469,17 +7453,7 @@ class MasterFetchServer:
                 _stamp_robots_mode(hit)
                 return _apply_chunking(hit, max_chars=mc, offset=offset)
 
-        # 3. Reddit optimization: rewrite listings to old.reddit.com (7x smaller,
-        #    2x faster). Done BEFORE force_fetcher so even an explicit
-        #    force_fetcher="http" benefits from the old.reddit.com rewrite.
-        #    Post pages (/comments/...) stay on www.reddit.com (old.reddit.com
-        #    shows the sidebar instead of full comments) — handled inside
-        #    rewrite_to_old_reddit.
-        is_reddit = is_reddit_url(url)
-        if is_reddit:
-            url = rewrite_to_old_reddit(url)
-
-        # 3.5. actions: page interactions (click/fill/press/wait/scroll) require
+        # 3. actions: page interactions (click/fill/press/wait/scroll) require
         # the stealthy browser tier. Force it, bypass cache (post-action content
         # is unique to the action sequence), and pass the page_action built and
         # validated before the lane selection above.
@@ -7503,7 +7477,7 @@ class MasterFetchServer:
             _report_action_outcomes(result, page_action)
             return result
 
-        # 4. Force specific fetcher (explicit pin wins; uses rewritten url)
+        # 4. Force specific fetcher (explicit pin wins)
         if force_fetcher:
             return await self._within_call_budget(
                 self._force_fetch(
@@ -7520,29 +7494,7 @@ class MasterFetchServer:
                     check_login=check_login,
                 ), url, timeout, f"forced {force_fetcher} tier")
 
-        # 5. Reddit default: skip HTTP, go straight to stealthy. www.reddit.com
-        #    JS-walls/blocks plain HTTP ~100% of the time, so the HTTP tier is
-        #    ~1s of wasted time before it escalates anyway. old.reddit.com
-        #    listings render fine in the stealthy browser. Saves ~1s per fetch.
-        #    (An explicit force_fetcher above already returned, so this only
-        #    applies to the unpinned/default case.)
-        if is_reddit:
-            return await self._within_call_budget(
-                self._force_fetch(
-                    url, "stealthy", extraction_type=extraction_type,
-                    css_selector=css_selector,
-                    cache_ttl=cache_ttl,
-                    offset=offset, headless=headless, real_chrome=real_chrome,
-                    wait=wait, proxy=proxy, timeout=timeout,
-                    network_idle=network_idle,
-                    solve_cloudflare=solve_cloudflare,
-                    block_webrtc=block_webrtc, hide_canvas=hide_canvas,
-                    extra_headers=extra_headers, useragent=useragent,
-                    cookies=cookies, max_chars=mc,
-                    check_login=check_login,
-                ), url, timeout, "stealthy tier (reddit)")
-
-        # 6. Auto-escalation (HTTP -> stealthy) for everything else
+        # 5. Auto-escalation (HTTP -> stealthy) for everything else
         return await self._within_call_budget(
             self._auto_escalate(
                 url, extraction_type,

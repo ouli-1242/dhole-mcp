@@ -331,6 +331,50 @@ class TestLocalPdfReportsItsEnvelope:
         assert out.content_ok is True
 
 
+class TestNoPerHostLane:
+    """17.0 §6 删掉 reddit 特例，这一类钉的是"没有按 host 分叉的泳道"这件事本身。
+
+    删掉的两样行为都是按 host 的例外：listing 的 URL 被改写成 old.reddit.com（少 7x
+    字节），以及 reddit 跳过 HTTP 直接进 stealthy（省约 1 秒）。它们是这条链上**唯一**
+    一组"某家主机自己占一条泳道"的例子，而例子消失之后最容易发生的事，就是下一个特例
+    在没人注意的时候长出来。所以这里守的是形状：URL 原样送下去、人人都走
+    `_auto_escalate`，而显式的 `force_fetcher` 仍然是最后一句。
+    """
+
+    def _lane(self, monkeypatch, url, **kw):
+        """Which tier lane the call took, and the URL it was handed."""
+        seen: dict = {}
+
+        async def auto(self, u, extraction_type, *a, **k):
+            seen["lane"] = "auto_escalate"
+            seen["url"] = u
+            raise _Stop()
+
+        async def forced(self, u, force_fetcher, *a, **k):
+            seen["lane"] = f"force:{force_fetcher}"
+            seen["url"] = u
+            raise _Stop()
+
+        monkeypatch.setattr(MasterFetchServer, "_auto_escalate", auto)
+        monkeypatch.setattr(MasterFetchServer, "_force_fetch", forced)
+        with pytest.raises(_Stop):
+            asyncio.run(MasterFetchServer().smart_fetch(url=url, **kw))
+        return seen
+
+    def test_a_reddit_listing_takes_everyones_lane_with_its_own_url(self, monkeypatch):
+        asked = "https://www.reddit.com/r/Python/"
+        seen = self._lane(monkeypatch, asked)
+        assert seen["lane"] == "auto_escalate", \
+            f"reddit 又占了单独一条泳道：{seen['lane']}"
+        assert seen["url"] == asked, f"URL 在路上被改写过：{seen['url']}"
+
+    def test_an_explicit_pin_is_still_the_last_word(self, monkeypatch):
+        asked = "https://old.reddit.com/r/Python/"
+        seen = self._lane(monkeypatch, asked, force_fetcher="http")
+        assert seen["lane"] == "force:http"
+        assert seen["url"] == asked
+
+
 class TestActionsTierBudget:
     """report BUG-2: actions force the stealthy tier but inherited the 30s
     HTTP-era default, so a cold browser start spent the whole budget on
