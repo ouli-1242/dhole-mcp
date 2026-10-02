@@ -878,7 +878,7 @@ def _filter_irrelevant_results(results: list[SearchResult], query: str) -> list[
     return []
 
 
-# ─── six-signal quality boost (zero-latency, no extra fetches) ───────────────
+# ─── three-signal quality boost (zero-latency, no extra fetches) ───────────────
 
 _TECH_QUERY_SIGNALS = frozenset({
     "model", "architecture", "api", "code", "implement", "benchmark",
@@ -886,11 +886,6 @@ _TECH_QUERY_SIGNALS = frozenset({
     "layer", "parameter", "config", "schema", "table", "comparison",
     "tensor", "precision", "throughput", "latency", "inference", "training",
 })
-
-_DIGIT_RE = re.compile(r"\d{3,}")
-_TABLE_MARKERS = ("table", "|", "column", "row", "\t")
-_CODE_MARKERS = ("def ", "func ", "class ", "import ", "const ", "```", "=> ", "fn ")
-_COMPARISON_MARKERS = ("vs", "compared", "while", "however", "whereas", "better", "faster")
 
 
 def _is_technical_query(query: str) -> bool:
@@ -900,46 +895,6 @@ def _is_technical_query(query: str) -> bool:
 
 def _query_terms(query: str) -> set:
     return {w.lower() for w in _WORD_RE.findall(query or "") if w.lower() not in _STOPWORDS and len(w) >= 3}
-
-
-def _domain_boost(url: str, query: str, is_technical: bool) -> float:
-    """Boost authoritative domains. +0.15 tech domains, +0.05 reference, +0.05 feedback (opt-in). Not a blocklist."""
-    host = _get_domain(url)
-    if not host:
-        return 0.0
-    def _matches(ds):
-        return host in ds or any(host.endswith(f".{d}") for d in ds)
-    boost = 0.0
-    if is_technical:
-        if _matches(_DOCS_DOMAINS) or _matches(_REPO_DOMAINS) or _matches(_PAPER_DOMAINS):
-            boost += 0.15
-        elif _matches(_FORUM_DOMAINS):
-            boost += 0.08
-    if _matches(_REFERENCE_DOMAINS):
-        boost += 0.05
-    return boost
-
-
-def _answer_signal_score(query: str, snippet: str, is_technical: bool) -> float:
-    """Detect if snippet CONTAINS answer data vs just discusses topic. Up to +0.30."""
-    if not snippet:
-        return 0.0
-    boost = 0.0
-    q_lower = query.lower()
-    s_lower = snippet.lower()
-    if is_technical or any(w in q_lower for w in ("dimension", "size", "parameters", "count", "number", "how many")):
-        if _DIGIT_RE.search(snippet):
-            boost += 0.15
-    if "table" in q_lower or "comparison" in q_lower:
-        if any(w in s_lower for w in _TABLE_MARKERS):
-            boost += 0.15
-    if any(w in q_lower for w in ("vs", "compare", "comparison", "difference", "better")):
-        if any(w in s_lower for w in _COMPARISON_MARKERS):
-            boost += 0.10
-    if any(w in q_lower for w in ("code", "api", "function", "example")):
-        if any(w in s_lower for w in _CODE_MARKERS):
-            boost += 0.10
-    return min(boost, 0.30)
 
 
 def _title_relevance(query: str, title: str) -> float:
@@ -1089,20 +1044,28 @@ def _generate_query_map(query: str, intent: str, engines: list[str] | None) -> d
 
 def _apply_quality_boost(ranked: list, scores: list[float], query: str
                          ) -> tuple[list, list[float]]:
-    """Six-signal composite boost: consensus + domain + answer + title + URL.
-    All additive, zero-latency. Re-sorts and renormalizes to 0..1."""
+    """Three-signal composite boost: consensus + title terms + URL path terms.
+    All additive, zero-latency. Re-sorts and renormalizes to 0..1.
+
+    17.0 §3-24：这里原本挂六路手工加权，其中「域名声誉」和「摘要像不像答案」
+    两路删了。理由不是它们错，而是**测不出差异**：`evals/ranking_baseline.py` 在
+    67 题冻结 SERP 语料上重放整条链，摘掉这两路之后 P@5 0.373 不变、
+    nDCG@10 0.654→0.652、MRR 0.559→0.555 —— 都小于一两道人工标注翻案的粒度
+    （一道题的一个相关文档挪出前十，P@10 就动 1.5 个点）。而它们的代价是永久的
+    误判面 —— 域名表要人养，"摘要里有数字"对"要数字"的查询是一票，对"讲哪个数字"
+    的查询是噪声。
+    留下的三路都是**这条结果自己带的**证据（几家独立索引同意它 / 查询词出现在
+    标题里 / 出现在 URL 路径里），不需要任何外部名单，也不会随站点改版腐烂。
+    """
     if not ranked:
         return ranked, scores
-    is_tech = _is_technical_query(query)
     boosted = []
     for r, s in zip(ranked, scores):
         c = max(1, getattr(r, "consensus", 1))
         total_boost = (
-            0.2 * (c - 1) +                          # consensus
-            _domain_boost(r.url, query, is_tech) +   # domain reputation
-            _answer_signal_score(query, r.snippet, is_tech) +  # answer signal
-            _title_relevance(query, r.title) +        # title relevance
-            _url_relevance(query, r.url)              # URL relevance
+            0.2 * (c - 1) +                    # consensus
+            _title_relevance(query, r.title) +  # query terms in the title
+            _url_relevance(query, r.url)        # query terms in the URL path
         )
         boosted.append((r, s + total_boost))
     order = {id(r): i for i, (r, _) in enumerate(boosted)}

@@ -1089,6 +1089,56 @@ class TestNeuralOrderIsAuthoritative:
         assert [r.source for r in ranked] == ["bing", "so360"]
 
 
+class TestBoostTracksAreResultLocal:
+    """§3-24：composite boost 只吃**这条结果自己带的**证据。
+
+    删掉的两路（域名声誉表 / "摘要像不像答案"）不是错，是**测不出差异**：
+    `evals/ranking_baseline.py` 在 67 题冻结 SERP 语料上重放整条链，P@5 0.373 不变、
+    nDCG@10 0.654→0.652、MRR 0.559→0.555，都小于一两道人工标注翻案的粒度。
+    留着它们要付的代价却是永久的：域名名单得有人养，而"摘要里有数字"对
+    "要数字"的查询是一票，对"讲哪个数字"的查询是噪声。
+
+    所以这条守卫钉的是**方向**：以后再有谁往 boost 里加一路需要外部名单的信号，
+    这里两条"分数必须相等"会先红。
+    """
+
+    @staticmethod
+    def _one(url: str, snippet: str, title: str = "asyncio tutorial",
+             consensus: int = 1) -> RawResult:
+        return RawResult(title=title, url=url, snippet=snippet, source="bing",
+                         sources=("bing",), position=1, consensus=consensus)
+
+    def test_a_prestigious_domain_no_longer_beats_an_ordinary_one(self):
+        q = "transformer inference latency benchmark"  # 技术查询：旧域名表在这里给 +0.15
+        docs = [self._one("https://github.com/docs/a", "s"),
+                self._one("https://someone-blog.test/docs/a", "s")]
+        _ranked, scores = search._apply_quality_boost(docs, [0.5, 0.5], q)
+        assert scores[0] == scores[1], f"域名声誉那一路还在动分数: {scores}"
+
+    def test_digits_in_the_snippet_no_longer_beat_plain_text(self):
+        q = "transformer parameter count"  # 要数字 + 摘要里有 3 位以上数字：旧 +0.15
+        docs = [self._one("https://a.test/x", "96,000,000 parameters"),
+                self._one("https://a.test/x", "many parameters")]
+        _ranked, scores = search._apply_quality_boost(docs, [0.5, 0.5], q)
+        assert scores[0] == scores[1], f"摘要形状那一路还在动分数: {scores}"
+
+    def test_the_three_kept_signals_still_move_the_score(self):
+        """反面：留下的三路（共识 / 标题词 / 路径词）必须还能加分，否则这条守卫
+        只是在庆祝什么都没测到。"""
+        q = "asyncio tutorial"
+        docs = [self._one("https://x.test/asyncio/tutorial", "body",
+                          title="asyncio tutorial"),
+                self._one("https://y.test/", "body", title="something else")]
+        ranked, scores = search._apply_quality_boost(docs, [0.1, 0.1], q)
+        assert ranked[0].url == "https://x.test/asyncio/tutorial", ranked
+        assert scores[0] > scores[1], scores
+        strong = self._one("https://z.test/", "body", consensus=3)
+        weak = self._one("https://w.test/", "body", consensus=1)
+        _r2, s2 = search._apply_quality_boost([weak, strong], [0.1, 0.1], "unrelated words")
+        assert abs(s2[0] - s2[1]) == pytest.approx(0.4, abs=1e-3), \
+            f"共识那一路是 0.2*(家族数-1)，两家族之差该是 0.4: {s2}"
+
+
 class TestQueryMapNamesAreReal:
     """手工维护的引擎名单会腐烂：这个集合里原先有三个不存在的引擎。
 
