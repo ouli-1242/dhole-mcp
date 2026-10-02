@@ -696,7 +696,7 @@ class ResponseModel(BaseModel):
     url: str = Field(description="Final URL")
     original_url: str = Field(default="", description="The URL you passed, set ONLY when the fetch ended somewhere else (redirect or canonical rewrite). Empty = url is the URL you asked for, so comparing the two is how you detect a redirect.")
     cached: bool = Field(default=False, description="From cache")
-    fetcher_used: str = Field(default="", description="http/dynamic/stealthy/cache/none")
+    fetcher_used: str = Field(default="", description="Which tier answered: http / stealthy / cache / none")
     extracted_type: str = Field(default="markdown", description="markdown|html|text|article|structured")
     session_id: str = Field(default="", description="The id of the persistent session this call ran under (empty = stateless, the default). Pass session_id='name' to reuse cookies across calls: whatever the site sets is remembered for that host and sent back on the next call with the same id. A browser-session id is echoed here too. The jar covers the HTTP tier.")
     session_cookie_names: List[str] = Field(default_factory=list, description="Cookie NAMES the session jar now holds for this host (only when session_id is set). Values are never returned - a session cookie is a credential and tool output goes into your transcript. Use this to check a login actually stuck: empty after a sign-in call means nothing was stored.")
@@ -1445,7 +1445,6 @@ def _is_js_shell(result: ResponseModel) -> bool:
     """Check if a response contains only a JS-only placeholder, not real content.
 
     Used by smart_fetch to decide whether to escalate from HTTP to stealthy.
-    Pre-v3.5 callers may have passed through dynamic as an intermediate step.
     """
     # Data documents are not JS shells. The "large body, little text" heuristic
     # below describes an HTML shell; a PDF is a container, and one that OCR
@@ -2420,10 +2419,11 @@ _BOOL_LITERALS: dict[str, bool] = {
     "false": False, "0": False, "no": False, "off": False,
 }
 
-# Fetcher tiers accepted on the wire. 'dynamic' is the documented legacy alias
-# for 'stealthy' and is kept as-is (normalizing it would rewrite the
-# escalation_path callers already parse).
-_FORCE_FETCHER_VALUES = frozenset({"http", "stealthy", "dynamic"})
+# Fetcher tiers accepted on the wire. 'dynamic' (the alias left over from the
+# Playwright tier removed in v3.5.0) is gone as of 17.0 B4: two names for one
+# tier is a vocabulary the reader has to reconcile on every response, and the
+# escalation_path it produced said 'stealthy' anyway.
+_FORCE_FETCHER_VALUES = frozenset({"http", "stealthy"})
 
 
 def _coerce_bool_arg(value: Any, name: str, *, default: bool = False) -> bool:
@@ -2525,13 +2525,23 @@ def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Option
     if not isinstance(value, str):
         raise ValueError(
             f"{name} must be a string, got {type(value).__name__}. "
-            "Valid values: 'http', 'stealthy' ('dynamic' is a legacy alias for 'stealthy')."
+            "Valid values: 'http', 'stealthy'."
         )
     key = value.strip().lower()
+    if key == "dynamic":
+        # Named rather than folded into "not a fetcher tier": a caller working
+        # from old notes needs to be told where that name went, not asked to
+        # guess between the two tiers that are left.
+        raise ValueError(
+            f"{name}='dynamic' was the alias of the browser tier that left in "
+            "v3.5.0, and the alias itself is gone in 17.0 - pass "
+            "force_fetcher='stealthy' (anti-detect browser) or 'http'. "
+            "No request was made."
+        )
     if key not in _FORCE_FETCHER_VALUES:
         raise ValueError(
             f"{name}={value!r} is not a fetcher tier. "
-            "Valid values: 'http', 'stealthy' ('dynamic' is a legacy alias for 'stealthy')."
+            "Valid values: 'http', 'stealthy'."
         )
     return key
 
@@ -3964,7 +3974,7 @@ def _translate_response_body(
         content = _dhole_extract()
 
     if page.status == 503 and fetcher_used == "stealthy":
-        note = "[503 via stealthy fetcher. The target server may block headless browser fingerprints. Try smart_fetch or http/dynamic fetcher instead.]"
+        note = "[503 via stealthy fetcher. The target server may block headless browser fingerprints. Retry with force_fetcher='http' if the page does not need JS.]"
         content = [note]
 
     # Metadata enrichment (OpenGraph + JSON-LD + canonical + <title>) for HTML
@@ -4423,7 +4433,7 @@ def _stealthy_only_call(force_fetcher: Any, actions: Any) -> bool:
     if actions:
         return True
     ff = (force_fetcher or "").lower() if isinstance(force_fetcher, str) else ""
-    return ff in ("stealthy", "dynamic")
+    return ff == "stealthy"
 
 
 def _conditional_headers(if_modified_since: Any, if_none_match: Any) -> tuple:
@@ -6942,7 +6952,7 @@ class MasterFetchServer:
         main_content_only: Annotated[bool, Field(description="Strip nav, ads, footers (default True).")] = True,
         use_trafilatura: Annotated[bool, Field(description="Use Trafilatura for cleaner article extraction (default True).")] = True,
         cache_ttl: Annotated[Optional[int], Field(description="Cache duration in seconds. Default 3600 (1 hour). Set 0 to skip cache and force a fresh fetch.")] = None,
-        force_fetcher: Annotated[Optional[Literal["http", "dynamic", "stealthy"]], Field(description="Lock to one fetcher tier, skip auto-escalation. 'http' = fast HTTP-only (fails on JS/bot walls). 'stealthy' = anti-detect browser (Patchright). 'dynamic' is a legacy alias for 'stealthy'. Exposed to clients as: ['http', 'stealthy'].")] = None,
+        force_fetcher: Annotated[Optional[Literal["http", "stealthy"]], Field(description="Lock to one fetcher tier, skip auto-escalation. 'http' = fast HTTP-only (fails on JS/bot walls). 'stealthy' = anti-detect browser (Patchright). Two tiers: the third one and its 'dynamic' alias are gone.")] = None,
         headless: Annotated[bool, Field(description="Run browser without visible window (default True).")] = True,
         real_chrome: Annotated[bool, Field(description="Use installed Chrome instead of bundled browser.")] = False,
         wait: Annotated[int | float, Field(description="Extra milliseconds to wait after page load for JS rendering.")] = 0,
@@ -6985,9 +6995,9 @@ class MasterFetchServer:
         Use this when a plain HTTP fetch is not enough (it still tries HTTP
         first). It auto-selects the best method:
         HTTP (fast, curl_cffi) → Stealthy (anti-detect browser; handles JS
-        rendering and Cloudflare-style bot walls. The legacy 'dynamic' tier was
-        merged into it) → Archive.org (hard-block only; see the tool
-        description - that string is what clients actually receive).
+        rendering and Cloudflare-style bot walls — the only browser tier since
+        the Playwright one was removed) → Archive.org (hard-block only; see the
+        tool description - that string is what clients actually receive).
 
         When to use:
         - Fetching any web page for content extraction
@@ -7759,7 +7769,7 @@ class MasterFetchServer:
             result.escalation_path = "direct:http"
             return await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
 
-        else:  # stealthy ("dynamic" also routes here — Patchright handles everything)
+        else:  # stealthy — Patchright handles everything
             # Playwright fixes the proxy when the browser context starts.
             # The shared auto-session is direct, so a proxied request must use
             # the one-off path where stealthy_fetch constructs the browser

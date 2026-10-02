@@ -99,13 +99,16 @@ class TestTheHeaderTranslation:
 
 
 class TestTheStealthyPredicate:
-    """条件请求只能问 HTTP 层：浏览器不接受这个问题。"""
+    """条件请求只能问 HTTP 层：浏览器不接受这个问题。
+
+    表里没有 'dynamic' 那一行了：B4-3 删掉这个别名之后，它到不了这个谓词 ——
+    参数强制层先把它拒在外面。
+    """
 
     @pytest.mark.parametrize("ff,actions,want", [
         (None, None, False),
         ("http", None, False),
         ("stealthy", None, True),
-        ("dynamic", None, True),
         (None, [{"click": "x"}], True),
     ])
     def test_only_a_browser_call_is_browser_only(self, ff, actions, want):

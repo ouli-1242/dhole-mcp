@@ -211,8 +211,7 @@ class TestDispatchedArgumentTypes:
     def test_force_fetcher_unlisted_value_is_rejected(self, monkeypatch):
         """D-02: ``force_fetcher="magic"`` silently ran the stealthy browser.
 
-        The signature declares ``Literal["http", "dynamic", "stealthy"]``, but
-        the value only has to miss ``== "http"`` to land in the stealthy
+        The value only had to miss ``== "http"`` to land in the stealthy
         ``else`` — the heaviest tier, ~5s plus anti-detect overhead, reported as
         a normal success.
         """
@@ -222,10 +221,20 @@ class TestDispatchedArgumentTypes:
         assert "not a fetcher tier" in payload["error"]
         assert seen == {}
 
+    def test_the_dynamic_alias_is_refused_and_says_what_to_use(self):
+        """B4-3：'dynamic' 是 Playwright 层删掉（v3.5）之后留给老写法的别名，
+        17.0 连别名一起删。它现在必须被拒，并且指名 'stealthy' —— 一句
+        "not a fetcher tier" 会让照着旧笔记重写调用的人再猜一次。
+        """
+        with pytest.raises(ValueError) as exc:
+            server_mod._validate_tool_args(
+                "smart_fetch", {"force_fetcher": "dynamic"})
+        msg = str(exc.value)
+        assert "dynamic" in msg and "stealthy" in msg, msg
+
     @pytest.mark.parametrize("value,expected", [
         ("http", "http"),
         ("stealthy", "stealthy"),
-        ("dynamic", "dynamic"),   # documented legacy alias, kept verbatim
         ("HTTP", "http"),
         (" Stealthy ", "stealthy"),
     ])
