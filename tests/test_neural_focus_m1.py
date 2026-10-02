@@ -294,58 +294,53 @@ class TestIntentHint:
         assert "focus match is weak" in out.next_action
 
 
-# ─── M-2：爬取页面过滤 ──────────────────────────────────────────────────────
+class TestNoPerPagePrescreen:
+    """17.0 §6 删掉爬前相关性预筛（原 `_page_relevant`），这里钉的是删完之后仍然
+    成立的那个形状：**取回几页就报几页**。
 
+    那一档做的是"整页在进结果之前被打一次分，落在跑题带就整页丢弃"，省下的是跑题页
+    的 token，代价是页面取回来了却不在结果里 —— 而"我要找的那页正好被判成跑题"这种
+    失败是不可见的。B8 会带着新的打分后端重做这个能力（§3 第 7 条：现在删是因为它
+    绑的就是 B8 要换掉的那套东西），在那之前不许有静默丢页。
+    断言写在真爬取循环上（假 server 对象），不是"某个函数不存在"。
+    """
 
-class TestCrawlFilter:
-    """17.0：过滤的开关 = contextvar 里有没有点名 "neural"（按次选择）。"""
+    SEED = "https://prescreen.test/"
+    LEAVES = [f"https://prescreen.test/p{i}" for i in range(3)]
 
-    @staticmethod
-    def _name_neural():
-        # 与 server 共用同一个 var（focus.py 定义）——爬取按同一条规则判定
+    class _Server:
+        """每一 leaf 都是一页与 `focus` 无关的东西；seed 只负责把链摊开。"""
+
+        async def smart_fetch(self, url, **kwargs):
+            if url.rstrip("/") == TestNoPerPagePrescreen.SEED.rstrip("/"):
+                body = ('<html><body>'
+                        + "".join(f'<a href="/p{i}">p{i}</a>' for i in range(3))
+                        + '</body></html>')
+            else:
+                body = "<p>bread and butter</p>"
+            return ResponseModel(url=url, status=200, content=[body],
+                                 content_type="text/html", fetcher_used="http")
+
+    @pytest.mark.asyncio
+    async def test_a_named_neural_crawl_keeps_every_page_it_fetched(self, monkeypatch):
+        import dhole_mcp.reranker as rr
+        from dhole_mcp import crawl as crawl_mod
         from dhole_mcp.focus import FOCUS_ENGINE
-        return FOCUS_ENGINE
 
-    def test_relevant_page_is_kept(self, monkeypatch):
-        import dhole_mcp.reranker as rr
-        monkeypatch.setattr(rr, "get_reranker", lambda: FakeReranker())
-        from dhole_mcp.crawl import _page_relevant
-        token = self._name_neural().set("neural")
+        # 假打分器对没点名 table 的文档一律给 0.001 —— 正是旧过滤器会丢掉的那一档。
+        monkeypatch.setattr(rr, "get_reranker", FakeReranker)
+        token = FOCUS_ENGINE.set("neural")
         try:
-            # 未命中 table 的文档得 0.001 -> 跑题带 -> 丢
-            assert _page_relevant("cooking recipes for pancakes", "asyncio") is False
+            out = await crawl_mod.smart_crawl(
+                self._Server(), self.SEED, max_pages=4, max_depth=1,
+                focus="asyncio", cache_ttl=0)
         finally:
-            self._name_neural().reset(token)
+            FOCUS_ENGINE.reset(token)
 
-    def test_off_topic_page_is_dropped(self, monkeypatch):
-        import dhole_mcp.reranker as rr
-        monkeypatch.setattr(rr, "get_reranker",
-                            lambda: FakeReranker(table={"asyncio": 0.97}))
-        from dhole_mcp.crawl import _page_relevant
-        token = self._name_neural().set("neural")
-        try:
-            assert _page_relevant("asyncio event loop tutorial", "asyncio") is True
-        finally:
-            self._name_neural().reset(token)
-
-    def test_no_reranker_fails_open(self, monkeypatch):
-        import dhole_mcp.reranker as rr
-        monkeypatch.setattr(rr, "get_reranker", lambda: None)
-        from dhole_mcp.crawl import _page_relevant
-        token = self._name_neural().set("neural")
-        try:
-            assert _page_relevant("anything", "goal") is None
-        finally:
-            self._name_neural().reset(token)
-
-    def test_unnamed_engine_skips_the_filter(self, monkeypatch):
-        import dhole_mcp.reranker as rr
-
-        def boom():
-            raise AssertionError("nothing named but the filter consulted the model")
-        monkeypatch.setattr(rr, "get_reranker", boom)
-        from dhole_mcp.crawl import _page_relevant
-        assert _page_relevant("anything", "goal") is None
+        urls = {p.url.rstrip("/") for p in out.pages}
+        assert urls >= {u.rstrip("/") for u in self.LEAVES}, \
+            f"取回的页面没有全部进结果：{sorted(urls)}"
+        assert "dropped" not in out.summary.lower(), out.summary
 
 
 # ─── W15：按次选打分器（flag = 许可，focus_engine = 意愿）────────────────────

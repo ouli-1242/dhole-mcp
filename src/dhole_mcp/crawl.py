@@ -65,16 +65,14 @@ from dhole_mcp.robots import check as check_robots, get_robots_cache
 
 logger = logging.getLogger("dhole-mcp.crawl")
 
-# ─── M-1/M-2：神经 focus（按次 focus_engine='neural' 点名，17.0 起无许可门）──
+# ─── M-1：神经 focus（按次 focus_engine='neural' 点名，17.0 起无许可门）──
 # 与 server.py / focus.py 的选择语义一致：focus_engine 点名才用本地 cross-encoder
 # 打分；模型缺失在工具入口显式报错（smart_crawl 的闸），这里只 peek，拿不到就
-# fail open（保留页面 / 退回 BM25），绝不在爬取中途静默下载。
-
-# 实测分布（rerank，bge-zh）：明显跑题 ~0.0001（p90 0.0104），对题 0.93+；
-# 同题不同侧面 p50 0.005。0.03 在跑题带之上、对题带之下——错杀的是"同题不同
-# 侧面"里偏远的那些，summary 会把丢弃数报出来，误伤可被看见（改用
-# focus_engine='bm25' 即可整趟跳过语义分）。
-_CRAWL_FILTER_FLOOR = 0.03
+# 退回 BM25，绝不在爬取中途静默下载。
+#
+# 原来这一节还有 M-2 那一档：`_page_relevant` 拿同一套 cross-encoder 在**整页进
+# 结果之前**判一次相关性，落在跑题带的页面整页丢弃，summary 报出丢了几页。17.0 §6
+# 把它删了 —— 它依赖的正是 B8 要换掉的那个打分后端，留着只会把 B8 绑在旧模型上。
 
 
 def _neural_for_this_call() -> bool:
@@ -87,26 +85,6 @@ def _neural_for_this_call() -> bool:
     from dhole_mcp.focus import engine_wants_neural
     return engine_wants_neural()
 
-
-def _page_relevant(md: str, goal: str) -> Optional[bool]:
-    """页面摘要 vs crawl 目标的 cross-encoder 判定。
-
-    True = 相关（保留），False = 落在跑题带（丢），None = 过滤不可用或打分
-    失败（保留——fail open）。摘要取前 600 字符：判断"这页讲什么"足够，且
-    是 cross-encoder 一个窗口内的量。
-    """
-    try:
-        from dhole_mcp.reranker import get_reranker
-        rer = get_reranker()
-        if rer is None:
-            return None
-        scores = rer.score(goal, [md[:600]])
-        if not scores:
-            return None
-        return float(scores[0]) >= _CRAWL_FILTER_FLOOR
-    except Exception as e:
-        logger.debug("crawl focus filter failed: %s", e)
-        return None
 
 # Match <a ... href="..."> and capture the href + the anchor's visible text.
 _LINK_RE = re.compile(
@@ -1010,7 +988,6 @@ async def smart_crawl(
     pages: list[CrawlPage] = []
     total_chars = 0
     robots_skipped = 0
-    focus_dropped = 0
     truncated_budget = False
     truncated_maxpages = False
     truncated_time = False
@@ -1208,16 +1185,6 @@ async def smart_crawl(
                 # because "which of these URLs are dead" is a real answer.
                 content_ok = False
 
-            # M-2 爬取相关性过滤（神经 focus 许可 + 意愿 + focus=）：页面摘要与
-            # crawl 目标做 cross-encoder 打分，落在实测跑题带（< 0.03）的页面
-            # 整页丢弃——爬 100 页可能只 30 相关，省掉的正是这些页的 token。
-            # 用户点名的 URL（depth 0）永不丢；过滤不可用（模型缺失/打分失败）
-            # 时 fail open 保留页面——宁多给一页，不错杀一页。
-            if (content_md and focus and depth > 0 and _neural_for_this_call()):
-                if _page_relevant(content_md, focus) is False:
-                    focus_dropped += 1
-                    continue
-
             page = CrawlPage(
                 url=u_norm, depth=depth, status=_error_status(resp),
                 content_ok=content_ok, fetcher_used=resp.fetcher_used,
@@ -1342,11 +1309,6 @@ async def smart_crawl(
             bits_now.append("stopped: time deadline reached")
         if robots_skipped:
             bits_now.append(f"{robots_skipped} URL(s) skipped by robots.txt")
-        if focus_dropped:
-            bits_now.append(
-                f"{focus_dropped} page(s) dropped by the neural focus filter "
-                f"(score < {_CRAWL_FILTER_FLOOR} on the focus query; re-run "
-                "with focus_engine='bm25' to keep everything)")
         if urls_dropped_note:
             bits_now.append(urls_dropped_note)
         if _chars_per_clamp:

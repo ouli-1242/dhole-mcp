@@ -8791,8 +8791,8 @@ class MasterFetchServer:
                 # Lazy import to break circular dependency (crawl.py imports
                 # ResponseModel from server.py; server.py imports smart_crawl
                 # from crawl.py). Function-level import avoids import-time cycle.
-                # 本次的打分器意愿要活到 crawl 里那两个消费点（_classify_and_extract /
-                # _page_relevant），但它们读的是 focus.FOCUS_ENGINE 而不是参数——爬取的
+                # 本次的打分器意愿要活到 crawl 的那个消费点（_classify_and_extract），
+                # 但它读的是 focus.FOCUS_ENGINE 而不是参数——爬取的
                 # 每页调用链太长，逐层加参数会把签名变成噪音。crawl 内部对 smart_fetch
                 # 的调用自带 token，进出各还原一次，互不污染。
                 from dhole_mcp.crawl import smart_crawl as _smart_crawl
