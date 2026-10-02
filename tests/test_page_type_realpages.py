@@ -9,7 +9,10 @@
     gnu.org free-sw（正文，无 article）   112     25785     25245      0.05     unknown
     rfc-editor RFC9110（正文）           194      8357    446123      0.01     list（旧）
     quotes.toscrape.com（列表）            52      2179      1681      0.26     list
-    docs.python.org/3/（索引）             21      2385      3232      0.16     docs
+    docs.python.org/3/（索引）             21      2385      3232      0.16     docs（旧）
+
+「docs」这个值已经不在（17.0 §3 第 28 条：page_type 只讲结构，站型归 source_type），
+所以这张表记的是**当时**的判定，其中带（旧）的那两行不再是今天的输出。
 
 两条判据（见 envelope.detect_page_type）：
 1. 文本量取 max(抽取长度, 可见文本长度)：抽取器（trafilatura）报的是最密集的一段，

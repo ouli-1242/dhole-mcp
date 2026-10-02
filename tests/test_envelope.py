@@ -8,6 +8,7 @@ token in copy/links/scripts) must not classify as paywall; real paywalls
 """
 
 from datetime import datetime, timedelta, timezone
+import re
 from dhole_mcp.envelope import (
     detect_page_type, classify_source, compute_freshness, page_type_from_error,
     _paywall_evidence,
@@ -42,17 +43,25 @@ class TestDetectPageType:
         html = '<article><p>Real article content here that is long enough.</p></article>'
         assert detect_page_type(html, "https://example.com", "text/html", 80) == "article"
 
-    def test_qa_markers_detected(self):
+    # 17.0 §3 第 28 条：page_type 收窄为「只讲结构」。qa / forum / docs 说的是
+    # 「这是个什么站」，那句话 source_type 已经在说（classify_source 回 qa / forum /
+    # docs-site，见本文件下方的 TestClassifySource 三条）；两个字段各说一遍就是两处
+    # 会互相矛盾的事实。这里钉住删除后的形状：靠站方软件名撑起来的壳页既没有正文结构
+    # 也没有列表结构，回 unknown。
+    def test_qa_markup_is_not_a_page_type(self):
         html = '<div class="question">How to X?</div><div class="answer">Do Y.</div>'
-        assert "qa" in detect_page_type(html, "https://stackoverflow.com/q/1", "text/html", 80)
+        assert detect_page_type(
+            html, "https://stackoverflow.com/q/1", "text/html", 80) == "unknown"
 
-    def test_forum_markers_detected(self):
+    def test_forum_markup_is_not_a_page_type(self):
         html = '<div class="post-body">Forum post text.</div>'
-        assert "forum" in detect_page_type(html, "https://forum.example.com/t/1", "text/html", 80)
+        assert detect_page_type(
+            html, "https://forum.example.com/t/1", "text/html", 80) == "unknown"
 
-    def test_docs_markers_detected(self):
+    def test_docs_markup_is_not_a_page_type(self):
         html = '<div class="md-nav">Docs sidebar</div><div class="rst-content">Content</div>'
-        assert detect_page_type(html, "https://docs.example.com", "text/html", 80) == "docs"
+        assert detect_page_type(
+            html, "https://docs.example.com", "text/html", 80) == "unknown"
 
     def test_list_page_detected_many_links(self):
         # 25 same-domain links with little text -> list
@@ -65,6 +74,61 @@ class TestDetectPageType:
         links = "".join(f'<a href="/page/{i}">Link {i}</a>' for i in range(25))
         html = f'<article><p>Article text. {links}</p></article>'
         assert detect_page_type(html, "https://example.com", "text/html", 2000) == "article"
+
+
+# ─── page_type 的词表：代码能回的值 == 描述里承诺的值 ─────────────────
+
+_RETURNED = re.compile(r'return "([a-z_]+)"')
+_ASSIGNED = re.compile(r'result\.page_type = "([a-z_]+)"')
+
+
+def _page_types_the_code_can_produce() -> set:
+    """每一个 page_type 产出点，从源码里读而不是手抄一份清单。
+
+    手抄的第二份清单就是下一次漂移的来源（同一个理由见
+    test_tool_descriptions._response_field_names）。加一个新值的人会在这里
+    被要求同时写进描述；删一个值的人会被要求把描述里的也删掉。
+    """
+    import inspect
+
+    from dhole_mcp import envelope, server
+
+    out = set(_RETURNED.findall(inspect.getsource(envelope.detect_page_type)))
+    out |= set(_RETURNED.findall(inspect.getsource(envelope.page_type_from_error)))
+    out |= set(_ASSIGNED.findall(inspect.getsource(server._apply_envelope)))
+    return out
+
+
+def _page_types_named_in_the_description() -> set:
+    from dhole_mcp.server import ResponseModel
+
+    desc = ResponseModel.model_fields["page_type"].description
+    return set(desc.split(": ", 1)[1].split(".", 1)[0].split("|"))
+
+
+def test_page_type_vocabulary_matches_its_documentation():
+    produced, named = _page_types_the_code_can_produce(), _page_types_named_in_the_description()
+    assert produced, "推导空了：这条守卫会退化成永远通过"
+    assert named - produced == set(), (
+        f"描述承诺了代码回不出的值：{sorted(named - produced)}"
+    )
+    assert produced - named == set(), (
+        f"代码会回描述没解释的值：{sorted(produced - named)}"
+    )
+
+
+def test_page_type_no_longer_names_a_site_kind():
+    """§3 第 28 条删掉的三个值不许从任何产出点漂回来。"""
+    from dhole_mcp.server import _TTL_BY_PAGE_TYPE
+
+    produced = _page_types_the_code_can_produce()
+    assert not ({"qa", "forum", "docs"} & produced)
+    assert not ({"qa", "forum", "docs"} & _page_types_named_in_the_description())
+    # 按 page_type 定缓存时长的那张表也在产出点里：一个代码回不出的键不是规则，
+    # 是一段长得像规则的废代码 ——「docs」那行正是这样在值删掉之后留下的。
+    assert set(_TTL_BY_PAGE_TYPE) <= produced, (
+        f"缓存 TTL 表里有回不出的 page_type：{sorted(set(_TTL_BY_PAGE_TYPE) - produced)}"
+    )
 
 
 # ─── Paywall detection (PR #9 fix) ─────────────────────────────────

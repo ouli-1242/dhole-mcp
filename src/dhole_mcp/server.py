@@ -721,7 +721,7 @@ class ResponseModel(BaseModel):
     # ─── v10 research-grade envelope (additive; all default-valued) ───
     # page_type: structural class of the page, computed from raw HTML. Drives
     # next_action (list pages point to their links, auth walls suggest switching source).
-    page_type: str = Field(default="unknown", description="Structural class: article|docs|list|forum|qa|pdf|xml|js_shell|auth_wall|paywall|captcha|redirect|image|json|unknown. Drives next_action. 'list' = a page whose main content is links to other pages (fetch those or smart_crawl). 'xml' = a data XML document (sitemap, RSS/Atom, XML API) returned with its tags intact. 'auth_wall'/'paywall'/'captcha' = the body is a login/payment/anti-bot challenge rather than the page's content.")
+    page_type: str = Field(default="unknown", description="Structural class: article|list|pdf|xml|js_shell|auth_wall|paywall|captcha|redirect|image|json|unknown. Drives next_action. What kind of SITE this is lives in source_type, never here. 'list' = a page whose main content is links to other pages (fetch those or smart_crawl). 'xml' = a data XML document (sitemap, RSS/Atom, XML API) returned with its tags intact. 'auth_wall'/'paywall'/'captcha' = the body is a login/payment/anti-bot challenge rather than the page's content.")
     # source_type + is_official: domain-based authority signal so the agent can
     # weigh trust without a separate lookup. Conservative: is_official is True
     # only on a strong signal (the name itself cannot be bought by a third
@@ -2051,7 +2051,10 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                 f"page redirected; the real URL is {canon}" if canon
                 else "page redirected; check the final URL field"
             )
-        elif result.is_stale and result.page_type in ("article", "docs", "unknown"):
+        elif result.is_stale and result.page_type in ("article", "unknown"):
+            # 「内容过期」这句提示只对正文说得出作用，所以只列讲结构的两个值：
+            # article，以及 unknown（没认出结构，默认按正文对待）。§3 第 28 条之前
+            # 这里还列着 docs —— 那个值已经并给 source_type。
             # Name the horizon that was applied (G15): 30 days for news, 730 for
             # reference/docs/repo/QA, 365 otherwise. "content is 400 days old"
             # means very different things on a news article and on a wiki page.
@@ -2062,6 +2065,14 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                 "the current year)"
             )
     return summary, next_action, content_ok
+
+
+# Cache TTL per structural page_type, applied only when the caller left the
+# default (see the write path in smart_fetch). Module level and not inline
+# because test_envelope's vocabulary guard reads it: a key naming a page_type
+# the code can no longer produce is dead code that looks like a rule, which is
+# exactly how the "docs" row outlived the value it keyed on.
+_TTL_BY_PAGE_TYPE = {"article": 21600}
 
 
 def _apply_envelope(result: ResponseModel) -> None:
@@ -2092,7 +2103,7 @@ def _apply_envelope(result: ResponseModel) -> None:
         elif ct.startswith("image/"):
             result.page_type = "image"
         # else: keep the structural page_type from _translate_response
-        # (forum/qa/list/docs/article/paywall/redirect/unknown).
+        # (article/list/paywall/redirect/unknown).
     # Source authority: cheap URL heuristic, recomputed always (not cached).
     st, off = classify_source(result.url)
     result.source_type = st
@@ -4013,8 +4024,8 @@ def _translate_response_body(
             content and content[0].lstrip().startswith("{")):
         _etype = "markdown"
 
-    # v10 page_type: structural class from raw HTML (forum/qa/list/docs/article/
-    # paywall/redirect). pdf/json/image/js_shell/auth_wall are filled later in
+    # v10 page_type: structural class from raw HTML (article/list/paywall/
+    # redirect/unknown). pdf/json/image/js_shell/auth_wall are filled later in
     # _with_agent_hints from content_type/error (definitive signals override
     # this structural guess).
     _page_type = detect_page_type(
@@ -5354,14 +5365,14 @@ class MasterFetchServer:
         # the whole TTL (and the cache-hit path doesn't restore the error field,
         # so content_ok would come back True — the agent would trust garbage).
         if cache_ttl > 0 and _is_cacheable(result):
-            # Auto-adjust TTL by page_type when using the default TTL.
-            # Docs rarely change (24h); articles change occasionally (6h);
-            # list/other pages use the default (1h). User-explicit TTL is
-            # always respected (cache_ttl != DEFAULT_TTL means user chose it).
-            effective_ttl = cache_ttl
-            if cache_ttl == DEFAULT_TTL and result.page_type:
-                _TTL_BY_PAGE_TYPE = {"docs": 86400, "article": 21600}
-                effective_ttl = _TTL_BY_PAGE_TYPE.get(result.page_type, cache_ttl)
+            # Auto-adjust TTL by page_type when using the default TTL. Articles
+            # change occasionally (6h); list/other pages use the default (1h).
+            # User-explicit TTL is always respected (cache_ttl != DEFAULT_TTL
+            # means user chose it). 这里曾有 {"docs": 86400}：那个值说的是「这是个
+            # 文档站」，§3 第 28 条把它归给 source_type，而缓存时长跟的是页面结构。
+            # 手册类页面从此按默认 1h 缓存 —— 代价是最多多取一次，换不到更旧的内容。
+            effective_ttl = _TTL_BY_PAGE_TYPE.get(
+                result.page_type, cache_ttl) if cache_ttl == DEFAULT_TTL else cache_ttl
             await set_cached(
                 url, extraction_type, result.content, result.status,
                 css_selector, effective_ttl,
@@ -7011,7 +7022,7 @@ class MasterFetchServer:
         Response: url, status, content (extracted text), content_type, total_size_bytes,
         is_truncated (+ next_offset to paginate), escalation_path, duration_ms, error.
         Signals to branch on: content_ok (real content, not a login/bot wall?), next_action
-        (suggested next call), summary, page_type (article/docs/list/forum/auth_wall/paywall/...),
+        (suggested next call), summary, page_type (article/list/auth_wall/paywall/...),
         content_age_days + is_stale, source_type + is_official, source + archived_at.
         """
         # bulk 与 attach 不兼容：attach 是「这一次调用挂哪个浏览器」的事，而批量里

@@ -9,10 +9,12 @@ Design principles:
 - CONSERVATIVE over RECALL. A wrong ``is_official=True`` or a mislabelled
   ``page_type="list"`` sends the agent on a bad path. Default to "unknown" /
   False when the signal is weak; only assert on strong evidence.
-- page_type is split: structural signals (forum/qa/list/docs/article) are
-  detected from raw HTML in _translate_response; error-derived signals
-  (js_shell/auth_wall) override in _with_agent_hints since they are
-  definitive (set by _annotate_quality after extraction).
+- page_type is split: structural signals are detected from raw HTML in
+  _translate_response; error-derived signals (js_shell/auth_wall) override
+  in _with_agent_hints since they are definitive (set by _annotate_quality
+  after extraction). It answers STRUCTURE only (article / list / a media type
+  / a wall) — 17.0 §3 第 28 条删掉了它说的 forum / qa / docs，因为那三个值说的是
+  「这是个什么站」，而那句话 source_type（classify_source）本来就在说。
 - freshness prefers the MODIFIED/updated date over the published date — a page
   updated last week is not stale even if first published in 2014.
 """
@@ -338,15 +340,8 @@ def compute_freshness(metadata: dict[str, Any], fetched_at_iso: str,
 
 # ─── Page-type detection ────────────────────────────────────────────
 
-# Forum / Q&A / docs markers in the raw HTML (class/id substring matches).
-_FORUM_MARKERS = ("phpbb", "discourse", "class=\"forum", "id=\"forum",
-                  "class=\"thread", "class=\"post-body", "class=\"message-body",
-                  "data-post-id")
-_QA_MARKERS = ("stackoverflow", "stackexchange", "class=\"question",
-               "class=\"answer", "data-answerid", "data-questionid")
-_DOCS_MARKERS = ("mkdocs", "docusaurus", "readthedocs", "sphinx-document",
-                 "algolia-docsearch", "md-nav", "theme-doc", "class=\"rst-content",
-                 "wy-nav-side")
+# Visible-text paywall phrases (matched against the parsed text, never the raw
+# HTML — see _paywall_evidence).
 _PAYWALL_MARKERS = ("subscribe to continue", "subscribe to read", "this article is for subscribers",
                     "create a free account to continue", "sign in to continue reading",
                     "you've reached your free article limit", "subscriber-only content",
@@ -675,20 +670,19 @@ def detect_page_type(
     if has_active_paywall_attribute:
         return "paywall"
 
-    # Forum / Q&A / docs markers (substring match in the raw HTML).
-    if any(m in low for m in _QA_MARKERS):
-        return "qa"
-    if any(m in low for m in _FORUM_MARKERS):
-        return "forum"
-    if any(m in low for m in _DOCS_MARKERS):
-        return "docs"
+    # 17.0 §3 第 28 条删掉了这里原来的三个分支（qa / forum / docs，靠站方软件名和
+    # class/id 子串匹配）：那三个值说的是「这是个什么站」，而这句话 source_type 已经在
+    # 说（classify_source 回 qa / forum / docs-site），同一个回包里两处说就是两处会互相
+    # 矛盾的事实。留下的值只回答结构：正文 / 列表 / 某种媒体 / 一道墙。少了「docs 先行
+    # 豁免」这一行之后，Sphinx/mkdocs 手册按形状判 —— 正文页判成 article，目录页判成
+    # list，而 list 的 next_action 正是「去取那些链接」。
 
     # List page: many same-domain content links whose LABELS make up most of the
-    # text, NOT an <article> page and NOT a docs page (caught above). This catches
-    # index / search-result / category / archive pages whose main value is the
-    # links onward. Conservative: an <article> page is an article even if it has
-    # many cross-reference links (precision over recall — mislabelling an
-    # article as a list sends the agent on a wrong crawl).
+    # text, NOT an <article> page. This catches index / search-result / category /
+    # archive pages whose main value is the links onward. Conservative: an
+    # <article> page is an article even if it has many cross-reference links
+    # (precision over recall — mislabelling an article as a list sends the agent
+    # on a wrong crawl).
     #
     # Two measurements this used to get wrong, both from the same habit — reading
     # one cheap number as "how much prose does this page carry":
