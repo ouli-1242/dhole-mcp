@@ -403,10 +403,24 @@ class TestItem9ProxyTcp:
 class TestItem10LiveProbe:
 
     class _Srv:
+        """挂具服务器 —— 但它**照抄真实分发器的参数名闸门**。
+
+        这一格曾经用「什么都收」的挂具打过桩，于是 doctor 的 live search 行带着
+        已删除的袋形参数在套件里全绿、在真机上失败（B4 拆平那一刀实测撞到）。
+        挂具接受真实的名字集合，形状写错就会红在这里，而不是红在用户机器上。
+        """
+
         def __init__(self, results):
             self._results = results
 
         async def _dispatch(self, name, args):
+            from dhole_mcp.server import _TOP_LEVEL_ARGS
+
+            allowed = _TOP_LEVEL_ARGS[name]
+            unknown = sorted(k for k, v in args.items()
+                             if v is not None and k not in allowed)
+            if unknown:
+                raise ValueError(f"Unsupported argument(s) for {name}: {unknown}")
             return self._results[name]
 
     def _run(self, monkeypatch, results):

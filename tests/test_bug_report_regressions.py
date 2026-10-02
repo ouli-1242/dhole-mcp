@@ -13,11 +13,10 @@ import pytest
 from dhole_mcp.server import (
     ResponseModel, MasterFetchServer, _ARCHIVE_FALLBACK_STATUSES,
     _agent_hints, _apply_chunking, _annotate_quality, _with_agent_hints,
-    _backfill_article_json, _blocked_path_prefix, _coerce_options,
+    _backfill_article_json, _blocked_path_prefix,
     _detect_content_issue, _invalid_request_result, _is_bot_wall, _is_js_shell,
     _never_escalate,
-    _resolve_local_path, _should_try_archive, _strict_options, _translate_response,
-    _SF_OPTIONS_ALLOWED, _SF_OPTIONS_FORWARDED,
+    _resolve_local_path, _should_try_archive, _translate_response,
 )
 
 
@@ -406,34 +405,10 @@ class TestStructuredInputErrors:
         assert all(r.content == [] for r in bulk.results)
 
 
-# ─── BUG-19: an options bag that arrives as a JSON string ──────────────────
-
-class TestOptionsCoercion:
-
-    def test_json_string_options_are_parsed(self):
-        assert _coerce_options('{"max_results": 8}') == {"max_results": 8}
-
-    def test_none_and_blank_are_empty(self):
-        assert _coerce_options(None) == {}
-        assert _coerce_options("   ") == {}
-
-    def test_dict_passes_through(self):
-        assert _coerce_options({"a": 1}) == {"a": 1}
-
-    def test_bad_json_says_so(self):
-        with pytest.raises(ValueError, match="not valid JSON"):
-            _coerce_options("{max_results: 8")
-
-    def test_non_mapping_is_rejected(self):
-        with pytest.raises(ValueError, match="must be an object"):
-            _coerce_options("[1,2]")
-
-    def test_strict_options_never_iterates_a_string_by_character(self):
-        """The reported symptom: Unsupported option key(s) ... ['{','"','m','a'...]"""
-        with pytest.raises(ValueError, match="must be an object") as exc:
-            _strict_options('{"max_results": 8}', _SF_OPTIONS_ALLOWED,
-                            _SF_OPTIONS_FORWARDED, "smart_fetch")
-        assert "'" not in str(exc.value)
+# BUG-19 的形状（`options` 袋被当成字符集合遍历）随袋子一起消失了：17.0 B4 起
+# 参数只有顶层一个家，没有第二份字符串要解析。同一族事故现在由
+# test_params_reach_the_tool.py（每个参数抵达）与 test_wire_arg_type_regressions.py
+# （JSON-stringify 的值要认下来）守着。
 
 
 # ─── BUG-8: css_selector in the default markdown mode ──────────────────────

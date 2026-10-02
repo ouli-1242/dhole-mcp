@@ -4,27 +4,26 @@ Every pattern below is live-tested (16.1 full pass) or wire-test verified (the 1
 
 ## 0. Parameter placement rules (correct vs incorrect)
 
-Knobs live in the `options` bag. For `smart_fetch` / `smart_search` / `smart_crawl` / `screenshot`, same-named top-level parameters are a compat read (top-level wins when both are given). Three iron exceptions:
+Every parameter is a **top-level argument** of the tool it belongs to. Nothing is nested: a wrapper object is rejected, not read.
 
 ```json
-✅ {"url": "https://example.com", "options": {"focus": "pricing"}}
-❌ {"options": {"url": "https://example.com"}}        // smart_fetch's url MUST be top-level; unreadable inside options
-❌ {"url": "...", "options": {"crawl_urls": ["..."]}} // smart_crawl's discover_only/crawl_urls/focus are top-level ONLY
-❌ {"url": "...", "options": {"since": "2026-09-01"}} // parse/feed_fetch/resolve_url/cache_clear/close_session take top-level only
+✅ {"url": "https://example.com", "focus": "pricing"}
+❌ {"url": "https://example.com", "options": {"focus": "pricing"}}   // rejected outright
+❌ {"url": "...", "since": "2026-09-01"}                             // since= belongs to feed_fetch, not smart_fetch
 ```
 
-Rejections list the keys the tool actually accepts — follow the error.
+A rejection names the key and lists the keys that tool accepts — follow the error rather than guessing a placement.
 
 ## smart_fetch
 
 **Basic fetch + focus** (BM25 returns only relevant blocks; the header says "showing N of M blocks"; `focus:""` gets the full page):
 ```json
-{"url": "https://example.com/pricing", "options": {"focus": "enterprise pricing"}}
+{"url": "https://example.com/pricing", "focus": "enterprise pricing"}
 ```
 
 **Paginate a long read** (`next_offset` comes from the previous response; **repeat the same focus** — focus runs after cache, no re-request):
 ```json
-{"url": "https://example.com/long-doc", "options": {"focus": "deployment steps", "offset": 40000}}
+{"url": "https://example.com/long-doc", "focus": "deployment steps", "offset": 40000}
 ```
 
 **Batch in parallel** (each URL gets its own result object):
@@ -34,115 +33,115 @@ Rejections list the keys the tool actually accepts — follow the error.
 
 **Conditional request** (step 1: plain GET, grab `cache_validators`; step 2: send the etag back — a 304 is SUCCESS, `not_modified=true` with an empty body):
 ```json
-{"url": "https://example.com", "options": {"if_none_match": "\"6aba938b-2c9\""}}
+{"url": "https://example.com", "if_none_match": "\"6aba938b-2c9\""}
 ```
 
 **Write request** (one-shot: no retry, no cache, no browser escalation; body ≤256KB):
 ```json
-{"url": "https://api.example.com/orders", "options": {"method": "POST", "body": "{\"item\": 1, \"qty\": 2}", "content_type": "application/json"}}
+{"url": "https://api.example.com/orders", "method": "POST", "body": "{\"item\": 1, \"qty\": 2}", "content_type": "application/json"}
 ```
 
 **Credentials** (three shapes; values are never echoed; they do not survive cross-origin redirects; 401 responses distinguish "rejected" from "not sent"):
 ```json
-{"url": "https://api.example.com/me", "options": {"auth": {"type": "bearer", "token": "eyJ..."}}}
-{"url": "https://api.example.com/me", "options": {"auth": {"type": "basic", "username": "u", "password": "p"}}}
-{"url": "https://api.example.com/me", "options": {"auth": {"type": "header", "name": "X-API-Key", "value": "key-123"}}}
+{"url": "https://api.example.com/me", "auth": {"type": "bearer", "token": "eyJ..."}}
+{"url": "https://api.example.com/me", "auth": {"type": "basic", "username": "u", "password": "p"}}
+{"url": "https://api.example.com/me", "auth": {"type": "header", "name": "X-API-Key", "value": "key-123"}}
 ```
 
 **Session cookies** (same `session_id` re-sends that host's cookies automatically, 24h lifetime; responses report cookie NAMES only, never values; roster/cleanup via `close_session`):
 ```json
-{"url": "https://example.com/login-check", "options": {"session_id": "sess1", "cookies": [{"name": "token", "value": "abc"}]}}
+{"url": "https://example.com/login-check", "session_id": "sess1", "cookies": [{"name": "token", "value": "abc"}]}
 ```
 
 **Lazy-load interaction** (one action key per object; `scroll` waits for the page to stop growing — sites that gate lazy-load on `event.isTrusted` need `click` instead; every action leaves a receipt in `metadata.actions`):
 ```json
-{"url": "https://example.com/feed", "options": {"force_fetcher": "stealthy", "actions": [
+{"url": "https://example.com/feed", "force_fetcher": "stealthy", "actions": [
   {"scroll": 3},
   {"click": "button.load-more"},
   {"wait_selector": {"selector": ".item", "count": 40, "state": "visible"}},
   {"fill": {"selector": "#search", "text": "keywords"}},
   {"press": "Enter"}
-]}}
+]}
 ```
 
 **Act without selectors — snapshot, then index addressing** (step 1 lists interactive elements numbered in document order; step 2 acts by index; `expect` verifies the element's visible name, so a stale index fails loudly instead of clicking the wrong thing — re-snapshot when it fires):
 ```json
-{"url": "https://example.com/settings", "options": {"force_fetcher": "stealthy", "actions": [{"snapshot": true}]}}
-{"url": "https://example.com/settings", "options": {"force_fetcher": "stealthy", "actions": [
+{"url": "https://example.com/settings", "force_fetcher": "stealthy", "actions": [{"snapshot": true}]}
+{"url": "https://example.com/settings", "force_fetcher": "stealthy", "actions": [
   {"fill": {"index": 3, "text": "new value"}},
   {"click": {"index": 12, "expect": "Save"}}
-]}}
+]}
 ```
 
 **Form submission goes through the approval gate** (without `confirm`, the submit PAUSES with a `pending_approval` receipt and nothing is sent — describe the submission to the user, then re-run the **whole chain** with `confirm: true` only after they said yes; each call reloads the page, so the re-run must redo every prior step; paused and confirmed runs both land in the audit log):
 ```json
-{"url": "https://shop.example.com/checkout", "options": {"force_fetcher": "stealthy", "actions": [
+{"url": "https://shop.example.com/checkout", "force_fetcher": "stealthy", "actions": [
   {"fill": {"index": 3, "text": "note to seller"}},
   {"submit": {"index": 8}}
-]}}
+]}
 // after the user confirmed:
-{"url": "https://shop.example.com/checkout", "options": {"force_fetcher": "stealthy", "actions": [
+{"url": "https://shop.example.com/checkout", "force_fetcher": "stealthy", "actions": [
   {"fill": {"index": 3, "text": "note to seller"}},
   {"submit": {"index": 8, "confirm": true}}
-]}}
+]}
 ```
 
 **Element screenshot + QR decode** (always available in 17.0; `decode_qr` lists decoded texts in the receipt):
 ```json
-{"url": "https://example.com/ticket", "options": {"force_fetcher": "stealthy", "actions": [
+{"url": "https://example.com/ticket", "force_fetcher": "stealthy", "actions": [
   {"screenshot": {"selector": ".qr-panel", "decode_qr": true}}
-]}}
+]}
 ```
 
 **Answer located to one paragraph** (`focus_mode="best"` returns the single highest-scoring block plus its heading instead of a block list; picking is semantic with `focus_engine="neural"`, BM25 by default):
 ```json
-{"url": "https://docs.example.com/guide", "options": {"focus": "retry policy", "focus_mode": "best"}}
+{"url": "https://docs.example.com/guide", "focus": "retry policy", "focus_mode": "best"}
 ```
 
 **Choosing the focus scorer for one call** (`focus_engine` — a pure per-call choice in 17.0: omitted or `"bm25"` is keyword focus, `"neural"` is the local cross-encoder):
 ```json
-{"url": "https://docs.example.com/guide", "options": {"focus": "retry policy", "focus_engine": "bm25"}}
+{"url": "https://docs.example.com/guide", "focus": "retry policy", "focus_engine": "bm25"}
 ```
-Same key works in `smart_crawl`'s options, where it matters more: the semantic path costs ~12.5s of CPU per page times `max_pages`, so the cheap default is what runs when nobody names it. `"neural"` with the model missing is **refused** (`neural_focus_model_missing`) instead of silently downloading ~280MB — the first neural `smart_search` fetches it once (resumable), or re-run with `"bm25"`.
+The same key exists on `smart_crawl`, where it matters more: the semantic path costs ~12.5s of CPU per page times `max_pages`, so the cheap default is what runs when nobody names it. `"neural"` with the model missing is **refused** (`neural_focus_model_missing`) instead of silently downloading ~280MB — the first neural `smart_search` fetches it once (resumable), or re-run with `"bm25"`.
 
 **Structured extraction** (repeated records REQUIRE a "container selector + sub-schema": sub-selectors evaluate inside each container, one record per container; a bare top-level selector returns a page-wide union with no record attribution):
 ```json
-{"url": "https://quotes.toscrape.com", "options": {"schema": {"properties": {"quotes": {
+{"url": "https://quotes.toscrape.com", "schema": {"properties": {"quotes": {
   "type": "array", "selector": ".quote",
   "properties": {"text": {"selector": ".text"}, "author": {"selector": ".author"}, "tags": {"type": "array", "selector": ".tag"}}
-}}}}}
+}}}}
 ```
 
 **PDF** (read `table_of_contents` in the response first, then pick `pages`; `pages` trims extraction only — the file downloads whole, so raise `timeout` for big files; scanned PDFs auto-OCR):
 ```json
-{"url": "https://arxiv.org/pdf/1706.03762", "options": {"pages": "1-3", "timeout": 60000}}
+{"url": "https://arxiv.org/pdf/1706.03762", "pages": "1-3", "timeout": 60000}
 ```
 
 **Local dev service** (the SSRF guard rejects private hosts by default; with a proxy running, loopback may be intercepted — see troubleshooting "local services"):
 ```json
-{"url": "http://127.0.0.1:8080/api/health", "options": {"allow_private": true}}
+{"url": "http://127.0.0.1:8080/api/health", "allow_private": true}
 ```
 
 **Force the browser tier** (once a site has shown escalation, skip the chain):
 ```json
-{"url": "https://hard-site.com/page", "options": {"force_fetcher": "stealthy"}}
+{"url": "https://hard-site.com/page", "force_fetcher": "stealthy"}
 ```
 
 **CDP attach — login-walled page via the user's real Chrome** (requires the user's one-time setup: copy-profile Chrome with `--remote-debugging-port=9222` — configuration.md "CDP attach"; the FIRST attach to a host is refused with `cdp_authorization_required` and authorizing it is one re-call with `"confirm": true` after the user says yes). `check_login` returns `{logged_in: true/false/null, signals, cookie_names}` — cookie names only, never values; `schema=` cannot combine with `cdp_url`:
 ```json
-{"url": "https://portal.example.com/dashboard", "options": {"cdp_url": "http://127.0.0.1:9222", "check_login": true}}
+{"url": "https://portal.example.com/dashboard", "cdp_url": "http://127.0.0.1:9222", "check_login": true}
 ```
 
 **Explicit proxy** (5s TCP precheck; an unreachable proxy returns `proxy_unreachable` before any request):
 ```json
-{"url": "https://example.com", "options": {"proxy": "http://127.0.0.1:7890"}}
+{"url": "https://example.com", "proxy": "http://127.0.0.1:7890"}
 ```
 
 ## smart_search
 
 **Vertical + dated + threshold + pull full text** (`before` does not exist; `after` is widened to a day/week/month/year preset — read `date_filter.note`; `fetch_content` also fetches the top 3 results' full text):
 ```json
-{"query": "MCP streamable HTTP spec", "options": {"engines": ["bing", "sogou_weixin"], "after": "2026-09-01", "min_raw_relevance": 0.1, "fetch_content": true}}
+{"query": "MCP streamable HTTP spec", "engines": ["bing", "sogou_weixin"], "after": "2026-09-01", "min_raw_relevance": 0.1, "fetch_content": true}
 ```
 
 When searching without fetching: rank by `relevance_score` / `fetch_relevance` (high first), and treat `engines_consensus: 1 of N` as unverified — `smart_fetch` before citing.
@@ -151,11 +150,11 @@ When searching without fetching: rank by `relevance_score` / `fetch_relevance` (
 
 ```json
 // Step 1: whole-site URL map in one request
-{"url": "https://docs.example.com", "discover_only": true, "options": {"sitemap": true}}
+{"url": "https://docs.example.com", "discover_only": true, "sitemap": true}
 // Step 2: scope the map to a subtree ('/guide' matches /guide and below, NOT /guide-old; the only wildcard is a trailing /*)
-{"url": "https://docs.example.com", "discover_only": true, "options": {"path_include": "/guide", "max_pages": 30, "delay": 1}}
+{"url": "https://docs.example.com", "discover_only": true, "path_include": "/guide", "max_pages": 30, "delay": 1}
 // Step 3: fetch the picks (named pages are ALWAYS fetched in full — max_total_chars does not stop them; cap single pages with max_content_chars_per)
-{"url": "https://docs.example.com", "crawl_urls": ["https://docs.example.com/guide/a", "https://docs.example.com/guide/b"], "options": {"max_content_chars_per": 8000}}
+{"url": "https://docs.example.com", "crawl_urls": ["https://docs.example.com/guide/a", "https://docs.example.com/guide/b"], "max_content_chars_per": 8000}
 ```
 
 List pages return a structured link listing (`page_type=list`), not body text — follow it to the content pages.
@@ -172,11 +171,11 @@ List pages return a structured link listing (`page_type=list`), not body text �
 ## screenshot
 
 ```json
-{"url": "https://example.com", "options": {"save_to": "C:/tmp/page.png", "full_page": true}}
+{"url": "https://example.com", "save_to": "C:/tmp/page.png", "full_page": true}
 ```
-Agents that can see images receive it inline; text-only agents read the absolute path from `save_to` and open it with their own image tool. The tool also takes `options.selector` (element crop) and `options.decode_qr: true` (local QR decode) — both always available in 17.0.
+Agents that can see images receive it inline; text-only agents read the absolute path from `save_to` and open it with their own image tool. The tool also takes `selector` (element crop) and `decode_qr: true` (local QR decode) — both always available in 17.0.
 
-## The remaining four (top-level parameters only)
+## The remaining four
 
 ```json
 // parse: the entry point for local documents in a client with no file tools of its own, and
@@ -194,7 +193,7 @@ Agents that can see images receive it inline; text-only agents read the absolute
 
 ## The stateful four (always registered in 17.0)
 
-All four take **top-level parameters only** — there is no `options` bag.
+Nothing is nested here either — every parameter of every tool sits at the top level of the call.
 
 ```json
 // recipe: record a chain once — validated at save time by the same validator the executor uses,

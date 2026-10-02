@@ -24,10 +24,7 @@ from dhole_mcp.robots import MAX_CRAWL_DELAY_S, cached_crawl_delay, get_robots_c
 from dhole_mcp.server import (
     MasterFetchServer,
     ResponseModel,
-    _SC_OPTIONS_FORWARDED,
-    _SF_OPTIONS_FORWARDED,
-    _SS_OPTIONS,
-    _SHOT_OPTIONS,
+    _TOP_LEVEL_ARGS,
 )
 
 SEED = "https://paced.example.com/"
@@ -80,18 +77,15 @@ def _fresh_robots_cache(monkeypatch):
 
 class TestTheWiringThatWasMissing:
 
-    @pytest.mark.parametrize("tool,forwarded", [
-        ("smart_fetch", _SF_OPTIONS_FORWARDED),
-        ("smart_crawl", _SC_OPTIONS_FORWARDED),
-        ("screenshot", _SHOT_OPTIONS),
-        ("smart_search", _SS_OPTIONS),
-    ])
-    def test_every_forwarded_option_is_a_parameter_the_method_accepts(self, tool, forwarded):
-        """选项袋的键最终是 `self.<tool>(**kw)`。少一个形参不是「忽略这个选项」，
-        而是一记 TypeError —— 被宽泛的 except 吞掉后，调用方看到的是一句「不是被
-        站方挡了」的内错，恰好把真正的故障类别说反了。"""
+    @pytest.mark.parametrize("tool", ["smart_fetch", "smart_crawl", "screenshot",
+                                       "smart_search"])
+    def test_every_advertised_name_is_a_parameter_the_method_accepts(self, tool):
+        """`_TOP_LEVEL_ARGS` 现在就是转发的白名单（17.0 B4 起调度器只按它 `**kwargs`）。
+        表里多一个方法没有的名字，不是「这个参数被忽略」，而是一记 TypeError —— 被宽泛的
+        except 吞掉后，调用方看到的是一句「不是被站方挡了」的内错，恰好把真正的故障类别
+        说反了。这条守卫因此从「袋子的键」升级到「这张表」。"""
         accepted = set(inspect.signature(getattr(MasterFetchServer, tool)).parameters)
-        missing = sorted(set(forwarded) - accepted)
+        missing = sorted(set(_TOP_LEVEL_ARGS[tool]) - accepted)
         assert not missing, f"{tool} does not accept {missing} but forwards them"
 
     @pytest.mark.asyncio

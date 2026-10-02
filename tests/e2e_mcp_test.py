@@ -164,17 +164,19 @@ def test_tool_definitions(mcp):
     # robots 遵从、跨调用会话、动词、archive 层、自查清单。
     #
     # 挂在**可见面**上而不是某一个界面上：16.0 的审计把 envelope 读法从八个工具描述
-    # 各抄一遍上收到 instructions 一份，选项键则按设计只出现在 options 那段文本里
-    # （它们不进 properties）。只查 tool.description 会判「删了」，而那句话只是换了
-    # 一个每次连接都会到的地方 —— 对 agent 而言这三段是同一句话。
-    options_desc = tool_map["smart_fetch"]["inputSchema"]["properties"]["options"]["description"]
+    # 各抄一遍上收到 instructions 一份；17.0 拆平之后参数说明各自住在自己的 property
+    # 上。只查 tool.description 会判「删了」，而那句话只是换了一个每次连接都会到的
+    # 地方 —— 对 agent 而言这些段是同一句话。
+    props = tool_map["smart_fetch"]["inputSchema"]["properties"]
     from dhole_mcp.server import DHOLE_INSTRUCTIONS
-    visible = fetch_desc + options_desc + DHOLE_INSTRUCTIONS
+    visible = (fetch_desc + DHOLE_INSTRUCTIONS
+               + "".join((p.get("description") or "")
+                         for p in props.values() if isinstance(p, dict)))
     assert "robots" in fetch_desc.lower()
     assert "session_id" in visible
     # 两条陷阱都要在可见面上露名：method 的"非 GET 只发一次"和 body 的 256KB 上限。
     # 判据写的是文本里真的那句承诺，不是"body 这个词出现过"—— 后者连"body part"都能满足。
-    assert "method:" in visible and "body cap 256KB" in visible, \
+    assert "sent ONCE" in visible and "cap 256KB" in visible, \
         "verb/body 的陷阱句从可见面上消失了"
     assert "archive.org" in visible
     assert "do not cite" in visible.lower(), "引用前的自查必须在场"
@@ -191,46 +193,39 @@ def test_tool_definitions(mcp):
     offset_desc = tool_map["smart_fetch"]["inputSchema"]["properties"]["offset"]["description"]
     assert "next_offset" in offset_desc
 
-    # 选项袋（options={...}）里的键**不进** inputSchema.properties —— 那是本项目刻意
-    # 的契约（`_promote_options` 负责提升，test_tool_descriptions.py 守键集合）。于是
-    # agent 能不能发现它们，只取决于 options 那段描述文本。16.0 新加的
-    # session_id / method / body / content_type 就靠这条兜住：漏写一个键，那个功能
-    # 在 wire 上就等于不存在。
+    # 17.0 拆平之后，这些键必须**出现在 properties 里** —— 那是客户端取值的唯一
+    # 来源。以前它们只活在袋子那段散文里，漏写一个键等于功能在 wire 上不存在；现在
+    # 漏声明一个键连调用都发不出去，所以这条查的比原先硬。
     for key in ("session_id", "method", "body", "content_type",
                 "allow_private", "ignore_robots", "max_links", "auth",
                 "if_modified_since", "if_none_match"):
-        assert key in options_desc
-    # 16.0 的另一半：搜索的日期窗口与 feed 的增量。这两条都只存在于选项文本里
-    # （选项键不进 properties），漏写就等于功能在 wire 上不存在。
-    ss_desc = tool_map["smart_search"]["inputSchema"]["properties"]["options"]["description"]
-    # 「一行一键」的排版之后 after/before 挤在 freshness 那一行里：钉键名和各自那句话，
-    # 不钉括号写法（16.0 之前长这样："after (...)"）。
-    assert "after:" in ss_desc and "before:" in ss_desc
-    assert "refused, not ignored" in ss_desc.lower(), \
+        assert key in props, f"{key} 没被声明，agent 写不出来"
+        assert (props[key].get("description") or "").strip(), f"{key} 声明了却没说明"
+    # 16.0 的另一半：搜索的日期窗口与 feed 的增量，各自是一个参数。
+    ss_props = tool_map["smart_search"]["inputSchema"]["properties"]
+    assert "after" in ss_props and "before" in ss_props
+    assert "refused, not ignored" in ss_props["before"]["description"].lower(), \
         "before 是拒绝而不是忽略 —— 这句才是调用方要的行为（大小写不钉，文案改过字体）"
     assert "since" in tool_map["feed_fetch"]["inputSchema"]["properties"]
 
-    # 搜索缓存：13.16 重写描述后这句提示只在 cache_clear 里，smart_search 的散文
-    # 不再提它 —— 但 cache_ttl 仍是它的公开选项，所以断言挂在选项上而不是散文上。
-    assert "cache_ttl" in (
-        tool_map["smart_search"]["inputSchema"]["properties"]["options"]["description"]
-    )
+    # 搜索缓存：smart_search 的散文不再提它，但 cache_ttl 是它的公开参数。
+    assert "cache_ttl" in ss_props
 
     cache_desc = tool_map["cache_clear"]["description"]
     assert "TTL" in cache_desc or "ttl" in cache_desc or "cache stores" in cache_desc.lower()
 
 
-def test_urls_in_the_options_bag_clears_the_protocol_gate(mcp):
-    """`options.urls` 必须走得通整条 wire。
+def test_urls_alone_clears_the_protocol_gate(mcp):
+    """`urls=[...]` 不带 `url` 必须走得通整条 wire。
 
-    选项描述明写袋里接受 `urls`，分发器也确实会提升它（进程内实测 total=1）——
-    而 `inputSchema` 的 anyOf 只列了顶层两种，于是协议层在请求到达服务端之前就报
-    "must have required property 'url'"：承诺的形状发不出去。单元测试直接调分发器，
-    恰好绕过这道网关，所以只有这条测得到。
+    `inputSchema` 的 anyOf 承诺两种形状（url= 或 urls=），协议层却可能在请求到达
+    服务端之前就把其中一种拒掉 —— 承诺的形状发不出去。单元测试直接调分发器，恰好
+    绕过这道网关，所以只有这条测得到。袋子时代它还要额外证明"urls 藏在袋里也算
+    第三种形状"，现在只有一条通道，测的就是 anyOf 的第二支。
     """
-    resp = mcp.call_tool("smart_fetch", {"options": {
+    resp = mcp.call_tool("smart_fetch", {
         "urls": ["https://example.com"], "max_content_chars": 600, "cache_ttl": 0,
-    }})
+    })
     result = resp.get("result", {})
     assert result.get("isError") is False, result
     data = _extract_data(result)
@@ -250,16 +245,16 @@ def test_smart_fetch_response_fields(mcp):
         assert next_off == 0
 
 
-def test_options_bag_reaches_the_http_tier(mcp):
-    """选项袋里的 method 真的走到 HTTP 层：一次 HEAD 探针。
+def test_method_reaches_the_http_tier(mcp):
+    """wire 上的 method 真的走到 HTTP 层：一次 HEAD 探针。
 
     单元测试是在同一个进程里直接调 ``smart_fetch(...)``，绕过了「wire arguments →
-    ``_promote_options`` → 形参」这一段。HEAD 是这一段最短的探针：不抽取正文、
-    不升级浏览器，一次请求就有答案。
+    分发器 → 形参」这一段。HEAD 是这一段最短的探针：不抽取正文、不升级浏览器，
+    一次请求就有答案。
     """
     resp = mcp.call_tool(
         "smart_fetch",
-        {"url": "https://example.com", "cache_ttl": 0, "options": {"method": "HEAD"}},
+        {"url": "https://example.com", "cache_ttl": 0, "method": "HEAD"},
     )
     data = _extract_data(resp.get("result", {}))
     assert data.get("status") == 200, data.get("error")
@@ -270,7 +265,7 @@ def test_options_bag_reaches_the_http_tier(mcp):
 
 
 def test_revalidation_option_reaches_the_origin(mcp):
-    """options.if_none_match 走完 wire 到 HTTP 层：一次对真实源站的条件请求。
+    """if_none_match 走完 wire 到 HTTP 层：一次对真实源站的条件请求。
 
     loopback 那组用例答的是可重复的 304，这里要的是真实源站怎么处理这个头：它答
     304 就必须是「成功、无正文」，它不理条件请求（很多站点就这样）就回普通 200，
@@ -278,7 +273,7 @@ def test_revalidation_option_reaches_the_origin(mcp):
     """
     resp = mcp.call_tool("smart_fetch", {
         "url": "https://httpbin.org/get", "cache_ttl": 0,
-        "options": {"if_none_match": "*"}})
+        "if_none_match": "*"})
     data = _extract_data(resp.get("result", {}))
     body = "".join(data.get("content") or [])
     assert data.get("status") in (200, 304), data.get("error")
@@ -296,10 +291,10 @@ def test_revalidation_option_reaches_the_origin(mcp):
 
 
 def test_search_date_window_reaches_the_engines(mcp):
-    """options.after 走完 wire → 搜索层 → 引擎，并且如实报告发了哪一档。"""
+    """after= 走完 wire → 搜索层 → 引擎，并且如实报告发了哪一档。"""
     resp = mcp.call_tool("smart_search", {
         "query": "python asyncio tutorial",
-        "options": {"after": "2026-09-20", "max_results": 3, "cache_ttl": 0}})
+        "after": "2026-09-20", "max_results": 3, "cache_ttl": 0})
     data = _extract_data(resp.get("result", {}))
     assert not str(data.get("error", "")).startswith("invalid_request"), data.get("error")
     window = data.get("date_filter") or {}
@@ -322,13 +317,12 @@ def test_error_response_format(mcp):
     assert data.get("content_ok") is False
     assert data.get("next_action")
 
-    # 不认识的选项键同样在信封里报错，且不静默忽略（静默忽略 = 调用方以为生效了）。
-    # 键得是**真的**不认识：cache_ttl 从 16.0 起是袋里的合法键（G22 把 smart_fetch
-    # 除 url 外的每个参数都收成两处放法），拿它当「未知键」测等于什么都没测。
+    # 不认识的参数名同样在信封里报错，且不静默忽略（静默忽略 = 调用方以为生效了）。
+    # 名字得是**真的**不认识：cache_ttl 是合法参数，拿它当「未知键」测等于什么都没测。
     bad = _extract_data(mcp.call_tool("smart_fetch", {
-        "url": "https://example.com", "options": {"cache_tll": 0},
+        "url": "https://example.com", "cache_tll": 0,
     }).get("result", {}))
-    assert "Unsupported option key" in str(bad.get("error", "")), bad
+    assert "Unsupported argument" in str(bad.get("error", "")), bad
     assert "cache_ttl" in str(bad.get("error", "")), "支持集要一起给出，否则改不出正确的键"
 
     resp2 = mcp.call_tool("nonexistent_tool_xyz", {})

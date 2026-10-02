@@ -18,7 +18,7 @@ Starting routes for multi-step tasks. Each recipe marks where to pivot on failur
 
 ## Collect a documentation site
 
-1. `smart_crawl(url=<docs root>, options={sitemap:true}, discover_only=true)` — whole-site URL map in one request (if no sitemap: `discover_only=true`, but map expansion costs one request per page)
+1. `smart_crawl(url=<docs root>, sitemap=true, discover_only=true)` — whole-site URL map in one request (if no sitemap: `discover_only=true`, but map expansion costs one request per page)
 2. `path_include:"/docs"` to scope a subtree (`'/docs'` does not match `/docs-old`), `search:"keywords"` to filter by title/URL
 3. `crawl_urls=[...]` to fetch the picks (named pages always fetch in full; dropped entries are reported); for known URLs you can also go straight to `smart_fetch(urls=[...])`
 4. List pages return structured link listings (`page_type=list`) — follow them to content pages
@@ -32,8 +32,8 @@ Starting routes for multi-step tasks. Each recipe marks where to pivot on failur
 
 ## Verify a local dev / staging service
 
-1. `smart_fetch(url="http://127.0.0.1:PORT/...", options={allow_private:true})` — the SSRF guard rejects private hosts by default; name the waiver; for recurring use set `DHOLE_ALLOW_PRIVATE_HOSTS`. With a proxy running, loopback may be intercepted (dead ports answer 502 instead of connection-refused) — rule the proxy out first (`NO_PROXY` += `127.0.0.1,localhost`); never probe dead ports with stealthy (the browser waits out the 30s timeout)
-2. Rendered view / real behavior: `screenshot` (text-only agents: `options.save_to` then read the file); interaction checks via `actions` click/fill
+1. `smart_fetch(url="http://127.0.0.1:PORT/...", allow_private=true)` — the SSRF guard rejects private hosts by default; name the waiver; for recurring use set `DHOLE_ALLOW_PRIVATE_HOSTS`. With a proxy running, loopback may be intercepted (dead ports answer 502 instead of connection-refused) — rule the proxy out first (`NO_PROXY` += `127.0.0.1,localhost`); never probe dead ports with stealthy (the browser waits out the 30s timeout)
+2. Rendered view / real behavior: `screenshot` (text-only agents: `save_to` then read the file); interaction checks via `actions` click/fill
 3. `resolve_url` settles where server-side redirects actually land
 
 ## Reading PDFs
@@ -51,7 +51,7 @@ Starting routes for multi-step tasks. Each recipe marks where to pivot on failur
 
 ## Sites behind login
 
-Five paths, cheapest first: (1) user-supplied cookies (`options.cookies` + `options.session_id` keeps the jar, 24h) or an API token (`options.auth`: basic/bearer/header). (2) **No-password browser flow (17.0)**: pass the same named `session_id` to browser-tier calls — the jar bridges into that session's dedicated browser and back; verify with `check_login`, act with snapshot + index actions, and let `{"submit": ...}` pause for the user's confirmation. (3) **Stored-credential login (17.0, opt-in)**: `vault(op='match', url=...)` to find the item, then `login` without `confirm` to show the plan and again with `confirm=true` to run it — for a password the user already keeps in Bitwarden / 1Password; the value is read server-side and never enters the transcript. (4) CDP attach (user's real Chrome, one-time setup — configuration.md). (5) DataDome / Akamai / interactive Turnstile / 2FA remain hand-offs. Cookies and tokens don't survive cross-origin redirects; values are never echoed. **Never ask the user to paste a password into the conversation** — route it through path 2, 3, or 4 instead.
+Five paths, cheapest first: (1) user-supplied cookies (`cookies` + `session_id` keeps the jar, 24h) or an API token (`auth`: basic/bearer/header). (2) **No-password browser flow (17.0)**: pass the same named `session_id` to browser-tier calls — the jar bridges into that session's dedicated browser and back; verify with `check_login`, act with snapshot + index actions, and let `{"submit": ...}` pause for the user's confirmation. (3) **Stored-credential login (17.0, opt-in)**: `vault(op='match', url=...)` to find the item, then `login` without `confirm` to show the plan and again with `confirm=true` to run it — for a password the user already keeps in Bitwarden / 1Password; the value is read server-side and never enters the transcript. (4) CDP attach (user's real Chrome, one-time setup — configuration.md). (5) DataDome / Akamai / interactive Turnstile / 2FA remain hand-offs. Cookies and tokens don't survive cross-origin redirects; values are never echoed. **Never ask the user to paste a password into the conversation** — route it through path 2, 3, or 4 instead.
 
 ## Reach a page that needs steps — record and replay (recipe, opt-in)
 

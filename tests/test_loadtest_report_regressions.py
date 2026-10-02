@@ -143,7 +143,7 @@ class TestDispatchedArgumentTypes:
     def test_a_json_encoded_array_is_still_accepted(self, monkeypatch):
         """Clients that stringify nested structures must keep working.
 
-        ``_coerce_options`` exists for the same reason; an array literal has
+        ``_coerce_arg_types`` exists for the same reason; an array literal has
         exactly one reading, so it is honoured rather than rejected with the
         bare string.
         """
@@ -237,11 +237,11 @@ class TestDispatchedArgumentTypes:
     def test_an_absent_force_fetcher_stays_none(self):
         assert server_mod._validate_tool_args("smart_fetch", {})["force_fetcher"] is None
 
-    def test_smart_crawl_options_force_fetcher_is_validated_too(self):
+    def test_smart_crawl_force_fetcher_is_validated_too(self):
         """crawl.py forwards it straight to smart_fetch — same silent fallback."""
         with pytest.raises(ValueError, match="not a fetcher tier"):
             _dispatch("smart_crawl", {
-                "url": "https://example.com/", "options": {"force_fetcher": "magic"},
+                "url": "https://example.com/", "force_fetcher": "magic",
             })
 
 
@@ -259,11 +259,9 @@ class TestToolSchemaRequired:
         """The schema said nothing; the tool rejects a call with neither.
 
         Asserted by VALIDATING the shapes the tool documents rather than by
-        comparing the literal to a literal: the options bag is a documented home
-        for `urls` (its description says so, and the dispatcher promotes it),
-        and a hand-matched anyOf stayed green while the protocol layer rejected
-        exactly that call - the gate and the promise had drifted, and only the
-        promise was being read.
+        comparing the literal to a literal: a hand-matched anyOf stayed green
+        while the protocol layer rejected exactly that call - the gate and the
+        promise had drifted, and only the promise was being read.
         """
         import jsonschema
 
@@ -272,12 +270,11 @@ class TestToolSchemaRequired:
         for documented in (
             {"url": "https://example.com/"},
             {"urls": ["https://example.com/"]},
-            {"options": {"urls": ["https://example.com/"], "max_content_chars": 500}},
+            {"urls": ["https://example.com/"], "max_content_chars": 500},
         ):
             jsonschema.validate(instance=documented, schema=schema)
         with pytest.raises(jsonschema.ValidationError):
-            jsonschema.validate(instance={"options": {"max_content_chars": 500}},
-                                schema=schema)
+            jsonschema.validate(instance={"max_content_chars": 500}, schema=schema)
 
     def test_cache_clear_requires_nothing(self):
         """The report listed cache_clear here too; both its args are optional."""

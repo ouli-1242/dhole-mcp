@@ -70,7 +70,7 @@ def normalize_engine(value: object) -> str:
 
 
 def engine_wants_neural() -> bool:
-    """本次调用**点名**语义打分了吗。只认按次的 ``options.focus_engine``：
+    """本次调用**点名**语义打分了吗。只认按次的 ``focus_engine``：
     没点名（""）或点名 "bm25" 都是 BM25 —— 神经分是显式选择，从来不该默认发生。"""
     choice = FOCUS_ENGINE.get()
     if choice:

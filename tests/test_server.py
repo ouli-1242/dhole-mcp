@@ -15,9 +15,7 @@ from dhole_mcp.server import (
     _annotate_quality, _with_agent_hints, MAX_CONTENT_CHARS, MIN_CHUNK_CHARS, MAX_BULK_URLS,
     _JS_SHELL_SIGNALS, _CF_CHALLENGE_SIGNALS, MAX_RESPONSE_BYTES,
     _browser_deps_available,
-    _strict_options, _SF_OPTIONS_ALLOWED, _SF_OPTIONS_FORWARDED,
     _SessionBusy,
-    _SHOT_OPTIONS,
     _proxy_to_url, _basic_auth_header,
 )
 
@@ -1158,36 +1156,3 @@ class TestBrowserDepsNonBlocking:
         assert checked == [], "preflight 失败后不许再去查浏览器"
 
 
-# ─── options bag validation ───────────────────────────────────────
-
-class TestStrictOptions:
-
-    def test_unknown_key_raises_with_supported_set(self):
-        with pytest.raises(ValueError) as exc:
-            _strict_options({"wait": 100, "typo_key": 1}, _SHOT_OPTIONS, _SHOT_OPTIONS, "screenshot")
-        msg = str(exc.value)
-        assert "typo_key" in msg
-        assert "screenshot" in msg
-        assert "full_page" in msg  # supported set shown so the agent can self-correct
-
-    def test_known_keys_forwarded(self):
-        out = _strict_options({"full_page": True, "timeout": 5000}, _SHOT_OPTIONS, _SHOT_OPTIONS, "screenshot")
-        assert out == {"full_page": True, "timeout": 5000}
-
-    def test_empty_options_ok(self):
-        assert _strict_options({}, _SHOT_OPTIONS, _SHOT_OPTIONS, "screenshot") == {}
-
-    def test_smart_fetch_promoted_keys_allowed_but_not_forwarded(self):
-        # css_selector is read via options.get fallback in _dispatch, so it must
-        # be ALLOWED (no false rejection) yet not FORWARDED (**kw would collide
-        # with the explicit css_selector arg -> duplicate-keyword TypeError).
-        out = _strict_options(
-            {"css_selector": ".main", "proxy": "http://p:1"},
-            _SF_OPTIONS_ALLOWED, _SF_OPTIONS_FORWARDED, "smart_fetch",
-        )
-        assert out == {"proxy": "http://p:1"}
-        assert "css_selector" not in out
-
-    def test_smart_fetch_unknown_key_raises(self):
-        with pytest.raises(ValueError):
-            _strict_options({"includeMedia": True}, _SF_OPTIONS_ALLOWED, _SF_OPTIONS_FORWARDED, "smart_fetch")

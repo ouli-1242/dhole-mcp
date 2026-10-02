@@ -170,7 +170,7 @@ PLAUSIBLE_CASES = {
     "smart_search": [
         # Engines are routed to the dead loopback proxy: no internet egress.
         ("minimal: query via dead loopback proxy", {"query": "dhole offline snapshot probe"}),
-        ("minimal: find_similar with blocked source url", {"query": "probe", "options": {"mode": "find_similar", "url": "http://127.0.0.1/"}}),
+        ("minimal: find_similar with blocked source url", {"query": "probe", "mode": "find_similar", "url": "http://127.0.0.1/"}),
     ],
     "cache_clear": [
         ("minimal: no args (expired entries only)", {}),

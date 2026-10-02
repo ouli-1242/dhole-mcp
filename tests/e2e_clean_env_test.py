@@ -214,7 +214,7 @@ def task_browser_fetch(client: Client, report: dict) -> list[str]:
     started = time.perf_counter()
     data = client.call("smart_fetch", {
         "url": JS_ONLY_PAGE, "cache_ttl": 0, "timeout": 120000,
-        "options": {"force_fetcher": "stealthy"}})
+        "force_fetcher": "stealthy"})
     took = time.perf_counter() - started
     report["fetch_s"] = round(took, 1)
     report["fetcher_used"] = data.get("fetcher_used", "")
@@ -235,7 +235,7 @@ def task_search(client: Client, report: dict) -> list[str]:
     """任务 2 · 一次真实搜索（没有任何引擎 key、没有代理）。"""
     started = time.perf_counter()
     data = client.call("smart_search", {
-        "query": SEARCH_QUERY, "options": {"max_results": 3, "cache_ttl": 0}})
+        "query": SEARCH_QUERY, "max_results": 3, "cache_ttl": 0})
     report["search_s"] = round(time.perf_counter() - started, 1)
     results = data.get("results") or []
     report["search_results"] = len(results)

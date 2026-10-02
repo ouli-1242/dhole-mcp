@@ -140,7 +140,7 @@ class TestTheWireReadsEveryArgumentItAdvertises:
 
         报告的复现是「结果与不传 since 完全一致」。只有把每个声明的参数都送一遍、再核对
         门方法收到了什么，这类掉包才会红 —— 单测 `_since_cutoff` 或直调 `self.feed_fetch`
-        都看不见它。带 options 袋的四个工具由 test_options_are_canonical_g22 同样地钉住。
+        都看不见它。四个网络工具的每个参数名由 test_params_reach_the_tool.py 同样地钉住。
         """
         defs = {d["name"]: d for d in MasterFetchServer._enabled_tool_defs()}
         props = set(defs[tool]["inputSchema"]["properties"])
@@ -231,11 +231,11 @@ class _ServedPdf:
         return False
 
 
-def _fetch(url: str, **options) -> dict:
+def _fetch(url: str, **args) -> dict:
     """One smart_fetch through the real dispatcher (loopback hosts need the opt-in)."""
     return asyncio.run(MasterFetchServer()._dispatch(
         "smart_fetch",
-        {"url": url, "allow_private": True, "timeout": 60000, **options}))[1]
+        {"url": url, "allow_private": True, "timeout": 60000, **args}))[1]
 
 
 class TestACachedPdfKeepsTheExtractorsVerdict:
@@ -516,11 +516,10 @@ class TestTheResponseSaysHowRobotsWasDecided:
         with _ServedValidator() as (ignored_url, _honoured):
             url = ignored_url.split("?")[0]
             monkeypatch.setenv("DHOLE_IGNORE_ROBOTS", "1")
-            by_env = _fetch(url, options={"include_links": False})
+            by_env = _fetch(url, include_links=False)
             monkeypatch.delenv("DHOLE_IGNORE_ROBOTS")
-            by_param = _fetch(url, options={"ignore_robots": True,
-                                            "cache_ttl": 0, "include_links": False})
-            complying = _fetch(url + "#", options={"cache_ttl": 0, "include_links": False})
+            by_param = _fetch(url, ignore_robots=True, cache_ttl=0, include_links=False)
+            complying = _fetch(url + '#', cache_ttl=0, include_links=False)
 
         assert "DHOLE_IGNORE_ROBOTS" in by_env["metadata"]["robots"], \
             f"进程级绕过没有如实写出：{by_env['metadata']}"

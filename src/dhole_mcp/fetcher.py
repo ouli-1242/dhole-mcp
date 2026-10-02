@@ -700,7 +700,7 @@ class HTTPSession:
         防护——每跳校验。仅测试/可信环境可开启）。
 
         ``credential_headers``: 除 Cookie/Authorization 之外还要按凭据对待的头名
-        （options.auth 放出去的 ``X-API-Key`` 之类）。只在**跨源重定向**时被丢掉，
+        （auth 放出去的 ``X-API-Key`` 之类）。只在**跨源重定向**时被丢掉，
         同源照发——否则等于替调用方把密钥寄给了第一个服务器挑中的下一跳。
 
         ``session_id``: 非空时启用持久 cookie jar（G7，见 sessions 模块）——本次

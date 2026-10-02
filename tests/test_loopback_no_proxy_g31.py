@@ -119,8 +119,8 @@ async def test_forced_stealthy_dead_private_port_fails_fast():
     started = time.monotonic()
     r = await srv._dispatch("smart_fetch", {
         "url": "http://127.0.0.1:1/",
-        "options": {"force_fetcher": "stealthy", "allow_private": True,
-                    "timeout": 45000}})
+        "force_fetcher": "stealthy", "allow_private": True,
+        "timeout": 45000})
     elapsed = time.monotonic() - started
     payload = json.loads(r[0][0].text)
     # Fast: nowhere near the 45s budget the browser tier used to burn.

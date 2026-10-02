@@ -1,4 +1,4 @@
-"""G25 回归：`options.auth` —— 凭据怎么变成头，以及**它不该出现在哪里**。
+"""G25 回归：`auth` —— 凭据怎么变成头，以及**它不该出现在哪里**。
 
 报告的缺口是「无认证助手，只能靠 extra_headers.Authorization」（G25）。加一个把
 dict 翻成头的函数不难，难的是这个功能天生带着三个静默失效的方向，每一个都比「不支持」
@@ -418,5 +418,5 @@ class TestA401SaysWhichOneItIs:
         out = await MasterFetchServer().smart_fetch(URL, cache_ttl=0)
 
         assert "needs credentials" in out.next_action
-        assert "options.auth" in out.next_action
+        assert "auth=" in out.next_action
         assert "REFUSED" not in out.next_action

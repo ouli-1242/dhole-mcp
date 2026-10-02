@@ -78,7 +78,7 @@ _CRAWL_FILTER_FLOOR = 0.03
 
 
 def _neural_for_this_call() -> bool:
-    """这一次爬取真的用语义打分吗 = 按次 ``options.focus_engine`` 点名 "neural"。
+    """这一次爬取真的用语义打分吗 = 按次 ``focus_engine`` 点名 "neural"。
 
     17.0：``DHOLE_NEURAL_FOCUS`` 许可门已删除 —— 神经分是显式按次选择，
     没点名（""）或点名 "bm25" 都走 BM25；爬取把每页 ~12.5s 的推理乘上

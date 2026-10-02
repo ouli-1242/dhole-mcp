@@ -582,9 +582,8 @@ DHOLE_INSTRUCTIONS = (
     "deep syntax of actions / schema lives there.\n"
     "Parameters:\n"
     "- Every parameter is named at the TOP LEVEL of the call: "
-    '{"url": "https://x", "focus": "q"}. The options object is a compatibility '
-    "channel that is still read, and a top-level copy wins over the copy inside "
-    "it - nothing has to be nested.\n"
+    '{"url": "https://x", "focus": "q"} - nothing is nested. A name the '
+    "tool does not accept raises rather than being dropped.\n"
     "Reading any response:\n"
     "- A field that is ABSENT is at its default: no is_truncated means not "
     "truncated, no cached means not cached. Only what changed or what you must "
@@ -647,13 +646,12 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "syntax of actions / schema lives there.\n",
 }
 _INSTRUCTIONS_RULES = (
-    # 17.0 B4 · 放置规则只在连接期说一份：参数住在顶层，袋子是还读的兼容通道。
+    # 17.0 B4 · 放置规则只在连接期说一份：参数住在顶层，别处没有第二个家。
     # 每个工具描述里再抄一遍就是 4 份会各自漂走的副本。
     "Parameters:\n"
     "- Every parameter is named at the TOP LEVEL of the call: "
-    '{"url": "https://x", "focus": "q"}. The options object is a compatibility '
-    "channel that is still read, and a top-level copy wins over the copy inside "
-    "it - nothing has to be nested.\n"
+    '{"url": "https://x", "focus": "q"} - nothing is nested. A name the '
+    "tool does not accept raises rather than being dropped.\n"
     "Reading any response:\n"
     "- A field that is ABSENT is at its default: no is_truncated means not "
     "truncated, no cached means not cached. Only what changed or what you must "
@@ -700,7 +698,7 @@ class ResponseModel(BaseModel):
     cached: bool = Field(default=False, description="From cache")
     fetcher_used: str = Field(default="", description="http/dynamic/stealthy/cache/none")
     extracted_type: str = Field(default="markdown", description="markdown|html|text|article|structured")
-    session_id: str = Field(default="", description="The id of the persistent session this call ran under (empty = stateless, the default). Pass options.session_id='name' to reuse cookies across calls: whatever the site sets is remembered for that host and sent back on the next call with the same id. A browser-session id is echoed here too. The jar covers the HTTP tier.")
+    session_id: str = Field(default="", description="The id of the persistent session this call ran under (empty = stateless, the default). Pass session_id='name' to reuse cookies across calls: whatever the site sets is remembered for that host and sent back on the next call with the same id. A browser-session id is echoed here too. The jar covers the HTTP tier.")
     session_cookie_names: List[str] = Field(default_factory=list, description="Cookie NAMES the session jar now holds for this host (only when session_id is set). Values are never returned - a session cookie is a credential and tool output goes into your transcript. Use this to check a login actually stuck: empty after a sign-in call means nothing was stored.")
     duration_ms: float = Field(default=0, description="Duration ms")
     error: str = Field(default="", description="Error + recovery hints")
@@ -738,7 +736,7 @@ class ResponseModel(BaseModel):
     is_stale: bool = Field(default=False, description="True when content_age_days is past the staleness horizon for this kind of source: 30 days for news, 730 for reference/paper/docs/repo/QA, 365 for everything else. So the same age can be stale on a news page and current on a reference page. False when there is no age to judge.")
     # Revalidation (G23): what the server's own version markers say, and whether
     # this call was a conditional GET that came back "unchanged".
-    cache_validators: Dict[str, Any] = Field(default_factory=dict, description="The server's own version markers for this exact URL: {etag, last_modified} (either may be absent - many servers send only one). Save them and pass them back as options.if_none_match / options.if_modified_since to ask 'has this changed?' without re-downloading the page. {} when the server sends neither, which means revalidation is not available for this URL - a poller should then compare content itself.")
+    cache_validators: Dict[str, Any] = Field(default_factory=dict, description="The server's own version markers for this exact URL: {etag, last_modified} (either may be absent - many servers send only one). Save them and pass them back as if_none_match / if_modified_since to ask 'has this changed?' without re-downloading the page. {} when the server sends neither, which means revalidation is not available for this URL - a poller should then compare content itself.")
     not_modified: bool = Field(default=False, description="True = this call sent a conditional request (if_none_match / if_modified_since) and the server answered 304 'not modified'. The content is UNCHANGED, so no body is returned and content=[] is the expected shape: content_ok is true, error is empty. Treat it as 'your copy is current', not as a failed fetch.")
     # source + archived_at: set ONLY when this content came from the Internet
     # Archive (auto-fallback after a live hard-block). 'live' (default) = the
@@ -784,7 +782,7 @@ class SessionCensusRow(BaseModel):
     (a login done through the HTTP tier never opens a browser), so the browser
     half is what is optional here, not the id.
     """
-    session_id: str = Field(description="The id you passed to options.session_id")
+    session_id: str = Field(description="The session_id= this call was given (empty = none)")
     hosts: Dict[str, List[str]] = Field(default_factory=dict, description="host -> the cookie NAMES the jar holds for it. Names only, always: a cookie value is a credential, and everything a tool returns lands in the transcript.")
     cookies: int = Field(default=0, description="Cookies held under this id. 0 with browser_open true means the browser keeps them in its own context, out of the jar.")
     expires_in_s: int = Field(default=0, description="Seconds until the EARLIEST of this session's cookies lapses by itself (0 = the jar holds nothing). Says whether forgetting it is urgent or already happening on its own.")
@@ -1875,7 +1873,7 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         next_action = (
             "the proxy did not answer, so no request was sent - do NOT retry the "
             "same way. Check the proxy host/port and that the proxy is running, or "
-            "drop options.proxy to fetch directly. Raising timeout will not help: "
+            "drop proxy= to fetch directly. Raising timeout will not help: "
             "the failure happens before the request."
         )
     elif err.startswith("schema_no_match"):
@@ -1983,14 +1981,14 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         _auth_kind = _AUTH_SENT.get()[0]
         if _auth_kind:
             next_action = (
-                f"HTTP {result.status}: the credentials were REFUSED. options.auth "
+                f"HTTP {result.status}: the credentials were REFUSED. auth= "
                 f"(type={_auth_kind}) was sent to this host and rejected - re-check "
                 "the username/password or token. Retrying unchanged cannot change the "
                 "answer, and they will not be sent to any other host.")
         else:
             next_action = (
                 f"HTTP {result.status}: this URL needs credentials. Pass them as "
-                "options.auth ({type:'basic',username,password} / "
+                "auth= ({type:'basic',username,password} / "
                 "{type:'bearer',token} / {type:'header',name,value}) - no fetcher "
                 "tier can invent them, so a browser retry is wasted here.")
     elif result.status == 403:
@@ -2340,10 +2338,10 @@ def _coerce_int_arg(
 
     ``max_content_chars`` did exactly that: a non-int was replaced by
     ``MAX_CONTENT_CHARS``. Since several MCP clients stringify numbers (the same
-    behaviour ``_coerce_options`` exists for), ``max_content_chars="2000"``
+    JSON-stringified clients need parsed), ``max_content_chars="2000"``
     silently became 40,000 — a 20x context overspend delivered as an ordinary
     200. That is the "looks like it worked" family already closed one level up
-    by ``_coerce_options``, ``_strict_options`` and ``_normalize_schema``.
+    by ``_coerce_arg_types`` and ``_normalize_schema``.
 
     Policy, in order:
       * ``None`` -> ``default`` (the argument was not set)
@@ -2474,7 +2472,7 @@ def _coerce_str_list_arg(
     Wrapping the string would be a guess (is a comma a separator? a newline?),
     so it raises and names the argument that already means "one URL". A
     JSON-encoded array is accepted because several clients stringify nested
-    structures (the same behaviour ``_coerce_options`` exists for) and an array
+    structures (the same reason a JSON-stringified value gets parsed) and an array
     literal has exactly one reading.
 
     Elements are checked too: ``urls=["https://a", 123]`` used to reach
@@ -2550,10 +2548,10 @@ def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Option
 #     what an external test report filed as "smart_search 完全崩溃，重启不恢复"
 #     and misdiagnosed as engine-cooldown state. The state files were innocent —
 #     the same call succeeds once the number arrives as an int.
-#   * a client that echoes every schema property as null. A null in the OPTIONS
-#     bag is forwarded by _strict_options (unlike a top-level null, which
-#     _promote_options skips), so `options={"cache_ttl":null}` reached
-#     `if cache_ttl > 0` and raised on a NoneType comparison.
+#   * a client that echoes every schema property as null. A null means "not
+#     set", so it is dropped before any branch reads it - but the drop has to
+#     be deliberate: `if cache_ttl > 0` on a None raises a NoneType comparison,
+#     and letting the tool's own default apply is what the caller meant.
 #
 # A bare string where a list was meant is the same gap with a worse outcome:
 # `crawl_urls="https://x"` iterates character by character.
@@ -2690,30 +2688,23 @@ def _coerce_one_arg(kind: str, name: str, value: Any, default: Any) -> Any:
     return value
 
 
-def _coerce_arg_types(tool: str, args: dict, options: dict) -> tuple[dict, dict]:
-    """Normalize both argument channels of one call to the types the tool reads.
+def _coerce_arg_types(tool: str, args: dict) -> dict:
+    """Normalize one call's arguments to the types the tool reads.
 
-    Both, because every promoted parameter can arrive either way (`page=1` or
-    `options={"page":1}`), and top-level-wins is decided downstream of here.
-    Keys the caller never sent stay absent so the tool's own default applies;
-    keys sent as null take that same default, which is already what a
-    top-level null means to _promote_options.
+    One channel since 17.0 B4: parameters live at the top level, so there is no
+    second copy arriving through a bag to keep in step with. Keys the caller
+    never sent stay absent so the tool's own default applies; a key sent as null
+    takes that same default.
     """
     spec = _ARG_TYPES.get(tool)
-    if not spec:
-        return args, options
+    if not spec or not any(k in args for k in spec):
+        return args
     defaults = _arg_defaults(tool)
-
-    def one(store: dict) -> dict:
-        if not any(k in store for k in spec):
-            return store
-        out = dict(store)
-        for key in spec:
-            if key in out:
-                out[key] = _coerce_one_arg(spec[key], key, out[key], defaults.get(key))
-        return out
-
-    return one(args), one(options)
+    out = dict(args)
+    for key in spec:
+        if key in out:
+            out[key] = _coerce_one_arg(spec[key], key, out[key], defaults.get(key))
+    return out
 
 
 # The hint travels with the error: a caller who wrote urls="https://x" is one
@@ -2761,31 +2752,9 @@ def _validate_tool_args(name: str, args: dict) -> dict:
         if sid is not None and not isinstance(sid, str):
             raise ValueError(
                 f"session_id must be a string, got {type(sid).__name__}. "
-                "It is the name you passed to options.session_id.")
+                "It is the name you passed as session_id=.")
     elif name == "feed_fetch":
         out["urls"] = _coerce_str_list_arg(args.get("urls"), "urls")
-    return out
-
-
-def _normalize_promoted_copies(name: str, args: dict, options: dict) -> dict:
-    """Coerce the options-bag copies that only the top level used to be checked on.
-
-    ``urls`` and ``force_fetcher`` are normalized by ``_validate_tool_args``, which
-    reads the top-level dict only. Both parameters are accepted in the bag now
-    (G22), so a bag copy used to skip the check: ``options.urls="https://x"``
-    reached the bulk fetcher as a string (19 one-character URLs), and
-    ``options.force_fetcher='magic'`` fell through to the stealthy browser tier.
-    Runs inside the argument guard so a bad value keeps the invalid_request
-    envelope rather than becoming an is_error result of another shape.
-    """
-    if name != "smart_fetch":
-        return options
-    out = dict(options)
-    if out.get("urls") is not None and args.get("urls") is None:
-        out["urls"] = _coerce_str_list_arg(out["urls"], "urls",
-                                           single_hint=_URLS_SINGLE_HINT)
-    if out.get("force_fetcher") is not None and args.get("force_fetcher") is None:
-        out["force_fetcher"] = _coerce_force_fetcher_arg(out["force_fetcher"])
     return out
 
 
@@ -2829,7 +2798,7 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
     # the relevant blocks so the agent loads less context on long pages.
     # Only applies to text-like extractions (not raw html). Runs before chunking
     # so offset/next_offset page through the FOCUSED content.
-    # M-1: 打分器只由**本次调用**的 options.focus_engine 决定（17.0 没有许可门：
+    # M-1: 打分器只由**本次调用**的 focus_engine= 决定（17.0 没有许可门：
     # 没点名 = BM25，点名 'neural' 才用语义分，见 focus.engine_wants_neural）——
     # the blocks are scored by the warm local cross-encoder instead of BM25
     # (peek only — the load happened at the smart_fetch entry; a missing scorer
@@ -3161,8 +3130,8 @@ _BROWSER_ERROR_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
      "DOM (extraction_type='html', or screenshot the full page first); use "
      "wait_selector only if the element appears later"),
     (("timeout", "exceeded"),
-     "the page never finished rendering - raise options.timeout (ms), or wait for "
-     "a specific element with options.wait_selector"),
+     "the page never finished rendering - raise timeout= (ms), or wait for "
+     "a specific element with wait_selector="),
     (("has been closed", "target closed"),
      "the browser session is gone - call again to get a fresh one, or close_session "
      "and retry"),
@@ -4534,7 +4503,7 @@ def _auth_request_headers(
     auth: Any,
     headers: Optional[Mapping[str, Optional[str]]],
 ) -> tuple:
-    """Turn an ``options.auth`` dict into request headers.
+    """Turn an ``auth`` dict into request headers.
 
     Returns ``(headers_to_add, kind, credential_names, ignored_reason)``.
 
@@ -4682,18 +4651,14 @@ def _browser_cookies(cookies: Any, url: str) -> Any:
     return cookies
 
 
-# ─── options bag validation ────────────────────────────────────────
-# The advertised schemas set additionalProperties: True on `options`, so a
-# typo'd key used to be silently dropped — the parameter no-ops while the
-# call still looks successful (the worst failure mode for an agent). Every
-# tool validates its options against its known keys before forwarding;
-# unknown keys raise so the agent sees the supported set instead.
-#
-# Per tool: ALLOWED = every key that may appear in options (documented +
-# promoted-fallback keys), FORWARDED = the subset actually passed through
-# to the method (promoted keys are already forwarded as explicit args, so
-# re-forwarding them via **kw would raise a duplicate-keyword TypeError).
-_SF_OPTIONS_ALLOWED = frozenset({
+# ─── 参数面：每个工具接受哪些名字 ──────────────────────────────────
+# 17.0 B4：`options` 袋删掉了，参数只剩顶层这一个家（`url` 除外 —— 它说的是"这次调用
+# 关于哪一页"，不是一个旋钮）。一个键写错必须抛 —— 静默丢掉一个上限，调用方就会相信那个
+# 上限生效过（这是 agent 最坏的一种失败：调用看起来成功）。
+# 这张表同时是三件事的唯一来源：陌生键判定、那句错误里列出的 Supported 名单、以及
+# `_dispatch` 转发给方法时的白名单。名字打错与"这个工具没这个能力"是两句话，
+# `_reject_unknown_args` 负责说清是哪一句。
+_SF_PARAMS = frozenset({
     "css_selector", "max_content_chars", "timeout", "pages", "password",
     "schema",
     "proxy", "cookies", "extra_headers", "useragent", "wait", "network_idle",
@@ -4702,43 +4667,19 @@ _SF_OPTIONS_ALLOWED = frozenset({
     "include_media", "include_links", "max_links", "ignore_robots",
     "allow_private", "session_id", "method", "body", "content_type", "auth",
     "if_modified_since", "if_none_match",
-    # G33/G35：CDP attach 与无模型登录判定。top-level 与 options bag 双收。
-    "check_login", "cdp_url",
-    # §3-16：CDP attach 的先问再记。confirm 是门的一部分，同走 promoted 通道
-    # （顶层的 confirm 由方法签名读，bag 里的副本被识别而不是报不支持）。
-    "confirm",
-    # G22's other half, non-breaking: these were top-level ONLY, and putting them
-    # in the bag raised "Unsupported option key" — so the tool really did have two
-    # shapes for one call, and an agent reading the option descriptions could not
-    # say where a parameter belongs. `url` stays top-level: it is what the call is
-    # about, and a bag copy would compete with it.
-    "cache_ttl", "offset", "focus", "actions", "extraction_type",
-    "force_fetcher", "urls",
-    # M-2：focus 的形态（filter | best）。与 focus 同走 promoted 通道。
-    "focus_mode",
-    # 按次选打分器（bm25 | neural）。同 focus 走 promoted 通道：它是对同一次
-    # focus 的修饰，不是一个独立入口。
-    "focus_engine",
+    # G33/G35：CDP attach、无模型登录判定，以及 §3-16 那道先问再记的门
+    # （confirm 是门的一部分，不是可选装饰）。
+    "check_login", "cdp_url", "confirm",
+    "cache_ttl", "offset", "focus", "focus_mode", "focus_engine", "actions",
+    "extraction_type", "force_fetcher", "urls",
 })
-# Keys the smart_fetch branch reads by name (top-level wins over the bag copy).
-# They are excluded from the forwarded set on purpose: forwarding one as well
-# would pass the same parameter twice.
-_SF_PROMOTED = frozenset({
-    "css_selector", "max_content_chars", "timeout", "pages", "password", "schema",
-    "cache_ttl", "offset", "focus", "actions", "extraction_type",
-    "force_fetcher", "urls", "focus_mode", "focus_engine", "confirm",
-})
-_SF_OPTIONS_FORWARDED = frozenset(_SF_OPTIONS_ALLOWED - _SF_PROMOTED)
-_SC_OPTIONS = frozenset({
+_SC_PARAMS = frozenset({
     "max_pages", "max_depth", "path_include", "path_exclude",
     "max_content_chars_per", "max_total_chars", "concurrency",
     "cache_ttl", "force_fetcher", "timeout", "deadline_ms", "sitemap",
     "search", "ignore_robots", "delay", "focus_engine",
 })
-# `search` lives in options for callers who read the docs that way, but it is
-# promoted to an explicit argument below - forwarding it twice is a TypeError.
-_SC_OPTIONS_FORWARDED = frozenset(_SC_OPTIONS - {"search"})
-_SHOT_OPTIONS = frozenset({
+_SHOT_PARAMS = frozenset({
     "full_page", "image_type", "quality", "wait", "wait_selector",
     "network_idle", "timeout", "save_to",
     # selector = 元素级裁剪（17.0 起常开）；decode_qr = 本地二维码解码
@@ -4749,7 +4690,7 @@ _SHOT_OPTIONS = frozenset({
     # outright by the next. Same option, same semantics, same guard.
     "allow_private",
 })
-_SS_OPTIONS = frozenset({
+_SS_PARAMS = frozenset({
     "max_results", "cache_ttl", "mode", "engines", "url",
     "site", "exclude_sites", "location", "language", "region", "page",
     "freshness", "fetch_content", "fetch_schema", "min_relevance",
@@ -4758,22 +4699,21 @@ _SS_OPTIONS = frozenset({
     "after", "before",
     "min_raw_relevance",
 })
-# Every top-level argument name a tool accepts. Params that live in the options
-# bag are listed here too (and promoted by _promote_options): the descriptions
-# name them without saying "in options" - smart_crawl says "Caps: max_pages(10),
-# max_depth(2)..." - and a key the dispatcher never read used to be dropped on
-# the floor, so a top-level max_pages=3 crawled 10 pages with no warning at all.
+# The complete set of names each tool accepts at the top level. `url=` and
+# friends that are NOT in *_PARAMS (smart_crawl's discover_only/crawl_urls,
+# screenshot's session_id, smart_search's query) are the required-ish arguments
+# the branches read by name, so they join here.
+#
+# A name listed but never read by the dispatcher used to be the quiet half of
+# the old bug (a top-level max_pages=3 crawled 10 pages with no warning). The
+# guard test_every_accepted_name_is_advertised now ties this set to the schema,
+# and the forwarding below reads nothing but this set.
 _TOP_LEVEL_ARGS: dict[str, frozenset] = {
-    "smart_fetch": frozenset({
-        "url", "urls", "extraction_type", "css_selector", "max_content_chars",
-        "timeout", "pages", "password", "schema", "cache_ttl", "force_fetcher",
-        "offset", "focus", "actions", "options",
-    }) | _SF_OPTIONS_ALLOWED,
-    "smart_crawl": frozenset({
-        "url", "discover_only", "focus", "crawl_urls", "search", "options",
-    }) | _SC_OPTIONS,
-    "screenshot": frozenset({"url", "session_id", "options"}) | _SHOT_OPTIONS,
-    "smart_search": frozenset({"query", "options"}) | _SS_OPTIONS,
+    "smart_fetch": _SF_PARAMS | {"url"},
+    "smart_crawl": _SC_PARAMS | {"url", "discover_only", "focus", "crawl_urls",
+                                 "search"},
+    "screenshot": _SHOT_PARAMS | {"url", "session_id"},
+    "smart_search": _SS_PARAMS | {"query"},
     "cache_clear": frozenset({"all", "engine_state"}),
     "parse": frozenset({"file_path", "cwd", "encoding"}),
     "feed_fetch": frozenset({"urls", "max_items", "timeout", "since",
@@ -4849,98 +4789,35 @@ _ENABLED_TOOLS = _parse_enabled_tools()
 ACTIVE_INSTRUCTIONS = _compose_instructions(_ENABLED_TOOLS)
 
 
-def _coerce_options(options) -> dict:
-    """Accept an options bag that arrived serialized, and reject junk.
-
-    Several MCP clients (and agents) JSON-encode nested objects, so ``options``
-    can show up as a string. ``set("{\"max_results\":8}")`` is the character set
-    of that string, which is why a cold-start call used to fail with
-    ``Unsupported option key(s) ... ['{', '"', 'm', ...]`` — an unparseable
-    error that also blamed the caller for keys they never typed. Parse the
-    string; anything that is not a mapping raises with the actual shape.
-    """
-    if options is None or options == "":
-        return {}
-    if isinstance(options, str):
-        text = options.strip()
-        if not text:
-            return {}
-        try:
-            options = json.loads(text)
-        except (ValueError, TypeError) as e:
-            raise ValueError(
-                f"options was passed as a string but is not valid JSON ({e}). "
-                'Pass it as an object: {"max_results": 8}'
-            ) from None
-    if not isinstance(options, dict):
-        raise ValueError(
-            f"options must be an object, got {type(options).__name__}. "
-            'Example: {"max_results": 8}'
-        )
-    return options
-
-
-def _strict_options(options: dict, allowed: frozenset, forwarded: frozenset, tool: str) -> dict:
-    """Validate an options bag and return only the keys to forward.
-
-    Raises ValueError listing the unknown keys and the supported set, so a
-    misspelled option surfaces as an explicit tool error instead of a silent
-    no-op.
-    """
-    if not isinstance(options, dict):
-        # A str here would be read as a set of characters (see _coerce_options).
-        raise ValueError(
-            f"options must be an object, got {type(options).__name__}. "
-            'Example: {"max_results": 8}'
-        )
-    unknown = set(options) - allowed
-    if unknown:
-        # Some of this tool's parameters live beside the required argument and
-        # not in the bag (smart_crawl's discover_only is the case that reads as
-        # "unsupported" and is actually real). Without naming the channel, the
-        # caller's only conclusion is that the capability does not exist.
-        elsewhere = sorted(k for k in unknown
-                           if k in _TOP_LEVEL_ARGS.get(tool, frozenset())
-                           and k not in forwarded and k != "options")
-        hint = (f" {' and '.join(elsewhere)} "
-                f"{'is' if len(elsewhere) == 1 else 'are'} a "
-                f"top-level parameter of {tool}, not an option key - move it out "
-                "of the options object." if elsewhere else "")
-        raise ValueError(
-            f"Unsupported option key(s) for {tool}: {sorted(unknown)}. "
-            f"Supported keys: {sorted(allowed)}{hint}"
-        )
-    return {k: v for k, v in options.items() if k in forwarded}
-
-
 def _reject_unknown_args(tool: str, args: dict) -> None:
-    """Raise when a tool is called with a top-level key it does not accept.
+    """Raise when a tool is called with a name it does not accept.
 
-    Same principle as _strict_options, one level up: a key that is dropped
-    silently lets the caller believe a cap or filter applied when it did not.
-    None-valued keys are ignored - clients that echo every schema property as
-    null mean "not set", not "unsupported".
+    A key that is dropped silently lets the caller believe a cap or filter
+    applied when it did not — the same failure the option bag's own validator
+    used to cover one level down; with the bag gone this is the only check there is. None-valued keys are
+    ignored: clients that echo every schema property as null mean "not set",
+    not "unsupported".
     """
     allowed = _TOP_LEVEL_ARGS[tool]
     unknown = sorted(k for k, v in args.items() if v is not None and k not in allowed)
-    if unknown:
+    if not unknown:
+        return
+    if "options" in unknown:
+        # 17.0 B4 删掉的就是这个袋子。老写法的调用现在会撞在这里，而"陌生键"三个字
+        # 会把人引向"这工具没这个能力"——正好相反：能力全在，只是名字换了位置。
+        leftover = sorted(k for k, v in (args.get("options") or {}).items()
+                          if isinstance(args.get("options"), dict) and k in allowed)
         raise ValueError(
-            f"Unsupported argument(s) for {tool}: {unknown}. "
-            f"Supported: {sorted(allowed)}"
+            f"Unsupported argument(s) for {tool}: {unknown}. The options object was "
+            "removed in 17.0 - its keys are top-level parameters now, so pass them "
+            "beside url, not inside an object"
+            + (f" (this call's {', '.join(leftover)} can move out as-is)" if leftover
+               else "") + f". Supported: {sorted(allowed)}"
         )
-
-
-def _promote_options(args: dict, options: dict, forwarded: frozenset) -> dict:
-    """Merge top-level copies of options-bag keys into the bag (top-level wins).
-
-    Same param, same fetch, whichever way it arrives; the options bag stays the
-    documented home. Mirrors the explicit promotions the branches already do.
-    """
-    merged = dict(options)
-    for k in forwarded:
-        if args.get(k) is not None:
-            merged[k] = args[k]
-    return merged
+    raise ValueError(
+        f"Unsupported argument(s) for {tool}: {unknown}. "
+        f"Supported: {sorted(allowed)}"
+    )
 
 
 # ─── extraction schema normalization ───────────────────────────────
@@ -4952,8 +4829,8 @@ def _promote_options(args: dict, options: dict, forwarded: frozenset) -> dict:
 #      nested objects; agents also stringify) failed `isinstance(schema, dict)`
 #   2. a schema dict with no non-empty `properties` (e.g. {"type": "object"})
 # In both cases the caller had no way to tell the schema had been dropped — the
-# worst failure mode for an agent, and the same one _strict_options exists to
-# prevent for option keys. Now a supplied-but-unusable schema raises, so the
+# worst failure mode for an agent, and the same one _reject_unknown_args
+# exists to prevent for argument names. Now a supplied-but-unusable schema raises, so the
 # agent sees the problem instead of silently getting markdown.
 def _normalize_schema(schema: Any) -> Optional[dict]:
     """Coerce a caller-supplied extraction schema to a usable dict.
@@ -5815,7 +5692,7 @@ class MasterFetchServer:
 
     async def close_session(
         self,
-        session_id: Annotated[Optional[str], Field(description="The `options.session_id` to forget: its cookie jar and any browser still running under it. Omit it (and `all`) to get the census of what is open instead - you cannot point at a session you cannot see, and until now nothing on the wire could.")] = None,
+        session_id: Annotated[Optional[str], Field(description="The `session_id` to forget: its cookie jar and any browser still running under it. Omit it (and `all`) to get the census of what is open instead - you cannot point at a session you cannot see, and until now nothing on the wire could.")] = None,
         all: Annotated[bool, Field(description="true = forget EVERY session: all jars plus all browser sessions, including the pre-warmed one the next stealthy fetch would otherwise have reused (it pays a 3-5s cold start, and the reply says so). Refused together with session_id: two answers to one question.")] = False,
     ) -> SessionClosedModel:
         """Look at what a session holds, or forget one (or all of them).
@@ -6457,9 +6334,9 @@ class MasterFetchServer:
         open session.
 
         Capture knobs (image_type / full_page / quality / wait / wait_selector
-        / network_idle / timeout / save_to) live in the `options` bag, not as
-        top-level args - this docstring used to list them as :param: entries,
-        which had been wrong since they moved.
+        / network_idle / timeout / save_to) are top-level args of this tool.
+        This docstring once listed them as :param: entries while they lived in
+        the options bag, and was wrong the moment they moved either way.
 
         save_to writes the bytes to that path and reports the absolute path in
         the text part, which is the only form a text-only client can use.
@@ -8111,7 +7988,7 @@ class MasterFetchServer:
         #
         # 代理感知：配置了代理（HTTP 请求走代理而非直连）时，直连探测目标会误报
         # connection_refused/dns_failure —— 所以改成探测**代理端点**。此前这里只是
-        # 整体跳过，于是死代理没有任何快失败可依赖：实测 options.proxy=
+        # 整体跳过，于是死代理没有任何快失败可依赖：实测 proxy=
         # 'http://127.0.0.1:9/' 烧掉整个 30000ms 预算（HTTP 层失败后升级到浏览器，
         # 而浏览器拨的是同一个死代理），最后报成「预算耗尽，慢主机请调大 timeout」——
         # 归因和旋钮都指错了（G21）。
@@ -9045,7 +8922,7 @@ class MasterFetchServer:
     _TOOL_DEFS: list[dict] = [
         {
             "name": "smart_fetch",
-            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: smart_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: when the live site hard-blocks, content_ok can be true of a dated Wayback snapshot (check source + archived_at). No parameter disables it; costs 10-30s.\n- Every parameter has its own top-level name here; the options object is still read for compatibility and a top-level copy wins over the bag one.\n- The exact shape of actions, schema and the browser/session knobs is NOT in this description: dhole_doc(topic='behavior') reads dhole's own handbook, and dhole_doc(topic='call') the placement traps. Read one before writing the other.\n\nVISUAL ASSIST: actions gains {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} - crops one element on the SAME page instance as the surrounding fill/click actions and returns it inline (metadata.actions keeps a name-only receipt; decoded QR text rides with it). Use it to read a CAPTCHA you are about to answer in the same action chain. Discipline: simple text/grid image CAPTCHAs - at most 3 read-and-retry rounds, then hand off to the user; DataDome/Akamai/interactive Turnstile walls, 2FA factors, and sliders are always handed off (nothing readable on the page, or outside dhole's action primitives). dhole ships no vision model: the reading happens in you.",
+            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: smart_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: when the live site hard-blocks, content_ok can be true of a dated Wayback snapshot (check source + archived_at). No parameter disables it; costs 10-30s.\n- Every parameter has its own top-level name here: pass them beside url=, nothing is nested. A name the tool does not accept raises.\n- The exact shape of actions, schema and the browser/session knobs is NOT in this description: dhole_doc(topic='behavior') reads dhole's own handbook, and dhole_doc(topic='call') the placement traps. Read one before writing the other.\n\nVISUAL ASSIST: actions gains {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} - crops one element on the SAME page instance as the surrounding fill/click actions and returns it inline (metadata.actions keeps a name-only receipt; decoded QR text rides with it). Use it to read a CAPTCHA you are about to answer in the same action chain. Discipline: simple text/grid image CAPTCHAs - at most 3 read-and-retry rounds, then hand off to the user; DataDome/Akamai/interactive Turnstile walls, 2FA factors, and sliders are always handed off (nothing readable on the page, or outside dhole's action primitives). dhole ships no vision model: the reading happens in you.",
             "inputSchema": {
                 "type": "object",
                 # smart_fetch needs one of the two; the schema said nothing at
@@ -9053,15 +8930,13 @@ class MasterFetchServer:
                 # required) because either one satisfies it, and they are not
                 # used together: url wins for a single page, urls switches to
                 # the parallel bulk path.
-                # The third branch is not decoration: `urls` in the options bag
-                # is a documented home (the option description says so, and the
-                # dispatcher promotes it), and a two-branch anyOf made the
-                # protocol layer refuse that call before the server ever saw
-                # it - the promise and the gate disagreed. `url` stays out of
-                # it by design: it names what the call is about, not an option.
-                "anyOf": [{"required": ["url"]}, {"required": ["urls"]},
-                          {"required": ["options"],
-                           "properties": {"options": {"required": ["urls"]}}}],
+                # Two branches, both real: url= for one page, urls=[...] for a
+                # known list. The third one this carried existed only because
+                # `urls` could also arrive inside the options bag, and a
+                # two-branch anyOf used to refuse THAT call at the protocol
+                # layer - the promise and the gate disagreed. The bag is gone
+                # (B4), so the branch that guarded it is gone with it.
+                "anyOf": [{"required": ["url"]}, {"required": ["urls"]}],
                 "properties": {
                     "url": {"type": "string", "description": "URL to fetch"},
                     "urls": {"type": "array", "items": {"type": "string"}, "description": "Multiple URLs (parallel; one result per URL)"},
@@ -9080,8 +8955,8 @@ class MasterFetchServer:
                     "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "Interactions on the stealthy browser after load, before extraction (forces stealthy, bypasses cache). ONE action key per object: [{scroll:3},{wait:1000}], not {scroll:3,wait:1000}. Keys: click, fill, press, wait, scroll, wait_selector, snapshot, screenshot, submit - each takes a CSS selector or a snapshot index; {snapshot:true} returns the numbered interactive-element list (index/tag/role/name) to take indices from, and expect:'name' verifies an element's visible name before acting, so a stale index fails loudly instead of clicking the wrong thing.\nsubmit is the explicit irreversible step: without confirm:true it PAUSES (a pending_approval receipt, nothing submitted) until the user has approved that exact submission. The full shape of each key, the lazy-feed and captcha discipline: dhole_doc(topic='behavior', section='Page interaction')."},
                     "schema": {"type": "object", "description": "{properties: {...}} (a JSON string is accepted): CSS-driven structured extraction, returned instead of markdown. Only these keys are read - selector, attribute, type, properties, items; any other JSON-Schema keyword is accepted and does nothing. Each property may carry 'selector' (CSS) and/or 'attribute' (that attribute's value instead of the text). Without \"type\" a property returns the FIRST match; \"type\": \"array\" returns all of them. A property with its OWN 'properties' (or items.properties) plus a selector extracts one record PER MATCHED ELEMENT, child selectors evaluated inside it - that keeps a repeated list grouped instead of flattened. Up to 200 records per field; a nested \"type\": \"array\" must name the container it iterates or the call is rejected. The rule and a worked example: dhole_doc(topic='behavior', section='Structured extraction').", "additionalProperties": True},
                     "confirm": {"type": "boolean", "description": "Approval for a first-time sensitive action on this call - today that means cdp_url: attaching your real Chrome hands over every logged-in site's cookies, so the FIRST attach to a host is refused with cdp_authorization_required and nothing is executed; re-call with confirm=true to authorize that host (remembered on disk; delete cdp_hosts.json in the dhole state directory to revoke). False (default) approves nothing."},
-                    # 17.0 B4 · 下面这 27 个一直都能从顶层传进来（_promote_options 读
-                    # args，_TOP_LEVEL_ARGS 认它们），只是 schema 从没露过脸 —— 而
+                    # 17.0 B4 · 下面这 27 个一直都能从顶层传进来（分发器读 args，
+                    # _TOP_LEVEL_ARGS 认它们），只是 schema 从没露过脸 —— 而
                     # `options` 那段散文把它们和"袋子的键"绑在了一起。参数只有一个家：
                     # 顶层。描述按 test_wire_shape 的 200 字符目标写，用法细节留在
                     # dhole_doc 语料里（tools.md 已经逐条写了它们）。
@@ -9112,14 +8987,13 @@ class MasterFetchServer:
                     "include_links": {"type": "boolean", "description": "Return the page's outgoing links classified as citations / navigation / external, with a primary_source hint (default false)."},
                     "max_links": {"type": "integer", "description": "Cap for EACH links list when include_links=true (1-100; default 30/20/20). links.total_found and links.is_truncated say what the cap hid."},
                     "include_media": {"type": "boolean", "description": "Return up to 20 image URLs found on the page in .media (default false)."},
-                    "options": {"type": "object", "description": "DEPRECATED COMPATIBILITY CHANNEL: every one of these keys is now a top-level parameter of this tool, and a top-level copy wins over a copy here. The keys, for callers still sending them this way: extraction_type, css_selector, max_content_chars, timeout, cache_ttl, force_fetcher, offset, pages, password, focus, focus_mode, focus_engine, schema, actions, urls, include_links, max_links, include_media, main_content_only, use_trafilatura, method, body, content_type, auth, cookies, extra_headers, proxy, useragent, session_id, check_login, cdp_url, confirm, ignore_robots, allow_private, if_modified_since, if_none_match, wait, network_idle, headless, real_chrome, hide_canvas, block_webrtc, solve_cloudflare.\nFive of them carry a trap:\nmethod: a non-GET is sent ONCE - never retried, cached, browser-escalated or archive-answered, because the previous call may already be committed and re-sending writes twice. body cap 256KB; HEAD asks for status+size+type with no body.\nauth / cookies / session_id: credentials go only to the origin you named, and a redirect to another domain strips them. Values are never echoed back, and a credentialed body is cached per credential rather than publicly.\nif_none_match / if_modified_since: conditional GET on the HTTP tier only; a 304 is SUCCESS (not_modified=true, empty body) - do not escalate it to the browser to 'retry'.\nallow_private: true = loopback only, or a host list. Cloud metadata endpoints are never allowed under any setting.\ncdp_url: runs the fetch in the user's own Chrome; the FIRST attach to a host is refused with cdp_authorization_required and nothing executes - re-call with confirm=true to authorize that host (persisted to cdp_hosts.json; revoke by deleting it), and the answer says cdp_attached=true. confirm: approves that first-time sensitive action; false approves nothing.\nheadless, useragent, extra_headers, network_idle, real_chrome, hide_canvas, block_webrtc, solve_cloudflare, use_trafilatura, main_content_only are fingerprint and extraction internals, already tuned - overriding them usually makes a site detect you, so leave them unset unless something names one. What every key does and its range: dhole_doc(topic='behavior'). Placement with counterexamples: dhole_doc(topic='call').", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
         },
         {
             "name": "smart_crawl",
-            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, smart_fetch(urls=[...]) fetches them directly - no crawl needed.\n- Every parameter is a top-level argument (the options object is still read for compatibility). url= is required even with crawl_urls (it is the domain root those URLs are checked against).\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed'), discoveries already known to be disallowed are skipped, and robots_skipped says how many. ignore_robots=true overrides.\n- Caps: max_pages(10), max_depth(2), max_total_chars (hard-capped 1000000), deadline_ms.\n- Map-then-fetch (sitemap / discover_only / crawl_urls), what the drop counters mean and how politeness is decided: dhole_doc(topic='behavior', section='smart_crawl'); placement pairs with counterexamples: dhole_doc(topic='call').",
+            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, smart_fetch(urls=[...]) fetches them directly - no crawl needed.\n- Every parameter is a top-level argument; nothing is nested. url= is required even with crawl_urls (it is the domain root those URLs are checked against).\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed'), discoveries already known to be disallowed are skipped, and robots_skipped says how many. ignore_robots=true overrides.\n- Caps: max_pages(10), max_depth(2), max_total_chars (hard-capped 1000000), deadline_ms.\n- Map-then-fetch (sitemap / discover_only / crawl_urls), what the drop counters mean and how politeness is decided: dhole_doc(topic='behavior', section='smart_crawl'); placement pairs with counterexamples: dhole_doc(topic='call').",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
@@ -9133,7 +9007,7 @@ class MasterFetchServer:
                     "max_pages": {"type": "integer", "description": "Pages to fetch (1-100, default 10). The first budget a crawl hits."},
                     "max_depth": {"type": "integer", "description": "Hops from the start URL (0-5, default 2). 0 = the start page only."},
                     "concurrency": {"type": "integer", "description": "Pages in flight at once (1-5, default 3). Waiting between requests to the same host is the separate delay= knob."},
-                    "path_include": {"type": "array", "items": {"type": "string"}, "description": "Keep only these path subtrees: '/docs' keeps /docs and everything under it."},
+                    "path_include": {"type": "array", "items": {"type": "string"}, "description": "Keep only these path subtrees: '/docs' keeps /docs and everything under it, NOT /docs-old."},
                     "path_exclude": {"type": "array", "items": {"type": "string"}, "description": "Drop these path subtrees: '/docs-old' under an include keeps nothing."},
                     "max_content_chars_per": {"type": "integer", "description": "Per-page content cap (default 8000)."},
                     "max_total_chars": {"type": "integer", "description": "Whole-crawl content budget. The cap that stops the run rather than one page."},
@@ -9144,7 +9018,6 @@ class MasterFetchServer:
                     "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check and the disallowed-URL skip (default false = comply per page). Set true only where you have the site's permission."},
                     "delay": {"type": "number", "description": "Seconds between requests to the SAME host (0-60). A robots.txt Crawl-delay can raise this, never lower it."},
                     "focus_engine": {"type": "string", "enum": ["bm25", "neural"], "description": "Which scorer runs focus here: 'bm25' (default, cheap) or 'neural' (~12.5s of CPU per page TIMES max_pages, needs the local reranker model; asking without it is refused, not downgraded)."},
-                    "options": {"type": "object", "description": "sitemap: true | 'auto' | false (default) - where the URL map comes from.\nmax_pages: 1-100 (default 10). max_depth: 0-5 (default 2). concurrency: 1-5 (default 3) pages in flight.\npath_include / path_exclude: keep or drop a path subtree - '/docs' keeps /docs and everything under it, NOT /docs-old.\nmax_content_chars_per: per-page content cap (8000). max_total_chars: whole-crawl budget.\ncache_ttl: seconds (3600; 0 = fresh). force_fetcher: 'http' | 'stealthy'. timeout: ms (30000). deadline_ms: hard stop (120000).\nignore_robots: skip the robots.txt check and the disallowed-URL skip.\ndelay: 0-60 seconds between requests to the SAME host; a site's robots.txt Crawl-delay can raise it, never lower it.\nfocus_engine: 'bm25' | 'neural' - which scorer runs focus here. Neural costs ~12.5s of CPU per page TIMES max_pages and needs the local reranker model; asking for it without the model is refused, not downgraded. Omit = 'bm25', which needs nothing and costs nothing extra.\nWhat each knob does and what the counters in the reply mean: dhole_doc(topic='behavior', section='smart_crawl').", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -9169,7 +9042,6 @@ class MasterFetchServer:
                     "network_idle": {"type": "boolean", "description": "Wait until the network has been idle 500ms (good for SPAs)."},
                     "timeout": {"type": "integer", "description": "Budget in ms (default 30000)."},
                     "allow_private": {"anyOf": [{"type": "boolean"}, {"type": "array", "items": {"type": "string"}}], "description": "Same guard as smart_fetch's: true = loopback only, or name the hosts. Without it a private URL is refused before the browser starts. Cloud metadata endpoints are never allowed."},
-                    "options": {"type": "object", "description": "save_to: a path - the image is written there and the text part reports the absolute path + byte size (parents created; an existing file not named like an image is refused).\nfull_page: bool (false). image_type: png|jpeg. quality: 0-100 (jpeg). wait: ms. wait_selector: css. network_idle: bool. timeout: ms (30000).\ndecode_qr: bool - decode QR payloads from the capture and report them in the text part (local deterministic decoding, opencv). Empty list = no code found.\nallow_private: same as smart_fetch's - true for loopback (127.0.0.0/8, ::1, localhost), or a host list. Without it a private URL is refused before the browser starts.", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -9200,7 +9072,6 @@ class MasterFetchServer:
                     "fetch_schema": {"type": "object", "additionalProperties": True, "description": "{properties: {...}} applied to the pages fetched by fetch_content, instead of their markdown - the same shape rules as smart_fetch's schema."},
                     "min_relevance": {"type": "number", "description": "0-1 cutoff on the NORMALIZED rerank score. Below it results are dropped, not re-ordered."},
                     "min_raw_relevance": {"type": "number", "description": "0-1 floor on the reranker's RAW score instead - the one that can call a whole round irrelevant. Start at 0.1; fetch_hint reports the raw span the round had."},
-                    "options": {"type": "object", "description": "max_results: 1-50 (default 6). page: 0-10. cache_ttl: seconds (300).\nengines: override the pool, max 9. Opt-in: baidu_baike, duckduckgo, mwmbl, so360, sogou_weixin, wikipedia, grokipedia, yahoo.\nsite: restrict to one domain. exclude_sites: list. location, language (2-letter), region.\nfreshness: day|week|month|year. after: a date, 'newer than' - no engine takes an absolute range, so it is widened to the narrowest preset covering it and date_filter reports what was actually sent. before: REFUSED, not ignored (presets only bound 'not older than' and results carry no publish date); for dated items use feed_fetch(since=).\nmode: auto|neural|find_similar (find_similar needs url=). fetch_content (bool, false): pull the top hits' full text in this same call.\nfetch_schema: {properties: {...}} applied to those fetched pages instead of returning their markdown - the same shape rules as smart_fetch's schema.\nmin_relevance: 0-1 cutoff on the NORMALIZED rerank score. min_raw_relevance: 0-1 floor on the reranker's RAW score instead - that is the one that can call a whole round irrelevant; start at 0.1, fetch_hint reports the raw span the round had.\nRanges, the calibration numbers and the engine matrix: dhole_doc(topic='behavior', section='smart_search').", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -9265,7 +9136,7 @@ class MasterFetchServer:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "session_id": {"type": "string", "description": "The options.session_id to forget."},
+                    "session_id": {"type": "string", "description": "The session_id to forget."},
                     "all": {"type": "boolean", "description": "true = every session, not just the one named."},
                 },
             },
@@ -9359,7 +9230,7 @@ class MasterFetchServer:
         # 内容源与 topic 注册表由 guide.py 与 tests/test_guide.py 双向钉住。
         {
             "name": "dhole_doc",
-            "description": "Read dhole's own handbook, one volume per call: how to write a call, what a response field means, how to fix a failure, which knob to configure. The deep syntax of actions, schema and options lives HERE rather than in the tool descriptions - read it before guessing at those. An empty or wrong topic answers with the topic list instead of an error.",
+            "description": "Read dhole's own handbook, one volume per call: how to write a call, what a response field means, how to fix a failure, which knob to configure. The deep syntax of actions, schema and the browser knobs lives HERE rather than in the tool descriptions - read it before guessing at those. An empty or wrong topic answers with the topic list instead of an error.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -9518,6 +9389,20 @@ class MasterFetchServer:
             app = Starlette(routes=[Route("/mcp", endpoint=_StreamableHTTPASGIApp())], lifespan=lifespan)
             uvicorn.run(app, host=host, port=port)
 
+    def _forward(self, tool: str, args: dict, skip: tuple = ()) -> dict:
+        """The one forwarding rule left: send each accepted name that carries a
+        value, and nothing else.
+
+        Absent stays absent so the method's own default applies. Handing every
+        unread key an explicit None looked harmless and was not:
+        `extraction_type` defaults to "markdown", so a None overrode a default
+        that is not None, and the cache INSERT (whose extraction_type column is
+        NOT NULL) failed for every call that did not pass cache_ttl=0.
+        """
+        allowed = _TOP_LEVEL_ARGS[tool]
+        return {k: v for k, v in args.items()
+                if v is not None and k in allowed and k not in skip}
+
     async def _dispatch(self, name: str, args: dict) -> list | tuple:
         """Route MCP tool calls to internal methods and format responses.
 
@@ -9540,10 +9425,9 @@ class MasterFetchServer:
             args = _validate_tool_args(name, args)
             # Parsed and coerced inside the SAME guard: a bad number has to come
             # back as the invalid_request envelope a bad `urls` already gets, not
-            # as an is_error result of a second shape.
-            options = _coerce_options(args.get("options"))
-            args, options = _coerce_arg_types(name, args, options)
-            options = _normalize_promoted_copies(name, args, options)
+            # as an is_error result of a second shape. One channel since B4, so
+            # there is no bag copy left to normalize a second time.
+            args = _coerce_arg_types(name, args)
         except ValueError as e:
             # smart_fetch answers a bad argument with the same envelope every
             # other outcome uses (see _invalid_request_result); letting it raise
@@ -9568,30 +9452,11 @@ class MasterFetchServer:
 
         if name == "smart_fetch":
             url = args.get("url", "")
-            # Promoted parameters: `options` is their documented home and the top
-            # level is the compatible read, so each one is taken from whichever
-            # channel carried it (top level wins when both do). The set is
-            # _SF_PROMOTED, which is also what keeps _strict_options from calling
-            # a bag copy "unsupported" and from forwarding one twice.
-            picked: dict = {}
-            for key in _SF_PROMOTED:
-                value = args.get(key)
-                if value is None:
-                    value = options.get(key)
-                # Absent stays absent — the tool's own default applies (for
-                # cache_ttl, the server's). Handing every unpromoted key an
-                # explicit None looked harmless and was not: `extraction_type`
-                # defaults to "markdown", so None overrode a default that is not
-                # None, and the cache INSERT (whose extraction_type column is
-                # NOT NULL) failed for every call that did not pass cache_ttl=0.
-                if value is not None:
-                    picked[key] = value
-            if not url and not picked.get("urls"):
+            call = self._forward("smart_fetch", args, skip=("url",))
+            if not url and not call.get("urls"):
                 result = _invalid_request_result("", "Either 'url' or 'urls' must be provided")
                 return _wire_result(result)
-            kw = _strict_options(_promote_options(args, options, _SF_OPTIONS_FORWARDED),
-                                 _SF_OPTIONS_ALLOWED, _SF_OPTIONS_FORWARDED, "smart_fetch")
-            result = await self.smart_fetch(url=url, **picked, **kw)
+            result = await self.smart_fetch(url=url, **call)
             # `_action_images` is a ResponseModel-only PrivateAttr (element
             # captures from {"screenshot"} actions). urls=[...] returns a
             # BulkResponseModel, where the attribute is ABSENT rather than
@@ -9607,35 +9472,25 @@ class MasterFetchServer:
             return _wire_result(result, images=getattr(result, "_action_images", None) or None)
 
         elif name == "smart_crawl":
-            # search is promoted like smart_fetch's schema: top-level wins, the
-            # options bag is accepted as a fallback (the option description
-            # lists it, and passing it in options used to be rejected outright).
-            search = (args.get("search") if args.get("search") is not None
-                      else options.get("search"))
-            kw = _strict_options(_promote_options(args, options, _SC_OPTIONS_FORWARDED),
-                                 _SC_OPTIONS, _SC_OPTIONS_FORWARDED, "smart_crawl")
+            call = self._forward("smart_crawl", args, skip=("url",))
             # Same enum as smart_fetch's, and the same failure mode: crawl.py
             # forwards it straight to smart_fetch, so an unlisted value would
             # pin the crawl to the stealthy tier without saying so.
-            if "force_fetcher" in kw:
-                kw["force_fetcher"] = _coerce_force_fetcher_arg(kw["force_fetcher"])
-            result = await self.smart_crawl(
-                url=args["url"], discover_only=args.get("discover_only", False),
-                focus=args.get("focus"), crawl_urls=args.get("crawl_urls"),
-                search=search, **kw,
-            )
+            if call.get("force_fetcher") is not None:
+                call["force_fetcher"] = _coerce_force_fetcher_arg(call["force_fetcher"])
+            call.setdefault("discover_only", False)
+            result = await self.smart_crawl(url=args["url"], **call)
             return _wire_result(result)
 
         elif name == "screenshot":
-            kw = _strict_options(_promote_options(args, options, _SHOT_OPTIONS),
-                                 _SHOT_OPTIONS, _SHOT_OPTIONS, "screenshot")
-            result = await self.screenshot(url=args["url"], session_id=args.get("session_id"), **kw)
+            result = await self.screenshot(
+                url=args["url"], **self._forward("screenshot", args, skip=("url",)))
             return result  # already list[ImageContent|TextContent]
 
         elif name == "smart_search":
-            kw = _strict_options(_promote_options(args, options, _SS_OPTIONS),
-                                 _SS_OPTIONS, _SS_OPTIONS, "smart_search")
-            result = await self.smart_search(query=args["query"], **kw)
+            result = await self.smart_search(
+                query=args["query"], **self._forward("smart_search", args,
+                                                     skip=("query",)))
             return _wire_result(result)
 
         elif name == "cache_clear":

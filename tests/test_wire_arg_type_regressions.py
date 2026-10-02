@@ -112,16 +112,17 @@ class TestStringifiedNumbers:
         assert payload["error"] == ""
         assert seen["page"] == 1
 
-    def test_a_null_in_the_options_bag_takes_the_documented_default(self, monkeypatch):
-        """A top-level null already means "not set"; in the bag it meant TypeError.
+    def test_a_null_takes_the_documented_default(self, monkeypatch):
+        """`cache_ttl=null` means "not set", not "set to None".
 
-        _promote_options skips nulls, but _strict_options forwards them, so
-        `options={"cache_ttl": null}` reached `if cache_ttl > 0` as None.
+        这条留着是因为它是老事故的另一半：袋子里的 null 会被原样转发，于是
+        `if cache_ttl > 0` 读到一个 None 变成 TypeError。B4 拆平后只有一个通道，
+        null 一律按"没传"处理，与顶层的读法一致。
         """
         seen = _stub_search_layer(monkeypatch)
         payload = _envelope("smart_search",
-                            {"query": "Knot DNS", "options": {"cache_ttl": None,
-                                                              "max_results": None}})
+                            {"query": "Knot DNS", "cache_ttl": None,
+                             "max_results": None})
 
         assert "not supported between instances" not in payload["error"]
         assert seen["ttl"] == search_mod.SEARCH_CACHE_TTL
@@ -156,9 +157,9 @@ class TestOtherToolsWithTheSameGap:
         """`headless="false"` used to keep the browser headless anyway."""
         seen = _record(monkeypatch, "smart_fetch", ResponseModel(url="", status=0, content=[]))
         _dispatch("smart_fetch", {"url": "https://example.test",
-                                  "options": {"headless": "false",
-                                              "main_content_only": "false",
-                                              "include_links": "true"}})
+                                  "headless": "false",
+                                  "main_content_only": "false",
+                                  "include_links": "true"})
 
         assert seen["headless"] is False
         assert seen["main_content_only"] is False
@@ -167,7 +168,7 @@ class TestOtherToolsWithTheSameGap:
     def test_screenshot_full_page_accepts_the_string_spellings(self, monkeypatch):
         seen = _record(monkeypatch, "screenshot", [])
         _dispatch("screenshot", {"url": "https://example.test",
-                                 "options": {"full_page": "false", "quality": "80"}})
+                                 "full_page": "false", "quality": "80"})
 
         assert seen["full_page"] is False
         assert seen["quality"] == 80
@@ -177,7 +178,7 @@ class TestOtherToolsWithTheSameGap:
         reached `if discover_only:` and answered with a URL map instead."""
         seen = _record(monkeypatch, "smart_crawl", ResponseModel(url="", status=0, content=[]))
         _dispatch("smart_crawl", {"url": "https://example.test", "discover_only": "false",
-                                  "options": {"max_pages": "5", "deadline_ms": "90000"}})
+                                  "max_pages": "5", "deadline_ms": "90000"})
 
         assert seen["max_pages"] == 5
         assert seen["deadline_ms"] == 90000
@@ -192,7 +193,7 @@ class TestOtherToolsWithTheSameGap:
         seen = _record(monkeypatch, "smart_crawl")
         with pytest.raises(ValueError) as exc:
             _dispatch("smart_crawl", {"url": "https://example.test",
-                                      "options": {"crawl_urls": "https://example.test/a"}})
+                                      "crawl_urls": "https://example.test/a"})
 
         assert "crawl_urls must be an array of strings" in str(exc.value)
         assert seen == {}, "a rejected call must not reach the crawl at all"
@@ -213,7 +214,7 @@ class TestOtherToolsWithTheSameGap:
         all — the whole file extracted, with nothing saying so."""
         seen = _record(monkeypatch, "smart_fetch", ResponseModel(url="", status=0, content=[]))
         _dispatch("smart_fetch", {"url": "https://example.test/paper.pdf",
-                                  "options": {"pages": 3, "password": 1234}})
+                                  "pages": 3, "password": 1234})
 
         assert seen["pages"] == "3"
         assert seen["password"] == "1234"

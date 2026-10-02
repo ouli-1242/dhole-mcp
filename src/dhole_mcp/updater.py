@@ -998,7 +998,7 @@ def _append_robots_posture(checks) -> None:
         "robots posture", "info" if waived else "ok",
         ("waived process-wide (DHOLE_IGNORE_ROBOTS) - every fetch skips the check"
          if waived else
-         "compliance ON (per-call waiver needs options.ignore_robots=true)")
+         "compliance ON (per-call waiver needs ignore_robots=true)")
         + " - per-site state is NOT visible here: a robots.txt that could not be "
           "read is reported per response in metadata.robots, and not checked "
           "is not complied",
@@ -1138,7 +1138,7 @@ def _append_live_probe(checks) -> None:
 
     try:
         search = asyncio.run(_call("smart_search", {
-            "query": PROBE_SEARCH_QUERY, "options": {"max_results": 3}}))
+            "query": PROBE_SEARCH_QUERY, "max_results": 3}))
     except Exception as exc:  # noqa: BLE001
         search = {"error": f"{type(exc).__name__}: {exc}"}
     hits = search.get("results") or []

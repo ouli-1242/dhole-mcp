@@ -16,10 +16,10 @@ from dhole_mcp import guide
 from dhole_mcp.server import (
     DHOLE_INSTRUCTIONS,
     MasterFetchServer,
-    _SC_OPTIONS,
-    _SF_OPTIONS_ALLOWED,
-    _SHOT_OPTIONS,
-    _SS_OPTIONS,
+    _SC_PARAMS,
+    _SF_PARAMS,
+    _SHOT_PARAMS,
+    _SS_PARAMS,
     _TOP_LEVEL_ARGS,
 )
 
@@ -141,7 +141,7 @@ def test_response_is_a_text_channel():
 # smart_fetch 的 options 袋子从「逐键解释」改成了「列出键名 + 少数几条陷阱」，
 # 细节移进 references/tools.md。这个移动只有在语料真的接住时才是优化而不是丢
 # 信息，所以覆盖率**从代码里的键集合反查**，而不是比对两份手写清单：以后任何
-# 新键进了 _SF_OPTIONS_ALLOWED，它在 wire 上没名字、或在语料里没解释，都会红。
+# 新键进了 _SF_PARAMS，它在 wire 上没名字、或在语料里没解释，都会红。
 
 def _corpus() -> str:
     return "\n".join(p.read_text(encoding="utf-8") for p in guide._ROOT.rglob("*.md"))
@@ -189,52 +189,70 @@ def test_the_mention_matcher_is_not_a_substring_test():
     stripped = _tool_text("smart_search").replace("fetch_schema", "")
     assert not _mentions(stripped, "fetch_schema")
     assert len(_corpus()) > 20_000, "语料空了：覆盖率会伪装成通过"
-    assert len(_SF_OPTIONS_ALLOWED) > 20, "键集合空了：同上"
+    assert len(_SF_PARAMS) > 20, "键集合空了：同上"
+
+
+def test_the_handbook_never_teaches_a_nested_call():
+    """语料是「照着抄」的那一卷：一处教了袋形，agent 就白跑一次调用。
+
+    17.0 删掉了 `options` 袋，于是「怎么抄」的权威落点就在语料里 —— 运行时只
+    能在被拒的那一刻提醒，抄错的代价已经付掉了。唯一豁免是 ❌ 行：它教的正是
+    「这样写会被拒」。
+    """
+    bad = []
+    for path in sorted(guide._ROOT.rglob("*.md")):
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if line.lstrip().startswith("❌"):
+                continue
+            if '"options"' in line or re.search(r"\boptions\.", line):
+                bad.append(f"{path.name}:{n}: {line.strip()[:90]}")
+    assert not bad, "语料把参数写成袋里的键（或被袋里的写法提到）：\n" + "\n".join(bad)
 
 
 def test_every_smart_fetch_key_is_named_on_the_wire():
-    """一个 accepted 却不点名的键 = 这个能力对 agent 不存在。"""
-    listed = _def_of("smart_fetch")["inputSchema"]["properties"]["options"]["description"]
-    silent = sorted(k for k in _SF_OPTIONS_ALLOWED if not _mentions(listed, k))
-    assert not silent, f"这些 options 键没进 wire 上的清单: {silent}"
+    """一个 accepted 却不点名的键 = 这个能力对 agent 不存在。
+
+    B4 之前这句话查的是"袋子的清单里有没有它"；袋子删了，清单就是属性表本身，
+    于是判据升级为**必须有属性，而且属性自己带一句说明** —— 只列名字不给说明，
+    agent 仍然不知道该不该用它。
+    """
+    props = _def_of("smart_fetch")["inputSchema"]["properties"]
+    silent = sorted(k for k in _SF_PARAMS
+                    if k not in props or not (props[k].get("description") or "").strip())
+    assert not silent, f"这些参数在 wire 上没有自己的名字或说明: {silent}"
 
 
-# 每个带 options 袋的工具：袋里被接受的键，必须在袋的说明里出现名字。
-# 这一条管住四个工具，因为它是"新键进集合却没人提"的唯一拦截点 —— 常驻文本
-# 有两种合法写法（smart_fetch：列名字 + 细节进语料；其余：袋里逐键内联解释），
-# 但两种都不允许出现一个谁都没提过的键。
-BAGS = {
-    "smart_fetch": _SF_OPTIONS_ALLOWED,
-    "smart_crawl": _SC_OPTIONS,
-    "smart_search": _SS_OPTIONS,
-    "screenshot": _SHOT_OPTIONS,
+PARAMS = {
+    "smart_fetch": _SF_PARAMS,
+    "smart_crawl": _SC_PARAMS,
+    "smart_search": _SS_PARAMS,
+    "screenshot": _SHOT_PARAMS,
 }
 
 
-@pytest.mark.parametrize("tool", sorted(BAGS))
-def test_every_accepted_bag_key_is_named_in_its_description(tool):
-    """袋里被接受的键，至少要在**这个工具的 wire 文本**里出现一次名字。
+@pytest.mark.parametrize("tool", sorted(PARAMS))
+def test_every_accepted_parameter_is_declared_with_a_description(tool):
+    """每个工具的被接受名字，都得是 schema 里一个带说明的属性。
 
-    查整个工具载荷而不是只查袋子，因为放置本身就分两类：`search` 的规范位置是
-    顶层，袋里只是兼容读法；`selector`（截图裁元素）的纪律在 17.0 已烙进
-    screenshot / smart_fetch 的字面量描述。两种情况都不允许"哪儿都不提"。
+    这是"新参数进了 `_TOP_LEVEL_ARGS` 却没人给它名字"的唯一拦截点 —— 历史上正是
+    这个缝让 `fetch_schema` 之类的键活着、能被读、而 wire 上查无此人。
     """
-    text = _tool_text(tool)
-    silent = sorted(k for k in BAGS[tool] if k != "options" and not _mentions(text, k))
-    assert not silent, f"{tool} 接受了这些键却没在任何地方提到它们: {silent}"
+    props = _def_of(tool)["inputSchema"]["properties"]
+    silent = sorted(k for k in PARAMS[tool]
+                    if k not in props or not (props[k].get("description") or "").strip())
+    assert not silent, f"{tool} 接受了这些名字却没有声明: {silent}"
 
 
 def test_every_smart_fetch_key_is_explained_somewhere():
-    """smart_fetch 把逐键解释搬进了语料，所以这里查的是搬走的落点。
+    """smart_fetch 把逐键的**详细**解释搬进了语料，所以这里查的是搬走的落点。
 
-    只有 smart_fetch 用「清单 + 语料」这一写法：其余三个工具的键仍在袋里内联
-    解释，键少、每条一句，改写法省不下什么。所以这条守卫跟着写法走，不摊大饼。
+    属性名与一句话判据留在常驻层（每一次连接都要发），怎么用、边界在哪进语料按需取。
     """
     surface = _wire_explanations() + "\n" + _corpus()
-    undocumented = sorted(k for k in _SF_OPTIONS_ALLOWED if not _mentions(surface, k))
+    undocumented = sorted(k for k in _SF_PARAMS if not _mentions(surface, k))
     assert not undocumented, (
-        f"这些 options 键没有任何地方解释（既不在常驻文本，也不在 dhole_doc 语料）: "
-        f"{undocumented}。补进 references/tools.md，或从 _SF_OPTIONS_ALLOWED 里删掉。")
+        f"这些参数没有任何地方解释（既不在常驻文本，也不在 dhole_doc 语料）: "
+        f"{undocumented}。补进 references/tools.md，或从 _SF_PARAMS 里删掉。")
 
 
 def test_the_stateful_tools_are_announced_with_their_discipline():
@@ -249,7 +267,7 @@ def test_the_stateful_tools_are_announced_with_their_discipline():
 
 # ─── 整个参数面的覆盖率（不只是 options 袋）──────────────────────────────
 #
-# W10 的守卫抓出了 `fetch_schema`：功能活着、_SS_OPTIONS 接受它、整个 wire 里
+# W10 的守卫抓出了 `fetch_schema`：功能活着、_SS_PARAMS 接受它、整个 wire 里
 # 没有任何一处提到过它的名字。那种缺陷不会自己冒出来，所以把它变成一条覆盖
 # 全部 14 个工具的断言 —— 参数存在而无人提及，等于这个能力不存在。
 

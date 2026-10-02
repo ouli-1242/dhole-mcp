@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -145,15 +144,15 @@ class TestBeforeIsRefusedNotIgnored:
 
 class TestTheWireText:
 
-    def test_search_options_advertise_the_window(self):
+    def test_the_wire_advertises_the_window(self):
         from dhole_mcp.server import MasterFetchServer
         tools = {t["name"]: t for t in MasterFetchServer._TOOL_DEFS}
-        opts = tools["smart_search"]["inputSchema"]["properties"]["options"]["description"]
-        # 袋子现在是「一行一键」的写法（"after: ..."），旧的 "after (" 是同段列举
-        # 时代的形状。判据是键有没有被 advertised，不是它后面跟的是括号还是冒号。
-        assert re.search(r"\bafter\s*[(:]", opts), "after= 的窗口语义没上线"
-        assert re.search(r"\bbefore\s*[(:]", opts), "before= 被拒的说明没上线"
-        assert "date_filter" in opts, "没告诉调用方去哪读实际发出去的日期窗口"
+        props = tools["smart_search"]["inputSchema"]["properties"]
+        # 判据是「键有没有被 advertised」：after 要说清窗口被放宽并回读 date_filter，
+        # before 要说清是被拒而不是被忽略，并给出替代路径。
+        assert "date_filter" in props["after"]["description"], "after= 的窗口语义没上线"
+        assert "REFUSED" in props["before"]["description"], "before= 被拒的说明没上线"
+        assert "feed_fetch" in props["before"]["description"], "没给出带日期条目的替代路径"
 
     def test_the_method_accepts_both(self):
         import inspect

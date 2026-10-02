@@ -6,7 +6,7 @@
 2. ``schema`` 里没有非空 ``properties``（例如 ``{"type": "object"}``）
 
 调用方完全无从知道 schema 被丢掉了 —— 一个看起来成功的调用其实没做结构化提取，
-这正是 ``_strict_options`` 存在的意义要防的那类失败。现在前者被解析，后者直接报错。
+这正是 ``_reject_unknown_args`` / ``_coerce_arg_types`` 这一层要防的那类失败。现在前者被解析，后者直接报错。
 """
 
 import json
@@ -135,34 +135,16 @@ class TestSchemaReachesStructuredExtraction:
         assert out.content == [HTML]
 
 
-class TestSchemaFromOptionsBag:
-    """schema 与 css_selector/timeout 一样是「提升参数」：顶层优先，options 兜底。"""
+class TestSchemaReachesTheTool:
+    """``schema`` 只有一个通道：顶层参数。它必须真的抵达 smart_fetch。"""
 
     @pytest.mark.asyncio
-    async def test_options_bag_schema_is_accepted(self):
+    async def test_schema_drives_structured_extraction(self):
         server = MasterFetchServer()
         server._auto_escalate = AsyncMock(return_value=_html_result())
 
         out = await server._dispatch(
             "smart_fetch",
-            {"url": "https://example.com", "options": {"schema": SCHEMA}, "cache_ttl": 0},
+            {"url": "https://example.com", "schema": SCHEMA, "cache_ttl": 0},
         )
         assert out[1]["extracted_type"] == "structured"
-
-    @pytest.mark.asyncio
-    async def test_top_level_schema_wins_over_options(self):
-        server = MasterFetchServer()
-        server._auto_escalate = AsyncMock(return_value=_html_result())
-        other = {"properties": {"only": {"selector": "h1"}}}
-
-        out = await server._dispatch(
-            "smart_fetch",
-            {
-                "url": "https://example.com",
-                "schema": SCHEMA,
-                "options": {"schema": other},
-                "cache_ttl": 0,
-            },
-        )
-        payload = json.loads(out[1]["content"][0])
-        assert "title" in payload and "only" not in payload

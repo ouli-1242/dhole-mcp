@@ -29,13 +29,13 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 | Web search (no URL known) | `smart_search` → pick `fetch_relevance: high` hits → `smart_fetch` for full text |
 | Already have a URL (incl. online PDFs) | `smart_fetch` — do **not** search for a URL you already hold |
 | Only need one block of a page | `smart_fetch` + `focus="keywords"` (BM25 extraction); HTML can also take `css_selector` |
-| Many pages on one site | `smart_crawl`: `options.sitemap=true` for a one-request URL map, then `crawl_urls=[...]` for the picks |
+| Many pages on one site | `smart_crawl`: `sitemap=true` for a one-request URL map, then `crawl_urls=[...]` for the picks |
 | Track a site's latest updates | `feed_fetch` (pass the site homepage; it finds the feed); poll incrementally with `since=` |
 | Resolve a short/tracking link | `resolve_url` (no body download) |
 | Local file: `.docx` / `.xlsx` / `.pptx` / `.odt` / `.pdf` / `.csv` / `.html` | `parse` — a docx/xlsx/pptx/odt is a zip and a pdf is a container, so a text reader sees bytes; a non-UTF-8 csv/html decodes to plausible-looking **wrong** text rather than an error |
 | Local file: `.md` / `.txt` / `.json` / `.yaml` | Your own file tool is fine if you have one; `parse` also works (it detects the encoding and validates json/yaml). MCP-only clients have no other path |
-| See rendered layout / verify UI | `screenshot`; if you can't see images, pass `options.save_to` and read the file |
-| Page behind a login wall (user has a logged-in Chrome) | `smart_fetch` with `options.cdp_url` (+ `options.check_login=true` to confirm state) — requires one-time user setup, see `references/configuration.md` "CDP attach" |
+| See rendered layout / verify UI | `screenshot`; if you can't see images, pass `save_to` and read the file |
+| Page behind a login wall (user has a logged-in Chrome) | `smart_fetch` with `cdp_url` (+ `check_login=true` to confirm state) — requires one-time user setup, see `references/configuration.md` "CDP attach" |
 | Act on a page (click / fill / press / submit a form) | `smart_fetch` `actions`: `{"snapshot": true}` first for the numbered element list, then address by `index` — see `references/tools.md` "Page interaction" |
 | Reach that page again without re-deriving the steps | `recipe` **(opt-in)** — `op=save` the `url` + `actions` once, `op=run` replays; a non-zero `actions_failed` means the page changed, re-save |
 | Watch a page for changes | `watch` **(opt-in)** — `op=add` then `op=check`; the FIRST check only stores the baseline and answers `changed=null` (no baseline ≠ no change) |
@@ -48,7 +48,7 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 ## Hard constraints (each exists because violating it breaks something)
 
 1. **Snippets are not answers** — a snippet is a 500-char preview; verify factual claims against fetched full text.
-2. **Parameter placement** — `url` must be top-level; `smart_crawl`'s `discover_only` / `crawl_urls` / `focus` are top-level **only**; `parse` / `feed_fetch` / `resolve_url` / `cache_clear` / `close_session` take top-level only and reject an `options` bag. All other knobs go in `options` (top-level names accepted as compat; top-level wins on conflict). Correct/incorrect pairs in examples.md.
+2. **Parameter placement** — every parameter sits at the **top level** of the call; nothing is nested, and a wrapper object is rejected rather than read. Each tool accepts only its own names (`since=` belongs to `feed_fetch`, not to `smart_fetch`), so a wrong name — or a right name on the wrong tool — fails loudly and lists what that tool takes. Correct/incorrect pairs in examples.md.
 3. **Never retry non-GET** — the previous call may already be committed; re-sending writes twice. No cache, no browser escalation, no archive fallback for write methods.
 4. **304 is success** — `not_modified=true` means the copy you already hold is current; do not escalate to the browser to "retry".
 5. **Keyed engines (tavily / bocha) bill per call** — add them only when the user explicitly names them. Never by default.
@@ -72,7 +72,7 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 
 ## Token-saving habits
 
-- Lead long pages with `focus=`; when paginating with `offset`, **repeat the same focus** (focus runs after cache — no re-request). `options.focus_mode="best"` returns just the top block + its heading when you need the one paragraph that answers the question. `options.focus_engine` picks the scorer for this call: `"bm25"` is the cheap path and stays available when the operator enabled neural focus (no need to ask them to turn a machine-wide flag off), `"neural"` needs the operator's permission.
+- Lead long pages with `focus=`; when paginating with `offset`, **repeat the same focus** (focus runs after cache — no re-request). `focus_mode="best"` returns just the top block + its heading when you need the one paragraph that answers the question. `focus_engine` picks the scorer for this call: `"bm25"` is the cheap path and stays available when the operator enabled neural focus (no need to ask them to turn a machine-wide flag off), `"neural"` needs the operator's permission.
 - Continue truncated reads with `next_offset` instead of raising `max_content_chars` and re-fetching (cap 200000).
 - Fetch `fetch_relevance: high` results first; judge "whole round irrelevant" with `min_raw_relevance` (start at 0.1), not `min_relevance`.
 - First search of a session showing `rerank_mode=merge` = the rerank model is still loading; one retry restores `neural`.
@@ -97,11 +97,11 @@ These signals mean **a problem is happening that the user likely doesn't see**. 
 | `metadata.robots` says bypassed | robots compliance off process-wide | Just know it (compliance is the operator's); explain if asked |
 | `date_filter.note` says a preset was substituted | `after` widened to day/week/month/year | State time ranges the way the note does ("within the last month"), not as exact dates |
 | Local file comes back mojibake | Charset detection failed | `parse` with explicit `encoding=` (Shift_JIS / EUC-KR decode into plausible-looking wrong Chinese — the dangerous case) |
-| `error=proxy_unreachable` | Explicit proxy failed the 5s TCP precheck | Raising timeout is useless (no request was sent); check the proxy itself or drop `options.proxy` |
+| `error=proxy_unreachable` | Explicit proxy failed the 5s TCP precheck | Raising timeout is useless (no request was sent); check the proxy itself or drop `proxy` |
 | Fetching `127.0.0.1` returns 502/proxy errors | The proxy is intercepting loopback traffic (even dead ports answer 502 instead of connection-refused) | Have the user add `127.0.0.1,localhost` to `NO_PROXY`; confirm the port actually listens; **never probe local dead ports with stealthy** (the browser waits out the full timeout) |
-| `401` distinguishing "credentials rejected" vs "no credentials sent" | Opposite fixes | Rejected → fresh token; not sent → add `options.auth`; credentials don't survive cross-origin redirects |
+| `401` distinguishing "credentials rejected" vs "no credentials sent" | Opposite fixes | Rejected → fresh token; not sent → add `auth`; credentials don't survive cross-origin redirects |
 | `error=cdp_authorization_required` | FIRST attach to this host — nothing was executed | Present it as the user's one-time approval decision; only on a clear yes re-call with `confirm: true` (the host stays authorized afterwards; revoke = delete `cdp_hosts.json`). Don't retry without asking |
-| `error=neural_focus_model_missing` | `options.focus_engine='neural'` was asked but the reranker isn't downloaded yet — no request was sent | Re-run with `options.focus_engine='bm25'` for this call, or let the model download on the first neural smart_search (one-time, resumable) |
+| `error=neural_focus_model_missing` | `focus_engine='neural'` was asked but the reranker isn't downloaded yet — no request was sent | Re-run with `focus_engine='bm25'` for this call, or let the model download on the first neural smart_search (one-time, resumable) |
 | `element_screenshot_disabled` | (17.0 removed this error) Element captures need no permission now | If you still see it, the installed dhole is older than 17.0 — say so instead of setting env vars |
 | `pending_approval: true` in `metadata.actions` | A submit action was paused BEFORE acting — nothing was submitted | Describe exactly what would be submitted to the user; only on a clear yes re-run the same actions with `{"confirm": true}` on that submit |
 | `pending_approval: true` on a `login` response | The login ran WITHOUT `confirm` — nothing was filled or submitted; `fields` + `plan` describe what a confirmed run would do | Show the user the plan (target site, vault item name, the fields detected); re-call with the **same arguments plus `confirm=true`** only after they approve |
@@ -120,7 +120,7 @@ These signals mean **a problem is happening that the user likely doesn't see**. 
 
 **Single-call** behavior = call parameters (no config, no restart). **Process-wide** = env vars in the `dhole` server's `env` block in the host's MCP config, **then restart the host**. Full scenario-indexed reference: `references/configuration.md`. The frequent few:
 
-- `DHOLE_SEARCH_PROXY` — search engines blocked/rate-limited (also auto-reads `HTTPS_PROXY` etc.; search layer only — fetch layer uses `options.proxy`)
+- `DHOLE_SEARCH_PROXY` — search engines blocked/rate-limited (also auto-reads `HTTPS_PROXY` etc.; search layer only — fetch layer uses `proxy`)
 - `DHOLE_DEFAULT_ENGINES` — swap the default pool (default `baidu,bing,sogou,bing_global,yandex,brave`)
 - 17.0 deleted the old on/off switches (tool groups, multimodal, neural-focus license, wire shape, cooldown tuning, self-update): those capabilities are default-on or fixed, and a stale `DHOLE_…` in the env block does nothing — `--doctor` names what a host still sets that no longer has any effect
 

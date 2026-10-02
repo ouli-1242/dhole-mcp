@@ -30,7 +30,7 @@
 ### Scenario: search engines blocked / rate-limited / should use a proxy
 
 - `DHOLE_SEARCH_PROXY` — the single egress every search engine goes through; **also auto-reads** `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` when unset (sandboxes and CI often already have one; `dhole --doctor` names which variable answered). 17.0 removed the proxy pool — there is no `dhole proxy` command and no `~/.dhole/search_proxies.json`, so a comma-separated value rotates nothing (first URL wins, the rest are dropped with a warning) and a value with an unrecognised scheme (`http`/`https`/`socks5`/`socks5h` only — usually a missing `http://`) is treated as unset, also with a warning. Credentials in the URL are never echoed back anywhere: doctor, errors and the usage audit all show `http://***@host:3128`
-- Division of labor: this variable covers the **search layer only**; fetches go through a proxy via per-call `options.proxy` (with a 5s precheck)
+- Division of labor: this variable covers the **search layer only**; fetches go through a proxy via per-call `proxy` (with a 5s precheck)
 
 ### Scenario: Clash / sing-box TUN proxy (fake-IP mode)
 
@@ -38,7 +38,7 @@
 
 ### Scenario: fetching intranet / local dev services
 
-- `DHOLE_ALLOW_PRIVATE_HOSTS` — comma-separated allowlist (`localhost,my-service.local,192.168.1.50`) bypassing the SSRF guard for those hosts; default empty = reject all. Per-call: `options.allow_private=true` (loopback only) or a list
+- `DHOLE_ALLOW_PRIVATE_HOSTS` — comma-separated allowlist (`localhost,my-service.local,192.168.1.50`) bypassing the SSRF guard for those hosts; default empty = reject all. Per-call: `allow_private=true` (loopback only) or a list
 - **Cloud metadata endpoints (169.254.169.254, metadata.google.internal, …) are never allowed**, allowlist or not
 - With a proxy running, loopback traffic may be intercepted by the proxy itself (502 instead of connection-refused) — `NO_PROXY` needs `127.0.0.1,localhost` (see troubleshooting)
 
@@ -53,7 +53,7 @@ chrome.exe --user-data-dir=D:\dhole-chrome --remote-debugging-port=9222
 Then just call — the first attach asks, the user answers once:
 
 ```json
-{"url": "https://portal.example.com/dashboard", "options": {"cdp_url": "http://127.0.0.1:9222", "check_login": true}}
+{"url": "https://portal.example.com/dashboard", "cdp_url": "http://127.0.0.1:9222", "check_login": true}
 ```
 
 - **先问再记**: attaching = handing dhole read access to every site logged into that Chrome, so the FIRST attach to a host is refused with `cdp_authorization_required` and **nothing is executed**. Re-call the same call with `confirm=true` to approve that one host; the approval is persisted to `~/.dhole/cdp_hosts.json` and every later attach is fenced to the authorized set. Revoke = delete that file
@@ -65,8 +65,8 @@ Then just call — the first attach asks, the user answers once:
 
 ### Scenario: screenshots an agent can see / semantic focus
 
-- Element captures are **always on**: `options.selector` crops on the `screenshot` tool and `{"screenshot": {...}}` inside `actions` (element shots ride the response as image blocks). The captcha discipline (≤3 tries then hand off; DataDome / Akamai / interactive Turnstile / 2FA / sliders always hand off) is part of the tool descriptions. `decode_qr` (local OpenCV QR decode, in the `[all]` extra) is deterministic local work
-- `focus` block-picking scores with BM25 by default. `options.focus_engine="neural"` switches that ONE call to the local cross-encoder (~12.5s of CPU per page — budget timeout for bulk); model missing = explicit error (`neural_focus_model_missing`), never a silent download. The model arrives on the first neural smart_search (one-time, resumable); `options.focus_mode="best"` returns the single top block + heading
+- Element captures are **always on**: `selector` crops on the `screenshot` tool and `{"screenshot": {...}}` inside `actions` (element shots ride the response as image blocks). The captcha discipline (≤3 tries then hand off; DataDome / Akamai / interactive Turnstile / 2FA / sliders always hand off) is part of the tool descriptions. `decode_qr` (local OpenCV QR decode, in the `[all]` extra) is deterministic local work
+- `focus` block-picking scores with BM25 by default. `focus_engine="neural"` switches that ONE call to the local cross-encoder (~12.5s of CPU per page — budget timeout for bulk); model missing = explicit error (`neural_focus_model_missing`), never a silent download. The model arrives on the first neural smart_search (one-time, resumable); `focus_mode="best"` returns the single top block + heading
 
 ### Scenario: repeatable tasks, change monitoring, stored credentials
 

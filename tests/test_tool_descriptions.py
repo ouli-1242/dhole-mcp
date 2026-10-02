@@ -127,7 +127,7 @@ def test_search_engine_list_is_never_partial(tools):
     t = tools["smart_search"]
     locations = {
         "description": t["description"],
-        "options.engines": t["inputSchema"]["properties"]["options"]["description"],
+        "engines": t["inputSchema"]["properties"]["engines"]["description"],
     }
     partial: dict[str, list[str]] = {}
     for where, text in locations.items():
@@ -139,7 +139,8 @@ def test_search_engine_list_is_never_partial(tools):
         "（漏列会让调用方以为池子更小）。\n"
         f"  注册表里: {sorted(opt_in)}\n"
         f"  不符处: {partial}\n"
-        "要么补全，要么删掉该处清单改为指向 options.engines（推荐 —— 名单只留一份）。"
+        "要么补全，要么删掉该处清单、只留一份名单（推荐 —— 引擎表写在 "
+        "dhole_doc 语料里，常驻层给指针）。"
     )
 
 
@@ -256,7 +257,7 @@ def test_params_named_in_description_exist(tools, name):
     """描述说 `foo=...`，就得真有某个工具接受 foo。
 
     防的是「描述承诺了一个不存在的参数」—— agent 会照着传，然后被
-    _strict_options 拒绝或静默忽略。跨工具引用是合法的（smart_crawl 的
+    _reject_unknown_args 拒绝或静默忽略。跨工具引用是合法的（smart_crawl 的
     描述里写 smart_fetch(urls=[...])），所以已知集合取全部工具的并集。
     """
     known = set(_NOT_A_PARAM) | _response_field_names()
@@ -315,12 +316,17 @@ def test_descriptions_have_no_stray_whitespace(tools):
 # 客户端收到的是 _TOOL_DEFS 的 description；工具方法的 docstring **不上
 # wire**（全项目零处消费 __doc__，见 server.py 中 _TOOL_DEFS 上方的注释）。
 # 两边没有同步机制，于是 docstring 必然腐坏 —— screenshot 的 :param: 块曾把
-# 早已搬进 `options` 的键描述成顶层参数，读源码的人会照着写错。
+# 参数说成早已改名的位置，读源码的人会照着写错。
 #
 # 这条守卫不要求两边内容一致（wire 是刻意瘦身的，docstring 更长）。它只要
-# 求一件事：**docstring 里的 snake_case 标识符，若在整个 wire 载荷里找不到，
+# 求一件事：**docstring 里的 snake_case 标识符，若在整个 agent 可见面上找不到，
 # 就必须登记在下面的集合里**。新增的漂移必须显式登记，不能默默出现 ——
 # 这正是「改了 docstring 以为生效」的拦截点。
+#
+# agent 可见面有三扇门，不只是 tools/list：initialize 的 instructions、该工具
+# 自己的载荷，以及 ``dhole_doc`` 按需取的语料（17.0 把常驻层装不下的细节搬进
+# 了第三扇门）。只查前两扇会把「搬进说明书」误判成信息丢失 —— 那正是 B5 瘦身
+# 要做的事。语料里查不到才算 stray，所以搬走必须真的搬过去，不能搬成一句空指针。
 
 _SNAKE_CASE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
 
@@ -359,27 +365,39 @@ def _docstring_identifiers(name: str) -> set[str]:
     return set(_SNAKE_CASE.findall(doc))
 
 
+def _handbook_corpus() -> str:
+    """dhole_doc 那扇门的全部文本 —— agent 不用装任何东西就能取到。"""
+    from dhole_mcp.guide import TOPICS, _ROOT
+
+    return "\n".join((_ROOT / rel).read_text(encoding="utf-8").lower()
+                     for rel, _when in TOPICS.values()
+                     if (_ROOT / rel).is_file()).lower()
+
+
 def test_docstring_identifiers_are_on_the_wire_or_registered(tools):
-    """docstring 里出现 wire 上看不到的标识符 = agent 与开发者看到的事实不同。
+    """docstring 里出现 agent 看不到的标识符 = 开发者与代理看到的事实不同。
 
     拦截场景：往 docstring 里写了一个新参数/新字段，以为客户端能看到 ——
     实际看不到。要么搬进 _TOOL_DEFS，要么登记并说明为什么它是内部细节。
 
-    agent 看得见的界面有两个，都算：tools/list 里该工具的那一条，以及
-    initialize 的 instructions。envelope 的读法集中写在 instructions（八
-    个工具共用一份，不在每个描述里各抄一遍），只查 tools/list 会把这种
-    「上收到公共层」误判成信息丢失。
+    agent 看得见的界面有三扇门，都算：tools/list 里该工具的那一条、
+    initialize 的 instructions（envelope 的读法集中写在这里，八个工具共用
+    一份，不在每个描述里各抄一遍），以及 dhole_doc 的语料（17.0 把常驻层
+    装不下的细节搬了进去）。少认一扇门会把「上收到公共层 / 搬进说明书」
+    误判成信息丢失。
     """
     instructions = DHOLE_INSTRUCTIONS.lower()
+    handbook = _handbook_corpus()
     unregistered: dict[str, list[str]] = {}
     for name, t in tools.items():
-        on_wire = json.dumps(t, ensure_ascii=False).lower() + instructions
+        on_wire = (json.dumps(t, ensure_ascii=False).lower() + instructions
+                   + handbook)
         stray = sorted(i for i in _docstring_identifiers(name)
                        if i not in on_wire and i not in _ALLOWED_DOCSTRING_ONLY)
         if stray:
             unregistered[name] = stray
     assert not unregistered, (
-        "docstring 里有 wire 上看不到的标识符，且未登记。\n"
+        "docstring 里有 agent 看不到的标识符（三扇门里都没有），且未登记。\n"
         "要么搬进 _TOOL_DEFS 的描述（agent 需要知道），要么加进 "
         "_DOCSTRING_ONLY_* 白名单并写明理由。\n"
         f"{unregistered}"

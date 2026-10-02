@@ -450,7 +450,7 @@ class TestAZeroMatchSelectorFailsFastAndHonestly:
         msg = _screenshot_error_message(
             LookupError("selector matched no element on the loaded page: 'div'"))
         assert "matched nothing" in msg
-        assert "options.timeout" not in msg, (
+        assert "raise timeout" not in msg, (
             "零匹配不是渲染超时 —— 让人去调 timeout 是无效方向")
         assert "wait_selector" in msg, "只在元素稍后出现时 wait_selector 才有用"
 

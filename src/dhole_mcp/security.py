@@ -61,7 +61,7 @@ def _env_private_hosts() -> frozenset[str]:
 
 
 def parse_allow_private(value) -> tuple[frozenset, bool]:
-    """Normalize ``options.allow_private`` into ``(hosts, loopback_net)``.
+    """Normalize ``allow_private`` into ``(hosts, loopback_net)``.
 
     ``true``  -> 只放开回环。**不是整个局域网**：一次布尔开关把 RFC1918 全打开，
     等于把路由器、NAS、打印机和云元数据一起打开，那是「允许我的 dev 服务」没有
@@ -656,7 +656,7 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
 
         if is_ip:
             # G9: an internal target the operator named in DHOLE_ALLOW_PRIVATE_HOSTS
-            # or options.allow_private is fetched instead of refused. Cloud metadata
+            # or allow_private is fetched instead of refused. Cloud metadata
             # is never allowed (see _private_host_allowed).
             _allowed = _private_host_allowed(hostname, addr)
             # Check IPv4-mapped IPv6: extract the mapped IPv4 and re-check it

@@ -64,7 +64,7 @@ def _stub_crawl(monkeypatch, **kwargs):
 
 
 class TestCookieShapes:
-    """report BUG-5: ``options={cookies: "sessionid=abc123"}`` put no cookie on
+    """report BUG-5: ``cookies="sessionid=abc123"`` put no cookie on
     the wire at all - the string was iterated character by character, every
     entry was dropped, and the call still reported 200 + ``content_ok``.
     """
@@ -96,7 +96,7 @@ class TestCookieShapes:
 
 
 class TestUserAgentOverride:
-    """report BUG-4: ``options.useragent`` was accepted and ignored - the HTTP
+    """report BUG-4: ``useragent`` was accepted and ignored - the HTTP
     tier always sent browserforge's rotating UA. The browser tier honoured it,
     so the same option worked or not depending on which tier answered.
     """
@@ -242,9 +242,8 @@ class TestCrawlPathFilterAcceptsAString:
 
 
 class TestCrawlSearchOptionAndSummary:
-    """report BUG-7: ``search`` was documented for smart_crawl and implemented
-    top-level, but the same key inside the options bag raised "Unsupported
-    option key(s)".
+    """report BUG-7: ``search`` was documented for smart_crawl but a call that
+    carried it was rejected as an unsupported key.
 
     Found alongside it: when the filter matched nothing, the summary kept the
     PRE-filter stats - "crawled 1 page(s) ... 1 content_ok" next to
@@ -266,16 +265,10 @@ class TestCrawlSearchOptionAndSummary:
         asyncio.run(server_mod.MasterFetchServer()._dispatch("smart_crawl", args))
         return seen.get("search")
 
-    def test_search_in_the_options_bag_is_accepted(self, monkeypatch):
+    def test_search_is_accepted(self, monkeypatch):
         assert self._dispatched_search(monkeypatch, {
-            "url": "https://example.com/", "options": {"search": "interpreter"},
+            "url": "https://example.com/", "search": "interpreter",
         }) == "interpreter"
-
-    def test_top_level_search_still_wins(self, monkeypatch):
-        assert self._dispatched_search(monkeypatch, {
-            "url": "https://example.com/", "search": "top",
-            "options": {"search": "opt"},
-        }) == "top"
 
     def test_filtered_away_summary_describes_the_pages_returned(self, monkeypatch):
         result = _stub_crawl(monkeypatch, search="nomatch")
@@ -738,26 +731,10 @@ class TestCrawlPathScopeIsASubtree:
         result = _stub_crawl(monkeypatch, path_include=["/api/*/v1"])
         assert "different source" not in result.next_action
 
-    def test_the_options_bag_route_behaves_identically(self, monkeypatch):
-        """The options bag is the documented home for path_include, and it
-        reaches smart_crawl through a different promotion path than the
-        top-level key - so both routes need exercising, not just one."""
-        seen: dict = {}
-
-        async def fake_smart_crawl(self, **kwargs):
-            seen.update(kwargs)
-            from dhole_mcp.crawl import CrawlResponseModel
-            return CrawlResponseModel(start_url="https://example.com/", pages=[])
-
-        monkeypatch.setattr(server_mod.MasterFetchServer, "smart_crawl", fake_smart_crawl)
-        asyncio.run(MasterFetchServer()._dispatch("smart_crawl", {
-            "url": "https://example.com/", "options": {"path_include": ["/docs"]},
-        }))
-        assert seen["path_include"] == ["/docs"]
-
     def test_the_wire_description_names_the_subtree_rule(self):
         tools = {t["name"]: t for t in MasterFetchServer._TOOL_DEFS}
-        desc = tools["smart_crawl"]["inputSchema"]["properties"]["options"]["description"]
+        props = tools["smart_crawl"]["inputSchema"]["properties"]
+        desc = props["path_include"]["description"]
         assert "path subtree" in desc
         assert "NOT /docs-old" in desc, "描述必须点明前缀相同的兄弟目录不算"
 
@@ -766,8 +743,8 @@ class TestContentBudgetArgIsHonouredOrRejected:
     """report P1-5: ``max_content_chars`` silently ignored the caller's value.
 
     The old code was ``if not isinstance(v, int): v = MAX_CONTENT_CHARS``. Several
-    MCP clients stringify numbers - the exact behaviour ``_coerce_options`` was
-    written for - so ``max_content_chars="2000"`` silently became 40,000: a 20x
+    MCP clients stringify numbers - the exact behaviour ``_coerce_arg_types``
+    exists for - so ``max_content_chars="2000"`` silently became 40,000: a 20x
     context overspend reported as an ordinary 200. ``offset`` had the sibling
     defect that a negative value slices from the END (``text[-5:]`` returns the
     last 5 chars), i.e. a wrong result also delivered as an ordinary 200.
@@ -965,7 +942,7 @@ class TestScreenshotErrorsAreActionableNotRawDriverLogs:
             "Call log:\n"
             "  - retrying after timeout\n")
         out = self._msg(exc)
-        assert "options.timeout" not in out
+        assert "raise timeout" not in out
         assert "Protocol error" in out
 
     def test_the_dispatched_error_is_the_sanitised_one(self, monkeypatch):
@@ -1012,4 +989,4 @@ class TestScreenshotErrorsAreActionableNotRawDriverLogs:
         assert "Call log" not in text
         assert "fonts" not in text
         assert "Timeout 30000ms exceeded" in text
-        assert "options.timeout" in text
+        assert "raise timeout=" in text

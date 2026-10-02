@@ -1,16 +1,16 @@
 """Top-level arguments either reach the tool or fail loudly - never vanish.
 
 Found while re-testing the third report's crawl item live. The dispatcher read
-only url/discover_only/focus/crawl_urls/search + options, so every other
+only url/discover_only/focus/crawl_urls/search + the options bag, so every other
 top-level key was dropped on the floor: `max_pages=3` crawled 10 pages and
 `path_include="/tag/"` filtered nothing, with no error, no warning and nothing
 in the reply to say the cap never applied. The tool descriptions name those
 params without saying "in options" ("Caps: max_pages(10), max_depth(2)...").
 
-Two guards, same principle as _strict_options one level up:
+Two guards, same principle as `_reject_unknown_args` one level up:
 
-* a key the tool documents may be passed top-level (top-level wins over the
-  options bag, which stays the documented home), and
+* a key the tool documents is passed top-level — 17.0 removed the bag, so that
+  is now the only channel, and
 * a key it does not accept raises, listing what is supported.
 """
 
@@ -68,19 +68,10 @@ class TestCrawlTopLevelArgs:
         _dispatch("smart_crawl", {"url": "https://example.com/", "path_exclude": "/what/"})
         assert seen["path_exclude"] == "/what/"
 
-    def test_top_level_wins_over_the_options_bag(self, monkeypatch):
+    def test_a_top_level_bool_reaches_the_crawl(self, monkeypatch):
         seen = _stub(monkeypatch, "smart_crawl", _CRAWL_OK)
         _dispatch("smart_crawl", {
-            "url": "https://example.com/", "max_pages": 3,
-            "options": {"max_pages": 9, "max_depth": 1},
-        })
-        assert seen["max_pages"] == 3, "顶层应优先（与 smart_fetch 的 promote 先例一致）"
-        assert seen["max_depth"] == 1, "options 里的其余键照旧生效"
-
-    def test_the_options_bag_alone_still_works(self, monkeypatch):
-        seen = _stub(monkeypatch, "smart_crawl", _CRAWL_OK)
-        _dispatch("smart_crawl", {
-            "url": "https://example.com/", "options": {"sitemap": True, "max_pages": 5},
+            "url": "https://example.com/", "sitemap": True, "max_pages": 5,
         })
         assert seen["sitemap"] is True and seen["max_pages"] == 5
 
@@ -93,13 +84,13 @@ class TestOtherToolsTakeTheirDocumentedKeysTopLevel:
         assert (seen["max_results"], seen["engines"], seen["freshness"], seen["site"]) == (
             8, ["brave"], "week", "example.com")
 
-    def test_screenshot_options(self, monkeypatch):
+    def test_screenshot_keys(self, monkeypatch):
         seen = _stub(monkeypatch, "screenshot", [])
         _dispatch("screenshot", {"url": "https://example.com/", "full_page": True,
                                  "image_type": "jpeg"})
         assert seen["full_page"] is True and seen["image_type"] == "jpeg"
 
-    def test_fetch_bag_options_that_used_to_be_dropped(self, monkeypatch):
+    def test_fetch_keys_that_used_to_be_dropped(self, monkeypatch):
         from dhole_mcp.server import ResponseModel
 
         seen: dict = {}
@@ -150,12 +141,14 @@ class TestUnknownTopLevelArgsRaise:
         seen = _stub(monkeypatch, "smart_crawl", _CRAWL_OK)
         _dispatch("smart_crawl", {"url": "https://example.com/", "focus": None,
                                   "crawl_urls": None, "nonsense": None})
-        assert seen["focus"] is None and seen["crawl_urls"] is None
+        # 没传 = 不写进 kwargs，让方法自己的默认值生效。显式传 None 会盖掉一个
+        # 不是 None 的默认值（extraction_type 的教训，见 _dispatch 里的注释）。
+        assert "focus" not in seen and "crawl_urls" not in seen
 
-    def test_null_valued_options_alone_is_fine(self, monkeypatch):
+    def test_a_null_valued_call_is_not_rejected(self, monkeypatch):
         seen = _stub(monkeypatch, "smart_crawl", _CRAWL_OK)
-        _dispatch("smart_crawl", {"url": "https://example.com/", "options": None,
-                                  "max_pages": 2})
+        _dispatch("smart_crawl", {"url": "https://example.com/", "max_pages": 2,
+                                  "sitemap": None})
         assert seen["max_pages"] == 2
 
 
@@ -171,21 +164,21 @@ class TestAcceptedSetCoversTheContract:
         """17.0 B4 的那半边：能被读的键就必须能在 schema 里看到 —— 参数只有一个家，
         而家要看得见。
 
-        反过来的事故真实存在过：`options` 的散文写着"method 只发一次"，而顶层的 method
+        反过来的事故真实存在过：袋子的散文写着"method 只发一次"，而顶层的 method
         一直能用、从来没被声明过，于是任何按 schema 写调用的客户端都不知道自己有这条能力。
-        今天唯一还豁免的名字是 `options` 袋本身（兼容通道，拆平那一刀连着这条豁免一起删）。
+        拆平之后没有豁免项了：能被接受又看不见 = 说谎。
         """
         for td in MasterFetchServer._TOOL_DEFS:
             declared = set((td.get("inputSchema") or {}).get("properties") or {})
             allowed = set(server_mod._TOP_LEVEL_ARGS[td["name"]])
             hidden = allowed - declared
-            assert hidden <= {"options"}, (td["name"], sorted(hidden))
+            assert not hidden, (td["name"], sorted(hidden))
 
-    def test_every_documented_option_is_accepted(self):
-        assert server_mod._SC_OPTIONS <= server_mod._TOP_LEVEL_ARGS["smart_crawl"]
-        assert server_mod._SS_OPTIONS <= server_mod._TOP_LEVEL_ARGS["smart_search"]
-        assert server_mod._SHOT_OPTIONS <= server_mod._TOP_LEVEL_ARGS["screenshot"]
-        assert server_mod._SF_OPTIONS_ALLOWED <= server_mod._TOP_LEVEL_ARGS["smart_fetch"]
+    def test_every_documented_param_set_is_accepted(self):
+        assert server_mod._SC_PARAMS <= server_mod._TOP_LEVEL_ARGS["smart_crawl"]
+        assert server_mod._SS_PARAMS <= server_mod._TOP_LEVEL_ARGS["smart_search"]
+        assert server_mod._SHOT_PARAMS <= server_mod._TOP_LEVEL_ARGS["screenshot"]
+        assert server_mod._SF_PARAMS <= server_mod._TOP_LEVEL_ARGS["smart_fetch"]
 
     def test_every_tool_in_the_schema_is_covered(self):
         names = {td["name"] for td in MasterFetchServer._TOOL_DEFS}
@@ -236,9 +229,3 @@ class TestTopLevelFilterAppliesEndToEnd:
         assert got["pages_crawled"] == 3
         assert not any(u.endswith("/a") for u in urls)
         assert any(u.endswith("/b") for u in urls)
-
-    def test_top_level_and_options_forms_agree(self, monkeypatch):
-        top = self._crawl(monkeypatch, path_exclude="/a")
-        bag = self._crawl(monkeypatch, options={"path_exclude": "/a"})
-        assert top["pages_crawled"] == bag["pages_crawled"] == 3
-        assert [p["url"] for p in top["pages"]] == [p["url"] for p in bag["pages"]]
