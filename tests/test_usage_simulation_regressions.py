@@ -404,14 +404,14 @@ class TestAnUnscoredExtractionSaysNull:
         # PDF, because a 0.0 there reads as 'the extraction is maximally
         # garbled'". Every successful non-PDF parse was returning exactly that 0.0.
         _, payload = asyncio.run(MasterFetchServer()._dispatch(
-            "parse", {"file_path": "tests/gbk_sample.csv"}))
+            "doc_parse", {"file_path": "tests/gbk_sample.csv"}))
         assert payload["content_ok"] is True
         assert "quality_score" not in payload or payload["quality_score"] is None, \
             payload.get("quality_score")
 
     def test_a_local_pdf_keeps_its_real_score(self):
         _, payload = asyncio.run(MasterFetchServer()._dispatch(
-            "parse", {"file_path": "tests/background_checks.pdf"}))
+            "doc_parse", {"file_path": "tests/background_checks.pdf"}))
         assert payload["quality_score"] is not None
 
 

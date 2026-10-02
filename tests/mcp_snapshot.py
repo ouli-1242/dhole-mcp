@@ -177,7 +177,7 @@ PLAUSIBLE_CASES = {
         ("minimal: engine_state reset", {"engine_state": True}),
         ("minimal: all=true (throwaway DHOLE_HOME)", {"all": True}),
     ],
-    "parse": [
+    "doc_parse": [
         ("minimal: nonexistent local path", {"file_path": NONEXISTENT_FILE}),
         ("plausible: GBK CSV (charset detection)", {"file_path": GBK_CSV_FILE}),
     ],
@@ -194,7 +194,7 @@ PLAUSIBLE_CASES = {
 
 TOOL_ORDER = [
     "web_read", "web_crawl", "screenshot", "web_search",
-    "cache_clear", "parse", "feed_read", "web_resolve",
+    "cache_clear", "doc_parse", "feed_read", "web_resolve",
 ]
 
 

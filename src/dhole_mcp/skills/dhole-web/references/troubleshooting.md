@@ -58,7 +58,7 @@ The response distinguishes "credentials rejected" (supply a fresh token) from "n
 
 ### Mojibake
 
-`parse` with explicit `encoding=`. **Shift_JIS / EUC-KR decode into plausible-looking but wrong Chinese** and sit outside auto-detection — when the Chinese reads fluently and impossibly, suspect this first.
+`doc_parse` with explicit `encoding=`. **Shift_JIS / EUC-KR decode into plausible-looking but wrong Chinese** and sit outside auto-detection — when the Chinese reads fluently and impossibly, suspect this first.
 
 ### Sites behind login
 

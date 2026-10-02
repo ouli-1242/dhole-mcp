@@ -48,7 +48,7 @@ ROUTING_CONTRACT = [
      "搜索结果只是 URL，必须说清下一步是取正文"),
     ("screenshot", "web_read",
      "文本 agent 不该调截图，要明确让位给 web_read"),
-    ("parse", "web_read",
+    ("doc_parse", "web_read",
      "本地 PDF 只有 web_read 能处理（且仅限 URL 形态），必须指明"),
     ("feed_read", "web_read",
      "feed_read 不是通用抓取器，必须说明何时该换 web_read"),
@@ -147,10 +147,10 @@ def test_parse_advertises_local_pdf(tools):
     也不是合法 URL，于是本地 PDF 实际无路可走，agent 照描述走会白烧两次调用。
     现在 parse 自己解析，描述与参数说明都必须写明。
     """
-    desc = _desc(tools, "parse")
+    desc = _desc(tools, "doc_parse")
     assert ".pdf" in desc
     assert "NOT supported" not in desc
-    props = tools["parse"]["inputSchema"]["properties"]
+    props = tools["doc_parse"]["inputSchema"]["properties"]
     assert ".pdf" in props["file_path"]["description"]
 
 
@@ -176,8 +176,8 @@ def test_parse_advertises_every_supported_extension(tools):
     # 机制自检：`.html` 不该顶替 `.htm`（子串匹配在这里会静默失效）
     assert _extensions_mentioned("only .html here") == {".html"}
 
-    desc = _desc(tools, "parse")
-    prop = tools["parse"]["inputSchema"]["properties"]["file_path"]["description"]
+    desc = _desc(tools, "doc_parse")
+    prop = tools["doc_parse"]["inputSchema"]["properties"]["file_path"]["description"]
     for where, text in (("描述", desc), ("file_path 说明", prop)):
         missing = sorted(SUPPORTED_EXTENSIONS - _extensions_mentioned(text))
         assert not missing, f"parse 的{where}未列出支持的扩展名: {missing}"

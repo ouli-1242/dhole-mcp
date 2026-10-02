@@ -122,7 +122,7 @@ class TestUnknownTopLevelArgsRaise:
         ("web_read", {"url": "https://example.com/", "max_chars": 100}),
         ("screenshot", {"url": "https://example.com/", "width": 800}),
         ("cache_clear", {"all": True, "everything": True}),
-        ("parse", {"file_path": "a.pdf", "pages": "1-2"}),
+        ("doc_parse", {"file_path": "a.pdf", "pages": "1-2"}),
         ("feed_read", {"urls": ["https://example.com/f.xml"], "limit": 5}),
         ("web_resolve", {"url": "https://example.com/", "follow": True}),
     ])
@@ -200,17 +200,17 @@ class TestParseCwdReachesTheTool:
     """
 
     def test_cwd_is_forwarded(self, monkeypatch):
-        seen = _stub(monkeypatch, "parse",
+        seen = _stub(monkeypatch, "doc_parse",
                      server_mod.ResponseModel(url="file:///x", status=0, content=[]))
-        _dispatch("parse", {"file_path": "notes.csv", "cwd": "/tmp/session"})
+        _dispatch("doc_parse", {"file_path": "notes.csv", "cwd": "/tmp/session"})
         assert seen["file_path"] == "notes.csv"
         assert seen["cwd"] == "/tmp/session"
 
     def test_omitted_cwd_stays_none(self, monkeypatch):
         """不传就是 None（继续走进程 cwd / home），不是空串或报错。"""
-        seen = _stub(monkeypatch, "parse",
+        seen = _stub(monkeypatch, "doc_parse",
                      server_mod.ResponseModel(url="file:///x", status=0, content=[]))
-        _dispatch("parse", {"file_path": "notes.csv"})
+        _dispatch("doc_parse", {"file_path": "notes.csv"})
         assert seen["cwd"] is None
 
 

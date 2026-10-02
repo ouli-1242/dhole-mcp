@@ -115,7 +115,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 | `DHOLE_OUTPUT_SCHEMA` | 设 `1` 在 `tools/list` 声明 `outputSchema`（连接期 +13.6%，隐含打开上面那个） |
 | `DHOLE_WIRE_FULL` | 设 `1` 恢复瘦身前的响应形状（每个字段恒定存在） |
 | `DHOLE_HOME` | 状态目录（默认 `~/.dhole`） |
-| `DHOLE_WORKDIR` | `parse` 解析相对路径时额外尝试的目录 |
+| `DHOLE_WORKDIR` | `doc_parse` 解析相对路径时额外尝试的目录 |
 | `DHOLE_HF_ENDPOINT`（或 `HF_ENDPOINT`） | 重排模型下载源（默认 `huggingface.co` 失败回退 `hf-mirror.com`） |
 | `DHOLE_BRIGHTDATA_API_KEY` / `DHOLE_BRIGHTDATA_ZONE` / `DHOLE_BRIGHTDATA_COUNTRY` | Bright Data SERP 后端（zone 默认 `dhole`，地区默认 `us`） |
 | `DHOLE_TAVILY_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_BOCHA_API_KEY` | 对应 keyed 引擎的密钥 |
@@ -131,7 +131,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 
 ## 用法
 
-装好重启后直接说人话：「抓 `https://example.com/pricing` 列成表」→ `web_read`；「查官方文档挑两条最相关的读给我」→ `web_search` + `web_read`；「`/guide` 下面都收一遍」→ `web_crawl`；「这份 `report.pdf` 讲了什么」→ `parse`。
+装好重启后直接说人话：「抓 `https://example.com/pricing` 列成表」→ `web_read`；「查官方文档挑两条最相关的读给我」→ `web_search` + `web_read`；「`/guide` 下面都收一遍」→ `web_crawl`；「这份 `report.pdf` 讲了什么」→ `doc_parse`。
 
 | 命令 | 用途 |
 |---|---|
@@ -157,7 +157,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 | `web_search` | 无密钥搜索：多引擎并行 + 本地重排，可顺带抓回前三条全文 |
 | `web_crawl` | 同域爬取：sitemap、关键词过滤、路径子树限定 |
 | `screenshot` | 页面截图；看不见图的宿主传 `options.save_to` 拿路径 |
-| `parse` | 本地文件 → Markdown（docx / xlsx / pdf / pptx / odt / csv / html / json / yaml / md / txt） |
+| `doc_parse` | 本地文件 → Markdown（docx / xlsx / pdf / pptx / odt / csv / html / json / yaml / md / txt） |
 | `feed_read` | 批量抓 RSS / Atom，`since=` 只取增量 |
 | `web_resolve` | 解析最终地址，不抽正文 |
 | `cache_clear` | 清缓存（连 robots 结论与全部会话 jar 一起清） |

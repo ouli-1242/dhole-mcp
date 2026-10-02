@@ -1053,7 +1053,7 @@ class TestParseEnvelope:
                      "<p>Paragraph body text.</p></body></html>", encoding="utf-8")
         monkeypatch.chdir(tmp_path)
         server = MasterFetchServer()
-        r = await server.parse("doc.html")
+        r = await server.doc_parse("doc.html")
         assert r.status == 200
         assert r.content_ok is True
         assert r.total_extracted_chars == len("\n".join(r.content)) > 0
@@ -1067,7 +1067,7 @@ class TestParseEnvelope:
     async def test_failure_says_what_was_tried(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         server = MasterFetchServer()
-        r = await server.parse("missing.html")
+        r = await server.doc_parse("missing.html")
         assert r.status == 0
         assert r.content == []
         assert "File not found" in r.error
@@ -1090,7 +1090,7 @@ class TestParseEnvelope:
             "</body></html>", encoding="utf-8")
         monkeypatch.chdir(tmp_path)
         server = MasterFetchServer()
-        r = await server.parse("doc.html", cwd=str(session))
+        r = await server.doc_parse("doc.html", cwd=str(session))
         assert r.status == 200, r.error
         assert "Session copy" in "\n".join(r.content)
         assert r.url.startswith("file:///")

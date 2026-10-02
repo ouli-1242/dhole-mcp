@@ -292,7 +292,7 @@ class TestToolSchemaRequired:
     def test_every_other_tool_still_declares_its_required_arg(self):
         for name, required in (
             ("web_crawl", ["url"]), ("screenshot", ["url"]),
-            ("web_search", ["query"]), ("parse", ["file_path"]),
+            ("web_search", ["query"]), ("doc_parse", ["file_path"]),
             ("feed_read", ["urls"]), ("web_resolve", ["url"]),
         ):
             assert self._schema(name)["required"] == required

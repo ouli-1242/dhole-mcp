@@ -92,7 +92,7 @@ def pdf_install_advice() -> str:
 
 
 def docx_install_advice() -> str:
-    """Advice for ``parse`` refusing a .docx because python-docx is not there."""
+    """Advice for ``doc_parse`` refusing a .docx because python-docx is not there."""
     try:
         import docx  # noqa: F401
         return ("python-docx is installed - the parse failure was not a missing "

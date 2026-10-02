@@ -222,7 +222,7 @@ class Response:
             # elements on different platforms (e.g. ubuntu CI returns the
             # first child element, not the <html> root), which breaks
             # CSSSelector (it only searches descendants, not the root).
-            # parse() always returns a full tree with <html> as root.
+            # doc_parse() always returns a full tree with <html> as root.
             #
             # self.content, re-encoded, with the parser pinned to that charset:
             # handing libxml2 the raw body instead lets it pick the document's

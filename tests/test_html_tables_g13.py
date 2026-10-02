@@ -1,9 +1,9 @@
 """G13 回归：HTML 表格要变成 markdown 表格，而不是九行散落的单元格。
 
-复现是 `parse` 读一个含 `<table>` 的 HTML：输出 `Region / Q1 / Q2 / North / 12 / 14`
+复现是 `doc_parse` 读一个含 `<table>` 的 HTML：输出 `Region / Q1 / Q2 / North / 12 / 14`
 ——表格的**形状**（哪个值属于哪一行哪一列）在输出里消失了。同一工具对 DOCX / XLSX 的
 表格却给出真正的 markdown 表格。修法在共享抽取器里（`_trafilatura_markdown`），所以
-`parse`、`web_read`、`web_crawl` 三条路同时被修，也因此要小心别把没表格的页面
+`doc_parse`、`web_read`、`web_crawl` 三条路同时被修，也因此要小心别把没表格的页面
 抽坏了 —— 那条「行为逐字节不变」的断言就是为这个放的。
 
 机制是把 `<table>` 换成一个占位词，让 trafilatura 只处理散文，最后把渲染好的

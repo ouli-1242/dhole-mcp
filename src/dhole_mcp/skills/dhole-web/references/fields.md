@@ -30,7 +30,7 @@ Consult this when a response doesn't make sense or a field shows a non-default v
 | Field | Meaning | What to do when non-default |
 |---|---|---|
 | `url` / `original_url` | Final URL / the URL you passed | Different = a redirect or meta-refresh hop happened |
-| `fetcher_used` | Tier actually used: `http` / `stealthy` / `cache` / `parse` / `none` | `none` = no request was sent (validation / SSRF / robots) |
+| `fetcher_used` | Tier actually used: `http` / `stealthy` / `cache` / `doc_parse` / `none` | `none` = no request was sent (validation / SSRF / robots) |
 | `escalation_path` | The escalation chain walked (e.g. `direct:http` → stealthy → archive); a CDP-attach call reads `cdp-attach:stealthy` | Reached stealthy/archive = strong anti-bot; send later same-site calls with `force_fetcher='stealthy'` |
 | `cdp_attached` | The fetch ran inside the user's real Chrome via CDP attach (omitted = normal tiers) | Attach is user-granted and audit-logged; read `login_check` before citing the content |
 | `login_check` | `{logged_in: true/false/null, signals, cookie_names, method:"dom+cookie-names"}` — DOM shape + cookie NAMES, no model, values never leave the browser | `false` = session expired → ask the user to re-login in the attached Chrome; `null` = page shape undecidable → say so, don't treat it as success; `cookie_names` are identifiers, not secrets |
@@ -69,7 +69,7 @@ Consult this when a response doesn't make sense or a field shows a non-default v
 | `metadata.robots` | This request's robots verdict | `bypassed (DHOLE_IGNORE_ROBOTS=1…)` = compliance off process-wide; also the ground truth behind `robots_disallowed` |
 | `metadata.title` / `lang` / `published_time` / `author` / `canonical` | Page metadata | Prefer `canonical` and `published_time` when citing |
 | `metadata.actions` | One receipt per page-interaction action: `ok`, `error`, and — for rich actions — `image: true` (pixels rode the content list as image blocks), `qr: [...]` (decoded QR texts), `elements` / `elements_total` / `elements_truncated` (snapshot), `submitted: true` | If an action didn't take effect, look here (e.g. wait_selector timed out). A receipt with `pending_approval: true` means a submit PAUSED before acting — nothing was sent; ask the user, then re-run the whole chain with `confirm: true` on that submit. A receipt with `error` naming "element index" beyond the page means the page changed — re-snapshot |
-| `metadata.encoding` | (parse) encoding actually used | On mojibake, compare — if detection guessed wrong, pass `encoding=` explicitly |
+| `metadata.encoding` | (doc_parse) encoding actually used | On mojibake, compare — if detection guessed wrong, pass `encoding=` explicitly |
 
 ## The stateful tools (web_recipe / web_watch / cred_vault / login)
 

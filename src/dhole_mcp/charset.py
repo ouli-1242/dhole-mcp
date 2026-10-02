@@ -4,7 +4,7 @@ Two callers, two situations, one shared vocabulary for "this text looks wrong":
 
 * HTTP (``fetcher._decode_html_bytes``) starts from a Content-Type charset -
   but the header can lie, so the bytes get a vote.
-* Local files (``parse``) have no header at all: only the bytes, an optional
+* Local files (``doc_parse``) have no header at all: only the bytes, an optional
   BOM, and whatever the caller declares.
 
 Both need the same question answered - "which of these decodes is least

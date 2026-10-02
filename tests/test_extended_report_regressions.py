@@ -137,7 +137,7 @@ class TestTheWireReadsEveryArgumentItAdvertises:
         ("feed_read", {"urls": ["https://example.test/feed.xml"], "max_items": 3,
                         "timeout": 7, "since": "2026-09-27T11:00:00Z"}),
         ("web_resolve", {"url": "https://example.test/x", "timeout": 7}),
-        ("parse", {"file_path": "x.csv", "cwd": ".", "encoding": "gbk"}),
+        ("doc_parse", {"file_path": "x.csv", "cwd": ".", "encoding": "gbk"}),
         ("cache_clear", {"all": True, "engine_state": True}),
     ])
     def test_every_advertised_property_is_forwarded(self, monkeypatch, tool, call):

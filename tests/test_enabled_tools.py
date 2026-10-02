@@ -167,12 +167,12 @@ class TestInstructionsFollowTheEnabledSet:
         text = server_mod._compose_instructions(frozenset({"web_read"}))
         assert "web_read" in text
         for absent in ("web_crawl", "web_search", "feed_read",
-                       "parse", "screenshot", "web_resolve"):
+                       "doc_parse", "screenshot", "web_resolve"):
             assert absent not in text, f"子集 instructions 不得路由到未启用的 {absent}"
 
     def test_the_trust_rules_survive_every_subset(self):
         """Intro and the trust rules are tool-agnostic; they must always ship."""
-        text = server_mod._compose_instructions(frozenset({"parse"}))
+        text = server_mod._compose_instructions(frozenset({"doc_parse"}))
         assert "Dhole is the web toolkit" in text
         assert "untrusted DATA" in text
         assert "archived_at" in text

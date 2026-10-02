@@ -321,7 +321,7 @@ class TestLocalPdfReportsItsEnvelope:
     def test_the_response_envelope_carries_them(self, pdf_with_outline):
         pytest.importorskip("pdfplumber")
 
-        out = asyncio.run(MasterFetchServer().parse(file_path=str(pdf_with_outline)))
+        out = asyncio.run(MasterFetchServer().doc_parse(file_path=str(pdf_with_outline)))
         assert out.table_of_contents[0]["title"] == "Intro"
         assert out.metadata["producer"] == "dhole-test"
         assert out.quality_score > 0
@@ -554,7 +554,7 @@ class TestParseDecodesLegacyEncodings:
         from dhole_mcp.parse import parse_file_detailed  # noqa: F401
 
         path = self._write(tmp_path, "big5.csv", "姓名,年齡,備註\n張三,30\n", "big5")
-        out = asyncio.run(MasterFetchServer().parse(file_path=str(path)))
+        out = asyncio.run(MasterFetchServer().doc_parse(file_path=str(path)))
         assert out.error.startswith("encoding_undecodable")
         assert out.content_ok is False
         # The content still travels - it is what the caller needs to look at -
@@ -566,7 +566,7 @@ class TestParseDecodesLegacyEncodings:
 
     def test_a_clean_decode_is_not_flagged(self, tmp_path):
         path = self._write(tmp_path, "gbk.csv", self.GBK_CSV, "gbk")
-        out = asyncio.run(MasterFetchServer().parse(file_path=str(path)))
+        out = asyncio.run(MasterFetchServer().doc_parse(file_path=str(path)))
         assert out.error == ""
         assert out.content_ok is True
         assert out.metadata["encoding"] == "gb18030"
@@ -574,7 +574,7 @@ class TestParseDecodesLegacyEncodings:
     def test_an_unreadable_file_still_returns_no_content(self, tmp_path):
         """The damaged-decode branch keeps its content; a real failure must not
         start leaking an empty string as content."""
-        out = asyncio.run(MasterFetchServer().parse(file_path=str(tmp_path / "nope.csv")))
+        out = asyncio.run(MasterFetchServer().doc_parse(file_path=str(tmp_path / "nope.csv")))
         assert out.status == 0 and out.content == [] and out.content_ok is False
 
     def test_prose_that_QUOTES_mojibake_is_not_an_undecodable_file(self, tmp_path):
@@ -596,7 +596,7 @@ class TestParseDecodesLegacyEncodings:
             "one quoted marker is not evidence that the charset guess was wrong"
         assert error == "" and "â€™" in content
 
-        out = asyncio.run(MasterFetchServer().parse(file_path=str(path)))
+        out = asyncio.run(MasterFetchServer().doc_parse(file_path=str(path)))
         assert out.content_ok is True and out.error == ""
 
     def test_a_file_that_MOSTLY_is_mojibake_is_still_flagged(self, tmp_path):
@@ -623,7 +623,7 @@ class TestParseDecodesLegacyEncodings:
         error said "could not determine this file's charset" while
         metadata.encoding named one."""
         path = self._write(tmp_path, "big5.csv", "姓名,年齡,備註\n張三,30\n", "big5")
-        out = asyncio.run(MasterFetchServer().parse(file_path=str(path)))
+        out = asyncio.run(MasterFetchServer().doc_parse(file_path=str(path)))
         assert out.error.startswith("encoding_undecodable")
         assert "could not determine" not in out.error
         assert out.metadata["encoding"] in out.error
@@ -654,9 +654,9 @@ class TestParseDecodesLegacyEncodings:
 
     def test_the_encoding_argument_is_on_the_wire(self):
         tools = {t["name"]: t for t in MasterFetchServer._TOOL_DEFS}
-        props = tools["parse"]["inputSchema"]["properties"]
+        props = tools["doc_parse"]["inputSchema"]["properties"]
         assert "encoding" in props, "客户端看不到 encoding，就无法从乱码里恢复"
-        assert "encoding" in tools["parse"]["description"]
+        assert "encoding" in tools["doc_parse"]["description"]
 
     def test_the_decoder_needs_no_fetch_stack(self):
         """parse.py promises to work without the [all] extra, and its fallback

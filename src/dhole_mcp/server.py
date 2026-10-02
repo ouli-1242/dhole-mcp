@@ -563,7 +563,7 @@ DHOLE_INSTRUCTIONS = (
     "- Finding what to fetch: web_search - then web_read the top hits. "
     "NEVER answer from search snippets alone.\n"
     "- RSS/Atom changelogs or release notes: feed_read.\n"
-    "- Local file: parse.\n"
+    "- Local file: doc_parse.\n"
     "- Screenshot: screenshot - words instead? web_read.\n"
     "- Check a short link: web_resolve.\n"
     "- Cookies a site kept behind session_id=: close_session (no arguments "
@@ -623,7 +623,7 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "web_search": "- Finding what to fetch: web_search - then web_read the top hits. "
     "NEVER answer from search snippets alone.\n",
     "feed_read": "- RSS/Atom changelogs or release notes: feed_read.\n",
-    "parse": "- Local file: parse.\n",
+    "doc_parse": "- Local file: doc_parse.\n",
     "screenshot": "- Screenshot: screenshot - words instead? web_read.\n",
     "web_resolve": "- Check a short link: web_resolve.\n",
     "close_session": "- Cookies a site kept behind session_id=: close_session "
@@ -4733,7 +4733,7 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     "screenshot": _SHOT_PARAMS | {"url", "session_id"},
     "web_search": _SS_PARAMS | {"query"},
     "cache_clear": frozenset({"all", "engine_state"}),
-    "parse": frozenset({"file_path", "cwd", "encoding"}),
+    "doc_parse": frozenset({"file_path", "cwd", "encoding"}),
     "feed_read": frozenset({"urls", "max_items", "timeout", "since",
                              "allow_private"}),
     "web_resolve": frozenset({"url", "timeout"}),
@@ -4983,7 +4983,7 @@ def _resolve_local_path(file_path: str, cwd: str | None = None) -> tuple[str, li
     """Find the file the caller meant. Returns (existing absolute path, candidates tried).
 
     Relative paths used to resolve against the SERVER PROCESS cwd, which under an
-    MCP host is the host's own install directory — measured: parse("report.csv")
+    MCP host is the host's own install directory — measured: doc_parse("report.csv")
     failed against "D:\\Program Files\\Qoder\\report.csv", a path the caller had
     never mentioned. Every documented root is now tried in order, and a miss
     names all of them so the next call can be an absolute path.
@@ -8384,7 +8384,7 @@ class MasterFetchServer:
 
     # ─── Parse (local file) ─────────────────────────────────────────
 
-    async def parse(
+    async def doc_parse(
         self,
         file_path: Annotated[str, Field(description="Absolute or relative path to a local file. Supported: .html, .htm, .xhtml, .docx, .xlsx, .csv, .pdf, .md, .markdown, .txt, .json, .yaml, .yml, .pptx, .odt")],
         cwd: Annotated[Optional[str], Field(description="Base directory for a relative file_path. Ignored for absolute paths.")] = None,
@@ -9011,7 +9011,7 @@ class MasterFetchServer:
             "annotations": {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": False},
         },
         {
-            "name": "parse",
+            "name": "doc_parse",
             "description": "Use for LOCAL files the task references: .html/.htm/.xhtml, .docx, .xlsx, .csv, .pdf, .md/.markdown/.txt, .json/.yaml/.yml, .pptx, .odt -> Markdown, no web fetch. A PDF that has a URL is better served by web_read (page ranges, password, table_of_contents).\n.html/.csv are decoded by charset detection, not assumed UTF-8: metadata.encoding names the charset used, and a wrong guess comes back as an error whose next_action says to re-call with encoding=.\n.pptx/.odt need no extra install; what a text reader cannot carry (speaker notes, layout, images) is named in the output's first line rather than vanishing from it. .json/.yaml are validated, not just echoed: an unparseable file is an error, not a dump.\nRelative paths: pass cwd when the host doesn't tell the server the working directory; otherwise the process cwd, then home.",
             "inputSchema": {
                 "type": "object", "required": ["file_path"],
@@ -9423,8 +9423,8 @@ class MasterFetchServer:
                                             engine_state=args.get("engine_state", False))
             return _wire_result(result)
 
-        elif name == "parse":
-            result = await self.parse(
+        elif name == "doc_parse":
+            result = await self.doc_parse(
                 file_path=args["file_path"],
                 cwd=args.get("cwd"),
                 encoding=args.get("encoding"),

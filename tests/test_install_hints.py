@@ -79,7 +79,7 @@ class TestUsePointHintsAreHelperProduced:
 
     def test_docx_missing_parse_response_carries_the_helper_string(
             self, monkeypatch, tmp_path):
-        """parse() with a .docx file on a machine without python-docx must
+        """doc_parse() with a .docx file on a machine without python-docx must
         produce an error whose copy comes from the helper. Not a bare
         literal - W7 changing the helper must not require editing parse.py."""
         import builtins
