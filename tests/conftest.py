@@ -193,11 +193,19 @@ def _no_real_home_state_writes(request, monkeypatch, tmp_path):
     monkeypatch.setattr(_paths, "file",
                         lambda name: tmp_path / name if name == "cdp_hosts.json"
                         else _orig_file(name))
+    # tasks.db (recorded recipes + watch baselines) is the ninth state file, and
+    # it leaks the same way sessions.db does: a test that only LISTS what is
+    # stored would read the developer's own recipes, and one that ERASES a class
+    # (sys_state clear=["watch"/"recipes"/"all"]) would delete them for real.
+    from dhole_mcp import tasks as _tasks
+    monkeypatch.setattr(_tasks, "_db_path", lambda: str(tmp_path / "tasks.db"))
+    _tasks.reset_connection()
     from dhole_mcp import server as _srv
     _srv._cdp_hosts_cache, _srv._cdp_hosts_stamp = frozenset(), None
     yield
     _srv._cdp_hosts_cache, _srv._cdp_hosts_stamp = frozenset(), None
     _sessions.reset_for_tests()
+    _tasks.reset_connection()
     _envreg.invalidate_file_cache()
 
 

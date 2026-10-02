@@ -43,7 +43,7 @@ A rejection names the key and lists the keys that tool accepts — follow the er
 {"url": "https://api.example.com/me", "auth": {"type": "header", "name": "X-API-Key", "value": "key-123"}}
 ```
 
-**Session cookies** (same `session_id` re-sends that host's cookies automatically, 24h lifetime; responses report cookie NAMES only, never values; roster/cleanup via `close_session`):
+**Session cookies** (same `session_id` re-sends that host's cookies automatically, 24h lifetime; responses report cookie NAMES only, never values; roster/cleanup via `sys_state`):
 ```json
 {"url": "https://example.com/login-check", "session_id": "sess1", "cookies": [{"name": "token", "value": "abc"}]}
 ```
@@ -180,10 +180,18 @@ Agents that can see images receive it inline; text-only agents read the absolute
 {"file_path": "C:/docs/japanese.txt", "encoding": "shift_jis"}
 // web_resolve: resolve short links before deciding to fetch
 {"url": "https://t.co/xxxx"}
-// cache_clear: wipes body cache — AND robots verdicts and every session cookie jar; engine_state also resets engine cooldowns
-{"engine_state": true}
-// close_session: no args = session roster; name one to forget it; all=true clears everything
-{"all": true}
+// sys_state: no arguments = the census (open sessions + cache state + stored-task counts)
+{}
+// show one class without touching anything
+{"show": ["cache", "engine_state"]}
+// wipe the whole content cache (robots verdicts go with it; login state does NOT)
+{"clear": ["cache"]}
+// forget one named session — an id that is open is a valid token
+{"clear": ["my-shop"]}
+// every session, every watch baseline: these pause until you say so
+{"clear": ["sessions"], "confirm": true}
+// engine cooldowns + yield history, for "the same engines keep getting skipped"
+{"clear": ["engine_state"]}
 ```
 
 ## The stateful four (always registered in 17.0)

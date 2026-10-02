@@ -855,10 +855,10 @@ class TestEngineState:
         assert "not a block" in by["bing"].error
 
     @pytest.mark.asyncio
-    async def test_cache_clear_can_reset_engine_state(self, _ms):
+    async def test_the_state_tool_can_reset_engine_state(self, _ms):
         _ms._record_block("brave")
         server = MasterFetchServer()
-        out = await server.cache_clear(engine_state=True)
+        out = await server.sys_state(clear=["engine_state"])
         assert out.engine_state_reset is True
         assert "cooldown" in out.message.lower()
         assert _ms.cooldowns() == {}

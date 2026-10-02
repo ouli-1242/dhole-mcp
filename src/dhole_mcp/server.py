@@ -156,7 +156,9 @@ if TYPE_CHECKING:
     from dhole_mcp.search import SearchResponseModel
     from mcp.types import ImageContent, TextContent
 
-from dhole_mcp.cache import get_cached, set_cached, clear_cache, clear_all_cache, DEFAULT_TTL
+from dhole_mcp.cache import (
+    DEFAULT_TTL, cache_stats, clear_all_cache, get_cached, set_cached,
+)
 from dhole_mcp.envelope import (
     classify_source, compute_freshness, detect_page_type, page_type_from_error,
     _stale_days_for,
@@ -169,7 +171,7 @@ from dhole_mcp.robots import (
     check as check_robots, env_disabled as robots_env_disabled, robots_url_for,
 )
 # Cookie jar shared by every tier (G7). `get_robots_cache`'s sibling: one place
-# holds cross-call state, so `cache_clear` can drop all of it at once.
+# holds cross-call state, so `sys_state` can drop all of it at once.
 from dhole_mcp.sessions import (
     clear as clear_cookie_jar, names_for as cookie_names_for,
     sessions as cookie_jar_census,
@@ -566,8 +568,8 @@ DHOLE_INSTRUCTIONS = (
     "- Local file: doc_parse.\n"
     "- Screenshot: web_screenshot - words instead? web_read.\n"
     "- Check a short link: web_resolve.\n"
-    "- Cookies a site kept behind session_id=: close_session (no arguments "
-    "= what is open; session_id= or all=true to forget them).\n"
+    "- Cookies a site kept behind session_id=, the fetch cache, the engine pool: "
+    "sys_state (no arguments = what is stored; clear= to erase a named class).\n"
     "- A page you already worked out how to reach: web_recipe (save the url+actions "
     "once, then run it).\n"
     "- Watching a page for changes: web_watch (add it, then check - it diffs against "
@@ -626,8 +628,9 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "doc_parse": "- Local file: doc_parse.\n",
     "web_screenshot": "- Screenshot: web_screenshot - words instead? web_read.\n",
     "web_resolve": "- Check a short link: web_resolve.\n",
-    "close_session": "- Cookies a site kept behind session_id=: close_session "
-    "(no arguments = what is open; session_id= or all=true to forget them).\n",
+    "sys_state": "- Cookies a site kept behind session_id=, the fetch cache, the "
+    "engine pool: sys_state (no arguments = what is stored; clear= to erase a "
+    "named class).\n",
     # 17.0：web_recipe/web_watch 全量默认注册（opt-in 组已删），这行 instructions 是
     # 它们唯一的"什么时候用我"，必须留在连接期说明里。
     "web_recipe": "- A page you already worked out how to reach: web_recipe (save the "
@@ -678,9 +681,9 @@ def _compose_instructions(enabled: frozenset) -> str:
     """Compose initialize-instructions for an enabled tool set.
 
     The routing section names only ENABLED tools - routing an agent to a tool
-    the server did not register just burns a failed call. cache_clear has no
-    routing line (it is housekeeping, not a destination), so a subset of only
-    housekeeping tools gets no "Routing:" header at all.
+    the server did not register just burns a failed call. Every tool with a
+    routing line here is a destination, so a subset of tools that have none
+    gets no "Routing:" header at all.
     """
     lines = "".join(
         line for name, line in _INSTRUCTIONS_ROUTING.items() if name in enabled
@@ -777,7 +780,7 @@ class SessionCreatedModel(SessionInfo):
 
 
 class SessionCensusRow(BaseModel):
-    """One live session in the `close_session` census.
+    """One live session in the `sys_state` census.
 
     Not a `SessionInfo` subclass: a session can exist purely as a cookie jar
     (a login done through the HTTP tier never opens a browser), so the browser
@@ -792,31 +795,33 @@ class SessionCensusRow(BaseModel):
     browser_created: str = Field(default="", description="ISO timestamp of when the browser session opened")
 
 
-class SessionClosedModel(BaseModel):
-    """Response from `close_session`: the census (no arguments) or what one/all closed.
+class SysStateModel(BaseModel):
+    """Response from `sys_state`: what local state exists, or what one call erased.
 
-    `session_id` gained a default because a bare call closes nothing and names no
-    session; the census answers "what is open?", which is the question you have to
-    ask before you can point at one.
+    The field names are the ones the two tools this one merged used to answer
+    with (`purged`, `engine_state_reset`, `cookies_forgotten`, `prewarm_closed`,
+    `open_count`...). That is deliberate: an agent that learned either tool from
+    an old transcript, or from the guide, reads the same receipt for the same
+    event instead of relearning a vocabulary that describes nothing new.
     """
     message: str = Field(default="", description="What this call did, in one line")
-    sessions: List[SessionCensusRow] = Field(default_factory=list, description="The census: every id holding a cookie jar or running a browser. Returned by a call with no session_id, and listed in `error` when a named id does not exist.")
+    cleared: List[str] = Field(default_factory=list, description="State classes this call actually erased, in the words you passed. Absent means nothing was erased - a paused or refused call says so here too.")
+    pending_approval: bool = Field(default=False, description="true = this call erased NOTHING and is waiting for you to repeat it with confirm=true. Absent (false) is not approval: nothing happened yet. Reserved for erasures you would not notice as they happened - losing a site's cookies shows up only at your next visit to that site.")
+    sessions: List[SessionCensusRow] = Field(default_factory=list, description="The census: every id holding a cookie jar or running a browser. Returned by a call with no `clear`, and listed in `error` when a named id does not exist.")
     open_count: int = Field(default=0, description="How many sessions are open right now (0 = nothing to forget)")
-    session_id: str = Field(default="", description="The session this call closed, empty for a census")
+    session_id: str = Field(default="", description="The single session this call forgot, empty otherwise.")
     cookies_forgotten: int = Field(default=0, description="Cookies dropped by this call")
     browser_closed: bool = Field(default=False, description="True when this call shut a browser session down")
-    closed: int = Field(default=0, description="Sessions closed by an all=true call")
-    prewarm_closed: bool = Field(default=False, description="all=true also gave up the shared pre-warmed browser, so the next stealthy fetch pays a 3-5s cold start again. Named because it is a cost the caller did not ask for but should know about.")
-    error: str = Field(default="", description="Set when the id you named holds nothing at all; it lists the ids that DO exist rather than saying 'not found' and leaving you to guess.")
+    closed: int = Field(default=0, description="Sessions closed by this call")
+    prewarm_closed: bool = Field(default=False, description="Erasing every session also gave up the shared pre-warmed browser, so the next stealthy fetch pays a 3-5s cold start again. Named because it is a cost the caller did not ask for but should know about.")
+    purged: int = Field(default=0, description="Cache rows erased by this call")
+    cache: Dict[str, Any] = Field(default_factory=dict, description="Content-cache state: entries, expired (what a clear would drop that was going to lapse anyway), oldest_age_s, cap. Filled by a call with no arguments, so you can see the state before deciding to erase it.")
+    engine_state_reset: bool = Field(default=False, description="True when this call also forgot engine cooldowns + yield history (circuit_breaker.json, engine_stats.json).")
+    engine_health: Dict[str, Any] = Field(default_factory=dict, description="Per-engine pool health as dhole currently sees it: last status, yield verdict, and cooldown_seconds_left while an engine is on cooldown. Carried ONLY when the call names engine_state; a call about the content cache says nothing about the search pool.")
+    watch_count: int = Field(default=0, description="Watches stored in ~/.dhole/tasks.db. Their rows, with baseline age, are web_watch(op='list').")
+    recipe_count: int = Field(default=0, description="Recipes stored in ~/.dhole/tasks.db. Their rows are web_recipe(op='list').")
+    error: str = Field(default="", description="Set when a token meant nothing (an unknown class, or a session id nobody has open), or when a store refused the erasure; it names what DOES exist or what failed, rather than saying 'not found' and leaving you to guess.")
     next_action: str = Field(default="", description="What to do next, empty when there is nothing to do")
-
-
-class CacheInfoModel(BaseModel):
-    """Response from cache management operations."""
-    message: str = Field(description="Result message")
-    purged: int = Field(default=0, description="Entries purged")
-    engine_state_reset: bool = Field(default=False, description="True when engine_state=true also forgot engine cooldowns + yield history (circuit_breaker.json, engine_stats.json).")
-    engine_health: Dict[str, Any] = Field(default_factory=dict, description="Per-engine pool health as dhole currently sees it: last status, yield verdict, and cooldown_seconds_left while an engine is on cooldown. Populated ONLY when engine_state=true; empty on a plain cache_clear.")
 
 
 class RecipeModel(BaseModel):
@@ -977,9 +982,7 @@ _WIRE_OMIT: dict = {
         "note",
     }),
     "FeedItem": frozenset({"title", "published", "summary", "summary_truncated"}),
-    "CacheInfoModel": frozenset({"purged", "engine_state_reset",
-                                 "engine_health"}),
-    # close_session: every field of the census row is per-session detail that
+    # sys_state: every field of the census row is per-session detail that
     # sits at its default most of the time (no browser, no cookies, nothing
     # expiring). `session_id` is NOT omittable - a row without its id says
     # nothing about anything.
@@ -987,9 +990,14 @@ _WIRE_OMIT: dict = {
         "hosts", "cookies", "expires_in_s", "browser_open",
         "browser_type", "browser_created",
     }),
-    "SessionClosedModel": frozenset({
-        "sessions", "open_count", "session_id", "cookies_forgotten",
-        "browser_closed", "closed", "prewarm_closed", "error", "next_action",
+    # sys_state（cache_clear + close_session 合成的一颗）：只 `message` 一定上线，
+    # 其余全是"这次没发生"的收据。`pending_approval` 与 cred_login 的同名字段同理
+    # —— 缺省即"没有等待批准的动作"，上线即"什么都没抹，去 confirm"。
+    "SysStateModel": frozenset({
+        "cleared", "pending_approval", "sessions", "open_count", "session_id",
+        "cookies_forgotten", "browser_closed", "closed", "prewarm_closed",
+        "purged", "cache", "engine_state_reset", "engine_health",
+        "watch_count", "recipe_count", "error", "next_action",
     }),
     # web_recipe / web_watch（L3/L4）：清单与回执都在"默认值"上时省略，但 `changed`
     # 刻意不在这个集合里 —— 首跑时它是 null，而 null≠false 正是这条 watch
@@ -2473,6 +2481,7 @@ def _coerce_bool_arg(value: Any, name: str, *, default: bool = False) -> bool:
 
 def _coerce_str_list_arg(
     value: Any, name: str, *, single_hint: str = "",
+    element_hint: str = "a URL string",
 ) -> Optional[List[str]]:
     """Normalize a list-of-strings argument; a bare string is an error.
 
@@ -2502,7 +2511,8 @@ def _coerce_str_list_arg(
             except (ValueError, TypeError):
                 parsed = None
         if isinstance(parsed, list):
-            return _coerce_str_list_arg(parsed, name, single_hint=single_hint)
+            return _coerce_str_list_arg(parsed, name, single_hint=single_hint,
+                                        element_hint=element_hint)
         raise ValueError(
             f"{name} must be an array of strings, got a single string. "
             + (single_hint or f'Pass {name}=["...", "..."] instead.')
@@ -2513,7 +2523,7 @@ def _coerce_str_list_arg(
             if not isinstance(item, str):
                 raise ValueError(
                     f"{name}[{i}] must be a string, got {type(item).__name__} "
-                    f"({item!r}). Every element of {name} has to be a URL string."
+                    f"({item!r}). Every element of {name} has to be {element_hint}."
                 )
             out.append(item)
         return out
@@ -2631,8 +2641,9 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
     },
     "feed_read": {"max_items": "int", "timeout": "int"},
     "web_resolve": {"timeout": "number"},
-    # cache_clear already normalizes its two booleans in _validate_tool_args;
-    # parse takes three strings and has nothing to convert.
+    # sys_state normalizes its three arguments in _validate_tool_args, because its
+    # list elements are state tokens rather than URLs and it needs the wording to
+    # say so. doc_parse takes three strings and has nothing to convert.
     # L3/L4: `actions` goes through the same rawlist path as web_read's (the
     # chain validator owns its shape); the numbers are the same coercions.
     "web_recipe": {"actions": "rawlist", "timeout": "number",
@@ -2744,10 +2755,10 @@ def _validate_tool_args(name: str, args: dict) -> dict:
     methods only ever reach clients as wire schema — nothing validates at
     runtime, and every argument is read with ``args.get()``. Three defects lived
     in that gap, all silent and all delivered as an ordinary 200:
-    ``web_read(urls="https://x")`` iterated the string into nineteen
-    one-character results; ``cache_clear(all="false")`` cleared the entire cache
-    because a non-empty string is truthy; ``web_read(force_fetcher="magic")``
-    fell through to the stealthy browser tier.
+    ``urls="https://x"`` iterated the string into nineteen one-character
+    results; the cache wipe's ``all="false"`` cleared the entire cache because a
+    non-empty string is truthy; ``force_fetcher="magic"`` fell through to the
+    stealthy browser tier.
 
     Returning a normalized copy here means every branch below reads a value that
     already has exactly one reading. Raises ValueError; the web_read branch
@@ -2759,22 +2770,18 @@ def _validate_tool_args(name: str, args: dict) -> dict:
         out["urls"] = _coerce_str_list_arg(
             args.get("urls"), "urls", single_hint=_URLS_SINGLE_HINT)
         out["force_fetcher"] = _coerce_force_fetcher_arg(args.get("force_fetcher"))
-    elif name == "cache_clear":
-        out["all"] = _coerce_bool_arg(args.get("all"), "all", default=False)
-        out["engine_state"] = _coerce_bool_arg(
-            args.get("engine_state"), "engine_state", default=False,
-        )
-    elif name == "close_session":
-        # The same trap, one tool over: read raw, `all="false"` is a non-empty
-        # string, and a call that meant "just look" forgets every session and
-        # shuts every browser. session_id is checked too because the method
-        # strips it, and an int has no strip.
-        out["all"] = _coerce_bool_arg(args.get("all"), "all", default=False)
-        sid = args.get("session_id")
-        if sid is not None and not isinstance(sid, str):
-            raise ValueError(
-                f"session_id must be a string, got {type(sid).__name__}. "
-                "It is the name you passed as session_id=.")
+    elif name == "sys_state":
+        # The same trap the cache wipe fell into: read raw, `confirm="false"` is a
+        # non-empty string, and a call that meant "just look" erases every session.
+        # The elements are state classes and session ids, so the shared wording
+        # ("a URL string") would send a caller looking for a URL to put in clear=.
+        token_hint = ("a state class (cache|engine_state|sessions|watch|recipes|all) "
+                      "or an open session id")
+        for key in ("show", "clear"):
+            out[key] = _coerce_str_list_arg(args.get(key), key,
+                                            element_hint=token_hint)
+        out["confirm"] = _coerce_bool_arg(args.get("confirm"), "confirm",
+                                          default=False)
     elif name == "feed_read":
         out["urls"] = _coerce_str_list_arg(args.get("urls"), "urls")
     return out
@@ -3160,8 +3167,8 @@ _BROWSER_ERROR_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
      "the page never finished rendering - raise timeout= (ms), or wait for "
      "a specific element with wait_selector="),
     (("has been closed", "target closed"),
-     "the browser session is gone - call again to get a fresh one, or close_session "
-     "and retry"),
+     "the browser session is gone - call again to get a fresh one, or forget it "
+     "with sys_state(clear=['<session id>']) and retry"),
     (("executable doesn't exist", "playwright install", "browser_binary_missing"),
      "the browser binary is missing - dhole installs it on first use, so this means "
      f"that install failed or is still running: `{_install.browser_binary_command()}` "
@@ -4735,15 +4742,15 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
                                "max_pages", "search", "timeout"}),
     "web_screenshot": _SHOT_PARAMS | {"url", "session_id"},
     "web_search": _SS_PARAMS | {"query"},
-    "cache_clear": frozenset({"all", "engine_state"}),
     "doc_parse": frozenset({"file_path", "cwd", "encoding"}),
     "feed_read": frozenset({"urls", "max_items", "timeout", "since",
                              "allow_private"}),
     "web_resolve": frozenset({"url", "timeout"}),
-    # Both optional: the bare call is the census. This dict is also the set of
-    # known tool names (`_dispatch` refuses anything outside it), which is how a
-    # method can exist, be documented, and still be unreachable on the wire.
-    "close_session": frozenset({"session_id", "all"}),
+    # 17.0 §4：sys_state 是 cache_clear 与 close_session 合上来的一颗。三个参数全都
+    # 可选 —— 裸调用是名册，而名册是"要关哪个"之前唯一能问的问题。这张表同时是已知
+    # 工具名的全集（`_dispatch` 拒掉表外的名字），所以一个方法可以存在、有文档、
+    # 却在 wire 上够不着。
+    "sys_state": frozenset({"show", "clear", "confirm"}),
     # L3 / L4（计划第九章）：录制回放与监控 diff。17.0 起默认在连接期表里。
     "web_recipe": frozenset({"op", "name", "url", "actions", "note",
                          "timeout", "max_content_chars", "focus",
@@ -5073,9 +5080,9 @@ class MasterFetchServer:
                 raise ValueError(
                     # It used to point at `list_sessions`, a tool that has never
                     # existed on this server - the agent following that advice got
-                    # "Unknown tool" and no way to find the id. close_session with
-                    # no arguments IS that listing.
-                    f"Session '{session_id}' not found. Call close_session with no "
+                    # "Unknown tool" and no way to find the id. sys_state with no
+                    # arguments IS that listing.
+                    f"Session '{session_id}' not found. Call sys_state with no "
                     "arguments to see which sessions are open."
                 )
             if not entry.session._is_alive:
@@ -5143,7 +5150,7 @@ class MasterFetchServer:
                 existing_id = getattr(self, attr)
                 if existing_id and existing_id in self._sessions and self._sessions[existing_id].session._is_alive:
                     try:
-                        await self.close_session(sid.session_id)
+                        await self._close_one_session(sid.session_id)
                     except Exception:
                         pass  # Best effort cleanup
                     setattr(self, ts_attr, now())
@@ -5242,7 +5249,7 @@ class MasterFetchServer:
                 # Close sessions outside the lock to avoid blocking
                 if close_stealthy:
                     try:
-                        await self.close_session(close_stealthy)
+                        await self._close_one_session(close_stealthy)
                     except Exception as e:
                         logger.warning(f"Idle monitor failed to close stealthy session {close_stealthy}: {e}")
                         # Pop from sessions dict even if close() failed — don't orphan
@@ -5599,7 +5606,7 @@ class MasterFetchServer:
 
         存在且活着就复用——登录后的 context 跨调用存活，登录流兜底路径才有
         "会话"可言；否则以调用方的 session_id 建专用会话。专用会话不进 auto
-        池、不吃 idle 回收，靠 close_session 显式关闭（census 会如实报它）。
+        池、不吃 idle 回收，靠 sys_state 显式关闭（census 会如实报它）。
         """
         async with self._sessions_lock:
             entry = self._sessions.get(sid)
@@ -5701,81 +5708,6 @@ class MasterFetchServer:
                 logger.debug("session '%s' close raised: %s", sid, str(e)[:120])
             return dropped, True, was_auto
         return dropped, False, was_auto
-
-    async def close_session(
-        self,
-        session_id: Annotated[Optional[str], Field(description="The `session_id` to forget: its cookie jar and any browser still running under it. Omit it (and `all`) to get the census of what is open instead - you cannot point at a session you cannot see, and until now nothing on the wire could.")] = None,
-        all: Annotated[bool, Field(description="true = forget EVERY session: all jars plus all browser sessions, including the pre-warmed one the next stealthy fetch would otherwise have reused (it pays a 3-5s cold start, and the reply says so). Refused together with session_id: two answers to one question.")] = False,
-    ) -> SessionClosedModel:
-        """Look at what a session holds, or forget one (or all of them).
-
-        A session id is a caller-chosen name for site credentials: cookies the
-        host set are kept 24 hours in `~/.dhole/sessions.db` and re-sent to that
-        host, and a browser session may be running with its own copy. `cache_clear`
-        wipes those along with the whole content cache; this is the targeted
-        version, and the census is how you find out what you have.
-        """
-        sid = (session_id or "").strip()
-        if sid and all:
-            return SessionClosedModel(
-                error=f"session_id='{sid}' and all=true both answer the same question.",
-                next_action="Pass one. all=true forgets every session; session_id=<name> "
-                            "forgets the one you name. Nothing was closed.",
-            )
-
-        rows = await self._session_rows()
-        known = {r.session_id for r in rows}
-
-        if not sid and not all:
-            n = len(rows)
-            held = sum(r.cookies for r in rows)
-            return SessionClosedModel(
-                message=(f"{n} session(s) open, holding {held} cookie(s)."
-                         if n else "Nothing is open: no cookie jar, no browser session."),
-                sessions=rows, open_count=n,
-                next_action=("close_session(session_id='<name>') forgets one, all=true forgets "
-                             "every one. A session with cookies is a live credential for that "
-                             "host until it expires on its own."
-                             if n else ""),
-            )
-
-        if sid and sid not in known:
-            return SessionClosedModel(
-                error=f"Nothing is open under '{sid}'.",
-                next_action=("Nothing was closed - that id holds no cookies and runs no browser "
-                             "(it expired, or was never used). "
-                             + (f"Open: {', '.join(sorted(known))}."
-                                if known else "No sessions are open right now.")),
-                sessions=rows, open_count=len(rows),
-            )
-
-        targets = [sid] if sid else sorted(known)
-        forgotten = browser_closed = prewarm = 0
-        for t in targets:
-            d, b, a = await self._close_one_session(t)
-            forgotten += d
-            browser_closed += int(b)
-            prewarm += int(a)
-        if sid:
-            parts = [f"{forgotten} cookie(s) forgotten"]
-            if browser_closed:
-                parts.append("browser closed")
-            if prewarm:
-                parts.append("the pre-warmed browser was one of them (next stealthy "
-                             "fetch pays a 3-5s cold start)")
-            message = f"Session '{sid}' closed ({'; '.join(parts)})."
-        else:
-            message = (f"{len(targets)} session(s) closed, {forgotten} cookie(s) forgotten"
-                       + (", browser(s) shut down" if browser_closed else "")
-                       + (" - including the pre-warmed browser (next stealthy fetch pays a "
-                          "3-5s cold start)" if prewarm else "")
-                       + ".")
-        rows_after = await self._session_rows()
-        return SessionClosedModel(
-            message=message, session_id=sid, cookies_forgotten=forgotten,
-            browser_closed=bool(browser_closed), closed=len(targets),
-            prewarm_closed=bool(prewarm), open_count=len(rows_after), sessions=rows_after,
-        )
 
     # ─── L3 / L4：录制回放与监控（计划第九章）───────────────────────────
     #
@@ -8298,92 +8230,255 @@ class MasterFetchServer:
 
         return await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
 
-    # ─── Cache Management ──────────────────────────────────────────
+    # ─── Local state (sys_state) ────────────────────────────────────
 
-    async def cache_clear(
+    # 17.0 §4：「本地还存着什么」与「抹掉哪一类」合成一颗工具。合并前是两个入口，
+    # 各自只看得到自己那一半，而 cache_clear(all=true) 会顺手抹掉 cookie jar ——
+    # 那句警告写在另一颗工具的描述里，拿着"清缓存"意图的人正好读不到它。词表把类别
+    # 摊开之后，§3-32 的闸才有地方落：只有"抹完不会立刻察觉"的那一类要 confirm。
+    _STATE_TOKENS = ("cache", "engine_state", "sessions", "watch", "recipes", "all")
+    _ERASE_EVERYTHING = "all"
+    # 抹掉后不会立刻察觉的那一类：登录态要到下次访问那个站才暴露，watch 基线抹掉后
+    # 下一次 check 会说"没有变化"，配方抹掉后要到那页需要点链路时才想起来。清缓存与
+    # 清引擎冷却不在这一类——后果就是下一次调用变慢或换一批引擎，当场看得见，不拦。
+    _SILENT_ERASURE = ("sessions", "watch", "recipes", "all")
+    _ERASURE_COST = {
+        "sessions": "every session's cookies are a live credential for that host, and "
+                    "the next visit to it goes anonymous",
+        "watch": "every watch baseline, so the next check re-baselines and reports no "
+                 "change instead of the diff you were watching for",
+        "recipes": "every recorded recipe, so a page that takes a click chain to reach "
+                   "has to be worked out again",
+        "all": "the content cache, the engine pool, every session, watch baseline and "
+               "recipe",
+    }
+
+    async def sys_state(
         self,
-        all: Annotated[bool, Field(description="True=wipe all, False=expired only")] = False,
-        engine_state: Annotated[
+        show: Annotated[
+            Optional[List[str]],
+            Field(description="What to report without changing it: cache|engine_state|sessions|watch|recipes|all. A call with neither show= nor clear= reports the session census, the cache state and the stored-task counts."),
+        ] = None,
+        clear: Annotated[
+            Optional[List[str]],
+            Field(description="What to erase: the same tokens, plus a bare session id to forget just that one. An unknown token is an error listing both sets, never a no-op. cache erases the whole content cache."),
+        ] = None,
+        confirm: Annotated[
             bool,
-            Field(description="True also forgets engine cooldowns + per-engine yield "
-                              "history, so cooled-down engines are asked again right away."),
+            Field(description="true to go through with an erasure you would not notice as it happened: sessions|watch|recipes|all. Without it the call pauses and erases nothing. cache and engine_state need no confirm - their cost shows up on the next call."),
         ] = False,
-    ) -> CacheInfoModel:
-        """Clear the content cache; optionally reset search-engine health state.
+    ) -> SysStateModel:
+        """See what dhole keeps on this machine, or erase a named class of it.
 
-        :param all: If True, clear ALL cache entries. If False (default), only expired ones.
-        :param engine_state: If True, also clear circuit_breaker.json +
-            engine_stats.json (which engines are on cooldown and what each engine
-            last yielded). Those two files shape which engines get asked, and
-            until now the only way to un-stick a pool after the network changed
-            (VPN switched on) was to find and delete them by hand.
+        Four stores, one question each. `~/.dhole/cache.db` holds fetched pages and
+        search results; `~/.dhole/sessions.db` holds the cookies a site set after a
+        login, keyed by the `session_id=` you passed; the engine pool remembers
+        which engines are on cooldown and what each one last yielded
+        (`circuit_breaker.json` and `engine_stats.json`); and `~/.dhole/tasks.db`
+        holds recorded recipes and the baselines a watch diffs against.
+
+        A session is a credential, so the census reports hosts and cookie NAMES only.
+        A value here would land in the transcript, and the point of showing the
+        census is that you can decide to erase it without reading it.
         """
-        if all:
-            count = await clear_all_cache()
-            message = f"Cleared all {count} cache entries."
-        else:
-            count = await clear_cache()
-            message = f"Cleared {count} expired cache entries."
+        show_tokens = [t.strip() for t in (show or []) if t.strip()]
+        clear_tokens = [t.strip() for t in (clear or []) if t.strip()]
+        rows = await self._session_rows()
+        known = {r.session_id for r in rows}
 
-        # robots.txt verdicts are cached state too (one entry per origin, 1h TTL).
-        # "Clear the cache" leaving a compliance verdict behind would be a
-        # surprising exception to the knob's whole job: a site that just relaxed
-        # its rules would keep being refused until the TTL lapsed on its own.
-        # Dropping it is cheap - the next fetch re-reads robots.txt once.
-        try:
-            from dhole_mcp.robots import reset_robots_cache
-            reset_robots_cache()
-            message += " robots.txt verdicts forgotten (re-read on the next fetch)."
-        except Exception as e:
-            logger.debug("robots cache reset failed: %s", e)
+        # An unknown token is the one answer that must not be a shrug: silently
+        # dropping it would make `clear=["cahce"]` look like a call that worked and
+        # did nothing, which is the failure mode the whole tool exists to avoid.
+        bad = [t for t in show_tokens if t not in self._STATE_TOKENS]
+        named: List[str] = []
+        for t in clear_tokens:
+            if t in self._STATE_TOKENS:
+                continue
+            if t in known:
+                named.append(t)
+            else:
+                bad.append(t)
+        if bad:
+            # One message for both readings, because the server cannot tell them
+            # apart: an unknown token is equally a mistyped class and a session
+            # whose cookies already lapsed. What it CAN say is what does exist -
+            # the classes and the open ids - which is the answer either way.
+            return SysStateModel(
+                error=(f"Nothing matches '{', '.join(sorted(set(bad)))}': a token is one "
+                       f"of {', '.join(self._STATE_TOKENS)}"
+                       + (f", or the name of an open session ({', '.join(sorted(known))})."
+                          if known else ", or the name of a session that is open - "
+                                       "and none is.")),
+                next_action=("Nothing was erased. clear= takes a state class or one "
+                             "open session id; show= takes only the classes."),
+                sessions=rows, open_count=len(rows),
+            )
 
-        # Cookie jars are cached state under the same roof (sessions.db). A
-        # "clear everything" knob that leaves a login cookie behind is the same
-        # surprise the robots verdicts used to be: the next call still presents
-        # credentials the user just asked to forget.
-        try:
-            dropped = clear_cookie_jar()
-            if dropped:
-                message += f" {dropped} session cookie(s) forgotten."
-        except Exception as e:
-            logger.debug("cookie jar clear failed: %s", e)
+        gated = [t for t in clear_tokens if t in self._SILENT_ERASURE]
+        if gated and not confirm:
+            return SysStateModel(
+                pending_approval=True,
+                message=(f"{', '.join(gated)} not erased: this call did not carry "
+                         "confirm=true."),
+                next_action=(f"Repeat with confirm=true to erase {', '.join(gated)}. What "
+                             f"you lose: {'; '.join(self._ERASURE_COST[t] for t in gated)}. "
+                             "Nothing was erased by this call."),
+                sessions=rows, open_count=len(rows),
+            )
 
-        note = ""
+        want = set(clear_tokens)
+        if self._ERASE_EVERYTHING in want:
+            want |= {"cache", "engine_state", "sessions", "watch", "recipes"}
+
+        cleared: List[str] = []
+        failed: List[str] = []
+        parts: List[str] = []
+        purged = cookies = closed_n = 0
+        browser_closed = prewarm_closed = engine_reset = False
         health: Dict[str, Any] = {}
+        cache_view: Dict[str, Any] = {}
+        watch_count = recipe_count = 0
 
-        if engine_state:
-            # Snapshot BEFORE any reset. ``engine_state_reset()`` empties the very
-            # dicts this reads, so taking it afterwards could only ever return {}
-            # while the field's whole purpose is to say what the pool was doing
-            # (and what the reset just released). Read through sys.modules rather
-            # than importing: a call that came only to clear cached pages must not
-            # pull the scraping stack.
-            #
-            # Both the snapshot and the reset are gated on engine_state. The reply
-            # used to carry the full per-engine pool health (~1KB: n/mean/status/
-            # verdict per engine) on EVERY cache_clear, including the default
-            # "drop expired entries" call — noise for a caller that asked about
-            # the content cache and said nothing about the search pool.
-            ms = sys.modules.get("dhole_mcp.search_metasearch")
-            if ms is not None:
-                try:
-                    health = ms.engine_state_snapshot()
-                except Exception:
-                    health = {}
+        if "cache" in want:
+            purged = await clear_all_cache()
+            cleared.append("cache")
+            parts.append(f"{purged} cache entry(ies) erased")
+            # robots.txt verdicts are cached state too (one per origin, 1h TTL). A
+            # "clear the cache" that leaves a compliance verdict behind keeps refusing
+            # a site that just relaxed its rules until the TTL lapsed on its own.
             try:
-                # Lazy: this pulls the scraping stack (primp/lxml), and only the
-                # admin path that actually asks for it should pay.
-                from dhole_mcp.search_metasearch import engine_state_reset
+                from dhole_mcp.robots import reset_robots_cache
+                reset_robots_cache()
+                parts.append("robots.txt verdicts forgotten (re-read on the next fetch)")
+            except Exception as e:
+                logger.debug("robots cache reset failed: %s", e)
+
+        if "engine_state" in want:
+            # Snapshot BEFORE the reset: the reset empties the very dicts this reads,
+            # so taken afterwards it could only ever return {} while the field's whole
+            # purpose is to say what the pool was doing and what the reset released.
+            try:
+                from dhole_mcp.search_metasearch import (
+                    engine_state_reset, engine_state_snapshot,
+                )
+                health = engine_state_snapshot()
                 info = engine_state_reset()
                 cool = info.get("released_cooldowns") or {}
-                note = (f" Engine state forgotten: {info.get('engines_forgotten', 0)} "
-                        f"engine record(s), {len(cool)} cooldown(s) released "
-                        f"({', '.join(sorted(cool)) if cool else 'none active'}).")
+                engine_reset = True
+                cleared.append("engine_state")
+                parts.append(
+                    f"engine state forgotten: {info.get('engines_forgotten', 0)} "
+                    f"record(s), {len(cool)} cooldown(s) released "
+                    f"({', '.join(sorted(cool)) if cool else 'none active'})")
             except Exception as e:
-                note = f" Engine state could not be reset: {str(e)[:120]}"
+                failed.append(f"engine_state: {str(e)[:120]}")
 
-        return CacheInfoModel(message=message + note, purged=count,
-                              engine_state_reset=engine_state, engine_health=health)
+        if "sessions" in want or named:
+            for t in (sorted(known) if "sessions" in want else named):
+                d, b, a = await self._close_one_session(t)
+                cookies += d
+                closed_n += 1
+                browser_closed = browser_closed or b
+                prewarm_closed = prewarm_closed or a
+            cleared.append("sessions")
+            parts.append(
+                f"{closed_n} session(s) closed, {cookies} cookie(s) forgotten"
+                + (" - the shared pre-warmed browser was one of them, so the next "
+                   "stealthy fetch pays a 3-5s cold start" if prewarm_closed else ""))
+
+        if "watch" in want or "recipes" in want:
+            from dhole_mcp import tasks
+            # 逐条 delete 而不是 DROP：清的是这一类，另一类的行与库本身都不该被带走。
+            for token, listing, delete, noun in (
+                ("watch", tasks.list_watches, tasks.delete_watch, "watch"),
+                ("recipes", tasks.list_recipes, tasks.delete_recipe, "recipe"),
+            ):
+                if token not in want:
+                    continue
+                try:
+                    gone = sum(1 for r in listing() if delete(r["name"]))
+                except Exception as e:
+                    failed.append(f"{token}: {str(e)[:120]}")
+                    continue
+                cleared.append(token)
+                parts.append(f"{gone} {noun}(es) forgotten")
+
+        if cleared:
+            rows = await self._session_rows()
+
+        report = set(show_tokens)
+        if not show_tokens and not clear_tokens:
+            report = {"sessions", "cache", "watch", "recipes"}
+        # A call that erased something reports what is left of exactly the classes it
+        # touched: the receipt is the proof, and a census of the two it said nothing
+        # about is noise the caller did not ask for.
+        if cleared:
+            report |= set(cleared)
+
+        if "cache" in report:
+            try:
+                cache_view = await cache_stats()
+            except Exception as e:
+                logger.debug("cache stats failed: %s", e)
+
+        if "engine_state" in report and not health:
+            try:
+                from dhole_mcp.search_metasearch import engine_state_snapshot
+                health = engine_state_snapshot()
+            except Exception as e:
+                logger.debug("engine snapshot failed: %s", e)
+
+        if "watch" in report or "recipes" in report:
+            from dhole_mcp import tasks
+            try:
+                if "watch" in report:
+                    watch_count = len(tasks.list_watches())
+                if "recipes" in report:
+                    recipe_count = len(tasks.list_recipes())
+            except Exception as e:
+                logger.debug("task census failed: %s", e)
+
+        n = len(rows)
+        if cleared:
+            message = f"Erased {', '.join(cleared)}: {'; '.join(parts)}."
+        elif failed:
+            # The classes asked for were not erased, so the census is still the
+            # whole answer - and `error` below says which store refused.
+            message = "Nothing was erased."
+        elif show_tokens:
+            message = (f"Reported {', '.join(sorted(report))}. Nothing erased.")
+        elif n:
+            message = (f"{n} session(s) open, holding {sum(r.cookies for r in rows)} "
+                       f"cookie(s); the cache and stored-task counts ride along. "
+                       "Nothing erased.")
+        else:
+            message = ("Nothing is open: no cookie jar, no browser session. "
+                       "Nothing erased.")
+
+        next_action = ""
+        if not clear_tokens:
+            if rows:
+                next_action = ("sys_state(clear=['<session id>']) forgets one; "
+                               "clear=['sessions'] with confirm=true forgets every one. "
+                               "A session with cookies is a live credential for that "
+                               "host until it expires on its own.")
+            elif "cache" in report and cache_view.get("entries"):
+                next_action = ("No session is open. The content cache holds "
+                               f"{cache_view['entries']} entry(ies) - "
+                               "sys_state(clear=['cache']) erases them.")
+
+        return SysStateModel(
+            message=message, cleared=cleared,
+            sessions=rows, open_count=n,
+            session_id=(named[0] if len(named) == 1 and "sessions" not in want else ""),
+            cookies_forgotten=cookies, browser_closed=browser_closed, closed=closed_n,
+            prewarm_closed=prewarm_closed,
+            purged=purged, cache=cache_view,
+            engine_state_reset=engine_reset, engine_health=health,
+            watch_count=watch_count, recipe_count=recipe_count,
+            error="; ".join(failed),
+            next_action=next_action,
+        )
 
     # ─── Parse (local file) ─────────────────────────────────────────
 
@@ -9040,13 +9135,14 @@ class MasterFetchServer:
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
         },
         {
-            "name": "cache_clear",
-            "description": "Clear the fetch cache: all=true wipes everything, the default removes only expired entries. To re-fetch one URL fresh, pass cache_ttl=0 to web_read/web_crawl instead.\nAlso forgotten: robots.txt verdicts, and every session's cookie jar - close_session drops one session and keeps the cache.\nengine_state=true additionally forgets engine cooldowns + yield history - use it when the same engines keep getting skipped after the network changed (VPN on) - and adds engine_health to the reply.",
+            "name": "sys_state",
+            "description": "What dhole keeps on this machine, and how to erase a named class of it: the fetch cache, the cookies a site left behind a login (keyed by session_id=), the engine pool's cooldowns, and stored recipes/watch baselines.\n- No arguments = the census, erasing nothing: every open session with its hosts and cookie NAMES (a value is a credential, and everything a tool returns lands in the transcript), plus the cache state and the stored-task counts.\n- clear=[\"cache\"] wipes the whole content cache. To re-fetch ONE url fresh, pass cache_ttl=0 to web_read/web_crawl instead.\n- clear=[\"<session id>\"] forgets that session and any browser under it; clear=[\"sessions\"] needs confirm=true, because losing a site's cookies shows up only at your next visit there. Same for watch baselines and recipes: they erase nothing you can see coming.\n- clear=[\"engine_state\"] forgets engine cooldowns + yield history - use it when the same engines keep getting skipped after the network changed (VPN on).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "all": {"type": "boolean", "description": "Wipe all (default: expired only)"},
-                    "engine_state": {"type": "boolean", "description": "Also reset engine cooldowns (default false)"},
+                    "show": {"type": "array", "items": {"type": "string"}, "description": "State classes to report without touching them: cache|engine_state|sessions|watch|recipes|all."},
+                    "clear": {"type": "array", "items": {"type": "string"}, "description": "State classes to erase, or one open session id to forget just that session."},
+                    "confirm": {"type": "boolean", "description": "true to go through with an erasure you would not notice as it happened (sessions|watch|recipes|all)."},
                 },
             },
             "annotations": {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": False},
@@ -9090,19 +9186,6 @@ class MasterFetchServer:
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
-        },
-        {
-            "name": "close_session",
-            "description": "See which sessions still hold site credentials, or forget one.\n- No arguments = the census, closing nothing: every id with its hosts, cookie names (values are never returned), soonest expiry, and whether a browser is open under it.\n- session_id='<name>' drops that one; all=true drops every one; both also close any browser under the id. Naming both is refused.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "session_id": {"type": "string", "description": "The session_id to forget."},
-                    "all": {"type": "boolean", "description": "true = every session, not just the one named."},
-                },
-            },
-            "annotations": {"readOnlyHint": False, "destructiveHint": True,
-                            "idempotentHint": False, "openWorldHint": False},
         },
         {
             "name": "web_recipe",
@@ -9461,12 +9544,14 @@ class MasterFetchServer:
                                                      skip=("query",)))
             return _wire_result(result)
 
-        elif name == "cache_clear":
-            # Both flags arrive already normalized to real booleans by
-            # _validate_tool_args. Reading them raw is what made
-            # all="false" truthy and wipe the whole cache.
-            result = await self.cache_clear(all=args.get("all", False),
-                                            engine_state=args.get("engine_state", False))
+        elif name == "sys_state":
+            # All three arrive normalized by _validate_tool_args: reading
+            # confirm raw is what would make the string "false" erase
+            # everything the caller meant to leave alone.
+            result = await self.sys_state(
+                show=args.get("show"), clear=args.get("clear"),
+                confirm=args.get("confirm", False),
+            )
             return _wire_result(result)
 
         elif name == "doc_parse":
@@ -9527,16 +9612,6 @@ class MasterFetchServer:
             result = await self.web_resolve(
                 url=args["url"],
                 timeout=args.get("timeout", 15),
-            )
-            return _wire_result(result)
-
-        elif name == "close_session":
-            # Both arguments are optional on purpose: the bare call is the census,
-            # and a census is what makes "close the session" an action you can
-            # actually take rather than a name you have to remember.
-            result = await self.close_session(
-                session_id=args.get("session_id"),
-                all=args.get("all", False),
             )
             return _wire_result(result)
 
@@ -9856,8 +9931,8 @@ def _cmd_engines(argv: list[str]) -> int:
         print("  " + ui.dim("cleared") + "  " + ", ".join(
             [ui.cmd("circuit_breaker.json"), ui.cmd("engine_stats.json")]))
         print("  " + ui.dim("a RUNNING server keeps its own copy in memory - to un-stick "
-                            "one without restarting, call the cache_clear tool with "
-                            "engine_state=true"))
+                            "one without restarting, call sys_state with "
+                            "clear='engine_state'"))
         return 0
     if action in ("probe", "check", "test"):
         return _engines_probe(argv[1:])

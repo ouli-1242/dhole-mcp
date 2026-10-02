@@ -1430,7 +1430,8 @@ def engine_state_reset() -> dict:
     unblocked), the records still shape the next several searches, and the only
     lever a user had was finding and deleting these files by hand — which is also
     how the "dhole ignores my VPN" misdiagnosis started. This is that lever, made
-    a call. Nothing else is touched: the content cache is `cache_clear`.
+    a call. Nothing else is touched: the content cache is `sys_state`'s
+    `cache` class.
     """
     released = {k: round(v - time(), 1) for k, v in _BACKEND_HEALTH.items()}
     forgotten = len(_ENGINE_YIELD)

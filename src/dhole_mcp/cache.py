@@ -259,3 +259,32 @@ async def clear_all_cache(cache_dir: Path | None = None) -> int:
         cursor = await db.execute("DELETE FROM cache")
         await db.commit()
         return cursor.rowcount
+
+
+async def cache_stats(cache_dir: Path | None = None) -> dict:
+    """What the cache holds right now, for `sys_state(show=["cache"])`.
+
+    Read-only by construction: it runs one SELECT and no DELETE. A state tool
+    that reports by wiping would make the census un-callable from a session you
+    still want logged in.
+
+    `expired` is what a plain sweep would drop and `entries` is what a wipe
+    drops, so the caller can tell "3 rows, 3 of them stale" from "3 rows, all
+    of them fresh" — the difference between clearing being free and being a
+    re-fetch.
+    """
+    db_path = await _ensure_db(cache_dir)
+    async with aiosqlite.connect(db_path) as db:
+        row = await (await db.execute(
+            "SELECT COUNT(*) AS entries, "
+            "SUM(CASE WHEN fetched_at + ttl <= ? THEN 1 ELSE 0 END) AS expired, "
+            "MIN(fetched_at) AS oldest FROM cache",
+            (time.time(),),
+        )).fetchone()
+    entries, expired, oldest = (row or (0, 0, None))
+    return {
+        "entries": int(entries or 0),
+        "expired": int(expired or 0),
+        "oldest_age_s": int(time.time() - oldest) if oldest else 0,
+        "cap": MAX_CACHE_ENTRIES,
+    }

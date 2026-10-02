@@ -57,7 +57,7 @@ Consult this when a response doesn't make sense or a field shows a non-default v
 
 | Field | Meaning | What to do when non-default |
 |---|---|---|
-| `session_id` + `session_cookie_names` | Session active + cookie NAMES stored for that host (values are never echoed) | Cookies are live credentials — `close_session(session_id=...)` when done |
+| `session_id` + `session_cookie_names` | Session active + cookie NAMES stored for that host (values are never echoed) | Cookies are live credentials — `sys_state(clear=['<that id>'])` when done |
 | `items_older_than_since` | (feed) entries filtered out by `since` | Non-zero means incremental filtering is working |
 | `summary_truncated` | (feed) item summary is a 500-char preview | Fetch the item URL with `web_read` for full text |
 

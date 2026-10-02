@@ -931,7 +931,7 @@ class TestScreenshotErrorsAreActionableNotRawDriverLogs:
 
     @pytest.mark.parametrize("raw,needle", [
         ("Page.screenshot: Timeout 30000ms exceeded.", "timeout"),
-        ("Target page, context or browser has been closed", "close_session"),
+        ("Target page, context or browser has been closed", "sys_state"),
         ("browserType.launch: Executable doesn't exist at /x/chrome",
          "patchright install"),
     ])

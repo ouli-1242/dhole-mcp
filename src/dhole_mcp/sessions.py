@@ -25,7 +25,7 @@ Scope, and what is deliberately NOT here:
 * **Expires after** the fixed :data:`COOKIE_TTL_S` (24h, hardcoded in 17.0).
   Written once per ``Set-Cookie``, not
   refreshed on send, so a forgotten session cannot accumulate credentials
-  forever. ``cache_clear`` (the tool) and ``close_session`` drop the jar.
+  forever. ``sys_state`` (the tool) drops the jar, one named id or every one.
 
 Storage is SQLite at ``~/.dhole/sessions.db`` (0600 dir/file per paths.py), the
 same trust level as ``cache.db``, which already stores every fetched body in
@@ -207,7 +207,7 @@ def sessions() -> dict:
     """A name-only census: ``{session_id: {"hosts": {host: [names]},
     "cookies": n, "expires_in_s": s}}``.
 
-    Diagnostics and the ``close_session`` tool are the consumers, and both need
+    Diagnostics and the ``sys_state`` census are the consumers, and both need
     the same answer to a different question: which ids hold credentials, for
     which hosts, and how long before they lapse on their own. So the soonest
     expiry is reported as a countdown rather than an epoch float — "expires in

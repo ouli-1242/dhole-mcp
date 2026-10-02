@@ -11,7 +11,7 @@ Ground rule: **read the response fields before acting**. Every failure names its
 3. Still thin: CLI `dhole engines list` for each engine's verdict and remaining cooldown; `dhole engines probe` for one real query per engine (hits / latency / block reason)
 4. Fix:
    - Per-call: re-search naming live engines (`engines=["baidu","bing","so360"]`)
-   - Urgent: `dhole engines reset` or `cache_clear(engine_state=true)` to clear cooldowns now
+   - Urgent: `dhole engines reset` or `sys_state(clear=["engine_state"])` to clear cooldowns now
    - Process-wide (only if recurring): a different egress via `DHOLE_SEARCH_PROXY` (one URL; `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` are picked up when it is unset), or a keyed backend as fallback
 5. Tell the user: "Search engines were rate-limiting me; I re-searched via X. If this keeps happening we can add a search proxy."
 
@@ -72,7 +72,7 @@ Five paths, cheapest first: (1) HTTP tier — user-supplied cookies (`cookies` +
 - **`cred_login` error: no password field found** — the page did not render a `type=password` input (a two-step email-then-password flow, a JS gate, or the page never settled). Pass `username_index` / `password_index` / `submit_index` from a snapshot, or raise `timeout`; if the form is genuinely multi-page, do the steps with `actions` instead
 - **`cred_login` returned `pending_approval: true`** — not a failure: nothing was filled or submitted. Show the user `plan` + `fields`; re-call the **same arguments** with `confirm=true` only on their yes
 - **`cred_login` `logged_in: false`** — the credential was submitted but the session did not take: wrong item, or the site wants 2FA. Check `signals`; do not retry blindly (a second wrong submit can lock the account). `logged_in: null` = the probe could not answer — not "failed"
-- **`cred_login` ran but later fetches are anonymous** — pass the **same `session_id`** to those fetches; the cookies were kept under it. `close_session` shows what is held
+- **`cred_login` ran but later fetches are anonymous** — pass the **same `session_id`** to those fetches; the cookies were kept under it. `sys_state` shows what is held
 
 ### Recipe / web_watch misbehave
 
@@ -128,5 +128,5 @@ This machine runs a source-installed personal fork with self-update off: `git pu
 | `dhole engines list` | Per-engine verdict, remaining cooldown, active backoff tiers |
 | `dhole engines probe` | One real query per engine (hits / latency / block reason) |
 | `dhole engines reset` | Clear all cooldowns now |
-| `cache_clear(engine_state=true)` | MCP-side equivalent of engines reset (wipes the body cache too) |
+| `sys_state(clear=["engine_state"])` | MCP-side equivalent of engines reset, and the one that reaches a RUNNING server (it touches no cache) |
 | `dhole skill install --force` | re-sync the installed agent skill to the one bundled with this dhole version (skill updates ship with dhole releases) |

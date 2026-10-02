@@ -172,10 +172,10 @@ PLAUSIBLE_CASES = {
         ("minimal: query via dead loopback proxy", {"query": "dhole offline snapshot probe"}),
         ("minimal: find_similar with blocked source url", {"query": "probe", "mode": "find_similar", "url": "http://127.0.0.1/"}),
     ],
-    "cache_clear": [
-        ("minimal: no args (expired entries only)", {}),
-        ("minimal: engine_state reset", {"engine_state": True}),
-        ("minimal: all=true (throwaway DHOLE_HOME)", {"all": True}),
+    "sys_state": [
+        ("minimal: no args (the census)", {}),
+        ("minimal: engine_state class", {"clear": ["engine_state"]}),
+        ("minimal: cache class (throwaway DHOLE_HOME)", {"clear": ["cache"]}),
     ],
     "doc_parse": [
         ("minimal: nonexistent local path", {"file_path": NONEXISTENT_FILE}),
@@ -194,7 +194,7 @@ PLAUSIBLE_CASES = {
 
 TOOL_ORDER = [
     "web_read", "web_crawl", "web_screenshot", "web_search",
-    "cache_clear", "doc_parse", "feed_read", "web_resolve",
+    "sys_state", "doc_parse", "feed_read", "web_resolve",
 ]
 
 

@@ -60,10 +60,10 @@ class TestTheEnvVarIsParsed:
         payload = json.loads(out.stdout)
         assert payload["enabled"] == sorted(
             n.strip() for n in value.split(",") if n.strip())
-        assert len(payload["all"]) == 15, \
-            "全集是 15 个工具（16.0 补上 close_session，L3/L4 补上 web_recipe/web_watch，" \
+        assert len(payload["all"]) == 14, \
+            "全集是 14 个工具（16.0 补上会话名册，L3/L4 补上 web_recipe/web_watch，" \
             "凭据/登录流补上 cred_vault/cred_login，文档通道补上 sys_guide，" \
-            "B5 又把一张地图拆成 web_discover）；" \
+            "B5 把一张地图拆成 web_discover、又把两颗运维面合成 sys_state）；" \
             "默认关闭的也留在这里，守卫继续覆盖它们"
 
     @pytest.mark.parametrize("value", [None, "", "   "])
@@ -180,7 +180,7 @@ class TestInstructionsFollowTheEnabledSet:
         assert "gov/edu/github" in text
 
     def test_no_routing_header_when_nothing_routable_is_enabled(self):
-        text = server_mod._compose_instructions(frozenset({"cache_clear"}))
+        text = server_mod._compose_instructions(frozenset({"web_discover"}))
         assert "Routing:" not in text, "没有可路由的工具时留着空 Routing: 头是废话"
 
     def test_every_routing_line_names_its_own_tool(self):

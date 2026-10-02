@@ -18,8 +18,7 @@ def __getattr__(name: str):
         "BulkResponseModel",
         "SessionInfo",
         "SessionCreatedModel",
-        "SessionClosedModel",
-        "CacheInfoModel",
+        "SysStateModel",
         "main",
     }
     if name in _lazy_exports:
@@ -31,8 +30,7 @@ def __getattr__(name: str):
             BulkResponseModel,
             SessionInfo,
             SessionCreatedModel,
-            SessionClosedModel,
-            CacheInfoModel,
+            SysStateModel,
             main,
         )
 
@@ -46,7 +44,6 @@ __all__ = [
     "BulkResponseModel",
     "SessionInfo",
     "SessionCreatedModel",
-    "SessionClosedModel",
-    "CacheInfoModel",
+    "SysStateModel",
     "main",
 ]

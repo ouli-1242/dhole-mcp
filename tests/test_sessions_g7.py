@@ -296,18 +296,20 @@ class TestSmartFetchSeesTheSession:
 class TestTheJarCanBeForgotten:
 
     @pytest.mark.asyncio
-    async def test_cache_clear_forgets_the_jar(self):
+    async def test_the_state_tool_forgets_the_jar(self):
+        """17.0 B5-12：清缓存不再顺手抹凭据（那是 cache_clear(all=true) 的谎），
+        抹登录态是 sessions 这一类自己的事。"""
         sessions.store("bob", ME, {"sid": "abc"})
-        out = await MasterFetchServer().cache_clear()
+        out = await MasterFetchServer().sys_state(clear=["sessions"], confirm=True)
         assert sessions.header_for("bob", ME) == {}
         assert "cookie" in out.message.lower()
 
     @pytest.mark.asyncio
-    async def test_close_session_forgets_the_jar_even_without_a_browser(self):
-        """close_session 以前只认浏览器会话；只有 jar 的 id 会先抛「not found」，
+    async def test_naming_a_session_forgets_the_jar_even_without_a_browser(self):
+        """工具以前只认浏览器会话；只有 jar 的 id 会先抛「not found」，
         cookie 就留在磁盘上了。"""
         sessions.store("bob", ME, {"sid": "abc"})
-        out = await MasterFetchServer().close_session("bob")
+        out = await MasterFetchServer().sys_state(clear=["bob"])
         assert sessions.header_for("bob", ME) == {}
         assert "cookie" in out.message.lower()
 
@@ -320,8 +322,8 @@ class TestTheJarCanBeForgotten:
         是「那我该关哪个」，不是「你给的名字不存在」。
         """
         sessions.store("real-one", ME, {"sid": "abc"})
-        out = await MasterFetchServer().close_session("never-existed")
-        assert out.error.startswith("Nothing is open under 'never-existed'")
-        assert "real-one" in out.next_action
+        out = await MasterFetchServer().sys_state(clear=["never-existed"])
+        assert out.error.startswith("Nothing matches 'never-existed'")
+        assert "real-one" in out.error
         assert out.closed == 0 and out.cookies_forgotten == 0
         assert sessions.header_for("real-one", ME) == {"sid": "abc"}, "报错不该顺手关掉别人"

@@ -27,12 +27,11 @@ from dhole_mcp.crawl import CrawlPage, CrawlResponseModel
 from dhole_mcp.search import SearchResponseModel, SearchResult
 from dhole_mcp.server import (
     BulkResponseModel,
-    CacheInfoModel,
     LoginModel,
     RecipeModel,
     ResponseModel,
     SessionCensusRow,
-    SessionClosedModel,
+    SysStateModel,
     VaultModel,
     WatchModel,
     _WIRE_OMIT,
@@ -184,8 +183,8 @@ class TestEveryRowGetsItsOwnPolicy:
         assert all(set(row) == {"url", "status"} for row in p["pages"]), p["pages"]
         assert p["sitemap_used"] is True
 
-    def test_cache_clear_does_not_pay_for_an_empty_pool_snapshot(self):
-        p = _payload(CacheInfoModel(message="purged 0 entries"))
+    def test_a_state_call_does_not_pay_for_an_empty_pool_snapshot(self):
+        p = _payload(SysStateModel(message="purged 0 entries"))
         assert "engine_health" not in p and "purged" not in p
         assert p["message"]
 
@@ -233,9 +232,9 @@ class TestTheCompressionCannotReachInsideTheModel:
         from dhole_mcp.feed import FeedItem, FeedResult
         from dhole_mcp.search import SearchResponseModel, SearchResult
 
-        models = [ResponseModel, BulkResponseModel, CacheInfoModel, CrawlPage,
+        models = [ResponseModel, BulkResponseModel, SysStateModel, CrawlPage,
                   CrawlResponseModel, SearchResult, SearchResponseModel,
-                  FeedItem, FeedResult, SessionClosedModel, SessionCensusRow]
+                  FeedItem, FeedResult, SessionCensusRow]
 
         def probe(annotation):
             origin = get_origin(annotation)
@@ -362,15 +361,14 @@ class TestThePolicyTableItself:
                   "CrawlResponseModel": CrawlResponseModel,
                   "SearchResult": SearchResult,
                   "SearchResponseModel": SearchResponseModel,
-                  "CacheInfoModel": CacheInfoModel,
+                  "SysStateModel": SysStateModel,
                   "RecipeModel": RecipeModel,
                   "WatchModel": WatchModel,
                   "VaultModel": VaultModel,
                   "LoginModel": LoginModel}
         from dhole_mcp.feed import FeedItem, FeedResult
         models.update({"FeedItem": FeedItem, "FeedResult": FeedResult,
-                       "SessionCensusRow": SessionCensusRow,
-                       "SessionClosedModel": SessionClosedModel})
+                       "SessionCensusRow": SessionCensusRow})
         assert set(_WIRE_OMIT) <= set(models), \
             "策略表点名了不存在的模型（模型改名会让整组压缩静默失效）"
         for name, fields in _WIRE_OMIT.items():

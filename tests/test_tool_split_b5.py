@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -86,3 +87,115 @@ def test_a_map_call_over_the_new_name_asks_the_engine_for_a_map(monkeypatch):
     assert seen.get("discover_only") is True, \
         "新入口没把地图模式带上：它其实还在抓正文"
     assert seen.get("max_pages") == 5 and seen.get("sitemap") is True
+
+
+# ─── sys_state：把 cache_clear 与 close_session 合成一颗 ───────────────
+#
+# 两颗旧工具做的是同一件事的两半：「本地还存着什么」和「把它抹掉」。分开摆的代价
+# 是踩过的：cache_clear(all=true) 连 cookie jar 一起抹，而它自己的描述里没这句；
+# close_session 看不见缓存。合成一颗之后 token 词表把「抹哪一类」说明白，
+# §3-32 的闸（抹掉后用户不会立刻知道的那一类要先 confirm）才有地方落。
+
+STATE_PARAMS = {"show", "clear", "confirm"}
+VOCAB = {"cache", "engine_state", "sessions", "watch", "recipes", "all"}
+
+ME = "https://shop.example.com/account"
+SECRET = "session-value-DO-NOT-LEAK"
+
+
+def _defs_by_name() -> dict:
+    return {td["name"]: td for td in MasterFetchServer._TOOL_DEFS}
+
+
+def test_sys_state_is_registered_with_three_params():
+    defs = _defs_by_name()
+    assert "sys_state" in defs, sorted(defs)
+    props = set(defs["sys_state"]["inputSchema"]["properties"])
+    assert props == STATE_PARAMS, (
+        f"§4 给 sys_state 的是这 3 个，多出的是没搬干净的旧旋钮：{props}")
+    assert props == set(server_mod._TOP_LEVEL_ARGS["sys_state"])
+
+
+def test_the_two_housekeeping_tools_are_gone():
+    """合并不能留两个家：旧名字必须在三个注册面上都消失。"""
+    for old in ("cache_clear", "close_session"):
+        assert old not in _defs_by_name(), f"{old} 还在连接期的表里"
+        assert old not in server_mod._TOP_LEVEL_ARGS, f"{old} 仍可被分发"
+        with pytest.raises(ValueError, match="Unknown tool") as exc:
+            _run(MasterFetchServer()._dispatch(old, {}))
+        # 报错会回显调用方打的那个名字，那是对的；不能有的部分是"建议名单"——
+        # 服务端不许把一个不存在的名字推荐给人。
+        assert old not in str(exc.value).split("Registered names:")[1], \
+            "报错的建议名单里还留着旧名字"
+
+
+def test_a_bare_call_shows_the_census_and_changes_nothing():
+    from dhole_mcp import sessions
+    from dhole_mcp.cache import set_cached
+
+    sessions.store("alpha", ME, {"sid": SECRET})
+    _run(set_cached(URL, "markdown", ["body"], 200))
+    _content, structured = _run(MasterFetchServer()._dispatch("sys_state", {}))
+    assert [r["session_id"] for r in structured["sessions"]] == ["alpha"]
+    assert structured["open_count"] == 1
+    assert structured["cache"]["entries"] >= 1
+    assert sessions.header_for("alpha", ME) == {"sid": SECRET}, "看一看不该有任何副作用"
+    assert SECRET not in json.dumps(structured, ensure_ascii=False)
+
+
+def test_clearing_every_session_waits_for_a_confirm():
+    """§3-32：抹掉之后用户不会立刻知道自己失去了什么 —— 登录态正是这一类。"""
+    from dhole_mcp import sessions
+
+    sessions.store("alpha", ME, {"sid": SECRET})
+    _content, paused = _run(MasterFetchServer()._dispatch(
+        "sys_state", {"clear": ["sessions"]}))
+    assert paused["pending_approval"] is True, paused
+    assert sessions.header_for("alpha", ME) == {"sid": SECRET}, \
+        "没批准就不能动手"
+    assert "confirm" in paused["next_action"]
+
+    _content, ok = _run(MasterFetchServer()._dispatch(
+        "sys_state", {"clear": ["sessions"], "confirm": True}))
+    assert sessions.header_for("alpha", ME) == {}
+    assert ok["cleared"] == ["sessions"] and ok["cookies_forgotten"] == 1
+
+
+def test_naming_one_session_forgets_it_without_a_confirm():
+    """点名关是调用方自己写出来的意图，闸只拦「你没点名的那些也一起没了」。"""
+    from dhole_mcp import sessions
+
+    sessions.store("target", ME, {"sid": SECRET})
+    sessions.store("untouched", "https://elsewhere.example.org/x", {"sid": SECRET})
+    _content, structured = _run(MasterFetchServer()._dispatch(
+        "sys_state", {"clear": ["target"]}))
+    assert sessions.header_for("target", ME) == {}
+    assert sessions.header_for("untouched", "https://elsewhere.example.org/x") == \
+        {"sid": SECRET}
+    assert structured["session_id"] == "target"
+
+
+def test_clear_cache_does_not_touch_the_jar():
+    """旧 cache_clear(all=true) 顺手抹掉 cookie，是这条合并要修的谎。
+    现在缓存与凭据是两个 token，谁都不再是另一个的隐藏副作用。"""
+    from dhole_mcp import sessions
+    from dhole_mcp.cache import get_cached, set_cached
+
+    sessions.store("alpha", ME, {"sid": SECRET})
+    _run(set_cached(URL, "markdown", ["body"], 200))
+    _content, structured = _run(MasterFetchServer()._dispatch(
+        "sys_state", {"clear": ["cache"]}))
+    assert _run(get_cached(URL, "markdown")) is None, structured
+    assert structured["purged"] >= 1
+    assert sessions.header_for("alpha", ME) == {"sid": SECRET}, \
+        "清缓存不该顺手把人登出"
+
+
+def test_an_unknown_token_names_the_vocabulary_and_its_neighbour():
+    """词表打错不能静悄悄：既不落会话分支，也不能只回一句 not found。"""
+    _content, structured = _run(MasterFetchServer()._dispatch(
+        "sys_state", {"clear": ["chache"]}))
+    assert structured["error"], structured
+    for token in VOCAB:
+        assert token in structured["error"] or token in structured["next_action"], token
+    assert structured.get("cleared", []) == []

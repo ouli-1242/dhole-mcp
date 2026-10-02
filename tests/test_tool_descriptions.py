@@ -52,7 +52,7 @@ ROUTING_CONTRACT = [
      "本地 PDF 只有 web_read 能处理（且仅限 URL 形态），必须指明"),
     ("feed_read", "web_read",
      "feed_read 不是通用抓取器，必须说明何时该换 web_read"),
-    ("cache_clear", "cache_ttl=0",
+    ("sys_state", "cache_ttl=0",
      "清缓存不是刷新单页的手段，要导向 cache_ttl=0"),
 ]
 
@@ -332,13 +332,11 @@ _DOCSTRING_ONLY_IMPLEMENTATION = {
     "engine_stats",     # 同上
 }
 
-# 跨工具引用：指向别处，不是本工具的契约。
-# `cache_clear` 属于这类：close_session 的 docstring 拿它说明「那个是连正文缓存
-# 一起清、这个是指名清」，而这条对比只写在 cache_clear 自己的描述里（警告长在
-# 会动手的那个工具上才有用 —— 拿着「清缓存」意图的 agent 才是需要知道会掉登录
-# 的人）。两边各写一遍就是两个工具描述互为副本，删掉任一侧都会漂。
+# 跨工具引用：指向别处，不是本工具的契约。17.0 B5-12 之前这一类里还有 cache_clear
+# （close_session 的 docstring 拿它对比「连正文缓存一起清」与「指名清」）；两颗合成
+# 一颗之后那个对比没了，豁免项也跟着没了。
 _DOCSTRING_ONLY_CROSS_REFERENCE = {
-    "web_read", "web_search", "cache_clear",
+    "web_read", "web_search",
 }
 
 # 刻意不在 wire 暴露的诊断字段：暴露的边际价值低于其 token 成本（agent 基本

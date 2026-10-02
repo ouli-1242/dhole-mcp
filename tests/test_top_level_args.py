@@ -121,7 +121,7 @@ class TestUnknownTopLevelArgsRaise:
         ("web_search", {"query": "x", "sites": ["example.com"]}),
         ("web_read", {"url": "https://example.com/", "max_chars": 100}),
         ("web_screenshot", {"url": "https://example.com/", "width": 800}),
-        ("cache_clear", {"all": True, "everything": True}),
+        ("sys_state", {"show": ["cache"], "everything": True}),
         ("doc_parse", {"file_path": "a.pdf", "pages": "1-2"}),
         ("feed_read", {"urls": ["https://example.com/f.xml"], "limit": 5}),
         ("web_resolve", {"url": "https://example.com/", "follow": True}),

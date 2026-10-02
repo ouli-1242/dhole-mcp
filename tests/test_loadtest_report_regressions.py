@@ -15,10 +15,10 @@ have been worse than none:
   contract on the wire, so the schema description now states it and the test
   pins both halves. The report's suggested ``{"all": true}`` would have added a
   second way to say what ``"type": "array"`` already says.
-* D-13 (``required`` empty on web_read *and* cache_clear) — true for
-  web_read, which now declares ``anyOf``. cache_clear genuinely has no
-  required argument, so it stays empty; adding a fabricated ``required`` there
-  would have been the bug.
+* D-13 (``required`` empty on web_read *and* the cache-wipe tool) — true for
+  web_read, which now declares ``anyOf``. The state tool genuinely has no
+  required argument (a call with no arguments is the census), so it stays
+  empty; adding a fabricated ``required`` there would have been the bug.
 * D-14 (no ``original_url``/``final_url``/``status_code``) — only
   ``original_url`` was actually missing. ``url`` is documented as the FINAL url
   and ``status`` IS the status code, so ``final_url``/``status_code`` would be
@@ -158,55 +158,44 @@ class TestDispatchedArgumentTypes:
         assert seen["urls"] == ["https://a.test", "https://b.test"]
 
     @pytest.mark.parametrize("value", ["false", "no", "0", "off", False, 0])
-    def test_cache_clear_only_expired_when_all_is_falsy(self, monkeypatch, value):
-        """D-03: ``all="false"`` cleared the WHOLE cache.
+    def test_a_stringified_false_confirm_erases_no_sessions(self, value):
+        """D-03, pinned on the argument that still decides an erasure.
 
-        ``args.get("all", False)`` handed the string straight to ``if all:``,
-        and every non-empty string is truthy — so a caller asking for the
-        expired-only sweep got a full wipe, silently.
+        The defect was ``args.get("all", False)`` handed straight to ``if all:``,
+        where every non-empty string is truthy. 17.0 B5-12 collapsed the
+        expired-only sweep into the whole-cache clear (the rows it dropped were
+        going to lapse anyway, and judging the difference was never the caller's
+        to make), so the trap now lives on ``confirm`` - the one spelled-out
+        boolean that gates erasing every session's cookies.
         """
-        calls: list[str] = []
+        from dhole_mcp import sessions
 
-        async def fake_clear_cache(*a, **kw):
-            calls.append("expired")
-            return 0
-
-        async def fake_clear_all_cache(*a, **kw):
-            calls.append("all")
-            return 0
-
-        monkeypatch.setattr(server_mod, "clear_cache", fake_clear_cache)
-        monkeypatch.setattr(server_mod, "clear_all_cache", fake_clear_all_cache)
-
-        _dispatch("cache_clear", {"all": value})
-        assert calls == ["expired"], f"all={value!r} must not wipe everything"
+        sessions.store("alpha", "https://shop.example.com/account", {"sid": "v"})
+        _content, structured = _dispatch("sys_state", {"clear": ["sessions"],
+                                                        "confirm": value})
+        assert structured["pending_approval"] is True, f"confirm={value!r} must pause"
+        assert sessions.header_for("alpha", "https://shop.example.com/account") == {"sid": "v"}, \
+            f"confirm={value!r} must not erase everything"
 
     @pytest.mark.parametrize("value", ["true", "yes", "1", "on", True, 1])
-    def test_cache_clear_wipes_all_when_all_is_truthy(self, monkeypatch, value):
+    def test_a_stringified_true_confirm_still_erases(self, value):
         """The other direction keeps working, including stringified."""
-        calls: list[str] = []
+        from dhole_mcp import sessions
 
-        async def fake_clear_cache(*a, **kw):
-            calls.append("expired")
-            return 0
-
-        async def fake_clear_all_cache(*a, **kw):
-            calls.append("all")
-            return 0
-
-        monkeypatch.setattr(server_mod, "clear_cache", fake_clear_cache)
-        monkeypatch.setattr(server_mod, "clear_all_cache", fake_clear_all_cache)
-
-        _dispatch("cache_clear", {"all": value})
-        assert calls == ["all"], f"all={value!r} should wipe everything"
+        sessions.store("alpha", "https://shop.example.com/account", {"sid": "v"})
+        _content, structured = _dispatch("sys_state", {"clear": ["sessions"],
+                                                        "confirm": value})
+        assert not structured.get("pending_approval", False), \
+            f"confirm={value!r} should go through"
+        assert sessions.header_for("alpha", "https://shop.example.com/account") == {}
 
     def test_an_unlisted_boolean_string_is_rejected(self):
         """Neither true nor false: guessing would be the original defect again."""
         with pytest.raises(ValueError, match="must be a boolean"):
-            server_mod._validate_tool_args("cache_clear", {"all": "maybe"})
+            server_mod._validate_tool_args("sys_state", {"confirm": "maybe"})
 
     def test_a_missing_boolean_keeps_its_default(self):
-        assert server_mod._validate_tool_args("cache_clear", {})["all"] is False
+        assert server_mod._validate_tool_args("sys_state", {})["confirm"] is False
 
     def test_force_fetcher_unlisted_value_is_rejected(self, monkeypatch):
         """D-02: ``force_fetcher="magic"`` silently ran the stealthy browser.
@@ -285,9 +274,9 @@ class TestToolSchemaRequired:
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate(instance={"max_content_chars": 500}, schema=schema)
 
-    def test_cache_clear_requires_nothing(self):
-        """The report listed cache_clear here too; both its args are optional."""
-        assert "required" not in self._schema("cache_clear")
+    def test_sys_state_requires_nothing(self):
+        """The report listed the cache tool here too; a bare call is the census."""
+        assert "required" not in self._schema("sys_state")
 
     def test_every_other_tool_still_declares_its_required_arg(self):
         for name, required in (
@@ -485,15 +474,15 @@ class TestFeedContract:
         assert "at least one URL" in payload["error"]
 
 
-# ─── D-10: cache_clear payload ────────────────────────────────────────
+# ─── D-10: the state call's payload ───────────────────────────────────
 
 
-class TestCacheClearPayload:
-    def test_a_plain_cache_clear_carries_no_engine_health(self, monkeypatch):
-        """D-10: every cache_clear shipped ~1KB of per-engine pool state.
+class TestStatePayload:
+    def test_a_plain_state_call_carries_no_engine_health(self, monkeypatch):
+        """D-10: every cache wipe shipped ~1KB of per-engine pool state.
 
-        The default call is about the content cache and says nothing about the
-        search pool, so the snapshot is now taken only when engine_state=true.
+        A call about the content cache says nothing about the search pool, so the
+        snapshot is taken only when the call names engine_state.
         """
         from dhole_mcp import search_metasearch as ms
 
@@ -505,17 +494,12 @@ class TestCacheClearPayload:
 
         monkeypatch.setattr(ms, "engine_state_snapshot", fake_snapshot, raising=False)
 
-        async def fake_clear_cache(*a, **kw):
-            return 0
-
-        monkeypatch.setattr(server_mod, "clear_cache", fake_clear_cache)
-
-        _content, structured = _dispatch("cache_clear", {})
+        _content, structured = _dispatch("sys_state", {"clear": ["cache"]})
         assert "engine_health" not in structured, \
             "the plain call must not carry pool state, not even as an empty {}"
         assert called == [], "the pool snapshot must not even be taken"
 
-    def test_engine_state_true_still_reports_health(self, monkeypatch):
+    def test_engine_state_still_reports_health(self, monkeypatch):
         from dhole_mcp import search_metasearch as ms
 
         monkeypatch.setattr(
@@ -527,12 +511,7 @@ class TestCacheClearPayload:
             lambda: {"engines_forgotten": 2, "released_cooldowns": {}}, raising=False,
         )
 
-        async def fake_clear_cache(*a, **kw):
-            return 0
-
-        monkeypatch.setattr(server_mod, "clear_cache", fake_clear_cache)
-
-        _content, structured = _dispatch("cache_clear", {"engine_state": True})
+        _content, structured = _dispatch("sys_state", {"clear": ["engine_state"]})
         assert structured["engine_health"] == {"brave": {"n": 3, "mean": 0.5}}
         assert structured["engine_state_reset"] is True
 

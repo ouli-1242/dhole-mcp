@@ -444,7 +444,7 @@ def get_robots_cache() -> RobotsCache:
 
 
 def reset_robots_cache() -> None:
-    """Drop the process-wide cache (tests, and ``cache_clear``)."""
+    """Drop the process-wide cache (tests, and the ``sys_state`` cache wipe)."""
     global _CACHE
     _CACHE = None
 

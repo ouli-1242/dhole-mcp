@@ -255,7 +255,8 @@ class TestActionsAndEngineState:
     def test_engine_state_reset_leaves_the_next_search_working(self, monkeypatch):
         """The report's restart-proof crash was never the engine pool.
 
-        It filed `cache_clear(engine_state=true)` as the trigger and pointed at
+        It filed the engine-state reset (now `sys_state(clear=["engine_state"])`)
+        as the trigger and pointed at
         the cooldown tracker's `last` field. Resetting the pool and searching
         again is the exact sequence, and it works with the state files in the
         condition the reset leaves them in.
@@ -267,7 +268,7 @@ class TestActionsAndEngineState:
 
         monkeypatch.setattr(server_mod, "clear_all_cache", fake_clear_all)
         _stub_search_layer(monkeypatch)
-        payload = _envelope("cache_clear", {"all": True, "engine_state": True})
+        payload = _envelope("sys_state", {"clear": ["cache", "engine_state"]})
         assert payload["engine_state_reset"] is True
         assert ms.cooldowns() == {} and ms._ENGINE_YIELD == {}
 

@@ -210,7 +210,7 @@ def test_tool_definitions(mcp):
     # 搜索缓存：web_search 的散文不再提它，但 cache_ttl 是它的公开参数。
     assert "cache_ttl" in ss_props
 
-    cache_desc = tool_map["cache_clear"]["description"]
+    cache_desc = tool_map["sys_state"]["description"]
     assert "TTL" in cache_desc or "ttl" in cache_desc or "cache stores" in cache_desc.lower()
 
 
