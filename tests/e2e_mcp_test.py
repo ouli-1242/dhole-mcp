@@ -172,7 +172,10 @@ def test_tool_definitions(mcp):
     visible = fetch_desc + options_desc + DHOLE_INSTRUCTIONS
     assert "robots" in fetch_desc.lower()
     assert "session_id" in visible
-    assert "method:" in visible and "body:" in visible
+    # 两条陷阱都要在可见面上露名：method 的"非 GET 只发一次"和 body 的 256KB 上限。
+    # 判据写的是文本里真的那句承诺，不是"body 这个词出现过"—— 后者连"body part"都能满足。
+    assert "method:" in visible and "body cap 256KB" in visible, \
+        "verb/body 的陷阱句从可见面上消失了"
     assert "archive.org" in visible
     assert "do not cite" in visible.lower(), "引用前的自查必须在场"
     assert "snippets" in visible.lower()
@@ -203,7 +206,8 @@ def test_tool_definitions(mcp):
     # 「一行一键」的排版之后 after/before 挤在 freshness 那一行里：钉键名和各自那句话，
     # 不钉括号写法（16.0 之前长这样："after (...)"）。
     assert "after:" in ss_desc and "before:" in ss_desc
-    assert "refused" in ss_desc, "before 是拒绝而不是忽略 —— 这句才是调用方要的行为"
+    assert "refused, not ignored" in ss_desc.lower(), \
+        "before 是拒绝而不是忽略 —— 这句才是调用方要的行为（大小写不钉，文案改过字体）"
     assert "since" in tool_map["feed_fetch"]["inputSchema"]["properties"]
 
     # 搜索缓存：13.16 重写描述后这句提示只在 cache_clear 里，smart_search 的散文

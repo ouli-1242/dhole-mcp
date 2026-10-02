@@ -23,6 +23,45 @@ def _doctor_off_the_network(request, monkeypatch):
     monkeypatch.setattr(updater, "LIVE_CHECKS", False)
 
 
+class _RealBrowserInstall(BaseException):
+    """套件里"真的去下浏览器"用的跳闸类型。
+
+    它**不能**是 `Exception` 的子孙：`ensure_chromium` 为了让一次坏掉的子进程不拖垮
+    抓取，会吞掉一切 Exception（生产里这是对的）。一道会被产品代码吞掉的闸等于没有闸
+    —— 实测过一次：改成 Exception 之后用例只报"DID NOT RAISE"，而下载照样开始。
+    """
+
+
+@pytest.fixture(autouse=True)
+def _nobody_installs_a_browser(monkeypatch):
+    """17.0 B3 · 套件永远不许真的去下 chromium（默认那一份就有 119MB）。
+
+    首用安装挂在"需要浏览器档"的那几条路上，而测试里有一批用例会把
+    `PLAYWRIGHT_BROWSERS_PATH` 指到空目录去模拟"二进制没装" —— 那条判定现在正好会
+    触发一次真的 `python -m patchright install chromium`。这不是假设：上一次跑套件
+    就同时起了三个安装子进程，套件停在 26%，三条下载互相抢带宽。
+
+    所以钉成死闸：任何子进程命令里出现 patchright/playwright + install 就立刻红，并且
+    说清本该打什么桩。`tests/test_ensure_chromium.py` 自己的用例随后再覆盖这一层
+    （monkeypatch 后设者胜），它每次都把 `subprocess.run` 换成桩，所以量不到真下载。
+    """
+    from dhole_mcp import browser
+
+    real_run = browser.subprocess.run
+
+    def guarded_run(cmd, *args, **kwargs):
+        argv = [str(x) for x in (cmd if isinstance(cmd, (list, tuple)) else [cmd])]
+        if any("patchright" in a or "playwright" in a for a in argv) \
+                and "install" in argv:
+            raise _RealBrowserInstall(
+                "a test reached the real browser installer - stub "
+                "browser.subprocess.run (or server.ensure_chromium_async) instead "
+                f"of downloading ~119MB: {argv}")
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(browser.subprocess, "run", guarded_run)
+
+
 @pytest.fixture(autouse=True)
 def _no_real_robots_fetch(monkeypatch):
     """Keep the suite off the network for robots.txt.

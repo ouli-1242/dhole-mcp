@@ -15,8 +15,14 @@ Optional extras (browser engine, PDF, OCR, local file parsing) are in `[all]`:
 
 ```bash
 python -m pip install -e ".[dev,all]"
-playwright install chromium          # required for the anti-bot browser path
+python -m patchright install chromium   # the anti-bot browser (~193MB); optional —
+                                        # dhole installs it on the first browser-tier
+                                        # call, and tests never download it
 ```
+
+`patchright`, not `playwright`: the driver only launches the revision named in its own
+`browsers.json`, so a browser installed by upstream playwright's CLI is a different
+directory and does not count.
 
 Without `[all]`, dhole degrades to HTTP-only mode instead of failing — that
 degradation is a supported configuration and is covered by tests.

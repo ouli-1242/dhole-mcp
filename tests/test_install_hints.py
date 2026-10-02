@@ -65,7 +65,7 @@ class TestUsePointHintsAreHelperProduced:
         # fall through to the install branch.
         msg = install.browser_install_advice()
         assert install.full_install_command() in msg
-        assert "playwright install chromium" in msg
+        assert install.browser_binary_command() in msg
 
     def test_ocr_missing_response_carries_the_helper_string(self, monkeypatch):
         """pdf_extractor.ocr_advice is the pre-W6 reference implementation;

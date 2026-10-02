@@ -912,7 +912,7 @@ class TestScreenshotErrorsAreActionableNotRawDriverLogs:
         ("Page.screenshot: Timeout 30000ms exceeded.", "timeout"),
         ("Target page, context or browser has been closed", "close_session"),
         ("browserType.launch: Executable doesn't exist at /x/chrome",
-         "playwright install"),
+         "patchright install"),
     ])
     def test_each_known_failure_names_the_knob_that_fixes_it(self, raw, needle):
         assert needle in self._msg(Exception(raw))

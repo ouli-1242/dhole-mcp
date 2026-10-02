@@ -13,14 +13,22 @@ Architecture:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import tempfile
+import threading
+import time
+from dataclasses import dataclass
+from pathlib import Path
 from random import randint
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
+
+from dhole_mcp.install import browser_binary_command
 
 logger = logging.getLogger("dhole_mcp.browser")
 
@@ -1176,7 +1184,7 @@ class BrowserSession:
             "args": browser_args,
             "ignore_default_args": list(HARMFUL_ARGS),
             "headless": self._headless,
-            "channel": "chrome" if self._real_chrome else _detect_chrome_channel(),
+            "channel": _launch_channel(self._real_chrome),
         }
 
         # Build context options
@@ -1688,6 +1696,379 @@ class StealthyBrowser(BrowserSession):
     @property
     def _is_stealthy(self) -> bool:
         return True
+
+
+# ─── chromium 首用安装（17.0 B3） ──────────────────────────────────────────
+#
+# 在此之前，"零配置"那句话是空的：`check_browser_available()` 只问 patchright 能不能
+# import，二进制不在就直接 launch 失败，然后把 `python -m playwright install chromium`
+# 印在错误里让用户自己去敲。这一节把那句话做成真的。
+#
+# 四条规矩各自都有对应的测试，因为它们在代码评审里都长得"显然正确"：
+#
+# 1. 绝不在事件循环上装。一次下载几分钟，客户端拿到的是 -32001 REQUEST_TIMEOUT 而不是
+#    答复 —— 这正是被删掉的 `paths.migrate_legacy_cache_dir` 那条 BLOCKING 注释要守的坑。
+#    这次不写注释，写运行期跳闸（`ensure_chromium` 在循环线程上直接拒绝）。
+# 2. 下载时长不吃调用预算：装完之后页面该拿到的时间要还是原来的时间。
+# 3. 装不上要诚实拒绝并把命令给全：把"没装上"说成"这个站读不到"是最坏的一种错误分类。
+# 4. 装的那一个必须正是起得来的那一个，判据只能有一份（`_launch_channel`）。第一版按
+#    headless 挑了 119MB 的 shell，启动那行传的却是显式 channel='chromium'，于是下载
+#    完成、复核通过、当场起不来 —— 这条是干净环境验收抓的。
+
+#: 安装事实的落盘处：另一个进程（以及 `dhole doctor`）看的是它，不是本进程的内存。
+_INSTALL_STATE_FILE = "browser_install.json"
+#: 一次安装的总时限。要下的那一份（默认那条路是 193MB 的 chromium）在同一台机器上实测过
+#: 100KB/s 与 2.4MB/s 两端 —— 差 24 倍，快的那端 80 秒，慢的那端 33 分钟，比这个上限还
+#: 高。所以到点的意思不是"产品坏了"，而是"这条链路今天搬不动"，那句超时文案因此直接给
+#: 换源的出口（npmmirror 镜像同版本同制品；干净环境验收走它，193MB 下载 + 起浏览器 +
+#: 抓到一页共 82.2s）。它同时是 `_BudgetCredit` 放宽调用预算的上限（见 server 那侧）。
+INSTALL_TIMEOUT_S = 1800.0
+
+_install_lock = threading.Lock()
+_install_async_lock: Optional[asyncio.Lock] = None
+#: 本进程的安装事实镜像：磁盘上没有状态文件时 `read_install_state()` 读它。没有这一行，
+#: 一次都没装过的进程里那次读取是 NameError —— doctor 会把它报成"读不到"。
+_install_state: Dict[str, Any] = {}
+#: 期望修订号来自包内清单，读一次就够（pip 升级 patchright 才会变，而那会重启进程）。
+_expected_revision_cache: Optional[int] = None
+_revision_read = False
+
+#: 装不上时给用户的命令。与 doctor、错误文案同源（install.py 那一处）。
+_INSTALL_COMMAND_STR = browser_binary_command()
+
+
+@dataclass
+class InstallOutcome:
+    """`ensure_chromium_async()` 的结果。
+
+    ``waited_s`` 是**这次调用为等一个安装实际花掉的时间**，调用方用它把 deadline 往后
+    挪 —— 下载是装机成本，不是这个页面的响应时间。已经就绪时是 0.0。
+    """
+    ok: bool
+    detail: str
+    waited_s: float = 0.0
+
+
+def _package_dir() -> Path:
+    """patchright 包的目录（browsers.json 在它里面）。"""
+    import patchright
+    return Path(patchright.__file__).resolve().parent
+
+
+def _expected_chromium_revision() -> Optional[int]:
+    """driver 会去找的那一版。
+
+    磁盘上"有 chromium-XXXX"不等于"能启动"：pip 升级过 patchright 之后旧目录还在，
+    新 driver 却只认清单里的 revision。照目录名猜会把一次必然失败的 launch 报成就绪。
+    """
+    global _expected_revision_cache, _revision_read
+    if _revision_read:
+        return _expected_revision_cache
+    _revision_read = True
+    try:
+        import json as _json
+        data = _json.loads((_package_dir() / "driver" / "package"
+                            / "browsers.json").read_text(encoding="utf-8"))
+        for entry in data.get("browsers", []):
+            if entry.get("name") == "chromium":
+                _expected_revision_cache = int(entry["revision"])
+                break
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("browsers.json unreadable: %r", exc)
+        _expected_revision_cache = None
+    return _expected_revision_cache
+
+
+def _browsers_root() -> Path:
+    """playwright/patchright 的浏览器落盘根（环境变量优先，与上游同一约定）。"""
+    override = (os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+                or os.environ.get("PATCHRIGHT_BROWSERS_PATH"))
+    if override:
+        return Path(override)
+    if sys.platform == "win32":
+        return Path(os.environ.get("LOCALAPPDATA", "")) / "ms-playwright"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / "ms-playwright"
+    return Path.home() / ".cache" / "ms-playwright"
+
+
+#: 一次 launch 到底要哪个目录。判据**不是** headless，而是"有没有显式传 channel"：驱动
+#: 源码 `getExecutableName()`（patchright driver/package/lib/coreBundle.js）的顺序是显式
+#: channel 优先，只有 channel 缺省时 headless 才落到 shell。dhole 两条路都会传 channel
+#: （`StealthyBrowser.start()` 里是 'chrome' 或 'chromium'），所以默认路径要的始终是完整的
+#: `chromium-<rev>`。实测（patchright 1228 / win64，空 PLAYWRIGHT_BROWSERS_PATH 里让驱动
+#: 自己报缺失路径）：channel='chromium' + headless=True → `chromium-1228\chrome-win64\
+#: chrome.exe`；不传 channel + headless=True → `chromium_headless_shell-1228\…`；
+#: channel='chrome' → 用户自己那个 Chrome，我们的目录根本不参与。
+#: 按 headless 判就会去装那份启动根本不用的 shell：下载完成、复核通过、当场起不来。
+#: 这条真发生过，就是干净环境验收的那一次红。
+_ARTIFACT_DIRS = {"chromium": "chromium-{rev}",
+                  "headless_shell": "chromium_headless_shell-{rev}"}
+
+#: 每份多大（实测 win64 两个 zip 的 Content-Length 与本机解包后的目录：chromium
+#: 193MB → 416MB，headless_shell 119MB → 270MB）。
+INSTALL_DOWNLOAD_MB = {"chromium": 193, "headless_shell": 119}
+
+#: `launch_artifact()` 的一个返回值：这次起的是用户自己的 Chrome，没有东西要下载。
+SYSTEM_CHROME = "system-chrome"
+
+
+def _launch_channel(real_chrome: bool = False) -> str:
+    """`StealthyBrowser.start()` 交给 launch 的那个 channel —— 只在这里判一次。
+
+    安装侧与启动侧必须共用它：两边各写一遍同一个条件，就是"装了 119MB 却起不来"的来路。
+    """
+    return "chrome" if real_chrome else _detect_chrome_channel()
+
+
+def launch_artifact(real_chrome: bool = False) -> str:
+    """这次 launch 需要哪个落盘 artifact —— 用的就是 `_launch_channel()` 那一个判据。
+
+    注意这里**没有** headless：dhole 两条路都显式传 channel（'chrome' 或 'chromium'），
+    而驱动里显式 channel 优先于 headless 的 shell 选择。所以按 headless 挑 artifact 是错
+    的 —— 那个版本装完 119MB shell、复核通过、当场起不来（实测见 `_ARTIFACT_DIRS`）。
+    shell 那一支仍留在表里，是因为 doctor 要说清"磁盘上有 shell 不等于能用"。
+    """
+    if _launch_channel(real_chrome) == "chrome":
+        return SYSTEM_CHROME
+    return "chromium"
+
+
+def _install_argv(artifact: str) -> list[str]:
+    """只下这次真正要启动的那一份（实测：`--no-shell` 下 chromium-<rev> + ffmpeg + winldd，
+    `--only-shell` 下 shell + 同样那两个小依赖）。
+
+    首用等待是这款功能最贵的一刻，把不需要的那一份也拖下来，等于让每个干净机器多等一倍
+    时间（默认路径上 193MB → 313MB）。
+    """
+    return [sys.executable, "-m", "patchright", "install", "chromium",
+            "--only-shell" if artifact == "headless_shell" else "--no-shell"]
+
+
+def _installed_artifact(kind: str, revision: Optional[int]) -> Optional[Path]:
+    """清单那一版的该当 artifact 在不在。半个安装（被打断的下载）不算存在。"""
+    if revision is None:
+        return None
+    d = _browsers_root() / _ARTIFACT_DIRS[kind].format(rev=revision)
+    # 上游用这个标记文件表示"解包完成"。没有它 = 下载中途被打断。
+    if d.is_dir() and (d / "INSTALLATION_COMPLETE").exists():
+        return d
+    return None
+
+
+def chromium_status(real_chrome: bool = False) -> dict:
+    """这台机器现在能不能起浏览器。纯读，几毫秒，绝不下载。
+
+    问的是 `launch_artifact()` 算出来的那一个目录，而它和启动共用 `_launch_channel()`。
+    """
+    artifact = launch_artifact(real_chrome)
+    if artifact == SYSTEM_CHROME:
+        # channel='chrome' 时两种模式都由用户自己那个 Chrome 承担，没有东西要下载。
+        return {"present": True, "source": "system-chrome", "artifact": artifact,
+                "expected_revision": _expected_chromium_revision(),
+                "path": "", "detail": "system Chrome - no download needed"}
+    rev = _expected_chromium_revision()
+    if rev is None:
+        return {"present": False, "source": "unknown", "artifact": artifact,
+                "expected_revision": None, "path": "",
+                "detail": "patchright's browsers.json is unreadable - cannot tell "
+                          "which chromium revision this driver launches"}
+    found = _installed_artifact(artifact, rev)
+    if found is not None:
+        return {"present": True, "source": "bundled", "artifact": artifact,
+                "expected_revision": rev, "path": str(found),
+                "detail": found.name}
+    return {"present": False, "source": "missing", "artifact": artifact,
+            "expected_revision": rev, "path": "",
+            "detail": f"{_ARTIFACT_DIRS[artifact].format(rev=rev)} not installed"}
+
+
+def chromium_artifacts() -> dict:
+    """两个 artifact 各自在不在。抓取只问它这次要用的那一个，doctor 要说全。"""
+    rev = _expected_chromium_revision()
+    out: Dict[str, Any] = {"revision": rev,
+                           "system_chrome": _detect_chrome_channel() == "chrome",
+                           "launch_needs": launch_artifact(),
+                           "expected": {k: _ARTIFACT_DIRS[k].format(rev=rev)
+                                        for k in _ARTIFACT_DIRS}}
+    for _kind in _ARTIFACT_DIRS:
+        found = _installed_artifact(_kind, rev)
+        out[_kind] = found.name if found is not None else None
+    return out
+
+
+def _platform_can_install() -> tuple[bool, str]:
+    """这台机器能不能自己装。False 时那句 reason 会原样进错误文案。"""
+    if not _has_patchright():
+        return False, ("patchright is not importable - the browser tier is absent "
+                       "for real, install the extras first")
+    if "com.termux" in os.environ.get("PREFIX", ""):
+        return False, ("Termux ships no playwright/patchright wheel or driver, so "
+                       "there is no chromium to install here")
+    if sys.platform not in ("win32", "darwin", "linux"):
+        return False, f"no chromium build for {sys.platform}"
+    return True, ""
+
+
+def _has_patchright() -> bool:
+    try:
+        import importlib.util
+        return importlib.util.find_spec("patchright") is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _install_state_path() -> str:
+    from dhole_mcp import paths
+    return str(paths.file(_INSTALL_STATE_FILE))
+
+
+def _record_install(state: dict) -> None:
+    """把安装事实写进 ~/.dhole/browser_install.json（另一个进程与 doctor 读它）。"""
+    global _install_state
+    _install_state = dict(state)
+    try:
+        from dhole_mcp import paths
+        path = _install_state_path()
+        paths.ensure_private_dir(Path(os.path.dirname(path)))
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False)
+        paths.harden_file(path)
+    except Exception as exc:  # noqa: BLE001 - 记录失败不能改变安装结论
+        logger.debug("install state not written: %r", exc)
+
+
+def read_install_state() -> dict:
+    """磁盘上的安装记录；没有就回退到本进程的内存镜像。"""
+    try:
+        path = _install_state_path()
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except Exception:  # noqa: BLE001
+        pass
+    return dict(_install_state)
+
+
+def reset_install_state() -> None:
+    """清掉进程内的"装过了"状态。测试要能重来；生产不需要。
+
+    异步那把锁一起丢：`asyncio.Lock` 第一次 acquire 就认死了当时那个 loop，留着它会让
+    下一个事件循环拿到一把属于已关闭循环的锁。
+    """
+    global _install_state, _expected_revision_cache, _revision_read, _install_async_lock
+    _install_state = {}
+    _install_async_lock = None
+    _expected_revision_cache = None
+    _revision_read = False
+
+
+def _loop_is_running_here() -> bool:
+    try:
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        return False
+
+
+def ensure_chromium(real_chrome: bool = False,
+                    timeout_s: float = INSTALL_TIMEOUT_S) -> tuple[bool, str]:
+    """需要就装，装完给结论。**同步阻塞**：只能在 worker 线程里调用。
+
+    `real_chrome` 是调用方这次会不会传 channel='chrome'：它决定该装哪一个 artifact
+    （`launch_artifact()`，与启动同源）。
+
+    在事件循环线程上被直接调用时拒绝并说明为什么（见文件顶部第 1 条规矩）—— 这个坑
+    有过一次真实事故，注释没守住，所以这次做成运行期跳闸。
+    """
+    if _loop_is_running_here():
+        return False, ("ensure_chromium() refused: it blocks for minutes and this is "
+                       "the event loop thread - await ensure_chromium_async() instead "
+                       "(it runs this in a worker thread)")
+    status = chromium_status(real_chrome)
+    if status["present"]:
+        return True, status["detail"]
+
+    can, why = _platform_can_install()
+    if not can:
+        return False, (f"cannot install the browser here - {why}; "
+                       f"if this platform should support it, run: {_INSTALL_COMMAND_STR}")
+
+    with _install_lock:
+        # 双重检查：等锁的那段时间里另一个线程可能已经装完了。
+        status = chromium_status(real_chrome)
+        if status["present"]:
+            return True, status["detail"]
+        artifact = status["artifact"]
+        rev = status["expected_revision"]
+        wanted = status["detail"].replace(" not installed", "")
+        cmd = _install_argv(artifact)
+        mb = INSTALL_DOWNLOAD_MB[artifact]
+        _record_install({"status": "installing", "revision": rev,
+                         "command": _INSTALL_COMMAND_STR,
+                         "started_at": time.time()})
+        logger.info("Installing %s (revision %s) - ~%dMB, once",
+                    artifact, rev, mb)
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            # 慢链路是唯一现实的失败原因：这一份在同一台机器上实测过 100KB/s 与
+            # 2.4MB/s 两个极端（差 24 倍）。到点是链路今天搬不动，不是产品坏了，所以
+            # 这句话要说清"还要重下"并把上游换源的出口给出来 —— playwright 自己认
+            # PLAYWRIGHT_DOWNLOAD_HOST，而它不是 dhole 的旋钮。
+            detail = (f"chromium install did not finish within {int(timeout_s)}s "
+                      f"(~{mb}MB for {wanted} from cdn.playwright.dev) - the "
+                      "download does not resume, so a retry starts over. Run "
+                      f"manually: {_INSTALL_COMMAND_STR}, or set "
+                      "PLAYWRIGHT_DOWNLOAD_HOST to a faster mirror first")
+            _record_install({"status": "failed", "revision": rev,
+                             "command": _INSTALL_COMMAND_STR,
+                             "error": f"timeout after {int(timeout_s)}s",
+                             "finished_at": time.time()})
+            return False, detail
+        except Exception as exc:  # noqa: BLE001
+            detail = (f"chromium install could not run: {type(exc).__name__}: {exc}; "
+                      f"run manually: {_INSTALL_COMMAND_STR}")
+            _record_install({"status": "failed", "revision": rev,
+                             "command": _INSTALL_COMMAND_STR,
+                             "error": str(exc)[:400], "finished_at": time.time()})
+            return False, detail
+        after = chromium_status(real_chrome)
+        if proc.returncode == 0 and after["present"]:
+            _record_install({"status": "done", "revision": rev,
+                             "command": _INSTALL_COMMAND_STR,
+                             "path": after["path"], "finished_at": time.time()})
+            return True, f"installed {after['detail']}"
+        tail = ((proc.stderr or proc.stdout or "") or "").strip()[-200:]
+        _record_install({"status": "failed", "revision": rev,
+                         "command": _INSTALL_COMMAND_STR,
+                         "error": tail or f"exit {proc.returncode}",
+                         "finished_at": time.time()})
+        return False, (f"chromium install failed (exit {proc.returncode}) - "
+                       f"{wanted} is still missing"
+                       + (f": {tail}" if tail else "")
+                       + f" - run manually: {_INSTALL_COMMAND_STR}")
+
+
+async def ensure_chromium_async(real_chrome: bool = False,
+                                timeout_s: float = INSTALL_TIMEOUT_S) -> InstallOutcome:
+    """事件循环安全的那一面：安装跑在 worker 线程，并发调用共享同一次下载。
+
+    第二个调用者等的是同一把锁，所以它拿到的是已经装好的浏览器，而不是第二份几百 MB。
+    """
+    global _install_async_lock
+    status = chromium_status(real_chrome)
+    if status["present"]:
+        return InstallOutcome(True, status["detail"], 0.0)
+    started = time.perf_counter()
+    if _install_async_lock is None:
+        _install_async_lock = asyncio.Lock()
+    async with _install_async_lock:
+        ok, detail = await asyncio.to_thread(ensure_chromium, real_chrome, timeout_s)
+    return InstallOutcome(ok, detail, time.perf_counter() - started)
 
 
 # ─── Browser availability check ───────────────────────────────────────────────

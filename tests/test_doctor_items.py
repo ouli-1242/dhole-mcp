@@ -10,6 +10,7 @@ doctor 跑在"已经坏了"的时候，所以它的两条老规矩不变：绝�
 `_append_*` 本体，而不是整份报告。
 """
 
+import json
 import sys
 
 import pytest
@@ -117,26 +118,91 @@ class TestItem2DependencyLayers:
 
 
 class TestItem3Chromium:
+    """第 3 项在 B3 之后读的是 driver 的清单，不是磁盘上恰好有什么目录。
+
+    B2-5 那两条用例只设了 `PLAYWRIGHT_BROWSERS_PATH` 并造一个 `chromium-1243` 目录，
+    当时的实现照目录名报"已就绪"。现在的实现问 browsers.json 要期望修订号，再问
+    **这次真的会 launch 的那一个** artifact（判据是显式 channel，见
+    `browser._ARTIFACT_DIRS` 那段实测），所以挂具照那个形状造。
+    """
+
+    REV = 1228
+
+    @pytest.fixture
+    def browsers(self, monkeypatch, tmp_path):
+        """一个干净的浏览器世界：清单说 1228，磁盘上什么都没有，系统 Chrome 不算数。"""
+        from dhole_mcp import browser
+
+        browser.reset_install_state()
+        pkg = tmp_path / "patchright_pkg"
+        (pkg / "driver" / "package").mkdir(parents=True)
+        (pkg / "driver" / "package" / "browsers.json").write_text(
+            json.dumps({"browsers": [{"name": "chromium", "revision": self.REV}]}),
+            encoding="utf-8")
+        monkeypatch.setattr(browser, "_package_dir", lambda: pkg)
+        monkeypatch.setattr(browser, "_detect_chrome_channel", lambda: "chromium")
+        root = tmp_path / "ms-playwright"
+        root.mkdir()
+        monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(root))
+        return root
+
+    def _install(self, root, rev, kinds=("chromium", "headless_shell")):
+        from dhole_mcp import browser
+        for kind in kinds:
+            d = root / browser._ARTIFACT_DIRS[kind].format(rev=rev)
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "INSTALLATION_COMPLETE").write_text("", encoding="utf-8")
+
+    def _row(self, capsys):
+        return next(x for x in capsys.readouterr().out.splitlines()
+                    if "chromium binary" in x)
 
     def test_an_absent_binary_says_it_will_self_install(self, isolated_home,
-                                                        monkeypatch, tmp_path,
-                                                        capsys):
-        empty = tmp_path / "browsers"
-        empty.mkdir()
-        monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(empty))
+                                                       browsers, monkeypatch,
+                                                       capsys):
+        monkeypatch.setenv("DHOLE_HOME", str(isolated_home))
         updater.doctor()
-        out = capsys.readouterr().out
-        assert "chromium binary" in out
-        assert "150MB" in out, out
+        line = self._row(capsys)
+        assert "193MB" in line, line
+        assert "first" in line, line
+        assert str(self.REV) in line, line
+        # 说的是"这次要用的那个不在"，不是一个笼统的"浏览器没装"
+        assert "chromium-1228 not installed" in line, line
 
-    def test_a_present_binary_is_read_as_the_actual_directory(self, isolated_home,
-                                                             monkeypatch, tmp_path,
-                                                             capsys):
-        base = tmp_path / "browsers"
-        (base / "chromium-1243").mkdir(parents=True)
-        monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(base))
+    def test_a_present_binary_is_read_as_the_revision_the_driver_wants(
+            self, isolated_home, browsers, monkeypatch, capsys):
+        monkeypatch.setenv("DHOLE_HOME", str(isolated_home))
+        self._install(browsers, self.REV)
         updater.doctor()
-        assert "chromium-1243" in capsys.readouterr().out
+        line = self._row(capsys)
+        assert "chromium-1228 (revision 1228)" in line, line
+
+    def test_only_the_shell_on_disk_is_not_read_as_ready(self, isolated_home,
+                                                         browsers, monkeypatch,
+                                                         capsys):
+        """验收真撞过的形状：`patchright install chromium --only-shell` 装完，盘上有
+        chromium_headless_shell-1228，而 dhole 传的是显式 channel='chromium' —— 那一份
+        它不 launch。报"已就绪"就是替一次必然失败的启动作保；只说"没装"又藏起了用户
+        已经花掉的那 119MB，所以两边都要出现在同一行里。
+        """
+        monkeypatch.setenv("DHOLE_HOME", str(isolated_home))
+        self._install(browsers, self.REV, kinds=("headless_shell",))
+        updater.doctor()
+        line = self._row(capsys)
+        assert "chromium-1228 not installed" in line, line
+        assert "chromium_headless_shell-1228" in line, line
+        assert "not launched" in line, line
+
+    def test_an_other_revision_on_disk_is_not_reported_as_ready(
+            self, isolated_home, browsers, monkeypatch, capsys):
+        """pip 升过 patchright 之后磁盘上会有一个更高的 chromium-XXXX 目录，driver 却不
+        认它。把它读成"已就绪"就是让 doctor 替一次必然失败的 launch 作保。"""
+        monkeypatch.setenv("DHOLE_HOME", str(isolated_home))
+        self._install(browsers, self.REV + 71)
+        updater.doctor()
+        line = self._row(capsys)
+        assert "not installed" in line, line
+        assert str(self.REV + 71) not in line, line
 
 
 class TestItem4RerankModel:

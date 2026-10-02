@@ -139,6 +139,55 @@ class TestAttachIsPerCallNotPerBatch:
         assert _cdp_authorized_hosts() == frozenset({"127.0.0.1"})
 
 
+class _Stop(Exception):
+    """抓到"参数已经算好了"这一刻：桩不需要真起浏览器就能看见传进去的 kwargs。"""
+
+
+class TestCdpLaneReachesTheBrowser:
+    """attach 主路径本身在默认套件里必须有人接。
+
+    实测过的漏网形状：CDP 快速通道读了一个只在 `if actions:` 里绑定的局部变量，于是
+    **每一次没有 actions 的 attach** 都在组装参数时炸成
+    `cannot access local variable 'actions_need_resources'` —— 而这条正是这个功能的主要
+    用法（attach 看一眼已登录的页面，什么都不做）。它只在 `-m e2e` 里看得见，默认运行
+    deselect 了那条，所以闸必须落在 unit 层。
+    """
+
+    CDP = "http://127.0.0.1:9222"
+
+    def _lane_kwargs(self, monkeypatch, **call):
+        from dhole_mcp.server import MasterFetchServer
+
+        seen: dict = {}
+
+        async def fake_force_fetch(self, *args, **kwargs):
+            seen.update(kwargs)
+            raise _Stop()
+
+        monkeypatch.setattr(MasterFetchServer, "_force_fetch", fake_force_fetch)
+        with pytest.raises(_Stop):
+            asyncio.run(MasterFetchServer().smart_fetch(
+                url="https://example.com/", cdp_url=self.CDP, confirm=True, **call))
+        return seen
+
+    def test_an_attach_without_actions_reaches_the_fetch_with_the_default_speed_plan(
+            self, monkeypatch):
+        seen = self._lane_kwargs(monkeypatch)
+        assert seen["cdp_url"] == self.CDP
+        assert seen["page_action"] is None
+        # 没有动作要渲染 → 沿用 `_force_fetch` 自己的默认（丢资源），不是"什么都不知道"
+        assert seen["disable_resources"] is True
+
+    def test_an_attach_that_asks_for_a_screenshot_keeps_the_resources(
+            self, monkeypatch):
+        """反向半边：这条通道不是把 actions 丢了。同一条 lane 要为截图动作把资源拦截
+        关掉，否则 attach 视角截出来的是破图占位符。
+        """
+        seen = self._lane_kwargs(monkeypatch, actions=[{"screenshot": {"selector": "#x"}}])
+        assert seen["page_action"] is not None
+        assert seen["disable_resources"] is False
+
+
 # ─── attach 语义: contexts[0] 复用 ───────────────────────────────────────────
 
 class _FakeBrowser:

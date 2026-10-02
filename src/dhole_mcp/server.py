@@ -3154,8 +3154,10 @@ _BROWSER_ERROR_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("has been closed", "target closed"),
      "the browser session is gone - call again to get a fresh one, or close_session "
      "and retry"),
-    (("executable doesn't exist", "playwright install"),
-     "the browser binary is missing - run: python -m playwright install chromium"),
+    (("executable doesn't exist", "playwright install", "browser_binary_missing"),
+     "the browser binary is missing - dhole installs it on first use, so this means "
+     f"that install failed or is still running: `{_install.browser_binary_command()}` "
+     "(state: ~/.dhole/browser_install.json)"),
 )
 
 
@@ -4070,6 +4072,30 @@ async def _timed(coro):
     return result, elapsed
 
 
+def _browser_binary_ready() -> bool:
+    """预热要不要管浏览器。纯读，几毫秒，**绝不下载**。
+
+    计划里那句话是"第一次**用到**时同步自动装"，用到它的是抓取，不是启动。启动就下
+    193MB 是把成本摊给每一个装机的人，包括一次浏览器档都不需要的那些，而这条链路可能是
+    计费的（同一台机器实测 120KB/s ~ 2.4MB/s，最慢的一端一份要一小时）。所以二进制不在
+    时这里就是"跳过预热"，首用的那次安装由 `open_session` 那条路负责。
+
+    惰性导入 + 只在 worker 线程里调用：`browser` 是重模块，而启动路径上任何一次同步
+    import 都会饿死 MCP 握手（这条有过真实事故，见 `_prewarm_stealthy` 的注释）。
+    """
+    from dhole_mcp import browser as _browser
+    try:
+        status = _browser.chromium_status()
+    except Exception as exc:  # noqa: BLE001 - 预热读不出状态就当没有，不让启动崩
+        logger.debug("browser binary check failed: %r", exc)
+        return False
+    if not status["present"]:
+        logger.info("Browser prewarm skipped - %s is not installed yet; the first "
+                    "browser-tier fetch installs it once", status["detail"])
+        return False
+    return True
+
+
 async def _safe_prewarm(coro_fn, timeout: float = 20.0) -> None:
     """Run a prewarm callable in the background, fully isolated.
 
@@ -4103,6 +4129,124 @@ async def _safe_imported_prewarm(module_name: str, attr: str, timeout: float = 2
     except BaseException:
         return
     await _safe_prewarm(coro_fn, timeout=timeout)
+
+
+async def ensure_chromium_async(real_chrome: bool = False):
+    """17.0 B3 · 需要浏览器档时先确保二进制在（干净机器上首用下一次 193MB，实测）。
+
+    `real_chrome` 必须一路传到底：该装哪一个 artifact 由它决定
+    （`browser.launch_artifact()`，判据与启动那行同源）。这个判据曾经分叉过一次：安装按
+    headless 下了 119MB 的 shell，而启动那行传的是显式 channel='chromium'（驱动里显式
+    channel 优先），于是下载完成、复核通过、当场起不来。
+
+    惰性导入：browser 是重模块，而 server 的导入面就是 MCP 的连接成本。放在这里
+    而不是每个调用点写一遍，是因为 `open_session` 与升级链都要问同一句话，而
+    patchright 只会在其中一处先撞上"Executable doesn't exist"。
+
+    另一件只有这一处能做的事：把安装花掉的时间**还给调用预算**。下载是装机成本，不是
+    这个页面的响应时间；不还的话首用那一次会带着"30000ms 预算用尽"的假故障回去（实测
+    过：真下载 40s 时，一次 forced stealthy 就是这么死的）。预算作用域由
+    `_within_call_budget` 放进 ContextVar；不在作用域里（比如 CLI、预热）时这里就是纯
+    等待，不做任何记账。
+    """
+    from dhole_mcp import browser as _browser
+    credit = _budget_credit.get()
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    if credit is not None:
+        credit.begin_install(_browser.INSTALL_TIMEOUT_S)
+    try:
+        return await _browser.ensure_chromium_async(real_chrome)
+    finally:
+        if credit is not None:
+            credit.end_install(loop.time() - started)
+
+
+class _BudgetCredit:
+    """一次调用里"不算在页面预算上"的时间账本（目前只有 chromium 首用安装）。
+
+    安装开始时按最坏情况放宽截止（安装自己有 `INSTALL_TIMEOUT_S` 的上限，所以放宽是有
+    界的），结束时收回到实际花掉的秒数。作用域走 ContextVar：并发调用各有各的预算，而
+    安装发生在 `await` 进去的同一 Task 里，所以深处改的就是外层那个 `asyncio.timeout`
+    的截止（同一个对象）。
+    """
+
+    __slots__ = ("base_deadline", "spent_s", "_cm", "_cap_s", "_depth")
+
+    def __init__(self):
+        self.base_deadline = 0.0
+        self.spent_s = 0.0
+        self._cm = None
+        self._cap_s = 0.0
+        self._depth = 0
+
+    def attach(self, cm) -> None:
+        """接上 `asyncio.timeout()` 返回的那个上下文对象（它可以被改期）。
+
+        基准从对象本身读，不重算：`asyncio.timeout` 记账用的是 `loop.time()`，自己加
+        一遍会把进入作用域的那几毫秒算歪。
+        """
+        self._cm = cm
+        self.base_deadline = _timeout_when(cm)
+        self._apply()
+
+    def begin_install(self, cap_s: float) -> None:
+        self._depth += 1
+        self._cap_s = max(self._cap_s, cap_s)
+        self._apply()
+
+    def end_install(self, used_s: float) -> None:
+        self._depth = max(0, self._depth - 1)
+        self.spent_s += max(0.0, used_s)
+        if self._depth == 0:
+            self._cap_s = 0.0
+        self._apply()
+
+    def _apply(self) -> None:
+        if self._cm is not None:
+            _timeout_reschedule(self._cm,
+                                self.base_deadline + self.spent_s + self._cap_s)
+
+
+def _timeout_when(cm) -> float:
+    """`asyncio.timeout` 作用域当前的截止（loop.time 基准）。
+
+    pyproject 声明支持 >=3.11，而这个名字在 3.12 换过：3.11 是 `deadline()`（读写同
+    一个方法），3.12+ 是 `when()` + `reschedule()`。
+    """
+    when = getattr(cm, "when", None)
+    return when() if when is not None else cm.deadline()
+
+
+def _timeout_reschedule(cm, when: float) -> None:
+    """改期；已经到期的 Timeout 不许再改。
+
+    实测撞上过：安装跑满它自己的 900s 上限时，`asyncio.timeout` 早已 expire，
+    `reschedule()` 抛 `RuntimeError: Cannot change state of expiring Timeout` —— 而这句话
+    会变成用户看到的抓取错误。到期就是到期，记账结束时没什么可改的。
+    """
+    try:
+        reschedule = getattr(cm, "reschedule", None)
+        if reschedule is not None:
+            reschedule(when)
+        else:
+            cm.deadline(when)
+    except (RuntimeError, ValueError):
+        pass
+
+
+_budget_credit: contextvars.ContextVar[Optional["_BudgetCredit"]] = contextvars.ContextVar(
+    "_budget_credit", default=None)
+
+
+def _apply_install_shift(deadline: float, waited_s: float) -> float:
+    """把"等一次安装"的时间还给调用预算。
+
+    下载是装机成本，不是这个页面的响应时间：不挪 deadline，一次 90s 的安装会让下一
+    档在检查剩余时间时读到"预算已用尽"，于是用户看到的是一条关于站点的假故障 —— 而
+    站点此刻完全可能是好的。
+    """
+    return deadline + max(0.0, waited_s)
 
 
 class _SessionBusy(RuntimeError):
@@ -5128,6 +5272,13 @@ class MasterFetchServer:
         reply out (client reported -32001 REQUEST_TIMEOUT). Now the entire
         check+import is off the event loop.
         """
+        # 17.0 B3 · 二进制不在就整个跳过预热，绝不在这儿下载（见 `_browser_binary_ready`）。
+        # 顺序也因此不能再反过来：这条 30s 窗口管的是"启动一个浏览器"，而首用下载是分钟
+        # 量级 —— 让下载落进窗口，超时会掐死正拿着安装锁的任务，worker 线程却取消不掉，
+        # 锁一放下一个调用看盘上"还是没装"就又起一次下载（实测同时跑着三个
+        # `patchright install chromium`，套件停在 26%）。
+        if not await asyncio.to_thread(_browser_binary_ready):
+            return
         async def _warm():
             # Quick network preflight: skip browser prewarm if the network is
             # unreachable (saves 2-5s launching a browser that can't connect).
@@ -5450,6 +5601,15 @@ class MasterFetchServer:
                 f"{_browser_import_error or 'patchright not importable'}. "
                 + _install.browser_install_advice()
             )
+        # 17.0 B3：attach 到用户自己的 Chrome（cdp_url）或用本机装好的 Chrome
+        # （real_chrome）时没有任何东西要下载 —— 那个浏览器已经在机器上了。只有 dhole
+        # 自己起 bundled chromium 才需要先确保二进制在，而"该装哪一个"由同一个判据算。
+        if not cdp_url:
+            outcome = await ensure_chromium_async(real_chrome)
+            if not outcome.ok:
+                raise RuntimeError(
+                    f"browser_binary_missing: {outcome.detail} "
+                    + _install.browser_install_advice())
         session_id = session_id or uuid4().hex[:12]
         async with self._sessions_lock:
             if session_id in self._sessions:
@@ -5464,7 +5624,7 @@ class MasterFetchServer:
         validate_css_selector(wait_selector)
 
         # 安全闸 1/2 已上提到工具入口（smart_fetch / _bulk_stealthy_fetch）：
-        # _open_session 是内部助手，到达它时 cdp_url 已过闸（先问再记）。
+        # open_session 是内部入口，到达它时 cdp_url 已过闸（先问再记）。
         # 围栏 = 落盘的已授权主机集合，浏览器层 route handler 执行。
         cdp_allowed = (_cdp_authorized_hosts() or None) if cdp_url else None
         if cdp_url:
@@ -7221,6 +7381,12 @@ class MasterFetchServer:
         # together silently dropped every action, and a capture/click the agent
         # believed it had queued never ran.)
         page_action = None
+        # 必须在 `if actions` 外面初始化：CDP 那条快速通道也要读它，而没有 actions 的
+        # attach 是这个功能的主要用法 —— 读一个未绑定的局部变量把整条 cdp_url 通道炸成
+        # "cannot access local variable …"（e2e 里实测到，默认套件 deselect 了那条所以
+        # 一直没响）。False 就是这条通道在引入 actions 之前的行为：用 `_force_fetch`
+        # 自己的默认值（丢资源）。
+        actions_need_resources = False
         if actions:
             if force_fetcher == "http":
                 raise ValueError("actions require the browser tier; use force_fetcher='stealthy' or omit it")
@@ -7508,8 +7674,13 @@ class MasterFetchServer:
         """
         started = now()
         asked_s = max(1.0, float(timeout_ms or 30000) / 1000.0)
+        # 17.0 B3 · 首用安装不算在这个预算里。见 `_BudgetCredit`：这里只负责把账本
+        # 放进 ContextVar 并接上真正的截止对象，等待发生在里面的 `ensure_chromium_async`。
+        credit = _BudgetCredit()
+        token = _budget_credit.set(credit)
         try:
-            async with asyncio.timeout(asked_s + _BACKSTOP_GRACE_S):
+            async with asyncio.timeout(asked_s + _BACKSTOP_GRACE_S) as cm:
+                credit.attach(cm)
                 return await coro
         except TimeoutError:
             result = _with_agent_hints(_over_budget_result(
@@ -7519,6 +7690,8 @@ class MasterFetchServer:
             # ran" when in fact one ran and never came back.
             result.escalation_path = f"{stage}(timeout: no tier returned)"
             return result
+        finally:
+            _budget_credit.reset(token)
 
     async def _smart_fetch_bulk(
         self, urls, extraction_type, css_selector, main_content_only,
@@ -8123,6 +8296,22 @@ class MasterFetchServer:
             return await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
 
         errors.append(f"HTTP failed (status {result.status})")
+        # 17.0 B3：需要浏览器档时先确保二进制在。装一次是几分钟，所以这段时间必须
+        # 从"这个页面的预算"里摘出去 —— 否则一次首用安装会把下一档的剩余时间读成
+        # 0，用户收到的是一条关于站点的假故障。已经就绪时这里是几毫秒、waited_s=0。
+        install = await ensure_chromium_async(real_chrome)
+        if not install.ok:
+            result.duration_ms = (now() - start_time) * 1000
+            result.escalation_path = "browser_binary_missing"
+            note = (f"browser_binary_missing: {install.detail[:200]} "
+                    f"- stealthy tier skipped, HTTP tier returned status {result.status}")
+            result.error = f"{result.error}; {note}" if result.error else note
+            return await self._finalize_result(result, url, extraction_type, css_selector,
+                                               cache_ttl, offset, max_chars)
+        if install.waited_s:
+            deadline = _apply_install_shift(deadline, install.waited_s)
+            logger.info("chromium installed on first use (%.1fs) - budget restored",
+                        install.waited_s)
         # The tier's own words, kept for the browser over-budget message below.
         # `errors` carries the status only because it also feeds the
         # all_tiers_failed string, where a raw exception sentence would bloat it -
@@ -9163,6 +9352,9 @@ class MasterFetchServer:
                 warm_reranker = asyncio.create_task(
                     _safe_imported_prewarm("dhole_mcp.reranker", "prewarm_reranker")
                 )
+                # 17.0 B3：首用那一次下载（119MB 起）由 `_prewarm_stealthy` 自己在它的
+                # 30s 窗口**之外**先等完（顺序在那条函数的开头，写在那里）。这里不再开
+                # 第二条任务：两个等待者守着同一把锁，做的是同一件事。
                 try:
                     async with stdio_server() as (read, write):
                         await server.run(read, write, server.create_initialization_options())
@@ -9210,6 +9402,9 @@ class MasterFetchServer:
                 warm_reranker = asyncio.create_task(
                     _safe_imported_prewarm("dhole_mcp.reranker", "prewarm_reranker")
                 )
+                # 17.0 B3：首用那一次下载（119MB 起）由 `_prewarm_stealthy` 自己在它的
+                # 30s 窗口**之外**先等完（顺序在那条函数的开头，写在那里）。这里不再开
+                # 第二条任务：两个等待者守着同一把锁，做的是同一件事。
                 try:
                     async with manager.run():
                         yield

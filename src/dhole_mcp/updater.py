@@ -32,6 +32,8 @@ import sys
 
 from dhole_mcp import env_registry
 
+from dhole_mcp import install
+
 from dhole_mcp import paths
 
 __all__ = ["installed_version", "print_version", "print_capabilities",
@@ -768,41 +770,81 @@ def _append_dependency_layers(checks) -> None:
     ))
 
 
-def _playwright_browsers_dir() -> str:
-    """chromium 的落盘目录（patchright/playwright 的默认位置，环境变量可改）。"""
-    override = (os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-                or os.environ.get("PATCHRIGHT_BROWSERS_PATH"))
-    if override:
-        return override
-    if sys.platform == "win32":
-        return os.path.join(os.environ.get("LOCALAPPDATA", ""), "ms-playwright")
-    if sys.platform == "darwin":
-        return os.path.expanduser("~/Library/Caches/ms-playwright")
-    return os.path.expanduser("~/.cache/ms-playwright")
-
-
 def _append_chromium(checks) -> None:
-    """3 · 浏览器二进制在不在。包装了 != 浏览器在：这是"第一次抓取卡住"的常见真因。"""
-    base = _playwright_browsers_dir()
-    found = ""
+    """3 · 浏览器二进制的真实状态（17.0 B3 之后才有"真实"可言）。
+
+    三件此前做不到、也做错过的事：
+      * 期望版本要问 driver 的 browsers.json。磁盘上最高的那个 chromium-XXXX 不算答案
+        —— pip 升级过 patchright 之后旧目录还在，新 driver 却只认清单里那一版，照目录
+        名猜会把一次必然失败的 launch 报成"已就绪"。
+      * 一次 launch 要的是哪一个目录。判据是**显式 channel**，不是 headless（实测见
+        `browser._ARTIFACT_DIRS`）：dhole 默认那条路要完整的 `chromium-<rev>`，而磁盘上
+        可能只有 `chromium_headless_shell-<rev>` —— 那一份它根本不起。两个都报出来，
+        "这次要用的没装"才说得出"没装"。
+      * 首用安装是会失败的（网络、依赖、平台），失败得留痕。一条承诺"第一次自己装"的
+        行，如果安装失败过却什么都不说，就是把 doctor 变成了广告。
+    """
     try:
-        if os.path.isdir(base):
-            for name in sorted(os.listdir(base), reverse=True):
-                if name.startswith("chromium-") and os.path.isdir(os.path.join(base, name)):
-                    found = name
-                    break
-    except Exception:  # noqa: BLE001
-        found = ""
+        from dhole_mcp import browser
+        arts = browser.chromium_artifacts()
+        state = browser.read_install_state()
+    except Exception as exc:  # noqa: BLE001 - browser 是重模块，缺它也要能出报告
+        checks.append(("chromium binary", "info",
+                       f"not inspectable: {type(exc).__name__}"[:60], ""))
+        return
+    rev = arts.get("revision")
+    cmd = install.browser_binary_command()
+    if arts.get("system_chrome"):
+        checks.append(("chromium binary", "ok",
+                       "system Chrome - nothing to download", ""))
+        return
+    needs = arts.get("launch_needs") or "chromium"
+    wanted = arts["expected"][needs]
+    found = arts.get(needs)
     if found:
-        checks.append(("chromium binary", "ok", f"{found} under {base}", ""))
-    else:
+        checks.append(("chromium binary", "ok", f"{found} (revision {rev})", ""))
+        return
+    # 磁盘上有另一份 ≠ 这次起得来。这条要说得出名字，否则用户只会看到一次"明明装过"
+    # 的失败。
+    other = next((arts[k] for k in ("chromium", "headless_shell")
+                  if k != needs and arts.get(k)), None)
+    if state.get("status") == "failed":
         checks.append((
-            "chromium binary", "info",
-            "not installed - the first browser-tier fetch installs it "
-            "(~150MB, one time, resumable)",
-            "python -m patchright install chromium" if _has_module("patchright")
-            else 'python -m pip install -e ".[all]"',
+            "chromium binary", "fail",
+            f"install failed (revision {state.get('revision', rev)}): "
+            f"{str(state.get('error', ''))[:120]}",
+            str(state.get("command") or cmd),
         ))
+        return
+    if state.get("status") == "installing":
+        # 一条没有下文的"正在装"是 doctor 最容易说的话，也是最容易过期的话：安装线程
+        # 会随进程一起没掉（客户端掐请求、机器重启），留下的状态文件却还写着 installing。
+        # 安装自己有时间上限，超过它就该说"上次没装完"，而不是继续承诺在等。
+        import time
+        started = state.get("started_at") or 0
+        age_s = time.time() - float(started) if started else 0.0
+        if started and age_s > browser.INSTALL_TIMEOUT_S + 120:
+            checks.append((
+                "chromium binary", "info",
+                f"last install did not finish ({int(age_s // 60)} min ago) - "
+                f"{wanted} still not installed",
+                cmd,
+            ))
+            return
+        checks.append(("chromium binary", "info",
+                       f"install in progress (revision {rev}) - "
+                       "the first browser fetch waits on it", ""))
+        return
+    checks.append((
+        "chromium binary", "info",
+        f"{wanted} not installed (revision {rev}) - the first browser-tier fetch "
+        f"installs the one it launches (~"
+        f"{browser.INSTALL_DOWNLOAD_MB[needs]}MB, one time; an interrupted download "
+        "starts over)"
+        + (f"; {other} on disk is not launched with an explicit channel" if other
+           else ""),
+        cmd if _has_module("patchright") else 'python -m pip install -e ".[all]"',
+    ))
 
 
 def _dir_mb(path: str) -> tuple[float, int]:

@@ -32,26 +32,37 @@ def full_install_command() -> str:
     return "pip install dhole-mcp[all]"
 
 
+def browser_binary_command() -> str:
+    """装 chromium 二进制的那条命令 —— 唯一一处知道它的地方。
+
+    17.0 B3 之前这句话印在 4 个文件里，而且写的是 `playwright install chromium`
+    （装的是上游 playwright 的浏览器，patchright 的 driver 只认自己清单里那一版）。
+    现在 browser.py 真的去装、doctor 报告装没装上、错误文案给出命令，三处都读这一个值。
+    """
+    return "python -m patchright install chromium"
+
+
 def browser_install_advice() -> str:
     """Advice for a browser-tier failure. Only tells the user to install if
     the browser dependencies are genuinely missing on THIS machine.
 
-    ``playwright install chromium`` stays a separate step - installing the
-    Python packages does not download the browser binary, and pretending
-    otherwise is how "pip install did not fix it" bug reports start.
+    17.0 B3: chromium 不再需要用户自己去装 —— 第一次用到浏览器档时 dhole 同步装它。
+    所以这里只剩两种真话：Python 依赖层没装（补 pip），或者二进制那一步失败/还没跑完
+    （给出同一条命令）。
     """
+    cmd = browser_binary_command()
     try:
         # Local import to keep install.py at the bottom of the dependency
         # graph (server imports install, install must not import server).
         from dhole_mcp.server import _browser_deps_available
         if _browser_deps_available():
-            return ("browser tier is installed - this call failed for another "
-                    "reason (see the error above); a fresh `playwright install "
-                    "chromium` also fixes a half-downloaded browser")
+            return ("browser tier is installed - dhole installs chromium on first "
+                    "use, so this is either that install failing or still running: "
+                    f"`{cmd}` (state: ~/.dhole/browser_install.json)")
     except Exception:  # noqa: BLE001
         pass
-    return (f"Install the browser tier with: {full_install_command()}, then "
-            "`playwright install chromium`")
+    return (f"Install the browser tier with: {full_install_command()}; chromium "
+            f"itself is installed on first use, or run `{cmd}`")
 
 
 def ocr_install_advice() -> str:
