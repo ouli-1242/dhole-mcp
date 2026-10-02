@@ -260,7 +260,7 @@ def test_the_stateful_tools_are_announced_with_their_discipline():
     login/submit 的逐次确认闸与凭据红线是 agent 读得到的纪律（没有开关可关，
     纪律就是全部）。"""
     announced = _wire_explanations() + "\n" + _corpus()
-    for tool in ("web_recipe", "web_watch", "cred_vault", "login"):
+    for tool in ("web_recipe", "web_watch", "cred_vault", "cred_login"):
         assert _mentions(announced, tool), f"{tool} 在 agent 读得到的地方没被提到"
     assert "confirm" in announced, "确认闸必须在常驻文本里"
 
@@ -275,7 +275,7 @@ def test_the_stateful_tools_are_announced_with_their_discipline():
 _OBVIOUS = {
     ("web_read", "url"), ("web_read", "urls"),
     ("web_search", "query"), ("web_resolve", "url"),
-    ("web_crawl", "url"), ("screenshot", "url"), ("login", "url"),
+    ("web_crawl", "url"), ("screenshot", "url"), ("cred_login", "url"),
 }
 
 

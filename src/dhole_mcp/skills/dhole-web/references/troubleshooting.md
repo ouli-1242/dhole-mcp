@@ -62,21 +62,21 @@ The response distinguishes "credentials rejected" (supply a fresh token) from "n
 
 ### Sites behind login
 
-Five paths, cheapest first: (1) HTTP tier — user-supplied cookies (`cookies` + `session_id` to keep the jar) or an API token (`auth`: basic/bearer/header). (2) The **no-password browser fallback (17.0)**: a named `session_id` bridges the jar into that session's dedicated stealthy browser (and harvests back), so HTTP-tier login state rides browser calls; combine with `check_login` + snapshot actions + gated submit to operate the site without ever touching a password. (3) **Stored-credential login (17.0)** — `cred_vault(op='match')` then `login`; see "Stored-credential login" below. (4) CDP attach (17.0) — `web_read` with `cdp_url` (+ `check_login=true`) runs the fetch inside the user's real logged-in Chrome; requires one-time user setup (configuration.md "CDP attach"). (5) Still impossible: DataDome / Akamai / interactive Turnstile walls and 2FA — none of these paths defeats challenges; say so honestly.
+Five paths, cheapest first: (1) HTTP tier — user-supplied cookies (`cookies` + `session_id` to keep the jar) or an API token (`auth`: basic/bearer/header). (2) The **no-password browser fallback (17.0)**: a named `session_id` bridges the jar into that session's dedicated stealthy browser (and harvests back), so HTTP-tier login state rides browser calls; combine with `check_login` + snapshot actions + gated submit to operate the site without ever touching a password. (3) **Stored-credential login (17.0)** — `cred_vault(op='match')` then `cred_login`; see "Stored-credential login" below. (4) CDP attach (17.0) — `web_read` with `cdp_url` (+ `check_login=true`) runs the fetch inside the user's real logged-in Chrome; requires one-time user setup (configuration.md "CDP attach"). (5) Still impossible: DataDome / Akamai / interactive Turnstile walls and 2FA — none of these paths defeats challenges; say so honestly.
 
 ### Stored-credential login (cred_vault / login) fails
 
-- **`cred_vault` / `login` not in `tools/list`** — 17.0 registers them by default, so this means the operator set an explicit `DHOLE_TOOLS` subset that excludes them. Widening it is the user's edit, not a workaround
+- **`cred_vault` / `cred_login` not in `tools/list`** — 17.0 registers them by default, so this means the operator set an explicit `DHOLE_TOOLS` subset that excludes them. Widening it is the user's edit, not a workaround
 - **`cred_vault` `notes` says a manager is not installed** — the `bw` / `op` CLI is missing. Relay the note's install step; this is a note, not an error, and the other manager may still work
 - **`notes` says the vault is locked / not signed in** — the user must unlock it (`bw unlock` / `op signin`). Never ask for a master password
-- **`login` error: no password field found** — the page did not render a `type=password` input (a two-step email-then-password flow, a JS gate, or the page never settled). Pass `username_index` / `password_index` / `submit_index` from a snapshot, or raise `timeout`; if the form is genuinely multi-page, do the steps with `actions` instead
-- **`login` returned `pending_approval: true`** — not a failure: nothing was filled or submitted. Show the user `plan` + `fields`; re-call the **same arguments** with `confirm=true` only on their yes
-- **`login` `logged_in: false`** — the credential was submitted but the session did not take: wrong item, or the site wants 2FA. Check `signals`; do not retry blindly (a second wrong submit can lock the account). `logged_in: null` = the probe could not answer — not "failed"
-- **`login` ran but later fetches are anonymous** — pass the **same `session_id`** to those fetches; the cookies were kept under it. `close_session` shows what is held
+- **`cred_login` error: no password field found** — the page did not render a `type=password` input (a two-step email-then-password flow, a JS gate, or the page never settled). Pass `username_index` / `password_index` / `submit_index` from a snapshot, or raise `timeout`; if the form is genuinely multi-page, do the steps with `actions` instead
+- **`cred_login` returned `pending_approval: true`** — not a failure: nothing was filled or submitted. Show the user `plan` + `fields`; re-call the **same arguments** with `confirm=true` only on their yes
+- **`cred_login` `logged_in: false`** — the credential was submitted but the session did not take: wrong item, or the site wants 2FA. Check `signals`; do not retry blindly (a second wrong submit can lock the account). `logged_in: null` = the probe could not answer — not "failed"
+- **`cred_login` ran but later fetches are anonymous** — pass the **same `session_id`** to those fetches; the cookies were kept under it. `close_session` shows what is held
 
 ### Recipe / web_watch misbehave
 
-- **`web_recipe` / `web_watch` not in `tools/list`** — same as vault/login above: only an explicit `DHOLE_TOOLS` subset removes them in 17.0
+- **`web_recipe` / `web_watch` not in `tools/list`** — same as cred_vault/cred_login above: only an explicit `DHOLE_TOOLS` subset removes them in 17.0
 - **`web_recipe(op='run')` with `actions_failed` > 0** — the page changed under the chain. Re-snapshot, re-derive the steps, `op='save'` again. An `op='save'` that is *rejected* means the chain is invalid (validation runs at save time) — fix the chain, don't retry the save
 - **`web_watch(op='check')` returns `changed: null`** — that is the FIRST check storing the baseline, not an error and not "no change". The next check answers `true`/`false`
 - **`web_watch` `error` set, `changed` absent** — the fetch failed; the baseline is **untouched** (by design, so an outage cannot silently re-baseline). Fix the fetch and re-check

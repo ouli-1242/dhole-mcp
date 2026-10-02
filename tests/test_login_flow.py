@@ -278,7 +278,7 @@ def wired(monkeypatch):
 class TestTheApprovalGate:
     def test_confirm_false_fills_nothing_and_only_snapshots(self, wired):
         srv, stub, _ = wired()
-        got = _run(srv.login(url="https://x.test/login", credential="Example"))
+        got = _run(srv.cred_login(url="https://x.test/login", credential="Example"))
         assert got.pending_approval is True
         assert got.filled == 0 and got.submitted is False
         assert got.plan and "password -> [1]" in got.plan
@@ -288,14 +288,14 @@ class TestTheApprovalGate:
 
     def test_confirm_true_without_a_session_is_refused_before_any_browser_work(self, wired):
         srv, stub, _ = wired()
-        got = _run(srv.login(url="https://x.test/login", credential="Example",
+        got = _run(srv.cred_login(url="https://x.test/login", credential="Example",
                              confirm=True))
         assert "session_id" in got.error
         assert stub.calls == [], "拒绝必须发生在开浏览器之前"
 
     def test_the_gate_message_tells_the_agent_to_ask_the_user(self, wired):
         srv, _, _ = wired()
-        got = _run(srv.login(url="https://x.test/login", credential="Example"))
+        got = _run(srv.cred_login(url="https://x.test/login", credential="Example"))
         assert "approve" in got.next_action.lower()
         assert "confirm=true" in got.next_action
 
@@ -303,7 +303,7 @@ class TestTheApprovalGate:
         srv, stub, _ = wired(elements=[
             {"index": 0, "tag": "input", "role": "textbox", "name": "搜索",
              "input_type": "text"}])
-        got = _run(srv.login(url="https://x.test/", credential="Example"))
+        got = _run(srv.cred_login(url="https://x.test/", credential="Example"))
         assert got.error and "password" in got.error
         assert not stub.act_calls()
         assert "snapshot" in got.next_action, "要给出 agent 自己看快照的出路"
@@ -314,7 +314,7 @@ class TestTheConfirmedRun:
         srv, stub, _ = wired(login_check={"logged_in": True,
                                           "signals": ["logout control"],
                                           "cookie_names": ["sid"]})
-        got = _run(srv.login(url="https://x.test/login", credential="Example",
+        got = _run(srv.cred_login(url="https://x.test/login", credential="Example",
                              session_id="acct", confirm=True))
         assert got.submitted is True and got.filled == 2
         assert got.logged_in is True
@@ -330,7 +330,7 @@ class TestTheConfirmedRun:
 
     def test_explicit_indices_skip_the_detection_pass(self, wired):
         srv, stub, _ = wired(login_check={"logged_in": True})
-        got = _run(srv.login(url="https://x.test/login", credential="Example",
+        got = _run(srv.cred_login(url="https://x.test/login", credential="Example",
                              session_id="acct", confirm=True,
                              username_index=0, password_index=1, submit_index=2))
         assert got.submitted is True
@@ -340,7 +340,7 @@ class TestTheConfirmedRun:
     def test_logged_in_false_is_a_verdict_not_a_crash(self, wired):
         srv, _, _ = wired(login_check={"logged_in": False,
                                        "signals": ["password field"]})
-        got = _run(srv.login(url="https://x.test/login", credential="Example",
+        got = _run(srv.cred_login(url="https://x.test/login", credential="Example",
                              session_id="acct", confirm=True))
         assert got.logged_in is False and got.submitted is True
         assert "CAPTCHA" in got.next_action or "2FA" in got.next_action
@@ -348,7 +348,7 @@ class TestTheConfirmedRun:
     def test_logged_in_null_is_preserved_not_flattened_to_false(self, wired):
         """null（探针答不了）≠ false（没登录）—— 与 watch 的 changed 同一条纪律。"""
         srv, _, _ = wired(login_check={"logged_in": None})
-        got = _run(srv.login(url="https://x.test/login", credential="Example",
+        got = _run(srv.cred_login(url="https://x.test/login", credential="Example",
                              session_id="acct", confirm=True))
         assert got.logged_in is None
         assert "probe could not answer" in got.next_action
@@ -360,7 +360,7 @@ class TestTheConfirmedRun:
         跑成"这条更具体的信号盖掉。
         """
         srv, _, _ = wired(submit_ok=False, login_check={"logged_in": None})
-        got = _run(srv.login(url="https://x.test/login", credential="Example",
+        got = _run(srv.cred_login(url="https://x.test/login", credential="Example",
                              session_id="acct", confirm=True))
         assert got.filled == 0, "失败的 fill 不算填上"
         assert "re-detect" in got.next_action
@@ -370,28 +370,28 @@ class TestTheConfirmedRun:
         """登录判定为真时，一条没跑成的动作不该把结论盖成"去重新识别"。"""
         srv, _, _ = wired(submit_ok=False,
                           login_check={"logged_in": True, "cookie_names": ["sid"]})
-        got = _run(srv.login(url="https://x.test/login", credential="Example",
+        got = _run(srv.cred_login(url="https://x.test/login", credential="Example",
                              session_id="acct", confirm=True))
         assert got.logged_in is True and got.next_action == ""
 
     def test_a_missing_credential_is_clean_and_opens_no_browser(self, wired):
         srv, stub, _ = wired(secret={"error": "no credential manager is available"})
-        got = _run(srv.login(url="https://x.test/login", credential="nope",
+        got = _run(srv.cred_login(url="https://x.test/login", credential="nope",
                              session_id="acct", confirm=True))
         assert got.error and "no credential manager" in got.error
         assert stub.calls == []
 
     def test_the_credential_is_looked_up_by_name_with_the_source(self, wired):
         srv, _, calls = wired()
-        _run(srv.login(url="https://x.test/login", credential="Example",
+        _run(srv.cred_login(url="https://x.test/login", credential="Example",
                        source="onepassword"))
         assert calls == [("Example", "onepassword")]
 
     def test_an_empty_url_or_credential_is_refused(self, wired):
         srv, stub, _ = wired()
-        assert "url" in _run(srv.login(url="", credential="Example")).error
+        assert "url" in _run(srv.cred_login(url="", credential="Example")).error
         assert "credential" in _run(
-            srv.login(url="https://x.test/", credential="")).error
+            srv.cred_login(url="https://x.test/", credential="")).error
         assert stub.calls == []
 
 
@@ -406,14 +406,14 @@ class TestNoSecretInTheResponse:
 
     def test_the_pending_plan_has_no_password(self, wired):
         srv, _, _ = wired()
-        got = _run(srv.login(url="https://x.test/login", credential="Example"))
+        got = _run(srv.cred_login(url="https://x.test/login", credential="Example"))
         blob = self._blobs(got)
         assert SECRET not in blob
         assert USER not in blob, "用户名也不回 —— 回执点名的是 vault 条目名"
 
     def test_the_confirmed_receipt_has_no_password(self, wired):
         srv, _, _ = wired(login_check={"logged_in": True, "cookie_names": ["sid"]})
-        got = _run(srv.login(url="https://x.test/login", credential="Example",
+        got = _run(srv.cred_login(url="https://x.test/login", credential="Example",
                              session_id="acct", confirm=True))
         blob = self._blobs(got)
         assert SECRET not in blob and USER not in blob
@@ -428,17 +428,17 @@ class TestNoSecretInTheResponse:
 
 class TestWireGating:
     def test_the_credential_tools_are_registered_by_default(self):
-        """17.0：没有 opt-in 组 —— vault/login 默认注册，许可纪律在工具内部
+        """17.0：没有 opt-in 组 —— cred_vault/cred_login 默认注册，许可纪律在工具内部
         （login 无 confirm 必暂停；值永不回显）。"""
         from dhole_mcp.server import _ENABLED_TOOLS
 
-        assert {"cred_vault", "login"} <= _ENABLED_TOOLS
+        assert {"cred_vault", "cred_login"} <= _ENABLED_TOOLS
 
     def test_the_vault_and_login_tool_defs_are_advertised(self):
         from dhole_mcp.server import MasterFetchServer
 
         names = [td["name"] for td in MasterFetchServer._enabled_tool_defs()]
-        for tool in ("cred_vault", "login"):
+        for tool in ("cred_vault", "cred_login"):
             assert tool in names, f"{tool} 应该出现在默认 wire 里"
 
     def test_every_tool_def_argument_is_a_known_top_level_arg(self):
@@ -446,7 +446,7 @@ class TestWireGating:
         from dhole_mcp.server import _TOP_LEVEL_ARGS, MasterFetchServer
 
         for td in MasterFetchServer._TOOL_DEFS:
-            if td["name"] not in ("cred_vault", "login"):
+            if td["name"] not in ("cred_vault", "cred_login"):
                 continue
             declared = set(td["inputSchema"]["properties"])
             accepted = set(_TOP_LEVEL_ARGS[td["name"]])
@@ -464,7 +464,7 @@ class TestWireGating:
 
         from dhole_mcp.server import _TOP_LEVEL_ARGS
 
-        for tool in ("cred_vault", "login"):
+        for tool in ("cred_vault", "cred_login"):
             sig = set(inspect.signature(getattr(MasterFetchServer, tool)).parameters)
             sig.discard("self")
             assert sig == set(_TOP_LEVEL_ARGS[tool]), \
@@ -483,7 +483,7 @@ class TestDispatchReachesTheTools:
         from dhole_mcp import server as sm
 
         monkeypatch.setattr(sm, "_ENABLED_TOOLS",
-                            sm._ENABLED_TOOLS | {"cred_vault", "login"})
+                            sm._ENABLED_TOOLS | {"cred_vault", "cred_login"})
 
     def test_vault_status_goes_through_dispatch(self, opted_in, wired):
         srv, _, _ = wired()
@@ -494,7 +494,7 @@ class TestDispatchReachesTheTools:
     def test_login_goes_through_dispatch_and_the_gate_still_holds(self, opted_in, wired):
         srv, stub, _ = wired()
         _content, payload = _run(srv._dispatch(
-            "login", {"url": "https://x.test/login", "credential": "Example"}))
+            "cred_login", {"url": "https://x.test/login", "credential": "Example"}))
         assert payload.get("pending_approval") is True
         assert not stub.act_calls(), "入口层也不能漏掉闸"
 

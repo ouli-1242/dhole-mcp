@@ -5,8 +5,8 @@
 
 1. `cred_vault(op='status')` 认得装在 PATH 上的管理器，并报出锁没锁；
 2. `cred_vault(op='match')` 按主机找到凭据，**响应里没有密码值**；
-3. `login` 不带 confirm 时**一个字节都不填**，只回计划（含识别出的字段索引）；
-4. `login` 带 confirm 时填 + 提交，`logged_in` 为真、cookie 名回得来，
+3. `cred_login` 不带 confirm 时**一个字节都不填**，只回计划（含识别出的字段索引）；
+4. `cred_login` 带 confirm 时填 + 提交，`logged_in` 为真、cookie 名回得来，
    **响应里依然没有密码值**；
 5. 登录态真的留住了：换回 HTTP 层、带同一个 session_id 取登录后的页面能拿到；
 6. `confirm=true` 但没给 session_id 时**在开浏览器之前**被拒（共享会话不能承接
@@ -136,7 +136,7 @@ async def main() -> int:
            f"（用户名按设计会回：{USERNAME in blob}）")
 
     # 3. 审批闸：不带 confirm
-    plan = await s.login(url=f"{BASE}/login", credential="fixture",
+    plan = await s.cred_login(url=f"{BASE}/login", credential="fixture",
                          source="bitwarden", session_id="evalsess",
                          allow_private=True)
     pblob = _blob(plan)
@@ -150,7 +150,7 @@ async def main() -> int:
            f"\n    plan: {plan.plan}")
 
     # 4. 确认执行
-    got = await s.login(url=f"{BASE}/login", credential="fixture",
+    got = await s.cred_login(url=f"{BASE}/login", credential="fixture",
                         source="bitwarden", session_id="evalsess",
                         allow_private=True, confirm=True, timeout=60000)
     gblob = _blob(got)
@@ -172,7 +172,7 @@ async def main() -> int:
            f"content_ok={after.content_ok} 正文片段={text.strip()[:60]!r}")
 
     # 6. 没点名会话就不许执行
-    refused = await s.login(url=f"{BASE}/login", credential="fixture",
+    refused = await s.cred_login(url=f"{BASE}/login", credential="fixture",
                             source="bitwarden", allow_private=True, confirm=True)
     record("confirm=true 但没给 session_id 时被拒",
            bool(refused.error) and "session_id" in refused.error

@@ -574,7 +574,7 @@ DHOLE_INSTRUCTIONS = (
     "the last snapshot).\n"
     "- A login the user already stores: cred_vault (op=match with the URL) lists what "
     "their password manager holds - never the values.\n"
-    "- Signing in with a stored credential: login (call once to see the plan, "
+    "- Signing in with a stored credential: cred_login (call once to see the plan, "
     "again with confirm=true to run it).\n"
     "- Unsure how to write a call, what a field means, or why something failed: "
     "sys_guide(topic) reads dhole's own handbook - one call, no setup, and the "
@@ -634,11 +634,11 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "url+actions once, then run it).\n",
     "web_watch": "- Watching a page for changes: web_watch (add it, then check - it diffs "
     "against the last snapshot).\n",
-    # cred_vault/login 同 web_recipe/web_watch：默认注册，行留在 instructions 里路由。
+    # cred_vault/cred_login 同 web_recipe/web_watch：默认注册，行留在 instructions 里路由。
     # 逐次确认闸（login 无 confirm 必暂停）在工具内部，注册面不做许可。
     "cred_vault": "- A login the user already stores: cred_vault (op=match with the URL) "
     "lists what their password manager holds - never the values.\n",
-    "login": "- Signing in with a stored credential: login (call once to see the "
+    "cred_login": "- Signing in with a stored credential: cred_login (call once to see the "
     "plan, again with confirm=true to run it).\n",
     "sys_guide": "- Unsure how to write a call, what a field means, or why something failed: "
     "sys_guide(topic) reads dhole's own handbook - one call, no setup, and the deep "
@@ -888,7 +888,7 @@ class VaultModel(BaseModel):
 
 
 class LoginModel(BaseModel):
-    """Response from `login`: the plan (before approval) or the outcome.
+    """Response from `cred_login`: the plan (before approval) or the outcome.
 
     Two fields carry the contract. `pending_approval=true` is the FIRST response
     a caller sees: with confirm=false nothing is filled and nothing is
@@ -1003,7 +1003,7 @@ _WIRE_OMIT: dict = {
         "diff_truncated", "baseline_cut", "baseline_created",
         "error", "next_action", "url", "name", "result",
     }),
-    # vault / login（计划第七章）。省略的是空容器与"这次没发生"的标志：
+    # cred_vault / cred_login（计划第七章）。省略的是空容器与"这次没发生"的标志：
     # `pending_approval` 缺省即"没有待批准的动作"，`submitted` 缺省即"没有提交"。
     # `logged_in` 与 WatchModel.changed 同理**不在**省略集里 —— 首跑时它是 null，
     # 而 null（探针答不了）≠ false（没登录），省掉它就把结论省掉了。
@@ -2642,7 +2642,7 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
     # The three index overrides come from a snapshot row, so they arrive as
     # strings from clients that JSON-stringify numbers; `confirm` is the
     # approval gate and must be a real boolean, never the string "false".
-    "login": {"username_index": "int", "password_index": "int",
+    "cred_login": {"username_index": "int", "password_index": "int",
               "submit_index": "int", "confirm": "bool", "timeout": "number"},
 }
 
@@ -4749,7 +4749,7 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
                         "timeout", "session_id", "allow_private"}),
     # 凭据来源 + 独立登录流（计划第七章）。17.0 起默认在连接期表里。
     "cred_vault": frozenset({"op", "query", "url", "source", "limit"}),
-    "login": frozenset({"url", "credential", "source", "session_id",
+    "cred_login": frozenset({"url", "credential", "source", "session_id",
                         "username_index", "password_index", "submit_index",
                         "confirm", "timeout", "allow_private"}),
     # 文档通道。总是注册：它不在两个 opt-in 组里，也不该在 —— 一个需要开关才
@@ -4759,8 +4759,8 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
 # （17.0：不存在 opt-in 组 —— 上面的注释是给全量注册做的注脚。）
 
 
-# 17.0: 没有 opt-in 组了 —— web_recipe/web_watch/cred_vault/login 全部默认注册（大众化一刀切：
-# pip install 接上宿主，能力全部默认在线；cred_vault/login 的逐次确认闸在工具内部，
+# 17.0: 没有 opt-in 组了 —— web_recipe/web_watch/cred_vault/cred_login 全部默认注册（大众化一刀切：
+# pip install 接上宿主，能力全部默认在线；cred_vault/cred_login 的逐次确认闸在工具内部，
 # 注册面不再做许可）。DHOLE_TASKS / DHOLE_VAULT 已注销，运行时静默忽略。
 
 
@@ -6131,7 +6131,7 @@ class MasterFetchServer:
                 message=((f"{n} credential(s)" + (" (truncated)" if got["truncated"]
                                                   else "") + ".") if n
                          else "No credentials matched."),
-                next_action=("login(url=..., credential='<name>') signs in with one."
+                next_action=("cred_login(url=..., credential='<name>') signs in with one."
                              if got["items"] else
                              ("cred_vault(op='status') says what is missing."
                               if got["notes"] else "Nothing matched that query.")),
@@ -6151,7 +6151,7 @@ class MasterFetchServer:
                 message=(f"{got['total']} credential(s) for {got['host']}."
                          if got["items"] else
                          f"No stored credential is registered for {got['host']}."),
-                next_action=("login(url=..., credential='<name>', "
+                next_action=("cred_login(url=..., credential='<name>', "
                              "session_id='<name>') signs in with one."
                              if got["items"] else
                              "cred_vault(op='list') shows everything the manager holds."),
@@ -6162,7 +6162,7 @@ class MasterFetchServer:
             next_action="Pass op='status', 'list' or 'match'.",
         )
 
-    async def login(
+    async def cred_login(
         self,
         url: Annotated[str, Field(description="The login page to sign in to.")],
         credential: Annotated[str, Field(description="Vault item name or id to read the username/password from. Never the password itself.")],
@@ -9122,7 +9122,7 @@ class MasterFetchServer:
                             "idempotentHint": True, "openWorldHint": False},
         },
         {
-            "name": "login",
+            "name": "cred_login",
             "description": "Sign in to a page using a credential from the user's password manager. Call it WITHOUT confirm first: it opens the page, finds the username/password/submit controls and returns the plan (fields + plan) for the user to approve - nothing is filled. Call again with confirm=true to fill and submit. The password is read server-side and never enters the transcript, the response, or any log; the receipt names the vault item instead. Afterwards it reports logged_in (model-free DOM + cookie-NAME probe) and keeps the cookies under session_id. CAPTCHA / 2FA are NOT solved - hand those back to the user.",
             "inputSchema": {
                 "type": "object", "required": ["url", "credential"],
@@ -9539,8 +9539,8 @@ class MasterFetchServer:
             )
             return _wire_result(result)
 
-        elif name == "login":
-            result = await self.login(
+        elif name == "cred_login":
+            result = await self.cred_login(
                 url=args.get("url", "") or "",
                 credential=args.get("credential", "") or "",
                 source=args.get("source", "auto") or "auto",

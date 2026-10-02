@@ -71,9 +71,9 @@ Then just call — the first attach asks, the user answers once:
 ### Scenario: repeatable tasks, change monitoring, stored credentials
 
 - `web_recipe` (save a `url` + `actions` chain, replay it later) and `web_watch` (diff a page against its last snapshot) are **always registered**. State lives in `~/.dhole/tasks.db`: action chains and page baselines, **no credentials**. Recipes deliberately store no `session_id` — pass it per run. Forget everything by deleting the file; per-item removal is `web_recipe(op='delete')` / `web_watch(op='remove')`
-- `cred_vault` (read item **metadata** from the user's own Bitwarden `bw` / 1Password `op`) and `login` (assisted sign-in) are also always registered. Prerequisites are the user's: the CLI installed and its vault unlocked (`bw unlock` / `op signin`). `cred_vault(op='status')` reports which manager answered, whether it is unlocked, and the fix when it is not — a missing manager is a note, not an error
-- **Values never leave the process**: `cred_vault` has no field for a password or a TOTP secret, and `login` reads the password server-side and reports the item name instead. Nothing reaches the transcript, the cache, or the log
-- `login` is **gated on approval**: without `confirm=true` it only detects the form and returns the plan. Present that to the user before re-calling with `confirm=true`
+- `cred_vault` (read item **metadata** from the user's own Bitwarden `bw` / 1Password `op`) and `cred_login` (assisted sign-in) are also always registered. Prerequisites are the user's: the CLI installed and its vault unlocked (`bw unlock` / `op signin`). `cred_vault(op='status')` reports which manager answered, whether it is unlocked, and the fix when it is not — a missing manager is a note, not an error
+- **Values never leave the process**: `cred_vault` has no field for a password or a TOTP secret, and `cred_login` reads the password server-side and reports the item name instead. Nothing reaches the transcript, the cache, or the log
+- `cred_login` is **gated on approval**: without `confirm=true` it only detects the form and returns the plan. Present that to the user before re-calling with `confirm=true`
 - CAPTCHA / 2FA / DataDome-class walls remain hand-offs; this path logs in, it does not defeat challenges
 
 ### Scenario: poor search results / want a different pool
