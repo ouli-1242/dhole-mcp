@@ -22,9 +22,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-
-from dhole_mcp import env_registry
 import re
 from collections import Counter
 from time import time
@@ -33,7 +30,6 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
-from dhole_mcp import paths
 from dhole_mcp.cache import get_cached, set_cached
 from dhole_mcp.security import validate_search_query, validate_url, redact_api_key, SecurityError
 from dhole_mcp.search_engines import (
@@ -935,104 +931,7 @@ def _domain_boost(url: str, query: str, is_technical: bool) -> float:
             boost += 0.08
     if _matches(_REFERENCE_DOMAINS):
         boost += 0.05
-    # Feedback boost: domains the agent previously found useful (opt-in only —
-    # DHOLE_SEARCH_FEEDBACK=1; off by default, see the section comment below).
-    if _feedback_enabled() and host in _feedback_domains():
-        boost += 0.05
     return boost
-
-
-# ─── search feedback (implicit domain preference learning) ───────────────────
-#
-# OFF by default (DHOLE_SEARCH_FEEDBACK=1 opts in). It is a persistent ranking
-# mutation with no quality signal behind it: record_search_feedback() fires
-# whenever a top result is successfully fetched with fetch_content=true, and
-# every such domain keeps a +0.05 boost for the life of the file (500 domains),
-# reinforcing itself over time. That silently rewrites the cross-engine
-# consensus ordering the user thinks they are seeing, and it writes state the
-# user never asked for.
-
-def _feedback_file() -> str:
-    """惰性取路径，与 metasearch 的两个状态文件同一约定。
-
-    import 期常量的话，`DHOLE_HOME` 就只对部分状态文件生效（半失效的开关比没有更
-    糟），测试也指不动它。
-    """
-    return str(paths.file("search_feedback.json"))
-
-
-def _feedback_enabled() -> bool:
-    """True only when the user opted in with DHOLE_SEARCH_FEEDBACK=1."""
-    return (env_registry.value_of("DHOLE_SEARCH_FEEDBACK") or "").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
-_feedback_cache: Optional[frozenset] = None
-_feedback_mtime: float = 0.0
-
-
-def _feedback_domains() -> frozenset:
-    """Load domains the agent found useful (from fetch_content successes).
-    Cached in memory; re-reads file only if modified."""
-    global _feedback_cache, _feedback_mtime
-    if not _feedback_enabled():
-        return frozenset()
-    try:
-        import os as _os
-        if not _os.path.exists(_feedback_file()):
-            return frozenset()
-        mt = _os.path.getmtime(_feedback_file())
-        if _feedback_cache is not None and mt == _feedback_mtime:
-            return _feedback_cache
-        import json as _json
-        with open(_feedback_file(), "r") as f:
-            data = _json.load(f)
-        _feedback_cache = frozenset(data.get("domains", []))
-        _feedback_mtime = mt
-        return _feedback_cache
-    except Exception:
-        return frozenset()
-
-
-def record_search_feedback(url: str) -> None:
-    """Record a domain as useful (called when fetch_content successfully fetches a page).
-    Best-effort, never raises. Atomic write. No-op unless DHOLE_SEARCH_FEEDBACK=1
-    (see the section comment above: the boost is opt-in)."""
-    if not _feedback_enabled():
-        return
-    try:
-        domain = _get_domain(url)
-        if not domain:
-            return
-        import json as _json
-        import tempfile
-        os.makedirs(os.path.dirname(_feedback_file()), exist_ok=True)
-        # Load existing
-        domains = set()
-        if os.path.exists(_feedback_file()):
-            with open(_feedback_file(), "r") as f:
-                domains = set(_json.load(f).get("domains", []))
-        domains.add(domain)
-        # Cap at 500 domains
-        if len(domains) > 500:
-            domains = set(list(domains)[-500:])
-        # Atomic write
-        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(_feedback_file()), suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w") as f:
-                _json.dump({"domains": sorted(domains)}, f)
-            os.replace(tmp, _feedback_file())
-            # mkstemp's 0600 rides along with the rename, but the directory may be
-            # new here, and the same explicit-after-replace pass the engine state
-            # files do keeps all three writers on one rule.
-            paths.harden_dir(os.path.dirname(_feedback_file()))
-            paths.harden_file(_feedback_file())
-        except Exception:
-            try:
-                os.unlink(tmp)
-            except Exception:
-                pass
-    except Exception:
-        pass
 
 
 def _answer_signal_score(query: str, snippet: str, is_technical: bool) -> float:

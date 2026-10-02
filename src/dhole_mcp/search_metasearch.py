@@ -85,17 +85,13 @@ def _get_search_proxy() -> str | None:
 # quorum, so a healthy search is ~1-2s; this bounds a fully-throttled one.
 # W4: env_registry.read_float records the "not a number" case so
 # ``dhole --doctor`` can name it; the fallback value is the same 16s.
-_SEARCH_DEADLINE = env_registry.read_float("DHOLE_SEARCH_DEADLINE", 16.0)
+_SEARCH_DEADLINE = 16.0  # 17.0 写死：整个搜索的硬期限是能算清的数，DHOLE_SEARCH_DEADLINE 已注销
 # 软截止：结果凑够就早退，不为慢/死的引擎等到硬截止。提成模块常量只为了让测试能
 # 把它压到毫秒级（否则验早退归属的测试每条都要真睡 2s）。
 _SOFT_DEADLINE = 2.0
 _ua = UserAgent()
 
-# Bright Data SERP API（keyed 引擎之一，见下方 KeyedApiEngine）
-# 此仓库为公开仓库，密钥只从环境变量读取，严禁硬编码进源码。
-_BRIGHTDATA_ZONE = (env_registry.value_of("DHOLE_BRIGHTDATA_ZONE") or "dhole")
-_BRIGHTDATA_ENDPOINT = "https://api.brightdata.com/request"
-_BRIGHTDATA_COUNTRY = (env_registry.value_of("DHOLE_BRIGHTDATA_COUNTRY") or "us")  # Google result region
+
 
 
 # ─── exceptions ──────────────────────────────────────────────────────────────
@@ -107,21 +103,8 @@ class MetaTimeoutException(MetaSearchException):
     """A backend or the whole search timed out."""
 
 
-class BrightDataAuthError(MetaSearchException):
-    """Bright Data rejected the credentials (bad/expired key, unauthorized zone).
-
-    Deliberately NOT a MetaBlockedException: a wrong key is permanent, so routing
-    it through the circuit breaker would cool the backend down for 60s and surface
-    the failure as a silent empty result -- indistinguishable from 'no hits'.
-    """
-
-
 class TavilyAuthError(MetaSearchException):
     """Tavily rejected the credentials (bad/expired key, out of credits)."""
-
-
-class ExaAuthError(MetaSearchException):
-    """Exa rejected the credentials. 实测无 key/欠费回 402 Payment required."""
 
 
 class BochaAuthError(MetaSearchException):
@@ -1103,10 +1086,9 @@ _DHOLE_TO_BACKEND = {
     # 代理），在默认池的国际 3 席里；mwmbl 是社区自建的小型独立索引，仍为 opt-in。
     "bing_global": "bing_global", "mwmbl": "mwmbl",
     # Paid JSON backends: selectable by name, run on their own track (see
-    # KeyedApiEngine) -- absent from _TEXT_ENGINES by design.
-    "brightdata": "brightdata",
+    # KeyedApiEngine) -- absent from _TEXT_ENGINES by design. 名字必须与
+    # KEYED_ENGINES 严格一致：留一个没有实现的键，点名它会通过校验却什么都不返回。
     "tavily": "tavily",
-    "exa": "exa",
     "bocha": "bocha",
 }
 # 默认池 = 国内 3（baidu/bing/sogou）+ 国际 3（bing_global/yandex/brave），全 keyless。
@@ -1283,7 +1265,7 @@ class Sogou(BaseSearchEngine):
 _TEXT_ENGINES["so360"] = So360
 _TEXT_ENGINES["sogou"] = Sogou
 
-# ─── keyed JSON search APIs (Bright Data / Tavily / Exa / Bocha) ────────────
+# ─── keyed JSON search APIs (Tavily / Bocha) ────────────────────────────────
 # 这些后端不走 BaseSearchEngine 的 HTML 抓取契约：都是 POST JSON + Bearer key。
 # 策略：**默认不跑**，只有 engines= 显式点名才执行 —— 每次调用都是真金白银。
 
@@ -1363,45 +1345,6 @@ def _ns(title: str, href: str, body: str):
     return SimpleNamespace(title=title, href=href, body=body)
 
 
-class _Brightdata(KeyedApiEngine):
-    name = "brightdata"
-    env_var = "DHOLE_BRIGHTDATA_API_KEY"
-    endpoint = _BRIGHTDATA_ENDPOINT
-    AuthError = BrightDataAuthError
-
-    def build_request(self, query, max_results, timelimit):
-        from urllib.parse import quote_plus
-
-        payload = {
-            "zone": _BRIGHTDATA_ZONE,
-            "url": f"https://www.google.com/search?q={quote_plus(query)}",
-            "format": "json",
-            "data_format": "parsed_light",
-            "country": _BRIGHTDATA_COUNTRY,
-        }
-        return (
-            self.endpoint,
-            {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key()}"},
-            payload,
-        )
-
-    def parse_response(self, data):
-        # 响应体里再包一层 JSON 字符串：body = '{"organic": [...]}'
-        body_str = data.get("body", "{}") if isinstance(data, dict) else "{}"
-        body = json.loads(body_str) if isinstance(body_str, str) else body_str
-        items = body.get("organic", body.get("organic_results", body.get("results", [])))
-        if not items and isinstance(body, list):
-            items = body
-        out = []
-        for item in items:
-            title = item.get("title", "")
-            href = item.get("url", item.get("link", item.get("href", "")))
-            snippet = item.get("snippet", item.get("description", item.get("body", "")))
-            if title and href:
-                out.append(_ns(title, href, snippet))
-        return out
-
-
 class _Tavily(KeyedApiEngine):
     name = "tavily"
     env_var = "DHOLE_TAVILY_API_KEY"
@@ -1424,35 +1367,6 @@ class _Tavily(KeyedApiEngine):
         for item in data.get("results", []):
             if item.get("title") and item.get("url"):
                 out.append(_ns(item["title"], item["url"], item.get("content", "")))
-        return out
-
-
-class _Exa(KeyedApiEngine):
-    name = "exa"
-    env_var = "DHOLE_EXA_API_KEY"
-    AuthError = ExaAuthError
-    endpoint = "https://api.exa.ai/search"
-    # 实测：无 key/欠费返回 402 "Payment required"，归入鉴权类失败
-    auth_codes = (401, 402, 403)
-
-    def build_request(self, query, max_results, timelimit):
-        payload = {"query": query, "numResults": max_results}
-        if timelimit == "year":
-            from datetime import date, timedelta
-
-            payload["startPublishedDate"] = (date.today() - timedelta(days=365)).isoformat()
-        return (
-            self.endpoint,
-            {"Content-Type": "application/json", "x-api-key": self.api_key()},
-            payload,
-        )
-
-    def parse_response(self, data):
-        out = []
-        for item in data.get("results", []):
-            if item.get("title") and item.get("url"):
-                snippet = item.get("text") or " ".join(item.get("highlights") or [])
-                out.append(_ns(item["title"], item["url"], snippet))
         return out
 
 
@@ -1487,9 +1401,7 @@ class _Bocha(KeyedApiEngine):
 
 # keyed 引擎注册表：engines= 按名字选择；不设 key 时选中会得到可诊断的报错
 KEYED_ENGINES: dict[str, type[KeyedApiEngine]] = {
-    _Brightdata.name: _Brightdata,
     _Tavily.name: _Tavily,
-    _Exa.name: _Exa,
     _Bocha.name: _Bocha,
 }
 
@@ -1588,55 +1500,29 @@ def _is_circuit_open(name: str) -> bool:
     return _BACKEND_HEALTH.get(name, 0.0) > time()
 
 
-# G6: the backoff was welded to the source, and the measured spread of real
-# situations is wide — a public IP that got briefly rate-limited wants 15s, a
-# host behind a hard anti-bot wall wants an hour, and a shared machine running
-# two agents at once wants to stop probing entirely. Env-tunable, read per
-# recording (so `dhole engines reset`-style tooling does not need a restart), and
-# CLAMPED: a typo like DHOLE_ENGINE_COOLDOWN=60000 is 16 hours of a dead pool,
-# which is not what anyone meant to ask for. The clamp is reported in
-# cooldown_settings() so `dhole engines list` can show what is actually in force.
+# G6: the backoff tiers. 17.0 写死：冷却时长是能算清的数，``DHOLE_ENGINE_*``
+# 三个旋钮已注销（运行时静默忽略）。表仍在函数里（在 _CONN_FAIL_COOLDOWN
+# 定义之前），但只剩各档的秒数。
 def _cooldown_tiers() -> dict:
-    """The three backoff tiers, read lazily.
-
-    A function rather than a module constant because this block sits ABOVE the
-    connection-failure constants: building the table at import time would name
-    `_CONN_FAIL_COOLDOWN` before it exists.
-    """
+    """The three backoff tiers (17.0: fixed seconds only)."""
     return {
-        "block": ("DHOLE_ENGINE_COOLDOWN", _CIRCUIT_COOLDOWN, 5.0, 1800.0),
-        "challenge": ("DHOLE_ENGINE_CHALLENGE_COOLDOWN", _CHALLENGE_COOLDOWN, 60.0, 7200.0),
-        "connection": ("DHOLE_ENGINE_CONN_COOLDOWN", _CONN_FAIL_COOLDOWN, 60.0, 7200.0),
+        "block": _CIRCUIT_COOLDOWN,
+        "challenge": _CHALLENGE_COOLDOWN,
+        "connection": _CONN_FAIL_COOLDOWN,
     }
 
 
 def _cooldown_seconds(kind: str) -> tuple[float, str]:
-    """(effective seconds, note) for one backoff tier, honouring its env var."""
-    env_name, default, lo, hi = _cooldown_tiers()[kind]
-    raw = os.environ.get(env_name)
-    if raw is None or not str(raw).strip():
-        return default, ""
-    try:
-        asked = float(raw)
-    except (TypeError, ValueError):
-        return default, (f"{env_name}={raw!r} is not a number; using "
-                         f"{default:g}s")
-    value = min(max(asked, lo), hi)
-    if value != asked:
-        return value, (f"{env_name}={asked:g}s is outside the supported "
-                       f"{lo:g}-{hi:g}s range; using {value:g}s")
-    return value, ""
+    """(effective seconds, note) for one backoff tier. 17.0 写死为各档默认值：
+    冷却时长是能算清的数（D-15 的教训刚好相反地证明了它不该随环境浮动）。"""
+    return _cooldown_tiers()[kind], ""
 
 
 def cooldown_settings() -> dict:
     """The backoff tiers currently in force, for reporting (G6)."""
     out: dict = {}
-    for kind, (env_name, _default, _lo, _hi) in _cooldown_tiers().items():
-        seconds, note = _cooldown_seconds(kind)
-        entry = {"seconds": seconds, "env": env_name}
-        if note:
-            entry["note"] = note
-        out[kind] = entry
+    for kind, seconds in _cooldown_tiers().items():
+        out[kind] = {"seconds": seconds}
     return out
 
 
@@ -1723,20 +1609,9 @@ _heartbeat_log: list[dict] = []
 
 
 def _heartbeat_interval() -> tuple[float, str]:
-    """Seconds between proactive probes (0 = never; env DHOLE_ENGINE_HEARTBEAT)."""
-    raw = env_registry.value_of("DHOLE_ENGINE_HEARTBEAT")
-    if raw is None or not str(raw).strip():
-        return _HEARTBEAT_DEFAULT_S, ""
-    try:
-        asked = float(raw)
-    except (TypeError, ValueError):
-        return _HEARTBEAT_DEFAULT_S, f"DHOLE_ENGINE_HEARTBEAT={raw!r} is not a number; using {_HEARTBEAT_DEFAULT_S:g}s"
-    if asked <= 0:
-        return 0.0, ""  # an explicit "never" is a choice, not a clamp
-    value = min(asked, 86400.0)
-    if value != asked:
-        return value, f"DHOLE_ENGINE_HEARTBEAT={asked:g}s capped at {value:g}s"
-    return value, ""
+    """Seconds between proactive probes. 17.0 写死为默认值：巡检节奏是
+    能算清的数，``DHOLE_ENGINE_HEARTBEAT`` 已注销（运行时静默忽略）。"""
+    return _HEARTBEAT_DEFAULT_S, ""
 
 
 def heartbeat_settings() -> dict:
@@ -2202,8 +2077,8 @@ async def metasearch(
         raise MetaSearchException(
             f"No search engines could start{proxy_note}. "
             f"Engine status: {status}. "
-            f"Check DHOLE_SEARCH_PROXY, or pick keyed engines (brightdata/tavily/"
-            f"exa/bocha) via engines= and set their API key env."
+            f"Check DHOLE_SEARCH_PROXY, or pick keyed engines (tavily/bocha) "
+            f"via engines= and set their API key env."
         )
 
     seen: dict[str, dict[str, Any]] = {}
@@ -2317,8 +2192,8 @@ async def metasearch(
             engines_ok >= min_engines or elapsed >= soft_deadline
         ):
             for pt in pending:
-                if tasks.get(pt) == "brightdata":
-                    continue  # let Bright Data finish (it's a paid API, don't waste credits)
+                if tasks.get(pt) in ("tavily", "bocha"):
+                    continue  # let keyed engines finish (they're paid APIs, don't waste credits)
                 pt.cancel()
             for pt in list(pending):
                 nm = tasks[pt]

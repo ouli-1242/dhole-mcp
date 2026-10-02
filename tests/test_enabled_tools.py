@@ -66,59 +66,26 @@ class TestTheEnvVarIsParsed:
             "默认关闭的也留在这里，守卫继续覆盖它们"
 
     @pytest.mark.parametrize("value", [None, "", "   "])
-    def test_unset_means_every_tool_except_the_opt_in_ones(self, value):
-        """未设 DHOLE_TOOLS = 全集 **减去** 两个 opt-in 组。
-
-        18.0 起 recipe / watch 是 opt-in：它们的 schema 合计约 3.6k 字符，
-        而连接期预算是这个项目反复量过的东西。凭据 / 登录流（vault / login）
-        是**第二个** opt-in 组，单独一个开关——它要用户装了密码管理器 CLI 才有
-        意义。默认 wire 必须与它们落地之前逐字节相同。
-        """
+    def test_unset_means_every_tool(self, value):
+        """17.0：未设 DHOLE_TOOLS = 全部 14 个工具（没有 opt-in 组）。"""
         out = _run_fresh(_ENABLED_SNIPPET, value)
         assert out.returncode == 0, out.stderr[-600:]
         payload = json.loads(out.stdout)
-        opt_in = {"recipe", "watch", "vault", "login"}
-        assert set(payload["enabled"]) == set(payload["all"]) - opt_in
-        assert opt_in.isdisjoint(payload["enabled"])
+        assert set(payload["enabled"]) == set(payload["all"])
 
-    def test_dhole_tasks_1_puts_the_task_opt_in_tools_back(self):
-        """DHOLE_TASKS=1 只放回 recipe / watch —— 不碰凭据那组。
-
-        两个开关两件事：打开「重复任务」不该顺手打开一个能读密码管理器的工具。
-        """
-        code = _ENABLED_SNIPPET
+    def test_a_stale_tasks_flag_enables_nothing_extra(self):
+        """DHOLE_TASKS 已注销：设与不设，enabled 集合逐字节相同。"""
         env = {k: v for k, v in os.environ.items()
                if k not in ("DHOLE_TOOLS", "DHOLE_TASKS", "DHOLE_VAULT")}
-        env["DHOLE_TASKS"] = "1"
-        out = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                             text=True, env=env, timeout=180)
-        assert out.returncode == 0, out.stderr[-600:]
-        payload = json.loads(out.stdout)
-        assert set(payload["enabled"]) == set(payload["all"]) - {"vault", "login"}
-        assert {"recipe", "watch"} <= set(payload["enabled"])
-
-    def test_dhole_vault_1_puts_the_credential_tools_back(self):
-        """DHOLE_VAULT=1 只放回 vault / login，不放回 recipe / watch。"""
-        env = {k: v for k, v in os.environ.items()
-               if k not in ("DHOLE_TOOLS", "DHOLE_TASKS", "DHOLE_VAULT")}
-        env["DHOLE_VAULT"] = "1"
-        out = subprocess.run([sys.executable, "-c", _ENABLED_SNIPPET],
-                             capture_output=True, text=True, env=env, timeout=180)
-        assert out.returncode == 0, out.stderr[-600:]
-        payload = json.loads(out.stdout)
-        assert set(payload["enabled"]) == set(payload["all"]) - {"recipe", "watch"}
-        assert {"vault", "login"} <= set(payload["enabled"])
-
-    def test_both_flags_together_enable_everything(self):
-        env = {k: v for k, v in os.environ.items()
-               if k not in ("DHOLE_TOOLS", "DHOLE_TASKS", "DHOLE_VAULT")}
-        env["DHOLE_TASKS"] = "1"
-        env["DHOLE_VAULT"] = "1"
-        out = subprocess.run([sys.executable, "-c", _ENABLED_SNIPPET],
-                             capture_output=True, text=True, env=env, timeout=180)
-        assert out.returncode == 0, out.stderr[-600:]
-        payload = json.loads(out.stdout)
-        assert payload["enabled"] == payload["all"]
+        out_plain = subprocess.run([sys.executable, "-c", _ENABLED_SNIPPET],
+                                   capture_output=True, text=True, env=env,
+                                   timeout=180)
+        env["DHOLE_TASKS"] = "0"
+        out_stale = subprocess.run([sys.executable, "-c", _ENABLED_SNIPPET],
+                                   capture_output=True, text=True, env=env,
+                                   timeout=180)
+        assert out_plain.returncode == 0 and out_stale.returncode == 0
+        assert json.loads(out_plain.stdout) == json.loads(out_stale.stdout)
 
     @pytest.mark.parametrize("value,bad", [
         ("smart_frobnicate", "smart_frobnicate"),
@@ -228,24 +195,8 @@ class TestInstructionsFollowTheEnabledSet:
         assert out.stdout.strip() == "False True", (
             "wire 发的是 ACTIVE_INSTRUCTIONS，不是全量字面量")
 
-    def test_the_default_wire_instructions_are_the_literal_minus_the_opt_in_lines(self):
-        """默认 wire 与全集字面量**只**差两个 opt-in 组的路由行。
-
-        断言写成「差集恰好是那几行」而不是「两者相等」：后者在这个改动之后
-        已经是废话（ACTIVE_INSTRUCTIONS 就是按默认集组合出来的），而前者能
-        同时抓住两种错误——opt-in 的行漏进默认 wire（默认开销白涨），以及
-        别的行被顺手改掉。
-        """
-        code = (
-            "import dhole_mcp.server as s;"
-            "optin=''.join(v for k,v in s._INSTRUCTIONS_ROUTING.items()"
-            " if k in (s._OPT_IN_TOOLS | s._OPT_IN_TOOLS_VAULT));"
-            "print(repr(s.DHOLE_INSTRUCTIONS.replace(optin,'')"
-            " == s.ACTIVE_INSTRUCTIONS));"
-            "print(len(optin))"
-        )
-        out = _run_fresh(code, None)
-        assert out.returncode == 0, out.stderr[-600:]
-        same, n = out.stdout.strip().splitlines()
-        assert same == "True", "默认 instructions 必须恰好是全集字面量减去 opt-in 路由行"
-        assert int(n) > 0, "opt-in 的行不能是空串，否则这条断言什么都没验"
+    def test_the_default_wire_instructions_are_the_full_literal(self):
+        """17.0：没有 opt-in 组 —— 默认 instructions 就是全集字面量本身，
+        不再有任何"减去的路由行"。"""
+        assert server_mod._compose_instructions(
+            frozenset(server_mod._TOP_LEVEL_ARGS)) == server_mod.DHOLE_INSTRUCTIONS

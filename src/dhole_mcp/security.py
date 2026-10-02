@@ -13,8 +13,6 @@ import time
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-from dhole_mcp import env_registry
-
 # Maximum URL length to prevent DoS via oversized URLs
 MAX_URL_LENGTH = 8192
 
@@ -226,15 +224,14 @@ _auto_note = ""
 
 
 def _recheck_skipped_by_environment() -> bool:
-    """True when dhole relaxed the recheck on the operator's behalf.
+    """True when dhole relaxed the recheck on this machine's behalf.
 
-    Only the no-setting case counts: an explicit value is a decision, not an
-    environment, so someone who wrote ``DHOLE_SSRF_DNS_RECHECK=on`` (or ``""``,
-    which this gate has always read as "keep it on") gets the guard they asked
-    for and a note that says nothing happened.
+    17.0: the ``DHOLE_SSRF_DNS_RECHECK`` knob is retired (silently ignored), so
+    the skip is decided by measurement alone — a fake-ip resolver is an
+    environment fact, not a preference. There is no override on purpose: the
+    historical reason to want one IS the fake-ip case, and that case is what the
+    probe detects.
     """
-    if env_registry.source_of("DHOLE_SSRF_DNS_RECHECK") != "unset":
-        return False
     return probe_fake_ip()[0] == "fake-ip"
 
 
@@ -276,8 +273,7 @@ def probe_fake_ip() -> tuple[str, str, str]:
                       f"resolves to {hit} in {net}{both}, which is what a fake-ip TUN "
                       f"proxy (Clash / sing-box) does to every public name. Only the DNS "
                       f"recheck layer is off: IP-literal, hostname and cloud-metadata "
-                      f"guards still apply. Force it back on: "
-                      f"dhole config set DHOLE_SSRF_DNS_RECHECK on")
+                      f"guards still apply.")
         _fake_ip_cache = ("fake-ip", hit, f"{_PROBE_DOMAIN} -> {hit} in {net}")
     else:
         _fake_ip_cache = ("public", "", "")
@@ -304,35 +300,13 @@ def recheck_posture_note() -> str:
 def _dns_recheck_enabled() -> bool:
     """是否开启域名 DNS 解析内网复查。
 
-    默认**开启**（fail-closed）：这个工具的输入是 agent 从不受信任来源拿到的
-    URL，"公网域名指向 127.0.0.1 / 169.254.169.254 / 内网段" 是 SSRF 的主路径。
-    两点例外都对着"误伤"设计：hosts 文件里显式钉住的域名放行（那是本机用户的
-    故意决定，攻击者改不了你的 hosts 文件，见 ``_hosts_file_pin``）；
-    ``DHOLE_SSRF_DNS_RECHECK=0`` 可整体关闭 —— DNS 污染/分流环境（公网域名被
-    解析到保留地址且未写进 hosts）下合法公网请求会被误伤。
-
-    W4 补的记录：这个 off-list 只有 ``0/false/off/no``，比 ``_env_flag`` 少了
-    ``"" / none / null``——这是历史不对称（W4.3 只统一 tokens 集合的**存在**，
-    不改任何一条判定的**语义**，见 W4.1）。这里保持原判定，只把"未识别的值"
-    （既不在 ON 也不在这条短 off-list 里，比如 ``flase``）记入告警列表；
-    仍然按 fail-safe 走（recheck 继续开着）。
+    17.0 写死为**开启**（fail-closed），``DHOLE_SSRF_DNS_RECHECK`` 已注销：
+    唯一需要关它的场景 —— fake-ip TUN（公网域名被解析到保留地址）—— 已由
+    W12 的自动判定（``_recheck_skipped_by_environment``）覆盖，一个需要用户
+    选择才能正确工作的旋钮不再是配置，是一个环境 bug。放宽守卫需要证据，
+    不需要猜测。
     """
-    raw = env_registry.value_of("DHOLE_SSRF_DNS_RECHECK")
-    v = (raw or "").strip().lower()
-    if v in ("0", "false", "off", "no"):
-        return False
-    if not v:
-        # 没人设过 —— 于是问这台机器本身。fake-ip TUN 下"默认开启"等于"默认什么都
-        # 抓不到"，而那不是一个用户能配置的默认值，是一个环境问题。探测不确定时
-        # （unprobed）保持开启：放宽守卫需要证据，不需要猜测。
-        if _recheck_skipped_by_environment():
-            return False
-    if v and v not in env_registry.ON_TOKENS and v not in ("0", "false", "off", "no"):
-        env_registry.record_warning(
-            "DHOLE_SSRF_DNS_RECHECK", raw,
-            f"{raw!r} is not a recognised on/off value - DNS recheck stays enabled",
-        )
-    return True
+    return not _recheck_skipped_by_environment()
 
 
 # DNS 复查结果短缓存：一次抓取会对初始 URL + 每一跳重定向各调一次
@@ -716,7 +690,8 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
             if hostname_lower.endswith(_DNS_REBINDING_SUFFIXES):
                 raise SecurityError(f"URL uses DNS rebinding service: {hostname}")
             # 纵深防御（报告声明 4）：域名经 DNS 解析到的内网 IP 复查。
-            # 默认开启；DHOLE_SSRF_DNS_RECHECK=0 关闭（见 _dns_recheck_enabled）。
+            # 常开；唯一正当的关闭理由（fake-ip TUN 把公网域名解析进保留段）由
+            # 开机探测自动判定（见 _dns_recheck_enabled / probe_fake_ip）。
             # 只拒绝"解析成功且命中内网"；解析失败（gaierror/超时）容忍。
             # 存在 DNS rebinding TOCTOU 竞态，作为纵深防御而非唯一防线。
             # 点名放行的主机跳过这一条：它本来就该解析到内网。
@@ -725,9 +700,9 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
                 if internal:
                     raise SecurityError(
                         f"URL hostname {hostname} resolves to internal/private IP ({internal}). "
-                        "If your resolver maps public domains to reserved addresses (DNS "
-                        "pollution / split-horizon), set DHOLE_SSRF_DNS_RECHECK=0 to disable "
-                        "this check."
+                        "This guard is fail-closed: dhole auto-detects fake-ip TUN resolvers "
+                        "(public names answering with reserved addresses) and skips the layer "
+                        "only for them; this hostname still resolved into a private range."
                     )
 
     return url

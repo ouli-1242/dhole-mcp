@@ -5,12 +5,17 @@ The other e2e files drive dhole's classes directly; this one spawns the actual
 installed wheel — and speaks the newline-JSON MCP protocol to it, so it
 validates exactly what an agent client sees:
 
-1. gate: ``cdp_url`` without ``DHOLE_CDP_ATTACH`` is refused on the wire;
-2. attach: with ``DHOLE_CDP_ATTACH=1`` + ``DHOLE_CDP_HOSTS=127.0.0.1``,
-   smart_fetch rides the attached Chrome's logged-in cookie — the response
-   carries ``cdp_attached: true`` and ``login_check.logged_in: true``;
-3. host scope: a URL outside ``DHOLE_CDP_HOSTS`` is refused on the wire;
-4. audit: the attach attempt lands in the ``DHOLE_USAGE_LOG`` channel.
+1. gate: ``cdp_url`` for a host the user has never authorized is refused on the
+   wire with ``cdp_authorization_required`` -- and NOTHING executes, so the
+   authorization file stays absent;
+2. ask-then-remember: the same call with ``confirm: true`` attaches, rides the
+   logged-in Chrome's cookie (``cdp_attached: true``, ``login_check.logged_in:
+   true``), and writes the host into ``<DHOLE_HOME>/cdp_hosts.json``;
+3. host scope: a URL outside the authorized hosts is refused on the wire;
+4. bulk: ``urls=`` + ``cdp_url=`` is refused (the attach is per call, so a batch
+   would otherwise authorize a host and then fetch every page un-attached);
+5. audit: the refusal and the authorization both land in the ``DHOLE_USAGE_LOG``
+   channel.
 
 Run manually:
     pytest -m e2e tests/e2e_cdp_attach_wire_test.py -v
@@ -51,7 +56,9 @@ class _WireClient:
             "PYTHONPATH": str(_SRC_DIR),
             "DHOLE_HOME": str(home),
             "DHOLE_IGNORE_ROBOTS": "1",
-            "DHOLE_NO_BROWSER_PREWARM": "1",
+            # 17.0：启动预热没有开关（DHOLE_NO_BROWSER_PREWARM 已注销），所以这里
+            # 会有一次后台 stealthy 预热与本用例自己拉的 Chrome 并存。它整段
+            # best-effort 且吞掉所有异常，不能当成"已经被关掉"来断言。
             "DHOLE_USAGE_LOG": "1",
         }
         env.update(extra_env)
@@ -149,8 +156,9 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
         try:
             asyncio.run(_seed_cookie(endpoint, site.base_url))
 
-            # ── 1. gate: attach refused without the explicit opt-in ──
-            client = _WireClient(tmp_path / "home-gate", {})
+            # ── 1. gate: 未授权主机被拒绝，且什么都没执行、什么都没落盘 ──
+            gate_home = tmp_path / "home-gate"
+            client = _WireClient(gate_home, {})
             try:
                 payload = _payload(client.call_tool("smart_fetch", {
                     "url": f"{site.base_url}/home",
@@ -159,20 +167,22 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
                 }))
             finally:
                 client.close()
-            assert "cdp_attach_disabled" in payload.get("error", ""), \
+            assert "cdp_authorization_required" in payload.get("error", ""), \
                 f"expected the gate to refuse: {payload}"
-            assert "DHOLE_CDP_ATTACH" in payload.get("error", ""), \
-                "refusal must say how to enable"
+            assert "confirm=true" in payload.get("error", ""), \
+                "refusal must say how to authorize"
+            # 拒绝的语义是"什么都没执行"：授权名册不该因此出现
+            assert not (gate_home / "cdp_hosts.json").exists(), \
+                "a refused attach must not authorize the host"
 
-            # ── 2. attach: the logged-in cookie rides the wire call ──
-            client = _WireClient(tmp_path / "home-attach", {
-                "DHOLE_CDP_ATTACH": "1",
-                "DHOLE_CDP_HOSTS": "127.0.0.1",
-            })
+            # ── 2. 先问再记: confirm=true 才 attach，并把主机落盘 ──
+            attach_home = tmp_path / "home-attach"
+            client = _WireClient(attach_home, {})
             try:
                 payload = _payload(client.call_tool("smart_fetch", {
                     "url": f"{site.base_url}/home",
                     "cdp_url": endpoint,
+                    "confirm": True,
                     "check_login": True,
                     "allow_private": True,
                 }))
@@ -187,14 +197,16 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
                 f"cookie NAMES missing from login_check: {probe}"
             assert _COOKIE_VALUE not in json.dumps(payload), \
                 "cookie VALUE must never reach the wire"
-            audit = (tmp_path / "home-attach" / "usage.jsonl").read_text(encoding="utf-8")
+            # "记"这一半只有在这条线上测里能验：文件真的写进了这次连接的 DHOLE_HOME
+            remembered = json.loads(
+                (attach_home / "cdp_hosts.json").read_text(encoding="utf-8"))
+            assert "127.0.0.1" in remembered["hosts"], remembered
+            audit = (attach_home / "usage.jsonl").read_text(encoding="utf-8")
+            assert "cdp_authorize" in audit, "authorization missing from the audit log"
             assert "cdp_attach" in audit, "attach attempt missing from the audit log"
 
-            # ── 3. host scope: off-fence navigation refused on the wire ──
-            client = _WireClient(tmp_path / "home-scope", {
-                "DHOLE_CDP_ATTACH": "1",
-                "DHOLE_CDP_HOSTS": "127.0.0.1",
-            })
+            # ── 3. host scope: 围栏外的导航在 route 层被拒 ──
+            client = _WireClient(attach_home, {})   # 复用已授权过 127.0.0.1 的家
             try:
                 payload = _payload(client.call_tool("smart_fetch", {
                     "url": "https://example.com/",
@@ -204,8 +216,26 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
                 client.close()
             assert "cdp_host_not_allowed" in payload.get("error", ""), \
                 f"expected host scope to refuse example.com: {payload}"
+
+            # ── 4. bulk: urls= 与 cdp_url= 不兼容，必须在闸口之前拒绝 ──
+            bulk_home = tmp_path / "home-bulk"
+            client = _WireClient(bulk_home, {})
+            try:
+                payload = _payload(client.call_tool("smart_fetch", {
+                    "urls": [f"{site.base_url}/home"],
+                    "cdp_url": endpoint,
+                    "confirm": True,
+                    "allow_private": True,
+                }))
+            finally:
+                client.close()
+            assert "cannot be combined with urls=" in json.dumps(payload), \
+                f"bulk + attach should be refused, not downgraded: {payload}"
+            assert not (bulk_home / "cdp_hosts.json").exists(), \
+                "a refused bulk call must not leave a host authorized"
         finally:
             _stop_chrome(chrome_proc)
 
-    print("\nWire verdict: gate refusal, attach + login probe, host scope, "
+    print("\nWire verdict: gate refusal (nothing executed), ask-then-remember "
+          "(attach + login probe + host on disk), host scope, bulk refusal, "
           "audit — all confirmed over the real MCP stdio protocol.")

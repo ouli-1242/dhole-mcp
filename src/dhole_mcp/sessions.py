@@ -22,8 +22,8 @@ Scope, and what is deliberately NOT here:
   is a credential, and tool output lands in the agent's transcript — and in the
   SQLite content cache, and possibly in a log. An agent that needs to know
   "did my login survive?" is answered by the name list.
-* **Expires after** the effective TTL (:data:`COOKIE_TTL_S`, or
-  ``DHOLE_COOKIE_TTL_S`` when set). Written once per ``Set-Cookie``, not
+* **Expires after** the fixed :data:`COOKIE_TTL_S` (24h, hardcoded in 17.0).
+  Written once per ``Set-Cookie``, not
   refreshed on send, so a forgotten session cannot accumulate credentials
   forever. ``cache_clear`` (the tool) and ``close_session`` drop the jar.
 
@@ -42,32 +42,18 @@ import threading
 import time
 from urllib.parse import urlparse
 
-from dhole_mcp import env_registry
-
 logger = logging.getLogger("dhole-mcp.sessions")
 
 # A stored cookie lives this long from when the site set it.
-# Overridable via ``DHOLE_COOKIE_TTL_S`` (seconds; clamped 60s..30d). The plan
-# ("登录一次、长期复用") needs more than the 24h default on quiet sites — but the
-# expiry still exists, so an abandoned session cannot hold credentials forever.
+# 17.0 写死（``DHOLE_COOKIE_TTL_S`` 已注销）：一个 cookie 该活多久是能算清的
+# （"隔天还认不认"），需要改它的频率低于发版频率。过期仍存在 —— 废弃的会话
+# 不能无限期持有凭据。
 COOKIE_TTL_S = 24 * 3600.0
-_COOKIE_TTL_MIN_S = 60.0
-_COOKIE_TTL_MAX_S = 30 * 24 * 3600.0
 
 
 def _cookie_ttl() -> float:
-    """Effective TTL in seconds: ``DHOLE_COOKIE_TTL_S`` when parseable, else
-    :data:`COOKIE_TTL_S`. Read per call (cheap) so tests and long-lived servers
-    pick up env changes without a reload.
-
-    W4: an unparseable value falls back to the default as before, but the
-    failure now lands in ``env_registry.warnings_snapshot()`` — this is the
-    cross-module test target in the plan (a warning recorded by ``sessions.py``
-    must be visible from ``dhole --doctor``, which runs in a different module).
-    """
-    return env_registry.read_float(
-        "DHOLE_COOKIE_TTL_S", COOKIE_TTL_S,
-        lo=_COOKIE_TTL_MIN_S, hi=_COOKIE_TTL_MAX_S)
+    """Effective TTL in seconds. 17.0 写死为 :data:`COOKIE_TTL_S`（24 小时）。"""
+    return COOKIE_TTL_S
 # Bound on the jar, so a crawl that hops through 500 hosts cannot grow it
 # without limit. Oldest-expiring rows go first.
 MAX_COOKIES = 2000

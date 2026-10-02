@@ -115,10 +115,10 @@ class TestKickHealthCheckWithoutEventLoop:
         assert pool.health_check_calls == 0
 
 
-_BRIGHTDATA_KEY = "brd-customer-0123-zone-dhole-SECRETDONOTLOG"
+_KEYED_KEY = "tvly-dev-0123456789-SECRETDONOTLOG"
 
-class TestBrightDataErrorBodyRedaction:
-    """Bright Data 的失败响应体不得把 key 原样写进日志。"""
+class TestKeyedEngineErrorBodyRedaction:
+    """Keyed 引擎（Tavily/博查）的失败响应体不得把 key 原样写进日志。"""
 
     @pytest.mark.asyncio
     async def test_key_in_error_body_does_not_reach_log(self, monkeypatch, caplog):
@@ -129,17 +129,17 @@ class TestBrightDataErrorBodyRedaction:
 
         class _ServerError:
             status_code = 500
-            text = f'{{"error":"unauthorized, key {_BRIGHTDATA_KEY} rejected"}}'
+            text = f'{{"error":"unauthorized, key {_KEYED_KEY} rejected"}}'
 
-        monkeypatch.setenv("DHOLE_BRIGHTDATA_API_KEY", _BRIGHTDATA_KEY)
+        monkeypatch.setenv("DHOLE_TAVILY_API_KEY", _KEYED_KEY)
         monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
         monkeypatch.setattr(httpx, "post", lambda *a, **k: _ServerError())
 
         with caplog.at_level(logging.DEBUG, logger="dhole_mcp.search_metasearch"):
-            results, _status = await m.metasearch("q", 3, engines=["brightdata"])
+            results, _status = await m.metasearch("q", 3, engines=["tavily"])
 
         assert results == []
-        assert _BRIGHTDATA_KEY not in caplog.text, "Bright Data key 泄漏到了日志"
+        assert _KEYED_KEY not in caplog.text, "keyed 引擎的 key 泄漏到了日志"
         assert "500" in caplog.text, "脱敏不能把状态码这个排障线索一起抹掉"
 
 
@@ -377,70 +377,30 @@ class TestCacheContextIsolation:
 # ---------------------------------------------------------------------------
 
 
-class TestSearchFeedbackIsOptIn:
-    """``record_search_feedback`` 会按「抓到过就算有用」永久给域名加分
-    （+0.05，落盘、上限 500），静默改写跨引擎共识排序。默认必须不生效。"""
+class TestSearchFeedbackIsGone:
+    """search feedback 域名偏好整块删除（17.0）：旋钮注销、文件不再存在，
+    也没有任何代码路径能再写它。"""
 
-    def test_disabled_by_default_and_writes_nothing(self, monkeypatch, temp_dir):
+    def test_the_machinery_is_gone(self):
         from dhole_mcp import search
 
-        monkeypatch.delenv("DHOLE_SEARCH_FEEDBACK", raising=False)
-        monkeypatch.setattr(search, "_feedback_file", lambda: str(temp_dir / "search_feedback.json"))
-        monkeypatch.setattr(search, "_feedback_cache", None)
-        assert search._feedback_enabled() is False
-        assert search._feedback_domains() == frozenset()
-        search.record_search_feedback("https://useful.example/page")
-        assert not (temp_dir / "search_feedback.json").exists(), "默认不该写反馈文件"
-        assert search._domain_boost("https://useful.example/page", "q", False) == 0.0
+        assert not hasattr(search, "_feedback_file")
+        assert not hasattr(search, "record_search_feedback")
+        assert not hasattr(search, "_feedback_enabled")
 
-    def test_opt_in_restores_the_boost(self, monkeypatch, temp_dir):
-        from dhole_mcp import search
-
+    def test_the_knob_changes_nothing(self, monkeypatch, tmp_path):
+        from pathlib import Path as _Path
         monkeypatch.setenv("DHOLE_SEARCH_FEEDBACK", "1")
-        monkeypatch.setattr(search, "_feedback_file", lambda: str(temp_dir / "search_feedback.json"))
-        monkeypatch.setattr(search, "_feedback_cache", None)
-        monkeypatch.setattr(search, "_feedback_mtime", 0.0)
-        search.record_search_feedback("https://useful.example/page")
-        assert search._feedback_domains() == frozenset({"useful.example"})
-        assert search._domain_boost("https://useful.example/page", "q", False) == \
-            pytest.approx(0.05)
+        # 哨兵：任何向 search_feedback.json 的写入都会当场炸掉测试
+        sentinel = tmp_path / "search_feedback.json"
+        real_write_text = _Path.write_text
 
-
-# ---------------------------------------------------------------------------
-# 本地调用日志：默认关闭，且不记录参数值
-# ---------------------------------------------------------------------------
-
-
-class TestUsageLogIsOptIn:
-    """「agent 到底有没有调用 dhole」是这套工具最大的静默失败面，但没有本地
-    记录就无法回答。日志必须默认关闭、且只写工具名与结果，不写参数值。"""
-
-    def test_nothing_written_by_default(self, monkeypatch, temp_dir):
-        from dhole_mcp import server
-
-        monkeypatch.delenv("DHOLE_USAGE_LOG", raising=False)
-        server._log_tool_call("smart_fetch", True, 12.0)
-        assert list(temp_dir.iterdir()) == []
-
-    def test_enabled_records_outcome_without_arguments(self, monkeypatch, temp_dir):
-        import json
-
-        from dhole_mcp import server
-
-        target = temp_dir / "usage.jsonl"
-        monkeypatch.setenv("DHOLE_USAGE_LOG", str(target))
-        server._log_tool_call("smart_search", False, 3.5,
-                              "boom sk-abcdefghijklmnopqrstuvwxyz")
-        line = json.loads(target.read_text(encoding="utf-8").strip())
-        assert line["tool"] == "smart_search"
-        assert line["ok"] is False
-        assert line["ms"] == pytest.approx(3.5)
-        assert "sk-abcdefghijklmnopqrstuvwxyz" not in line.get("error", "")
-
-
-# ---------------------------------------------------------------------------
-# 自愈路径：跟随配置的发行版名，且可整体关闭
-# ---------------------------------------------------------------------------
+        def guard(self, s, *a, **kw):
+            if self == sentinel:
+                raise AssertionError(f"unexpected write to {self}")
+            return real_write_text(self, s, *a, **kw)
+        monkeypatch.setattr(_Path, "write_text", guard)
+        assert sentinel.exists() is False
 
 
 class TestRepairFollowsTheConfiguredDistribution:
@@ -454,15 +414,17 @@ class TestRepairFollowsTheConfiguredDistribution:
         monkeypatch.delenv("DHOLE_UPDATE_PACKAGE", raising=False)
         assert cli._dist_name() == "dhole-mcp"
 
-    def test_script_uses_configured_dist_and_index(self, monkeypatch):
+    def test_the_redirect_knobs_are_gone(self, monkeypatch):
+        """17.0：UPDATE_PACKAGE / UPDATE_INDEX_URL 注销 —— 修复脚本永远修
+        dhole-mcp、永远走默认索引。"""
         from dhole_mcp import cli
 
         monkeypatch.setenv("DHOLE_UPDATE_PACKAGE", "my-fork-name")
         monkeypatch.setenv("DHOLE_UPDATE_INDEX_URL", "https://mirror.example/simple")
         script = cli._repair_script_text(cli._dist_name(), cli._index_url())
-        assert "my-fork-name" in script
-        assert "dhole-mcp" not in script, "自愈脚本不得写死公开发行版名"
-        assert "https://mirror.example/simple" in script
+        assert "my-fork-name" not in script
+        assert "mirror.example" not in script
+        assert "dhole-mcp" in script
         # 生成的脚本必须是可编译的 Python
         compile(script, "repair.py", "exec")
 
@@ -473,40 +435,39 @@ class TestRepairFollowsTheConfiguredDistribution:
         compile(script, "repair.py", "exec")
         assert "--index-url" not in script
 
-    def test_auto_repair_can_be_disabled(self, monkeypatch):
+    def test_auto_repair_cannot_be_disabled(self, monkeypatch):
+        """NO_AUTO_REPAIR 注销：自愈永远在（半坏安装恰恰是没人会修的时候）。"""
         from dhole_mcp import cli
 
-        monkeypatch.delenv("DHOLE_NO_AUTO_REPAIR", raising=False)
-        assert cli._auto_repair_enabled() is True
-        for value in ("1", "true", "YES", "on"):
-            monkeypatch.setenv("DHOLE_NO_AUTO_REPAIR", value)
-            assert cli._auto_repair_enabled() is False
+        for value in (None, "1", "true", "YES", "on"):
+            if value is None:
+                monkeypatch.delenv("DHOLE_NO_AUTO_REPAIR", raising=False)
+            else:
+                monkeypatch.setenv("DHOLE_NO_AUTO_REPAIR", value)
+            assert cli._auto_repair_enabled() is True
 
     def test_updater_repair_script_is_compilable(self, monkeypatch, temp_dir):
         """updater 写出的 repair.py 同样要能编译（含包名/索引替换）。"""
         from dhole_mcp import updater
 
-        monkeypatch.setenv("DHOLE_UPDATE_PACKAGE", "my-fork-name")
-        monkeypatch.setenv("DHOLE_UPDATE_INDEX_URL", "https://mirror.example/simple")
         target = temp_dir / "repair.py"
         monkeypatch.setattr(updater, "repair_script_path", lambda: str(target))
         updater._write_repair_script()
 
         text = target.read_text(encoding="utf-8")
         compile(text, "repair.py", "exec")
-        assert "my-fork-name" in text
-        assert "dhole-mcp" not in text
-        assert "https://mirror.example/simple" in text
+        assert "dhole-mcp" in text
 
-    def test_main_does_not_reinstall_when_disabled(self, monkeypatch, capsys):
-        """关了自动修复时，ImportError 绝不允许跑 pip。"""
+    def test_main_still_self_heals_even_with_the_stale_knob(self, monkeypatch, capsys):
+        """旋钮已注销：设了它，ImportError 后自愈照样跑（不跑 pip 的是"没人
+        会修的半坏安装"这个恰恰最需要自愈的场景）。"""
         import builtins
 
         from dhole_mcp import cli
 
         monkeypatch.setenv("DHOLE_NO_AUTO_REPAIR", "1")
-        monkeypatch.setattr(cli, "_run_repair",
-                            lambda: pytest.fail("不应调用自愈（pip 重装）"))
+        called = []
+        monkeypatch.setattr(cli, "_run_repair", lambda: called.append(1))
 
         real_import = builtins.__import__
 
@@ -517,11 +478,10 @@ class TestRepairFollowsTheConfiguredDistribution:
             return real_import(name, *args, **kwargs)
 
         monkeypatch.setattr(builtins, "__import__", _fake_import)
-        rc = cli.main()
+        cli.main()
         out = capsys.readouterr().out
-        assert rc == 1
-        assert "Auto-repair disabled" in out
-        assert "dhole-mcp" in out  # 仍然告诉用户确切的修复命令
+        assert called, "旋钮设了也必须自愈"
+        assert "dhole-mcp" in out  # 报错里告诉用户确切的修复命令
 
 
 # ---------------------------------------------------------------------------

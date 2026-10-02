@@ -127,6 +127,80 @@ def test_w1_1_ast_approach_excludes_non_env_names():
     assert "DHOLE_TO_BACKEND" not in literals_metasearch | literals_server
 
 
+def test_wire_text_never_names_an_unregistered_knob():
+    """连接期文案里出现的每一个 ``DHOLE_*`` 名字都必须是活旋钮。
+
+    W1.1 只盯"整串恰好是旋钮名"的字面量（那是 ``os.environ.get()`` 的形状），
+    夹在长描述里的一句"需要 operator 设 DHOLE_NEURAL_FOCUS"它看不见 —— 而那正是
+    最贵的一类谎：它写在 tools/list 里，每次连接都付费，agent 照着它去教用户改一个
+    改了没有任何作用的环境变量。17.0 注销了 27 个旋钮，这条守卫是它们不复活的门。
+
+    扫的是**渲染后的对象**（instructions + 工具声明 + inputSchema + 每个 Field 的
+    description），不是源码文本：源码里"某旋钮已注销"的注释是合法教学，wire 里不是。
+    """
+    import dhole_mcp.server as server_mod
+
+    registered = {e.name for e in env_registry.ALL}
+    # 不含 DHOLE_ 字样的同族谎话：B1 删掉的是"许可门"这个概念本身，而文案里留下
+    # 的说法常常不点名任何旋钮（"the operator's flag is the permission"就是这句），
+    # 所以只扫名字会漏。这几个短语在合法的 17.0 文本里没有任何用处。
+    dead_phrases = ("operator's flag", "the flag is on", "with the permission",
+                    "whatever the operator configured", "opt-in tool")
+    hits: dict[str, list[str]] = {}
+    phrase_hits: dict[str, list[str]] = {}
+
+    def walk(obj, where):
+        if isinstance(obj, str):
+            for name in re.findall(r"DHOLE_[A-Z0-9_]+", obj):
+                if name not in registered:
+                    hits.setdefault(name, []).append(where)
+            for phrase in dead_phrases:
+                if phrase in obj:
+                    phrase_hits.setdefault(phrase, []).append(where)
+        elif isinstance(obj, dict):
+            for key, value in obj.items():
+                walk(value, where if key == "description" else f"{where}.{key}")
+        elif isinstance(obj, (list, tuple)):
+            for value in obj:
+                walk(value, where)
+
+    walk(server_mod.DHOLE_INSTRUCTIONS, "INSTRUCTIONS")
+    for tool_def in server_mod.MasterFetchServer._TOOL_DEFS:
+        walk(tool_def, tool_def.get("name", "?"))
+    for tool_def in server_mod.MasterFetchServer._TOOL_DEFS:
+        name = tool_def.get("name", "?")
+        method = getattr(server_mod.MasterFetchServer, name, None)
+        for pname, ann in (getattr(method, "__annotations__", None) or {}).items():
+            walk(getattr(ann, "description", None), f"{name}.{pname}")
+
+    assert not hits, (
+        f"连接期文案点了未注册（多半是已注销）的旋钮: "
+        f"{ {k: sorted(set(v))[:3] for k, v in hits.items()} } —— "
+        f"运行时它已经什么都不做，这句话就是在教用户改一个无效的设置")
+    assert not phrase_hits, (
+        f"连接期文案还在描述一道已删除的许可门: "
+        f"{ {k: sorted(set(v))[:3] for k, v in phrase_hits.items()} } —— "
+        f"17.0 的能力全部默认在线，按次参数就是唯一的门")
+
+
+def test_skill_corpus_never_names_an_unregistered_knob():
+    """随包说明书（``skills/dhole-web/**``）与 wire 同一档：它也是 agent 照做的文本。
+
+    这批里有三处就是这么漏的 —— fields.md 还在教 ``DHOLE_WIRE_FULL=1``，
+    troubleshooting.md 还在教 ``DHOLE_ENGINE_HEARTBEAT`` / ``DHOLE_ENGINE_COOLDOWN``。
+    与 W1.5（"每个活旋钮都要在配置文档里出现"）方向相反：那条盯覆盖率，这条盯谎话。
+    """
+    registered = {e.name for e in env_registry.ALL}
+    bad: dict[str, list[str]] = {}
+    for path in sorted((SRC_ROOT / "skills" / "dhole-web").rglob("*.md")):
+        for name in re.findall(r"DHOLE_[A-Z0-9_]+", path.read_text(encoding="utf-8")):
+            if name not in registered:
+                bad.setdefault(name, []).append(path.name)
+    assert not bad, (
+        f"说明书里教了未注册的旋钮: { {k: sorted(set(v)) for k, v in bad.items()} } —— "
+        f"设了没有任何作用，这段话就是在浪费读者的时间")
+
+
 # ─── W1.2 reverse anti-drift ────────────────────────────────────────────
 def test_w1_2_every_registry_name_is_read_as_string_in_src():
     """A registry entry that no reader in src/ actually parses is dead weight -
@@ -147,13 +221,13 @@ def test_w1_3_registry_has_no_duplicate_names():
     assert len(names) == len(set(names))
 
 
-def test_registry_covers_all_39_env_vars():
-    """Plan §1.1 pins the count at 39; a 40th env var must go through the
-    plan review, and a dropped one must fail this before someone's doctor
-    output lies about coverage.
+def test_registry_covers_all_11_env_vars():
+    """17.0 大众化一刀切把注册表从 39 收到 11（§3-20：注销的旋钮运行时静默
+    忽略，只有 --doctor 认识它们）。再删一个必须先改这里 —— 在有人 --doctor
+    的输出说谎之前先红。加回或新增一个旋钮同理。
     """
-    assert len(env_registry.ALL) == 39, (
-        f"expected 39 env vars, found {len(env_registry.ALL)}: "
+    assert len(env_registry.ALL) == 11, (
+        f"expected 11 env vars, found {len(env_registry.ALL)}: "
         f"{sorted(e.name for e in env_registry.ALL)}"
     )
 
@@ -204,11 +278,12 @@ def test_w1_5_every_registry_name_appears_in_configuration_doc():
 
 # ─── registry-shape guards ───────────────────────────────────────────
 def test_secret_kind_never_default_echos_value():
-    """The four API-key entries are the ``secret`` kind. Their ``default`` is
-    a marker string, not a value - W2's config audit depends on it.
+    """The API-key entries are the ``secret`` kind (17.0: Tavily + 博查 ——
+    brightdata/exa 的 keyed 引擎已删). Their ``default`` is a marker string,
+    not a value - W2's config audit depends on it.
     """
     secrets = [e for e in env_registry.ALL if e.kind == "secret"]
-    assert len(secrets) == 4
+    assert len(secrets) == 2
     for entry in secrets:
         assert entry.default == "", (
             f"{entry.name} is secret but has a non-empty default - W2 will "
@@ -221,34 +296,26 @@ def test_secret_kind_never_default_echos_value():
 
 
 def test_fail_safe_closed_matches_plan_d1_gate_list():
-    """Plan §A.4 names exactly 4 gates as ``fail_safe=closed`` (D1 scope)."""
+    """§A.4 的 fail_safe=closed 门。17.0 收敛后剩两道：内网放行与 robots
+    忽略 —— CDP 与 SSRF 复查的门已经从「旋钮」变成「写死 + 审计/自动判定」，
+    比旋钮更硬，所以不再出现在这张表里。"""
     closed = sorted(e.name for e in env_registry.ALL if e.fail_safe == "closed")
     assert closed == sorted([
         "DHOLE_ALLOW_PRIVATE_HOSTS",
-        "DHOLE_CDP_ATTACH",
         "DHOLE_IGNORE_ROBOTS",
-        "DHOLE_SSRF_DNS_RECHECK",
     ])
 
 
 def test_read_at_import_matches_plan_a1():
-    """Plan §A.1 enumerates 11 import-time reads. A drift here means W2's
-    "restart the host" line either fires on a call-time var (noise) or
-    stays silent on an import-time var (misleading).
+    """Import-time reads. 17.0 收敛后剩两个：内容默认值与工具白名单
+    （DHOLE_HOME 也是 ENV_ONLY，但它是 bootstrap —— 定位配置文件的变量不能
+    等配置文件来设，所以不进注册表）。 drift 在这意味着 W2 的
+    "restart the host" 提示要么空响、要么漏报。
     """
     imports = sorted(e.name for e in env_registry.ALL if e.read_at == "import")
     assert imports == sorted([
-        "DHOLE_BROWSER_IDLE_TIMEOUT",
-        "DHOLE_BRIGHTDATA_COUNTRY",
-        "DHOLE_BRIGHTDATA_ZONE",
         "DHOLE_DEFAULT_CONTENT_CHARS",
-        "DHOLE_OUTPUT_SCHEMA",
-        "DHOLE_SEARCH_DEADLINE",
-        "DHOLE_STRUCTURED_CONTENT",
-        "DHOLE_TASKS",
         "DHOLE_TOOLS",
-        "DHOLE_VAULT",
-        "DHOLE_WIRE_FULL",
     ])
 
 
@@ -356,7 +423,7 @@ def test_is_valid_value_matches_registry_kind():
     ok, why = env_registry.is_valid_value(entry_int, "1")
     assert not ok and "outside 500..200000" in why
 
-    entry_flag = env_registry.by_name("DHOLE_MULTIMODAL")
+    entry_flag = env_registry.by_name("DHOLE_IGNORE_ROBOTS")
     assert env_registry.is_valid_value(entry_flag, "on") == (True, "")
     assert env_registry.is_valid_value(entry_flag, "") == (True, "")
     ok, why = env_registry.is_valid_value(entry_flag, "yes-please")

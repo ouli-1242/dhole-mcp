@@ -8,10 +8,12 @@ the observed symptom it locks down rather than the number.
 Two items needed no code change and have no test here:
 
 * report BUG-1 (parse resolving ``dhole_test.html`` to ``$HOME``) - relative
-  paths already try cwd -> DHOLE_WORKDIR -> home and the miss lists every root
+  paths already try cwd -> process cwd -> home and the miss lists every root
   (pinned by test_bug_report_regressions.py). What the report measured is the
   MCP host's cwd: it IS tried first, it is just the host's own install
-  directory. DHOLE_WORKDIR is the lever.
+  directory. The per-call ``cwd`` argument is the lever (17.0 retired
+  ``DHOLE_WORKDIR`` -- a parameter you can pass every call needs no second,
+  later-wins spelling).
 * report BUG-10 (related_queries fragments) - the examples given predate 14.6's
   per-domain evidence counting + function-word lead filter; a live re-run
   produced no fragments of that kind.

@@ -1,10 +1,10 @@
 """M 轴（M-1/M-2/M-3）：神经 focus、答案块定位、意图命中提示。
 
-设计红线（计划第六章）：
-* flag（DHOLE_NEURAL_FOCUS）**默认关**——focus 是所有抓取路径的公共节点，
-  每页 × 每 block 的 CPU 推理延迟不能默认发生；
-* 模型缺失在工具入口**显式报错**，不静默下载（~280MB 的惊吓），也不静默降回
-  BM25（flag 开着的语义就是"我要神经分"）；BM25 回退只属于"打分器中途失败"；
+17.0 的设计红线：
+* focus 打分引擎是**纯按次选择**（``options.focus_engine``）——许可门已删，
+  未点名或点名 "bm25" 都走 BM25；每页 × 每 block 的 CPU 推理只在显式点名时发生；
+* 模型缺失在工具入口**显式报错**（neural_focus_model_missing），不静默下载
+  （~280MB 的惊吓），也不静默降回 BM25；BM25 回退只属于"打分器中途失败"；
 * reranker 只做文本相关性打分——这里所有判定都是纯文本 + 假打分器，不引入
   任何模型依赖（$0 无密钥边界）。
 """
@@ -170,7 +170,6 @@ class TestTheEntryGate:
 
     @pytest.mark.asyncio
     async def test_smart_fetch_refuses_without_the_model(self, monkeypatch):
-        monkeypatch.setenv("DHOLE_NEURAL_FOCUS", "1")
         import dhole_mcp.reranker as rr
 
         async def no_model(*a, **kw):
@@ -184,13 +183,12 @@ class TestTheEntryGate:
         monkeypatch.setattr(MasterFetchServer, "_auto_escalate", no_fetch)
 
         out = await MasterFetchServer().smart_fetch(
-            url="https://example.com/", focus="topic")
+            url="https://example.com/", focus="topic", focus_engine="neural")
         assert "neural_focus_model_missing" in out.error
         assert out.status == 0
 
     @pytest.mark.asyncio
     async def test_smart_fetch_without_focus_needs_no_model(self, monkeypatch):
-        monkeypatch.setenv("DHOLE_NEURAL_FOCUS", "1")
         import dhole_mcp.reranker as rr
 
         async def no_model(*a, **kw):
@@ -205,12 +203,11 @@ class TestTheEntryGate:
         assert out.content == ["body"]
 
     @pytest.mark.asyncio
-    async def test_flag_off_never_touches_the_reranker(self, monkeypatch):
-        monkeypatch.delenv("DHOLE_NEURAL_FOCUS", raising=False)
+    async def test_unnamed_engine_never_touches_the_reranker(self, monkeypatch):
         import dhole_mcp.reranker as rr
 
         def boom():
-            raise AssertionError("flag off but the reranker was consulted")
+            raise AssertionError("no focus_engine named but the reranker was consulted")
         monkeypatch.setattr(rr, "get_reranker", boom)
 
         result = ResponseModel(url="https://example.com/", status=200,
@@ -222,7 +219,6 @@ class TestTheEntryGate:
 
     @pytest.mark.asyncio
     async def test_smart_crawl_refuses_without_the_model(self, monkeypatch):
-        monkeypatch.setenv("DHOLE_NEURAL_FOCUS", "1")
         import dhole_mcp.reranker as rr
 
         async def no_model(*a, **kw):
@@ -230,11 +226,9 @@ class TestTheEntryGate:
         monkeypatch.setattr(rr, "get_reranker", lambda: None)
         monkeypatch.setattr(rr, "ensure_reranker", no_model)
 
-        async def no_crawl(*a, **kw):
-            raise AssertionError("the crawl ran despite a missing model")
-        monkeypatch.setattr(server_mod, "_neural_focus_enabled", lambda: True)
         out = await MasterFetchServer().smart_crawl(
-            "https://example.com/", focus="topic", max_pages=1)
+            "https://example.com/", focus="topic", max_pages=1,
+            focus_engine="neural")
         assert out.error.startswith("neural_focus_model_missing")
         assert out.pages == []
 
@@ -279,10 +273,10 @@ class TestIntentHint:
 
     @pytest.mark.asyncio
     async def test_end_to_end_hint_on_a_neural_fetch(self, monkeypatch):
-        """_apply_chunking 全链路：flag 开 + 假打分器全低分 → 提示出现在响应里。"""
-        monkeypatch.setenv("DHOLE_NEURAL_FOCUS", "1")
+        """_apply_chunking 全链路：点名 neural + 假打分器全低分 → 提示出现在响应里。"""
         import dhole_mcp.reranker as rr
         monkeypatch.setattr(rr, "get_reranker", lambda: FakeReranker(zero=False))
+        tokens = (server_mod._FOCUS_ENGINE.set("neural"),)
 
         multi_block = "\n\n".join([
             "# Intro", "Setup instructions for the tutorial.",
@@ -290,11 +284,13 @@ class TestIntentHint:
         ])
         result = ResponseModel(url="https://example.com/", status=200,
                                content=[multi_block], fetcher_used="http")
-        server_mod._FOCUS.set("how to fly to the moon cheaply")
+        tokens = (server_mod._FOCUS.set("how to fly to the moon cheaply"),
+                  *tokens)
         try:
             out = _apply_chunking(result)
         finally:
-            server_mod._FOCUS.set(None)
+            for tok in reversed(tokens):
+                tok.var.reset(tok)
         assert "focus match is weak" in out.next_action
 
 
@@ -302,36 +298,51 @@ class TestIntentHint:
 
 
 class TestCrawlFilter:
+    """17.0：过滤的开关 = contextvar 里有没有点名 "neural"（按次选择）。"""
+
+    @staticmethod
+    def _name_neural():
+        # 与 server 共用同一个 var（focus.py 定义）——爬取按同一条规则判定
+        from dhole_mcp.focus import FOCUS_ENGINE
+        return FOCUS_ENGINE
 
     def test_relevant_page_is_kept(self, monkeypatch):
-        monkeypatch.setenv("DHOLE_NEURAL_FOCUS", "1")
         import dhole_mcp.reranker as rr
         monkeypatch.setattr(rr, "get_reranker", lambda: FakeReranker())
         from dhole_mcp.crawl import _page_relevant
-        # 未命中 table 的文档得 0.001 -> 跑题带 -> 丢
-        assert _page_relevant("cooking recipes for pancakes", "asyncio") is False
+        token = self._name_neural().set("neural")
+        try:
+            # 未命中 table 的文档得 0.001 -> 跑题带 -> 丢
+            assert _page_relevant("cooking recipes for pancakes", "asyncio") is False
+        finally:
+            self._name_neural().reset(token)
 
     def test_off_topic_page_is_dropped(self, monkeypatch):
-        monkeypatch.setenv("DHOLE_NEURAL_FOCUS", "1")
         import dhole_mcp.reranker as rr
         monkeypatch.setattr(rr, "get_reranker",
                             lambda: FakeReranker(table={"asyncio": 0.97}))
         from dhole_mcp.crawl import _page_relevant
-        assert _page_relevant("asyncio event loop tutorial", "asyncio") is True
+        token = self._name_neural().set("neural")
+        try:
+            assert _page_relevant("asyncio event loop tutorial", "asyncio") is True
+        finally:
+            self._name_neural().reset(token)
 
     def test_no_reranker_fails_open(self, monkeypatch):
-        monkeypatch.setenv("DHOLE_NEURAL_FOCUS", "1")
         import dhole_mcp.reranker as rr
         monkeypatch.setattr(rr, "get_reranker", lambda: None)
         from dhole_mcp.crawl import _page_relevant
-        assert _page_relevant("anything", "goal") is None
+        token = self._name_neural().set("neural")
+        try:
+            assert _page_relevant("anything", "goal") is None
+        finally:
+            self._name_neural().reset(token)
 
-    def test_flag_off_skips_the_filter(self, monkeypatch):
-        monkeypatch.delenv("DHOLE_NEURAL_FOCUS", raising=False)
+    def test_unnamed_engine_skips_the_filter(self, monkeypatch):
         import dhole_mcp.reranker as rr
 
         def boom():
-            raise AssertionError("flag off but the filter consulted the model")
+            raise AssertionError("nothing named but the filter consulted the model")
         monkeypatch.setattr(rr, "get_reranker", boom)
         from dhole_mcp.crawl import _page_relevant
         assert _page_relevant("anything", "goal") is None
@@ -351,39 +362,31 @@ async def _never_ensured(*a, **kw):
 
 
 class TestThePerCallScorerChoice:
-    """M-1 的开关语义从"全局能力"变成"许可 + 这一次要不要"。
+    """M-1 的开关语义 17.0 收敛成一件事：``options.focus_engine`` 就是全部。
 
-    钉住的三条：不传参数时行为逐字节不变；``bm25`` 在 flag 开着时也不用模型
-    （否则"这次想省钱"只能靠关全局能力）；``neural`` 在没有许可时是**拒绝**而不
-    是降级（一次静默降级会把"神经/BM25 的差别"变成不可解释的玄学）。
+    钉住的三条：不点名 = BM25（12.5s/页的推理不该默认发生）；``bm25`` 永远
+    不碰模型（点名便宜路的人不想为语义分付费）；``neural`` 缺模型时是**拒绝**
+    而不是降级或下载（一次静默降级会把"神经/BM25 的差别"变成不可解释的玄学）。
     """
 
-    @pytest.mark.parametrize("engine,flag,expected", [
-        ("", False, False), ("", True, True),
-        ("bm25", False, False), ("bm25", True, False),
-        ("neural", False, False), ("neural", True, True),
+    @pytest.mark.parametrize("engine,expected", [
+        ("", False), ("bm25", False), ("neural", True),
     ])
-    def test_effective_choice_is_willingness_and_permission(self, engine, flag, expected):
+    def test_effective_choice_is_the_parameter_alone(self, engine, expected):
         from dhole_mcp import focus as _f
         token = _f.FOCUS_ENGINE.set(engine)
         try:
-            assert _f.neural_for_call(flag) is expected
+            assert _f.engine_wants_neural() is expected
         finally:
             _f.FOCUS_ENGINE.reset(token)
 
-    def test_willingness_without_permission_still_reads_as_requested(self):
-        """"要神经"必须能被闸看见——否则拒绝分支永远不触发，意愿参数成了装饰。"""
+    def test_the_permission_api_is_gone(self):
         from dhole_mcp import focus as _f
-        token = _f.FOCUS_ENGINE.set("neural")
-        try:
-            assert _f.engine_wants_neural(False) is True
-            assert _f.neural_for_call(False) is False
-        finally:
-            _f.FOCUS_ENGINE.reset(token)
+        assert not hasattr(_f, "neural_for_call"), (
+            "许可/意愿两段式已删 —— 留着它就是留着第二份语义")
 
     @pytest.mark.asyncio
-    async def test_bm25_is_honored_even_with_the_flag_on(self, monkeypatch):
-        monkeypatch.setenv("DHOLE_NEURAL_FOCUS", "1")
+    async def test_bm25_never_touches_the_model(self, monkeypatch):
         import dhole_mcp.reranker as rr
         monkeypatch.setattr(rr, "get_reranker", _never_consulted())
         monkeypatch.setattr(rr, "ensure_reranker", _never_ensured)
@@ -397,8 +400,13 @@ class TestThePerCallScorerChoice:
         assert out.content == ["body"]
 
     @pytest.mark.asyncio
-    async def test_neural_without_permission_is_refused_not_downgraded(self, monkeypatch):
-        monkeypatch.delenv("DHOLE_NEURAL_FOCUS", raising=False)
+    async def test_neural_without_the_model_is_refused_not_downgraded(self, monkeypatch):
+        import dhole_mcp.reranker as rr
+
+        async def no_model(*a, **kw):
+            return None
+        monkeypatch.setattr(rr, "get_reranker", lambda: None)
+        monkeypatch.setattr(rr, "ensure_reranker", no_model)
 
         async def no_fetch(*a, **kw):
             raise AssertionError("a refused call must not reach the network")
@@ -407,17 +415,15 @@ class TestThePerCallScorerChoice:
         out = await MasterFetchServer().smart_fetch(url="https://example.com/",
                                                     focus="topic",
                                                     focus_engine="neural")
-        # 拒绝走的是所有参数级拒绝的同一条通道（"invalid_request: …" 前缀），
-        # 而不是一个只有这个开关会产生的新形状。
-        assert "focus_engine_not_permitted" in out.error
+        # 拒绝走的是所有参数级拒绝的同一条通道，而不是一个只有这个开关会
+        # 产生的新形状；错误里没有"已用 BM25"的假成功。
+        assert "neural_focus_model_missing" in out.error
         assert out.status == 0, "不是伪装成成功的 BM25 结果"
-        assert "DHOLE_NEURAL_FOCUS" in out.error
-        assert "dhole init --neural" in out.next_action
+        assert "focus_engine_not_permitted" not in str(out.error)
 
     @pytest.mark.asyncio
-    async def test_the_old_model_gate_is_not_loosened(self, monkeypatch):
-        """许可 + 意愿都在场，模型缺失仍是 neural_focus_model_missing。"""
-        monkeypatch.setenv("DHOLE_NEURAL_FOCUS", "1")
+    async def test_the_model_gate_stands(self, monkeypatch):
+        """点名 neural 而模型缺失，仍是 neural_focus_model_missing。"""
         import dhole_mcp.reranker as rr
 
         async def no_model(*a, **kw):
@@ -435,8 +441,7 @@ class TestThePerCallScorerChoice:
         assert "neural_focus_model_missing" in out.error
 
     def test_the_chunker_obeys_the_per_call_choice(self, monkeypatch):
-        """意愿要活到打分那一刻，不只是活到闸里——两条路的表头就是证据。"""
-        monkeypatch.setenv("DHOLE_NEURAL_FOCUS", "1")
+        """点名要活到打分那一刻，不只是活到闸里——两条路的表头就是证据。"""
         import dhole_mcp.reranker as rr
         monkeypatch.setattr(rr, "get_reranker",
                             lambda: FakeReranker(table={"enterprise": 0.95}))
@@ -454,15 +459,20 @@ class TestThePerCallScorerChoice:
 
         assert "by BM25 relevance" in run("bm25")
         assert "neural relevance" in run("neural")
-        assert "neural relevance" in run("")  # 不传 = 跟随 flag（W15 之前的一切）
+        assert "by BM25 relevance" in run("")  # 不传 = BM25（17.0：无默认跟随）
 
 
 class TestTheCrawlFollowsTheSameRule:
     """爬取比抓取更需要这句实话：12.5s/页 × max_pages。"""
 
     @pytest.mark.asyncio
-    async def test_crawl_refuses_neural_without_permission(self, monkeypatch):
-        monkeypatch.delenv("DHOLE_NEURAL_FOCUS", raising=False)
+    async def test_crawl_refuses_neural_without_the_model(self, monkeypatch):
+        import dhole_mcp.reranker as rr
+
+        async def no_model(*a, **kw):
+            return None
+        monkeypatch.setattr(rr, "get_reranker", lambda: None)
+        monkeypatch.setattr(rr, "ensure_reranker", no_model)
 
         # 拒绝必须发生在爬取本体之前，所以本体被换成一个记过的 stub：真爬取不仅
         # 慢，还会把这个单元测试变成对 example.com 的一次真实拜访。
@@ -477,15 +487,13 @@ class TestTheCrawlFollowsTheSameRule:
         out = await MasterFetchServer().smart_crawl("https://example.com/",
                                                     focus="topic",
                                                     focus_engine="neural")
-        assert "focus_engine_not_permitted" in out.error
+        assert "neural_focus_model_missing" in out.error
         assert out.pages == []
         assert not ran, "the crawl body ran despite the refusal"
-        assert "dhole init --neural" in out.next_action
 
     @pytest.mark.asyncio
     async def test_crawl_with_bm25_needs_no_model(self, monkeypatch):
-        """flag 开着的老行为是"入口必查模型"；focus_engine='bm25' 把它绕开了。"""
-        monkeypatch.setenv("DHOLE_NEURAL_FOCUS", "1")
+        """focus_engine='bm25'（或不点名）根本不查模型。"""
         import dhole_mcp.reranker as rr
         monkeypatch.setattr(rr, "get_reranker", _never_consulted())
         monkeypatch.setattr(rr, "ensure_reranker", _never_ensured)
@@ -501,9 +509,8 @@ class TestTheCrawlFollowsTheSameRule:
                                                    focus_engine="bm25")
         assert not out.error, "走到了爬取本体（stub 无页），闸没有拦住"
 
-    def test_crawl_reads_the_same_per_call_var(self, monkeypatch):
+    def test_crawl_reads_the_same_per_call_var(self):
         from dhole_mcp import crawl as _crawl
-        monkeypatch.setenv("DHOLE_NEURAL_FOCUS", "1")
         token = server_mod._FOCUS_ENGINE.set("bm25")
         try:
             assert _crawl._neural_for_this_call() is False
@@ -511,6 +518,11 @@ class TestTheCrawlFollowsTheSameRule:
             server_mod._FOCUS_ENGINE.reset(token)
         token2 = server_mod._FOCUS_ENGINE.set("")
         try:
-            assert _crawl._neural_for_this_call() is True
+            assert _crawl._neural_for_this_call() is False
         finally:
             server_mod._FOCUS_ENGINE.reset(token2)
+        token3 = server_mod._FOCUS_ENGINE.set("neural")
+        try:
+            assert _crawl._neural_for_this_call() is True
+        finally:
+            server_mod._FOCUS_ENGINE.reset(token3)

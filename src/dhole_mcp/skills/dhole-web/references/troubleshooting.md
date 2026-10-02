@@ -17,11 +17,11 @@ Ground rule: **read the response fields before acting**. Every failure names its
 
 ### Whole round empty, `fetch_hint` reports error
 
-The entire pool is cooling. Read remaining seconds from `dhole engines list` and decide wait vs reset; probe failures never extend penalties (`DHOLE_ENGINE_HEARTBEAT` patrols cooling engines every 300s by default and lifts cooldowns on a successful probe).
+The entire pool is cooling. Read remaining seconds from `dhole engines list` and decide wait vs reset; probe failures never extend penalties (a heartbeat patrol runs every 300s, probes the cooling engines, and lifts a cooldown on a successful probe).
 
 ### The same engine keeps cooling
 
-This IP is being watched. The three cooldown tiers default to 60s / 600s / 600s (blocked / challenge x3 / unreachable x3) — raising `DHOLE_ENGINE_COOLDOWN` only makes the pool deader. The real fix is a different egress (proxy pool) or keyed engines. **Do not set `DHOLE_ENGINE_COOLDOWN` to hours** — that's a 16-hour dead pool; nobody wants that.
+This IP is being watched. The three cooldown tiers are fixed at 60s / 600s / 600s (blocked / challenge x3 / unreachable x3) — 17.0 does not expose them, because the only way to "fix" a watched IP with a longer timer is a deader pool. The real fix is a different egress (`DHOLE_SEARCH_PROXY`) or a keyed engine. There is no knob to set to hours; `dhole engines reset` is the way to drop a penalty early.
 
 ## Fetch
 
@@ -38,7 +38,7 @@ Default compliance: **zero requests** were sent for that URL. A one-shot waiver 
 
 ### Every public URL flagged as internal
 
-A fake-IP TUN proxy (Clash / sing-box TUN mode) hands every public name an address in `198.18.0.0/15` / a `fc00::/7` AAAA, which the DNS recheck reads as internal. **Since 18.0 this is detected and the recheck layer skips itself** — the response then says so in `metadata.ssrf_recheck` and `dhole --doctor` names the address and the network. If URLs are still being flagged internal, the probe did not fire (an unusual resolver, or the operator pinned the knob): have the user run `dhole config set DHOLE_SSRF_DNS_RECHECK 0` — no host restart — and re-check with `dhole --doctor`. Plain HTTP proxies are unaffected and must not set this.
+A fake-IP TUN proxy (Clash / sing-box TUN mode) hands every public name an address in `198.18.0.0/15` / a `fc00::/7` AAAA, which the DNS recheck reads as internal. **This is detected and the recheck layer skips itself** — the response then says so in `metadata.ssrf_recheck` and `dhole --doctor` names the address and the network. If URLs are still being flagged internal, the probe missed an unusual resolver that fake-ips only some names: have the user restart dhole once so the startup probe re-judges — 17.0 has no manual override (the knob is retired, and the only historical reason to want one IS the fake-ip case) — and re-check with `dhole --doctor`. Plain HTTP proxies are unaffected.
 
 ### Fetch timeouts
 
@@ -62,11 +62,11 @@ The response distinguishes "credentials rejected" (supply a fresh token) from "n
 
 ### Sites behind login
 
-Five paths, cheapest first: (1) HTTP tier — user-supplied cookies (`options.cookies` + `options.session_id` to keep the jar) or an API token (`options.auth`: basic/bearer/header). (2) The **no-password browser fallback (17.0)**: a named `session_id` bridges the jar into that session's dedicated stealthy browser (and harvests back), so HTTP-tier login state rides browser calls; combine with `check_login` + snapshot actions + gated submit to operate the site without ever touching a password. (3) **Stored-credential login (17.0, opt-in)** — `vault(op='match')` then `login` (needs `DHOLE_VAULT=1`); see "Stored-credential login" below. (4) CDP attach (17.0) — `smart_fetch` with `options.cdp_url` (+ `check_login=true`) runs the fetch inside the user's real logged-in Chrome; requires one-time user setup (configuration.md "CDP attach"). (5) Still impossible: DataDome / Akamai / interactive Turnstile walls and 2FA — none of these paths defeats challenges; say so honestly.
+Five paths, cheapest first: (1) HTTP tier — user-supplied cookies (`options.cookies` + `options.session_id` to keep the jar) or an API token (`options.auth`: basic/bearer/header). (2) The **no-password browser fallback (17.0)**: a named `session_id` bridges the jar into that session's dedicated stealthy browser (and harvests back), so HTTP-tier login state rides browser calls; combine with `check_login` + snapshot actions + gated submit to operate the site without ever touching a password. (3) **Stored-credential login (17.0)** — `vault(op='match')` then `login`; see "Stored-credential login" below. (4) CDP attach (17.0) — `smart_fetch` with `options.cdp_url` (+ `check_login=true`) runs the fetch inside the user's real logged-in Chrome; requires one-time user setup (configuration.md "CDP attach"). (5) Still impossible: DataDome / Akamai / interactive Turnstile walls and 2FA — none of these paths defeats challenges; say so honestly.
 
 ### Stored-credential login (vault / login) fails
 
-- **`vault` / `login` not in `tools/list`, or an error naming `DHOLE_VAULT`** — the opt-in group is off (the default). No request was sent. Enabling it is an env edit (`DHOLE_VAULT=1`, then restart the host) — the user's decision, not a workaround
+- **`vault` / `login` not in `tools/list`** — 17.0 registers them by default, so this means the operator set an explicit `DHOLE_TOOLS` subset that excludes them. Widening it is the user's edit, not a workaround
 - **`vault` `notes` says a manager is not installed** — the `bw` / `op` CLI is missing. Relay the note's install step; this is a note, not an error, and the other manager may still work
 - **`notes` says the vault is locked / not signed in** — the user must unlock it (`bw unlock` / `op signin`). Never ask for a master password
 - **`login` error: no password field found** — the page did not render a `type=password` input (a two-step email-then-password flow, a JS gate, or the page never settled). Pass `username_index` / `password_index` / `submit_index` from a snapshot, or raise `timeout`; if the form is genuinely multi-page, do the steps with `actions` instead
@@ -74,17 +74,17 @@ Five paths, cheapest first: (1) HTTP tier — user-supplied cookies (`options.co
 - **`login` `logged_in: false`** — the credential was submitted but the session did not take: wrong item, or the site wants 2FA. Check `signals`; do not retry blindly (a second wrong submit can lock the account). `logged_in: null` = the probe could not answer — not "failed"
 - **`login` ran but later fetches are anonymous** — pass the **same `session_id`** to those fetches; the cookies were kept under it. `close_session` shows what is held
 
-### Recipe / watch (opt-in) misbehave
+### Recipe / watch misbehave
 
-- **`recipe` / `watch` not in `tools/list`, or an error naming `DHOLE_TASKS`** — the group is off (default). Same as above: an env edit is the user's call
+- **`recipe` / `watch` not in `tools/list`** — same as vault/login above: only an explicit `DHOLE_TOOLS` subset removes them in 17.0
 - **`recipe(op='run')` with `actions_failed` > 0** — the page changed under the chain. Re-snapshot, re-derive the steps, `op='save'` again. An `op='save'` that is *rejected* means the chain is invalid (validation runs at save time) — fix the chain, don't retry the save
 - **`watch(op='check')` returns `changed: null`** — that is the FIRST check storing the baseline, not an error and not "no change". The next check answers `true`/`false`
 - **`watch` `error` set, `changed` absent** — the fetch failed; the baseline is **untouched** (by design, so an outage cannot silently re-baseline). Fix the fetch and re-check
 - **`watch` keeps reporting noise** — the page's chrome changes every load; re-add with `focus=` to diff only the relevant block, or raise `max_chars` if `baseline_cut` is true
 
 Attach-specific failures:
-- `cdp_attach_disabled` — the gate is off by default, so this is the user's to grant: `dhole init --cdp <host>` writes both gates (attach + its host fence) through `~/.dhole/config.json`, or by hand `dhole config set DHOLE_CDP_ATTACH 1`. Read per call - no restart needed. No request was sent; retrying changes nothing
-- `cdp_host_not_allowed` — the host is outside `DHOLE_CDP_HOSTS`, and the match is an **exact hostname**: `example.com` in the list does not let `www.example.com` through, and neither does it cover a CDN the page loads assets from. Ask the user to allowlist that host (`dhole init --cdp <host>` merges into the existing fence instead of replacing it); never work around by fetching a different host with the user's login state
+- `cdp_authorization_required` — this is the FIRST attach to this host, so nothing was executed. Attaching hands over the authenticated session of every site the user is logged into, and dhole asks once: present it as the user's decision, and only on a clear yes re-call with `confirm=true` (the approval persists to `~/.dhole/cdp_hosts.json`, so later attaches need no ask). Retrying without the user's yes changes nothing
+- `cdp_host_not_allowed` — the host is not in the authorized set, and the match is an **exact hostname**: `example.com` authorized does not let `www.example.com` through, and neither does it cover a CDN the page loads assets from. With the user's yes, attach to that host with `confirm=true`; never work around by fetching a different host with the user's login state
 - `login_check.logged_in: false` — session expired in the attached Chrome; the user re-logs in their window, then re-run the call
 - `logged_in: null` — the page's DOM shape wasn't enough to decide (pure-JSON endpoints, odd layouts); read `signals` and say what's uncertain instead of guessing
 
@@ -93,12 +93,12 @@ Attach-specific failures:
 - `pending_approval: true` in `metadata.actions` — not a failure: the submit PAUSED before acting, nothing was sent. Describe the submission to the user; on a clear yes re-run the **whole chain** with `confirm: true` on that submit (each call reloads the page, so prior fill/click steps must be redone)
 - An error naming the element index ("beyond this page's N interactive elements", or an `expect` mismatch reporting what the element reads now) — the page changed under you. Re-run `{"snapshot": true}` and re-address; don't retry the stale index
 - The snapshot came back empty / `could not enumerate` — the document was still loading; add `{"wait_selector": ...}` before the snapshot
-- `screenshot` selector / decode options refused, error names `DHOLE_MULTIMODAL` — the multimodal gate is off. That flag declares the calling agent can see images; adding it is the user's env decision (constraint 9). `decode_qr` alone never needs the flag
+- `element_screenshot_disabled` — 17.0 removed this error (element captures need no permission). Seeing it means the installed dhole predates 17.0; say so instead of editing env
 
 ### Focus behaves differently than expected
 
-- `neural_focus_model_missing` — `DHOLE_NEURAL_FOCUS=1` is set but the reranker model isn't downloaded; no request was made. For this call pass `focus_engine='bm25'` (plain keyword focus, no model), or have the user download once: `dhole init --neural`, any neural `smart_search`, or `dhole model use bge-zh`
-- `focus_engine_not_permitted` — `options.focus_engine='neural'` was asked on a server whose operator never enabled neural focus; no request was sent, and nothing was quietly downgraded. The permission is the user's to grant (`dhole init --neural` also fetches the model the flag needs); meanwhile re-run with `'bm25'` or without the parameter
+- `neural_focus_model_missing` — `options.focus_engine='neural'` was asked but the reranker model isn't downloaded; no request was made. For this call pass `focus_engine='bm25'` (plain keyword focus, no model), or let the model download once: any neural `smart_search` (one-time, resumable) or `dhole model use bge-zh`
+- `focus_engine_not_permitted` — 17.0 removed this error (neural focus is a per-call choice now, no license). Seeing it means the installed dhole predates 17.0
 - A weak-hit note in `next_action` ("best block scored below the intent floor") — the fetch succeeded but the page likely doesn't answer the focus query; `content_ok` stays true by design. Pivot: search for a better source instead of re-reading this page
 
 ## Local services

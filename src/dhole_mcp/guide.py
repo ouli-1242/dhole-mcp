@@ -34,7 +34,7 @@ TOPICS: dict[str, tuple[str, str]] = {
     "fields": ("references/fields.md",
                "reading a response: what each field means and what to do when it is not the default"),
     "behavior": ("references/tools.md",
-                 "deep behavior: fetch escalation, page actions, schema extraction, engine matrix, crawl economics, the opt-in tools"),
+                 "deep behavior: fetch escalation, page actions, schema extraction, engine matrix, crawl economics"),
     "fix": ("references/troubleshooting.md",
             "something failed: symptom-indexed diagnosis, the per-call fix before the config one"),
     "config": ("references/configuration.md",

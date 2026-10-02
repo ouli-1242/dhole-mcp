@@ -59,22 +59,22 @@ Five paths, cheapest first: (1) user-supplied cookies (`options.cookies` + `opti
 2. `recipe(op='save', name=..., url=..., actions=[...], note=...)` — validated at save time, so a chain the executor would refuse cannot be stored
 3. Later: `recipe(op='run', name=..., session_id=...)` returns the whole fetch plus one receipt per action. `session_id` is per-run — recipes never store one
 4. Pivot: `actions_failed` non-zero (or `op='list'` showing `last_ok: false`) means the page changed → re-snapshot, re-derive, re-save. Don't keep replaying a broken chain
-- Needs `DHOLE_TASKS=1`. Best for: pages whose content only appears after clicks, or a repeated multi-step fetch
+- Best for: pages whose content only appears after clicks, or a repeated multi-step fetch (always registered in 17.0)
 
-## Watch a page for changes (watch, opt-in)
+## Watch a page for changes (watch)
 
 1. `watch(op='add', name=..., url=..., focus=...)` — add `focus` for a long page whose chrome changes every load
 2. First `watch(op='check', name=...)` **only stores the baseline**: `changed=null`, `baseline_created=true`. Report "baseline stored", NOT "no change"
 3. Later checks answer `changed: true/false` with `added`/`removed` counts and a capped `diff`
 4. Pivot: a failed fetch leaves the baseline untouched and puts the reason in `error` — fix and re-check rather than assuming the page is gone. `baseline_cut=true` means `max_chars` was too small to see the whole page — widen it and re-baseline
-- Needs `DHOLE_TASKS=1`. Best for: changelogs, pricing pages, status pages, docs — a page without a feed
+- Best for: changelogs, pricing pages, status pages, docs — a page without a feed
 
 ## Operate a page (form, settings, checkout)
 
 1. `smart_fetch` with `actions: [{"snapshot": true}]` (+ `force_fetcher='stealthy'`) — read the numbered element list
 2. Address by index with `expect`: `{"fill": {"index": 3, "text": ...}}`, `{"click": {"index": 12, "expect": "Save"}}`; an `expect` mismatch = the page changed → re-snapshot, never retry a stale index
 3. Submission: `{"submit": {...}}` without `confirm` pauses (`pending_approval`, nothing sent) — describe what will be submitted to the user; only on their explicit yes re-run the **whole chain** with `confirm: true`. Every submit (paused or confirmed) is audit-logged
-4. Captchas / 2FA / sliders: ≤3 tries on image captchas (needs `DHOLE_MULTIMODAL=1` to see them at all), then hand off — see SKILL.md constraint 12
+4. Captchas / 2FA / sliders: ≤3 tries on image captchas, then hand off — see SKILL.md constraint 12
 
 ## Overhead compression (long sessions / bulk jobs)
 

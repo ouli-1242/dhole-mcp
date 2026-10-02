@@ -90,6 +90,9 @@ VALUES: dict[str, object] = {
     # G33/G35: CDP attach + the model-free login check (probe values only —
     # the tool methods are mocked in the forms-agree tests, nothing attaches).
     "cdp_url": "http://127.0.0.1:9222",
+    # 首次 CDP attach 的主机授权（顶层缩写与 options 全名两条路都必须通）。
+    # True 而不是 False：默认就是不放行，探得出「值被丢了」的探针才叫探针。
+    "confirm": True,
     # smart_crawl
     "max_pages": 3,
     "max_depth": 1,

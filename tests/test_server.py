@@ -1100,38 +1100,62 @@ class TestBrowserDepsNonBlocking:
         assert "_browser_deps_available" not in before_thread, \
             "_browser_deps_available must not be called before to_thread (blocks event loop)"
 
-    # — KB-4: 启动预热可以被关掉（关掉时一个包都不发）—
+    # — 17.0：预热常开，只剩"网络不通"这一条自动放弃的路 —
 
-    def test_prewarm_env_flag_variants(self, monkeypatch):
-        from dhole_mcp.server import _browser_prewarm_enabled
-        monkeypatch.delenv("DHOLE_NO_BROWSER_PREWARM", raising=False)
-        assert _browser_prewarm_enabled() is True
-        for raw in ("1", "true", "YES", " on "):
-            monkeypatch.setenv("DHOLE_NO_BROWSER_PREWARM", raw)
-            assert _browser_prewarm_enabled() is False, raw
-        for raw in ("0", "false", ""):
-            monkeypatch.setenv("DHOLE_NO_BROWSER_PREWARM", raw)
-            assert _browser_prewarm_enabled() is True, raw
+    def test_prewarm_has_no_env_switch(self, monkeypatch):
+        """``_browser_prewarm_enabled`` 与 ``DHOLE_NO_BROWSER_PREWARM`` 都已注销。
 
-    def test_prewarm_disabled_sends_nothing_and_launches_nothing(self, monkeypatch):
-        """DHOLE_NO_BROWSER_PREWARM=1：TCP preflight 与浏览器启动都不发生。"""
+        这笔账能算清：预热的代价是启动时多拉起一次浏览器，收益是第一次 stealthy
+        抓取省掉 3-5s 冷启动 —— 能算清的写死，需要人选择的才给旋钮。
+        """
+        import asyncio
+        import socket
+        from types import SimpleNamespace
+
+        import dhole_mcp.server as server_mod
+        from dhole_mcp import browser as browser_mod
+
+        assert not hasattr(server_mod, "_browser_prewarm_enabled"), \
+            "预热的 env 开关已注销，别再把它加回来"
+
+        launched: list = []
+
+        async def _record(*a, **k):
+            launched.append(1)
+
+        monkeypatch.setenv("DHOLE_NO_BROWSER_PREWARM", "1")   # 退役旋钮：设了也必须照跑
+        monkeypatch.setattr(socket, "create_connection",
+                            lambda *a, **k: SimpleNamespace(close=lambda: None))
+        monkeypatch.setattr(browser_mod, "check_browser_available", lambda: True)
+        monkeypatch.setattr(MasterFetchServer, "_ensure_auto_session", _record)
+
+        asyncio.run(MasterFetchServer()._prewarm_stealthy())
+        assert launched == [1], "退役旋钮不许让预热停下来"
+
+    def test_prewarm_gives_up_when_the_network_is_unreachable(self, monkeypatch):
+        """网络不可达时不查浏览器、不拉起：那 2-5s 是白烧。
+
+        这是预热剩下的唯一一条"什么都不做"的路，而它由探测决定，不由配置决定。
+        """
         import asyncio
         import socket
 
-        from dhole_mcp.server import MasterFetchServer
-
-        monkeypatch.setenv("DHOLE_NO_BROWSER_PREWARM", "1")
+        from dhole_mcp import browser as browser_mod
 
         def _no_connect(*args, **kwargs):
-            raise AssertionError("DHOLE_NO_BROWSER_PREWARM=1 时不该发起 TCP preflight")
+            raise OSError("network down")
 
         async def _no_launch(*args, **kwargs):
-            raise AssertionError("DHOLE_NO_BROWSER_PREWARM=1 时不该拉起浏览器")
+            raise AssertionError("网络不可达时不该拉起浏览器")
 
+        checked: list = []
         monkeypatch.setattr(socket, "create_connection", _no_connect)
+        monkeypatch.setattr(browser_mod, "check_browser_available",
+                            lambda: checked.append(1) or True)
         monkeypatch.setattr(MasterFetchServer, "_ensure_auto_session", _no_launch)
-        # 不该抛，也不该做任何事
-        asyncio.run(MasterFetchServer()._prewarm_stealthy())
+
+        asyncio.run(MasterFetchServer()._prewarm_stealthy())   # 不该抛
+        assert checked == [], "preflight 失败后不许再去查浏览器"
 
 
 # ─── options bag validation ───────────────────────────────────────

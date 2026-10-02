@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from dhole_mcp import env_registry, robots, security, sessions
+from dhole_mcp import env_registry, robots, sessions
 from dhole_mcp import server as server_mod
 
 
@@ -66,45 +66,23 @@ def test_env_flag_recognised_off_values_no_warning(monkeypatch, value):
 
 
 # ─── cross-module visibility (W4 test 4) ──────────────────────────────
-def test_sessions_cookie_ttl_invalid_lands_in_shared_warning_list(monkeypatch):
-    """``sessions._cookie_ttl`` is the module the plan picked to prove the
-    warning list is not ``server.py``-local: sessions imports neither
-    ``server`` nor ``updater``, so if ``doctor`` can print this warning, any
-    reader wired to the same list can too."""
+def test_a_retired_cookie_ttl_knob_is_ignored_without_warnings(monkeypatch):
+    """17.0: the TTL is a fixed constant and the knob is retired — a stale or
+    nonsensical value in the env block must not move it, must not crash, and
+    must NOT land in the warning list (that list is for knobs that are read;
+    retired ones are only ever named by --doctor's dynamic scan)."""
     monkeypatch.setenv("DHOLE_COOKIE_TTL_S", "abc")
     assert sessions._cookie_ttl() == sessions.COOKIE_TTL_S
-    snaps = env_registry.warnings_snapshot()
-    assert any(w.name == "DHOLE_COOKIE_TTL_S" and "abc" in w.message for w in snaps)
+    assert env_registry.warnings_snapshot() == ()
 
 
-def test_sessions_cookie_ttl_below_floor_clamps_and_warns(monkeypatch):
-    monkeypatch.setenv("DHOLE_COOKIE_TTL_S", "5")
-    got = sessions._cookie_ttl()
-    assert got == 60.0
-    snaps = env_registry.warnings_snapshot()
-    assert any(w.name == "DHOLE_COOKIE_TTL_S" and "below the minimum" in w.message
-               for w in snaps)
-
-
-def test_crawl_neural_focus_typo_records_warning(monkeypatch):
-    """Another module (crawl) reaching the same list."""
-    from dhole_mcp import crawl
-    monkeypatch.setenv("DHOLE_NEURAL_FOCUS", "flase")
-    # crawl's flag uses _env_flag-style ON; a typo stays ON, but the warning
-    # must be visible to the shared list (W4.1 - semantics unchanged).
-    assert crawl._neural_focus_enabled() is True
-    snaps = env_registry.warnings_snapshot()
-    assert any(w.name == "DHOLE_NEURAL_FOCUS" for w in snaps)
-
-
-def test_actions_multimodal_typo_records_warning(monkeypatch):
-    """Same, from actions.py's own reader (no reverse-import to server)."""
-    from dhole_mcp import actions
-    monkeypatch.setenv("DHOLE_MULTIMODAL", "yes-please")
-    assert actions.multimodal_enabled() is True
-    snaps = env_registry.warnings_snapshot()
-    assert any(w.name == "DHOLE_MULTIMODAL" and "yes-please" in w.message
-               for w in snaps)
+def test_default_engines_typo_degrades_gracefully(monkeypatch):
+    """A mistyped engine name is skipped (and logged), the rest of the pool
+    still answers — an operator typo must not take search down."""
+    from dhole_mcp import search_metasearch as ms
+    monkeypatch.setenv("DHOLE_DEFAULT_ENGINES", "bing,not-a-real-engine")
+    out = ms._configured_default_backends()
+    assert "bing" in out and "not-a-real-engine" not in out
 
 
 # ─── D1: safety gates change direction (W4 gate list) ───────────────
@@ -132,47 +110,39 @@ def test_ignore_robots_recognised_off_still_keeps_compliance(monkeypatch, value)
     assert env_registry.warnings_snapshot() == ()
 
 
-def test_dns_recheck_typo_warns_and_stays_enabled(monkeypatch):
-    """The DNS recheck's short off-list is preserved (W4.1 semantics), but a
-    value that is neither an ON nor a short-OFF token now warns."""
-    monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", "flase")
-    assert security._dns_recheck_enabled() is True
-    snaps = env_registry.warnings_snapshot()
-    assert any(w.name == "DHOLE_SSRF_DNS_RECHECK"
-               and "DNS recheck stays enabled" in w.message for w in snaps)
-
-
-@pytest.mark.parametrize("value", ["0", "false", "off", "no"])
-def test_dns_recheck_recognised_off_still_disables(monkeypatch, value):
-    """Regression: the four documented "turn it off" tokens still work."""
-    monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", value)
-    assert security._dns_recheck_enabled() is False
+def test_dns_recheck_knob_is_gone_measurement_decides(monkeypatch):
+    """17.0: the knob is retired; skip is decided ONLY by the fake-ip probe.
+    An explicit off value must NOT relax the guard any more — that escape hatch
+    was the last manual way around a fail-closed guard."""
+    from dhole_mcp import security as sec
+    monkeypatch.setattr(sec, "probe_fake_ip", lambda: ("public", "", ""))
+    for value in ("0", "false", "off", "no", "flase", ""):
+        monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", value)
+        assert sec._dns_recheck_enabled() is True, value
     assert env_registry.warnings_snapshot() == ()
 
 
-def test_dns_recheck_unset_or_empty_is_enabled(monkeypatch):
-    """The unset and empty-string paths are unchanged (fail-closed default)."""
-    monkeypatch.delenv("DHOLE_SSRF_DNS_RECHECK", raising=False)
-    assert security._dns_recheck_enabled() is True
-    monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", "")
-    assert security._dns_recheck_enabled() is True
+def test_cdp_gate_has_no_env_switch_left(monkeypatch, tmp_path):
+    """CDP_ATTACH/CDP_HOSTS are retired: the fence is the persisted host set,
+    and a stale env value can neither enable attach nor silence the ask."""
+    for name in ("DHOLE_CDP_ATTACH", "DHOLE_CDP_HOSTS"):
+        monkeypatch.setenv(name, "portal.example.com,1")
+    (tmp_path / "cdp_hosts.json").unlink(missing_ok=True)
+    server_mod._cdp_hosts_cache, server_mod._cdp_hosts_stamp = frozenset(), None
+    err, allowed = server_mod._cdp_attach_gate("http://127.0.0.1:9222")
+    assert err and "cdp_authorization_required" in err
+    assert allowed is None
     assert env_registry.warnings_snapshot() == ()
 
 
-def test_cdp_attach_typo_warns_and_stays_off(monkeypatch):
-    """CDP_ATTACH was already strict-ON; now an unrecognised value is recorded."""
-    monkeypatch.setenv("DHOLE_CDP_ATTACH", "flase")
-    err, _ = server_mod._cdp_attach_gate("http://127.0.0.1:9222")
-    assert err and "cdp_attach_disabled" in err
-    snaps = env_registry.warnings_snapshot()
-    assert any(w.name == "DHOLE_CDP_ATTACH" for w in snaps)
-
-
-def test_server_prewarm_typo_warns_and_keeps_prewarm_enabled(monkeypatch):
-    monkeypatch.setenv("DHOLE_NO_BROWSER_PREWARM", "f1ase")
-    assert server_mod._browser_prewarm_enabled() is True
-    snaps = env_registry.warnings_snapshot()
-    assert any(w.name == "DHOLE_NO_BROWSER_PREWARM" for w in snaps)
+def test_server_prewarm_has_no_env_switch_left(monkeypatch):
+    """NO_BROWSER_PREWARM is retired: the warm-up always runs."""
+    import inspect
+    monkeypatch.setenv("DHOLE_NO_BROWSER_PREWARM", "1")
+    assert not hasattr(server_mod, "_browser_prewarm_enabled"), (
+        "the reader must be gone, not just overridable")
+    src = inspect.getsource(server_mod.MasterFetchServer._prewarm_stealthy)
+    assert "DHOLE_NO_BROWSER_PREWARM" not in src
 
 
 # ─── W4 test 5 - regression: pre-existing _env_flag tests unchanged ──
@@ -195,21 +165,14 @@ def test_existing_server_env_flag_semantics_are_intact(monkeypatch):
     assert server_mod._env_flag("DHOLE_W4_Z") is True
 
 
-def test_search_deadline_invalid_records_warning(monkeypatch):
-    """Module-level import read (search_metasearch.py:85) uses read_float,
-    so an invalid value falls back to 16.0 AND records - the module is
-    imported eagerly, so we re-run the module-level constant computation."""
-    import importlib
-
+def test_search_deadline_is_a_fixed_constant(monkeypatch):
+    """17.0: the whole-search deadline is a fixed 16s; the knob is retired and
+    a stale value neither moves it nor records anything."""
     from dhole_mcp import search_metasearch
     monkeypatch.setenv("DHOLE_SEARCH_DEADLINE", "not-a-number")
     env_registry.clear_warnings()
-    importlib.reload(search_metasearch)
     try:
         assert search_metasearch._SEARCH_DEADLINE == 16.0
-        snaps = env_registry.warnings_snapshot()
-        assert any(w.name == "DHOLE_SEARCH_DEADLINE" for w in snaps)
+        assert env_registry.warnings_snapshot() == ()
     finally:
-        monkeypatch.delenv("DHOLE_SEARCH_DEADLINE", raising=False)
         env_registry.clear_warnings()
-        importlib.reload(search_metasearch)

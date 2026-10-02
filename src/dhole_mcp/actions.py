@@ -49,7 +49,6 @@ import logging
 import time
 from typing import Callable, Optional
 
-from dhole_mcp import env_registry
 
 logger = logging.getLogger("dhole-mcp.actions")
 
@@ -73,31 +72,9 @@ CLICK_SETTLE_MIN_MS = 600
 _VALID_KEYS = {"click", "fill", "press", "wait", "scroll", "wait_selector",
                "screenshot", "snapshot", "submit"}
 
-# An element capture only exists to be LOOKED at, so it is the one action gated
-# behind DHOLE_MULTIMODAL (=1 declares "the calling agent is multimodal" — the
-# recognition happens agent-side; dhole ships no vision model). Kept here rather
-# than imported from server.py: server imports actions lazily, and a reverse
-# import would drag the whole server module into every lean process that touches
-# the actions list.
-#
-# W4.3: the off/on token lists live in ``env_registry`` so a value that
-# ``server._env_flag`` would recognise reads the same here, and an
-# unrecognised value gets a warning the doctor can name.
-def multimodal_enabled() -> bool:
-    return env_registry.read_flag("DHOLE_MULTIMODAL")
-
-
-def multimodal_gate_error() -> str:
-    return (
-        "element_screenshot_disabled: the {\"screenshot\"} action is refused "
-        "because DHOLE_MULTIMODAL is not set - element captures exist to be "
-        "read by a multimodal agent, and without the flag dhole must assume "
-        "the caller cannot see images. Set DHOLE_MULTIMODAL=1 in the dhole "
-        "server env and restart (it declares the calling agent is multimodal; "
-        "dhole itself ships no vision model). Text-only agents: QR codes are "
-        "NOT gated - use the screenshot tool with options.decode_qr=true."
-    )
-
+# An element capture only exists to be LOOKED at. 17.0: always available ——
+# the recognition happens agent-side (dhole ships no vision model), and a
+# text-only caller simply never asks for {"screenshot"}.
 # Element captures ride the same page instance as the surrounding fill/click
 # actions — that is the whole point over a separate screenshot call: the
 # captcha read in this capture is the one the next action answers, on the page
@@ -373,8 +350,6 @@ def _validate_actions(actions) -> list[dict]:
             want_qr = spec.pop("decode_qr", False)
             if not isinstance(want_qr, bool):
                 raise ValueError(f"action {i} 'screenshot.decode_qr' must be a boolean")
-            if not multimodal_enabled():
-                raise ValueError(multimodal_gate_error())
             out.append({"screenshot": {**_act_target(i, key, spec),
                                        "decode_qr": want_qr}})
         elif key == "fill":

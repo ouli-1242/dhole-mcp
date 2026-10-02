@@ -193,7 +193,7 @@ class TestParseCwdReachesTheTool:
         assert seen["cwd"] == "/tmp/session"
 
     def test_omitted_cwd_stays_none(self, monkeypatch):
-        """不传就是 None（继续走 DHOLE_WORKDIR / 进程 cwd），不是空串或报错。"""
+        """不传就是 None（继续走进程 cwd / home），不是空串或报错。"""
         seen = _stub(monkeypatch, "parse",
                      server_mod.ResponseModel(url="file:///x", status=0, content=[]))
         _dispatch("parse", {"file_path": "notes.csv"})

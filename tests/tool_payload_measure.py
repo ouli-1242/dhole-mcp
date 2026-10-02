@@ -185,43 +185,26 @@ def _wire_for(tool_defs: list[dict], names: set, parts: tuple[str, dict, str]) -
     return compact, len(instr)
 
 
-def default_wire_report(tool_defs: list[dict], opt_in: frozenset,
-                        parts: tuple[str, dict, str],
-                        vault_opt_in: frozenset = frozenset()) -> list[str]:
+def default_wire_report(tool_defs: list[dict],
+                        parts: tuple[str, dict, str]) -> list[str]:
     """The payload an ordinary connect actually pays, next to the full literal.
 
-    Why this section exists: `_TOOL_DEFS` is the source of truth for every tool
-    the server CAN advertise, but it is no longer the set it DOES advertise -
-    two groups are opt-in (``_OPT_IN_TOOLS`` behind DHOLE_TASKS, and
-    ``_OPT_IN_TOOLS_VAULT`` behind DHOLE_VAULT), so measuring the literal alone
-    publishes a number the default wire never reaches. That is the same class of
-    error as a stale hand-copied figure, one level up: the number is reproducible
-    and still wrong about the thing it claims to describe.
-
-    Every configuration is reported so none can be quoted for another.
+    17.0: there are no opt-in groups — the default wire IS every tool, so the
+    default connect total and the full literal coincide. This section stays
+    because the two numbers can drift apart again the moment someone adds a
+    filter, and measuring only the literal would then publish a figure the
+    default wire never reaches.
     """
     all_names = {td["name"] for td in tool_defs}
-    default_names = all_names - set(opt_in) - set(vault_opt_in)
-    compact, instr_chars = _wire_for(tool_defs, default_names, parts)
+    compact, instr_chars = _wire_for(tool_defs, all_names, parts)
 
     out = ["", "-- default connect (what an ordinary client pays) --"]
-    out.append(f"tools advertised     : {len(default_names)} of {len(tool_defs)}"
-               f"  (opt-in: DHOLE_TASKS={sorted(opt_in)}, "
-               f"DHOLE_VAULT={sorted(vault_opt_in)})")
+    out.append(f"tools advertised     : {len(all_names)} of {len(tool_defs)}"
+               "  (no opt-in groups in 17.0)")
     out.append(f"instructions chars   : {instr_chars}")
     out.append(f"tools/list compact   : {compact}")
     out.append(f"connect total chars  : {compact + instr_chars}"
                "  (instructions + compact tools/list)")
-    for flag, group in (("DHOLE_TASKS=1", set(opt_in)),
-                        ("DHOLE_VAULT=1", set(vault_opt_in)),
-                        ("both flags", set(opt_in) | set(vault_opt_in))):
-        if not group:
-            continue
-        c2, i2 = _wire_for(tool_defs, default_names | group, parts)
-        out.append(f"-- {flag} --")
-        out.append(f"tools/list delta     : +{c2 - compact}")
-        out.append(f"instructions delta   : +{i2 - instr_chars}")
-        out.append(f"connect total        : {c2 + i2}")
     return out
 
 
@@ -231,8 +214,6 @@ def main() -> None:
 
     instructions = ast.literal_eval(find_assignment(tree, "DHOLE_INSTRUCTIONS"))
     tool_defs = ast.literal_eval(find_assignment(tree, "_TOOL_DEFS"))
-    opt_in = find_frozenset(tree, "_OPT_IN_TOOLS")
-    vault_opt_in = find_frozenset(tree, "_OPT_IN_TOOLS_VAULT")
     parts = (ast.literal_eval(find_assignment(tree, "_INSTRUCTIONS_INTRO")),
              ast.literal_eval(find_assignment(tree, "_INSTRUCTIONS_ROUTING")),
              ast.literal_eval(find_assignment(tree, "_INSTRUCTIONS_RULES")))
@@ -297,7 +278,7 @@ def main() -> None:
     if "--with-output-schema" in sys.argv[1:]:
         minimal_compact, _ = size(minimal_payload, None, (",", ":"))
         out.extend(output_schema_report(minimal_compact, len(instructions)))
-    out.extend(default_wire_report(tool_defs, opt_in, parts, vault_opt_in))
+    out.extend(default_wire_report(tool_defs, parts))
     out.extend(duplication_report(tool_defs, instructions))
 
     text = "\n".join(out) + "\n"

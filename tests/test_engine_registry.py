@@ -1,4 +1,4 @@
-"""Engine-name registry + keyed JSON engines (brightdata/tavily/exa/bocha).
+"""Engine-name registry + keyed JSON engines (tavily/bocha).
 
 策略：keyed 引擎默认不跑，只有 engines= 显式点名才执行 —— 每次调用都花钱。
 """
@@ -11,107 +11,6 @@ import pytest
 from dhole_mcp.search import _validate_engines
 
 
-class TestBrightdataSelectable:
-    """'brightdata' is a real backend, so it must be selectable by name."""
-
-    def test_brightdata_passes_validation(self):
-        assert _validate_engines(["brightdata"]) == ["brightdata"]
-
-    def test_all_keyed_names_pass_validation(self):
-        from dhole_mcp.search_metasearch import KEYED_ENGINES
-
-        names = sorted(KEYED_ENGINES)
-        assert names == ["bocha", "brightdata", "exa", "tavily"]
-        assert _validate_engines(names) == names
-
-
-class TestBrightdataWithoutKey:
-    """Asking for the paid backend with no key must blame the key, not the proxy."""
-
-    @pytest.mark.asyncio
-    async def test_message_names_missing_key_not_proxy(self, monkeypatch):
-        from dhole_mcp import search_metasearch as m
-
-        monkeypatch.delenv("DHOLE_BRIGHTDATA_API_KEY", raising=False)
-        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
-
-        with pytest.raises(m.MetaSearchException) as ei:
-            await m.metasearch("test query", engines=["brightdata"])
-
-        msg = str(ei.value)
-        assert "DHOLE_BRIGHTDATA_API_KEY" in msg
-        assert "DHOLE_SEARCH_PROXY" not in msg
-
-
-class TestBrightdataSelectedWithKey:
-    """With a key set, selecting it by name must actually deliver its results."""
-
-    @pytest.mark.asyncio
-    async def test_returns_brightdata_results(self, monkeypatch):
-        from types import SimpleNamespace
-
-        from dhole_mcp import search_metasearch as m
-
-        monkeypatch.setenv("DHOLE_BRIGHTDATA_API_KEY", "fake-key")
-        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
-
-        # 用假的 httpx.post 返回 Bright Data 解析层认识的结构
-        import json as _json
-
-        body = _json.dumps({"organic": [
-            {"title": "T", "url": "https://example.com/a", "snippet": "B"}
-        ]})
-
-        def fake_post(*a, **k):
-            return SimpleNamespace(status_code=200, text="", body=body,
-                                   json=lambda: {"body": body})
-
-        monkeypatch.setattr(httpx, "post", fake_post)
-
-        results, status = await m.metasearch("test query", 3, engines=["brightdata"])
-
-        assert [r["href"] for r in results] == ["https://example.com/a"]
-        assert status.get("brightdata") == "ok"
-
-
-class TestBrightdataAuthError:
-    """A wrong/expired key must not look like 'Google returned nothing'."""
-
-    @pytest.mark.asyncio
-    async def test_401_is_distinguishable_from_empty(self, monkeypatch):
-        from dhole_mcp import search_metasearch as m
-
-        class _Denied:
-            status_code = 401
-            text = "invalid api key"
-
-        monkeypatch.setenv("DHOLE_BRIGHTDATA_API_KEY", "wrong-key")
-        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
-        monkeypatch.setattr(httpx, "post", lambda *a, **k: _Denied())
-
-        results, status = await m.metasearch("test query", 3, engines=["brightdata"])
-
-        assert results == []
-        assert status["brightdata"] == "error:BrightDataAuthError"
-
-    @pytest.mark.asyncio
-    async def test_401_does_not_trip_the_circuit_breaker(self, monkeypatch):
-        """A bad key is permanent -- cooling it down for 60s fixes nothing."""
-        from dhole_mcp import search_metasearch as m
-
-        class _Denied:
-            status_code = 403
-            text = "zone not authorized"
-
-        monkeypatch.setenv("DHOLE_BRIGHTDATA_API_KEY", "wrong-key")
-        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
-        monkeypatch.setattr(httpx, "post", lambda *a, **k: _Denied())
-
-        await m.metasearch("test query", 3, engines=["brightdata"])
-
-        assert m._is_circuit_open("brightdata") is False
-
-
 class _OkEmpty:
     status_code = 200
     text = "{}"
@@ -120,8 +19,81 @@ class _OkEmpty:
         return {}
 
 
-class TestBrightdataTimeout:
-    """The paid call must honour DHOLE_SEARCH_DEADLINE instead of a fixed 20s."""
+class TestKeyedRegistryIsExactlyTwo:
+    """17.0：keyed 后端只剩 tavily + bocha。
+
+    ``KEYED_ENGINES`` 与 ``_DHOLE_TO_BACKEND`` 必须严格同集。多出来的名字会通过
+    ``engines=`` 校验却没有任何实现（既不在 _TEXT_ENGINES 也不在 KEYED_ENGINES），
+    于是「点了个不存在的引擎」退化成静默零结果 —— 正是本项目拒绝的那种失败。
+    """
+
+    def test_all_keyed_names_pass_validation(self):
+        from dhole_mcp.search_metasearch import KEYED_ENGINES
+
+        names = sorted(KEYED_ENGINES)
+        assert names == ["bocha", "tavily"]
+        assert _validate_engines(names) == names
+
+    def test_retired_keyed_names_are_not_selectable(self):
+        from dhole_mcp.search import SecurityError
+
+        for name in ("brightdata", "exa"):
+            with pytest.raises(SecurityError):
+                _validate_engines([name])
+
+    def test_every_selectable_name_has_an_implementation(self):
+        from dhole_mcp import search_metasearch as m
+
+        implemented = set(m._TEXT_ENGINES) | set(m.KEYED_ENGINES)
+        orphans = set(m._DHOLE_TO_BACKEND.values()) - implemented
+        assert not orphans, f"这些引擎名可选但没有实现: {sorted(orphans)}"
+
+
+class TestBochaAuthError:
+    """一个错 key 不能长得像「这家返回了空」。"""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("code", [401, 403])
+    async def test_auth_status_is_distinguishable_from_empty(self, monkeypatch, code):
+        from dhole_mcp import search_metasearch as m
+
+        class _Denied:
+            status_code = code
+            text = "invalid api key"
+
+        monkeypatch.setenv("DHOLE_BOCHA_API_KEY", "wrong-key")
+        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
+        monkeypatch.setattr(httpx, "post", lambda *a, **k: _Denied())
+
+        results, status = await m.metasearch("test query", 3, engines=["bocha"])
+
+        assert results == []
+        assert status["bocha"] == "error:BochaAuthError"
+
+    @pytest.mark.asyncio
+    async def test_auth_error_does_not_trip_the_circuit_breaker(self, monkeypatch):
+        """坏 key 是永久状态 —— 走 blocked/冷却那条路只会把真正的诊断（key 被拒）
+        盖成 circuit_open。这里把两份模块级计数都清空，否则同会话里前面几次
+        鉴权失败会累进 `_CONN_FAIL_COUNTS`，第 3 次就落到 600s 连接冷却上。"""
+        from dhole_mcp import search_metasearch as m
+
+        class _Denied:
+            status_code = 403
+            text = "key not authorized"
+
+        monkeypatch.setenv("DHOLE_BOCHA_API_KEY", "wrong-key")
+        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
+        monkeypatch.setattr(m, "_BACKEND_HEALTH", {})
+        monkeypatch.setattr(m, "_CONN_FAIL_COUNTS", {})
+        monkeypatch.setattr(httpx, "post", lambda *a, **k: _Denied())
+
+        await m.metasearch("test query", 3, engines=["bocha"])
+
+        assert m._is_circuit_open("bocha") is False
+
+
+class TestBochaTimeout:
+    """付费调用要跟上整体死线，但有个下限：请求一发出去额度就扣了。"""
 
     @staticmethod
     def _capture(monkeypatch, deadline):
@@ -133,7 +105,7 @@ class TestBrightdataTimeout:
             seen["timeout"] = kwargs.get("timeout")
             return _OkEmpty()
 
-        monkeypatch.setenv("DHOLE_BRIGHTDATA_API_KEY", "fake-key")
+        monkeypatch.setenv("DHOLE_BOCHA_API_KEY", "fake-key")
         monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
         monkeypatch.setattr(m, "_SEARCH_DEADLINE", deadline)
         monkeypatch.setattr(httpx, "post", fake_post)
@@ -145,27 +117,25 @@ class TestBrightdataTimeout:
 
         seen = self._capture(monkeypatch, 30.0)
 
-        await m.metasearch("test query", 3, engines=["brightdata"])
+        await m.metasearch("test query", 3, engines=["bocha"])
         assert seen["timeout"] == 30.0
 
     @pytest.mark.asyncio
     async def test_tight_deadline_keeps_the_paid_call_viable(self, monkeypatch):
-        """Floor: a 5s overall deadline must not cut the SERP render short --
-        the credit is spent the moment the request goes out."""
+        """下限：整体死线只有 5s 时也不该把已扣费的 SERP 渲染掐断。"""
         from dhole_mcp import search_metasearch as m
 
         seen = self._capture(monkeypatch, 5.0)
 
-        await m.metasearch("test query", 3, engines=["brightdata"])
+        await m.metasearch("test query", 3, engines=["bocha"])
         assert seen["timeout"] == 20.0
 
 
 class TestNewKeyedEngines:
-    """tavily / exa / bocha：可选、可跑、失败可诊断、默认不花钱。"""
+    """tavily / bocha：可选、可跑、失败可诊断、默认不花钱。"""
 
     def test_new_names_pass_validation(self):
         assert _validate_engines(["tavily"]) == ["tavily"]
-        assert _validate_engines(["exa"]) == ["exa"]
         assert _validate_engines(["bocha"]) == ["bocha"]
 
     @pytest.mark.asyncio
@@ -218,8 +188,7 @@ class TestNewKeyedEngines:
             calls.append(url)
             return _Empty()
 
-        for var in ("DHOLE_BRIGHTDATA_API_KEY", "DHOLE_TAVILY_API_KEY",
-                    "DHOLE_EXA_API_KEY", "DHOLE_BOCHA_API_KEY"):
+        for var in ("DHOLE_TAVILY_API_KEY", "DHOLE_BOCHA_API_KEY"):
             monkeypatch.setenv(var, "key-set")
         monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
         monkeypatch.setattr(httpx, "post", fake_post)
@@ -232,25 +201,6 @@ class TestNewKeyedEngines:
 
         assert calls == [], "keyed 引擎在未被 engines= 点名时不得发起调用"
         assert "engines=" in str(ei.value), "报错应提示 keyed 引擎是显式选填的"
-
-    @pytest.mark.asyncio
-    async def test_exa_402_is_auth_error(self, monkeypatch):
-        """实测 Exa 对无 key/欠费回 402 —— 必须可诊断，不进熔断。"""
-        from dhole_mcp import search_metasearch as m
-
-        class _PaymentRequired:
-            status_code = 402
-            text = '{"error":"Payment required to access"}'
-
-        monkeypatch.setenv("DHOLE_EXA_API_KEY", "expired")
-        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
-        monkeypatch.setattr(httpx, "post", lambda *a, **k: _PaymentRequired())
-
-        results, status = await m.metasearch("q", 3, engines=["exa"])
-
-        assert results == []
-        assert status["exa"] == "error:ExaAuthError"
-        assert m._is_circuit_open("exa") is False
 
     @pytest.mark.asyncio
     async def test_bocha_maps_timelimit_to_freshness(self, monkeypatch):
@@ -282,6 +232,7 @@ class TestNewKeyedEngines:
 
     @pytest.mark.asyncio
     async def test_bocha_without_key_blames_env(self, monkeypatch):
+        """没配 key 时报错要怪 key —— 不能把人支去查搜索代理（两回事）。"""
         from dhole_mcp import search_metasearch as m
 
         monkeypatch.delenv("DHOLE_BOCHA_API_KEY", raising=False)
@@ -290,7 +241,9 @@ class TestNewKeyedEngines:
         with pytest.raises(m.MetaSearchException) as ei:
             await m.metasearch("q", engines=["bocha"])
 
-        assert "DHOLE_BOCHA_API_KEY" in str(ei.value)
+        msg = str(ei.value)
+        assert "DHOLE_BOCHA_API_KEY" in msg
+        assert "DHOLE_SEARCH_PROXY" not in msg
 
 
 class TestDefaultPoolEnv:

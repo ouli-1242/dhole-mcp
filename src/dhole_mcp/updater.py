@@ -38,6 +38,7 @@ This rewrite fixes all of that:
 from __future__ import annotations
 
 import os
+import pathlib
 import sys
 
 from dhole_mcp import env_registry
@@ -54,17 +55,14 @@ __all__ = [
 # ─── self-update source ────────────────────────────────────────────────────
 # This is a personal derivative work (of dondai1234/master-fetch). The project
 # was renamed hound-mcp -> dhole-mcp in 14.0 because the old name collided on
-# PyPI; ``dhole-mcp`` is now the distribution name of THIS fork. Self-update
-# stays OFF by default until the fork is actually published under the new name
-# (until then ``dhole -u`` reports from the source tree only):
-#   DHOLE_UPDATE_PACKAGE=<distribution name on PyPI>
-#   DHOLE_UPDATE_INDEX_URL=<optional index url>
+# PyPI; ``dhole-mcp`` is now the distribution name of THIS fork. 17.0 写死：
+# ``DHOLE_UPDATE_PACKAGE`` / ``DHOLE_UPDATE_INDEX_URL`` 已注销（运行时静默忽略）。
 _DIST_NAME = "dhole-mcp"   # the distribution this fork is installed as
 
 
 def update_package() -> str:
     """Distribution to self-update FROM; empty string means self-update is off."""
-    return (os.environ.get("DHOLE_UPDATE_PACKAGE") or "").strip()
+    return ""
 
 
 def _dist() -> str:
@@ -89,8 +87,8 @@ def _dist_spec() -> str:
 
 
 def update_index_url() -> str | None:
-    """Optional index url for the self-update pip call."""
-    return (os.environ.get("DHOLE_UPDATE_INDEX_URL") or "").strip() or None
+    """Optional index url for the self-update pip call. 17.0 写死 None（pip 默认源）。"""
+    return None
 
 
 # ─── version probing ───────────────────────────────────────────────────────
@@ -121,8 +119,8 @@ def check_version() -> tuple[str, str | None, bool | None]:
     dist = update_package()
     if not dist:
         # Self-update is disabled in this fork: do not even hit the network.
-        # Until dhole-mcp is published there is nothing to compare against;
-        # once it is, DHOLE_UPDATE_PACKAGE is the gate that turns this on.
+        # Until dhole-mcp is published there is nothing to compare against; the
+        # gate is the distribution metadata being resolvable, not a knob.
         return installed, None, None
 
     latest: str | None = None
@@ -287,7 +285,7 @@ of dhole-mcp never touches it.
 """
 import subprocess, sys
 
-# DHOLE_UPDATE_INDEX_URL baked in at write time (empty list = pip's default index).
+# Index override resolved at write time (empty list = pip's default index).
 _INDEX_ARGS = __INDEX_ARGS__
 
 def _stop():
@@ -812,46 +810,19 @@ def _engine_yield_row() -> tuple[str, str, bool] | None:
 
 
 def _cooldown_config() -> dict:
-    """The backoff tiers + heartbeat in force (G6), read straight from the env.
+    """The backoff tiers + heartbeat in force (G6).
 
-    Stdlib-only for the same reason as `_engine_cooldowns`: `dhole engines list`
-    has to run on a half-broken install, which is exactly when someone wants to
-    know what the pool's timeouts are set to. Defaults mirror
-    search_metasearch._cooldown_tiers(); a comment there points back here.
+    17.0 写死：三个冷却档与心跳都是能算清的数，``DHOLE_ENGINE_*`` 旋钮已注销
+    （运行时静默忽略），这里只镜像 search_metasearch 的固定值供 `dhole engines
+    list` 展示。保持 stdlib-only：这条命令必须能在半坏安装上跑，而那正是用户
+    想看超时配置的时候。
     """
     tiers = {
-        "block": ("DHOLE_ENGINE_COOLDOWN", 60.0, 5.0, 1800.0),
-        "challenge": ("DHOLE_ENGINE_CHALLENGE_COOLDOWN", 600.0, 60.0, 7200.0),
-        "connection": ("DHOLE_ENGINE_CONN_COOLDOWN", 600.0, 60.0, 7200.0),
+        "block": 60.0,
+        "challenge": 600.0,
+        "connection": 600.0,
     }
-
-    def _one(env: str, default: float, lo: float, hi: float) -> tuple[float, str]:
-        raw = os.environ.get(env)
-        if raw is None or not str(raw).strip():
-            return default, ""
-        try:
-            asked = float(raw)
-        except (TypeError, ValueError):
-            return default, f"{env}={raw!r} is not a number; using {default:g}s"
-        value = min(max(asked, lo), hi)
-        if value != asked:
-            return value, f"{env}={asked:g}s clamped to {value:g}s (range {lo:g}-{hi:g}s)"
-        return value, ""
-
-    out = {"tiers": {}, "heartbeat": 300.0, "note": ""}
-    notes = []
-    for kind, (env, default, lo, hi) in tiers.items():
-        value, note = _one(env, default, lo, hi)
-        out["tiers"][kind] = value
-        if note:
-            notes.append(note)
-    hb, note = _one("DHOLE_ENGINE_HEARTBEAT", 300.0, 0.0, 86400.0)
-    out["heartbeat"] = hb
-    if note:
-        notes.append(note)
-    if notes:
-        out["note"] = "; ".join(notes)
-    return out
+    return {"tiers": tiers, "heartbeat": 300.0, "note": ""}
 
 
 def _engine_cooldowns() -> dict[str, float]:
@@ -1072,6 +1043,23 @@ def _append_config_audit(checks: list[tuple[str, str, str, str]]) -> None:
             f"fix: dhole config unset {orphan}",
         ))
 
+    # §3-20：注销的 DHOLE_* 旋钮运行时静默忽略，唯一会提到它们的地方是
+    # 这里。动态扫 os.environ（不点名任何已删旋钮），注册表里没有的名字
+    # —— 无论注销还是拼错 —— 都得到同一句实话：设了也没人读。
+    # 放在 "none set 早退" 之前：只设了已注销旋钮的机器最需要这一行。
+    known = {e.name for e in _reg.ALL}
+    stale_names = sorted(n for n in os.environ
+                         if n.startswith("DHOLE_") and n not in known)
+    if stale_names:
+        checks.append((
+            "retired env vars", "info",
+            f"{len(stale_names)} DHOLE_* name(s) set in the env block that no "
+            f"longer exist in 17.0 and are ignored: "
+            + ", ".join(stale_names[:6])
+            + ("…" if len(stale_names) > 6 else "")
+            + " - remove them (their behavior is fixed in code now)",
+            "dhole config list shows the 11 names that are still read"))
+
     total = len(_reg.ALL)
     if not set_entries:
         checks.append((
@@ -1096,29 +1084,44 @@ def _append_config_audit(checks: list[tuple[str, str, str, str]]) -> None:
             msg = f"{raw!r} is {why} - using default {default}"
             checks.append((name, "fail", msg, _fix_line_for(entry)))
 
-    # The one setting where "it works" and "it is safe" are different
-    # statements: with attach enabled and no host fence, every request the
-    # attached browser makes carries the cookies of every site the user is
-    # logged into. That is a legal configuration, so it is not a failure - but
-    # a health check that stayed silent about it would be checking the wrong
-    # thing.
-    if _reg.read_flag("DHOLE_CDP_ATTACH", default=False, fail_safe=True):
-        if not (_reg.value_of("DHOLE_CDP_HOSTS") or "").strip():
-            checks.append((
-                "cdp fence", "info",
-                "attach is ON with an empty DHOLE_CDP_HOSTS - navigation is not "
-                "fenced, and every attached request carries your logged-in cookies",
-                "dhole init --cdp <host>[,<host>...]  (names the hosts, "
-                "merges the list, exact-hostname match)"))
+    # The one capability where "it works" and "it is safe" are different
+    # statements: attaching your real Chrome hands every request the attached
+    # browser makes the cookies of every site the user is logged into. 17.0
+    # 先问再记（§3-16）：attach 没有总开关，围栏是落盘的已授权主机集合 —— 从未
+    # 授权过的主机第一次 attach 会被拒绝并等待 confirm，所以这里报告的是磁盘上
+    # 的授权现实，而不是任何配置项。保持 stdlib-only：直接读
+    # ~/.dhole/cdp_hosts.json（server._cdp_authorized_hosts 的镜像）。
+    try:
+        import json as _json
+        from dhole_mcp import paths as _paths
+        _cdp_path = pathlib.Path(_paths.file("cdp_hosts.json"))
+        _cdp_hosts: list = []
+        if _cdp_path.exists():
+            _cdp_hosts = sorted(str(h).strip().lower()
+                                for h in (_json.loads(_cdp_path.read_text(encoding="utf-8"))
+                                          .get("hosts") or []) if str(h).strip())
+    except Exception:
+        _cdp_hosts = []
+    if _cdp_hosts:
+        if len(_cdp_hosts) == 1:
+            listing = _cdp_hosts[0]
         else:
-            n = len([h for h in (_reg.value_of("DHOLE_CDP_HOSTS") or "")
-                     .replace(";", ",").split(",") if h.strip()])
-            checks.append((
-                "cdp fence", "info",
-                f"attach is ON, fenced to {n} exact "
-                f"{'hostname' if n == 1 else 'hostnames'} "
-                "(subdomains and third-party asset hosts need their own entry)",
-                ""))
+            listing = (", ".join(_cdp_hosts[:3])
+                       + (", …" if len(_cdp_hosts) > 3 else ""))
+        checks.append((
+            "cdp fence", "info",
+            f"CDP attach is authorized for {len(_cdp_hosts)} "
+            f"{'host: ' + listing if len(_cdp_hosts) == 1 else 'hosts: ' + listing}; "
+            "every attach is fenced to these - a new host is refused once and "
+            "asks for confirm first",
+            f"revoke: delete cdp_hosts.json in {_cdp_path.parent}"))
+    else:
+        checks.append((
+            "cdp fence", "ok",
+            "no CDP host authorized yet - the first attach to your real Chrome "
+            "is refused with an authorization ask (nothing executes until you "
+            "confirm it)",
+            ""))
 
     checks.append((
         "config", "ok",
@@ -1170,8 +1173,8 @@ def _append_resolver_reality(checks: list[tuple[str, str, str, str]]) -> None:
     specific network turns it into a copy-pasteable setting change.
 
     Never counts as a failure. A machine with no network, a machine with a
-    plain HTTP proxy, and a machine that already set
-    ``DHOLE_SSRF_DNS_RECHECK=0`` all read as either ``ok`` or ``info`` here.
+    plain HTTP proxy, and a fake-ip machine whose auto-skip has engaged all
+    read as either ``ok`` or ``info`` here.
     """
     import ipaddress
     import socket
@@ -1214,45 +1217,30 @@ def _append_resolver_reality(checks: list[tuple[str, str, str, str]]) -> None:
         ))
         return
 
-    # fake-ip detected. Say which env gate is on the user's side.
-    recheck_off = (env_registry.value_of("DHOLE_SSRF_DNS_RECHECK") or "").strip().lower() \
-        in ("0", "false", "off", "no")
-    if recheck_off:
-        checks.append((
-            "resolver reality", "ok",
-            f"fake-ip proxy detected ({probe} -> {v4_in_fake_ip_block} in "
-            f"198.18.0.0/15), DNS recheck already disabled",
-            "",
-        ))
+    # fake-ip detected. 17.0：旋钮已注销，姿态只有一个来源 —— 开机探测的自动
+    # 判定（security.probe_fake_ip），doctor 不再替用户读任何环境变量。
+    # （行宽预算 280 字符，超了会被截头 —— 两段 detail 都要短。）
+    from dhole_mcp import security as _sec
+    if not _sec._dns_recheck_enabled():
+        detail = (f"fake-ip proxy detected ({probe} -> {v4_in_fake_ip_block} in "
+                  f"198.18.0.0/15); the DNS-recheck layer is skipped "
+                  f"automatically on this host, so URLs work as-is "
+                  f"(metadata.ssrf_recheck says so; IP-literal, hostname and "
+                  f"cloud-metadata guards stay on)")
+        if v6_in_ula:
+            detail += f"; AAAA {v6_in_ula} in fc00::/7"
+        checks.append(("resolver reality", "ok", detail, ""))
         return
 
-    detail = (
-        f"fake-ip proxy detected ({probe} -> {v4_in_fake_ip_block} in 198.18.0.0/15)"
-    )
-    if v6_in_ula:
-        detail += f"; the SSRF DNS recheck rejects it via the AAAA record: {v6_in_ula} in fc00::/7"
-
-    # The remedy line must match what dhole actually does here. Since W12 the
-    # recheck layer skips itself on a detected fake-ip host, so telling that
-    # operator to set an env var and restart would send them to fix something
-    # that is already fixed - and worse, the sentence "every URL would fail"
-    # would be false on their machine.
-    from dhole_mcp import security as _sec
-    if _sec.recheck_posture_note():
-        detail += ("; dhole skipped that layer on this host automatically, so URLs "
-                   "work as-is (every affected response says so in "
-                   "metadata.ssrf_recheck)")
-        remedy = ("force it back on: dhole config set DHOLE_SSRF_DNS_RECHECK on "
-                  "(the auto-skip only ever disables the DNS-recheck layer; "
-                  "IP-literal, hostname and cloud-metadata guards stay on)")
-    else:
-        detail += "; every smart_fetch / smart_search URL would fail with 'resolves to internal/private IP'"
-        remedy = ("set DHOLE_SSRF_DNS_RECHECK=0 in the host's env block, then restart the host "
-                  "(disables the DNS-recheck layer only; IP-literal and hostname guards stay on)")
+    # 探测到了 fake-ip，但复查层在本进程仍然开着：两处探测结果不一致（例如解析
+    # 器只对部分名字撒谎）。没有旋钮可关 —— 让用户重启，交给开机探测重新判定。
     checks.append((
         "resolver reality", "info",
-        detail,
-        remedy,
+        f"fake-ip proxy detected ({probe} -> {v4_in_fake_ip_block} in "
+        f"198.18.0.0/15); the DNS-recheck layer is still on for this process",
+        "restart dhole so the startup probe re-judges this resolver "
+        "(no manual override exists; IP-literal, hostname and cloud-metadata "
+        "guards always stay on)",
     ))
 
 

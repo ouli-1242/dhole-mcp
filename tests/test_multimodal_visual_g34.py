@@ -1,13 +1,13 @@
-"""G34 多模态开关（DHOLE_MULTIMODAL）：元素级截图 + 本地二维码解码。
+"""G34 → 17.0：元素级截图 + 本地二维码解码，**常开**（无 DHOLE_MULTIMODAL 门）。
 
-计划第八章的设计落地为三件事，这里各守各的：
+大众化一刀切把"调用方声明自己是多模态的"这层许可删了 —— 元素级截图
+（screenshot 的 options.selector、smart_fetch 的 {"screenshot"} 动作）和工具描述
+里的试读纪律默认全量在线；dhole 不引入视觉模型，识别永远在 agent 侧。这里各守各的：
 
-* **门控语义**：`DHOLE_MULTIMODAL=1` 声明"调用方 agent 是多模态的"——它只开
-  元素级截图（screenshot 的 options.selector、smart_fetch 的 {screenshot} 动作）
-  和工具描述里的试读纪律。dhole 不引入视觉模型，识别永远在 agent 侧。
-* **二维码不在门控内**：解码 QR 是确定性工作（opencv 本地解码），不是视觉任务，
-  纯文本 agent 也用得上（decode_qr 走文本通道）。这条边界必须由测试钉住——
-  门控收紧时最容易顺手把 decode_qr 也锁进去，那会毁掉文本侧唯一的读码路径。
+* **无门控语义**：任何 env 状态下动作与工具都能走通；曾经读 env 的入口
+  （actions.multimodal_enabled / server._multimodal_enabled）必须不存在。
+* **二维码解码**：确定性工作（opencv 本地解码），不是视觉任务（decode_qr 走
+  文本通道）；解码失败永远不连坐截图本身。
 * **像素走内容列表、元数据走收据**：base64 进 JSON payload 会摊到每一个
   transcript / cache 副本上，所以 metadata.actions 只留名字级收据（image: true
   + 解码出的 QR 文本），像素单独骑 ImageContent。
@@ -23,7 +23,6 @@ from dhole_mcp.actions import (
     MAX_ACTION_SHOT_BYTES,
     _validate_actions,
     build_page_action,
-    multimodal_enabled,
 )
 from dhole_mcp.server import (
     MasterFetchServer,
@@ -99,37 +98,24 @@ class _FakeSession:
             await action(self.page)
 
 
-# ─── 门控：动作在校验期就被拒，错误里说清出路 ───────────────────────────────
+# ─── 无门控：动作在任何 env 状态下都能通过校验，读 env 的入口已删 ──────────
 
 
-class TestTheActionGate:
+class TestNoActionGate:
 
-    def test_without_the_flag_the_action_is_refused_at_validation_time(
-            self, monkeypatch):
-        monkeypatch.delenv("DHOLE_MULTIMODAL", raising=False)
-        with pytest.raises(ValueError) as e:
-            build_page_action([{"screenshot": "img.captcha"}])
-        assert "element_screenshot_disabled" in str(e.value)
-        assert "DHOLE_MULTIMODAL" in str(e.value)
-        # 报错必须给纯文本 agent 指出那条不设门的路
-        assert "decode_qr" in str(e.value)
-
-    @pytest.mark.parametrize("raw", ["1", "true", "YES", "on"])
-    def test_flag_spellings_open_the_gate(self, monkeypatch, raw):
-        monkeypatch.setenv("DHOLE_MULTIMODAL", raw)
-        assert multimodal_enabled() is True
-        assert build_page_action([{"screenshot": "img.captcha"}]) is not None
-
-    @pytest.mark.parametrize("raw", ["0", "false", "", None])
-    def test_flag_spellings_keep_the_gate_shut(self, monkeypatch, raw):
+    @pytest.mark.parametrize("raw", [None, "0", "1", "flase", "yes-please"])
+    def test_the_action_passes_regardless_of_env(self, monkeypatch, raw):
+        """17.0 起这个能力不在任何门后面 —— 连旧旋钮的残留值也不改变行为
+        （注销的旋钮运行时静默忽略）。"""
+        import dhole_mcp.actions as actions_mod
         if raw is None:
             monkeypatch.delenv("DHOLE_MULTIMODAL", raising=False)
         else:
             monkeypatch.setenv("DHOLE_MULTIMODAL", raw)
-        assert multimodal_enabled() is False
+        assert not hasattr(actions_mod, "multimodal_enabled")
+        assert build_page_action([{"screenshot": "img.captcha"}]) is not None
 
-    def test_the_dict_form_normalizes_selector_and_decode_qr(self, monkeypatch):
-        monkeypatch.setenv("DHOLE_MULTIMODAL", "1")
+    def test_the_dict_form_normalizes_selector_and_decode_qr(self):
         (a,) = _validate_actions([{"screenshot": {"selector": "img.qr",
                                                   "decode_qr": True}}])
         assert a == {"screenshot": {"selector": "img.qr", "decode_qr": True}}
@@ -143,12 +129,10 @@ class TestTheActionGate:
         {"screenshot": {"selector": None}},
         {"screenshot": 3},
     ])
-    def test_bad_shapes_are_refused_even_with_the_flag(self, monkeypatch, bad):
-        monkeypatch.setenv("DHOLE_MULTIMODAL", "1")
+    def test_bad_shapes_are_refused(self, bad):
         with pytest.raises((ValueError, Exception)) as e:
             build_page_action([bad])
-        assert "element_screenshot_disabled" not in str(e.value), (
-            "门控报错盖住了形状报错，调用方会去改 env 而不是改参数")
+        assert "element_screenshot_disabled" not in str(e.value)
 
 
 # ─── 执行器：像素进行、收据齐、失败不连坐 ───────────────────────────────────
@@ -158,7 +142,6 @@ class TestTheCaptureExecutor:
 
     @pytest.mark.asyncio
     async def test_a_capture_rides_its_outcome_row(self, monkeypatch):
-        monkeypatch.setenv("DHOLE_MULTIMODAL", "1")
         pa = build_page_action([{"screenshot": "img.captcha"}])
         await pa(_FakePage())
         (row,) = pa.outcomes
@@ -169,7 +152,6 @@ class TestTheCaptureExecutor:
     @pytest.mark.asyncio
     async def test_decode_qr_reports_the_payload_in_the_row(self, monkeypatch):
         pytest.importorskip("cv2")
-        monkeypatch.setenv("DHOLE_MULTIMODAL", "1")
         payload = "https://example.com/checkin?token=abc123"
         pa = build_page_action([{"screenshot": {"selector": "img.qr",
                                                 "decode_qr": True}}])
@@ -181,7 +163,6 @@ class TestTheCaptureExecutor:
     @pytest.mark.asyncio
     async def test_a_decoder_problem_never_fails_the_capture(self, monkeypatch):
         """图是产品，解码是赠品：缺 opencv / 空白图都不能把动作标成失败。"""
-        monkeypatch.setenv("DHOLE_MULTIMODAL", "1")
 
         import dhole_mcp.qr as qr_mod
 
@@ -200,7 +181,6 @@ class TestTheCaptureExecutor:
     @pytest.mark.asyncio
     async def test_an_oversized_capture_is_a_failed_action_not_a_dos(self,
                                                                      monkeypatch):
-        monkeypatch.setenv("DHOLE_MULTIMODAL", "1")
         big = b"\x89PNG\r\n\x1a\n" + b"0" * (MAX_ACTION_SHOT_BYTES + 1)
         pa = build_page_action([{"screenshot": "body"}])
         await pa(_FakePage(data=big))
@@ -211,7 +191,6 @@ class TestTheCaptureExecutor:
 
     @pytest.mark.asyncio
     async def test_a_failed_capture_does_not_abort_the_rest(self, monkeypatch):
-        monkeypatch.setenv("DHOLE_MULTIMODAL", "1")
         pa = build_page_action([{"wait": 1},
                                 {"screenshot": "img.missing"},
                                 {"wait": 1}])
@@ -269,37 +248,34 @@ class TestTheReceiptAndTheWire:
         assert content[0].type == "text"
 
 
-# ─── screenshot 工具：门在浏览器启动之前 ────────────────────────────────────
+# ─── screenshot 工具：无门，形状冲突仍然当场拒绝 ────────────────────────────
 
 
 class TestTheToolGate:
 
     @pytest.mark.asyncio
-    async def test_selector_without_the_flag_refuses_before_a_browser_starts(
+    async def test_a_selector_crop_starts_no_browser_for_a_shape_error(
             self, monkeypatch):
-        monkeypatch.delenv("DHOLE_MULTIMODAL", raising=False)
-
         async def no_browser(*a, **kw):
-            raise AssertionError("a browser was started for a refused capture")
+            raise AssertionError("a browser was started for a shape refusal")
         monkeypatch.setattr(MasterFetchServer, "_ensure_auto_session", no_browser)
 
-        with pytest.raises(ValueError) as e:
-            await MasterFetchServer().screenshot(URL, selector="img.captcha")
-        assert "element_screenshot_disabled" in str(e.value)
-
-    @pytest.mark.asyncio
-    async def test_full_page_cannot_combine_with_a_selector(self, monkeypatch):
-        monkeypatch.setenv("DHOLE_MULTIMODAL", "1")
         with pytest.raises(ValueError) as e:
             await MasterFetchServer().screenshot(URL, selector="img.captcha",
                                                  full_page=True)
         assert "full_page" in str(e.value)
 
     @pytest.mark.asyncio
-    async def test_decode_qr_alone_is_never_gated(self, monkeypatch):
-        """decode_qr 不设门控：flag 关着也必须能走到浏览器层（这里用假会话证明
+    async def test_full_page_cannot_combine_with_a_selector(self, monkeypatch):
+        with pytest.raises(ValueError) as e:
+            await MasterFetchServer().screenshot(URL, selector="img.captcha",
+                                                 full_page=True)
+        assert "full_page" in str(e.value)
+
+    @pytest.mark.asyncio
+    async def test_decode_qr_runs_with_no_env_at_all(self, monkeypatch):
+        """decode_qr 从来不是视觉任务：任何 env 状态下都走到浏览器层（假会话证明
         它没在入口就被拒）。"""
-        monkeypatch.delenv("DHOLE_MULTIMODAL", raising=False)
 
         class _Entry:
             session = _FakeSession(_FakePage())
@@ -338,7 +314,6 @@ class TestTheToolCapture:
 
     @pytest.mark.asyncio
     async def test_a_selector_crop_captures_the_element(self, monkeypatch):
-        monkeypatch.setenv("DHOLE_MULTIMODAL", "1")
         self._patch_session(monkeypatch, _FakePage())
         out = await MasterFetchServer().screenshot(URL, selector="img.captcha")
         image = [c for c in out if getattr(c, "type", "") == "image"][0]
@@ -350,7 +325,6 @@ class TestTheToolCapture:
     @pytest.mark.asyncio
     async def test_decode_qr_lands_in_the_text_part(self, monkeypatch):
         pytest.importorskip("cv2")
-        monkeypatch.delenv("DHOLE_MULTIMODAL", raising=False)
         payload = "https://example.com/checkin?token=abc123"
         self._patch_session(monkeypatch, _FakePage(data=_qr_png(payload)))
         out = await MasterFetchServer().screenshot(URL, decode_qr=True)
@@ -363,7 +337,6 @@ class TestTheToolCapture:
         import cv2
         import numpy as np
 
-        monkeypatch.setenv("DHOLE_MULTIMODAL", "1")
         blank = np.full((60, 60, 3), 255, dtype=np.uint8)
         ok, buf = cv2.imencode(".png", blank)
         assert ok
@@ -377,7 +350,6 @@ class TestTheToolCapture:
     async def test_undecodable_bytes_are_a_note_and_the_image_still_flows(
             self, monkeypatch):
         """PNG_BYTES 不是真图片：解码失败要降级成注记，截图本身照常交付。"""
-        monkeypatch.setenv("DHOLE_MULTIMODAL", "1")
         self._patch_session(monkeypatch, _FakePage())
         out = await MasterFetchServer().screenshot(URL, decode_qr=True)
         image = [c for c in out if getattr(c, "type", "") == "image"][0]
@@ -391,21 +363,9 @@ class TestTheToolCapture:
 
 class TestTheDescriptions:
 
-    def test_flag_off_keeps_the_base_literal(self, monkeypatch):
-        monkeypatch.delenv("DHOLE_MULTIMODAL", raising=False)
-        defs = {td["name"]: td for td in MasterFetchServer._enabled_tool_defs()}
-        assert "VISUAL ASSIST" not in defs["screenshot"]["description"]
-        assert "VISUAL ASSIST" not in defs["smart_fetch"]["description"]
-        # 类字面量本身也从未被改写（幂等：反复调用不会累加）
-        MasterFetchServer._enabled_tool_defs()
-        MasterFetchServer._enabled_tool_defs()
-        assert "VISUAL ASSIST" not in dict(
-            (td["name"], td) for td in MasterFetchServer._TOOL_DEFS
-        )["screenshot"]["description"]
-
-    def test_flag_on_adds_the_capture_clauses_and_the_discipline(self,
-                                                                 monkeypatch):
-        monkeypatch.setenv("DHOLE_MULTIMODAL", "1")
+    def test_discipline_is_in_the_literal_itself(self):
+        """VISUAL ASSIST 不再是运行时拼接：它在 _TOOL_DEFS 字面量里
+        （能力常开，纪律不是模式）。"""
         defs = {td["name"]: td for td in MasterFetchServer._enabled_tool_defs()}
         shot = defs["screenshot"]["description"]
         sf = defs["smart_fetch"]["description"]
@@ -419,3 +379,8 @@ class TestTheDescriptions:
             assert "DataDome" in desc
             assert "2FA" in desc
             assert "hand off" in desc
+
+    def test_repeated_calls_do_not_accumulate(self):
+        first = [td["description"] for td in MasterFetchServer._enabled_tool_defs()]
+        again = [td["description"] for td in MasterFetchServer._enabled_tool_defs()]
+        assert first == again

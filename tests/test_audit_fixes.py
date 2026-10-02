@@ -5,7 +5,7 @@
 - P1: 重定向链逐跳 SSRF 校验（fetcher 层）
 - P1: max_redirects 生效
 - P2: search_proxy._kick_health_check 重置（不再 no-op）
-- P2: 域名 DNS 解析内网复查（DHOLE_SSRF_DNS_RECHECK=1 开启时）
+- P2: 域名 DNS 解析内网复查（17.0 起无条件开启，DHOLE_SSRF_DNS_RECHECK 已注销）
 """
 
 from __future__ import annotations
@@ -183,22 +183,29 @@ def test_dns_recheck_on_by_default(monkeypatch):
     assert sp._dns_recheck_enabled() is True
 
 
-def test_dns_recheck_can_be_disabled(monkeypatch):
-    """DHOLE_SSRF_DNS_RECHECK=0 关闭（DNS 污染/分流环境的逃生口）。"""
+def test_retired_dns_recheck_knob_moves_nothing(monkeypatch):
+    """17.0：``DHOLE_SSRF_DNS_RECHECK`` 已注销 —— 设成什么都不改变判定。
+
+    当年这个旋钮能让一个解析到内网的主机名放行，等于把一道 SSRF 守卫交给一个
+    环境变量；现在唯一的放宽路径是「探测到 fake-ip」时的自动判定，且只放宽 DNS
+    复检这一层（见 test_fake_ip_auto.py）。整段都待在假 getaddrinfo 里跑：判定
+    既然只来自探测，测试就必须把探测的答案钉死，否则红的会是本机网络。
+    """
     sp = __import__("dhole_mcp.security", fromlist=["_dns_recheck_enabled"])
-    for value in ("0", "false", "off", "no"):
-        monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", value)
-        assert sp._dns_recheck_enabled() is False
-    monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", "0")
-    sp._DNS_CHECK_CACHE.clear()
     with patch("socket.getaddrinfo",
                return_value=[(2, 1, 6, "", ("192.168.1.10", 0))]):
-        assert validate_url("https://mycorp.internal/x") == "https://mycorp.internal/x"
+        sp.reset_fake_ip_probe()
+        sp._DNS_CHECK_CACHE.clear()
+        for value in ("0", "false", "off", "no"):
+            monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", value)
+            assert sp._dns_recheck_enabled() is True, value
+        with pytest.raises(SecurityError, match="resolves to internal"):
+            validate_url("https://mycorp.internal/x")
+    sp.reset_fake_ip_probe()
 
 
-def test_dns_recheck_accepts_public_resolution(monkeypatch):
-    """开启时解析到公网 IP 应放行。"""
-    monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", "1")
+def test_dns_recheck_accepts_public_resolution():
+    """解析到公网 IP 应放行。"""
     with patch("socket.getaddrinfo",
                return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
         assert validate_url("https://example.com/x") == "https://example.com/x"

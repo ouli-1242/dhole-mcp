@@ -182,48 +182,6 @@ def test_init_dispatches_from_main(monkeypatch, tmp_home):
 
 
 
-class TestOptInGroupsThroughTheFileDoor:
-    """--tasks / --vault 把默认关的工具组打开，走 W11 的文件门。
-
-    这两个开关过去只有一种打开方式：编辑宿主的 MCP JSON + 重启。用户看不见
-    文件门，就只能靠读 README 才知道有东西可开 —— 而"打开"这一步必须是命令，
-    不是文档。env 已经设过时**不写文件**：那是操作者已经做过的决定。
-    """
-
-    def test_dry_run_writes_nothing(self, tmp_home, capsys):
-        from dhole_mcp import env_registry as er
-        assert init_cmd.run_init(["--tasks"]) == 0
-        assert er.file_entries() == {}, "dry-run 默认不许落盘"
-        out = capsys.readouterr().out
-        assert "dry-run" in out and "--yes" in out
-
-    def test_yes_enables_both_groups_and_says_the_restart(self, tmp_home, capsys):
-        from dhole_mcp import env_registry as er
-        assert init_cmd.run_init(["--tasks", "--vault", "--yes"]) == 0
-        assert er.file_entries() == {"DHOLE_TASKS": "1", "DHOLE_VAULT": "1"}
-        # 诚实：这两个是 import 期读的旋钮，写了也要重启才注册工具
-        assert "restart the host" in capsys.readouterr().out
-
-    def test_enabling_the_file_does_not_enable_the_tools_this_process(self, tmp_home, monkeypatch):
-        """落盘之后 `_ENABLED_TOOLS` 仍是旧值 —— 这就是那句"要重启"的证据。"""
-        from dhole_mcp import env_registry as er
-        import dhole_mcp.server as srv
-        assert init_cmd.run_init(["--tasks", "--yes"]) == 0
-        assert "recipe" not in srv._ENABLED_TOOLS
-        assert er.value_of("DHOLE_TASKS") == "1"
-
-    def test_env_already_set_means_no_write(self, tmp_home, monkeypatch, capsys):
-        from dhole_mcp import env_registry as er
-        monkeypatch.setenv("DHOLE_TASKS", "1")
-        init_cmd.run_init(["--tasks", "--yes"])
-        assert er.file_entries() == {}, "env 赢，就不该再留一份文件里的副本"
-        assert "env block" in capsys.readouterr().out
-
-    def test_an_unknown_flag_is_refused_not_ignored(self, tmp_home, capsys):
-        assert init_cmd.run_init(["--task"]) == 2
-        assert "unknown flag" in capsys.readouterr().out
-
-
 class TestTheLiveProbe:
     """--probe 问的是运行中的代码，不是静态体检：从这里搜得到吗、抓得开吗。"""
 
@@ -286,147 +244,17 @@ class TestTheLiveProbe:
         assert "engines probe" in out, "空池要给出下一步，不是只报 0 结果"
         assert "network fact" in out
 
-class TestNeuralFlagAndItsWeights:
-    """--neural 一次把开关和重量都装上：写了 flag 却没有模型，得到的只是每次
-    调用一句 neural_focus_model_missing —— 那不是"打开了能力"，那是另一个错误。
 
-    下载与 Chromium 同一条纪律：只在 --yes 后面发生。几百 MB 藏在一条没人会
-    重读的命令背后，是惊吓而不是回退。
-    """
+class TestInitOpensNoGates:
+    """17.0：init 只做安装与客户端登记 —— `--tasks/--vault/--neural/--cdp`
+    随能力闸一起注销。任何 DHOLE_* 都不许被它写进配置文件。"""
 
-    @pytest.fixture
-    def stub_reranker(self, monkeypatch):
-        state = {"present": False, "downloaded": 0}
-
-        monkeypatch.setattr("dhole_mcp.reranker.model_present",
-                            lambda: state["present"])
-
-        async def ensure(*a, **kw):
-            state["downloaded"] += 1
-            return object() if state["present"] or kw.get("download") else None
-        monkeypatch.setattr("dhole_mcp.reranker.ensure_reranker", ensure)
-        return state
-
-    def test_dry_run_writes_nothing_and_downloads_nothing(self, tmp_home, stub_reranker, capsys):
-        from dhole_mcp import env_registry as er
-        assert init_cmd.run_init(["--neural"]) == 0
-        assert er.file_entries() == {}
-        assert stub_reranker["downloaded"] == 0, "dry-run 不许动几百 MB"
-        out = capsys.readouterr().out
-        assert "DHOLE_NEURAL_FOCUS" in out and "dry-run" in out
-
-    def test_yes_enables_the_flag_without_a_restart_note(self, tmp_home, stub_reranker, capsys):
-        """这条 flag 是**按次**读的，所以"重启宿主"的说法在这里是假的。"""
-        from dhole_mcp import env_registry as er
-        assert init_cmd.run_init(["--neural", "--yes"]) == 0
-        assert er.file_entries() == {"DHOLE_NEURAL_FOCUS": "1"}
-        assert stub_reranker["downloaded"] == 1
-        out = capsys.readouterr().out
-        assert "next call" in out
-        assert "reranker ready" in out
-
-    def test_an_already_downloaded_model_is_not_fetched_again(self, tmp_home, stub_reranker, capsys):
-        stub_reranker["present"] = True
-        assert init_cmd.run_init(["--neural", "--yes"]) == 0
-        assert stub_reranker["downloaded"] == 0
-        assert "already downloaded" in capsys.readouterr().out
-
-    def test_a_failed_download_is_reported_not_raised(self, tmp_home, monkeypatch, capsys):
-        from dhole_mcp import env_registry as er
-
-        async def broken(*a, **kw):
-            raise ConnectionError("no route to host")
-        monkeypatch.setattr("dhole_mcp.reranker.model_present", lambda: False)
-        monkeypatch.setattr("dhole_mcp.reranker.ensure_reranker", broken)
-        assert init_cmd.run_init(["--neural", "--yes"]) == 0
-        assert "download failed" in capsys.readouterr().out
-        # flag 照样写下：模型会在下一次神经搜索重试，用户不必重跑整条 init
-        assert er.file_entries() == {"DHOLE_NEURAL_FOCUS": "1"}
-
-
-class TestCdpAttachSetup:
-    """`dhole init --cdp <hosts>`：这条命令交出的是**已登录浏览器**的读权限，
-    比"某个写操作要不要确认"严重一档，所以它有三条不能省：必须点名主机、
-    围栏是合并而不是覆盖、先验证再落笔。
-
-    最后一条是因为半条命令 = 半装的安全边界：`DHOLE_CDP_ATTACH=1` 已经写进
-    文件、主机列表却因为第二个 token 拼错而没写，机器就处在"attach 已开、没有
-    围栏"这个恰好最危险的状态里。
-    """
-
-    @pytest.fixture
-    def probe(self, monkeypatch):
-        """端口探测必须被替换：测试不能真的去连 127.0.0.1:9222 —— 那等于把
-        "这台开发机此刻有没有开着调试端口的 Chrome" 当成测试前置条件。"""
-        seen = {"calls": 0, "returns": False}
-
-        def fake(port=None):
-            seen["calls"] += 1
-            return seen["returns"]
-        monkeypatch.setattr(init_cmd, "_cdp_endpoint_listening", fake)
-        return seen
-
-    def test_requires_at_least_one_host(self, tmp_home, capsys):
-        """无围栏的 attach 不是这条命令提供的形态——交出去的是所有已登录站点。"""
-        for argv in (["--cdp"], ["--cdp", ""], ["--cdp="]):
+    def test_the_capability_flags_are_refused_as_unknown(self, tmp_home, capsys):
+        for argv in (["--tasks"], ["--vault"], ["--neural"], ["--cdp", "h"]):
             assert init_cmd.run_init(argv) == 2, argv
-            assert "at least one host" in capsys.readouterr().out
+            assert "unknown flag" in capsys.readouterr().out
 
-    def test_a_pasted_url_becomes_the_exact_hostname(self, tmp_home, probe, capsys):
-        assert init_cmd.run_init(["--cdp", "https://Portal.Example.com/dashboard?x=1"]) == 0
-        out = capsys.readouterr().out
-        assert "portal.example.com" in out
-        assert "subdomains and third-party assets are NOT covered" in out
-        assert "dry-run" in out and "DHOLE_CDP_ATTACH" in out
-
-    def test_yes_writes_both_gates_and_says_no_restart(self, tmp_home, probe, capsys):
+    def test_a_full_init_writes_no_dhole_knobs(self, tmp_home, monkeypatch):
         from dhole_mcp import env_registry as er
-        assert init_cmd.run_init(["--cdp", "portal.example.com", "--yes"]) == 0
-        assert er.file_entries() == {"DHOLE_CDP_ATTACH": "1",
-                                     "DHOLE_CDP_HOSTS": "portal.example.com"}
-        out = capsys.readouterr().out
-        # 两道闸都是 read_at="call"：说"重启宿主"会让人白重启一次
-        assert "no host restart" in out or "next call" in out
-        assert probe["calls"] == 1
-
-    def test_an_existing_allowlist_is_merged_not_clobbered(self, tmp_home, probe, capsys):
-        """覆盖操作者的围栏 = 悄悄改变他设过的边界。这里只做并集。"""
-        from dhole_mcp import env_registry as er
-        er.set_entry("DHOLE_CDP_HOSTS", "old.example.com")
-        assert init_cmd.run_init(["--cdp", "new.example.com", "--yes"]) == 0
-        hosts = er.file_entries()["DHOLE_CDP_HOSTS"].split(",")
-        assert set(hosts) == {"new.example.com", "old.example.com"}
-        assert "merged" in capsys.readouterr().out
-
-    @pytest.mark.parametrize("bad", [
-        "169.254.169.254",              # 云元数据：任何设置下都不放行
-        "*.example.com",                # 通配符不是主机，围栏是精确主机名
-        "https://",                     # 里面根本没有主机名
-    ])
-    def test_a_refused_host_leaves_nothing_half_written(self, tmp_home, probe, bad, capsys):
-        from dhole_mcp import env_registry as er
-        assert init_cmd.run_init(["--cdp", bad, "--yes"]) == 2
-        assert er.file_entries() == {}, "拒绝必须发生在任何写入之前"
-        assert "refused" in capsys.readouterr().out
-
-    def test_attach_already_in_env_is_not_shadowed_by_a_write(self, tmp_home, probe,
-                                                             monkeypatch, capsys):
-        from dhole_mcp import env_registry as er
-        monkeypatch.setenv("DHOLE_CDP_ATTACH", "1")
-        assert init_cmd.run_init(["--cdp", "portal.example.com", "--yes"]) == 0
-        entries = er.file_entries()
-        assert "DHOLE_CDP_ATTACH" not in entries, "env 赢，文件里不该留一份假设置"
-        assert entries.get("DHOLE_CDP_HOSTS") == "portal.example.com"
-        assert "env block" in capsys.readouterr().out
-
-    def test_the_probe_never_runs_without_the_flag(self, tmp_home, probe):
-        assert init_cmd.run_init(["--tasks"]) == 0
-        assert probe["calls"] == 0, "没要求 CDP 就不该去探调试端口"
-
-    def test_a_listening_endpoint_is_reported_as_a_fact(self, tmp_home, probe, capsys):
-        probe["returns"] = True
-        assert init_cmd.run_init(["--cdp", "portal.example.com", "--yes"]) == 0
-        out = capsys.readouterr().out
-        assert "listening on 127.0.0.1:9222" in out
-        assert "--remote-debugging-port=9222" in out
-        assert '"cdp_url"' in out
+        assert init_cmd.run_init(["--yes"]) == 0
+        assert [k for k in er.file_entries() if k.startswith("DHOLE_")] == []

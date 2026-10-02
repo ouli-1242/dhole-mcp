@@ -7,7 +7,8 @@
 * watch 的**首跑不是变化**（`changed=None`，`change_count` 不动）——把没有基线
   报成"没有变化"是凭空造一个事实；
 * **失败的抓取不动基线**——否则一次网络故障就被写成"页面清空了"；
-* 两个工具**默认不在连接期表里**（`_OPT_IN_TOOLS`），默认 wire 一个字符不变。
+* 两个工具**默认就在线** —— 17.0 删了 opt-in 门（`_OPT_IN_TOOLS` 不复存在），
+  这里钉的始终是语义，不是"要不要把它们放进连接期"。
 """
 
 from __future__ import annotations
@@ -215,41 +216,36 @@ class TestDiff:
         assert d["added"] == 2 and d["removed"] == 0
 
 
-# ─── 默认关闭（连接期预算）─────────────────────────────────────────────
+# ─── 17.0：没有 opt-in 组，默认全量注册 ─────────────────────────────────
 
 class TestOptInWiring:
-    def test_both_tools_are_known_but_not_enabled_by_default(self, monkeypatch):
+    def test_both_tools_are_enabled_by_default(self, monkeypatch):
         monkeypatch.delenv("DHOLE_TOOLS", raising=False)
         monkeypatch.delenv("DHOLE_TASKS", raising=False)
         enabled = server_mod._parse_enabled_tools()
         assert {"recipe", "watch"} <= set(server_mod._TOP_LEVEL_ARGS)
-        assert {"recipe", "watch"}.isdisjoint(enabled)
+        assert {"recipe", "watch"} <= enabled
 
-    def test_dhole_tasks_turns_them_on(self, monkeypatch):
+    def test_a_stale_tasks_flag_does_nothing(self, monkeypatch):
+        """注销的旋钮运行时静默忽略 —— 不许它复活成一道闸。"""
         monkeypatch.delenv("DHOLE_TOOLS", raising=False)
-        monkeypatch.setenv("DHOLE_TASKS", "1")
+        monkeypatch.setenv("DHOLE_TASKS", "0")
         assert {"recipe", "watch"} <= server_mod._parse_enabled_tools()
 
-    def test_naming_them_in_dhole_tools_also_works(self, monkeypatch):
+    def test_naming_them_in_dhole_tools_still_works(self, monkeypatch):
         monkeypatch.setenv("DHOLE_TOOLS", "smart_fetch,recipe,watch")
         assert server_mod._parse_enabled_tools() == frozenset(
             {"smart_fetch", "recipe", "watch"})
 
-    def test_the_default_wire_costs_what_it_did_before(self, monkeypatch):
-        """默认 instructions 不含这两行——否则默认连接期就白涨 191 字符。"""
+    def test_the_default_instructions_route_to_them(self, monkeypatch):
+        """默认注册的工具必须在默认 instructions 里有路由行——否则连上来
+        也找不到它们。"""
         monkeypatch.delenv("DHOLE_TOOLS", raising=False)
         monkeypatch.delenv("DHOLE_TASKS", raising=False)
-        text = server_mod._compose_instructions(server_mod._parse_enabled_tools())
-        assert "recipe" not in text and "watch" not in text
-
-    def test_enabling_them_routes_to_them(self, monkeypatch):
-        monkeypatch.delenv("DHOLE_TOOLS", raising=False)
-        monkeypatch.setenv("DHOLE_TASKS", "1")
         text = server_mod._compose_instructions(server_mod._parse_enabled_tools())
         assert "recipe" in text and "watch" in text
 
     def test_a_disabled_tool_is_refused_with_a_named_error(self, monkeypatch):
-        monkeypatch.delenv("DHOLE_TASKS", raising=False)
         monkeypatch.setattr(server_mod, "_ENABLED_TOOLS", frozenset({"smart_fetch"}))
         s = MasterFetchServer()
         with pytest.raises(ValueError) as e:

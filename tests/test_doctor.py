@@ -184,23 +184,22 @@ class TestDoctorConfigAudit:
         哨兵一眼看得出来；这一条同时钉住 _config_effective_value 对 str
         只写 "set" 的分支。
         """
-        sentinel = "SENTINEL-package-name-xyzzy-42"
-        monkeypatch.setenv("DHOLE_UPDATE_PACKAGE", sentinel)
+        sentinel = "SENTINEL-pool-name-xyzzy-42"
+        monkeypatch.setenv("DHOLE_SEARCH_PROXY", sentinel)
         assert updater.doctor() == 0
         out = capsys.readouterr().out
-        assert "DHOLE_UPDATE_PACKAGE" in out
+        assert "DHOLE_SEARCH_PROXY" in out
         assert sentinel not in out
 
     def test_secret_env_shows_only_length(self, isolated_home, monkeypatch, capsys):
-        """W2 验收 3：4 个 API key 类 env 只显示 ``set (len=N)``，绝不回显值。"""
-        for key_env in ("DHOLE_BOCHA_API_KEY", "DHOLE_BRIGHTDATA_API_KEY",
-                        "DHOLE_EXA_API_KEY", "DHOLE_TAVILY_API_KEY"):
+        """W2 验收 3：API key 类 env 只显示 ``set (len=N)``，绝不回显值。
+        17.0 后 keyed 引擎只剩 Tavily 与博查。"""
+        for key_env in ("DHOLE_BOCHA_API_KEY", "DHOLE_TAVILY_API_KEY"):
             sentinel = f"super-secret-{key_env}-SENTINEL"
             monkeypatch.setenv(key_env, sentinel)
         assert updater.doctor() == 0
         out = capsys.readouterr().out
-        for key_env in ("DHOLE_BOCHA_API_KEY", "DHOLE_BRIGHTDATA_API_KEY",
-                        "DHOLE_EXA_API_KEY", "DHOLE_TAVILY_API_KEY"):
+        for key_env in ("DHOLE_BOCHA_API_KEY", "DHOLE_TAVILY_API_KEY"):
             assert key_env in out
             assert "SENTINEL" not in out
         assert "set (len=" in out
@@ -209,10 +208,10 @@ class TestDoctorConfigAudit:
         """W2：read_at="import" 的行必须显式说 "restart the host to change"，
         不然操作者会按 call 类 env 那样改完直接跑一次工具，然后困惑为什么
         改了没生效——这是"配置改了没生效"最常见的一个来源。"""
-        monkeypatch.setenv("DHOLE_STRUCTURED_CONTENT", "1")
+        monkeypatch.setenv("DHOLE_DEFAULT_CONTENT_CHARS", "8000")
         updater.doctor()
         out = capsys.readouterr().out
-        assert "DHOLE_STRUCTURED_CONTENT" in out
+        assert "DHOLE_DEFAULT_CONTENT_CHARS" in out
         assert "restart the host" in out
 
     def test_call_time_env_is_not_marked_as_restart(self, isolated_home,
@@ -246,10 +245,10 @@ class TestDoctorConfigAudit:
 
     def test_summary_counts_set_variables(self, isolated_home, monkeypatch, capsys):
         monkeypatch.setenv("DHOLE_USAGE_LOG", "1")
-        monkeypatch.setenv("DHOLE_MULTIMODAL", "1")
+        monkeypatch.setenv("DHOLE_SEARCH_PROXY", "http://127.0.0.1:7890")
         updater.doctor()
         out = capsys.readouterr().out
-        assert "2 of 39 variables set" in out
+        assert "2 of 11 variables set" in out
 
     def test_config_audit_does_not_raise_when_the_section_itself_breaks(
             self, isolated_home, monkeypatch, capsys):
@@ -285,6 +284,15 @@ class TestDoctorConfigAudit:
         for line in out.splitlines():
             if "DHOLE_IGNORE_ROBOTS" in line:
                 assert "off" in line
+
+    def test_a_retired_knob_is_named_as_ignored(self, isolated_home,
+                                                monkeypatch, capsys):
+        """§3-20：注销的旋钮运行时静默忽略，唯一会提到它们的地方是 --doctor。
+        它不许出现在合法变量的审计行里（否则像还在生效），也不许让 doctor 变红。"""
+        monkeypatch.setenv("DHOLE_MULTIMODAL", "1")
+        assert updater.doctor() == 0
+        out = capsys.readouterr().out
+        assert "DHOLE_MULTIMODAL" in out
 
 
 class TestDoctorResolverReality:
@@ -335,30 +343,31 @@ class TestDoctorResolverReality:
         assert "198.18.0.32" in out
         assert "198.18.0.0/15" in out
         assert "fc00::/7" in out
-        # W12: 没人设过这个变量时，dhole 已经自己跳过那一层了。体检再教用户去设
-        # =0 就是在让他修一个已经好了的东西 —— 现在这一行说的是"要强制恢复怎么做"。
-        assert "automatically" in out and "dhole config set DHOLE_SSRF_DNS_RECHECK on" in out
+        # W12 → 17.0：自动判定没有覆盖开关 —— 体检说"已自动跳过、URL 照常可用"，
+        # 不再教任何 env 写法（教了也是已经注销的旋钮）。
+        assert "automatically" in out
+        assert "DHOLE_SSRF_DNS_RECHECK" not in out
         # and the note about what disabling actually turns off:
         assert "IP-literal" in out or "IP literal" in out
 
-    def test_forced_on_keeps_the_manual_remedy(self, isolated_home, monkeypatch, capsys):
-        """显式说 on 是决定，不是环境：这时"每个 URL 都会失败"重新成为事实，
-        体检必须回到教用户怎么关掉的那句话。"""
+    def test_fake_ip_without_auto_skip_names_the_restart_remedy(self, isolated_home, monkeypatch, capsys):
+        """探测到了 fake-ip 但本进程复查层还开着（两处探测不一致的罕见机器）：
+        没有旋钮可关 —— 唯一的出路是重启让开机探测重新判定。"""
         import socket
 
-        monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", "on")
         self._fake_addr(monkeypatch, [(socket.AF_INET, "198.18.0.32")])
+        from dhole_mcp import security as _sec
+        monkeypatch.setattr(_sec, "_dns_recheck_enabled", lambda: True)
         assert updater.doctor() == 0
         out = capsys.readouterr().out
         assert "fake-ip proxy detected" in out
-        assert "would fail" in out
-        assert "DHOLE_SSRF_DNS_RECHECK=0" in out
+        assert "restart" in out
+        assert "DHOLE_SSRF_DNS_RECHECK" not in out
 
-    def test_recheck_already_disabled_is_ok_green(
-            self, isolated_home, monkeypatch, capsys):
+    def test_auto_skip_engaged_is_ok_green(self, isolated_home, monkeypatch, capsys):
+        """自动判定已跳过复查层：这一行是 ok，且不谈任何 env。"""
         import socket
 
-        monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", "0")
         self._fake_addr(monkeypatch, [
             (socket.AF_INET, "198.18.0.127"),
             (socket.AF_INET6, "fd00::80"),
@@ -366,7 +375,8 @@ class TestDoctorResolverReality:
         assert updater.doctor() == 0
         out = capsys.readouterr().out
         assert "fake-ip proxy detected" in out
-        assert "DNS recheck already disabled" in out
+        assert "automatically" in out
+        assert "DHOLE_SSRF_DNS_RECHECK" not in out
 
     def test_offline_dns_never_counts_as_failure(
             self, isolated_home, monkeypatch, capsys):
@@ -409,7 +419,8 @@ class TestDoctorResolverReality:
         out = capsys.readouterr().out
         assert "fake-ip" in out
         # 只有 A 记录命中也认得出来，而这一台机器上 dhole 已经自动跳过了那一层
-        assert "dhole config set DHOLE_SSRF_DNS_RECHECK on" in out
+        assert "automatically" in out
+        assert "DHOLE_SSRF_DNS_RECHECK" not in out
 
     def test_resolver_reality_does_not_raise_even_if_patched_bad(
             self, isolated_home, monkeypatch, capsys):
@@ -424,46 +435,32 @@ class TestDoctorResolverReality:
 
 
 class TestTheCdpFenceRow:
-    """W16：attach 开着但没有主机围栏 —— 这是一个"能跑"和"安全"不是一件事的
-    设置。体检沉默就等于把这条边界交给了 README 里的一段小字。
-
-    它**不算 failure**：围栏是操作者的选择，把合法选择标成故障会让 exit code
-    失去意义（`dhole init --cdp` 存在的理由正是让围栏成为默认写法，而不是让
-    没有围栏看起来像坏了）。
+    """§3-16：attach 的围栏 = 落盘的已授权主机集合。体检报告的是磁盘上的
+    授权现实 —— 没有授权主机时明确说"第一次 attach 会被拒绝并提问"，
+    有授权主机时报数量并给出撤销路径。env 旋钮已注销，这条行不受任何 env 影响。
     """
 
-    def test_attach_without_hosts_names_the_gap_and_the_command(self, isolated_home,
-                                                                monkeypatch, capsys):
-        monkeypatch.setenv("DHOLE_CDP_ATTACH", "1")
-        monkeypatch.delenv("DHOLE_CDP_HOSTS", raising=False)
+    def test_no_authorized_host_reports_the_confirm_flow(self, isolated_home,
+                                                         monkeypatch, capsys):
         assert updater.doctor() == 0
         out = capsys.readouterr().out
         assert "cdp fence" in out
-        assert "every attached request carries your logged-in cookies" in out
-        assert "dhole init --cdp" in out
+        assert "refused" in out and "confirm" in out
 
-    def test_a_fenced_attach_reports_the_count_in_the_right_form(self, isolated_home,
-                                                                monkeypatch, capsys):
-        monkeypatch.setenv("DHOLE_CDP_ATTACH", "1")
-        for hosts, expected in (("portal.example.com", "1 exact hostname "),
-                                ("a.com,b.com", "2 exact hostnames ")):
-            monkeypatch.setenv("DHOLE_CDP_HOSTS", hosts)
-            updater.doctor()
-            out = capsys.readouterr().out
-            assert expected in out, (hosts, out)
-            assert "hostnams" not in out, "复数是拼出来的，不是 'hostnam' + 's'"
-
-    def test_attach_off_prints_nothing_about_a_fence(self, isolated_home,
-                                                    monkeypatch, capsys):
-        monkeypatch.delenv("DHOLE_CDP_ATTACH", raising=False)
-        updater.doctor()
-        assert "cdp fence" not in capsys.readouterr().out
-
-    def test_a_typo_on_the_gate_does_not_claim_a_fence_is_on(self, isolated_home,
-                                                            monkeypatch, capsys):
-        """fail_safe 读法在这条行上也成立：'flase' 不是 ON，所以围栏行不该出现。"""
-        monkeypatch.setenv("DHOLE_CDP_ATTACH", "flase")
-        updater.doctor()
+    def test_authorized_hosts_report_the_count_and_the_revoke_path(self, isolated_home,
+                                                                   monkeypatch, capsys):
+        from dhole_mcp.server import _cdp_attach_gate
+        _cdp_attach_gate("http://portal.example.test:9222", confirm=True)
+        assert updater.doctor() == 0
         out = capsys.readouterr().out
-        assert "cdp fence" not in out
-        assert "not fenced" not in out
+        assert "1 host" in out
+        assert "portal.example.test" in out
+        assert "revoke" in out and "cdp_hosts.json" in out
+
+    def test_a_stale_gate_value_neither_enables_nor_lies(self, isolated_home,
+                                                         monkeypatch, capsys):
+        """旋钮已注销：设置它不产生授权（磁盘说了算），也不让 doctor 变红。"""
+        monkeypatch.setenv("DHOLE_CDP_ATTACH", "1")
+        assert updater.doctor() == 0
+        out = capsys.readouterr().out
+        assert "refused" in out  # 仍是"未授权"行，不是"已围栏 N 台"

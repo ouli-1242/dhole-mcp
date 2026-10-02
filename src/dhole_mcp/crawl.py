@@ -58,10 +58,6 @@ from urllib.parse import urljoin, urlparse, urlunparse
 
 from pydantic import BaseModel, Field, model_serializer
 
-# W4: env_registry is the shared warning recorder - it imports nothing from
-# dhole_mcp so it is cycle-free from any module.
-from dhole_mcp import env_registry
-
 # robots.txt compliance (v16.0). robots.py imports nothing from dhole at module
 # level, so this is cycle-free; the seed check + the discovered-URL peek both
 # need it, and keeping one import point is what makes the cache the shared one.
@@ -69,34 +65,27 @@ from dhole_mcp.robots import check as check_robots, get_robots_cache
 
 logger = logging.getLogger("dhole-mcp.crawl")
 
-# ─── M-1/M-2：神经 focus（DHOLE_NEURAL_FOCUS，默认关）────────────────────────
-# 与 server.py / focus.py 的开关语义一致：flag 只声明"focus 用本地 cross-encoder
-# 打分"；模型缺失在工具入口显式报错（smart_crawl 的闸），这里只 peek，拿不到就
+# ─── M-1/M-2：神经 focus（按次 focus_engine='neural' 点名，17.0 起无许可门）──
+# 与 server.py / focus.py 的选择语义一致：focus_engine 点名才用本地 cross-encoder
+# 打分；模型缺失在工具入口显式报错（smart_crawl 的闸），这里只 peek，拿不到就
 # fail open（保留页面 / 退回 BM25），绝不在爬取中途静默下载。
 
 # 实测分布（rerank，bge-zh）：明显跑题 ~0.0001（p90 0.0104），对题 0.93+；
 # 同题不同侧面 p50 0.005。0.03 在跑题带之上、对题带之下——错杀的是"同题不同
-# 侧面"里偏远的那些，summary 会把丢弃数报出来，误伤可被看见并可用 flag 关掉。
+# 侧面"里偏远的那些，summary 会把丢弃数报出来，误伤可被看见（改用
+# focus_engine='bm25' 即可整趟跳过语义分）。
 _CRAWL_FILTER_FLOOR = 0.03
 
 
-def _neural_focus_enabled() -> bool:
-    # W4.3: read via env_registry so unrecognised values ("flase" typo) get
-    # recorded for ``dhole --doctor``; the return value follows _env_flag's
-    # "not in off-list = ON" semantics so existing behaviour is preserved.
-    return env_registry.read_flag("DHOLE_NEURAL_FOCUS")
-
-
 def _neural_for_this_call() -> bool:
-    """这一次爬取真的用语义打分吗 = 许可（``DHOLE_NEURAL_FOCUS``）∧ 意愿
-    （按次 ``focus_engine``，住在 focus.py 的 FOCUS_ENGINE，与 server 同一套规则）。
+    """这一次爬取真的用语义打分吗 = 按次 ``options.focus_engine`` 点名 "neural"。
 
-    意愿的默认值是""（跟随 flag），所以不传参数时行为与从前逐字节相同。
-    ``"bm25"`` 在 flag 开着时也说"这次不要"：爬取把每页 ~12.5s 的推理乘上
-    max_pages，一次便宜的复查不该逼人先关掉全局能力。
+    17.0：``DHOLE_NEURAL_FOCUS`` 许可门已删除 —— 神经分是显式按次选择，
+    没点名（""）或点名 "bm25" 都走 BM25；爬取把每页 ~12.5s 的推理乘上
+    max_pages，这个代价不该在没人点名时发生。
     """
-    from dhole_mcp.focus import neural_for_call
-    return neural_for_call(_neural_focus_enabled())
+    from dhole_mcp.focus import engine_wants_neural
+    return engine_wants_neural()
 
 
 def _page_relevant(md: str, goal: str) -> Optional[bool]:
@@ -1362,8 +1351,8 @@ async def smart_crawl(
         if focus_dropped:
             bits_now.append(
                 f"{focus_dropped} page(s) dropped by the neural focus filter "
-                f"(score < {_CRAWL_FILTER_FLOOR} on the focus query; unset "
-                "DHOLE_NEURAL_FOCUS to keep everything)")
+                f"(score < {_CRAWL_FILTER_FLOOR} on the focus query; re-run "
+                "with focus_engine='bm25' to keep everything)")
         if urls_dropped_note:
             bits_now.append(urls_dropped_note)
         if _chars_per_clamp:

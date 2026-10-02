@@ -107,8 +107,6 @@ def _no_real_home_state_writes(request, monkeypatch, tmp_path):
 
     monkeypatch.setattr(ms, "_engine_stats_file", lambda: str(tmp_path / "engine_stats.json"))
     monkeypatch.setattr(ms, "_circuit_state_file", lambda: str(tmp_path / "circuit_breaker.json"))
-    from dhole_mcp import search as _search
-    monkeypatch.setattr(_search, "_feedback_file", lambda: str(tmp_path / "search_feedback.json"))
     monkeypatch.setattr(ms, "_ENGINE_YIELD", {})
     monkeypatch.setattr(ms, "_engine_stats_last_save", 0.0)
     # The proxy pool config is the fourth writable state file. `dhole proxy add`
@@ -149,7 +147,21 @@ def _no_real_home_state_writes(request, monkeypatch, tmp_path):
     from dhole_mcp import env_registry as _envreg
     monkeypatch.setattr(_envreg, "config_path", lambda: tmp_path / "config.json")
     _envreg.invalidate_file_cache()
+    # The CDP authorize store (§3-16 先问再记) is the eighth state file, and it
+    # decides whether a first attach executes: pointing it at the real
+    # ~/.dhole/cdp_hosts.json would let one test's confirm=true authorize a host
+    # for every later test AND for the developer's own live server. Routed
+    # through paths.file itself so BOTH readers agree — server's
+    # _cdp_hosts_file() and updater.doctor()'s stdlib mirror.
+    from dhole_mcp import paths as _paths
+    _orig_file = _paths.file
+    monkeypatch.setattr(_paths, "file",
+                        lambda name: tmp_path / name if name == "cdp_hosts.json"
+                        else _orig_file(name))
+    from dhole_mcp import server as _srv
+    _srv._cdp_hosts_cache, _srv._cdp_hosts_stamp = frozenset(), None
     yield
+    _srv._cdp_hosts_cache, _srv._cdp_hosts_stamp = frozenset(), None
     _sessions.reset_for_tests()
     _envreg.invalidate_file_cache()
 

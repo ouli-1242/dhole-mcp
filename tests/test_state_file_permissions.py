@@ -4,8 +4,8 @@
 状态文件 0600"，`paths.ensure_private_dir` / `paths.harden_file` 也确实存在且被
 ``cache.py`` / ``reranker.py`` / ``search_metasearch.py`` 用着 —— 但覆盖不全，
 **恰好漏掉了含明文凭据的 `search_proxies.json`**（实测落盘 mode 受 umask 决定，
-本机读到 0o666），`usage.jsonl`、`search_feedback.json`、`last_version` 以及
-若干"先建 home 再写文件"的目录也都漏了。
+本机读到 0o666），`usage.jsonl`、`last_version`（以及 17.0 的 `cdp_hosts.json`）
+以及若干"先建 home 再写文件"的目录也都漏了。
 
 这里冻结的是修复后的规则：**任何写 dhole home 下状态文件的路径，都要把目录收到
 0700、把文件收到 0600**；而用户用 ``DHOLE_USAGE_LOG`` 显式指定的外部路径，
@@ -166,19 +166,22 @@ class TestUsageLogPermissions:
         assert json.loads(lines[1])["error"] == "boom"
 
 
-# ─── 另外三个状态文件 ────────────────────────────────────────────────────
+# ─── 其余状态文件 ────────────────────────────────────────────────────────
 
 class TestOtherStateFiles:
-    def test_search_feedback_tightens_both(self, chmod_spy, monkeypatch, tmp_path):
-        from dhole_mcp import search
+    def test_cdp_hosts_tightens_both(self, chmod_spy, monkeypatch, tmp_path):
+        """``cdp_hosts.json`` 记的是「哪些主机的已登录 Chrome 可以连」—— 这台机器
+        上它等同于「谁的浏览器里那些站点算你」。17.0 先问再记的新落盘处，权限必须
+        和别的凭据文件同级。"""
+        from dhole_mcp import server
 
-        target = tmp_path / "search_feedback.json"
-        monkeypatch.setattr(search, "_feedback_file", lambda: str(target))
-        monkeypatch.setenv("DHOLE_SEARCH_FEEDBACK", "1")
-        search.record_search_feedback("https://example.org/page")
+        target = tmp_path / "cdp_hosts.json"
+        monkeypatch.setattr(server, "_cdp_hosts_file", lambda: str(target))
+        server._cdp_authorize_host("127.0.0.1")
 
         assert (str(tmp_path), oct(0o700)) in chmod_spy, chmod_spy
         assert (str(target), oct(0o600)) in chmod_spy, chmod_spy
+        assert json.loads(target.read_text(encoding="utf-8"))["hosts"] == ["127.0.0.1"]
 
     def test_circuit_state_tightens_dir(self, chmod_spy, monkeypatch, tmp_path):
         from dhole_mcp import search_metasearch as ms
@@ -248,16 +251,21 @@ class TestRealModeOnPosix:
         assert stat.S_IMODE((home / "usage.jsonl").stat().st_mode) == 0o600
         assert stat.S_IMODE(home.stat().st_mode) == 0o700
 
-    def test_search_feedback_lands_0600(self, monkeypatch, tmp_path):
-        from dhole_mcp import search
+    def test_cdp_hosts_lands_0600(self, monkeypatch, tmp_path):
+        """``cdp_hosts.json`` 在 POSIX 上真的落到 0600/0700，不只是"发过 chmod"。
 
-        target = tmp_path / "home" / "search_feedback.json"
-        monkeypatch.setattr(search, "_feedback_file", lambda: str(target))
-        monkeypatch.setenv("DHOLE_SEARCH_FEEDBACK", "1")
-        search.record_search_feedback("https://example.org/page")
+        直接钉 ``_cdp_hosts_file`` 而不是 DHOLE_HOME：conftest 把这个文件指到了
+        测试临时目录（防止一次 confirm=true 写进用户真实的围栏）。
+        """
+        from dhole_mcp import server
+
+        home = tmp_path / "home"
+        target = home / "cdp_hosts.json"
+        monkeypatch.setattr(server, "_cdp_hosts_file", lambda: str(target))
+        server._cdp_authorize_host("127.0.0.1")
 
         assert stat.S_IMODE(target.stat().st_mode) == 0o600
-        assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700
+        assert stat.S_IMODE(home.stat().st_mode) == 0o700
 
 
 def test_python_is_actually_from_src():

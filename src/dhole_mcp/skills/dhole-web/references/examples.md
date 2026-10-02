@@ -87,23 +87,23 @@ Rejections list the keys the tool actually accepts — follow the error.
 ]}}
 ```
 
-**Element screenshot + QR decode** (needs `DHOLE_MULTIMODAL=1` in the server env — the flag declares that the calling agent can see images; `decode_qr` itself works without the flag and lists decoded texts in the receipt):
+**Element screenshot + QR decode** (always available in 17.0; `decode_qr` lists decoded texts in the receipt):
 ```json
 {"url": "https://example.com/ticket", "options": {"force_fetcher": "stealthy", "actions": [
   {"screenshot": {"selector": ".qr-panel", "decode_qr": true}}
 ]}}
 ```
 
-**Answer located to one paragraph** (`focus_mode="best"` returns the single highest-scoring block plus its heading instead of a block list; picking is semantic when the operator enabled `DHOLE_NEURAL_FOCUS`, BM25 otherwise):
+**Answer located to one paragraph** (`focus_mode="best"` returns the single highest-scoring block plus its heading instead of a block list; picking is semantic with `focus_engine="neural"`, BM25 by default):
 ```json
 {"url": "https://docs.example.com/guide", "options": {"focus": "retry policy", "focus_mode": "best"}}
 ```
 
-**Choosing the focus scorer for one call** (`focus_engine` — the flag is the operator's permission, this is this call's willingness):
+**Choosing the focus scorer for one call** (`focus_engine` — a pure per-call choice in 17.0: omitted or `"bm25"` is keyword focus, `"neural"` is the local cross-encoder):
 ```json
 {"url": "https://docs.example.com/guide", "options": {"focus": "retry policy", "focus_engine": "bm25"}}
 ```
-`"bm25"` is honored even with `DHOLE_NEURAL_FOCUS=1` on, so a cheap re-read does not require turning a machine-wide capability off. `"neural"` on a server without that permission is **refused** (`focus_engine_not_permitted`) instead of silently running BM25 — say so and offer `dhole init --neural` as the user's decision. Same key works in `smart_crawl`'s options, where it matters more: the semantic path costs ~12.5s of CPU per page times `max_pages`.
+Same key works in `smart_crawl`'s options, where it matters more: the semantic path costs ~12.5s of CPU per page times `max_pages`, so the cheap default is what runs when nobody names it. `"neural"` with the model missing is **refused** (`neural_focus_model_missing`) instead of silently downloading ~280MB — offer `dhole model use bge-zh` or the automatic download on the first neural `smart_search`.
 
 **Structured extraction** (repeated records REQUIRE a "container selector + sub-schema": sub-selectors evaluate inside each container, one record per container; a bare top-level selector returns a page-wide union with no record attribution):
 ```json
@@ -128,7 +128,7 @@ Rejections list the keys the tool actually accepts — follow the error.
 {"url": "https://hard-site.com/page", "options": {"force_fetcher": "stealthy"}}
 ```
 
-**CDP attach — login-walled page via the user's real Chrome** (requires the user's one-time setup: copy-profile Chrome with `--remote-debugging-port=9222` + `DHOLE_CDP_ATTACH=1` / `DHOLE_CDP_HOSTS` in the server env — configuration.md "CDP attach"). `check_login` returns `{logged_in: true/false/null, signals, cookie_names}` — cookie names only, never values; `schema=` cannot combine with `cdp_url`:
+**CDP attach — login-walled page via the user's real Chrome** (requires the user's one-time setup: copy-profile Chrome with `--remote-debugging-port=9222` — configuration.md "CDP attach"; the FIRST attach to a host is refused with `cdp_authorization_required` and authorizing it is one re-call with `"confirm": true` after the user says yes). `check_login` returns `{logged_in: true/false/null, signals, cookie_names}` — cookie names only, never values; `schema=` cannot combine with `cdp_url`:
 ```json
 {"url": "https://portal.example.com/dashboard", "options": {"cdp_url": "http://127.0.0.1:9222", "check_login": true}}
 ```
@@ -174,7 +174,7 @@ List pages return a structured link listing (`page_type=list`), not body text �
 ```json
 {"url": "https://example.com", "options": {"save_to": "C:/tmp/page.png", "full_page": true}}
 ```
-Multimodal agents receive the image inline; text-only agents read the absolute path from `save_to` and open it with their own image tool. With `DHOLE_MULTIMODAL=1` the tool also takes `options.selector` (element crop) and `options.decode_qr: true` (local QR decode; works without the flag) — refused with an explanation while the flag is off.
+Agents that can see images receive it inline; text-only agents read the absolute path from `save_to` and open it with their own image tool. The tool also takes `options.selector` (element crop) and `options.decode_qr: true` (local QR decode) — both always available in 17.0.
 
 ## The remaining four (top-level parameters only)
 
@@ -192,9 +192,9 @@ Multimodal agents receive the image inline; text-only agents read the absolute p
 {"all": true}
 ```
 
-## The opt-in four (registered only when the operator enabled them)
+## The stateful four (always registered in 17.0)
 
-`recipe` / `watch` need `DHOLE_TASKS=1`; `vault` / `login` need `DHOLE_VAULT=1`. All four take **top-level parameters only** — there is no `options` bag.
+All four take **top-level parameters only** — there is no `options` bag.
 
 ```json
 // recipe: record a chain once — validated at save time by the same validator the executor uses,

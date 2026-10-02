@@ -12,7 +12,6 @@ single source of truth for those paths:
       models/                  downloaded model files (neural reranker)
       circuit_breaker.json     engine cooldown state
       engine_stats.json        per-engine parse yield (who returned 0 usable results)
-      search_feedback.json     opt-in implicit domain preference
       usage.jsonl              opt-in local call log
       last_version             last version offered by the updater
       repair.py                self-heal script (stdlib-only, survives a broken install)
@@ -126,11 +125,9 @@ def profiles_dir() -> Path:
     """Parent of named persistent browser profiles (``~/.dhole/profiles/``).
 
     Each profile is a full Chrome user-data-dir: cookies, localStorage, login
-    state. It exists ONLY when the user opts in via ``DHOLE_BROWSER_PROFILE``
-    (or a per-call profile_name) — the default launch path is still a
-    ``tempfile.mkdtemp`` scratch dir that dies on close, so an opt-in profile
-    is an explicit "keep me signed in" decision, and everything it holds is
-    credentials-grade: created 0700 (owner-only on POSIX; on Windows the
+    state. 17.0 没有任何调用方给它取名（按环境的 ``DHOLE_BROWSER_PROFILE`` 已
+    注销，按次参数在 B5 随 ``cred_defaults`` 回来），所以这个目录通常不存在。
+    它一旦存在就是"keep me signed in"的产物，里面每一项都是凭据级：created 0700 (owner-only on POSIX; on Windows the
     profile ACL under the user's home directory is the real boundary).
     """
     return ensure_private_dir(home() / "profiles")

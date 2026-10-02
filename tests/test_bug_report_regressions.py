@@ -989,20 +989,23 @@ class TestParsePathResolution:
         assert target == str(tmp_path / "report.csv")
         assert tried[0] == target
 
-    def test_dhole_workdir_is_honored(self, tmp_path, monkeypatch):
-        """The MCP host's cwd is its own install directory; DHOLE_WORKDIR is the
-        documented way to point relative paths at the project."""
+    def test_retired_workdir_knob_changes_nothing(self, tmp_path, monkeypatch):
+        """17.0：``DHOLE_WORKDIR`` 已注销 —— 设了它不报错，也不许参与解析。
+        相对路径的每次调用入口只剩 ``cwd`` 参数一个。"""
         work = tmp_path / "project"
         work.mkdir()
         (work / "notes.html").write_text("<h1>x</h1>", encoding="utf-8")
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("DHOLE_WORKDIR", str(work))
-        target, _ = _resolve_local_path("notes.html")
+        target, tried = _resolve_local_path("notes.html")
+        assert target == ""
+        assert not any(p.startswith(str(work)) for p in tried), "退役旋钮不许进入候选路径"
+
+        target, _ = _resolve_local_path("notes.html", cwd=str(work))
         assert target == str(work / "notes.html")
 
     def test_miss_lists_every_directory_tried(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("DHOLE_WORKDIR", str(tmp_path / "elsewhere"))
         target, tried = _resolve_local_path("nope.csv")
         assert target == ""
         assert any(p.endswith("nope.csv") for p in tried)
@@ -1018,9 +1021,9 @@ class TestParsePathResolution:
         """cwd 是唯一不依赖 host 的通道，所以它必须最优先。
 
         背景：宿主进程的 cwd 是它自己的安装目录（实测 D:\\Program Files\\Qoder），
-        DHOLE_WORKDIR 要 host 配置，MCP roots 在 SDK 里已弃用（SEP-2577）。剩下
-        「agent 从 system prompt 读到工作目录再传进来」这条路 —— 传了就必须赢过
-        环境变量和进程 cwd，否则这个参数等于没加。
+        MCP roots 在 SDK 里已弃用（SEP-2577），``DHOLE_WORKDIR`` 在 17.0 注销。
+        剩下「agent 从 system prompt 读到工作目录再传进来」这条路 —— 传了就必须
+        赢过进程 cwd 和 home，否则这个参数等于没加。
         """
         session = tmp_path / "session"
         elsewhere = tmp_path / "elsewhere"
@@ -1028,22 +1031,20 @@ class TestParsePathResolution:
             d.mkdir()
             (d / "notes.csv").write_text(body, encoding="utf-8")
         monkeypatch.chdir(elsewhere)
-        monkeypatch.setenv("DHOLE_WORKDIR", str(elsewhere))
         target, tried = _resolve_local_path("notes.csv", cwd=str(session))
         assert target == str(session / "notes.csv")
         assert tried[0] == target, "cwd 的候选必须排在最前，否则报错信息会误导"
 
     def test_cwd_without_the_file_falls_through_and_is_still_listed(self, tmp_path, monkeypatch):
-        """cwd 指错地方不是错误 —— 继续按既有顺序找，并且把试过的路径都列出来。"""
-        work = tmp_path / "project"
-        work.mkdir()
-        (work / "notes.html").write_text("<h1>x</h1>", encoding="utf-8")
+        """cwd 指错地方不是错误 —— 继续按既有顺序往下找，并且把试过的路径都列出来。"""
+        here = tmp_path / "here"
+        here.mkdir()
+        (here / "notes.html").write_text("<h1>x</h1>", encoding="utf-8")
         empty = tmp_path / "empty"
         empty.mkdir()
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("DHOLE_WORKDIR", str(work))
+        monkeypatch.chdir(here)
         target, tried = _resolve_local_path("notes.html", cwd=str(empty))
-        assert target == str(work / "notes.html")
+        assert target == str(here / "notes.html")
         assert str(empty / "notes.html") in tried
 
     def test_absolute_path_ignores_cwd(self, tmp_path):
@@ -1094,8 +1095,11 @@ class TestParseEnvelope:
         r = await server.parse("missing.html")
         assert r.status == 0
         assert r.content == []
-        assert "DHOLE_WORKDIR" in r.error
+        assert "File not found" in r.error
         assert "missing.html" in r.error
+        # 17.0：报错不再提 DHOLE_WORKDIR（旋钮已注销），只给真正的入口 cwd 参数
+        assert "DHOLE_WORKDIR" not in r.error
+        assert "cwd=" in r.error
 
     @pytest.mark.asyncio
     async def test_cwd_argument_changes_which_file_is_parsed(self, tmp_path, monkeypatch):

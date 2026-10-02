@@ -1,11 +1,9 @@
 """Local QR decoding for captured pixels (deterministic work, not vision).
 
 Decoding a QR code is not a model task: the format is deterministic and a
-local decoder answers it exactly. This module exists so a TEXT-ONLY agent can
-still read a login QR / check-in URL / token off a page — the result travels
-over the text channel, no image ever has to be seen. It is deliberately NOT
-gated behind ``DHOLE_MULTIMODAL``: the flag declares "the calling agent has
-eyes"; decoding QRs needs none.
+local decoder answers it exactly. This module exists so an agent can read a
+login QR / check-in URL / token off a page — the result travels over the text
+channel, no image ever has to be seen.
 
 The decoder is OpenCV's QRCodeDetector (``opencv-python-headless``, an ``[all]``
 extra), imported lazily like every other heavy optional dep (ocr.py's pattern):

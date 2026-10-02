@@ -45,11 +45,12 @@ logger = logging.getLogger("dhole-mcp.focus")
 # 依赖标准库，两边都能 import；contextvar 对 ``asyncio.to_thread`` 也是透传的，
 # 所以爬取线程读到的是发起那次调用的值。
 #
-# 语义：**操作者的 flag 是许可，按次参数是意愿**。
-#   ""       跟随 DHOLE_NEURAL_FOCUS —— 与以前逐字节相同（不传就是这样）
-#   "bm25"   这一页明确走便宜的路（~23ms/页），即使 flag 开着
-#   "neural" 明确要语义分（~12.5s/页），但意愿不能自己造出许可：flag 关着时
-#            在工具入口就被拒绝并说明怎么打开，不是静默降级
+# 语义（17.0）：focus 打分引擎是**纯按次选择** —— DHOLE_NEURAL_FOCUS 许可门
+# 已删除（写死判据：要不要每页 ~12.5s 的 CPU 推理是每一次调用的决定，不是一次
+# 配置；没有全局默认可跟随）。
+#   ""       走 BM25（~23ms/页的便宜默认；不传就是这样）
+#   "bm25"   明确走便宜的路（与 "" 同义，写给读描述的人）
+#   "neural" 明确要语义分（~12.5s/页）；模型缺失在工具入口显式报错，不静默下载
 FOCUS_ENGINE: contextvars.ContextVar[str] = contextvars.ContextVar(
     "dhole.focus_engine", default="")
 ENGINES = ("bm25", "neural")
@@ -58,8 +59,8 @@ ENGINES = ("bm25", "neural")
 def normalize_engine(value: object) -> str:
     """把客户端给的东西读成 'bm25' / 'neural' / ''。
 
-    不可识别的值取 ''（跟随 flag），和 ``focus_mode`` 同款宽容：schema 里有
-    enum，拼错的值不该让一次真抓取失败——但它也不会被当成"我要求神经分"。
+    不可识别的值取 ''（= 不点名，走 BM25），和 ``focus_mode`` 同款宽容：schema 里有
+    enum，拼错的值不该让一次真抓取失败 —— 但它也不会被当成"我要求神经分"。
     """
     if isinstance(value, str):
         candidate = value.strip().lower()
@@ -68,22 +69,13 @@ def normalize_engine(value: object) -> str:
     return ""
 
 
-def engine_wants_neural(flag_on: bool) -> bool:
-    """意愿侧：本次调用**要求**语义打分吗（不看操作者是否许可）。"""
+def engine_wants_neural() -> bool:
+    """本次调用**点名**语义打分了吗。只认按次的 ``options.focus_engine``：
+    没点名（""）或点名 "bm25" 都是 BM25 —— 神经分是显式选择，从来不该默认发生。"""
     choice = FOCUS_ENGINE.get()
     if choice:
         return choice == "neural"
-    return flag_on
-
-
-def neural_for_call(flag_on: bool) -> bool:
-    """语义打分真的会跑 = 要求 ∧ 许可。
-
-    ``flag_on`` 由调用方读自己的开关（server 与 crawl 各有一份，crawl 那份走
-    env_registry 以留下 ``--doctor`` 能报的拼写警告），所以两处判定共用一条规则，
-    而 monkeypatch 那份开关仍然有效。
-    """
-    return engine_wants_neural(flag_on) and flag_on
+    return False
 
 # A "word run": letters/digits of any script, split at underscores and
 # punctuation. Unicode-aware (\w) rather than [a-z0-9], so Cyrillic / Greek /
@@ -399,10 +391,12 @@ def focus_content(
 
     ``reranker`` (M-1, neural focus): when a warm ``_Reranker`` is passed, every
     block is scored by the local cross-encoder instead of BM25. The scorer
-    never loads a model and never downloads — callers (``_apply_chunking``)
-    peek ``get_reranker()`` under the ``DHOLE_NEURAL_FOCUS`` flag and arrange
-    the load at the tool entry; a None/failed scorer here falls back to BM25
-    with the header saying so. The cross-encoder does not need the heading
+    never loads a model and never downloads — callers (``_apply_chunking``) peek
+    ``get_reranker()`` only when this call named ``focus_engine='neural'`` (17.0:
+    there is no permission flag; the load is arranged at the tool entry, and a
+    named-but-missing model is refused there rather than downgraded); a
+    None/failed scorer here falls back to BM25 with the header saying so. The
+    cross-encoder does not need the heading
     boost (it reads the pair, not term overlap), and the absolute ``threshold``
     does not apply — the sigmoid scale has its own geometry (on-topic ~0.9+,
     off-topic ~0.001), so only the best-anchored relative cut is used.

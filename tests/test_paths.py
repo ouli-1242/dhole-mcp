@@ -35,18 +35,19 @@ def test_layout_is_one_root(fake_home):
 @pytest.mark.real_state_paths   # 本用例验的就是 paths.py 的落点，不能被隔离 fixture 接管
 def test_every_writer_agrees_on_the_layout(monkeypatch, tmp_path):
     """所有落盘模块都必须走 paths.py，不允许各自 expanduser 再拼一个根。"""
-    from dhole_mcp import cache, reranker, search, search_metasearch, search_proxy
-
+    from dhole_mcp import cache, reranker, search_metasearch, search_proxy, server
     assert cache._CACHE_DIR == paths.cache_dir()
     assert str(reranker.MODEL_DIR).startswith(str(paths.models_dir()))
-    # 三个 metasearch/search 状态文件都必须是**惰性**派生（函数而非 import 期常量）：
+    # 这些状态文件都必须是**惰性**派生（函数而非 import 期常量）：
     # 否则 DHOLE_HOME 只对其中一部分生效（半失效的开关比没有开关更糟），而测试也指
     # 不动它们 —— 跑一次套件就会改掉用户真实的引擎冷却状态/域名偏好。
     monkeypatch.setenv("DHOLE_HOME", str(tmp_path / "moved"))
     moved = tmp_path / "moved"
-    assert search._feedback_file() == str(moved / "search_feedback.json")
     assert search_metasearch._circuit_state_file() == str(moved / "circuit_breaker.json")
     assert search_metasearch._engine_stats_file() == str(moved / "engine_stats.json")
+    # cdp_hosts.json 由 server 写、doctor 读，两边都走 paths.file —— 它记的是「哪些
+    # 主机的 CDP 授权过」，落错地方等于把围栏留在另一个家里。
+    assert server._cdp_hosts_file() == str(moved / "cdp_hosts.json")
     assert search_proxy._config_path() == paths.file("search_proxies.json")
 
 

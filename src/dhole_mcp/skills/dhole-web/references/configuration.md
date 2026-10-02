@@ -1,11 +1,11 @@
 # Configuration Guide
 
-Users rarely read READMEs, but many problems (blocked engines, internal-host false positives, weak results, context bloat) are solved by **changing one setting**. This volume is organized by "when to touch what". All variables are optional; zero-config works by default.
+17.0 大众化一刀切：`pip install dhole-mcp` 接上宿主就能用，**能力全部默认在线**。所以可配置的东西只剩 11 个 `DHOLE_*` 变量 —— 每一个都是"这台机器的事实"（代理、内网、密钥、状态目录），而不是"要不要开某个能力"。所有变量可选；零配置即默认全量行为。
 
 ## The rules of changing things
 
-- **Single-call behavior** → call parameters (`ignore_robots` / `allow_private` / `proxy` / `cache_ttl` …). No config edit, no restart. Prefer this whenever it suffices
-- **Process-wide behavior, two doors.** `dhole config set DHOLE_X value` writes `~/.dhole/config.json`, which is re-read when the file changes — knobs read per call take effect on the next call, no restart. `dhole config list` shows what the file sets, whether env shadows it, and which values are secret without printing them. The host's `env` block still works and **always wins** (an operator's existing env configuration must never be silently overridden by a file); editing it needs a host restart. Knobs marked "read at startup" need a restart through either door — one tool set cannot be changed after `tools/list` was sent
+- **Single-call behavior** → call parameters (`ignore_robots` / `allow_private` / `proxy` / `cache_ttl` / `focus_engine` …). No config edit, no restart. Prefer this whenever it suffices
+- **Process-wide behavior, two doors.** `dhole config set DHOLE_DEFAULT_ENGINES baidu,bing` writes `~/.dhole/config.json`, which is re-read when the file changes — knobs read per call take effect on the next call, no restart. `dhole config list` shows what the file sets, whether env shadows it, and which values are secret without printing them. The host's `env` block still works and **always wins** (an operator's existing env configuration must never be silently overridden by a file); editing it needs a host restart
 - **Process-wide, the old way** → environment variables, in the host's MCP config under the `dhole` server's `env` block, **then restart the host**:
 
 ```json
@@ -14,8 +14,7 @@ Users rarely read READMEs, but many problems (blocked engines, internal-host fal
     "dhole": {
       "command": "dhole",
       "env": {
-        "DHOLE_SEARCH_PROXY": "http://127.0.0.1:7890",
-        "DHOLE_SSRF_DNS_RECHECK": "0"
+        "DHOLE_SEARCH_PROXY": "http://127.0.0.1:7890"
       }
     }
   }
@@ -24,6 +23,7 @@ Users rarely read READMEs, but many problems (blocked engines, internal-host fal
 
 - Values are strings; booleans are `"1"` / `"0"`
 - Changing env vars edits the user's machine — present options and get consent first
+- **Retired knobs are silently ignored.** 17.0 deleted the old on/off switches (wire shape, tool groups, multimodal, neural-focus license, cooldown tuning, self-update…); their values are now fixed in code because 能算清的写死. A stale `DHOLE_…=1` in an env block does nothing and is not an error — `dhole --doctor` is the one place that names what a host still sets that no longer does anything
 
 ## Variables by scenario
 
@@ -34,7 +34,7 @@ Users rarely read READMEs, but many problems (blocked engines, internal-host fal
 
 ### Scenario: Clash / sing-box TUN proxy (fake-IP mode)
 
-- `DHOLE_SSRF_DNS_RECHECK` — **normally not needed**: a fake-IP TUN resolver (Clash / sing-box TUN) is detected at first use and the recheck layer skips itself, with the reason carried in `metadata.ssrf_recheck` and the address/network named by `dhole --doctor`. Set `on` to force the guard back on (then every public site is flagged internal again); set `0` to skip the layer without relying on the probe. Do not set it for plain HTTP proxies, and never set it to make an internal-host target reachable — that is `allow_private` / the host list's job
+- Nothing to set. A fake-IP resolver (every public name answering with an address in `198.18.0.0/15` / `fc00::/7`) is detected by a one-time startup probe, and only the SSRF DNS-recheck layer skips itself — the reason travels in `metadata.ssrf_recheck` on every affected response, and `dhole --doctor`'s "resolver reality" row names the address/network. IP-literal, hostname and cloud-metadata guards stay on; there is no manual override (放宽守卫需要证据，不需要猜测)
 
 ### Scenario: fetching intranet / local dev services
 
@@ -42,56 +42,36 @@ Users rarely read READMEs, but many problems (blocked engines, internal-host fal
 - **Cloud metadata endpoints (169.254.169.254, metadata.google.internal, …) are never allowed**, allowlist or not
 - With a proxy running, loopback traffic may be intercepted by the proxy itself (502 instead of connection-refused) — `NO_PROXY` needs `127.0.0.1,localhost` (see troubleshooting)
 
-### Scenario: pages behind a login wall — CDP attach (17.0)
+### Scenario: pages behind a login wall — CDP attach
 
-One-time user setup, two steps. (1) Launch a **copy-profile** Chrome with remote debugging (Chrome 136+ refuses debugging on the default profile):
+One-time user setup: launch a **copy-profile** Chrome with remote debugging (Chrome 136+ refuses debugging on the default profile) and log into the target site in that window once:
 
 ```
 chrome.exe --user-data-dir=D:\dhole-chrome --remote-debugging-port=9222
 ```
 
-Log into the target site in that window once. (2) Turn the two gates on - one command does it and prints the boundary it is drawing:
-
-```
-dhole init --cdp portal.example.com            # dry-run: shows the hosts, the launch line, the fence rules
-dhole init --cdp portal.example.com --yes      # writes both gates to ~/.dhole/config.json
-```
-
-By hand it is `dhole config set DHOLE_CDP_ATTACH 1` plus `dhole config set DHOLE_CDP_HOSTS portal.example.com`. Both are read **per call**, so neither the file door nor the env block needs a host restart.
-
-- `DHOLE_CDP_ATTACH=1` — master switch, **default off**. Attaching = handing dhole read access to every site logged into that Chrome, so it is deliberately gated: without it every `cdp_url` call is refused (`cdp_attach_disabled`, no request sent)
-- `DHOLE_CDP_HOSTS` — comma-separated host allowlist (e.g. `portal.example.com,mail.example.com`). Enforced at the route level (including page-JS subresource requests) and at the fetch entry; a non-listed host fails with `cdp_host_not_allowed`. **The match is an EXACT hostname**, not a domain or a suffix: `example.com` does not cover `www.example.com`, and a page that loads scripts from a CDN needs that CDN named too. No wildcards - `dhole init --cdp` reduces a pasted URL to its hostname, merges with any list already set (it never clobbers the user's fence), and prints the reduced form back so nothing is written that the user did not mean
-- `dhole --doctor` prints a `cdp fence` row when attach is on: an empty allowlist is reported as un-fenced (it is a legal choice, so it is info, not a failure) and names the command that fences it
-
-The call itself is per-call, no restart needed afterwards:
+Then just call — the first attach asks, the user answers once:
 
 ```json
 {"url": "https://portal.example.com/dashboard", "options": {"cdp_url": "http://127.0.0.1:9222", "check_login": true}}
 ```
 
-- The response marks `cdp_attached: true`; attach events go to the audit log (`DHOLE_USAGE_LOG=1`). Every attach is visible
+- **先问再记**: attaching = handing dhole read access to every site logged into that Chrome, so the FIRST attach to a host is refused with `cdp_authorization_required` and **nothing is executed**. Re-call the same call with `confirm=true` to approve that one host; the approval is persisted to `~/.dhole/cdp_hosts.json` and every later attach is fenced to the authorized set. Revoke = delete that file
+- The fence is enforced at the route level (including page-JS subresource requests) and at the fetch entry; a non-authorized host fails instead of navigating. **The match is an EXACT hostname**, not a domain or a suffix: `example.com` does not cover `www.example.com`, and a page that loads scripts from a CDN needs that CDN confirmed too. No wildcards
+- The response marks `cdp_attached: true`; authorize/refuse events go to the audit log (`DHOLE_USAGE_LOG=1`). Every attach decision is visible
 - `check_login` returns a three-state verdict from DOM shape + cookie **names** (values never leave the browser — no model involved). `false` = session expired, ask the user to re-login in that Chrome window
 - `cdp_url` forces the browser tier, bypasses the public cache and HTTP tier, and cannot combine with `schema=`
 - Attach reuses the user's existing session — it does **not** solve DataDome / Akamai / interactive Turnstile, and 2FA still needs the user
 
-Related knobs (not the attach path itself): `DHOLE_BROWSER_PROFILE` — persist dhole's own stealthy-browser profile under `~/.dhole/profiles/<name>/` instead of a temp dir; `DHOLE_COOKIE_TTL_S` — HTTP-tier session-cookie lifetime (default 86400, clamped 60s–30d) so a working HTTP login outlives a day. Since 17.0 a **named** `session_id` also bridges the jar into that session's dedicated stealthy browser (seeded before navigation, harvested after) — no env var needed, just pass the same `session_id` to browser-tier calls; the shared auto session and CDP attach never bridge.
+### Scenario: screenshots an agent can see / semantic focus
 
-### Scenario: page operation, screenshots an agent can see, semantic focus (17.0)
+- Element captures are **always on**: `options.selector` crops on the `screenshot` tool and `{"screenshot": {...}}` inside `actions` (element shots ride the response as image blocks). The captcha discipline (≤3 tries then hand off; DataDome / Akamai / interactive Turnstile / 2FA / sliders always hand off) is part of the tool descriptions. `decode_qr` (local OpenCV QR decode, in the `[all]` extra) is deterministic local work
+- `focus` block-picking scores with BM25 by default. `options.focus_engine="neural"` switches that ONE call to the local cross-encoder (~12.5s of CPU per page — budget timeout for bulk); model missing = explicit error (`neural_focus_model_missing`), never a silent download. The model arrives on the first neural smart_search (one-time, resumable) or via `dhole model use <name>`; `options.focus_mode="best"` returns the single top block + heading
 
-- `DHOLE_MULTIMODAL=1` — declare that **the calling agent can see images** (dhole stays zero-model; recognition is yours). Unlocks `options.selector` element crops on the `screenshot` tool and `{"screenshot": {...}}` actions (element shots ride the response as image blocks), and appends the captcha discipline (≤3 tries then hand off; DataDome / Akamai / interactive Turnstile / 2FA / sliders always hand off) to the tool descriptions. Off by default; with it off those options are refused with an explanation. `decode_qr` (local OpenCV QR decode, in the `[all]` extra) is deterministic local work and needs no flag
-- `DHOLE_NEURAL_FOCUS=1` — `focus` block-picking (`smart_fetch`) and focus page-filtering (`smart_crawl`) score semantically with the local reranker instead of BM25 keyword overlap; default off (BM25). Model missing = explicit error (`neural_focus_model_missing`), never a silent downgrade. Turn it on with `dhole init --neural` (writes this flag **and** fetches the ~280MB model, which the flag without the file cannot use). Read per call, so no restart. This flag is the **permission**; `options.focus_engine="bm25"|"neural"` is the per-call **willingness** — `"bm25"` is honored even with the flag on, `"neural"` without it is refused rather than downgraded. Same model as search ranking: `dhole model use <name>` swaps it; `options.focus_mode="best"` (per call, no config) returns the single top block + heading
+### Scenario: repeatable tasks, change monitoring, stored credentials
 
-### Scenario: repeatable tasks and change monitoring (17.0 opt-in)
-
-Two tools that persist state across sessions, off by default because their schemas add ~2.6k chars to every connection:
-
-- `DHOLE_TASKS=1` — registers `recipe` (save a `url` + `actions` chain, replay it later) and `watch` (diff a page against its last snapshot). State lives in `~/.dhole/tasks.db`: action chains and page baselines, **no credentials**. Recipes deliberately store no `session_id` — pass it per run. Forget everything by deleting the file; per-item removal is `recipe(op='delete')` / `watch(op='remove')`
-- Naming either tool in `DHOLE_TOOLS` enables it without the group flag
-
-### Scenario: signing in with a credential the user already stores (17.0 opt-in)
-
-- `DHOLE_VAULT=1` — registers `vault` (read item **metadata** from the user's own Bitwarden `bw` / 1Password `op`) and `login` (assisted sign-in). Off by default: it only does anything if the user actually runs one of those CLIs, and it is the one pair that touches their credentials
-- Prerequisites are the user's: the CLI installed and its vault unlocked (`bw unlock` / `op signin`). `vault(op='status')` reports which manager answered, whether it is unlocked, and the fix when it is not — a missing manager is a note, not an error
+- `recipe` (save a `url` + `actions` chain, replay it later) and `watch` (diff a page against its last snapshot) are **always registered**. State lives in `~/.dhole/tasks.db`: action chains and page baselines, **no credentials**. Recipes deliberately store no `session_id` — pass it per run. Forget everything by deleting the file; per-item removal is `recipe(op='delete')` / `watch(op='remove')`
+- `vault` (read item **metadata** from the user's own Bitwarden `bw` / 1Password `op`) and `login` (assisted sign-in) are also always registered. Prerequisites are the user's: the CLI installed and its vault unlocked (`bw unlock` / `op signin`). `vault(op='status')` reports which manager answered, whether it is unlocked, and the fix when it is not — a missing manager is a note, not an error
 - **Values never leave the process**: `vault` has no field for a password or a TOTP secret, and `login` reads the password server-side and reports the item name instead. Nothing reaches the transcript, the cache, or the log
 - `login` is **gated on approval**: without `confirm=true` it only detects the form and returns the plan. Present that to the user before re-calling with `confirm=true`
 - CAPTCHA / 2FA / DataDome-class walls remain hand-offs; this path logs in, it does not defeat challenges
@@ -99,25 +79,14 @@ Two tools that persist state across sessions, off by default because their schem
 ### Scenario: poor search results / want a different pool
 
 - `DHOLE_DEFAULT_ENGINES` — override the keyless default pool (default `baidu,bing,sogou,bing_global,yandex,brave`); opt-in names may be included
-- `DHOLE_SEARCH_DEADLINE` — whole-search deadline in seconds (default 16)
-- `DHOLE_SEARCH_FEEDBACK=1` — domain preference: domains that fetched well gain ranking weight (off by default)
-- Keyed backends (per-call billing, off by default, only run when named): `DHOLE_BRIGHTDATA_API_KEY` (optional `DHOLE_BRIGHTDATA_ZONE` default `dhole` and `DHOLE_BRIGHTDATA_COUNTRY` default `us`, both read at import so a change needs a host restart) / `DHOLE_TAVILY_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_BOCHA_API_KEY`
-
-### Scenario: cooldowns too frequent / pacing
-
-Three cooldown tiers (defaults 60s / 600s / 600s; out-of-range values are clamped and explained):
-- `DHOLE_ENGINE_COOLDOWN` — ordinary blocks (5–1800)
-- `DHOLE_ENGINE_CHALLENGE_COOLDOWN` — 3 consecutive challenge pages (60–7200)
-- `DHOLE_ENGINE_CONN_COOLDOWN` — 3 consecutive connection failures (60–7200)
-- `DHOLE_ENGINE_HEARTBEAT` — patrol interval for cooling engines (default 300s, `0`=off); failed probes never extend penalties
+- Keyed backends (per-call billing, only run when named): `DHOLE_TAVILY_API_KEY` / `DHOLE_BOCHA_API_KEY`. Without a key a named backend answers with a diagnosable `no_key` error instead of silently vanishing
+- The whole search has a fixed 16s deadline; per-engine cooldowns are fixed too (60s after a hard block, 600s after repeated challenge pages or connection failures, 300s patrol heartbeat) — `dhole engines list` shows what is cooling and why, `dhole engines reset` clears it
 
 ### Scenario: context overhead too high
 
 - `DHOLE_TOOLS` — register only the listed tools (`smart_fetch,smart_search` ≈ −49% connection overhead). Worth it for lightweight search-and-fetch sessions
-- `DHOLE_DEFAULT_CONTENT_CHARS` — default body budget (default 40000, range 500–200000)
-- `DHOLE_STRUCTURED_CONTENT=1` — also emit a structuredContent copy per call (doubles volume); only when a downstream parses structured fields
-- `DHOLE_OUTPUT_SCHEMA=1` — declare outputSchema in tools/list (+14.6% connection overhead); only for validating clients or human-facing UIs
-- `DHOLE_WIRE_FULL=1` — restore the pre-slim response shape (every field always present); for callers that read `result["field"]` directly and don't understand absence-means-default
+- `DHOLE_DEFAULT_CONTENT_CHARS` — default body budget (default 40000, range 500–200000). Lower = fewer tokens now, the rest stays reachable via `offset`/`next_offset`
+- The wire shape is fixed: responses are compact (a field that is ABSENT is at its documented default), text-only, with no advertised outputSchema
 
 ### Scenario: compliance / fetch behavior
 
@@ -125,31 +94,26 @@ Three cooldown tiers (defaults 60s / 600s / 600s; out-of-range values are clampe
 
 ### Scenario: browser overhead
 
-- `DHOLE_BROWSER_IDLE_TIMEOUT` — idle shutdown seconds (default 300, `0`=never)
-- `DHOLE_NO_BROWSER_PREWARM=1` — skip prewarming the stealthy browser at startup (default prewarms, saving a 3–5s cold start on first fetch)
+- Fixed in 17.0: the stealthy browser prewarms at startup and closes after 300s idle (relaunch ~2-5s on the next fetch). No knobs — a lightweight session that never touches browser-tier tools pays nothing anyway
 
 ### Scenario: data location / privacy / diagnostics
 
 - `DHOLE_HOME` — state directory (default `~/.dhole`: plaintext body cache, **cookie jar with credentials**, plaintext proxy-pool credentials; point elsewhere on shared machines; delete the directory for a full cleanup)
-- `DHOLE_WORKDIR` — extra directory `parse` tries for relative paths (after the `cwd` parameter)
-- `DHOLE_USAGE_LOG=1` — local call log (tool names / durations / redacted errors; no parameter values, no network)
+- `DHOLE_USAGE_LOG=1` — local call log (tool names / durations / redacted errors; no parameter values, no network). CDP authorize/refuse events land here too
 - `DHOLE_HF_ENDPOINT` (or `HF_ENDPOINT`) — rerank-model download mirror; default tries huggingface.co then falls back to hf-mirror.com; setting it pins one source (set `https://hf-mirror.com` when downloads stall in CN)
-- `DHOLE_NO_AUTO_REPAIR=1` — on ImportError, print the fix command instead of auto-reinstalling
-- `DHOLE_UPDATE_PACKAGE` — the package name the self-update path installs (`dhole` and `dhole -u`). Defaults to `dhole-mcp`; a fork or a private mirror points it elsewhere. Read per call.
-- `DHOLE_UPDATE_INDEX_URL` — pip index URL used by the self-update path, so a machine with no PyPI access can pull `dhole-mcp` from an internal mirror. Read per call.
 
 ## CLI management commands
 
 | Command | Purpose |
 |---|---|
 | `dhole -v` | Version + capability panel (browser / pdf / rerank / engine yield — each missing row is a degraded tier) |
-| `dhole --doctor` | Install check: item-by-item with copy-pasteable fixes; also runs the config audit + fake-ip resolver reality check on this machine |
-| `dhole doctor` | Same output and exit code as `dhole --doctor` (W5: the two spellings are equivalent, use whichever matches the other subcommand you already typed) |
-| `dhole init` | One-shot install + MCP client registration (W8): checks browser deps, offers `playwright install chromium`, detects Claude Desktop / Cursor / Windsurf / VS Code configs, prints the JSON it would add. **Dry-run by default**; only `--yes` writes, and it always leaves a `.bak-<timestamp>` next to every modified file. Exits 0 with manual instructions when no known client is on disk. |
+| `dhole --doctor` | Install check: item-by-item with copy-pasteable fixes; also runs the config audit + fake-ip resolver reality check on this machine, and names any retired `DHOLE_*` a host still sets |
+| `dhole doctor` | Same output and exit code as `dhole --doctor` (the two spellings are equivalent, use whichever matches the other subcommand you already typed) |
+| `dhole init` | One-shot install + MCP client registration: checks browser deps, offers `playwright install chromium`, detects Claude Desktop / Cursor / Windsurf / VS Code configs, prints the JSON it would add. **Dry-run by default**; only `--yes` writes, and it always leaves a `.bak-<timestamp>` next to every modified file. Exits 0 with manual instructions when no known client is on disk. |
 | `dhole engines list` | Per-engine verdict, remaining cooldown, active backoff |
 | `dhole engines probe` | One real query per engine (hits / latency / block reason) |
 | `dhole engines reset` | Clear cooldowns now |
 | `dhole proxy list/add/remove/clear` | Search proxy pool management |
 | `dhole model` / `dhole model use <name>` | Rerank model: `bge-zh` (default, bilingual, ~279MB) / `zh-full` (cross-lingual ~450MB) / `ms-marco` (English-first ~91MB); recalibrate `min_raw_relevance` after switching |
 | `dhole --http --host --port` | Serve over streamable HTTP instead of stdio. **No authentication**: `--host 0.0.0.0` exposes "fetch any URL on your behalf" to the whole network — put a reverse proxy / auth / firewall in front on shared networks |
-| `dhole -u` | Self-update (off in the personal fork; update via `git pull && pip install -e .` then restart the host) |
+| `dhole -u` | Self-update (off in 17.0; update via `git pull && pip install -e .` then restart the host) |

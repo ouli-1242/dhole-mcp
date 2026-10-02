@@ -289,121 +289,60 @@ class TestTheCompressionCannotReachInsideTheModel:
 
 
 class TestOneChannelPerCall:
-    """structuredContent was a second copy of the same JSON, always paid, never asked for."""
+    """structuredContent was a second copy of the same JSON, always paid, never
+    asked for. 17.0: the opt-in (and the flag that drove it) is gone — the text
+    channel is the whole wire surface, unconditionally."""
 
     def _result(self):
         from dhole_mcp.server import _wire_result
         return _wire_result(_fetch(status=200, content=["body"],
                                    metadata={"title": "T"}))
 
-    def test_the_text_channel_is_the_default_and_carries_the_whole_response(
-            self, monkeypatch):
+    def test_the_text_channel_carries_the_whole_response(self):
         import dhole_mcp.server as server_mod
-        monkeypatch.setattr(server_mod, "_STRUCTURED_CONTENT", False)
         res = server_mod._call_result(self._result())
         assert res.structured_content is None
         assert json.loads(res.content[0].text)["metadata"] == {"title": "T"}
 
-    def test_the_second_copy_returns_when_the_operator_asks(self, monkeypatch):
+    def test_the_flag_that_switched_the_channel_is_gone(self):
         import dhole_mcp.server as server_mod
-        monkeypatch.setattr(server_mod, "_STRUCTURED_CONTENT", True)
-        res = server_mod._call_result(self._result())
-        assert res.structured_content["status"] == 200
+        assert not hasattr(server_mod, "_STRUCTURED_CONTENT"), (
+            "第二通道的开关必须连同第二通道一起删除，不能留一个永远无效的旋钮")
 
-    def test_a_content_list_without_a_payload_passes_through(self, monkeypatch):
+    def test_a_content_list_without_a_payload_passes_through(self):
         # screenshot returns list[ImageContent|TextContent], not a tuple.
         from mcp.types import TextContent
         import dhole_mcp.server as server_mod
-        monkeypatch.setattr(server_mod, "_STRUCTURED_CONTENT", False)
         res = server_mod._call_result([TextContent(type="text", text="x")])
         assert res.content[0].text == "x"
 
 
-class TestTheEscapeHatch:
-    """DHOLE_WIRE_FULL=1：把"缺席即默认"这套契约一键退回旧形状。
+class TestNoEscapeHatch:
+    """17.0: DHOLE_WIRE_FULL 已注销 —— 压缩无条件。"缺席即默认"写进了工具文档
+    与 instructions；一个读不懂缺席语义的调用方也读不懂工具文档。保留逃生阀
+    等于把两套线格式都当永久承诺养着。"""
 
-    压缩把默认值从线上拿走，前提是读的人理解缺席。这条逃生阀存在是因为那个前提
-    未必成立：按 `result["is_truncated"]` 取值的客户端、上下文里已经没有
-    instructions 的长会话。省字节因此变成操作员的一行配置，而不是必须改代码。
-    """
-
-    def _full(self, obj):
+    def test_the_flag_is_gone(self):
         import dhole_mcp.server as server_mod
-        from dhole_mcp.server import _wire_json
-        original = server_mod._WIRE_FULL
-        server_mod._WIRE_FULL = True
-        try:
-            _text, payload = _wire_json(obj)
-        finally:
-            server_mod._WIRE_FULL = original
-        return payload
-
-    def test_full_mode_ships_every_field_at_its_default(self):
-        p = self._full(_fetch())
-        assert set(p) == set(ResponseModel.model_fields), \
-            f"少了 {set(ResponseModel.model_fields) - set(p)}"
-
-    def test_full_mode_returns_the_numeric_precision(self):
-        r = _fetch(duration_ms=1583.716630935669,
-                   fetched_at="2026-09-27T17:06:35.685286+00:00")
-        p = self._full(r)
-        assert p["duration_ms"] == 1583.716630935669
-        assert p["fetched_at"] == "2026-09-27T17:06:35.685286+00:00"
-
-    def test_full_mode_reaches_nested_rows_too(self):
-        from dhole_mcp.crawl import CrawlPage, CrawlResponseModel
-        c = CrawlResponseModel(start_url="https://a.test", pages=[
-            CrawlPage(url="https://a.test/1", status=200, content=["x"],
-                      content_chars=1)])
-        p = self._full(c)
-        assert set(p["pages"][0]) == set(CrawlPage.model_fields)
-
-    def test_full_mode_reaches_projected_rows_too(self):
-        """feed_fetch 那类手拼 dict 也在恢复范围内。"""
-        from dhole_mcp.feed import FeedResult
-        row = FeedResult(source_url="https://x.test/f").model_dump()
-        assert "note" not in _wire_json({"feeds": [row]})[1]["feeds"][0], \
-            "默认仍在压缩"
-        assert "note" in self._full({"feeds": [row]})["feeds"][0]
+        assert not hasattr(server_mod, "_WIRE_FULL")
+        assert not hasattr(server_mod, "_wire_dump_full"), (
+            "旧形状的序列化器要么被引用（两套承诺）要么不存在")
 
     def test_the_default_stays_compact(self):
-        """逃生阀默认关着 —— 否则这轮瘦身等于没做。"""
+        """压缩无条件 —— 否则这轮瘦身等于没做。"""
         p = _wire_json(_fetch())[1]
         assert "is_truncated" not in p and "page_type" not in p
 
-    def test_map_mode_row_pruning_is_out_of_its_scope(self):
-        """说清边界：地图行的按列裁剪是模型自己的序列化器，不是线上策略。
-
-        这条不是"期望它不生效"，而是防止有人把 DHOLE_WIRE_FULL 当成
-        「恢复一切旧行为」的调试开关 —— 它只恢复字段恒定与数字精度。
-        """
+    def test_map_mode_row_pruning_is_untouched(self):
+        """说清边界：地图行的按列裁剪是模型自己的序列化器，不是线上策略。"""
         rows = [CrawlPage(url=f"https://a.test/{i}", status=200,
                           page_type="discover_only", content_ok=True,
                           summary="mapped") for i in range(2)]
         c = CrawlResponseModel(start_url="https://a.test", pages=rows,
                                discover_only=True, pages_discovered=2)
-        p = self._full(c)
-        assert all("page_type" not in row for row in p["pages"]), \
-            "地图模式仍按列裁剪（那是 discover_only 的语义，不是线上策略）"
-        # 顶层的默认值字段则照样回来
-        assert "truncated_by_budget" in p and "sitemaps" in p
-
-
-    def test_the_hatch_reaches_a_real_tool_call(self, monkeypatch):
-        """走 _dispatch，而不是只测 _wire_json：开关必须作用在真实出口上。
-
-        否则「策略被绕过」可能只在这份测试里成立，而 content[0].text 是另一条
-        序列化路径。
-        """
-        import asyncio
-
-        import dhole_mcp.server as server_mod
-        monkeypatch.setattr(server_mod, "_WIRE_FULL", True)
-        content, payload = asyncio.run(server_mod.MasterFetchServer()._dispatch(
-            "parse", {"file_path": "tests/gbk_sample.csv"}))
-        assert set(payload) == set(ResponseModel.model_fields)
-        assert "is_truncated" in json.loads(content[0].text), \
-            "文本通道才是客户端读的那一份"
+        _text, payload = _wire_json(c)
+        assert all("page_type" not in row for row in payload["pages"]), (
+            "地图模式仍按列裁剪（那是 discover_only 的语义，不是线上策略）")
 
 
 class TestThePolicyTableItself:

@@ -6,8 +6,9 @@ smart_fetch / smart_search 全部失败 —— 而唯一的出路是**事先知�
 `DHOLE_SSRF_DNS_RECHECK=0`。README 里那句"零配置即可用"在这台机器上是被实测证伪
 的（见 CHANGELOG W3）。
 
-现在改由环境自己回答：探测到 fake-ip 就跳过这一层，跳过这件事在回包里可见，并且
-留一条硬回的路。下面每一条都在守这个边界的一侧 —— 放宽的只有 DNS 复检这一层。
+现在改由环境自己回答：探测到 fake-ip 就跳过这一层，跳过这件事在回包里可见。17.0 连
+那条硬回的路也收掉了 —— 旋钮注销，判定只由探测结论给出。下面每一条都在守这个边界的
+一侧 —— 放宽的只有 DNS 复检这一层。
 """
 
 import socket
@@ -66,22 +67,27 @@ class TestWhatTheVerdictChanges:
         note = security.recheck_posture_note()
         assert "auto-skipped" in note
         assert "198.18.0.0/15" in note and "fc00::/7" in note
-        # 硬回口子必须写在用户看得见的地方，而不是只在源码注释里
-        assert "DHOLE_SSRF_DNS_RECHECK on" in note
+        # 只放宽一层这件事也必须写在用户看得见的地方
+        assert "Only the DNS recheck layer is off" in note
+        # 17.0：旋钮已注销，判定只来自探测 —— 文案里不许再指一条不存在的出路
+        assert "DHOLE_SSRF_DNS_RECHECK" not in note
 
-    def test_an_explicit_setting_outranks_the_environment(self, monkeypatch):
-        """这是安全默认，不是一个建议：探测到 fake-ip 也不能覆盖人明确说过的 on。"""
-        _answers(monkeypatch, (socket.AF_INET, "198.18.0.9"))
-        monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", "on")
-        assert security._dns_recheck_enabled() is True
-        monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", "0")
-        assert security._dns_recheck_enabled() is False
+    def test_the_retired_knob_moves_nothing(self, monkeypatch):
+        """``DHOLE_SSRF_DNS_RECHECK`` 注销后设什么都不改变判定，也不报错。
 
-    def test_an_unrecognised_value_still_fails_closed(self, monkeypatch):
-        """typo 的判定方向不变（W4/D1）：flase 不会顺带把复检关掉。"""
+        两个方向都要钉住：公网机器上设 ``0`` 不许把复检关掉（一道 fail-closed
+        的守卫不能被一个没人再读的名字松动），fake-ip 机器上设 ``on`` 也不许把
+        它强开回去（那恰好是让这台机器所有抓取全挂的值）。typo 同理。
+        """
         _answers(monkeypatch, (socket.AF_INET, "93.184.216.34"))
-        monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", "flase")
-        assert security._dns_recheck_enabled() is True
+        for value in ("0", "off", "flase", "on"):
+            monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", value)
+            assert security._dns_recheck_enabled() is True, value
+
+        _answers(monkeypatch, (socket.AF_INET, "198.18.0.9"))
+        security.reset_fake_ip_probe()
+        monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", "on")
+        assert security._dns_recheck_enabled() is False
 
 
 class TestWhatDoesNotMove:

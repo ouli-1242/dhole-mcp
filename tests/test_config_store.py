@@ -132,7 +132,7 @@ def _direct_reads(text: str) -> list[str]:
 
 
 class TestTheBootstrapKnobsStayEnvOnly:
-    """五个旋钮故意只认环境变量，理由是结构性的，不是口味问题（见 ENV_ONLY）。"""
+    """两个旋钮故意只认环境变量，理由是结构性的，不是口味问题（见 ENV_ONLY）。"""
 
     def test_the_env_only_list_names_real_knobs(self):
         unknown = sorted(n for n in er.ENV_ONLY if er.by_name(n) is None)
@@ -166,9 +166,9 @@ class TestTheBootstrapKnobsStayEnvOnly:
             'import os\n'
             'raw = os.environ.get("DHOLE_USAGE_LOG")\n'
             '# os.environ.get("DHOLE_USAGE_LOG") 在注释里，不算违规\n'
-            'z = os.environ["DHOLE_BROWSER_PROFILE"]\n'
+            'z = os.environ["DHOLE_DEFAULT_ENGINES"]\n'
             'ok = os.environ.get("DHOLE_HOME")            # env-only，本就该直读\n'
             'also_ok = env_registry.value_of("DHOLE_USAGE_LOG")\n'
         )
-        assert _direct_reads(snippet) == ["2:DHOLE_USAGE_LOG", "4:DHOLE_BROWSER_PROFILE"]
+        assert _direct_reads(snippet) == ["2:DHOLE_USAGE_LOG", "4:DHOLE_DEFAULT_ENGINES"]
         assert "DHOLE_HOME" not in PERSISTABLE

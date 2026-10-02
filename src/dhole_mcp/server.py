@@ -18,6 +18,7 @@ import base64
 import json
 import logging
 import os
+import pathlib
 import re
 import sys
 from uuid import uuid4
@@ -500,53 +501,21 @@ def _iso_from_ts(ts) -> str:
         microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-# MCP's structuredContent is a SECOND copy of the same response JSON. With the
-# flags off this server declares no outputSchema, so a strict client is entitled
-# to ignore it - while a client that does render it pays the whole envelope twice
-# on every call (measured: the 1,162-char text plus the same content again as a
-# dict). Text-only is the default; an operator whose client reads the structured
-# channel turns it back on with DHOLE_STRUCTURED_CONTENT=1.
-_STRUCTURED_CONTENT = _env_flag("DHOLE_STRUCTURED_CONTENT")
-
-
-# The other half of the shape contract: an outputSchema, so a client can check
-# what our responses guarantee rather than read the instructions and trust it.
-# Off by default because it is not free - the schema rides on tools/list, the
-# same connect-time payload the token audit spent this session shrinking:
-# measured on the wire, 3,101 extra chars (tools/list 19,141 -> 22,242).
-#
-# Declaring it and emitting structuredContent are ONE decision, not two: the
-# spec makes the payload mandatory where a schema exists, so a configuration
-# that turns one on without the other is a contradiction waiting for a
-# validating client to catch it. Setting this flag therefore implies the
-# second channel, and there is no supported way to separate them.
-_OUTPUT_SCHEMA = _env_flag("DHOLE_OUTPUT_SCHEMA")
-if _OUTPUT_SCHEMA:
-    _STRUCTURED_CONTENT = True
-
-
-# The escape hatch for the compaction itself. "Absent means default" is a
-# contract, and a contract some caller may not be able to read: a client that
-# indexes result["is_truncated"], or an agent mid-session whose context no
-# longer carries the instructions that explain absence. DHOLE_WIRE_FULL=1 puts
-# back the pre-compaction shape - every field, at its default, with full numeric
-# precision - so the byte saving is a choice an operator can reverse with one
-# config line instead of a code change.
-#
-# Scope, stated so nobody over-reads it: this bypasses the WIRE policy. Map-mode
-# row compaction lives in CrawlResponseModel's own serializer and stays on
-# (discover_only is a different decision, and the flag is not a debug-everything
-# switch).
-_WIRE_FULL = _env_flag("DHOLE_WIRE_FULL")
+# 17.0: the wire-shape knobs are gone. Text-only CallToolResults (the
+# structuredContent double envelope was opt-in and never turned on by anyone we
+# could see), no advertised outputSchema (the derived schemas rode on
+# tools/list for no reader), and the compaction is unconditional (a client that
+# cannot read "absent = default" is a client that cannot read the tool docs
+# either; DHOLE_STRUCTURED_CONTENT / DHOLE_OUTPUT_SCHEMA / DHOLE_WIRE_FULL are
+# silently ignored if a host still sets them).
 
 # Idle browser close: after this many seconds with no smart_fetch/screenshot in
 # flight, the warm Patchright Chrome is closed entirely (process exits, OS reclaims
-# all its RAM). The next fetch relaunches it (~2s cold start). Tuned via the
-# DHOLE_BROWSER_IDLE_TIMEOUT env var. Default 300s (5 min) so an agent actively
-# working (30-90s think-pauses between fetches) keeps Chrome warm, while a dhole
-# left running in the background actually frees its RAM. Set to 0 to keep the
-# browser alive forever (the old behavior, useful when RAM is not a concern).
-AUTO_SESSION_IDLE_TIMEOUT = _env_int("DHOLE_BROWSER_IDLE_TIMEOUT", 300)
+# all its RAM). The next fetch relaunches it (~2s cold start). 17.0 写死 300s
+# (5 min): an agent actively working (30-90s think-pauses between fetches) keeps
+# Chrome warm, while a dhole left running in the background actually frees its
+# RAM. ``DHOLE_BROWSER_IDLE_TIMEOUT`` 已注销（运行时静默忽略）。
+AUTO_SESSION_IDLE_TIMEOUT = 300
 IDLE_CHECK_INTERVAL = 60  # How often to check for idle sessions (seconds)
 
 # Content budget a fetch uses when the CALLER does not pass max_content_chars.
@@ -657,16 +626,14 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "resolve_url": "- Check a short link: resolve_url.\n",
     "close_session": "- Cookies a site kept behind options.session_id: close_session "
     "(no arguments = what is open; session_id= or all=true to forget them).\n",
-    # Opt-in（DHOLE_TASKS=1，见 _OPT_IN_TOOLS）。行还留在这里：flag 打开时
-    # instructions 必须路由得到它们，否则 connect-time 那份"怎么选工具"的说明
-    # 会漏掉两个刚被启用的工具。默认集合里没有它们，所以默认 wire 一个字符不变。
+    # 17.0：recipe/watch 全量默认注册（opt-in 组已删），这行 instructions 是
+    # 它们唯一的"什么时候用我"，必须留在连接期说明里。
     "recipe": "- A page you already worked out how to reach: recipe (save the "
     "url+actions once, then run it).\n",
     "watch": "- Watching a page for changes: watch (add it, then check - it diffs "
     "against the last snapshot).\n",
-    # 第二个 opt-in 组（DHOLE_VAULT=1，见 _OPT_IN_TOOLS_VAULT）。同 recipe/watch：
-    # 行留在这里，flag 打开时 instructions 路由得到它们，默认集合里没有它们，
-    # 所以默认 wire 一个字符不变。
+    # vault/login 同 recipe/watch：默认注册，行留在 instructions 里路由。
+    # 逐次确认闸（login 无 confirm 必暂停）在工具内部，注册面不做许可。
     "vault": "- A login the user already stores: vault (op=match with the URL) "
     "lists what their password manager holds - never the values.\n",
     "login": "- Signing in with a stored credential: login (call once to see the "
@@ -768,7 +735,7 @@ class ResponseModel(BaseModel):
     source: str = Field(default="live", description="'live' (default) = fetched from the real URL. 'archive.org' = the live site hard-blocked and this content was recovered from the Internet Archive's closest snapshot (see archived_at for the snapshot date).")
     archived_at: str = Field(default="", description="ISO date of the archive.org snapshot when source='archive.org'. Empty when source='live'. The content reflects the page as it was on this date.")
     # ─── G33/G35: CDP attach 可见性 + 无模型登录判定 ───
-    cdp_attached: bool = Field(default=False, description="True when this response was fetched through an attached real browser (cdp_url): every request rode the attached profile's authenticated cookies. Default false - attach is refused unless DHOLE_CDP_ATTACH=1, and every attach attempt is audited. Never treat content from an attached profile like public content: it is the user's logged-in view.")
+    cdp_attached: bool = Field(default=False, description="True when this response was fetched through an attached real browser (cdp_url): every request rode the attached profile's authenticated cookies. Default false - the first attach to a host is refused with cdp_authorization_required until the user approves that host, and every attach attempt is audited. Never treat content from an attached profile like public content: it is the user's logged-in view.")
     login_check: Optional[Dict[str, Any]] = Field(default=None, description="Only when check_login=true AND the fetch ran on the browser tier: {logged_in: true|false|null, signals: [...], cookie_names: [...], method: 'dom+cookie-names'}. Model-free: DOM shape (logout control / password field / login form) plus cookie NAMES - values are never returned. null when not requested, when the fetch never reached the browser tier, or on cache hits (the probe is live-only).")
 
     # Element captures from {\"screenshot\"} actions (multimodal flag): pixels
@@ -1052,141 +1019,6 @@ _WIRE_PROJECTED_ROWS = {"feeds": "FeedResult"}
 _WIRE_MODEL_CACHE: dict = {}
 
 
-_JSON_TYPES = {str: "string", int: "integer", float: "number", bool: "boolean"}
-
-
-def _json_type_of(annotation):
-    """The JSON Schema type for a field, or None when we would be guessing.
-
-    None means "leave this field out of the schema", which is honest: an
-    outputSchema a client validates against is a promise, and a wrong promise is
-    worse than no promise.
-    """
-    from typing import get_args, get_origin
-    origin = get_origin(annotation)
-    if origin in (list, set, tuple):
-        args = [a for a in get_args(annotation) if a is not type(None)]
-        inner = _json_type_of(args[0]) if args else None
-        if inner is None:
-            return None
-        return {"type": "array", "items": inner}
-    if origin is dict:
-        return {"type": "object"}
-    if annotation in _JSON_TYPES:
-        return {"type": _JSON_TYPES[annotation]}
-    args = get_args(annotation)
-    if args and type(None) in args:  # Optional[X]
-        return _json_type_of(next(a for a in args if a is not type(None)))
-    return None
-
-
-# What a model's own serializer can still take away. CrawlPage rows in map mode
-# lose every column except the URL, so `url` is the only field any response is
-# guaranteed to carry there - declaring more would make the schema lie about our
-# own output, which is the one thing an outputSchema must not do.
-_WIRE_GUARANTEED = {"CrawlPage": ("url",)}
-
-
-def _wire_core_schema(model: type) -> dict:
-    """What the wire guarantees, DERIVED from what the compaction keeps.
-
-    `required` is exactly the field set `_WIRE_OMIT` never removes: the same
-    promise the instructions currently make in prose ("a field that is ABSENT is
-    at its default"), stated where a client can check it mechanically. What
-    compaction may drop stays unspecified under `additionalProperties` rather
-    than enumerated - declaring all 36 ResponseModel fields costs 2,657 chars of
-    the CONNECT-time budget per tool, and none of it is load-bearing for a
-    client: the part worth a contract is the part that never disappears.
-
-    Derived, never re-listed. A second hand-maintained list of field names is
-    the exact drift this session removed elsewhere (and _WIRE_OMIT already fails
-    its own typo guard), so the schema and the compaction cannot disagree.
-    """
-    omit = _WIRE_OMIT.get(model.__name__, frozenset())
-    guaranteed = _WIRE_GUARANTEED.get(model.__name__)
-    props: dict = {}
-    for name, spec in model.model_fields.items():
-        if name in omit:
-            continue
-        child = _wire_child_model(spec.annotation)
-        if child is not None:
-            inner = _wire_core_schema(child)
-            origin = getattr(spec.annotation, "__origin__", None)
-            props[name] = ({"type": "array", "items": inner}
-                           if origin in (list, set, tuple) else inner)
-            continue
-        t = _json_type_of(spec.annotation)
-        if t is not None:
-            props[name] = t
-    return {"type": "object",
-            "properties": props,
-            # additionalProperties is deliberately absent: `true` is JSON
-            # Schema's default, and writing it out costs a line per nesting
-            # level to say nothing.
-            "required": sorted(guaranteed or props)}
-
-
-_OUTPUT_SCHEMAS: dict = {}
-
-
-def _output_schema_for(tool: str):
-    """The declared outputSchema of one tool, built once and cached.
-
-    resolve_url is left out on purpose: it returns a hand-built dict whose keys
-    differ between the success and the network-error path, so the only schema
-    that would always validate is `{}` - which promises nothing and costs a
-    client's trust for nothing. screenshot returns image content, not a payload.
-    """
-    if tool in _OUTPUT_SCHEMAS:
-        return _OUTPUT_SCHEMAS[tool]
-    from dhole_mcp.crawl import CrawlResponseModel
-    from dhole_mcp.feed import FeedResult
-    from dhole_mcp.search import SearchResponseModel
-    single = _wire_core_schema(ResponseModel)
-    table = {
-        # smart_fetch answers with one result, or with a per-URL list when urls=
-        # is used, so its contract is genuinely a union - saying so is the
-        # point of declaring it. The union lives under a root ``type`` because
-        # the wire protocol (2025-11-25 and earlier) types outputSchema as an
-        # object root: a bare top-level anyOf makes the SDK reject the whole
-        # tools/list result, the runner answers -32603, and the client sees zero
-        # tools. Extra keywords ride through untouched (OutputSchema is
-        # extra="allow"), so the branches still say what they said.
-        "smart_fetch": {"type": "object",
-                        "anyOf": [single, _wire_core_schema(BulkResponseModel)]},
-        "parse": single,
-        "smart_crawl": _wire_core_schema(CrawlResponseModel),
-        "smart_search": _wire_core_schema(SearchResponseModel),
-        "cache_clear": _wire_core_schema(CacheInfoModel),
-        "feed_fetch": {"type": "object",
-                       "properties": {"feeds": {"type": "array",
-                                                "items": _wire_core_schema(FeedResult)}},
-                       "required": ["feeds"]},
-    }
-    schema = table.get(tool)
-    # No description here on purpose. "A field that is ABSENT is at its
-    # documented default" is stated once in the connect-time instructions and
-    # covers all nine tools; repeating that sentence in the six schemas that
-    # declare one would add ~0.45k to the 3,085 chars this feature ships, and a
-    # client reads the guarantee from `required`, not prose.
-    _OUTPUT_SCHEMAS[tool] = schema
-    return schema
-
-
-def _enabled_output_schema() -> tuple:
-    """(total chars, per tool) for the advertised outputSchemas.
-
-    Reported rather than asserted: the connect-time cost of a contract is the
-    number an operator needs before deciding whether to turn it on, and a
-    budget constant here would be the size-guard pattern this repo already
-    removed (every description edit would trip it for no information).
-    """
-    per = {t: len(json.dumps({"outputSchema": _output_schema_for(t)},
-                             ensure_ascii=False, separators=(",", ":")))
-           for t in _TOP_LEVEL_ARGS if _output_schema_for(t) is not None}
-    return sum(per.values()), per
-
-
 def _wire_projected_model(field_name: str):
     name = _WIRE_PROJECTED_ROWS.get(field_name)
     if name is None:
@@ -1329,39 +1161,27 @@ def _wire_result(obj, images: Optional[list] = None) -> tuple:
 
 
 def _call_result(result):
-    """One _dispatch return as a CallToolResult, on the channel the operator chose.
+    """One _dispatch return as a CallToolResult, text-only.
 
-    A tuple means the tool has a structured payload: the text channel always
-    carries it in full, and structured_content repeats it as a second copy only
-    when DHOLE_STRUCTURED_CONTENT asks for that copy.
+    A tuple means the tool has a structured payload: the text channel carries it
+    in full and that IS the whole wire surface (17.0 removed the opt-in
+    structuredContent double envelope; nobody reads the same JSON twice).
     """
     from mcp.types import CallToolResult
     if isinstance(result, tuple):
-        content_list, structured = result
-        if _STRUCTURED_CONTENT:
-            return CallToolResult(content=content_list, structured_content=structured)
+        content_list, _structured = result
         return CallToolResult(content=content_list)
     return CallToolResult(content=result)
 
 
-def _wire_dump_full(obj):
-    """The pre-compaction shape: every field, at its default, full precision.
-
-    model_dump() is what the wire used before the token audit, so this is not a
-    second policy to keep in sync - it is the absence of one.
-    """
-    if isinstance(obj, BaseModel):
-        return obj.model_dump()
-    if isinstance(obj, (list, tuple)):
-        return [_wire_dump_full(item) for item in obj]
-    if isinstance(obj, dict):
-        return {k: _wire_dump_full(v) for k, v in obj.items()}
-    return obj
-
-
 def _wire_json(obj) -> tuple:
-    """(text, structured) for one response - the only place the compact form exists."""
-    payload = _wire_dump_full(obj) if _WIRE_FULL else _wire_dump(obj)
+    """(text, structured) for one response - the only place the compact form exists.
+
+    17.0: 无条件压实。``DHOLE_WIRE_FULL`` 逃生口已注销 —— "字段缺席 = 默认值"
+    这份契约写进了工具文档与 instructions，一个读不懂缺席语义的调用方也读不懂
+    工具文档；保留开关等于把两套线格式都当永久承诺养着。
+    """
+    payload = _wire_dump(obj)
     return json.dumps(payload, ensure_ascii=False,
                       separators=(",", ":")), payload
 
@@ -2119,7 +1939,7 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             next_action = (
                 "See the error field for the paths that were tried. Pass an absolute "
                 "path, or pass cwd=<your working directory> so relative paths resolve "
-                "against it (DHOLE_WORKDIR does the same for every call)."
+                "against it."
             )
         else:
             # The path was NOT the problem: the file was found, opened and read, and
@@ -2998,8 +2818,8 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
     # the relevant blocks so the agent loads less context on long pages.
     # Only applies to text-like extractions (not raw html). Runs before chunking
     # so offset/next_offset page through the FOCUSED content.
-    # M-1: when the effective choice for THIS call is neural (operator's flag =
-    # permission, options.focus_engine = willingness — see focus.neural_for_call)
+    # M-1: 打分器只由**本次调用**的 options.focus_engine 决定（17.0 没有许可门：
+    # 没点名 = BM25，点名 'neural' 才用语义分，见 focus.engine_wants_neural）——
     # the blocks are scored by the warm local cross-encoder instead of BM25
     # (peek only — the load happened at the smart_fetch entry; a missing scorer
     # falls back to BM25 inside focus_content). M-2: focus_mode='best' returns
@@ -3010,8 +2830,7 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
         try:
             from dhole_mcp.focus import focus_content
             from dhole_mcp.reranker import get_reranker
-            reranker = (get_reranker()
-                        if _neural_for_this_call(_neural_focus_enabled()) else None)
+            reranker = (get_reranker() if _neural_focus_requested() else None)
             focus_stats = {}
             full_text = focus_content(
                 full_text, focus_q, reranker=reranker,
@@ -3086,13 +2905,12 @@ _FOCUS: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_focus",
 _FOCUS_MODE: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_focus_mode", default=None)
 # 本次调用用哪个 focus 打分器："" = 由操作者的 flag 决定（默认，行为与以前逐字节
 # 相同）；"bm25" = 这一页明确要便宜的那条路；"neural" = 明确要语义分（仅在操作者
-# 开了 DHOLE_NEURAL_FOCUS 时被允许，见 _neural_focus_denied）。
+# 17.0：focus 打分引擎是纯按次选择（无许可门），别名只剩意愿侧判定。
 # 这个 var 定义在 focus.py：crawl 也要按同一条规则判定，而 crawl 不能在模块级
 # import server。这里只是别名，好让 reset token 与两个消费者读到同一个状态。
 from dhole_mcp.focus import (
     FOCUS_ENGINE as _FOCUS_ENGINE,
     engine_wants_neural as _neural_focus_requested,
-    neural_for_call as _neural_for_this_call,
     normalize_engine as _normalize_focus_engine,
 )
 # Opt-in: populate ResponseModel.media with the page's image URLs (multimodal).
@@ -3437,133 +3255,114 @@ def _screenshot_error_message(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {flat} - {hint}"
 
 
-def _cdp_attach_gate(cdp_url: Optional[str]) -> tuple[Optional[str], Optional[frozenset]]:
-    """安全闸 1/2（G33）：CDP attach 默认关 + host scope。
+_CDP_HOSTS_FILE_NAME = "cdp_hosts.json"
+_cdp_hosts_cache: Optional[frozenset] = None
+_cdp_hosts_stamp: Optional[tuple[float, int]] = None
+
+
+def _cdp_hosts_file() -> str:
+    """``~/.dhole/cdp_hosts.json`` —— 先问再记的落盘处（17.0，§3-16）。"""
+    from dhole_mcp import paths
+    return str(paths.file(_CDP_HOSTS_FILE_NAME))
+
+
+def _cdp_authorized_hosts() -> frozenset:
+    """已授权的 CDP 端点主机集合。按 mtime 缓存，与引擎状态文件同一约定。"""
+    global _cdp_hosts_cache, _cdp_hosts_stamp
+    import json as _json
+    try:
+        path = pathlib.Path(_cdp_hosts_file())
+        stat = path.stat()
+        stamp = (stat.st_mtime, stat.st_size)
+    except OSError:
+        _cdp_hosts_cache, _cdp_hosts_stamp = frozenset(), None
+        return _cdp_hosts_cache
+    if _cdp_hosts_cache is not None and stamp == _cdp_hosts_stamp:
+        return _cdp_hosts_cache
+    try:
+        data = _json.loads(path.read_text(encoding="utf-8"))
+        hosts = frozenset(str(h).strip().lower() for h in (data.get("hosts") or [])
+                          if str(h).strip())
+    except Exception:
+        hosts = frozenset()
+    _cdp_hosts_cache, _cdp_hosts_stamp = hosts, stamp
+    return _cdp_hosts_cache
+
+
+def _cdp_authorize_host(host: str) -> None:
+    """把一台用户已同意的 CDP 端点主机写进落盘围栏。只增不删；撤销走删除文件
+    （B5 的 sys_state 会给出体面的出口）。"""
+    import json as _json
+    from dhole_mcp import paths
+    global _cdp_hosts_cache, _cdp_hosts_stamp
+    host = host.strip().lower()
+    path = pathlib.Path(_cdp_hosts_file())
+    current: list[str] = sorted(_cdp_authorized_hosts())
+    if host in current:
+        return
+    current.append(host)
+    data = {"hosts": current}
+    paths.ensure_private_dir(path.parent)
+    path.write_text(_json.dumps(data, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8")
+    paths.harden_file(path)
+    _cdp_hosts_cache = frozenset(current)
+    try:
+        stat = path.stat()
+        _cdp_hosts_stamp = (stat.st_mtime, stat.st_size)
+    except OSError:
+        _cdp_hosts_stamp = None
+
+
+def _cdp_endpoint_host(cdp_url: str) -> str:
+    """CDP 端点 URL 里的主机名（围栏与授权都按主机记账）。取不到就原样小写。"""
+    host = (urlparse(str(cdp_url)).hostname or "").strip().lower()
+    return host or str(cdp_url).strip().lower()
+
+
+def _cdp_attach_gate(cdp_url: Optional[str],
+                     confirm: bool = False) -> tuple[Optional[str], Optional[frozenset]]:
+    """安全闸 1/2（G33 → 17.0 §3-16）：CDP attach 改成**先问再记**。
 
     attach 用户真实 Chrome = 一次交出**所有已登录站点**的已认证读权限，比
-    "写操作要确认"严重一个数量级（后者管已知的写，前者泄露未知站点的已认证
-    读）。所以 cdp_url 参数默认**拒绝**：必须显式 ``DHOLE_CDP_ATTACH=1`` 才
-    放行。``DHOLE_CDP_HOSTS=a.com,b.com``（可选）把 attach 模式的导航圈进
-    白名单——机制层执行在 browser.py 的 route handler（拦重定向与页面 JS
-    请求），这里只负责解析与透传。
+    "写操作要确认"严重一个数量级。所以 cdp_url 默认拒绝；一台从未授权过的
+    主机，第一次不执行，返回待授权并转述（与 ``submit`` 同一套确认语义）：
+    调用方带 ``confirm=true`` 重发，才落盘授权并放行。围栏 = 已授权主机集合
+    （导航圈在里面，机制层执行在 browser.py 的 route handler）。
 
     Returns ``(error, allowed_hosts)``：error 非 None 时调用方 raise；
-    allowed_hosts 为 None 表示未设白名单（显式开启这一闸仍然要过）。
+    allowed_hosts 为 None 表示不设围栏（理论不可达 —— 落盘集合至少含本机）。
     """
     if not cdp_url:
         return None, None
-    # W4/D1: the check already goes only on an explicit ON-token value, so
-    # unrecognised inputs (a typo like "flase") silently stayed on the safe
-    # side. What is new is that the typo is now *recorded* - doctor can name
-    # it, and the operator stops wondering why the flag "did not do anything".
-    enabled = env_registry.read_flag("DHOLE_CDP_ATTACH", default=False, fail_safe=True)
-    if not enabled:
-        return (
-            "cdp_attach_disabled: cdp_url is refused by default - attaching your "
-            "real Chrome hands over the authenticated session of EVERY site you "
-            "are logged into. Enable it deliberately with DHOLE_CDP_ATTACH=1, and "
-            "fence the blast radius with DHOLE_CDP_HOSTS=host1,host2 (navigation "
-            "outside those hosts is aborted at the route level).",
-            None,
-        )
-    raw = (env_registry.value_of("DHOLE_CDP_HOSTS") or "").strip()
-    if not raw:
-        return None, None
-    hosts = frozenset(
-        h.strip().lower() for h in raw.replace(";", ",").split(",") if h.strip())
-    return None, (hosts or None)
-
-
-def _multimodal_enabled() -> bool:
-    """多模态开关（17.0）：``DHOLE_MULTIMODAL=1`` 声明**调用方 agent 是多模态的**。
-
-    不是「dhole 启用视觉模型」——识别永远发生在 agent 侧，dhole 核心路径保持
-    零模型零密钥。flag 只开三样：元素级截图（screenshot 的 options.selector、
-    smart_fetch 的 {screenshot} 动作）、工具描述内嵌的验证码试读纪律、降级链的
-    第三级。二维码解码（decode_qr）是确定性工作，**不在门控内**。
-
-    actions.py 里有一份语义完全相同的读取（`multimodal_enabled`）——server 懒
-    加载 actions，反向导入会把整个 server 拖进每个轻量进程，所以各自读 env；
-    改任何一处时两处语义必须一起改。
-    """
-    from dhole_mcp.actions import multimodal_enabled
-    return multimodal_enabled()
-
-
-def _multimodal_gate_error(where: str) -> str:
-    """元素级截图被拒时的报错：说清门控语义与两条出路（设 flag / 走 decode_qr）。"""
+    host = _cdp_endpoint_host(cdp_url)
+    authorized = _cdp_authorized_hosts()
+    if host in authorized:
+        return None, (authorized or None)
+    if confirm:
+        _cdp_authorize_host(host)
+        _audit_event("cdp_authorize", host=host,
+                     endpoint=str(cdp_url)[:120],
+                     authorized_hosts=sorted(_cdp_authorized_hosts()))
+        return None, (_cdp_authorized_hosts() or None)
+    _audit_event("cdp_attach_refused", host=host,
+                 endpoint=str(cdp_url)[:120],
+                 reason="host not authorized yet")
     return (
-        f"element_screenshot_disabled: {where} is refused because DHOLE_MULTIMODAL "
-        "is not set - element captures exist to be read by a multimodal agent, and "
-        "without the flag dhole must assume the caller cannot see images. Set "
-        "DHOLE_MULTIMODAL=1 in the dhole server env and restart (it declares the "
-        "calling agent is multimodal; dhole itself ships no vision model). "
-        "Text-only agents: QR codes are NOT gated - use the screenshot tool with "
-        "options.decode_qr=true."
+        "cdp_authorization_required: this is the FIRST attach to host "
+        f"{host!r}, so nothing was executed - attaching your real Chrome hands "
+        "over the authenticated session of EVERY site you are logged into, and "
+        "dhole asks once before doing that. Re-call with confirm=true to "
+        "authorize this host (the approval is remembered for it and every later "
+        "attach to it is fenced to the authorized hosts; remove "
+        f"{_CDP_HOSTS_FILE_NAME} from the dhole state directory to revoke).",
+        None,
     )
 
 
-# DHOLE_MULTIMODAL=1 时追加进 screenshot / smart_fetch 描述的两段话：能力子句 +
-# 试读纪律。纪律只跟着 flag 上线（关着 flag 的调用方看不见像素，纪律对它是噪声，
-# 还白占 connect tokens）；≤3 次的数字是纪律的"≤N"，转交是终点——dhole 不引入
-# 视觉模型，识别发生在 agent 侧（安全红线 6）。
-_MULTIMODAL_SHOT_CLAUSE = (
-    "\n\nVISUAL ASSIST (DHOLE_MULTIMODAL=1): options.selector crops the capture "
-    "to ONE element (CSS selector; full_page cannot combine with it) and returns "
-    "it inline - for CAPTCHAs, QR codes, forms. Discipline: a simple text/grid "
-    "image CAPTCHA may be read and tried at most 3 times, then STOP and hand off "
-    "to the user; behavioral/fingerprint walls (DataDome, Akamai, interactive "
-    "Turnstile) have nothing to look at - hand off immediately; 2FA codes are "
-    "never on the page - hand off; sliders need drag primitives dhole does not "
-    "have - hand off. dhole ships no vision model: the reading happens in you."
-)
-_MULTIMODAL_SF_CLAUSE = (
-    "\n\nVISUAL ASSIST (DHOLE_MULTIMODAL=1): actions gains {\"screenshot\": "
-    "{\"selector\": \"css\", \"decode_qr\": true}} - crops one element on the "
-    "SAME page instance as the surrounding fill/click actions and returns it "
-    "inline (metadata.actions keeps a name-only receipt; decoded QR text rides "
-    "with it). Use it to read a CAPTCHA you are about to answer in the same "
-    "action chain. Discipline: simple text/grid image CAPTCHAs - at most 3 "
-    "read-and-retry rounds, then hand off to the user; DataDome/Akamai/"
-    "interactive Turnstile walls, 2FA factors, and sliders are always handed "
-    "off (nothing readable on the page, or outside dhole's action primitives). "
-    "dhole ships no vision model: the reading happens in you."
-)
-
-
-def _neural_focus_enabled() -> bool:
-    """M-1 神经 focus 的**许可**侧：``DHOLE_NEURAL_FOCUS=1`` 才允许 focus 用本地
-    cross-encoder 打分（BM25 回退只在打分器**中途失败**时发生；模型缺失是在
-    工具入口显式报错的，见 smart_fetch 的闸）。默认关：focus 是所有抓取路径的
-    公共节点，每页 × 每 block 的 CPU 推理延迟不能默认发生（计划第六章坑②）。
-
-    意愿侧是按次的 ``options.focus_engine``（见 focus.py 的 FOCUS_ENGINE）——
-    两个侧各说一件事：flag 决定"能不能"，参数决定"这一次要不要"，
-    而"要 bm25"在 flag 开着时也生效（一次便宜的重读不必全局关掉能力）。"""
-    return _env_flag("DHOLE_NEURAL_FOCUS")
-
-
 _NEURAL_FOCUS_UNAVAILABLE = (
-    "neural_focus_model_missing: DHOLE_NEURAL_FOCUS=1 needs the local reranker "
+    "neural_focus_model_missing: focus_engine='neural' needs the local reranker "
     "model, which is not downloaded yet. No request was made."
-)
-
-# 意愿 ≠ 许可：按次参数点名要神经分，而操作者没有打开这道能力。
-_NEURAL_FOCUS_NOT_PERMITTED = (
-    "focus_engine_not_permitted: options.focus_engine='neural' asks the local "
-    "cross-encoder to pick the focus blocks, but neural focus is not permitted on "
-    "this server (DHOLE_NEURAL_FOCUS is off). No request was made, and the call "
-    "was not silently downgraded to BM25 either."
-)
-_NEURAL_FOCUS_PERMIT_HOWTO = (
-    "This is a permission, not a preference: neural focus costs ~12.5s of CPU per "
-    "page and needs the ~280MB reranker, so it is switched on once by the operator "
-    "instead of bought call by call. The one-command version is `dhole init --neural`: "
-    "it sets the flag AND downloads the model (a flag without the file only moves the "
-    "error to neural_focus_model_missing). The manual version is `dhole config set "
-    "DHOLE_NEURAL_FOCUS 1`. Both are read per call - no host restart. To answer now: "
-    "re-run without focus_engine, or with focus_engine='bm25' - keyword-overlap "
-    "focus still filters the page."
 )
 
 # M-3：神经分低于这条线 = 落在实测的"明显跑题"带（off-topic ~0.0001，on-topic
@@ -4361,22 +4160,6 @@ async def _prewarm_state_dir() -> None:
         pass
 
 
-def _browser_prewarm_enabled() -> bool:
-    """DHOLE_NO_BROWSER_PREWARM=1 skips the startup browser warm-up.
-
-    The warm-up hides a 3-5s cold start, and its first step is a TCP preflight
-    to 1.1.1.1:443 — a real outbound connection before the agent has asked for
-    anything. Offline boxes, metered links and strict egress policies opt out
-    here; the browser then simply launches lazily on the first stealthy fetch.
-
-    W4: the "on" side is already strict (only 1/true/yes/on disable prewarm);
-    this refactor just makes the "typo -> silently keeps prewarm" case visible
-    in ``doctor`` while leaving the return value identical.
-    """
-    return not env_registry.read_flag(
-        "DHOLE_NO_BROWSER_PREWARM", default=False, fail_safe=True)
-
-
 def _normalize_credentials(credentials: Optional[Dict[str, str]]) -> Optional[tuple]:
     """Convert a credentials dictionary to a tuple accepted by fetchers.
 
@@ -4787,6 +4570,9 @@ _SF_OPTIONS_ALLOWED = frozenset({
     "if_modified_since", "if_none_match",
     # G33/G35：CDP attach 与无模型登录判定。top-level 与 options bag 双收。
     "check_login", "cdp_url",
+    # §3-16：CDP attach 的先问再记。confirm 是门的一部分，同走 promoted 通道
+    # （顶层的 confirm 由方法签名读，bag 里的副本被识别而不是报不支持）。
+    "confirm",
     # G22's other half, non-breaking: these were top-level ONLY, and putting them
     # in the bag raised "Unsupported option key" — so the tool really did have two
     # shapes for one call, and an agent reading the option descriptions could not
@@ -4806,7 +4592,7 @@ _SF_OPTIONS_ALLOWED = frozenset({
 _SF_PROMOTED = frozenset({
     "css_selector", "max_content_chars", "timeout", "pages", "password", "schema",
     "cache_ttl", "offset", "focus", "actions", "extraction_type",
-    "force_fetcher", "urls", "focus_mode", "focus_engine",
+    "force_fetcher", "urls", "focus_mode", "focus_engine", "confirm",
 })
 _SF_OPTIONS_FORWARDED = frozenset(_SF_OPTIONS_ALLOWED - _SF_PROMOTED)
 _SC_OPTIONS = frozenset({
@@ -4821,8 +4607,8 @@ _SC_OPTIONS_FORWARDED = frozenset(_SC_OPTIONS - {"search"})
 _SHOT_OPTIONS = frozenset({
     "full_page", "image_type", "quality", "wait", "wait_selector",
     "network_idle", "timeout", "save_to",
-    # 17.0 多模态开关：selector = 元素级裁剪（DHOLE_MULTIMODAL 门控）；
-    # decode_qr = 本地二维码解码（确定性工作，不设门控）。
+    # selector = 元素级裁剪（17.0 起常开）；decode_qr = 本地二维码解码
+    # （确定性工作，从来不设门控）。
     "selector", "decode_qr",
     # G9 parity: smart_fetch could always name a private target and screenshot
     # could not, so "my dev server" was fetchable by one tool and refused
@@ -4864,15 +4650,13 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     # known tool names (`_dispatch` refuses anything outside it), which is how a
     # method can exist, be documented, and still be unreachable on the wire.
     "close_session": frozenset({"session_id", "all"}),
-    # L3 / L4（计划第九章）：录制回放与监控 diff。默认**不**在连接期表里 ——
-    # 见 _OPT_IN_TOOLS。
+    # L3 / L4（计划第九章）：录制回放与监控 diff。17.0 起默认在连接期表里。
     "recipe": frozenset({"op", "name", "url", "actions", "note",
                          "timeout", "max_content_chars", "focus",
                          "extraction_type", "session_id", "allow_private"}),
     "watch": frozenset({"op", "name", "url", "focus", "max_chars", "note",
                         "timeout", "session_id", "allow_private"}),
-    # 凭据来源 + 独立登录流（计划第七章）。同样默认**不**在连接期表里 ——
-    # 见 _OPT_IN_TOOLS_VAULT。
+    # 凭据来源 + 独立登录流（计划第七章）。17.0 起默认在连接期表里。
     "vault": frozenset({"op", "query", "url", "source", "limit"}),
     "login": frozenset({"url", "credential", "source", "session_id",
                         "username_index", "password_index", "submit_index",
@@ -4881,20 +4665,12 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     # 能读到的说明书，等于没有说明书。
     "dhole_doc": frozenset({"topic", "section"}),
 }
+# （17.0：不存在 opt-in 组 —— 上面的注释是给全量注册做的注脚。）
 
 
-# 默认关闭的工具。它们的描述加起来约 2.6k 字符，而连接期预算是这个项目反复
-# 量过的东西（见 README「连接期开销」）：一个不是每次会话都要用的能力，没有
-# 理由让每个会话都替它付 token。打开方式两种 —— DHOLE_TASKS=1（保留默认工具
-# 集再加这两个），或直接在 DHOLE_TOOLS 里点名。
-_OPT_IN_TOOLS = frozenset({"recipe", "watch"})
-
-# 第二个 opt-in 组：凭据来源 + 独立登录流（计划第七章）。单独一个开关，因为它是
-# 另一件事 —— recipe/watch 是"重复任务"，这两个是"用用户密码管理器里的凭据登录"，
-# 而且它要用户机器上真的装了 `bw` / `op` 才有意义。把两组塞进同一个 flag 会让
-# 打开其中一件事的人替另一件事付 token，也会让"我开了 DHOLE_TASKS，怎么多出个
-# 能读我密码的工具"变成一个合理的疑问。
-_OPT_IN_TOOLS_VAULT = frozenset({"vault", "login"})
+# 17.0: 没有 opt-in 组了 —— recipe/watch/vault/login 全部默认注册（大众化一刀切：
+# pip install 接上宿主，能力全部默认在线；vault/login 的逐次确认闸在工具内部，
+# 注册面不再做许可）。DHOLE_TASKS / DHOLE_VAULT 已注销，运行时静默忽略。
 
 
 # Which tools this server registers and dispatches. Default: ALL of them.
@@ -4914,16 +4690,9 @@ _OPT_IN_TOOLS_VAULT = frozenset({"vault", "login"})
 def _parse_enabled_tools() -> frozenset:
     raw = os.environ.get("DHOLE_TOOLS")
     if raw is None or not raw.strip():
-        names = frozenset(_TOP_LEVEL_ARGS)
-        # Two opt-in groups, two flags (see _OPT_IN_TOOLS / _OPT_IN_TOOLS_VAULT):
-        # the default connect table stays exactly what it was before either
-        # landed, and turning one group on does not drag the other in.
-        off: set = set()
-        if not _env_flag("DHOLE_TASKS"):
-            off |= _OPT_IN_TOOLS
-        if not _env_flag("DHOLE_VAULT"):
-            off |= _OPT_IN_TOOLS_VAULT
-        return names - off
+        # 17.0: default = every tool. The opt-in groups are gone; the only way
+        # to shrink the wire set left is naming an explicit DHOLE_TOOLS subset.
+        return frozenset(_TOP_LEVEL_ARGS)
     names = frozenset(part.strip() for part in raw.split(",") if part.strip())
     if not names:
         raise ValueError(
@@ -5168,18 +4937,14 @@ def _relative_path_roots(cwd: str | None = None) -> list[str]:
     """Directories a relative ``file_path`` may resolve against, in priority order.
 
     Order is by how much the caller controls the answer: the ``cwd`` argument is
-    per-call and host-independent, DHOLE_WORKDIR is one line of host config, and
-    the process cwd — the host's own install directory under an MCP host, which
-    is why relative paths failed in the first place — sits below both.
+    per-call and host-independent, then the process cwd — the host's own install
+    directory under an MCP host, which is why relative paths failed in the first
+    place — and finally the user's home. 17.0: ``DHOLE_WORKDIR`` 已注销（运行时
+    静默忽略）；一个每次调用都能给的参数不该有第二个更晚生效的拼法。
     """
     roots: list[str] = []
     if cwd and str(cwd).strip():
         roots.append(os.path.abspath(os.path.expanduser(str(cwd).strip())))
-    # DHOLE_WORKDIR is the lever for an MCP host whose cwd is its own install
-    # directory (the reason relative paths failed here in the first place).
-    env = (env_registry.value_of("DHOLE_WORKDIR") or "").strip()
-    if env:
-        roots.append(os.path.expanduser(env))
     for fallback in (os.getcwd(), os.path.expanduser("~")):
         if fallback not in roots:
             roots.append(fallback)
@@ -5365,10 +5130,11 @@ class MasterFetchServer:
 
         Scheduled when the MCP server starts so the browser is warm by the time
         the agent first needs a stealthy fetch or screenshot, skipping the
-        ~3-5s cold start. Closes after DHOLE_BROWSER_IDLE_TIMEOUT of inactivity,
+        ~3-5s cold start. Closes after 300s of inactivity (fixed in 17.0),
         then relaunches on the next fetch. Idempotent: _ensure_auto_session
-        reuses any existing session. Opt out with DHOLE_NO_BROWSER_PREWARM=1
-        (see _browser_prewarm_enabled) — the lazy path is unchanged.
+        reuses any existing session. The warm-up stays best-effort: its first
+        step is a TCP preflight to 1.1.1.1:443, and an unreachable network just
+        makes it give up so the browser lazy-launches later.
 
         Robustness: fully isolated — catches BaseException (so a
         CancelledError or any launch failure can NEVER crash the server) and is
@@ -5384,10 +5150,6 @@ class MasterFetchServer:
         reply out (client reported -32001 REQUEST_TIMEOUT). Now the entire
         check+import is off the event loop.
         """
-        if not _browser_prewarm_enabled():
-            logger.debug("DHOLE_NO_BROWSER_PREWARM set; skipping the startup warm-up")
-            return
-
         async def _warm():
             # Quick network preflight: skip browser prewarm if the network is
             # unreachable (saves 2-5s launching a browser that can't connect).
@@ -5723,11 +5485,10 @@ class MasterFetchServer:
         validate_headers(extra_headers)
         validate_css_selector(wait_selector)
 
-        # 安全闸 1/2（G33）：cdp attach 默认关；白名单在这里解析、在浏览器层
-        # 的 route handler 机制执行。
-        gate_err, cdp_allowed = _cdp_attach_gate(cdp_url)
-        if gate_err:
-            raise ValueError(gate_err)
+        # 安全闸 1/2 已上提到工具入口（smart_fetch / _bulk_stealthy_fetch）：
+        # _open_session 是内部助手，到达它时 cdp_url 已过闸（先问再记）。
+        # 围栏 = 落盘的已授权主机集合，浏览器层 route handler 执行。
+        cdp_allowed = (_cdp_authorized_hosts() or None) if cdp_url else None
         if cdp_url:
             _audit_event("cdp_attach", via="open_session",
                          endpoint=str(cdp_url)[:120],
@@ -5979,7 +5740,7 @@ class MasterFetchServer:
 
     # ─── L3 / L4：录制回放与监控（计划第九章）───────────────────────────
     #
-    # 两个工具共用 ~/.dhole/tasks.db，默认不在连接期表里（server._OPT_IN_TOOLS）。
+    # 两个工具共用 ~/.dhole/tasks.db。
     # recipe 的动作在**录制时**就过 actions.validate_actions，所以库里不可能
     # 存在一个执行器会拒绝的配方 —— 存一个永远跑不通的配方比不存更糟，调用方
     # 会以为"存下来了就是对的"。
@@ -6575,8 +6336,6 @@ class MasterFetchServer:
 
         if selector:
             validate_css_selector(selector)
-            if not _multimodal_enabled():
-                raise ValueError(_multimodal_gate_error("screenshot(options.selector)"))
             if full_page:
                 raise ValueError(
                     "'full_page' cannot combine with 'selector' - an element "
@@ -6648,9 +6407,9 @@ class MasterFetchServer:
         if selector:
             text += f"\nelement crop: {selector}"
         if decode_qr:
-            # Deterministic local decoding (opencv, an [all] extra) - NOT gated
-            # by DHOLE_MULTIMODAL: a QR payload travels as text, so a text-only
-            # agent reads a login QR / check-in URL without ever seeing pixels.
+            # Deterministic local decoding (opencv, an [all] extra): a QR
+            # payload travels as text, so an agent reads a login QR / check-in
+            # URL without ever seeing pixels.
             try:
                 from dhole_mcp.qr import decode_qr_bytes
                 found = decode_qr_bytes(captured["bytes"])
@@ -7013,6 +6772,7 @@ class MasterFetchServer:
         session_id: Optional[str] = None,
         page_action=None,
         probe_out: Optional[dict] = None,
+        confirm: bool = False,
     ) -> BulkResponseModel:
         """Async parallel stealthy fetch with browser fingerprint randomization.
 
@@ -7051,9 +6811,10 @@ class MasterFetchServer:
         validate_proxy(proxy)
         validate_css_selector(wait_selector)
 
-        # 安全闸 1/2（G33）：cdp attach 默认关（DHOLE_CDP_ATTACH=1 显式放行）；
-        # DHOLE_CDP_HOSTS 白名单在这里解析、在浏览器层 route handler 机制执行。
-        gate_err, cdp_allowed = _cdp_attach_gate(cdp_url)
+        # 安全闸 1/2（G33 → 17.0 先问再记）：首次 attach 一台主机不执行，
+        # 返回待授权；confirm=true 授权落盘并放行。围栏 = 已授权主机集合，
+        # 在浏览器层 route handler 机制执行。
+        gate_err, cdp_allowed = _cdp_attach_gate(cdp_url, confirm=confirm)
         if gate_err:
             raise ValueError(gate_err)
         if cdp_url:
@@ -7173,7 +6934,7 @@ class MasterFetchServer:
         password: Annotated[Optional[str], Field(description="PDF only: password for an encrypted PDF.")] = None,
         focus: Annotated[Optional[str], Field(description="Query-focused extraction: pass a query and only the BM25-relevant blocks (paragraphs/headings/tables) are returned, saving context on long pages. Works post-cache, so it never triggers a re-fetch. Re-pass the same focus when paginating with offset. Empty = full page.")] = None,
         focus_mode: Annotated[Optional[str], Field(description="Shape of the focus answer: 'filter' (default) keeps every block past the relevance cut; 'best' returns only the single highest-scoring block plus its heading - 'which part of this page answers the question'. Requires focus.")] = None,
-        focus_engine: Annotated[Optional[str], Field(description="Which scorer runs this focus: 'bm25' (fast, keyword overlap, ~23ms/page) or 'neural' (semantic, ~12.5s of CPU per page, and it needs the operator's DHOLE_NEURAL_FOCUS). Omit = whatever the operator configured. Asking for 'neural' without that permission is refused rather than silently downgraded.")] = None,
+        focus_engine: Annotated[Optional[str], Field(description="Which scorer runs this focus: 'bm25' (fast, keyword overlap, ~23ms/page) or 'neural' (semantic, ~12.5s of CPU per page, needs the local reranker model). Omit = 'bm25'. Asking for 'neural' when the model is not downloaded is refused rather than silently downgraded - it never downloads behind your back.")] = None,
         actions: Annotated[Optional[List[Dict[str, Any]]], Field(description="Page interactions run on the stealthy browser AFTER load, BEFORE extraction: [{click:'button.load-more'}, {fill:{selector:'#q', text:'x'}}, {press:'Enter'}, {wait:500}, {scroll:3} or {scroll:{steps:5,selector:'.feed'}}, {wait_selector:'.item'} or {wait_selector:{selector:'.quote', count:40, state:'visible'}}]. Forces the stealthy tier; bypasses cache. Reaches content behind a click/form/infinite scroll: scroll re-reaches the bottom as the page grows instead of assuming one viewport plus a fixed pause is enough.")] = None,
         include_media: Annotated[bool, Field(description="If true, populate the response .media field with up to 20 image URLs found on the page (for multimodal agents). Default false (keeps responses lean).")] = False,
         include_links: Annotated[bool, Field(description="If true, populate the response .links field with the page's outgoing links classified as citations/navigation/external + a primary_source hint. Default false. Use when you want to follow a page's referenced sources in one step.")] = False,
@@ -7181,7 +6942,7 @@ class MasterFetchServer:
         ignore_robots: Annotated[bool, Field(description="Skip the robots.txt check for this call (default false = comply). When robots.txt disallows the URL, dhole makes NO request and returns error='robots_disallowed' with content_ok false. Set true only when you have the site's permission to fetch regardless; DHOLE_IGNORE_ROBOTS=1 disables the check process-wide.")] = False,
         allow_private: Annotated[Optional[Any], Field(description="Fetch a host the SSRF guard otherwise blocks (your own dev / staging / Docker service). true = loopback only (127.0.0.0/8, ::1, localhost); a list names the hosts to allow, e.g. ['my-service.local','192.168.1.50']. Cloud metadata endpoints (169.254.169.254 etc.) are never allowed. DHOLE_ALLOW_PRIVATE_HOSTS does the same process-wide. Default: nothing is allowed.")] = None,
         check_login: Annotated[bool, Field(description="After the page settles on the browser tier, run a model-free login probe and return login_check: {logged_in: true|false|null, signals: [...], cookie_names: [...]}. DOM shape (logout control / password field / login form) + cookie NAMES only - values are never returned, no model involved. Null on HTTP-tier results and on cache hits (the probe is live-only, so pass check_login again with cache_ttl=0).")] = False,
-        cdp_url: Annotated[Optional[str], Field(description="Attach the user's real Chrome via CDP for THIS call: browser tier forced, HTTP tier and the public cache are skipped, and the fetch rides the attached profile's logged-in cookies. Refused by default - set DHOLE_CDP_ATTACH=1 to enable, and fence the blast radius with DHOLE_CDP_HOSTS=host1,host2 (navigation outside those hosts is aborted at the route level). Every response fetched this way returns cdp_attached=true; attach attempts are audited. Cannot be combined with schema=.")] = None,
+        cdp_url: Annotated[Optional[str], Field(description="Attach the user's real Chrome via CDP for THIS call: browser tier forced, HTTP tier and the public cache are skipped, and the fetch rides the attached profile's logged-in cookies. Refused by default - the FIRST attach to a host returns cdp_authorization_required and executes nothing; re-call with confirm=true once the user approved that host, which also fences navigation to the authorized hosts (anything outside them is aborted at the route level). Every response fetched this way returns cdp_attached=true; attach attempts are audited. Cannot be combined with schema=.")] = None,
         session_id: Annotated[Optional[str], Field(description="Reuse cookies across calls under this name (1-64 chars: letters, digits, '.', '_', '-'). Cookies a site sets are kept for that exact host and sent back on the next call naming the same session_id, so a login (or a form POST) can be followed by the pages behind it. Default: no session - cookies live for one call only. Covers BOTH tiers: the HTTP tier reads/writes the jar per host, and browser-tier calls under a session_id run in a dedicated browser seeded from the jar and written back after each call (cookie two-way bridge) - an HTTP login is visible to the browser, a browser login survives to the HTTP tier. Values never leave the process and are never returned; session_cookie_names reports names only.")] = None,
         method: Annotated[Optional[str], Field(description="HTTP verb for the request: GET (default), HEAD, POST, PUT, DELETE or PATCH. HEAD asks for status + size + content-type only and returns no body (size is the server's Content-Length, so 0 when the server omits it - example.com does). A non-GET is sent once (not retried, not cached, not escalated to the browser or the archive): a write must not be repeated, and a browser replay would answer about a GET to the same URL, not about your POST.")] = None,
         body: Annotated[Optional[Any], Field(description="Request body for POST/PUT/DELETE/PATCH (max 256 KB). A dict is sent as a form; with content_type=application/json it is sent as JSON; a string is sent as-is. Ignored for GET/HEAD (said so in the summary).")] = None,
@@ -7190,6 +6951,7 @@ class MasterFetchServer:
         if_modified_since: Annotated[Optional[str], Field(description="Ask 'has this changed since?' instead of re-downloading: send the server a date (an HTTP-date, or ISO-8601 like '2026-09-27' / '2026-09-27T08:00:00Z'; a bare date means midnight UTC). If the page has not changed the server answers 304, dhole returns not_modified=true with NO content and content_ok stays true - that is a successful answer, not a failure. Pair it with cache_validators.last_modified from an earlier call. HTTP tier only: a conditional request never escalates to the browser, which cannot be asked this question.")] = None,
         if_none_match: Annotated[Optional[str], Field(description="Stronger revalidation than if_modified_since where the server publishes one: an ETag to check against (from cache_validators.etag; the quotes are added if you leave them off, '*' means 'any current version'). An unchanged page comes back status=304, not_modified=true, content=[] with content_ok true. HTTP tier only, and never cached: a 304 says nothing about the body, so it cannot be stored as one.")] = None,
         schema: Annotated[Optional[Dict[str, Any]], Field(description="JSON schema for structured data extraction. Each property can have a 'selector' (CSS) for direct DOM extraction. Returns structured JSON instead of markdown. No LLM needed. Needs a non-empty 'properties' map (a JSON string is also accepted); an unusable schema raises instead of silently returning markdown. A property carrying its OWN 'properties' (or items.properties) plus a selector extracts one record per matched element, child selectors evaluated inside that element - how a repeated list (quotes, products, rows) keeps its grouping instead of flattening into one array of every tag on the page. Up to 200 records per field.")] = None,
+        confirm: Annotated[bool, Field(description="Approval for a first-time sensitive action on this call. Today that means cdp_url: attaching your real Chrome hands over every logged-in site's cookies, so the FIRST attach to a host is refused with cdp_authorization_required and nothing executed - re-call with confirm=true to authorize that host (remembered on disk; delete cdp_hosts.json in the dhole state directory to revoke). False (default) = nothing sensitive is approved.")] = False,
     ) -> ResponseModel:
         """Fetch a URL (or multiple URLs) with automatic anti-bot escalation.
 
@@ -7217,6 +6979,23 @@ class MasterFetchServer:
         (suggested next call), summary, page_type (article/docs/list/forum/auth_wall/paywall/...),
         content_age_days + is_stale, source_type + is_official, source + archived_at.
         """
+        # bulk 与 attach 不兼容：attach 是「这一次调用挂哪个浏览器」的事，而批量里
+        # 每个 URL 各自再进一次 smart_fetch，cdp_url 传不下去。让闸口先过，效果就是
+        # 「把主机写进授权名册，然后每一页都不 attach」—— 静默降级，还留下一个用户
+        # 没同意的授权。所以拒绝发生在闸口之前，这次调用不落任何授权。
+        if urls is not None and cdp_url:
+            msg = ("cdp_url= cannot be combined with urls=: the attach is per call, "
+                   "so a batch would fetch every URL un-attached. Call smart_fetch "
+                   "once per URL with cdp_url=.")
+            return BulkResponseModel(
+                results=[_invalid_request_result(u, msg) for u in urls],
+                total=len(urls), successful=0,
+            )
+        # 安全闸 1/2（G33 → 17.0 先问再记）：CDP attach 的授权点在工具入口，
+        # 单条与 bulk 两条路都在这里过闸；_open_session 只消费已过闸的结果。
+        gate_err, _cdp_allowed = _cdp_attach_gate(cdp_url, confirm=confirm)
+        if gate_err:
+            raise ValueError(gate_err)
         # `--cache-ttl` 之前是死参数：默认值在函数定义时就把模块常量焊进了签名，
         # 实例上的 self._cache_ttl 永远读不到。用 None 当哨兵，在这里解析。
         # 未显式设置时 self._cache_ttl == DEFAULT_TTL，所以除真正用了该旗标之外
@@ -7236,22 +7015,13 @@ class MasterFetchServer:
             schema = _normalize_schema(schema)
         except (ValueError, SecurityError) as e:
             return _invalid_request_result(url or "", str(e))
-        # M-1 神经 focus：许可 = DHOLE_NEURAL_FOCUS（默认关），意愿 = 按次
-        # focus_engine。带 focus 的调用在这里分三种说法：
-        #   点名要神经但没有许可 → 拒绝并说明怎么打开（不静默降级，也不静默下载）
-        #   有许可（且没被 bm25 否决）→ 在 async 上下文里确保模型加载一次：
-        #     focus_content 只做同步 peek，加载只能发生在这里；模型文件缺失时
-        #     **显式报错**，~280MB 的意外下载不是回退，是惊吓
-        #   只要 bm25 → 根本不碰重排器，即使 flag 开着（一次便宜的重读不该为此
-        #     付 12.5s/页，也不该逼人先关全局能力）
+        # M-1 神经 focus：17.0 起没有许可门 —— focus_engine='neural' 点名才用
+        # 语义分（未点名 / 'bm25' 走 BM25，根本不碰重排器）。点名了但模型缺失时
+        # **显式报错**：~280MB 的意外下载不是回退，是惊吓。加载只能发生在 async
+        # 上下文这里；focus_content 只做同步 peek。
         # bulk 与单 URL 两条路都过这里：bulk 的每个任务经 _apply_chunking 应用 focus。
         if _FOCUS.get():
-            permitted = _neural_focus_enabled()
-            if _neural_focus_requested(permitted) and not permitted:
-                return _invalid_request_result(
-                    url or "", _NEURAL_FOCUS_NOT_PERMITTED,
-                    next_action=_NEURAL_FOCUS_PERMIT_HOWTO)
-            if _neural_for_this_call(permitted):
+            if _neural_focus_requested():
                 from dhole_mcp.reranker import ensure_reranker, get_reranker
                 if get_reranker() is None:
                     rer = await ensure_reranker(download=False)
@@ -7263,8 +7033,7 @@ class MasterFetchServer:
                                 "automatically on the first neural smart_search (one-time, "
                                 "resumable), or select it with `dhole model use bge-zh`. "
                                 "For this call only, pass focus_engine='bm25' to use "
-                                "keyword-overlap focus (or turn the flag off with "
-                                "`dhole config unset DHOLE_NEURAL_FOCUS`)."))
+                                "keyword-overlap focus."))
 
         # Bulk mode: fetch multiple URLs in parallel
         if urls is not None:
@@ -8659,8 +8428,7 @@ class MasterFetchServer:
                 fetcher_used="parse",
                 error=("File not found: " + ", ".join(candidates)
                        + ". Pass an absolute path, or pass cwd=<working directory> "
-                         "so relative paths resolve against it (DHOLE_WORKDIR does "
-                         "the same for every call)."),
+                         "so relative paths resolve against it."),
             ))
 
         content, error, extras = await asyncio_to_thread(
@@ -8953,10 +8721,6 @@ class MasterFetchServer:
                         "content": "\n".join(page_result.content)[:8000] if page_result.content else "",
                         "content_ok": page_result.content_ok,
                     })
-                    # Implicit feedback: record domain as useful
-                    if page_result.content_ok:
-                        from dhole_mcp.search import record_search_feedback
-                        record_search_feedback(sr.url)
                 except Exception as e:
                     # Surface the failure instead of silently dropping the page,
                     # so the agent sees a hole in fetched_pages (with the reason)
@@ -9014,30 +8778,22 @@ class MasterFetchServer:
             how often one server is hit; a host's robots.txt Crawl-delay raises
             this per host, and the summary names the interval that was used.
         focus_engine: which scorer runs `focus` ('bm25' | 'neural'). Same rule as
-            smart_fetch: the operator's flag is the permission, this is the
-            willingness for this crawl, and 'bm25' is the cheap path even when
-            the flag is on. Asking for 'neural' without the permission is refused
-            (12.5s of CPU per page multiplied by max_pages is not a silent choice).
+            smart_fetch: omitting it is 'bm25', which is the cheap path and needs
+            nothing; 'neural' is what you ask for when keyword overlap is not
+            enough. Asking for 'neural' without the local reranker model is
+            refused, not downgraded (12.5s of CPU per page multiplied by
+            max_pages is not a silent choice).
         """
-        # M-1 闸：与 smart_fetch 同一套三条规则、同一份文案（许可 = flag，意愿 =
-        # focus_engine）。爬取比抓取更需要这句实话：一页 12.5s 的 CPU 推理会乘上
-        # max_pages，所以"这一次只要 bm25"在这里同样是一等选项，而不是要操作者
-        # 先把全局能力关掉。模型必须在场（缺模型显式报错，不静默下载）：爬取中途
-        # 是同步循环，没有 async 入口可加载。
+        # M-1 闸：与 smart_fetch 同一条规则（17.0 起无许可门 —— focus_engine=
+        # 'neural' 点名才用语义分）。模型必须在场（缺模型显式报错，不静默下载）：
+        # 爬取中途是同步循环，没有 async 入口可加载。
         from dhole_mcp.crawl import CrawlResponseModel as _CRM
         # 意愿先落到 contextvar，闸和 crawl 里的两个消费点读的才是同一个值。
-        # （先判闸、后进 try 里 set 的写法第一次跑就自己招了：闸读到上一次调用
-        # 留下的 ""，focus_engine 既没被拒绝也没买到 BM25 豁免——参数成了装饰。）
-        # reset 放在最外层：两个早退的错误分支也不会把这次的意愿漏给下次调用。
+        # reset 放在最外层：早退的错误分支也不会把这次的意愿漏给下次调用。
         token = _FOCUS_ENGINE.set(_normalize_focus_engine(focus_engine))
         try:
             if isinstance(focus, str) and focus.strip():
-                permitted = _neural_focus_enabled()
-                if _neural_focus_requested(permitted) and not permitted:
-                    return _CRM(start_url=url, pages=[],
-                                error=_NEURAL_FOCUS_NOT_PERMITTED,
-                                next_action=_NEURAL_FOCUS_PERMIT_HOWTO)
-                if _neural_for_this_call(permitted):
+                if _neural_focus_requested():
                     from dhole_mcp.reranker import ensure_reranker, get_reranker
                     if get_reranker() is None:
                         rer = await ensure_reranker(download=False)
@@ -9049,8 +8805,7 @@ class MasterFetchServer:
                                             "automatically on the first neural smart_search (one-time, "
                                             "resumable), or select it with `dhole model use bge-zh`. "
                                             "For this crawl only, pass focus_engine='bm25' to use "
-                                            "keyword-overlap focus (or turn the flag off with "
-                                            "`dhole config unset DHOLE_NEURAL_FOCUS`)."))
+                                            "keyword-overlap focus."))
             try:
                 # Lazy import to break circular dependency (crawl.py imports
                 # ResponseModel from server.py; server.py imports smart_crawl
@@ -9111,7 +8866,7 @@ class MasterFetchServer:
     _TOOL_DEFS: list[dict] = [
         {
             "name": "smart_fetch",
-            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: smart_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: when the live site hard-blocks, content_ok can be true of a dated Wayback snapshot (check source + archived_at). No parameter disables it; costs 10-30s.\n- Everything but url has a home in options (its description lists them all); a top-level copy is read too, and wins when both are given.\n- The exact shape of actions, schema and the browser/session knobs is NOT in this description: dhole_doc(topic='behavior') reads dhole's own handbook, and dhole_doc(topic='call') the placement traps. Read one before writing the other.",
+            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: smart_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: when the live site hard-blocks, content_ok can be true of a dated Wayback snapshot (check source + archived_at). No parameter disables it; costs 10-30s.\n- Everything but url has a home in options (its description lists them all); a top-level copy is read too, and wins when both are given.\n- The exact shape of actions, schema and the browser/session knobs is NOT in this description: dhole_doc(topic='behavior') reads dhole's own handbook, and dhole_doc(topic='call') the placement traps. Read one before writing the other.\n\nVISUAL ASSIST: actions gains {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} - crops one element on the SAME page instance as the surrounding fill/click actions and returns it inline (metadata.actions keeps a name-only receipt; decoded QR text rides with it). Use it to read a CAPTCHA you are about to answer in the same action chain. Discipline: simple text/grid image CAPTCHAs - at most 3 read-and-retry rounds, then hand off to the user; DataDome/Akamai/interactive Turnstile walls, 2FA factors, and sliders are always handed off (nothing readable on the page, or outside dhole's action primitives). dhole ships no vision model: the reading happens in you.",
             "inputSchema": {
                 "type": "object",
                 # smart_fetch needs one of the two; the schema said nothing at
@@ -9140,12 +8895,13 @@ class MasterFetchServer:
                     "offset": {"type": "integer", "description": "Char offset into the extracted text, to resume a truncated page. Take it from next_offset."},
                     "pages": {"type": "string", "description": "PDF only: '1-5' or '1,3,5-7'. Narrows what is EXTRACTED, not what is downloaded. Pick ranges from table_of_contents page/end_page."},
                     "password": {"type": "string", "description": "PDF only: password for an encrypted PDF."},
-                    "focus": {"type": "string", "description": "Return only blocks matching this query - the big token saver on long pages. Applied after the cache, so it does not re-fetch. Re-pass the same focus when paginating. Scored with BM25, or with a slower local cross-encoder if the operator enabled it - that path costs ~12.5s of CPU PER PAGE, so budget timeout for bulk calls."},
+                    "focus": {"type": "string", "description": "Return only blocks matching this query - the big token saver on long pages. Applied after the cache, so it does not re-fetch. Re-pass the same focus when paginating. Scored with BM25 by default; focus_engine='neural' switches to a local cross-encoder - that path costs ~12.5s of CPU PER PAGE, so budget timeout for bulk calls."},
                     "focus_mode": {"type": "string", "enum": ["filter", "best"], "description": "Shape of the focus answer. 'filter' (default) keeps every block past the relevance cut; 'best' returns only the single highest-scoring block plus its heading - 'which part of this page answers the question'. Requires focus."},
-                    "focus_engine": {"type": "string", "enum": ["bm25", "neural"], "description": "Which scorer runs focus: 'bm25' (keyword overlap) or 'neural' (semantic, needs the operator's DHOLE_NEURAL_FOCUS - without it the call is refused, not downgraded). Omit = the operator's setting; 'bm25' is honored even with the flag on."},
+                    "focus_engine": {"type": "string", "enum": ["bm25", "neural"], "description": "Which scorer runs focus: 'bm25' (keyword overlap, the default) or 'neural' (a local cross-encoder; needs the reranker model downloaded, and costs ~12.5s of CPU per page). Omit = 'bm25'."},
                     "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "Interactions on the stealthy browser after load, before extraction (forces stealthy, bypasses cache). ONE action key per object: [{scroll:3},{wait:1000}], not {scroll:3,wait:1000}. Keys: click, fill, press, wait, scroll, wait_selector, snapshot, screenshot, submit - each takes a CSS selector or a snapshot index; {snapshot:true} returns the numbered interactive-element list (index/tag/role/name) to take indices from, and expect:'name' verifies an element's visible name before acting, so a stale index fails loudly instead of clicking the wrong thing.\nsubmit is the explicit irreversible step: without confirm:true it PAUSES (a pending_approval receipt, nothing submitted) until the user has approved that exact submission. The full shape of each key, the lazy-feed and captcha discipline: dhole_doc(topic='behavior', section='Page interaction')."},
                     "schema": {"type": "object", "description": "{properties: {...}} (a JSON string is accepted): CSS-driven structured extraction, returned instead of markdown. Only these keys are read - selector, attribute, type, properties, items; any other JSON-Schema keyword is accepted and does nothing. Each property may carry 'selector' (CSS) and/or 'attribute' (that attribute's value instead of the text). Without \"type\" a property returns the FIRST match; \"type\": \"array\" returns all of them. A property with its OWN 'properties' (or items.properties) plus a selector extracts one record PER MATCHED ELEMENT, child selectors evaluated inside it - that keeps a repeated list grouped instead of flattened. Up to 200 records per field; a nested \"type\": \"array\" must name the container it iterates or the call is rejected. The rule and a worked example: dhole_doc(topic='behavior', section='Structured extraction').", "additionalProperties": True},
-                    "options": {"type": "object", "description": "Every parameter of this tool except url may go here. The keys: extraction_type, css_selector, max_content_chars, timeout, cache_ttl, force_fetcher, offset, pages, password, focus, focus_mode, focus_engine, schema, actions, urls, include_links, max_links, include_media, main_content_only, use_trafilatura, method, body, content_type, auth, cookies, extra_headers, proxy, useragent, session_id, check_login, cdp_url, ignore_robots, allow_private, if_modified_since, if_none_match, wait, network_idle, headless, real_chrome, hide_canvas, block_webrtc, solve_cloudflare.\nFive of them carry a trap:\nmethod: a non-GET is sent ONCE - never retried, cached, browser-escalated or archive-answered, because the previous call may already be committed and re-sending writes twice. body cap 256KB; HEAD asks for status+size+type with no body.\nauth / cookies / session_id: credentials go only to the origin you named, and a redirect to another domain strips them. Values are never echoed back, and a credentialed body is cached per credential rather than publicly.\nif_none_match / if_modified_since: conditional GET on the HTTP tier only; a 304 is SUCCESS (not_modified=true, empty body) - do not escalate it to the browser to 'retry'.\nallow_private: true = loopback only, or a host list. Cloud metadata endpoints are never allowed under any setting.\ncdp_url: runs the fetch in the user's own Chrome; needs DHOLE_CDP_ATTACH=1, fenced by DHOLE_CDP_HOSTS, and the answer says cdp_attached=true.\nheadless, useragent, extra_headers, network_idle, real_chrome, hide_canvas, block_webrtc, solve_cloudflare, use_trafilatura, main_content_only are fingerprint and extraction internals, already tuned - overriding them usually makes a site detect you, so leave them unset unless something names one. What every key does and its range: dhole_doc(topic='behavior'). Placement with counterexamples: dhole_doc(topic='call').", "additionalProperties": True},
+                    "confirm": {"type": "boolean", "description": "Approval for a first-time sensitive action on this call - today that means cdp_url: attaching your real Chrome hands over every logged-in site's cookies, so the FIRST attach to a host is refused with cdp_authorization_required and nothing is executed; re-call with confirm=true to authorize that host (remembered on disk; delete cdp_hosts.json in the dhole state directory to revoke). False (default) approves nothing."},
+                    "options": {"type": "object", "description": "Every parameter of this tool except url may go here. The keys: extraction_type, css_selector, max_content_chars, timeout, cache_ttl, force_fetcher, offset, pages, password, focus, focus_mode, focus_engine, schema, actions, urls, include_links, max_links, include_media, main_content_only, use_trafilatura, method, body, content_type, auth, cookies, extra_headers, proxy, useragent, session_id, check_login, cdp_url, confirm, ignore_robots, allow_private, if_modified_since, if_none_match, wait, network_idle, headless, real_chrome, hide_canvas, block_webrtc, solve_cloudflare.\nFive of them carry a trap:\nmethod: a non-GET is sent ONCE - never retried, cached, browser-escalated or archive-answered, because the previous call may already be committed and re-sending writes twice. body cap 256KB; HEAD asks for status+size+type with no body.\nauth / cookies / session_id: credentials go only to the origin you named, and a redirect to another domain strips them. Values are never echoed back, and a credentialed body is cached per credential rather than publicly.\nif_none_match / if_modified_since: conditional GET on the HTTP tier only; a 304 is SUCCESS (not_modified=true, empty body) - do not escalate it to the browser to 'retry'.\nallow_private: true = loopback only, or a host list. Cloud metadata endpoints are never allowed under any setting.\ncdp_url: runs the fetch in the user's own Chrome; the FIRST attach to a host is refused with cdp_authorization_required and nothing executes - re-call with confirm=true to authorize that host (persisted to cdp_hosts.json; revoke by deleting it), and the answer says cdp_attached=true. confirm: approves that first-time sensitive action; false approves nothing.\nheadless, useragent, extra_headers, network_idle, real_chrome, hide_canvas, block_webrtc, solve_cloudflare, use_trafilatura, main_content_only are fingerprint and extraction internals, already tuned - overriding them usually makes a site detect you, so leave them unset unless something names one. What every key does and its range: dhole_doc(topic='behavior'). Placement with counterexamples: dhole_doc(topic='call').", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -9161,20 +8917,20 @@ class MasterFetchServer:
                     "focus": {"type": "string", "description": "Query: crawl the links relevant to this and focus-filter each page."},
                     "crawl_urls": {"type": "array", "items": {"type": "string"}, "description": "Chosen subset of URLs to fetch (no re-discovery). Use after sitemap=true or discover_only=true."},
                     "search": {"type": "string", "description": "Filter discovered/crawled URLs by keyword (URL path + title). Use with discover_only=true."},
-                    "options": {"type": "object", "description": "sitemap: true | 'auto' | false (default) - where the URL map comes from.\nmax_pages: 1-100 (default 10). max_depth: 0-5 (default 2). concurrency: 1-5 (default 3) pages in flight.\npath_include / path_exclude: keep or drop a path subtree - '/docs' keeps /docs and everything under it, NOT /docs-old.\nmax_content_chars_per: per-page content cap (8000). max_total_chars: whole-crawl budget.\ncache_ttl: seconds (3600; 0 = fresh). force_fetcher: 'http' | 'stealthy'. timeout: ms (30000). deadline_ms: hard stop (120000).\nignore_robots: skip the robots.txt check and the disallowed-URL skip.\ndelay: 0-60 seconds between requests to the SAME host; a site's robots.txt Crawl-delay can raise it, never lower it.\nfocus_engine: 'bm25' | 'neural' - which scorer runs focus here. Neural costs ~12.5s of CPU per page TIMES max_pages and needs the operator's DHOLE_NEURAL_FOCUS; asking without it is refused, not downgraded. Omit = the operator's setting, and 'bm25' is honored even with the flag on.\nWhat each knob does and what the counters in the reply mean: dhole_doc(topic='behavior', section='smart_crawl').", "additionalProperties": True},
+                    "options": {"type": "object", "description": "sitemap: true | 'auto' | false (default) - where the URL map comes from.\nmax_pages: 1-100 (default 10). max_depth: 0-5 (default 2). concurrency: 1-5 (default 3) pages in flight.\npath_include / path_exclude: keep or drop a path subtree - '/docs' keeps /docs and everything under it, NOT /docs-old.\nmax_content_chars_per: per-page content cap (8000). max_total_chars: whole-crawl budget.\ncache_ttl: seconds (3600; 0 = fresh). force_fetcher: 'http' | 'stealthy'. timeout: ms (30000). deadline_ms: hard stop (120000).\nignore_robots: skip the robots.txt check and the disallowed-URL skip.\ndelay: 0-60 seconds between requests to the SAME host; a site's robots.txt Crawl-delay can raise it, never lower it.\nfocus_engine: 'bm25' | 'neural' - which scorer runs focus here. Neural costs ~12.5s of CPU per page TIMES max_pages and needs the local reranker model; asking for it without the model is refused, not downgraded. Omit = 'bm25', which needs nothing and costs nothing extra.\nWhat each knob does and what the counters in the reply mean: dhole_doc(topic='behavior', section='smart_crawl').", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
         },
         {
             "name": "screenshot",
-            "description": "Use when you need to SEE a page - layout, charts, UI state, how it really renders: returns an image. For the page's words use smart_fetch instead. A text-only model gets nothing from an inline image: pass options.save_to and read the file at the absolute path it reports.\n- Full-page rendering costs a browser: the first call pays a cold start (seconds); later ones in the same session are fast.",
+            "description": "Use when you need to SEE a page - layout, charts, UI state, how it really renders: returns an image. For the page's words use smart_fetch instead. A text-only model gets nothing from an inline image: pass options.save_to and read the file at the absolute path it reports.\n- Full-page rendering costs a browser: the first call pays a cold start (seconds); later ones in the same session are fast.\n\nVISUAL ASSIST: options.selector crops the capture to ONE element (CSS selector; full_page cannot combine with it) and returns it inline - for CAPTCHAs, QR codes, forms. Discipline: a simple text/grid image CAPTCHA may be read and tried at most 3 times, then STOP and hand off to the user; behavioral/fingerprint walls (DataDome, Akamai, interactive Turnstile) have nothing to look at - hand off immediately; 2FA codes are never on the page - hand off; sliders need drag primitives dhole does not have - hand off. dhole ships no vision model: the reading happens in you.",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
                     "url": {"type": "string", "description": "URL to screenshot"},
                     "session_id": {"type": "string", "description": "Reuse a specific open browser session. Omit to auto-manage."},
-                    "options": {"type": "object", "description": "save_to: a path - the image is written there and the text part reports the absolute path + byte size (parents created; an existing file not named like an image is refused).\nfull_page: bool (false). image_type: png|jpeg. quality: 0-100 (jpeg). wait: ms. wait_selector: css. network_idle: bool. timeout: ms (30000).\ndecode_qr: bool - decode QR payloads from the capture and report them in the text part (local deterministic decoding, opencv; NOT gated by DHOLE_MULTIMODAL). Empty list = no code found.\nallow_private: same as smart_fetch's - true for loopback (127.0.0.0/8, ::1, localhost), or a host list. Without it a private URL is refused before the browser starts.", "additionalProperties": True},
+                    "options": {"type": "object", "description": "save_to: a path - the image is written there and the text part reports the absolute path + byte size (parents created; an existing file not named like an image is refused).\nfull_page: bool (false). image_type: png|jpeg. quality: 0-100 (jpeg). wait: ms. wait_selector: css. network_idle: bool. timeout: ms (30000).\ndecode_qr: bool - decode QR payloads from the capture and report them in the text part (local deterministic decoding, opencv). Empty list = no code found.\nallow_private: same as smart_fetch's - true for loopback (127.0.0.0/8, ::1, localhost), or a host list. Without it a private URL is refused before the browser starts.", "additionalProperties": True},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -9205,7 +8961,7 @@ class MasterFetchServer:
         },
         {
             "name": "parse",
-            "description": "Use for LOCAL files the task references: .html/.htm/.xhtml, .docx, .xlsx, .csv, .pdf, .md/.markdown/.txt, .json/.yaml/.yml, .pptx, .odt -> Markdown, no web fetch. A PDF that has a URL is better served by smart_fetch (page ranges, password, table_of_contents).\n.html/.csv are decoded by charset detection, not assumed UTF-8: metadata.encoding names the charset used, and a wrong guess comes back as an error whose next_action says to re-call with encoding=.\n.pptx/.odt need no extra install; what a text reader cannot carry (speaker notes, layout, images) is named in the output's first line rather than vanishing from it. .json/.yaml are validated, not just echoed: an unparseable file is an error, not a dump.\nRelative paths: pass cwd when the host doesn't tell the server the working directory; otherwise $DHOLE_WORKDIR, then home.",
+            "description": "Use for LOCAL files the task references: .html/.htm/.xhtml, .docx, .xlsx, .csv, .pdf, .md/.markdown/.txt, .json/.yaml/.yml, .pptx, .odt -> Markdown, no web fetch. A PDF that has a URL is better served by smart_fetch (page ranges, password, table_of_contents).\n.html/.csv are decoded by charset detection, not assumed UTF-8: metadata.encoding names the charset used, and a wrong guess comes back as an error whose next_action says to re-call with encoding=.\n.pptx/.odt need no extra install; what a text reader cannot carry (speaker notes, layout, images) is named in the output's first line rather than vanishing from it. .json/.yaml are validated, not just echoed: an unparseable file is an error, not a dump.\nRelative paths: pass cwd when the host doesn't tell the server the working directory; otherwise the process cwd, then home.",
             "inputSchema": {
                 "type": "object", "required": ["file_path"],
                 "properties": {
@@ -9367,36 +9123,12 @@ class MasterFetchServer:
         calling one anyway gets a named error instead of silence. Tests read
         this method to assert the wire set without standing up a server.
 
-        This is also where an advertised SHAPE is decided: DHOLE_OUTPUT_SCHEMA
-        adds the derived core contract per tool, and only here - the class
-        literal stays what the token audit measures and what the tests read, so
-        the opt-in cannot quietly change the baseline either way.
-
-        The multimodal flag (17.0) composes here too: DHOLE_MULTIMODAL=1 adds
-        the element-capture clauses and the challenge discipline to the
-        screenshot / smart_fetch descriptions. OFF keeps the base literal byte
-        for byte - the gated features are refused at call time, so advertising
-        them to a caller that declared itself text-only would spend connect
-        tokens on shapes it can never use, and the discipline lines exist to
-        be read by an agent that is ABOUT to see pixels.
+        17.0: no outputSchema is advertised (the derived schemas had no reader
+        and rode on every connect), and the visual-assist discipline lines are
+        baked into the class literal itself - element capture is always on, so
+        its discipline is part of the tool, not a mode of it.
         """
-        defs = []
-        for td in cls._TOOL_DEFS:
-            if td["name"] not in _ENABLED_TOOLS:
-                continue
-            schema = _output_schema_for(td["name"]) if _OUTPUT_SCHEMA else None
-            defs.append({**td, "outputSchema": schema} if schema else td)
-        if _env_flag("DHOLE_MULTIMODAL"):
-            # Copies, never in-place: the class literal is the token-audit
-            # baseline and a shared object - one mutated description would
-            # leak into every later list_tools call and every test that reads it.
-            defs = [dict(td) for td in defs]
-            for td in defs:
-                if td["name"] == "screenshot":
-                    td["description"] += _MULTIMODAL_SHOT_CLAUSE
-                elif td["name"] == "smart_fetch":
-                    td["description"] += _MULTIMODAL_SF_CLAUSE
-        return defs
+        return [td for td in cls._TOOL_DEFS if td["name"] in _ENABLED_TOOLS]
 
     def serve(self, http: bool = False, host: str = "127.0.0.1", port: int = 8765):
         """Start the MCP server using low-level Server for minimal token overhead.
@@ -10062,9 +9794,8 @@ def _cmd_engines(argv: list[str]) -> int:
                                 "clears one immediately"))
         else:
             print("    " + ui.ok("no engine is on cooldown"))
-        # G6: the timeouts themselves are part of "why is this engine missing", and
-        # they are now tunable - so say which values are in force rather than leaving
-        # them readable only in the source.
+        # G6: the timeouts themselves are part of "why is this engine missing".
+        # 17.0 写死 —— 说出现在生效的值，而不是让人去读源码。
         from dhole_mcp.updater import _cooldown_config
         cfg = _cooldown_config()
         tiers = cfg["tiers"]
@@ -10072,11 +9803,7 @@ def _cmd_engines(argv: list[str]) -> int:
         print("  " + ui.dim(
             f"backoff: blocked {tiers['block']:g}s / challenge x3 {tiers['challenge']:g}s"
             f" / unreachable x3 {tiers['connection']:g}s"
-            + "  ·  heartbeat: "
-            + (f"probes cooling engines every {hb:g}s" if hb > 0
-               else "off (DHOLE_ENGINE_HEARTBEAT=0)")))
-        if cfg["note"]:
-            print("  " + ui.err(cfg["note"]))
+            + f"  ·  heartbeat: probes cooling engines every {hb:g}s"))
         print("  " + ui.dim("reset with") + "  " + ui.cmd("dhole engines reset"))
         return 0
     if action in ("reset", "clear"):

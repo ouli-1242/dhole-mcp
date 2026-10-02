@@ -1,6 +1,6 @@
 # Response Field Dictionary
 
-Consult this when a response doesn't make sense or a field shows a non-default value. **Responses are compressed: absence means default** — a missing field is "nothing unusual", not lost data (legacy parsers that need the full shape can opt into `DHOLE_WIRE_FULL=1`).
+Consult this when a response doesn't make sense or a field shows a non-default value. **Responses are compressed: absence means default** — a missing field is "nothing unusual", not lost data. There is no switch that makes dhole send every field: the shape is the shape.
 
 ## Verdict fields (read these three first)
 
@@ -73,9 +73,9 @@ Consult this when a response doesn't make sense or a field shows a non-default v
 | `metadata.actions` | One receipt per page-interaction action: `ok`, `error`, and — for rich actions — `image: true` (pixels rode the content list as image blocks), `qr: [...]` (decoded QR texts), `elements` / `elements_total` / `elements_truncated` (snapshot), `submitted: true` | If an action didn't take effect, look here (e.g. wait_selector timed out). A receipt with `pending_approval: true` means a submit PAUSED before acting — nothing was sent; ask the user, then re-run the whole chain with `confirm: true` on that submit. A receipt with `error` naming "element index" beyond the page means the page changed — re-snapshot |
 | `metadata.encoding` | (parse) encoding actually used | On mojibake, compare — if detection guessed wrong, pass `encoding=` explicitly |
 
-## The opt-in tools (recipe / watch / vault / login)
+## The stateful tools (recipe / watch / vault / login)
 
-Absent from `tools/list` unless the operator enabled the group (`DHOLE_TASKS=1` / `DHOLE_VAULT=1`). Absence-means-default applies here too.
+Registered by default in 17.0; absent from `tools/list` only when the operator named an explicit `DHOLE_TOOLS` subset. Absence-means-default applies here too.
 
 | Field | Meaning | What to do when non-default |
 |---|---|---|

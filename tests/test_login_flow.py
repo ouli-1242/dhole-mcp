@@ -427,30 +427,26 @@ class TestNoSecretInTheResponse:
 
 
 class TestWireGating:
-    def test_the_credential_tools_are_opt_in(self):
-        from dhole_mcp.server import _ENABLED_TOOLS, _OPT_IN_TOOLS_VAULT
+    def test_the_credential_tools_are_registered_by_default(self):
+        """17.0：没有 opt-in 组 —— vault/login 默认注册，许可纪律在工具内部
+        （login 无 confirm 必暂停；值永不回显）。"""
+        from dhole_mcp.server import _ENABLED_TOOLS
 
-        assert _OPT_IN_TOOLS_VAULT == frozenset({"vault", "login"})
-        assert _OPT_IN_TOOLS_VAULT.isdisjoint(_ENABLED_TOOLS), \
-            "默认连接期表里不能有能读凭据的工具"
+        assert {"vault", "login"} <= _ENABLED_TOOLS
 
-    def test_the_vault_and_login_tool_defs_are_advertised_when_enabled(self):
-        from dhole_mcp.server import MasterFetchServer, _OPT_IN_TOOLS_VAULT
+    def test_the_vault_and_login_tool_defs_are_advertised(self):
+        from dhole_mcp.server import MasterFetchServer
 
         names = [td["name"] for td in MasterFetchServer._enabled_tool_defs()]
-        for tool in _OPT_IN_TOOLS_VAULT:
-            assert tool not in names, f"{tool} 不该出现在默认 wire 里"
+        for tool in ("vault", "login"):
+            assert tool in names, f"{tool} 应该出现在默认 wire 里"
 
     def test_every_tool_def_argument_is_a_known_top_level_arg(self):
         """schema 里宣传的参数必须真的会被 _dispatch 读 —— 否则是一个安静的谎。"""
-        from dhole_mcp.server import (
-            _OPT_IN_TOOLS_VAULT,
-            _TOP_LEVEL_ARGS,
-            MasterFetchServer,
-        )
+        from dhole_mcp.server import _TOP_LEVEL_ARGS, MasterFetchServer
 
         for td in MasterFetchServer._TOOL_DEFS:
-            if td["name"] not in _OPT_IN_TOOLS_VAULT:
+            if td["name"] not in ("vault", "login"):
                 continue
             declared = set(td["inputSchema"]["properties"])
             accepted = set(_TOP_LEVEL_ARGS[td["name"]])
@@ -487,7 +483,7 @@ class TestDispatchReachesTheTools:
         from dhole_mcp import server as sm
 
         monkeypatch.setattr(sm, "_ENABLED_TOOLS",
-                            sm._ENABLED_TOOLS | sm._OPT_IN_TOOLS_VAULT)
+                            sm._ENABLED_TOOLS | {"vault", "login"})
 
     def test_vault_status_goes_through_dispatch(self, opted_in, wired):
         srv, _, _ = wired()
@@ -507,8 +503,10 @@ class TestDispatchReachesTheTools:
         with pytest.raises(ValueError):
             _run(srv._dispatch("vault", {"op": "status", "password": "x"}))
 
-    def test_a_disabled_credential_tool_is_refused_with_the_flag(self, wired):
-        """默认关时入口要拒绝，并且报错里点名怎么打开。"""
+    def test_a_disabled_credential_tool_is_refused_with_the_flag(self, wired, monkeypatch):
+        """DHOLE_TOOLS 白名单点名之外的工具，入口要拒绝并点名那道白名单。"""
+        from dhole_mcp import server as sm
+        monkeypatch.setattr(sm, "_ENABLED_TOOLS", frozenset({"smart_fetch"}))
         srv, _, _ = wired()
         with pytest.raises(ValueError) as e:
             _run(srv._dispatch("vault", {"op": "status"}))

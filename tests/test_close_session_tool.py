@@ -209,11 +209,20 @@ class TestTheWireContract:
         assert "close_session" in server_mod.DHOLE_INSTRUCTIONS, \
             "常驻指令里没有它，agent 就不知道该用它"
 
-    def test_it_declares_no_output_schema(self):
-        """和 screenshot / resolve_url 同一档：名册是 dict-of-lists 的形状，写成
-        schema 只能写成空承诺，而承诺一旦写下就必须永远成立。"""
-        from dhole_mcp.server import _output_schema_for
-        assert _output_schema_for("close_session") is None
+    def test_the_output_schema_mechanism_does_not_exist(self):
+        """17.0：不广告 outputSchema —— 机制连同三个 wire 形状开关一起删了。
+
+        名册是 dict-of-lists 的形状，写成 schema 只能写成空承诺，而承诺一旦写下就
+        必须永远成立。这里断言的是"没有这套机制"而不是"它返回 None"：留一个永远
+        返回 None 的构造函数，等于给下一个人留一条把承诺加回来的路。
+        与 test_wire_compaction.py::TestOneChannelPerCall 同一口径。
+        """
+        import dhole_mcp.server as server_mod
+
+        assert not hasattr(server_mod, "_output_schema_for"), (
+            "开关要与通道一起删除，不许留一个永远无效的入口")
+        for td in MasterFetchServer._TOOL_DEFS:
+            assert "outputSchema" not in td, f"{td['name']} 不许广告 outputSchema"
 
     def test_the_census_row_is_covered_by_the_compaction_policy(self):
         """新模型必须被 _WIRE_OMIT 判定过，否则"新增字段未判定即红"的守卫形同虚设。"""

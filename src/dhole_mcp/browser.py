@@ -15,8 +15,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-
-from dhole_mcp import env_registry
 import re
 import sys
 import tempfile
@@ -215,29 +213,17 @@ def _is_entry_target(request_url: str, entry_url: str) -> bool:
 
 
 class CDPHostNotAllowedError(RuntimeError):
-    """CDP attach 模式下，目标 host 不在 DHOLE_CDP_HOSTS 白名单里。
+    """CDP attach 模式下，目标 host 不在用户授权过的名册里（cdp_hosts.json）。
 
-    与 SSRF 拦截同类：这是用户设的授权边界，不是网络错误——不重试，原样抛。
+    与 SSRF 拦截同类：这是用户给的授权边界，不是网络错误——不重试，原样抛。
     """
 
 
 _PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
-
-def _env_profile_name() -> Optional[str]:
-    """``DHOLE_BROWSER_PROFILE=<name>``：launch 路径改用
-    ``~/.dhole/profiles/<name>/`` 持久 profile 而不是临时目录（storage-state
-    持久化：close 不删、重启重登不需要）。非法名字直接抛——打错的字绝不能
-    静默回落到一次性 profile，那会让"以为存了登录态"的调用方拿到空会话。
-    """
-    raw = (env_registry.value_of("DHOLE_BROWSER_PROFILE") or "").strip()
-    if not raw:
-        return None
-    if not _PROFILE_NAME_RE.match(raw):
-        raise ValueError(
-            f"DHOLE_BROWSER_PROFILE={raw!r} is not a valid profile name "
-            "(letters/digits/._-, starting with a letter or digit, max 64 chars)")
-    return raw
+# 17.0：``DHOLE_BROWSER_PROFILE`` 已注销（运行时静默忽略）。命名 profile 的
+# 能力随 B5 的 `cred_defaults` 以参数形态回来（§3-15/§3-17）；在那之前
+# launch 一律用一次性临时目录，storage-state 持久化经 session 桥仍可用。
 
 
 async def _resolve_cdp_context(browser: Any, context_options: Dict[str, Any]) -> Tuple[Any, bool]:
@@ -1117,7 +1103,7 @@ class BrowserSession:
         # G33 host scope：None = 不限制（launch 模式）；frozenset = attach 模式
         # 白名单，entry URL 与 route 层双层执行。
         self._allowed_hosts = allowed_hosts
-        self._profile_name = profile_name or _env_profile_name()
+        self._profile_name = profile_name or None
         self._real_chrome = real_chrome
         self._wait_selector = wait_selector
         self._wait_selector_state = wait_selector_state
@@ -1145,7 +1131,9 @@ class BrowserSession:
         # patches on the user's pages, no context.close() on detach.
         self._cdp_attached: bool = False
         # True when the launch path runs on a named persistent profile that
-        # must survive close (DHOLE_BROWSER_PROFILE / profile_name).
+        # must survive close. 17.0: nothing names one yet (the env knob is
+        # gone), and the plumbing stays for B5's cred_defaults parameter --
+        # until then every launch is a scratch dir.
         self._persistent_profile: bool = False
 
     # ── Lifecycle ─────────────────────────────────────────────────
@@ -1417,10 +1405,12 @@ class BrowserSession:
             _entry_host = (urlparse(url).hostname or "").lower()
             if _entry_host not in self._allowed_hosts:
                 raise CDPHostNotAllowedError(
-                    f"cdp_host_not_allowed: '{_entry_host or url}' is outside "
-                    "DHOLE_CDP_HOSTS. In CDP-attach mode every request carries "
+                    f"cdp_host_not_allowed: '{_entry_host or url}' is outside the "
+                    "authorized host fence. In CDP-attach mode every request carries "
                     "the authenticated cookies of the attached profile, so "
-                    "navigation is fenced to the hosts the user allowed."
+                    "navigation is fenced to the hosts the user approved "
+                    "(confirm=true on that host authorizes it; the fence lives in "
+                    "cdp_hosts.json in the dhole state directory)."
                 )
 
         # Resolve per-request overrides

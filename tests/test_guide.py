@@ -118,10 +118,9 @@ def test_topic_and_section_are_the_whole_argument_surface():
 
 
 def test_dhole_doc_is_not_opt_in():
-    """说明书不需要开关才能读到 —— 要开关的说明书等于没有说明书。"""
+    """说明书不需要开关才能读到 —— 17.0 起根本没有 opt-in 组。"""
     from dhole_mcp import server as s
-    assert "dhole_doc" not in s._OPT_IN_TOOLS
-    assert "dhole_doc" not in s._OPT_IN_TOOLS_VAULT
+    assert not hasattr(s, "_OPT_IN_TOOLS")
     assert "dhole_doc" in s._ENABLED_TOOLS
 
 
@@ -217,13 +216,10 @@ def test_every_accepted_bag_key_is_named_in_its_description(tool):
     """袋里被接受的键，至少要在**这个工具的 wire 文本**里出现一次名字。
 
     查整个工具载荷而不是只查袋子，因为放置本身就分两类：`search` 的规范位置是
-    顶层，袋里只是兼容读法；`selector`（截图裁元素）属于 DHOLE_MULTIMODAL 打开
-    后才由 `_MULTIMODAL_*_CLAUSE` 补进描述的能力 —— 关掉时它不可用， refusal 会
-    解释，所以"在开着的那份描述里被点名"已经足够。两种情况都不允许"哪儿都不提"。
+    顶层，袋里只是兼容读法；`selector`（截图裁元素）的纪律在 17.0 已烙进
+    screenshot / smart_fetch 的字面量描述。两种情况都不允许"哪儿都不提"。
     """
-    from dhole_mcp.server import _MULTIMODAL_SF_CLAUSE, _MULTIMODAL_SHOT_CLAUSE
-
-    text = _tool_text(tool) + _MULTIMODAL_SF_CLAUSE + _MULTIMODAL_SHOT_CLAUSE
+    text = _tool_text(tool)
     silent = sorted(k for k in BAGS[tool] if k != "options" and not _mentions(text, k))
     assert not silent, f"{tool} 接受了这些键却没在任何地方提到它们: {silent}"
 
@@ -241,17 +237,14 @@ def test_every_smart_fetch_key_is_explained_somewhere():
         f"{undocumented}。补进 references/tools.md，或从 _SF_OPTIONS_ALLOWED 里删掉。")
 
 
-def test_the_opt_in_capability_groups_are_announced_even_when_off():
-    """默认关掉四个工具是为了 token，但「有没有这四个」不该靠读 README 才知道。
-
-    常驻文本必须回答两件事：它们存在，以及打开它们是操作者的决定而不是 agent
-    能自己改的东西。少了后半句 agent 会去绕，少了前半句用户根本不知道有。
-    """
+def test_the_stateful_tools_are_announced_with_their_discipline():
+    """四个状态工具 17.0 起默认注册 —— 常驻文本必须说明它们存在，且
+    login/submit 的逐次确认闸与凭据红线是 agent 读得到的纪律（没有开关可关，
+    纪律就是全部）。"""
     announced = _wire_explanations() + "\n" + _corpus()
     for tool in ("recipe", "watch", "vault", "login"):
         assert _mentions(announced, tool), f"{tool} 在 agent 读得到的地方没被提到"
-    for flag in ("DHOLE_TASKS", "DHOLE_VAULT"):
-        assert flag in announced, f"{flag} 没有出现在任何 agent 读得到的地方"
+    assert "confirm" in announced, "确认闸必须在常驻文本里"
 
 
 # ─── 整个参数面的覆盖率（不只是 options 袋）──────────────────────────────
@@ -282,12 +275,10 @@ def test_every_property_explains_something(tool):
 def test_no_accepted_parameter_is_unmentioned(tool):
     """`_TOP_LEVEL_ARGS` 接受的每一个名字，都要在该工具的 wire 文本里出现一次。
 
-    查该工具自己的文本（说明 + 每个属性名与描述 + 两个多模态变体），因为「别的
-    工具提过」不救这个调用：agent 在 `recipe` 的描述里读不到 `note`，就不会给
-    `recipe` 传 `note`。
+    查该工具自己的文本（说明 + 每个属性名与描述；VISUAL ASSIST 纪律已烙进
+    smart_fetch / screenshot 的字面量，无需再拼），因为「别的工具提过」不救这个
+    调用：agent 在 `recipe` 的描述里读不到 `note`，就不会给 `recipe` 传 `note`。
     """
-    from dhole_mcp.server import _MULTIMODAL_SF_CLAUSE, _MULTIMODAL_SHOT_CLAUSE
-
-    text = _tool_text(tool) + _MULTIMODAL_SF_CLAUSE + _MULTIMODAL_SHOT_CLAUSE
+    text = _tool_text(tool)
     silent = sorted(k for k in _TOP_LEVEL_ARGS[tool] if not _mentions(text, k))
     assert not silent, f"{tool} 接受但它的 wire 文本从未提到的参数: {silent}"
