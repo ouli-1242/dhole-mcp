@@ -35,6 +35,8 @@ URL = "https://example.com/"
 BASE: dict[str, tuple[dict, object]] = {
     "web_read": ({"url": URL}, _FETCH_OK),
     "web_crawl": ({"url": URL}, _CRAWL_OK),
+    # 17.0 §4 拆出来的那颗：同一个引擎，另一个入口，参数只剩地图那一半
+    "web_discover": ({"url": URL}, _CRAWL_OK),
     "web_search": ({"query": "python asyncio"}, _SEARCH_OK),
     # screenshot 回的是内容片段列表，不是模型；这里只看桩被用什么参数调用。
     "web_screenshot": ({"url": URL}, []),
@@ -84,7 +86,7 @@ BOOL_KEYS = {
     "network_idle", "headless", "real_chrome",
     "solve_cloudflare", "block_webrtc", "hide_canvas",
     "include_media", "include_links", "ignore_robots", "allow_private",
-    "discover_only", "full_page", "sitemap", "check_login",
+    "full_page", "sitemap", "check_login",
 }
 for _k in BOOL_KEYS:
     VALUES.setdefault(_k, True)

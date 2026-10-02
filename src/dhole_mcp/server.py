@@ -2606,7 +2606,7 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         "max_pages": "int", "max_depth": "int", "max_content_chars_per": "int",
         "cache_ttl": "int",
         "concurrency": "int", "timeout": "number", "deadline_ms": "number",
-        "discover_only": "bool", "ignore_robots": "bool",
+        "ignore_robots": "bool",
         "focus_engine": "str",
         # path_include/path_exclude are NOT here: a bare string is already read
         # as the one-prefix list it means, and crawl.py does that at the point
@@ -4718,7 +4718,7 @@ _SS_PARAMS = frozenset({
     "min_raw_relevance",
 })
 # The complete set of names each tool accepts at the top level. `url=` and
-# friends that are NOT in *_PARAMS (web_crawl's discover_only,
+# friends that are NOT in *_PARAMS (web_crawl's focus,
 # web_screenshot's session_id, web_search's query) are the required-ish arguments
 # the branches read by name, so they join here.
 #
@@ -4728,8 +4728,11 @@ _SS_PARAMS = frozenset({
 # and the forwarding below reads nothing but this set.
 _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     "web_read": _SF_PARAMS | {"url"},
-    "web_crawl": _SC_PARAMS | {"url", "discover_only", "focus",
-                                 "search"},
+    "web_crawl": _SC_PARAMS | {"url", "focus", "search"},
+    # 17.0 §4: the map got its own tool, and the flag it used to be is not an
+    # argument any more -- `crawl.web_crawl` still takes it internally.
+    "web_discover": frozenset({"url", "sitemap", "path_include", "path_exclude",
+                               "max_pages", "search", "timeout"}),
     "web_screenshot": _SHOT_PARAMS | {"url", "session_id"},
     "web_search": _SS_PARAMS | {"query"},
     "cache_clear": frozenset({"all", "engine_state"}),
@@ -8727,6 +8730,28 @@ class MasterFetchServer:
 
     # ─── Crawl ─────────────────────────────────────────────────────
 
+    async def web_discover(
+        self,
+        url: str,
+        sitemap: "str | bool" = False,
+        path_include: Optional[List[str]] = None,
+        path_exclude: Optional[List[str]] = None,
+        max_pages: int = 10,
+        search: Optional[str] = None,
+        timeout: int = 30000,
+    ) -> CrawlResponseModel:
+        """A site's URL map, with no page read for content.
+
+        This was `web_crawl`'s map mode behind a boolean. Asking for a map and
+        asking for pages are two intentions, and the one a caller has should not
+        depend on remembering a switch -- so the switch became a tool and the
+        engine stayed where it was.
+        """
+        return await self.web_crawl(
+            url, max_pages=max_pages, path_include=path_include,
+            path_exclude=path_exclude, discover_only=True, sitemap=sitemap,
+            search=search, timeout=timeout)
+
     async def web_crawl(
         self,
         url: str,
@@ -8748,8 +8773,8 @@ class MasterFetchServer:
         focus_engine: Optional[str] = None,
     ) -> CrawlResponseModel:
         """Deep-crawl a site: best-first same-domain from `url`, returning each
-        page as markdown with content_ok/summary/page_type. discover_only=true
-        returns the URL map only. `focus` prioritizes relevant pages AND
+        page as markdown with content_ok/summary/page_type. A URL map with no
+        content at all is web_discover. `focus` prioritizes relevant pages AND
         focus-filters each page's content. URLs picked out of that map are read
         with web_read(urls=[...]) - the crawl discovers, it does not fetch a
         list the caller already has. Content-adaptive:
@@ -8759,7 +8784,7 @@ class MasterFetchServer:
         web_read anti-bot escalation + cache.
 
         search: filter discovered/crawled URLs by keyword match (URL path + title).
-            Use with discover_only=True for fast URL discovery on large sites.
+            For a URL list alone - no page content - call web_discover.
         ignore_robots: skip robots.txt compliance for the whole crawl (default
             False = comply, per page, through web_read).
         focus_engine: which scorer runs `focus` ('bm25' | 'neural'). Same rule as
@@ -8918,14 +8943,13 @@ class MasterFetchServer:
         },
         {
             "name": "web_crawl",
-            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, web_read(urls=[...]) fetches them directly - no crawl needed.\n- Every parameter is a top-level argument; nothing is nested. url= names the site the crawl stays inside.\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed'), discoveries already known to be disallowed are skipped, and robots_skipped says how many. ignore_robots=true overrides.\n- Caps: max_pages (1-40, default 10), max_depth(2), 20000 chars per page, deadline_ms. There is no whole-run character budget.\n- Map-then-fetch: sitemap=true or discover_only=true maps it, web_read(urls=[...]) reads the picks. What the drop counters mean and how politeness is decided: sys_guide(topic='behavior', section='web_crawl'); placement pairs with counterexamples: sys_guide(topic='call').",
+            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, web_read(urls=[...]) fetches them directly - no crawl needed.\n- Every parameter is a top-level argument; nothing is nested. url= names the site the crawl stays inside.\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed'), discoveries already known to be disallowed are skipped, and robots_skipped says how many. ignore_robots=true overrides.\n- Caps: max_pages (1-40, default 10), max_depth(2), 20000 chars per page, deadline_ms. There is no whole-run character budget.\n- Map-then-fetch: web_discover (or sitemap=true here) maps it, web_read(urls=[...]) reads the picks. What the drop counters mean and how politeness is decided: sys_guide(topic='behavior', section='web_crawl'); placement pairs with counterexamples: sys_guide(topic='call').",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
                     "url": {"type": "string", "description": "Start URL (crawl stays on this domain)"},
-                    "discover_only": {"type": "boolean", "description": "true = URL map only, no page content."},
                     "focus": {"type": "string", "description": "Query: crawl the links relevant to this and focus-filter each page."},
-                    "search": {"type": "string", "description": "Filter discovered/crawled URLs by keyword (URL path + title). Use with discover_only=true."},
+                    "search": {"type": "string", "description": "Filter discovered/crawled URLs by keyword (URL path + title)."},
                     # 17.0 B4 · 顶层只有一个家（这 15 个键今天也已经能从顶层传进来）。
                     "sitemap": {"anyOf": [{"type": "boolean"}, {"type": "string"}], "description": "Where the URL map comes from: true | 'auto' (default) | false. A tri-state, so the strings a serialized client sends are accepted too."},
                     "max_pages": {"type": "integer", "description": "Pages to fetch (1-40, default 10). The first budget a crawl hits."},
@@ -8940,6 +8964,23 @@ class MasterFetchServer:
                     "deadline_ms": {"type": "integer", "description": "Hard stop for the whole crawl in ms (default 120000) - the budget that ends the run, unlike timeout= which is per page."},
                     "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check and the disallowed-URL skip (default false = comply per page). Set true only where you have the site's permission."},
                     "focus_engine": {"type": "string", "enum": ["bm25", "neural"], "description": "Which scorer runs focus here: 'bm25' (default, cheap) or 'neural' (~12.5s of CPU per page TIMES max_pages, needs the local reranker model; asking without it is refused, not downgraded)."},
+                },
+            },
+            "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
+        },
+        {
+            "name": "web_discover",
+            "description": "A site's URL MAP, with no page read for content - one call answers 'what is on this site' before you choose what to read. pages_crawled=0 is the design, not a failure. The picks go to web_read(urls=[...]); many pages at once is web_crawl.\n- Two prices: sitemap=true reads the site's own index (one request, the whole site, <lastmod> per row), or unset walks links, which costs one request per step up to max_pages. 'auto' tries the index, then walks.\n- path_include / path_exclude scope the map as they scope a crawl ('/docs' is a subtree, not a string prefix); search filters it by path + title. The counters and how to read a map: sys_guide(topic='behavior', section='web_discover').",
+            "inputSchema": {
+                "type": "object", "required": ["url"],
+                "properties": {
+                    "url": {"type": "string", "description": "Start URL (the map stays on this domain)"},
+                    "sitemap": {"anyOf": [{"type": "boolean"}, {"type": "string"}], "description": "true = the site's index only, 'auto' = index then link walk, unset/false = link walk."},
+                    "max_pages": {"type": "integer", "description": "URLs to expand through (1-40, default 10)."},
+                    "path_include": {"type": "array", "items": {"type": "string"}, "description": "Keep only these path subtrees: '/docs', or '/docs/*'."},
+                    "path_exclude": {"type": "array", "items": {"type": "string"}, "description": "Drop these path subtrees."},
+                    "search": {"type": "string", "description": "Filter the map by keyword (URL path + page title)."},
+                    "timeout": {"type": "integer", "description": "Budget per expansion step in ms (default 30000)."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -9400,8 +9441,13 @@ class MasterFetchServer:
             # pin the crawl to the stealthy tier without saying so.
             if call.get("force_fetcher") is not None:
                 call["force_fetcher"] = _coerce_force_fetcher_arg(call["force_fetcher"])
-            call.setdefault("discover_only", False)
             result = await self.web_crawl(url=args["url"], **call)
+            return _wire_result(result)
+
+        elif name == "web_discover":
+            # One branch because one mode is pinned here and no argument can
+            # unpin it: the tool cannot turn into a content crawl.
+            result = await self.web_discover(**self._forward("web_discover", args))
             return _wire_result(result)
 
         elif name == "web_screenshot":

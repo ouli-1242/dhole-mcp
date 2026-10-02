@@ -60,14 +60,15 @@ class TestTheEnvVarIsParsed:
         payload = json.loads(out.stdout)
         assert payload["enabled"] == sorted(
             n.strip() for n in value.split(",") if n.strip())
-        assert len(payload["all"]) == 14, \
-            "全集是 14 个工具（16.0 补上 close_session，L3/L4 补上 recipe/web_watch，" \
-            "凭据/登录流补上 cred_vault/cred_login，文档通道补上 sys_guide）；" \
+        assert len(payload["all"]) == 15, \
+            "全集是 15 个工具（16.0 补上 close_session，L3/L4 补上 web_recipe/web_watch，" \
+            "凭据/登录流补上 cred_vault/cred_login，文档通道补上 sys_guide，" \
+            "B5 又把一张地图拆成 web_discover）；" \
             "默认关闭的也留在这里，守卫继续覆盖它们"
 
     @pytest.mark.parametrize("value", [None, "", "   "])
     def test_unset_means_every_tool(self, value):
-        """17.0：未设 DHOLE_TOOLS = 全部 14 个工具（没有 opt-in 组）。"""
+        """17.0：未设 DHOLE_TOOLS = 全部工具（没有 opt-in 组；数量由上一条钉住）。"""
         out = _run_fresh(_ENABLED_SNIPPET, value)
         assert out.returncode == 0, out.stderr[-600:]
         payload = json.loads(out.stdout)

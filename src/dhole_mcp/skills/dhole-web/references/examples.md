@@ -141,13 +141,13 @@ The same key exists on `web_crawl`, where it matters more: the semantic path cos
 
 When searching without fetching: rank by `relevance_score` / `fetch_relevance` (high first), and treat `engines_consensus: 1 of N` as unverified — `web_read` before citing.
 
-## Big site: map, scope, read (web_crawl then web_read)
+## Big site: map, scope, read (web_discover then web_read)
 
 ```json
-// Step 1: whole-site URL map in one request
-{"url": "https://docs.example.com", "discover_only": true, "sitemap": true}
+// Step 1: whole-site URL map in one request (web_discover)
+{"url": "https://docs.example.com", "sitemap": true}
 // Step 2: scope the map to a subtree ('/guide' matches /guide and below, NOT /guide-old; the only wildcard is a trailing /*)
-{"url": "https://docs.example.com", "discover_only": true, "path_include": "/guide", "max_pages": 30}
+{"url": "https://docs.example.com", "path_include": "/guide", "max_pages": 30}
 // Step 3: read the picks - web_read, not a second crawl
 {"urls": ["https://docs.example.com/guide/a", "https://docs.example.com/guide/b"], "max_content_chars": 8000}
 ```

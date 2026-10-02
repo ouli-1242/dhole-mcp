@@ -173,7 +173,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 | `cred_vault` | `DHOLE_VAULT=1` | 读**你自己**密码管理器的条目元数据（从不回密码 / TOTP 值） |
 | `cred_login` | `DHOLE_VAULT=1` | 用其中一条凭据登录：先只回计划，确认后才填并提交 |
 
-参数摆放：`web_read` / `web_crawl` / `web_search` / `web_screenshot` 的旋钮收在一个 `options` 对象里，顶层同名参数也接受（兼容读法，两处都给时**顶层优先**）；其余工具**只有顶层这一层**，塞 `options` 会被拒绝并列出它真正接受的键。反向例外：`web_read` 的 `url` 与 `web_crawl` 的 `discover_only` / `crawl_urls` / `focus` 必须放顶层。以 `tools/list` 为准。
+参数摆放：`web_read` / `web_crawl` / `web_search` / `web_screenshot` 的旋钮收在一个 `options` 对象里，顶层同名参数也接受（兼容读法，两处都给时**顶层优先**）；其余工具**只有顶层这一层**，塞 `options` 会被拒绝并列出它真正接受的键。反向例外：`web_read` 的 `url` 与 `web_crawl` 的 `focus` 必须放顶层。以 `tools/list` 为准。
 
 调用写法、字段含义与排查的手册有两个入口，同一份语料：`sys_guide(topic=...)`（默认注册，装上就能用）与 `dhole skill install`（宿主原生 skill 形态）。
 

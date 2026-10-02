@@ -69,9 +69,17 @@ too) accept dates, and only as day/week/month/year presets. `after=<date>` is wi
 
 **No SLA**: keyless engines are direct scrapes of public search results (unauthorized, unquota'd) — when providers change layout or ban IPs, they degrade **silently**. For reliability: a different egress (`DHOLE_SEARCH_PROXY`) or a keyed backend.
 
+## web_discover: the map, and what it costs
+
+- One call, URLs only: `pages_crawled=0` in the answer is the design, not a failure. Reading the picks is `web_read(urls=[...])`; a second `web_crawl` would rediscover what is already in hand
+- A map has two prices. `sitemap=true` asks for the site's own index — one request, the whole site, and each row can carry the `<lastmod>` the site published. Without it the map is grown by walking links, which costs one request per step and stops at `max_pages` (1-40). `'auto'` tries the index first, then walks
+- robots.txt still decides eligibility: URLs already known to be disallowed are dropped before any request and counted in `robots_skipped`. A map is not a promise that those pages can be fetched
+- Map rows carry only what differs from the default, because a map's length is set by the site rather than by the caller — a 1000-URL map is 70KB of URLs, and restating one constant per row turned that into 350KB
+- `path_include` / `path_exclude` scope the map exactly as they scope a crawl (`/docs` is a subtree, not a string prefix; the only wildcard is a trailing `/*`), and `search` filters it by URL path + page title
+
 ## web_crawl: discovery economics and politeness
 
-- `discover_only=true` returns a URL map without body extraction, but **expanding the link graph still costs one request per page** (up to `max_pages`). For a one-request map: `sitemap=true` (whole site) or `discover_only=true, max_pages=1` (start page's links only)
+- The map is its own tool: `web_discover` returns URLs without body extraction, but **expanding the link graph still costs one request per page** (up to `max_pages`). For a one-request map: `sitemap=true` (whole site) or `max_pages=1` (start page's links only)
 - After mapping, read the picks with `web_read(urls=[...])` — one call, no re-discovery, and nothing to reconcile. `crawl_urls=` and its four drop counters left with 17.0 §3 decision 31: a caller's list needed normalization, same-domain checks, dedup and a cap before it became a crawl, and each cut needed its own receipt. Those URLs never needed discovery, so `web_read(urls=[...])` is their home
 - `focus='query'` does two different jobs at once: it **prioritizes the links** whose path and anchor text look relevant (the best-first queue scores them) and it **filters each fetched page** down to the blocks matching the query — the same trimming `web_read` does, applied per page. Passing `focus` therefore does not only narrow what you read, it changes which pages get reached at all; leave it out for an unbiased crawl and use `search=` when you only want to filter the URL map, not the bodies
 - `path_include` / `path_exclude` match **path subtrees**: `'/docs'` matches `/docs` and everything below it but NOT `/docs-old`; the only wildcard is a trailing `/*`

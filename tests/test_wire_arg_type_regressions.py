@@ -174,15 +174,19 @@ class TestOtherToolsWithTheSameGap:
         assert seen["quality"] == 80
 
     def test_crawl_caps_arrive_as_numbers_for_the_code_that_counts(self, monkeypatch):
-        """`max_pages="5"` reaches `range(max_pages)`; discover_only="false"
-        reached `if discover_only:` and answered with a URL map instead."""
+        """`max_pages="5"` reaches `range(max_pages)`; `ignore_robots="false"`
+        reaches `if ignore_robots:` and crawls a site the robots file forbids.
+
+        这条原先拿 discover_only 举例（一个 "false" 会被读真，答案是那张地图而不是
+        正文）。17.0 §4 把地图拆成 web_discover 之后，它不再是任何工具的入参，同一个
+        bug 类改由 ignore_robots 钉住 —— 换的只是被读错的那个名字。"""
         seen = _record(monkeypatch, "web_crawl", ResponseModel(url="", status=0, content=[]))
-        _dispatch("web_crawl", {"url": "https://example.test", "discover_only": "false",
+        _dispatch("web_crawl", {"url": "https://example.test", "ignore_robots": "false",
                                   "max_pages": "5", "deadline_ms": "90000"})
 
         assert seen["max_pages"] == 5
         assert seen["deadline_ms"] == 90000
-        assert seen["discover_only"] is False
+        assert seen["ignore_robots"] is False
 
     def test_a_list_option_as_a_bare_string_is_rejected_before_any_search(self, monkeypatch):
         """`engines="bing"` iterates into four one-character engine names.

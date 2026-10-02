@@ -18,7 +18,7 @@ Starting routes for multi-step tasks. Each recipe marks where to pivot on failur
 
 ## Collect a documentation site
 
-1. `web_crawl(url=<docs root>, sitemap=true, discover_only=true)` — whole-site URL map in one request (if no sitemap: `discover_only=true`, but map expansion costs one request per page)
+1. `web_discover(url=<docs root>, sitemap=true)` — whole-site URL map in one request (no sitemap: drop `sitemap` and the map walks links, which costs one request per page)
 2. `path_include:"/docs"` to scope a subtree (`'/docs'` does not match `/docs-old`), `search:"keywords"` to filter by title/URL
 3. `web_read(urls=[...])` to read the picks — one call, no re-discovery, no counters to reconcile
 4. List pages return structured link listings (`page_type=list`) — follow them to content pages
@@ -45,7 +45,7 @@ Starting routes for multi-step tasks. Each recipe marks where to pivot on failur
 ## When search fails (pivot in this order)
 
 1. Re-search naming other engines (`dhole engines probe` first to see who's alive; 17.0 has no vertical index — name the international engines for international content)
-2. Know the domain? Skip search: `web_crawl(url=<domain>, discover_only=true)` to map the site directly
+2. Know the domain? Skip search: `web_discover(url=<domain>)` to map the site directly
 3. Site has a feed? `feed_read`
 4. Everything down (blocked, no proxy): tell the user about `DHOLE_SEARCH_PROXY` or a keyed backend (references/configuration.md) — this is a "config change", so present options and wait for the user's decision
 
