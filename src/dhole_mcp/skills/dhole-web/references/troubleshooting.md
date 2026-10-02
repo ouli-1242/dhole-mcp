@@ -112,7 +112,7 @@ With a proxy running, the HTTP tier's loopback traffic can be intercepted by the
 ### Tools missing / behaving oddly
 
 1. `dhole -v`: read the capability panel line by line (browser tier / pdf / rerank / engine yield) — each missing row is a silently degraded tier
-2. `dhole --doctor`: item-by-item diagnosis with copy-pasteable fix commands (exit code 1 on failure)
+2. `dhole --doctor`: the 12-item diagnosis with copy-pasteable fix commands (exit code 1 on failure). It really spawns a server and really runs one search + one fetch, so it takes a few seconds and sends traffic — say so before running it on someone's machine. Its `live search` / `live fetch` rows are the only evidence that this IP works today; a failure there is a network fact, not an install fault
 3. Missing browser dependencies auto-degrade to pure HTTP (usable on Termux / slim containers) — anti-bot sites start failing; that is degradation, not a bug
 
 ### Version / updates
@@ -124,7 +124,7 @@ This machine runs a source-installed personal fork with self-update off: `git pu
 | Command | Purpose |
 |---|---|
 | `dhole -v` | Version + capability panel |
-| `dhole --doctor` | Install check; exit code 1 on failure |
+| `dhole --doctor` | The 12-item install check (incl. one real search + one real fetch); exit code 1 on failure |
 | `dhole engines list` | Per-engine verdict, remaining cooldown, active backoff tiers |
 | `dhole engines probe` | One real query per engine (hits / latency / block reason) |
 | `dhole engines reset` | Clear all cooldowns now |

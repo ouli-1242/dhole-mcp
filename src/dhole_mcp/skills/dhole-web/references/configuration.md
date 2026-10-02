@@ -107,7 +107,7 @@ Then just call — the first attach asks, the user answers once:
 | Command | Purpose |
 |---|---|
 | `dhole -v` | Version + capability panel (browser / pdf / rerank / engine yield — each missing row is a degraded tier) |
-| `dhole --doctor` | Install check: item-by-item with copy-pasteable fixes; also runs the config audit + fake-ip resolver reality check on this machine, and names any retired `DHOLE_*` a host still sets |
+| `dhole --doctor` | The one command every install should be checked with: 12 items in order — python+platform, the five dependency tiers, chromium binary, rerank model (+whether a publisher digest backs it), a real stdio handshake with the host's own command, the two config doors and which one shadows which, retired `DHOLE_*` names a host still sets, robots posture (complied / waived / **not readable — and "not checked" is not "complied"**), the search egress with an actual TCP connect, **one real search + one real fetch** (keyless engines have no SLA; this is the only proof it works from this IP today), what `~/.dhole` holds (sizes, ages, which files are credentials), and the connect-phase token cost. Every failure prints a command to run — and exits 1 |
 | `dhole doctor` | Same output and exit code as `dhole --doctor` (the two spellings are equivalent, use whichever matches the other subcommand you already typed) |
 | `dhole engines list` | Per-engine verdict, remaining cooldown, active backoff |
 | `dhole engines probe` | One real query per engine (hits / latency / block reason) |

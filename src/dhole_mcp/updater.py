@@ -315,10 +315,14 @@ def capabilities() -> list[tuple[str, str, bool]]:
     ))
 
     pdf = _has_module("pdfplumber") or _has_module("pypdfium2")
+    ocr = _has_module("rapidocr") or _has_module("rapidocr_onnxruntime")
     caps.append((
         "pdf / ocr",
-        "ready" if pdf else "missing (pip install 'dhole-mcp[all]')",
-        pdf,
+        "ready" if (pdf and ocr) else (
+            "pdf only - no OCR, scanned pages come back empty "
+            "(pip install 'dhole-mcp[all]')" if pdf else
+            "missing (pip install 'dhole-mcp[all]')"),
+        pdf and ocr,
     ))
 
     if not (_has_module("onnxruntime") and _has_module("tokenizers")):
@@ -512,7 +516,10 @@ def _append_config_audit(checks: list[tuple[str, str, str, str]]) -> None:
         ok, why = _reg.is_valid_value(entry, raw)
         timing = ("  (read at startup - restart the host to change)"
                   if entry.read_at == "import" else "")
-        if entry.name not in os.environ and entry.name in persisted:
+        if entry.name in os.environ and entry.name in persisted:
+            # 6 · 两扇门同时开着：谁赢必须是这行话说出来的，而不是让人回去猜。
+            timing += "  (env SHADOWS the value in ~/.dhole/config.json)"
+        elif entry.name not in os.environ and entry.name in persisted:
             timing += "  (from ~/.dhole/config.json)"
         if ok:
             detail = _config_effective_value(entry, raw) + timing
@@ -682,6 +689,446 @@ def _append_resolver_reality(checks: list[tuple[str, str, str, str]]) -> None:
     ))
 
 
+# ─── doctor 的检查项（B2-5：计划里的 12 项，重排而不是沿用旧表） ─────────────
+#
+# 每项一个独立、绝不抛异常的 `_append_*(checks)`。把顺序本身当文档：从"这台机器
+# 能不能跑"读到"这次连接花了多少 token"，一个人顺着读下来就是他的排查顺序。
+
+#: 会真起子进程、会真发消息的两项（5 宿主握手 / 10 实搜实抓）由这个开关决定。
+#: 测试里由 conftest 置 False —— 不是为了省事：那两项跑一次几秒且依赖当场的网络，
+#: 让它们进入每条 doctor 断言，得到的将是关于宽带而不是关于产品的断言。真实运行
+#: 始终是 True，并由一条 e2e 用例证明它没有被静默跳过。
+LIVE_CHECKS = True
+
+
+def _live_checks_enabled() -> bool:
+    return bool(LIVE_CHECKS)
+
+
+def _append_runtime(checks) -> None:
+    """1 · Python 与平台 —— "为什么没有浏览器"的最上游答案常常不在 dhole 里。"""
+    ver = ".".join(str(x) for x in sys.version_info[:3])
+    too_old = sys.version_info < (3, 11)
+    plat = f"{sys.platform}, {os.name}"
+    note = ""
+    try:
+        import platform as _pf
+        machine = (_pf.machine() or "").lower()
+        plat = f"{plat}, {machine}"
+        if "com.termux" in os.environ.get("PREFIX", ""):
+            note = " - Termux: playwright ships no wheel here, so no browser tier"
+        elif machine in ("aarch64", "arm64") and sys.platform == "linux":
+            note = " - arm64 linux: confirm a chromium build exists before using the browser tier"
+    except Exception:  # noqa: BLE001
+        pass
+    checks.append((
+        "python + platform", "fail" if too_old else "ok",
+        f"{ver} on {plat}{note}",
+        "run dhole on CPython >= 3.11" if too_old else "",
+    ))
+
+
+#: 分层依赖：缺哪一层就少哪一档能力。能力面板说"浏览器档没了"，这一行说少的是哪个包。
+#: 每个槽位是一组**可替代**的包名（ocr 有 v3 与 legacy v1 两个发行名，pdf 有两个后端），
+#: 全部可替代名都缺才算这个槽位缺 —— 按 AND 判定会把装全的机器报成缺层。
+_LAYERS = (
+    ("http", (("primp",), ("httpx",), ("trafilatura",))),
+    ("browser", (("patchright",), ("playwright",))),
+    ("pdf", (("pdfplumber", "pypdfium2"),)),
+    ("ocr", (("rapidocr", "rapidocr_onnxruntime"), ("cv2",))),
+    ("rerank", (("onnxruntime",), ("tokenizers",))),
+)
+
+
+def _layer_present(slots) -> str:
+    """这层齐不齐；不齐时返回第一个补不上的包名。"""
+    for slot in slots:
+        if not any(_has_module(m) for m in slot):
+            return slot[0]
+    return ""
+
+
+def _append_dependency_layers(checks) -> None:
+    """2 · 依赖分层：五层一次看完。"""
+    core = [m for m in ("httpx", "aiosqlite", "mcp", "pydantic")
+            if not _has_module(m)]
+    if core:
+        checks.append((
+            "core dependencies", "fail", "missing: " + ", ".join(core),
+            'python -m pip install -e ".[all]"',
+        ))
+        return
+    absent = [f"{label} tier needs {gap}"
+              for label, slots in _LAYERS
+              for gap in [_layer_present(slots)] if gap]
+    checks.append((
+        "dependency layers", "ok" if not absent else "info",
+        "all five tiers present" if not absent else "; ".join(absent),
+        "" if not absent else 'python -m pip install -e ".[all]" then restart the host',
+    ))
+
+
+def _playwright_browsers_dir() -> str:
+    """chromium 的落盘目录（patchright/playwright 的默认位置，环境变量可改）。"""
+    override = (os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+                or os.environ.get("PATCHRIGHT_BROWSERS_PATH"))
+    if override:
+        return override
+    if sys.platform == "win32":
+        return os.path.join(os.environ.get("LOCALAPPDATA", ""), "ms-playwright")
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Caches/ms-playwright")
+    return os.path.expanduser("~/.cache/ms-playwright")
+
+
+def _append_chromium(checks) -> None:
+    """3 · 浏览器二进制在不在。包装了 != 浏览器在：这是"第一次抓取卡住"的常见真因。"""
+    base = _playwright_browsers_dir()
+    found = ""
+    try:
+        if os.path.isdir(base):
+            for name in sorted(os.listdir(base), reverse=True):
+                if name.startswith("chromium-") and os.path.isdir(os.path.join(base, name)):
+                    found = name
+                    break
+    except Exception:  # noqa: BLE001
+        found = ""
+    if found:
+        checks.append(("chromium binary", "ok", f"{found} under {base}", ""))
+    else:
+        checks.append((
+            "chromium binary", "info",
+            "not installed - the first browser-tier fetch installs it "
+            "(~150MB, one time, resumable)",
+            "python -m patchright install chromium" if _has_module("patchright")
+            else 'python -m pip install -e ".[all]"',
+        ))
+
+
+def _dir_mb(path: str) -> tuple[float, int]:
+    """(MB, 文件数)。只读目录树；任何一步失败都返回已知的部分而不是抛。"""
+    total, files = 0, 0
+    try:
+        for root, _dirs, names in os.walk(path):
+            for n in names:
+                try:
+                    total += os.path.getsize(os.path.join(root, n))
+                    files += 1
+                except OSError:
+                    continue
+    except Exception:  # noqa: BLE001
+        pass
+    return round(total / 1_000_000, 1), files
+
+
+def _append_rerank_model(checks) -> None:
+    """4 · 语义模型：在不在、多大、有没有发布方摘要可对。
+
+    publisher_sha256 是"这份字节就是作者发布的那份"的唯一凭据；只有本机自算 hash
+    的模型只能证明"没坏"。这一行把差别说出来，因为它决定了"离线拷过来的模型"该
+    不该被信任。
+    """
+    if not (_has_module("onnxruntime") and _has_module("tokenizers")):
+        checks.append(("rerank model", "info",
+                       "runtime absent - consensus order only", ""))
+        return
+    try:
+        from dhole_mcp.reranker import active_model, active_model_dir
+        model = active_model()
+        d = active_model_dir()
+    except Exception as exc:  # noqa: BLE001
+        checks.append((
+            "rerank model", "fail",
+            f"registry unreadable: {type(exc).__name__}"[:60],
+            "check ~/.dhole/config/reranker.json",
+        ))
+        return
+    if not (d / "model.onnx").exists():
+        checks.append((
+            "rerank model", "info",
+            f"{model.name} not downloaded (~{model.approx_bytes // 1_000_000}MB, "
+            "resumable; the first neural search fetches it)", "",
+        ))
+        return
+    mb, files = _dir_mb(str(d))
+    authority = (f"publisher digest for {len(model.publisher_sha256)} file(s)"
+                 if model.publisher_sha256 else
+                 "self-hash only - no publisher digest to compare against")
+    checks.append(("rerank model", "ok",
+                   f"{model.name}: {mb}MB in {files} file(s), {authority}", ""))
+
+
+#: 握手预算：一次真 spawn + initialize + tools/list 在这台机器上实测 1.2s，30s 是
+#: "宿主的 env 写错了导致服务起不来也说不清" 的上界。测试把它压到零点几秒。
+_HANDSHAKE_BUDGET_S = 30.0
+
+
+def _append_host_handshake(checks) -> None:
+    """5 · 宿主能不能连上：真的起一个 stdio 服务，走完 initialize + tools/list。
+
+    装机失败的第一大原因是"配置写错了"，而它和"代码坏了"在 `-v` 里长得一样。只有
+    真握手一次能分开两者。子进程用完即杀 —— doctor 绝不能留下一个占着管道的服务器。
+    """
+    import json as _json
+    import subprocess as _sp
+    import threading as _th
+    import time as _t
+
+    try:
+        proc = _sp.Popen(
+            [sys.executable, "-m", "dhole_mcp"],
+            stdin=_sp.PIPE, stdout=_sp.PIPE, stderr=_sp.DEVNULL,
+        )
+    except Exception as exc:  # noqa: BLE001
+        checks.append(("stdio handshake", "fail",
+                       f"cannot spawn: {type(exc).__name__}"[:60],
+                       "python -m pip install -e ."))
+        return
+
+    answers: dict = {}
+
+    def _reader():
+        try:
+            for raw in iter(proc.stdout.readline, b""):
+                try:
+                    parsed = _json.loads(raw.decode("utf-8", "replace"))
+                except Exception:  # noqa: BLE001
+                    continue
+                if isinstance(parsed, dict) and parsed.get("id") is not None:
+                    answers[parsed["id"]] = parsed
+                    if 2 in answers:
+                        return
+        except Exception:  # noqa: BLE001
+            pass
+
+    _th.Thread(target=_reader, daemon=True).start()
+    t0 = _t.perf_counter()
+    outcome, tools = "", 0
+    try:
+        for rid, method, params in (
+                (1, "initialize", {"protocolVersion": "2025-03-26",
+                                   "capabilities": {},
+                                   "clientInfo": {"name": "dhole-doctor",
+                                                  "version": "1"}}),
+                (2, "tools/list", {})):
+            msg = {"jsonrpc": "2.0", "id": rid, "method": method, "params": params}
+            proc.stdin.write((_json.dumps(msg) + "\n").encode("utf-8"))
+            proc.stdin.flush()
+        deadline = t0 + _HANDSHAKE_BUDGET_S
+        while 2 not in answers and _t.perf_counter() < deadline:
+            _t.sleep(0.05)
+        if 2 in answers:
+            tools = len((answers[2].get("result") or {}).get("tools") or [])
+            outcome = f"initialize + tools/list in {_t.perf_counter() - t0:.2f}s"
+        else:
+            outcome = f"no tools/list answer within {_HANDSHAKE_BUDGET_S:.0f}s"
+    except Exception as exc:  # noqa: BLE001
+        outcome = f"handshake broke: {type(exc).__name__}: {exc}"[:70]
+    finally:
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except Exception:  # noqa: BLE001
+            pass
+    checks.append((
+        "stdio handshake", "ok" if tools else "fail",
+        f"{outcome}{f' - {tools} tools advertised' if tools else ''}",
+        "" if tools else "run the host's exact command by hand: python -m dhole_mcp",
+    ))
+
+
+def _append_robots_posture(checks) -> None:
+    """8 · robots 三态里的两种半：遵守 / 已豁免 / 这一行看不见的那部分。
+
+    进程级只能看见前两种。"这个站没读到 robots 所以根本没查"是每次响应的
+    `metadata.robots`，任何诊断命令都聚不出它 —— 所以必须把"看不见"说出来，
+    否则 all healthy 会被读成"一直在合规"。
+    """
+    try:
+        from dhole_mcp import robots
+        waived = robots.env_disabled()
+    except Exception:  # noqa: BLE001 - 读不到 robots 本身就是发现
+        checks.append(("robots posture", "fail",
+                       "the robots module did not import",
+                       "python -m pip install -e ."))
+        return
+    checks.append((
+        "robots posture", "info" if waived else "ok",
+        ("waived process-wide (DHOLE_IGNORE_ROBOTS) - every fetch skips the check"
+         if waived else
+         "compliance ON (per-call waiver needs options.ignore_robots=true)")
+        + " - per-site state is NOT visible here: a robots.txt that could not be "
+          "read is reported per response in metadata.robots, and not checked "
+          "is not complied",
+        "unset DHOLE_IGNORE_ROBOTS to go back to compliance" if waived else "",
+    ))
+
+
+def _append_proxy_tcp(checks) -> None:
+    """9 · 出口：配置说了什么，加上 TCP 认不认。"""
+    from dhole_mcp import search_proxy
+    proxy, source = search_proxy.configured_proxy()
+    if not proxy:
+        checks.append(("search proxy", "ok", "none set - direct connection", ""))
+        return
+    detail = f"{search_proxy.redact(proxy)} (from {source})"
+    why = ""
+    try:
+        from dhole_mcp.fetcher import proxy_preflight
+        reachable, _category = proxy_preflight(proxy, 5.0)
+    except Exception as exc:  # noqa: BLE001
+        reachable, why = False, f"preflight raised {type(exc).__name__}"
+    else:
+        reachable = bool(reachable)
+    if reachable:
+        checks.append(("search proxy tcp", "ok",
+                       detail + " - accepts connections", ""))
+    else:
+        checks.append((
+            "search proxy tcp", "fail",
+            f"{detail} - DID NOT ACCEPT a TCP connection"
+            + (f": {why}" if why else ""),
+            "start the proxy, or unset "
+            + (source if source.startswith("DHOLE_") else "DHOLE_SEARCH_PROXY"),
+        ))
+
+
+def _append_state_inventory(checks) -> None:
+    """11 · 状态目录里有什么、多大、最老多久 —— 这一行同时是隐私出口。"""
+    import time as _t
+    home = paths.home()
+    files, dirs = [], []
+    try:
+        for e in sorted(os.scandir(home), key=lambda x: x.name):
+            (dirs if e.is_dir() else files).append(e)
+    except Exception:  # noqa: BLE001
+        pass
+    mb, _ = _dir_mb(str(home))
+    ages = []
+    for e in files:
+        try:
+            ages.append((_t.time() - os.path.getmtime(e.path)) / 86400.0)
+        except OSError:
+            continue
+    oldest = max(ages) if ages else 0.0
+    names = ", ".join(e.name for e in files[:6]) or "empty"
+    if len(files) > 6:
+        names += f" (+{len(files) - 6} more)"
+    checks.append((
+        "state dir contents", "info",
+        f"{len(files)} file(s) + {len(dirs)} dir(s), {mb}MB, oldest {oldest:.0f}d: {names}",
+        "",
+    ))
+    held = []
+    if any(e.name == "sessions.db" for e in files):
+        held.append("sessions.db holds cookie VALUES")
+    if any(e.name == "usage.jsonl" for e in files):
+        held.append("usage.jsonl is the call log")
+    if any(e.name == "profiles" for e in dirs):
+        held.append("profiles/ is a logged-in browser profile")
+    if any(e.name == "cdp_hosts.json" for e in files):
+        held.append("cdp_hosts.json names the hosts allowed to attach your Chrome")
+    if held:
+        checks.append(("credentials on disk", "info",
+                       "; ".join(held) +
+                       " - delete these before sharing a machine or pasting a bug report",
+                       ""))
+
+
+def _append_wire_cost(checks) -> None:
+    """12 · 这次连接付了多少 token：注册工具数 + 连接期字符数。
+
+    连接期字符数是每次会话都要付一次的固定成本，而这个数字此前只有 `tests/
+    tool_payload_measure.py` 量得到 —— 也就是说只有开发者知道。把它印出来，用户
+    才有依据决定要不要用 DHOLE_TOOLS 收窄注册面。4.16 chars/token 是这份载荷实测
+    出来的比值，不是通用常数，所以句子里把出处写在一起。
+    """
+    try:
+        import json as _json
+
+        from dhole_mcp import server as _srv
+        defs = _srv.MasterFetchServer._enabled_tool_defs()
+        minimal = [{"name": td["name"], "description": td["description"],
+                    "inputSchema": td["inputSchema"],
+                    **({"annotations": td["annotations"]}
+                       if "annotations" in td else {})} for td in defs]
+        compact = len(_json.dumps({"tools": minimal}, separators=(",", ":"),
+                                  ensure_ascii=False))
+        total = compact + len(_srv.DHOLE_INSTRUCTIONS)
+    except Exception as exc:  # noqa: BLE001
+        checks.append(("connect cost", "info",
+                       f"unreadable: {type(exc).__name__}"[:60], ""))
+        return
+    checks.append((
+        "connect cost", "ok",
+        f"{len(defs)} tool(s), {total} chars on the wire "
+        f"~{total / 4.16:.0f} tokens (4.16 is this payload's measured chars/token)"
+        " - to pay less: DHOLE_TOOLS=smart_fetch,smart_search (restart the host)",
+        "",
+    ))
+
+
+PROBE_SEARCH_QUERY = "dhole mcp"
+PROBE_FETCH_URL = "https://example.com/"
+
+
+def _append_live_probe(checks) -> None:
+    """10 · 真实搜索 + 真实抓取各一次（`init --probe` 的职责搬进 doctor）。
+
+    免密引擎是对公开结果的直抓，没有 SLA：静态检查看不出"这个 IP 今天被盯着"。
+    这两行是唯一能证明"今天从这台机器能用"的手段，所以每个目标都点名，且失败
+    记成网络事实而不是安装故障。
+    """
+    import asyncio
+
+    try:
+        from dhole_mcp import server as _srv
+    except Exception as exc:  # noqa: BLE001
+        checks.append(("live search", "fail",
+                       f"server did not import: {type(exc).__name__}"[:60],
+                       "python -m pip install -e ."))
+        return
+    srv = _srv.MasterFetchServer(cache_ttl=0)
+
+    async def _call(name, args):
+        out = await srv._dispatch(name, args)
+        return out[1] if isinstance(out, tuple) else out
+
+    try:
+        search = asyncio.run(_call("smart_search", {
+            "query": PROBE_SEARCH_QUERY, "options": {"max_results": 3}}))
+    except Exception as exc:  # noqa: BLE001
+        search = {"error": f"{type(exc).__name__}: {exc}"}
+    hits = search.get("results") or []
+    if search.get("error"):
+        checks.append(("live search", "info",
+                       f"failed: {str(search['error'])[:110]}",
+                       "dhole engines probe says who still answers from this IP"))
+    elif not hits:
+        checks.append(("live search", "info",
+                       "0 results - every keyless engine declined or is cooling",
+                       "dhole engines probe, or set DHOLE_SEARCH_PROXY"))
+    else:
+        checks.append(("live search", "ok",
+                       f"{len(hits)} result(s) for {PROBE_SEARCH_QUERY!r} via "
+                       f"{len(search.get('engines_used') or [])} engine(s), "
+                       f"rerank={search.get('rerank_mode', '?')}", ""))
+
+    try:
+        fetch = asyncio.run(_call("smart_fetch", {"url": PROBE_FETCH_URL}))
+    except Exception as exc:  # noqa: BLE001
+        fetch = {"error": f"{type(exc).__name__}: {exc}"}
+    if fetch.get("error"):
+        checks.append(("live fetch", "info",
+                       f"{PROBE_FETCH_URL} failed: {str(fetch['error'])[:110]}",
+                       str(fetch.get("next_action") or "check this network")[:150]))
+    else:
+        checks.append(("live fetch", "ok",
+                       f"{PROBE_FETCH_URL} -> {fetch.get('status')} "
+                       f"{fetch.get('total_extracted_chars', 0)} chars "
+                       f"via {fetch.get('fetcher_used', '?')}", ""))
+
+
 def doctor() -> int:
     """Proactive health check: diagnose a half-broken install and name the fix.
 
@@ -710,7 +1157,22 @@ def doctor() -> int:
     # (label, state, detail, fix) - state is "ok" | "fail" | "info"
     checks: list[tuple[str, str, str, str]] = []
 
-    # ── install integrity ────────────────────────────────────────────────
+    def _safe(fn, label: str) -> None:
+        """一项检查自己坏了，不许把整份报告带垮：换成一行说明，其余照旧。
+
+        doctor 是"已经坏了才去跑"的命令，它自己抛异常是最坏的结局（这条不变量由
+        test_never_raises_and_returns_an_exit_code 钉着，12 项只是让它更难守）。
+        """
+        try:
+            fn(checks)
+        except Exception as exc:  # noqa: BLE001
+            checks.append((label, "info", f"skipped: {type(exc).__name__}"[:60], ""))
+
+    live = _live_checks_enabled()
+
+    # ── 1 · 运行环境与这份安装的真实身份 ──────────────────────────────────
+    _safe(_append_runtime, "python + platform")
+
     exe = _dhole_launcher_path()
     checks.append((
         "launcher resolves", "ok" if exe else "fail",
@@ -765,15 +1227,54 @@ def doctor() -> int:
         "",
     ))
 
-    missing_core = [m for m in ("httpx", "aiosqlite", "mcp", "pydantic")
-                    if not _has_module(m)]
-    checks.append((
-        "core dependencies", "ok" if not missing_core else "fail",
-        "ok" if not missing_core else "missing: " + ", ".join(missing_core),
-        "" if not missing_core else "python -m pip install -e .",
-    ))
+    # ── 2 · 依赖分层 ──────────────────────────────────────────────────────
+    _safe(_append_dependency_layers, "dependency layers")
 
-    # ── writable state ───────────────────────────────────────────────────
+    # ── 3+4 · 抓取与排序真正要用的那两个大件 ──────────────────────────────
+    _safe(_append_chromium, "chromium binary")
+    _safe(_append_rerank_model, "rerank model")
+
+    # ── 5 · 宿主连得上吗（真起一个 stdio 服务）──────────────────────────
+    if live:
+        _safe(_append_host_handshake, "stdio handshake")
+    else:
+        checks.append(("stdio handshake", "info",
+                       "skipped by the test harness (it spawns a server)", ""))
+
+    # ── 6+7 · 两扇门当前值、遮蔽关系，以及已被注销却被设着的旋钮 ─────────
+    # The whole section runs inside a guard because a doctor() that raises is
+    # worse than a doctor() with a missing section - the plan's W2 clause "doctor
+    # 依然绝不许抛异常" is pinned by test_never_raises_and_returns_an_exit_code.
+    _safe(_append_config_audit, "config audit")
+
+    # ── 8 · robots 的三种状态 ─────────────────────────────────────────────
+    _safe(_append_robots_posture, "robots posture")
+
+    # ── 9 · 出口与解析器现实 ─────────────────────────────────────────────
+    # §1.5：README 的"零配置可用"在 fake-ip TUN 上被证伪过，每次抓取都失败的现场
+    # 看着像产品 bug。这里说出环境的真相，操作者才看得见"是你的代理这么配的"。
+    # 离线 / DNS 坏了读成 info，绝不算失败。
+    if live:
+        _safe(_append_proxy_tcp, "search proxy tcp")
+    else:
+        from dhole_mcp import search_proxy
+        proxy, source = search_proxy.configured_proxy()
+        checks.append((
+            "search proxy", "ok" if not proxy else "info",
+            (f"{search_proxy.redact(proxy)} (from {source})" if proxy
+             else "none set - direct connection"),
+            "" if proxy else "set DHOLE_SEARCH_PROXY when your IP is being throttled",
+        ))
+    _safe(_append_resolver_reality, "resolver reality")
+
+    # ── 10 · 实搜 + 实抓（免密引擎没有 SLA，这是唯一的"今天能用"证明）────
+    if live:
+        _safe(_append_live_probe, "live probe")
+    else:
+        checks.append(("live probe", "info",
+                       "skipped by the test harness (it sends real traffic)", ""))
+
+    # ── 11 · 状态目录：能不能写、里面有什么、多久没清 ────────────────────
     try:
         home = paths.home()
         home.mkdir(parents=True, exist_ok=True)
@@ -786,42 +1287,10 @@ def doctor() -> int:
             "state dir writable", "fail", f"{type(exc).__name__}: {exc}"[:60],
             "set DHOLE_HOME to a writable path",
         ))
+    _safe(_append_state_inventory, "state dir contents")
 
-    try:
-        from dhole_mcp import search_proxy
-        proxy, source = search_proxy.configured_proxy()
-        if proxy:
-            checks.append(("search proxy", "info",
-                           f"{search_proxy.redact(proxy)} (from {source})",
-                           "TCP reachability is what `dhole --doctor` proves next; "
-                           "17.0 has one egress, no pool"))
-        else:
-            checks.append(("search proxy", "info", "none (direct connection)",
-                           "set DHOLE_SEARCH_PROXY when your IP is being throttled"))
-    except Exception as exc:  # noqa: BLE001
-        checks.append(("search proxy", "info", f"check failed: {exc}"[:60], ""))
-
-    # ── config audit (W2) ────────────────────────────────────────────────
-    # The whole section runs inside try/except because a doctor() that
-    # raises is worse than a doctor() with a missing section - the tests
-    # test_never_raises_and_returns_an_exit_code and the plan's W2 "doctor
-    # 依然绝不许抛异常" clause both pin this.
-    try:
-        _append_config_audit(checks)
-    except Exception as exc:  # noqa: BLE001
-        checks.append(("config audit", "info", f"skipped: {exc}"[:60], ""))
-
-    # ── resolver reality (W3) ────────────────────────────────────────────
-    # The plan's §1.5 - README's "zero-config works" was falsified on a
-    # fake-ip TUN setup, and every URL tool failed with what looked like
-    # a product bug. This check names the environment so the operator
-    # sees "your proxy is set up this way, here is the switch" instead
-    # of an unexplained SecurityError from every fetch. Never counts as
-    # a failure - offline / broken-DNS read as info, not red.
-    try:
-        _append_resolver_reality(checks)
-    except Exception as exc:  # noqa: BLE001
-        checks.append(("resolver reality", "info", f"skipped: {exc}"[:60], ""))
+    # ── 12 · 这次连接付了多少 ───────────────────────────────────────────
+    _safe(_append_wire_cost, "connect cost")
 
     # ── render ───────────────────────────────────────────────────────────
     failures = [c for c in checks if c[1] == "fail"]

@@ -9512,7 +9512,7 @@ def _help_epilog() -> str:
         f"  {ui.cyan('dhole')}              {ui.dim('serve · stdio MCP (Claude Code, Cursor, OpenCode, Pi)')}",
         f"  {ui.cyan('dhole --http')}       {ui.dim('serve · streamable HTTP (Open WebUI), use --host/--port')}",
         f"  {ui.cyan('dhole -v')}           {ui.dim('version + capability check')}",
-        f"  {ui.cyan('dhole doctor')}       {ui.dim('diagnose the install + config audit + resolver reality')}",
+        f"  {ui.cyan('dhole doctor')}       {ui.dim('the 12-item install check (spawns a server, then one real search + one real fetch)')}",
         f"  {ui.cyan('dhole --doctor')}     {ui.dim('same as `dhole doctor` (accepted for backwards compatibility)')}",
         f"  {ui.cyan('dhole engines')}      {ui.dim('show / reset / live-test engine health (list|reset|probe)')}",
         f"  {ui.cyan('dhole config')}       {ui.dim('list / set / unset persisted knobs in ~/.dhole/config.json (no host restart for per-call knobs)')}",
@@ -9932,7 +9932,7 @@ def main():
     parser.add_argument("-v", "--version", action="store_true",
                         help="show version + the capability panel")
     parser.add_argument("--doctor", action="store_true",
-                        help="diagnose the install and suggest fixes")
+                        help="the 12-item install check; prints the fix for every failure")
     args = parser.parse_args()
 
     if args.version:

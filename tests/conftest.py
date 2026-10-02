@@ -8,6 +8,22 @@ from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
+def _doctor_off_the_network(request, monkeypatch):
+    """doctor 的第 5 项与第 10 项分别会真起一个 stdio 子进程、真发一次搜索与抓取
+    —— 计划里的 12 项就有这两条，它们不是可选项。
+
+    套件里默认关掉：跑一次几秒，而结论取决于当场的网络，那不是关于产品的断言。
+    关掉之后 doctor 仍然印出一行"skipped by the test harness"，所以这条路不会静默
+    消失；它接得上由 tests/test_doctor.py 里两条打桩用例证明，`-m live` 那一条则
+    在真网络上跑整条路径。
+    """
+    if request.node.get_closest_marker("live"):
+        return
+    from dhole_mcp import updater
+    monkeypatch.setattr(updater, "LIVE_CHECKS", False)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_robots_fetch(monkeypatch):
     """Keep the suite off the network for robots.txt.
 
