@@ -212,7 +212,7 @@ class TestResponseCookiesAreReadAtAll:
         assert _resp_cookies(object()) == {}
 
 
-# ─── smart_fetch 这一层 ──────────────────────────────────────────────
+# ─── web_read 这一层 ──────────────────────────────────────────────
 
 def _html_result(url: str) -> ResponseModel:
     return ResponseModel(url=url, status=200, content=["<p>ok</p>"],
@@ -229,7 +229,7 @@ class TestSmartFetchSeesTheSession:
             return _html_result(url)
         monkeypatch.setattr(MasterFetchServer, "get", fake_get)
 
-        out = await MasterFetchServer().smart_fetch(ME, cache_ttl=0, session_id="bob")
+        out = await MasterFetchServer().web_read(ME, cache_ttl=0, session_id="bob")
 
         assert out.session_id == "bob"
         assert sorted(out.session_cookie_names) == ["csrf", "sid"]
@@ -248,13 +248,13 @@ class TestSmartFetchSeesTheSession:
             return _html_result(url)
         monkeypatch.setattr(MasterFetchServer, "get", fake_get)
 
-        out = await MasterFetchServer().smart_fetch(ME, cache_ttl=0)
+        out = await MasterFetchServer().web_read(ME, cache_ttl=0)
 
         assert out.session_id == "" and out.session_cookie_names == []
 
     @pytest.mark.asyncio
     async def test_the_bulk_path_does_not_lose_the_session(self, monkeypatch):
-        """urls=[...] 会按 URL 再调一次 smart_fetch；不转发 session_id 的话，第二批
+        """urls=[...] 会按 URL 再调一次 web_read；不转发 session_id 的话，第二批
         请求全部以「无会话」发出，cookie 静默不带上——而响应看起来完全正常。"""
         seen: list[str] = []
 
@@ -263,7 +263,7 @@ class TestSmartFetchSeesTheSession:
             return _html_result(url)
         monkeypatch.setattr(MasterFetchServer, "get", fake_get)
 
-        out = await MasterFetchServer().smart_fetch(
+        out = await MasterFetchServer().web_read(
             "", urls=[ME, LOGIN], cache_ttl=0, session_id="bob")
 
         assert out.results[0].session_id == "bob"
@@ -276,7 +276,7 @@ class TestSmartFetchSeesTheSession:
             return _html_result(url)
         monkeypatch.setattr(MasterFetchServer, "get", fake_get)
 
-        out = await MasterFetchServer().smart_fetch(
+        out = await MasterFetchServer().web_read(
             ME, cache_ttl=0, session_id="../etc/passwd")
 
         assert out.status == 200, "rejecting the id must not reject the page"

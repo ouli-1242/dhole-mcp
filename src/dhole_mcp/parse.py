@@ -9,7 +9,7 @@ Supported formats:
 - .docx         → python-docx: headings, paragraphs, tables → Markdown
 - .xlsx         → openpyxl: sheets → Markdown tables
 - .csv          → stdlib csv: → Markdown table
-- .pdf          → pdf_extractor (same pipeline smart_fetch uses for PDF URLs:
+- .pdf          → pdf_extractor (same pipeline web_read uses for PDF URLs:
                   layout-aware markdown, OCR fallback for scans, quality score)
 - .md / .markdown / .txt → as-is, through the same charset detection .csv uses
 - .json / .yaml / .yml   → as-is, but validated (an unparseable file is an error)
@@ -462,13 +462,13 @@ def _parse_csv(file_path: str, encoding: str = "") -> tuple[str, dict]:
 def _parse_pdf(file_path: str) -> tuple[str, str, dict]:
     """Parse a local .pdf to Markdown, reusing the URL path's extractor.
 
-    Same pipeline smart_fetch uses for PDF URLs - layout-aware markdown,
+    Same pipeline web_read uses for PDF URLs - layout-aware markdown,
     per-page CID-garbage OCR fallback - so a local file behaves identically to a
     fetched one, envelope included: the extractor's table_of_contents,
     metadata and quality_score are handed back to the caller instead of being
     dropped here.
 
-    Why not just hand it to smart_fetch as ``file://``: that tool's URL
+    Why not just hand it to web_read as ``file://``: that tool's URL
     validator is an SSRF guard and rejects non-http(s) schemes by design.
     Reading a path the caller supplied is a different trust boundary - the same
     one this module already crosses for .docx/.xlsx/.csv/.html.

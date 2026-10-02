@@ -1,6 +1,6 @@
 """Regressions for the wire-boundary argument types (external report, 2026-09-24).
 
-The report filed smart_search as "completely broken, and an MCP restart does not
+The report filed web_search as "completely broken, and an MCP restart does not
 recover it", with `'<' not supported between instances of 'int' and 'str'` on
 every call, and diagnosed the engine cooldown tracker. The state files were
 innocent: `engine_state_reset()` followed by a search works (pinned below,
@@ -9,7 +9,7 @@ because the wrong diagnosis points at the wrong fix).
 What actually raised was `max(1, min(max_results, 50))` in search.py. `min()`
 compares its SECOND operand against the first, so a `max_results` that arrived as
 the string "6" produces that message verbatim — int on the left, str on the
-right. smart_fetch and cache_clear already coerced their arguments at the
+right. web_read and cache_clear already coerced their arguments at the
 dispatcher because "several MCP clients stringify numbers"; the other six tools
 read `args.get()` raw, so a number-typed client that serializes (or echoes a
 schema property as null) was one keystroke away from a bare Python traceback.
@@ -95,7 +95,7 @@ class TestStringifiedNumbers:
     def test_max_results_as_a_string_no_longer_raises_typeerror(self, monkeypatch):
         """The report's P1: every search answered with a bare Python traceback."""
         _stub_search_layer(monkeypatch)
-        payload = _envelope("smart_search", {"query": "Knot DNS", "max_results": "8"})
+        payload = _envelope("web_search", {"query": "Knot DNS", "max_results": "8"})
 
         assert "not supported between instances" not in payload["error"]
         assert payload["total_results"] == 8, "the caller's 8 has to be the 8 it gets"
@@ -107,7 +107,7 @@ class TestStringifiedNumbers:
         `page + 1` for the backends, so it has to arrive as the int it means.
         """
         seen = _stub_search_layer(monkeypatch)
-        payload = _envelope("smart_search", {"query": "Knot DNS", "page": "1"})
+        payload = _envelope("web_search", {"query": "Knot DNS", "page": "1"})
 
         assert payload["error"] == ""
         assert seen["page"] == 1
@@ -120,7 +120,7 @@ class TestStringifiedNumbers:
         null 一律按"没传"处理，与顶层的读法一致。
         """
         seen = _stub_search_layer(monkeypatch)
-        payload = _envelope("smart_search",
+        payload = _envelope("web_search",
                             {"query": "Knot DNS", "cache_ttl": None,
                              "max_results": None})
 
@@ -131,7 +131,7 @@ class TestStringifiedNumbers:
     def test_a_junk_number_names_the_argument_instead_of_tracebacking(self, monkeypatch):
         _stub_search_layer(monkeypatch)
         with pytest.raises(ValueError) as exc:
-            _dispatch("smart_search", {"query": "Knot DNS", "max_results": "abc"})
+            _dispatch("web_search", {"query": "Knot DNS", "max_results": "abc"})
 
         assert "max_results must be an integer" in str(exc.value)
         assert "max_results=6" in str(exc.value)
@@ -144,8 +144,8 @@ class TestStringifiedNumbers:
         """
         _stub_search_layer(monkeypatch)
         assert "Invalid page: 99 (0-10)" in _envelope(
-            "smart_search", {"query": "Knot DNS", "page": 99})["error"]
-        over = json.dumps(_envelope("smart_search",
+            "web_search", {"query": "Knot DNS", "page": 99})["error"]
+        over = json.dumps(_envelope("web_search",
                                     {"query": "Knot DNS", "max_results": 100}))
         assert "max_results=100 is outside the supported 1-50" in over
 
@@ -155,8 +155,8 @@ class TestOtherToolsWithTheSameGap:
 
     def test_a_stringified_false_is_not_true_for_the_browser_knobs(self, monkeypatch):
         """`headless="false"` used to keep the browser headless anyway."""
-        seen = _record(monkeypatch, "smart_fetch", ResponseModel(url="", status=0, content=[]))
-        _dispatch("smart_fetch", {"url": "https://example.test",
+        seen = _record(monkeypatch, "web_read", ResponseModel(url="", status=0, content=[]))
+        _dispatch("web_read", {"url": "https://example.test",
                                   "headless": "false",
                                   "hide_canvas": "false",
                                   "include_links": "true"})
@@ -176,8 +176,8 @@ class TestOtherToolsWithTheSameGap:
     def test_crawl_caps_arrive_as_numbers_for_the_code_that_counts(self, monkeypatch):
         """`max_pages="5"` reaches `range(max_pages)`; discover_only="false"
         reached `if discover_only:` and answered with a URL map instead."""
-        seen = _record(monkeypatch, "smart_crawl", ResponseModel(url="", status=0, content=[]))
-        _dispatch("smart_crawl", {"url": "https://example.test", "discover_only": "false",
+        seen = _record(monkeypatch, "web_crawl", ResponseModel(url="", status=0, content=[]))
+        _dispatch("web_crawl", {"url": "https://example.test", "discover_only": "false",
                                   "max_pages": "5", "deadline_ms": "90000"})
 
         assert seen["max_pages"] == 5
@@ -192,29 +192,29 @@ class TestOtherToolsWithTheSameGap:
         (`crawl_urls` was this test's subject until 17.0 §3 decision 31 deleted it;
         the boundary guard it exercised is what this test is really about.)
         """
-        seen = _record(monkeypatch, "smart_search")
+        seen = _record(monkeypatch, "web_search")
         with pytest.raises(ValueError) as exc:
-            _dispatch("smart_search", {"query": "q", "engines": "bing"})
+            _dispatch("web_search", {"query": "q", "engines": "bing"})
 
         assert "engines must be an array of strings" in str(exc.value)
         assert seen == {}, "a rejected call must not reach the search at all"
 
     def test_feed_and_resolve_timeouts_arrive_as_numbers(self, monkeypatch):
-        seen = _record(monkeypatch, "feed_fetch", [])
-        _dispatch("feed_fetch", {"urls": ["https://example.test/rss"],
+        seen = _record(monkeypatch, "feed_read", [])
+        _dispatch("feed_read", {"urls": ["https://example.test/rss"],
                                  "max_items": "0", "timeout": "30"})
         assert seen["max_items"] == 0
         assert seen["timeout"] == 30
 
-        seen2 = _record(monkeypatch, "resolve_url", {})
-        _dispatch("resolve_url", {"url": "https://example.test", "timeout": "1.5"})
+        seen2 = _record(monkeypatch, "web_resolve", {})
+        _dispatch("web_resolve", {"url": "https://example.test", "timeout": "1.5"})
         assert seen2["timeout"] == 1.5
 
     def test_a_numeric_pdf_page_range_is_not_dropped(self, monkeypatch):
         """`pages` was read only when it was a str, so pages=3 meant no range at
         all — the whole file extracted, with nothing saying so."""
-        seen = _record(monkeypatch, "smart_fetch", ResponseModel(url="", status=0, content=[]))
-        _dispatch("smart_fetch", {"url": "https://example.test/paper.pdf",
+        seen = _record(monkeypatch, "web_read", ResponseModel(url="", status=0, content=[]))
+        _dispatch("web_read", {"url": "https://example.test/paper.pdf",
                                   "pages": 3, "password": 1234})
 
         assert seen["pages"] == "3"
@@ -245,7 +245,7 @@ class TestActionsAndEngineState:
             actions_mod._validate_actions([{"scroll": 3, "wait": 1000}])
         assert "exactly one key" in str(exc.value)
 
-        tool = next(td for td in MasterFetchServer._TOOL_DEFS if td["name"] == "smart_fetch")
+        tool = next(td for td in MasterFetchServer._TOOL_DEFS if td["name"] == "web_read")
         assert "ONE action key per object" in tool["inputSchema"]["properties"]["actions"]["description"]
 
     def test_engine_state_reset_leaves_the_next_search_working(self, monkeypatch):
@@ -267,7 +267,7 @@ class TestActionsAndEngineState:
         assert payload["engine_state_reset"] is True
         assert ms.cooldowns() == {} and ms._ENGINE_YIELD == {}
 
-        search = _envelope("smart_search", {"query": "Knot DNS"})
+        search = _envelope("web_search", {"query": "Knot DNS"})
 
         assert search["error"] == ""
         assert search["total_results"] == 6

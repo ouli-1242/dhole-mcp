@@ -8,7 +8,7 @@
 
 1. **purpose**      第一句有动词性的职责陈述 —— 没有它，agent 只能靠名字猜。
 2. **boundary**     说了"什么时候不用我 / 用谁代替" —— 路由错的头号来源是边界
-                    没写（smart_fetch 的描述里"many pages of one site: smart_crawl"
+                    没写（web_read 的描述里"many pages of one site: web_crawl"
                     就是在画这条线）。
 3. **hard_limits**  数值上限/单位写进描述或指向说明书 —— 单位混乱（ms vs 秒）
                     是这个仓库修过的真 bug 类。

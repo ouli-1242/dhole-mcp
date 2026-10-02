@@ -2,7 +2,7 @@
 
 背景
 ----
-``smart_fetch`` 的 stealthy 路径（server.py:7091，即带 ``actions`` 的那条）硬编码
+``web_read`` 的 stealthy 路径（server.py:7091，即带 ``actions`` 的那条）硬编码
 ``disable_resources=True``，而 ``DISABLED_RESOURCE_TYPES`` 含 ``"image"``。
 现象：``{"screenshot": {"selector": "#qr", "decode_qr": true}}`` 在动作链里截到的是
 破图占位符，``qr: []``。

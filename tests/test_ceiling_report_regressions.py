@@ -7,7 +7,7 @@
    都以 HTTP 200 返回且 content_ok=true，agent 会把失败页当正文引用。
 2. archive.org 第三层降级在工具描述与 README 里都不存在 —— agent 调用前
    无从得知内容可能是存档快照。
-3. smart_crawl 有一道没写在文档里的钳制，于是 "调大 max_pages 就能多爬" 是错的
+3. web_crawl 有一道没写在文档里的钳制，于是 "调大 max_pages 就能多爬" 是错的
    预期。17.0 §3-31 删掉了那道总字符预算（`max_total_chars` 整个下线），页数与每页
    字符这两道天花板留着 —— 教训不跟着删：数值由 crawl.py 的常量反查 wire。
 """
@@ -145,7 +145,7 @@ class TestArchiveTierDocumented:
     """
 
     def test_smart_fetch_names_the_third_tier(self, tools):
-        desc = _desc(tools, "smart_fetch").lower()
+        desc = _desc(tools, "web_read").lower()
         assert "archive.org" in desc, "第三层降级在工具描述里不存在"
         # 辨认存档来源的字段是**顶层** source / archived_at（server.py 的
         # BulkResponseModel 投影可证），不是 metadata.source —— 旧 needle 钉在
@@ -153,7 +153,7 @@ class TestArchiveTierDocumented:
         assert "archived_at" in desc, "没告诉 agent 去哪里辨认存档来源"
 
     def test_smart_fetch_says_it_cannot_be_disabled(self, tools):
-        desc = _desc(tools, "smart_fetch").lower()
+        desc = _desc(tools, "web_read").lower()
         assert "disabl" in desc, "没说明这一层无法关闭（实测无开关可关）"
 
     def test_instructions_point_at_the_archive_receipt(self):
@@ -181,14 +181,14 @@ class TestCrawlCapsDocumented:
 
     def test_the_page_ceiling_is_on_the_wire(self, tools):
         asked = str(crawl_mod.MAX_PAGES_CEILING)
-        assert asked in _desc(tools, "smart_crawl"), \
+        assert asked in _desc(tools, "web_crawl"), \
             "爬取页数的硬顶没写进工具描述"
-        assert asked in self._prop(tools, "smart_crawl", "max_pages"), \
+        assert asked in self._prop(tools, "web_crawl", "max_pages"), \
             "max_pages 自己的描述没写上限"
 
     def test_the_per_page_ceiling_is_on_the_wire(self, tools):
         assert str(crawl_mod.PER_PAGE_CHARS_CEILING) in self._prop(
-            tools, "smart_crawl", "max_content_chars_per"), \
+            tools, "web_crawl", "max_content_chars_per"), \
             "每页字符上限没写进参数描述"
 
 
@@ -216,8 +216,8 @@ class TestHardClampBehavior:
                 fetcher_used="http", content_ok=True, content_type="text/html",
             )
 
-        monkeypatch.setattr(MasterFetchServer, "smart_fetch", fake_smart_fetch)
-        result = asyncio.run(MasterFetchServer().smart_crawl(
+        monkeypatch.setattr(MasterFetchServer, "web_read", fake_smart_fetch)
+        result = asyncio.run(MasterFetchServer().web_crawl(
             "https://example.com/", max_pages=500, cache_ttl=0,
             max_content_chars_per=999_999, concurrency=1,
         ))

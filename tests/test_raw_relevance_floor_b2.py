@@ -59,7 +59,7 @@ def wired(monkeypatch):
         async def _no_real_load(*a, **k):
             return fake
 
-        # search.smart_search awaits ensure_reranker() before ranking; without this
+        # search.web_search awaits ensure_reranker() before ranking; without this
         # it would load the real 288 MB model to answer a unit test.
         monkeypatch.setattr(S, "ensure_reranker", _no_real_load)
         return fake
@@ -142,7 +142,7 @@ class TestTheSearchLayerReportsIt:
             return list(raw), [EngineReport(name="bing", ok=True)]
 
         monkeypatch.setattr(S, "multi_search", fake_multi)
-        out = await S.smart_search(None, "任意查询", max_results=5, cache_ttl=0,
+        out = await S.web_search(None, "任意查询", max_results=5, cache_ttl=0,
                                    engines=["bing"], min_raw_relevance=0.1)
 
         assert out.results == []
@@ -158,7 +158,7 @@ class TestTheSearchLayerReportsIt:
             return list(raw), [EngineReport(name="bing", ok=True)]
 
         monkeypatch.setattr(S, "multi_search", fake_multi)
-        out = await S.smart_search(None, "任意查询", max_results=5, cache_ttl=0,
+        out = await S.web_search(None, "任意查询", max_results=5, cache_ttl=0,
                                    engines=["bing"], min_raw_relevance=0.1)
 
         titles = [r.title for r in out.results]
@@ -186,8 +186,8 @@ class TestTheSearchLayerReportsIt:
         monkeypatch.setattr(S, "set_cached", fake_set_cached)
         monkeypatch.setattr(S, "multi_search", fake_multi)
 
-        loose = await S.smart_search(None, "同一查询", max_results=5, engines=["bing"])
-        strict = await S.smart_search(None, "同一查询", max_results=5, engines=["bing"],
+        loose = await S.web_search(None, "同一查询", max_results=5, engines=["bing"])
+        strict = await S.web_search(None, "同一查询", max_results=5, engines=["bing"],
                                        min_raw_relevance=0.1)
 
         assert len(strict.results) < len(loose.results)
@@ -201,7 +201,7 @@ class TestTheSearchLayerReportsIt:
             return list(raw), [EngineReport(name="bing", ok=True)]
 
         monkeypatch.setattr(S, "multi_search", fake_multi)
-        out = await S.smart_search(None, "q", max_results=5, cache_ttl=0,
+        out = await S.web_search(None, "q", max_results=5, cache_ttl=0,
                                    engines=["bing"], min_raw_relevance=5)
 
         assert "outside 0-1" in out.fetch_hint, out.fetch_hint
@@ -215,12 +215,12 @@ async def test_a_full_floor_empties_a_real_round_instead_of_passing_it_off():
     from dhole_mcp.server import MasterFetchServer
 
     srv = MasterFetchServer()
-    loose = await S.smart_search(srv, "kubernetes liveness probe 配置", max_results=5,
+    loose = await S.web_search(srv, "kubernetes liveness probe 配置", max_results=5,
                                  cache_ttl=0)
     if not loose.results:
         pytest.skip(f"no live engine answer: {loose.error[:80]}")
 
-    strict = await S.smart_search(srv, "kubernetes liveness probe 配置", max_results=5,
+    strict = await S.web_search(srv, "kubernetes liveness probe 配置", max_results=5,
                                   cache_ttl=0, min_raw_relevance=1.0)
 
     assert strict.rerank_mode == "neural", strict.fetch_hint

@@ -63,10 +63,10 @@ class TestSmartSearchRegionCache:
     async def test_explicit_regions_use_distinct_cache_entries(self, smart_search_cache):
         cache, live_regions = smart_search_cache
 
-        us = await search.smart_search(
+        us = await search.web_search(
             None, "regional cache test", engines=["brave"], region="us-en",
         )
-        gb = await search.smart_search(
+        gb = await search.web_search(
             None, "regional cache test", engines=["brave"], region="gb-en",
         )
 
@@ -82,10 +82,10 @@ class TestSmartSearchRegionCache:
     async def test_same_normalized_explicit_region_uses_cached_result(self, smart_search_cache):
         cache, live_regions = smart_search_cache
 
-        first = await search.smart_search(
+        first = await search.web_search(
             None, "regional cache test", engines=["brave"], region="GB-EN",
         )
-        second = await search.smart_search(
+        second = await search.web_search(
             None, "regional cache test", engines=["brave"], region="gb-en",
         )
 
@@ -99,7 +99,7 @@ class TestSmartSearchRegionCache:
     async def test_omitted_region_keeps_existing_cache_key(self, smart_search_cache):
         cache, _ = smart_search_cache
 
-        await search.smart_search(
+        await search.web_search(
             None, "regional cache test", engines=["brave"],
         )
 
@@ -761,7 +761,7 @@ class TestDegradedPoolIsHonest:
 
     @pytest.mark.asyncio
     async def test_consensus_counts_the_universe_not_the_survivors(self, degraded_pool):
-        r = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        r = await search.web_search(None, "sqlite WAL mode", max_results=6, mode="auto")
         n_families = len({se._INDEX_FAMILY.get(n, n) for n in se.DEFAULT_ENGINES})
         # 只有一个家族活着，分母仍是整个池子的家族数（否则 "1 of 1" 与全员一致同形）
         assert r.results and r.results[0].engines_consensus == f"1 of {n_families}"
@@ -769,13 +769,13 @@ class TestDegradedPoolIsHonest:
 
     @pytest.mark.asyncio
     async def test_live_response_carries_the_low_confidence_note(self, degraded_pool):
-        r = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        r = await search.web_search(None, "sqlite WAL mode", max_results=6, mode="auto")
         assert "LOW CONFIDENCE" in r.fetch_hint
 
     @pytest.mark.asyncio
     async def test_cache_hit_reports_the_same_degradation_as_live(self, degraded_pool):
-        live = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
-        hit = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        live = await search.web_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        hit = await search.web_search(None, "sqlite WAL mode", max_results=6, mode="auto")
         assert hit.cached is True, "第二次应当命中缓存"
         assert hit.consensus_basis == live.consensus_basis
         assert "LOW CONFIDENCE" in hit.fetch_hint
@@ -788,7 +788,7 @@ class TestDegradedPoolIsHonest:
         旧行的 engines_consensus 字符串是写盘时渲染的（"1 of 1"），改不动；
         但降级标注是从 engines_used/engine_blocked 现推的，必须照旧出现。
         """
-        await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        await search.web_search(None, "sqlite WAL mode", max_results=6, mode="auto")
         (key, payload), = degraded_pool.items()
         row = json.loads(payload["content"][0])
         for gone in ("consensus_basis", "families_contributing", "family_universe"):
@@ -796,7 +796,7 @@ class TestDegradedPoolIsHonest:
         row["results"][0]["engines_consensus"] = "1 of 1"  # 旧版渲染
         payload["content"] = [json.dumps(row)]
 
-        hit = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        hit = await search.web_search(None, "sqlite WAL mode", max_results=6, mode="auto")
         assert hit.cached is True
         assert hit.consensus_basis == ""      # 旧行无从得知，不猜
         assert "LOW CONFIDENCE" in hit.fetch_hint
@@ -828,7 +828,7 @@ class TestDegradedPoolIsHonest:
         monkeypatch.setattr(search, "set_cached", fake_set_cached)
 
         for _ in range(2):
-            r = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+            r = await search.web_search(None, "sqlite WAL mode", max_results=6, mode="auto")
             assert r.consensus_basis == "full"
             assert "LOW CONFIDENCE" not in r.fetch_hint
             assert "didn't contribute" not in r.fetch_hint
@@ -838,7 +838,7 @@ class TestDegradedPoolIsHonest:
 
 async def _search_with(monkeypatch, reports, results=None, query="sqlite WAL mode",
                      store=None, **kw):
-    """用给定的 reports 跑一次真 smart_search（引擎层与缓存都是假的）。"""
+    """用给定的 reports 跑一次真 web_search（引擎层与缓存都是假的）。"""
     ranked = results if results is not None else [RawResult(
         title="sqlite WAL mode explained", url="https://sqlite.org/wal",
         snippet="sqlite WAL journaling", source="bing", position=1)]
@@ -866,7 +866,7 @@ async def _search_with(monkeypatch, reports, results=None, query="sqlite WAL mod
     monkeypatch.setattr(search, "ensure_reranker", _none)
     monkeypatch.setattr(search, "get_cached", no_get)
     monkeypatch.setattr(search, "set_cached", no_set)
-    return await search.smart_search(None, query, max_results=6, mode="auto", **kw)
+    return await search.web_search(None, query, max_results=6, mode="auto", **kw)
 
 
 class TestEngineEmptyIsVisible:
@@ -995,7 +995,7 @@ class TestSilentPoolRewriteGate:
                                 item_nodes=8, usable=0, yield_verdict="parser_drift")
                    for n in ("bing", "brave", "yandex")]
         calls = self._calls(monkeypatch, reports)
-        r = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        r = await search.web_search(None, "sqlite WAL mode", max_results=6, mode="auto")
         assert len(calls) == 1, "解析器确认坏了，不该再打第二轮全量 fan-out"
         assert "parsed 0 usable results" in r.error
         assert "dhole -v" in r.error
@@ -1009,7 +1009,7 @@ class TestSilentPoolRewriteGate:
                    for n in ("bing", "brave", "yandex")]
         calls = self._calls(monkeypatch, reports, second_results=[RawResult(
             title="sqlite", url="https://sqlite.org", snippet="s", source="brave", position=1)])
-        r = await search.smart_search(None, "zzzqqx sqlite WAL mode", max_results=6, mode="auto")
+        r = await search.web_search(None, "zzzqqx sqlite WAL mode", max_results=6, mode="auto")
         assert len(calls) == 2, "窄查询的改写救回被剥夺了"
         assert r.results, "改写后应当拿到结果"
 
@@ -1022,7 +1022,7 @@ class TestSilentPoolRewriteGate:
                          item_nodes=0, usable=0, yield_verdict="unknown_empty"),
         ]
         calls = self._calls(monkeypatch, reports)
-        await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        await search.web_search(None, "sqlite WAL mode", max_results=6, mode="auto")
         assert len(calls) == 2
         assert calls[1]["engines"] == ["brave"], calls[1]["engines"]
 
@@ -1031,7 +1031,7 @@ class TestSilentPoolRewriteGate:
         """被墙那条路径的文案不受本阶段影响。"""
         reports = [EngineReport(name="bing", blocked=True, status="timeout", error="timed out")]
         self._calls(monkeypatch, reports)
-        r = await search.smart_search(None, "sqlite WAL mode", max_results=6, mode="auto")
+        r = await search.web_search(None, "sqlite WAL mode", max_results=6, mode="auto")
         assert "rate-limited" in r.error or "rephrase" in r.error, r.error
 
 

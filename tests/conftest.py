@@ -66,7 +66,7 @@ def _nobody_installs_a_browser(monkeypatch):
 def _no_real_robots_fetch(monkeypatch):
     """Keep the suite off the network for robots.txt.
 
-    v16.0 made ``smart_fetch`` consult robots.txt before every tier. Any test
+    v16.0 made ``web_read`` consult robots.txt before every tier. Any test
     that monkeypatches the tier functions (the usual way to test the fetch
     pipeline) would otherwise add a REAL ``GET /robots.txt`` per origin — slow,
     network-dependent, and a source of flakes. ``DHOLE_IGNORE_ROBOTS=1`` makes

@@ -152,7 +152,7 @@ class TestCacheContextIsolation:
         assert hit is not None and hit["content"] == ["private body"]
 
     def test_request_context_decorator_sets_the_fingerprint(self):
-        """接线测试：smart_fetch 的请求上下文装饰器负责把指纹放进 ContextVar。
+        """接线测试：web_read 的请求上下文装饰器负责把指纹放进 ContextVar。
 
         只看纯函数不够——指纹必须真的在调用期间生效，否则缓存键永远为空。
         """
@@ -478,7 +478,7 @@ class TestRerankerDownloadEndpoints:
 class TestServerCacheTtlFlagIsLive:
     """`dhole --cache-ttl N` 必须是真旋钮。
 
-    它此前是死的：smart_fetch 的默认值在函数定义时就把模块常量 DEFAULT_TTL 焊进了
+    它此前是死的：web_read 的默认值在函数定义时就把模块常量 DEFAULT_TTL 焊进了
     签名，self._cache_ttl 赋值后没有任何读取点。用户唯一能表达"别存这么久"的开关
     不生效，而 README 还列着它。
     """
@@ -503,7 +503,7 @@ class TestServerCacheTtlFlagIsLive:
         monkeypatch.setattr(server_mod.MasterFetchServer, "_auto_escalate", stop)
         monkeypatch.setattr(server_mod.MasterFetchServer, "_force_fetch", stop)
         with pytest.raises(self._Stop):
-            asyncio.run(srv.smart_fetch(url="https://example.com/x", **kw))
+            asyncio.run(srv.web_read(url="https://example.com/x", **kw))
         return seen
 
     def test_instance_default_reaches_the_cache_lookup(self, monkeypatch):

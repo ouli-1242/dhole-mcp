@@ -949,7 +949,7 @@ def proxy_preflight(proxy_url: str, timeout: float = 5.0) -> tuple[bool, str]:
     Returns ``(reachable, error_category)``; the category is ``proxy_unreachable``
     when the endpoint did not accept a connection, else ``""``.
 
-    Why this exists: with a proxy configured, ``smart_fetch`` skipped its TCP
+    Why this exists: with a proxy configured, ``web_read`` skipped its TCP
     preflight (probing the TARGET directly would misreport, since the HTTP tier
     talks to the proxy). So a dead proxy had nothing to fail fast on — measured:
     ``proxy='http://127.0.0.1:9/'`` burned the whole 30000ms budget, escalated to

@@ -33,16 +33,16 @@ URL = "https://example.com/"
 
 # tool -> 这条调用最少要有的东西，以及桩返回什么
 BASE: dict[str, tuple[dict, object]] = {
-    "smart_fetch": ({"url": URL}, _FETCH_OK),
-    "smart_crawl": ({"url": URL}, _CRAWL_OK),
-    "smart_search": ({"query": "python asyncio"}, _SEARCH_OK),
+    "web_read": ({"url": URL}, _FETCH_OK),
+    "web_crawl": ({"url": URL}, _CRAWL_OK),
+    "web_search": ({"query": "python asyncio"}, _SEARCH_OK),
     # screenshot 回的是内容片段列表，不是模型；这里只看桩被用什么参数调用。
     "screenshot": ({"url": URL}, []),
 }
 
 # 每个参数一个探针值。值要能活过线路层的强制转换，所以不是一律 "x"。
 VALUES: dict[str, object] = {
-    # smart_fetch
+    # web_read
     "css_selector": "p", "max_content_chars": 5000, "timeout": 20000,
     "pages": "1-2", "password": "pw",
     "schema": {"properties": {"t": {"selector": "p"}}},
@@ -62,11 +62,11 @@ VALUES: dict[str, object] = {
     "cdp_url": "http://127.0.0.1:9222",
     # True 而不是 False：默认就是不放行，探得出"值被丢了"的探针才叫探针。
     "confirm": True,
-    # smart_crawl
+    # web_crawl
     "max_pages": 3, "max_depth": 1, "path_include": "/a", "path_exclude": "/b",
     "max_content_chars_per": 2000, "concurrency": 2,
     "deadline_ms": 60000, "sitemap": True, "search": "topic",
-    # smart_search
+    # web_search
     "max_results": 5, "mode": "auto", "engines": ["bing"], "site": "example.com",
     "exclude_sites": ["other.example"], "location": "cn", "language": "zh",
     "region": "cn-zh", "page": 1, "freshness": "week", "after": "2026-09-20",
@@ -96,10 +96,10 @@ REWRITTEN = {"method": "GET", "force_fetcher": "http", "before": None}
 def _optional_names(tool: str) -> frozenset:
     """这个工具能被接受的参数名，去掉那条调用必带的主语。
 
-    主语按工具算：smart_search 的 `url=` 不是主语（它的主语是 query，url 是
+    主语按工具算：web_search 的 `url=` 不是主语（它的主语是 query，url 是
     find_similar 的输入，一个真正的可选参数）。
     """
-    subject = {"query"} if tool == "smart_search" else {"url"}
+    subject = {"query"} if tool == "web_search" else {"url"}
     return server_mod._TOP_LEVEL_ARGS[tool] - subject
 
 
@@ -167,8 +167,8 @@ class TestAbsentMeansTheToolsOwnDefault:
     """没传的键不许被递成 None —— 那会盖掉方法自己那个非 None 的默认值。"""
 
     def test_an_unsent_parameter_is_absent_not_none(self, monkeypatch):
-        calls = _capture(monkeypatch, "smart_fetch")
-        _dispatch("smart_fetch", {"url": URL})
+        calls = _capture(monkeypatch, "web_read")
+        _dispatch("web_read", {"url": URL})
         got = calls[-1]
         for key in ("extraction_type", "cache_ttl", "focus", "pages", "method",
                     "allow_private", "session_id", "force_fetcher"):
@@ -176,8 +176,8 @@ class TestAbsentMeansTheToolsOwnDefault:
 
     def test_a_null_valued_parameter_is_not_set_either(self, monkeypatch):
         """客户端把每个 schema 属性都回显成 null 是常见的，那不等于"传了一个 null"。"""
-        calls = _capture(monkeypatch, "smart_crawl")
-        _dispatch("smart_crawl", {"url": URL, "max_pages": None, "focus": None})
+        calls = _capture(monkeypatch, "web_crawl")
+        _dispatch("web_crawl", {"url": URL, "max_pages": None, "focus": None})
         assert "max_pages" not in calls[-1] and "focus" not in calls[-1]
 
     def test_the_server_default_cache_ttl_survives_the_dispatcher(self, monkeypatch):
@@ -194,11 +194,11 @@ class TestAbsentMeansTheToolsOwnDefault:
 
         monkeypatch.setattr(MasterFetchServer, "_auto_escalate", fake)
         server = MasterFetchServer(cache_ttl=7)
-        asyncio.run(server._dispatch("smart_fetch", {"url": URL}))
+        asyncio.run(server._dispatch("web_read", {"url": URL}))
         assert seen["cache_ttl"] == 7, "服务端配置的 TTL 被调度器代答成了模块默认值"
 
         seen.clear()
-        asyncio.run(server._dispatch("smart_fetch", {"url": URL, "cache_ttl": 0}))
+        asyncio.run(server._dispatch("web_read", {"url": URL, "cache_ttl": 0}))
         assert seen["cache_ttl"] == 0, "显式的 cache_ttl=0 必须仍然绕过缓存"
 
 
@@ -207,7 +207,7 @@ class TestAWrongNameIsRefused:
 
     def test_a_typo_is_refused_with_the_supported_set(self):
         with pytest.raises(ValueError) as ei:
-            _dispatch("smart_crawl", {"url": URL, "max_pges": 3})
+            _dispatch("web_crawl", {"url": URL, "max_pges": 3})
         msg = str(ei.value)
         assert "max_pges" in msg and "max_pages" in msg, msg
 
@@ -216,7 +216,7 @@ class TestAWrongNameIsRefused:
         正好相反：能力全在，只是位置换了。所以这句话必须点名 17.0 与能搬出去的键。
         """
         with pytest.raises(ValueError) as ei:
-            _dispatch("smart_search", {"query": "q", "options": {"max_results": 5}})
+            _dispatch("web_search", {"query": "q", "options": {"max_results": 5}})
         msg = str(ei.value)
         assert "removed in 17.0" in msg, msg
         assert "max_results" in msg, msg
@@ -224,7 +224,7 @@ class TestAWrongNameIsRefused:
     def test_a_bag_key_that_could_not_move_anywhere_says_so(self):
         """袋子里装了一个哪儿都不存在的键：不能假装它"可以搬出来"。"""
         with pytest.raises(ValueError) as ei:
-            _dispatch("smart_search", {"query": "q", "options": {"frobnicate": 1}})
+            _dispatch("web_search", {"query": "q", "options": {"frobnicate": 1}})
         assert "frobnicate" not in str(ei.value).split("removed in 17.0")[1]
 
 
@@ -240,12 +240,12 @@ class TestTheTwoChoiceKnobsAreGone:
     @pytest.mark.parametrize("key", ["main_content_only", "use_trafilatura"])
     def test_the_key_is_refused(self, key):
         with pytest.raises(ValueError, match="Unsupported argument") as ei:
-            _dispatch("smart_fetch", {"url": URL, key: False})
+            _dispatch("web_read", {"url": URL, key: False})
         assert key in str(ei.value)
 
     @pytest.mark.parametrize("key", ["main_content_only", "use_trafilatura"])
     def test_the_key_is_not_advertised(self, key):
-        props = _def_of("smart_fetch")["inputSchema"]["properties"]
+        props = _def_of("web_read")["inputSchema"]["properties"]
         assert key not in props
 
 

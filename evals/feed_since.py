@@ -1,6 +1,6 @@
-"""feed_fetch 的 since 增量端到端场景（走完整工具路径）。
+"""feed_read 的 since 增量端到端场景（走完整工具路径）。
 
-计划第十章的 Eval 缺口之一。此前 `feed_fetch` 没有 `allow_private`，回环被
+计划第十章的 Eval 缺口之一。此前 `feed_read` 没有 `allow_private`，回环被
 SSRF 守卫拦下，这个场景只能靠单测覆盖逻辑（`tests/test_feed.py`、
 `tests/test_revalidation_g23.py`）；D3 补上 `allow_private` 之后可以走完整路径。
 
@@ -48,7 +48,7 @@ def record(name: str, ok: bool, detail: str) -> None:
 
 
 def field(obj, key, default=None):
-    """feed_fetch 走的是 envelope 形状，逐条结果是 dict；两种形状都认。"""
+    """feed_read 走的是 envelope 形状，逐条结果是 dict；两种形状都认。"""
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
@@ -63,7 +63,7 @@ def fixture_pubdates() -> list:
 
 async def call_feed(**kw) -> dict:
     server = MasterFetchServer()
-    out = await server.feed_fetch(urls=[f"{BASE}/feed.xml"], allow_private=True, **kw)
+    out = await server.feed_read(urls=[f"{BASE}/feed.xml"], allow_private=True, **kw)
     return out[0]
 
 

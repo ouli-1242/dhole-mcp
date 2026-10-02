@@ -1,4 +1,4 @@
-"""Outgoing-link extraction + classification for smart_fetch (v8).
+"""Outgoing-link extraction + classification for web_read (v8).
 
 Given a page's HTML, return its outgoing links classified by context so an
 agent can follow a page's source chain in one step instead of eyeballing
@@ -47,7 +47,7 @@ _PRIMARY_HOSTS = (
 _MAX_CITATIONS = 30
 _MAX_NAV = 20
 _MAX_EXTERNAL = 20
-# Bounds for the caller-facing `max_links` cap (smart_fetch). Same numbers the
+# Bounds for the caller-facing `max_links` cap (web_read). Same numbers the
 # tool description quotes; anything outside is clamped here, at the point where
 # the cap is actually applied, so the documented range cannot drift from it.
 MAX_LINKS_FLOOR = 1

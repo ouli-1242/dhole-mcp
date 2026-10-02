@@ -1,4 +1,4 @@
-"""Query-focused content filtering for smart_fetch.
+"""Query-focused content filtering for web_read.
 
 When the agent passes ``focus="..."``, the extracted markdown is filtered to
 the blocks (paragraphs / headings / tables / lists) most relevant to the query,
@@ -40,7 +40,7 @@ logger = logging.getLogger("dhole-mcp.focus")
 
 # ─── 本次调用要哪个 focus 打分器（按次参数 focus_engine，W15）───────────────
 # 为什么这个状态住在 focus.py：读它的是两个消费者 —— server 的
-# ``_apply_chunking``（smart_fetch 与 bulk）和 crawl 的 ``_classify_and_extract``，
+# ``_apply_chunking``（web_read 与 bulk）和 crawl 的 ``_classify_and_extract``，
 # 而 crawl 不能在模块级 import server（循环）。focus.py 只
 # 依赖标准库，两边都能 import；contextvar 对 ``asyncio.to_thread`` 也是透传的，
 # 所以爬取线程读到的是发起那次调用的值。

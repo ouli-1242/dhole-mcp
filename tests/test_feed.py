@@ -230,5 +230,5 @@ class TestAnItemPreviewOwnsItsCut:
         """看见 summary_truncated 之前，agent 得先知道有这个上限。"""
         from dhole_mcp.server import MasterFetchServer
         desc = [t["description"] for t in MasterFetchServer._TOOL_DEFS
-                if t["name"] == "feed_fetch"][0]
+                if t["name"] == "feed_read"][0]
         assert "500" in desc and "summary_truncated" in desc

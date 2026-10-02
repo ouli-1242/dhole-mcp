@@ -94,7 +94,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 | `DHOLE_IGNORE_ROBOTS=1` | 关掉进程级的 `robots.txt` 遵从（单次豁免用 `ignore_robots=true`） |
 | `DHOLE_USAGE_LOG=1` | 本地调用与写操作日志（不记参数值、不联网） |
 | `DHOLE_SSRF_DNS_RECHECK` | fake-ip 已自动适配；设 `on` 强制恢复 |
-| `DHOLE_TOOLS=smart_fetch,smart_search` | 只注册列出的工具，连接期省约一半；**写这个就等于关掉其余工具** |
+| `DHOLE_TOOLS=web_read,web_search` | 只注册列出的工具，连接期省约一半；**写这个就等于关掉其余工具** |
 
 ### 其余变量（都不是必须设的）
 
@@ -131,7 +131,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 
 ## 用法
 
-装好重启后直接说人话：「抓 `https://example.com/pricing` 列成表」→ `smart_fetch`；「查官方文档挑两条最相关的读给我」→ `smart_search` + `smart_fetch`；「`/guide` 下面都收一遍」→ `smart_crawl`；「这份 `report.pdf` 讲了什么」→ `parse`。
+装好重启后直接说人话：「抓 `https://example.com/pricing` 列成表」→ `web_read`；「查官方文档挑两条最相关的读给我」→ `web_search` + `web_read`；「`/guide` 下面都收一遍」→ `web_crawl`；「这份 `report.pdf` 讲了什么」→ `parse`。
 
 | 命令 | 用途 |
 |---|---|
@@ -153,13 +153,13 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 
 | 工具 | 做什么 |
 |---|---|
-| `smart_fetch` | 抓任意 URL：反爬升级、PDF / OCR、批量、聚焦提取、结构化提取、页面动作、非 GET、`auth`、条件请求、CDP 接管 |
-| `smart_search` | 无密钥搜索：多引擎并行 + 本地重排，可顺带抓回前三条全文 |
-| `smart_crawl` | 同域爬取：sitemap、关键词过滤、路径子树限定 |
+| `web_read` | 抓任意 URL：反爬升级、PDF / OCR、批量、聚焦提取、结构化提取、页面动作、非 GET、`auth`、条件请求、CDP 接管 |
+| `web_search` | 无密钥搜索：多引擎并行 + 本地重排，可顺带抓回前三条全文 |
+| `web_crawl` | 同域爬取：sitemap、关键词过滤、路径子树限定 |
 | `screenshot` | 页面截图；看不见图的宿主传 `options.save_to` 拿路径 |
 | `parse` | 本地文件 → Markdown（docx / xlsx / pdf / pptx / odt / csv / html / json / yaml / md / txt） |
-| `feed_fetch` | 批量抓 RSS / Atom，`since=` 只取增量 |
-| `resolve_url` | 解析最终地址，不抽正文 |
+| `feed_read` | 批量抓 RSS / Atom，`since=` 只取增量 |
+| `web_resolve` | 解析最终地址，不抽正文 |
 | `cache_clear` | 清缓存（连 robots 结论与全部会话 jar 一起清） |
 | `close_session` | 查看 / 清掉会话 cookie（值一律不出境） |
 | `dhole_doc` | 读 dhole 自己的说明书：选工具、写参数、字段含义、失败怎么修、配置改哪个 |
@@ -173,7 +173,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 | `vault` | `DHOLE_VAULT=1` | 读**你自己**密码管理器的条目元数据（从不回密码 / TOTP 值） |
 | `login` | `DHOLE_VAULT=1` | 用其中一条凭据登录：先只回计划，确认后才填并提交 |
 
-参数摆放：`smart_fetch` / `smart_crawl` / `smart_search` / `screenshot` 的旋钮收在一个 `options` 对象里，顶层同名参数也接受（兼容读法，两处都给时**顶层优先**）；其余工具**只有顶层这一层**，塞 `options` 会被拒绝并列出它真正接受的键。反向例外：`smart_fetch` 的 `url` 与 `smart_crawl` 的 `discover_only` / `crawl_urls` / `focus` 必须放顶层。以 `tools/list` 为准。
+参数摆放：`web_read` / `web_crawl` / `web_search` / `screenshot` 的旋钮收在一个 `options` 对象里，顶层同名参数也接受（兼容读法，两处都给时**顶层优先**）；其余工具**只有顶层这一层**，塞 `options` 会被拒绝并列出它真正接受的键。反向例外：`web_read` 的 `url` 与 `web_crawl` 的 `discover_only` / `crawl_urls` / `focus` 必须放顶层。以 `tools/list` 为准。
 
 调用写法、字段含义与排查的手册有两个入口，同一份语料：`dhole_doc(topic=...)`（默认注册，装上就能用）与 `dhole skill install`（宿主原生 skill 形态）。
 
@@ -194,7 +194,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 
 **免密 14 个**：默认池 6 个（`baidu` / `bing` / `sogou` / `bing_global` / `yandex` / `brave`），opt-in 8 个（`duckduckgo`（别名 `ddg`）/ `yahoo` / `baidu_baike` / `so360`（别名 `360`）/ `sogou_weixin` / `wikipedia` / `grokipedia` / `mwmbl`），要 `engines=[...]` 点名才跑，单次最多 9 个。另有 4 个 keyed 后端（`brightdata` / `tavily` / `exa` / `bocha`）：配了 key 即启用，只有点名才调用，按次计费。
 
-**日期**只有 day / week / month / year 四档：`after=<日期>` 会被放宽到最窄的覆盖档，`before` 直接拒绝——按日期取增量用 `feed_fetch(since=)`。
+**日期**只有 day / week / month / year 四档：`after=<日期>` 会被放宽到最窄的覆盖档，`before` 直接拒绝——按日期取增量用 `feed_read(since=)`。
 
 **重排模型**：本地 cross-encoder，首次神经搜索自动下到 `~/.dhole/models/`；`bge-zh`（默认，~279MB）/ `zh-full`（~450MB）/ `ms-marco`（~91MB），`dhole model use <name>` 切换。`min_raw_relevance` 判断「这一轮有没有相关结果」，起点 **0.1**（实测离题 ~1e-4、勉强 0.2、真命中 0.93+），换模型要重新校准。离线复用：拷 `models/<名字>/` 整个目录。
 

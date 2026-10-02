@@ -206,10 +206,10 @@ async def test_the_real_lazy_load_page_lets_more_than_its_first_screen_out():
     """
     from dhole_mcp.server import MasterFetchServer
 
-    plain = await MasterFetchServer().smart_fetch(
+    plain = await MasterFetchServer().web_read(
         "https://quotes.toscrape.com/scroll", extraction_type="html",
         force_fetcher="stealthy", cache_ttl=0, timeout=60000)
-    scrolled = await MasterFetchServer().smart_fetch(
+    scrolled = await MasterFetchServer().web_read(
         "https://quotes.toscrape.com/scroll", extraction_type="html",
         actions=[{"scroll": {"steps": 6, "ms_per_step": 3000}}],
         force_fetcher="stealthy", cache_ttl=0, timeout=90000)

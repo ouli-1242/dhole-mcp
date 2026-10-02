@@ -117,7 +117,7 @@ async def test_forced_stealthy_dead_private_port_fails_fast():
 
     srv = MasterFetchServer(cache_ttl=0)
     started = time.monotonic()
-    r = await srv._dispatch("smart_fetch", {
+    r = await srv._dispatch("web_read", {
         "url": "http://127.0.0.1:1/",
         "force_fetcher": "stealthy", "allow_private": True,
         "timeout": 45000})

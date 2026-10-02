@@ -158,7 +158,7 @@ def test_tool_definitions(mcp):
     tools = result.get("result", {}).get("tools", [])
     tool_map = {t["name"]: t for t in tools}
 
-    fetch_desc = tool_map["smart_fetch"]["description"]
+    fetch_desc = tool_map["web_read"]["description"]
     # 14.7 的「描述瘦身」删掉了旧文案里的 "EVERY web page"，这条断言从那时起就一直
     # 挂着 —— 等于每版都在骗自己「e2e 只是没跑」。钉住现在真正要守的外部契约：
     # robots 遵从、跨调用会话、动词、archive 层、自查清单。
@@ -167,7 +167,7 @@ def test_tool_definitions(mcp):
     # 各抄一遍上收到 instructions 一份；17.0 拆平之后参数说明各自住在自己的 property
     # 上。只查 tool.description 会判「删了」，而那句话只是换了一个每次连接都会到的
     # 地方 —— 对 agent 而言这些段是同一句话。
-    props = tool_map["smart_fetch"]["inputSchema"]["properties"]
+    props = tool_map["web_read"]["inputSchema"]["properties"]
     from dhole_mcp.server import DHOLE_INSTRUCTIONS
     visible = (fetch_desc + DHOLE_INSTRUCTIONS
                + "".join((p.get("description") or "")
@@ -183,14 +183,14 @@ def test_tool_definitions(mcp):
     assert "snippets" in visible.lower()
     assert "offset" in visible.lower()
     # 'html' 不靠散文露脸：它是 extraction_type 的枚举值，而枚举才是客户端取值的来源
-    assert "html" in tool_map["smart_fetch"]["inputSchema"]["properties"][
+    assert "html" in tool_map["web_read"]["inputSchema"]["properties"][
         "extraction_type"]["enum"]
     # schema 是结构化提取的唯一入口，此前会被静默丢弃（传了也照样返回 markdown），
     # 所以这里把它钉在 e2e 层面：既要在描述里露脸，也要在 inputSchema 里真实存在。
     assert "schema" in visible
-    assert "schema" in tool_map["smart_fetch"]["inputSchema"]["properties"]
+    assert "schema" in tool_map["web_read"]["inputSchema"]["properties"]
 
-    offset_desc = tool_map["smart_fetch"]["inputSchema"]["properties"]["offset"]["description"]
+    offset_desc = tool_map["web_read"]["inputSchema"]["properties"]["offset"]["description"]
     assert "next_offset" in offset_desc
 
     # 17.0 拆平之后，这些键必须**出现在 properties 里** —— 那是客户端取值的唯一
@@ -201,13 +201,13 @@ def test_tool_definitions(mcp):
         assert key in props, f"{key} 没被声明，agent 写不出来"
         assert (props[key].get("description") or "").strip(), f"{key} 声明了却没说明"
     # 16.0 的另一半：搜索的日期窗口与 feed 的增量，各自是一个参数。
-    ss_props = tool_map["smart_search"]["inputSchema"]["properties"]
+    ss_props = tool_map["web_search"]["inputSchema"]["properties"]
     assert "after" in ss_props and "before" in ss_props
     assert "refused, not ignored" in ss_props["before"]["description"].lower(), \
         "before 是拒绝而不是忽略 —— 这句才是调用方要的行为（大小写不钉，文案改过字体）"
-    assert "since" in tool_map["feed_fetch"]["inputSchema"]["properties"]
+    assert "since" in tool_map["feed_read"]["inputSchema"]["properties"]
 
-    # 搜索缓存：smart_search 的散文不再提它，但 cache_ttl 是它的公开参数。
+    # 搜索缓存：web_search 的散文不再提它，但 cache_ttl 是它的公开参数。
     assert "cache_ttl" in ss_props
 
     cache_desc = tool_map["cache_clear"]["description"]
@@ -222,7 +222,7 @@ def test_urls_alone_clears_the_protocol_gate(mcp):
     绕过这道网关，所以只有这条测得到。袋子时代它还要额外证明"urls 藏在袋里也算
     第三种形状"，现在只有一条通道，测的就是 anyOf 的第二支。
     """
-    resp = mcp.call_tool("smart_fetch", {
+    resp = mcp.call_tool("web_read", {
         "urls": ["https://example.com"], "max_content_chars": 600, "cache_ttl": 0,
     })
     result = resp.get("result", {})
@@ -233,7 +233,7 @@ def test_urls_alone_clears_the_protocol_gate(mcp):
 
 
 def test_smart_fetch_response_fields(mcp):
-    resp = mcp.call_tool("smart_fetch", {"url": "https://example.com", "cache_ttl": 0})
+    resp = mcp.call_tool("web_read", {"url": "https://example.com", "cache_ttl": 0})
     data = _extract_data(resp.get("result", {}))
     assert data.get("total_extracted_chars", 0) > 0
     is_trunc = data.get("is_truncated", False)
@@ -247,12 +247,12 @@ def test_smart_fetch_response_fields(mcp):
 def test_method_reaches_the_http_tier(mcp):
     """wire 上的 method 真的走到 HTTP 层：一次 HEAD 探针。
 
-    单元测试是在同一个进程里直接调 ``smart_fetch(...)``，绕过了「wire arguments →
+    单元测试是在同一个进程里直接调 ``web_read(...)``，绕过了「wire arguments →
     分发器 → 形参」这一段。HEAD 是这一段最短的探针：不抽取正文、不升级浏览器，
     一次请求就有答案。
     """
     resp = mcp.call_tool(
-        "smart_fetch",
+        "web_read",
         {"url": "https://example.com", "cache_ttl": 0, "method": "HEAD"},
     )
     data = _extract_data(resp.get("result", {}))
@@ -275,12 +275,12 @@ def test_revalidation_options_are_off_the_wire(mcp):
     tools = mcp.list_tools().get("result", {}).get("tools", [])
     by_name = {t["name"]: t for t in tools}
     for key in ("if_modified_since", "if_none_match"):
-        for tool in ("smart_fetch", "feed_fetch"):
+        for tool in ("web_read", "feed_read"):
             assert key not in by_name[tool]["inputSchema"]["properties"], \
                 f"{tool} 还挂着 {key}"
 
     for key in ("if_none_match", "if_modified_since"):
-        resp = mcp.call_tool("smart_fetch", {
+        resp = mcp.call_tool("web_read", {
             "url": "https://httpbin.org/get", key: "*"})
         blob = json.dumps(resp, ensure_ascii=False)
         assert "Unsupported argument" in blob, blob[:400]
@@ -289,7 +289,7 @@ def test_revalidation_options_are_off_the_wire(mcp):
 
 def test_search_date_window_reaches_the_engines(mcp):
     """after= 走完 wire → 搜索层 → 引擎，并且如实报告发了哪一档。"""
-    resp = mcp.call_tool("smart_search", {
+    resp = mcp.call_tool("web_search", {
         "query": "python asyncio tutorial",
         "after": "2026-09-20", "max_results": 3, "cache_ttl": 0})
     data = _extract_data(resp.get("result", {}))
@@ -306,7 +306,7 @@ def test_error_response_format(mcp):
     # 让 agent 照着改（isError=True 会让多数客户端只把文本倒给用户，结构化的
     # next_action 就白给了）。这条契约由 test_bug_report* 守着；旧断言在它失效之后
     # 还挂了 8 个版本，因为默认跑法把 e2e 排除在外。
-    resp = mcp.call_tool("smart_fetch", {})
+    resp = mcp.call_tool("web_read", {})
     result = resp.get("result", {})
     assert result.get("isError") is False, result
     data = _extract_data(result)
@@ -316,7 +316,7 @@ def test_error_response_format(mcp):
 
     # 不认识的参数名同样在信封里报错，且不静默忽略（静默忽略 = 调用方以为生效了）。
     # 名字得是**真的**不认识：cache_ttl 是合法参数，拿它当「未知键」测等于什么都没测。
-    bad = _extract_data(mcp.call_tool("smart_fetch", {
+    bad = _extract_data(mcp.call_tool("web_read", {
         "url": "https://example.com", "cache_tll": 0,
     }).get("result", {}))
     assert "Unsupported argument" in str(bad.get("error", "")), bad
@@ -328,7 +328,7 @@ def test_error_response_format(mcp):
 
 def test_bulk_url_limit(mcp):
     fake_urls = [f"https://example{i}.com" for i in range(101)]
-    resp = mcp.call_tool("smart_fetch", {"urls": fake_urls})
+    resp = mcp.call_tool("web_read", {"urls": fake_urls})
     result = resp.get("result", {})
     assert result.get("isError", False) is True, \
         f"101 URLs should trigger error. isError={result.get('isError')}"

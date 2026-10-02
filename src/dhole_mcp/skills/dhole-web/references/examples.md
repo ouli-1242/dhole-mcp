@@ -9,12 +9,12 @@ Every parameter is a **top-level argument** of the tool it belongs to. Nothing i
 ```json
 ✅ {"url": "https://example.com", "focus": "pricing"}
 ❌ {"url": "https://example.com", "options": {"focus": "pricing"}}   // rejected outright
-❌ {"url": "...", "since": "2026-09-01"}                             // since= belongs to feed_fetch, not smart_fetch
+❌ {"url": "...", "since": "2026-09-01"}                             // since= belongs to feed_read, not web_read
 ```
 
 A rejection names the key and lists the keys that tool accepts — follow the error rather than guessing a placement.
 
-## smart_fetch
+## web_read
 
 **Basic fetch + focus** (BM25 returns only relevant blocks; the header says "showing N of M blocks"; `focus:""` gets the full page):
 ```json
@@ -97,7 +97,7 @@ A rejection names the key and lists the keys that tool accepts — follow the er
 ```json
 {"url": "https://docs.example.com/guide", "focus": "retry policy", "focus_engine": "bm25"}
 ```
-The same key exists on `smart_crawl`, where it matters more: the semantic path costs ~12.5s of CPU per page times `max_pages`, so the cheap default is what runs when nobody names it. `"neural"` with the model missing is **refused** (`neural_focus_model_missing`) instead of silently downloading ~280MB — the first neural `smart_search` fetches it once (resumable), or re-run with `"bm25"`.
+The same key exists on `web_crawl`, where it matters more: the semantic path costs ~12.5s of CPU per page times `max_pages`, so the cheap default is what runs when nobody names it. `"neural"` with the model missing is **refused** (`neural_focus_model_missing`) instead of silently downloading ~280MB — the first neural `web_search` fetches it once (resumable), or re-run with `"bm25"`.
 
 **Structured extraction** (repeated records REQUIRE a "container selector + sub-schema": sub-selectors evaluate inside each container, one record per container; a bare top-level selector returns a page-wide union with no record attribution):
 ```json
@@ -132,29 +132,29 @@ The same key exists on `smart_crawl`, where it matters more: the semantic path c
 {"url": "https://example.com", "proxy": "http://127.0.0.1:7890"}
 ```
 
-## smart_search
+## web_search
 
 **Vertical + dated + threshold + pull full text** (`before` does not exist; `after` is widened to a day/week/month/year preset — read `date_filter.note`; `fetch_content` also fetches the top 3 results' full text):
 ```json
 {"query": "MCP streamable HTTP spec", "engines": ["bing", "so360"], "after": "2026-09-01", "min_raw_relevance": 0.1, "fetch_content": true}
 ```
 
-When searching without fetching: rank by `relevance_score` / `fetch_relevance` (high first), and treat `engines_consensus: 1 of N` as unverified — `smart_fetch` before citing.
+When searching without fetching: rank by `relevance_score` / `fetch_relevance` (high first), and treat `engines_consensus: 1 of N` as unverified — `web_read` before citing.
 
-## Big site: map, scope, read (smart_crawl then smart_fetch)
+## Big site: map, scope, read (web_crawl then web_read)
 
 ```json
 // Step 1: whole-site URL map in one request
 {"url": "https://docs.example.com", "discover_only": true, "sitemap": true}
 // Step 2: scope the map to a subtree ('/guide' matches /guide and below, NOT /guide-old; the only wildcard is a trailing /*)
 {"url": "https://docs.example.com", "discover_only": true, "path_include": "/guide", "max_pages": 30}
-// Step 3: read the picks - smart_fetch, not a second crawl
+// Step 3: read the picks - web_read, not a second crawl
 {"urls": ["https://docs.example.com/guide/a", "https://docs.example.com/guide/b"], "max_content_chars": 8000}
 ```
 
 List pages return a structured link listing (`page_type=list`), not body text — follow it to the content pages.
 
-## feed_fetch (incremental polling)
+## feed_read (incremental polling)
 
 ```json
 // First call: passing the site homepage works too — it follows the page's own alternate link to the feed (discovered_from records this)
@@ -178,7 +178,7 @@ Agents that can see images receive it inline; text-only agents read the absolute
 // Pass encoding explicitly for mojibake (Shift_JIS/EUC-KR are outside auto-detection)
 {"file_path": "C:/docs/report.docx"}
 {"file_path": "C:/docs/japanese.txt", "encoding": "shift_jis"}
-// resolve_url: resolve short links before deciding to fetch
+// web_resolve: resolve short links before deciding to fetch
 {"url": "https://t.co/xxxx"}
 // cache_clear: wipes body cache — AND robots verdicts and every session cookie jar; engine_state also resets engine cooldowns
 {"engine_state": true}

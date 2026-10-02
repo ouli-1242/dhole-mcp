@@ -34,7 +34,7 @@ from dhole_mcp.server import (
 
 def _dispatch(args: dict):
     """跑一次真实 dispatcher，返回 (content, structured envelope)。"""
-    return asyncio.run(MasterFetchServer(cache_ttl=0)._dispatch("smart_fetch", args))
+    return asyncio.run(MasterFetchServer(cache_ttl=0)._dispatch("web_read", args))
 
 
 # ── 缺陷 1（P0）· 批量路径 100% 抛 AttributeError ────────────────────────────
@@ -55,7 +55,7 @@ class TestBulkFetchDoesNotReachForASingleResultAttribute:
                 results=[ResponseModel(url=u, status=200, content=["x"]) for u in picked],
                 total=len(picked), successful=len(picked))
 
-        monkeypatch.setattr(MasterFetchServer, "smart_fetch", fake_smart_fetch)
+        monkeypatch.setattr(MasterFetchServer, "web_read", fake_smart_fetch)
         _content, payload = _dispatch({"urls": ["http://a.test/", "http://b.test/"]})
         assert payload["total"] == 2
         assert [r["url"] for r in payload["results"]] == ["http://a.test/", "http://b.test/"]
@@ -67,7 +67,7 @@ class TestBulkFetchDoesNotReachForASingleResultAttribute:
             row._action_images = [{"data": "aGk=", "mime_type": "image/png"}]
             return row
 
-        monkeypatch.setattr(MasterFetchServer, "smart_fetch", fake_smart_fetch)
+        monkeypatch.setattr(MasterFetchServer, "web_read", fake_smart_fetch)
         content, _payload = _dispatch({"url": "http://a.test/"})
         kinds = [getattr(c, "type", None) for c in content]
         assert "image" in kinds, "单条路径的图片必须仍然作为 image content 返回"
@@ -80,7 +80,7 @@ class TestBulkFetchDoesNotReachForASingleResultAttribute:
         图片」是死代码。这条把那个前提钉住：哪天批量开始支持 actions，这里会红，
         那时才真的需要聚合。
         """
-        result = asyncio.run(MasterFetchServer(cache_ttl=0).smart_fetch(
+        result = asyncio.run(MasterFetchServer(cache_ttl=0).web_read(
             url="", urls=["http://a.test/"], actions=[{"click": "a"}]))
         assert isinstance(result, BulkResponseModel)
         assert result.successful == 0
@@ -326,7 +326,7 @@ class TestOcrHintsAreCapabilityAware:
     解释器才纠正 —— 真实用户会去重装一个已经装好的包。
 
     提示统一收进 `pdf_extractor.ocr_advice()`，四处（整篇扫描死路、两个逐页
-    标记、smart_fetch 的 next_action）同源，不可能对同一台机器给出两种说法。
+    标记、web_read 的 next_action）同源，不可能对同一台机器给出两种说法。
     """
 
     def test_it_does_not_tell_you_to_install_when_ocr_is_present(self, monkeypatch):
@@ -622,8 +622,8 @@ class TestAnEmptyMapIsNotEmptySite:
                                  content_ok=True)
 
         monkeypatch.setattr(crawl_mod, "_sitemap_map", fake_map)
-        monkeypatch.setattr(MasterFetchServer, "smart_fetch", fake_fetch)
-        out = asyncio.run(crawl_mod.smart_crawl(
+        monkeypatch.setattr(MasterFetchServer, "web_read", fake_fetch)
+        out = asyncio.run(crawl_mod.web_crawl(
             MasterFetchServer(cache_ttl=0), "https://site.test/",
             sitemap=sitemap, discover_only=True, max_pages=1, ignore_robots=True))
         return out, empty, calls

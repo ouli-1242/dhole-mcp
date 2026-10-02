@@ -182,7 +182,7 @@ class TestTheEntryGate:
         monkeypatch.setattr(MasterFetchServer, "_force_fetch", no_fetch)
         monkeypatch.setattr(MasterFetchServer, "_auto_escalate", no_fetch)
 
-        out = await MasterFetchServer().smart_fetch(
+        out = await MasterFetchServer().web_read(
             url="https://example.com/", focus="topic", focus_engine="neural")
         assert "neural_focus_model_missing" in out.error
         assert out.status == 0
@@ -199,7 +199,7 @@ class TestTheEntryGate:
         result = ResponseModel(url="https://example.com/", status=200,
                                content=["body"], fetcher_used="http")
         monkeypatch.setattr(MasterFetchServer, "_auto_escalate", no_fetch_ok(result))
-        out = await MasterFetchServer().smart_fetch(url="https://example.com/")
+        out = await MasterFetchServer().web_read(url="https://example.com/")
         assert out.content == ["body"]
 
     @pytest.mark.asyncio
@@ -213,7 +213,7 @@ class TestTheEntryGate:
         result = ResponseModel(url="https://example.com/", status=200,
                                content=["body"], fetcher_used="http")
         monkeypatch.setattr(MasterFetchServer, "_auto_escalate", no_fetch_ok(result))
-        out = await MasterFetchServer().smart_fetch(url="https://example.com/",
+        out = await MasterFetchServer().web_read(url="https://example.com/",
                                                     focus="topic")
         assert out.content == ["body"]  # 原样通过；stub 不经 _apply_chunking
 
@@ -226,7 +226,7 @@ class TestTheEntryGate:
         monkeypatch.setattr(rr, "get_reranker", lambda: None)
         monkeypatch.setattr(rr, "ensure_reranker", no_model)
 
-        out = await MasterFetchServer().smart_crawl(
+        out = await MasterFetchServer().web_crawl(
             "https://example.com/", focus="topic", max_pages=1,
             focus_engine="neural")
         assert out.error.startswith("neural_focus_model_missing")
@@ -311,7 +311,7 @@ class TestNoPerPagePrescreen:
     class _Server:
         """每一 leaf 都是一页与 `focus` 无关的东西；seed 只负责把链摊开。"""
 
-        async def smart_fetch(self, url, **kwargs):
+        async def web_read(self, url, **kwargs):
             if url.rstrip("/") == TestNoPerPagePrescreen.SEED.rstrip("/"):
                 body = ('<html><body>'
                         + "".join(f'<a href="/p{i}">p{i}</a>' for i in range(3))
@@ -331,7 +331,7 @@ class TestNoPerPagePrescreen:
         monkeypatch.setattr(rr, "get_reranker", FakeReranker)
         token = FOCUS_ENGINE.set("neural")
         try:
-            out = await crawl_mod.smart_crawl(
+            out = await crawl_mod.web_crawl(
                 self._Server(), self.SEED, max_pages=4, max_depth=1,
                 focus="asyncio", cache_ttl=0)
         finally:
@@ -389,7 +389,7 @@ class TestThePerCallScorerChoice:
         result = ResponseModel(url="https://example.com/", status=200,
                                content=["body"], fetcher_used="http")
         monkeypatch.setattr(MasterFetchServer, "_auto_escalate", no_fetch_ok(result))
-        out = await MasterFetchServer().smart_fetch(url="https://example.com/",
+        out = await MasterFetchServer().web_read(url="https://example.com/",
                                                     focus="topic",
                                                     focus_engine="bm25")
         assert out.content == ["body"]
@@ -407,7 +407,7 @@ class TestThePerCallScorerChoice:
             raise AssertionError("a refused call must not reach the network")
         monkeypatch.setattr(MasterFetchServer, "_auto_escalate", no_fetch)
 
-        out = await MasterFetchServer().smart_fetch(url="https://example.com/",
+        out = await MasterFetchServer().web_read(url="https://example.com/",
                                                     focus="topic",
                                                     focus_engine="neural")
         # 拒绝走的是所有参数级拒绝的同一条通道，而不是一个只有这个开关会
@@ -430,7 +430,7 @@ class TestThePerCallScorerChoice:
             raise AssertionError("missing model must stop the call before a fetch")
         monkeypatch.setattr(MasterFetchServer, "_auto_escalate", no_fetch)
 
-        out = await MasterFetchServer().smart_fetch(url="https://example.com/",
+        out = await MasterFetchServer().web_read(url="https://example.com/",
                                                     focus="topic",
                                                     focus_engine="neural")
         assert "neural_focus_model_missing" in out.error
@@ -477,9 +477,9 @@ class TestTheCrawlFollowsTheSameRule:
             ran.append(True)
             from dhole_mcp.crawl import CrawlResponseModel as _CRM
             return _CRM(start_url="https://example.com/", pages=[])
-        monkeypatch.setattr("dhole_mcp.crawl.smart_crawl", fake_crawl)
+        monkeypatch.setattr("dhole_mcp.crawl.web_crawl", fake_crawl)
 
-        out = await MasterFetchServer().smart_crawl("https://example.com/",
+        out = await MasterFetchServer().web_crawl("https://example.com/",
                                                     focus="topic",
                                                     focus_engine="neural")
         assert "neural_focus_model_missing" in out.error
@@ -497,9 +497,9 @@ class TestTheCrawlFollowsTheSameRule:
 
         async def fake_crawl(*a, **kw):
             return _CRM(start_url="https://example.com/", pages=[])
-        monkeypatch.setattr("dhole_mcp.crawl.smart_crawl", fake_crawl)
+        monkeypatch.setattr("dhole_mcp.crawl.web_crawl", fake_crawl)
 
-        out = await MasterFetchServer().smart_crawl("https://example.com/",
+        out = await MasterFetchServer().web_crawl("https://example.com/",
                                                    focus="topic",
                                                    focus_engine="bm25")
         assert not out.error, "走到了爬取本体（stub 无页），闸没有拦住"

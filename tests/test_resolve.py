@@ -1,4 +1,4 @@
-"""Tests for resolve_url (server.py)."""
+"""Tests for web_resolve (server.py)."""
 
 import pytest
 
@@ -32,7 +32,7 @@ class FakeSession:
 async def test_resolve_url_returns_final_url(monkeypatch):
     server = MasterFetchServer()
     monkeypatch.setattr("dhole_mcp.fetcher.HTTPSession", FakeSession)
-    result = await server.resolve_url("https://t.co/abc123")
+    result = await server.web_resolve("https://t.co/abc123")
     assert result["final_url"] == "https://final.example/x"
     assert result["status"] == 200
     assert result["content_type"] == "text/html; charset=utf-8"
@@ -44,7 +44,7 @@ async def test_resolve_url_returns_final_url(monkeypatch):
 async def test_resolve_url_surfaces_error(monkeypatch):
     server = MasterFetchServer()
     monkeypatch.setattr("dhole_mcp.fetcher.HTTPSession", FakeSession)
-    result = await server.resolve_url("https://example.com/blocked")
+    result = await server.web_resolve("https://example.com/blocked")
     assert result["error"]
     assert result["final_url"] == ""
 
@@ -52,6 +52,6 @@ async def test_resolve_url_surfaces_error(monkeypatch):
 @pytest.mark.asyncio
 async def test_resolve_url_rejects_ssrf(monkeypatch):
     server = MasterFetchServer()
-    result = await server.resolve_url("http://169.254.169.254/latest/meta-data")
+    result = await server.web_resolve("http://169.254.169.254/latest/meta-data")
     assert result["error"]  # blocked by validate_url
     assert result["status"] == 0

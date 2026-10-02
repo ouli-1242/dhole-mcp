@@ -118,7 +118,7 @@ def rerank_install_advice() -> str:
         import onnxruntime  # noqa: F401
         import tokenizers  # noqa: F401
         return ("reranker packages are installed - the failure was model state, "
-                "not deps; a neural smart_search re-fetches the model, and "
+                "not deps; a neural web_search re-fetches the model, and "
                 "~/.dhole/models holds whatever was already downloaded")
     except Exception:  # noqa: BLE001
         return (f"Install the neural rerank tier with: {full_install_command()}; "

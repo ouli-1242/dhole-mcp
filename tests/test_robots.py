@@ -8,7 +8,7 @@ v16.0 之前 dhole 从不看 robots.txt（README 里明说了）。现在默认�
 * 每 origin 一条、TTL 1h、并发单飞；
 * 两条豁免通道（per-call ``ignore_robots`` / 进程级 ``DHOLE_IGNORE_ROBOTS``）；
 * ``cached()`` 同步 peek —— crawl 靠它免费丢掉已知被禁的候选 URL；
-* 接线：``smart_fetch`` 被拒时**一个请求都不发**，``smart_crawl`` 在 seed 就报错。
+* 接线：``web_read`` 被拒时**一个请求都不发**，``web_crawl`` 在 seed 就报错。
 """
 
 from __future__ import annotations
@@ -244,13 +244,13 @@ class TestEscapes:
         assert get_robots_cache() is first, "单例：每个 fetch 路径共用同一份规则"
 
 
-# ─── 接线：smart_fetch / smart_crawl ─────────────────────────────────
+# ─── 接线：web_read / web_crawl ─────────────────────────────────
 
 @pytest.fixture
 def robots_rules(monkeypatch):
     """Point the PROCESS-WIDE robots cache at a fake fetcher.
 
-    smart_fetch and crawl both resolve the cache through get_robots_cache(), so
+    web_read and crawl both resolve the cache through get_robots_cache(), so
     replacing the module singleton is what makes these integration tests
     network-free. The autouse DHOLE_IGNORE_ROBOTS from conftest is removed here:
     these tests exist precisely to exercise compliance.
@@ -284,7 +284,7 @@ class TestSmartFetchIntegration:
         server.get = _never
         server.stealthy_fetch = _never
 
-        out = await server.smart_fetch(PAGE)
+        out = await server.web_read(PAGE)
 
         assert out.status == 0
         assert out.content == []
@@ -310,7 +310,7 @@ class TestSmartFetchIntegration:
         server.get = _ok
         # cache_ttl=0: without it a hit from the shared fetch cache would answer
         # the call and the tier under test would never run.
-        out = await server.smart_fetch(OTHER, cache_ttl=0)
+        out = await server.web_read(OTHER, cache_ttl=0)
 
         assert hit == [OTHER]
         assert out.status == 200
@@ -330,7 +330,7 @@ class TestSmartFetchIntegration:
 
         server = MasterFetchServer()
         server.get = _ok
-        out = await server.smart_fetch(PAGE, ignore_robots=True, cache_ttl=0)
+        out = await server.web_read(PAGE, ignore_robots=True, cache_ttl=0)
 
         assert hit == [PAGE]
         assert out.status == 200
@@ -340,10 +340,10 @@ class TestSmartCrawlIntegration:
 
     @pytest.mark.asyncio
     async def test_seed_disallowed_fails_the_crawl_before_spending_budget(self, robots_rules):
-        from dhole_mcp.crawl import smart_crawl
+        from dhole_mcp.crawl import web_crawl
 
         robots_rules()
-        out = await smart_crawl(None, PAGE)
+        out = await web_crawl(None, PAGE)
 
         assert out.pages == []
         assert out.error.startswith("robots_disallowed")
@@ -366,12 +366,12 @@ class TestSmartCrawlIntegration:
         )
 
         class _FakeServer:
-            async def smart_fetch(self, url, **kwargs):
+            async def web_read(self, url, **kwargs):
                 body = html if url.rstrip("/") == seed.rstrip("/") else "<p>leaf</p>"
                 return ResponseModel(url=url, status=200, content=[body],
                                      content_type="text/html", fetcher_used="http")
 
-        out = await crawl_mod.smart_crawl(_FakeServer(), seed, max_pages=3, max_depth=1)
+        out = await crawl_mod.web_crawl(_FakeServer(), seed, max_pages=3, max_depth=1)
 
         assert out.robots_skipped == 2, out.summary
         assert "2 URL(s) skipped by robots.txt" in out.summary

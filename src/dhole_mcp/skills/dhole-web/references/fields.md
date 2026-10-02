@@ -38,13 +38,13 @@ Consult this when a response doesn't make sense or a field shows a non-default v
 | `discovered_from` | (feed) homepage the feed was auto-discovered from | — |
 | `duration_ms` / `fetched_at` | Elapsed time / fetch timestamp | — |
 
-## Search-specific (smart_search)
+## Search-specific (web_search)
 
 | Field | Meaning | What to do when non-default |
 |---|---|---|
 | `results[].relevance_score` | Normalized relevance (top is always 1.0) | — |
 | `results[].fetch_relevance` | `high` / `med` / `low` — fetch-worthiness | Fetch high first; a lower tier can still be the right one (ranking is a hint, not a directive) |
-| `results[].engines_consensus` | How many independent index FAMILIES agree (`x of N`) | `1 of N` = no cross-validation — verify via `smart_fetch` before citing |
+| `results[].engines_consensus` | How many independent index FAMILIES agree (`x of N`) | `1 of N` = no cross-validation — verify via `web_read` before citing |
 | `engines_used` | Engines that actually answered | Only 1–2 names = degraded pool |
 | `engine_empty` / `engine_preempted` | Answered with zero results / didn't finish before the deadline | A long list = rate-limiting/blocking/cooling — follow the signal table |
 | `rerank_mode` | `neural` = cross-encoder ranked / `merge` = consensus ordering | `merge` = model still loading (first search of a process); one retry restores `neural` |
@@ -59,7 +59,7 @@ Consult this when a response doesn't make sense or a field shows a non-default v
 |---|---|---|
 | `session_id` + `session_cookie_names` | Session active + cookie NAMES stored for that host (values are never echoed) | Cookies are live credentials — `close_session(session_id=...)` when done |
 | `items_older_than_since` | (feed) entries filtered out by `since` | Non-zero means incremental filtering is working |
-| `summary_truncated` | (feed) item summary is a 500-char preview | Fetch the item URL with `smart_fetch` for full text |
+| `summary_truncated` | (feed) item summary is a 500-char preview | Fetch the item URL with `web_read` for full text |
 
 ## Links and metadata
 

@@ -4,11 +4,11 @@ Forks Scrapling's built-in MCP server and adds:
 - Trafilatura article extraction (cleaner than markdownify)
 - Smart fetch routing (auto-escalate HTTP -> Stealthy). 2 tiers: HTTP first, then Patchright stealth browser.
 - SQLite content cache with TTL
-- smart_fetch umbrella tool (single entry point that routes automatically)
+- web_read umbrella tool (single entry point that routes automatically)
 - extract_article and extract_structured modes
 - Input validation with SSRF protection
 
-Note: the dynamic (Playwright) browser tier was removed in v3.5.0. smart_fetch
+Note: the dynamic (Playwright) browser tier was removed in v3.5.0. web_read
 auto-routing only uses http -> stealthy; open_session creates a stealthy session.
 """
 
@@ -185,8 +185,8 @@ from dhole_mcp.security import (
     SecurityError,
     # G9: the per-call private-host allowlist (see security.parse_allow_private).
     _ALLOW_PRIVATE, parse_allow_private, set_allow_private,
-    # Same policy, for the two tools that never went through the smart_fetch
-    # options decorator (screenshot / feed_fetch).
+    # Same policy, for the two tools that never went through the web_read
+    # options decorator (screenshot / feed_read).
     allow_private_scope,
 )
 
@@ -196,7 +196,7 @@ SessionType = Literal["dynamic", "stealthy"]
 ScreenshotType = Literal["png", "jpeg"]
 
 MAX_CONTENT_CHARS = 40000
-# smart_fetch `schema` runs CSS selectors over the raw markup, so the document
+# web_read `schema` runs CSS selectors over the raw markup, so the document
 # fed to the extractor must NOT be capped by the caller's `max_content_chars`
 # (that cap is about what goes back to the caller). A 500-char cap used to leave
 # the extractor with nothing but <head>, so every selector missed and the call
@@ -279,7 +279,7 @@ def _record_latency(url: str, elapsed_ms: float, *, document: bool = False) -> N
         pass
 
 
-# smart_fetch's call budget when the caller does not pass `timeout`.
+# web_read's call budget when the caller does not pass `timeout`.
 # `actions` force the stealthy tier, where the browser cold start alone can
 # outlast the HTTP-era default: measured on this machine, the 30000ms budget ran
 # out before example.com finished loading, while the 60000ms budget let the same
@@ -507,7 +507,7 @@ def _iso_from_ts(ts) -> str:
 # either; DHOLE_STRUCTURED_CONTENT / DHOLE_OUTPUT_SCHEMA / DHOLE_WIRE_FULL are
 # silently ignored if a host still sets them).
 
-# Idle browser close: after this many seconds with no smart_fetch/screenshot in
+# Idle browser close: after this many seconds with no web_read/screenshot in
 # flight, the warm Patchright Chrome is closed entirely (process exits, OS reclaims
 # all its RAM). The next fetch relaunches it (~2s cold start). 17.0 写死 300s
 # (5 min): an agent actively working (30-90s think-pauses between fetches) keeps
@@ -555,17 +555,17 @@ DHOLE_INSTRUCTIONS = (
     "Bypasses anti-bot walls (Cloudflare), reads PDFs incl. scans (OCR), and "
     "searches 8 engines keylessly.\n"
     "Routing:\n"
-    "- Content of a URL you already have (page or PDF): smart_fetch. urls=[...] "
+    "- Content of a URL you already have (page or PDF): web_read. urls=[...] "
     "for a known list; focus= cuts tokens on long pages; pages= for PDF ranges.\n"
-    "- Many pages from one site and you don't have the URLs yet: smart_crawl "
-    "(sitemap=true maps the whole site, then smart_fetch(urls=[...]) reads just the "
+    "- Many pages from one site and you don't have the URLs yet: web_crawl "
+    "(sitemap=true maps the whole site, then web_read(urls=[...]) reads just the "
     "ones you need; a page_type of 'list' points at it too).\n"
-    "- Finding what to fetch: smart_search - then smart_fetch the top hits. "
+    "- Finding what to fetch: web_search - then web_read the top hits. "
     "NEVER answer from search snippets alone.\n"
-    "- RSS/Atom changelogs or release notes: feed_fetch.\n"
+    "- RSS/Atom changelogs or release notes: feed_read.\n"
     "- Local file: parse.\n"
-    "- Screenshot: screenshot - words instead? smart_fetch.\n"
-    "- Check a short link: resolve_url.\n"
+    "- Screenshot: screenshot - words instead? web_read.\n"
+    "- Check a short link: web_resolve.\n"
     "- Cookies a site kept behind session_id=: close_session (no arguments "
     "= what is open; session_id= or all=true to forget them).\n"
     "- A page you already worked out how to reach: recipe (save the url+actions "
@@ -616,16 +616,16 @@ _INSTRUCTIONS_INTRO = (
     "searches 8 engines keylessly.\n"
 )
 _INSTRUCTIONS_ROUTING: dict[str, str] = {
-    "smart_fetch": "- Content of a URL you already have (page or PDF): smart_fetch. "
+    "web_read": "- Content of a URL you already have (page or PDF): web_read. "
     "urls=[...] for a known list; focus= cuts tokens on long pages; pages= for PDF ranges.\n",
-    "smart_crawl": "- Many pages from one site and you don't have the URLs yet: smart_crawl "
-    "(sitemap=true maps the whole site, then smart_fetch(urls=[...]) reads just the ones you need; a page_type of 'list' points at it too).\n",
-    "smart_search": "- Finding what to fetch: smart_search - then smart_fetch the top hits. "
+    "web_crawl": "- Many pages from one site and you don't have the URLs yet: web_crawl "
+    "(sitemap=true maps the whole site, then web_read(urls=[...]) reads just the ones you need; a page_type of 'list' points at it too).\n",
+    "web_search": "- Finding what to fetch: web_search - then web_read the top hits. "
     "NEVER answer from search snippets alone.\n",
-    "feed_fetch": "- RSS/Atom changelogs or release notes: feed_fetch.\n",
+    "feed_read": "- RSS/Atom changelogs or release notes: feed_read.\n",
     "parse": "- Local file: parse.\n",
-    "screenshot": "- Screenshot: screenshot - words instead? smart_fetch.\n",
-    "resolve_url": "- Check a short link: resolve_url.\n",
+    "screenshot": "- Screenshot: screenshot - words instead? web_read.\n",
+    "web_resolve": "- Check a short link: web_resolve.\n",
     "close_session": "- Cookies a site kept behind session_id=: close_session "
     "(no arguments = what is open; session_id= or all=true to forget them).\n",
     # 17.0：recipe/watch 全量默认注册（opt-in 组已删），这行 instructions 是
@@ -721,7 +721,7 @@ class ResponseModel(BaseModel):
     # ─── v10 research-grade envelope (additive; all default-valued) ───
     # page_type: structural class of the page, computed from raw HTML. Drives
     # next_action (list pages point to their links, auth walls suggest switching source).
-    page_type: str = Field(default="unknown", description="Structural class: article|list|pdf|xml|js_shell|auth_wall|paywall|captcha|redirect|image|json|unknown. Drives next_action. What kind of SITE this is lives in source_type, never here. 'list' = a page whose main content is links to other pages (fetch those or smart_crawl). 'xml' = a data XML document (sitemap, RSS/Atom, XML API) returned with its tags intact. 'auth_wall'/'paywall'/'captcha' = the body is a login/payment/anti-bot challenge rather than the page's content.")
+    page_type: str = Field(default="unknown", description="Structural class: article|list|pdf|xml|js_shell|auth_wall|paywall|captcha|redirect|image|json|unknown. Drives next_action. What kind of SITE this is lives in source_type, never here. 'list' = a page whose main content is links to other pages (fetch those or web_crawl). 'xml' = a data XML document (sitemap, RSS/Atom, XML API) returned with its tags intact. 'auth_wall'/'paywall'/'captcha' = the body is a login/payment/anti-bot challenge rather than the page's content.")
     # source_type + is_official: domain-based authority signal so the agent can
     # weigh trust without a separate lookup. Conservative: is_official is True
     # only on a strong signal (the name itself cannot be bought by a third
@@ -823,7 +823,7 @@ class RecipeModel(BaseModel):
     """Response from `recipe`: save / list / run / delete of a recorded action chain.
 
     `run` carries the whole fetch back in `result` (the same ResponseModel
-    smart_fetch returns, same wire compaction), because a replay whose answer you
+    web_read returns, same wire compaction), because a replay whose answer you
     cannot read is not a replay. `outcomes` repeats the per-action receipts so a
     broken step is visible without digging into result.metadata.
     """
@@ -834,7 +834,7 @@ class RecipeModel(BaseModel):
     recipes: List[Dict[str, Any]] = Field(default_factory=list, description="Every stored recipe (op=list), newest-used first, with use_count / last_ok so a stale one is visible without running it.")
     recipe: Dict[str, Any] = Field(default_factory=dict, description="The stored recipe itself (op=save): url, action count, note, created_at.")
     result: Optional[ResponseModel] = Field(default=None, description="op=run: the fetch this recipe produced, in full.")
-    outcomes: List[Dict[str, Any]] = Field(default_factory=list, description="op=run: one row per action, ok or why not - the same receipts smart_fetch reports, surfaced here so a broken step is obvious.")
+    outcomes: List[Dict[str, Any]] = Field(default_factory=list, description="op=run: one row per action, ok or why not - the same receipts web_read reports, surfaced here so a broken step is obvious.")
     actions_failed: int = Field(default=0, description="op=run: how many of the recipe's actions failed. Non-zero means the page changed under the recipe; re-record it with recipe(op='save', ...).")
     error: str = Field(default="", description="Set when the recipe could not be stored or replayed; it names what exists rather than saying 'not found'.")
     next_action: str = Field(default="", description="What to do next, empty when there is nothing to do")
@@ -893,7 +893,7 @@ class LoginModel(BaseModel):
     Two fields carry the contract. `pending_approval=true` is the FIRST response
     a caller sees: with confirm=false nothing is filled and nothing is
     submitted, and `fields`/`plan` say what a confirmed run would do. `logged_in`
-    is tri-state like smart_fetch's login_check — null is "the probe could not
+    is tri-state like web_read's login_check — null is "the probe could not
     answer", which is not the same as false.
 
     The credential's password never appears in any field; the receipt names the
@@ -910,7 +910,7 @@ class LoginModel(BaseModel):
     fields: Dict[str, Any] = Field(default_factory=dict, description="The detected form: username/password/submit element indices with their names, and how submit would happen (element or Enter).")
     filled: int = Field(default=0, description="How many fields were filled (0 before approval).")
     submitted: bool = Field(default=False, description="true when the submit step actually ran.")
-    logged_in: Optional[bool] = Field(default=None, description="Post-login verdict from the same model-free DOM + cookie-NAME probe smart_fetch's check_login uses. NULL means the probe could not answer (no browser tier, or the page never settled) - not 'not logged in'.")
+    logged_in: Optional[bool] = Field(default=None, description="Post-login verdict from the same model-free DOM + cookie-NAME probe web_read's check_login uses. NULL means the probe could not answer (no browser tier, or the page never settled) - not 'not logged in'.")
     signals: List[str] = Field(default_factory=list, description="What the probe saw (logout control / password field / login form / session cookie names).")
     cookie_names: List[str] = Field(default_factory=list, description="Cookie NAMES the site set. Values are never returned.")
     result: Optional[ResponseModel] = Field(default=None, description="The post-submit fetch, in full.")
@@ -1019,7 +1019,7 @@ _WIRE_OMIT: dict = {
 }
 
 
-# A few tools project their own dicts instead of returning models (feed_fetch
+# A few tools project their own dicts instead of returning models (feed_read
 # hands back one dict per feed, assembled field by field), so the policy above
 # has no class to look up. Name the model behind each such container and the
 # same pruning applies. Resolved lazily: `feed` is imported on first use, where
@@ -1151,7 +1151,7 @@ def _wire_dump(obj) -> dict:
 def _wire_result(obj, images: Optional[list] = None) -> tuple:
     """The (content_list, structured_dict) pair every tool call returns.
 
-    ``images`` (element captures from smart_fetch {\"screenshot\"} actions) are
+    ``images`` (element captures from web_read {\"screenshot\"} actions) are
     prepended as ImageContent blocks: the text channel keeps the full JSON
     payload, and the pixels ride alongside it so a multimodal client sees them
     without any base64 flowing through the JSON itself.
@@ -1241,7 +1241,7 @@ _JS_SHELL_ZH_MAX_TEXT_CHARS = 1500
 # interstitial / Turnstile challenge pages (which can return 200). Used by
 # _is_js_shell to detect CF pages that bypass the generic JS-shell signals
 # (large HTML body with CF-specific scripts). Without this, extraction_type=html
-# (used by smart_crawl) gets the challenge page as "content" and never escalates.
+# (used by web_crawl) gets the challenge page as "content" and never escalates.
 _CF_CHALLENGE_SIGNALS = [
     "challenges.cloudflare.com/turnstile",
     "cf-turnstile",
@@ -1444,7 +1444,7 @@ def _never_escalate(result: ResponseModel, url: str) -> bool:
 def _is_js_shell(result: ResponseModel) -> bool:
     """Check if a response contains only a JS-only placeholder, not real content.
 
-    Used by smart_fetch to decide whether to escalate from HTTP to stealthy.
+    Used by web_read to decide whether to escalate from HTTP to stealthy.
     """
     # Data documents are not JS shells. The "large body, little text" heuristic
     # below describes an HTML shell; a PDF is a container, and one that OCR
@@ -1483,7 +1483,7 @@ def _is_js_shell(result: ResponseModel) -> bool:
         return True
     # Cloudflare challenge pages can return 200 with large HTML (Turnstile
     # scripts, challenge-platform divs). With extraction_type=html (used by
-    # smart_crawl), the raw HTML is large so the text-length heuristic below
+    # web_crawl), the raw HTML is large so the text-length heuristic below
     # doesn't trigger. Check for CF-specific markers to catch these.
     if result.fetcher_used == "http" and result.status == 200:
         if any(signal in content_str for signal in _CF_CHALLENGE_SIGNALS):
@@ -1972,7 +1972,7 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         # "keep paginating" is the wrong answer to a page that isn't there.
         next_action = ("page does not exist (HTTP 404/410) - the URL is stale or "
                        "misspelled. Do NOT paginate it: check the URL, or "
-                       "smart_search for the page's current location")
+                       "web_search for the page's current location")
     elif result.status in (401, 407):
         # 401 is not "the client looks like a bot" (403's advice) and not something
         # a browser escalation can fix — we do not escalate on 401 for exactly that
@@ -2031,11 +2031,11 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             if top:
                 next_action = (
                     "this is a list page; the content you want is likely behind its "
-                    f"links. Top targets: {', '.join(top)}. Or call smart_crawl on this URL."
+                    f"links. Top targets: {', '.join(top)}. Or call web_crawl on this URL."
                 )
             else:
                 next_action = (
-                    "this is a list page (links to other pages); call smart_crawl on "
+                    "this is a list page (links to other pages); call web_crawl on "
                     "this URL, or fetch the linked pages directly"
                 )
         elif result.page_type == "auth_wall":
@@ -2061,14 +2061,14 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             next_action = (
                 f"content is {result.content_age_days} days old - past the "
                 f"{_stale_days_for(result.url)}-day staleness horizon for this kind "
-                "of source; for current info, smart_search a recent query (e.g. add "
+                "of source; for current info, web_search a recent query (e.g. add "
                 "the current year)"
             )
     return summary, next_action, content_ok
 
 
 # Cache TTL per structural page_type, applied only when the caller left the
-# default (see the write path in smart_fetch). Module level and not inline
+# default (see the write path in web_read). Module level and not inline
 # because test_envelope's vocabulary guard reads it: a key naming a page_type
 # the code can no longer produce is dead code that looks like a rule, which is
 # exactly how the "docs" row outlived the value it keyed on.
@@ -2239,7 +2239,7 @@ def _invalid_request_result(url: str, msg: str, next_action: str = "") -> Respon
         summary=f"invalid request · {msg[:80]}",
         next_action=next_action or (
             "Correct the argument and call again - no request was made. "
-            "smart_fetch takes an absolute http(s) URL "
+            "web_read takes an absolute http(s) URL "
             "(e.g. https://example.com)."),
     )
     _apply_envelope(result)
@@ -2476,7 +2476,7 @@ def _coerce_str_list_arg(
 ) -> Optional[List[str]]:
     """Normalize a list-of-strings argument; a bare string is an error.
 
-    A string IS iterable, which is why ``smart_fetch(urls="https://example.com")``
+    A string IS iterable, which is why ``web_read(urls="https://example.com")``
     used to answer with ``total=19, successful=19`` and nineteen one-character
     "results" — the bulk path took ``len(urls)`` and iterated it, and nothing
     downstream could tell that apart from a real 19-URL request.
@@ -2559,7 +2559,7 @@ def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Option
 
 
 # ─── wire argument types ───────────────────────────────────────────
-# smart_fetch and cache_clear had per-argument coercers; the other six tools had
+# web_read and cache_clear had per-argument coercers; the other six tools had
 # none, so everything the dispatcher forwarded was whatever JSON happened to
 # carry. Two client behaviors reach that gap on ordinary machines:
 #
@@ -2567,7 +2567,7 @@ def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Option
 #     `max(1, min("6", 50))`, and min() compares the SECOND operand against the
 #     first: `'<' not supported between instances of 'int' and 'str'`. The tool
 #     answered with that bare Python traceback as its `error` field, which is
-#     what an external test report filed as "smart_search 完全崩溃，重启不恢复"
+#     what an external test report filed as "web_search 完全崩溃，重启不恢复"
 #     and misdiagnosed as engine-cooldown state. The state files were innocent —
 #     the same call succeeds once the number arrives as an int.
 #   * a client that echoes every schema property as null. A null means "not
@@ -2585,7 +2585,7 @@ def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Option
 # telling the caller the value moved. Clamping a second time above those notes
 # would produce the silent version of the bug this table exists to close.
 _ARG_TYPES: dict[str, dict[str, str]] = {
-    "smart_fetch": {
+    "web_read": {
         "urls": "list",
         "headless": "bool",
         "real_chrome": "bool", "network_idle": "bool", "solve_cloudflare": "bool",
@@ -2602,7 +2602,7 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         "pages": "strnum", "password": "strnum",
         "actions": "rawlist",
     },
-    "smart_crawl": {
+    "web_crawl": {
         "max_pages": "int", "max_depth": "int", "max_content_chars_per": "int",
         "cache_ttl": "int",
         "concurrency": "int", "timeout": "number", "deadline_ms": "number",
@@ -2620,7 +2620,7 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         "full_page": "bool", "network_idle": "bool", "decode_qr": "bool",
         "quality": "int", "wait": "number", "timeout": "number",
     },
-    "smart_search": {
+    "web_search": {
         "max_results": "int", "cache_ttl": "int", "page": "int",
         "engines": "list", "exclude_sites": "list", "fetch_content": "bool",
         # min_relevance arrives as a string from clients that JSON-stringify
@@ -2629,11 +2629,11 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         "min_relevance": "number",
         "min_raw_relevance": "number",
     },
-    "feed_fetch": {"max_items": "int", "timeout": "int"},
-    "resolve_url": {"timeout": "number"},
+    "feed_read": {"max_items": "int", "timeout": "int"},
+    "web_resolve": {"timeout": "number"},
     # cache_clear already normalizes its two booleans in _validate_tool_args;
     # parse takes three strings and has nothing to convert.
-    # L3/L4: `actions` goes through the same rawlist path as smart_fetch's (the
+    # L3/L4: `actions` goes through the same rawlist path as web_read's (the
     # chain validator owns its shape); the numbers are the same coercions.
     "recipe": {"actions": "rawlist", "timeout": "number",
                "max_content_chars": "int"},
@@ -2744,18 +2744,18 @@ def _validate_tool_args(name: str, args: dict) -> dict:
     methods only ever reach clients as wire schema — nothing validates at
     runtime, and every argument is read with ``args.get()``. Three defects lived
     in that gap, all silent and all delivered as an ordinary 200:
-    ``smart_fetch(urls="https://x")`` iterated the string into nineteen
+    ``web_read(urls="https://x")`` iterated the string into nineteen
     one-character results; ``cache_clear(all="false")`` cleared the entire cache
-    because a non-empty string is truthy; ``smart_fetch(force_fetcher="magic")``
+    because a non-empty string is truthy; ``web_read(force_fetcher="magic")``
     fell through to the stealthy browser tier.
 
     Returning a normalized copy here means every branch below reads a value that
-    already has exactly one reading. Raises ValueError; the smart_fetch branch
+    already has exactly one reading. Raises ValueError; the web_read branch
     converts it to the ordinary invalid_request envelope, and anything else
     surfaces through ``call_tool`` as an is_error result.
     """
     out = dict(args)
-    if name == "smart_fetch":
+    if name == "web_read":
         out["urls"] = _coerce_str_list_arg(
             args.get("urls"), "urls", single_hint=_URLS_SINGLE_HINT)
         out["force_fetcher"] = _coerce_force_fetcher_arg(args.get("force_fetcher"))
@@ -2775,7 +2775,7 @@ def _validate_tool_args(name: str, args: dict) -> dict:
             raise ValueError(
                 f"session_id must be a string, got {type(sid).__name__}. "
                 "It is the name you passed as session_id=.")
-    elif name == "feed_fetch":
+    elif name == "feed_read":
         out["urls"] = _coerce_str_list_arg(args.get("urls"), "urls")
     return out
 
@@ -2823,7 +2823,7 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
     # M-1: 打分器只由**本次调用**的 focus_engine= 决定（17.0 没有许可门：
     # 没点名 = BM25，点名 'neural' 才用语义分，见 focus.engine_wants_neural）——
     # the blocks are scored by the warm local cross-encoder instead of BM25
-    # (peek only — the load happened at the smart_fetch entry; a missing scorer
+    # (peek only — the load happened at the web_read entry; a missing scorer
     # falls back to BM25 inside focus_content). M-2: focus_mode='best' returns
     # only the answer block.
     focus_q = _FOCUS.get()
@@ -2894,12 +2894,12 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
 
 # ─── Response translation helpers ──────────────────────────────────
 
-# PDF extraction options flow from smart_fetch down to _translate_response via
+# PDF extraction options flow from web_read down to _translate_response via
 # contextvars (task-local, safe under concurrent bulk fetches) instead of
 # threading two new params through every fetcher signature.
 _PDF_PAGES: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_pdf_pages", default=None)
 _PDF_PASSWORD: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_pdf_password", default=None)
-# Query-focused content filter (smart_fetch `focus` param). Applied POST-cache
+# Query-focused content filter (web_read `focus` param). Applied POST-cache
 # inside _apply_chunking: the full extracted text is cached once, and different
 # focus queries are just different BM25 views over the same cached content.
 _FOCUS: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_focus", default=None)
@@ -2918,19 +2918,19 @@ from dhole_mcp.focus import (
 # Opt-in: populate ResponseModel.media with the page's image URLs (multimodal).
 _INCLUDE_MEDIA: contextvars.ContextVar[bool] = contextvars.ContextVar("_include_media", default=False)
 _INCLUDE_LINKS: contextvars.ContextVar[bool] = contextvars.ContextVar("_include_links", default=False)
-# Per-list cap for ResponseModel.links when include_links=true (smart_fetch
+# Per-list cap for ResponseModel.links when include_links=true (web_read
 # `max_links`; 0 = the documented per-category defaults in links.py). Links were
 # capped silently at 30/20/20 with no way to ask for more or fewer and no signal
 # that anything had been left out; links.total_found + links.is_truncated now
 # report it, and this knob decides where the cut lands.
 _MAX_LINKS: contextvars.ContextVar[int] = contextvars.ContextVar("_max_links", default=0)
-# Per-call css_selector (smart_fetch). Read by _with_agent_hints rather than at the
+# Per-call css_selector (web_read). Read by _with_agent_hints rather than at the
 # extraction site, so a selector that could not apply to the response is reported on
 # EVERY return path (fresh fetch, cache hit, bulk, archive) instead of only where
 # extraction happened to run.
 _CSS_SELECTOR: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "_css_selector", default=None)
-# Per-call cookie-jar id (smart_fetch `session_id`, G7). "" = stateless, the
+# Per-call cookie-jar id (web_read `session_id`, G7). "" = stateless, the
 # pre-16.0 behaviour: cookies live for the one call and the response's
 # Set-Cookie is dropped. Read by the HTTP tier (fetcher.HTTPSession.get) and by
 # _stamp_session, which puts the id and the held cookie NAMES back on the
@@ -2992,7 +2992,7 @@ def _stamp_robots_mode(result: ResponseModel) -> None:
 # "this page needs a login" when it is the former. Values themselves are kept
 # only in the outgoing header — never in the response, never in a log.
 _AUTH_SENT: contextvars.ContextVar[tuple] = contextvars.ContextVar("_auth_sent", default=("", ()))
-# The verbs smart_fetch speaks. OPTIONS/TRACE are left out on purpose: a fetch
+# The verbs web_read speaks. OPTIONS/TRACE are left out on purpose: a fetch
 # tool that proxies arbitrary methods to arbitrary hosts is a request forgery
 # primitive with a nicer name.
 _FETCH_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "DELETE", "PATCH"})
@@ -3020,7 +3020,7 @@ _REVALIDATE: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
 # now, values that were clamped to a documented bound. Scoped per invocation by
 # _smart_fetch_request_context exactly like _FOCUS, and folded into the response
 # summary by _with_agent_hints. None (not an empty list) means "not inside a
-# smart_fetch call", which keeps the wrapper a no-op everywhere else.
+# web_read call", which keeps the wrapper a no-op everywhere else.
 _ARG_NOTES: contextvars.ContextVar[Optional[list]] = contextvars.ContextVar("_arg_notes", default=None)
 
 
@@ -3416,8 +3416,8 @@ def _result_error(result: Any) -> str:
     ``ok`` in the call log means "the call ran to completion without raising" —
     a tool that answers with an envelope carrying ``error`` never raises, so
     without this the log said ``ok: true`` for calls that plainly failed.
-    Measured: a ``feed_fetch`` refused by the SSRF guard logged
-    ``{"tool": "feed_fetch", "ok": true, "ms": 22.0}`` with no trace of the
+    Measured: a ``feed_read`` refused by the SSRF guard logged
+    ``{"tool": "feed_read", "ok": true, "ms": 22.0}`` with no trace of the
     refusal. The question this log exists to answer is "does my client actually
     route here, and does it hold up?" — and a refusal that reads like a success
     is the one shape that question cannot survive.
@@ -3487,7 +3487,7 @@ def _log_tool_call(name: str, ok: bool, duration_ms: float, error: str = "") -> 
 
 
 def _smart_fetch_request_context(func):
-    """Scope smart_fetch request options to one invocation and its child tasks.
+    """Scope web_read request options to one invocation and its child tasks.
 
     Request options (pages/password/focus/include_media/include_links) flow to
     lower-level fetchers through ContextVars. Setting them inline lets a stale
@@ -3497,7 +3497,7 @@ def _smart_fetch_request_context(func):
     Also the single choke point where the requested URL is still known after the
     fetch has rewritten it: every return path (and every per-URL call made by
     the bulk path) passes through here, so ``original_url`` is stamped once
-    rather than at each of the eight returns inside ``smart_fetch``.
+    rather than at each of the eight returns inside ``web_read``.
     """
     signature = inspect.signature(func)
 
@@ -3542,7 +3542,7 @@ def _smart_fetch_request_context(func):
             (_CONTENT_TYPE, _CONTENT_TYPE.set(
                 options["content_type"].strip()
                 if isinstance(options.get("content_type"), str) else "")),
-            # G25. Emptied here, filled by smart_fetch once the shape is verified
+            # G25. Emptied here, filled by web_read once the shape is verified
             # — a credential dict that fails validation must leave no trace for
             # the next call to read.
             (_AUTH_SENT, _AUTH_SENT.set(("", ()))),
@@ -3669,7 +3669,7 @@ def _stamp_session(result):
 def _stamp_original_url(result, requested: str):
     """Record the requested URL when the fetch ended somewhere else.
 
-    ``smart_fetch`` rewrites ``url`` to the final address, so a redirect left no
+    ``web_read`` rewrites ``url`` to the final address, so a redirect left no
     trace at all — the caller's only clue was a URL it had not typed, and a
     wrong-but-plausible one reads as "the site moved" at best and "you fetched
     the wrong page" at worst. ``original_url`` is set ONLY when the two differ,
@@ -4703,7 +4703,7 @@ _SHOT_PARAMS = frozenset({
     # selector = 元素级裁剪（17.0 起常开）；decode_qr = 本地二维码解码
     # （确定性工作，从来不设门控）。
     "selector", "decode_qr",
-    # G9 parity: smart_fetch could always name a private target and screenshot
+    # G9 parity: web_read could always name a private target and screenshot
     # could not, so "my dev server" was fetchable by one tool and refused
     # outright by the next. Same option, same semantics, same guard.
     "allow_private",
@@ -4718,8 +4718,8 @@ _SS_PARAMS = frozenset({
     "min_raw_relevance",
 })
 # The complete set of names each tool accepts at the top level. `url=` and
-# friends that are NOT in *_PARAMS (smart_crawl's discover_only,
-# screenshot's session_id, smart_search's query) are the required-ish arguments
+# friends that are NOT in *_PARAMS (web_crawl's discover_only,
+# screenshot's session_id, web_search's query) are the required-ish arguments
 # the branches read by name, so they join here.
 #
 # A name listed but never read by the dispatcher used to be the quiet half of
@@ -4727,16 +4727,16 @@ _SS_PARAMS = frozenset({
 # guard test_every_accepted_name_is_advertised now ties this set to the schema,
 # and the forwarding below reads nothing but this set.
 _TOP_LEVEL_ARGS: dict[str, frozenset] = {
-    "smart_fetch": _SF_PARAMS | {"url"},
-    "smart_crawl": _SC_PARAMS | {"url", "discover_only", "focus",
+    "web_read": _SF_PARAMS | {"url"},
+    "web_crawl": _SC_PARAMS | {"url", "discover_only", "focus",
                                  "search"},
     "screenshot": _SHOT_PARAMS | {"url", "session_id"},
-    "smart_search": _SS_PARAMS | {"query"},
+    "web_search": _SS_PARAMS | {"query"},
     "cache_clear": frozenset({"all", "engine_state"}),
     "parse": frozenset({"file_path", "cwd", "encoding"}),
-    "feed_fetch": frozenset({"urls", "max_items", "timeout", "since",
+    "feed_read": frozenset({"urls", "max_items", "timeout", "since",
                              "allow_private"}),
-    "resolve_url": frozenset({"url", "timeout"}),
+    "web_resolve": frozenset({"url", "timeout"}),
     # Both optional: the bare call is the census. This dict is also the set of
     # known tool names (`_dispatch` refuses anything outside it), which is how a
     # method can exist, be documented, and still be unreachable on the wire.
@@ -4765,12 +4765,12 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
 
 
 # Which tools this server registers and dispatches. Default: ALL of them.
-# DHOLE_TOOLS takes a comma-separated subset ("smart_fetch,smart_search") for
+# DHOLE_TOOLS takes a comma-separated subset ("web_read,web_search") for
 # clients that pay the connect-time table on every conversation even when dhole
 # is never called: measured on the wire, 19,141 chars of tool schemas + 2,141 of
 # instructions = 21,282 on connect (~5.1k tokens at cl100k - chars is the half
 # that reproduces; the usual chars/4 rule of thumb reads 5.3k and chars/3.88
-# reads 5.5k, both high), with smart_fetch alone accounting for
+# reads 5.5k, both high), with web_read alone accounting for
 # 6,508 - fetch+search covers the daily-driver cases at roughly half the cost,
 # and the rest is one env-edit away. A name that is not a real tool RAISES at
 # import: a typo must never silently drop a capability the operator believes is
@@ -5352,7 +5352,7 @@ class MasterFetchServer:
         """Apply content quality annotation, cache, and chunking to a fetch result.
 
         Centralizes the repetitive 'annotate -> cache -> chunk' pattern
-        that was duplicated 8+ times across smart_fetch.
+        that was duplicated 8+ times across web_read.
         """
         # 304 的读法全在这里定：`status == 304` 就是"没变"这个事实，不再另存一个
         # 布尔。曾经的 `not_modified` 有过一整类 bug（升级路径里有 304 分支而正文
@@ -5413,7 +5413,7 @@ class MasterFetchServer:
         proxy: Optional[str | Dict[str, str]],
         useragent: Optional[str],
     ) -> tuple:
-        """Validate and sanitize inputs for smart_fetch and related tools.
+        """Validate and sanitize inputs for web_read and related tools.
 
         Returns (validated_url, validated_css_selector, validated_headers,
                  validated_timeout, validated_proxy, validated_useragent).
@@ -5424,7 +5424,7 @@ class MasterFetchServer:
         proxy = validate_proxy(proxy)
 
         # Timeout validation: browser uses ms, HTTP uses seconds.
-        # Since smart_fetch can use both, validate as milliseconds (max 120s).
+        # Since web_read can use both, validate as milliseconds (max 120s).
         timeout = validate_timeout(timeout)
 
         # User agent sanitization
@@ -5521,7 +5521,7 @@ class MasterFetchServer:
         validate_headers(extra_headers)
         validate_css_selector(wait_selector)
 
-        # 安全闸 1/2 已上提到工具入口（smart_fetch / _bulk_stealthy_fetch）：
+        # 安全闸 1/2 已上提到工具入口（web_read / _bulk_stealthy_fetch）：
         # open_session 是内部入口，到达它时 cdp_url 已过闸（先问再记）。
         # 围栏 = 落盘的已授权主机集合，浏览器层 route handler 执行。
         cdp_allowed = (_cdp_authorized_hosts() or None) if cdp_url else None
@@ -5789,14 +5789,14 @@ class MasterFetchServer:
         op: Annotated[str, Field(description="save = record a {url, actions} pair; run = replay it; list = show every stored recipe; delete = forget one.")],
         name: Annotated[Optional[str], Field(description="Recipe name (1-64 chars). Required for save / run / delete.")] = None,
         url: Annotated[Optional[str], Field(description="op=save: the URL to replay.")] = None,
-        actions: Annotated[Optional[List[Dict[str, Any]]], Field(description="op=save: the action chain, same schema as smart_fetch's actions. Validated now by the same validator the executor uses, so a chain that would be refused at run time cannot be stored.")] = None,
+        actions: Annotated[Optional[List[Dict[str, Any]]], Field(description="op=save: the action chain, same schema as web_read's actions. Validated now by the same validator the executor uses, so a chain that would be refused at run time cannot be stored.")] = None,
         note: Annotated[str, Field(description="op=save: what this recipe is for (max 500 chars).")] = "",
         timeout: Annotated[Optional[int], Field(description="op=run: whole-call budget in ms (default 60000 with actions).")] = None,
         max_content_chars: Annotated[Optional[int], Field(description="op=run: cap the returned content chars (default 40000).")] = None,
         focus: Annotated[Optional[str], Field(description="op=run: query-focused extraction over the replayed page. The recipe stores the how, not the question, so this is per-run.")] = None,
         extraction_type: Annotated[Optional[str], Field(description="op=run: markdown (default) | html | text | article | structured.")] = None,
         session_id: Annotated[Optional[str], Field(description="op=run: reuse cookies under this name. Deliberately not stored in the recipe.")] = None,
-        allow_private: Annotated[Optional[Any], Field(description="op=run: replay a recipe that points at loopback (your own dev server). Same semantics as smart_fetch's.")] = None,
+        allow_private: Annotated[Optional[Any], Field(description="op=run: replay a recipe that points at loopback (your own dev server). Same semantics as web_read's.")] = None,
     ) -> RecipeModel:
         """Record / replay a stored (url, actions) pair. See the tool description."""
         from dhole_mcp import tasks
@@ -5842,7 +5842,7 @@ class MasterFetchServer:
                 return RecipeModel(
                     op=o, name=nm, error=str(e),
                     next_action=("Nothing was stored. Fix the chain and save again - "
-                                 "`actions` is the same list smart_fetch takes."),
+                                 "`actions` is the same list web_read takes."),
                 )
             return RecipeModel(
                 op=o, name=saved["name"], url=saved["url"], recipe=saved,
@@ -5891,7 +5891,7 @@ class MasterFetchServer:
         if allow_private is not None:
             kw["allow_private"] = allow_private
 
-        result = await self.smart_fetch(url=rec["url"], actions=rec["actions"], **kw)
+        result = await self.web_read(url=rec["url"], actions=rec["actions"], **kw)
         outcomes = list((result.metadata or {}).get("actions") or [])
         failed = [row for row in outcomes if not row.get("ok")]
 
@@ -5927,7 +5927,7 @@ class MasterFetchServer:
         note: Annotated[str, Field(description="op=add: what you are watching for (max 500 chars).")] = "",
         timeout: Annotated[Optional[int], Field(description="op=check: whole-call budget in ms.")] = None,
         session_id: Annotated[Optional[str], Field(description="op=check: reuse cookies under this name (a watch behind a login). Deliberately not stored.")] = None,
-        allow_private: Annotated[Optional[Any], Field(description="op=check: monitor a loopback URL (your own dev server). Same semantics as smart_fetch's.")] = None,
+        allow_private: Annotated[Optional[Any], Field(description="op=check: monitor a loopback URL (your own dev server). Same semantics as web_read's.")] = None,
     ) -> WatchModel:
         """Start / check / list / stop a monitored URL. See the tool description."""
         from dhole_mcp import tasks
@@ -6024,7 +6024,7 @@ class MasterFetchServer:
             _rv = None
         _rv_tok = _REVALIDATE.set(_rv)
         try:
-            result = await self.smart_fetch(url=w["url"], **kw)
+            result = await self.web_read(url=w["url"], **kw)
         finally:
             _REVALIDATE.reset(_rv_tok)
 
@@ -6173,7 +6173,7 @@ class MasterFetchServer:
         submit_index: Annotated[Optional[int], Field(description="Skip detection: the submit control's snapshot index. Omit it to press Enter in the password box instead.")] = None,
         confirm: Annotated[bool, Field(description="false (default) = detect the form and return the plan without filling anything. true = fill and submit, after the user approved.")] = False,
         timeout: Annotated[Optional[int], Field(description="Whole-call budget in ms.")] = None,
-        allow_private: Annotated[Optional[Any], Field(description="Sign in to a loopback URL (your own dev server). Same semantics as smart_fetch's.")] = None,
+        allow_private: Annotated[Optional[Any], Field(description="Sign in to a loopback URL (your own dev server). Same semantics as web_read's.")] = None,
     ) -> LoginModel:
         """Sign in with a vault credential. See the tool description."""
         from dhole_mcp import login as login_mod
@@ -6239,7 +6239,7 @@ class MasterFetchServer:
             probe = None
         else:
             try:
-                probe = await self.smart_fetch(url=page,
+                probe = await self.web_read(url=page,
                                                actions=[{"snapshot": True}],
                                                extraction_type="text", **kw)
             except Exception as e:
@@ -6289,7 +6289,7 @@ class MasterFetchServer:
         # 4) 执行。动作链带明文密码，但它的每个出口都只记 action_label（记目标
         #    不记文本）—— 见 login.py 的模块注释与 actions.py 的失败日志。
         actions = login_mod.build_actions(fields, uname, password, confirm=True)
-        result = await self.smart_fetch(url=page, actions=actions,
+        result = await self.web_read(url=page, actions=actions,
                                         check_login=True, **kw)
         outcomes = list((result.metadata or {}).get("actions") or [])
         filled = sum(1 for o in outcomes
@@ -6327,7 +6327,7 @@ class MasterFetchServer:
         elif submitted:
             nxt = ("the form was submitted but the login probe could not answer "
                    "(it needs the browser tier and a settled page). Verify with "
-                   "smart_fetch(url=<a page behind the login>, check_login=true).")
+                   "web_read(url=<a page behind the login>, check_login=true).")
         else:
             nxt = "Nothing was submitted. Re-run without confirm to re-detect."
 
@@ -6385,7 +6385,7 @@ class MasterFetchServer:
         `decode_qr` decodes QR payloads from the capture over the text channel
         (deterministic local decoding - no flag, no model).
 
-        ``allow_private`` (G35) is smart_fetch's option, same semantics: without
+        ``allow_private`` (G35) is web_read's option, same semantics: without
         it a loopback / private URL is refused before the browser starts, so
         "screenshot my own dev server" used to be impossible while "fetch my own
         dev server" worked.
@@ -6393,7 +6393,7 @@ class MasterFetchServer:
         NOTE: clients never receive this docstring. The authoritative
         agent-facing contract is the "description" in _TOOL_DEFS.
         """
-        # G35: same option, same guard as smart_fetch.
+        # G35: same option, same guard as web_read.
         with allow_private_scope(allow_private):
             url = validate_url(url)
         validate_css_selector(wait_selector)
@@ -6418,7 +6418,7 @@ class MasterFetchServer:
         if quality is not None and image_type != "jpeg":
             raise ValueError("'quality' is only valid when 'image_type' is 'jpeg'.")
 
-        # Auto-manage a stealthy session when none is provided (mirrors smart_fetch).
+        # Auto-manage a stealthy session when none is provided (mirrors web_read).
         if session_id:
             ssid = session_id
         else:
@@ -6528,7 +6528,7 @@ class MasterFetchServer:
     ) -> ResponseModel:
         """Make GET HTTP request with browser fingerprint impersonation.
         Fast, but only works for low-protection sites. For protected sites, use
-        smart_fetch or stealthy_fetch.
+        web_read or stealthy_fetch.
 
         :param url: The URL to request.
         :param impersonate: Browser to impersonate (default 'chrome').
@@ -6631,7 +6631,7 @@ class MasterFetchServer:
         auth_hdr, _auth_kind, auth_names, _auth_ignored = _auth_request_headers(auth, headers)
         if auth_hdr:
             headers = {**(headers or {}), **auth_hdr}
-        # smart_fetch translates its own auth into `headers` before it reaches
+        # web_read translates its own auth into `headers` before it reaches
         # here, so the names it declared are the other half of "which of these
         # headers are credentials" — the per-hop drop off-origin needs both.
         credential_names = tuple(auth_names) + tuple(_AUTH_SENT.get()[1])
@@ -6738,7 +6738,7 @@ class MasterFetchServer:
         - DataDome (behavioral analysis — detects headless browsers via timing)
         - Akamai Bot Manager (advanced fingerprinting beyond Patchright's scope)
 
-        For the auto-escalation that tries HTTP then stealthy, use smart_fetch instead
+        For the auto-escalation that tries HTTP then stealthy, use web_read instead
         (the dynamic/Playwright tier was removed in v3.5.0; old logs may still show it).
 
         :param url: The URL to fetch.
@@ -6956,10 +6956,10 @@ class MasterFetchServer:
     # ─── SMART FETCH (The One Tool To Rule Them All) ────────────────
 
     @_smart_fetch_request_context
-    async def smart_fetch(
+    async def web_read(
         self,
         url: Annotated[str, Field(description="Single URL to fetch.")],
-        urls: Annotated[Optional[List[str]], Field(description="Multiple URLs to fetch in parallel. Returns bulk results. Use instead of calling smart_fetch multiple times.")] = None,
+        urls: Annotated[Optional[List[str]], Field(description="Multiple URLs to fetch in parallel. Returns bulk results. Use instead of calling web_read multiple times.")] = None,
         extraction_type: Annotated[ExtendedExtractionType, Field(description="Content format: 'markdown' (default), 'html', 'text', 'article', 'structured'.")] = "markdown",
         css_selector: Annotated[Optional[str], Field(description="CSS selector to narrow extracted content (e.g. 'article', '.main-content').")] = None,
         cache_ttl: Annotated[Optional[int], Field(description="Cache duration in seconds. Default 3600 (1 hour). Set 0 to skip cache and force a fresh fetch.")] = None,
@@ -7016,7 +7016,7 @@ class MasterFetchServer:
 
         When NOT to use:
         - Taking screenshots: use the screenshot tool instead
-        - Web search: use smart_search instead
+        - Web search: use web_search instead
         - You specifically need HTTP-only without escalation: set force_fetcher="http"
 
         Response: url, status, content (extracted text), content_type, total_size_bytes,
@@ -7026,12 +7026,12 @@ class MasterFetchServer:
         content_age_days + is_stale, source_type + is_official, source + archived_at.
         """
         # bulk 与 attach 不兼容：attach 是「这一次调用挂哪个浏览器」的事，而批量里
-        # 每个 URL 各自再进一次 smart_fetch，cdp_url 传不下去。让闸口先过，效果就是
+        # 每个 URL 各自再进一次 web_read，cdp_url 传不下去。让闸口先过，效果就是
         # 「把主机写进授权名册，然后每一页都不 attach」—— 静默降级，还留下一个用户
         # 没同意的授权。所以拒绝发生在闸口之前，这次调用不落任何授权。
         if urls is not None and cdp_url:
             msg = ("cdp_url= cannot be combined with urls=: the attach is per call, "
-                   "so a batch would fetch every URL un-attached. Call smart_fetch "
+                   "so a batch would fetch every URL un-attached. Call web_read "
                    "once per URL with cdp_url=.")
             return BulkResponseModel(
                 results=[_invalid_request_result(u, msg) for u in urls],
@@ -7076,7 +7076,7 @@ class MasterFetchServer:
                             url or "", _NEURAL_FOCUS_UNAVAILABLE,
                             next_action=(
                                 "The reranker model is not downloaded yet. It downloads "
-                                "automatically on the first neural smart_search (one-time, "
+                                "automatically on the first neural web_search (one-time, "
                                 "resumable). "
                                 "For this call only, pass focus_engine='bm25' to use "
                                 "keyword-overlap focus."))
@@ -7085,7 +7085,7 @@ class MasterFetchServer:
         if urls is not None:
             if actions:
                 msg = ("actions are not supported in bulk mode; "
-                       "call smart_fetch once per URL")
+                       "call web_read once per URL")
                 return BulkResponseModel(
                     results=[_invalid_request_result(u, msg) for u in urls],
                     total=len(urls), successful=0,
@@ -7585,7 +7585,7 @@ class MasterFetchServer:
 
         async def _fetch_one(u: str) -> ResponseModel:
             try:
-                return await self.smart_fetch(
+                return await self.web_read(
                     url=u, extraction_type=extraction_type,
                     css_selector=css_selector,
                     cache_ttl=cache_ttl,
@@ -8399,9 +8399,9 @@ class MasterFetchServer:
         won is reported in metadata.encoding, and a decode that came out damaged
         is reported as a failure rather than passed off as content.
 
-        PDFs go through the same extractor smart_fetch uses for PDF URLs, so a
+        PDFs go through the same extractor web_read uses for PDF URLs, so a
         local file gets identical handling (OCR fallback, quality signals).
-        A PDF that has a URL is still better served by smart_fetch, which can
+        A PDF that has a URL is still better served by web_read, which can
         also do page ranges and passwords.
 
         .pptx and .odt are read from the zip + XML they already are, so no extra
@@ -8496,18 +8496,18 @@ class MasterFetchServer:
         )
         # Chunking, not just hints: it fills total_extracted_chars /
         # is_truncated / next_offset, which a successful parse left empty, and it
-        # caps a 50 MB file the way smart_fetch caps a 50 MB page.
+        # caps a 50 MB file the way web_read caps a 50 MB page.
         return _apply_chunking(result)
 
     # ─── Feed ─────────────────────────────────────────────────────
 
-    async def feed_fetch(
+    async def feed_read(
         self,
         urls: Annotated[List[str], Field(description="One or more RSS/Atom feed URLs to fetch.")],
         max_items: Annotated[Optional[int], Field(description="Max entries per feed (default 20; 0 = all).")] = 20,
         timeout: Annotated[Optional[int], Field(description="Per-feed timeout in seconds (default 20).")] = 20,
         since: Annotated[Optional[str], Field(description="Incremental polling: keep only entries published at or after this date (ISO-8601 like '2026-09-20' / '2026-09-20T08:00:00Z', or an RFC-822 feed timestamp). Store the newest published value from the previous call and pass it back. What the filter removed is reported (items_older_than_since) rather than silently shrinking the list, so 'nothing new' is an answer you can act on; entries with no usable date are KEPT and counted (items_without_date) because an undated feed cannot be filtered honestly. An unreadable date is refused as an error instead of returning the whole feed as if it were new.")] = None,
-        allow_private: Annotated[Optional[Any], Field(description="Poll a feed the SSRF guard otherwise blocks - your own dev / Docker / LAN feed reader. true = loopback only, or a list of hosts. Same option and same semantics as smart_fetch's.")] = None,
+        allow_private: Annotated[Optional[Any], Field(description="Poll a feed the SSRF guard otherwise blocks - your own dev / Docker / LAN feed reader. true = loopback only, or a list of hosts. Same option and same semantics as web_read's.")] = None,
     ) -> List[Any]:
         """Fetch RSS/Atom feeds and return their latest entries.
 
@@ -8520,7 +8520,7 @@ class MasterFetchServer:
         and the counts say what the filter dropped.
 
         WHEN TO USE: following changelogs, docs updates, release notes, news
-        sites, or any source with a feed URL. For a single page, use smart_fetch.
+        sites, or any source with a feed URL. For a single page, use web_read.
 
         A web page URL is not a failure: the page's own
         <link rel="alternate" type="application/rss+xml"> is followed and
@@ -8531,17 +8531,17 @@ class MasterFetchServer:
         from dhole_mcp.security import SecurityError, validate_url
         urls = [u for u in urls if u and u.strip()]
         if not urls:
-            raise ValueError("feed_fetch requires at least one URL")
+            raise ValueError("feed_read requires at least one URL")
         if len(urls) > 50:
-            raise ValueError("feed_fetch supports at most 50 URLs per call")
-        # SSRF 防护：与 resolve_url 一致，每个 feed URL 先经 validate_url 校验。
+            raise ValueError("feed_read supports at most 50 URLs per call")
+        # SSRF 防护：与 web_resolve 一致，每个 feed URL 先经 validate_url 校验。
         # allow_private（G35）把作用域开在这里，覆盖校验与真正的抓取两步：只放开
         # 校验那一步，等于放行了 URL 又在取文档时把它拒掉。
         with allow_private_scope(allow_private):
             try:
                 urls = [validate_url(u) for u in urls]
             except SecurityError as se:
-                raise ValueError(f"feed_fetch URL 校验失败: {se}") from se
+                raise ValueError(f"feed_read URL 校验失败: {se}") from se
             results = await fetch_feeds(urls, timeout=timeout or 20,
                                         max_items=max_items if max_items is not None else 20,
                                         since=since or "")
@@ -8571,7 +8571,7 @@ class MasterFetchServer:
 
     # ─── URL resolution ────────────────────────────────────────────
 
-    async def resolve_url(
+    async def web_resolve(
         self,
         url: Annotated[str, Field(description="URL to resolve (follows redirects without downloading the page).")],
         timeout: Annotated[Optional[int], Field(description="Timeout in seconds (default 15).")] = 15,
@@ -8579,7 +8579,7 @@ class MasterFetchServer:
         """Resolve a URL to its final destination without fetching the page body.
 
         Follows redirects (short links, tracking chains, canonical jumps) and
-        returns the final URL + status + content type. Cheaper than smart_fetch
+        returns the final URL + status + content type. Cheaper than web_read
         when you only need to know where a link lands — use it to pre-screen
         search results before deciding which pages to actually fetch.
 
@@ -8616,7 +8616,7 @@ class MasterFetchServer:
 
     # ─── Search ────────────────────────────────────────────────────
 
-    async def smart_search(
+    async def web_search(
         self,
         query: str,
         max_results: int = 6,
@@ -8649,7 +8649,7 @@ class MasterFetchServer:
         them by neural relevance; on a lean install (or offline) that step is
         skipped and consensus + engine position stand - so do not read
         relevance_score as "a neural model judged this relevant". Returns URLs +
-        ranking, not page content - smart_fetch the
+        ranking, not page content - web_read the
         results you want. Each result has
         relevance_score + fetch_relevance + engines_consensus. Filters:
         site/exclude_sites (domain include/exclude on the final URL),
@@ -8666,7 +8666,7 @@ class MasterFetchServer:
             )
 
         try:
-            from dhole_mcp.search import smart_search as _smart_search
+            from dhole_mcp.search import web_search as _smart_search
             result = await _smart_search(
                 self, query, max_results, cache_ttl,
                 mode=mode, engines=engines, url=url,
@@ -8679,10 +8679,10 @@ class MasterFetchServer:
         except Exception as e:
             # An unexpected raise used to reach the caller as a bare Python
             # message with nothing saying what to do about it — which is how one
-            # stringified `max_results` came to be reported as "smart_search is
+            # stringified `max_results` came to be reported as "web_search is
             # completely broken, and a restart does not fix it". The traceback
             # belongs in the log; the caller gets a next step.
-            logger.exception("smart_search raised")
+            logger.exception("web_search raised")
             return SearchResponseModel(
                 query=query, results=[], total_results=0,
                 error=redact_api_key(str(e)[:200]),
@@ -8701,7 +8701,7 @@ class MasterFetchServer:
                 high_results = result.results[:3]
             for sr in high_results:
                 try:
-                    page_result = await self.smart_fetch(
+                    page_result = await self.web_read(
                         url=sr.url, focus=query if not fetch_schema else None,
                         schema=fetch_schema, cache_ttl=cache_ttl,
                         max_content_chars=8000, timeout=15000,
@@ -8727,7 +8727,7 @@ class MasterFetchServer:
 
     # ─── Crawl ─────────────────────────────────────────────────────
 
-    async def smart_crawl(
+    async def web_crawl(
         self,
         url: str,
         max_pages: int = 10,
@@ -8751,25 +8751,25 @@ class MasterFetchServer:
         page as markdown with content_ok/summary/page_type. discover_only=true
         returns the URL map only. `focus` prioritizes relevant pages AND
         focus-filters each page's content. URLs picked out of that map are read
-        with smart_fetch(urls=[...]) - the crawl discovers, it does not fetch a
+        with web_read(urls=[...]) - the crawl discovers, it does not fetch a
         list the caller already has. Content-adaptive:
         article pages -> main content, list/index pages -> structured link list,
         JS shells -> detected + reported honestly. Caps: max_pages, max_depth,
         max_content_chars_per, deadline_ms (overall time). Reuses
-        smart_fetch anti-bot escalation + cache.
+        web_read anti-bot escalation + cache.
 
         search: filter discovered/crawled URLs by keyword match (URL path + title).
             Use with discover_only=True for fast URL discovery on large sites.
         ignore_robots: skip robots.txt compliance for the whole crawl (default
-            False = comply, per page, through smart_fetch).
+            False = comply, per page, through web_read).
         focus_engine: which scorer runs `focus` ('bm25' | 'neural'). Same rule as
-            smart_fetch: omitting it is 'bm25', which is the cheap path and needs
+            web_read: omitting it is 'bm25', which is the cheap path and needs
             nothing; 'neural' is what you ask for when keyword overlap is not
             enough. Asking for 'neural' without the local reranker model is
             refused, not downgraded (12.5s of CPU per page multiplied by
             max_pages is not a silent choice).
         """
-        # M-1 闸：与 smart_fetch 同一条规则（17.0 起无许可门 —— focus_engine=
+        # M-1 闸：与 web_read 同一条规则（17.0 起无许可门 —— focus_engine=
         # 'neural' 点名才用语义分）。模型必须在场（缺模型显式报错，不静默下载）：
         # 爬取中途是同步循环，没有 async 入口可加载。
         from dhole_mcp.crawl import CrawlResponseModel as _CRM
@@ -8787,19 +8787,19 @@ class MasterFetchServer:
                                         error=_NEURAL_FOCUS_UNAVAILABLE,
                                         next_action=(
                                             "The reranker model is not downloaded yet. It downloads "
-                                            "automatically on the first neural smart_search (one-time, "
+                                            "automatically on the first neural web_search (one-time, "
                                             "resumable). "
                                             "For this crawl only, pass focus_engine='bm25' to use "
                                             "keyword-overlap focus."))
             try:
                 # Lazy import to break circular dependency (crawl.py imports
-                # ResponseModel from server.py; server.py imports smart_crawl
+                # ResponseModel from server.py; server.py imports web_crawl
                 # from crawl.py). Function-level import avoids import-time cycle.
                 # 本次的打分器意愿要活到 crawl 的那个消费点（_classify_and_extract），
                 # 但它读的是 focus.FOCUS_ENGINE 而不是参数——爬取的
-                # 每页调用链太长，逐层加参数会把签名变成噪音。crawl 内部对 smart_fetch
+                # 每页调用链太长，逐层加参数会把签名变成噪音。crawl 内部对 web_read
                 # 的调用自带 token，进出各还原一次，互不污染。
-                from dhole_mcp.crawl import smart_crawl as _smart_crawl
+                from dhole_mcp.crawl import web_crawl as _smart_crawl
                 return await _smart_crawl(
                     self, url, max_pages=max_pages, max_depth=max_depth,
                     path_include=path_include, path_exclude=path_exclude,
@@ -8812,7 +8812,7 @@ class MasterFetchServer:
                     ignore_robots=ignore_robots,
                 )
             except Exception as e:
-                logger.exception("smart_crawl raised")
+                logger.exception("web_crawl raised")
                 return _CRM(start_url=url, pages=[],
                             error=redact_api_key(str(e)[:200]),
                             next_action=("Internal error, not a blocked site: retry the same "
@@ -8850,11 +8850,11 @@ class MasterFetchServer:
     # tests/test_tool_descriptions.py guards this split.
     _TOOL_DEFS: list[dict] = [
         {
-            "name": "smart_fetch",
-            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: smart_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: when the live site hard-blocks, content_ok can be true of a dated Wayback snapshot (check source + archived_at). No parameter disables it; costs 10-30s.\n- Every parameter has its own top-level name here: pass them beside url=, nothing is nested. A name the tool does not accept raises.\n- The exact shape of actions, schema and the browser/session knobs is NOT in this description: dhole_doc(topic='behavior') reads dhole's own handbook, and dhole_doc(topic='call') the placement traps. Read one before writing the other.\n\nVISUAL ASSIST: actions gains {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} - crops one element on the SAME page instance as the surrounding fill/click actions and returns it inline (metadata.actions keeps a name-only receipt; decoded QR text rides with it). Use it to read a CAPTCHA you are about to answer in the same action chain. Discipline: simple text/grid image CAPTCHAs - at most 3 read-and-retry rounds, then hand off to the user; DataDome/Akamai/interactive Turnstile walls, 2FA factors, and sliders are always handed off (nothing readable on the page, or outside dhole's action primitives). dhole ships no vision model: the reading happens in you.",
+            "name": "web_read",
+            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: web_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: when the live site hard-blocks, content_ok can be true of a dated Wayback snapshot (check source + archived_at). No parameter disables it; costs 10-30s.\n- Every parameter has its own top-level name here: pass them beside url=, nothing is nested. A name the tool does not accept raises.\n- The exact shape of actions, schema and the browser/session knobs is NOT in this description: dhole_doc(topic='behavior') reads dhole's own handbook, and dhole_doc(topic='call') the placement traps. Read one before writing the other.\n\nVISUAL ASSIST: actions gains {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} - crops one element on the SAME page instance as the surrounding fill/click actions and returns it inline (metadata.actions keeps a name-only receipt; decoded QR text rides with it). Use it to read a CAPTCHA you are about to answer in the same action chain. Discipline: simple text/grid image CAPTCHAs - at most 3 read-and-retry rounds, then hand off to the user; DataDome/Akamai/interactive Turnstile walls, 2FA factors, and sliders are always handed off (nothing readable on the page, or outside dhole's action primitives). dhole ships no vision model: the reading happens in you.",
             "inputSchema": {
                 "type": "object",
-                # smart_fetch needs one of the two; the schema said nothing at
+                # web_read needs one of the two; the schema said nothing at
                 # all, so a client could not tell before calling. anyOf (not
                 # required) because either one satisfies it, and they are not
                 # used together: url wins for a single page, urls switches to
@@ -8917,8 +8917,8 @@ class MasterFetchServer:
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
         },
         {
-            "name": "smart_crawl",
-            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, smart_fetch(urls=[...]) fetches them directly - no crawl needed.\n- Every parameter is a top-level argument; nothing is nested. url= names the site the crawl stays inside.\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed'), discoveries already known to be disallowed are skipped, and robots_skipped says how many. ignore_robots=true overrides.\n- Caps: max_pages (1-40, default 10), max_depth(2), 20000 chars per page, deadline_ms. There is no whole-run character budget.\n- Map-then-fetch: sitemap=true or discover_only=true maps it, smart_fetch(urls=[...]) reads the picks. What the drop counters mean and how politeness is decided: dhole_doc(topic='behavior', section='smart_crawl'); placement pairs with counterexamples: dhole_doc(topic='call').",
+            "name": "web_crawl",
+            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, web_read(urls=[...]) fetches them directly - no crawl needed.\n- Every parameter is a top-level argument; nothing is nested. url= names the site the crawl stays inside.\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed'), discoveries already known to be disallowed are skipped, and robots_skipped says how many. ignore_robots=true overrides.\n- Caps: max_pages (1-40, default 10), max_depth(2), 20000 chars per page, deadline_ms. There is no whole-run character budget.\n- Map-then-fetch: sitemap=true or discover_only=true maps it, web_read(urls=[...]) reads the picks. What the drop counters mean and how politeness is decided: dhole_doc(topic='behavior', section='web_crawl'); placement pairs with counterexamples: dhole_doc(topic='call').",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
@@ -8946,7 +8946,7 @@ class MasterFetchServer:
         },
         {
             "name": "screenshot",
-            "description": "Use when you need to SEE a page - layout, charts, UI state, how it really renders: returns an image. For the page's words use smart_fetch instead. A text-only model gets nothing from an inline image: pass save_to= and read the file at the absolute path it reports.\n- Full-page rendering costs a browser: the first call pays a cold start (seconds); later ones in the same session are fast.\n\nVISUAL ASSIST: selector= crops the capture to ONE element (CSS selector; full_page cannot combine with it) and returns it inline - for CAPTCHAs, QR codes, forms. Discipline: a simple text/grid image CAPTCHA may be read and tried at most 3 times, then STOP and hand off to the user; behavioral/fingerprint walls (DataDome, Akamai, interactive Turnstile) have nothing to look at - hand off immediately; 2FA codes are never on the page - hand off; sliders need drag primitives dhole does not have - hand off. dhole ships no vision model: the reading happens in you.",
+            "description": "Use when you need to SEE a page - layout, charts, UI state, how it really renders: returns an image. For the page's words use web_read instead. A text-only model gets nothing from an inline image: pass save_to= and read the file at the absolute path it reports.\n- Full-page rendering costs a browser: the first call pays a cold start (seconds); later ones in the same session are fast.\n\nVISUAL ASSIST: selector= crops the capture to ONE element (CSS selector; full_page cannot combine with it) and returns it inline - for CAPTCHAs, QR codes, forms. Discipline: a simple text/grid image CAPTCHA may be read and tried at most 3 times, then STOP and hand off to the user; behavioral/fingerprint walls (DataDome, Akamai, interactive Turnstile) have nothing to look at - hand off immediately; 2FA codes are never on the page - hand off; sliders need drag primitives dhole does not have - hand off. dhole ships no vision model: the reading happens in you.",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
@@ -8963,14 +8963,14 @@ class MasterFetchServer:
                     "wait_selector": {"type": "string", "description": "CSS selector to wait for before capturing."},
                     "network_idle": {"type": "boolean", "description": "Wait until the network has been idle 500ms (good for SPAs)."},
                     "timeout": {"type": "integer", "description": "Budget in ms (default 30000)."},
-                    "allow_private": {"anyOf": [{"type": "boolean"}, {"type": "array", "items": {"type": "string"}}], "description": "Same guard as smart_fetch's: true = loopback only, or name the hosts. Without it a private URL is refused before the browser starts. Cloud metadata endpoints are never allowed."},
+                    "allow_private": {"anyOf": [{"type": "boolean"}, {"type": "array", "items": {"type": "string"}}], "description": "Same guard as web_read's: true = loopback only, or name the hosts. Without it a private URL is refused before the browser starts. Cloud metadata endpoints are never allowed."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
         },
         {
-            "name": "smart_search",
-            "description": "Keyless multi-engine web search (default pool = all 8 engines: baidu,bing,sogou,so360,bing_global,yandex,brave,duckduckgo). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- fetch_content=true auto-fetches the top 3; otherwise smart_fetch the high fetch_relevance hits with focus=. Don't search for a URL you already have - smart_fetch it directly.\n- min_relevance / min_raw_relevance (0-1) drop low-relevance results - two different scales, read which one you are setting.\n- Result fields: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index FAMILIES, not raw hits, so a low value can mean a degraded pool - check consensus_basis.",
+            "name": "web_search",
+            "description": "Keyless multi-engine web search (default pool = all 8 engines: baidu,bing,sogou,so360,bing_global,yandex,brave,duckduckgo). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- fetch_content=true auto-fetches the top 3; otherwise web_read the high fetch_relevance hits with focus=. Don't search for a URL you already have - web_read it directly.\n- min_relevance / min_raw_relevance (0-1) drop low-relevance results - two different scales, read which one you are setting.\n- Result fields: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index FAMILIES, not raw hits, so a low value can mean a degraded pool - check consensus_basis.",
             "inputSchema": {
                 "type": "object", "required": ["query"],
                 "properties": {
@@ -8981,7 +8981,7 @@ class MasterFetchServer:
                     "max_results": {"type": "integer", "description": "Results to return (1-50, default 6)."},
                     "page": {"type": "integer", "description": "Result page, 0-10 (default 0)."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds (default 300). 0 = force fresh."},
-                    "engines": {"type": "array", "items": {"type": "string"}, "description": "Narrow the pool, max 9 names. The selectable names are exactly the 8 engines above, plus the keyed engines that need an API key (dhole_doc(topic='behavior', section='smart_search'))."},
+                    "engines": {"type": "array", "items": {"type": "string"}, "description": "Narrow the pool, max 9 names. The selectable names are exactly the 8 engines above, plus the keyed engines that need an API key (dhole_doc(topic='behavior', section='web_search'))."},
                     "site": {"type": "string", "description": "Restrict to one domain."},
                     "exclude_sites": {"type": "array", "items": {"type": "string"}, "description": "Drop results from these domains."},
                     "location": {"type": "string", "description": "ISO country code ('US'), optionally with a region suffix ('US-CN'). Anything else is refused rather than guessed at."},
@@ -8989,9 +8989,9 @@ class MasterFetchServer:
                     "region": {"type": "string", "description": "Engine region, passed through as given and folded into the cache key. Omitted, it is derived from location + language."},
                     "freshness": {"type": "string", "enum": ["day", "week", "month", "year"], "description": "Time window preset - only these four, anything else is refused. The engines offer nothing finer, so no absolute date range can be asked."},
                     "after": {"type": "string", "description": "'Newer than' a date. No engine takes an absolute range, so this is widened to the narrowest preset that covers it and date_filter reports what was actually sent."},
-                    "before": {"type": "string", "description": "REFUSED, not ignored: presets only bound 'not older than' and results carry no publish date, so nothing could honour it. For dated items use feed_fetch(since=)."},
+                    "before": {"type": "string", "description": "REFUSED, not ignored: presets only bound 'not older than' and results carry no publish date, so nothing could honour it. For dated items use feed_read(since=)."},
                     "fetch_content": {"type": "boolean", "description": "Pull the top hits' full text inside this same call (default false) instead of returning snippets."},
-                    "fetch_schema": {"type": "object", "additionalProperties": True, "description": "{properties: {...}} applied to the pages fetched by fetch_content, instead of their markdown - the same shape rules as smart_fetch's schema."},
+                    "fetch_schema": {"type": "object", "additionalProperties": True, "description": "{properties: {...}} applied to the pages fetched by fetch_content, instead of their markdown - the same shape rules as web_read's schema."},
                     "min_relevance": {"type": "number", "description": "0-1 cutoff on the NORMALIZED rerank score. Below it results are dropped, not re-ordered."},
                     "min_raw_relevance": {"type": "number", "description": "0-1 floor on the reranker's RAW score instead - the one that can call a whole round irrelevant. Start at 0.1; fetch_hint reports the raw span the round had."},
                 },
@@ -9000,7 +9000,7 @@ class MasterFetchServer:
         },
         {
             "name": "cache_clear",
-            "description": "Clear the fetch cache: all=true wipes everything, the default removes only expired entries. To re-fetch one URL fresh, pass cache_ttl=0 to smart_fetch/smart_crawl instead.\nAlso forgotten: robots.txt verdicts, and every session's cookie jar - close_session drops one session and keeps the cache.\nengine_state=true additionally forgets engine cooldowns + yield history - use it when the same engines keep getting skipped after the network changed (VPN on) - and adds engine_health to the reply.",
+            "description": "Clear the fetch cache: all=true wipes everything, the default removes only expired entries. To re-fetch one URL fresh, pass cache_ttl=0 to web_read/web_crawl instead.\nAlso forgotten: robots.txt verdicts, and every session's cookie jar - close_session drops one session and keeps the cache.\nengine_state=true additionally forgets engine cooldowns + yield history - use it when the same engines keep getting skipped after the network changed (VPN on) - and adds engine_health to the reply.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -9012,7 +9012,7 @@ class MasterFetchServer:
         },
         {
             "name": "parse",
-            "description": "Use for LOCAL files the task references: .html/.htm/.xhtml, .docx, .xlsx, .csv, .pdf, .md/.markdown/.txt, .json/.yaml/.yml, .pptx, .odt -> Markdown, no web fetch. A PDF that has a URL is better served by smart_fetch (page ranges, password, table_of_contents).\n.html/.csv are decoded by charset detection, not assumed UTF-8: metadata.encoding names the charset used, and a wrong guess comes back as an error whose next_action says to re-call with encoding=.\n.pptx/.odt need no extra install; what a text reader cannot carry (speaker notes, layout, images) is named in the output's first line rather than vanishing from it. .json/.yaml are validated, not just echoed: an unparseable file is an error, not a dump.\nRelative paths: pass cwd when the host doesn't tell the server the working directory; otherwise the process cwd, then home.",
+            "description": "Use for LOCAL files the task references: .html/.htm/.xhtml, .docx, .xlsx, .csv, .pdf, .md/.markdown/.txt, .json/.yaml/.yml, .pptx, .odt -> Markdown, no web fetch. A PDF that has a URL is better served by web_read (page ranges, password, table_of_contents).\n.html/.csv are decoded by charset detection, not assumed UTF-8: metadata.encoding names the charset used, and a wrong guess comes back as an error whose next_action says to re-call with encoding=.\n.pptx/.odt need no extra install; what a text reader cannot carry (speaker notes, layout, images) is named in the output's first line rather than vanishing from it. .json/.yaml are validated, not just echoed: an unparseable file is an error, not a dump.\nRelative paths: pass cwd when the host doesn't tell the server the working directory; otherwise the process cwd, then home.",
             "inputSchema": {
                 "type": "object", "required": ["file_path"],
                 "properties": {
@@ -9024,8 +9024,8 @@ class MasterFetchServer:
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False},
         },
         {
-            "name": "feed_fetch",
-            "description": "Batch-fetch RSS/Atom feeds newest-first (title/url/published/summary) to track what a source has PUBLISHED - changelogs, release notes, blogs, news. Feeds parse independently, so a dead feed never fails the batch. NOT a general page fetcher - use smart_fetch.\n- A site page is accepted: the alternate RSS/Atom link in its own head is followed and the reply says so in discovered_from.\n- since= turns it into a poll for what is new since the last call; items_older_than_since counts what it dropped.\n- An item's summary is a PREVIEW: past 500 chars it is cut and that item says summary_truncated=true. smart_fetch the item url for the whole text.\nWhat an unparseable feed answers with and the reply shape: dhole_doc(topic='behavior', section='remaining tools').",
+            "name": "feed_read",
+            "description": "Batch-fetch RSS/Atom feeds newest-first (title/url/published/summary) to track what a source has PUBLISHED - changelogs, release notes, blogs, news. Feeds parse independently, so a dead feed never fails the batch. NOT a general page fetcher - use web_read.\n- A site page is accepted: the alternate RSS/Atom link in its own head is followed and the reply says so in discovered_from.\n- since= turns it into a poll for what is new since the last call; items_older_than_since counts what it dropped.\n- An item's summary is a PREVIEW: past 500 chars it is cut and that item says summary_truncated=true. web_read the item url for the whole text.\nWhat an unparseable feed answers with and the reply shape: dhole_doc(topic='behavior', section='remaining tools').",
             "inputSchema": {
                 "type": "object", "required": ["urls"],
                 "properties": {
@@ -9039,7 +9039,7 @@ class MasterFetchServer:
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
         },
         {
-            "name": "resolve_url",
+            "name": "web_resolve",
             "description": "Follow a short/redirected link (t.co, bit.ly, tracking URLs) without downloading the page body: returns final_url + status + content_type. Use it to check where a link lands BEFORE fetching it. A page that redirects by putting a refresh directive in its own head is followed too, so final_url matches what a browser would show.",
             "inputSchema": {
                 "type": "object", "required": ["url"],
@@ -9072,7 +9072,7 @@ class MasterFetchServer:
                     "op": {"type": "string", "enum": ["save", "run", "list", "delete"], "description": "save = record; run = replay; list = show all; delete = forget one."},
                     "name": {"type": "string", "description": "Recipe name (1-64 chars). Required for save/run/delete."},
                     "url": {"type": "string", "description": "op=save: the URL to replay."},
-                    "actions": {"type": "array", "items": {"type": "object"}, "description": "op=save: the action chain, same schema as smart_fetch's actions."},
+                    "actions": {"type": "array", "items": {"type": "object"}, "description": "op=save: the action chain, same schema as web_read's actions."},
                     "note": {"type": "string", "description": "op=save: what this recipe is for (max 500 chars)."},
                     "timeout": {"type": "integer", "description": "op=run: whole-call budget in ms."},
                     "max_content_chars": {"type": "integer", "description": "op=run: cap on returned content chars."},
@@ -9333,7 +9333,9 @@ class MasterFetchServer:
         from mcp.types import TextContent
 
         if name not in _TOP_LEVEL_ARGS:
-            raise ValueError(f"Unknown tool: {name}")
+            raise ValueError(
+                f"Unknown tool: {name}. Registered names: {sorted(_TOP_LEVEL_ARGS)}"
+            )
         if name not in _ENABLED_TOOLS:
             raise ValueError(
                 f"Tool '{name}' is not enabled in this server: DHOLE_TOOLS "
@@ -9349,11 +9351,11 @@ class MasterFetchServer:
             # there is no bag copy left to normalize a second time.
             args = _coerce_arg_types(name, args)
         except ValueError as e:
-            # smart_fetch answers a bad argument with the same envelope every
+            # web_read answers a bad argument with the same envelope every
             # other outcome uses (see _invalid_request_result); letting it raise
             # would hand the caller an is_error result of a different shape with
             # no next_action.
-            if name != "smart_fetch":
+            if name != "web_read":
                 raise
             # Every coercer opens with the offending argument name ("<name> must
             # be ..."), which is the one thing the caller can act on. Quoting it
@@ -9370,13 +9372,13 @@ class MasterFetchServer:
             )
             return _wire_result(result)
 
-        if name == "smart_fetch":
+        if name == "web_read":
             url = args.get("url", "")
-            call = self._forward("smart_fetch", args, skip=("url",))
+            call = self._forward("web_read", args, skip=("url",))
             if not url and not call.get("urls"):
                 result = _invalid_request_result("", "Either 'url' or 'urls' must be provided")
                 return _wire_result(result)
-            result = await self.smart_fetch(url=url, **call)
+            result = await self.web_read(url=url, **call)
             # `_action_images` is a ResponseModel-only PrivateAttr (element
             # captures from {"screenshot"} actions). urls=[...] returns a
             # BulkResponseModel, where the attribute is ABSENT rather than
@@ -9386,20 +9388,20 @@ class MasterFetchServer:
             #
             # No images are lost by not aggregating across results: bulk mode
             # refuses `actions` outright (see the "actions are not supported in
-            # bulk mode" branch in smart_fetch), and _report_action_outcomes —
+            # bulk mode" branch in web_read), and _report_action_outcomes —
             # the only writer of this attribute — runs on the single-URL path
             # only. Guarded read, same shape as the recipe branch below.
             return _wire_result(result, images=getattr(result, "_action_images", None) or None)
 
-        elif name == "smart_crawl":
-            call = self._forward("smart_crawl", args, skip=("url",))
-            # Same enum as smart_fetch's, and the same failure mode: crawl.py
-            # forwards it straight to smart_fetch, so an unlisted value would
+        elif name == "web_crawl":
+            call = self._forward("web_crawl", args, skip=("url",))
+            # Same enum as web_read's, and the same failure mode: crawl.py
+            # forwards it straight to web_read, so an unlisted value would
             # pin the crawl to the stealthy tier without saying so.
             if call.get("force_fetcher") is not None:
                 call["force_fetcher"] = _coerce_force_fetcher_arg(call["force_fetcher"])
             call.setdefault("discover_only", False)
-            result = await self.smart_crawl(url=args["url"], **call)
+            result = await self.web_crawl(url=args["url"], **call)
             return _wire_result(result)
 
         elif name == "screenshot":
@@ -9407,9 +9409,9 @@ class MasterFetchServer:
                 url=args["url"], **self._forward("screenshot", args, skip=("url",)))
             return result  # already list[ImageContent|TextContent]
 
-        elif name == "smart_search":
-            result = await self.smart_search(
-                query=args["query"], **self._forward("smart_search", args,
+        elif name == "web_search":
+            result = await self.web_search(
+                query=args["query"], **self._forward("web_search", args,
                                                      skip=("query",)))
             return _wire_result(result)
 
@@ -9429,7 +9431,7 @@ class MasterFetchServer:
             )
             return _wire_result(result)
 
-        elif name == "feed_fetch":
+        elif name == "feed_read":
             try:
                 # `since` is in this tool's schema and the method honours it, but
                 # the dispatcher never read it, so every MCP call that asked for
@@ -9440,7 +9442,7 @@ class MasterFetchServer:
                 # allow_private is forwarded like every other advertised
                 # parameter (schema 声明即承诺) - the method opens the scope
                 # itself, where the URLs it guards actually are.
-                feeds = await self.feed_fetch(
+                feeds = await self.feed_read(
                     urls=args.get("urls") or [],
                     max_items=args.get("max_items", 20),
                     timeout=args.get("timeout", 20),
@@ -9448,7 +9450,7 @@ class MasterFetchServer:
                     allow_private=args.get("allow_private"),
                 )
             except ValueError as e:
-                # feed_fetch used to raise, and call_tool turned that into an
+                # feed_read used to raise, and call_tool turned that into an
                 # is_error result whose payload was a bare {"error": ...}: a
                 # second error shape for callers to detect, with no next_action.
                 # Every other tool answers with an envelope, so this one does too.
@@ -9475,8 +9477,8 @@ class MasterFetchServer:
             text, compact = _wire_json(payload)
             return [TextContent(type="text", text=text)], compact
 
-        elif name == "resolve_url":
-            result = await self.resolve_url(
+        elif name == "web_resolve":
+            result = await self.web_resolve(
                 url=args["url"],
                 timeout=args.get("timeout", 15),
             )
@@ -9493,7 +9495,7 @@ class MasterFetchServer:
             return _wire_result(result)
 
         elif name == "recipe":
-            # Images ride along like they do for smart_fetch: a recipe whose
+            # Images ride along like they do for web_read: a recipe whose
             # chain ends in an element capture is the same capture, and putting
             # base64 in the JSON would tax every text-only transcript instead.
             result = await self.recipe(
@@ -9827,7 +9829,7 @@ def _engines_probe(args: list[str]) -> int:
 
     为什么必须一家一次：并跑时有早退配额，答得慢的引擎会被取消（preempted），于是
     "这家今天到底能不能用"在真实搜索里根本没有答案。点名单引擎才拿得到它自己的耗时、
-    状态与解析产出。走 `multi_search` —— 与 smart_search 同一条链，诊断的不是另一套代码。
+    状态与解析产出。走 `multi_search` —— 与 web_search 同一条链，诊断的不是另一套代码。
     """
     import asyncio
     import time

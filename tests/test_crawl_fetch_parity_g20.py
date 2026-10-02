@@ -1,8 +1,8 @@
 """G20：同一种内容在同一个工具里必须是同一种形态。
 
-报告的复现是 `quotes.toscrape.com/` 上 `smart_fetch` 给出干净 markdown，而
-`smart_crawl` 的 `pages[0].content` 是一段带大量空白的原始 HTML（`fetcher_used:"http"`）。
-现在的实现里 crawl 的正文与 `smart_fetch` 走的是同一个抽取入口
+报告的复现是 `quotes.toscrape.com/` 上 `web_read` 给出干净 markdown，而
+`web_crawl` 的 `pages[0].content` 是一段带大量空白的原始 HTML（`fetcher_used:"http"`）。
+现在的实现里 crawl 的正文与 `web_read` 走的是同一个抽取入口
 （`extract_content_from_html` → `_extract_type`，crawl.py:249），实测两处逐字节相同。
 
 所以这一项不是改代码，是**把已经成立的等式钉住**：抽取分叉在两个方向上都发生过
@@ -76,15 +76,15 @@ async def test_the_crawl_and_the_fetch_answer_the_same_for_one_page():
 
     url = "https://quotes.toscrape.com/"
     srv = MasterFetchServer()
-    fetched = await srv.smart_fetch(url, cache_ttl=0, timeout=40000)
-    crawled = await srv.smart_crawl(url, max_pages=1, cache_ttl=0)
+    fetched = await srv.web_read(url, cache_ttl=0, timeout=40000)
+    crawled = await srv.web_crawl(url, max_pages=1, cache_ttl=0)
 
     assert fetched.content_ok, fetched.error
     assert crawled.pages, crawled.error
     page = crawled.pages[0]
     assert page.content_ok, page.error
     assert "".join(page.content).strip() == "".join(fetched.content).strip(), (
-        "smart_crawl 与 smart_fetch 对同一页给了不同形态的正文")
+        "web_crawl 与 web_read 对同一页给了不同形态的正文")
     # The raw-HTML symptom the report described: markup leaking into the body.
     assert "<div" not in "".join(page.content)[:400].lower()
 
@@ -95,7 +95,7 @@ async def test_a_list_page_is_still_a_link_list_on_purpose():
     """唯一的有意分叉要在测试里留着名字，否则下一次「统一」会把它也统一掉。"""
     from dhole_mcp.server import MasterFetchServer
 
-    out = await MasterFetchServer().smart_crawl("https://quotes.toscrape.com/",
+    out = await MasterFetchServer().web_crawl("https://quotes.toscrape.com/",
                                                 max_pages=1, cache_ttl=0)
     if not out.pages:
         pytest.skip(f"no crawl answer: {out.error[:80]}")

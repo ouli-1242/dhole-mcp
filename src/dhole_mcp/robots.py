@@ -3,7 +3,7 @@
 Until v16.0 dhole fetched any URL an agent asked for without looking at the
 site's robots.txt at all (README said so out loud). This module is the checker:
 one per-origin, TTL'd, single-flight cache of parsed rules shared by every fetch
-path, consulted by ``smart_fetch`` before any tier runs and by ``smart_crawl``
+path, consulted by ``web_read`` before any tier runs and by ``web_crawl``
 before a discovered URL is queued.
 
 Policy (deliberately narrow, and stated here because it is a behaviour change):
@@ -239,7 +239,7 @@ class RobotsCache:
     def cached(self, url: str, *, user_agent: str = USER_AGENT) -> Optional[bool]:
         """Answer from the cache only: True/False, or None when not yet read.
 
-        ``smart_crawl`` uses this to drop discovered URLs without a network
+        ``web_crawl`` uses this to drop discovered URLs without a network
         call: the seed page's rules are already cached by then, so filtering a
         same-origin candidate is free.
         """

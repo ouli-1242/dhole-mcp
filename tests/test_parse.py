@@ -64,7 +64,7 @@ class TestParseFileBasic:
             assert "hello there" in content
 
     def test_pdf_with_text_is_parsed(self):
-        """本地 PDF 走 smart_fetch 用的同一个提取器，不再是「给个提示」。"""
+        """本地 PDF 走 web_read 用的同一个提取器，不再是「给个提示」。"""
         path = os.path.join(os.path.dirname(__file__), "background_checks.pdf")
         content, error = parse_file(path)
         assert error == ""
@@ -74,7 +74,7 @@ class TestParseFileBasic:
     def test_image_only_pdf_is_ocrd_not_just_explained(self):
         """装了 [all] 时，扫描件不该只回一句「没有文字层」。
 
-        缺陷 2 之前：同一份字节走 URL（smart_fetch）会自动 OCR，走本地（parse）
+        缺陷 2 之前：同一份字节走 URL（web_read）会自动 OCR，走本地（parse）
         却答「去装 [all]」——而 [all] 早就装好了。本文件下面那条
         `test_pdf_with_text_is_parsed` 说的「本地 PDF 走同一个提取器」对扫描件
         分支当时并不成立，这条钉住它成立。
@@ -106,7 +106,7 @@ class TestParseFileBasic:
             os.unlink(path)
 
     def test_pdf_never_hints_at_the_file_scheme(self, monkeypatch):
-        """回归：这里曾返回「用 smart_fetch(url='file://...')」，而 file:// 被
+        """回归：这里曾返回「用 web_read(url='file://...')」，而 file:// 被
         SSRF 守卫硬拦 —— agent 照做必然失败，且失败前已经白花两次调用。
 
         缺陷 2 之后本机（装了 [all]）走 OCR 成功分支、`error` 是空串，只跑这一

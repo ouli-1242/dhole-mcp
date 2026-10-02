@@ -116,9 +116,9 @@ def _record(monkeypatch, method: str, result=None) -> dict:
 
 def _shape_for(tool: str):
     """Whatever each dispatch branch expects back, so the stub is not the failure."""
-    if tool == "feed_fetch":
+    if tool == "feed_read":
         return []
-    if tool == "resolve_url":
+    if tool == "web_resolve":
         return {}
     return ResponseModel(url="https://example.test/", status=200, content=["x"])
 
@@ -127,16 +127,16 @@ class TestTheWireReadsEveryArgumentItAdvertises:
     """BUG-5 本体，外加一条不再靠人记得的守卫。"""
 
     def test_since_reaches_the_method(self, monkeypatch):
-        seen = _record(monkeypatch, "feed_fetch")
-        _dispatch("feed_fetch", {"urls": ["https://example.test/feed.xml"],
+        seen = _record(monkeypatch, "feed_read")
+        _dispatch("feed_read", {"urls": ["https://example.test/feed.xml"],
                                  "since": "2026-09-27T11:00:00Z"})
 
         assert seen.get("since") == "2026-09-27T11:00:00Z"
 
     @pytest.mark.parametrize("tool,call", [
-        ("feed_fetch", {"urls": ["https://example.test/feed.xml"], "max_items": 3,
+        ("feed_read", {"urls": ["https://example.test/feed.xml"], "max_items": 3,
                         "timeout": 7, "since": "2026-09-27T11:00:00Z"}),
-        ("resolve_url", {"url": "https://example.test/x", "timeout": 7}),
+        ("web_resolve", {"url": "https://example.test/x", "timeout": 7}),
         ("parse", {"file_path": "x.csv", "cwd": ".", "encoding": "gbk"}),
         ("cache_clear", {"all": True, "engine_state": True}),
     ])
@@ -144,7 +144,7 @@ class TestTheWireReadsEveryArgumentItAdvertises:
         """schema 声明即承诺：写了却没读 = 对调用方说谎。
 
         报告的复现是「结果与不传 since 完全一致」。只有把每个声明的参数都送一遍、再核对
-        门方法收到了什么，这类掉包才会红 —— 单测 `_since_cutoff` 或直调 `self.feed_fetch`
+        门方法收到了什么，这类掉包才会红 —— 单测 `_since_cutoff` 或直调 `self.feed_read`
         都看不见它。四个网络工具的每个参数名由 test_params_reach_the_tool.py 同样地钉住。
         """
         defs = {d["name"]: d for d in MasterFetchServer._enabled_tool_defs()}
@@ -182,7 +182,7 @@ class TestSinceActuallyFilters:
         return fake_grab
 
     def test_entries_before_the_cutoff_are_dropped_and_counted(self, served):
-        _content, structured = _dispatch("feed_fetch", {
+        _content, structured = _dispatch("feed_read", {
             "urls": ["https://example.test/feed.xml"], "since": "2026-09-27T11:00:00Z"})
 
         feed = structured["feeds"][0]
@@ -193,7 +193,7 @@ class TestSinceActuallyFilters:
 
     def test_without_since_the_same_feed_comes_back_whole(self, served):
         """对照：有 since 与没有 since 必须**不一样**，那才是过滤器在跑的证据。"""
-        _content, structured = _dispatch("feed_fetch", {
+        _content, structured = _dispatch("feed_read", {
             "urls": ["https://example.test/feed.xml"]})
 
         assert len(structured["feeds"][0]["items"]) == 4
@@ -237,9 +237,9 @@ class _ServedPdf:
 
 
 def _fetch(url: str, **args) -> dict:
-    """One smart_fetch through the real dispatcher (loopback hosts need the opt-in)."""
+    """One web_read through the real dispatcher (loopback hosts need the opt-in)."""
     return asyncio.run(MasterFetchServer()._dispatch(
-        "smart_fetch",
+        "web_read",
         {"url": url, "allow_private": True, "timeout": 60000, **args}))[1]
 
 

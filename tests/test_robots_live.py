@@ -105,7 +105,7 @@ async def test_smart_fetch_refuses_the_real_disallowed_page():
     verdict = await _check_or_skip("https://httpbin.org/deny")
     assert verdict.allowed is False, verdict.reason
     srv = server_mod.MasterFetchServer()
-    out = await srv.smart_fetch("https://httpbin.org/deny", cache_ttl=0, timeout=20000)
+    out = await srv.web_read("https://httpbin.org/deny", cache_ttl=0, timeout=20000)
     if out.error.startswith("timeout") or out.status == -1:
         pytest.skip(f"no route to httpbin: {out.error[:80]}")
     assert out.error.startswith("robots_disallowed"), out.error
@@ -120,7 +120,7 @@ async def test_smart_fetch_refuses_the_real_disallowed_page():
 
 async def test_smart_fetch_allows_a_real_allowed_page():
     srv = server_mod.MasterFetchServer()
-    out = await srv.smart_fetch("https://httpbin.org/get", cache_ttl=0, timeout=20000)
+    out = await srv.web_read("https://httpbin.org/get", cache_ttl=0, timeout=20000)
     if out.status in (-1, 0) and not out.content_ok:
         pytest.skip(f"no route to httpbin: {out.error[:80]}")
     assert out.status == 200
@@ -130,7 +130,7 @@ async def test_smart_fetch_allows_a_real_allowed_page():
 
 async def test_ignore_robots_overrides_the_real_verdict():
     srv = server_mod.MasterFetchServer()
-    out = await srv.smart_fetch("https://httpbin.org/deny", cache_ttl=0,
+    out = await srv.web_read("https://httpbin.org/deny", cache_ttl=0,
                                 ignore_robots=True, timeout=20000)
     if out.status in (-1, 0) and not out.content_ok:
         pytest.skip(f"no route to httpbin: {out.error[:80]}")

@@ -3,7 +3,7 @@
 都不是报告里的条目，是拿真网络撞出来的，两个都属于这个项目最在意的那一类：
 **调用看起来成功，实际没做它承诺的事**。
 
-1. `smart_fetch` 一旦同时传 `schema` 和 `max_content_chars`，抽取器拿到的是
+1. `web_read` 一旦同时传 `schema` 和 `max_content_chars`，抽取器拿到的是
    **被截断的 HTML**。实测 HN 首页同一份 schema：不传 `max_content_chars`
    得到 `{"n":30,"first":"Xiaomi MiMo v2.6",…}`，传 400（被钳到 500）得到三个
    空字符串，而回包 `content_ok: true`、`next_action` 还建议「offset=500 继续
@@ -63,7 +63,7 @@ def _stub_tier(monkeypatch, html: str, captured: dict) -> None:
 
 def _fetch_schema(schema: dict, **kwargs) -> ResponseModel:
     server = server_mod.MasterFetchServer()
-    return asyncio.run(server.smart_fetch(
+    return asyncio.run(server.web_read(
         url="https://example.com/padded", schema=schema, **kwargs,
     ))
 

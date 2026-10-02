@@ -18,7 +18,7 @@ def _page_html(n_links: int = 30) -> str:
 
 
 class _CountingServer:
-    """Fake server that records every smart_fetch it is asked to perform."""
+    """Fake server that records every web_read it is asked to perform."""
 
     def __init__(self, body: str | None = None, status: int = 200,
                  content_ok: bool = True):
@@ -27,7 +27,7 @@ class _CountingServer:
         self._status = status
         self._content_ok = content_ok
 
-    async def smart_fetch(self, url, **kwargs):
+    async def web_read(self, url, **kwargs):
         self.calls.append(url)
         return ResponseModel(url=url, status=self._status, content=[self._body],
                              content_type="text/html", fetcher_used="http",
@@ -47,7 +47,7 @@ class TestDiscoverOnlyIsHonestAboutItsCost:
     async def test_the_fetch_count_is_exactly_pages_crawled(self):
         server = _CountingServer()
 
-        out = await crawl_mod.smart_crawl(
+        out = await crawl_mod.web_crawl(
             server, "https://example.com/", max_pages=10, max_depth=2, discover_only=True)
 
         assert len(server.calls) == 10, "请求数必须等于 pages_crawled"
@@ -57,7 +57,7 @@ class TestDiscoverOnlyIsHonestAboutItsCost:
     @pytest.mark.asyncio
     async def test_map_mode_returns_no_content_and_claims_none(self):
         """`content_ok=true` 曾经是 map 模式的谎：字段定义是「取到并抽取了正文」。"""
-        out = await crawl_mod.smart_crawl(
+        out = await crawl_mod.web_crawl(
             _CountingServer(), "https://example.com/", max_pages=3, max_depth=1,
             discover_only=True)
 
@@ -70,7 +70,7 @@ class TestDiscoverOnlyIsHonestAboutItsCost:
 
     @pytest.mark.asyncio
     async def test_the_summary_states_the_fetch_count_and_not_a_content_claim(self):
-        out = await crawl_mod.smart_crawl(
+        out = await crawl_mod.web_crawl(
             _CountingServer(), "https://example.com/", max_pages=4, max_depth=1,
             discover_only=True)
 
@@ -83,7 +83,7 @@ class TestDiscoverOnlyIsHonestAboutItsCost:
         """一次请求拿到起始页的链接图 —— 这是「只想发现链接」的正确姿势。"""
         server = _CountingServer()
 
-        out = await crawl_mod.smart_crawl(
+        out = await crawl_mod.web_crawl(
             server, "https://example.com/", max_pages=1, max_depth=1, discover_only=True)
 
         assert len(server.calls) == 1
@@ -98,7 +98,7 @@ class TestDiscoverOnlyIsHonestAboutItsCost:
         被读到的是「stopped early」那条；专门的 map 分支只在跨域重定向的边缘情形
         可达。这条测试钉住的是前者。
         """
-        out = await crawl_mod.smart_crawl(
+        out = await crawl_mod.web_crawl(
             _CountingServer(), "https://example.com/", max_pages=3, max_depth=1,
             discover_only=True)
 
@@ -114,7 +114,7 @@ class TestDiscoverOnlyIsHonestAboutItsCost:
         这条复现的是一条真实的错位：content_ok 现在诚实地为 False，若不做区分，
         「全部页面都没有正文」的诊断会在一次成功的 map 调用上触发。
         """
-        out = await crawl_mod.smart_crawl(
+        out = await crawl_mod.web_crawl(
             _CountingServer(), "https://example.com/", max_pages=1, max_depth=0,
             discover_only=True)
 
@@ -128,7 +128,7 @@ class TestDiscoverOnlyIsHonestAboutItsCost:
         body = f"<html><body><article><h1>T</h1><p>{para}</p><p>{para}</p></article></body></html>"
         server = _CountingServer(body=body)
 
-        out = await crawl_mod.smart_crawl(
+        out = await crawl_mod.web_crawl(
             server, "https://example.com/", max_pages=1, max_depth=0)
 
         assert out.pages[0].content_ok is True
@@ -218,7 +218,7 @@ class TestCssSelectorOnNonHtml:
         server = MasterFetchServer()
         server.get = fake_get
 
-        out = await server.smart_fetch("https://example.com/feed",
+        out = await server.web_read("https://example.com/feed",
                                        css_selector="h1", cache_ttl=0)
 
         assert "css_selector 'h1' was NOT applied" in out.summary, out.summary
@@ -364,7 +364,7 @@ class TestAllowPrivateIsNarrow:
         # allow_private lives in the options bag; the MCP dispatcher promotes it to
         # a keyword, so calling the method directly takes it as one.
         target = "http://127.0.0.1:8899/secret.txt"
-        out = await server.smart_fetch(target, allow_private=True,
+        out = await server.web_read(target, allow_private=True,
                                        cache_ttl=0, timeout=6000)
         assert hit == [target], out.error
         assert out.content == ["dev server body"]
@@ -381,7 +381,7 @@ class TestAllowPrivateIsNarrow:
         server.get = _never
         server.stealthy_fetch = _never
 
-        out = await server.smart_fetch("http://127.0.0.1:8899/secret.txt",
+        out = await server.web_read("http://127.0.0.1:8899/secret.txt",
                                        cache_ttl=0, timeout=6000)
         assert "internal/private" in out.error, out.error
         assert out.content == []
@@ -473,7 +473,7 @@ class TestErrorBodyIsKept:
         server.stealthy_fetch = no_stealthy
         monkeypatch.setattr(server, "_fetch_from_archive", fake_archive)
 
-        out = await server.smart_fetch("https://api.example.com/items/42",
+        out = await server.web_read("https://api.example.com/items/42",
                                        cache_ttl=0, timeout=6000)
 
         assert out.content == [live], out.content
@@ -586,7 +586,7 @@ class TestDeadProxyFailsFast:
 
         import time
         started = time.monotonic()
-        out = await server.smart_fetch(
+        out = await server.web_read(
             "https://example.com/", proxy="http://127.0.0.1:9/",
             cache_ttl=0, timeout=30000)
         elapsed = time.monotonic() - started
@@ -620,7 +620,7 @@ class TestDeadProxyFailsFast:
         server.get = _never
         server.stealthy_fetch = _never
         for pinned in ("http", "stealthy"):
-            out = await server.smart_fetch(
+            out = await server.web_read(
                 "https://example.com/", proxy="http://127.0.0.1:9/",
                 force_fetcher=pinned, cache_ttl=0)
             assert out.error.startswith("proxy_unreachable"), f"{pinned}: {out.error}"
@@ -633,7 +633,7 @@ class TestDeadProxyFailsFast:
         proxy_socket["mode"] = "refused"
         server = MasterFetchServer()
 
-        out = await server.smart_fetch(
+        out = await server.web_read(
             "https://example.com/", proxy="http://user:sekret@127.0.0.1:9/",
             cache_ttl=0, timeout=10000)
 
@@ -657,7 +657,7 @@ class TestDeadProxyFailsFast:
         server = MasterFetchServer()
         server.get = fake_get
 
-        out = await server.smart_fetch(
+        out = await server.web_read(
             "https://example.com/", proxy="http://127.0.0.1:7890/",
             cache_ttl=0, timeout=5000)
 

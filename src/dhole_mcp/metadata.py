@@ -148,7 +148,7 @@ def extract_image_urls(html: str, url: str, max_n: int = 20) -> list[str]:
     """Extract absolute image URLs from <img> tags. Deduped, order-preserving,
     capped at max_n. Skips data: URIs. Prefers src; falls back to data-src for
     lazy-loaded pages (placeholder in src, real image in data-src). Used by
-    smart_fetch's opt-in include_media flag so a multimodal agent can pull the
+    web_read's opt-in include_media flag so a multimodal agent can pull the
     page's images."""
     if not html:
         return []

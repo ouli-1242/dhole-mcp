@@ -49,7 +49,7 @@ async def _ask(url, markers=None, **kw):
     """经由内部通道发起一次复验 —— 这就是 17.0 之后 `watch` 走的同一条路。"""
     tok = server_mod._REVALIDATE.set(markers)
     try:
-        return await MasterFetchServer().smart_fetch(url, allow_private=True, **kw)
+        return await MasterFetchServer().web_read(url, allow_private=True, **kw)
     finally:
         server_mod._REVALIDATE.reset(tok)
 
@@ -194,7 +194,7 @@ class TestTheConditionalCall:
         `watch` 存基线时读的就是这里；字段下线之后，这条是那个交接唯一的证人。
         """
         url, srv = origin
-        r = await MasterFetchServer().smart_fetch(url, allow_private=True, cache_ttl=0)
+        r = await MasterFetchServer().web_read(url, allow_private=True, cache_ttl=0)
         assert r.status == 200
         assert r._validators == {"etag": ETAG, "last_modified": LM}
         assert "cache_validators" not in r.model_dump(), "内部落点不许上线"
@@ -209,11 +209,11 @@ class TestTheConditionalCall:
         往返钉在这里，并让拿到的 etag 真的换来一个 304。
         """
         url, _ = origin
-        fresh = await MasterFetchServer().smart_fetch(url, allow_private=True,
+        fresh = await MasterFetchServer().web_read(url, allow_private=True,
                                                       cache_ttl=600)
         assert fresh._validators == {"etag": ETAG, "last_modified": LM}
 
-        hit = await MasterFetchServer().smart_fetch(url, allow_private=True,
+        hit = await MasterFetchServer().web_read(url, allow_private=True,
                                                     cache_ttl=600)
         assert hit.cached is True, "这一条测的就是缓存命中那条路径"
         assert hit._validators == {"etag": ETAG, "last_modified": LM}, \
@@ -278,7 +278,7 @@ class TestTheConditionalCall:
     async def test_a_conditional_call_asks_the_origin_not_the_cache(self, origin):
         """先缓存一份 200，再问「变了吗」：必须真的去问站点，不能拿记忆作答。"""
         url, srv = origin
-        await MasterFetchServer().smart_fetch(url, allow_private=True, cache_ttl=600)
+        await MasterFetchServer().web_read(url, allow_private=True, cache_ttl=600)
         before = srv.hits
         r = await _ask(url, {"etag": ETAG}, cache_ttl=600)
         assert srv.hits == before + 1, "the conditional question never reached the origin"
@@ -413,12 +413,12 @@ class TestTheFeedCutoff:
         assert (out.since, out.items_older_than_since, out.items_without_date) == ("", 0, 0)
 
     def test_the_projection_shows_the_receipts(self):
-        """feed_fetch 返回的是自己拼的 dict：模型上的新字段不投影就等于不存在。
+        """feed_read 返回的是自己拼的 dict：模型上的新字段不投影就等于不存在。
 
         判据是「这个工具的 wire 条目里有没有」而非「有没有写在描述里」：收据清单
         现在归在 since 参数的说明里（一个事实一处），只查描述会误报成信息丢失。
         """
         tools = {t["name"]: t for t in MasterFetchServer._TOOL_DEFS}
-        text = json.dumps(tools["feed_fetch"], ensure_ascii=False).lower()
+        text = json.dumps(tools["feed_read"], ensure_ascii=False).lower()
         assert "items_older_than_since" in text and "since" in text
-        assert "since" in tools["feed_fetch"]["inputSchema"]["properties"]
+        assert "since" in tools["feed_read"]["inputSchema"]["properties"]

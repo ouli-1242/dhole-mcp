@@ -66,7 +66,7 @@ Then just call — the first attach asks, the user answers once:
 ### Scenario: screenshots an agent can see / semantic focus
 
 - Element captures are **always on**: `selector` crops on the `screenshot` tool and `{"screenshot": {...}}` inside `actions` (element shots ride the response as image blocks). The captcha discipline (≤3 tries then hand off; DataDome / Akamai / interactive Turnstile / 2FA / sliders always hand off) is part of the tool descriptions. `decode_qr` (local OpenCV QR decode, in the `[all]` extra) is deterministic local work
-- `focus` block-picking scores with BM25 by default. `focus_engine="neural"` switches that ONE call to the local cross-encoder (~12.5s of CPU per page — budget timeout for bulk); model missing = explicit error (`neural_focus_model_missing`), never a silent download. The model arrives on the first neural smart_search (one-time, resumable); `focus_mode="best"` returns the single top block + heading
+- `focus` block-picking scores with BM25 by default. `focus_engine="neural"` switches that ONE call to the local cross-encoder (~12.5s of CPU per page — budget timeout for bulk); model missing = explicit error (`neural_focus_model_missing`), never a silent download. The model arrives on the first neural web_search (one-time, resumable); `focus_mode="best"` returns the single top block + heading
 
 ### Scenario: repeatable tasks, change monitoring, stored credentials
 
@@ -84,7 +84,7 @@ Then just call — the first attach asks, the user answers once:
 
 ### Scenario: context overhead too high
 
-- `DHOLE_TOOLS` — register only the listed tools (`smart_fetch,smart_search` ≈ −49% connection overhead). Worth it for lightweight search-and-fetch sessions
+- `DHOLE_TOOLS` — register only the listed tools (`web_read,web_search` ≈ −49% connection overhead). Worth it for lightweight search-and-fetch sessions
 - `DHOLE_DEFAULT_CONTENT_CHARS` — default body budget (default 40000, range 500–200000). Lower = fewer tokens now, the rest stays reachable via `offset`/`next_offset`
 - The wire shape is fixed: responses are compact (a field that is ABSENT is at its documented default), text-only, with no advertised outputSchema
 
@@ -112,6 +112,6 @@ Then just call — the first attach asks, the user answers once:
 | `dhole engines list` | Per-engine verdict, remaining cooldown, active backoff |
 | `dhole engines probe` | One real query per engine (hits / latency / block reason) |
 | `dhole engines reset` | Clear cooldowns now |
-| reranker model | No command selects it: `bge-zh` (bilingual, ~279MB) is the default and a neural `smart_search` fetches it on first use (resumable). `~/.dhole/config/reranker.json` (`{"model": "<name>"}`) is still honoured if you wrote one by hand — `min_raw_relevance` is calibrated per model, so recalibrate after switching. A later 17.0 step collapses the registry to one model and this file disappears |
+| reranker model | No command selects it: `bge-zh` (bilingual, ~279MB) is the default and a neural `web_search` fetches it on first use (resumable). `~/.dhole/config/reranker.json` (`{"model": "<name>"}`) is still honoured if you wrote one by hand — `min_raw_relevance` is calibrated per model, so recalibrate after switching. A later 17.0 step collapses the registry to one model and this file disappears |
 | `dhole --http --host --port` | Serve over streamable HTTP instead of stdio. **No authentication**: `--host 0.0.0.0` exposes "fetch any URL on your behalf" to the whole network — put a reverse proxy / auth / firewall in front on shared networks |
 | self-update | No command does it: 17.0 deleted `dhole -u` and the unattended reinstall (an any-ImportError trigger that killed every dhole process and force-reinstalled hundreds of MB). Update by hand — `git pull && python -m pip install -e ".[all]"` — then restart the host; `dhole -v` prints exactly this |

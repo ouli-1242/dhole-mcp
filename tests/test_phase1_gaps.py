@@ -262,7 +262,7 @@ class TestSearchReportsAFullyFilteredFloor:
         monkeypatch.setattr(S, "neural_rerank",
                             lambda q, r, **kw: [])
 
-        out = await S.smart_search(None, "dns resolution", 6, min_relevance=0.5)
+        out = await S.web_search(None, "dns resolution", 6, min_relevance=0.5)
 
         assert out.results == []
         assert "min_relevance=0.5" in out.error, out.error
@@ -289,11 +289,11 @@ class TestSearchReportsAFullyFilteredFloor:
         monkeypatch.setattr(S, "set_cached", no_set)
         monkeypatch.setattr(S, "multi_search", fake_multi_search)
 
-        await S.smart_search(None, "plain query", 6)
+        await S.web_search(None, "plain query", 6)
         assert keys and "minrel" not in keys[0]
 
         keys.clear()
-        await S.smart_search(None, "plain query", 6, min_relevance=0.4)
+        await S.web_search(None, "plain query", 6, min_relevance=0.4)
         assert keys and "minrel=0.4" in keys[0], \
             "非默认阈值必须进缓存键，否则 0.4 的调用会被喂回未加阈值的旧结果"
 
@@ -325,7 +325,7 @@ class TestSearchReportsAFullyFilteredFloor:
         monkeypatch.setattr(S, "neural_rerank",
                             lambda q, r, **kw: [(x, 1.0) for x in r])
 
-        out = await S.smart_search(None, "dns resolution", 6, min_relevance=5.0)
+        out = await S.web_search(None, "dns resolution", 6, min_relevance=5.0)
         assert "min_relevance=5.0 is outside 0-1" in out.fetch_hint, out.fetch_hint
 
 

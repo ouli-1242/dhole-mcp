@@ -62,7 +62,7 @@ The response distinguishes "credentials rejected" (supply a fresh token) from "n
 
 ### Sites behind login
 
-Five paths, cheapest first: (1) HTTP tier — user-supplied cookies (`cookies` + `session_id` to keep the jar) or an API token (`auth`: basic/bearer/header). (2) The **no-password browser fallback (17.0)**: a named `session_id` bridges the jar into that session's dedicated stealthy browser (and harvests back), so HTTP-tier login state rides browser calls; combine with `check_login` + snapshot actions + gated submit to operate the site without ever touching a password. (3) **Stored-credential login (17.0)** — `vault(op='match')` then `login`; see "Stored-credential login" below. (4) CDP attach (17.0) — `smart_fetch` with `cdp_url` (+ `check_login=true`) runs the fetch inside the user's real logged-in Chrome; requires one-time user setup (configuration.md "CDP attach"). (5) Still impossible: DataDome / Akamai / interactive Turnstile walls and 2FA — none of these paths defeats challenges; say so honestly.
+Five paths, cheapest first: (1) HTTP tier — user-supplied cookies (`cookies` + `session_id` to keep the jar) or an API token (`auth`: basic/bearer/header). (2) The **no-password browser fallback (17.0)**: a named `session_id` bridges the jar into that session's dedicated stealthy browser (and harvests back), so HTTP-tier login state rides browser calls; combine with `check_login` + snapshot actions + gated submit to operate the site without ever touching a password. (3) **Stored-credential login (17.0)** — `vault(op='match')` then `login`; see "Stored-credential login" below. (4) CDP attach (17.0) — `web_read` with `cdp_url` (+ `check_login=true`) runs the fetch inside the user's real logged-in Chrome; requires one-time user setup (configuration.md "CDP attach"). (5) Still impossible: DataDome / Akamai / interactive Turnstile walls and 2FA — none of these paths defeats challenges; say so honestly.
 
 ### Stored-credential login (vault / login) fails
 
@@ -97,7 +97,7 @@ Attach-specific failures:
 
 ### Focus behaves differently than expected
 
-- `neural_focus_model_missing` — `focus_engine='neural'` was asked but the reranker model isn't downloaded; no request was made. For this call pass `focus_engine='bm25'` (plain keyword focus, no model), or let the model download once: any neural `smart_search` (one-time, resumable) or let a neural `smart_search` fetch it
+- `neural_focus_model_missing` — `focus_engine='neural'` was asked but the reranker model isn't downloaded; no request was made. For this call pass `focus_engine='bm25'` (plain keyword focus, no model), or let the model download once: any neural `web_search` (one-time, resumable) or let a neural `web_search` fetch it
 - `focus_engine_not_permitted` — 17.0 removed this error (neural focus is a per-call choice now, no license). Seeing it means the installed dhole predates 17.0
 - A weak-hit note in `next_action` ("best block scored below the intent floor") — the fetch succeeded but the page likely doesn't answer the focus query; `content_ok` stays true by design. Pivot: search for a better source instead of re-reading this page
 

@@ -40,7 +40,7 @@ _METADATA_HOSTS = frozenset({
     "fd00:ec2::254", "100.100.100.200",
 })
 
-# 单次调用的 allowlist（smart_fetch 的 options.allow_private）。放在这里而不是当作
+# 单次调用的 allowlist（web_read 的 options.allow_private）。放在这里而不是当作
 # 参数层层下传，是为了让**每一个** validate_url 调用点 —— 包括抓取循环里的重定向
 # 复校验、robots.txt 那条旁路、tcp_preflight 的裸连接预检（它走
 # url_targets_internal -> validate_url）—— 共用同一个答案，不会出现
@@ -100,9 +100,9 @@ def set_allow_private(value) -> Any:
 def allow_private_scope(value):
     """Run a block under a per-call private-host policy.
 
-    ``smart_fetch`` gets this from its options decorator, which pushes the
+    ``web_read`` gets this from its options decorator, which pushes the
     contextvar for the whole call. Tools that never went through that decorator
-    (``screenshot``, ``feed_fetch``) had no way to name a private target at all,
+    (``screenshot``, ``feed_read``) had no way to name a private target at all,
     so the same product decision read as "loopback is fetchable" in one tool and
     "loopback is refused outright" in the next. This gives them the identical
     mechanism instead of a second policy to keep in sync.

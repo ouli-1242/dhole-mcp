@@ -76,7 +76,7 @@ class TestUsageLogPermissions:
         home = tmp_path / "home"
         monkeypatch.setenv("DHOLE_HOME", str(home))
         monkeypatch.setenv("DHOLE_USAGE_LOG", "1")
-        server._log_tool_call("smart_fetch", True, 12.3)
+        server._log_tool_call("web_read", True, 12.3)
 
         assert (str(home), oct(0o700)) in chmod_spy, chmod_spy
         assert (str(home / "usage.jsonl"), oct(0o600)) in chmod_spy, chmod_spy
@@ -88,7 +88,7 @@ class TestUsageLogPermissions:
         external = tmp_path / "elsewhere" / "calls.jsonl"
         monkeypatch.setenv("DHOLE_HOME", str(tmp_path / "home"))
         monkeypatch.setenv("DHOLE_USAGE_LOG", str(external))
-        server._log_tool_call("smart_fetch", True, 12.3)
+        server._log_tool_call("web_read", True, 12.3)
 
         assert external.exists()
         assert chmod_spy == [], chmod_spy
@@ -99,12 +99,12 @@ class TestUsageLogPermissions:
         home = tmp_path / "home"
         monkeypatch.setenv("DHOLE_HOME", str(home))
         monkeypatch.setenv("DHOLE_USAGE_LOG", "1")
-        server._log_tool_call("smart_fetch", True, 1.0)
-        server._log_tool_call("smart_search", False, 2.0, "boom")
+        server._log_tool_call("web_read", True, 1.0)
+        server._log_tool_call("web_search", False, 2.0, "boom")
 
         lines = (home / "usage.jsonl").read_text(encoding="utf-8").splitlines()
         assert len(lines) == 2
-        assert json.loads(lines[0])["tool"] == "smart_fetch"
+        assert json.loads(lines[0])["tool"] == "web_read"
         assert json.loads(lines[1])["error"] == "boom"
 
 
@@ -168,7 +168,7 @@ class TestRealModeOnPosix:
         home = tmp_path / "home"
         monkeypatch.setenv("DHOLE_HOME", str(home))
         monkeypatch.setenv("DHOLE_USAGE_LOG", "1")
-        server._log_tool_call("smart_fetch", True, 1.0)
+        server._log_tool_call("web_read", True, 1.0)
 
         assert stat.S_IMODE((home / "usage.jsonl").stat().st_mode) == 0o600
         assert stat.S_IMODE(home.stat().st_mode) == 0o700

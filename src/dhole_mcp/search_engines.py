@@ -3,7 +3,7 @@
 No API key, no account, no third-party service at runtime. The actual multi-
 backend scraping + parsing + rotation lives in `search_metasearch.py` (vendored
 + stripped from ddgs, MIT, attributed in NOTICE.ddgs.txt). This module is the
-thin dhole-side adapter: maps dhole's smart_search params (engines, freshness,
+thin dhole-side adapter: maps dhole's web_search params (engines, freshness,
 site, region, page) onto the metasearch, maps results back to RawResult with
 cross-backend consensus, and builds the per-engine reports.
 
@@ -17,7 +17,7 @@ name that exists.
 这些站点，只是不再把词条当成结构化答案）。yahoo/mwmbl 是覆盖面窄的补充索引。
 Engines run in PARALLEL; one that CAPTCHAs / rate-limits /
 has no topic-match just yields nothing and the others carry. Search is 100%
-HTTP (no browser) - the single Patchright browser stays for smart_fetch only.
+HTTP (no browser) - the single Patchright browser stays for web_read only.
 
 DHOLE_SEARCH_PROXY (http/https/socks5) is the one egress a caller can name for
 per-IP throttling - the one thing no scraper can escape from one IP.
@@ -50,7 +50,7 @@ def _get_metasearch():
 
 
 # Public default engine pool (order = rough preference). `engines=None` in
-# smart_search uses this via the metasearch.
+# web_search uses this via the metasearch.
 # 组合：国内 4（baidu/bing/sogou/so360）+ 国际 4（bing_global/yandex/brave/duckduckgo），
 # 8 家全部入池 —— 17.0 之后没有 opt-in 引擎，注册表就是默认池。
 # baidu 排首位：国内直连、独立索引（百度自家索引，非 bing/google 代理），实测无反爬。

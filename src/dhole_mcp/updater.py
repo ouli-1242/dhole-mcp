@@ -1117,7 +1117,7 @@ def _append_wire_cost(checks) -> None:
         "connect cost", "ok",
         f"{len(defs)} tool(s), {total} chars on the wire "
         f"~{total / 4.16:.0f} tokens (4.16 is this payload's measured chars/token)"
-        " - to pay less: DHOLE_TOOLS=smart_fetch,smart_search (restart the host)",
+        " - to pay less: DHOLE_TOOLS=web_read,web_search (restart the host)",
         "",
     ))
 
@@ -1149,7 +1149,7 @@ def _append_live_probe(checks) -> None:
         return out[1] if isinstance(out, tuple) else out
 
     try:
-        search = asyncio.run(_call("smart_search", {
+        search = asyncio.run(_call("web_search", {
             "query": PROBE_SEARCH_QUERY, "max_results": 3}))
     except Exception as exc:  # noqa: BLE001
         search = {"error": f"{type(exc).__name__}: {exc}"}
@@ -1169,7 +1169,7 @@ def _append_live_probe(checks) -> None:
                        f"rerank={search.get('rerank_mode', '?')}", ""))
 
     try:
-        fetch = asyncio.run(_call("smart_fetch", {"url": PROBE_FETCH_URL}))
+        fetch = asyncio.run(_call("web_read", {"url": PROBE_FETCH_URL}))
     except Exception as exc:  # noqa: BLE001
         fetch = {"error": f"{type(exc).__name__}: {exc}"}
     if fetch.get("error"):

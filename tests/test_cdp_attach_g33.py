@@ -102,7 +102,7 @@ class TestCdpAttachGate:
 class TestAttachIsPerCallNotPerBatch:
     """``urls=`` + ``cdp_url=`` 必须在闸口**之前**拒绝。
 
-    批量里每个 URL 各自再进一次 smart_fetch，cdp_url 传不下去。若让闸口先过，这次
+    批量里每个 URL 各自再进一次 web_read，cdp_url 传不下去。若让闸口先过，这次
     调用会做两件互相矛盾的事：把一个主机的授权写进磁盘（用户同意的是"attach"，
     结果一页都没 attach），并且每一页静默地走未 attach 的路。两条都是静默降级，
     所以这里既拒绝调用，也要求名册仍然是空的。
@@ -118,7 +118,7 @@ class TestAttachIsPerCallNotPerBatch:
             raise AssertionError("被拒绝的批量调用不许进入抓取层")
         monkeypatch.setattr(MasterFetchServer, "_smart_fetch_bulk", _never)
 
-        bulk = asyncio.run(MasterFetchServer().smart_fetch(
+        bulk = asyncio.run(MasterFetchServer().web_read(
             url="", urls=self.URLS, cdp_url=self.CDP, confirm=True))
 
         assert bulk.total == 2 and bulk.successful == 0
@@ -166,7 +166,7 @@ class TestCdpLaneReachesTheBrowser:
 
         monkeypatch.setattr(MasterFetchServer, "_force_fetch", fake_force_fetch)
         with pytest.raises(_Stop):
-            asyncio.run(MasterFetchServer().smart_fetch(
+            asyncio.run(MasterFetchServer().web_read(
                 url="https://example.com/", cdp_url=self.CDP, confirm=True, **call))
         return seen
 

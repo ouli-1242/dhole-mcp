@@ -12,7 +12,7 @@
 绕开它的那条路。
 
 最后一组不在抽取器里，在调用链上：实测报告复现的 `'int' object is not iterable` 是
-`smart_fetch` 的 schema 分支把参数送错了位置，与嵌套无关。
+`web_read` 的 schema 分支把参数送错了位置，与嵌套无关。
 """
 
 from __future__ import annotations
@@ -241,7 +241,7 @@ def _stub_tier(monkeypatch, seen: dict) -> dict:
 
 
 class TestTheSchemaBranchCallsTheTierInOrder:
-    """G14 的另一半不在抽取器里，在 ``smart_fetch`` 的 schema 分支：那次
+    """G14 的另一半不在抽取器里，在 ``web_read`` 的 schema 分支：那次
     ``_auto_escalate`` 调用漏了一个位置参数（``use_trafilatura``，17.0 已删），之后每个参数集体
     错一位 —— ``cookies`` 因此收到 ``_SCHEMA_SOURCE_MAX_CHARS``，被
     ``_safe_cookie_dict`` 当成 cookie 列表遍历。症状是**任何**带 schema 的调用都回
@@ -255,7 +255,7 @@ class TestTheSchemaBranchCallsTheTierInOrder:
         cookies = [{"name": "sid", "value": "v"}]
         seen = _stub_tier(monkeypatch, {})
 
-        asyncio.run(MasterFetchServer().smart_fetch(
+        asyncio.run(MasterFetchServer().web_read(
             url="https://example.com", schema=NESTED_QUOTES, cache_ttl=0,
             cookies=cookies, extra_headers={"X-Test": "1"},
             useragent="dhole-test/1", timeout=12345,
@@ -283,7 +283,7 @@ class TestTheSchemaBranchCallsTheTierInOrder:
 
         tok = _REVALIDATE.set({"last_modified": "2020-01-01"})
         try:
-            asyncio.run(MasterFetchServer().smart_fetch(
+            asyncio.run(MasterFetchServer().web_read(
                 url="https://example.com", schema=NESTED_QUOTES, cache_ttl=3600,
             ))
         finally:
@@ -296,7 +296,7 @@ class TestTheSchemaBranchCallsTheTierInOrder:
         """整条链路的验收：抽取器的单测全绿时，工具仍可能一个字节都返不回来。"""
         _stub_tier(monkeypatch, {})
 
-        out = asyncio.run(MasterFetchServer().smart_fetch(
+        out = asyncio.run(MasterFetchServer().web_read(
             url="https://example.com", schema=NESTED_QUOTES, cache_ttl=0,
         ))
 

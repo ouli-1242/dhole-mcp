@@ -304,7 +304,7 @@ def _usable_count(rows: Any) -> int:
 def _split_region(region: str) -> tuple[str, str]:
     """``"us-en"`` -> ``("us", "en")``，对调用方能送进来的形状都不炸。
 
-    region 是 dhole 的公开参数（`smart_search(region=)`，也由 location+language 派生），
+    region 是 dhole 的公开参数（`web_search(region=)`，也由 location+language 派生），
     所以 "cn"、"zh-Hans-CN"、空串都会走到这里。原先两处用户写的是
     `country, lang = region.lower().split("-")` —— 段数不对就 ValueError，而 metasearch
     把它记成 `error:ValueError`，engine_health 报 blocked。一个 region 字符串能让一家

@@ -51,7 +51,7 @@ class _FakeSite:
         self.sleep = sleep
         self.pages = pages or {}
 
-    async def smart_fetch(self, url, **kwargs):
+    async def web_read(self, url, **kwargs):
         self.fetched.append(url)
         if self.sleep:
             await asyncio.sleep(self.sleep)
@@ -77,7 +77,7 @@ class TestBudgetGatesReportThemselves:
         links = [f"/p{i}" for i in range(4)]
         site = _FakeSite({SEED: _page_with_links(links)})
 
-        out = await crawl_mod.smart_crawl(site, SEED, max_pages=2, max_depth=1,
+        out = await crawl_mod.web_crawl(site, SEED, max_pages=2, max_depth=1,
                                           cache_ttl=0)
 
         assert out.pages_crawled == 2
@@ -92,7 +92,7 @@ class TestBudgetGatesReportThemselves:
         断言的就是这个语义：请求发了、页没报上来、原因说了出口。"""
         site = _FakeSite({SEED: _page_with_links(["/a", "/b"])}, sleep=0.05)
 
-        out = await crawl_mod.smart_crawl(site, SEED, max_pages=5, max_depth=1,
+        out = await crawl_mod.web_crawl(site, SEED, max_pages=5, max_depth=1,
                                           deadline_ms=30, cache_ttl=0)
 
         assert site.fetched == [SEED]          # 请求发了
@@ -106,7 +106,7 @@ class TestBudgetGatesReportThemselves:
     async def test_a_crawl_that_hit_nothing_reports_no_gate(self):
         site = _FakeSite({SEED: _page_with_links(["/a", "/b"])})
 
-        out = await crawl_mod.smart_crawl(site, SEED, max_pages=5, max_depth=1,
+        out = await crawl_mod.web_crawl(site, SEED, max_pages=5, max_depth=1,
                                           cache_ttl=0)
 
         assert (out.truncated_by_max_pages, out.truncated_by_time) == (False, False)
@@ -115,11 +115,11 @@ class TestBudgetGatesReportThemselves:
     @pytest.mark.asyncio
     async def test_per_page_cap_truncates_and_hands_the_offset(self):
         """每页预算到点：内容被切到上限，is_truncated/next_offset 替调用方记住
-        「这页还有」，让他知道去 smart_fetch(offset=) 续读，而不是当整页就这么长。"""
+        「这页还有」，让他知道去 web_read(offset=) 续读，而不是当整页就这么长。"""
         big = "<p>" + ("word " * 20000) + "</p>"          # ~100k chars
         site = _FakeSite({SEED: big})
 
-        out = await crawl_mod.smart_crawl(site, SEED, max_pages=1,
+        out = await crawl_mod.web_crawl(site, SEED, max_pages=1,
                                           max_content_chars_per=500, cache_ttl=0)
 
         assert out.pages_crawled == 1
@@ -132,7 +132,7 @@ class TestBudgetGatesReportThemselves:
     async def test_a_page_under_the_cap_is_not_marked_truncated(self):
         site = _FakeSite({SEED: "<p>short page</p>"})
 
-        out = await crawl_mod.smart_crawl(site, SEED, max_pages=1,
+        out = await crawl_mod.web_crawl(site, SEED, max_pages=1,
                                           max_content_chars_per=5000, cache_ttl=0)
 
         page = out.pages[0]
@@ -144,7 +144,7 @@ class TestBudgetGatesReportThemselves:
         """下限 500：往 crawled 结果里塞 10 个字符的页是没人要的。夹了要说。"""
         site = _FakeSite({SEED: "<p>" + ("word " * 4000) + "</p>"})
 
-        out = await crawl_mod.smart_crawl(site, SEED, max_pages=1,
+        out = await crawl_mod.web_crawl(site, SEED, max_pages=1,
                                           max_content_chars_per=10, cache_ttl=0)
 
         assert "clamped 10->500" in out.summary
@@ -192,7 +192,7 @@ class TestSameDomainNormalization:
         site = _FakeSite({SEED: _page_with_links(
             ["/kept", "https://other.example.com/x", "https://sub.gates.example.com/y"])})
 
-        out = await crawl_mod.smart_crawl(site, SEED, max_pages=5, max_depth=1,
+        out = await crawl_mod.web_crawl(site, SEED, max_pages=5, max_depth=1,
                                           cache_ttl=0)
 
         assert all(urlparse_netloc_is_root(u) for u in site.fetched)
@@ -243,7 +243,7 @@ class TestSubtreePatternContract:
     @pytest.mark.parametrize("bad", ["/api/*/v1", "/do?cs", "/a[b]", "/docs/*/x"])
     def test_a_wildcard_anywhere_but_the_tail_is_rejected(self, bad):
         """中段通配符拒绝而不是悄悄匹配空集：一个安静返回 0 页的爬取，读起来
-        就像「这站没内容」。拒绝要在任何请求之前（smart_crawl 已在入口校验）。"""
+        就像「这站没内容」。拒绝要在任何请求之前（web_crawl 已在入口校验）。"""
         with pytest.raises(ValueError, match="not supported"):
             normalize_path_pattern(bad)
 
@@ -286,7 +286,7 @@ class TestRobotsPrePrune:
         robots.get_robots_cache().prime(SEED, "User-agent: *\nDisallow: /\n")
         site = _FakeSite()
 
-        out = await crawl_mod.smart_crawl(site, SEED, max_pages=3, cache_ttl=0)
+        out = await crawl_mod.web_crawl(site, SEED, max_pages=3, cache_ttl=0)
 
         assert site.fetched == []
         assert out.pages == []
@@ -298,7 +298,7 @@ class TestRobotsPrePrune:
         """发现阶段预剪：/private/* 拿不到队列槽位，robots_skipped 记账。"""
         site = _FakeSite({SEED: _page_with_links(["/private/a", "/public/b"])})
 
-        out = await crawl_mod.smart_crawl(site, SEED, max_pages=5, max_depth=1,
+        out = await crawl_mod.web_crawl(site, SEED, max_pages=5, max_depth=1,
                                           cache_ttl=0)
 
         assert "/private/a" not in site.fetched
@@ -310,7 +310,7 @@ class TestRobotsPrePrune:
     async def test_ignore_robots_fetches_what_pruning_would_drop(self):
         site = _FakeSite({SEED: _page_with_links(["/private/a"])})
 
-        out = await crawl_mod.smart_crawl(site, SEED, max_pages=3, max_depth=1,
+        out = await crawl_mod.web_crawl(site, SEED, max_pages=3, max_depth=1,
                                           ignore_robots=True, cache_ttl=0)
 
         assert any(u.endswith("/private/a") for u in site.fetched)
@@ -325,7 +325,7 @@ class TestRobotsPrePrune:
         monkeypatch.setattr(crawl_mod, "check_robots", explode)
         site = _FakeSite({SEED: _page_with_links(["/a"])})
 
-        out = await crawl_mod.smart_crawl(site, SEED, max_pages=3, max_depth=1,
+        out = await crawl_mod.web_crawl(site, SEED, max_pages=3, max_depth=1,
                                           cache_ttl=0)
 
         assert len(site.fetched) == 2

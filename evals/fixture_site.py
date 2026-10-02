@@ -170,7 +170,7 @@ def _article() -> bytes:
 def _feed() -> bytes:
     """6 条带 pubDate（0/1/2/3/5/10 天前）+ 2 条无 pubDate。
 
-    无日期条目是刻意的：feed_fetch 的 since 语义是"无日期的条目**保留**并计数"
+    无日期条目是刻意的：feed_read 的 since 语义是"无日期的条目**保留**并计数"
     （一个没有日期的 feed 无法诚实地过滤），不摆两条在靶站上就测不到那一半。
     """
     now = datetime.now(timezone.utc).replace(microsecond=0)

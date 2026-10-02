@@ -1,4 +1,4 @@
-"""Sitemap.xml discovery + parsing for smart_crawl (v8).
+"""Sitemap.xml discovery + parsing for web_crawl (v8).
 
 The genius move for crawling big sites: instead of blind best-first BFS (one
 fetch per page to discover the next layer), fetch the site's sitemap.xml in ONE
@@ -210,7 +210,7 @@ def discover_sitemap(start_url: str, *, http_get: HttpGet,
     `accept` (optional) decides which URLs are eligible, and it runs BEFORE
     max_urls counts them. That ordering is the whole point of the parameter: the
     cap has to be spent on the pages the caller asked for. Applied after the cap
-    instead (as smart_crawl used to do it, on the returned list), a caller who
+    instead (as web_crawl used to do it, on the returned list), a caller who
     asked for one section got that section filtered out of the first max_urls
     URLs the site happened to list - an empty or partial map for a subtree that
     may be thousands of entries deep, with no error to show for it.
@@ -218,7 +218,7 @@ def discover_sitemap(start_url: str, *, http_get: HttpGet,
     A predicate that raises on some URL drops that URL rather than the whole
     walk. This module's contract is that it never raises, and the alternative is
     the worse failure: one unparseable entry in a 5,000-URL sitemap would take
-    the map down with it and send smart_crawl off to BFS with nothing saying why.
+    the map down with it and send web_crawl off to BFS with nothing saying why.
     """
     result = SitemapResult()
     if not start_url:

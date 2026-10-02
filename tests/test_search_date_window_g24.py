@@ -158,7 +158,7 @@ class TestBeforeIsRefusedNotIgnored:
         applied, info, why = _date_window(None, days_ago(30), None, POOL)
         assert (applied, info) == (None, {})
         assert "before is not supported" in why
-        assert "feed_fetch(since=" in why
+        assert "feed_read(since=" in why
 
     def test_the_alternative_is_named(self):
         _a, _i, why = _date_window(None, "2026-01-01", None, POOL)
@@ -175,15 +175,15 @@ class TestTheWireText:
     def test_the_wire_advertises_the_window(self):
         from dhole_mcp.server import MasterFetchServer
         tools = {t["name"]: t for t in MasterFetchServer._TOOL_DEFS}
-        props = tools["smart_search"]["inputSchema"]["properties"]
+        props = tools["web_search"]["inputSchema"]["properties"]
         # 判据是「键有没有被 advertised」：after 要说清窗口被放宽并回读 date_filter，
         # before 要说清是被拒而不是被忽略，并给出替代路径。
         assert "date_filter" in props["after"]["description"], "after= 的窗口语义没上线"
         assert "REFUSED" in props["before"]["description"], "before= 被拒的说明没上线"
-        assert "feed_fetch" in props["before"]["description"], "没给出带日期条目的替代路径"
+        assert "feed_read" in props["before"]["description"], "没给出带日期条目的替代路径"
 
     def test_the_method_accepts_both(self):
         import inspect
         from dhole_mcp.server import MasterFetchServer
-        params = inspect.signature(MasterFetchServer.smart_search).parameters
+        params = inspect.signature(MasterFetchServer.web_search).parameters
         assert {"after", "before"} <= set(params)

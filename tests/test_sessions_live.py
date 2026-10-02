@@ -40,7 +40,7 @@ def _body(result) -> str:
 
 async def _get(url: str, **kw):
     srv = MasterFetchServer()
-    out = await srv.smart_fetch(url, cache_ttl=0, timeout=25000, **kw)
+    out = await srv.web_read(url, cache_ttl=0, timeout=25000, **kw)
     if out.status in (-1, 0) or (out.error and "timeout" in out.error.lower()):
         pytest.skip(f"no usable route to {url}: {out.error[:80]}")
     return out

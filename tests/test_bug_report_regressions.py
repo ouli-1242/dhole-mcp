@@ -379,16 +379,16 @@ class TestStructuredInputErrors:
     @pytest.mark.asyncio
     async def test_missing_url_does_not_raise(self):
         """Measured: the MCP call came back as a protocol error instead of a
-        FetchResult, unlike every other smart_fetch failure."""
+        FetchResult, unlike every other web_read failure."""
         server = MasterFetchServer()
-        content, structured = await server._dispatch("smart_fetch", {})
+        content, structured = await server._dispatch("web_read", {})
         assert structured["error"].startswith("invalid_request:")
         assert structured["content"] == []
 
     @pytest.mark.asyncio
     async def test_unsupported_scheme_returns_structured_result(self):
         server = MasterFetchServer()
-        result = await server.smart_fetch(url="example.com")
+        result = await server.web_read(url="example.com")
         assert result.status == 0
         assert result.content == []
         assert "invalid_request" in result.error
@@ -396,7 +396,7 @@ class TestStructuredInputErrors:
     @pytest.mark.asyncio
     async def test_actions_in_bulk_mode_reported_per_url(self):
         server = MasterFetchServer()
-        bulk = await server.smart_fetch(
+        bulk = await server.web_read(
             url="", urls=["https://a.example.com", "https://b.example.com"],
             actions=[{"click": "button"}],
         )
@@ -562,7 +562,7 @@ class TestExtractedTypeLabel:
         assert r.extracted_type == "html"
 
 
-# ─── NEW-1 / NEW-2 / BUG-13: what smart_search says when IT dropped the hits ─
+# ─── NEW-1 / NEW-2 / BUG-13: what web_search says when IT dropped the hits ─
 
 def _raw(title: str, url: str, snippet: str = "", source: str = "bing"):
     from dhole_mcp.search_engines import RawResult
@@ -611,7 +611,7 @@ class TestOffTopicFilterIsVisible:
             _raw("Bilibili", "https://www.bilibili.com/", "视频网站"),
             _raw("Other", "https://other.example/", "unrelated text"),
         ])
-        out = await S.smart_search(None, "how does dns resolution work", 6)
+        out = await S.web_search(None, "how does dns resolution work", 6)
         assert out.results == []
         assert "dhole dropped them rather than return noise" in out.error
         assert "rephrasing will not help" in out.error
@@ -630,7 +630,7 @@ class TestOffTopicFilterIsVisible:
             lambda q, ranked, mode, **kw: (
                 ranked, scores[:len(ranked)], "merge", ""),
         )
-        out = await S.smart_search(None, "dns resolution", 6)
+        out = await S.web_search(None, "dns resolution", 6)
         assert len(out.results) < len(rows)
         assert "dropped as off-topic/low-relevance" in out.fetch_hint
         assert out.error == ""
@@ -639,7 +639,7 @@ class TestOffTopicFilterIsVisible:
     async def test_cjk_queries_are_never_filtered(self, monkeypatch):
         """The filter can only judge latin terms; CJK must pass through untouched."""
         S = _patch_engines(monkeypatch, [_raw("标题", "https://example.com/a", "正文")])
-        out = await S.smart_search(None, "大模型 推理优化", 6)
+        out = await S.web_search(None, "大模型 推理优化", 6)
         assert len(out.results) == 1
         assert out.error == ""
 
@@ -653,7 +653,7 @@ class TestSiteFilterSurvivesRewrite:
         site=None and dropped the caller's explicit domain constraint."""
         calls: list[dict] = []
         S = _patch_engines(monkeypatch, [], calls=calls)
-        await S.smart_search(None, "Googlebooks Android review", 3, site="theverge.com")
+        await S.web_search(None, "Googlebooks Android review", 3, site="theverge.com")
         assert len(calls) >= 2, "expected a rewritten second round"
         assert all(c.get("site") == "theverge.com" for c in calls), \
             "the site filter must not be lifted silently on the rewrite round"
@@ -661,7 +661,7 @@ class TestSiteFilterSurvivesRewrite:
     @pytest.mark.asyncio
     async def test_empty_with_site_says_the_filter_was_respected(self, monkeypatch):
         S = _patch_engines(monkeypatch, [])
-        out = await S.smart_search(None, "nothing at all here", 3, site="example.invalid")
+        out = await S.web_search(None, "nothing at all here", 3, site="example.invalid")
         assert out.results == []
         assert "site=example.invalid" in out.error
 
@@ -671,7 +671,7 @@ class TestMaxResultsClampIsVisible:
     @pytest.mark.asyncio
     async def test_out_of_range_is_announced(self, monkeypatch):
         S = _patch_engines(monkeypatch, [_raw("A", "https://a.example/")])
-        out = await S.smart_search(None, "dns resolution test", 100)
+        out = await S.web_search(None, "dns resolution test", 100)
         assert "max_results=100 is outside the supported 1-50 range" in out.fetch_hint
 
 

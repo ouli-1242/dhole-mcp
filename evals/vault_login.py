@@ -164,7 +164,7 @@ async def main() -> int:
            f"    message: {got.message}")
 
     # 5. 登录态真的留住了：回到 HTTP 层，同一个 session_id
-    after = await s.smart_fetch(url=f"{BASE}/account", session_id="evalsess",
+    after = await s.web_read(url=f"{BASE}/account", session_id="evalsess",
                                 cache_ttl=0, allow_private=True)
     text = "\n".join(after.content or [])
     record("登录态留住了：同 session_id 取登录后页面拿到登录版内容",

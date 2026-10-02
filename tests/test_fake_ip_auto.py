@@ -2,7 +2,7 @@
 
 这个默认值曾经是新手的第一道墙：Clash / sing-box 的 TUN + fake-ip 解析器给**每一
 个公网域名**都返回保留地址，于是 fail-closed 的 DNS 复检把整台机器判成内网，
-smart_fetch / smart_search 全部失败 —— 而唯一的出路是**事先知道**要设
+web_read / web_search 全部失败 —— 而唯一的出路是**事先知道**要设
 `DHOLE_SSRF_DNS_RECHECK=0`。README 里那句"零配置即可用"在这台机器上是被实测证伪
 的（见 CHANGELOG W3）。
 

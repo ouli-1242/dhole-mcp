@@ -834,7 +834,7 @@ class TestStealthySessionBudget:
         server._finalize_result = AsyncMock(side_effect=lambda result, *args: result)
 
         with patch("dhole_mcp.server._browser_deps_available", return_value=True):
-            out = await server.smart_fetch("https://example.com", cache_ttl=0)
+            out = await server.web_read("https://example.com", cache_ttl=0)
 
         assert out.escalation_path == "http(browser_busy)"
         assert "browser_busy" in (out.error or "")
@@ -858,7 +858,7 @@ class TestSmartFetchProxy:
         # routing, and the pinned tier now asks the proxy the same question
         # before it dials anything (nothing listens on :8080 here).
         with patch("dhole_mcp.fetcher.proxy_preflight", return_value=(True, "")):
-            await server.smart_fetch(
+            await server.web_read(
                 "https://example.com",
                 force_fetcher="stealthy",
                 proxy="http://127.0.0.1:8080",
@@ -885,7 +885,7 @@ class TestSmartFetchProxy:
         # returns proxy_unreachable and the tiers are never reached.
         with patch("dhole_mcp.server._browser_deps_available", return_value=True), \
                 patch("dhole_mcp.fetcher.proxy_preflight", return_value=(True, "")):
-            await server.smart_fetch(
+            await server.web_read(
                 "https://example.com",
                 proxy="http://127.0.0.1:8080",
                 cache_ttl=0,
@@ -898,7 +898,7 @@ class TestSmartFetchProxy:
 # ─── Focus context scoping ─────────────────────────
 
 class TestSmartFetchFocusContext:
-    """smart_fetch request options must be scoped per invocation: focus set in
+    """web_read request options must be scoped per invocation: focus set in
     one call must not leak into the next, and bulk fetches must forward focus.
     """
 
@@ -915,7 +915,7 @@ class TestSmartFetchFocusContext:
         server = MasterFetchServer(cache_ttl=0)
         server.get = AsyncMock(return_value=self._long_content_result())
 
-        result = await server.smart_fetch(
+        result = await server.web_read(
             "https://example.com",
             urls=["https://example.com"],
             focus="bananas",
@@ -935,10 +935,10 @@ class TestSmartFetchFocusContext:
             side_effect=[self._long_content_result(), self._long_content_result()]
         )
 
-        focused = await server.smart_fetch(
+        focused = await server.web_read(
             "https://example.com/first", focus="bananas", cache_ttl=0
         )
-        unfiltered = await server.smart_fetch(
+        unfiltered = await server.web_read(
             "https://example.com/second", cache_ttl=0
         )
 

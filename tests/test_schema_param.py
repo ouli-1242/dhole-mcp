@@ -1,4 +1,4 @@
-"""smart_fetch 的 ``schema`` 参数：要么真的产出结构化 JSON，要么明确报错。
+"""web_read 的 ``schema`` 参数：要么真的产出结构化 JSON，要么明确报错。
 
 回归背景 —— 此前两个形态都会**静默退回 markdown 并返回 200**：
 
@@ -87,7 +87,7 @@ class TestSchemaReachesStructuredExtraction:
     @pytest.mark.asyncio
     async def test_object_schema_returns_structured_json(self):
         server = self._server()
-        out = await server.smart_fetch("https://example.com", schema=SCHEMA, cache_ttl=0)
+        out = await server.web_read("https://example.com", schema=SCHEMA, cache_ttl=0)
 
         assert out.extracted_type == "structured"
         payload = json.loads(out.content[0])
@@ -98,7 +98,7 @@ class TestSchemaReachesStructuredExtraction:
     async def test_json_string_schema_is_not_silently_dropped(self):
         """回归：字符串形式的 schema 此前会静默退回 markdown。"""
         server = self._server()
-        out = await server.smart_fetch(
+        out = await server.web_read(
             "https://example.com", schema=json.dumps(SCHEMA), cache_ttl=0,
         )
 
@@ -109,12 +109,12 @@ class TestSchemaReachesStructuredExtraction:
     async def test_unusable_schema_is_rejected_before_any_fetch(self):
         """回归：无 properties 的 schema 此前会静默退回 markdown。
 
-        拒绝的形式也进了契约：抛异常会被兜底成 is_error 的 MCP 结果，与 resolve_url
+        拒绝的形式也进了契约：抛异常会被兜底成 is_error 的 MCP 结果，与 web_resolve
         之类返回结构化错误的做法不一致（BUG-16）。现在是 status=0 + error，且仍然
         不发请求、不返回 markdown。
         """
         server = self._server()
-        out = await server.smart_fetch(
+        out = await server.web_read(
             "https://example.com", schema={"type": "object"}, cache_ttl=0,
         )
         assert out.status == 0
@@ -129,14 +129,14 @@ class TestSchemaReachesStructuredExtraction:
         server._auto_escalate = AsyncMock(return_value=_html_result("markdown"))
         server._finalize_result = AsyncMock(side_effect=lambda result, *args: result)
 
-        out = await server.smart_fetch("https://example.com", cache_ttl=0)
+        out = await server.web_read("https://example.com", cache_ttl=0)
 
         assert out.extracted_type != "structured"
         assert out.content == [HTML]
 
 
 class TestSchemaReachesTheTool:
-    """``schema`` 只有一个通道：顶层参数。它必须真的抵达 smart_fetch。"""
+    """``schema`` 只有一个通道：顶层参数。它必须真的抵达 web_read。"""
 
     @pytest.mark.asyncio
     async def test_schema_drives_structured_extraction(self):
@@ -144,7 +144,7 @@ class TestSchemaReachesTheTool:
         server._auto_escalate = AsyncMock(return_value=_html_result())
 
         out = await server._dispatch(
-            "smart_fetch",
+            "web_read",
             {"url": "https://example.com", "schema": SCHEMA, "cache_ttl": 0},
         )
         assert out[1]["extracted_type"] == "structured"

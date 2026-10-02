@@ -2,7 +2,7 @@
 
 Why this file exists: the per-call BODY — not the tools/list table — is where an
 agent's tokens go. Measured on docs.python.org/3/library/asyncio-task.html: one
-smart_fetch at the shipped 40,000-char default returned 42,037 chars, more than
+web_read at the shipped 40,000-char default returned 42,037 chars, more than
 the whole connect-time table: the 9 inputSchemas together are 11,566 chars and
 the full tools/list payload 19,141 (cl100k ≈4.16 chars/token, so ~2.8k and ~4.6k
 respectively).
@@ -35,7 +35,7 @@ def _stub_fetch(monkeypatch, body: str) -> None:
     """Replace the fetch tiers with one canned body.
 
     The stub passes the budget it RECEIVES to the real ``_apply_chunking``, so the
-    test observes the value ``smart_fetch`` computed from the default — stubbing
+    test observes the value ``web_read`` computed from the default — stubbing
     the tool method instead would test the stub rather than the wiring.
 
     It reads that budget by PARAMETER NAME rather than by position. A positional
@@ -57,9 +57,9 @@ def _stub_fetch(monkeypatch, body: str) -> None:
 
 
 def _fetch(args: dict) -> dict:
-    """Run one smart_fetch through the real dispatcher; return the envelope."""
+    """Run one web_read through the real dispatcher; return the envelope."""
     _content, structured = asyncio.run(
-        server_mod.MasterFetchServer(cache_ttl=0)._dispatch("smart_fetch", args))
+        server_mod.MasterFetchServer(cache_ttl=0)._dispatch("web_read", args))
     return structured
 
 

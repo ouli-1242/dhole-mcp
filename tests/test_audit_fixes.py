@@ -1,7 +1,7 @@
 """Dhole 审查修复回归测试。
 
 覆盖：
-- P0: feed_fetch 不再崩溃（structured_content 合法 dict）+ URL 校验
+- P0: feed_read 不再崩溃（structured_content 合法 dict）+ URL 校验
 - P1: 重定向链逐跳 SSRF 校验（fetcher 层）
 - P1: max_redirects 生效
 - P2: 域名 DNS 解析内网复查（17.0 起无条件开启，DHOLE_SSRF_DNS_RECHECK 已注销）
@@ -19,13 +19,13 @@ from dhole_mcp.server import MasterFetchServer
 
 
 # ---------------------------------------------------------------------------
-# P0: feed_fetch 崩溃修复
+# P0: feed_read 崩溃修复
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_feed_fetch_returns_dict_structured(mock_logger=None):
-    """feed_fetch 分支应返回 dict structured_content（list 会 -32603）。"""
+    """feed_read 分支应返回 dict structured_content（list 会 -32603）。"""
 
     srv = MasterFetchServer(cache_ttl=0)
     args = {"urls": ["https://example.com/feed"], "max_items": 3}
@@ -44,7 +44,7 @@ async def test_feed_fetch_returns_dict_structured(mock_logger=None):
     with patch("dhole_mcp.feed.fetch_feeds", new=AsyncMock(return_value=[_FakeResp()])):
         with patch("socket.getaddrinfo",
                    return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
-            result = await srv.feed_fetch(urls=args["urls"], max_items=3)
+            result = await srv.feed_read(urls=args["urls"], max_items=3)
 
     assert isinstance(result, list)
     assert isinstance(result[0], dict)
@@ -60,17 +60,17 @@ async def test_feed_fetch_returns_dict_structured(mock_logger=None):
     # of names is what let `note` slip through).
     from dhole_mcp.feed import FeedResult
     assert set(result[0]) == set(FeedResult.model_fields), (
-        "feed_fetch 的投影与 FeedResult 的字段已经不一致："
+        "feed_read 的投影与 FeedResult 的字段已经不一致："
         f"少 {set(FeedResult.model_fields) - set(result[0])}，"
         f"多 {set(result[0]) - set(FeedResult.model_fields)}")
 
 
 @pytest.mark.asyncio
 async def test_feed_fetch_rejects_internal_url():
-    """feed_fetch 传内网 URL 应报错（SSRF 防护）。"""
+    """feed_read 传内网 URL 应报错（SSRF 防护）。"""
     srv = MasterFetchServer(cache_ttl=0)
     with pytest.raises(ValueError, match="校验失败"):
-        await srv.feed_fetch(urls=["http://127.0.0.1:8080/x"], max_items=3)
+        await srv.feed_read(urls=["http://127.0.0.1:8080/x"], max_items=3)
 
 
 # ---------------------------------------------------------------------------

@@ -400,7 +400,7 @@ def _narrow_html_to_selector(html: str, css_selector: str) -> Optional[str]:
 
 
 def extract_content_from_html(html: str, url: str = "", extraction_type: str = "markdown") -> str | None:
-    """Extract content from a raw HTML string (used by smart_crawl, which fetches
+    """Extract content from a raw HTML string (used by web_crawl, which fetches
     pages as html once and derives both links and markdown from the same body)."""
     return _extract_type(html, url, extraction_type)
 

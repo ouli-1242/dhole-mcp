@@ -56,21 +56,21 @@ class TestCrawlTopLevelArgs:
     """The report's wire shape: caps and path filters passed top-level."""
 
     def test_a_top_level_cap_reaches_the_crawl(self, monkeypatch):
-        seen = _stub(monkeypatch, "smart_crawl", _CRAWL_OK)
-        _dispatch("smart_crawl", {"url": "https://example.com/", "max_pages": 3,
+        seen = _stub(monkeypatch, "web_crawl", _CRAWL_OK)
+        _dispatch("web_crawl", {"url": "https://example.com/", "max_pages": 3,
                                   "max_depth": 1, "cache_ttl": 0})
         assert seen["max_pages"] == 3
         assert seen["max_depth"] == 1
         assert seen["cache_ttl"] == 0
 
     def test_a_top_level_string_filter_reaches_the_crawl(self, monkeypatch):
-        seen = _stub(monkeypatch, "smart_crawl", _CRAWL_OK)
-        _dispatch("smart_crawl", {"url": "https://example.com/", "path_exclude": "/what/"})
+        seen = _stub(monkeypatch, "web_crawl", _CRAWL_OK)
+        _dispatch("web_crawl", {"url": "https://example.com/", "path_exclude": "/what/"})
         assert seen["path_exclude"] == "/what/"
 
     def test_a_top_level_bool_reaches_the_crawl(self, monkeypatch):
-        seen = _stub(monkeypatch, "smart_crawl", _CRAWL_OK)
-        _dispatch("smart_crawl", {
+        seen = _stub(monkeypatch, "web_crawl", _CRAWL_OK)
+        _dispatch("web_crawl", {
             "url": "https://example.com/", "sitemap": True, "max_pages": 5,
         })
         assert seen["sitemap"] is True and seen["max_pages"] == 5
@@ -78,8 +78,8 @@ class TestCrawlTopLevelArgs:
 
 class TestOtherToolsTakeTheirDocumentedKeysTopLevel:
     def test_search_filters(self, monkeypatch):
-        seen = _stub(monkeypatch, "smart_search", _SEARCH_OK)
-        _dispatch("smart_search", {"query": "x", "max_results": 8, "engines": ["brave"],
+        seen = _stub(monkeypatch, "web_search", _SEARCH_OK)
+        _dispatch("web_search", {"query": "x", "max_results": 8, "engines": ["brave"],
                                    "freshness": "week", "site": "example.com"})
         assert (seen["max_results"], seen["engines"], seen["freshness"], seen["site"]) == (
             8, ["brave"], "week", "example.com")
@@ -99,8 +99,8 @@ class TestOtherToolsTakeTheirDocumentedKeysTopLevel:
             seen.update(kwargs)
             return ResponseModel(url=kwargs.get("url", ""), status=200, content=["x"])
 
-        monkeypatch.setattr(server_mod.MasterFetchServer, "smart_fetch", fake)
-        _dispatch("smart_fetch", {"url": "https://example.com/", "include_links": True,
+        monkeypatch.setattr(server_mod.MasterFetchServer, "web_read", fake)
+        _dispatch("web_read", {"url": "https://example.com/", "include_links": True,
                                   "cookies": "sessionid=abc123"})
         assert seen["include_links"] is True
         assert seen["cookies"] == "sessionid=abc123"
@@ -111,20 +111,20 @@ class TestUnknownTopLevelArgsRaise:
 
     def test_a_typo_names_the_key_and_the_supported_set(self):
         with pytest.raises(ValueError) as exc:
-            _dispatch("smart_crawl", {"url": "https://example.com/", "path_exlucde": "/what/"})
+            _dispatch("web_crawl", {"url": "https://example.com/", "path_exlucde": "/what/"})
         message = str(exc.value)
         assert "path_exlucde" in message
         assert "max_pages" in message and "path_exclude" in message
 
     @pytest.mark.parametrize("tool,args", [
-        ("smart_crawl", {"url": "https://example.com/", "paths": ["/a"]}),
-        ("smart_search", {"query": "x", "sites": ["example.com"]}),
-        ("smart_fetch", {"url": "https://example.com/", "max_chars": 100}),
+        ("web_crawl", {"url": "https://example.com/", "paths": ["/a"]}),
+        ("web_search", {"query": "x", "sites": ["example.com"]}),
+        ("web_read", {"url": "https://example.com/", "max_chars": 100}),
         ("screenshot", {"url": "https://example.com/", "width": 800}),
         ("cache_clear", {"all": True, "everything": True}),
         ("parse", {"file_path": "a.pdf", "pages": "1-2"}),
-        ("feed_fetch", {"urls": ["https://example.com/f.xml"], "limit": 5}),
-        ("resolve_url", {"url": "https://example.com/", "follow": True}),
+        ("feed_read", {"urls": ["https://example.com/f.xml"], "limit": 5}),
+        ("web_resolve", {"url": "https://example.com/", "follow": True}),
     ])
     def test_every_tool_rejects_its_own_unknown_keys(self, tool, args):
         with pytest.raises(ValueError) as exc:
@@ -132,22 +132,29 @@ class TestUnknownTopLevelArgsRaise:
         assert "Unsupported argument" in str(exc.value)
 
     def test_unknown_tool_still_says_unknown_tool(self):
+        """改名之后，一个还带着 16.x 名字的客户端要能从报错里读到现在的名字。
+
+        这里传的就是旧名：Unknown tool 之外什么都不说的话，它只知道「有个工具不
+        存在」，得自己去翻 tools/list。
+        """
         with pytest.raises(ValueError) as exc:
-            _dispatch("smart_frobnicate", {"url": "https://example.com/"})
-        assert "Unknown tool" in str(exc.value)
+            _dispatch("smart_fetch", {"url": "https://example.com/"})
+        msg = str(exc.value)
+        assert "Unknown tool" in msg
+        assert "web_read" in msg, "报错没列注册名，改了名的调用方无处可查"
 
     def test_null_valued_keys_mean_not_set(self, monkeypatch):
         """Clients that echo every schema property as null must not be rejected."""
-        seen = _stub(monkeypatch, "smart_crawl", _CRAWL_OK)
-        _dispatch("smart_crawl", {"url": "https://example.com/", "focus": None,
+        seen = _stub(monkeypatch, "web_crawl", _CRAWL_OK)
+        _dispatch("web_crawl", {"url": "https://example.com/", "focus": None,
                                   "path_include": None, "nonsense": None})
         # 没传 = 不写进 kwargs，让方法自己的默认值生效。显式传 None 会盖掉一个
         # 不是 None 的默认值（extraction_type 的教训，见 _dispatch 里的注释）。
         assert "focus" not in seen and "path_include" not in seen
 
     def test_a_null_valued_call_is_not_rejected(self, monkeypatch):
-        seen = _stub(monkeypatch, "smart_crawl", _CRAWL_OK)
-        _dispatch("smart_crawl", {"url": "https://example.com/", "max_pages": 2,
+        seen = _stub(monkeypatch, "web_crawl", _CRAWL_OK)
+        _dispatch("web_crawl", {"url": "https://example.com/", "max_pages": 2,
                                   "sitemap": None})
         assert seen["max_pages"] == 2
 
@@ -175,10 +182,10 @@ class TestAcceptedSetCoversTheContract:
             assert not hidden, (td["name"], sorted(hidden))
 
     def test_every_documented_param_set_is_accepted(self):
-        assert server_mod._SC_PARAMS <= server_mod._TOP_LEVEL_ARGS["smart_crawl"]
-        assert server_mod._SS_PARAMS <= server_mod._TOP_LEVEL_ARGS["smart_search"]
+        assert server_mod._SC_PARAMS <= server_mod._TOP_LEVEL_ARGS["web_crawl"]
+        assert server_mod._SS_PARAMS <= server_mod._TOP_LEVEL_ARGS["web_search"]
         assert server_mod._SHOT_PARAMS <= server_mod._TOP_LEVEL_ARGS["screenshot"]
-        assert server_mod._SF_PARAMS <= server_mod._TOP_LEVEL_ARGS["smart_fetch"]
+        assert server_mod._SF_PARAMS <= server_mod._TOP_LEVEL_ARGS["web_read"]
 
     def test_every_tool_in_the_schema_is_covered(self):
         names = {td["name"] for td in MasterFetchServer._TOOL_DEFS}
@@ -217,8 +224,8 @@ class TestTopLevelFilterAppliesEndToEnd:
                 url=url or "", status=200, content=[_LINKED_PAGE],
                 fetcher_used="http", content_ok=True, content_type="text/html")
 
-        monkeypatch.setattr(server_mod.MasterFetchServer, "smart_fetch", fake_smart_fetch)
-        text, structured = _dispatch("smart_crawl", {
+        monkeypatch.setattr(server_mod.MasterFetchServer, "web_read", fake_smart_fetch)
+        text, structured = _dispatch("web_crawl", {
             "url": "https://example.com/", "max_pages": 5, "max_depth": 1,
             "force_fetcher": "http", **top_level})
         return structured

@@ -1,6 +1,6 @@
-"""Page interaction for smart_fetch (the `actions` param).
+"""Page interaction for web_read (the `actions` param).
 
-When the agent passes `actions=[...]`, smart_fetch forces the stealthy browser
+When the agent passes `actions=[...]`, web_read forces the stealthy browser
 tier and runs the actions on the page after navigation, before content
 extraction. This reaches content behind a click, a search form, a "load more"
 button, or infinite scroll — cases a plain fetch can't.
@@ -8,7 +8,7 @@ button, or infinite scroll — cases a plain fetch can't.
 Implementation: patchright's stealthy fetch accepts a `page_action` callable that
 receives the Playwright AsyncPage after goto and is awaited. We build that
 callable from a validated list of action dicts and thread it through
-smart_fetch -> _force_fetch -> stealthy_fetch -> session.fetch(page_action=...).
+web_read -> _force_fetch -> stealthy_fetch -> session.fetch(page_action=...).
 
 Action schema (one key per dict):
   {"click": "css-selector"}                 click the first match

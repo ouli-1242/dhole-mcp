@@ -1,7 +1,7 @@
 """G34 → 17.0：元素级截图 + 本地二维码解码，**常开**（无 DHOLE_MULTIMODAL 门）。
 
 大众化一刀切把"调用方声明自己是多模态的"这层许可删了 —— 元素级截图
-（screenshot 的 options.selector、smart_fetch 的 {"screenshot"} 动作）和工具描述
+（screenshot 的 options.selector、web_read 的 {"screenshot"} 动作）和工具描述
 里的试读纪律默认全量在线；dhole 不引入视觉模型，识别永远在 agent 侧。这里各守各的：
 
 * **无门控语义**：任何 env 状态下动作与工具都能走通；曾经读 env 的入口
@@ -368,7 +368,7 @@ class TestTheDescriptions:
         （能力常开，纪律不是模式）。"""
         defs = {td["name"]: td for td in MasterFetchServer._enabled_tool_defs()}
         shot = defs["screenshot"]["description"]
-        sf = defs["smart_fetch"]["description"]
+        sf = defs["web_read"]["description"]
         assert "VISUAL ASSIST" in shot
         assert "selector=" in shot
         assert "VISUAL ASSIST" in sf

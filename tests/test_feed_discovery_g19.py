@@ -1,6 +1,6 @@
 """G19 回归：把站点页当 feed 传进来时，要顺着页面自己声明的链接找到 feed。
 
-报告的复现是 `feed_fetch("https://quotes.toscrape.com/")` 回一句
+报告的复现是 `feed_read("https://quotes.toscrape.com/")` 回一句
 `XMLSyntaxError: Opening and ending tag mismatch: meta line 5 ...`。那句话没错，但它
 回答的是「为什么这不是 XML」，而调用方的问题是「这个站发了什么」。一个 HTML 首页几乎
 总是用 `<link rel="alternate" type="application/rss+xml">` 写明自己的 feed 在哪，

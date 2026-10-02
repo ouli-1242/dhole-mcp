@@ -296,7 +296,7 @@ class TestItem5HostHandshake:
             (json.dumps({"jsonrpc": "2.0", "id": 1,
                          "result": {"capabilities": {}}}) + "\n").encode(),
             (json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"tools": [
-                {"name": "smart_fetch"}, {"name": "smart_search"}]}})
+                {"name": "web_read"}, {"name": "web_search"}]}})
              + "\n").encode(),
         ]
         row, proc = self._run(monkeypatch, answers)
@@ -434,10 +434,10 @@ class TestItem10LiveProbe:
 
     def test_a_working_search_and_fetch_read_as_facts(self, monkeypatch):
         rows = self._run(monkeypatch, {
-            "smart_search": {"results": [{"title": "t"}] * 3,
+            "web_search": {"results": [{"title": "t"}] * 3,
                              "engines_used": ["baidu", "bing", "sogou"],
                              "rerank_mode": "neural"},
-            "smart_fetch": {"status": 200, "total_extracted_chars": 225,
+            "web_read": {"status": 200, "total_extracted_chars": 225,
                             "fetcher_used": "http"},
         })
         assert rows["live search"][1] == "ok", rows["live search"]
@@ -447,8 +447,8 @@ class TestItem10LiveProbe:
     def test_an_empty_engine_pool_is_not_reported_as_a_broken_install(self, monkeypatch):
         """免密引擎没有 SLA：全冷却是网络事实，下一句该是 engines probe 而不是重装。"""
         rows = self._run(monkeypatch, {
-            "smart_search": {"results": [], "engines_used": []},
-            "smart_fetch": {"error": "connection refused"},
+            "web_search": {"results": [], "engines_used": []},
+            "web_read": {"error": "connection refused"},
         })
         assert rows["live search"][1] == "info", rows["live search"]
         assert "engines probe" in rows["live search"][3]

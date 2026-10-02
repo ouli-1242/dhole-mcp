@@ -108,7 +108,7 @@ def ocr_advice() -> str:
     package they already have.
 
     One source of truth for every OCR hint in the codebase (the all-scanned
-    dead-end, the two per-page markers, and smart_fetch's next_action), so the
+    dead-end, the two per-page markers, and web_read's next_action), so the
     four cannot drift into disagreeing about the same machine.
     """
     try:
@@ -133,7 +133,7 @@ def recover_scanned_pdf(
 ) -> PdfResult:
     """OCR-recover an all-scanned PDF (the ``scanned=True`` dead-end above).
 
-    Shared by the URL path (server.py's PDF branch, i.e. smart_fetch) and the
+    Shared by the URL path (server.py's PDF branch, i.e. web_read) and the
     local-file path (parse._parse_pdf) so the two behave identically — which is
     what ``parse._parse_pdf``'s docstring promises, and what the URL path alone
     violated: a scanned PDF read from disk answered "install [all] to auto-OCR"

@@ -210,7 +210,7 @@ class TestTheSecretNeverLeaves:
 # ─── 编排（server.login） ────────────────────────────────────────────────
 
 class _StubFetch:
-    """Stand in for smart_fetch: answers the detect pass, then the act pass."""
+    """Stand in for web_read: answers the detect pass, then the act pass."""
 
     def __init__(self, elements=LOGIN_ROWS, login_check=None, submit_ok=True):
         self.elements = elements
@@ -219,7 +219,7 @@ class _StubFetch:
         self.calls: list[dict] = []
 
     async def __call__(self, *args, **kw):
-        # Set as a CLASS attribute, so it is not bound: `self.smart_fetch(...)`
+        # Set as a CLASS attribute, so it is not bound: `self.web_read(...)`
         # arrives here with no positional server instance. `*args` swallows it
         # either way.
         self.calls.append(kw)
@@ -260,7 +260,7 @@ def wired(monkeypatch):
     """Stub both the browser and the vault; hand back (server, stub, secret_calls)."""
     def build(secret=None, **stub_kw):
         stub = _StubFetch(**stub_kw)
-        monkeypatch.setattr(MasterFetchServer, "smart_fetch", stub)
+        monkeypatch.setattr(MasterFetchServer, "web_read", stub)
         calls: list[tuple] = []
 
         def fake_secret(ref, source="auto"):
@@ -506,7 +506,7 @@ class TestDispatchReachesTheTools:
     def test_a_disabled_credential_tool_is_refused_with_the_flag(self, wired, monkeypatch):
         """DHOLE_TOOLS 白名单点名之外的工具，入口要拒绝并点名那道白名单。"""
         from dhole_mcp import server as sm
-        monkeypatch.setattr(sm, "_ENABLED_TOOLS", frozenset({"smart_fetch"}))
+        monkeypatch.setattr(sm, "_ENABLED_TOOLS", frozenset({"web_read"}))
         srv, _, _ = wired()
         with pytest.raises(ValueError) as e:
             _run(srv._dispatch("vault", {"op": "status"}))

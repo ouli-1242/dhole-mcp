@@ -1,7 +1,7 @@
 """修复复验：直接驱动真实代码路径，确认 D1/D2 在线上行为上确实修好。
 
 与 `evals/check_image_blocking.py` 的分工：那个证明**缺陷的因果**（A/B 单变量），
-这个证明**修复的结果**（走完整 smart_fetch：真浏览器、真动作链、真截图、真解码）。
+这个证明**修复的结果**（走完整 web_read：真浏览器、真动作链、真截图、真解码）。
 
     python evals/verify_fixes.py
 """
@@ -34,7 +34,7 @@ def record(name: str, ok: bool, detail: str) -> None:
 async def check_screenshot_carries_pixels() -> None:
     """D1：动作链里的元素截图要拿到真像素，decode_qr 要解出载荷。"""
     server = MasterFetchServer()
-    res = await server.smart_fetch(
+    res = await server.web_read(
         url=f"{BASE}/qr",
         actions=[{"screenshot": {"selector": "#qr", "decode_qr": True}}],
         allow_private=True,
@@ -58,7 +58,7 @@ async def check_submit_label() -> None:
     os.environ["DHOLE_USAGE_LOG"] = str(log)
 
     server = MasterFetchServer()
-    res = await server.smart_fetch(
+    res = await server.web_read(
         url=f"{BASE}/checkout",
         actions=[{"submit": {"index": 2}}],
         allow_private=True,

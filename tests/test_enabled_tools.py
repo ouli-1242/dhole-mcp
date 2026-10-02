@@ -5,8 +5,8 @@ connect, even when dhole is never called. Measured after the token audit: 19,141
 chars of tool schemas + 2,141 chars of instructions per conversation = 21,282
 chars, which that tokenizer run counts as ~5.1k cl100k tokens (4.16 chars per
 token for this payload; the repo's older 3.88 divisor read 5.5k and was high),
-with smart_fetch alone at 6,508 chars.
-``DHOLE_TOOLS=smart_fetch,smart_search`` keeps the daily drivers at roughly half
+with web_read alone at 6,508 chars.
+``DHOLE_TOOLS=web_read,web_search`` keeps the daily drivers at roughly half
 that cost; everything else stays one env-edit away.
 
 The knob is an import-time constant (like DHOLE_BROWSER_IDLE_TIMEOUT and
@@ -53,7 +53,7 @@ _ENABLED_SNIPPET = (
 
 class TestTheEnvVarIsParsed:
 
-    @pytest.mark.parametrize("value", ["smart_fetch", " smart_fetch ,smart_search ,"])
+    @pytest.mark.parametrize("value", ["web_read", " web_read ,web_search ,"])
     def test_a_subset_registers_exactly_those_tools(self, value):
         out = _run_fresh(_ENABLED_SNIPPET, value)
         assert out.returncode == 0, out.stderr[-600:]
@@ -89,7 +89,7 @@ class TestTheEnvVarIsParsed:
 
     @pytest.mark.parametrize("value,bad", [
         ("smart_frobnicate", "smart_frobnicate"),
-        ("smart_fetch,bogus", "bogus"),
+        ("web_read,bogus", "bogus"),
     ])
     def test_an_unknown_name_raises_at_import_naming_it(self, value, bad):
         """A typo must kill startup loudly, not silently drop a capability."""
@@ -112,9 +112,9 @@ class TestTheWireSetIsFiltered:
             "print(json.dumps([td['name'] for td in"
             " s.MasterFetchServer._enabled_tool_defs()]))"
         )
-        out = _run_fresh(code, "smart_fetch,smart_search")
+        out = _run_fresh(code, "web_read,web_search")
         assert out.returncode == 0, out.stderr[-600:]
-        assert json.loads(out.stdout) == ["smart_fetch", "smart_search"], (
+        assert json.loads(out.stdout) == ["web_read", "web_search"], (
             "广告集被过滤，且保持 _TOOL_DEFS 的顺序")
 
 
@@ -125,7 +125,7 @@ class TestDispatchRefusesDisabledTools:
         "async def main():\n"
         "    srv = s.MasterFetchServer(cache_ttl=0)\n"
         "    try:\n"
-        "        await srv._dispatch('smart_crawl', {'url': 'https://example.com/'})\n"
+        "        await srv._dispatch('web_crawl', {'url': 'https://example.com/'})\n"
         "        print('CRAWL: dispatched')\n"
         "    except ValueError as e:\n"
         "        print('CRAWL:', e)\n"
@@ -134,7 +134,7 @@ class TestDispatchRefusesDisabledTools:
         "    except ValueError as e:\n"
         "        print('FROB:', e)\n"
         "    try:\n"
-        "        r = await srv._dispatch('smart_fetch', {'url': 'not a url'})\n"
+        "        r = await srv._dispatch('web_read', {'url': 'not a url'})\n"
         "        print('FETCH: dispatched', type(r).__name__)\n"
         "    except Exception as e:\n"
         "        print('FETCH: raised', type(e).__name__, str(e)[:100])\n"
@@ -142,13 +142,13 @@ class TestDispatchRefusesDisabledTools:
     )
 
     def test_disabled_known_unknown_and_enabled_calls_behave_differently(self):
-        out = _run_fresh(self.CODE, "smart_fetch")
+        out = _run_fresh(self.CODE, "web_read")
         assert out.returncode == 0, out.stderr[-600:]
         crawl = next(x for x in out.stdout.splitlines() if x.startswith("CRAWL:"))
         frob = next(x for x in out.stdout.splitlines() if x.startswith("FROB:"))
         fetch = next(x for x in out.stdout.splitlines() if x.startswith("FETCH:"))
         assert "not enabled" in crawl and "DHOLE_TOOLS" in crawl
-        assert "smart_fetch" in crawl, "报错必须点名当前启用集，给出改法"
+        assert "web_read" in crawl, "报错必须点名当前启用集，给出改法"
         assert "Unknown tool" in frob, "真未知工具的报错不能与「未启用」混淆"
         assert "not enabled" not in fetch, "启用的工具不许被这道门误拦"
 
@@ -164,10 +164,10 @@ class TestInstructionsFollowTheEnabledSet:
             frozenset(server_mod._TOP_LEVEL_ARGS)) == server_mod.DHOLE_INSTRUCTIONS
 
     def test_a_subset_drops_the_other_tools_routing_lines(self):
-        text = server_mod._compose_instructions(frozenset({"smart_fetch"}))
-        assert "smart_fetch" in text
-        for absent in ("smart_crawl", "smart_search", "feed_fetch",
-                       "parse", "screenshot", "resolve_url"):
+        text = server_mod._compose_instructions(frozenset({"web_read"}))
+        assert "web_read" in text
+        for absent in ("web_crawl", "web_search", "feed_read",
+                       "parse", "screenshot", "web_resolve"):
             assert absent not in text, f"子集 instructions 不得路由到未启用的 {absent}"
 
     def test_the_trust_rules_survive_every_subset(self):
@@ -188,9 +188,9 @@ class TestInstructionsFollowTheEnabledSet:
 
     def test_the_wire_instructions_come_from_the_enabled_set(self):
         code = ("import dhole_mcp.server as s;"
-                "print('smart_crawl' in s.ACTIVE_INSTRUCTIONS,"
-                " 'smart_fetch' in s.ACTIVE_INSTRUCTIONS)")
-        out = _run_fresh(code, "smart_fetch")
+                "print('web_crawl' in s.ACTIVE_INSTRUCTIONS,"
+                " 'web_read' in s.ACTIVE_INSTRUCTIONS)")
+        out = _run_fresh(code, "web_read")
         assert out.returncode == 0, out.stderr[-600:]
         assert out.stdout.strip() == "False True", (
             "wire 发的是 ACTIVE_INSTRUCTIONS，不是全量字面量")

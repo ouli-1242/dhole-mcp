@@ -38,20 +38,20 @@ def _desc(tools: dict[str, dict], name: str) -> str:
 # 每条都对应一个真实的误用场景，不是泛泛的「描述要写清楚」。
 
 ROUTING_CONTRACT = [
-    ("smart_fetch", "smart_crawl",
-     "list page 时要把 agent 导向 smart_crawl，否则它会一个个 fetch"),
-    ("smart_crawl", "smart_fetch(urls=",
-     "已有 URL 列表时必须把 agent 推回 smart_fetch，否则会为一个已知清单白爬一遍"),
-    ("smart_search", "fetch_content",
-     "不知道 fetch_content 的 agent 会多花 N 次 smart_fetch 去取正文"),
-    ("smart_search", "smart_fetch",
+    ("web_read", "web_crawl",
+     "list page 时要把 agent 导向 web_crawl，否则它会一个个 fetch"),
+    ("web_crawl", "web_read(urls=",
+     "已有 URL 列表时必须把 agent 推回 web_read，否则会为一个已知清单白爬一遍"),
+    ("web_search", "fetch_content",
+     "不知道 fetch_content 的 agent 会多花 N 次 web_read 去取正文"),
+    ("web_search", "web_read",
      "搜索结果只是 URL，必须说清下一步是取正文"),
-    ("screenshot", "smart_fetch",
-     "文本 agent 不该调截图，要明确让位给 smart_fetch"),
-    ("parse", "smart_fetch",
-     "本地 PDF 只有 smart_fetch 能处理（且仅限 URL 形态），必须指明"),
-    ("feed_fetch", "smart_fetch",
-     "feed_fetch 不是通用抓取器，必须说明何时该换 smart_fetch"),
+    ("screenshot", "web_read",
+     "文本 agent 不该调截图，要明确让位给 web_read"),
+    ("parse", "web_read",
+     "本地 PDF 只有 web_read 能处理（且仅限 URL 形态），必须指明"),
+    ("feed_read", "web_read",
+     "feed_read 不是通用抓取器，必须说明何时该换 web_read"),
     ("cache_clear", "cache_ttl=0",
      "清缓存不是刷新单页的手段，要导向 cache_ttl=0"),
 ]
@@ -66,9 +66,9 @@ def test_routing_rule_present(tools, tool, needle, why):
 def test_instructions_routes_known_url_list_to_fetch(tools):
     """instructions 是跨工具的入口表，必须区分「已有 URL」和「需先发现 URL」。"""
     low = DHOLE_INSTRUCTIONS.lower()
-    assert "smart_fetch" in low and "smart_crawl" in low
-    assert "already have" in low, "未说明「已有 URL 用 smart_fetch」"
-    assert "don't have the urls" in low, "未说明「需先发现 URL 才用 smart_crawl」"
+    assert "web_read" in low and "web_crawl" in low
+    assert "already have" in low, "未说明「已有 URL 用 web_read」"
+    assert "don't have the urls" in low, "未说明「需先发现 URL 才用 web_crawl」"
 
 
 # ─── 事实性：描述里的声明必须和代码一致 ────────────────────────────────
@@ -82,7 +82,7 @@ def test_engine_count_in_instructions_matches_real_pool():
 
 
 def test_search_description_lists_the_real_default_pool(tools):
-    desc = _desc(tools, "smart_search")
+    desc = _desc(tools, "web_search")
     missing = [e for e in DEFAULT_ENGINES if e not in desc]
     assert not missing, f"描述里的默认引擎池与 DEFAULT_ENGINES 不符，缺: {missing}"
 
@@ -101,7 +101,7 @@ def _engine_tokens(text: str) -> set[str]:
 
 
 def test_search_engine_list_never_names_a_retired_engine(tools):
-    """`smart_search` 的每一处引擎点名都不许指着已经不存在的后端。
+    """`web_search` 的每一处引擎点名都不许指着已经不存在的后端。
 
     17.0 删了 6 家引擎、并把 opt-in 层一起去掉（池子=注册表），所以这条守卫换了
     形状：过去它比对「点名的 opt-in 清单别只列一半」，现在比对「点名的名字里不许
@@ -122,7 +122,7 @@ def test_search_engine_list_never_names_a_retired_engine(tools):
     assert set(_INDEX_FAMILY) == set(DEFAULT_ENGINES), (
         "注册表与默认池又不一致了：先修池子，再回来改这条守卫")
 
-    t = tools["smart_search"]
+    t = tools["web_search"]
     locations = {
         "description": t["description"],
         "engines": t["inputSchema"]["properties"]["engines"]["description"],
@@ -133,7 +133,7 @@ def test_search_engine_list_never_names_a_retired_engine(tools):
         if hit:
             stale[where] = sorted(hit)
     assert not stale, (
-        "smart_search 点名了 17.0 已删除的引擎，调用方会点到不存在的名字。\n"
+        "web_search 点名了 17.0 已删除的引擎，调用方会点到不存在的名字。\n"
         f"  不符处: {stale}\n"
         "能力损失写在 dhole_doc 语料里（那里可以讲「以前有、现在没了」），"
         "常驻层只写现在能用的。")
@@ -143,7 +143,7 @@ def test_parse_advertises_local_pdf(tools):
     """本地 PDF 必须真的可用，且被如实声明。
 
     历史：`SUPPORTED_EXTENSIONS` 一直含 `.pdf`，但实现只返回一句
-    「用 smart_fetch(url='file://...')」—— 而 file:// 被 SSRF 守卫硬拦、裸路径
+    「用 web_read(url='file://...')」—— 而 file:// 被 SSRF 守卫硬拦、裸路径
     也不是合法 URL，于是本地 PDF 实际无路可走，agent 照描述走会白烧两次调用。
     现在 parse 自己解析，描述与参数说明都必须写明。
     """
@@ -199,7 +199,7 @@ def test_parse_implements_pdf_locally():
 
     import inspect
     src = inspect.getsource(parse_mod)
-    assert "smart_fetch(url='file://" not in src, "parse.py 仍推荐 file:// 用法"
+    assert "web_read(url='file://" not in src, "parse.py 仍推荐 file:// 用法"
     assert "extract_pdf" in src, "parse.py 没有真的解析 PDF"
 
 
@@ -252,8 +252,8 @@ def test_params_named_in_description_exist(tools, name):
     """描述说 `foo=...`，就得真有某个工具接受 foo。
 
     防的是「描述承诺了一个不存在的参数」—— agent 会照着传，然后被
-    _reject_unknown_args 拒绝或静默忽略。跨工具引用是合法的（smart_crawl 的
-    描述里写 smart_fetch(urls=[...])），所以已知集合取全部工具的并集。
+    _reject_unknown_args 拒绝或静默忽略。跨工具引用是合法的（web_crawl 的
+    描述里写 web_read(urls=[...])），所以已知集合取全部工具的并集。
     """
     known = set(_NOT_A_PARAM) | _response_field_names()
     assert "summary_truncated" in known and "next_offset" in known, \
@@ -338,7 +338,7 @@ _DOCSTRING_ONLY_IMPLEMENTATION = {
 # 会动手的那个工具上才有用 —— 拿着「清缓存」意图的 agent 才是需要知道会掉登录
 # 的人）。两边各写一遍就是两个工具描述互为副本，删掉任一侧都会漂。
 _DOCSTRING_ONLY_CROSS_REFERENCE = {
-    "smart_fetch", "smart_search", "cache_clear",
+    "web_read", "web_search", "cache_clear",
 }
 
 # 刻意不在 wire 暴露的诊断字段：暴露的边际价值低于其 token 成本（agent 基本

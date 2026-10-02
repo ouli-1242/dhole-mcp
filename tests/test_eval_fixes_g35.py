@@ -6,7 +6,7 @@
 * **D1** 元素截图拿不到图片像素 —— A/B 实验坐实（`disable_resources` 单变量：
   True 时浏览器发出 `GET /qr.png` 0 次，False 时 1 次）
 * **D2** 索引寻址的动作标签渲染成 `None`，并泄漏进写操作审计的 `action` 字段
-* **D3** `screenshot` / `feed_fetch` 缺 `allow_private`，与 `smart_fetch` 不对称
+* **D3** `screenshot` / `feed_read` 缺 `allow_private`，与 `web_read` 不对称
 * **D4** `usage.jsonl` 的 `ok` 对"返回 error 的调用"也记 `True`
 """
 
@@ -55,7 +55,7 @@ class TestAScreenshotActionKeepsPageResources:
         monkeypatch.setattr(server_mod.MasterFetchServer, "_force_fetch",
                             fake_force_fetch)
         with pytest.raises(_Stop):
-            asyncio.run(MasterFetchServer().smart_fetch(
+            asyncio.run(MasterFetchServer().web_read(
                 url="https://example.com/", actions=actions))
         return seen
 
@@ -165,8 +165,8 @@ class TestTheAuditRowCarriesTheSubmitTarget:
 # ─── D3：私有目标口径统一 ────────────────────────────────────────────────
 
 class TestAllowPrivateScope:
-    """D3。`allow_private_scope` 是 smart_fetch 那套机制的可复用形态，给两个
-    没走 options 装饰器的工具（screenshot / feed_fetch）用同一套答案，而不是
+    """D3。`allow_private_scope` 是 web_read 那套机制的可复用形态，给两个
+    没走 options 装饰器的工具（screenshot / feed_read）用同一套答案，而不是
     再立一套要同步维护的策略。"""
 
     def test_loopback_is_refused_outside_the_scope(self):
@@ -202,9 +202,9 @@ class TestThePrivateTargetOptionReachesBothTools:
             seen.update(kwargs)
             return []
 
-        monkeypatch.setattr(server_mod.MasterFetchServer, "feed_fetch",
+        monkeypatch.setattr(server_mod.MasterFetchServer, "feed_read",
                             fake_feed_fetch)
-        asyncio.run(MasterFetchServer()._dispatch("feed_fetch", {
+        asyncio.run(MasterFetchServer()._dispatch("feed_read", {
             "urls": ["http://127.0.0.1:8399/feed.xml"], "allow_private": True}))
 
         assert seen["allow_private"] is True
@@ -212,7 +212,7 @@ class TestThePrivateTargetOptionReachesBothTools:
     def test_both_methods_accept_the_option_as_a_real_parameter(self):
         import inspect
 
-        for tool in ("screenshot", "feed_fetch"):
+        for tool in ("screenshot", "feed_read"):
             params = inspect.signature(getattr(MasterFetchServer, tool)).parameters
             assert "allow_private" in params, f"{tool} 不接受 allow_private"
 
@@ -230,7 +230,7 @@ class TestThePrivateTargetOptionReachesBothTools:
 
         monkeypatch.setattr(feed_mod, "fetch_feeds", fake_fetch_feeds)
 
-        out = asyncio.run(MasterFetchServer().feed_fetch(
+        out = asyncio.run(MasterFetchServer().feed_read(
             urls=["http://127.0.0.1:8399/feed.xml"], allow_private=True))
 
         assert out == []
@@ -239,9 +239,9 @@ class TestThePrivateTargetOptionReachesBothTools:
 
     def test_feed_fetch_refuses_a_loopback_url_without_the_option(self):
         with pytest.raises(ValueError) as e:
-            asyncio.run(MasterFetchServer().feed_fetch(
+            asyncio.run(MasterFetchServer().feed_read(
                 urls=["http://127.0.0.1:8399/feed.xml"]))
-        assert "feed_fetch URL 校验失败" in str(e.value)
+        assert "feed_read URL 校验失败" in str(e.value)
         assert "internal" in str(e.value)
 
     def test_screenshot_opens_the_scope_before_validate_url(self, monkeypatch):
@@ -300,12 +300,12 @@ class TestThePrivateTargetOptionReachesBothTools:
 
 class TestTheCallLogRecordsApplicationLevelFailures:
     """D4。`ok` 是"调用跑完了、没抛异常"，不是"工具报告了成功"。一个被 SSRF
-    守卫拒掉的 feed_fetch 会走正常 envelope 返回，于是日志里记成
-    `{"tool": "feed_fetch", "ok": true, "ms": 22.0}`，拒绝对读者不可见。"""
+    守卫拒掉的 feed_read 会走正常 envelope 返回，于是日志里记成
+    `{"tool": "feed_read", "ok": true, "ms": 22.0}`，拒绝对读者不可见。"""
 
     def test_a_refusal_envelope_yields_its_error(self):
-        payload = {"feeds": [], "error": "feed_fetch URL 校验失败: ..."}
-        assert server_mod._result_error(([], payload)).startswith("feed_fetch URL 校验失败")
+        payload = {"feeds": [], "error": "feed_read URL 校验失败: ..."}
+        assert server_mod._result_error(([], payload)).startswith("feed_read URL 校验失败")
 
     def test_a_clean_envelope_yields_nothing(self):
         assert server_mod._result_error(([], {"feeds": [], "error": ""})) == ""
@@ -328,7 +328,7 @@ class TestTheCallLogRecordsApplicationLevelFailures:
         monkeypatch.setenv("DHOLE_USAGE_LOG", str(log))
 
         server_mod._log_tool_call(
-            "feed_fetch", True, 22.0,
+            "feed_read", True, 22.0,
             server_mod._result_error(([], {"feeds": [], "error": "refused"})))
 
         row = json.loads(log.read_text(encoding="utf-8").strip())

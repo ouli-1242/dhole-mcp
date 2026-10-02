@@ -22,7 +22,7 @@
    70KB 的 URL（5.0 倍开销），且 max_pages=2 根本不参与 map 的上限。
 4. crawl 页的 is_truncated 永远是 false（抽取函数已经先裁到上限，外层再比长度就不
    可能成立），而同一行的 summary 自己写着 truncated；max_content_chars_per 的钳
-   制也不像 smart_fetch 那样说出来。
+   制也不像 web_read 那样说出来。
 5. 空结果时 error 说"改措辞没用"，next_action 说"请改措辞或试 mode=neural"——后
    者在这次调用里已经开着。
 7. 本地解析里"文件找到了但内容解析不了"（坏 JSON/坏 YAML/假 PDF/不支持扩展名）全
@@ -264,12 +264,12 @@ class TestACutPageSaysItWasCut:
                                              "disallow": []}, raising=False)
 
         class _Srv:
-            async def smart_fetch(self, url, **kwargs):
+            async def web_read(self, url, **kwargs):
                 return _result(url=url, content=[_article_html(4000)],
                                content_type="text/html", fetcher_used="http",
                                content_ok=True, summary="200 OK · big · http")
 
-        out = await crawl_mod.smart_crawl(_Srv(), "https://d.test/", max_pages=1,
+        out = await crawl_mod.web_crawl(_Srv(), "https://d.test/", max_pages=1,
                                           max_depth=0, max_content_chars_per=500)
         page = out.pages[0]
         assert page.is_truncated is True
@@ -278,11 +278,11 @@ class TestACutPageSaysItWasCut:
     @pytest.mark.asyncio
     async def test_the_per_page_cap_clamp_is_named(self):
         class _Srv:
-            async def smart_fetch(self, url, **kwargs):
+            async def web_read(self, url, **kwargs):
                 return _result(url=url, content=["x" * 200], content_type="text/html",
                                fetcher_used="http", content_ok=True)
 
-        out = await crawl_mod.smart_crawl(_Srv(), "https://d.test/", max_pages=1,
+        out = await crawl_mod.web_crawl(_Srv(), "https://d.test/", max_pages=1,
                                           max_depth=0, max_content_chars_per=100)
         assert "clamped 100->500" in out.summary, out.summary
 
@@ -291,25 +291,25 @@ class TestACutPageSaysItWasCut:
         """实测：arxiv 对一个错误分类返回 400「Invalid archive or category」，
         crawl 的页却标 page_type=js_shell —— 那是把"URL 无效"说成"这站要 JS"。"""
         class _Srv:
-            async def smart_fetch(self, url, **kwargs):
+            async def web_read(self, url, **kwargs):
                 return _result(url=url, status=400, content=["<html><body>Invalid "
                                                              "archive or category</body></html>"],
                                content_ok=False, content_type="text/html",
                                error="http_error_400: server returned error status")
 
-        out = await crawl_mod.smart_crawl(_Srv(), "https://arxiv.org/list/cs.CO/recent",
+        out = await crawl_mod.web_crawl(_Srv(), "https://arxiv.org/list/cs.CO/recent",
                                           max_pages=1, max_depth=0)
         assert out.pages[0].page_type == "fallback", out.pages[0].page_type
 
     @pytest.mark.asyncio
     async def test_an_empty_success_is_still_called_a_js_shell(self):
         class _Srv:
-            async def smart_fetch(self, url, **kwargs):
+            async def web_read(self, url, **kwargs):
                 return _result(url=url, status=200, content=["<html><body></body></html>"],
                                content_ok=False, content_type="text/html",
                                error="js_shell_detected: x")
 
-        out = await crawl_mod.smart_crawl(_Srv(), "https://x.test/", max_pages=1,
+        out = await crawl_mod.web_crawl(_Srv(), "https://x.test/", max_pages=1,
                                           max_depth=0)
         assert out.pages[0].page_type == "js_shell"
 
@@ -317,13 +317,13 @@ class TestACutPageSaysItWasCut:
     async def test_a_filter_that_ate_everything_says_so(self):
         """path_include 命中 0 条时，响应里没有任何地方承认有个过滤器运行过。"""
         class _Srv:
-            async def smart_fetch(self, url, **kwargs):
+            async def web_read(self, url, **kwargs):
                 html = ('<html><body><a href="/other/a">a</a>'
                         '<a href="/other/b">b</a></body></html>')
                 return _result(url=url, content=[html], content_type="text/html",
                                fetcher_used="http", content_ok=True)
 
-        out = await crawl_mod.smart_crawl(_Srv(), "https://d.test/", max_pages=5,
+        out = await crawl_mod.web_crawl(_Srv(), "https://d.test/", max_pages=5,
                                           max_depth=1, path_include="/nowhere")
         assert len(out.pages) == 1
         assert "only the start page was kept" in out.summary, out.summary
@@ -464,7 +464,7 @@ class TestAnArrayFieldNeedsAContainer:
         """重启实测抓到的收尾问题：这条响应的 next_action 是空串，而它恰恰是唯一
         一个修复完全在调用方自己手里、且确实一个请求都没发出去的错。"""
         _, payload = asyncio.run(MasterFetchServer()._dispatch(
-            "smart_fetch", {"url": "https://quotes.toscrape.com/", "schema": {
+            "web_read", {"url": "https://quotes.toscrape.com/", "schema": {
                 "properties": {"quotes": {"type": "array",
                                           "properties": {"a": {"selector": "i"}}}}}}))
         assert payload["error"].startswith("schema validation error: ")
@@ -486,7 +486,7 @@ class TestRobotsLabelTellsTheTruth:
             return _result(url="https://x.test/deny", content=["body"],
                            content_type="text/html", content_ok=True)
         server.get = fake_get
-        return asyncio.run(server.smart_fetch("https://x.test/deny", cache_ttl=0))
+        return asyncio.run(server.web_read("https://x.test/deny", cache_ttl=0))
 
     def test_an_unreadable_file_is_not_reported_as_compliance(self, monkeypatch):
         out = self._fetch_with_verdict(
@@ -539,9 +539,9 @@ class TestRobotsLabelTellsTheTruth:
         monkeypatch.setattr(srv_mod.MasterFetchServer, "get", fake_get)
         server = srv_mod.MasterFetchServer()
 
-        first = await server.smart_fetch(url="https://receipt.test/p", cache_ttl=600)
+        first = await server.web_read(url="https://receipt.test/p", cache_ttl=600)
         assert first.metadata.get("robots") == "complied", first.metadata
-        second = await server.smart_fetch(url="https://receipt.test/p", cache_ttl=600,
+        second = await server.web_read(url="https://receipt.test/p", cache_ttl=600,
                                           ignore_robots=True)
         assert second.cached is True, "the second call must be the cache-hit path"
         label = second.metadata.get("robots")

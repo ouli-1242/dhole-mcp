@@ -233,9 +233,9 @@ class TestOptInWiring:
         assert {"recipe", "watch"} <= server_mod._parse_enabled_tools()
 
     def test_naming_them_in_dhole_tools_still_works(self, monkeypatch):
-        monkeypatch.setenv("DHOLE_TOOLS", "smart_fetch,recipe,watch")
+        monkeypatch.setenv("DHOLE_TOOLS", "web_read,recipe,watch")
         assert server_mod._parse_enabled_tools() == frozenset(
-            {"smart_fetch", "recipe", "watch"})
+            {"web_read", "recipe", "watch"})
 
     def test_the_default_instructions_route_to_them(self, monkeypatch):
         """默认注册的工具必须在默认 instructions 里有路由行——否则连上来
@@ -246,7 +246,7 @@ class TestOptInWiring:
         assert "recipe" in text and "watch" in text
 
     def test_a_disabled_tool_is_refused_with_a_named_error(self, monkeypatch):
-        monkeypatch.setattr(server_mod, "_ENABLED_TOOLS", frozenset({"smart_fetch"}))
+        monkeypatch.setattr(server_mod, "_ENABLED_TOOLS", frozenset({"web_read"}))
         s = MasterFetchServer()
         with pytest.raises(ValueError) as e:
             _run(s._dispatch("recipe", {"op": "list"}))
@@ -310,7 +310,7 @@ class TestWatchTool:
                 url="https://example.com/", status=0, content=[],
                 error="connection reset", next_action="retry later")
 
-        monkeypatch.setattr(MasterFetchServer, "smart_fetch", _boom)
+        monkeypatch.setattr(MasterFetchServer, "web_read", _boom)
         m = _run(MasterFetchServer().watch(op="check", name="w"))
         assert m.error and m.changed is None
         assert lib.get_watch("w")["baseline"] == "the good snapshot"

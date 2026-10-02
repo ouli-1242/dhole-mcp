@@ -346,7 +346,7 @@ class TestTheWireStatesTheBudgetIsForBytes:
 
     @pytest.fixture()
     def props(self):
-        tool = next(td for td in MasterFetchServer._TOOL_DEFS if td["name"] == "smart_fetch")
+        tool = next(td for td in MasterFetchServer._TOOL_DEFS if td["name"] == "web_read")
         return tool["inputSchema"]["properties"]
 
     def test_timeout_says_a_document_spends_it_on_the_download(self, props):

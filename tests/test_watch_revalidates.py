@@ -9,7 +9,7 @@
 * **源站不给标记时如实退化**：整页重读，不许在回答里假装复验过。
 * **失败的抓取既不动基线也不动标记**（与 16.x 那条"故障不写成页面清空了"同一条）。
 
-抓取层本身用假 `smart_fetch` 替掉：这里要测的是 watch 与存储之间的那份约定，
+抓取层本身用假 `web_read` 替掉：这里要测的是 watch 与存储之间的那份约定，
 真 HTTP 那一侧（校验子变成请求头、304 不当失败）由 `test_revalidation_g23.py` 钉。
 """
 
@@ -71,7 +71,7 @@ class TestValidatorsRideWithTheBaseline:
 
     def test_the_first_check_stores_the_markers_it_was_given(self, home, monkeypatch):
         fake = _FakeFetch([{"text": "v1\nline", "etag": '"A"'}])
-        monkeypatch.setattr(MasterFetchServer, "smart_fetch", fake)
+        monkeypatch.setattr(MasterFetchServer, "web_read", fake)
         srv = MasterFetchServer()
         out = _watch(srv, op="add", name="n", url="https://e.test/p")
         assert out.baseline_created is True or out.changed is None, out
@@ -84,7 +84,7 @@ class TestValidatorsRideWithTheBaseline:
         """换基线必须同时换标记 —— 否则标记描述的是上一个版本。"""
         fake = _FakeFetch([{"text": "v1", "etag": '"A"'},
                            {"text": "v2", "etag": '"B"'}])
-        monkeypatch.setattr(MasterFetchServer, "smart_fetch", fake)
+        monkeypatch.setattr(MasterFetchServer, "web_read", fake)
         srv = MasterFetchServer()
         _watch(srv, op="add", name="n", url="https://e.test/p")
         _watch(srv, op="check", name="n")          # 建基线（A）
@@ -96,7 +96,7 @@ class TestValidatorsRideWithTheBaseline:
     def test_a_failure_leaves_both_the_baseline_and_the_markers(self, home, monkeypatch):
         fake = _FakeFetch([{"text": "v1", "etag": '"A"'},
                            {"status": 503, "content_ok": False, "error": "503"}])
-        monkeypatch.setattr(MasterFetchServer, "smart_fetch", fake)
+        monkeypatch.setattr(MasterFetchServer, "web_read", fake)
         srv = MasterFetchServer()
         _watch(srv, op="add", name="n", url="https://e.test/p")
         _watch(srv, op="check", name="n")
@@ -111,7 +111,7 @@ class TestTheConditionalQuestion:
     def test_the_second_check_asks_with_the_stored_markers(self, home, monkeypatch):
         fake = _FakeFetch([{"text": "v1", "etag": '"A"', "last_modified": "x"},
                            {"text": "v1", "etag": '"A"'}])
-        monkeypatch.setattr(MasterFetchServer, "smart_fetch", fake)
+        monkeypatch.setattr(MasterFetchServer, "web_read", fake)
         srv = MasterFetchServer()
         _watch(srv, op="add", name="n", url="https://e.test/p")
         _watch(srv, op="check", name="n")          # 建基线
@@ -120,7 +120,7 @@ class TestTheConditionalQuestion:
 
     def test_a_304_is_an_answer_not_a_failure(self, home, monkeypatch):
         fake = _FakeFetch([{"text": "v1", "etag": '"A"'}, {"status": 304}])
-        monkeypatch.setattr(MasterFetchServer, "smart_fetch", fake)
+        monkeypatch.setattr(MasterFetchServer, "web_read", fake)
         srv = MasterFetchServer()
         _watch(srv, op="add", name="n", url="https://e.test/p")
         _watch(srv, op="check", name="n")
@@ -136,7 +136,7 @@ class TestTheConditionalQuestion:
     def test_no_markers_means_no_question(self, home, monkeypatch):
         """源站不给 etag / last-modified：老老实实整页重读，不许假装复验过。"""
         fake = _FakeFetch([{"text": "v1"}] * 4)
-        monkeypatch.setattr(MasterFetchServer, "smart_fetch", fake)
+        monkeypatch.setattr(MasterFetchServer, "web_read", fake)
         srv = MasterFetchServer()
         _watch(srv, op="add", name="n", url="https://e.test/p")
         _watch(srv, op="check", name="n")
@@ -146,7 +146,7 @@ class TestTheConditionalQuestion:
     def test_retargeting_clears_the_markers_with_the_baseline(self, home, monkeypatch):
         """换靶清基线是既有规矩；标记必须一起清 —— 留着就是把旧站的 etag 问新站。"""
         fake = _FakeFetch([{"text": "v1", "etag": '"A"'}] * 4)
-        monkeypatch.setattr(MasterFetchServer, "smart_fetch", fake)
+        monkeypatch.setattr(MasterFetchServer, "web_read", fake)
         srv = MasterFetchServer()
         _watch(srv, op="add", name="n", url="https://e.test/p")
         _watch(srv, op="check", name="n")

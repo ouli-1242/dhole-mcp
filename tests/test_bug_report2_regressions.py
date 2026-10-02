@@ -51,16 +51,16 @@ class _Stop(Exception):
 
 
 def _stub_crawl(monkeypatch, **kwargs):
-    """Run a real smart_crawl against a stubbed fetch tier (no network)."""
+    """Run a real web_crawl against a stubbed fetch tier (no network)."""
     async def fake_smart_fetch(self, url=None, **ignored):
         return server_mod.ResponseModel(
             url=url or "", status=200, content=[_LINKED_PAGE],
             fetcher_used="http", content_ok=True, content_type="text/html",
         )
 
-    monkeypatch.setattr(server_mod.MasterFetchServer, "smart_fetch", fake_smart_fetch)
+    monkeypatch.setattr(server_mod.MasterFetchServer, "web_read", fake_smart_fetch)
     srv = server_mod.MasterFetchServer()
-    return asyncio.run(srv.smart_crawl("https://example.com/", max_pages=5, cache_ttl=0, **kwargs))
+    return asyncio.run(srv.web_crawl("https://example.com/", max_pages=5, cache_ttl=0, **kwargs))
 
 
 class TestCookieShapes:
@@ -242,7 +242,7 @@ class TestCrawlPathFilterAcceptsAString:
 
 
 class TestCrawlSearchOptionAndSummary:
-    """report BUG-7: ``search`` was documented for smart_crawl but a call that
+    """report BUG-7: ``search`` was documented for web_crawl but a call that
     carried it was rejected as an unsupported key.
 
     Found alongside it: when the filter matched nothing, the summary kept the
@@ -261,8 +261,8 @@ class TestCrawlSearchOptionAndSummary:
             seen.update(kwargs)
             return CrawlResponseModel(start_url=url or "", pages=[])
 
-        monkeypatch.setattr(server_mod.MasterFetchServer, "smart_crawl", fake_crawl)
-        asyncio.run(server_mod.MasterFetchServer()._dispatch("smart_crawl", args))
+        monkeypatch.setattr(server_mod.MasterFetchServer, "web_crawl", fake_crawl)
+        asyncio.run(server_mod.MasterFetchServer()._dispatch("web_crawl", args))
         return seen.get("search")
 
     def test_search_is_accepted(self, monkeypatch):
@@ -279,7 +279,7 @@ class TestCrawlSearchOptionAndSummary:
 
 class TestLocalPdfReportsItsEnvelope:
     """report BUG-8: parse returned ``table_of_contents: []`` and ``metadata: {}``
-    for a local PDF while smart_fetch on the same PDF by URL returned both - the
+    for a local PDF while web_read on the same PDF by URL returned both - the
     extractor already produced them and the parse path dropped them.
     """
 
@@ -358,7 +358,7 @@ class TestNoPerHostLane:
         monkeypatch.setattr(MasterFetchServer, "_auto_escalate", auto)
         monkeypatch.setattr(MasterFetchServer, "_force_fetch", forced)
         with pytest.raises(_Stop):
-            asyncio.run(MasterFetchServer().smart_fetch(url=url, **kw))
+            asyncio.run(MasterFetchServer().web_read(url=url, **kw))
         return seen
 
     def test_a_reddit_listing_takes_everyones_lane_with_its_own_url(self, monkeypatch):
@@ -399,7 +399,7 @@ class TestActionsTierBudget:
 
         monkeypatch.setattr(server_mod.MasterFetchServer, "_force_fetch", fake_force_fetch)
         with pytest.raises(_Stop):
-            asyncio.run(server_mod.MasterFetchServer().smart_fetch(
+            asyncio.run(server_mod.MasterFetchServer().web_read(
                 url="https://example.com/", actions=[{"scroll": 300}], **kwargs))
         return seen["timeout"]
 
@@ -426,7 +426,7 @@ class TestActionsTierBudget:
 
         monkeypatch.setattr(server_mod.MasterFetchServer, "_auto_escalate", fake_auto_escalate)
         with pytest.raises(_Stop):
-            asyncio.run(server_mod.MasterFetchServer().smart_fetch(url="https://example.com/"))
+            asyncio.run(server_mod.MasterFetchServer().web_read(url="https://example.com/"))
         assert seen["timeout"] == 30000
 
     def test_the_dispatcher_leaves_the_default_to_smart_fetch(self, monkeypatch):
@@ -441,9 +441,9 @@ class TestActionsTierBudget:
             return ResponseModel(url=kwargs.get("url", ""), status=0, content=[],
                                  error="stub")
 
-        monkeypatch.setattr(server_mod.MasterFetchServer, "smart_fetch", fake_smart_fetch)
+        monkeypatch.setattr(server_mod.MasterFetchServer, "web_read", fake_smart_fetch)
         asyncio.run(server_mod.MasterFetchServer()._dispatch(
-            "smart_fetch", {"url": "https://example.com/"}))
+            "web_read", {"url": "https://example.com/"}))
         # Absent or None both mean the same thing here — the tool decides — and the
         # dispatcher now leaves it absent rather than handing over an explicit None.
         # What must never come back is a number substituted at this layer.
@@ -777,7 +777,7 @@ class TestCrawlPathScopeIsASubtree:
 
     def test_the_wire_description_names_the_subtree_rule(self):
         tools = {t["name"]: t for t in MasterFetchServer._TOOL_DEFS}
-        props = tools["smart_crawl"]["inputSchema"]["properties"]
+        props = tools["web_crawl"]["inputSchema"]["properties"]
         desc = props["path_include"]["description"]
         assert "path subtree" in desc
         assert "NOT /docs-old" in desc, "描述必须点明前缀相同的兄弟目录不算"
@@ -799,7 +799,7 @@ class TestContentBudgetArgIsHonouredOrRejected:
     """
 
     def _call(self, **args):
-        return asyncio.run(MasterFetchServer()._dispatch("smart_fetch", args))
+        return asyncio.run(MasterFetchServer()._dispatch("web_read", args))
 
     @staticmethod
     def _no_request(monkeypatch) -> list:
@@ -894,7 +894,7 @@ class TestContentBudgetArgIsHonouredOrRejected:
         """The 200000 ceiling is a deliberate clamp, so it has to be stated -
         otherwise an agent asking for 500000 cannot tell why it got 200000."""
         tools = {t["name"]: t for t in MasterFetchServer._TOOL_DEFS}
-        desc = tools["smart_fetch"]["inputSchema"]["properties"]["max_content_chars"]["description"]
+        desc = tools["web_read"]["inputSchema"]["properties"]["max_content_chars"]["description"]
         assert "200000" in desc
         assert "500" in desc
 

@@ -160,7 +160,7 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
             gate_home = tmp_path / "home-gate"
             client = _WireClient(gate_home, {})
             try:
-                payload = _payload(client.call_tool("smart_fetch", {
+                payload = _payload(client.call_tool("web_read", {
                     "url": f"{site.base_url}/home",
                     "cdp_url": endpoint,
                     "allow_private": True,
@@ -179,7 +179,7 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
             attach_home = tmp_path / "home-attach"
             client = _WireClient(attach_home, {})
             try:
-                payload = _payload(client.call_tool("smart_fetch", {
+                payload = _payload(client.call_tool("web_read", {
                     "url": f"{site.base_url}/home",
                     "cdp_url": endpoint,
                     "confirm": True,
@@ -208,7 +208,7 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
             # ── 3. host scope: 围栏外的导航在 route 层被拒 ──
             client = _WireClient(attach_home, {})   # 复用已授权过 127.0.0.1 的家
             try:
-                payload = _payload(client.call_tool("smart_fetch", {
+                payload = _payload(client.call_tool("web_read", {
                     "url": "https://example.com/",
                     "cdp_url": endpoint,
                 }))
@@ -221,7 +221,7 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
             bulk_home = tmp_path / "home-bulk"
             client = _WireClient(bulk_home, {})
             try:
-                payload = _payload(client.call_tool("smart_fetch", {
+                payload = _payload(client.call_tool("web_read", {
                     "urls": [f"{site.base_url}/home"],
                     "cdp_url": endpoint,
                     "confirm": True,

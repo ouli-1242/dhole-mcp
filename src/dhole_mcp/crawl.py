@@ -1,7 +1,7 @@
-"""smart_crawl — flagship same-domain deep crawl for Dhole, optimized for agents.
+"""web_crawl — flagship same-domain deep crawl for Dhole, optimized for agents.
 
 Walks a website from a start URL and returns each page as agent-usable markdown
-with the same honest signals smart_fetch produces (content_ok / summary / error /
+with the same honest signals web_read produces (content_ok / summary / error /
 fetched_at). Designed to beat free OSS crawlers (Crawl4AI, Firecrawl free tier,
 Jina) on agent-usability: honest per-page quality signals, content-adaptive
 extraction, and next_action guidance instead of a dumb page dump.
@@ -31,7 +31,7 @@ Flagship design (v6):
     before dedup, so `/docs` and `/docs/` are no longer crawled twice.
   * **Map first, then read.** `discover_only=true` returns the URL map (prefetch)
     and `sitemap=true` returns the whole site's map in one fetch; the URLs picked
-    out of either are read with `smart_fetch(urls=[...])`. Map mode extracts no
+    out of either are read with `web_read(urls=[...])`. Map mode extracts no
     page content, but it is not free: expanding the map means fetching one page
     per step, so it costs up to `max_pages` requests (10 by default) and
     `pages_crawled` reports exactly how many were made. For a one-request map use
@@ -41,14 +41,14 @@ Flagship design (v6):
     without re-discovering. It left in 17.0 (§3 decision 31) because a caller's
     list had to pass normalization, same-domain checking, dedup and a cap before
     it became a crawl, and each of those four cuts needed its own counter. Those
-    URLs never needed discovery, so `smart_fetch(urls=[...])` was already home.
+    URLs never needed discovery, so `web_read(urls=[...])` was already home.
   * **same_domain_only=true** default. External links are dropped (not crawled).
   * **Honest status.** Network failures report status -1 (documented) so
     downstream logic can distinguish them from a real HTTP 0 / no response.
   * **Freshness.** Each page carries `fetched_at`; `cache_ttl=0` forces fresh.
   * **Overall deadline.** One slow page can't hang the crawl; when the deadline
     is hit, partial results are returned with `truncated_by_time=true`.
-  * One fetch per page (extraction_type='html'), reusing smart_fetch's anti-bot
+  * One fetch per page (extraction_type='html'), reusing web_read's anti-bot
     escalation + fetch cache. Links + markdown are derived from the same body.
 """
 
@@ -73,7 +73,7 @@ logger = logging.getLogger("dhole-mcp.crawl")
 
 # ─── M-1：神经 focus（按次 focus_engine='neural' 点名，17.0 起无许可门）──
 # 与 server.py / focus.py 的选择语义一致：focus_engine 点名才用本地 cross-encoder
-# 打分；模型缺失在工具入口显式报错（smart_crawl 的闸），这里只 peek，拿不到就
+# 打分；模型缺失在工具入口显式报错（web_crawl 的闸），这里只 peek，拿不到就
 # 退回 BM25，绝不在爬取中途静默下载。
 #
 # 原来这一节还有 M-2 那一档：`_page_relevant` 拿同一套 cross-encoder 在**整页进
@@ -152,7 +152,7 @@ class CrawlPage(BaseModel):
     page_type: str = Field(default="", description="How the page was extracted: article / list / js_shell / fallback / discover_only. Tells the agent what kind of content it got.")
     content: list[str] = Field(default=[], description="Page markdown (empty in discover_only mode). For list pages, a structured link list.")
     content_chars: int = Field(default=0, description="Chars of markdown returned for this page.")
-    is_truncated: bool = Field(default=False, description="True = this page has more content; smart_fetch it with offset=next_offset.")
+    is_truncated: bool = Field(default=False, description="True = this page has more content; web_read it with offset=next_offset.")
     next_offset: int = Field(default=0, description="Next offset if is_truncated; 0 = no more.")
     fetched_at: str = Field(default="", description="ISO-8601 UTC when this page was fetched (may show cache age).")
     lastmod: str = Field(default="", description="<lastmod> from the site's sitemap.xml for this URL (sitemap mode only). Empty otherwise.")
@@ -694,7 +694,7 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
     listed = len(result.urls)
     if not pages:
         # The sitemap WAS found and parsed; it just produced no rows. Returning
-        # None here made smart_crawl report "no sitemap.xml found ... /sitemap.xml
+        # None here made web_crawl report "no sitemap.xml found ... /sitemap.xml
         # returned nothing" - false, and it sends the agent to BFS for a site
         # whose sitemap dhole has already read. A scope filter that matches
         # nothing is the usual cause (see `_eligible`), and the answer that helps
@@ -730,9 +730,9 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
     summary = (f"mapped {ok} URL(s) at {url} from sitemap.xml "
                f"(via {result.via}; {len(result.sitemaps_used)} sitemap file(s)) - one fetch, no BFS")
     next_action = (
-        f"{ok} URLs mapped from the sitemap. smart_fetch the ones you need - urls=[] "
+        f"{ok} URLs mapped from the sitemap. web_read the ones you need - urls=[] "
         f"takes the whole subset in one call, no discovery and no re-crawl - or "
-        f"re-run smart_crawl with discover_only=false to crawl content from the "
+        f"re-run web_crawl with discover_only=false to crawl content from the "
         f"start URL. Use path_include/path_exclude to scope."
     )
     if result.capped:
@@ -787,7 +787,7 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
     )
 
 
-async def smart_crawl(
+async def web_crawl(
     server,
     url: str,
     max_pages: int = 10,
@@ -815,7 +815,7 @@ async def smart_crawl(
     the site has one, else fall back to BFS. False (default) = BFS only. The
     sitemap path collapses big-site discovery (hundreds of pages) into one call.
     ignore_robots: skip robots.txt compliance for this crawl (default False =
-    comply). Every page is fetched through smart_fetch, which refuses a
+    comply). Every page is fetched through web_read, which refuses a
     disallowed URL before any request; this crawl additionally drops the
     discovered URLs it already knows are disallowed (robots_skipped) instead of
     spending budget on a refusal.
@@ -843,7 +843,7 @@ async def smart_crawl(
 
     # robots.txt compliance (v16.0): the crawl's own seed check, so a site that
     # disallows dhole is reported once, honestly, instead of as a crawl that
-    # silently collected refusals. Per-page enforcement lives in smart_fetch
+    # silently collected refusals. Per-page enforcement lives in web_read
     # (every page goes through it), and the robots cache is warm after this
     # call, which is what makes the discovered-URL filter below free.
     if not ignore_robots:
@@ -870,7 +870,7 @@ async def smart_crawl(
     concurrency = max(1, min(int(concurrency), 5))
     _chars_per_asked = int(max_content_chars_per)
     max_content_chars_per = max(500, min(_chars_per_asked, PER_PAGE_CHARS_CEILING))
-    # smart_fetch names its clamp in the summary; a crawl that silently answered
+    # web_read names its clamp in the summary; a crawl that silently answered
     # 500 chars for a request of 400 named nothing at all, so the two tools
     # described the same event differently depending on which one was called.
     _chars_per_clamp = ("" if max_content_chars_per == _chars_per_asked else
@@ -934,7 +934,7 @@ async def smart_crawl(
                 pages_discovered=0, discover_only=True, sitemap_used=False,
                 duration_ms=(time() - t0) * 1000,
                 summary=f"no sitemap.xml found at {start_norm} (robots.txt had no Sitemap directive and /sitemap.xml returned nothing)",
-                next_action=("No sitemap found. Re-run smart_crawl with sitemap=false (or omit it) "
+                next_action=("No sitemap found. Re-run web_crawl with sitemap=false (or omit it) "
                              "to use best-first BFS discovery instead."),
             )
 
@@ -1003,7 +1003,7 @@ async def smart_crawl(
             from dhole_mcp.search_proxy import configured_proxy
             _crawl_proxy = configured_proxy()[0]
             try:
-                resp = await server.smart_fetch(
+                resp = await server.web_read(
                     url=u, extraction_type="html", cache_ttl=cache_ttl,
                     max_content_chars=200000, force_fetcher=force_fetcher,
                     timeout=timeout,
@@ -1015,7 +1015,7 @@ async def smart_crawl(
                 if _is_transient_error(str(e)):
                     await asyncio.sleep(1.0)
                     try:
-                        resp = await server.smart_fetch(
+                        resp = await server.web_read(
                             url=u, extraction_type="html", cache_ttl=cache_ttl,
                             max_content_chars=200000, force_fetcher=force_fetcher,
                             timeout=timeout,
@@ -1025,7 +1025,7 @@ async def smart_crawl(
                     except Exception as e2:
                         # Lazy import to break circular dependency:
                         # crawl.py -> server.py (ResponseModel) and
-                        # server.py -> crawl.py (smart_crawl). Both are
+                        # server.py -> crawl.py (web_crawl). Both are
                         # function-level imports so neither module needs the
                         # other at import time.
                         from dhole_mcp.server import ResponseModel
@@ -1107,7 +1107,7 @@ async def smart_crawl(
                         # The extraction already holds the whole page up to the
                         # per-page cap; `cut` says whether more exists. next_offset
                         # is the char offset INTO THAT extraction, so it is only
-                        # meaningful with smart_fetch on this URL - a crawl page has
+                        # meaningful with web_read on this URL - a crawl page has
                         # no resumable cursor of its own, which is what the field
                         # description on CrawlPage.next_offset already says.
                         is_trunc = cut
@@ -1169,7 +1169,7 @@ async def smart_crawl(
                         # this costs nothing, and spending a page of the token
                         # budget on a refusal the next page would have skipped
                         # anyway is pure waste. Unknown verdicts still go
-                        # through - smart_fetch is the enforcement point.
+                        # through - web_read is the enforcement point.
                         if not ignore_robots and get_robots_cache().cached(link_url) is False:
                             robots_skipped += 1
                             continue
@@ -1250,7 +1250,7 @@ async def smart_crawl(
     if truncated_maxpages or truncated_time:
         why = "time deadline" if truncated_time else "max_pages"
         next_action = (
-            f"crawl stopped early ({why}); re-run smart_crawl with a higher "
+            f"crawl stopped early ({why}); re-run web_crawl with a higher "
             f"max_pages / deadline_ms, or scope it with "
             f"path_include=['/docs'] (a path subtree, not a string prefix). "
             f"{not_fetched} URL(s) were discovered but not fetched."
@@ -1270,7 +1270,7 @@ async def smart_crawl(
         next_action = (
             f"{pages_discovered} URLs mapped at a cost of {pages_crawled} page "
             f"fetch(es) (map mode fetches one page per expansion step to find more "
-            f"links). smart_fetch the ones you need, or re-run smart_crawl with "
+            f"links). web_read the ones you need, or re-run web_crawl with "
             f"discover_only=false to fetch content from the start URL. For a "
             f"ONE-request map, pass max_pages=1 (start URL's links) or "
             f"sitemap=true (whole site, if it publishes one)."
@@ -1295,7 +1295,7 @@ async def smart_crawl(
             # there and must not be diagnosed as "the site may be unreachable".
             next_action = ("All crawled pages returned no content. The site may be "
                           "unreachable, require JavaScript, or block automated access. "
-                          "Try smart_fetch on a specific URL for more diagnostics.")
+                          "Try web_read on a specific URL for more diagnostics.")
 
     result = CrawlResponseModel(
         start_url=start_norm, pages=pages, pages_crawled=pages_crawled,

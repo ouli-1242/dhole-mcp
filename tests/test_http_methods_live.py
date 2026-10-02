@@ -27,7 +27,7 @@ def _json_body(result) -> dict:
 
 
 async def _fetch(url: str, **kw):
-    out = await MasterFetchServer().smart_fetch(url, cache_ttl=0, timeout=25000, **kw)
+    out = await MasterFetchServer().web_read(url, cache_ttl=0, timeout=25000, **kw)
     if out.status in (-1, 0):
         pytest.skip(f"no usable route to {url}: {out.error[:80]}")
     return out

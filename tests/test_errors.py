@@ -218,7 +218,7 @@ class TestCrawlNetworkDiagnostics:
     def test_all_pages_network_failure(self):
         """When all pages fail with network errors, next_action should not be empty."""
         from dhole_mcp.crawl import CrawlPage
-        # Simulate what smart_crawl does at the end
+        # Simulate what web_crawl does at the end
         pages = [
             CrawlPage(url="https://example.com/1", depth=0, status=-1,
                      content_ok=False, error="net::ERR_CONNECTION_REFUSED"),

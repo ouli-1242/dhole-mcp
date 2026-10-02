@@ -15,8 +15,8 @@ have been worse than none:
   contract on the wire, so the schema description now states it and the test
   pins both halves. The report's suggested ``{"all": true}`` would have added a
   second way to say what ``"type": "array"`` already says.
-* D-13 (``required`` empty on smart_fetch *and* cache_clear) — true for
-  smart_fetch, which now declares ``anyOf``. cache_clear genuinely has no
+* D-13 (``required`` empty on web_read *and* cache_clear) — true for
+  web_read, which now declares ``anyOf``. cache_clear genuinely has no
   required argument, so it stays empty; adding a fabricated ``required`` there
   would have been the bug.
 * D-14 (no ``original_url``/``final_url``/``status_code``) — only
@@ -117,8 +117,8 @@ class TestDispatchedArgumentTypes:
         characters, and every result carried a single character as its URL —
         ``total=19, successful=19``, no error anywhere.
         """
-        seen = _record(monkeypatch, "smart_fetch", _REJECTED)
-        payload = _envelope("smart_fetch", {"urls": "https://example.com"})
+        seen = _record(monkeypatch, "web_read", _REJECTED)
+        payload = _envelope("web_read", {"urls": "https://example.com"})
 
         assert payload["status"] == 0
         assert "array of strings" in payload["error"]
@@ -132,8 +132,8 @@ class TestDispatchedArgumentTypes:
         "1 validation error for ResponseModel" — framework internals, no
         recovery hint, and nothing naming which element was wrong.
         """
-        seen = _record(monkeypatch, "smart_fetch", _REJECTED)
-        payload = _envelope("smart_fetch", {"urls": ["https://example.com", 123]})
+        seen = _record(monkeypatch, "web_read", _REJECTED)
+        payload = _envelope("web_read", {"urls": ["https://example.com", 123]})
 
         assert "urls[1]" in payload["error"]
         assert "int" in payload["error"]
@@ -147,14 +147,14 @@ class TestDispatchedArgumentTypes:
         exactly one reading, so it is honoured rather than rejected with the
         bare string.
         """
-        seen = _record(monkeypatch, "smart_fetch", _REJECTED)
-        _dispatch("smart_fetch", {"urls": '["https://a.test", "https://b.test"]'})
+        seen = _record(monkeypatch, "web_read", _REJECTED)
+        _dispatch("web_read", {"urls": '["https://a.test", "https://b.test"]'})
         assert seen["urls"] == ["https://a.test", "https://b.test"]
 
     def test_a_url_list_of_strings_still_reaches_the_tool(self, monkeypatch):
         """The legitimate path is untouched."""
-        seen = _record(monkeypatch, "smart_fetch", _REJECTED)
-        _dispatch("smart_fetch", {"urls": ["https://a.test", "https://b.test"]})
+        seen = _record(monkeypatch, "web_read", _REJECTED)
+        _dispatch("web_read", {"urls": ["https://a.test", "https://b.test"]})
         assert seen["urls"] == ["https://a.test", "https://b.test"]
 
     @pytest.mark.parametrize("value", ["false", "no", "0", "off", False, 0])
@@ -215,8 +215,8 @@ class TestDispatchedArgumentTypes:
         ``else`` — the heaviest tier, ~5s plus anti-detect overhead, reported as
         a normal success.
         """
-        seen = _record(monkeypatch, "smart_fetch", _REJECTED)
-        payload = _envelope("smart_fetch", {"url": "https://example.com", "force_fetcher": "magic"})
+        seen = _record(monkeypatch, "web_read", _REJECTED)
+        payload = _envelope("web_read", {"url": "https://example.com", "force_fetcher": "magic"})
 
         assert "not a fetcher tier" in payload["error"]
         assert seen == {}
@@ -228,7 +228,7 @@ class TestDispatchedArgumentTypes:
         """
         with pytest.raises(ValueError) as exc:
             server_mod._validate_tool_args(
-                "smart_fetch", {"force_fetcher": "dynamic"})
+                "web_read", {"force_fetcher": "dynamic"})
         msg = str(exc.value)
         assert "dynamic" in msg and "stealthy" in msg, msg
 
@@ -240,16 +240,16 @@ class TestDispatchedArgumentTypes:
     ])
     def test_force_fetcher_valid_values_are_preserved(self, value, expected):
         assert server_mod._validate_tool_args(
-            "smart_fetch", {"force_fetcher": value},
+            "web_read", {"force_fetcher": value},
         )["force_fetcher"] == expected
 
     def test_an_absent_force_fetcher_stays_none(self):
-        assert server_mod._validate_tool_args("smart_fetch", {})["force_fetcher"] is None
+        assert server_mod._validate_tool_args("web_read", {})["force_fetcher"] is None
 
     def test_smart_crawl_force_fetcher_is_validated_too(self):
-        """crawl.py forwards it straight to smart_fetch — same silent fallback."""
+        """crawl.py forwards it straight to web_read — same silent fallback."""
         with pytest.raises(ValueError, match="not a fetcher tier"):
-            _dispatch("smart_crawl", {
+            _dispatch("web_crawl", {
                 "url": "https://example.com/", "force_fetcher": "magic",
             })
 
@@ -274,7 +274,7 @@ class TestToolSchemaRequired:
         """
         import jsonschema
 
-        schema = self._schema("smart_fetch")
+        schema = self._schema("web_read")
         assert "required" not in schema, "either one alone satisfies the call"
         for documented in (
             {"url": "https://example.com/"},
@@ -291,9 +291,9 @@ class TestToolSchemaRequired:
 
     def test_every_other_tool_still_declares_its_required_arg(self):
         for name, required in (
-            ("smart_crawl", ["url"]), ("screenshot", ["url"]),
-            ("smart_search", ["query"]), ("parse", ["file_path"]),
-            ("feed_fetch", ["urls"]), ("resolve_url", ["url"]),
+            ("web_crawl", ["url"]), ("screenshot", ["url"]),
+            ("web_search", ["query"]), ("parse", ["file_path"]),
+            ("feed_read", ["urls"]), ("web_resolve", ["url"]),
         ):
             assert self._schema(name)["required"] == required
 
@@ -391,7 +391,7 @@ class TestClampNotes:
             return {"content": [payload]}
 
         monkeypatch.setattr(search_mod, "get_cached", fake_get_cached)
-        resp = asyncio.run(MasterFetchServer().smart_search("clamp note", max_results=51))
+        resp = asyncio.run(MasterFetchServer().web_search("clamp note", max_results=51))
 
         assert resp.cached is True
         assert "outside the supported 1-50 range" in resp.fetch_hint
@@ -411,7 +411,7 @@ class TestClampNotes:
             return {"content": [payload]}
 
         monkeypatch.setattr(search_mod, "get_cached", fake_get_cached)
-        resp = asyncio.run(MasterFetchServer().smart_search("clamp note", max_results=10))
+        resp = asyncio.run(MasterFetchServer().web_search("clamp note", max_results=10))
         assert "outside the supported" not in resp.fetch_hint
 
     def test_max_content_chars_below_the_floor_is_reported(self, monkeypatch):
@@ -425,7 +425,7 @@ class TestClampNotes:
             url="https://example.com", status=200, content=["short body"],
             content_type="text/html", total_extracted_chars=10,
         ))
-        out = asyncio.run(MasterFetchServer().smart_fetch(
+        out = asyncio.run(MasterFetchServer().web_read(
             "https://example.com", max_content_chars=499, cache_ttl=0,
         ))
         assert "clamped 499->500" in out.summary
@@ -435,7 +435,7 @@ class TestClampNotes:
             url="https://example.com", status=200, content=["short body"],
             content_type="text/html", total_extracted_chars=10,
         ))
-        out = asyncio.run(MasterFetchServer().smart_fetch(
+        out = asyncio.run(MasterFetchServer().web_read(
             "https://example.com", max_content_chars=5000, cache_ttl=0,
         ))
         assert "clamped" not in out.summary
@@ -447,8 +447,8 @@ class TestClampNotes:
             content_type="text/html", total_extracted_chars=10,
         ))
         srv = MasterFetchServer()
-        asyncio.run(srv.smart_fetch("https://example.com", max_content_chars=499, cache_ttl=0))
-        second = asyncio.run(srv.smart_fetch("https://example.com", cache_ttl=0))
+        asyncio.run(srv.web_read("https://example.com", max_content_chars=499, cache_ttl=0))
+        second = asyncio.run(srv.web_read("https://example.com", cache_ttl=0))
         assert "clamped" not in second.summary
 
 
@@ -463,7 +463,7 @@ class TestFeedContract:
         bare ``{"error": ...}`` — a second error shape for callers to detect,
         with no next_action.
         """
-        payload = _envelope("feed_fetch", {"urls": []})
+        payload = _envelope("feed_read", {"urls": []})
         assert payload["feeds"] == []
         assert payload["error"]
         assert payload["next_action"]
@@ -473,14 +473,14 @@ class TestFeedContract:
         async def fake_feed(self, **kwargs):
             return []
 
-        monkeypatch.setattr(server_mod.MasterFetchServer, "feed_fetch", fake_feed)
-        content, structured = _dispatch("feed_fetch", {"urls": ["https://example.test/feed"]})
+        monkeypatch.setattr(server_mod.MasterFetchServer, "feed_read", fake_feed)
+        content, structured = _dispatch("feed_read", {"urls": ["https://example.test/feed"]})
 
         assert structured == {"feeds": []}
         assert json.loads(content[0].text) == structured
 
     def test_a_missing_urls_argument_is_reported_as_an_envelope(self):
-        payload = _envelope("feed_fetch", {})
+        payload = _envelope("feed_read", {})
         assert payload["feeds"] == []
         assert "at least one URL" in payload["error"]
 
@@ -551,7 +551,7 @@ class TestOriginalUrl:
             url="https://example.com/final", status=200, content=["body"],
             content_type="text/html", total_extracted_chars=4,
         ))
-        out = asyncio.run(MasterFetchServer().smart_fetch(
+        out = asyncio.run(MasterFetchServer().web_read(
             "https://example.com/start", cache_ttl=0,
         ))
         assert out.url == "https://example.com/final"
@@ -562,7 +562,7 @@ class TestOriginalUrl:
             url="https://example.com/page", status=200, content=["body"],
             content_type="text/html", total_extracted_chars=4,
         ))
-        out = asyncio.run(MasterFetchServer().smart_fetch(
+        out = asyncio.run(MasterFetchServer().web_read(
             "https://example.com/page", cache_ttl=0,
         ))
         assert out.original_url == ""
@@ -573,7 +573,7 @@ class TestOriginalUrl:
             url="https://example.com/page/", status=200, content=["body"],
             content_type="text/html", total_extracted_chars=4,
         ))
-        out = asyncio.run(MasterFetchServer().smart_fetch(
+        out = asyncio.run(MasterFetchServer().web_read(
             "https://example.com/page", cache_ttl=0,
         ))
         assert out.original_url == ""
@@ -583,7 +583,7 @@ class TestOriginalUrl:
             url="https://EXAMPLE.com/page", status=200, content=["body"],
             content_type="text/html", total_extracted_chars=4,
         ))
-        out = asyncio.run(MasterFetchServer().smart_fetch(
+        out = asyncio.run(MasterFetchServer().web_read(
             "https://example.com/page", cache_ttl=0,
         ))
         assert out.original_url == ""
@@ -623,7 +623,7 @@ class TestStructuredAttributeContract:
     def test_the_wire_description_states_both_halves(self):
         schema_desc = next(
             t["inputSchema"]["properties"]["schema"]["description"]
-            for t in MasterFetchServer._TOOL_DEFS if t["name"] == "smart_fetch"
+            for t in MasterFetchServer._TOOL_DEFS if t["name"] == "web_read"
         )
         assert "FIRST match" in schema_desc
         assert "array" in schema_desc

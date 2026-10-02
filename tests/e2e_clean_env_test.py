@@ -212,7 +212,7 @@ def task_browser_fetch(client: Client, report: dict) -> list[str]:
     首用安装这条路径。安装的时长不计在这里面（B3 的第 2 条规矩），所以两个数是分开的。
     """
     started = time.perf_counter()
-    data = client.call("smart_fetch", {
+    data = client.call("web_read", {
         "url": JS_ONLY_PAGE, "cache_ttl": 0, "timeout": 120000,
         "force_fetcher": "stealthy"})
     took = time.perf_counter() - started
@@ -223,7 +223,7 @@ def task_browser_fetch(client: Client, report: dict) -> list[str]:
     report["fetch_summary"] = str(data.get("summary", ""))[:120]
     failures = []
     if data.get("error"):
-        failures.append(f"smart_fetch error: {str(data['error'])[:300]}")
+        failures.append(f"web_read error: {str(data['error'])[:300]}")
     if data.get("fetcher_used") != "stealthy":
         failures.append(f"fetcher_used={data.get('fetcher_used')!r}，浏览器档没跑起来")
     if _chars(data) < 50:
@@ -234,13 +234,13 @@ def task_browser_fetch(client: Client, report: dict) -> list[str]:
 def task_search(client: Client, report: dict) -> list[str]:
     """任务 2 · 一次真实搜索（没有任何引擎 key、没有代理）。"""
     started = time.perf_counter()
-    data = client.call("smart_search", {
+    data = client.call("web_search", {
         "query": SEARCH_QUERY, "max_results": 3, "cache_ttl": 0})
     report["search_s"] = round(time.perf_counter() - started, 1)
     results = data.get("results") or []
     report["search_results"] = len(results)
     if data.get("error") and not results:
-        return [f"smart_search error: {str(data['error'])[:300]}"]
+        return [f"web_search error: {str(data['error'])[:300]}"]
     if not results:
         return [f"搜索返回 0 条（error={str(data.get('error'))[:120]}）"]
     return []
@@ -250,7 +250,7 @@ def task_pdf(client: Client, report: dict) -> list[str]:
     """任务 3 · 读一份 PDF。第一个候选失败就换第二个，但结论只看一条：真拿到文字。"""
     for url in PDF_URLS:
         started = time.perf_counter()
-        data = client.call("smart_fetch", {"url": url, "cache_ttl": 0})
+        data = client.call("web_read", {"url": url, "cache_ttl": 0})
         took = round(time.perf_counter() - started, 1)
         if _chars(data) >= 100 and not data.get("error"):
             report["pdf_url"] = url

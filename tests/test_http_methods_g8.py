@@ -181,7 +181,7 @@ class TestBodyNormalization:
         assert _clean_method("TRACE") == "TRACE", "the caller must see it was not accepted"
 
 
-# ─── smart_fetch 的后果表 ───────────────────────────────────────────
+# ─── web_read 的后果表 ───────────────────────────────────────────
 
 def _html(url: str, status: int = 200) -> ResponseModel:
     return ResponseModel(url=url, status=status, content=['{"ok":true}'],
@@ -228,7 +228,7 @@ class TestSmartFetchHonoursTheVerb:
         seen: dict = {}
         _fake_tier(monkeypatch, seen)
 
-        out = await MasterFetchServer().smart_fetch(
+        out = await MasterFetchServer().web_read(
             URL, method="POST", body={"q": "x"}, content_type="application/json",
             cache_ttl=0, timeout=8000)
 
@@ -244,7 +244,7 @@ class TestSmartFetchHonoursTheVerb:
         seen: dict = {}
         _fake_tier(monkeypatch, seen)
 
-        await MasterFetchServer().smart_fetch(URL, method="POST", body={"q": "x"},
+        await MasterFetchServer().web_read(URL, method="POST", body={"q": "x"},
                                               cache_ttl=0, timeout=8000)
 
         assert seen["body"] == b"q=x"
@@ -256,7 +256,7 @@ class TestSmartFetchHonoursTheVerb:
             raise AssertionError("a request was made with a verb we do not speak")
         monkeypatch.setattr(MasterFetchServer, "get", boom)
 
-        out = await MasterFetchServer().smart_fetch(URL, method="TRACE", cache_ttl=0)
+        out = await MasterFetchServer().web_read(URL, method="TRACE", cache_ttl=0)
 
         assert out.status == 0
         assert "unsupported method" in out.error
@@ -268,7 +268,7 @@ class TestSmartFetchHonoursTheVerb:
             return _html(url)
         monkeypatch.setattr(MasterFetchServer, "get", fake_get)
 
-        out = await MasterFetchServer().smart_fetch(URL, body="ignored", cache_ttl=0)
+        out = await MasterFetchServer().web_read(URL, body="ignored", cache_ttl=0)
 
         assert out.status == 200
         assert "body ignored" in out.summary
@@ -279,7 +279,7 @@ class TestSmartFetchHonoursTheVerb:
             raise AssertionError("an oversized body reached the network")
         monkeypatch.setattr(MasterFetchServer, "get", boom)
 
-        out = await MasterFetchServer().smart_fetch(
+        out = await MasterFetchServer().web_read(
             URL, method="POST", body="x" * (server_mod.MAX_REQUEST_BODY_BYTES + 1),
             cache_ttl=0)
 
@@ -307,7 +307,7 @@ class TestSmartFetchHonoursTheVerb:
         monkeypatch.setattr(MasterFetchServer, "stealthy_fetch", no_browser)
         monkeypatch.setattr(MasterFetchServer, "_fetch_from_archive", no_archive)
 
-        out = await MasterFetchServer().smart_fetch(
+        out = await MasterFetchServer().web_read(
             URL, method="POST", body={"a": "1"}, cache_ttl=0, timeout=8000)
 
         assert calls == ["get"], calls
@@ -323,9 +323,9 @@ class TestSmartFetchHonoursTheVerb:
         monkeypatch.setattr(MasterFetchServer, "get", fake_get)
 
         srv = MasterFetchServer()
-        first = await srv.smart_fetch(URL, method="POST", body={"a": "1"},
+        first = await srv.web_read(URL, method="POST", body={"a": "1"},
                                      cache_ttl=3600, timeout=8000)
-        second = await srv.smart_fetch(URL, method="POST", body={"a": "1"},
+        second = await srv.web_read(URL, method="POST", body={"a": "1"},
                                        cache_ttl=3600, timeout=8000)
 
         assert first.cached is False and second.cached is False
@@ -339,7 +339,7 @@ class TestSmartFetchHonoursTheVerb:
         _fake_tier(monkeypatch, seen, body=b"",
                    headers={"content-type": "text/html", "content-length": "3741"})
 
-        out = await MasterFetchServer().smart_fetch(
+        out = await MasterFetchServer().web_read(
             URL, method="HEAD", cache_ttl=0, timeout=8000)
 
         assert seen["method"] == "HEAD"

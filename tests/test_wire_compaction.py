@@ -191,7 +191,7 @@ class TestEveryRowGetsItsOwnPolicy:
 
 
     def test_a_projected_row_without_a_model_still_gets_its_policy(self):
-        """feed_fetch 交回的是自己拼的 dict，_wire_dump 无从查类。
+        """feed_read 交回的是自己拼的 dict，_wire_dump 无从查类。
 
         容器名登记在 _WIRE_PROJECTED_ROWS 里，策略才落得下去。漏掉它的代价是按
         feed 计费的：一批安静的订阅每行都付 error:"" / since:"" /

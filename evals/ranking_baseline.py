@@ -2,7 +2,7 @@
 """排序/去重基线 —— 两个集，各出各的数，永不合并。
 
 **集 A（真实 SERP 冻结语料，本脚本量）**：测整条链 —— 引擎解析 → 归一化 → 去重 →
-确定性排序。重放按 `smart_search` 无神经模型时的真实调用顺序（`_rank(mode="merge")`
+确定性排序。重放按 `web_search` 无神经模型时的真实调用顺序（`_rank(mode="merge")`
 → `_apply_quality_boost` → `_diversify` → `_build_results` → `_quality_filter` →
 `_filter_irrelevant_results`），解析用各家引擎自己的 parser 对冻结页跑。有 qrels
 的题目上报 P@5 / P@10 / MRR / nDCG@10；没有 qrels 的题目只出去重审计。**神经重排
@@ -110,7 +110,7 @@ def _merge_with_dedup(pages: list[tuple[str, list]]):
 
 
 def _replay_chain(query: str, ranked: list) -> list[str]:
-    """smart_search 的确定性段，按真实调用顺序；返回最终序的 URL。"""
+    """web_search 的确定性段，按真实调用顺序；返回最终序的 URL。"""
     from dhole_mcp import search as S
 
     cand = ranked[:CANDIDATE_CAP]

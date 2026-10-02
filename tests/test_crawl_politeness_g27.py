@@ -6,8 +6,8 @@
 `Crawl-delay`。调用方的 `delay=` 删了 —— 给别人的服务器定节奏不是性能选择，而是礼貌
 问题，而这件事站方已经表过态；「只升不降」因此自动成立（没有东西可以被压低）。
 
-顺带这一族里最贵的那个 bug：`ignore_robots` 在 smart_crawl 的选项集合里，却不在
-`MasterFetchServer.smart_crawl` 的形参表里 —— 于是从 wire 上传进来就是 TypeError，
+顺带这一族里最贵的那个 bug：`ignore_robots` 在 web_crawl 的选项集合里，却不在
+`MasterFetchServer.web_crawl` 的形参表里 —— 于是从 wire 上传进来就是 TypeError，
 被兜底的 except 变成「Internal error, not a blocked site」。robots 那个选项从接上
 wire 的那天起就没通过。下面第一条断言守的是整类问题，不是这一个键。
 """
@@ -41,7 +41,7 @@ class _TimingServer:
                       + "".join(f'<a href="/p{i}">p{i}</a>' for i in range(len(urls)))
                       + '</body></html>')
 
-    async def smart_fetch(self, url, **kwargs):
+    async def web_read(self, url, **kwargs):
         self.at.append((url, time.monotonic()))
         body = self._html if url.rstrip("/") == SEED.rstrip("/") else "<p>leaf page</p>"
         return ResponseModel(url=url, status=200, content=[body],
@@ -78,8 +78,8 @@ def _fresh_robots_cache(monkeypatch):
 
 class TestTheWiringThatWasMissing:
 
-    @pytest.mark.parametrize("tool", ["smart_fetch", "smart_crawl", "screenshot",
-                                       "smart_search"])
+    @pytest.mark.parametrize("tool", ["web_read", "web_crawl", "screenshot",
+                                       "web_search"])
     def test_every_advertised_name_is_a_parameter_the_method_accepts(self, tool):
         """`_TOP_LEVEL_ARGS` 现在就是转发的白名单（17.0 B4 起调度器只按它 `**kwargs`）。
         表里多一个方法没有的名字，不是「这个参数被忽略」，而是一记 TypeError —— 被宽泛的
@@ -98,9 +98,9 @@ class TestTheWiringThatWasMissing:
             from dhole_mcp.crawl import CrawlResponseModel
             return CrawlResponseModel(start_url=url, pages=[])
 
-        monkeypatch.setattr(crawl_mod, "smart_crawl", fake_crawl)
+        monkeypatch.setattr(crawl_mod, "web_crawl", fake_crawl)
 
-        await MasterFetchServer().smart_crawl(
+        await MasterFetchServer().web_crawl(
             SEED, ignore_robots=True, max_depth=3)
 
         assert seen["ignore_robots"] is True
@@ -121,7 +121,7 @@ class TestTheIntervalIsPerHost:
         get_robots_cache().prime(SEED, "User-agent: *\nCrawl-delay: 1\n")
         server = _TimingServer()
 
-        out = await crawl_mod.smart_crawl(server, SEED, max_pages=4, max_depth=1,
+        out = await crawl_mod.web_crawl(server, SEED, max_pages=4, max_depth=1,
                                           concurrency=3, cache_ttl=0)
 
         # page_times excludes the seed: what is under test is the interval between
@@ -134,7 +134,7 @@ class TestTheIntervalIsPerHost:
         """没有要求就没有间隔：这条钉的是「删了旋钮之后不会凭空多出一个默认限速」。"""
         server = _TimingServer()
 
-        out = await crawl_mod.smart_crawl(server, SEED, max_pages=4, max_depth=1,
+        out = await crawl_mod.web_crawl(server, SEED, max_pages=4, max_depth=1,
                                           concurrency=3, cache_ttl=0)
 
         # The claim is "nothing was inserted between requests", so measure the
@@ -152,7 +152,7 @@ class TestTheIntervalIsPerHost:
         get_robots_cache().prime(SEED, "User-agent: *\nCrawl-delay: 1\n")
         server = _TimingServer()
 
-        out = await crawl_mod.smart_crawl(server, SEED, max_pages=2, max_depth=1,
+        out = await crawl_mod.web_crawl(server, SEED, max_pages=2, max_depth=1,
                                           cache_ttl=0)
 
         assert "1s between requests per host" in out.summary, out.summary
@@ -168,7 +168,7 @@ class TestTheSitesOwnAskCounts:
         get_robots_cache().prime(SEED, "User-agent: *\nCrawl-delay: 5\n")
         server = _TimingServer()
 
-        out = await crawl_mod.smart_crawl(server, SEED, max_pages=4, max_depth=1,
+        out = await crawl_mod.web_crawl(server, SEED, max_pages=4, max_depth=1,
                                           ignore_robots=True, cache_ttl=0)
 
         assert max(_spacings(server.page_times), default=0.0) < 0.5, server.page_times

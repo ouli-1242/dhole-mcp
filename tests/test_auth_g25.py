@@ -177,7 +177,7 @@ class TestTheTierIsHandedBothTheHeaderAndTheNames:
         seen: dict = {}
         _fake_tier(monkeypatch, seen)
 
-        out = await MasterFetchServer().smart_fetch(
+        out = await MasterFetchServer().web_read(
             URL, auth={"type": "bearer", "token": "t0k"}, cache_ttl=0, timeout=8000)
 
         assert out.status == 200
@@ -190,7 +190,7 @@ class TestTheTierIsHandedBothTheHeaderAndTheNames:
         seen: dict = {}
         _fake_tier(monkeypatch, seen)
 
-        await MasterFetchServer().smart_fetch(
+        await MasterFetchServer().web_read(
             URL, auth={"type": "header", "name": "X-API-Key", "value": "k"},
             cache_ttl=0, timeout=8000)
 
@@ -201,7 +201,7 @@ class TestTheTierIsHandedBothTheHeaderAndTheNames:
         seen: dict = {}
         _fake_tier(monkeypatch, seen)
 
-        out = await MasterFetchServer().smart_fetch(
+        out = await MasterFetchServer().web_read(
             URL, auth={"type": "basic", "username": "admin", "password": "hunter2"},
             cache_ttl=0, timeout=8000)
 
@@ -215,7 +215,7 @@ class TestTheTierIsHandedBothTheHeaderAndTheNames:
         seen: dict = {}
         _fake_tier(monkeypatch, seen)
 
-        out = await MasterFetchServer().smart_fetch(
+        out = await MasterFetchServer().web_read(
             URL, auth={"type": "bearer", "token": "ignored-me"},
             extra_headers={"Authorization": "Bearer theirs"},
             cache_ttl=0, timeout=8000)
@@ -229,7 +229,7 @@ class TestTheTierIsHandedBothTheHeaderAndTheNames:
             raise AssertionError("a request went out with an unparsed credential")
         monkeypatch.setattr(MasterFetchServer, "get", boom)
 
-        out = await MasterFetchServer().smart_fetch(URL, auth={"type": "magic"}, cache_ttl=0)
+        out = await MasterFetchServer().web_read(URL, auth={"type": "magic"}, cache_ttl=0)
 
         assert "invalid auth" in out.error
         assert "basic" in out.next_action and "bearer" in out.next_action
@@ -241,10 +241,10 @@ class TestTheTierIsHandedBothTheHeaderAndTheNames:
         _fake_tier(monkeypatch, seen)
         srv = MasterFetchServer()
 
-        await srv.smart_fetch(URL, auth={"type": "bearer", "token": "first"},
+        await srv.web_read(URL, auth={"type": "bearer", "token": "first"},
                               cache_ttl=0, timeout=8000)
         seen.clear()
-        await srv.smart_fetch(URL, cache_ttl=0, timeout=8000)
+        await srv.web_read(URL, cache_ttl=0, timeout=8000)
 
         assert "Authorization" not in str(seen.get("headers") or {})
         assert not seen.get("credential_headers")
@@ -400,7 +400,7 @@ class TestA401SaysWhichOneItIs:
                                  fetcher_used="http")
         monkeypatch.setattr(MasterFetchServer, "get", fake_get)
 
-        out = await MasterFetchServer().smart_fetch(
+        out = await MasterFetchServer().web_read(
             URL, auth={"type": "basic", "username": "a", "password": "wrong-on-purpose"},
             cache_ttl=0)
 
@@ -415,7 +415,7 @@ class TestA401SaysWhichOneItIs:
                                  fetcher_used="http")
         monkeypatch.setattr(MasterFetchServer, "get", fake_get)
 
-        out = await MasterFetchServer().smart_fetch(URL, cache_ttl=0)
+        out = await MasterFetchServer().web_read(URL, cache_ttl=0)
 
         assert "needs credentials" in out.next_action
         assert "auth=" in out.next_action

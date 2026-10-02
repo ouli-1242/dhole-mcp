@@ -8,12 +8,12 @@
 2. :func:`build_actions` —— 把字段位置 + 凭据值拼成 fill / fill / submit 动作
    链。
 
-**这个动作链里带着明文密码。** 它是 ``smart_fetch`` 的内部参数，不落任何出口：
+**这个动作链里带着明文密码。** 它是 ``web_read`` 的内部参数，不落任何出口：
 响应回执与 ``DHOLE_USAGE_LOG`` 审计行都只记 :func:`actions.action_label`（记目标
 不记文本），``actions.py`` 的失败日志同样只记 label，``_log_tool_call`` 从不写参数
 值。凭据值能到达的地方只有浏览器输入框。
 
-浏览器那一半在 ``server.py`` 的 ``login`` 方法里（它要 ``self.smart_fetch``），
+浏览器那一半在 ``server.py`` 的 ``login`` 方法里（它要 ``self.web_read``），
 不在这里 —— 分层的目的是让"认不认得出表单"这件事不需要起浏览器就能测。
 """
 
@@ -119,7 +119,7 @@ def build_actions(fields: dict, username: str, password: str,
                   confirm: bool = False) -> list[dict]:
     """The fill / fill / submit chain. **Contains the plaintext password.**
 
-    Only ever passed to ``smart_fetch(actions=...)``. Nothing that leaves the
+    Only ever passed to ``web_read(actions=...)``. Nothing that leaves the
     process serialises this list — see the module docstring.
     """
     actions: list[dict] = []

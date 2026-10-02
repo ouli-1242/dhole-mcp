@@ -72,7 +72,7 @@ class TestSchemaAuto:
         assert result.get("_mode") == "auto"
 
 
-# ─── fetch_content + fetch_schema in smart_search ─────────────────────────────
+# ─── fetch_content + fetch_schema in web_search ─────────────────────────────
 
 class TestFetchContentSchema:
     """fetch_content=true 的行为测试（签名/属性存在性快照测试已删：
@@ -80,7 +80,7 @@ class TestFetchContentSchema:
 
     @pytest.mark.asyncio
     async def test_fetch_content_failure_is_visible_in_fetched_pages(self, monkeypatch):
-        """回归：fetch_content=true 时 smart_fetch 抛错曾被静默吞掉——agent 看到
+        """回归：fetch_content=true 时 web_read 抛错曾被静默吞掉——agent 看到
         fetched_pages 缺一条却不知道为什么。现在失败也占位，带 error 字段。"""
         from unittest.mock import AsyncMock
         from dhole_mcp import search as search_mod
@@ -102,9 +102,9 @@ class TestFetchContentSchema:
         monkeypatch.setattr(search_mod, "ensure_reranker", fake_ensure_reranker)
 
         server = MasterFetchServer()
-        server.smart_fetch = AsyncMock(side_effect=RuntimeError("boom: network down"))
+        server.web_read = AsyncMock(side_effect=RuntimeError("boom: network down"))
 
-        resp = await server.smart_search("widgets doc", fetch_content=True, cache_ttl=0)
+        resp = await server.web_search("widgets doc", fetch_content=True, cache_ttl=0)
 
         assert len(resp.fetched_pages) == 1
         page = resp.fetched_pages[0]

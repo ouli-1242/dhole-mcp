@@ -19,7 +19,7 @@
    —— 出题时不打印答案，避免"基线"变成抄答案。
 
 3. **转交纪律在不在 wire 上**（代码）
-   `DHOLE_MULTIMODAL=1` 时 `screenshot` / `smart_fetch` 的描述里必须带
+   `DHOLE_MULTIMODAL=1` 时 `screenshot` / `web_read` 的描述里必须带
    "≤3 次后转交"。纪律只跟着 flag 上线：关着 flag 的调用方看不见像素，
    纪律对它是噪声，还白占 connect tokens。
 
@@ -237,20 +237,20 @@ def wire_check() -> None:
             os.environ["DHOLE_MULTIMODAL"] = saved
 
     grew = (len(on["screenshot"]) > len(off["screenshot"])
-            and len(on["smart_fetch"]) > len(off["smart_fetch"]))
-    caps = ("at most 3" in on["screenshot"] or "at most 3" in on["smart_fetch"])
+            and len(on["web_read"]) > len(off["web_read"]))
+    caps = ("at most 3" in on["screenshot"] or "at most 3" in on["web_read"])
     hand = (on["screenshot"].count("hand off") >= 3
-            and on["smart_fetch"].count("hand off") >= 1)
+            and on["web_read"].count("hand off") >= 1)
     clean_off = "hand off" not in off["screenshot"] and "VISUAL ASSIST" not in off["screenshot"]
 
     record("DHOLE_MULTIMODAL=1 时，试读纪律只跟着 flag 上线", grew and clean_off,
            f"开旗后 screenshot +{len(on['screenshot']) - len(off['screenshot'])} 字符、"
-           f"smart_fetch +{len(on['smart_fetch']) - len(off['smart_fetch'])} 字符；"
+           f"web_read +{len(on['web_read']) - len(off['web_read'])} 字符；"
            f"关旗时描述里无 'VISUAL ASSIST'")
     record("纪律写明 ≤3 次上限与转交终点", caps and hand,
            f"含 'at most 3'={caps}；hand off 出现次数 "
            f"screenshot={on['screenshot'].count('hand off')} "
-           f"smart_fetch={on['smart_fetch'].count('hand off')}")
+           f"web_read={on['web_read'].count('hand off')}")
 
 
 # ── main ───────────────────────────────────────────────────────────────

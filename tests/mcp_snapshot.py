@@ -154,12 +154,12 @@ NONEXISTENT_FILE = str(TMP_ROOT / "does-not-exist-snapshot-probe.html")
 GBK_CSV_FILE = str(REPO_ROOT / "tests" / "gbk_sample.csv")
 
 PLAUSIBLE_CASES = {
-    "smart_fetch": [
+    "web_read": [
         ("minimal: loopback url (SSRF-blocked)", {"url": "http://127.0.0.1/"}),
         ("minimal: cloud metadata IP (SSRF-blocked)", {"url": "http://169.254.169.254/latest/meta-data/"}),
         ("minimal: file:// scheme (blocked scheme)", {"url": "file:///C:/Windows/win.ini"}),
     ],
-    "smart_crawl": [
+    "web_crawl": [
         ("minimal: loopback start url (SSRF-blocked)", {"url": "http://127.0.0.1/"}),
         ("minimal: cloud metadata IP (SSRF-blocked)", {"url": "http://169.254.169.254/"}),
     ],
@@ -167,7 +167,7 @@ PLAUSIBLE_CASES = {
         ("minimal: loopback url (SSRF-blocked)", {"url": "http://127.0.0.1/"}),
         ("minimal: file:// scheme (blocked scheme)", {"url": "file:///C:/Windows/win.ini"}),
     ],
-    "smart_search": [
+    "web_search": [
         # Engines are routed to the dead loopback proxy: no internet egress.
         ("minimal: query via dead loopback proxy", {"query": "dhole offline snapshot probe"}),
         ("minimal: find_similar with blocked source url", {"query": "probe", "mode": "find_similar", "url": "http://127.0.0.1/"}),
@@ -181,11 +181,11 @@ PLAUSIBLE_CASES = {
         ("minimal: nonexistent local path", {"file_path": NONEXISTENT_FILE}),
         ("plausible: GBK CSV (charset detection)", {"file_path": GBK_CSV_FILE}),
     ],
-    "feed_fetch": [
+    "feed_read": [
         ("minimal: loopback feed url (SSRF-blocked)", {"urls": ["http://127.0.0.1/feed.xml"]}),
         ("minimal: cloud metadata feed url (SSRF-blocked)", {"urls": ["http://169.254.169.254/feed"]}),
     ],
-    "resolve_url": [
+    "web_resolve": [
         ("minimal: loopback url (SSRF-blocked)", {"url": "http://127.0.0.1/"}),
         ("minimal: scheme-relative input", {"url": "//127.0.0.1/"}),
         ("minimal: cloud metadata IP (SSRF-blocked)", {"url": "http://169.254.169.254/"}),
@@ -193,8 +193,8 @@ PLAUSIBLE_CASES = {
 }
 
 TOOL_ORDER = [
-    "smart_fetch", "smart_crawl", "screenshot", "smart_search",
-    "cache_clear", "parse", "feed_fetch", "resolve_url",
+    "web_read", "web_crawl", "screenshot", "web_search",
+    "cache_clear", "parse", "feed_read", "web_resolve",
 ]
 
 

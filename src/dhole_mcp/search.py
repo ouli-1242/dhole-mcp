@@ -8,7 +8,7 @@ account. Results are merged across engines, deduped by normalized URL, and
 ranked. Merging INDEPENDENT indexes gives a free authority signal: a URL
 returned by several engines is a consensus hit (engines_consensus field) and
 gets a ranking boost. Every result also carries a relevance_score and a
-fetch_relevance tier so the agent fetches the right URLs via smart_fetch itself
+fetch_relevance tier so the agent fetches the right URLs via web_read itself
 (search returns URLs + ranking, NOT page content - the agent decides what to fetch).
 
 Rerank: neural (a local ONNX cross-encoder on snippets, needs [all]; the ONLY
@@ -235,7 +235,7 @@ class SearchResult(BaseModel):
     source: str = Field(default="", description="Backend(s) that returned this result (baidu/bing/bing_global/brave/duckduckgo/so360/sogou/yandex). Multiple = cross-backend consensus.")
     position: int = Field(default=0, description="1-indexed rank after merge + rerank")
     relevance_score: float = Field(default=0.0, description="0.0-1.0 relevance to the query (neural cross-encoder score in neural mode, min-max normalized), boosted by cross-backend consensus. 1.0 = most relevant in this set.")
-    fetch_relevance: str = Field(default="", description="high|med|low - relative relevance hint. smart_fetch what matches your need; the tiers rank results but a lower tier can be the right one - use your judgment.")
+    fetch_relevance: str = Field(default="", description="high|med|low - relative relevance hint. web_read what matches your need; the tiers rank results but a lower tier can be the right one - use your judgment.")
     engines_consensus: str = Field(default="", description="How many independent index families returned this URL over how many could have (e.g. '2 of 6'; the default 8-engine pool is 6 families since bing, bing_global and duckduckgo all sit on the Bing index). '1 of 1 (no corroboration)' means a single family contributed at all - that is a degraded or tiny pool, NOT agreement. A free authority signal only when the denominator is >1.")
     source_type: str = Field(default="", description="Source type from URL pattern: docs|paper|repo|blog|forum|reference|news|other. Helps pick the right source.")
 
@@ -254,7 +254,7 @@ class SearchResponseModel(BaseModel):
     cached: bool = Field(default=False, description="Served from cache?")
     duration_ms: float = Field(default=0, description="Duration ms")
     error: str = Field(default="", description="Error message (empty = ok)")
-    fetch_hint: str = Field(default="", description="How many high/med/low results + which to smart_fetch first")
+    fetch_hint: str = Field(default="", description="How many high/med/low results + which to web_read first")
     related_queries: list[str] = Field(default=[], description="Follow-up queries worth searching next, mined extractively from the result titles+snippets (no LLM). Empty if none derived. Use to refine a broad query.")
     summary: str = Field(default="", description="One-line status of the search (counts + engines + rerank).")
     next_action: str = Field(default="", description="The obvious next call: fetch the high results, rephrase, retry, etc. Empty = nothing more to do.")
@@ -416,7 +416,7 @@ def compute_fetch_hint(results: list[SearchResult]) -> str:
     med = sum(1 for r in results if r.fetch_relevance == "med")
     low = sum(1 for r in results if r.fetch_relevance == "low")
     return (f"{high} high, {med} med, {low} low. Ranked by relevance_score; "
-            f"smart_fetch what fits your need (high first, but a lower tier can be the right call).")
+            f"web_read what fits your need (high first, but a lower tier can be the right call).")
 
 
 def _search_summary(query: str, results: list[SearchResult], engines_used: list[str],
@@ -466,7 +466,7 @@ def _search_next_action(results: list[SearchResult], engine_blocked: list[str],
         return "No results. Rephrase (more specific / different terms) or try mode=neural for semantic matching."
     high = [r for r in results if r.fetch_relevance == "high"]
     base = ("Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). "
-            "smart_fetch the ones that match what you actually need - the ranking is a hint, "
+            "web_read the ones that match what you actually need - the ranking is a hint, "
             "not a directive; a lower-ranked result can be the right one, so trust your judgment.")
     if not high:
         base += (" No 'high' matches - if none of these fit, rephrase (more specific)."
@@ -500,7 +500,7 @@ def _as_int(value, default: int) -> int:
 
     The wire boundary coerces argument types (_coerce_arg_types); this is the
     same belt inside the module, where `min("6", 50)` raised the TypeError an
-    external report filed as "smart_search is completely broken" because
+    external report filed as "web_search is completely broken" because
     `max_results` arrived as a string.
     """
     try:
@@ -630,7 +630,7 @@ def _date_window(after: Any, before: Any, freshness: Any, engines: list[str]) ->
                      "results to older-than-a-date (the ones that filter at all "
                      "offer day/week/month/year only), and search results carry no "
                      "publish date for dhole to filter on either. Use after=<date> "
-                     "for 'newer than', or feed_fetch(since=) for dated items from "
+                     "for 'newer than', or feed_read(since=) for dated items from "
                      "a source that publishes them.")
         return applied, info, rejection
 
@@ -815,7 +815,7 @@ def _pool_health_notes(results: list[SearchResult], engine_blocked: list[str],
     if contributing <= 1:
         notes.append(f"LOW CONFIDENCE: only {max(1, contributing)} index family contributed "
                      f"({len(engine_blocked)} engines blocked). Cross-engine consensus is "
-                     f"unavailable - verify results via smart_fetch before relying on them.")
+                     f"unavailable - verify results via web_read before relying on them.")
     return " | ".join(notes)
 
 
@@ -1089,7 +1089,7 @@ def _apply_quality_boost(ranked: list, scores: list[float], query: str
 
 # ─── main entry ───────────────────────────────────────────────────────────────
 
-async def smart_search(
+async def web_search(
     server,
     query: str,
     max_results: int = DEFAULT_MAX_RESULTS,
@@ -1181,7 +1181,7 @@ async def smart_search(
             query=query, results=[], total_results=0, duration_ms=0,
             error=date_rejected,
             next_action=("Drop before= and use after=<date>, or fetch the source's "
-                         "feed with feed_fetch(since=<date>) when it publishes one - "
+                         "feed with feed_read(since=<date>) when it publishes one - "
                          "a feed carries per-item dates, which search results do not."),
         )
 
@@ -1357,7 +1357,7 @@ async def smart_search(
                 query=find_sim_url, results=[], total_results=0,
                 duration_ms=(time() - t0) * 1000,
                 error="could not fetch the source URL for find_similar (blocked or offline).",
-                next_action="Retry, or smart_fetch the source URL first to confirm it is reachable, then call smart_search with mode=find_similar.")
+                next_action="Retry, or web_read the source URL first to confirm it is reachable, then call web_search with mode=find_similar.")
         derived_query = src_title or " ".join(src_text.split()[:8]) or query
         try:
             ranked, reports = await multi_search(

@@ -107,7 +107,7 @@ def test_a_wrong_section_lists_the_ones_that_exist():
     """错误猜测的产物必须是可用的下一步，而不是一个死端。"""
     _, body = guide.read("behavior", section="definitely-not-a-heading")
     assert "matched no heading" in _
-    assert "- smart_search" in body or "smart_search" in body
+    assert "- web_search" in body or "web_search" in body
 
 
 def test_topic_and_section_are_the_whole_argument_surface():
@@ -138,7 +138,7 @@ def test_response_is_a_text_channel():
 
 # ─── 瘦身的前提：常驻文本删掉的解释，必须能从 dhole_doc 取回来 ───────────
 #
-# smart_fetch 的 options 袋子从「逐键解释」改成了「列出键名 + 少数几条陷阱」，
+# web_read 的 options 袋子从「逐键解释」改成了「列出键名 + 少数几条陷阱」，
 # 细节移进 references/tools.md。这个移动只有在语料真的接住时才是优化而不是丢
 # 信息，所以覆盖率**从代码里的键集合反查**，而不是比对两份手写清单：以后任何
 # 新键进了 _SF_PARAMS，它在 wire 上没名字、或在语料里没解释，都会红。
@@ -149,7 +149,7 @@ def _corpus() -> str:
 
 def _wire_explanations() -> str:
     """常驻文本里除那份键名清单之外的部分 —— 清单只点名，不解释。"""
-    td = _def_of("smart_fetch")
+    td = _def_of("web_read")
     parts = [td["description"], DHOLE_INSTRUCTIONS]
     for name, spec in td["inputSchema"]["properties"].items():
         if name != "options":
@@ -184,9 +184,9 @@ def test_the_mention_matcher_is_not_a_substring_test():
     assert not _mentions("network_idle and waits", "wait")
     assert _mentions("headless, useragent, wait", "wait")
     assert not _mentions("solve_cloudflare", "cloudflare")
-    assert _mentions(_tool_text("smart_search"), "site"), "转义把词边界弄坏了"
+    assert _mentions(_tool_text("web_search"), "site"), "转义把词边界弄坏了"
     # 反证：把 fetch_schema 的那句说明删掉，覆盖率守卫就该看不见它（W10 的成因）
-    stripped = _tool_text("smart_search").replace("fetch_schema", "")
+    stripped = _tool_text("web_search").replace("fetch_schema", "")
     assert not _mentions(stripped, "fetch_schema")
     assert len(_corpus()) > 20_000, "语料空了：覆盖率会伪装成通过"
     assert len(_SF_PARAMS) > 20, "键集合空了：同上"
@@ -216,16 +216,16 @@ def test_every_smart_fetch_key_is_named_on_the_wire():
     于是判据升级为**必须有属性，而且属性自己带一句说明** —— 只列名字不给说明，
     agent 仍然不知道该不该用它。
     """
-    props = _def_of("smart_fetch")["inputSchema"]["properties"]
+    props = _def_of("web_read")["inputSchema"]["properties"]
     silent = sorted(k for k in _SF_PARAMS
                     if k not in props or not (props[k].get("description") or "").strip())
     assert not silent, f"这些参数在 wire 上没有自己的名字或说明: {silent}"
 
 
 PARAMS = {
-    "smart_fetch": _SF_PARAMS,
-    "smart_crawl": _SC_PARAMS,
-    "smart_search": _SS_PARAMS,
+    "web_read": _SF_PARAMS,
+    "web_crawl": _SC_PARAMS,
+    "web_search": _SS_PARAMS,
     "screenshot": _SHOT_PARAMS,
 }
 
@@ -244,7 +244,7 @@ def test_every_accepted_parameter_is_declared_with_a_description(tool):
 
 
 def test_every_smart_fetch_key_is_explained_somewhere():
-    """smart_fetch 把逐键的**详细**解释搬进了语料，所以这里查的是搬走的落点。
+    """web_read 把逐键的**详细**解释搬进了语料，所以这里查的是搬走的落点。
 
     属性名与一句话判据留在常驻层（每一次连接都要发），怎么用、边界在哪进语料按需取。
     """
@@ -273,9 +273,9 @@ def test_the_stateful_tools_are_announced_with_their_discipline():
 
 #: 名字本身已经说明用途的顶层必填项，一句短说明就够了。
 _OBVIOUS = {
-    ("smart_fetch", "url"), ("smart_fetch", "urls"),
-    ("smart_search", "query"), ("resolve_url", "url"),
-    ("smart_crawl", "url"), ("screenshot", "url"), ("login", "url"),
+    ("web_read", "url"), ("web_read", "urls"),
+    ("web_search", "query"), ("web_resolve", "url"),
+    ("web_crawl", "url"), ("screenshot", "url"), ("login", "url"),
 }
 
 
@@ -294,7 +294,7 @@ def test_no_accepted_parameter_is_unmentioned(tool):
     """`_TOP_LEVEL_ARGS` 接受的每一个名字，都要在该工具的 wire 文本里出现一次。
 
     查该工具自己的文本（说明 + 每个属性名与描述；VISUAL ASSIST 纪律已烙进
-    smart_fetch / screenshot 的字面量，无需再拼），因为「别的工具提过」不救这个
+    web_read / screenshot 的字面量，无需再拼），因为「别的工具提过」不救这个
     调用：agent 在 `recipe` 的描述里读不到 `note`，就不会给 `recipe` 传 `note`。
     """
     text = _tool_text(tool)

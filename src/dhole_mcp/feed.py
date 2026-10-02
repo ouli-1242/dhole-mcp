@@ -372,7 +372,7 @@ async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20,
     A URL that turns out to be a web page is not a dead end: the page announces
     its own feed with ``<link rel="alternate" type="application/rss+xml">``, so
     that is followed (up to two candidates) and reported back with
-    ``discovered_from`` set. That is the difference between "feed_fetch on a
+    ``discovered_from`` set. That is the difference between "feed_read on a
     homepage errors" and it answering the question the caller actually had.
 
     Returns a FeedResult with items parsed so far; on fetch failure the error
