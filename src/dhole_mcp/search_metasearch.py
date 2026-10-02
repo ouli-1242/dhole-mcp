@@ -346,6 +346,13 @@ class BaseSearchEngine:
     # 200 拦截页判定（几 KB 的壳 + 校验字样）。默认关闭：只在国内引擎上观测到这种
     # 形态，不拿它去猜别家的语义 —— 误判成"被拦"会让一个健康引擎进冷却。
     _detect_challenge_shell: ClassVar[bool] = False
+    # 这一家该拿**原始** query 还是意图展开后的变体。展开词是两串英文术语
+    # （" paper arxiv benchmark results" / " specifications table data parameters"），
+    # 追加到中文索引或国内版面上等于换了一个查询（实测只会搜不到东西）。
+    # 判据只写在这一处：它跟着引擎类走，池子/注册表以后怎么改都不会留下第二份
+    # 需要有人记得同步的名单 —— `_CORE_QUERY_ENGINES` 是这份名单的第三版，也是
+    # 本仓库第三次踩"两处定义漂移"，所以它被删掉了（§6）。
+    prefers_raw_query: ClassVar[bool] = False
 
     # ── 引擎产出计数（静默降级的唯一观测面）────────────────────────────
     # 免密搜索顶部那个失败模式是"引擎还在跑，但解析不出东西"，而它在响应里
@@ -584,6 +591,9 @@ class Bing(BaseSearchEngine):
     # Bing 对单 IP 高频请求随机限流（连接重置/空结果），重试可显著提高命中率
     _retries = 2
     _retry_delay = 0.6
+    # cn.bing.com 是国内版面：内容池以中文站点为主，英文展开词等于换了个查询。
+    # 国际版那一家（BingGlobal）不继承这个判断，见下。
+    prefers_raw_query = True
 
     def __init__(self, proxy: str | None = None, timeout: int | None = None, *, verify: bool = True) -> None:
         # Bing 用标准 httpx.Client（非 _HttpxClient）：随机 ciphers / H2Patch
@@ -662,6 +672,10 @@ class BingGlobal(Bing):
     name = "bing_global"
     search_url = "https://www.bing.com/search"
 
+    # 国际版是另一套索引、内容池全球向 —— 它该拿展开后的变体。
+    # 判据是「版面/内容池是不是中文」，不是继承自谁，所以这里显式覆盖。
+    prefers_raw_query = False
+
 
 # ─── Baidu (CN, free, keyless, no cookies needed) ────────────────────────────
 def _is_challenge_shell(html_text: str) -> bool:
@@ -738,6 +752,8 @@ class Baidu(BaseSearchEngine):
     }
     headers_update: ClassVar[Mapping[str, str]] = {"Accept-Language": "zh-CN,zh;q=0.9"}
     _detect_challenge_shell = True
+    # 中文索引占优：意图展开追加的是英文术语，对这一家等于换了一个查询。
+    prefers_raw_query = True
 
     def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
                       timelimit: str | None,  # noqa: ARG002 - 时间过滤（gpc/stf）未实现
@@ -856,6 +872,8 @@ class So360(BaseSearchEngine):
     }
     headers_update: ClassVar[Mapping[str, str]] = {"Accept-Language": "zh-CN,zh;q=0.9"}
     _detect_challenge_shell = True
+    # 中文索引占优：意图展开追加的是英文术语，对这一家等于换了一个查询。
+    prefers_raw_query = True
 
     def __init__(self, proxy: str | None = None, timeout: int | None = None, *,
                  verify: bool = True) -> None:
@@ -912,6 +930,8 @@ class Sogou(BaseSearchEngine):
     }
     headers_update: ClassVar[Mapping[str, str]] = {"Accept-Language": "zh-CN,zh;q=0.9"}
     _detect_challenge_shell = True
+    # 中文索引占优：意图展开追加的是英文术语，对这一家等于换了一个查询。
+    prefers_raw_query = True
 
     def __init__(self, proxy: str | None = None, timeout: int | None = None, *,
                  verify: bool = True) -> None:

@@ -513,14 +513,20 @@ class TestDiversify:
 class TestQueryMapIntegration:
 
     def test_research_query_generates_different_queries(self):
-        engines = ["duckduckgo", "brave", "mojeek", "yahoo",
-                    "yandex", "startpage", "google", "qwant"]
-        intent = search._detect_intent("transformer attention mechanism research")
+        """同一个 research 意图下，中文版面拿原话、国际索引拿展开变体。
+
+        这里原先点名的 engines 列表里有四个名字从未在本项目存在过（mojeek /
+        startpage / google / qwant）—— 正是 `_CORE_QUERY_ENGINES` 那份手写名单
+        腐烂的方式。现在名单没了，列表也就只写真的名字。
+        """
+        q = "transformer attention mechanism research"
+        engines = ["bing", "sogou", "so360", "duckduckgo", "brave", "yandex"]
+        intent = search._detect_intent(q)
         assert intent == "research"
-        qm = search._generate_query_map("transformer attention mechanism research", intent, engines)
+        qm = search._generate_query_map(q, intent, engines)
         assert qm != {}
-        assert qm["duckduckgo"] == "transformer attention mechanism research"
-        assert qm["yandex"] != "transformer attention mechanism research"
+        assert qm["bing"] == q and qm["sogou"] == q and qm["so360"] == q
+        assert qm["yandex"] != q and qm["duckduckgo"] != q and qm["brave"] != q
         assert "paper" in qm["yandex"] or "arxiv" in qm["yandex"]
 
     def test_comparison_query_no_fan_out(self):
@@ -1139,46 +1145,53 @@ class TestBoostTracksAreResultLocal:
             f"共识那一路是 0.2*(家族数-1)，两家族之差该是 0.4: {s2}"
 
 
-class TestQueryMapNamesAreReal:
-    """手工维护的引擎名单会腐烂：这个集合里原先有三个不存在的引擎。
+class TestQueryVariantsComeFromTheClassFlag:
+    """提问变体的分组只由引擎类上的 `prefers_raw_query` 决定 —— 没有第二份名单。
 
-    旧值是 {duckduckgo, brave, mojeek, yahoo} —— mojeek/startpage/google/qwant 从未
-    在本项目存在过，而 bing（默认池首位、国内免 VPN）不在集合里，于是它成了唯一被
-    改写提问的默认引擎。上面那组测试全都不含 bing，所以抓不到。
+    旧实现是模块级手写集合 `_CORE_QUERY_ENGINES`，本仓库第三次踩"引擎列表改了而这份
+    名单没跟着改"（前两次：默认池两处定义、垂直索引两处定义）。判据搬进类属性之后，
+    还能腐烂的地方只剩**取值**，所以下面钉三件事：中文版面带着它、国际索引不带、以及
+    改类属性就能改分组（证明分组真读类属性，不是读某处抄下来的名字）。
     """
 
-    def test_core_set_only_names_existing_engines(self):
-        from dhole_mcp.search_engines import DEFAULT_ENGINES
-        from dhole_mcp.search_metasearch import _DHOLE_TO_BACKEND, _TEXT_ENGINES
-        known = set(DEFAULT_ENGINES) | set(_DHOLE_TO_BACKEND) | set(_TEXT_ENGINES)
-        ghost = set(search._CORE_QUERY_ENGINES) - known
-        assert not ghost, f"core 集合里有不存在的引擎名: {sorted(ghost)}"
+    Q = "transformer attention mechanism research"
 
-    def test_bing_gets_the_original_query(self):
-        intent = search._detect_intent("transformer attention mechanism research")
-        assert intent == "research"
-        q = "transformer attention mechanism research"
-        qm = search._generate_query_map(q, intent, list(se.DEFAULT_ENGINES))
+    def _map(self, engines):
+        return search._generate_query_map(
+            self.Q, search._detect_intent(self.Q), engines)
+
+    def test_research_intent_expands_at_all(self):
+        """前提自检：意图不展开时，下面每一条都是空转。"""
+        assert search._detect_intent(self.Q) == "research"
+        assert self._map(["yandex"])["yandex"] != self.Q
+
+    def test_domestic_pages_get_the_original_query(self):
+        qm = self._map(list(se.DEFAULT_ENGINES))
         assert qm, "research 意图应当展开"
-        assert qm["bing"] == q, "bing 在默认池里，不该是被改写提问的那一个"
-        assert qm["sogou"] == q, "sogou 是中文索引，英文展开词只会让它搜不到东西"
-        assert qm["so360"] == q, "换下席位的 so360 归类不变：同样是中文索引"
-        assert qm["duckduckgo"] == q and qm["brave"] == q
-        assert qm["yandex"] != q, "yandex 才是指定的多样性引擎"
-        # bing_global 也是多样性引擎：国际索引正该拿英文展开词
-        assert qm["bing_global"] != q
+        for name in ("baidu", "bing", "sogou", "so360"):
+            assert qm[name] == self.Q, f"{name} 是中文版面，英文展开词等于换掉查询"
+
+    def test_international_indexes_get_the_variant(self):
+        qm = self._map(list(se.DEFAULT_ENGINES))
+        for name in ("yandex", "bing_global", "brave", "duckduckgo"):
+            assert qm[name] != self.Q, f"{name} 是国际索引，展开变体正是为它准备的"
 
     def test_every_default_engine_is_classified(self):
-        """默认池里每个引擎都必须有明确归属，不能靠集合漏项来"恰好"生效。"""
-        intent = search._detect_intent("transformer attention mechanism research")
-        q = "transformer attention mechanism research"
-        qm = search._generate_query_map(q, intent, list(se.DEFAULT_ENGINES))
+        """默认池里每个名字都必须拿到归属，不能靠集合漏项来"恰好"生效。"""
+        qm = self._map(list(se.DEFAULT_ENGINES))
         assert set(qm) == set(se.DEFAULT_ENGINES)
 
-    def test_chinese_indexes_keep_the_original_query(self):
-        """baidu / sogou / so360 是中文索引占优 —— 英文展开词等于换了一个查询。"""
-        intent = search._detect_intent("transformer attention mechanism research")
-        q = "transformer attention mechanism research"
-        qm = search._generate_query_map(q, intent, ["baidu", "sogou", "so360", "yandex"])
-        assert qm and qm["yandex"] != q, "对照组：yandex 才是被改写的那一个"
-        assert qm["baidu"] == q and qm["sogou"] == q and qm["so360"] == q
+    def test_the_flag_is_the_only_thing_deciding(self, monkeypatch):
+        """改类属性 → 分组立刻跟着变：这里不存在一份抄下来的名单。"""
+        from dhole_mcp import search_metasearch as ms
+
+        monkeypatch.setattr(ms.Yandex, "prefers_raw_query", True)
+        monkeypatch.setattr(ms.Brave, "prefers_raw_query", True)
+        assert self._map(["yandex", "brave", "bing"]) == {
+            "yandex": self.Q, "brave": self.Q, "bing": self.Q}
+
+    def test_aliases_take_the_same_path(self):
+        """`360` / `ddg` 是别名：分组按它们真正指向的那家算，不按字面名。"""
+        qm = self._map(["360", "ddg", "yandex"])
+        assert qm["360"] == self.Q, "360 → so360，中文版面"
+        assert qm["ddg"] != self.Q, "ddg → duckduckgo，国际索引"

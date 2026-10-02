@@ -927,8 +927,10 @@ def _url_relevance(query: str, url: str) -> float:
 
 
 # ─── intent-aware multi-query fan-out ────────────────
-# Detect query intent and give every engine NOT in _CORE_QUERY_ENGINES an
-# expanded query variant while the core engines keep the original. Same
+# Detect query intent, then hand the expanded variant to every engine whose class
+# does not prefer the raw query (`prefers_raw_query`) —— i.e. the international
+# indexes get the rewritten question, the Chinese-facing editions keep their own.
+# Same
 # request count, zero added latency (all parallel), but higher recall because
 # different query variants surface different pages. Cross-variant consensus: a URL
 # surfaced by different queries from different engines is a STRONGER authority
@@ -1003,42 +1005,49 @@ def _expand_query(query: str, intent: str) -> str:
     return query + " " + " ".join(new_terms)
 
 
-_CORE_QUERY_ENGINES = frozenset({"baidu", "bing", "duckduckgo", "brave",
-                                 "sogou", "so360"})
-"""这些引擎拿**原始** query，其余拿展开后的变体。
+# `_CORE_QUERY_ENGINES` 曾在这里做这件事 —— 一份手写的引擎名单，本仓库第三次因为
+# "引擎列表改了而它没跟着改"踩坑（前两次：默认池两处定义、垂直索引两处定义）。
+# 现在判据搬到了引擎自己身上：`search_metasearch.BaseSearchEngine.prefers_raw_query`
+# —— 一处定义、跟着类走。它说的是**为什么**而不是**谁**：展开词是英文的
+# （" paper arxiv benchmark results" / " specifications table data parameters"），
+# 中文版面拿它等于换了一个查询。
+#
+# 一个有意的行为变化随这次搬迁出现：`brave` 与 `duckduckgo` 从"拿原始 query"改成
+# "拿展开变体"。它们是国际英文索引，英文展开词正是为这类索引设计的（不同变体浮出
+# 不同页面，同一请求数换更高召回）；旧名单里它们俩是因为"默认池首位不该被改写"这条
+# 角色理由进来的，而那条理由如今由 bing 自己的类属性承担。
+#
+# 一个已知局限（不在本次修）：不同引擎被问不同 query 时，URL 重合度里混进了"跨
+# query 变体也重合"这一层（见 _expand_query 上方注释，那是有意设计的好处，但也确实
+# 如此）。engines_consensus 的分母已经如实反映池子健康度，这个语义残留留在此处说明。
+def _raw_query_backends() -> frozenset:
+    """哪些 backend 该拿原始 query。读的是引擎类上的 `prefers_raw_query`。"""
+    from dhole_mcp import search_metasearch as ms
 
-原先这个集合写的是 {duckduckgo, brave, mojeek, yahoo}：mojeek 从来没在本项目里存在过
-（docstring 里的 startpage/google/qwant 同样不存在），而 bing 既是默认池首位又是国内
-免 VPN 的两个入口之一，却因为不在集合里而成了**唯一被改写提问**的默认引擎。集合是手
-工维护的、引擎列表改了它不会跟着改 —— 这是本仓库第三次踩同一类"两处定义漂移"。
-
-_INTENT_EXPANSIONS 只有两串**英文**词（" paper arxiv benchmark results" /
-" specifications table data parameters"），而中文索引（baidu / sogou / so360）的内容
-池几乎全是中文 —— 把英文术语追加进去只会让它更搜不到东西。sogou / so360 现在都在
-默认池里，这条更要紧：给它们的英文展开词等于换了个查询，中文索引上只会空。
-
-注意一个已知局限（不在本次修）：不同引擎被问不同 query 时，URL 重合度里混进了"跨
-query 变体也重合"这一层（见 _expand_query 上方注释，那是有意设计的好处，但也确实如
-此）。engines_consensus 的分母已经如实反映池子健康度，这个语义残留留在此处说明。
-"""
+    return frozenset(n for n, cls in ms._TEXT_ENGINES.items()
+                     if getattr(cls, "prefers_raw_query", False))
 
 
 def _generate_query_map(query: str, intent: str, engines: list[str] | None) -> dict[str, str]:
     """Assign per-engine query variants for multi-query fan-out.
 
-    Core engines (baidu, bing, duckduckgo, brave, sogou, so360) get the original
-    query; diversity engines (yandex, bing_global) get the expanded query.
-    Returns {}
+    Engines whose class says `prefers_raw_query` (the Chinese-facing editions:
+    baidu, bing, sogou, so360) get the original query; the rest get the expanded
+    variant. Returns {}
     if no expansion applies (all engines get the same query = backward-compatible).
     """
     expanded = _expand_query(query, intent)
     if expanded == query:
         return {}
+    from dhole_mcp.search_metasearch import _DHOLE_TO_BACKEND
+    raw = _raw_query_backends()
     engs = engines or []
     query_map: dict[str, str] = {}
     for eng in engs:
-        # Map dhole engine name to its backend name before matching.
-        query_map[eng] = query if eng in _CORE_QUERY_ENGINES else expanded
+        # 判据记的是 backend 名，调用方传的是 dhole 名（含 ddg / 360 这类别名），
+        # 所以先过一遍映射再查类属性。
+        backend = _DHOLE_TO_BACKEND.get(eng, eng)
+        query_map[eng] = query if backend in raw else expanded
     return query_map
 
 
