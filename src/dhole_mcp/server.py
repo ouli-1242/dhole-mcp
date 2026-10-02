@@ -568,7 +568,7 @@ DHOLE_INSTRUCTIONS = (
     "- Check a short link: web_resolve.\n"
     "- Cookies a site kept behind session_id=: close_session (no arguments "
     "= what is open; session_id= or all=true to forget them).\n"
-    "- A page you already worked out how to reach: recipe (save the url+actions "
+    "- A page you already worked out how to reach: web_recipe (save the url+actions "
     "once, then run it).\n"
     "- Watching a page for changes: web_watch (add it, then check - it diffs against "
     "the last snapshot).\n"
@@ -628,13 +628,13 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "web_resolve": "- Check a short link: web_resolve.\n",
     "close_session": "- Cookies a site kept behind session_id=: close_session "
     "(no arguments = what is open; session_id= or all=true to forget them).\n",
-    # 17.0：recipe/web_watch 全量默认注册（opt-in 组已删），这行 instructions 是
+    # 17.0：web_recipe/web_watch 全量默认注册（opt-in 组已删），这行 instructions 是
     # 它们唯一的"什么时候用我"，必须留在连接期说明里。
-    "recipe": "- A page you already worked out how to reach: recipe (save the "
+    "web_recipe": "- A page you already worked out how to reach: web_recipe (save the "
     "url+actions once, then run it).\n",
     "web_watch": "- Watching a page for changes: web_watch (add it, then check - it diffs "
     "against the last snapshot).\n",
-    # vault/login 同 recipe/web_watch：默认注册，行留在 instructions 里路由。
+    # vault/login 同 web_recipe/web_watch：默认注册，行留在 instructions 里路由。
     # 逐次确认闸（login 无 confirm 必暂停）在工具内部，注册面不做许可。
     "vault": "- A login the user already stores: vault (op=match with the URL) "
     "lists what their password manager holds - never the values.\n",
@@ -820,7 +820,7 @@ class CacheInfoModel(BaseModel):
 
 
 class RecipeModel(BaseModel):
-    """Response from `recipe`: save / list / run / delete of a recorded action chain.
+    """Response from `web_recipe`: save / list / run / delete of a recorded action chain.
 
     `run` carries the whole fetch back in `result` (the same ResponseModel
     web_read returns, same wire compaction), because a replay whose answer you
@@ -835,7 +835,7 @@ class RecipeModel(BaseModel):
     recipe: Dict[str, Any] = Field(default_factory=dict, description="The stored recipe itself (op=save): url, action count, note, created_at.")
     result: Optional[ResponseModel] = Field(default=None, description="op=run: the fetch this recipe produced, in full.")
     outcomes: List[Dict[str, Any]] = Field(default_factory=list, description="op=run: one row per action, ok or why not - the same receipts web_read reports, surfaced here so a broken step is obvious.")
-    actions_failed: int = Field(default=0, description="op=run: how many of the recipe's actions failed. Non-zero means the page changed under the recipe; re-record it with recipe(op='save', ...).")
+    actions_failed: int = Field(default=0, description="op=run: how many of the recipe's actions failed. Non-zero means the page changed under the recipe; re-record it with web_recipe(op='save', ...).")
     error: str = Field(default="", description="Set when the recipe could not be stored or replayed; it names what exists rather than saying 'not found'.")
     next_action: str = Field(default="", description="What to do next, empty when there is nothing to do")
 
@@ -991,7 +991,7 @@ _WIRE_OMIT: dict = {
         "sessions", "open_count", "session_id", "cookies_forgotten",
         "browser_closed", "closed", "prewarm_closed", "error", "next_action",
     }),
-    # recipe / watch（L3/L4）：清单与回执都在"默认值"上时省略，但 `changed`
+    # web_recipe / web_watch（L3/L4）：清单与回执都在"默认值"上时省略，但 `changed`
     # 刻意不在这个集合里 —— 首跑时它是 null，而 null≠false 正是这条 watch
     # 唯一想说的话（没有基线不等于没有变化），省掉它就把结论一起省掉了。
     "RecipeModel": frozenset({
@@ -2635,7 +2635,7 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
     # parse takes three strings and has nothing to convert.
     # L3/L4: `actions` goes through the same rawlist path as web_read's (the
     # chain validator owns its shape); the numbers are the same coercions.
-    "recipe": {"actions": "rawlist", "timeout": "number",
+    "web_recipe": {"actions": "rawlist", "timeout": "number",
                "max_content_chars": "int"},
     "web_watch": {"max_chars": "int", "timeout": "number"},
     "vault": {"limit": "int"},
@@ -4742,7 +4742,7 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     # method can exist, be documented, and still be unreachable on the wire.
     "close_session": frozenset({"session_id", "all"}),
     # L3 / L4（计划第九章）：录制回放与监控 diff。17.0 起默认在连接期表里。
-    "recipe": frozenset({"op", "name", "url", "actions", "note",
+    "web_recipe": frozenset({"op", "name", "url", "actions", "note",
                          "timeout", "max_content_chars", "focus",
                          "extraction_type", "session_id", "allow_private"}),
     "web_watch": frozenset({"op", "name", "url", "focus", "max_chars", "note",
@@ -4759,7 +4759,7 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
 # （17.0：不存在 opt-in 组 —— 上面的注释是给全量注册做的注脚。）
 
 
-# 17.0: 没有 opt-in 组了 —— recipe/watch/vault/login 全部默认注册（大众化一刀切：
+# 17.0: 没有 opt-in 组了 —— web_recipe/web_watch/vault/login 全部默认注册（大众化一刀切：
 # pip install 接上宿主，能力全部默认在线；vault/login 的逐次确认闸在工具内部，
 # 注册面不再做许可）。DHOLE_TASKS / DHOLE_VAULT 已注销，运行时静默忽略。
 
@@ -5784,7 +5784,7 @@ class MasterFetchServer:
     # 两者都不存凭据：session_id 每次 run/check 现传（与 sessions.py 的
     # "值不出境"同纪律）。
 
-    async def recipe(
+    async def web_recipe(
         self,
         op: Annotated[str, Field(description="save = record a {url, actions} pair; run = replay it; list = show every stored recipe; delete = forget one.")],
         name: Annotated[Optional[str], Field(description="Recipe name (1-64 chars). Required for save / run / delete.")] = None,
@@ -5814,12 +5814,12 @@ class MasterFetchServer:
             rows = tasks.list_recipes()
             return RecipeModel(
                 op=o,
-                message=(f"{len(rows)} recipe(s) stored." if rows
+                message=(f"{len(rows)} web_recipe(s) stored." if rows
                          else "No recipes are stored."),
                 recipes=rows,
-                next_action=("recipe(op='run', name='<name>') replays one."
+                next_action=("web_recipe(op='run', name='<name>') replays one."
                              if rows else
-                             "recipe(op='save', name=..., url=..., actions=[...]) "
+                             "web_recipe(op='save', name=..., url=..., actions=[...]) "
                              "records one."),
             )
 
@@ -5828,7 +5828,7 @@ class MasterFetchServer:
             return RecipeModel(
                 op=o, error="name is required for this op.",
                 next_action=("Pass name='<recipe name>'. "
-                             + ("recipe(op='list') shows what exists."
+                             + ("web_recipe(op='list') shows what exists."
                                 if o in ("run", "delete") else
                                 "Pick any short name you will remember.")),
             )
@@ -5849,7 +5849,7 @@ class MasterFetchServer:
                 message=(f"Recipe '{saved['name']}' "
                          + ("updated" if saved["updated"] else "saved")
                          + f" ({saved['actions']} actions)."),
-                next_action=(f"recipe(op='run', name='{saved['name']}') replays it."),
+                next_action=(f"web_recipe(op='run', name='{saved['name']}') replays it."),
             )
 
         if o == "delete":
@@ -5874,7 +5874,7 @@ class MasterFetchServer:
                 next_action=("Nothing was run. Stored: " + ", ".join(names) + "."
                              if names else
                              "Nothing was run - no recipes are stored. Record one "
-                             "with recipe(op='save', ...)."),
+                             "with web_recipe(op='save', ...)."),
             )
 
         kw: dict = {}
@@ -5902,7 +5902,7 @@ class MasterFetchServer:
 
         if failed:
             nxt = (f"{len(failed)} of {len(outcomes)} action(s) failed - the page "
-                   "changed under this recipe. Re-record it with recipe(op='save', "
+                   "changed under this recipe. Re-record it with web_recipe(op='save', "
                    "name='" + rec["name"] + "', ...) after re-checking the page.")
         elif not result.content_ok:
             nxt = result.next_action or "The replay ran but returned no usable content."
@@ -9064,7 +9064,7 @@ class MasterFetchServer:
                             "idempotentHint": False, "openWorldHint": False},
         },
         {
-            "name": "recipe",
+            "name": "web_recipe",
             "description": "Record how to reach a page once, replay it later: op=save stores a {url, actions} pair, op=run fetches that url with those actions, op=list shows what is stored with use_count/last_ok, op=delete forgets one. Actions are validated at save time by the same validator the executor uses, so a chain that would be refused at run time cannot be stored. run returns the full fetch plus one receipt per action; a non-zero actions_failed means the page changed under the recipe - re-save it. Stored in ~/.dhole/tasks.db; holds no credentials (pass session_id on each run).",
             "inputSchema": {
                 "type": "object", "required": ["op"],
@@ -9494,11 +9494,11 @@ class MasterFetchServer:
             )
             return _wire_result(result)
 
-        elif name == "recipe":
+        elif name == "web_recipe":
             # Images ride along like they do for web_read: a recipe whose
             # chain ends in an element capture is the same capture, and putting
             # base64 in the JSON would tax every text-only transcript instead.
-            result = await self.recipe(
+            result = await self.web_recipe(
                 op=args.get("op", ""),
                 name=args.get("name"),
                 url=args.get("url"),

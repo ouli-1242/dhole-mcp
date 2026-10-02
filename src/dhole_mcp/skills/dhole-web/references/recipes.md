@@ -56,8 +56,8 @@ Five paths, cheapest first: (1) user-supplied cookies (`cookies` + `session_id` 
 ## Reach a page that needs steps — record and replay (recipe, opt-in)
 
 1. Derive the chain once: `web_read` with `actions: [{"snapshot": true}]`, then address by index with `expect` (see "Operate a page")
-2. `recipe(op='save', name=..., url=..., actions=[...], note=...)` — validated at save time, so a chain the executor would refuse cannot be stored
-3. Later: `recipe(op='run', name=..., session_id=...)` returns the whole fetch plus one receipt per action. `session_id` is per-run — recipes never store one
+2. `web_recipe(op='save', name=..., url=..., actions=[...], note=...)` — validated at save time, so a chain the executor would refuse cannot be stored
+3. Later: `web_recipe(op='run', name=..., session_id=...)` returns the whole fetch plus one receipt per action. `session_id` is per-run — recipes never store one
 4. Pivot: `actions_failed` non-zero (or `op='list'` showing `last_ok: false`) means the page changed → re-snapshot, re-derive, re-save. Don't keep replaying a broken chain
 - Best for: pages whose content only appears after clicks, or a repeated multi-step fetch (always registered in 17.0)
 

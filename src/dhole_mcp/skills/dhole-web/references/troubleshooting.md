@@ -76,8 +76,8 @@ Five paths, cheapest first: (1) HTTP tier — user-supplied cookies (`cookies` +
 
 ### Recipe / web_watch misbehave
 
-- **`recipe` / `web_watch` not in `tools/list`** — same as vault/login above: only an explicit `DHOLE_TOOLS` subset removes them in 17.0
-- **`recipe(op='run')` with `actions_failed` > 0** — the page changed under the chain. Re-snapshot, re-derive the steps, `op='save'` again. An `op='save'` that is *rejected* means the chain is invalid (validation runs at save time) — fix the chain, don't retry the save
+- **`web_recipe` / `web_watch` not in `tools/list`** — same as vault/login above: only an explicit `DHOLE_TOOLS` subset removes them in 17.0
+- **`web_recipe(op='run')` with `actions_failed` > 0** — the page changed under the chain. Re-snapshot, re-derive the steps, `op='save'` again. An `op='save'` that is *rejected* means the chain is invalid (validation runs at save time) — fix the chain, don't retry the save
 - **`web_watch(op='check')` returns `changed: null`** — that is the FIRST check storing the baseline, not an error and not "no change". The next check answers `true`/`false`
 - **`web_watch` `error` set, `changed` absent** — the fetch failed; the baseline is **untouched** (by design, so an outage cannot silently re-baseline). Fix the fetch and re-check
 - **`web_watch` keeps reporting noise** — the page's chrome changes every load; re-add with `focus=` to diff only the relevant block, or raise `max_chars` if `baseline_cut` is true

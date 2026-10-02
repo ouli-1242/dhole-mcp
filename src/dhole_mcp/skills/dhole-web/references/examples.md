@@ -191,7 +191,7 @@ Agents that can see images receive it inline; text-only agents read the absolute
 Nothing is nested here either — every parameter of every tool sits at the top level of the call.
 
 ```json
-// recipe: record a chain once — validated at save time by the same validator the executor uses,
+// web_recipe: record a chain once — validated at save time by the same validator the executor uses,
 // so a chain that would be refused at run time cannot be stored
 {"op": "save", "name": "price-watch", "url": "https://shop.example.com/item",
  "actions": [{"click": {"index": 12, "expect": "Show price"}}], "note": "reveals the member price"}

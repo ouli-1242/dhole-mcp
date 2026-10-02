@@ -53,17 +53,17 @@ async def main() -> int:
     print(f"靶站 {BASE}　·　库 {os.environ['DHOLE_HOME']}\n")
 
     # 1. 录制时的坏链
-    bad = await s.recipe(op="save", name="bad", url=f"{BASE}/",
+    bad = await s.web_recipe(op="save", name="bad", url=f"{BASE}/",
                          actions=[{"click": ""}])
     record("录制时坏链被拒，且什么都没存", bool(bad.error)
            and tasks.get_recipe("bad") is None,
            f"error={bad.error!r} 库里={'bad' in {r['name'] for r in tasks.list_recipes()}}")
 
     # 2. 正常录制 + 重放
-    await s.recipe(op="save", name="idx-article", url=f"{BASE}/",
+    await s.web_recipe(op="save", name="idx-article", url=f"{BASE}/",
                    actions=[{"click": "a[href='/article']"}],
                    note="从索引点进长文")
-    run = await s.recipe(op="run", name="idx-article", allow_private=True,
+    run = await s.web_recipe(op="run", name="idx-article", allow_private=True,
                          timeout=60000)
     title = (run.result.metadata or {}).get("title", "") if run.result else ""
     record("重放点进长文：动作全过且拿到目标页",
@@ -72,15 +72,15 @@ async def main() -> int:
            f"url={run.result.url if run.result else ''}")
 
     # 3. 页面变了之后：重放必须大声失败，而不是悄悄给回旧内容
-    await s.recipe(op="save", name="idx-article", url=f"{BASE}/",
+    await s.web_recipe(op="save", name="idx-article", url=f"{BASE}/",
                    actions=[{"click": "a[href='/does-not-exist']"}])
-    broken = await s.recipe(op="run", name="idx-article", allow_private=True,
+    broken = await s.web_recipe(op="run", name="idx-article", allow_private=True,
                             timeout=60000)
     record("页面变了之后重放大声失败并让人重录",
            broken.actions_failed >= 1 and "re-record" in broken.next_action.lower(),
            f"actions_failed={broken.actions_failed} "
            f"next_action={broken.next_action[:70]!r}")
-    await s.recipe(op="delete", name="idx-article")
+    await s.web_recipe(op="delete", name="idx-article")
 
     # 4/5. watch：首跑建基线，静态页第二次 check 无变化
     await s.web_watch(op="add", name="art", url=f"{BASE}/article")

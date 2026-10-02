@@ -223,19 +223,19 @@ class TestOptInWiring:
         monkeypatch.delenv("DHOLE_TOOLS", raising=False)
         monkeypatch.delenv("DHOLE_TASKS", raising=False)
         enabled = server_mod._parse_enabled_tools()
-        assert {"recipe", "web_watch"} <= set(server_mod._TOP_LEVEL_ARGS)
-        assert {"recipe", "web_watch"} <= enabled
+        assert {"web_recipe", "web_watch"} <= set(server_mod._TOP_LEVEL_ARGS)
+        assert {"web_recipe", "web_watch"} <= enabled
 
     def test_a_stale_tasks_flag_does_nothing(self, monkeypatch):
         """注销的旋钮运行时静默忽略 —— 不许它复活成一道闸。"""
         monkeypatch.delenv("DHOLE_TOOLS", raising=False)
         monkeypatch.setenv("DHOLE_TASKS", "0")
-        assert {"recipe", "web_watch"} <= server_mod._parse_enabled_tools()
+        assert {"web_recipe", "web_watch"} <= server_mod._parse_enabled_tools()
 
     def test_naming_them_in_dhole_tools_still_works(self, monkeypatch):
-        monkeypatch.setenv("DHOLE_TOOLS", "web_read,recipe,web_watch")
+        monkeypatch.setenv("DHOLE_TOOLS", "web_read,web_recipe,web_watch")
         assert server_mod._parse_enabled_tools() == frozenset(
-            {"web_read", "recipe", "web_watch"})
+            {"web_read", "web_recipe", "web_watch"})
 
     def test_the_default_instructions_route_to_them(self, monkeypatch):
         """默认注册的工具必须在默认 instructions 里有路由行——否则连上来
@@ -243,13 +243,13 @@ class TestOptInWiring:
         monkeypatch.delenv("DHOLE_TOOLS", raising=False)
         monkeypatch.delenv("DHOLE_TASKS", raising=False)
         text = server_mod._compose_instructions(server_mod._parse_enabled_tools())
-        assert "recipe" in text and "web_watch" in text
+        assert "web_recipe" in text and "web_watch" in text
 
     def test_a_disabled_tool_is_refused_with_a_named_error(self, monkeypatch):
         monkeypatch.setattr(server_mod, "_ENABLED_TOOLS", frozenset({"web_read"}))
         s = MasterFetchServer()
         with pytest.raises(ValueError) as e:
-            _run(s._dispatch("recipe", {"op": "list"}))
+            _run(s._dispatch("web_recipe", {"op": "list"}))
         assert "not enabled" in str(e.value) and "DHOLE_TOOLS" in str(e.value)
 
 
@@ -257,32 +257,32 @@ class TestOptInWiring:
 
 class TestRecipeTool:
     def test_list_on_an_empty_library_says_how_to_start(self, lib):
-        m = _run(MasterFetchServer().recipe(op="list"))
+        m = _run(MasterFetchServer().web_recipe(op="list"))
         assert m.recipes == [] and "save" in m.next_action
 
     def test_an_unknown_op_is_answered_not_raised(self, lib):
-        m = _run(MasterFetchServer().recipe(op="frobnicate"))
+        m = _run(MasterFetchServer().web_recipe(op="frobnicate"))
         assert "unknown op" in m.error and "save" in m.next_action
 
     def test_run_without_a_name_says_so(self, lib):
-        m = _run(MasterFetchServer().recipe(op="run"))
+        m = _run(MasterFetchServer().web_recipe(op="run"))
         assert "name is required" in m.error
 
     def test_run_of_a_missing_recipe_names_what_exists(self, lib):
         lib.save_recipe("known", "https://example.com/", [{"wait": 1}])
-        m = _run(MasterFetchServer().recipe(op="run", name="other"))
+        m = _run(MasterFetchServer().web_recipe(op="run", name="other"))
         assert "No recipe named 'other'" in m.error
         assert "known" in m.next_action
 
     def test_a_bad_chain_comes_back_as_an_envelope(self, lib):
         """录制失败必须是 envelope，不是异常——调用方要拿到 next_action。"""
-        m = _run(MasterFetchServer().recipe(
+        m = _run(MasterFetchServer().web_recipe(
             op="save", name="r", url="https://example.com/", actions=[{"click": ""}]))
         assert m.error and "Nothing was stored" in m.next_action
         assert lib.get_recipe("r") is None
 
     def test_delete_of_a_missing_recipe_says_nothing_was_deleted(self, lib):
-        m = _run(MasterFetchServer().recipe(op="delete", name="ghost"))
+        m = _run(MasterFetchServer().web_recipe(op="delete", name="ghost"))
         assert "nothing was deleted" in m.message
 
 
