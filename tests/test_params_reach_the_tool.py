@@ -83,8 +83,8 @@ VALUES: dict[str, object] = {
 }
 # 布尔类共用一个值；列出来是为了让"表里查不到"这条守卫说得准。
 BOOL_KEYS = {
-    "network_idle", "headless", "real_chrome", "main_content_only",
-    "use_trafilatura", "solve_cloudflare", "block_webrtc", "hide_canvas",
+    "network_idle", "headless", "real_chrome",
+    "solve_cloudflare", "block_webrtc", "hide_canvas",
     "include_media", "include_links", "ignore_robots", "allow_private",
     "discover_only", "full_page", "sitemap", "check_login",
 }
@@ -118,6 +118,10 @@ def _capture(monkeypatch, tool: str) -> list[dict]:
 
 def _dispatch(tool: str, args: dict):
     return asyncio.run(MasterFetchServer()._dispatch(tool, args))
+
+
+def _def_of(name: str) -> dict:
+    return {td["name"]: td for td in MasterFetchServer._TOOL_DEFS}[name]
 
 
 class TestTheValueTableCoversTheSurface:
@@ -224,6 +228,27 @@ class TestAWrongNameIsRefused:
         with pytest.raises(ValueError) as ei:
             _dispatch("smart_search", {"query": "q", "options": {"frobnicate": 1}})
         assert "frobnicate" not in str(ei.value).split("removed in 17.0")[1]
+
+
+class TestTheTwoChoiceKnobsAreGone:
+    """§3-27：三级提取梯子一寸不动，但"走哪条提取路径"不再是调用方的选择权。
+
+    这两个键（`main_content_only` / `use_trafilatura`）还能动的时候，删掉的不是
+    参数而是"没人用的参数"；它们必须进拒绝名单，否则 schema 上仍然挂着两个
+    今天不需要的开关。梯子本身由 test_extractor.py 那组端到端用例守着 ——
+    这条删的是选择权，不是那三条路径。
+    """
+
+    @pytest.mark.parametrize("key", ["main_content_only", "use_trafilatura"])
+    def test_the_key_is_refused(self, key):
+        with pytest.raises(ValueError, match="Unsupported argument") as ei:
+            _dispatch("smart_fetch", {"url": URL, key: False})
+        assert key in str(ei.value)
+
+    @pytest.mark.parametrize("key", ["main_content_only", "use_trafilatura"])
+    def test_the_key_is_not_advertised(self, key):
+        props = _def_of("smart_fetch")["inputSchema"]["properties"]
+        assert key not in props
 
 
 class TestTheBagIsGoneFromTheWire:

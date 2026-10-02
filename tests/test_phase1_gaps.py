@@ -109,7 +109,7 @@ class TestFiveHundredDoesNotBuyABrowserRun:
         server.get = http_5xx
         server.stealthy_fetch = browser
         out = await server._auto_escalate(
-            "https://example.com/boom", "markdown", None, True, True, 0, 0,
+            "https://example.com/boom", "markdown", None, 0, 0,
             True, False, 0, None, 20000, False, False, False, False,
             None, None, None,
         )
@@ -137,7 +137,7 @@ class TestFiveHundredDoesNotBuyABrowserRun:
         server.get = http_503
         server.stealthy_fetch = browser
         out = await server._auto_escalate(
-            "https://example.com/boom", "markdown", None, True, True, 0, 0,
+            "https://example.com/boom", "markdown", None, 0, 0,
             True, False, 0, None, 20000, False, False, False, False,
             None, None, None,
         )

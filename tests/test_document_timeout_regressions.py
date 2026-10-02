@@ -153,7 +153,7 @@ async def _escalate(srv, url, timeout_ms, body_size=None):
     fetcher.http_get = fake_http_get
     try:
         return await srv._auto_escalate(
-            url, "markdown", None, True, True, 0, 0,
+            url, "markdown", None, 0, 0,
             True, False, 0, None, timeout_ms, False, False, False, False,
             None, None, None,
         )
@@ -328,7 +328,7 @@ class TestForcedHttpTierRespectsTheBudget:
         fetcher.http_get = lambda u, **kw: _ProbeResponse({})
         try:
             await srv._force_fetch(
-                DOC_URL, "http", "markdown", None, True, True, 0, 0,
+                DOC_URL, "http", "markdown", None, 0, 0,
                 True, False, 0, None, 90000, False, False, False, False,
                 None, None, None,
             )

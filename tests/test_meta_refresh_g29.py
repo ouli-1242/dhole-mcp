@@ -324,6 +324,6 @@ class TestTheResponseCarriesTheReason:
                         status=200, headers={"content-type": "text/html"},
                         meta_refresh={"from": "https://a.example/from",
                                       "delay_s": 0.0, "hops": 1})
-        result = server_mod._translate_response(page, "markdown", None, False, True,
+        result = server_mod._translate_response(page, "markdown", None,
                                                 "http", 1.0)
         assert result.metadata["meta_refresh"]["from"] == "https://a.example/from"

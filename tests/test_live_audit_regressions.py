@@ -42,8 +42,8 @@ _PADDED_HTML = (
 def _stub_tier(monkeypatch, html: str, captured: dict) -> None:
     """Stand in for the fetch tiers, faithfully: they truncate to `max_chars`."""
     async def fake(
-        self, url, extraction_type, css_selector, main_content_only,
-        use_trafilatura, cache_ttl, offset, headless, real_chrome, wait,
+        self, url, extraction_type, css_selector, cache_ttl, offset, headless,
+        real_chrome, wait,
         proxy, timeout, network_idle, solve_cloudflare, block_webrtc,
         hide_canvas, extra_headers, useragent, cookies,
         max_chars: int = server_mod.MAX_CONTENT_CHARS,

@@ -2575,7 +2575,7 @@ def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Option
 _ARG_TYPES: dict[str, dict[str, str]] = {
     "smart_fetch": {
         "urls": "list",
-        "main_content_only": "bool", "use_trafilatura": "bool", "headless": "bool",
+        "headless": "bool",
         "real_chrome": "bool", "network_idle": "bool", "solve_cloudflare": "bool",
         "block_webrtc": "bool", "hide_canvas": "bool", "include_media": "bool",
         "include_links": "bool", "ignore_robots": "bool",
@@ -3103,11 +3103,6 @@ def _cache_context(options: dict) -> str:
     if isinstance(password, str) and password:
         bits.append(f"pw={password}")
 
-    # Content-shaping flags: their defaults are the "plain" answer.
-    if options.get("main_content_only") is False:
-        bits.append("mc=0")
-    if options.get("use_trafilatura") is False:
-        bits.append("tr=0")
     if options.get("include_media"):
         bits.append("im=1")
     if options.get("include_links"):
@@ -3789,16 +3784,14 @@ def _translate_response_body(
     page: _DholeResponse,
     extraction_type: str,
     css_selector: Optional[str],
-    main_content_only: bool,
-    use_trafilatura: bool = False,
     fetcher_used: str = "",
     duration_ms: float = 0,
 ) -> ResponseModel:
     """Extract content from a response and translate it to a ResponseModel.
 
-    When use_trafilatura=True, ALL non-HTML extraction types go through
-    Trafilatura first. Trafilatura has its own robust fallback chain internally,
-    so we only fall back to Scrapling if Trafilatura completely fails.
+    Markdown / text / article / structured go through Trafilatura first. It has
+    its own robust fallback chain internally, so Scrapling is only reached when
+    Trafilatura completely fails — that ladder is not a caller's choice.
 
     For JSON responses (content-type: application/json), extraction is skipped
     and the raw JSON is returned directly to avoid mangling by HTML extractors.
@@ -3964,7 +3957,7 @@ def _translate_response_body(
                 content = _dhole_extract()
         except Exception:
             content = _dhole_extract()
-    elif use_trafilatura and extraction_type in ("markdown", "text", "article", "structured"):
+    elif extraction_type in ("markdown", "text", "article", "structured"):
         # Trafilatura-first path
         content = _trafilatura_extract()
         if (not content or content == [""] or content == ["\n"]):
@@ -4672,7 +4665,7 @@ _SF_PARAMS = frozenset({
     "css_selector", "max_content_chars", "timeout", "pages", "password",
     "schema",
     "proxy", "cookies", "extra_headers", "useragent", "wait", "network_idle",
-    "headless", "real_chrome", "main_content_only", "use_trafilatura",
+    "headless", "real_chrome",
     "solve_cloudflare", "block_webrtc", "hide_canvas",
     "include_media", "include_links", "max_links", "ignore_robots",
     "allow_private", "session_id", "method", "body", "content_type", "auth",
@@ -5039,11 +5032,10 @@ def _blocked_path_prefix(real_path: str) -> str:
 class MasterFetchServer:
     """Enhanced MCP server built on Scrapling with smart routing, caching, and Trafilatura."""
 
-    def __init__(self, cache_ttl: int = DEFAULT_TTL, use_trafilatura: bool = True):
+    def __init__(self, cache_ttl: int = DEFAULT_TTL):
         self._sessions: Dict[str, _SessionEntry] = {}
         self._sessions_lock: Lock = Lock()
         self._cache_ttl = cache_ttl
-        self._use_trafilatura = use_trafilatura
         self._auto_stealthy_id: Optional[str] = None
         self._auto_stealthy_last_used: float = 0  # timestamp of last auto stealthy session use
         self._idle_monitor_task: Optional[Any] = None  # asyncio.Task for idle session cleanup
@@ -6480,8 +6472,6 @@ class MasterFetchServer:
         impersonate: ImpersonateType = "chrome",
         extraction_type: ExtendedExtractionType = "markdown",
         css_selector: Optional[str] = None,
-        main_content_only: bool = True,
-        use_trafilatura: bool = True,
         params: Optional[Dict] = None,
         headers: Optional[Mapping[str, Optional[str]]] = None,
         cookies: Optional[Dict[str, str]] = None,
@@ -6506,8 +6496,6 @@ class MasterFetchServer:
         :param impersonate: Browser to impersonate (default 'chrome').
         :param extraction_type: Content format: 'markdown', 'html', 'text', 'article', 'structured'.
         :param css_selector: CSS selector to narrow content before extraction.
-        :param main_content_only: Strip nav/ads/footers (default True).
-        :param use_trafilatura: Use Trafilatura for article extraction (default True).
         :param params: Query string parameters.
         :param headers: Request headers.
         :param cookies: Request cookies.
@@ -6533,8 +6521,8 @@ class MasterFetchServer:
         t0 = now()
         bulk = await MasterFetchServer.bulk_get(
             urls=[url], impersonate=impersonate, extraction_type=extraction_type,
-            css_selector=css_selector, main_content_only=main_content_only,
-            use_trafilatura=use_trafilatura, params=params, headers=headers,
+            css_selector=css_selector,
+            params=params, headers=headers,
             cookies=cookies, useragent=useragent, timeout=timeout,
             follow_redirects=follow_redirects,
             max_redirects=max_redirects, retries=retries, retry_delay=retry_delay,
@@ -6551,8 +6539,6 @@ class MasterFetchServer:
         impersonate: ImpersonateType = "chrome",
         extraction_type: ExtendedExtractionType = "markdown",
         css_selector: Optional[str] = None,
-        main_content_only: bool = True,
-        use_trafilatura: bool = True,
         params: Optional[Dict] = None,
         headers: Optional[Mapping[str, Optional[str]]] = None,
         cookies: Optional[Dict[str, str]] = None,
@@ -6576,8 +6562,6 @@ class MasterFetchServer:
         :param impersonate: Browser to impersonate (default 'chrome').
         :param extraction_type: Content format: 'markdown', 'html', 'text', 'article', 'structured'.
         :param css_selector: CSS selector to narrow content.
-        :param main_content_only: Strip nav/ads/footers (default True).
-        :param use_trafilatura: Use Trafilatura for article extraction (default True).
         :param params: Query parameters.
         :param headers: Request headers.
         :param cookies: Request cookies.
@@ -6616,7 +6600,6 @@ class MasterFetchServer:
         if _auth_ignored and _ARG_NOTES.get() is not None:
             _ARG_NOTES.get().append(_auth_ignored)
         http_proxy = _proxy_to_url(proxy, proxy_auth)
-        use_tf = use_trafilatura and extraction_type in ("markdown", "text", "article", "structured")
 
         from dhole_mcp.fetcher import HTTPSession
         # 写操作审计（安全闸剩余项 2）：所有 HTTP 写的必经点——force-http 与
@@ -6666,7 +6649,8 @@ class MasterFetchServer:
                     page, elapsed = resp
                     results.append(_with_agent_hints(_annotate_quality(
                             _translate_response(
-                                page, extraction_type, css_selector, main_content_only, use_tf, "http", elapsed,
+                                page, extraction_type, css_selector,
+                                fetcher_used="http", duration_ms=elapsed,
                             )
                         )))
         successful = sum(1 for r in results if r.status < 400 and not r.error)
@@ -6680,8 +6664,6 @@ class MasterFetchServer:
         url: str,
         extraction_type: ExtendedExtractionType = "markdown",
         css_selector: Optional[str] = None,
-        main_content_only: bool = True,
-        use_trafilatura: bool = True,
         headless: bool = True,
         google_search: bool = True,
         real_chrome: bool = False,
@@ -6724,8 +6706,6 @@ class MasterFetchServer:
         :param url: The URL to fetch.
         :param extraction_type: Content format: 'markdown', 'html', 'text', 'article', 'structured'.
         :param css_selector: CSS selector to narrow content.
-        :param main_content_only: Strip nav/ads/footers (default True).
-        :param use_trafilatura: Use Trafilatura for article extraction (default True).
         :param headless: Run browser in headless mode (default True).
         :param solve_cloudflare: Auto-solve Cloudflare embedded challenges.
         :param block_webrtc: Prevent IP leak via WebRTC.
@@ -6763,7 +6743,6 @@ class MasterFetchServer:
         t0 = now()
         bulk = await self.bulk_stealthy_fetch(
             urls=[url], extraction_type=extraction_type, css_selector=css_selector,
-            main_content_only=main_content_only, use_trafilatura=use_trafilatura,
             headless=headless, google_search=google_search, real_chrome=real_chrome,
             wait=wait, proxy=proxy, timezone_id=timezone_id, locale=locale,
             extra_headers=extra_headers, useragent=useragent, hide_canvas=hide_canvas,
@@ -6783,8 +6762,6 @@ class MasterFetchServer:
         urls: List[str],
         extraction_type: ExtendedExtractionType = "markdown",
         css_selector: Optional[str] = None,
-        main_content_only: bool = True,
-        use_trafilatura: bool = True,
         headless: bool = True,
         google_search: bool = True,
         real_chrome: bool = False,
@@ -6816,8 +6793,6 @@ class MasterFetchServer:
         :param urls: List of URLs to fetch.
         :param extraction_type: Content format: 'markdown', 'html', 'text', 'article', 'structured'.
         :param css_selector: CSS selector to narrow content.
-        :param main_content_only: Strip nav/ads/footers (default True).
-        :param use_trafilatura: Use Trafilatura for article extraction (default True).
         :param headless: Run browser in headless mode (default True).
         :param solve_cloudflare: Auto-solve Cloudflare challenges.
         :param block_webrtc: Prevent IP leak via WebRTC.
@@ -6866,7 +6841,6 @@ class MasterFetchServer:
                 + _install.browser_install_advice()
             )
 
-        use_tf = use_trafilatura and extraction_type in ("markdown", "text", "article", "structured")
 
         attached = False
         _probe = probe_out if len(urls) == 1 else None
@@ -6929,7 +6903,8 @@ class MasterFetchServer:
                 page, elapsed = resp
                 results.append(_with_agent_hints(_annotate_quality(
                         _translate_response(
-                            page, extraction_type, css_selector, main_content_only, use_tf, "stealthy", elapsed,
+                            page, extraction_type, css_selector,
+                            fetcher_used="stealthy", duration_ms=elapsed,
                         )
                     )))
         if attached:
@@ -6949,8 +6924,6 @@ class MasterFetchServer:
         urls: Annotated[Optional[List[str]], Field(description="Multiple URLs to fetch in parallel. Returns bulk results. Use instead of calling smart_fetch multiple times.")] = None,
         extraction_type: Annotated[ExtendedExtractionType, Field(description="Content format: 'markdown' (default), 'html', 'text', 'article', 'structured'.")] = "markdown",
         css_selector: Annotated[Optional[str], Field(description="CSS selector to narrow extracted content (e.g. 'article', '.main-content').")] = None,
-        main_content_only: Annotated[bool, Field(description="Strip nav, ads, footers (default True).")] = True,
-        use_trafilatura: Annotated[bool, Field(description="Use Trafilatura for cleaner article extraction (default True).")] = True,
         cache_ttl: Annotated[Optional[int], Field(description="Cache duration in seconds. Default 3600 (1 hour). Set 0 to skip cache and force a fresh fetch.")] = None,
         force_fetcher: Annotated[Optional[Literal["http", "stealthy"]], Field(description="Lock to one fetcher tier, skip auto-escalation. 'http' = fast HTTP-only (fails on JS/bot walls). 'stealthy' = anti-detect browser (Patchright). Two tiers: the third one and its 'dynamic' alias are gone.")] = None,
         headless: Annotated[bool, Field(description="Run browser without visible window (default True).")] = True,
@@ -7082,8 +7055,7 @@ class MasterFetchServer:
                     total=len(urls), successful=0,
                 )
             return await self._smart_fetch_bulk(
-                urls, extraction_type, css_selector, main_content_only,
-                use_trafilatura, cache_ttl, force_fetcher,
+                urls, extraction_type, css_selector, cache_ttl, force_fetcher,
                 headless, real_chrome, wait, proxy, timeout, network_idle,
                 solve_cloudflare, block_webrtc, hide_canvas, extra_headers,
                 useragent, cookies, max_content_chars, include_media, include_links,
@@ -7314,8 +7286,7 @@ class MasterFetchServer:
                 self._force_fetch(
                     url, "stealthy", extraction_type=extraction_type,
                     css_selector=css_selector,
-                    main_content_only=main_content_only,
-                    use_trafilatura=use_trafilatura, cache_ttl=0,
+                    cache_ttl=0,
                     offset=offset, headless=headless, real_chrome=real_chrome,
                     wait=wait, proxy=proxy, timeout=timeout,
                     network_idle=network_idle,
@@ -7366,8 +7337,8 @@ class MasterFetchServer:
             # cap here: the selectors run over the whole document, and the
             # caller's cap applies to the JSON that comes back (see re-chunk
             # below).
-            # Keyword args, not positionals: this call dropped `use_trafilatura`,
-            # so every slot after it shifted by one and `cookies` arrived as
+            # Keyword args, not positionals: this call once dropped an extraction
+            # flag, so every slot after it shifted by one and `cookies` arrived as
             # _SCHEMA_SOURCE_MAX_CHARS — which is the `'int' object is not
             # iterable` the 16.0 report filed as a nested-schema bug (G14). A
             # misspelled or missing name raises at once instead of landing in a
@@ -7375,8 +7346,6 @@ class MasterFetchServer:
             html_result = await self._auto_escalate(
                 url, "html",
                 css_selector=css_selector,
-                main_content_only=main_content_only,
-                use_trafilatura=use_trafilatura,
                 # A conditional question goes to the origin, never to dhole's own
                 # memory of an answer (G23): serving a cached 200 here would report
                 # "content" for a call that asked whether the content still stands.
@@ -7477,8 +7446,7 @@ class MasterFetchServer:
                 self._force_fetch(
                     url, "stealthy", extraction_type=extraction_type,
                     css_selector=css_selector,
-                    main_content_only=main_content_only,
-                    use_trafilatura=use_trafilatura, cache_ttl=cache_ttl,
+                    cache_ttl=cache_ttl,
                     offset=offset, headless=headless, real_chrome=real_chrome,
                     wait=wait, proxy=proxy, timeout=timeout,
                     network_idle=network_idle,
@@ -7499,8 +7467,7 @@ class MasterFetchServer:
                 self._force_fetch(
                     url, force_fetcher, extraction_type=extraction_type,
                     css_selector=css_selector,
-                    main_content_only=main_content_only,
-                    use_trafilatura=use_trafilatura, cache_ttl=cache_ttl,
+                    cache_ttl=cache_ttl,
                     offset=offset, headless=headless, real_chrome=real_chrome,
                     wait=wait, proxy=proxy, timeout=timeout,
                     network_idle=network_idle,
@@ -7522,8 +7489,7 @@ class MasterFetchServer:
                 self._force_fetch(
                     url, "stealthy", extraction_type=extraction_type,
                     css_selector=css_selector,
-                    main_content_only=main_content_only,
-                    use_trafilatura=use_trafilatura, cache_ttl=cache_ttl,
+                    cache_ttl=cache_ttl,
                     offset=offset, headless=headless, real_chrome=real_chrome,
                     wait=wait, proxy=proxy, timeout=timeout,
                     network_idle=network_idle,
@@ -7539,8 +7505,6 @@ class MasterFetchServer:
             self._auto_escalate(
                 url, extraction_type,
                 css_selector=css_selector,
-                main_content_only=main_content_only,
-                use_trafilatura=use_trafilatura,
                 cache_ttl=0 if conditional else cache_ttl,
                 offset=offset,
                 headless=headless, real_chrome=real_chrome, wait=wait,
@@ -7593,8 +7557,7 @@ class MasterFetchServer:
             _budget_credit.reset(token)
 
     async def _smart_fetch_bulk(
-        self, urls, extraction_type, css_selector, main_content_only,
-        use_trafilatura, cache_ttl, force_fetcher,
+        self, urls, extraction_type, css_selector, cache_ttl, force_fetcher,
         headless, real_chrome, wait, proxy, timeout, network_idle,
         solve_cloudflare, block_webrtc, hide_canvas, extra_headers,
         useragent, cookies, max_chars: int = DEFAULT_MAX_CONTENT_CHARS,
@@ -7620,8 +7583,8 @@ class MasterFetchServer:
             try:
                 return await self.smart_fetch(
                     url=u, extraction_type=extraction_type,
-                    css_selector=css_selector, main_content_only=main_content_only,
-                    use_trafilatura=use_trafilatura, cache_ttl=cache_ttl,
+                    css_selector=css_selector,
+                    cache_ttl=cache_ttl,
                     force_fetcher=force_fetcher,
                     headless=headless, real_chrome=real_chrome, wait=wait,
                     proxy=proxy, timeout=timeout, network_idle=network_idle,
@@ -7721,7 +7684,7 @@ class MasterFetchServer:
 
     async def _force_fetch(
         self, url, force_fetcher, extraction_type, css_selector,
-        main_content_only, use_trafilatura, cache_ttl, offset,
+        cache_ttl, offset,
         headless, real_chrome, wait, proxy, timeout, network_idle,
         solve_cloudflare, block_webrtc, hide_canvas, extra_headers,
         useragent, cookies, max_chars: int = DEFAULT_MAX_CONTENT_CHARS,
@@ -7760,7 +7723,6 @@ class MasterFetchServer:
                         offset, max_chars)
             result = await self.get(
                 url, extraction_type=extraction_type, css_selector=css_selector,
-                main_content_only=main_content_only, use_trafilatura=use_trafilatura,
                 proxy=proxy_url,
                 headers=extra_headers, cookies=http_cookies,
                 useragent=useragent, timeout=http_timeout, retries=http_retries,
@@ -7856,8 +7818,8 @@ class MasterFetchServer:
             _login_probe: dict = {}
             result = await self.stealthy_fetch(
                 url, extraction_type=extraction_type,
-                css_selector=css_selector, main_content_only=main_content_only,
-                use_trafilatura=use_trafilatura, headless=headless,
+                css_selector=css_selector,
+                headless=headless,
                 real_chrome=real_chrome, wait=wait, proxy=proxy,
                 timeout=timeout, network_idle=network_idle,
                 disable_resources=disable_resources,
@@ -7877,7 +7839,7 @@ class MasterFetchServer:
 
     async def _fetch_from_archive(
         self, url: str, extraction_type: str, css_selector: Optional[str],
-        main_content_only: bool, use_trafilatura: bool, offset: int, max_chars: int,
+        offset: int, max_chars: int,
     ) -> Optional[ResponseModel]:
         """Try to fetch content from the Internet Archive (Wayback Machine).
 
@@ -7906,8 +7868,8 @@ class MasterFetchServer:
             # 2. Fetch the snapshot page via HTTP tier
             snap_resp = await self.get(
                 snapshot_url, extraction_type=extraction_type,
-                css_selector=css_selector, main_content_only=main_content_only,
-                use_trafilatura=use_trafilatura, timeout=15,
+                css_selector=css_selector,
+                timeout=15,
             )
             if snap_resp.status >= 400 or not snap_resp.content or not any(c.strip() for c in snap_resp.content):
                 return None
@@ -7927,8 +7889,7 @@ class MasterFetchServer:
             return None
 
     async def _auto_escalate(
-        self, url, extraction_type, css_selector, main_content_only,
-        use_trafilatura, cache_ttl, offset, headless, real_chrome, wait,
+        self, url, extraction_type, css_selector, cache_ttl, offset, headless, real_chrome, wait,
         proxy, timeout, network_idle, solve_cloudflare, block_webrtc,
         hide_canvas, extra_headers, useragent, cookies, max_chars: int = DEFAULT_MAX_CONTENT_CHARS,
         conditional: Optional[dict] = None,
@@ -8027,8 +7988,7 @@ class MasterFetchServer:
             # Try archive.org before giving up
             if _should_try_archive(result):
                 archive_result = await _with_budget(self._fetch_from_archive(
-                    url, extraction_type, css_selector, main_content_only,
-                    use_trafilatura, offset, max_chars,
+                    url, extraction_type, css_selector, offset, max_chars,
                 ), "archive.org lookup", "archive.org")
                 if _is_over_budget(archive_result):
                     return archive_result
@@ -8072,8 +8032,7 @@ class MasterFetchServer:
 
         result = await _with_budget(self.get(
             url, extraction_type=extraction_type,
-            css_selector=css_selector, main_content_only=main_content_only,
-            use_trafilatura=use_trafilatura,
+            css_selector=css_selector,
             proxy=_proxy_to_url(proxy, None),
             headers=extra_headers, cookies=http_cookies,
             useragent=useragent, stealthy_headers=True,
@@ -8172,8 +8131,7 @@ class MasterFetchServer:
             # settling for an old snapshot.
             if result.status in _ARCHIVE_FALLBACK_STATUSES and _should_try_archive(result):
                 archive_result = await _with_budget(self._fetch_from_archive(
-                    url, extraction_type, css_selector, main_content_only,
-                    use_trafilatura, offset, max_chars,
+                    url, extraction_type, css_selector, offset, max_chars,
                 ), "archive.org lookup", "archive.org")
                 if _is_over_budget(archive_result):
                     return archive_result
@@ -8271,8 +8229,8 @@ class MasterFetchServer:
             "waiting for a render that cannot arrive.")
         result = await _with_budget(self.stealthy_fetch(
             url, extraction_type=extraction_type,
-            css_selector=css_selector, main_content_only=main_content_only,
-            use_trafilatura=use_trafilatura, headless=headless,
+            css_selector=css_selector,
+            headless=headless,
             real_chrome=real_chrome, wait=wait, proxy=proxy,
             timeout=remaining, network_idle=network_idle,
             disable_resources=True,
@@ -8342,8 +8300,7 @@ class MasterFetchServer:
         # failures, and server errors. Never blocks the original error response.
         if _should_try_archive(result):
             archive_result = await _with_budget(self._fetch_from_archive(
-                url, extraction_type, css_selector, main_content_only,
-                use_trafilatura, offset, max_chars,
+                url, extraction_type, css_selector, offset, max_chars,
             ), "archive.org lookup", "archive.org")
             if _is_over_budget(archive_result):
                 return archive_result
@@ -8992,8 +8949,6 @@ class MasterFetchServer:
                     "solve_cloudflare": {"type": "boolean", "description": "Stealthy-tier challenge handling (default true). A fingerprint internal that is already tuned - leave unset unless something names it."},
                     "block_webrtc": {"type": "boolean", "description": "Stop WebRTC from leaking the real IP in the stealthy tier (default true). Already tuned - leave unset unless something names it."},
                     "hide_canvas": {"type": "boolean", "description": "Add per-session noise to canvas reads (default true). Already tuned - leave unset unless something names it."},
-                    "main_content_only": {"type": "boolean", "description": "Drop nav/ads/footers from the extracted text (default true). Set false to keep the whole page, e.g. to read a sidebar's link list."},
-                    "use_trafilatura": {"type": "boolean", "description": "Use Trafilatura for article extraction (default true). Already tuned - leave unset unless something names it."},
                     "include_links": {"type": "boolean", "description": "Return the page's outgoing links classified as citations / navigation / external, with a primary_source hint (default false)."},
                     "max_links": {"type": "integer", "description": "Cap for EACH links list when include_links=true (1-100; default 30/20/20). links.total_found and links.is_truncated say what the cap hid."},
                     "include_media": {"type": "boolean", "description": "Return up to 20 image URLs found on the page in .media (default false)."},

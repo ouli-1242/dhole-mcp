@@ -76,7 +76,7 @@ class TestFailureContentIsEmpty:
         monkeypatch.setattr(ocr, "ocr_available", lambda: True)
         monkeypatch.setattr(ocr, "ocr_image_bytes",
                             lambda b: (_ for _ in ()).throw(ValueError("cannot identify image file")))
-        r = _translate_response(self._image_page(), "markdown", None, False, False, "http", 1)
+        r = _translate_response(self._image_page(), "markdown", None, "http", 1)
         assert r.content == [], "OCR 失败的占位文本又回到正文里了"
         assert r.content_ok is False
         assert r.error.startswith("image_ocr_failed")
@@ -88,7 +88,7 @@ class TestFailureContentIsEmpty:
         import dhole_mcp.ocr as ocr
 
         monkeypatch.setattr(ocr, "ocr_available", lambda: False)
-        r = _translate_response(self._image_page(), "markdown", None, False, False, "http", 1)
+        r = _translate_response(self._image_page(), "markdown", None, "http", 1)
         assert r.content == []
         assert "image_ocr_unavailable" in r.error
         assert "dhole-mcp[all]" in r.error
@@ -98,7 +98,7 @@ class TestFailureContentIsEmpty:
 
         monkeypatch.setattr(ocr, "ocr_available", lambda: True)
         monkeypatch.setattr(ocr, "ocr_image_bytes", lambda b: "")
-        r = _translate_response(self._image_page(), "markdown", None, False, False, "http", 1)
+        r = _translate_response(self._image_page(), "markdown", None, "http", 1)
         assert r.content == []
         assert r.error.startswith("image_ocr_empty")
 
@@ -112,7 +112,7 @@ class TestFailureContentIsEmpty:
         page = FakePage()
         page.body = b"<html><body>Please sign in to download</body></html>"
         page.url = "https://example.com/paper.pdf"
-        r = _translate_response(page, "markdown", None, False, False, "http", 1)
+        r = _translate_response(page, "markdown", None, "http", 1)
         assert r.content == []
         assert r.error.startswith("auth_required")
         assert "not_a_pdf" not in " ".join(r.content)
@@ -147,7 +147,7 @@ class TestFailureContentIsEmpty:
         server.get = http_image
         server.stealthy_fetch = browser
         out = await server._auto_escalate(
-            "https://cdn.example.com/logo.svg", "markdown", None, True, True, 0, 0,
+            "https://cdn.example.com/logo.svg", "markdown", None, 0, 0,
             True, False, 0, None, 20000, False, False, False, False,
             None, None, None,
         )
@@ -184,7 +184,7 @@ class TestFailureContentIsEmpty:
         server.stealthy_fetch = browser
         monkeypatch.setattr(server, "_fetch_from_archive", fake_archive)
         out = await server._auto_escalate(
-            "https://cdn.example.com/gone.png", "markdown", None, True, True, 0, 0,
+            "https://cdn.example.com/gone.png", "markdown", None, 0, 0,
             True, False, 0, None, 20000, False, False, False, False,
             None, None, None,
         )
@@ -250,7 +250,7 @@ class TestFailureContentIsEmpty:
         server.get = http_fail
         server.stealthy_fetch = browser_fail
         out = await server._auto_escalate(
-            "https://blocked.example.com", "markdown", None, True, True, 0, 0,
+            "https://blocked.example.com", "markdown", None, 0, 0,
             True, False, 0, None, 20000, False, False, False, False,
             None, None, None,
         )
@@ -544,21 +544,21 @@ class TestExtractedTypeLabel:
         html = ("<html><head><title>Only title</title></head><body>"
                 "<article><p>" + ("Some article prose here. " * 20) + "</p></article>"
                 "</body></html>")
-        r = _translate_response(self._page(html), "article", None, True, True, "http", 1)
+        r = _translate_response(self._page(html), "article", None, "http", 1)
         assert r.extracted_type == "article"
 
     def test_markdown_fallback_is_not_labelled_article(self):
         """Saying "article" about a prose fallback is the same lie in the other
         direction; the label must describe what came back."""
         html = "<html><body><div>" + ("lorem ipsum dolor sit amet " * 30) + "</div></body></html>"
-        r = _translate_response(self._page(html), "structured", None, True, True, "http", 1)
+        r = _translate_response(self._page(html), "structured", None, "http", 1)
         assert r.extracted_type in ("structured", "markdown")
         if r.extracted_type == "markdown":
             assert not r.content[0].lstrip().startswith("{")
 
     def test_html_mode_reports_html(self):
         html = "<html><body><h1>Hi</h1></body></html>"
-        r = _translate_response(self._page(html), "html", None, False, False, "http", 1)
+        r = _translate_response(self._page(html), "html", None, "http", 1)
         assert r.extracted_type == "html"
 
 
@@ -918,7 +918,7 @@ class TestCallBudget:
         server = MasterFetchServer()
         server.get = slow_get
         out = await server._auto_escalate(
-            "https://slow.example.com", "markdown", None, True, True, 0, 0,
+            "https://slow.example.com", "markdown", None, 0, 0,
             True, False, 0, None, 800, False, False, False, False,
             None, None, None,
         )
@@ -946,7 +946,7 @@ class TestCallBudget:
         server = MasterFetchServer()
         server.get = capture_get
         await server._auto_escalate(
-            "https://slow.example.com", "markdown", None, True, True, 0, 0,
+            "https://slow.example.com", "markdown", None, 0, 0,
             True, False, 0, None, 1500, False, False, False, False,
             None, None, None,
         )
@@ -1138,7 +1138,7 @@ class TestArchiveFallback:
 
         monkeypatch.setattr(server, "_fetch_from_archive", fake_archive)
         out = await server._auto_escalate(
-            "https://gone.example.com/x", "markdown", None, True, True, 0, 0,
+            "https://gone.example.com/x", "markdown", None, 0, 0,
             True, False, 0, None, 8000, False, False, False, False,
             None, None, None,
         )

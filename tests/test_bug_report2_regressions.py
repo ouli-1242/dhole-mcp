@@ -146,7 +146,7 @@ class TestOptionsReachTheHttpTier:
             asyncio.run(srv._force_fetch(
                 url="https://example.com/p", force_fetcher="http",
                 extraction_type="markdown", css_selector=None,
-                main_content_only=True, use_trafilatura=True, cache_ttl=0,
+                cache_ttl=0,
                 offset=0, headless=True, real_chrome=False, wait=0, proxy=None,
                 timeout=30000, network_idle=False, solve_cloudflare=True,
                 block_webrtc=True, hide_canvas=True, extra_headers=None,
@@ -343,7 +343,7 @@ class TestActionsTierBudget:
         seen: dict = {}
 
         async def fake_force_fetch(self, url, force_fetcher, extraction_type,
-                                   css_selector, main_content_only, use_trafilatura,
+                                   css_selector,
                                    cache_ttl, offset, headless, real_chrome, wait,
                                    proxy, timeout, network_idle, solve_cloudflare,
                                    block_webrtc, hide_canvas, extra_headers,
@@ -371,7 +371,7 @@ class TestActionsTierBudget:
         seen: dict = {}
 
         async def fake_auto_escalate(self, url, extraction_type, css_selector,
-                                     main_content_only, use_trafilatura, cache_ttl,
+                                     cache_ttl,
                                      offset, headless, real_chrome, wait, proxy,
                                      timeout, network_idle, solve_cloudflare,
                                      block_webrtc, hide_canvas, extra_headers,

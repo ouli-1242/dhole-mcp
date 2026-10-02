@@ -625,7 +625,7 @@ class TestADataXmlDocumentKeepsItsTags:
         from dhole_mcp.server import _translate_response
 
         text = "".join(_translate_response(_fake_page(ct, SITEMAP), "markdown", None,
-                                           False, False, "http", 1).content)
+                                           "http", 1).content)
         assert "<urlset" in text and "<loc>" in text and "2026-09-27" in text, text[:160]
 
     def test_xhtml_is_still_an_html_document(self):

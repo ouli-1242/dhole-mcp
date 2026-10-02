@@ -121,7 +121,7 @@ class TestTheBackstopArrivesAfterTheTiers:
         server.stealthy_fetch = wedged
 
         out = await server._auto_escalate(
-            "https://slow.test/page.html", "markdown", None, True, True, 0, 0,
+            "https://slow.test/page.html", "markdown", None, 0, 0,
             True, False, 0, None, 2000, False, False, False, False,
             None, None, None)
         assert out.error.startswith("timeout: the ")

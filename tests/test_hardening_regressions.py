@@ -116,7 +116,6 @@ class TestCacheContextIsolation:
         assert _cache_context({}) == ""
         assert _cache_context({
             "cookies": None, "extra_headers": None, "useragent": None, "proxy": None,
-            "main_content_only": True, "use_trafilatura": True,
             "include_media": False, "include_links": False,
         }) == ""
 
@@ -165,7 +164,7 @@ class TestCacheContextIsolation:
 
         @server_mod._smart_fetch_request_context
         async def fake(self, url="", urls=None, extraction_type="markdown",
-                       css_selector=None, main_content_only=True, use_trafilatura=True,
+                       css_selector=None,
                        cache_ttl=3600, force_fetcher=None, headless=True,
                        real_chrome=False, wait=0, proxy=None, timeout=30000,
                        network_idle=False, solve_cloudflare=True, block_webrtc=True,
@@ -270,8 +269,7 @@ class TestCacheContextIsolation:
         async def fake(self, url="", password=None, pages=None, focus=None,
                        include_media=False, include_links=False, max_links=None,
                        css_selector=None, cookies=None, extra_headers=None,
-                       useragent=None, proxy=None, main_content_only=True,
-                       use_trafilatura=True):
+                       useragent=None, proxy=None):
             captured["ctx"] = server_mod._CACHE_CTX.get()
 
         asyncio.run(fake(None, url="https://x/a.pdf", password="s3cret"))

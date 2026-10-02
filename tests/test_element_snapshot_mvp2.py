@@ -400,7 +400,7 @@ class TestWriteAudit:
     async def _force_http(s, url):
         return await s._force_fetch(
             url, "http", extraction_type="markdown", css_selector=None,
-            main_content_only=True, use_trafilatura=True, cache_ttl=0,
+            cache_ttl=0,
             offset=0, headless=True, real_chrome=False, wait=0, proxy=None,
             timeout=30000, network_idle=False, solve_cloudflare=True,
             block_webrtc=True, hide_canvas=True, extra_headers=None,

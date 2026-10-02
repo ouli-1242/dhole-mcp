@@ -158,11 +158,11 @@ class TestOtherToolsWithTheSameGap:
         seen = _record(monkeypatch, "smart_fetch", ResponseModel(url="", status=0, content=[]))
         _dispatch("smart_fetch", {"url": "https://example.test",
                                   "headless": "false",
-                                  "main_content_only": "false",
+                                  "hide_canvas": "false",
                                   "include_links": "true"})
 
         assert seen["headless"] is False
-        assert seen["main_content_only"] is False
+        assert seen["hide_canvas"] is False
         assert seen["include_links"] is True
 
     def test_screenshot_full_page_accepts_the_string_spellings(self, monkeypatch):

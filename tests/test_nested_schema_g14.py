@@ -241,7 +241,7 @@ def _stub_tier(monkeypatch, seen: dict) -> dict:
 
 class TestTheSchemaBranchCallsTheTierInOrder:
     """G14 的另一半不在抽取器里，在 ``smart_fetch`` 的 schema 分支：那次
-    ``_auto_escalate`` 调用漏了一个位置参数（``use_trafilatura``），之后每个参数集体
+    ``_auto_escalate`` 调用漏了一个位置参数（``use_trafilatura``，17.0 已删），之后每个参数集体
     错一位 —— ``cookies`` 因此收到 ``_SCHEMA_SOURCE_MAX_CHARS``，被
     ``_safe_cookie_dict`` 当成 cookie 列表遍历。症状是**任何**带 schema 的调用都回
     ``Error: 'int' object is not iterable``，报告把它记成了「嵌套 schema 的 bug」。
@@ -265,7 +265,6 @@ class TestTheSchemaBranchCallsTheTierInOrder:
         assert seen["useragent"] == "dhole-test/1"
         assert seen["extra_headers"] == {"X-Test": "1"}
         assert seen["timeout"] == 12345
-        assert seen["use_trafilatura"] is True
         # 抽取器要看到整篇文档，所以喂给取回层的不是调用方的返回上限（见
         # test_live_audit_regressions）；分页 offset 由 JSON 的 re-chunk 负责，
         # 取回层拿到 0。
