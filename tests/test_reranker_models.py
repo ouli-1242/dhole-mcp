@@ -182,7 +182,7 @@ def tiny_env(monkeypatch, tmp_path):
     holder = {"model": _tiny_model()}
     monkeypatch.setattr(reranker, "active_model", lambda: holder["model"])
     monkeypatch.setattr(reranker, "active_model_dir", lambda: model_dir)
-    monkeypatch.setattr(reranker.paths, "migrate_legacy_cache_dir", lambda: None)
+    monkeypatch.setattr(reranker.paths, "rename_legacy_model_dirs", lambda: None)
     monkeypatch.setattr(reranker, "_reranker_unavailable_reason", "")
     # 与摘要逻辑无关的尺寸下限（真模型 50MB）放宽，否则测试要先写出 50MB 文件
     monkeypatch.setattr(reranker, "MIN_MODEL_BYTES", 1)

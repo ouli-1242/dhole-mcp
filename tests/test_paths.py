@@ -1,10 +1,9 @@
-"""Runtime path layout + one-time migration of the legacy cache root.
+"""Runtime path layout: one root, and nobody looks at the old one any more.
 
-14.3 之前 dhole 把状态写在 ``~/.dhole/``、把缓存和模型写在
-``~/.dhole_mcp_cache/``——「这个工具在我机器上留下了什么」要两个目录才答得全，
-卸载说明也因此不完整。现在只有一个根（``dhole_mcp.paths`` 是唯一事实来源），
-旧目录在首次使用时被搬进来：缓存可以重建，但 ~90MB 的重排模型在有些网络下
-（hosts 钉死 / 代理）根本下不回来，所以必须搬而不是等它重新下载。
+14.3 之前 dhole 把状态写在 ``~/.dhole/``、把缓存和模型写在 ``~/.dhole_mcp_cache/``，
+「这个工具在我机器上留下了什么」要两个目录才答得全。17.0 起只有一个根
+（``dhole_mcp.paths`` 是唯一事实来源），而把旧根搬进来的那次迁移也删了 —— 见
+``TestTheOldRootIsLeftAlone``。唯一留下的迁移是同一个根里的一次模型目录改名。
 """
 
 from pathlib import Path
@@ -19,7 +18,6 @@ def fake_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setattr(Path, "home", lambda: home)
-    monkeypatch.setattr(paths, "_legacy_migrate_done", False)
     return home
 
 
@@ -50,167 +48,114 @@ def test_every_writer_agrees_on_the_layout(monkeypatch, tmp_path):
     assert server._cdp_hosts_file() == str(moved / "cdp_hosts.json")
 
 
+class TestTheOldRootIsLeftAlone:
+    """17.0 B2 删掉了把 ``~/.dhole_mcp_cache`` 搬进 ``~/.dhole`` 的那次迁移。
 
-class TestLegacyMigration:
-    def _make_legacy(self, fake_home, *, with_db=True, with_model=True):
-        legacy = fake_home / ".dhole_mcp_cache"
-        legacy.mkdir(parents=True)
-        if with_db:
-            (legacy / "cache.db").write_bytes(b"sqlite")
-            (legacy / "cache.db-wal").write_bytes(b"wal")
-        if with_model:
-            model_dir = legacy / "models" / "msmarco-minilm-l6-v2"
-            model_dir.mkdir(parents=True)
-            (model_dir / "model.onnx").write_bytes(b"onnx")
-        return legacy
+    它服务的是 14.3 及更早的安装，代价却长期挂在两个最热的路径上：cache 建库与
+    重排模型查表都要先问一次"有没有旧根要搬"，而搬移动作会碰 cache.db 加一棵
+    90-450MB 的模型树（跨卷还要 copy+delete），所以它历史上必须避开事件循环 ——
+    为它专门写的 to_thread 包装、锁、一次性标志和那组 -32001 回归测试，整套机制
+    留着比它解决的问题更贵。
 
-    def test_moves_db_sidecars_and_model_into_the_home(self, fake_home):
-        legacy = self._make_legacy(fake_home)
-        paths.migrate_legacy_cache_dir()
-
-        assert paths.db_path().read_bytes() == b"sqlite"
-        assert (fake_home / ".dhole" / "cache.db-wal").read_bytes() == b"wal"
-        # The pre-registry dir name is renamed to its model key in the same pass
-        # (msmarco-minilm-l6-v2 -> ms-marco), so the weights are not re-fetched.
-        assert (paths.models_dir() / "ms-marco" / "model.onnx").read_bytes() == b"onnx"
-        assert not legacy.exists(), "搬空之后旧目录应当消失"
-        assert not (paths.models_dir() / "msmarco-minilm-l6-v2").exists()
-
-    def test_never_overwrites_the_destination(self, fake_home):
-        legacy = self._make_legacy(fake_home)
-        paths.home().mkdir(parents=True, exist_ok=True)
-        paths.db_path().write_bytes(b"NEW")
-        paths.migrate_legacy_cache_dir()
-
-        assert paths.db_path().read_bytes() == b"NEW", "不得覆盖新位置已有的数据"
-        assert legacy.is_dir(), "旧数据没能搬走时，旧目录必须原样保留"
-
-    def test_merges_model_children_when_models_dir_exists(self, fake_home):
-        self._make_legacy(fake_home)
-        dest_model_dir = paths.models_dir() / "ms-marco"
-        dest_model_dir.mkdir(parents=True)
-        (dest_model_dir / "tokenizer.json").write_bytes(b"tok")
-
-        paths.migrate_legacy_cache_dir()
-
-        assert (dest_model_dir / "tokenizer.json").read_bytes() == b"tok"
-        assert (dest_model_dir / "model.onnx").read_bytes() == b"onnx"
-
-    def test_no_legacy_dir_is_a_noop(self, fake_home):
-        paths.migrate_legacy_cache_dir()
-        assert not (fake_home / ".dhole").exists(), "没有旧目录就不该凭空建目录"
-
-    def test_migration_is_idempotent(self, fake_home):
-        legacy = self._make_legacy(fake_home)
-        paths.migrate_legacy_cache_dir()
-        first = paths.db_path().read_bytes()
-        paths.migrate_legacy_cache_dir()  # 幂等：第二次什么都不动
-        assert paths.db_path().read_bytes() == first
-        assert not legacy.exists()
-
-
-class TestMigrationNeverBlocksTheEventLoop:
-    """首次缓存写入会触发旧目录搬移 —— 它必须在工作线程里跑。
-
-    回归：这个搬移此前是**同步跑在事件循环上**的。实测搬一个 120MB 模型就把事件
-    循环完全停摆 2.09s（心跳间隔本该 0.05s），期间 MCP 服务发不出任何响应，于是
-    首个工具调用（如 smart_fetch cache_ttl=0）被客户端判为 -32001 超时；而重试
-    ——一次性标志此时已置位——瞬间成功。用户看到的就是「首次报错、重试即恢复」。
+    这里钉的是删除之后的事实：**没有人读那个目录，也没有人动它**。旧根里躺着什么
+    就还躺着，用户自己删。
     """
 
-    def _make_legacy(self, fake_home):
-        legacy = fake_home / ".dhole_mcp_cache"
-        (legacy / "models" / "bge-zh").mkdir(parents=True)
-        (legacy / "models" / "bge-zh" / "model.onnx").write_bytes(b"onnx")
-        (legacy / "cache.db").write_bytes(b"sqlite")
-        return legacy
+    @pytest.mark.parametrize("name", [
+        "migrate_legacy_cache_dir", "migrate_legacy_cache_dir_async",
+        "_migrate_legacy_cache_dir_impl", "_merge_tree",
+        "_LEGACY_CACHE_DIR_NAME", "_legacy_migrate_lock", "_legacy_migrate_done",
+    ])
+    def test_paths_exposes_no_migration_api(self, name):
+        assert not hasattr(paths, name), f"paths.{name} 又回来了"
 
-    def test_async_wrapper_keeps_the_loop_responsive(self, fake_home, monkeypatch):
-        import asyncio
-        import time
+    def test_no_module_references_the_old_root(self):
+        """扫 AST 而不是扫全文：注释里可以留下"这里曾经搬过旧根"这段历史，
+        但被执行的字符串常量里不许再出现那个名字。"""
+        import ast
+        import pathlib
 
-        self._make_legacy(fake_home)
-        real_impl = paths._migrate_legacy_cache_dir_impl
+        src = pathlib.Path(paths.__file__).resolve().parent
+        hits = []
+        for file in sorted(src.rglob("*.py")):
+            if "__pycache__" in file.parts:
+                continue
+            tree = ast.parse(file.read_text(encoding="utf-8"))
+            docs = set()
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                     ast.AsyncFunctionDef)) and node.body:
+                    first = node.body[0]
+                    if (isinstance(first, ast.Expr)
+                            and isinstance(first.value, ast.Constant)
+                            and isinstance(first.value.value, str)):
+                        docs.add(id(first.value))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    if id(node) in docs:
+                        continue
+                    if ("dhole_mcp_cache" in node.value
+                            or "migrate_legacy_cache" in node.value):
+                        hits.append(file.name)
+                elif isinstance(node, ast.Attribute) and "migrate_legacy" in node.attr:
+                    hits.append(file.name)
+        assert not hits, sorted(set(hits))
 
-        def slow_impl():
-            time.sleep(0.6)          # 模拟跨卷复制 90-450MB 模型
-            real_impl()
+    def test_the_old_root_survives_a_cache_open_and_a_model_lookup(
+            self, fake_home, monkeypatch):
+        """真实触发点跑一遍：开缓存库、查模型在不在，都不许碰旧根。
 
-        monkeypatch.setattr(paths, "_migrate_legacy_cache_dir_impl", slow_impl)
-
-        async def run():
-            lags: list[float] = []
-            stop = False
-
-            async def heartbeat():
-                prev = time.perf_counter()
-                while not stop:
-                    await asyncio.sleep(0.02)
-                    t = time.perf_counter()
-                    lags.append(t - prev)
-                    prev = t
-
-            hb = asyncio.create_task(heartbeat())
-            await asyncio.sleep(0.05)
-            t0 = time.perf_counter()
-            await paths.migrate_legacy_cache_dir_async()
-            elapsed = time.perf_counter() - t0
-            stop = True
-            await hb
-            return max(lags), elapsed
-
-        worst, elapsed = asyncio.run(run())
-
-        assert elapsed >= 0.6, "搬移确实发生了（否则本用例什么都没验到）"
-        assert worst < 0.3, f"事件循环被搬移阻塞了 {worst:.2f}s（应远小于 0.6s）"
-        assert paths.db_path().read_bytes() == b"sqlite"
-
-    def test_async_wrapper_is_a_noop_once_done(self, fake_home):
-        import asyncio
-
-        self._make_legacy(fake_home)
-        asyncio.run(paths.migrate_legacy_cache_dir_async())
-        # 第二次调用不该再动任何东西（幂等），也不该抛。
-        asyncio.run(paths.migrate_legacy_cache_dir_async())
-        assert paths.db_path().read_bytes() == b"sqlite"
-
-    def test_concurrent_callers_wait_instead_of_reading_a_half_moved_db(
-        self, fake_home, monkeypatch,
-    ):
-        """第二个调用者必须等第一个搬完，而不是提前返回。
-
-        旧实现先置位再干活（普通 bool），第二个调用者会立刻返回、然后去读一个
-        正在被搬移的 cache.db —— 拿到半个数据库比等一会儿糟得多。
+        这两个调用点当年就是迁移的入口（cache._ensure_db 与 reranker 的模型查表），
+        所以它们是最会复发的地方。
         """
-        import threading
-        import time
+        legacy = fake_home / ".dhole_mcp_cache"
+        (legacy / "models" / "ms-marco").mkdir(parents=True)
+        (legacy / "cache.db").write_bytes(b"sqlite")
+        (legacy / "models" / "ms-marco" / "model.onnx").write_bytes(b"x")
+        before = sorted(q.as_posix() for q in legacy.rglob("*"))
 
-        self._make_legacy(fake_home)
-        real_impl = paths._migrate_legacy_cache_dir_impl
-        started = threading.Event()
-        release = threading.Event()
+        from dhole_mcp import cache, reranker
 
-        def slow_impl():
-            started.set()
-            release.wait(10)
-            real_impl()
+        monkeypatch.setattr(cache, "_CACHE_DIR", fake_home / ".dhole")
+        reranker.model_present()
+        assert sorted(q.as_posix() for q in legacy.rglob("*")) == before,             "旧根被搬走或删掉了：那次迁移又回来了"
+        assert not (fake_home / ".dhole" / "cache.db").exists(),             "新根里凭空多出一个从旧根搬来的 cache.db"
 
-        monkeypatch.setattr(paths, "_migrate_legacy_cache_dir_impl", slow_impl)
 
-        first = threading.Thread(target=paths.migrate_legacy_cache_dir)
-        first.start()
-        assert started.wait(10), "第一个调用者没能开始"
+class TestTheOldModelDirNameStillRenames:
+    """留着的那一半迁移：14.4 之前模型目录按仓库名（msmarco-minilm-l6-v2）落盘，
+    注册表键是 ms-marco。同一个目录树里的一次改名，成本是几行 os.replace，换掉的是
+    一次 90MB 重下 —— 有些网络下那一下载就永久失败。"""
 
-        second = threading.Thread(target=paths.migrate_legacy_cache_dir)
-        second.start()
-        time.sleep(0.2)
-        assert second.is_alive(), "第二个调用者不得在搬移完成前返回"
+    def test_a_lone_legacy_dir_is_renamed_not_copied(self, fake_home):
+        old = paths.models_dir() / "msmarco-minilm-l6-v2"
+        old.mkdir(parents=True)
+        (old / "model.onnx").write_bytes(b"bytes")
+        paths.rename_legacy_model_dirs()
+        assert (paths.models_dir() / "ms-marco" / "model.onnx").read_bytes() == b"bytes"
+        assert not old.exists()
 
-        release.set()
-        first.join(10)
-        second.join(10)
-        assert not first.is_alive() and not second.is_alive()
-        assert paths.db_path().read_bytes() == b"sqlite"
+    def test_a_collision_destroys_nothing(self, fake_home):
+        """两边都在时谁也不许被删：宁肯留一个重复目录，也不替用户决定留哪份。"""
+        base = paths.models_dir()
+        old, new_dir = base / "msmarco-minilm-l6-v2", base / "ms-marco"
+        old.mkdir(parents=True)
+        new_dir.mkdir(parents=True)
+        (old / "model.onnx").write_bytes(b"old")
+        (new_dir / "model.onnx").write_bytes(b"new")
+        paths.rename_legacy_model_dirs()
+        assert (old / "model.onnx").read_bytes() == b"old"
+        assert (new_dir / "model.onnx").read_bytes() == b"new"
+
+    def test_the_reranker_lookup_runs_it(self, fake_home, monkeypatch):
+        """改名必须挂在真实的查表路径上，否则它是一条没人调用的历史。"""
+        from dhole_mcp import reranker
+
+        ran = []
+        monkeypatch.setattr(paths, "rename_legacy_model_dirs",
+                            lambda: ran.append(1))
+        reranker.model_present()
+        assert ran, "model_present 不再改名，14.3 的模型目录就只是躺着"
 
 
 class TestDholeHomeOverride:

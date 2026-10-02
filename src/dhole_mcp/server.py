@@ -84,7 +84,6 @@ except Exception:
 logger = logging.getLogger("dhole-mcp.server")
 
 
-
 from dhole_mcp import __version__
 from pydantic import BaseModel, Field, PrivateAttr
 
@@ -4140,26 +4139,6 @@ async def _lock_within(lock, timeout: Optional[float]):
         lock.release()
 
 
-async def _prewarm_state_dir() -> None:
-    """Run the one-time legacy state-dir move at startup, off the request path.
-
-    A pre-14.3 ``~/.dhole_mcp_cache`` is folded into ``~/.dhole`` on first use.
-    That is real filesystem work (cache.db + a 90-450MB model tree, copy+delete
-    when the two roots are on different volumes) and it used to happen inline on
-    the event loop during the first cache write — so the first tool call timed
-    out (-32001) and the retry succeeded.
-
-    Doing it here means the cost lands in the startup window instead. The
-    off-loop call in cache._ensure_db still covers the case where a request
-    arrives before this finishes (and both are serialized by the lock in
-    paths.migrate_legacy_cache_dir). Never raises.
-    """
-    try:
-        await paths.migrate_legacy_cache_dir_async()
-    except BaseException:
-        pass
-
-
 def _normalize_credentials(credentials: Optional[Dict[str, str]]) -> Optional[tuple]:
     """Convert a credentials dictionary to a tuple accepted by fetchers.
 
@@ -4490,7 +4469,6 @@ def _auth_request_headers(
             f"{existing[0]!r} - drop it there, or send the credential yourself")
 
     return built_headers, kind, (header_name.lower(),), None
-
 
 
 def _parse_cookie_header(raw: str) -> Optional[Dict[str, str]]:
@@ -9185,8 +9163,6 @@ class MasterFetchServer:
                 warm_reranker = asyncio.create_task(
                     _safe_imported_prewarm("dhole_mcp.reranker", "prewarm_reranker")
                 )
-                # One-time legacy state-dir move: keep it off the first tool call.
-                warm_state = asyncio.create_task(_prewarm_state_dir())
                 try:
                     async with stdio_server() as (read, write):
                         await server.run(read, write, server.create_initialization_options())
@@ -9196,12 +9172,12 @@ class MasterFetchServer:
                     # BaseException) so the process always exits cleanly. A noisy
                     # teardown traceback must never look like a server crash to the
                     # MCP client (which reports it as 'failed to load').
-                    for _t in (warm, warm_reranker, warm_state):
+                    for _t in (warm, warm_reranker):
                         try:
                             _t.cancel()
                         except BaseException:
                             pass
-                    for _t in (warm, warm_reranker, warm_state):
+                    for _t in (warm, warm_reranker):
                         try:
                             await _t
                         except BaseException:
@@ -9234,18 +9210,16 @@ class MasterFetchServer:
                 warm_reranker = asyncio.create_task(
                     _safe_imported_prewarm("dhole_mcp.reranker", "prewarm_reranker")
                 )
-                # One-time legacy state-dir move: keep it off the first tool call.
-                warm_state = asyncio.create_task(_prewarm_state_dir())
                 try:
                     async with manager.run():
                         yield
                 finally:
-                    for _t in (warm, warm_reranker, warm_state):
+                    for _t in (warm, warm_reranker):
                         try:
                             _t.cancel()
                         except BaseException:
                             pass
-                    for _t in (warm, warm_reranker, warm_state):
+                    for _t in (warm, warm_reranker):
                         try:
                             await _t
                         except BaseException:
@@ -9528,7 +9502,6 @@ class MasterFetchServer:
 
         else:
             raise ValueError(f"Unknown tool: {name}")
-
 
 
 def _help_epilog() -> str:

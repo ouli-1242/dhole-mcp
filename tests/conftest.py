@@ -8,21 +8,6 @@ from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _no_real_home_migration(monkeypatch):
-    """Keep tests from ever touching the REAL user home via the migration.
-
-    ``migrate_legacy_cache_dir()`` fires on the first cache access / model
-    lookup, and running the suite would otherwise move a real
-    ``~/.dhole_mcp_cache`` into the real ``~/.dhole``. That is product behavior,
-    not a test side effect — so it is globally disabled here, and
-    ``tests/test_paths.py`` resets the flag itself to exercise the migration
-    against a fake home.
-    """
-    from dhole_mcp import paths
-    monkeypatch.setattr(paths, "_legacy_migrate_done", True)
-
-
-@pytest.fixture(autouse=True)
 def _no_real_robots_fetch(monkeypatch):
     """Keep the suite off the network for robots.txt.
 

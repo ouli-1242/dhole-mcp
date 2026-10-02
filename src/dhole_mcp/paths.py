@@ -1,10 +1,12 @@
 """Runtime path layout — every file dhole persists lives under ONE directory.
 
-Everything dhole writes is regenerable state, and it used to be split across two
-roots (``~/.dhole/`` for state and ``~/.dhole_mcp_cache/`` for the content cache
-and the reranker model). That made "what does this tool leave on my machine?" a
-two-directory answer and the uninstall instructions wrong. This module is the
-single source of truth for those paths:
+Everything dhole writes is regenerable state, and it lives under exactly one
+root: "what does this tool leave on my machine?" has to be answerable in one
+directory, and an uninstall instruction that names two is a lie about one.
+(``~/.dhole_mcp_cache/`` was the second root until 17.0 B2 - the migration that
+folded it in is gone, and nothing reads that path any more. A pre-14.3 install
+that still has it keeps it until the user deletes it.) This module is the single
+source of truth for those paths:
 
     ~/.dhole/
       cache.db                 content cache (SQLite; + -wal/-shm sidecars)
@@ -29,15 +31,11 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
-import threading
 from pathlib import Path
 
 logger = logging.getLogger("dhole-mcp.paths")
 
 _HOME_DIR_NAME = ".dhole"
-# 14.3 之前缓存与模型在另一个根目录下；迁移逻辑就在本模块（见下）。
-_LEGACY_CACHE_DIR_NAME = ".dhole_mcp_cache"
 
 
 def home() -> Path:
@@ -130,112 +128,20 @@ def profiles_dir() -> Path:
     return ensure_private_dir(home() / "profiles")
 
 
-_legacy_migrate_lock = threading.Lock()
-_legacy_migrate_done = False
-
-
-def migrate_legacy_cache_dir() -> None:
-    """Move a pre-14.3 ``~/.dhole_mcp_cache`` under ``~/.dhole``.
-
-    Old: ``~/.dhole_mcp_cache/cache.db``  + ``~/.dhole_mcp_cache/models/**``
-    New: ``~/.dhole/cache.db``            + ``~/.dhole/models/**``
-
-    Why bother instead of letting the cache rebuild: the reranker model is ~90MB
-    and on some networks (CN hosts-file blocks, proxies) it cannot be re-fetched
-    at all, so silently starting from an empty directory would quietly downgrade
-    search ranking forever.
-
-    Idempotent and best-effort: only moves entries that are MISSING at the
-    destination, never overwrites, never deletes a non-empty legacy directory,
-    never raises. A partial/failed move costs at most a re-download, never data
-    that existed only in the new location. Called on first cache access and on
-    reranker lookup.
-
-    BLOCKING: this does real filesystem work (``cache.db`` plus a 90-450MB model
-    tree; a cross-device move falls back to copy+delete). It can take seconds to
-    minutes and it must NEVER run on the event loop — an MCP server stalled here
-    cannot answer the in-flight tool call, and the client reports -32001
-    REQUEST_TIMEOUT. Callers on the event loop must use
-    ``await migrate_legacy_cache_dir_async()`` instead.
-
-    Concurrency: a second caller waits for the first to finish rather than
-    returning early. Returning early used to be the behaviour (a plain bool set
-    before the work started), which let a concurrent request read ``cache.db``
-    while it was still being moved.
-    """
-    global _legacy_migrate_done
-    if _legacy_migrate_done:
-        return
-    with _legacy_migrate_lock:
-        if _legacy_migrate_done:
-            return
-        try:
-            rename_legacy_model_dirs()
-            _migrate_legacy_cache_dir_impl()
-            # Also after the move: a legacy root can itself contain a pre-registry
-            # model dir name (msmarco-minilm-l6-v2), which only exists post-move.
-            rename_legacy_model_dirs()
-        finally:
-            _legacy_migrate_done = True
-
-
-async def migrate_legacy_cache_dir_async() -> None:
-    """Event-loop-safe wrapper around :func:`migrate_legacy_cache_dir`.
-
-    Use this from any async caller. The work happens in a worker thread, so a
-    slow (or cross-device) move of the legacy cache/model tree cannot stall the
-    event loop and time out the tool call that triggered it.
-    """
-    if _legacy_migrate_done:
-        return
-    import asyncio
-
-    await asyncio.to_thread(migrate_legacy_cache_dir)
-
-
-def _merge_tree(src: Path, dst: Path) -> None:
-    """Move the contents of ``src`` into ``dst`` without overwriting.
-
-    Directories that do not exist at the destination are moved whole (one
-    rename); the rest are merged recursively. Best-effort throughout.
-    """
-    for child in src.iterdir():
-        target = dst / child.name
-        if child.is_dir():
-            if not target.exists():
-                try:
-                    os.replace(child, target)
-                    continue
-                except OSError:
-                    target.mkdir(parents=True, exist_ok=True)
-            _merge_tree(child, target)
-        elif not target.exists():
-            try:
-                shutil.move(str(child), str(target))
-            except Exception:
-                pass
-    # Remove the directories this call emptied, so the legacy root can be
-    # reclaimed instead of surviving as a chain of empty folders.
-    try:
-        for child in src.iterdir():
-            if child.is_dir() and not any(child.iterdir()):
-                child.rmdir()
-        if not any(src.iterdir()):
-            src.rmdir()
-    except OSError:
-        pass
-
-
 def rename_legacy_model_dirs() -> None:
     """Rename pre-registry model dirs to their registry names.
 
     ``models/msmarco-minilm-l6-v2`` -> ``models/ms-marco`` (14.4 registry). Same
     bytes, new key — renaming avoids re-downloading ~90MB just because the
-    directory was named after the repo instead of the model key.
+    directory was named after the repo instead of the model key, and on the
+    networks where huggingface.co is pinned that download is not a cost but a
+    permanent loss of neural ranking.
 
-    A plain rename when the destination is missing; if the destination already
-    exists, only the MISSING children are merged in (never overwritten) and the
-    emptied legacy dir is removed, so no stray duplicate directory survives.
+    This is the one migration left in the product, and it is deliberately small:
+    one ``os.replace`` inside a directory dhole already owns, called from the
+    reranker's model lookup. When BOTH names exist, neither is touched - two
+    copies of a model the user downloaded twice is a disk annoyance, deleting one
+    would be a decision made on their behalf.
     """
     legacy_map = {"msmarco-minilm-l6-v2": "ms-marco"}
     try:
@@ -244,66 +150,14 @@ def rename_legacy_model_dirs() -> None:
             return
         for old, new in legacy_map.items():
             src, dst = base / old, base / new
-            if not src.is_dir():
+            if not src.is_dir() or dst.exists():
                 continue
-            if not dst.exists():
-                try:
-                    os.replace(src, dst)
-                    logger.info("renamed model dir %s -> %s", src, dst)
-                    continue
-                except OSError:
-                    pass
-            dst.mkdir(parents=True, exist_ok=True)
-            _merge_tree(src, dst)
+            try:
+                os.replace(src, dst)
+                logger.info("renamed model dir %s -> %s", src, dst)
+            except OSError:
+                pass
     except Exception:
         pass
 
 
-def _migrate_legacy_cache_dir_impl() -> None:
-    try:
-        legacy = Path.home() / _LEGACY_CACHE_DIR_NAME
-        if not legacy.is_dir():
-            return
-        dest = home()
-        dest.mkdir(parents=True, exist_ok=True)
-
-        # SQLite DB + its WAL sidecars (moving the DB without them can drop the
-        # most recent writes).
-        for name in ("cache.db", "cache.db-wal", "cache.db-shm"):
-            src, dst = legacy / name, dest / name
-            if src.exists() and not dst.exists():
-                try:
-                    os.replace(src, dst)
-                    logger.info("moved %s -> %s", src, dst)
-                except OSError:
-                    # Cross-device or locked (a running server holds the DB):
-                    # copy is not worth it for a regenerable cache — skip.
-                    pass
-
-        # Model tree. One recursive merge handles both cases: an empty
-        # destination (fast path: move the whole tree in one rename) and a
-        # partially populated one (move only what is missing, level by level).
-        legacy_models = legacy / "models"
-        if legacy_models.is_dir():
-            dest_models = models_dir()
-            if dest_models.exists() and not any(dest_models.iterdir()):
-                try:
-                    dest_models.rmdir()
-                    os.replace(legacy_models, dest_models)
-                    logger.info("moved %s -> %s", legacy_models, dest_models)
-                except OSError:
-                    dest_models.mkdir(parents=True, exist_ok=True)
-                    _merge_tree(legacy_models, dest_models)
-            else:
-                dest_models.mkdir(parents=True, exist_ok=True)
-                _merge_tree(legacy_models, dest_models)
-
-        # Drop the legacy directory only when it is empty — never remove
-        # anything the user may still want.
-        try:
-            if not any(legacy.iterdir()):
-                legacy.rmdir()
-        except OSError:
-            pass
-    except Exception:
-        pass

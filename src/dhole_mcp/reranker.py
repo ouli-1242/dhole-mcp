@@ -332,9 +332,8 @@ def _reject(reason: str) -> None:
 
 def _ensure_model() -> Optional[tuple[Path, Path]]:
     """Ensure model.onnx + tokenizer.json are present + valid. Returns paths or None."""
-    # A pre-14.3 ~/.dhole_mcp_cache may already hold this ~90MB model; move it
-    # before deciding it has to be downloaded (on some networks it cannot be).
-    paths.migrate_legacy_cache_dir()
+    # 14.4 之前这个模型是按仓库名落盘的；先改名，再决定要不要下载。
+    paths.rename_legacy_model_dirs()
     model = active_model()
     model_dir = active_model_dir()
     onnx = model_dir / "model.onnx"
@@ -472,8 +471,8 @@ async def ensure_reranker(*, download: bool = True) -> Optional[_Reranker]:
     global _reranker_lock
     if _reranker is not None:
         return _reranker  # type: ignore[return-value]  # warm fast path (no lock)
-    # model_present() is blocking: on first use it can move a pre-14.3 legacy
-    # cache/model tree (see paths.migrate_legacy_cache_dir). Keep it off the loop.
+    # model_present() touches the filesystem (and may rename a model dir), so it
+    # stays off the event loop even though the work is now milliseconds.
     if not download and not await asyncio.to_thread(model_present):
         return None
     if _reranker_lock is None:
@@ -595,7 +594,7 @@ def model_present() -> bool:
     get_reranker() will NOT trigger a download). Used by startup prewarm to warm
     the ONNX session only when it is free to do so.
     """
-    paths.migrate_legacy_cache_dir()
+    paths.rename_legacy_model_dirs()
     model = active_model()
     onnx = active_model_dir() / "model.onnx"
     tokjson = active_model_dir() / "tokenizer.json"
