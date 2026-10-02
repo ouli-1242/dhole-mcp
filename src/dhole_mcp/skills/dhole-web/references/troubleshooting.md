@@ -12,7 +12,7 @@ Ground rule: **read the response fields before acting**. Every failure names its
 4. Fix:
    - Per-call: re-search naming live engines (`engines=["baidu","bing","sogou"]` or a usable opt-in)
    - Urgent: `dhole engines reset` or `cache_clear(engine_state=true)` to clear cooldowns now
-   - Process-wide (only if recurring): a search proxy via `DHOLE_SEARCH_PROXY` (or `dhole proxy add` for a rotating pool), or a keyed backend as fallback
+   - Process-wide (only if recurring): a different egress via `DHOLE_SEARCH_PROXY` (one URL; `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` are picked up when it is unset), or a keyed backend as fallback
 5. Tell the user: "Search engines were rate-limiting me; I re-searched via X. If this keeps happening we can add a search proxy."
 
 ### Whole round empty, `fetch_hint` reports error
@@ -128,6 +128,5 @@ This machine runs a source-installed personal fork with self-update off: `git pu
 | `dhole engines list` | Per-engine verdict, remaining cooldown, active backoff tiers |
 | `dhole engines probe` | One real query per engine (hits / latency / block reason) |
 | `dhole engines reset` | Clear all cooldowns now |
-| `dhole proxy list / add / remove / clear` | Search proxy pool management (list masks credentials) |
 | `cache_clear(engine_state=true)` | MCP-side equivalent of engines reset (wipes the body cache too) |
 | `dhole skill install --force` | re-sync the installed agent skill to the one bundled with this dhole version (skill updates ship with dhole releases) |

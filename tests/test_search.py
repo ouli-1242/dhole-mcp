@@ -398,49 +398,15 @@ class TestEngineConfig:
         assert _INDEX_FAMILY["yandex"] == "yandex"
 
 
-# ─── Proxy validation ───────────────────────────
+# ─── 全都起不来时必须出声 ─────────────────────────────────
 
-class TestSearchProxyValidation:
-    def _load_with(self, monkeypatch, tmp_path, env_value):
-        """Load proxies from the env var + an empty config file (isolated)."""
-        from dhole_mcp import search_proxy as sp
-        if env_value is None:
-            monkeypatch.delenv("DHOLE_SEARCH_PROXY", raising=False)
-        else:
-            monkeypatch.setenv("DHOLE_SEARCH_PROXY", env_value)
-        monkeypatch.setattr(sp, "_config_path", lambda: tmp_path / "no_such_proxies.json")
-        sp._pool = None
-        return sp.load_proxies()
+class TestNoEngineCanStart:
+    """一个引擎都构造不出来（缺依赖、出口不通）要抛错，不能返回 0 条让人以为
+    "没有结果"。
 
-    def test_whitespace_stripped(self, monkeypatch, tmp_path):
-        """Leading/trailing whitespace is stripped so httpx doesn't crash."""
-        proxies = self._load_with(monkeypatch, tmp_path, " http://proxy:8080 ")
-        assert proxies == ["http://proxy:8080"]
-
-    def test_whitespace_only_nulled(self, monkeypatch, tmp_path):
-        """Whitespace-only proxy becomes empty, not a crash-inducing string."""
-        assert self._load_with(monkeypatch, tmp_path, "   ") == []
-
-    def test_invalid_scheme_rejected(self, monkeypatch, tmp_path):
-        """Unknown scheme (not http/https/socks5/socks5h) is rejected."""
-        assert self._load_with(monkeypatch, tmp_path, "garbage://proxy") == []
-
-    def test_valid_socks5_accepted(self, monkeypatch, tmp_path):
-        """socks5 scheme is accepted (primp supports it natively)."""
-        assert self._load_with(monkeypatch, tmp_path, "socks5://192.0.2.1:1080") == [
-            "socks5://192.0.2.1:1080"
-        ]
-
-    def test_no_proxy_env(self, monkeypatch, tmp_path):
-        """Unset env var -> [] (direct connection)."""
-        assert self._load_with(monkeypatch, tmp_path, None) == []
-
-    def test_multiple_comma_separated(self, monkeypatch, tmp_path):
-        """Comma-separated env var yields a rotation pool."""
-        proxies = self._load_with(
-            monkeypatch, tmp_path, "http://p1:8080,http://p2:8080,http://p3:8080"
-        )
-        assert proxies == ["http://p1:8080", "http://p2:8080", "http://p3:8080"]
+    17.0 删了代理池，这一组原本六条轮转/校验用例随之消失；活下来的读侧语义由
+    tests/test_search_proxy.py 守（含"报错里的出口不带凭据"）。
+    """
 
     def test_all_engines_construction_failure_raises(self):
         """If every engine fails to construct (bad deps, etc), raise an error

@@ -7,7 +7,7 @@ B1 之前这条测试的分类是"每个默认关的开关，必须有一条命�
   * 注册表里剩下的 flag 必须逐个有"它不锁能力"的理由（隐私 opt-in / 操作者的
     长期合规决定），且理由由这张表人工持有 —— 新增一个默认关的**能力**旋钮，
     没有借口就会在这里变红；
-  * `dhole init` 不得再写任何能力闸（它如今只做安装与客户端登记）；
+  * 装机与选模型用的 `dhole init` / `dhole model` 已经整个删除，登记表里不许再有它们；
   * 机制自检保留：对一条捏造的默认关旋钮，扫描必须能变红。
 
 The complaint this batch originally existed for was "the options that unlock
@@ -100,6 +100,16 @@ class TestNoCapabilityBehindAGate:
         assert importlib.util.find_spec("dhole_mcp.init") is None, \
             "src/dhole_mcp/init.py 必须整个删除，不是留一个空壳"
         assert not (REPO / "src" / "dhole_mcp" / "init.py").exists()
+
+    def test_the_verb_that_wrote_plaintext_credentials_is_gone(self):
+        """`dhole proxy add` 与整个代理池一起删了。它往 ~/.dhole/search_proxies.json
+        写明文凭据，换来的"这个 IP 被盯上就换下一个"对免密引擎并不成立（同一台机器
+        换端口不换指纹）。出口因此退回一个字符串、一条 env 变量；读侧由
+        tests/test_search_proxy.py 守，这里只钉"那条写用户机器的命令不存在"。"""
+        subcommands = _cli_subcommands(SERVER_SRC.read_text(encoding="utf-8"))
+        assert "proxy" not in subcommands, f"dhole proxy 又回来了：{sorted(subcommands)}"
+        from dhole_mcp import server
+        assert not hasattr(server, "_cmd_proxy"), "_cmd_proxy 还在，只是没登记进表里"
 
     def test_the_subcommand_scan_reacts_to_a_command_that_should_not_exist(self):
         """机制自检：上一条靠"读不到就红"防不住解析形状变了还返回空集的情形 ——

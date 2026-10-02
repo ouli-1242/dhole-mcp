@@ -1363,15 +1363,17 @@ def doctor() -> int:
 
     try:
         from dhole_mcp import search_proxy
-        proxies = search_proxy.load_proxies()
-        src = search_proxy._env_proxy_source()
-        if proxies:
-            detail = f"{len(proxies)} configured" + (f" (env: {src})" if src else "")
+        proxy, source = search_proxy.configured_proxy()
+        if proxy:
+            checks.append(("search proxy", "info",
+                           f"{search_proxy.redact(proxy)} (from {source})",
+                           "TCP reachability is what `dhole --doctor` proves next; "
+                           "17.0 has one egress, no pool"))
         else:
-            detail = "none (direct connection)"
-        checks.append(("proxy pool", "info", detail, ""))
+            checks.append(("search proxy", "info", "none (direct connection)",
+                           "set DHOLE_SEARCH_PROXY when your IP is being throttled"))
     except Exception as exc:  # noqa: BLE001
-        checks.append(("proxy pool", "info", f"check failed: {exc}"[:60], ""))
+        checks.append(("search proxy", "info", f"check failed: {exc}"[:60], ""))
 
     # ── config audit (W2) ────────────────────────────────────────────────
     # The whole section runs inside try/except because a doctor() that

@@ -62,7 +62,7 @@ Tool descriptions cover parameters; this volume covers **how the tools actually 
 
 **Dates**: only `bing` / `bing_global` / `brave` (plus opt-in `ddg` / `yahoo`, keyed `bocha` / `tavily`) accept dates, and only as day/week/month/year presets. `after=<date>` is widened to the narrowest preset covering the window (`date_filter` reports what was sent and which engines were never asked); `before` is rejected outright — search results carry no publish dates, so "older-than" is both unaskable and unverifiable. Date-bounded increments belong to `feed_fetch(since=)`. There is **no `total_estimate`** — do not look for it, do not invent one.
 
-**No SLA**: keyless engines are direct scrapes of public search results (unauthorized, unquota'd) — when providers change layout or ban IPs, they degrade **silently**. For reliability: a search proxy (`DHOLE_SEARCH_PROXY` or the proxy pool) or a keyed backend.
+**No SLA**: keyless engines are direct scrapes of public search results (unauthorized, unquota'd) — when providers change layout or ban IPs, they degrade **silently**. For reliability: a different egress (`DHOLE_SEARCH_PROXY`) or a keyed backend.
 
 ## smart_crawl: discovery economics and politeness
 
@@ -114,8 +114,7 @@ A failed fetch leaves the baseline **untouched** and puts the reason in `error` 
 | `sessions.db` | Cookie jar, **contains cookie values = credentials**, 24h expiry |
 | `models/<name>/` | Rerank models (copy the whole directory for offline reuse) |
 | `config/reranker.json` | Rerank model selection |
-| `search_proxies.json` | Proxy pool, **credentials stored in plaintext** (masked in `list` output) |
 | `tasks.db` | Recorded recipes (`url` + `actions`) and watch baselines (page text). **No credentials** — a recipe stores the chain, never a session id |
 | `usage.jsonl` | With `DHOLE_USAGE_LOG=1`: call log (tool / duration / redacted errors) plus the audit channel — attach events, HTTP writes (non-GET), browser submits (names and outcome only, never parameter values) |
 
-No telemetry: nothing leaves the process except traffic to the sites you point it at. Nuke `~/.dhole` for a full cleanup.
+No telemetry: nothing leaves the process except traffic to the sites you point it at. Nuke `~/.dhole` for a full cleanup. One 16.x leftover worth naming to the user: `~/.dhole/search_proxies.json` (the deleted proxy pool) is now ignored but still holds its credentials in plaintext — deleting that file is the fix.

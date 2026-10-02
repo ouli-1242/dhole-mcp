@@ -32,11 +32,11 @@ class TestDoctorReporting:
         assert "module loaded from" in out
         assert "dhole_mcp" in out
 
-    def test_checks_the_state_dir_and_the_proxy_pool(self, isolated_home, capsys):
+    def test_checks_the_state_dir_and_the_search_egress(self, isolated_home, capsys):
         updater.doctor()
         out = capsys.readouterr().out
         assert "state dir writable" in out
-        assert "proxy pool" in out
+        assert "search proxy" in out
 
     def test_always_appends_the_capability_panel(self, isolated_home, capsys):
         updater.doctor()

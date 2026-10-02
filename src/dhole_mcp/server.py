@@ -9542,7 +9542,6 @@ def _help_epilog() -> str:
         f"  {ui.cyan('dhole doctor')}       {ui.dim('diagnose the install + config audit + resolver reality')}",
         f"  {ui.cyan('dhole --doctor')}     {ui.dim('same as `dhole doctor` (accepted for backwards compatibility)')}",
         f"  {ui.cyan('dhole -u')}           {ui.dim('update to the latest version')}",
-        f"  {ui.cyan('dhole proxy')}        {ui.dim('manage the search proxy pool (list|add|remove|clear)')}",
         f"  {ui.cyan('dhole engines')}      {ui.dim('show / reset / live-test engine health (list|reset|probe)')}",
         f"  {ui.cyan('dhole config')}       {ui.dim('list / set / unset persisted knobs in ~/.dhole/config.json (no host restart for per-call knobs)')}",
         f"  {ui.cyan('dhole skill')}        {ui.dim('install the bundled agent skill (status|install)')}",
@@ -9907,87 +9906,6 @@ def _engines_probe(args: list[str]) -> int:
         return 130
 
 
-def _cmd_proxy(argv: list[str]) -> int:
-    """`dhole proxy [list|add|remove|clear]` - manage the search proxy pool.
-
-    Writes the same file a user can edit by hand (~/.dhole/search_proxies.json);
-    the CLI is a convenience, not a second source of truth. A proxy supplied via
-    DHOLE_SEARCH_PROXY stays env-owned and is never copied into that file.
-    """
-    from dhole_mcp import cli_ui as ui
-    from dhole_mcp import search_proxy
-
-    action = argv[0].lower() if argv else "list"
-    rest = argv[1:]
-
-    if action in ("list", "ls", ""):
-        print("  " + ui.dim(f"proxy pool (config: {search_proxy._config_path()})"))
-        proxies = search_proxy.list_proxies()
-        if proxies:
-            for i, p in enumerate(proxies):
-                print(f"    {str(i).ljust(3)} {search_proxy._redact(p)}")
-        else:
-            print("    " + ui.dim("none configured - searches go out over your own IP"))
-        env = search_proxy._read_env_var()
-        if env:
-            src = search_proxy._env_proxy_source() or "environment"
-            print("  " + ui.dim(f"from {src} (env-owned, not written to the file):"))
-            for p in env:
-                print("    " + ui.dim(search_proxy._redact(p)))
-        print("  " + ui.dim("add with") + "  "
-              + ui.cmd('dhole proxy add "socks5://ip:port"'))
-        return 0
-
-    if action == "add":
-        if not rest:
-            print(ui.err("usage: dhole proxy add <proxy> [<proxy> ...]"))
-            return 2
-        added = 0
-        for raw in rest:
-            try:
-                total = search_proxy.add_proxy(raw)
-            except ValueError as exc:
-                print(ui.err(str(exc)))
-                continue
-            added += 1
-            print(ui.ok(f"added {search_proxy._redact(raw)}") + "  "
-                  + ui.dim(f"({total}/{search_proxy.MAX_PROXIES})"))
-        if added:
-            search_proxy.reset_pool()
-            print("  " + ui.dim("rotation is per search call - new proxies apply "
-                                "to the next search"))
-        return 0 if added else 2
-
-    if action == "remove":
-        if not rest:
-            print(ui.err("usage: dhole proxy remove <index>"))
-            return 2
-        try:
-            index = int(rest[0])
-        except ValueError:
-            print(ui.err(f"index must be a number, got: {rest[0]}"))
-            return 2
-        try:
-            removed = search_proxy.remove_proxy(index)
-        except IndexError as exc:
-            print(ui.err(str(exc)))
-            return 2
-        search_proxy.reset_pool()
-        print(ui.ok(f"removed {search_proxy._redact(removed)}"))
-        return 0
-
-    if action == "clear":
-        n = search_proxy.clear_proxies()
-        search_proxy.reset_pool()
-        print(ui.ok(f"cleared {n} proxy(ies)") if n
-              else "  " + ui.dim("nothing to clear"))
-        return 0
-
-    print(ui.err(f"unknown subcommand: {action} "
-                 f"(try: dhole proxy list|add|remove|clear)"))
-    return 2
-
-
 def main():
     """Entry point for the dhole CLI."""
     from dhole_mcp import cli_ui as ui
@@ -10002,11 +9920,9 @@ def main():
     # through to argparse, which errored with "unrecognized arguments: doctor"
     # and never mentioned --doctor. Both spellings now go through the same
     # `updater.doctor()` call, so their stdout AND exit code are identical.
-    _SUBCOMMANDS = ("proxy", "engines", "skill", "doctor", "config")
+    _SUBCOMMANDS = ("engines", "skill", "doctor", "config")
     if len(_sys.argv) > 1:
         first = _sys.argv[1].lower()
-        if first == "proxy":
-            raise SystemExit(_cmd_proxy(_sys.argv[2:]))
         if first == "engines":
             raise SystemExit(_cmd_engines(_sys.argv[2:]))
         if first == "skill":

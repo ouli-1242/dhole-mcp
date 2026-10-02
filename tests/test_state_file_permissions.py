@@ -2,10 +2,10 @@
 
 背景（D-06，已实测复核）：README#269 承诺"POSIX 下 ``~/.dhole`` 建为 0700、
 状态文件 0600"，`paths.ensure_private_dir` / `paths.harden_file` 也确实存在且被
-``cache.py`` / ``reranker.py`` / ``search_metasearch.py`` 用着 —— 但覆盖不全，
-**恰好漏掉了含明文凭据的 `search_proxies.json`**（实测落盘 mode 受 umask 决定，
-本机读到 0o666），`usage.jsonl`、`last_version`（以及 17.0 的 `cdp_hosts.json`）
-以及若干"先建 home 再写文件"的目录也都漏了。
+``cache.py`` / ``reranker.py`` / ``search_metasearch.py`` 用着 —— 但当初覆盖不全：
+凡是"自己 open 再写"的路径都按 umask 落盘（本机实测 0o666），而这里面装着
+``sessions.db``（cookie 罐 = 凭据）与 ``cdp_hosts.json``（授权围栏），另有
+`usage.jsonl`、`last_version` 和若干"先建 home 再写文件"的目录也漏了。
 
 这里冻结的是修复后的规则：**任何写 dhole home 下状态文件的路径，都要把目录收到
 0700、把文件收到 0600**；而用户用 ``DHOLE_USAGE_LOG`` 显式指定的外部路径，
@@ -65,64 +65,6 @@ class TestHardenDir:
         monkeypatch.setattr(os, "chmod", _boom)
         paths.harden_dir(tmp_path)  # 不抛
         paths.harden_dir(tmp_path / "missing")  # 不存在也不抛
-
-
-# ─── 明文凭据：本轮的原始缺陷 ────────────────────────────────────────────
-
-class TestProxyConfigPermissions:
-    def test_save_proxies_tightens_both_dir_and_file(self, chmod_spy, monkeypatch, tmp_path):
-        from dhole_mcp import search_proxy
-
-        monkeypatch.setattr(search_proxy, "_config_path",
-                            lambda: tmp_path / "search_proxies.json")
-        search_proxy.save_proxies(["http://user:secret@10.0.0.1:8080"])
-
-        assert (str(tmp_path), oct(0o700)) in chmod_spy, chmod_spy
-        assert (str(tmp_path / "search_proxies.json"), oct(0o600)) in chmod_spy, chmod_spy
-
-    def test_add_remove_clear_go_through_save_proxies(self, monkeypatch, tmp_path):
-        """CLI 的三个入口都必须落到同一条收紧路径上。"""
-        from dhole_mcp import search_proxy
-
-        monkeypatch.setattr(search_proxy, "_config_path",
-                            lambda: tmp_path / "search_proxies.json")
-        hardened: list[str] = []
-        real = search_proxy.save_proxies
-
-        def spy(proxies):
-            hardened.append("save_proxies")
-            real(proxies)
-
-        monkeypatch.setattr(search_proxy, "save_proxies", spy)
-        search_proxy.add_proxy("http://10.0.0.1:8080")
-        search_proxy.clear_proxies()          # non-empty, so it rewrites
-        search_proxy.add_proxy("http://10.0.0.2:8080")
-        search_proxy.remove_proxy(0)
-        assert hardened == ["save_proxies"] * 4, hardened
-
-    def test_content_is_unchanged(self, monkeypatch, tmp_path):
-        """只改模式，不改字节。"""
-        from dhole_mcp import search_proxy
-
-        target = tmp_path / "search_proxies.json"
-        monkeypatch.setattr(search_proxy, "_config_path", lambda: target)
-        search_proxy.save_proxies(["http://user:secret@10.0.0.1:8080"])
-
-        assert json.loads(target.read_text(encoding="utf-8")) == {
-            "proxies": ["http://user:secret@10.0.0.1:8080"],
-        }
-        assert target.read_text(encoding="utf-8").endswith("\n") is False
-
-    def test_directory_failure_still_raises(self, monkeypatch, tmp_path):
-        """建目录失败的错误语义没变：仍旧抛，不因为加了收紧就被吞掉。"""
-        from dhole_mcp import search_proxy
-
-        blocker = tmp_path / "blocker"
-        blocker.write_text("i am a file", encoding="utf-8")
-        monkeypatch.setattr(search_proxy, "_config_path",
-                            lambda: blocker / "sub" / "search_proxies.json")
-        with pytest.raises(OSError):
-            search_proxy.save_proxies(["http://10.0.0.1:8080"])
 
 
 # ─── usage.jsonl ────────────────────────────────────────────────────────
@@ -230,16 +172,6 @@ posix_only = pytest.mark.skipif(
 
 @posix_only
 class TestRealModeOnPosix:
-    def test_proxy_config_lands_0600(self, monkeypatch, tmp_path):
-        from dhole_mcp import search_proxy
-
-        target = tmp_path / "home" / "search_proxies.json"
-        monkeypatch.setattr(search_proxy, "_config_path", lambda: target)
-        search_proxy.save_proxies(["http://user:secret@10.0.0.1:8080"])
-
-        assert stat.S_IMODE(target.stat().st_mode) == 0o600
-        assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700
-
     def test_usage_log_lands_0600(self, monkeypatch, tmp_path):
         from dhole_mcp import server
 

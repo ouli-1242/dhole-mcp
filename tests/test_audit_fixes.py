@@ -4,7 +4,6 @@
 - P0: feed_fetch 不再崩溃（structured_content 合法 dict）+ URL 校验
 - P1: 重定向链逐跳 SSRF 校验（fetcher 层）
 - P1: max_redirects 生效
-- P2: search_proxy._kick_health_check 重置（不再 no-op）
 - P2: 域名 DNS 解析内网复查（17.0 起无条件开启，DHOLE_SSRF_DNS_RECHECK 已注销）
 """
 
@@ -127,37 +126,6 @@ async def test_max_redirects_bounded():
                           max_redirects=2, allow_internal=True)
     assert calls["n"] == 3, f"max_redirects=2 应产生 3 次请求，实际 {calls['n']}"
     assert r.status == 302, "超过 max_redirects 后应返回 3xx 而非继续跟随"
-
-
-# ---------------------------------------------------------------------------
-# P2: search_proxy health check 重置
-# ---------------------------------------------------------------------------
-
-
-def test_health_check_done_resets_task():
-    """health_check 完成后 _health_task 应重置为 None，可再触发。"""
-    import asyncio
-    import dhole_mcp.search_proxy as sp
-
-    async def scenario():
-        pool = MagicMock()
-        pool.health_check = AsyncMock(return_value={"p": True})
-        with patch.object(sp, "get_proxy_pool", return_value=pool):
-            sp._health_task = None
-            sp._kick_health_check()
-            assert sp._health_task is not None, "应已创建任务"
-            # 第二次调用应被跳过（任务仍在运行）
-            sp._kick_health_check()
-            await asyncio.gather(sp._health_task)
-            await asyncio.sleep(0.01)
-            assert sp._health_task is None, "任务完成后应重置为 None"
-            # 重置后可再次触发
-            sp._kick_health_check()
-            assert sp._health_task is not None, "重置后应能再触发"
-            await asyncio.gather(sp._health_task)
-            sp._health_task = None
-
-    asyncio.run(scenario())
 
 
 # ---------------------------------------------------------------------------

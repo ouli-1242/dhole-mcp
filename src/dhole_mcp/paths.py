@@ -15,7 +15,6 @@ single source of truth for those paths:
       usage.jsonl              opt-in local call log
       last_version             last version offered by the updater
       repair.py                self-heal script (stdlib-only, survives a broken install)
-      search_proxies.json      user config (read-only for dhole)
 
 Not in here, on purpose:
 

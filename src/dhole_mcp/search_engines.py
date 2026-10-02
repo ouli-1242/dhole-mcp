@@ -17,8 +17,8 @@ Engines run in PARALLEL; one that CAPTCHAs / rate-limits /
 has no topic-match just yields nothing and the others carry. Search is 100%
 HTTP (no browser) - the single Patchright browser stays for smart_fetch only.
 
-DHOLE_SEARCH_PROXY (http/https/socks5) is the power-user rotating-proxy escape
-hatch for per-IP throttling - the one thing no scraper can escape from one IP.
+DHOLE_SEARCH_PROXY (http/https/socks5) is the one egress a caller can name for
+per-IP throttling - the one thing no scraper can escape from one IP.
 """
 
 from __future__ import annotations

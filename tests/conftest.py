@@ -109,18 +109,13 @@ def _no_real_home_state_writes(request, monkeypatch, tmp_path):
     monkeypatch.setattr(ms, "_circuit_state_file", lambda: str(tmp_path / "circuit_breaker.json"))
     monkeypatch.setattr(ms, "_ENGINE_YIELD", {})
     monkeypatch.setattr(ms, "_engine_stats_last_save", 0.0)
-    # The proxy pool config is the fourth writable state file. `dhole proxy add`
-    # and any test that exercises add/remove/clear would otherwise write real
-    # credentials into the user's ~/.dhole/search_proxies.json.
-    from dhole_mcp import search_proxy as _proxy
-    monkeypatch.setattr(_proxy, "_config_path", lambda: tmp_path / "search_proxies.json")
-    # The cookie jar (G7) is the fifth state file, and the only one holding
-    # credentials: without this, a test that fetches with options.session_id
-    # writes a real Set-Cookie value into the real ~/.dhole/sessions.db, where it
-    # then outlives the test and gets sent by the next unrelated call.
-    # reset_for_tests() closes the module-level connection because the DB path is
-    # resolved lazily — a connection opened before this redirect would keep
-    # writing to the real file.
+    # 17.0 B2: 代理池（第四个可写状态文件 search_proxies.json）连同它的重定向一起
+    # 删了 —— 现在代理只来自环境变量，没有落盘可污染。
+    # The cookie jar (G7) is the state file that still holds credentials, and
+    # the only one whose path is resolved lazily: without reset_for_tests(), a
+    # connection opened before this redirect keeps writing to the real
+    # ~/.dhole/sessions.db, where a Set-Cookie value then outlives the test and
+    # gets sent by the next unrelated call.
     from dhole_mcp import sessions as _sessions
     _sessions.reset_for_tests()
     monkeypatch.setattr(_sessions, "_db_path", lambda: str(tmp_path / "sessions.db"))

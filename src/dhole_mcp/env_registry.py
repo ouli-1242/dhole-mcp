@@ -142,7 +142,7 @@ ALL: tuple[EnvVar, ...] = (
         default="~/.dhole",
         read_at="call",
         scenario="data location / privacy / diagnostics",
-        summary="State directory (cache, cookie jar, proxy pool).",
+        summary="State directory (cache, cookie jar).",
         read_by=("cli", "paths", "search", "search_metasearch", "sessions", "updater"),
     ),
     EnvVar(
@@ -161,7 +161,7 @@ ALL: tuple[EnvVar, ...] = (
         default="",
         read_at="call",
         scenario="search engines blocked / rate-limited / should use a proxy",
-        summary="Search-layer proxy; comma-separated for rotation.",
+        summary="Search egress proxy, one URL (HTTPS/HTTP/ALL_PROXY as fallbacks).",
         read_by=("errors", "search", "search_engines", "search_metasearch", "search_proxy", "server"),
     ),
     EnvVar(

@@ -35,7 +35,7 @@ def test_layout_is_one_root(fake_home):
 @pytest.mark.real_state_paths   # 本用例验的就是 paths.py 的落点，不能被隔离 fixture 接管
 def test_every_writer_agrees_on_the_layout(monkeypatch, tmp_path):
     """所有落盘模块都必须走 paths.py，不允许各自 expanduser 再拼一个根。"""
-    from dhole_mcp import cache, reranker, search_metasearch, search_proxy, server
+    from dhole_mcp import cache, reranker, search_metasearch, server
     assert cache._CACHE_DIR == paths.cache_dir()
     assert str(reranker.MODEL_DIR).startswith(str(paths.models_dir()))
     # 这些状态文件都必须是**惰性**派生（函数而非 import 期常量）：
@@ -48,7 +48,6 @@ def test_every_writer_agrees_on_the_layout(monkeypatch, tmp_path):
     # cdp_hosts.json 由 server 写、doctor 读，两边都走 paths.file —— 它记的是「哪些
     # 主机的 CDP 授权过」，落错地方等于把围栏留在另一个家里。
     assert server._cdp_hosts_file() == str(moved / "cdp_hosts.json")
-    assert search_proxy._config_path() == paths.file("search_proxies.json")
 
 
 

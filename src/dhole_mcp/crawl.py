@@ -633,8 +633,8 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
     from dhole_mcp.sitemap import discover_sitemap
 
     def _make_http_get():
-        from dhole_mcp.search_proxy import get_next_proxy
-        _sitemap_proxy = get_next_proxy()
+        from dhole_mcp.search_proxy import configured_proxy
+        _sitemap_proxy = configured_proxy()[0]
         try:
             import primp  # type: ignore
             client = primp.Client(proxy=_sitemap_proxy, timeout=15, impersonate="random",
@@ -1069,9 +1069,10 @@ async def smart_crawl(
         """
         async with sem:
             await _pace(u)
-            # Rotate through proxy pool so crawl pages don't hammer one IP.
-            from dhole_mcp.search_proxy import get_next_proxy, get_proxy_pool
-            _crawl_proxy = get_next_proxy()
+            # 17.0: 代理池删了，整个爬取用同一个出口（配了几个就是几个），所以这里
+            # 不再"每页换一个 IP"。
+            from dhole_mcp.search_proxy import configured_proxy
+            _crawl_proxy = configured_proxy()[0]
             try:
                 resp = await server.smart_fetch(
                     url=u, extraction_type="html", cache_ttl=cache_ttl,
@@ -1105,15 +1106,8 @@ async def smart_crawl(
                     from dhole_mcp.server import ResponseModel
                     resp = ResponseModel(url=u, status=-1, content=[""],
                                          fetcher_used="none", error=str(e)[:200])
-            # Proxy health tracking: success marks the proxy healthy, a failed
-            # fetch cools it so the next crawl page uses a different IP.
-            if _crawl_proxy:
-                pool = get_proxy_pool()
-                if pool is not None:
-                    if resp.status > 0:
-                        pool.mark_success(_crawl_proxy)
-                    else:
-                        pool.mark_failed(_crawl_proxy)
+            # 17.0: 这里原来会按成败给代理记健康分并冷却它 —— 那是池子的机制，
+            # 池子删了就没有可冷却的对象；失败本身已经写在 resp.error 里如实上报。
         html = resp.content[0] if resp.content else ""
         return u, resp, html
 

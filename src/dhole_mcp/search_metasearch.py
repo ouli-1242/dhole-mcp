@@ -16,9 +16,9 @@ failure. This is the robustness dhole's hand-rolled 3-engine scraper never had.
 
 Transport: primp (Rust HTTP client with browser TLS/header impersonation) for
 most backends; httpx (HTTP/2 + randomized cipher/SETTINGS frame) for DuckDuckGo.
-DHOLE_SEARCH_PROXY env var (http/https/socks5) is the power-user rotating-proxy
-escape hatch for per-IP throttling - the one thing no scraper, browser or not,
-can escape from a single IP.
+DHOLE_SEARCH_PROXY env var (http/https/socks5) is the one egress a caller can
+name for per-IP throttling - the one thing no scraper, browser or not,
+can escape from a single IP. 17.0: one proxy, no pool (see search_proxy.py).
 """
 
 from __future__ import annotations
@@ -54,30 +54,23 @@ random = SystemRandom()
 
 T = TypeVar("T")
 
-# Proxy rotation: env var DHOLE_SEARCH_PROXY (comma-separated for multiple),
-# HTTPS_PROXY/HTTP_PROXY/ALL_PROXY fallbacks, or config file
-# ~/.dhole/search_proxies.json. See search_proxy.py.
-# _PROXY is set dynamically per search call by _get_search_proxy() below.
+# 搜索出口：一个变量一个代理（17.0 删了池与轮转，见 search_proxy.py）。
+# HTTPS_PROXY / HTTP_PROXY / ALL_PROXY 是环境里已有的兜底，顺序也在那里定义。
+# _PROXY 每次搜索调用由 _get_search_proxy() 写一次，让 search_engines 的惰性
+# 导入读到同一个出口。
 _PROXY: str | None = None  # current proxy for this search call (set by metasearch)
-_proxy_pool = None  # lazily initialized ProxyPool (see _get_search_proxy)
 
 
 def _get_search_proxy() -> str | None:
-    """Get the next proxy from the rotation pool for this search call.
+    """本轮搜索用的代理（没有就直连）。
 
-    Returns None if no proxies are configured (direct connection) or if all
-    proxies are cooled. Also sets the module-level ``_PROXY`` so
-    ``search_engines.py`` lazy imports see the current proxy.
+    17.0: 池子内不再有状态 —— 同一个进程里每次搜索得到的是同一个答案，所以这里
+    不必"取下一个"，只需要"读那一个"。仍然设 ``_PROXY``，因为 find_similar 那条
+    路（``search_engines._fetch_url``）读的是模块量而不是参数。
     """
-    global _PROXY, _proxy_pool
-    from dhole_mcp.search_proxy import get_proxy_pool, _kick_health_check
-    pool = get_proxy_pool()
-    if pool is None:
-        _PROXY = None
-        return None
-    _kick_health_check()
-    proxy = pool.get_proxy()
-    # If all proxies are cooled, fall back to direct (None = no proxy).
+    global _PROXY
+    from dhole_mcp.search_proxy import configured_proxy
+    proxy, _source = configured_proxy()
     _PROXY = proxy
     return proxy
 
@@ -2073,7 +2066,11 @@ async def metasearch(
             raise MetaSearchException(
                 f"Engine '{cls.name}' requires {cls.env_var}, which is not set."
             )
-        proxy_note = f" (proxy in use: {_search_proxy})" if _search_proxy else ""
+        # 出口写在报错里，但代理 URL 常带 user:pass —— 这条 message 会进 agent 的
+        # 视野和 usage 审计的 error 字段，所以只回抹掉凭据的形式（说清走了哪台代理
+        # 不需要出卖"用谁的身份"）。
+        from dhole_mcp.search_proxy import redact as _redact_proxy
+        proxy_note = f" (proxy in use: {_redact_proxy(_search_proxy)})" if _search_proxy else ""
         raise MetaSearchException(
             f"No search engines could start{proxy_note}. "
             f"Engine status: {status}. "
@@ -2228,19 +2225,7 @@ async def metasearch(
     for e in order:
         e["backends"] = sorted(e["backends"])
 
-    # Proxy health tracking: if all engines failed with connection errors
-    # (not just empty), the proxy is bad - cool it. If any engine succeeded,
-    # the proxy is healthy - mark success. Only track when a proxy was used.
-    if _search_proxy:
-        from dhole_mcp.search_proxy import get_proxy_pool
-        pool = get_proxy_pool()
-        if pool is not None:
-            has_connection_errors = any(
-                v.startswith("error:") or v == "timeout" for v in status.values()
-            )
-            if engines_ok == 0 and has_connection_errors:
-                pool.mark_failed(_search_proxy)
-            elif engines_ok > 0:
-                pool.mark_success(_search_proxy)
-
+    # 17.0: 这里原来有一段"整池连不上就把这个代理冷却掉"的追踪。代理池删掉之后
+    # 没有可冷却的对象了，而失败本身已经如实写在 status 里（error:/timeout 每家
+    # 一条），再加一层"下次悄悄换成直连"只会让人查不到为什么。
     return order, status

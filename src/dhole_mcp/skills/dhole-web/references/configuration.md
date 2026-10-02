@@ -29,7 +29,7 @@
 
 ### Scenario: search engines blocked / rate-limited / should use a proxy
 
-- `DHOLE_SEARCH_PROXY` — search-layer proxy; comma-separated to rotate; **also auto-reads** `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`. Alternatively `dhole proxy add` writes to the pool (`dhole proxy list/add/remove/clear`; pool credentials are stored **in plaintext** in `~/.dhole/search_proxies.json`, masked in `list`)
+- `DHOLE_SEARCH_PROXY` — the single egress every search engine goes through; **also auto-reads** `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` when unset (sandboxes and CI often already have one; `dhole --doctor` names which variable answered). 17.0 removed the proxy pool — there is no `dhole proxy` command and no `~/.dhole/search_proxies.json`, so a comma-separated value rotates nothing (first URL wins, the rest are dropped with a warning) and a value with an unrecognised scheme (`http`/`https`/`socks5`/`socks5h` only — usually a missing `http://`) is treated as unset, also with a warning. Credentials in the URL are never echoed back anywhere: doctor, errors and the usage audit all show `http://***@host:3128`
 - Division of labor: this variable covers the **search layer only**; fetches go through a proxy via per-call `options.proxy` (with a 5s precheck)
 
 ### Scenario: Clash / sing-box TUN proxy (fake-IP mode)
@@ -98,7 +98,7 @@ Then just call — the first attach asks, the user answers once:
 
 ### Scenario: data location / privacy / diagnostics
 
-- `DHOLE_HOME` — state directory (default `~/.dhole`: plaintext body cache, **cookie jar with credentials**, plaintext proxy-pool credentials; point elsewhere on shared machines; delete the directory for a full cleanup)
+- `DHOLE_HOME` — state directory (default `~/.dhole`: plaintext body cache, **cookie jar with credentials**; point elsewhere on shared machines; delete the directory for a full cleanup)
 - `DHOLE_USAGE_LOG=1` — local call log (tool names / durations / redacted errors; no parameter values, no network). CDP authorize/refuse events land here too
 - `DHOLE_HF_ENDPOINT` (or `HF_ENDPOINT`) — rerank-model download mirror; default tries huggingface.co then falls back to hf-mirror.com; setting it pins one source (set `https://hf-mirror.com` when downloads stall in CN)
 
@@ -112,7 +112,6 @@ Then just call — the first attach asks, the user answers once:
 | `dhole engines list` | Per-engine verdict, remaining cooldown, active backoff |
 | `dhole engines probe` | One real query per engine (hits / latency / block reason) |
 | `dhole engines reset` | Clear cooldowns now |
-| `dhole proxy list/add/remove/clear` | Search proxy pool management |
 | reranker model | No command selects it: `bge-zh` (bilingual, ~279MB) is the default and a neural `smart_search` fetches it on first use (resumable). `~/.dhole/config/reranker.json` (`{"model": "<name>"}`) is still honoured if you wrote one by hand — `min_raw_relevance` is calibrated per model, so recalibrate after switching. A later 17.0 step collapses the registry to one model and this file disappears |
 | `dhole --http --host --port` | Serve over streamable HTTP instead of stdio. **No authentication**: `--host 0.0.0.0` exposes "fetch any URL on your behalf" to the whole network — put a reverse proxy / auth / firewall in front on shared networks |
 | `dhole -u` | Self-update (off in 17.0; update via `git pull && pip install -e .` then restart the host) |

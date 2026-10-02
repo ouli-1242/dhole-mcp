@@ -114,7 +114,7 @@ These signals mean **a problem is happening that the user likely doesn't see**. 
 | `error=cdp_host_not_allowed` | Target host is not in the authorized set — the match is an exact hostname, so `example.com` does not cover `www.example.com` or a CDN the page pulls from | Ask the user; with their yes, attach to it with `confirm: true` (the host is then authorized too) — never dodge it by fetching a different host with the user's login state |
 | `cdp_attached: true` (usually with `login_check`) | The call ran inside the user's real Chrome | Read `login_check.logged_in` before trusting the content: `false` = session expired → hand back to the user to re-login; `null` = undecidable from page shape — say so, don't guess |
 | `escalation_path` climbed to stealthy / archive | Strong anti-bot on this site | Send later same-site calls straight with `force_fetcher='stealthy'`; don't re-walk the chain |
-| Same engine cooling repeatedly | This IP is being watched | Suggest a proxy pool (`dhole proxy add`, rotating) or a keyed backend as fallback |
+| Same engine cooling repeatedly | This IP is being watched | Suggest a different egress (`DHOLE_SEARCH_PROXY`, one URL) or a keyed backend as fallback |
 
 ## Config quick reference
 
@@ -124,7 +124,7 @@ These signals mean **a problem is happening that the user likely doesn't see**. 
 - `DHOLE_DEFAULT_ENGINES` — swap the default pool (default `baidu,bing,sogou,bing_global,yandex,brave`)
 - 17.0 deleted the old on/off switches (tool groups, multimodal, neural-focus license, wire shape, cooldown tuning, self-update): those capabilities are default-on or fixed, and a stale `DHOLE_…` in the env block does nothing — `--doctor` names what a host still sets that no longer has any effect
 
-CLI: `dhole -v` capability panel · `--doctor` install check (audits env AND `~/.dhole/config.json`) · `config list|set|unset` persisted knobs · `engines list|probe|reset` engine health · `proxy list|add` proxy pool · `skill install|status` sync the bundled agent skill (re-run `dhole skill install --force` after upgrading dhole to pick up skill updates).
+CLI: `dhole -v` capability panel · `--doctor` install check (audits env AND `~/.dhole/config.json`) · `config list|set|unset` persisted knobs · `engines list|probe|reset` engine health · `skill install|status` sync the bundled agent skill (re-run `dhole skill install --force` after upgrading dhole to pick up skill updates).
 
 ## references index (read on demand — never all at once)
 
