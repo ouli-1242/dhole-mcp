@@ -37,7 +37,7 @@ BASE: dict[str, tuple[dict, object]] = {
     "web_crawl": ({"url": URL}, _CRAWL_OK),
     "web_search": ({"query": "python asyncio"}, _SEARCH_OK),
     # screenshot 回的是内容片段列表，不是模型；这里只看桩被用什么参数调用。
-    "screenshot": ({"url": URL}, []),
+    "web_screenshot": ({"url": URL}, []),
 }
 
 # 每个参数一个探针值。值要能活过线路层的强制转换，所以不是一律 "x"。

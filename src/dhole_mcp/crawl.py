@@ -21,7 +21,7 @@ Flagship design (v6):
                          returns nothing because the page IS a list of links).
       - js-shell      -> the fetch already auto-escalated HTTP->stealthy render;
                          if even the rendered HTML is empty, content_ok=false
-                         with an actionable error (use screenshot / vision).
+                         with an actionable error (use web_screenshot / vision).
       - fallback      -> cleaned visible text.
     This fixes the "0 content_ok on Hacker News" and "JS SPA timeout" class of
     bugs at the root: list pages now return their link list as content, and JS

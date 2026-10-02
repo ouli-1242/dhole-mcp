@@ -166,8 +166,8 @@ class TestOtherToolsWithTheSameGap:
         assert seen["include_links"] is True
 
     def test_screenshot_full_page_accepts_the_string_spellings(self, monkeypatch):
-        seen = _record(monkeypatch, "screenshot", [])
-        _dispatch("screenshot", {"url": "https://example.test",
+        seen = _record(monkeypatch, "web_screenshot", [])
+        _dispatch("web_screenshot", {"url": "https://example.test",
                                  "full_page": "false", "quality": "80"})
 
         assert seen["full_page"] is False

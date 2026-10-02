@@ -156,7 +156,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 | `web_read` | 抓任意 URL：反爬升级、PDF / OCR、批量、聚焦提取、结构化提取、页面动作、非 GET、`auth`、条件请求、CDP 接管 |
 | `web_search` | 无密钥搜索：多引擎并行 + 本地重排，可顺带抓回前三条全文 |
 | `web_crawl` | 同域爬取：sitemap、关键词过滤、路径子树限定 |
-| `screenshot` | 页面截图；看不见图的宿主传 `options.save_to` 拿路径 |
+| `web_screenshot` | 页面截图；看不见图的宿主传 `options.save_to` 拿路径 |
 | `doc_parse` | 本地文件 → Markdown（docx / xlsx / pdf / pptx / odt / csv / html / json / yaml / md / txt） |
 | `feed_read` | 批量抓 RSS / Atom，`since=` 只取增量 |
 | `web_resolve` | 解析最终地址，不抽正文 |
@@ -173,7 +173,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 | `cred_vault` | `DHOLE_VAULT=1` | 读**你自己**密码管理器的条目元数据（从不回密码 / TOTP 值） |
 | `cred_login` | `DHOLE_VAULT=1` | 用其中一条凭据登录：先只回计划，确认后才填并提交 |
 
-参数摆放：`web_read` / `web_crawl` / `web_search` / `screenshot` 的旋钮收在一个 `options` 对象里，顶层同名参数也接受（兼容读法，两处都给时**顶层优先**）；其余工具**只有顶层这一层**，塞 `options` 会被拒绝并列出它真正接受的键。反向例外：`web_read` 的 `url` 与 `web_crawl` 的 `discover_only` / `crawl_urls` / `focus` 必须放顶层。以 `tools/list` 为准。
+参数摆放：`web_read` / `web_crawl` / `web_search` / `web_screenshot` 的旋钮收在一个 `options` 对象里，顶层同名参数也接受（兼容读法，两处都给时**顶层优先**）；其余工具**只有顶层这一层**，塞 `options` 会被拒绝并列出它真正接受的键。反向例外：`web_read` 的 `url` 与 `web_crawl` 的 `discover_only` / `crawl_urls` / `focus` 必须放顶层。以 `tools/list` 为准。
 
 调用写法、字段含义与排查的手册有两个入口，同一份语料：`sys_guide(topic=...)`（默认注册，装上就能用）与 `dhole skill install`（宿主原生 skill 形态）。
 

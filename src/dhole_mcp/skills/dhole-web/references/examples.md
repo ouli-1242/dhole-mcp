@@ -163,7 +163,7 @@ List pages return a structured link listing (`page_type=list`), not body text â€
 {"urls": ["https://blog.example.com/feed.xml"], "since": "2026-09-29T11:14:45+00:00"}
 ```
 
-## screenshot
+## web_screenshot
 
 ```json
 {"url": "https://example.com", "save_to": "C:/tmp/page.png", "full_page": true}

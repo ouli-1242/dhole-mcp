@@ -95,7 +95,7 @@ from dhole_mcp import install as _install
 # until first use so the MCP server responds to initialize immediately.
 # Set when browser import fails (e.g. patchright not installable on Termux).
 # When set, dhole runs in HTTP-only mode: fetch + search + crawl work via primp
-# + httpx + trafilatura, but stealthy browser escalation and screenshot are disabled.
+# + httpx + trafilatura, but stealthy browser escalation and web_screenshot are disabled.
 _browser_import_error: Optional[str] = None
 
 # Module-level type placeholders — needed because FastMCP evaluates string
@@ -186,7 +186,7 @@ from dhole_mcp.security import (
     # G9: the per-call private-host allowlist (see security.parse_allow_private).
     _ALLOW_PRIVATE, parse_allow_private, set_allow_private,
     # Same policy, for the two tools that never went through the web_read
-    # options decorator (screenshot / feed_read).
+    # options decorator (web_screenshot / feed_read).
     allow_private_scope,
 )
 
@@ -507,7 +507,7 @@ def _iso_from_ts(ts) -> str:
 # either; DHOLE_STRUCTURED_CONTENT / DHOLE_OUTPUT_SCHEMA / DHOLE_WIRE_FULL are
 # silently ignored if a host still sets them).
 
-# Idle browser close: after this many seconds with no web_read/screenshot in
+# Idle browser close: after this many seconds with no web_read/web_screenshot in
 # flight, the warm Patchright Chrome is closed entirely (process exits, OS reclaims
 # all its RAM). The next fetch relaunches it (~2s cold start). 17.0 写死 300s
 # (5 min): an agent actively working (30-90s think-pauses between fetches) keeps
@@ -564,7 +564,7 @@ DHOLE_INSTRUCTIONS = (
     "NEVER answer from search snippets alone.\n"
     "- RSS/Atom changelogs or release notes: feed_read.\n"
     "- Local file: doc_parse.\n"
-    "- Screenshot: screenshot - words instead? web_read.\n"
+    "- Screenshot: web_screenshot - words instead? web_read.\n"
     "- Check a short link: web_resolve.\n"
     "- Cookies a site kept behind session_id=: close_session (no arguments "
     "= what is open; session_id= or all=true to forget them).\n"
@@ -624,7 +624,7 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "NEVER answer from search snippets alone.\n",
     "feed_read": "- RSS/Atom changelogs or release notes: feed_read.\n",
     "doc_parse": "- Local file: doc_parse.\n",
-    "screenshot": "- Screenshot: screenshot - words instead? web_read.\n",
+    "web_screenshot": "- Screenshot: web_screenshot - words instead? web_read.\n",
     "web_resolve": "- Check a short link: web_resolve.\n",
     "close_session": "- Cookies a site kept behind session_id=: close_session "
     "(no arguments = what is open; session_id= or all=true to forget them).\n",
@@ -1902,7 +1902,7 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         # successfully OCR'd image is also page_type image, and telling its reader
         # "text cannot be read" would be false.
         next_action = ("no text could be read from this image - "
-                       "use a vision-capable model or the screenshot tool, or switch source")
+                       "use a vision-capable model or the web_screenshot tool, or switch source")
     elif (not result.content_ok) and (result.quality_score or 0) > 0 and result.quality_score < 0.7 and not err:
         from dhole_mcp.pdf_extractor import ocr_advice
         next_action = ("low-quality PDF extraction (CID font corruption / garbled "
@@ -2616,7 +2616,7 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         # a serialized client sends. Forcing it through _coerce_bool_arg here is
         # the one spelling 'auto' would not survive.
     },
-    "screenshot": {
+    "web_screenshot": {
         "full_page": "bool", "network_idle": "bool", "decode_qr": "bool",
         "quality": "int", "wait": "number", "timeout": "number",
     },
@@ -4703,7 +4703,7 @@ _SHOT_PARAMS = frozenset({
     # selector = 元素级裁剪（17.0 起常开）；decode_qr = 本地二维码解码
     # （确定性工作，从来不设门控）。
     "selector", "decode_qr",
-    # G9 parity: web_read could always name a private target and screenshot
+    # G9 parity: web_read could always name a private target and web_screenshot
     # could not, so "my dev server" was fetchable by one tool and refused
     # outright by the next. Same option, same semantics, same guard.
     "allow_private",
@@ -4719,7 +4719,7 @@ _SS_PARAMS = frozenset({
 })
 # The complete set of names each tool accepts at the top level. `url=` and
 # friends that are NOT in *_PARAMS (web_crawl's discover_only,
-# screenshot's session_id, web_search's query) are the required-ish arguments
+# web_screenshot's session_id, web_search's query) are the required-ish arguments
 # the branches read by name, so they join here.
 #
 # A name listed but never read by the dispatcher used to be the quiet half of
@@ -4730,7 +4730,7 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     "web_read": _SF_PARAMS | {"url"},
     "web_crawl": _SC_PARAMS | {"url", "discover_only", "focus",
                                  "search"},
-    "screenshot": _SHOT_PARAMS | {"url", "session_id"},
+    "web_screenshot": _SHOT_PARAMS | {"url", "session_id"},
     "web_search": _SS_PARAMS | {"query"},
     "cache_clear": frozenset({"all", "engine_state"}),
     "doc_parse": frozenset({"file_path", "cwd", "encoding"}),
@@ -6349,7 +6349,7 @@ class MasterFetchServer:
 
     # ─── Screenshot ───────────────────────────────────────────────
 
-    async def screenshot(
+    async def web_screenshot(
         self,
         url: str,
         session_id: Optional[str] = None,
@@ -8945,7 +8945,7 @@ class MasterFetchServer:
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
         },
         {
-            "name": "screenshot",
+            "name": "web_screenshot",
             "description": "Use when you need to SEE a page - layout, charts, UI state, how it really renders: returns an image. For the page's words use web_read instead. A text-only model gets nothing from an inline image: pass save_to= and read the file at the absolute path it reports.\n- Full-page rendering costs a browser: the first call pays a cold start (seconds); later ones in the same session are fast.\n\nVISUAL ASSIST: selector= crops the capture to ONE element (CSS selector; full_page cannot combine with it) and returns it inline - for CAPTCHAs, QR codes, forms. Discipline: a simple text/grid image CAPTCHA may be read and tried at most 3 times, then STOP and hand off to the user; behavioral/fingerprint walls (DataDome, Akamai, interactive Turnstile) have nothing to look at - hand off immediately; 2FA codes are never on the page - hand off; sliders need drag primitives dhole does not have - hand off. dhole ships no vision model: the reading happens in you.",
             "inputSchema": {
                 "type": "object", "required": ["url"],
@@ -9404,9 +9404,9 @@ class MasterFetchServer:
             result = await self.web_crawl(url=args["url"], **call)
             return _wire_result(result)
 
-        elif name == "screenshot":
-            result = await self.screenshot(
-                url=args["url"], **self._forward("screenshot", args, skip=("url",)))
+        elif name == "web_screenshot":
+            result = await self.web_screenshot(
+                url=args["url"], **self._forward("web_screenshot", args, skip=("url",)))
             return result  # already list[ImageContent|TextContent]
 
         elif name == "web_search":

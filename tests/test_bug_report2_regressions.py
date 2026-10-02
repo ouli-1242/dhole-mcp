@@ -1028,7 +1028,7 @@ class TestScreenshotErrorsAreActionableNotRawDriverLogs:
 
         with pytest.raises(RuntimeError) as ei:
             asyncio.run(MasterFetchServer()._dispatch(
-                "screenshot", {"url": "https://example.com/"}))
+                "web_screenshot", {"url": "https://example.com/"}))
         text = str(ei.value)
         assert "Call log" not in text
         assert "fonts" not in text

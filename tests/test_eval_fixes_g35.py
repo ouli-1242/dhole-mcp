@@ -212,7 +212,7 @@ class TestThePrivateTargetOptionReachesBothTools:
     def test_both_methods_accept_the_option_as_a_real_parameter(self):
         import inspect
 
-        for tool in ("screenshot", "feed_read"):
+        for tool in ("web_screenshot", "feed_read"):
             params = inspect.signature(getattr(MasterFetchServer, tool)).parameters
             assert "allow_private" in params, f"{tool} 不接受 allow_private"
 
@@ -257,7 +257,7 @@ class TestThePrivateTargetOptionReachesBothTools:
         monkeypatch.setattr(server_mod, "_browser_deps_available", lambda: False)
 
         with pytest.raises(RuntimeError):
-            asyncio.run(MasterFetchServer().screenshot(
+            asyncio.run(MasterFetchServer().web_screenshot(
                 url="http://127.0.0.1:8399/qr", allow_private=True))
 
         assert seen["loopback_ok"] is True
@@ -284,7 +284,7 @@ class TestThePrivateTargetOptionReachesBothTools:
         monkeypatch.setattr(server_mod, "_browser_deps_available", lambda: True)
 
         with pytest.raises(RuntimeError):  # 假 session 不产出像素，止于"没截到"
-            asyncio.run(MasterFetchServer().screenshot(
+            asyncio.run(MasterFetchServer().web_screenshot(
                 url="http://127.0.0.1:8399/qr", session_id="probe",
                 allow_private=True))
 
@@ -292,7 +292,7 @@ class TestThePrivateTargetOptionReachesBothTools:
 
     def test_screenshot_refuses_loopback_without_the_option(self):
         with pytest.raises(SecurityError):
-            asyncio.run(MasterFetchServer().screenshot(
+            asyncio.run(MasterFetchServer().web_screenshot(
                 url="http://127.0.0.1:8399/qr"))
 
 

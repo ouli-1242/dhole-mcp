@@ -167,7 +167,7 @@ class TestInstructionsFollowTheEnabledSet:
         text = server_mod._compose_instructions(frozenset({"web_read"}))
         assert "web_read" in text
         for absent in ("web_crawl", "web_search", "feed_read",
-                       "doc_parse", "screenshot", "web_resolve"):
+                       "doc_parse", "web_screenshot", "web_resolve"):
             assert absent not in text, f"子集 instructions 不得路由到未启用的 {absent}"
 
     def test_the_trust_rules_survive_every_subset(self):

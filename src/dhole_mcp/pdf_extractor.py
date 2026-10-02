@@ -118,7 +118,7 @@ def ocr_advice() -> str:
         ready = False
     if ready:
         return ("OCR is installed but recovered no text here - use a vision tool / "
-                "screenshot, or another source.")
+                "web_screenshot, or another source.")
     from dhole_mcp import install as _install
     return ("Install OCR support with `" + _install.full_install_command() + "` and "
             "dhole will auto-OCR it; or use a vision-capable tool / screenshot.")

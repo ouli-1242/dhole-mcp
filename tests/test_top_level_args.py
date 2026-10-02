@@ -85,8 +85,8 @@ class TestOtherToolsTakeTheirDocumentedKeysTopLevel:
             8, ["brave"], "week", "example.com")
 
     def test_screenshot_keys(self, monkeypatch):
-        seen = _stub(monkeypatch, "screenshot", [])
-        _dispatch("screenshot", {"url": "https://example.com/", "full_page": True,
+        seen = _stub(monkeypatch, "web_screenshot", [])
+        _dispatch("web_screenshot", {"url": "https://example.com/", "full_page": True,
                                  "image_type": "jpeg"})
         assert seen["full_page"] is True and seen["image_type"] == "jpeg"
 
@@ -120,7 +120,7 @@ class TestUnknownTopLevelArgsRaise:
         ("web_crawl", {"url": "https://example.com/", "paths": ["/a"]}),
         ("web_search", {"query": "x", "sites": ["example.com"]}),
         ("web_read", {"url": "https://example.com/", "max_chars": 100}),
-        ("screenshot", {"url": "https://example.com/", "width": 800}),
+        ("web_screenshot", {"url": "https://example.com/", "width": 800}),
         ("cache_clear", {"all": True, "everything": True}),
         ("doc_parse", {"file_path": "a.pdf", "pages": "1-2"}),
         ("feed_read", {"urls": ["https://example.com/f.xml"], "limit": 5}),
@@ -184,7 +184,7 @@ class TestAcceptedSetCoversTheContract:
     def test_every_documented_param_set_is_accepted(self):
         assert server_mod._SC_PARAMS <= server_mod._TOP_LEVEL_ARGS["web_crawl"]
         assert server_mod._SS_PARAMS <= server_mod._TOP_LEVEL_ARGS["web_search"]
-        assert server_mod._SHOT_PARAMS <= server_mod._TOP_LEVEL_ARGS["screenshot"]
+        assert server_mod._SHOT_PARAMS <= server_mod._TOP_LEVEL_ARGS["web_screenshot"]
         assert server_mod._SF_PARAMS <= server_mod._TOP_LEVEL_ARGS["web_read"]
 
     def test_every_tool_in_the_schema_is_covered(self):

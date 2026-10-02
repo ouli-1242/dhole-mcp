@@ -226,7 +226,7 @@ PARAMS = {
     "web_read": _SF_PARAMS,
     "web_crawl": _SC_PARAMS,
     "web_search": _SS_PARAMS,
-    "screenshot": _SHOT_PARAMS,
+    "web_screenshot": _SHOT_PARAMS,
 }
 
 
@@ -275,7 +275,7 @@ def test_the_stateful_tools_are_announced_with_their_discipline():
 _OBVIOUS = {
     ("web_read", "url"), ("web_read", "urls"),
     ("web_search", "query"), ("web_resolve", "url"),
-    ("web_crawl", "url"), ("screenshot", "url"), ("cred_login", "url"),
+    ("web_crawl", "url"), ("web_screenshot", "url"), ("cred_login", "url"),
 }
 
 

@@ -33,7 +33,7 @@ Starting routes for multi-step tasks. Each recipe marks where to pivot on failur
 ## Verify a local dev / staging service
 
 1. `web_read(url="http://127.0.0.1:PORT/...", allow_private=true)` — the SSRF guard rejects private hosts by default; name the waiver; for recurring use set `DHOLE_ALLOW_PRIVATE_HOSTS`. With a proxy running, loopback may be intercepted (dead ports answer 502 instead of connection-refused) — rule the proxy out first (`NO_PROXY` += `127.0.0.1,localhost`); never probe dead ports with stealthy (the browser waits out the 30s timeout)
-2. Rendered view / real behavior: `screenshot` (text-only agents: `save_to` then read the file); interaction checks via `actions` click/fill
+2. Rendered view / real behavior: `web_screenshot` (text-only agents: `save_to` then read the file); interaction checks via `actions` click/fill
 3. `web_resolve` settles where server-side redirects actually land
 
 ## Reading PDFs

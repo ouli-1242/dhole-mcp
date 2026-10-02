@@ -110,7 +110,7 @@ class TestScreenshotUsesTheKnobItDocuments:
         monkeypatch.setattr(MasterFetchServer, "_ensure_auto_session", no_browser)
 
         with pytest.raises(ValueError) as e:
-            await MasterFetchServer().screenshot("https://example.com",
+            await MasterFetchServer().web_screenshot("https://example.com",
                                                 save_to=str(tmp_path))
 
         assert "directory" in str(e.value)
@@ -143,7 +143,7 @@ class TestScreenshotUsesTheKnobItDocuments:
         monkeypatch.setattr(MasterFetchServer, "_get_session", fake_get)
         monkeypatch.setattr("dhole_mcp.server._browser_deps_available", lambda: True)
 
-        out = await MasterFetchServer().screenshot(
+        out = await MasterFetchServer().web_screenshot(
             "https://example.com", save_to=str(tmp_path / "page.png"))
 
         text = [c for c in out if getattr(c, "type", "") == "text"][0].text
@@ -164,7 +164,7 @@ async def test_a_real_page_lands_on_disk_as_a_real_png(tmp_path):
         pytest.skip("no browser deps for the live tier")
 
     try:
-        out = await MasterFetchServer().screenshot(
+        out = await MasterFetchServer().web_screenshot(
             "https://example.com/", save_to=str(tmp_path / "real.png"), timeout=60000)
     except RuntimeError as e:
         # patchright 装了但 chromium 没装（`python -m patchright install chromium`

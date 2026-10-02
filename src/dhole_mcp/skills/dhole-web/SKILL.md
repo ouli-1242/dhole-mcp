@@ -5,7 +5,7 @@ description: Operational handbook for the dhole MCP server — how to write call
 
 # dhole MCP Operations Handbook
 
-Companion to dhole's ten default tools: `web_read` / `web_search` / `web_crawl` / `screenshot` / `doc_parse` / `feed_read` / `web_resolve` / `cache_clear` / `close_session` — plus `sys_guide`, which serves this very corpus as a tool call for hosts that never installed the skill — plus four **stateful** tools that are registered by default in 17.0: `web_recipe` / `web_watch` and `cred_vault` / `cred_login`. If one of those four is missing from `tools/list`, the operator named an explicit `DHOLE_TOOLS` subset — say so, don't route around it.
+Companion to dhole's ten default tools: `web_read` / `web_search` / `web_crawl` / `web_screenshot` / `doc_parse` / `feed_read` / `web_resolve` / `cache_clear` / `close_session` — plus `sys_guide`, which serves this very corpus as a tool call for hosts that never installed the skill — plus four **stateful** tools that are registered by default in 17.0: `web_recipe` / `web_watch` and `cred_vault` / `cred_login`. If one of those four is missing from `tools/list`, the operator named an explicit `DHOLE_TOOLS` subset — say so, don't route around it.
 
 Division of labor: this file = tool selection + hard constraints + signal triage. `references/` = six on-demand volumes (index at the bottom). Parameter and field definitions ultimately live in `tools/list` — when anything conflicts, trust the tool descriptions. Calibrated against dhole 16.1 via a full live test pass (2026-09-29); the 17.0 additions (CDP attach with per-host confirm / `check_login` / page actions with snapshot + index addressing + submit gate / session cookie bridge / per-call neural focus / always-on element screenshots) verified against the 17.0 wire tests (2026-10-01). The four stateful tools (recorded chains, change monitoring, credential lookup, assisted login) are documented here but were **not** in that live pass — treat them as wire-verified against their tool descriptions, and check `tools/list` if a detail matters.
 
@@ -34,7 +34,7 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 | Resolve a short/tracking link | `web_resolve` (no body download) |
 | Local file: `.docx` / `.xlsx` / `.pptx` / `.odt` / `.pdf` / `.csv` / `.html` | `doc_parse` — a docx/xlsx/pptx/odt is a zip and a pdf is a container, so a text reader sees bytes; a non-UTF-8 csv/html decodes to plausible-looking **wrong** text rather than an error |
 | Local file: `.md` / `.txt` / `.json` / `.yaml` | Your own file tool is fine if you have one; `doc_parse` also works (it detects the encoding and validates json/yaml). MCP-only clients have no other path |
-| See rendered layout / verify UI | `screenshot`; if you can't see images, pass `save_to` and read the file |
+| See rendered layout / verify UI | `web_screenshot`; if you can't see images, pass `save_to` and read the file |
 | Page behind a login wall (user has a logged-in Chrome) | `web_read` with `cdp_url` (+ `check_login=true` to confirm state) — requires one-time user setup, see `references/configuration.md` "CDP attach" |
 | Act on a page (click / fill / press / submit a form) | `web_read` `actions`: `{"snapshot": true}` first for the numbered element list, then address by `index` — see `references/tools.md` "Page interaction" |
 | Reach that page again without re-deriving the steps | `web_recipe` **(opt-in)** — `op=save` the `url` + `actions` once, `op=run` replays; a non-zero `actions_failed` means the page changed, re-save |

@@ -74,11 +74,11 @@ def ocr_install_advice() -> str:
         from dhole_mcp.ocr import ocr_available
         if ocr_available():
             return ("OCR is installed but recovered no text here - use a vision "
-                    "tool / screenshot, or another source.")
+                    "tool / web_screenshot, or another source.")
     except Exception:  # noqa: BLE001
         pass
     return (f"Install OCR support with `{full_install_command()}` and dhole will "
-            "auto-OCR it; or use a vision-capable tool / screenshot.")
+            "auto-OCR it; or use a vision-capable tool / web_screenshot.")
 
 
 def pdf_install_advice() -> str:

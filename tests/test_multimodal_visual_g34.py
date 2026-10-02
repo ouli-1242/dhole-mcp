@@ -261,14 +261,14 @@ class TestTheToolGate:
         monkeypatch.setattr(MasterFetchServer, "_ensure_auto_session", no_browser)
 
         with pytest.raises(ValueError) as e:
-            await MasterFetchServer().screenshot(URL, selector="img.captcha",
+            await MasterFetchServer().web_screenshot(URL, selector="img.captcha",
                                                  full_page=True)
         assert "full_page" in str(e.value)
 
     @pytest.mark.asyncio
     async def test_full_page_cannot_combine_with_a_selector(self, monkeypatch):
         with pytest.raises(ValueError) as e:
-            await MasterFetchServer().screenshot(URL, selector="img.captcha",
+            await MasterFetchServer().web_screenshot(URL, selector="img.captcha",
                                                  full_page=True)
         assert "full_page" in str(e.value)
 
@@ -290,7 +290,7 @@ class TestTheToolGate:
         monkeypatch.setattr(MasterFetchServer, "_get_session", fake_get)
         monkeypatch.setattr("dhole_mcp.server._browser_deps_available", lambda: True)
 
-        out = await MasterFetchServer().screenshot(URL, decode_qr=True)
+        out = await MasterFetchServer().web_screenshot(URL, decode_qr=True)
         text = [c for c in out if getattr(c, "type", "") == "text"][0].text
         assert "decode_qr" in text
 
@@ -315,7 +315,7 @@ class TestTheToolCapture:
     @pytest.mark.asyncio
     async def test_a_selector_crop_captures_the_element(self, monkeypatch):
         self._patch_session(monkeypatch, _FakePage())
-        out = await MasterFetchServer().screenshot(URL, selector="img.captcha")
+        out = await MasterFetchServer().web_screenshot(URL, selector="img.captcha")
         image = [c for c in out if getattr(c, "type", "") == "image"][0]
         text = [c for c in out if getattr(c, "type", "") == "text"][0].text
         assert base64.b64decode(image.data) == PNG_BYTES
@@ -327,7 +327,7 @@ class TestTheToolCapture:
         pytest.importorskip("cv2")
         payload = "https://example.com/checkin?token=abc123"
         self._patch_session(monkeypatch, _FakePage(data=_qr_png(payload)))
-        out = await MasterFetchServer().screenshot(URL, decode_qr=True)
+        out = await MasterFetchServer().web_screenshot(URL, decode_qr=True)
         text = [c for c in out if getattr(c, "type", "") == "text"][0].text
         assert payload in text
 
@@ -341,7 +341,7 @@ class TestTheToolCapture:
         ok, buf = cv2.imencode(".png", blank)
         assert ok
         self._patch_session(monkeypatch, _FakePage(data=buf.tobytes()))
-        out = await MasterFetchServer().screenshot(URL, decode_qr=True,
+        out = await MasterFetchServer().web_screenshot(URL, decode_qr=True,
                                                    selector="img.not-a-code")
         text = [c for c in out if getattr(c, "type", "") == "text"][0].text
         assert "no QR code found" in text
@@ -351,7 +351,7 @@ class TestTheToolCapture:
             self, monkeypatch):
         """PNG_BYTES 不是真图片：解码失败要降级成注记，截图本身照常交付。"""
         self._patch_session(monkeypatch, _FakePage())
-        out = await MasterFetchServer().screenshot(URL, decode_qr=True)
+        out = await MasterFetchServer().web_screenshot(URL, decode_qr=True)
         image = [c for c in out if getattr(c, "type", "") == "image"][0]
         text = [c for c in out if getattr(c, "type", "") == "text"][0].text
         assert image.data
@@ -367,7 +367,7 @@ class TestTheDescriptions:
         """VISUAL ASSIST 不再是运行时拼接：它在 _TOOL_DEFS 字面量里
         （能力常开，纪律不是模式）。"""
         defs = {td["name"]: td for td in MasterFetchServer._enabled_tool_defs()}
-        shot = defs["screenshot"]["description"]
+        shot = defs["web_screenshot"]["description"]
         sf = defs["web_read"]["description"]
         assert "VISUAL ASSIST" in shot
         assert "selector=" in shot

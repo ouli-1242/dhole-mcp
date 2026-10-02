@@ -163,7 +163,7 @@ PLAUSIBLE_CASES = {
         ("minimal: loopback start url (SSRF-blocked)", {"url": "http://127.0.0.1/"}),
         ("minimal: cloud metadata IP (SSRF-blocked)", {"url": "http://169.254.169.254/"}),
     ],
-    "screenshot": [
+    "web_screenshot": [
         ("minimal: loopback url (SSRF-blocked)", {"url": "http://127.0.0.1/"}),
         ("minimal: file:// scheme (blocked scheme)", {"url": "file:///C:/Windows/win.ini"}),
     ],
@@ -193,7 +193,7 @@ PLAUSIBLE_CASES = {
 }
 
 TOOL_ORDER = [
-    "web_read", "web_crawl", "screenshot", "web_search",
+    "web_read", "web_crawl", "web_screenshot", "web_search",
     "cache_clear", "doc_parse", "feed_read", "web_resolve",
 ]
 

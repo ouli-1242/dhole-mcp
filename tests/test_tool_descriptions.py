@@ -46,7 +46,7 @@ ROUTING_CONTRACT = [
      "不知道 fetch_content 的 agent 会多花 N 次 web_read 去取正文"),
     ("web_search", "web_read",
      "搜索结果只是 URL，必须说清下一步是取正文"),
-    ("screenshot", "web_read",
+    ("web_screenshot", "web_read",
      "文本 agent 不该调截图，要明确让位给 web_read"),
     ("doc_parse", "web_read",
      "本地 PDF 只有 web_read 能处理（且仅限 URL 形态），必须指明"),
