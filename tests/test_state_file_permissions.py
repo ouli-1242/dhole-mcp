@@ -149,16 +149,6 @@ class TestOtherStateFiles:
         assert (str(tmp_path), oct(0o700)) in chmod_spy, chmod_spy
         assert (str(target), oct(0o600)) in chmod_spy, chmod_spy
 
-    def test_last_version_is_tightened(self, chmod_spy, monkeypatch, tmp_path):
-        from dhole_mcp import updater
-
-        home = tmp_path / "home"
-        monkeypatch.setenv("DHOLE_HOME", str(home))
-        updater._write_last_version("14.7")
-
-        assert (str(home / "last_version"), oct(0o600)) in chmod_spy, chmod_spy
-        assert (home / "last_version").read_text(encoding="utf-8") == "14.7"
-
 
 # ─── POSIX 上真正落到 inode 的位 ─────────────────────────────────────────
 # 本机（Windows）chmod 只能改只读位，stat 报出的 mode 一律是 0o777/0o666 —— 连

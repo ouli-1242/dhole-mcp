@@ -1,38 +1,27 @@
-"""Reliable, brick-proof self-update for the dhole CLI. Cross-platform.
+"""Diagnostics for a dhole install: the version panel, the capability panel, doctor.
 
-This module owns the entire update lifecycle. The previous updater could brick
-the install: `pip install --upgrade dhole-mcp[all]` pulled the heavy `[all]`
-extra (onnxruntime, tokenizers, rapidocr) which is slow and fails mid-install
-(leaving dhole_mcp deleted and dhole.exe orphaned -> every `dhole` command
-crashes with ModuleNotFoundError, including `dhole -u` itself, so the tool
-cannot self-heal). The recovery messages told users to run a bare
-`pip install --force-reinstall` while a dhole server held the launcher, which
-is the exact command that bricks it.
+Before 17.0 B2-3 this module also owned self-update and self-repair. `dhole -u`
+drove a detached Windows helper (wait for the launcher to exit, dodge the
+dhole.exe file lock by renaming it, run pip, retry with --force-reinstall) plus a
+standalone ~/.dhole/repair.py that taskkilled every dhole process and reinstalled
+a few hundred MB from the index. The trigger was ANY ImportError - including one
+raised by an unrelated package in the same environment. The cost was out of
+proportion to the benefit (§3-34), so the whole mechanism is gone: this module
+now only reads, and the most side effect it will produce is a `tasklist` that
+matches process names.
 
-This rewrite fixes all of that:
+What stays, and why:
 
-- **Core deps installed, no extras.** The self-update installs dhole-mcp
-  WITH its core deps (so new core deps introduced in major versions are
-  installed), but WITHOUT the `[all]` extra (so the heavy onnxruntime /
-  tokenizers / rapidocr are NOT pulled). Fast, deterministic, cannot fail on
-  a heavy dep. Existing deps already satisfied are left alone by pip.
-- **Windows: a detached helper runs pip after the launcher exits.** The running
-  `dhole -u` command IS dhole.exe, which Windows locks against overwrite. The
-  helper is a standalone `python -c` (no dhole_mcp dependency) that waits
-  for the parent launcher to exit, stages the launcher aside via the rename
-  trick (Windows permits renaming a running .exe, just not overwriting it), then
-  runs pip with the launcher free. A still-running dhole server is handled by
-  the rename trick (it keeps the old code in memory until restarted); a stale
-  locked `.old` is cleared by stopping that server. Never refuses, never bricks.
-- **Self-heal.** If pip's first pass leaves the version unchanged or broken, a
-  `--force-reinstall --no-deps` pass runs (the launcher is free by then) and
-  re-verifies. Catches a half-failed install automatically.
-- **Surviving repair.** `~/.dhole/repair.py` (pure stdlib, outside site-packages)
-  is written on every update. If dhole is ever bricked (e.g. a manual pip while
-  a server held the launcher), `python ~/.dhole/repair.py` stops dhole and
-  force-reinstalls. It survives because it is not part of the dhole-mcp package.
-- **Safe messages.** Every failure prints ONE clean error plus the safe
-  recovery (`python ~/.dhole/repair.py`), never a bare destructive pip command.
+- ``dhole -v`` - in a silent-degradation design the diagnostics command is the
+  only place a user can see which tier is actually missing (no patchright means
+  HTTP-only fetch, no onnxruntime means consensus-order search).
+- ``dhole doctor`` - whether the install is the one that loads, which file that
+  is, what the config wrote, what the resolver actually answers; every failure
+  prints a command the human can run. Printing it is the whole point: executing
+  it is the human's decision.
+- version truth - ``__version__`` is authoritative and dist-info is compared
+  against it, because an editable install makes dist-info lie (measured: 16.2
+  code, 16.1 banner).
 """
 
 from __future__ import annotations
@@ -45,125 +34,39 @@ from dhole_mcp import env_registry
 
 from dhole_mcp import paths
 
-__all__ = [
-    "check_version", "pad_version",
-    "do_update", "print_version", "print_capabilities", "capabilities",
-    "doctor",
-]
+__all__ = ["installed_version", "print_version", "print_capabilities",
+           "capabilities", "doctor"]
 
 
-# ─── self-update source ────────────────────────────────────────────────────
-# This is a personal derivative work (of dondai1234/master-fetch). The project
-# was renamed hound-mcp -> dhole-mcp in 14.0 because the old name collided on
-# PyPI; ``dhole-mcp`` is now the distribution name of THIS fork. 17.0 写死：
-# ``DHOLE_UPDATE_PACKAGE`` / ``DHOLE_UPDATE_INDEX_URL`` 已注销（运行时静默忽略）。
+# 这是一个个人衍生版（of dondai1234/master-fetch），14.0 从 hound-mcp 改名为
+# dhole-mcp，因为旧名在 PyPI 上撞车。17.0 写死：``DHOLE_UPDATE_PACKAGE`` /
+# ``DHOLE_UPDATE_INDEX_URL`` 已注销（运行时静默忽略）—— 本模块不再从任何索引装东西。
 _DIST_NAME = "dhole-mcp"   # the distribution this fork is installed as
 
 
-def update_package() -> str:
-    """Distribution to self-update FROM; empty string means self-update is off."""
-    return ""
+# ─── version ──────────────────────────────────────────────────────────────
 
+def installed_version() -> str:
+    """当前版本。
 
-def _dist() -> str:
-    """Distribution name used when building pip commands."""
-    return update_package() or _DIST_NAME
-
-
-def _dist_spec() -> str:
-    """pip 目标：能确定当前版本就钉住，否则裸包名。
-
-    与 cli._pip_spec 同一意图 —— 自愈/自更新都不该在无人值守时拉"索引上当前的最新
-    版"。这里不复用 cli 的那个函数是为了避免 updater←→cli 的导入环（cli 只在
-    main() 里惰性导入 server，而 server 导入 updater）。
+    ``dhole_mcp.__version__`` 是唯一权威（pyproject 与 CHANGELOG 头部都这么声明）；
+    importlib.metadata 读的是安装那一刻的 dist-info，editable 安装下源码升版后
+    它会说谎，所以只作兜底。两者都拿不到就说 unknown，不猜。
     """
-    dist = _dist()
     try:
-        from importlib.metadata import version as _v
-        ver = (_v(dist) or "").strip()
-    except Exception:
-        ver = ""
-    return f"{dist}=={ver}" if ver else dist
-
-
-def update_index_url() -> str | None:
-    """Optional index url for the self-update pip call. 17.0 写死 None（pip 默认源）。"""
-    return None
-
-
-# ─── version probing ───────────────────────────────────────────────────────
-
-def check_version() -> tuple[str, str | None, bool | None]:
-    """Return (installed, latest, is_current).
-
-    installed: the importlib.metadata version, or "unknown" if the package
-    metadata is missing (a half-failed install / brick). latest: the current
-    PyPI version, or None when PyPI is unreachable *or* self-update is disabled.
-    is_current: latest == installed when latest is known, else None.
-    """
-    from importlib.metadata import version as _get_version
-    try:
-        installed = _get_version(_DIST_NAME)
-    except Exception:
-        installed = "unknown"
-    # `__init__.__version__` 是唯一权威（pyproject 与 CHANGELOG 头部都这么声明）；
-    # importlib.metadata 读的是安装那一刻的 dist-info，editable 安装下源码升版后
-    # 它会说谎——实测 16.2 的代码横幅显示 16.1。元数据只作兜底。
-    try:
-        from dhole_mcp import __version__ as _runtime_version
-        if _runtime_version and _runtime_version != installed:
-            installed = _runtime_version
-    except Exception:
+        from dhole_mcp import __version__ as runtime
+        if runtime:
+            return runtime
+    except Exception:  # noqa: BLE001
         pass
-
-    dist = update_package()
-    if not dist:
-        # Self-update is disabled in this fork: do not even hit the network.
-        # Until dhole-mcp is published there is nothing to compare against; the
-        # gate is the distribution metadata being resolvable, not a knob.
-        return installed, None, None
-
-    latest: str | None = None
     try:
-        import json
-        from urllib.request import urlopen, Request
-        req = Request(
-            f"https://pypi.org/pypi/{dist}/json",
-            headers={"User-Agent": "Dhole/" + installed},
-        )
-        with urlopen(req, timeout=5) as resp:
-            latest = json.loads(resp.read().decode()).get("info", {}).get("version")
-    except Exception:
-        pass
-
-    return installed, latest, (latest == installed if latest else None)
+        from importlib.metadata import version as _meta
+        return _meta(_DIST_NAME)
+    except Exception:  # noqa: BLE001
+        return "unknown"
 
 
-def pad_version(v: str) -> tuple[int, ...]:
-    """Parse a dotted version into a comparable int tuple (first 3 parts)."""
-    return tuple(int(p) for p in v.split(".")[:3])
-
-
-def _at_or_ahead(installed: str, target: str) -> bool:
-    """True if installed is parseable and >= target (so no update needed)."""
-    if not installed or installed == "unknown":
-        return False
-    try:
-        return pad_version(installed) >= pad_version(target)
-    except (ValueError, IndexError):
-        return installed == target
-
-
-def _advanced(new_ver: str, target: str) -> bool:
-    """True if, after a pip run, the installed version reached the target."""
-    if not new_ver or new_ver == "unknown":
-        return False
-    try:
-        return pad_version(new_ver) >= pad_version(target)
-    except (ValueError, IndexError):
-        return new_ver == target
-
-
+# ─── launcher + process helpers (只读：找到 launcher、数有几个在跑) ────
 # ─── launcher + process helpers (Windows file-lock handling) ───────────────
 
 def _dhole_launcher_path() -> str | None:
@@ -184,12 +87,6 @@ def _dhole_launcher_path() -> str | None:
     return None
 
 
-def _looks_like_file_lock_error(stderr: str) -> bool:
-    if not stderr:
-        return False
-    s = stderr.lower()
-    return ("winerror 32" in s or "being used by another process" in s
-            or ("permission denied" in s and "dhole" in s))
 
 
 def _other_dhole_pids() -> list[int]:
@@ -237,430 +134,22 @@ def _other_dhole_pids() -> list[int]:
     return pids
 
 
-def _stop_all_dhole() -> None:
-    """Kill all running dhole launcher processes (except this one)."""
-    import subprocess
-    pids = _other_dhole_pids()
-    if not pids:
-        return
-    try:
-        if sys.platform == "win32":
-            subprocess.run(["taskkill", "/IM", "dhole.exe", "/F"],
-                         capture_output=True, timeout=10,
-                         creationflags=0x08000000)
-        else:
-            for pid in pids:
-                try:
-                    os.kill(pid, 15)  # SIGTERM
-                except Exception:
-                    pass
-    except Exception:
-        pass
 
 
 
-def _dhole_home() -> str:
-    p = str(paths.home())
-    os.makedirs(p, exist_ok=True)
-    paths.harden_dir(p)
-    return p
-
-
-def repair_script_path() -> str:
-    return os.path.join(_dhole_home(), "repair.py")
-
-
-def _state_path(name: str) -> str:
-    return os.path.join(_dhole_home(), name)
-
-
-_REPAIR_SCRIPT = '''#!/usr/bin/env python3
-r"""Dhole repair - recover from a broken dhole install (failed update, brick).
-
-Run with:  python __REPAIR__
-Stops any running dhole process, force-reinstalls dhole-mcp from PyPI, verifies.
-Pure standard library - works even when the dhole-mcp package is gone, because
-this file lives in ~/.dhole (outside site-packages), so a failed pip uninstall
-of dhole-mcp never touches it.
-"""
-import subprocess, sys
-
-# Index override resolved at write time (empty list = pip's default index).
-_INDEX_ARGS = __INDEX_ARGS__
-
-def _stop():
-    if sys.platform == "win32":
-        subprocess.run(["taskkill", "/IM", "dhole.exe", "/F"], capture_output=True)
-    else:
-        # -x matches the process name exactly ("dhole"), not this script ("python").
-        subprocess.run(["pkill", "-x", "dhole"], capture_output=True)
-
-def _pip(*extra):
-    return subprocess.run(
-        [sys.executable, "-m", "pip", "install", *extra, *_INDEX_ARGS, "--quiet",
-         "--disable-pip-version-check"])
-
-def main():
-    print("Dhole repair: stopping any running dhole...")
-    _stop()
-    print("Dhole repair: force-reinstalling __SPEC__ ...")
-    # 钉到当前已装版本时不能再带 --upgrade（两者意图相反），故按 SPEC 形态选参数。
-    _pinned = "==" in "__SPEC__"
-    r = _pip("--force-reinstall", *([] if _pinned else ["--upgrade"]), "__SPEC__")
-    if r.returncode != 0:
-        print("Dhole repair: reinstall failed (pip exit %d)." % r.returncode)
-        print("  Try manually:  %s -m pip install --force-reinstall __SPEC__" % sys.executable)
-        return r.returncode
-    try:
-        from importlib.metadata import version as _v
-        print("Dhole " + _v("dhole-mcp") + "  repaired")
-        return 0
-    except Exception as e:
-        print("Dhole repair: still broken after reinstall: " + str(e))
-        print("  Reinstall all deps:  %s -m pip install --force-reinstall dhole-mcp" % sys.executable)
-        return 1
-
-if __name__ == "__main__":
-    sys.exit(main())
-'''
-
-
-def _write_repair_script() -> None:
-    """(Re)write ~/.dhole/repair.py so the brick-recovery safety net exists."""
-    index = update_index_url()
-    index_args = ["--index-url", index] if index else []
-    try:
-        with open(repair_script_path(), "w", encoding="utf-8") as f:
-            f.write(
-                _REPAIR_SCRIPT
-                .replace("__REPAIR__", repair_script_path())
-                # 生成脚本里的包名跟随自更新源，避免把上游包名写死
-                .replace(_DIST_NAME, _dist())
-                # 索引源同理：否则自愈会悄悄从默认 PyPI 拉包
-                .replace("__INDEX_ARGS__", repr(index_args))
-                # 重装目标钉在当前已装版本（取不到版本时才退回裸包名）
-                .replace("__SPEC__", _dist_spec())
-            )
-    except OSError:
-        pass  # home dir not writable; not fatal - the update can still proceed
-
-
-def _write_last_version(v: str) -> None:
-    if not v or v == "unknown":
-        return
-    try:
-        path = _state_path("last_version")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(v.strip())
-        paths.harden_file(path)
-    except OSError:
-        pass
-
-
-# ─── pip commands + runner ─────────────────────────────────────────────────
-
-def _pip_cmd(target: str) -> list[str]:
-    """Install `target` with core deps (no extras). Fast, reliable.
-
-    Uses NO --no-deps (unlike v10.x) so new core deps introduced in major
-    versions are installed. Does NOT include [all] so the heavy extras
-    (onnxruntime, tokenizers, rapidocr) are NOT pulled. Existing deps that
-    are already satisfied are left alone by pip.
-    """
-    cmd = [sys.executable, "-m", "pip", "install",
-           f"{_dist()}=={target}", "--quiet", "--disable-pip-version-check",
-           "--no-python-version-warning"]
-    index = update_index_url()
-    if index:
-        cmd += ["--index-url", index]
-    return cmd
-
-
-def _heal_cmd(target: str) -> list[str]:
-    """Force-reinstall `target` (with core deps) - the self-heal / brick-recovery pass.
-
-    Uses NO --no-deps so missing core deps are installed. Does NOT include [all]
-    so heavy extras are not pulled.
-    """
-    cmd = [sys.executable, "-m", "pip", "install", "--force-reinstall",
-           f"{_dist()}=={target}", "--quiet", "--disable-pip-version-check",
-           "--no-python-version-warning"]
-    index = update_index_url()
-    if index:
-        cmd += ["--index-url", index]
-    return cmd
 
 
 
-def _run_pip(cmd: list[str]) -> tuple[int, str]:
-    """Run pip, capturing stderr for diagnosis. Returns (returncode, stderr)."""
-    import subprocess
-    try:
-        r = subprocess.run(cmd, timeout=300, capture_output=True, text=True)
-        return r.returncode, (r.stderr or "")
-    except subprocess.TimeoutExpired:
-        return 124, "timed out"
-    except Exception as e:
-        return 1, str(e)
 
 
-def _diagnose(stderr: str) -> str:
-    if _looks_like_file_lock_error(stderr):
-        return "a running dhole server holds the launcher"
-    s = (stderr or "").lower()
-    if "no matching distribution" in s or "could not find a version" in s:
-        return "version not found on PyPI"
-    if "timed out" in s or "timeout" in s:
-        return "network timed out"
-    return "pip failed"
 
 
-# ─── the detached Windows helper (standalone python -c, survives brick) ────
-
-def _build_helper_source(target: str, repair_path: str, parent_pid: int, full: bool = False) -> str:
-    """Build the standalone helper source. Pure stdlib, no dhole_mcp import,
-    so it runs even if the package is mid-replacement or bricked.
-
-    The helper: waits for the parent launcher to exit, stages the launcher aside
-    (rename trick; stops a server only if it holds a stale .old), runs pip
-    --no-deps, self-heals on verify-fail, prints a clean result. Plain ASCII
-    output (no ANSI) since it runs detached after the parent's color setup is
-    gone and may run on a legacy console.
-    """
-    return '''import os, sys, time, subprocess
-PARENT = __PARENT_PID__
-TARGET = __TARGET__
-REPAIR = __REPAIR__
-EXE = __EXE__
-WIN = (sys.platform == "win32")
-FULL = __FULL__
-
-def _wait_parent_exit(timeout=15):
-    if not WIN or not PARENT:
-        return
-    end = time.time() + timeout
-    while time.time() < end:
-        try:
-            os.waitpid(PARENT, os.WNOHANG)
-            return
-        except (ChildProcessError, OSError):
-            return  # not our child (the launcher was) - assume gone after sleep
-        except Exception:
-            break
-    time.sleep(2)  # fallback: give the launcher time to release the file
-
-def _dhole_pids():
-    out = []
-    if not WIN:
-        return out
-    my = os.getpid()
-    try:
-        o = subprocess.check_output(
-            ["tasklist", "/FI", "IMAGENAME eq dhole.exe", "/FO", "CSV", "/NH"],
-            text=True, timeout=10, creationflags=0x08000000)
-    except Exception:
-        return out
-    for ln in o.splitlines():
-        ps = [x.strip().strip(chr(34)) for x in ln.split(chr(34) + "," + chr(34))]
-        if len(ps) >= 2 and ps[0].lower() == "dhole.exe":
-            try:
-                pid = int(ps[1])
-            except ValueError:
-                continue
-            if pid != my:
-                out.append(pid)
-    return out
-
-def _stop_all_dhole():
-    if WIN:
-        subprocess.run(["taskkill", "/IM", "dhole.exe", "/F"], capture_output=True)
-    else:
-        subprocess.run(["pkill", "-x", "dhole"], capture_output=True)
-
-def _stage():
-    # Rename the live dhole.exe -> dhole.exe.old so pip can write a fresh one
-    # to the now-free path. Windows permits RENAMING a running .exe (it only
-    # forbids overwrite/delete), so a server keeps running from the .old until
-    # it restarts - no need to stop it. The only stop is for a stale .old left
-    # by a previous update that a server still runs from.
-    if not EXE or not WIN:
-        return True
-    old = EXE + ".old"
-    if os.path.exists(old):
-        for _ in range(2):
-            try:
-                os.remove(old)
-                break
-            except OSError:
-                print("  a stale dhole.exe.old is locked - stopping the old dhole server...")
-                _stop_all_dhole()
-                time.sleep(2)
-    try:
-        os.rename(EXE, old)
-        return True
-    except OSError:
-        # Rename failed (e.g. read-only system install). pip will likely fail
-        # too; the self-heal pass and the repair.py fallback handle the rest.
-        return False
-
-def _pip(*extra):
-    r = subprocess.run(
-        [sys.executable, "-m", "pip", "install", *extra, "--quiet",
-         "--disable-pip-version-check"],
-        capture_output=True, text=True, timeout=300)
-    return r.returncode, (r.stderr or "")
-
-def _ver():
-    try:
-        from importlib.metadata import version as _v
-        return _v("dhole-mcp")
-    except Exception:
-        return "unknown"
-
-def _pad(v):
-    try:
-        return tuple(int(x) for x in v.split(".")[:3])
-    except Exception:
-        return None
-
-def _advanced(new):
-    if not new or new == "unknown":
-        return False
-    np, tp = _pad(new), _pad(TARGET)
-    if np and tp:
-        return np >= tp
-    return new == TARGET
-
-_wait_parent_exit()
-# Move below any shell prompt that printed when the parent exited.
-try:
-    sys.stdout.write(chr(10)); sys.stdout.flush()
-except Exception:
-    pass
-
-servers_before = _dhole_pids()
-if servers_before:
-    print("  stopping " + str(len(servers_before)) + " running dhole server(s)...")
-    _stop_all_dhole()
-    time.sleep(1)
-    servers_before = []
-_stage()
-
-if FULL:
-    rc, stderr = _pip("--force-reinstall", "--no-deps", "dhole-mcp[all]==" + TARGET)
-else:
-    rc, stderr = _pip("dhole-mcp==" + TARGET)
-if not _advanced(_ver()):
-    print("  first pass did not complete - recovering...")
-    if FULL:
-        rc2, stderr2 = _pip("--force-reinstall", "--no-deps", "dhole-mcp[all]==" + TARGET)
-    else:
-        rc2, stderr2 = _pip("--force-reinstall", "dhole-mcp==" + TARGET)
-    if not _advanced(_ver()):
-        print("  Dhole  " + ("reinstall" if FULL else "update") + " failed - " + (stderr2 or stderr or "pip failed").strip().splitlines()[-1:][0] if (stderr2 or stderr) else "pip failed")
-        print("  recover with:  python \\"" + REPAIR + "\\"")
-        sys.exit(1)
-
-# Best-effort: sweep the staged .old (fails if a server still maps it - fine).
-# Safety: if pip didn't recreate the .exe (already satisfied, no --force-reinstall),
-# restore it from the .old backup.
-try:
-    if WIN and EXE:
-        if os.path.exists(EXE + ".old"):
-            if not os.path.exists(EXE):
-                os.rename(EXE + ".old", EXE)
-            else:
-                os.remove(EXE + ".old")
-except OSError:
-    pass
-
-new = _ver()
-print("  Dhole  v" + new + "  " + ("reinstalled" if FULL else "updated"))
-if servers_before:
-    print("  restart your running dhole server (PID " + ", ".join(str(p) for p in servers_before) + ") to use it")
-'''.replace("__PARENT_PID__", str(parent_pid)).replace("__TARGET__", repr(target)).replace("__REPAIR__", repr(repair_path)).replace("__EXE__", repr(_dhole_launcher_path())).replace("__FULL__", str(full)).replace(_DIST_NAME, _dist())
 
 
-def _spawn_helper(target: str, repair_path: str, parent_pid: int, full: bool = False) -> bool:
-    """Spawn the detached Windows helper (inherits this console). Returns True
-    if spawned. `full=True` triggers a complete reinstall with deps + [all]
-    extras instead of the usual --no-deps update."""
-    import subprocess
-    src = _build_helper_source(target, repair_path, parent_pid, full)
-    try:
-        subprocess.Popen([sys.executable, "-c", src])
-        return True
-    except Exception:
-        return False
+
 
 
 # ─── public commands ───────────────────────────────────────────────────────
-
-def do_update(target: str | None = None) -> None:
-    """Reliable, brick-proof self-update. `target` pins a version (rollback);
-    None means the latest on PyPI. See the module docstring for the design."""
-    from dhole_mcp import cli_ui as ui
-    installed, latest, _is_current = check_version()
-    if not update_package():
-        # Refuse even an explicit target: `pip install dhole-mcp==X` pulls the
-        # UPSTREAM distribution, which is not this fork.
-        print(ui.branded(ui.ver(installed), ui.dim("self-update off")))
-        print("  " + ui.dim(f"personal fork - refusing to install {_dist()} from PyPI over it."))
-        print("  " + ui.dim("update with")
-              + "  " + ui.cmd("git pull && python -m pip install -e ."))
-        return
-    if target is None:
-        target = latest
-
-    if not target:
-        print(ui.branded(ui.ver(installed if installed != "unknown" else "?"),
-                         ui.dim("couldn't reach PyPI")))
-        print("  " + ui.warn("check your connection, then") + "  " + ui.cmd("dhole -u"))
-        return
-
-    if _at_or_ahead(installed, target):
-        print(ui.branded(ui.ver(installed), ui.ok("up to date")))
-        return
-
-    # Ensure the safety net + rollback state exist before touching anything.
-    _write_repair_script()
-    _write_last_version(installed)
-    repair = repair_script_path()
-
-    if installed == "unknown":
-        print(ui.branded(ui.red("install corrupted"), ui.dim("recovering...")))
-    else:
-        print(ui.branded(ui.ver_transition(installed, target), ui.dim("updating...")))
-
-    if sys.platform == "win32":
-        # Detached helper: waits for this launcher to exit, frees it via the
-        # rename trick, runs pip, self-heals, prints the result. The parent
-        # must exit so dhole.exe is releasable.
-        if _spawn_helper(target, repair, os.getpid()):
-            print("  " + ui.dim("(completes in this window once this command exits)"))
-            return
-        # Spawn failed - last resort: point at the surviving repair script.
-        print("  " + ui.err("could not start the updater"))
-        print("  " + ui.warn("recover with") + "  " + ui.cmd(f'python "{repair}"'))
-        return
-
-    # POSIX: no file lock. Kill stale servers, run pip with self-heal + verify.
-    others = _other_dhole_pids()
-    if others:
-        print("  " + ui.dim(f"stopping {len(others)} dhole server(s)..."))
-        _stop_all_dhole()
-    rc, stderr = _run_pip(_pip_cmd(target))
-    if not _advanced(check_version()[0], target):
-        print("  " + ui.dim("first pass did not complete - recovering..."))
-        rc2, stderr2 = _run_pip(_heal_cmd(target))
-        new_ver = check_version()[0]
-        if not _advanced(new_ver, target):
-            print("  " + ui.err("update failed: " + _diagnose(stderr2 or stderr)))
-            print("  " + ui.warn("recover with") + "  " + ui.cmd(f'python "{repair}"'))
-            sys.exit(1)
-    new_ver = check_version()[0]
-    print(ui.branded(ui.ver(new_ver), ui.ok("updated")))
-
 
 def print_version() -> None:
     """Render `dhole -v`: the version panel, then what this install can actually do."""
@@ -669,56 +158,23 @@ def print_version() -> None:
 
 
 def _print_version_panel() -> None:
-    """A compact bordered version panel (or a clean error panel when the install
-    is corrupted, pointing at the safe repair path)."""
+    """版本面板：我是谁、第几版、以及这一版该怎么升 —— 只打印，不执行。
+
+    过去这里会先联网问 PyPI"最新是哪版"，然后印出 "up to date" / "vX available" 并
+    给一句 `dhole -u`。三条都不成立了：这个 fork 不发 PyPI（问了也只会拿到上游
+    dondai1234/master-fetch 的版本，那不是可比对象），而 `-u` 已经删掉。所以现在
+    说的是一句能照着做的话，而不是一个状态。
+    """
     from dhole_mcp import cli_ui as ui
     W = 50
     inner = W - 4
-    installed, latest, is_current = check_version()
-    if installed == "unknown":
-        repair = repair_script_path()
-        body = [
-            ui.dim("package metadata is missing - a previous update was"),
-            ui.dim("interrupted. The launcher works, but pip lost the version."),
-            "",
-            ui.dim("recover with:"),
-            "  " + ui.cmd(f'python "{repair}"'),
-            ui.dim("or:  dhole -u  (reinstalls the latest version)"),
-        ]
-        print(ui.panel([ui.err("install corrupted")] + body, 62))
-        return
-    if not update_package():
-        # Self-update is intentionally off in this fork. Reporting "couldn't
-        # reach PyPI" here would be a lie: we never looked.
-        print(ui.panel([
-            ui.lr(ui.wordmark(), "", inner),
-            ui.lr(ui.ver(installed), ui.dim("self-update off"), inner),
-        ], W))
-        print("  " + ui.dim("personal fork - not updating from PyPI. update with")
-              + "  " + ui.cmd("git pull && python -m pip install -e ."))
-        return
-    if latest is None:
-        print(ui.panel([
-            ui.lr(ui.wordmark(), "", inner),
-            ui.lr(ui.ver(installed), ui.dim("couldn't reach PyPI"), inner),
-        ], W))
-        print("  " + ui.warn("check your connection, then") + "  " + ui.cmd("dhole -v"))
-        return
-    try:
-        up_to_date = pad_version(installed) >= pad_version(latest)
-    except (ValueError, IndexError):
-        up_to_date = bool(is_current)
-    if up_to_date:
-        print(ui.panel([
-            ui.lr(ui.wordmark(), "", inner),
-            ui.lr(ui.ver(installed), ui.ok("up to date"), inner),
-        ], W))
-    else:
-        print(ui.panel([
-            ui.lr(ui.wordmark(), "", inner),
-            ui.lr(ui.ver(installed), ui.magenta(f"v{latest} available"), inner),
-        ], W))
-        print("  " + ui.warn("update with") + "  " + ui.cmd("dhole -u"))
+    print(ui.panel([
+        ui.lr(ui.wordmark(), "", inner),
+        ui.lr(ui.ver(installed_version()), ui.dim("no self-update"), inner),
+    ], W))
+    print("  " + ui.dim("personal fork - update by hand with")
+          + "  " + ui.cmd('git pull && python -m pip install -e ".[all]"'))
+
 
 
 # ─── capability report (`dhole -v`) ─────────────────────────────────────────
@@ -1304,7 +760,7 @@ def doctor() -> int:
     except Exception:  # noqa: BLE001
         checks.append((
             "metadata consistent", "fail", "package metadata missing",
-            f'python "{repair_script_path()}"',
+            "python -m pip install -e .",
         ))
 
     stale_exe = ""
@@ -1315,18 +771,6 @@ def doctor() -> int:
             stale_exe = "dhole.exe.old locked by a running server"
     checks.append(("launcher clean", "ok" if not stale_exe else "info",
                    stale_exe or "no stale .old", ""))
-
-    try:
-        _write_repair_script()
-        rp = repair_script_path()
-    except Exception:  # noqa: BLE001
-        # A broken state dir must not take doctor down with it - this is the
-        # command a user runs precisely when things are already broken.
-        rp = ""
-    rp_ok = bool(rp) and os.path.exists(rp)
-    checks.append(("repair script ready", "ok" if rp_ok else "fail",
-                   _short(rp) if rp else "could not resolve the state dir",
-                   "" if rp_ok else "check DHOLE_HOME / permissions, then re-run"))
 
     try:
         stale_pids = _other_dhole_pids()

@@ -13,8 +13,6 @@ single source of truth for those paths:
       circuit_breaker.json     engine cooldown state
       engine_stats.json        per-engine parse yield (who returned 0 usable results)
       usage.jsonl              opt-in local call log
-      last_version             last version offered by the updater
-      repair.py                self-heal script (stdlib-only, survives a broken install)
 
 Not in here, on purpose:
 

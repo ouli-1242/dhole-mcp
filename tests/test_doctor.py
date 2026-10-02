@@ -14,7 +14,8 @@ from dhole_mcp import updater
 
 @pytest.fixture
 def isolated_home(tmp_path, monkeypatch):
-    """Point every state path at a throwaway dir - doctor writes repair.py."""
+    """Point every state path at a throwaway dir - doctor probes the home it writes
+    its writable-check probe into."""
     home = tmp_path / "home"
     monkeypatch.setenv("DHOLE_HOME", str(home))
     return home
@@ -69,15 +70,17 @@ class TestDoctorFailuresAreLoud:
         assert "state dir writable" in out
         assert "DHOLE_HOME" in out
 
-    def test_unusable_state_dir_does_not_crash_the_repair_check(
+    def test_unusable_state_dir_is_reported_not_raised(
             self, isolated_home, monkeypatch, capsys):
-        """repair_script_path() also resolves through the state dir."""
+        """doctor 是"已经坏了才去跑"的命令：状态目录打不开要印成一行 fail，
+        不能把自己崩掉，也不能顺手写一个会重装、会杀进程的脚本进别的目录。"""
         def boom(*args, **kwargs):
             raise PermissionError("denied")
 
         monkeypatch.setattr(updater.paths, "home", boom)
         assert updater.doctor() == 1
-        assert "repair script ready" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "state dir" in out, out
 
     def test_missing_metadata_fails(self, isolated_home, monkeypatch, capsys):
         import importlib.metadata as md

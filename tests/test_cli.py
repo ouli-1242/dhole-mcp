@@ -1,10 +1,11 @@
-"""CLI tests: self-healing entry point, version probing, version comparison.
+"""CLI tests: the entry point's structure, the doctor/engines subcommand surface.
 
-Tests the real cli.py module structure and updater functions. No network
-calls for version probing (PyPI fetch is mocked). The self-heal flow is
-tested BEHAVIORALLY: a subprocess blocks every heavy dependency and then
-imports dhole_mcp.cli — the whole point of the entry point is that it must
-import (and self-heal) even on a broken install.
+Tests the real cli.py module structure and server.main() argument handling. No
+network calls. The entry point is tested BEHAVIORALLY: a subprocess blocks every
+heavy dependency and then imports dhole_mcp.cli — the whole point is that it must
+still import on a broken install. What it *says* when the import fails, and the
+promise that it says it without installing anything, is pinned in
+tests/test_self_heal_prints_only.py.
 """
 
 import os
@@ -14,7 +15,6 @@ from pathlib import Path
 
 import pytest
 
-from dhole_mcp.updater import check_version, pad_version, _at_or_ahead
 
 _SRC = str(Path(__file__).resolve().parent.parent / "src")
 
@@ -91,110 +91,6 @@ class TestSearchPoolRow:
     def test_env_override_still_wins(self, monkeypatch):
         row = self._pool_row(monkeypatch, "bing,yandex")
         assert row == "bing,yandex"
-
-
-# ─── Repair script ─────────────────────────────────────────────────
-
-class TestRepairScript:
-
-    def test_repair_script_path(self, tmp_path, monkeypatch):
-        """repair.py should be at ~/.dhole/repair.py"""
-        import dhole_mcp.updater as updater
-        home = str(tmp_path)
-        monkeypatch.setattr(os.path, "expanduser", lambda x: home)
-        path = updater.repair_script_path()
-        assert ".dhole" in path
-        assert "repair.py" in path
-
-    def test_run_repair_writes_under_dhole_home(self, tmp_path, monkeypatch):
-        """KB-7：cli 的 repair 也要跟随 DHOLE_HOME，不能写进真实 home。
-
-        这里同时把 ``expanduser("~")`` 指向另一个目录：如果代码退回硬编码
-        ``~/.dhole``，文件会落在那里，第二条断言就会抓到。
-        """
-        import dhole_mcp.cli as cli
-
-        state = tmp_path / "moved_state"
-        real_home = tmp_path / "real_home"
-        monkeypatch.setenv("DHOLE_HOME", str(state))
-        monkeypatch.setattr(os.path, "expanduser", lambda x: str(real_home))
-
-        launched: list[list[str]] = []
-
-        class _Done:
-            returncode = 0
-
-        monkeypatch.setattr(
-            subprocess, "run",
-            lambda cmd, **k: (launched.append(cmd), _Done())[1],
-        )
-
-        assert cli._run_repair() == 0
-        assert (state / "repair.py").exists(), "repair.py 该落在 DHOLE_HOME 下"
-        assert not real_home.exists(), "不许在真实 home 下建任何东西"
-        assert launched and launched[0][1] == str(state / "repair.py")
-
-
-# ─── Version probing ──────────────────────────────────────────────
-
-class TestVersionProbing:
-
-    def test_pad_version_basic(self):
-        assert pad_version("11.1.6") == (11, 1, 6)
-
-    def test_pad_version_extra_parts_ignored(self):
-        assert pad_version("11.1.6.7.8") == (11, 1, 6)
-
-    def test_pad_version_short(self):
-        assert pad_version("11.1") == (11, 1)
-
-    def test_at_or_ahead_current(self):
-        assert _at_or_ahead("11.1.6", "11.1.6") is True
-
-    def test_at_or_ahead_newer(self):
-        assert _at_or_ahead("11.2.0", "11.1.6") is True
-
-    def test_at_or_ahead_older(self):
-        assert _at_or_ahead("11.1.5", "11.1.6") is False
-
-    def test_at_or_ahead_unknown_returns_false(self):
-        assert _at_or_ahead("unknown", "11.1.6") is False
-
-    def test_at_or_ahead_empty_returns_false(self):
-        assert _at_or_ahead("", "11.1.6") is False
-
-    def test_check_version_returns_tuple(self):
-        # PyPI fetch may fail in tests; just check the return type
-        result = check_version()
-        assert len(result) == 3
-        installed, latest, is_current = result
-        assert isinstance(installed, str)
-        # latest may be None if PyPI unreachable
-        if latest is not None:
-            assert isinstance(latest, str)
-        # is_current may be None if latest is None
-        if is_current is not None:
-            assert isinstance(is_current, bool)
-
-
-# ─── Version comparison edge cases ────────────────────────────────
-
-class TestVersionComparison:
-
-    def test_major_version_comparison(self):
-        assert _at_or_ahead("12.0.0", "11.9.9") is True
-
-    def test_minor_version_comparison(self):
-        assert _at_or_ahead("11.2.0", "11.1.9") is True
-
-    def test_patch_version_comparison(self):
-        assert _at_or_ahead("11.1.7", "11.1.6") is True
-
-    def test_same_version(self):
-        assert _at_or_ahead("11.1.6", "11.1.6") is True
-
-    def test_malformed_installed(self):
-        assert _at_or_ahead("not-a-version", "11.1.6") is False
 
 
 # ─── W5 · CLI syntax unification ────────────────────────────────────

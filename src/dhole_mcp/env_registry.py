@@ -262,10 +262,6 @@ _CONFIG_BASENAME = "config.json"
 #:   DHOLE_TOOLS             a whitelist: honouring it from a file a caller cannot
 #:                           see would drop tools silently for someone who set one
 #:                           env entry. It belongs to the host's visible env block.
-#:   DHOLE_UPDATE_PACKAGE    the recovery path. The repair script runs before the
-#:   DHOLE_UPDATE_INDEX_URL  package may be importable at all, and it has to know
-#:   DHOLE_NO_AUTO_REPAIR    which distribution to reinstall from a state directory
-#:                           that may itself be the thing that is broken.
 ENV_ONLY = frozenset({
     "DHOLE_HOME", "DHOLE_TOOLS",
 })
