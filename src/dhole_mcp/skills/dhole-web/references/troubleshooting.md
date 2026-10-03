@@ -32,6 +32,15 @@ This IP is being watched. The three cooldown tiers are fixed at 60s / 600s / 600
 3. Still thin: the site needs login (→ "Sites behind login" below) or runs DataDome / Akamai / interactive Turnstile (unbeatable) — **say so honestly**; never answer from the shell
 4. Tell the user: "This site blocks plain scraping; what I got is the pre-login shell. For real content I'd need your session cookie, or we use a public source."
 
+### `nested_no_match` / `nested_empty` / fewer records than the page has
+
+Both are failures to fix, not empty answers to report — and **no second-layer request was sent** for the first one, so retrying costs nothing until the selector changes.
+
+- `nested_no_match` (0 usable hrefs): either the selector names something that doesn't carry links, or the page is a JS shell. Widen it to the element that CONTAINS the `<a>` (`.card`, not `.card a`) — the href is read from the matched element, its first descendant `<a>`, or its nearest ancestor `<a>`. If `total_extracted_chars` is a few hundred and `page_type` is `shell`/`unknown`, no selector will help: re-call with `force_fetcher='stealthy'`.
+- `nested_empty` (every second-layer page returned no field): `nested_fields` doesn't match that site's markup. Read ONE of those pages without `nested_*` (`css_selector` or a screenshot of the structure) and re-derive the selectors; `type: "array"` on a field that is a list on the page (a topic page's 20 works) or you get its first item.
+- Fewer records than the page has: look for `truncation=nested_budget` in `summary` — the default expands 8 and the ceiling is 30. Say the cap in your answer rather than reporting "all". Past 30, the job is `web_crawl`.
+- A record carrying `"error": "robots_disallowed"`: that item was never requested (each second-layer link passes its own robots check); `robots_skipped` in `summary` counts them.
+
 ### `robots_disallowed`
 
 Default compliance: **zero requests** were sent for that URL. A one-shot waiver is `ignore_robots=true` — the user's compliance decision, ask first. Process-wide: `DHOLE_IGNORE_ROBOTS=1`. Whether robots are honored right now: read the `metadata.robots` field on every response (it says `bypassed` when process-wide off). When robots.txt itself is unfetchable (5xx / timeout) the tool proceeds and retries at a 60s short TTL — don't read "couldn't check" as "compliance passed".

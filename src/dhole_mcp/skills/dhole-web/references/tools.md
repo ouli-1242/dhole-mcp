@@ -34,6 +34,27 @@ Repeated records REQUIRE a "container selector + sub-schema" — sub-selectors e
   "properties": {"text": {"selector": ".text"}, "tags": {"type": "array", "selector": ".tag"}}}}}
 ```
 
+## Two layers in one call (`nested_*`)
+
+`schema` nesting scopes selectors **inside one document**; it cannot reach a second page. When the items you want each live on their own page — 8 featured collections and the works inside each, a result list and its detail pages — that is a fan-out over URLs, and `nested_selector` + `nested_fields` do it in one call instead of nine:
+
+```json
+{"url": "https://quotes.toscrape.com/", "nested_selector": "div.quote",
+ "nested_fields": [{"name": "author", "selector": "h3"},
+                   {"name": "bio", "selector": "p", "type": "array"}],
+ "nested_max": 10}
+```
+
+Measured on that call: 8 records (10 containers, 8 unique authors), 8.1s, `summary` ending `nested: 8 links expanded, rungs=2, ok 8 / empty 0 / failed 0`. Read the three things the fan-out owes you:
+
+- **The href is taken from the matched element, its first descendant `<a>`, or its nearest ancestor `<a>`** — in that order. So `.topic-card` works even when the card is a `<div>` holding the link, which is the common shape. Duplicates collapse to one record, so `matched` and `expanded` are different numbers and both appear in `summary`.
+- **`truncation=nested_budget` means "there were more"** — the default is 8 links and the ceiling is 30. A list page with 12 sections and an answer of 8 records is only correct if you raised `nested_max` or said the cap out loud. Past 30 it stops being a read and becomes a crawl: use `web_crawl` / `web_discover`.
+- **Each second-layer link passes its own robots.txt check before any request** — the fan-out took that job off your hands, so a disallowed item comes back as `{"error": "robots_disallowed"}` with `robots_skipped` counted in `summary`, and nothing was sent for it. If you would have checked per URL by hand, the tool now does it as part of the call.
+
+Second-layer pages are read as whole documents (like `schema=`), so a field's `type: "array"` is what separates "the one title on that page" from "the 20 works listed there". Concurrency is 6 lanes. Not combinable with `urls=`, `cdp_url=` or `actions=` — each of those would silently drop one side, so the call is refused before any request goes out.
+
+`nested_no_match` (0 usable hrefs) and `nested_empty` (every page returned no field) are both **failures, not empty answers**: the first is a selector problem (widen it to the container, or the page is a JS shell — retry with `force_fetcher='stealthy'`), the second is a `nested_fields` problem. Neither is fixed by re-sending the same call.
+
 ## web_request: one write, sent once
 
 Since 17.0 a non-GET is its own tool: `web_request(url=, method=, body=, content_type=)`. `web_read` refuses `method=` — reading and writing are different jobs, and the write's rules used to live in a branch of the read.

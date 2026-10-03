@@ -31,6 +31,7 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 | Only need one block of a page | `web_read` + `focus="keywords"` (BM25 extraction); HTML can also take `css_selector` |
 | Send to an API (POST / PUT / PATCH / DELETE / HEAD) | `web_request` — never `web_read`, which refuses `method=`. One write per call, and it goes out **once**: no retry, no cache, no browser replay (`references/tools.md` "web_request") |
 | Many pages on one site | `web_crawl`: `sitemap=true` for a one-request URL map, then `web_read(urls=[...])` for the picks |
+| A list page whose items each live on their own page (8 topics → the works inside each) | `web_read` + `nested_selector` + `nested_fields` — ONE call follows the links (8 by default, cap 30) and returns one record per item; `truncation=nested_budget` in `summary` says what the cap hid, and each second-layer link passes its own robots.txt check |
 | Only want to know what URLs a site holds | `web_discover` — the map with no bodies read; `sitemap=true` is the one-request way to get it |
 | Track a site's latest updates | `feed_read` (pass the site homepage; it finds the feed); poll incrementally with `since=` |
 | Resolve a short/tracking link | `web_resolve` (no body download) |

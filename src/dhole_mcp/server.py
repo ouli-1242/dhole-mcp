@@ -4968,6 +4968,10 @@ _SF_PARAMS = frozenset({
     # 经由这条管线走），公开面上它属于另一颗工具。
     "cache_ttl", "offset", "focus", "focus_mode", "focus_engine",
     "extraction_type", "force_fetcher", "urls",
+    # 17.0 §5 E-13：「列表页 → 每项详情页」这两层的一次摊平。它们是读法参数不是
+    # 伪装参数，所以留在这扇门；`schema=` 的嵌套解决的是同一篇文档里的作用域，
+    # 这两层是另外 N 篇文档。
+    "nested_selector", "nested_fields", "nested_max",
 })
 _SC_PARAMS = frozenset({
     "max_pages", "max_depth", "path_include", "path_exclude",
@@ -7445,6 +7449,10 @@ class MasterFetchServer:
         content_type: Annotated[Optional[str], Field(description="Content-Type for the body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json.")] = None,
         schema: Annotated[Optional[Dict[str, Any]], Field(description="JSON schema for structured data extraction. Each property can have a 'selector' (CSS) for direct DOM extraction. Returns structured JSON instead of markdown. No LLM needed. Needs a non-empty 'properties' map (a JSON string is also accepted); an unusable schema raises instead of silently returning markdown. A property carrying its OWN 'properties' (or items.properties) plus a selector extracts one record per matched element, child selectors evaluated inside that element - how a repeated list (quotes, products, rows) keeps its grouping instead of flattening into one array of every tag on the page. Up to 200 records per field.")] = None,
         confirm: Annotated[bool, Field(description="Approval for a first-time sensitive action on this call. Today that means cdp_url: attaching your real Chrome hands over every logged-in site's cookies, so the FIRST attach to a host is refused with cdp_authorization_required and nothing executed - re-call with confirm=true to authorize that host (remembered on disk; delete cdp_hosts.json in the dhole state directory to revoke). False (default) = nothing sensitive is approved.")] = False,
+        # 17.0 §5 E-13：两层摊平。三颗参数一起读才读得通，所以描述里互相点名。
+        nested_selector: Annotated[Optional[str], Field(description="Two layers in one call: a CSS selector on THIS page naming the elements to follow into the second layer (e.g. '.topic-card', 'a[href*=\"/works/\"]'). Each matched element becomes one record: its href is fetched (6 at a time, up to nested_max) and nested_fields are extracted from that page. The href is read from the element itself, else its first descendant <a>, else its nearest ancestor <a> - so a card that is not itself an <a> still resolves. Requires nested_fields; returns structured JSON; reads this page as a whole document. 0 links matched is reported as nested_no_match (the selector, or this page is a JS shell), not as an empty answer.")] = None,
+        nested_fields: Annotated[Optional[Any], Field(description="What to read on each second-layer page, as a list: [{'name': '作品', 'selector': '.work-item a', 'type': 'array'}] or {'作品': '.work-item a'} (a JSON string is accepted). 'type': 'array' means every match on that page (a list of works); without it you get the first one. 1-12 fields, each selector guarded like schema= ones.")] = None,
+        nested_max: Annotated[Optional[int], Field(description="How many of THIS page's matched links to expand (default 8, max 30). What the cap hid is reported as truncation=nested_budget in the summary, so 'these 8' is never mistaken for 'all of them'. Pass 0 to fan out nothing and just read this page.")] = None,
     ) -> ResponseModel:
         """Fetch a URL (or multiple URLs) with automatic anti-bot escalation.
 
@@ -7505,6 +7513,69 @@ class MasterFetchServer:
         extra_headers = None
         anti_detect = _idvals["anti_detect"]
         _IDENTITY_APPLIED.set(_idnote)
+        # §5 E-13 的三颗参数在**任何请求发出之前**解析完：一个读不懂的字段规格如果
+        # 走到第二层才被发现，调用方付了 1 + 8 次请求的钱，收到的却是 8 个空对象。
+        _nested_n = 0
+        _nested_props: dict = {}
+        if nested_selector is not None:
+            from dhole_mcp import nested as _nested_mod
+            _nested_n = _nested_mod.nested_cap(nested_max)
+            if _nested_n == 0:
+                # "我看见了这层链接，这一次不展开"——落回普通读法，但要在 summary 里
+                # 说清这不是默认行为，否则 nested_max=0 读起来像被忽略了。
+                if _ARG_NOTES.get() is not None:
+                    _ARG_NOTES.get().append(
+                        "nested_max=0: this page only, no second-layer request sent")
+            else:
+                if urls is not None:
+                    # 批量里每个 URL 各自再进一次 web_read，nested_* 传不下去 —— 与
+                    # cdp_url 同一类静默降级（闸口先过，这次调用不落任何扇出）。
+                    return _invalid_request_result(
+                        url or "", "nested_selector= cannot be combined with urls=: "
+                        "the fan-out is per page, so a batch would read every URL "
+                        "without expanding any of them",
+                        next_action=("Call web_read once per list page with "
+                                     "nested_selector=, or pass the second-layer URLs "
+                                     "yourself as urls=."))
+                if cdp_url or identity.get("cdp"):
+                    return _invalid_request_result(
+                        url or "", "nested_selector= cannot be combined with cdp_url=: "
+                        "the attach is per call and the second-layer pages are fetched "
+                        "without it",
+                        next_action=("Read the list page with cdp_url= (no nested_*), "
+                                     "then web_read(urls=[...]) the links it gave you."))
+                if actions:
+                    # 扇出这条路自己负责第一层的取回，动作链在它后面才跑 —— 不说就会
+                    # 变成"动作排了队、一次没执行"（schema + actions 当年同一句话）。
+                    return _invalid_request_result(
+                        url or "", "nested_selector= cannot be combined with actions=: "
+                        "the fan-out reads this page as it stands, so the actions would "
+                        "never run",
+                        next_action=("Run the actions with web_act first, take the list "
+                                     "page's URLs from that answer, then web_read(urls=[...]) "
+                                     "them - or drop actions= if the links are already in "
+                                     "the HTML."))
+                try:
+                    _nested_props = _nested_mod.normalize_nested_fields(nested_fields)
+                    if not _nested_props:
+                        raise ValueError(
+                            "nested_selector= needs nested_fields=: without a field "
+                            "spec there is nothing to read on the second-layer pages, "
+                            "and an empty record per link is not an answer")
+                    # 注入守卫跟着选择器进第二层（与 G14 对 schema 的要求同一待遇）：
+                    # 只守第一层的话，nested_fields 就是绕过 validate_css_selector
+                    # 的那条路。
+                    _nested_mod_selector = validate_css_selector(nested_selector)
+                    _validate_schema_selectors(_nested_props)
+                except (ValueError, SecurityError) as e:
+                    return _invalid_request_result(
+                        url or "", f"invalid nested_* arguments: {e}",
+                        next_action=("Correct them and call again - no request was made. "
+                                     "nested_fields is [{'name': ..., 'selector': ...}] "
+                                     "(add \"type\": \"array\" for a list), and "
+                                     "nested_selector is one CSS selector on THIS page."))
+                nested_selector = _nested_mod_selector
+
         # 安全闸 1/2（G33 → 17.0 先问再记）：CDP attach 的授权点在工具入口，
         # 单条与 bulk 两条路都在这里过闸；_open_session 只消费已过闸的结果。
         gate_err, _cdp_allowed = _cdp_attach_gate(cdp_url, confirm=confirm)
@@ -7824,6 +7895,38 @@ class MasterFetchServer:
         # HTML; focus filters markdown output — combining them produces inconsistent
         # results where schema has data but focus-filtered content is empty).
         # `schema` is already normalized above: non-None means usable.
+        # Keyword args, not positionals, and built ONCE for both whole-document
+        # readers below: this call site once dropped an extraction flag, so every
+        # slot after it shifted by one and `cookies` arrived as
+        # _SCHEMA_SOURCE_MAX_CHARS — which is the `'int' object is not iterable` the
+        # 16.0 report filed as a nested-schema bug (G14). A name that does not exist
+        # raises at once instead of landing in a neighbouring parameter, and the two
+        # paths (schema, nested fan-out) cannot drift apart because they unpack the
+        # same dict.
+        _tier_kwargs = dict(
+            extraction_type="html",
+            css_selector=css_selector,
+            # A conditional question goes to the origin, never to dhole's own
+            # memory of an answer (G23): serving a cached 200 here would report
+            # "content" for a call that asked whether the content still stands.
+            cache_ttl=0 if conditional else cache_ttl,
+            offset=0,
+            headless=headless, real_chrome=real_chrome,
+            proxy=proxy, timeout=timeout,
+            solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
+            hide_canvas=hide_canvas, extra_headers=extra_headers,
+            useragent=useragent, cookies=cookies,
+            # NOT `mc`: the selectors run over the whole document, and the caller's
+            # cap applies to the JSON that comes back (see re-chunk below).
+            max_chars=_SCHEMA_SOURCE_MAX_CHARS,
+            conditional=conditional, load_everything=load_everything,
+        )
+        if nested_selector is not None and _nested_n > 0:
+            return await self._nested_read(
+                url, nested_selector=nested_selector, nested_props=_nested_props,
+                nested_limit=_nested_n, schema=schema, tier=_tier_kwargs,
+                proxy=proxy, ignore_robots=ignore_robots, mc=mc, offset=offset,
+            )
         if schema is not None:
             if actions:
                 raise ValueError(
@@ -8038,6 +8141,152 @@ class MasterFetchServer:
             return result
         finally:
             _budget_credit.reset(token)
+
+    async def _nested_read(self, url: str, *, nested_selector: str,
+                           nested_props: dict, nested_limit: int,
+                           schema: Optional[dict], tier: dict, proxy,
+                           ignore_robots: bool, mc: int,
+                           offset: int) -> ResponseModel:
+        """17.0 §5 E-13：「列表页 → 每项详情页」一次摊平。
+
+        `schema=` 的嵌套（G14）解决的是同一篇文档里的作用域；这里的第一层是这一篇，
+        第二层是另外 N 篇。所以这个方法只有三件事：把这一篇的选择器变成一份 URL 名册、
+        并发取回名册里的每一篇（礼貌与升级都走 `_auto_escalate` 原样那条路）、每篇
+        按同一份字段规格抽取，最后按「一个链接一条记录」拼回一个 JSON。
+
+        它接过的不只是扇出，还有扇出带来的礼貌责任：每一条第二层链接都各自过一次
+        robots.txt（每个 origin 一小时内有缓存，8 条链接不会发 8 次探测），被拒的那条
+        一个请求都不发、在计数里说出来。扇出静默绕过 robots 的话，这一颗参数就等于
+        把合规从调用方手里偷走，而描述里没写过这件事。
+        """
+        from dhole_mcp import nested as _nested_mod
+        from dhole_mcp.structured import extract_structured
+
+        first = await self._auto_escalate(url, **tier)
+        html = "\n".join(first.content) if first.content else ""
+        if not html or first.status >= 400:
+            # 第一层连 DOM 都没有，扇出无从谈起 —— 把墙原样交回，别造一个看起来
+            # "抽到了 0 条"的成功响应。
+            return first
+
+        found = await asyncio_to_thread(
+            _nested_mod.resolve_nested_links, html, url, nested_selector,
+            nested_limit)
+        links = found["links"]
+        if not links:
+            return ResponseModel(
+                url=url, status=first.status, content=[],
+                fetcher_used=first.fetcher_used, extracted_type="structured",
+                page_type=first.page_type, metadata=first.metadata,
+                error=(f"nested_no_match: nested_selector '{nested_selector}' matched "
+                       f"{found['matched']} element(s) on this page and none of them "
+                       "has an http(s) href"),
+                # 0 命中有两件事要分清：选择器写窄了，和这页根本没有内容（壳页）。
+                # 后者换选择器是白换，所以 next_action 必须把两条路都摆出来。
+                next_action=(
+                    "No second-layer request was sent. If this page is real (look at "
+                    "page_type + total_extracted_chars), widen the selector to the "
+                    "element that CONTAINS the link — a '.card' that holds an <a> "
+                    "resolves. If it is a shell (a few hundred chars, page_type=shell/"
+                    "unknown), the links are rendered by JS: re-call with "
+                    "force_fetcher='stealthy', or drop nested_* and read the markdown."),
+            )
+
+        _notes = _ARG_NOTES.get()
+        if found["matched"] > len(links) or found["skipped"]:
+            # 上限藏起来的东西要说出口：8 条被当成"这页只有 8 个专题"是这一颗参数
+            # 唯一能造成的错。
+            note = (f"truncation=nested_budget: expanded {len(links)} of "
+                    f"{found['matched']} matched ({found['skipped']} without a usable "
+                    f"href) — raise nested_max (ceiling {_nested_mod.MAX_NESTED_ITEMS})")
+            if _notes is not None:
+                _notes.append(note)
+
+        _budget_ms = float(tier.get("timeout") or DEFAULT_CALL_TIMEOUT_MS)
+        _started = now()
+        _lane = asyncio.Semaphore(_nested_mod.NESTED_CONCURRENCY)
+
+        async def _one(link: dict):
+            rec = {"url": link["url"]}
+            if link["label"]:
+                rec["label"] = link["label"]
+            async with _lane:
+                left_ms = _budget_ms - (now() - _started) * 1000
+                # 每条链接的预算是**剩余量**，不是整份调用预算：8 条各拿 30s 的话，
+                # 调用方要的 30s 会变成 4 分钟，而 MCP 客户端在那之前就把请求杀了
+                # （-32001）—— 那正是 _within_call_budget 当初要修的事故。
+                per = dict(tier)
+                per["timeout"] = int(max(3000, min(_budget_ms, left_ms)))
+                try:
+                    verdict = await check_robots(
+                        link["url"], proxy=_proxy_to_url(proxy, None),
+                        ignore=bool(ignore_robots))
+                except Exception as e:
+                    logger.debug("nested robots check failed for %s: %s", link["url"], e)
+                    verdict = None
+                if verdict is not None and not verdict.allowed:
+                    rec["error"] = "robots_disallowed"
+                    return rec, "robots"
+                try:
+                    res = await self._auto_escalate(link["url"], **per)
+                except Exception as e:
+                    rec["error"] = redact_api_key(str(e)[:200])
+                    return rec, "failed"
+                body = "\n".join(res.content) if res.content else ""
+                if not body or res.status >= 400:
+                    rec["error"] = (res.error or f"HTTP {res.status}")[:200]
+                    return rec, "failed"
+                page = await asyncio_to_thread(
+                    extract_structured, body, {"properties": nested_props},
+                    link["url"], res.metadata or {})
+                for k, v in page.items():
+                    rec[k] = v
+                # 「外壳在、内容全空」不是抽到了：与 G14 对 schema 的判定同一把尺。
+                if all(_schema_value_empty(v) for v in page.values()):
+                    rec["error"] = "fields_no_match"
+                    return rec, "empty"
+                return rec, "ok"
+
+        timed = await gather(*[_one(link) for link in links],
+                             return_exceptions=True)
+        records, counts = [], {"ok": 0, "empty": 0, "failed": 0, "robots": 0}
+        for item in timed:
+            if isinstance(item, BaseException):
+                # gather(return_exceptions=True) 把取消也一起回传；一条链接炸了不能
+                # 让整次扇出变成一个没有记录的响应。
+                counts["failed"] += 1
+                records.append({"url": "", "error": redact_api_key(str(item)[:200])})
+                continue
+            rec, kind = item
+            counts[kind] += 1
+            records.append(rec)
+
+        payload: dict = {}
+        if schema is not None:
+            first_fields = await asyncio_to_thread(
+                extract_structured, html, schema, url, first.metadata or {})
+            payload.update(first_fields)
+        payload["nested"] = records
+
+        import json as _json_mod
+        first.content = [_json_mod.dumps(payload, ensure_ascii=False, indent=2)]
+        first.extracted_type = "structured"
+        if _notes is not None:
+            _notes.append(
+                f"nested: {len(links)} links expanded, rungs=2, "
+                f"ok {counts['ok']} / empty {counts['empty']} / "
+                f"failed {counts['failed']}"
+                + (f" / robots_skipped {counts['robots']}" if counts["robots"] else ""))
+            # _auto_escalate 之后没人再算 summary，这一条必须在 _apply_chunking 之前
+            # 落账 —— _with_agent_hints 就在里面。
+        if records and counts["empty"] == len(records):
+            # 判据是每条记录**自己抽到的字段**，不是记录本身：url 与 label 永远非空，
+            # 拿 _schema_value_empty 整条判的话这一支永远不响，"8 个空对象"就又被
+            # 当成成功交付了。
+            first.error = (
+                "nested_empty: every second-layer page returned no field - the "
+                "nested_fields selectors do not match this site's markup")
+        return _apply_chunking(first, max_chars=mc, offset=offset)
 
     async def _smart_fetch_bulk(
         self, urls, extraction_type, css_selector, cache_ttl, force_fetcher,
@@ -9751,6 +10000,11 @@ class MasterFetchServer:
                     "include_links": {"type": "boolean", "description": "Return the page's outgoing links classified as citations / navigation / external, with a primary_source hint (default false)."},
                     "max_links": {"type": "integer", "description": "Cap for EACH links list when include_links=true (1-100; default 30/20/20). links.total_found and links.is_truncated say what the cap hid."},
                     "include_media": {"type": "boolean", "description": "Return up to 20 image URLs found on the page in .media (default false)."},
+                    # §5 E-13：一次调用摊平两层。三颗都在场上，缺一条描述就没人会
+                    # 想到它们存在 —— 而 agent 的默认做法是发 8 次 web_read。
+                    "nested_selector": {"type": "string", "description": "Two layers in one call: a CSS selector on THIS page naming the elements to follow into the second layer; each match becomes one record. Needs nested_fields."},
+                    "nested_fields": {"type": ["array", "object"], "description": "What to read on each second-layer page: [{'name':'作品','selector':'.work a','type':'array'}] or {'作品':'.work a'}. 1-12 fields; 'array' = every match on that page."},
+                    "nested_max": {"type": "integer", "description": "How many of this page's matched links to expand (default 8, max 30). What the cap hid is reported as truncation=nested_budget."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},

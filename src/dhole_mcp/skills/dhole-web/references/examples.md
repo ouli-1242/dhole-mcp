@@ -112,6 +112,22 @@ The same key exists on `web_crawl`, where it matters more: the semantic path cos
 }}}}
 ```
 
+**Two layers in one call** (the items live on their own pages, so `schema` nesting cannot reach them — `nested_selector` names the list entries on THIS page, `nested_fields` says what to read on each page they point to; 8 links by default, ceiling 30, robots checked per link):
+```json
+{"url": "https://quotes.toscrape.com/", "nested_selector": "div.quote",
+ "nested_fields": [{"name": "author", "selector": "h3"}, {"name": "bio", "selector": "p", "type": "array"}],
+ "nested_max": 10}
+```
+Measured: one call, 8 grouped records, `summary` carrying `nested: 8 links expanded, rungs=2, ok 8 / empty 0 / failed 0`.
+
+```json
+// wrong — nine calls that each re-derive the links the first call already had:
+{"url": "https://quotes.toscrape.com/"}
+{"url": "https://quotes.toscrape.com/author/Albert-Einstein", "schema": "..."}
+// right — the fan-out is the tool's job now, and it checks robots per link:
+{"url": "https://quotes.toscrape.com/", "nested_selector": "div.quote", "nested_fields": {"author": "h3"}}
+```
+
 **PDF** (read `table_of_contents` in the response first, then pick `pages`; `pages` trims extraction only — the file downloads whole, so raise `timeout` for big files; scanned PDFs auto-OCR):
 ```json
 {"url": "https://arxiv.org/pdf/1706.03762", "pages": "1-3", "timeout": 60000}

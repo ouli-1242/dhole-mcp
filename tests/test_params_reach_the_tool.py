@@ -63,6 +63,11 @@ VALUES: dict[str, object] = {
     "css_selector": "p", "max_content_chars": 5000, "timeout": 20000,
     "pages": "1-2", "password": "pw",
     "schema": {"properties": {"t": {"selector": "p"}}},
+    # B5-14d 的两层扇出。nested_max 的探针值是 5：既不是"没传"（None），也不是
+    # 默认展开数 8 —— 两个都不撞，丢了才分辨得出是丢了。
+    "nested_selector": "div.quote",
+    "nested_fields": [{"name": "t", "selector": "p"}],
+    "nested_max": 5,
     # B5-13a：档位是字符串枚举，探针值要和默认值 "auto" 不同才探得出丢没丢。
     "anti_detect": "aggressive",
     "max_links": 5, "session_id": "probe-session",

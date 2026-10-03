@@ -233,7 +233,10 @@ class TestReadSideLostTheThreeNames:
         props = _defs()["web_read"]["inputSchema"]["properties"]
         for key in ("method", "body", "content_type"):
             assert key not in props, key
-        assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 24, \
+        # 这颗数字的来龙去脉写在 tests/test_anti_detect_b5.py:94（28→25→24→27）。
+        # 这里再钉一遍是因为这条用例的主语就是"读的那扇门还剩几颗"：扇出（B5-14d）
+        # 加的三颗要在这里被看见，而不是只在别人的文件里解释。
+        assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 27, \
             sorted(server_mod._TOP_LEVEL_ARGS["web_read"])
 
     @pytest.mark.parametrize("key", ["method", "body", "content_type"])
