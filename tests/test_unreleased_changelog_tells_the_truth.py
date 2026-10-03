@@ -36,11 +36,11 @@ _RETIRED_MARKERS = ("注销", "删掉", "删除", "不再被读", "收掉", "收
                     "随大众化", "曾有", "一度", "整组删", "退役", "搬走", "取消", "已拆平")
 
 #: 旧工具名只允许出现在"说这个名字后来怎么了"的行里
-_RENAMED_MARKERS = ("落地时叫", "原名", "曾用名", "改名", "移进", "拆平")
+_RENAMED_MARKERS = ("落地时叫", "原名", "旧名", "曾用名", "改名", "移进", "拆平")
 
 #: 本版内改过两次以上的名字：出现在未发版段里一定是漏扫，不是历史
 _OLD_NAMES = ("smart_fetch", "smart_crawl", "smart_search", "feed_fetch",
-              "dhole_doc", "solve_cloudflare", "real_chrome")
+              "dhole_doc", "solve_cloudflare", "real_chrome", "discover_only")
 
 
 def _text() -> str:
