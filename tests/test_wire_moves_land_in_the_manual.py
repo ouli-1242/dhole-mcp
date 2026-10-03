@@ -134,3 +134,33 @@ def test_connect_stays_inside_the_packed_budget():
 #: 实测的棘轮位（B5-17 四刀之后：44,016 → 40,010，其中 instructions 3,532 → 3,070）。
 #: 改它必须写理由，且只准往小改 —— 要往上抬就是「这句话值不值每次连接」的一次显式决定。
 CONNECT_CEILING = 40_010
+
+
+def test_the_price_table_in_the_manual_is_the_current_one():
+    """配置那一卷里的价目表必须等于尺子此刻的读数。
+
+    这卷是 `sys_guide(topic='config')` 送出去的：操作员照它决定要不要裁注册面。
+    一个过期的"总开销"不会报错，只会让人按错的价做决定 —— 所以这里只认逐字符相等，
+    而且连价目表里那颗最贵的（`web_read`）一起钉住：它变了而文档没变，就是文档在说谎。
+    """
+    import json
+
+    from dhole_mcp.server import DHOLE_INSTRUCTIONS as IN, MasterFetchServer
+
+    defs = {d["name"]: d for d in MasterFetchServer._TOOL_DEFS}
+
+    def wire(sel):
+        return len(json.dumps({"tools": [defs[n] for n in sel]}, ensure_ascii=False,
+                              separators=(",", ":"))) + len(IN)
+
+    allnames = list(defs)
+    total = wire(allnames)
+    # 单价的口径写死在这里：注册这颗工具带来的**总开销增量**（含它前面那个逗号）。
+    # 手册里的价目表按同一个定义写，否则同一颗工具会有三个"成本"。
+    web_read = total - wire([n for n in allnames if n != "web_read"])
+    cfg = (guide._ROOT / "references" / "configuration.md").read_text(encoding="utf-8")
+    assert f"**{total:,} chars**" in cfg, (
+        f"配置手册写的连接期总开销不是实测值（现在量到 {total:,}）—— 改文档，"
+        "或说明为什么这次改动不该进 wire")
+    assert f"`web_read` {web_read:,}" in cfg, (
+        f"价目表里 web_read 的单价过期了（按增量口径实测 {web_read:,}）")
