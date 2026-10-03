@@ -18,7 +18,7 @@ Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器：抓网页、�
 - **是什么**：给 AI 用的上网工具包。
 - **怎么用**：正常提要求，AI 自己选工具，你不用记命令。
 - **17 个工具默认全部注册**：搜网页 · 抓网址 · 在页面上动手 · 发一次非 GET 请求 · 批量抓 · 爬整站 · 出 URL 地图 · 截图 · 读本地文件 · RSS · 短链 · 录制回放 · 盯页面变化 · 用你自己的密码管理器登录 · 设一次的默认身份 · 看与清本地状态 · 读 dhole 自己的说明书。
-- **另外 4 个默认关**：`web_recipe` / `web_watch` / `cred_vault` / `cred_login`；打开用 `dhole init --tasks` / `--vault`，不用编辑 JSON。它们的存在不必读 README：`sys_guide(topic='behavior')` 会说。
+- **没有“要额外打开”的能力**：上面每一颗都默认注册。`cred_vault` / `cred_login` 的密码闸在工具里面（不给 `confirm` 就只回计划，一个字节都不填），不在注册面上；旧文档里的 DHOLE_TASKS / DHOLE_VAULT 与那条一条命令开能力的入口都已注销。
 - **代理环境自己适配**：Clash / sing-box 的 TUN + fake-ip 不再需要先设任何变量。
 - **要调设置**：见[配置](#配置)；出问题先跑 `dhole --doctor`。
 
@@ -29,7 +29,7 @@ Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器：抓网页、�
 ```bash
 pip install dhole-mcp              # 默认即完整版：浏览器 / PDF / OCR / 解析器 / 重排
 playwright install chromium        # 浏览器引擎（~150MB），pip 装不到这一步
-dhole init --yes                   # 或一条搞定上面两步 + 写客户端配置 + 体检
+dhole doctor                       # 12 项体检：起一次 server，再跑一次真实搜索 + 真实抓取
 ```
 
 - `pip install "dhole-mcp[all]"` 依然合法，效果等价于默认安装。
@@ -57,7 +57,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 
 | 门 | 怎么写 | 什么时候生效 |
 |---|---|---|
-| **文件**（推荐） | `dhole config set DHOLE_X value`，落在 `~/.dhole/config.json` | 按次读取的旋钮下一次调用就生效，不用重启；`dhole config list` 看当前值与来源 |
+| **文件**（推荐） | `dhole config set DHOLE_IGNORE_ROBOTS 1`，落在 `~/.dhole/config.json` | 按次读取的旋钮下一次调用就生效，不用重启；`dhole config list` 看当前值与来源 |
 | **env 块** | 宿主 MCP 配置里的 `env`，值一律写成字符串 | 重启宿主之后 |
 
 **env 永远优先**——一个文件不会悄悄覆盖你已经做出来的决定。`dhole --doctor` 两个门一起审计。
@@ -78,56 +78,36 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 }
 ```
 
-变量名与取值见下面两张表。**默认行为通常就是你要的**，不确定就先别设。
+变量名与取值见下面这张表。**默认行为通常就是你要的**，不确定就先别设。
 
 ### 常用变量
 
 | 变量 | 什么时候设 |
 |---|---|
-| `DHOLE_SEARCH_PROXY` | 搜索引擎被限流 / 被墙时（也自动读 `HTTPS_PROXY` 等） |
-| `DHOLE_MULTIMODAL=1` | 宿主 agent 能看图才设（元素裁剪截图、验证码试读纪律） |
-| `DHOLE_NEURAL_FOCUS=1` | `focus` 改用语义打分：更准但单页约 12.5 秒 CPU（BM25 约 23ms）。一条命令打开：`dhole init --neural`；单次想省钱传 `options.focus_engine='bm25'` |
-| `DHOLE_TASKS=1` | 打开 `web_recipe` / `web_watch` |
-| `DHOLE_VAULT=1` | 打开 `cred_vault` / `cred_login`；需本机已装并解锁 Bitwarden（`bw`）或 1Password（`op`）CLI |
-| `DHOLE_CDP_ATTACH=1` + `DHOLE_CDP_HOSTS` | 用你已登录的 Chrome 读页面，见下节「CDP 接管」；一条命令开：`dhole init --cdp <host>` |
+| `DHOLE_SEARCH_PROXY` | 搜索引擎被限流 / 被墙时（也自动读 `HTTPS_PROXY` 等）；只想让某一次调用走代理，用 `cred_defaults` 存 |
+| `DHOLE_IGNORE_ROBOTS=1` | 关掉进程级的 `robots.txt` 遵从（单次豁免是 `ignore_robots=true`，那是你的合规决定） |
 | `DHOLE_ALLOW_PRIVATE_HOSTS` | 放行内网 / 本机地址，默认一律拒绝 |
-| `DHOLE_IGNORE_ROBOTS=1` | 关掉进程级的 `robots.txt` 遵从（单次豁免用 `ignore_robots=true`） |
 | `DHOLE_USAGE_LOG=1` | 本地调用与写操作日志（不记参数值、不联网） |
-| `DHOLE_SSRF_DNS_RECHECK` | fake-ip 已自动适配；设 `on` 强制恢复 |
 | `DHOLE_TOOLS=web_read,web_search` | 只注册列出的工具，连接期省约一半；**写这个就等于关掉其余工具** |
-
-### 其余变量（都不是必须设的）
-
-| 变量 | 用途 |
-|---|---|
-| `DHOLE_BROWSER_PROFILE` | 浏览器改用 `~/.dhole/profiles/<name>/` 持久 profile（**含登录态**），不设是临时目录 |
-| `DHOLE_COOKIE_TTL_S` | 会话 cookie 过期秒数（默认 86400，区间 60–2592000） |
 | `DHOLE_DEFAULT_ENGINES` | 覆盖默认搜索池（默认 `baidu,bing,sogou,bing_global,yandex,brave`） |
-| `DHOLE_SEARCH_DEADLINE` | 单次搜索整体截止秒数（默认 16） |
-| `DHOLE_SEARCH_FEEDBACK` | 设 `1`：抓成功的域名下次排序加权（默认关） |
 | `DHOLE_DEFAULT_CONTENT_CHARS` | 默认正文预算（默认 40000，区间 500–200000） |
-| `DHOLE_BROWSER_IDLE_TIMEOUT` | 浏览器空闲关闭秒数（默认 300，`0` = 不关） |
-| `DHOLE_NO_BROWSER_PREWARM` | 设 `1` 启动不预热隐身浏览器（默认预热，省首次 3–5 秒） |
-| `DHOLE_ENGINE_COOLDOWN` | 普通被拒的冷却秒数（默认 60，区间 5–1800） |
-| `DHOLE_ENGINE_CHALLENGE_COOLDOWN` / `DHOLE_ENGINE_CONN_COOLDOWN` | 连续 3 次校验页 / 连不上的冷却（各默认 600，区间 60–7200） |
-| `DHOLE_ENGINE_HEARTBEAT` | 巡检冷却中引擎的间隔秒数（默认 300，`0` = 关） |
-| `DHOLE_STRUCTURED_CONTENT` | 设 `1` 额外发一份 `structuredContent`（体积翻倍） |
-| `DHOLE_OUTPUT_SCHEMA` | 设 `1` 在 `tools/list` 声明 `outputSchema`（连接期 +13.6%，隐含打开上面那个） |
-| `DHOLE_WIRE_FULL` | 设 `1` 恢复瘦身前的响应形状（每个字段恒定存在） |
+| `DHOLE_TAVILY_API_KEY` / `DHOLE_BOCHA_API_KEY` | 两颗 keyed 引擎的密钥：配了才启用，只有点名才调用，按次计费 |
+| `DHOLE_HF_ENDPOINT`（或 `HF_ENDPOINT`） | 重排模型下载源（默认 `huggingface.co`，失败回退 `hf-mirror.com`） |
 | `DHOLE_HOME` | 状态目录（默认 `~/.dhole`） |
-| `DHOLE_WORKDIR` | `doc_parse` 解析相对路径时额外尝试的目录 |
-| `DHOLE_HF_ENDPOINT`（或 `HF_ENDPOINT`） | 重排模型下载源（默认 `huggingface.co` 失败回退 `hf-mirror.com`） |
-| `DHOLE_BRIGHTDATA_API_KEY` / `DHOLE_BRIGHTDATA_ZONE` / `DHOLE_BRIGHTDATA_COUNTRY` | Bright Data SERP 后端（zone 默认 `dhole`，地区默认 `us`） |
-| `DHOLE_TAVILY_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_BOCHA_API_KEY` | 对应 keyed 引擎的密钥 |
-| `DHOLE_NO_AUTO_REPAIR` | 设 `1` 后入口遇 ImportError 只打印修复命令，不自动重装 |
-| `DHOLE_UPDATE_PACKAGE` / `DHOLE_UPDATE_INDEX_URL` | 自愈与 `dhole -u` 用哪个包名 / 索引源；**改名或私有源分发必须设**，否则修复会装回官方同名包 |
+
+**其余旋钮都在 17.0 被收成了固定值**，写进 env 也不会被读，所以这张表不再列它们：引擎
+冷却与心跳、cookie 存活时长、搜索整体截止、浏览器空闲关闭与预热、SSRF 的 DNS 复验、
+`structuredContent` / `outputSchema` / 完整 wire 形状三个开关、多模态许可（截图与元素
+裁剪现在总是可用）、神经 focus 的许可门（改成每次调用的 `focus_engine`）、`doc_parse`
+的工作目录、自愈与搜索代理池。理由都同一句话：**能算清的数不需要旋钮**，而需要按次
+决定的改成了参数。
 
 ### 借你已登录的 Chrome（CDP 接管）
 
 - `chrome.exe --user-data-dir=D:\dhole-chrome --remote-debugging-port=9222`（Chrome 136+ 不许对默认 profile 开调试），在这个窗口登录一次目标站点。
-- `dhole init --cdp portal.example.com --yes` 打开总开关并写主机围栏（精确主机名：`example.com` 不含 `www.example.com`；已有列表合并不覆盖；按次生效，不用重启）。
-- 之后 agent 抓这些站点会带你的登录态；每次 attach 都回 `cdp_attached: true` 并进审计。
-- 不设围栏时 attach 的重定向与第三方请求会带着你的已认证 cookie 出门，所以这条命令要求你点名主机；`dhole --doctor` 会把没围栏这件事说出来。
+- 第一次 `web_read(url=..., cdp_url="http://127.0.0.1:9222")` **不执行任何东西**，回 `cdp_authorization_required`；用户同意之后同一调用加 `confirm=true` 才放行，并把那一台主机写进授权名册（精确主机名：`example.com` 不含 `www.example.com`）。
+- 名册之后 agent 抓这些站点会带你的登录态；每次 attach 都回 `cdp_attached: true` 并进审计。要撤销就删状态目录里的 `cdp_hosts.json`。
+- 每一台新主机都要重新过一次这道闸：attach 的重定向与第三方请求会带着你的已认证 cookie 出门，所以授权只能逐台点名，不能一把开。
 
 ## 用法
 
@@ -137,11 +117,8 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 |---|---|
 | `dhole -v` | 版本 + 能力面板 |
 | `dhole --doctor` | 安装体检，逐项给修复命令 |
-| `dhole init` | 装 + 配 + 开能力（`--yes` 才落盘；`--tasks` / `--vault` / `--neural` / `--cdp <host>`；`--probe` 跑一次真实搜索与抓取） |
 | `dhole config` | `list` / `set <NAME> <value>` / `unset <NAME>` |
 | `dhole engines list` / `probe` / `reset` | 引擎冷却状态 / 实测健康 / 立即清空 |
-| `dhole proxy list` / `add` / `remove` / `clear` | 搜索代理池 |
-| `dhole model` / `dhole model use <name>` | 查看 / 切换重排模型 |
 | `dhole skill` | 安装 / 查看随包 agent 技能 |
 | `dhole --http --host --port` | 改用 streamable HTTP 传输（默认 stdio） |
 
@@ -194,18 +171,18 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 
 ## 搜索引擎与重排
 
-**免密 14 个**：默认池 6 个（`baidu` / `bing` / `sogou` / `bing_global` / `yandex` / `brave`），opt-in 8 个（`duckduckgo`（别名 `ddg`）/ `yahoo` / `baidu_baike` / `so360`（别名 `360`）/ `sogou_weixin` / `wikipedia` / `grokipedia` / `mwmbl`），要 `engines=[...]` 点名才跑，单次最多 9 个。另有 4 个 keyed 后端（`brightdata` / `tavily` / `exa` / `bocha`）：配了 key 即启用，只有点名才调用，按次计费。
+**免密 14 个**：默认池 6 个（`baidu` / `bing` / `sogou` / `bing_global` / `yandex` / `brave`），opt-in 8 个（`duckduckgo`（别名 `ddg`）/ `yahoo` / `baidu_baike` / `so360`（别名 `360`）/ `sogou_weixin` / `wikipedia` / `grokipedia` / `mwmbl`），要 `engines=[...]` 点名才跑，单次最多 9 个。另有 2 个 keyed 后端（`tavily` / `bocha`）：配了 key 即启用，只有点名才调用，按次计费。
 
 **日期**只有 day / week / month / year 四档：`after=<日期>` 会被放宽到最窄的覆盖档，`before` 直接拒绝——按日期取增量用 `feed_read(since=)`。
 
-**重排模型**：本地 cross-encoder，首次神经搜索自动下到 `~/.dhole/models/`；`bge-zh`（默认，~279MB）/ `zh-full`（~450MB）/ `ms-marco`（~91MB），`dhole model use <name>` 切换。`min_raw_relevance` 判断「这一轮有没有相关结果」，起点 **0.1**（实测离题 ~1e-4、勉强 0.2、真命中 0.93+），换模型要重新校准。离线复用：拷 `models/<名字>/` 整个目录。
+**重排模型**：本地 cross-encoder，首次神经搜索自动下到 `~/.dhole/models/`；`bge-zh`（默认，~279MB）/ `zh-full`（~450MB）/ `ms-marco`（~91MB）；换模型改 `~/.dhole/config/reranker.json`。`min_raw_relevance` 判断「这一轮有没有相关结果」，起点 **0.1**（实测离题 ~1e-4、勉强 0.2、真命中 0.93+），换模型要重新校准。离线复用：拷 `models/<名字>/` 整个目录。
 
 ## 故障排查
 
 | 症状 | 怎么办 |
 |---|---|
 | 搜索结果很少或为空 | 重试；设 `DHOLE_SEARCH_PROXY`；`dhole engines probe` 看哪家能用 |
-| 所有公网站点都报内网地址 | fake-ip TUN 已自动适配；仍报错说明没命中，设 `DHOLE_SSRF_DNS_RECHECK=0` |
+| 所有公网站点都报内网地址 | fake-ip TUN 已自动适配（探测在启动时做一次，写死为开启）。仍报错就跑 `dhole --doctor`：它会把那个地址与其网段点名出来。17.0 没有手动关掉复验的旋钮——那个形状正是当初造成误判的地方 |
 | 抓取超时 | `timeout` 是整次调用的墙钟预算，文档下载全额计入（默认 30s，上限 120s） |
 | 正文被截断 | 用 `offset` / `next_offset` 续取，或调大 `max_content_chars`（上限 200000） |
 | 返回了内容但明显是壳 | 见[注意事项](#注意事项)第一条 |
@@ -232,9 +209,8 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 | `sessions.db` | 会话 cookie jar，**含 cookie 值（=凭据）**，默认 24 小时过期 |
 | `profiles/<name>/` | 持久浏览器 profile，**含登录态**，删目录即注销 |
 | `models/<model>/`、`config/reranker.json` | 重排模型与选择 |
-| `search_proxies.json` | 代理池，**凭据明文**（`list` 显示时打码） |
 | `config.json` | `dhole config set` 写的旋钮；**secret 同样明文落盘**，不想进文件就继续用 env 块 |
-| `usage.jsonl`、`search_feedback.json`、引擎状态 | 调用与写审计、域名偏好、引擎冷却 |
+| `usage.jsonl`、引擎状态 | 调用与写审计、引擎冷却 |
 
 ## 贡献
 
