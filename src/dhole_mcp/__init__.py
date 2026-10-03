@@ -19,7 +19,6 @@ def __getattr__(name: str):
         "SessionInfo",
         "SessionCreatedModel",
         "SysStateModel",
-        "main",
     }
     if name in _lazy_exports:
         # F401：这些名字通过下方 locals()[name] 返回，是刻意的惰性再导出，
@@ -31,10 +30,15 @@ def __getattr__(name: str):
             SessionInfo,
             SessionCreatedModel,
             SysStateModel,
-            main,
         )
 
         return locals()[name]
+    if name == "main":
+        # 17.0 B6-1 把进程入口搬进 ops.py，再导出的来源必须跟着搬 —— 留在
+        # server 那一行会变成 ImportError，而 `dhole_mcp.main` 是公开面。
+        from dhole_mcp.ops import main
+
+        return main
     raise AttributeError(f"module 'dhole_mcp' has no attribute '{name}'")
 
 

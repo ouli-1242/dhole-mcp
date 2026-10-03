@@ -254,3 +254,39 @@ class TestEnginesProbe:
         _, _, asked = self._run(monkeypatch, capsys, ["--all"])
         assert len(asked) == len(_TEXT_ENGINES), \
             f"--all 应当问遍 {len(_TEXT_ENGINES)} 个免密引擎，实际 {len(asked)}"
+
+
+class TestPublicReExports:
+    """`dhole_mcp.<name>` 这份公开面在拆文件的每一刀都必须还成立。
+
+    B6 把 server.py 一块块搬出去，而 `__init__` 的惰性再导出是按名字硬编码的：
+    名字搬走了、导出的那行没跟着改，用户那边就是一个 ImportError —— 全量测试里
+    没有任何一条会读到 `dhole_mcp.main`，所以这类断裂只能靠守卫钉住。
+    """
+
+    def test_every_declared_export_resolves(self):
+        import dhole_mcp
+
+        missing = []
+        for name in dhole_mcp.__all__:
+            try:
+                getattr(dhole_mcp, name)
+            except Exception as exc:  # noqa: BLE001 - 守卫要报出任何失败
+                missing.append(f"{name}: {type(exc).__name__} {exc}")
+        assert not missing, f"__all__ 里有名字导不出来：{missing}"
+
+    def test_main_points_at_the_entry_that_was_moved(self):
+        import dhole_mcp
+        from dhole_mcp import ops
+
+        assert dhole_mcp.main is ops.main, "再导出的必须是同一个函数对象"
+
+    def test_an_unknown_name_is_still_a_plain_attribute_error(self):
+        import dhole_mcp
+
+        try:
+            dhole_mcp.nope_not_a_dhole
+        except AttributeError as exc:
+            assert "nope_not_a_dhole" in str(exc)
+        else:
+            raise AssertionError("未知名字必须是 AttributeError，不是静默 None")
