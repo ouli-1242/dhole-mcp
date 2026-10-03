@@ -204,15 +204,30 @@ def _set_b() -> dict:
         return {
             "status": "not_run",
             "reason": f"no datasets under {EVAL_SETS}",
-            "how_to": ("手动下载 MIRB / MTEB-zh 到 evals/.runtime/eval_sets/<name>/，"
-                       "每份 jsonl 一行一题：{query, positives: [doc], negatives: [doc]}。"
+            "how_to": ("跑 `python evals/fetch_eval_sets.py`（拉 C-MTEB/T2Reranking），"
+                       "或手动放 MIRB / MTEB-zh 到 evals/.runtime/eval_sets/<name>/："
+                       "每份 jsonl 一行一题 {query, positives: [doc], negatives: [doc]}。"
                        "接口只有 score(query, docs) -> [float]，与引擎无关。"),
         }
+    # 集 B 必须读到**真实** ~/.dhole 里的模型，而本脚本顶部把 DHOLE_HOME 指到了
+    # 一次性目录（集 A 不碰用户状态）。两件事都要成立，所以这里临时还回去。
+    #
+    # 另一处：模型是惰性的，`get_reranker()` 只是 peek（没预热就回 None），而评测
+    # 脚本不预热。**这两处一起**决定了修之前这条路径只会永远报
+    # "no local model (lean install)" —— 一个看着很确定、其实从没跑过的结论。
+    saved_home = os.environ.pop("DHOLE_HOME", None)
     try:
-        from dhole_mcp.reranker import get_reranker
-        rer = get_reranker()
+        from dhole_mcp import reranker as _rer
+        if not _rer.model_present():
+            return {"status": "not_run",
+                    "reason": f"no model at {_rer.active_model_dir()} —— 先在真实 "
+                              f"~/.dhole 里让它下过一次（跑任意一次神经搜索）"}
+        rer = _rer._load_reranker()
     except Exception as exc:
         return {"status": "not_run", "reason": f"model unavailable: {exc}"}
+    finally:
+        if saved_home is not None:
+            os.environ["DHOLE_HOME"] = saved_home
     if rer is None:
         return {"status": "not_run", "reason": "no local model (lean install)"}
     results = {}
