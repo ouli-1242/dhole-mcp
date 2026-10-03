@@ -19,6 +19,10 @@
 /feed.xml            6 条带 pubDate（0/1/2/3/5/10 天前）+ 2 条无 pubDate 的 RSS
 /article             多段落长文（focus / focus_mode=best 靶）
 /changing            每次请求正文都不同的页（watch / diff 靶）
+/collections         列表页：?items=N 张 .card，每张肚子里挂一个 /work/N 的链接（E-13 扇出靶）
+/work/<n>            详情页：一列每页不同、一列每页同值（页眉）、一列永不命中
+/shell               几百字符、组不成任何一组链接的页（壳页 → force_fetcher 那一支）
+/about               孤链接的去处（候选选择器不该把只有一条链接的组报出来）
 /captcha             HTML 页，内嵌 <img src="/captcha.png?token=..."> + 提交表单
 /captcha.png         扭曲文字验证码 PNG（逐字旋转 + 正弦位移 + 干扰线；?level=hard 加码）
 /captcha/verify      POST token+answer；对错分别回不同页，每次尝试落盘
@@ -165,6 +169,76 @@ def _article() -> bytes:
         f"<p>{p}</p>" for p in paras
     )
     return _page("本地抓取工具配置指南", body)
+
+
+# ── 扇出靶（E-13：列表页 → 每项详情页，一次调用）──────────────────────
+#
+# 这一族以前只有内联 HTML 的桩测（`tests/test_nested_fanout_e13.py`）：桩递出去的
+# 是测试自己写进字典的字符串，于是「选择器与页面之间的契约」从来没有过真链路的证人
+# —— 过 content-type、过解码、过 robots、过本地缓存之后还成立吗？`nested_no_match`
+# 那句「没发第二层请求」也一直是工具自述，没有独立旁证。下面三张页各还一截。
+
+COLLECTIONS_ITEMS = 10          # 默认 10 条 > 默认 nested_max 8：不抬参数也截得到
+COLLECTIONS_MAX = 200
+
+
+def _collections_page(items: int = COLLECTIONS_ITEMS) -> bytes:
+    """成组的列表页：每张 `.card` **肚子里**挂一个 `/work/N` 的 `<a>`。
+
+    三种「少给了」的形状刻意摆在同一页上，各按各的原因少：
+
+      - 一张没有 href 的卡片（`.card` 在那个站上只是样式）→ 计入 skipped
+      - 第一项的第二条链接，只差一个 `#top` → 去重，**不是**截断
+      - `?items=` 超过 `nested_max` → 那才是 `truncation=nested_budget`
+
+    把去重报成截断，调用方就会为那 2 条再抬一次上限而永远拿不回来，所以这三个数
+    必须在一次调用里各说各的。末尾那条 `.menu` 孤链接不构成一组，候选里不该有它。
+    """
+    cards = "".join(
+        f'<div class="card"><a href="/work/{i}">专题 {i}</a>'
+        f'<span class="count">{i * 3} 件</span></div>'
+        for i in range(1, items + 1))
+    body = (
+        "<h1>推荐专题</h1>"
+        + cards
+        + '<div class="card"><a href="/work/1#top">专题 1（重复）</a></div>'
+        + '<div class="card"><span>没有链接的一张</span></div>'
+        + '<div class="menu"><a href="/about">关于</a></div>'
+    )
+    return _page("推荐专题", body)
+
+
+_WORK_TAGS = (("静物", "黑白"), ("街景", "夜景", "人像"), ("胶片", "扫描"))
+
+
+def _work_page(n: int) -> bytes:
+    """详情页：一列每页都不同（真值）、一列每页同值（页眉）、一列永不命中。
+
+    `.site-footer` 是故意摆的页眉：仓库自己的示例就被这种列骗过 —— 8 条作者页抽出
+    8 个一模一样的段落，`ok 8 / empty 0`，响应读起来完全成功。`.rating` 这台靶站上
+    根本没有，用来逼出「别的列都填上了，只有这颗选择器什么都不指」那一句。
+    """
+    tags = "".join(f'<span class="tag">{t}</span>'
+                   for t in _WORK_TAGS[n % len(_WORK_TAGS)])
+    body = (
+        f'<h1 class="title">作品 {n}</h1>'
+        f'<div class="tags">{tags}</div>'
+        f'<p class="summary">第 {n} 篇的独有正文，用来证明这一列真的每页不同。</p>'
+        '<footer class="site-footer">© 2026 dhole 靶站</footer>'
+    )
+    return _page(f"作品 {n}", body)
+
+
+SHELL_PAGE = _page("加载中", """
+<div id="root"></div>
+<script>
+  // 列表由脚本渲染：这份 HTML 里没有那 10 个容器，换任何选择器都还是 0 命中。
+  window.__fixture = {"items": []};
+</script>
+<a href="/about">关于</a>
+""")
+
+ABOUT_PAGE = _page("关于", "<h1>关于</h1><p>靶站的孤链接去处。</p>")
 
 
 def _feed() -> bytes:
@@ -461,6 +535,23 @@ class Handler(BaseHTTPRequestHandler):
             return self._html(_article())
         if path == "/changing":
             return self._html(_changing())
+        if path == "/collections":
+            q = parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            try:
+                items = int(q.get("items", [str(COLLECTIONS_ITEMS)])[0])
+            except ValueError:
+                return self._html(_page("400", "<h1>items 不是整数</h1>"), 400)
+            return self._html(_collections_page(max(1, min(items, COLLECTIONS_MAX))))
+        if path.startswith("/work/"):
+            try:
+                n = int(path[len("/work/"):])
+            except ValueError:
+                return self._html(_page("404", "<h1>404</h1>"), 404)
+            return self._html(_work_page(n))
+        if path == "/shell":
+            return self._html(SHELL_PAGE)
+        if path == "/about":
+            return self._html(ABOUT_PAGE)
         return self._html(_page("404", "<h1>404</h1>"), 404)
 
     def do_POST(self) -> None:  # noqa: N802
