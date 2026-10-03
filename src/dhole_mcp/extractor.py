@@ -47,3 +47,17 @@ def extract_content(
 
     # Fallback: use markdownify for markdown/html, or raw text
     return _fallback_extract(page, extraction_type, css_selector)
+
+
+def _is_xml_content_type(content_type: str) -> bool:
+    """True for data XML (sitemap / RSS / Atom / SOAP / +xml), False for HTML-ish XML.
+
+    `application/xhtml+xml` is an HTML document wearing an XML media type: it must
+    keep going through the HTML extractor, not be handed back raw.
+    """
+    ct = (content_type or "").split(";")[0].strip().lower()
+    if not ct or ct.startswith(("application/xhtml", "image/", "text/html")):
+        return False
+    return ct.endswith("+xml") or ct.startswith(
+        ("application/xml", "text/xml", "application/rss", "application/atom",
+         "application/rdf"))

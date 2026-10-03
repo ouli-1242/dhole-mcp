@@ -87,7 +87,7 @@ logger = logging.getLogger("dhole-mcp.server")
 from dhole_mcp import __version__
 from pydantic import Field
 
-from dhole_mcp import paths
+# `paths` 跟着 audit.py 走了；server 里用到它的函数各自就地 import。
 from dhole_mcp import env_registry
 from dhole_mcp import identity
 from dhole_mcp import install as _install
@@ -216,6 +216,10 @@ from dhole_mcp.models import (
 )
 # 17.0 B6 第三刀：压实层搬进 wire.py。server 只用这三颗名字（`_WIRE_OMIT` /
 # `_wire_dump` 那些现在由 tests 直接认 wire 的家，server 不替它们撑一个假公开面）。
+# 17.0 B6 第五刀：本地调用日志搬进 audit.py，媒体类型的判定搬进 extractor.py。
+# server 与 tests 读的还是同一批函数对象。
+from dhole_mcp.audit import _audit_event, _log_tool_call, _result_error
+from dhole_mcp.extractor import _is_xml_content_type
 from dhole_mcp.wire import _call_result, _wire_json, _wire_result
 # 17.0 B6 第四刀：按次调用的上下文搬进 context.py。server 读的还是同一批对象
 # （ContextVar 是对象，跨模块 .get()/.set() 命中同一份状态），tests 里那些
@@ -2752,112 +2756,6 @@ _NEURAL_FOCUS_UNAVAILABLE = (
 _INTENT_MISS_FLOOR = 0.05
 
 
-def _audit_event(event: str, **fields: Any) -> None:
-    """Security-relevant events (CDP attach attempts) into the opt-in local
-    audit channel. Same file as ``_log_tool_call`` (DHOLE_USAGE_LOG), same
-    discipline: opt-in, local-only, best-effort, never raises. Attach attempts
-    are recorded whether or not they succeed — a refused attach is exactly the
-    event worth seeing in the log."""
-    target = (env_registry.value_of("DHOLE_USAGE_LOG") or "").strip()
-    if not target:
-        return
-    owned = target.lower() in ("1", "true", "yes", "on")
-    if owned:
-        target = str(paths.file("usage.jsonl"))
-    try:
-        parent = os.path.dirname(os.path.abspath(target))
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        entry: dict = {
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "event": event,
-        }
-        entry.update(fields)
-        with open(target, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        if owned:
-            paths.harden_dir(parent)
-            paths.harden_file(target)
-    except Exception:
-        pass
-
-
-def _result_error(result: Any) -> str:
-    """The application-level error a tool reported, or "" when it reported none.
-
-    ``ok`` in the call log means "the call ran to completion without raising" —
-    a tool that answers with an envelope carrying ``error`` never raises, so
-    without this the log said ``ok: true`` for calls that plainly failed.
-    Measured: a ``feed_read`` refused by the SSRF guard logged
-    ``{"tool": "feed_read", "ok": true, "ms": 22.0}`` with no trace of the
-    refusal. The question this log exists to answer is "does my client actually
-    route here, and does it hold up?" — and a refusal that reads like a success
-    is the one shape that question cannot survive.
-
-    Additive on purpose: ``ok`` keeps its meaning (a batch that answers with one
-    failed URL is still a completed call), and the reported error rides in the
-    existing ``error`` field, so ``select(.error)`` finds every call a tool
-    itself called a failure.
-    """
-    payload: Any = result
-    if isinstance(result, tuple) and len(result) == 2:
-        payload = result[1]
-    rows = payload if isinstance(payload, list) else [payload]
-    for row in rows:
-        if isinstance(row, dict):
-            err = row.get("error")
-            if err:
-                return str(err)[:200]
-    return ""
-
-
-def _log_tool_call(name: str, ok: bool, duration_ms: float, error: str = "") -> None:
-    """Append one line to the opt-in local call log (DHOLE_USAGE_LOG=1 or a path).
-
-    Off by default, and it never leaves the machine - nothing is uploaded. It
-    exists because the top failure mode of a tool like this is silent: the agent
-    simply never calls it (or calls it and ignores the answer), and that question
-    - "does my client actually route here, and does it hold up?" - cannot be
-    answered without a local record. Argument VALUES are never written, only the
-    tool name and the outcome. ``ok`` means "the call ran to completion without
-    raising" — it is NOT "the tool reported success": a refused or failed call
-    answers with an envelope rather than an exception, so what the tool itself
-    called a failure is recorded in ``error`` (see ``_result_error``). A clean
-    call is ``{"tool": ..., "ok": true, "ms": ...}`` with no ``error`` key; a call
-    that completed but reported a failure carries both, so ``select(.error)``
-    finds every one of them. Best-effort: never raises, never blocks startup.
-
-    When the log lives under the dhole home (the ``=1`` form) that home and the
-    log are tightened to 0700/0600 like the other state files. A path the user
-    chose via the environment is left exactly as they set it up.
-    """
-    target = (env_registry.value_of("DHOLE_USAGE_LOG") or "").strip()
-    if not target:
-        return
-    owned = target.lower() in ("1", "true", "yes", "on")
-    if owned:
-        target = str(paths.file("usage.jsonl"))
-    try:
-        parent = os.path.dirname(os.path.abspath(target))
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        entry: dict = {
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "tool": name,
-            "ok": bool(ok),
-            "ms": round(float(duration_ms), 1),
-        }
-        if error:
-            entry["error"] = redact_api_key(str(error)[:200])
-        with open(target, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        if owned:
-            paths.harden_dir(parent)
-            paths.harden_file(target)
-    except Exception:
-        pass
-
-
 def _smart_fetch_request_context(func):
     """Scope web_read request options to one invocation and its child tasks.
 
@@ -3145,20 +3043,6 @@ def _backfill_article_json(content: list[str], meta: Dict[str, Any]) -> list[str
     if not changes:
         return content
     return [json.dumps(data, indent=2)]
-
-
-def _is_xml_content_type(content_type: str) -> bool:
-    """True for data XML (sitemap / RSS / Atom / SOAP / +xml), False for HTML-ish XML.
-
-    `application/xhtml+xml` is an HTML document wearing an XML media type: it must
-    keep going through the HTML extractor, not be handed back raw.
-    """
-    ct = (content_type or "").split(";")[0].strip().lower()
-    if not ct or ct.startswith(("application/xhtml", "image/", "text/html")):
-        return False
-    return ct.endswith("+xml") or ct.startswith(
-        ("application/xml", "text/xml", "application/rss", "application/atom",
-         "application/rdf"))
 
 
 def _translate_response(page: _DholeResponse, *args, **kwargs) -> ResponseModel:
