@@ -152,3 +152,26 @@ class TestLayerDocsTellTheTruth:
             "ops.py 的模块级 MasterFetchServer import 被改掉了：那会让缺依赖的人"
             "看到 argparse 的参数错误而不是该装的那件东西（见 ops.py docstring）")
         assert "惰性" in src, "这条约束的理由必须留在源码里，不只在 commit message 里"
+
+
+def test_the_connect_size_readme_quotes_is_the_one_the_ruler_measures():
+    """README 里那句「连接期开销 N 字符」必须等于尺子此刻量的数。
+
+    这个数字是 17.0 收尾这一批的发言权所在（44,016 → 40,472）：每改一颗描述它都会动，
+    而 README 是操作员唯一真会读的那一份。手抄一次的下场已经在正文里写过一次 ——
+    旧数字比实测高 233 的那条修复记录就是它。所以这里不比对"写得差不多"，只比对
+    同一把尺子（compact tools/list + instructions）的当下读数。
+    """
+    import json
+
+    from dhole_mcp.server import DHOLE_INSTRUCTIONS, MasterFetchServer
+
+    total = len(json.dumps({"tools": MasterFetchServer._TOOL_DEFS}, ensure_ascii=False,
+                           separators=(",", ":"))) + len(DHOLE_INSTRUCTIONS)
+    quoted = [int(m.replace(",", "")) for m in
+              re.findall(r"连接期开销 ([\d,]+) 字符", _readme())]
+    assert quoted, ("README 不再写连接期开销了：那这条守卫该跟着退场，"
+                    "而不是留在这里空转成一个看起来通过的东西")
+    assert quoted == [total], (
+        f"README 写的是 {quoted}，尺子量到 {total:,} —— 要么改 README，"
+        "要么说清为什么这次改动没进 wire")

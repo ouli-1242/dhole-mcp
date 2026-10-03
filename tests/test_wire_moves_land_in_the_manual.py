@@ -115,7 +115,9 @@ def test_connect_stays_inside_the_packed_budget():
     """
     import json
 
-    tools = json.dumps(MasterFetchServer._TOOL_DEFS, ensure_ascii=False,
+    # 与 `tests/tool_payload_measure.py` 同一把尺子：MCP 发的是 `{"tools":[...]}`，
+    # 那层信封的 10 个字符也算连接期开销。
+    tools = json.dumps({"tools": MasterFetchServer._TOOL_DEFS}, ensure_ascii=False,
                        separators=(",", ":"))
     total = len(tools) + len(DHOLE_INSTRUCTIONS)
     assert total <= CONNECT_CEILING, (
