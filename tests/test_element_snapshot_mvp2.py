@@ -398,11 +398,14 @@ class TestWriteAudit:
 
     @staticmethod
     async def _force_http(s, url):
+        # 13d：_force_fetch 不再收 wait / network_idle —— 渲染时机不再是参数，浏览器
+        # 层认出壳页才付那 5 秒（证人 tests/test_render_settle_b5.py）。本条走的是
+        # HTTP 层，钉的是写审计，时机从来与它无关。
         return await s._force_fetch(
             url, "http", extraction_type="markdown", css_selector=None,
             cache_ttl=0,
-            offset=0, headless=True, real_chrome=False, wait=0, proxy=None,
-            timeout=30000, network_idle=False, solve_cloudflare=True,
+            offset=0, headless=True, real_chrome=False, proxy=None,
+            timeout=30000, solve_cloudflare=True,
             block_webrtc=True, hide_canvas=True, extra_headers=None,
             useragent=None, cookies=None)
 

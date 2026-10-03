@@ -147,8 +147,10 @@ class TestOptionsReachTheHttpTier:
                 url="https://example.com/p", force_fetcher="http",
                 extraction_type="markdown", css_selector=None,
                 cache_ttl=0,
-                offset=0, headless=True, real_chrome=False, wait=0, proxy=None,
-                timeout=30000, network_idle=False, solve_cloudflare=True,
+                # 13d：渲染时机不再是参数（wait / network_idle 两颗删），这一层收的
+                # 自变量随之少两个；本条钉的是 cookies/useragent 能不能走到 HTTP 层。
+                offset=0, headless=True, real_chrome=False, proxy=None,
+                timeout=30000, solve_cloudflare=True,
                 block_webrtc=True, hide_canvas=True, extra_headers=None,
                 useragent="DholeTestBot/1.0", cookies="sessionid=abc123",
             ))
@@ -386,15 +388,11 @@ class TestActionsTierBudget:
 
         seen: dict = {}
 
-        async def fake_force_fetch(self, url, force_fetcher, extraction_type,
-                                   css_selector,
-                                   cache_ttl, offset, headless, real_chrome, wait,
-                                   proxy, timeout, network_idle, solve_cloudflare,
-                                   block_webrtc, hide_canvas, extra_headers,
-                                   useragent, cookies, max_chars=None, page_action=None,
-                                   check_login=False, cdp_url=None,
-                                   disable_resources=True):
-            seen["timeout"] = timeout
+        async def fake_force_fetch(self, url, force_fetcher, **kw):
+            # 本题只问预算：把 _force_fetch 的整串形参抄一遍（那时 23 个）等于让这条
+            # 测试在任何一次无关的签名改动上变红 —— 13d 删掉 wait / network_idle
+            # 就是这样。值从 kw 里取，签名再怎么变也只红在真正相关的那一行。
+            seen["timeout"] = kw["timeout"]
             raise _Stop()
 
         monkeypatch.setattr(server_mod.MasterFetchServer, "_force_fetch", fake_force_fetch)

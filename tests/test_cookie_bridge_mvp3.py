@@ -79,7 +79,10 @@ class TestBrowserBridgeHooks:
 
     @staticmethod
     def _browser(context):
-        b = StealthyBrowser(wait=0)
+        # 13d 之前这里写 StealthyBrowser(wait=0)：那颗参数只是构造时的占位，删了
+        # 就等于不传（0 从来不是这条桥的自变量）。时机本身改成浏览器层认出壳页才
+        # 付的那 5 秒，证人在 tests/test_render_settle_b5.py。
+        b = StealthyBrowser()
         b._is_alive = True
         b._context = context
         return b

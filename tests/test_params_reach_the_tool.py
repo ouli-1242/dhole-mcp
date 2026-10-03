@@ -48,6 +48,11 @@ BASE: dict[str, tuple[dict, object]] = {
 # 从公共面上搬进 cred_defaults 的落盘存储，探针表里因此不再有它们的位置：这里的每个
 # 名字都必须还是某个工具的参数（下面那条守卫会钉住），删掉的键按这个文件对退役键的
 # 既有做法办 —— 从表里拿掉，另立一条「传了就拒」的用例（TestTheIdentityKeysRefused）。
+#
+# B5-13d 之后同理少了两颗渲染时机（wait / network_idle）：它们不再是任何工具的参数，
+# 表里留着就是让"覆盖了多少颗"这个数字掺水。"传了就拒"那半边由
+# tests/test_render_settle_b5.py 的 TestTheCallSurfaceLostBothKnobs 钉住，能力本身
+# （认出壳页才付的那 5 秒）由同一份文件守。
 VALUES: dict[str, object] = {
     # web_read
     "css_selector": "p", "max_content_chars": 5000, "timeout": 20000,
@@ -55,7 +60,7 @@ VALUES: dict[str, object] = {
     "schema": {"properties": {"t": {"selector": "p"}}},
     # B5-13a：档位是字符串枚举，探针值要和默认值 "auto" 不同才探得出丢没丢。
     "anti_detect": "aggressive",
-    "wait": 100, "max_links": 5, "session_id": "probe-session",
+    "max_links": 5, "session_id": "probe-session",
     "method": "GET", "body": {"a": 1}, "content_type": "application/json",
     "focus": "topic", "focus_mode": "best", "focus_engine": "bm25",
     "actions": [{"wait": 1}], "cache_ttl": 300,
@@ -88,8 +93,8 @@ VALUES: dict[str, object] = {
 # 布尔类共用一个值；列出来是为了让"表里查不到"这条守卫说得准。
 # §3-17：allow_private 原来是这张表里的一颗（每次调用放行内网），现在它只能从
 # cred_defaults 落盘，所以按上面 VALUES 的同一处理从表里拿掉。
+# B5-13d：network_idle 同样拿掉 —— 渲染时机不再是调用方能说的话。
 BOOL_KEYS = {
-    "network_idle",
     "include_media", "include_links", "ignore_robots",
     "full_page", "sitemap", "check_login",
 }

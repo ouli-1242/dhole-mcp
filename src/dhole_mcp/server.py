@@ -2661,14 +2661,19 @@ def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Option
 _ARG_TYPES: dict[str, dict[str, str]] = {
     "web_read": {
         "urls": "list",
-        "network_idle": "bool", "include_media": "bool",
+        "include_media": "bool",
         "include_links": "bool", "ignore_robots": "bool",
         "cache_ttl": "int", "offset": "int", "max_content_chars": "int",
         "max_links": "int",
         "method": "str", "content_type": "str",
         "focus_mode": "str",
         "focus_engine": "str",
-        "timeout": "number", "wait": "number",
+        # The two booleans that make a decision rather than ask for data. Read
+        # raw, a string client's `confirm: "false"` is a truthy non-empty string
+        # and authorizes a CDP attach nobody approved — the same defect
+        # sys_state's `confirm` already fell into once.
+        "confirm": "bool", "check_login": "bool",
+        "timeout": "number",
         # A numeric PDF page request ("pages": 3) is unambiguous; reading it only
         # as a string used to drop the range silently and return the whole file.
         "pages": "strnum", "password": "strnum",
@@ -2689,8 +2694,8 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         # the one spelling 'auto' would not survive.
     },
     "web_screenshot": {
-        "full_page": "bool", "network_idle": "bool", "decode_qr": "bool",
-        "quality": "int", "wait": "number", "timeout": "number",
+        "full_page": "bool", "decode_qr": "bool",
+        "quality": "int", "timeout": "number",
     },
     "web_search": {
         "max_results": "int", "cache_ttl": "int", "page": "int",
@@ -3649,7 +3654,7 @@ def _smart_fetch_request_context(func):
         if _ap not in (None, False, "") and not parse_allow_private(_ap)[0]:
             # A security-relevant default that parses to nothing must not fail
             # silently: the caller stored it and needs to know it did nothing.
-            notes.append(f"the stored allow_private={_ap!r} was ignored: cred_defaults "
+            notes.append(f"the stored allow_private ({_ap!r}) does nothing: cred_defaults "
                          "takes true (loopback only) or a list of hosts")
         _sid = options.get("session_id")
         if _sid not in (None, "") and not _SESSION_ID.get():
@@ -4898,7 +4903,6 @@ _SF_PARAMS = frozenset({
     "schema",
     # §3-17：身份不再逐次传 —— auth / cookies / proxy / extra_headers 全部住在
     # cred_defaults（凭据还要带 host），这里只剩渲染时机与读法。
-    "wait", "network_idle",
     # §3-19：伪装强度是一颗档位，不是六颗旋钮（headless/real_chrome/hide_canvas/
     # block_webrtc/solve_cloudflare/useragent 全收进 _ANTI_DETECT）。
     "anti_detect",
@@ -4917,8 +4921,8 @@ _SC_PARAMS = frozenset({
     "search", "ignore_robots", "focus_engine",
 })
 _SHOT_PARAMS = frozenset({
-    "full_page", "image_type", "quality", "wait", "wait_selector",
-    "network_idle", "timeout", "save_to",
+    "full_page", "image_type", "quality", "wait_selector",
+    "timeout", "save_to",
     # selector = 元素级裁剪（17.0 起常开）；decode_qr = 本地二维码解码
     # （确定性工作，从来不设门控）。
     "selector", "decode_qr",
@@ -5697,7 +5701,6 @@ class MasterFetchServer:
         headless: bool = True,
         google_search: bool = True,
         real_chrome: bool = False,
-        wait: int | float = 0,
         proxy: Optional[str | Dict[str, str]] = None,
         timezone_id: str | None = None,
         locale: str | None = None,
@@ -5708,7 +5711,6 @@ class MasterFetchServer:
         disable_resources: bool = False,
         wait_selector: Optional[str] = None,
         cookies: Sequence[SetCookieParam] | None = None,
-        network_idle: bool = False,
         wait_selector_state: SelectorWaitStates = "attached",
         hide_canvas: bool = False,
         block_webrtc: bool = False,
@@ -5727,7 +5729,6 @@ class MasterFetchServer:
         :param headless: Run browser headless (default True).
         :param google_search: Set Google referer header (default True).
         :param real_chrome: Use installed Chrome instead of Chromium.
-        :param wait: Milliseconds to wait after everything finishes.
         :param proxy: Proxy string or dict with 'server', 'username', 'password'.
         :param timezone_id: Change browser timezone.
         :param locale: User locale, e.g., 'en-GB'.
@@ -5738,7 +5739,6 @@ class MasterFetchServer:
         :param disable_resources: Drop font/image/media/stylesheet requests for speed.
         :param wait_selector: CSS selector to wait for before proceeding.
         :param cookies: Cookies for the session.
-        :param network_idle: Wait until no network connections for 500ms.
         :param wait_selector_state: 'attached', 'detached', 'visible', or 'hidden'.
         :param hide_canvas: (Stealthy) Random canvas noise for anti-fingerprinting.
         :param block_webrtc: (Stealthy) Prevent IP leak via WebRTC.
@@ -5785,10 +5785,10 @@ class MasterFetchServer:
 
         from dhole_mcp.browser import StealthyBrowser
         common_kwargs: Dict[str, Any] = dict(
-            wait=wait, proxy=proxy, locale=locale, timeout=timeout, cookies=cookies,
+            proxy=proxy, locale=locale, timeout=timeout, cookies=cookies,
             cdp_url=cdp_url, headless=headless, allowed_hosts=cdp_allowed,
             useragent=useragent, timezone_id=timezone_id, real_chrome=real_chrome,
-            network_idle=network_idle, wait_selector=wait_selector, google_search=google_search,
+            wait_selector=wait_selector, google_search=google_search,
             extra_headers=extra_headers, disable_resources=disable_resources,
             wait_selector_state=wait_selector_state,
             # §3-17: the named persistent context. Nothing else can name it now
@@ -6544,10 +6544,8 @@ class MasterFetchServer:
         image_type: ScreenshotType = "png",
         full_page: bool = False,
         quality: Optional[int] = None,
-        wait: int | float = 0,
         wait_selector: Optional[str] = None,
         wait_selector_state: SelectorWaitStates = "attached",
-        network_idle: bool = False,
         timeout: int | float = 30000,
         save_to: Optional[str] = None,
         selector: Optional[str] = None,
@@ -6560,8 +6558,8 @@ class MasterFetchServer:
         pays the browser cold start. Pass session_id only to reuse a specific
         open session.
 
-        Capture knobs (image_type / full_page / quality / wait / wait_selector
-        / network_idle / timeout / save_to) are top-level args of this tool.
+        Capture knobs (image_type / full_page / quality / wait_selector / timeout
+        / save_to) are top-level args of this tool.
         This docstring once listed them as :param: entries while they lived in
         the options bag, and was wrong the moment they moved either way.
 
@@ -6641,7 +6639,7 @@ class MasterFetchServer:
         # only the entry check would load the page and then block its image.
         with allow_private_scope(allow_private):
             await entry.session.fetch(
-                url, wait=wait, timeout=timeout, network_idle=network_idle,
+                url, timeout=timeout,
                 wait_selector=wait_selector, wait_selector_state=wait_selector_state,
                 page_action=_capture,
             )
@@ -6895,7 +6893,6 @@ class MasterFetchServer:
         headless: bool = True,
         google_search: bool = True,
         real_chrome: bool = False,
-        wait: int | float = 0,
         proxy: Optional[str | Dict[str, str]] = None,
         timezone_id: str | None = None,
         locale: str | None = None,
@@ -6907,7 +6904,6 @@ class MasterFetchServer:
         disable_resources: bool = False,
         wait_selector: Optional[str] = None,
         cookies: Sequence[SetCookieParam] | None = None,
-        network_idle: bool = False,
         wait_selector_state: SelectorWaitStates = "attached",
         block_webrtc: bool = False,
         allow_webgl: bool = True,
@@ -6940,7 +6936,6 @@ class MasterFetchServer:
         :param hide_canvas: Random canvas noise.
         :param allow_webgl: Keep WebGL enabled (default True; WAFs check for it).
         :param real_chrome: Use installed Chrome.
-        :param wait: Milliseconds to wait after page load.
         :param proxy: Proxy to use.
         :param timezone_id: Browser timezone.
         :param locale: Browser locale.
@@ -6951,7 +6946,6 @@ class MasterFetchServer:
         :param disable_resources: Drop unnecessary resource requests.
         :param wait_selector: CSS selector to wait for.
         :param cookies: Cookies to set.
-        :param network_idle: Wait for no network connections for 500ms.
         :param wait_selector_state: Selector wait state.
         :param additional_args: Extra Playwright context args.
         :param session_id: Reuse existing browser session.
@@ -6972,10 +6966,10 @@ class MasterFetchServer:
         bulk = await self.bulk_stealthy_fetch(
             urls=[url], extraction_type=extraction_type, css_selector=css_selector,
             headless=headless, google_search=google_search, real_chrome=real_chrome,
-            wait=wait, proxy=proxy, timezone_id=timezone_id, locale=locale,
+            proxy=proxy, timezone_id=timezone_id, locale=locale,
             extra_headers=extra_headers, useragent=useragent, hide_canvas=hide_canvas,
             cdp_url=cdp_url, timeout=timeout, disable_resources=disable_resources,
-            wait_selector=wait_selector, cookies=cookies, network_idle=network_idle,
+            wait_selector=wait_selector, cookies=cookies,
             wait_selector_state=wait_selector_state, block_webrtc=block_webrtc,
             allow_webgl=allow_webgl, solve_cloudflare=solve_cloudflare,
             additional_args=additional_args, session_id=session_id,
@@ -6993,7 +6987,6 @@ class MasterFetchServer:
         headless: bool = True,
         google_search: bool = True,
         real_chrome: bool = False,
-        wait: int | float = 0,
         proxy: Optional[str | Dict[str, str]] = None,
         timezone_id: str | None = None,
         locale: str | None = None,
@@ -7005,7 +6998,6 @@ class MasterFetchServer:
         disable_resources: bool = False,
         wait_selector: Optional[str] = None,
         cookies: Sequence[SetCookieParam] | None = None,
-        network_idle: bool = False,
         wait_selector_state: SelectorWaitStates = "attached",
         block_webrtc: bool = False,
         allow_webgl: bool = True,
@@ -7027,7 +7019,6 @@ class MasterFetchServer:
         :param hide_canvas: Random canvas noise.
         :param allow_webgl: Keep WebGL enabled (default True).
         :param real_chrome: Use installed Chrome.
-        :param wait: Milliseconds to wait after page load.
         :param proxy: Proxy to use.
         :param timezone_id: Browser timezone.
         :param locale: Browser locale.
@@ -7038,7 +7029,6 @@ class MasterFetchServer:
         :param disable_resources: Drop unnecessary resource requests.
         :param wait_selector: CSS selector to wait for.
         :param cookies: Cookies to set.
-        :param network_idle: Wait for no network connections for 500ms.
         :param wait_selector_state: Selector wait state.
         :param additional_args: Extra Playwright context args.
         :param session_id: Reuse existing browser session.
@@ -7085,10 +7075,10 @@ class MasterFetchServer:
                 await self._bridge_seed(entry.session, urls, bridge_sid)
             timed_tasks = [
                 _timed(entry.session.fetch(
-                    url, wait=wait, timeout=timeout, google_search=google_search,
+                    url, timeout=timeout, google_search=google_search,
                     extra_headers=extra_headers, disable_resources=disable_resources,
                     wait_selector=wait_selector, wait_selector_state=wait_selector_state,
-                    network_idle=network_idle, proxy=proxy, solve_cloudflare=solve_cloudflare,
+                    proxy=proxy, solve_cloudflare=solve_cloudflare,
                     page_action=page_action, probe_out=_probe,
                 ))
                 for url in urls
@@ -7099,11 +7089,11 @@ class MasterFetchServer:
         else:
             from dhole_mcp.browser import StealthyBrowser
             async with StealthyBrowser(
-                wait=wait, proxy=proxy, locale=locale, cdp_url=cdp_url,
+                proxy=proxy, locale=locale, cdp_url=cdp_url,
                 timeout=timeout, cookies=cookies, headless=headless,
                 useragent=useragent, timezone_id=timezone_id,
                 real_chrome=real_chrome, hide_canvas=hide_canvas,
-                allow_webgl=allow_webgl, network_idle=network_idle,
+                allow_webgl=allow_webgl,
                 block_webrtc=block_webrtc, wait_selector=wait_selector,
                 google_search=google_search, extra_headers=extra_headers,
                 additional_args=additional_args, solve_cloudflare=solve_cloudflare,
@@ -7155,9 +7145,7 @@ class MasterFetchServer:
         cache_ttl: Annotated[Optional[int], Field(description="Cache duration in seconds. Default 3600 (1 hour). Set 0 to skip cache and force a fresh fetch.")] = None,
         force_fetcher: Annotated[Optional[Literal["http", "stealthy"]], Field(description="Lock to one fetcher tier, skip auto-escalation. 'http' = fast HTTP-only (fails on JS/bot walls). 'stealthy' = anti-detect browser (Patchright). Two tiers: the third one and its 'dynamic' alias are gone.")] = None,
         anti_detect: Annotated[Optional[Literal["off", "basic", "auto", "aggressive"]], Field(description=ANTI_DETECT_DESC)] = None,
-        wait: Annotated[int | float, Field(description="Extra milliseconds to wait after page load for JS rendering.")] = 0,
         timeout: Annotated[Optional[int | float], Field(description="Whole-call budget in milliseconds (default 30000; 60000 when actions are used; max 120000). Shared by the HTTP retries, and a document URL spends it on the download.")] = None,
-        network_idle: Annotated[bool, Field(description="Wait until network is idle for 500ms before capturing (good for SPAs).")] = False,
         offset: Annotated[int, Field(description="Resume from this character offset when content was truncated. The response tells you the next offset to use.")] = 0,
         max_content_chars: Annotated[Optional[int], Field(description="Max chars of extracted content to return (default 40000). Lower this to save context tokens on big pages; the rest is paginated via offset/next_offset.")] = None,
         pages: Annotated[Optional[str], Field(description="PDF only: page spec like '1-5' or '1,3,5-7' to extract a subset of pages. Saves tokens on big PDFs, NOT download time - the file is fetched in full before any page is picked. None = all pages.")] = None,
@@ -7303,7 +7291,7 @@ class MasterFetchServer:
                 )
             return await self._smart_fetch_bulk(
                 urls, extraction_type, css_selector, cache_ttl, force_fetcher,
-                wait, timeout=timeout, network_idle=network_idle,
+                timeout=timeout,
                 # The rung is the one identity value a caller can still name per
                 # call, so a batch carries it to every row; credentials need no
                 # forwarding — each row resolves its own host from the store.
@@ -7538,8 +7526,7 @@ class MasterFetchServer:
                     css_selector=css_selector,
                     cache_ttl=0,
                     offset=offset, headless=headless, real_chrome=real_chrome,
-                    wait=wait, proxy=proxy, timeout=timeout,
-                    network_idle=network_idle,
+                    proxy=proxy, timeout=timeout,
                     solve_cloudflare=solve_cloudflare,
                     block_webrtc=block_webrtc, hide_canvas=hide_canvas,
                     extra_headers=extra_headers, useragent=useragent,
@@ -7601,8 +7588,8 @@ class MasterFetchServer:
                 # "content" for a call that asked whether the content still stands.
                 cache_ttl=0 if conditional else cache_ttl,
                 offset=0,
-                headless=headless, real_chrome=real_chrome, wait=wait,
-                proxy=proxy, timeout=timeout, network_idle=network_idle,
+                headless=headless, real_chrome=real_chrome,
+                proxy=proxy, timeout=timeout,
                 solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
                 hide_canvas=hide_canvas, extra_headers=extra_headers,
                 useragent=useragent, cookies=cookies,
@@ -7688,8 +7675,7 @@ class MasterFetchServer:
                     css_selector=css_selector,
                     cache_ttl=cache_ttl,
                     offset=offset, headless=headless, real_chrome=real_chrome,
-                    wait=wait, proxy=proxy, timeout=timeout,
-                    network_idle=network_idle,
+                    proxy=proxy, timeout=timeout,
                     solve_cloudflare=solve_cloudflare,
                     block_webrtc=block_webrtc, hide_canvas=hide_canvas,
                     extra_headers=extra_headers, useragent=useragent,
@@ -7709,8 +7695,7 @@ class MasterFetchServer:
                     css_selector=css_selector,
                     cache_ttl=cache_ttl,
                     offset=offset, headless=headless, real_chrome=real_chrome,
-                    wait=wait, proxy=proxy, timeout=timeout,
-                    network_idle=network_idle,
+                    proxy=proxy, timeout=timeout,
                     solve_cloudflare=solve_cloudflare,
                     block_webrtc=block_webrtc, hide_canvas=hide_canvas,
                     extra_headers=extra_headers, useragent=useragent,
@@ -7726,8 +7711,8 @@ class MasterFetchServer:
                 css_selector=css_selector,
                 cache_ttl=0 if conditional else cache_ttl,
                 offset=offset,
-                headless=headless, real_chrome=real_chrome, wait=wait,
-                proxy=proxy, timeout=timeout, network_idle=network_idle,
+                headless=headless, real_chrome=real_chrome,
+                proxy=proxy, timeout=timeout,
                 solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
                 hide_canvas=hide_canvas, extra_headers=extra_headers,
                 useragent=useragent, cookies=cookies, max_chars=mc,
@@ -7777,7 +7762,7 @@ class MasterFetchServer:
 
     async def _smart_fetch_bulk(
         self, urls, extraction_type, css_selector, cache_ttl, force_fetcher,
-        wait, timeout, network_idle,
+        timeout,
         max_chars: int = DEFAULT_MAX_CONTENT_CHARS,
         anti_detect: Optional[str] = None,
         include_media: bool = False, include_links: bool = False,
@@ -7804,8 +7789,7 @@ class MasterFetchServer:
                     css_selector=css_selector,
                     cache_ttl=cache_ttl,
                     force_fetcher=force_fetcher,
-                    wait=wait, timeout=timeout,
-                    network_idle=network_idle, anti_detect=anti_detect,
+                    timeout=timeout, anti_detect=anti_detect,
                     max_content_chars=max_chars,
                     include_media=include_media, include_links=include_links,
                     focus=focus, schema=schema,
@@ -7899,7 +7883,7 @@ class MasterFetchServer:
     async def _force_fetch(
         self, url, force_fetcher, extraction_type, css_selector,
         cache_ttl, offset,
-        headless, real_chrome, wait, proxy, timeout, network_idle,
+        headless, real_chrome, proxy, timeout,
         solve_cloudflare, block_webrtc, hide_canvas, extra_headers,
         useragent, cookies, max_chars: int = DEFAULT_MAX_CONTENT_CHARS,
         page_action=None,
@@ -8034,8 +8018,8 @@ class MasterFetchServer:
                 url, extraction_type=extraction_type,
                 css_selector=css_selector,
                 headless=headless,
-                real_chrome=real_chrome, wait=wait, proxy=proxy,
-                timeout=timeout, network_idle=network_idle,
+                real_chrome=real_chrome, proxy=proxy,
+                timeout=timeout,
                 disable_resources=disable_resources,
                 solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
                 hide_canvas=hide_canvas, extra_headers=extra_headers,
@@ -8103,8 +8087,8 @@ class MasterFetchServer:
             return None
 
     async def _auto_escalate(
-        self, url, extraction_type, css_selector, cache_ttl, offset, headless, real_chrome, wait,
-        proxy, timeout, network_idle, solve_cloudflare, block_webrtc,
+        self, url, extraction_type, css_selector, cache_ttl, offset, headless, real_chrome,
+        proxy, timeout, solve_cloudflare, block_webrtc,
         hide_canvas, extra_headers, useragent, cookies, max_chars: int = DEFAULT_MAX_CONTENT_CHARS,
         conditional: Optional[dict] = None, load_everything: bool = False,
     ) -> ResponseModel:
@@ -8426,8 +8410,8 @@ class MasterFetchServer:
             url, extraction_type=extraction_type,
             css_selector=css_selector,
             headless=headless,
-            real_chrome=real_chrome, wait=wait, proxy=proxy,
-            timeout=remaining, network_idle=network_idle,
+            real_chrome=real_chrome, proxy=proxy,
+            timeout=remaining,
             disable_resources=not load_everything,
             solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
             hide_canvas=hide_canvas, extra_headers=extra_headers,
@@ -8461,7 +8445,7 @@ class MasterFetchServer:
         elif category == "connection_reset":
             tips = (
                 "- The remote host forcibly closed the connection (anti-bot firewall).\n"
-                "- Try with a proxy via the proxy parameter.\n"
+                "- Try a proxy stored with cred_defaults.\n"
                 "- Try a different URL on the same domain (some paths have lower protection).\n"
                 "- If it persists, switch sources."
             )
@@ -8475,7 +8459,7 @@ class MasterFetchServer:
             tips = (
                 "- If the site uses Cloudflare Turnstile or DataDome, no free tool can bypass it.\n"
                 "- Try a different URL on the same domain (some paths have lower protection).\n"
-                "- Try with a proxy via the proxy parameter."
+                "- Try a proxy stored with cred_defaults."
             )
         # The recovery tips belong in `error` ("Error + recovery hints"), not in
         # `content`: a caller that reads content[0] as the page body would take
@@ -9489,8 +9473,6 @@ class MasterFetchServer:
                     "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check for this call (default false = comply; a disallowed URL makes no request at all). Set true only where you have the site's permission."},
                     "check_login": {"type": "boolean", "description": "Run the model-free login probe on the settled browser page; returns login_check (DOM signals + cookie NAMES, never values). Live-only: null on HTTP-tier results and on cache hits, so pair it with cache_ttl=0."},
                     "cdp_url": {"type": "string", "description": "Attach the user's own Chrome over CDP for this call - it rides that profile's logged-in cookies, and the HTTP tier and public cache are skipped. The FIRST attach to a host is refused with cdp_authorization_required and executes nothing until confirm=true authorizes it; answers say cdp_attached=true."},
-                    "wait": {"type": "number", "description": "Extra milliseconds to wait after page load for JS rendering (browser tier)."},
-                    "network_idle": {"type": "boolean", "description": "Wait until the network has been idle 500ms before capturing (browser tier; good for SPAs). Already tuned - leave unset unless something names it."},
                     "include_links": {"type": "boolean", "description": "Return the page's outgoing links classified as citations / navigation / external, with a primary_source hint (default false)."},
                     "max_links": {"type": "integer", "description": "Cap for EACH links list when include_links=true (1-100; default 30/20/20). links.total_found and links.is_truncated say what the cap hid."},
                     "include_media": {"type": "boolean", "description": "Return up to 20 image URLs found on the page in .media (default false)."},
@@ -9557,9 +9539,7 @@ class MasterFetchServer:
                     "image_type": {"type": "string", "enum": ["png", "jpeg"], "description": "Encoding (default png)."},
                     "quality": {"type": "integer", "description": "JPEG quality 0-100; ignored for png."},
                     "decode_qr": {"type": "boolean", "description": "Decode QR codes visible in the capture and report the payloads in the text part (local, deterministic, no model). An empty list means no code was found."},
-                    "wait": {"type": "integer", "description": "Extra milliseconds after load before capturing."},
                     "wait_selector": {"type": "string", "description": "CSS selector to wait for before capturing."},
-                    "network_idle": {"type": "boolean", "description": "Wait until the network has been idle 500ms (good for SPAs)."},
                     "timeout": {"type": "integer", "description": "Budget in ms (default 30000)."},
                 },
             },

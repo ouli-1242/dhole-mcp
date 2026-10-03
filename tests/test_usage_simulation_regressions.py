@@ -120,10 +120,14 @@ class TestTheBackstopArrivesAfterTheTiers:
         server.get = shell
         server.stealthy_fetch = wedged
 
+        # 升级链那些参数按名字给：B5-13d 删掉的是时机那两位（`wait` 彻底没，
+        # `network_idle` 变成浏览器层认出壳页才付的 5 秒，见 tests/test_render_settle_b5.py），
+        # 照位置传的话这次会往后错两位，红成内部函数的形状而不是这条症状。
         out = await server._auto_escalate(
-            "https://slow.test/page.html", "markdown", None, 0, 0,
-            True, False, 0, None, 2000, False, False, False, False,
-            None, None, None)
+            "https://slow.test/page.html", extraction_type="markdown", css_selector=None,
+            cache_ttl=0, offset=0, headless=True, real_chrome=False, proxy=None,
+            timeout=2000, solve_cloudflare=False, block_webrtc=False, hide_canvas=False,
+            extra_headers=None, useragent=None, cookies=None)
         assert out.error.startswith("timeout: the ")
         assert "status 200" in out.next_action, out.next_action
         assert "force_fetcher='http'" in out.next_action

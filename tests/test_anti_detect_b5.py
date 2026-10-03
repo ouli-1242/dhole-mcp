@@ -89,18 +89,27 @@ def test_web_read_advertises_one_level_param_and_no_hardening_knobs():
     assert "anti_detect" in server_mod._TOP_LEVEL_ARGS["web_read"]
     assert not set(RETIRED) & server_mod._TOP_LEVEL_ARGS["web_read"]
     # 六颗换一颗，这一刀的净账是 40 → 35；B5-13c 再把 auth / cookies / proxy /
-    # extra_headers / allow_private 五颗搬进 cred_defaults，净账 35 → 30。
+    # extra_headers / allow_private 五颗搬进 cred_defaults，净账 35 → 30；B5-13d
+    # 又把渲染时机那两颗（wait / network_idle）收成浏览器层的一条规矩，30 → 28。
     # §3-12 的 ≤20 由 tests/test_wire_shape.py 整块 xfail(strict) 盯着，等 B5-14
     #（web_act / web_request 拆走）把剩下的搬完再摘牌 —— 这里若预先断言 ≤20，
     # 就是在替别的批次许它还没实现的愿。
-    assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 30, \
+    assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 28, \
         len(server_mod._TOP_LEVEL_ARGS["web_read"])
 
 
-def test_render_timing_knobs_stay_on_the_call_surface():
-    """两条轴不许混：wait / network_idle 决定读不读得到内容，不决定像不像机器人。"""
+def test_the_two_axes_stayed_two_axes():
+    """两条轴不许混：伪装收进档位，时机收成规矩 —— 谁也不许替对方做决定。
+
+    13a 的时候时机还留在参数面（那条测试钉的是"它俩没被吸进 anti_detect"）。13d
+    之后时机那颗也没了：`wait` 彻底删，`network_idle` 变成认出壳页才付的 5 秒，
+    判定的证人搬到 tests/test_render_settle_b5.py。这里守的是另一半：档位的枚举
+    里不许混进时机（一个决定"像不像机器人"的旋钮不该同时决定"读不读得到内容"）。
+    """
     props = set(_defs()["web_read"]["inputSchema"]["properties"])
-    assert {"wait", "network_idle"} <= props, sorted(props)
+    assert not {"wait", "network_idle"} & props, sorted(props)
+    assert set(_defs()["web_read"]["inputSchema"]["properties"]["anti_detect"]["enum"]) \
+        == {"off", "basic", "auto", "aggressive"}
 
 
 @pytest.mark.parametrize("knob", RETIRED)

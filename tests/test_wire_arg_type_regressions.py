@@ -159,21 +159,39 @@ class TestOtherToolsWithTheSameGap:
         17.0 B5-13a 之前这里的样本是 `headless` / `hide_canvas`。那两颗已经进了
         `anti_detect` 档位、不再是入参，所以这一族的样本换成留下来的那几颗布尔，
         并把档位那颗字符串一起钉住：它走的是同一条边界，而大小写/空白是字符串客户端
-        最容易带进来的两种噪声。
+        最容易带进来的两种噪声。B5-13d 退掉 `network_idle` 后，样本就是 web_read 在
+        `_ARG_TYPES` 里仅剩的三颗布尔 —— 一颗读真、两颗读假，边界两个方向都还钉着。
         """
         seen = _record(monkeypatch, "web_read", ResponseModel(url="", status=0, content=[]))
         _dispatch("web_read", {"url": "https://example.test",
                                   "include_links": "true",
                                   "include_media": "false",
-                                  "network_idle": "false",
                                   "ignore_robots": "false",
                                   "anti_detect": " AGGRESSIVE "})
 
         assert seen["include_links"] is True
         assert seen["include_media"] is False
-        assert seen["network_idle"] is False
         assert seen["ignore_robots"] is False
         assert seen["anti_detect"] == "aggressive"
+
+    def test_the_two_booleans_that_decide_something_are_read_as_booleans(self, monkeypatch):
+        """`confirm="false"` 到闸门口是一个非空字符串 = 真。
+
+        sys_state 的 confirm 栽过一次（"just look" 变成了清盘）。web_read 这两颗是同
+        一类、而且后果更重：confirm 决定"要不要替用户授权一台真实 Chrome"（先问再记
+        的那道闸），check_login 决定要不要跑那次 DOM 探测。schema 里两颗都写着
+        boolean，调度器原先却没有它们的字符串写法路径 —— 守卫
+        `test_every_boolean_property_has_a_string_spelling_reader` 现在盯着这一整族。
+        """
+        seen = _record(monkeypatch, "web_read", ResponseModel(url="", status=0, content=[]))
+        _dispatch("web_read", {"url": "https://example.test",
+                                  "confirm": "false", "check_login": "false"})
+        assert seen["confirm"] is False
+        assert seen["check_login"] is False
+
+        seen = _record(monkeypatch, "web_read", ResponseModel(url="", status=0, content=[]))
+        _dispatch("web_read", {"url": "https://example.test", "check_login": "true"})
+        assert seen["check_login"] is True
 
     def test_screenshot_full_page_accepts_the_string_spellings(self, monkeypatch):
         seen = _record(monkeypatch, "web_screenshot", [])

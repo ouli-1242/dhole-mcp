@@ -31,6 +31,23 @@ def _result(**kwargs):
     return ResponseModel(**defaults)
 
 
+# `_auto_escalate` 这一层的必填自变量：除 url 与预算外，其余都是本题不收的值。
+# 以前 6 条测试各自把它们抄成一串位置参数（17 个），13d 删掉 wait / network_idle
+# 之后位置整体错位而不报错 —— timeout 被喂成 None、max_chars 被喂成 None，有的测试
+# 只是碰巧还没走到用到那两个值的那一步。改成按名字传，且只在这一处传。
+_TIER_BASE = dict(
+    extraction_type="markdown", css_selector=None, cache_ttl=0, offset=0,
+    headless=True, real_chrome=False, proxy=None, solve_cloudflare=False,
+    block_webrtc=False, hide_canvas=False, extra_headers=None,
+    useragent=None, cookies=None,
+)
+
+
+async def _escalate(server, url, timeout_ms):
+    """走真的升级阶梯，网络在 self.get 那一层被换掉。"""
+    return await server._auto_escalate(url, timeout=timeout_ms, **_TIER_BASE)
+
+
 # ─── BUG-5: error / placeholder text must never be the page body ───────────
 
 class TestFailureContentIsEmpty:
@@ -146,11 +163,7 @@ class TestFailureContentIsEmpty:
         server = MasterFetchServer()
         server.get = http_image
         server.stealthy_fetch = browser
-        out = await server._auto_escalate(
-            "https://cdn.example.com/logo.svg", "markdown", None, 0, 0,
-            True, False, 0, None, 20000, False, False, False, False,
-            None, None, None,
-        )
+        out = await _escalate(server, "https://cdn.example.com/logo.svg", 20000)
         assert out.error.startswith("image_ocr_failed")
         assert out.fetcher_used == "http", "结果应该仍是 HTTP 层的，说明没走浏览器"
 
@@ -183,11 +196,7 @@ class TestFailureContentIsEmpty:
         server.get = http_404
         server.stealthy_fetch = browser
         monkeypatch.setattr(server, "_fetch_from_archive", fake_archive)
-        out = await server._auto_escalate(
-            "https://cdn.example.com/gone.png", "markdown", None, 0, 0,
-            True, False, 0, None, 20000, False, False, False, False,
-            None, None, None,
-        )
+        out = await _escalate(server, "https://cdn.example.com/gone.png", 20000)
         assert asked == ["https://cdn.example.com/gone.png"], "404 的图片 URL 没去查 Wayback"
         assert "snapshot body" in "\n".join(out.content)
 
@@ -249,14 +258,14 @@ class TestFailureContentIsEmpty:
         server = MasterFetchServer()
         server.get = http_fail
         server.stealthy_fetch = browser_fail
-        out = await server._auto_escalate(
-            "https://blocked.example.com", "markdown", None, 0, 0,
-            True, False, 0, None, 20000, False, False, False, False,
-            None, None, None,
-        )
+        out = await _escalate(server, "https://blocked.example.com", 20000)
         assert out.content == []
         assert out.error.startswith("all_tiers_failed:")
-        assert "Try with a proxy" in out.error or "unreachable" in out.error
+        # 13d 只改了这句的措辞：代理不再是一颗参数，而是 cred_defaults 里存的凭据，
+        # 建议随之改口。本题钉的仍是 BUG-5 那一半 —— 恢复建议在 error 里、不在正文里。
+        assert "Try a proxy stored with cred_defaults" in out.error \
+            or "unreachable" in out.error
+        assert "the proxy parameter" not in out.error, "退役的 proxy 参数措辞复活了"
         assert out.content_ok is False
 
     def test_exhausted_pagination_still_says_so(self):
@@ -917,11 +926,7 @@ class TestCallBudget:
         monkeypatch.setattr(fetcher, "tcp_preflight", lambda url, timeout=2.0: (True, ""))
         server = MasterFetchServer()
         server.get = slow_get
-        out = await server._auto_escalate(
-            "https://slow.example.com", "markdown", None, 0, 0,
-            True, False, 0, None, 800, False, False, False, False,
-            None, None, None,
-        )
+        out = await _escalate(server, "https://slow.example.com", 800)
         assert out.status == 0
         assert out.content == []
         assert "HTTP tier" in out.error
@@ -945,11 +950,7 @@ class TestCallBudget:
                             lambda url, default_ms: 60000)
         server = MasterFetchServer()
         server.get = capture_get
-        await server._auto_escalate(
-            "https://slow.example.com", "markdown", None, 0, 0,
-            True, False, 0, None, 1500, False, False, False, False,
-            None, None, None,
-        )
+        await _escalate(server, "https://slow.example.com", 1500)
         assert seen.get("timeout", 99) <= 2
 
 
@@ -1137,11 +1138,7 @@ class TestArchiveFallback:
                            fetcher_used="archive.org", url=url)
 
         monkeypatch.setattr(server, "_fetch_from_archive", fake_archive)
-        out = await server._auto_escalate(
-            "https://gone.example.com/x", "markdown", None, 0, 0,
-            True, False, 0, None, 8000, False, False, False, False,
-            None, None, None,
-        )
+        out = await _escalate(server, "https://gone.example.com/x", 8000)
         assert asked == ["https://gone.example.com/x"], "410 没走到 archive 回退"
         assert out.content == ["Archived snapshot body."]
         assert out.content_ok is True

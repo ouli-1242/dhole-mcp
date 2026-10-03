@@ -140,6 +140,18 @@ def _server_with_captured_get(result=None):
     return srv, seen
 
 
+# `_auto_escalate` 与 `_force_fetch` 这两层的必填自变量：除了 url / 预算，其余都是
+# 本题不收的值。以前每条调用都抄成一串位置参数（17 个），13d 删掉 wait /
+# network_idle 后位置整体错位而不报错 —— timeout 被喂成 None、max_chars 被喂成
+# None。按名字传，并且只在这一处传，签名再动只会红在相关的那一行。
+_TIER_BASE = dict(
+    extraction_type="markdown", css_selector=None, cache_ttl=0, offset=0,
+    headless=True, real_chrome=False, proxy=None, solve_cloudflare=False,
+    block_webrtc=False, hide_canvas=False, extra_headers=None,
+    useragent=None, cookies=None,
+)
+
+
 async def _escalate(srv, url, timeout_ms, body_size=None):
     """Run tier 1 with the network replaced: TCP preflight, size probe, HTTP."""
 
@@ -152,11 +164,7 @@ async def _escalate(srv, url, timeout_ms, body_size=None):
     fetcher.tcp_preflight = lambda url, timeout=2.0: (True, "")
     fetcher.http_get = fake_http_get
     try:
-        return await srv._auto_escalate(
-            url, "markdown", None, 0, 0,
-            True, False, 0, None, timeout_ms, False, False, False, False,
-            None, None, None,
-        )
+        return await srv._auto_escalate(url, timeout=timeout_ms, **_TIER_BASE)
     finally:
         fetcher.tcp_preflight, fetcher.http_get = orig_preflight, orig_get
 
@@ -327,11 +335,7 @@ class TestForcedHttpTierRespectsTheBudget:
         orig_get = fetcher.http_get
         fetcher.http_get = lambda u, **kw: _ProbeResponse({})
         try:
-            await srv._force_fetch(
-                DOC_URL, "http", "markdown", None, 0, 0,
-                True, False, 0, None, 90000, False, False, False, False,
-                None, None, None,
-            )
+            await srv._force_fetch(DOC_URL, "http", timeout=90000, **_TIER_BASE)
         finally:
             fetcher.http_get = orig_get
 

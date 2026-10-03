@@ -88,6 +88,23 @@ def _result(**kwargs):
     return ResponseModel(**defaults)
 
 
+async def _escalate(server, url="https://example.com/boom", **over):
+    """按名字驱动升级链，不抄它的位置 arity —— 本文件开头就说红要红在症状上。
+
+    B5-13d 从这条链上删掉了渲染时机那两位（时机不再是参数：那 5 秒现在是浏览器
+    层认出壳页才付的，证人搬去 tests/test_render_settle_b5.py），照位置传法的调用
+    于是把"少了两位"读成"后面那些各自前移一位"，红成一个 TypeError。
+    """
+    kwargs = dict(
+        extraction_type="markdown", css_selector=None, cache_ttl=0, offset=0,
+        headless=True, real_chrome=False, proxy=None, timeout=20000,
+        solve_cloudflare=False, block_webrtc=False, hide_canvas=False,
+        extra_headers=None, useragent=None, cookies=None,
+    )
+    kwargs.update(over)
+    return await server._auto_escalate(url, **kwargs)
+
+
 class TestFiveHundredDoesNotBuyABrowserRun:
     """报告 G4：/status/500 白升一级 stealthy 耗 6.9s，再把同一个服务器错误
     报成 Cloudflare/DataDome。浏览器拿不到 5xx 的第二种答案。
@@ -108,11 +125,7 @@ class TestFiveHundredDoesNotBuyABrowserRun:
         server = MasterFetchServer()
         server.get = http_5xx
         server.stealthy_fetch = browser
-        out = await server._auto_escalate(
-            "https://example.com/boom", "markdown", None, 0, 0,
-            True, False, 0, None, 20000, False, False, False, False,
-            None, None, None,
-        )
+        out = await _escalate(server)
 
         assert out.fetcher_used == "http", "结果仍是 HTTP 层的，说明没走浏览器"
         assert out.status == status
@@ -136,11 +149,7 @@ class TestFiveHundredDoesNotBuyABrowserRun:
         server = MasterFetchServer()
         server.get = http_503
         server.stealthy_fetch = browser
-        out = await server._auto_escalate(
-            "https://example.com/boom", "markdown", None, 0, 0,
-            True, False, 0, None, 20000, False, False, False, False,
-            None, None, None,
-        )
+        out = await _escalate(server)
 
         assert seen == ["browser"], "503 的升级路径被一起收走了"
         assert out.status == 200

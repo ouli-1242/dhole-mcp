@@ -256,7 +256,7 @@ class TestTheSchemaBranchCallsTheTierInOrder:
         """17.0 §3-17 之后这一条读的是**存储 → 取回层**那一段。
 
         `cookies` / `proxy` 不再是 web_read 的参数：调用方递不进来，但 `_auto_escalate`
-        那 19 个位置一个没少（内部梯子仍然要它们），值改由 cred_defaults 的存储按 host
+        那 18 个位置一个没少（内部梯子仍然要它们），值改由 cred_defaults 的存储按 host
         回答。参数错位在公共面上少了一个入口，不等于这一族断言可以撤 —— 所以这里把
         cookie 存进 example.com 的 scope，再断言它原样抵达取回层。
         """
@@ -267,7 +267,7 @@ class TestTheSchemaBranchCallsTheTierInOrder:
 
         asyncio.run(MasterFetchServer().web_read(
             url="https://example.com", schema=NESTED_QUOTES, cache_ttl=0,
-            anti_detect="basic", wait=7, timeout=12345,
+            anti_detect="basic", timeout=12345,
         ))
 
         assert seen["extraction_type"] == "html", "schema 分支必须抓原始 HTML"
@@ -278,7 +278,8 @@ class TestTheSchemaBranchCallsTheTierInOrder:
         # 那一位 —— 一位不错，才轮到下面那些断言说话。
         assert seen["extra_headers"] is None
         assert seen["timeout"] == 12345
-        assert seen["wait"] == 7
+        # 原来的 `assert seen["wait"] == 7` 断的是渲染时机；B5-13d 之后时机不再是
+        # 参数，那 5 秒成了浏览器层认出壳页才付的钱，证人搬到 tests/test_render_settle_b5.py。
         # B5-13a 之后这一档不再有"每颗一个独一值"的公共口：UA/伪装旋钮由
         # anti_detect 一步解析，公开传 useragent 已经是不支持的参数。所以这里
         # 读的是**档位解析后的形状** —— basic 档是四档里唯一

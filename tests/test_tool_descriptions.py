@@ -510,3 +510,72 @@ def test_nobody_is_told_to_call_a_tool_that_does_not_exist():
     assert not offenders, (
         "文案里有注册面之外的工具名（改名没跟上，或名字写错）：\n"
         + "\n".join(f"  {t} <- {sorted(w)}" for t, w in sorted(offenders.items())))
+
+
+# ─── 反向守卫：文案不许教一个发不出去的写法 ──────────────────────────
+#
+# 上面的守卫查「注册面上的名字有没有都露脸」（覆盖率）。这两条查相反的方向：
+# 已经不在参数面上的名字，文案还在不在教人这么传。覆盖率红是"功能看不见"，
+# 这条红是"照着做会失败"——后者更贵，因为调用方会以为自己试过了。
+
+RETIRED_PARAMETERS = frozenset({
+    # §3-19：反爬那几颗收进 anti_detect 档位，伪装只有一档一档的选法
+    "headless", "real_chrome", "hide_canvas", "block_webrtc", "solve_cloudflare",
+    "useragent", "allow_webgl", "disable_resources",
+    # §3-17：身份搬进 cred_defaults，键名还在、传法完全不同
+    "auth", "cookies", "proxy", "extra_headers", "allow_private",
+    # §6 渲染时机：wait 彻底删，network_idle 变成认出壳页才付的那 5 秒
+    "wait", "network_idle",
+    # B4：options 袋子拆平，参数一律顶层
+    "options",
+})
+
+_PARAM_SHAPE = re.compile(r"(?<![\w`])(%s)=(?![\w=])"
+                          % "|".join(sorted(RETIRED_PARAMETERS, key=len, reverse=True)))
+
+
+def test_no_text_tells_the_caller_to_pass_a_retired_parameter():
+    from dhole_mcp.server import _TOP_LEVEL_ARGS
+
+    accepted = {p for params in _TOP_LEVEL_ARGS.values() for p in params}
+    retired = RETIRED_PARAMETERS - accepted
+    assert retired, "这张表整张都过期了 —— 守卫会退化成永远通过"
+    offenders: dict[str, set[str]] = {}
+    for where, text in _agent_facing_strings():
+        for tok in _PARAM_SHAPE.findall(text):
+            if tok in accepted:
+                continue
+            offenders.setdefault(tok, set()).add(where)
+    assert not offenders, (
+        "文案还在教已退役参数的传法（`名字=` 的调用形状）：\n"
+        + "\n".join(f"  {t} <- {sorted(w)}" for t, w in sorted(offenders.items()))
+        + "\n名字退役了，建议就必须跟着搬 —— 留着这句，调用方会以为自己试过了。")
+
+
+# schema 说是布尔、调度器却只会原样转发的键：字符串写法（"false"）到方法里是
+# 非空字符串 = 真。sys_state 的 confirm 栽过一次（"just look" 变成了清盘）。
+_BOOL_COERCION_EXEMPT = {
+    ("web_crawl", "sitemap"): "三态 (true|'auto'|false)，crawl.py 自己归一化每个写法；"
+                              "硬塞进 _coerce_bool_arg 会把 'auto' 读没了",
+    ("web_discover", "sitemap"): "同 web_crawl",
+    ("sys_state", "confirm"): "_validate_tool_args 的 sys_state 分支自己按类名册处理，"
+                              "读的是元素而不是标量",
+    ("cred_defaults", "show"): "cred_defaults 分支里显式 _coerce_bool_arg",
+}
+
+
+def test_every_boolean_property_has_a_string_spelling_reader(tools):
+    from dhole_mcp.server import _ARG_TYPES
+
+    missing = {}
+    for name, tool in tools.items():
+        table = _ARG_TYPES.get(name, {})
+        for key, spec in (tool["inputSchema"].get("properties") or {}).items():
+            if (name, key) in _BOOL_COERCION_EXEMPT:
+                continue
+            if '"boolean"' in json.dumps(spec) and table.get(key) != "bool":
+                missing.setdefault(name, []).append(key)
+    assert not missing, (
+        "这些布尔参数在 schema 里声明成 boolean，调度器却没有字符串写法的路径：\n"
+        + "\n".join(f"  {n}: {sorted(k)}" for n, k in sorted(missing.items()))
+        + "\n要么进 _ARG_TYPES（'bool'），要么在上面那张例外表里写明谁读它。")

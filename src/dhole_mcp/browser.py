@@ -186,6 +186,36 @@ _BROWSER_CREDENTIAL_HEADERS = frozenset({
     "x-api-key", "api-key", "x-goog-api-key", "x-auth-token", "x-access-token",
 })
 
+# ─── 渲染时机：认出壳页才付的那 5 秒（17.0 §6 三条新规矩第 1 条）──────────
+#
+# `network_idle` 原来是调用方的一颗开关，而它唯一的用户就是"SPA 抽到空壳"这一种
+# 失败 —— 那种失败现在认得出来：load 都过了，可见文本还没长出来。所以这 5 秒改成
+# **认出壳页才付**，参数随之删掉。探针只报数，结论在 Python 这边下（阈值散进页面
+# 脚本就等于没人能测它、也没人能改它）。200 与 server 侧抽取后的壳页判定同值：两边
+# 一错位，就会出现"一条轴认得出、另一条轴白等 5 秒"的裂缝。
+_UNRENDERED_MAX_TEXT_CHARS = 200
+_SETTLE_IDLE_MS = 5000
+
+_UNRENDERED_PROBE_JS = """() => {
+  const b = document.body;
+  const text = b ? (b.innerText || b.textContent || '') : '';
+  return { text: String(text).trim().length,
+           scripts: document.querySelectorAll('script').length };
+}"""
+
+
+def _looks_unrendered(reading) -> bool:
+    """DOM 读数 → 这页是不是还没长出来。读不到 = 不算（猜一次就花读者 5 秒）。"""
+    if not isinstance(reading, dict):
+        return False
+    try:
+        text = int(reading.get("text", -1))
+        scripts = int(reading.get("scripts", 0))
+    except (TypeError, ValueError):
+        return False
+    return 0 <= text < _UNRENDERED_MAX_TEXT_CHARS and scripts > 0
+
+
 class BrowserSSRFBlockedError(RuntimeError):
     """浏览器被指到一个内网/回环/元数据地址 —— 已拦下，且不会重试。
 
@@ -1066,14 +1096,12 @@ class BrowserSession:
         self,
         *,
         headless: bool = True,
-        wait: int = 0,
         proxy: Optional[str] = None,
         locale: Optional[str] = None,
         timezone_id: Optional[str] = None,
         timeout: int = 30000,
         cookies: Optional[List[Dict]] = None,
         useragent: Optional[str] = None,
-        network_idle: bool = False,
         disable_resources: bool = False,
         extra_headers: Optional[Dict[str, str]] = None,
         google_search: bool = True,
@@ -1096,14 +1124,12 @@ class BrowserSession:
         humanize: bool = True,
     ):
         self._headless = headless
-        self._wait = wait
         self._proxy = proxy
         self._locale = locale
         self._timezone_id = timezone_id
         self._timeout = timeout
         self._cookies = cookies
         self._useragent = useragent
-        self._network_idle = network_idle
         self._disable_resources = disable_resources
         self._extra_headers = extra_headers
         self._google_search = google_search
@@ -1374,14 +1400,12 @@ class BrowserSession:
         self,
         url: str,
         *,
-        wait: Optional[int] = None,
         timeout: Optional[int] = None,
         google_search: Optional[bool] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         disable_resources: Optional[bool] = None,
         wait_selector: Optional[str] = None,
         wait_selector_state: Optional[str] = None,
-        network_idle: Optional[bool] = None,
         proxy: Optional[str] = None,
         solve_cloudflare: Optional[bool] = None,
         page_action: Optional[Callable] = None,
@@ -1422,14 +1446,12 @@ class BrowserSession:
                 )
 
         # Resolve per-request overrides
-        actual_wait = wait if wait is not None else self._wait
         actual_timeout = timeout if timeout is not None else self._timeout
         actual_google = google_search if google_search is not None else self._google_search
         actual_extra_headers = extra_headers if extra_headers is not None else self._extra_headers
         actual_disable_resources = disable_resources if disable_resources is not None else self._disable_resources
         actual_wait_selector = wait_selector if wait_selector is not None else self._wait_selector
         actual_wait_selector_state = wait_selector_state or self._wait_selector_state
-        actual_network_idle = network_idle if network_idle is not None else self._network_idle
         actual_solve_cf = solve_cloudflare if solve_cloudflare is not None else self._solve_cloudflare
         actual_page_action = page_action or self._page_action
         actual_page_setup = page_setup or self._page_setup
@@ -1516,7 +1538,7 @@ class BrowserSession:
                         logger.debug(f"Stealth script injection error: {e}")
 
                 # Wait for page stability (full load)
-                await self._wait_for_stability(page, actual_network_idle)
+                await self._wait_for_stability(page)
 
                 if not first_response:
                     raise RuntimeError(f"Failed to get response for {url}")
@@ -1524,7 +1546,7 @@ class BrowserSession:
                 # Solve Cloudflare if requested
                 if actual_solve_cf:
                     await _solve_cloudflare(page)
-                    await self._wait_for_stability(page, actual_network_idle)
+                    await self._wait_for_stability(page)
 
                 # Page action callback
                 if actual_page_action:
@@ -1540,13 +1562,9 @@ class BrowserSession:
                     try:
                         waiter = page.locator(actual_wait_selector)
                         await waiter.first.wait_for(state=actual_wait_selector_state)
-                        await self._wait_for_stability(page, actual_network_idle)
+                        await self._wait_for_stability(page)
                     except Exception as e:
                         logger.warning(f"Wait for selector '{actual_wait_selector}' failed: {e}")
-
-                # Post-load wait
-                if actual_wait > 0:
-                    await page.wait_for_timeout(actual_wait)
 
                 # Human behavior simulation (stealthy only, if enabled)
                 # Adds ~1.5-2.5s of mouse movement + scroll + dwell.
@@ -1650,21 +1668,30 @@ class BrowserSession:
 
         raise RuntimeError(f"Browser fetch failed for {url}")
 
-    async def _wait_for_stability(self, page: Any, network_idle: bool) -> None:
-        """Wait for the page to reach a stable state."""
-        try:
-            await page.wait_for_load_state("load")
-        except Exception:
-            pass
-        try:
-            await page.wait_for_load_state("domcontentloaded")
-        except Exception:
-            pass
-        if network_idle:
+    async def _wait_for_stability(self, page: Any) -> bool:
+        """load + domcontentloaded, then the idle wait ONLY for a page that
+        rendered nothing. Returns whether that 5s was paid.
+
+        The cap and the silence are the existing implementation: 17.0 deleted the
+        caller's switch, not the bound. An idle timeout here is not a failure - the
+        page is what it is, and extraction reads whatever DOM survived.
+        """
+        for state in ("load", "domcontentloaded"):
             try:
-                await page.wait_for_load_state("networkidle", timeout=5000)
+                await page.wait_for_load_state(state)
             except Exception:
                 pass
+        try:
+            reading = await page.evaluate(_UNRENDERED_PROBE_JS)
+        except Exception:
+            reading = None
+        if not _looks_unrendered(reading):
+            return False
+        try:
+            await page.wait_for_load_state("networkidle", timeout=_SETTLE_IDLE_MS)
+        except Exception:
+            pass
+        return True
 
     # ── Properties ────────────────────────────────────────────────
 
