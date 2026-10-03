@@ -291,6 +291,44 @@ def default_wire_report(tool_defs: list[dict],
     return out
 
 
+def budget_report(tool_defs: list[dict], top: int = 20) -> list[str]:
+    """把 connect 面的字符拆开算在谁头上：工具描述、参数描述、还是 schema 骨架。
+
+    瘦身的账要算在对的那一块上：一颗 900 字符的参数说明搬进 sys_guide 就省 900，
+    而 17 颗工具的键名 + 类型 + required 那一层骨架压不出多少。同理，**重复**是
+    唯一一种不用牺牲信息就能拿回来的量 —— 同一句话在三颗工具里各写一遍，
+    下线其中两遍不减少任何人能查到的东西。
+    """
+    out: list[str] = ["", "-- where the connect chars go (per description) --"]
+    rows: list[tuple[int, str, str]] = []
+    tool_desc = 0
+    param_desc = 0
+    for td in tool_defs:
+        d = td.get("description") or ""
+        tool_desc += len(d)
+        for name, spec in (td.get("inputSchema", {}).get("properties", {}) or {}).items():
+            pd = spec.get("description") or ""
+            param_desc += len(pd)
+            rows.append((len(pd), f"{td['name']}.{name}", pd))
+    out.append(f"tool descriptions    : {tool_desc}")
+    out.append(f"param descriptions   : {param_desc}")
+    out.append("largest single descriptions:")
+    for n, key, text in sorted(rows, reverse=True)[:top]:
+        out.append(f"  {n:5d}  {key:34s} {text[:58].replace(chr(10), ' ')}")
+    by_text: dict[str, list[str]] = {}
+    for n, key, text in rows:
+        if n >= 120:            # 短句重复不是可省的量，只有成段的知识才是
+            by_text.setdefault(text, []).append(key)
+    dup = [(len(t), sorted(ks)) for t, ks in by_text.items() if len(ks) > 1]
+    dup.sort(reverse=True)
+    if dup:
+        out.append(f"identical param text in more than one tool ({len(dup)} 段，"
+                   "每一段只留一处即可):")
+        for n, ks in dup[:8]:
+            out.append(f"  {n:5d} × {len(ks)}  {', '.join(ks)}")
+    return out
+
+
 def main() -> None:
     src = SERVER.read_text(encoding="utf-8")
     tree = ast.parse(src, filename=str(SERVER))
@@ -363,6 +401,7 @@ def main() -> None:
         out.extend(output_schema_report(minimal_compact, len(instructions)))
     out.extend(default_wire_report(tool_defs, parts))
     out.extend(duplication_report(tool_defs, instructions))
+    out.extend(budget_report(tool_defs))
 
     text = "\n".join(out) + "\n"
     if OUT is not None:
