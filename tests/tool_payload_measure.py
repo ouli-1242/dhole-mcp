@@ -330,6 +330,10 @@ def budget_report(tool_defs: list[dict], top: int = 20) -> list[str]:
 
 
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        # 这份报告会打印中文小节名与描述样本。Windows 控制台默认 cp936，于是
+        # "省了多少字"旁边是一串乱码 —— 一把读不出字的尺子等于一把会说谎的尺子。
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     src = SERVER.read_text(encoding="utf-8")
     tree = ast.parse(src, filename=str(SERVER))
 

@@ -131,13 +131,19 @@ class TestTheCallSurfaceLostBothKnobs:
             for knob in ("wait", "network_idle"):
                 assert knob not in props, f"{tool} 还在教 {knob}"
 
-    def test_web_read_advertises_twenty_four_names(self):
-        """35 → 30（13c 身份）→ 28（13d 时机）→ 25（14a 写操作）→ 24（14b 动作链）。
+    def test_web_read_advertises_twenty_seven_names(self):
+        """35 → 30（13c 身份）→ 28（13d 时机）→ 25（14a 写操作）→ 24（14b 动作链）→ 27（14d nested_*）。
 
         §3-12 的 ≤20 由 tests/test_wire_shape.py 整块 xfail(strict) 盯着：差的那几颗是
         §3-16 那道门与读法本身，不是这条链要在这儿替别的批次许的愿。
+
+        24 → 27 是 B5-17 的全量跑补上的：E-13 那批加进 `nested_selector` /
+        `nested_fields` / `nested_max` 三颗时没回改这条普查，于是它连着几个提交都在
+        报一个不存在的数字。普查写死是有意义的（少一颗就是能力从门上消失），但它的
+        意义全在于**跟着改** —— 一条常年红着没人理的普查比没有普查更糟，因为它教会
+        大家红是可以接受的。
         """
-        assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 24, \
+        assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 27, \
             sorted(server_mod._TOP_LEVEL_ARGS["web_read"])
 
     def test_web_screenshot_lost_the_same_two(self):

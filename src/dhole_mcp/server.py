@@ -7571,7 +7571,7 @@ class MasterFetchServer:
     _TOOL_DEFS: list[dict] = [
         {
             "name": "web_read",
-            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: web_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: when the live site hard-blocks, content_ok can be true of a dated Wayback snapshot (check source + archived_at). No parameter disables it; costs 10-30s.\n- Every parameter has its own top-level name here: pass them beside url=, nothing is nested. A name the tool does not accept raises.\n- Touching the page is web_act: an action chain is no longer a parameter of a read, and this tool changes nothing it fetches. The deep shape of schema and the browser/session knobs is not here either: sys_guide(topic='behavior') reads dhole's own handbook, and sys_guide(topic='call') the placement traps. Read one before writing the other.",
+            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: web_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: on a hard block, content_ok can be true of a dated Wayback snapshot - check source + archived_at. No parameter disables it.\n- Every parameter has its own top-level name: pass it beside url=, nothing is nested; a name the tool does not accept raises.\n- Touching the page is web_act, and this tool changes nothing it fetches. The deep shape of schema and the browser/session knobs is not here: sys_guide(topic='behavior') is the handbook, sys_guide(topic='call') the placement traps.",
             "inputSchema": {
                 "type": "object",
                 # web_read needs one of the two; the schema said nothing at
@@ -7590,37 +7590,37 @@ class MasterFetchServer:
                     "url": {"type": "string", "description": "URL to fetch"},
                     "urls": {"type": "array", "items": {"type": "string"}, "description": "Multiple URLs (parallel; one result per URL)"},
                     "extraction_type": {"type": "string", "enum": ["markdown", "html", "text", "article", "structured"], "description": "Content format (default markdown). 'html' = raw markup."},
-                    "css_selector": {"type": "string", "description": "CSS selector to narrow extracted content. HTML only: on XML/JSON/plain text it cannot apply, the whole document is returned, and the summary says so."},
-                    "max_content_chars": {"type": "integer", "description": "Content cap in chars (500-200000; the server's default comes from DHOLE_DEFAULT_CONTENT_CHARS). Lower = fewer tokens now, the rest stays reachable via offset/next_offset."},
-                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000; 60000 with actions; max 120000), shared by the HTTP retries. For a document URL it is spent on the DOWNLOAD: a big PDF needs budget for bytes."},
+                    "css_selector": {"type": "string", "description": "Narrows extracted content. HTML only - on XML/JSON/plain text the whole document comes back and the summary says so."},
+                    "max_content_chars": {"type": "integer", "description": "Content cap in chars (500-200000; default from DHOLE_DEFAULT_CONTENT_CHARS). The rest stays reachable via offset/next_offset."},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000; 60000 with actions; max 120000), shared by the HTTP retries. On a document URL it is spent on the DOWNLOAD."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds (default 3600). 0 = force fresh."},
                     "force_fetcher": {"type": "string", "enum": ["http", "stealthy"], "description": "Pin one tier, skipping auto-escalation: 'http' = fast, no JS/bot walls; 'stealthy' = anti-detect browser."},
                     "anti_detect": {"type": "string", "enum": ["off", "basic", "auto", "aggressive"], "description": ANTI_DETECT_DESC},
-                    "offset": {"type": "integer", "description": "Char offset into the extracted text, to resume a truncated page. Take it from next_offset."},
-                    "pages": {"type": "string", "description": "PDF only: '1-5' or '1,3,5-7'. Narrows what is EXTRACTED, not what is downloaded. Pick ranges from table_of_contents page/end_page."},
+                    "offset": {"type": "integer", "description": "Char offset to resume a truncated page; take it from next_offset."},
+                    "pages": {"type": "string", "description": "PDF only: '1-5' or '1,3,5-7'. Narrows what is EXTRACTED, not what is downloaded; pick ranges from table_of_contents."},
                     "password": {"type": "string", "description": "PDF only: password for an encrypted PDF."},
-                    "focus": {"type": "string", "description": "Return only blocks matching this query - the big token saver on long pages. Applied after the cache, so it does not re-fetch. Re-pass the same focus when paginating. Scored with BM25 by default; focus_engine='neural' switches to a local cross-encoder - that path costs ~12.5s of CPU PER PAGE, so budget timeout for bulk calls."},
-                    "focus_mode": {"type": "string", "enum": ["filter", "best"], "description": "Shape of the focus answer. 'filter' (default) keeps every block past the relevance cut; 'best' returns only the single highest-scoring block plus its heading - 'which part of this page answers the question'. Requires focus."},
-                    "focus_engine": {"type": "string", "enum": ["bm25", "neural"], "description": "Which scorer runs focus: 'bm25' (keyword overlap, the default) or 'neural' (a local cross-encoder; needs the reranker model downloaded, and costs ~12.5s of CPU per page). Omit = 'bm25'."},
-                    "schema": {"type": "object", "description": "{properties: {...}} (a JSON string is accepted): CSS-driven structured extraction, returned instead of markdown. Only these keys are read - selector, attribute, type, properties, items; any other JSON-Schema keyword is accepted and does nothing. Each property may carry 'selector' (CSS) and/or 'attribute' (that attribute's value instead of the text). Without \"type\" a property returns the FIRST match; \"type\": \"array\" returns all of them. A property with its OWN 'properties' (or items.properties) plus a selector extracts one record PER MATCHED ELEMENT, child selectors evaluated inside it - that keeps a repeated list grouped instead of flattened. Up to 200 records per field; a nested \"type\": \"array\" must name the container it iterates or the call is rejected. The rule and a worked example: sys_guide(topic='behavior', section='Structured extraction').", "additionalProperties": True},
-                    "confirm": {"type": "boolean", "description": "Approval for a first-time sensitive action on this call - today that means cdp_url: attaching your real Chrome hands over every logged-in site's cookies, so the FIRST attach to a host is refused with cdp_authorization_required and nothing is executed; re-call with confirm=true to authorize that host (remembered on disk; delete cdp_hosts.json in the dhole state directory to revoke). False (default) approves nothing."},
+                    "focus": {"type": "string", "description": "Return only blocks matching this query. Applied after the cache, so it does not re-fetch; re-pass the same focus when paginating. Which scorer runs it, and what it costs: focus_engine."},
+                    "focus_mode": {"type": "string", "enum": ["filter", "best"], "description": "Shape of the focus answer: 'filter' (default) keeps every block past the relevance cut; 'best' returns only the highest-scoring block plus its heading. Requires focus."},
+                    "focus_engine": {"type": "string", "enum": ["bm25", "neural"], "description": "Which scorer runs focus: 'bm25' (default, keyword overlap) or 'neural' (a local cross-encoder, needing the reranker model). Per-page cost: sys_guide(topic='behavior')."},
+                    "schema": {"type": "object", "description": "CSS-driven structured extraction instead of markdown: {properties: {...}} (a JSON string is accepted). Which keys are read, first match vs \"type\": \"array\", per-element grouping, the invented-keyword trap and the record ceilings: sys_guide(topic='behavior', section='Structured extraction').", "additionalProperties": True},
+                    "confirm": {"type": "boolean", "description": "Approval for a first-time sensitive action on this call - today only cdp_url: the FIRST attach to a host is refused with cdp_authorization_required and nothing executes until it says true. False (default) approves nothing."},
                     # 17.0 B4 · 下面这 27 个一直都能从顶层传进来（分发器读 args，
                     # _TOP_LEVEL_ARGS 认它们），只是 schema 从没露过脸 —— 而
                     # `options` 那段散文把它们和"袋子的键"绑在了一起。参数只有一个家：
                     # 顶层。描述按 test_wire_shape 的 200 字符目标写，用法细节留在
                     # sys_guide 语料里（tools.md 已经逐条写了它们）。
-                    "session_id": {"type": "string", "description": "Carry cookies across calls under this name (1-64 chars: letters, digits, . _ -). Covers both tiers. Values never leave the process and are never returned."},
-                    "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check for this call (default false = comply; a disallowed URL makes no request at all). Set true only where you have the site's permission."},
-                    "check_login": {"type": "boolean", "description": "Run the model-free login probe on the settled browser page; returns login_check (DOM signals + cookie NAMES, never values). Live-only: null on HTTP-tier results and on cache hits, so pair it with cache_ttl=0."},
-                    "cdp_url": {"type": "string", "description": "Attach the user's own Chrome over CDP for this call - it rides that profile's logged-in cookies, and the HTTP tier and public cache are skipped. The FIRST attach to a host is refused with cdp_authorization_required and executes nothing until confirm=true authorizes it; answers say cdp_attached=true."},
-                    "include_links": {"type": "boolean", "description": "Return the page's outgoing links classified as citations / navigation / external, with a primary_source hint (default false)."},
-                    "max_links": {"type": "integer", "description": "Cap for EACH links list when include_links=true (1-100; default 30/20/20). links.total_found and links.is_truncated say what the cap hid."},
-                    "include_media": {"type": "boolean", "description": "Return up to 20 image URLs found on the page in .media (default false)."},
+                    "session_id": {"type": "string", "description": "Carry cookies across calls under this name (1-64 chars: letters, digits, . _ -). Covers both tiers; values never leave the process."},
+                    "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check for this call (default false = comply). True only where you have the site's permission."},
+                    "check_login": {"type": "boolean", "description": "Model-free login probe on the settled browser page; returns login_check (DOM signals + cookie NAMES, never values). Live-only: null on HTTP-tier results and on cache hits."},
+                    "cdp_url": {"type": "string", "description": "Attach the user's Chrome over CDP: rides that profile's logged-in cookies, skips the HTTP tier and public cache; answers say cdp_attached=true. First attach per host needs confirm=true."},
+                    "include_links": {"type": "boolean", "description": "Also return outgoing links, classified as citations / navigation / external, with a primary_source hint (default false)."},
+                    "max_links": {"type": "integer", "description": "Per-list cap for include_links (1-100; default 30/20/20); links.total_found and links.is_truncated report what it hid."},
+                    "include_media": {"type": "boolean", "description": "Also return up to 20 image URLs found on the page in .media (default false)."},
                     # §5 E-13：一次调用摊平两层。三颗都在场上，缺一条描述就没人会
                     # 想到它们存在 —— 而 agent 的默认做法是发 8 次 web_read。
-                    "nested_selector": {"type": "string", "description": "Two layers in one call: a CSS selector on THIS page naming the elements to follow into the second layer; each one's href (its own, a descendant's or an ancestor's <a>) is fetched, and nested_fields are read there."},
-                    "nested_fields": {"type": ["array", "object"], "description": "What to read on each second-layer page: [{'name':'作品','selector':'.work a','type':'array'}] or {'作品':'.work a'}. 1-12 fields; array = every match. This page's own fields do not ride along; a field matching nothing returns \"\"."},
-                    "nested_max": {"type": "integer", "description": "How many of this page's unique links to expand (default 8, max 30). Links the cap hid are reported as truncation=nested_budget; duplicates and href-less matches are counted separately, never as a cap."},
+                    "nested_selector": {"type": "string", "description": "Two layers in one call: a CSS selector on THIS page naming the elements to follow; each one's href (its own, a descendant's or an ancestor's <a>) is fetched and nested_fields read there."},
+                    "nested_fields": {"type": ["array", "object"], "description": "What to read on each second-layer page: [{'name':'作品','selector':'.work a','type':'array'}] or {'作品':'.work a'}. 1-12 fields; array = every match. Field rules and the carry-over trap: sys_guide(topic='behavior')."},
+                    "nested_max": {"type": "integer", "description": "How many of this page's unique links to expand (default 8, max 30). Links the cap hid are truncation=nested_budget; duplicates and href-less matches are counted separately."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -7630,44 +7630,21 @@ class MasterFetchServer:
             # （回执 / snapshot 先数 / submit 先问 / 验证码三次就转交）是原样搬过来的
             # —— 搬工具不许搬走规矩。
             "name": "web_act",
-            "description": ("Act on one page - click / fill / press / scroll / wait / snapshot / submit - "
-                            "then read back what it became. Reading it without touching it is web_read, "
-                            "which no longer takes an action chain.\n"
-                            "- The chain runs in order on the stealthy browser and never from cache: what "
-                            "you are reading exists only after the actions. Every action leaves a receipt "
-                            "in metadata.actions; a failed one says what sat at that selector.\n"
-                            "- No selector? {\"snapshot\": true} first: the interactive elements come back "
-                            "numbered, later actions address them by index and expect:'name' verifies the "
-                            "label, so a stale index fails instead of clicking the wrong thing.\n"
-                            "- submit PAUSES without confirm=true (nothing is filled or sent): describe "
-                            "exactly what would go, and on the user's yes re-run the same chain. Captchas "
-                            "get at most 3 read-and-retry rounds, then hand off to the user; DataDome / "
-                            "Akamai / interactive Turnstile walls, 2FA factors and sliders are always "
-                            "hand-offs - dhole is a tool layer, cracking is not its business.\n"
-                            "- A logged-in page: session_id names the cookie jar, cdp_url attaches the "
-                            "user's own Chrome (its first attach needs the same confirm). Credentials are "
-                            "never an argument - cred_defaults stores them.\n"
-                            "- VISUAL ASSIST: an element capture rides the chain - "
-                            "{\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} crops one "
-                            "element of the SAME page instance and returns it inline, the way to read a "
-                            "CAPTCHA you are about to type, with a name-only receipt in metadata.actions. "
-                            "dhole ships no vision model: the reading happens in you.\n"
-                            "Action-key shapes and the lazy-feed discipline: "
-                            "sys_guide(topic='behavior', section='Page interaction')."),
+            "description": "Act on one page - click / fill / press / scroll / wait / snapshot / submit - then read back what it became. Reading it without touching it is web_read.\n- The chain runs in order on the stealthy browser and never from cache; every action leaves a receipt in metadata.actions, and a failed one says what sat at that selector.\n- No selector? {\"snapshot\": true} first: elements come back numbered, later actions address them by index, and expect:'name' verifies the visible name so a stale index fails instead of clicking the wrong thing.\n- submit PAUSES without confirm=true (nothing is filled or sent): describe exactly what would go, and on the user's yes re-run the same chain. Captchas get at most 3 read-and-retry rounds, then hand off to the user; DataDome / Akamai / interactive Turnstile, 2FA factors and sliders are always hand-offs.\n- Credentials are never an argument: cred_defaults stores them, session_id names the cookie jar, cdp_url attaches the user's own Chrome.\n- VISUAL ASSIST: {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} crops one element of the SAME page instance and returns it inline - the way to read a CAPTCHA you are about to type.\nAction-key shapes, index addressing and the lazy-feed discipline: sys_guide(topic='behavior', section='Page interaction').",
             "inputSchema": {
                 "type": "object", "required": ["url", "actions"],
                 "properties": {
                     "url": {"type": "string", "description": "The page to act on. One per call - a chain is written against one DOM."},
-                    "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "ONE action key per object: [{scroll:3},{wait:1000}], not {scroll:3,wait:1000}. Keys: click, fill, press, wait, scroll, wait_selector, snapshot, screenshot, submit - each takes a CSS selector or a snapshot index; {snapshot:true} returns the numbered interactive-element list (index/tag/role/name), and expect:'name' verifies an element's visible name before acting."},
+                    "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "ONE action key per object: [{scroll:3},{wait:1000}], not {scroll:3,wait:1000}. Keys: click, fill, press, wait, scroll, wait_selector, snapshot, screenshot, submit - each takes a CSS selector or a snapshot index."},
                     "extraction_type": {"type": "string", "enum": ["markdown", "html", "text", "article", "structured"], "description": "How the post-action page is read back (default markdown)."},
                     "max_content_chars": {"type": "integer", "description": "Max chars of that content (default 40000); the action receipts are never cut by it."},
-                    "focus": {"type": "string", "description": "Query-focused extraction of the page after the chain: only blocks relevant to this come back."},
-                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 60000 here - a browser launch plus a chain needs it; max 120000)."},
+                    "focus": {"type": "string", "description": "After the chain, return only blocks relevant to this query instead of the whole page."},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 60000, max 120000)."},
                     "anti_detect": {"type": "string", "enum": ["off", "basic", "auto", "aggressive"], "description": ANTI_DETECT_DESC},
                     "session_id": {"type": "string", "description": "Act inside this named session, so the login it holds is the state the page starts from. Names only, never values."},
-                    "cdp_url": {"type": "string", "description": "Attach a running Chrome (its own logged-in profile) and act there. The first attach to a host is refused with cdp_authorization_required until the user approves it."},
+                    "cdp_url": {"type": "string", "description": "Attach a running Chrome (its own logged-in profile) and act there; the first attach to a host needs confirm=true."},
                     "confirm": {"type": "boolean", "description": "Two things need it: a submit action, and the first CDP attach to a host. Neither acts until this says true - and only put it there on the user's explicit yes."},
-                    "check_login": {"type": "boolean", "description": "After the chain, run the model-free login probe on the settled page: login_check with DOM signals and cookie NAMES, never values."},
+                    "check_login": {"type": "boolean", "description": "Model-free login probe on the settled browser page; returns login_check (DOM signals + cookie NAMES, never values)."},
                 },
             },
             # 它会动页面，所以不是只读；同一串动作再跑一遍不保证同一个答案。真正不可
@@ -7679,18 +7656,7 @@ class MasterFetchServer:
             # 17.0 §4 第 4 行。描述里那四条一次性规则是从 web_read 的 method 分支
             # 搬过来的：搬工具不许搬走规矩，所以它们在这里一个字都不能少。
             "name": "web_request",
-            "description": ("Send ONE non-GET request (POST / PUT / PATCH / DELETE / HEAD) and read "
-                            "back what the server answered. Reading a page is web_read; GET here is refused.\n"
-                            "- A write is sent ONCE: not retried (the previous call may already have "
-                            "committed), not cached, not escalated to the browser (a replay answers about "
-                            "a GET to that URL, not about your POST), never answered from archive.org.\n"
-                            "- Credentials are not a parameter: cred_defaults stores auth / cookies for "
-                            "that host and this call carries them; identity_applied names what it ran on. "
-                            "Bodies cap at 256KB - this retrieves, it does not upload.\n"
-                            "- There is no anti_detect here on purpose: a write never renders, so there is no "
-                            "ladder to choose - the HTTP tier is the whole request.\n"
-                            "- Check before you send: web_resolve answers where a URL really goes. How the "
-                            "answer is shaped: sys_guide(topic='behavior', section='web_request')."),
+            "description": "Send ONE non-GET request (POST / PUT / PATCH / DELETE / HEAD) and read back what the server answered. Reading a page is web_read; GET here is refused.\n- A write is sent ONCE: not retried (an earlier call may already have committed), not cached, not escalated to the browser, never answered from archive.org.\n- Credentials are not a parameter: cred_defaults stores auth / cookies for that host and this call carries them; identity_applied names what it ran on. Bodies cap at 256KB - this retrieves, it does not upload.\n- There is no anti_detect here on purpose: a write never renders. Check where a URL goes first: web_resolve. Answer shape: sys_guide(topic='behavior', section='web_request').",
             "inputSchema": {
                 "type": "object", "required": ["url", "method"],
                 "properties": {
@@ -7699,7 +7665,7 @@ class MasterFetchServer:
                     "body": {"description": "Request body (cap 256KB). A dict is sent as a form, or as JSON when content_type says json; a string is sent as-is. HEAD takes none."},
                     "content_type": {"type": "string", "description": "Content-Type for body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json."},
                     "extraction_type": {"type": "string", "enum": ["markdown", "html", "text", "article", "structured"], "description": "How the answer is read back (default markdown). A server answering a write with JSON still gets that JSON extracted."},
-                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000). A write gets this budget once: it is never retried, so nothing shares it."},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000)."},
                 },
             },
             # 写操作默认不是只读；重复调用不保证同一个答案，所以不是幂等。
@@ -7708,7 +7674,7 @@ class MasterFetchServer:
         },
         {
             "name": "web_crawl",
-            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, web_read(urls=[...]) fetches them directly - no crawl needed.\n- Every parameter is a top-level argument; nothing is nested. url= names the site the crawl stays inside.\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed'), discoveries already known to be disallowed are skipped, and robots_skipped says how many. ignore_robots=true overrides.\n- Caps: max_pages (1-40, default 10), max_depth(2), 20000 chars per page, deadline_ms. There is no whole-run character budget.\n- Map-then-fetch: web_discover (or sitemap=true here) maps it, web_read(urls=[...]) reads the picks. What the drop counters mean and how politeness is decided: sys_guide(topic='behavior', section='web_crawl'); placement pairs with counterexamples: sys_guide(topic='call').",
+            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, web_read(urls=[...]) fetches them directly - no crawl needed.\n- Every parameter is a top-level argument; nothing is nested. url= names the site the crawl stays inside.\n- Caps: max_pages (1-40, default 10), max_depth(2), 20000 chars per page, deadline_ms. There is no whole-run character budget.\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed') and robots_skipped counts them. ignore_robots=true overrides.\n- Map-then-fetch: web_discover (or sitemap=true here) maps it, web_read(urls=[...]) reads the picks. Drop counters and politeness: sys_guide(topic='behavior', section='web_crawl').",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
@@ -7725,17 +7691,17 @@ class MasterFetchServer:
                     "max_content_chars_per": {"type": "integer", "description": "Per-page content cap (500-20000, default 8000)."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds per page (default 3600). 0 = force fresh."},
                     "force_fetcher": {"type": "string", "enum": ["http", "stealthy"], "description": "Pin one tier for every page, skipping auto-escalation: 'http' fast but no JS/bot walls, 'stealthy' the anti-detect browser."},
-                    "timeout": {"type": "integer", "description": "Per-page budget in ms (default 30000). Not the whole-crawl stop - that is deadline_ms."},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000)."},
                     "deadline_ms": {"type": "integer", "description": "Hard stop for the whole crawl in ms (default 120000) - the budget that ends the run, unlike timeout= which is per page."},
-                    "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check and the disallowed-URL skip (default false = comply per page). Set true only where you have the site's permission."},
-                    "focus_engine": {"type": "string", "enum": ["bm25", "neural"], "description": "Which scorer runs focus here: 'bm25' (default, cheap) or 'neural' (~12.5s of CPU per page TIMES max_pages, needs the local reranker model; asking without it is refused, not downgraded)."},
+                    "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check for this call (default false = comply). True only where you have the site's permission."},
+                    "focus_engine": {"type": "string", "enum": ["bm25", "neural"], "description": "Which scorer runs focus here: 'bm25' (default, cheap) or 'neural' (the local reranker model; asking without it is refused, not downgraded)."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
         },
         {
             "name": "web_discover",
-            "description": "A site's URL MAP, with no page read for content - one call answers 'what is on this site' before you choose what to read. pages_crawled=0 is the design, not a failure. The picks go to web_read(urls=[...]); many pages at once is web_crawl.\n- Two prices: sitemap=true reads the site's own index (one request, the whole site, <lastmod> per row), or unset walks links, which costs one request per step up to max_pages. 'auto' tries the index, then walks.\n- path_include / path_exclude scope the map as they scope a crawl ('/docs' is a subtree, not a string prefix); search filters it by path + title. The counters and how to read a map: sys_guide(topic='behavior', section='web_discover').",
+            "description": "A site's URL MAP, with no page read for content - one call answers 'what is on this site' before you choose what to read. pages_crawled=0 is the design, not a failure. The picks go to web_read(urls=[...]); many pages at once is web_crawl.\n- Two prices: sitemap=true reads the site's own index (one request, <lastmod> per row), unset walks links at one request per step up to max_pages; 'auto' tries the index, then walks.\n- path_include / path_exclude scope the map ('/docs' is a subtree, not a string prefix); search filters by path + title. How to read a map: sys_guide(topic='behavior', section='web_discover').",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
@@ -7745,21 +7711,21 @@ class MasterFetchServer:
                     "path_include": {"type": "array", "items": {"type": "string"}, "description": "Keep only these path subtrees: '/docs', or '/docs/*'."},
                     "path_exclude": {"type": "array", "items": {"type": "string"}, "description": "Drop these path subtrees."},
                     "search": {"type": "string", "description": "Filter the map by keyword (URL path + page title)."},
-                    "timeout": {"type": "integer", "description": "Budget per expansion step in ms (default 30000)."},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000)."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
         },
         {
             "name": "web_screenshot",
-            "description": "Use when you need to SEE a page - layout, charts, UI state, how it really renders: returns an image. For the page's words use web_read instead. A text-only model gets nothing from an inline image: pass save_to= and read the file at the absolute path it reports.\n- Full-page rendering costs a browser: the first call pays a cold start (seconds); later ones in the same session are fast.\n- anti_detect decides here the one thing a capture can decide per call: whether a Cloudflare challenge gets answered before the shutter. The canvas / WebRTC half of that rung is fixed when the browser starts, so it stays cred_defaults' business - a blank capture is that rung's problem, not this call's.\n\nVISUAL ASSIST: selector= crops the capture to ONE element (CSS selector; full_page cannot combine with it) and returns it inline - for CAPTCHAs, QR codes, forms. Discipline: a simple text/grid image CAPTCHA may be read and tried at most 3 times, then STOP and hand off to the user; behavioral/fingerprint walls (DataDome, Akamai, interactive Turnstile) have nothing to look at - hand off immediately; 2FA codes are never on the page - hand off; sliders need drag primitives dhole does not have - hand off. dhole ships no vision model: the reading happens in you.",
+            "description": "Use when you need to SEE a page - layout, charts, UI state, how it really renders: returns an image. For the page's words use web_read instead. A text-only model gets nothing from an inline image: pass save_to= and read the file at the absolute path it reports.\n- Full-page rendering costs a browser: the first call pays a cold start (seconds).\n- anti_detect decides the one thing a capture can decide per call: whether a Cloudflare challenge gets answered before the shutter. The fingerprint half rides cred_defaults.\nVISUAL ASSIST: selector= crops the capture to ONE element (full_page cannot combine with it) and returns it inline - for CAPTCHAs, QR codes, forms. A simple text/grid CAPTCHA may be read and tried at most 3 times, then STOP and hand off to the user; behavioral walls (DataDome, Akamai, interactive Turnstile), 2FA codes and sliders have nothing to look at - hand off immediately. dhole ships no vision model: the reading happens in you.",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
                     "url": {"type": "string", "description": "URL to screenshot"},
                     "session_id": {"type": "string", "description": "Reuse a specific open browser session. Omit to auto-manage."},
                     # 17.0 B4 · 顶层只有一个家（这 11 个键今天也已经能从顶层传进来）。
-                    "save_to": {"type": "string", "description": "Write the image to this path and report the absolute path + byte size in the text part instead of an inline image (parents created; an existing file not named like an image is refused). A text-only host needs this."},
+                    "save_to": {"type": "string", "description": "Write the image to this path and report the absolute path + byte size as text instead of an inline image (parents created; a non-image file name is refused). A text-only host needs this."},
                     "selector": {"type": "string", "description": "Crop the capture to ONE element (CSS). Cannot combine with full_page."},
                     "full_page": {"type": "boolean", "description": "Capture the whole scrollable page, not just the viewport (default false)."},
                     "image_type": {"type": "string", "enum": ["png", "jpeg"], "description": "Encoding (default png)."},
@@ -7767,25 +7733,25 @@ class MasterFetchServer:
                     "decode_qr": {"type": "boolean", "description": "Decode QR codes visible in the capture and report the payloads in the text part (local, deterministic, no model). An empty list means no code was found."},
                     "anti_detect": {"type": "string", "enum": ["off", "basic", "auto", "aggressive"], "description": "What this capture asks for: 'auto' (default) and 'aggressive' also answer a Cloudflare challenge, 'off' / 'basic' shoot the interstitial as-is. The fingerprint half rides the machine - cred_defaults."},
                     "wait_selector": {"type": "string", "description": "CSS selector to wait for before capturing."},
-                    "timeout": {"type": "integer", "description": "Budget in ms (default 30000)."},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 60000, max 120000)."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
         },
         {
             "name": "web_search",
-            "description": "Keyless multi-engine web search (default pool = all 8 engines: baidu,bing,sogou,so360,bing_global,yandex,brave,duckduckgo). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- fetch_content=true auto-fetches the top 3; otherwise web_read the high fetch_relevance hits with focus=. Don't search for a URL you already have - web_read it directly.\n- min_relevance / min_raw_relevance (0-1) drop low-relevance results - two different scales, read which one you are setting.\n- Result fields: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index FAMILIES, not raw hits, so a low value can mean a degraded pool - check consensus_basis.",
+            "description": "Keyless multi-engine web search (default pool = all 8 engines: baidu,bing,sogou,so360,bing_global,yandex,brave,duckduckgo). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- fetch_content=true auto-fetches the top 3; otherwise web_read the high fetch_relevance hits with focus=. Don't search for a URL you already have - web_read it directly.\n- min_relevance / min_raw_relevance (0-1) drop low-relevance results - two different scales, read which one you are setting.\n- Result fields: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index FAMILIES, so a low value can mean a degraded pool - check consensus_basis. Engine matrix: sys_guide(topic='behavior', section='web_search').",
             "inputSchema": {
                 "type": "object", "required": ["query"],
                 "properties": {
                     "query": {"type": "string", "description": "Search query"},
                     # 17.0 B4 · 顶层只有一个家（这 18 个键今天也已经能从顶层传进来）。
                     "url": {"type": "string", "description": "A page you already have, to find similar pages of. Requires mode='find_similar'."},
-                    "mode": {"type": "string", "enum": ["auto", "neural", "find_similar"], "description": "'auto' (default) ranks with the local reranker when it can. 'neural' asks for it by name - if it cannot run, the reply says so instead of pretending. 'find_similar' needs url=."},
+                    "mode": {"type": "string", "enum": ["auto", "neural", "find_similar"], "description": "'auto' (default) ranks with the local reranker when it can; 'neural' asks for it by name - if it cannot run, the reply says so instead of pretending. 'find_similar' needs url=."},
                     "max_results": {"type": "integer", "description": "Results to return (1-50, default 6)."},
                     "page": {"type": "integer", "description": "Result page, 0-10 (default 0)."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds (default 300). 0 = force fresh."},
-                    "engines": {"type": "array", "items": {"type": "string"}, "description": "Narrow the pool, max 9 names. The selectable names are exactly the 8 engines above, plus the keyed engines that need an API key (sys_guide(topic='behavior', section='web_search'))."},
+                    "engines": {"type": "array", "items": {"type": "string"}, "description": "Narrow the pool, max 9 names. The selectable names are exactly the 8 engines above plus the keyed engines that need an API key (sys_guide(topic='behavior', section='web_search'))."},
                     "site": {"type": "string", "description": "Restrict to one domain."},
                     "exclude_sites": {"type": "array", "items": {"type": "string"}, "description": "Drop results from these domains."},
                     "location": {"type": "string", "description": "ISO country code ('US'), optionally with a region suffix ('US-CN'). Anything else is refused rather than guessed at."},
@@ -7797,14 +7763,14 @@ class MasterFetchServer:
                     "fetch_content": {"type": "boolean", "description": "Pull the top hits' full text inside this same call (default false) instead of returning snippets."},
                     "fetch_schema": {"type": "object", "additionalProperties": True, "description": "{properties: {...}} applied to the pages fetched by fetch_content, instead of their markdown - the same shape rules as web_read's schema."},
                     "min_relevance": {"type": "number", "description": "0-1 cutoff on the NORMALIZED rerank score. Below it results are dropped, not re-ordered."},
-                    "min_raw_relevance": {"type": "number", "description": "0-1 floor on the reranker's RAW score instead - the one that can call a whole round irrelevant. Start at 0.1; fetch_hint reports the raw span the round had."},
+                    "min_raw_relevance": {"type": "number", "description": "0-1 floor on the reranker's RAW score instead - the one that can call a whole round irrelevant. fetch_hint reports the raw span the round had."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
         },
         {
             "name": "cred_defaults",
-            "description": "The identity later calls should assume: set it once instead of passing it on every call.\n- Seven keys: `proxy`, `profile` (the named persistent browser context - the only way to name it now), `cdp` (the Chrome endpoint to attach), `allow_private`, `anti_detect` (the rung), plus `auth` and `cookies`, which REQUIRE \"host\" in the same object: a stored credential with no host would ride along to the next site you read, and that is a different site's request.\n- What a call was fetched with is echoed as `identity_applied` in its response - names and host scopes only. Values never come back: they leave this process only as request headers to the host they were stored for.\n- A bare call reports the store and changes nothing. `unset=[\"proxy\"]` forgets one key (every host scope of it); `sys_state(clear=[\"cred_defaults\"])` forgets the whole store.\n- What the caller passes this time always wins over what is stored here.",
+            "description": "The identity later calls should assume: set it once instead of passing it on every call.\n- Seven keys: proxy, profile (the named persistent browser context), cdp (the Chrome endpoint), allow_private, anti_detect (the rung), plus auth and cookies - and those two REQUIRE \"host\" in the same object. A stored credential with no host would ride along to the next site you read.\n- What a call ran on is echoed as identity_applied (names and host scopes only). Values never come back: they leave this process only as request headers to the host they were stored for.\n- A bare call reports the store and changes nothing; unset=[\"proxy\"] forgets one key, sys_state(clear=[\"cred_defaults\"]) the whole store. What the caller passes this time always beats what is stored here.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -7817,7 +7783,7 @@ class MasterFetchServer:
         },
         {
             "name": "sys_state",
-            "description": "What dhole keeps on this machine, and how to erase a named class of it: the fetch cache, the cookies a site left behind a login (keyed by session_id=), the engine pool's cooldowns, and stored recipes/watch baselines.\n- No arguments = the census, erasing nothing: every open session with its hosts and cookie NAMES (a value is a credential, and everything a tool returns lands in the transcript), plus the cache state and the stored-task counts.\n- clear=[\"cache\"] wipes the whole content cache. To re-fetch ONE url fresh, pass cache_ttl=0 to web_read/web_crawl instead.\n- clear=[\"<session id>\"] forgets that session and any browser under it; clear=[\"sessions\"] needs confirm=true, because losing a site's cookies shows up only at your next visit there. Same for watch baselines and recipes: they erase nothing you can see coming.\n- clear=[\"engine_state\"] forgets engine cooldowns + yield history - use it when the same engines keep getting skipped after the network changed (VPN on).",
+            "description": "What dhole keeps on this machine, and how to erase a named class of it: the fetch cache, the cookies a site left behind a login (keyed by session_id=), the engine pool's cooldowns, and stored recipes/watch baselines.\n- No arguments = the census, erasing nothing: every open session with its hosts and cookie NAMES (a value is a credential, and everything a tool returns lands in the transcript), plus cache state and stored-task counts.\n- clear=[\"cache\"] wipes the content cache; to re-fetch ONE url fresh pass cache_ttl=0 to web_read/web_crawl instead.\n- clear=[\"<session id>\"] forgets that session and any browser under it; clear=[\"sessions\"] needs confirm=true, because losing a site's cookies shows up only at your next visit there. Same for watch baselines and recipes.\n- clear=[\"engine_state\"] forgets engine cooldowns + yield history - use it when the same engines keep getting skipped after the network changed.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -7830,27 +7796,27 @@ class MasterFetchServer:
         },
         {
             "name": "doc_parse",
-            "description": "Use for LOCAL files the task references: .html/.htm/.xhtml, .docx, .xlsx, .csv, .pdf, .md/.markdown/.txt, .json/.yaml/.yml, .pptx, .odt -> Markdown, no web fetch. A PDF that has a URL is better served by web_read (page ranges, password, table_of_contents).\n.html/.csv are decoded by charset detection, not assumed UTF-8: metadata.encoding names the charset used, and a wrong guess comes back as an error whose next_action says to re-call with encoding=.\n.pptx/.odt need no extra install; what a text reader cannot carry (speaker notes, layout, images) is named in the output's first line rather than vanishing from it. .json/.yaml are validated, not just echoed: an unparseable file is an error, not a dump.\nRelative paths: pass cwd when the host doesn't tell the server the working directory; otherwise the process cwd, then home.",
+            "description": "Use for LOCAL files the task references: .html/.htm/.xhtml, .docx, .xlsx, .csv, .pdf, .md/.markdown/.txt, .json/.yaml/.yml, .pptx, .odt -> Markdown, no web fetch. A PDF that has a URL is better served by web_read (page ranges, password, table_of_contents).\n.html/.csv are decoded by charset detection, not assumed UTF-8: metadata.encoding names the charset used, and a wrong guess comes back as an error whose next_action says to re-call with encoding=. .pptx/.odt need no extra install; what a text reader cannot carry (speaker notes, layout, images) is named in the output's first line rather than vanishing from it. .json/.yaml are validated, not just echoed. Relative paths: pass cwd when the host doesn't tell the server the working directory.",
             "inputSchema": {
                 "type": "object", "required": ["file_path"],
                 "properties": {
                     "file_path": {"type": "string", "description": "Absolute or relative path to a local file. Supported: .html/.htm/.xhtml, .docx, .xlsx, .csv, .pdf, .md/.markdown/.txt, .json/.yaml/.yml, .pptx, .odt"},
                     "cwd": {"type": "string", "description": "Base directory for a relative file_path. Ignored for absolute paths."},
-                    "encoding": {"type": "string", "description": "Charset for .html/.csv (e.g. 'gbk', 'big5', 'shift_jis', 'cp1252'). Leave unset to auto-detect; pass it when the result is mojibake or metadata.encoding named the wrong charset."},
+                    "encoding": {"type": "string", "description": "Charset for .html/.csv (e.g. 'gbk', 'big5', 'shift_jis', 'cp1252'). Leave unset to auto-detect; pass it when the result is mojibake."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False},
         },
         {
             "name": "feed_read",
-            "description": "Batch-fetch RSS/Atom feeds newest-first (title/url/published/summary) to track what a source has PUBLISHED - changelogs, release notes, blogs, news. Feeds parse independently, so a dead feed never fails the batch. NOT a general page fetcher - use web_read.\n- A site page is accepted: the alternate RSS/Atom link in its own head is followed and the reply says so in discovered_from.\n- since= turns it into a poll for what is new since the last call; items_older_than_since counts what it dropped.\n- An item's summary is a PREVIEW: past 500 chars it is cut and that item says summary_truncated=true. web_read the item url for the whole text.\nWhat an unparseable feed answers with and the reply shape: sys_guide(topic='behavior', section='remaining tools').",
+            "description": "Batch-fetch RSS/Atom feeds newest-first (title/url/published/summary) to track what a source has PUBLISHED - changelogs, release notes, blogs, news. Feeds parse independently, so a dead feed never fails the batch. NOT a general page fetcher - use web_read.\n- A site page is accepted: the alternate RSS/Atom link in its own head is followed and the reply says so in discovered_from.\n- since= turns it into a poll for what is new; items_older_than_since counts what it dropped.\n- An item's summary is a PREVIEW: past 500 chars it is cut and that item says summary_truncated=true. web_read the item url for the whole text.\nReply shape and the unparseable feed: sys_guide(topic='behavior', section='remaining tools').",
             "inputSchema": {
                 "type": "object", "required": ["urls"],
                 "properties": {
                     "urls": {"type": "array", "items": {"type": "string"}, "description": "One or more RSS/Atom feed URLs"},
                     "max_items": {"type": "integer", "description": "Max entries per feed (default 20; 0 = all)"},
-                    "timeout": {"type": "integer", "description": "Per-feed timeout in seconds (default 20)"},
-                    "since": {"type": "string", "description": "Incremental polling: keep only entries published at or after this date (ISO-8601 '2026-09-20' / '2026-09-20T08:00:00Z', or an RFC-822 feed timestamp). Pass the newest published value from the previous call. items_older_than_since reports what it removed; undated entries are kept and counted, not dropped. An unreadable date is an error, not a filter that kept everything."},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000)."},
+                    "since": {"type": "string", "description": "Incremental polling: keep entries published at or after this (ISO-8601 '2026-09-20' / '2026-09-20T08:00:00Z', or an RFC-822 stamp) - pass the newest published value from the previous call. items_older_than_since counts what it dropped; undated entries are kept, never dropped."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -7862,7 +7828,7 @@ class MasterFetchServer:
                 "type": "object", "required": ["url"],
                 "properties": {
                     "url": {"type": "string", "description": "URL to resolve"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds (default 15)"},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000)."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -7878,7 +7844,7 @@ class MasterFetchServer:
                     "url": {"type": "string", "description": "op=save: the URL to replay."},
                     "actions": {"type": "array", "items": {"type": "object"}, "description": "op=save: the action chain, the same chain web_act takes."},
                     "note": {"type": "string", "description": "op=save: what this recipe is for (max 500 chars)."},
-                    "timeout": {"type": "integer", "description": "op=run: whole-call budget in ms."},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 60000, max 120000)."},
                     "max_content_chars": {"type": "integer", "description": "op=run: cap on returned content chars."},
                     "focus": {"type": "string", "description": "op=run: query-focused extraction over the replayed page."},
                     "extraction_type": {"type": "string", "description": "op=run: markdown (default) | html | text | article | structured."},
@@ -7897,10 +7863,10 @@ class MasterFetchServer:
                     "op": {"type": "string", "enum": ["add", "check", "list", "remove"], "description": "add = start watching; check = fetch + diff; list = show all; remove = stop."},
                     "name": {"type": "string", "description": "Watch name (1-64 chars). Required for add/check/remove."},
                     "url": {"type": "string", "description": "op=add: the URL to monitor."},
-                    "focus": {"type": "string", "description": "op=add: diff only the blocks relevant to this query - the right setting for a long page whose chrome changes every load."},
+                    "focus": {"type": "string", "description": "op=add: diff only the blocks relevant to this query - for a long page whose chrome moves."},
                     "max_chars": {"type": "integer", "description": "op=add: cap the stored snapshot (default 200000)."},
                     "note": {"type": "string", "description": "op=add: what you are watching for (max 500 chars)."},
-                    "timeout": {"type": "integer", "description": "op=check: whole-call budget in ms."},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 60000, max 120000)."},
                     "session_id": {"type": "string", "description": "op=check: reuse cookies under this name (a watch behind a login). Not stored."},
                 },
             },
@@ -7937,7 +7903,7 @@ class MasterFetchServer:
                     "password_index": {"type": "integer", "description": "Skip detection: the password field's snapshot index."},
                     "submit_index": {"type": "integer", "description": "Skip detection: the submit control's snapshot index."},
                     "confirm": {"type": "boolean", "description": "false (default) = show the plan only. true = actually fill and submit, after the user approved."},
-                    "timeout": {"type": "integer", "description": "Whole-call budget in ms."},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 60000, max 120000)."},
                 },
             },
             "annotations": {"readOnlyHint": False, "destructiveHint": True,
@@ -7955,7 +7921,7 @@ class MasterFetchServer:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "topic": {"type": "string", "description": "start = tool choice + hard constraints. call = how to write a call (placement, patterns). fields = response field dictionary. behavior = fetch escalation, page actions, schema extraction, search engines, crawl economics. fix = symptom-indexed troubleshooting. config = every knob by scenario. recipes = multi-step sequences. The volume's own file name is accepted as an alias."},
+                    "topic": {"type": "string", "description": "Which volume: start = which tool + the hard constraints. call = writing a call (placement, patterns). fields = reading a response. behavior = deep per-tool behavior. fix = a failure to diagnose. config = a knob to change. recipes = a multi-step task. The volume's own file name works as an alias."},
                     "section": {"type": "string", "description": "One heading inside the volume, matched case-insensitively (e.g. 'actions', 'PDF', 'engine matrix'). No match answers with the headings that exist."},
                 },
             },

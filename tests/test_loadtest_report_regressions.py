@@ -646,16 +646,26 @@ class TestStructuredAttributeContract:
             "https://example.test/three",
         ]
 
-    def test_the_wire_description_states_both_halves(self):
-        schema_desc = next(
+    def test_the_contract_states_both_halves(self):
+        """`schema` 的键语义搬到手册之后，这条查的是"搬过去且读得到"，不是"在 wire 上"。
+
+        17.0 B5-17 之前这三句写在常驻层，于是每一次连接都在为它们付字。`tests/
+        test_wire_moves_land_in_the_manual.py` 钉住同一个落点集合；这里保留的是**这条
+        契约本身不能被删**：不写 type 只回第一条、写了 array 才回全部、自造关键字不起作用。
+        """
+        from dhole_mcp import guide
+
+        _head, manual = guide.read("behavior", "Structured extraction")
+        assert "FIRST match" in manual
+        assert "array" in manual
+        # 实测里 agent 会自己发明 `repeat`/`multiple` 这类键，然后拿着首条以为
+        # 拿到了全部 —— 所以「除了这几个键别的都不起作用」必须和上面两句同处。
+        assert "keyword is ignored" in manual
+        wire = next(
             t["inputSchema"]["properties"]["schema"]["description"]
             for t in MasterFetchServer._TOOL_DEFS if t["name"] == "web_read"
         )
-        assert "FIRST match" in schema_desc
-        assert "array" in schema_desc
-        # 实测里 agent 会自己发明 `repeat`/`multiple` 这类键，然后拿着首条以为
-        # 拿到了全部 —— 所以「除了这几个键别的都不起作用」必须和上面两句同处。
-        assert "does nothing" in schema_desc
+        assert "Structured extraction" in wire, "常驻层那句指针不能丢：它是到这一卷的路"
 
     def test_an_invented_keyword_stays_an_invented_keyword(self):
         """`repeat` 不在被读的键里：它被忽略，字段仍是首条，而不是变成列表。
