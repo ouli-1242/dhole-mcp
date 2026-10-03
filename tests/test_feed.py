@@ -216,7 +216,7 @@ class TestAnItemPreviewOwnsItsCut:
         assert item.summary_truncated is True
 
     def test_the_flag_travels_only_when_it_is_true(self):
-        from dhole_mcp.server import _wire_json
+        from dhole_mcp.wire import _wire_json
         rows = FeedResult(source_url="https://e.test/f", items=[
             FeedItem(title="cut", summary="x" * 500, summary_truncated=True),
             FeedItem(title="whole", summary="short")])

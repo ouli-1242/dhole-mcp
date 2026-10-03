@@ -35,10 +35,9 @@ from dhole_mcp.server import (
     SysStateModel,
     VaultModel,
     WatchModel,
-    _WIRE_OMIT,
-    _wire_dump,
-    _wire_json,
 )
+# 17.0 B6 第三刀：压实层有了自己的家，测试直接认它，不再借 server 的名字。
+from dhole_mcp.wire import _WIRE_OMIT, _wire_dump, _wire_json
 
 # 每个响应都必须保留的"行动通道"：agent 读一次就要能决定下一步。
 ACTION_CHANNEL = ("status", "url", "content", "content_ok", "summary",
@@ -299,26 +298,28 @@ class TestOneChannelPerCall:
     channel is the whole wire surface, unconditionally."""
 
     def _result(self):
-        from dhole_mcp.server import _wire_result
+        from dhole_mcp.wire import _wire_result
         return _wire_result(_fetch(status=200, content=["body"],
                                    metadata={"title": "T"}))
 
     def test_the_text_channel_carries_the_whole_response(self):
-        import dhole_mcp.server as server_mod
-        res = server_mod._call_result(self._result())
+        from dhole_mcp.wire import _call_result
+        res = _call_result(self._result())
         assert res.structured_content is None
         assert json.loads(res.content[0].text)["metadata"] == {"title": "T"}
 
     def test_the_flag_that_switched_the_channel_is_gone(self):
         import dhole_mcp.server as server_mod
+        import dhole_mcp.wire as wire_mod
         assert not hasattr(server_mod, "_STRUCTURED_CONTENT"), (
             "第二通道的开关必须连同第二通道一起删除，不能留一个永远无效的旋钮")
+        assert not hasattr(wire_mod, "_STRUCTURED_CONTENT")
 
     def test_a_content_list_without_a_payload_passes_through(self):
         # screenshot returns list[ImageContent|TextContent], not a tuple.
         from mcp.types import TextContent
-        import dhole_mcp.server as server_mod
-        res = server_mod._call_result([TextContent(type="text", text="x")])
+        from dhole_mcp.wire import _call_result
+        res = _call_result([TextContent(type="text", text="x")])
         assert res.content[0].text == "x"
 
 
@@ -329,9 +330,13 @@ class TestNoEscapeHatch:
 
     def test_the_flag_is_gone(self):
         import dhole_mcp.server as server_mod
-        assert not hasattr(server_mod, "_WIRE_FULL")
-        assert not hasattr(server_mod, "_wire_dump_full"), (
-            "旧形状的序列化器要么被引用（两套承诺）要么不存在")
+        import dhole_mcp.wire as wire_mod
+        # 压实层搬进 wire.py 之后，"退役名字没有偷偷复活"必须在它的新家也成立，
+        # 只查 server 就成了假守卫。
+        for mod in (server_mod, wire_mod):
+            assert not hasattr(mod, "_WIRE_FULL")
+            assert not hasattr(mod, "_wire_dump_full"), (
+                "旧形状的序列化器要么被引用（两套承诺）要么不存在")
 
     def test_the_default_stays_compact(self):
         """压缩无条件 —— 否则这轮瘦身等于没做。"""

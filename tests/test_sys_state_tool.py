@@ -378,7 +378,7 @@ class TestTheWireContract:
 
     def test_the_state_models_are_covered_by_the_compaction_policy(self):
         """新模型必须被 _WIRE_OMIT 判定过，否则"新增字段未判定即红"的守卫形同虚设。"""
-        from dhole_mcp.server import _WIRE_OMIT
+        from dhole_mcp.wire import _WIRE_OMIT
 
         for model in ("SessionCensusRow", "SysStateModel"):
             assert model in _WIRE_OMIT

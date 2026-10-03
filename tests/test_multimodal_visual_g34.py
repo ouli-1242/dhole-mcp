@@ -28,8 +28,8 @@ from dhole_mcp.server import (
     MasterFetchServer,
     ResponseModel,
     _report_action_outcomes,
-    _wire_result,
 )
+from dhole_mcp.wire import _wire_result  # 17.0 B6 第三刀：压实层的家
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 

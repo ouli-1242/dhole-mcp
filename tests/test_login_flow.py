@@ -397,7 +397,7 @@ class TestTheConfirmedRun:
 
 class TestNoSecretInTheResponse:
     def _blobs(self, model) -> str:
-        from dhole_mcp.server import _wire_json
+        from dhole_mcp.wire import _wire_json
 
         parts = [model.model_dump_json()]
         text, _payload = _wire_json(model)

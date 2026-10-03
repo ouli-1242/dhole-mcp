@@ -28,8 +28,8 @@ from dhole_mcp.server import (
     _is_js_shell,
     _locator_or_raise,
     _screenshot_error_message,
-    _wire_json,
 )
+from dhole_mcp.wire import _wire_json  # 17.0 B6 第三刀：压实层的家
 
 
 def _dispatch(args: dict):
