@@ -414,14 +414,8 @@ class TestActionsTierBudget:
 
         seen: dict = {}
 
-        async def fake_auto_escalate(self, url, extraction_type, css_selector,
-                                     cache_ttl,
-                                     offset, headless, real_chrome, wait, proxy,
-                                     timeout, network_idle, solve_cloudflare,
-                                     block_webrtc, hide_canvas, extra_headers,
-                                     useragent, cookies, max_chars=None,
-                                     conditional=None):
-            seen["timeout"] = timeout
+        async def fake_auto_escalate(self, url, extraction_type, **kw):
+            seen["timeout"] = kw["timeout"]
             raise _Stop()
 
         monkeypatch.setattr(server_mod.MasterFetchServer, "_auto_escalate", fake_auto_escalate)

@@ -49,7 +49,9 @@ VALUES: dict[str, object] = {
     "pages": "1-2", "password": "pw",
     "schema": {"properties": {"t": {"selector": "p"}}},
     "proxy": "http://proxy.test:8080", "cookies": {"a": "1"},
-    "extra_headers": {"X-Probe": "1"}, "useragent": "dhole-probe/1",
+    "extra_headers": {"X-Probe": "1"},
+    # B5-13a：档位是字符串枚举，探针值要和默认值 "auto" 不同才探得出丢没丢。
+    "anti_detect": "aggressive",
     "wait": 100, "max_links": 5, "session_id": "probe-session",
     "method": "GET", "body": {"a": 1}, "content_type": "application/json",
     "auth": {"type": "basic", "username": "u", "password": "p"},
@@ -83,8 +85,7 @@ VALUES: dict[str, object] = {
 }
 # 布尔类共用一个值；列出来是为了让"表里查不到"这条守卫说得准。
 BOOL_KEYS = {
-    "network_idle", "headless", "real_chrome",
-    "solve_cloudflare", "block_webrtc", "hide_canvas",
+    "network_idle",
     "include_media", "include_links", "ignore_robots", "allow_private",
     "full_page", "sitemap", "check_login",
 }

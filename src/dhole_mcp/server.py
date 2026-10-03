@@ -2332,9 +2332,9 @@ def _robots_blocked_result(url: str, verdict: RobotsVerdict) -> ResponseModel:
     switch source, or re-call with the documented override.
     """
     where = verdict.robots_url or robots_url_for(url) or "robots.txt"
-    override = (f"re-call with ignore_robots=true (and set a useragent the site "
-                f"allows) if you have the site's permission, or {ENV_IGNORE_ROBOTS}=1 "
-                f"to disable the check process-wide")
+    override = (f"re-call with ignore_robots=true if you have the site's "
+                f"permission, or {ENV_IGNORE_ROBOTS}=1 to disable the check "
+                f"process-wide")
     result = ResponseModel(
         url=url, status=0, content=[], fetcher_used="none",
         extracted_type="markdown",
@@ -2533,6 +2533,25 @@ def _coerce_str_list_arg(
     )
 
 
+def _coerce_anti_detect_arg(value: Any, name: str = "anti_detect") -> str:
+    """The one rung the caller named, or 'auto' - and nothing in between.
+
+    `Literal[...]` reaches clients as schema only; this server reads every
+    argument with `args.get()`, so an unlisted level would otherwise reach the
+    ladder table and raise a KeyError there - a Python traceback where a list of
+    the four spellings belongs.
+    """
+    if value is None:
+        return "auto"
+    if isinstance(value, str) and value.strip().lower() in _ANTI_DETECT:
+        return value.strip().lower()
+    raise ValueError(
+        f"{name} must be one of {', '.join(_ANTI_DETECT)}, got {value!r}. "
+        "The rungs go weakest to strongest; there is no fifth, and no single "
+        "fingerprint knob to override."
+    )
+
+
 def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Optional[str]:
     """Validate the force_fetcher enum instead of falling through to stealthy.
 
@@ -2597,9 +2616,7 @@ def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Option
 _ARG_TYPES: dict[str, dict[str, str]] = {
     "web_read": {
         "urls": "list",
-        "headless": "bool",
-        "real_chrome": "bool", "network_idle": "bool", "solve_cloudflare": "bool",
-        "block_webrtc": "bool", "hide_canvas": "bool", "include_media": "bool",
+        "network_idle": "bool", "include_media": "bool",
         "include_links": "bool", "ignore_robots": "bool",
         "cache_ttl": "int", "offset": "int", "max_content_chars": "int",
         "max_links": "int",
@@ -2770,6 +2787,7 @@ def _validate_tool_args(name: str, args: dict) -> dict:
         out["urls"] = _coerce_str_list_arg(
             args.get("urls"), "urls", single_hint=_URLS_SINGLE_HINT)
         out["force_fetcher"] = _coerce_force_fetcher_arg(args.get("force_fetcher"))
+        out["anti_detect"] = _coerce_anti_detect_arg(args.get("anti_detect"))
     elif name == "sys_state":
         # The same trap the cache wipe fell into: read raw, `confirm="false"` is a
         # non-empty string, and a call that meant "just look" erases every session.
@@ -4677,6 +4695,39 @@ def _browser_cookies(cookies: Any, url: str) -> Any:
     return cookies
 
 
+# ─── 反爬档位（§3-19）─────────────────────────────────────────────
+# 伪装强度是一条单调轴：调用方选档，不选实现。表里每一栏就是浏览器层真实收到的
+# 参数，`auto` 逐位等于收编之前 web_read 的签名默认（画布噪声 / WebRTC 屏蔽 / CF
+# 挑战处理全开、资源按当日规则裁、headless、channel 自动探测）——这一刀的定义是
+# "收参数"而不是"改行为"，tests/test_anti_detect_b5.py 里那条
+# test_auto_is_bit_for_bit_the_pre_refactor_default 红了就说明在改反爬效果。
+#
+# 两档之外不留逃生门，而表里没有 real_chrome 的位置：**没有任何一档传
+# real_chrome=True**。`_launch_channel(False)` 已经用 `_detect_chrome_channel()`
+# 在装了 Chrome 的机器上走 channel='chrome'，传 True 只是在没装的机器上把启动
+# 钉死——那不是更强的反爬，是更脆的启动，还会让一档参数去改 B3 的装机承诺。
+# useragent 同理不在表里：UA 必须与 TLS/指纹成套（HTTP 层配 primp 的
+# impersonate_os，浏览器层配 _FINGERPRINT_PROFILES），手传一个会造出"UA 说
+# Chrome、JA3 说别的"的自相矛盾指纹，比不设更容易被认出来。
+ANTI_DETECT_DESC = """How hard the browser tier hides that it is one: off, basic (canvas noise + WebRTC block), auto (the tested default; also answers Cloudflare challenges), aggressive (auto + loads every resource)."""
+
+_ANTI_DETECT = {
+    #        画布噪声, WebRTC 屏蔽, CF 挑战处理, 资源全加载
+    "off":        (False, False, False, False),
+    "basic":      (True, True, False, False),
+    "auto":       (True, True, True, False),
+    "aggressive": (True, True, True, True),
+}
+
+
+def _anti_detect(level: str) -> dict:
+    """One rung of the ladder, spelled the way the browser tier reads it."""
+    canvas, webrtc, challenge, everything = _ANTI_DETECT[level]
+    return {"hide_canvas": canvas, "block_webrtc": webrtc,
+            "solve_cloudflare": challenge, "load_everything": everything,
+            "headless": True, "real_chrome": False, "useragent": None}
+
+
 # ─── 参数面：每个工具接受哪些名字 ──────────────────────────────────
 # 17.0 B4：`options` 袋删掉了，参数只剩顶层这一个家（`url` 除外 —— 它说的是"这次调用
 # 关于哪一页"，不是一个旋钮）。一个键写错必须抛 —— 静默丢掉一个上限，调用方就会相信那个
@@ -4687,9 +4738,10 @@ def _browser_cookies(cookies: Any, url: str) -> Any:
 _SF_PARAMS = frozenset({
     "css_selector", "max_content_chars", "timeout", "pages", "password",
     "schema",
-    "proxy", "cookies", "extra_headers", "useragent", "wait", "network_idle",
-    "headless", "real_chrome",
-    "solve_cloudflare", "block_webrtc", "hide_canvas",
+    "proxy", "cookies", "extra_headers", "wait", "network_idle",
+    # §3-19：伪装强度是一颗档位，不是六颗旋钮（headless/real_chrome/hide_canvas/
+    # block_webrtc/solve_cloudflare/useragent 全收进 _ANTI_DETECT）。
+    "anti_detect",
     "include_media", "include_links", "max_links", "ignore_robots",
     "allow_private", "session_id", "method", "body", "content_type", "auth",
     # G33/G35：CDP attach、无模型登录判定，以及 §3-16 那道先问再记的门
@@ -6899,17 +6951,12 @@ class MasterFetchServer:
         css_selector: Annotated[Optional[str], Field(description="CSS selector to narrow extracted content (e.g. 'article', '.main-content').")] = None,
         cache_ttl: Annotated[Optional[int], Field(description="Cache duration in seconds. Default 3600 (1 hour). Set 0 to skip cache and force a fresh fetch.")] = None,
         force_fetcher: Annotated[Optional[Literal["http", "stealthy"]], Field(description="Lock to one fetcher tier, skip auto-escalation. 'http' = fast HTTP-only (fails on JS/bot walls). 'stealthy' = anti-detect browser (Patchright). Two tiers: the third one and its 'dynamic' alias are gone.")] = None,
-        headless: Annotated[bool, Field(description="Run browser without visible window (default True).")] = True,
-        real_chrome: Annotated[bool, Field(description="Use installed Chrome instead of bundled browser.")] = False,
+        anti_detect: Annotated[Literal["off", "basic", "auto", "aggressive"], Field(description=ANTI_DETECT_DESC)] = "auto",
         wait: Annotated[int | float, Field(description="Extra milliseconds to wait after page load for JS rendering.")] = 0,
         proxy: Annotated[Optional[str | Dict[str, str]], Field(description="Proxy URL or dict with server/username/password.")] = None,
         timeout: Annotated[Optional[int | float], Field(description="Whole-call budget in milliseconds (default 30000; 60000 when actions are used; max 120000). Shared by the HTTP retries, and a document URL spends it on the download.")] = None,
         network_idle: Annotated[bool, Field(description="Wait until network is idle for 500ms before capturing (good for SPAs).")] = False,
-        solve_cloudflare: Annotated[bool, Field(description="Attempt Cloudflare bypass in stealthy mode (default True).")] = True,
-        block_webrtc: Annotated[bool, Field(description="Prevent WebRTC IP leak in stealthy mode (default True).")] = True,
-        hide_canvas: Annotated[bool, Field(description="Randomize canvas fingerprint in stealthy mode (default True).")] = True,
         extra_headers: Annotated[Optional[Dict[str, str]], Field(description="Additional HTTP headers as {name: value} dict.")] = None,
-        useragent: Annotated[Optional[str], Field(description="Override the user agent for both tiers (default: a realistic rotating browser UA).")] = None,
         cookies: Annotated[Sequence[SetCookieParam] | None, Field(description="Cookies for the request: list of {name, value, domain} dicts, a plain {name: value} dict, or a Cookie header string.")] = None,
         offset: Annotated[int, Field(description="Resume from this character offset when content was truncated. The response tells you the next offset to use.")] = 0,
         max_content_chars: Annotated[Optional[int], Field(description="Max chars of extracted content to return (default 40000). Lower this to save context tokens on big pages; the rest is paginated via offset/next_offset.")] = None,
@@ -6985,6 +7032,16 @@ class MasterFetchServer:
             cache_ttl = self._cache_ttl
         # `timeout` uses the same sentinel: an actions call always drives the
         # stealthy tier, so it gets a budget that covers a cold browser start.
+        # §3-19: the ladder is the only public spelling of these six. Resolved
+        # once here so every tier call below keeps reading them by name.
+        _hardening = _anti_detect(anti_detect)
+        headless = _hardening["headless"]
+        real_chrome = _hardening["real_chrome"]
+        hide_canvas = _hardening["hide_canvas"]
+        block_webrtc = _hardening["block_webrtc"]
+        solve_cloudflare = _hardening["solve_cloudflare"]
+        useragent = _hardening["useragent"]
+        load_everything = _hardening["load_everything"]
         # An explicit value still wins.
         if timeout is None:
             timeout = ACTIONS_DEFAULT_TIMEOUT_MS if actions else DEFAULT_CALL_TIMEOUT_MS
@@ -7027,9 +7084,10 @@ class MasterFetchServer:
                 )
             return await self._smart_fetch_bulk(
                 urls, extraction_type, css_selector, cache_ttl, force_fetcher,
-                headless, real_chrome, wait, proxy, timeout, network_idle,
-                solve_cloudflare, block_webrtc, hide_canvas, extra_headers,
-                useragent, cookies, max_content_chars, include_media, include_links,
+                wait, proxy, timeout, network_idle, extra_headers, cookies,
+                max_chars=max_content_chars,
+                anti_detect=anti_detect,
+                include_media=include_media, include_links=include_links,
                 focus=focus, schema=schema,
                 max_links=max_links, ignore_robots=ignore_robots,
                 allow_private=allow_private, session_id=session_id,
@@ -7267,7 +7325,7 @@ class MasterFetchServer:
                     cookies=cookies, max_chars=mc,
                     check_login=check_login, cdp_url=cdp_url,
                     page_action=page_action,
-                    disable_resources=not actions_need_resources,
+                    disable_resources=not (actions_need_resources or load_everything),
                 ), url, timeout, "cdp-attach stealthy tier")
             if page_action is not None:
                 _report_action_outcomes(cdp_result, page_action)
@@ -7328,7 +7386,7 @@ class MasterFetchServer:
                 hide_canvas=hide_canvas, extra_headers=extra_headers,
                 useragent=useragent, cookies=cookies,
                 max_chars=_SCHEMA_SOURCE_MAX_CHARS,
-                conditional=conditional,
+                conditional=conditional, load_everything=load_everything,
             )
             html_content = "\n".join(html_result.content) if html_result.content else ""
             if html_content and html_result.status < 400:
@@ -7417,7 +7475,7 @@ class MasterFetchServer:
                     cookies=cookies, max_chars=mc,
                     page_action=page_action,
                     check_login=check_login,
-                    disable_resources=not actions_need_resources,
+                    disable_resources=not (actions_need_resources or load_everything),
                 ), url, timeout, "actions (stealthy) tier")
             _report_action_outcomes(result, page_action)
             return result
@@ -7437,6 +7495,7 @@ class MasterFetchServer:
                     extra_headers=extra_headers, useragent=useragent,
                     cookies=cookies, max_chars=mc,
                     check_login=check_login,
+                    disable_resources=not load_everything,
                 ), url, timeout, f"forced {force_fetcher} tier")
 
         # 5. Auto-escalation (HTTP -> stealthy) for everything else
@@ -7451,7 +7510,7 @@ class MasterFetchServer:
                 solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
                 hide_canvas=hide_canvas, extra_headers=extra_headers,
                 useragent=useragent, cookies=cookies, max_chars=mc,
-                conditional=conditional,
+                conditional=conditional, load_everything=load_everything,
             ), url, timeout, "fetch tiers")
 
     async def _within_call_budget(self, coro, url: str, timeout_ms, stage: str):
@@ -7497,9 +7556,9 @@ class MasterFetchServer:
 
     async def _smart_fetch_bulk(
         self, urls, extraction_type, css_selector, cache_ttl, force_fetcher,
-        headless, real_chrome, wait, proxy, timeout, network_idle,
-        solve_cloudflare, block_webrtc, hide_canvas, extra_headers,
-        useragent, cookies, max_chars: int = DEFAULT_MAX_CONTENT_CHARS,
+        wait, proxy, timeout, network_idle, extra_headers, cookies,
+        max_chars: int = DEFAULT_MAX_CONTENT_CHARS,
+        anti_detect: str = "auto",
         include_media: bool = False, include_links: bool = False,
         focus: Optional[str] = None, schema=None,
         max_links: Optional[int] = None, ignore_robots: bool = False,
@@ -7525,11 +7584,9 @@ class MasterFetchServer:
                     css_selector=css_selector,
                     cache_ttl=cache_ttl,
                     force_fetcher=force_fetcher,
-                    headless=headless, real_chrome=real_chrome, wait=wait,
-                    proxy=proxy, timeout=timeout, network_idle=network_idle,
-                    solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
-                    hide_canvas=hide_canvas, extra_headers=extra_headers,
-                    useragent=useragent, cookies=cookies,
+                    wait=wait, proxy=proxy, timeout=timeout,
+                    network_idle=network_idle, extra_headers=extra_headers,
+                    cookies=cookies, anti_detect=anti_detect,
                     max_content_chars=max_chars,
                     include_media=include_media, include_links=include_links,
                     focus=focus, schema=schema,
@@ -7831,7 +7888,7 @@ class MasterFetchServer:
         self, url, extraction_type, css_selector, cache_ttl, offset, headless, real_chrome, wait,
         proxy, timeout, network_idle, solve_cloudflare, block_webrtc,
         hide_canvas, extra_headers, useragent, cookies, max_chars: int = DEFAULT_MAX_CONTENT_CHARS,
-        conditional: Optional[dict] = None,
+        conditional: Optional[dict] = None, load_everything: bool = False,
     ) -> ResponseModel:
         """Auto-escalation: try HTTP first, fall back to stealthy if it fails.
 
@@ -8153,7 +8210,7 @@ class MasterFetchServer:
             headless=headless,
             real_chrome=real_chrome, wait=wait, proxy=proxy,
             timeout=remaining, network_idle=network_idle,
-            disable_resources=True,
+            disable_resources=not load_everything,
             solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
             hide_canvas=hide_canvas, extra_headers=extra_headers,
             useragent=useragent, cookies=_browser_cookies(cookies, url),
@@ -8995,6 +9052,7 @@ class MasterFetchServer:
                     "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000; 60000 with actions; max 120000), shared by the HTTP retries. For a document URL it is spent on the DOWNLOAD: a big PDF needs budget for bytes."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds (default 3600). 0 = force fresh."},
                     "force_fetcher": {"type": "string", "enum": ["http", "stealthy"], "description": "Pin one tier, skipping auto-escalation: 'http' = fast, no JS/bot walls; 'stealthy' = anti-detect browser."},
+                    "anti_detect": {"type": "string", "enum": ["off", "basic", "auto", "aggressive"], "description": ANTI_DETECT_DESC},
                     "offset": {"type": "integer", "description": "Char offset into the extracted text, to resume a truncated page. Take it from next_offset."},
                     "pages": {"type": "string", "description": "PDF only: '1-5' or '1,3,5-7'. Narrows what is EXTRACTED, not what is downloaded. Pick ranges from table_of_contents page/end_page."},
                     "password": {"type": "string", "description": "PDF only: password for an encrypted PDF."},
@@ -9017,18 +9075,12 @@ class MasterFetchServer:
                     "extra_headers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Additional request headers as {name: value}, applied on both tiers. Values must be strings; a newline in a name or value, or a backslash in a name, is refused as header injection."},
                     "proxy": {"anyOf": [{"type": "string"}, {"type": "object"}], "description": "Proxy for this call: a URL (http://host:port, socks5://...) or {server, username, password}."},
                     "session_id": {"type": "string", "description": "Carry cookies across calls under this name (1-64 chars: letters, digits, . _ -). Covers both tiers. Values never leave the process and are never returned."},
-                    "useragent": {"type": "string", "description": "Override the user agent, both tiers. A fingerprint internal that is already tuned - overriding it usually makes a site detect you, so leave it unset unless something names it."},
                     "allow_private": {"anyOf": [{"type": "boolean"}, {"type": "array", "items": {"type": "string"}}], "description": "Fetch a host the SSRF guard otherwise blocks (your own dev/staging service): true = loopback only, or name the hosts. Cloud metadata endpoints are never allowed under any setting."},
                     "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check for this call (default false = comply; a disallowed URL makes no request at all). Set true only where you have the site's permission."},
                     "check_login": {"type": "boolean", "description": "Run the model-free login probe on the settled browser page; returns login_check (DOM signals + cookie NAMES, never values). Live-only: null on HTTP-tier results and on cache hits, so pair it with cache_ttl=0."},
                     "cdp_url": {"type": "string", "description": "Attach the user's own Chrome over CDP for this call - it rides that profile's logged-in cookies, and the HTTP tier and public cache are skipped. The FIRST attach to a host is refused with cdp_authorization_required and executes nothing until confirm=true authorizes it; answers say cdp_attached=true."},
                     "wait": {"type": "number", "description": "Extra milliseconds to wait after page load for JS rendering (browser tier)."},
                     "network_idle": {"type": "boolean", "description": "Wait until the network has been idle 500ms before capturing (browser tier; good for SPAs). Already tuned - leave unset unless something names it."},
-                    "headless": {"type": "boolean", "description": "Browser window visibility (default true = no window). Honest caveat: the shared auto-managed browser is created headless, so false takes effect only when this call does not reuse it - e.g. session_id= names one."},
-                    "real_chrome": {"type": "boolean", "description": "Launch the Chrome already installed on this machine instead of the bundled browser (default false). Its real TLS fingerprint is the better spoof, and no browser download happens for it."},
-                    "solve_cloudflare": {"type": "boolean", "description": "Stealthy-tier challenge handling (default true). A fingerprint internal that is already tuned - leave unset unless something names it."},
-                    "block_webrtc": {"type": "boolean", "description": "Stop WebRTC from leaking the real IP in the stealthy tier (default true). Already tuned - leave unset unless something names it."},
-                    "hide_canvas": {"type": "boolean", "description": "Add per-session noise to canvas reads (default true). Already tuned - leave unset unless something names it."},
                     "include_links": {"type": "boolean", "description": "Return the page's outgoing links classified as citations / navigation / external, with a primary_source hint (default false)."},
                     "max_links": {"type": "integer", "description": "Cap for EACH links list when include_links=true (1-100; default 30/20/20). links.total_found and links.is_truncated say what the cap hid."},
                     "include_media": {"type": "boolean", "description": "Return up to 20 image URLs found on the page in .media (default false)."},

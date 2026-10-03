@@ -40,14 +40,16 @@ _PADDED_HTML = (
 
 
 def _stub_tier(monkeypatch, html: str, captured: dict) -> None:
-    """Stand in for the fetch tiers, faithfully: they truncate to `max_chars`."""
+    """Stand in for the fetch tiers, faithfully: they truncate to `max_chars`.
+
+    Keyword-splat on purpose: this stub is here to talk about `max_chars`, and a
+    hand-copied copy of the tier's 18 internal names would make every unrelated
+    signature change in `server.py` red here (B5-13a's ladder did exactly that).
+    """
     async def fake(
-        self, url, extraction_type, css_selector, cache_ttl, offset, headless,
-        real_chrome, wait,
-        proxy, timeout, network_idle, solve_cloudflare, block_webrtc,
-        hide_canvas, extra_headers, useragent, cookies,
+        self, url, extraction_type,
         max_chars: int = server_mod.MAX_CONTENT_CHARS,
-        conditional: dict | None = None,
+        **_hardening,
     ) -> ResponseModel:
         captured["max_chars"] = max_chars
         body = html[:max_chars]

@@ -153,17 +153,27 @@ class TestStringifiedNumbers:
 class TestOtherToolsWithTheSameGap:
     """Every tool that read args.get() raw, not just the one that was reported."""
 
-    def test_a_stringified_false_is_not_true_for_the_browser_knobs(self, monkeypatch):
-        """`headless="false"` used to keep the browser headless anyway."""
+    def test_a_stringified_false_is_not_true_for_the_fetch_knobs(self, monkeypatch):
+        """`include_media="false"` used to load the resources anyway.
+
+        17.0 B5-13a 之前这里的样本是 `headless` / `hide_canvas`。那两颗已经进了
+        `anti_detect` 档位、不再是入参，所以这一族的样本换成留下来的那几颗布尔，
+        并把档位那颗字符串一起钉住：它走的是同一条边界，而大小写/空白是字符串客户端
+        最容易带进来的两种噪声。
+        """
         seen = _record(monkeypatch, "web_read", ResponseModel(url="", status=0, content=[]))
         _dispatch("web_read", {"url": "https://example.test",
-                                  "headless": "false",
-                                  "hide_canvas": "false",
-                                  "include_links": "true"})
+                                  "include_links": "true",
+                                  "include_media": "false",
+                                  "network_idle": "false",
+                                  "ignore_robots": "false",
+                                  "anti_detect": " AGGRESSIVE "})
 
-        assert seen["headless"] is False
-        assert seen["hide_canvas"] is False
         assert seen["include_links"] is True
+        assert seen["include_media"] is False
+        assert seen["network_idle"] is False
+        assert seen["ignore_robots"] is False
+        assert seen["anti_detect"] == "aggressive"
 
     def test_screenshot_full_page_accepts_the_string_spellings(self, monkeypatch):
         seen = _record(monkeypatch, "web_screenshot", [])

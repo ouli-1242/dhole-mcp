@@ -122,6 +122,12 @@ The same key exists on `web_crawl`, where it matters more: the semantic path cos
 {"url": "https://hard-site.com/page", "force_fetcher": "stealthy"}
 ```
 
+**How hard to hide that it is a browser** (`anti_detect` is the only fingerprint dial — `off` / `basic` / `auto` / `aggressive`, no per-knob override. `auto` is already the tested configuration, so the two worth writing are `aggressive` when a site scores the subresources dhole trims, and `off` when the hardening itself is what trips it):
+```json
+{"url": "https://hard-site.com/page", "force_fetcher": "stealthy", "anti_detect": "aggressive"}
+{"url": "https://legacy-app.example.com/report", "anti_detect": "off"}
+```
+
 **CDP attach — login-walled page via the user's real Chrome** (requires the user's one-time setup: copy-profile Chrome with `--remote-debugging-port=9222` — configuration.md "CDP attach"; the FIRST attach to a host is refused with `cdp_authorization_required` and authorizing it is one re-call with `"confirm": true` after the user says yes). `check_login` returns `{logged_in: true/false/null, signals, cookie_names}` — cookie names only, never values; `schema=` cannot combine with `cdp_url`:
 ```json
 {"url": "https://portal.example.com/dashboard", "cdp_url": "http://127.0.0.1:9222", "check_login": true}

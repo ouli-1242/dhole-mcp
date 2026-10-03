@@ -258,14 +258,23 @@ class TestTheSchemaBranchCallsTheTierInOrder:
         asyncio.run(MasterFetchServer().web_read(
             url="https://example.com", schema=NESTED_QUOTES, cache_ttl=0,
             cookies=cookies, extra_headers={"X-Test": "1"},
-            useragent="dhole-test/1", timeout=12345,
+            anti_detect="basic", wait=7, timeout=12345,
         ))
 
         assert seen["extraction_type"] == "html", "schema 分支必须抓原始 HTML"
         assert seen["cookies"] == cookies
-        assert seen["useragent"] == "dhole-test/1"
         assert seen["extra_headers"] == {"X-Test": "1"}
         assert seen["timeout"] == 12345
+        assert seen["wait"] == 7
+        # B5-13a 之后这一档不再有"每颗一个独一值"的公共口：UA/伪装旋钮由
+        # anti_detect 一步解析，公开传 useragent 已经是不支持的参数。所以这里
+        # 读的是**档位解析后的形状** —— basic 档是四档里唯一
+        # "画布+WebRTC 开、CF 关、资源不全省"的组合，错位一样会红；而
+        # useragent 必须是 None（UA 跟着指纹档，不跟着调用方）。
+        assert seen["hide_canvas"] is True and seen["block_webrtc"] is True
+        assert seen["solve_cloudflare"] is False
+        assert seen["load_everything"] is False
+        assert seen["useragent"] is None
         # 抽取器要看到整篇文档，所以喂给取回层的不是调用方的返回上限（见
         # test_live_audit_regressions）；分页 offset 由 JSON 的 re-chunk 负责，
         # 取回层拿到 0。
