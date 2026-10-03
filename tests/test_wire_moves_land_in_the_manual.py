@@ -1,6 +1,6 @@
 """搬家不是丢：每一条从常驻层搬走的说法，都必须真的能在手册里读到。
 
-B5-17 把 connect 面从 44,016 字往下压。用户划的刀是"用法细节可以离开 wire，落点
+B5-17 把 connect 面从 44,016 字压到 40,010。用户划的刀是"用法细节可以离开 wire，落点
 = 同一份语料两个门（`sys_guide` 与 `dhole skill install`）"，仓库自己那张
 `test_wire_shape` 的挂牌写的也是同一句话：**搬家，不是缩写**。
 
@@ -58,6 +58,11 @@ MOVED_LESSONS = [
     # 订阅
     ("since 传上一次最新的 published 值", "items_older_than_since"),
     ("没有日期的条目是留下并计数，不是丢", "undated"),
+    # instructions：第四刀搬走的逐字段读法，落点是 topic='fields' 那一卷
+    ("is_stale + content_age_days 说时效", "content_age_days"),
+    ("quality_score 只属于 PDF", "quality_score"),
+    ("original_url 只在重定向时出现", "original_url"),
+    ("fetcher_used / escalation_path 说哪一档答的", "escalation_path"),
 ]
 
 
@@ -102,7 +107,8 @@ def test_the_wire_no_longer_pays_for_what_moved():
             (v or {}).get("description", "") for v in
             (td.get("inputSchema", {}).get("properties") or {}).values())
         for td in MasterFetchServer._TOOL_DEFS)
-    for needle in ("12.5s", "FIRST match", "isTrusted", "cdp_hosts.json"):
+    for needle in ("12.5s", "FIRST match", "isTrusted", "cdp_hosts.json",
+                   "content_age_days", "escalation_path"):
         assert needle not in wire, f"{needle!r} 还在常驻层，搬家没搬完"
 
 
@@ -125,5 +131,6 @@ def test_connect_stays_inside_the_packed_budget():
         "要么把新句子搬进 sys_guide 语料（按需付），要么说清为什么它必须每次连接都到。")
 
 
-#: 实测的棘轮位（B5-17 三刀之后：44,016 → 40,472）。改它必须写理由，且只准往小改。
-CONNECT_CEILING = 40_472
+#: 实测的棘轮位（B5-17 四刀之后：44,016 → 40,010，其中 instructions 3,532 → 3,070）。
+#: 改它必须写理由，且只准往小改 —— 要往上抬就是「这句话值不值每次连接」的一次显式决定。
+CONNECT_CEILING = 40_010

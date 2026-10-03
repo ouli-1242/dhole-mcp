@@ -157,7 +157,7 @@ class TestLayerDocsTellTheTruth:
 def test_the_connect_size_readme_quotes_is_the_one_the_ruler_measures():
     """README 里那句「连接期开销 N 字符」必须等于尺子此刻量的数。
 
-    这个数字是 17.0 收尾这一批的发言权所在（44,016 → 40,472）：每改一颗描述它都会动，
+    这个数字是 17.0 收尾这一批的发言权所在（44,016 → 40,010）：每改一颗描述它都会动，
     而 README 是操作员唯一真会读的那一份。手抄一次的下场已经在正文里写过一次 ——
     旧数字比实测高 233 的那条修复记录就是它。所以这里不比对"写得差不多"，只比对
     同一把尺子（compact tools/list + instructions）的当下读数。
