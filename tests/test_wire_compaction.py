@@ -1,7 +1,11 @@
 """线格式压缩（wire compaction）的契约测试。
 
-为什么要单独测：描述是连接时付一次（实测 instructions 1,454 字符 + tools/list
-21,630 字符 ≈ 5.8k token），而**响应 envelope 是每次调用都要付**。实测：
+为什么要单独测：描述是连接时付一次（2026-10-03 实测 instructions 3,532 字符 +
+tools/list 40,484 字符 = connect 面 44,016，按这份额外测到的 4.16 chars/token
+约 10.6k token），而**响应 envelope 是每次调用都要付**。数字来自
+`tests/tool_payload_measure.py`（它拒绝出一个偏小的数），不是手抄的。
+
+响应这一面的实测形状：
 
   - 一个 0 正文的 404 返回 927 字符，其中 33% 是停在默认值上的字段
     （is_stale=false、page_type="unknown"、links={}、retry_count=0……）；

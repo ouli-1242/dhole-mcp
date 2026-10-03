@@ -87,6 +87,15 @@ that no engine can produce is a gap to report, not to paper over.
 ```
 src/dhole_mcp/
   server.py              MCP tool schemas + dispatch + orchestration
+  models.py              17 颗工具的响应形状（字段描述就是调用方读的那份说明书）
+  wire.py                线格式压实 —— "字段缺席 = 默认值"这份契约的实现
+  params.py              入参面 —— `_coerce_*` 把客户端发成字符串的数字读回类型，
+                         `_validate_tool_args` 决定这颗工具到底收不收这个名字
+  quality.py             内容质量判定与 agent 提示 —— 墙/空壳/该活多久/下一步
+  context.py             按次调用的 ContextVar（pages / focus / session_id / auth …）
+  rungs.py               反爬档位表与读它的那几处查表
+  audit.py               `DHOLE_USAGE_LOG`：每次调用的收据与只往这里发的安全事件
+  ops.py                 `dhole` 运维面（子命令、`--doctor`、技能安装、进程入口）
   fetcher.py             primp-based HTTP session and Response
   browser.py             patchright stealth browser
   search*.py             keyless metasearch backends, proxy pool, reranker
@@ -97,6 +106,16 @@ src/dhole_mcp/
   envelope.py, errors.py, cache.py          cross-cutting helpers
 tests/                   unit + integration tests (no live network by default)
 ```
+
+上面那八块（models … ops）是 17.0 B6 从 server.py 里搬出来的，搬的理由各不相同，
+但有一条共同的约束：**它们不许在模块级 import server**。唯一的例外是
+`params._arg_defaults` 里那句函数内的 `from dhole_mcp.server import MasterFetchServer`
+—— 它要的方法默认值必须从签名现读（抄一份会漂），而模块级读就成了循环。
+新加一层时先问"它需要 server 吗"，需要就说明切法错了。
+
+`tests/tool_payload_measure.py` 用 ast 从源码读 connect 面，且不 import 包；
+常量搬到哪一块它就得跟着读到哪一块（`_package_trees()` 干的就是这件事）。
+搬完它的表现是**拒绝出数**，不是出一个偏小的数。
 
 ## Conventions
 

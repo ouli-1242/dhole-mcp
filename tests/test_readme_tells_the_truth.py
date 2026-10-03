@@ -95,3 +95,60 @@ def test_the_skill_corpus_names_no_dead_knob():
             offenders[md.name] = dead
 
     assert not offenders, f"技能语料里教了不存在的旋钮：{offenders}"
+
+
+class TestLayerDocsTellTheTruth:
+    """17.0 B6 拆出去的每一层：文档要说出它存在，而它不许反过来吃 server。
+
+    这两件事都会被下一刀破：搬了新模块而 CONTRIBUTING 的 Layout 还在说
+    "server.py 里什么都有"，下一个来读的人就会把新代码继续写进那个 8k 行的文件；
+    而在某个搬出去的层里加一句模块级 `from dhole_mcp.server import X`，拆出去
+    的那一块就再也单独导不进来（循环），于是"分层"退化成一个文件名。
+    """
+
+    LAYERS = ("models", "wire", "params", "quality", "context",
+              "rungs", "audit", "ops")
+
+    def _layout_text(self) -> str:
+        import re
+        doc = (Path(__file__).resolve().parents[1] / "CONTRIBUTING.md").read_text(
+            encoding="utf-8")
+        block = re.search(r"^## Layout\n+```(.*?)```", doc, re.S | re.M)
+        assert block, "CONTRIBUTING.md 没有 Layout 代码块"
+        return block.group(1)
+
+    def test_every_split_layer_is_documented(self):
+        layout = self._layout_text()
+        missing = [f"{n}.py" for n in self.LAYERS if f"{n}.py" not in layout]
+        assert not missing, (
+            f"B6 拆出去的这些层没写进 Layout，读的人会继续往 server.py 里加东西："
+            f"{missing}")
+
+    def test_no_layer_imports_server_at_module_level(self):
+        import ast
+
+        pkg = Path(__file__).resolve().parents[1] / "src" / "dhole_mcp"
+        offenders = []
+        for name in self.LAYERS:
+            if name == "ops":
+                continue  # 唯一的例外，理由写在 ops.py 的 docstring 与 Layout 之后
+            tree = ast.parse((pkg / f"{name}.py").read_text(encoding="utf-8"))
+            for node in tree.body:          # 只看模块级：函数内 import 是许可的
+                if (isinstance(node, ast.ImportFrom)
+                        and node.module == "dhole_mcp.server"):
+                    offenders.append(f"{name}.py:{node.lineno}")
+        assert not offenders, (
+            f"{offenders} 在模块级 import server —— 这一层再也单独导不进来")
+
+    def test_the_ops_exception_still_says_why(self):
+        """例外必须留在那儿并且带理由，否则它看起来像疏忽而不是决定。"""
+        import ast
+
+        pkg = Path(__file__).resolve().parents[1] / "src" / "dhole_mcp"
+        src = (pkg / "ops.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        assert any(isinstance(n, ast.ImportFrom) and n.module == "dhole_mcp.server"
+                   for n in tree.body), (
+            "ops.py 的模块级 MasterFetchServer import 被改掉了：那会让缺依赖的人"
+            "看到 argparse 的参数错误而不是该装的那件东西（见 ops.py docstring）")
+        assert "惰性" in src, "这条约束的理由必须留在源码里，不只在 commit message 里"
