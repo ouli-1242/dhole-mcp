@@ -521,3 +521,89 @@ class TestSchemaStillWorksAlongside:
         assert [c["href"] for c in payload["cards"]] == [
             "/t/1", "/t/2", "", "/t/1", "javascript:void(0)"]
         assert len(payload["nested"]) == 2
+
+
+class TestNoMatchSaysWhatIsThere:
+    """猜错选择器时，这一页已经读回来了 —— 那就不能只回一句"0 命中"。
+
+    这把尺子是校准跑给的：两个用例各多花一整页的 `extraction_type='html'` 探针，
+    才问出页面上真实的类名（`nested_selector` 猜错 → no_match → 探一次 → 再摊平）。
+    DOM 已经在这一步手上，报出"这页上成组的链接"就把那一发探针换成一次改参数。
+    """
+
+    def test_a_wrong_selector_names_the_groups_that_are_actually_there(self, monkeypatch):
+        calls: list = []
+        html = ('<html><body>'
+                '<div class="topic-card"><a href="/t/1">专题一</a><span>20 件</span></div>'
+                '<div class="topic-card"><a href="/t/2">专题二</a><span>13 件</span></div>'
+                '<div class="topic-card"><a href="/t/1">专题一（重复）</a></div>'
+                '<div class="menu"><a href="/about">关于</a></div>'
+                '</body></html>')
+        _stub_pages(monkeypatch, {LIST_URL: html, **DETAIL}, calls=calls)
+        _stub_robots(monkeypatch)
+        out = _run(url=LIST_URL, nested_selector=".nope", nested_fields=FIELDS,
+                   cache_ttl=0)
+        assert out.error.startswith("nested_no_match"), out.error
+        assert ".topic-card (2 links" in out.next_action, out.next_action
+        # 计数说"能抓的链接"而不是"DOM 里 <a> 的个数"：三张卡片去重后是 2 条。
+        assert "(3 links" not in out.next_action
+        assert "专题一" in out.next_action, "候选要带一项的真实名字，不然还是猜"
+        # 只有一条链接的 `.menu` 不构成一组：报它等于教调用方去抓一个孤链接。
+        assert ".menu" not in out.next_action, out.next_action
+        assert [u for u, _ in calls] == [LIST_URL], "报候选不等于替调用方把扇出发出去"
+
+    def test_a_page_with_no_group_says_that_instead_of_inventing_one(self, monkeypatch):
+        """只有一条链接的页面没有"组"可报 —— 这种情况必须说出来。
+
+        不写这一条，`next_action` 就停在"widew the selector"那句建议上，而它在这个
+        页面上是走不通的：真正的原因是链接根本不在 HTML 里（壳页），换选择器白换。
+        """
+        calls: list = []
+        html = '<html><body><div class="lone"><a href="/t/1">只有一条</a></div></body></html>'
+        _stub_pages(monkeypatch, {LIST_URL: html, **DETAIL}, calls=calls)
+        _stub_robots(monkeypatch)
+        out = _run(url=LIST_URL, nested_selector=".nope", nested_fields=FIELDS,
+                   cache_ttl=0)
+        assert "No repeated link group exists" in out.next_action, out.next_action
+        assert "Link groups actually on this page" not in out.next_action
+
+    def test_the_three_shapes_a_nested_selector_accepts_are_all_offered(self):
+        """单元层：链接自己（`a.tag`）、装着链接的容器（`.quote`）、href 前缀那一组。
+
+        只报前两种，卡片型列表页（`.card` 里藏着 `<a>`）猜不到；只报类名，「URL 上才有
+        规律、类名只是样式」的那类站点也猜不到 —— 校准跑里两个 agent 最后各自摸到的都
+        是 `a[href^="/author/"]` 这种形状，所以它得被直接报出来。
+        """
+        html = ('<html><body><div class="quote"><a class="text-muted" href="/a/1">x</a></div>'
+                '<div class="quote"><a class="text-muted" href="/a/2">y</a></div>'
+                '</body></html>')
+        rows = nested_mod.suggest_link_selectors(html, LIST_URL)
+        selectors = [r["selector"] for r in rows]
+        assert 'a[href^="/a/"]' in selectors, selectors
+        assert "a.text-muted" in selectors, selectors
+        assert ".quote" in selectors, selectors
+        assert all(r["links"] == 2 for r in rows), rows
+        # href 前缀那组排在同数之前：它按 URL 聚，不像类名那样可能只是样式。
+        assert selectors[0] == 'a[href^="/a/"]', selectors
+
+    def test_duplicates_and_non_http_hrefs_are_not_counted_as_a_group(self):
+        """候选的计数口径与扇出一致：`urldefrag` + 绝对化 + 去重，`javascript:` 不算。
+
+        这条不是挑剔，是可信度：如果候选说"这一组 4 条"而扇出只抓到 2 条，调用方
+        下一次就不会再信这个字段说的任何数字。
+        """
+        html = ('<html><body>'
+                '<div class="row"><a href="/t/1#top">一</a></div>'
+                '<div class="row"><a href="/t/1">一（同一条）</a></div>'
+                '<div class="row"><a href="javascript:void(0)">按钮</a></div>'
+                '<div class="row"><a href="mailto:x@y.test">邮件</a></div>'
+                '</body></html>')
+        rows = nested_mod.suggest_link_selectors(html, LIST_URL)
+        assert rows == [], f"1 条去重后的链接不构成一组：{rows}"
+        # 加一条真的第二链接，这一组就到了门槛
+        html2 = html.replace('mailto:x@y.test', '/t/2')
+        rows2 = nested_mod.suggest_link_selectors(html2, LIST_URL)
+        # `/t/1` 与 `/t/2` 既在同一个容器里，也共享同一个 href 前缀 —— 两种形状都报，
+        # 而计数都必须是去重之后的 2，不是 DOM 里 4 个 `<a>`。
+        assert [r["selector"] for r in rows2] == ['a[href^="/t/"]', ".row"], rows2
+        assert all(r["links"] == 2 for r in rows2), rows2

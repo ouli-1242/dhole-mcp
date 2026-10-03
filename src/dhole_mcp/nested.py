@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Optional
-from urllib.parse import urldefrag, urljoin
+from urllib.parse import urldefrag, urljoin, urlparse
 
 logger = logging.getLogger("dhole_mcp.nested")
 
@@ -221,3 +221,82 @@ def nested_cap(requested: Optional[int]) -> int:
     if asked < 0:
         return 0
     return min(asked, MAX_NESTED_ITEMS)
+
+
+# 0 命中时报几颗候选选择器。这个数字是量出来的：校准跑里两个用例各多花一整页的
+# `extraction_type='html'` 探针，才问出页面上真实的类名 —— 而那页 DOM 已经在这一步
+# 手上了。DOM 在手却不报，等于把"再发一次请求"当成唯一的问法。
+MAX_SUGGESTIONS = 4
+_SUGGEST_MIN_LINKS = 2
+
+
+def suggest_link_selectors(html: str, base_url: str,
+                           limit: int = MAX_SUGGESTIONS) -> List[Dict[str, Any]]:
+    """这页上「成组的链接」长什么样：按类名分组数一遍，回报最大的几组。
+
+    报三种形状，因为 `nested_selector` 三种都收，而校准跑里两个 agent 各自摸到的都是第三种：
+    链接本身（`a.tag`）、**装着链接的容器**（`.quote` —— 卡片不是 `<a>`，链接在它肚子里），
+    以及按 href 前缀聚出来的一组（`a[href^="/author/"]`）。只报前两种的话，类名根本不该被指望
+    出现在URL上的那些站点（quotes.toscrape 的作者链接就只靠 `/author/` 这一段）还是猜不到。
+
+    计数口径与 `resolve_nested_links` 一致：先 `urldefrag` 再绝对化再去重，所以
+    这里说的 8 条就是扇出会抓的 8 条，不是 DOM 里 `a` 的个数。
+    """
+    from dhole_mcp.structured import _parse_html
+
+    root = _parse_html(html or "")
+    if root is None:
+        return []
+    groups: Dict[str, Dict[str, Any]] = {}
+
+    def _tally(selector: str, absolute: str, label: str) -> None:
+        bucket = groups.setdefault(selector, {"urls": set(), "label": ""})
+        bucket["urls"].add(absolute)
+        if not bucket["label"]:
+            bucket["label"] = label
+
+    for anchor in root.iter("a"):
+        href = anchor.get("href")
+        if not isinstance(href, str) or not href.strip():
+            continue
+        absolute = urljoin(base_url, urldefrag(href.strip())[0])
+        if not absolute.startswith(("http://", "https://")):
+            continue
+        label = _label_for(anchor)
+        names: List[str] = []
+        own = sorted((anchor.get("class") or "").split())
+        if own:
+            names.append("a." + ".".join(own))
+        node = anchor.getparent()
+        for _ in range(3):        # 容器最多往上找三层：再远的祖先已经不像"那一项"了
+            if node is None:
+                break
+            classes = sorted((node.get("class") or "").split())
+            if classes:
+                names.append("." + ".".join(classes))
+            node = node.getparent()
+        # href 的第一段路径：`/author/x/`、`/tag/y/`、`/p/123.html` 都算同一组。
+        # 站点自己的类名帮不上忙时，链接的"长相"是唯一还有规律的那一维。
+        first = urlparse(absolute).path.split("/", 2)[1:2]
+        if first and first[0]:
+            names.append(f'a[href^="/{first[0]}/"]')
+        for selector in names:
+            _tally(selector, absolute, label)
+    rows = [{"selector": s, "links": len(b["urls"]), "example": b["label"]}
+            for s, b in groups.items()
+            if len(b["urls"]) >= _SUGGEST_MIN_LINKS]
+    # 多的那组在前；一样多时挑写起来短的（`.quote` 比 `a.text-muted` 更容易是"那一项"）。
+    # href 前缀那一族排在同数的前面：它是按 URL 聚的，不像类名那样可能只是样式。
+    rows.sort(key=lambda r: (-r["links"], 0 if r["selector"].startswith("a[href") else 1,
+                             len(r["selector"])))
+    return rows[:limit]
+
+
+def format_suggestions(rows: List[Dict[str, Any]]) -> str:
+    """候选选择器的那一句人话，空列表回空串（没有可报的就不占字数）。"""
+    if not rows:
+        return ""
+    parts = [f"{r['selector']} ({r['links']} links"
+             + (f", e.g. \u201c{r['example']}\u201d" if r["example"] else "")
+             + ")" for r in rows]
+    return " | ".join(parts)

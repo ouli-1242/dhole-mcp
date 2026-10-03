@@ -5710,6 +5710,12 @@ class MasterFetchServer:
             nested_limit)
         links = found["links"]
         if not links:
+            # 猜错选择器的代价本来是一整页的第二次读取：校准跑里两个用例各发了一发
+            # `extraction_type='html'` 的探针才问出真实类名。DOM 已经在这一步手上了，
+            # 所以把"这页上成组的链接长什么样"报出去 —— 下一发该是对的选择器，而不是探针。
+            _cands = await asyncio_to_thread(
+                _nested_mod.suggest_link_selectors, html, url)
+            _hint = _nested_mod.format_suggestions(_cands)
             return ResponseModel(
                 url=url, status=first.status, content=[],
                 fetcher_used=first.fetcher_used, extracted_type="structured",
@@ -5725,7 +5731,10 @@ class MasterFetchServer:
                     "element that CONTAINS the link — a '.card' that holds an <a> "
                     "resolves. If it is a shell (a few hundred chars, page_type=shell/"
                     "unknown), the links are rendered by JS: re-call with "
-                    "force_fetcher='stealthy', or drop nested_* and read the markdown."),
+                    "force_fetcher='stealthy', or drop nested_* and read the markdown."
+                    + (f" Link groups actually on this page: {_hint}" if _hint else
+                       " No repeated link group exists in this HTML, so no selector "
+                       "will find them here - that is the shell case.")),
             )
 
         _notes = _ARG_NOTES.get()

@@ -5,7 +5,9 @@
     "tool_substitute": "dhole 的 MCP server 没接进跑评测的会话，所以每格用 `python evals/dhole_eval_cli.py --record <evidence>/<case>-<arm>.calls.jsonl '<json>'` 发一次真实 web_read。JSON 就是发给工具的参数对象；评分读服务端落下的 JSONL，不读 agent 的回忆。",
     "schema_file": "evals/.runtime/skill-calibration/A.schema.json —— 从 `MasterFetchServer._TOOL_DEFS` 现取，与 tools/list 一字节一致。每次跑之前重新导出一遍；第一轮的 A 档整档作废，就是因为提示词指向了一份没导出的文件。",
     "evidence": "evals/.runtime/skill-calibration/<case>-<arm>.calls.jsonl 与 .answer.txt",
-    "guards": "每档都禁止：调用任何 Skill、读取清单外的文件、用 WebSearch/WebFetch。A 档只许读 schema_file。"
+    "guards": "每档都禁止：调用任何 Skill、读取清单外的文件、用 WebSearch/WebFetch。A 档只许读 schema_file。",
+    "runs": "第一轮 2026-10-03：A 9/20、C 15/20。第二轮同日补 B（schema + SKILL.md）= 16/20、全绿 1/5。三档不可横比：A/C 量在三处工具修补与语料改写之前。",
+    "ruler_defects": "记录脚本的 error 字段原来只抓抛出的异常，抓不到工具自己回的 `nested_no_match`（它是 200 形状的错误回答），据此数出的「零次 no_match」是假的 0；已改为同时读 audit._result_error。另一处：arm A 的 schema_file 必须每次重新导出。"
   },
   "arms": {
     "A-bare-schema": "只给连接期 JSON schema —— 没有任何说明书时的地板。它还回来说『够用』，就说明该瘦的是语料不是描述。",

@@ -62,6 +62,12 @@ def main() -> int:
     parts = result if isinstance(result, list) else (result[0] if isinstance(result, tuple) else [])
     text = "\n".join(getattr(p, "text", "") for p in parts)
 
+    from dhole_mcp.audit import _result_error
+    # 工具自己判定的失败不抛异常 —— `nested_no_match` 就是一发"成功返回"的错误回答。
+    # 上一版只记 raise 出来的那种，于是 5 个用例 37 发的 error 全是 None，
+    # "这一发到底成没成"只能从 text_head 的前 80 个字猜。
+    err = err or (_result_error(result) or None)
+
     if ns.record:
         Path(ns.record).parent.mkdir(parents=True, exist_ok=True)
         with open(ns.record, "a", encoding="utf-8") as f:
