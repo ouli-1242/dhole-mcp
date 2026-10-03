@@ -2,9 +2,9 @@
 
 Why this file exists: the tools/list table plus instructions is paid on EVERY
 connect, even when dhole is never called. Measured on the 17.0 branch with
-``python tests/tool_payload_measure.py``: 39,085 chars of tool schemas + 3,532
-chars of instructions = 42,617 chars per connect (17 tools), which that tokenizer
-reads as ~10.2k cl100k tokens (4.16 chars per token for this payload), with
+``python tests/tool_payload_measure.py``: 39,681 chars of tool schemas + 3,532
+chars of instructions = 43,213 chars per connect (17 tools), which that tokenizer
+reads as ~10.4k cl100k tokens (4.16 chars per token for this payload), with
 web_read alone at 6,977 and web_act at 4,055. ``DHOLE_TOOLS=web_read,web_search``
 keeps the daily drivers at roughly
 half that cost; everything else stays one env-edit away.

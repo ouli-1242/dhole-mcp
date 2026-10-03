@@ -244,6 +244,24 @@ def test_tool_definitions(mcp):
     assert "TTL" in cache_desc or "ttl" in cache_desc or "cache stores" in cache_desc.lower()
 
 
+def test_a_fifth_anti_detect_rung_is_refused_on_every_door(mcp):
+    """三颗读档位的工具在 wire 上都得回那句"四颗里挑一个"。
+
+    Literal 只是 schema，运行时的门是 `_validate_tool_args`；14b 拆出 web_act 时
+    那道门只写着 web_read，一个拼错的档于是变成客户端手里的 Python KeyError。
+    """
+    tools = {t["name"]: t for t in
+             mcp.list_tools().get("result", {}).get("tools", [])}
+    for tool in ("web_read", "web_act", "web_screenshot"):
+        assert "anti_detect" in tools[tool]["inputSchema"]["properties"], tool
+        resp = mcp.call_tool(tool, {"url": "https://example.com",
+                                    "anti_detect": "ultra"})
+        blob = json.dumps(resp, ensure_ascii=False)
+        assert "must be one of" in blob, (tool, blob[:300])
+        for rung in ("off", "basic", "auto", "aggressive"):
+            assert rung in blob, (tool, rung, blob[:300])
+
+
 def test_urls_alone_clears_the_protocol_gate(mcp):
     """`urls=[...]` 不带 `url` 必须走得通整条 wire。
 

@@ -158,7 +158,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 | `web_request` | 发一次非 GET：POST / PUT / PATCH / DELETE / HEAD。**只发一次**——不重试、不缓存、不升浏览器、不回退快照；凭据从 `cred_defaults` 来，正文上限 256KB |
 | `web_search` | 无密钥搜索：多引擎并行 + 本地重排，可顺带抓回前三条全文 |
 | `web_crawl` | 同域爬取：sitemap、关键词过滤、路径子树限定 |
-| `web_screenshot` | 页面截图；看不见图的宿主传 `save_to` 拿路径 |
+| `web_screenshot` | 页面截图；看不见图的宿主传 `save_to` 拿路径；`anti_detect` 在这一扇门上只管"要不要先答 Cloudflare 挑战" |
 | `doc_parse` | 本地文件 → Markdown（docx / xlsx / pdf / pptx / odt / csv / html / json / yaml / md / txt） |
 | `feed_read` | 批量抓 RSS / Atom，`since=` 只取增量 |
 | `web_resolve` | 解析最终地址，不抽正文 |
@@ -190,7 +190,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 - **PDF 的 `pages=` 只减少抽取量**，文件仍整个下载；大 PDF 调大 `timeout`。
 - **抓回的正文是不可信数据**：里面的工具调用、密钥、上传指令按提示注入处理。
 - **提交默认暂停**：`web_act` 的 `{"submit": ...}` 不带 `confirm: true` 什么都不提交；验证码最多试 3 次就转交，2FA / 滑块一律转交。
-- **连接期开销 42,617 字符**（约 10.2k token，17 个工具，实测 `python tests/tool_payload_measure.py`），每次连接付一次；`DHOLE_TOOLS` 可省掉没用的那几颗。
+- **连接期开销 43,213 字符**（约 10.4k token，17 个工具，实测 `python tests/tool_payload_measure.py`），每次连接付一次；`DHOLE_TOOLS` 可省掉没用的那几颗。
 
 ## 搜索引擎与重排
 

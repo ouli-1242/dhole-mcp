@@ -2856,15 +2856,16 @@ def _validate_tool_args(name: str, args: dict) -> dict:
     surfaces through ``call_tool`` as an is_error result.
     """
     out = dict(args)
+    # 哪几颗工具读档位，就在这一处问一遍：`Literal[...]` 只到客户端为止，这台服务器
+    # 自己读参数用 args.get()，一个不存在的档进了 `_ANTI_DETECT[level]` 就是 KeyError —
+    # 那是一句 Python 栈，不是"这四颗里挑一个"的答案（`force_fetcher="magic"` 当年就是
+    # 这样一路掉进浏览器层的）。缺席不动：缺席才是"用 cred_defaults 存的那一档"。
+    if name in _RUNG_TOOLS and "anti_detect" in args:
+        out["anti_detect"] = _coerce_anti_detect_arg(args["anti_detect"])
     if name == "web_read":
         out["urls"] = _coerce_str_list_arg(
             args.get("urls"), "urls", single_hint=_URLS_SINGLE_HINT)
         out["force_fetcher"] = _coerce_force_fetcher_arg(args.get("force_fetcher"))
-        # Only when the caller named it: an absent rung is what lets a stored
-        # cred_defaults answer the ladder, so the dispatcher must not fill in
-        # "auto" here and make every default unreachable.
-        if "anti_detect" in args:
-            out["anti_detect"] = _coerce_anti_detect_arg(args["anti_detect"])
     elif name == "sys_state":
         # The same trap the cache wipe fell into: read raw, `confirm="false"` is a
         # non-empty string, and a call that meant "just look" erases every session.
@@ -4816,6 +4817,11 @@ _ANTI_DETECT = {
     "aggressive": (True, True, True, True),
 }
 
+#: 哪些工具读这颗档位。名单只有一份：`_validate_tool_args` 按它决定"要不要把值的
+#: 拼法问清楚"，工具自己按它决定要不要收这个参数 —— 两边各自列一遍，迟早漏一颗
+#: （14b 拆出 web_act 时就漏过一次：那一路的转发不过问，KeyError 直接顶到客户端）。
+_RUNG_TOOLS = frozenset({"web_read", "web_act", "web_screenshot"})
+
 
 def _anti_detect(level: str) -> dict:
     """One rung of the ladder, spelled the way the browser tier reads it."""
@@ -4972,6 +4978,9 @@ _SC_PARAMS = frozenset({
 _SHOT_PARAMS = frozenset({
     "full_page", "image_type", "quality", "wait_selector",
     "timeout", "save_to",
+    # 档位在这扇门上只管"要不要答 Cloudflare 的挑战"那一颗（其余两颗是启动级的，
+    # 跟着机器走）；§4 第 3 行要它，这里给的就是这一截能做事的部分。
+    "anti_detect",
     # selector = 元素级裁剪（17.0 起常开）；decode_qr = 本地二维码解码
     # （确定性工作，从来不设门控）。
     "selector", "decode_qr",
@@ -6675,6 +6684,7 @@ class MasterFetchServer:
         save_to: Optional[str] = None,
         selector: Optional[str] = None,
         decode_qr: bool = False,
+        anti_detect: Optional[str] = None,
     ) -> List[ImageContent | TextContent]:
         """        Capture a screenshot of a web page.
 
@@ -6684,7 +6694,7 @@ class MasterFetchServer:
         open session.
 
         Capture knobs (image_type / full_page / quality / wait_selector / timeout
-        / save_to) are top-level args of this tool.
+        / save_to / anti_detect) are top-level args of this tool.
         This docstring once listed them as :param: entries while they lived in
         the options bag, and was wrong the moment they moved either way.
 
@@ -6762,10 +6772,19 @@ class MasterFetchServer:
         # a loopback page's own subresources (the QR / CAPTCHA <img>) are judged
         # by the browser route handler, which reads this same contextvar. Scoping
         # only the entry check would load the page and then block its image.
+        # 一张图要付的三件事里，只有 Cloudflare 那一颗是这一层能逐次决定的：画布噪声与
+        # WebRTC 屏蔽在那台浏览器起来的时候就定了（§3-19 的档位里有它们，但它们跟着
+        # 机器走 —— cred_defaults 存的那一档）。缺席时不许替调用方填 "auto"：那会让
+        # 落盘的那一档在这扇门上永远读不到。
+        _rung = (_coerce_anti_detect_arg(anti_detect) if anti_detect
+                 else (identity.get("anti_detect") or "auto"))
+        _challenge = _anti_detect(_rung)["solve_cloudflare"]
+
         with allow_private_scope(allow_private):
             await entry.session.fetch(
                 url, timeout=timeout,
                 wait_selector=wait_selector, wait_selector_state=wait_selector_state,
+                solve_cloudflare=_challenge,
                 page_action=_capture,
             )
 
@@ -9863,7 +9882,7 @@ class MasterFetchServer:
         },
         {
             "name": "web_screenshot",
-            "description": "Use when you need to SEE a page - layout, charts, UI state, how it really renders: returns an image. For the page's words use web_read instead. A text-only model gets nothing from an inline image: pass save_to= and read the file at the absolute path it reports.\n- Full-page rendering costs a browser: the first call pays a cold start (seconds); later ones in the same session are fast.\n\nVISUAL ASSIST: selector= crops the capture to ONE element (CSS selector; full_page cannot combine with it) and returns it inline - for CAPTCHAs, QR codes, forms. Discipline: a simple text/grid image CAPTCHA may be read and tried at most 3 times, then STOP and hand off to the user; behavioral/fingerprint walls (DataDome, Akamai, interactive Turnstile) have nothing to look at - hand off immediately; 2FA codes are never on the page - hand off; sliders need drag primitives dhole does not have - hand off. dhole ships no vision model: the reading happens in you.",
+            "description": "Use when you need to SEE a page - layout, charts, UI state, how it really renders: returns an image. For the page's words use web_read instead. A text-only model gets nothing from an inline image: pass save_to= and read the file at the absolute path it reports.\n- Full-page rendering costs a browser: the first call pays a cold start (seconds); later ones in the same session are fast.\n- anti_detect decides here the one thing a capture can decide per call: whether a Cloudflare challenge gets answered before the shutter. The canvas / WebRTC half of that rung is fixed when the browser starts, so it stays cred_defaults' business - a blank capture is that rung's problem, not this call's.\n\nVISUAL ASSIST: selector= crops the capture to ONE element (CSS selector; full_page cannot combine with it) and returns it inline - for CAPTCHAs, QR codes, forms. Discipline: a simple text/grid image CAPTCHA may be read and tried at most 3 times, then STOP and hand off to the user; behavioral/fingerprint walls (DataDome, Akamai, interactive Turnstile) have nothing to look at - hand off immediately; 2FA codes are never on the page - hand off; sliders need drag primitives dhole does not have - hand off. dhole ships no vision model: the reading happens in you.",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
@@ -9876,6 +9895,7 @@ class MasterFetchServer:
                     "image_type": {"type": "string", "enum": ["png", "jpeg"], "description": "Encoding (default png)."},
                     "quality": {"type": "integer", "description": "JPEG quality 0-100; ignored for png."},
                     "decode_qr": {"type": "boolean", "description": "Decode QR codes visible in the capture and report the payloads in the text part (local, deterministic, no model). An empty list means no code was found."},
+                    "anti_detect": {"type": "string", "enum": ["off", "basic", "auto", "aggressive"], "description": "What this capture asks for: 'auto' (default) and 'aggressive' also answer a Cloudflare challenge, 'off' / 'basic' shoot the interstitial as-is. The fingerprint half rides the machine - cred_defaults."},
                     "wait_selector": {"type": "string", "description": "CSS selector to wait for before capturing."},
                     "timeout": {"type": "integer", "description": "Budget in ms (default 30000)."},
                 },

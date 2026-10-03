@@ -178,3 +178,52 @@ class TestTheReadSideLostTheChain:
         """
         assert "actions" in inspect.signature(MasterFetchServer.web_read).parameters
         assert "actions" in inspect.signature(MasterFetchServer.web_act).parameters
+
+
+class TestARungIsNamedOrRefused:
+    """第五档不存在，所以".ultra"要被拒并列出那四颗 —— 而不是炸一个 KeyError。
+
+    14b 拆出这颗门的时候踩过一次：rung 的归一化写在 `name == "web_read"` 那一个
+    分支里，web_act 转发的值没人问就进了 `_ANTI_DETECT[level]`。 Literal 只存在于
+    schema，读参数的还是这台服务器自己。
+    """
+
+    @pytest.mark.parametrize("tool", ["web_read", "web_act", "web_screenshot"])
+    def test_a_fifth_rung_is_refused_naming_the_four(self, tool):
+        """问这一颗的是 `_validate_tool_args` —— 那才是 wire 上真的那道门。
+
+        Literal 只到客户端为止；`_dispatch` 是门后面的分发器，测试打在门上才是
+        客户端会碰到的行为。
+        """
+        with pytest.raises(ValueError, match="must be one of") as exc:
+            server_mod._validate_tool_args(tool, {"anti_detect": "ultra"})
+        msg = str(exc.value)
+        for rung in ("off", "basic", "auto", "aggressive"):
+            assert rung in msg, (rung, msg)
+
+    def test_the_rung_list_has_one_home(self):
+        """名单只有一份：加了会读档位的工具，参数面与那道门一起跟上。"""
+        for tool in server_mod._RUNG_TOOLS:
+            assert "anti_detect" in server_mod._TOP_LEVEL_ARGS[tool], tool
+
+    @pytest.mark.parametrize("tool,base", [
+        ("web_read", {"url": URL}),
+        ("web_act", {"url": URL, "actions": [{"wait": 1}]}),
+    ])
+    def test_an_absent_rung_stays_absent_so_the_stored_one_can_answer(self, tool, base):
+        """`anti_detect` 缺席不等于 "auto"：缺席才是"用 cred_defaults 存的那一档"。"""
+        seen = {}
+
+        async def fake_read(self, url, **kwargs):
+            seen.update(kwargs)
+            from dhole_mcp.server import ResponseModel
+            return ResponseModel(url=url, status=200, content=["body"],
+                                 fetcher_used="http")
+
+        monkey = pytest.MonkeyPatch()
+        try:
+            monkey.setattr(MasterFetchServer, "web_read", fake_read)
+            asyncio.run(MasterFetchServer()._dispatch(tool, base))
+        finally:
+            monkey.undo()
+        assert seen.get("anti_detect", None) is None, seen
