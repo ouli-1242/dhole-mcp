@@ -8193,14 +8193,31 @@ class MasterFetchServer:
             )
 
         _notes = _ARG_NOTES.get()
-        if found["matched"] > len(links) or found["skipped"]:
-            # 上限藏起来的东西要说出口：8 条被当成"这页只有 8 个专题"是这一颗参数
-            # 唯一能造成的错。
-            note = (f"truncation=nested_budget: expanded {len(links)} of "
-                    f"{found['matched']} matched ({found['skipped']} without a usable "
-                    f"href) — raise nested_max (ceiling {_nested_mod.MAX_NESTED_ITEMS})")
-            if _notes is not None:
-                _notes.append(note)
+        _omitted = found["candidates"] - len(links)
+        if _omitted > 0 and _notes is not None:
+            # 只有"上限挡住了还能抓的链接"才叫截断。抬 `nested_max` 能拿回来的是这一
+            # 部分，拿不回来的是去重掉的那部分 —— 把两种少法说成同一句，调用方就会为
+            # 重复的 URL 再抬一次上限，而那不是慢，是白付。
+            # 已经顶到 ceiling 时不能再写 "raise nested_max"：那是在指一条走不通的路，
+            # 而真正的出口（web_crawl）在旁边那一句里。
+            _at_ceiling = nested_limit >= _nested_mod.MAX_NESTED_ITEMS
+            _notes.append(
+                f"truncation=nested_budget: {found['candidates']} unique links here, "
+                f"expanded {len(links)} "
+                + ("(the ceiling — past 30 the tool is web_crawl) "
+                   if _at_ceiling else
+                   f"(nested_max={nested_limit}, ceiling "
+                   f"{_nested_mod.MAX_NESTED_ITEMS}) — raise nested_max ")
+                + "for the rest")
+        if (found["matched"] > found["candidates"]) and _notes is not None:
+            # DOM 命中数与真要抓的链接数之间的差额，必须逐项交代：重复的、没有可用
+            # href 的。合起来只报后者，"选择器写宽了"就看不见了。
+            _notes.append(
+                f"links: {found['matched']} elements matched → {found['candidates']} "
+                f"unique"
+                + (f", {found['skipped']} without a usable href"
+                   if found["skipped"] else "")
+                + (f", {_omitted} not expanded" if _omitted else ""))
 
         _budget_ms = float(tier.get("timeout") or DEFAULT_CALL_TIMEOUT_MS)
         _started = now()
@@ -10002,9 +10019,9 @@ class MasterFetchServer:
                     "include_media": {"type": "boolean", "description": "Return up to 20 image URLs found on the page in .media (default false)."},
                     # §5 E-13：一次调用摊平两层。三颗都在场上，缺一条描述就没人会
                     # 想到它们存在 —— 而 agent 的默认做法是发 8 次 web_read。
-                    "nested_selector": {"type": "string", "description": "Two layers in one call: a CSS selector on THIS page naming the elements to follow into the second layer; each match becomes one record. Needs nested_fields."},
-                    "nested_fields": {"type": ["array", "object"], "description": "What to read on each second-layer page: [{'name':'作品','selector':'.work a','type':'array'}] or {'作品':'.work a'}. 1-12 fields; 'array' = every match on that page."},
-                    "nested_max": {"type": "integer", "description": "How many of this page's matched links to expand (default 8, max 30). What the cap hid is reported as truncation=nested_budget."},
+                    "nested_selector": {"type": "string", "description": "Two layers in one call: a CSS selector on THIS page naming the elements to follow into the second layer; each one's href (its own, a descendant's or an ancestor's <a>) is fetched, and nested_fields are read there."},
+                    "nested_fields": {"type": ["array", "object"], "description": "What to read on each second-layer page: [{'name':'作品','selector':'.work a','type':'array'}] or {'作品':'.work a'}. 1-12 fields; array = every match. This page's own fields do not ride along; a field matching nothing returns \"\"."},
+                    "nested_max": {"type": "integer", "description": "How many of this page's unique links to expand (default 8, max 30). Links the cap hid are reported as truncation=nested_budget; duplicates and href-less matches are counted separately, never as a cap."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},

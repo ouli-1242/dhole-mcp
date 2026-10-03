@@ -199,10 +199,31 @@ class TestWhatTheCapHid:
         assert len(_payload(out)["nested"]) == nested_mod.DEFAULT_NESTED_ITEMS
         assert "truncation=nested_budget" in out.summary, \
             f"8 条被当成全部交付了：{out.summary}"
-        assert "8 of 12" in out.summary
+        assert "12 unique links here, expanded 8" in out.summary
 
-    def test_the_ceiling_is_stated_in_the_note(self, monkeypatch):
-        """封顶到 30 也要说 —— 否则 'nested_max=500' 读起来像被忽略了。"""
+    def test_duplicates_are_not_reported_as_a_cap(self, monkeypatch):
+        """去重掉的和上限挡住的是两件事 —— 混报会让调用方为重复的 URL 再抬一次上限。
+
+        这正是校准跑第一次实测到的形状：`quotes.toscrape.com` 首页 10 个容器去重成
+        8 位作者，`nested_max` 根本没生效，summary 却写着 `truncation=nested_budget`。
+        """
+        calls: list = []
+        _stub_pages(monkeypatch, {LIST_URL: LIST_HTML, **DETAIL}, calls=calls)
+        _stub_robots(monkeypatch)
+
+        out = _run(url=LIST_URL, nested_selector=".topic-card",
+                   nested_fields=FIELDS, cache_ttl=0)
+
+        assert "truncation" not in out.summary, out.summary
+        assert "5 elements matched → 2 unique" in out.summary, out.summary
+        assert "2 without a usable href" in out.summary
+
+    def test_the_ceiling_note_points_at_the_real_way_out(self, monkeypatch):
+        """封顶到 30 之后不许再写 "raise nested_max" —— 那是一条走不通的路。
+
+        真正的出口是 `web_crawl`，而它必须出现在同一句里：调用方读到"还有更多"时
+        需要知道的是"那我现在该怎么办"，不是"再抬一次那个已经抬不动的数"。
+        """
         calls: list = []
         cards = "".join(f'<div class="c"><a href="/t/{i}">x</a></div>'
                         for i in range(40))
@@ -214,7 +235,8 @@ class TestWhatTheCapHid:
         out = _run(url=LIST_URL, nested_selector=".c", nested_fields=FIELDS,
                    nested_max=500, cache_ttl=0)
         assert len(_payload(out)["nested"]) == nested_mod.MAX_NESTED_ITEMS
-        assert str(nested_mod.MAX_NESTED_ITEMS) in out.summary
+        assert "the ceiling" in out.summary and "web_crawl" in out.summary, out.summary
+        assert "raise nested_max" not in out.summary
 
     def test_rungs_and_per_layer_counts_reach_the_summary(self, monkeypatch):
         calls: list = []

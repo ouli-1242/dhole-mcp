@@ -38,7 +38,7 @@ Both are failures to fix, not empty answers to report — and **no second-layer 
 
 - `nested_no_match` (0 usable hrefs): either the selector names something that doesn't carry links, or the page is a JS shell. Widen it to the element that CONTAINS the `<a>` (`.card`, not `.card a`) — the href is read from the matched element, its first descendant `<a>`, or its nearest ancestor `<a>`. If `total_extracted_chars` is a few hundred and `page_type` is `shell`/`unknown`, no selector will help: re-call with `force_fetcher='stealthy'`.
 - `nested_empty` (every second-layer page returned no field): `nested_fields` doesn't match that site's markup. Read ONE of those pages without `nested_*` (`css_selector` or a screenshot of the structure) and re-derive the selectors; `type: "array"` on a field that is a list on the page (a topic page's 20 works) or you get its first item.
-- Fewer records than the page has: look for `truncation=nested_budget` in `summary` — the default expands 8 and the ceiling is 30. Say the cap in your answer rather than reporting "all". Past 30, the job is `web_crawl`.
+- Fewer records than the page has: look for `truncation=nested_budget` in `summary` — the default expands 8 and the ceiling is 30, and that phrase is the one that raising `nested_max` actually fixes. A note like `links: 10 elements matched → 8 unique` is **deduplication** (the same author linked twice), so raising the cap recovers nothing. Say the number you got rather than reporting "all". Past 30, the job is `web_crawl`.
 - A record carrying `"error": "robots_disallowed"`: that item was never requested (each second-layer link passes its own robots check); `robots_skipped` in `summary` counts them.
 
 ### `robots_disallowed`

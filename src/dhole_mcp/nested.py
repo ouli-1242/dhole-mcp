@@ -130,10 +130,16 @@ def resolve_nested_links(html: str, base_url: str, selector: str,
     收到"这页没有专题"。
 
     去重按最终绝对 URL（先 `urldefrag`，否则同一专题的 `#anchor` 变体各算一项）。
+
+    三个数是三件事，分开报：`matched` 是 DOM 命中，`candidates` 是去重之后**真的能抓**
+    的链接数，`expanded` 是 `limit` 允许抓的那部分。校准跑的第一次实测里，10 个容器去重
+    成 8 条链接被说成了 `truncation=nested_budget` —— 少的那 2 条是同一个作者的第二次出现，
+    不是被上限藏起来的。把去重报成截断，调用方就会为"剩下的 2 条"再抬一次 `nested_max`，
+    而抬到多少都拿不回来。
     """
     from dhole_mcp.structured import _parse_html
 
-    empty = {"links": [], "matched": 0, "skipped": 0}
+    empty = {"links": [], "matched": 0, "candidates": 0, "skipped": 0}
     root = _parse_html(html or "")
     if root is None:
         return empty
@@ -144,7 +150,7 @@ def resolve_nested_links(html: str, base_url: str, selector: str,
         logger.debug("nested_selector '%s' failed: %s", selector, e)
         return dict(empty, error=str(e))
 
-    links: List[Dict[str, str]] = []
+    candidates: List[Dict[str, str]] = []
     seen: set = set()
     skipped = 0
     for node in nodes:
@@ -162,12 +168,9 @@ def resolve_nested_links(html: str, base_url: str, selector: str,
         # 标题取**带 href 的那个元素**的文字，不是整张卡片的：卡片里跟着链接的
         # "20 件 · 更新于…"那一段进 label 之后，JSON 里每一项的辨识度反而下降了
         # —— label 的用途是"认出抓错了哪一项"，链接文字本身就是那一项的名字。
-        links.append({"url": absolute, "label": _label_for(carrier)})
-        if len(links) >= limit:
-            break
-    # matched 是 DOM 命中数（含没 href 的和重复的），expanded 才是真要抓的。
-    # 两个数分开报，"选择器写宽了"和"选择器写窄了"才是可分辨的两句话。
-    return {"links": links, "matched": len(nodes), "skipped": skipped}
+        candidates.append({"url": absolute, "label": _label_for(carrier)})
+    return {"links": candidates[:limit], "matched": len(nodes),
+            "candidates": len(candidates), "skipped": skipped}
 
 
 def _href_for(node) -> tuple:
