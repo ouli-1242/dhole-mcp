@@ -96,10 +96,10 @@ def test_web_read_advertises_one_level_param_and_no_hardening_knobs():
     # B5-14d 加了两层扇出的三颗（nested_selector / nested_fields / nested_max），24 → 27：
     # 它们不是又一组装饰，而是"一次调用替 agent 发 8 次"这件事的接口 —— 没有它们，
     # 列表页→详情页只能靠 agent 自己排队，而排队的那 8 次里没人保证 robots 逐条查过。
-    # §3-12 的 ≤20 由 tests/test_wire_shape.py 整块 xfail(strict) 盯着。今天还差 7 颗，
-    # 而这 7 颗里没有一颗是"没人用的装饰"：cdp_url / confirm / check_login 是 §3-16 那
-    # 扇门（"逐次留着"是定过的决定），nested_* 是扇出，剩的是读法本身。所以 ≤20 要么与
-    # 那条决定不相容，要么得给读法再找门 —— 那是拍过板的事，不在这儿预先断言。
+    # §3-12 的 ≤20 已由作者裁决**放宽成棘轮 27**（"能力优先"，与作废 ≤26,000 同一句
+    # 话）：这 7 颗里没有一颗是"没人用的装饰"——cdp_url / confirm / check_login 是
+    # §3-16 那道门（"逐次留着"是定过的决定），nested_* 是扇出，剩的是读法本身。守卫
+    # 在 tests/test_wire_shape.py，数字钉在 27、只准往下。
     assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 27, \
         len(server_mod._TOP_LEVEL_ARGS["web_read"])
 
