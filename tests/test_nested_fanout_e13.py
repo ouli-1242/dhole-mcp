@@ -607,3 +607,95 @@ class TestNoMatchSaysWhatIsThere:
         # 而计数都必须是去重之后的 2，不是 DOM 里 4 个 `<a>`。
         assert [r["selector"] for r in rows2] == ['a[href^="/t/"]', ".row"], rows2
         assert all(r["links"] == 2 for r in rows2), rows2
+
+
+class TestSecondLayerFieldQuality:
+    """扇出第二层的字段质量：整列同值与某列全空都要说出口。
+
+    这把尺子上一个批次记在"已知未覆盖"里：counts 只有 ok/empty/failed 三个数，
+    分不出「这一列抽错了」与「这一页什么都没抽到」。而实测到的缺陷恰好是前者 ——
+    仓库自己的示例对作者页写 `{"selector": "p"}`，8 条页面抽出 8 个一模一样的
+    登录/版权段落，`ok 8 / empty 0`，响应读起来完全成功。
+    """
+
+    CHROME = {
+        "https://list.test/t/1": '<html><body><div class="chrome">© 2026 站点</div>'
+                                 '<p>第一段</p></body></html>',
+        "https://list.test/t/2": '<html><body><div class="chrome">© 2026 站点</div>'
+                                 '<p>第二段</p></body></html>',
+    }
+    TWO_FIELDS = [{"name": "版权", "selector": ".chrome"},
+                  {"name": "正文", "selector": "p"}]
+
+    def test_a_column_that_is_identical_on_every_page_is_named(self, monkeypatch):
+        calls: list = []
+        _stub_pages(monkeypatch, {LIST_URL: LIST_HTML, **self.CHROME}, calls=calls)
+        _stub_robots(monkeypatch)
+        out = _run(url=LIST_URL, nested_selector=".topic-card",
+                   nested_fields=self.TWO_FIELDS, cache_ttl=0)
+        assert out.error == "", out.error          # 数据仍然交付：那是事实，不是失败
+        records = _payload(out)["nested"]
+        assert [r["版权"] for r in records] == ["© 2026 站点", "© 2026 站点"]
+        assert "版权 came back identical" in out.summary, out.summary
+        assert "page chrome" in out.summary, out.summary
+        assert "really share" in out.summary, \
+            "同值不等于有罪：作者名这类真的每页一样的值不能被说成页眉"
+        assert "正文" not in out.summary.split("nested fields:")[-1], \
+            "只有那一列被点名，抽对了的列不能被一起怀疑"
+        assert "re-derive nested_fields" in out.next_action, out.next_action
+
+    def test_a_column_empty_on_every_page_while_others_fill_is_a_different_sentence(self, monkeypatch):
+        """另一半天：`ok/empty` 数的是**整页**，整页有产出而某一列永远空，今天没人说。"""
+        calls: list = []
+        _stub_pages(monkeypatch, {LIST_URL: LIST_HTML, **DETAIL}, calls=calls)
+        _stub_robots(monkeypatch)
+        fields = [{"name": "作品", "selector": ".work-item a", "type": "array"},
+                  {"name": "评分", "selector": ".no-such-star"}]
+        out = _run(url=LIST_URL, nested_selector=".topic-card",
+                   nested_fields=fields, cache_ttl=0)
+        assert "评分 came back empty on all" in out.summary, out.summary
+        assert "while other fields filled" in out.summary
+        assert "作品" not in out.summary.split("nested fields:")[-1]
+
+    def test_pages_that_genuinely_differ_stay_silent(self, monkeypatch):
+        """最常见的那条路必须一个字都不多付：抽到的是不同项的不同值。"""
+        calls: list = []
+        _stub_pages(monkeypatch, {LIST_URL: LIST_HTML, **DETAIL}, calls=calls)
+        _stub_robots(monkeypatch)
+        out = _run(url=LIST_URL, nested_selector=".topic-card",
+                   nested_fields=FIELDS, cache_ttl=0)
+        assert "nested fields:" not in out.summary, out.summary
+        assert "re-derive" not in out.next_action
+
+    def test_one_record_is_not_evidence_of_a_uniform_column(self, monkeypatch):
+        """只展开一条时"整列同值"是恒真式 —— 那时不能说人家抽的是页眉。"""
+        calls: list = []
+        one = ('<html><body><div class="topic-card"><a href="/t/1">专题一</a></div>'
+               '</body></html>')
+        _stub_pages(monkeypatch, {LIST_URL: one, **DETAIL}, calls=calls)
+        _stub_robots(monkeypatch)
+        out = _run(url=LIST_URL, nested_selector=".topic-card",
+                   nested_fields=[{"name": "作品", "selector": ".work-item a"}],
+                   nested_max=1, cache_ttl=0)
+        assert len(_payload(out)["nested"]) == 1
+        assert "nested fields:" not in out.summary, out.summary
+
+    def test_the_truncation_hint_and_the_field_hint_share_next_action(self, monkeypatch):
+        """两件事同时成立时不能互相盖掉：上限没展开的链接与抽错的列都要说出来。"""
+        calls: list = []
+        many = ('<html><body>'
+                + "".join(f'<div class="topic-card"><a href="/t/{i}">项{i}</a></div>'
+                          for i in (1, 2))
+                + '<div class="topic-card"><a href="/t/9">项九</a></div>'
+                '</body></html>')
+        pages = {LIST_URL: many,
+                 "https://list.test/t/1": self.CHROME["https://list.test/t/1"],
+                 "https://list.test/t/2": self.CHROME["https://list.test/t/2"],
+                 "https://list.test/t/9": self.CHROME["https://list.test/t/1"]}
+        _stub_pages(monkeypatch, pages, calls=calls)
+        _stub_robots(monkeypatch)
+        out = _run(url=LIST_URL, nested_selector=".topic-card",
+                   nested_fields=[{"name": "版权", "selector": ".chrome"}],
+                   nested_max=2, cache_ttl=0)
+        assert "were not expanded" in out.next_action, out.next_action
+        assert "re-derive nested_fields" in out.next_action, out.next_action

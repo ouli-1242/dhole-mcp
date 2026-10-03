@@ -5829,6 +5829,46 @@ class MasterFetchServer:
             first_fields = await asyncio_to_thread(
                 extract_structured, html, schema, url, first.metadata or {})
             payload.update(first_fields)
+
+        # 第二层的**字段**质量。counts 只分得出"这一页抽到东西没有"，分不出两件事：
+        # 整列同值（那不是那一项，那是页眉/版权段）与某列全空（别的列都填上了，
+        # 只有这颗选择器在这个站上什么都不指）。校准跑实测到的正是前者 —— 仓库自己
+        # 的示例写的是 `{"selector": "p"}`，8 条作者页抽出 8 个一模一样的段落，
+        # 而响应读起来完全成功（ok 8 / empty 0）。
+        _cols: dict = {}
+        for rec in records:
+            for k, v in rec.items():
+                if k in ("url", "label", "error"):
+                    continue
+                _cols.setdefault(k, []).append(v)
+        _uniform, _blank = [], []
+        for k, vs in _cols.items():
+            if len(vs) < 2:
+                continue          # 一条记录分不出"同值"与"就一条"
+            if all(_schema_value_empty(v) for v in vs):
+                _blank.append(k)
+            elif not _schema_value_empty(vs[0]):
+                key = json.dumps(vs[0], ensure_ascii=False, sort_keys=True)
+                if all(json.dumps(v, ensure_ascii=False, sort_keys=True) == key
+                       for v in vs[1:]):
+                    _uniform.append(k)
+        _hint = ""
+        if (_uniform or _blank) and len(records) > 1:
+            _bits = []
+            if _uniform:
+                _bits.append(f"{', '.join(_uniform[:3])} came back identical on all "
+                             f"{len(records)} second-layer pages - either those pages "
+                             "really share that value or the selector is grabbing "
+                             "page chrome rather than the item")
+            if _blank:
+                _bits.append(f"{', '.join(_blank[:3])} came back empty on all "
+                             f"{len(records)} second-layer pages while other fields "
+                             "filled - that selector names nothing on this site")
+            if _notes is not None:
+                _notes.append("nested fields: " + "; ".join(_bits)
+                              + ". Read ONE of those pages without nested_* and "
+                              "re-derive the selector.")
+            _hint = "re-derive nested_fields (" + "; ".join(_bits) + ")"
         payload["nested"] = records
 
         import json as _json_mod
@@ -5854,10 +5894,14 @@ class MasterFetchServer:
             # 扇出成功之后，通用提示语里那句"这是个列表页，去 web_crawl 抓全站"就
             # 说不上了 —— 第二层刚刚已经被读完。两个只读过文档的观察者都报告被这句
             # 引去发了一次多余的 crawl，所以这里换成只在"还有没展开"时成立的一句话。
-            out.next_action = (
-                f"{_omitted} more unique links on this page were not expanded — raise "
-                f"nested_max (ceiling {_nested_mod.MAX_NESTED_ITEMS})"
-                if _omitted > 0 else "")
+            _acts = []
+            if _omitted > 0:
+                _acts.append(
+                    f"{_omitted} more unique links on this page were not expanded — "
+                    f"raise nested_max (ceiling {_nested_mod.MAX_NESTED_ITEMS})")
+            if _hint:
+                _acts.append(_hint)
+            out.next_action = " · ".join(_acts)
         return out
 
     async def _smart_fetch_bulk(
