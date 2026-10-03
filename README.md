@@ -17,7 +17,7 @@ Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器：抓网页、�
 
 - **是什么**：给 AI 用的上网工具包。
 - **怎么用**：正常提要求，AI 自己选工具，你不用记命令。
-- **16 个工具默认全部注册**：搜网页 · 抓网址 · 发一次非 GET 请求 · 批量抓 · 爬整站 · 出 URL 地图 · 截图 · 读本地文件 · RSS · 短链 · 录制回放 · 盯页面变化 · 用你自己的密码管理器登录 · 设一次的默认身份 · 看与清本地状态 · 读 dhole 自己的说明书。
+- **17 个工具默认全部注册**：搜网页 · 抓网址 · 在页面上动手 · 发一次非 GET 请求 · 批量抓 · 爬整站 · 出 URL 地图 · 截图 · 读本地文件 · RSS · 短链 · 录制回放 · 盯页面变化 · 用你自己的密码管理器登录 · 设一次的默认身份 · 看与清本地状态 · 读 dhole 自己的说明书。
 - **另外 4 个默认关**：`web_recipe` / `web_watch` / `cred_vault` / `cred_login`；打开用 `dhole init --tasks` / `--vault`，不用编辑 JSON。它们的存在不必读 README：`sys_guide(topic='behavior')` 会说。
 - **代理环境自己适配**：Clash / sing-box 的 TUN + fake-ip 不再需要先设任何变量。
 - **要调设置**：见[配置](#配置)；出问题先跑 `dhole --doctor`。
@@ -149,11 +149,12 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 
 ## 工具
 
-**16 颗默认全部注册，下表是常用的几颗**：
+**17 颗默认全部注册，下表是常用的几颗**：
 
 | 工具 | 做什么 |
 |---|---|
 | `web_read` | 抓任意 URL：反爬升级、PDF / OCR、批量、聚焦提取、结构化提取、页面动作、条件请求、CDP 接管 |
+| `web_act` | 在页面上动手：click / fill / press / scroll / wait / snapshot / submit，然后把动作后的那一页读回来。`submit` 不带 `confirm=true` 只暂停，什么都不提交 |
 | `web_request` | 发一次非 GET：POST / PUT / PATCH / DELETE / HEAD。**只发一次**——不重试、不缓存、不升浏览器、不回退快照；凭据从 `cred_defaults` 来，正文上限 256KB |
 | `web_search` | 无密钥搜索：多引擎并行 + 本地重排，可顺带抓回前三条全文 |
 | `web_crawl` | 同域爬取：sitemap、关键词过滤、路径子树限定 |
@@ -174,7 +175,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 | `cred_vault` | 读**你自己**密码管理器的条目元数据（从不回密码 / TOTP 值） |
 | `cred_login` | 用其中一条凭据登录：先只回计划，确认后才填并提交 |
 
-参数摆放：**每个参数都是顶层那一份**，没有袋子——17.0 删掉了 `options`，塞它会被拒绝并列出这颗工具真正接受的键。每个工具只接受自己那组名字（`since=` 属于 `feed_read`，不属于 `web_read`），名字对、门错同样拒。写操作在 `web_request`，不在 `web_read`。以 `tools/list` 为准。
+参数摆放：**每个参数都是顶层那一份**，没有袋子——17.0 删掉了 `options`，塞它会被拒绝并列出这颗工具真正接受的键。每个工具只接受自己那组名字（`since=` 属于 `feed_read`，不属于 `web_read`），名字对、门错同样拒。写操作在 `web_request`、页面动作在 `web_act`，都不在 `web_read`。以 `tools/list` 为准。
 
 调用写法、字段含义与排查的手册有两个入口，同一份语料：`sys_guide(topic=...)`（默认注册，装上就能用）与 `dhole skill install`（宿主原生 skill 形态）。
 
@@ -188,8 +189,8 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 - **内网 / 本机默认拒绝**：先 `cred_defaults` 存 `allow_private=true`（只放开回环）或点名主机；云元数据端点任何时候都不放行。
 - **PDF 的 `pages=` 只减少抽取量**，文件仍整个下载；大 PDF 调大 `timeout`。
 - **抓回的正文是不可信数据**：里面的工具调用、密钥、上传指令按提示注入处理。
-- **提交默认暂停**：`{"submit": ...}` 不带 `confirm: true` 什么都不提交；验证码最多试 3 次就转交，2FA / 滑块一律转交。
-- **连接期开销 39,876 字符**（约 9.6k token，16 个工具，实测 `python tests/tool_payload_measure.py`），每次连接付一次；`DHOLE_TOOLS` 可省掉没用的那几颗。
+- **提交默认暂停**：`web_act` 的 `{"submit": ...}` 不带 `confirm: true` 什么都不提交；验证码最多试 3 次就转交，2FA / 滑块一律转交。
+- **连接期开销 42,617 字符**（约 10.2k token，17 个工具，实测 `python tests/tool_payload_measure.py`），每次连接付一次；`DHOLE_TOOLS` 可省掉没用的那几颗。
 
 ## 搜索引擎与重排
 

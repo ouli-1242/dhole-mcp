@@ -80,8 +80,8 @@ class TestTheToolExists:
         assert ann.get("idempotentHint") is False
         assert ann.get("openWorldHint") is True
 
-    def test_the_default_surface_is_sixteen_tools(self):
-        assert len(_defs()) == 16, sorted(_defs())
+    def test_the_default_surface_is_seventeen_tools(self):
+        assert len(_defs()) == 17, sorted(_defs())
 
     def test_every_property_description_stays_within_the_budget(self):
         props = _defs()["web_request"]["inputSchema"]["properties"]
@@ -233,7 +233,7 @@ class TestReadSideLostTheThreeNames:
         props = _defs()["web_read"]["inputSchema"]["properties"]
         for key in ("method", "body", "content_type"):
             assert key not in props, key
-        assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 25, \
+        assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 24, \
             sorted(server_mod._TOP_LEVEL_ARGS["web_read"])
 
     @pytest.mark.parametrize("key", ["method", "body", "content_type"])

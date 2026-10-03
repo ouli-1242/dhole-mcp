@@ -18,7 +18,7 @@ Tool descriptions cover parameters; this volume covers **how the tools actually 
 
 ## Page interaction (actions, via the stealthy browser)
 
-Actions run in order; each leaves a receipt in `metadata.actions`.
+The chain is **`web_act`'s** since 17.0 §4: `web_read(url=, actions=)` is refused and the refusal names the door (`web_read` never touches what it fetches, and a chain does). Actions run in order; each leaves a receipt in `metadata.actions`.
 - `{scroll:n}` or `{scroll:{steps,selector,ms_per_step}}`: scrolls to the bottom, then polls the DOM until the page **stops growing** (chases the new bottom, two quiet rounds ends it), capped at a 20s budget — and it dispatches a real `scroll` event, because when the viewport is tall and content short, `scrollTo` fires nothing and event-only lazy-loaders never wake
 - Sites gating lazy-load on `event.isTrusted` ignore synthetic scrolls — use `{click:'<css of the load-more button>'}`; forms take `{fill:{selector,text}}` + `{press:'Enter'}`; `{wait:ms}` / `{wait_selector:'css'}` (or `{selector,count,state,timeout_ms}`) hold for elements
 - **No selector? snapshot first**: `{"snapshot": true}` returns a numbered list of interactive elements (index/tag/role/name, capped at 80 with `elements_truncated` + `elements_total` when cut). Then address by index: `{click:{index:12, expect:'登录'}}`, `{fill:{index:3, text:'...'}}`, `{press:{index:7, key:'Enter'}}`. Snapshot and actions share ONE interactive-element selector in document order, so indices reproduce across page loads; `expect` verifies the element's visible name before acting — a stale index fails loudly naming what sits there now, instead of clicking the wrong thing

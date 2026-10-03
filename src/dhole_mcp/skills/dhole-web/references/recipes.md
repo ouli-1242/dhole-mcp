@@ -55,7 +55,7 @@ Five paths, cheapest first: (1) stored credentials — `cred_defaults` `set={coo
 
 ## Reach a page that needs steps — record and replay
 
-1. Derive the chain once: `web_read` with `actions: [{"snapshot": true}]`, then address by index with `expect` (see "Operate a page")
+1. Derive the chain once: `web_act` with `actions: [{"snapshot": true}]`, then address by index with `expect` (see "Operate a page")
 2. `web_recipe(op='save', name=..., url=..., actions=[...], note=...)` — validated at save time, so a chain the executor would refuse cannot be stored
 3. Later: `web_recipe(op='run', name=..., session_id=...)` returns the whole fetch plus one receipt per action. `session_id` is per-run — recipes never store one
 4. Pivot: `actions_failed` non-zero (or `op='list'` showing `last_ok: false`) means the page changed → re-snapshot, re-derive, re-save. Don't keep replaying a broken chain
@@ -71,7 +71,7 @@ Five paths, cheapest first: (1) stored credentials — `cred_defaults` `set={coo
 
 ## Operate a page (form, settings, checkout)
 
-1. `web_read` with `actions: [{"snapshot": true}]` (+ `force_fetcher='stealthy'`) — read the numbered element list
+1. `web_act` with `actions: [{"snapshot": true}]` — read the numbered element list (the chain is the browser tier: no `force_fetcher` to say)
 2. Address by index with `expect`: `{"fill": {"index": 3, "text": ...}}`, `{"click": {"index": 12, "expect": "Save"}}`; an `expect` mismatch = the page changed → re-snapshot, never retry a stale index
 3. Submission: `{"submit": {...}}` without `confirm` pauses (`pending_approval`, nothing sent) — describe what will be submitted to the user; only on their explicit yes re-run the **whole chain** with `confirm: true`. Every submit (paused or confirmed) is audit-logged
 4. Captchas / 2FA / sliders: ≤3 tries on image captchas, then hand off — see SKILL.md constraint 12

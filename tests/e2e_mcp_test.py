@@ -213,6 +213,15 @@ def test_tool_definitions(mcp):
     # 出去的写法。它们在对面必须真实存在（properties 是客户端取值的唯一来源）。
     for key in ("method", "body", "content_type"):
         assert key not in props, f"{key} 已归 web_request，却还在 web_read 的面上"
+    # B5-14b 的同一条：动作链搬去 web_act。它留在读的门上就是教一个发不出去的写法，
+    # 而 web_act 那边必须真实声明它（properties 是客户端取值的唯一来源）。
+    assert "actions" not in props, "actions 已归 web_act，却还在 web_read 的面上"
+    act_props = tool_map["web_act"]["inputSchema"]["properties"]
+    assert tool_map["web_act"]["inputSchema"]["required"] == ["url", "actions"]
+    for key in ("actions", "session_id", "cdp_url", "confirm", "check_login",
+                "anti_detect"):
+        assert key in act_props, f"web_act 少了 {key}"
+        assert (act_props[key].get("description") or "").strip(), f"{key} 没说明"
     req_props = tool_map["web_request"]["inputSchema"]["properties"]
     for key in ("url", "method", "body", "content_type"):
         assert key in req_props, f"web_request 少了 {key}"
@@ -301,11 +310,12 @@ def test_the_old_write_spelling_is_refused_naming_the_new_door(mcp):
     「陌生键」三个字会把人引向"这工具没这个能力"；真相是"能力换了门牌"，所以拒答
     要点名 web_request —— 而且一次请求都不许发出去。
     """
-    for key in ("method", "body", "content_type"):
+    for key, door in (("method", "web_request"), ("body", "web_request"),
+                      ("content_type", "web_request"), ("actions", "web_act")):
         resp = mcp.call_tool("web_read", {"url": "https://example.com", key: "x"})
         blob = json.dumps(resp, ensure_ascii=False)
         assert "Unsupported argument" in blob, blob[:400]
-        assert "web_request" in blob, blob[:400]
+        assert door in blob, blob[:400]
         assert key in blob, blob[:400]
 
 

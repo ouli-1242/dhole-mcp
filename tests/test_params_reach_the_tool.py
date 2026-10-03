@@ -37,6 +37,8 @@ BASE: dict[str, tuple[dict, object]] = {
     # 17.0 §4 第 4 行：写操作自己的门。`method` 在这里是主语之一（必填），所以 BASE
     # 得带上它 —— 少一颗，这条 dispatch 就在测"缺 method 的拒答"而不是抵达。
     "web_request": ({"url": URL, "method": "POST"}, _FETCH_OK),
+    # 17.0 §4 第 2 行：动作链那颗门。`actions` 与 `url` 一样是必填主语，BASE 得带上。
+    "web_act": ({"url": URL, "actions": [{"wait": 1}]}, _FETCH_OK),
     "web_crawl": ({"url": URL}, _CRAWL_OK),
     # 17.0 §4 拆出来的那颗：同一个引擎，另一个入口，参数只剩地图那一半
     "web_discover": ({"url": URL}, _CRAWL_OK),

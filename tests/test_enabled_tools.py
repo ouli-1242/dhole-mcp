@@ -2,10 +2,11 @@
 
 Why this file exists: the tools/list table plus instructions is paid on EVERY
 connect, even when dhole is never called. Measured on the 17.0 branch with
-``python tests/tool_payload_measure.py``: 36,539 chars of tool schemas + 3,322
-chars of instructions = 39,876 chars per connect, which that tokenizer reads as
-~9.6k cl100k tokens (4.16 chars per token for this payload), with web_read alone
-at 8,497. ``DHOLE_TOOLS=web_read,web_search`` keeps the daily drivers at roughly
+``python tests/tool_payload_measure.py``: 39,085 chars of tool schemas + 3,532
+chars of instructions = 42,617 chars per connect (17 tools), which that tokenizer
+reads as ~10.2k cl100k tokens (4.16 chars per token for this payload), with
+web_read alone at 6,977 and web_act at 4,055. ``DHOLE_TOOLS=web_read,web_search``
+keeps the daily drivers at roughly
 half that cost; everything else stays one env-edit away.
 
 The knob is an import-time constant (like DHOLE_BROWSER_IDLE_TIMEOUT and
@@ -59,11 +60,11 @@ class TestTheEnvVarIsParsed:
         payload = json.loads(out.stdout)
         assert payload["enabled"] == sorted(
             n.strip() for n in value.split(",") if n.strip())
-        assert len(payload["all"]) == 16, \
-            "全集是 16 个工具（16.0 补上会话名册，L3/L4 补上 web_recipe/web_watch，" \
+        assert len(payload["all"]) == 17, \
+            "全集是 17 个工具（16.0 补上会话名册，L3/L4 补上 web_recipe/web_watch，" \
             "凭据/登录流补上 cred_vault/cred_login，文档通道补上 sys_guide，" \
-            "B5 把一张地图拆成 web_discover、又把两颗运维面合成 sys_state、" \
-            "再把写操作拆成 web_request）；" \
+            "B5 把一张地图拆成 web_discover、两颗运维面合成 sys_state、" \
+            "写操作拆成 web_request、页面动作拆成 web_act）；" \
             "默认关闭的也留在这里，守卫继续覆盖它们"
 
     @pytest.mark.parametrize("value", [None, "", "   "])

@@ -47,9 +47,13 @@ A rejection names the key and lists the keys that tool accepts — follow the er
 {"url": "https://example.com/login-check", "session_id": "sess1"}
 ```
 
+## web_act
+
+`actions` is `web_act`'s argument now (17.0 §4) - `web_read` refuses it, and the chain forces the browser tier, so there is no `force_fetcher` left to say. Every example below was one call to `web_act`.
+
 **Lazy-load interaction** (one action key per object; `scroll` waits for the page to stop growing — sites that gate lazy-load on `event.isTrusted` need `click` instead; every action leaves a receipt in `metadata.actions`):
 ```json
-{"url": "https://example.com/feed", "force_fetcher": "stealthy", "actions": [
+{"url": "https://example.com/feed", "actions": [
   {"scroll": 3},
   {"click": "button.load-more"},
   {"wait_selector": {"selector": ".item", "count": 40, "state": "visible"}},
@@ -60,8 +64,8 @@ A rejection names the key and lists the keys that tool accepts — follow the er
 
 **Act without selectors — snapshot, then index addressing** (step 1 lists interactive elements numbered in document order; step 2 acts by index; `expect` verifies the element's visible name, so a stale index fails loudly instead of clicking the wrong thing — re-snapshot when it fires):
 ```json
-{"url": "https://example.com/settings", "force_fetcher": "stealthy", "actions": [{"snapshot": true}]}
-{"url": "https://example.com/settings", "force_fetcher": "stealthy", "actions": [
+{"url": "https://example.com/settings", "actions": [{"snapshot": true}]}
+{"url": "https://example.com/settings", "actions": [
   {"fill": {"index": 3, "text": "new value"}},
   {"click": {"index": 12, "expect": "Save"}}
 ]}
@@ -69,12 +73,12 @@ A rejection names the key and lists the keys that tool accepts — follow the er
 
 **Form submission goes through the approval gate** (without `confirm`, the submit PAUSES with a `pending_approval` receipt and nothing is sent — describe the submission to the user, then re-run the **whole chain** with `confirm: true` only after they said yes; each call reloads the page, so the re-run must redo every prior step; paused and confirmed runs both land in the audit log):
 ```json
-{"url": "https://shop.example.com/checkout", "force_fetcher": "stealthy", "actions": [
+{"url": "https://shop.example.com/checkout", "actions": [
   {"fill": {"index": 3, "text": "note to seller"}},
   {"submit": {"index": 8}}
 ]}
 // after the user confirmed:
-{"url": "https://shop.example.com/checkout", "force_fetcher": "stealthy", "actions": [
+{"url": "https://shop.example.com/checkout", "actions": [
   {"fill": {"index": 3, "text": "note to seller"}},
   {"submit": {"index": 8, "confirm": true}}
 ]}
@@ -82,10 +86,12 @@ A rejection names the key and lists the keys that tool accepts — follow the er
 
 **Element screenshot + QR decode** (always available in 17.0; `decode_qr` lists decoded texts in the receipt):
 ```json
-{"url": "https://example.com/ticket", "force_fetcher": "stealthy", "actions": [
+{"url": "https://example.com/ticket", "actions": [
   {"screenshot": {"selector": ".qr-panel", "decode_qr": true}}
 ]}
 ```
+
+## web_read: focus, structured extraction, PDFs and the tiers
 
 **Answer located to one paragraph** (`focus_mode="best"` returns the single highest-scoring block plus its heading instead of a block list; picking is semantic with `focus_engine="neural"`, BM25 by default):
 ```json
@@ -124,7 +130,7 @@ The same key exists on `web_crawl`, where it matters more: the semantic path cos
 
 **How hard to hide that it is a browser** (`anti_detect` is the only fingerprint dial — `off` / `basic` / `auto` / `aggressive`, no per-knob override. `auto` is already the tested configuration, so the two worth writing are `aggressive` when a site scores the subresources dhole trims, and `off` when the hardening itself is what trips it):
 ```json
-{"url": "https://hard-site.com/page", "force_fetcher": "stealthy", "anti_detect": "aggressive"}
+{"url": "https://hard-site.com/page", "anti_detect": "aggressive"}
 {"url": "https://legacy-app.example.com/report", "anti_detect": "off"}
 ```
 

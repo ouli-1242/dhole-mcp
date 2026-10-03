@@ -570,6 +570,9 @@ DHOLE_INSTRUCTIONS = (
     "NEVER answer from search snippets alone.\n"
     "- RSS/Atom changelogs or release notes: feed_read.\n"
     "- Local file: doc_parse.\n"
+    "- A page you have to click, fill or submit on: web_act (web_read no longer "
+    "takes an action chain). It runs the browser tier, never from cache, and a "
+    "submit pauses until the user approves that exact submission.\n"
     "- A non-GET request - POST / PUT / PATCH / DELETE / HEAD: web_request, never "
     "web_read. It is sent once: no retry, no cache, no browser replay, because a "
     "replay writes twice.\n"
@@ -636,6 +639,9 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "NEVER answer from search snippets alone.\n",
     "feed_read": "- RSS/Atom changelogs or release notes: feed_read.\n",
     "doc_parse": "- Local file: doc_parse.\n",
+    "web_act": "- A page you have to click, fill or submit on: web_act (web_read no "
+    "longer takes an action chain). It runs the browser tier, never from cache, and "
+    "a submit pauses until the user approves that exact submission.\n",
     "web_request": "- A non-GET request - POST / PUT / PATCH / DELETE / HEAD: "
     "web_request, never web_read. It is sent once: no retry, no cache, no browser "
     "replay, because a replay writes twice.\n",
@@ -2682,7 +2688,6 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         # A numeric PDF page request ("pages": 3) is unambiguous; reading it only
         # as a string used to drop the range silently and return the whole file.
         "pages": "strnum", "password": "strnum",
-        "actions": "rawlist",
     },
     "web_crawl": {
         "max_pages": "int", "max_depth": "int", "max_content_chars_per": "int",
@@ -2706,6 +2711,14 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
     # 最容易带进来的噪声），timeout 是数字，body 不 coerce（dict 与 string 都合法）。
     "web_request": {
         "method": "str", "content_type": "str", "timeout": "number",
+    },
+    # §4 页面动作那颗。rawlist：动作链的每一个对象都是一个不同键的形状
+    # （{click:…} / {fill:…} / {wait:…}），逐颗归一化会读掉那些键本身。
+    # 两颗会做决定的布尔同样要读字符串写法：`confirm: "false"` 如果按裸值传，
+    # 是一次非空字符串 = 授权，而它授权的是"在你的真实 Chrome 里 attach"。
+    "web_act": {
+        "actions": "rawlist", "timeout": "number", "max_content_chars": "int",
+        "confirm": "bool", "check_login": "bool",
     },
     "web_search": {
         "max_results": "int", "cache_ttl": "int", "page": "int",
@@ -4943,7 +4956,11 @@ _SF_PARAMS = frozenset({
     # G33/G35：CDP attach、无模型登录判定，以及 §3-16 那道先问再记的门
     # （confirm 是门的一部分，不是可选装饰）。
     "check_login", "cdp_url", "confirm",
-    "cache_ttl", "offset", "focus", "focus_mode", "focus_engine", "actions",
+    # 17.0 §4 第 2 行：页面动作有自己的门（`web_act`）。`actions` 今天从读的那扇
+    # 面上搬走 —— 它从来不是"读正文的一种玩法"：它强制浏览器层、绕开缓存、改的是
+    # 页面的状态。签名里这颗参数留着（web_act 与 recipe/cred_login 的内部链路都
+    # 经由这条管线走），公开面上它属于另一颗工具。
+    "cache_ttl", "offset", "focus", "focus_mode", "focus_engine",
     "extraction_type", "force_fetcher", "urls",
 })
 _SC_PARAMS = frozenset({
@@ -4965,6 +4982,21 @@ _SHOT_PARAMS = frozenset({
 # 内部管线照旧收这三颗（一次性那条规则住在管线里，不住在工具名上）。
 _REQUEST_PARAMS = frozenset({
     "url", "method", "body", "content_type", "extraction_type", "timeout",
+})
+
+# 17.0 §4 第 2 行：页面动作那颗门。施工图给它留了 7 个名字，这里落 11 个 —— 多出来
+# 的四颗（session_id / cdp_url / confirm / check_login）不是顺手留的装饰，是"在不
+# 交出一个密码的前提下动作"这条能力本身：命名会话的 cookie 桥（recipes 里那条兜底
+# 路径）与在用户真实 Chrome 里动作（§3-16 先问再记的那道门，confirm 是门的一部分，
+# check_login 是它唯一的验真手段）。把它们删了，这扇门就只能动公开页面 —— 那不是
+# 拆小，那是拆掉。
+# 反过来没有的：`urls`（一次动作链属于一个页面）、`cache_ttl`（动作一律绕开缓存）、
+# `force_fetcher`（动作按定义就是浏览器层）、`schema` / `css_selector` / `pages` /
+# `offset` / `include_*` / `focus_mode` / `focus_engine` / `ignore_robots`（读法与
+# 文档形状，不是动作）。
+_ACT_PARAMS = frozenset({
+    "actions", "extraction_type", "max_content_chars", "focus", "timeout",
+    "anti_detect", "session_id", "cdp_url", "confirm", "check_login",
 })
 
 _SS_PARAMS = frozenset({
@@ -4989,6 +5021,8 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     "web_read": _SF_PARAMS | {"url"},
     # 17.0 §4 第 4 行：写操作那颗门。
     "web_request": _REQUEST_PARAMS,
+    # 17.0 §4 第 2 行：页面动作那颗门。
+    "web_act": _ACT_PARAMS | {"url"},
     "web_crawl": _SC_PARAMS | {"url", "focus", "search"},
     # 17.0 §4: the map got its own tool, and the flag it used to be is not an
     # argument any more -- `crawl.web_crawl` still takes it internally.
@@ -5077,6 +5111,7 @@ _MOVED_TO = {
     "method": "web_request",
     "body": "web_request",
     "content_type": "web_request",
+    "actions": "web_act",
 }
 
 
@@ -6061,7 +6096,7 @@ class MasterFetchServer:
         op: Annotated[str, Field(description="save = record a {url, actions} pair; run = replay it; list = show every stored recipe; delete = forget one.")],
         name: Annotated[Optional[str], Field(description="Recipe name (1-64 chars). Required for save / run / delete.")] = None,
         url: Annotated[Optional[str], Field(description="op=save: the URL to replay.")] = None,
-        actions: Annotated[Optional[List[Dict[str, Any]]], Field(description="op=save: the action chain, same schema as web_read's actions. Validated now by the same validator the executor uses, so a chain that would be refused at run time cannot be stored.")] = None,
+        actions: Annotated[Optional[List[Dict[str, Any]]], Field(description="op=save: the action chain, the same chain web_act takes. Validated now by the same validator the executor uses, so a chain that would be refused at run time cannot be stored.")] = None,
         note: Annotated[str, Field(description="op=save: what this recipe is for (max 500 chars).")] = "",
         timeout: Annotated[Optional[int], Field(description="op=run: whole-call budget in ms (default 60000 with actions).")] = None,
         max_content_chars: Annotated[Optional[int], Field(description="op=run: cap the returned content chars (default 40000).")] = None,
@@ -7300,6 +7335,64 @@ class MasterFetchServer:
             url=url, method=verb, body=body, content_type=content_type,
             extraction_type=extraction_type,
             timeout=timeout, cache_ttl=0,
+        )
+
+    async def web_act(
+        self,
+        url: Annotated[str, Field(description="Absolute http(s) URL of the page to act on. One page per call: an action chain is written against one DOM.")],
+        actions: Annotated[Optional[List[Dict[str, Any]]], Field(description="The chain, in order: [{click:'button.load-more'}, {fill:{selector:'#q', text:'x'}}, {press:'Enter'}, {wait:500}, {scroll:3}, {wait_selector:'.item'}], then {snapshot:true} to number the interactive elements and {click:{index:12, expect:'登录'}} to address one by index. ONE action key per object. submit is the irreversible one: without confirm:true it pauses for approval.")],
+        extraction_type: Annotated[Optional[Literal["markdown", "html", "text", "article", "structured"]], Field(description="How the page after the actions is read back: markdown (default), html, text, article or structured.")] = None,
+        max_content_chars: Annotated[Optional[int], Field(description="Max chars of that content (default 40000). The action receipts are never cut by it.")] = None,
+        focus: Annotated[Optional[str], Field(description="Query-focused extraction of the post-action page: only the blocks relevant to this come back.")] = None,
+        timeout: Annotated[Optional[int | float], Field(description="Whole-call budget in milliseconds (default 60000 here - a browser launch plus a chain needs it; max 120000).")] = None,
+        anti_detect: Annotated[Optional[Literal["off", "basic", "auto", "aggressive"]], Field(description=ANTI_DETECT_DESC)] = None,
+        session_id: Annotated[Optional[str], Field(description="Act inside this named session, so a login made earlier (or a jar the HTTP tier filled) is the state the page starts from.")] = None,
+        cdp_url: Annotated[Optional[str], Field(description="Attach to a running Chrome (its own logged-in profile) and act there. The FIRST host is refused until the user approves it: read the receipt, ask, re-call with confirm:true.")] = None,
+        confirm: Annotated[Optional[bool], Field(description="Two things need it and nothing else does: a submit action, and the first CDP attach to a host. Neither acts until this says true.")] = None,
+        check_login: Annotated[Optional[bool], Field(description="After the chain, run the model-free login probe on the settled page: login_check with DOM signals and cookie NAMES, never values.")] = None,
+    ) -> ResponseModel:
+        """Act on a page (click / fill / press / scroll / wait / submit) and read back the page after.
+
+        Why this is a tool and not one parameter on a read: an action chain is the
+        one call in this server that changes something. It forces the browser tier,
+        bypasses the cache, and its content is only reachable by having done the
+        actions - which is a different job from `web_read`, whose whole design (cache,
+        escalation ladder, archive fallback, bulk `urls=`) assumes nothing it touches
+        changes state. Keeping the chain as one parameter of the read made the
+        irreversible part of this server look like a rendering option.
+
+        What carried over unchanged: every action leaves a receipt in
+        `metadata.actions`; `submit` pauses before acting until the user approves that
+        exact submission; a captcha gets at most 3 attempts and then goes back to the
+        human; `schema=` still cannot combine with a chain (that path runs its own
+        fetch, without the actions). The full shape of each action key:
+        `sys_guide(topic='behavior', section='Page interaction')`.
+
+        The four identity-ish arguments (`session_id`, `cdp_url`, `confirm`,
+        `check_login`) are here because acting somewhere you are already logged in is
+        the job that needs them, and none of them is a credential: passwords and
+        cookies come from `cred_defaults`, never from a call.
+        """
+        if not (url or "").strip():
+            return _invalid_request_result(
+                "", "url is required: the page to act on, one URL per call")
+        if not actions:
+            return _invalid_request_result(
+                url, "actions is required: a non-empty list of {action key: args} "
+                     "objects - click / fill / press / wait / scroll / wait_selector / "
+                     "snapshot / screenshot / submit",
+                next_action=("Name the chain, or read the page with web_read(url=...) "
+                             "if nothing on it has to be touched. The first call is "
+                             "usually {snapshot: true}, which returns the numbered "
+                             "element list to address by index. Nothing was sent."))
+        # cache_ttl=0 says at the door what the pipeline already does with a chain:
+        # an action's content exists only after the actions, so a cached page would
+        # answer a question the chain never asked.
+        return await self.web_read(
+            url, actions=actions, extraction_type=extraction_type,
+            max_content_chars=max_content_chars, focus=focus, timeout=timeout,
+            anti_detect=anti_detect, session_id=session_id, cdp_url=cdp_url,
+            confirm=confirm, check_login=check_login, cache_ttl=0,
         )
 
     @_smart_fetch_request_context
@@ -9594,7 +9687,7 @@ class MasterFetchServer:
     _TOOL_DEFS: list[dict] = [
         {
             "name": "web_read",
-            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: web_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: when the live site hard-blocks, content_ok can be true of a dated Wayback snapshot (check source + archived_at). No parameter disables it; costs 10-30s.\n- Every parameter has its own top-level name here: pass them beside url=, nothing is nested. A name the tool does not accept raises.\n- The exact shape of actions, schema and the browser/session knobs is NOT in this description: sys_guide(topic='behavior') reads dhole's own handbook, and sys_guide(topic='call') the placement traps. Read one before writing the other.\n\nVISUAL ASSIST: actions gains {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} - crops one element on the SAME page instance as the surrounding fill/click actions and returns it inline (metadata.actions keeps a name-only receipt; decoded QR text rides with it). Use it to read a CAPTCHA you are about to answer in the same action chain. Discipline: simple text/grid image CAPTCHAs - at most 3 read-and-retry rounds, then hand off to the user; DataDome/Akamai/interactive Turnstile walls, 2FA factors, and sliders are always handed off (nothing readable on the page, or outside dhole's action primitives). dhole ships no vision model: the reading happens in you.",
+            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: web_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: when the live site hard-blocks, content_ok can be true of a dated Wayback snapshot (check source + archived_at). No parameter disables it; costs 10-30s.\n- Every parameter has its own top-level name here: pass them beside url=, nothing is nested. A name the tool does not accept raises.\n- Touching the page is web_act: an action chain is no longer a parameter of a read, and this tool changes nothing it fetches. The deep shape of schema and the browser/session knobs is not here either: sys_guide(topic='behavior') reads dhole's own handbook, and sys_guide(topic='call') the placement traps. Read one before writing the other.",
             "inputSchema": {
                 "type": "object",
                 # web_read needs one of the two; the schema said nothing at
@@ -9625,7 +9718,6 @@ class MasterFetchServer:
                     "focus": {"type": "string", "description": "Return only blocks matching this query - the big token saver on long pages. Applied after the cache, so it does not re-fetch. Re-pass the same focus when paginating. Scored with BM25 by default; focus_engine='neural' switches to a local cross-encoder - that path costs ~12.5s of CPU PER PAGE, so budget timeout for bulk calls."},
                     "focus_mode": {"type": "string", "enum": ["filter", "best"], "description": "Shape of the focus answer. 'filter' (default) keeps every block past the relevance cut; 'best' returns only the single highest-scoring block plus its heading - 'which part of this page answers the question'. Requires focus."},
                     "focus_engine": {"type": "string", "enum": ["bm25", "neural"], "description": "Which scorer runs focus: 'bm25' (keyword overlap, the default) or 'neural' (a local cross-encoder; needs the reranker model downloaded, and costs ~12.5s of CPU per page). Omit = 'bm25'."},
-                    "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "Interactions on the stealthy browser after load, before extraction (forces stealthy, bypasses cache). ONE action key per object: [{scroll:3},{wait:1000}], not {scroll:3,wait:1000}. Keys: click, fill, press, wait, scroll, wait_selector, snapshot, screenshot, submit - each takes a CSS selector or a snapshot index; {snapshot:true} returns the numbered interactive-element list (index/tag/role/name) to take indices from, and expect:'name' verifies an element's visible name before acting, so a stale index fails loudly instead of clicking the wrong thing.\nsubmit is the explicit irreversible step: without confirm:true it PAUSES (a pending_approval receipt, nothing submitted) until the user has approved that exact submission. The full shape of each key, the lazy-feed and captcha discipline: sys_guide(topic='behavior', section='Page interaction')."},
                     "schema": {"type": "object", "description": "{properties: {...}} (a JSON string is accepted): CSS-driven structured extraction, returned instead of markdown. Only these keys are read - selector, attribute, type, properties, items; any other JSON-Schema keyword is accepted and does nothing. Each property may carry 'selector' (CSS) and/or 'attribute' (that attribute's value instead of the text). Without \"type\" a property returns the FIRST match; \"type\": \"array\" returns all of them. A property with its OWN 'properties' (or items.properties) plus a selector extracts one record PER MATCHED ELEMENT, child selectors evaluated inside it - that keeps a repeated list grouped instead of flattened. Up to 200 records per field; a nested \"type\": \"array\" must name the container it iterates or the call is rejected. The rule and a worked example: sys_guide(topic='behavior', section='Structured extraction').", "additionalProperties": True},
                     "confirm": {"type": "boolean", "description": "Approval for a first-time sensitive action on this call - today that means cdp_url: attaching your real Chrome hands over every logged-in site's cookies, so the FIRST attach to a host is refused with cdp_authorization_required and nothing is executed; re-call with confirm=true to authorize that host (remembered on disk; delete cdp_hosts.json in the dhole state directory to revoke). False (default) approves nothing."},
                     # 17.0 B4 · 下面这 27 个一直都能从顶层传进来（分发器读 args，
@@ -9643,6 +9735,56 @@ class MasterFetchServer:
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
+        },
+        {
+            # 17.0 §4 第 2 行：动作链从读的那扇门上搬走。描述里那四条不能少的规矩
+            # （回执 / snapshot 先数 / submit 先问 / 验证码三次就转交）是原样搬过来的
+            # —— 搬工具不许搬走规矩。
+            "name": "web_act",
+            "description": ("Act on one page - click / fill / press / scroll / wait / snapshot / submit - "
+                            "then read back what it became. Reading it without touching it is web_read, "
+                            "which no longer takes an action chain.\n"
+                            "- The chain runs in order on the stealthy browser and never from cache: what "
+                            "you are reading exists only after the actions. Every action leaves a receipt "
+                            "in metadata.actions; a failed one says what sat at that selector.\n"
+                            "- No selector? {\"snapshot\": true} first: the interactive elements come back "
+                            "numbered, later actions address them by index and expect:'name' verifies the "
+                            "label, so a stale index fails instead of clicking the wrong thing.\n"
+                            "- submit PAUSES without confirm=true (nothing is filled or sent): describe "
+                            "exactly what would go, and on the user's yes re-run the same chain. Captchas "
+                            "get at most 3 read-and-retry rounds, then hand off to the user; DataDome / "
+                            "Akamai / interactive Turnstile walls, 2FA factors and sliders are always "
+                            "hand-offs - dhole is a tool layer, cracking is not its business.\n"
+                            "- A logged-in page: session_id names the cookie jar, cdp_url attaches the "
+                            "user's own Chrome (its first attach needs the same confirm). Credentials are "
+                            "never an argument - cred_defaults stores them.\n"
+                            "- VISUAL ASSIST: an element capture rides the chain - "
+                            "{\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} crops one "
+                            "element of the SAME page instance and returns it inline, the way to read a "
+                            "CAPTCHA you are about to type, with a name-only receipt in metadata.actions. "
+                            "dhole ships no vision model: the reading happens in you.\n"
+                            "Action-key shapes and the lazy-feed discipline: "
+                            "sys_guide(topic='behavior', section='Page interaction')."),
+            "inputSchema": {
+                "type": "object", "required": ["url", "actions"],
+                "properties": {
+                    "url": {"type": "string", "description": "The page to act on. One per call - a chain is written against one DOM."},
+                    "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "ONE action key per object: [{scroll:3},{wait:1000}], not {scroll:3,wait:1000}. Keys: click, fill, press, wait, scroll, wait_selector, snapshot, screenshot, submit - each takes a CSS selector or a snapshot index; {snapshot:true} returns the numbered interactive-element list (index/tag/role/name), and expect:'name' verifies an element's visible name before acting."},
+                    "extraction_type": {"type": "string", "enum": ["markdown", "html", "text", "article", "structured"], "description": "How the post-action page is read back (default markdown)."},
+                    "max_content_chars": {"type": "integer", "description": "Max chars of that content (default 40000); the action receipts are never cut by it."},
+                    "focus": {"type": "string", "description": "Query-focused extraction of the page after the chain: only blocks relevant to this come back."},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 60000 here - a browser launch plus a chain needs it; max 120000)."},
+                    "anti_detect": {"type": "string", "enum": ["off", "basic", "auto", "aggressive"], "description": ANTI_DETECT_DESC},
+                    "session_id": {"type": "string", "description": "Act inside this named session, so the login it holds is the state the page starts from. Names only, never values."},
+                    "cdp_url": {"type": "string", "description": "Attach a running Chrome (its own logged-in profile) and act there. The first attach to a host is refused with cdp_authorization_required until the user approves it."},
+                    "confirm": {"type": "boolean", "description": "Two things need it: a submit action, and the first CDP attach to a host. Neither acts until this says true - and only put it there on the user's explicit yes."},
+                    "check_login": {"type": "boolean", "description": "After the chain, run the model-free login probe on the settled page: login_check with DOM signals and cookie NAMES, never values."},
+                },
+            },
+            # 它会动页面，所以不是只读；同一串动作再跑一遍不保证同一个答案。真正不可
+            # 逆的那一步（submit）由 confirm 单独设门，不是靠这颗注解提示客户端"小心"。
+            "annotations": {"readOnlyHint": False, "idempotentHint": False,
+                            "destructiveHint": False, "openWorldHint": True},
         },
         {
             # 17.0 §4 第 4 行。描述里那四条一次性规则是从 web_read 的 method 分支
@@ -9844,7 +9986,7 @@ class MasterFetchServer:
                     "op": {"type": "string", "enum": ["save", "run", "list", "delete"], "description": "save = record; run = replay; list = show all; delete = forget one."},
                     "name": {"type": "string", "description": "Recipe name (1-64 chars). Required for save/run/delete."},
                     "url": {"type": "string", "description": "op=save: the URL to replay."},
-                    "actions": {"type": "array", "items": {"type": "object"}, "description": "op=save: the action chain, same schema as web_read's actions."},
+                    "actions": {"type": "array", "items": {"type": "object"}, "description": "op=save: the action chain, the same chain web_act takes."},
                     "note": {"type": "string", "description": "op=save: what this recipe is for (max 500 chars)."},
                     "timeout": {"type": "integer", "description": "op=run: whole-call budget in ms."},
                     "max_content_chars": {"type": "integer", "description": "op=run: cap on returned content chars."},
@@ -10184,6 +10326,14 @@ class MasterFetchServer:
             result = await self.web_request(
                 url=args.get("url") or "", method=args.get("method") or "",
                 **self._forward("web_request", args, skip=("url", "method")))
+            return _wire_result(result)
+
+        elif name == "web_act":
+            # url / actions 同样具名传递：缺一颗都要回那句"缺什么、去哪补"，
+            # 而不是炸成 TypeError。
+            result = await self.web_act(
+                url=args.get("url") or "", actions=args.get("actions"),
+                **self._forward("web_act", args, skip=("url", "actions")))
             return _wire_result(result)
 
         elif name == "web_screenshot":

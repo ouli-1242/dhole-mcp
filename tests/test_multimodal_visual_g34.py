@@ -368,13 +368,16 @@ class TestTheDescriptions:
         （能力常开，纪律不是模式）。"""
         defs = {td["name"]: td for td in MasterFetchServer._enabled_tool_defs()}
         shot = defs["web_screenshot"]["description"]
-        sf = defs["web_read"]["description"]
+        # 17.0 §4 第 2 行：链上那颗 {screenshot} 跟着 actions 一起搬去了 web_act ——
+        # 判据不变（标记与纪律都得在字面量里），只是那扇门换了名字。
+        act = defs["web_act"]["description"]
         assert "VISUAL ASSIST" in shot
         assert "selector=" in shot
-        assert "VISUAL ASSIST" in sf
-        assert '{"screenshot"' in sf
+        assert "VISUAL ASSIST" in act
+        assert '{"screenshot"' in act
+        assert "actions" not in defs["web_read"]["inputSchema"]["properties"],             "web_read 还挂着动作链，两扇门就又是一扇"
         # 纪律（安全红线 6 的 ≤N 次与一律转交）
-        for desc in (shot, sf):
+        for desc in (shot, act):
             assert "at most 3" in desc
             assert "DataDome" in desc
             assert "2FA" in desc
