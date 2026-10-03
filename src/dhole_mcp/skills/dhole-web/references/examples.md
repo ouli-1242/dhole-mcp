@@ -200,7 +200,7 @@ Agents that can see images receive it inline; text-only agents read the absolute
 {"clear": ["engine_state"]}
 ```
 
-## The stateful four (always registered in 17.0)
+## The stateful five (always registered in 17.0)
 
 Nothing is nested here either — every parameter of every tool sits at the top level of the call.
 
@@ -230,4 +230,14 @@ Nothing is nested here either — every parameter of every tool sits at the top 
 {"url": "https://portal.example.com/login", "credential": "portal", "session_id": "sess1"}
 // step 2, only after the user approves: the SAME arguments plus confirm=true
 {"url": "https://portal.example.com/login", "credential": "portal", "session_id": "sess1", "confirm": true}
+
+// cred_defaults: set the identity once. A credential WITHOUT a host is refused, because it would
+// ride along to the next site you read. A bare call = what is in force (names only, never values).
+{}
+{"set": {"proxy": "http://127.0.0.1:7890", "anti_detect": "aggressive"}}
+{"set": {"host": "api.example.com", "auth": {"type": "bearer", "token": "..."}, "cookies": {"sid": "..."}}}
+{"set": {"host": ["api.example.com", "intranet.test"], "profile": "work"}}
+{"unset": ["proxy"]}
+// later calls then name what they ran on: web_read's response carries identity_applied="auth, proxy"
+{"url": "https://api.example.com/v1/items"}
 ```

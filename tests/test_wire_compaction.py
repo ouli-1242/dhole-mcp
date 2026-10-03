@@ -27,6 +27,7 @@ from dhole_mcp.crawl import CrawlPage, CrawlResponseModel
 from dhole_mcp.search import SearchResponseModel, SearchResult
 from dhole_mcp.server import (
     BulkResponseModel,
+    CredDefaultsModel,
     LoginModel,
     RecipeModel,
     ResponseModel,
@@ -362,6 +363,7 @@ class TestThePolicyTableItself:
                   "SearchResult": SearchResult,
                   "SearchResponseModel": SearchResponseModel,
                   "SysStateModel": SysStateModel,
+                  "CredDefaultsModel": CredDefaultsModel,
                   "RecipeModel": RecipeModel,
                   "WatchModel": WatchModel,
                   "VaultModel": VaultModel,

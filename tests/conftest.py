@@ -200,12 +200,22 @@ def _no_real_home_state_writes(request, monkeypatch, tmp_path):
     from dhole_mcp import tasks as _tasks
     monkeypatch.setattr(_tasks, "_db_path", lambda: str(tmp_path / "tasks.db"))
     _tasks.reset_connection()
+    # identity.db (cred_defaults, §3-17) is the tenth state file, and it holds
+    # credentials rather than content: a test that stores an auth header would
+    # otherwise write one into the developer's own ~/.dhole, and every later test
+    # (and every later real fetch) would pick it up as a default. The connection
+    # is a module singleton, so closing it is the part that matters — a fresh
+    # tmp_path per test does nothing while the old handle stays open.
+    from dhole_mcp import identity as _identity
+    monkeypatch.setattr(_identity, "_db_path", lambda: str(tmp_path / "identity.db"))
+    _identity.close()
     from dhole_mcp import server as _srv
     _srv._cdp_hosts_cache, _srv._cdp_hosts_stamp = frozenset(), None
     yield
     _srv._cdp_hosts_cache, _srv._cdp_hosts_stamp = frozenset(), None
     _sessions.reset_for_tests()
     _tasks.reset_connection()
+    _identity.close()
     _envreg.invalidate_file_cache()
 
 

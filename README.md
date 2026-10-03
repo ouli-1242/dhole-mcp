@@ -17,7 +17,7 @@ Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器：抓网页、�
 
 - **是什么**：给 AI 用的上网工具包。
 - **怎么用**：正常提要求，AI 自己选工具，你不用记命令。
-- **14 个工具默认全部注册**：搜网页 · 抓网址 · 批量抓 · 爬整站 · 出 URL 地图 · 截图 · 读本地文件 · RSS · 短链 · 录制回放 · 盯页面变化 · 用你自己的密码管理器登录 · 看与清本地状态 · 读 dhole 自己的说明书。
+- **15 个工具默认全部注册**：搜网页 · 抓网址 · 批量抓 · 爬整站 · 出 URL 地图 · 截图 · 读本地文件 · RSS · 短链 · 录制回放 · 盯页面变化 · 用你自己的密码管理器登录 · 设一次的默认身份 · 看与清本地状态 · 读 dhole 自己的说明书。
 - **另外 4 个默认关**：`web_recipe` / `web_watch` / `cred_vault` / `cred_login`；打开用 `dhole init --tasks` / `--vault`，不用编辑 JSON。它们的存在不必读 README：`sys_guide(topic='behavior')` 会说。
 - **代理环境自己适配**：Clash / sing-box 的 TUN + fake-ip 不再需要先设任何变量。
 - **要调设置**：见[配置](#配置)；出问题先跑 `dhole --doctor`。
@@ -149,7 +149,7 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 
 ## 工具
 
-**14 颗默认全部注册，下表是常用的几颗**：
+**15 颗默认全部注册，下表是常用的几颗**：
 
 | 工具 | 做什么 |
 |---|---|
@@ -160,7 +160,8 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 | `doc_parse` | 本地文件 → Markdown（docx / xlsx / pdf / pptx / odt / csv / html / json / yaml / md / txt） |
 | `feed_read` | 批量抓 RSS / Atom，`since=` 只取增量 |
 | `web_resolve` | 解析最终地址，不抽正文 |
-| `sys_state` | 看与清本地状态：正文缓存 · 会话 cookie（值一律不出境）· 引擎冷却 · 已存的 recipe/watch。抹掉「事后才察觉」的那几类要 `confirm=true` |
+| `cred_defaults` | 设一次的默认身份：代理 · 命名浏览器 profile · CDP 端点 · 私网放行 · 反爬档位 · `auth`/cookies（**必须带 host**，否则会被发给下一个你读的站点）。回执与每次响应只报名字，值不出境 |
+| `sys_state` | 看与清本地状态：正文缓存 · 会话 cookie（值一律不出境）· 引擎冷却 · 已存的 recipe/watch · 落盘的默认身份。抹掉「事后才察觉」的那几类要 `confirm=true` |
 | `sys_guide` | 读 dhole 自己的说明书：选工具、写参数、字段含义、失败怎么修、配置改哪个 |
 
 **默认关的 4 个**：

@@ -89,6 +89,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 
 from dhole_mcp import paths
 from dhole_mcp import env_registry
+from dhole_mcp import identity
 from dhole_mcp import install as _install
 
 # Lazy imports: browser deps (patchright) pull in playwright (~5s load). Defer
@@ -570,6 +571,9 @@ DHOLE_INSTRUCTIONS = (
     "- Check a short link: web_resolve.\n"
     "- Cookies a site kept behind session_id=, the fetch cache, the engine pool: "
     "sys_state (no arguments = what is stored; clear= to erase a named class).\n"
+    "- The same proxy, credential or anti-detect rung on every call: cred_defaults "
+    "stores it once (a credential needs its host) and each later response names "
+    "what it used.\n"
     "- A page you already worked out how to reach: web_recipe (save the url+actions "
     "once, then run it).\n"
     "- Watching a page for changes: web_watch (add it, then check - it diffs against "
@@ -631,6 +635,9 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "sys_state": "- Cookies a site kept behind session_id=, the fetch cache, the "
     "engine pool: sys_state (no arguments = what is stored; clear= to erase a "
     "named class).\n",
+    "cred_defaults": "- The same proxy, credential or anti-detect rung on every "
+    "call: cred_defaults stores it once (a credential needs its host) and each "
+    "later response names what it used.\n",
     # 17.0：web_recipe/web_watch 全量默认注册（opt-in 组已删），这行 instructions 是
     # 它们唯一的"什么时候用我"，必须留在连接期说明里。
     "web_recipe": "- A page you already worked out how to reach: web_recipe (save the "
@@ -749,6 +756,9 @@ class ResponseModel(BaseModel):
     archived_at: str = Field(default="", description="ISO date of the archive.org snapshot when source='archive.org'. Empty when source='live'. The content reflects the page as it was on this date.")
     # ─── G33/G35: CDP attach 可见性 + 无模型登录判定 ───
     cdp_attached: bool = Field(default=False, description="True when this response was fetched through an attached real browser (cdp_url): every request rode the attached profile's authenticated cookies. Default false - the first attach to a host is refused with cdp_authorization_required until the user approves that host, and every attach attempt is audited. Never treat content from an attached profile like public content: it is the user's logged-in view.")
+    # 17.0 §3-17: the stored default identity that was in force for THIS call.
+    # A caller who never sees which calls ran on defaults cannot revoke them.
+    identity_applied: str = Field(default="", description="Key names (and host scopes) from `cred_defaults` that this call was fetched with — names only, never values. Empty means nothing stored was in force and every credential on this call came from what you passed. Read it before concluding a page is public: content fetched with your stored credentials is your logged view of that host.")
     login_check: Optional[Dict[str, Any]] = Field(default=None, description="Only when check_login=true AND the fetch ran on the browser tier: {logged_in: true|false|null, signals: [...], cookie_names: [...], method: 'dom+cookie-names'}. Model-free: DOM shape (logout control / password field / login form) plus cookie NAMES - values are never returned. null when not requested, when the fetch never reached the browser tier, or on cache hits (the probe is live-only).")
 
     # Element captures from {\"screenshot\"} actions (multimodal flag): pixels
@@ -820,8 +830,27 @@ class SysStateModel(BaseModel):
     engine_health: Dict[str, Any] = Field(default_factory=dict, description="Per-engine pool health as dhole currently sees it: last status, yield verdict, and cooldown_seconds_left while an engine is on cooldown. Carried ONLY when the call names engine_state; a call about the content cache says nothing about the search pool.")
     watch_count: int = Field(default=0, description="Watches stored in ~/.dhole/tasks.db. Their rows, with baseline age, are web_watch(op='list').")
     recipe_count: int = Field(default=0, description="Recipes stored in ~/.dhole/tasks.db. Their rows are web_recipe(op='list').")
+    cred_defaults: List[Dict[str, Any]] = Field(default_factory=list, description="The stored default identity (cred_defaults), redacted: key, host scope, age, and a value half that can never contain a secret. It is a credential you chose, kept on this machine for every later call - `clear` it here or `unset` one key there.")
+    identity_count: int = Field(default=0, description="How many identity defaults are in force right now (0 = every call carries its own).")
     error: str = Field(default="", description="Set when a token meant nothing (an unknown class, or a session id nobody has open), or when a store refused the erasure; it names what DOES exist or what failed, rather than saying 'not found' and leaving you to guess.")
     next_action: str = Field(default="", description="What to do next, empty when there is nothing to do")
+
+
+class CredDefaultsModel(BaseModel):
+    """Response from `cred_defaults`: the shareable half of the stored identity.
+
+    No field here can hold a secret by shape. `rows` carries what
+    ``identity.redact`` returned — for a credential that is a type plus a
+    username, cookie NAMES, or a proxy host with a "has credentials" boolean.
+    The full values live in ``~/.dhole/identity.db`` and leave the process only
+    as request headers to the host they were stored for.
+    """
+    message: str = Field(default="", description="One line: what this call stored or forgot, and what is in force now.")
+    rows: List[Dict[str, Any]] = Field(default_factory=list, description="The whole store, redacted: [{key, scope, stored_s_ago, value}] where scope is the host a credential was given for ('' for the five global keys) and stored_s_ago is how long ago it was set. Values are never included.")
+    changed: List[str] = Field(default_factory=list, description="Keys this call stored or replaced.")
+    forgotten: List[str] = Field(default_factory=list, description="Keys this call forgot (every host scope of them).")
+    error: str = Field(default="", description="Why nothing was stored: a key that is not one of the seven, a credential given without a host, or a value the key cannot hold. A refused call changed nothing on disk.")
+    next_action: str = Field(default="", description="The call that would work, empty when this one did.")
 
 
 class RecipeModel(BaseModel):
@@ -957,6 +986,8 @@ _WIRE_OMIT: dict = {
         # G33/G35: 默认 False/None（无人 attach、未要求登录判定）时省略；
         # 非 default 的值（attach 过、probe 出结果）照常上线。
         "cdp_attached", "login_check",
+        # §3-17：没用到落盘身份时这颗根本不该出现（绝大多数调用如此）。
+        "identity_applied",
     }),
     "CrawlPage": frozenset({
         "depth", "fetcher_used", "title", "page_type", "content_chars",
@@ -998,6 +1029,12 @@ _WIRE_OMIT: dict = {
         "cookies_forgotten", "browser_closed", "closed", "prewarm_closed",
         "purged", "cache", "engine_state_reset", "engine_health",
         "watch_count", "recipe_count", "error", "next_action",
+        "cred_defaults", "identity_count",
+    }),
+    # cred_defaults 的回执：`rows` 是答案本身（且只有脱敏的一半），其余四颗是
+    # "这次改了什么 / 为什么没改"。打在默认值上就下线，与 sys_state 同一口径。
+    "CredDefaultsModel": frozenset({
+        "changed", "forgotten", "error", "next_action",
     }),
     # web_recipe / web_watch（L3/L4）：清单与回执都在"默认值"上时省略，但 `changed`
     # 刻意不在这个集合里 —— 首跑时它是 null，而 null≠false 正是这条 watch
@@ -2181,6 +2218,9 @@ def _with_agent_hints(result: ResponseModel) -> ResponseModel:
     result.summary = summary
     result.content_ok = content_ok
     result.next_action = next_action
+    applied = _IDENTITY_APPLIED.get()
+    if applied and not result.identity_applied:
+        result.identity_applied = applied
     return result
 
 
@@ -2787,19 +2827,34 @@ def _validate_tool_args(name: str, args: dict) -> dict:
         out["urls"] = _coerce_str_list_arg(
             args.get("urls"), "urls", single_hint=_URLS_SINGLE_HINT)
         out["force_fetcher"] = _coerce_force_fetcher_arg(args.get("force_fetcher"))
-        out["anti_detect"] = _coerce_anti_detect_arg(args.get("anti_detect"))
+        # Only when the caller named it: an absent rung is what lets a stored
+        # cred_defaults answer the ladder, so the dispatcher must not fill in
+        # "auto" here and make every default unreachable.
+        if "anti_detect" in args:
+            out["anti_detect"] = _coerce_anti_detect_arg(args["anti_detect"])
     elif name == "sys_state":
         # The same trap the cache wipe fell into: read raw, `confirm="false"` is a
         # non-empty string, and a call that meant "just look" erases every session.
         # The elements are state classes and session ids, so the shared wording
         # ("a URL string") would send a caller looking for a URL to put in clear=.
-        token_hint = ("a state class (cache|engine_state|sessions|watch|recipes|all) "
+        token_hint = ("a state class (cache|engine_state|sessions|watch|recipes|cred_defaults|all) "
                       "or an open session id")
         for key in ("show", "clear"):
             out[key] = _coerce_str_list_arg(args.get(key), key,
                                             element_hint=token_hint)
         out["confirm"] = _coerce_bool_arg(args.get("confirm"), "confirm",
                                           default=False)
+    elif name == "cred_defaults":
+        # The same two traps, on the two shapes that carry them: `unset="proxy"`
+        # is a string, and read raw it forgets six single-letter keys none of
+        # which exist; `show="false"` is a non-empty string, so a call that meant
+        # to forget something answers as though it had only been asked to look.
+        out["unset"] = _coerce_str_list_arg(
+            args.get("unset"), "unset",
+            element_hint="a key name (auth|cookies|proxy|profile|cdp|"
+                         "allow_private|anti_detect)")
+        if "show" in out:
+            out["show"] = _coerce_bool_arg(out.get("show"), "show", default=False)
     elif name == "feed_read":
         out["urls"] = _coerce_str_list_arg(args.get("urls"), "urls")
     return out
@@ -2962,6 +3017,11 @@ _CSS_SELECTOR: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
 # result — values never go into the response (a session cookie is a credential,
 # and tool output lands in the agent's transcript).
 _SESSION_ID: contextvars.ContextVar[str] = contextvars.ContextVar("_session_id", default="")
+# 17.0 §3-17: which cred_defaults this call was fetched with. A context var (not
+# an argument) because the answer is decided once, at the top of web_read, and
+# every return path — live fetch, cache hit, robots block, archive fallback —
+# owes it to the caller. Bulk rows run in their own task, so each gets its own.
+_IDENTITY_APPLIED: contextvars.ContextVar[str] = contextvars.ContextVar("_identity_applied", default="")
 # A jar key is a plain word, nothing else (see _clean_session_id).
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 # Per-call HTTP method / request body (G8). Read where the request is actually
@@ -4709,7 +4769,7 @@ def _browser_cookies(cookies: Any, url: str) -> Any:
 # useragent 同理不在表里：UA 必须与 TLS/指纹成套（HTTP 层配 primp 的
 # impersonate_os，浏览器层配 _FINGERPRINT_PROFILES），手传一个会造出"UA 说
 # Chrome、JA3 说别的"的自相矛盾指纹，比不设更容易被认出来。
-ANTI_DETECT_DESC = """How hard the browser tier hides that it is one: off, basic (canvas noise + WebRTC block), auto (the tested default; also answers Cloudflare challenges), aggressive (auto + loads every resource)."""
+ANTI_DETECT_DESC = """How hard the browser tier hides that it is one: off, basic (canvas + WebRTC), auto (the tested default, answers Cloudflare), aggressive (auto + every resource). Omit = cred_defaults, else auto."""
 
 _ANTI_DETECT = {
     #        画布噪声, WebRTC 屏蔽, CF 挑战处理, 资源全加载
@@ -4727,6 +4787,104 @@ def _anti_detect(level: str) -> dict:
             "solve_cloudflare": challenge, "load_everything": everything,
             "headless": True, "real_chrome": False, "useragent": None}
 
+
+# ─── 落盘的默认身份（§3-17）───────────────────────────────────────
+# 一颗参数要不要进 cred_defaults，判据是"每一次调用都得重传吗"。答案是是的六颗
+# 有了这个家；`profile` 是第七颗，它今天根本没有别的入口（DHOLE_BROWSER_PROFILE
+# 已注销，而 browser.py 的持久上下文一直等着有人给它取名）。
+#
+# 存储里的键名与参数名不同处只有两处（`cdp` → `cdp_url`，`profile` 不是参数），
+# 所以这里有一张表而不是字符串替换：一次调用读到什么，取决于这张表说的是什么。
+_IDENTITY_PARAMS = {
+    "auth": "auth", "cookies": "cookies", "proxy": "proxy",
+    "cdp": "cdp_url", "allow_private": "allow_private",
+    "anti_detect": "anti_detect", "profile": "profile",
+}
+
+
+def _identity_value_error(key: str, value: Any) -> str:
+    """为什么这一颗不能这么存。空串 = 可以。
+
+    校验放在 set 的时候，而不是等到下一次抓取：一次打错如果当场不响，就会在
+    别人的一次无关调用上响 —— 而那时没人知道根源在这条 `set` 上。
+    """
+    if value is None:
+        return f"{key} must be a value, not null"
+    if key == "auth":
+        try:
+            _auth_request_headers(value, None)
+        except (ValueError, SecurityError) as e:
+            return (f"auth: {e} — it is an object: "
+                    "{type:'basic',username,password}, {type:'bearer',token} or "
+                    "{type:'header',name,value}")
+        return ""
+    if key == "cookies":
+        if not _safe_cookie_dict(value):
+            return ("cookies: nothing usable — pass a {{name: value}} dict, a list "
+                    "of {{name, value, domain}}, or one 'a=1; b=2' header string")
+        return ""
+    if key == "proxy":
+        if not isinstance(value, (str, dict)):
+            # A bool/int here would reach urlparse and raise an AttributeError
+            # about `decode` — a Python traceback where a shape refusal belongs.
+            return "proxy: a URL string or a dict with server/username/password"
+        try:
+            url = _proxy_to_url(value, None)
+        except (ValueError, SecurityError) as e:
+            return f"proxy: {e}"
+        if not url:
+            return "proxy: pass a URL like 'http://host:port' or a dict with server"
+        return ""
+    if key == "profile":
+        from dhole_mcp import browser as _browser
+        name = str(value).strip()
+        if not _browser._PROFILE_NAME_RE.match(name):
+            return ("profile: a name is letters, digits, dot, dash or underscore "
+                    "(1-64 chars, starting alphanumeric) — it becomes a directory "
+                    "under ~/.dhole/profiles/")
+        return ""
+    if key == "cdp":
+        parsed = urlparse(str(value))
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return "cdp: a local Chrome endpoint URL like 'http://127.0.0.1:9222'"
+        return ""
+    if key == "allow_private":
+        hosts, _ = parse_allow_private(value)
+        return "" if hosts else (
+            "allow_private: pass true (loopback only) or a list of host names — "
+            "cloud metadata endpoints are never allowed, by any spelling")
+    if key == "anti_detect":
+        try:
+            _coerce_anti_detect_arg(value)
+        except ValueError as e:
+            return str(e)
+        return ""
+    return f"{key} is not a key cred_defaults stores"
+
+
+def _cred_hosts_of(host_arg: Any) -> List[str]:
+    """The `host` inside `set={...}`, as a normalized list.
+
+    A string or a list, because both readings are natural and a client that sends
+    one host as a one-element list should not be told it passed the wrong shape.
+    """
+    if host_arg is None:
+        return []
+    raw = host_arg if isinstance(host_arg, (list, tuple)) else [host_arg]
+    return [str(h).strip().lower() for h in raw if str(h).strip()]
+
+
+def _identity_scope_error(key: str, host: str) -> str:
+    """凭据没有 host 就是没有边界 —— 这一条是整个工具最要紧的一句拒绝。"""
+    if key not in identity.CREDENTIAL_KEYS or host:
+        return ""
+    return (f"{key} needs a host: pass it alongside \"host\": "
+            "'api.example.com' (or a list) in the same set. A stored credential "
+            "with no host would ride along to the NEXT site you read, which is a "
+            "different site's request.")
+
+
+CRED_DEFAULTS_DESC = """Set the identity once instead of passing it on every call: proxy, a named browser profile, the CDP endpoint to attach, the private-host allowance, the anti-detect rung, and (with a host) auth and cookies. Stored locally, applied to later calls whose argument is absent, and echoed as names only - values never come back."""
 
 # ─── 参数面：每个工具接受哪些名字 ──────────────────────────────────
 # 17.0 B4：`options` 袋删掉了，参数只剩顶层这一个家（`url` 除外 —— 它说的是"这次调用
@@ -4803,6 +4961,8 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     # 工具名的全集（`_dispatch` 拒掉表外的名字），所以一个方法可以存在、有文档、
     # 却在 wire 上够不着。
     "sys_state": frozenset({"show", "clear", "confirm"}),
+    # §3-17：落盘的默认身份。三颗参数，裸调用是"现在生效的是什么"。
+    "cred_defaults": frozenset({"set", "unset", "show"}),
     # L3 / L4（计划第九章）：录制回放与监控 diff。17.0 起默认在连接期表里。
     "web_recipe": frozenset({"op", "name", "url", "actions", "note",
                          "timeout", "max_content_chars", "focus",
@@ -5149,7 +5309,8 @@ class MasterFetchServer:
                 )
             return entry
 
-    async def _ensure_auto_session(self, *, lock_wait: Optional[float] = None) -> str:
+    async def _ensure_auto_session(self, *, lock_wait: Optional[float] = None,
+                                   profile_name: Optional[str] = None) -> str:
         """Get or create an auto-persistent browser session. Avoids browser startup on every fetch.
 
         Race-safe: if two concurrent calls both pass the initial check,
@@ -5165,6 +5326,14 @@ class MasterFetchServer:
         for up to 30s — past the MCP client's request timeout. Pass a budget to
         get ``_SessionBusy`` instead of an unbounded wait; None keeps the old
         wait-forever behaviour.
+
+        ``profile_name`` names the persistent browser context to build the shared
+        session with; None means "whatever cred_defaults stores" (§3-17 — after
+        ``DHOLE_BROWSER_PROFILE`` was retired this is the only way to name one).
+        A warm browser built with a DIFFERENT profile is not reusable: it carries
+        the other context's logins, so the default that just changed could never
+        take effect on it. The mismatch closes it and launches the right one —
+        changing the default costs one cold start, which is what it should cost.
         """
         if not _browser_deps_available():
             raise RuntimeError(
@@ -5173,14 +5342,30 @@ class MasterFetchServer:
             )
         attr = "_auto_stealthy_id"
         ts_attr = "_auto_stealthy_last_used"
+        want_profile = (profile_name if profile_name is not None
+                        else identity.get("profile"))
+
+        def _scan() -> tuple[Optional[str], Optional[str]]:
+            """(reusable, to_close) for the warm session under the current profile."""
+            existing_id = getattr(self, attr)
+            if not (existing_id and existing_id in self._sessions
+                    and self._sessions[existing_id].session._is_alive):
+                return None, None
+            if getattr(self, "_auto_stealthy_profile", None) == want_profile:
+                setattr(self, ts_attr, now())
+                self._ensure_idle_monitor()
+                return existing_id, None
+            # The pointer clears either way: whoever holds this lock owns the
+            # relaunch, and a second closer would be shutting a browser that is
+            # already being replaced.
+            setattr(self, attr, None)
+            return None, existing_id
 
         # Fast path: reuse an existing alive session.
         async with self._sessions_lock:
-            existing_id = getattr(self, attr)
-            if existing_id and existing_id in self._sessions and self._sessions[existing_id].session._is_alive:
-                setattr(self, ts_attr, now())
-                self._ensure_idle_monitor()
-                return existing_id
+            reusable, stale = _scan()
+        if reusable:
+            return reusable
 
         # Serialize creation: the startup warm-up and a concurrent fetch share ONE
         # creation. A second caller waits on the lock, then reuses — never a 2nd
@@ -5190,14 +5375,22 @@ class MasterFetchServer:
         async with _lock_within(self._auto_session_lock, lock_wait):
             # Re-check: another creator may have finished while we waited.
             async with self._sessions_lock:
-                existing_id = getattr(self, attr)
-                if existing_id and existing_id in self._sessions and self._sessions[existing_id].session._is_alive:
-                    setattr(self, ts_attr, now())
-                    self._ensure_idle_monitor()
-                    return existing_id
+                reusable, other = _scan()
+            if reusable:
+                return reusable
+            to_close = other or stale
+            if to_close:
+                # Slow (a browser shutdown), and deliberately outside the sessions
+                # lock — the pointer already cleared, so nothing can hand this id
+                # to a new caller while it closes.
+                try:
+                    await self._close_one_session(to_close)
+                except Exception as e:
+                    logger.debug("warm browser on the other profile did not close: %s", e)
             # Create outside the sessions lock (expensive — browser launch) but
             # inside the creation lock (no concurrent 2nd launch).
-            sid = await self.open_session(headless=True)
+            sid = await self.open_session(headless=True, profile_name=want_profile)
+            self._auto_stealthy_profile = want_profile
             async with self._sessions_lock:
                 existing_id = getattr(self, attr)
                 if existing_id and existing_id in self._sessions and self._sessions[existing_id].session._is_alive:
@@ -5525,6 +5718,7 @@ class MasterFetchServer:
         allow_webgl: bool = True,
         solve_cloudflare: bool = False,
         additional_args: Optional[Dict] = None,
+        profile_name: Optional[str] = None,
     ) -> SessionCreatedModel:
         """Open a persistent browser session that can be reused across multiple fetch calls.
 
@@ -5600,6 +5794,10 @@ class MasterFetchServer:
             network_idle=network_idle, wait_selector=wait_selector, google_search=google_search,
             extra_headers=extra_headers, disable_resources=disable_resources,
             wait_selector_state=wait_selector_state,
+            # §3-17: the named persistent context. Nothing else can name it now
+            # (DHOLE_BROWSER_PROFILE is retired), so cred_defaults' `profile` is
+            # its only home — and BrowserState persists only when one is given.
+            profile_name=profile_name,
         )
 
         session = StealthyBrowser(
@@ -5786,6 +5984,11 @@ class MasterFetchServer:
         allow_private: Annotated[Optional[Any], Field(description="op=run: replay a recipe that points at loopback (your own dev server). Same semantics as web_read's.")] = None,
     ) -> RecipeModel:
         """Record / replay a stored (url, actions) pair. See the tool description."""
+        # 17.0 §3-17: the private-host gate behind cred_defaults too, so
+        # a call to a local service stops needing allow_private= every time.
+        allow_private = self._apply_identity(
+            url or '', {"allow_private": allow_private}
+        )[0]["allow_private"]
         from dhole_mcp import tasks
 
         o = (op or "").strip().lower()
@@ -5917,6 +6120,11 @@ class MasterFetchServer:
         allow_private: Annotated[Optional[Any], Field(description="op=check: monitor a loopback URL (your own dev server). Same semantics as web_read's.")] = None,
     ) -> WatchModel:
         """Start / check / list / stop a monitored URL. See the tool description."""
+        # 17.0 §3-17: the private-host gate behind cred_defaults too, so
+        # a call to a local service stops needing allow_private= every time.
+        allow_private = self._apply_identity(
+            url or '', {"allow_private": allow_private}
+        )[0]["allow_private"]
         from dhole_mcp import tasks
 
         o = (op or "").strip().lower()
@@ -6163,6 +6371,11 @@ class MasterFetchServer:
         allow_private: Annotated[Optional[Any], Field(description="Sign in to a loopback URL (your own dev server). Same semantics as web_read's.")] = None,
     ) -> LoginModel:
         """Sign in with a vault credential. See the tool description."""
+        # 17.0 §3-17: the private-host gate behind cred_defaults too, so
+        # a call to a local service stops needing allow_private= every time.
+        allow_private = self._apply_identity(
+            url or '', {"allow_private": allow_private}
+        )[0]["allow_private"]
         from dhole_mcp import login as login_mod
         from dhole_mcp import vault as vault_mod
 
@@ -6380,6 +6593,11 @@ class MasterFetchServer:
         NOTE: clients never receive this docstring. The authoritative
         agent-facing contract is the "description" in _TOOL_DEFS.
         """
+        # 17.0 §3-17: the private-host gate behind cred_defaults too, so
+        # a call to a local service stops needing allow_private= every time.
+        allow_private = self._apply_identity(
+            url, {"allow_private": allow_private}
+        )[0]["allow_private"]
         # G35: same option, same guard as web_read.
         with allow_private_scope(allow_private):
             url = validate_url(url)
@@ -6951,7 +7169,7 @@ class MasterFetchServer:
         css_selector: Annotated[Optional[str], Field(description="CSS selector to narrow extracted content (e.g. 'article', '.main-content').")] = None,
         cache_ttl: Annotated[Optional[int], Field(description="Cache duration in seconds. Default 3600 (1 hour). Set 0 to skip cache and force a fresh fetch.")] = None,
         force_fetcher: Annotated[Optional[Literal["http", "stealthy"]], Field(description="Lock to one fetcher tier, skip auto-escalation. 'http' = fast HTTP-only (fails on JS/bot walls). 'stealthy' = anti-detect browser (Patchright). Two tiers: the third one and its 'dynamic' alias are gone.")] = None,
-        anti_detect: Annotated[Literal["off", "basic", "auto", "aggressive"], Field(description=ANTI_DETECT_DESC)] = "auto",
+        anti_detect: Annotated[Optional[Literal["off", "basic", "auto", "aggressive"]], Field(description=ANTI_DETECT_DESC)] = None,
         wait: Annotated[int | float, Field(description="Extra milliseconds to wait after page load for JS rendering.")] = 0,
         proxy: Annotated[Optional[str | Dict[str, str]], Field(description="Proxy URL or dict with server/username/password.")] = None,
         timeout: Annotated[Optional[int | float], Field(description="Whole-call budget in milliseconds (default 30000; 60000 when actions are used; max 120000). Shared by the HTTP retries, and a document URL spends it on the download.")] = None,
@@ -7011,14 +7229,42 @@ class MasterFetchServer:
         # 每个 URL 各自再进一次 web_read，cdp_url 传不下去。让闸口先过，效果就是
         # 「把主机写进授权名册，然后每一页都不 attach」—— 静默降级，还留下一个用户
         # 没同意的授权。所以拒绝发生在闸口之前，这次调用不落任何授权。
-        if urls is not None and cdp_url:
+        if urls is not None and (cdp_url or identity.get("cdp")):
             msg = ("cdp_url= cannot be combined with urls=: the attach is per call, "
                    "so a batch would fetch every URL un-attached. Call web_read "
                    "once per URL with cdp_url=.")
+            if not cdp_url:
+                # The caller never typed cdp_url — a stored default is attaching
+                # every single-URL call, and saying "pass cdp_url=null" is the only
+                # honest way to say "this batch cannot attach".
+                msg += (" (No cdp_url= on this call: cred_defaults stores one, and it "
+                        "attaches every single-URL call the same way. Pass cdp_url=null "
+                        "for this batch, or unset the default.)")
             return BulkResponseModel(
                 results=[_invalid_request_result(u, msg) for u in urls],
                 total=len(urls), successful=0,
             )
+        # §3-17: whatever the caller did not name, cred_defaults answers — per host,
+        # so a credential stored for api.example.com never rides along to a call
+        # elsewhere. It runs before the CDP gate and before the ladder because both
+        # can read a value decided here, and it remembers what the caller actually
+        # sent so the bulk fan-out can forward THAT instead — otherwise the first
+        # URL's credential would leave as an explicit argument to every other row.
+        _sent = {"auth": auth, "cookies": cookies, "proxy": proxy,
+                 "allow_private": allow_private,
+                 "anti_detect": anti_detect}
+        _idvals, _idnote = self._apply_identity(
+            url or "",
+            {"auth": auth, "cookies": cookies, "proxy": proxy,
+             "allow_private": allow_private, "cdp_url": cdp_url,
+             "anti_detect": anti_detect})
+        auth = _idvals["auth"]
+        cookies = _idvals["cookies"]
+        proxy = _idvals["proxy"]
+        allow_private = _idvals["allow_private"]
+        cdp_url = _idvals["cdp_url"]
+        anti_detect = _idvals["anti_detect"] or "auto"
+        _IDENTITY_APPLIED.set(_idnote)
         # 安全闸 1/2（G33 → 17.0 先问再记）：CDP attach 的授权点在工具入口，
         # 单条与 bulk 两条路都在这里过闸；_open_session 只消费已过闸的结果。
         gate_err, _cdp_allowed = _cdp_attach_gate(cdp_url, confirm=confirm)
@@ -7083,16 +7329,20 @@ class MasterFetchServer:
                     total=len(urls), successful=0,
                 )
             return await self._smart_fetch_bulk(
+                # What the CALLER sent, never the backfilled values: each bulk row
+                # re-enters web_read and resolves its own host's identity.
                 urls, extraction_type, css_selector, cache_ttl, force_fetcher,
-                wait, proxy, timeout, network_idle, extra_headers, cookies,
+                wait, proxy=_sent["proxy"], timeout=timeout,
+                network_idle=network_idle, extra_headers=extra_headers,
+                cookies=_sent["cookies"],
                 max_chars=max_content_chars,
-                anti_detect=anti_detect,
+                anti_detect=_sent["anti_detect"],
                 include_media=include_media, include_links=include_links,
                 focus=focus, schema=schema,
                 max_links=max_links, ignore_robots=ignore_robots,
-                allow_private=allow_private, session_id=session_id,
+                allow_private=_sent["allow_private"], session_id=session_id,
                 method=method, body=body, content_type=content_type,
-                auth=auth,
+                auth=_sent["auth"],
             )
 
         # Validate all inputs
@@ -8293,7 +8543,8 @@ class MasterFetchServer:
     # 各自只看得到自己那一半，而 cache_clear(all=true) 会顺手抹掉 cookie jar ——
     # 那句警告写在另一颗工具的描述里，拿着"清缓存"意图的人正好读不到它。词表把类别
     # 摊开之后，§3-32 的闸才有地方落：只有"抹完不会立刻察觉"的那一类要 confirm。
-    _STATE_TOKENS = ("cache", "engine_state", "sessions", "watch", "recipes", "all")
+    _STATE_TOKENS = ("cache", "engine_state", "sessions", "watch", "recipes",
+                     "cred_defaults", "all")
     _ERASE_EVERYTHING = "all"
     # 抹掉后不会立刻察觉的那一类：登录态要到下次访问那个站才暴露，watch 基线抹掉后
     # 下一次 check 会说"没有变化"，配方抹掉后要到那页需要点链路时才想起来。清缓存与
@@ -8306,15 +8557,15 @@ class MasterFetchServer:
                  "change instead of the diff you were watching for",
         "recipes": "every recorded recipe, so a page that takes a click chain to reach "
                    "has to be worked out again",
-        "all": "the content cache, the engine pool, every session, watch baseline and "
-               "recipe",
+        "all": "the content cache, the engine pool, every session, watch baseline, "
+               "recipe and stored identity default",
     }
 
     async def sys_state(
         self,
         show: Annotated[
             Optional[List[str]],
-            Field(description="What to report without changing it: cache|engine_state|sessions|watch|recipes|all. A call with neither show= nor clear= reports the session census, the cache state and the stored-task counts."),
+            Field(description="What to report without changing it: cache|engine_state|sessions|watch|recipes|cred_defaults|all. A call with neither show= nor clear= reports the session census, the cache state and the stored-task counts."),
         ] = None,
         clear: Annotated[
             Optional[List[str]],
@@ -8327,12 +8578,15 @@ class MasterFetchServer:
     ) -> SysStateModel:
         """See what dhole keeps on this machine, or erase a named class of it.
 
-        Four stores, one question each. `~/.dhole/cache.db` holds fetched pages and
+        Five stores, one question each. `~/.dhole/cache.db` holds fetched pages and
         search results; `~/.dhole/sessions.db` holds the cookies a site set after a
         login, keyed by the `session_id=` you passed; the engine pool remembers
         which engines are on cooldown and what each one last yielded
-        (`circuit_breaker.json` and `engine_stats.json`); and `~/.dhole/tasks.db`
-        holds recorded recipes and the baselines a watch diffs against.
+        (`circuit_breaker.json` and `engine_stats.json`); `~/.dhole/tasks.db`
+        holds recorded recipes and the baselines a watch diffs against; and
+        `~/.dhole/identity.db` holds the default identity `cred_defaults` stored —
+        the one class here that a caller CHOSE rather than a site handed us, which
+        is why it is listed redacted and erased without a confirm.
 
         A session is a credential, so the census reports hosts and cookie NAMES only.
         A value here would land in the transcript, and the point of showing the
@@ -8385,7 +8639,8 @@ class MasterFetchServer:
 
         want = set(clear_tokens)
         if self._ERASE_EVERYTHING in want:
-            want |= {"cache", "engine_state", "sessions", "watch", "recipes"}
+            want |= {"cache", "engine_state", "sessions", "watch", "recipes",
+                     "cred_defaults"}
 
         cleared: List[str] = []
         failed: List[str] = []
@@ -8395,6 +8650,7 @@ class MasterFetchServer:
         health: Dict[str, Any] = {}
         cache_view: Dict[str, Any] = {}
         watch_count = recipe_count = 0
+        cred_rows: List[dict] = []
 
         if "cache" in want:
             purged = await clear_all_cache()
@@ -8460,12 +8716,25 @@ class MasterFetchServer:
                 cleared.append(token)
                 parts.append(f"{gone} {noun}(es) forgotten")
 
+        if "cred_defaults" in want:
+            # 落盘的默认身份：这一类不需要 confirm，因为它丢得当场就看得见 ——
+            # 下一次调用要么 401，要么那个站点的请求不走你的代理了。§3-32 只拦
+            # "不会立刻察觉"的那一类。
+            try:
+                gone = identity.clear()
+                cleared.append("cred_defaults")
+                parts.append(f"{gone} stored default(s) forgotten"
+                             + (" - later calls carry their own identity again"
+                                if gone else ""))
+            except Exception as e:
+                failed.append(f"cred_defaults: {str(e)[:120]}")
+
         if cleared:
             rows = await self._session_rows()
 
         report = set(show_tokens)
         if not show_tokens and not clear_tokens:
-            report = {"sessions", "cache", "watch", "recipes"}
+            report = {"sessions", "cache", "watch", "recipes", "cred_defaults"}
         # A call that erased something reports what is left of exactly the classes it
         # touched: the receipt is the proof, and a census of the two it said nothing
         # about is noise the caller did not ask for.
@@ -8494,6 +8763,12 @@ class MasterFetchServer:
                     recipe_count = len(tasks.list_recipes())
             except Exception as e:
                 logger.debug("task census failed: %s", e)
+
+        if "cred_defaults" in report:
+            try:
+                cred_rows = identity.all_rows()
+            except Exception as e:
+                logger.debug("identity census failed: %s", e)
 
         n = len(rows)
         if cleared:
@@ -8533,9 +8808,166 @@ class MasterFetchServer:
             purged=purged, cache=cache_view,
             engine_state_reset=engine_reset, engine_health=health,
             watch_count=watch_count, recipe_count=recipe_count,
+            cred_defaults=cred_rows, identity_count=len(cred_rows),
             error="; ".join(failed),
             next_action=next_action,
         )
+
+    # ─── Default identity (cred_defaults) ───────────────────────────
+
+    _CRED_SET_DESC = """Keys to store: proxy, profile, cdp, allow_private, anti_detect, and auth / cookies - the last two only with a "host" (one name or a list) in the same object saying which site they belong to."""
+
+    _CRED_UNSET_DESC = """Key names to forget, every host scope of them together. An unknown name is an error, never a silent no-op."""
+
+    _CRED_SHOW_DESC = """true = report the store and change nothing. A call with no arguments at all does the same thing."""
+
+    async def cred_defaults(
+        self,
+        set: Annotated[Optional[Dict[str, Any]],
+                       Field(description=_CRED_SET_DESC)] = None,
+        unset: Annotated[Optional[List[str]],
+                         Field(description=_CRED_UNSET_DESC)] = None,
+        show: Annotated[Optional[bool],
+                        Field(description=_CRED_SHOW_DESC)] = None,
+    ) -> CredDefaultsModel:
+        """The identity a later call should assume: set once, read back every time.
+
+        Six of the seven keys replace an argument the caller would otherwise repeat
+        on every call (`web_read`'s auth/cookies/proxy/cdp_url/allow_private and the
+        `anti_detect` rung); the seventh, `profile`, is the only way to name the
+        persistent browser context now that `DHOLE_BROWSER_PROFILE` is retired.
+
+        Two rules the tool exists to enforce:
+
+        * `auth` and `cookies` are refused without a host. A stored credential with
+          no host would be sent to the next site the caller reads, and that is a
+          different site's request — the same mistake the per-hop credential drop in
+          `web_read` prevents, made permanent.
+        * What comes back is the redacted half. `rows` shows a type plus username,
+          cookie NAMES, a proxy host; the values leave this process only as request
+          headers to the host they were stored for. Echoing them would put a
+          credential in the transcript, which is the boundary `sessions.py` draws
+          for exactly the same reason.
+
+        A call that is refused changes nothing on disk — no partial write, and the
+        error names the seven keys so the next call can be right.
+        """
+        items = dict(set or {})
+        hosts = _cred_hosts_of(items.pop("host", None))
+        forget = [str(k).strip().lower() for k in (unset or []) if str(k).strip()]
+
+        # The parameter is `set` because that is the name on the wire (§4), and
+        # inside this body the builtin is therefore unreachable — every set
+        # operation below is written against dict views and `dict.fromkeys`
+        # instead of `set(...)`.
+        if not items and not forget:
+            return self._cred_show()
+
+        unknown = sorted(dict.fromkeys(
+            k for k in list(items) + forget if k not in identity.KEYS))
+        if unknown:
+            return CredDefaultsModel(
+                error=(f"Unknown key(s) {', '.join(unknown)}: cred_defaults stores "
+                       f"{', '.join(identity.KEYS)} (and 'host' inside set= to say "
+                       "which site a credential belongs to)."),
+                next_action="Nothing was stored or forgotten.")
+
+        clash = sorted(k for k in items if k in forget)
+        if clash:
+            return CredDefaultsModel(
+                error=(f"{', '.join(clash)} appears in both set= and unset=: one call "
+                       "cannot both store a key and forget it."),
+                next_action="Nothing was stored or forgotten - pick one.")
+
+        needs_host = sorted(k for k in items if k in identity.CREDENTIAL_KEYS)
+        if needs_host and not hosts:
+            return CredDefaultsModel(
+                error=_identity_scope_error(needs_host[0], ""),
+                next_action=("Nothing was stored. Re-call with set={..., \"host\": "
+                             "\"api.example.com\"}, or with a list of hosts."))
+        if hosts and not needs_host:
+            return CredDefaultsModel(
+                error=("host only means something alongside auth or cookies: proxy, "
+                       "profile, cdp, allow_private and anti_detect are global by "
+                       "nature (one egress, one browser context, one ladder)."),
+                next_action="Nothing was stored.")
+
+        problems = [_identity_value_error(k, v) for k, v in items.items()]
+        problems = [p for p in problems if p]
+        if problems:
+            return CredDefaultsModel(
+                error="; ".join(problems), next_action="Nothing was stored.")
+
+        forgotten: List[str] = []
+        if forget:
+            for key in forget:
+                if identity.unset([key]):
+                    forgotten.append(key)
+
+        changed: List[str] = []
+        for key, value in items.items():
+            for scope in (hosts if key in identity.CREDENTIAL_KEYS else [""]):
+                identity.set_value(key, value, scope)
+            changed.append(key)
+
+        if changed:
+            _audit_event("identity_set", keys=sorted(changed),
+                         hosts=hosts, forgotten=sorted(forgotten))
+        rows = identity.all_rows()
+        parts = []
+        if forgotten:
+            parts.append(f"forgot {', '.join(forgotten)}")
+        if changed:
+            parts.append(f"stored {', '.join(sorted(changed))}"
+                         + (f" for {', '.join(hosts)}" if hosts else ""))
+        return CredDefaultsModel(
+            message=("; ".join(parts) + f". {len(rows)} key(s) in force."
+                     if parts else f"{len(rows)} key(s) in force."),
+            rows=rows, changed=changed, forgotten=forgotten,
+            next_action=("web_read echoes identity_applied on every later call that "
+                         "uses one of these; sys_state(clear=['cred_defaults']) "
+                         "forgets the whole store."))
+
+    def _cred_show(self) -> CredDefaultsModel:
+        rows = identity.all_rows()
+        if not rows:
+            return CredDefaultsModel(
+                message=("Nothing is stored: every call carries its own identity, and "
+                         "the tools' own defaults apply."),
+                next_action=('cred_defaults(set={"proxy": "http://127.0.0.1:7890"}) '
+                             'is the shape; auth and cookies need a "host" too.'))
+        named = ", ".join(f"{r['key']}@{r['scope']}" if r["scope"] else r["key"]
+                          for r in rows)
+        return CredDefaultsModel(
+            message=f"{len(rows)} default(s) in force: {named}.", rows=rows,
+            next_action=("unset=[\"<key>\"] forgets one (every host scope of it); "
+                         "sys_state(clear=['cred_defaults']) forgets all of them. "
+                         "Values are never shown here - a credential in tool output "
+                         "is a credential in the transcript."))
+
+    def _apply_identity(self, url: str,
+                        values: Dict[str, Any]) -> tuple[Dict[str, Any], str]:
+        """Fill the identity keys this call did not name from `cred_defaults`.
+
+        One place owns the precedence — what the caller passed this time beats what
+        is stored, which beats the tool's own default — because every tool reading
+        one of these keys must answer it the same way. `None` (and an argument the
+        dispatcher left out) means "not named"; an explicit `allow_private=False` is
+        a decision, not an absence, so a stored default does not overwrite it.
+        """
+        host = identity.host_of(url)
+        out = dict(values)
+        applied: List[str] = []
+        for key in identity.KEYS:
+            param = _IDENTITY_PARAMS[key]
+            if param not in out or out[param] is not None:
+                continue
+            value = identity.get(key, host)
+            if value is None:
+                continue
+            out[param] = value
+            applied.append(key)
+        return out, ", ".join(k for k in identity.KEYS if k in applied)
 
     # ─── Parse (local file) ─────────────────────────────────────────
 
@@ -8682,6 +9114,11 @@ class MasterFetchServer:
         discovered_from records where the caller pointed. Parse failures come
         back as one readable sentence, not lxml's parse dump.
         """
+        # 17.0 §3-17: the private-host gate behind cred_defaults too, so
+        # a call to a local service stops needing allow_private= every time.
+        allow_private = self._apply_identity(
+            (urls[0] if urls else ''), {"allow_private": allow_private}
+        )[0]["allow_private"]
         from dhole_mcp.feed import fetch_feeds
         from dhole_mcp.security import SecurityError, validate_url
         urls = [u for u in urls if u and u.strip()]
@@ -9187,12 +9624,25 @@ class MasterFetchServer:
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
         },
         {
+            "name": "cred_defaults",
+            "description": "The identity later calls should assume: set it once instead of passing it on every call.\n- Seven keys: `proxy`, `profile` (the named persistent browser context - the only way to name it now), `cdp` (the Chrome endpoint to attach), `allow_private`, `anti_detect` (the rung), plus `auth` and `cookies`, which REQUIRE \"host\" in the same object: a stored credential with no host would ride along to the next site you read, and that is a different site's request.\n- What a call was fetched with is echoed as `identity_applied` in its response - names and host scopes only. Values never come back: they leave this process only as request headers to the host they were stored for.\n- A bare call reports the store and changes nothing. `unset=[\"proxy\"]` forgets one key (every host scope of it); `sys_state(clear=[\"cred_defaults\"])` forgets the whole store.\n- What the caller passes this time always wins over what is stored here.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "set": {"type": "object", "additionalProperties": True, "description": _CRED_SET_DESC},
+                    "unset": {"type": "array", "items": {"type": "string"}, "description": _CRED_UNSET_DESC},
+                    "show": {"type": "boolean", "description": _CRED_SHOW_DESC},
+                },
+            },
+            "annotations": {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": False},
+        },
+        {
             "name": "sys_state",
             "description": "What dhole keeps on this machine, and how to erase a named class of it: the fetch cache, the cookies a site left behind a login (keyed by session_id=), the engine pool's cooldowns, and stored recipes/watch baselines.\n- No arguments = the census, erasing nothing: every open session with its hosts and cookie NAMES (a value is a credential, and everything a tool returns lands in the transcript), plus the cache state and the stored-task counts.\n- clear=[\"cache\"] wipes the whole content cache. To re-fetch ONE url fresh, pass cache_ttl=0 to web_read/web_crawl instead.\n- clear=[\"<session id>\"] forgets that session and any browser under it; clear=[\"sessions\"] needs confirm=true, because losing a site's cookies shows up only at your next visit there. Same for watch baselines and recipes: they erase nothing you can see coming.\n- clear=[\"engine_state\"] forgets engine cooldowns + yield history - use it when the same engines keep getting skipped after the network changed (VPN on).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "show": {"type": "array", "items": {"type": "string"}, "description": "State classes to report without touching them: cache|engine_state|sessions|watch|recipes|all."},
+                    "show": {"type": "array", "items": {"type": "string"}, "description": "State classes to report without touching them: cache|engine_state|sessions|watch|recipes|cred_defaults|all."},
                     "clear": {"type": "array", "items": {"type": "string"}, "description": "State classes to erase, or one open session id to forget just that session."},
                     "confirm": {"type": "boolean", "description": "true to go through with an erasure you would not notice as it happened (sessions|watch|recipes|all)."},
                 },
@@ -9603,6 +10053,13 @@ class MasterFetchServer:
             result = await self.sys_state(
                 show=args.get("show"), clear=args.get("clear"),
                 confirm=args.get("confirm", False),
+            )
+            return _wire_result(result)
+
+        elif name == "cred_defaults":
+            result = await self.cred_defaults(
+                set=args.get("set"), unset=args.get("unset"),
+                show=args.get("show"),
             )
             return _wire_result(result)
 

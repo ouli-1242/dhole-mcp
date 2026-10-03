@@ -60,7 +60,7 @@ class TestTheEnvVarIsParsed:
         payload = json.loads(out.stdout)
         assert payload["enabled"] == sorted(
             n.strip() for n in value.split(",") if n.strip())
-        assert len(payload["all"]) == 14, \
+        assert len(payload["all"]) == 15, \
             "全集是 14 个工具（16.0 补上会话名册，L3/L4 补上 web_recipe/web_watch，" \
             "凭据/登录流补上 cred_vault/cred_login，文档通道补上 sys_guide，" \
             "B5 把一张地图拆成 web_discover、又把两颗运维面合成 sys_state）；" \
