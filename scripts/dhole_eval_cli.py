@@ -25,6 +25,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
 def main() -> int:
+    # The console on Windows defaults to the machine codepage (GBK here), and a
+    # page body is not ASCII: three calibration runs lost calls to
+    # `UnicodeEncodeError: 'gbk' codec can't encode character '\u2764'` — a crash
+    # in THIS wrapper, not in dhole, and one the agent cannot tell apart from a
+    # tool failure. Replace rather than raise: a mangled glyph in a transcript is
+    # noise, a crashed harness is a wrong measurement.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
     ap = argparse.ArgumentParser()
     ap.add_argument("--record", default="")
     ap.add_argument("--tool", default="web_read")
@@ -64,6 +74,15 @@ def main() -> int:
     if err:
         print(f"CALL_FAILED: {err}", file=sys.stderr)
         return 1
+    # A sidecar copy of the SAME text: the Windows console decodes this pipe with
+    # the machine codepage, so CJK bodies arrive to the caller as mojibake even
+    # though the bytes are correct. Reading the file is the way to see what the
+    # tool actually said.
+    if ns.record:
+        try:
+            Path(ns.record).with_suffix(".last.txt").write_text(text, encoding="utf-8")
+        except OSError:
+            pass
     print(text)
     return 0
 

@@ -350,6 +350,79 @@ class TestNothingWasSentSilently:
         assert "cannot be combined" in out.error, out.error
 
 
+class TestThePinnedTierIsHonored:
+    """`force_fetcher` 是显式针，不是提示 —— 整篇读的两条路都得听它。
+
+    这两条路过去直接叫 `_auto_escalate`，而那个梯子不认识 `force_fetcher`（针在
+    下面的第 4 条车道上，整篇读永远走不到那里）。后果不是慢，是**假答案**：点了
+    浏览器层，抽的却是 HTTP 层那 300 字符的壳页，然后回一句"这页没有你要的东西"。
+    校准跑里一个只读过参数描述的观察者独立撞上了它，并把它记成了"zcool 没专题"。
+    """
+
+    def _both(self, monkeypatch, pages, calls):
+        """两条车道都装桩，各自记一次到达 —— 断言读的是"走了哪条"。"""
+        import inspect
+
+        _stub_pages(monkeypatch, pages, calls=calls)
+        auto = Server._auto_escalate
+
+        async def no_auto(self, *a, **k):
+            raise AssertionError("点了 force_fetcher 还回自动升级梯子：" + str(k.get("url")))
+
+        sig = inspect.signature(Server._force_fetch)
+
+        async def fake_force(self, *a, **k):
+            bound = dict(sig.bind(self, *a, **k).arguments)
+            bound.pop("self")
+            calls.append((bound["url"], bound))
+            html = pages.get(bound["url"])
+            return ResponseModel(url=bound["url"], status=200,
+                                 content=[html] if html else [],
+                                 fetcher_used=bound["force_fetcher"],
+                                 extracted_type="html")
+
+        monkeypatch.setattr(Server, "_auto_escalate", no_auto)
+        monkeypatch.setattr(Server, "_force_fetch", fake_force)
+        return auto
+
+    def test_the_pin_reaches_every_second_layer_page(self, monkeypatch):
+        calls: list = []
+        _stub_robots(monkeypatch)
+        self._both(monkeypatch, {LIST_URL: LIST_HTML, **DETAIL}, calls)
+        out = _run(url=LIST_URL, nested_selector=".topic-card",
+                   nested_fields=FIELDS, force_fetcher="stealthy", cache_ttl=0)
+        assert out.error == "", out.error
+        assert len(calls) == 3, [u for u, _ in calls]
+        assert all(k["force_fetcher"] == "stealthy" for _, k in calls)
+        # 整篇文档的口也在这里：针换了车道，`max_chars` 不能跟着掉回调用方的上限。
+        assert all(k["max_chars"] == server_mod._SCHEMA_SOURCE_MAX_CHARS
+                   for _, k in calls)
+
+    def test_the_pin_reaches_the_schema_read(self, monkeypatch):
+        calls: list = []
+        _stub_robots(monkeypatch)
+        self._both(monkeypatch, {LIST_URL: LIST_HTML}, calls)
+        out = _run(url=LIST_URL, schema={"properties": {"t": {"selector": ".topic-card"}}},
+                   force_fetcher="stealthy", cache_ttl=0)
+        assert [u for u, _ in calls] == [LIST_URL]
+        assert calls[0][1]["force_fetcher"] == "stealthy"
+        assert out.extracted_type == "structured"
+
+    def test_a_pinned_tier_says_so_when_it_cannot_revalidate(self, monkeypatch):
+        """`_force_fetch` 没有条件请求这个口 —— 丢掉校验子必须说出来。"""
+        from dhole_mcp.server import _REVALIDATE
+        calls: list = []
+        _stub_robots(monkeypatch)
+        self._both(monkeypatch, {LIST_URL: LIST_HTML}, calls)
+        tok = _REVALIDATE.set({"last_modified": "2020-01-01"})
+        try:
+            out = _run(url=LIST_URL, schema={"properties": {"t": {"selector": "a"}}},
+                       force_fetcher="stealthy", cache_ttl=3600)
+        finally:
+            _REVALIDATE.reset(tok)
+        assert "revalidation was dropped" in out.summary, out.summary
+
+
 class TestNestedFieldsSpelling:
 
     def test_the_map_spelling_and_the_json_string_are_the_same_call(self, monkeypatch):

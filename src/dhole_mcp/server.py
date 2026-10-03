@@ -7926,6 +7926,7 @@ class MasterFetchServer:
                 url, nested_selector=nested_selector, nested_props=_nested_props,
                 nested_limit=_nested_n, schema=schema, tier=_tier_kwargs,
                 proxy=proxy, ignore_robots=ignore_robots, mc=mc, offset=offset,
+                force_fetcher=force_fetcher,
             )
         if schema is not None:
             if actions:
@@ -7956,28 +7957,12 @@ class MasterFetchServer:
             # cap here: the selectors run over the whole document, and the
             # caller's cap applies to the JSON that comes back (see re-chunk
             # below).
-            # Keyword args, not positionals: this call once dropped an extraction
-            # flag, so every slot after it shifted by one and `cookies` arrived as
-            # _SCHEMA_SOURCE_MAX_CHARS — which is the `'int' object is not
-            # iterable` the 16.0 report filed as a nested-schema bug (G14). A
-            # misspelled or missing name raises at once instead of landing in a
-            # neighbouring parameter.
-            html_result = await self._auto_escalate(
-                url, "html",
-                css_selector=css_selector,
-                # A conditional question goes to the origin, never to dhole's own
-                # memory of an answer (G23): serving a cached 200 here would report
-                # "content" for a call that asked whether the content still stands.
-                cache_ttl=0 if conditional else cache_ttl,
-                offset=0,
-                headless=headless, real_chrome=real_chrome,
-                proxy=proxy, timeout=timeout,
-                solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
-                hide_canvas=hide_canvas, extra_headers=extra_headers,
-                useragent=useragent, cookies=cookies,
-                max_chars=_SCHEMA_SOURCE_MAX_CHARS,
-                conditional=conditional, load_everything=load_everything,
-            )
+            # The parameters live in `_tier_kwargs` above, and the pin is handed
+            # down: this path used to call `_auto_escalate` directly, which does not
+            # read `force_fetcher` at all, so `force_fetcher='stealthy'` + `schema=`
+            # silently extracted whatever the HTTP tier returned.
+            html_result = await self._document_tier(
+                url, tier=_tier_kwargs, force_fetcher=force_fetcher)
             html_content = "\n".join(html_result.content) if html_result.content else ""
             if html_content and html_result.status < 400:
                 from dhole_mcp.structured import extract_structured
@@ -8142,11 +8127,51 @@ class MasterFetchServer:
         finally:
             _budget_credit.reset(token)
 
+    async def _document_tier(self, url: str, *, tier: dict,
+                             force_fetcher: Optional[str],
+                             check_login: bool = False) -> ResponseModel:
+        """整篇文档的那一次取回 —— 两条整篇读的路（`schema=` 与 `nested_*`）共用。
+
+        它们过去直接叫 `_auto_escalate`，而 `_auto_escalate` 不认识 `force_fetcher`：
+        那根针在下面第 4 条车道上，整篇读的路永远走不到那里。后果是
+        `force_fetcher='stealthy'` + `schema=` 静默按 HTTP 层的壳页抽取，还回一句
+        "这页没有你要的东西" —— 校准跑里一个只读过参数描述的观察者独立撞上了这件事
+        （它拿到 `nested_no_match` 和 "No second-layer request was sent"，而它明明点了
+        浏览器层）。点名了哪一层就不许由别人替它改：这一颗参数是显式针，不是提示。
+        """
+        if not force_fetcher:
+            return await self._auto_escalate(url, **tier)
+        if tier.get("conditional"):
+            # `_force_fetch` 没有条件请求这个口，所以被点名的那一层回答不了"变了吗"。
+            # 这件事必须说出来：校验子静默丢掉之后，一次 200 会被读成"内容变了"。
+            notes = _ARG_NOTES.get()
+            if notes is not None:
+                notes.append(
+                    "revalidation was dropped: the pinned tier is not given "
+                    "conditional requests, so the whole page was read instead of a 304")
+            tier = {**tier, "conditional": None}
+        return await self._within_call_budget(
+            self._force_fetch(
+                url, force_fetcher,
+                extraction_type=tier["extraction_type"],
+                css_selector=tier["css_selector"],
+                cache_ttl=tier["cache_ttl"], offset=0,
+                headless=tier["headless"], real_chrome=tier["real_chrome"],
+                proxy=tier["proxy"], timeout=tier["timeout"],
+                solve_cloudflare=tier["solve_cloudflare"],
+                block_webrtc=tier["block_webrtc"], hide_canvas=tier["hide_canvas"],
+                extra_headers=tier["extra_headers"], useragent=tier["useragent"],
+                cookies=tier["cookies"], max_chars=tier["max_chars"],
+                check_login=check_login,
+                disable_resources=not tier["load_everything"]),
+            url, tier["timeout"], f"forced {force_fetcher} tier (whole-document read)")
+
     async def _nested_read(self, url: str, *, nested_selector: str,
                            nested_props: dict, nested_limit: int,
                            schema: Optional[dict], tier: dict, proxy,
                            ignore_robots: bool, mc: int,
-                           offset: int) -> ResponseModel:
+                           offset: int,
+                           force_fetcher: Optional[str] = None) -> ResponseModel:
         """17.0 §5 E-13：「列表页 → 每项详情页」一次摊平。
 
         `schema=` 的嵌套（G14）解决的是同一篇文档里的作用域；这里的第一层是这一篇，
@@ -8162,7 +8187,8 @@ class MasterFetchServer:
         from dhole_mcp import nested as _nested_mod
         from dhole_mcp.structured import extract_structured
 
-        first = await self._auto_escalate(url, **tier)
+        first = await self._document_tier(url, tier=tier,
+                                          force_fetcher=force_fetcher)
         html = "\n".join(first.content) if first.content else ""
         if not html or first.status >= 400:
             # 第一层连 DOM 都没有，扇出无从谈起 —— 把墙原样交回，别造一个看起来
@@ -8245,7 +8271,8 @@ class MasterFetchServer:
                     rec["error"] = "robots_disallowed"
                     return rec, "robots"
                 try:
-                    res = await self._auto_escalate(link["url"], **per)
+                    res = await self._document_tier(link["url"], tier=per,
+                                                    force_fetcher=force_fetcher)
                 except Exception as e:
                     rec["error"] = redact_api_key(str(e)[:200])
                     return rec, "failed"
