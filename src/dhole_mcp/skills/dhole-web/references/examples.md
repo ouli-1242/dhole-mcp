@@ -31,10 +31,7 @@ A rejection names the key and lists the keys that tool accepts — follow the er
 {"urls": ["https://a.com/post/1", "https://b.com/post/2"]}
 ```
 
-**Write request** (one-shot: no retry, no cache, no browser escalation; body ≤256KB):
-```json
-{"url": "https://api.example.com/orders", "method": "POST", "body": "{\"item\": 1, \"qty\": 2}", "content_type": "application/json"}
-```
+**A write is not asked of this tool** (17.0): POST / PUT / PATCH / DELETE / HEAD go to `web_request` — see its own section below. `web_read` rejects `method=`, and the rejection names the door the capability moved to.
 
 **Credentials** (three shapes; stored once with `cred_defaults`, then every later call to that host uses them; values are never echoed; they do not survive cross-origin redirects; 401 responses distinguish "rejected" from "not sent"). The `"host"` key is not optional — a credential without one is refused, because it would ride to the next site you read:
 ```json
@@ -141,6 +138,36 @@ The same key exists on `web_crawl`, where it matters more: the semantic path cos
 {"tool": "cred_defaults", "arguments": {"set": {"proxy": "http://127.0.0.1:7890"}}}
 {"url": "https://example.com"}
 ```
+
+## web_request
+
+**JSON POST** (sent once: the transport will not retry it, the answer is not cached, and no browser replays it — a replay answers about a GET to that URL, not about your write; body ≤256KB):
+```json
+{"url": "https://api.example.com/orders", "method": "POST", "body": "{\"item\": 1, \"qty\": 2}", "content_type": "application/json"}
+```
+
+**A dict body is a form** unless the type says json — `{"item": 1}` arrives as `item=1`, which is what an HTML form endpoint expects. Naming the type is how you ask for JSON instead:
+```json
+{"url": "https://api.example.com/orders", "method": "POST", "body": {"item": 1, "qty": 2}, "content_type": "application/json"}
+```
+
+**PUT / PATCH / DELETE** take the same shape. `method` is required and must be one of the five: a typo (`POSET`) is refused before anything leaves, because sending a verb the caller did not name is worse than sending nothing.
+```json
+{"url": "https://api.example.com/orders/7", "method": "DELETE"}
+```
+
+**HEAD** answers status + declared length + type with no body — the cheap way to ask "did it move" before paying for a read:
+```json
+{"url": "https://example.com/reports/q3.pdf", "method": "HEAD"}
+```
+
+**A write that needs credentials** stores them first; the request carries them and `identity_applied` names what it ran on (values never enter the transcript):
+```json
+{"tool": "cred_defaults", "arguments": {"set": {"host": "api.example.com", "auth": {"type": "bearer", "token": "eyJ..."}}}}
+{"url": "https://api.example.com/orders", "method": "POST", "body": "{\"item\": 1}", "content_type": "application/json"}
+```
+
+**After a timeout, do not resend.** The answer is "unknown", not "failed" — the write may have landed. Read the resource (`web_read`) and let the site say; `web_resolve` tells you where the endpoint actually goes before you send at all.
 
 ## web_search
 

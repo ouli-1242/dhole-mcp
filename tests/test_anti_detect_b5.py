@@ -90,11 +90,12 @@ def test_web_read_advertises_one_level_param_and_no_hardening_knobs():
     assert not set(RETIRED) & server_mod._TOP_LEVEL_ARGS["web_read"]
     # 六颗换一颗，这一刀的净账是 40 → 35；B5-13c 再把 auth / cookies / proxy /
     # extra_headers / allow_private 五颗搬进 cred_defaults，净账 35 → 30；B5-13d
-    # 又把渲染时机那两颗（wait / network_idle）收成浏览器层的一条规矩，30 → 28。
-    # §3-12 的 ≤20 由 tests/test_wire_shape.py 整块 xfail(strict) 盯着，等 B5-14
-    #（web_act / web_request 拆走）把剩下的搬完再摘牌 —— 这里若预先断言 ≤20，
+    # 又把渲染时机那两颗（wait / network_idle）收成浏览器层的一条规矩，30 → 28；
+    # B5-14a 把写操作那三颗（method / body / content_type）搬去 web_request，28 → 25。
+    # §3-12 的 ≤20 由 tests/test_wire_shape.py 整块 xfail(strict) 盯着，等 B5-14b
+    #（web_act 拆走 actions 那一家）把剩下的搬完再摘牌 —— 这里若预先断言 ≤20，
     # 就是在替别的批次许它还没实现的愿。
-    assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 28, \
+    assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 25, \
         len(server_mod._TOP_LEVEL_ARGS["web_read"])
 
 

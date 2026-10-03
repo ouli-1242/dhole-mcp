@@ -394,10 +394,14 @@ _METHOD_CONVERTERS = (301, 302, 303)
 # Headers that describe a request body; they go when the body goes.
 _BODY_HEADERS = ("content-type", "content-length")
 
-# Methods whose retry is safe: resending the same request cannot leave the server
-# in a different state, so a timeout is a retry rather than a possible duplicate.
-# POST/PATCH are excluded — the previous attempt may well have landed.
-_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
+# Methods a timeout may be answered by asking again: resending one of these
+# cannot leave the server in a different state, so a retry is a retry rather than
+# a duplicate. RFC 9110 calls PUT and DELETE idempotent too, but that is a claim
+# about the endpoint — "the second time converges on the first" is exactly the
+# promise a badly-built form endpoint breaks — and nothing here can check it.
+# web_request tells its caller a write leaves once, so this gate asks "can this
+# verb change state", not "does the spec say this verb converges".
+_RETRY_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 def _host_of(url: str) -> str:
@@ -739,8 +743,8 @@ class HTTPSession:
 
         actual_timeout = timeout or self._timeout
         actual_retries = retries if retries is not None else self._retries
-        if method not in _IDEMPOTENT_METHODS:
-            # 非幂等方法不重试：上一次尝试很可能已经落库，重试就是再写一遍。
+        if method not in _RETRY_SAFE_METHODS:
+            # 会改变服务器状态的动词不重试：上一次尝试很可能已经落库，重试就是再写一遍。
             # 超时报错让人以为「没成功」而重发，是同一件事的另一半——所以宁可一次。
             actual_retries = 0
 

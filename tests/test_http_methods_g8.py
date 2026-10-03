@@ -119,7 +119,12 @@ class TestTheTierSendsWhatWasAsked:
 
     @pytest.mark.asyncio
     async def test_a_write_is_not_retried_while_a_get_is(self):
-        """POST 的失败可能已经落库；重发等于写两遍。"""
+        """任何会改状态的动词都只发一次：失败可能已经落库，重发等于写两遍。
+
+        RFC 把 PUT/DELETE 叫做幂等，说的是"设计好的端点"；这一层没法核对某个端点
+        是否真的那样，而 web_request 对调用方的承诺是"写只出去一次"。所以门槛问的是
+        "这个动词会不会改状态"，不是"规范说它收不收敛"。
+        """
         class _Boom:
             def __init__(self):
                 self.n = 0
@@ -128,17 +133,22 @@ class TestTheTierSendsWhatWasAsked:
                 self.n += 1
                 raise RuntimeError("connection reset")
 
-        boom = _Boom()
-        s = _session_with(boom)
-        with pytest.raises(RuntimeError):
-            await s.get(URL, method="POST", body=b"x=1", retries=3)
-        assert boom.n == 1, "a POST was resent"
+        for verb in ("POST", "PUT", "PATCH", "DELETE"):
+            boom = _Boom()
+            with pytest.raises(RuntimeError):
+                await _session_with(boom).get(URL, method=verb, body=b"x=1",
+                                              retries=3)
+            assert boom.n == 1, f"a {verb} was resent"
 
         boom2 = _Boom()
-        s2 = _session_with(boom2)
         with pytest.raises(RuntimeError):
-            await s2.get(URL, method="GET", retries=3)
+            await _session_with(boom2).get(URL, method="GET", retries=3)
         assert boom2.n == 4, "a GET should still be retried"
+
+        boom3 = _Boom()
+        with pytest.raises(RuntimeError):
+            await _session_with(boom3).get(URL, method="HEAD", retries=3)
+        assert boom3.n == 4, "HEAD reads state without changing it - retry is safe"
 
     @pytest.mark.asyncio
     async def test_a_cross_origin_307_carries_the_body_but_not_the_credentials(self):

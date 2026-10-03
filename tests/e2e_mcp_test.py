@@ -174,9 +174,14 @@ def test_tool_definitions(mcp):
                          for p in props.values() if isinstance(p, dict)))
     assert "robots" in fetch_desc.lower()
     assert "session_id" in visible
-    # 两条陷阱都要在可见面上露名：method 的"非 GET 只发一次"和 body 的 256KB 上限。
-    # 判据写的是文本里真的那句承诺，不是"body 这个词出现过"—— 后者连"body part"都能满足。
-    assert "sent ONCE" in visible and "cap 256KB" in visible, \
+    # 两条陷阱本来住在 web_read 的描述里，B5-14a 之后跟着参数一起搬去了 web_request：
+    # method 的"非 GET 只发一次"和 body 的 256KB 上限。判据不变 —— 要的是文本里真
+    # 有那句承诺，不是"body 这个词出现过"（后者连 "body part" 都能满足）。
+    req_visible = (tool_map["web_request"]["description"]
+                   + "".join((p.get("description") or "") for p in
+                             tool_map["web_request"]["inputSchema"]["properties"].values()
+                             if isinstance(p, dict)))
+    assert "sent ONCE" in req_visible and "256KB" in req_visible, \
         "verb/body 的陷阱句从可见面上消失了"
     assert "archive.org" in visible
     assert "do not cite" in visible.lower(), "引用前的自查必须在场"
@@ -196,8 +201,7 @@ def test_tool_definitions(mcp):
     # 17.0 拆平之后，这些键必须**出现在 properties 里** —— 那是客户端取值的唯一
     # 来源。以前它们只活在袋子那段散文里，漏写一个键等于功能在 wire 上不存在；现在
     # 漏声明一个键连调用都发不出去，所以这条查的比原先硬。
-    for key in ("session_id", "method", "body", "content_type",
-                "ignore_robots", "max_links", "anti_detect", "cdp_url"):
+    for key in ("session_id", "ignore_robots", "max_links", "anti_detect", "cdp_url"):
         assert key in props, f"{key} 没被声明，agent 写不出来"
         assert (props[key].get("description") or "").strip(), f"{key} 声明了却没说明"
     # 17.0 §3-17：身份的门（auth / cookies / proxy / allow_private / extra_headers）
@@ -205,6 +209,14 @@ def test_tool_definitions(mcp):
     # web_read 上：留一个发不出去的键就是在教旧写法。
     for key in ("auth", "cookies", "proxy", "allow_private", "extra_headers"):
         assert key not in props, f"{key} 已归 cred_defaults，却还在 web_read 的面上"
+    # B5-14a 的同一条：写操作那三颗搬去 web_request，留在读的门上就是教一个发不
+    # 出去的写法。它们在对面必须真实存在（properties 是客户端取值的唯一来源）。
+    for key in ("method", "body", "content_type"):
+        assert key not in props, f"{key} 已归 web_request，却还在 web_read 的面上"
+    req_props = tool_map["web_request"]["inputSchema"]["properties"]
+    for key in ("url", "method", "body", "content_type"):
+        assert key in req_props, f"web_request 少了 {key}"
+    assert tool_map["web_request"]["inputSchema"]["required"] == ["url", "method"]
     cd_text = json.dumps(tool_map["cred_defaults"]).lower()
     for key in ("auth", "cookies", "proxy", "profile", "cdp", "allow_private",
                 "anti_detect"):
@@ -253,16 +265,16 @@ def test_smart_fetch_response_fields(mcp):
         assert next_off == 0
 
 
-def test_method_reaches_the_http_tier(mcp):
-    """wire 上的 method 真的走到 HTTP 层：一次 HEAD 探针。
+def test_a_write_goes_out_on_its_own_door(mcp):
+    """wire 上的 web_request 真的走到 HTTP 层：一次 HEAD 探针 + 一次 POST。
 
-    单元测试是在同一个进程里直接调 ``web_read(...)``，绕过了「wire arguments →
+    单元测试是在同一个进程里直接调 `web_request(...)`，绕过了「wire arguments →
     分发器 → 形参」这一段。HEAD 是这一段最短的探针：不抽取正文、不升级浏览器，
-    一次请求就有答案。
+    一次请求就有答案。POST 补上另一半：正文确实跟着出去了，服务器怎么答就怎么回。
     """
     resp = mcp.call_tool(
-        "web_read",
-        {"url": "https://example.com", "cache_ttl": 0, "method": "HEAD"},
+        "web_request",
+        {"url": "https://example.com", "method": "HEAD", "timeout": 20000},
     )
     data = _extract_data(resp.get("result", {}))
     assert data.get("status") == 200, data.get("error")
@@ -270,6 +282,31 @@ def test_method_reaches_the_http_tier(mcp):
     # HEAD 按定义没有正文；把「没有」报成 0 字节 markdown 才是撒谎。
     assert not "".join(data.get("content") or [])
     assert "head probe" in data.get("summary", "").lower()
+
+    post = mcp.call_tool("web_request", {
+        "url": "https://example.com", "method": "POST",
+        "body": '{"item": 1}', "content_type": "application/json",
+        "timeout": 20000})
+    pdata = _extract_data(post.get("result", {}))
+    # example.com 不收款：这里要的是"这一趟真的发了、而且服务器答了"，不是 2xx。
+    assert pdata.get("status", 0) >= 400, pdata
+    # direct:http 那条路径在 wire 上被折掉了（默认值不占字节，见
+    # tests/test_wire_compaction.py），这里能验的是到层的那一颗是 HTTP 而不是浏览器。
+    assert pdata.get("fetcher_used") == "http", pdata
+
+
+def test_the_old_write_spelling_is_refused_naming_the_new_door(mcp):
+    """`web_read(method=...)` 在 wire 上必须被拒，并且说出能力搬去了哪。
+
+    「陌生键」三个字会把人引向"这工具没这个能力"；真相是"能力换了门牌"，所以拒答
+    要点名 web_request —— 而且一次请求都不许发出去。
+    """
+    for key in ("method", "body", "content_type"):
+        resp = mcp.call_tool("web_read", {"url": "https://example.com", key: "x"})
+        blob = json.dumps(resp, ensure_ascii=False)
+        assert "Unsupported argument" in blob, blob[:400]
+        assert "web_request" in blob, blob[:400]
+        assert key in blob, blob[:400]
 
 
 def test_revalidation_options_are_off_the_wire(mcp):

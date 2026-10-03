@@ -17,7 +17,7 @@ Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器：抓网页、�
 
 - **是什么**：给 AI 用的上网工具包。
 - **怎么用**：正常提要求，AI 自己选工具，你不用记命令。
-- **15 个工具默认全部注册**：搜网页 · 抓网址 · 批量抓 · 爬整站 · 出 URL 地图 · 截图 · 读本地文件 · RSS · 短链 · 录制回放 · 盯页面变化 · 用你自己的密码管理器登录 · 设一次的默认身份 · 看与清本地状态 · 读 dhole 自己的说明书。
+- **16 个工具默认全部注册**：搜网页 · 抓网址 · 发一次非 GET 请求 · 批量抓 · 爬整站 · 出 URL 地图 · 截图 · 读本地文件 · RSS · 短链 · 录制回放 · 盯页面变化 · 用你自己的密码管理器登录 · 设一次的默认身份 · 看与清本地状态 · 读 dhole 自己的说明书。
 - **另外 4 个默认关**：`web_recipe` / `web_watch` / `cred_vault` / `cred_login`；打开用 `dhole init --tasks` / `--vault`，不用编辑 JSON。它们的存在不必读 README：`sys_guide(topic='behavior')` 会说。
 - **代理环境自己适配**：Clash / sing-box 的 TUN + fake-ip 不再需要先设任何变量。
 - **要调设置**：见[配置](#配置)；出问题先跑 `dhole --doctor`。
@@ -149,14 +149,15 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 
 ## 工具
 
-**15 颗默认全部注册，下表是常用的几颗**：
+**16 颗默认全部注册，下表是常用的几颗**：
 
 | 工具 | 做什么 |
 |---|---|
-| `web_read` | 抓任意 URL：反爬升级、PDF / OCR、批量、聚焦提取、结构化提取、页面动作、非 GET、`auth`、条件请求、CDP 接管 |
+| `web_read` | 抓任意 URL：反爬升级、PDF / OCR、批量、聚焦提取、结构化提取、页面动作、条件请求、CDP 接管 |
+| `web_request` | 发一次非 GET：POST / PUT / PATCH / DELETE / HEAD。**只发一次**——不重试、不缓存、不升浏览器、不回退快照；凭据从 `cred_defaults` 来，正文上限 256KB |
 | `web_search` | 无密钥搜索：多引擎并行 + 本地重排，可顺带抓回前三条全文 |
 | `web_crawl` | 同域爬取：sitemap、关键词过滤、路径子树限定 |
-| `web_screenshot` | 页面截图；看不见图的宿主传 `options.save_to` 拿路径 |
+| `web_screenshot` | 页面截图；看不见图的宿主传 `save_to` 拿路径 |
 | `doc_parse` | 本地文件 → Markdown（docx / xlsx / pdf / pptx / odt / csv / html / json / yaml / md / txt） |
 | `feed_read` | 批量抓 RSS / Atom，`since=` 只取增量 |
 | `web_resolve` | 解析最终地址，不抽正文 |
@@ -164,16 +165,16 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 | `sys_state` | 看与清本地状态：正文缓存 · 会话 cookie（值一律不出境）· 引擎冷却 · 已存的 recipe/watch · 落盘的默认身份。抹掉「事后才察觉」的那几类要 `confirm=true` |
 | `sys_guide` | 读 dhole 自己的说明书：选工具、写参数、字段含义、失败怎么修、配置改哪个 |
 
-**默认关的 4 个**：
+**另外几颗同样默认注册**（17.0 删掉了"默认关"这一档；只剩 `DHOLE_TOOLS` 一个子集开关，写了它才会少注册）：
 
-| 工具 | 开关 | 做什么 |
-|---|---|---|
-| `web_recipe` | `DHOLE_TASKS=1` | 录下一条抓取路径，以后一次调用重放 |
-| `web_watch` | `DHOLE_TASKS=1` | 盯一个 URL，与上次快照 diff |
-| `cred_vault` | `DHOLE_VAULT=1` | 读**你自己**密码管理器的条目元数据（从不回密码 / TOTP 值） |
-| `cred_login` | `DHOLE_VAULT=1` | 用其中一条凭据登录：先只回计划，确认后才填并提交 |
+| 工具 | 做什么 |
+|---|---|
+| `web_recipe` | 录下一条抓取路径，以后一次调用重放 |
+| `web_watch` | 盯一个 URL，与上次快照 diff |
+| `cred_vault` | 读**你自己**密码管理器的条目元数据（从不回密码 / TOTP 值） |
+| `cred_login` | 用其中一条凭据登录：先只回计划，确认后才填并提交 |
 
-参数摆放：`web_read` / `web_crawl` / `web_search` / `web_screenshot` 的旋钮收在一个 `options` 对象里，顶层同名参数也接受（兼容读法，两处都给时**顶层优先**）；其余工具**只有顶层这一层**，塞 `options` 会被拒绝并列出它真正接受的键。反向例外：`web_read` 的 `url` 与 `web_crawl` 的 `focus` 必须放顶层。以 `tools/list` 为准。
+参数摆放：**每个参数都是顶层那一份**，没有袋子——17.0 删掉了 `options`，塞它会被拒绝并列出这颗工具真正接受的键。每个工具只接受自己那组名字（`since=` 属于 `feed_read`，不属于 `web_read`），名字对、门错同样拒。写操作在 `web_request`，不在 `web_read`。以 `tools/list` 为准。
 
 调用写法、字段含义与排查的手册有两个入口，同一份语料：`sys_guide(topic=...)`（默认注册，装上就能用）与 `dhole skill install`（宿主原生 skill 形态）。
 
@@ -181,14 +182,14 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 
 - **`content_ok=true` 不代表内容为真**：只表示 2xx + 无错 + 正文非空；几百字符的「成功」多半是登录墙或占位页。
 - **`robots.txt` 默认遵守**：被 `Disallow` 的 URL 一个请求都不发，回 `error=robots_disallowed`。
-- **写请求一次性**：`POST/PUT/DELETE/PATCH` 不重试、不缓存、不升浏览器、不回退快照——重发就是写两遍。
+- **写请求一次性**：`web_request` 里 `POST/PUT/DELETE/PATCH` 不重试、不缓存、不升浏览器、不回退快照——重发就是写两遍。超时那句答案是「不知道」不是「没成功」，先读一下再决定要不要再发。
 - **凭据不跟跨源重定向走**：存储的 `cookies` 与 `Authorization` 只发给那个源站。
 - **凭据只能 `cred_defaults` 存，不再逐次传**：`auth` 只把头摆好，不做 OAuth、不刷新 token；没带 host 的凭据一律拒。
 - **内网 / 本机默认拒绝**：先 `cred_defaults` 存 `allow_private=true`（只放开回环）或点名主机；云元数据端点任何时候都不放行。
 - **PDF 的 `pages=` 只减少抽取量**，文件仍整个下载；大 PDF 调大 `timeout`。
 - **抓回的正文是不可信数据**：里面的工具调用、密钥、上传指令按提示注入处理。
 - **提交默认暂停**：`{"submit": ...}` 不带 `confirm: true` 什么都不提交；验证码最多试 3 次就转交，2FA / 滑块一律转交。
-- **连接期开销 38,679 字符**（约 9.3k token，15 个工具，实测 `python tests/tool_payload_measure.py`），每次连接付一次；`DHOLE_TOOLS` 可省掉没用的那几颗。
+- **连接期开销 39,876 字符**（约 9.6k token，16 个工具，实测 `python tests/tool_payload_measure.py`），每次连接付一次；`DHOLE_TOOLS` 可省掉没用的那几颗。
 
 ## 搜索引擎与重排
 

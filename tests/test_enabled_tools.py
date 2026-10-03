@@ -1,13 +1,12 @@
-"""Connect-time token spend: DHOLE_TOOLS registers only a subset of the 13 tools.
+"""Connect-time token spend: DHOLE_TOOLS registers only a subset of the tools.
 
 Why this file exists: the tools/list table plus instructions is paid on EVERY
-connect, even when dhole is never called. Measured after the token audit: 19,141
-chars of tool schemas + 2,141 chars of instructions per conversation = 21,282
-chars, which that tokenizer run counts as ~5.1k cl100k tokens (4.16 chars per
-token for this payload; the repo's older 3.88 divisor read 5.5k and was high),
-with web_read alone at 6,508 chars.
-``DHOLE_TOOLS=web_read,web_search`` keeps the daily drivers at roughly half
-that cost; everything else stays one env-edit away.
+connect, even when dhole is never called. Measured on the 17.0 branch with
+``python tests/tool_payload_measure.py``: 36,539 chars of tool schemas + 3,322
+chars of instructions = 39,876 chars per connect, which that tokenizer reads as
+~9.6k cl100k tokens (4.16 chars per token for this payload), with web_read alone
+at 8,497. ``DHOLE_TOOLS=web_read,web_search`` keeps the daily drivers at roughly
+half that cost; everything else stays one env-edit away.
 
 The knob is an import-time constant (like DHOLE_BROWSER_IDLE_TIMEOUT and
 DHOLE_DEFAULT_CONTENT_CHARS), so env-dependent behaviour is exercised in fresh
@@ -60,10 +59,11 @@ class TestTheEnvVarIsParsed:
         payload = json.loads(out.stdout)
         assert payload["enabled"] == sorted(
             n.strip() for n in value.split(",") if n.strip())
-        assert len(payload["all"]) == 15, \
-            "全集是 14 个工具（16.0 补上会话名册，L3/L4 补上 web_recipe/web_watch，" \
+        assert len(payload["all"]) == 16, \
+            "全集是 16 个工具（16.0 补上会话名册，L3/L4 补上 web_recipe/web_watch，" \
             "凭据/登录流补上 cred_vault/cred_login，文档通道补上 sys_guide，" \
-            "B5 把一张地图拆成 web_discover、又把两颗运维面合成 sys_state）；" \
+            "B5 把一张地图拆成 web_discover、又把两颗运维面合成 sys_state、" \
+            "再把写操作拆成 web_request）；" \
             "默认关闭的也留在这里，守卫继续覆盖它们"
 
     @pytest.mark.parametrize("value", [None, "", "   "])

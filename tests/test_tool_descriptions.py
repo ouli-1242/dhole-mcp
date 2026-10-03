@@ -579,3 +579,37 @@ def test_every_boolean_property_has_a_string_spelling_reader(tools):
         "这些布尔参数在 schema 里声明成 boolean，调度器却没有字符串写法的路径：\n"
         + "\n".join(f"  {n}: {sorted(k)}" for n, k in sorted(missing.items()))
         + "\n要么进 _ARG_TYPES（'bool'），要么在上面那张例外表里写明谁读它。")
+
+
+# ─── 指针守卫：文案里那句 sys_guide(...) 必须翻得出东西 ────────────────
+#
+# 描述瘦身（§3-14）把解释搬进说明书，工具描述只留一句"细节在 topic='X',
+# section='Y'"。这句是 wire 上唯一的指路牌，而语料是手写的标题：一边改了名字、
+# 另一边没跟，调用方按提示去取就拿到"这一篇没有这一节"——比没有指路牌更糟，因为它
+# 已经花了一次调用。标题匹配是子串（guide._chunks 按二级标题切），所以改标题等于
+# 改指针。
+
+_POINTER = re.compile(
+    r"sys_guide\(topic='([^']+)'(?:,\s*section='([^']+)')?\)")
+
+
+def test_every_sys_guide_pointer_resolves():
+    from dhole_mcp import guide
+
+    strings = _agent_facing_strings()
+    found = 0
+    broken = []
+    for where, text in strings:
+        for topic, section in _POINTER.findall(text):
+            found += 1
+            if guide._resolve(topic) is None:
+                broken.append(f"  {where}: topic='{topic}' 不是任何一篇")
+                continue
+            if not section:
+                continue
+            header, _body = guide.read(topic, section=section)
+            if "matched no heading" in header:
+                broken.append(f"  {where}: topic='{topic}', section='{section}' "
+                              f"在该篇里没有这一节")
+    assert found >= 7, f"扫描面空了（只找到 {found} 个指针），守卫会永远通过"
+    assert not broken, "文案指向的说明书位置取不到：\n" + "\n".join(sorted(set(broken)))

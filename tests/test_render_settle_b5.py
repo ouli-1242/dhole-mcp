@@ -131,14 +131,13 @@ class TestTheCallSurfaceLostBothKnobs:
             for knob in ("wait", "network_idle"):
                 assert knob not in props, f"{tool} 还在教 {knob}"
 
-    def test_web_read_advertises_twenty_eight_names(self):
-        """35 → 30（13c 那五颗身份）→ 28（这一刀的两颗时机）。
+    def test_web_read_advertises_twenty_five_names(self):
+        """35 → 30（13c 那五颗身份）→ 28（这一刀的两颗时机）→ 25（14a 那三颗写操作）。
 
-        §3-12 的 ≤20 由 tests/test_wire_shape.py 整块 xfail(strict) 盯着，等 B5-14
-        把 actions / confirm / method / body / content_type 搬进 web_act 与
-        web_request 再摘牌。
+        §3-12 的 ≤20 由 tests/test_wire_shape.py 整块 xfail(strict) 盯着，等 B5-14b
+        把 actions / confirm / check_login 搬进 web_act 再摘牌。
         """
-        assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 28, \
+        assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 25, \
             sorted(server_mod._TOP_LEVEL_ARGS["web_read"])
 
     def test_web_screenshot_lost_the_same_two(self):

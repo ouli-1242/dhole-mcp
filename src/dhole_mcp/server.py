@@ -570,6 +570,9 @@ DHOLE_INSTRUCTIONS = (
     "NEVER answer from search snippets alone.\n"
     "- RSS/Atom changelogs or release notes: feed_read.\n"
     "- Local file: doc_parse.\n"
+    "- A non-GET request - POST / PUT / PATCH / DELETE / HEAD: web_request, never "
+    "web_read. It is sent once: no retry, no cache, no browser replay, because a "
+    "replay writes twice.\n"
     "- Screenshot: web_screenshot - words instead? web_read.\n"
     "- Check a short link: web_resolve.\n"
     "- Cookies a site kept behind session_id=, the fetch cache, the engine pool: "
@@ -633,6 +636,9 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "NEVER answer from search snippets alone.\n",
     "feed_read": "- RSS/Atom changelogs or release notes: feed_read.\n",
     "doc_parse": "- Local file: doc_parse.\n",
+    "web_request": "- A non-GET request - POST / PUT / PATCH / DELETE / HEAD: "
+    "web_request, never web_read. It is sent once: no retry, no cache, no browser "
+    "replay, because a replay writes twice.\n",
     "web_screenshot": "- Screenshot: web_screenshot - words instead? web_read.\n",
     "web_resolve": "- Check a short link: web_resolve.\n",
     "sys_state": "- Cookies a site kept behind session_id=, the fetch cache, the "
@@ -2665,7 +2671,6 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         "include_links": "bool", "ignore_robots": "bool",
         "cache_ttl": "int", "offset": "int", "max_content_chars": "int",
         "max_links": "int",
-        "method": "str", "content_type": "str",
         "focus_mode": "str",
         "focus_engine": "str",
         # The two booleans that make a decision rather than ask for data. Read
@@ -2696,6 +2701,11 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
     "web_screenshot": {
         "full_page": "bool", "decode_qr": "bool",
         "quality": "int", "timeout": "number",
+    },
+    # §4 写操作那颗：method/content_type 是字符串（大小写与空白是字符串客户端
+    # 最容易带进来的噪声），timeout 是数字，body 不 coerce（dict 与 string 都合法）。
+    "web_request": {
+        "method": "str", "content_type": "str", "timeout": "number",
     },
     "web_search": {
         "max_results": "int", "cache_ttl": "int", "page": "int",
@@ -4907,7 +4917,7 @@ _SF_PARAMS = frozenset({
     # block_webrtc/solve_cloudflare/useragent 全收进 _ANTI_DETECT）。
     "anti_detect",
     "include_media", "include_links", "max_links", "ignore_robots",
-    "session_id", "method", "body", "content_type",
+    "session_id",
     # G33/G35：CDP attach、无模型登录判定，以及 §3-16 那道先问再记的门
     # （confirm 是门的一部分，不是可选装饰）。
     "check_login", "cdp_url", "confirm",
@@ -4927,6 +4937,14 @@ _SHOT_PARAMS = frozenset({
     # （确定性工作，从来不设门控）。
     "selector", "decode_qr",
 })
+# 17.0 §4 第 4 行：写操作有自己的门。这三颗今天从 web_read 的公开面上搬走 ——
+# 它们从来不是"读正文的一种玩法"，而是"这件事根本不是读"：不重试、不进缓存、不升
+# 浏览器、不回退快照，因为重发就是写两遍，而浏览器回放答的是同一个 URL 的 GET。
+# 内部管线照旧收这三颗（一次性那条规则住在管线里，不住在工具名上）。
+_REQUEST_PARAMS = frozenset({
+    "url", "method", "body", "content_type", "extraction_type", "timeout",
+})
+
 _SS_PARAMS = frozenset({
     "max_results", "cache_ttl", "mode", "engines", "url",
     "site", "exclude_sites", "location", "language", "region", "page",
@@ -4947,6 +4965,8 @@ _SS_PARAMS = frozenset({
 # and the forwarding below reads nothing but this set.
 _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     "web_read": _SF_PARAMS | {"url"},
+    # 17.0 §4 第 4 行：写操作那颗门。
+    "web_request": _REQUEST_PARAMS,
     "web_crawl": _SC_PARAMS | {"url", "focus", "search"},
     # 17.0 §4: the map got its own tool, and the flag it used to be is not an
     # argument any more -- `crawl.web_crawl` still takes it internally.
@@ -5029,6 +5049,15 @@ _ENABLED_TOOLS = _parse_enabled_tools()
 ACTIVE_INSTRUCTIONS = _compose_instructions(_ENABLED_TOOLS)
 
 
+# 17.0 §4：这些名字不再是"这颗工具的陌生键"，而是"走错了门的合法参数"。
+# 拒答因此必须点名它去了哪，否则调用方会以为能力被删了（options 袋子那次同理）。
+_MOVED_TO = {
+    "method": "web_request",
+    "body": "web_request",
+    "content_type": "web_request",
+}
+
+
 def _reject_unknown_args(tool: str, args: dict) -> None:
     """Raise when a tool is called with a name it does not accept.
 
@@ -5042,6 +5071,16 @@ def _reject_unknown_args(tool: str, args: dict) -> None:
     unknown = sorted(k for k, v in args.items() if v is not None and k not in allowed)
     if not unknown:
         return
+    moved = {k: _MOVED_TO[k] for k in unknown if k in _MOVED_TO}
+    if moved:
+        # §4 把能力搬进了另一颗工具。这里只说"陌生键"会把人引向"这个 MCP 没这个
+        # 能力"，而真相是"名字换了门"——与 options 袋子同一类谎，同一套说法修。
+        raise ValueError(
+            f"Unsupported argument(s) for {tool}: {unknown}. "
+            + "; ".join(f"`{k}` moved to the {v} tool in 17.0" for k, v in sorted(moved.items()))
+            + " - the capability is still there, the door changed. "
+            f"Supported here: {sorted(allowed)}"
+        )
     if "options" in unknown:
         # 17.0 B4 删掉的就是这个袋子。老写法的调用现在会撞在这里，而"陌生键"三个字
         # 会把人引向"这工具没这个能力"——正好相反：能力全在，只是名字换了位置。
@@ -7134,6 +7173,66 @@ class MasterFetchServer:
         return BulkResponseModel(results=results, total=len(results), successful=successful)
 
     # ─── SMART FETCH (The One Tool To Rule Them All) ────────────────
+
+    async def web_request(
+        self,
+        url: Annotated[str, Field(description="Absolute http(s) URL to send this request to. One URL per call: a write is not a batch.")],
+        method: Annotated[str, Field(description="The verb, and the reason this tool exists: POST, PUT, PATCH, DELETE or HEAD (case-insensitive). GET is refused - reading is web_read's job, with its cache, its escalation ladder and its archive fallback.")],
+        body: Annotated[Optional[Any], Field(description="Request body for POST/PUT/PATCH/DELETE (cap 256KB). A dict is sent as a form, or as JSON when content_type says json; a string is sent as-is. HEAD takes none.")] = None,
+        content_type: Annotated[Optional[str], Field(description="Content-Type for body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json.")] = None,
+        extraction_type: Annotated[Optional[Literal["markdown", "html", "text", "article", "structured"]], Field(description="How the answer is read back: markdown (default), html, text, article or structured. A server that answers a write with JSON still gets that JSON extracted.")] = None,
+        timeout: Annotated[Optional[int | float], Field(description="Whole-call budget in milliseconds (default 30000, max 120000). A write gets this budget once: it is never retried, so nothing shares it.")] = None,
+    ) -> ResponseModel:
+        """Send one NON-GET request and read back what the server answered.
+
+        Why this is a tool and not three parameters on a read: a write is sent
+        ONCE. It is not retried (the previous call may already have committed),
+        not cached (the next call asks a different question), not escalated to the
+        browser (a replay would answer about a GET to that URL, not about your
+        POST), and not answered from archive.org (a snapshot is one GET from some
+        past day). Those four rules are this tool's whole definition, and keeping
+        them in a `method=` branch of web_read made them a special case of reading
+        rather than the thing they are.
+
+        Credentials are NOT a parameter here either (17.0 §3-17): `cred_defaults`
+        stores auth / cookies per host, and a write to that host carries them -
+        so the key is typed once instead of being copied into the transcript with
+        every request, and the response names what it ran on in `identity_applied`.
+
+        Every verb here that changes state is one-shot by rule rather than by
+        spec: RFC calls PUT and DELETE idempotent, which is a claim about the
+        endpoint and nothing this client can check. So `method` says what will
+        happen and the answer says what did - exactly once. HEAD is here rather
+        than in web_read because it is a request shape, not a content read:
+        status + declared size + type only.
+        """
+        verb = _clean_method(method)
+        if not (url or "").strip():
+            return _invalid_request_result(
+                "", "url is required: the absolute http(s) URL to send this request to")
+        if not (method or "").strip():
+            # `_clean_method` reads an absent verb as GET, so this has to be asked
+            # before the GET branch or the caller is told they asked for a read.
+            return _invalid_request_result(
+                url, "method is required and must be one of POST / PUT / PATCH / "
+                     "DELETE / HEAD - this tool never sends a bare GET",
+                next_action=("Name the verb, or read the page with web_read(url=...). "
+                             "Nothing was sent."))
+        if verb == "GET":
+            return _invalid_request_result(
+                url, "method=GET is a read, not a request - web_request takes "
+                     "POST / PUT / PATCH / DELETE / HEAD",
+                next_action=("Call web_read(url=...) for a GET: it is the door with the "
+                             "cache, the anti-bot escalation ladder and the archive "
+                             "fallback. Nothing was sent."))
+        # cache_ttl=0 is not a preference here: a write must never be answered from
+        # the cache, and the pipeline reads that rule off the verb anyway. Saying it
+        # at the door keeps the two statements from ever disagreeing.
+        return await self.web_read(
+            url=url, method=verb, body=body, content_type=content_type,
+            extraction_type=extraction_type,
+            timeout=timeout, cache_ttl=0,
+        )
 
     @_smart_fetch_request_context
     async def web_read(
@@ -9466,9 +9565,6 @@ class MasterFetchServer:
                     # `options` 那段散文把它们和"袋子的键"绑在了一起。参数只有一个家：
                     # 顶层。描述按 test_wire_shape 的 200 字符目标写，用法细节留在
                     # sys_guide 语料里（tools.md 已经逐条写了它们）。
-                    "method": {"type": "string", "description": "HTTP verb: GET (default), HEAD, POST, PUT, DELETE, PATCH - case-insensitive. A non-GET is sent ONCE: never retried, cached, browser-escalated or archive-answered, because a replay writes twice."},
-                    "body": {"description": "Request body for POST/PUT/DELETE/PATCH (cap 256KB). A dict is sent as a form, or as JSON when content_type says json; a string is sent as-is. Ignored for GET/HEAD."},
-                    "content_type": {"type": "string", "description": "Content-Type for body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json."},
                     "session_id": {"type": "string", "description": "Carry cookies across calls under this name (1-64 chars: letters, digits, . _ -). Covers both tiers. Values never leave the process and are never returned."},
                     "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check for this call (default false = comply; a disallowed URL makes no request at all). Set true only where you have the site's permission."},
                     "check_login": {"type": "boolean", "description": "Run the model-free login probe on the settled browser page; returns login_check (DOM signals + cookie NAMES, never values). Live-only: null on HTTP-tier results and on cache hits, so pair it with cache_ttl=0."},
@@ -9479,6 +9575,37 @@ class MasterFetchServer:
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
+        },
+        {
+            # 17.0 §4 第 4 行。描述里那四条一次性规则是从 web_read 的 method 分支
+            # 搬过来的：搬工具不许搬走规矩，所以它们在这里一个字都不能少。
+            "name": "web_request",
+            "description": ("Send ONE non-GET request (POST / PUT / PATCH / DELETE / HEAD) and read "
+                            "back what the server answered. Reading a page is web_read; GET here is refused.\n"
+                            "- A write is sent ONCE: not retried (the previous call may already have "
+                            "committed), not cached, not escalated to the browser (a replay answers about "
+                            "a GET to that URL, not about your POST), never answered from archive.org.\n"
+                            "- Credentials are not a parameter: cred_defaults stores auth / cookies for "
+                            "that host and this call carries them; identity_applied names what it ran on. "
+                            "Bodies cap at 256KB - this retrieves, it does not upload.\n"
+                            "- There is no anti_detect here on purpose: a write never renders, so there is no "
+                            "ladder to choose - the HTTP tier is the whole request.\n"
+                            "- Check before you send: web_resolve answers where a URL really goes. How the "
+                            "answer is shaped: sys_guide(topic='behavior', section='web_request')."),
+            "inputSchema": {
+                "type": "object", "required": ["url", "method"],
+                "properties": {
+                    "url": {"type": "string", "description": "Absolute http(s) URL to send this request to. One URL per call - a write is not a batch."},
+                    "method": {"type": "string", "description": "POST / PUT / PATCH / DELETE / HEAD (case-insensitive). GET is refused: web_read owns the cache, the escalation ladder and the archive fallback."},
+                    "body": {"description": "Request body (cap 256KB). A dict is sent as a form, or as JSON when content_type says json; a string is sent as-is. HEAD takes none."},
+                    "content_type": {"type": "string", "description": "Content-Type for body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json."},
+                    "extraction_type": {"type": "string", "enum": ["markdown", "html", "text", "article", "structured"], "description": "How the answer is read back (default markdown). A server answering a write with JSON still gets that JSON extracted."},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000). A write gets this budget once: it is never retried, so nothing shares it."},
+                },
+            },
+            # 写操作默认不是只读；重复调用不保证同一个答案，所以不是幂等。
+            "annotations": {"readOnlyHint": False, "idempotentHint": False,
+                            "destructiveHint": True, "openWorldHint": True},
         },
         {
             "name": "web_crawl",
@@ -9981,6 +10108,14 @@ class MasterFetchServer:
             # One branch because one mode is pinned here and no argument can
             # unpin it: the tool cannot turn into a content crawl.
             result = await self.web_discover(**self._forward("web_discover", args))
+            return _wire_result(result)
+
+        elif name == "web_request":
+            # url / method 走具名传递：缺哪一颗由 web_request 自己回那句"缺什么、
+            # 去哪补"的信封。让它们缺席成 TypeError，等于把契约换成了栈异常。
+            result = await self.web_request(
+                url=args.get("url") or "", method=args.get("method") or "",
+                **self._forward("web_request", args, skip=("url", "method")))
             return _wire_result(result)
 
         elif name == "web_screenshot":
