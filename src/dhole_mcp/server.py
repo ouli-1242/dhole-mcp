@@ -4812,6 +4812,28 @@ def _anti_detect(level: str) -> dict:
             "headless": True, "real_chrome": False, "useragent": None}
 
 
+# 档位里有两颗是**启动级**的：画布噪声进 context 的 init script，WebRTC 屏蔽进
+# chromium 的启动参数。浏览器一起来就改不动它们 —— 所以"这台浏览器是按哪一档起来的"
+# 是一个有答案的问题，而下面三个函数就是它的问法。`solve_cloudflare` 与
+# `disable_resources` 是逐次生效的，不在这个身份里。
+_LAUNCH_HARDENING = ("hide_canvas", "block_webrtc")
+
+
+def _launch_identity(**hardening: bool) -> tuple:
+    """一档（或一台已起的浏览器）的启动级身份。"""
+    return tuple(bool(hardening.get(k)) for k in _LAUNCH_HARDENING)
+
+
+def _default_hardening() -> dict:
+    """当下生效的那一档摊开的样子：cred_defaults 存的，缺省 auto。"""
+    return _anti_detect(identity.get("anti_detect") or "auto")
+
+
+def _session_identity(session: Any) -> tuple:
+    return _launch_identity(hide_canvas=getattr(session, "_hide_canvas", False),
+                            block_webrtc=getattr(session, "_block_webrtc", False))
+
+
 # ─── 落盘的默认身份（§3-17）───────────────────────────────────────
 # 一颗参数要不要进 cred_defaults，判据是"每一次调用都得重传吗"。答案是是的六颗
 # 有了这个家；`profile` 是第七颗，它今天根本没有别的入口（DHOLE_BROWSER_PROFILE
@@ -5374,6 +5396,13 @@ class MasterFetchServer:
         the other context's logins, so the default that just changed could never
         take effect on it. The mismatch closes it and launches the right one —
         changing the default costs one cold start, which is what it should cost.
+
+        The same judgement applies to the anti-detect rung: canvas noise and the
+        WebRTC policy are decided when a browser starts, so the warm one is built
+        at whatever rung is in force now (``cred_defaults``, else ``auto``) and a
+        rung change rotates it. Before 17.0 B5-14a-2 this launcher passed neither,
+        which quietly meant the shared browser — the one most stealthy calls ride
+        — ran unhardened no matter what ``anti_detect`` said.
         """
         if not _browser_deps_available():
             raise RuntimeError(
@@ -5384,14 +5413,22 @@ class MasterFetchServer:
         ts_attr = "_auto_stealthy_last_used"
         want_profile = (profile_name if profile_name is not None
                         else identity.get("profile"))
+        # 档位里那两颗启动级的开关（画布噪声 / WebRTC 屏蔽）只能在一台浏览器起来
+        # 的时候决定，所以"这台热浏览器是按哪一档起来的"必须和 profile 一样进入能否
+        # 复用的判据 —— 而且问的是那台浏览器本身，不是这边记的一个数：记的数可以谎，
+        # 起来过的浏览器不能。
+        want_hard = _default_hardening()
+        want_launch = _launch_identity(**want_hard)
 
         def _scan() -> tuple[Optional[str], Optional[str]]:
-            """(reusable, to_close) for the warm session under the current profile."""
+            """(reusable, to_close) for the warm session under this profile + rung."""
             existing_id = getattr(self, attr)
             if not (existing_id and existing_id in self._sessions
                     and self._sessions[existing_id].session._is_alive):
                 return None, None
-            if getattr(self, "_auto_stealthy_profile", None) == want_profile:
+            entry = self._sessions[existing_id]
+            if (getattr(self, "_auto_stealthy_profile", None) == want_profile
+                    and _session_identity(entry.session) == want_launch):
                 setattr(self, ts_attr, now())
                 self._ensure_idle_monitor()
                 return existing_id, None
@@ -5429,7 +5466,13 @@ class MasterFetchServer:
                     logger.debug("warm browser on the other profile did not close: %s", e)
             # Create outside the sessions lock (expensive — browser launch) but
             # inside the creation lock (no concurrent 2nd launch).
-            sid = await self.open_session(headless=True, profile_name=want_profile)
+            # 那三颗是这一档在这台浏览器上的落点：两颗启动级的定下它的指纹，
+            # solve_cloudflare 作为会话默认存着 —— web_screenshot 不逐次传它，
+            # 读的就是这一份。
+            sid = await self.open_session(headless=True, profile_name=want_profile,
+                                          hide_canvas=want_hard["hide_canvas"],
+                                          block_webrtc=want_hard["block_webrtc"],
+                                          solve_cloudflare=want_hard["solve_cloudflare"])
             self._auto_stealthy_profile = want_profile
             async with self._sessions_lock:
                 existing_id = getattr(self, attr)
@@ -5907,8 +5950,16 @@ class MasterFetchServer:
                 if self._sessions.get(sid) is entry:
                     self._sessions.pop(sid, None)
                     entry._alive = False
+        # 命名会话没有理由比共享的那台更不设防：建起来就带上当下生效的档位。
+        # 但它**不**按档位轮换 —— 这个会话的意义就是那个 context（登录态），换一次
+        # 档就把它抹掉是拿能力换一个旋钮；真要在别的档上跑的那一次由
+        # `bulk_stealthy_fetch` 自己起一台（那里会说清代价）。
+        hard = _default_hardening()
         try:
-            await self.open_session(session_id=sid, headless=headless)
+            await self.open_session(session_id=sid, headless=headless,
+                                    hide_canvas=hard["hide_canvas"],
+                                    block_webrtc=hard["block_webrtc"],
+                                    solve_cloudflare=hard["solve_cloudflare"])
         except ValueError as e:
             if "already exists" in str(e):
                 # 并发竞争下另一个调用刚建好——直接复用。
@@ -7105,8 +7156,25 @@ class MasterFetchServer:
         # auto 会话的 id 不是调用方的会话（桥它会往 jar 里灌匿名浏览的 cookie）；
         # attach 的 context 是用户真实 profile（绝不能写入）。
         bridge_sid = _SESSION_ID.get() or ""
+        entry = None
         if session_id:
-            entry = await self._get_session(session_id, "stealthy")
+            _warm = await self._get_session(session_id, "stealthy")
+            asked = _launch_identity(hide_canvas=hide_canvas,
+                                     block_webrtc=block_webrtc)
+            if _session_identity(_warm.session) == asked:
+                entry = _warm
+            else:
+                # 这两颗是启动级的，挂在一台已经起来的浏览器上改不动。以前的做法是
+                # 把它们在这里丢掉：档位说 off，页面照样跑在开着画布噪声的共享浏览器
+                # 上（或者反过来）。现在这一趟自己起一台 —— 代价写在回执里，因为丢掉
+                # 的不只是那台浏览器的速度，还有它那个 context 里的登录态。
+                if _ARG_NOTES.get() is not None:
+                    _ARG_NOTES.get().append(
+                        "anti_detect asked for hardening that the session's browser "
+                        "was not started with (canvas noise and the WebRTC policy are "
+                        "launch-level), so this call ran on its own browser - page "
+                        "state from that session, including logins, did not ride along")
+        if entry is not None:
             attached = bool(getattr(entry.session, "cdp_attached", False))
             bridged = bool(bridge_sid) and not attached \
                 and not getattr(entry.session, "cdp_attached", False)

@@ -44,6 +44,10 @@ A fake-IP TUN proxy (Clash / sing-box TUN mode) hands every public name an addre
 
 `timeout` is the wall-clock budget for the whole call (default 30s, max 120s); document **download** time counts fully — for big PDFs raise `timeout`. The 50MB body cap gates BEFORE download; oversized bodies fail with `Response body too large` and raising `timeout` won't help.
 
+### The summary says this call "ran on its own browser"
+
+The rung you asked for is not what the shared browser was started with: canvas noise and the WebRTC policy are **launch-level**, so a call wanting `anti_detect='off'` while the warm browser is an `auto` one takes its own browser for that call. Slower by one cold start, and **without that browser's page state** — a named session's logins do not ride along. Not an error: the content came from the rung you asked for. To stop paying it, store the rung you actually want (`cred_defaults` `set={"anti_detect": "off"}`), which replaces the warm browser once. `basic` / `auto` / `aggressive` share one launch identity and never hit this.
+
 ### `proxy_unreachable`
 
 `proxy_unreachable` means the stored `proxy` failed its 5s TCP precheck — no request was sent (no browser escalation, no snapshot fallback). Raising `timeout` is useless: check the proxy's address / port / liveness, or `unset=["proxy"]` for a direct connection.

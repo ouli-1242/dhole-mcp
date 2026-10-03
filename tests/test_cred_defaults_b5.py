@@ -270,6 +270,12 @@ def _fake_open(monkeypatch, opened: list) -> None:
         class _Live:
             _is_alive = True
 
+            # 17.0 B5-14a-2：这台现在能不能复用，看的是它**带着**哪一档起来的
+            # （画布噪声与 WebRTC 屏蔽是启动级的）。桩不带上这两颗，它就不是一个
+            # 忠实的 open_session 桩 —— 复用与轮换的判据会看不见它。
+            _hide_canvas = kw.get("hide_canvas", False)
+            _block_webrtc = kw.get("block_webrtc", False)
+
             async def close(self):
                 pass
 
