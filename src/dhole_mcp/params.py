@@ -1,0 +1,513 @@
+"""Dhole 的参数面：调用方传来的 JSON 在进任何一条抓取路径之前读一遍。
+
+从 server.py 原样搬出（17.0 B6 的第七刀下半，零行为变更）。这一层只回答两个问题：
+"这个值能不能被读成它声称的类型"（`_coerce_*`：客户端会把数字发成字符串，
+会把 false 发成 "false"），以及"这个工具到底收不收这个名字"（`_ARG_TYPES` 加
+`_validate_tool_args`）。答案必须是同一条：一处放宽一处收紧，就是"工具描述里
+写着能传、传进来被静默改回默认"那一类缺陷的产地。
+
+依赖只有 stdlib、档位表 `_ANTI_DETECT` / `_RUNG_TOOLS`（rungs.py）与一处对
+`MasterFetchServer` 的回看 —— 那颗是刻意的：`_arg_defaults` 从方法签名现读默认值，
+抄来的默认值会漂，而签名是工具已经写明它们的地方。
+"""
+
+from __future__ import annotations
+
+import inspect
+import json
+from typing import Any, List, Optional
+
+from dhole_mcp.rungs import _ANTI_DETECT, _RUNG_TOOLS
+
+
+def _coerce_int_arg(
+    value: Any, name: str, *, lo: Optional[int] = None, hi: Optional[int] = None,
+    default: int, clamp: bool = True, allow_float: bool = False,
+) -> int:
+    """Normalize an integer tool argument; never silently swap in the default.
+
+    ``max_content_chars`` did exactly that: a non-int was replaced by
+    ``MAX_CONTENT_CHARS``. Since several MCP clients stringify numbers (the same
+    JSON-stringified clients need parsed), ``max_content_chars="2000"``
+    silently became 40,000 — a 20x context overspend delivered as an ordinary
+    200. That is the "looks like it worked" family already closed one level up
+    by ``_coerce_arg_types`` and ``_normalize_schema``.
+
+    Policy, in order:
+      * ``None`` -> ``default`` (the argument was not set)
+      * a bool -> raise (``True`` is an ``int`` subclass; nobody means 1 char)
+      * a string that parses as an int -> coerce, honouring the caller's intent
+      * anything else -> raise, naming the type it actually was
+      * out of ``[lo, hi]`` -> clamp when ``clamp`` (a resource cap, which is
+        documented on the wire so it is a known bound rather than a surprise),
+        otherwise raise (a nonsense value with no sensible reading).
+
+    ``lo``/``hi`` are optional because the wire-boundary pass
+    (:func:`_coerce_arg_types`) converts types ONLY and leaves the range to the
+    tool: every documented cap is already applied where it is enforced, with the
+    note that tells the caller it was applied. Repeating the bounds here would
+    clamp in silence one layer above that note.
+
+    ``allow_float`` accepts a float as well as an int, for the arguments whose
+    own annotation is ``int | float`` (timeouts, waits) — where 1500.5 ms is a
+    value the caller meant, not a type error.
+    """
+    if value is None:
+        return default
+    # Every rejection below points at a concrete correct value. For an argument
+    # whose own default is None ("not set") there is no number to suggest, so the
+    # suggestion is to omit it.
+    example = (f"e.g. {name}={default}" if default is not None
+               else f"or omit {name} to use the tool default")
+    if isinstance(value, bool):
+        raise ValueError(
+            f"{name} must be an integer, got a boolean. "
+            f"Pass {name}={int(value)} ({example})."
+        )
+    number_types: tuple = (int, float) if allow_float else (int,)
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            value = int(text)
+        except ValueError:
+            if not allow_float:
+                raise ValueError(
+                    f"{name} must be an integer, got {value!r}. "
+                    f"Pass a number ({example})."
+                ) from None
+            try:
+                value = float(text)
+            except ValueError:
+                raise ValueError(
+                    f"{name} must be a number, got {value!r}. "
+                    f"Pass a number ({example})."
+                ) from None
+    if not isinstance(value, number_types):
+        raise ValueError(
+            f"{name} must be {'a number' if allow_float else 'an integer'}, got "
+            f"{type(value).__name__}. Pass a number ({example})."
+        )
+    if (lo is not None and value < lo) or (hi is not None and value > hi):
+        if clamp:
+            if lo is not None:
+                value = max(lo, value)
+            if hi is not None:
+                value = min(hi, value)
+            return value
+        raise ValueError(
+            f"{name} must be between {lo} and {hi}, got {value}."
+        )
+    return value
+
+
+# The strings a client can legitimately send for a boolean. Listed explicitly
+# because the defect this closes was caused by truthiness: `if all:` treats ANY
+# non-empty string as True, so cache_clear(all="false") wiped the whole cache.
+# A whitelist is the only version of this that cannot be wrong in that
+# direction — an unlisted string raises instead of guessing.
+_BOOL_LITERALS: dict[str, bool] = {
+    "true": True, "1": True, "yes": True, "on": True,
+    "false": False, "0": False, "no": False, "off": False,
+}
+
+# Fetcher tiers accepted on the wire. 'dynamic' (the alias left over from the
+# Playwright tier removed in v3.5.0) is gone as of 17.0 B4: two names for one
+# tier is a vocabulary the reader has to reconcile on every response, and the
+# escalation_path it produced said 'stealthy' anyway.
+_FORCE_FETCHER_VALUES = frozenset({"http", "stealthy"})
+
+
+def _coerce_bool_arg(value: Any, name: str, *, default: bool = False) -> bool:
+    """Normalize a boolean tool argument; never let truthiness decide.
+
+    Same policy as ``_coerce_int_arg``: ``None`` means "not set" (-> ``default``),
+    a real ``bool`` passes through, ``0``/``1`` pass through as ``False``/``True``
+    (how a number-typed client spells them), and a string is honoured only when
+    it is one of ``_BOOL_LITERALS``. Everything else raises, naming what actually
+    arrived.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    # 0/1 are how a number-typed client says false/true. They have exactly one
+    # reading, so they are honoured; any other int is a mistake and raises
+    # (unlike _coerce_int_arg, which rejects bools outright because `True` there
+    # would silently mean "1 character").
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        key = value.strip().lower()
+        if key in _BOOL_LITERALS:
+            return _BOOL_LITERALS[key]
+        raise ValueError(
+            f"{name} must be a boolean, got {value!r}. "
+            f"Pass true or false (default {str(default).lower()})."
+        )
+    raise ValueError(
+        f"{name} must be a boolean, got {type(value).__name__}. "
+        f"Pass true or false (default {str(default).lower()})."
+    )
+
+
+def _coerce_str_list_arg(
+    value: Any, name: str, *, single_hint: str = "",
+    element_hint: str = "a URL string",
+) -> Optional[List[str]]:
+    """Normalize a list-of-strings argument; a bare string is an error.
+
+    A string IS iterable, which is why ``web_read(urls="https://example.com")``
+    used to answer with ``total=19, successful=19`` and nineteen one-character
+    "results" — the bulk path took ``len(urls)`` and iterated it, and nothing
+    downstream could tell that apart from a real 19-URL request.
+
+    Wrapping the string would be a guess (is a comma a separator? a newline?),
+    so it raises and names the argument that already means "one URL". A
+    JSON-encoded array is accepted because several clients stringify nested
+    structures (the same reason a JSON-stringified value gets parsed) and an array
+    literal has exactly one reading.
+
+    Elements are checked too: ``urls=["https://a", 123]`` used to reach
+    ``ResponseModel(url=123)`` and come back as a bare Pydantic
+    "1 validation error for ResponseModel" with no recovery hint.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        parsed = None
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+            except (ValueError, TypeError):
+                parsed = None
+        if isinstance(parsed, list):
+            return _coerce_str_list_arg(parsed, name, single_hint=single_hint,
+                                        element_hint=element_hint)
+        raise ValueError(
+            f"{name} must be an array of strings, got a single string. "
+            + (single_hint or f'Pass {name}=["...", "..."] instead.')
+        )
+    if isinstance(value, (list, tuple)):
+        out: List[str] = []
+        for i, item in enumerate(value):
+            if not isinstance(item, str):
+                raise ValueError(
+                    f"{name}[{i}] must be a string, got {type(item).__name__} "
+                    f"({item!r}). Every element of {name} has to be {element_hint}."
+                )
+            out.append(item)
+        return out
+    raise ValueError(
+        f"{name} must be an array of strings, got {type(value).__name__}. "
+        + (single_hint or f'Pass {name}=["...", "..."] instead.')
+    )
+
+
+def _coerce_anti_detect_arg(value: Any, name: str = "anti_detect") -> str:
+    """The one rung the caller named, or 'auto' - and nothing in between.
+
+    `Literal[...]` reaches clients as schema only; this server reads every
+    argument with `args.get()`, so an unlisted level would otherwise reach the
+    ladder table and raise a KeyError there - a Python traceback where a list of
+    the four spellings belongs.
+    """
+    if value is None:
+        return "auto"
+    if isinstance(value, str) and value.strip().lower() in _ANTI_DETECT:
+        return value.strip().lower()
+    raise ValueError(
+        f"{name} must be one of {', '.join(_ANTI_DETECT)}, got {value!r}. "
+        "The rungs go weakest to strongest; there is no fifth, and no single "
+        "fingerprint knob to override."
+    )
+
+
+def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Optional[str]:
+    """Validate the force_fetcher enum instead of falling through to stealthy.
+
+    ``Literal[...]`` on the method signature is documentation only — the
+    dispatcher reads arguments with ``args.get()``, so ``force_fetcher="magic"``
+    used to miss every ``== "http"`` branch and land in the stealthy ``else``:
+    the heaviest tier (~5s plus anti-detect overhead) with no error saying the
+    value was wrong. Returns ``None`` for "not set".
+    """
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{name} must be a string, got {type(value).__name__}. "
+            "Valid values: 'http', 'stealthy'."
+        )
+    key = value.strip().lower()
+    if key == "dynamic":
+        # Named rather than folded into "not a fetcher tier": a caller working
+        # from old notes needs to be told where that name went, not asked to
+        # guess between the two tiers that are left.
+        raise ValueError(
+            f"{name}='dynamic' was the alias of the browser tier that left in "
+            "v3.5.0, and the alias itself is gone in 17.0 - pass "
+            "force_fetcher='stealthy' (anti-detect browser) or 'http'. "
+            "No request was made."
+        )
+    if key not in _FORCE_FETCHER_VALUES:
+        raise ValueError(
+            f"{name}={value!r} is not a fetcher tier. "
+            "Valid values: 'http', 'stealthy'."
+        )
+    return key
+
+
+# ─── wire argument types ───────────────────────────────────────────
+# web_read and cache_clear had per-argument coercers; the other six tools had
+# none, so everything the dispatcher forwarded was whatever JSON happened to
+# carry. Two client behaviors reach that gap on ordinary machines:
+#
+#   * a client that serializes numbers ("max_results": "6"). search.py then ran
+#     `max(1, min("6", 50))`, and min() compares the SECOND operand against the
+#     first: `'<' not supported between instances of 'int' and 'str'`. The tool
+#     answered with that bare Python traceback as its `error` field, which is
+#     what an external test report filed as "web_search 完全崩溃，重启不恢复"
+#     and misdiagnosed as engine-cooldown state. The state files were innocent —
+#     the same call succeeds once the number arrives as an int.
+#   * a client that echoes every schema property as null. A null means "not
+#     set", so it is dropped before any branch reads it - but the drop has to
+#     be deliberate: `if cache_ttl > 0` on a None raises a NoneType comparison,
+#     and letting the tool's own default apply is what the caller meant.
+#
+# A bare string where a list was meant is the same gap with a worse outcome:
+# `path_include="/docs"` iterates character by character.
+#
+# So: convert TYPES at the boundary, for both channels, before any branch reads
+# them. Ranges deliberately are NOT checked here — every documented cap is
+# already enforced where it is applied (search clamps max_results and says so,
+# crawl clamps max_pages, _validate_filters rejects page>10), usually with a note
+# telling the caller the value moved. Clamping a second time above those notes
+# would produce the silent version of the bug this table exists to close.
+_ARG_TYPES: dict[str, dict[str, str]] = {
+    "web_read": {
+        "urls": "list",
+        "include_media": "bool",
+        "include_links": "bool", "ignore_robots": "bool",
+        "cache_ttl": "int", "offset": "int", "max_content_chars": "int",
+        "max_links": "int",
+        "focus_mode": "str",
+        "focus_engine": "str",
+        # The two booleans that make a decision rather than ask for data. Read
+        # raw, a string client's `confirm: "false"` is a truthy non-empty string
+        # and authorizes a CDP attach nobody approved — the same defect
+        # sys_state's `confirm` already fell into once.
+        "confirm": "bool", "check_login": "bool",
+        "timeout": "number",
+        # A numeric PDF page request ("pages": 3) is unambiguous; reading it only
+        # as a string used to drop the range silently and return the whole file.
+        "pages": "strnum", "password": "strnum",
+    },
+    "web_crawl": {
+        "max_pages": "int", "max_depth": "int", "max_content_chars_per": "int",
+        "cache_ttl": "int",
+        "concurrency": "int", "timeout": "number", "deadline_ms": "number",
+        "ignore_robots": "bool",
+        "focus_engine": "str",
+        # path_include/path_exclude are NOT here: a bare string is already read
+        # as the one-prefix list it means, and crawl.py does that at the point
+        # where it can still say so before any page is fetched.
+        # sitemap is not here either: it is a tri-state (true|'auto'|false) and
+        # crawl.py already normalizes every spelling of it, including the strings
+        # a serialized client sends. Forcing it through _coerce_bool_arg here is
+        # the one spelling 'auto' would not survive.
+    },
+    "web_screenshot": {
+        "full_page": "bool", "decode_qr": "bool",
+        "quality": "int", "timeout": "number",
+    },
+    # §4 写操作那颗：method/content_type 是字符串（大小写与空白是字符串客户端
+    # 最容易带进来的噪声），timeout 是数字，body 不 coerce（dict 与 string 都合法）。
+    "web_request": {
+        "method": "str", "content_type": "str", "timeout": "number",
+    },
+    # §4 页面动作那颗。rawlist：动作链的每一个对象都是一个不同键的形状
+    # （{click:…} / {fill:…} / {wait:…}），逐颗归一化会读掉那些键本身。
+    # 两颗会做决定的布尔同样要读字符串写法：`confirm: "false"` 如果按裸值传，
+    # 是一次非空字符串 = 授权，而它授权的是"在你的真实 Chrome 里 attach"。
+    "web_act": {
+        "actions": "rawlist", "timeout": "number", "max_content_chars": "int",
+        "confirm": "bool", "check_login": "bool",
+    },
+    "web_search": {
+        "max_results": "int", "cache_ttl": "int", "page": "int",
+        "engines": "list", "exclude_sites": "list", "fetch_content": "bool",
+        # min_relevance arrives as a string from clients that JSON-stringify
+        # numbers ("0.3"); without this it would reach search.py as text and be
+        # coerced to 0.0 there (silently disabling the floor).
+        "min_relevance": "number",
+        "min_raw_relevance": "number",
+    },
+    "feed_read": {"max_items": "int", "timeout": "int"},
+    "web_resolve": {"timeout": "number"},
+    # sys_state normalizes its three arguments in _validate_tool_args, because its
+    # list elements are state tokens rather than URLs and it needs the wording to
+    # say so. doc_parse takes three strings and has nothing to convert.
+    # L3/L4: `actions` goes through the same rawlist path as web_read's (the
+    # chain validator owns its shape); the numbers are the same coercions.
+    "web_recipe": {"actions": "rawlist", "timeout": "number",
+               "max_content_chars": "int"},
+    "web_watch": {"max_chars": "int", "timeout": "number"},
+    "cred_vault": {"limit": "int"},
+    # The three index overrides come from a snapshot row, so they arrive as
+    # strings from clients that JSON-stringify numbers; `confirm` is the
+    # approval gate and must be a real boolean, never the string "false".
+    "cred_login": {"username_index": "int", "password_index": "int",
+              "submit_index": "int", "confirm": "bool", "timeout": "number"},
+}
+
+_ARG_DEFAULTS: dict[Any, dict[str, Any]] = {}
+
+
+def _arg_defaults(tool: str) -> dict[str, Any]:
+    """Each typed argument's own default, read off the method signature.
+
+    Copied defaults drift; the signature is where the tool already states them.
+
+    Keyed by the function it read, not by tool name: the test suite replaces
+    these methods with stubs, and a cache keyed on the tool would keep serving
+    whatever the first caller happened to see as that tool's signature.
+    """
+    # 这颗回看是这一层唯一的反向依赖，所以就地 import：模块级 import server 会绕成
+    # 循环，而 `crawl.py` / `install.py` 读 server 用的就是这个写法。测试把方法换成
+    # stub 时读到的仍是同一个类对象 —— 行为与搬迁前逐位相同。
+    from dhole_mcp.server import MasterFetchServer
+
+    fn = getattr(MasterFetchServer, tool)
+    cached = _ARG_DEFAULTS.get(fn)
+    if cached is not None:
+        return cached
+    params = inspect.signature(fn).parameters
+    empty = inspect.Parameter.empty
+    defaults = {name: p.default for name, p in params.items()
+                if p.default is not empty and name in _ARG_TYPES.get(tool, {})}
+    _ARG_DEFAULTS[fn] = defaults
+    return defaults
+
+
+def _coerce_one_arg(kind: str, name: str, value: Any, default: Any) -> Any:
+    """Apply one table entry to one value."""
+    if kind == "int":
+        return _coerce_int_arg(value, name, default=default)
+    if kind == "number":
+        return _coerce_int_arg(value, name, default=default, allow_float=True)
+    if kind == "bool":
+        return _coerce_bool_arg(value, name, default=bool(default))
+    if kind == "list":
+        return _coerce_str_list_arg(value, name)
+    if kind == "rawlist":
+        # Elements belong to the consumer (actions._validate_actions knows the
+        # per-action shapes); the boundary only fixes the container.
+        if isinstance(value, str):
+            text = value.strip()
+            try:
+                parsed = json.loads(text) if text.startswith("[") else None
+            except (ValueError, TypeError):
+                parsed = None
+            if isinstance(parsed, list):
+                return parsed
+            raise ValueError(
+                f"{name} must be an array of objects, got {value!r}. "
+                f"Pass {name}=[{{...}}, {{...}}]."
+            )
+        if value is None or isinstance(value, (list, tuple)):
+            return value
+        raise ValueError(
+            f"{name} must be an array of objects, got {type(value).__name__}. "
+            f"Pass {name}=[{{...}}, {{...}}]."
+        )
+    if kind == "strnum":
+        # An argument the tool only reads as a string, where an integer is the
+        # same value: PDF `pages: 3` is page 3, and `password: 1234` is "1234".
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+        return value
+    return value
+
+
+def _coerce_arg_types(tool: str, args: dict) -> dict:
+    """Normalize one call's arguments to the types the tool reads.
+
+    One channel since 17.0 B4: parameters live at the top level, so there is no
+    second copy arriving through a bag to keep in step with. Keys the caller
+    never sent stay absent so the tool's own default applies; a key sent as null
+    takes that same default.
+    """
+    spec = _ARG_TYPES.get(tool)
+    if not spec or not any(k in args for k in spec):
+        return args
+    defaults = _arg_defaults(tool)
+    out = dict(args)
+    for key in spec:
+        if key in out:
+            out[key] = _coerce_one_arg(spec[key], key, out[key], defaults.get(key))
+    return out
+
+
+# The hint travels with the error: a caller who wrote urls="https://x" is one
+# bracket away from the right call, and that is true whichever channel the value
+# arrived in.
+_URLS_SINGLE_HINT = ('Pass urls=["https://a", "https://b"], or use url= '
+                     "for a single URL.")
+
+
+def _validate_tool_args(name: str, args: dict) -> dict:
+    """Type-check the arguments the manual dispatcher is about to read.
+
+    This server runs on the low-level ``mcp.server.Server`` with a hand-written
+    ``on_call_tool``, so the ``Annotated``/``Literal`` annotations on the tool
+    methods only ever reach clients as wire schema — nothing validates at
+    runtime, and every argument is read with ``args.get()``. Three defects lived
+    in that gap, all silent and all delivered as an ordinary 200:
+    ``urls="https://x"`` iterated the string into nineteen one-character
+    results; the cache wipe's ``all="false"`` cleared the entire cache because a
+    non-empty string is truthy; ``force_fetcher="magic"`` fell through to the
+    stealthy browser tier.
+
+    Returning a normalized copy here means every branch below reads a value that
+    already has exactly one reading. Raises ValueError; the web_read branch
+    converts it to the ordinary invalid_request envelope, and anything else
+    surfaces through ``call_tool`` as an is_error result.
+    """
+    out = dict(args)
+    # 哪几颗工具读档位，就在这一处问一遍：`Literal[...]` 只到客户端为止，这台服务器
+    # 自己读参数用 args.get()，一个不存在的档进了 `_ANTI_DETECT[level]` 就是 KeyError —
+    # 那是一句 Python 栈，不是"这四颗里挑一个"的答案（`force_fetcher="magic"` 当年就是
+    # 这样一路掉进浏览器层的）。缺席不动：缺席才是"用 cred_defaults 存的那一档"。
+    if name in _RUNG_TOOLS and "anti_detect" in args:
+        out["anti_detect"] = _coerce_anti_detect_arg(args["anti_detect"])
+    if name == "web_read":
+        out["urls"] = _coerce_str_list_arg(
+            args.get("urls"), "urls", single_hint=_URLS_SINGLE_HINT)
+        out["force_fetcher"] = _coerce_force_fetcher_arg(args.get("force_fetcher"))
+    elif name == "sys_state":
+        # The same trap the cache wipe fell into: read raw, `confirm="false"` is a
+        # non-empty string, and a call that meant "just look" erases every session.
+        # The elements are state classes and session ids, so the shared wording
+        # ("a URL string") would send a caller looking for a URL to put in clear=.
+        token_hint = ("a state class (cache|engine_state|sessions|watch|recipes|cred_defaults|all) "
+                      "or an open session id")
+        for key in ("show", "clear"):
+            out[key] = _coerce_str_list_arg(args.get(key), key,
+                                            element_hint=token_hint)
+        out["confirm"] = _coerce_bool_arg(args.get("confirm"), "confirm",
+                                          default=False)
+    elif name == "cred_defaults":
+        # The same two traps, on the two shapes that carry them: `unset="proxy"`
+        # is a string, and read raw it forgets six single-letter keys none of
+        # which exist; `show="false"` is a non-empty string, so a call that meant
+        # to forget something answers as though it had only been asked to look.
+        out["unset"] = _coerce_str_list_arg(
+            args.get("unset"), "unset",
+            element_hint="a key name (auth|cookies|proxy|profile|cdp|"
+                         "allow_private|anti_detect)")
+        if "show" in out:
+            out["show"] = _coerce_bool_arg(out.get("show"), "show", default=False)
+    elif name == "feed_read":
+        out["urls"] = _coerce_str_list_arg(args.get("urls"), "urls")
+    return out

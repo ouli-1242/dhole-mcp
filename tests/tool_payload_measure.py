@@ -59,6 +59,7 @@ import sys
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVER = REPO_ROOT / "src" / "dhole_mcp" / "server.py"
+PKG = SERVER.parent
 
 # Measured chars/token of THIS payload under cl100k_base, not a model-wide
 # constant: it is what the rough estimates here have to divide by to agree with
@@ -89,6 +90,31 @@ def find_assignment(tree: ast.Module, name: str) -> ast.AST | None:
                 if isinstance(t, ast.Name) and t.id == name:
                     return node.value
     return None
+
+
+_TREES: list[ast.Module] | None = None
+
+
+def _package_trees() -> list[ast.Module]:
+    """server.py plus every module that has been split out of it (17.0 B6).
+
+    `_TOOL_DEFS` still lives in server.py, but a description it points at may now
+    be a constant in rungs.py / quality.py / models.py. Reading only server.py
+    made such a reference unresolvable - and this script's whole contract is to
+    refuse rather than publish a payload smaller than the wire really is. The
+    fix is to look in the module the constant actually lives in, not to relax
+    the refusal.
+    """
+    global _TREES
+    if _TREES is None:
+        _TREES = []
+        for path in sorted(PKG.glob("*.py")):
+            try:
+                _TREES.append(ast.parse(path.read_text(encoding="utf-8"),
+                                        filename=str(path)))
+            except (OSError, SyntaxError):
+                continue
+    return _TREES
 
 
 def find_frozenset(tree: ast.Module, name: str) -> frozenset:
@@ -126,6 +152,11 @@ def literal_node(tree: ast.Module, name: str):
     isn't a literal, because silently skipping it would understate the wire.
     """
     constants = _string_constants(tree)
+    for other in _package_trees():
+        if other is tree:
+            continue
+        for key, value in _string_constants(other).items():
+            constants.setdefault(key, value)
     unresolved: list[str] = []
 
     class _Inline(ast.NodeTransformer):
@@ -135,7 +166,13 @@ def literal_node(tree: ast.Module, name: str):
             unresolved.append(node.id)
             return node
 
-    node = _Inline().visit(find_assignment(tree, name))
+    node = find_assignment(tree, name)
+    if node is None:
+        for other in _package_trees():
+            node = find_assignment(other, name)
+            if node is not None:
+                break
+    node = _Inline().visit(node)
     ast.fix_missing_locations(node)
     if unresolved:
         raise SystemExit(
