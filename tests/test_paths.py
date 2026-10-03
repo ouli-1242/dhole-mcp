@@ -3,7 +3,8 @@
 14.3 之前 dhole 把状态写在 ``~/.dhole/``、把缓存和模型写在 ``~/.dhole_mcp_cache/``，
 「这个工具在我机器上留下了什么」要两个目录才答得全。17.0 起只有一个根
 （``dhole_mcp.paths`` 是唯一事实来源），而把旧根搬进来的那次迁移也删了 —— 见
-``TestTheOldRootIsLeftAlone``。唯一留下的迁移是同一个根里的一次模型目录改名。
+``TestTheOldRootIsLeftAlone``。B8 把模型注册表收敛成一颗之后，最后一次迁移（同一个根
+里的模型目录改名）也随之下线：它搬去的目的地名已不再是模型键。**现在一条迁移都不剩。**
 """
 
 from pathlib import Path
@@ -109,9 +110,9 @@ class TestTheOldRootIsLeftAlone:
         所以它们是最会复发的地方。
         """
         legacy = fake_home / ".dhole_mcp_cache"
-        (legacy / "models" / "ms-marco").mkdir(parents=True)
+        (legacy / "models" / "bge-zh").mkdir(parents=True)
         (legacy / "cache.db").write_bytes(b"sqlite")
-        (legacy / "models" / "ms-marco" / "model.onnx").write_bytes(b"x")
+        (legacy / "models" / "bge-zh" / "model.onnx").write_bytes(b"x")
         before = sorted(q.as_posix() for q in legacy.rglob("*"))
 
         from dhole_mcp import cache, reranker
@@ -120,42 +121,6 @@ class TestTheOldRootIsLeftAlone:
         reranker.model_present()
         assert sorted(q.as_posix() for q in legacy.rglob("*")) == before,             "旧根被搬走或删掉了：那次迁移又回来了"
         assert not (fake_home / ".dhole" / "cache.db").exists(),             "新根里凭空多出一个从旧根搬来的 cache.db"
-
-
-class TestTheOldModelDirNameStillRenames:
-    """留着的那一半迁移：14.4 之前模型目录按仓库名（msmarco-minilm-l6-v2）落盘，
-    注册表键是 ms-marco。同一个目录树里的一次改名，成本是几行 os.replace，换掉的是
-    一次 90MB 重下 —— 有些网络下那一下载就永久失败。"""
-
-    def test_a_lone_legacy_dir_is_renamed_not_copied(self, fake_home):
-        old = paths.models_dir() / "msmarco-minilm-l6-v2"
-        old.mkdir(parents=True)
-        (old / "model.onnx").write_bytes(b"bytes")
-        paths.rename_legacy_model_dirs()
-        assert (paths.models_dir() / "ms-marco" / "model.onnx").read_bytes() == b"bytes"
-        assert not old.exists()
-
-    def test_a_collision_destroys_nothing(self, fake_home):
-        """两边都在时谁也不许被删：宁肯留一个重复目录，也不替用户决定留哪份。"""
-        base = paths.models_dir()
-        old, new_dir = base / "msmarco-minilm-l6-v2", base / "ms-marco"
-        old.mkdir(parents=True)
-        new_dir.mkdir(parents=True)
-        (old / "model.onnx").write_bytes(b"old")
-        (new_dir / "model.onnx").write_bytes(b"new")
-        paths.rename_legacy_model_dirs()
-        assert (old / "model.onnx").read_bytes() == b"old"
-        assert (new_dir / "model.onnx").read_bytes() == b"new"
-
-    def test_the_reranker_lookup_runs_it(self, fake_home, monkeypatch):
-        """改名必须挂在真实的查表路径上，否则它是一条没人调用的历史。"""
-        from dhole_mcp import reranker
-
-        ran = []
-        monkeypatch.setattr(paths, "rename_legacy_model_dirs",
-                            lambda: ran.append(1))
-        reranker.model_present()
-        assert ran, "model_present 不再改名，14.3 的模型目录就只是躺着"
 
 
 class TestDholeHomeOverride:
@@ -185,11 +150,6 @@ class TestDholeHomeOverride:
         monkeypatch.setenv("DHOLE_HOME", "~/dhole-x")
         assert "~" not in str(paths.home())
         assert str(paths.home()).endswith("dhole-x")
-
-    def test_migration_targets_the_custom_home(self, monkeypatch, tmp_path):
-        """旧目录迁移的目的端必须是 home()，否则设了 DHOLE_HOME 反而丢缓存。"""
-        monkeypatch.setenv("DHOLE_HOME", str(tmp_path / "dh"))
-        assert (tmp_path / "dh") == paths.home()
 
 
 class TestPrivateModeHelpers:

@@ -4,9 +4,12 @@ Runs a cross-encoder (query, title+snippet) -> relevance score, in-process via
 ONNX. It answers "does this result actually match the query?" — something the
 source engines cannot tell you, since each engine only returns its own order.
 
-Three models are registered (see MODELS below); the ACTIVE one is chosen by
-``~/.dhole/config/reranker.json`` (``{"model": "<name>"}``), default
-``bge-zh``. Unknown names are rejected, never silently mapped.
+17.0 B8 把注册表收敛成**一颗**：``bge-zh``（见 MODELS）。此前那套「三颗选一颗 +
+``~/.dhole/config/reranker.json``」的选择机制整个下掉了 —— 换型评测（集 B）量出
+候选 ``gte-multilingual-base`` 与它在 nDCG 上分差不明显、CPU 上还慢 2.3×，于是落
+到「只留一个语义模型，不给用户选」。老机器上遗留的 ``reranker.json`` 仍会被读一眼：
+**不静默换掉打分器**，只在日志里说明你选的那个名字不再起作用（见
+``_legacy_selection``）。
 
 Graceful fallback: if onnxruntime/tokenizers are missing (lean install) or the
 model download fails / is offline, `get_reranker()` returns None and the caller
@@ -18,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import math
 import os
@@ -82,45 +86,11 @@ MODELS: dict[str, RerankerModel] = {
                 "2059d8ef0b6e935b4845e11b38c9af9e9e2e7b91f69fc99efe03254e0a7da8d3",
         },
     ),
-    # Cross-lingual MiniLM distilled from XLM-R Large on mMARCO (incl. Chinese),
-    # fp32. Apache-2.0, ~117M params / ~450MB. Only worth it when you want the
-    # best multilingual ranking and have the bandwidth for the heavier file.
-    "zh-full": RerankerModel(
-        name="zh-full",
-        repo="cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
-        rev="1427fd652930e4ba29e8149678df786c240d8825",
-        relpaths={
-            "model.onnx": "onnx/model.onnx",
-            "tokenizer.json": "tokenizer.json",
-            "vocab.txt": "sentencepiece.bpe.model",
-        },
-        approx_bytes=450_000_000,
-        min_bytes=300_000_000,
-        label="cross-lingual MiniLM fp32 (mMARCO, incl. Chinese) - heavier",
-        # 未填：本机没下载过这个模型，拿不到可用于核对的字节 —— 机制对它是惰性的
-        # （只做自记哈希防损坏）。填之前必须先在真机上下一份并逐位核对。
-    ),
-    # The 14.x default until now: English MS MARCO MiniLM. Apache-2.0,
-    # ~22.7M params / ~91MB ONNX. Kept for EN-heavy users + backward compat.
-    "ms-marco": RerankerModel(
-        name="ms-marco",
-        repo="cross-encoder/ms-marco-MiniLM-L-6-v2",
-        rev="c5ee24cb16019beea0893ab7796b1df96625c6b8",
-        relpaths={
-            "model.onnx": "onnx/model.onnx",
-            "tokenizer.json": "tokenizer.json",
-            "vocab.txt": "vocab.txt",
-        },
-        approx_bytes=91_000_000,
-        min_bytes=50_000_000,
-        label="English MS MARCO MiniLM (legacy default)",
-        # 同上（仓库已改名：ms-marco-MiniLM-L-6-v2 -> ...L6-v2，rev 保留）。与本机
-        # 下载的 onnx/model.onnx（91,011,230 字节）逐位核对一致（2026-09-21）。
-        publisher_sha256={
-            "model.onnx":
-                "5d3e70fd0c9ff14b9b5169a51e957b7a9c74897afd0a35ce4bd318150c1d4d4a",
-        },
-    ),
+    # 17.0 B8：注册表收敛成一颗。集 B（C-MTEB/T2Reranking，300 题）量出候选
+    # `gte-multilingual-base` 与它在 nDCG 上分差不明显（Δ+0.0030，95%CI 跨 0），
+    # 而 CPU 上慢 2.3× —— 换不到质量还倒贴时间，所以不换。落点是 §3-4
+    # 「只留一个语义模型，不给用户选」：另两颗（`zh-full` / `ms-marco`）连同
+    # `~/.dhole/config/reranker.json` 一起下线。原始数据见 `evals/README.md`。
 }
 
 DEFAULT_MODEL = "bge-zh"
@@ -133,24 +103,37 @@ MODEL_REV = MODELS[DEFAULT_MODEL].rev
 MODEL_DIR = paths.models_dir() / DEFAULT_MODEL
 
 
-def active_model() -> RerankerModel:
-    """The model the search path actually uses: config file wins, else default.
+def _legacy_selection() -> str:
+    """读一眼 16.x 遗留的 ``~/.dhole/config/reranker.json``（如果还在）。
 
-    Unknown names in the config are IGNORED (with a warning), never mapped:
-    silently scoring with the wrong model would be worse than scoring with the
-    default one, and the note tells the user exactly what happened.
+    17.0 把模型选择下掉了，这个文件不再选任何东西。留这个函数只有一个目的：让
+    ``active_model`` 能**说明**「你当年选的那个名字不再起作用」，而不是静默把打分器
+    换掉。文件不在 / 读不动 / 没有 ``model`` 键 —— 一律返回空串（沉默是正确结果）。
     """
-    from dhole_mcp import reranker_config
+    try:
+        p = paths.home() / "config" / "reranker.json"
+        return (json.loads(p.read_text(encoding="utf-8")).get("model") or "").strip()
+    except Exception:
+        return ""
 
-    name = reranker_config.get_selected() or DEFAULT_MODEL
-    model = MODELS.get(name)
-    if model is None:
+
+def active_model() -> RerankerModel:
+    """The one registered model — 17.0 collapsed the registry to a single entry.
+
+    Kept as a function (not a constant) so ``MODEL_DIR``-style import-time
+    snapshots and the live answer stay distinguishable, and so the legacy-config
+    notice has a home. A ``~/.dhole/config/reranker.json`` left over from 16.x no
+    longer selects anything — but we say so instead of silently switching the
+    scorer the machine was calibrated against.
+    """
+    legacy = _legacy_selection()
+    if legacy and legacy != DEFAULT_MODEL:
         logger.warning(
-            f"reranker config names unknown model {name!r} - using default "
-            f"{DEFAULT_MODEL}. Known: {', '.join(sorted(MODELS))}."
+            f"~/.dhole/config/reranker.json names {legacy!r}, but 17.0 removed "
+            f"model selection; using the only registered model {DEFAULT_MODEL!r}. "
+            "Delete that file to silence this."
         )
-        return MODELS[DEFAULT_MODEL]
-    return model
+    return MODELS[DEFAULT_MODEL]
 
 
 def active_model_dir() -> Path:
@@ -332,8 +315,6 @@ def _reject(reason: str) -> None:
 
 def _ensure_model() -> Optional[tuple[Path, Path]]:
     """Ensure model.onnx + tokenizer.json are present + valid. Returns paths or None."""
-    # 14.4 之前这个模型是按仓库名落盘的；先改名，再决定要不要下载。
-    paths.rename_legacy_model_dirs()
     model = active_model()
     model_dir = active_model_dir()
     onnx = model_dir / "model.onnx"
@@ -499,11 +480,12 @@ def rerank(query: str, results: list, *, min_relevance: float = 0.0,
     pairs sorted desc, or None if the reranker is unavailable (caller falls back
     to consensus + engine-position order).
 
-    Scores are min-max normalized across this result set to 0..1. ms-marco
-    sigmoid saturates (~1.0 for any clearly-relevant snippet), so raw scores
-    cluster tightly and can't discriminate among good results; normalizing
-    restores meaningful spread (top=1.0, worst=0.0) for the relevance_score field
-    + tier derivation. Ranking ORDER is unchanged (normalization is monotonic).
+    Scores are min-max normalized across this result set to 0..1. The
+    cross-encoder sigmoid saturates (~1.0 for any clearly-relevant snippet), so
+    raw scores cluster tightly and can't discriminate among good results;
+    normalizing restores meaningful spread (top=1.0, worst=0.0) for the
+    relevance_score field + tier derivation. Ranking ORDER is unchanged
+    (normalization is monotonic).
 
     ``min_relevance`` (G5) drops every pair scoring below it on that NORMALIZED
     scale, so a query whose engine results are mostly off-topic does not return
@@ -518,16 +500,16 @@ def rerank(query: str, results: list, *, min_relevance: float = 0.0,
 
     ``min_raw_relevance`` is the floor on the raw cross-encoder sigmoid instead,
     and that is what makes "nothing in this round is relevant" expressible.
-    Measured on live search results (bge-zh, the model a multilingual/Chinese
-    query selects): an off-topic document scores ~1e-4 (p90 0.0001 across 621
+    Measured on live search results (bge-zh, the only registered model):
+    an off-topic document scores ~1e-4 (p90 0.0001 across 621
     cross-topic pairs, max 0.0104) while an on-topic one sits at 0.93-0.9996,
     so the two populations barely touch — the junk tail of engine results is the
     ~0.0001 band, not a low percentile of the good ones. Same-topic-different-
     aspect pairs (the hard case) land at p50 0.005 / p90 0.18, above which a
     floor stops being safe, which is why this is opt-in with no default value
     baked in and why 0.1 is the recommended starting point rather than 0.5.
-    Distributions differ per model, so a number calibrated on one is not
-    automatically right for the other: ``stats`` reports what this round actually
+    Distributions are model-specific, so a number calibrated on one model is not
+    automatically right for another: ``stats`` reports what this round actually
     spanned so a caller can calibrate instead of guessing.
 
     ``stats`` (optional dict) is filled with ``{"raw_min", "raw_max", "kept",
@@ -594,7 +576,6 @@ def model_present() -> bool:
     get_reranker() will NOT trigger a download). Used by startup prewarm to warm
     the ONNX session only when it is free to do so.
     """
-    paths.rename_legacy_model_dirs()
     model = active_model()
     onnx = active_model_dir() / "model.onnx"
     tokjson = active_model_dir() / "tokenizer.json"

@@ -350,7 +350,7 @@ def capabilities() -> list[tuple[str, str, bool]]:
         ready = ((d / "model.onnx").exists()
                  and (d / "tokenizer.json").exists())
     except Exception:
-        caps.append(("neural rerank", "config unreadable - check ~/.dhole/config/reranker.json", False))
+        caps.append(("neural rerank", "registry unreadable - reinstall dhole-mcp", False))
         _append_engine_yield(caps)
         return caps
     if ready:
@@ -364,7 +364,7 @@ def capabilities() -> list[tuple[str, str, bool]]:
             "neural rerank",
             f"{model.name} not downloaded yet "
             f"(~{model.approx_bytes // 1_000_000}MB, resumable; "
-            "~/.dhole/config/reranker.json switches model)",
+            "the first neural search fetches it)",
             False,
         ))
 
@@ -894,7 +894,7 @@ def _append_rerank_model(checks) -> None:
         checks.append((
             "rerank model", "fail",
             f"registry unreadable: {type(exc).__name__}"[:60],
-            "check ~/.dhole/config/reranker.json",
+            "reinstall dhole-mcp (registry unreadable)",
         ))
         return
     if not (d / "model.onnx").exists():

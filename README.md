@@ -175,7 +175,7 @@ dhole doctor                       # 12 项体检：起一次 server，再跑一
 
 **日期**只有 day / week / month / year 四档：`after=<日期>` 会被放宽到最窄的覆盖档，`before` 直接拒绝——按日期取增量用 `feed_read(since=)`。
 
-**重排模型**：本地 cross-encoder，首次神经搜索自动下到 `~/.dhole/models/`；`bge-zh`（默认，~279MB）/ `zh-full`（~450MB）/ `ms-marco`（~91MB）；换模型改 `~/.dhole/config/reranker.json`。`min_raw_relevance` 判断「这一轮有没有相关结果」，起点 **0.1**（实测离题 ~1e-4、勉强 0.2、真命中 0.93+），换模型要重新校准。离线复用：拷 `models/<名字>/` 整个目录。
+**重排模型**：本地 cross-encoder，只有一颗 —— `bge-zh`（中英双语 int8，~279MB），首次神经搜索自动下到 `~/.dhole/models/bge-zh/`。**不给用户选**：17.0 换型评测（集 B）量出候选与它分差不明显、CPU 上还更慢，于是三颗收敛成一颗，`~/.dhole/config/reranker.json` 一并下线（老机器上若还留着，首次取模型时会在日志里说明它不再起作用）。`min_raw_relevance` 判断「这一轮有没有相关结果」，起点 **0.1**（实测离题 ~1e-4、勉强 0.2、真命中 0.93+）。离线复用：拷 `models/bge-zh/` 整个目录。
 
 ## 故障排查
 
@@ -208,7 +208,7 @@ dhole doctor                       # 12 项体检：起一次 server，再跑一
 | `cache.db` | 抓到的正文（明文 SQLite），TTL 默认 1 小时（docs 24h、article 6h） |
 | `sessions.db` | 会话 cookie jar，**含 cookie 值（=凭据）**，默认 24 小时过期 |
 | `profiles/<name>/` | 持久浏览器 profile，**含登录态**，删目录即注销 |
-| `models/<model>/`、`config/reranker.json` | 重排模型与选择 |
+| `models/bge-zh/` | 重排模型（唯一一颗） |
 | `config.json` | `dhole config set` 写的旋钮；**secret 同样明文落盘**，不想进文件就继续用 env 块 |
 | `usage.jsonl`、引擎状态 | 调用与写审计、引擎冷却 |
 

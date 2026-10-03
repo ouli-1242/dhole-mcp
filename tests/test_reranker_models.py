@@ -1,48 +1,55 @@
-"""Reranker model registry + selection: which cross-encoder scores search
-results, and how the choice is read and validated.
+"""Reranker model registry: which cross-encoder scores search results.
 
-The registry itself lives in ``reranker.MODELS`` (that module owns ONNX loading,
-so it owns the model list too). This file covers the parts a user touches:
-``~/.dhole/config/reranker.json``, the default, and the fact that an unknown
-name is never silently mapped onto some other model.
+The registry lives in ``reranker.MODELS`` (that module owns ONNX loading, so it
+owns the model list too). 17.0 B8 collapsed it to a **single** entry — the
+semantic-swap evaluation (set B) found the candidate ``gte-multilingual-base``
+indistinguishable from ``bge-zh`` on nDCG (Δ+0.0030, 95% CI spans 0) while being
+2.3× slower on CPU, so "choose a model" was removed rather than kept as a lever
+that buys nothing.
 
-17.0: ``dhole model`` (the CLI verb) and ``reranker_config.set_selected`` are
-gone, so this file is written only by hand -- which makes the READ side the
-place where a typo has to be caught.
+This file covers what is left of the user-facing surface: the default, the fact
+that the registry is one model by design, and the one honest leftover — a
+``~/.dhole/config/reranker.json`` written by a 16.x machine no longer selects
+anything, but we **say so** instead of silently switching the scorer.
 """
-
-import json
-from pathlib import Path
 
 import pytest
 
-from dhole_mcp import reranker, reranker_config
+from dhole_mcp import reranker
 
 
 @pytest.fixture
-def config_file(tmp_path, monkeypatch):
-    """Point the config at a temp file (never the real ~/.dhole)."""
-    path = tmp_path / "reranker.json"
-    monkeypatch.setattr(reranker_config, "_path", lambda: path)
-    return path
+def legacy_config(tmp_path, monkeypatch):
+    """Point ``~/.dhole`` at a temp dir; return the legacy config file path.
 
-
-def _select(config_file, name: str) -> None:
-    """Write the selection file the way a user now can only do it by hand.
-
-    ``set_selected`` used to be the writer; with the CLI verb deleted the file
-    stays as the documented manual lever, so the test writes it literally rather
-    than keeping a fake API alive.
+    ``_legacy_selection`` reads ``paths.home() / config / reranker.json``, so
+    redirecting ``home`` is the whole isolation this needs.
     """
-    config_file.parent.mkdir(parents=True, exist_ok=True)
-    config_file.write_text(json.dumps({"model": name}), encoding="utf-8")
+    home = tmp_path / ".dhole"
+    monkeypatch.setattr(reranker.paths, "home", lambda: home)
+    return home / "config" / "reranker.json"
 
 
-def test_default_model_is_the_chinese_capable_one(config_file):
-    """Default (no config file) must be the cross-lingual model, not the EN one."""
+def _write_legacy(path, model: str) -> None:
+    """Write the 16.x selection file the way a user can only do it by hand now."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"model": "%s"}' % model, encoding="utf-8")
+
+
+def test_default_model_is_the_chinese_capable_one():
+    """Default must be the cross-lingual model, not an English-only one."""
     assert reranker.DEFAULT_MODEL == "bge-zh"
     assert reranker.active_model().name == "bge-zh"
-    assert not config_file.exists()
+
+
+def test_registry_is_a_single_model():
+    """收敛是有意的产品决定，不是某次重构漏掉的入口。
+
+    留一颗以上的话，``min_raw_relevance`` 的标定值就得按模型分叉 —— 而集 B 已经
+    证明那颗候选换不来质量。所以"不给选"是结论，不是妥协。
+    """
+    assert set(reranker.MODELS) == {"bge-zh"}
+    assert reranker.DEFAULT_MODEL in reranker.MODELS
 
 
 def test_registry_entries_are_complete():
@@ -57,62 +64,65 @@ def test_registry_entries_are_complete():
         assert model.label
 
 
-def test_config_selects_the_model(config_file):
-    assert reranker.active_model().name == "bge-zh"
-    _select(config_file, "ms-marco")
-    assert reranker.active_model().name == "ms-marco"
-    assert reranker.active_model_dir() == \
-        reranker.paths.models_dir() / "ms-marco"
+# ─── 16.x 遗留的选择文件：不再选，但不静默 ─────────────────────────────────
 
+def test_legacy_config_warns_but_does_not_switch(legacy_config, caplog):
+    """手写过的 reranker.json 不再选模型，但**不许静默换掉打分器**。
 
-def test_there_is_no_writer_api_left(config_file):
-    """``set_selected`` 随 ``dhole model`` 一起删：剩下的唯一入口是用户手写这个文件。
-
-    留一个"只有测试在用"的写函数，等于给下一条 CLI 动词留好脚手架。
+    一台 16.x 上选了 ``ms-marco`` 的机器升上来，唯一能证明它"被换掉了"的就是这句
+    日志。删掉它 = 让升级变成一次看不见的变更。
     """
-    assert not hasattr(reranker_config, "set_selected")
-
-
-def test_unknown_name_in_file_falls_back_to_default(config_file, caplog):
-    """A typo in the file must not silently pick a different model."""
-    config_file.write_text('{"model": "not-a-model"}', encoding="utf-8")
+    _write_legacy(legacy_config, "ms-marco")
     with caplog.at_level("WARNING", logger="dhole-mcp.reranker"):
         assert reranker.active_model().name == "bge-zh"
-    assert "unknown model" in caplog.text
-    assert "bge-zh" in caplog.text
+    assert "ms-marco" in caplog.text
+    assert "removed" in caplog.text and "bge-zh" in caplog.text
 
 
-def test_missing_or_corrupt_config_uses_default(config_file):
-    assert reranker.active_model().name == "bge-zh"      # missing file
-    config_file.write_text("not json at all", encoding="utf-8")
-    assert reranker.active_model().name == "bge-zh"      # corrupt file
-    config_file.write_text('{"model": "   "}', encoding="utf-8")
-    assert reranker.active_model().name == "bge-zh"      # blank value
+def test_naming_the_default_is_silent(legacy_config, caplog):
+    """文件里写的就是那颗唯一的模型 —— 没有"被换掉"这回事，不该吵。"""
+    _write_legacy(legacy_config, "bge-zh")
+    with caplog.at_level("WARNING", logger="dhole-mcp.reranker"):
+        assert reranker.active_model().name == "bge-zh"
+    assert not caplog.text
 
 
-def test_model_present_follows_the_active_model(config_file, tmp_path, monkeypatch):
-    """present() must describe the SELECTED model, not whichever files exist."""
+def test_missing_corrupt_or_blank_config_is_silent(legacy_config, caplog):
+    """读不动 / 不是 JSON / 值是空白 —— 都当"没有这个文件"，沉默是正确结果。"""
+    with caplog.at_level("WARNING", logger="dhole-mcp.reranker"):
+        assert reranker.active_model().name == "bge-zh"       # missing file
+    legacy_config.parent.mkdir(parents=True, exist_ok=True)
+    legacy_config.write_text("not json at all", encoding="utf-8")
+    with caplog.at_level("WARNING", logger="dhole-mcp.reranker"):
+        assert reranker.active_model().name == "bge-zh"       # corrupt file
+    legacy_config.write_text('{"model": "   "}', encoding="utf-8")
+    with caplog.at_level("WARNING", logger="dhole-mcp.reranker"):
+        assert reranker.active_model().name == "bge-zh"       # blank value
+    assert not caplog.text
+
+
+def test_active_model_dir_is_under_models_dir(tmp_path, monkeypatch):
     models_dir = tmp_path / "models"
     monkeypatch.setattr(reranker.paths, "models_dir", lambda: models_dir)
+    assert reranker.active_model_dir() == models_dir / "bge-zh"
 
-    def _populate(name):
-        model = reranker.MODELS[name]
-        d = models_dir / name
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "model.onnx").write_bytes(b"x" * model.min_bytes)
-        (d / "tokenizer.json").write_bytes(b"{}")
 
-    _populate("bge-zh")
+def test_model_present_uses_the_single_model(tmp_path, monkeypatch):
+    """present() 描述的是那颗唯一的模型，不是"随便哪些文件在"。"""
+    models_dir = tmp_path / "models"
+    monkeypatch.setattr(reranker.paths, "models_dir", lambda: models_dir)
+    model = reranker.MODELS["bge-zh"]
+    d = models_dir / "bge-zh"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "model.onnx").write_bytes(b"x" * model.min_bytes)
+    (d / "tokenizer.json").write_bytes(b"{}")
     assert reranker.model_present() is True
-    _populate("ms-marco")
-    _select(config_file, "ms-marco")
-    assert reranker.model_present() is True
-    # A truncated active model is NOT "present" (min_bytes floor).
-    (models_dir / "ms-marco" / "model.onnx").write_bytes(b"x" * 10)
+    # 截断的模型不算"在"（min_bytes 下限）。
+    (d / "model.onnx").write_bytes(b"x" * 10)
     assert reranker.model_present() is False
 
 
-def test_capabilities_names_the_active_model(config_file, tmp_path, monkeypatch):
+def test_capabilities_names_the_single_model(tmp_path, monkeypatch):
     from dhole_mcp import updater
 
     monkeypatch.setattr(reranker.paths, "models_dir", lambda: tmp_path / "models")
@@ -120,47 +130,7 @@ def test_capabilities_names_the_active_model(config_file, tmp_path, monkeypatch)
     caps = {label: (state, ok) for label, state, ok in updater.capabilities()}
     state, ok = caps["neural rerank"]
     assert "bge-zh" in state and ok is False       # not downloaded yet
-    _select(config_file, "ms-marco")
-    caps = {label: (state, ok) for label, state, ok in updater.capabilities()}
-    assert "ms-marco" in caps["neural rerank"][0]
 
-
-def test_legacy_model_dir_is_renamed_not_redownloaded(tmp_path, monkeypatch):
-    """14.x stored the EN model under the repo-derived dir name. Renaming keeps
-    ~90MB of already-downloaded weights instead of re-fetching them."""
-    models_dir = tmp_path / "models"
-    legacy = models_dir / "msmarco-minilm-l6-v2"
-    legacy.mkdir(parents=True)
-    (legacy / "model.onnx").write_bytes(b"weights")
-    monkeypatch.setattr(reranker.paths, "models_dir", lambda: models_dir)
-
-    reranker.paths.rename_legacy_model_dirs()
-
-    assert not legacy.exists()
-    assert (models_dir / "ms-marco" / "model.onnx").read_bytes() == b"weights"
-
-
-def test_rename_never_overwrites_an_existing_dir(tmp_path, monkeypatch):
-    models_dir = tmp_path / "models"
-    legacy = models_dir / "msmarco-minilm-l6-v2"
-    legacy.mkdir(parents=True)
-    (legacy / "model.onnx").write_bytes(b"old")
-    target = models_dir / "ms-marco"
-    target.mkdir(parents=True)
-    (target / "model.onnx").write_bytes(b"new")
-    monkeypatch.setattr(reranker.paths, "models_dir", lambda: models_dir)
-
-    reranker.paths.rename_legacy_model_dirs()
-
-    assert (target / "model.onnx").read_bytes() == b"new"
-    assert legacy.is_dir(), "旧目录未被搬走时必须保留"
-
-
-def test_config_path_is_inside_the_dhole_home(monkeypatch, tmp_path):
-    """配置文件也属于「工具在我机器上留下的东西」，必须落在同一个根下。"""
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    assert reranker_config._path() == \
-        tmp_path / ".dhole" / "config" / "reranker.json"
 
 # ─── 发布方摘要校验（真实性）与自记哈希（仅完整性）─────────────────────────
 
@@ -182,7 +152,6 @@ def tiny_env(monkeypatch, tmp_path):
     holder = {"model": _tiny_model()}
     monkeypatch.setattr(reranker, "active_model", lambda: holder["model"])
     monkeypatch.setattr(reranker, "active_model_dir", lambda: model_dir)
-    monkeypatch.setattr(reranker.paths, "rename_legacy_model_dirs", lambda: None)
     monkeypatch.setattr(reranker, "_reranker_unavailable_reason", "")
     # 与摘要逻辑无关的尺寸下限（真模型 50MB）放宽，否则测试要先写出 50MB 文件
     monkeypatch.setattr(reranker, "MIN_MODEL_BYTES", 1)
@@ -245,9 +214,9 @@ def test_registry_digests_are_well_formed_and_verifiable():
     """注册表里填了的摘要必须能核对：64 位小写十六进制。
 
     值本身来自仓库元数据（LFS oid），没法在离线测试里重新推导 —— 这里钉的是"别写坏
-    格式"，以及"该字段的用途只有一个"：填错一个字符 = 所有下载都被拒用。默认模型必须
-    有摘要（它是真实性的唯一来源）；没有摘要的模型只许是那些**从未在本机核对过**的
-    （目前只有 zh-full）。
+    格式"，以及"该字段的用途只有一个"：填错一个字符 = 所有下载都被拒用。收敛成单模型
+    后，在册的每一颗都必须有摘要 —— 它是真实性的唯一来源（此前 zh-full 留空是因为
+    从未在本机下载过、无从核对；那颗已随 B8 下线）。
     """
     import re
     hex64 = re.compile(r"^[0-9a-f]{64}$")
@@ -255,12 +224,8 @@ def test_registry_digests_are_well_formed_and_verifiable():
         for fname, digest in (m.publisher_sha256 or {}).items():
             assert hex64.match(digest), f"{name}/{fname} 的摘要不是 64 位十六进制: {digest!r}"
             assert fname in m.relpaths, f"{name} 的摘要指向一个不下载的文件: {fname}"
-    assert reranker.MODELS["bge-zh"].publisher_sha256, \
-        "默认模型的摘要不能空着 —— 空了等于没有真实性校验"
-    assert set(reranker.MODELS) - {"zh-full"} == {
-        n for n, m in reranker.MODELS.items() if m.publisher_sha256}, \
-        "只有 zh-full 允许留空（未在本机下载过，无从核对）；其余模型请按 raw LFS " \
-        "指针取值并逐位核对后填上"
+        assert m.publisher_sha256, \
+            f"{name} 的摘要不能空着 —— 空了等于没有真实性校验"
 
 
 def test_vocab_txt_is_fetched_best_effort(tiny_env, monkeypatch):

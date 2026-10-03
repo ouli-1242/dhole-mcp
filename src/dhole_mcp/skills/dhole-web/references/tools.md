@@ -118,7 +118,7 @@ content is not fully covered by the general engines) and **encyclopedia lookups 
 structured answers** (`wikipedia` / `grokipedia` / `baidu_baike`; the general
 engines still return those pages, they are just no longer queried as APIs).
 
-**Ranking**: a local cross-encoder reranks (bge-zh by default); while it's still loading in a fresh process, `rerank_mode=merge` (consensus ordering, slightly weaker) — one retry restores `neural`. `relevance_score` is normalized (top is always 1.0); `min_raw_relevance` is what can judge "the whole round is irrelevant" — the raw-score distribution (bge-zh, measured): off-topic ~1e-4, marginal ~0.2, true hits 0.93+. **Start at 0.1**; hard negatives on the same topic sit at p90 0.18, so higher starts killing good results. Recalibrate after switching models by hand (`~/.dhole/config/reranker.json`). `fetch_hint` reports each round's raw-score span. `engines_consensus` counts independent index FAMILIES (6 total — `bing`, `bing_global` and `duckduckgo` are one Bing-family entry, so 8 engines reach 6 families), not raw hits.
+**Ranking**: a local cross-encoder reranks (the single registered model, `bge-zh`); while it's still loading in a fresh process, `rerank_mode=merge` (consensus ordering, slightly weaker) — one retry restores `neural`. `relevance_score` is normalized (top is always 1.0); `min_raw_relevance` is what can judge "the whole round is irrelevant" — the raw-score distribution (bge-zh, measured): off-topic ~1e-4, marginal ~0.2, true hits 0.93+. **Start at 0.1**; hard negatives on the same topic sit at p90 0.18, so higher starts killing good results. There is no model to switch to (17.0 collapsed the registry to one), so this calibration is fixed. `fetch_hint` reports each round's raw-score span. `engines_consensus` counts independent index FAMILIES (6 total — `bing`, `bing_global` and `duckduckgo` are one Bing-family entry, so 8 engines reach 6 families), not raw hits.
 
 **Dates**: only `bing` / `bing_global` / `brave` / `duckduckgo` (keyed `bocha` / `tavily`
 too) accept dates, and only as day/week/month/year presets. `after=<date>` is widened to the narrowest preset covering the window (`date_filter` reports what was sent and which engines were never asked); `before` is rejected outright — search results carry no publish dates, so "older-than" is both unaskable and unverifiable. Date-bounded increments belong to `feed_read(since=)`. There is **no `total_estimate`** — do not look for it, do not invent one.
@@ -192,8 +192,7 @@ What comes back is **the redacted half**: `auth` as `{type, username}`, cookies 
 |---|---|
 | `cache.db` | Fetched body text (plaintext SQLite), TTL 1h by default (docs auto-raised to 24h, article 6h) |
 | `sessions.db` | Cookie jar, **contains cookie values = credentials**, 24h expiry |
-| `models/<name>/` | Rerank models (copy the whole directory for offline reuse) |
-| `config/reranker.json` | Rerank model selection |
+| `models/bge-zh/` | The rerank model — the only one (copy the whole directory for offline reuse) |
 | `tasks.db` | Recorded recipes (`url` + `actions`) and watch baselines (page text). **No credentials** — a recipe stores the chain, never a session id |
 | `identity.db` | The defaults `cred_defaults` stored: proxy, profile, CDP endpoint, private hosts, anti-detect rung, and host-scoped `auth` / `cookies`. **Contains credential values** — `sys_state` and every response show names only |
 | `usage.jsonl` | With `DHOLE_USAGE_LOG=1`: call log (tool / duration / redacted errors) plus the audit channel — attach events, HTTP writes (non-GET), browser submits (names and outcome only, never parameter values) |

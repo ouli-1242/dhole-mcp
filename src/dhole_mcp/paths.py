@@ -29,11 +29,8 @@ import a third-party dependency.
 
 from __future__ import annotations
 
-import logging
 import os
 from pathlib import Path
-
-logger = logging.getLogger("dhole-mcp.paths")
 
 _HOME_DIR_NAME = ".dhole"
 
@@ -47,8 +44,8 @@ def home() -> Path:
     the location used to be unmovable. ``DHOLE_HOME`` also lets a test or a
     sandbox point everything at a throwaway directory.
 
-    The pre-14.3 migration below targets this same function, so a custom home
-    receives the migrated cache instead of a fresh ``~/.dhole``.
+    (17.0 B2 deleted the pre-14.3 cache migration, so a custom home is now
+    exactly what it says: nothing is folded in from ``~/.dhole_mcp_cache``.)
     """
     raw = (os.environ.get("DHOLE_HOME") or "").strip()
     if raw:
@@ -133,38 +130,5 @@ def profiles_dir() -> Path:
     profile ACL under the user's home directory is the real boundary).
     """
     return ensure_private_dir(home() / "profiles")
-
-
-def rename_legacy_model_dirs() -> None:
-    """Rename pre-registry model dirs to their registry names.
-
-    ``models/msmarco-minilm-l6-v2`` -> ``models/ms-marco`` (14.4 registry). Same
-    bytes, new key — renaming avoids re-downloading ~90MB just because the
-    directory was named after the repo instead of the model key, and on the
-    networks where huggingface.co is pinned that download is not a cost but a
-    permanent loss of neural ranking.
-
-    This is the one migration left in the product, and it is deliberately small:
-    one ``os.replace`` inside a directory dhole already owns, called from the
-    reranker's model lookup. When BOTH names exist, neither is touched - two
-    copies of a model the user downloaded twice is a disk annoyance, deleting one
-    would be a decision made on their behalf.
-    """
-    legacy_map = {"msmarco-minilm-l6-v2": "ms-marco"}
-    try:
-        base = models_dir()
-        if not base.is_dir():
-            return
-        for old, new in legacy_map.items():
-            src, dst = base / old, base / new
-            if not src.is_dir() or dst.exists():
-                continue
-            try:
-                os.replace(src, dst)
-                logger.info("renamed model dir %s -> %s", src, dst)
-            except OSError:
-                pass
-    except Exception:
-        pass
 
 

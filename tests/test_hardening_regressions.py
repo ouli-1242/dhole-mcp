@@ -284,9 +284,9 @@ class TestCacheContextIsolation:
     async def test_legacy_pdf_rows_are_purged_once_and_nothing_else_dies(self, temp_dir):
         """升级只清唯一可能受影响的子集，其余命中照旧。
 
-        整体作废缓存对这个工具有实代价：某些网络上被拦的页面再也抓不回来
-        （与 ``paths.rename_legacy_model_dirs`` 为什么存在是同一条理由 —— 有些东西
-        不是"重下一次就好"）。
+        整体作废缓存对这个工具有实代价：某些网络上被拦的页面再也抓不回来 ——
+        不是"重下一次就好"（重排模型坚持发布方 sha256 校验是同一个道理：重下还可能
+        下到不一样的东西）。
         """
         import aiosqlite
 
