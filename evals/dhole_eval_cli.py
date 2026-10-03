@@ -9,7 +9,7 @@ and those are unaffected by the plumbing.
 Every call is appended to ``--record`` as JSONL so the grader reads the server-
 side truth rather than the subagent's recollection of what it sent.
 
-  python scripts/dhole_eval_cli.py --record out/calls.jsonl '{"url":"...","nested_selector":"a"}'
+  python evals/dhole_eval_cli.py --record out/calls.jsonl '{"url":"...","nested_selector":"a"}'
 """
 
 from __future__ import annotations

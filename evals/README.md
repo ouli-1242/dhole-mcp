@@ -544,3 +544,79 @@ JSON 解析这条链是真在跑，不是被 monkeypatch 掉的。靶站复用�
 > `evals/vault_login.py` 6/6）。**仍未覆盖的**：登录流的 CAPTCHA / 2FA 分支只有文案
 > 断言（本地造不出真东西，与上面第 3 条同一原因）；`login` 的"按回车提交"分支只有
 > 单测覆盖（靶站的表单有 `<button type="submit">`，走的是元素提交那条路）。
+
+## 技能本体校准：读了说明书会不会发对这一次调用（2026-10-03 动工）
+
+上面所有基线量的是**工具**（排序、focus、验证码、冷启动）。这一把量的是另一件事：
+`src/dhole_mcp/skills/dhole-web/` 这份说明书有没有让一个 agent 在**第一次调用**就选对
+机制。一个参数可以被完整接通、被测试逐位钉住，同时被描述写成让人不敢用它 —— 前者绿
+不代表后者成立。
+
+### 尺子
+
+- `evals/dhole_eval_cli.py`：MCP 的替身。dhole 的 server 没接进跑评测的会话，所以它把
+  一份 JSON 参数喂给真实的 `MasterFetchServer._dispatch`，并原样打印客户端会收到的
+  `TextContent`。要测的是 agent 的**参数选择**，这一层管道换不掉它。每一次调用同时
+  落一份服务端 JSONL —— 评分读的是"实际发出去了什么"，不是 agent 对它的回忆。
+- `evals/skill_eval_score.py` + `src/dhole_mcp/skills/dhole-web/evals/evals.json`：
+  三档消融（A 只给连接期 schema / B +SKILL.md / C +全套 references）× 五格任务。
+- 证据与导出物落 `evals/.runtime/skill-calibration/`。
+
+### 第一轮实测（2 档 × 5 格，真实站点，非 mock）
+
+| 档 | 断言通过 | 扇出被发现 |
+|---|---|---|
+| A-bare-schema | **9/20** | 1/4 格 |
+| C-full-corpus | **15/20** | 4/4 格 |
+
+读出来的不是"分数差 6"，而是**差在哪一类**：A 档在三格干脆没用 `nested_*`，退化成
+"读首页 + 逐条手抓第二层"（正是 E-13 要消掉的那 8 次调用）；C 档五格全部用上了扇出，
+失分集中在一类断言 —— `few_calls` / `one_page_only`，即**先探针一发再扇出**。两档都这样，
+所以那不是文档缺口，是 agent 的合理保守行为：这条断言目前惩罚的是探针而不是错误做法，
+`no_hand_rolled_second_layer` 才是要守的那一条（A 档 1 格失败、C 档全过）。
+
+第一轮的 A 档有一个**作废条件必须记下来**：提示词指向的 `A.schema.json` 没被导出到
+那个路径，所以那一档实际测的是"什么说明书都没有"，不是"只给连接期描述"。它仍然是有用
+的下界（地板 = 9/20），但"A 档 vs C 档"的差值里混进了这一格混淆；下一轮先重新导出再跑。
+
+### 回答文本里读出来的四处缺陷（都已处理，都有回归钉子）
+
+1. **`force_fetcher` 在整篇读的那两条路上一直没落地。** 一个只读过参数描述的观察者点了
+   浏览器层读站酷，拿到 `nested_no_match`，于是在回答里写下"这站的专题不存在"。真相是
+   它抽的是 HTTP 层那 300 字符的壳页。根因不在新代码：`schema=` 分支直接叫
+   `_auto_escalate`，而那架梯子不认识 `force_fetcher`（针在下面的车道，整篇读永远走不到）
+   —— 所以这是 **16.0 起就在**的静默忽略，`nested_*` 复用那条路时把它变成了会被读成
+   "内容不存在"的假答案。修在 `Server._document_tier`，实测站酷 + `stealthy` →
+   `fetcher_used: stealthy`、87 元素命中 → 61 条去重链接。
+2. **去重被报成了截断。** `quotes.toscrape.com` 首页 10 个容器去重成 8 位作者，
+   `nested_max` 根本没生效，summary 却写 `truncation=nested_budget` —— 照这句话抬上限，
+   抬到多少都拿不回那 2 条。现在两笔账分开写，且顶到 ceiling 时不再指"raise nested_max"
+   这条走不通的路，改指 `web_crawl`。
+3. **仓库自己的示例在它自己的示范站点上是错的。** `examples.md` / `tools.md` 对
+   `quotes.toscrape.com` 作者页写的 `{"selector": "p", "type": "array"}` 抽回来的是
+   登录 / 版权 / 署名段落，不是简介 —— 而这两份文档是 sys_guide 的同一份语料，一个
+   "worked example" 就跟着进线上了。C 档的 agent 照抄之后拿到错数据，靠
+   troubleshooting 里"先不带 `nested_*` 读一页重推选择器"才做完。已按实测选择器改正
+   （`h3` / `span.author-born-date` / `div.author-description`，一次调用 8 条记录 8.2s），
+   并在示例旁边写下这条区分：**要点住装值的那个元素，不是它外面的标签**。
+4. **超过 30 条第二层链接之后没有 documented 的走法。** A 档与 C 档都独立报告了同一处
+   空白（"no way to resume past the ceiling with web_read alone"）。实测确认
+   `schema=` 可以与 `urls=` 组合，于是把出路写成两步：第一层用
+   `a[href^="…"]` + `attribute: href` 取名册，然后 `urls=[...]` 分批。这条也补进了
+   examples.md，并附了一格"说明书没写但确实成立"的组合规则。
+
+顺带修的尺子自身两处：`dhole_eval_cli.py` 在 GBK 控制面上 `UnicodeEncodeError`
+（三格各丢一次调用，而且长得像工具故障）—— 改成 UTF-8 + replace，并另落一份 sidecar
+原文；`resolve_nested_links` 原来在 `limit` 处早停，导致 `skipped` 只数到前 `limit` 个
+节点，两个交代性数字都偏小 —— 现在名册先收齐再切片。
+
+### 已知未覆盖
+
+- **B 档没跑**（本轮只跑两端），所以还分不清"是路由表起作用还是三篇 references 起作用"。
+  下一轮补中间档，并同时补 A 档的导出缺陷。
+- `shell-is-not-an-answer` 这一格的前提可疑：站酷的「推荐专题」在本机两个层级的 DOM 里
+  都没出现（浏览器层列出 106–113 条链接，零条专题链接）。它现在实际量的是**拿不到时
+  会不会说实话**（这一条两档都过了），不是专题扇出。要么换成一个确实会返回壳页的靶站，
+  要么把它改名成诚实性用例。
+- 扇出第二层的**内容质量**没有断言，只有 ok/empty/failed 计数 —— 空字段与错字段是两件
+  事，目前只有前者被抓到。

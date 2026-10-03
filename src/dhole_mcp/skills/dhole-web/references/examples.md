@@ -115,10 +115,9 @@ The same key exists on `web_crawl`, where it matters more: the semantic path cos
 **Two layers in one call** (the items live on their own pages, so `schema` nesting cannot reach them — `nested_selector` names the list entries on THIS page, `nested_fields` says what to read on each page they point to; 8 links by default, ceiling 30, robots checked per link):
 ```json
 {"url": "https://quotes.toscrape.com/", "nested_selector": "div.quote",
- "nested_fields": [{"name": "author", "selector": "h3"}, {"name": "bio", "selector": "p", "type": "array"}],
- "nested_max": 10}
+ "nested_fields": [{"name": "author", "selector": "h3"}, {"name": "born", "selector": "span.author-born-date"}, {"name": "description", "selector": "div.author-description"}]}
 ```
-Measured: one call, 8 grouped records, `summary` carrying `nested: 8 links expanded, rungs=2, ok 8 / empty 0 / failed 0`.
+Measured: one call, 8 grouped records, `summary` carrying `nested: 8 links expanded, rungs=2, ok 8 / empty 0 / failed 0`. Name the element that HOLDS the value: `{"name": "description", "selector": "p", "type": "array"}` on that same author page returns Login / copyright / credit lines, which is a hit that is not the answer.
 
 ```json
 // wrong — nine calls that each re-derive the links the first call already had:
@@ -126,6 +125,9 @@ Measured: one call, 8 grouped records, `summary` carrying `nested: 8 links expan
 {"url": "https://quotes.toscrape.com/author/Albert-Einstein", "schema": "..."}
 // right — the fan-out is the tool's job now, and it checks robots per link:
 {"url": "https://quotes.toscrape.com/", "nested_selector": "div.quote", "nested_fields": {"author": "h3"}}
+// more than 30 items: take the href list on the first page, then batch it — schema= combines with urls=
+{"url": "https://quotes.toscrape.com/", "schema": {"properties": {"hrefs": {"type": "array", "selector": "a[href^=\"/author/\"]", "attribute": "href"}}}}
+{"urls": ["https://quotes.toscrape.com/author/Albert-Einstein", "…"], "schema": {"properties": {"author": {"selector": "h3"}}}}
 ```
 
 **PDF** (read `table_of_contents` in the response first, then pick `pages`; `pages` trims extraction only — the file downloads whole, so raise `timeout` for big files; scanned PDFs auto-OCR):

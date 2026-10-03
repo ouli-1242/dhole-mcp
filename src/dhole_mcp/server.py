@@ -8330,7 +8330,16 @@ class MasterFetchServer:
             first.error = (
                 "nested_empty: every second-layer page returned no field - the "
                 "nested_fields selectors do not match this site's markup")
-        return _apply_chunking(first, max_chars=mc, offset=offset)
+        out = _apply_chunking(first, max_chars=mc, offset=offset)
+        if links and not out.error:
+            # 扇出成功之后，通用提示语里那句"这是个列表页，去 web_crawl 抓全站"就
+            # 说不上了 —— 第二层刚刚已经被读完。两个只读过文档的观察者都报告被这句
+            # 引去发了一次多余的 crawl，所以这里换成只在"还有没展开"时成立的一句话。
+            out.next_action = (
+                f"{_omitted} more unique links on this page were not expanded — raise "
+                f"nested_max (ceiling {_nested_mod.MAX_NESTED_ITEMS})"
+                if _omitted > 0 else "")
+        return out
 
     async def _smart_fetch_bulk(
         self, urls, extraction_type, css_selector, cache_ttl, force_fetcher,

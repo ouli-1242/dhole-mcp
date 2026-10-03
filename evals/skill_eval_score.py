@@ -6,7 +6,7 @@ Reads the server-side evidence, not the subagent's recollection: every
 facts about the process rather than claims in an answer. Only the assertions that
 read the agent's *final text* use ``<case>-<arm>.answer.txt``.
 
-    python scripts/skill_eval_score.py evals.json evidence/
+    python evals/skill_eval_score.py evals.json evidence/
 """
 
 from __future__ import annotations
@@ -25,10 +25,26 @@ def _calls(path: Path) -> list[dict]:
 
 
 def _first_args(calls: list[dict], tool: str) -> dict:
+    """The call the assertions about *arguments* read: the first one that used the
+    feature, not the first one issued.
+
+    An agent that probes the page with a bare read and then fans out made the right
+    call; grading its **first** argument set would score the probe as the answer and
+    every case would read "no nested_selector". Efficiency is a separate assertion
+    (`single_call`), so the two questions stay two different measurements.
+    """
     for c in calls:
         if c.get("tool") == tool:
             return c.get("args") or {}
     return {}
+
+
+def _best_args(calls: list[dict], tool: str, path: str) -> dict:
+    """The first call that actually set `path` (falling back to the first call)."""
+    for c in calls:
+        if c.get("tool") == tool and _has(path, c.get("args") or {}):
+            return c["args"]
+    return _first_args(calls, tool)
 
 
 def _has(path: Path, args: dict) -> bool:
@@ -53,6 +69,9 @@ def check(a: dict, calls: list[dict], text: str) -> tuple[bool, str]:
     op = a.get("op", "nonempty")
     want = a.get("value")
     args = _first_args(calls, tool)
+    if kind == "arg":
+        # 读的是"那颗参数出现的那一次调用"，不是第一次调用（见 _best_args）。
+        args = _best_args(calls, tool, path)
 
     if kind == "tool_count":
         n = sum(1 for c in calls if c.get("tool") == tool)
@@ -70,8 +89,9 @@ def check(a: dict, calls: list[dict], text: str) -> tuple[bool, str]:
         hits = [c for c in calls if c.get("tool") == tool and _has(path, c.get("args") or {})]
         if op == "nonempty":
             return bool(hits), f"{len(hits)} call(s) set {path}"
-        return any(op == "contains" and _string(want) in _string(c["args"].get(path))
-                   for c in hits), f"no call with {path} {op} {want!r}"
+        got = any(_string(want) in _string(c["args"].get(path)) for c in hits)
+        return got, (f"{path}={want!r} on {len(hits)} call(s)" if got
+                     else f"no call with {path} containing {want!r}")
     if kind == "arg":
         if not _has(path, args):
             return False, f"first {tool} call has no {path}"

@@ -41,16 +41,20 @@ Repeated records REQUIRE a "container selector + sub-schema" — sub-selectors e
 ```json
 {"url": "https://quotes.toscrape.com/", "nested_selector": "div.quote",
  "nested_fields": [{"name": "author", "selector": "h3"},
-                   {"name": "bio", "selector": "p", "type": "array"}],
- "nested_max": 10}
+                   {"name": "born", "selector": "span.author-born-date"},
+                   {"name": "description", "selector": "div.author-description"}]}
 ```
 
-Measured on that call: 8 records (10 containers, 8 unique authors), 8.1s, `summary` ending `nested: 8 links expanded, rungs=2, ok 8 / empty 0 / failed 0`. Read the four things the fan-out owes you:
+Measured on that call: 8 records (10 containers, 8 unique authors), 8.2s, `summary` ending `nested: 8 links expanded, rungs=2, ok 8 / empty 0 / failed 0`. Read the four things the fan-out owes you:
 
 - **The href is taken from the matched element, its first descendant `<a>`, or its nearest ancestor `<a>`** — in that order. So `.topic-card` works even when the card is a `<div>` holding the link, which is the common shape.
-- **`nested_fields` runs on the second-layer page only.** Nothing from the list row rides along — if you need the card's own text next to its detail page's fields, extract it on the first page with `schema=` in the same call (the two results sit side by side in one JSON object). A field that matches nothing on that page comes back as `""`; a page where *every* field missed is `nested_empty`, which is a failure and not an answer.
-- **`truncation=nested_budget` means "there were more, and raising the cap gets them"** — the default expands 8 links and the ceiling is 30. Duplicates and href-less matches are counted in a separate note (`links: 5 elements matched → 2 unique, 2 without a usable href`), because re-raising `nested_max` recovers neither. A list page with 12 sections answered by 8 records is only correct if you raised the cap or said so out loud. Past 30 it stops being a read and becomes a crawl: use `web_crawl` / `web_discover`.
+- **`nested_fields` runs on the second-layer page only.** Nothing from the list row rides along — if you need the card's own text next to its detail page's fields, extract it on the first page with `schema=` in the same call (the two results sit side by side in one JSON object). A field that matches nothing on that page comes back as `""`; a page where *every* field missed is `nested_empty`, which is a failure and not an answer. Name the element that holds the value (`div.author-description` for the bio above), not the bare tag: on that author page `{"selector": "p", "type": "array"}` returns Login / copyright / credit paragraphs — a hit that is not the answer.
+- **`truncation=nested_budget` means "there were more, and raising the cap gets them"** — the default expands 8 links and the ceiling is 30. Duplicates and href-less matches are counted in a separate note (`links: 5 elements matched → 2 unique, 2 without a usable href`), because re-raising `nested_max` recovers neither. A list page with 12 sections answered by 8 records is only correct if you raised the cap or said so out loud.
 - **Each second-layer link passes its own robots.txt check before any request** — the fan-out took that job off your hands, so a disallowed item comes back as `{"error": "robots_disallowed"}` with `robots_skipped` counted in `summary`, and nothing was sent for it. If you would have checked per URL by hand, the tool now does it as part of the call.
+
+**More than 30 second-layer pages** is no longer one read: take the link list with `schema={"properties":{"href":{"type":"array","selector":"a.card","attribute":"href"}}}` on the first page, then `web_read(urls=[...])` in batches — `schema=` combines with `urls=` (one schema applied to each URL, so a batch of detail pages comes back as grouped records), and 30+ URLs is where `web_crawl` / `web_discover` become the cheaper map.
+
+Second-layer pages are read as whole documents (like `schema=`), so a field's `type: "array"` is what separates "the one title on that page" from "the 20 works listed there". Concurrency is 6 lanes. Not combinable with `urls=`, `cdp_url=` or `actions=` — each of those would silently drop one side, so the call is refused before any request goes out. A call is cache-addressable like any other, **including its fetcher tier**: pinning `force_fetcher='stealthy'` within the TTL can be answered by the copy that tier already produced, so add `cache_ttl=0` when you need that tier to re-visit the site (after a login, or after the first read looked like a shell).
 
 Second-layer pages are read as whole documents (like `schema=`), so a field's `type: "array"` is what separates "the one title on that page" from "the 20 works listed there". Concurrency is 6 lanes. Not combinable with `urls=`, `cdp_url=` or `actions=` — each of those would silently drop one side, so the call is refused before any request goes out.
 

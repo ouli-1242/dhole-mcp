@@ -350,6 +350,31 @@ class TestNothingWasSentSilently:
         assert "cannot be combined" in out.error, out.error
 
 
+    def test_a_finished_fan_out_does_not_send_you_to_a_crawl(self, monkeypatch):
+        """通用提示语那句"这是列表页，去 web_crawl"在第二层刚读完时是多余的。"""
+        calls: list = []
+        _stub_pages(monkeypatch, {LIST_URL: LIST_HTML, **DETAIL}, calls=calls)
+        _stub_robots(monkeypatch)
+        out = _run(url=LIST_URL, nested_selector=".topic-card",
+                   nested_fields=FIELDS, cache_ttl=0)
+        assert out.next_action == "", out.next_action
+        assert "web_crawl" not in out.next_action
+
+    def test_an_unfinished_fan_out_says_what_is_left_and_how_to_get_it(self, monkeypatch):
+        calls: list = []
+        cards = "".join(f'<div class="c"><a href="/t/{i}">x</a></div>'
+                        for i in range(12))
+        pages = {LIST_URL: f"<html><body>{cards}</body></html>"}
+        pages.update({f"https://list.test/t/{i}": DETAIL["https://list.test/t/1"]
+                      for i in range(12)})
+        _stub_pages(monkeypatch, pages, calls=calls)
+        _stub_robots(monkeypatch)
+        out = _run(url=LIST_URL, nested_selector=".c", nested_fields=FIELDS,
+                   cache_ttl=0)
+        assert "4 more unique links" in out.next_action, out.next_action
+        assert "nested_max" in out.next_action
+
+
 class TestThePinnedTierIsHonored:
     """`force_fetcher` 是显式针，不是提示 —— 整篇读的两条路都得听它。
 

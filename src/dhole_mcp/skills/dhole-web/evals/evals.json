@@ -1,57 +1,186 @@
 {
   "skill_name": "dhole-web",
-  "base_url": "https://quotes.toscrape.com/",
-  "arms": {
-    "A-bare-schema": "只给 web_read 的连接期 JSON schema（与 tools/list 上一字节一致），不给任何说明书。",
-    "B-skill-index": "schema + SKILL.md（路由表 + 硬约束）。",
-    "C-full-corpus": "schema + SKILL.md + references/tools.md + references/examples.md + references/troubleshooting.md。"
+  "purpose": "量『读了这份说明书的 agent，第一次调用会不会发对』。evals/description_quality.py 量的是工具描述的写作质量（rubric），它自己写明不冒充路由评测；这把尺子补的就是那一半 —— 行为。",
+  "protocol": {
+    "tool_substitute": "dhole 的 MCP server 没接进跑评测的会话，所以每格用 `python evals/dhole_eval_cli.py --record <evidence>/<case>-<arm>.calls.jsonl '<json>'` 发一次真实 web_read。JSON 就是发给工具的参数对象；评分读服务端落下的 JSONL，不读 agent 的回忆。",
+    "schema_file": "evals/.runtime/skill-calibration/A.schema.json —— 从 `MasterFetchServer._TOOL_DEFS` 现取，与 tools/list 一字节一致。每次跑之前重新导出一遍；第一轮的 A 档整档作废，就是因为提示词指向了一份没导出的文件。",
+    "evidence": "evals/.runtime/skill-calibration/<case>-<arm>.calls.jsonl 与 .answer.txt",
+    "guards": "每档都禁止：调用任何 Skill、读取清单外的文件、用 WebSearch/WebFetch。A 档只许读 schema_file。"
   },
+  "arms": {
+    "A-bare-schema": "只给连接期 JSON schema —— 没有任何说明书时的地板。它还回来说『够用』，就说明该瘦的是语料不是描述。",
+    "B-skill-index": "schema + SKILL.md（路由表 + 硬约束）。",
+    "C-full-corpus": "schema + SKILL.md + references 的四篇（tools / examples / troubleshooting / fields）。"
+  },
+  "measured_with": "python evals/skill_eval_score.py src/dhole_mcp/skills/dhole-web/evals/evals.json <evidence-dir>",
   "evals": [
     {
       "id": "author-per-quote",
       "prompt": "https://quotes.toscrape.com/ 首页有 10 条名言，每条右边有个 (about) 链接进那位作者的主页。我要每条名言的作者主页上那个大标题（全名）和主页里的介绍段落。",
-      "expected_output": "一次 web_read：nested_selector='div.quote' + nested_fields(h3 / p array)。不逐个抓作者页。",
+      "expected_output": "一次 web_read：nested_selector='div.quote' + nested_fields(h3 / span.author-born-date / div.author-description)。不逐个抓作者页。",
       "assertions": [
-        {"name": "single_call", "type": "tool_count", "tool": "web_read", "op": "==", "value": 1},
-        {"name": "nested_selector_present", "type": "arg", "path": "nested_selector", "op": "nonempty"},
-        {"name": "nested_fields_present", "type": "arg", "path": "nested_fields", "op": "nonempty"},
-        {"name": "no_hand_rolled_second_layer", "type": "no_arg", "path": "urls", "description": "不许用 urls=[...]/逐条 web_read 手工搭第二层"},
-        {"name": "answers_from_records", "type": "text", "op": "contains_any", "value": ["Albert Einstein", "Einstein"]},
-        {"name": "reports_layer_counts", "type": "text", "op": "contains_any", "value": ["8", "10"]}
+        {
+          "name": "used_the_fan_out",
+          "type": "arg",
+          "path": "nested_selector",
+          "op": "nonempty",
+          "description": "某一发调用真的用了 nested_selector"
+        },
+        {
+          "name": "nested_fields_present",
+          "type": "arg",
+          "path": "nested_fields",
+          "op": "nonempty"
+        },
+        {
+          "name": "few_calls",
+          "type": "tool_count",
+          "tool": "web_read",
+          "op": "<=",
+          "value": 2,
+          "description": "允许一次探针，但不许逐页手抓"
+        },
+        {
+          "name": "no_hand_rolled_second_layer",
+          "type": "no_arg",
+          "path": "urls",
+          "description": "不许用 urls=[...] 手工搭第二层"
+        },
+        {
+          "name": "answers_from_records",
+          "type": "text",
+          "op": "contains_any",
+          "value": [
+            "Albert Einstein",
+            "Einstein"
+          ]
+        }
       ]
     },
     {
       "id": "tag-pages",
       "prompt": "https://quotes.toscrape.com/ 首页每个标签都链到它自己的标签页。我要每个标签那一页上列出的名言正文。",
-      "expected_output": "一次 web_read：nested_selector='a.tag' + nested_fields=[{正文, '.quote span.text', array}]，nested_max 提到 20 以上（首页有 30+ 个标签，默认 8 会截断）。",
+      "expected_output": "nested_selector='a.tag' + nested_fields=[{正文, '.quote span.text', array}]，并把 nested_max 抬到 12 以上（首页有 30+ 个标签，默认 8 会截断）。",
       "assertions": [
-        {"name": "single_call", "type": "tool_count", "tool": "web_read", "op": "==", "value": 1},
-        {"name": "nested_selector_present", "type": "arg", "path": "nested_selector", "op": "nonempty"},
-        {"name": "raised_nested_max", "type": "arg", "path": "nested_max", "op": ">=", "value": 12},
-        {"name": "array_field_spelling", "type": "arg", "path": "nested_fields", "op": "contains", "value": "array"}
+        {
+          "name": "used_the_fan_out",
+          "type": "arg",
+          "path": "nested_selector",
+          "op": "nonempty"
+        },
+        {
+          "name": "raised_nested_max",
+          "type": "arg",
+          "path": "nested_max",
+          "op": ">=",
+          "value": 12
+        },
+        {
+          "name": "array_field_spelling",
+          "type": "arg",
+          "path": "nested_fields",
+          "op": "contains",
+          "value": "array"
+        },
+        {
+          "name": "few_calls",
+          "type": "tool_count",
+          "tool": "web_read",
+          "op": "<=",
+          "value": 3
+        }
       ]
     },
     {
       "id": "budget-said-out-loud",
       "prompt": "https://quotes.toscrape.com/ 首页上所有标签的名言，一个都不要漏。",
-      "expected_output": "nested_max=30（上限）；看到 truncation=nested_budget 就在回答里说清还有更多，而不是把 30 条说成全部。",
+      "expected_output": "nested_max 抬到上限 30；看到 truncation=nested_budget 就在回答里说清还有更多，而不是把 30 条说成全部。",
       "assertions": [
-        {"name": "single_call", "type": "tool", "tool": "web_read", "description": "恰好一次 web_read"},
-        {"name": "nested_selector_present", "type": "arg", "path": "nested_selector", "op": "nonempty"},
-        {"name": "nested_max_at_ceiling", "type": "arg", "path": "nested_max", "op": ">=", "value": 20},
-        {"name": "names_the_cap", "type": "text", "op": "contains_any", "value": ["截断", "truncation", "上限", "还有更多", "不是全部", "30 条"]}
+        {
+          "name": "used_the_fan_out",
+          "type": "arg",
+          "path": "nested_selector",
+          "op": "nonempty"
+        },
+        {
+          "name": "nested_max_at_ceiling",
+          "type": "arg",
+          "path": "nested_max",
+          "op": ">=",
+          "value": 20
+        },
+        {
+          "name": "names_the_cap",
+          "type": "text",
+          "op": "contains_any",
+          "value": [
+            "截断",
+            "truncation",
+            "上限",
+            "还有更多",
+            "不是全部",
+            "30 条",
+            "30 个"
+          ]
+        },
+        {
+          "name": "few_calls",
+          "type": "tool_count",
+          "tool": "web_read",
+          "op": "<=",
+          "value": 4
+        }
       ]
     },
     {
       "id": "shell-is-not-an-answer",
       "prompt": "https://www.zcool.com.cn/ 首页挂着「推荐专题」栏目，每个专题链到专题页，我要各专题页里的作品标题。",
-      "expected_output": "第一次调用带 nested_*；拿到 nested_no_match / 壳页之后换选择器或改 force_fetcher='stealthy' 重试，绝不把空结果报成「这个站没有专题」。",
+      "expected_output": "带 nested_* 试一次；拿到 nested_no_match / 壳页之后换选择器或改 force_fetcher='stealthy'（并配 cache_ttl=0），绝不把空结果报成『这个站没有专题』。",
       "assertions": [
-        {"name": "tried_nested_first", "type": "tool", "tool": "web_read", "arg": "nested_selector", "op": "nonempty", "description": "第一次调用带 nested_selector"},
-        {"name": "retried_after_empty", "type": "tool_count", "tool": "web_read", "op": ">=", "value": 2},
-        {"name": "escalated_tier", "type": "any_arg", "path": "force_fetcher", "op": "contains", "value": "stealthy"},
-        {"name": "no_fake_absence", "type": "text", "op": "not_contains", "value": ["该站没有专题", "没有找到专题", "不存在推荐专题"]},
-        {"name": "tells_the_user_the_truth", "type": "text", "op": "contains_any", "value": ["壳", "JS", "渲染", "拿不到", "读不到", "登录"]}
+        {
+          "name": "tried_nested",
+          "type": "arg",
+          "path": "nested_selector",
+          "op": "nonempty"
+        },
+        {
+          "name": "retried_after_empty",
+          "type": "tool_count",
+          "tool": "web_read",
+          "op": ">=",
+          "value": 2
+        },
+        {
+          "name": "escalated_tier",
+          "type": "any_arg",
+          "path": "force_fetcher",
+          "op": "contains",
+          "value": "stealthy"
+        },
+        {
+          "name": "no_fake_absence",
+          "type": "text",
+          "op": "not_contains",
+          "value": [
+            "该站没有专题",
+            "没有找到专题",
+            "不存在推荐专题"
+          ]
+        },
+        {
+          "name": "tells_the_user_the_truth",
+          "type": "text",
+          "op": "contains_any",
+          "value": [
+            "壳",
+            "JS",
+            "渲染",
+            "拿不到",
+            "读不到",
+            "登录",
+            "WAF"
+          ]
+        }
       ]
     },
     {
@@ -59,9 +188,19 @@
       "prompt": "就读一下 https://quotes.toscrape.com/ 这一页本身的文字，别管每条名言链到的作者页。",
       "expected_output": "不带任何 nested_*（或 nested_max=0）；一次调用。",
       "assertions": [
-        {"name": "single_call", "type": "tool", "tool": "web_read", "description": "恰好一次 web_read"},
-        {"name": "no_unrequested_expansion", "type": "absent_or", "path": "nested_selector", "description": "不许自己加 nested_selector"},
-        {"name": "no_expanded_records", "type": "tool_count", "tool": "web_read", "op": "==", "value": 1}
+        {
+          "name": "no_unrequested_expansion",
+          "type": "absent_or",
+          "path": "nested_selector",
+          "description": "不许自己加 nested_selector"
+        },
+        {
+          "name": "one_page_only",
+          "type": "tool_count",
+          "tool": "web_read",
+          "op": "<=",
+          "value": 2
+        }
       ]
     }
   ]
