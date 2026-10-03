@@ -46,7 +46,7 @@ A fake-IP TUN proxy (Clash / sing-box TUN mode) hands every public name an addre
 
 ### `proxy_unreachable`
 
-The explicit `proxy` failed its 5s TCP precheck — no request was sent (no browser escalation, no snapshot fallback). Raising `timeout` is useless: check the proxy's address / port / liveness, or drop the proxy for a direct connection.
+`proxy_unreachable` means the stored `proxy` failed its 5s TCP precheck — no request was sent (no browser escalation, no snapshot fallback). Raising `timeout` is useless: check the proxy's address / port / liveness, or `unset=["proxy"]` for a direct connection.
 
 ### Stale content / someone else's snapshot
 
@@ -54,7 +54,7 @@ When `source` shows an archive fallback, that is a dated snapshot (`archived_at`
 
 ### 401 / credential problems
 
-The response distinguishes "credentials rejected" (supply a fresh token) from "no credentials sent" (add `auth`) — the fixes are opposite, so read which one it is. Also check: did a cross-origin redirect strip the credentials (same-host hops keep them, cross-domain hops strip them)? Expired tokens are simply replaced — the tool runs no refresh flow.
+The response distinguishes "credentials rejected" (store a fresh token) from "no credentials sent" (store `auth` for that host with `cred_defaults`) — the fixes are opposite, so read which one it is. Also check: did a cross-origin redirect strip the credentials (same-host hops keep them, cross-domain hops strip them)? Expired tokens are simply replaced — the tool runs no refresh flow.
 
 ### Mojibake
 
@@ -62,7 +62,7 @@ The response distinguishes "credentials rejected" (supply a fresh token) from "n
 
 ### Sites behind login
 
-Five paths, cheapest first: (1) HTTP tier — user-supplied cookies (`cookies` + `session_id` to keep the jar) or an API token (`auth`: basic/bearer/header). (2) The **no-password browser fallback (17.0)**: a named `session_id` bridges the jar into that session's dedicated stealthy browser (and harvests back), so HTTP-tier login state rides browser calls; combine with `check_login` + snapshot actions + gated submit to operate the site without ever touching a password. (3) **Stored-credential login (17.0)** — `cred_vault(op='match')` then `cred_login`; see "Stored-credential login" below. (4) CDP attach (17.0) — `web_read` with `cdp_url` (+ `check_login=true`) runs the fetch inside the user's real logged-in Chrome; requires one-time user setup (configuration.md "CDP attach"). (5) Still impossible: DataDome / Akamai / interactive Turnstile walls and 2FA — none of these paths defeats challenges; say so honestly.
+Five paths, cheapest first: (1) HTTP tier — credentials stored once with `cred_defaults` (`cookies` or `auth`: basic/bearer/header, each with its `host`; pass a `session_id` to keep the browser jar). (2) The **no-password browser fallback (17.0)**: a named `session_id` bridges the jar into that session's dedicated stealthy browser (and harvests back), so HTTP-tier login state rides browser calls; combine with `check_login` + snapshot actions + gated submit to operate the site without ever touching a password. (3) **Stored-credential login (17.0)** — `cred_vault(op='match')` then `cred_login`; see "Stored-credential login" below. (4) CDP attach (17.0) — `web_read` with `cdp_url` (+ `check_login=true`) runs the fetch inside the user's real logged-in Chrome; requires one-time user setup (configuration.md "CDP attach"). (5) Still impossible: DataDome / Akamai / interactive Turnstile walls and 2FA — none of these paths defeats challenges; say so honestly.
 
 ### Stored-credential login (cred_vault / login) fails
 
@@ -105,7 +105,7 @@ Attach-specific failures:
 
 ### Unreachable / mysterious 502 on 127.0.0.1
 
-With a proxy running, the HTTP tier's loopback traffic can be intercepted by the proxy — measured: even ports with no listener answer 502 in ~2s (the proxy answering), not connection-refused. `allow_private=true` only satisfies the SSRF guard; it does nothing about proxy interception. Fix: have the user add `127.0.0.1,localhost` to `NO_PROXY` (or pause the proxy). And **never probe local dead ports with `force_fetcher='stealthy'`** — the browser navigation waits out the full 30s timeout; the HTTP tier fails fast instead.
+With a proxy running, the HTTP tier's loopback traffic can be intercepted by the proxy — measured: even ports with no listener answer 502 in ~2s (the proxy answering), not connection-refused. `cred_defaults` `allow_private` only satisfies the SSRF guard; it does nothing about proxy interception. Fix: have the user add `127.0.0.1,localhost` to `NO_PROXY` (or pause the proxy). And **never probe local dead ports with `force_fetcher='stealthy'`** — the browser navigation waits out the full 30s timeout; the HTTP tier fails fast instead.
 
 ## Install and capability
 

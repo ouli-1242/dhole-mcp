@@ -99,11 +99,51 @@ class TestOtherToolsTakeTheirDocumentedKeysTopLevel:
             seen.update(kwargs)
             return ResponseModel(url=kwargs.get("url", ""), status=200, content=["x"])
 
+        # 17.0 §3-17 之前这条用的是 `cookies`：它和 auth/proxy/extra_headers/
+        # allow_private 一起从每次调用里搬走了，现在住在 cred_defaults（读回的路径
+        # 由 test_cred_defaults_* 那组守）。这里换成一颗留下来的字符串键，守卫的
+        # 形状不变：一个顶层名字要么抵达方法，要么当场拒绝。
         monkeypatch.setattr(server_mod.MasterFetchServer, "web_read", fake)
         _dispatch("web_read", {"url": "https://example.com/", "include_links": True,
-                                  "cookies": "sessionid=abc123"})
+                                  "css_selector": "h1"})
         assert seen["include_links"] is True
-        assert seen["cookies"] == "sessionid=abc123"
+        assert seen["css_selector"] == "h1"
+
+
+class TestTheIdentityKeysAreGoneFromTheSurface:
+    """17.0 §3-17：五颗身份参数搬进 cred_defaults，旧写法必须以名字被拒。
+
+    「删掉了」的可验收形式不是 schema 少一行，而是老调用当场报错：一个被静默忽略的
+    `cookies=` 等于让调用方以为自己带着登录态取到了那一页。留在每次调用里的只有
+    `cdp_url` / `session_id` / `anti_detect` 三颗（前者要逐页授权，后两者是按站判断）。
+    """
+
+    _IDENTITY_KEYS = ("auth", "cookies", "proxy", "extra_headers", "allow_private")
+    _ALLOW_PRIVATE_TOOLS = ("web_screenshot", "feed_read", "web_recipe", "web_watch",
+                            "cred_login")
+
+    @pytest.mark.parametrize("key", _IDENTITY_KEYS)
+    def test_web_read_refuses_its_old_identity_keys_by_name(self, key):
+        with pytest.raises(ValueError) as exc:
+            _dispatch("web_read", {"url": "https://example.com/", key: "x"})
+        msg = str(exc.value)
+        assert "Unsupported argument" in msg and key in msg, msg
+        assert key not in server_mod._TOP_LEVEL_ARGS["web_read"], msg
+
+    @pytest.mark.parametrize("tool", _ALLOW_PRIVATE_TOOLS)
+    def test_the_other_tools_refuse_allow_private(self, tool):
+        with pytest.raises(ValueError) as exc:
+            _dispatch(tool, {"url": "https://example.com/", "allow_private": True})
+        msg = str(exc.value)
+        assert "Unsupported argument" in msg and "allow_private" in msg, msg
+        assert "allow_private" not in server_mod._TOP_LEVEL_ARGS[tool], msg
+
+    def test_the_three_names_that_stayed_are_still_accepted(self):
+        allowed = server_mod._TOP_LEVEL_ARGS["web_read"]
+        assert {"cdp_url", "session_id", "anti_detect"} <= allowed
+        # 落盘的默认身份只能从这一颗工具进来。
+        assert server_mod._TOP_LEVEL_ARGS["cred_defaults"] == frozenset(
+            {"set", "unset", "show"})
 
 
 class TestUnknownTopLevelArgsRaise:

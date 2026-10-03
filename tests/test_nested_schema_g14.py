@@ -22,6 +22,7 @@ import json
 
 import pytest
 
+from dhole_mcp import identity
 from dhole_mcp.security import SecurityError
 from dhole_mcp.server import (
     MasterFetchServer,
@@ -252,18 +253,30 @@ class TestTheSchemaBranchCallsTheTierInOrder:
     """
 
     def test_every_tier_parameter_gets_its_own_value(self, monkeypatch):
+        """17.0 §3-17 之后这一条读的是**存储 → 取回层**那一段。
+
+        `cookies` / `proxy` 不再是 web_read 的参数：调用方递不进来，但 `_auto_escalate`
+        那 19 个位置一个没少（内部梯子仍然要它们），值改由 cred_defaults 的存储按 host
+        回答。参数错位在公共面上少了一个入口，不等于这一族断言可以撤 —— 所以这里把
+        cookie 存进 example.com 的 scope，再断言它原样抵达取回层。
+        """
         cookies = [{"name": "sid", "value": "v"}]
+        identity.set_value("cookies", cookies, scope="example.com")
+        identity.set_value("proxy", "http://proxy.test:8080")
         seen = _stub_tier(monkeypatch, {})
 
         asyncio.run(MasterFetchServer().web_read(
             url="https://example.com", schema=NESTED_QUOTES, cache_ttl=0,
-            cookies=cookies, extra_headers={"X-Test": "1"},
             anti_detect="basic", wait=7, timeout=12345,
         ))
 
         assert seen["extraction_type"] == "html", "schema 分支必须抓原始 HTML"
-        assert seen["cookies"] == cookies
-        assert seen["extra_headers"] == {"X-Test": "1"}
+        assert seen["cookies"] == cookies, "存进 host scope 的 cookie 没抵达取回层"
+        assert seen["proxy"] == "http://proxy.test:8080"
+        # extra_headers 今天没有任何来源（web_read 里它被写死成 None）：凭据形状的
+        # 头走 auth（它会说清自己的 host），其余是梯子的事。名字仍然占着它自己的
+        # 那一位 —— 一位不错，才轮到下面那些断言说话。
+        assert seen["extra_headers"] is None
         assert seen["timeout"] == 12345
         assert seen["wait"] == 7
         # B5-13a 之后这一档不再有"每颗一个独一值"的公共口：UA/伪装旋钮由

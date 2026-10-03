@@ -15,9 +15,12 @@ proxy / 同一份 auth / 同一个档位，而"改 env 重启宿主"不是答案
   只有类型 + 用户名，proxy 只有主机且凭据在不在以布尔说。存的那一份永远只在
   `~/.dhole/identity.db`（0600）。回显存在的意义是"让调用方不用读值就能撤"。
 
-优先级写死成一条：**调用方这次传的 > 落盘的默认 > 环境/工具自身默认**。环境代理
-例外，它是机器配置（既有教义：机器配置不许替一次抓取下结论），所以落盘的显式
-默认排在它前面，且和显式参数一样过 TCP 预检。
+优先级写死成一条：**调用方这次传的 > 落盘的默认 > 环境/工具自身默认**。B5-13c
+之后还能"这次传"的只有两颗：`anti_detect`（需要的档位是眼前这个站的属性）与
+`cdp_url`（附加是"这一页属于哪台浏览器"的判断），其余几颗（auth / cookies /
+proxy / extra_headers / allow_private）在参数面上已是陌生键，
+传了会抛而不是被吞。环境代理例外，它是机器配置（既有教义：机器配置不许替一次抓取
+下结论），所以落盘的显式默认排在它前面，且和显式参数一样过 TCP 预检。
 """
 
 from __future__ import annotations
@@ -49,6 +52,22 @@ def _set(**items):
 # ─── 存储：读侧只有脱敏的一半 ───────────────────────────────────────
 
 class TestTheStore:
+
+    def test_a_missing_state_directory_is_created_by_the_first_write(
+            self, monkeypatch, tmp_path):
+        """一个从未存在过的 DHOLE_HOME 里的第一次 cred_defaults 就是这条路径。
+
+        e2e 抓到过真的 bug：建目录那一步收到的是 str，而 str 没有 .mkdir —— 那句
+        `except Exception: pass` 把 AttributeError 吞了，目录没建，sqlite 于是在
+        下一行报 "unable to open database file"。存储自己的错，长得像环境的错。
+        """
+        identity.close()
+        fresh = tmp_path / "fresh-home" / "identity.db"
+        monkeypatch.setattr(identity, "_db_path", lambda: str(fresh))
+        identity.set_value("proxy", "http://127.0.0.1:7890")
+        assert fresh.exists(), "第一次写没有把状态目录建出来"
+        assert identity.get("proxy") == "http://127.0.0.1:7890"
+        identity.close()
 
     def test_a_value_round_trips_and_counts_when_forgotten(self):
         identity.set_value("proxy", "http://127.0.0.1:7890")
@@ -268,10 +287,22 @@ class TestTheWireIn:
         _set(proxy="http://127.0.0.1:7890")
         assert _tier_kwargs(monkeypatch)["proxy"] == "http://127.0.0.1:7890"
 
+    def test_the_moved_identity_keys_are_refused_as_unknown_arguments(self):
+        """搬进存储的那几颗在参数面上必须变成陌生键 —— 不是被吞掉。
+
+        吞掉一次 `proxy=`，调用方就以为那台代理正在用；§3-20 的静默忽略只管已注销
+        的 DHOLE_* 环境变量，参数面从来是「未知键必须抛」。
+        """
+        for key in ("auth", "cookies", "proxy", "extra_headers", "allow_private"):
+            with pytest.raises(ValueError, match="Unsupported argument") as e:
+                _call("web_read", {"url": API, key: "x"})
+            assert key in str(e.value), str(e.value)
+
     def test_what_the_caller_passed_this_time_beats_the_store(self, monkeypatch):
-        _set(proxy="http://stored.test:1")
-        seen = _tier_kwargs(monkeypatch, proxy="http://explicit.test:2")
-        assert seen["proxy"] == "http://explicit.test:2"
+        """两条还能逐次传的键里，档位是这条优先级链的证人。"""
+        _set(anti_detect="aggressive")
+        assert _tier_kwargs(monkeypatch, anti_detect="basic")["hide_canvas"] is True
+        assert _tier_kwargs(monkeypatch, anti_detect="basic")["disable_resources"] is True
 
     def test_a_stored_credential_only_rides_to_the_host_it_was_given_for(
             self, monkeypatch):
@@ -292,13 +323,23 @@ class TestTheWireIn:
         assert _tier_kwargs(monkeypatch)["disable_resources"] is False
         assert _tier_kwargs(monkeypatch, anti_detect="auto")["disable_resources"] is True
 
-    def test_a_stored_allow_private_opens_the_loopback_gate_for_later_calls(
-            self, monkeypatch):
-        """私有主机的围栏是"每次都要重申"最烦的一处，也是这条默认存在的理由。"""
+    def test_a_stored_allow_private_opens_the_loopback_gate_for_later_calls(self):
+        """私有主机的围栏是"每次都要重申"最烦的一处，也是这条默认存在的理由。
+
+        断言打在闸门的两端：没存的时候同一个 URL 得到的是「internal/private IP」
+        这句拒绝，存了之后拒绝换成一次真正的连接失败 —— 这才说明闸门真的开了，
+        而不是错误文案恰好不含某个词。
+        """
+        refused = _call("web_read", {"url": "http://127.0.0.1:9/health",
+                                     "force_fetcher": "http", "cache_ttl": 0})
+        assert "internal" in str(refused.get("error", "")).lower(), refused
+        assert not refused.get("identity_applied")
+
         _set(allow_private=True)
         out = _call("web_read", {"url": "http://127.0.0.1:9/health",
                                  "force_fetcher": "http", "cache_ttl": 0})
-        assert "allow_private" not in str(out.get("error", ""))
+        assert "internal" not in str(out.get("error", "")).lower(), out
+        assert "allow_private" in str(out.get("identity_applied")), out
 
     def test_the_response_names_what_was_applied_and_stays_quiet_when_nothing_was(
             self, monkeypatch):

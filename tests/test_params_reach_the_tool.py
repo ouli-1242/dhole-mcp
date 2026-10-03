@@ -43,18 +43,20 @@ BASE: dict[str, tuple[dict, object]] = {
 }
 
 # 每个参数一个探针值。值要能活过线路层的强制转换，所以不是一律 "x"。
+#
+# 17.0 §3-17 把五颗身份参数（auth / cookies / proxy / extra_headers / allow_private）
+# 从公共面上搬进 cred_defaults 的落盘存储，探针表里因此不再有它们的位置：这里的每个
+# 名字都必须还是某个工具的参数（下面那条守卫会钉住），删掉的键按这个文件对退役键的
+# 既有做法办 —— 从表里拿掉，另立一条「传了就拒」的用例（TestTheIdentityKeysRefused）。
 VALUES: dict[str, object] = {
     # web_read
     "css_selector": "p", "max_content_chars": 5000, "timeout": 20000,
     "pages": "1-2", "password": "pw",
     "schema": {"properties": {"t": {"selector": "p"}}},
-    "proxy": "http://proxy.test:8080", "cookies": {"a": "1"},
-    "extra_headers": {"X-Probe": "1"},
     # B5-13a：档位是字符串枚举，探针值要和默认值 "auto" 不同才探得出丢没丢。
     "anti_detect": "aggressive",
     "wait": 100, "max_links": 5, "session_id": "probe-session",
     "method": "GET", "body": {"a": 1}, "content_type": "application/json",
-    "auth": {"type": "basic", "username": "u", "password": "p"},
     "focus": "topic", "focus_mode": "best", "focus_engine": "bm25",
     "actions": [{"wait": 1}], "cache_ttl": 300,
     # 探针值不许与工具自己的默认值重合，否则"丢了"和"到了"看起来一样：
@@ -84,9 +86,11 @@ VALUES: dict[str, object] = {
     "selector": ".qr", "decode_qr": True,
 }
 # 布尔类共用一个值；列出来是为了让"表里查不到"这条守卫说得准。
+# §3-17：allow_private 原来是这张表里的一颗（每次调用放行内网），现在它只能从
+# cred_defaults 落盘，所以按上面 VALUES 的同一处理从表里拿掉。
 BOOL_KEYS = {
     "network_idle",
-    "include_media", "include_links", "ignore_robots", "allow_private",
+    "include_media", "include_links", "ignore_robots",
     "full_page", "sitemap", "check_login",
 }
 for _k in BOOL_KEYS:
@@ -250,6 +254,40 @@ class TestTheTwoChoiceKnobsAreGone:
     def test_the_key_is_not_advertised(self, key):
         props = _def_of("web_read")["inputSchema"]["properties"]
         assert key not in props
+
+
+class TestTheIdentityKeysRefused:
+    """§3-17：五颗身份键从 VALUES / BOOL_KEYS 里拿掉了，拿掉的代价是要有人钉住
+    「传了会拒」。静默接受一个不再存在的 `cookies=` 比拒掉它坏得多 —— 调用方会带着
+    「我传了 cookie」的错觉继续往下走。
+
+    存储侧（cred_defaults 写、工具读回）由 test_cred_defaults 那一组守，这里只管公共面。
+    """
+
+    @pytest.mark.parametrize("tool,key", [
+        ("web_read", "auth"), ("web_read", "cookies"), ("web_read", "proxy"),
+        ("web_read", "extra_headers"), ("web_read", "allow_private"),
+        ("web_screenshot", "allow_private"),
+    ])
+    def test_the_key_is_refused(self, tool, key):
+        with pytest.raises(ValueError, match="Unsupported argument") as ei:
+            _dispatch(tool, {**BASE[tool][0], key: True})
+        assert key in str(ei.value)
+        assert key not in VALUES and key not in BOOL_KEYS
+
+    @pytest.mark.parametrize("key", ["auth", "cookies", "proxy", "extra_headers",
+                                     "allow_private"])
+    def test_the_key_is_not_advertised_by_web_read(self, key):
+        props = _def_of("web_read")["inputSchema"]["properties"]
+        assert key not in props
+
+    @pytest.mark.parametrize("key", ["anti_detect", "cdp_url", "session_id"])
+    def test_the_three_names_that_stayed_keep_their_probe(self, key):
+        """留在每次调用上的三颗必须还有探针值、还在接受名单里 —— 否则这张表下次
+        清身份键的时候会顺手把它们一起清掉，抵达性用例就少守了三颗参数。"""
+        assert key in VALUES and key in server_mod._TOP_LEVEL_ARGS["web_read"], key
+        if key == "anti_detect":
+            assert VALUES[key] != "auto", "探针值与默认值重合就探不出丢没丢"
 
 
 class TestTheBagIsGoneFromTheWire:

@@ -99,6 +99,52 @@ def find_frozenset(tree: ast.Module, name: str) -> frozenset:
     return frozenset(ast.literal_eval(node))
 
 
+def _string_constants(tree: ast.Module) -> dict:
+    """Every ``NAME = "literal"`` the payload can point at, module level or class body."""
+    found: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            for t in targets:
+                if isinstance(t, ast.Name):
+                    found.setdefault(t.id, value.value)
+    return found
+
+
+def literal_node(tree: ast.Module, name: str):
+    """``ast.literal_eval`` the assignment, after inlining string constants.
+
+    The script never imports the package (importing runs module-level code and can
+    touch the filesystem), so ``_TOOL_DEFS`` has to be readable as a literal. A
+    description that lives in its own constant is a ``Name`` node, and
+    ``literal_eval`` refuses those - inline them, and refuse loudly if a node still
+    isn't a literal, because silently skipping it would understate the wire.
+    """
+    constants = _string_constants(tree)
+    unresolved: list[str] = []
+
+    class _Inline(ast.NodeTransformer):
+        def visit_Name(self, node):
+            if node.id in constants:
+                return ast.copy_location(ast.Constant(value=constants[node.id]), node)
+            unresolved.append(node.id)
+            return node
+
+    node = _Inline().visit(find_assignment(tree, name))
+    ast.fix_missing_locations(node)
+    if unresolved:
+        raise SystemExit(
+            f"{name} references {sorted(set(unresolved))}, which is not a string "
+            f"literal this script can read; the payload would come out smaller "
+            f"than the wire really is")
+    return ast.literal_eval(node)
+
+
 def duplication_report(tool_defs: list[dict], instructions: str) -> list[str]:
     """Every fact the agent is told twice, found mechanically.
 
@@ -212,11 +258,11 @@ def main() -> None:
     src = SERVER.read_text(encoding="utf-8")
     tree = ast.parse(src, filename=str(SERVER))
 
-    instructions = ast.literal_eval(find_assignment(tree, "DHOLE_INSTRUCTIONS"))
-    tool_defs = ast.literal_eval(find_assignment(tree, "_TOOL_DEFS"))
-    parts = (ast.literal_eval(find_assignment(tree, "_INSTRUCTIONS_INTRO")),
-             ast.literal_eval(find_assignment(tree, "_INSTRUCTIONS_ROUTING")),
-             ast.literal_eval(find_assignment(tree, "_INSTRUCTIONS_RULES")))
+    instructions = literal_node(tree, "DHOLE_INSTRUCTIONS")
+    tool_defs = literal_node(tree, "_TOOL_DEFS")
+    parts = (literal_node(tree, "_INSTRUCTIONS_INTRO"),
+             literal_node(tree, "_INSTRUCTIONS_ROUTING"),
+             literal_node(tree, "_INSTRUCTIONS_RULES"))
 
     names = [td["name"] for td in tool_defs]
 

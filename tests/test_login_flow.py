@@ -498,6 +498,18 @@ class TestDispatchReachesTheTools:
         assert payload.get("pending_approval") is True
         assert not stub.act_calls(), "入口层也不能漏掉闸"
 
+    def test_the_retired_private_option_is_refused_at_the_entry(self, opted_in, wired):
+        """§3-17 的另一半：`allow_private` 现在是陌生键，入口必须拒绝而不是吞掉。
+
+        吞掉一次 `allow_private=true`，调用方就会以为那个回环目标已经被放行。
+        """
+        srv, _, _ = wired()
+        with pytest.raises(ValueError, match="Unsupported argument") as e:
+            _run(srv._dispatch("cred_login", {
+                "url": "https://x.test/login", "credential": "Example",
+                "allow_private": True}))
+        assert "allow_private" in str(e.value)
+
     def test_an_unknown_argument_is_refused_at_the_entry(self, opted_in, wired):
         srv, _, _ = wired()
         with pytest.raises(ValueError):

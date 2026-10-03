@@ -88,11 +88,12 @@ def test_web_read_advertises_one_level_param_and_no_hardening_knobs():
     assert not gone, f"档位收了这几颗却还留在公开面：{gone}"
     assert "anti_detect" in server_mod._TOP_LEVEL_ARGS["web_read"]
     assert not set(RETIRED) & server_mod._TOP_LEVEL_ARGS["web_read"]
-    # 六颗换一颗：这一刀的净账是 40 → 35。§3-12 的 ≤20 由
-    # tests/test_wire_shape.py 整块 xfail(strict) 盯着，等 B5-13b（身份参数进
-    # cred_defaults）与 B5-14（web_act / web_request 拆走）把剩下的搬完再摘牌 ——
-    # 这里若预先断言 ≤20，就是在替别的批次许它还没实现的愿。
-    assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 35, \
+    # 六颗换一颗，这一刀的净账是 40 → 35；B5-13c 再把 auth / cookies / proxy /
+    # extra_headers / allow_private 五颗搬进 cred_defaults，净账 35 → 30。
+    # §3-12 的 ≤20 由 tests/test_wire_shape.py 整块 xfail(strict) 盯着，等 B5-14
+    #（web_act / web_request 拆走）把剩下的搬完再摘牌 —— 这里若预先断言 ≤20，
+    # 就是在替别的批次许它还没实现的愿。
+    assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 30, \
         len(server_mod._TOP_LEVEL_ARGS["web_read"])
 
 

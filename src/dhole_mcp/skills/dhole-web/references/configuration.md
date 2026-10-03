@@ -4,7 +4,8 @@
 
 ## The rules of changing things
 
-- **Single-call behavior** → call parameters (`ignore_robots` / `allow_private` / `proxy` / `cache_ttl` / `focus_engine` …). No config edit, no restart. Prefer this whenever it suffices
+- **Single-call behavior** → call parameters (`ignore_robots` / `cache_ttl` / `focus_engine` / `anti_detect` …). No config edit, no restart. Prefer this whenever it suffices
+- **Per-site defaults, the new third door** → `cred_defaults` (a tool, not a config file): proxy, browser profile, CDP endpoint, private-host waiver, anti-detect rung, and host-scoped `auth` / `cookies`. Written once to `~/.dhole/identity.db`, read back by every later call, shown redacted, revoked with `unset`. No restart, and no credential copied into the conversation each time
 - **Process-wide behavior, two doors.** `dhole config set DHOLE_DEFAULT_ENGINES baidu,bing` writes `~/.dhole/config.json`, which is re-read when the file changes — knobs read per call take effect on the next call, no restart. `dhole config list` shows what the file sets, whether env shadows it, and which values are secret without printing them. The host's `env` block still works and **always wins** (an operator's existing env configuration must never be silently overridden by a file); editing it needs a host restart
 - **Process-wide, the old way** → environment variables, in the host's MCP config under the `dhole` server's `env` block, **then restart the host**:
 
@@ -30,7 +31,7 @@
 ### Scenario: search engines blocked / rate-limited / should use a proxy
 
 - `DHOLE_SEARCH_PROXY` — the single egress every search engine goes through; **also auto-reads** `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` when unset (sandboxes and CI often already have one; `dhole --doctor` names which variable answered). 17.0 removed the proxy pool — there is no `dhole proxy` command and no `~/.dhole/search_proxies.json`, so a comma-separated value rotates nothing (first URL wins, the rest are dropped with a warning) and a value with an unrecognised scheme (`http`/`https`/`socks5`/`socks5h` only — usually a missing `http://`) is treated as unset, also with a warning. Credentials in the URL are never echoed back anywhere: doctor, errors and the usage audit all show `http://***@host:3128`
-- Division of labor: this variable covers the **search layer only**; fetches go through a proxy via per-call `proxy` (with a 5s precheck)
+- Division of labor: this variable covers the **search layer only**; fetches go through a proxy via the stored `cred_defaults` `proxy` (credited as an explicit proxy, so it gets the 5s precheck)
 
 ### Scenario: Clash / sing-box TUN proxy (fake-IP mode)
 
@@ -38,7 +39,7 @@
 
 ### Scenario: fetching intranet / local dev services
 
-- `DHOLE_ALLOW_PRIVATE_HOSTS` — comma-separated allowlist (`localhost,my-service.local,192.168.1.50`) bypassing the SSRF guard for those hosts; default empty = reject all. Per-call: `allow_private=true` (loopback only) or a list
+- `DHOLE_ALLOW_PRIVATE_HOSTS` — comma-separated allowlist (`localhost,my-service.local,192.168.1.50`) bypassing the SSRF guard for those hosts; default empty = reject all. Per-machine door; the tool-side equivalent is `cred_defaults` `set={allow_private: true}` (loopback only) or a host list, which the next call reads back
 - **Cloud metadata endpoints (169.254.169.254, metadata.google.internal, …) are never allowed**, allowlist or not
 - With a proxy running, loopback traffic may be intercepted by the proxy itself (502 instead of connection-refused) — `NO_PROXY` needs `127.0.0.1,localhost` (see troubleshooting)
 

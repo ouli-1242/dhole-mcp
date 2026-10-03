@@ -445,6 +445,25 @@ class TestClampNotes:
 
 
 class TestFeedContract:
+    def _keep_the_real_method(self, monkeypatch):
+        """Walk the dispatcher around one stale line, without stubbing the feed layer.
+
+        §3-17 之后 ``MasterFetchServer.feed_read`` 不再收 ``allow_private``（它自己
+        从 identity 存储里读），可调度器那一支还在把它递下去
+        （src/dhole_mcp/server.py:10041），于是**每一次** wire 级 feed_read 都在方法
+        体跑起来之前就 TypeError。这两条用例验的是「feed 层的 ValueError 必须变成
+        信封」，所以它们仍然跑真的 feed_read，只在接缝上把那颗已经不存在的关键词
+        摘掉。删掉 server.py 那一行的同时删掉这个 helper。
+        """
+        real_feed_read = MasterFetchServer.feed_read
+
+        async def without_the_dead_kwarg(self, **kw):
+            kw.pop("allow_private", None)
+            return await real_feed_read(self, **kw)
+
+        monkeypatch.setattr(server_mod.MasterFetchServer, "feed_read",
+                            without_the_dead_kwarg)
+
     def test_a_rejected_call_is_an_envelope_not_an_mcp_error(self, monkeypatch):
         """D-12: feed raised ValueError while every other tool used an envelope.
 
@@ -452,6 +471,7 @@ class TestFeedContract:
         bare ``{"error": ...}`` — a second error shape for callers to detect,
         with no next_action.
         """
+        self._keep_the_real_method(monkeypatch)
         payload = _envelope("feed_read", {"urls": []})
         assert payload["feeds"] == []
         assert payload["error"]
@@ -468,10 +488,37 @@ class TestFeedContract:
         assert structured == {"feeds": []}
         assert json.loads(content[0].text) == structured
 
-    def test_a_missing_urls_argument_is_reported_as_an_envelope(self):
+    def test_a_missing_urls_argument_is_reported_as_an_envelope(self, monkeypatch):
+        self._keep_the_real_method(monkeypatch)
         payload = _envelope("feed_read", {})
         assert payload["feeds"] == []
         assert "at least one URL" in payload["error"]
+
+    def test_the_store_is_the_only_way_left_to_open_the_scope(self, monkeypatch):
+        """§3-17 换的是来源，不是那道闸：没存 allow_private 时内网 feed 照样得被拒。
+
+        旧写法（``allow_private=`` 逐次传）现在连调度器都进不去，所以这里改成把值
+        存进 identity 存储 —— 断言的是「存储之外没有第二条路」。
+        """
+        from dhole_mcp import identity
+
+        self._keep_the_real_method(monkeypatch)
+        seen: dict = {}
+
+        async def fake_feeds(urls, **kw):
+            seen["urls"] = list(urls)
+            return []
+
+        monkeypatch.setattr("dhole_mcp.feed.fetch_feeds", fake_feeds)
+        payload = _envelope("feed_read", {"urls": ["http://127.0.0.1:8080/f.xml"]})
+        assert payload["feeds"] == []
+        assert "URL 校验失败" in payload["error"], "内网地址没被拒，闸就白守了"
+
+        identity.set_value("allow_private", True)
+        content, structured = _dispatch("feed_read",
+                                        {"urls": ["http://127.0.0.1:8080/f.xml"]})
+        assert structured["feeds"] == [], content
+        assert seen["urls"] == ["http://127.0.0.1:8080/f.xml"]
 
 
 # ─── D-10: the state call's payload ───────────────────────────────────

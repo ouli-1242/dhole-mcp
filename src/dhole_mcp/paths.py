@@ -56,17 +56,23 @@ def home() -> Path:
     return Path.home() / _HOME_DIR_NAME
 
 
-def ensure_private_dir(path: Path) -> Path:
+def ensure_private_dir(path: Path | str) -> Path:
     """mkdir -p + best-effort owner-only mode. Never raises.
 
     POSIX gets a real 0700. Windows largely ignores chmod (NTFS ACLs govern), so
     there this is a no-op and ``DHOLE_HOME`` is the actual lever — said out loud
     rather than pretending the bit was set.
+
+    str callers exist (`sessions` / `identity` pass `os.path.dirname`), so the path
+    is normalized here rather than at each caller. `except` is OSError-only on
+    purpose: when this swallowed every exception, a `str.mkdir` AttributeError hid
+    inside it and the store died later as sqlite's "unable to open database file".
     """
+    path = Path(path)
     try:
         path.mkdir(parents=True, exist_ok=True)
         os.chmod(path, 0o700)
-    except Exception:
+    except OSError:
         pass
     return path
 

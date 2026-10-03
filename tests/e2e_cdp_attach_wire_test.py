@@ -156,14 +156,34 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
         try:
             asyncio.run(_seed_cookie(endpoint, site.base_url))
 
-            # ── 1. gate: 未授权主机被拒绝，且什么都没执行、什么都没落盘 ──
-            gate_home = tmp_path / "home-gate"
+            # ── 0. §3-17 的一半：私有主机的门只能存，不能逐次传 ──
+            # 17.0 之前这三条线都靠 web_read(allow_private=true) 敲开 127.0.0.1；
+            # 现在那个键在参数面上是陌生键。"拒绝而不是吞掉"必须由 wire 作证，
+            # 否则整套默认身份只剩单元测试里的那句断言。
+            gate_home = tmp_path / "home-refuse"
             client = _WireClient(gate_home, {})
             try:
                 payload = _payload(client.call_tool("web_read", {
                     "url": f"{site.base_url}/home",
-                    "cdp_url": endpoint,
                     "allow_private": True,
+                }))
+            finally:
+                client.close()
+            assert "Unsupported argument" in payload.get("error", ""), \
+                f"allow_private 该被拒成陌生键: {payload}"
+            assert "allow_private" in payload.get("error", ""), \
+                "拒绝必须点名被拒的那个键"
+            assert not (gate_home / "identity.db").exists(), \
+                "被拒的调用不该在盘上留下任何东西"
+
+            # ── 1. gate: 未授权主机被拒绝，且什么都没执行、什么都没落盘 ──
+            gate_home = tmp_path / "home-gate"
+            client = _WireClient(gate_home, {})
+            try:
+                _payload(client.call_tool("cred_defaults", {"set": {"allow_private": True}}))
+                payload = _payload(client.call_tool("web_read", {
+                    "url": f"{site.base_url}/home",
+                    "cdp_url": endpoint,
                 }))
             finally:
                 client.close()
@@ -179,12 +199,14 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
             attach_home = tmp_path / "home-attach"
             client = _WireClient(attach_home, {})
             try:
+                stored = _payload(client.call_tool("cred_defaults",
+                                                   {"set": {"allow_private": True}}))
+                assert "allow_private" in json.dumps(stored), stored
                 payload = _payload(client.call_tool("web_read", {
                     "url": f"{site.base_url}/home",
                     "cdp_url": endpoint,
                     "confirm": True,
                     "check_login": True,
-                    "allow_private": True,
                 }))
             finally:
                 client.close()
@@ -221,11 +243,11 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
             bulk_home = tmp_path / "home-bulk"
             client = _WireClient(bulk_home, {})
             try:
+                _payload(client.call_tool("cred_defaults", {"set": {"allow_private": True}}))
                 payload = _payload(client.call_tool("web_read", {
                     "urls": [f"{site.base_url}/home"],
                     "cdp_url": endpoint,
                     "confirm": True,
-                    "allow_private": True,
                 }))
             finally:
                 client.close()

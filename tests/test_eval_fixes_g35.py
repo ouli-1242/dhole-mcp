@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from dhole_mcp import identity
 from dhole_mcp import server as server_mod
 from dhole_mcp.actions import actions_want_visual, action_label
 from dhole_mcp.security import SecurityError, allow_private_scope, validate_url
@@ -191,11 +192,18 @@ class TestAllowPrivateScope:
 
 
 class TestThePrivateTargetOptionReachesBothTools:
-    """D3 的接线面。仓库自己有一条不变式——"被转发的选项必须是方法接受的
-    参数"（tests/test_crawl_politeness_g27.py）——所以 `allow_private` 是两个
-    方法的**真实形参**，作用域开在方法内部、紧挨着它保护的那几行。"""
+    """D3 的接线面。17.0 §3-17 之后 `allow_private` 不再是调用参数：它住在
+    cred_defaults 的存储里（`identity.GLOBAL_KEYS`），两个工具各自在**读回它的
+    那几行**周围作用域。
 
-    def test_the_dispatcher_forwards_the_option_to_feed_fetch(self, monkeypatch):
+    仓库那条不变式（「被转发的选项必须是方法接受的参数」，
+    tests/test_crawl_politeness_g27.py）现在反过来守这条刀：退役的参数是陌生键，
+    入口必须拒绝而不是吞掉 —— 吞掉一次 `allow_private=true`，调用方就会以为
+    作用域开过。
+    """
+
+    def test_the_dispatcher_refuses_the_retired_option_instead_of_forwarding_it(
+            self, monkeypatch):
         seen: dict = {}
 
         async def fake_feed_fetch(self, **kwargs):
@@ -204,21 +212,28 @@ class TestThePrivateTargetOptionReachesBothTools:
 
         monkeypatch.setattr(server_mod.MasterFetchServer, "feed_read",
                             fake_feed_fetch)
-        asyncio.run(MasterFetchServer()._dispatch("feed_read", {
-            "urls": ["http://127.0.0.1:8399/feed.xml"], "allow_private": True}))
+        with pytest.raises(ValueError, match="Unsupported argument") as e:
+            asyncio.run(MasterFetchServer()._dispatch("feed_read", {
+                "urls": ["http://127.0.0.1:8399/feed.xml"], "allow_private": True}))
 
-        assert seen["allow_private"] is True
+        assert "allow_private" in str(e.value)
+        assert seen == {}, "退役的参数不该再被当成参数转进方法"
 
-    def test_both_methods_accept_the_option_as_a_real_parameter(self):
+    def test_neither_method_carries_the_option_as_a_parameter(self):
         import inspect
 
         for tool in ("web_screenshot", "feed_read"):
             params = inspect.signature(getattr(MasterFetchServer, tool)).parameters
-            assert "allow_private" in params, f"{tool} 不接受 allow_private"
+            assert "allow_private" not in params, \
+                f"{tool} 仍在收已经退役的 allow_private 参数"
+            assert "allow_private" not in server_mod._TOP_LEVEL_ARGS[tool], \
+                f"{tool} 的参数面还宣传着 allow_private"
+        # 它现在住在哪：cred_defaults 的全局键（一次设定，两个工具各自读回）。
+        assert "allow_private" in identity.GLOBAL_KEYS
 
     def test_feed_fetch_opens_the_scope_around_validation_and_fetch(self, monkeypatch):
-        """作用域要盖住校验**和**抓取两步：只放开校验那一步，等于放行了 URL
-        又在取文档时把它拒掉。"""
+        """存储里的 `allow_private` 要盖住校验**和**抓取两步：只放开校验那一步，
+        等于放行了 URL 又在取文档时把它拒掉。"""
         import dhole_mcp.feed as feed_mod
 
         seen: dict = {}
@@ -229,9 +244,10 @@ class TestThePrivateTargetOptionReachesBothTools:
             return []
 
         monkeypatch.setattr(feed_mod, "fetch_feeds", fake_fetch_feeds)
+        identity.set_value("allow_private", True)
 
         out = asyncio.run(MasterFetchServer().feed_read(
-            urls=["http://127.0.0.1:8399/feed.xml"], allow_private=True))
+            urls=["http://127.0.0.1:8399/feed.xml"]))
 
         assert out == []
         assert seen["urls"] == ["http://127.0.0.1:8399/feed.xml"]
@@ -255,10 +271,11 @@ class TestThePrivateTargetOptionReachesBothTools:
         monkeypatch.setattr(server_mod, "validate_url", spy)
         # 在 validate_url 之后立刻停下，不真起浏览器。
         monkeypatch.setattr(server_mod, "_browser_deps_available", lambda: False)
+        identity.set_value("allow_private", True)
 
         with pytest.raises(RuntimeError):
             asyncio.run(MasterFetchServer().web_screenshot(
-                url="http://127.0.0.1:8399/qr", allow_private=True))
+                url="http://127.0.0.1:8399/qr"))
 
         assert seen["loopback_ok"] is True
 
@@ -282,11 +299,11 @@ class TestThePrivateTargetOptionReachesBothTools:
         monkeypatch.setattr(server_mod.MasterFetchServer, "_get_session",
                             fake_get_session)
         monkeypatch.setattr(server_mod, "_browser_deps_available", lambda: True)
+        identity.set_value("allow_private", True)
 
         with pytest.raises(RuntimeError):  # 假 session 不产出像素，止于"没截到"
             asyncio.run(MasterFetchServer().web_screenshot(
-                url="http://127.0.0.1:8399/qr", session_id="probe",
-                allow_private=True))
+                url="http://127.0.0.1:8399/qr", session_id="probe"))
 
         assert seen["loopback_ok"] is True
 

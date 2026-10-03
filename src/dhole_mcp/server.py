@@ -186,10 +186,13 @@ from dhole_mcp.security import (
     validate_search_query,
     redact_api_key,
     SecurityError,
-    # G9: the per-call private-host allowlist (see security.parse_allow_private).
+    # G9: the active private-host allowlist (see security.parse_allow_private).
+    # 17.0 removed the per-call argument, so the only writers are the stored
+    # cred_defaults value and the environment default.
     _ALLOW_PRIVATE, parse_allow_private, set_allow_private,
-    # Same policy, for the two tools that never went through the web_read
-    # options decorator (web_screenshot / feed_read).
+    # Same policy, scoped to one call, for the two tools that read the stored
+    # value themselves instead of going through the fetch path
+    # (web_screenshot / feed_read).
     allow_private_scope,
 )
 
@@ -1918,8 +1921,8 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         next_action = (
             "the proxy did not answer, so no request was sent - do NOT retry the "
             "same way. Check the proxy host/port and that the proxy is running, or "
-            "drop proxy= to fetch directly. Raising timeout will not help: "
-            "the failure happens before the request."
+            "forget it (cred_defaults unset=['proxy']) to fetch directly. Raising "
+            "timeout will not help: the failure happens before the request."
         )
     elif err.startswith("schema_no_match"):
         next_action = ("no selector matched this page - re-check the selectors, or fetch "
@@ -2026,15 +2029,17 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         _auth_kind = _AUTH_SENT.get()[0]
         if _auth_kind:
             next_action = (
-                f"HTTP {result.status}: the credentials were REFUSED. auth= "
+                f"HTTP {result.status}: the credentials were REFUSED. auth "
                 f"(type={_auth_kind}) was sent to this host and rejected - re-check "
-                "the username/password or token. Retrying unchanged cannot change the "
+                "the username/password or token, with cred_defaults. Retrying "
+                "unchanged cannot change the "
                 "answer, and they will not be sent to any other host.")
         else:
             next_action = (
-                f"HTTP {result.status}: this URL needs credentials. Pass them as "
-                "auth= ({type:'basic',username,password} / "
-                "{type:'bearer',token} / {type:'header',name,value}) - no fetcher "
+                f"HTTP {result.status}: this URL needs credentials. Store them once "
+                "with cred_defaults (set={auth: {type:'basic',username,password} / "
+                "{type:'bearer',token} / {type:'header',name,value}, plus the host) "
+                "- no fetcher "
                 "tier can invent them, so a browser retry is wasted here.")
     elif result.status == 403:
         next_action = ("access denied (HTTP 403) - the site is refusing this client. "
@@ -3618,7 +3623,9 @@ def _smart_fetch_request_context(func):
             # a KeyError. A value that parses to nothing is reported in the
             # summary - a security-relevant option being ignored silently is the
             # worst possible shape.
-            (_ALLOW_PRIVATE, set_allow_private(options.get("allow_private"))),
+            # G9 → §3-17: the private-host allowance is cred_defaults' now, so the
+            # scope is pushed from the store. Nothing on the call can open it.
+            (_ALLOW_PRIVATE, set_allow_private(identity.get("allow_private"))),
             (_SESSION_ID, _SESSION_ID.set(_clean_session_id(options.get("session_id")))),
             # G8. .get() everywhere: these are optional and absent from most
             # calls, and the decorator must not be the thing that raises.
@@ -3638,10 +3645,12 @@ def _smart_fetch_request_context(func):
             (_ROBOTS_MODE, _ROBOTS_MODE.set("")),
             (_ARG_NOTES, _ARG_NOTES.set(notes)),
         ]
-        _ap = options.get("allow_private")
+        _ap = identity.get("allow_private")
         if _ap not in (None, False, "") and not parse_allow_private(_ap)[0]:
-            notes.append(f"allow_private={_ap!r} was ignored: pass true (loopback "
-                         "only) or a list of hosts to allow")
+            # A security-relevant default that parses to nothing must not fail
+            # silently: the caller stored it and needs to know it did nothing.
+            notes.append(f"the stored allow_private={_ap!r} was ignored: cred_defaults "
+                         "takes true (loopback only) or a list of hosts")
         _sid = options.get("session_id")
         if _sid not in (None, "") and not _SESSION_ID.get():
             notes.append(f"session_id={_sid!r} was ignored: use 1-64 characters of "
@@ -4793,15 +4802,6 @@ def _anti_detect(level: str) -> dict:
 # 有了这个家；`profile` 是第七颗，它今天根本没有别的入口（DHOLE_BROWSER_PROFILE
 # 已注销，而 browser.py 的持久上下文一直等着有人给它取名）。
 #
-# 存储里的键名与参数名不同处只有两处（`cdp` → `cdp_url`，`profile` 不是参数），
-# 所以这里有一张表而不是字符串替换：一次调用读到什么，取决于这张表说的是什么。
-_IDENTITY_PARAMS = {
-    "auth": "auth", "cookies": "cookies", "proxy": "proxy",
-    "cdp": "cdp_url", "allow_private": "allow_private",
-    "anti_detect": "anti_detect", "profile": "profile",
-}
-
-
 def _identity_value_error(key: str, value: Any) -> str:
     """为什么这一颗不能这么存。空串 = 可以。
 
@@ -4896,12 +4896,14 @@ CRED_DEFAULTS_DESC = """Set the identity once instead of passing it on every cal
 _SF_PARAMS = frozenset({
     "css_selector", "max_content_chars", "timeout", "pages", "password",
     "schema",
-    "proxy", "cookies", "extra_headers", "wait", "network_idle",
+    # §3-17：身份不再逐次传 —— auth / cookies / proxy / extra_headers 全部住在
+    # cred_defaults（凭据还要带 host），这里只剩渲染时机与读法。
+    "wait", "network_idle",
     # §3-19：伪装强度是一颗档位，不是六颗旋钮（headless/real_chrome/hide_canvas/
     # block_webrtc/solve_cloudflare/useragent 全收进 _ANTI_DETECT）。
     "anti_detect",
     "include_media", "include_links", "max_links", "ignore_robots",
-    "allow_private", "session_id", "method", "body", "content_type", "auth",
+    "session_id", "method", "body", "content_type",
     # G33/G35：CDP attach、无模型登录判定，以及 §3-16 那道先问再记的门
     # （confirm 是门的一部分，不是可选装饰）。
     "check_login", "cdp_url", "confirm",
@@ -4920,10 +4922,6 @@ _SHOT_PARAMS = frozenset({
     # selector = 元素级裁剪（17.0 起常开）；decode_qr = 本地二维码解码
     # （确定性工作，从来不设门控）。
     "selector", "decode_qr",
-    # G9 parity: web_read could always name a private target and web_screenshot
-    # could not, so "my dev server" was fetchable by one tool and refused
-    # outright by the next. Same option, same semantics, same guard.
-    "allow_private",
 })
 _SS_PARAMS = frozenset({
     "max_results", "cache_ttl", "mode", "engines", "url",
@@ -4953,8 +4951,7 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     "web_screenshot": _SHOT_PARAMS | {"url", "session_id"},
     "web_search": _SS_PARAMS | {"query"},
     "doc_parse": frozenset({"file_path", "cwd", "encoding"}),
-    "feed_read": frozenset({"urls", "max_items", "timeout", "since",
-                             "allow_private"}),
+    "feed_read": frozenset({"urls", "max_items", "timeout", "since"}),
     "web_resolve": frozenset({"url", "timeout"}),
     # 17.0 §4：sys_state 是 cache_clear 与 close_session 合上来的一颗。三个参数全都
     # 可选 —— 裸调用是名册，而名册是"要关哪个"之前唯一能问的问题。这张表同时是已知
@@ -4966,14 +4963,14 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     # L3 / L4（计划第九章）：录制回放与监控 diff。17.0 起默认在连接期表里。
     "web_recipe": frozenset({"op", "name", "url", "actions", "note",
                          "timeout", "max_content_chars", "focus",
-                         "extraction_type", "session_id", "allow_private"}),
+                         "extraction_type", "session_id"}),
     "web_watch": frozenset({"op", "name", "url", "focus", "max_chars", "note",
-                        "timeout", "session_id", "allow_private"}),
+                        "timeout", "session_id"}),
     # 凭据来源 + 独立登录流（计划第七章）。17.0 起默认在连接期表里。
     "cred_vault": frozenset({"op", "query", "url", "source", "limit"}),
     "cred_login": frozenset({"url", "credential", "source", "session_id",
                         "username_index", "password_index", "submit_index",
-                        "confirm", "timeout", "allow_private"}),
+                        "confirm", "timeout"}),
     # 文档通道。总是注册：它不在两个 opt-in 组里，也不该在 —— 一个需要开关才
     # 能读到的说明书，等于没有说明书。
     "sys_guide": frozenset({"topic", "section"}),
@@ -5981,14 +5978,11 @@ class MasterFetchServer:
         focus: Annotated[Optional[str], Field(description="op=run: query-focused extraction over the replayed page. The recipe stores the how, not the question, so this is per-run.")] = None,
         extraction_type: Annotated[Optional[str], Field(description="op=run: markdown (default) | html | text | article | structured.")] = None,
         session_id: Annotated[Optional[str], Field(description="op=run: reuse cookies under this name. Deliberately not stored in the recipe.")] = None,
-        allow_private: Annotated[Optional[Any], Field(description="op=run: replay a recipe that points at loopback (your own dev server). Same semantics as web_read's.")] = None,
     ) -> RecipeModel:
         """Record / replay a stored (url, actions) pair. See the tool description."""
-        # 17.0 §3-17: the private-host gate behind cred_defaults too, so
-        # a call to a local service stops needing allow_private= every time.
-        allow_private = self._apply_identity(
-            url or '', {"allow_private": allow_private}
-        )[0]["allow_private"]
+        # 17.0 §3-17: the private-host gate is cred_defaults' business now — a
+        # local dev service stops needing allow_private= on every call.
+        allow_private = identity.get("allow_private")
         from dhole_mcp import tasks
 
         o = (op or "").strip().lower()
@@ -6117,14 +6111,11 @@ class MasterFetchServer:
         note: Annotated[str, Field(description="op=add: what you are watching for (max 500 chars).")] = "",
         timeout: Annotated[Optional[int], Field(description="op=check: whole-call budget in ms.")] = None,
         session_id: Annotated[Optional[str], Field(description="op=check: reuse cookies under this name (a watch behind a login). Deliberately not stored.")] = None,
-        allow_private: Annotated[Optional[Any], Field(description="op=check: monitor a loopback URL (your own dev server). Same semantics as web_read's.")] = None,
     ) -> WatchModel:
         """Start / check / list / stop a monitored URL. See the tool description."""
-        # 17.0 §3-17: the private-host gate behind cred_defaults too, so
-        # a call to a local service stops needing allow_private= every time.
-        allow_private = self._apply_identity(
-            url or '', {"allow_private": allow_private}
-        )[0]["allow_private"]
+        # 17.0 §3-17: the private-host gate is cred_defaults' business now — a
+        # local dev service stops needing allow_private= on every call.
+        allow_private = identity.get("allow_private")
         from dhole_mcp import tasks
 
         o = (op or "").strip().lower()
@@ -6368,14 +6359,11 @@ class MasterFetchServer:
         submit_index: Annotated[Optional[int], Field(description="Skip detection: the submit control's snapshot index. Omit it to press Enter in the password box instead.")] = None,
         confirm: Annotated[bool, Field(description="false (default) = detect the form and return the plan without filling anything. true = fill and submit, after the user approved.")] = False,
         timeout: Annotated[Optional[int], Field(description="Whole-call budget in ms.")] = None,
-        allow_private: Annotated[Optional[Any], Field(description="Sign in to a loopback URL (your own dev server). Same semantics as web_read's.")] = None,
     ) -> LoginModel:
         """Sign in with a vault credential. See the tool description."""
-        # 17.0 §3-17: the private-host gate behind cred_defaults too, so
-        # a call to a local service stops needing allow_private= every time.
-        allow_private = self._apply_identity(
-            url or '', {"allow_private": allow_private}
-        )[0]["allow_private"]
+        # 17.0 §3-17: the private-host gate is cred_defaults' business now — a
+        # local dev service stops needing allow_private= on every call.
+        allow_private = identity.get("allow_private")
         from dhole_mcp import login as login_mod
         from dhole_mcp import vault as vault_mod
 
@@ -6564,7 +6552,6 @@ class MasterFetchServer:
         save_to: Optional[str] = None,
         selector: Optional[str] = None,
         decode_qr: bool = False,
-        allow_private: Optional[Any] = None,
     ) -> List[ImageContent | TextContent]:
         """        Capture a screenshot of a web page.
 
@@ -6593,11 +6580,9 @@ class MasterFetchServer:
         NOTE: clients never receive this docstring. The authoritative
         agent-facing contract is the "description" in _TOOL_DEFS.
         """
-        # 17.0 §3-17: the private-host gate behind cred_defaults too, so
-        # a call to a local service stops needing allow_private= every time.
-        allow_private = self._apply_identity(
-            url, {"allow_private": allow_private}
-        )[0]["allow_private"]
+        # 17.0 §3-17: the private-host gate is cred_defaults' business now —
+        # "screenshot my own dev server" stops needing an argument each time.
+        allow_private = identity.get("allow_private")
         # G35: same option, same guard as web_read.
         with allow_private_scope(allow_private):
             url = validate_url(url)
@@ -7171,11 +7156,8 @@ class MasterFetchServer:
         force_fetcher: Annotated[Optional[Literal["http", "stealthy"]], Field(description="Lock to one fetcher tier, skip auto-escalation. 'http' = fast HTTP-only (fails on JS/bot walls). 'stealthy' = anti-detect browser (Patchright). Two tiers: the third one and its 'dynamic' alias are gone.")] = None,
         anti_detect: Annotated[Optional[Literal["off", "basic", "auto", "aggressive"]], Field(description=ANTI_DETECT_DESC)] = None,
         wait: Annotated[int | float, Field(description="Extra milliseconds to wait after page load for JS rendering.")] = 0,
-        proxy: Annotated[Optional[str | Dict[str, str]], Field(description="Proxy URL or dict with server/username/password.")] = None,
         timeout: Annotated[Optional[int | float], Field(description="Whole-call budget in milliseconds (default 30000; 60000 when actions are used; max 120000). Shared by the HTTP retries, and a document URL spends it on the download.")] = None,
         network_idle: Annotated[bool, Field(description="Wait until network is idle for 500ms before capturing (good for SPAs).")] = False,
-        extra_headers: Annotated[Optional[Dict[str, str]], Field(description="Additional HTTP headers as {name: value} dict.")] = None,
-        cookies: Annotated[Sequence[SetCookieParam] | None, Field(description="Cookies for the request: list of {name, value, domain} dicts, a plain {name: value} dict, or a Cookie header string.")] = None,
         offset: Annotated[int, Field(description="Resume from this character offset when content was truncated. The response tells you the next offset to use.")] = 0,
         max_content_chars: Annotated[Optional[int], Field(description="Max chars of extracted content to return (default 40000). Lower this to save context tokens on big pages; the rest is paginated via offset/next_offset.")] = None,
         pages: Annotated[Optional[str], Field(description="PDF only: page spec like '1-5' or '1,3,5-7' to extract a subset of pages. Saves tokens on big PDFs, NOT download time - the file is fetched in full before any page is picked. None = all pages.")] = None,
@@ -7188,14 +7170,12 @@ class MasterFetchServer:
         include_links: Annotated[bool, Field(description="If true, populate the response .links field with the page's outgoing links classified as citations/navigation/external + a primary_source hint. Default false. Use when you want to follow a page's referenced sources in one step.")] = False,
         max_links: Annotated[Optional[int], Field(description="Cap for EACH links list (citations/navigation/external) when include_links=true; range 1-100. Omit for the documented defaults (30/20/20). links.total_found + links.is_truncated tell you what the cap hid.")] = None,
         ignore_robots: Annotated[bool, Field(description="Skip the robots.txt check for this call (default false = comply). When robots.txt disallows the URL, dhole makes NO request and returns error='robots_disallowed' with content_ok false. Set true only when you have the site's permission to fetch regardless; DHOLE_IGNORE_ROBOTS=1 disables the check process-wide.")] = False,
-        allow_private: Annotated[Optional[Any], Field(description="Fetch a host the SSRF guard otherwise blocks (your own dev / staging / Docker service). true = loopback only (127.0.0.0/8, ::1, localhost); a list names the hosts to allow, e.g. ['my-service.local','192.168.1.50']. Cloud metadata endpoints (169.254.169.254 etc.) are never allowed. DHOLE_ALLOW_PRIVATE_HOSTS does the same process-wide. Default: nothing is allowed.")] = None,
         check_login: Annotated[bool, Field(description="After the page settles on the browser tier, run a model-free login probe and return login_check: {logged_in: true|false|null, signals: [...], cookie_names: [...]}. DOM shape (logout control / password field / login form) + cookie NAMES only - values are never returned, no model involved. Null on HTTP-tier results and on cache hits (the probe is live-only, so pass check_login again with cache_ttl=0).")] = False,
         cdp_url: Annotated[Optional[str], Field(description="Attach the user's real Chrome via CDP for THIS call: browser tier forced, HTTP tier and the public cache are skipped, and the fetch rides the attached profile's logged-in cookies. Refused by default - the FIRST attach to a host returns cdp_authorization_required and executes nothing; re-call with confirm=true once the user approved that host, which also fences navigation to the authorized hosts (anything outside them is aborted at the route level). Every response fetched this way returns cdp_attached=true; attach attempts are audited. Cannot be combined with schema=.")] = None,
         session_id: Annotated[Optional[str], Field(description="Reuse cookies across calls under this name (1-64 chars: letters, digits, '.', '_', '-'). Cookies a site sets are kept for that exact host and sent back on the next call naming the same session_id, so a login (or a form POST) can be followed by the pages behind it. Default: no session - cookies live for one call only. Covers BOTH tiers: the HTTP tier reads/writes the jar per host, and browser-tier calls under a session_id run in a dedicated browser seeded from the jar and written back after each call (cookie two-way bridge) - an HTTP login is visible to the browser, a browser login survives to the HTTP tier. Values never leave the process and are never returned; session_cookie_names reports names only.")] = None,
         method: Annotated[Optional[str], Field(description="HTTP verb for the request: GET (default), HEAD, POST, PUT, DELETE or PATCH. HEAD asks for status + size + content-type only and returns no body (size is the server's Content-Length, so 0 when the server omits it - example.com does). A non-GET is sent once (not retried, not cached, not escalated to the browser or the archive): a write must not be repeated, and a browser replay would answer about a GET to the same URL, not about your POST.")] = None,
         body: Annotated[Optional[Any], Field(description="Request body for POST/PUT/DELETE/PATCH (max 256 KB). A dict is sent as a form; with content_type=application/json it is sent as JSON; a string is sent as-is. Ignored for GET/HEAD (said so in the summary).")] = None,
         content_type: Annotated[Optional[str], Field(description="Content-Type for the body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json.")] = None,
-        auth: Annotated[Optional[Any], Field(description="Send credentials with the request: {type:'basic',username,password}, {type:'bearer',token}, or {type:'header',name,value} for an API-key header (e.g. name='X-API-Key'). 'user'/'pass' work as shorthand; 'type' may be omitted when the fields already say what it is. The credential goes to THAT host only - a redirect to a different host drops it, so a site that bounces you to a CDN cannot collect your key. Values are never echoed back in the response, and a credentialed answer is cached per credential instead of publicly.")] = None,
         schema: Annotated[Optional[Dict[str, Any]], Field(description="JSON schema for structured data extraction. Each property can have a 'selector' (CSS) for direct DOM extraction. Returns structured JSON instead of markdown. No LLM needed. Needs a non-empty 'properties' map (a JSON string is also accepted); an unusable schema raises instead of silently returning markdown. A property carrying its OWN 'properties' (or items.properties) plus a selector extracts one record per matched element, child selectors evaluated inside that element - how a repeated list (quotes, products, rows) keeps its grouping instead of flattening into one array of every tag on the page. Up to 200 records per field.")] = None,
         confirm: Annotated[bool, Field(description="Approval for a first-time sensitive action on this call. Today that means cdp_url: attaching your real Chrome hands over every logged-in site's cookies, so the FIRST attach to a host is refused with cdp_authorization_required and nothing executed - re-call with confirm=true to authorize that host (remembered on disk; delete cdp_hosts.json in the dhole state directory to revoke). False (default) = nothing sensitive is approved.")] = False,
     ) -> ResponseModel:
@@ -7244,26 +7224,19 @@ class MasterFetchServer:
                 results=[_invalid_request_result(u, msg) for u in urls],
                 total=len(urls), successful=0,
             )
-        # §3-17: whatever the caller did not name, cred_defaults answers — per host,
-        # so a credential stored for api.example.com never rides along to a call
-        # elsewhere. It runs before the CDP gate and before the ladder because both
-        # can read a value decided here, and it remembers what the caller actually
-        # sent so the bulk fan-out can forward THAT instead — otherwise the first
-        # URL's credential would leave as an explicit argument to every other row.
-        _sent = {"auth": auth, "cookies": cookies, "proxy": proxy,
-                 "allow_private": allow_private,
-                 "anti_detect": anti_detect}
-        _idvals, _idnote = self._apply_identity(
-            url or "",
-            {"auth": auth, "cookies": cookies, "proxy": proxy,
-             "allow_private": allow_private, "cdp_url": cdp_url,
-             "anti_detect": anti_detect})
+        # §3-17: the identity is no longer something a call carries — cred_defaults
+        # answers it, per host, so a credential stored for api.example.com never
+        # rides along to a call elsewhere. extra_headers has no source left here at
+        # all: a credential-shaped header belongs in auth (which says its host),
+        # and everything else is the ladder's own business.
+        _idvals, _idnote = self._identity_for(url or "", cdp_url=cdp_url,
+                                              anti_detect=anti_detect)
         auth = _idvals["auth"]
         cookies = _idvals["cookies"]
         proxy = _idvals["proxy"]
-        allow_private = _idvals["allow_private"]
         cdp_url = _idvals["cdp_url"]
-        anti_detect = _idvals["anti_detect"] or "auto"
+        extra_headers = None
+        anti_detect = _idvals["anti_detect"]
         _IDENTITY_APPLIED.set(_idnote)
         # 安全闸 1/2（G33 → 17.0 先问再记）：CDP attach 的授权点在工具入口，
         # 单条与 bulk 两条路都在这里过闸；_open_session 只消费已过闸的结果。
@@ -7329,20 +7302,18 @@ class MasterFetchServer:
                     total=len(urls), successful=0,
                 )
             return await self._smart_fetch_bulk(
-                # What the CALLER sent, never the backfilled values: each bulk row
-                # re-enters web_read and resolves its own host's identity.
                 urls, extraction_type, css_selector, cache_ttl, force_fetcher,
-                wait, proxy=_sent["proxy"], timeout=timeout,
-                network_idle=network_idle, extra_headers=extra_headers,
-                cookies=_sent["cookies"],
+                wait, timeout=timeout, network_idle=network_idle,
+                # The rung is the one identity value a caller can still name per
+                # call, so a batch carries it to every row; credentials need no
+                # forwarding — each row resolves its own host from the store.
+                anti_detect=anti_detect,
                 max_chars=max_content_chars,
-                anti_detect=_sent["anti_detect"],
                 include_media=include_media, include_links=include_links,
                 focus=focus, schema=schema,
                 max_links=max_links, ignore_robots=ignore_robots,
-                allow_private=_sent["allow_private"], session_id=session_id,
+                session_id=session_id,
                 method=method, body=body, content_type=content_type,
-                auth=_sent["auth"],
             )
 
         # Validate all inputs
@@ -7806,15 +7777,14 @@ class MasterFetchServer:
 
     async def _smart_fetch_bulk(
         self, urls, extraction_type, css_selector, cache_ttl, force_fetcher,
-        wait, proxy, timeout, network_idle, extra_headers, cookies,
+        wait, timeout, network_idle,
         max_chars: int = DEFAULT_MAX_CONTENT_CHARS,
-        anti_detect: str = "auto",
+        anti_detect: Optional[str] = None,
         include_media: bool = False, include_links: bool = False,
         focus: Optional[str] = None, schema=None,
         max_links: Optional[int] = None, ignore_robots: bool = False,
-        allow_private=None, session_id: Optional[str] = None,
+        session_id: Optional[str] = None,
         method: Optional[str] = None, body=None, content_type: Optional[str] = None,
-        auth=None,
     ) -> BulkResponseModel:
         """Fetch multiple URLs in parallel through the smart fetch pipeline.
 
@@ -7834,16 +7804,14 @@ class MasterFetchServer:
                     css_selector=css_selector,
                     cache_ttl=cache_ttl,
                     force_fetcher=force_fetcher,
-                    wait=wait, proxy=proxy, timeout=timeout,
-                    network_idle=network_idle, extra_headers=extra_headers,
-                    cookies=cookies, anti_detect=anti_detect,
+                    wait=wait, timeout=timeout,
+                    network_idle=network_idle, anti_detect=anti_detect,
                     max_content_chars=max_chars,
                     include_media=include_media, include_links=include_links,
                     focus=focus, schema=schema,
                     max_links=max_links, ignore_robots=ignore_robots,
-                    allow_private=allow_private, session_id=session_id,
+                    session_id=session_id,
                     method=method, body=body, content_type=content_type,
-                    auth=auth,
                 )
             except Exception as e:
                 return _with_agent_hints(ResponseModel(
@@ -8832,10 +8800,15 @@ class MasterFetchServer:
     ) -> CredDefaultsModel:
         """The identity a later call should assume: set once, read back every time.
 
-        Six of the seven keys replace an argument the caller would otherwise repeat
-        on every call (`web_read`'s auth/cookies/proxy/cdp_url/allow_private and the
-        `anti_detect` rung); the seventh, `profile`, is the only way to name the
-        persistent browser context now that `DHOLE_BROWSER_PROFILE` is retired.
+        Four of the seven keys used to be arguments the caller repeated on every
+        call — `auth`, `cookies`, `proxy` and `allow_private` are gone from the
+        tool schemas entirely, because a credential retyped per call is a credential
+        copied into the transcript per call. `cdp_url` stays a per-call argument as
+        well: attaching names ONE page's browser, so a stored endpoint would attach
+        every later single-URL fetch to it. `anti_detect` keeps the same shape for
+        the same reason (the rung a wall needs is a property of the site in front of
+        you). `profile` is the only way to name the persistent browser context now
+        that `DHOLE_BROWSER_PROFILE` is retired.
 
         Two rules the tool exists to enforce:
 
@@ -8945,29 +8918,38 @@ class MasterFetchServer:
                          "Values are never shown here - a credential in tool output "
                          "is a credential in the transcript."))
 
-    def _apply_identity(self, url: str,
-                        values: Dict[str, Any]) -> tuple[Dict[str, Any], str]:
-        """Fill the identity keys this call did not name from `cred_defaults`.
+    def _identity_for(self, url: str, *, cdp_url: Optional[str] = None,
+                      anti_detect: Optional[str] = None,
+                      ) -> tuple[Dict[str, Any], str]:
+        """What `cred_defaults` says this call runs on, plus the note it owes.
 
-        One place owns the precedence — what the caller passed this time beats what
-        is stored, which beats the tool's own default — because every tool reading
-        one of these keys must answer it the same way. `None` (and an argument the
-        dispatcher left out) means "not named"; an explicit `allow_private=False` is
-        a decision, not an absence, so a stored default does not overwrite it.
+        Two keys keep an argument of their own. `cdp_url` names ONE page's browser:
+        attaching hands over every logged-in site in that profile, so the flagship
+        move has to stay a per-call decision and a stored endpoint attaching every
+        later fetch is a bigger privacy step than anyone asked for. `anti_detect` is
+        a per-site judgment. For both, what the caller passed wins and the store is
+        the fallback; everything else has no argument left, so the store answers or
+        the tool's own default does.
+
+        The note lists only the keys the STORE supplied — cred_defaults takes no
+        credit for what the caller typed.
         """
         host = identity.host_of(url)
-        out = dict(values)
-        applied: List[str] = []
-        for key in identity.KEYS:
-            param = _IDENTITY_PARAMS[key]
-            if param not in out or out[param] is not None:
-                continue
-            value = identity.get(key, host)
-            if value is None:
-                continue
-            out[param] = value
-            applied.append(key)
-        return out, ", ".join(k for k in identity.KEYS if k in applied)
+        stored = {key: identity.get(key, host) for key in identity.KEYS}
+        values = {
+            "auth": stored["auth"],
+            "cookies": stored["cookies"],
+            "proxy": stored["proxy"],
+            "allow_private": stored["allow_private"],
+            "cdp_url": cdp_url or stored["cdp"],
+            "anti_detect": anti_detect or stored["anti_detect"] or "auto",
+        }
+        used = [key for key in ("auth", "cookies", "proxy", "allow_private",
+                                "cdp", "anti_detect")
+                if stored[key] is not None
+                and not (key == "cdp" and cdp_url)
+                and not (key == "anti_detect" and anti_detect)]
+        return values, ", ".join(used)
 
     # ─── Parse (local file) ─────────────────────────────────────────
 
@@ -9094,7 +9076,6 @@ class MasterFetchServer:
         max_items: Annotated[Optional[int], Field(description="Max entries per feed (default 20; 0 = all).")] = 20,
         timeout: Annotated[Optional[int], Field(description="Per-feed timeout in seconds (default 20).")] = 20,
         since: Annotated[Optional[str], Field(description="Incremental polling: keep only entries published at or after this date (ISO-8601 like '2026-09-20' / '2026-09-20T08:00:00Z', or an RFC-822 feed timestamp). Store the newest published value from the previous call and pass it back. What the filter removed is reported (items_older_than_since) rather than silently shrinking the list, so 'nothing new' is an answer you can act on; entries with no usable date are KEPT and counted (items_without_date) because an undated feed cannot be filtered honestly. An unreadable date is refused as an error instead of returning the whole feed as if it were new.")] = None,
-        allow_private: Annotated[Optional[Any], Field(description="Poll a feed the SSRF guard otherwise blocks - your own dev / Docker / LAN feed reader. true = loopback only, or a list of hosts. Same option and same semantics as web_read's.")] = None,
     ) -> List[Any]:
         """Fetch RSS/Atom feeds and return their latest entries.
 
@@ -9114,11 +9095,8 @@ class MasterFetchServer:
         discovered_from records where the caller pointed. Parse failures come
         back as one readable sentence, not lxml's parse dump.
         """
-        # 17.0 §3-17: the private-host gate behind cred_defaults too, so
-        # a call to a local service stops needing allow_private= every time.
-        allow_private = self._apply_identity(
-            (urls[0] if urls else ''), {"allow_private": allow_private}
-        )[0]["allow_private"]
+        # 17.0 §3-17: the private-host gate is cred_defaults' business now.
+        allow_private = identity.get("allow_private")
         from dhole_mcp.feed import fetch_feeds
         from dhole_mcp.security import SecurityError, validate_url
         urls = [u for u in urls if u and u.strip()]
@@ -9507,12 +9485,7 @@ class MasterFetchServer:
                     "method": {"type": "string", "description": "HTTP verb: GET (default), HEAD, POST, PUT, DELETE, PATCH - case-insensitive. A non-GET is sent ONCE: never retried, cached, browser-escalated or archive-answered, because a replay writes twice."},
                     "body": {"description": "Request body for POST/PUT/DELETE/PATCH (cap 256KB). A dict is sent as a form, or as JSON when content_type says json; a string is sent as-is. Ignored for GET/HEAD."},
                     "content_type": {"type": "string", "description": "Content-Type for body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json."},
-                    "auth": {"description": "Credentials for this call (basic / bearer / header). Sent only to the origin you named - a redirect to another host strips them. Values are never echoed back, and a credentialed answer is cached per credential rather than publicly."},
-                    "cookies": {"anyOf": [{"type": "string"}, {"type": "object"}, {"type": "array", "items": {"type": "object"}}], "description": "Cookies to send: a {name: value} dict, a Cookie header string, or a list of {name, value, domain}. Values are never returned - names only."},
-                    "extra_headers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Additional request headers as {name: value}, applied on both tiers. Values must be strings; a newline in a name or value, or a backslash in a name, is refused as header injection."},
-                    "proxy": {"anyOf": [{"type": "string"}, {"type": "object"}], "description": "Proxy for this call: a URL (http://host:port, socks5://...) or {server, username, password}."},
                     "session_id": {"type": "string", "description": "Carry cookies across calls under this name (1-64 chars: letters, digits, . _ -). Covers both tiers. Values never leave the process and are never returned."},
-                    "allow_private": {"anyOf": [{"type": "boolean"}, {"type": "array", "items": {"type": "string"}}], "description": "Fetch a host the SSRF guard otherwise blocks (your own dev/staging service): true = loopback only, or name the hosts. Cloud metadata endpoints are never allowed under any setting."},
                     "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check for this call (default false = comply; a disallowed URL makes no request at all). Set true only where you have the site's permission."},
                     "check_login": {"type": "boolean", "description": "Run the model-free login probe on the settled browser page; returns login_check (DOM signals + cookie NAMES, never values). Live-only: null on HTTP-tier results and on cache hits, so pair it with cache_ttl=0."},
                     "cdp_url": {"type": "string", "description": "Attach the user's own Chrome over CDP for this call - it rides that profile's logged-in cookies, and the HTTP tier and public cache are skipped. The FIRST attach to a host is refused with cdp_authorization_required and executes nothing until confirm=true authorizes it; answers say cdp_attached=true."},
@@ -9588,7 +9561,6 @@ class MasterFetchServer:
                     "wait_selector": {"type": "string", "description": "CSS selector to wait for before capturing."},
                     "network_idle": {"type": "boolean", "description": "Wait until the network has been idle 500ms (good for SPAs)."},
                     "timeout": {"type": "integer", "description": "Budget in ms (default 30000)."},
-                    "allow_private": {"anyOf": [{"type": "boolean"}, {"type": "array", "items": {"type": "string"}}], "description": "Same guard as web_read's: true = loopback only, or name the hosts. Without it a private URL is refused before the browser starts. Cloud metadata endpoints are never allowed."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -9672,7 +9644,6 @@ class MasterFetchServer:
                     "max_items": {"type": "integer", "description": "Max entries per feed (default 20; 0 = all)"},
                     "timeout": {"type": "integer", "description": "Per-feed timeout in seconds (default 20)"},
                     "since": {"type": "string", "description": "Incremental polling: keep only entries published at or after this date (ISO-8601 '2026-09-20' / '2026-09-20T08:00:00Z', or an RFC-822 feed timestamp). Pass the newest published value from the previous call. items_older_than_since reports what it removed; undated entries are kept and counted, not dropped. An unreadable date is an error, not a filter that kept everything."},
-                    "allow_private": {"type": "boolean", "description": "Poll a feed the SSRF guard otherwise blocks - your own dev / Docker / LAN feed reader. true = loopback only. Omit and a localhost feed is refused before any request."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -9705,7 +9676,6 @@ class MasterFetchServer:
                     "focus": {"type": "string", "description": "op=run: query-focused extraction over the replayed page."},
                     "extraction_type": {"type": "string", "description": "op=run: markdown (default) | html | text | article | structured."},
                     "session_id": {"type": "string", "description": "op=run: reuse cookies under this name. Not stored in the recipe."},
-                    "allow_private": {"type": "boolean", "description": "op=run: replay a recipe pointing at loopback (your own dev server)."},
                 },
             },
             "annotations": {"readOnlyHint": False, "destructiveHint": True,
@@ -9725,7 +9695,6 @@ class MasterFetchServer:
                     "note": {"type": "string", "description": "op=add: what you are watching for (max 500 chars)."},
                     "timeout": {"type": "integer", "description": "op=check: whole-call budget in ms."},
                     "session_id": {"type": "string", "description": "op=check: reuse cookies under this name (a watch behind a login). Not stored."},
-                    "allow_private": {"type": "boolean", "description": "op=check: monitor a loopback URL (your own dev server)."},
                 },
             },
             "annotations": {"readOnlyHint": False, "destructiveHint": True,
@@ -9762,7 +9731,6 @@ class MasterFetchServer:
                     "submit_index": {"type": "integer", "description": "Skip detection: the submit control's snapshot index."},
                     "confirm": {"type": "boolean", "description": "false (default) = show the plan only. true = actually fill and submit, after the user approved."},
                     "timeout": {"type": "integer", "description": "Whole-call budget in ms."},
-                    "allow_private": {"type": "boolean", "description": "Log in to a loopback URL (your own dev server)."},
                 },
             },
             "annotations": {"readOnlyHint": False, "destructiveHint": True,
@@ -10079,15 +10047,14 @@ class MasterFetchServer:
                 # items_older_than_since=0 — "nothing new" and "filter dropped"
                 # were indistinguishable, which is the one thing a poller needs.
                 #
-                # allow_private is forwarded like every other advertised
-                # parameter (schema 声明即承诺) - the method opens the scope
-                # itself, where the URLs it guards actually are.
+                # allow_private is deliberately NOT a parameter here: the method
+                # takes the stored cred_defaults value and opens the scope itself,
+                # where the URLs it guards actually are.
                 feeds = await self.feed_read(
                     urls=args.get("urls") or [],
                     max_items=args.get("max_items", 20),
                     timeout=args.get("timeout", 20),
                     since=args.get("since"),
-                    allow_private=args.get("allow_private"),
                 )
             except ValueError as e:
                 # feed_read used to raise, and call_tool turned that into an
@@ -10099,8 +10066,9 @@ class MasterFetchServer:
                     "error": str(e),
                     "next_action": ("Pass urls=[...] with 1-50 absolute http(s) "
                                     "RSS/Atom feed URLs. Internal addresses are "
-                                    "rejected unless you name them with "
-                                    "allow_private=true (loopback) or a host list."),
+                                    "rejected until cred_defaults stores "
+                                    "allow_private (true = loopback, or a list "
+                                    "of hostnames)."),
                 }
                 text, compact = _wire_json(payload)
                 return [TextContent(type="text", text=text)], compact
@@ -10139,7 +10107,6 @@ class MasterFetchServer:
                 focus=args.get("focus"),
                 extraction_type=args.get("extraction_type"),
                 session_id=args.get("session_id"),
-                allow_private=args.get("allow_private"),
             )
             inner = getattr(result, "result", None)
             return _wire_result(result,
@@ -10155,7 +10122,6 @@ class MasterFetchServer:
                 note=args.get("note", ""),
                 timeout=args.get("timeout"),
                 session_id=args.get("session_id"),
-                allow_private=args.get("allow_private"),
             )
             return _wire_result(result)
 
@@ -10180,7 +10146,6 @@ class MasterFetchServer:
                 submit_index=args.get("submit_index"),
                 confirm=bool(args.get("confirm", False)),
                 timeout=args.get("timeout"),
-                allow_private=args.get("allow_private"),
             )
             return _wire_result(result)
 

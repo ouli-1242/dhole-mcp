@@ -23,7 +23,7 @@ MAX_URL_LENGTH = 8192
 # 一起打开，不是「显式开启」能覆盖的风险。
 #
 #   DHOLE_ALLOW_PRIVATE_HOSTS=localhost,my-service.local   （进程级）
-#   options: {allow_private: ["my-service.local"]}          （单次）
+#   cred_defaults set={allow_private: ["my-service.local"], ...}  （落盘，每次读回）
 #
 # 匹配用的是 URL 里的**字面**主机名，不做归一化：allowlist 里写了 127.0.0.1，
 # 不代表 0177.0.0.1（八进制写法）也被放行 —— 那条路是给绕过准备的。
@@ -40,7 +40,8 @@ _METADATA_HOSTS = frozenset({
     "fd00:ec2::254", "100.100.100.200",
 })
 
-# 单次调用的 allowlist（web_read 的 options.allow_private）。放在这里而不是当作
+# 当前生效的 allowlist（抓取入口把 cred_defaults 的存储值 push 进来，
+# web_screenshot / feed_read 用 allow_private_scope 就地开）。放在这里而不是当作
 # 参数层层下传，是为了让**每一个** validate_url 调用点 —— 包括抓取循环里的重定向
 # 复校验、robots.txt 那条旁路、tcp_preflight 的裸连接预检（它走
 # url_targets_internal -> validate_url）—— 共用同一个答案，不会出现

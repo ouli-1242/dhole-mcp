@@ -28,6 +28,7 @@ import threading
 import pytest
 
 from dhole_mcp import feed as feed_mod
+from dhole_mcp import identity
 from dhole_mcp import server as server_mod
 from dhole_mcp.server import (
     MasterFetchServer,
@@ -46,10 +47,14 @@ def _hdrs(last_modified=None, etag=None):
 
 
 async def _ask(url, markers=None, **kw):
-    """经由内部通道发起一次复验 —— 这就是 17.0 之后 `watch` 走的同一条路。"""
+    """经由内部通道发起一次复验 —— 这就是 17.0 之后 `watch` 走的同一条路。
+
+    `allow_private` 不再是这条调用的参数（17.0 §3-17）；放开本机 fixture 服务器
+    的那一步在 `_the_test_origin_is_fetchable` 里，每一次调用之前都已经做好。
+    """
     tok = server_mod._REVALIDATE.set(markers)
     try:
-        return await MasterFetchServer().web_read(url, allow_private=True, **kw)
+        return await MasterFetchServer().web_read(url, **kw)
     finally:
         server_mod._REVALIDATE.reset(tok)
 
@@ -185,6 +190,19 @@ def _throwaway_cache(tmp_path, monkeypatch):
     cache_mod._db_initialized.clear()
 
 
+@pytest.fixture(autouse=True)
+def _the_test_origin_is_fetchable():
+    """本文件的站点是 127.0.0.1 上那个 fixture 服务器 —— 它是被测对象，不是调用方
+    点名的私网，所以 SSRF 围栏必须为它开着。
+
+    17.0 §3-17 之后 `allow_private` 不再是每次调用传的参数：它归 cred_defaults
+    存储，所以这里存的就是那条唯一的值，后面每一次 web_read 读回的都是它。落存储
+    这条写法本身就是被测的那条路 —— 抓取入口会把存储值推给闸门，测试不再需要拿
+    DHOLE_ALLOW_PRIVATE_HOSTS 绕过去。
+    """
+    identity.set_value("allow_private", True)
+
+
 class TestTheConditionalCall:
 
     @pytest.mark.asyncio
@@ -194,8 +212,10 @@ class TestTheConditionalCall:
         `watch` 存基线时读的就是这里；字段下线之后，这条是那个交接唯一的证人。
         """
         url, srv = origin
-        r = await MasterFetchServer().web_read(url, allow_private=True, cache_ttl=0)
+        r = await MasterFetchServer().web_read(url, cache_ttl=0)
         assert r.status == 200
+        assert r.identity_applied == "allow_private", \
+            "围栏这次是靠存储读回来的（不是参数）—— 这条是那个来源唯一的证人"
         assert r._validators == {"etag": ETAG, "last_modified": LM}
         assert "cache_validators" not in r.model_dump(), "内部落点不许上线"
 
@@ -209,12 +229,10 @@ class TestTheConditionalCall:
         往返钉在这里，并让拿到的 etag 真的换来一个 304。
         """
         url, _ = origin
-        fresh = await MasterFetchServer().web_read(url, allow_private=True,
-                                                      cache_ttl=600)
+        fresh = await MasterFetchServer().web_read(url, cache_ttl=600)
         assert fresh._validators == {"etag": ETAG, "last_modified": LM}
 
-        hit = await MasterFetchServer().web_read(url, allow_private=True,
-                                                    cache_ttl=600)
+        hit = await MasterFetchServer().web_read(url, cache_ttl=600)
         assert hit.cached is True, "这一条测的就是缓存命中那条路径"
         assert hit._validators == {"etag": ETAG, "last_modified": LM}, \
             "缓存命中丢掉了版本标记，下一次复验无从问起"
@@ -278,7 +296,7 @@ class TestTheConditionalCall:
     async def test_a_conditional_call_asks_the_origin_not_the_cache(self, origin):
         """先缓存一份 200，再问「变了吗」：必须真的去问站点，不能拿记忆作答。"""
         url, srv = origin
-        await MasterFetchServer().web_read(url, allow_private=True, cache_ttl=600)
+        await MasterFetchServer().web_read(url, cache_ttl=600)
         before = srv.hits
         r = await _ask(url, {"etag": ETAG}, cache_ttl=600)
         assert srv.hits == before + 1, "the conditional question never reached the origin"

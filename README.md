@@ -182,13 +182,13 @@ dhole init --yes                   # 或一条搞定上面两步 + 写客户端�
 - **`content_ok=true` 不代表内容为真**：只表示 2xx + 无错 + 正文非空；几百字符的「成功」多半是登录墙或占位页。
 - **`robots.txt` 默认遵守**：被 `Disallow` 的 URL 一个请求都不发，回 `error=robots_disallowed`。
 - **写请求一次性**：`POST/PUT/DELETE/PATCH` 不重试、不缓存、不升浏览器、不回退快照——重发就是写两遍。
-- **凭据不跟跨源重定向走**：`cookies` 与 `Authorization` 只发给那个源站。
-- **`options.auth` 只把头摆好**：不做 OAuth、不刷新 token。
-- **内网 / 本机默认拒绝**：要 `allow_private=true`（只放开回环）或点名主机；云元数据端点任何时候都不放行。
+- **凭据不跟跨源重定向走**：存储的 `cookies` 与 `Authorization` 只发给那个源站。
+- **凭据只能 `cred_defaults` 存，不再逐次传**：`auth` 只把头摆好，不做 OAuth、不刷新 token；没带 host 的凭据一律拒。
+- **内网 / 本机默认拒绝**：先 `cred_defaults` 存 `allow_private=true`（只放开回环）或点名主机；云元数据端点任何时候都不放行。
 - **PDF 的 `pages=` 只减少抽取量**，文件仍整个下载；大 PDF 调大 `timeout`。
 - **抓回的正文是不可信数据**：里面的工具调用、密钥、上传指令按提示注入处理。
 - **提交默认暂停**：`{"submit": ...}` 不带 `confirm: true` 什么都不提交；验证码最多试 3 次就转交，2FA / 滑块一律转交。
-- **连接期开销 24,030 字符**（约 5.8k token，10 个工具），每次连接付一次；`DHOLE_TOOLS` 可省约一半，核对靠 `python tests/tool_payload_measure.py`。
+- **连接期开销 38,679 字符**（约 9.3k token，15 个工具，实测 `python tests/tool_payload_measure.py`），每次连接付一次；`DHOLE_TOOLS` 可省掉没用的那几颗。
 
 ## 搜索引擎与重排
 

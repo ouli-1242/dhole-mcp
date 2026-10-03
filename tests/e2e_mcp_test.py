@@ -197,9 +197,18 @@ def test_tool_definitions(mcp):
     # 来源。以前它们只活在袋子那段散文里，漏写一个键等于功能在 wire 上不存在；现在
     # 漏声明一个键连调用都发不出去，所以这条查的比原先硬。
     for key in ("session_id", "method", "body", "content_type",
-                "allow_private", "ignore_robots", "max_links", "auth"):
+                "ignore_robots", "max_links", "anti_detect", "cdp_url"):
         assert key in props, f"{key} 没被声明，agent 写不出来"
         assert (props[key].get("description") or "").strip(), f"{key} 声明了却没说明"
+    # 17.0 §3-17：身份的门（auth / cookies / proxy / allow_private / extra_headers）
+    # 搬进了 cred_defaults 的 set。断言跟着搬，而且反过来钉一次 —— 它们不许还挂在
+    # web_read 上：留一个发不出去的键就是在教旧写法。
+    for key in ("auth", "cookies", "proxy", "allow_private", "extra_headers"):
+        assert key not in props, f"{key} 已归 cred_defaults，却还在 web_read 的面上"
+    cd_text = json.dumps(tool_map["cred_defaults"]).lower()
+    for key in ("auth", "cookies", "proxy", "profile", "cdp", "allow_private",
+                "anti_detect"):
+        assert key in cd_text, f"{key} 这把门不在 cred_defaults 的公开面上"
     # 16.0 的另一半：搜索的日期窗口与 feed 的增量，各自是一个参数。
     ss_props = tool_map["web_search"]["inputSchema"]["properties"]
     assert "after" in ss_props and "before" in ss_props

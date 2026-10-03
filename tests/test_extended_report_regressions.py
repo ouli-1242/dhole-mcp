@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from dhole_mcp import feed as feed_mod
+from dhole_mcp import identity
 from dhole_mcp.envelope import detect_page_type
 from dhole_mcp.fetcher import Response
 from dhole_mcp.server import (
@@ -238,10 +239,16 @@ class _ServedPdf:
 
 
 def _fetch(url: str, **args) -> dict:
-    """One web_read through the real dispatcher (loopback hosts need the opt-in)."""
+    """One web_read through the real dispatcher (loopback hosts need the opt-in).
+
+    17.0 §3-17：那颗 opt-in 不再是每次调用都传的 `allow_private=`，而是
+    `cred_defaults` 存一次的东西 —— 全局键，不需要 host，web_read 在入口把它读回来
+    并开到自己的 SSRF 闸上。conftest 把 identity.db 指到每个用例自己的 tmp 目录，
+    所以这一次存下的放行不会跟着下一个用例去敲别人的门。
+    """
+    identity.set_value("allow_private", True)
     return asyncio.run(MasterFetchServer()._dispatch(
-        "web_read",
-        {"url": url, "allow_private": True, "timeout": 60000, **args}))[1]
+        "web_read", {"url": url, "timeout": 60000, **args}))[1]
 
 
 class TestACachedPdfKeepsTheExtractorsVerdict:

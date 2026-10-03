@@ -22,6 +22,7 @@ import socketserver
 
 import pytest
 
+from dhole_mcp import identity
 from dhole_mcp.fetcher import (
     HTTPSession,
     _LOOPBACK_NO_PROXY_ENTRIES,
@@ -115,11 +116,18 @@ async def test_forced_stealthy_dead_private_port_fails_fast():
 
     from dhole_mcp.server import MasterFetchServer
 
+    # 17.0 §3-17: allow_private left the call surface — the private-host gate is
+    # stored once and read back per call, so the loopback target below is
+    # reachable without naming the option on the wire. The store is what both the
+    # entry check and the tiers read (and what the response echoes as
+    # identity_applied, asserted below).
+    identity.set_value("allow_private", True)
+
     srv = MasterFetchServer(cache_ttl=0)
     started = time.monotonic()
     r = await srv._dispatch("web_read", {
         "url": "http://127.0.0.1:1/",
-        "force_fetcher": "stealthy", "allow_private": True,
+        "force_fetcher": "stealthy",
         "timeout": 45000})
     elapsed = time.monotonic() - started
     payload = json.loads(r[0][0].text)
@@ -133,6 +141,8 @@ async def test_forced_stealthy_dead_private_port_fails_fast():
     assert payload["fetcher_used"] in ("none", "http")
     assert "skipped_stealthy" in payload.get("escalation_path", "")
     assert payload["status"] == 0
+    # The call ran on the stored default, and says so by NAME only.
+    assert payload.get("identity_applied") == "allow_private", payload
     assert "private" in payload.get("next_action", "").lower() or \
         "service" in payload.get("next_action", "").lower()
 

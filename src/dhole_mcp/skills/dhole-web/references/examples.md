@@ -36,16 +36,18 @@ A rejection names the key and lists the keys that tool accepts — follow the er
 {"url": "https://api.example.com/orders", "method": "POST", "body": "{\"item\": 1, \"qty\": 2}", "content_type": "application/json"}
 ```
 
-**Credentials** (three shapes; values are never echoed; they do not survive cross-origin redirects; 401 responses distinguish "rejected" from "not sent"):
+**Credentials** (three shapes; stored once with `cred_defaults`, then every later call to that host uses them; values are never echoed; they do not survive cross-origin redirects; 401 responses distinguish "rejected" from "not sent"). The `"host"` key is not optional — a credential without one is refused, because it would ride to the next site you read:
 ```json
-{"url": "https://api.example.com/me", "auth": {"type": "bearer", "token": "eyJ..."}}
-{"url": "https://api.example.com/me", "auth": {"type": "basic", "username": "u", "password": "p"}}
-{"url": "https://api.example.com/me", "auth": {"type": "header", "name": "X-API-Key", "value": "key-123"}}
+{"tool": "cred_defaults", "arguments": {"set": {"host": "api.example.com", "auth": {"type": "bearer", "token": "eyJ..."}}}}
+{"tool": "cred_defaults", "arguments": {"set": {"host": "api.example.com", "auth": {"type": "basic", "username": "u", "password": "p"}}}}
+{"tool": "cred_defaults", "arguments": {"set": {"host": "api.example.com", "auth": {"type": "header", "name": "X-API-Key", "value": "key-123"}}}}
+{"url": "https://api.example.com/me"}
 ```
 
-**Session cookies** (same `session_id` re-sends that host's cookies automatically, 24h lifetime; responses report cookie NAMES only, never values; roster/cleanup via `sys_state`):
+**Session cookies** (same `session_id` re-sends that host's cookies automatically, 24h lifetime; responses report cookie NAMES only, never values; roster/cleanup via `sys_state`. Cookies you supply are stored per host the same way):
 ```json
-{"url": "https://example.com/login-check", "session_id": "sess1", "cookies": [{"name": "token", "value": "abc"}]}
+{"tool": "cred_defaults", "arguments": {"set": {"host": "example.com", "cookies": {"token": "abc"}}}}
+{"url": "https://example.com/login-check", "session_id": "sess1"}
 ```
 
 **Lazy-load interaction** (one action key per object; `scroll` waits for the page to stop growing — sites that gate lazy-load on `event.isTrusted` need `click` instead; every action leaves a receipt in `metadata.actions`):
@@ -112,9 +114,10 @@ The same key exists on `web_crawl`, where it matters more: the semantic path cos
 {"url": "https://arxiv.org/pdf/1706.03762", "pages": "1-3", "timeout": 60000}
 ```
 
-**Local dev service** (the SSRF guard rejects private hosts by default; with a proxy running, loopback may be intercepted — see troubleshooting "local services"):
+**Local dev service** (the SSRF guard rejects private hosts until the waiver is stored; with a proxy running, loopback may be intercepted — see troubleshooting "local services"):
 ```json
-{"url": "http://127.0.0.1:8080/api/health", "allow_private": true}
+{"tool": "cred_defaults", "arguments": {"set": {"allow_private": true}}}
+{"url": "http://127.0.0.1:8080/api/health"}
 ```
 
 **Force the browser tier** (once a site has shown escalation, skip the chain):
@@ -133,9 +136,10 @@ The same key exists on `web_crawl`, where it matters more: the semantic path cos
 {"url": "https://portal.example.com/dashboard", "cdp_url": "http://127.0.0.1:9222", "check_login": true}
 ```
 
-**Explicit proxy** (5s TCP precheck; an unreachable proxy returns `proxy_unreachable` before any request):
+**Proxy** (stored, not passed: a stored proxy is credited as an explicit one, so it gets the 5s TCP precheck and an unreachable proxy returns `proxy_unreachable` before any request):
 ```json
-{"url": "https://example.com", "proxy": "http://127.0.0.1:7890"}
+{"tool": "cred_defaults", "arguments": {"set": {"proxy": "http://127.0.0.1:7890"}}}
+{"url": "https://example.com"}
 ```
 
 ## web_search

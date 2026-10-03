@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from dhole_mcp import crawl as crawl_mod
+from dhole_mcp import identity
 from dhole_mcp.server import ResponseModel
 
 
@@ -361,11 +362,12 @@ class TestAllowPrivateIsNarrow:
         server = MasterFetchServer()
         server.get = fake_get
 
-        # allow_private lives in the options bag; the MCP dispatcher promotes it to
-        # a keyword, so calling the method directly takes it as one.
+        # 17.0 §3-17：allow_private 不再是逐次传的那一颗，它住在 identity.db 里，
+        # web_read 入口读回来并把 guard 的 scope 开在校验与抓取那两步上。所以「接线」
+        # 量的是「存进去的默认真的开到闸门吗」，而不是「参数送到 guard 了吗」。
         target = "http://127.0.0.1:8899/secret.txt"
-        out = await server.web_read(target, allow_private=True,
-                                       cache_ttl=0, timeout=6000)
+        identity.set_value("allow_private", True)
+        out = await server.web_read(target, cache_ttl=0, timeout=6000)
         assert hit == [target], out.error
         assert out.content == ["dev server body"]
 
@@ -586,9 +588,9 @@ class TestDeadProxyFailsFast:
 
         import time
         started = time.monotonic()
-        out = await server.web_read(
-            "https://example.com/", proxy="http://127.0.0.1:9/",
-            cache_ttl=0, timeout=30000)
+        identity.set_value("proxy", "http://127.0.0.1:9/")
+        out = await server.web_read("https://example.com/",
+                                     cache_ttl=0, timeout=30000)
         elapsed = time.monotonic() - started
 
         assert out.status == 0
@@ -619,10 +621,10 @@ class TestDeadProxyFailsFast:
         server = MasterFetchServer()
         server.get = _never
         server.stealthy_fetch = _never
+        identity.set_value("proxy", "http://127.0.0.1:9/")
         for pinned in ("http", "stealthy"):
             out = await server.web_read(
-                "https://example.com/", proxy="http://127.0.0.1:9/",
-                force_fetcher=pinned, cache_ttl=0)
+                "https://example.com/", force_fetcher=pinned, cache_ttl=0)
             assert out.error.startswith("proxy_unreachable"), f"{pinned}: {out.error}"
             assert out.fetcher_used == "none"
 
@@ -633,12 +635,15 @@ class TestDeadProxyFailsFast:
         proxy_socket["mode"] = "refused"
         server = MasterFetchServer()
 
-        out = await server.web_read(
-            "https://example.com/", proxy="http://user:sekret@127.0.0.1:9/",
-            cache_ttl=0, timeout=10000)
+        identity.set_value("proxy", "http://user:sekret@127.0.0.1:9/")
+        out = await server.web_read("https://example.com/",
+                                     cache_ttl=0, timeout=10000)
 
         assert "sekret" not in out.error
         assert "127.0.0.1:9" in out.error
+        # 代理现在住在落盘的默认里，于是响应多了一条出境的路：identity_applied 的
+        # 回显。它只许点名键（"proxy"），所以这里量整份响应而不只是 error。
+        assert "sekret" not in str(out.model_dump()), "凭据从响应的另一个字段出境了"
 
     @pytest.mark.asyncio
     async def test_a_live_proxy_endpoint_is_not_rejected(self, proxy_socket, monkeypatch):
@@ -657,9 +662,9 @@ class TestDeadProxyFailsFast:
         server = MasterFetchServer()
         server.get = fake_get
 
-        out = await server.web_read(
-            "https://example.com/", proxy="http://127.0.0.1:7890/",
-            cache_ttl=0, timeout=5000)
+        identity.set_value("proxy", "http://127.0.0.1:7890/")
+        out = await server.web_read("https://example.com/",
+                                     cache_ttl=0, timeout=5000)
 
         assert hit == ["https://example.com/"], "接受连接的代理不该被前置探测拦下"
         assert not out.error.startswith("proxy_unreachable")

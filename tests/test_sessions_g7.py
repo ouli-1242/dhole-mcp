@@ -270,6 +270,33 @@ class TestSmartFetchSeesTheSession:
         assert out.results[1].session_id == "bob"
         assert seen == ["bob", "bob"], seen
 
+    # 同一条扇出的另一半：session_id 不能把 `anti_detect` 弄丢 —— 扇出去的那两次
+    # 各自重问一次身份，档位一旦在 `_smart_fetch_bulk` 里掉了，每一次嵌套都会退回
+    # "auto"（或存储里的那一档）而且一句警告都没有。这条和上面那条 session_id 的
+    # 用例合起来才是这条扇出的完整证人。
+    @pytest.mark.asyncio
+    async def test_the_bulk_path_does_not_lose_the_ladder(self, monkeypatch):
+        rung: list = []
+        real_identity_for = MasterFetchServer._identity_for
+
+        def spy(self, url, *, cdp_url=None, anti_detect=None):
+            # web_read 每跑一次就问一次身份：这条记录因此同时覆盖外层那一次与
+            # 扇出去的每一次，谁把档位弄丢了都藏不住。
+            rung.append(anti_detect)
+            return real_identity_for(self, url, cdp_url=cdp_url,
+                                     anti_detect=anti_detect)
+
+        async def fake_get(self, url, **kwargs):
+            return _html_result(url)
+
+        monkeypatch.setattr(MasterFetchServer, "_identity_for", spy)
+        monkeypatch.setattr(MasterFetchServer, "get", fake_get)
+
+        await MasterFetchServer().web_read(
+            "", urls=[ME, LOGIN], cache_ttl=0, anti_detect="aggressive")
+
+        assert rung == ["aggressive"] * 3, rung
+
     @pytest.mark.asyncio
     async def test_an_unusable_id_is_said_out_loud_and_the_page_still_comes(self, monkeypatch):
         async def fake_get(self, url, **kwargs):

@@ -8,6 +8,7 @@ against real ResponseModel objects. No mocks of the functions themselves.
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
+from dhole_mcp import identity
 from dhole_mcp.server import (
     MasterFetchServer,
     ResponseModel, BulkResponseModel, _is_js_shell, _detect_content_issue, _is_cacheable,
@@ -857,11 +858,14 @@ class TestSmartFetchProxy:
         # Same seam as the auto-escalation twin below: this is about session
         # routing, and the pinned tier now asks the proxy the same question
         # before it dials anything (nothing listens on :8080 here).
+        #
+        # 17.0 §3-17: proxy is no longer a per-call argument — the egress lives in
+        # cred_defaults' store and web_read reads it back per call.
+        identity.set_value("proxy", "http://127.0.0.1:8080")
         with patch("dhole_mcp.fetcher.proxy_preflight", return_value=(True, "")):
             await server.web_read(
                 "https://example.com",
                 force_fetcher="stealthy",
-                proxy="http://127.0.0.1:8080",
                 cache_ttl=0,
             )
 
@@ -883,11 +887,13 @@ class TestSmartFetchProxy:
         # proxy_preflight: this test is about session routing, not reachability,
         # and nothing is listening on :8080 here. Without this, the preflight
         # returns proxy_unreachable and the tiers are never reached.
+        #
+        # The egress itself comes from the store (§3-17), same as the twin above.
+        identity.set_value("proxy", "http://127.0.0.1:8080")
         with patch("dhole_mcp.server._browser_deps_available", return_value=True), \
                 patch("dhole_mcp.fetcher.proxy_preflight", return_value=(True, "")):
             await server.web_read(
                 "https://example.com",
-                proxy="http://127.0.0.1:8080",
                 cache_ttl=0,
             )
 

@@ -22,6 +22,7 @@ import base64
 
 import pytest
 
+from dhole_mcp import identity
 from dhole_mcp.browser import _create_route_handler
 from dhole_mcp.fetcher import HTTPSession, Response as DholeResponse
 from dhole_mcp.security import SecurityError
@@ -34,6 +35,11 @@ from dhole_mcp.server import (
 
 URL = "https://staging.example.com/admin"
 CROSS = "https://third-party-analytics.net/collect"
+# 凭据从此是**存储里**的一行，而 `auth` 是 host-scoped 的键：这里的 scope 必须认得
+# URL 的那个主机，值才会应用上去。写错一个字符就是一条红 —— 那正是这次改造要盯着
+# 的事实（一条为 example.com 存的凭据不该去敲 evil-example.com 的门）。
+HOST = "staging.example.com"
+OTHER = "https://other.example.org/dashboard"
 
 
 # ─── 形状 → 头 ───────────────────────────────────────────────────────
@@ -176,9 +182,9 @@ class TestTheTierIsHandedBothTheHeaderAndTheNames:
     async def test_the_credential_reaches_the_request_as_a_header(self, monkeypatch):
         seen: dict = {}
         _fake_tier(monkeypatch, seen)
+        identity.set_value("auth", {"type": "bearer", "token": "t0k"}, scope=HOST)
 
-        out = await MasterFetchServer().web_read(
-            URL, auth={"type": "bearer", "token": "t0k"}, cache_ttl=0, timeout=8000)
+        out = await MasterFetchServer().web_read(URL, cache_ttl=0, timeout=8000)
 
         assert out.status == 200
         assert seen["headers"]["Authorization"] == "Bearer t0k"
@@ -189,10 +195,10 @@ class TestTheTierIsHandedBothTheHeaderAndTheNames:
         就没人知道该把它拿掉。"""
         seen: dict = {}
         _fake_tier(monkeypatch, seen)
+        identity.set_value("auth", {"type": "header", "name": "X-API-Key", "value": "k"},
+                           scope=HOST)
 
-        await MasterFetchServer().web_read(
-            URL, auth={"type": "header", "name": "X-API-Key", "value": "k"},
-            cache_ttl=0, timeout=8000)
+        await MasterFetchServer().web_read(URL, cache_ttl=0, timeout=8000)
 
         assert "x-api-key" in seen["credential_headers"]
 
@@ -200,10 +206,10 @@ class TestTheTierIsHandedBothTheHeaderAndTheNames:
     async def test_the_response_never_carries_the_credential_back(self, monkeypatch):
         seen: dict = {}
         _fake_tier(monkeypatch, seen)
+        identity.set_value("auth", {"type": "basic", "username": "admin",
+                                    "password": "hunter2"}, scope=HOST)
 
-        out = await MasterFetchServer().web_read(
-            URL, auth={"type": "basic", "username": "admin", "password": "hunter2"},
-            cache_ttl=0, timeout=8000)
+        out = await MasterFetchServer().web_read(URL, cache_ttl=0, timeout=8000)
 
         dumped = out.model_dump_json()
         assert "hunter2" not in dumped
@@ -211,39 +217,68 @@ class TestTheTierIsHandedBothTheHeaderAndTheNames:
         assert "Authorization" not in dumped
 
     @pytest.mark.asyncio
-    async def test_a_credential_that_is_ignored_is_said_out_loud(self, monkeypatch):
+    async def test_a_header_the_caller_cannot_pass_anymore_is_refused_not_ignored(
+            self, monkeypatch):
+        """`extra_headers` 没有替代品：一条凭据形状的默认属于 auth（它认 host），
+        不属于一次调用现挂的头。老契约里「调用方自己写的 Authorization 盖住 auth，
+        并说一句 ignored」随那条参数一起没了，所以这里钉还活着的两件事：传它是硬拒
+        绝（不是静默吞掉），而没存凭据的调用真的是匿名的 —— 存储是唯一来源。
+        """
         seen: dict = {}
         _fake_tier(monkeypatch, seen)
 
-        out = await MasterFetchServer().web_read(
-            URL, auth={"type": "bearer", "token": "ignored-me"},
-            extra_headers={"Authorization": "Bearer theirs"},
-            cache_ttl=0, timeout=8000)
+        with pytest.raises(ValueError, match="Unsupported argument") as exc:
+            await MasterFetchServer()._dispatch(
+                "web_read", {"url": URL,
+                             "extra_headers": {"Authorization": "Bearer theirs"}})
+        assert "extra_headers" in str(exc.value)
+        assert seen == {}, "被拒绝的这次调用不该发出任何请求"
 
-        assert "ignored" in out.summary.lower()
-        assert seen["headers"]["Authorization"] == "Bearer theirs"
+        out = await MasterFetchServer().web_read(URL, cache_ttl=0, timeout=8000)
+
+        assert out.status == 200
+        assert "authorization" not in {k.lower() for k in (seen.get("headers") or {})}
+        assert not seen.get("credential_headers")
 
     @pytest.mark.asyncio
     async def test_a_bad_shape_refuses_before_any_request(self, monkeypatch):
         async def boom(self, url, **kwargs):
             raise AssertionError("a request went out with an unparsed credential")
         monkeypatch.setattr(MasterFetchServer, "get", boom)
+        identity.set_value("auth", {"type": "magic"}, scope=HOST)
 
-        out = await MasterFetchServer().web_read(URL, auth={"type": "magic"}, cache_ttl=0)
+        out = await MasterFetchServer().web_read(URL, cache_ttl=0)
 
         assert "invalid auth" in out.error
         assert "basic" in out.next_action and "bearer" in out.next_action
 
     @pytest.mark.asyncio
-    async def test_the_contextvar_does_not_smuggle_a_credential_into_the_next_call(
+    async def test_a_stored_credential_does_not_smuggle_itself_into_the_next_host(
             self, monkeypatch):
+        """凭据的「下一次调用」从此带一个条件：同一个 host。
+
+        这一条原来防的是 contextvar 把上一次的凭据漏进下一次调用。存储之后，同一主机
+        的下一次调用**本该**再拿到它（那正是"设一次、之后每一次都用"的意义），所以
+        泄漏的定义换成了「跟着去了一个没为它存过的主机」。忘了那一行之后连本机都不该
+        再发，所以末尾一并钉住：存储是唯一来源。
+        """
         seen: dict = {}
         _fake_tier(monkeypatch, seen)
         srv = MasterFetchServer()
+        identity.set_value("auth", {"type": "bearer", "token": "first"}, scope=HOST)
 
-        await srv.web_read(URL, auth={"type": "bearer", "token": "first"},
-                              cache_ttl=0, timeout=8000)
+        await srv.web_read(URL, cache_ttl=0, timeout=8000)
+        assert seen["headers"]["Authorization"] == "Bearer first", \
+            "先证明存的那一行真的应用了，否则下面两条只是空断言"
+
         seen.clear()
+        await srv.web_read(OTHER, cache_ttl=0, timeout=8000)
+
+        assert "Authorization" not in str(seen.get("headers") or {})
+        assert not seen.get("credential_headers")
+
+        seen.clear()
+        identity.unset(["auth"])
         await srv.web_read(URL, cache_ttl=0, timeout=8000)
 
         assert "Authorization" not in str(seen.get("headers") or {})
@@ -399,10 +434,10 @@ class TestA401SaysWhichOneItIs:
             return ResponseModel(url=url, status=401, content=["<p>no</p>"],
                                  fetcher_used="http")
         monkeypatch.setattr(MasterFetchServer, "get", fake_get)
+        identity.set_value("auth", {"type": "basic", "username": "a",
+                                    "password": "wrong-on-purpose"}, scope=HOST)
 
-        out = await MasterFetchServer().web_read(
-            URL, auth={"type": "basic", "username": "a", "password": "wrong-on-purpose"},
-            cache_ttl=0)
+        out = await MasterFetchServer().web_read(URL, cache_ttl=0)
 
         assert "REFUSED" in out.next_action
         assert "basic" in out.next_action
@@ -418,5 +453,6 @@ class TestA401SaysWhichOneItIs:
         out = await MasterFetchServer().web_read(URL, cache_ttl=0)
 
         assert "needs credentials" in out.next_action
-        assert "auth=" in out.next_action
+        # 17.0 §3-17：凭据不再是逐次参数，所以这句话的门是 cred_defaults。
+        assert "auth" in out.next_action and "cred_defaults" in out.next_action
         assert "REFUSED" not in out.next_action
