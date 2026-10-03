@@ -878,7 +878,7 @@ class TestEngineState:
         assert out.engine_health["brave"]["cooldown_seconds_left"] > 0
 
     def test_cli_engines_reset_clears_the_files(self, _ms):
-        from dhole_mcp.server import _cmd_engines
+        from dhole_mcp.ops import _cmd_engines
         _ms._record_block("brave")
         _ms._ENGINE_YIELD["brave"] = {"n": 1, "status": "ok", "ts": 0}
         assert _cmd_engines(["reset"]) == 0

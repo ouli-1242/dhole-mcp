@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 
 from dhole_mcp import env_registry
-from dhole_mcp.server import _help_epilog
+from dhole_mcp.ops import _help_epilog
 
 README = Path(__file__).resolve().parents[1] / "README.md"
 

@@ -225,7 +225,7 @@ class TestTheConfigIsVisible:
         assert ms.heartbeat_settings()["interval_s"] == 300.0
 
     def test_engines_list_prints_the_in_force_values(self, capsys):
-        from dhole_mcp.server import _cmd_engines
+        from dhole_mcp.ops import _cmd_engines
 
         assert _cmd_engines(["list"]) == 0
         out = capsys.readouterr().out

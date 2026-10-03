@@ -30,7 +30,7 @@ _FIX = """\
 def main() -> int:
     """Run the server; if it cannot even be imported, say which piece is missing."""
     try:
-        from dhole_mcp.server import main as _server_main
+        from dhole_mcp.ops import main as _server_main
         return _server_main() or 0
     except (ImportError, ModuleNotFoundError) as exc:
         # The missing name is what makes this actionable: "No module named 'bs4'"

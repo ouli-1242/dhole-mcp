@@ -367,6 +367,7 @@ class TestTheRepairKnobsMoveNothing:
     def test_the_entry_point_behaves_the_same_with_the_stale_knob(
             self, monkeypatch, capsys, knob, value):
         import builtins
+        import sys
 
         from dhole_mcp import cli
 
@@ -379,6 +380,9 @@ class TestTheRepairKnobsMoveNothing:
                                           name="dhole_mcp.server")
             return real_import(name, *args, **kwargs)
 
+        # ops 在别的用例里已经被导入过；不清缓存就不会再执行它那行
+        # `from dhole_mcp.server import …`，于是测不到坏安装这条路。
+        monkeypatch.delitem(sys.modules, "dhole_mcp.ops", raising=False)
         monkeypatch.setattr(builtins, "__import__", _fake_import)
         rc = cli.main()
         captured = capsys.readouterr()

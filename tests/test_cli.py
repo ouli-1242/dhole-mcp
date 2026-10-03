@@ -1,6 +1,6 @@
 """CLI tests: the entry point's structure, the doctor/engines subcommand surface.
 
-Tests the real cli.py module structure and server.main() argument handling. No
+Tests the real cli.py module structure and ops.main() argument handling. No
 network calls. The entry point is tested BEHAVIORALLY: a subprocess blocks every
 heavy dependency and then imports dhole_mcp.cli — the whole point is that it must
 still import on a broken install. What it *says* when the import fails, and the
@@ -125,7 +125,7 @@ class TestDoctorSubcommandSyntax:
                                                               argv_tail):
         """Same env, same tmp home, both invocations must yield byte-identical
         stdout AND the same exit code (0/1 depending on install state)."""
-        from dhole_mcp import server as srv
+        from dhole_mcp import ops as srv
 
         monkeypatch.setattr(sys, "argv", ["dhole", *argv_tail])
         code_a = None
@@ -151,7 +151,7 @@ class TestDoctorSubcommandSyntax:
             self, env_isolated, monkeypatch, capsys):
         """`dhole doctoooor` was a "usage" dump with no hint. Now it says
         exactly what the plan wanted: `did you mean: dhole doctor?`."""
-        from dhole_mcp import server as srv
+        from dhole_mcp import ops as srv
 
         monkeypatch.setattr(sys, "argv", ["dhole", "doctoooor"])
         try:
@@ -169,7 +169,7 @@ class TestDoctorSubcommandSyntax:
                                                   monkeypatch, capsys):
         """The unknown-subcommand guard fires only for a bare positional that
         is not a flag. `-v`, `--http`, `-u` etc. must still parse normally."""
-        from dhole_mcp import server as srv
+        from dhole_mcp import ops as srv
 
         monkeypatch.setattr(sys, "argv", ["dhole", "--help"])
         with pytest.raises(SystemExit) as excinfo:
@@ -192,7 +192,7 @@ class TestEnginesProbe:
     @staticmethod
     def _run(monkeypatch, capsys, args, reports=None, cooldowns=None):
         from dhole_mcp import search_engines as se
-        from dhole_mcp import server as srv
+        from dhole_mcp import ops as srv
         from dhole_mcp.search_engines import EngineReport
 
         given = reports or {}

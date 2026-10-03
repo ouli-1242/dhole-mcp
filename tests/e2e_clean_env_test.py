@@ -124,7 +124,7 @@ class Client:
     def __init__(self, env: dict):
         self.proc = subprocess.Popen(
             _python_args("import sys;"
-                         "from dhole_mcp.server import main;"
+                         "from dhole_mcp.ops import main;"
                          "sys.exit(main())"),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, env=env, cwd=str(REPO_ROOT))

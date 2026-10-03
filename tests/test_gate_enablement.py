@@ -26,6 +26,14 @@ from dhole_mcp import env_registry as er
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 SERVER_SRC = REPO / "src" / "dhole_mcp" / "server.py"
+# B6 之后 `dhole <verb>` 那张表搬进了 ops.py：守卫读的是文本，所以它跟着搬。
+OPS_SRC = REPO / "src" / "dhole_mcp" / "ops.py"
+
+
+def _cli_text() -> str:
+    """两张源文件拼起来的文本 —— 命令表在哪份里，守卫就扫哪份。"""
+    return (SERVER_SRC.read_text(encoding="utf-8") + "\n"
+            + OPS_SRC.read_text(encoding="utf-8"))
 CORPUS = REPO / "src" / "dhole_mcp" / "skills" / "dhole-web"
 
 #: Flags that gate NO capability a user is trying to reach, each with the reason
@@ -58,7 +66,7 @@ def unexplained_gates(entries=None) -> list[str]:
 
 
 def _cli_subcommands(src: str) -> set[str]:
-    """`dhole <verb>` 的登记表，从 server.py 的源码里读出来。
+    """`dhole <verb>` 的登记表，从源码文本里读出来（B6 之后它在 ops.py）。
 
     解析而不导入：main() 里那个 `_SUBCOMMANDS` 是个函数内局部量，导入路径摸不到它；
     而"哪个命令能开门"这个问题必须落在真实文本上，否则守卫只是在读自己的假设。
@@ -93,7 +101,7 @@ class TestNoCapabilityBehindAGate:
         """
         import importlib.util
 
-        subcommands = _cli_subcommands(SERVER_SRC.read_text(encoding="utf-8"))
+        subcommands = _cli_subcommands(_cli_text())
         assert subcommands, "读不到 _SUBCOMMANDS —— 守卫要扫的东西换了形状，得同步改这里"
         for gone in ("init", "model"):
             assert gone not in subcommands, f"dhole {gone} 又回来了：{sorted(subcommands)}"
@@ -106,7 +114,7 @@ class TestNoCapabilityBehindAGate:
         写明文凭据，换来的"这个 IP 被盯上就换下一个"对免密引擎并不成立（同一台机器
         换端口不换指纹）。出口因此退回一个字符串、一条 env 变量；读侧由
         tests/test_search_proxy.py 守，这里只钉"那条写用户机器的命令不存在"。"""
-        subcommands = _cli_subcommands(SERVER_SRC.read_text(encoding="utf-8"))
+        subcommands = _cli_subcommands(_cli_text())
         assert "proxy" not in subcommands, f"dhole proxy 又回来了：{sorted(subcommands)}"
         from dhole_mcp import server
         assert not hasattr(server, "_cmd_proxy"), "_cmd_proxy 还在，只是没登记进表里"

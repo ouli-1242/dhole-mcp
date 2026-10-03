@@ -183,6 +183,8 @@ class TestBrokenImportSpeaksUp:
 
         blocker = _Blocker()
         monkeypatch.delitem(sys.modules, "dhole_mcp.server", raising=False)
+        # B6 之后入口链是 cli → ops → server：清掉 ops 的缓存，那一行 server 导入才会真的再跑一次。
+        monkeypatch.delitem(sys.modules, "dhole_mcp.ops", raising=False)
         sys.meta_path.insert(0, blocker)
         try:
             yield
@@ -242,7 +244,7 @@ class TestUpdateCommandIsGone:
     def test_dhole_u_is_rejected_by_argparse(self, monkeypatch, tmp_path, capsys):
         """不是"接受但什么都不做"，是明确拒绝：一个不再存在的开关静默成功，
         用户就永远不知道自己该去哪重装。"""
-        from dhole_mcp import server as srv
+        from dhole_mcp import ops as srv
 
         monkeypatch.setenv("DHOLE_HOME", str(tmp_path / "home"))
         monkeypatch.setattr(sys, "argv", ["dhole", "-u"])
@@ -253,7 +255,7 @@ class TestUpdateCommandIsGone:
 
     def test_dhole_update_long_form_is_rejected_too(self, monkeypatch, tmp_path,
                                                     capsys):
-        from dhole_mcp import server as srv
+        from dhole_mcp import ops as srv
 
         monkeypatch.setenv("DHOLE_HOME", str(tmp_path / "home"))
         monkeypatch.setattr(sys, "argv", ["dhole", "--update"])
@@ -262,7 +264,7 @@ class TestUpdateCommandIsGone:
         assert excinfo.value.code == 2
 
     def test_help_advertises_no_update_command(self, monkeypatch, tmp_path, capsys):
-        from dhole_mcp import server as srv
+        from dhole_mcp import ops as srv
 
         monkeypatch.setenv("DHOLE_HOME", str(tmp_path / "home"))
         monkeypatch.setattr(sys, "argv", ["dhole", "--help"])

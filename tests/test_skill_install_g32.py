@@ -10,7 +10,7 @@ refuses to clobber local edits without --force.
 from pathlib import Path
 
 
-from dhole_mcp.server import _cmd_skill, _skill_manifest
+from dhole_mcp.ops import _cmd_skill, _skill_manifest
 
 _BUNDLED = Path(__file__).resolve().parent.parent / "src" / "dhole_mcp" / "skills" / "dhole-web"
 
