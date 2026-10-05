@@ -695,7 +695,14 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
     if result.status == 0:
         # A local-file failure has nothing to do with the network; saying
         # "network error" sent agents debugging proxies over a bad path.
-        parts.append("local error" if result.fetcher_used == "parse" else "network error")
+        # A security gate is the same mistake in the other direction: the CDP
+        # first-attach refusal came back "network error" while no request had
+        # ever been attempted (2026-10-05) - the reader then debugs the proxy
+        # instead of asking the one question that moves it.
+        if (result.error or "").startswith("cdp_authorization_required"):
+            parts.append("awaiting approval")
+        else:
+            parts.append("local error" if result.fetcher_used == "parse" else "network error")
     else:
         parts.append(f"{int(result.status)} {'OK' if result.status < 400 else 'ERR'}")
     if probe_ok:
@@ -796,6 +803,23 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             "same way. Check the proxy host/port and that the proxy is running, or "
             "forget it (cred_defaults unset=['proxy']) to fetch directly. Raising "
             "timeout will not help: the failure happens before the request."
+        )
+    elif err.startswith("cdp_authorization_required"):
+        # 一道等批准的闸，不是站点故障：能做的只有"问过用户，再带 confirm 重发同一条"。
+        # 通用的 "换个来源或调参数重试" 在这里是错的 —— 没有任何参数能放宽它，而把
+        # cdp_url= 删掉回答的是另一个问题（一次不带登录态的抓取）。
+        next_action = (
+            "Ask the user, then re-call the SAME url with confirm=true - that "
+            "authorizes the host this call names and nothing else. No parameter "
+            "widens the fence, and dropping cdp_url= answers a different question "
+            "(an unauthenticated fetch of a page you wanted read logged-in)."
+        )
+    elif err.startswith("cdp_host_not_allowed"):
+        next_action = (
+            "the host fence refused a site that was never authorized - no parameter "
+            "widens it. Re-call with cdp_url= plus confirm=true to authorize the "
+            "host THIS call names, or revoke one you no longer want with "
+            "sys_state(clear=['cdp:host=<name>'])."
         )
     elif err.startswith("schema_no_match"):
         next_action = ("no selector matched this page - re-check the selectors, or fetch "

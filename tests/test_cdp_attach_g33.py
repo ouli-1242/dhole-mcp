@@ -38,65 +38,155 @@ def _fresh_cdp_store(monkeypatch, tmp_path):
 
 
 class TestCdpAttachGate:
-    def test_first_attach_refused_nothing_authorized(self):
-        error, allowed = _cdp_attach_gate("http://127.0.0.1:9222")
+    """批次 7：授权与围栏说的是**这一次点名要读的那个站**，不是调试端口。
+
+    2026-10-05 实测：闸写的是 `urlparse(cdp_url).hostname`（永远 `127.0.0.1`），而
+    route 层拿**目标主机**比那名册 —— 两边各说各话，名册里永远不可能出现要读的那个站，
+    于是 attach 每一次都撞死在围栏上（实测名册 `["127.0.0.1"]`、目标
+    `i.mooc.chaoxing.com` 被 `cdp_host_not_allowed` 拦下，`content: []`）。这个类钉的
+    就是"两边说同一套主机名"这一条等式。
+    """
+
+    CDP = "http://127.0.0.1:9222"
+    SITE = "https://site.example.test/space/index"
+
+    def test_first_attach_to_a_target_host_is_refused_and_authorizes_nothing(self):
+        error, allowed = _cdp_attach_gate(self.CDP, targets=[self.SITE])
         assert error is not None
         assert "cdp_authorization_required" in error
         assert "confirm=true" in error
+        assert "site.example.test" in error, "拒绝要点名**要读的那个站**"
+        assert "127.0.0.1" not in error, "调试端口不是被授权的对象，别写进拒绝里"
         assert allowed is None
         assert _cdp_authorized_hosts() == frozenset()
 
-    def test_confirm_authorizes_and_persists(self, tmp_path):
-        error, allowed = _cdp_attach_gate("http://127.0.0.1:9222", confirm=True)
+    def test_confirm_authorizes_the_target_host_not_the_endpoint(self, tmp_path):
+        error, allowed = _cdp_attach_gate(self.CDP, confirm=True, targets=[self.SITE])
         assert error is None
-        assert allowed == frozenset({"127.0.0.1"})
-        # 落盘：文件存在、内容是主机集合、权限收紧
+        assert allowed == frozenset({"site.example.test"})
         raw = json.loads((tmp_path / "cdp_hosts.json").read_text(encoding="utf-8"))
-        assert raw == {"hosts": ["127.0.0.1"]}
+        assert raw == {"hosts": ["site.example.test"]}, (
+            "名册里出现 127.0.0.1 就是这次事故的形状：它匹配不上任何目标请求")
 
-    def test_second_call_needs_no_confirm(self):
-        first, _ = _cdp_attach_gate("http://127.0.0.1:9222", confirm=True)
-        assert first is None
-        error, allowed = _cdp_attach_gate("http://127.0.0.1:9222")
+    def test_second_call_to_the_same_target_needs_no_confirm(self):
+        assert _cdp_attach_gate(self.CDP, confirm=True, targets=[self.SITE])[0] is None
+        error, allowed = _cdp_attach_gate(self.CDP, targets=[self.SITE])
         assert error is None
-        assert allowed == frozenset({"127.0.0.1"})
+        assert allowed == frozenset({"site.example.test"})
 
-    def test_other_host_still_refused_after_authorize(self):
-        # 围栏按主机记账：同主机换端口仍是已授权（9222 → 9333 都是 127.0.0.1），
-        # 真正的"另一台主机"要换 hostname。
-        _cdp_attach_gate("http://127.0.0.1:9222", confirm=True)
-        error, _ = _cdp_attach_gate("http://127.0.0.1:9333")
-        assert error is None
-        error, _ = _cdp_attach_gate("http://other.example.test:9222")
+    def test_another_target_is_still_refused_after_one_is_authorized(self):
+        # 授权的是**主机**，不是某一条 URL：换路径不算换主机，换 hostname 才算。
+        _cdp_attach_gate(self.CDP, confirm=True, targets=[self.SITE])
+        error, _ = _cdp_attach_gate(self.CDP, targets=["https://other.example.test/"])
+        assert error is not None and "other.example.test" in error
+        assert _cdp_attach_gate(self.CDP,
+                                targets=["https://site.example.test/other?page=2"])[0] is None
+
+    def test_a_bulk_call_authorizes_every_host_it_names(self, tmp_path):
+        urls = ["https://a.example.test/1", "https://b.example.test/2",
+                "https://A.EXAMPLE.TEST:443/3"]
+        error, _ = _cdp_attach_gate(self.CDP, targets=urls)
         assert error is not None
-        assert "cdp_authorization_required" in error
+        assert "a.example.test" in error and "b.example.test" in error, "缺哪台说要哪台"
+        _cdp_attach_gate(self.CDP, confirm=True, targets=urls)
+        raw = json.loads((tmp_path / "cdp_hosts.json").read_text(encoding="utf-8"))
+        assert raw["hosts"] == ["a.example.test", "b.example.test"], "去重且小写"
 
-    def test_endpoint_host_is_extracted_and_lowered(self, tmp_path):
-        _cdp_attach_gate("http://LOCALhost.DAILY-BUGLE.test:9222/json", confirm=True)
-        assert _cdp_authorized_hosts() == frozenset({"localhost.daily-bugle.test"})
+    def test_the_gate_and_the_fence_read_the_same_name_list(self):
+        """这次修复的全部内容就是这条等式，所以用**真的** route handler 跑一遍，
+        而不是比字符串：闸授权过的主机，围栏必须放行；没授权过的第三方 origin，
+        围栏仍然拦（cookie 不跟着走）。"""
+        _, allowed = _cdp_attach_gate(self.CDP, confirm=True, targets=[self.SITE])
+        handler = _create_route_handler(False, allowed_hosts=allowed)
+        mine = _FakeRoute("https://site.example.test/page")
+        asyncio.run(handler(mine))
+        assert mine.continued and not mine.aborted, "授权了还拦，就是原 bug"
+        third = _FakeRoute("https://tracker.example.test/pixel.gif", resource_type="image")
+        asyncio.run(handler(third))
+        assert third.aborted, "围栏的另一半不许被修松"
+
+    def test_the_entry_pre_screen_admits_the_authorized_target(self):
+        """`fetch()` 的入口快失败与 route 层同一份名册 —— 它从前也必然拦死。"""
+        from dhole_mcp.browser import BrowserSession
+        _, allowed = _cdp_attach_gate(self.CDP, confirm=True, targets=[self.SITE])
+        session = BrowserSession(cdp_url=self.CDP, allowed_hosts=allowed)
+        session._is_alive = True
+        with pytest.raises(CDPHostNotAllowedError, match="cdp_host_not_allowed"):
+            asyncio.run(session.fetch("https://never-approved.example.test/"))
 
     def test_authorize_merges_never_clobbers(self, tmp_path):
-        _cdp_attach_gate("http://a.example.test:9222", confirm=True)
-        _cdp_attach_gate("http://b.example.test:9222", confirm=True)
+        _cdp_attach_gate(self.CDP, confirm=True, targets=["https://a.example.test/"])
+        _cdp_attach_gate(self.CDP, confirm=True, targets=["https://b.example.test/"])
         raw = json.loads((tmp_path / "cdp_hosts.json").read_text(encoding="utf-8"))
         assert raw["hosts"] == ["a.example.test", "b.example.test"]
 
-    def test_no_url_is_a_noop(self):
-        assert _cdp_attach_gate(None) == (None, None)
-        assert _cdp_attach_gate(None, confirm=True) == (None, None)
+    def test_no_cdp_url_is_a_noop(self):
+        assert _cdp_attach_gate(None, targets=[self.SITE]) == (None, None)
+        assert _cdp_attach_gate(None, confirm=True, targets=[self.SITE]) == (None, None)
 
     def test_refusal_and_authorization_are_audited(self, tmp_path, monkeypatch):
         log = tmp_path / "usage.jsonl"
         monkeypatch.setenv("DHOLE_USAGE_LOG", str(log))
-        _cdp_attach_gate("http://127.0.0.1:9222")                      # refused
-        _cdp_attach_gate("http://127.0.0.1:9222", confirm=True)        # authorized
+        _cdp_attach_gate(self.CDP, targets=[self.SITE])              # refused
+        _cdp_attach_gate(self.CDP, confirm=True, targets=[self.SITE])  # authorized
         events = [json.loads(line) for line in
                   log.read_text(encoding="utf-8").splitlines()]
         kinds = [e["event"] for e in events]
         assert "cdp_attach_refused" in kinds and "cdp_authorize" in kinds
-        # 审计记的是主机与端点形状，不是任何 cookie/参数值
+        # 审计记的是**要读的主机**与端点形状，不是任何 cookie/参数值
         refused = next(e for e in events if e["event"] == "cdp_attach_refused")
-        assert refused["host"] == "127.0.0.1"
+        assert refused["hosts"] == ["site.example.test"]
+        assert refused["endpoint"] == self.CDP
+
+
+class TestTheRefusalReachesTheCallerWhole:
+    """批次 7 的后半：一条**设计好的**拒绝不许被剪成半句。
+
+    从前闸口 `raise ValueError`，于是这条拒绝被交给 transport 的通用异常处理器 ——
+    `call_tool` 的 `str(e)[:300]` 把它剪在 `…confirm=true to authori`（本机名
+    `site.example.test` 实测 567 字符，剪在单词中间），丢掉的后半正是「授权哪一台、
+    `sys_state(clear=['cdp:host=…'])` 怎么撤」，而 summary / next_action / content_ok
+    一起消失：最需要被读明白的那一条响应 arrives as a bare ``{"error": ...}``。围栏那条
+    （`CDPHostNotAllowedError`，同一主机实测 388 字符）是同一族的第二个受害者，200 字符
+    的帽子把它剪在 "…igation is fenced to t" 上。
+    """
+
+    CDP = "http://127.0.0.1:9222"
+    SITE = "https://site.example.test/space/index"
+
+    def _refusal(self, monkeypatch):
+        from dhole_mcp.server import MasterFetchServer
+
+        def _never(*a, **k):
+            raise AssertionError("被闸拦住的调用不许进任何一层抓取")
+
+        monkeypatch.setattr(MasterFetchServer, "bulk_stealthy_fetch", _never)
+        monkeypatch.setattr(MasterFetchServer, "get", _never)
+        return asyncio.run(MasterFetchServer().web_read(url=self.SITE, cdp_url=self.CDP))
+
+    def test_the_first_attach_refusal_travels_the_envelope(self, monkeypatch):
+        out = self._refusal(monkeypatch)
+        assert out.error.startswith("cdp_authorization_required")
+        assert "sys_state(clear=" in out.error, "撤销路径必须活着走到调用方手里"
+        assert out.content == [] and out.content_ok is False
+        assert _cdp_authorized_hosts() == frozenset()
+
+    def test_the_refusal_says_what_to_do_and_what_cannot_work(self, monkeypatch):
+        out = self._refusal(monkeypatch)
+        assert "confirm=true" in out.next_action, out.next_action
+        # 批次 3 那条规矩的镜像：不许建议一个点了没反应的旋钮
+        assert "no parameter widens" in out.next_action.lower(), out.next_action
+        assert "awaiting approval" in out.summary, out.summary
+        assert "network error" not in out.summary, "一道等批准的闸不是网络故障"
+
+    def test_the_fence_message_survives_the_tier_clip(self):
+        from dhole_mcp.server import _tier_error_text
+
+        designed = CDPHostNotAllowedError("cdp_host_not_allowed: " + "x" * 400)
+        assert len(_tier_error_text(designed)) > 300, (
+            "dhole 自己写的拒绝被帽子吃掉，结尾那句 remedy 就没了")
+        noise = RuntimeError("playwright call log " + "y" * 400)
+        assert len(_tier_error_text(noise)) == 200, "噪声仍然要剪，否则信封被 call log 灌满"
 
 
 class TestAttachIsPerCallNotPerBatch:
@@ -133,10 +223,11 @@ class TestAttachIsPerCallNotPerBatch:
 
         没有这一条，上一条守卫靠"永远拒绝"也能通过。
         """
-        error, allowed = _cdp_attach_gate(self.CDP, confirm=True)
+        error, allowed = _cdp_attach_gate(self.CDP, confirm=True,
+                                          targets=["https://a.example.test/1"])
         assert error is None
-        assert allowed == frozenset({"127.0.0.1"})
-        assert _cdp_authorized_hosts() == frozenset({"127.0.0.1"})
+        assert allowed == frozenset({"a.example.test"})
+        assert _cdp_authorized_hosts() == frozenset({"a.example.test"})
 
 
 class _Stop(Exception):

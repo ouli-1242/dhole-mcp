@@ -1056,51 +1056,106 @@ def _cdp_revoke_hosts(hosts: List[str]) -> int:
         _cdp_hosts_stamp = None
 
 
-def _cdp_endpoint_host(cdp_url: str) -> str:
-    """CDP 端点 URL 里的主机名（围栏与授权都按主机记账）。取不到就原样小写。"""
-    host = (urlparse(str(cdp_url)).hostname or "").strip().lower()
-    return host or str(cdp_url).strip().lower()
+def _cdp_target_hosts(targets) -> list[str]:
+    """这一次调用点名要读的那些主机 —— 授权与围栏都按它们记。
+
+    17.0 批次 7：从前这里读的是 `urlparse(cdp_url).hostname`，也就是**调试端点**自己的
+    主机（永远 `127.0.0.1`）。而 route 层的围栏拿每个请求的**目标主机**去比那名册，
+    两边用的是两个命名空间：名册里永远不可能出现 `i.mooc.chaoxing.com`，也没有任何参数
+    能把目标主机加进去 —— 于是 attach 每一次都在围栏上撞死，"带登录态抓取"这个能力今天
+    拿不到一个字节。授权的对象从来应该是"用户同意让 dhole 带着他的 cookie 去读的那个站"，
+    不是"Chrome 监听在哪"。
+    """
+    if isinstance(targets, str) or targets is None:
+        targets = [targets] if targets else []
+    hosts: list[str] = []
+    for one in targets:
+        host = (urlparse(str(one or "")).hostname or "").strip().lower()
+        if host and host not in hosts:
+            hosts.append(host)
+    return hosts
 
 
-def _cdp_attach_gate(cdp_url: Optional[str],
-                     confirm: bool = False) -> tuple[Optional[str], Optional[frozenset]]:
-    """安全闸 1/2（G33 → 17.0 §3-16）：CDP attach 改成**先问再记**。
+def _cdp_attach_gate(cdp_url: Optional[str], confirm: bool = False,
+                     targets=()) -> tuple[Optional[str], Optional[frozenset]]:
+    """安全闸 1/2（G33 → 17.0 §3-16 → 批次 7）：CDP attach 改成**先问再记**。
 
     attach 用户真实 Chrome = 一次交出**所有已登录站点**的已认证读权限，比
-    "写操作要确认"严重一个数量级。所以 cdp_url 默认拒绝；一台从未授权过的
-    主机，第一次不执行，返回待授权并转述（与 ``submit`` 同一套确认语义）：
-    调用方带 ``confirm=true`` 重发，才落盘授权并放行。围栏 = 已授权主机集合
-    （导航圈在里面，机制层执行在 browser.py 的 route handler）。
+    "写操作要确认"严重一个数量级。所以 cdp_url 默认拒绝；本次要读的**目标主机**里只要
+    有一台从未授权过，就不执行，返回待授权并转述（与 ``submit`` 同一套确认语义）：调用方
+    带 ``confirm=true`` 重发，才把这些主机落盘授权并放行。
 
-    Returns ``(error, allowed_hosts)``：error 非 None 时调用方 raise；
-    allowed_hosts 为 None 表示不设围栏（理论不可达 —— 落盘集合至少含本机）。
+    围栏 = 已授权的目标主机集合（机制层执行在 browser.py 的 route handler）。语义因此
+    是"你的登录 cookie 只跟着你点名的那些站走"：页面里第三方 origin 的子资源、跳到别的
+    域的重定向，一律在 route 层 abort。这不是宽松化 —— 从前那个名册装的是端点主机，
+    对目标请求一条都匹配不上，围栏等于一个永远关着的门。
+
+    Returns ``(error, allowed_hosts)``：error 非 None 时调用方**不得**发起请求。
+    allowed_hosts 为 None 表示不设围栏（理论不可达 —— 过了闸就至少含本次的目标主机）。
     """
     if not cdp_url:
         return None, None
-    host = _cdp_endpoint_host(cdp_url)
+    wanted = _cdp_target_hosts(targets)
     authorized = _cdp_authorized_hosts()
-    if host in authorized:
+    missing = [h for h in wanted if h not in authorized]
+    if not missing:
         return None, (authorized or None)
     if confirm:
-        _cdp_authorize_host(host)
-        _audit_event("cdp_authorize", host=host,
+        for host in missing:
+            _cdp_authorize_host(host)
+        _audit_event("cdp_authorize", hosts=missing,
                      endpoint=str(cdp_url)[:120],
                      authorized_hosts=sorted(_cdp_authorized_hosts()))
         return None, (_cdp_authorized_hosts() or None)
-    _audit_event("cdp_attach_refused", host=host,
+    _audit_event("cdp_attach_refused", hosts=missing,
                  endpoint=str(cdp_url)[:120],
-                 reason="host not authorized yet")
+                 reason="target host not authorized yet")
+    named = ", ".join(repr(h) for h in missing)
+    revoke = " or ".join(f"clear=['cdp:host={h}']" for h in missing)
     return (
-        "cdp_authorization_required: this is the FIRST attach to host "
-        f"{host!r}, so nothing was executed - attaching your real Chrome hands "
-        "over the authenticated session of EVERY site you are logged into, and "
-        "dhole asks once before doing that. Re-call with confirm=true to "
-        "authorize this host (the approval is remembered for it and every later "
-        "attach to it is fenced to the authorized hosts; revoke later with "
-        f"sys_state(clear=['cdp:host={host}']) - deleting "
-        f"{_CDP_HOSTS_FILE_NAME} works too).",
+        f"cdp_authorization_required: this is the FIRST attach for {named}, so "
+        "nothing was executed - attaching your real Chrome hands over the "
+        "authenticated session of EVERY site you are logged into, and dhole asks "
+        "once per host before doing that. Re-call the SAME url with confirm=true "
+        f"to authorize {named}; the approval is remembered per host, and every "
+        "later request to another origin (a redirect, a page-script fetch) stays "
+        f"fenced out of your cookies. Revoke with sys_state({revoke}) - deleting "
+        f"{_CDP_HOSTS_FILE_NAME} works too.",
         None,
     )
+
+
+def _cdp_refusal_result(url: str, msg: str) -> "ResponseModel":
+    """The first-attach refusal as an ordinary envelope, not a transport error.
+
+    实测形状（一台未授权目标主机）：这条拒本是 **573 字符**，其中前 300 字符止于
+    `…confirm=true to autho` —— 单词中间。它被剪的位置不是排版决定的，是 `call_tool` 那个
+    通用异常处理器（`server.py:7424` 的 `[:300]`）决定的；被剪掉的尾巴才是唯一可执行的两
+    句：授权哪一台、以及 `sys_state(clear=['cdp:host=…'])` 怎么撤销。走信封才有地方放
+    `next_action`，也让 `error` 字段完整送达（`_tier_error_text` 管另一条围栏拒绝）。
+    """
+    return _with_agent_hints(ResponseModel(
+        url=url, status=0, content=[], fetcher_used="none",
+        extracted_type="markdown", error=msg,
+    ))
+
+
+def _tier_error_text(exc: BaseException) -> str:
+    """A tier exception's text for the ``error`` field — clipped only when it is noise.
+
+    那个 200 字符的帽子是为了不让 Playwright 的 call-log 整段灌进信封。它不该吃掉 dhole
+    自己写好的拒绝：`CDPHostNotAllowedError` 那句的**结尾**才是唯一存在的出路（对该主机
+    带 confirm=true 重发；`sys_state(clear=[...])` 撤销），而帽子正好把它剪在
+    "navigation is fenced to" 上 —— 一条把话说一半的拒绝，读者只能去猜。
+    """
+    text = str(exc)
+    try:
+        from dhole_mcp.browser import CDPHostNotAllowedError
+        if isinstance(exc, CDPHostNotAllowedError):
+            return text
+    except Exception:  # noqa: BLE001 - 没有浏览器层就没有这个异常类
+        pass
+    return text[:200]
 
 
 _NEURAL_FOCUS_UNAVAILABLE = (
@@ -4030,7 +4085,8 @@ class MasterFetchServer:
         # 安全闸 1/2（G33 → 17.0 先问再记）：首次 attach 一台主机不执行，
         # 返回待授权；confirm=true 授权落盘并放行。围栏 = 已授权主机集合，
         # 在浏览器层 route handler 机制执行。
-        gate_err, cdp_allowed = _cdp_attach_gate(cdp_url, confirm=confirm)
+        gate_err, cdp_allowed = _cdp_attach_gate(cdp_url, confirm=confirm,
+                                                 targets=urls)
         if gate_err:
             raise ValueError(gate_err)
         if cdp_url:
@@ -4118,7 +4174,7 @@ class MasterFetchServer:
                 results.append(_with_agent_hints(ResponseModel(
                     url=urls[i], status=0,
                     content=[], fetcher_used="stealthy",
-                    error=redact_api_key(str(resp)[:200]),
+                    error=redact_api_key(_tier_error_text(resp)),
                 )))
             else:
                 page, elapsed = resp
@@ -4297,13 +4353,13 @@ class MasterFetchServer:
         max_links: Annotated[Optional[int], Field(description="Cap for EACH links list (citations/navigation/external) when include_links=true; range 1-100. Omit for the documented defaults (30/20/20). links.total_found + links.is_truncated tell you what the cap hid.")] = None,
         ignore_robots: Annotated[bool, Field(description="Skip the robots.txt check for this call (default false = comply). When robots.txt disallows the URL, dhole makes NO request and returns error='robots_disallowed' with content_ok false. Set true only when you have the site's permission to fetch regardless; DHOLE_IGNORE_ROBOTS=1 disables the check process-wide.")] = False,
         check_login: Annotated[bool, Field(description="After the page settles on the browser tier, run a model-free login probe and return login_check: {logged_in: true|false|null, signals: [...], cookie_names: [...]}. DOM shape (logout control / password field / login form) + cookie NAMES only - values are never returned, no model involved. Null on HTTP-tier results and on cache hits (the probe is live-only, so pass check_login again with cache_ttl=0).")] = False,
-        cdp_url: Annotated[Optional[str], Field(description="Attach the user's real Chrome via CDP for THIS call: browser tier forced, HTTP tier and the public cache are skipped, and the fetch rides the attached profile's logged-in cookies. Refused by default - the FIRST attach to a host returns cdp_authorization_required and executes nothing; re-call with confirm=true once the user approved that host, which also fences navigation to the authorized hosts (anything outside them is aborted at the route level). Every response fetched this way returns cdp_attached=true; attach attempts are audited. Cannot be combined with schema=.")] = None,
+        cdp_url: Annotated[Optional[str], Field(description="Attach the user's real Chrome via CDP for THIS call: browser tier forced, HTTP tier and the public cache are skipped, and the fetch rides the attached profile's logged-in cookies. Refused by default - the FIRST attach for a site returns cdp_authorization_required and executes nothing; re-call with confirm=true once the user approved that site, which also fences navigation to the approved sites (anything outside them is aborted at the route level). Every response fetched this way returns cdp_attached=true; attach attempts are audited. Cannot be combined with schema=.")] = None,
         session_id: Annotated[Optional[str], Field(description="Reuse cookies across calls under this name (1-64 chars: letters, digits, '.', '_', '-'). Cookies a site sets are kept for that exact host and sent back on the next call naming the same session_id, so a login (or a form POST) can be followed by the pages behind it. Default: no session - cookies live for one call only. Covers BOTH tiers: the HTTP tier reads/writes the jar per host, and browser-tier calls under a session_id run in a dedicated browser seeded from the jar and written back after each call (cookie two-way bridge) - an HTTP login is visible to the browser, a browser login survives to the HTTP tier. Values never leave the process and are never returned; session_cookie_names reports names only.")] = None,
         method: Annotated[Optional[str], Field(description="HTTP verb for the request: GET (default), HEAD, POST, PUT, DELETE or PATCH. HEAD asks for status + size + content-type only and returns no body (size is the server's Content-Length, so 0 when the server omits it - example.com does). A non-GET is sent once (not retried, not cached, not escalated to the browser or the archive): a write must not be repeated, and a browser replay would answer about a GET to the same URL, not about your POST.")] = None,
         body: Annotated[Optional[Any], Field(description="Request body for POST/PUT/DELETE/PATCH (max 256 KB). A dict is sent as a form; with content_type=application/json it is sent as JSON; a string is sent as-is. Ignored for GET/HEAD (said so in the summary).")] = None,
         content_type: Annotated[Optional[str], Field(description="Content-Type for the body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json.")] = None,
         schema: Annotated[Optional[Dict[str, Any]], Field(description="JSON schema for structured data extraction. Each property can have a 'selector' (CSS) for direct DOM extraction. Returns structured JSON instead of markdown. No LLM needed. Needs a non-empty 'properties' map (a JSON string is also accepted); an unusable schema raises instead of silently returning markdown. A property carrying its OWN 'properties' (or items.properties) plus a selector extracts one record per matched element, child selectors evaluated inside that element - how a repeated list (quotes, products, rows) keeps its grouping instead of flattening into one array of every tag on the page. Up to 200 records per field.")] = None,
-        confirm: Annotated[bool, Field(description="Approval for a first-time sensitive action on this call. Today that means cdp_url: attaching your real Chrome hands over every logged-in site's cookies, so the FIRST attach to a host is refused with cdp_authorization_required and nothing executed - re-call with confirm=true to authorize that host (remembered on disk; sys_state(clear=['cdp:host=<name>']) revokes one host, clear=['cdp_hosts'] revokes all). False (default) = nothing sensitive is approved.")] = False,
+        confirm: Annotated[bool, Field(description="Approval for a first-time sensitive action on this call. Today that means cdp_url: attaching your real Chrome hands over every logged-in site's cookies, so the FIRST attach for a site is refused with cdp_authorization_required and nothing executed - re-call with confirm=true to authorize that site (remembered on disk; sys_state(clear=['cdp:host=<name>']) revokes one host, clear=['cdp_hosts'] revokes all). False (default) = nothing sensitive is approved.")] = False,
         # 17.0 §5 E-13：两层摊平。三颗参数一起读才读得通，所以描述里互相点名。
         nested_selector: Annotated[Optional[str], Field(description="Two layers in one call: a CSS selector on THIS page naming the elements to follow into the second layer (e.g. '.topic-card', 'a[href*=\"/works/\"]'). Each matched element becomes one record: its href is fetched (6 at a time, up to nested_max) and nested_fields are extracted from that page. The href is read from the element itself, else its first descendant <a>, else its nearest ancestor <a> - so a card that is not itself an <a> still resolves. Requires nested_fields; returns structured JSON; reads this page as a whole document. 0 links matched is reported as nested_no_match (the selector, or this page is a JS shell), not as an empty answer.")] = None,
         nested_fields: Annotated[Optional[Any], Field(description="What to read on each second-layer page, as a list: [{'name': '作品', 'selector': '.work-item a', 'type': 'array'}] or {'作品': '.work-item a'} (a JSON string is accepted). 'type': 'array' means every match on that page (a list of works); without it you get the first one. 1-12 fields, each selector guarded like schema= ones.")] = None,
@@ -4433,9 +4489,10 @@ class MasterFetchServer:
 
         # 安全闸 1/2（G33 → 17.0 先问再记）：CDP attach 的授权点在工具入口，
         # 单条与 bulk 两条路都在这里过闸；_open_session 只消费已过闸的结果。
-        gate_err, _cdp_allowed = _cdp_attach_gate(cdp_url, confirm=confirm)
+        gate_err, _cdp_allowed = _cdp_attach_gate(cdp_url, confirm=confirm,
+                                                  targets=(urls or [url]))
         if gate_err:
-            raise ValueError(gate_err)
+            return _cdp_refusal_result(url or "", gate_err)
         # `--cache-ttl` 之前是死参数：默认值在函数定义时就把模块常量焊进了签名，
         # 实例上的 self._cache_ttl 永远读不到。用 None 当哨兵，在这里解析。
         # 未显式设置时 self._cache_ttl == DEFAULT_TTL，所以除真正用了该旗标之外
@@ -7096,7 +7153,7 @@ class MasterFetchServer:
                     "focus_mode": {"type": "string", "description": "Shape of the focus answer: 'filter' (default) keeps every block past the relevance cut; 'best' returns only the highest-scoring block plus its heading. Requires focus."},
                     "focus_engine": {"type": "string", "description": "Which scorer runs focus: 'bm25' (default, keyword overlap) or 'neural' (a local cross-encoder, needing the reranker model). Per-page cost: sys_guide(topic='behavior')."},
                     "schema": {"type": "object", "description": "CSS-driven structured extraction instead of markdown: {properties: {...}} (a JSON string is accepted). Which keys are read, first match vs \"type\": \"array\", per-element grouping, the invented-keyword trap and the record ceilings: sys_guide(topic='behavior', section='Structured extraction').", "additionalProperties": True},
-                    "confirm": {"type": "boolean", "description": "Approval for a first-time sensitive action on this call - today only cdp_url: the FIRST attach to a host is refused with cdp_authorization_required and nothing executes until it says true. False (default) approves nothing."},
+                    "confirm": {"type": "boolean", "description": "Approval for a first-time sensitive action on this call - today only cdp_url: the FIRST attach for a site is refused with cdp_authorization_required and nothing executes without it. False (default) approves nothing."},
                     # 17.0 B4 · 下面这 27 个一直都能从顶层传进来（分发器读 args，
                     # _TOP_LEVEL_ARGS 认它们），只是 schema 从没露过脸 —— 而
                     # `options` 那段散文把它们和"袋子的键"绑在了一起。参数只有一个家：

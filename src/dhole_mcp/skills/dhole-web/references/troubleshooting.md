@@ -79,7 +79,7 @@ Four paths, cheapest first: (1) HTTP tier — credentials stored once with `cred
 
 ### CDP attach fails
 
-- `cdp_authorization_required` — this is the FIRST attach to this host, so nothing was executed. Attaching hands over the authenticated session of every site the user is logged into, and dhole asks once: present it as the user's decision, and only on a clear yes re-call with `confirm=true` (the approval persists to `~/.dhole/cdp_hosts.json`, so later attaches need no ask). Retrying without the user's yes changes nothing
+- `cdp_authorization_required` — this is the FIRST attach **for this target host** (the site being read, not the Chrome debug endpoint), so nothing was executed. Attaching hands over the authenticated session of every site the user is logged into, and dhole asks once: present it as the user's decision, and only on a clear yes re-call with `confirm=true` (the approval persists to `~/.dhole/cdp_hosts.json`, so later attaches need no ask). Retrying without the user's yes changes nothing, and no parameter widens the fence
 - `cdp_host_not_allowed` — the host is not in the authorized set, and the match is an **exact hostname**: `example.com` authorized does not let `www.example.com` through, and neither does it cover a CDN the page loads assets from. With the user's yes, attach to that host with `confirm=true`; never work around by fetching a different host with the user's login state
 - `login_check.logged_in: false` — session expired in the attached Chrome; the user re-logs in their window, then re-run the call
 - `logged_in: null` — the page's DOM shape wasn't enough to decide (pure-JSON endpoints, odd layouts); read `signals` and say what's uncertain instead of guessing

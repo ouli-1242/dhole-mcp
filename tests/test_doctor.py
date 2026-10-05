@@ -491,7 +491,8 @@ class TestTheCdpFenceRow:
     def test_authorized_hosts_report_the_count_and_the_revoke_path(self, isolated_home,
                                                                    monkeypatch, capsys):
         from dhole_mcp.server import _cdp_attach_gate
-        _cdp_attach_gate("http://portal.example.test:9222", confirm=True)
+        _cdp_attach_gate("http://127.0.0.1:9222", confirm=True,
+                         targets=["http://portal.example.test/"])
         assert updater.doctor() == 0
         out = capsys.readouterr().out
         assert "1 host" in out

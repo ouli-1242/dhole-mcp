@@ -129,7 +129,8 @@ def test_cdp_gate_has_no_env_switch_left(monkeypatch, tmp_path):
         monkeypatch.setenv(name, "portal.example.com,1")
     (tmp_path / "cdp_hosts.json").unlink(missing_ok=True)
     server_mod._cdp_hosts_cache, server_mod._cdp_hosts_stamp = frozenset(), None
-    err, allowed = server_mod._cdp_attach_gate("http://127.0.0.1:9222")
+    err, allowed = server_mod._cdp_attach_gate("http://127.0.0.1:9222",
+                                               targets=["https://read.example.test/"])
     assert err and "cdp_authorization_required" in err
     assert allowed is None
     assert env_registry.warnings_snapshot() == ()

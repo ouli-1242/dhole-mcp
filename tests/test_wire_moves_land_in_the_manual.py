@@ -178,7 +178,12 @@ def test_connect_stays_inside_the_packed_budget():
 #: 整轮帽，默认尺寸的爬取交回 324,001 字符（实测那次 223,599），宿主把载荷截断落盘，
 #: 调用方付的是整轮 token 加一次重爬。273 字每次连接，买的是"一次调用的结果读得完"
 #: —— 房内规矩问的那句"这句话值不值每次连接"，这是它值的那一种。
-CONNECT_CEILING = 30_474
+#: 2026-10-05 批次 7：CDP 的授权对象从"调试端口主机"改成"这一次要点名去读的那个站"
+#: （实测：名册 ["127.0.0.1"] 而围栏拿目标主机比对，attach 每一次都撞死）。措辞随之
+#: 从 "the FIRST attach to a host" 改成 "for a site"，并把 "until it says true" 收成
+#: "without it" —— 净 -7，30,474 → **30,467**。一次修 bug 顺带把话说短了，这是棘轮
+#: 该往下走的那种。
+CONNECT_CEILING = 30_467
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():
