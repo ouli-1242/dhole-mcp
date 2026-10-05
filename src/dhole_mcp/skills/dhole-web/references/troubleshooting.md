@@ -100,6 +100,8 @@ Four paths, cheapest first: (1) HTTP tier — credentials stored once with `cred
 - `focus_engine_not_permitted` — 17.0 removed this error (neural focus is a per-call choice now, no license). Seeing it means the installed dhole predates 17.0
 - A weak-hit note in `next_action` ("best block scored below the intent floor") — the fetch succeeded but the page likely doesn't answer the focus query; `content_ok` stays true by design. Pivot: search for a better source instead of re-reading this page
 
+- **`all_tiers_failed: unknown (HTTP status 0)`** — no tier ever received an HTTP response, so this is reachability, not a bot wall (a wall answers with a status and a challenge page). Check the URL spelling and DNS first; do not retry the same URL. A `198.18.x.x` address in the error text means the fake-IP TUN proxy could not reach the real network
+
 ## Local services
 
 ### Unreachable / mysterious 502 on 127.0.0.1

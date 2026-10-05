@@ -811,6 +811,100 @@ def _focus_intent_hint(finalized: ResponseModel, focus_q: Optional[str],
     return finalized
 
 
+def _login_probe_unavailable(reason: str) -> dict:
+    """check_login was asked; this tier cannot answer (the probe is live-only).
+
+    A bare ``login_check=None`` is wire-folded into an ABSENT field -
+    indistinguishable from "not requested". That silence sent an agent hunting
+    through the handbook for why the field never came; the marker keeps the
+    answer on the wire with the reason attached.
+    """
+    return {"logged_in": None, "signals": [], "cookie_names": [],
+            "method": f"unavailable: {reason}"}
+
+
+def _attach_login_probe_gap(result: ResponseModel, check_login: bool) -> ResponseModel:
+    """Honesty pass: mark check_login as unanswerable on non-browser results."""
+    if check_login and result.login_check is None and result.fetcher_used != "stealthy":
+        result.login_check = _login_probe_unavailable(
+            "this result never reached the browser tier")
+        result.next_action = (
+            (result.next_action + " " if result.next_action else "")
+            + "check_login is live-only on the browser tier: re-call with "
+            "force_fetcher='stealthy' (or cdp_url=) to actually probe")
+    return result
+
+
+def _all_tiers_failed_tips(category: str, status: int) -> str:
+    """Recovery tips for the all-tiers-failed receipt, keyed by classification.
+
+    ``status == 0`` with an unknown category means NO tier ever received an HTTP
+    response, so anti-bot advice would be unfalsifiable from silence: a wall
+    ANSWERS (403 / challenge page). Measured: a nonexistent domain landed in the
+    generic branch and got Turnstile/proxy tips - neither can fix a name that
+    never resolved. Known categories keep their own tips even at status 0
+    (connection_refused / dns_failure already name reachability; browser_launch
+    is never the site's fault).
+    """
+    if category == "unknown" and status == 0:
+        return (
+            "- No HTTP response was received at all: the name may not exist or "
+            "the network cannot reach it. Check the URL spelling and DNS first - "
+            "an anti-bot wall is unlikely (walls answer with a status, not silence).\n"
+            "- Do NOT retry the same URL; if the name is correct, switch sources."
+        )
+    if category in ("connection_refused", "dns_failure"):
+        return (
+            "- The site is unreachable from this network (site down or outbound blocked).\n"
+            "- Do NOT retry the same URL - switch to a different source.\n"
+            "- If multiple sites fail, your network environment may block outbound connections."
+        )
+    if category == "connection_reset":
+        return (
+            "- The remote host forcibly closed the connection (anti-bot firewall).\n"
+            "- Try a proxy stored with cred_defaults.\n"
+            "- Try a different URL on the same domain (some paths have lower protection).\n"
+            "- If it persists, switch sources."
+        )
+    if category == "timeout":
+        return (
+            "- The site is unresponsive (slow server or network restriction).\n"
+            "- Retry once with a higher timeout parameter.\n"
+            "- If it persists, switch sources."
+        )
+    if category == "browser_launch":
+        # The browser never became a process, so nothing about the TARGET is
+        # implicated: the generic branch would blame Cloudflare and send the
+        # caller to "try a proxy", which cannot start a browser either.
+        return (
+            "- The browser process could not be started - the site is not the problem.\n"
+            "- `dhole --doctor` names the three states (absent / present but never "
+            "launched / refused by the OS) and the directory it searched.\n"
+            "- Attaching to a browser you started yourself "
+            "(cdp_url='http://127.0.0.1:9222', confirm=true) is the way out when "
+            "the install itself is refused.\n"
+            "- HTTP-only tools (web_read without force_fetcher, web_request, "
+            "web_search) still work while this is broken."
+        )
+    return (
+        "- If the site uses Cloudflare Turnstile or DataDome, no free tool can bypass it.\n"
+        "- Try a different URL on the same domain (some paths have lower protection).\n"
+        "- Try a proxy stored with cred_defaults."
+    )
+
+
+def _stamp_focus_continuation(result: ResponseModel, focus_q: Optional[str], offset: int) -> ResponseModel:
+    """The focus header lives inside the paginated text, so an offset>0 window
+    starts past it: the readback then LOOKS unfocused even though focus ran
+    (it re-scores the full text on every call, post-cache). The summary note
+    keeps that visible without touching the pagination arithmetic."""
+    if focus_q and offset > 0:
+        result = result.model_copy(update={
+            "summary": ((result.summary + " · ") if result.summary else "")
+                       + "focus re-applied over the full text before pagination"})
+    return result
+
+
 def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_CHARS, offset: int = 0) -> ResponseModel:
     """Truncate content if it exceeds max_chars, starting from offset.
 
@@ -861,12 +955,12 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
         # (metadata/links/page_type/source_type/quality_score/toc/...). The
         # old hand-written constructor dropped any field not listed, so every
         # new envelope field silently vanished on the no-more-content branch.
-        return _focus_intent_hint(_with_agent_hints(result.model_copy(update={
+        return _stamp_focus_continuation(_focus_intent_hint(_with_agent_hints(result.model_copy(update={
             "content": [exhausted] if exhausted else [],
             "total_extracted_chars": total_len,
             "is_truncated": False,
             "next_offset": 0,
-        })), focus_q, focus_stats)
+        })), focus_q, focus_stats), focus_q, offset)
 
     chunk = full_text[offset:offset + max_chars]
     chunk_len = len(chunk)
@@ -891,12 +985,12 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
     # model_copy(update=...) preserves every field by construction — no more
     # hand-maintained field list that silently dropped envelope fields on
     # truncation. Add a field to ResponseModel and it survives chunking free.
-    return _focus_intent_hint(_with_agent_hints(result.model_copy(update={
+    return _stamp_focus_continuation(_focus_intent_hint(_with_agent_hints(result.model_copy(update={
         "content": [chunk],
         "total_extracted_chars": total_len,
         "is_truncated": truncated,
         "next_offset": next_off,
-    })), focus_q, focus_stats)
+    })), focus_q, focus_stats), focus_q, offset)
 
 
 # First-line substrings -> the move that usually fixes it. Matched
@@ -5094,7 +5188,8 @@ class MasterFetchServer:
                 # 合规姿态本进程有一份现值，窗口形态没有）。
                 hit.metadata = {k: v for k, v in (hit.metadata or {}).items()
                                 if k != "browser"}
-                return _apply_chunking(hit, max_chars=mc, offset=offset)
+                return _attach_login_probe_gap(
+                    _apply_chunking(hit, max_chars=mc, offset=offset), check_login)
 
         # 3. actions: page interactions (click/fill/press/wait/scroll) require
         # the stealthy browser tier. Force it, bypass cache (post-action content
@@ -5137,7 +5232,7 @@ class MasterFetchServer:
                 ), url, timeout, f"forced {force_fetcher} tier")
 
         # 5. Auto-escalation (HTTP -> stealthy) for everything else
-        return await self._within_call_budget(
+        return _attach_login_probe_gap(await self._within_call_budget(
             self._auto_escalate(
                 url, extraction_type,
                 css_selector=css_selector,
@@ -5149,7 +5244,7 @@ class MasterFetchServer:
                 hide_canvas=hide_canvas, extra_headers=extra_headers,
                 useragent=useragent, cookies=cookies, max_chars=mc,
                 conditional=conditional, load_everything=load_everything,
-            ), url, timeout, "fetch tiers")
+            ), url, timeout, "fetch tiers"), check_login)
 
     async def _within_call_budget(self, coro, url: str, timeout_ms, stage: str):
         """Hard ceiling: finish a fetch tier inside the caller's own budget.
@@ -5626,7 +5721,11 @@ class MasterFetchServer:
                 stealthy_headers=True,
             )
             result.escalation_path = "direct:http"
-            return await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
+            return _attach_login_probe_gap(
+                await self._finalize_result(result, url, extraction_type,
+                                            css_selector, cache_ttl, offset,
+                                            max_chars),
+                check_login)
 
         else:  # stealthy — Patchright handles everything
             # Playwright fixes the proxy when the browser context starts.
@@ -5735,10 +5834,10 @@ class MasterFetchServer:
             )
             if (result.error or "").startswith("cdp_"):
                 # 批次 9：这条路没走成，就不能说走了。从前一条被围栏掐掉的行也带着
-                # `escalation_path="cdp-attach:stealthy"`，读者据此以为登录态到场了。
+                # attach 的成功字样，读者据此以为登录态到场了。
                 result.escalation_path = "cdp-attach:refused"
             else:
-                result.escalation_path = "cdp-attach:stealthy" if cdp_url else "direct:stealthy"
+                result.escalation_path = "cdp-attach" if cdp_url else "direct:stealthy"
             finalized = await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
             if check_login and _login_probe:
                 finalized.login_check = _login_probe
@@ -6145,45 +6244,7 @@ class MasterFetchServer:
         from dhole_mcp.errors import classify_network_error
         raw_error = result.error or " ".join(errors)
         category, _ = classify_network_error(raw_error)
-        if category in ("connection_refused", "dns_failure"):
-            tips = (
-                "- The site is unreachable from this network (site down or outbound blocked).\n"
-                "- Do NOT retry the same URL - switch to a different source.\n"
-                "- If multiple sites fail, your network environment may block outbound connections."
-            )
-        elif category == "connection_reset":
-            tips = (
-                "- The remote host forcibly closed the connection (anti-bot firewall).\n"
-                "- Try a proxy stored with cred_defaults.\n"
-                "- Try a different URL on the same domain (some paths have lower protection).\n"
-                "- If it persists, switch sources."
-            )
-        elif category == "timeout":
-            tips = (
-                "- The site is unresponsive (slow server or network restriction).\n"
-                "- Retry once with a higher timeout parameter.\n"
-                "- If it persists, switch sources."
-            )
-        elif category == "browser_launch":
-            # The browser never became a process, so nothing about the TARGET is
-            # implicated: the generic branch below would blame Cloudflare and send
-            # the caller to "try a proxy", which cannot start a browser either.
-            tips = (
-                "- The browser process could not be started - the site is not the problem.\n"
-                "- `dhole --doctor` names the three states (absent / present but never "
-                "launched / refused by the OS) and the directory it searched.\n"
-                "- Attaching to a browser you started yourself "
-                "(cdp_url='http://127.0.0.1:9222', confirm=true) is the way out when "
-                "the install itself is refused.\n"
-                "- HTTP-only tools (web_read without force_fetcher, web_request, "
-                "web_search) still work while this is broken."
-            )
-        else:
-            tips = (
-                "- If the site uses Cloudflare Turnstile or DataDome, no free tool can bypass it.\n"
-                "- Try a different URL on the same domain (some paths have lower protection).\n"
-                "- Try a proxy stored with cred_defaults."
-            )
+        tips = _all_tiers_failed_tips(category, result.status)
         # The recovery tips belong in `error` ("Error + recovery hints"), not in
         # `content`: a caller that reads content[0] as the page body would take
         # this block for the article. Same contract as every other failure path.

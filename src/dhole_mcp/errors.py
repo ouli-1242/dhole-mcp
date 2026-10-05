@@ -40,6 +40,13 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
         re.IGNORECASE,
     ), "connection_reset"),
 
+    # Fake-IP tunnel ranges (Clash / sing-box TUN hand out 198.18.0.0/15). A
+    # failure naming such an address is the tunnel not reaching the real
+    # network: "site down or outbound blocked" is the truthful framing, the
+    # same verdict as a refused connection. Must precede `timeout`: the phrase
+    # "timed out" shows up in these errors too, and the tunnel is the cause.
+    (re.compile(r"\b198\.1[89]\.\d+\.\d+\b"), "connection_refused"),
+
     # DNS resolution failure
     (re.compile(
         r"ERR_NAME_NOT_RESOLVED|NameResolutionError|getaddrinfo failed|"
