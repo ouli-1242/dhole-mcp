@@ -84,6 +84,19 @@ def _excerpt(text: str, start: int, end: int) -> str:
     return span[:_EXCERPT_CHARS]
 
 
+# 代码格式豁免：文档正文里 `web_read(url=...)` 的调用示例恰好就是 tool_call 的
+# 形状（dhole 自己的 README 被标了 9 处——示例代码即正文）。启发式标的是形状，
+# 不是排版；把 fenced code block 与 inline code span 掩成**等长**空白，偏移不变，
+# excerpt 仍切原文，而代码区内的形状不再计数。
+_CODE_FENCE = re.compile(r"```.*?(?:```|\Z)", re.DOTALL)
+_CODE_SPAN = re.compile(r"`[^`\n]+`")
+
+
+def _mask_code(text: str) -> str:
+    out = _CODE_FENCE.sub(lambda m: " " * len(m.group()), text)
+    return _CODE_SPAN.sub(lambda m: " " * len(m.group()), out)
+
+
 def scan(text: str) -> Optional[Dict[str, Any]]:
     """扫一段第三方文本；命中返回 ``{"hits": [...], "total": n}``，干净返回
     ``None``（信封上即字段缺席）。
@@ -94,6 +107,7 @@ def scan(text: str) -> Optional[Dict[str, Any]]:
     """
     if not text:
         return None
+    text = _mask_code(text)
     hits: List[Dict[str, Any]] = []
     total = 0
     for kind, pattern in _PATTERNS:

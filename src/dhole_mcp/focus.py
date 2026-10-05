@@ -480,6 +480,14 @@ def focus_content(
             f"[Focus best block: {query!r}; top of {n} by {scorer_note}. "
             f"Pass focus='' for the full page, or keep mode unset for the filtered page.]"
         )
+        if len(blocks[top].strip()) < 200:
+            # The BM25 arm has no calibrated score to name a weak hit (unlike
+            # the neural intent floor), but a tiny best block is checkable
+            # without one: a 30-char "best answer" is usually just a heading.
+            header += (
+                f" The best block is only {len(blocks[top].strip())} chars - "
+                "possibly just a heading with no answer; keep mode unset "
+                "(filter) or reword the focus query.")
         return header + "\n\n" + "\n\n".join(blocks[i] for i in range(n) if i in top_set)
 
     kept = "\n\n".join(blocks[i] for i in range(n) if i in keep_set)

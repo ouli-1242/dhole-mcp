@@ -400,6 +400,16 @@ def _fallback_extract(page, extraction_type: str, css_selector: Optional[str]) -
     # markdown, article, structured: use markdownify
     try:
         from markdownify import markdownify
+        # data: URIs are bytes, not information - an image-heavy page came back
+        # as tens of KB of base64 inside the markdown (the media field already
+        # skips data: assets; same verdict here). Strip before conversion; the
+        # html/text types above are the caller asking for raw bytes, untouched.
+        # (`re` is a function-local import in the text branch above, so this
+        # path binds its own alias instead of racing that UnboundLocalError.)
+        import re as _re
+        html = _re.sub(
+            r'<img[^>]*\ssrc=["\']data:[^"\']*["\'][^>]*>', '', html,
+            flags=_re.IGNORECASE)
         result = markdownify(html)
         logger.info(f"Falling back to markdownify extraction (type={extraction_type})")
         return [result] if result else [html]

@@ -1382,6 +1382,16 @@ def _report_action_outcomes(result: ResponseModel, page_action: Any) -> None:
                 "BEFORE them - check each failed selector against a fresh copy of "
                 "the page and retry just that action (metadata.actions lists one "
                 "row per action)")
+    if result.page_type == "js_shell":
+        # The post-action readback of an SPA is still the shell's "enable
+        # JavaScript" text - that is what the DOM holds. Without this note the
+        # caller reads the shell as "the actions did nothing" (measured on a
+        # React login page: every fill reported ok, the body never changed).
+        result.next_action = (
+            (result.next_action + " " if result.next_action else "")
+            + "this page renders by JavaScript, so the readback is the shell, "
+            "not the post-action state: what happened is in metadata.actions, "
+            "and a screenshot action shows the rendered result")
 
 
 def _robots_blocked_result(url: str, verdict: RobotsVerdict) -> ResponseModel:
