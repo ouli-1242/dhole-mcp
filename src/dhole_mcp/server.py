@@ -409,12 +409,15 @@ def _record_latency(url: str, elapsed_ms: float, *, document: bool = False) -> N
 
 
 # web_read's call budget when the caller does not pass `timeout`.
-# `actions` force the stealthy tier, where the browser cold start alone can
-# outlast the HTTP-era default: measured on this machine, the 30000ms budget ran
-# out before example.com finished loading, while the 60000ms budget let the same
-# call finish in 42.4s.
+# Whole-call wall-clock defaults, sized to the HOST, not to the page: MCP clients
+# commonly cut a call at 30s with a bare "tool execution timed out" and nothing
+# comes back (measured 2026-10-06: a 60s web_act default died exactly that way).
+# An internal budget that outlives the host's returns nothing; one that fires
+# first returns a structured timeout naming the knob to raise. Warm browser calls
+# fit in 25s (3-17s measured); a cold start that genuinely needs longer is the
+# caller's explicit `timeout=` raise, not a default the host will never honor.
 DEFAULT_CALL_TIMEOUT_MS = 30000
-ACTIONS_DEFAULT_TIMEOUT_MS = 60000
+ACTIONS_DEFAULT_TIMEOUT_MS = 25000
 
 
 def _adaptive_timeout(url: str, default_ms: int = 30000) -> int:
@@ -4344,7 +4347,7 @@ class MasterFetchServer:
         extraction_type: Annotated[Optional[Literal["markdown", "html", "text", "article", "structured"]], Field(description="How the page after the actions is read back: markdown (default), html, text, article or structured.")] = None,
         max_content_chars: Annotated[Optional[int], Field(description="Max chars of that content (default 40000). The action receipts are never cut by it.")] = None,
         focus: Annotated[Optional[str], Field(description="Query-focused extraction of the post-action page: only the blocks relevant to this come back.")] = None,
-        timeout: Annotated[Optional[int | float], Field(description="Whole-call budget in milliseconds (default 60000 here - a browser launch plus a chain needs it; max 120000).")] = None,
+        timeout: Annotated[Optional[int | float], Field(description="Whole-call budget in milliseconds (default 25000 here - sized to beat a typical 30s host MCP timeout, which would kill the call with nothing returned; raise it when your host allows more. max 120000).")] = None,
         anti_detect: Annotated[Optional[Literal["off", "basic", "auto", "aggressive"]], Field(description=ANTI_DETECT_DESC_SHORT)] = None,
         session_id: Annotated[Optional[str], Field(description="Act inside this named session, so a login made earlier (or a jar the HTTP tier filled) is the state the page starts from.")] = None,
         # 批次 11：可见性是"人在不在场"，不是反爬强度（档位表每一档都写死 headless，那张表管站点看到
@@ -4408,7 +4411,7 @@ class MasterFetchServer:
         cache_ttl: Annotated[Optional[int], Field(description="Cache duration in seconds. Default 3600 (1 hour). Set 0 to skip cache and force a fresh fetch.")] = None,
         force_fetcher: Annotated[Optional[Literal["http", "stealthy"]], Field(description="Lock to one fetcher tier, skip auto-escalation. 'http' = fast HTTP-only (fails on JS/bot walls). 'stealthy' = anti-detect browser (Patchright). Two tiers: the third one and its 'dynamic' alias are gone.")] = None,
         anti_detect: Annotated[Optional[Literal["off", "basic", "auto", "aggressive"]], Field(description=ANTI_DETECT_DESC)] = None,
-        timeout: Annotated[Optional[int | float], Field(description="Whole-call budget in milliseconds (default 30000; 60000 when actions are used; max 120000). Shared by the HTTP retries, and a document URL spends it on the download.")] = None,
+        timeout: Annotated[Optional[int | float], Field(description="Whole-call budget in milliseconds (default 30000; 25000 when actions are used - sized to beat a typical 30s host MCP timeout, which would kill the call with nothing returned; max 120000). Shared by the HTTP retries, and a document URL spends it on the download.")] = None,
         offset: Annotated[int, Field(description="Resume from this character offset when content was truncated. The response tells you the next offset to use.")] = 0,
         max_content_chars: Annotated[Optional[int], Field(description="Max chars of extracted content to return (default 40000). Lower this to save context tokens on big pages; the rest is paginated via offset/next_offset.")] = None,
         pages: Annotated[Optional[str], Field(description="PDF only: page spec like '1-5' or '1,3,5-7' to extract a subset of pages. Saves tokens on big PDFs, NOT download time - the file is fetched in full before any page is picked. None = all pages.")] = None,
@@ -7236,7 +7239,7 @@ class MasterFetchServer:
                     "extraction_type": {"type": "string", "description": "Content format: markdown (default), html (raw markup), text, article, structured, or check (changed-since-last-fetch receipt, not the page)."},
                     "css_selector": {"type": "string", "description": "Narrows extracted content. HTML only - on XML/JSON/plain text the whole document comes back and the summary says so."},
                     "max_content_chars": {"type": "integer", "description": "Content cap in chars (500-200000; default from DHOLE_DEFAULT_CONTENT_CHARS). The rest stays reachable via offset/next_offset."},
-                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000; 60000 with actions; max 120000), shared by the HTTP retries. On a document URL it is spent on the DOWNLOAD."},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000; 25000 with actions; max 120000), shared by the HTTP retries. On a document URL it is spent on the DOWNLOAD."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds (default 3600). 0 = force fresh."},
                     "force_fetcher": {"type": "string", "description": "Pin one tier, skipping auto-escalation: 'http' = fast, no JS/bot walls; 'stealthy' = anti-detect browser."},
                     "anti_detect": {"type": "string", "description": ANTI_DETECT_DESC},
@@ -7283,7 +7286,7 @@ class MasterFetchServer:
                     "extraction_type": {"type": "string", "description": "How the post-action page is read back (default markdown; also html, text, article, structured)."},
                     "max_content_chars": {"type": "integer", "description": "Max chars of that content (default 40000); the action receipts are never cut by it."},
                     "focus": {"type": "string", "description": "After the chain, return only blocks relevant to this query instead of the whole page."},
-                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 60000, max 120000)."},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 25000 - sized to beat a typical 30s host MCP timeout; raise it when your host allows more. max 120000)."},
                     "anti_detect": {"type": "string", "description": ANTI_DETECT_DESC_SHORT},
                     "session_id": {"type": "string", "description": "Act inside this named session, so the login it holds is the state the page starts from. Names only, never values."},
                     "cdp_url": {"type": "string", "description": "Attach a running Chrome (its own logged-in profile) and act there; the first attach to a host needs confirm=true."},
@@ -7339,7 +7342,7 @@ class MasterFetchServer:
                     "cache_ttl": {"type": "integer", "description": "Cache seconds per page (default 3600). 0 = force fresh."},
                     "force_fetcher": {"type": "string", "description": "Pin one tier for every page, skipping auto-escalation: 'http' fast but no JS/bot walls, 'stealthy' the anti-detect browser."},
                     "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000)."},
-                    "deadline_ms": {"type": "integer", "description": "Hard stop for the whole crawl in ms (default 120000) - the budget that ends the run, unlike timeout= which is per page."},
+                    "deadline_ms": {"type": "integer", "description": "Hard stop for the whole crawl in ms (default 25000 - aligned to a typical 30s host MCP timeout; raise it when your host allows more) - the budget that ends the run, unlike timeout= which is per page."},
                     "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check for this call (default false = comply). True only where you have the site's permission."},
                     "focus_engine": {"type": "string", "description": "Which scorer runs focus here: 'bm25' (default, cheap) or 'neural' (the local reranker model; asking without it is refused, not downgraded)."},
                 },

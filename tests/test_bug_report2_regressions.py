@@ -403,8 +403,11 @@ class TestActionsTierBudget:
                 url="https://example.com/", actions=[{"scroll": 300}], **kwargs))
         return seen["timeout"]
 
-    def test_actions_get_a_browser_sized_default(self, monkeypatch):
-        assert self._budget_for_actions(monkeypatch) == 60000
+    def test_actions_get_a_host_safe_default(self, monkeypatch):
+        # 批次13：动作链默认 25000 —— 宿主的 MCP 超时普遍 30s 且砍掉时什么都不回
+        # （实测 web_act 首调死于裸 "Tool execution timed out"）。内部预算必须赶在
+        # 宿主动手之前返回结构化超时；慢页面是调用方显式抬高 timeout 的事。
+        assert self._budget_for_actions(monkeypatch) == 25000
 
     def test_an_explicit_timeout_still_wins(self, monkeypatch):
         assert self._budget_for_actions(monkeypatch, timeout=12345) == 12345

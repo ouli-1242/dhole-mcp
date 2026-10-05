@@ -191,7 +191,11 @@ def test_connect_stays_inside_the_packed_budget():
 #: 后果清单（回收豁免 / 临时目录 / 交回窗口）全部搬进 `sys_guide(topic='config')` 按需
 #: 付，wire 上只留指针。第二次上抬，付的是 337 字每次连接（属性名 + 292 字描述 + 骨架），
 #: 买的是一次调用就能把人要看的那扇窗叫出来。
-CONNECT_CEILING = 30_804
+#: 2026-10-06 批次 13：web_act / 带 actions 的 web_read 默认 60000→25000ms、
+#: web_crawl deadline_ms 120000→25000ms —— 内部预算必须赶在宿主 30s MCP 超时之前
+#: 返回结构化超时（实测 60s 默认被宿主裸砍成 "Tool execution timed out"，什么都
+#: 回不来）；描述随默认值改口，+164 → **30,968**。
+CONNECT_CEILING = 30_968
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

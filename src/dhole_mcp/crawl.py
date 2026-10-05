@@ -821,7 +821,7 @@ async def web_crawl(
     cache_ttl: int = 3600,
     force_fetcher: Optional[str] = None,
     timeout: int = 30000,
-    deadline_ms: int = 120000,
+    deadline_ms: int = 25000,
     sitemap: str | bool = False,
     search: Optional[str] = None,
     ignore_robots: bool = False,
