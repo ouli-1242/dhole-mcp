@@ -22,6 +22,7 @@
 
 import asyncio
 import json
+import os
 import sys
 import threading
 import time
@@ -832,6 +833,22 @@ def test_the_launch_and_the_installer_read_one_channel_decision():
     assert '"chrome"' in inspect.getsource(browser._launch_channel)
 
 
+def test_the_rendered_sandbox_posture_is_written_down_not_inherited():
+    """渲染沙箱是关的，而且一直是 driver 的默认（`chromiumSandbox !== true` 时它自己
+    push `--no-sandbox`）。这一行不改变今天的任何行为，它改变的是**上游翻默认的那一天**：
+    继承来的默认翻转时，每一次浏览器静默多一个沙箱；写下来的这一份会跟着测试变红。
+
+    为什么值得为"将来"花这一行：2026-10-05 排查时实测过裸 `chrome.exe` 在受限令牌下报
+    `Sandbox cannot access executable … 0x5`，当时第一反应是"沙箱是新拦路虎"。核到
+    driver 源码才发现旗本来就没开 —— 一句隐含的默认值值一次误诊。
+    """
+    import inspect
+
+    start = inspect.getsource(browser.BrowserSession.start)
+    assert '"chromium_sandbox": False' in start, \
+        "沙箱姿态又变回继承的了 —— dhole 的围栏是 SSRF 路由闸与 CDP 逐主机授权，不是沙箱"
+
+
 # ─── 8 · 状态文件的权限与不污染 ──────────────────────────────────────────
 
 def test_the_state_file_lands_owner_only(fake_package, fake_browsers_dir,
@@ -852,19 +869,29 @@ def test_reset_state_is_available_for_tests():
     assert callable(browser.reset_install_state)
 
 
-def test_a_process_that_never_installed_can_still_be_read(isolated_home, monkeypatch):
+def test_a_process_that_never_installed_can_still_be_read(isolated_home):
     """doctor 在一台从没装过 chromium 的机器上问的第一句就是"装过吗"。
 
     `_install_state` 在代码里只被 `_record_install` 用 `global` 赋过值，所以"模块级没有
     默认值"这个 bug 会让一次都没装过的进程抛 NameError —— 而 doctor 把它读成"这项查不
-    了"。本文件的 autouse 挂具先调了 reset，正好把这行缺失盖住，所以这里重新导入一次，
-    回到真正的冷进程形状。
-    """
-    import importlib
+    了"。本文件的 autouse 挂具先调了 reset，正好把这行缺失盖住，所以这里要回到真正的
+    冷进程形状。
 
-    monkeypatch.setenv("DHOLE_HOME", str(isolated_home))
-    fresh = importlib.reload(browser)
-    assert fresh.read_install_state() == {}
+    冷进程用**子进程**做，不用 `importlib.reload`：reload 换掉 `dhole_mcp.browser` 里
+    每个类的对象身份，而别的测试文件是 `from dhole_mcp.browser import X` 早绑死了旧类。
+    一 reload，那些文件里的 `pytest.raises(X)` 就接不住自己模块抛出的那个 X —— 实测过
+    一次：套件随机序时 `test_cdp_attach_g33` 因此变红，单跑永远绿。
+    """
+    import subprocess
+    import sys
+
+    env = {**os.environ, "DHOLE_HOME": str(isolated_home)}
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import dhole_mcp.browser as b; print(repr(b.read_install_state()))"],
+        capture_output=True, text=True, env=env, timeout=120)
+    assert out.returncode == 0, out.stderr[-400:]
+    assert "{}" in out.stdout, out.stdout
 
 
 # ─── 9 · 套件那道"不许真下载"的死闸 ──────────────────────────────────────

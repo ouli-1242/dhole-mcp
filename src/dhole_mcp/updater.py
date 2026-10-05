@@ -316,17 +316,61 @@ def _append_engine_yield(caps: list[tuple[str, str, bool]]) -> None:
         ))
 
 
+def _browser_capability_row() -> tuple[str, str, bool]:
+    """capabilities() 的浏览器那一行：问文件系统，不问 import 表。
+
+    此前它等于 `_has_module("patchright") and _has_module("playwright")` —— 两个 import
+    检查。2026-10-05 那次事故里，同一分钟的 `dhole -v` 打印的是 `browser tier ✓ ready`，
+    而整个浏览器层不可用：**能导入一个 driver 不等于它有一个可执行的浏览器**。这一行
+    从此读 `chromium_status()`（纯文件系统，几毫秒），并把"在盘上但从没验证过起得来"
+    与"确实起不来"分开。
+
+    它同时被 `-v` 与 `--doctor` 读（`print_capabilities()` 一行两个读者），所以这里
+    **永不启动浏览器**：真启动一次要 3–5 秒，那是每一个宿主的税；探针住在 doctor 的
+    3b 项里，只有 `dhole --doctor` 才付。
+    """
+    if not (_has_module("patchright") and _has_module("playwright")):
+        return ("browser tier",
+                f"missing - HTTP-only (pip install 'dhole-mcp[all]', then "
+                f"{install.browser_binary_command()})", False)
+    try:
+        from dhole_mcp import browser as _b
+        status = _b.chromium_status()
+        refused = _b.recorded_launch_failure()
+    except Exception as exc:  # noqa: BLE001 - 面板不许把自己变成故障
+        return ("browser tier",
+                f"not inspectable: {type(exc).__name__}"[:70], False)
+    if refused:
+        return ("browser tier",
+                f"refused by the OS on the last launch: "
+                f"{str(refused.get('error') or '')[:70]} - `dhole --doctor`", False)
+    reason = status.get("reason")
+    if reason == "system_browser":
+        return ("browser tier",
+                f"system browser ({status.get('browser_path') or status.get('detail')})"
+                " - no download", True)
+    if reason == "bundled_present":
+        return ("browser tier",
+                f"on disk ({status.get('detail')}) - launch not verified "
+                "(`dhole --doctor` launches once to check)", True)
+    if reason == "root_unresolvable":
+        return ("browser tier",
+                "the browser cache root cannot be resolved - check "
+                "PLAYWRIGHT_BROWSERS_PATH", False)
+    if reason == "manifest_unreadable":
+        return ("browser tier", str(status.get("detail") or "")[:90], False)
+    needs = _b.launch_artifact()
+    size = _b.INSTALL_DOWNLOAD_MB.get(needs, 193)
+    return ("browser tier",
+            f"binaries not downloaded - the first browser fetch installs ~{size}MB "
+            "(one time; until then every browser-tier call is HTTP-only)", True)
+
+
 def capabilities() -> list[tuple[str, str, bool]]:
     """[(label, state, ok)] for the optional capabilities that degrade silently."""
     caps: list[tuple[str, str, bool]] = []
 
-    browser = _has_module("patchright") and _has_module("playwright")
-    caps.append((
-        "browser tier",
-        "ready (anti-bot / JS rendering / screenshot)" if browser
-        else "missing - HTTP-only (pip install 'dhole-mcp[all]', playwright install chromium)",
-        browser,
-    ))
+    caps.append(_browser_capability_row())
 
     pdf = _has_module("pdfplumber") or _has_module("pypdfium2")
     ocr = _has_module("rapidocr") or _has_module("rapidocr_onnxruntime")
@@ -514,7 +558,7 @@ def _append_config_audit(checks: list[tuple[str, str, str, str]]) -> None:
             + ", ".join(stale_names[:6])
             + ("…" if len(stale_names) > 6 else "")
             + " - remove them (their behavior is fixed in code now)",
-            "dhole config list shows the 11 names that are still read"))
+            f"dhole config list shows the {len(_reg.ALL)} names that are still read"))
 
     total = len(_reg.ALL)
     if not set_entries:
@@ -573,7 +617,8 @@ def _append_config_audit(checks: list[tuple[str, str, str, str]]) -> None:
             f"{'host: ' + listing if len(_cdp_hosts) == 1 else 'hosts: ' + listing}; "
             "every attach is fenced to these - a new host is refused once and "
             "asks for confirm first",
-            f"revoke: delete cdp_hosts.json in {_cdp_path.parent}"))
+            f"revoke: sys_state(clear=['cdp_hosts']) from the agent side, or "
+            f"delete cdp_hosts.json in {_cdp_path.parent}"))
     else:
         checks.append((
             "cdp fence", "ok",
@@ -634,6 +679,16 @@ def _append_resolver_reality(checks: list[tuple[str, str, str, str]]) -> None:
     Never counts as a failure. A machine with no network, a machine with a
     plain HTTP proxy, and a fake-ip machine whose auto-skip has engaged all
     read as either ``ok`` or ``info`` here.
+
+    17.0 批次 6d：这一行从前只报 doctor 自己，却用着"这台机器已经自动跳过了"那种
+    说的是别人的措辞。它问的 ``security._dns_recheck_enabled()`` 是 doctor **本进程**
+    刚刚自己探的那一次 —— 必然和上一行的结论一致，等于没核对；而真正持有判词的进程
+    （服务进程：启动后第一次抓取探一次，缓存到进程寿命结束）从来没被问过。于是两个
+    方向里会咬人的那一个永远印不出来：doctor 看到 public 就 return，服务进程那边可能
+    还缓存着 fake-ip；反过来 doctor 看到 fake-ip、服务进程缓存 public，用户的 URL 全部
+    被拒，体检却耸肩。现在这一行读 `resolver_probe.json` —— 谁测的、什么时候、测出什么
+    —— 并在两个答案不一致时把不一致说出来。doctor 自己不再调用那颗会写盘的探测，所以
+    "doctor 除了自己的探针不落任何东西"那条承诺仍然成立。
     """
     import ipaddress
     import socket
@@ -651,8 +706,8 @@ def _append_resolver_reality(checks: list[tuple[str, str, str, str]]) -> None:
         ))
         return
 
-    v4_in_fake_ip_block: str | None = None
-    v6_in_ula: str | None = None
+    v4: str | None = None
+    v6: str | None = None
     fake_net = _fake_ip_network()
     ula = ipaddress.ip_network("fc00::/7")
     for info in infos:
@@ -661,46 +716,72 @@ def _append_resolver_reality(checks: list[tuple[str, str, str, str]]) -> None:
         except ValueError:
             continue
         if isinstance(addr, ipaddress.IPv4Address):
-            if addr in fake_net and v4_in_fake_ip_block is None:
-                v4_in_fake_ip_block = str(addr)
+            if addr in fake_net and v4 is None:
+                v4 = str(addr)
         else:
-            if addr in ula and v6_in_ula is None:
-                v6_in_ula = str(addr)
+            if addr in ula and v6 is None:
+                v6 = str(addr)
 
-    if v4_in_fake_ip_block is None:
-        # Normal public answer. Healthy.
+    from dhole_mcp import security as _sec
+    record = _sec.resolver_probe_record()
+    theirs = str(record.get("verdict") or "")
+    who = f"pid {record.get('pid', '?')} at {record.get('probed_at', '?')}"
+    restart = ("restart dhole from its host launcher so the startup probe re-judges "
+               "this resolver - the cached verdict is the one validate_url applies, "
+               "and no manual override exists")
+
+    if v4 is None:
+        # 行宽预算 280，`_short` 保尾去头，所以每一段都要量过再写。
+        if not record:
+            checks.append((
+                "resolver reality", "ok",
+                f"{probe} resolves to a public answer; no dhole fetch has measured "
+                "this resolver yet (one process measures it once and keeps that "
+                "verdict for its lifetime)",
+                "",
+            ))
+            return
+        if theirs == "public":
+            checks.append((
+                "resolver reality", "ok",
+                f"{probe} resolves to a public answer, and the dhole process that "
+                f"measured it agrees ({who})",
+                "",
+            ))
+            return
+        detail = (
+            f"{probe} resolves to a public answer for doctor, but " + (
+                f"the process that fetched measured fake-ip "
+                f"({record.get('address') or 'a reserved address'}) at "
+                f"{record.get('probed_at')} and keeps that verdict"
+                if theirs == "fake-ip" else
+                f"the process that tried at {record.get('probed_at')} could not "
+                "resolve anything and keeps 'unprobed', so the recheck stays ON "
+                "there"))
+        checks.append(("resolver reality", "info", detail, restart))
+        return
+
+    head = f"fake-ip proxy detected ({probe} -> {v4} in 198.18.0.0/15)"
+    if v6:
+        head += f"; AAAA {v6} in fc00::/7"
+    if theirs in ("public", "unprobed"):
+        # 探测到了 fake-ip，但那个真正回答你调用的进程判的是别的：它现在还开着
+        # 复查层，所以在这台机器上"URL 全被拒"是它的现场，不是 doctor 的。
         checks.append((
-            "resolver reality", "ok",
-            f"{probe} resolves to a public answer",
-            "",
+            "resolver reality", "info",
+            f"{head}; the dhole process that fetched measured {theirs} at "
+            f"{record.get('probed_at')} and keeps it, so the recheck is still on "
+            "there",
+            restart + " (IP-literal, hostname and cloud-metadata guards always "
+                      "stay on)",
         ))
         return
-
-    # fake-ip detected. 17.0：旋钮已注销，姿态只有一个来源 —— 开机探测的自动
-    # 判定（security.probe_fake_ip），doctor 不再替用户读任何环境变量。
-    # （行宽预算 280 字符，超了会被截头 —— 两段 detail 都要短。）
-    from dhole_mcp import security as _sec
-    if not _sec._dns_recheck_enabled():
-        detail = (f"fake-ip proxy detected ({probe} -> {v4_in_fake_ip_block} in "
-                  f"198.18.0.0/15); the DNS-recheck layer is skipped "
-                  f"automatically on this host, so URLs work as-is "
-                  f"(metadata.ssrf_recheck says so; IP-literal, hostname and "
-                  f"cloud-metadata guards stay on)")
-        if v6_in_ula:
-            detail += f"; AAAA {v6_in_ula} in fc00::/7"
-        checks.append(("resolver reality", "ok", detail, ""))
-        return
-
-    # 探测到了 fake-ip，但复查层在本进程仍然开着：两处探测结果不一致（例如解析
-    # 器只对部分名字撒谎）。没有旋钮可关 —— 让用户重启，交给开机探测重新判定。
-    checks.append((
-        "resolver reality", "info",
-        f"fake-ip proxy detected ({probe} -> {v4_in_fake_ip_block} in "
-        f"198.18.0.0/15); the DNS-recheck layer is still on for this process",
-        "restart dhole so the startup probe re-judges this resolver "
-        "(no manual override exists; IP-literal, hostname and cloud-metadata "
-        "guards always stay on)",
-    ))
+    tail = (f" - measured by {who}" if theirs == "fake-ip"
+            else "; no dhole fetch has measured it yet")
+    checks.append(("resolver reality", "ok",
+                   f"{head}; the DNS-recheck layer is skipped automatically here, "
+                   "so URLs work as-is (IP-literal, hostname, cloud-metadata "
+                   "guards stay on)" + tail, ""))
 
 
 # ─── doctor 的检查项（B2-5：计划里的 12 项，重排而不是沿用旧表） ─────────────
@@ -782,10 +863,116 @@ def _append_dependency_layers(checks) -> None:
     ))
 
 
+def _launch_verdict(launch_bad: dict) -> str:
+    """把"上一次真起浏览器时发生了什么"说成一句人话（含多久以前）。
+
+    时间用"多久以前"而不是 UTC 时刻：doctor 的这一行是给"现在能不能用"这个问题的
+    答案，而一条判词的价值完全随它多旧而衰减 —— 一个 ISO-8601 串要读者自己心算年龄。
+    """
+    import time
+    at = launch_bad.get("at") or 0
+    try:
+        age = max(0.0, time.time() - float(at))
+    except (TypeError, ValueError):
+        age = -1.0
+    if age < 0:
+        when = "at an unreadable time"
+    elif age < 90:
+        when = f"{int(age)}s ago"
+    elif age < 5400:
+        when = f"{int(age // 60)} min ago"
+    elif age < 172800:
+        when = f"{int(age // 3600)}h ago"
+    else:
+        when = f"{int(age // 86400)} days ago (this verdict is old)"
+    return (f"the last launch attempt was refused {when}: "
+            f"{str(launch_bad.get('error') or '')[:150]}")
+
+
+def _append_browser_launch(checks) -> None:
+    """3b · 真起一次浏览器。盘上有没有与起不起得来是两件事，这里只回答后者。
+
+    三条自我约束都来自 2026-10-05 那次：
+      * **永不触发下载**。探针的前提是 `present`，为假就一行说明返回去 —— 一条"顺手
+        帮你把 193MB 拉下来"的诊断命令不是诊断命令。
+      * **只在 `--doctor` 里跑**。启动一次是 3–5 秒量级，`-v` 每一个宿主都要付这笔税，
+        而 `-v` 的语义是"这台安装能干什么"，文件系统 + 已记录的判词足够回答它。
+      * **失败时它自己会留痕**。生产那条启动路径已经会把"在场但起不来"写进状态文件的
+        `launch` 段（`browser.record_launch_failure`），探针复用同一条路径，所以这里
+        不另写一份记录 —— 两处各写就是下一对会漂的门。
+    """
+    if not _live_checks_enabled():
+        checks.append(("chromium launch", "info",
+                       "skipped by the test harness (it launches a browser)", ""))
+        return
+    try:
+        from dhole_mcp import browser
+        status = browser.chromium_status()
+    except Exception as exc:  # noqa: BLE001
+        checks.append(("chromium launch", "info",
+                       f"not inspectable: {type(exc).__name__}"[:60], ""))
+        return
+    if not status["present"]:
+        checks.append((
+            "chromium launch", "info",
+            f"skipped - nothing to launch ({status['detail']}); a probe never starts "
+            "the download", ""))
+        return
+    import asyncio
+    import time
+    started = time.perf_counter()
+    try:
+        out = asyncio.run(browser.launch_probe_async())
+    except Exception as exc:  # noqa: BLE001 - 起不来正是这一行要报告的内容
+        headline = (str(exc).strip().splitlines() or [""])[0][:150]
+        # 探针自己也要落这一笔：生产那条路是 `BrowserSession.start()` 的 except 在记，
+        # 而探针能失败在 start() 之外（goto 超时、context 建不起来）。同一个写者、同一
+        # 段，60 秒节流让"两处都记一次"退化成"只留下第一条"。
+        browser.record_launch_failure(exc)
+        checks.append((
+            "chromium launch", "fail",
+            f"present but would not start ({type(exc).__name__}: {headline}) - "
+            f"searched {status.get('searched_in') or status.get('browser_path')}",
+            install.browser_binary_command()))
+        return
+    checks.append((
+        "chromium launch", "ok",
+        f"{out['channel']} / {out['artifact']} answered in "
+        f"{time.perf_counter() - started:.1f}s (about:blank, no network)", ""))
+
+
+def _append_browser_verdicts(checks, looked: str, launch_bad: dict,
+                             state: dict) -> None:
+    """把两条"证据"各自单独成行：搜过哪个绝对目录、上一次真启动时发生了什么。
+
+    为什么不并进第 3 行里：`doctor()` 的渲染对每行做一次 `_short(detail, 280)`，而那句
+    实现是**保尾弃头**（`"..." + p[-(w-3):]`）—— 对路径是对的（有意义的是最后一段），
+    对"结论 + 目录"这种句子就是灾难：加了目录之后被截掉的正好是结论那一头。分成两行，
+    每行只装一样东西，两边都截不到。
+
+    目录行在场即打印（不只故障时）："它到底去哪儿看的"是操作员唯一能自查的问题，
+    healthy 的时候问这个问题同样常见 —— 而且 2026-10-05 那次，healthy 恰恰是假的。
+    """
+    if looked:
+        checks.append(("browsers root", "info", f"dhole looks in {looked}", ""))
+    if state.get("found_at"):
+        # 装上了却看不到：两句路径并排放在一行里，操作员才可能自己看出是两边解析不一致，
+        # 而不是"再跑一遍 install"（跑一百遍还是 exit 0 + "still missing"）。
+        checks.append((
+            "browser install location", "info",
+            f"the installer wrote it to {state.get('found_at')}",
+            f"set PLAYWRIGHT_BROWSERS_PATH to that directory, or move it to "
+            f"{looked}"))
+    if launch_bad:
+        checks.append(("browser launch verdict", "fail",
+                       _launch_verdict(launch_bad),
+                       str(launch_bad.get("searched_in") or "")))
+
+
 def _append_chromium(checks) -> None:
     """3 · 浏览器二进制的真实状态（17.0 B3 之后才有"真实"可言）。
 
-    三件此前做不到、也做错过的事：
+    四件此前做不到、也做错过的事：
       * 期望版本要问 driver 的 browsers.json。磁盘上最高的那个 chromium-XXXX 不算答案
         —— pip 升级过 patchright 之后旧目录还在，新 driver 却只认清单里那一版，照目录
         名猜会把一次必然失败的 launch 报成"已就绪"。
@@ -795,6 +982,9 @@ def _append_chromium(checks) -> None:
         "这次要用的没装"才说得出"没装"。
       * 首用安装是会失败的（网络、依赖、平台），失败得留痕。一条承诺"第一次自己装"的
         行，如果安装失败过却什么都不说，就是把 doctor 变成了广告。
+      * **说得出它搜过哪里**。2026-10-05 那次事故里，操作员唯一的自查动作是去盘上看目录，
+        而 dhole 报的是相对路径 —— 于是"没找到"与"找错了地方"在报告里长得一模一样。
+        目录不并进这一行，单独成行（见 `_append_browser_verdicts`）。
     """
     try:
         from dhole_mcp import browser
@@ -806,27 +996,56 @@ def _append_chromium(checks) -> None:
         return
     rev = arts.get("revision")
     cmd = install.browser_binary_command()
+    looked = str(arts.get("searched_in") or "")
+    # 启动判词（"在场但起不来"）优先于任何 ok：那一份记录来自真正 launch 过的那条路，
+    # 而这一行只做了文件系统检查 —— 文件系统检查说"就绪"、launch 说"起不来"的时候，
+    # 信哪一个的答案是信那个付过代价的。
+    launch_bad = browser.recorded_launch_failure()
     if arts.get("system_chrome"):
-        checks.append(("chromium binary", "ok",
-                       "system Chrome - nothing to download", ""))
+        path = browser.chromium_status().get("browser_path") or ""
+        checks.append(("chromium binary",
+                       "fail" if launch_bad else "ok",
+                       f"{path or 'system browser'} - no download needed",
+                       ("the OS refused to start this executable - dhole cannot grant "
+                        "it; fix the ACL or attach to a browser you started yourself "
+                        "with cdp_url + confirm=true" if launch_bad else
+                        "the browser tier uses this executable; nothing to install")))
+        # 系统浏览器在场时 `_browsers_root()` 根本不会被读到，所以这里**不**打印那个
+        # 目录：印一个本次决策没有参与的路径，等于给操作员一条会把他带去改错 env 的线索。
+        _append_browser_verdicts(checks, "", launch_bad, state)
         return
     needs = arts.get("launch_needs") or "chromium"
     wanted = arts["expected"][needs]
     found = arts.get(needs)
     if found:
-        checks.append(("chromium binary", "ok", f"{found} (revision {rev})", ""))
+        checks.append(("chromium binary",
+                       "fail" if launch_bad else "ok",
+                       f"{found} (revision {rev})",
+                       cmd if launch_bad else ""))
+        _append_browser_verdicts(checks, looked, launch_bad, state)
         return
     # 磁盘上有另一份 ≠ 这次起得来。这条要说得出名字，否则用户只会看到一次"明明装过"
     # 的失败。
     other = next((arts[k] for k in ("chromium", "headless_shell")
                   if k != needs and arts.get(k)), None)
     if state.get("status") == "failed":
+        import time
+        done = state.get("finished_at") or 0
+        age = max(0.0, time.time() - float(done)) if done else -1.0
+        # 退避活在**服务进程**里（跨进程抑制会把"刚在另一个终端手动装好了"的人晾在
+        # 原地），所以 doctor 不能说"还剩 N 秒"——它读不到别人的计时器。它能说的是这件
+        # 事实：上一次失败是多久以前，而失败之后的 15 分钟里那个进程不会再试。
+        retry = (f"; the running server suppresses retries for "
+                 f"{int((browser.INSTALL_BACKOFF_S - age) // 60)} more min"
+                 if 0 <= age < browser.INSTALL_BACKOFF_S else "")
         checks.append((
             "chromium binary", "fail",
             f"install failed (revision {state.get('revision', rev)}): "
-            f"{str(state.get('error', ''))[:120]}",
+            f"{str(state.get('error', ''))[:120]}"
+            + (f" ({int(age // 60)} min ago{retry})" if age >= 0 else ""),
             str(state.get("command") or cmd),
         ))
+        _append_browser_verdicts(checks, looked, launch_bad, state)
         return
     if state.get("status") == "installing":
         # 一条没有下文的"正在装"是 doctor 最容易说的话，也是最容易过期的话：安装线程
@@ -842,10 +1061,12 @@ def _append_chromium(checks) -> None:
                 f"{wanted} still not installed",
                 cmd,
             ))
+            _append_browser_verdicts(checks, looked, launch_bad, state)
             return
         checks.append(("chromium binary", "info",
                        f"install in progress (revision {rev}) - "
                        "the first browser fetch waits on it", ""))
+        _append_browser_verdicts(checks, looked, launch_bad, state)
         return
     checks.append((
         "chromium binary", "info",
@@ -857,6 +1078,7 @@ def _append_chromium(checks) -> None:
            else ""),
         cmd if _has_module("patchright") else 'python -m pip install -e ".[all]"',
     ))
+    _append_browser_verdicts(checks, looked, launch_bad, state)
 
 
 def _dir_mb(path: str) -> tuple[float, int]:
@@ -1075,7 +1297,8 @@ def _append_state_inventory(checks) -> None:
     ))
     held = []
     if any(e.name == "sessions.db" for e in files):
-        held.append("sessions.db holds cookie VALUES")
+        held.append("sessions.db holds cookie VALUES (DPAPI-encrypted on 17.1+; "
+                    "a pre-17.1 plaintext file migrates on the store's first use)")
     if any(e.name == "usage.jsonl" for e in files):
         held.append("usage.jsonl is the call log")
     if any(e.name == "profiles" for e in dirs):
@@ -1087,6 +1310,44 @@ def _append_state_inventory(checks) -> None:
                        "; ".join(held) +
                        " - delete these before sharing a machine or pasting a bug report",
                        ""))
+    _append_credential_storage_policy(checks)
+
+
+def _append_credential_storage_policy(checks) -> None:
+    """13 · 凭据现在在哪：默认内存（文件根本不存在），落盘必须加密。
+
+    G25 评审 H4 的另一半收口：pre-17.1 的 sessions.db / identity.db 是明文
+    SQLite，0600 在 Windows 上是空操作。默认模式什么都不写；落盘模式下值经
+    DPAPI 加密、密钥绑定本 Windows 用户——它防的是"文件被拷走/同步外带"，
+    防不了本机已沦陷的同用户进程，这句话要印出来而不是含糊过去。
+    """
+    from dhole_mcp import secretbox
+    persist = env_registry.read_flag("DHOLE_PERSIST_CREDENTIALS", fail_safe=True)
+    if persist and not secretbox.available():
+        checks.append((
+            "credential storage", "fail",
+            "DHOLE_PERSIST_CREDENTIALS=1 is set but encrypted persistence only "
+            "exists on Windows (DPAPI) - cookies and stored credentials stay in "
+            "memory, nothing is written to disk",
+            "remove the flag on this platform, or run dhole on Windows to persist",
+        ))
+    elif persist:
+        checks.append((
+            "credential storage", "info",
+            "cookies and stored credentials persist to sessions.db / identity.db, "
+            "every value encrypted with Windows DPAPI (bound to this user). That "
+            "protects a copied/synced file, NOT another process running as this "
+            "user - nothing defends against the machine already being owned",
+            "unset DHOLE_PERSIST_CREDENTIALS to keep everything in memory instead",
+        ))
+    else:
+        checks.append((
+            "credential storage", "ok",
+            "cookies and stored credentials live in memory only - the store files "
+            "are never created, and a restart starts from zero. "
+            "DHOLE_PERSIST_CREDENTIALS=1 persists them (Windows DPAPI, encrypted)",
+            "",
+        ))
 
 
 def _append_wire_cost(checks) -> None:
@@ -1286,6 +1547,7 @@ def doctor() -> int:
 
     # ── 3+4 · 抓取与排序真正要用的那两个大件 ──────────────────────────────
     _safe(_append_chromium, "chromium binary")
+    _safe(_append_browser_launch, "chromium launch")
     _safe(_append_rerank_model, "rerank model")
 
     # ── 5 · 宿主连得上吗（真起一个 stdio 服务）──────────────────────────

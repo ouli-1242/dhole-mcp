@@ -251,7 +251,36 @@ class TestDoctorConfigAudit:
         monkeypatch.setenv("DHOLE_SEARCH_PROXY", "http://127.0.0.1:7890")
         updater.doctor()
         out = capsys.readouterr().out
-        assert "2 of 11 variables set" in out
+        # 13 = 注册表现有旋钮数（G25 评审加 DHOLE_HTTP_TOKEN 到 12、17.1 加
+        # DHOLE_PERSIST_CREDENTIALS 到 13）。
+        assert "2 of 13 variables set" in out
+
+    def test_the_credential_storage_policy_is_reported(
+            self, isolated_home, monkeypatch, capsys):
+        """评审 H4 的收口要在 doctor 里有名字：默认报"只在内存"，落盘模式
+        报加密边界（防拷走，不防同用户进程——这句话必须印出来）。"""
+        updater.doctor()
+        out = capsys.readouterr().out
+        assert "credential storage" in out
+        assert "in memory only" in out
+
+        monkeypatch.setenv("DHOLE_PERSIST_CREDENTIALS", "1")
+        updater.doctor()
+        out = capsys.readouterr().out
+        assert "DPAPI" in out
+        assert "NOT another process running as this user" in out
+
+    def test_persist_requested_without_an_encryptor_fails_loud(
+            self, isolated_home, monkeypatch, capsys):
+        """没有 DPAPI 的平台设了落盘旗：运行时退回内存 + doctor 报 fail——
+        宁可拒存也不回退明文，而且这句必须被看见。"""
+        from dhole_mcp import secretbox
+        monkeypatch.setenv("DHOLE_PERSIST_CREDENTIALS", "1")
+        monkeypatch.setattr(secretbox, "available", lambda: False)
+        assert updater.doctor() == 1
+        out = capsys.readouterr().out
+        assert "credential storage" in out
+        assert "stay in memory" in out
 
     def test_config_audit_does_not_raise_when_the_section_itself_breaks(
             self, isolated_home, monkeypatch, capsys):
@@ -353,17 +382,26 @@ class TestDoctorResolverReality:
         # and the note about what disabling actually turns off:
         assert "IP-literal" in out or "IP literal" in out
 
-    def test_fake_ip_without_auto_skip_names_the_restart_remedy(self, isolated_home, monkeypatch, capsys):
-        """探测到了 fake-ip 但本进程复查层还开着（两处探测不一致的罕见机器）：
-        没有旋钮可关 —— 唯一的出路是重启让开机探测重新判定。"""
+    def test_the_verdict_of_the_process_that_fetches_is_what_gets_printed(
+            self, isolated_home, monkeypatch, capsys):
+        """17.0 批次 6d：doctor 自己看到 fake-ip，而**真正回答调用的那个进程**当初测的是
+        public 并把判词缓存到进程寿命结束 —— 这条从前印不出来。旧代码问的是
+        `_sec._dns_recheck_enabled()`，那是 doctor 本进程刚刚自己探的那一次，必然和上一
+        行自洽，等于没核对；用户的 URL 全被拒、体检却耸肩。现在这一行读盘上那份镜像，
+        并且这里用真的生产者写它（probe_fake_ip），不是手搓一个字典。"""
         import socket
 
-        self._fake_addr(monkeypatch, [(socket.AF_INET, "198.18.0.32")])
         from dhole_mcp import security as _sec
-        monkeypatch.setattr(_sec, "_dns_recheck_enabled", lambda: True)
+
+        self._fake_addr(monkeypatch, [(socket.AF_INET, "93.184.216.34")])
+        _sec.reset_fake_ip_probe()
+        assert _sec.probe_fake_ip()[0] == "public", "前置：那次'抓取进程'判的是公网"
+
+        self._fake_addr(monkeypatch, [(socket.AF_INET, "198.18.0.32")])
         assert updater.doctor() == 0
         out = capsys.readouterr().out
         assert "fake-ip proxy detected" in out
+        assert "measured public" in out, "要说出是谁的答案不一样，而不是只报自己看到的"
         assert "restart" in out
         assert "DHOLE_SSRF_DNS_RECHECK" not in out
 

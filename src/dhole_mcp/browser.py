@@ -622,19 +622,101 @@ async def _solve_cloudflare(page: Any) -> None:
 
 # ─── Channel detection: prefer system Chrome over bundled Chromium ───────────────
 
+def _win_local_appdata() -> Path:
+    """这台机器的 Local 目录，与 driver 的 `LOCALAPPDATA || homedir()/AppData/Local` 同式。
+
+    没有兜底就是本次事故的成因：宿主 spawn 的进程 env 里常常没有 LOCALAPPDATA，那时
+    `Path("") / "ms-playwright"` 得到的是**相对**路径，后面的 `is_dir()` 按进程 CWD
+    解析 —— 于是"盘上明明有"和"我没找到"可以同时为真。
+    """
+    raw = (os.environ.get("LOCALAPPDATA") or "").strip()
+    if raw:
+        return Path(raw)
+    return Path.home() / "AppData" / "Local"
+
+
+def _program_files_roots() -> list[Path]:
+    """Program Files 两根；env 没给就从 SystemRoot 的父目录推（被剥干净的进程常这样）。"""
+    roots: list[Path] = []
+    for name in ("PROGRAMFILES", "PROGRAMFILES(X86)"):
+        raw = (os.environ.get(name) or "").strip()
+        if raw:
+            roots.append(Path(raw))
+    if not roots:
+        sysroot = (os.environ.get("SystemRoot") or "").strip() or r"C:\Windows"
+        parent = Path(sysroot).parent
+        roots = [parent / "Program Files", parent / "Program Files (x86)"]
+    return roots
+
+
+def _win_browser_roots() -> list[Path]:
+    """系统浏览器的安装根：Program Files 两根 + per-user 的 Local。这份清单只列一次。"""
+    return _program_files_roots() + [_win_local_appdata()]
+
+
+_APP_PATHS_BASES = (
+    "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths",
+    "SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\App Paths",
+)
+
+
+def _winreg_app_paths(exe_name: str) -> list[str]:
+    """注册表 App Paths 里这颗 exe 记的位置：不读 env、不起进程，被剥干净的环境也能答。
+
+    HKLM 两条（64 位与 WOW6432Node）加 HKCU 一条，覆盖"机器级装"与"只给当前用户装"
+    两种。这里的答案不保证文件还在（卸载残留、手动搬过），所以调用方仍要 `isfile`。
+    """
+    if sys.platform != "win32":
+        return []
+    try:
+        import winreg
+    except ImportError:  # pragma: no cover - 非 Windows 没有这个模块
+        return []
+    found: list[str] = []
+    hives = [(winreg.HKEY_LOCAL_MACHINE, base) for base in _APP_PATHS_BASES]
+    hives.append((winreg.HKEY_CURRENT_USER, _APP_PATHS_BASES[0]))
+    for root, base in hives:
+        try:
+            with winreg.OpenKey(root, base + "\\" + exe_name, 0,
+                                winreg.KEY_QUERY_VALUE) as key:
+                value, _ = winreg.QueryValueEx(key, None)
+        except OSError:
+            continue
+        if value:
+            found.append(str(value).strip().strip('"'))
+    return found
+
+
+def _win_system_browser_path(rel: tuple) -> Optional[str]:
+    """一颗系统浏览器 exe 在哪里：注册表 → 安装根 → PATH。都不中才 None。"""
+    exe_name = rel[-1]
+    for candidate in _winreg_app_paths(exe_name):
+        if os.path.isfile(candidate):
+            return candidate
+    for base in _win_browser_roots():
+        path = os.path.join(str(base), *rel)
+        if os.path.isfile(path):
+            return path
+    import shutil
+    found = shutil.which(exe_name)
+    return found if found and os.path.isfile(found) else None
+
+
 _chrome_channel_cache: Optional[str] = None
-_chrome_version_cache: Optional[str] = None
 
 
 def _detect_chrome_channel() -> str:
-    """Detect if system Google Chrome is installed. Cache the result.
+    """Detect an installed system Chromium-family browser. Cache the result.
 
-    System Chrome (channel='chrome') has a real TLS fingerprint (JA4)
-    that matches what real users have. Bundled Chromium's fingerprint
-    differs and is detectable. The benchmark showed channel=chrome is
-    the bigger lever than patchright's own patches.
+    A system browser (channel='chrome' or 'msedge') has a real TLS
+    fingerprint (JA4) that matches what real users have. Bundled Chromium's
+    fingerprint differs and is detectable. The benchmark showed a system
+    channel is the bigger lever than patchright's own patches. Edge shares
+    Chrome's whole network stack (BoringSSL), so it carries the same lever -
+    which matters on machines that never installed Chrome (Edge ships with
+    Windows), so the order is chrome → msedge → bundled chromium.
 
-    Returns 'chrome' if system Chrome is found, 'chromium' otherwise.
+    Returns the patchright channel name: 'chrome', 'msedge', or 'chromium'.
     """
     global _chrome_channel_cache
     if _chrome_channel_cache is not None:
@@ -642,77 +724,131 @@ def _detect_chrome_channel() -> str:
 
     import shutil
 
-    # Common Chrome executable names on each platform
+    # (channel, win32 paths, POSIX PATH names) — Chrome first, Edge second:
+    # on a machine with both, either works, and Chrome is the tested default.
+    _SYSTEM_BROWSERS = (
+        ("chrome",
+         ("Google", "Chrome", "Application", "chrome.exe"),
+         ("google-chrome", "google-chrome-stable")),
+        ("msedge",
+         ("Microsoft", "Edge", "Application", "msedge.exe"),
+         ("microsoft-edge", "microsoft-edge-stable")),
+    )
     if sys.platform == "win32":
-        candidates = [
-            os.path.join(os.environ.get("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
-            os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
-            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
-        ]
-        for path in candidates:
-            if os.path.isfile(path):
-                _chrome_channel_cache = "chrome"
-                logger.info("System Chrome detected: %s", path)
-                return "chrome"
+        for channel, rel, _ in _SYSTEM_BROWSERS:
+            path = _win_system_browser_path(rel)
+            if path:
+                _chrome_channel_cache = channel
+                logger.info("System %s detected: %s", channel, path)
+                return channel
     else:
-        # POSIX: check if google-chrome or chromium is in PATH
-        for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
-            if shutil.which(name):
-                _chrome_channel_cache = "chrome"
-                logger.info("System Chrome detected: %s", name)
-                return "chrome"
+        # POSIX: system browsers by PATH name, then bundled chromium.
+        # 'chromium' stays in the Chrome row: a distro chromium is still a
+        # system browser with a real fingerprint, just not Google-branded.
+        for channel, _, names in _SYSTEM_BROWSERS:
+            probes = names + (("chromium", "chromium-browser")
+                              if channel == "chrome" else ())
+            for name in probes:
+                if shutil.which(name):
+                    _chrome_channel_cache = channel
+                    logger.info("System %s detected: %s", channel, name)
+                    return channel
 
     _chrome_channel_cache = "chromium"
-    logger.info("System Chrome not found, using bundled Chromium")
+    logger.info("No system Chrome/Edge found, using bundled Chromium")
     return "chromium"
 
 
-def _get_chrome_ua() -> Optional[str]:
-    """Get a User-Agent string matching the installed system Chrome version.
+_chrome_version_cache: Dict[str, Optional[str]] = {}
 
-    In headless mode, Chrome reports 'HeadlessChrome' in the UA which is
-    a dead giveaway. We read the real Chrome version and construct a UA
-    with 'Chrome' instead of 'HeadlessChrome'. This UA matches the TLS
-    fingerprint from channel=chrome.
 
-    Returns None if Chrome version can't be determined.
+def _win_version_dir_version(exe_path: str) -> Optional[str]:
+    """从版本目录读版本号，不起进程、不开 PowerShell。
+
+    Chrome/Edge 在 Windows 上是 `Application\\<x.y.z.w>\\chrome.exe` 的布局，launcher
+    与版本号目录同级 —— 版本号就写在目录名里。`_get_chrome_ua()` 原来只问 PowerShell
+    拿 `VersionInfo.FileVersion`：宿主把进程创建收紧时那一句会失败，而它的失败被吞成
+    None，UA 覆盖于是**静默**不发生，系统浏览器在隐身档里自称 HeadlessChrome ——
+    档位还在跑，指纹已经不是那一级了，调用方看不到任何痕迹。
+    """
+    exe_name = os.path.basename(exe_path)
+    parent = Path(exe_path).parent
+    try:
+        entries = list(parent.iterdir())
+    except OSError:
+        return None
+    versions = []
+    for entry in entries:
+        match = re.fullmatch(r"(\d+(?:\.\d+){3})", entry.name)
+        if not match:
+            continue
+        try:
+            if not (entry / exe_name).is_file():
+                continue
+        except OSError:
+            continue
+        versions.append(tuple(int(p) for p in match.group(1).split(".")))
+    if not versions:
+        return None
+    return ".".join(str(p) for p in max(versions))
+
+
+def _system_browser_path(channel: str) -> Optional[str]:
+    """Where the detected system channel's executable lives, or None."""
+    import shutil
+
+    _SYSTEM_PATHS = {
+        "chrome": (("Google", "Chrome", "Application", "chrome.exe"),
+                   ("google-chrome", "google-chrome-stable")),
+        "msedge": (("Microsoft", "Edge", "Application", "msedge.exe"),
+                   ("microsoft-edge", "microsoft-edge-stable")),
+    }
+    rel, names = _SYSTEM_PATHS[channel]
+    if sys.platform == "win32":
+        return _win_system_browser_path(rel)
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def _get_chrome_ua(channel: str = "chrome") -> Optional[str]:
+    """Get a User-Agent string matching the installed system browser version.
+
+    In headless mode, the browser reports 'HeadlessChrome' / 'HeadlessEdg'
+    in the UA which is a dead giveaway. We read the real executable version
+    and construct a UA with the normal brand instead. This UA matches the
+    TLS fingerprint from the system channel: for Edge that means the
+    'Edg/<version>' token rides along, so the UA tells the same story as
+    the browser's own Sec-CH-UA brands (a Chrome UA on an Edge TLS
+    handshake would be a self-contradicting fingerprint).
+
+    Returns None if the version can't be determined.
     """
     global _chrome_version_cache
-    if _chrome_version_cache is not None:
-        return _chrome_version_cache
+    cached = _chrome_version_cache.get(channel)
+    if cached is not None:
+        return cached
 
     import subprocess
 
-    chrome_path = None
-    if sys.platform == "win32":
-        for path in [
-            os.path.join(os.environ.get("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
-            os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
-            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
-        ]:
-            if os.path.isfile(path):
-                chrome_path = path
-                break
-    else:
-        import shutil
-        for name in ("google-chrome", "google-chrome-stable"):
-            chrome_path = shutil.which(name)
-            if chrome_path:
-                break
-
+    chrome_path = _system_browser_path(channel)
     if not chrome_path:
         return None
 
     try:
         if sys.platform == "win32":
-            # On Windows, chrome.exe --version hangs (starts the browser).
-            # Use PowerShell to read the file version instead.
-            result = subprocess.run(
-                ["powershell", "-Command",
-                 f"(Get-Item '{chrome_path}').VersionInfo.FileVersion"],
-                capture_output=True, text=True, timeout=5,
-            )
-            version_output = (result.stdout or "").strip()
+            # 同级版本目录先答（纯文件系统，不起进程）；问不到才退回 PowerShell。
+            version_output = _win_version_dir_version(chrome_path) or ""
+            if not version_output:
+                # On Windows, the exe --version hangs (starts the browser).
+                result = subprocess.run(
+                    ["powershell", "-Command",
+                     f"(Get-Item '{chrome_path}').VersionInfo.FileVersion"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                version_output = (result.stdout or "").strip()
         else:
             result = subprocess.run(
                 [chrome_path, "--version"],
@@ -720,18 +856,27 @@ def _get_chrome_ua() -> Optional[str]:
             )
             version_output = (result.stdout or "").strip()
         # Parse version: 'Google Chrome 150.0.0.0' -> '150.0.0.0'
-        import re
         match = re.search(r'(\d+\.\d+\.\d+\.\d+)', version_output)
         if match:
             version = match.group(1)
+            # Edge appends its own brand token; Chrome does not.
+            _brand = f" Edg/{version}" if channel == "msedge" else ""
             if sys.platform == "win32":
-                ua = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version} Safari/537.36"
+                ua = (f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      f"AppleWebKit/537.36 (KHTML, like Gecko) "
+                      f"Chrome/{version} Safari/537.36{_brand}")
             elif sys.platform == "darwin":
-                ua = f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version} Safari/537.36"
+                ua = (f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                      f"AppleWebKit/537.36 (KHTML, like Gecko) "
+                      f"Chrome/{version} Safari/537.36{_brand}")
             else:
-                ua = f"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version} Safari/537.36"
-            _chrome_version_cache = ua
-            logger.info("Chrome UA constructed: Chrome/%s", version)
+                ua = (f"Mozilla/5.0 (X11; Linux x86_64) "
+                      f"AppleWebKit/537.36 (KHTML, like Gecko) "
+                      f"Chrome/{version} Safari/537.36{_brand}")
+            _chrome_version_cache[channel] = ua
+            logger.info("%s UA constructed: Chrome/%s%s",
+                        "Edge" if channel == "msedge" else "Chrome",
+                        version, _brand)
             return ua
     except Exception:
         pass
@@ -1211,6 +1356,12 @@ class BrowserSession:
             "ignore_default_args": list(HARMFUL_ARGS),
             "headless": self._headless,
             "channel": _launch_channel(self._real_chrome),
+            # 渲染沙箱是**关**的，而且这一直是 driver 的默认（`chromiumSandbox !== true`
+            # 时它自己 push `--no-sandbox`，dhole 从不设 `chromium_sandbox`）。写成显式不
+            # 是为了改变行为，是为了上游哪天翻默认：翻的时候这一行会跟着测试一起变红，
+            # 而不是让每一次浏览器抓取静默多一个沙箱、慢一截、在某些 Windows 令牌下起不来。
+            # dhole 真正的围栏从来不是渲染沙箱：SSRF 路由闸 + CDP 逐主机授权。
+            "chromium_sandbox": False,
         }
 
         # Build context options
@@ -1238,10 +1389,11 @@ class BrowserSession:
         if self._useragent:
             context_options["user_agent"] = self._useragent
         elif self._headless:
-            # In headless mode, Chrome reports 'HeadlessChrome' in the UA.
-            # Fix: get the real Chrome version and construct a UA without 'Headless'.
-            if browser_options["channel"] == "chrome":
-                ua = _get_chrome_ua()
+            # In headless mode, the browser reports 'HeadlessChrome' /
+            # 'HeadlessEdg' in the UA. Fix: get the real executable version
+            # and construct a UA without 'Headless'.
+            if browser_options["channel"] in ("chrome", "msedge"):
+                ua = _get_chrome_ua(browser_options["channel"])
                 if ua:
                     context_options["user_agent"] = ua
             else:
@@ -1316,6 +1468,11 @@ class BrowserSession:
                         f"cdp_attached={self._cdp_attached})")
         except Exception as e:
             logger.error(f"Browser session start failed: {e}")
+            # 三态里最难自己发现的那一态（在场、起不来）只有写下来才看得见：本进程
+            # 马上要把这句错抛给调用方，而下一个进程（`dhole -v`、doctor、别的宿主
+            # 会话）读的是这块磁盘。判定与节流都在 record_launch_failure 里，它绝
+            # 不会抛 —— 这条热路径上不能多一个故障面。
+            record_launch_failure(e, real_chrome=self._real_chrome)
             await self._cleanup_playwright()
             raise
 
@@ -1442,7 +1599,8 @@ class BrowserSession:
                     "the authenticated cookies of the attached profile, so "
                     "navigation is fenced to the hosts the user approved "
                     "(confirm=true on that host authorizes it; the fence lives in "
-                    "cdp_hosts.json in the dhole state directory)."
+                    "cdp_hosts.json, and sys_state(clear=['cdp:host=<name>']) "
+                    "revokes one host, clear=['cdp_hosts'] all)."
                 )
 
         # Resolve per-request overrides
@@ -1751,11 +1909,20 @@ _INSTALL_STATE_FILE = "browser_install.json"
 #: 抓到一页共 82.2s）。它同时是 `_BudgetCredit` 放宽调用预算的上限（见 server 那侧）。
 INSTALL_TIMEOUT_S = 1800.0
 
+#: 一次失败之后多久之内不再重试安装。193MB 不该被每一个 web_act 重付一遍。
+INSTALL_BACKOFF_S = 900.0
+
 _install_lock = threading.Lock()
 _install_async_lock: Optional[asyncio.Lock] = None
+#: 退避到什么时候（进程内）。必须有模块级默认值：和 `_install_state` 同一个理由 ——
+#: 一次都没装过的进程里读它会炸。
+_install_retry_after: float = 0.0
 #: 本进程的安装事实镜像：磁盘上没有状态文件时 `read_install_state()` 读它。没有这一行，
 #: 一次都没装过的进程里那次读取是 NameError —— doctor 会把它报成"读不到"。
 _install_state: Dict[str, Any] = {}
+#: 上一次把"起不来"写进状态文件是什么时候。它在启动热路径上，不节流就等于每一次失败
+#: 调用都开一次文件写。
+_launch_record_at: float = 0.0
 #: 期望修订号来自包内清单，读一次就够（pip 升级 patchright 才会变，而那会重启进程）。
 _expected_revision_cache: Optional[int] = None
 _revision_read = False
@@ -1807,16 +1974,34 @@ def _expected_chromium_revision() -> Optional[int]:
 
 
 def _browsers_root() -> Path:
-    """playwright/patchright 的浏览器落盘根（环境变量优先，与上游同一约定）。"""
-    override = (os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-                or os.environ.get("PATCHRIGHT_BROWSERS_PATH"))
-    if override:
-        return Path(override)
-    if sys.platform == "win32":
-        return Path(os.environ.get("LOCALAPPDATA", "")) / "ms-playwright"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Caches" / "ms-playwright"
-    return Path.home() / ".cache" / "ms-playwright"
+    """playwright/patchright 的浏览器落盘根。
+
+    与 driver 同式：`PLAYWRIGHT_BROWSERS_PATH` 优先（`"0"` 是上游"落在包内
+    `.local-browsers`"的约定），否则 win32 用 `_win_local_appdata()/ms-playwright`。
+    返回值**永远是绝对路径**：一次 launch 用 driver 的解析、一次存在性检查用自己写的
+    相对路径，两边各看一个目录 —— 2026-10-05 那次"安装 exit 0 却说二进制没装上"就是它。
+    """
+    override = (os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "").strip()
+    if override == "0":
+        try:
+            root = _package_dir() / "driver" / "package" / ".local-browsers"
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                "PLAYWRIGHT_BROWSERS_PATH=0 means 'the patchright package's own "
+                ".local-browsers', but patchright is not importable here: %r"
+                % (exc,)) from None
+    elif override:
+        root = Path(override)
+    elif sys.platform == "win32":
+        root = _win_local_appdata() / "ms-playwright"
+    elif sys.platform == "darwin":
+        root = Path.home() / "Library" / "Caches" / "ms-playwright"
+    else:
+        root = Path.home() / ".cache" / "ms-playwright"
+    if not root.is_absolute():
+        # driver 也是这么展开相对 override 的（INIT_CWD || process.cwd()）。
+        root = Path(os.environ.get("INIT_CWD") or os.getcwd()) / root
+    return Path(os.path.normpath(str(root)))
 
 
 #: 一次 launch 到底要哪个目录。判据**不是** headless，而是"有没有显式传 channel"：驱动
@@ -1836,7 +2021,9 @@ _ARTIFACT_DIRS = {"chromium": "chromium-{rev}",
 #: 193MB → 416MB，headless_shell 119MB → 270MB）。
 INSTALL_DOWNLOAD_MB = {"chromium": 193, "headless_shell": 119}
 
-#: `launch_artifact()` 的一个返回值：这次起的是用户自己的 Chrome，没有东西要下载。
+#: `launch_artifact()` 的一个返回值：这次起的是用户自己的系统浏览器
+#: （Chrome 或 Edge），没有东西要下载。值保持 "system-chrome" 不变：
+#: updater 与干净环境 e2e 都按这个字符串读。
 SYSTEM_CHROME = "system-chrome"
 
 
@@ -1844,6 +2031,8 @@ def _launch_channel(real_chrome: bool = False) -> str:
     """`StealthyBrowser.start()` 交给 launch 的那个 channel —— 只在这里判一次。
 
     安装侧与启动侧必须共用它：两边各写一遍同一个条件，就是"装了 119MB 却起不来"的来路。
+    `real_chrome=True` 仍钉死 'chrome' —— 档位表（rungs.py）没有任何一档传它，
+    见该文件"两档之外不留逃生门"那段；这里不为一个没人走的参数扩语义。
     """
     return "chrome" if real_chrome else _detect_chrome_channel()
 
@@ -1851,12 +2040,14 @@ def _launch_channel(real_chrome: bool = False) -> str:
 def launch_artifact(real_chrome: bool = False) -> str:
     """这次 launch 需要哪个落盘 artifact —— 用的就是 `_launch_channel()` 那一个判据。
 
-    注意这里**没有** headless：dhole 两条路都显式传 channel（'chrome' 或 'chromium'），
-    而驱动里显式 channel 优先于 headless 的 shell 选择。所以按 headless 挑 artifact 是错
-    的 —— 那个版本装完 119MB shell、复核通过、当场起不来（实测见 `_ARTIFACT_DIRS`）。
-    shell 那一支仍留在表里，是因为 doctor 要说清"磁盘上有 shell 不等于能用"。
+    注意这里**没有** headless：dhole 两条路都显式传 channel（'chrome' / 'msedge'
+    或 'chromium'），而驱动里显式 channel 优先于 headless 的 shell 选择。所以按
+    headless 挑 artifact 是错的 —— 那个版本装完 119MB shell、复核通过、当场起不来
+    （实测见 `_ARTIFACT_DIRS` 上方那段实测）。shell 那一支仍留在表里，是因为 doctor
+    要说清"磁盘上有 shell 不等于能用"。
     """
-    if _launch_channel(real_chrome) == "chrome":
+    if _launch_channel(real_chrome) in ("chrome", "msedge"):
+        # 用户自己的系统浏览器（Chrome 或 Edge）：没有任何东西要下载。
         return SYSTEM_CHROME
     return "chromium"
 
@@ -1872,50 +2063,122 @@ def _install_argv(artifact: str) -> list[str]:
             "--only-shell" if artifact == "headless_shell" else "--no-shell"]
 
 
+def _resolved_browsers_root() -> Optional[Path]:
+    """`_browsers_root()`，或 None —— 给那些"只是想知道现状"的读者用。
+
+    `_browsers_root()` 会抛（override 是 `"0"` 而 patchright 又没装时），而抛在一个
+    **诊断**读者里等于把一次可解释的缺失误升级成一次崩溃：doctor 的那一行会写成
+    "not inspectable"，调用方拿到的是一句 traceback。
+    """
+    try:
+        return _browsers_root()
+    except RuntimeError as exc:
+        logger.debug("browsers root unresolvable: %s", exc)
+        return None
+
+
 def _installed_artifact(kind: str, revision: Optional[int]) -> Optional[Path]:
     """清单那一版的该当 artifact 在不在。半个安装（被打断的下载）不算存在。"""
     if revision is None:
         return None
-    d = _browsers_root() / _ARTIFACT_DIRS[kind].format(rev=revision)
+    root = _resolved_browsers_root()
+    if root is None:
+        return None
+    d = root / _ARTIFACT_DIRS[kind].format(rev=revision)
     # 上游用这个标记文件表示"解包完成"。没有它 = 下载中途被打断。
     if d.is_dir() and (d / "INSTALLATION_COMPLETE").exists():
         return d
     return None
 
 
+def _system_browser_search_roots() -> list:
+    """系统浏览器检测搜过哪些目录 —— 诊断用。
+
+    为什么值得单独报：检测给出 chrome/msedge 时 `_browsers_root()` 根本不会被读到，
+    所以"明明装了 Edge 却下载 193MB"这种故障，只看 `searched_in` 是看不出来的。POSIX
+    没有固定的安装根（只走 PATH），那里回空表而不是回一个假装搜过的目录。
+    """
+    if sys.platform != "win32":
+        return []
+    return [str(p) for p in _win_browser_roots()]
+
+
 def chromium_status(real_chrome: bool = False) -> dict:
     """这台机器现在能不能起浏览器。纯读，几毫秒，绝不下载。
 
     问的是 `launch_artifact()` 算出来的那一个目录，而它和启动共用 `_launch_channel()`。
+
+    `searched_in` / `browser_path` / `reason` 是 2026-10-05 那次故障之后加的：调用方收到
+    "not installed" 时，唯一能自查的问题是**它去哪儿看的**。`detail` 保持逐字节不变 ——
+    它同时是数据源（`ensure_chromium()` 与 doctor 都按这个字符串读），改它等于把一条
+    可读性修复变成又一次"两处各读一遍"的分叉。
     """
     artifact = launch_artifact(real_chrome)
     if artifact == SYSTEM_CHROME:
-        # channel='chrome' 时两种模式都由用户自己那个 Chrome 承担，没有东西要下载。
+        # 系统浏览器（Chrome 或 Edge）承担两种模式，没有东西要下载。
+        #
+        # 这一支**不读** `_browsers_root()`，`searched_in` 因此是空的：这次决策没有看过
+        # 那个目录，报一个没参与的路径就是给操作员一条把他带去改错 env 的线索。更重要的是
+        # 它不能抛 —— `PLAYWRIGHT_BROWSERS_PATH=0` 而 patchright 又没装时，解析 bundled
+        # 根会抛 RuntimeError，而这一次明明有一个能用的浏览器。
+        channel = _launch_channel(real_chrome)
         return {"present": True, "source": "system-chrome", "artifact": artifact,
                 "expected_revision": _expected_chromium_revision(),
-                "path": "", "detail": "system Chrome - no download needed"}
+                "path": "", "detail": f"system browser "
+                                      f"({channel}) - no download needed",
+                "reason": "system_browser", "searched_in": "",
+                "browser_roots_searched": _system_browser_search_roots(),
+                "browser_path": _system_browser_path(channel) or ""}
+    resolved = _resolved_browsers_root()
+    roots = _system_browser_search_roots()
+    if resolved is None:
+        # 第四态：不是"没装"，是"没地方可看"。把它并进 bundled_absent 会让调用方去跑
+        # 一次必败的安装（`patchright install` 自己会写到它解析得出来的地方去）。
+        return {"present": False, "source": "unknown", "artifact": artifact,
+                "expected_revision": _expected_chromium_revision(), "path": "",
+                "detail": "the browser cache root could not be resolved from this "
+                          "process - check PLAYWRIGHT_BROWSERS_PATH",
+                "reason": "root_unresolvable", "searched_in": "",
+                "browser_roots_searched": roots, "browser_path": ""}
+    searched = str(resolved)
     rev = _expected_chromium_revision()
     if rev is None:
         return {"present": False, "source": "unknown", "artifact": artifact,
                 "expected_revision": None, "path": "",
                 "detail": "patchright's browsers.json is unreadable - cannot tell "
-                          "which chromium revision this driver launches"}
+                          "which chromium revision this driver launches",
+                "reason": "manifest_unreadable", "searched_in": searched,
+                "browser_roots_searched": roots,
+                "browser_path": ""}
     found = _installed_artifact(artifact, rev)
     if found is not None:
         return {"present": True, "source": "bundled", "artifact": artifact,
                 "expected_revision": rev, "path": str(found),
-                "detail": found.name}
+                "detail": found.name,
+                "reason": "bundled_present", "searched_in": searched,
+                "browser_roots_searched": roots,
+                "browser_path": ""}
     return {"present": False, "source": "missing", "artifact": artifact,
             "expected_revision": rev, "path": "",
-            "detail": f"{_ARTIFACT_DIRS[artifact].format(rev=rev)} not installed"}
+            "detail": f"{_ARTIFACT_DIRS[artifact].format(rev=rev)} not installed",
+            "reason": "bundled_absent", "searched_in": searched,
+            "browser_roots_searched": roots,
+            "browser_path": ""}
 
 
 def chromium_artifacts() -> dict:
     """两个 artifact 各自在不在。抓取只问它这次要用的那一个，doctor 要说全。"""
     rev = _expected_chromium_revision()
     out: Dict[str, Any] = {"revision": rev,
-                           "system_chrome": _detect_chrome_channel() == "chrome",
+                           # 名字沿用 system_chrome（updater 与测试读这个键），
+                           # 语义已是"系统 Chromium 系浏览器在场"——含 Edge。
+                           "system_chrome": _detect_chrome_channel() in ("chrome", "msedge"),
+                           "launch_channel": _detect_chrome_channel(),
                            "launch_needs": launch_artifact(),
+                           # doctor 要说"在哪个目录里找的"：只报 artifact 名字的话，
+                           # "没找到"和"找错了地方"在操作员眼里一模一样。
+                           "searched_in": str(_resolved_browsers_root() or ""),
+                           "browser_roots_searched": _system_browser_search_roots(),
                            "expected": {k: _ARTIFACT_DIRS[k].format(rev=rev)
                                         for k in _ARTIFACT_DIRS}}
     for _kind in _ARTIFACT_DIRS:
@@ -1951,22 +2214,31 @@ def _install_state_path() -> str:
 
 
 def _record_install(state: dict) -> None:
-    """把安装事实写进 ~/.dhole/browser_install.json（另一个进程与 doctor 读它）。"""
+    """把安装事实写进 ~/.dhole/browser_install.json（另一个进程与 doctor 读它）。
+
+    同一个文件里还有 `launch` 那一段，写者是 `record_launch_failure`。这里必须把它
+    带着一起写，否则一次安装尝试会抹掉"盘上有、起不来"这条唯一的证据 —— 而那条恰恰
+    是安装已经成功过之后才会出现的状态。
+    """
     global _install_state
     _install_state = dict(state)
     try:
         from dhole_mcp import paths
         path = _install_state_path()
         paths.ensure_private_dir(Path(os.path.dirname(path)))
+        payload = dict(state)
+        prior = _read_install_file().get("launch")
+        if isinstance(prior, dict):
+            payload["launch"] = prior
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False)
+            json.dump(payload, f, ensure_ascii=False)
         paths.harden_file(path)
     except Exception as exc:  # noqa: BLE001 - 记录失败不能改变安装结论
         logger.debug("install state not written: %r", exc)
 
 
-def read_install_state() -> dict:
-    """磁盘上的安装记录；没有就回退到本进程的内存镜像。"""
+def _read_install_file() -> dict:
+    """只读磁盘那一份，不回退到内存镜像（两段各自的写者都要看见对方的段落）。"""
     try:
         path = _install_state_path()
         if os.path.exists(path):
@@ -1976,7 +2248,87 @@ def read_install_state() -> dict:
                 return data
     except Exception:  # noqa: BLE001
         pass
+    return {}
+
+
+def read_install_state() -> dict:
+    """磁盘上的安装记录；没有就回退到本进程的内存镜像。"""
+    data = _read_install_file()
+    if data:
+        return data
     return dict(_install_state)
+
+
+#: "在场但起不来"的措辞窄表。只记这几类，因为它们都是**进程创建/权限**故障 —— 也就是
+#: 二进制在场、driver 也找到了它，但操作系统不让它跑起来。反过来说，命中不了的
+#: 首行（网络、站点慢、driver 内部超时）不该被写成一个浏览器层的判词：那会把一次
+#: 偶发的等待说成"这台机器的浏览器坏了"。
+_LAUNCH_FAILURE_MARKERS = (
+    "cannot access executable",
+    "access is denied",
+    "拒绝访问",
+    "0x5",
+    "failed to launch",
+    "executable doesn't exist",
+)
+#: 一次失败之后多久之内不再重复记录。60 秒足够覆盖一次调用里的多次重试，
+#: 又不至于把几分钟后换了一种死法的故障盖掉。
+LAUNCH_RECORD_THROTTLE_S = 60.0
+
+
+def _is_launch_denied(text: str) -> bool:
+    """首行是否命中窄表。只看首行：driver 的错误第一行是判词，后面是回栈与命令行。"""
+    lines = (text or "").strip().splitlines()
+    head = lines[0].lower() if lines else ""
+    return any(marker.lower() in head for marker in _LAUNCH_FAILURE_MARKERS)
+
+
+def record_launch_failure(exc: BaseException, real_chrome: bool = False) -> None:
+    """把"盘上有、起不来"写进状态文件的 `launch` 段。绝不让它抛出。
+
+    为什么要专门记这一态：`browser_binary_missing` 这个词覆盖不了它，而它恰好是本次
+    事故之后最难自己发现的一种 —— 安装记录是 `done`，`present` 是真，调用方看到的
+    却是一句起不来。另一个进程（`dhole -v`、`dhole --doctor`）想知道浏览器层究竟怎么
+    样，只有这块磁盘可读。
+
+    两个条件都在收窄误报空间：(i) 当时确实判为在场，否则那是安装问题，安装段已经记了；
+    (ii) 首行命中 `_LAUNCH_FAILURE_MARKERS`，否则那是等待或站点问题，与二进制无关。
+    """
+    global _launch_record_at
+    try:
+        text = f"{type(exc).__name__}: {exc}"
+        if not _is_launch_denied(text):
+            return
+        now = time.time()
+        if _launch_record_at and now - _launch_record_at < LAUNCH_RECORD_THROTTLE_S:
+            return
+        status = chromium_status(real_chrome)
+        if not status["present"]:
+            return
+        _launch_record_at = now
+        from dhole_mcp import paths
+        path = _install_state_path()
+        paths.ensure_private_dir(Path(os.path.dirname(path)))
+        payload = _read_install_file()
+        payload["launch"] = {
+            "status": "failed",
+            "error": text.strip().splitlines()[0][:300],
+            "artifact": str(status.get("path") or ""),
+            "searched_in": str(status.get("searched_in")
+                          or _resolved_browsers_root() or ""),
+            "at": now,
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        paths.harden_file(path)
+    except Exception as inner:  # noqa: BLE001 - 诊断管路不能自己变成新故障面
+        logger.debug("launch failure not recorded: %r", inner)
+
+
+def recorded_launch_failure() -> dict:
+    """磁盘上那段"起不来"的判词；没有就回空 dict。"""
+    seg = _read_install_file().get("launch")
+    return seg if isinstance(seg, dict) else {}
 
 
 def reset_install_state() -> None:
@@ -1986,10 +2338,13 @@ def reset_install_state() -> None:
     下一个事件循环拿到一把属于已关闭循环的锁。
     """
     global _install_state, _expected_revision_cache, _revision_read, _install_async_lock
+    global _install_retry_after, _launch_record_at
     _install_state = {}
     _install_async_lock = None
     _expected_revision_cache = None
     _revision_read = False
+    _install_retry_after = 0.0
+    _launch_record_at = 0.0
 
 
 def _loop_is_running_here() -> bool:
@@ -1998,6 +2353,41 @@ def _loop_is_running_here() -> bool:
         return True
     except RuntimeError:
         return False
+
+
+def _arm_install_backoff() -> None:
+    """这一次失败之后 INSTALL_BACKOFF_S 内不再重试安装（判据见 `ensure_chromium`）。"""
+    global _install_retry_after
+    _install_retry_after = time.time() + INSTALL_BACKOFF_S
+
+
+def _artifact_elsewhere(wanted: str) -> str:
+    """这一份 artifact 是否在**别的**根目录里躺着。找到就报那个路径，找不到空串。
+
+    这是给"安装 exit 0、复查仍然说没装"那种自相矛盾准备的：两边各按自己的规则解析
+    根目录时，文件真的装上了、检查真的看不到。不修好 `_browsers_root()` 之前，这句
+    话是唯一的诊断线索；修好之后它是跳闸器。注意这里绝不把 present 翻真 ——
+    driver 起的是它自己那一份，替它认一个别处的目录等于放行一次必败的 launch。
+    """
+    resolved = _resolved_browsers_root()
+    candidates: list[Path] = [resolved] if resolved is not None else []
+    if sys.platform == "win32":
+        candidates.append(_win_local_appdata() / "ms-playwright")
+    candidates.append(Path.home() / ".cache" / "ms-playwright")
+    candidates.append(Path.home() / "Library" / "Caches" / "ms-playwright")
+    candidates.append(Path.cwd() / "ms-playwright")
+    try:
+        candidates.append(_package_dir() / "driver" / "package" / ".local-browsers")
+    except Exception:  # noqa: BLE001
+        pass
+    for root in candidates:
+        d = root / wanted
+        try:
+            if d.is_dir() and (d / "INSTALLATION_COMPLETE").exists():
+                return str(d)
+        except OSError:
+            continue
+    return ""
 
 
 def ensure_chromium(real_chrome: bool = False,
@@ -2010,6 +2400,7 @@ def ensure_chromium(real_chrome: bool = False,
     在事件循环线程上被直接调用时拒绝并说明为什么（见文件顶部第 1 条规矩）—— 这个坑
     有过一次真实事故，注释没守住，所以这次做成运行期跳闸。
     """
+    global _install_retry_after
     if _loop_is_running_here():
         return False, ("ensure_chromium() refused: it blocks for minutes and this is "
                        "the event loop thread - await ensure_chromium_async() instead "
@@ -2017,6 +2408,19 @@ def ensure_chromium(real_chrome: bool = False,
     status = chromium_status(real_chrome)
     if status["present"]:
         return True, status["detail"]
+
+    # 刚失败过就别再来一遍：一次失败的"装"可能是 193MB。今天没有负面缓存，
+    # 于是浏览器层坏掉的那台机器上，每一次 web_act 都重新付一遍安装的钱（锁内，
+    # 最多 INSTALL_TIMEOUT_S），而调用方看到的还是同一条错。退避只在本进程生效：
+    # 跨进程抑制会把"刚在另一个终端手动装好了"的人晾在原地 —— 两扇门会各自漂。
+    if _install_retry_after and time.time() < _install_retry_after:
+        left = int(_install_retry_after - time.time())
+        last = (_install_state.get("error") or "").strip()[:160]
+        return False, (f"browser install failed {left}s ago and is not being retried "
+                      f"for now (last error: {last or 'unknown'}; looked in "
+                      f"{status.get('searched_in') or _resolved_browsers_root() or '(unresolved)'}) - "
+                      f"run {_INSTALL_COMMAND_STR} yourself, or wait for the backoff "
+                      f"to expire")
 
     can, why = _platform_can_install()
     if not can:
@@ -2030,7 +2434,10 @@ def ensure_chromium(real_chrome: bool = False,
             return True, status["detail"]
         artifact = status["artifact"]
         rev = status["expected_revision"]
-        wanted = status["detail"].replace(" not installed", "")
+        # 想要的那一份直接从 artifact + revision 拼，不再从 detail 反解：那是一句
+        # 给人看的话，被第二个读者当数据源用就是第二扇会漂的门。
+        wanted = (_ARTIFACT_DIRS[artifact].format(rev=rev) if rev is not None
+                  else str(status["detail"]).replace(" not installed", ""))
         cmd = _install_argv(artifact)
         mb = INSTALL_DOWNLOAD_MB[artifact]
         _record_install({"status": "installing", "revision": rev,
@@ -2055,6 +2462,7 @@ def ensure_chromium(real_chrome: bool = False,
                              "command": _INSTALL_COMMAND_STR,
                              "error": f"timeout after {int(timeout_s)}s",
                              "finished_at": time.time()})
+            _arm_install_backoff()
             return False, detail
         except Exception as exc:  # noqa: BLE001
             detail = (f"chromium install could not run: {type(exc).__name__}: {exc}; "
@@ -2062,21 +2470,35 @@ def ensure_chromium(real_chrome: bool = False,
             _record_install({"status": "failed", "revision": rev,
                              "command": _INSTALL_COMMAND_STR,
                              "error": str(exc)[:400], "finished_at": time.time()})
+            _arm_install_backoff()
             return False, detail
         after = chromium_status(real_chrome)
         if proc.returncode == 0 and after["present"]:
+            _install_retry_after = 0.0
             _record_install({"status": "done", "revision": rev,
                              "command": _INSTALL_COMMAND_STR,
                              "path": after["path"], "finished_at": time.time()})
             return True, f"installed {after['detail']}"
         tail = ((proc.stderr or proc.stdout or "") or "").strip()[-200:]
+        # exit 0 而复查说没有：文件多半真装上去了，只是装在**另一个**根目录里。
+        # 那必须写进这一句里，否则调用方唯一的线索是"再跑一遍 install"——
+        # 而再跑一百遍也还是 exit 0、还是"still missing"。
+        elsewhere = _artifact_elsewhere(wanted) if proc.returncode == 0 else ""
+        looked = str(after.get("searched_in") or _resolved_browsers_root()
+                    or "(unresolved)")
         _record_install({"status": "failed", "revision": rev,
                          "command": _INSTALL_COMMAND_STR,
                          "error": tail or f"exit {proc.returncode}",
+                         "reason": "installed_elsewhere" if elsewhere else "verify_failed",
+                         "found_at": elsewhere, "looked_in": looked,
                          "finished_at": time.time()})
+        _arm_install_backoff()
         return False, (f"chromium install failed (exit {proc.returncode}) - "
                        f"{wanted} is still missing"
                        + (f": {tail}" if tail else "")
+                       + (f" - the installer put it in {elsewhere} - dhole looks in "
+                          f"{looked}" if elsewhere else
+                          f" - dhole looked in {looked}")
                        + f" - run manually: {_INSTALL_COMMAND_STR}")
 
 
@@ -2096,6 +2518,45 @@ async def ensure_chromium_async(real_chrome: bool = False,
     async with _install_async_lock:
         ok, detail = await asyncio.to_thread(ensure_chromium, real_chrome, timeout_s)
     return InstallOutcome(ok, detail, time.perf_counter() - started)
+
+
+#: 一次启动探针的总时限。真起一次浏览器在这台机器上是 3–5 秒量级，而探针的价值就在
+#: "它到底起不起得来" —— 给到 25 秒是为了慢机器，同时不许把 doctor 挂死。
+LAUNCH_PROBE_TIMEOUT_S = 25.0
+
+
+async def launch_probe_async(timeout_s: float = LAUNCH_PROBE_TIMEOUT_S) -> dict:
+    """真起一次浏览器、读一个 about:blank、关掉。不碰网络，永不触发下载。
+
+    `chromium_status()` 只回答"盘上有没有"；这次事故教的是**"盘上有"与"起得来"是两件
+    事**，而后一件事只有真的起一次才知道。探针起的形状与抓取那条路一致（`real_chrome`
+    取档位表唯一会发的 False —— `rungs._anti_detect`），否则它验的不是用户会用到的那一台。
+
+    调用方负责门控：这只在 `dhole --doctor` 里跑，`-v` 绝不起浏览器（一次启动是每一个
+    宿主的税）。这里也不查 present —— "什么都没有就别下载"那条规矩由调用方守着。
+    """
+    started = time.perf_counter()
+    session = StealthyBrowser(headless=True, real_chrome=False)
+    try:
+        await asyncio.wait_for(session.start(), timeout_s)
+        page = await asyncio.wait_for(session._context.new_page(), timeout_s)
+        try:
+            await asyncio.wait_for(page.goto("about:blank"), timeout_s)
+        finally:
+            await page.close()
+    except BaseException:
+        # 超时是 CancelledError（BaseException），而 `close()` 在 `_is_alive` 为假时直接
+        # 返回 —— 那会把 driver 的子进程留在原地。`start()` 自己失败时已经清过一遍，
+        # 这里再清一次是幂等的。
+        try:
+            await session._cleanup_playwright()
+        except Exception:  # noqa: BLE001
+            pass
+        raise
+    await session.close()
+    return {"channel": _launch_channel(False),
+            "artifact": launch_artifact(False),
+            "elapsed_s": round(time.perf_counter() - started, 2)}
 
 
 # ─── Browser availability check ───────────────────────────────────────────────

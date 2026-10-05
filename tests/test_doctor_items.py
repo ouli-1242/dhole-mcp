@@ -22,6 +22,7 @@ REQUIRED_ROWS = (
     "python + platform",      # 1
     "dependency layers",      # 2
     "chromium binary",        # 3
+    "chromium launch",        # 3b · 真起一次；套件里是"被挂具跳过"那一行
     "rerank model",           # 4
     "stdio handshake",        # 5
     "config",                 # 6 · 两扇门（设了东西时是逐变量行）
@@ -69,7 +70,15 @@ class TestTheTwelveItems:
 
     def test_doctor_writes_nothing_but_its_own_probe(self, isolated_home):
         """除了 .doctor-probe（写完即删），doctor 不许在状态目录里留下任何东西：
-        它是"坏了才跑"的命令，跑完不该改变现场。"""
+        它是"坏了才跑"的命令，跑完不该改变现场。
+
+        17.0 批次 1 给这一条开了一个**有名字的豁免**：3b 那项探针会真起一次浏览器，
+        起不来的时候它必须把这一笔写进 `browser_install.json` 的 `launch` 段 —— 否则
+        "盘上有、起不来"这一态只有这一次运行的现场知道，下次没人记得。豁免的确切边界
+        （成功时一个字都不写、失败时只写那一段）由
+        `tests/test_the_version_panel_does_not_claim_a_browser_it_cannot_launch.py`
+        最后那对用例钉着；这一条继续钉默认形状（套件里 live 项是关的，探针不参与）。
+        """
         updater.doctor()
         assert not isolated_home.exists() or list(isolated_home.iterdir()) == []
 
@@ -202,7 +211,10 @@ class TestItem3Chromium:
         updater.doctor()
         line = self._row(capsys)
         assert "not installed" in line, line
-        assert str(self.REV + 71) not in line, line
+        # 钉的是"永不点名另一颗 artifact"，不是"这行里不许出现那个整数"：这一行现在要
+        # 打印它搜过的绝对目录，而临时目录名里就带着数字（pytest-1299 之类），纯整数
+        # 断言迟早被自己的挂具误红。
+        assert f"chromium-{self.REV + 71}" not in line, line
 
 
 class TestItem4RerankModel:

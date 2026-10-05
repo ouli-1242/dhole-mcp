@@ -62,6 +62,51 @@ def _nobody_installs_a_browser(monkeypatch):
     monkeypatch.setattr(browser.subprocess, "run", guarded_run)
 
 
+class _RealBrowserLaunch(BaseException):
+    """套件里"真的启动一个浏览器"用的跳闸类型。
+
+    与 `_RealBrowserInstall` 同一个理由：产品代码吞掉一切 `Exception`，一道能被吞掉的
+    闸等于没有闸。
+    """
+
+
+@pytest.fixture(autouse=True)
+def _nobody_launches_a_browser(request, monkeypatch):
+    """17.0 批次 1 · 普通用例绝不许真起一个浏览器。
+
+    为什么现在才钉：这一批评的是"能力面板与 doctor 不再谎报"，而谎报的根源是**用 import
+    检查代替启动检查**。一旦代码里出现真的启动（doctor 的 3b 探针），套件就需要一道闸，
+    否则"跑一次测试"变成"在 CI 上开 N 个 chromium"。2026-10-05 那次事故还有第二层：
+    浏览器层坏掉的时候，每一次抓取都会去试启动一次 —— 没有这道闸，那种失败在套件里
+    长得和成功一模一样。
+
+    闸装在 `patchright.async_api.async_playwright` 上，**不是** `StealthyBrowser.start`：
+    `test_ensure_chromium.py:827` 要 `inspect.getsource(StealthyBrowser.start)` 读源码，
+    打桩方法会让那条守卫读到 stub 的源码，守卫就从"钉住实现"变成"钉住挂具"。
+    `BrowserSession.start()` 是在函数体里 import 这个名字的，所以模块属性打桩正好接得住。
+
+    真启动的用例自己放行：`live`（真网络）与 `e2e`（真子进程）两个 marker。
+    """
+    if (request.node.get_closest_marker("live")
+            or request.node.get_closest_marker("e2e")):
+        yield
+        return
+    try:
+        import patchright.async_api as _pa
+    except Exception:  # noqa: BLE001 - 没装 patchright 的机器上，这一项本来就起不来
+        yield
+        return
+
+    def guarded(*args, **kwargs):
+        raise _RealBrowserLaunch(
+            "a test launched a real browser - stub BrowserSession.start (or mark the "
+            "test with @pytest.mark.live / @pytest.mark.e2e). The browser tier costs "
+            "3-5s per launch and a broken tier retries it on every fetch.")
+
+    monkeypatch.setattr(_pa, "async_playwright", guarded)
+    yield
+
+
 @pytest.fixture(autouse=True)
 def _no_real_robots_fetch(monkeypatch):
     """Keep the suite off the network for robots.txt.
@@ -159,6 +204,10 @@ def _no_real_home_state_writes(request, monkeypatch, tmp_path):
     from dhole_mcp import sessions as _sessions
     _sessions.reset_for_tests()
     monkeypatch.setattr(_sessions, "_db_path", lambda: str(tmp_path / "sessions.db"))
+    # 17.1 凭据落盘：jar 默认在内存里，但 _PERSIST 是 import 时从真实环境冻结的
+    # —— 开发机自己设了这颗旗的话，每个测试都会静默跑在落盘模式上。钉死为
+    # 默认态，要测落盘的测试自己 monkeypatch 覆盖。
+    monkeypatch.setattr(_sessions, "_PERSIST", False)
     # The fetch cache is the sixth state file, and it broke from the other
     # direction: not written by tests so much as READ by them. Ordinary live use
     # fills ~/.dhole/cache.db with real pages, so a test that stubs the fetcher for
@@ -188,19 +237,17 @@ def _no_real_home_state_writes(request, monkeypatch, tmp_path):
     # for every later test AND for the developer's own live server. Routed
     # through paths.file itself so BOTH readers agree — server's
     # _cdp_hosts_file() and updater.doctor()'s stdlib mirror.
+    # 17.0 批次 6d 起，resolver 判词的镜像（resolver_probe.json）走同一条接管：
+    # 套件里 `_offline_dns` 把 getaddrinfo 钉成公网地址，而每一次 validate_url 都会
+    # 经过 probe_fake_ip() —— 不接管的话每个用例都往用户真实的 ~/.dhole 里写一份
+    # "这台机器是 public"，而那正是这份文件存在的意义（别的进程读它）。
     from dhole_mcp import paths as _paths
     _orig_file = _paths.file
     monkeypatch.setattr(_paths, "file",
-                        lambda name: tmp_path / name if name == "cdp_hosts.json"
+                        lambda name: tmp_path / name
+                        if name in ("cdp_hosts.json", "resolver_probe.json")
                         else _orig_file(name))
-    # tasks.db (recorded recipes + watch baselines) is the ninth state file, and
-    # it leaks the same way sessions.db does: a test that only LISTS what is
-    # stored would read the developer's own recipes, and one that ERASES a class
-    # (sys_state clear=["watch"/"recipes"/"all"]) would delete them for real.
-    from dhole_mcp import tasks as _tasks
-    monkeypatch.setattr(_tasks, "_db_path", lambda: str(tmp_path / "tasks.db"))
-    _tasks.reset_connection()
-    # identity.db (cred_defaults, §3-17) is the tenth state file, and it holds
+    # identity.db (cred_defaults, §3-17) is the ninth state file, and it holds
     # credentials rather than content: a test that stores an auth header would
     # otherwise write one into the developer's own ~/.dhole, and every later test
     # (and every later real fetch) would pick it up as a default. The connection
@@ -208,13 +255,13 @@ def _no_real_home_state_writes(request, monkeypatch, tmp_path):
     # tmp_path per test does nothing while the old handle stays open.
     from dhole_mcp import identity as _identity
     monkeypatch.setattr(_identity, "_db_path", lambda: str(tmp_path / "identity.db"))
+    monkeypatch.setattr(_identity, "_PERSIST", False)
     _identity.close()
     from dhole_mcp import server as _srv
     _srv._cdp_hosts_cache, _srv._cdp_hosts_stamp = frozenset(), None
     yield
     _srv._cdp_hosts_cache, _srv._cdp_hosts_stamp = frozenset(), None
     _sessions.reset_for_tests()
-    _tasks.reset_connection()
     _identity.close()
     _envreg.invalidate_file_cache()
 

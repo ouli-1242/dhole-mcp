@@ -48,6 +48,19 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
         re.IGNORECASE,
     ), "dns_failure"),
 
+    # Browser process could not be started. Must come BEFORE `timeout`: the real
+    # driver sentence is "Timed out while launching browser", and reading that as
+    # a site timeout sends the caller to raise `timeout=` and retry against the
+    # target — while the actual fact is that the OS refused to create the process.
+    # Narrow on purpose (`(0x5)` with its parentheses): a bare `0x5` would match
+    # the hex addresses that appear in other crash text.
+    (re.compile(
+        r"browserType\.[a-zA-Z]*launch|failed to launch|could not launch|"
+        r"cannot access executable|executable doesn't exist|"
+        r"access is denied|拒绝访问|\(0x5\)|spawn [^\s]+ ENOENT",
+        re.IGNORECASE,
+    ), "browser_launch"),
+
     # Timeout
     (re.compile(
         r"TimeoutError|ERR_TIMED_OUT|ERR_CONNECTION_TIMED_OUT|"
@@ -86,6 +99,16 @@ _HINTS: dict[str, str] = {
         "Request timed out. The site may be slow or your network is restricted. "
         "Retry once with a longer timeout; if it persists, switch sources."
     ),
+    "browser_launch": (
+        "The browser process could not be started - this is not a site problem, so "
+        "retrying the URL or raising timeout= cannot change the outcome. Check the "
+        "three states in `dhole --doctor`: nothing on disk (run the install command "
+        "it prints), present but never launched, or present and refused by the "
+        "operating system (that one is recorded in ~/.dhole/browser_install.json). "
+        "If your machine already runs Chrome or Edge, dhole uses it automatically; "
+        "otherwise attach to a browser you started yourself with "
+        "cdp_url='http://127.0.0.1:9222' plus confirm=true."
+    ),
     "tls_error": (
         "TLS/SSL handshake failed. Possible certificate issue or network "
         "interception. Do NOT retry without changing network/proxy."
@@ -107,6 +130,9 @@ def classify_network_error(error_str: str) -> Tuple[str, str]:
     - connection_refused: target refused TCP connection (site down / env blocked)
     - connection_reset: remote host forcibly closed connection (anti-bot / firewall)
     - dns_failure: domain name resolution failed
+    - browser_launch: the browser process itself could not be started (not a site
+      problem — checked before `timeout` so "Timed out while launching browser"
+      does not get read as a slow target)
     - timeout: request timed out (site slow / network restricted)
     - tls_error: TLS/SSL handshake failure
     - proxy_error: proxy connection failure
