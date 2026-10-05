@@ -404,7 +404,11 @@ def _validate_actions(actions) -> list[dict]:
     out: list[dict] = []
     for i, a in enumerate(actions):
         if not isinstance(a, dict) or len(a) != 1:
-            raise ValueError(f"action {i} must be a dict with exactly one key {sorted(_VALID_KEYS)}")
+            raise ValueError(
+                f"action {i} must be a dict with exactly one key {sorted(_VALID_KEYS)}; "
+                "the target rides inside that key's value: "
+                '{"fill": {"index": 0, "text": "new value"}} or {"click": "#submit"}'
+            )
         (key, val), = a.items()
         if key not in _VALID_KEYS:
             raise ValueError(f"action {i} has unknown key {key!r}; valid: {sorted(_VALID_KEYS)}")

@@ -277,6 +277,10 @@ class TestActionsAndEngineState:
             actions_mod._validate_actions([{"scroll": 3, "wait": 1000}])
         assert "exactly one key" in str(exc.value)
 
+        # 批次12：光有键名清单不够 —— 实测调用方写 {"index": 0, "fill": ...} 被拒后
+        # 只能靠猜 index 放哪（正确形状藏在 examples.md 里）。报错要带可抄写的示例。
+        assert '"fill": {"index": 0' in str(exc.value)
+
         # 17.0 §4 第 2 行：这条规矩的话现在由 web_act 说（actions 不再挂在读的那扇门上）。
         tool = next(td for td in MasterFetchServer._TOOL_DEFS if td["name"] == "web_act")
         assert "ONE action key per object" in tool["inputSchema"]["properties"]["actions"]["description"]

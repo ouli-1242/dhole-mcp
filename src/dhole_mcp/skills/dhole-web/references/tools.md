@@ -35,6 +35,8 @@ Repeated records REQUIRE a "container selector + sub-schema" — sub-selectors e
   "properties": {"text": {"selector": ".text"}, "tags": {"type": "array", "selector": ".tag"}}}}}
 ```
 
+The top level of a schema is for page-wide scalar fields (and `"type": "auto"`) only — a `selector` or `type: "array"` there is refused before any request, with the container shape spelled out. And when a well-formed schema returns far fewer records than the page visibly holds, suspect the container selector first: one that matches a single wrapper (or a wrapper the page has only one of) yields exactly one record.
+
 ## Two layers in one call (`nested_*`)
 
 `schema` nesting scopes selectors **inside one document**; it cannot reach a second page. When the items you want each live on their own page — 8 featured collections and the works inside each, a result list and its detail pages — that is a fan-out over URLs, and `nested_selector` + `nested_fields` do it in one call instead of nine:

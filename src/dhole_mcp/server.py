@@ -2754,6 +2754,22 @@ def _normalize_schema(schema: Any) -> Optional[dict]:
         )
     if not schema:
         return None
+    # 批次12：容器意图写在顶层（selector + properties，或顶层 type:"array"）此前被
+    # 下面的宽容放行放过，而抽取端只读 properties —— 顶层 selector 被无视，每个字段
+    # 各取页面第一个匹配，组装成一条记录：调用看起来成功，结果是错的。错误答案比报错糟。
+    top_selector = schema.get("selector")
+    if isinstance(top_selector, str) and top_selector.strip() and (
+        schema.get("type") == "array" or schema.get("properties")
+    ):
+        raise ValueError(
+            "schema puts a container selector at the top level, where it is "
+            "ignored - that shape extracts exactly ONE record, not the list of "
+            "records you meant. Nest the container under a named property: "
+            '{"properties": {"stories": {"type": "array", "selector": ".athing", '
+            '"properties": {"title": {"selector": ".titleline a"}}}}}. '
+            "The top level is for page-wide scalar fields (no 'selector' there) "
+            "or type/mode = 'auto'."
+        )
     if schema.get("properties") or schema.get("type") == "auto" or schema.get("mode") == "auto":
         return schema
     raise ValueError(

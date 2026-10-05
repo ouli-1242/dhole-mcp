@@ -76,6 +76,48 @@ class TestNormalizeSchema:
             _normalize_schema(["h1"])
 
 
+class TestContainerIntentAtTheTopLevelIsRefused:
+    """批次12 回归：顶层 `{"type": "array", "selector": ".athing", ...}` 此前被
+    宽容放行，而抽取端只读 `properties` —— 顶层 selector 被无视，HN 首页 30 条
+    实测只回 1 条：看起来成功，结果是错的。现在发请求前具名拒绝。"""
+
+    WRONG = {"type": "array", "selector": ".athing",
+             "properties": {"title": {"selector": ".titleline a"}}}
+
+    def test_top_level_container_shape_is_refused(self):
+        with pytest.raises(ValueError, match="container"):
+            _normalize_schema(dict(self.WRONG))
+
+    def test_selector_with_properties_without_type_array_is_refused(self):
+        with pytest.raises(ValueError, match="container"):
+            _normalize_schema({"selector": ".quote",
+                               "properties": {"text": {"selector": ".text"}}})
+
+    def test_type_array_with_bare_selector_is_refused(self):
+        with pytest.raises(ValueError, match="container"):
+            _normalize_schema({"type": "array", "selector": ".quote"})
+
+    def test_refusal_carries_the_correct_shape(self):
+        with pytest.raises(ValueError) as exc:
+            _normalize_schema(dict(self.WRONG))
+        assert '"properties": {"stories"' in str(exc.value)
+
+    def test_page_wide_scalar_properties_still_pass(self):
+        ok = {"properties": {"title": {"selector": "h1"}}}
+        assert _normalize_schema(ok) is ok
+        assert _normalize_schema({"type": "auto"}) == {"type": "auto"}
+
+    @pytest.mark.asyncio
+    async def test_container_intent_schema_is_refused_before_any_fetch(self):
+        server = MasterFetchServer()
+        server._auto_escalate = AsyncMock(return_value=_html_result())
+        out = await server.web_read("https://example.com",
+                                    schema=dict(self.WRONG), cache_ttl=0)
+        assert out.status == 0 and out.content == []
+        assert "container" in out.error
+        server._auto_escalate.assert_not_awaited()
+
+
 class TestSchemaReachesStructuredExtraction:
     """契约：传了 schema 就必须拿到 JSON，不能悄悄给 markdown。"""
 
