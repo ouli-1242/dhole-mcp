@@ -236,8 +236,8 @@ class TestScreenshotPixelsReachTheWire:
     从回执挪进 `_action_images`（PrivateAttr，不进 JSON），像素再往前一步变成
     ImageContent 是 dispatch 层的活。那条线此前只接在 web_read 分支上 —— web_act
     分支把它们丢在了原地：回执说「有图」，客户端却什么都看不到。真实协议层才测得
-    到（单元层一直只看回执形状，而这根管子在 dispatch）。2026-10-05 全真模拟
-    （review/realrun）第一次过 wire 时抓到。
+    到（单元层一直只看回执形状，而这根管子在 dispatch）。2026-10-05 那次真实使用
+    全真模拟第一次过 wire 时抓到。
     """
 
     def test_pixels_ride_the_content_list(self, monkeypatch):

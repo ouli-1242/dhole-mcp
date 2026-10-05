@@ -4,8 +4,8 @@
 什么"），但 17.0 把 auth / cookies 从调用参数搬进 `cred_defaults` 之后，指纹的
 输入源还留在旧地址上：装饰器只看 `options`，而 options 里早就没有这三个键了。
 后果是「先匿名抓、再存身份、再抓同 URL」命中设身份之前的缓存——回执的
-`identity_applied` 声称这次身份在生效，内容却是匿名那一份（2026-10-05 全真模拟
-`review/realrun` 抓到，wire 组有真协议存证）。
+`identity_applied` 声称这次身份在生效，内容却是匿名那一份（2026-10-05 那次真实使用
+全真模拟抓到，wire 组有真协议存证）。
 
 修法在 `_smart_fetch_request_context`：构建指纹前把**存量** auth / cookies
 （按这次请求的 host 取，与 `_identity_for` 同一判定）与 proxy（全局键）并回

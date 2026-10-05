@@ -1,6 +1,6 @@
 """靶站当爬虫的种子：存量 allow_private 必须在爬的门上同样成立。
 
-2026-10-05 全真模拟（review/realrun）抓到：`cred_defaults` 存了 `allow_private`
+2026-10-05 那次真实使用全真模拟抓到：`cred_defaults` 存了 `allow_private`
 之后，web_read / web_act / web_request / feed_read 四扇门都放行回环，唯独
 web_crawl / web_discover 仍拒 —— `crawl.py` 的种子 `validate_url` 在任何作用域
 之外裸跑（feed_read 当年同类问题修的时候，这颗漏了）。每页的真实抓取走 web_read
