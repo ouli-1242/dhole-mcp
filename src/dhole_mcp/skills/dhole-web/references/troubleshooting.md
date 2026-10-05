@@ -21,7 +21,7 @@ The entire pool is cooling. Read remaining seconds from `dhole engines list` and
 
 ### The same engine keeps cooling
 
-This IP is being watched. The three cooldown tiers are fixed at 60s / 600s / 600s (blocked / challenge x3 / unreachable x3) — 17.0 does not expose them, because the only way to "fix" a watched IP with a longer timer is a deader pool. The real fix is a different egress (`DHOLE_SEARCH_PROXY`) or a keyed engine. There is no knob to set to hours; `dhole engines reset` is the way to drop a penalty early.
+This IP is being watched. The three cooldown tiers are fixed at 60s / 600s / 600s (blocked / challenge x3 / unreachable x3) — they are not exposed, because the only way to "fix" a watched IP with a longer timer is a deader pool. The real fix is a different egress (`DHOLE_SEARCH_PROXY`) or a keyed engine. There is no knob to set to hours; `dhole engines reset` is the way to drop a penalty early.
 
 ## Fetch
 
@@ -47,7 +47,7 @@ Default compliance: **zero requests** were sent for that URL. A one-shot waiver 
 
 ### Every public URL flagged as internal
 
-A fake-IP TUN proxy (Clash / sing-box TUN mode) hands every public name an address in `198.18.0.0/15` / a `fc00::/7` AAAA, which the DNS recheck reads as internal. **This is detected and the recheck layer skips itself** — the response then says so in `ssrf_recheck` (under `metadata` on a single fetch; once on the envelope of a `urls=[...]` batch or a crawl, because it is a fact about the process rather than about any one page) and `dhole --doctor` names the address and the network. If URLs are still being flagged internal, the probe missed an unusual resolver that fake-ips only some names: have the user restart dhole once so the startup probe re-judges — 17.0 has no manual override (the knob is retired, and the only historical reason to want one IS the fake-ip case) — and re-check with `dhole --doctor`. Plain HTTP proxies are unaffected.
+A fake-IP TUN proxy (Clash / sing-box TUN mode) hands every public name an address in `198.18.0.0/15` / a `fc00::/7` AAAA, which the DNS recheck reads as internal. **This is detected and the recheck layer skips itself** — the response then says so in `ssrf_recheck` (under `metadata` on a single fetch; once on the envelope of a `urls=[...]` batch or a crawl, because it is a fact about the process rather than about any one page) and `dhole --doctor` names the address and the network. If URLs are still being flagged internal, the probe missed an unusual resolver that fake-ips only some names: have the user restart dhole once so the startup probe re-judges, then re-check with `dhole --doctor`. Plain HTTP proxies are unaffected.
 
 ### Fetch timeouts
 
@@ -75,7 +75,7 @@ The response distinguishes "credentials rejected" (store a fresh token) from "no
 
 ### Sites behind login
 
-Four paths, cheapest first: (1) HTTP tier — credentials stored once with `cred_defaults` (`cookies` or `auth`: basic/bearer/header, each with its `host`; pass a `session_id` to keep the browser jar). (2) The **no-password browser fallback (17.0)**: a named `session_id` bridges the jar into that session's dedicated stealthy browser (and harvests back), so HTTP-tier login state rides browser calls; combine with `check_login` + snapshot actions + gated submit to operate the site without ever touching a password. (3) CDP attach (17.0) — `web_read` with `cdp_url` (+ `check_login=true`) runs the fetch inside the user's real logged-in Chrome; requires one-time user setup (configuration.md "CDP attach"). (4) Still impossible: DataDome / Akamai / interactive Turnstile walls and 2FA — none of these paths defeats challenges; say so honestly.
+Four paths, cheapest first: (1) HTTP tier — credentials stored once with `cred_defaults` (`cookies` or `auth`: basic/bearer/header, each with its `host`; pass a `session_id` to keep the browser jar). (2) The **no-password browser fallback**: a named `session_id` bridges the jar into that session's dedicated stealthy browser (and harvests back), so HTTP-tier login state rides browser calls; combine with `check_login` + snapshot actions + gated submit to operate the site without ever touching a password. (3) CDP attach — `web_read` with `cdp_url` (+ `check_login=true`) runs the fetch inside the user's real logged-in Chrome; requires one-time user setup (configuration.md "CDP attach"). (4) Still impossible: DataDome / Akamai / interactive Turnstile walls and 2FA — none of these paths defeats challenges; say so honestly.
 
 ### CDP attach fails
 
@@ -92,12 +92,12 @@ Four paths, cheapest first: (1) HTTP tier — credentials stored once with `cred
 - `pending_approval: true` in `metadata.actions` — not a failure: the submit PAUSED before acting, nothing was sent. Describe the submission to the user; on a clear yes re-run the **whole chain** with `confirm: true` on that submit (each call reloads the page, so prior fill/click steps must be redone)
 - An error naming the element index ("beyond this page's N interactive elements", or an `expect` mismatch reporting what the element reads now) — the page changed under you. Re-run `{"snapshot": true}` and re-address; don't retry the stale index
 - The snapshot came back empty / `could not enumerate` — the document was still loading; add `{"wait_selector": ...}` before the snapshot
-- `element_screenshot_disabled` — 17.0 removed this error (element captures need no permission). Seeing it means the installed dhole predates 17.0; say so instead of editing env
+- `element_screenshot_disabled` — retired (element captures need no permission). Seeing it means the installed dhole is too old; say so instead of editing env
 
 ### Focus behaves differently than expected
 
 - `neural_focus_model_missing` — `focus_engine='neural'` was asked but the reranker model isn't downloaded; no request was made. For this call pass `focus_engine='bm25'` (plain keyword focus, no model), or let the model download once: any neural `web_search` (one-time, resumable) or let a neural `web_search` fetch it
-- `focus_engine_not_permitted` — 17.0 removed this error (neural focus is a per-call choice now, no license). Seeing it means the installed dhole predates 17.0
+- `focus_engine_not_permitted` — retired (neural focus is a per-call choice now). Seeing it means the installed dhole is too old
 - A weak-hit note in `next_action` ("best block scored below the intent floor") — the fetch succeeded but the page likely doesn't answer the focus query; `content_ok` stays true by design. Pivot: search for a better source instead of re-reading this page
 
 - **`all_tiers_failed: unknown (HTTP status 0)`** — no tier ever received an HTTP response, so this is reachability, not a bot wall (a wall answers with a status and a challenge page). Check the URL spelling and DNS first; do not retry the same URL. A `198.18.x.x` address in the error text means the fake-IP TUN proxy could not reach the real network
@@ -120,7 +120,7 @@ With a proxy running, the HTTP tier's loopback traffic can be intercepted by the
 
 This machine runs a source-installed personal fork with self-update off: `git pull && python -m pip install -e .` then restart the host. Any change to `env` in the MCP config also needs a host restart.
 
-- A code update reaches the **server** at that restart, but the **host may keep answering `tools/list` from its own cache**: a parameter added in this version can read as "does not exist" when you inspect the schema and still work when you call it (observed live 2026-10-05 with `web_act`'s `headed`). Behaviour is the authority - make the call. An unknown name is refused loudly and lists what that tool actually takes, so one probe settles it; concluding "this dhole lacks the capability" from a cached schema is how a working door gets walked past.
+- A code update reaches the **server** at that restart, but the **host may keep answering `tools/list` from its own cache**: a parameter added in this version can read as "does not exist" when you inspect the schema and still work when you call it. Behaviour is the authority - make the call. An unknown name is refused loudly and lists what that tool actually takes, so one probe settles it; concluding "this dhole lacks the capability" from a cached schema is how a working door gets walked past.
 
 ## Diagnostic command quick reference
 

@@ -2,7 +2,7 @@
 
 Consult this when a response doesn't make sense or a field shows a non-default value. **Responses are compressed: absence means default** — a missing field is "nothing unusual", not lost data. There is no switch that makes dhole send every field: the shape is the shape.
 
-**Where the JSON lives:** the whole response is ONE JSON object delivered in the text channel — there is no `structuredContent`. 17.0 removed that double envelope deliberately: the same JSON sent twice buys nobody anything, and a host that wants to consume results programmatically parses the text. Every field in the tables below lives in that one object.
+**Where the JSON lives:** the whole response is ONE JSON object delivered in the text channel — there is no `structuredContent`. That double envelope was removed deliberately: the same JSON sent twice buys nobody anything, and a host that wants to consume results programmatically parses the text. Every field in the tables below lives in that one object.
 
 ## Verdict fields (read these three first)
 

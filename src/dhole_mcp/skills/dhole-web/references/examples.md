@@ -1,6 +1,6 @@
 # Call Pattern Handbook (copy-ready)
 
-Every pattern below is live-tested (16.1 full pass) or wire-test verified (the 17.0 additions: snapshot / index actions / submit gate / element screenshot / `focus_mode`). **Read section 0 first** — misplaced parameters are the single most common way to fumble this MCP.
+Every pattern below is tested against the live wire. **Read section 0 first** — misplaced parameters are the single most common way to fumble this MCP.
 
 ## 0. Parameter placement rules (correct vs incorrect)
 
@@ -31,7 +31,7 @@ A rejection names the key and lists the keys that tool accepts — follow the er
 {"urls": ["https://a.com/post/1", "https://b.com/post/2"]}
 ```
 
-**A write is not asked of this tool** (17.0): POST / PUT / PATCH / DELETE / HEAD go to `web_request` — see its own section below. `web_read` rejects `method=`, and the rejection names the door the capability moved to.
+**A write is not asked of this tool**: POST / PUT / PATCH / DELETE / HEAD go to `web_request` — see its own section below. `web_read` rejects `method=`, and the rejection names the door the capability moved to.
 
 **Credentials** (three shapes; stored once with `cred_defaults`, then every later call to that host uses them; values are never echoed; they do not survive cross-origin redirects; 401 responses distinguish "rejected" from "not sent"). The `"host"` key is not optional — a credential without one is refused, because it would ride to the next site you read:
 ```json
@@ -49,7 +49,7 @@ A rejection names the key and lists the keys that tool accepts — follow the er
 
 ## web_act
 
-`actions` is `web_act`'s argument now (17.0 §4) - `web_read` refuses it, and the chain forces the browser tier, so there is no `force_fetcher` left to say. Every example below was one call to `web_act`.
+`actions` is `web_act`'s argument - `web_read` refuses it, and the chain forces the browser tier, so there is no `force_fetcher` left to say. Every example below was one call to `web_act`.
 
 **Lazy-load interaction** (one action key per object; `scroll` waits for the page to stop growing — sites that gate lazy-load on `event.isTrusted` need `click` instead; every action leaves a receipt in `metadata.actions`):
 ```json
@@ -95,7 +95,7 @@ A rejection names the key and lists the keys that tool accepts — follow the er
 ]}
 ```
 
-**Element screenshot + QR decode** (always available in 17.0; `decode_qr` lists decoded texts in the receipt):
+**Element screenshot + QR decode** (always available; `decode_qr` lists decoded texts in the receipt):
 ```json
 {"url": "https://example.com/ticket", "actions": [
   {"screenshot": {"selector": ".qr-panel", "decode_qr": true}}
@@ -109,7 +109,7 @@ A rejection names the key and lists the keys that tool accepts — follow the er
 {"url": "https://docs.example.com/guide", "focus": "retry policy", "focus_mode": "best"}
 ```
 
-**Choosing the focus scorer for one call** (`focus_engine` — a pure per-call choice in 17.0: omitted or `"bm25"` is keyword focus, `"neural"` is the local cross-encoder):
+**Choosing the focus scorer for one call** (`focus_engine` — a pure per-call choice: omitted or `"bm25"` is keyword focus, `"neural"` is the local cross-encoder):
 ```json
 {"url": "https://docs.example.com/guide", "focus": "retry policy", "focus_engine": "bm25"}
 ```
@@ -243,7 +243,7 @@ List pages return a structured link listing (`page_type=list`), not body text �
 // whole page, written to disk instead of the transcript (text-only hosts)
 {"url": "https://example.com", "actions": [{"screenshot": {"full_page": true, "save_to": "C:/tmp/page.png"}}]}
 ```
-Inline images reach agents that can see them; text-only agents read the absolute path from the action receipt (`saved` + `saved_bytes`). `selector` crops one element, `decode_qr` decodes QR payloads locally — both always available in 17.0.
+Inline images reach agents that can see them; text-only agents read the absolute path from the action receipt (`saved` + `saved_bytes`). `selector` crops one element, `decode_qr` decodes QR payloads locally — both always available.
 
 ## The remaining four
 
@@ -269,7 +269,7 @@ Inline images reach agents that can see them; text-only agents read the absolute
 {"clear": ["engine_state"]}
 ```
 
-## The stateful tool (cred_defaults, always registered in 17.0)
+## The stateful tool (cred_defaults, always registered)
 
 Nothing is nested here either — every parameter of every tool sits at the top level of the call.
 

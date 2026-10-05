@@ -44,14 +44,14 @@ Starting routes for multi-step tasks. Each recipe marks where to pivot on failur
 
 ## When search fails (pivot in this order)
 
-1. Re-search naming other engines (`dhole engines probe` first to see who's alive; 17.0 has no vertical index — name the international engines for international content)
+1. Re-search naming other engines (`dhole engines probe` first to see who's alive; there is no vertical index — name the international engines for international content)
 2. Know the domain? Skip search: `web_discover(url=<domain>)` to map the site directly
 3. Site has a feed? `feed_read`
 4. Everything down (blocked, no proxy): tell the user about `DHOLE_SEARCH_PROXY` or a keyed backend (references/configuration.md) — this is a "config change", so present options and wait for the user's decision
 
 ## Sites behind login
 
-Four paths, cheapest first: (1) stored credentials — `cred_defaults` `set={cookies: ..., host: ...}` or `{auth: ..., host: ...}` (`session_id` keeps a browser jar across calls, 24h). (2) **No-password browser flow (17.0)**: pass the same named `session_id` to browser-tier calls — the jar bridges into that session's dedicated browser and back; verify with `check_login`, act with snapshot + index actions, and let `{"submit": ...}` pause for the user's confirmation. (3) CDP attach (user's real Chrome, one-time setup — configuration.md). (4) DataDome / Akamai / interactive Turnstile / 2FA remain hand-offs. Cookies and tokens don't survive cross-origin redirects; values are never echoed. **Never ask the user to paste a password into the conversation** — route it through path 2 or 3 instead.
+Four paths, cheapest first: (1) stored credentials — `cred_defaults` `set={cookies: ..., host: ...}` or `{auth: ..., host: ...}` (`session_id` keeps a browser jar across calls, 24h). (2) **No-password browser flow**: pass the same named `session_id` to browser-tier calls — the jar bridges into that session's dedicated browser and back; verify with `check_login`, act with snapshot + index actions, and let `{"submit": ...}` pause for the user's confirmation. (3) CDP attach (user's real Chrome, one-time setup — configuration.md). (4) DataDome / Akamai / interactive Turnstile / 2FA remain hand-offs. Cookies and tokens don't survive cross-origin redirects; values are never echoed. **Never ask the user to paste a password into the conversation** — route it through path 2 or 3 instead.
 
 ## Operate a page (form, settings, checkout)
 
