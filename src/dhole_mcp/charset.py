@@ -139,6 +139,30 @@ _AUTO_ENCODINGS = ("utf-8", "gb18030")
 _SCORED_ENCODINGS = ("utf-8", "gb18030")
 
 
+def encoding_was_guessed(body: bytes, declared: str, used: str) -> bool:
+    """True when the charset is dhole's guess rather than anyone's statement.
+
+    Measured boundary (module note above): GB18030 decodes Shift_JIS and EUC-KR
+    bytes STRICTLY, so a Japanese or Korean legacy file comes back as plausible
+    Chinese with damage 0 and nothing in the text betrays it — there is no cheap
+    discriminator, and pretending otherwise would be a new kind of green light.
+    What can be said without overreaching is the weaker, true thing: nobody
+    declared this charset, no BOM stated it, and the answer came from the
+    strict-gb18030 branch. That is a guess, and a caller who passed `encoding=`
+    would get a verdict instead.
+
+    A declared name that decoded successfully is NOT a guess (the caller owns
+    that reading), and neither is anything a BOM or a UTF-16/32 body stated.
+    """
+    if used != "gb18030":
+        return False
+    if (declared or "").strip():
+        return False
+    if any(body.startswith(bom) for bom, _ in _BOM_ENCODINGS):
+        return False
+    return b"\x00" not in body[:64]
+
+
 def decode_file_bytes(body: bytes, declared: str = "") -> tuple[str, str, int]:
     """Decode local-file bytes. Returns ``(text, encoding_used, damage)``.
 

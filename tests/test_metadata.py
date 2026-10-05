@@ -86,6 +86,50 @@ class TestExtractMetadata:
             extract_metadata(html, "https://example.com/")["author"] == "First"
         )
 
+    def test_a_date_with_an_offset_survives_whole(self):
+        """批次 6b：`[:20]` 曾经从时区偏移的中间剪断一个合法的 ISO-8601。
+
+        2026-10-05 实测的字段形状是 `'2026-03-13T14:17:06+'` —— 前 20 个字符正好
+        停在 `+` 上。残缺串既不合法也不完整，却被原样端进 transcript 当引用依据，
+        而调用方看不出它被剪过（同一页的 `content_age_days` 反而是对的，因为解析
+        函数认得剩下的那半句 —— 一个字段说谎、另一个字段说真话，是最难查的组合）。
+        """
+        for raw, want in (
+            ("2026-03-13T14:17:06+08:00", "2026-03-13T14:17:06+08:00"),
+            ("2026-03-13T14:17:06.500Z", "2026-03-13T14:17:06.500Z"),
+            ("2026-03-13T14:17:06", "2026-03-13T14:17:06"),
+            ("2026-03-13", "2026-03-13"),
+        ):
+            html = ('<script type="application/ld+json">'
+                    f'{{"@type": "Article", "datePublished": "{raw}"}}'
+                    "</script>")
+            got = extract_metadata(html, "https://example.com/")["published_time"]
+            assert got == want, f"{raw} 进来、{got!r} 出去"
+            assert not got.endswith(("+", ".", "-")), f"偏移被剪断：{got!r}"
+
+    def test_a_stored_offset_still_drives_the_age_math(self):
+        """不剪断不是为了好看：`content_age_days` 读的就是这一串。
+
+        带偏移的日期被剪成 `...+` 之后，任何按 ISO 解析的下游都只能猜；这一条把
+        "字段完整" 与 "年龄算得对" 钉成同一件事（Python 3.14 的 fromisoformat 认得
+        空格分隔的写法，所以站点自己给 `2026-03-13 14:17:06Z` 也是同一条路）。
+        """
+        from dhole_mcp.envelope import _parse_date
+
+        html = ('<script type="application/ld+json">'
+                '{"datePublished": "2026-03-13T14:17:06+08:00"}</script>')
+        meta = extract_metadata(html, "https://example.com/")
+        parsed = _parse_date(meta["published_time"])
+        assert parsed is not None, f"完整串反而解析不动：{meta['published_time']!r}"
+        assert (parsed.year, parsed.month, parsed.day) == (2026, 3, 13)
+
+    def test_an_absurd_date_value_is_still_bounded(self):
+        """上限从 20 抬到 40 是为了容纳偏移，不是为了容纳整个对象。"""
+        html = ('<script type="application/ld+json">'
+                '{"datePublished": "' + ("9" * 400) + '"}</script>')
+        meta = extract_metadata(html, "https://example.com/")
+        assert len(meta["published_time"]) <= 40, len(meta["published_time"])
+
     def test_malformed_jsonld_is_skipped(self):
         html = '<script type="application/ld+json">{ not json </script>'
 

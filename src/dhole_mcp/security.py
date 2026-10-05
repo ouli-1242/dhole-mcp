@@ -41,7 +41,7 @@ _METADATA_HOSTS = frozenset({
 })
 
 # 当前生效的 allowlist（抓取入口把 cred_defaults 的存储值 push 进来，
-# web_screenshot / feed_read 用 allow_private_scope 就地开）。放在这里而不是当作
+# web_act / feed_read 用 allow_private_scope 就地开）。放在这里而不是当作
 # 参数层层下传，是为了让**每一个** validate_url 调用点 —— 包括抓取循环里的重定向
 # 复校验、robots.txt 那条旁路、tcp_preflight 的裸连接预检（它走
 # url_targets_internal -> validate_url）—— 共用同一个答案，不会出现
@@ -251,6 +251,7 @@ def probe_fake_ip() -> tuple[str, str, str]:
         infos = socket.getaddrinfo(_PROBE_DOMAIN, None)
     except Exception:  # noqa: BLE001 - offline is not a reason to lower a guard
         _fake_ip_cache = ("unprobed", "", "")
+        _record_resolver_probe("unprobed", "")
         return _fake_ip_cache
     v4 = v6 = ""
     net4 = ipaddress.ip_network(_FAKE_IP_V4)
@@ -276,8 +277,10 @@ def probe_fake_ip() -> tuple[str, str, str]:
                       f"recheck layer is off: IP-literal, hostname and cloud-metadata "
                       f"guards still apply.")
         _fake_ip_cache = ("fake-ip", hit, f"{_PROBE_DOMAIN} -> {hit} in {net}")
+        _record_resolver_probe("fake-ip", hit)
     else:
         _fake_ip_cache = ("public", "", "")
+        _record_resolver_probe("public", "")
     return _fake_ip_cache
 
 
@@ -285,6 +288,67 @@ def reset_fake_ip_probe() -> None:
     """Forget the cached verdict (tests point the probe at a stubbed resolver)."""
     global _fake_ip_cache, _auto_note
     _fake_ip_cache, _auto_note = None, ""
+
+
+# The verdict is a process fact, and the two facts an operator can check are in
+# different processes: `dhole --doctor` resolves the name again in its own, while
+# the guard that answers a fetch uses whatever the server process measured - possibly
+# at a startup hours ago, possibly under a different env block. Recording the
+# measurement is what lets doctor say WHO answered, instead of reporting its own
+# fresh answer under wording that implies it checked the server ("the DNS-recheck
+# layer is skipped automatically on this host"). 2026-10-05, batch 6d.
+_RESOLVER_RECORD_NAME = "resolver_probe.json"
+
+
+def _record_resolver_probe(verdict: str, address: str) -> None:
+    """Mirror this process's measurement for other processes to read.
+
+    Best-effort and never raising: the verdict is already decided and applied by
+    the time this runs, so a file that cannot be written must not change, delay,
+    or accompany a security decision with an exception.
+    """
+    try:
+        import json
+
+        from dhole_mcp import paths
+        # Resolved through paths.file() even for the WRITE, so the one seam the
+        # test harness redirects (tests/conftest.py) covers both directions: a
+        # suite whose stubbed DNS decides "public" on every call must not be able
+        # to write that conclusion into the developer's real home.
+        target = paths.file(_RESOLVER_RECORD_NAME)
+        paths.ensure_private_dir(target.parent)
+        with open(target, "w", encoding="utf-8") as f:
+            json.dump({
+                "verdict": verdict,
+                "address": address,
+                "probe": _PROBE_DOMAIN,
+                "pid": os.getpid(),
+                "probed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }, f, ensure_ascii=False)
+        paths.harden_file(target)
+    except Exception:  # noqa: BLE001 - a diagnostic echo, never a decision
+        pass
+
+
+def resolver_probe_record() -> dict:
+    """What the last dhole process to measure this resolver answered, or ``{}``.
+
+    ``{}`` means no fetch has ever probed here (a fresh home, or a process that
+    died before its first URL). Callers must say that out loud rather than read
+    it as "public": an absent record and a swallowed one look the same on disk.
+    """
+    try:
+        import json
+
+        from dhole_mcp import paths
+        target = paths.file(_RESOLVER_RECORD_NAME)
+        if not target.exists():
+            return {}
+        with open(target, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def recheck_posture_note() -> str:

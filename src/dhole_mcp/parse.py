@@ -79,12 +79,18 @@ def _html_declared_charset(body: bytes) -> str:
 
 def _decode_body(body: bytes, declared: str = "") -> tuple[str, dict]:
     """Decode file bytes and package the envelope fields. See charset.decode_file_bytes."""
-    from dhole_mcp.charset import decode_file_bytes
+    from dhole_mcp.charset import decode_file_bytes, encoding_was_guessed
 
     text, used, damage = decode_file_bytes(body, declared)
     extras: dict = {"encoding": used}
     if damage:
         extras["decode_damage"] = damage
+    if encoding_was_guessed(body, declared, used):
+        # 这一颗不是"检测结果可疑"的意思，是"这个名字是猜出来的"：GB18030 严格解得开
+        # Shift_JIS / EUC-KR 的字节（charset.py 上面记着这条实测边界），所以日/韩旧
+        # 编码在这里出来的是**看着像中文的错字**，damage 0、content_ok true。能诚实说
+        # 的只有 weaker 的那半句 —— 没有人声明过编码，而这一个是 dhole 选的。
+        extras["encoding_guessed"] = True
     return text, extras
 
 

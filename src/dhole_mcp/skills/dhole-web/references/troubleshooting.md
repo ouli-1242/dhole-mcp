@@ -47,7 +47,7 @@ Default compliance: **zero requests** were sent for that URL. A one-shot waiver 
 
 ### Every public URL flagged as internal
 
-A fake-IP TUN proxy (Clash / sing-box TUN mode) hands every public name an address in `198.18.0.0/15` / a `fc00::/7` AAAA, which the DNS recheck reads as internal. **This is detected and the recheck layer skips itself** — the response then says so in `metadata.ssrf_recheck` and `dhole --doctor` names the address and the network. If URLs are still being flagged internal, the probe missed an unusual resolver that fake-ips only some names: have the user restart dhole once so the startup probe re-judges — 17.0 has no manual override (the knob is retired, and the only historical reason to want one IS the fake-ip case) — and re-check with `dhole --doctor`. Plain HTTP proxies are unaffected.
+A fake-IP TUN proxy (Clash / sing-box TUN mode) hands every public name an address in `198.18.0.0/15` / a `fc00::/7` AAAA, which the DNS recheck reads as internal. **This is detected and the recheck layer skips itself** — the response then says so in `ssrf_recheck` (under `metadata` on a single fetch; once on the envelope of a `urls=[...]` batch or a crawl, because it is a fact about the process rather than about any one page) and `dhole --doctor` names the address and the network. If URLs are still being flagged internal, the probe missed an unusual resolver that fake-ips only some names: have the user restart dhole once so the startup probe re-judges — 17.0 has no manual override (the knob is retired, and the only historical reason to want one IS the fake-ip case) — and re-check with `dhole --doctor`. Plain HTTP proxies are unaffected.
 
 ### Fetch timeouts
 
@@ -75,27 +75,10 @@ The response distinguishes "credentials rejected" (store a fresh token) from "no
 
 ### Sites behind login
 
-Five paths, cheapest first: (1) HTTP tier — credentials stored once with `cred_defaults` (`cookies` or `auth`: basic/bearer/header, each with its `host`; pass a `session_id` to keep the browser jar). (2) The **no-password browser fallback (17.0)**: a named `session_id` bridges the jar into that session's dedicated stealthy browser (and harvests back), so HTTP-tier login state rides browser calls; combine with `check_login` + snapshot actions + gated submit to operate the site without ever touching a password. (3) **Stored-credential login (17.0)** — `cred_vault(op='match')` then `cred_login`; see "Stored-credential login" below. (4) CDP attach (17.0) — `web_read` with `cdp_url` (+ `check_login=true`) runs the fetch inside the user's real logged-in Chrome; requires one-time user setup (configuration.md "CDP attach"). (5) Still impossible: DataDome / Akamai / interactive Turnstile walls and 2FA — none of these paths defeats challenges; say so honestly.
+Four paths, cheapest first: (1) HTTP tier — credentials stored once with `cred_defaults` (`cookies` or `auth`: basic/bearer/header, each with its `host`; pass a `session_id` to keep the browser jar). (2) The **no-password browser fallback (17.0)**: a named `session_id` bridges the jar into that session's dedicated stealthy browser (and harvests back), so HTTP-tier login state rides browser calls; combine with `check_login` + snapshot actions + gated submit to operate the site without ever touching a password. (3) CDP attach (17.0) — `web_read` with `cdp_url` (+ `check_login=true`) runs the fetch inside the user's real logged-in Chrome; requires one-time user setup (configuration.md "CDP attach"). (4) Still impossible: DataDome / Akamai / interactive Turnstile walls and 2FA — none of these paths defeats challenges; say so honestly.
 
-### Stored-credential login (cred_vault / login) fails
+### CDP attach fails
 
-- **`cred_vault` / `cred_login` not in `tools/list`** — 17.0 registers them by default, so this means the operator set an explicit `DHOLE_TOOLS` subset that excludes them. Widening it is the user's edit, not a workaround
-- **`cred_vault` `notes` says a manager is not installed** — the `bw` / `op` CLI is missing. Relay the note's install step; this is a note, not an error, and the other manager may still work
-- **`notes` says the vault is locked / not signed in** — the user must unlock it (`bw unlock` / `op signin`). Never ask for a master password
-- **`cred_login` error: no password field found** — the page did not render a `type=password` input (a two-step email-then-password flow, a JS gate, or the page never settled). Pass `username_index` / `password_index` / `submit_index` from a snapshot, or raise `timeout`; if the form is genuinely multi-page, do the steps with `actions` instead
-- **`cred_login` returned `pending_approval: true`** — not a failure: nothing was filled or submitted. Show the user `plan` + `fields`; re-call the **same arguments** with `confirm=true` only on their yes
-- **`cred_login` `logged_in: false`** — the credential was submitted but the session did not take: wrong item, or the site wants 2FA. Check `signals`; do not retry blindly (a second wrong submit can lock the account). `logged_in: null` = the probe could not answer — not "failed"
-- **`cred_login` ran but later fetches are anonymous** — pass the **same `session_id`** to those fetches; the cookies were kept under it. `sys_state` shows what is held
-
-### Recipe / web_watch misbehave
-
-- **`web_recipe` / `web_watch` not in `tools/list`** — same as cred_vault/cred_login above: only an explicit `DHOLE_TOOLS` subset removes them in 17.0
-- **`web_recipe(op='run')` with `actions_failed` > 0** — the page changed under the chain. Re-snapshot, re-derive the steps, `op='save'` again. An `op='save'` that is *rejected* means the chain is invalid (validation runs at save time) — fix the chain, don't retry the save
-- **`web_watch(op='check')` returns `changed: null`** — that is the FIRST check storing the baseline, not an error and not "no change". The next check answers `true`/`false`
-- **`web_watch` `error` set, `changed` absent** — the fetch failed; the baseline is **untouched** (by design, so an outage cannot silently re-baseline). Fix the fetch and re-check
-- **`web_watch` keeps reporting noise** — the page's chrome changes every load; re-add with `focus=` to diff only the relevant block, or raise `max_chars` if `baseline_cut` is true
-
-Attach-specific failures:
 - `cdp_authorization_required` — this is the FIRST attach to this host, so nothing was executed. Attaching hands over the authenticated session of every site the user is logged into, and dhole asks once: present it as the user's decision, and only on a clear yes re-call with `confirm=true` (the approval persists to `~/.dhole/cdp_hosts.json`, so later attaches need no ask). Retrying without the user's yes changes nothing
 - `cdp_host_not_allowed` — the host is not in the authorized set, and the match is an **exact hostname**: `example.com` authorized does not let `www.example.com` through, and neither does it cover a CDN the page loads assets from. With the user's yes, attach to that host with `confirm=true`; never work around by fetching a different host with the user's login state
 - `login_check.logged_in: false` — session expired in the attached Chrome; the user re-logs in their window, then re-run the call
@@ -125,7 +108,7 @@ With a proxy running, the HTTP tier's loopback traffic can be intercepted by the
 ### Tools missing / behaving oddly
 
 1. `dhole -v`: read the capability panel line by line (browser tier / pdf / rerank / engine yield) — each missing row is a silently degraded tier
-2. `dhole --doctor`: the 12-item diagnosis with copy-pasteable fix commands (exit code 1 on failure). It really spawns a server and really runs one search + one fetch, so it takes a few seconds and sends traffic — say so before running it on someone's machine. Its `live search` / `live fetch` rows are the only evidence that this IP works today; a failure there is a network fact, not an install fault
+2. `dhole --doctor`: the 12-item diagnosis with copy-pasteable fix commands (exit code 1 on failure). It really spawns a server, really launches the browser once (`chromium launch` is the only row that proves the binary on disk can start), and really runs one search + one fetch, so it takes a few seconds and sends traffic — say so before running it on someone's machine. Its `live search` / `live fetch` rows are the only evidence that this IP works today; a failure there is a network fact, not an install fault
 3. Missing browser dependencies auto-degrade to pure HTTP (usable on Termux / slim containers) — anti-bot sites start failing; that is degradation, not a bug
 
 ### Version / updates
@@ -137,7 +120,7 @@ This machine runs a source-installed personal fork with self-update off: `git pu
 | Command | Purpose |
 |---|---|
 | `dhole -v` | Version + capability panel |
-| `dhole --doctor` | The 12-item install check (incl. one real search + one real fetch); exit code 1 on failure |
+| `dhole --doctor` | The 12-item install check (incl. one real browser launch + one real search + one real fetch); exit code 1 on failure |
 | `dhole engines list` | Per-engine verdict, remaining cooldown, active backoff tiers |
 | `dhole engines probe` | One real query per engine (hits / latency / block reason) |
 | `dhole engines reset` | Clear all cooldowns now |

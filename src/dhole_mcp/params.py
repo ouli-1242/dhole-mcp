@@ -258,6 +258,95 @@ def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Option
     return key
 
 
+# The two tools that read a fetcher tier. web_crawl took force_fetcher straight
+# to the tier ladder with no boundary check, so `force_fetcher="hpt"` on a crawl
+# was the web_read defect (`_coerce_force_fetcher_arg`'s docstring) with the
+# whole site as the blast radius: it missed the `== "http"` branch and browsered
+# every page.
+_FORCE_FETCHER_TOOLS = frozenset({"web_read", "web_crawl"})
+
+
+# ─── 枚举参数：合法值表 + 边界校验 ──────────────────────────────────
+# 17.0 之前，"这一串里挑一个"这件事只写在线格式的 `enum` 数组里，于是非法值由
+# **宿主**在进入 dhole 之前拒掉，而拒本文案不列合法值（实测原话："must be equal to
+# one of the allowed values"）。摘掉 enum 之后，这句话必须由 dhole 自己说得出 ——
+# 所以值集留在这里，校验也留在这里。
+#
+# 表与工具签名是同一条规则的两个副本（`ExtendedExtractionType` /
+# `ReadExtractionType` / `focus.ENGINES`），所以有一对相等断言钉着它们
+# （tests/test_the_enum_argument_values_are_checked_by_dhole.py）：漂了就是
+# "描述里写着能传、传进来被读成不传"那一类缺陷的重新开张。
+_EXTRACTION_TYPES = ("markdown", "html", "text", "article", "structured")
+_READ_EXTRACTION_TYPES = _EXTRACTION_TYPES + ("check",)
+_FOCUS_MODES = ("filter", "best")
+_FOCUS_ENGINES = ("bm25", "neural")
+
+_ENUM_ARGS: dict[str, dict[str, tuple[str, ...]]] = {
+    "web_read": {
+        "extraction_type": _READ_EXTRACTION_TYPES,
+        "focus_mode": _FOCUS_MODES,
+        "focus_engine": _FOCUS_ENGINES,
+    },
+    "web_act": {"extraction_type": _EXTRACTION_TYPES},
+    "web_request": {"extraction_type": _EXTRACTION_TYPES},
+    "web_crawl": {"focus_engine": _FOCUS_ENGINES},
+    # web_search's `mode` and `freshness` are deliberately NOT here: search.py
+    # rejects both before its first network call (`_validate_mode`,
+    # `_validate_freshness`), and each refusal already prints the whole value set
+    # — `Invalid mode: 'bogus' (auto|neural|find_similar)`. A second table here
+    # would be a copy that can drift from `_IMPLEMENTED_MODES`, which is the
+    # "bound repeated above the note that announces it" shape this module already
+    # warns about.
+}
+
+# 只有"值在别的工具里合法、在这颗工具不合法"才需要额外一句：同一份笔记从 web_read
+# 搬到 web_act 是最常见的一条路，而 `check` 恰恰是五颗里唯一长得不像格式的那颗。
+# 键是 (工具, 参数)：对 web_read 自己说"'check' 是 web_read 的"是一句疯话。
+_ENUM_NOTE = (
+    "'check' (the changed-since-last-fetch receipt) is web_read's; the five above "
+    "are the read-back formats this tool has."
+)
+_ENUM_NOTES: dict[tuple[str, str], str] = {
+    ("web_act", "extraction_type"): _ENUM_NOTE,
+    ("web_request", "extraction_type"): _ENUM_NOTE,
+}
+
+
+def _coerce_enum_arg(value: Any, name: str, allowed: tuple[str, ...],
+                     note: str = "") -> Optional[str]:
+    """One of the named values, or a refusal that prints them all.
+
+    Read raw, an unlisted spelling never raised: every consumer compares the
+    literal (`mode == "find_similar"`, `extraction_type in _EXTRACTED_TYPES`,
+    `normalize_engine`), so a typo fell through to whichever branch "not equal"
+    leads to — `mode="blurry"` searched, skipped the reranker, and reported
+    `rerank_mode=merge` as if that had been asked for. While the wire `enum`
+    existed this could not be reached; it is reachable now, which is the whole
+    reason this function does.
+
+    Policy mirrors ``_coerce_force_fetcher_arg``: ``None``/``""`` mean "not set"
+    (return ``None``; ``_forward`` drops it so the method's own default applies),
+    surrounding space and capitalization are the caller's noise rather than a
+    different value, and anything else raises naming what actually arrived.
+    """
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{name} must be a string, got {type(value).__name__}. "
+            f"Valid values: {', '.join(allowed)}."
+        )
+    key = value.strip().lower()
+    if key not in allowed:
+        raise ValueError(
+            f"{name}={value!r} is not a value this tool accepts. "
+            f"Valid values: {', '.join(allowed)}."
+            + (f" {note}" if note else "")
+            + " No request was made."
+        )
+    return key
+
+
 # ─── wire argument types ───────────────────────────────────────────
 # web_read and cache_clear had per-argument coercers; the other six tools had
 # none, so everything the dispatcher forwarded was whatever JSON happened to
@@ -305,6 +394,7 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
     },
     "web_crawl": {
         "max_pages": "int", "max_depth": "int", "max_content_chars_per": "int",
+        "max_total_chars": "int",
         "cache_ttl": "int",
         "concurrency": "int", "timeout": "number", "deadline_ms": "number",
         "ignore_robots": "bool",
@@ -317,14 +407,13 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         # a serialized client sends. Forcing it through _coerce_bool_arg here is
         # the one spelling 'auto' would not survive.
     },
-    "web_screenshot": {
-        "full_page": "bool", "decode_qr": "bool",
-        "quality": "int", "timeout": "number",
-    },
     # §4 写操作那颗：method/content_type 是字符串（大小写与空白是字符串客户端
     # 最容易带进来的噪声），timeout 是数字，body 不 coerce（dict 与 string 都合法）。
+    # confirm 同 web_act：字符串写法要归一化——"false" 按裸值传是非空字符串 =
+    # 授权，而它授权的是一次带存储凭据的写。
     "web_request": {
         "method": "str", "content_type": "str", "timeout": "number",
+        "confirm": "bool",
     },
     # §4 页面动作那颗。rawlist：动作链的每一个对象都是一个不同键的形状
     # （{click:…} / {fill:…} / {wait:…}），逐颗归一化会读掉那些键本身。
@@ -344,21 +433,13 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         "min_raw_relevance": "number",
     },
     "feed_read": {"max_items": "int", "timeout": "int"},
-    "web_resolve": {"timeout": "number"},
     # sys_state normalizes its three arguments in _validate_tool_args, because its
     # list elements are state tokens rather than URLs and it needs the wording to
-    # say so. doc_parse takes three strings and has nothing to convert.
-    # L3/L4: `actions` goes through the same rawlist path as web_read's (the
-    # chain validator owns its shape); the numbers are the same coercions.
-    "web_recipe": {"actions": "rawlist", "timeout": "number",
-               "max_content_chars": "int"},
-    "web_watch": {"max_chars": "int", "timeout": "number"},
-    "cred_vault": {"limit": "int"},
-    # The three index overrides come from a snapshot row, so they arrive as
-    # strings from clients that JSON-stringify numbers; `confirm` is the
-    # approval gate and must be a real boolean, never the string "false".
-    "cred_login": {"username_index": "int", "password_index": "int",
-              "submit_index": "int", "confirm": "bool", "timeout": "number"},
+    # say so.
+    # doc_parse 现在也有一颗要归一化：`offset` 是分页位置，字符串客户端写 "12000"
+    # 时按裸值传会进到切片下标上（`content[\"12000\":]` 当场 TypeError），而它承诺的
+    # 那个"Next offset: N"是响应里印出来的数字 —— 印出来的东西必须能原样传回去。
+    "doc_parse": {"offset": "int"},
 }
 
 _ARG_DEFAULTS: dict[Any, dict[str, Any]] = {}
@@ -481,16 +562,28 @@ def _validate_tool_args(name: str, args: dict) -> dict:
     # 这样一路掉进浏览器层的）。缺席不动：缺席才是"用 cred_defaults 存的那一档"。
     if name in _RUNG_TOOLS and "anti_detect" in args:
         out["anti_detect"] = _coerce_anti_detect_arg(args["anti_detect"])
+    # 枚举值同样在这一层问一遍。这些参数在 Python 侧一直是宽类型（`str`），
+    # 过去只有线格式的 `enum` 拦着；17.0 把 enum 摘掉之后，"不合法的拼法"第一次
+    # 有机会走到那条按字面量写的内部代码 —— 而每一条那样的代码都是"不相等 ⇒ 走
+    # 到另一条路"，不是"不相等 ⇒ 报错"。校验器必须先于摘除存在，否则这行是空的。
+    for key, allowed in _ENUM_ARGS.get(name, {}).items():
+        if key in args:
+            out[key] = _coerce_enum_arg(args[key], key, allowed,
+                                        _ENUM_NOTES.get((name, key), ""))
+    # Absent still writes `None` rather than leaving the key out: a caller who reads
+    # the normalized dict must be able to tell "no tier" from "not looked at", and
+    # `_forward` drops the None so the tool's own default applies either way.
+    if name in _FORCE_FETCHER_TOOLS:
+        out["force_fetcher"] = _coerce_force_fetcher_arg(args.get("force_fetcher"))
     if name == "web_read":
         out["urls"] = _coerce_str_list_arg(
             args.get("urls"), "urls", single_hint=_URLS_SINGLE_HINT)
-        out["force_fetcher"] = _coerce_force_fetcher_arg(args.get("force_fetcher"))
     elif name == "sys_state":
         # The same trap the cache wipe fell into: read raw, `confirm="false"` is a
         # non-empty string, and a call that meant "just look" erases every session.
         # The elements are state classes and session ids, so the shared wording
         # ("a URL string") would send a caller looking for a URL to put in clear=.
-        token_hint = ("a state class (cache|engine_state|sessions|watch|recipes|cred_defaults|all) "
+        token_hint = ("a state class (cache|engine_state|sessions|cred_defaults|all) "
                       "or an open session id")
         for key in ("show", "clear"):
             out[key] = _coerce_str_list_arg(args.get(key), key,

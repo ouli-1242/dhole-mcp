@@ -44,7 +44,17 @@ _TIER_BASE = dict(
 
 
 async def _escalate(server, url, timeout_ms):
-    """走真的升级阶梯，网络在 self.get 那一层被换掉。"""
+    """走真的升级阶梯，网络在 self.get 那一层被换掉。
+
+    会话那一层也要换掉：升级链拿 `stealthy_fetch` 之前先 `_ensure_auto_session`，而那颗
+    函数真的 launch 一台浏览器。这一刀读的是阶梯与文案，不是浏览器 —— 批次 1 的 conftest
+    启动闸把这种"顺带起一次 chromium"的用例抓了出来（`tests/test_anti_detect_b5.py:63`
+    是同一刀的先例）。
+    """
+    async def _no_session(**kw):
+        return "auto-under-test"
+
+    server._ensure_auto_session = _no_session
     return await server._auto_escalate(url, timeout=timeout_ms, **_TIER_BASE)
 
 

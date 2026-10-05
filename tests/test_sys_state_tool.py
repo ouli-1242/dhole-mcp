@@ -30,22 +30,6 @@ def _dispatch(tool: str, args: dict):
     return asyncio.run(MasterFetchServer()._dispatch(tool, args))
 
 
-@pytest.fixture
-def home(tmp_path, monkeypatch):
-    """Point the stored-task library (tasks.db) at a throwaway DHOLE_HOME.
-
-    sys_state reports and erases rows there, so a test that does not redirect it
-    would read the developer's own recipes and - worse - `clear=["recipes"]`
-    would delete them.
-    """
-    from dhole_mcp import tasks
-
-    monkeypatch.setenv("DHOLE_HOME", str(tmp_path))
-    tasks.reset_connection()
-    yield tasks
-    tasks.reset_connection()
-
-
 class _FakeBrowser:
     """Enough of a session object for the census and the close path."""
 
@@ -94,7 +78,6 @@ class TestTheCensus:
         out = await MasterFetchServer().sys_state()
         assert out.cache["entries"] == 1
         assert out.cache["expired"] == 0
-        assert out.watch_count == 0 and out.recipe_count == 0
 
     @pytest.mark.asyncio
     async def test_a_jar_without_a_browser_and_a_browser_without_a_jar_both_appear(self):
@@ -241,51 +224,6 @@ class TestTheOtherStores:
         assert out.engine_health == {"brave": {"cooldown_seconds_left": 30}}
         assert out.engine_state_reset is False, "show 不是 clear 的别名"
 
-    @pytest.mark.asyncio
-    async def test_watch_baselines_and_recipes_need_a_confirm_and_erase_nothing_else(self, home):
-        """两类都在「抹完不会立刻察觉」那一档：基线没了下一次 check 会说"没有变化"，
-        配方没了要到那页需要点链路时才想起来。"""
-        home.save_watch("daily", ME, note="n")
-        home.save_recipe("chain", ME, [{"wait": 1}])
-
-        paused = await MasterFetchServer().sys_state(clear=["watch", "recipes"])
-        assert paused.pending_approval is True
-        assert len(home.list_watches()) == 1 and len(home.list_recipes()) == 1
-
-        out = await MasterFetchServer().sys_state(
-            clear=["watch", "recipes"], confirm=True)
-        assert home.list_watches() == [] and home.list_recipes() == []
-        assert sorted(out.cleared) == ["recipes", "watch"]
-        assert out.watch_count == 0 and out.recipe_count == 0
-
-    @pytest.mark.asyncio
-    async def test_the_stored_task_counts_show_without_a_confirm(self, home):
-        home.save_watch("daily", ME)
-        out = await MasterFetchServer().sys_state(show=["watch", "recipes"])
-        assert out.watch_count == 1 and out.recipe_count == 0
-        assert len(home.list_watches()) == 1, "show 不动任何仓库"
-
-    @pytest.mark.asyncio
-    async def test_a_store_that_refuses_is_named_instead_of_reported_as_erased(self, home,
-                                                                               monkeypatch):
-        """抹失败不是抹成功：`cleared` 只记真的动了的仓库。
-
-        一颗工具管四个仓库，就一定会遇到其中一个打不开（盘、权限、正在被别的进程
-        占用）。把那种情形写成 "Erased watch" 是让调用方以为自己已经没有基线了。
-        """
-        home.save_watch("daily", ME)
-
-        def boom():
-            raise OSError("tasks.db is locked")
-
-        monkeypatch.setattr(home, "list_watches", boom)
-        out = await MasterFetchServer().sys_state(clear=["watch"], confirm=True)
-        assert out.cleared == [], out.cleared
-        assert "watch" in out.error and "locked" in out.error, out.error
-        assert home.get_watch("daily") is not None, "报错的那一类必须还在"
-        assert "Nothing was erased" in out.message
-
-
 class TestTheArgumentSurface:
 
     def test_a_stringified_false_confirm_wipes_nothing(self):
@@ -386,3 +324,148 @@ class TestTheWireContract:
         assert set(_WIRE_OMIT["SessionCensusRow"]) <= set(SessionCensusRow.model_fields)
         assert "message" not in _WIRE_OMIT["SysStateModel"], \
             "一句「这次做了什么」总要上线"
+
+    def test_the_new_census_classes_are_covered_by_the_compaction_policy(self):
+        """G25 评审加的两个类：空名单缺席（默认值上线即噪声），非空才在。"""
+        from dhole_mcp.wire import _WIRE_OMIT
+
+        assert {"cdp_hosts", "config_keys"} <= _WIRE_OMIT["SysStateModel"]
+
+
+class TestTheCdpRoster:
+    """G25 评审：撤销粒度从「删整个文件」收到主机；名册把 cdp_hosts / config
+    补进册。conftest 已把 cdp_hosts.json 与 config.json 指到 tmp_path 并清过
+    server 的名册缓存，这里只管行为。"""
+
+    def _authorize(self, *hosts):
+        import dhole_mcp.server as server_mod
+        for h in hosts:
+            server_mod._cdp_authorize_host(h)
+
+    def _roster(self):
+        import dhole_mcp.server as server_mod
+        return server_mod._cdp_authorized_hosts()
+
+    def test_show_lists_the_roster_and_the_default_census_carries_it(self):
+        self._authorize("chrome.test", "box.test")
+        _content, structured = _dispatch("sys_state", {"show": ["cdp_hosts"]})
+        assert structured["cdp_hosts"] == ["box.test", "chrome.test"]
+        _content, bare = _dispatch("sys_state", {})
+        assert bare["cdp_hosts"] == ["box.test", "chrome.test"], \
+            "「谁被批准接我的登录态」不该等点名才出现"
+
+    def test_revoking_one_host_needs_confirm_and_leaves_the_other(self):
+        self._authorize("a.test", "b.test")
+        _content, paused = _dispatch("sys_state", {"clear": ["cdp:host=a.test"]})
+        assert paused.get("pending_approval") is True, paused
+        assert "confirm" in paused.get("next_action", ""), paused
+        assert self._roster() == frozenset({"a.test", "b.test"}), \
+            "没有 confirm 的撤销一个主机都不能动"
+
+        _content, out = _dispatch("sys_state",
+                                  {"clear": ["cdp:host=a.test"], "confirm": True})
+        assert "cdp_hosts" in out["cleared"], out
+        assert "a.test" in out["message"], out
+        assert self._roster() == frozenset({"b.test"})
+
+    def test_clear_cdp_hosts_revokes_all_and_the_disk_looks_never_authorized(self):
+        import pathlib
+
+        import dhole_mcp.server as server_mod
+        self._authorize("a.test", "b.test")
+        _content, out = _dispatch("sys_state",
+                                  {"clear": ["cdp_hosts"], "confirm": True})
+        assert self._roster() == frozenset()
+        assert not pathlib.Path(server_mod._cdp_hosts_file()).exists(), \
+            "名册清空后的磁盘形状 = 从没授权过任何主机，不是空名单文件"
+
+    def test_all_includes_cdp_hosts(self):
+        self._authorize("a.test")
+        _content, out = _dispatch("sys_state", {"clear": ["all"], "confirm": True})
+        assert "cdp_hosts" in out["cleared"], out
+        assert self._roster() == frozenset()
+
+    def test_revoking_an_unknown_host_is_an_error_naming_the_roster(self):
+        """与 `clear=["cahce"]` 同罪：装没看见就是 no-op，错一个字母要当场说。"""
+        self._authorize("a.test")
+        _content, out = _dispatch("sys_state",
+                                  {"clear": ["cdp:host=nope.test"], "confirm": True})
+        assert "nope.test" in out["error"], out
+        assert "a.test" in out["error"], "错误要列出名册里真正存在的主机"
+        assert out.get("cleared", []) == []
+        assert self._roster() == frozenset({"a.test"})
+
+    def test_config_is_show_only_with_a_named_refusal(self):
+        """旋钮的另一扇门在 `dhole config unset`——留两扇会各自漂走的门是这个
+        仓库自己裁决过的事，所以 clear 这一类要被点名拒绝，不是悄悄吞掉。"""
+        _content, out = _dispatch("sys_state", {"clear": ["config"]})
+        assert "show-only" in out["error"], out
+        assert "dhole config unset" in out["error"], out
+        # 拒绝即什么都没清：空的 cleared 是默认值，按省略表不下线（缺席=空）。
+        assert out.get("cleared", []) == []
+
+    def test_show_config_lists_names_never_values(self):
+        from dhole_mcp import env_registry
+
+        env_registry.set_entry("DHOLE_USAGE_LOG", "1")
+        env_registry.set_entry("DHOLE_BOCHA_API_KEY", "hunter2-super-secret")
+        _content, structured = _dispatch("sys_state", {"show": ["config"]})
+        assert structured["config_keys"] == ["DHOLE_BOCHA_API_KEY", "DHOLE_USAGE_LOG"]
+        blob = json.dumps(structured, ensure_ascii=False)
+        assert "hunter2-super-secret" not in blob, \
+            "值里可能有 secret：名字过线，值永远不过"
+
+    def test_show_all_expands_to_the_state_classes_it_was_asked_to_show(self):
+        """批次 6a：`show=["all"]` 必须真的展开 —— 实测它回来的体只有一颗 `message`。
+
+        下游全是精确成员测试（`"cache" in report` / `"engine_state" in report` / …），
+        而 "all" 一个都不匹配。clear 侧的 "all" 一直是展开的，同一个词在两扇门上
+        一个展开一个不展开，读者只能猜。
+
+        判据落在 message 上而不是字段上，因为这五类各有各的空集形状（引擎池没记录时
+        `engine_health` 按契约不上线），而"有没有去查"这件事只在这句话里说得清。
+        """
+        _content, out = _dispatch("sys_state", {"show": ["all"]})
+        msg = out["message"]
+        listed = msg.split(":")[0].replace("Reported ", "")
+        for cls in ("cache", "sessions", "cred_defaults", "cdp_hosts", "engine_state"):
+            assert cls in listed, f"展开的名册少了 {cls}：{listed}"
+        assert "all," not in listed and " all" not in listed, (
+            f"'all' 自己被当成了一类状态印进名册：{listed}")
+        assert "config" not in listed, f"没点名就该不出现的类出现了：{listed}"
+        # 查过的类要留痕：cache 的统计是真的上线了（空集也带 entries=0 的形状）。
+        assert "cache" in out, sorted(out)
+
+    def test_a_show_that_asks_for_one_class_reports_only_that_one(self):
+        """展开不许把默认名册拖进来当副作用：点名一类就只查一类。"""
+        _content, out = _dispatch("sys_state", {"show": ["cache"]})
+        listed = out["message"].split(":")[0].replace("Reported ", "")
+        assert listed.strip() == "cache", listed
+        assert "engine_health" not in out, sorted(out)
+
+    def test_an_empty_answer_says_it_is_empty_instead_of_looking_swallowed(self):
+        """空回执与被吞的数据字节相同 —— 这是 wire 压缩的事实，不是假设。
+
+        `config_keys` 是 `default_factory=list`，等于默认值的字段整个不上线
+        （`wire.py`），所以"这台机器一个旋钮都没存过"与"这颗字段掉了"在字节上是
+        同一句话。修法不是新增字段，是把"空"说进那句人读的话。
+        """
+        _content, out = _dispatch("sys_state", {"show": ["config"]})
+        assert "config_keys" not in out, "空列表按契约不上线（这条守的是压缩本身）"
+        assert "none are persisted" in out["message"], out["message"]
+        assert "built-in default" in out["message"], out["message"]
+        assert out.get("error", "") == "", "空集不是一次失败"
+
+    def test_a_persisted_knob_is_counted_in_the_same_sentence(self):
+        """同一句话在"有"的时候也要能用：计数变了，措辞不许偷偷换成另一条路。"""
+        from dhole_mcp import env_registry
+
+        env_registry.set_entry("DHOLE_USAGE_LOG", "1")
+        _content, out = _dispatch("sys_state", {"show": ["config"]})
+        assert "persisted config knobs 1" in out["message"], out["message"]
+        assert "none are persisted" not in out["message"]
+
+    def test_an_empty_roster_and_config_ride_off_the_wire(self):
+        _content, structured = _dispatch("sys_state", {})
+        assert "cdp_hosts" not in structured, structured
+        assert "config_keys" not in structured, structured

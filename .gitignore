@@ -33,6 +33,9 @@ credentials.json
 .dhole_mcp_cache/
 .dhole_cache/
 *.log
+# A browser download that landed in the repo root: with LOCALAPPDATA stripped from
+# the host's env, the win32 browsers root used to resolve relative to the CWD.
+/ms-playwright/
 
 # Test artifacts
 .pytest_cache/

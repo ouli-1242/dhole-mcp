@@ -28,6 +28,7 @@ import asyncio
 import pytest
 
 from dhole_mcp import browser as _browser
+from dhole_mcp import params
 from dhole_mcp import server as server_mod
 from dhole_mcp.server import MasterFetchServer as Server
 
@@ -81,8 +82,11 @@ def _defs():
 def test_web_read_advertises_one_level_param_and_no_hardening_knobs():
     props = _defs()["web_read"]["inputSchema"]["properties"]
     assert "anti_detect" in props, sorted(props)
-    assert set(props["anti_detect"]["enum"]) == set(server_mod._ANTI_DETECT), \
-        "档位表与 schema 必须同一份"
+    # 17.0 B6-7：档位不再由 schema 的 enum 守，改由 dhole 的拒绝守 —— 因为宿主那条
+    # "must be equal to one of the allowed values" 既不列合法值、也不给恢复方向。
+    # 表还是同一份，只是读它的人从 schema 换成了 params._coerce_anti_detect_arg。
+    assert "enum" not in props["anti_detect"], "enum 数组回来了"
+    assert set(server_mod._ANTI_DETECT) == {"off", "basic", "auto", "aggressive"}
     assert len(props["anti_detect"]["description"]) <= 200
     gone = sorted(k for k in RETIRED if k in props)
     assert not gone, f"档位收了这几颗却还留在公开面：{gone}"
@@ -114,8 +118,17 @@ def test_the_two_axes_stayed_two_axes():
     """
     props = set(_defs()["web_read"]["inputSchema"]["properties"])
     assert not {"wait", "network_idle"} & props, sorted(props)
-    assert set(_defs()["web_read"]["inputSchema"]["properties"]["anti_detect"]["enum"]) \
-        == {"off", "basic", "auto", "aggressive"}
+    # 档位的合法值现在只印在两处：描述里的例子，和 dhole 拒本里的整份列表。两处都不
+    # 许混进时机旋钮 —— 判据从 "enum == {...}" 换成 "能被接受的集合 == {...}"，因为
+    # 后者才是真正被读的那份（params._coerce_anti_detect_arg 的 `_ANTI_DETECT`）。
+    accepted = set()
+    for level in ("off", "basic", "auto", "aggressive", "wait", "network_idle"):
+        try:
+            params._coerce_anti_detect_arg(level)
+        except ValueError:
+            continue
+        accepted.add(level)
+    assert accepted == {"off", "basic", "auto", "aggressive"}, accepted
 
 
 @pytest.mark.parametrize("knob", RETIRED)

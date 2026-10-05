@@ -149,6 +149,25 @@ class TestOtherStateFiles:
         assert (str(tmp_path), oct(0o700)) in chmod_spy, chmod_spy
         assert (str(target), oct(0o600)) in chmod_spy, chmod_spy
 
+    @pytest.mark.real_state_paths
+    def test_the_resolver_mirror_tightens_both(self, chmod_spy, monkeypatch, tmp_path):
+        """17.0 批次 6d 的第十个状态文件 `resolver_probe.json`：一个进程把自己的
+        resolver 判词写给别的进程看。里面不是凭据，但它是 SSRF 复查层开还是关的
+        依据，也是 doctor 那句话的唯一出处，所以和别的状态文件同级收紧。
+
+        带 `real_state_paths`：这条验的正是路径由 ``paths.home()`` 派生，而 conftest
+        把这个文件接管去了临时目录（套件的 DNS 挂具会让每个用例都写一份"公网"）。
+        """
+        from dhole_mcp import security
+
+        home = tmp_path / "home"
+        monkeypatch.setenv("DHOLE_HOME", str(home))
+        security._record_resolver_probe("fake-ip", "198.18.0.32")
+
+        assert (str(home), oct(0o700)) in chmod_spy, chmod_spy
+        assert (str(home / "resolver_probe.json"), oct(0o600)) in chmod_spy, chmod_spy
+        assert security.resolver_probe_record()["verdict"] == "fake-ip"
+
 
 # ─── POSIX 上真正落到 inode 的位 ─────────────────────────────────────────
 # 本机（Windows）chmod 只能改只读位，stat 报出的 mode 一律是 0o777/0o666 —— 连

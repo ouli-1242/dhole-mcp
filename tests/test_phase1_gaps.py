@@ -89,12 +89,21 @@ def _result(**kwargs):
 
 
 async def _escalate(server, url="https://example.com/boom", **over):
-    """按名字驱动升级链，不抄它的位置 arity —— 本文件开头就说红要红在症状上。
+    """按名字驱动升级链，网络在 self.get 那一层被换掉。
 
     B5-13d 从这条链上删掉了渲染时机那两位（时机不再是参数：那 5 秒现在是浏览器
     层认出壳页才付的，证人搬去 tests/test_render_settle_b5.py），照位置传法的调用
     于是把"少了两位"读成"后面那些各自前移一位"，红成一个 TypeError。
+
+    `_ensure_auto_session` 也必须换掉：升级链在调用 `stealthy_fetch` 之前要先拿到
+    会话 id，而那颗函数真的会 launch 一台浏览器。这一刀读的是阶梯往哪一级走，不是
+    浏览器 —— 挂具没换它的时候，这两条用例每次跑都在套件里起一个真 chromium（批次 1
+    的 conftest 启动闸把它抓了出来）。
     """
+    async def _no_session(**kw):
+        return "auto-under-test"
+
+    server._ensure_auto_session = _no_session
     kwargs = dict(
         extraction_type="markdown", css_selector=None, cache_ttl=0, offset=0,
         headless=True, real_chrome=False, proxy=None, timeout=20000,

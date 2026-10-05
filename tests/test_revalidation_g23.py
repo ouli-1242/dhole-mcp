@@ -9,10 +9,15 @@
 为空，并且明确说「你手上那份就是最新的」。
 
 17.0 §6 把「谁来发起复验」换了人：`if_none_match` / `if_modified_since` 不再是参数，
-校验子改由 `watch` 自己存在基线旁边，经 `_REVALIDATE` 这条进程内通道送进来。这个文件
-因此读起来像一次重排 —— 每条用例测的还是**同一个答复形状**，只是问问题的人从调用方
-变成了 dhole 自己。那些只在"调用方保管标记"合同中才有意义的断言（把标记回吐给调用方、
-批量里只有一个 feed 被问过）随合同一起删了。
+校验子经 `_REVALIDATE` 这条进程内通道送进来。这个文件因此读起来像一次重排 —— 每条用例
+测的还是**同一个答复形状**，只是问问题的人从调用方变成了 dhole 自己。那些只在"调用方
+保管标记"合同中才有意义的断言（把标记回吐给调用方、批量里只有一个 feed 被问过）随合同
+一起删了。
+
+**17.0 收尾：这条通道连生产端也没有了。** 曾经喂它的是 `web_watch`（校验子存在基线
+旁边），那颗工具随四颗状态工具一起下线。机制与 304 语义保留（`_conditional_headers` 仍在、
+抓取内核仍把 304 读成成功），所以这里的用例改成**直接驱动通道** —— 它们是这条路径唯一
+的守门人，也是「删它要动抓取内核、收益为零」这个取舍的凭证。
 
 feed 的「增量」是同一个问题的另一半：只留下比 since 新的条目，并把被过滤掉的条数
 说出来 —— 空列表既可能是「没有新东西」也可能是「你的日期写错了」。
@@ -323,7 +328,14 @@ class TestTheConditionalCall:
             return ResponseModel(url=url, status=200, content=["<p>body</p>"],
                                  content_type="text/html", fetcher_used="stealthy")
 
+        async def _no_session(self, **kw):
+            # 升级链在 `stealthy_fetch` 之前要先拿到会话 id，而 `_ensure_auto_session`
+            # 真的 launch 一台浏览器。这一刀读的是"条件头有没有被丢掉并说出来"，不是浏览器
+            # （批次 1 的 conftest 启动闸抓的正是这种顺带起一次 chromium 的用例）。
+            return "auto-under-test"
+
         monkeypatch.setattr(MasterFetchServer, "stealthy_fetch", fake_stealthy)
+        monkeypatch.setattr(MasterFetchServer, "_ensure_auto_session", _no_session)
         r = await _ask(url, {"etag": ETAG}, cache_ttl=0, force_fetcher="stealthy")
         assert r.status == 200, "浏览器层答不了这个问题，就不许假装复验过"
         assert "revalidation was dropped" in r.summary

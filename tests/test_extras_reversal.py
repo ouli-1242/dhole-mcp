@@ -49,13 +49,18 @@ def test_all_extra_is_preserved_with_same_contents():
         assert heavy in all_names, f"[all] must still name {heavy} (self-heal path)"
 
 
-def test_slim_extra_is_declared_as_a_name():
-    """`slim` names the pre-W7 default tier. pip extras can only ADD, so
-    this list is empty today - see pyproject's comment block. The
-    assertion is that the key exists at all; a future release that ships
-    a real slim wheel can populate it, and this test would still pass."""
+def test_slim_extra_is_gone():
+    """`slim` was an empty extra: pip extras can only ADD dependencies and the
+    heavy tier lives in the default set, so `pip install dhole-mcp[slim]`
+    resolved to exactly the same set as plain `pip install dhole-mcp` - a name
+    promising something pip cannot deliver. Removed; the honest HTTP-only path
+    (`pip install --no-deps dhole-mcp` + hand-picked core) is what the README
+    documents. If a future release ships a real slim wheel, re-add the extra
+    WITH contents and flip this guard back."""
     extras = _load()["project"]["optional-dependencies"]
-    assert "slim" in extras, "W7 §3.2 requires a `slim` extra to exist"
+    assert "slim" not in extras, (
+        "an empty `slim` extra is a name without an effect - do not re-add it; "
+        "point Termux/aarch64 users at `pip install --no-deps dhole-mcp` instead")
 
 
 def test_all_and_default_heavy_tiers_are_the_same_set():
@@ -71,10 +76,18 @@ def test_all_and_default_heavy_tiers_are_the_same_set():
         assert str(item) in dep_set, f"{item!r} is in [all] but not default deps"
 
 
-def test_readme_documents_the_playwright_install_step_is_separate():
-    """W7 §3.3 - don't claim "install and go" without saying the Chromium
-    binary is a separate download."""
+def test_readme_documents_the_browser_binary_step_is_separate():
+    """W7 §3.3 - don't claim "install and go" without saying the browser binary is
+    a separate download.
+
+    17.0 批次 1 改了那条命令的名字：README 以前教的是 `playwright install chromium`，
+    而 patchright 的 driver 只认自己清单里那一版 —— 照着敲会把另一家浏览器放进盘上，
+    dhole 起的那一份还是缺的（`install.browser_binary_command()` 是唯一一处知道正确
+    命令的地方，这里就是钉它别让读物再漂回去）。
+    """
     readme = (_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "playwright install chromium" in readme
+    assert "python -m patchright install chromium" in readme
+    assert "playwright install chromium" not in readme.replace(
+        "patchright install chromium", "")
     # the W7 wording that explains this explicitly
     assert "pip 装不到这一步" in readme or "两步都跑完" in readme

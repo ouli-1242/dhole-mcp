@@ -96,7 +96,7 @@ from dhole_mcp import install as _install
 # until first use so the MCP server responds to initialize immediately.
 # Set when browser import fails (e.g. patchright not installable on Termux).
 # When set, dhole runs in HTTP-only mode: fetch + search + crawl work via primp
-# + httpx + trafilatura, but stealthy browser escalation and web_screenshot are disabled.
+# + httpx + trafilatura, but stealthy browser escalation and web_act are disabled.
 _browser_import_error: Optional[str] = None
 
 # Module-level type placeholders — needed because FastMCP evaluates string
@@ -189,7 +189,7 @@ from dhole_mcp.security import (
     _ALLOW_PRIVATE, parse_allow_private, set_allow_private,
     # Same policy, scoped to one call, for the two tools that read the stored
     # value themselves instead of going through the fetch path
-    # (web_screenshot / feed_read).
+    # (web_act / feed_read).
     allow_private_scope,
 )
 
@@ -200,16 +200,12 @@ from dhole_mcp.security import (
 from dhole_mcp.models import (
     BulkResponseModel,
     CredDefaultsModel,
-    LoginModel,
-    RecipeModel,
     ResponseModel,
     SessionCensusRow,
     SessionCreatedModel,
     SessionInfo,  # noqa: F401
     SessionType,
     SysStateModel,
-    VaultModel,
-    WatchModel,
 )
 # 17.0 B6 第三刀：压实层搬进 wire.py。server 只用这三颗名字（`_WIRE_OMIT` /
 # `_wire_dump` 那些现在由 tests 直接认 wire 的家，server 不替它们撑一个假公开面）。
@@ -254,6 +250,7 @@ from dhole_mcp.quality import (  # noqa: F401
 # 读这张表 —— 门留在 server，家已经在 rungs。
 from dhole_mcp.rungs import (  # noqa: F401
     ANTI_DETECT_DESC,
+    ANTI_DETECT_DESC_SHORT,
     _ANTI_DETECT,
     _LAUNCH_HARDENING,
     _RUNG_TOOLS,
@@ -310,6 +307,8 @@ from dhole_mcp.context import (
     _ROBOTS_MODE,
     _SESSION_ID,
     _SESSION_ID_RE,
+    _arg_notes_scope,
+    _note_text,
     MAX_REQUEST_BODY_BYTES,
     _cache_context,
     _neural_focus_requested,
@@ -320,6 +319,9 @@ from dhole_mcp.context import (
 
 # Extended extraction types (beyond Scrapling's markdown/html/text)
 ExtendedExtractionType = Literal["markdown", "html", "text", "article", "structured"]
+# G1：'check' 只归 web_read —— 它回答「这页变了吗」，对 web_request/crawl 的批量
+# 取回没有意义；tier 方法也不认识它（拦截在 handler 顶层，往下的类型面不变）。
+ReadExtractionType = Literal["markdown", "html", "text", "article", "structured", "check"]
 ScreenshotType = Literal["png", "jpeg"]
 
 MAX_CONTENT_CHARS = 40000
@@ -612,9 +614,9 @@ def _iso_from_ts(ts) -> str:
     """A stored epoch float as the ISO-8601 UTC string the wire uses.
 
     Same shape the responses already use for ``fetched_at`` (seconds precision,
-    trailing Z), so a watch's baseline age reads like every other timestamp
-    instead of as a raw 1.7e9. Empty in, empty out - a watch with no baseline
-    has no timestamp to print.
+    trailing Z), so a stored timestamp reads like every other one on the wire
+    instead of as a raw 1.7e9. Empty in, empty out - nothing to format, nothing
+    printed.
     """
     try:
         t = float(ts or 0)
@@ -634,7 +636,7 @@ def _iso_from_ts(ts) -> str:
 # either; DHOLE_STRUCTURED_CONTENT / DHOLE_OUTPUT_SCHEMA / DHOLE_WIRE_FULL are
 # silently ignored if a host still sets them).
 
-# Idle browser close: after this many seconds with no web_read/web_screenshot in
+# Idle browser close: after this many seconds with no web_read/web_act in
 # flight, the warm Patchright Chrome is closed entirely (process exits, OS reclaims
 # all its RAM). The next fetch relaunches it (~2s cold start). 17.0 写死 300s
 # (5 min): an agent actively working (30-90s think-pauses between fetches) keeps
@@ -667,10 +669,12 @@ DEFAULT_MAX_CONTENT_CHARS = max(
 # connect by clients that support it. This is the connect-time mastery doc:
 # the #1 workflow, the gotchas, and when to use each tool. Written as
 # imperatives with the "prefer dhole over built-ins" rule FIRST, because tool
-# selection is driven by the first lines an agent reads. Kept tight (~250
-# tokens) since it is paid once, not per-turn-per-tool.
+# selection is driven by the first lines an agent reads. Measured 2,636 chars
+# ≈ 634 tokens at the repo's own 4.16 chars/token — paid once per connect, but
+# the whole table rides the host's context for the whole session (see the
+# connect-cost note near DHOLE_TOOLS below for the multi-round arithmetic).
 #
-# This literal is the FULL text (all 9 tools). The wire actually sends
+# This literal is the FULL text (all 13 tools). The wire actually sends
 # ACTIVE_INSTRUCTIONS = _compose_instructions(_ENABLED_TOOLS), which drops the
 # routing lines of the tools DHOLE_TOOLS left out. The literal stays because
 # tests/tool_payload_measure.py reads it with ast.literal_eval, and a test
@@ -684,16 +688,10 @@ DHOLE_INSTRUCTIONS = (
     "- Finding what to fetch: web_search - then web_read the top hits. NEVER answer from search snippets alone.\n"
     "- RSS/Atom changelogs or release notes: feed_read.\n"
     "- Local file: doc_parse.\n"
-    "- A page you have to click, fill or submit on: web_act - the browser tier, never from cache, and submit pauses until the user approves that exact submission.\n"
+    "- A page you have to click, fill or submit on: web_act - the browser tier, never from cache; submit pauses until the user approves that exact submission, and screenshots ride its action chain.\n"
     "- A non-GET request (POST / PUT / PATCH / DELETE / HEAD): web_request, never web_read. It is sent once - no retry, no cache, no replay, because a replay writes twice.\n"
-    "- Screenshot: web_screenshot - words instead? web_read.\n"
-    "- Check a short link: web_resolve.\n"
     "- Cookies behind session_id=, the fetch cache, engine cooldowns: sys_state (no arguments = the census; clear= to erase).\n"
     "- The same proxy, credential or anti-detect rung on every call: cred_defaults stores it once (a credential needs its host) and each later response names what it used.\n"
-    "- A page you already worked out how to reach: web_recipe (save the url+actions once, then run it).\n"
-    "- Watching a page for changes: web_watch (add it, then check - it diffs against the last snapshot).\n"
-    "- A login the user already stores: cred_vault (op=match with the URL) lists what their manager holds - never the values.\n"
-    "- Signing in with a stored credential: cred_login (call once to see the plan, again with confirm=true to run it).\n"
     "- Unsure how to write a call, what a field means, or why something failed: sys_guide(topic) reads dhole's own handbook - one call, no setup, and the deep syntax of actions / schema lives there.\n"
     "Parameters:\n"
     "- Every parameter is named at the TOP LEVEL of the call: {\"url\": \"https://x\", \"focus\": \"q\"} - nothing is nested. A name the tool does not accept raises rather than being dropped.\n"
@@ -725,30 +723,16 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "feed_read": "- RSS/Atom changelogs or release notes: feed_read.\n",
     "doc_parse": "- Local file: doc_parse.\n",
     "web_act": "- A page you have to click, fill or submit on: web_act - the browser tier, "
-    "never from cache, and submit pauses until the user approves that exact "
-    "submission.\n",
+    "never from cache; submit pauses until the user approves that exact "
+    "submission, and screenshots ride its action chain.\n",
     "web_request": "- A non-GET request (POST / PUT / PATCH / DELETE / HEAD): web_request, "
     "never web_read. It is sent once - no retry, no cache, no replay, because a "
     "replay writes twice.\n",
-    "web_screenshot": "- Screenshot: web_screenshot - words instead? web_read.\n",
-    "web_resolve": "- Check a short link: web_resolve.\n",
     "sys_state": "- Cookies behind session_id=, the fetch cache, engine cooldowns: sys_state "
     "(no arguments = the census; clear= to erase).\n",
     "cred_defaults": "- The same proxy, credential or anti-detect rung on every "
     "call: cred_defaults stores it once (a credential needs its host) and each "
     "later response names what it used.\n",
-    # 17.0：web_recipe/web_watch 全量默认注册（opt-in 组已删），这行 instructions 是
-    # 它们唯一的"什么时候用我"，必须留在连接期说明里。
-    "web_recipe": "- A page you already worked out how to reach: web_recipe (save the "
-    "url+actions once, then run it).\n",
-    "web_watch": "- Watching a page for changes: web_watch (add it, then check - it diffs "
-    "against the last snapshot).\n",
-    # cred_vault/cred_login 同 web_recipe/web_watch：默认注册，行留在 instructions 里路由。
-    # 逐次确认闸（login 无 confirm 必暂停）在工具内部，注册面不做许可。
-    "cred_vault": "- A login the user already stores: cred_vault (op=match with the URL) "
-    "lists what their manager holds - never the values.\n",
-    "cred_login": "- Signing in with a stored credential: cred_login (call once to see the "
-    "plan, again with confirm=true to run it).\n",
     "sys_guide": "- Unsure how to write a call, what a field means, or why something failed: "
     "sys_guide(topic) reads dhole's own handbook - one call, no setup, and the deep "
     "syntax of actions / schema lives there.\n",
@@ -914,120 +898,73 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
 
 # First-line substrings -> the move that usually fixes it. Matched
 # case-insensitively against the headline only, never against the call log.
-_BROWSER_ERROR_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
-    # Must come first: it is the narrow signal. A "matched no element" headline
-    # must not be read as a rendering timeout, which is the whole defect this
-    # entry exists for.
-    (("matched no element",),
-     "the selector matched nothing on the loaded page - check it against the real "
-     "DOM (extraction_type='html', or screenshot the full page first); use "
-     "wait_selector only if the element appears later"),
-    (("timeout", "exceeded"),
-     "the page never finished rendering - raise timeout= (ms), or wait for "
-     "a specific element with wait_selector="),
-    (("has been closed", "target closed"),
-     "the browser session is gone - call again to get a fresh one, or forget it "
-     "with sys_state(clear=['<session id>']) and retry"),
-    (("executable doesn't exist", "playwright install", "browser_binary_missing"),
-     "the browser binary is missing - dhole installs it on first use, so this means "
-     f"that install failed or is still running: `{_install.browser_binary_command()}` "
-     "(state: ~/.dhole/browser_install.json)"),
-)
+# ─── HTTP transport surface (G25 评审) ──────────────────────────────────────
+# mcp SDK 的 TransportSecuritySettings 缺省显式关闭 Host/Origin 防护，而空列表的
+# settings 会把一切 Host 拒掉（421）——所以 allowlist 由 serve() 按 --host 显式
+# 构建，而不是传一个空构造。
 
+def _http_allowed_hosts(host: str) -> list[str]:
+    """Host-header allowlist for the streamable-HTTP transport's rebinding guard.
 
-async def _locator_or_raise(page: Any, selector: str) -> Any:
-    """The locator for `selector`, or LookupError when nothing on the page matches.
-
-    Split out of the screenshot capture so the rule it enforces can be tested
-    without a browser: `.first` on a locator that will never match waits the
-    whole call budget out (30s by default) and then reports a TIMEOUT, which
-    the error mapping reads as "the page never finished rendering" - advice
-    (raise `timeout`, add `wait_selector`) that cannot conjure an element that
-    is not in the DOM. Measured: a selector matching nothing and a page that
-    genuinely never rendered produced the same sentence.
-
-    A test can hand this a fake page and assert `.first.screenshot()` was never
-    reached; with the check inlined in the capture closure it could only be
-    observed by actually waiting 30 seconds.
+    回环的三个拼法永远在名单上；使用者点名的 `--host` 也进名单（带端口通配）。
+    绑 0.0.0.0 时客户端的 Host 无法预知——这正是该配置需要 `DHOLE_HTTP_TOKEN`
+    的原因之一：名单防得住 rebinding，防不住能直达端口的东西。
     """
-    loc = page.locator(selector)
-    if await loc.count() == 0:
-        raise LookupError(
-            f"selector matched no element on the loaded page: {selector!r}")
-    return loc
+    names = {"127.0.0.1", "localhost", "[::1]"}
+    if host and host not in ("0.0.0.0", "::", ""):
+        names.add(host)
+    out: list[str] = []
+    for name in sorted(names):
+        out.extend((name, f"{name}:*"))
+    return out
 
 
-# Suffixes a screenshot may legitimately be written under. The guard below is
-# about the OTHER direction: a typo'd save_to must not eat a real document.
-_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+def _http_allowed_origins(host: str, port: int) -> list[str]:
+    """Origin allowlist：同一批名字在本端口上的 http 形态。带 Origin 头的请求
+    只放行名单内的——浏览器页面发的跨源请求正是 rebinding 的形状。"""
+    names = {"127.0.0.1", "localhost", "[::1]"}
+    if host and host not in ("0.0.0.0", "::", ""):
+        names.add(host)
+    return [f"http://{name}:{port}" for name in sorted(names)]
 
 
-def _resolve_save_to(save_to: str, image_type: str):
-    """Validate a save_to path BEFORE a browser is started, and return it.
+def _http_token_ok(headers: dict, token: str) -> bool:
+    """Bearer / X-Dhole-Token 校验（常量时间比较）。空 token 永远不放行。"""
+    import hmac
 
-    Split from the write so a typo costs an instant refusal instead of a 10-second
-    cold start followed by "could not write".
-    """
-    from pathlib import Path
-
-    raw = (save_to or "").strip()
-    if not raw:
-        raise ValueError(
-            "save_to needs a path to write the image to (e.g. "
-            "'C:/shots/page.png' or './page.png')")
-    target = Path(raw).expanduser()
-    if target.is_dir():
-        raise ValueError(f"save_to {str(target)!r} is a directory, not a file")
-    if target.exists() and target.suffix.lower() not in _IMAGE_SUFFIXES:
-        raise ValueError(
-            f"refusing to overwrite {str(target)!r} with image bytes - it is not "
-            f"named like an image; pass a path ending in .{image_type.lower()}")
-    return target
-
-
-def _write_screenshot(data: bytes, target) -> str:
-    """Write captured bytes to a validated path; return the absolute path.
-
-    Why this exists at all (G10): the image itself only reaches a multimodal
-    client. Every other model got "image unavailable" plus a pile of base64 it
-    cannot read, so the screenshot was effectively not a feature — a path is the
-    form that survives into a text-only transcript and out to another tool.
-    """
+    supplied = ""
+    auth = headers.get("authorization", "")
+    if auth[:7].lower() == "bearer ":
+        supplied = auth[7:].strip()
+    supplied = supplied or (headers.get("x-dhole-token") or "").strip()
+    if not token:
+        return False
     try:
-        if target.parent and not target.parent.exists():
-            target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
-    except OSError as e:
-        raise ValueError(f"could not write {str(target)!r}: {str(e)[:160]}") from None
-    return str(target.resolve())
+        return hmac.compare_digest(supplied.encode("utf-8"), token.encode("utf-8"))
+    except UnicodeEncodeError:
+        return False
 
 
-def _screenshot_error_message(exc: BaseException) -> str:
-    """Turn a browser-capture exception into one actionable line for the agent.
+class _TokenGate:
+    """Pure-ASGI bearer gate；`DHOLE_HTTP_TOKEN` 设了即强制，未设不挂。"""
 
-    patchright/playwright raise multi-line dumps: a one-line headline followed
-    by a "Call log:" block with per-step indentation ("waiting for fonts to
-    load"). That block describes the *driver's* internals, not the caller's
-    problem - it names no argument the agent could change, so shipping it spends
-    context and buries the one line that does matter. Keep the exception type
-    and the headline, drop the log, and append the move that usually fixes it.
-    The raw exception is not lost: the caller logs it for the operator.
-    """
-    text = str(exc).strip()
-    headline = text.splitlines()[0].strip() if text else ""
-    if not headline:
-        headline = "(no message)"
-    flat = " ".join(headline.split())
-    if len(flat) > 160:
-        flat = flat[:157].rstrip() + "..."
-    low = flat.lower()
-    hint = ("call again; if it persists, open the URL in a browser to check it "
-            "renders without a challenge")
-    for needles, candidate in _BROWSER_ERROR_HINTS:
-        if any(n in low for n in needles):
-            hint = candidate
-            break
-    return f"{type(exc).__name__}: {flat} - {hint}"
+    def __init__(self, app, token: str):
+        self.app = app
+        self._token = token
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            headers = {k.decode("latin-1").lower(): v.decode("latin-1")
+                       for k, v in (scope.get("headers") or [])}
+            if not _http_token_ok(headers, self._token):
+                from starlette.responses import Response
+
+                await Response(
+                    "Unauthorized: pass Authorization: Bearer <DHOLE_HTTP_TOKEN> "
+                    "(or X-Dhole-Token) to call this server", 401,
+                )(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
 
 
 _CDP_HOSTS_FILE_NAME = "cdp_hosts.json"
@@ -1065,8 +1002,9 @@ def _cdp_authorized_hosts() -> frozenset:
 
 
 def _cdp_authorize_host(host: str) -> None:
-    """把一台用户已同意的 CDP 端点主机写进落盘围栏。只增不删；撤销目前是删这个
-    文件，一个像样的出口要等 B5 把本地状态那颗工具立起来。"""
+    """把一台用户已同意的 CDP 端点主机写进落盘围栏。撤销不再走「删整个文件」：
+    `sys_state(clear=['cdp:host=<name>'])` 撤一台，`clear=['cdp_hosts']` 撤全部
+    （G25 评审把这两条路补上了，见 `_cdp_revoke_hosts`）。"""
     import json as _json
     from dhole_mcp import paths
     global _cdp_hosts_cache, _cdp_hosts_stamp
@@ -1082,6 +1020,35 @@ def _cdp_authorize_host(host: str) -> None:
                     encoding="utf-8")
     paths.harden_file(path)
     _cdp_hosts_cache = frozenset(current)
+
+
+def _cdp_revoke_hosts(hosts: List[str]) -> int:
+    """从落盘围栏里删掉指定主机（G25 评审：撤销粒度从「删整个文件」收到主机）。
+
+    空名单（调用方传 `clear=["cdp_hosts"]` 而名册本来是空的）是合法的零撤销，
+    返回 0。写回与 `_cdp_authorize_host` 同一形状；名册清空时删掉整个文件，
+    与「从没授权过任何主机」的磁盘形状一致。缓存失效交给下次 stat（mtime/size
+    必然变化），不在这里手搓。
+    """
+    import json as _json
+    from dhole_mcp import paths
+    drop = {h.strip().lower() for h in (hosts or []) if h and h.strip()}
+    path = pathlib.Path(_cdp_hosts_file())
+    current = sorted(_cdp_authorized_hosts())
+    remaining = [h for h in current if h not in drop]
+    removed = len(current) - len(remaining)
+    try:
+        if remaining:
+            paths.ensure_private_dir(path.parent)
+            path.write_text(
+                _json.dumps({"hosts": remaining}, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8")
+            paths.harden_file(path)
+        else:
+            path.unlink(missing_ok=True)
+    except OSError as e:
+        raise ValueError(f"could not update {str(path)!r}: {str(e)[:160]}") from None
+    return removed
     try:
         stat = path.stat()
         _cdp_hosts_stamp = (stat.st_mtime, stat.st_size)
@@ -1129,8 +1096,9 @@ def _cdp_attach_gate(cdp_url: Optional[str],
         "over the authenticated session of EVERY site you are logged into, and "
         "dhole asks once before doing that. Re-call with confirm=true to "
         "authorize this host (the approval is remembered for it and every later "
-        "attach to it is fenced to the authorized hosts; remove "
-        f"{_CDP_HOSTS_FILE_NAME} from the dhole state directory to revoke).",
+        "attach to it is fenced to the authorized hosts; revoke later with "
+        f"sys_state(clear=['cdp:host={host}']) - deleting "
+        f"{_CDP_HOSTS_FILE_NAME} works too).",
         None,
     )
 
@@ -1169,6 +1137,24 @@ def _smart_fetch_request_context(func):
         # Fresh list per invocation: _note_clamped appends to it, _with_agent_hints
         # reads it, and the reset below guarantees the next call starts empty.
         notes: list[str] = []
+        # §3-17 的补笔：auth / cookies / proxy 自从搬进 cred_defaults 就不再是调用
+        # 参数，而 _cache_context 的指纹输入是这份 options —— 17.0 把门搬了家，却把
+        # 指纹留在了旧地址上。后果是"先匿名抓、再存身份、再抓同 URL"命中设身份之前
+        # 的缓存，而回执的 identity_applied 声称这次身份在生效（2026-10-05 全真模拟
+        # 抓到）。这里把存量身份并回指纹输入：三个键都是 _cache_context 本来就会
+        # 消费的（G7/G25 时代进的）， scope 键只对这次请求的 host 生效 —— 与
+        # web_read 自己用 _identity_for 读它们是同一个 host 判定。
+        _cache_url = options.get("url") or ""
+        _cache_host = identity.host_of(_cache_url)
+        _identity_bits: dict = {}
+        if _cache_host:
+            for _ikey in ("auth", "cookies"):
+                _ival = identity.get(_ikey, _cache_host)
+                if _ival not in (None, "", {}, []):
+                    _identity_bits[_ikey] = _ival
+        _pval = identity.get("proxy")
+        if _pval not in (None, "", {}, []):
+            _identity_bits["proxy"] = _pval
         tokens = [
             (_PDF_PAGES, _PDF_PAGES.set(options["pages"] if isinstance(options["pages"], str) else None)),
             (_PDF_PASSWORD, _PDF_PASSWORD.set(options["password"] if isinstance(options["password"], str) else None)),
@@ -1210,8 +1196,9 @@ def _smart_fetch_request_context(func):
             (_AUTH_SENT, _AUTH_SENT.set(("", ()))),
             (_CACHE_CTX, _CACHE_CTX.set(_cache_context(
                 # 校验子不是参数了，但它是"这一次问的是哪个版本"的一部分，所以仍然
-                # 要进缓存指纹（_cache_context 保持纯函数，值由这里并进去）。
-                {**options, "_revalidate": _REVALIDATE.get()}))),
+                # 要进缓存指纹（_cache_context 保持纯函数，值由这里并进去）。存量
+                # 身份同理：上面并入的 auth / cookies / proxy 改变"回来的是什么"。
+                {**options, "_revalidate": _REVALIDATE.get(), **_identity_bits}))),
             (_ROBOTS_MODE, _ROBOTS_MODE.set("")),
             (_ARG_NOTES, _ARG_NOTES.set(notes)),
         ]
@@ -1690,13 +1677,35 @@ def _translate_response_body(
     if _meta_hop and isinstance(page_metadata, dict):
         page_metadata["meta_refresh"] = _meta_hop
 
-    return ResponseModel(
+    return _attach_dom_visible_chars(ResponseModel(
         status=page.status, content=content, url=page.url,
         fetcher_used=fetcher_used, duration_ms=duration_ms,
         content_type=raw_ct, total_size_bytes=total_size, metadata=page_metadata,
         media=page_media, links=page_links, page_type=_page_type,
         extracted_type=_etype,
-    )
+    ), page_html)
+
+
+#: 算整页可见文本要把 HTML 再解析一遍，所以只在**抽得薄**的那一支算。这条上限就是
+#: "薄"的定义：远高于 `quality._JS_SHELL_MIN_TEXT_CHARS`（200，壳页判据），低到
+#: 让正常的正文页一律跳过这次解析。
+_THIN_EXTRACTION_PROBE_MAX_CHARS = 2_000
+
+
+def _attach_dom_visible_chars(result: ResponseModel, page_html: str) -> ResponseModel:
+    """把"这一页自己有多少字"记在信封的私有一面（批次 2 的壳页/塌陷分岔用）。
+
+    放在 HTML 还在手边的这里，而不是让 `quality` 去猜：抽取器给出 196 个字符的时候，
+    "站点给的是空壳"与"抽取器没读懂这页"在响应面上**一模一样**，而只有 DOM 能分开它们。
+    """
+    try:
+        if not page_html or sum(len(c) for c in result.content) >= _THIN_EXTRACTION_PROBE_MAX_CHARS:
+            return result
+        from dhole_mcp.envelope import _paywall_evidence
+        result._dom_visible_chars = len(_paywall_evidence(page_html)[0])
+    except Exception as exc:  # noqa: BLE001 - 一个判据的输入不许弄坏一次抓取
+        logger.debug("dom visible chars not measured: %r", exc)
+    return result
 
 
 def _check_response_size(page: _DholeResponse) -> None:
@@ -2092,7 +2101,7 @@ def _stealthy_only_call(force_fetcher: Any, actions: Any) -> bool:
 def _conditional_headers(markers: Any) -> tuple:
     """Turn stored version markers ({etag, last_modified}) into request headers.
 
-    17.0：唯一喂它的人是 `_REVALIDATE`（watch 的复验），不再是 agent 能传的参数。
+    17.0：唯一喂它的人是进程内通道 `_REVALIDATE`，不再是 agent 能传的参数。
     翻译规则一条没改 —— 它防的是注入（换行会变成一个新请求头），以及"源站根本对不上的
     校验子被答成 200，于是 200 被读成'变了'"。
 
@@ -2409,6 +2418,18 @@ def _identity_scope_error(key: str, host: str) -> str:
 
 CRED_DEFAULTS_DESC = """Set the identity once instead of passing it on every call: proxy, a named browser profile, the CDP endpoint to attach, the private-host allowance, the anti-detect rung, and (with a host) auth and cookies. Stored locally, applied to later calls whose argument is absent, and echoed as names only - values never come back."""
 
+# A1/A2 下线的工具名：旧调用点撞进来时，拒绝消息直接教到新的家 —— "Unknown tool"
+# 会把人引向"这能力没了"，而真相是能力还在，门换了。
+_REMOVED_TOOL_HINTS = {
+    "web_screenshot": "the capture lives on web_act now - pass it in the action "
+                      "chain, e.g. actions=[{\"screenshot\": {\"selector\": \"img\"}}]; "
+                      "full_page / save_to / image_type / quality are keys of that "
+                      "screenshot action",
+    "web_resolve": "web_read follows redirects and reports the landing URL "
+                   "(metadata.meta_refresh covers meta-refresh hops); a bare "
+                   "aliveness probe is web_request(method='HEAD')",
+}
+
 # ─── 参数面：每个工具接受哪些名字 ──────────────────────────────────
 # 17.0 B4：`options` 袋删掉了，参数只剩顶层这一个家（`url` 除外 —— 它说的是"这次调用
 # 关于哪一页"，不是一个旋钮）。一个键写错必须抛 —— 静默丢掉一个上限，调用方就会相信那个
@@ -2431,8 +2452,8 @@ _SF_PARAMS = frozenset({
     "check_login", "cdp_url", "confirm",
     # 17.0 §4 第 2 行：页面动作有自己的门（`web_act`）。`actions` 今天从读的那扇
     # 面上搬走 —— 它从来不是"读正文的一种玩法"：它强制浏览器层、绕开缓存、改的是
-    # 页面的状态。签名里这颗参数留着（web_act 与 recipe/cred_login 的内部链路都
-    # 经由这条管线走），公开面上它属于另一颗工具。
+    # 页面的状态。签名里这颗参数留着（web_act 的内部链路经由这条管线走），公开面上
+    # 它属于另一颗工具。
     "cache_ttl", "offset", "focus", "focus_mode", "focus_engine",
     "extraction_type", "force_fetcher", "urls",
     # 17.0 §5 E-13：「列表页 → 每项详情页」这两层的一次摊平。它们是读法参数不是
@@ -2442,19 +2463,9 @@ _SF_PARAMS = frozenset({
 })
 _SC_PARAMS = frozenset({
     "max_pages", "max_depth", "path_include", "path_exclude",
-    "max_content_chars_per", "concurrency",
+    "max_content_chars_per", "max_total_chars", "concurrency",
     "cache_ttl", "force_fetcher", "timeout", "deadline_ms", "sitemap",
     "search", "ignore_robots", "focus_engine",
-})
-_SHOT_PARAMS = frozenset({
-    "full_page", "image_type", "quality", "wait_selector",
-    "timeout", "save_to",
-    # 档位在这扇门上只管"要不要答 Cloudflare 的挑战"那一颗（其余两颗是启动级的，
-    # 跟着机器走）；§4 第 3 行要它，这里给的就是这一截能做事的部分。
-    "anti_detect",
-    # selector = 元素级裁剪（17.0 起常开）；decode_qr = 本地二维码解码
-    # （确定性工作，从来不设门控）。
-    "selector", "decode_qr",
 })
 # 17.0 §4 第 4 行：写操作有自己的门。这三颗今天从 web_read 的公开面上搬走 ——
 # 它们从来不是"读正文的一种玩法"，而是"这件事根本不是读"：不重试、不进缓存、不升
@@ -2462,6 +2473,9 @@ _SHOT_PARAMS = frozenset({
 # 内部管线照旧收这三颗（一次性那条规则住在管线里，不住在工具名上）。
 _REQUEST_PARAMS = frozenset({
     "url", "method", "body", "content_type", "extraction_type", "timeout",
+    # 写操作确认门（G25 评审 Blocker）：confirm 必须是已知名，否则被注入内容
+    # 诱导后的重试会被 dispatch 当表外名拒掉——闸门要在，通往闸门的路也要在。
+    "confirm",
 })
 
 # 17.0 §4 第 2 行：页面动作那颗门。施工图给它留了 7 个名字，这里落 11 个 —— 多出来
@@ -2490,7 +2504,7 @@ _SS_PARAMS = frozenset({
 })
 # The complete set of names each tool accepts at the top level. `url=` and
 # friends that are NOT in *_PARAMS (web_crawl's focus,
-# web_screenshot's session_id, web_search's query) are the required-ish arguments
+# web_act's session_id, web_search's query) are the required-ish arguments
 # the branches read by name, so they join here.
 #
 # A name listed but never read by the dispatcher used to be the quiet half of
@@ -2508,11 +2522,9 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     # argument any more -- `crawl.web_crawl` still takes it internally.
     "web_discover": frozenset({"url", "sitemap", "path_include", "path_exclude",
                                "max_pages", "search", "timeout"}),
-    "web_screenshot": _SHOT_PARAMS | {"url", "session_id"},
     "web_search": _SS_PARAMS | {"query"},
-    "doc_parse": frozenset({"file_path", "cwd", "encoding"}),
+    "doc_parse": frozenset({"file_path", "cwd", "encoding", "offset"}),
     "feed_read": frozenset({"urls", "max_items", "timeout", "since"}),
-    "web_resolve": frozenset({"url", "timeout"}),
     # 17.0 §4：sys_state 是 cache_clear 与 close_session 合上来的一颗。三个参数全都
     # 可选 —— 裸调用是名册，而名册是"要关哪个"之前唯一能问的问题。这张表同时是已知
     # 工具名的全集（`_dispatch` 拒掉表外的名字），所以一个方法可以存在、有文档、
@@ -2520,17 +2532,6 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     "sys_state": frozenset({"show", "clear", "confirm"}),
     # §3-17：落盘的默认身份。三颗参数，裸调用是"现在生效的是什么"。
     "cred_defaults": frozenset({"set", "unset", "show"}),
-    # L3 / L4（计划第九章）：录制回放与监控 diff。17.0 起默认在连接期表里。
-    "web_recipe": frozenset({"op", "name", "url", "actions", "note",
-                         "timeout", "max_content_chars", "focus",
-                         "extraction_type", "session_id"}),
-    "web_watch": frozenset({"op", "name", "url", "focus", "max_chars", "note",
-                        "timeout", "session_id"}),
-    # 凭据来源 + 独立登录流（计划第七章）。17.0 起默认在连接期表里。
-    "cred_vault": frozenset({"op", "query", "url", "source", "limit"}),
-    "cred_login": frozenset({"url", "credential", "source", "session_id",
-                        "username_index", "password_index", "submit_index",
-                        "confirm", "timeout"}),
     # 文档通道。总是注册：它不在两个 opt-in 组里，也不该在 —— 一个需要开关才
     # 能读到的说明书，等于没有说明书。
     "sys_guide": frozenset({"topic", "section"}),
@@ -2538,20 +2539,15 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
 # （17.0：不存在 opt-in 组 —— 上面的注释是给全量注册做的注脚。）
 
 
-# 17.0: 没有 opt-in 组了 —— web_recipe/web_watch/cred_vault/cred_login 全部默认注册（大众化一刀切：
-# pip install 接上宿主，能力全部默认在线；cred_vault/cred_login 的逐次确认闸在工具内部，
-# 注册面不再做许可）。DHOLE_TASKS / DHOLE_VAULT 已注销，运行时静默忽略。
-
-
 # Which tools this server registers and dispatches. Default: ALL of them.
 # DHOLE_TOOLS takes a comma-separated subset ("web_read,web_search") for
 # clients that pay the connect-time table on every conversation even when dhole
-# is never called: measured on the wire, 19,141 chars of tool schemas + 2,141 of
-# instructions = 21,282 on connect (~5.1k tokens at cl100k - chars is the half
-# that reproduces; the usual chars/4 rule of thumb reads 5.3k and chars/3.88
-# reads 5.5k, both high), with web_read alone accounting for
-# 6,508 - fetch+search covers the daily-driver cases at roughly half the cost,
-# and the rest is one env-edit away. A name that is not a real tool RAISES at
+# is never called: measured on the wire (python tests/tool_payload_measure.py),
+# 30,816 chars of tool schemas + 2,636 of instructions = 33,452 on connect
+# (≈8.0k tokens at the measured 4.16 chars/token), with web_read alone
+# accounting for 6,162 - fetch+search covers the daily-driver cases at roughly
+# half the cost, and the rest is one env-edit away. A name that is not a real
+# tool RAISES at
 # import: a typo must never silently drop a capability the operator believes is
 # enabled - that is the same failure class as an ignored unknown argument, one
 # level up. Disabled tools stay in _TOOL_DEFS/_TOP_LEVEL_ARGS (every guard
@@ -2579,6 +2575,31 @@ def _parse_enabled_tools() -> frozenset:
 
 _ENABLED_TOOLS = _parse_enabled_tools()
 
+#: 浏览器档三颗（G6）：预热是否值得付的判据。
+_BROWSER_TOOLS = frozenset({"web_read", "web_act"})
+
+
+def _browser_tier_enabled() -> bool:
+    """DHOLE_TOOLS 裁掉整个浏览器档时，启动预热是纯资源税：浏览器闲置 300s
+    才退、重排模型 ~279MB 常驻，一个用不到它们的进程一分也收不回。凡配置真能
+    用到浏览器档的行为不变（逐次升级照旧）。"""
+    return bool(_ENABLED_TOOLS & _BROWSER_TOOLS)
+
+
+def _cdp_dead_endpoint_note(message: str, arguments: dict) -> str:
+    """G5：宿主重启后旧的 CDP 端点回落成裸 ``ECONNREFUSED``——一个没有出路
+    的错误字符串（对比首挂有 450 字符设计的 ``cdp_authorization_required``
+    回执）。remote debugging 随浏览器进程死，所以唯一出路是**重启 Chrome**：
+    带上 ``--remote-debugging-port``（与当年那份 ``--user-data-dir``）再重新
+    attach。只在异常消息像「端点连不上」且本次调用真带 ``cdp_url`` 时补。"""
+    if (arguments or {}).get("cdp_url") and (
+            "ECONNREFUSED" in message or "Connection refused" in message):
+        return (message + " - that Chrome is not listening: remote debugging "
+                "dies with the browser process. Start Chrome with "
+                "--remote-debugging-port=<port> (plus the same --user-data-dir "
+                "you approved hosts from), then re-call with the same cdp_url")
+    return message
+
 # The instructions actually sent on initialize: the routing section mentions
 # only enabled tools. With the default full set this equals DHOLE_INSTRUCTIONS
 # exactly (a test pins that, so the literal and the parts cannot drift).
@@ -2592,6 +2613,13 @@ _MOVED_TO = {
     "body": "web_request",
     "content_type": "web_request",
     "actions": "web_act",
+    # A1：web_screenshot 并入 web_act 的截图动作 —— 旋钮跟着能力走，进动作对象，
+    # 不再是顶层参数。指路句由 _reject_unknown_args 统一说。
+    "save_to": "web_act",
+    "full_page": "web_act",
+    "image_type": "web_act",
+    "quality": "web_act",
+    "decode_qr": "web_act",
 }
 
 
@@ -2614,7 +2642,7 @@ def _reject_unknown_args(tool: str, args: dict) -> None:
         # 能力"，而真相是"名字换了门"——与 options 袋子同一类谎，同一套说法修。
         raise ValueError(
             f"Unsupported argument(s) for {tool}: {unknown}. "
-            + "; ".join(f"`{k}` moved to the {v} tool in 17.0" for k, v in sorted(moved.items()))
+            + "; ".join(f"`{k}` moved to the {v} tool" for k, v in sorted(moved.items()))
             + " - the capability is still there, the door changed. "
             f"Supported here: {sorted(allowed)}"
         )
@@ -2982,7 +3010,7 @@ class MasterFetchServer:
             # Create outside the sessions lock (expensive — browser launch) but
             # inside the creation lock (no concurrent 2nd launch).
             # 那三颗是这一档在这台浏览器上的落点：两颗启动级的定下它的指纹，
-            # solve_cloudflare 作为会话默认存着 —— web_screenshot 不逐次传它，
+            # solve_cloudflare 作为会话默认存着 —— 捕获动作不逐次传它，
             # 读的就是这一份。
             sid = await self.open_session(headless=True, profile_name=want_profile,
                                           hide_canvas=want_hard["hide_canvas"],
@@ -3191,6 +3219,81 @@ class MasterFetchServer:
                     transport.close()
             except BaseException:
                 pass
+
+    # G1：check 的基线窗口。普通 web_read 默认落 1h 的缓存，拿 1h 当 check 的记忆
+    # 会让「昨天存过、今天来问」退化成重新落基线（changed=null）；7 天让一次 check
+    # 在一周内都有可比对象。基线条目本身仍是普通缓存行，到期自然淘汰，无特殊待遇。
+    _CHECK_BASELINE_TTL = 7 * 24 * 3600
+
+    async def _check_read(self, url: str, *, css_selector: Optional[str],
+                          force_fetcher: Optional[str], tier: dict) -> dict:
+        """extraction_type='check' 的整条答复链（G1，评审 High）。
+
+        「变了吗」与「给我内容」共用同一次抓取内核，但答复形状完全不同：回执只有
+        changed/状态/首个分叉窗口。比较的锚是 dhole 上次以 html 落的缓存行 —— 它的
+        envelope 里带着源站自己的校验子（etag/last_modified），所以「问站方」用的是
+        条件请求：304 是站方亲口说的「没变」，一次几百字节；200 才下载正文并与基线
+        逐字比对。无基线时这次抓取走普通路径正常落缓存，changed=null —— 如实说
+        「现在还没有可比的记忆」，而不是把第一次见面冒充成「没变」。
+        """
+        import hashlib as _hashlib
+        baseline = await get_cached(
+            url, "html", css_selector, ttl=self._CHECK_BASELINE_TTL,
+            ctx=_CACHE_CTX.get())
+        base_tier = dict(
+            extraction_type="html", css_selector=css_selector, offset=0,
+            max_chars=_SCHEMA_SOURCE_MAX_CHARS, **tier)
+        if baseline is None or not baseline.get("content"):
+            result = await self._document_tier(url, tier={
+                **base_tier, "cache_ttl": self._CHECK_BASELINE_TTL},
+                force_fetcher=force_fetcher)
+            return {
+                "url": url, "changed": None, "status": result.status,
+                "fetcher": result.fetcher_used,
+                "note": ("no comparable baseline for this URL (or it expired) - "
+                         "this call fetched and recorded one; ask again with "
+                         "extraction_type='check' to learn whether it changed"),
+                **({"error": result.error} if result.error else {}),
+            }
+        markers = (baseline.get("envelope") or {}).get("cache_validators") or {}
+        conditional, _rejected = _conditional_headers(markers)
+        fresh = await self._document_tier(url, tier={
+            **base_tier, "cache_ttl": 0, "conditional": conditional},
+            force_fetcher=force_fetcher)
+        if fresh.status == 304:
+            return {"url": url, "changed": False, "status": 304,
+                    "fetcher": fresh.fetcher_used,
+                    "note": ("origin answered 304 Not Modified - the page is "
+                             "what dhole last stored, to the byte")}
+        if not (200 <= fresh.status < 400) or not fresh.content:
+            return {"url": url, "changed": None, "status": fresh.status,
+                    "fetcher": fresh.fetcher_used,
+                    "note": ("the fetch did not return comparable content - no "
+                             "changed/unchanged verdict is possible from it"),
+                    **({"error": fresh.error} if fresh.error else {})}
+        old_text = "\n".join(baseline["content"])
+        new_text = "\n".join(fresh.content)
+        if (_hashlib.sha256(old_text.encode()).hexdigest()
+                == _hashlib.sha256(new_text.encode()).hexdigest()):
+            return {"url": url, "changed": False, "status": 200,
+                    "fetcher": fresh.fetcher_used,
+                    "note": ("origin answered 200 and the body matches the "
+                             "baseline byte for byte (validators were ignored "
+                             "or the page is truly unchanged)")}
+        _i = next((k for k in range(min(len(old_text), len(new_text)))
+                   if old_text[k] != new_text[k]),
+                  min(len(old_text), len(new_text)))
+        _lo = max(0, _i - 60)
+        return {
+            "url": url, "changed": True, "status": 200,
+            "fetcher": fresh.fetcher_used,
+            "first_divergence_at": _i,
+            "diff_window": new_text[_lo:_i + 140],
+            "baseline_chars": len(old_text), "fresh_chars": len(new_text),
+            "note": ("diff_window shows the fresh text around the first "
+                     "divergence - refetch with extraction_type='markdown' "
+                     "to read the page"),
+        }
 
     async def _finalize_result(
         self,
@@ -3459,8 +3562,9 @@ class MasterFetchServer:
         if alive:
             return sid
         if entry is not None:
-            # 死会话占着名字：摘掉让 open_session 能重建（cookie jar 在
-            # sessions.db 里、按 sid 键存，重建不丢 jar）。
+            # 死会话占着名字：摘掉让 open_session 能重建（cookie jar 在会话
+            # jar 里、按 sid 键存，默认内存、落盘模式在 sessions.db，重建不丢
+            # jar——同进程内）。
             async with self._sessions_lock:
                 if self._sessions.get(sid) is entry:
                     self._sessions.pop(sid, None)
@@ -3561,749 +3665,7 @@ class MasterFetchServer:
             return dropped, True, was_auto
         return dropped, False, was_auto
 
-    # ─── L3 / L4：录制回放与监控（计划第九章）───────────────────────────
-    #
-    # 两个工具共用 ~/.dhole/tasks.db。
-    # recipe 的动作在**录制时**就过 actions.validate_actions，所以库里不可能
-    # 存在一个执行器会拒绝的配方 —— 存一个永远跑不通的配方比不存更糟，调用方
-    # 会以为"存下来了就是对的"。
-    #
-    # 两者都不存凭据：session_id 每次 run/check 现传（与 sessions.py 的
-    # "值不出境"同纪律）。
-
-    async def web_recipe(
-        self,
-        op: Annotated[str, Field(description="save = record a {url, actions} pair; run = replay it; list = show every stored recipe; delete = forget one.")],
-        name: Annotated[Optional[str], Field(description="Recipe name (1-64 chars). Required for save / run / delete.")] = None,
-        url: Annotated[Optional[str], Field(description="op=save: the URL to replay.")] = None,
-        actions: Annotated[Optional[List[Dict[str, Any]]], Field(description="op=save: the action chain, the same chain web_act takes. Validated now by the same validator the executor uses, so a chain that would be refused at run time cannot be stored.")] = None,
-        note: Annotated[str, Field(description="op=save: what this recipe is for (max 500 chars).")] = "",
-        timeout: Annotated[Optional[int], Field(description="op=run: whole-call budget in ms (default 60000 with actions).")] = None,
-        max_content_chars: Annotated[Optional[int], Field(description="op=run: cap the returned content chars (default 40000).")] = None,
-        focus: Annotated[Optional[str], Field(description="op=run: query-focused extraction over the replayed page. The recipe stores the how, not the question, so this is per-run.")] = None,
-        extraction_type: Annotated[Optional[str], Field(description="op=run: markdown (default) | html | text | article | structured.")] = None,
-        session_id: Annotated[Optional[str], Field(description="op=run: reuse cookies under this name. Deliberately not stored in the recipe.")] = None,
-    ) -> RecipeModel:
-        """Record / replay a stored (url, actions) pair. See the tool description."""
-        # 17.0 §3-17: the private-host gate is cred_defaults' business now — a
-        # local dev service stops needing allow_private= on every call.
-        allow_private = identity.get("allow_private")
-        from dhole_mcp import tasks
-
-        o = (op or "").strip().lower()
-        if o not in ("save", "run", "list", "delete"):
-            return RecipeModel(
-                op=o or "?",
-                error=f"unknown op {op!r}",
-                next_action=("Pass op='save' (name+url+actions), 'run' (name), "
-                             "'list' (no other argument) or 'delete' (name)."),
-            )
-
-        if o == "list":
-            rows = tasks.list_recipes()
-            return RecipeModel(
-                op=o,
-                message=(f"{len(rows)} web_recipe(s) stored." if rows
-                         else "No recipes are stored."),
-                recipes=rows,
-                next_action=("web_recipe(op='run', name='<name>') replays one."
-                             if rows else
-                             "web_recipe(op='save', name=..., url=..., actions=[...]) "
-                             "records one."),
-            )
-
-        nm = (name or "").strip()
-        if not nm:
-            return RecipeModel(
-                op=o, error="name is required for this op.",
-                next_action=("Pass name='<recipe name>'. "
-                             + ("web_recipe(op='list') shows what exists."
-                                if o in ("run", "delete") else
-                                "Pick any short name you will remember.")),
-            )
-
-        if o == "save":
-            try:
-                saved = tasks.save_recipe(nm, url, actions, note)
-            except ValueError as e:
-                # Record-time refusal, not a run-time surprise: the message is
-                # the validator's own, which names the offending action.
-                return RecipeModel(
-                    op=o, name=nm, error=str(e),
-                    next_action=("Nothing was stored. Fix the chain and save again - "
-                                 "`actions` is the same list web_read takes."),
-                )
-            return RecipeModel(
-                op=o, name=saved["name"], url=saved["url"], recipe=saved,
-                message=(f"Recipe '{saved['name']}' "
-                         + ("updated" if saved["updated"] else "saved")
-                         + f" ({saved['actions']} actions)."),
-                next_action=(f"web_recipe(op='run', name='{saved['name']}') replays it."),
-            )
-
-        if o == "delete":
-            gone = tasks.delete_recipe(nm)
-            names = [r["name"] for r in tasks.list_recipes()]
-            return RecipeModel(
-                op=o, name=nm,
-                message=(f"Recipe '{nm}' forgotten." if gone
-                         else f"No recipe named '{nm}' - nothing was deleted."),
-                next_action=("" if gone else
-                             ("Stored: " + ", ".join(names) + "." if names
-                              else "No recipes are stored.")),
-            )
-
-        # op == "run"
-        rec = tasks.get_recipe(nm)
-        if rec is None:
-            names = [r["name"] for r in tasks.list_recipes()]
-            return RecipeModel(
-                op=o, name=nm,
-                error=f"No recipe named '{nm}'.",
-                next_action=("Nothing was run. Stored: " + ", ".join(names) + "."
-                             if names else
-                             "Nothing was run - no recipes are stored. Record one "
-                             "with web_recipe(op='save', ...)."),
-            )
-
-        kw: dict = {}
-        if timeout is not None:
-            kw["timeout"] = timeout
-        if max_content_chars is not None:
-            kw["max_content_chars"] = max_content_chars
-        if focus:
-            kw["focus"] = focus
-        if extraction_type:
-            kw["extraction_type"] = extraction_type
-        if session_id:
-            kw["session_id"] = session_id
-        if allow_private is not None:
-            kw["allow_private"] = allow_private
-
-        result = await self.web_read(url=rec["url"], actions=rec["actions"], **kw)
-        outcomes = list((result.metadata or {}).get("actions") or [])
-        failed = [row for row in outcomes if not row.get("ok")]
-
-        # 记账：一次重放的结果决定这条配方下次还值不值得信。写统计是尽力而为，
-        # 绝不因为它失败把一次成功的抓取变成失败的调用。
-        tasks.note_use(rec["name"], ok=(not failed and bool(result.content_ok)),
-                       error=result.error)
-
-        if failed:
-            nxt = (f"{len(failed)} of {len(outcomes)} action(s) failed - the page "
-                   "changed under this recipe. Re-record it with web_recipe(op='save', "
-                   "name='" + rec["name"] + "', ...) after re-checking the page.")
-        elif not result.content_ok:
-            nxt = result.next_action or "The replay ran but returned no usable content."
-        else:
-            nxt = ""
-        return RecipeModel(
-            op=o, name=rec["name"], url=rec["url"], result=result,
-            outcomes=outcomes, actions_failed=len(failed),
-            message=(f"Replayed '{rec['name']}' ({len(outcomes)} actions"
-                     + (f", {len(failed)} failed" if failed else "")
-                     + f"): {result.summary or ''}").strip(),
-            next_action=nxt,
-        )
-
-    async def web_watch(
-        self,
-        op: Annotated[str, Field(description="add = start monitoring a URL; check = fetch it fresh and diff against the last snapshot; list = show every watch; remove = stop.")],
-        name: Annotated[Optional[str], Field(description="Watch name (1-64 chars). Required for add / check / remove.")] = None,
-        url: Annotated[Optional[str], Field(description="op=add: the URL to monitor.")] = None,
-        focus: Annotated[Optional[str], Field(description="op=add: diff only the blocks relevant to this query. The right setting for a long page whose chrome (timestamps, ads, counters) changes on every load - without it every check reports a change.")] = None,
-        max_chars: Annotated[Optional[int], Field(description="op=add: cap the stored snapshot (default 200000). Past the cap the snapshot is cut and the watch says so.")] = 0,
-        note: Annotated[str, Field(description="op=add: what you are watching for (max 500 chars).")] = "",
-        timeout: Annotated[Optional[int], Field(description="op=check: whole-call budget in ms.")] = None,
-        session_id: Annotated[Optional[str], Field(description="op=check: reuse cookies under this name (a watch behind a login). Deliberately not stored.")] = None,
-    ) -> WatchModel:
-        """Start / check / list / stop a monitored URL. See the tool description."""
-        # 17.0 §3-17: the private-host gate is cred_defaults' business now — a
-        # local dev service stops needing allow_private= on every call.
-        allow_private = identity.get("allow_private")
-        from dhole_mcp import tasks
-
-        o = (op or "").strip().lower()
-        if o not in ("add", "check", "list", "remove"):
-            return WatchModel(
-                op=o or "?",
-                error=f"unknown op {op!r}",
-                next_action=("Pass op='add' (name+url), 'check' (name), "
-                             "'list' (no other argument) or 'remove' (name)."),
-            )
-
-        if o == "list":
-            rows = tasks.list_watches()
-            return WatchModel(
-                op=o,
-                message=(f"{len(rows)} watches stored." if rows
-                         else "No watches are stored."),
-                watches=rows,
-                next_action=("web_watch(op='check', name='<name>') fetches and diffs one."
-                             if rows else
-                             "web_watch(op='add', name=..., url=...) starts one."),
-            )
-
-        nm = (name or "").strip()
-        if not nm:
-            return WatchModel(
-                op=o, error="name is required for this op.",
-                next_action=("Pass name='<watch name>'. "
-                             + ("web_watch(op='list') shows what exists."
-                                if o in ("check", "remove") else
-                                "Pick any short name you will remember.")),
-            )
-
-        if o == "add":
-            try:
-                saved = tasks.save_watch(nm, url, focus or "",
-                                         max_chars or 0, note)
-            except ValueError as e:
-                return WatchModel(op=o, name=nm, error=str(e),
-                                  next_action="Nothing was stored. Fix the argument "
-                                              "and add again.")
-            msg = (f"Watch '{saved['name']}' "
-                   + ("updated" if saved["updated"] else "added")
-                   + f" on {saved['url']}.")
-            if saved["updated"] and not saved["baseline_kept"]:
-                msg += (" The target changed, so the old baseline was dropped - "
-                        "the next check creates a new one.")
-            return WatchModel(
-                op=o, name=saved["name"], url=saved["url"],
-                baseline_created=bool(saved["baseline_kept"]),
-                message=msg,
-                next_action=(f"web_watch(op='check', name='{saved['name']}') takes the "
-                             "first snapshot."),
-            )
-
-        if o == "remove":
-            gone = tasks.delete_watch(nm)
-            return WatchModel(
-                op=o, name=nm,
-                message=(f"Watch '{nm}' removed." if gone
-                         else f"No watch named '{nm}' - nothing was removed."),
-                next_action="" if gone else "web_watch(op='list') shows what exists.",
-            )
-
-        # op == "check"
-        w = tasks.get_watch(nm)
-        if w is None:
-            names = [r["name"] for r in tasks.list_watches()]
-            return WatchModel(
-                op=o, name=nm, error=f"No watch named '{nm}'.",
-                next_action=("Nothing was checked. Stored: " + ", ".join(names) + "."
-                             if names else
-                             "Nothing was checked - no watches are stored. Start one "
-                             "with web_watch(op='add', ...)."),
-            )
-
-        kw: dict = {"cache_ttl": 0}          # a monitor that reads its own cache
-        if timeout is not None:              # is not monitoring anything
-            kw["timeout"] = timeout
-        if w["focus"]:
-            kw["focus"] = w["focus"]
-        if session_id:
-            kw["session_id"] = session_id
-        if allow_private is not None:
-            kw["allow_private"] = allow_private
-
-        # 17.0 §6：条件请求从 agent 能传的参数变成监控自己的常规。基线那一行存着
-        # 源站给过的版本标记（etag / last-modified），下一次检查先问"变了吗"：
-        # 没变就一个字节正文都不搬。第一次没有基线可对应，所以那一趟照常整页读。
-        _rv = {"etag": w["etag"], "last_modified": w["last_modified"]}
-        if not (w["baseline"] and (_rv["etag"] or _rv["last_modified"])):
-            _rv = None
-        _rv_tok = _REVALIDATE.set(_rv)
-        try:
-            result = await self.web_read(url=w["url"], **kw)
-        finally:
-            _REVALIDATE.reset(_rv_tok)
-
-        if _rv and result.status == 304:
-            # 源站答"没变"。基线**不动**：它描述的正是当前版本，把 checked_at 之外
-            # 的东西重写一遍等于假装看过新内容。changed=false 是回答，不是没检查。
-            tasks.note_check(nm, changed=False)
-            return WatchModel(
-                op=o, name=nm, url=w["url"], result=result,
-                changed=False, baseline_at=_iso_from_ts(w["baseline_at"]),
-                message=(f"'{nm}' is unchanged: the origin answered 304, so no "
-                         "body was transferred."),
-                next_action=("The stored baseline is still the current version. "
-                             "Revalidation is automatic on every check - there is "
-                             "nothing to pass back."),
-            )
-
-        if not result.content_ok:
-            # 失败的抓取**不动基线**：把一次网络故障写成"页面清空了"，是让
-            # 监控自己造出一个假变化。
-            tasks.note_check(nm, changed=None, error=result.error or "no content")
-            return WatchModel(
-                op=o, name=nm, url=w["url"], result=result,
-                error=result.error or "the fetch returned no usable content",
-                next_action=("The baseline was left untouched, so the next check still "
-                             "compares against the last good snapshot."
-                             + (" " + result.next_action if result.next_action else "")),
-            )
-
-        text = "\n".join(result.content or [])
-        # 这一版正文对应哪一版本标记：与基线同写一次，下一次检查带出去问"变了吗"。
-        _v = result._validators or {}
-        cut = len(text) > (w["max_chars"] or tasks.MAX_SNAPSHOT_CHARS)
-        text = text[: (w["max_chars"] or tasks.MAX_SNAPSHOT_CHARS)]
-
-        if not w["baseline"]:
-            tasks.set_baseline(nm, text, cut=cut,
-                               etag=str(_v.get("etag") or ""),
-                               last_modified=str(_v.get("last_modified") or ""))
-            tasks.note_check(nm, changed=None)
-            return WatchModel(
-                op=o, name=nm, url=w["url"], result=result,
-                changed=None, baseline_created=True, baseline_cut=cut,
-                message=f"Baseline for '{nm}' created ({len(text):,} chars).",
-                next_action=("Nothing to compare against yet - changed is null on "
-                             "purpose, because no baseline is not the same as no "
-                             "change. Check again later."),
-            )
-
-        d = tasks.diff_text(w["baseline"], text)
-        changed = bool(d["added"] or d["removed"])
-        tasks.set_baseline(nm, text, cut=cut,
-                           etag=str(_v.get("etag") or ""),
-                           last_modified=str(_v.get("last_modified") or ""))
-        tasks.note_check(nm, changed=changed)
-        return WatchModel(
-            op=o, name=nm, url=w["url"], result=result,
-            changed=changed, baseline_at=_iso_from_ts(w["baseline_at"]),
-            baseline_cut=cut, **d,
-            message=(f"'{nm}' changed: +{d['added']} / -{d['removed']} lines."
-                     if changed else f"'{nm}' is unchanged."),
-            next_action=("" if changed else
-                         "Nothing moved since the last check. The baseline was "
-                         "refreshed either way."),
-        )
-
-    # ─── Vault / login（计划第七章） ──────────────────────────────────
-
-    async def cred_vault(
-        self,
-        op: Annotated[str, Field(description="status = which manager is installed and unlocked; list = item metadata; match = the items whose stored URI is a given URL's host.")],
-        query: Annotated[Optional[str], Field(description="op=list: substring filter on the item name.")] = None,
-        url: Annotated[Optional[str], Field(description="op=match: the URL to find credentials for.")] = None,
-        source: Annotated[str, Field(description="Which manager to read: auto (default) | bitwarden | onepassword.")] = "auto",
-        limit: Annotated[Optional[int], Field(description="op=list: cap on returned items (default 300).")] = None,
-    ) -> VaultModel:
-        """Read credential metadata from the user's password manager. See the tool description."""
-        from dhole_mcp import vault as vault_mod
-
-        o = (op or "").strip().lower()
-
-        if o == "status":
-            rows = vault_mod.status(source)
-            ready = [r for r in rows if r.get("available") and r.get("unlocked")]
-            hints = "; ".join(r["hint"] for r in rows if r.get("hint"))
-            return VaultModel(
-                op=o, sources=rows,
-                message=(f"{len(ready)} credential manager(s) ready."
-                         if ready else
-                         "No unlocked credential manager is available."),
-                next_action=("cred_vault(op='match', url=...) finds a credential for a "
-                             "site." if ready else
-                             hints or "Install the Bitwarden CLI (bw) or the "
-                                      "1Password CLI (op), then unlock it."),
-            )
-
-        if o == "list":
-            got = vault_mod.list_items(query or "", source,
-                                       limit or vault_mod.MAX_ITEMS)
-            n = got["total"]
-            return VaultModel(
-                op=o, items=got["items"], total=n, truncated=got["truncated"],
-                notes=got["notes"],
-                message=((f"{n} credential(s)" + (" (truncated)" if got["truncated"]
-                                                  else "") + ".") if n
-                         else "No credentials matched."),
-                next_action=("cred_login(url=..., credential='<name>') signs in with one."
-                             if got["items"] else
-                             ("cred_vault(op='status') says what is missing."
-                              if got["notes"] else "Nothing matched that query.")),
-            )
-
-        if o == "match":
-            if not (url or "").strip():
-                return VaultModel(
-                    op=o, error="op=match needs url.",
-                    next_action="Pass url='https://the-site.example' - it matches "
-                                "on host.",
-                )
-            got = vault_mod.match_for_url(url, source)
-            return VaultModel(
-                op=o, host=got["host"], items=got["items"], total=got["total"],
-                notes=got["notes"],
-                message=(f"{got['total']} credential(s) for {got['host']}."
-                         if got["items"] else
-                         f"No stored credential is registered for {got['host']}."),
-                next_action=("cred_login(url=..., credential='<name>', "
-                             "session_id='<name>') signs in with one."
-                             if got["items"] else
-                             "cred_vault(op='list') shows everything the manager holds."),
-            )
-
-        return VaultModel(
-            op=o or "?", error=f"unknown op {op!r}",
-            next_action="Pass op='status', 'list' or 'match'.",
-        )
-
-    async def cred_login(
-        self,
-        url: Annotated[str, Field(description="The login page to sign in to.")],
-        credential: Annotated[str, Field(description="Vault item name or id to read the username/password from. Never the password itself.")],
-        source: Annotated[str, Field(description="Which manager to read: auto (default) | bitwarden | onepassword.")] = "auto",
-        session_id: Annotated[Optional[str], Field(description="Where the resulting cookies are kept; reuse it in later fetches. Required once you confirm - a login with nowhere to keep its cookies would land them in the shared browser.")] = None,
-        username_index: Annotated[Optional[int], Field(description="Skip detection: the username field's snapshot index (from a {\"snapshot\": true} fetch you already did).")] = None,
-        password_index: Annotated[Optional[int], Field(description="Skip detection: the password field's snapshot index. Supplying this skips the detection pass entirely.")] = None,
-        submit_index: Annotated[Optional[int], Field(description="Skip detection: the submit control's snapshot index. Omit it to press Enter in the password box instead.")] = None,
-        confirm: Annotated[bool, Field(description="false (default) = detect the form and return the plan without filling anything. true = fill and submit, after the user approved.")] = False,
-        timeout: Annotated[Optional[int], Field(description="Whole-call budget in ms.")] = None,
-    ) -> LoginModel:
-        """Sign in with a vault credential. See the tool description."""
-        # 17.0 §3-17: the private-host gate is cred_defaults' business now — a
-        # local dev service stops needing allow_private= on every call.
-        allow_private = identity.get("allow_private")
-        from dhole_mcp import login as login_mod
-        from dhole_mcp import vault as vault_mod
-
-        page = (url or "").strip()
-        if not page:
-            return LoginModel(error="url is required.",
-                              next_action="Pass the login page's URL.")
-        cred = (credential or "").strip()
-        if not cred:
-            return LoginModel(
-                url=page, error="credential is required.",
-                next_action="Pass the vault item's name - cred_vault(op='match', "
-                            "url=...) lists the candidates.",
-            )
-        sid = (session_id or "").strip()
-        if confirm and not sid:
-            # 共享 auto 会话不能承接登录态：那是所有调用共用的浏览器，把一个人的
-            # cookie 灌进去等于把登录态借给下一个匿名请求（计划第七章的既有红线
-            # "共享 auto 会话与 attach 永不桥"）。所以确认执行时必须点名会话。
-            return LoginModel(
-                url=page, credential=cred, error="confirm=true needs session_id.",
-                next_action="Name a session_id - it is where the cookies are kept "
-                            "and what later fetches pass to reuse them. Without "
-                            "one the login would land in the shared browser, "
-                            "which every other call also uses.",
-            )
-
-        # 1) 凭据。先取 —— 取不到就别开浏览器了。值只在第 4 步构造动作链时用一次。
-        secret = vault_mod.secret_for(cred, source)
-        if secret.get("error"):
-            return LoginModel(
-                url=page, credential=cred, error=secret["error"],
-                next_action="cred_vault(op='status') says what is missing; "
-                            "cred_vault(op='match', url=...) lists candidates.",
-            )
-        item = secret.get("item") or cred
-        src = secret.get("source", "")
-        uname = secret.get("username") or ""
-        password = secret.get("password") or ""
-
-        kw: dict = {}
-        if timeout is not None:
-            kw["timeout"] = timeout
-        if allow_private is not None:
-            kw["allow_private"] = allow_private
-        if sid:
-            kw["session_id"] = sid
-
-        # 2) 认表单。按 type=password 认，不按页面文案猜 —— 前者是事实，后者是
-        #    一句话。快照是只读的，不碰凭据。
-        if password_index is not None:
-            fields = {
-                "found": True, "reason": "",
-                "password": {"index": int(password_index), "name": ""},
-                "username": ({"index": int(username_index), "name": ""}
-                             if username_index is not None else None),
-                "submit": ({"index": int(submit_index), "name": ""}
-                           if submit_index is not None else None),
-                "submit_kind": "element" if submit_index is not None else "enter",
-            }
-            probe = None
-        else:
-            try:
-                probe = await self.web_read(url=page,
-                                               actions=[{"snapshot": True}],
-                                               extraction_type="text", **kw)
-            except Exception as e:
-                return LoginModel(
-                    url=page, credential=item, credential_source=src,
-                    error=f"could not open {page}: {type(e).__name__}: "
-                          f"{str(e)[:160]}",
-                    next_action="Check the URL, or pass username_index / "
-                                "password_index / submit_index from a snapshot "
-                                "you take yourself.",
-                )
-            rows: list = []
-            for row in (probe.metadata or {}).get("actions") or []:
-                rows.extend(row.get("elements") or [])
-            fields = login_mod.find_fields(rows)
-            if not fields["found"]:
-                return LoginModel(
-                    url=page, credential=item, credential_source=src,
-                    result=probe, error=fields["reason"],
-                    next_action="Fetch the page with a {\"snapshot\": true} action "
-                                "to see its interactive elements yourself, then "
-                                "pass username_index / password_index / "
-                                "submit_index - or the page may not be a login "
-                                "form at all.",
-                )
-
-        shown = {k: fields[k] for k in ("username", "password", "submit")
-                 if fields.get(k)}
-        if fields.get("submit_kind"):
-            shown["submit_kind"] = fields["submit_kind"]
-        plan = login_mod.describe_plan(fields, page, item)
-
-        # 3) 审批闸：没有 confirm 就到此为止，一个字节都不填。填也是不可逆的
-        #    （页面上的输入事件能把值发出去），所以它和提交一起等在闸后。
-        if not confirm:
-            return LoginModel(
-                url=page, credential=item, credential_source=src, session_id=sid,
-                pending_approval=True, plan=plan, fields=shown,
-                message=f"Login plan for {page} is ready - nothing was filled.",
-                next_action="Describe this sign-in to the user and ask them to "
-                            "approve it. On a yes, re-run with confirm=true"
-                            + (f" and session_id='{sid}'." if sid else
-                               " and a session_id so the cookies have somewhere "
-                               "to live."),
-            )
-
-        # 4) 执行。动作链带明文密码，但它的每个出口都只记 action_label（记目标
-        #    不记文本）—— 见 login.py 的模块注释与 actions.py 的失败日志。
-        actions = login_mod.build_actions(fields, uname, password, confirm=True)
-        result = await self.web_read(url=page, actions=actions,
-                                        check_login=True, **kw)
-        outcomes = list((result.metadata or {}).get("actions") or [])
-        filled = sum(1 for o in outcomes
-                     if str(o.get("action", "")).startswith("fill") and o.get("ok"))
-        submitted = any(o.get("submitted") for o in outcomes)
-        failed = [o for o in outcomes if not o.get("ok")]
-
-        lc = result.login_check if isinstance(result.login_check, dict) else {}
-        logged_in = lc.get("logged_in")
-        cookie_names = [str(n) for n in (lc.get("cookie_names") or [])]
-        if not cookie_names and sid:
-            try:
-                from dhole_mcp import sessions
-                cookie_names = sessions.names_for(sid, page)
-            except Exception:
-                cookie_names = []
-
-        # 分支顺序是有意的：**成功判定优先**，其次是"有动作没跑成"，最后才是
-        # 探针答不了。一次登录里用户名框可能本来就是预填的（fill 失败）而密码
-        # 填上了、提交也成功 —— 那是一次成功的登录，不该被一条失败的动作盖掉；
-        # 反过来，没成功时失败的动作必须说出来，而不是被"探针答不了"淹没。
-        if logged_in is True:
-            nxt = ""
-        elif failed:
-            nxt = ("these actions did not run: "
-                   + "; ".join(f"{o['action']}: {str(o.get('error', ''))[:120]}"
-                               for o in failed)
-                   + ". Re-run without confirm to re-detect the fields - the page "
-                     "may have changed since the snapshot.")
-        elif logged_in is False:
-            nxt = ("the form was submitted but the page still reads as logged "
-                   "out - the stored credential may be wrong, or the site needs a "
-                   "CAPTCHA / 2FA. Do not retry blindly: fetch the page and look, "
-                   "or hand it back to the user.")
-        elif submitted:
-            nxt = ("the form was submitted but the login probe could not answer "
-                   "(it needs the browser tier and a settled page). Verify with "
-                   "web_read(url=<a page behind the login>, check_login=true).")
-        else:
-            nxt = "Nothing was submitted. Re-run without confirm to re-detect."
-
-        if submitted and logged_in is True:
-            msg = f"Signed in to {page} with vault credential '{item}'."
-        elif submitted:
-            msg = (f"Submitted the login form on {page}; the login probe says "
-                   f"{logged_in!r}.")
-        else:
-            msg = f"Filled {filled} field(s) on {page} but nothing was submitted."
-
-        return LoginModel(
-            op="login", message=msg, url=page, credential=item,
-            credential_source=src, session_id=sid, fields=shown,
-            filled=filled, submitted=submitted, logged_in=logged_in,
-            signals=[str(s) for s in (lc.get("signals") or [])],
-            cookie_names=cookie_names, result=result, next_action=nxt,
-        )
-
     # ─── Screenshot ───────────────────────────────────────────────
-
-    async def web_screenshot(
-        self,
-        url: str,
-        session_id: Optional[str] = None,
-        image_type: ScreenshotType = "png",
-        full_page: bool = False,
-        quality: Optional[int] = None,
-        wait_selector: Optional[str] = None,
-        wait_selector_state: SelectorWaitStates = "attached",
-        timeout: int | float = 30000,
-        save_to: Optional[str] = None,
-        selector: Optional[str] = None,
-        decode_qr: bool = False,
-        anti_detect: Optional[str] = None,
-    ) -> List[ImageContent | TextContent]:
-        """        Capture a screenshot of a web page.
-
-        Session handling: if session_id is omitted, a stealthy browser session
-        is auto-managed and reused across calls, so only the first screenshot
-        pays the browser cold start. Pass session_id only to reuse a specific
-        open session.
-
-        Capture knobs (image_type / full_page / quality / wait_selector / timeout
-        / save_to / anti_detect) are top-level args of this tool.
-        This docstring once listed them as :param: entries while they lived in
-        the options bag, and was wrong the moment they moved either way.
-
-        save_to writes the bytes to that path and reports the absolute path in
-        the text part, which is the only form a text-only client can use.
-
-        `selector` (multimodal flag) crops the capture to one element;
-        `decode_qr` decodes QR payloads from the capture over the text channel
-        (deterministic local decoding - no flag, no model).
-
-        ``allow_private`` (G35) is web_read's option, same semantics: without
-        it a loopback / private URL is refused before the browser starts, so
-        "screenshot my own dev server" used to be impossible while "fetch my own
-        dev server" worked.
-
-        NOTE: clients never receive this docstring. The authoritative
-        agent-facing contract is the "description" in _TOOL_DEFS.
-        """
-        # 17.0 §3-17: the private-host gate is cred_defaults' business now —
-        # "screenshot my own dev server" stops needing an argument each time.
-        allow_private = identity.get("allow_private")
-        # G35: same option, same guard as web_read.
-        with allow_private_scope(allow_private):
-            url = validate_url(url)
-        validate_css_selector(wait_selector)
-        # Resolved up front: a bad save_to must cost an instant refusal, not a
-        # browser cold start and then nothing on disk.
-        shot_target = _resolve_save_to(save_to, image_type) if save_to else None
-
-        if selector:
-            validate_css_selector(selector)
-            if full_page:
-                raise ValueError(
-                    "'full_page' cannot combine with 'selector' - an element "
-                    "crop is already bounded by the element's own box")
-
-        if not _browser_deps_available():
-            raise RuntimeError(
-                f"Screenshot requires browser deps which are unavailable: "
-                f"{_browser_import_error or 'patchright not importable'}. "
-                + _install.browser_install_advice()
-            )
-
-        if quality is not None and image_type != "jpeg":
-            raise ValueError("'quality' is only valid when 'image_type' is 'jpeg'.")
-
-        # Auto-manage a stealthy session when none is provided (mirrors web_read).
-        if session_id:
-            ssid = session_id
-        else:
-            ssid = await self._ensure_auto_session()
-        entry = await self._get_session(ssid, expected_type=None)
-        screenshot_kwargs: Dict[str, Any] = {"type": image_type, "full_page": full_page}
-        if quality is not None:
-            screenshot_kwargs["quality"] = quality
-
-        captured: Dict[str, Any] = {}
-
-        async def _capture(page: Any) -> None:
-            try:
-                if selector:
-                    # Element crop: locator.screenshot() has no full_page
-                    # (bounded by the element's own box), so drop it.
-                    shot_kwargs = {k: v for k, v in screenshot_kwargs.items()
-                                   if k != "full_page"}
-                    loc = await _locator_or_raise(page, selector)
-                    captured["bytes"] = await loc.first.screenshot(**shot_kwargs)
-                else:
-                    captured["bytes"] = await page.screenshot(**screenshot_kwargs)
-                captured["url"] = page.url
-            except Exception as exc:
-                captured["error"] = exc
-
-        # The scope has to be open for the NAVIGATION too, not just validate_url:
-        # a loopback page's own subresources (the QR / CAPTCHA <img>) are judged
-        # by the browser route handler, which reads this same contextvar. Scoping
-        # only the entry check would load the page and then block its image.
-        # 一张图要付的三件事里，只有 Cloudflare 那一颗是这一层能逐次决定的：画布噪声与
-        # WebRTC 屏蔽在那台浏览器起来的时候就定了（§3-19 的档位里有它们，但它们跟着
-        # 机器走 —— cred_defaults 存的那一档）。缺席时不许替调用方填 "auto"：那会让
-        # 落盘的那一档在这扇门上永远读不到。
-        _rung = (_coerce_anti_detect_arg(anti_detect) if anti_detect
-                 else (identity.get("anti_detect") or "auto"))
-        _challenge = _anti_detect(_rung)["solve_cloudflare"]
-
-        with allow_private_scope(allow_private):
-            await entry.session.fetch(
-                url, timeout=timeout,
-                wait_selector=wait_selector, wait_selector_state=wait_selector_state,
-                solve_cloudflare=_challenge,
-                page_action=_capture,
-            )
-
-        if "error" in captured:
-            exc = captured["error"]
-            logger.debug("screenshot capture failed for %s: %r", url, exc)
-            raise RuntimeError(f"Screenshot failed - {_screenshot_error_message(exc)}")
-        if "bytes" not in captured:
-            raise RuntimeError(f"Failed to capture screenshot for {url}")
-
-        import base64
-        from mcp.types import ImageContent, TextContent
-        image = ImageContent(
-            type="image",
-            data=base64.b64encode(captured["bytes"]).decode(),
-            mime_type=f"image/{image_type.lower()}",
-        )
-        text = captured["url"]
-        if selector:
-            text += f"\nelement crop: {selector}"
-        if decode_qr:
-            # Deterministic local decoding (opencv, an [all] extra): a QR
-            # payload travels as text, so an agent reads a login QR / check-in
-            # URL without ever seeing pixels.
-            try:
-                from dhole_mcp.qr import decode_qr_bytes
-                found = decode_qr_bytes(captured["bytes"])
-            except ImportError as e:
-                raise RuntimeError(str(e)) from None
-            except ValueError as e:
-                # The capture itself is fine and still rides the content list;
-                # undecodable bytes (or an oversized frame) are a note, not a
-                # reason to throw away a successful screenshot.
-                found = None
-                text += f"\ndecode_qr: unavailable on this capture ({str(e)[:120]})"
-            else:
-                if found:
-                    text += "\ndecode_qr:\n" + "\n".join(f"- {p}" for p in found)
-                else:
-                    text += "\ndecode_qr: no QR code found in the capture"
-        if shot_target is not None:
-            saved = _write_screenshot(captured["bytes"], shot_target)
-            # The path line is the part a text-only client can act on, so it goes
-            # in the text block rather than only in a log: that model cannot see
-            # the image at all, and "where is it" is its whole question.
-            text += (f"\nsaved: {saved} "
-                     f"({len(captured['bytes'])} bytes, {image_type.lower()})")
-        return [image, TextContent(type="text", text=text)]
 
     # ─── HTTP Fetcher (curl_cffi) ─────────────────────────────────
 
@@ -4451,13 +3813,22 @@ class MasterFetchServer:
             for u in urls:
                 _audit_event("write", channel="http", method=_verb,
                              url=u[:200], session_id=_SESSION_ID.get() or "")
+        # `timeout` here is this tier's own unit — seconds per attempt — and the cap
+        # is 30 no matter what the call was budgeted. A document fetch that was given
+        # the whole 120s (`_http_tier_budget`, document=True) therefore used a quarter
+        # of it and said nothing; the wire says "max 120000", so the gap has to be
+        # named in the response rather than left for the caller to time.
+        _per_attempt_s = max(1, min(int(timeout), 30))
+        if _per_attempt_s != int(timeout):
+            _note_text(f"timeout clamped {int(timeout)}->{_per_attempt_s} s per "
+                       "attempt (this tier caps one attempt at 30s)")
         async with HTTPSession(
             impersonate=impersonate or "chrome",
             proxy=http_proxy,
             stealthy_headers=stealthy_headers,
             retries=retries,
             retry_delay=retry_delay,
-            timeout=max(1, min(int(timeout), 30)),
+            timeout=_per_attempt_s,
         ) as session:
             timed_tasks = [
                 _timed(session.get(
@@ -4466,7 +3837,7 @@ class MasterFetchServer:
                     method=_METHOD.get(), body=_BODY.get(),
                     content_type=_CONTENT_TYPE.get(),
                     credential_headers=credential_names,
-                    timeout=max(1, min(int(timeout), 30)), retries=retries,
+                    timeout=_per_attempt_s, retries=retries,
                     proxy=http_proxy, follow_redirects=follow_redirects,
                     max_redirects=max_redirects, params=params,
                 ))
@@ -4775,6 +4146,7 @@ class MasterFetchServer:
         content_type: Annotated[Optional[str], Field(description="Content-Type for body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json.")] = None,
         extraction_type: Annotated[Optional[Literal["markdown", "html", "text", "article", "structured"]], Field(description="How the answer is read back: markdown (default), html, text, article or structured. A server that answers a write with JSON still gets that JSON extracted.")] = None,
         timeout: Annotated[Optional[int | float], Field(description="Whole-call budget in milliseconds (default 30000, max 120000). A write gets this budget once: it is never retried, so nothing shares it.")] = None,
+        confirm: Annotated[Optional[bool], Field(description="Required true for POST / PUT / PATCH / DELETE - a write acts only on the user's explicit yes, and stored credentials for the host ride along automatically. HEAD is a probe and needs none.")] = None,
     ) -> ResponseModel:
         """Send one NON-GET request and read back what the server answered.
 
@@ -4786,6 +4158,11 @@ class MasterFetchServer:
         past day). Those four rules are this tool's whole definition, and keeping
         them in a `method=` branch of web_read made them a special case of reading
         rather than the thing they are.
+
+        A write also sits behind the same gate as web_act's submit: without
+        confirm=true nothing is sent. The threat model is indirect injection -
+        page text the agent read earlier must never be able to spend the user's
+        stored credentials with no human in the loop.
 
         Credentials are NOT a parameter here either (17.0 §3-17): `cred_defaults`
         stores auth / cookies per host, and a write to that host carries them -
@@ -4818,6 +4195,17 @@ class MasterFetchServer:
                 next_action=("Call web_read(url=...) for a GET: it is the door with the "
                              "cache, the anti-bot escalation ladder and the archive "
                              "fallback. Nothing was sent."))
+        if verb in _FETCH_METHODS - {"GET", "HEAD"} and not confirm:
+            # 写操作确认门（G25 评审 Blocker）：submit 有闸、sys_state 清会话有闸、
+            # CDP 首挂有闸，唯独这扇门没有——而被注入的页面正文恰恰能诱导 agent
+            # 直发已认证写请求（cred_defaults 存的凭据按主机自动随行）。与 submit
+            # 同一语义：没有用户点过头，一个请求都不出。
+            return _invalid_request_result(
+                url, f"method={verb} is a write: it changes server state, and "
+                     "stored credentials for this host ride along automatically",
+                next_action=("Ask the user, then re-send the same call with "
+                             "confirm=true. HEAD probes need no confirm. "
+                             "Nothing was sent."))
         # cache_ttl=0 is not a preference here: a write must never be answered from
         # the cache, and the pipeline reads that rule off the verb anyway. Saying it
         # at the door keeps the two statements from ever disagreeing.
@@ -4835,7 +4223,7 @@ class MasterFetchServer:
         max_content_chars: Annotated[Optional[int], Field(description="Max chars of that content (default 40000). The action receipts are never cut by it.")] = None,
         focus: Annotated[Optional[str], Field(description="Query-focused extraction of the post-action page: only the blocks relevant to this come back.")] = None,
         timeout: Annotated[Optional[int | float], Field(description="Whole-call budget in milliseconds (default 60000 here - a browser launch plus a chain needs it; max 120000).")] = None,
-        anti_detect: Annotated[Optional[Literal["off", "basic", "auto", "aggressive"]], Field(description=ANTI_DETECT_DESC)] = None,
+        anti_detect: Annotated[Optional[Literal["off", "basic", "auto", "aggressive"]], Field(description=ANTI_DETECT_DESC_SHORT)] = None,
         session_id: Annotated[Optional[str], Field(description="Act inside this named session, so a login made earlier (or a jar the HTTP tier filled) is the state the page starts from.")] = None,
         cdp_url: Annotated[Optional[str], Field(description="Attach to a running Chrome (its own logged-in profile) and act there. The FIRST host is refused until the user approves it: read the receipt, ask, re-call with confirm:true.")] = None,
         confirm: Annotated[Optional[bool], Field(description="Two things need it and nothing else does: a submit action, and the first CDP attach to a host. Neither acts until this says true.")] = None,
@@ -4890,7 +4278,7 @@ class MasterFetchServer:
         self,
         url: Annotated[str, Field(description="Single URL to fetch.")],
         urls: Annotated[Optional[List[str]], Field(description="Multiple URLs to fetch in parallel. Returns bulk results. Use instead of calling web_read multiple times.")] = None,
-        extraction_type: Annotated[ExtendedExtractionType, Field(description="Content format: 'markdown' (default), 'html', 'text', 'article', 'structured'.")] = "markdown",
+        extraction_type: Annotated[ReadExtractionType, Field(description="Content format: 'markdown' (default), 'html', 'text', 'article', 'structured', 'check' (changed-since-last-fetch receipt, not page content).")] = "markdown",
         css_selector: Annotated[Optional[str], Field(description="CSS selector to narrow extracted content (e.g. 'article', '.main-content').")] = None,
         cache_ttl: Annotated[Optional[int], Field(description="Cache duration in seconds. Default 3600 (1 hour). Set 0 to skip cache and force a fresh fetch.")] = None,
         force_fetcher: Annotated[Optional[Literal["http", "stealthy"]], Field(description="Lock to one fetcher tier, skip auto-escalation. 'http' = fast HTTP-only (fails on JS/bot walls). 'stealthy' = anti-detect browser (Patchright). Two tiers: the third one and its 'dynamic' alias are gone.")] = None,
@@ -4915,7 +4303,7 @@ class MasterFetchServer:
         body: Annotated[Optional[Any], Field(description="Request body for POST/PUT/DELETE/PATCH (max 256 KB). A dict is sent as a form; with content_type=application/json it is sent as JSON; a string is sent as-is. Ignored for GET/HEAD (said so in the summary).")] = None,
         content_type: Annotated[Optional[str], Field(description="Content-Type for the body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json.")] = None,
         schema: Annotated[Optional[Dict[str, Any]], Field(description="JSON schema for structured data extraction. Each property can have a 'selector' (CSS) for direct DOM extraction. Returns structured JSON instead of markdown. No LLM needed. Needs a non-empty 'properties' map (a JSON string is also accepted); an unusable schema raises instead of silently returning markdown. A property carrying its OWN 'properties' (or items.properties) plus a selector extracts one record per matched element, child selectors evaluated inside that element - how a repeated list (quotes, products, rows) keeps its grouping instead of flattening into one array of every tag on the page. Up to 200 records per field.")] = None,
-        confirm: Annotated[bool, Field(description="Approval for a first-time sensitive action on this call. Today that means cdp_url: attaching your real Chrome hands over every logged-in site's cookies, so the FIRST attach to a host is refused with cdp_authorization_required and nothing executed - re-call with confirm=true to authorize that host (remembered on disk; delete cdp_hosts.json in the dhole state directory to revoke). False (default) = nothing sensitive is approved.")] = False,
+        confirm: Annotated[bool, Field(description="Approval for a first-time sensitive action on this call. Today that means cdp_url: attaching your real Chrome hands over every logged-in site's cookies, so the FIRST attach to a host is refused with cdp_authorization_required and nothing executed - re-call with confirm=true to authorize that host (remembered on disk; sys_state(clear=['cdp:host=<name>']) revokes one host, clear=['cdp_hosts'] revokes all). False (default) = nothing sensitive is approved.")] = False,
         # 17.0 §5 E-13：两层摊平。三颗参数一起读才读得通，所以描述里互相点名。
         nested_selector: Annotated[Optional[str], Field(description="Two layers in one call: a CSS selector on THIS page naming the elements to follow into the second layer (e.g. '.topic-card', 'a[href*=\"/works/\"]'). Each matched element becomes one record: its href is fetched (6 at a time, up to nested_max) and nested_fields are extracted from that page. The href is read from the element itself, else its first descendant <a>, else its nearest ancestor <a> - so a card that is not itself an <a> still resolves. Requires nested_fields; returns structured JSON; reads this page as a whole document. 0 links matched is reported as nested_no_match (the selector, or this page is a JS shell), not as an empty answer.")] = None,
         nested_fields: Annotated[Optional[Any], Field(description="What to read on each second-layer page, as a list: [{'name': '作品', 'selector': '.work-item a', 'type': 'array'}] or {'作品': '.work-item a'} (a JSON string is accepted). 'type': 'array' means every match on that page (a list of works); without it you get the first one. 1-12 fields, each selector guarded like schema= ones.")] = None,
@@ -5150,8 +4538,9 @@ class MasterFetchServer:
             extra_headers = {**(extra_headers or {}), **auth_headers}
             _AUTH_SENT.set((auth_kind, auth_names))
 
-        # 复验（17.0 §6）：这里唯一的发起者是 `watch`，它经由进程内通道 _REVALIDATE
-        # 带来自己存过的版本标记。翻译仍然集中在一个位置（与 auth 同一待遇），因为
+        # 复验（17.0 §6）：标记经由进程内通道 _REVALIDATE 送来（曾由 web_watch 驱动，
+        # 那颗工具已下线；机制与测试保留）。翻译仍然集中在一个位置（与 auth 同一待遇），
+        # 因为
         # 一个决定牵动三处：HTTP 层要发、浏览器层不能发（它答不了这个问题），而一次
         # 带校验子的调用不许被自己的缓存抢先 —— 问"变了吗"的人要的是站方的回答。
         _rv = _REVALIDATE.get() or {}
@@ -5161,8 +4550,8 @@ class MasterFetchServer:
                 url or "", f"invalid revalidation marker: {cond_rejected}",
                 next_action=("No request was made: a stored marker the server cannot "
                              "match would come back as 200 and read like 'it changed'. "
-                             "This is dhole's own revalidation bookkeeping (web_watch), not "
-                             "something the caller passes - re-check the watch entry."))
+                             "This is dhole's own revalidation bookkeeping, not "
+                             "something the caller passes."))
         if conditional and _stealthy_only_call(force_fetcher, actions):
             _ARG_NOTES.get().append(
                 "revalidation was dropped: this call runs on the stealthy browser, "
@@ -5388,6 +4777,38 @@ class MasterFetchServer:
             max_chars=_SCHEMA_SOURCE_MAX_CHARS,
             conditional=conditional, load_everything=load_everything,
         )
+        # G1（评审 High）：extraction_type="check" 问的是「这页变了吗」，不是「把页面
+        # 给我」。基线就是 web_read 自己落的 html 缓存（envelope 带着源站校验子，
+        # _finalize_result 写入、缓存命中路径读回），不引入新的存储：有基线带校验子
+        # 回源，304 即「没变」；200 与基线正文逐字比对，首个分叉给 ≤200 字符窗口；
+        # 无基线先按普通抓取落一次基线，回 changed=null。拦截在 auth/复验翻译之后、
+        # nested/schema 分支之前 —— check 不豁免任何一条合规闸门，也不许与
+        # actions=/schema=/nested_selector= 搭车（它们各有自己的取数语义）。
+        if extraction_type == "check":
+            if actions or schema is not None or nested_selector is not None:
+                return _invalid_request_result(
+                    url,
+                    "extraction_type='check' answers 'did this page change' and "
+                    "cannot be combined with actions=, schema= or nested_selector=",
+                    next_action=("Run check on its own. For calls that interact or "
+                                 "extract, use the regular formats (markdown/html/"
+                                 "text/article/structured)."))
+            if not url:
+                return _invalid_request_result(
+                    "",
+                    "extraction_type='check' compares one URL at a time - pass a "
+                    "single url=, not urls=",
+                    next_action=("Call check once per URL; each receipt stands "
+                                 "alone. Fan-out is the caller's job."))
+            return await self._check_read(
+                url, css_selector=css_selector, force_fetcher=force_fetcher,
+                tier=dict(
+                    headless=headless, real_chrome=real_chrome, proxy=proxy,
+                    timeout=timeout, solve_cloudflare=solve_cloudflare,
+                    block_webrtc=block_webrtc, hide_canvas=hide_canvas,
+                    extra_headers=extra_headers, useragent=useragent,
+                    cookies=cookies, load_everything=load_everything))
+
         if nested_selector is not None and _nested_n > 0:
             return await self._nested_read(
                 url, nested_selector=nested_selector, nested_props=_nested_props,
@@ -5428,8 +4849,41 @@ class MasterFetchServer:
             # down: this path used to call `_auto_escalate` directly, which does not
             # read `force_fetcher` at all, so `force_fetcher='stealthy'` + `schema=`
             # silently extracted whatever the HTTP tier returned.
-            html_result = await self._document_tier(
-                url, tier=_tier_kwargs, force_fetcher=force_fetcher)
+            # M3（评审 Medium）：schema 重抽先问缓存——同一页换个 schema 重抽，
+            # 不该每轮都付整页网络与延迟。HTML 以 extraction_type="html" 落缓存，
+            # 同键（url + "html" + css_selector）可命中；带出去跑 select 的就是
+            # 那份缓存的正文。conditional 的调用照旧回源（它的语义是"问源站还
+            # 站不站"，吃缓存等于撒谎——G23 的裁决），cache_ttl=0 同理。
+            html_result = None
+            if not conditional and cache_ttl != 0:
+                cached_html = await get_cached(
+                    url, "html", css_selector, ttl=cache_ttl,
+                    ctx=_CACHE_CTX.get())
+                # get_cached 回的是 dict（status/content/url/content_type/
+                # total_size_bytes/envelope），schema 分支下游吃的是 ResponseModel
+                # —— 按 :5025 那条缓存命中路径同款拼回去，envelope 里的质量字段
+                # 一并还原，别让缓存命中的 schema 抽取比真抓的那次少东西。
+                if (cached_html is not None and cached_html["status"] < 400
+                        and cached_html["content"]):
+                    _env = cached_html.get("envelope") or {}
+                    html_result = ResponseModel(
+                        url=cached_html["url"], status=cached_html["status"],
+                        content=cached_html["content"], cached=True,
+                        fetcher_used="cache", duration_ms=0,
+                        extracted_type="html",
+                        content_type=cached_html.get("content_type", ""),
+                        total_size_bytes=cached_html.get("total_size_bytes", 0),
+                        metadata=_env.get("metadata", {}) or {},
+                        links=_env.get("links", {}) or {},
+                        quality_score=_env.get("quality_score"),
+                        content_ok=bool(_env.get("content_ok", False)),
+                        page_type=_env.get("page_type", "unknown") or "unknown",
+                        source=_env.get("source", "live") or "live",
+                    )
+                    html_result._validators = _env.get("cache_validators", {}) or {}
+            if html_result is None:
+                html_result = await self._document_tier(
+                    url, tier=_tier_kwargs, force_fetcher=force_fetcher)
             html_content = "\n".join(html_result.content) if html_result.content else ""
             if html_content and html_result.status < 400:
                 from dhole_mcp.structured import extract_structured
@@ -6556,6 +6010,20 @@ class MasterFetchServer:
                 "- Retry once with a higher timeout parameter.\n"
                 "- If it persists, switch sources."
             )
+        elif category == "browser_launch":
+            # The browser never became a process, so nothing about the TARGET is
+            # implicated: the generic branch below would blame Cloudflare and send
+            # the caller to "try a proxy", which cannot start a browser either.
+            tips = (
+                "- The browser process could not be started - the site is not the problem.\n"
+                "- `dhole --doctor` names the three states (absent / present but never "
+                "launched / refused by the OS) and the directory it searched.\n"
+                "- Attaching to a browser you started yourself "
+                "(cdp_url='http://127.0.0.1:9222', confirm=true) is the way out when "
+                "the install itself is refused.\n"
+                "- HTTP-only tools (web_read without force_fetcher, web_request, "
+                "web_search) still work while this is broken."
+            )
         else:
             tips = (
                 "- If the site uses Cloudflare Turnstile or DataDome, no free tool can bypass it.\n"
@@ -6596,50 +6064,52 @@ class MasterFetchServer:
     # 各自只看得到自己那一半，而 cache_clear(all=true) 会顺手抹掉 cookie jar ——
     # 那句警告写在另一颗工具的描述里，拿着"清缓存"意图的人正好读不到它。词表把类别
     # 摊开之后，§3-32 的闸才有地方落：只有"抹完不会立刻察觉"的那一类要 confirm。
-    _STATE_TOKENS = ("cache", "engine_state", "sessions", "watch", "recipes",
-                     "cred_defaults", "all")
+    _STATE_TOKENS = ("cache", "engine_state", "sessions",
+                     "cred_defaults", "cdp_hosts", "config", "all")
+    # show-only：配置旋钮的另一扇门在操作员侧（`dhole config unset`）。留两扇
+    # 会各自漂走的门是这个仓库自己裁决过的事（17.0 删 `dhole init` 的同一句话），
+    # 所以 clear 这一类要被点名拒绝，而不是悄悄吞掉。
+    _SHOW_ONLY = ("config",)
     _ERASE_EVERYTHING = "all"
-    # 抹掉后不会立刻察觉的那一类：登录态要到下次访问那个站才暴露，watch 基线抹掉后
-    # 下一次 check 会说"没有变化"，配方抹掉后要到那页需要点链路时才想起来。清缓存与
-    # 清引擎冷却不在这一类——后果就是下一次调用变慢或换一批引擎，当场看得见，不拦。
-    _SILENT_ERASURE = ("sessions", "watch", "recipes", "all")
+    # 抹掉后不会立刻察觉的那一类：登录态要到下次访问那个站才暴露；CDP 授权要到
+    # 下次 attach 那台主机才暴露（此前一直静默放行的门突然要重新问一遍）。清缓存
+    # 与清引擎冷却不在这一类——后果就是下一次调用变慢或换一批引擎，当场看得见，不拦。
+    _SILENT_ERASURE = ("sessions", "cdp_hosts", "all")
     _ERASURE_COST = {
         "sessions": "every session's cookies are a live credential for that host, and "
                     "the next visit to it goes anonymous",
-        "watch": "every watch baseline, so the next check re-baselines and reports no "
-                 "change instead of the diff you were watching for",
-        "recipes": "every recorded recipe, so a page that takes a click chain to reach "
-                   "has to be worked out again",
-        "all": "the content cache, the engine pool, every session, watch baseline, "
-               "recipe and stored identity default",
+        "cdp_hosts": "the CDP attach approvals - the next attach to a revoked host is "
+                     "refused until the user approves it again",
+        "all": "the content cache, the engine pool, every session, the stored "
+               "identity default and the CDP attach approvals",
     }
 
     async def sys_state(
         self,
         show: Annotated[
             Optional[List[str]],
-            Field(description="What to report without changing it: cache|engine_state|sessions|watch|recipes|cred_defaults|all. A call with neither show= nor clear= reports the session census, the cache state and the stored-task counts."),
+            Field(description="What to report without changing it: cache|engine_state|sessions|cred_defaults|cdp_hosts|config|all. A call with neither show= nor clear= reports the session census, the cache state, the stored identity defaults and the CDP attach approvals."),
         ] = None,
         clear: Annotated[
             Optional[List[str]],
-            Field(description="What to erase: the same tokens, plus a bare session id to forget just that one. An unknown token is an error listing both sets, never a no-op. cache erases the whole content cache."),
+            Field(description="What to erase: the clearable tokens (config is show-only - knobs go through `dhole config unset`), plus a bare session id to forget just that one, or cdp:host=<name> to revoke one CDP attach approval. An unknown token is an error listing what exists, never a no-op."),
         ] = None,
         confirm: Annotated[
             bool,
-            Field(description="true to go through with an erasure you would not notice as it happened: sessions|watch|recipes|all. Without it the call pauses and erases nothing. cache and engine_state need no confirm - their cost shows up on the next call."),
+            Field(description="true to go through with an erasure you would not notice as it happened: sessions|cdp_hosts|all. Without it the call pauses and erases nothing. cache and engine_state need no confirm - their cost shows up on the next call."),
         ] = False,
     ) -> SysStateModel:
         """See what dhole keeps on this machine, or erase a named class of it.
 
-        Five stores, one question each. `~/.dhole/cache.db` holds fetched pages and
-        search results; `~/.dhole/sessions.db` holds the cookies a site set after a
-        login, keyed by the `session_id=` you passed; the engine pool remembers
-        which engines are on cooldown and what each one last yielded
-        (`circuit_breaker.json` and `engine_stats.json`); `~/.dhole/tasks.db`
-        holds recorded recipes and the baselines a watch diffs against; and
-        `~/.dhole/identity.db` holds the default identity `cred_defaults` stored —
-        the one class here that a caller CHOSE rather than a site handed us, which
-        is why it is listed redacted and erased without a confirm.
+        Four stores, one question each. `~/.dhole/cache.db` holds fetched pages and
+        search results; the session jar holds the cookies a site set after a login,
+        keyed by the `session_id=` you passed (in memory — `~/.dhole/sessions.db`
+        exists only when the operator set DHOLE_PERSIST_CREDENTIALS=1); the engine
+        pool remembers which engines are on cooldown and what each one last yielded
+        (`circuit_breaker.json` and `engine_stats.json`); and the stored identity
+        `cred_defaults` chose — the one class here that a caller CHOSE rather than a
+        site handed us, which is why it is listed redacted and erased without a
+        confirm (same switch decides whether it touches `~/.dhole/identity.db`).
 
         A session is a credential, so the census reports hosts and cookie NAMES only.
         A value here would land in the transcript, and the point of showing the
@@ -6650,13 +6120,22 @@ class MasterFetchServer:
         rows = await self._session_rows()
         known = {r.session_id for r in rows}
 
+        # 按主机撤销（G25 评审）：`cdp:host=<name>` 不是状态类也不是会话 id，
+        # 是第三种 token 形状——在词表检查之前摘出来，空名字落回 bad。
+        cdp_named: List[str] = []
+        for t in clear_tokens:
+            if t.startswith("cdp:host="):
+                name = t.split("=", 1)[1].strip().lower()
+                if name:
+                    cdp_named.append(name)
+
         # An unknown token is the one answer that must not be a shrug: silently
         # dropping it would make `clear=["cahce"]` look like a call that worked and
         # did nothing, which is the failure mode the whole tool exists to avoid.
         bad = [t for t in show_tokens if t not in self._STATE_TOKENS]
         named: List[str] = []
         for t in clear_tokens:
-            if t in self._STATE_TOKENS:
+            if t in self._STATE_TOKENS or t.startswith("cdp:host="):
                 continue
             if t in known:
                 named.append(t)
@@ -6678,22 +6157,55 @@ class MasterFetchServer:
                 sessions=rows, open_count=len(rows),
             )
 
-        gated = [t for t in clear_tokens if t in self._SILENT_ERASURE]
+        # show-only 的类被点名要抹：不是 bad token（show 它是合法的），是走错了门。
+        show_only = [t for t in clear_tokens if t in self._SHOW_ONLY]
+        if show_only:
+            return SysStateModel(
+                error=(f"{', '.join(show_only)} is show-only: configuration knobs "
+                       "are erased from the operator side (`dhole config unset "
+                       "<name>`), not by a tool call."),
+                next_action=("show=['config'] lists the knob NAMES set in "
+                             "config.json - values ride `dhole config list`. "
+                             "Nothing was erased."),
+                sessions=rows, open_count=len(rows),
+            )
+        # 撤销一台名册里没有的主机与 `clear=["cahce"]` 同罪：装没看见就是 no-op。
+        if cdp_named:
+            roster = sorted(_cdp_authorized_hosts())
+            unknown = [h for h in cdp_named if h not in roster]
+            if unknown:
+                return SysStateModel(
+                    error=(f"Nothing matches 'cdp:host={', '.join(sorted(unknown))}': "
+                           f"the CDP attach roster holds "
+                           f"{', '.join(roster) if roster else 'no hosts'}."),
+                    next_action=("show=['cdp_hosts'] lists the authorized hosts. "
+                                 "Nothing was revoked."),
+                    sessions=rows, open_count=len(rows),
+                )
+
+        gated = [t for t in clear_tokens
+                 if t in self._SILENT_ERASURE or t.startswith("cdp:host=")]
         if gated and not confirm:
+            # per-host 撤销（cdp:host=<name>）不在 _ERASURE_COST 里——它丢的
+            # 就是 cdp_hosts 那一类，按同一句话报成本。
+            costs = "; ".join(
+                self._ERASURE_COST["cdp_hosts"] if t.startswith("cdp:host=")
+                else self._ERASURE_COST[t]
+                for t in gated)
             return SysStateModel(
                 pending_approval=True,
                 message=(f"{', '.join(gated)} not erased: this call did not carry "
                          "confirm=true."),
                 next_action=(f"Repeat with confirm=true to erase {', '.join(gated)}. What "
-                             f"you lose: {'; '.join(self._ERASURE_COST[t] for t in gated)}. "
+                             f"you lose: {costs}. "
                              "Nothing was erased by this call."),
                 sessions=rows, open_count=len(rows),
             )
 
         want = set(clear_tokens)
         if self._ERASE_EVERYTHING in want:
-            want |= {"cache", "engine_state", "sessions", "watch", "recipes",
-                     "cred_defaults"}
+            want |= {"cache", "engine_state", "sessions", "cred_defaults",
+                     "cdp_hosts"}
 
         cleared: List[str] = []
         failed: List[str] = []
@@ -6702,7 +6214,6 @@ class MasterFetchServer:
         browser_closed = prewarm_closed = engine_reset = False
         health: Dict[str, Any] = {}
         cache_view: Dict[str, Any] = {}
-        watch_count = recipe_count = 0
         cred_rows: List[dict] = []
 
         if "cache" in want:
@@ -6752,23 +6263,6 @@ class MasterFetchServer:
                 + (" - the shared pre-warmed browser was one of them, so the next "
                    "stealthy fetch pays a 3-5s cold start" if prewarm_closed else ""))
 
-        if "watch" in want or "recipes" in want:
-            from dhole_mcp import tasks
-            # 逐条 delete 而不是 DROP：清的是这一类，另一类的行与库本身都不该被带走。
-            for token, listing, delete, noun in (
-                ("watch", tasks.list_watches, tasks.delete_watch, "watch"),
-                ("recipes", tasks.list_recipes, tasks.delete_recipe, "recipe"),
-            ):
-                if token not in want:
-                    continue
-                try:
-                    gone = sum(1 for r in listing() if delete(r["name"]))
-                except Exception as e:
-                    failed.append(f"{token}: {str(e)[:120]}")
-                    continue
-                cleared.append(token)
-                parts.append(f"{gone} {noun}(es) forgotten")
-
         if "cred_defaults" in want:
             # 落盘的默认身份：这一类不需要 confirm，因为它丢得当场就看得见 ——
             # 下一次调用要么 401，要么那个站点的请求不走你的代理了。§3-32 只拦
@@ -6782,12 +6276,40 @@ class MasterFetchServer:
             except Exception as e:
                 failed.append(f"cred_defaults: {str(e)[:120]}")
 
+        if "cdp_hosts" in want or cdp_named:
+            # 撤销 CDP 授权（G25 评审：从「删整个文件」收到主机粒度）。丢掉的
+            # 后果与 sessions 同类——下次 attach 那台主机才暴露——所以同一道闸。
+            try:
+                roster = sorted(_cdp_authorized_hosts())
+                targets = roster if "cdp_hosts" in want else list(cdp_named)
+                removed = _cdp_revoke_hosts(targets)
+                cleared.append("cdp_hosts")
+                detail = (f" ({', '.join(sorted(targets))})"
+                          if targets and "cdp_hosts" not in want else "")
+                parts.append(f"{removed} CDP attach approval(s) revoked{detail}"
+                             " - the next attach to a revoked host is refused "
+                             "until the user approves it again")
+            except Exception as e:
+                failed.append(f"cdp_hosts: {str(e)[:120]}")
+
         if cleared:
             rows = await self._session_rows()
 
         report = set(show_tokens)
+        # `all` 在 clear 侧一直是展开的（`_ERASE_EVERYTHING`），show 侧却从没展开过：
+        # 2026-10-05 实测 `show=["all"]` 回来的体只有一颗 `message`，因为下游全是
+        # 精确成员测试（"cache" / "engine_state" / …），而 "all" 一个都不匹配。
+        # 同一个词在两颗门上有一个展开、一个不展开，就是"合同写在名字上、读的人在
+        # 猜"。展开到那五类**运行时攒出来的状态**；`config` 不在其中 —— 它是操作员
+        # 设的静态配置，必须点名（下面那段就是它为什么要点名）。
+        if self._ERASE_EVERYTHING in report:
+            report |= {t for t in self._STATE_TOKENS
+                       if t != self._ERASE_EVERYTHING and t not in self._SHOW_ONLY}
         if not show_tokens and not clear_tokens:
-            report = {"sessions", "cache", "watch", "recipes", "cred_defaults"}
+            # 默认名册带上 CDP 授权（G25 评审：它是这台机器上"谁被批准接我的
+            # 登录态"的账本，不该等点名才出现）；config 仍要点名——那是操作员
+            # 设的静态配置，不是运行时攒出来的状态。
+            report = {"sessions", "cache", "cred_defaults", "cdp_hosts"}
         # A call that erased something reports what is left of exactly the classes it
         # touched: the receipt is the proof, and a census of the two it said nothing
         # about is noise the caller did not ask for.
@@ -6807,21 +6329,24 @@ class MasterFetchServer:
             except Exception as e:
                 logger.debug("engine snapshot failed: %s", e)
 
-        if "watch" in report or "recipes" in report:
-            from dhole_mcp import tasks
-            try:
-                if "watch" in report:
-                    watch_count = len(tasks.list_watches())
-                if "recipes" in report:
-                    recipe_count = len(tasks.list_recipes())
-            except Exception as e:
-                logger.debug("task census failed: %s", e)
-
         if "cred_defaults" in report:
             try:
                 cred_rows = identity.all_rows()
             except Exception as e:
                 logger.debug("identity census failed: %s", e)
+
+        cdp_roster: List[str] = []
+        if "cdp_hosts" in report:
+            cdp_roster = sorted(_cdp_authorized_hosts())
+
+        config_keys: List[str] = []
+        if "config" in report:
+            # 只报名字，不报值：值里可能有 secret（display_value 对 secret 只给
+            # 长度），而工具输出会落进 transcript。值走操作员侧 `dhole config list`。
+            try:
+                config_keys = env_registry.config_file_keys()
+            except Exception as e:
+                logger.debug("config census failed: %s", e)
 
         n = len(rows)
         if cleared:
@@ -6831,7 +6356,30 @@ class MasterFetchServer:
             # whole answer - and `error` below says which store refused.
             message = "Nothing was erased."
         elif show_tokens:
-            message = (f"Reported {', '.join(sorted(report))}. Nothing erased.")
+            # 空回执必须自己说出口。wire 会把等于默认值的字段整个删掉
+            # （`wire.py` 的压缩），所以「一类都没查到」与「数据字节被吞了」在字节上
+            # 是同一句话 —— 实测的 `show=["all"]` 就是这样读成一个失败而不是一个空集。
+            # 这一句把每一类的实际计数写在字段之外，读者不需要推断缺席。
+            counts = []
+            if "sessions" in report:
+                counts.append(f"{n} session(s)")
+            if "cache" in report:
+                counts.append(f"cache {cache_view.get('entries', 0)} entr(ies)")
+            if "cred_defaults" in report:
+                counts.append(f"stored identity rows {len(cred_rows)}")
+            if "cdp_hosts" in report:
+                counts.append(f"cdp-approved hosts {len(cdp_roster)}")
+            if "engine_state" in report:
+                counts.append("engine health "
+                              + (f"{len(health)} row(s)" if health else "not reported"))
+            if "config" in report:
+                counts.append("persisted config knobs "
+                              + (f"{len(config_keys)}" if config_keys else
+                                 "0 - none are persisted, so every knob is at its "
+                                 "built-in default (this is not a missing read; set "
+                                 "one with `dhole config set <key> <value>`)"))
+            message = (f"Reported {', '.join(sorted(report - {self._ERASE_EVERYTHING}))}: "
+                       + "; ".join(counts) + ". Nothing erased.")
         elif n:
             message = (f"{n} session(s) open, holding {sum(r.cookies for r in rows)} "
                        f"cookie(s); the cache and stored-task counts ride along. "
@@ -6851,6 +6399,12 @@ class MasterFetchServer:
                 next_action = ("No session is open. The content cache holds "
                                f"{cache_view['entries']} entry(ies) - "
                                "sys_state(clear=['cache']) erases them.")
+            if cdp_roster:
+                next_action = ((next_action + " " if next_action else "")
+                               + "CDP attach is approved for "
+                               + ", ".join(cdp_roster)
+                               + " - clear=['cdp:host=<name>'] revokes one, "
+                                 "clear=['cdp_hosts'] all (confirm=true).")
 
         return SysStateModel(
             message=message, cleared=cleared,
@@ -6860,8 +6414,8 @@ class MasterFetchServer:
             prewarm_closed=prewarm_closed,
             purged=purged, cache=cache_view,
             engine_state_reset=engine_reset, engine_health=health,
-            watch_count=watch_count, recipe_count=recipe_count,
             cred_defaults=cred_rows, identity_count=len(cred_rows),
+            cdp_hosts=cdp_roster, config_keys=config_keys,
             error="; ".join(failed),
             next_action=next_action,
         )
@@ -7043,6 +6597,7 @@ class MasterFetchServer:
         file_path: Annotated[str, Field(description="Absolute or relative path to a local file. Supported: .html, .htm, .xhtml, .docx, .xlsx, .csv, .pdf, .md, .markdown, .txt, .json, .yaml, .yml, .pptx, .odt")],
         cwd: Annotated[Optional[str], Field(description="Base directory for a relative file_path. Ignored for absolute paths.")] = None,
         encoding: Annotated[Optional[str], Field(description="Charset to decode text-based files with (.html/.csv/.md/.txt/.json/.yaml; e.g. 'gbk', 'big5', 'shift_jis', 'cp1252'). Leave unset to auto-detect; pass it when the result looks like mojibake or when metadata.encoding names the wrong charset.")] = None,
+        offset: Annotated[Optional[int], Field(description="Character offset into the parsed document, to continue a truncated read (default 0). Same paging contract as web_read: when is_truncated is true the summary names a Next offset, and THAT number is what you pass back here.")] = 0,
     ) -> ResponseModel:
         """Parse a local file to Markdown. Supports .html/.htm/.xhtml, .docx,
         .xlsx, .csv, .pdf, .md/.markdown/.txt, .json/.yaml/.yml, .pptx, .odt.
@@ -7117,6 +6672,14 @@ class MasterFetchServer:
             # Which charset won, so a wrong auto-detection is visible and the
             # caller can correct it with encoding=.
             metadata["encoding"] = extras["encoding"]
+        if extras.get("encoding_guessed"):
+            # "encoding: gb18030" alone reads like a measurement. It is not
+            # always one: GB18030 strictly decodes Shift_JIS/EUC-KR bytes too
+            # (charset.py records the measurement), so the name can be a guess
+            # that came out clean. The field says which of the two it was; the
+            # sentence explaining it is in next_action, and content_ok is NOT
+            # touched - see quality._agent_hints.
+            metadata["encoding_basis"] = "guessed"
         # A decode that came out damaged keeps its content - it is exactly what
         # the caller needs to look at - but must not read as a success. status
         # stays 200 because the file *was* read; the error field is what flips
@@ -7151,7 +6714,12 @@ class MasterFetchServer:
         # Chunking, not just hints: it fills total_extracted_chars /
         # is_truncated / next_offset, which a successful parse left empty, and it
         # caps a 50 MB file the way web_read caps a 50 MB page.
-        return _apply_chunking(result)
+        #
+        # `offset` here is what makes the truncation marker true: `_apply_chunking`
+        # prints "Next offset: N" into every truncated body, and until this argument
+        # existed doc_parse rejected N as an unknown argument (measured: the advice
+        # and the refusal came from the same response).
+        return _apply_chunking(result, offset=offset or 0)
 
     # ─── Feed ─────────────────────────────────────────────────────
 
@@ -7189,7 +6757,7 @@ class MasterFetchServer:
             raise ValueError("feed_read requires at least one URL")
         if len(urls) > 50:
             raise ValueError("feed_read supports at most 50 URLs per call")
-        # SSRF 防护：与 web_resolve 一致，每个 feed URL 先经 validate_url 校验。
+        # SSRF 防护：每个 feed URL 先经 validate_url 校验。
         # allow_private（G35）把作用域开在这里，覆盖校验与真正的抓取两步：只放开
         # 校验那一步，等于放行了 URL 又在取文档时把它拒掉。
         with allow_private_scope(allow_private):
@@ -7223,51 +6791,6 @@ class MasterFetchServer:
             }
             for r in results
         ]
-
-    # ─── URL resolution ────────────────────────────────────────────
-
-    async def web_resolve(
-        self,
-        url: Annotated[str, Field(description="URL to resolve (follows redirects without downloading the page).")],
-        timeout: Annotated[Optional[int], Field(description="Timeout in seconds (default 15).")] = 15,
-    ) -> dict:
-        """Resolve a URL to its final destination without fetching the page body.
-
-        Follows redirects (short links, tracking chains, canonical jumps) and
-        returns the final URL + status + content type. Cheaper than web_read
-        when you only need to know where a link lands — use it to pre-screen
-        search results before deciding which pages to actually fetch.
-
-        WHEN TO USE: t.co/bit.ly short links, redirect-heavy search results,
-        checking whether a link is alive (200) or dead (404/410) before fetching.
-        """
-        from dhole_mcp.fetcher import HTTPSession
-        from dhole_mcp.security import validate_url, SecurityError
-        try:
-            url = validate_url(url)
-        except SecurityError as se:
-            return {"original_url": url, "final_url": "", "status": 0,
-                    "content_type": "", "error": str(se)}
-        try:
-            async with HTTPSession(stealthy_headers=False, retries=1, timeout=timeout or 15) as session:
-                resp = await session.get(url, follow_redirects="safe")
-            final_url = getattr(resp, "url", "") or url
-            status = getattr(resp, "status", 0)
-            ct = ""
-            for k, v in (getattr(resp, "headers", {}) or {}).items():
-                if k.lower() == "content-type":
-                    ct = v
-                    break
-            return {
-                "original_url": url,
-                "final_url": final_url,
-                "status": status,
-                "content_type": ct,
-                "error": "",
-            }
-        except Exception as e:
-            return {"original_url": url, "final_url": "", "status": 0,
-                    "content_type": "", "error": f"{type(e).__name__}: {str(e)[:200]}"}
 
     # ─── Search ────────────────────────────────────────────────────
 
@@ -7359,12 +6882,15 @@ class MasterFetchServer:
                     page_result = await self.web_read(
                         url=sr.url, focus=query if not fetch_schema else None,
                         schema=fetch_schema, cache_ttl=cache_ttl,
-                        max_content_chars=8000, timeout=15000,
+                        # 每页帽 3000（G25 附注三/M4）：3 页满打满算 9,000 字符
+                        # ≈2.2k token，是"带着焦点摘录回来"而不是"把三页全文
+                        # 倒进对话"——要全文有 web_read 的 offset 分页。
+                        max_content_chars=3000, timeout=15000,
                     )
                     fetched_pages.append({
                         "url": sr.url,
                         "title": sr.title,
-                        "content": "\n".join(page_result.content)[:8000] if page_result.content else "",
+                        "content": "\n".join(page_result.content)[:3000] if page_result.content else "",
                         "content_ok": page_result.content_ok,
                     })
                 except Exception as e:
@@ -7414,6 +6940,7 @@ class MasterFetchServer:
         discover_only: bool = False,
         focus: Optional[str] = None,
         max_content_chars_per: int = 8000,
+        max_total_chars: int = 60_000,
         concurrency: int = 3,
         cache_ttl: int = DEFAULT_TTL,
         force_fetcher: Optional[str] = None,
@@ -7432,8 +6959,16 @@ class MasterFetchServer:
         list the caller already has. Content-adaptive:
         article pages -> main content, list/index pages -> structured link list,
         JS shells -> detected + reported honestly. Caps: max_pages, max_depth,
-        max_content_chars_per, deadline_ms (overall time). Reuses
-        web_read anti-bot escalation + cache.
+        max_content_chars_per (per page), max_total_chars (the whole run),
+        deadline_ms (overall time). Whichever one stops the crawl is named in the
+        summary. Reuses web_read anti-bot escalation + cache.
+
+        max_total_chars: the character budget for everything this call returns
+            (default 60000, 0 = no cap). It exists because a crawl's own caps are
+            per page: 40 pages x 8000 is a legal request and an ~81k-token reply,
+            and what the caller then gets is the host truncating the payload, not
+            the crawl. Stopping at a named budget - before the next batch is
+            fetched - keeps the result consumable and says what it left out.
 
         search: filter discovered/crawled URLs by keyword match (URL path + title).
             For a URL list alone - no page content - call web_discover.
@@ -7482,6 +7017,7 @@ class MasterFetchServer:
                     path_include=path_include, path_exclude=path_exclude,
                     discover_only=discover_only, focus=focus,
                     max_content_chars_per=max_content_chars_per,
+                    max_total_chars=max_total_chars,
                     concurrency=concurrency,
                     cache_ttl=cache_ttl,
                     force_fetcher=force_fetcher, timeout=timeout,
@@ -7546,19 +7082,19 @@ class MasterFetchServer:
                 "properties": {
                     "url": {"type": "string", "description": "URL to fetch"},
                     "urls": {"type": "array", "items": {"type": "string"}, "description": "Multiple URLs (parallel; one result per URL)"},
-                    "extraction_type": {"type": "string", "enum": ["markdown", "html", "text", "article", "structured"], "description": "Content format (default markdown). 'html' = raw markup."},
+                    "extraction_type": {"type": "string", "description": "Content format: markdown (default), html (raw markup), text, article, structured, or check (changed-since-last-fetch receipt, not the page)."},
                     "css_selector": {"type": "string", "description": "Narrows extracted content. HTML only - on XML/JSON/plain text the whole document comes back and the summary says so."},
                     "max_content_chars": {"type": "integer", "description": "Content cap in chars (500-200000; default from DHOLE_DEFAULT_CONTENT_CHARS). The rest stays reachable via offset/next_offset."},
                     "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000; 60000 with actions; max 120000), shared by the HTTP retries. On a document URL it is spent on the DOWNLOAD."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds (default 3600). 0 = force fresh."},
-                    "force_fetcher": {"type": "string", "enum": ["http", "stealthy"], "description": "Pin one tier, skipping auto-escalation: 'http' = fast, no JS/bot walls; 'stealthy' = anti-detect browser."},
-                    "anti_detect": {"type": "string", "enum": ["off", "basic", "auto", "aggressive"], "description": ANTI_DETECT_DESC},
+                    "force_fetcher": {"type": "string", "description": "Pin one tier, skipping auto-escalation: 'http' = fast, no JS/bot walls; 'stealthy' = anti-detect browser."},
+                    "anti_detect": {"type": "string", "description": ANTI_DETECT_DESC},
                     "offset": {"type": "integer", "description": "Char offset to resume a truncated page; take it from next_offset."},
                     "pages": {"type": "string", "description": "PDF only: '1-5' or '1,3,5-7'. Narrows what is EXTRACTED, not what is downloaded; pick ranges from table_of_contents."},
                     "password": {"type": "string", "description": "PDF only: password for an encrypted PDF."},
                     "focus": {"type": "string", "description": "Return only blocks matching this query. Applied after the cache, so it does not re-fetch; re-pass the same focus when paginating. Which scorer runs it, and what it costs: focus_engine."},
-                    "focus_mode": {"type": "string", "enum": ["filter", "best"], "description": "Shape of the focus answer: 'filter' (default) keeps every block past the relevance cut; 'best' returns only the highest-scoring block plus its heading. Requires focus."},
-                    "focus_engine": {"type": "string", "enum": ["bm25", "neural"], "description": "Which scorer runs focus: 'bm25' (default, keyword overlap) or 'neural' (a local cross-encoder, needing the reranker model). Per-page cost: sys_guide(topic='behavior')."},
+                    "focus_mode": {"type": "string", "description": "Shape of the focus answer: 'filter' (default) keeps every block past the relevance cut; 'best' returns only the highest-scoring block plus its heading. Requires focus."},
+                    "focus_engine": {"type": "string", "description": "Which scorer runs focus: 'bm25' (default, keyword overlap) or 'neural' (a local cross-encoder, needing the reranker model). Per-page cost: sys_guide(topic='behavior')."},
                     "schema": {"type": "object", "description": "CSS-driven structured extraction instead of markdown: {properties: {...}} (a JSON string is accepted). Which keys are read, first match vs \"type\": \"array\", per-element grouping, the invented-keyword trap and the record ceilings: sys_guide(topic='behavior', section='Structured extraction').", "additionalProperties": True},
                     "confirm": {"type": "boolean", "description": "Approval for a first-time sensitive action on this call - today only cdp_url: the FIRST attach to a host is refused with cdp_authorization_required and nothing executes until it says true. False (default) approves nothing."},
                     # 17.0 B4 · 下面这 27 个一直都能从顶层传进来（分发器读 args，
@@ -7587,17 +7123,17 @@ class MasterFetchServer:
             # （回执 / snapshot 先数 / submit 先问 / 验证码三次就转交）是原样搬过来的
             # —— 搬工具不许搬走规矩。
             "name": "web_act",
-            "description": "Act on one page - click / fill / press / scroll / wait / snapshot / submit - then read back what it became. Reading it without touching it is web_read.\n- The chain runs in order on the stealthy browser and never from cache; every action leaves a receipt in metadata.actions, and a failed one says what sat at that selector.\n- No selector? {\"snapshot\": true} first: elements come back numbered, later actions address them by index, and expect:'name' verifies the visible name so a stale index fails instead of clicking the wrong thing.\n- submit PAUSES without confirm=true (nothing is filled or sent): describe exactly what would go, and on the user's yes re-run the same chain. Captchas get at most 3 read-and-retry rounds, then hand off to the user; DataDome / Akamai / interactive Turnstile, 2FA factors and sliders are always hand-offs.\n- Credentials are never an argument: cred_defaults stores them, session_id names the cookie jar, cdp_url attaches the user's own Chrome.\n- VISUAL ASSIST: {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} crops one element of the SAME page instance and returns it inline - the way to read a CAPTCHA you are about to type.\nAction-key shapes, index addressing and the lazy-feed discipline: sys_guide(topic='behavior', section='Page interaction').",
+            "description": "Act on one page - click / fill / press / scroll / wait / snapshot / submit - then read back what it became. Reading it without touching it is web_read.\n- The chain runs in order on the stealthy browser and never from cache; every action leaves a receipt in metadata.actions, and a failed one says what sat at that selector.\n- No selector? {\"snapshot\": true} first: elements come back numbered, later actions address them by index, and expect:'name' verifies the visible name so a stale index fails instead of clicking the wrong thing.\n- submit PAUSES without confirm=true (nothing is filled or sent): describe exactly what would go, and on the user's yes re-run the same chain. Captchas get at most 3 read-and-retry rounds, then hand off; the walls-and-2FA list lives in sys_guide(topic='behavior').\n- Credentials are never an argument: cred_defaults stores them, session_id names the cookie jar, cdp_url attaches the user's own Chrome.\n- VISUAL ASSIST: {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} crops one element of the SAME page instance and returns it inline - the way to read a CAPTCHA you are about to type. The dict form adds decode_qr, full_page (whole scrollable page, no selector), save_to (write the capture to disk and report the path - text-only hosts and the route around the inline size cap), image_type ('png'|'jpeg') and quality ('jpeg' only).\nAction-key shapes, index addressing and the lazy-feed discipline: sys_guide(topic='behavior', section='Page interaction').",
             "inputSchema": {
                 "type": "object", "required": ["url", "actions"],
                 "properties": {
                     "url": {"type": "string", "description": "The page to act on. One per call - a chain is written against one DOM."},
-                    "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "ONE action key per object: [{scroll:3},{wait:1000}], not {scroll:3,wait:1000}. Keys: click, fill, press, wait, scroll, wait_selector, snapshot, screenshot, submit - each takes a CSS selector or a snapshot index."},
-                    "extraction_type": {"type": "string", "enum": ["markdown", "html", "text", "article", "structured"], "description": "How the post-action page is read back (default markdown)."},
+                    "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "ONE action key per object: [{scroll:3},{wait:1000}]. Keys: click, fill, press, hover, drag, wait, scroll, wait_selector, snapshot, screenshot, submit - each targets a CSS selector or a snapshot index; drag needs a source and a to-target."},
+                    "extraction_type": {"type": "string", "description": "How the post-action page is read back (default markdown; also html, text, article, structured)."},
                     "max_content_chars": {"type": "integer", "description": "Max chars of that content (default 40000); the action receipts are never cut by it."},
                     "focus": {"type": "string", "description": "After the chain, return only blocks relevant to this query instead of the whole page."},
                     "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 60000, max 120000)."},
-                    "anti_detect": {"type": "string", "enum": ["off", "basic", "auto", "aggressive"], "description": ANTI_DETECT_DESC},
+                    "anti_detect": {"type": "string", "description": ANTI_DETECT_DESC_SHORT},
                     "session_id": {"type": "string", "description": "Act inside this named session, so the login it holds is the state the page starts from. Names only, never values."},
                     "cdp_url": {"type": "string", "description": "Attach a running Chrome (its own logged-in profile) and act there; the first attach to a host needs confirm=true."},
                     "confirm": {"type": "boolean", "description": "Two things need it: a submit action, and the first CDP attach to a host. Neither acts until this says true - and only put it there on the user's explicit yes."},
@@ -7613,7 +7149,7 @@ class MasterFetchServer:
             # 17.0 §4 第 4 行。描述里那四条一次性规则是从 web_read 的 method 分支
             # 搬过来的：搬工具不许搬走规矩，所以它们在这里一个字都不能少。
             "name": "web_request",
-            "description": "Send ONE non-GET request (POST / PUT / PATCH / DELETE / HEAD) and read back what the server answered. Reading a page is web_read; GET here is refused.\n- A write is sent ONCE: not retried (an earlier call may already have committed), not cached, not escalated to the browser, never answered from archive.org.\n- Credentials are not a parameter: cred_defaults stores auth / cookies for that host and this call carries them; identity_applied names what it ran on. Bodies cap at 256KB - this retrieves, it does not upload.\n- There is no anti_detect here on purpose: a write never renders. Check where a URL goes first: web_resolve. Answer shape: sys_guide(topic='behavior', section='web_request').",
+            "description": "Send ONE non-GET request (POST / PUT / PATCH / DELETE / HEAD) and read back what the server answered. Reading a page is web_read; GET here is refused.\n- A write is sent ONCE: not retried (an earlier call may already have committed), not cached, not escalated to the browser, never answered from archive.org.\n- A write acts only with confirm=true (the user's explicit yes): stored credentials for the host ride along automatically. HEAD is a probe and needs none.\n- Credentials are not a parameter: cred_defaults stores auth / cookies for that host and this call carries them; identity_applied names what it ran on. Bodies cap at 256KB - this retrieves, it does not upload.\n- There is no anti_detect here on purpose: a write never renders. Check where a URL goes first: web_read follows redirects and reports the landing URL. Answer shape: sys_guide(topic='behavior', section='web_request').",
             "inputSchema": {
                 "type": "object", "required": ["url", "method"],
                 "properties": {
@@ -7621,8 +7157,9 @@ class MasterFetchServer:
                     "method": {"type": "string", "description": "POST / PUT / PATCH / DELETE / HEAD (case-insensitive). GET is refused: web_read owns the cache, the escalation ladder and the archive fallback."},
                     "body": {"description": "Request body (cap 256KB). A dict is sent as a form, or as JSON when content_type says json; a string is sent as-is. HEAD takes none."},
                     "content_type": {"type": "string", "description": "Content-Type for body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json."},
-                    "extraction_type": {"type": "string", "enum": ["markdown", "html", "text", "article", "structured"], "description": "How the answer is read back (default markdown). A server answering a write with JSON still gets that JSON extracted."},
+                    "extraction_type": {"type": "string", "description": "How the answer is read back: markdown (default), html, text, article or structured. A server answering a write with JSON still gets that JSON extracted."},
                     "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000)."},
+                    "confirm": {"type": "boolean", "description": "Required true for POST / PUT / PATCH / DELETE: a write acts only on the user's explicit yes, and stored credentials for the host ride along. HEAD needs none."},
                 },
             },
             # 写操作默认不是只读；重复调用不保证同一个答案，所以不是幂等。
@@ -7631,7 +7168,7 @@ class MasterFetchServer:
         },
         {
             "name": "web_crawl",
-            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, web_read(urls=[...]) fetches them directly - no crawl needed.\n- Every parameter is a top-level argument; nothing is nested. url= names the site the crawl stays inside.\n- Caps: max_pages (1-40, default 10), max_depth(2), 20000 chars per page, deadline_ms. There is no whole-run character budget.\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed') and robots_skipped counts them. ignore_robots=true overrides.\n- Map-then-fetch: web_discover (or sitemap=true here) maps it, web_read(urls=[...]) reads the picks. Drop counters and politeness: sys_guide(topic='behavior', section='web_crawl').",
+            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, web_read(urls=[...]) fetches them directly - no crawl needed.\n- Every parameter is a top-level argument; nothing is nested. url= names the site the crawl stays inside.\n- Caps: max_pages (1-40, default 10), max_depth(2), max_content_chars_per per page, max_total_chars for the whole run (default 60000), deadline_ms. Whichever one bites is named in the summary.\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed') and robots_skipped counts them. ignore_robots=true overrides.\n- Map-then-fetch: web_discover (or sitemap=true here) maps it, web_read(urls=[...]) reads the picks. Drop counters and politeness: sys_guide(topic='behavior', section='web_crawl').",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
@@ -7646,12 +7183,13 @@ class MasterFetchServer:
                     "path_include": {"type": "array", "items": {"type": "string"}, "description": "Keep only these path subtrees: '/docs' keeps /docs and everything under it, NOT /docs-old."},
                     "path_exclude": {"type": "array", "items": {"type": "string"}, "description": "Drop these path subtrees: '/docs-old' under an include keeps nothing."},
                     "max_content_chars_per": {"type": "integer", "description": "Per-page content cap (500-20000, default 8000)."},
+                    "max_total_chars": {"type": "integer", "description": "Whole-run content cap (1000-200000, default 60000; 0 = no cap). When it bites the crawl stops before the next batch and the summary names the pages left."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds per page (default 3600). 0 = force fresh."},
-                    "force_fetcher": {"type": "string", "enum": ["http", "stealthy"], "description": "Pin one tier for every page, skipping auto-escalation: 'http' fast but no JS/bot walls, 'stealthy' the anti-detect browser."},
+                    "force_fetcher": {"type": "string", "description": "Pin one tier for every page, skipping auto-escalation: 'http' fast but no JS/bot walls, 'stealthy' the anti-detect browser."},
                     "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000)."},
                     "deadline_ms": {"type": "integer", "description": "Hard stop for the whole crawl in ms (default 120000) - the budget that ends the run, unlike timeout= which is per page."},
                     "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check for this call (default false = comply). True only where you have the site's permission."},
-                    "focus_engine": {"type": "string", "enum": ["bm25", "neural"], "description": "Which scorer runs focus here: 'bm25' (default, cheap) or 'neural' (the local reranker model; asking without it is refused, not downgraded)."},
+                    "focus_engine": {"type": "string", "description": "Which scorer runs focus here: 'bm25' (default, cheap) or 'neural' (the local reranker model; asking without it is refused, not downgraded)."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -7674,28 +7212,6 @@ class MasterFetchServer:
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
         },
         {
-            "name": "web_screenshot",
-            "description": "Use when you need to SEE a page - layout, charts, UI state, how it really renders: returns an image. For the page's words use web_read instead. A text-only model gets nothing from an inline image: pass save_to= and read the file at the absolute path it reports.\n- Full-page rendering costs a browser: the first call pays a cold start (seconds).\n- anti_detect decides the one thing a capture can decide per call: whether a Cloudflare challenge gets answered before the shutter. The fingerprint half rides cred_defaults.\nVISUAL ASSIST: selector= crops the capture to ONE element (full_page cannot combine with it) and returns it inline - for CAPTCHAs, QR codes, forms. A simple text/grid CAPTCHA may be read and tried at most 3 times, then STOP and hand off to the user; behavioral walls (DataDome, Akamai, interactive Turnstile), 2FA codes and sliders have nothing to look at - hand off immediately. dhole ships no vision model: the reading happens in you.",
-            "inputSchema": {
-                "type": "object", "required": ["url"],
-                "properties": {
-                    "url": {"type": "string", "description": "URL to screenshot"},
-                    "session_id": {"type": "string", "description": "Reuse a specific open browser session. Omit to auto-manage."},
-                    # 17.0 B4 · 顶层只有一个家（这 11 个键今天也已经能从顶层传进来）。
-                    "save_to": {"type": "string", "description": "Write the image to this path and report the absolute path + byte size as text instead of an inline image (parents created; a non-image file name is refused). A text-only host needs this."},
-                    "selector": {"type": "string", "description": "Crop the capture to ONE element (CSS). Cannot combine with full_page."},
-                    "full_page": {"type": "boolean", "description": "Capture the whole scrollable page, not just the viewport (default false)."},
-                    "image_type": {"type": "string", "enum": ["png", "jpeg"], "description": "Encoding (default png)."},
-                    "quality": {"type": "integer", "description": "JPEG quality 0-100; ignored for png."},
-                    "decode_qr": {"type": "boolean", "description": "Decode QR codes visible in the capture and report the payloads in the text part (local, deterministic, no model). An empty list means no code was found."},
-                    "anti_detect": {"type": "string", "enum": ["off", "basic", "auto", "aggressive"], "description": "What this capture asks for: 'auto' (default) and 'aggressive' also answer a Cloudflare challenge, 'off' / 'basic' shoot the interstitial as-is. The fingerprint half rides the machine - cred_defaults."},
-                    "wait_selector": {"type": "string", "description": "CSS selector to wait for before capturing."},
-                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 60000, max 120000)."},
-                },
-            },
-            "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
-        },
-        {
             "name": "web_search",
             "description": "Keyless multi-engine web search (default pool = all 8 engines: baidu,bing,sogou,so360,bing_global,yandex,brave,duckduckgo). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- fetch_content=true auto-fetches the top 3; otherwise web_read the high fetch_relevance hits with focus=. Don't search for a URL you already have - web_read it directly.\n- min_relevance / min_raw_relevance (0-1) drop low-relevance results - two different scales, read which one you are setting.\n- Result fields: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index FAMILIES, so a low value can mean a degraded pool - check consensus_basis. Engine matrix: sys_guide(topic='behavior', section='web_search').",
             "inputSchema": {
@@ -7704,17 +7220,17 @@ class MasterFetchServer:
                     "query": {"type": "string", "description": "Search query"},
                     # 17.0 B4 · 顶层只有一个家（这 18 个键今天也已经能从顶层传进来）。
                     "url": {"type": "string", "description": "A page you already have, to find similar pages of. Requires mode='find_similar'."},
-                    "mode": {"type": "string", "enum": ["auto", "neural", "find_similar"], "description": "'auto' (default) ranks with the local reranker when it can; 'neural' asks for it by name - if it cannot run, the reply says so instead of pretending. 'find_similar' needs url=."},
+                    "mode": {"type": "string", "description": "Rerank mode: 'auto' (default) ranks with the local reranker when it can; 'neural' asks for it by name - if it cannot run, the reply says so instead of pretending. 'find_similar' needs url=."},
                     "max_results": {"type": "integer", "description": "Results to return (1-50, default 6)."},
                     "page": {"type": "integer", "description": "Result page, 0-10 (default 0)."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds (default 300). 0 = force fresh."},
-                    "engines": {"type": "array", "items": {"type": "string"}, "description": "Narrow the pool, max 9 names. The selectable names are exactly the 8 engines above plus the keyed engines that need an API key (sys_guide(topic='behavior', section='web_search'))."},
+                    "engines": {"type": "array", "items": {"type": "string"}, "description": "Narrow the pool, max 10 names. The selectable names are the 8 engines listed above plus the keyed engines that need an API key (sys_guide(topic='behavior', section='web_search'))."},
                     "site": {"type": "string", "description": "Restrict to one domain."},
                     "exclude_sites": {"type": "array", "items": {"type": "string"}, "description": "Drop results from these domains."},
                     "location": {"type": "string", "description": "ISO country code ('US'), optionally with a region suffix ('US-CN'). Anything else is refused rather than guessed at."},
                     "language": {"type": "string", "description": "2-letter language code."},
                     "region": {"type": "string", "description": "Engine region, passed through as given and folded into the cache key. Omitted, it is derived from location + language."},
-                    "freshness": {"type": "string", "enum": ["day", "week", "month", "year"], "description": "Time window preset - only these four, anything else is refused. The engines offer nothing finer, so no absolute date range can be asked."},
+                    "freshness": {"type": "string", "description": "Time window preset - 'day', 'week', 'month' or 'year', and only these four: anything else is refused. The engines offer nothing finer, so no absolute date range can be asked."},
                     "after": {"type": "string", "description": "'Newer than' a date. No engine takes an absolute range, so this is widened to the narrowest preset that covers it and date_filter reports what was actually sent."},
                     "before": {"type": "string", "description": "REFUSED, not ignored: presets only bound 'not older than' and results carry no publish date, so nothing could honour it. For dated items use feed_read(since=)."},
                     "fetch_content": {"type": "boolean", "description": "Pull the top hits' full text inside this same call (default false) instead of returning snippets."},
@@ -7740,26 +7256,27 @@ class MasterFetchServer:
         },
         {
             "name": "sys_state",
-            "description": "What dhole keeps on this machine, and how to erase a named class of it: the fetch cache, the cookies a site left behind a login (keyed by session_id=), the engine pool's cooldowns, and stored recipes/watch baselines.\n- No arguments = the census, erasing nothing: every open session with its hosts and cookie NAMES (a value is a credential, and everything a tool returns lands in the transcript), plus cache state and stored-task counts.\n- clear=[\"cache\"] wipes the content cache; to re-fetch ONE url fresh pass cache_ttl=0 to web_read/web_crawl instead.\n- clear=[\"<session id>\"] forgets that session and any browser under it; clear=[\"sessions\"] needs confirm=true, because losing a site's cookies shows up only at your next visit there. Same for watch baselines and recipes.\n- clear=[\"engine_state\"] forgets engine cooldowns + yield history - use it when the same engines keep getting skipped after the network changed.",
+            "description": "What dhole keeps on this machine, and how to erase a class of it: the fetch cache, session cookies (keyed by session_id=), engine cooldowns, the stored identity default, the CDP attach approvals, and the config knobs.\n- No arguments = the census, erasing nothing: every open session with its hosts and cookie NAMES (a value is a credential - it would land in the transcript), plus cache state.\n- clear=[\"cache\"] wipes the content cache; one fresh URL is cache_ttl=0 instead.\n- clear=[\"<session id>\"] forgets that session and its browser; clear=[\"sessions\"] needs confirm=true (the loss shows up at your next visit to that site).\n- clear=[\"engine_state\"] forgets engine cooldowns + yield history.\n- clear=[\"cdp:host=<name>\"] / [\"cdp_hosts\"] revoke CDP approvals (confirm=true); show=[\"config\"] lists knob NAMES; values via `dhole config list`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "show": {"type": "array", "items": {"type": "string"}, "description": "State classes to report without touching them: cache|engine_state|sessions|watch|recipes|cred_defaults|all."},
-                    "clear": {"type": "array", "items": {"type": "string"}, "description": "State classes to erase, or one open session id to forget just that session."},
-                    "confirm": {"type": "boolean", "description": "true to go through with an erasure you would not notice as it happened (sessions|watch|recipes|all)."},
+                    "show": {"type": "array", "items": {"type": "string"}, "description": "State classes to report without touching them: cache|engine_state|sessions|cred_defaults|cdp_hosts|config|all."},
+                    "clear": {"type": "array", "items": {"type": "string"}, "description": "State classes to erase (config is show-only), or one open session id; cdp:host=<name> revokes one CDP approval."},
+                    "confirm": {"type": "boolean", "description": "true for an erasure you would not notice as it happened (sessions|cdp_hosts|all)."},
                 },
             },
             "annotations": {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": False},
         },
         {
             "name": "doc_parse",
-            "description": "Use for LOCAL files the task references: .html/.htm/.xhtml, .docx, .xlsx, .csv, .pdf, .md/.markdown/.txt, .json/.yaml/.yml, .pptx, .odt -> Markdown, no web fetch. A PDF that has a URL is better served by web_read (page ranges, password, table_of_contents).\n.html/.csv are decoded by charset detection, not assumed UTF-8: metadata.encoding names the charset used, and a wrong guess comes back as an error whose next_action says to re-call with encoding=. .pptx/.odt need no extra install; what a text reader cannot carry (speaker notes, layout, images) is named in the output's first line rather than vanishing from it. .json/.yaml are validated, not just echoed. Relative paths: pass cwd when the host doesn't tell the server the working directory.",
+            "description": "Use for LOCAL files the task references (the supported-extension list lives on file_path) -> Markdown, no web fetch. A PDF that has a URL is better served by web_read (page ranges, password, table_of_contents).\n.html/.csv are decoded by charset detection, not assumed UTF-8: metadata.encoding names the charset used, and a wrong guess comes back as an error whose next_action says to re-call with encoding=. .pptx/.odt need no extra install; what a text reader cannot carry (speaker notes, layout, images) is named in the output's first line rather than vanishing from it. .json/.yaml are validated, not just echoed. Relative paths: pass cwd when the host doesn't tell the server the working directory.",
             "inputSchema": {
                 "type": "object", "required": ["file_path"],
                 "properties": {
                     "file_path": {"type": "string", "description": "Absolute or relative path to a local file. Supported: .html/.htm/.xhtml, .docx, .xlsx, .csv, .pdf, .md/.markdown/.txt, .json/.yaml/.yml, .pptx, .odt"},
                     "cwd": {"type": "string", "description": "Base directory for a relative file_path. Ignored for absolute paths."},
                     "encoding": {"type": "string", "description": "Charset for .html/.csv (e.g. 'gbk', 'big5', 'shift_jis', 'cp1252'). Leave unset to auto-detect; pass it when the result is mojibake."},
+                    "offset": {"type": "integer", "description": "Character offset to continue a truncated read (default 0). When is_truncated is true, the Next offset this tool prints is what you pass back here - same paging contract as web_read."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False},
@@ -7777,94 +7294,6 @@ class MasterFetchServer:
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
-        },
-        {
-            "name": "web_resolve",
-            "description": "Follow a short/redirected link (t.co, bit.ly, tracking URLs) without downloading the page body: returns final_url + status + content_type. Use it to check where a link lands BEFORE fetching it. A page that redirects by putting a refresh directive in its own head is followed too, so final_url matches what a browser would show.",
-            "inputSchema": {
-                "type": "object", "required": ["url"],
-                "properties": {
-                    "url": {"type": "string", "description": "URL to resolve"},
-                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000)."},
-                },
-            },
-            "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
-        },
-        {
-            "name": "web_recipe",
-            "description": "Record how to reach a page once, replay it later: op=save stores a {url, actions} pair, op=run fetches that url with those actions, op=list shows what is stored with use_count/last_ok, op=delete forgets one. Actions are validated at save time by the same validator the executor uses, so a chain that would be refused at run time cannot be stored. run returns the full fetch plus one receipt per action; a non-zero actions_failed means the page changed under the recipe - re-save it. Stored in ~/.dhole/tasks.db; holds no credentials (pass session_id on each run).",
-            "inputSchema": {
-                "type": "object", "required": ["op"],
-                "properties": {
-                    "op": {"type": "string", "enum": ["save", "run", "list", "delete"], "description": "save = record; run = replay; list = show all; delete = forget one."},
-                    "name": {"type": "string", "description": "Recipe name (1-64 chars). Required for save/run/delete."},
-                    "url": {"type": "string", "description": "op=save: the URL to replay."},
-                    "actions": {"type": "array", "items": {"type": "object"}, "description": "op=save: the action chain, the same chain web_act takes."},
-                    "note": {"type": "string", "description": "op=save: what this recipe is for (max 500 chars)."},
-                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 60000, max 120000)."},
-                    "max_content_chars": {"type": "integer", "description": "op=run: cap on returned content chars."},
-                    "focus": {"type": "string", "description": "op=run: query-focused extraction over the replayed page."},
-                    "extraction_type": {"type": "string", "description": "op=run: markdown (default) | html | text | article | structured."},
-                    "session_id": {"type": "string", "description": "op=run: reuse cookies under this name. Not stored in the recipe."},
-                },
-            },
-            "annotations": {"readOnlyHint": False, "destructiveHint": True,
-                            "idempotentHint": False, "openWorldHint": True},
-        },
-        {
-            "name": "web_watch",
-            "description": "Monitor a URL for changes: op=add stores it, op=check fetches it fresh and diffs the text against the last stored snapshot, op=list / op=remove manage them. check answers changed=true/false with added/removed line counts and a capped unified diff. The FIRST check only creates the baseline and answers changed=null - no baseline is not the same as no change. A failed fetch leaves the baseline untouched. Pass focus to diff only the relevant part of a long page. Stored in ~/.dhole/tasks.db.",
-            "inputSchema": {
-                "type": "object", "required": ["op"],
-                "properties": {
-                    "op": {"type": "string", "enum": ["add", "check", "list", "remove"], "description": "add = start watching; check = fetch + diff; list = show all; remove = stop."},
-                    "name": {"type": "string", "description": "Watch name (1-64 chars). Required for add/check/remove."},
-                    "url": {"type": "string", "description": "op=add: the URL to monitor."},
-                    "focus": {"type": "string", "description": "op=add: diff only the blocks relevant to this query - for a long page whose chrome moves."},
-                    "max_chars": {"type": "integer", "description": "op=add: cap the stored snapshot (default 200000)."},
-                    "note": {"type": "string", "description": "op=add: what you are watching for (max 500 chars)."},
-                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 60000, max 120000)."},
-                    "session_id": {"type": "string", "description": "op=check: reuse cookies under this name (a watch behind a login). Not stored."},
-                },
-            },
-            "annotations": {"readOnlyHint": False, "destructiveHint": True,
-                            "idempotentHint": False, "openWorldHint": True},
-        },
-        {
-            "name": "cred_vault",
-            "description": "Look up logins in the user's OWN password manager (Bitwarden `bw` / 1Password `op`). op=status: which manager is installed and unlocked, and how to fix it if not. op=list: item metadata (name, username, whether a password exists, URIs). op=match: the items whose stored URI is a given URL's host - use this to pick a credential, then pass its name/id to login. Passwords and TOTP secrets are NEVER returned; this tool has no field for them.",
-            "inputSchema": {
-                "type": "object", "required": ["op"],
-                "properties": {
-                    "op": {"type": "string", "enum": ["status", "list", "match"], "description": "status = is a manager available; list = item metadata; match = items for a URL."},
-                    "query": {"type": "string", "description": "op=list: substring filter on the item name."},
-                    "url": {"type": "string", "description": "op=match: the URL to find credentials for (matched on host)."},
-                    "source": {"type": "string", "enum": ["auto", "bitwarden", "onepassword"], "description": "Which manager to read. Default auto = try both."},
-                    "limit": {"type": "integer", "description": "op=list: cap on returned items (default 300)."},
-                },
-            },
-            "annotations": {"readOnlyHint": True, "destructiveHint": False,
-                            "idempotentHint": True, "openWorldHint": False},
-        },
-        {
-            "name": "cred_login",
-            "description": "Sign in to a page using a credential from the user's password manager. Call it WITHOUT confirm first: it opens the page, finds the username/password/submit controls and returns the plan (fields + plan) for the user to approve - nothing is filled. Call again with confirm=true to fill and submit. The password is read server-side and never enters the transcript, the response, or any log; the receipt names the vault item instead. Afterwards it reports logged_in (model-free DOM + cookie-NAME probe) and keeps the cookies under session_id. CAPTCHA / 2FA are NOT solved - hand those back to the user.",
-            "inputSchema": {
-                "type": "object", "required": ["url", "credential"],
-                "properties": {
-                    "url": {"type": "string", "description": "The login page."},
-                    "credential": {"type": "string", "description": "Vault item name or id (NOT the password). Find it with cred_vault(op='match', url=...)."},
-                    "source": {"type": "string", "enum": ["auto", "bitwarden", "onepassword"], "description": "Which manager to read. Default auto."},
-                    "session_id": {"type": "string", "description": "Where the resulting cookies are kept (reuse it in later fetches)."},
-                    "username_index": {"type": "integer", "description": "Skip detection: the username field's snapshot index."},
-                    "password_index": {"type": "integer", "description": "Skip detection: the password field's snapshot index."},
-                    "submit_index": {"type": "integer", "description": "Skip detection: the submit control's snapshot index."},
-                    "confirm": {"type": "boolean", "description": "false (default) = show the plan only. true = actually fill and submit, after the user approved."},
-                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 60000, max 120000)."},
-                },
-            },
-            "annotations": {"readOnlyHint": False, "destructiveHint": True,
-                            "idempotentHint": False, "openWorldHint": True},
         },
         # 文档通道（计划：上手成本）。它的存在理由是这条测量：tools/list +
         # instructions 每次连接由每个客户端付，一次调用只由问的那个人付。所以
@@ -7920,19 +7349,27 @@ class MasterFetchServer:
 
         async def call_tool(ctx, params: CallToolRequestParams) -> CallToolResult:
             started = now()
-            try:
-                result = await self._dispatch(params.name, params.arguments or {})
-                _log_tool_call(params.name, True, (now() - started) * 1000,
-                               _result_error(result))
-                # _dispatch returns (content_list, structured_dict) or just content_list
-                return _call_result(result)
-            except Exception as e:
-                _log_tool_call(params.name, False, (now() - started) * 1000, str(e))
-                error_text = json.dumps({"error": redact_api_key(str(e)[:300])})
-                return CallToolResult(
-                    content=[TextContent(type="text", text=error_text)],
-                    is_error=True,
-                )
+            # One argument-notes bucket per MCP call, opened at the one handler both
+            # transports go through. `web_read` has had a bucket all along (its
+            # decorator opens one), which is why a clamped `max_content_chars` was
+            # announced while a clamped action `wait`, a PDF `pages=` trimmed to the
+            # document, and a per-attempt HTTP timeout came back silent: those layers
+            # found no bucket and dropped the sentence on the floor.
+            with _arg_notes_scope():
+                try:
+                    result = await self._dispatch(params.name, params.arguments or {})
+                    _log_tool_call(params.name, True, (now() - started) * 1000,
+                                   _result_error(result))
+                    # _dispatch returns (content_list, structured_dict) or just content_list
+                    return _call_result(result)
+                except Exception as e:
+                    _log_tool_call(params.name, False, (now() - started) * 1000, str(e))
+                    error_text = json.dumps({"error": redact_api_key(
+                        _cdp_dead_endpoint_note(str(e), params.arguments or {})[:300])})
+                    return CallToolResult(
+                        content=[TextContent(type="text", text=error_text)],
+                        is_error=True,
+                    )
 
         server = Server(
             "Dhole",
@@ -7954,10 +7391,11 @@ class MasterFetchServer:
                 # inactivity (default 300s), then relaunches on the next fetch.
                 # Best-effort, runs in the background while the server handles the
                 # initialize handshake.
-                warm = asyncio.create_task(self._prewarm_stealthy())
-                warm_reranker = asyncio.create_task(
-                    _safe_imported_prewarm("dhole_mcp.reranker", "prewarm_reranker")
-                )
+                warm = (asyncio.create_task(self._prewarm_stealthy())
+                        if _browser_tier_enabled() else None)
+                warm_reranker = (asyncio.create_task(
+                    _safe_imported_prewarm("dhole_mcp.reranker", "prewarm_reranker"))
+                    if "web_search" in _ENABLED_TOOLS else None)
                 # 17.0 B3：首用那一次下载（119MB 起）由 `_prewarm_stealthy` 自己在它的
                 # 30s 窗口**之外**先等完（顺序在那条函数的开头，写在那里）。这里不再开
                 # 第二条任务：两个等待者守着同一把锁，做的是同一件事。
@@ -7992,11 +7430,28 @@ class MasterFetchServer:
             # connect to directly, no mcpo proxy needed. Endpoint: http://host:port/mcp
             from contextlib import asynccontextmanager
             from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+            from mcp.server.transport_security import TransportSecuritySettings
             from starlette.applications import Starlette
             from starlette.routing import Route
             import uvicorn
 
-            manager = StreamableHTTPSessionManager(app=server)
+            http_token = (env_registry.value_of("DHOLE_HTTP_TOKEN") or "").strip()
+            if host not in ("127.0.0.1", "localhost", "::1") and not http_token:
+                print(
+                    f"[dhole] WARNING: HTTP transport bound to {host} with no "
+                    "DHOLE_HTTP_TOKEN - any process that can reach this port can "
+                    "call every tool, including writes and stored credentials.",
+                    flush=True)
+
+            # G25 评审：此前这层不传 security_settings，SDK 缺省显式关闭 Host/Origin
+            # 防护——DNS rebinding 的浏览器页面与本机任意进程都能直呼全部工具。
+            manager = StreamableHTTPSessionManager(
+                app=server,
+                security_settings=TransportSecuritySettings(
+                    allowed_hosts=_http_allowed_hosts(host),
+                    allowed_origins=_http_allowed_origins(host, port),
+                ),
+            )
 
             class _StreamableHTTPASGIApp:
                 async def __call__(self, scope, receive, send):
@@ -8004,10 +7459,11 @@ class MasterFetchServer:
 
             @asynccontextmanager
             async def lifespan(app):
-                warm = asyncio.create_task(self._prewarm_stealthy())
-                warm_reranker = asyncio.create_task(
-                    _safe_imported_prewarm("dhole_mcp.reranker", "prewarm_reranker")
-                )
+                warm = (asyncio.create_task(self._prewarm_stealthy())
+                        if _browser_tier_enabled() else None)
+                warm_reranker = (asyncio.create_task(
+                    _safe_imported_prewarm("dhole_mcp.reranker", "prewarm_reranker"))
+                    if "web_search" in _ENABLED_TOOLS else None)
                 # 17.0 B3：首用那一次下载（119MB 起）由 `_prewarm_stealthy` 自己在它的
                 # 30s 窗口**之外**先等完（顺序在那条函数的开头，写在那里）。这里不再开
                 # 第二条任务：两个等待者守着同一把锁，做的是同一件事。
@@ -8031,6 +7487,8 @@ class MasterFetchServer:
                         pass
 
             app = Starlette(routes=[Route("/mcp", endpoint=_StreamableHTTPASGIApp())], lifespan=lifespan)
+            if http_token:
+                app = _TokenGate(app, http_token)
             uvicorn.run(app, host=host, port=port)
 
     def _forward(self, tool: str, args: dict, skip: tuple = ()) -> dict:
@@ -8057,9 +7515,10 @@ class MasterFetchServer:
         from mcp.types import TextContent
 
         if name not in _TOP_LEVEL_ARGS:
+            hint = _REMOVED_TOOL_HINTS.get(name, "")
             raise ValueError(
                 f"Unknown tool: {name}. Registered names: {sorted(_TOP_LEVEL_ARGS)}"
-            )
+                + (f" - {hint}" if hint else ""))
         if name not in _ENABLED_TOOLS:
             raise ValueError(
                 f"Tool '{name}' is not enabled in this server: DHOLE_TOOLS "
@@ -8114,16 +7573,18 @@ class MasterFetchServer:
             # refuses `actions` outright (see the "actions are not supported in
             # bulk mode" branch in web_read), and _report_action_outcomes —
             # the only writer of this attribute — runs on the single-URL path
-            # only. Guarded read, same shape as the recipe branch below.
+            # only. Guarded read, the same defensive shape used for this private attribute
+            # everywhere else.
             return _wire_result(result, images=getattr(result, "_action_images", None) or None)
 
         elif name == "web_crawl":
             call = self._forward("web_crawl", args, skip=("url",))
-            # Same enum as web_read's, and the same failure mode: crawl.py
-            # forwards it straight to web_read, so an unlisted value would
-            # pin the crawl to the stealthy tier without saying so.
-            if call.get("force_fetcher") is not None:
-                call["force_fetcher"] = _coerce_force_fetcher_arg(call["force_fetcher"])
+            # force_fetcher used to be re-checked here, one layer above the pass
+            # that already checks it (`_validate_tool_args` covers web_crawl since
+            # 17.0 B6-7). Two copies drifted in shape if not in behavior: a bad
+            # tier raised from inside this branch, past the envelope that turns a
+            # bad web_read argument into invalid_request, so the same typo came
+            # back as two different response shapes depending on the tool.
             result = await self.web_crawl(url=args["url"], **call)
             return _wire_result(result)
 
@@ -8147,12 +7608,10 @@ class MasterFetchServer:
             result = await self.web_act(
                 url=args.get("url") or "", actions=args.get("actions"),
                 **self._forward("web_act", args, skip=("url", "actions")))
-            return _wire_result(result)
-
-        elif name == "web_screenshot":
-            result = await self.web_screenshot(
-                url=args["url"], **self._forward("web_screenshot", args, skip=("url",)))
-            return result  # already list[ImageContent|TextContent]
+            # 截图像素与 web_read 的 actions 路径同一条管线：_report_action_outcomes
+            # 把 base64 挪进 _action_images、回执只留 image:true。这里不接，像素就
+            # 在 dispatch 处被丢掉——回执说"有图"，客户端却什么都看不到。
+            return _wire_result(result, images=getattr(result, "_action_images", None) or None)
 
         elif name == "web_search":
             result = await self.web_search(
@@ -8182,6 +7641,7 @@ class MasterFetchServer:
                 file_path=args["file_path"],
                 cwd=args.get("cwd"),
                 encoding=args.get("encoding"),
+                offset=args.get("offset", 0),
             )
             return _wire_result(result)
 
@@ -8230,70 +7690,6 @@ class MasterFetchServer:
             payload = {"feeds": feeds}
             text, compact = _wire_json(payload)
             return [TextContent(type="text", text=text)], compact
-
-        elif name == "web_resolve":
-            result = await self.web_resolve(
-                url=args["url"],
-                timeout=args.get("timeout", 15),
-            )
-            return _wire_result(result)
-
-        elif name == "web_recipe":
-            # Images ride along like they do for web_read: a recipe whose
-            # chain ends in an element capture is the same capture, and putting
-            # base64 in the JSON would tax every text-only transcript instead.
-            result = await self.web_recipe(
-                op=args.get("op", ""),
-                name=args.get("name"),
-                url=args.get("url"),
-                actions=args.get("actions"),
-                note=args.get("note", ""),
-                timeout=args.get("timeout"),
-                max_content_chars=args.get("max_content_chars"),
-                focus=args.get("focus"),
-                extraction_type=args.get("extraction_type"),
-                session_id=args.get("session_id"),
-            )
-            inner = getattr(result, "result", None)
-            return _wire_result(result,
-                                images=getattr(inner, "_action_images", None))
-
-        elif name == "web_watch":
-            result = await self.web_watch(
-                op=args.get("op", ""),
-                name=args.get("name"),
-                url=args.get("url"),
-                focus=args.get("focus"),
-                max_chars=args.get("max_chars", 0) or 0,
-                note=args.get("note", ""),
-                timeout=args.get("timeout"),
-                session_id=args.get("session_id"),
-            )
-            return _wire_result(result)
-
-        elif name == "cred_vault":
-            result = await self.cred_vault(
-                op=args.get("op", ""),
-                query=args.get("query"),
-                url=args.get("url"),
-                source=args.get("source", "auto") or "auto",
-                limit=args.get("limit"),
-            )
-            return _wire_result(result)
-
-        elif name == "cred_login":
-            result = await self.cred_login(
-                url=args.get("url", "") or "",
-                credential=args.get("credential", "") or "",
-                source=args.get("source", "auto") or "auto",
-                session_id=args.get("session_id"),
-                username_index=args.get("username_index"),
-                password_index=args.get("password_index"),
-                submit_index=args.get("submit_index"),
-                confirm=bool(args.get("confirm", False)),
-                timeout=args.get("timeout"),
-            )
-            return _wire_result(result)
 
         elif name == "sys_guide":
             # A bare text channel rather than _wire_result: putting markdown

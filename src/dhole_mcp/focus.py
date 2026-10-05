@@ -59,8 +59,10 @@ ENGINES = ("bm25", "neural")
 def normalize_engine(value: object) -> str:
     """把客户端给的东西读成 'bm25' / 'neural' / ''。
 
-    不可识别的值取 ''（= 不点名，走 BM25），和 ``focus_mode`` 同款宽容：schema 里有
-    enum，拼错的值不该让一次真抓取失败 —— 但它也不会被当成"我要求神经分"。
+    不可识别的值取 ''（= 不点名，走 BM25）。这条宽容现在只对**内部调用方**成立：
+    17.0 摘掉线格式 enum 之后，调用方传来的拼错值在进这一层之前就被
+    `params._coerce_enum_arg` 拒掉（并把四颗合法值一起报回去），所以走到这里的
+    非 'bm25'/'neural' 字符串只可能是代码里传错的，不是用户手打的。
     """
     if isinstance(value, str):
         candidate = value.strip().lower()

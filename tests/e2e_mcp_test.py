@@ -187,9 +187,12 @@ def test_tool_definitions(mcp):
     assert "do not cite" in visible.lower(), "引用前的自查必须在场"
     assert "snippets" in visible.lower()
     assert "offset" in visible.lower()
-    # 'html' 不靠散文露脸：它是 extraction_type 的枚举值，而枚举才是客户端取值的来源
-    assert "html" in tool_map["web_read"]["inputSchema"]["properties"][
-        "extraction_type"]["enum"]
+    # 17.0 B6-7：wire 上没有 enum 了（宿主在进入 dhole 之前拒值，而拒本文案不列合法
+    # 值），客户端取值的来源改成了这两句：描述里点名，传错了 dhole 把整份列表报回去。
+    # 所以这里守的是"描述必须自己说得出 'html'"，不再是"枚举里有 'html'"。
+    _et = tool_map["web_read"]["inputSchema"]["properties"]["extraction_type"]
+    assert "enum" not in _et, "枚举数组回来了：非法值会先被宿主拦掉，dhole 的报错永远跑不到"
+    assert "html" in _et["description"], _et["description"]
     # schema 是结构化提取的唯一入口，此前会被静默丢弃（传了也照样返回 markdown），
     # 所以这里把它钉在 e2e 层面：既要在描述里露脸，也要在 inputSchema 里真实存在。
     assert "schema" in visible
@@ -245,14 +248,14 @@ def test_tool_definitions(mcp):
 
 
 def test_a_fifth_anti_detect_rung_is_refused_on_every_door(mcp):
-    """三颗读档位的工具在 wire 上都得回那句"四颗里挑一个"。
+    """两颗读档位的工具在 wire 上都得回那句"四颗里挑一个"（A1 后 web_screenshot 并入 web_act）。
 
     Literal 只是 schema，运行时的门是 `_validate_tool_args`；14b 拆出 web_act 时
     那道门只写着 web_read，一个拼错的档于是变成客户端手里的 Python KeyError。
     """
     tools = {t["name"]: t for t in
              mcp.list_tools().get("result", {}).get("tools", [])}
-    for tool in ("web_read", "web_act", "web_screenshot"):
+    for tool in ("web_read", "web_act"):
         assert "anti_detect" in tools[tool]["inputSchema"]["properties"], tool
         resp = mcp.call_tool(tool, {"url": "https://example.com",
                                     "anti_detect": "ultra"})
@@ -342,9 +345,10 @@ def test_revalidation_options_are_off_the_wire(mcp):
     传进来还被拒。
 
     这一条原来是「if_none_match 走完 wire 到真实源站」。被删掉的只是**发起权**：
-    复验还在跑，发起者换成了 watch，它经由进程内的 `_REVALIDATE` 带标记，那边由
-    tests/test_revalidation_g23.py 的真 loopback 源站钉 304。wire 这一层能钉的是
-    反面 —— 静默忽略老键会让人以为自己的条件请求发出去了，而实际拿到的是整页。
+    复验机制还在（`_REVALIDATE` 通道 + 抓取内核把 304 读成成功），但 17.0 收尾后连
+    发起者也没有了 —— 喂它的 `web_watch` 随四颗状态工具下线，通道现在只由
+    tests/test_revalidation_g23.py 直接驱动，那边有真 loopback 源站钉 304。wire 这一层
+    能钉的是反面 —— 静默忽略老键会让人以为自己的条件请求发出去了，而实际拿到的是整页。
     """
     tools = mcp.list_tools().get("result", {}).get("tools", [])
     by_name = {t["name"]: t for t in tools}

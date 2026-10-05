@@ -122,7 +122,12 @@ def extract_metadata(html: str, url: str) -> dict[str, Any]:
             if "published_time" not in meta:
                 d = obj.get("datePublished") or obj.get("dateCreated")
                 if d:
-                    meta["published_time"] = str(d)[:20]
+                    # 40 不是 20。JSON-LD 的日期是 ISO-8601，而 `[:20]` 恰好卡在
+                    # 时区偏移的中间：'2026-03-13T14:17:06+08:00' 进来、
+                    # '2026-03-13T14:17:06+' 出去 —— 一个既不合法也不完整的串，被
+                    # 原样端进 transcript 当引用依据（2026-10-05 实测）。日期字段
+                    # 的上限只该防"有人把整个对象塞进来"，不该防它自己的格式。
+                    meta["published_time"] = str(d).strip()[:40]
             if "title" not in meta:
                 h = obj.get("headline") or obj.get("name")
                 if h:

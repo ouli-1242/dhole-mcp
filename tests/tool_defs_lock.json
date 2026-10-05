@@ -1,0 +1,5 @@
+{
+  "comment": "M10（G25 评审）：_TOOL_DEFS 的 sha256 锁。tools/list 是宿主免审批与调用决策的唯一依据，这串字节的任何变动（改一个字、加一颗工具、动一条描述）都必须是有意识的——测试断言 digest 一致，红了就改代码或改锁，二选一，不许静默漂移。算法：sha256(json.dumps(MasterFetchServer._TOOL_DEFS, ensure_ascii=False, sort_keys=True).encode('utf-8'))。本次刷新三笔，都来自 2026-10-05 那一次真实使用实测：(1) 批次 3 给 doc_parse 补 `offset`（+226）—— 截断回执里印着 `Next offset: N`，而 doc_parse 原先**拒收** N（入参名单只有 file_path/cwd/encoding），印出来的数字必须能原样传回去；(2) 批次 6c 摘掉 12 处 wire `enum` 数组（连同把值集写进描述的重排，共 -319）—— 宿主的 JSON-Schema 门拒非法值时不列合法值（实测原话 'must be equal to one of the allowed values'），而 dhole 自己的校验器（params._coerce_enum_arg 新写 extraction_type/focus_mode/focus_engine 三颗，加上原有的 force_fetcher/anti_detect/mode/freshness 四颗）把整份列表和恢复方向一起报回去；值集没有消失，只是搬进了描述散文与拒本文案两处；(3) 批次 5 给 web_crawl 加 `max_total_chars`（+273）—— 这把尺子立起来之后第一次上抬，理由就是它自己省下的那笔：没有这颗，默认尺寸的爬取交回 324,001 字符（实测那次 223,599），宿主把载荷截断落盘，调用方付的是整轮 token 加一次重爬。连接期总量 30,294 → 30,474（棘轮逐笔记账，见 tests/test_wire_moves_land_in_the_manual.py）。",
+  "tools": 11,
+  "sha256": "744a125b27cb97132cc17a63a93b7532a3da8f2ca582f7fca320588684f28796"
+}
