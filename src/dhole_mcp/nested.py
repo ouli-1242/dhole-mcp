@@ -211,7 +211,13 @@ def _label_for(node) -> str:
 
 
 def nested_cap(requested: Optional[int]) -> int:
-    """nested_max 的解析：None → 默认，0 → 关掉，>0 → 封顶到 MAX_NESTED_ITEMS。"""
+    """nested_max 的解析：None → 默认，0 → 关掉，>0 → 封顶到 MAX_NESTED_ITEMS。
+
+    封顶要说出来。以前只在"真的省掉了链接"的那条路上报（`nested_budget` 的
+    `truncation=` 措辞），于是 5 颗链接的页面传 `nested_max=100` 什么也不说 ——
+    调用方以为自己点的那 100 生效了，而它从来没有机会生效。省没省是站点的事，
+    钳没钳是我们这边的事实，两者不该共用一句上报。
+    """
     if requested is None:
         return DEFAULT_NESTED_ITEMS
     try:
@@ -220,7 +226,11 @@ def nested_cap(requested: Optional[int]) -> int:
         return DEFAULT_NESTED_ITEMS
     if asked < 0:
         return 0
-    return min(asked, MAX_NESTED_ITEMS)
+    applied = min(asked, MAX_NESTED_ITEMS)
+    if applied != asked:
+        from dhole_mcp.context import _note_clamped
+        _note_clamped("nested_max", asked, applied, lo=0, hi=MAX_NESTED_ITEMS)
+    return applied
 
 
 # 0 命中时报几颗候选选择器。这个数字是量出来的：校准跑里两个用例各多花一整页的

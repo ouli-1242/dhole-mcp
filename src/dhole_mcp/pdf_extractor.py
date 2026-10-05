@@ -118,7 +118,7 @@ def ocr_advice() -> str:
         ready = False
     if ready:
         return ("OCR is installed but recovered no text here - use a vision tool / "
-                "web_screenshot, or another source.")
+                "a web_act screenshot action, or another source.")
     from dhole_mcp import install as _install
     return ("Install OCR support with `" + _install.full_install_command() + "` and "
             "dhole will auto-OCR it; or use a vision-capable tool / screenshot.")
@@ -223,10 +223,19 @@ def _encryption_problem(exc: BaseException) -> str | None:
 
 def _parse_pages(spec: str | None, total: int) -> list[int]:
     """Parse a page spec like '1-5', '1,3,5-7', '1, 2' into a sorted unique
-    list of 1-indexed page numbers clamped to [1, total]. None -> all pages."""
+    list of 1-indexed page numbers clamped to [1, total]. None -> all pages.
+
+    The clamp is the DOCUMENT's size, not a configured range, so it is said in
+    those words ("of 12 page(s)") — a caller who asked for pages 5-999 of a
+    12-page file needs to know the file ended, not that some limit exists.
+    A range entirely outside the file is a different outcome and stays an error
+    (`no_pages_in_range` in the caller); this note covers the partial case, where
+    some pages came back and the rest silently did not.
+    """
     if not spec or not spec.strip():
         return list(range(1, total + 1))
     out: set[int] = set()
+    trimmed = False
     for part in spec.split(","):
         part = part.strip()
         if not part:
@@ -239,6 +248,8 @@ def _parse_pages(spec: str | None, total: int) -> list[int]:
                 continue
             if lo_i > hi_i:
                 lo_i, hi_i = hi_i, lo_i
+            if lo_i < 1 or hi_i > total:
+                trimmed = True
             out.update(range(max(1, lo_i), min(total, hi_i) + 1))
         else:
             try:
@@ -247,7 +258,19 @@ def _parse_pages(spec: str | None, total: int) -> list[int]:
                 continue
             if 1 <= n <= total:
                 out.add(n)
+            else:
+                trimmed = True
+    if out and trimmed:
+        _announce_page_clamp(spec, sorted(out), total)
     return sorted(out)
+
+
+def _announce_page_clamp(spec: str, applied: list[int], total: int) -> None:
+    """Say so when the page list came back shorter than the spec asked for."""
+    from dhole_mcp.context import _note_text
+    got = (f"{applied[0]}-{applied[-1]}" if len(applied) > 1 else str(applied[0]))
+    _note_text(f"pages clamped '{spec}' -> '{got}' of {total} page(s) "
+               f"(supported range 1-{total})")
 
 
 def _clean_text(s: str) -> str:

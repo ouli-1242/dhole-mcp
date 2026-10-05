@@ -13,6 +13,7 @@ ast 分析过，它对 server 的模块级名字零依赖，只依赖 stdlib、`
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import re
 from typing import Any, Optional
@@ -142,11 +143,11 @@ MAX_REQUEST_BODY_BYTES = 262144
 # that carry no credentials and change no flag keep the empty fingerprint, so
 # plain fetches (and pre-existing cache entries) keep hitting as before.
 _CACHE_CTX: contextvars.ContextVar[str] = contextvars.ContextVar("_cache_ctx", default="")
-# 17.0 §6：条件请求不再是 agent 能传的参数，但 ETag 本身要继续用 —— 用它的是
-# `watch`：它已经存着基线，下一次检查真正想问的是"变了吗"，而不是再搬一遍正文。
-# 所以校验子走这条进程内通道，由设置它的那次检查负责复位（try/finally）。
-# 刻意不做成参数：一个"请把你上次存的 etag 再传给我"的参数，等于把保管版本标记
-# 的责任推回调用方，而那正是这次要删掉的合同。
+# 17.0 §6：条件请求不再是 agent 能传的参数，但 ETag 本身要继续用 —— 复验的发起者
+# 已经存着基线，下一次检查真正想问的是"变了吗"，而不是再搬一遍正文。所以校验子走
+# 这条进程内通道，由设置它的那次调用负责复位（try/finally）。刻意不做成参数：一个
+# "请把你上次存的 etag 再传给我"的参数，等于把保管版本标记的责任推回调用方，而那
+# 正是这次要删掉的合同。
 _REVALIDATE: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
     "_revalidate", default=None)
 
@@ -158,6 +159,41 @@ _REVALIDATE: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
 _ARG_NOTES: contextvars.ContextVar[Optional[list]] = contextvars.ContextVar("_arg_notes", default=None)
 
 
+def _clamp_note(name: str, requested: Any, applied: int, *, lo: int, hi: int) -> str:
+    """The ONE wording for "this argument moved to a documented bound" ("" if not).
+
+    Owned here because three layers emit it: `web_read` (through the ContextVar
+    below), `web_crawl` (whose summary is assembled in crawl.py, not through
+    `_with_agent_hints`), and the action/PDF/timeout clamps that live inside the
+    tools that do the clamping. Two copies of a sentence is how the two tools
+    started describing the same event differently — which is exactly the bug the
+    crawl-side note was written to close.
+    """
+    if requested is None:
+        return ""
+    try:
+        asked = int(str(requested).strip())
+    except (TypeError, ValueError):
+        # _coerce_int_arg already raised for anything unparseable.
+        return ""
+    if asked == applied:
+        return ""
+    return f"{name} clamped {asked}->{applied} (supported range {lo}-{hi})"
+
+
+def _note_text(note: str) -> None:
+    """Append one already-worded argument note, when a call is listening.
+
+    For the bounds that are not a plain int-in-a-range: a PDF `pages='99-999'`
+    against a 12-page file is clamped by the DOCUMENT, and the honest sentence
+    names the page count rather than a 1-N range the caller could not have known.
+    """
+    notes = _ARG_NOTES.get()
+    if notes is None or not note:
+        return
+    notes.append(note)
+
+
 def _note_clamped(name: str, requested: Any, applied: int, *, lo: int, hi: int) -> None:
     """Record that a numeric argument was clamped to its documented bound.
 
@@ -167,16 +203,27 @@ def _note_clamped(name: str, requested: Any, applied: int, *, lo: int, hi: int) 
     than a surprise — but "documented limit" is not the same as "you were told",
     and the caller here was measuring its own context budget.
     """
-    notes = _ARG_NOTES.get()
-    if notes is None or requested is None:
+    if _ARG_NOTES.get() is None:
         return
+    _note_text(_clamp_note(name, requested, applied, lo=lo, hi=hi))
+
+
+@contextlib.contextmanager
+def _arg_notes_scope():
+    """Open a call's own argument-notes bucket, and close it on the way out.
+
+    `web_read` gets this for free from `@_smart_fetch_request_context`. The other
+    tools clamp too — an action's `wait` ms, a PDF's `pages=` range, a request's
+    `timeout` — and a clamp recorded with no bucket open is a clamp that goes
+    unannounced, which is the exact silence this file exists to end. Reset is
+    explicit rather than inherited: a bucket left installed on a long-lived task
+    would let one call's notes be printed on the next call's response.
+    """
+    token = _ARG_NOTES.set([])
     try:
-        asked = int(str(requested).strip())
-    except (TypeError, ValueError):
-        # _coerce_int_arg already raised for anything unparseable.
-        return
-    if asked != applied:
-        notes.append(f"{name} clamped {asked}->{applied} (supported range {lo}-{hi})")
+        yield _ARG_NOTES.get()
+    finally:
+        _ARG_NOTES.reset(token)
 
 
 def _cache_context(options: dict) -> str:
@@ -215,8 +262,9 @@ def _cache_context(options: dict) -> str:
             bits.append(f"au={auth!r}")
 
     # 条件请求：If-None-Match / If-Modified-Since 决定服务器答哪一个版本，和
-    # cookies / auth 同一类，所以也要进指纹。17.0 之后发起者只剩 `watch`，校验子从
-    # `_revalidate` 这一个键进来（由请求上下文注入，见 _smart_fetch_request_context）。
+    # cookies / auth 同一类，所以也要进指纹。17.0 之后没有公开发起者（唯一的那个
+    # `watch` 已随四颗状态工具下线），校验子从 `_revalidate` 这一个键进来（由请求
+    # 上下文注入，见 _smart_fetch_request_context）。
     # 条件请求本身不读也不写缓存（cache_ttl 被压成 0），这一位守的是反方向：一次带
     # 校验子的 200 不能被回放给之后没带校验子的调用。
     _cv = options.get("_revalidate") or {}

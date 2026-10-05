@@ -35,6 +35,13 @@ Action schema (one key per dict):
                                             fail loudly, not click the wrong
                                             thing). `expect` also works with a
                                             selector.
+  {"hover": "css-selector"}                 hover to reveal (menus, tooltips);
+                                            the {"selector"|"index", "expect"?}
+                                            dict form works here too
+  {"drag": {"selector": "#a", "to": "#b"}}  drag one element onto another; BOTH
+                                            ends take the same target shapes
+                                            (a CSS selector string or
+                                            {"index": N, "expect"?})
 
 Validation is strict (CSS selectors validated, counts/ms capped) so a bad action
 fails fast instead of hanging the browser. Per-action errors are caught so one
@@ -47,7 +54,11 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
+from pathlib import Path
 from typing import Callable, Optional
+
+from dhole_mcp import install as _install
+from dhole_mcp.context import _clamp_note, _note_text
 
 
 logger = logging.getLogger("dhole-mcp.actions")
@@ -70,7 +81,7 @@ SCROLL_TOTAL_MS = 20_000
 CLICK_SETTLE_MS = 4_000
 CLICK_SETTLE_MIN_MS = 600
 _VALID_KEYS = {"click", "fill", "press", "wait", "scroll", "wait_selector",
-               "screenshot", "snapshot", "submit"}
+               "screenshot", "snapshot", "submit", "hover", "drag"}
 
 # An element capture only exists to be LOOKED at. 17.0: always available ——
 # the recognition happens agent-side (dhole ships no vision model), and a
@@ -81,6 +92,134 @@ _VALID_KEYS = {"click", "fill", "press", "wait", "scroll", "wait_selector",
 # load that is still alive. A capture this large is a mistake (the whole page,
 # not a cropped element), and shipping it spends a multimodal client's context.
 MAX_ACTION_SHOT_BYTES = 2_000_000
+
+# ─── 捕获内核（A1：自 server.py 的 web_screenshot 方法搬入）───────────────────
+# web_screenshot 独立工具下线后，这五个 helper 的唯一消费者是动作链的 screenshot
+# 执行器 —— 它们住在动作的家。错误映射表原样随迁：它按 headline 子串匹配，顺序
+# 即优先级（窄信号在前），test_v17_fix_plan 钉着这个约定。
+
+_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+
+_BROWSER_ERROR_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    # Must come first: it is the narrow signal. A "matched no element" headline
+    # must not be read as a rendering timeout, which is the whole defect this
+    # entry exists for.
+    (("matched no element",),
+     "the selector matched nothing on the loaded page - check it against the real "
+     "DOM (extraction_type='html', or screenshot the full page first); use "
+     "wait_selector only if the element appears later"),
+    # Before the timeout row, and for a reason of the same kind as that row's own:
+    # the driver says "Timed out while launching browser" when the OS refuses to
+    # create the process, and "raise timeout=" is advice for a slow page on a
+    # machine whose browser cannot start at all.
+    (("cannot access executable", "access is denied", "拒绝访问", "failed to launch",
+      "while launching browser", "(0x5)"),
+     "the browser binary is on disk but the operating system refused to start it - "
+      "no page-level parameter changes that; `dhole --doctor` names the state, and "
+      "web_read(url, cdp_url='http://127.0.0.1:9222', confirm=true) uses a browser "
+      "you started yourself"),
+    (("timeout", "exceeded"),
+     "the page never finished rendering - raise timeout= (ms), or wait for "
+     "a specific element with wait_selector="),
+    (("has been closed", "target closed"),
+     "the browser session is gone - call again to get a fresh one, or forget it "
+     "with sys_state(clear=['<session id>']) and retry"),
+    (("executable doesn't exist", "playwright install", "browser_binary_missing"),
+     "the browser binary is missing - dhole installs it on first use, so this means "
+     f"that install failed or is still running: `{_install.browser_binary_command()}` "
+     "(state: ~/.dhole/browser_install.json)"),
+)
+
+
+async def _locator_or_raise(page, selector: str):
+    """The locator for `selector`, or LookupError when nothing on the page matches.
+
+    Split out of the screenshot capture so the rule it enforces can be tested
+    without a browser: `.first` on a locator that will never match waits the
+    whole call budget out (30s by default) and then reports a TIMEOUT, which
+    the error mapping reads as "the page never finished rendering" - advice
+    (raise `timeout`, add `wait_selector`) that cannot conjure an element that
+    is not in the DOM. Measured: a selector matching nothing and a page that
+    genuinely never rendered produced the same sentence.
+    """
+    loc = page.locator(selector)
+    if await loc.count() == 0:
+        raise LookupError(
+            f"selector matched no element on the loaded page: {selector!r}")
+    return loc
+
+
+def _resolve_save_to(save_to: str, image_type: str) -> Path:
+    """Validate a save_to path BEFORE a browser is started, and return it.
+
+    Split from the write so a typo costs an instant refusal instead of a 10-second
+    cold start followed by "could not write".
+    """
+    raw = (save_to or "").strip()
+    if not raw:
+        raise ValueError(
+            "save_to needs a path to write the image to (e.g. "
+            "'C:/shots/page.png' or './page.png')")
+    target = Path(raw).expanduser()
+    if target.is_dir():
+        raise ValueError(f"save_to {str(target)!r} is a directory, not a file")
+    if target.suffix.lower() not in _IMAGE_SUFFIXES:
+        # 后缀校验不以「文件已存在」为前提（G25 评审）：往任意新路径写字节是
+        # save_to 唯一的写原语，名字不像图片就不放行——描述里说的正是这个，
+        # 一个尚不存在的 notes.txt / task.bat 与一个既有的同等对待。
+        if target.exists():
+            raise ValueError(
+                f"refusing to overwrite {str(target)!r} with image bytes - it is not "
+                f"named like an image; pass a path ending in .{image_type.lower()}")
+        raise ValueError(
+            f"refusing to create {str(target)!r} - it is not named like an image; "
+            f"pass a path ending in .{image_type.lower()}")
+    return target
+
+
+def _write_screenshot(data: bytes, target: Path) -> str:
+    """Write captured bytes to a validated path; return the absolute path.
+
+    Why this exists at all (G10): the image itself only reaches a multimodal
+    client. Every other model got "image unavailable" plus a pile of base64 it
+    cannot read, so the screenshot was effectively not a feature — a path is the
+    form that survives into a text-only transcript and out to another tool.
+    """
+    try:
+        if target.parent and not target.parent.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    except OSError as e:
+        raise ValueError(f"could not write {str(target)!r}: {str(e)[:160]}") from None
+    return str(target.resolve())
+
+
+def _screenshot_error_message(exc: BaseException) -> str:
+    """Turn a browser-capture exception into one actionable line for the agent.
+
+    patchright/playwright raise multi-line dumps: a one-line headline followed
+    by a "Call log:" block with per-step indentation ("waiting for fonts to
+    load"). That block describes the *driver's* internals, not the caller's
+    problem - it names no argument the agent could change, so shipping it spends
+    context and buries the one line that does matter. Keep the exception type
+    and the headline, drop the log, and append the move that usually fixes it.
+    The raw exception is not lost: the caller logs it for the operator.
+    """
+    text = str(exc).strip()
+    headline = text.splitlines()[0].strip() if text else ""
+    if not headline:
+        headline = "(no message)"
+    flat = " ".join(headline.split())
+    if len(flat) > 160:
+        flat = flat[:157].rstrip() + "..."
+    low = flat.lower()
+    hint = ("call again; if it persists, open the URL in a browser to check it "
+            "renders without a challenge")
+    for needles, candidate in _BROWSER_ERROR_HINTS:
+        if any(n in low for n in needles):
+            hint = candidate
+            break
+    return f"{type(exc).__name__}: {flat} - {hint}"
 
 # ─── MVP-2：元素索引快照与索引化动作 ────────────────────────────────────────
 # "用户不用懂"由外层 agent 的语言能力提供，不由 dhole 的模型提供（计划第八章）：
@@ -280,6 +419,24 @@ def _validate_actions(actions) -> list[dict]:
                 out.append({key: val})
             else:
                 out.append({key: _act_target(i, key, val)})
+        elif key == "hover":
+            # Same target grammar as click (string shorthand or the
+            # {"selector"|"index", "expect"?} dict); no dict-only knobs exist.
+            out.append({key: _act_target(i, key, val)})
+        elif key == "drag":
+            # 拖拽的语义是两个端点：被拖的元素和落点，所以字符串简写在这里
+            # 不设——没有落点的 drag 不是没写完，是没意义（click 的简写是
+            # 历史形状，drag 没有历史）。两端各自走同一套 _act_target 寻址，
+            # 快照索引因此对被拖元素与落点都可用。
+            if not isinstance(val, dict) or "to" not in val:
+                raise ValueError(
+                    f"action {i} 'drag' must be {{{{selector|index, to}}}} - the "
+                    "element to drag plus where to drop it; 'to' takes the same "
+                    "target shapes (a CSS selector string or "
+                    '{"selector"|"index", "expect"?})')
+            src = _act_target(i, key, {k: v for k, v in val.items() if k != "to"})
+            to = _act_target(i, f"{key}.to", val["to"])
+            out.append({key: {**src, "to": to}})
         elif key == "snapshot":
             # {"snapshot": true} — 编号交互元素列表。无参数形态是刻意的：快照
             # 没有可调的东西（上限是保护，不是旋钮），多一个键就多一种拼错法。
@@ -335,10 +492,9 @@ def _validate_actions(actions) -> list[dict]:
             out.append({key: {"selector": sel, "count": min(count, 1000),
                               "state": state, "timeout": max(500, min(int(tmo), MAX_WAIT_MS))}})
         elif key == "screenshot":
-            # String shorthand = selector only; the dict adds decode_qr and the
-            # snapshot-index alternative. The gate is checked HERE (validation
-            # time), so a refused capture costs an instant error instead of a
-            # browser cold start.
+            # String shorthand = selector only; the dict adds the capture knobs.
+            # The gate is checked HERE (validation time), so a refused capture
+            # costs an instant error instead of a browser cold start.
             if isinstance(val, str):
                 spec: dict = {"selector": val}
             elif isinstance(val, dict):
@@ -346,12 +502,58 @@ def _validate_actions(actions) -> list[dict]:
             else:
                 raise ValueError(
                     f"action {i} 'screenshot' must be a CSS selector string or "
-                    "{{selector, decode_qr}}")
+                    "{{selector, decode_qr, full_page, save_to, image_type, "
+                    "quality}}")
             want_qr = spec.pop("decode_qr", False)
             if not isinstance(want_qr, bool):
                 raise ValueError(f"action {i} 'screenshot.decode_qr' must be a boolean")
-            out.append({"screenshot": {**_act_target(i, key, spec),
-                                       "decode_qr": want_qr}})
+            full_page = spec.pop("full_page", False)
+            if not isinstance(full_page, bool):
+                raise ValueError(f"action {i} 'screenshot.full_page' must be a boolean")
+            image_type = spec.pop("image_type", "png")
+            if image_type not in ("png", "jpeg"):
+                raise ValueError(
+                    f"action {i} 'screenshot.image_type' must be 'png' or 'jpeg'")
+            quality = spec.pop("quality", None)
+            if quality is not None and (
+                    not isinstance(quality, int) or isinstance(quality, bool)
+                    or not 0 <= quality <= 100):
+                raise ValueError(
+                    f"action {i} 'screenshot.quality' must be an integer 0-100")
+            if quality is not None and image_type != "jpeg":
+                raise ValueError(
+                    f"action {i} 'screenshot.quality' is only valid when "
+                    "'screenshot.image_type' is 'jpeg'")
+            save_to = spec.pop("save_to", None)
+            if save_to is not None and (not isinstance(save_to, str)
+                                        or not save_to.strip()):
+                raise ValueError(
+                    f"action {i} 'screenshot.save_to' must be a non-empty path "
+                    "when present")
+            if save_to is not None:
+                # 与 web_screenshot 时代同一裁决：坏路径要一次立刻拒绝，而不是
+                # 付完浏览器冷启动才在写盘处炸。执行器落盘前会再走一遍同一条
+                # 校验（同一函数，同一裁决），这里提前的是"及时死"。
+                _resolve_save_to(save_to, image_type)
+            # full_page 与元素裁剪互斥（同一裁决自 web_screenshot 原样随迁）：
+            # 元素裁剪本就被元素自己的盒子框住，没有"整页的元素"可言。
+            if full_page:
+                if spec.get("selector") or spec.get("index"):
+                    raise ValueError(
+                        f"action {i} 'screenshot.full_page' cannot combine with a "
+                        "selector/index target - an element crop is already "
+                        "bounded by the element's own box")
+                out.append({"screenshot": {"full_page": True,
+                                           "image_type": image_type,
+                                           **({"quality": quality} if quality is not None else {}),
+                                           "decode_qr": want_qr,
+                                           **({"save_to": save_to} if save_to else {})}})
+            else:
+                out.append({"screenshot": {**_act_target(i, key, spec),
+                                           "image_type": image_type,
+                                           **({"quality": quality} if quality is not None else {}),
+                                           "decode_qr": want_qr,
+                                           **({"save_to": save_to} if save_to else {})}})
         elif key == "fill":
             if not isinstance(val, dict) or "text" not in val:
                 raise ValueError(f"action {i} 'fill' must be {{selector, text}} "
@@ -413,10 +615,14 @@ def _validate_actions(actions) -> list[dict]:
                 validate_css_selector(sel)
             if not isinstance(ms, (int, float)) or isinstance(ms, bool):
                 raise ValueError(f"action {i} 'scroll.ms_per_step' must be a number")
+            ms_applied = max(250, min(int(ms), SCROLL_STEP_MS_MAX))
+            if ms_applied != int(ms):
+                _note_text(_clamp_note(f"action {i} scroll.ms_per_step", int(ms),
+                                       ms_applied, lo=250, hi=SCROLL_STEP_MS_MAX))
             out.append({"scroll": {
                 "steps": _int_arg(steps, f"action {i} 'scroll'", "steps", MAX_SCROLL),
                 "selector": sel or None,
-                "ms_per_step": max(250, min(int(ms), SCROLL_STEP_MS_MAX)),
+                "ms_per_step": ms_applied,
             }})
     return out
 
@@ -424,16 +630,16 @@ def _validate_actions(actions) -> list[dict]:
 _WAIT_STATES = frozenset({"attached", "visible", "hidden", "detached"})
 
 
-# Public alias for record-time validation. A recipe (tasks.py, L3) has to be
-# validated by the SAME validator the executor uses: a stored chain that the
-# executor would refuse is a recipe that can never succeed, and the caller who
-# saved it has no way to tell — which is worse than no recipe at all. Exposed as
-# a name rather than reaching across modules for the underscore version.
-validate_actions = _validate_actions
 
 
 def _int_arg(val, where: str, unit: str, cap: int) -> int:
-    """Coerce an int-or-digit-string action argument into a clamped int."""
+    """Coerce an int-or-digit-string action argument into a clamped int.
+
+    The cap is announced (`{"wait": 120000}` became 30,000 ms and the action list
+    came back looking exactly like what was sent), because the caller is the one
+    budgeting wall-clock time for a page: a wait that is shorter than asked is a
+    fact about the result, not a detail of the implementation.
+    """
     n: int | None = None
     if isinstance(val, int) and not isinstance(val, bool):
         n = val
@@ -444,7 +650,11 @@ def _int_arg(val, where: str, unit: str, cap: int) -> int:
             n = None
     if n is None:
         raise ValueError(f"{where} must be an int ({unit})")
-    return max(0, min(n, cap))
+    applied = max(0, min(n, cap))
+    if applied != n:
+        _note_text(f"{where} clamped {n}->{applied} {unit} "
+                   f"(supported range 0-{cap})")
+    return applied
 
 
 _MEASURE_JS = """
@@ -584,6 +794,31 @@ async def _settle_after_click(page, click_locator) -> None:
             await page.wait_for_load_state("domcontentloaded", timeout=left_ms)
 
 
+# hover / drag 的后果是页内变化（悬停菜单展开、可排序列表重排），不是导航。等法
+# 与 click 收尾的"安静轮询"同一问——DOM 什么时候停止变化——但没有"换页了吗"
+# 那一问，上限也更短：菜单是同步渲染的本地变换，没有一个网络往返可等。
+QUIET_SETTLE_MS = 2_000
+QUIET_SETTLE_MIN_MS = 300
+
+
+async def _settle_quiet(page) -> None:
+    """hover / drag 的收尾：等页内后果落定（DOM 安静两拍或到预算）。"""
+    before = await _dom_snapshot(page)
+    started = time.monotonic()
+    deadline = started + QUIET_SETTLE_MS / 1000.0
+    quiet = 0
+    while time.monotonic() < deadline:
+        await page.wait_for_timeout(200)
+        now = await _dom_snapshot(page)
+        if now is not None and now == before:
+            quiet += 1
+            if (quiet >= 2
+                    and (time.monotonic() - started) * 1000 >= QUIET_SETTLE_MIN_MS):
+                return
+        else:
+            before, quiet = now, 0
+
+
 async def _scroll(page, steps: int, selector, ms_per_step: int) -> None:
     """Reach the bottom, wait for the page to answer, then go again.
 
@@ -648,6 +883,11 @@ def action_label(a: dict) -> str:
     (key, val), = a.items()
     if key == "fill":
         return f"fill {_target_label(val)}"
+    if key == "hover":
+        return f"hover {_target_label(val)}"
+    if key == "drag":
+        return (f"drag {_target_label(val)} -> "
+                f"{_target_label(val.get('to'))}")
     if key == "press":
         target = val.get("selector")
         if target is None and val.get("index") is not None:
@@ -735,6 +975,16 @@ def build_page_action(actions) -> Optional[Callable]:
                 if "click" in a:
                     loc = await _target_locator(page, a["click"])
                     await _settle_after_click(page, loc)
+                elif "hover" in a:
+                    loc = await _target_locator(page, a["hover"])
+                    await loc.hover(timeout=10_000)
+                    await _settle_quiet(page)
+                elif "drag" in a:
+                    d = a["drag"]
+                    src = await _target_locator(page, d)
+                    dst = await _target_locator(page, d["to"])
+                    await src.drag_to(dst, timeout=10_000)
+                    await _settle_quiet(page)
                 elif "fill" in a:
                     f = a["fill"]
                     loc = await _target_locator(page, f)
@@ -768,15 +1018,56 @@ def build_page_action(actions) -> Optional[Callable]:
                 elif "screenshot" in a:
                     import base64
                     s = a["screenshot"]
-                    loc = await _target_locator(page, s)
-                    data = await loc.screenshot(type="png", timeout=10_000)
-                    if len(data) > MAX_ACTION_SHOT_BYTES:
-                        raise ValueError(
-                            f"element capture is {len(data):,} bytes "
-                            f"(cap {MAX_ACTION_SHOT_BYTES:,}) - crop a smaller "
-                            "element, not a whole-page container")
-                    shot["image_b64"] = base64.b64encode(data).decode("ascii")
-                    shot["image_mime"] = "image/png"
+                    full_page = s.get("full_page")
+                    image_type = s.get("image_type", "png")
+                    save_target = None
+                    if s.get("save_to"):
+                        # 同 web_screenshot 时代：坏路径在快门前一刻也值一次拒绝，
+                        # 但此刻浏览器已经起来了——至少让它在写盘前一刻而不是
+                        # 之后才炸。归一化时已验过形状，这里只落盘。
+                        save_target = _resolve_save_to(s["save_to"], image_type)
+                    shot_kwargs: dict = {"type": image_type, "timeout": 10_000}
+                    if s.get("quality") is not None:
+                        shot_kwargs["quality"] = s["quality"]
+                    if full_page:
+                        # 整页捕获没有元素盒子可依：page.screenshot 接 full_page。
+                        try:
+                            data = await page.screenshot(full_page=True,
+                                                         **shot_kwargs)
+                        except Exception as exc:
+                            logger.debug("capture failed: %r", exc)
+                            # 净化器把驱动方的 "Call log" 掉段砍掉，换成能改的
+                            # 那个旋钮的名字（timeout / 会话 / 二进制）——与
+                            # web_screenshot 时代同一张映射表，只是家搬了。
+                            raise RuntimeError(
+                                _screenshot_error_message(exc)) from None
+                    else:
+                        if s.get("index") is not None:
+                            loc = await _target_locator(page, s)
+                        else:
+                            loc = await _locator_or_raise(page, s["selector"])
+                        try:
+                            data = await loc.screenshot(**shot_kwargs)
+                        except Exception as exc:
+                            logger.debug("capture failed: %r", exc)
+                            raise RuntimeError(
+                                _screenshot_error_message(exc)) from None
+                    if save_target is not None:
+                        # save_to 是 text-only 宿主的整条出路：字节走盘，路径进
+                        # 回执，inline 一张都不发——大图也不再受 inline 帽约束。
+                        saved = _write_screenshot(data, save_target)
+                        shot["saved"] = saved
+                        shot["saved_bytes"] = len(data)
+                    else:
+                        if len(data) > MAX_ACTION_SHOT_BYTES:
+                            raise ValueError(
+                                f"capture is {len(data):,} bytes "
+                                f"(cap {MAX_ACTION_SHOT_BYTES:,} for inline "
+                                "images) - crop a smaller element, or pass "
+                                '{"save_to": "..."} to write the full capture '
+                                "to disk instead of the transcript")
+                        shot["image_b64"] = base64.b64encode(data).decode("ascii")
+                        shot["image_mime"] = f"image/{image_type}"
                     if s["decode_qr"]:
                         # Auxiliary to the capture: a decoder problem (missing
                         # extra, no code in the crop) reports in the row and
