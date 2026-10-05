@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from dhole_mcp import install as _install
+from dhole_mcp import injection
 from dhole_mcp.audit import _audit_event
 from dhole_mcp.context import (
     _ARG_NOTES,
@@ -29,6 +30,7 @@ from dhole_mcp.context import (
     _SESSION_ID,
 )
 from dhole_mcp.envelope import (
+    is_extraction_collapsed,
     _stale_days_for,
     classify_source,
     compute_freshness,
@@ -282,6 +284,25 @@ def _never_escalate(result: ResponseModel, url: str) -> bool:
     return _path.endswith((".xml", ".rss", ".atom", ".rdf", ".json"))
 
 
+#: 浏览器档"这次帮不上忙"的两个来源写在同一句里，因为调用方要的是同一个答案：别升级。
+_BROWSER_UNAVAILABLE_MARKS = ("browser_binary_missing", "browser_unavailable")
+
+
+def _browser_cannot_help(result: ResponseModel, url: str) -> bool:
+    """这一档帮不上的两种原因：被**故意**跳过（数据文档），或**试过了而起不来**。
+
+    旧的门只有前者。于是浏览器层坏掉的那台机器上 —— 2026-10-05 的那一次 —— 每一条
+    壳页 / 403 / bot_wall 的 `next_action` 都在建议一次刚刚被现场证明做不到的升级，
+    而它是调用方当时唯一拿到手的建议（实测那一整轮 0% 可用）。事实其实一直在信封上：
+    `escalation_path="browser_binary_missing"` 在跳过 stealthy 之前就写好了，只是没人读。
+    """
+    if _never_escalate(result, url):
+        return True
+    err = (result.error or "").lower()
+    return any(mark in (result.escalation_path or "") or mark in err
+               for mark in _BROWSER_UNAVAILABLE_MARKS)
+
+
 def _is_js_shell(result: ResponseModel) -> bool:
     """Check if a response contains only a JS-only placeholder, not real content.
 
@@ -338,8 +359,34 @@ def _is_js_shell(result: ResponseModel) -> bool:
             and result.total_size_bytes > _JS_SHELL_MIN_BODY_BYTES:
         text_len = sum(len(c) for c in result.content)
         if text_len < _JS_SHELL_MIN_TEXT_CHARS:
+            # 同一个"字少"有两种成因，而它们要求的下一步正好相反：
+            #   * 站点给了空壳 —— DOM 自己也没几个字（内容要 JS 才长出来），起浏览器对。
+            #   * 抽取器没读懂这页 —— DOM 里明明写着话，抽出来的却少。起浏览器只是把
+            #     同一份静态标记再交给同一个抽取器，多付 3–5 秒拿回同样少的字。
+            # 分岔用的数在 HTML 还在手边时就量好了（`_dom_visible_chars`），这里只读。
+            # 实测：books.toscrape 的 travel 列表页 196 个抽出字符对 1,374 个 DOM 可见
+            # 字符，被旧判据当成壳 —— 差 4 个字符就过 200 那条线，而它是个纯静态页面。
+            if is_extraction_collapsed(text_len,
+                                       getattr(result, "_dom_visible_chars", 0)):
+                return False
             return True
     return False
+
+
+def extraction_collapsed(result: ResponseModel) -> bool:
+    """这页有字而抽取没给回来 —— 把"塌陷"作为一个**说得出口的事实**留出来。
+
+    为什么要单独一个谓词而不是让 `_is_js_shell` 直接返回个元组：前者回答"要不要起
+    浏览器"（答否），后者回答"这次回得少该怎么说"。一个函数答两问，第二问的答案迟早
+    被第一问的形状扭成"壳"。
+    """
+    if result.fetcher_used not in ("http", "stealthy") or result.status >= 400:
+        return False
+    if "application/pdf" in (result.content_type or "").lower():
+        return False
+    text_len = sum(len(c) for c in result.content)
+    return is_extraction_collapsed(text_len,
+                                   getattr(result, "_dom_visible_chars", 0))
 
 
 def _schema_value_empty(value: Any) -> bool:
@@ -406,6 +453,22 @@ def _detect_content_issue(result: ResponseModel) -> str:
     # browser escalation that renders the same error view.
     if _is_soft_failure(result):
         return "soft_failure_detected: page returned an error or placeholder view with HTTP 200, not content"
+
+    if extraction_collapsed(result):
+        # 抽取塌陷与 JS 壳在"正文很少"这一条上长得一模一样，而下一步正好相反：壳靠渲染
+        # 补，塌陷是 dhole 自己的读取问题 —— 起浏览器是把同一份静态标记交给同一个抽取器
+        # 再说一次。所以这一支排在 `_is_js_shell` **前面**，给的也不是"再抓一次"而是
+        # "换个 extraction_type"。
+        #
+        # 它同时改写了 page_type 的命运：`page_type_from_error` 只认 `js_shell_detected`
+        # 那个前缀，所以这个新 token 不会把 `detect_page_type` 的结构化判定覆盖成壳 ——
+        # 那正是"用一个猜测盖掉一个检查"的本体。
+        visible = getattr(result, "_dom_visible_chars", 0)
+        return (f"extraction_collapsed: this page's own markup holds {visible} "
+                f"characters of visible text while the extract returned "
+                f"{sum(len(c) for c in result.content)} - the words ARE in the HTML, "
+                "dhole's reader lost them. Do NOT re-fetch for rendering; take "
+                "extraction_type='html' (or 'text') for this URL instead.")
 
     if _is_js_shell(result):
         return "js_shell_detected: page requires JavaScript rendering but fetcher returned placeholder"
@@ -664,27 +727,39 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         next_action = ("304 not modified: the origin says this URL still serves the "
                        "version dhole already holds, so no body was transferred - that "
                        "is a successful answer, do NOT report it as a failed fetch. "
-                       "Revalidation is asked by `web_watch`, not by a caller; to read the "
+                       "Revalidation is asked internally, never by a caller; to read the "
                        "body again, make a plain fetch (nothing to compare against).")
     elif err.startswith("js_shell_detected") or err.startswith("bot_challenge_detected"):
         _wall = ("bot challenge page" if err.startswith("bot_challenge_detected")
                  else "JS shell")
-        if _never_escalate(result, result.url):
-            # The advice cannot promise what the pipeline refuses to do. A data
-            # document (.xml/.rss/.atom/.json, or any non-GET) is never handed to
-            # the browser on purpose, so "re-fetch auto-escalates" sent the caller
-            # to retry a fetch that answers identically. Measured on
-            # docs.vllm.ai/sitemap.xml: a fresh request gets a Cloudflare 429
-            # challenge, dhole correctly declines to render it, and the hint still
-            # told the caller the browser would take it next time. Asking again is
-            # not a plan; naming the origin as the one refusing is.
-            next_action = (
-                f"the origin answered this {'request' if _METHOD.get() != 'GET' else 'URL'} "
-                f"with a {_wall}, but dhole will NOT render it in a browser - a "
-                "render of a data document returns the browser's own viewer markup "
-                "instead of the document (and a render cannot resend a write). "
-                "Re-fetching unchanged gets the same answer: wait and retry, or "
-                "switch source.")
+        if _browser_cannot_help(result, result.url):
+            if _never_escalate(result, result.url):
+                # The advice cannot promise what the pipeline refuses to do. A data
+                # document (.xml/.rss/.atom/.json, or any non-GET) is never handed to
+                # the browser on purpose, so "re-fetch auto-escalates" sent the caller
+                # to retry a fetch that answers identically. Measured on
+                # docs.vllm.ai/sitemap.xml: a fresh request gets a Cloudflare 429
+                # challenge, dhole correctly declines to render it, and the hint still
+                # told the caller the browser would take it next time. Asking again is
+                # not a plan; naming the origin as the one refusing is.
+                next_action = (
+                    f"the origin answered this {'request' if _METHOD.get() != 'GET' else 'URL'} "
+                    f"with a {_wall}, but dhole will NOT render it in a browser - a "
+                    "render of a data document returns the browser's own viewer markup "
+                    "instead of the document (and a render cannot resend a write). "
+                    "Re-fetching unchanged gets the same answer: wait and retry, or "
+                    "switch source.")
+            else:
+                # 同一个规矩的另一半：这一次不是"不肯升"，是"升不了"。2026-10-05 那次
+                # 浏览器层整体起不来，而每一条壳页的 next_action 都在说"再抓一次会自动
+                # 升级到 stealthy"—— 那是调用方当时唯一拿到手的建议，命中率是 0。
+                # 事实写在 `escalation_path` 上（跳过 stealthy 之前就写好了），读它就行。
+                next_action = (
+                    f"page is a {_wall}, and the browser tier that would render it is "
+                    "not available on this machine - the auto-escalation this usually "
+                    "promises was already attempted and skipped. `dhole --doctor` names "
+                    "the state and the directory it searched; meanwhile this HTTP body "
+                    "is what there is (extraction_type='html' shows it as sent).")
         else:
             next_action = (f"page is a {_wall}; re-fetch auto-escalates to the "
                            "stealthy browser")
@@ -696,8 +771,13 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                        "Switch source, or try the Internet Archive for a public copy")
     elif err.startswith("bot_wall_detected"):
         next_action = ("page is an anti-bot/CAPTCHA challenge, not content - do NOT cite it. "
-                       "Retry once with force_fetcher='stealthy' (renders the challenge), "
-                       "otherwise switch source")
+                       + ("The browser tier that would render it is unavailable on this "
+                          "machine (the skip is recorded in error/escalation_path), so "
+                          "force_fetcher='stealthy' cannot help this time - switch source "
+                          "or `dhole --doctor` to see why."
+                          if _browser_cannot_help(result, result.url) else
+                          "Retry once with force_fetcher='stealthy' (renders the "
+                          "challenge), otherwise switch source"))
     elif err.startswith("robots_disallowed"):
         # A pre-flight refusal, not a site failure: say so without the generic
         # "retry / switch source" wording, and name the documented override.
@@ -722,6 +802,22 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                        "with extraction_type='html' to inspect the markup yourself")
     elif err.startswith("geo_redirect_detected"):
         next_action = "geo redirect: try a different regional URL or a proxy"
+    elif err.startswith("extraction_collapsed"):
+        # 批次 2：这一页的字在 HTML 里，是 dhole 没抽到。推荐"再抓一次/起浏览器"会把
+        # 调用方送回同一条抽取管路 —— 唯一真的换个结果的旋钮是 extraction_type。
+        next_action = ("the extract lost this page's own text - do NOT re-fetch for "
+                       "rendering (the browser hands the same markup to the same "
+                       "reader). Re-call with extraction_type='html' or 'text' to get "
+                       "the body as it is, or web_crawl this one URL.")
+    elif "browser_binary_missing" in err or "browser_unavailable" in err:
+        # 批次 3：这一句是全场最多发的一条建议，而它以前每次都在推荐刚刚失败的那一档。
+        # 升级被跳过时 `escalation_path` 与 `error` 里已经带着事实（server 在跳过
+        # stealthy 之前写的），所以这里不需要新状态，只需要读它。
+        next_action = (
+            "the browser tier is not available on this machine, so this answer came "
+            "from the HTTP tier only - do NOT re-fetch with force_fetcher='stealthy' "
+            "(the same skip will happen). `dhole --doctor` names the state and the "
+            "directory it searched; search, plain reads, docs and feeds all still work.")
     elif err.startswith("Response body too large"):
         # This rejection is dhole's own verdict, not the host's, and the
         # classifier's generic "check the error field, try another source" would
@@ -743,7 +839,7 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         # successfully OCR'd image is also page_type image, and telling its reader
         # "text cannot be read" would be false.
         next_action = ("no text could be read from this image - "
-                       "use a vision-capable model or the web_screenshot tool, or switch source")
+                       "use a vision-capable model or a web_act screenshot action, or switch source")
     elif (not result.content_ok) and (result.quality_score or 0) > 0 and result.quality_score < 0.7 and not err:
         from dhole_mcp.pdf_extractor import ocr_advice
         next_action = ("low-quality PDF extraction (CID font corruption / garbled "
@@ -771,6 +867,17 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         elif category == "dns_failure":
             next_action = ("All fetch tiers failed: DNS resolution failed. Verify the URL "
                           "is correct; do NOT retry.")
+        elif category == "browser_launch":
+            # Say which of the three states this is instead of recommending the tier
+            # that just failed: "re-fetch auto-escalates to the stealthy browser" is
+            # advice for a browser that can start.
+            next_action = (
+                "All fetch tiers failed: the browser process could not be started, so "
+                "the target is not implicated and another fetch will fail the same way. "
+                "`dhole --doctor` names the state (absent / present but never launched / "
+                "refused by the OS) and the directory it searched. HTTP-tier tools still "
+                "work; attach to a browser you started yourself with "
+                "cdp_url='http://127.0.0.1:9222' plus confirm=true.")
         else:
             next_action = ("All fetch tiers failed. The site may use unbypassable protection "
                           "(DataDome/Akamai/Turnstile) or is unreachable - switch sources.")
@@ -836,7 +943,12 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                 "tier can invent them, so a browser retry is wasted here.")
     elif result.status == 403:
         next_action = ("access denied (HTTP 403) - the site is refusing this client. "
-                       "Retry once with force_fetcher='stealthy', otherwise switch source")
+                       + ("A browser render is the usual move and it is not available on "
+                          "this machine right now (see error/`dhole --doctor`), so do not "
+                          "spend a call on force_fetcher='stealthy' - switch source."
+                          if _browser_cannot_help(result, result.url) else
+                          "Retry once with force_fetcher='stealthy', otherwise switch "
+                          "source"))
     elif result.status == 429:
         next_action = ("rate limited (HTTP 429) - wait before retrying, or switch source")
     elif result.status >= 500:
@@ -907,6 +1019,22 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                 "of source; for current info, web_search a recent query (e.g. add "
                 "the current year)"
             )
+    # 批次 6e：encoding 字段在没人声明编码时写的是一个"看起来像测量结果"的名字。真实的
+    # 实测边界（charset.py 上面记着）是 GB18030 也严格解得开 Shift_JIS 与 EUC-KR 的字节，
+    # 出来的是看着像中文的错字、damage 0 —— 便宜的判别器不存在，所以能诚实说的只有
+    # "这一个是 dhole 选的"，不能说"这一个猜错了"。
+    # 不进 content_ok：那会把一次正确的中文读取报成失败，而读者从此不信这个字段 —— 用一
+    # 个新的谎换掉一句旧的含糊，是本仓库反复拒绝的那种修法。
+    if (result.metadata or {}).get("encoding_basis") == "guessed" and not result.error:
+        hedge = (
+            "the charset here is a guess, not a declaration: this file named no "
+            "encoding and gb18030 decoded it cleanly - but gb18030 decodes Shift_JIS "
+            "and EUC-KR bytes cleanly too, into plausible-looking wrong Chinese, and "
+            "nothing cheap tells the three apart. If the text reads like the wrong "
+            "language, re-call with encoding= ('shift_jis', 'euc-kr', 'big5', 'gbk') "
+            "- that turns the guess into a verdict. The content is not being doubted "
+            "by this note.")
+        next_action = f"{next_action} {hedge}" if next_action else hedge
     return summary, next_action, content_ok
 
 
@@ -1013,6 +1141,15 @@ def _with_agent_hints(result: ResponseModel) -> ResponseModel:
     selector_note = _ignored_selector_note(result)
     if selector_note:
         summary = f"{summary} · {selector_note}" if summary else selector_note
+    # G25 阶段4：正文是数据，不是指令——命中注入启发式就点名（标记不拦截，
+    # 形状与边界见 injection.py 的模块 docstring）。content 里混着的图片块
+    # 不是文本，跳过；空 content（错误/robots 拒绝）scan 返回 None。
+    finding = injection.scan("\n".join(
+        chunk for chunk in result.content if isinstance(chunk, str)))
+    if finding:
+        result.untrusted_content = finding
+        note = f"untrusted_content: {finding['total']} hit(s)"
+        summary = f"{summary} · {note}" if summary else note
     result.summary = summary
     result.content_ok = content_ok
     result.next_action = next_action
@@ -1025,6 +1162,21 @@ def _with_agent_hints(result: ResponseModel) -> ResponseModel:
 # How much later than the caller's own budget the _within_call_budget backstop
 # fires. See its docstring: it must lose the race to the tiers' own accounting.
 _BACKSTOP_GRACE_S = 1.5
+
+
+def _budget_advice(stage: str, fetcher_used: str) -> str:
+    """超时建议里不许出现这次根本没用到的旋钮（批次 3 的同一条规矩）。
+
+    `force_fetcher='http'` 只有在浏览器档真的参与过这次调用时才是一个选项。实测的形状是
+    一次 PDF 下载在 HTTP 档耗尽预算，而建议写着"传 force_fetcher='http' 以跳过浏览器渲染"
+    —— 那次调用离渲染一步都没沾，读者因此以为浏览器是成本所在，去查一个不存在的环节。
+    """
+    head = "Raise timeout (e.g. timeout=60000) for a slow host"
+    lowered = (stage or "").lower()
+    if "browser" in lowered or "stealthy" in lowered or fetcher_used == "stealthy":
+        return f"{head}, pass force_fetcher='http' to skip browser rendering, or switch source."
+    return (f"{head}, or switch source - the browser tier never ran on this call (it "
+            f"ran out at the {stage}), so there is no rendering here to skip.")
 
 
 def _over_budget_result(url: str, budget_ms: float, elapsed_ms: float,
@@ -1050,8 +1202,7 @@ def _over_budget_result(url: str, budget_ms: float, elapsed_ms: float,
                f"the {stage}. No content was extracted."),
         next_action=(
             f"{head} {diagnosis}" if diagnosis else
-            f"{head} Raise timeout (e.g. timeout=60000) for a slow host, pass "
-            "force_fetcher='http' to skip browser rendering, or switch source."),
+            f"{head} {_budget_advice(stage, fetcher_used)}"),
     )
 
 
