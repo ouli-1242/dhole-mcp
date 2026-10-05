@@ -131,9 +131,54 @@ def test_connect_stays_inside_the_packed_budget():
         "要么把新句子搬进 sys_guide 语料（按需付），要么说清为什么它必须每次连接都到。")
 
 
-#: 实测的棘轮位（B5-17 四刀之后：44,016 → 40,010，其中 instructions 3,532 → 3,070）。
-#: 改它必须写理由，且只准往小改 —— 要往上抬就是「这句话值不值每次连接」的一次显式决定。
-CONNECT_CEILING = 40_010
+#: 实测的棘轮位。B5-17 四刀：44,016 → 40,010（instructions 3,532 → 3,070）；
+#: 17.0 移除四颗状态工具：40,010 → 33,099（其中 `sys_state` 描述与那四行路由文本
+#: 一起收走）；2026-10-04 G25 评审的写操作确认门：33,099 → 33,460（+361）——
+#: web_request 的 confirm 属性与描述句必须住在连接期：藏在签名里的 confirm 会被
+#: dispatch 当表外名拒掉，拒绝消息教的重试根本到不了闸门，所以这不是「搬去
+#: sys_guide 按需付」能解决的句子，是它必须每次连接都到的显式决定（棘轮第一次
+#: 上抬，理由即此）。同日 sys_state 名册补全（cdp_hosts / config 两类进册）以
+#: 自身描述收紧 + ANTI_DETECT_DESC（wire 上两份）对冲，33,460 → 33,452——棘轮
+#: 随实测回落。2026-10-04 G25 阶段5（M1/M2/M4/M5 四项）第一刀真往下：web_act
+#: 的 anti_detect 换短指针（完整阶梯只住 web_read 一处，-83）、captcha 纪律归一
+#: （墙的清单归 web_screenshot，-41）、doc_parse 扩展名清单归 file_path（-58）、
+#: fetch_content 每页帽 8000→3000（响应侧，不占这页）——33,452 → 33,270。棘轮
+#: 随实测回落。改它必须写理由 —— 要往上抬就是「这句话值不值每次连接」的一次
+#: 显式决定，要往下砍就是一次瘦身。
+#: 2026-10-05 G25 阶段6（G1，评审 High）：web_read 的 extraction_type 枚举加
+#: 'check'（「这页变了吗」回执：带源站校验子回源，304 即没变，200 逐字比对给
+#: 分叉窗口）。评审原文把它记在预算账内（"枚举零参数成本、wire 约＋40"），实测
+#: +66（枚举 10 + 指针描述 56）——33,270 → 33,336。这是那笔账的兑现，不是新词
+#: 挤占：换到的是一次几百字节的变更探测，替掉整页重取。
+#: 同日阶段7（A1/A2，评审 High/Medium）：web_screenshot 并入 web_act 的截图动作
+#: （四颗捕获旋钮 full_page/save_to/image_type/quality 进动作对象，纪律文案归
+#: sys_guide behavior 卷）＋ web_resolve 下线（web_read 同样跟随重定向并回报落点）。
+#: 13 → 11 颗，实测 -3,014 —— 33,336 → 30,322。棘轮随实测大幅回落；web_act 自己
+#: +301（旋钮进描述），instructions -56（两条死路由句出、一句截图进 web_act 的）。
+#: 2026-10-05 批次 3：doc_parse 补 `offset`。这不是"又想到一句文案"，是一条被实测
+#: 抓到的自相矛盾：截断回执里印着 `Next offset: N`，而 doc_parse 自己**拒收** N（入参
+#: 名单只有 file_path/cwd/encoding）。建议做一次调用方不许做的事，就得为那句建议付
+#: 一次往返 —— 上限里买的就是"印出来的数字能原样传回去"这一件事。实测 +226，
+#: 30,294 → 30,520。
+#: 2026-10-05 批次 6c：12 处 wire `enum` 数组从 schema 里摘掉（实测 -319，连同把值集
+#: 写进描述的重排），换成 dhole 自己的校验器（extraction_type / focus_mode /
+#: focus_engine 三颗新写；force_fetcher / anti_detect / mode / freshness 四颗本来就有
+#: —— 摘 enum 之前先逐颗确认这一点，否则非法值第一次落到按字面量写的内部代码）。理由：
+#: 宿主那道 JSON-Schema 门拒收非法值时**不列合法值**（实测原话 "must be equal to one
+#: of the allowed values"），而 dhole 的报错印出整份列表加方向（`Invalid freshness:
+#: 'decade' (day|week|month|year)`）。Python 侧本来就是宽类型，枚举只让那句更有用的错误
+#: 永无机会运行（房内主张见 params.py 关于 `Literal` 只是文档那段）。值集没有消失：
+#: 它从数组搬进了描述散文（`'day', 'week', 'month' or 'year'`）与拒本文案两处，由
+#: tests/test_the_enum_argument_values_are_checked_by_dhole.py 双向守着"每颗参数要么
+#: 自己点全、要么指着点全的那一份"。
+#: 三次合账：上一记实测位 30,294（web_act 的 actions 增列 hover/drag，账写在
+#: tests/tool_defs_lock.json 的 comment 里），30,294 +226 -319 = 30,201，批次 5 的
+#: `max_total_chars` 再 +273 → **30,474**。前两次加参数同时删了更贵的东西、净降；
+#: 这一笔是这把尺子立起来之后**第一次上抬**，而抬它的理由就是它省下的那笔：没有
+#: 整轮帽，默认尺寸的爬取交回 324,001 字符（实测那次 223,599），宿主把载荷截断落盘，
+#: 调用方付的是整轮 token 加一次重爬。273 字每次连接，买的是"一次调用的结果读得完"
+#: —— 房内规矩问的那句"这句话值不值每次连接"，这是它值的那一种。
+CONNECT_CEILING = 30_474
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

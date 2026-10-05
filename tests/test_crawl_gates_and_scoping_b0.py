@@ -6,6 +6,13 @@
 参数、`crawl_urls` 三者一律不在此处出现。三刀都已落下，`crawl_urls` 连同它的四个
 裁剪计数一起走了（g28 那个文件也跟着），这一段留着是为了说明为什么这里没有它们的测试。
 
+**一处后来反悔了**：整轮字符预算（`max_total_chars`）在 2026-10-05 的实测之后回来了
+—— 删它的理由是"总量估不准"，实测给的是"40 页 × 默认每页 8,000 = 223,599 字符，
+宿主把载荷截断落盘"，而估不准从来不是花得起的理由。它不在本文件里，因为本文件的
+判据是"闸门到点要如实报告"这一族；整轮帽的两半（不再付下一批 + summary 点名被留下的
+页）钉在 tests/test_ceiling_report_regressions.py 的
+`test_the_whole_run_cap_stops_paying_and_names_what_it_left_out`。
+
 四个主题与 B0 计划一一对应：
 
 1. **预算三闸门与各自如实报告**：max_pages / deadline / 每页 max_chars 各自到点时，

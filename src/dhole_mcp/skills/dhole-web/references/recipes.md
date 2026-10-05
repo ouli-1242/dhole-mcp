@@ -22,7 +22,7 @@ Starting routes for multi-step tasks. Each recipe marks where to pivot on failur
 2. `path_include:"/docs"` to scope a subtree (`'/docs'` does not match `/docs-old`), `search:"keywords"` to filter by title/URL
 3. `web_read(urls=[...])` to read the picks — one call, no re-discovery, no counters to reconcile
 4. List pages return structured link listings (`page_type=list`) — follow them to content pages
-- Budget sense: pages × per-page chars is the entire ceiling; map first, then name pages — don't max `max_pages` blindly
+- Budget sense: three caps, and the summary names the one that bit — `max_pages`, `max_content_chars_per` per page, `max_total_chars` for the whole run (default 60,000). Map first, then name pages; don't max `max_pages` blindly
 
 ## Structured extraction (table/listing page → JSON)
 
@@ -33,8 +33,8 @@ Starting routes for multi-step tasks. Each recipe marks where to pivot on failur
 ## Verify a local dev / staging service
 
 1. `cred_defaults(set={allow_private: true})` once (or `["host.name"]` for a named host), then `web_read(url="http://127.0.0.1:PORT/...")` — the SSRF guard rejects private hosts until that waiver exists. For a one-machine waiver instead, set `DHOLE_ALLOW_PRIVATE_HOSTS`. With a proxy running, loopback may be intercepted (dead ports answer 502 instead of connection-refused) — rule the proxy out first (`NO_PROXY` += `127.0.0.1,localhost`); never probe dead ports with stealthy (the browser waits out the 30s timeout)
-2. Rendered view / real behavior: `web_screenshot` (text-only agents: `save_to` then read the file); interaction checks via `actions` click/fill
-3. `web_resolve` settles where server-side redirects actually land
+2. Rendered view / real behavior: a `screenshot` action inside `web_act`'s chain (text-only agents: add `save_to` and read the file); interaction checks via click/fill in the same chain
+3. `web_read` settles where server-side redirects actually land (it follows them and reports the landing page)
 
 ## Reading PDFs
 
@@ -51,23 +51,7 @@ Starting routes for multi-step tasks. Each recipe marks where to pivot on failur
 
 ## Sites behind login
 
-Five paths, cheapest first: (1) stored credentials — `cred_defaults` `set={cookies: ..., host: ...}` or `{auth: ..., host: ...}` (`session_id` keeps a browser jar across calls, 24h). (2) **No-password browser flow (17.0)**: pass the same named `session_id` to browser-tier calls — the jar bridges into that session's dedicated browser and back; verify with `check_login`, act with snapshot + index actions, and let `{"submit": ...}` pause for the user's confirmation. (3) **Stored-credential login (17.0)**: `cred_vault(op='match', url=...)` to find the item, then `cred_login` without `confirm` to show the plan and again with `confirm=true` to run it — for a password the user already keeps in Bitwarden / 1Password; the value is read server-side and never enters the transcript. (4) CDP attach (user's real Chrome, one-time setup — configuration.md). (5) DataDome / Akamai / interactive Turnstile / 2FA remain hand-offs. Cookies and tokens don't survive cross-origin redirects; values are never echoed. **Never ask the user to paste a password into the conversation** — route it through path 2, 3, or 4 instead.
-
-## Reach a page that needs steps — record and replay
-
-1. Derive the chain once: `web_act` with `actions: [{"snapshot": true}]`, then address by index with `expect` (see "Operate a page")
-2. `web_recipe(op='save', name=..., url=..., actions=[...], note=...)` — validated at save time, so a chain the executor would refuse cannot be stored
-3. Later: `web_recipe(op='run', name=..., session_id=...)` returns the whole fetch plus one receipt per action. `session_id` is per-run — recipes never store one
-4. Pivot: `actions_failed` non-zero (or `op='list'` showing `last_ok: false`) means the page changed → re-snapshot, re-derive, re-save. Don't keep replaying a broken chain
-- Best for: pages whose content only appears after clicks, or a repeated multi-step fetch (always registered in 17.0)
-
-## Watch a page for changes (web_watch)
-
-1. `web_watch(op='add', name=..., url=..., focus=...)` — add `focus` for a long page whose chrome changes every load
-2. First `web_watch(op='check', name=...)` **only stores the baseline**: `changed=null`, `baseline_created=true`. Report "baseline stored", NOT "no change"
-3. Later checks answer `changed: true/false` with `added`/`removed` counts and a capped `diff`
-4. Pivot: a failed fetch leaves the baseline untouched and puts the reason in `error` — fix and re-check rather than assuming the page is gone. `baseline_cut=true` means `max_chars` was too small to see the whole page — widen it and re-baseline
-- Best for: changelogs, pricing pages, status pages, docs — a page without a feed
+Four paths, cheapest first: (1) stored credentials — `cred_defaults` `set={cookies: ..., host: ...}` or `{auth: ..., host: ...}` (`session_id` keeps a browser jar across calls, 24h). (2) **No-password browser flow (17.0)**: pass the same named `session_id` to browser-tier calls — the jar bridges into that session's dedicated browser and back; verify with `check_login`, act with snapshot + index actions, and let `{"submit": ...}` pause for the user's confirmation. (3) CDP attach (user's real Chrome, one-time setup — configuration.md). (4) DataDome / Akamai / interactive Turnstile / 2FA remain hand-offs. Cookies and tokens don't survive cross-origin redirects; values are never echoed. **Never ask the user to paste a password into the conversation** — route it through path 2 or 3 instead.
 
 ## Operate a page (form, settings, checkout)
 
@@ -81,4 +65,4 @@ Five paths, cheapest first: (1) stored credentials — `cred_defaults` `set={coo
 - Known URLs in bulk: one parallel `web_read(urls=[...])`
 - Lead every long page with `focus=`; only paginate with `offset` when focus isn't enough
 - Lightweight search+fetch sessions: suggest `DHOLE_TOOLS=web_read,web_search` to halve connection overhead
-- Repeated fetches ride the cache (1h / docs 24h / article 6h); `cache_ttl=0` only for fresh data
+- Repeated fetches ride the cache (1h default / article 6h); `cache_ttl=0` only for fresh data

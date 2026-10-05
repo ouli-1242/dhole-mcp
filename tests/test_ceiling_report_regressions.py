@@ -8,8 +8,9 @@
 2. archive.org 第三层降级在工具描述与 README 里都不存在 —— agent 调用前
    无从得知内容可能是存档快照。
 3. web_crawl 有一道没写在文档里的钳制，于是 "调大 max_pages 就能多爬" 是错的
-   预期。17.0 §3-31 删掉了那道总字符预算（`max_total_chars` 整个下线），页数与每页
-   字符这两道天花板留着 —— 教训不跟着删：数值由 crawl.py 的常量反查 wire。
+   预期。17.0 §3-31 曾把总字符预算 `max_total_chars` 整个下线，2026-10-05 的实测
+   又把它带了回来（40 页 × 默认每页 8,000 真跑出 223,599 字符，被宿主截断落盘）；
+   三道天花板如今都在。教训不跟着任何一次增删走：数值由 crawl.py 的常量反查 wire。
 """
 
 import asyncio
@@ -173,6 +174,8 @@ class TestCrawlCapsDocumented:
     `max_pages` 与每页 `max_content_chars_per` 两道仍然存在的天花板。教训跟着留下，
     形式也照旧：**数值从 crawl.py 的常量读出来，再要求 wire 上出现同一个数** ——
     只钉文档拦不住"代码改了钳制值、描述跟着改"的双双漂移。
+    （那一道预算在 2026-10-05 的实测之后回来了，见本文件开头那条；所以这里现在读
+    的是三道闸的常量，同一条"从代码反查 wire"的形式一处没变。）
     """
 
     @staticmethod
@@ -191,14 +194,29 @@ class TestCrawlCapsDocumented:
             tools, "web_crawl", "max_content_chars_per"), \
             "每页字符上限没写进参数描述"
 
+    def test_the_whole_run_ceiling_is_on_the_wire(self, tools):
+        """整轮帽的两个数（默认与上限）必须写在参数描述里 —— 它是被删过一次又回来的一颗。
+
+        §3-31 删它的那句理由现在还刻在 crawl.py 的注释里，而注释不是调用方读的地方；
+        调用方读的是这颗参数的描述。删过、回来、却不写清"回来了且默认会砍"，
+        等于留下一颗会咬人而无名有主的闸。
+        """
+        prop = self._prop(tools, "web_crawl", "max_total_chars")
+        assert str(crawl_mod.MAX_TOTAL_CHARS_DEFAULT) in prop, prop
+        assert str(crawl_mod.MAX_TOTAL_CHARS_CEILING) in prop, prop
+        assert "0 = no cap" in prop, prop
+
 
 class TestHardClampBehavior:
     """钉钳制本身（上面那类钉的是文档）。
 
-    这一类原来跑的是"显式 max_total_chars 被钳在 1,000,000"。总预算下线之后能算的
-    账只剩两道天花板，所以这里跑一次真爬取（stub 掉网络层）证明：要 500 页只会拿到
+    这一类原来跑的是"显式 max_total_chars 被钳在 1,000,000"。17.0 §3-31 把整轮预算
+    删掉过一阵，那道账只剩两道天花板；2026-10-05 的实测把它带回来了（40 页 × 默认
+    每页 8,000 真跑出 223,599 字符，宿主把载荷截断落盘 —— 算不清不是花得起的理由）。
+    所以这里跑一次真爬取（stub 掉网络层）证明两件事：要 500 页只会拿到
     `MAX_PAGES_CEILING` 页、每页不超过 `PER_PAGE_CHARS_CEILING` 字符，而**被钳这件事
-    在 summary 里说得出名字** —— 静默才是这一族原来的 bug。
+    在 summary 里说得出名字** —— 静默才是这一族原来的 bug。整轮帽在这一条里显式关掉
+    （`max_total_chars=0`），因为这三道闸要各自能被单独证明；它自己那一刀在下面。
     """
 
     def test_both_ceilings_hold_and_say_so(self, monkeypatch):
@@ -219,7 +237,7 @@ class TestHardClampBehavior:
         monkeypatch.setattr(MasterFetchServer, "web_read", fake_smart_fetch)
         result = asyncio.run(MasterFetchServer().web_crawl(
             "https://example.com/", max_pages=500, cache_ttl=0,
-            max_content_chars_per=999_999, concurrency=1,
+            max_content_chars_per=999_999, concurrency=1, max_total_chars=0,
         ))
 
         assert len(result.pages) == crawl_mod.MAX_PAGES_CEILING, \
@@ -229,6 +247,51 @@ class TestHardClampBehavior:
         assert "max_content_chars_per clamped" in result.summary, \
             f"钳了却没说：{result.summary}"
         assert result.truncated_by_max_pages is True
+
+    def test_the_whole_run_cap_stops_paying_and_names_what_it_left_out(
+            self, monkeypatch):
+        """整轮帽到点要做两件事：**不再发下一批**，并且说出被留下的有哪几页。
+
+        这一颗是 §3-31 删过、实测又带回来的那道。删它的理由是"整趟多少字符估不准"，
+        带回来的理由是"估不准 ≠ 花得起"。所以这条测的两半都不是数字本身：
+
+        * 请求数必须跟着帽停 —— 只在装配时截一版的预算一次网络也省不下来，那既慢又是
+          把已付的钱藏起来；
+        * summary 必须自带"还剩几页没付、几页付了没返回"，因为调用方看到的只是
+          "比我要求的少"，而两种少法要不同的解药。
+        """
+        big_page = (
+            "<html><head><title>t</title></head><body><p>"
+            + " ".join(f"sentence {i} of the whole-run cap page" for i in range(6000))
+            + "</p>" + "".join(f'<a href="/p{i}">p{i}</a>' for i in range(60))
+            + "</body></html>")
+        calls: list[str] = []
+
+        async def fake_smart_fetch(self, url=None, **ignored):
+            calls.append(url or "")
+            return ResponseModel(
+                url=url or "", status=200, content=[big_page],
+                fetcher_used="http", content_ok=True, content_type="text/html")
+
+        monkeypatch.setattr(MasterFetchServer, "web_read", fake_smart_fetch)
+        result = asyncio.run(MasterFetchServer().web_crawl(
+            "https://example.com/", max_pages=500, cache_ttl=0,
+            max_content_chars_per=999_999, concurrency=1, max_total_chars=30_000))
+
+        assert result.truncated_by_total_chars is True
+        assert result.truncated_by_max_pages is False, (
+            "两道闸同时立起来 = 调用方不知道抬哪一个才有用")
+        assert "truncation=total_chars" in result.summary, result.summary
+        assert "max_total_chars=0 removes the cap" in result.summary
+        # 每页 ~20,000 字符、帽 30,000、concurrency=1 ⇒ 两页就该收手。
+        assert len(result.pages) == 2, [p.content_chars for p in result.pages]
+        assert len(calls) <= len(result.pages) + 1, (
+            f"付了 {len(calls)} 次请求只为回 {len(result.pages)} 页 —— "
+            "帽到点之后还在抓，那截掉的就不是预算而是钱包")
+        assert "whole-run character budget" in result.next_action, result.next_action
+        # 数字是千分位写的（`{:,}`），所以比对之前要去掉分隔符 —— 否则这条断言
+        # 挑的是排版而不是"上限有没有说出口"。
+        assert str(crawl_mod.MAX_TOTAL_CHARS_CEILING) in result.next_action.replace(",", "")
 
 
 # ─── 4. 错误状态的 next_action 不许被「截断」抢走 ────────────────────────

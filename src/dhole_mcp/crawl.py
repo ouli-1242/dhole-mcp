@@ -21,7 +21,7 @@ Flagship design (v6):
                          returns nothing because the page IS a list of links).
       - js-shell      -> the fetch already auto-escalated HTTP->stealthy render;
                          if even the rendered HTML is empty, content_ok=false
-                         with an actionable error (use web_screenshot / vision).
+                         with an actionable error (use a web_act screenshot action / vision).
       - fallback      -> cleaned visible text.
     This fixes the "0 content_ok on Hacker News" and "JS SPA timeout" class of
     bugs at the root: list pages now return their link list as content, and JS
@@ -59,10 +59,16 @@ import heapq
 import logging
 import re
 from time import time
-from typing import Optional
+from typing import Any, Dict, Optional
 from urllib.parse import urljoin, urlparse, urlunparse
 
 from pydantic import BaseModel, Field, model_serializer
+
+from dhole_mcp import injection
+# 钳制文案的唯一作者。crawl 的 summary 不经过 _with_agent_hints（它是
+# CrawlResponseModel，不是 ResponseModel），所以这里读的是那颗纯函数而不是
+# ContextVar —— 同一句话，两个通道。
+from dhole_mcp.context import _clamp_note
 
 # robots.txt compliance (v16.0). robots.py imports nothing from dhole at module
 # level, so this is cycle-free; the seed check + the discovered-URL peek both
@@ -118,12 +124,21 @@ _TRACKING_PARAMS = {
     "fbclid", "gclid", "ref", "ref_src", "source", "_ga", "mc_cid", "mc_eid",
 }
 
-# The two ceilings a crawl answers to (17.0 §3, decision 31). Named, not inline, because
-# the tool description has to state them and a description that drifts from the clamp is
-# exactly the bug this section's tests exist to catch: they read these constants and
-# require the same numbers on the wire.
+# The ceilings a crawl answers to. Named, not inline, because the tool description
+# has to state them and a description that drifts from the clamp is exactly the bug
+# this section's tests exist to catch: they read these constants and require the same
+# numbers on the wire.
 MAX_PAGES_CEILING = 40
 PER_PAGE_CHARS_CEILING = 20_000
+# 17.0 §3 第 31 条曾经裁决："整轮没有字符预算，因为一整趟多少字符要先把每页长度估
+# 出来，而那是站点决定的数，所以没有人算得清。" 2026-10-05 的实测把这条裁决的前提
+# 打掉了：算不清不等于花得起 —— `max_pages=41`（钳到 40）× 默认每页 8,000 真跑出
+# **223,599 字符**（约 81k token）一次到达宿主，被截断落盘。调用方拿到的不是"一整轮
+# 爬取"，是一句"结果太大，去看文件"。所以这一轮预算回来了，而它可算的部分恰恰是它
+# 该存在的理由：预算是**返回给调用方的字符数**，那一个是 dhole 自己决定写多少的数。
+MAX_TOTAL_CHARS_DEFAULT = 60_000
+MAX_TOTAL_CHARS_CEILING = 200_000
+MIN_TOTAL_CHARS = 1_000
 
 # Content-likelihood path tokens. Boost content pages, penalize app/admin noise
 # so the priority queue crawls docs before login/submit/cart.
@@ -158,6 +173,8 @@ class CrawlPage(BaseModel):
     lastmod: str = Field(default="", description="<lastmod> from the site's sitemap.xml for this URL (sitemap mode only). Empty otherwise.")
     summary: str = Field(default="", description="One-line status for this page.")
     error: str = Field(default="", description="Error for this page, if content_ok is False.")
+    # G25 阶段4：爬回的每页正文同样过注入启发式（见 dhole_mcp/injection.py）。
+    untrusted_content: Optional[Dict[str, Any]] = Field(default=None, description="Present ONLY when this page's text matched an injection heuristic ({hits: [{kind, excerpt, count}], total} — see web_read's untrusted_content for the shapes and the discipline). Per-page marking keeps a flagged page findable inside a 50-page crawl without rereading every row.")
 
 
 class CrawlResponseModel(BaseModel):
@@ -168,6 +185,7 @@ class CrawlResponseModel(BaseModel):
     discover_only: bool = Field(default=False, description="True = map mode (URLs only, no content).")
     truncated_by_max_pages: bool = Field(default=False, description="True = stopped early because max_pages was reached.")
     truncated_by_time: bool = Field(default=False, description="True = stopped early because the overall deadline (ms) was reached.")
+    truncated_by_total_chars: bool = Field(default=False, description="True = stopped early because the whole-run character budget (max_total_chars) was spent. The summary names how many pages were still queued and how many were fetched inside the last batch but not returned.")
     sitemap_used: bool = Field(default=False, description="True = the URL map came from the site's sitemap.xml (one fetch), not best-first BFS discovery.")
     sitemap_truncated: bool = Field(default=False, description="True = the map is SHORT OF THE SITE, not just short of your filters: it stopped at the URL cap, or the walk hit its own sitemap-index limit. pages_discovered is then a LOWER BOUND - the site's sitemap holds at least this many URLs. Absent (False) on a map that read the whole sitemap, but note that still is not a guarantee the sitemap lists every page: a sitemap is an index the site chooses to publish.")
     sitemaps: list[str] = Field(default=[], description="Sitemap.xml URLs that were fetched + parsed (sitemap mode only).")
@@ -176,6 +194,7 @@ class CrawlResponseModel(BaseModel):
     error: str = Field(default="", description="Error message (crawl-level).")
     summary: str = Field(default="", description="One-line crawl status.")
     next_action: str = Field(default="", description="Obvious next call when one exists (continue crawl / fetch a page).")
+    ssrf_recheck: str = Field(default="", description="Non-empty only when the post-redirect IP recheck was skipped because of this machine's resolver (a fake-ip proxy) — the SSRF posture of the WHOLE crawl, stated once. Before this field existed a crawl said nothing about it at all: the per-page receipts live on the web_read results that crawl consumes internally and never reaches the caller, so the one security posture that a 40-page run should disclose was dropped with the pages' own metadata.")
 
     @model_serializer(mode="wrap")
     def _map_rows_carry_only_what_differs(self, handler):
@@ -797,6 +816,7 @@ async def web_crawl(
     discover_only: bool = False,
     focus: Optional[str] = None,
     max_content_chars_per: int = 8000,
+    max_total_chars: int = MAX_TOTAL_CHARS_DEFAULT,
     concurrency: int = 3,
     cache_ttl: int = 3600,
     force_fetcher: Optional[str] = None,
@@ -820,7 +840,7 @@ async def web_crawl(
     discovered URLs it already knows are disallowed (robots_skipped) instead of
     spending budget on a refusal.
     """
-    from dhole_mcp.security import validate_url, SecurityError
+    from dhole_mcp.security import validate_url, SecurityError, allow_private_scope
     from dhole_mcp.trafilatura_extractor import extract_html_title
 
     t0 = time()
@@ -836,7 +856,13 @@ async def web_crawl(
                                   next_action=hint)
 
     try:
-        url = validate_url(url)
+        # 种子 URL 的私网放行与 web_read / feed_read 同一扇门：cred_defaults 存的
+        # allow_private 在这里也要成立 —— 本机 dev 站是最常见的爬取对象，而每页的
+        # 真实抓取都过 web_read（它自己推存量放行），只有这颗种子校验漏了作用域，
+        # 于是同一个 allow_private 在读的门上是开的、在爬的门上是死的。
+        from dhole_mcp import identity as _identity
+        with allow_private_scope(_identity.get("allow_private")):
+            url = validate_url(url)
     except (SecurityError, ValueError) as e:
         return _err(str(e))
     start_norm = normalize_url(url)  # canonical form for dedup + the response field
@@ -862,21 +888,44 @@ async def web_crawl(
                       "with ignore_robots=true if you have the site's permission."),
             )
 
-    # 17.0 §3 第 31 条：上限收紧，并且**没有总预算**。判据是能算清的才留：一次爬几页、
-    # 每页多少字符都由调用方定；一整趟多少字符要先把每页长度估出来，而那是站点决定
-    # 的数，所以没有人算得清。总量如今由下面那两道上限相乘封顶。
+    # 三道闸各管一件事，每一道到点都要说出口（下面那四句 clamp note + summary 里的
+    # truncation=total_chars）。17.0 §3 第 31 条曾经写下"这里没有整轮字符预算，因为
+    # 一整趟多少字符要先把每页长度估出来、而那是站点决定的数"；2026-10-05 的实测把
+    # 前提打掉了一半：估不准是真的，但算不清不等于花得起 —— max_pages=41（钳到 40）
+    # × 默认每页 8,000 真跑出 223,599 字符（约 81k token），被宿主截断落盘，调用方
+    # 拿到的不是爬取结果而是一句"太大去看文件"。所以整轮预算回来了，而它数的是**返回
+    # 给调用方的字符数** —— 那一个是 dhole 自己写得出的数，不需要猜站点的页有多长。
+    _asked = (max_pages, max_depth, concurrency, max_content_chars_per)
     max_pages = max(1, min(int(max_pages), MAX_PAGES_CEILING))
     max_depth = max(0, min(int(max_depth), 5))
     concurrency = max(1, min(int(concurrency), 5))
-    _chars_per_asked = int(max_content_chars_per)
-    max_content_chars_per = max(500, min(_chars_per_asked, PER_PAGE_CHARS_CEILING))
+    max_content_chars_per = max(500, min(int(max_content_chars_per),
+                                         PER_PAGE_CHARS_CEILING))
+    # `max_total_chars=0`（和任何负数）是"这一轮不要帽"的写法 —— 与 nested_max=0
+    # 同一颗拼法，所以负数不当越界处理、也就不进上报；>0 才在 1,000..200,000 里钳。
+    _asked_total = int(max_total_chars or 0)
+    if _asked_total <= 0:
+        max_total_chars = 0
+    else:
+        max_total_chars = max(MIN_TOTAL_CHARS, min(_asked_total, MAX_TOTAL_CHARS_CEILING))
     # web_read names its clamp in the summary; a crawl that silently answered
     # 500 chars for a request of 400 named nothing at all, so the two tools
     # described the same event differently depending on which one was called.
-    _chars_per_clamp = ("" if max_content_chars_per == _chars_per_asked else
-                        f"max_content_chars_per clamped {_chars_per_asked}->"
-                        f"{max_content_chars_per} (supported range "
-                        f"500-{PER_PAGE_CHARS_CEILING})")
+    # 那一句当初只补了 `max_content_chars_per` 一颗，另外三颗仍然静默：实测
+    # max_pages=41 换来 40、max_depth=9 换来 5、concurrency=9 换来 3，信封里一个字
+    # 都没有 —— 而这三颗恰恰是"这次爬了多少页为什么比我少的"唯一的答案。
+    # 措辞由 context._clamp_note 一处拥有：两句同义而不同形的话，等于没有那句话。
+    _clamp_notes = [note for note in (
+        _clamp_note("max_pages", _asked[0], max_pages, lo=1, hi=MAX_PAGES_CEILING),
+        _clamp_note("max_depth", _asked[1], max_depth, lo=0, hi=5),
+        _clamp_note("concurrency", _asked[2], concurrency, lo=1, hi=5),
+        _clamp_note("max_content_chars_per", _asked[3], max_content_chars_per,
+                    lo=500, hi=PER_PAGE_CHARS_CEILING),
+        # 负数与 0 是同一个意思（"这一轮不要帽"），不是一次越界，所以不上报。
+        _clamp_note("max_total_chars", _asked_total, max_total_chars,
+                    lo=MIN_TOTAL_CHARS, hi=MAX_TOTAL_CHARS_CEILING)
+        if _asked_total > 0 else "",
+    ) if note]
     focus = focus.strip() if isinstance(focus, str) and focus.strip() else None
     # A bare string was iterated character-by-character by the prefix filters
     # (`path.startswith(p) for p in "/what/"`), and startswith("/") holds for
@@ -945,6 +994,10 @@ async def web_crawl(
     robots_skipped = 0
     truncated_maxpages = False
     truncated_time = False
+    truncated_total_chars = False
+    # 被字符帽挡下的两种页要分开数：`chars_dropped_fetched` 是这批已经发过请求、
+    # 只是没返回的；队列里剩下的那些从来没付过钱。
+    chars_dropped_fetched = 0
 
     sem = asyncio.Semaphore(concurrency)
 
@@ -998,16 +1051,13 @@ async def web_crawl(
         """
         async with sem:
             await _pace(u)
-            # 17.0: 代理池删了，整个爬取用同一个出口（配了几个就是几个），所以这里
-            # 不再"每页换一个 IP"。
-            from dhole_mcp.search_proxy import configured_proxy
-            _crawl_proxy = configured_proxy()[0]
+            # 17.0: 代理池删了，页面抓取不再"每页换一个 IP"；出口由 cred_defaults
+            # 存的身份统一决定 —— web_read 自己从身份里取，调用方不再传 proxy。
             try:
                 resp = await server.web_read(
                     url=u, extraction_type="html", cache_ttl=cache_ttl,
                     max_content_chars=200000, force_fetcher=force_fetcher,
                     timeout=timeout,
-                    proxy=_crawl_proxy,
                     ignore_robots=ignore_robots,
                 )
             except Exception as e:
@@ -1019,7 +1069,6 @@ async def web_crawl(
                             url=u, extraction_type="html", cache_ttl=cache_ttl,
                             max_content_chars=200000, force_fetcher=force_fetcher,
                             timeout=timeout,
-                            proxy=_crawl_proxy,
                             ignore_robots=ignore_robots,
                         )
                     except Exception as e2:
@@ -1058,7 +1107,11 @@ async def web_crawl(
     push(url, 0, "")
 
     # Fetch a batch of up to `concurrency` best URLs from the heap concurrently.
-    while heap and len(pages) < max_pages:
+    # 整轮字符帽在**发下一批之前**判，不是返回之后再砍：一版只在装配时截的预算一次
+    # 网络也省不下来，只是把已经付过钱的结果藏起来。这里停下来的是"还没发的那些"。
+    total_chars = 0
+    while heap and len(pages) < max_pages and (
+            not max_total_chars or total_chars < max_total_chars):
         if time() > deadline_t:
             truncated_time = True
             break
@@ -1068,9 +1121,18 @@ async def web_crawl(
             batch.append(heapq.heappop(heap))
         results = await asyncio.gather(*[fetch_one(e[3]) for e in batch])
 
-        for (neg_score, depth, _seq, u, _text), (ru, resp, html) in zip(batch, results):
+        for _bi, ((neg_score, depth, _seq, u, _text), (ru, resp, html)) in enumerate(
+                zip(batch, results)):
             if len(pages) >= max_pages:
                 truncated_maxpages = True
+                break
+            # 整轮的字符帽在批内也要判：一批最多 `concurrency` 颗，一次 while 检查
+            # 最坏会多吐出一整批。被这一格挡下的页是**已经付过请求**的，所以 summary
+            # 要把"付了没返回"和"根本没付"分开说 —— 合起来只报一个"少了 N 页"，
+            # 调用方就分不清是该抬预算还是该换 max_pages。
+            if max_total_chars and total_chars >= max_total_chars:
+                truncated_total_chars = True
+                chars_dropped_fetched = len(batch) - _bi
                 break
             if time() > deadline_t:
                 truncated_time = True
@@ -1140,8 +1202,10 @@ async def web_crawl(
                 content_chars=len(content_md), is_truncated=is_trunc,
                 next_offset=next_off, fetched_at=getattr(resp, "fetched_at", ""),
                 summary=resp.summary, error=resp.error,
+                untrusted_content=injection.scan(content_md or ""),
             )
             pages.append(page)
+            total_chars += len(content_md)
 
             # Browser auto-escalation: if the start page (depth 0) failed with
             # js_shell or bot_challenge, upgrade force_fetcher to "stealthy" for
@@ -1184,6 +1248,11 @@ async def web_crawl(
 
     if pages_crawled >= max_pages and pages_discovered > pages_crawled:
         truncated_maxpages = True
+    # 两道闸同时到点时，说出的是先顶到的那道：max_pages 是这颗工具文档里的"第一道
+    # 预算"，字符帽是第二道。两格都立起来会让调用方以为抬哪一个都一样。
+    if (max_total_chars and not truncated_maxpages and heap
+            and total_chars >= max_total_chars):
+        truncated_total_chars = True
     not_fetched = max(pages_discovered - pages_crawled, 0)
 
     def _summary_for(pages_now: list) -> str:
@@ -1219,10 +1288,25 @@ async def web_crawl(
             bits_now.append("stopped: max_pages reached")
         if truncated_time:
             bits_now.append("stopped: time deadline reached")
+        if truncated_total_chars:
+            # 这一句必须自带"被砍的是哪几页"：一次 40 页的爬取只回 7 页时，调用方
+            # 看到的第一件事是"怎么比我要的少"，而少的部分既可能是队列里没付过的，
+            # 也可能是这一批已经付过、只是没吐出来的。两种少法要不同的解药。
+            # 返回的字符数允许越过帽一格 —— 一颗页的长度只有抓回来才知道，而把
+            # 已经付过钱的那页扔掉再假称"正好 8,000"是更坏的选择，所以要照实说。
+            queued_now = len(heap)
+            bits_now.append(
+                f"truncation=total_chars: returned {len(pages_now)} page(s) / "
+                f"{total_chars:,} chars against the {max_total_chars:,} you set "
+                f"(a page's length is only known once it is fetched); "
+                f"{queued_now:,} URL(s) still queued"
+                + (f", {chars_dropped_fetched} fetched in the last batch and not "
+                   "returned" if chars_dropped_fetched else "")
+                + " - max_total_chars=0 removes the cap")
         if robots_skipped:
             bits_now.append(f"{robots_skipped} URL(s) skipped by robots.txt")
-        if _chars_per_clamp:
-            bits_now.append(_chars_per_clamp)
+        # 四颗钳制一起报（哪一颗没动就不出现），措辞与 web_read 的 summary 同一句。
+        bits_now.extend(_clamp_notes)
         if (path_include or path_exclude) and len(pages_now) <= 1:
             # The filters are applied while links are discovered, so a pattern that
             # matches nothing produces a crawl of exactly one page (the start URL is
@@ -1247,7 +1331,17 @@ async def web_crawl(
     summary = _summary_for(pages)
 
     next_action = ""
-    if truncated_maxpages or truncated_time:
+    if truncated_total_chars:
+        next_action = (
+            f"crawl stopped at the whole-run character budget "
+            f"(max_total_chars={max_total_chars:,}); {not_fetched:,} URL(s) were "
+            "discovered but not fetched. Raise max_total_chars (up to "
+            f"{MAX_TOTAL_CHARS_CEILING:,}) or pass 0 for no cap, lower "
+            "max_content_chars_per to fit more pages in the same budget, or scope "
+            "the run with path_include=['/docs'] (a path subtree, not a string "
+            "prefix). The pages you already have are the best-first ones - "
+            "web_read the picks you actually need instead of re-crawling.")
+    elif truncated_maxpages or truncated_time:
         why = "time deadline" if truncated_time else "max_pages"
         next_action = (
             f"crawl stopped early ({why}); re-run web_crawl with a higher "
@@ -1297,11 +1391,17 @@ async def web_crawl(
                           "unreachable, require JavaScript, or block automated access. "
                           "Try web_read on a specific URL for more diagnostics.")
 
+    from dhole_mcp.security import recheck_posture_note
     result = CrawlResponseModel(
         start_url=start_norm, pages=pages, pages_crawled=pages_crawled,
         pages_discovered=pages_discovered, discover_only=discover_only,
         truncated_by_max_pages=truncated_maxpages,
-        truncated_by_time=truncated_time, duration_ms=(time() - t0) * 1000,
+        truncated_by_time=truncated_time,
+        truncated_by_total_chars=truncated_total_chars,
+        # 一次读取进程事实的调用：探针已经在这次爬取里跑过了（每页的 web_read 都
+        # 过那道门），这里只是把它的判词拿到调用方看得见的一层。
+        ssrf_recheck=recheck_posture_note(),
+        duration_ms=(time() - t0) * 1000,
         robots_skipped=robots_skipped,
         summary=summary, next_action=next_action,
     )

@@ -1,11 +1,11 @@
 # Configuration Guide
 
-17.0 大众化一刀切：`pip install dhole-mcp` 接上宿主就能用，**能力全部默认在线**。所以可配置的东西只剩 11 个 `DHOLE_*` 变量 —— 每一个都是"这台机器的事实"（代理、内网、密钥、状态目录），而不是"要不要开某个能力"。所有变量可选；零配置即默认全量行为。
+17.0 大众化一刀切：`pip install dhole-mcp` 接上宿主就能用，**能力全部默认在线**。所以可配置的东西只剩 13 个 `DHOLE_*` 变量 —— 每一个都是"这台机器的事实"（代理、内网、密钥、状态目录），而不是"要不要开某个能力"。所有变量可选；零配置即默认全量行为。
 
 ## The rules of changing things
 
 - **Single-call behavior** → call parameters (`ignore_robots` / `cache_ttl` / `focus_engine` / `anti_detect` …). No config edit, no restart. Prefer this whenever it suffices
-- **Per-site defaults, the new third door** → `cred_defaults` (a tool, not a config file): proxy, browser profile, CDP endpoint, private-host waiver, anti-detect rung, and host-scoped `auth` / `cookies`. Written once to `~/.dhole/identity.db`, read back by every later call, shown redacted, revoked with `unset`. No restart, and no credential copied into the conversation each time
+- **Per-site defaults, the new third door** → `cred_defaults` (a tool, not a config file): proxy, browser profile, CDP endpoint, private-host waiver, anti-detect rung, and host-scoped `auth` / `cookies`. Held in memory, read back by every later call, shown redacted, revoked with `unset`; `DHOLE_PERSIST_CREDENTIALS=1` moves them to `~/.dhole/identity.db` (values DPAPI-encrypted). No restart, and no credential copied into the conversation each time
 - **Process-wide behavior, two doors.** `dhole config set DHOLE_DEFAULT_ENGINES baidu,bing` writes `~/.dhole/config.json`, which is re-read when the file changes — knobs read per call take effect on the next call, no restart. `dhole config list` shows what the file sets, whether env shadows it, and which values are secret without printing them. The host's `env` block still works and **always wins** (an operator's existing env configuration must never be silently overridden by a file); editing it needs a host restart
 - **Process-wide, the old way** → environment variables, in the host's MCP config under the `dhole` server's `env` block, **then restart the host**:
 
@@ -35,7 +35,7 @@
 
 ### Scenario: Clash / sing-box TUN proxy (fake-IP mode)
 
-- Nothing to set. A fake-IP resolver (every public name answering with an address in `198.18.0.0/15` / `fc00::/7`) is detected by a one-time startup probe, and only the SSRF DNS-recheck layer skips itself — the reason travels in `metadata.ssrf_recheck` on every affected response, and `dhole --doctor`'s "resolver reality" row names the address/network. IP-literal, hostname and cloud-metadata guards stay on; there is no manual override (放宽守卫需要证据，不需要猜测)
+- Nothing to set. A fake-IP resolver (every public name answering with an address in `198.18.0.0/15` / `fc00::/7`) is detected by a one-time startup probe, and only the SSRF DNS-recheck layer skips itself — the reason travels in `ssrf_recheck` on every affected response — under `metadata` for a single URL, once on the envelope for a `urls=[...]` batch or a crawl (it is a property of the process, so repeating it per page would only repeat it), and `dhole --doctor`'s "resolver reality" row names the address/network. IP-literal, hostname and cloud-metadata guards stay on; there is no manual override (放宽守卫需要证据，不需要猜测)
 
 ### Scenario: fetching intranet / local dev services
 
@@ -57,7 +57,7 @@ Then just call — the first attach asks, the user answers once:
 {"url": "https://portal.example.com/dashboard", "cdp_url": "http://127.0.0.1:9222", "check_login": true}
 ```
 
-- **先问再记**: attaching = handing dhole read access to every site logged into that Chrome, so the FIRST attach to a host is refused with `cdp_authorization_required` and **nothing is executed**. Re-call the same call with `confirm=true` to approve that one host; the approval is persisted to `~/.dhole/cdp_hosts.json` and every later attach is fenced to the authorized set. Revoke = delete that file
+- **先问再记**: attaching = handing dhole read access to every site logged into that Chrome, so the FIRST attach to a host is refused with `cdp_authorization_required` and **nothing is executed**. Re-call the same call with `confirm=true` to approve that one host; the approval is persisted to `~/.dhole/cdp_hosts.json` and every later attach is fenced to the authorized set. Revoke = `sys_state(clear=['cdp:host=<name>'])` for one host or `clear=['cdp_hosts']` for all (both take `confirm=true`; `show=['cdp_hosts']` lists the roster); deleting the file works too
 - The fence is enforced at the route level (including page-JS subresource requests) and at the fetch entry; a non-authorized host fails instead of navigating. **The match is an EXACT hostname**, not a domain or a suffix: `example.com` does not cover `www.example.com`, and a page that loads scripts from a CDN needs that CDN confirmed too. No wildcards
 - The response marks `cdp_attached: true`; authorize/refuse events go to the audit log (`DHOLE_USAGE_LOG=1`). Every attach decision is visible
 - `check_login` returns a three-state verdict from DOM shape + cookie **names** (values never leave the browser — no model involved). `false` = session expired, ask the user to re-login in that Chrome window
@@ -69,14 +69,6 @@ Then just call — the first attach asks, the user answers once:
 - Element captures are **always on**: `selector` crops on the `screenshot` tool and `{"screenshot": {...}}` inside `actions` (element shots ride the response as image blocks). The captcha discipline (≤3 tries then hand off; DataDome / Akamai / interactive Turnstile / 2FA / sliders always hand off) is part of the tool descriptions. `decode_qr` (local OpenCV QR decode, in the `[all]` extra) is deterministic local work
 - `focus` block-picking scores with BM25 by default. `focus_engine="neural"` switches that ONE call to the local cross-encoder (~12.5s of CPU per page — budget timeout for bulk); model missing = explicit error (`neural_focus_model_missing`), never a silent download. The model arrives on the first neural web_search (one-time, resumable); `focus_mode="best"` returns the single top block + heading
 
-### Scenario: repeatable tasks, change monitoring, stored credentials
-
-- `web_recipe` (save a `url` + `actions` chain, replay it later) and `web_watch` (diff a page against its last snapshot) are **always registered**. State lives in `~/.dhole/tasks.db`: action chains and page baselines, **no credentials**. Recipes deliberately store no `session_id` — pass it per run. Forget everything by deleting the file; per-item removal is `web_recipe(op='delete')` / `web_watch(op='remove')`
-- `cred_vault` (read item **metadata** from the user's own Bitwarden `bw` / 1Password `op`) and `cred_login` (assisted sign-in) are also always registered. Prerequisites are the user's: the CLI installed and its vault unlocked (`bw unlock` / `op signin`). `cred_vault(op='status')` reports which manager answered, whether it is unlocked, and the fix when it is not — a missing manager is a note, not an error
-- **Values never leave the process**: `cred_vault` has no field for a password or a TOTP secret, and `cred_login` reads the password server-side and reports the item name instead. Nothing reaches the transcript, the cache, or the log
-- `cred_login` is **gated on approval**: without `confirm=true` it only detects the form and returns the plan. Present that to the user before re-calling with `confirm=true`
-- CAPTCHA / 2FA / DataDome-class walls remain hand-offs; this path logs in, it does not defeat challenges
-
 ### Scenario: poor search results / want a different pool
 
 - `DHOLE_DEFAULT_ENGINES` — override the keyless default pool (default `baidu,bing,sogou,so360,bing_global,yandex,brave,duckduckgo`)
@@ -85,7 +77,7 @@ Then just call — the first attach asks, the user answers once:
 
 ### Scenario: context overhead too high
 
-- `DHOLE_TOOLS` — register only the listed tools; the connection payload is exactly the sum of what you keep. Measured 2026-10-03 with `python tests/tool_payload_measure.py`: all 17 = **40,010 chars** (~9.6k tokens), of which 3,082 is fixed (the `{"tools":[…]}` envelope plus the initialize-time instructions, which are not a knob). Per-tool cost on the wire (the delta in the total when that tool is registered): `web_read` 6,188 · `web_search` 3,781 · `web_act` 3,446 · `web_crawl` 3,263 · `web_screenshot` 2,635 · `web_request` 1,909 · `web_recipe` 1,817 · `cred_login` 1,798 · `sys_state` 1,583 · `web_watch` 1,561 · `web_discover` 1,554 · `cred_defaults` 1,541 · `feed_read` 1,505 · `doc_parse` 1,421 · `cred_vault` 1,209 · `sys_guide` 1,053 · `web_resolve` 665. Two useful shapes: read/search/request/crawl/local-files/feeds/state/guide (8 tools) = **23,784**; adding `web_resolve` + `cred_vault` (10) = **25,658**. Two traps worth naming: sorting by per-tool size and taking "the smallest N" drops `web_read` / `web_search` / `web_act` / `web_crawl` — an arithmetic artifact, not a usable surface; and **unregistering a tool saves exactly what deleting its code would save** (the wire only follows registration), so cutting characters is never a reason to remove code.
+- `DHOLE_TOOLS` — register only the listed tools; the connection payload is exactly the sum of what you keep. Measured 2026-10-05 with `python tests/tool_payload_measure.py`: all 11 = **30,474 chars** (~7.3k tokens; 17.1 absorbed `web_screenshot` into `web_act`'s screenshot action and retired `web_resolve`, then `doc_parse` gained `offset` and `web_crawl` gained `max_total_chars` while the 12 schema `enum` arrays moved into dhole-side validators), of which 2,592 is fixed (the `{"tools":[…]}` envelope plus the initialize-time instructions, which are not a knob). Per-tool cost on the wire (the delta in the total when that tool is registered): `web_read` 6,071 · `web_search` 3,755 · `web_act` 3,496 · `web_crawl` 3,484 · `web_request` 2,290 · `doc_parse` 1,601 · `web_discover` 1,554 · `cred_defaults` 1,541 · `sys_state` 1,533 · `feed_read` 1,505 · `sys_guide` 1,053. Two useful shapes: read/search/request/crawl/local-files/feeds/state/guide (8 tools) = **23,883**; adding `web_discover` (9) = **25,437** (both include the 2,580-char instructions). Two traps worth naming: sorting by per-tool size and taking "the smallest N" drops `web_read` / `web_search` / `web_act` / `web_crawl` — an arithmetic artifact, not a usable surface; and **unregistering a tool saves exactly what deleting its code would save** (the wire only follows registration), so cutting characters is never a reason to remove code.
 - `DHOLE_DEFAULT_CONTENT_CHARS` — default body budget (default 40000, range 500–200000). Lower = fewer tokens now, the rest stays reachable via `offset`/`next_offset`
 - The wire shape is fixed: responses are compact (a field that is ABSENT is at its documented default), text-only, with no advertised outputSchema
 
@@ -97,9 +89,14 @@ Then just call — the first attach asks, the user answers once:
 
 - Fixed in 17.0: the stealthy browser prewarms at startup and closes after 300s idle (relaunch ~2-5s on the next fetch). No knobs — a lightweight session that never touches browser-tier tools pays nothing anyway
 
+### Scenario: serving dhole over HTTP beyond loopback
+
+- `DHOLE_HTTP_TOKEN` — bearer token for the `--http` transport: when set, every `/mcp` call must carry it (`Authorization: Bearer …` or `X-Dhole-Token`, constant-time compare); unset keeps the open-door behavior on whatever `--host` says (default 127.0.0.1), with a startup warning on non-loopback binds. Read at startup — changing it means restarting the server. The transport also validates Host/Origin headers against an allowlist built from `--host` (DNS-rebinding guard); a `0.0.0.0` bind cannot predict client Host headers, which is exactly why the token exists
+
 ### Scenario: data location / privacy / diagnostics
 
-- `DHOLE_HOME` — state directory (default `~/.dhole`: plaintext body cache, **cookie jar with credentials**; point elsewhere on shared machines; delete the directory for a full cleanup)
+- `DHOLE_HOME` — state directory (default `~/.dhole`: plaintext body cache; point elsewhere on shared machines; delete the directory for a full cleanup)
+- `DHOLE_PERSIST_CREDENTIALS=1` — persist session cookies and the stored identity to disk, encrypted. The default is **memory only**: `sessions.db` / `identity.db` are never created, credentials end with the process, and a legacy plaintext file from before 17.1 is absorbed into memory and deleted on first use. With the flag set, every value is encrypted with Windows DPAPI before it touches disk — the key is bound to the Windows user account, which protects a copied or synced file but NOT another process running as the same user. Non-Windows platforms have no DPAPI: the flag is refused there (stays in memory, `dhole --doctor` says so) rather than falling back to plaintext. Read at startup — changing it means restarting the server
 - `DHOLE_USAGE_LOG=1` — local call log (tool names / durations / redacted errors; no parameter values, no network). CDP authorize/refuse events land here too
 - `DHOLE_HF_ENDPOINT` (or `HF_ENDPOINT`) — rerank-model download mirror; default tries huggingface.co then falls back to hf-mirror.com; setting it pins one source (set `https://hf-mirror.com` when downloads stall in CN)
 
@@ -108,7 +105,7 @@ Then just call — the first attach asks, the user answers once:
 | Command | Purpose |
 |---|---|
 | `dhole -v` | Version + capability panel (browser / pdf / rerank / engine yield — each missing row is a degraded tier) |
-| `dhole --doctor` | The one command every install should be checked with: 12 items in order — python+platform, the five dependency tiers, chromium binary, rerank model (+whether a publisher digest backs it), a real stdio handshake with the host's own command, the two config doors and which one shadows which, retired `DHOLE_*` names a host still sets, robots posture (complied / waived / **not readable — and "not checked" is not "complied"**), the search egress with an actual TCP connect, **one real search + one real fetch** (keyless engines have no SLA; this is the only proof it works from this IP today), what `~/.dhole` holds (sizes, ages, which files are credentials), and the connect-phase token cost. Every failure prints a command to run — and exits 1 |
+| `dhole --doctor` | The one command every install should be checked with: 12 items in order — python+platform, the five dependency tiers, chromium binary **and one real launch of it**, rerank model (+whether a publisher digest backs it), a real stdio handshake with the host's own command, the two config doors and which one shadows which, retired `DHOLE_*` names a host still sets, robots posture (complied / waived / **not readable — and "not checked" is not "complied"**), the search egress with an actual TCP connect, **one real search + one real fetch** (keyless engines have no SLA; this is the only proof it works from this IP today), what `~/.dhole` holds (sizes, ages, which files are credentials), and the connect-phase token cost. Every failure prints a command to run — and exits 1 |
 | `dhole doctor` | Same output and exit code as `dhole --doctor` (the two spellings are equivalent, use whichever matches the other subcommand you already typed) |
 | `dhole engines list` | Per-engine verdict, remaining cooldown, active backoff |
 | `dhole engines probe` | One real query per engine (hits / latency / block reason) |

@@ -1,13 +1,13 @@
 ---
 name: dhole-web
-description: Operational handbook for the dhole MCP server — how to write calls (examples volume), how to read responses (field dictionary), how to troubleshoot failures, how to tune configuration, and how to plan multi-step tasks. Use whenever the user asks to search the web, fetch/read a URL or PDF, crawl a site, track site updates via RSS, parse local documents, or screenshot pages; to act on a page (click/fill/submit), send one non-GET request to an API endpoint (POST/PUT/PATCH/DELETE/HEAD), log into a site with a credential the user already stores, set the proxy or credential a later call should assume, replay a recorded action chain, or watch a page for changes; and whenever you are unsure about parameter placement, a response field, or how to handle a failure with the dhole tools (web_read / web_act / web_request / web_search / web_crawl / web_discover / web_screenshot / web_resolve / doc_parse / feed_read / sys_state, plus web_recipe / web_watch / cred_vault / cred_login / cred_defaults / sys_guide — all registered by default in 17.0). 触发词：搜索、查资料、抓取网页、读链接、读 PDF、爬整站文档、盯站点更新、解析本地文档、截图、表单提交、调接口写入、POST 请求、用密码管理器登录、录制回放、监控页面变化、参数报错、结果可疑。
+description: Operational handbook for the dhole MCP server — how to write calls (examples volume), how to read responses (field dictionary), how to troubleshoot failures, how to tune configuration, and how to plan multi-step tasks. Use whenever the user asks to search the web, fetch/read a URL or PDF, crawl a site, track site updates via RSS, parse local documents, or screenshot pages; to act on a page (click/fill/submit), send one non-GET request to an API endpoint (POST/PUT/PATCH/DELETE/HEAD), set the proxy or credential a later call should assume; and whenever you are unsure about parameter placement, a response field, or how to handle a failure with the dhole tools (web_read / web_act / web_request / web_search / web_crawl / web_discover / doc_parse / feed_read / sys_state, plus cred_defaults / sys_guide — all registered by default). 触发词：搜索、查资料、抓取网页、读链接、读 PDF、爬整站文档、盯站点更新、解析本地文档、截图、表单提交、调接口写入、POST 请求、参数报错、结果可疑。
 ---
 
 # dhole MCP Operations Handbook
 
-Companion to dhole's eleven everyday tools: `web_read` / `web_act` / `web_request` / `web_search` / `web_crawl` / `web_discover` / `web_screenshot` / `web_resolve` / `doc_parse` / `feed_read` / `sys_state` — plus `sys_guide`, which serves this very corpus as a tool call for hosts that never installed the skill — plus five **stateful** tools that are registered by default in 17.0: `web_recipe` / `web_watch`, `cred_vault` / `cred_login` and `cred_defaults`. If one of those five is missing from `tools/list`, the operator named an explicit `DHOLE_TOOLS` subset — say so, don't route around it.
+Companion to dhole's ten everyday tools: `web_read` / `web_act` / `web_request` / `web_search` / `web_crawl` / `web_discover` / `doc_parse` / `feed_read` / `sys_state` / `cred_defaults` — plus `sys_guide`, which serves this very corpus as a tool call for hosts that never installed the skill. All eleven are registered by default; if one is missing from `tools/list`, the operator named an explicit `DHOLE_TOOLS` subset — say so, don't route around it.
 
-Division of labor: this file = tool selection + hard constraints + signal triage. `references/` = six on-demand volumes (index at the bottom). Parameter and field definitions ultimately live in `tools/list` — when anything conflicts, trust the tool descriptions. Calibrated against dhole 16.1 via a full live test pass (2026-09-29); the 17.0 additions (CDP attach with per-host confirm / `check_login` / page actions with snapshot + index addressing + submit gate / session cookie bridge / per-call neural focus / always-on element screenshots) verified against the 17.0 wire tests (2026-10-01). The four stateful tools (recorded chains, change monitoring, credential lookup, assisted login) are documented here but were **not** in that live pass — treat them as wire-verified against their tool descriptions, and check `tools/list` if a detail matters.
+Division of labor: this file = tool selection + hard constraints + signal triage. `references/` = six on-demand volumes (index at the bottom). Parameter and field definitions ultimately live in `tools/list` — when anything conflicts, trust the tool descriptions. Calibrated against dhole 16.1 via a full live test pass (2026-09-29); the 17.0 additions (CDP attach with per-host confirm / `check_login` / page actions with snapshot + index addressing + submit gate / session cookie bridge / per-call neural focus / always-on element screenshots) verified against the 17.0 wire tests (2026-10-01).
 
 ## Stuck? Route first, don't guess
 
@@ -20,7 +20,7 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 | Whether to change config, and which knob | `references/configuration.md` |
 | How to structure a multi-step task, where to pivot on failure | `references/recipes.md` |
 | A tool's behavioral limits (escalation chain, engine matrix, crawl semantics) | `references/tools.md` |
-| How a recorded recipe, a watch, a credential lookup or the stored default identity behaves | `references/tools.md` "The stateful tools (web_recipe / web_watch / cred_vault / cred_login / cred_defaults)" |
+| How the stored default identity behaves | `references/tools.md` "The stateful tool (cred_defaults)" |
 
 ## Choosing a tool
 
@@ -34,17 +34,13 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 | A list page whose items each live on their own page (8 topics → the works inside each) | `web_read` + `nested_selector` + `nested_fields` — ONE call follows the links (8 by default, cap 30) and returns one record per item; `truncation=nested_budget` in `summary` says what the cap hid, and each second-layer link passes its own robots.txt check |
 | Only want to know what URLs a site holds | `web_discover` — the map with no bodies read; `sitemap=true` is the one-request way to get it |
 | Track a site's latest updates | `feed_read` (pass the site homepage; it finds the feed); poll incrementally with `since=` |
-| Resolve a short/tracking link | `web_resolve` (no body download) |
+| Resolve a short/tracking link | `web_read` (follows the redirect and lands on the final page) |
 | Local file: `.docx` / `.xlsx` / `.pptx` / `.odt` / `.pdf` / `.csv` / `.html` | `doc_parse` — a docx/xlsx/pptx/odt is a zip and a pdf is a container, so a text reader sees bytes; a non-UTF-8 csv/html decodes to plausible-looking **wrong** text rather than an error |
 | Local file: `.md` / `.txt` / `.json` / `.yaml` | Your own file tool is fine if you have one; `doc_parse` also works (it detects the encoding and validates json/yaml). MCP-only clients have no other path |
-| See rendered layout / verify UI | `web_screenshot`; if you can't see images, pass `save_to` and read the file |
+| See rendered layout / verify UI | a `screenshot` action in `web_act`'s chain; if you can't see images, add `save_to` and read the file |
 | Page behind a login wall (user has a logged-in Chrome) | `web_read` with `cdp_url` (+ `check_login=true` to confirm state) — requires one-time user setup, see `references/configuration.md` "CDP attach" |
 | Act on a page (click / fill / press / submit a form) | `web_act` — `web_read` refuses `actions=` now. `{"snapshot": true}` first for the numbered element list, then address by `index`; `submit` pauses until the user approves — see `references/tools.md` "Page interaction" |
-| Reach that page again without re-deriving the steps | `web_recipe` — `op=save` the `url` + `actions` once, `op=run` replays; a non-zero `actions_failed` means the page changed, re-save |
-| Watch a page for changes | `web_watch` — `op=add` then `op=check`; the FIRST check only stores the baseline and answers `changed=null` (no baseline ≠ no change) |
-| Find a credential the user already stores | `cred_vault` — `op=status` for availability, `op=match` with the URL for the items that fit; metadata only, never values |
 | Set a proxy / credential / anti-detect rung once instead of every call | `cred_defaults` — `set` with `"host"` for `auth` and `cookies` (a credential with no host is refused: it would ride to the next site you read); every later `web_read` names what it used in `identity_applied`, and values never come back |
-| Sign in with a stored credential | `cred_login` — call without `confirm` to get the plan (nothing filled), again with `confirm=true` to run it; the password is read server-side and never enters the transcript |
 | Log into a site WITHOUT handing over a password | Named `session_id` (cookie bridge spans HTTP + browser tiers) + `check_login` + snapshot actions + gated `submit` — the path when the user logs in themselves, in their browser or the CDP-attach window |
 
 **Core rhythm: search finds URLs, fetch reads content.** Search snippets are previews (cut at 500 chars) — never answer factual questions from snippets alone. `fetch_content=true` pulls the top 3 results' full text in the same call when that's likely enough.
@@ -54,7 +50,7 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 1. **Snippets are not answers** — a snippet is a 500-char preview; verify factual claims against fetched full text.
 2. **Parameter placement** — every parameter sits at the **top level** of the call; nothing is nested, and a wrapper object is rejected rather than read. Each tool accepts only its own names (`since=` belongs to `feed_read`, not to `web_read`), so a wrong name — or a right name on the wrong tool — fails loudly and lists what that tool takes. Correct/incorrect pairs in examples.md.
 3. **Never retry non-GET** — the previous call may already be committed; re-sending writes twice. No cache, no browser escalation, no archive fallback for write methods.
-4. **304 is success** — a response with `status=304` and no body means the copy dhole already holds is current; do not escalate to the browser to "retry". You cannot ask for this yourself (17.0): `web_watch` revalidates on its own, and a plain fetch just gets the body.
+4. **304 is success** — a response with `status=304` and no body means the copy dhole already holds is current; do not escalate to the browser to "retry". You cannot ask for this yourself (17.0): nothing on the wire asks for a revalidation, and a plain fetch just gets the body.
 5. **Keyed engines (tavily / bocha) bill per call** — add them only when the user explicitly names them. Never by default.
 6. **Never send `before=`** — no engine supports older-than bounds; the call is rejected. Date-bounded increments go through `feed_read(since=)`.
 7. **Never pass off a shell page** — `content_ok=true` with a few hundred characters is a placeholder page; report it honestly instead of answering from it.
@@ -63,14 +59,14 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 10. **Permanent boundaries** — robots-disallowed URLs get zero requests (the waiver is the user's compliance decision); private/internal hosts need the stored `allow_private` waiver (`cred_defaults`); cloud metadata endpoints (169.254.169.254 etc.) are **never** allowed.
 11. **CDP attach is user-granted infrastructure, not a knob to try** — the FIRST attach to a host is refused with `cdp_authorization_required` and nothing is executed; re-call with `confirm: true` ONLY after the user approved that host, and the approval is remembered (fenced to the authorized hosts; revoke = delete `~/.dhole/cdp_hosts.json`). Only touch authorized hosts; every attach response says `cdp_attached: true` and is audit-logged; cookie VALUES never leave the browser — `login_check` reports names only.
 12. **Irreversible steps pass through the user** — `{"submit": ...}` without `"confirm": true` pauses (`pending_approval`, nothing submitted); set `confirm: true` ONLY after the user explicitly said yes to that exact submission, and say what will be submitted when asking. Same discipline for captchas: ≤3 attempts on image captchas, then hand off; DataDome / Akamai / interactive Turnstile / 2FA / sliders are always hand-offs.
-13. **Credential values never enter the transcript** — `cred_vault` has no field that can hold one, `cred_login` reads the password server-side and reports the vault item NAME instead, `cred_defaults` echoes names and host scopes only, and you must never ask the user to paste a password into the conversation. (`web_recipe` / `web_watch` / `cred_vault` / `cred_login` / `cred_defaults` are always registered in 17.0 — there is no opt-in group to turn on; if one is missing from `tools/list`, the operator named an explicit `DHOLE_TOOLS` subset and only they can change it.)
+13. **Credential values never enter the transcript** — `cred_defaults` echoes names and host scopes only, and you must never ask the user to paste a password into the conversation. (`cred_defaults` is always registered in 17.0 — there is no opt-in group to turn on; if it is missing from `tools/list`, the operator named an explicit `DHOLE_TOOLS` subset and only they can change it.)
 
 ## Behavioral edge quick list
 
 - `css_selector` applies to HTML only; XML/JSON/plain-text responses come back whole with a summary note that the selector was not applied.
 - Archive fallback: check `source` / `archived_at` — that is a dated snapshot. `is_stale` ages by source type (news 30d, docs/reference/paper 730d, rest 365d).
 - Search date windows are day/week/month/year presets only; `after` is widened to the narrowest preset covering your window — `date_filter.note` is the authoritative plain-language account. There is **no `total_estimate`** field.
-- A crawl has **no whole-run character budget**: it is bounded by `max_pages` (1-40) and `max_content_chars_per` on each page. Those two are computable; a total was not.
+- A crawl is capped three ways and **whichever one bites is named in `summary`**: `max_pages` (1-40, default 10), `max_content_chars_per` per page (500-20,000, default 8,000), and `max_total_chars` for the whole run (default 60,000, max 200,000, `0` = no cap). The whole-run cap was deleted in 17.0 §3-31 because "a total has to be estimated from page lengths the site decides"; a measured run then came back with 223,599 characters (40 pages at the defaults) and the host truncated the payload. An uncomputable limit is not the same thing as an affordable one, so the cap is back - it counts the characters actually returned, stops the next batch from being fetched, and reports `truncation=total_chars` with how many pages were left.
 - Whether robots are honored in this process: read `metadata.robots` on every response (it may say `bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)`).
 - PDF responses carry `table_of_contents` — pick `pages` from it. `pages` trims extraction only; the file still downloads whole.
 
@@ -80,10 +76,10 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 - Continue truncated reads with `next_offset` instead of raising `max_content_chars` and re-fetching (cap 200000).
 - Fetch `fetch_relevance: high` results first; judge "whole round irrelevant" with `min_raw_relevance` (start at 0.1), not `min_relevance`.
 - First search of a session showing `rerank_mode=merge` = the rerank model is still loading; one retry restores `neural`.
-- Narrow the pool when a slice of the web is what you want: international index `bing_global` / `brave` / `duckduckgo`, domestic `baidu` / `sogou` / `so360` (max 9 names per search).
+- Narrow the pool when a slice of the web is what you want: international index `bing_global` / `brave` / `duckduckgo`, domestic `baidu` / `sogou` / `so360` (max 10 names per search).
 - Batch known URLs with `web_read`'s `urls=[...]` instead of serial single calls.
 - Map a site before crawling it (`sitemap=true` is one request); don't max out `max_pages` blindly.
-- Repeated fetches hit cache (1h; docs auto-raised to 24h, article 6h); pass `cache_ttl=0` only when freshness matters.
+- Repeated fetches hit cache (1h default; article 6h); pass `cache_ttl=0` only when freshness matters.
 
 ## Response signals → proactively tell the user
 
@@ -108,11 +104,6 @@ These signals mean **a problem is happening that the user likely doesn't see**. 
 | `error=neural_focus_model_missing` | `focus_engine='neural'` was asked but the reranker isn't downloaded yet — no request was sent | Re-run with `focus_engine='bm25'` for this call, or let the model download on the first neural web_search (one-time, resumable) |
 | `element_screenshot_disabled` | (17.0 removed this error) Element captures need no permission now | If you still see it, the installed dhole is older than 17.0 — say so instead of setting env vars |
 | `pending_approval: true` in `metadata.actions` | A submit action was paused BEFORE acting — nothing was submitted | Describe exactly what would be submitted to the user; only on a clear yes re-run the same actions with `{"confirm": true}` on that submit |
-| `pending_approval: true` on a `cred_login` response | The login ran WITHOUT `confirm` — nothing was filled or submitted; `fields` + `plan` describe what a confirmed run would do | Show the user the plan (target site, vault item name, the fields detected); re-call with the **same arguments plus `confirm=true`** only after they approve |
-| `changed: null` + `baseline_created: true` (web_watch) | The first `check` stored the baseline; there was nothing to compare against | Report "baseline stored", NOT "no changes" — a missing baseline is not a negative result; the next check answers `true`/`false` |
-| `logged_in: null` on a `cred_login` response | The post-login probe could not answer (no browser tier, or the page never settled) | Say it's undecided; never read `null` as "not logged in" — confirm by fetching a page that needs the session |
-| `actions_failed` non-zero on `web_recipe(op='run')` | The page changed under the recorded chain | Re-derive the steps (snapshot) and re-record with `web_recipe(op='save', ...)`; don't keep replaying a broken recipe |
-| `cred_vault` `notes` naming a manager as not installed / locked / not signed in | The `bw` / `op` CLI is absent or its vault is locked | Relay the note's own fix (it names the install or sign-in step); a locked vault is the user's to unlock — never ask for the master password |
 | An error naming an unknown tool | The operator's `DHOLE_TOOLS` subset excludes it (all tools are registered by default in 17.0) | Tell the user which list to widen; don't silently substitute a different tool |
 | A weak-hit note in `next_action` about the focus query | Neural focus scored the best block below the intent floor — the page is real but likely doesn't answer the focus query | Don't answer from it; search for a better source (content_ok stays true — that's correct, it grades relevance, not fetch success) |
 | `error=cdp_host_not_allowed` | Target host is not in the authorized set — the match is an exact hostname, so `example.com` does not cover `www.example.com` or a CDN the page pulls from | Ask the user; with their yes, attach to it with `confirm: true` (the host is then authorized too) — never dodge it by fetching a different host with the user's login state |
@@ -128,7 +119,7 @@ These signals mean **a problem is happening that the user likely doesn't see**. 
 - `DHOLE_DEFAULT_ENGINES` — swap the default pool (default `baidu,bing,sogou,so360,bing_global,yandex,brave,duckduckgo`)
 - 17.0 deleted the old on/off switches (tool groups, multimodal, neural-focus license, wire shape, cooldown tuning, self-update): those capabilities are default-on or fixed, and a stale `DHOLE_…` in the env block does nothing — `--doctor` names what a host still sets that no longer has any effect
 
-CLI: `dhole -v` capability panel · `--doctor` the 12-item install check (audits env AND `~/.dhole/config.json`, then really searches and really fetches once — warn the user, it sends traffic) · `config list|set|unset` persisted knobs · `engines list|probe|reset` engine health · `skill install|status` sync the bundled agent skill (re-run `dhole skill install --force` after upgrading dhole to pick up skill updates).
+CLI: `dhole -v` capability panel · `--doctor` the 12-item install check (audits env AND `~/.dhole/config.json`, launches the browser once, then really searches and really fetches once — warn the user, it sends traffic) · `config list|set|unset` persisted knobs · `engines list|probe|reset` engine health · `skill install|status` sync the bundled agent skill (re-run `dhole skill install --force` after upgrading dhole to pick up skill updates).
 
 ## references index (read on demand — never all at once)
 

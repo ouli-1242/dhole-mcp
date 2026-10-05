@@ -1,8 +1,12 @@
 """线格式压缩（wire compaction）的契约测试。
 
-为什么要单独测：描述是连接时付一次（2026-10-03 B5-17 瘦身后实测 instructions 3,070
-字符 + tools/list 36,940 字符 = connect 面 40,010，按这份额外测到的 4.16 chars/token
-约 9.6k token），而**响应 envelope 是每次调用都要付**。数字来自
+为什么要单独测：描述是连接时付一次（B5-17 瘦身后 2026-10-03 实测 40,010；17.0 移除
+四颗状态工具后 2026-10-04 实测 instructions 2,636 字符 + tools/list 30,463 字符 =
+connect 面 33,099；同日 G25 评审的 web_request 写门加 confirm 属性与描述句后实测
+instructions 2,636 + tools/list 30,824 = 33,460；再经 sys_state 名册补全与
+ANTI_DETECT_DESC 收紧对冲 = 33,452，按这份额外测到的 4.16 chars/token
+约 8.0k token），而**响应
+envelope 是每次调用都要付**。数字来自
 `tests/tool_payload_measure.py`（它拒绝出一个偏小的数），不是手抄的。
 
 40,010 这一刀砍掉的是措辞与重复，砍不动的是**颗数**：骨架（属性名、类型、enum、注解）
@@ -13,7 +17,7 @@
 说清这句话值不值每一次连接。
 
 想省字数的门是现成的，而且一行配置就够、不删任何知识：`DHOLE_TOOLS` 按注册面裁剪，
-同一把尺子实测 8 颗 23,784、10 颗 25,658。两件事别搞混：
+同一把尺子实测 8 颗 22,842、10 颗 25,096。两件事别搞混：
 
   - **不要按单颗体积排序去取"最小的 N 颗"** —— 那会把 `web_read` / `web_search` /
     `web_act` / `web_crawl` 排除在外，是个算术产物而不是可用的面；
@@ -47,13 +51,9 @@ from dhole_mcp.search import SearchResponseModel, SearchResult
 from dhole_mcp.server import (
     BulkResponseModel,
     CredDefaultsModel,
-    LoginModel,
-    RecipeModel,
     ResponseModel,
     SessionCensusRow,
     SysStateModel,
-    VaultModel,
-    WatchModel,
 )
 # 17.0 B6 第三刀：压实层有了自己的家，测试直接认它，不再借 server 的名字。
 from dhole_mcp.wire import _WIRE_OMIT, _wire_dump, _wire_json
@@ -384,14 +384,11 @@ class TestThePolicyTableItself:
         models = {"ResponseModel": ResponseModel,
                   "CrawlPage": CrawlPage,
                   "CrawlResponseModel": CrawlResponseModel,
+                  "BulkResponseModel": BulkResponseModel,
                   "SearchResult": SearchResult,
                   "SearchResponseModel": SearchResponseModel,
                   "SysStateModel": SysStateModel,
-                  "CredDefaultsModel": CredDefaultsModel,
-                  "RecipeModel": RecipeModel,
-                  "WatchModel": WatchModel,
-                  "VaultModel": VaultModel,
-                  "LoginModel": LoginModel}
+                  "CredDefaultsModel": CredDefaultsModel}
         from dhole_mcp.feed import FeedItem, FeedResult
         models.update({"FeedItem": FeedItem, "FeedResult": FeedResult,
                        "SessionCensusRow": SessionCensusRow})

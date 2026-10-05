@@ -43,8 +43,6 @@ BASE: dict[str, tuple[dict, object]] = {
     # 17.0 §4 拆出来的那颗：同一个引擎，另一个入口，参数只剩地图那一半
     "web_discover": ({"url": URL}, _CRAWL_OK),
     "web_search": ({"query": "python asyncio"}, _SEARCH_OK),
-    # screenshot 回的是内容片段列表，不是模型；这里只看桩被用什么参数调用。
-    "web_screenshot": ({"url": URL}, []),
 }
 
 # 每个参数一个探针值。值要能活过线路层的强制转换，所以不是一律 "x"。
@@ -71,6 +69,9 @@ VALUES: dict[str, object] = {
     # B5-13a：档位是字符串枚举，探针值要和默认值 "auto" 不同才探得出丢没丢。
     "anti_detect": "aggressive",
     "max_links": 5, "session_id": "probe-session",
+    # 整轮字符帽（批次 5 新增）：探针值要避开默认 60000，也避开 0（"不要帽"）——
+    # 两个都不撞，丢了才分辨得出是丢了。
+    "max_total_chars": 30000,
     "method": "GET", "body": {"a": 1}, "content_type": "application/json",
     "focus": "topic", "focus_mode": "best", "focus_engine": "bm25",
     "actions": [{"wait": 1}], "cache_ttl": 300,
@@ -94,11 +95,10 @@ VALUES: dict[str, object] = {
     "before": "2026-01-01", "url": URL, "fetch_content": True,
     "fetch_schema": {"properties": {"t": {"selector": "p"}}},
     "min_relevance": 0.2, "min_raw_relevance": 0.1,
-    # screenshot
-    "quality": 80, "save_to": "shot.png", "image_type": "png",
-    "wait_selector": ".item", "full_page": True,
-    # 17.0 多模态：只验"到没到"，不真截屏
-    "selector": ".qr", "decode_qr": True,
+    # A1：screenshot 的六颗旋钮（quality/save_to/image_type/wait_selector/
+    # full_page/selector/decode_qr）随 web_screenshot 一起离开顶层参数面 ——
+    # 它们现在住在 web_act 截图动作的对象里（actions 归一化层守形状），不再
+    # 是任何工具的顶层参数，按本文件对退役键的既有做法从表里拿掉。
 }
 # 布尔类共用一个值；列出来是为了让"表里查不到"这条守卫说得准。
 # §3-17：allow_private 原来是这张表里的一颗（每次调用放行内网），现在它只能从
@@ -106,7 +106,7 @@ VALUES: dict[str, object] = {
 # B5-13d：network_idle 同样拿掉 —— 渲染时机不再是调用方能说的话。
 BOOL_KEYS = {
     "include_media", "include_links", "ignore_robots",
-    "full_page", "sitemap", "check_login",
+    "sitemap", "check_login",
 }
 for _k in BOOL_KEYS:
     VALUES.setdefault(_k, True)
@@ -282,7 +282,6 @@ class TestTheIdentityKeysRefused:
     @pytest.mark.parametrize("tool,key", [
         ("web_read", "auth"), ("web_read", "cookies"), ("web_read", "proxy"),
         ("web_read", "extra_headers"), ("web_read", "allow_private"),
-        ("web_screenshot", "allow_private"),
     ])
     def test_the_key_is_refused(self, tool, key):
         with pytest.raises(ValueError, match="Unsupported argument") as ei:

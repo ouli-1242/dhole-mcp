@@ -329,6 +329,71 @@ def budget_report(tool_defs: list[dict], top: int = 20) -> list[str]:
     return out
 
 
+def bulk_payload_report() -> list[str]:
+    """结果面的尺子：一次调用往线上发多少字符的**正文与样板**（不是 tools/list）。
+
+    连接面一直有棘轮（`CONNECT_CEILING`），结果面没有过任何可复用的尺子 —— 于是
+    2026-10-05 实测里那两件事都没被量到：一次 `web_read(urls=[20 颗])` 把同一段
+    273–361 字的 SSRF 判词印了 20 份（5.5–7.2KB 样板），而一次默认爬取交回 223,599
+    字符（约 81k token）被宿主截断落盘。历史病例参照 crawl.py 的序列化器注释：
+    docs.vllm.ai 的 1000 行 URL 图 = 353KB JSON / 70KB URL = 5.0×。
+
+    这里量的是形状而不是真抓取：一行 `ResponseModel` 用真实字段的典型长度拼出来，
+    20 行就是那一次批量会付的量；重复检测用 `duplication_report` 的同一条规矩
+    （≥120 字符的整段重复才算样板，短句重复省不下什么）。
+    """
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+    lines = ["", "-- result side (a call's own payload, not tools/list) --"]
+    try:
+        from dhole_mcp.crawl import CrawlPage, CrawlResponseModel
+        from dhole_mcp.models import BulkResponseModel, ResponseModel
+        from dhole_mcp.wire import _wire_dump
+    except Exception as exc:  # noqa: BLE001 - report, never hide
+        lines.append(f"SKIPPED: cannot import the response models "
+                     f"({type(exc).__name__}: {exc})")
+        return lines
+
+    body = ("# Title\n\n" + " ".join(
+        f"sentence {i} carrying a plausible amount of page text" for i in range(300)))
+
+    def _row(i: int, note: str = "") -> ResponseModel:
+        meta = {"title": f"Page {i}", "description": "x" * 60}
+        if note:
+            meta["ssrf_recheck"] = note
+        return ResponseModel(url=f"https://a.test/{i}", status=200,
+                             content=[body], fetcher_used="http",
+                             extracted_type="markdown", content_ok=True,
+                             total_extracted_chars=len(body), metadata=meta)
+
+    note = ("DNS recheck skipped on this machine: the resolver answers every public "
+            "name with an address in 198.18.0.0/15 (fake-ip proxy). IP-literal, "
+            "hostname and cloud-metadata guards still applied.")
+    for count in (1, 20):
+        wired = _wire_dump(BulkResponseModel(
+            results=[_row(i, note) for i in range(count)],
+            total=count, successful=count))
+        text = json.dumps(wired, ensure_ascii=False, separators=(",", ":"))
+        repeats = text.count("DNS recheck skipped")
+        lines.append(f"BulkResponseModel rows={count:2d}  chars={len(text):,}  "
+                     f"ssrf_recheck occurrences={repeats}")
+        if count > 1 and repeats > 1:
+            lines.append(f"  BOILERPLATE: the same sentence ships {repeats}x "
+                         f"({(repeats - 1) * len(note):,} spare chars) - it belongs "
+                         "once on the envelope")
+
+    crawl_pages = [
+        CrawlPage(url=f"https://a.test/{i}", status=200, content_ok=True,
+                  content=[body[:8000]], content_chars=min(len(body), 8000))
+        for i in range(40)]
+    big = CrawlResponseModel(start_url="https://a.test", pages=crawl_pages,
+                             pages_crawled=len(crawl_pages))
+    n = len(json.dumps(_wire_dump(big), ensure_ascii=False, separators=(",", ":")))
+    lines.append(f"CrawlResponseModel 40 pages x 8,000 chars -> {n:,} chars "
+                 f"({n / _TOKENS:,.0f} rough tokens) - the shape a default-sized "
+                 "crawl pays without max_total_chars")
+    return lines
+
+
 def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         # 这份报告会打印中文小节名与描述样本。Windows 控制台默认 cp936，于是
@@ -405,6 +470,7 @@ def main() -> None:
         out.extend(output_schema_report(minimal_compact, len(instructions)))
     out.extend(default_wire_report(tool_defs, parts))
     out.extend(duplication_report(tool_defs, instructions))
+    out.extend(bulk_payload_report())
     out.extend(budget_report(tool_defs))
 
     text = "\n".join(out) + "\n"

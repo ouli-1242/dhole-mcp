@@ -53,20 +53,27 @@ _WIRE_OMIT: dict = {
         "cdp_attached", "login_check",
         # §3-17：没用到落盘身份时这颗根本不该出现（绝大多数调用如此）。
         "identity_applied",
+        # G25 阶段4：干净的正文不点名（None 缺席）；命中启发式才上线。
+        "untrusted_content",
     }),
     "CrawlPage": frozenset({
         "depth", "fetcher_used", "title", "page_type", "content_chars",
         "is_truncated", "next_offset", "fetched_at", "lastmod", "summary",
-        "error",
+        "error", "untrusted_content",
     }),
     "CrawlResponseModel": frozenset({
         "discover_only", "truncated_by_max_pages",
-        "truncated_by_time", "sitemap_truncated", "sitemaps", "robots_skipped",
-        "error", "duration_ms",
+        "truncated_by_time", "truncated_by_total_chars", "sitemap_truncated",
+        "sitemaps", "robots_skipped", "error", "duration_ms", "ssrf_recheck",
     }),
+    # 批量信封：`ssrf_recheck` 是"这台机器跳过了重查"的那一句，只在真跳过时上线
+    # （它原先在每一行的 metadata 里重复一遍，见 BulkResponseModel 的序列化器）。
+    "BulkResponseModel": frozenset({"ssrf_recheck"}),
     "SearchResult": frozenset({
         "snippet", "source", "position", "fetch_relevance",
         "engines_consensus", "source_type",
+        # G4：official=False（绝大多数行）省略；True 才上线（+15 chars/行）。
+        "official",
     }),
     "SearchResponseModel": frozenset({
         "engines_used", "engine_blocked", "engine_empty", "engine_preempted",
@@ -77,7 +84,8 @@ _WIRE_OMIT: dict = {
         "source_title", "error", "discovered_from", "since",
         "note",
     }),
-    "FeedItem": frozenset({"title", "published", "summary", "summary_truncated"}),
+    "FeedItem": frozenset({"title", "published", "summary", "summary_truncated",
+                           "untrusted_content"}),
     # sys_state: every field of the census row is per-session detail that
     # sits at its default most of the time (no browser, no cookies, nothing
     # expiring). `session_id` is NOT omittable - a row without its id says
@@ -87,44 +95,22 @@ _WIRE_OMIT: dict = {
         "browser_type", "browser_created",
     }),
     # sys_state（cache_clear + close_session 合成的一颗）：只 `message` 一定上线，
-    # 其余全是"这次没发生"的收据。`pending_approval` 与 cred_login 的同名字段同理
-    # —— 缺省即"没有等待批准的动作"，上线即"什么都没抹，去 confirm"。
+    # 其余全是"这次没发生"的收据。`pending_approval` 缺省即"没有等待批准的动作"，
+    # 上线即"什么都没抹，去 confirm"。
     "SysStateModel": frozenset({
         "cleared", "pending_approval", "sessions", "open_count", "session_id",
         "cookies_forgotten", "browser_closed", "closed", "prewarm_closed",
         "purged", "cache", "engine_state_reset", "engine_health",
-        "watch_count", "recipe_count", "error", "next_action",
+        "error", "next_action",
         "cred_defaults", "identity_count",
+        # G25 评审的名册补全：两个新 census 类，空名单（没有授权过主机 /
+        # config.json 没存过旋钮）照例缺席。
+        "cdp_hosts", "config_keys",
     }),
     # cred_defaults 的回执：`rows` 是答案本身（且只有脱敏的一半），其余四颗是
     # "这次改了什么 / 为什么没改"。打在默认值上就下线，与 sys_state 同一口径。
     "CredDefaultsModel": frozenset({
         "changed", "forgotten", "error", "next_action",
-    }),
-    # web_recipe / web_watch（L3/L4）：清单与回执都在"默认值"上时省略，但 `changed`
-    # 刻意不在这个集合里 —— 首跑时它是 null，而 null≠false 正是这条 watch
-    # 唯一想说的话（没有基线不等于没有变化），省掉它就把结论一起省掉了。
-    "RecipeModel": frozenset({
-        "recipes", "recipe", "result", "outcomes", "actions_failed",
-        "error", "next_action", "url", "name",
-    }),
-    "WatchModel": frozenset({
-        "watches", "baseline_at", "added", "removed", "diff",
-        "diff_truncated", "baseline_cut", "baseline_created",
-        "error", "next_action", "url", "name", "result",
-    }),
-    # cred_vault / cred_login（计划第七章）。省略的是空容器与"这次没发生"的标志：
-    # `pending_approval` 缺省即"没有待批准的动作"，`submitted` 缺省即"没有提交"。
-    # `logged_in` 与 WatchModel.changed 同理**不在**省略集里 —— 首跑时它是 null，
-    # 而 null（探针答不了）≠ false（没登录），省掉它就把结论省掉了。
-    "VaultModel": frozenset({
-        "sources", "items", "notes", "host", "total", "truncated",
-        "error", "next_action", "message",
-    }),
-    "LoginModel": frozenset({
-        "message", "url", "credential", "credential_source", "session_id",
-        "pending_approval", "plan", "fields", "filled", "submitted",
-        "signals", "cookie_names", "result", "error", "next_action",
     }),
 }
 

@@ -131,3 +131,72 @@ class TestTheNoteReachesTheCaller:
         result = ResponseModel(url="https://example.com/", status=200, content=["x"])
         _stamp_robots_mode(result)
         assert "ssrf_recheck" not in (result.metadata or {})
+
+
+class TestTheNoteIsSaidOncePerCall:
+    """一条进程事实不该在 20 行里说 20 遍。
+
+    2026-10-05 实测：`web_read(urls=[20 颗])` 把同一段 273–361 字的判词印了 20 份，
+    一次调用 5.5–7.2KB 的样板。它说的是"这台机器的解析器跳过了重查"，与页面无关，
+    所以它在信封上有一份就够了。两条边界一起守：不许把**不一致**的判词折成一份
+    （那是关于安全的一句假话），也不许让Healthy 机器多付一个字段。
+    """
+
+    @staticmethod
+    def _rows(monkeypatch, notes):
+        from dhole_mcp.server import ResponseModel, _stamp_robots_mode
+
+        out = []
+        for i, note in enumerate(notes):
+            r = ResponseModel(url=f"https://a.test/{i}", status=200, content=["x"],
+                              metadata={})
+            _stamp_robots_mode(r)
+            if note is not None:
+                r.metadata["ssrf_recheck"] = note
+            out.append(r)
+        return out
+
+    def test_an_identical_note_across_rows_becomes_one_field_on_the_envelope(
+            self, monkeypatch):
+        from dhole_mcp.server import BulkResponseModel
+        from dhole_mcp.wire import _wire_dump
+
+        _answers(monkeypatch, (socket.AF_INET, "198.18.0.9"))
+        note = security.recheck_posture_note()
+        assert note, "前置：这台机器要被认成 fake-ip"
+        bulk = BulkResponseModel(results=self._rows(monkeypatch, [note] * 4),
+                                 total=4, successful=4)
+        wire = _wire_dump(bulk)
+        assert wire.get("ssrf_recheck") == note, sorted(wire)
+        for row in wire["results"]:
+            assert "ssrf_recheck" not in (row.get("metadata") or {}), row
+        # 省下的必须是真字节，不是"换了个地方放同样的字"。
+        assert len(_wire_dump(bulk)) < 4 * len(note)
+
+    def test_rows_that_disagree_are_not_folded_into_one_statement(
+            self, monkeypatch):
+        """两种判词折成一份 = 关于这道闸门的假话。宁可每行各说各的。"""
+        from dhole_mcp.server import BulkResponseModel
+        from dhole_mcp.wire import _wire_dump
+
+        _answers(monkeypatch, (socket.AF_INET, "198.18.0.9"))
+        note = security.recheck_posture_note()
+        rows = self._rows(monkeypatch, [note, "a different verdict"])
+        wire = _wire_dump(BulkResponseModel(results=rows, total=2, successful=2))
+        assert "ssrf_recheck" not in wire, "不一致却被折成了一句"
+        assert [(r.get("metadata") or {}).get("ssrf_recheck")
+                for r in wire["results"]] == [note, "a different verdict"]
+
+    def test_a_crawl_states_the_posture_at_the_level_the_caller_reads(
+            self, monkeypatch):
+        """爬取的每页回执是内部物，从来没上线 —— 所以这道判词以前无处可说。"""
+        from dhole_mcp.crawl import CrawlResponseModel
+        from dhole_mcp.wire import _wire_dump
+
+        _answers(monkeypatch, (socket.AF_INET, "198.18.0.9"))
+        note = security.recheck_posture_note()
+        c = CrawlResponseModel(start_url="https://a.test", pages=[],
+                               ssrf_recheck=note)
+        assert _wire_dump(c).get("ssrf_recheck") == note
+        healthy = CrawlResponseModel(start_url="https://a.test", pages=[])
+        assert "ssrf_recheck" not in _wire_dump(healthy)
