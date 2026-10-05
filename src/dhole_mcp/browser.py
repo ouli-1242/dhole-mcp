@@ -1332,7 +1332,7 @@ class BrowserSession:
         page_setup: Optional[Callable] = None,
         humanize: bool = True,
     ):
-        self._headless = headless
+        self._headless = _resolve_headless(headless)
         self._proxy = proxy
         self._locale = locale
         self._timezone_id = timezone_id
@@ -2106,14 +2106,52 @@ INSTALL_DOWNLOAD_MB = {"chromium": 193, "headless_shell": 119}
 SYSTEM_CHROME = "system-chrome"
 
 
+def _forced_browser_channel() -> str:
+    """操作员点名的 launch channel（`DHOLE_BROWSER_CHANNEL`），没点或不懂就返回 ''。
+
+    读在 `_launch_channel` 这一个地方 —— 安装侧与启动侧共用它，所以强制 msedge 时
+    "该装哪一个 artifact"跟着一起变，不会再出现 17.0 那回"装了 shell、起了别的"。
+    """
+    from dhole_mcp import env_registry
+
+    raw = (env_registry.value_of("DHOLE_BROWSER_CHANNEL") or "").strip().lower()
+    return raw if raw in ("chrome", "msedge", "chromium") else ""
+
+
+def _browser_headed() -> bool:
+    """操作员要不要一台**看得见**的浏览器（`DHOLE_BROWSER_HEADED`）。
+
+    这不是调用方的旋钮，而且故意不是：`headless` 从没上过 wire，`cred_defaults` 里也
+    没有这一颗 —— 弹一个带着你登录态的可见窗口，权力留在人手里（同一个理由，submit
+    要 confirm、attach 要 confirm）。`read_at="call"`，所以 `dhole config set` 之后
+    下一调用就生效，不必重启宿主。
+    """
+    from dhole_mcp import env_registry
+
+    return env_registry.read_flag("DHOLE_BROWSER_HEADED")
+
+
+def _resolve_headless(headless: bool) -> bool:
+    """启动侧唯一的 headless 判定点。
+
+    dhole 各处签名里的 `headless=True` 不是调用方的决定（那颗参数不在 wire 上），是
+    dhole 自己的默认，所以操作员的覆盖优先。
+    """
+    return False if _browser_headed() else headless
+
+
 def _launch_channel(real_chrome: bool = False) -> str:
     """`StealthyBrowser.start()` 交给 launch 的那个 channel —— 只在这里判一次。
 
     安装侧与启动侧必须共用它：两边各写一遍同一个条件，就是"装了 119MB 却起不来"的来路。
     `real_chrome=True` 仍钉死 'chrome' —— 档位表（rungs.py）没有任何一档传它，
     见该文件"两档之外不留逃生门"那段；这里不为一个没人走的参数扩语义。
+    操作员点名（`DHOLE_BROWSER_CHANNEL`）排在**检测**前面，不排在 `real_chrome` 前面：
+    那一档说得起的就是用户自己那个 Chrome，点名换浏览器属于检测那一支的语义。
     """
-    return "chrome" if real_chrome else _detect_chrome_channel()
+    if real_chrome:
+        return "chrome"
+    return _forced_browser_channel() or _detect_chrome_channel()
 
 
 def launch_artifact(real_chrome: bool = False) -> str:

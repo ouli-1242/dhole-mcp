@@ -100,6 +100,26 @@ ALL: tuple[EnvVar, ...] = (
         read_by=("security", "server"),
     ),
     EnvVar(
+        name="DHOLE_BROWSER_CHANNEL",
+        kind="str",
+        default="auto",
+        read_at="call",
+        scenario="which browser runs, and whether you can watch it",
+        summary="Force the launch channel: 'chrome', 'msedge' or 'chromium'. "
+                "Unset keeps detection chrome > msedge > bundled chromium.",
+        read_by=("browser",),
+    ),
+    EnvVar(
+        name="DHOLE_BROWSER_HEADED",
+        kind="flag",
+        default="0",
+        read_at="call",
+        scenario="which browser runs, and whether you can watch it",
+        summary="Start the browser tier visibly so the user can log a site in or "
+                "watch. Operator-side: never a power the caller asks for.",
+        read_by=("browser", "server"),
+    ),
+    EnvVar(
         name="DHOLE_BOCHA_API_KEY",
         kind="secret",
         default="",

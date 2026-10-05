@@ -251,9 +251,12 @@ class TestDoctorConfigAudit:
         monkeypatch.setenv("DHOLE_SEARCH_PROXY", "http://127.0.0.1:7890")
         updater.doctor()
         out = capsys.readouterr().out
-        # 13 = 注册表现有旋钮数（G25 评审加 DHOLE_HTTP_TOKEN 到 12、17.1 加
-        # DHOLE_PERSIST_CREDENTIALS 到 13）。
-        assert "2 of 13 variables set" in out
+        # 总数从注册表读，不抄成字面量：这里曾经写着 "2 of 13"（13 是 G25 加
+        # DHOLE_HTTP_TOKEN 到 12、17.1 加 DHOLE_PERSIST_CREDENTIALS 到 13 的手抄结果），
+        # 于是每加一颗旋钮就要在这里改一次 —— 而漏改的那次会红着让人以为是 doctor 错了。
+        from dhole_mcp import env_registry
+
+        assert f"2 of {len(env_registry.ALL)} variables set" in out
 
     def test_the_credential_storage_policy_is_reported(
             self, isolated_home, monkeypatch, capsys):

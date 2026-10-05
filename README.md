@@ -91,6 +91,8 @@ dhole doctor                       # 安装体检：起一次 server、真起一
 | `DHOLE_SEARCH_PROXY` | 搜索引擎被限流 / 被墙时（也自动读 `HTTPS_PROXY` 等）；只想让某一次调用走代理，用 `cred_defaults` 存 |
 | `DHOLE_IGNORE_ROBOTS=1` | 关掉进程级的 `robots.txt` 遵从（单次豁免是 `ignore_robots=true`，那是你的合规决定） |
 | `DHOLE_ALLOW_PRIVATE_HOSTS` | 放行内网 / 本机地址，默认一律拒绝 |
+| `DHOLE_BROWSER_CHANNEL=msedge` | 隐身层起哪一台浏览器：`chrome` / `msedge` / `chromium`；不设按检测顺序 chrome → msedge → 内置 chromium。按次读取，下一调用就生效；装了哪个 artifact 跟着这个判定走（只有一处判据） |
+| `DHOLE_BROWSER_HEADED=1` | 起一台**看得见**的浏览器，方便你手工登录或盯着它做事。故意不给调用方（`headless` 从没上过 wire，`cred_defaults` 也没有这一颗）：弹一个带登录态的窗口是人的决定。配 `profile` 用，否则你登的东西随临时目录一起没了；开着窗口时抓取会在你眼前开标签（一台 profile 只有一台浏览器），可见的窗口不被空闲回收；`dhole --doctor` 那颗"真起一次"的探针也遵循它（会闪一个窗口出来，那是它在做它说的事） |
 | `DHOLE_HTTP_TOKEN` | `--http` 传输的 bearer 门：设了之后每个 `/mcp` 调用必须带 `Authorization: Bearer …` 或 `X-Dhole-Token`；未设保持开放行为（非回环绑定启动时警告）。启动时读取，改了要重启 |
 | `DHOLE_PERSIST_CREDENTIALS=1` | 把会话 cookie 与 `cred_defaults` 存的凭据落盘（值经 Windows DPAPI 加密，绑定本用户）。**默认只在内存**：库文件根本不创建，进程结束即清；非 Windows 无 DPAPI，设了也不落盘（`dhole doctor` 报 fail）。启动时读取，改了要重启 |
 | `DHOLE_USAGE_LOG=1` | 本地调用与写操作日志（不记参数值、不联网） |

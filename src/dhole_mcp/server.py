@@ -314,6 +314,7 @@ from dhole_mcp.context import (
     _neural_focus_requested,
     _normalize_focus_engine,
     _note_clamped,
+    _stamp_browser_mode,
     _stamp_robots_mode,
 )
 
@@ -3157,7 +3158,13 @@ class MasterFetchServer:
                 now_ts = now()
                 async with self._sessions_lock:
                     # Check stealthy auto session (all reads under lock)
-                    if self._auto_stealthy_id and now_ts - self._auto_stealthy_last_used > AUTO_SESSION_IDLE_TIMEOUT:
+                    # 批次 10：看得见的那台不归空闲回收管。它在等人打字，一次五分钟的
+                    # 停顿把窗口关掉，等于扔掉用户填了一半的登录表单 —— 而那看起来会像
+                    # 站点的问题，实际是 dhole 干的。headless 的自动浏览器照旧回收。
+                    from dhole_mcp.browser import _browser_headed
+                    _idle_out = (now_ts - self._auto_stealthy_last_used
+                                 > AUTO_SESSION_IDLE_TIMEOUT) and not _browser_headed()
+                    if self._auto_stealthy_id and _idle_out:
                         close_stealthy = self._auto_stealthy_id
                         self._auto_stealthy_id = None
                     else:
@@ -3361,6 +3368,7 @@ class MasterFetchServer:
         # 事实记在两个地方**。现在只有一个地方。
         result = _annotate_quality(result)
         _stamp_robots_mode(result)
+        _stamp_browser_mode(result)
         # Only cache CLEAN content. Caching JS shells / bot challenges / geo
         # redirects / error statuses would serve broken pages from cache for
         # the whole TTL (and the cache-hit path doesn't restore the error field,
@@ -5009,6 +5017,7 @@ class MasterFetchServer:
                 # needs the same reconciliation the fetch path gets there.
                 hit._validators = env.get("cache_validators", {}) or {}
                 _stamp_robots_mode(hit)
+                _stamp_browser_mode(hit)
                 return _apply_chunking(hit, max_chars=mc, offset=offset)
 
         # 3. actions: page interactions (click/fill/press/wait/scroll) require

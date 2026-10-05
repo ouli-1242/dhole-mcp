@@ -1,6 +1,6 @@
 # Configuration Guide
 
-17.0 大众化一刀切：`pip install dhole-mcp` 接上宿主就能用，**能力全部默认在线**。所以可配置的东西只剩 13 个 `DHOLE_*` 变量 —— 每一个都是"这台机器的事实"（代理、内网、密钥、状态目录），而不是"要不要开某个能力"。所有变量可选；零配置即默认全量行为。
+17.0 大众化一刀切：`pip install dhole-mcp` 接上宿主就能用，**能力全部默认在线**。所以可配置的东西只剩很少的一批 `DHOLE_*` 变量 —— 每一个都是"这台机器的事实"（代理、内网、密钥、状态目录），而不是"要不要开某个能力"。这里不抄总数（抄一次就会烂一次）：`dhole --doctor` 报当前注册表里有几颗、你设了几颗，`dhole config list` 连着值的来源一起列。所有变量可选；零配置即默认全量行为。
 
 ## The rules of changing things
 
@@ -63,6 +63,11 @@ Then just call — the first attach asks, the user answers once:
 - `check_login` returns a three-state verdict from DOM shape + cookie **names** (values never leave the browser — no model involved). `false` = session expired, ask the user to re-login in that Chrome window
 - `cdp_url` forces the browser tier, bypasses the public cache and HTTP tier, and cannot combine with `schema=`
 - Attach reuses the user's existing session — it does **not** solve DataDome / Akamai / interactive Turnstile, and 2FA still needs the user
+
+### Scenario: which browser runs, and whether you can watch it
+
+- `DHOLE_BROWSER_CHANNEL` — force the launch channel (`chrome` / `msedge` / `chromium`). Unset keeps detection (chrome → msedge → bundled chromium). Read per call, so `dhole config set DHOLE_BROWSER_CHANNEL msedge` bites on the next call; the install side asks the same function which artifact it needs, so "downloaded one, launched another" has a single judge.
+- `DHOLE_BROWSER_HEADED=1` — start the browser tier **visibly** so the user can log a site in by hand or watch the page. This is an operator knob, not a caller one, and that is deliberate: `headless` was never on the wire and `cred_defaults` has no such key, because popping a visible window that carries someone's logins is a human decision (same reasoning as `submit` and CDP attach needing `confirm`). Three consequences, all stated where they bite: it needs `cred_defaults(set={'profile': '…'})` or the logins die with the throwaway temp dir; one profile is ONE browser, so while the window is open a fetch opens a tab in front of the user; and a visible browser is exempt from the idle reaper (`AUTO_SESSION_IDLE_TIMEOUT=300` closes only the hidden auto one — killing a window mid-typing would look like the site's fault). `dhole --doctor`'s "actually launch one" probe honours it too, so with this on you may see a window flash - that is it doing what it reports. Rows fetched while this is on carry `metadata.browser` naming the profile; turning the knob off removes that statement again, including from cache hits.
 
 ### Scenario: screenshots an agent can see / semantic focus
 
