@@ -1126,17 +1126,18 @@ def _cdp_attach_gate(cdp_url: Optional[str], confirm: bool = False,
 
 
 def _cdp_refusal_result(url: str, msg: str) -> "ResponseModel":
-    """The first-attach refusal as an ordinary envelope, not a transport error.
+    """The CDP refusal as an ordinary envelope, not a transport error.
 
-    实测形状（一台未授权目标主机）：这条拒本是 **573 字符**，其中前 300 字符止于
-    `…confirm=true to autho` —— 单词中间。它被剪的位置不是排版决定的，是 `call_tool` 那个
-    通用异常处理器（`server.py:7424` 的 `[:300]`）决定的；被剪掉的尾巴才是唯一可执行的两
-    句：授权哪一台、以及 `sys_state(clear=['cdp:host=…'])` 怎么撤销。走信封才有地方放
-    `next_action`，也让 `error` 字段完整送达（`_tier_error_text` 管另一条围栏拒绝）。
+    两条 CDP 拒绝共用这只信封：闸门的首挂拒答（批次 7），以及端点连不上 / 没有登录
+    上下文（批次 8-9）。前者从前 `raise`，于是一条拒绝被交给 transport 的通用异常处理
+    器 —— 实测形状（一台未授权目标主机）：**573 字符**，前 300 字符止于 `…confirm=true
+    to authori`，单词中间。剪它的是 `call_tool` 的 `[:300]`（`server.py` 的兜底），而被
+    剪掉的尾巴正是唯一可执行的两句：授权哪一台、`sys_state(clear=['cdp:host=…'])` 怎么
+    撤销。拒绝走信封，才有地方放"下一步该做什么"。
     """
     return _with_agent_hints(ResponseModel(
         url=url, status=0, content=[], fetcher_used="none",
-        extracted_type="markdown", error=msg,
+        extracted_type="markdown", error=redact_api_key(msg),
     ))
 
 
@@ -1151,10 +1152,12 @@ def _tier_error_text(exc: BaseException) -> str:
     text = str(exc)
     try:
         from dhole_mcp.browser import (CDPHostNotAllowedError,
-                                       CDPNoLoggedInContextError)
-        if isinstance(exc, (CDPHostNotAllowedError, CDPNoLoggedInContextError)):
+                                       CDPNoLoggedInContextError,
+                                       CDPUnreachableError)
+        if isinstance(exc, (CDPHostNotAllowedError, CDPNoLoggedInContextError,
+                            CDPUnreachableError)):
             return text
-    except Exception:  # noqa: BLE001 - 没有浏览器层就没有这两个异常类
+    except Exception:  # noqa: BLE001 - 没有浏览器层就没有这几个异常类
         pass
     return text[:200]
 
@@ -2642,20 +2645,6 @@ def _browser_tier_enabled() -> bool:
     return bool(_ENABLED_TOOLS & _BROWSER_TOOLS)
 
 
-def _cdp_dead_endpoint_note(message: str, arguments: dict) -> str:
-    """G5：宿主重启后旧的 CDP 端点回落成裸 ``ECONNREFUSED``——一个没有出路
-    的错误字符串（对比首挂有 450 字符设计的 ``cdp_authorization_required``
-    回执）。remote debugging 随浏览器进程死，所以唯一出路是**重启 Chrome**：
-    带上 ``--remote-debugging-port``（与当年那份 ``--user-data-dir``）再重新
-    attach。只在异常消息像「端点连不上」且本次调用真带 ``cdp_url`` 时补。"""
-    if (arguments or {}).get("cdp_url") and (
-            "ECONNREFUSED" in message or "Connection refused" in message):
-        return (message + " - that Chrome is not listening: remote debugging "
-                "dies with the browser process. Start Chrome with "
-                "--remote-debugging-port=<port> (plus the same --user-data-dir "
-                "you approved hosts from), then re-call with the same cdp_url")
-    return message
-
 # The instructions actually sent on initialize: the routing section mentions
 # only enabled tools. With the default full set this equals DHOLE_INSTRUCTIONS
 # exactly (a test pins that, so the literal and the parts cannot drift).
@@ -4004,19 +3993,31 @@ class MasterFetchServer:
                 + _install.browser_install_advice()
             )
 
+        # 这两支只在浏览器层在的时候可能存在；本地 import 与上面的
+        # _browser_deps_available() 同一口径（server 不在顶层 import browser）。
+        from dhole_mcp.browser import (CDPNoLoggedInContextError,
+                                       CDPUnreachableError)
+
         t0 = now()
-        bulk = await self.bulk_stealthy_fetch(
-            urls=[url], extraction_type=extraction_type, css_selector=css_selector,
-            headless=headless, google_search=google_search, real_chrome=real_chrome,
-            proxy=proxy, timezone_id=timezone_id, locale=locale,
-            extra_headers=extra_headers, useragent=useragent, hide_canvas=hide_canvas,
-            cdp_url=cdp_url, timeout=timeout, disable_resources=disable_resources,
-            wait_selector=wait_selector, cookies=cookies,
-            wait_selector_state=wait_selector_state, block_webrtc=block_webrtc,
-            allow_webgl=allow_webgl, solve_cloudflare=solve_cloudflare,
-            additional_args=additional_args, session_id=session_id,
-            page_action=page_action, probe_out=probe_out,
-        )
+        try:
+            bulk = await self.bulk_stealthy_fetch(
+                urls=[url], extraction_type=extraction_type, css_selector=css_selector,
+                headless=headless, google_search=google_search, real_chrome=real_chrome,
+                proxy=proxy, timezone_id=timezone_id, locale=locale,
+                extra_headers=extra_headers, useragent=useragent, hide_canvas=hide_canvas,
+                cdp_url=cdp_url, timeout=timeout, disable_resources=disable_resources,
+                wait_selector=wait_selector, cookies=cookies,
+                wait_selector_state=wait_selector_state, block_webrtc=block_webrtc,
+                allow_webgl=allow_webgl, solve_cloudflare=solve_cloudflare,
+                additional_args=additional_args, session_id=session_id,
+                page_action=page_action, probe_out=probe_out,
+            )
+        except (CDPUnreachableError, CDPNoLoggedInContextError) as exc:
+            # 批次 9：设计好的拒绝走信封。让它逃出去，`call_tool` 的兜底会把整条响应
+            # 压成裸 {"error": ...}（[:300] 还剪尾巴），于是最需要 next_action /
+            # content_ok / summary 的那一条失败反而一个字段都没有。作者与闸门拒答共用
+            # `_cdp_refusal_result`，两条 CDP 拒绝因此是同一只信封。
+            return _cdp_refusal_result(url, _tier_error_text(exc))
         result = bulk.results[0]
         result.duration_ms = (now() - t0) * 1000
         return result
@@ -5642,7 +5643,12 @@ class MasterFetchServer:
                 probe_out=_login_probe if check_login else None,
                 cdp_url=cdp_url,
             )
-            result.escalation_path = "cdp-attach:stealthy" if cdp_url else "direct:stealthy"
+            if (result.error or "").startswith("cdp_"):
+                # 批次 9：这条路没走成，就不能说走了。从前一条被围栏掐掉的行也带着
+                # `escalation_path="cdp-attach:stealthy"`，读者据此以为登录态到场了。
+                result.escalation_path = "cdp-attach:refused"
+            else:
+                result.escalation_path = "cdp-attach:stealthy" if cdp_url else "direct:stealthy"
             finalized = await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
             if check_login and _login_probe:
                 finalized.login_check = _login_probe
@@ -7422,8 +7428,11 @@ class MasterFetchServer:
                     return _call_result(result)
                 except Exception as e:
                     _log_tool_call(params.name, False, (now() - started) * 1000, str(e))
-                    error_text = json.dumps({"error": redact_api_key(
-                        _cdp_dead_endpoint_note(str(e), params.arguments or {})[:300])})
+                    # 兜底仍是裸 {"error": ...}：走到这里说明这不是 dhole 设计过的拒绝
+                    # —— 那些自己走信封（闸门拒答见 `_cdp_refusal_result`，端点连不上与
+                    # 没有登录上下文见 `stealthy_fetch`），所以这里有 summary /
+                    # next_action 可放，不必让 transport 替它们编一句。
+                    error_text = json.dumps({"error": redact_api_key(str(e)[:300])})
                     return CallToolResult(
                         content=[TextContent(type="text", text=error_text)],
                         is_error=True,

@@ -268,6 +268,45 @@ class CDPNoLoggedInContextError(RuntimeError):
     """
 
 
+class CDPUnreachableError(RuntimeError):
+    """attach 要的端点根本没在听。批次 9：这句话由知道端点的那一层写完。
+
+    从前这里什么都没写，Playwright 的 `connect_over_cdp` 异常一路逃到 transport 的
+    通用处理器，于是整条响应退化成裸 ``{"error": ...}``：没有 summary / next_action /
+    content_ok，正文里还带着 call log，尾巴被 [:300] 剪掉。补建议的那段话曾经挂在
+    transport 层，条件是「这次调用的 `arguments` 里有 `cdp_url`」—— 只认**显式**传的
+    端点，而端点也可以来自 `cred_defaults(set={'cdp': …})`（操作员存的那份），那条路
+    上一个字的建议都不会出现。一个事实两个名字，检查只读了一个：第 7 批同一个洞。
+    """
+
+
+def _cdp_unreachable_text(endpoint: str, exc: BaseException) -> str:
+    """CDP 端点连不上时那一句完整的话。作者只有这一处。
+
+    只留原因的第一行（Playwright 把 call log 拼在同一条消息里，整段上线是噪声），
+    出路按**浏览器中立**的说法写：这里不能假设用户起的是 Chrome —— Edge 同样是
+    CDP 端点，而那句"Start Chrome with --remote-debugging-port"对 Edge 用户是错的。
+    """
+    reason = (str(exc).strip().splitlines() or ["did not answer"])[0][:160]
+    refused = "ECONNREFUSED" in reason or "Connection refused" in reason
+    how = (
+        "nothing is listening on it - remote debugging lives and dies with the "
+        "browser process, so this is not a timeout to raise"
+        if refused else
+        "it refused the CDP handshake"
+    )
+    return (
+        f"cdp_endpoint_unreachable: the CDP endpoint {str(endpoint)!r} {how} "
+        f"({reason}). NOTHING was fetched - no page was opened and no cookie was "
+        "read. To fix it on the browser side: start the browser you are actually "
+        "logged into (Chrome or Edge) with --remote-debugging-port=<this port> "
+        "plus the --user-data-dir that holds those logins, then re-call the same "
+        "url. No tool parameter reaches this; if the endpoint moved, cdp_url= is "
+        "the thing to change (and the hosts approved for the old one stay "
+        "authorized until sys_state(clear=['cdp_hosts']) says otherwise)."
+    )
+
+
 _PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 # 17.0：``DHOLE_BROWSER_PROFILE`` 已注销（运行时静默忽略）。命名 profile 的
@@ -1438,9 +1477,16 @@ class BrowserSession:
 
         try:
             if self._cdp_url:
-                self._browser = await self._playwright.chromium.connect_over_cdp(
-                    endpoint_url=self._cdp_url
-                )
+                try:
+                    self._browser = await self._playwright.chromium.connect_over_cdp(
+                        endpoint_url=self._cdp_url
+                    )
+                except Exception as exc:
+                    # 批次 9：这句话在这里写完整。放它逃到 transport 的通用处理器，
+                    # 调用方拿到的就是裸 {"error": ...} + 一段 call log + 被 [:300]
+                    # 剪掉的尾巴，而"起哪个浏览器"只有这一层说得出名字。
+                    raise CDPUnreachableError(
+                        _cdp_unreachable_text(self._cdp_url, exc)) from exc
                 # G33：复用端点自己的 default context（contexts[0]）——它带着
                 # 用户 profile 的全部 cookie / storage。此前这里调 new_context()，
                 # 那是新建隔离 profile："连上已登录的 Chrome"实际拿到的永远是
@@ -1492,9 +1538,11 @@ class BrowserSession:
             self._is_alive = True
             logger.info(f"Browser session started (stealthy={self._is_stealthy}, "
                         f"cdp_attached={self._cdp_attached})")
-        except CDPNoLoggedInContextError:
-            # 端点答了话，只是没有登录态可借：这不是"浏览器起不来"，不该进
-            # launch 故障记录（那一块盘是给下一个进程读"装上了但跑不起来"的）。
+        except (CDPNoLoggedInContextError, CDPUnreachableError):
+            # 这两种都是**端点**的事：一个答了话但没有登录态可借，一个根本没在听。
+            # 都不是"我们装的浏览器起不来"，所以不许进 launch 故障记录 —— 那块盘是
+            # 写给下一个进程读的，把用户的调试端口故障记成 dhole 的安装故障，下一次
+            # `dhole -v` 就会说一句假话。
             await self._cleanup_playwright()
             raise
         except Exception as e:

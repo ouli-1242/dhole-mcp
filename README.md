@@ -105,7 +105,7 @@ dhole doctor                       # 安装体检：起一次 server、真起一
 
 ### 借你已登录的 Chrome（CDP 接管）
 
-- `chrome.exe --user-data-dir=D:\dhole-chrome --remote-debugging-port=9222`（Chrome 136+ 不许对默认 profile 开调试），在这个窗口登录一次目标站点。
+- `chrome.exe --user-data-dir=D:\dhole-chrome --remote-debugging-port=9222`（Chrome 136+ 不许对默认 profile 开调试），在这个窗口登录一次目标站点。Edge 同样是 CDP 端点，把这行换成 `msedge.exe --user-data-dir=… --remote-debugging-port=9222` 即可，dhole 这边只改端口。
 - 第一次 `web_read(url=..., cdp_url="http://127.0.0.1:9222")` **不执行任何东西**，回 `cdp_authorization_required`；用户同意之后同一调用加 `confirm=true` 才放行，并把那一台主机写进授权名册（精确主机名：`example.com` 不含 `www.example.com`）。
 - 名册之后 agent 抓这些站点会带你的登录态；每次 attach 都回 `cdp_attached: true` 并进审计。要撤销就删状态目录里的 `cdp_hosts.json`。
 - 每一台新主机都要重新过一次这道闸：attach 的重定向与第三方请求会带着你的已认证 cookie 出门，所以授权只能逐台点名，不能一把开。

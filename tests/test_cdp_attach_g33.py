@@ -361,13 +361,17 @@ class TestResolveCdpContext:
             "端点没有 context 时又去建匿名 context 了 —— 那一态必须是拒答"
 
     def test_a_refused_attach_is_not_recorded_as_a_launch_failure(self):
-        """端点答了话、只是没有登录态可借 —— 这不该写进"装上了但起不来"那块盘。"""
+        """端点答了话、只是没有登录态可借 —— 这不该写进"装上了但起不来"那块盘。
+
+        批次 9 把同一条豁免扩到 `CDPUnreachableError`：没人听用户的调试端口，也不是
+        dhole 装的那个浏览器起不来；记错了，下一次 `dhole -v` 就说假话。
+        """
         import inspect
 
         from dhole_mcp import browser as B
 
         body = inspect.getsource(B.BrowserSession.start)
-        cut = body.index("except CDPNoLoggedInContextError")
+        cut = body.index("except (CDPNoLoggedInContextError, CDPUnreachableError)")
         after = body[cut:body.index("except Exception as e:")]
         assert "record_launch_failure" not in after
         assert "_cleanup_playwright" in after, "拒答也要把连接断开，不许留着一个 playwright"
@@ -482,3 +486,132 @@ class TestFixedShapes:
         assert not hasattr(server_mod, "_env_profile_name")
         import dhole_mcp.browser as browser_mod
         assert not hasattr(browser_mod, "_env_profile_name")
+
+
+# ─── 批次 9 · CDP 端点连不上：那句话与那只信封 ────────────────────────────────
+
+class TestTheDeadEndpointRefusal:
+    """`connect_over_cdp` 失败曾一路逃到 transport，整条响应退化成裸 ``{"error": ...}``。
+
+    实测（2026-10-05：操作员把端点存进 `cred_defaults` 之后浏览器重启了）：拿回来的
+    正文只有一句 `BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:9222`
+    加一段 Playwright call log —— 没有 summary / next_action / content_ok。补建议的
+    那段话当时挂在 transport 层，条件是 `arguments` 里有 `cdp_url`，而端点来自存的那份
+    时**不满足**那个条件，实测一个字都没补上（368 字符那句还被 `[:300]` 剪掉结尾）。
+    """
+
+    CDP = "http://127.0.0.1:59999"
+    SITE = "https://site.example.test/space/index"
+
+    def test_the_text_names_the_endpoint_and_reads_browser_neutral(self):
+        from dhole_mcp.browser import _cdp_unreachable_text
+
+        noisy = RuntimeError(
+            "BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:59999\n"
+            "Call log:\n  - <ws preparing> retrieving websocket url from x\n")
+        text = _cdp_unreachable_text(self.CDP, noisy)
+        assert text.startswith("cdp_endpoint_unreachable")
+        assert repr(self.CDP) in text, "点名是哪台端点没在听"
+        assert "Call log" not in text and "<ws preparing>" not in text, \
+            "只留原因那一行，日志整段上线是噪声"
+        assert "Chrome or Edge" in text, "不能假设用户起的一定是 Chrome"
+        assert "NOTHING was fetched" in text
+        assert "--remote-debugging-port" in text and "--user-data-dir" in text
+
+    def test_a_refused_attach_is_never_cached(self, monkeypatch):
+        """端点回来以后，不许还被一小时前的那句拒绝挡着。
+
+        这条不是想象：这一支从前根本到不了信封（异常逃到 transport），所以"拒绝会不会
+        被缓存"从来没被问过。现在它是一只 status=0 的信封，而缓存那一层读的是
+        `_is_cacheable` —— 它一旦放宽，用户重启浏览器之后仍会拿到一句"没人听"。
+        """
+        from dhole_mcp.browser import CDPUnreachableError, CDPNoLoggedInContextError
+        from dhole_mcp.quality import _is_cacheable
+        from dhole_mcp.server import ResponseModel
+
+        for err in ("cdp_endpoint_unreachable: the CDP endpoint 'x' did not answer.",
+                    "cdp_no_logged_in_context: 0 browser context(s)."):
+            assert _is_cacheable(ResponseModel(url=self.SITE, status=0, content=[],
+                                               fetcher_used="none", error=err)) is False
+        out = self._refusal(monkeypatch, CDPUnreachableError(
+            "cdp_endpoint_unreachable: the CDP endpoint 'x' nothing is listening on "
+            "it - NOTHING was fetched."), cdp_url=self.CDP, confirm=True)
+        assert _is_cacheable(out) is False, out
+        # 另一支（批次 8）同一条规矩
+        out2 = self._refusal(monkeypatch, CDPNoLoggedInContextError(
+            "cdp_no_logged_in_context: 0 browser context(s), NOTHING was fetched."),
+            cdp_url=self.CDP, confirm=True)
+        assert _is_cacheable(out2) is False
+
+    def test_a_handshake_that_was_refused_says_that_instead(self):
+        from dhole_mcp.browser import _cdp_unreachable_text
+
+        text = _cdp_unreachable_text(self.CDP, RuntimeError("websocket 401 unauthorized"))
+        assert "refused the CDP handshake" in text
+        assert "not a timeout to raise" not in text, "没人听与握手被拒是两件事"
+
+    def _refusal(self, monkeypatch, exc, **kwargs):
+        from dhole_mcp.server import MasterFetchServer
+
+        async def _boom(self, *a, **k):
+            raise exc
+        monkeypatch.setattr(MasterFetchServer, "bulk_stealthy_fetch", _boom)
+        # confirm=True 只在**第一次**授权时有用；名册是按主机记的，第二次再传一次
+        # 也只会命中已授权那条路（这正是批次 7 之后的语义）。
+        kwargs.setdefault("confirm", True)
+        return asyncio.run(MasterFetchServer().web_read(
+            url=self.SITE, cache_ttl=0, **kwargs))
+
+    def test_the_refusal_travels_the_envelope(self, monkeypatch):
+        from dhole_mcp.browser import CDPUnreachableError
+
+        out = self._refusal(monkeypatch, CDPUnreachableError(
+            "cdp_endpoint_unreachable: the CDP endpoint 'x' nothing is listening on "
+            "it - NOTHING was fetched - re-call the same url."), cdp_url=self.CDP,
+            confirm=True)
+        assert out.status == 0 and out.content == [] and out.content_ok is False
+        assert out.error.startswith("cdp_endpoint_unreachable")
+        assert "no cdp endpoint" in out.summary, out.summary
+        assert "network error" not in out.summary, "没有请求在路上，没什么网络可查"
+        assert "Raising timeout will not help" in out.next_action, out.next_action
+        assert "different question" in out.next_action
+        assert out.escalation_path == "cdp-attach:refused", \
+            "这条路没走成，就不能说走了这条路"
+
+    def test_a_stored_endpoint_gets_the_same_words_as_an_explicit_one(self, monkeypatch):
+        """这一条就是这批的判据：端点有两个来源，当年只认一个。"""
+        from dhole_mcp.browser import CDPUnreachableError
+        from dhole_mcp.server import MasterFetchServer
+
+        srv = MasterFetchServer()
+        asyncio.run(srv.cred_defaults(set={"cdp": self.CDP}))
+        try:
+            async def _boom(self, *a, **k):
+                raise CDPUnreachableError(
+                    "cdp_endpoint_unreachable: the CDP endpoint 'x' nothing is "
+                    "listening on it - NOTHING was fetched.")
+            monkeypatch.setattr(type(srv), "bulk_stealthy_fetch", _boom)
+            stored = asyncio.run(srv.web_read(url=self.SITE, cache_ttl=0, confirm=True))
+        finally:
+            asyncio.run(srv.cred_defaults(unset=["cdp"]))
+        assert stored.error.startswith("cdp_endpoint_unreachable"), (
+            "存进 cred_defaults 的端点连不上时，从前一个字的建议都没有")
+        assert "no cdp endpoint" in stored.summary, stored.summary
+        assert stored.next_action, "出路不能只长在 arguments['cdp_url'] 那一条路上"
+
+    def test_an_unexpected_browser_error_still_raises(self, monkeypatch):
+        """反向守卫：不许把每一种浏览器失败都改写成这句 CDP 的话。"""
+        from dhole_mcp.server import MasterFetchServer
+
+        async def _boom(self, *a, **k):
+            raise RuntimeError("Target page closed unexpectedly")
+        monkeypatch.setattr(MasterFetchServer, "bulk_stealthy_fetch", _boom)
+        with pytest.raises(RuntimeError):
+            asyncio.run(MasterFetchServer().web_read(url=self.SITE, cdp_url=self.CDP,
+                                                     confirm=True, cache_ttl=0))
+
+    def test_the_transport_layer_no_longer_edits_this_sentence(self):
+        """一句话只有一个作者：建议由 browser.py 写，transport 不许再往异常串后面拼。"""
+        assert not hasattr(server_mod, "_cdp_dead_endpoint_note"), (
+            "那颗只读 arguments['cdp_url'] 的补丁又回来了 —— 存进 cred_defaults 的"
+            "端点走不到它的条件，实测一个字都补不上")

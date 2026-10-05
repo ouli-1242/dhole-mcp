@@ -45,7 +45,7 @@
 
 ### Scenario: pages behind a login wall — CDP attach
 
-One-time user setup: launch a **copy-profile** Chrome with remote debugging (Chrome 136+ refuses debugging on the default profile) and log into the target site in that window once:
+One-time user setup: launch a **copy-profile** Chrome with remote debugging (Chrome 136+ refuses debugging on the default profile) and log into the target site in that window once. Edge works the same way - it is the same protocol, so swap the executable for `msedge.exe` and dhole only sees a different port:
 
 ```
 chrome.exe --user-data-dir=D:\dhole-chrome --remote-debugging-port=9222

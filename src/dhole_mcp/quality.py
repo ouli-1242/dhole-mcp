@@ -706,6 +706,10 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             # 说成 network error 会把人送去查代理，而这里没什么可查——那一窗口的
             # profile 里没有可复用的上下文。
             parts.append("no logged-in context")
+        elif (result.error or "").startswith("cdp_endpoint_unreachable"):
+            # 批次 9：端点这次连话都没答。说成 network error 仍然不对 —— 没有
+            # 请求在路上，也没有代理可查；把 timeout 调大更不会有用。
+            parts.append("no cdp endpoint")
         else:
             parts.append("local error" if result.fetcher_used == "parse" else "network error")
     else:
@@ -838,6 +842,18 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             "start the signed-in browser with --user-data-dir pointing at that "
             "profile and --remote-debugging-port at this port. Dropping cdp_url= "
             "answers a different question (the anonymous view of this page)."
+        )
+    elif err.startswith("cdp_endpoint_unreachable"):
+        # 批次 9：这一支从前根本没有词 —— 整条响应退化成裸 {"error": ...}，读者只能
+        # 拿一段 Playwright call log 自己猜。修的方向都在**浏览器那一侧**。
+        next_action = (
+            "the CDP endpoint is not answering, so nothing was fetched and nothing "
+            "was read - this is fixed on the browser side, not by a parameter: "
+            "start the browser holding your logins (Chrome or Edge) with "
+            "--remote-debugging-port=<this port> plus its --user-data-dir, then "
+            "re-call the SAME url. Raising timeout will not help (nothing is "
+            "listening is not the same as slow), and dropping cdp_url= answers a "
+            "different question (the anonymous view of this page)."
         )
     elif err.startswith("schema_no_match"):
         next_action = ("no selector matched this page - re-check the selectors, or fetch "
