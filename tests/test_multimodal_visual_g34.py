@@ -1,8 +1,9 @@
-"""G34 → 17.0：元素级截图 + 本地二维码解码，**常开**（无 DHOLE_MULTIMODAL 门）。
+"""G34 → 17.0 → A1：元素级截图 + 本地二维码解码，**常开**（无 DHOLE_MULTIMODAL 门）。
 
-大众化一刀切把"调用方声明自己是多模态的"这层许可删了 —— 元素级截图
-（screenshot 的 options.selector、web_read 的 {"screenshot"} 动作）和工具描述
-里的试读纪律默认全量在线；dhole 不引入视觉模型，识别永远在 agent 侧。这里各守各的：
+大众化一刀切把"调用方声明自己是多模态的"这层许可删了；A1 再把独立的
+web_screenshot 工具并进 web_act 的截图动作链 —— 捕获旋钮（full_page / save_to /
+image_type / quality）跟着能力走，进动作对象。dhole 不引入视觉模型，识别永远在
+agent 侧。这里各守各的：
 
 * **无门控语义**：任何 env 状态下动作与工具都能走通；曾经读 env 的入口
   （actions.multimodal_enabled / server._multimodal_enabled）必须不存在。
@@ -118,9 +119,12 @@ class TestNoActionGate:
     def test_the_dict_form_normalizes_selector_and_decode_qr(self):
         (a,) = _validate_actions([{"screenshot": {"selector": "img.qr",
                                                   "decode_qr": True}}])
-        assert a == {"screenshot": {"selector": "img.qr", "decode_qr": True}}
+        # A1：归一化把 image_type 定型（执行器不再猜默认），其余旋钮缺席即省略。
+        assert a == {"screenshot": {"selector": "img.qr", "image_type": "png",
+                                    "decode_qr": True}}
         (b,) = _validate_actions([{"screenshot": "img.qr"}])
-        assert b == {"screenshot": {"selector": "img.qr", "decode_qr": False}}
+        assert b == {"screenshot": {"selector": "img.qr", "image_type": "png",
+                                    "decode_qr": False}}
 
     @pytest.mark.parametrize("bad", [
         {"screenshot": {"selector": "img.qr", "decode_qr": "yes"}},
@@ -248,114 +252,72 @@ class TestTheReceiptAndTheWire:
         assert content[0].type == "text"
 
 
-# ─── screenshot 工具：无门，形状冲突仍然当场拒绝 ────────────────────────────
+# ─── 捕获旋钮（A1）：归一化即拒 + 执行器落盘 ────────────────────────────────
+# 原 TestTheToolGate/TestTheToolCapture 守的是 web_screenshot 方法本体；工具下线
+# 后同一批裁决改由动作链的两个环节承担：形状冲突在 build_page_action（校验期，
+# 浏览器还没起），旋钮在执行器（落盘/内联/编码）。
 
 
-class TestTheToolGate:
+class TestTheCaptureKnobs:
 
     @pytest.mark.asyncio
-    async def test_a_selector_crop_starts_no_browser_for_a_shape_error(
-            self, monkeypatch):
-        async def no_browser(*a, **kw):
-            raise AssertionError("a browser was started for a shape refusal")
-        monkeypatch.setattr(MasterFetchServer, "_ensure_auto_session", no_browser)
+    async def test_full_page_captures_the_page_not_an_element(self):
+        pa = build_page_action([{"screenshot": {"full_page": True}}])
+        await pa(_FakePage())
+        (row,) = pa.outcomes
+        assert row["ok"] is True
+        assert row["image_mime"] == "image/png"
+        assert base64.b64decode(row["image_b64"]) == PNG_BYTES
 
+    @pytest.mark.asyncio
+    async def test_full_page_cannot_combine_with_a_selector(self):
         with pytest.raises(ValueError) as e:
-            await MasterFetchServer().web_screenshot(URL, selector="img.captcha",
-                                                 full_page=True)
+            build_page_action([{"screenshot": {"full_page": True,
+                                               "selector": "img.captcha"}}])
         assert "full_page" in str(e.value)
 
-    @pytest.mark.asyncio
-    async def test_full_page_cannot_combine_with_a_selector(self, monkeypatch):
+    def test_quality_needs_jpeg(self):
         with pytest.raises(ValueError) as e:
-            await MasterFetchServer().web_screenshot(URL, selector="img.captcha",
-                                                 full_page=True)
-        assert "full_page" in str(e.value)
+            build_page_action([{"screenshot": {"selector": "img",
+                                               "quality": 80}}])
+        assert "quality" in str(e.value)
+        (a,) = _validate_actions([{"screenshot": {"selector": "img",
+                                                  "image_type": "jpeg",
+                                                  "quality": 80}}])
+        assert a["screenshot"]["quality"] == 80
+
+    def test_an_image_type_off_the_enum_is_refused(self):
+        with pytest.raises(ValueError) as e:
+            build_page_action([{"screenshot": {"selector": "img",
+                                               "image_type": "webp"}}])
+        assert "image_type" in str(e.value)
 
     @pytest.mark.asyncio
-    async def test_decode_qr_runs_with_no_env_at_all(self, monkeypatch):
-        """decode_qr 从来不是视觉任务：任何 env 状态下都走到浏览器层（假会话证明
-        它没在入口就被拒）。"""
+    async def test_save_to_writes_disk_and_keeps_the_bytes_off_the_transcript(
+            self, tmp_path):
+        target = tmp_path / "shots" / "page.png"
+        pa = build_page_action([{"screenshot": {"selector": "img.cap",
+                                                "save_to": str(target)}}])
+        await pa(_FakePage())
+        (row,) = pa.outcomes
+        assert row["ok"] is True
+        assert "image_b64" not in row, "落盘的捕获不再搭 transcript 的税"
+        assert row["saved_bytes"] == len(PNG_BYTES)
+        assert target.read_bytes() == PNG_BYTES, "父目录要自动创建"
 
-        class _Entry:
-            session = _FakeSession(_FakePage())
-
-        async def fake_session(*a, **kw):
-            return "auto"
-
-        async def fake_get(self, ssid, expected_type=None):
-            return _Entry()
-
-        monkeypatch.setattr(MasterFetchServer, "_ensure_auto_session", fake_session)
-        monkeypatch.setattr(MasterFetchServer, "_get_session", fake_get)
-        monkeypatch.setattr("dhole_mcp.server._browser_deps_available", lambda: True)
-
-        out = await MasterFetchServer().web_screenshot(URL, decode_qr=True)
-        text = [c for c in out if getattr(c, "type", "") == "text"][0].text
-        assert "decode_qr" in text
-
-
-class TestTheToolCapture:
-
-    @staticmethod
-    def _patch_session(monkeypatch, page: _FakePage):
-        class _Entry:
-            session = _FakeSession(page)
-
-        async def fake_session(*a, **kw):
-            return "auto"
-
-        async def fake_get(self, ssid, expected_type=None):
-            return _Entry()
-
-        monkeypatch.setattr(MasterFetchServer, "_ensure_auto_session", fake_session)
-        monkeypatch.setattr(MasterFetchServer, "_get_session", fake_get)
-        monkeypatch.setattr("dhole_mcp.server._browser_deps_available", lambda: True)
+    def test_a_non_image_save_to_is_refused_before_the_browser_starts(self):
+        with pytest.raises(ValueError) as e:
+            build_page_action([{"screenshot": {"selector": "img",
+                                               "save_to": "notes.txt"}}])
+        assert "not named like an image" in str(e.value)
 
     @pytest.mark.asyncio
-    async def test_a_selector_crop_captures_the_element(self, monkeypatch):
-        self._patch_session(monkeypatch, _FakePage())
-        out = await MasterFetchServer().web_screenshot(URL, selector="img.captcha")
-        image = [c for c in out if getattr(c, "type", "") == "image"][0]
-        text = [c for c in out if getattr(c, "type", "") == "text"][0].text
-        assert base64.b64decode(image.data) == PNG_BYTES
-        assert image.mime_type == "image/png"
-        assert "element crop: img.captcha" in text
-
-    @pytest.mark.asyncio
-    async def test_decode_qr_lands_in_the_text_part(self, monkeypatch):
-        pytest.importorskip("cv2")
-        payload = "https://example.com/checkin?token=abc123"
-        self._patch_session(monkeypatch, _FakePage(data=_qr_png(payload)))
-        out = await MasterFetchServer().web_screenshot(URL, decode_qr=True)
-        text = [c for c in out if getattr(c, "type", "") == "text"][0].text
-        assert payload in text
-
-    @pytest.mark.asyncio
-    async def test_no_qr_in_the_capture_is_a_note_not_an_error(self, monkeypatch):
-        pytest.importorskip("cv2")
-        import cv2
-        import numpy as np
-
-        blank = np.full((60, 60, 3), 255, dtype=np.uint8)
-        ok, buf = cv2.imencode(".png", blank)
-        assert ok
-        self._patch_session(monkeypatch, _FakePage(data=buf.tobytes()))
-        out = await MasterFetchServer().web_screenshot(URL, decode_qr=True,
-                                                   selector="img.not-a-code")
-        text = [c for c in out if getattr(c, "type", "") == "text"][0].text
-        assert "no QR code found" in text
-
-    @pytest.mark.asyncio
-    async def test_undecodable_bytes_are_a_note_and_the_image_still_flows(
-            self, monkeypatch):
-        """PNG_BYTES 不是真图片：解码失败要降级成注记，截图本身照常交付。"""
-        self._patch_session(monkeypatch, _FakePage())
-        out = await MasterFetchServer().web_screenshot(URL, decode_qr=True)
-        image = [c for c in out if getattr(c, "type", "") == "image"][0]
-        text = [c for c in out if getattr(c, "type", "") == "text"][0].text
-        assert image.data
-        assert "decode_qr: unavailable on this capture" in text
+    async def test_jpeg_type_sets_the_mime(self):
+        pa = build_page_action([{"screenshot": {"selector": "img",
+                                                "image_type": "jpeg"}}])
+        await pa(_FakePage())
+        (row,) = pa.outcomes
+        assert row["image_mime"] == "image/jpeg"
 
 
 # ─── 描述：纪律跟着 flag 上线，类字面量保持原样 ─────────────────────────────
@@ -365,23 +327,23 @@ class TestTheDescriptions:
 
     def test_discipline_is_in_the_literal_itself(self):
         """VISUAL ASSIST 不再是运行时拼接：它在 _TOOL_DEFS 字面量里
-        （能力常开，纪律不是模式）。"""
+        （能力常开，纪律不是模式）。A1 之后只有 web_act 这扇门。"""
         defs = {td["name"]: td for td in MasterFetchServer._enabled_tool_defs()}
-        shot = defs["web_screenshot"]["description"]
-        # 17.0 §4 第 2 行：链上那颗 {screenshot} 跟着 actions 一起搬去了 web_act ——
-        # 判据不变（标记与纪律都得在字面量里），只是那扇门换了名字。
+        assert "web_screenshot" not in defs, "独立工具该下线了"
         act = defs["web_act"]["description"]
-        assert "VISUAL ASSIST" in shot
-        assert "selector=" in shot
         assert "VISUAL ASSIST" in act
         assert '{"screenshot"' in act
+        # 捕获旋钮在描述里点得出名字（选型发生在读描述的那一刻）。
+        for knob in ("full_page", "save_to", "image_type", "quality"):
+            assert knob in act
         assert "actions" not in defs["web_read"]["inputSchema"]["properties"],             "web_read 还挂着动作链，两扇门就又是一扇"
-        # 纪律（安全红线 6 的 ≤N 次与一律转交）
-        for desc in (shot, act):
-            assert "at most 3" in desc
-            assert "DataDome" in desc
-            assert "2FA" in desc
-            assert "hand off" in desc
+        # 纪律（安全红线 6 的 ≤N 次与一律转交）：act 留 ≤3 次与转交动词，墙的
+        # 枚举随 web_screenshot 下线搬进 behavior 卷 —— 指针从 act 的字面一路
+        # 可达，纪律不因合并而失联。
+        assert "at most 3" in act
+        assert "DataDome" not in act, "墙的清单按需付费，不再常驻 wire"
+        assert "hand off" in act
+        assert "sys_guide(topic='behavior')" in act, "act 丢了指向墙清单的指针"
 
     def test_repeated_calls_do_not_accumulate(self):
         first = [td["description"] for td in MasterFetchServer._enabled_tool_defs()]

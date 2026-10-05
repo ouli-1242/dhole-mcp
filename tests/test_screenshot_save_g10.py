@@ -4,21 +4,23 @@
 堆它读不懂的 base64，等于这个工具对它不存在；即便是多模态客户端，也没有任何下游工具
 能接着用这张图（没有路径）。
 
-这里守的三件事：
+这里守的四件事：
     路径校验发生在**启动浏览器之前** —— 一个写错的 save_to 不该值 10 秒冷启动。
-    不覆盖非图片命名的既有文件 —— 打错一个字的截图工具吃掉 notes.txt 是数据丢失。
+    不写非图片命名的文件（无论存在与否）—— 打错一个字的截图工具吃掉 notes.txt
+    是数据丢失；一个尚不存在的 task.bat 一样不该被创建（G25 评审把后缀校验从
+    「已存在的文件」扩到「任何非图片命名」，代码这才与描述对齐）。
     落盘的事实出现在文本段里 —— 读不到图片的那一方，路径就是它唯一能用的输出。
+    注解说真话 —— save_to 会写盘、anti_detect 会答挑战，readOnlyHint=True 等于
+    把写原语放进宿主的免审批通道。
 """
 
 from __future__ import annotations
 
 import pytest
 
-from dhole_mcp.server import (
-    MasterFetchServer,
-    _resolve_save_to,
-    _write_screenshot,
-)
+# A1：save_to 的家从 web_screenshot 搬到了 web_act 的截图动作，helper 随迁。
+from dhole_mcp.actions import _resolve_save_to, _write_screenshot, build_page_action
+from dhole_mcp.server import MasterFetchServer
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
 
@@ -82,6 +84,20 @@ class TestRetakingAShotDoesNotEatADocument:
         assert notes.read_text(encoding="utf-8") == "the only copy"
         assert ".png" in str(e.value), "报错要说清改成什么才通过"
 
+    def test_a_new_file_that_is_not_named_like_an_image_is_refused_too(self, tmp_path):
+        """后缀守卫不以「文件已存在」为前提（G25 评审）：描述说 a non-image file
+        name is refused，那就无论存在与否都拒——否则 save_to 是一扇无门的
+        「任意新路径写字节」原语，往 Startup 目录塞 .bat 的路是敞开的。"""
+        target = tmp_path / "startup" / "task.bat"
+
+        with pytest.raises(ValueError) as e:
+            _resolve_save_to(str(target), "png")
+
+        assert "refusing to create" in str(e.value)
+        assert "not named like an image" in str(e.value)
+        assert ".png" in str(e.value), "报错要说清改成什么才通过"
+        assert not target.parent.exists(), "校验不许顺手建目录"
+
     def test_a_jpeg_named_target_may_hold_jpeg_bytes(self, tmp_path):
         """image_type=jpeg 写 .jpg 是同一个动作，不该被后缀守卫拦下。"""
         shot = tmp_path / "a.jpg"
@@ -100,57 +116,56 @@ class TestRetakingAShotDoesNotEatADocument:
         assert "could not write" in str(e.value)
 
 
+class TestTheAnnotationsTellTheTruth:
+    """注解是宿主决定「要不要先问用户」的依据：readOnlyHint=True 的工具会被
+    自动放行，而 save_to 写盘、anti_detect 答 Cloudflare 挑战都不是只读
+    （G25 评审：注解撒谎等于给写原语开免审通道）。"""
+
+    def test_web_act_is_not_read_only_on_the_wire(self):
+        """A1：截图能力住进 web_act；"save_to 写盘、anti_detect 答挑战都不是
+        只读"的注解诚实现在由 web_act 这扇门继续承担。"""
+        defs = {d["name"]: d for d in MasterFetchServer._TOOL_DEFS}
+        ann = defs["web_act"]["annotations"]
+        assert ann["readOnlyHint"] is False
+        assert ann["idempotentHint"] is False
+        assert ann["openWorldHint"] is True
+        assert "web_screenshot" not in defs
+
+
 class TestScreenshotUsesTheKnobItDocuments:
 
-    @pytest.mark.asyncio
-    async def test_a_bad_save_to_refuses_before_a_browser_is_started(self, tmp_path,
-                                                                     monkeypatch):
-        async def no_browser(*a, **kw):
-            raise AssertionError("a browser was started for a path that cannot work")
-        monkeypatch.setattr(MasterFetchServer, "_ensure_auto_session", no_browser)
-
+    def test_a_bad_save_to_refuses_at_action_validation(self, tmp_path):
+        """A1：校验在动作归一化层发生 —— 那是浏览器冷启动之前。"""
         with pytest.raises(ValueError) as e:
-            await MasterFetchServer().web_screenshot("https://example.com",
-                                                save_to=str(tmp_path))
-
+            build_page_action([{"screenshot": {"save_to": str(tmp_path)}}])
         assert "directory" in str(e.value)
+        with pytest.raises(ValueError) as e:
+            build_page_action([{"screenshot": {"save_to": str(tmp_path / "a.png")}}])
+        assert "selector" in str(e.value), "既不落盘也不裁元素的截图没有意义"
 
     @pytest.mark.asyncio
-    async def test_the_saved_path_is_in_the_text_part_not_only_in_the_image(
-            self, tmp_path, monkeypatch):
-        """文本段是非多模态客户端唯一能读的那一半。路径只放在日志里等于没放。"""
+    async def test_the_saved_path_lands_in_the_action_receipt(self, tmp_path):
+        """文本段是非多模态客户端唯一能读的那一半：A1 之后路径进的是动作回执行
+        （metadata.actions → summary/next_action 的原料），字节一律不搭 transcript。"""
+        target = tmp_path / "page.png"
+        pa = build_page_action([{"screenshot": {"save_to": str(target),
+                                                "full_page": True}}])
+
         class _Page:
             url = "https://example.com/"
 
             async def screenshot(self, **kwargs):
+                assert kwargs.get("full_page") is True
                 return PNG
 
-        class _Session:
-            async def fetch(self, url, **kwargs):
-                action = kwargs.get("page_action")
-                await action(_Page())
+        await pa(_Page())
 
-        class _Entry:
-            session = _Session()
-
-        async def fake_session(*a, **kw):
-            return "auto"
-
-        async def fake_get(self, ssid, expected_type=None):
-            return _Entry()
-
-        monkeypatch.setattr(MasterFetchServer, "_ensure_auto_session", fake_session)
-        monkeypatch.setattr(MasterFetchServer, "_get_session", fake_get)
-        monkeypatch.setattr("dhole_mcp.server._browser_deps_available", lambda: True)
-
-        out = await MasterFetchServer().web_screenshot(
-            "https://example.com", save_to=str(tmp_path / "page.png"))
-
-        text = [c for c in out if getattr(c, "type", "") == "text"][0].text
-        assert "page.png" in text
-        assert str(tmp_path.resolve()) in text
-        assert f"{len(PNG)} bytes" in text
-        assert (tmp_path / "page.png").read_bytes() == PNG
+        (row,) = pa.outcomes
+        assert row["ok"] is True
+        assert "image_b64" not in row
+        assert target.name in row["saved"]
+        assert row["saved_bytes"] == len(PNG)
+        assert target.read_bytes() == PNG
 
 
 @pytest.mark.live

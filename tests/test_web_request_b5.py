@@ -21,6 +21,11 @@ web_read 里一个 `method=` 分支维持，代价是读的那扇门上挂着三
 颗工具留了 7 个名字，其中一个就是档位；可写操作永远不进浏览器层（那正是"一次性"
 的推论），没有渲染就没有可选的强度。留一颗做不了任何事的参数，就是把 wire 写成谎
 —— 6 个名字是这一刀真正的形状，理由写在这里，也写在工具描述里。
+
+第七个名字是后来（G25 评审 Blocker）补上的 `confirm`：写操作出去时带着
+cred_defaults 存的凭据，被注入内容诱导的 agent 必须过一道与 submit 同语义的闸。
+它必须是 schema 里的已知名——藏在签名里的 confirm 会被 dispatch 当表外名拒掉，
+拒绝消息教的重试根本到不了闸门。
 """
 
 from __future__ import annotations
@@ -60,7 +65,9 @@ def _capture_get(monkeypatch, **call):
                              fetcher_used="http")
 
     monkeypatch.setattr(MasterFetchServer, "get", fake)
-    args = {"url": URL, "method": "POST", "body": '{"item": 1}'}
+    # confirm=True 是这颗工具的既有闸门（见 TestTheWriteGate）：走写路径的用例
+    # 都从这条入口过，这里默认带上，让它们继续测各自的主语。
+    args = {"url": URL, "method": "POST", "body": '{"item": 1}', "confirm": True}
     args.update(call)
     asyncio.run(MasterFetchServer()._dispatch("web_request", args))
     return seen
@@ -68,10 +75,11 @@ def _capture_get(monkeypatch, **call):
 
 class TestTheToolExists:
 
-    def test_it_is_registered_with_the_six_names_it_can_honour(self):
+    def test_it_is_registered_with_the_seven_names_it_can_honour(self):
         assert "web_request" in _defs(), sorted(_defs())
         assert server_mod._TOP_LEVEL_ARGS["web_request"] == frozenset({
-            "url", "method", "body", "content_type", "extraction_type", "timeout"})
+            "url", "method", "body", "content_type", "extraction_type", "timeout",
+            "confirm"})
 
     def test_it_is_a_write_on_the_wire(self):
         """annotations 是客户端决定"要不要先问用户"的输入，不是装饰。"""
@@ -80,8 +88,8 @@ class TestTheToolExists:
         assert ann.get("idempotentHint") is False
         assert ann.get("openWorldHint") is True
 
-    def test_the_default_surface_is_seventeen_tools(self):
-        assert len(_defs()) == 17, sorted(_defs())
+    def test_the_default_surface_is_eleven_tools(self):
+        assert len(_defs()) == 11, sorted(_defs())
 
     def test_every_property_description_stays_within_the_budget(self):
         props = _defs()["web_request"]["inputSchema"]["properties"]
@@ -100,6 +108,66 @@ class TestTheToolExists:
         assert "anti_detect" not in server_mod._TOP_LEVEL_ARGS["web_request"]
         # 描述里"为什么没有这颗"要能读到 —— 缺席也要有据可查，否则下一个人会"顺手补上"。
         assert "anti_detect" in _defs()["web_request"]["description"]
+
+
+class TestTheWriteGate:
+    """写操作确认门（G25 评审 Blocker）：submit 有闸、sys_state 清会话有闸、
+    CDP 首挂有闸，这扇门原来没有——而 cred_defaults 存的凭据按主机自动随行，
+    被页面正文（间接注入）诱导的 agent 可以直发已认证写请求。与 submit 同一
+    语义：没有用户点过头，一个请求都不出。HEAD 是探测，不需要 confirm。
+    """
+
+    @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+    def test_a_write_without_confirm_is_refused_before_anything_is_sent(
+            self, monkeypatch, method):
+        sent: list = []
+
+        async def fake(self, url, **kwargs):
+            sent.append((url, kwargs))
+            return OK
+
+        monkeypatch.setattr(MasterFetchServer, "get", fake)
+        out = _dispatch("web_request", {"url": URL, "method": method})
+        assert not sent, f"{method} 没有 confirm 竟然发出去了"
+        blob = json.dumps(out).lower()
+        assert "confirm" in blob, out
+        assert "nothing was sent" in blob, out
+
+    def test_confirm_false_is_as_good_as_absent(self, monkeypatch):
+        sent: list = []
+
+        async def fake(self, url, **kwargs):
+            sent.append(url)
+            return OK
+
+        monkeypatch.setattr(MasterFetchServer, "get", fake)
+        out = _dispatch("web_request", {"url": URL, "method": "POST",
+                                        "confirm": False})
+        assert not sent, "confirm=false 被当成了真"
+        assert "confirm" in json.dumps(out).lower(), out
+
+    @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+    def test_confirm_true_reaches_the_http_tier(self, monkeypatch, method):
+        seen = _capture_get(monkeypatch, method=method)
+        assert seen["url"] == URL, seen
+
+    def test_head_is_a_probe_and_needs_no_confirm(self, monkeypatch):
+        sent: list = []
+
+        async def fake(self, url, **kwargs):
+            sent.append(url)
+            return OK
+
+        monkeypatch.setattr(MasterFetchServer, "get", fake)
+        out = _dispatch("web_request", {"url": URL, "method": "head"})
+        assert sent, "HEAD 是探测，不该被确认门拦下"
+
+    def test_the_gate_is_discoverable_on_the_wire(self):
+        """闸门要在，通往闸门的路也要在：confirm 不进 schema，重试就被
+        dispatch 当表外名拒掉——拒绝消息教的 confirm=true 根本传不进来。"""
+        props = _defs()["web_request"]["inputSchema"]["properties"]
+        assert "confirm" in props, sorted(props)
+        assert "confirm" in _defs()["web_request"]["description"]
 
 
 class TestWhatItRequires:
@@ -196,7 +264,8 @@ class TestTheOneShotRulesSurviveTheMove:
         monkeypatch.setattr(MasterFetchServer, "get", fake)
         for _ in range(2):
             asyncio.run(MasterFetchServer(cache_ttl=3600)._dispatch(
-                "web_request", {"url": URL, "method": "POST", "body": "{}"}))
+                "web_request", {"url": URL, "method": "POST", "body": "{}",
+                                "confirm": True}))
         assert len(hits) == 2, "两次 POST 里有第二次走了缓存 —— 重发的是缓存不是写"
 
     def test_a_write_never_escalates_to_the_browser(self, monkeypatch):
@@ -208,7 +277,8 @@ class TestTheOneShotRulesSurviveTheMove:
         只验答案里那条路径：一次写落过的层只有 direct:http。
         """
         _capture_get(monkeypatch, timeout=5000)   # 装桩：这一趟不真发请求
-        out = _dispatch("web_request", {"url": URL, "method": "POST", "body": "{}"})
+        out = _dispatch("web_request", {"url": URL, "method": "POST", "body": "{}",
+                                        "confirm": True})
         assert "stealthy" not in (out.get("escalation_path") or ""), out
         assert out.get("escalation_path") == "direct:http", out
 
@@ -221,7 +291,8 @@ class TestTheOneShotRulesSurviveTheMove:
 
         monkeypatch.setattr(MasterFetchServer, "get", fake)
         out = _dispatch("web_request", {"url": URL, "method": "POST",
-                                        "body": "x" * (300 * 1024)})
+                                        "body": "x" * (300 * 1024),
+                                        "confirm": True})
         assert not sent, "正文超上限却还是发出去了"
         # 上限说的是字节数（262144 = 256KB）：拒答要给出可执行的数字，不是"太大了"。
         assert "262144" in json.dumps(out), out

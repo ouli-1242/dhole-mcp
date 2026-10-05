@@ -92,7 +92,7 @@ qrels 记 labeler 身份与盲表 sha256，没记录就不可复现，等于没�
 | 数 | 值 | 命令 |
 |---|---|---|
 | 全量测试 | **2,923 passed / 7 skipped / 61 deselected**，121s | `env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY python -m pytest -q` |
-| 连接期字符 | **24,030**（instructions 2,345 + tools/list 21,685）；`DHOLE_TASKS=1` → 27,818；`DHOLE_VAULT=1` → 27,327；两旗全开 → 31,115 | `python tests/tool_payload_measure.py` |
+| 连接期字符 | **24,030**（instructions 2,345 + tools/list 21,685）——B0 当时 17 颗口径；`DHOLE_TASKS` / `DHOLE_VAULT` 两旗已在 17.0 随四工具移除，当前 13 颗口径 33,099 | `python tests/tool_payload_measure.py` |
 | MCP 快照 | **35 次 tools/call，isError 真 14 / 假 21**，markers=none，11.3s | `python tests/mcp_snapshot.py` |
 | ruff | **All checks passed**（基线原有 8 个 W 批次残留 F401/F541，已在 `928d832` 先修掉） | `python -m ruff check src tests` |
 
@@ -137,12 +137,6 @@ python evals/captcha_baseline.py
 python evals/captcha_baseline.py --emit 8 --level normal
 python evals/captcha_baseline.py --score evals/.runtime/captcha/answers.txt
 
-# 7. L3/L4 重复任务（需要靶站在跑；会自己起一次性 DHOLE_HOME，不碰你的 ~/.dhole）
-DHOLE_TASKS=1 python evals/tasks_l3l4.py
-
-# 8. 凭据来源 + 独立登录流（需要靶站在跑；会自己起一次性 DHOLE_HOME 和一个
-#    临时目录里的「假 bw」，所以不依赖你机器上真的装了密码管理器）
-DHOLE_VAULT=1 python evals/vault_login.py
 ```
 
 场景 1/2/5/6 由**外层 agent 直接调 dhole 工具**执行，逐条调用见下。
@@ -287,93 +281,7 @@ connect tokens。
 
 ---
 
-## L3 / L4 重复任务（recipe 录制回放 / watch 监控 diff）
-
-计划第九章编排轴的最后两级，实现落在 `src/dhole_mcp/tasks.py` + 两个 opt-in 工具
-（`DHOLE_TASKS=1`）。单元测试（`tests/test_tasks_l3l4.py`，41 例）钉语义；
-`evals/tasks_l3l4.py` 走**完整工具调用**，验那些语义在真页面上还成立：
-
-```
-[通过] 录制时坏链被拒，且什么都没存
-    error="action 0 'click' must be a non-empty CSS selector string" 库里=False
-[通过] 重放点进长文：动作全过且拿到目标页
-    actions_failed=0 title='本地抓取工具配置指南' url=http://127.0.0.1:8399/article
-[通过] 页面变了之后重放大声失败并让人重录
-    actions_failed=1 next_action='1 of 1 action(s) failed - the page changed under this recipe. Re-recor'
-[通过] watch 首跑只建基线，changed 是 null 而不是 false
-    baseline_created=True changed=None
-[通过] 静态页第二次 check：changed=false
-    changed=False added=0 removed=0
-[通过] 会变的页：changed=true 且 diff 有行
-    changed=True added=4 removed=3 diff_lines=7
-[通过] 抓取失败不动基线（网络故障 ≠ 页面清空）
-    error='timeout: the 30000ms call budget ran out during the stealthy' baseline='' changed=None
-
-7/7 项通过
-```
-
-三条判据值得单独说，因为它们都是**"看起来成功"那类失败**的解药：
-
-1. **重放失败要响**（第 3 条）。一条静默返回旧页面的配方，比一条报错的配方危险
-   得多——调用方会拿旧内容当真。这里把选择器改成不存在的 `a[href='/does-not-exist']`，
-   动作行如实记 `ok: false`，`next_action` 直接让人重录。
-2. **首跑不是变化**（第 4 条）。`changed` 是 `null` 而非 `false`：没有基线不等于
-   没有变化，把首跑报成"无变化"是凭空造一个事实。
-3. **抓取失败不动基线**（第 7 条）。指向一个没人监听的端口，`error` 有值、
-   `changed` 为 `null`、基线**原样保留**——否则一次网络故障会被写成"页面清空了"，
-   下一次 check 会把整页报成新增。
-
-靶站为此新增 `/changing`（每次请求正文都多几行）：watch 的 diff 那一半需要一个
-**真会变**的页，否则只能靠单测覆盖。
-
----
-
-## 凭据来源 + 独立登录流（`vault` / `login`）
-
-计划第七章「凭据来源」与「独立登录流工具」。单元测试（`tests/test_vault.py` 40 例、
-`tests/test_login_flow.py` 43 例）钉语义；`evals/vault_login.py` 走**完整工具调用链**，
-验那些语义在真页面 + 真 CLI 边界上还成立。
-
-**它不依赖你机器上装了密码管理器**：脚本在一个临时目录里生成一个**真的假 `bw`**
-（Python 脚本 + `bw.cmd` / `bw` 包装，PATH 前置），所以 `vault._run` → 子进程 →
-JSON 解析这条链是真在跑，不是被 monkeypatch 掉的。靶站复用已有的 `/login`
-（GET 表单 + POST 302 到 `/account` 并下发 `sid` cookie）。
-
-```
-靶站 http://127.0.0.1:8399　·　假 bw <临时目录>　·　库 <一次性 DHOLE_HOME>
-
-[通过] vault 认得 PATH 上的管理器并报出未锁定
-    sources=[{'source': 'bitwarden', 'available': True, 'unlocked': True, 'detail': 'unlocked'}]
-[通过] vault(op='match') 按主机找到凭据，且响应里没有密码值
-    total=1 host='127.0.0.1' 含密码值=False （用户名按设计会回：True）
-[通过] login 不带 confirm 时一个字节都不填，只回计划
-    pending=True filled=0 fields={'username': {'index': 0, ...}, 'password': {'index': 1, ...},
-    'submit': {'index': 2, 'name': '登录'}, 'submit_kind': 'element'} 含密码值=False
-    plan: log in to http://127.0.0.1:8399/login with vault credential 'fixture':
-          username -> [0], password -> [1], submit -> [2] (登录)
-[通过] login 带 confirm 时填 + 提交，判定已登录，响应里没有密码值
-    submitted=True filled=2 logged_in=True cookies=['sid'] 含密码值=False
-    message: Signed in to http://127.0.0.1:8399/login with vault credential 'fixture'.
-[通过] 登录态留住了：同 session_id 取登录后页面拿到登录版内容
-    content_ok=True 正文片段='欢迎回来\n这是仅登录用户可见的内容。\n退出登录'
-[通过] confirm=true 但没给 session_id 时被拒
-    error='confirm=true needs session_id.'
-
-===== 6/6 通过 =====
-```
-
-三条判据值得单独说：
-
-1. **密码一次都没出现在响应里**（第 2/3/4 条）。断言不是"某个字段为空"，而是把整个
-   响应对象（`model_dump_json` + wire 形态）序列化后断言那个秘密串**一次都没出现** ——
-   "没有那个字段"和"没有那个值"是两件事，前者会被以后新增的字段悄悄绕过。
-2. **闸是真的闸**（第 3 条）。不带 `confirm` 时 `filled=0` 且只有**一次**只读快照调用，
-   一个字节都没填。填本身也不可逆（页面上的输入事件能把值发出去），所以它和提交
-   一起等在闸后。
-3. **登录态真的留住了**（第 5 条）。浏览器层登录成功后，换回 HTTP 层、带同一个
-   `session_id` 取 `/account` 拿到的是登录版正文——cookie 双向桥在登录流上成立。
-
-### 这个场景挖出的缺陷（D5）
+## D5 是 `evals/vault_login.py` 挖出来的（该脚本已随 17.0 移除四工具删除）
 
 **私网健康探针把"内容判定"读成"目标不健康"，于是本机登录页的浏览器层被跳过。**
 
@@ -481,8 +389,7 @@ JSON 解析这条链是真在跑，不是被 monkeypatch 掉的。靶站复用�
 
 `metadata.actions` 为 `null`——动作一次都没跑。代码旁边那句注释本来就写着
 "2xx / 3xx / 4xx ⇒ 活着"，实现却多读了一个字段。修法是把健康判定收回传输维度
-（`status == 0 or status >= 500`）。详见「凭据来源 + 独立登录流 → 这个场景挖出的
-缺陷（D5）」。**这条值得记下来的是它的形状**：单元测试全绿，因为没有任何用例覆盖
+（`status == 0 or status >= 500`）。详见上文「D5 是 `evals/vault_login.py` 挖出来的」。**这条值得记下来的是它的形状**：单元测试全绿，因为没有任何用例覆盖
 这个探针。
 
 ---
@@ -493,7 +400,7 @@ JSON 解析这条链是真在跑，不是被 monkeypatch 掉的。靶站复用�
 
 **未覆盖**：
 - `DHOLE_MULTIMODAL=1` / `DHOLE_NEURAL_FOCUS=1` 的**关闭分支**（本会话四个 flag 全开）；关闭分支的拒绝文案由单测覆盖（`tests/test_multimodal_visual_g34.py:105/281`）。
-- 场景 7 的线上触发（模型已下载）。
+- 神经 focus 的线上触发（模型已下载）。
 - **行为墙 / 2FA 的线上转交**：纪律文案已在 wire 上验过（见"视觉辅助基线"），但 DataDome / Akamai / 交互式 Turnstile 这类"无图可看"的墙与 2FA 因子不在页面上，本地靶站造不出真东西，只能靠文案断言，端到端仍未覆盖。
 - 视觉验证码**试读**已覆盖（见上），但**滑块类**需要拖拽原语 + 拟人轨迹，超出 dhole 动作范围，靶站未搭。
 - CDP attach 端到端（`DHOLE_CDP_ATTACH` 未开，需用户真实 Chrome）。
@@ -539,11 +446,11 @@ JSON 解析这条链是真在跑，不是被 monkeypatch 掉的。靶站复用�
 3. ~~**视觉验证码试读 / 2FA 转交**的 fixture~~ **已搭**：靶站新增 `/captcha` 三端点（扭曲文字、两档难度），`evals/captcha_baseline.py` 量出一次读对率 `normal` 38% / `hard` 12%、二维码解码 9/10、转交纪律在 wire 上（详见"视觉辅助基线"）。**行为墙与 2FA 仍只有文案断言**——本地造不出真东西。
 4. ~~`feed_fetch` 的 loopback 端到端~~ **已补**：`evals/feed_since.py` 走完整工具路径验 5 条判据（无过滤时计数保持 0、`since` 保留更新的并如实报出被丢掉的条数、被过滤时无日期条目仍在返回内容里、`since` 在未来、`since` 不可读时报错而非当成"全是新的"）。5/5 通过。
 
-> 2026-10-01 追加：计划第九章编排轴的最后两级（L3 `recipe` / L4 `watch`）与第七章的
-> 凭据来源 / 独立登录流已落地并各有端到端场景（`evals/tasks_l3l4.py` 7/7、
-> `evals/vault_login.py` 6/6）。**仍未覆盖的**：登录流的 CAPTCHA / 2FA 分支只有文案
-> 断言（本地造不出真东西，与上面第 3 条同一原因）；`login` 的"按回车提交"分支只有
-> 单测覆盖（靶站的表单有 `<button type="submit">`，走的是元素提交那条路）。
+> 2026-10-01 追加，2026-10-04 修订：第九章编排轴最后两级（L3 `recipe` / L4 `watch`）
+> 与第七章凭据来源 / 独立登录流当时已落地并各有端到端场景（7/7、6/6）；**17.0 把
+> 这四颗工具一并移除**（`web_recipe` / `web_watch` / `cred_vault` / `cred_login`），
+> 对应的 eval 脚本（`evals/tasks_l3l4.py` / `evals/vault_login.py`）与单测随之删除。
+> 它们当年挖出的缺陷（D5）仍由 `tests/test_loopback_no_proxy_g31.py` 钉着。
 
 ## 技能本体校准：读了说明书会不会发对这一次调用（2026-10-03 动工）
 

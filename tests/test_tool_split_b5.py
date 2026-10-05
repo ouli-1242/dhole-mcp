@@ -97,7 +97,7 @@ def test_a_map_call_over_the_new_name_asks_the_engine_for_a_map(monkeypatch):
 # §3-32 的闸（抹掉后用户不会立刻知道的那一类要先 confirm）才有地方落。
 
 STATE_PARAMS = {"show", "clear", "confirm"}
-VOCAB = {"cache", "engine_state", "sessions", "watch", "recipes", "all"}
+VOCAB = {"cache", "engine_state", "sessions", "cred_defaults", "all"}
 
 ME = "https://shop.example.com/account"
 SECRET = "session-value-DO-NOT-LEAK"

@@ -193,13 +193,16 @@ class TestOtherToolsWithTheSameGap:
         _dispatch("web_read", {"url": "https://example.test", "check_login": "true"})
         assert seen["check_login"] is True
 
-    def test_screenshot_full_page_accepts_the_string_spellings(self, monkeypatch):
-        seen = _record(monkeypatch, "web_screenshot", [])
-        _dispatch("web_screenshot", {"url": "https://example.test",
-                                 "full_page": "false", "quality": "80"})
-
-        assert seen["full_page"] is False
-        assert seen["quality"] == 80
+    def test_screenshot_action_accepts_the_string_spellings(self):
+        """A1：full_page/quality 的强制转换随工具下线离开顶层 coerce 表 ——
+        字符串写法现在在动作归一化层拒绝（形状错误不能静默读真）。"""
+        from dhole_mcp.actions import _validate_actions
+        with pytest.raises(ValueError, match="full_page"):
+            _validate_actions([{"screenshot": {"full_page": "false"}}])
+        with pytest.raises(ValueError, match="quality"):
+            _validate_actions([{"screenshot": {"selector": "img",
+                                               "image_type": "jpeg",
+                                               "quality": "80"}}])
 
     def test_crawl_caps_arrive_as_numbers_for_the_code_that_counts(self, monkeypatch):
         """`max_pages="5"` reaches `range(max_pages)`; `ignore_robots="false"`
@@ -238,9 +241,6 @@ class TestOtherToolsWithTheSameGap:
         assert seen["max_items"] == 0
         assert seen["timeout"] == 30
 
-        seen2 = _record(monkeypatch, "web_resolve", {})
-        _dispatch("web_resolve", {"url": "https://example.test", "timeout": "1.5"})
-        assert seen2["timeout"] == 1.5
 
     def test_a_numeric_pdf_page_range_is_not_dropped(self, monkeypatch):
         """`pages` was read only when it was a str, so pages=3 meant no range at

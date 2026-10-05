@@ -126,7 +126,8 @@ class TestTheCallSurfaceLostBothKnobs:
         return defs[tool]["inputSchema"]["properties"]
 
     def test_neither_tool_advertises_a_timing_knob(self):
-        for tool in ("web_read", "web_screenshot"):
+        # A1 后独立 screenshot 工具不在册；web_act 的 props 一起查。
+        for tool in ("web_read", "web_act"):
             props = self._props(tool)
             for knob in ("wait", "network_idle"):
                 assert knob not in props, f"{tool} 还在教 {knob}"
@@ -146,8 +147,8 @@ class TestTheCallSurfaceLostBothKnobs:
         assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 27, \
             sorted(server_mod._TOP_LEVEL_ARGS["web_read"])
 
-    def test_web_screenshot_lost_the_same_two(self):
-        assert not {"wait", "network_idle"} & server_mod._TOP_LEVEL_ARGS["web_screenshot"]
+    def test_web_act_carries_no_timing_knob_either(self):
+        assert not {"wait", "network_idle"} & server_mod._TOP_LEVEL_ARGS["web_act"]
 
     @pytest.mark.parametrize("knob", ["wait", "network_idle"])
     def test_passing_a_retired_timing_knob_is_refused_not_swallowed(self, knob):
@@ -169,7 +170,7 @@ class TestTheInternalChainHasNoSourceLeft:
     def test_the_server_tiers_take_no_timing_knobs(self):
         for name in ("get", "stealthy_fetch", "bulk_stealthy_fetch",
                      "_force_fetch", "_auto_escalate", "_smart_fetch_bulk",
-                     "web_read", "web_screenshot"):
+                     "web_read", "web_act"):
             params = inspect.signature(getattr(Server, name)).parameters
             for knob in ("wait", "network_idle"):
                 assert knob not in params, f"{name} 还收 {knob}"

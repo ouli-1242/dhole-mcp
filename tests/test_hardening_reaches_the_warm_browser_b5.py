@@ -304,55 +304,20 @@ class TestTheNoteReachesTheCaller:
 
 
 class TestWhatACaptureCanSteerPerCall:
-    """截图这一扇门上，档位能逐次决定的只有"要不要答挑战"那一颗。
+    """A1：web_screenshot 那扇门下线了，捕获住进 web_act 的动作链。
 
-    另两颗（画布噪声 / WebRTC 屏蔽）是那台浏览器起来时定的 —— 想让它们变，改的是
-    cred_defaults，不是这一次调用。把整颗档位摆到截图的参数面上而不说清只管哪一截，
-    就是一颗会让人以为自己在换指纹的参数。
+    原来钉在这个类里的三件事各有去处：档位逐次决定"要不要答挑战"由 web_act
+    自己的 anti_detect 处理（同一扇门上的既有类守）；缺席读存储由 cred_defaults
+    的接线守；"捕获不许挡资源"由 actions 的 _has_screenshot 分支与
+    test_eval_fixes_g35::test_a_screenshot_action_turns_resource_blocking_off
+    守。这里只留接线仍在的凭证：screenshot 键就是那个分支的开关。
     """
 
-    @staticmethod
-    def _fetch_kwargs(monkeypatch, **call):
-        from dhole_mcp.server import _SessionEntry
+    def test_the_screenshot_key_is_the_resource_shortcut_switch(self):
+        from dhole_mcp.actions import actions_want_visual
+        assert actions_want_visual([{"screenshot": "img"}]) is True
+        assert actions_want_visual([{"click": "a"}]) is False
+        assert actions_want_visual([{"click": "a"}, {"snapshot": True},
+                                {"screenshot": {"selector": "img",
+                                                "decode_qr": True}}]) is True
 
-        seen: dict = {}
-
-        class _Session:
-            _is_alive = True
-            cdp_attached = False
-            _hide_canvas, _block_webrtc = _expected("auto")
-
-            async def fetch(self, url, **kw):
-                seen.update(kw)
-                seen["url"] = url
-                raise RuntimeError("probe: stop at the browser")
-
-        server = Server()
-        server._sessions["shot"] = _SessionEntry(session=_Session(),
-                                                 session_type="stealthy")
-
-        async def fake_auto(self, **kw):
-            return "shot"
-
-        monkeypatch.setattr(Server, "_ensure_auto_session", fake_auto)
-        monkeypatch.setattr(server_mod, "_browser_deps_available", lambda: True)
-        with pytest.raises(RuntimeError):
-            asyncio.run(server.web_screenshot(URL, **call))
-        return seen
-
-    @pytest.mark.parametrize("rung,wants", [("off", False), ("basic", False),
-                                            ("auto", True), ("aggressive", True)])
-    def test_the_challenge_path_follows_the_rung(self, monkeypatch, rung, wants):
-        seen = self._fetch_kwargs(monkeypatch, anti_detect=rung)
-        assert seen.get("solve_cloudflare") is wants, (rung, seen)
-
-    def test_an_absent_rung_reads_the_stored_one(self, monkeypatch):
-        identity.set_value("anti_detect", "off")
-        seen = self._fetch_kwargs(monkeypatch)
-        assert seen.get("solve_cloudflare") is False, seen
-
-    def test_a_capture_never_asks_for_the_resource_shortcut(self, monkeypatch):
-        """一档都不许让 fetch 去挡图片与样式：那正是"截图截了个空框"的来路。"""
-        for rung in sorted(_ANTI_DETECT):
-            seen = self._fetch_kwargs(monkeypatch, anti_detect=rung)
-            assert not seen.get("disable_resources"), (rung, seen)

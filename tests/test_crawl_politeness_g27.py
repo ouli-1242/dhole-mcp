@@ -78,7 +78,7 @@ def _fresh_robots_cache(monkeypatch):
 
 class TestTheWiringThatWasMissing:
 
-    @pytest.mark.parametrize("tool", ["web_read", "web_crawl", "web_screenshot",
+    @pytest.mark.parametrize("tool", ["web_read", "web_crawl",
                                        "web_search"])
     def test_every_advertised_name_is_a_parameter_the_method_accepts(self, tool):
         """`_TOP_LEVEL_ARGS` 现在就是转发的白名单（17.0 B4 起调度器只按它 `**kwargs`）。

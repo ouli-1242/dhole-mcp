@@ -87,7 +87,7 @@ class EnvVar:
         return raw
 
 
-# ─── the 11 surviving env variables (17.0 大众化一刀切；见 plan §3-20) ──────
+# ─── the 13 surviving env variables (17.0 大众化一刀切；见 plan §3-20) ──────
 ALL: tuple[EnvVar, ...] = (
     EnvVar(
         name="DHOLE_ALLOW_PRIVATE_HOSTS",
@@ -146,6 +146,27 @@ ALL: tuple[EnvVar, ...] = (
         read_by=("cli", "paths", "search", "search_metasearch", "sessions", "updater"),
     ),
     EnvVar(
+        name="DHOLE_HTTP_TOKEN",
+        kind="secret",
+        default="",
+        read_at="import",
+        scenario="serving dhole over HTTP beyond loopback",
+        summary="Bearer token for the HTTP transport: when set, every /mcp call must carry it (Authorization: Bearer ... or X-Dhole-Token); unset keeps the open-door behavior.",
+        read_by=("server",),
+    ),
+    EnvVar(
+        name="DHOLE_PERSIST_CREDENTIALS",
+        kind="flag",
+        default="off",
+        read_at="import",
+        scenario="data location / privacy / diagnostics",
+        summary="Persist session cookies and stored credentials to disk, encrypted "
+                "(Windows DPAPI); the default keeps them in memory only - they end "
+                "with the process.",
+        fail_safe="closed",
+        read_by=("identity", "sessions"),
+    ),
+    EnvVar(
         name="DHOLE_IGNORE_ROBOTS",
         kind="flag",
         default="off",
@@ -189,7 +210,7 @@ ALL: tuple[EnvVar, ...] = (
         read_at="call",
         scenario="data location / privacy / diagnostics",
         summary="Write a local call log; no parameter values, no network.",
-        read_by=("actions", "login", "server", "vault"),
+        read_by=("actions", "server"),
     ),
 )
 
@@ -394,6 +415,16 @@ def invalidate_file_cache() -> None:
     a cache keyed by mtime alone can survive that on a coarse-grained clock."""
     global _file_cache, _file_stamp
     _file_cache, _file_stamp = None, None
+
+
+def config_file_keys() -> list[str]:
+    """Names (NEVER values) of the knobs set in config.json, sorted.
+
+    sys_state 的 `show=['config']` 只吃这一口：值里可能有 secret（对 secret 连
+    长度以外的任何东西都不显示），而工具输出会落进 transcript —— 值走操作员侧
+    的 `dhole config list`，那里有人看着。
+    """
+    return sorted(_load_file().keys())
 
 
 # ─── typed readers ───────────────────────────────────────────────────────

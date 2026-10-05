@@ -163,10 +163,6 @@ PLAUSIBLE_CASES = {
         ("minimal: loopback start url (SSRF-blocked)", {"url": "http://127.0.0.1/"}),
         ("minimal: cloud metadata IP (SSRF-blocked)", {"url": "http://169.254.169.254/"}),
     ],
-    "web_screenshot": [
-        ("minimal: loopback url (SSRF-blocked)", {"url": "http://127.0.0.1/"}),
-        ("minimal: file:// scheme (blocked scheme)", {"url": "file:///C:/Windows/win.ini"}),
-    ],
     "web_search": [
         # Engines are routed to the dead loopback proxy: no internet egress.
         ("minimal: query via dead loopback proxy", {"query": "dhole offline snapshot probe"}),
@@ -185,16 +181,11 @@ PLAUSIBLE_CASES = {
         ("minimal: loopback feed url (SSRF-blocked)", {"urls": ["http://127.0.0.1/feed.xml"]}),
         ("minimal: cloud metadata feed url (SSRF-blocked)", {"urls": ["http://169.254.169.254/feed"]}),
     ],
-    "web_resolve": [
-        ("minimal: loopback url (SSRF-blocked)", {"url": "http://127.0.0.1/"}),
-        ("minimal: scheme-relative input", {"url": "//127.0.0.1/"}),
-        ("minimal: cloud metadata IP (SSRF-blocked)", {"url": "http://169.254.169.254/"}),
-    ],
 }
 
 TOOL_ORDER = [
-    "web_read", "web_crawl", "web_screenshot", "web_search",
-    "sys_state", "doc_parse", "feed_read", "web_resolve",
+    "web_read", "web_crawl", "web_search",
+    "sys_state", "doc_parse", "feed_read",
 ]
 
 

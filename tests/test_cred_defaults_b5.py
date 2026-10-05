@@ -60,14 +60,34 @@ class TestTheStore:
         e2e 抓到过真的 bug：建目录那一步收到的是 str，而 str 没有 .mkdir —— 那句
         `except Exception: pass` 把 AttributeError 吞了，目录没建，sqlite 于是在
         下一行报 "unable to open database file"。存储自己的错，长得像环境的错。
+
+        17.1 起默认是内存库，"第一次写"发生在落盘模式（DHOLE_PERSIST_CREDENTIALS=1
+        且平台有加密器）——这条路径契约归到落盘分支；默认模式则反过来：什么都不建。
+        """
+        identity.close()
+        fresh = tmp_path / "fresh-home" / "identity.db"
+        monkeypatch.setattr(identity, "_db_path", lambda: str(fresh))
+        monkeypatch.setattr(identity, "_PERSIST", True)
+        identity.set_value("proxy", "http://127.0.0.1:7890")
+        assert fresh.exists(), "第一次写没有把状态目录建出来"
+        assert identity.get("proxy") == "http://127.0.0.1:7890"
+        identity.close()
+
+    def test_the_default_memory_store_touches_no_disk(self, monkeypatch, tmp_path):
+        """默认（B）：cookie 与身份库是凭据，最安全的文件是不存在的文件。
+
+        存了值之后 identity.db 不存在、目录不被建出；值在本进程内照常可用；
+        重启（close 即新进程）即空——这是默认模式的承诺，不是缺陷。
         """
         identity.close()
         fresh = tmp_path / "fresh-home" / "identity.db"
         monkeypatch.setattr(identity, "_db_path", lambda: str(fresh))
         identity.set_value("proxy", "http://127.0.0.1:7890")
-        assert fresh.exists(), "第一次写没有把状态目录建出来"
+        assert not fresh.exists(), "内存模式不应该写任何文件"
+        assert not fresh.parent.exists(), "内存模式不应该建状态目录"
         assert identity.get("proxy") == "http://127.0.0.1:7890"
         identity.close()
+        assert identity.get("proxy") is None, "重启后默认一无所有"
 
     def test_a_value_round_trips_and_counts_when_forgotten(self):
         identity.set_value("proxy", "http://127.0.0.1:7890")

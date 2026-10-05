@@ -52,8 +52,7 @@ def _child_env(extra: dict | None = None) -> dict:
     env["PYTHONIOENCODING"] = "utf-8"
     # 保险丝：握手与首调用都不碰网络，但别让任何意外路径出门。
     env["DHOLE_SEARCH_PROXY"] = "http://127.0.0.1:9"
-    for stale in ("DHOLE_TOOLS", "DHOLE_TASKS", "DHOLE_VAULT",
-                  "DHOLE_DEFAULT_ENGINES", "DHOLE_USAGE_LOG"):
+    for stale in ("DHOLE_TOOLS", "DHOLE_DEFAULT_ENGINES", "DHOLE_USAGE_LOG"):
         env.pop(stale, None)
     if extra:
         env.update(extra)

@@ -221,13 +221,15 @@ def test_w1_3_registry_has_no_duplicate_names():
     assert len(names) == len(set(names))
 
 
-def test_registry_covers_all_11_env_vars():
+def test_registry_covers_all_12_env_vars():
     """17.0 大众化一刀切把注册表从 39 收到 11（§3-20：注销的旋钮运行时静默
-    忽略，只有 --doctor 认识它们）。再删一个必须先改这里 —— 在有人 --doctor
-    的输出说谎之前先红。加回或新增一个旋钮同理。
+    忽略，只有 --doctor 认识它们）；G25 评审为 HTTP 传输加回
+    `DHOLE_HTTP_TOKEN` 到 12，为凭据落盘开关加回 `DHOLE_PERSIST_CREDENTIALS`
+    到 13。再删一个必须先改这里 —— 在有人 --doctor 的输出说谎之前先红。
+    加回或新增一个旋钮同理。
     """
-    assert len(env_registry.ALL) == 11, (
-        f"expected 11 env vars, found {len(env_registry.ALL)}: "
+    assert len(env_registry.ALL) == 13, (
+        f"expected 13 env vars, found {len(env_registry.ALL)}: "
         f"{sorted(e.name for e in env_registry.ALL)}"
     )
 
@@ -278,12 +280,12 @@ def test_w1_5_every_registry_name_appears_in_configuration_doc():
 
 # ─── registry-shape guards ───────────────────────────────────────────
 def test_secret_kind_never_default_echos_value():
-    """The API-key entries are the ``secret`` kind (17.0: Tavily + 博查 ——
-    brightdata/exa 的 keyed 引擎已删). Their ``default`` is a marker string,
-    not a value - W2's config audit depends on it.
+    """The ``secret`` kind (17.0: Tavily + 博查；G25 评审加 HTTP 传输的
+    bearer token —— brightdata/exa 的 keyed 引擎已删). Their ``default`` is a
+    marker string, not a value - W2's config audit depends on it.
     """
     secrets = [e for e in env_registry.ALL if e.kind == "secret"]
-    assert len(secrets) == 2
+    assert len(secrets) == 3
     for entry in secrets:
         assert entry.default == "", (
             f"{entry.name} is secret but has a non-empty default - W2 will "
@@ -298,23 +300,30 @@ def test_secret_kind_never_default_echos_value():
 def test_fail_safe_closed_matches_plan_d1_gate_list():
     """§A.4 的 fail_safe=closed 门。17.0 收敛后剩两道：内网放行与 robots
     忽略 —— CDP 与 SSRF 复查的门已经从「旋钮」变成「写死 + 审计/自动判定」，
-    比旋钮更硬，所以不再出现在这张表里。"""
+    比旋钮更硬，所以不再出现在这张表里。17.1 加回第三道：凭据落盘开关的
+    拼错值必须停在内存（safe 一侧），而不是被 read_flag 当成 ON。"""
     closed = sorted(e.name for e in env_registry.ALL if e.fail_safe == "closed")
     assert closed == sorted([
         "DHOLE_ALLOW_PRIVATE_HOSTS",
         "DHOLE_IGNORE_ROBOTS",
+        "DHOLE_PERSIST_CREDENTIALS",
     ])
 
 
 def test_read_at_import_matches_plan_a1():
-    """Import-time reads. 17.0 收敛后剩两个：内容默认值与工具白名单
-    （DHOLE_HOME 也是 ENV_ONLY，但它是 bootstrap —— 定位配置文件的变量不能
-    等配置文件来设，所以不进注册表）。 drift 在这意味着 W2 的
-    "restart the host" 提示要么空响、要么漏报。
+    """Import-time reads. 17.0 收敛后剩两个：内容默认值与工具白名单；G25 评审
+    的 `DHOLE_HTTP_TOKEN` 在 serve() 读（进程启动即定，改了要重启）—— 同属
+    "restart the host" 一档。17.1 的 `DHOLE_PERSIST_CREDENTIALS` 同档：store
+    是模块级单例连接，连接一开模式就绑死，中途改旗搬不动已开的库。
+    （DHOLE_HOME 也是 ENV_ONLY，但它是 bootstrap —— 定位配置文件的变量不能等
+    配置文件来设，所以不进注册表。）drift 在这意味着 W2 的 "restart the host"
+    提示要么空响、要么漏报。
     """
     imports = sorted(e.name for e in env_registry.ALL if e.read_at == "import")
     assert imports == sorted([
         "DHOLE_DEFAULT_CONTENT_CHARS",
+        "DHOLE_HTTP_TOKEN",
+        "DHOLE_PERSIST_CREDENTIALS",
         "DHOLE_TOOLS",
     ])
 

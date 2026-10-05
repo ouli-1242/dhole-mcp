@@ -12,6 +12,7 @@
 /login               GET 登录表单；POST 发 sid cookie -> 302 /account
 /account             验 sid：已登录给"欢迎回来"+退出控件；未登录给登录壳
 /checkout            GET 订单表单；POST **写订单日志文件**（不可逆步的服务端凭据）
+/hoverdrag           hover/drag 动作靶：mouseenter 展开菜单、mousedown/mouseup 拖拽，改写 #status
 /qr                  HTML 页，内嵌 <img src="/qr.png">
 /qr.png              cv2 QRCodeEncoder 生成的真二维码 PNG
 /robots.txt          Disallow: /private
@@ -239,6 +240,57 @@ SHELL_PAGE = _page("加载中", """
 """)
 
 ABOUT_PAGE = _page("关于", "<h1>关于</h1><p>靶站的孤链接去处。</p>")
+
+# hover/drag 动作靶：后果全部用鼠标事件驱动并改写 #status —— CSS :hover 读不回
+# DOM，事件监听才是"悬停真的发生了"的可断言证据。拖拽用 mousedown/mouseup 而不是
+# HTML5 DnD：Playwright 的 drag_to 走的是真鼠标事件序列，pointer 语义的排序组件
+# （SortableJS 一族）才一定响应它。
+HOVERDRAG_PAGE = _page("悬停与拖拽", """
+<h1>交互靶</h1>
+<div id="status">IDLE</div>
+<div id="evlog"></div>
+<nav><div id="nav-files" tabindex="0">文件</div></nav>
+<div id="menu"></div>
+<div id="card-a" tabindex="0" style="width:80px;height:30px;background:#9cf;line-height:30px">卡片A</div>
+<div id="slot-b" tabindex="0" style="width:120px;height:40px;background:#eee;line-height:40px">落点B</div>
+<script>
+// 事件账本写 localStorage（跨重载存活），每次加载时渲染回 #evlog —— 页面重载
+// 不再能销毁证据。
+function _log(ev) {
+  var arr = [];
+  try { arr = JSON.parse(localStorage.getItem('evlog') || '[]'); } catch (e) {}
+  if (arr.length < 80) arr.push(ev);
+  localStorage.setItem('evlog', JSON.stringify(arr));
+  document.getElementById('evlog').textContent = arr.join(' | ');
+}
+window.addEventListener('load', function () {
+  _log('LOAD@' + Math.round(performance.now()));
+});
+document.getElementById('nav-files').addEventListener('mouseenter', function () {
+  document.getElementById('status').textContent = 'HOVERED';
+  _log('mouseenter@nav-files');
+  var m = document.createElement('div');
+  m.id = 'menu-refunds'; m.textContent = '退款';
+  document.getElementById('menu').appendChild(m);
+});
+var dragging = false;
+document.getElementById('card-a').addEventListener('mousedown', function () {
+  dragging = true;
+  document.getElementById('status').textContent = 'DRAGGING';
+  _log('mousedown@card-a');
+});
+document.getElementById('slot-b').addEventListener('mouseup', function () {
+  if (dragging) {
+    dragging = false;
+    document.getElementById('status').textContent = 'DROPPED';
+    _log('mouseup@slot-b');
+    var d = document.createElement('div');
+    d.id = 'drop-done'; d.textContent = '已放入';
+    document.getElementById('slot-b').appendChild(d);
+  }
+});
+</script>
+""")
 
 
 def _feed() -> bytes:
@@ -501,6 +553,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._html(ACCOUNT_LOGGED_IN if self._has_sid() else ACCOUNT_SHELL)
         if path == "/checkout":
             return self._html(CHECKOUT_PAGE)
+        if path == "/hoverdrag":
+            return self._html(HOVERDRAG_PAGE)
         if path == "/qr":
             return self._html(QR_PAGE)
         if path == "/captcha":

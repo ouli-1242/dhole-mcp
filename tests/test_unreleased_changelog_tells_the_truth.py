@@ -7,7 +7,7 @@
 `dhole init` 整组删掉。留着旧形状的那一段不是历史，是一份"照着打字就撞墙"的
 安装说明，而且它比 README 更容易被信 —— 读者正想从它那里知道"这版改了什么"。
 
-判据三条，都是机械的：
+判据四条，都是机械的：
 
 1. 每一颗 `DHOLE_*` 要么在 `env_registry.ALL` 里，要么它所在那一行必须自己说明
    它已经注销（下面那张 `_RETIRED_MARKERS`）。名字出现不是问题，**冒充现行**才是。
@@ -15,6 +15,9 @@
    被删了。
 3. 本版段里不许出现旧工具名与 `options.` 袋 —— 它们不是"当时的名字"，是同一版里
    改了两次还没扫干净。
+4. 本版**未发布即移除**的四颗工具（`_REMOVED_NAMES`）不许被当成现行能力介绍：
+   出现在本版段里必须是"说它们被移除"的行。理由同 3 —— 一颗今天不存在的工具，
+   写进安装说明里就是"照着打字就撞墙"。
 
 已发版的段落（16.x 及更早）由 `_released_head` 排除在外。
 """
@@ -23,8 +26,6 @@ from __future__ import annotations
 
 import pathlib
 import re
-
-import pytest
 
 from dhole_mcp import env_registry
 from dhole_mcp.ops import _help_epilog
@@ -41,6 +42,12 @@ _RENAMED_MARKERS = ("落地时叫", "原名", "旧名", "曾用名", "改名", "
 #: 本版内改过两次以上的名字：出现在未发版段里一定是漏扫，不是历史
 _OLD_NAMES = ("smart_fetch", "smart_crawl", "smart_search", "feed_fetch",
               "dhole_doc", "solve_cloudflare", "real_chrome", "discover_only")
+
+#: 17.0 未发布即移除的四颗工具：在未发版段里只允许出现在"说它们被移除"的行里
+_REMOVED_NAMES = ("web_recipe", "web_watch", "cred_vault", "cred_login")
+
+#: 一行里出现这些词，就算它是在"宣布移除"而不是"教人用"
+_REMOVAL_MARKERS = ("移除", "未发布即", "一并删", "下线") + _RETIRED_MARKERS
 
 
 def _text() -> str:
@@ -70,16 +77,25 @@ def test_the_helper_finds_the_unreleased_section():
     assert "## [16." not in body, "切片越界，已发版的历史被算进管辖内了"
 
 
-@pytest.mark.parametrize("line", _lines(_current_version()),
-                         ids=lambda ln: ln[:48])
-def test_no_knob_is_taught_as_if_it_still_exists(line):
-    for tok in set(re.findall(r"DHOLE_[A-Z_]+", line)):
-        if tok in {getattr(n, "name", n) for n in env_registry.ALL}:
-            continue
-        assert any(m in line for m in _RETIRED_MARKERS), (
-            f"本版小节里教了一颗今天不再被读的旋钮 {tok}，而这一行没说它已注销：\n"
-            f"{line[:160]}\n要么换成真的门（cred_defaults / dhole config），"
-            "要么把『本版注销』写明。")
+def test_no_knob_is_taught_as_if_it_still_exists():
+    """扫整个本版小节，把所有"冒充现行"的行一次性报出来。
+
+    原先按行参数化（CHANGELOG 一行一例，约 90 例）；聚合成一条后**覆盖不变**，
+    失败信息反而更全 —— 断言消息本来就该列出全部违规行，而不是一次只暴露一行。
+    """
+    registered = {getattr(n, "name", n) for n in env_registry.ALL}
+    bad = []
+    for line in _lines(_current_version()):
+        for tok in sorted(set(re.findall(r"DHOLE_[A-Z_]+", line))):
+            if tok in registered:
+                continue
+            if any(m in line for m in _RETIRED_MARKERS):
+                continue
+            bad.append(f"{tok} ← {line[:140]}")
+    assert not bad, (
+        "本版小节里教了今天不再被读的旋钮，而那一行没说它已注销：\n"
+        + "\n".join(bad)
+        + "\n要么换成真的门（cred_defaults / dhole config），要么把『本版注销』写明。")
 
 
 def test_every_command_the_version_section_teaches_exists():
@@ -106,6 +122,23 @@ def test_no_pre_rename_tool_name_survives_in_the_unreleased_section():
     assert not bad, (
         "这些名字在 17.0 自己里就被改掉了（B5 改名 / B4 拆袋），未发版段落里只能出现在"
         "『说这个名字后来怎么了』的行里：\n" + "\n".join(bad))
+
+
+def test_no_removed_tool_is_taught_as_if_it_still_exists():
+    """17.0 未发布即移除的四颗：留在未发版段里必须是"说它们没了"。
+
+    与上面那条（旧名）分开，因为语义不同：旧名是"改过名字"，这几颗是"整颗没了"。
+    一颗今天不存在的工具被写进本版安装说明里，读者照着打字只会撞墙。
+    """
+    body = _current_version()
+    bad = []
+    for line in _lines(body):
+        for name in _REMOVED_NAMES:
+            if name in line and not any(m in line for m in _REMOVAL_MARKERS):
+                bad.append(f"{name} ← {line[:120]}")
+    assert not bad, (
+        "这四颗工具在本版未发布即移除（见本版「移除」小节），未发版段落里只能出现在"
+        "『说它们被移除』的行里：\n" + "\n".join(bad))
 
 
 def test_the_options_bag_is_not_taught_as_current_in_this_version():

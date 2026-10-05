@@ -222,7 +222,7 @@ class TestThePrivateTargetOptionReachesBothTools:
     def test_neither_method_carries_the_option_as_a_parameter(self):
         import inspect
 
-        for tool in ("web_screenshot", "feed_read"):
+        for tool in ("web_act", "feed_read"):
             params = inspect.signature(getattr(MasterFetchServer, tool)).parameters
             assert "allow_private" not in params, \
                 f"{tool} 仍在收已经退役的 allow_private 参数"
@@ -260,57 +260,41 @@ class TestThePrivateTargetOptionReachesBothTools:
         assert "feed_read URL 校验失败" in str(e.value)
         assert "internal" in str(e.value)
 
-    def test_screenshot_opens_the_scope_before_validate_url(self, monkeypatch):
+    def test_a_capture_action_inherits_the_open_scope_end_to_end(self, monkeypatch):
+        """A1 之后截图不再是独立工具：回环上的"截我自己的 dev 服务"走 web_act。
+        存储里放行私网时，作用域要开着走到导航那一步（回环页面自己的子资源由
+        浏览器路由处理器判定，读同一个上下文变量）——这由 web_read 的既有机制
+        保证，这里从派发层探针验证接线仍在。"""
         seen: dict = {}
-        real_validate = server_mod.validate_url
 
-        def spy(url, *args, **kwargs):
+        async def fake_force_fetch(self, url, fetcher, **kwargs):
             seen["loopback_ok"] = _loopback_is_fetchable()
-            return real_validate(url, *args, **kwargs)
+            raise RuntimeError("probe: stop at the browser")
 
-        monkeypatch.setattr(server_mod, "validate_url", spy)
-        # 在 validate_url 之后立刻停下，不真起浏览器。
-        monkeypatch.setattr(server_mod, "_browser_deps_available", lambda: False)
-        identity.set_value("allow_private", True)
-
-        with pytest.raises(RuntimeError):
-            asyncio.run(MasterFetchServer().web_screenshot(
-                url="http://127.0.0.1:8399/qr"))
-
-        assert seen["loopback_ok"] is True
-
-    def test_screenshot_opens_the_scope_for_the_navigation(self, monkeypatch):
-        """导航那一步也要在作用域里：回环页面自己的子资源（那张二维码
-        <img>）由浏览器路由处理器判定，读的是同一个上下文变量。只盖住入口
-        校验，结果是页面加载了、图被拦了。"""
-        seen: dict = {}
-
-        class _Session:
-            async def fetch(self, url, **kwargs):
-                seen["loopback_ok"] = _loopback_is_fetchable()
-                return None
-
-        class _Entry:
-            session = _Session()
-
-        async def fake_get_session(self, *args, **kwargs):
-            return _Entry()
-
-        monkeypatch.setattr(server_mod.MasterFetchServer, "_get_session",
-                            fake_get_session)
+        monkeypatch.setattr(MasterFetchServer, "_force_fetch", fake_force_fetch)
         monkeypatch.setattr(server_mod, "_browser_deps_available", lambda: True)
         identity.set_value("allow_private", True)
 
-        with pytest.raises(RuntimeError):  # 假 session 不产出像素，止于"没截到"
-            asyncio.run(MasterFetchServer().web_screenshot(
-                url="http://127.0.0.1:8399/qr", session_id="probe"))
+        with pytest.raises(RuntimeError, match="probe"):
+            asyncio.run(MasterFetchServer()._dispatch("web_act", {
+                "url": "http://127.0.0.1:8399/qr",
+                "actions": [{"screenshot": {"selector": "img.qr"}}]}))
 
-        assert seen["loopback_ok"] is True
+        assert seen["loopback_ok"] is True, "导航时作用域必须是开的"
 
-    def test_screenshot_refuses_loopback_without_the_option(self):
-        with pytest.raises(SecurityError):
-            asyncio.run(MasterFetchServer().web_screenshot(
-                url="http://127.0.0.1:8399/qr"))
+    def test_act_refuses_loopback_without_the_option(self, monkeypatch):
+        monkeypatch.setattr(MasterFetchServer, "_force_fetch", self._boom)
+        identity.set_value("allow_private", False)
+        # 放行缺席时拒在闸门：不抛异常，回的是"一个请求都没发"的拒绝信封。
+        content, payload = asyncio.run(MasterFetchServer()._dispatch("web_act", {
+            "url": "http://127.0.0.1:8399/qr",
+            "actions": [{"screenshot": {"selector": "img.qr"}}]}))
+        text = content[0].text
+        assert "private" in text or "loopback" in text, text[:200]
+
+    @staticmethod
+    def _boom(*a, **kw):
+        raise AssertionError("a browser was started for a refused target")
 
 
 # ─── D4：审计日志的 ok 口径 ──────────────────────────────────────────────

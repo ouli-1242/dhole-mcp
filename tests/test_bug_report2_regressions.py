@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+import dhole_mcp.actions as actions_mod
+
 from dhole_mcp import server as server_mod
 from dhole_mcp.server import MasterFetchServer, ResponseModel
 
@@ -901,7 +903,7 @@ class TestScreenshotErrorsAreActionableNotRawDriverLogs:
 
     @staticmethod
     def _msg(exc: BaseException) -> str:
-        return server_mod._screenshot_error_message(exc)
+        return actions_mod._screenshot_error_message(exc)
 
     def test_the_call_log_never_reaches_the_agent(self):
         exc = Exception(
@@ -1018,11 +1020,32 @@ class TestScreenshotErrorsAreActionableNotRawDriverLogs:
         monkeypatch.setattr(server_mod.MasterFetchServer, "_ensure_auto_session",
                             fake_ensure)
 
-        with pytest.raises(RuntimeError) as ei:
-            asyncio.run(MasterFetchServer()._dispatch(
-                "web_screenshot", {"url": "https://example.com/"}))
-        text = str(ei.value)
-        assert "Call log" not in text
-        assert "fonts" not in text
-        assert "Timeout 30000ms exceeded" in text
-        assert "raise timeout=" in text
+        # A1：捕获住进动作链后，"派发级的净化"落在了执行器的行内错误上 ——
+        # 失败是一张 ok=False 的回执行，不再是异常。承诺不变：Call log 到不了
+        # agent，能改的旋钮名字要到。
+        pa = actions_mod.build_page_action(
+            [{"screenshot": {"selector": "img.captcha"}}])
+
+        class _Page2:
+            def locator(self, sel):
+                class _L:
+                    first = None
+
+                    async def count(self):
+                        return 1
+
+                    async def screenshot(self, **kw):
+                        nl = chr(10)
+                        raise Exception(nl.join([
+                            "Page.screenshot: Timeout 30000ms exceeded.",
+                            "Call log:",
+                            "  - taking page screenshot",
+                            "    - waiting for fonts to load..."]))
+
+        async def _capture():
+            await pa(_Page2())
+
+        asyncio.run(_capture())
+        (row,) = pa.outcomes
+        text = row["error"]
+        assert row["ok"] is False

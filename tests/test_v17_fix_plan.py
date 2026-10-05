@@ -20,14 +20,13 @@ import pytest
 
 from dhole_mcp import crawl as crawl_mod
 from dhole_mcp import sitemap as sm
+from dhole_mcp.actions import _locator_or_raise, _screenshot_error_message
 from dhole_mcp.server import (
     BulkResponseModel,
     MasterFetchServer,
     ResponseModel,
     _detect_content_issue,
     _is_js_shell,
-    _locator_or_raise,
-    _screenshot_error_message,
 )
 from dhole_mcp.wire import _wire_json  # 17.0 B6 第三刀：压实层的家
 

@@ -45,6 +45,12 @@ NOT_A_GATE = {
         "ignore_robots=true path already exists behind the user's explicit yes",
     "DHOLE_USAGE_LOG":
         "privacy opt-in for a local log; it unlocks no tool and no content",
+    "DHOLE_PERSIST_CREDENTIALS":
+        "not a capability: the default (memory-only) IS the full behavior, and "
+        "nothing an agent does needs credentials to outlive the process. Where "
+        "credential data rests on disk is the operator's standing decision, the "
+        "same class as DHOLE_HOME - a restart-scoped storage bound cannot be a "
+        "per-call parameter",
 }
 
 

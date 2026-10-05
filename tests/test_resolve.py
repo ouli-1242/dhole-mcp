@@ -1,57 +1,89 @@
-"""Tests for web_resolve (server.py)."""
+"""A2：web_resolve 下线 —— 门换了，能力各有去处。
+
+评审复核后的裁决：两个主用例都能被同次数的既有调用覆盖——
+* 短链落点：web_read 的 HTTP 层走同一条会跟随重定向的 GET，落点回报在
+  metadata（meta_refresh 跳数同源）；HEAD 对 301 不跟随，替不了这一半。
+* 验活：web_request(method='HEAD') 同为一次调用。
+它自己 docstring 教的「逐条 pre-screen 搜索结果」恰是 nested 注释点名要消灭的
+N 次反模式；连 allow_private scope 都不读，连"web_read 的私有子集"都不成立。
+
+这个文件因此只守两件事：旧名字的派发拒答要教到新的家；教出来的那条路
+（web_read 跟随重定向）在靶站上是真成立的。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import http.server
+import socketserver
+import threading
 
 import pytest
 
 from dhole_mcp.server import MasterFetchServer
 
 
-class FakeResp:
-    def __init__(self, status=200, final_url="https://final.example/x", headers=None):
-        self.status = status
-        self.url = final_url
-        self.headers = headers or {"content-type": "text/html; charset=utf-8"}
+class TestTheRemovedToolAnswersWithDirections:
+
+    def test_the_old_name_points_at_the_new_homes(self):
+        with pytest.raises(ValueError) as e:
+            asyncio.run(MasterFetchServer()._dispatch(
+                "web_resolve", {"url": "https://example.com/"}))
+        msg = str(e.value)
+        assert "Unknown tool" in msg
+        assert "web_read" in msg, "拒答要教到跟随重定向的那扇门"
+        assert "web_request" in msg, "验活的那一半要教到 HEAD"
+
+    def test_the_old_wire_shows_no_such_property(self):
+        defs = {d["name"]: d for d in MasterFetchServer._TOOL_DEFS}
+        assert "web_resolve" not in defs
+        assert "web_screenshot" not in defs
 
 
-class FakeSession:
-    def __init__(self, proxy=None, stealthy_headers=True, retries=1, timeout=30):
-        self._proxy = proxy
+class _RedirectHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/to":
+            body = b"<html><body>landed</body></html>"
+            self.send_response(200)
+            self.send_header("content-type", "text/html")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            # 302 → /to：短链服务器的最小形态。
+            self.send_response(302)
+            self.send_header("location", "/to")
+            self.end_headers()
 
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *args):
-        return False
-
-    async def get(self, url, follow_redirects="safe"):
-        if "blocked" in url:
-            raise ConnectionError("tunnel failed")
-        return FakeResp()
-
-
-@pytest.mark.asyncio
-async def test_resolve_url_returns_final_url(monkeypatch):
-    server = MasterFetchServer()
-    monkeypatch.setattr("dhole_mcp.fetcher.HTTPSession", FakeSession)
-    result = await server.web_resolve("https://t.co/abc123")
-    assert result["final_url"] == "https://final.example/x"
-    assert result["status"] == 200
-    assert result["content_type"] == "text/html; charset=utf-8"
-    assert result["error"] == ""
-    assert result["original_url"] == "https://t.co/abc123"
+    def log_message(self, *a):
+        pass
 
 
-@pytest.mark.asyncio
-async def test_resolve_url_surfaces_error(monkeypatch):
-    server = MasterFetchServer()
-    monkeypatch.setattr("dhole_mcp.fetcher.HTTPSession", FakeSession)
-    result = await server.web_resolve("https://example.com/blocked")
-    assert result["error"]
-    assert result["final_url"] == ""
+@pytest.fixture(scope="module")
+def redirect_origin():
+    srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _RedirectHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{srv.server_address[1]}/short"
+    srv.shutdown()
 
 
-@pytest.mark.asyncio
-async def test_resolve_url_rejects_ssrf(monkeypatch):
-    server = MasterFetchServer()
-    result = await server.web_resolve("http://169.254.169.254/latest/meta-data")
-    assert result["error"]  # blocked by validate_url
-    assert result["status"] == 0
+@pytest.fixture(autouse=True)
+def _the_test_origin_is_fetchable():
+    from dhole_mcp import identity
+    identity.set_value("allow_private", True)
+
+
+class TestTheReplacementPathReallyWorks:
+
+    def test_web_read_follows_the_redirect_and_lands(self, redirect_origin,
+                                                     tmp_path, monkeypatch):
+        """评审实测的核心事实钉住：web_read 单发一次即落 /to —— 替代路径
+        不是"理论可行"，是现在也成立的行为。"""
+        from dhole_mcp import cache as cache_mod
+        monkeypatch.setattr(cache_mod, "_CACHE_DIR", tmp_path)
+        cache_mod._db_initialized.clear()
+
+        r = asyncio.run(MasterFetchServer().web_read(redirect_origin, cache_ttl=0))
+        assert r.status == 200
+        assert "landed" in "".join(r.content), "重定向要真的跟过去"
+        cache_mod._db_initialized.clear()

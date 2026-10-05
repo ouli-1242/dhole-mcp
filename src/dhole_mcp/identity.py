@@ -24,21 +24,30 @@ Two rules, both load-bearing:
   agent's transcript, and the point of echoing "what is in force" is to let the
   caller revoke it without reading it.
 
-Storage is SQLite at ``~/.dhole/identity.db`` (0600 dir/file per ``paths.py``),
-the same trust level as ``sessions.db``, which already holds site-set cookies in
-plaintext. Surviving a restart is the point: this is state the operator chose,
-not state a page handed us.
+Storage is **in memory by default** (SQLite ``:memory:``): "the operator chose
+it" is not "the operator wants it on disk" — every value here can be a
+credential (``auth``, ``cookies``, a proxy URL with embedded basics), and the
+safest file is one that does not exist. ``DHOLE_PERSIST_CREDENTIALS=1`` moves
+the store to ``~/.dhole/identity.db`` (0600 dir/file per ``paths.py``), where
+every value is encrypted with Windows DPAPI (:mod:`dhole_mcp.secretbox`) before
+it touches disk. A pre-17.1 plaintext file is absorbed into the live store and
+deleted (memory mode) or re-encrypted in place (persist mode).
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import threading
 import time
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlparse
+
+from dhole_mcp import env_registry, secretbox
+
+logger = logging.getLogger("dhole-mcp.identity")
 
 # Which keys need a host and which do not. Kept as data because the tool's error
 # messages and the sys_state census both have to say it.
@@ -50,6 +59,17 @@ CREDENTIAL_KEYS = SCOPED_KEYS
 
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
+# Frozen at import, like the jar's own switch (read_at="import" in the
+# registry): the store below is a module-level singleton connection, so a
+# mid-run flip could not move it anyway. Tests pin this attr for hermeticity.
+_PERSIST = env_registry.read_flag("DHOLE_PERSIST_CREDENTIALS", fail_safe=True)
+_file_backed = False
+
+_CREATE_SQL = (
+    "CREATE TABLE IF NOT EXISTS defaults ("
+    " key TEXT NOT NULL, scope TEXT NOT NULL DEFAULT '',"
+    " value TEXT NOT NULL, updated_at REAL NOT NULL,"
+    " PRIMARY KEY (key, scope))")
 
 
 def _db_path() -> str:
@@ -58,30 +78,111 @@ def _db_path() -> str:
 
 
 def _connect() -> sqlite3.Connection:
-    """Open (and create) the store. Caller holds :data:`_lock`."""
-    global _conn
+    """Open (and create) the store. Caller holds :data:`_lock`.
+
+    Default is ``:memory:`` — see the module docstring. Persisting additionally
+    needs an encryptor; without one (no Windows DPAPI) the flag degrades to
+    memory with a warning, never to a plaintext file.
+    """
+    global _conn, _file_backed
     if _conn is not None:
         return _conn
-    from dhole_mcp import paths
-    db = _db_path()
-    paths.ensure_private_dir(os.path.dirname(db) or ".")
-    _conn = sqlite3.connect(db, check_same_thread=False)
-    _conn.execute(
-        "CREATE TABLE IF NOT EXISTS defaults ("
-        " key TEXT NOT NULL, scope TEXT NOT NULL DEFAULT '',"
-        " value TEXT NOT NULL, updated_at REAL NOT NULL,"
-        " PRIMARY KEY (key, scope))")
-    _conn.commit()
+    persist = _PERSIST
+    if persist and not secretbox.available():
+        logger.warning(
+            "DHOLE_PERSIST_CREDENTIALS=1 but encrypted persistence only exists "
+            "on Windows (DPAPI) - stored credentials stay in memory, nothing "
+            "is written to disk")
+        persist = False
+    if persist:
+        from dhole_mcp import paths
+        db = _db_path()
+        paths.ensure_private_dir(os.path.dirname(db) or ".")
+        _conn = sqlite3.connect(db, check_same_thread=False)
+        _conn.execute(_CREATE_SQL)
+        _conn.commit()
+        paths.harden_file(db)
+        _file_backed = True
+        _reencrypt_plaintext_values(_conn)
+    else:
+        _conn = sqlite3.connect(":memory:", check_same_thread=False)
+        _conn.execute(_CREATE_SQL)
+        _conn.commit()
+        _file_backed = False
+        _absorb_legacy_file(_conn)
     return _conn
+
+
+def _absorb_legacy_file(conn: sqlite3.Connection) -> None:
+    """A pre-17.1 store lived in plaintext ``identity.db``. Memory mode reads
+    it into the live store once and deletes the file: these are the operator's
+    chosen defaults, so they keep working this run — as memory, which is what
+    the default now promises."""
+    try:
+        db = _db_path()
+        if not os.path.exists(db):
+            return
+        legacy = sqlite3.connect(db)
+        try:
+            rows = legacy.execute(
+                "SELECT key, scope, value, updated_at FROM defaults").fetchall()
+        finally:
+            legacy.close()
+    except Exception as e:
+        logger.debug("legacy identity.db unreadable, left in place: %s", e)
+        return
+    for key, scope, value, updated_at in rows:
+        conn.execute(
+            "INSERT INTO defaults (key, scope, value, updated_at) "
+            "VALUES (?,?,?,?)", (key, scope, value, updated_at))
+    conn.commit()
+    try:
+        os.remove(db)
+        logger.info("absorbed %d stored default(s) from the legacy plaintext "
+                    "%s into memory; the file was deleted", len(rows), db)
+    except OSError as e:
+        logger.debug("could not delete legacy identity.db: %s", e)
+
+
+def _reencrypt_plaintext_values(conn: sqlite3.Connection) -> None:
+    """One-time migration for persist mode: rewrite every value that does not
+    carry the ``dpapi:`` marker. Idempotent by the LIKE guard."""
+    rows = conn.execute(
+        "SELECT rowid, value FROM defaults WHERE value NOT LIKE 'dpapi:%'"
+    ).fetchall()
+    if not rows:
+        return
+    for rowid, value in rows:
+        conn.execute("UPDATE defaults SET value=? WHERE rowid=?",
+                     (secretbox.protect(value), rowid))
+    conn.commit()
+    logger.info("re-encrypted %d plaintext value(s) from a pre-17.1 "
+                "identity.db", len(rows))
+
+
+def _decode(raw: str) -> Any:
+    """The stored TEXT column to a Python value: unprotect (a no-op on legacy
+    plaintext and on memory mode) then json.loads, None on any failure — the
+    shape every reader had before encryption existed."""
+    if _file_backed:
+        try:
+            raw = secretbox.unprotect(raw)
+        except Exception:
+            return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
 
 
 def close() -> None:
     """Drop the connection (tests repoint DHOLE_HOME and must not keep writing)."""
-    global _conn
+    global _conn, _file_backed
     with _lock:
         if _conn is not None:
             _conn.close()
             _conn = None
+        _file_backed = False
 
 
 def host_of(url: str) -> str:
@@ -106,10 +207,15 @@ def scope_matches(scope: str, host: str) -> bool:
 def set_value(key: str, value: Any, scope: str = "") -> None:
     with _lock:
         cur = _connect()
+        payload = json.dumps(value)
+        if _file_backed:
+            # Every value here can be a credential; on disk it is only ever
+            # the encrypted form (see the module docstring for the boundary).
+            payload = secretbox.protect(payload)
         cur.execute(
             "INSERT OR REPLACE INTO defaults (key, scope, value, updated_at)"
             " VALUES (?, ?, ?, ?)",
-            (key, scope.lower(), json.dumps(value), time.time()))
+            (key, scope.lower(), payload, time.time()))
         cur.commit()
 
 
@@ -155,10 +261,7 @@ def all_rows() -> List[dict]:
     now = time.time()
     out = []
     for key, scope, raw, updated in fetched:
-        try:
-            value = json.loads(raw)
-        except Exception:
-            value = None
+        value = _decode(raw)
         out.append({"key": key, "scope": scope,
                     "stored_s_ago": max(0, int(now - (updated or now))),
                     "value": redact(key, value)})
@@ -179,19 +282,13 @@ def get(key: str, host: str = "") -> Any:
     if not fetched:
         return None
     if key not in CREDENTIAL_KEYS:
-        try:
-            return json.loads(fetched[0][1])
-        except Exception:
-            return None
+        return _decode(fetched[0][1])
     best: tuple[str, str] | None = None
     for scope, raw in fetched:
         if scope_matches(scope, host):
             if best is None or len(scope) > len(best[0]):
                 best = (scope, raw)
-    try:
-        return json.loads(best[1]) if best else None
-    except Exception:
-        return None
+    return _decode(best[1]) if best else None
 
 
 def in_force_rows(host: str = "") -> List[dict]:

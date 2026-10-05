@@ -60,12 +60,9 @@ class TestTheEnvVarIsParsed:
         payload = json.loads(out.stdout)
         assert payload["enabled"] == sorted(
             n.strip() for n in value.split(",") if n.strip())
-        assert len(payload["all"]) == 17, \
-            "全集是 17 个工具（16.0 补上会话名册，L3/L4 补上 web_recipe/web_watch，" \
-            "凭据/登录流补上 cred_vault/cred_login，文档通道补上 sys_guide，" \
-            "B5 把一张地图拆成 web_discover、两颗运维面合成 sys_state、" \
-            "写操作拆成 web_request、页面动作拆成 web_act）；" \
-            "默认关闭的也留在这里，守卫继续覆盖它们"
+        assert len(payload["all"]) == 11, \
+            "全集是 11 个工具（17.0 删掉 web_recipe/web_watch/cred_vault/cred_login " \
+            "四颗，17.1 阶段7 又下线 web_screenshot/web_resolve（前者并入 web_act 的截图动作））；默认关闭的也留在这里，守卫继续覆盖它们"
 
     @pytest.mark.parametrize("value", [None, "", "   "])
     def test_unset_means_every_tool(self, value):
@@ -169,7 +166,7 @@ class TestInstructionsFollowTheEnabledSet:
         text = server_mod._compose_instructions(frozenset({"web_read"}))
         assert "web_read" in text
         for absent in ("web_crawl", "web_search", "feed_read",
-                       "doc_parse", "web_screenshot", "web_resolve"):
+                       "doc_parse"):
             assert absent not in text, f"子集 instructions 不得路由到未启用的 {absent}"
 
     def test_the_trust_rules_survive_every_subset(self):

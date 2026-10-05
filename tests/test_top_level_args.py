@@ -84,11 +84,19 @@ class TestOtherToolsTakeTheirDocumentedKeysTopLevel:
         assert (seen["max_results"], seen["engines"], seen["freshness"], seen["site"]) == (
             8, ["brave"], "week", "example.com")
 
-    def test_screenshot_keys(self, monkeypatch):
-        seen = _stub(monkeypatch, "web_screenshot", [])
-        _dispatch("web_screenshot", {"url": "https://example.com/", "full_page": True,
-                                 "image_type": "jpeg"})
-        assert seen["full_page"] is True and seen["image_type"] == "jpeg"
+    def test_screenshot_capture_knobs_live_in_the_action_now(self):
+        """A1：full_page/image_type 等随 web_screenshot 下线，不再是顶层参数 ——
+        它们住进 web_act 截图动作的对象，由 actions 的归一化层守形状。"""
+        from dhole_mcp.actions import _validate_actions
+        (a,) = _validate_actions([{"screenshot": {"full_page": True,
+                                                  "image_type": "jpeg"}}])
+        assert a["screenshot"]["full_page"] is True
+        assert a["screenshot"]["image_type"] == "jpeg"
+        with pytest.raises(ValueError) as exc:
+            _dispatch("web_act", {"url": "https://example.com/",
+                                  "actions": [{"wait": 1}],
+                                  "full_page": True})
+        assert "full_page" in str(exc.value), "顶层传旧键要被指路拒绝"
 
     def test_fetch_keys_that_used_to_be_dropped(self, monkeypatch):
         from dhole_mcp.server import ResponseModel
@@ -119,8 +127,7 @@ class TestTheIdentityKeysAreGoneFromTheSurface:
     """
 
     _IDENTITY_KEYS = ("auth", "cookies", "proxy", "extra_headers", "allow_private")
-    _ALLOW_PRIVATE_TOOLS = ("web_screenshot", "feed_read", "web_recipe", "web_watch",
-                            "cred_login")
+    _ALLOW_PRIVATE_TOOLS = ("web_act", "feed_read")
 
     @pytest.mark.parametrize("key", _IDENTITY_KEYS)
     def test_web_read_refuses_its_old_identity_keys_by_name(self, key):
@@ -160,11 +167,9 @@ class TestUnknownTopLevelArgsRaise:
         ("web_crawl", {"url": "https://example.com/", "paths": ["/a"]}),
         ("web_search", {"query": "x", "sites": ["example.com"]}),
         ("web_read", {"url": "https://example.com/", "max_chars": 100}),
-        ("web_screenshot", {"url": "https://example.com/", "width": 800}),
         ("sys_state", {"show": ["cache"], "everything": True}),
         ("doc_parse", {"file_path": "a.pdf", "pages": "1-2"}),
         ("feed_read", {"urls": ["https://example.com/f.xml"], "limit": 5}),
-        ("web_resolve", {"url": "https://example.com/", "follow": True}),
     ])
     def test_every_tool_rejects_its_own_unknown_keys(self, tool, args):
         with pytest.raises(ValueError) as exc:
@@ -224,7 +229,6 @@ class TestAcceptedSetCoversTheContract:
     def test_every_documented_param_set_is_accepted(self):
         assert server_mod._SC_PARAMS <= server_mod._TOP_LEVEL_ARGS["web_crawl"]
         assert server_mod._SS_PARAMS <= server_mod._TOP_LEVEL_ARGS["web_search"]
-        assert server_mod._SHOT_PARAMS <= server_mod._TOP_LEVEL_ARGS["web_screenshot"]
         assert server_mod._SF_PARAMS <= server_mod._TOP_LEVEL_ARGS["web_read"]
 
     def test_every_tool_in_the_schema_is_covered(self):

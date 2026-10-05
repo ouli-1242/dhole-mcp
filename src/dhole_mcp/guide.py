@@ -56,17 +56,33 @@ def _resolve(topic: str) -> str | None:
     return ALIASES.get(key)
 
 
+def _volume_chars(rel: str) -> int:
+    """One volume's char count, the same measure read()'s header reports."""
+    try:
+        return len((_ROOT / rel).read_text(encoding="utf-8").strip())
+    except OSError:
+        return 0
+
+
 def index(reason: str = "") -> str:
     """The topic list. Also the answer to a bad topic: a rejected call that does
-    not say what was available costs a second round trip for nothing."""
+    not say what was available costs a second round trip for nothing.
+
+    Each row carries its volume's size (G25 附注二/M2): "behavior" is larger than
+    the whole connect-time table, and the only place an agent learns that BEFORE
+    reading 36k chars into its context is here — sizes turn "read the volume"
+    into "pass section= first" on the guess that would otherwise have cost a
+    full volume.
+    """
     head = (f"{reason}\n\n" if reason else "")
     lines = [head + "sys_guide(topic) returns one handbook volume per call. "
              "Known topics (aliases in parentheses):"]
     for topic, (path, when) in TOPICS.items():
         alias = "" if ALIASES.get(topic) == topic else f" (aka {ALIASES.get(topic)})"
-        lines.append(f"- topic='{topic}'{alias}: {when}")
+        lines.append(f"- topic='{topic}'{alias} ({_volume_chars(path):,} chars): {when}")
     lines.append("")
-    lines.append("Pass section='<heading text>' to get one section of a volume instead of all of it.")
+    lines.append("Pass section='<heading text>' to get one section of a volume instead of "
+                 "all of it — prefer that on any volume over ~10k chars.")
     return "\n".join(lines)
 
 

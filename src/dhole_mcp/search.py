@@ -31,14 +31,21 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, Field
 
 from dhole_mcp.cache import get_cached, set_cached
+from dhole_mcp.envelope import classify_source
 from dhole_mcp.security import validate_search_query, validate_url, redact_api_key, SecurityError
 from dhole_mcp.search_engines import (
     RawResult, multi_search, EngineReport, DEFAULT_ENGINES,
     fetch_source_for_similar, _INDEX_FAMILY, date_support,
 )
-from dhole_mcp.search_metasearch import schedule_engine_heartbeat
+from dhole_mcp.search_metasearch import schedule_engine_heartbeat, KEYED_ENGINES
 
 logger = logging.getLogger("dhole-mcp.search")
+
+# 单次搜索可点名的引擎上限 = 可选集合本身（17.0：8 免密 + 2 keyed = 10）。它曾经是写死
+# 的 9 —— 那是注册表还有 16 个名字时留下的形状；池子缩到 10 之后，这个数就成了没有理由
+# 的排他。从两张注册表推导，引擎增减时上限跟着走，不会再静默漂移（描述文案里的数字由
+# tests/test_engine_registry.py 钉在这个常量上）。
+MAX_ENGINES_PER_SEARCH = len(DEFAULT_ENGINES) + len(KEYED_ENGINES)
 
 
 def neural_rerank(query: str, ranked: list[RawResult], min_relevance: float = 0.0,
@@ -238,6 +245,11 @@ class SearchResult(BaseModel):
     fetch_relevance: str = Field(default="", description="high|med|low - relative relevance hint. web_read what matches your need; the tiers rank results but a lower tier can be the right one - use your judgment.")
     engines_consensus: str = Field(default="", description="How many independent index families returned this URL over how many could have (e.g. '2 of 6'; the default 8-engine pool is 6 families since bing, bing_global and duckduckgo all sit on the Bing index). '1 of 1 (no corroboration)' means a single family contributed at all - that is a degraded or tiny pool, NOT agreement. A free authority signal only when the denominator is >1.")
     source_type: str = Field(default="", description="Source type from URL pattern: docs|paper|repo|blog|forum|reference|news|other. Helps pick the right source.")
+    # G4（评审 Medium）：搜索行此前的信任轴只有引擎共识。fetch 侧的 is_official
+    # （envelope.classify_source——名字本身买不来的注册表命名空间：gov/edu/github
+    # 与标准组织、包注册表）一直没应用到搜索行。同一函数、单一权威；默认 False
+    # 时被省略表扣下，只有 True 的行多付 15 字符。
+    official: bool = Field(default=False, description="True only where the name itself cannot be bought (registry-controlled namespaces: gov, edu, github, standards bodies, package registries — same function that sets web_read's is_official). A HINT, not a verdict: who controls a domain is not the same as being right, and docs/blog/forum sites are never official. Omitted (= false) on every row that is not.")
 
 
 class SearchResponseModel(BaseModel):
@@ -553,8 +565,8 @@ def _validate_engines(engines):
         return None
     if not isinstance(engines, list) or not engines:
         raise SecurityError("engines must be a non-empty list")
-    if len(engines) > 9:
-        raise SecurityError("engines list too long (max 9)")
+    if len(engines) > MAX_ENGINES_PER_SEARCH:
+        raise SecurityError(f"engines list too long (max {MAX_ENGINES_PER_SEARCH})")
     # Single source of truth: a name is selectable iff _resolve_backends maps it.
     from dhole_mcp.search_metasearch import _DHOLE_TO_BACKEND
     valid = set(_DHOLE_TO_BACKEND)
@@ -837,6 +849,7 @@ def _build_results(query: str, ranked: list[RawResult], scores: Optional[list[fl
             fetch_relevance=_tier(score, i + 1, total),
             engines_consensus=consensus,
             source_type=_source_type(r.url),
+            official=classify_source(r.url)[1],
         ))
     return out
 

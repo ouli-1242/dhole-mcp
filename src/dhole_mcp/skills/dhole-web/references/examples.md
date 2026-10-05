@@ -71,6 +71,17 @@ A rejection names the key and lists the keys that tool accepts — follow the er
 ]}
 ```
 
+**Hover to reveal, drag to reorder** (hover menus and tooltips render synchronously, so the chain can click what the hover exposed; a drag names BOTH endpoints and each takes selector or index):
+```json
+{"url": "https://example.com/admin", "actions": [
+  {"hover": {"index": 5, "expect": "Orders"}},
+  {"click": {"index": 9, "expect": "Refunds"}}
+]}
+{"url": "https://example.com/board", "actions": [
+  {"drag": {"index": 3, "expect": "Task A", "to": {"index": 7}}}
+]}
+```
+
 **Form submission goes through the approval gate** (without `confirm`, the submit PAUSES with a `pending_approval` receipt and nothing is sent — describe the submission to the user, then re-run the **whole chain** with `confirm: true` only after they said yes; each call reloads the page, so the re-run must redo every prior step; paused and confirmed runs both land in the audit log):
 ```json
 {"url": "https://shop.example.com/checkout", "actions": [
@@ -191,7 +202,7 @@ Measured: one call, 8 grouped records, `summary` carrying `nested: 8 links expan
 {"url": "https://api.example.com/orders", "method": "POST", "body": "{\"item\": 1}", "content_type": "application/json"}
 ```
 
-**After a timeout, do not resend.** The answer is "unknown", not "failed" — the write may have landed. Read the resource (`web_read`) and let the site say; `web_resolve` tells you where the endpoint actually goes before you send at all.
+**After a timeout, do not resend.** The answer is "unknown", not "failed" — the write may have landed. Read the resource (`web_read`) and let the site say; a GET via `web_read` also shows where the endpoint actually lands before you send at all.
 
 ## web_search
 
@@ -224,12 +235,15 @@ List pages return a structured link listing (`page_type=list`), not body text �
 {"urls": ["https://blog.example.com/feed.xml"], "since": "2026-09-29T11:14:45+00:00"}
 ```
 
-## web_screenshot
+## Screenshots (inside web_act's action chain)
 
 ```json
-{"url": "https://example.com", "save_to": "C:/tmp/page.png", "full_page": true}
+{"url": "https://example.com", "actions": [{"snapshot": true},
+                                            {"screenshot": {"selector": "img.hero", "decode_qr": true}}]}
+// whole page, written to disk instead of the transcript (text-only hosts)
+{"url": "https://example.com", "actions": [{"screenshot": {"full_page": true, "save_to": "C:/tmp/page.png"}}]}
 ```
-Agents that can see images receive it inline; text-only agents read the absolute path from `save_to` and open it with their own image tool. The tool also takes `selector` (element crop) and `decode_qr: true` (local QR decode) — both always available in 17.0.
+Inline images reach agents that can see them; text-only agents read the absolute path from the action receipt (`saved` + `saved_bytes`). `selector` crops one element, `decode_qr` decodes QR payloads locally — both always available in 17.0.
 
 ## The remaining four
 
@@ -239,9 +253,9 @@ Agents that can see images receive it inline; text-only agents read the absolute
 // Pass encoding explicitly for mojibake (Shift_JIS/EUC-KR are outside auto-detection)
 {"file_path": "C:/docs/report.docx"}
 {"file_path": "C:/docs/japanese.txt", "encoding": "shift_jis"}
-// web_resolve: resolve short links before deciding to fetch
+// where a short link lands: web_read follows redirects (web_resolve was retired)
 {"url": "https://t.co/xxxx"}
-// sys_state: no arguments = the census (open sessions + cache state + stored-task counts)
+// sys_state: no arguments = the census (open sessions + cache state)
 {}
 // show one class without touching anything
 {"show": ["cache", "engine_state"]}
@@ -249,43 +263,17 @@ Agents that can see images receive it inline; text-only agents read the absolute
 {"clear": ["cache"]}
 // forget one named session — an id that is open is a valid token
 {"clear": ["my-shop"]}
-// every session, every watch baseline: these pause until you say so
+// every session: these pause until you say so
 {"clear": ["sessions"], "confirm": true}
 // engine cooldowns + yield history, for "the same engines keep getting skipped"
 {"clear": ["engine_state"]}
 ```
 
-## The stateful five (always registered in 17.0)
+## The stateful tool (cred_defaults, always registered in 17.0)
 
 Nothing is nested here either — every parameter of every tool sits at the top level of the call.
 
 ```json
-// web_recipe: record a chain once — validated at save time by the same validator the executor uses,
-// so a chain that would be refused at run time cannot be stored
-{"op": "save", "name": "price-watch", "url": "https://shop.example.com/item",
- "actions": [{"click": {"index": 12, "expect": "Show price"}}], "note": "reveals the member price"}
-// replay it (session_id is per-run and never stored); a non-zero actions_failed means the page changed — re-save
-{"op": "run", "name": "price-watch", "session_id": "sess1"}
-// see what is stored (use_count / last_ok show a stale recipe without running it); forget one
-{"op": "list"}
-{"op": "delete", "name": "price-watch"}
-
-// web_watch: add, then check. The FIRST check only stores the baseline and answers changed=null
-{"op": "add", "name": "changelog", "url": "https://example.com/changelog", "focus": "release notes"}
-{"op": "check", "name": "changelog"}
-{"op": "list"}
-{"op": "remove", "name": "changelog"}
-
-// cred_vault: which manager answered, then the items that fit a host — metadata only, never values
-{"op": "status"}
-{"op": "match", "url": "https://portal.example.com/login"}
-{"op": "list", "query": "portal", "source": "bitwarden"}
-
-// login: step 1 detects the form and fills NOTHING (pending_approval) — show this plan to the user
-{"url": "https://portal.example.com/login", "credential": "portal", "session_id": "sess1"}
-// step 2, only after the user approves: the SAME arguments plus confirm=true
-{"url": "https://portal.example.com/login", "credential": "portal", "session_id": "sess1", "confirm": true}
-
 // cred_defaults: set the identity once. A credential WITHOUT a host is refused, because it would
 // ride along to the next site you read. A bare call = what is in force (names only, never values).
 {}

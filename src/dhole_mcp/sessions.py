@@ -27,10 +27,15 @@ Scope, and what is deliberately NOT here:
   refreshed on send, so a forgotten session cannot accumulate credentials
   forever. ``sys_state`` (the tool) drops the jar, one named id or every one.
 
-Storage is SQLite at ``~/.dhole/sessions.db`` (0600 dir/file per paths.py), the
-same trust level as ``cache.db``, which already stores every fetched body in
-plaintext. Surviving a restart is the point: a long-running MCP server that
-authenticated once should not need to do it again after a crash.
+Storage is **in memory by default** (SQLite ``:memory:`` — the safest file is
+one that does not exist): the jar lives as long as the process, and a restart
+starts from zero. ``DHOLE_PERSIST_CREDENTIALS=1`` moves the jar to
+``~/.dhole/sessions.db`` (0600 dir/file per paths.py), where every cookie VALUE
+is encrypted with Windows DPAPI (:mod:`dhole_mcp.secretbox`) before it touches
+disk — the key is bound to the Windows user account, which is exactly the
+boundary a copied or synced file loses. A pre-17.1 plaintext file is read into
+the live store once and then deleted (memory mode) or re-encrypted in place
+(persist mode).
 """
 
 from __future__ import annotations
@@ -41,6 +46,8 @@ import sqlite3
 import threading
 import time
 from urllib.parse import urlparse
+
+from dhole_mcp import env_registry, secretbox
 
 logger = logging.getLogger("dhole-mcp.sessions")
 
@@ -65,31 +72,118 @@ def _db_path() -> str:
     return str(paths.file("sessions.db"))
 
 
+# The persist decision binds once per process: the jar below is a module-level
+# singleton connection, so a mid-run flip could not move an open store anyway.
+# Frozen at import — same "restart the host" tier as DHOLE_TOOLS (read_at is
+# "import" in the registry). Tests pin this attr for hermeticity.
+_PERSIST = env_registry.read_flag("DHOLE_PERSIST_CREDENTIALS", fail_safe=True)
+
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
+_file_backed = False
+
+_CREATE_SQL = (
+    "CREATE TABLE IF NOT EXISTS cookies ("
+    "  session_id TEXT NOT NULL,"
+    "  host TEXT NOT NULL,"
+    "  name TEXT NOT NULL,"
+    "  value TEXT NOT NULL,"
+    "  expires_at REAL NOT NULL,"
+    "  PRIMARY KEY (session_id, host, name))"
+)
 
 
 def _connect() -> sqlite3.Connection:
-    """Open (and create) the jar. Caller holds :data:`_lock`."""
-    global _conn
+    """Open (and create) the jar. Caller holds :data:`_lock`.
+
+    Default is ``:memory:``: cookies are credentials and the file that never
+    exists cannot leak. Persisting additionally needs an encryptor — on a
+    platform without one (no Windows DPAPI) the flag degrades to memory with a
+    warning, never to a plaintext file.
+    """
+    global _conn, _file_backed
     if _conn is not None:
         return _conn
-    from dhole_mcp import paths
-    db = _db_path()
-    paths.ensure_private_dir(os.path.dirname(db) or ".")
-    _conn = sqlite3.connect(db, check_same_thread=False)
-    _conn.execute(
-        "CREATE TABLE IF NOT EXISTS cookies ("
-        "  session_id TEXT NOT NULL,"
-        "  host TEXT NOT NULL,"
-        "  name TEXT NOT NULL,"
-        "  value TEXT NOT NULL,"
-        "  expires_at REAL NOT NULL,"
-        "  PRIMARY KEY (session_id, host, name))"
-    )
-    _conn.commit()
-    paths.harden_file(db)
+    persist = _PERSIST
+    if persist and not secretbox.available():
+        logger.warning(
+            "DHOLE_PERSIST_CREDENTIALS=1 but encrypted persistence only exists "
+            "on Windows (DPAPI) - the cookie jar stays in memory, nothing is "
+            "written to disk")
+        persist = False
+    if persist:
+        from dhole_mcp import paths
+        db = _db_path()
+        paths.ensure_private_dir(os.path.dirname(db) or ".")
+        _conn = sqlite3.connect(db, check_same_thread=False)
+        _conn.execute(_CREATE_SQL)
+        _conn.commit()
+        paths.harden_file(db)
+        _file_backed = True
+        _reencrypt_plaintext_values(_conn)
+    else:
+        # check_same_thread=False: the fetch path harvests Set-Cookie on a
+        # worker thread; the jar was always shared across threads.
+        _conn = sqlite3.connect(":memory:", check_same_thread=False)
+        _conn.execute(_CREATE_SQL)
+        _conn.commit()
+        _file_backed = False
+        _absorb_legacy_file(_conn)
     return _conn
+
+
+def _absorb_legacy_file(conn: sqlite3.Connection) -> None:
+    """A pre-17.1 jar lived in plaintext ``sessions.db``. Memory mode reads it
+    into the live jar once and deletes the file: leaving plaintext credentials
+    on disk would defeat the point of not persisting. Live (unexpired) rows
+    only — the jar's TTL discipline applies to a resurrected jar too."""
+    try:
+        db = _db_path()
+        if not os.path.exists(db):
+            return
+        legacy = sqlite3.connect(db)
+        try:
+            rows = legacy.execute(
+                "SELECT session_id, host, name, value, expires_at FROM cookies"
+            ).fetchall()
+        finally:
+            legacy.close()
+    except Exception as e:
+        logger.debug("legacy sessions.db unreadable, left in place: %s", e)
+        return
+    now = time.time()
+    kept = 0
+    for sid, host, name, value, expires_at in rows:
+        if expires_at > now:
+            conn.execute(
+                "INSERT INTO cookies (session_id, host, name, value, expires_at) "
+                "VALUES (?,?,?,?,?)", (sid, host, name, value, expires_at))
+            kept += 1
+    conn.commit()
+    try:
+        os.remove(db)
+        logger.info(
+            "absorbed %d live cookie(s) from the legacy plaintext %s into "
+            "memory; the file was deleted", kept, db)
+    except OSError as e:
+        logger.debug("could not delete legacy sessions.db: %s", e)
+
+
+def _reencrypt_plaintext_values(conn: sqlite3.Connection) -> None:
+    """One-time migration for persist mode: a pre-17.1 file holds cookie values
+    in plaintext; rewrite every value that does not carry the ``dpapi:``
+    marker. Idempotent by the LIKE guard."""
+    rows = conn.execute(
+        "SELECT rowid, value FROM cookies WHERE value NOT LIKE 'dpapi:%'"
+    ).fetchall()
+    if not rows:
+        return
+    for rowid, value in rows:
+        conn.execute("UPDATE cookies SET value=? WHERE rowid=?",
+                     (secretbox.protect(value), rowid))
+    conn.commit()
+    logger.info("re-encrypted %d plaintext cookie value(s) from a pre-17.1 "
+                "sessions.db", len(rows))
 
 
 def _hosts_of(url: str) -> str:
@@ -146,12 +240,18 @@ def store(session_id: str, url: str, cookies: dict, now: float | None = None) ->
             for name, value in (cookies or {}).items():
                 if not name or value is None:
                     continue
+                stored_value = str(value)
+                if _file_backed:
+                    # Values are credentials; on disk they are only ever the
+                    # encrypted form. Memory mode stores plaintext because RAM
+                    # is what everything else in the process already is.
+                    stored_value = secretbox.protect(stored_value)
                 conn.execute(
                     "INSERT INTO cookies (session_id, host, name, value, expires_at) "
                     "VALUES (?,?,?,?,?) "
                     "ON CONFLICT(session_id, host, name) DO UPDATE SET "
                     "  value=excluded.value, expires_at=excluded.expires_at",
-                    (sid, host, str(name), str(value), expires),
+                    (sid, host, str(name), stored_value, expires),
                 )
                 stored += 1
             _prune(conn, ts)
@@ -180,6 +280,8 @@ def header_for(session_id: str, url: str, now: float | None = None) -> dict:
         except Exception as e:
             logger.debug("cookie jar read failed for %s/%s: %s", sid, host, e)
             return {}
+    if _file_backed:
+        rows = [(name, secretbox.unprotect(value)) for name, value in rows]
     return {name: value for name, value in rows}
 
 
@@ -263,7 +365,7 @@ def reset_for_tests() -> None:
     The DB path is read lazily, so a fixture that sets a throwaway home after the
     first use would otherwise keep writing to the real file.
     """
-    global _conn
+    global _conn, _file_backed
     with _lock:
         if _conn is not None:
             try:
@@ -271,3 +373,4 @@ def reset_for_tests() -> None:
             except Exception:
                 pass
             _conn = None
+        _file_backed = False

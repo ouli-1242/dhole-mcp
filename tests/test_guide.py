@@ -18,7 +18,6 @@ from dhole_mcp.server import (
     MasterFetchServer,
     _SC_PARAMS,
     _SF_PARAMS,
-    _SHOT_PARAMS,
     _SS_PARAMS,
     _TOP_LEVEL_ARGS,
 )
@@ -226,7 +225,6 @@ PARAMS = {
     "web_read": _SF_PARAMS,
     "web_crawl": _SC_PARAMS,
     "web_search": _SS_PARAMS,
-    "web_screenshot": _SHOT_PARAMS,
 }
 
 
@@ -256,11 +254,10 @@ def test_every_smart_fetch_key_is_explained_somewhere():
 
 
 def test_the_stateful_tools_are_announced_with_their_discipline():
-    """四个状态工具 17.0 起默认注册 —— 常驻文本必须说明它们存在，且
-    login/submit 的逐次确认闸与凭据红线是 agent 读得到的纪律（没有开关可关，
-    纪律就是全部）。"""
+    """剩下的状态工具必须说明它们存在，且写操作的逐次确认闸是 agent 读得到的纪律
+    （没有开关可关，纪律就是全部）。"""
     announced = _wire_explanations() + "\n" + _corpus()
-    for tool in ("web_recipe", "web_watch", "cred_vault", "cred_login"):
+    for tool in ("cred_defaults", "sys_state"):
         assert _mentions(announced, tool), f"{tool} 在 agent 读得到的地方没被提到"
     assert "confirm" in announced, "确认闸必须在常驻文本里"
 
@@ -274,8 +271,8 @@ def test_the_stateful_tools_are_announced_with_their_discipline():
 #: 名字本身已经说明用途的顶层必填项，一句短说明就够了。
 _OBVIOUS = {
     ("web_read", "url"), ("web_read", "urls"),
-    ("web_search", "query"), ("web_resolve", "url"),
-    ("web_crawl", "url"), ("web_screenshot", "url"), ("cred_login", "url"),
+    ("web_search", "query"), ("web_act", "url"),
+    ("web_crawl", "url"),
 }
 
 

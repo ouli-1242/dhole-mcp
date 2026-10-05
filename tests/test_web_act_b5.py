@@ -171,7 +171,7 @@ class TestTheReadSideLostTheChain:
             assert shape not in branch, (shape, branch)
 
     def test_the_pipeline_still_takes_the_chain(self):
-        """公开面搬走，管线不动：web_act、web_recipe(op=run) 与 cred_login 都走这一条。
+        """公开面搬走，管线不动：web_act 走这一条。
 
         拆门的意义是"一扇门上不说两套规矩"，不是把执行链拆成两条 —— 真拆了，回放和
         登录流就各自长出一套动作语义。
@@ -188,7 +188,7 @@ class TestARungIsNamedOrRefused:
     schema，读参数的还是这台服务器自己。
     """
 
-    @pytest.mark.parametrize("tool", ["web_read", "web_act", "web_screenshot"])
+    @pytest.mark.parametrize("tool", ["web_read", "web_act"])
     def test_a_fifth_rung_is_refused_naming_the_four(self, tool):
         """问这一颗的是 `_validate_tool_args` —— 那才是 wire 上真的那道门。
 
@@ -227,3 +227,33 @@ class TestARungIsNamedOrRefused:
         finally:
             monkey.undo()
         assert seen.get("anti_detect", None) is None, seen
+
+
+class TestScreenshotPixelsReachTheWire:
+    """web_act 的截图像素必须真的到 content —— 回执只留 `image: true` 这个名字。
+
+    web_act 把链委托给 web_read 执行，`_report_action_outcomes` 在那里把 base64
+    从回执挪进 `_action_images`（PrivateAttr，不进 JSON），像素再往前一步变成
+    ImageContent 是 dispatch 层的活。那条线此前只接在 web_read 分支上 —— web_act
+    分支把它们丢在了原地：回执说「有图」，客户端却什么都看不到。真实协议层才测得
+    到（单元层一直只看回执形状，而这根管子在 dispatch）。2026-10-05 全真模拟
+    （review/realrun）第一次过 wire 时抓到。
+    """
+
+    def test_pixels_ride_the_content_list(self, monkeypatch):
+        from mcp.types import ImageContent
+
+        async def fake_act(self, url, actions=None, **kwargs):
+            from dhole_mcp.server import ResponseModel
+            result = ResponseModel(url=url, status=200, content=["body"],
+                                   fetcher_used="stealthy")
+            result._action_images = [{"data": "cGl4ZWw=", "mime_type": "image/png"}]
+            return result
+
+        monkeypatch.setattr(MasterFetchServer, "web_act", fake_act)
+        content, _structured = asyncio.run(MasterFetchServer()._dispatch(
+            "web_act", {"url": URL, "actions": CHAIN}))
+        imgs = [c for c in content if isinstance(c, ImageContent)]
+        assert imgs and imgs[0].data == "cGl4ZWw=", (
+            "web_act 的截图像素在 dispatch 处被丢掉 —— "
+            "_wire_result 少了 images= 那一参")

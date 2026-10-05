@@ -411,6 +411,48 @@ def test_readme_documents_every_selectable_engine():
         f"新增/改名引擎时同步「可选的搜索引擎」表")
 
 
+def test_readme_engine_roster_matches_the_registry():
+    """README 不仅要『提到』每个名字，还要把它们**归对池子**。
+
+    上一条守卫只查名字出现过 —— README 因此可以在描述 16.x 形状（默认池 6 + opt-in 8）
+    的同时把 16 个名字全列上，绿着通过（真发生过：那条「免密 14 个」一直留到 17.0 之后）。
+    这条钉的是归属。G25 附注一/M1 的教训是**扫描面**：原来只扫「搜索引擎与重排」一节，
+    于是 env 表里「默认池 6 颗」的旧账在节外绿着活了整整一版 —— 判据扫不到的位置必然
+    漂移。现在扫 README **全文**（引擎名可以出现在任何一节：env 表、变体表、doctor），
+    并把 DEFAULT_ENGINES 的字面钉死（默认免密池 8 颗）——池子变了必须动这条测试，
+    不许静默。
+    """
+    import re
+    from pathlib import Path
+
+    from dhole_mcp import search_metasearch as ms
+    from dhole_mcp.search_engines import DEFAULT_ENGINES
+
+    # 字面钉死（G25 附注一）：默认免密池就是这 8 颗。改池子 = 显式改这里。
+    assert DEFAULT_ENGINES == (
+        "baidu", "bing", "sogou", "so360", "bing_global", "yandex",
+        "brave", "duckduckgo",
+    ), f"默认免密池变了（现值 {DEFAULT_ENGINES}）—— 改池子要同时改 README/手册/这里"
+
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    # 扫描面 = README 全文（G25 附注一：只扫一节时，节外的旧账必然漂移）。
+    # 整词匹配：`_` 算词字符，所以 `bing` 不会命中 `bing_global`、`sogou` 不会命中
+    # `sogou_weixin`（子串陷阱，与 test_tool_descriptions._engine_tokens 同类）。
+    words = set(re.findall(r"[a-z0-9_]+", readme.lower()))
+
+    retired = {"sogou_weixin", "baidu_baike", "wikipedia", "grokipedia",
+               "mwmbl", "yahoo"}
+    assert not (words & retired), (
+        f"README 引擎段还点名了 17.0 已删除的引擎: {sorted(words & retired)} —— "
+        "调用方照着点会收到 invalid_request，读起来像是我们坏了")
+    missing = sorted(set(DEFAULT_ENGINES) - words)
+    assert not missing, (
+        f"README 引擎段漏了默认池引擎: {missing} —— "
+        "README 是用户挑引擎的唯一出处，漏一个那个引擎就等于不存在")
+    missing_keyed = sorted(set(ms.KEYED_ENGINES) - words)
+    assert not missing_keyed, f"README 引擎段漏了 keyed 引擎: {missing_keyed}"
+
+
 def test_every_default_pool_engine_is_registered_and_enabled():
     """默认池里不许出现未注册或被禁用的引擎 —— core 集合那个 bug 的同类。"""
     from dhole_mcp import search_metasearch as ms

@@ -10,7 +10,9 @@ source of truth for those paths:
 
     ~/.dhole/
       cache.db                 content cache (SQLite; + -wal/-shm sidecars)
-      sessions.db              cookie jar for session_id (SQLite; values, not names)
+      sessions.db              cookie jar (17.1+: only when DHOLE_PERSIST_CREDENTIALS=1;
+                               values DPAPI-encrypted — the default store is memory)
+      identity.db              stored cred_defaults (same switch, same encryption)
       models/                  downloaded model files (neural reranker)
       circuit_breaker.json     engine cooldown state
       engine_stats.json        per-engine parse yield (who returned 0 usable results)

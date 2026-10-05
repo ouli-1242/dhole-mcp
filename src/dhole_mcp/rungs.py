@@ -29,7 +29,12 @@ from dhole_mcp import identity
 # useragent 同理不在表里：UA 必须与 TLS/指纹成套（HTTP 层配 primp 的
 # impersonate_os，浏览器层配 _FINGERPRINT_PROFILES），手传一个会造出"UA 说
 # Chrome、JA3 说别的"的自相矛盾指纹，比不设更容易被认出来。
-ANTI_DETECT_DESC = """How hard the browser tier hides that it is one: off, basic (canvas + WebRTC), auto (the tested default, answers Cloudflare), aggressive (auto + every resource). Omit = cred_defaults, else auto."""
+# web_read 的完整阶梯（web_act 用下面的短指针，见其注释）。
+ANTI_DETECT_DESC = """Browser stealth level: off, basic (canvas + WebRTC), auto (the tested default, answers Cloudflare), aggressive (auto + every resource). Omit = cred_defaults, else auto."""
+# web_act 的短指针（G25 §4.3 去重）：完整阶梯只住在 web_read 一处——同一段
+# 168 字符在 tools/list 上出现两次，第二份是纯重复。档位语义见 _ANTI_DETECT
+# 映射表，这里只留"去哪读全的"。
+ANTI_DETECT_DESC_SHORT = "Stealth rungs per web_read.anti_detect; omit = cred_defaults, else auto."
 
 _ANTI_DETECT = {
     #        画布噪声, WebRTC 屏蔽, CF 挑战处理, 资源全加载
@@ -42,7 +47,7 @@ _ANTI_DETECT = {
 #: 哪些工具读这颗档位。名单只有一份：`_validate_tool_args` 按它决定"要不要把值的
 #: 拼法问清楚"，工具自己按它决定要不要收这个参数 —— 两边各自列一遍，迟早漏一颗
 #: （14b 拆出 web_act 时就漏过一次：那一路的转发不过问，KeyError 直接顶到客户端）。
-_RUNG_TOOLS = frozenset({"web_read", "web_act", "web_screenshot"})
+_RUNG_TOOLS = frozenset({"web_read", "web_act"})
 
 
 def _anti_detect(level: str) -> dict:

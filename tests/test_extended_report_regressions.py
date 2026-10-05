@@ -119,7 +119,6 @@ def _shape_for(tool: str):
     """Whatever each dispatch branch expects back, so the stub is not the failure."""
     if tool == "feed_read":
         return []
-    if tool == "web_resolve":
         return {}
     return ResponseModel(url="https://example.test/", status=200, content=["x"])
 
@@ -137,7 +136,6 @@ class TestTheWireReadsEveryArgumentItAdvertises:
     @pytest.mark.parametrize("tool,call", [
         ("feed_read", {"urls": ["https://example.test/feed.xml"], "max_items": 3,
                         "timeout": 7, "since": "2026-09-27T11:00:00Z"}),
-        ("web_resolve", {"url": "https://example.test/x", "timeout": 7}),
         ("doc_parse", {"file_path": "x.csv", "cwd": ".", "encoding": "gbk"}),
         ("sys_state", {"show": ["cache"], "clear": ["engine_state"],
                        "confirm": True}),

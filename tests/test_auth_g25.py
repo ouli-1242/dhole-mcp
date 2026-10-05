@@ -360,6 +360,39 @@ class TestCredentialsDoNotRideAHostWeNeverAgreedTo:
         assert hop["accept"] == "text/html"
         assert "authorization" in _CREDENTIAL_HEADERS
 
+    def test_a_scheme_downgrade_is_cross_origin_for_credentials(self):
+        """同主机的 https→http 降级也是跨源（G25 评审实测洞）：凭据跟着降级跳
+        走明文线，等于把它递给链路上的每个中间人。浏览器按 Fetch 规范剥掉，
+        HTTP 层现在一样剥——生产调用点传 origin_url 走严格口径。"""
+        from dhole_mcp.fetcher import _hop_headers
+
+        hop = _hop_headers({"authorization": "Basic x", "cookie": "a=1"},
+                           "http://api.example.com/next", "api.example.com",
+                           None, "", (),
+                           origin_url="https://api.example.com/start")
+        assert "authorization" not in hop and "cookie" not in hop
+
+    def test_same_scheme_same_port_still_carries_credentials(self):
+        from dhole_mcp.fetcher import _hop_headers
+
+        hop = _hop_headers({"authorization": "Basic x", "cookie": "a=1"},
+                           "https://api.example.com/next", "api.example.com",
+                           None, "", (),
+                           origin_url="https://api.example.com/start")
+        assert hop["authorization"] == "Basic x"
+        assert hop["cookie"] == "a=1"
+
+    def test_a_port_change_is_cross_origin_too(self):
+        """_host_of 不带端口，端口在严格口径里补齐：同主机 :8443→:9999 也按
+        跨源剥凭据（评审注记：问题面比降级一例更宽）。"""
+        from dhole_mcp.fetcher import _hop_headers
+
+        hop = _hop_headers({"authorization": "Basic x"},
+                           "http://api.example.com:9999/next", "api.example.com",
+                           None, "", (),
+                           origin_url="http://api.example.com:8443/start")
+        assert "authorization" not in hop
+
 
 class TestTheBrowserTierBindsThemToo:
     """`set_extra_http_headers` 是「这个页面每个请求都加」，不是「只加给这一站」。

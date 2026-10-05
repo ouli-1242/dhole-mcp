@@ -46,8 +46,8 @@ ROUTING_CONTRACT = [
      "不知道 fetch_content 的 agent 会多花 N 次 web_read 去取正文"),
     ("web_search", "web_read",
      "搜索结果只是 URL，必须说清下一步是取正文"),
-    ("web_screenshot", "web_read",
-     "文本 agent 不该调截图，要明确让位给 web_read"),
+    ("web_act", "web_read",
+     "文本 agent 在动作链里拿不到正文时，web_read 才是读的门"),
     ("doc_parse", "web_read",
      "本地 PDF 只有 web_read 能处理（且仅限 URL 形态），必须指明"),
     ("feed_read", "web_read",
@@ -139,16 +139,29 @@ def test_search_engine_list_never_names_a_retired_engine(tools):
         "常驻层只写现在能用的。")
 
 
+def test_the_engines_description_quotes_the_derived_cap(tools):
+    """常驻层那句「max N names」的 N 必须等于推导出来的上限 —— 手抄的数字会漂。
+
+    上限由 `search.MAX_ENGINES_PER_SEARCH`（8 免密 + 2 keyed）推导，注册表一变它跟着变；
+    描述是静态字符串，抄不了，只能在这里钉住。
+    """
+    from dhole_mcp.search import MAX_ENGINES_PER_SEARCH
+
+    desc = tools["web_search"]["inputSchema"]["properties"]["engines"]["description"]
+    assert f"max {MAX_ENGINES_PER_SEARCH} names" in desc, (
+        f"web_search.engines 描述里的上限过期了（应为 {MAX_ENGINES_PER_SEARCH}）: {desc!r}")
+
+
 def test_parse_advertises_local_pdf(tools):
     """本地 PDF 必须真的可用，且被如实声明。
 
     历史：`SUPPORTED_EXTENSIONS` 一直含 `.pdf`，但实现只返回一句
     「用 web_read(url='file://...')」—— 而 file:// 被 SSRF 守卫硬拦、裸路径
     也不是合法 URL，于是本地 PDF 实际无路可走，agent 照描述走会白烧两次调用。
-    现在 parse 自己解析，描述与参数说明都必须写明。
+    现在 parse 自己解析。G25 §4.3 去重后清单只住 file_path 一处（描述带指针），
+    所以 `.pdf` 的断言落在参数说明上。
     """
     desc = _desc(tools, "doc_parse")
-    assert ".pdf" in desc
     assert "NOT supported" not in desc
     props = tools["doc_parse"]["inputSchema"]["properties"]
     assert ".pdf" in props["file_path"]["description"]
@@ -165,11 +178,12 @@ def _extensions_mentioned(text: str) -> set[str]:
 
 
 def test_parse_advertises_every_supported_extension(tools):
-    """扩展名清单在 parse.py 与描述里各写一份 —— 又一处「同一份名单多处定义」。
+    """扩展名清单的唯一住处是 file_path 的参数说明（G25 §4.3 去重后从描述搬来）。
 
     实测漂移：`SUPPORTED_EXTENSIONS` 含 `.htm`/`.xhtml`，工具描述只写到 `.html`，
     file_path 的说明连 `.htm` 都没有。用户手里是 `.xhtml` 文件时会以为 parse 读不了。
-    守卫按**代码里的集合**反查描述，而不是比对两份人手写的清单。
+    守卫按**代码里的集合**反查参数说明；描述本身则必须带指针句——防止将来
+    有人把指针也删了，变成两处都没有。
     """
     from dhole_mcp.parse import SUPPORTED_EXTENSIONS
 
@@ -177,10 +191,10 @@ def test_parse_advertises_every_supported_extension(tools):
     assert _extensions_mentioned("only .html here") == {".html"}
 
     desc = _desc(tools, "doc_parse")
+    assert "file_path" in desc, "描述丢了指向清单的指针句"
     prop = tools["doc_parse"]["inputSchema"]["properties"]["file_path"]["description"]
-    for where, text in (("描述", desc), ("file_path 说明", prop)):
-        missing = sorted(SUPPORTED_EXTENSIONS - _extensions_mentioned(text))
-        assert not missing, f"parse 的{where}未列出支持的扩展名: {missing}"
+    missing = sorted(SUPPORTED_EXTENSIONS - _extensions_mentioned(prop))
+    assert not missing, f"parse 的 file_path 说明未列出支持的扩展名: {missing}"
 
 
 def test_no_description_recommends_the_file_scheme(tools):
@@ -212,6 +226,8 @@ _NOT_A_PARAM = {
     "end_page",        # table_of_contents 的字段
     "page",            # 同上（PDF 目录项字段，非本工具参数）
     "example",         # 文档用词
+    "host",            # cdp:host=<name> 的形状名；cred_defaults 的 set 里它是
+                       # 同一对象里的作用域键，都不是哪个工具的顶层参数
 }
 
 
@@ -458,6 +474,9 @@ _TOOL_SHAPED = re.compile(r"\b(?:smart|web|doc|feed|cred|sys)_[a-z][a-z0-9_]*\b"
 # 撞同一个形状但不是工具名的东西，逐个说明为什么可以留着。
 _SHAPED_BUT_NOT_A_TOOL = {
     "feed_url",     # feed_read 的参数名（§4 施工图里就這麼写）
+    # A1/A2 下线的两颗：指路文案（_REMOVED_TOOL_HINTS）与注入形状名单里的提及
+    # 是"门换了"的教法，不是"去调它"的教法。
+    "web_screenshot", "web_resolve",
 }
 
 

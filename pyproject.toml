@@ -53,8 +53,10 @@ dependencies = [
     # Browser deps (patchright for anti-detect browser, playwright for JS
     # rendering, browserforge for fingerprint generation). These may not
     # install on all platforms (e.g. playwright has no aarch64/Termux wheels)
-    # - on such hosts `pip install dhole-mcp` will fail at this block, and
-    # the user must fall back to `pip install dhole-mcp[slim]` (see below).
+    # - on such hosts `pip install dhole-mcp` fails at this block; the honest
+    # HTTP-only fallback is `pip install --no-deps dhole-mcp` plus a hand-picked
+    # runtime core (extras can only ADD dependencies, never subtract, so no
+    # extra can produce a slimmer set than the default).
     "patchright>=1.50",
     "playwright>=1.50",
     "browserforge>=1.2.4",
@@ -121,28 +123,6 @@ all = [
     "opencv-python-headless>=4.8",
     "python-docx>=1.0",
     "openpyxl>=3.1",
-]
-slim = [
-    # W7 introduces `slim` as a NAME for the pre-W7 default set (HTTP +
-    # search only, no browser / PDF / OCR / reranker). Two things to know
-    # before you reach for it:
-    #
-    #   1. pip extras can only ADD to `dependencies`, never subtract. Since
-    #      W7 folded the heavy tier INTO `dependencies`, `pip install
-    #      dhole-mcp[slim]` resolves to the same set as plain
-    #      `pip install dhole-mcp` - it is not "back to HTTP-only" the way
-    #      plan §3 W7 test #2 hoped. To actually get a slim install today
-    #      you need `pip install --no-deps dhole-mcp` and hand-pick the
-    #      runtime core; a future release that adds a real slim wheel would
-    #      change that.
-    #   2. Playwright / patchright have no aarch64 or Termux wheels. On
-    #      those hosts `pip install dhole-mcp` fails at the *browser
-    #      block*; the `[slim]` name is what you point at in a build
-    #      script, even if pip currently resolves it the same.
-    #
-    # Kept empty so the name exists in `pip index` metadata and in error
-    # messages ("try `pip install dhole-mcp[slim]`") without pretending
-    # to do something pip cannot do.
 ]
 
 [project.urls]

@@ -298,9 +298,9 @@ class TestTheSchemaBranchCallsTheTierInOrder:
     def test_a_conditional_schema_fetch_still_bypasses_the_cache(self, monkeypatch):
         """带版本标记的那一趟 schema 抓取问的是源站，不是 dhole 的记忆。
 
-        17.0 §6 之后标记不再是参数（`if_modified_since` 下了线），发起者变成 watch，
-        通道是 `_REVALIDATE`。这里改由那条通道驱动 —— 钉的是「条件请求不许读缓存」，
-        与谁发起无关。
+        17.0 §6 之后标记不再是参数（`if_modified_since` 下了线），通道是 `_REVALIDATE`；
+        17.0 收尾后这条通道连生产端也没有了（喂它的 `web_watch` 随四颗状态工具下线），
+        所以这里直接驱动它 —— 钉的是「条件请求不许读缓存」，与谁发起无关。
         """
         seen = _stub_tier(monkeypatch, {})
 

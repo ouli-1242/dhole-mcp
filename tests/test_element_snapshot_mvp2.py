@@ -196,7 +196,9 @@ class TestValidation:
     def test_screenshot_by_index_is_normalized(self, monkeypatch):
         monkeypatch.setenv("DHOLE_MULTIMODAL", "1")
         (a,) = _validate_actions([{"screenshot": {"index": 2}}])
-        assert a == {"screenshot": {"index": 2, "decode_qr": False}}
+        # A1：归一化补齐默认的捕获旋钮（image_type 在此定型，执行器不再猜）。
+        assert a == {"screenshot": {"index": 2, "image_type": "png",
+                                    "decode_qr": False}}
 
 
 # ─── 快照执行器 ─────────────────────────────────────────────────────────────

@@ -521,6 +521,23 @@ def _resp_cookies(resp) -> Dict[str, str]:
     return out
 
 
+def _effective_port(parsed) -> int:
+    """Port a URL actually dials: the explicit one, or the scheme's default."""
+    return parsed.port or (443 if parsed.scheme == "https" else 80)
+
+
+def _same_origin_strict(a: str, b: str) -> bool:
+    """scheme + host + 有效端口 全等，才算「凭据可以跟着走」的同源。
+
+    浏览器对重定向的读法（Fetch 规范）：异 scheme（https→http 降级）与异端口
+    都是跨源，Authorization 一律剥掉。`_host_of` 是不带端口的，端口在这里补齐。
+    """
+    pa, pb = urlparse(a), urlparse(b)
+    return (pa.scheme == pb.scheme
+            and _host_of(a) == _host_of(b)
+            and _effective_port(pa) == _effective_port(pb))
+
+
 def _hop_headers(
     base: Dict[str, str],
     url: str,
@@ -528,6 +545,7 @@ def _hop_headers(
     cookies: Optional[Dict[str, str]],
     session_id: str,
     extra_credentials: Sequence[str] = (),
+    origin_url: str = "",
 ) -> Dict[str, str]:
     """Build the headers for ONE request in a redirect chain.
 
@@ -548,10 +566,22 @@ def _hop_headers(
     ``extra_credentials`` extends the drop set for one call: an API key in
     ``X-API-Key`` is a credential too, and the built-in name list cannot know
     what the caller chose to call theirs.
+
+    ``origin_url`` tightens the same-origin test to the browser's reading:
+    equal scheme AND effective port, not just equal host. Without it the
+    pre-G25 hole stands - an https→http redirect to the SAME host kept
+    ``Authorization`` and sent it over plaintext. The production call site
+    always passes it; the empty default keeps direct callers (and the tests
+    that drive this function directly) on the host-only reading.
     """
     hop = dict(base)
     host = _host_of(url)
     same_origin = bool(host) and host == origin_host
+    if same_origin and origin_url:
+        # G25 评审：同主机的 https→http 降级重定向曾带着 Authorization 走明文线。
+        # 凭据跟随的同源判定用浏览器的口径——scheme 与有效端口也要相等；
+        # browser 层 {80,443} 互通豁免是「同一个落点」的口径，这里不沿用。
+        same_origin = _same_origin_strict(origin_url, url)
     if not same_origin:
         for name in _CREDENTIAL_HEADERS + tuple(extra_credentials):
             _drop_header_ci(hop, name.lower())
@@ -773,7 +803,7 @@ class HTTPSession:
                     for _hop in range(max_redirects + 1):
                         hop_headers = _hop_headers(
                             base_headers, current, origin_host, cookies, session_id,
-                            credential_headers)
+                            credential_headers, origin_url=url)
                         if current_body is None:
                             # 方法被转换掉（POST->GET）之后，描述实体的头要一起下来：
                             # 留着 content-type/content-length 就是「声明有 body 却没有
