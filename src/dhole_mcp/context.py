@@ -120,35 +120,6 @@ def _stamp_robots_mode(result: ResponseModel) -> None:
         changed = True
     if changed:
         result.metadata = md
-
-
-def _stamp_browser_mode(result) -> None:
-    """Say out loud when the browser tier would run **visibly** (批次 10).
-
-    `fetcher_used` 只有一个 'stealthy'，它说不出这台是看得见的还是 headless 的，也说不出
-    你刚登进去的东西会不会随临时目录一起没了 —— 而这两件事正是操作员按下
-    `DHOLE_BROWSER_HEADED` 之后最想知道的。和 robots 那一颗同一个理由：说的是**本进程**
-    的形态，所以两条返回路径都要过这里（抓取路径写缓存前先盖，缓存命中路径从存着的信封
-    里读出来再重盖）—— 关掉旋钮之后，一条旧的"visible window"不许继续跟着正文走。
-    """
-    from dhole_mcp import browser as _b, identity as _id
-
-    md = result.metadata or {}
-    if not _b._browser_headed():
-        if md.pop("browser", None) is not None:
-            result.metadata = md
-        return
-    if result.fetcher_used != "stealthy":
-        return
-    prof = (_id.get("profile") or "").strip()
-    md["browser"] = (
-        f"visible window (DHOLE_BROWSER_HEADED), profile {prof!r} - logins typed "
-        "here survive, and a visible browser is not closed by the idle reaper"
-        if prof else
-        "visible window (DHOLE_BROWSER_HEADED) on a THROWAWAY profile - nothing you "
-        "log in here survives; store a `profile` with cred_defaults first (a visible "
-        "browser is not closed by the idle reaper)")
-    result.metadata = md
 # Per-call credential headers (G25): ``(kind, header_names)`` — "basic"/"bearer"/
 # "header" plus which header names this call treats as credentials. The names go
 # to the HTTP tier so a cross-origin redirect drops them; the kind goes to the

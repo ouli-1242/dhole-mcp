@@ -183,7 +183,15 @@ def test_connect_stays_inside_the_packed_budget():
 #: 从 "the FIRST attach to a host" 改成 "for a site"，并把 "until it says true" 收成
 #: "without it" —— 净 -7，30,474 → **30,467**。一次修 bug 顺带把话说短了，这是棘轮
 #: 该往下走的那种。
-CONNECT_CEILING = 30_467
+#: 2026-10-05 批次 11：`web_act` 多一颗 `headed`（看得见的那扇门），+337 → **30,804**。
+#: 抬它的理由是"没有这句话，能力在 wire 上根本不可达"：操作员明确否掉了批次 10 那两颗
+#: env 旋钮（「多两个配置我觉得没必要，我升级到 17.0 就是避免过多配置的原因」），把
+#: "什么时候需要人在场"交回给正在做事的一方 —— 而那一方唯一能传这句话的地方就是参数面。
+#: 参数名与判据必须在连接期到场（表外名会被 dispatch 拒掉，藏在签名里没人调用得到），
+#: 后果清单（回收豁免 / 临时目录 / 交回窗口）全部搬进 `sys_guide(topic='config')` 按需
+#: 付，wire 上只留指针。第二次上抬，付的是 337 字每次连接（属性名 + 292 字描述 + 骨架），
+#: 买的是一次调用就能把人要看的那扇窗叫出来。
+CONNECT_CEILING = 30_804
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

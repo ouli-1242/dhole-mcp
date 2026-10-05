@@ -56,6 +56,7 @@ def _fake_open(monkeypatch, opened: list) -> None:
         class _Live:
             _is_alive = True
             cdp_attached = False
+            launch_note = ""      # 起的是隐形的那台，所以真会话在这一句上会回空串
             _hide_canvas = kw.get("hide_canvas", False)
             _block_webrtc = kw.get("block_webrtc", False)
             _solve_cloudflare = kw.get("solve_cloudflare", False)
@@ -154,6 +155,8 @@ def _serve(monkeypatch, *, warm: tuple, asked: str) -> dict:
     class _WarmSession:
         _is_alive = True
         cdp_attached = False
+        # 与 _OneShotBrowser 同一句理由：真会话对外说得出这两件事，假件就得说得出。
+        launch_note = ""
         _hide_canvas, _block_webrtc = warm
 
         async def fetch(self, url, **kw):
@@ -166,7 +169,11 @@ def _serve(monkeypatch, *, warm: tuple, asked: str) -> dict:
             seen["created"].append(kw)
             seen["how"] = "one-shot"
             seen["launch"] = (kw.get("hide_canvas"), kw.get("block_webrtc"))
+            # 一台真会话对外说得出两件事：attach 没 attach、它是被怎么起来的
+            # （批次 11 的 `launch_note`，headless 时是空串）。假件少一颗就是比真件
+            # 宽容 —— 那种宽容正好藏住"回执读不到那句话"这类事故。
             self.cdp_attached = False
+            self.launch_note = ""
 
         async def __aenter__(self):
             return self
@@ -267,6 +274,7 @@ class TestTheNoteReachesTheCaller:
         class _WarmSession:
             _is_alive = True
             cdp_attached = False
+            launch_note = ""
             _hide_canvas, _block_webrtc = _expected("auto")
 
             async def fetch(self, url, **kw):  # pragma: no cover - 不该被走到
@@ -274,6 +282,7 @@ class TestTheNoteReachesTheCaller:
 
         class _Own:
             cdp_attached = False
+            launch_note = ""
 
             def __init__(self, **kw):
                 assert (kw.get("hide_canvas"), kw.get("block_webrtc")) == (False, False)

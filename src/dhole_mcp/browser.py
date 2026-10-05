@@ -268,6 +268,16 @@ class CDPNoLoggedInContextError(RuntimeError):
     """
 
 
+class BrowserBusyError(RuntimeError):
+    """要一台**看得见**的浏览器，可这个 profile 上已经有一台 headless 的在跑。
+
+    批次 11。两条老路都不对：接管它（用户看不见的那个浏览器带着他的 profile 变成
+    可见的，行为像魔法）或者关掉再起一台（扔掉的可能正是他正在用的标签页）。所以这里
+    拒绝，并说清把窗口交回来的那一步。反向不冲突：可见的那台能干 headless 的活，所以
+    后台请求照常复用热的可见浏览器。
+    """
+
+
 class CDPUnreachableError(RuntimeError):
     """attach 要的端点根本没在听。批次 9：这句话由知道端点的那一层写完。
 
@@ -278,6 +288,14 @@ class CDPUnreachableError(RuntimeError):
     端点，而端点也可以来自 `cred_defaults(set={'cdp': …})`（操作员存的那份），那条路
     上一个字的建议都不会出现。一个事实两个名字，检查只读了一个：第 7 批同一个洞。
     """
+
+
+#: dhole **设计过的**拒绝（不是故障）。两份读法共用这一份名单：
+#: `server._tier_error_text` 按它决定"全文过闸还是剪到 200"（句子的出路都写在结尾，
+#: 帽子吃掉结尾就等于把话说一半），`server.stealthy_fetch` 按它决定"折成信封还是照旧
+#: 抛出"。加一类拒绝只改这一行 —— 两处各列一遍是第 7、9 批反复踩的那个洞。
+TIER_REFUSALS: tuple = (CDPHostNotAllowedError, CDPNoLoggedInContextError,
+                        CDPUnreachableError, BrowserBusyError)
 
 
 def _cdp_unreachable_text(endpoint: str, exc: BaseException) -> str:
@@ -1332,7 +1350,7 @@ class BrowserSession:
         page_setup: Optional[Callable] = None,
         humanize: bool = True,
     ):
-        self._headless = _resolve_headless(headless)
+        self._headless = headless
         self._proxy = proxy
         self._locale = locale
         self._timezone_id = timezone_id
@@ -1949,6 +1967,28 @@ class BrowserSession:
         attach is visible to the caller, not just to the audit log."""
         return self._cdp_attached
 
+    @property
+    def launch_note(self) -> str:
+        """这台浏览器**实际**是怎么起来的 —— 一句回执，只在看得见时说。
+
+        批次 11 把它从"读旋钮"改成"问实例"：可见与否是一台正在跑的浏览器的属性，不是
+        每次调用的属性（第一次把它起来的那次决定形态，后来的调用复用同一台）。读旋钮的
+        那句会这样骗人：旋钮后来关掉了，热着的窗口还在屏幕上，回执却开始说后台。问实例
+        就没有这个分叉。
+
+        看不见（headless）是这条梯子的常态、也是档位表每一档写的值，所以返回空串：
+        不说 == 不是可见的。
+        """
+        if self._headless:
+            return ""
+        if self._persistent_profile and self._profile_name:
+            return (f"visible window, profile '{self._profile_name}' - logins typed "
+                    "here survive later calls and this window is not closed by the "
+                    "idle reaper; sys_state(clear=['<session id>']) hands it back")
+        return ("visible window on a THROWAWAY profile - nothing you log in here "
+                "survives this browser; store a `profile` with cred_defaults to keep "
+                "the login")
+
 
 class StealthyBrowser(BrowserSession):
     """Anti-detect stealthy browser session with Cloudflare solving.
@@ -2106,52 +2146,25 @@ INSTALL_DOWNLOAD_MB = {"chromium": 193, "headless_shell": 119}
 SYSTEM_CHROME = "system-chrome"
 
 
-def _forced_browser_channel() -> str:
-    """操作员点名的 launch channel（`DHOLE_BROWSER_CHANNEL`），没点或不懂就返回 ''。
-
-    读在 `_launch_channel` 这一个地方 —— 安装侧与启动侧共用它，所以强制 msedge 时
-    "该装哪一个 artifact"跟着一起变，不会再出现 17.0 那回"装了 shell、起了别的"。
-    """
-    from dhole_mcp import env_registry
-
-    raw = (env_registry.value_of("DHOLE_BROWSER_CHANNEL") or "").strip().lower()
-    return raw if raw in ("chrome", "msedge", "chromium") else ""
-
-
-def _browser_headed() -> bool:
-    """操作员要不要一台**看得见**的浏览器（`DHOLE_BROWSER_HEADED`）。
-
-    这不是调用方的旋钮，而且故意不是：`headless` 从没上过 wire，`cred_defaults` 里也
-    没有这一颗 —— 弹一个带着你登录态的可见窗口，权力留在人手里（同一个理由，submit
-    要 confirm、attach 要 confirm）。`read_at="call"`，所以 `dhole config set` 之后
-    下一调用就生效，不必重启宿主。
-    """
-    from dhole_mcp import env_registry
-
-    return env_registry.read_flag("DHOLE_BROWSER_HEADED")
-
-
-def _resolve_headless(headless: bool) -> bool:
-    """启动侧唯一的 headless 判定点。
-
-    dhole 各处签名里的 `headless=True` 不是调用方的决定（那颗参数不在 wire 上），是
-    dhole 自己的默认，所以操作员的覆盖优先。
-    """
-    return False if _browser_headed() else headless
-
-
 def _launch_channel(real_chrome: bool = False) -> str:
     """`StealthyBrowser.start()` 交给 launch 的那个 channel —— 只在这里判一次。
 
     安装侧与启动侧必须共用它：两边各写一遍同一个条件，就是"装了 119MB 却起不来"的来路。
     `real_chrome=True` 仍钉死 'chrome' —— 档位表（rungs.py）没有任何一档传它，
     见该文件"两档之外不留逃生门"那段；这里不为一个没人走的参数扩语义。
-    操作员点名（`DHOLE_BROWSER_CHANNEL`）排在**检测**前面，不排在 `real_chrome` 前面：
-    那一档说得起的就是用户自己那个 Chrome，点名换浏览器属于检测那一支的语义。
+    点名哪一台浏览器**不是**旋钮也不是参数（批次 11 的裁决）：检测顺序
+    chrome → msedge → 内置 chromium 已经保证"这台机器上有什么就用什么"，而让 agent
+    点名下层可执行文件，等于把"指纹成套"这一件事（`anti_detect` 那一轴把 UA / TLS /
+    插件配成一组）拆到两个地方各说一半。真要用 Edge 读它里面已登录的页面，走 attach ——
+    那台浏览器本来就是用户自己起的。
     """
-    if real_chrome:
-        return "chrome"
-    return _forced_browser_channel() or _detect_chrome_channel()
+    return "chrome" if real_chrome else _detect_chrome_channel()
+
+
+# 批次 11：``DHOLE_BROWSER_HEADED`` 与 ``DHOLE_BROWSER_CHANNEL`` 已注销（注册表里没有
+# 名字，设了也不读 —— 与 ``DHOLE_BROWSER_PROFILE`` 同一处置）。它们管的两件事各自回了
+# 自己该待的层：看得见与否是**一次调用**的问题（`web_act(headed=true)`），而"用哪一台
+# 浏览器"根本不是一个需要谁来回答的问题（检测顺序已经保证这台机器上有什么就用什么）。
 
 
 def launch_artifact(real_chrome: bool = False) -> str:

@@ -64,7 +64,7 @@ class TestTheToolExists:
         assert server_mod._TOP_LEVEL_ARGS["web_act"] == frozenset({
             "url", "actions", "extraction_type", "max_content_chars", "focus",
             "timeout", "anti_detect", "session_id", "cdp_url", "confirm",
-            "check_login"})
+            "check_login", "headed"})
 
     def test_both_required_names_are_on_the_schema(self):
         schema = _defs()["web_act"]["inputSchema"]

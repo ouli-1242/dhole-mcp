@@ -55,6 +55,9 @@ class _FakeSess:
 
     _is_alive = True
     cdp_attached = False
+    # 会话对外说得出"我是被怎么起来的"（批次 11），车道那句读的是这个属性而不是
+    # getattr 的默认 —— 假件缺它就该红，因为真会话不会缺。
+    launch_note = ""
 
     def __init__(self, harvest=None):
         self.seeded: list = []

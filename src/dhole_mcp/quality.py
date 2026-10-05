@@ -710,6 +710,10 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             # 批次 9：端点这次连话都没答。说成 network error 仍然不对 —— 没有
             # 请求在路上，也没有代理可查；把 timeout 调大更不会有用。
             parts.append("no cdp endpoint")
+        elif (result.error or "").startswith("browser_busy"):
+            # 批次 11：要一台可见的而这个 profile 上已经有一台在跑。没有任何请求发出，
+            # 而"网络错误"会把人送去查代理，这里要查的是屏幕上有没有窗口。
+            parts.append("browser in use")
         else:
             parts.append("local error" if result.fetcher_used == "parse" else "network error")
     else:
@@ -854,6 +858,17 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             "re-call the SAME url. Raising timeout will not help (nothing is "
             "listening is not the same as slow), and dropping cdp_url= answers a "
             "different question (the anonymous view of this page)."
+        )
+    elif err.startswith("browser_busy"):
+        # 批次 11：dhole 既不接管一台正在隐藏的浏览器（用户的 profile 会突然出现在屏幕
+        # 上，那像魔法），也不关掉一台（扔掉的可能是他正在用的标签页）。所以这一步归人。
+        next_action = (
+            "a browser is already running on that profile and this call asked for a "
+            "VISIBLE one - nothing was fetched. Either hand the current browser back "
+            "first (sys_state() lists session ids, sys_state(clear=['<session id>']) "
+            "closes one, clear=['sessions'] with confirm=true closes all) and re-call, "
+            "or drop headed=true and ride the browser that is already up. A visible "
+            "browser can serve hidden work, so the other direction never blocks."
         )
     elif err.startswith("schema_no_match"):
         next_action = ("no selector matched this page - re-check the selectors, or fetch "

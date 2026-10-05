@@ -314,7 +314,6 @@ from dhole_mcp.context import (
     _neural_focus_requested,
     _normalize_focus_engine,
     _note_clamped,
-    _stamp_browser_mode,
     _stamp_robots_mode,
 )
 
@@ -1126,8 +1125,8 @@ def _cdp_attach_gate(cdp_url: Optional[str], confirm: bool = False,
     )
 
 
-def _cdp_refusal_result(url: str, msg: str) -> "ResponseModel":
-    """The CDP refusal as an ordinary envelope, not a transport error.
+def _refusal_result(url: str, msg: str) -> "ResponseModel":
+    """A designed refusal as an ordinary envelope, not a transport error.
 
     两条 CDP 拒绝共用这只信封：闸门的首挂拒答（批次 7），以及端点连不上 / 没有登录
     上下文（批次 8-9）。前者从前 `raise`，于是一条拒绝被交给 transport 的通用异常处理
@@ -1142,6 +1141,17 @@ def _cdp_refusal_result(url: str, msg: str) -> "ResponseModel":
     ))
 
 
+def _tier_refusals() -> tuple:
+    """dhole 设计过的拒绝（名单住在 browser.TIER_REFUSALS，这里只搬一次）。
+
+    本地 import 与 `_browser_deps_available()` 同一口径：server 不在顶层 import
+    browser。名单只有一份 —— 三处读它（`_tier_error_text` 剪不剪、`stealthy_fetch`
+    折不折信封、拿会话那一步走不走信封），各列一遍就是第 7、9 批反复踩的那个洞。
+    """
+    from dhole_mcp.browser import TIER_REFUSALS
+    return TIER_REFUSALS
+
+
 def _tier_error_text(exc: BaseException) -> str:
     """A tier exception's text for the ``error`` field — clipped only when it is noise.
 
@@ -1152,13 +1162,9 @@ def _tier_error_text(exc: BaseException) -> str:
     """
     text = str(exc)
     try:
-        from dhole_mcp.browser import (CDPHostNotAllowedError,
-                                       CDPNoLoggedInContextError,
-                                       CDPUnreachableError)
-        if isinstance(exc, (CDPHostNotAllowedError, CDPNoLoggedInContextError,
-                            CDPUnreachableError)):
+        if isinstance(exc, _tier_refusals()):
             return text
-    except Exception:  # noqa: BLE001 - 没有浏览器层就没有这几个异常类
+    except Exception:  # noqa: BLE001 - 没有浏览器层就没有这些异常类
         pass
     return text[:200]
 
@@ -2550,7 +2556,7 @@ _REQUEST_PARAMS = frozenset({
 # 文档形状，不是动作）。
 _ACT_PARAMS = frozenset({
     "actions", "extraction_type", "max_content_chars", "focus", "timeout",
-    "anti_detect", "session_id", "cdp_url", "confirm", "check_login",
+    "anti_detect", "session_id", "cdp_url", "confirm", "check_login", "headed",
 })
 
 _SS_PARAMS = frozenset({
@@ -2961,7 +2967,8 @@ class MasterFetchServer:
             return entry
 
     async def _ensure_auto_session(self, *, lock_wait: Optional[float] = None,
-                                   profile_name: Optional[str] = None) -> str:
+                                   profile_name: Optional[str] = None,
+                                   headless: bool = True) -> str:
         """Get or create an auto-persistent browser session. Avoids browser startup on every fetch.
 
         Race-safe: if two concurrent calls both pass the initial check,
@@ -2992,6 +2999,12 @@ class MasterFetchServer:
         rung change rotates it. Before 17.0 B5-14a-2 this launcher passed neither,
         which quietly meant the shared browser — the one most stealthy calls ride
         — ran unhardened no matter what ``anti_detect`` said.
+
+        ``headless=False``（批次 11：只有 ``web_act(headed=true)`` 会走到这里）是一条
+        **不对称**的规矩。看得见的那台能干后台的活，所以后台请求照常复用一台热的可见
+        浏览器；反过来不行 —— 一台正在跑的 headless 浏览器不许被"接管成可见"（用户的
+        profile 突然出现在屏幕上，那像魔法而不像行为），也不许被"关掉再起一台可见的"
+        （扔掉的可能正是他在用的标签页）。那种情况具名拒绝，并把交回窗口的那一步说清。
         """
         if not _browser_deps_available():
             raise RuntimeError(
@@ -3017,7 +3030,9 @@ class MasterFetchServer:
                 return None, None
             entry = self._sessions[existing_id]
             if (getattr(self, "_auto_stealthy_profile", None) == want_profile
-                    and _session_identity(entry.session) == want_launch):
+                    and _session_identity(entry.session) == want_launch
+                    and (headless
+                         or not getattr(entry.session, "_headless", True))):
                 setattr(self, ts_attr, now())
                 self._ensure_idle_monitor()
                 return existing_id, None
@@ -3032,6 +3047,20 @@ class MasterFetchServer:
             reusable, stale = _scan()
         if reusable:
             return reusable
+        if not headless and stale:
+            # 要可见，而这个 profile 上已经有一台活着的（headless 或档位不符的）浏览器。
+            # 接管它 = 用户的 profile 突然变得看得见；关掉它 = 可能关掉他正在用的标签页。
+            # 两条都不做，具名拒绝，出路说清。
+            from dhole_mcp.browser import BrowserBusyError
+            raise BrowserBusyError(
+                "browser_busy: this call asked for a VISIBLE browser, but a browser is "
+                f"already running on profile {want_profile or '(no named profile)'} and "
+                "dhole will neither take over a hidden one nor close it - the second "
+                "option throws away tabs the user is standing in. Either hand that "
+                "browser back first (sys_state() lists session ids, "
+                "sys_state(clear=['<session id>']) closes one; clear=['sessions'] with "
+                "confirm=true closes all), or drop headed=true and let this call ride "
+                "the browser that is already up.")
 
         # Serialize creation: the startup warm-up and a concurrent fetch share ONE
         # creation. A second caller waits on the lock, then reuses — never a 2nd
@@ -3058,7 +3087,7 @@ class MasterFetchServer:
             # 那三颗是这一档在这台浏览器上的落点：两颗启动级的定下它的指纹，
             # solve_cloudflare 作为会话默认存着 —— 捕获动作不逐次传它，
             # 读的就是这一份。
-            sid = await self.open_session(headless=True, profile_name=want_profile,
+            sid = await self.open_session(headless=headless, profile_name=want_profile,
                                           hide_canvas=want_hard["hide_canvas"],
                                           block_webrtc=want_hard["block_webrtc"],
                                           solve_cloudflare=want_hard["solve_cloudflare"])
@@ -3158,13 +3187,17 @@ class MasterFetchServer:
                 now_ts = now()
                 async with self._sessions_lock:
                     # Check stealthy auto session (all reads under lock)
-                    # 批次 10：看得见的那台不归空闲回收管。它在等人打字，一次五分钟的
-                    # 停顿把窗口关掉，等于扔掉用户填了一半的登录表单 —— 而那看起来会像
-                    # 站点的问题，实际是 dhole 干的。headless 的自动浏览器照旧回收。
-                    from dhole_mcp.browser import _browser_headed
-                    _idle_out = (now_ts - self._auto_stealthy_last_used
-                                 > AUTO_SESSION_IDLE_TIMEOUT) and not _browser_headed()
-                    if self._auto_stealthy_id and _idle_out:
+                    # 批次 11：看得见的那台不归空闲回收管 —— 问的是那台浏览器自己的
+                    # `_headless`，不读任何外部旋钮（批次 10 读的是 env，那是"这次想要
+                    # 什么"，而这里要回答的是"屏幕上现在有没有一台"）。人在里面打字时
+                    # 把它关掉，扔掉的是半张登录表单，而那看起来像站点的问题。
+                    # headless 的自动浏览器照旧回收。
+                    _entry = self._sessions.get(self._auto_stealthy_id or "")
+                    _visible = (_entry is not None
+                                and not getattr(_entry.session, "_headless", True))
+                    if (self._auto_stealthy_id and not _visible
+                            and now_ts - self._auto_stealthy_last_used
+                            > AUTO_SESSION_IDLE_TIMEOUT):
                         close_stealthy = self._auto_stealthy_id
                         self._auto_stealthy_id = None
                     else:
@@ -3368,7 +3401,6 @@ class MasterFetchServer:
         # 事实记在两个地方**。现在只有一个地方。
         result = _annotate_quality(result)
         _stamp_robots_mode(result)
-        _stamp_browser_mode(result)
         # Only cache CLEAN content. Caching JS shells / bot challenges / geo
         # redirects / error statuses would serve broken pages from cache for
         # the whole TTL (and the cache-hit path doesn't restore the error field,
@@ -4001,11 +4033,6 @@ class MasterFetchServer:
                 + _install.browser_install_advice()
             )
 
-        # 这两支只在浏览器层在的时候可能存在；本地 import 与上面的
-        # _browser_deps_available() 同一口径（server 不在顶层 import browser）。
-        from dhole_mcp.browser import (CDPNoLoggedInContextError,
-                                       CDPUnreachableError)
-
         t0 = now()
         try:
             bulk = await self.bulk_stealthy_fetch(
@@ -4020,12 +4047,12 @@ class MasterFetchServer:
                 additional_args=additional_args, session_id=session_id,
                 page_action=page_action, probe_out=probe_out,
             )
-        except (CDPUnreachableError, CDPNoLoggedInContextError) as exc:
+        except _tier_refusals() as exc:
             # 批次 9：设计好的拒绝走信封。让它逃出去，`call_tool` 的兜底会把整条响应
             # 压成裸 {"error": ...}（[:300] 还剪尾巴），于是最需要 next_action /
-            # content_ok / summary 的那一条失败反而一个字段都没有。作者与闸门拒答共用
-            # `_cdp_refusal_result`，两条 CDP 拒绝因此是同一只信封。
-            return _cdp_refusal_result(url, _tier_error_text(exc))
+            # content_ok / summary 的那一条失败反而一个字段都没有。名单只有一份
+            # （browser.TIER_REFUSALS），信封与闸门拒答共用 `_refusal_result`。
+            return _refusal_result(url, _tier_error_text(exc))
         result = bulk.results[0]
         result.duration_ms = (now() - t0) * 1000
         return result
@@ -4113,6 +4140,9 @@ class MasterFetchServer:
 
 
         attached = False
+        # 批次 11：这台浏览器**实际**是怎么起来的（可见与否问的是实例，
+        # 不是问这次的请求）；两条车道各填一次，收尾统一说。
+        launch_note = ""
         _probe = probe_out if len(urls) == 1 else None
         # MVP-3 cookie 双向桥的开关：只有调用方**显式命名**的 session_id 才桥。
         # auto 会话的 id 不是调用方的会话（桥它会往 jar 里灌匿名浏览的 cookie）；
@@ -4138,6 +4168,10 @@ class MasterFetchServer:
                         "state from that session, including logins, did not ride along")
         if entry is not None:
             attached = bool(getattr(entry.session, "cdp_attached", False))
+            # 直接读，不留 getattr 的后路：`launch_note` 是 `BrowserSession` 上的
+            # 属性，每一条车道起来的都是它的实例。默认成 "" 就是把"这句话缺席"变成
+            # 一件正常的事 —— 而那正是这批要消灭的形状。
+            launch_note = entry.session.launch_note
             bridged = bool(bridge_sid) and not attached \
                 and not getattr(entry.session, "cdp_attached", False)
             if bridged:
@@ -4171,6 +4205,7 @@ class MasterFetchServer:
                 allowed_hosts=cdp_allowed,
             ) as session:
                 attached = session.cdp_attached
+                launch_note = session.launch_note
                 timed_tasks = [
                     _timed(session.fetch(url, page_action=page_action, probe_out=_probe))
                     for url in urls
@@ -4194,6 +4229,11 @@ class MasterFetchServer:
                             fetcher_used="stealthy", duration_ms=elapsed,
                         )
                     )))
+        if launch_note:
+            # 起的是看得见的那台，就得在回执里说一次：谁在看着、登录
+            # 留不留得住、以及怎么把它交回去。headless 是常态，不说。
+            for r in results:
+                r.metadata = {**(r.metadata or {}), "browser": launch_note}
         if attached:
             # G33：attach 过真实浏览器的响应必须可见地标出——这是用户已认证
             # 视角下的页面，不是公共内容，外层 agent 拿到就要按这个口径用。
@@ -4291,6 +4331,9 @@ class MasterFetchServer:
         timeout: Annotated[Optional[int | float], Field(description="Whole-call budget in milliseconds (default 60000 here - a browser launch plus a chain needs it; max 120000).")] = None,
         anti_detect: Annotated[Optional[Literal["off", "basic", "auto", "aggressive"]], Field(description=ANTI_DETECT_DESC_SHORT)] = None,
         session_id: Annotated[Optional[str], Field(description="Act inside this named session, so a login made earlier (or a jar the HTTP tier filled) is the state the page starts from.")] = None,
+        # 批次 11：可见性是"人在不在场"，不是反爬强度（档位表每一档都写死 headless，那张表管站点看到
+        # 什么指纹）。挂在 web_act 这一扇门上：要人辅助的活只有这一扇门。
+        headed: Annotated[bool, Field(description="Run this chain in a VISIBLE browser so the user can watch and step in - the login-by-hand case. Default false (headless, the tested rung). The ask is about the browser that RUNS this call: if a visible one is already warm, the chain rides it; if a hidden one is warm on the same profile, this is refused (browser_busy) rather than taking over someone's browser or closing their tabs. To hand that browser back first: sys_state(clear=['<session id>']).")] = False,
         cdp_url: Annotated[Optional[str], Field(description="Attach to a running Chrome (its own logged-in profile) and act there. The FIRST host is refused until the user approves it: read the receipt, ask, re-call with confirm:true.")] = None,
         confirm: Annotated[Optional[bool], Field(description="Two things need it and nothing else does: a submit action, and the first CDP attach to a host. Neither acts until this says true.")] = None,
         check_login: Annotated[Optional[bool], Field(description="After the chain, run the model-free login probe on the settled page: login_check with DOM signals and cookie NAMES, never values.")] = None,
@@ -4336,7 +4379,7 @@ class MasterFetchServer:
             url, actions=actions, extraction_type=extraction_type,
             max_content_chars=max_content_chars, focus=focus, timeout=timeout,
             anti_detect=anti_detect, session_id=session_id, cdp_url=cdp_url,
-            confirm=confirm, check_login=check_login, cache_ttl=0,
+            confirm=confirm, check_login=check_login, cache_ttl=0, headed=headed,
         )
 
     @_smart_fetch_request_context
@@ -4374,6 +4417,11 @@ class MasterFetchServer:
         nested_selector: Annotated[Optional[str], Field(description="Two layers in one call: a CSS selector on THIS page naming the elements to follow into the second layer (e.g. '.topic-card', 'a[href*=\"/works/\"]'). Each matched element becomes one record: its href is fetched (6 at a time, up to nested_max) and nested_fields are extracted from that page. The href is read from the element itself, else its first descendant <a>, else its nearest ancestor <a> - so a card that is not itself an <a> still resolves. Requires nested_fields; returns structured JSON; reads this page as a whole document. 0 links matched is reported as nested_no_match (the selector, or this page is a JS shell), not as an empty answer.")] = None,
         nested_fields: Annotated[Optional[Any], Field(description="What to read on each second-layer page, as a list: [{'name': '作品', 'selector': '.work-item a', 'type': 'array'}] or {'作品': '.work-item a'} (a JSON string is accepted). 'type': 'array' means every match on that page (a list of works); without it you get the first one. 1-12 fields, each selector guarded like schema= ones.")] = None,
         nested_max: Annotated[Optional[int], Field(description="How many of THIS page's matched links to expand (default 8, max 30). What the cap hid is reported as truncation=nested_budget in the summary, so 'these 8' is never mistaken for 'all of them'. Pass 0 to fan out nothing and just read this page.")] = None,
+        # 批次 11：这颗**不在 web_read 的 wire schema 上** —— 公开的门只有
+        # web_act(headed=true)。web_act 把动作链委托给 web_read 执行（它自己 return
+        # self.web_read(...)），所以可见性必须能从这里过；dispatch 按表外名拒掉调用方
+        # 直接传 headed，那是设计，不是漏。
+        headed: bool = False,
     ) -> ResponseModel:
         """Fetch a URL (or multiple URLs) with automatic anti-bot escalation.
 
@@ -4502,7 +4550,7 @@ class MasterFetchServer:
         gate_err, _cdp_allowed = _cdp_attach_gate(cdp_url, confirm=confirm,
                                                   targets=(urls or [url]))
         if gate_err:
-            return _cdp_refusal_result(url or "", gate_err)
+            return _refusal_result(url or "", gate_err)
         # `--cache-ttl` 之前是死参数：默认值在函数定义时就把模块常量焊进了签名，
         # 实例上的 self._cache_ttl 永远读不到。用 None 当哨兵，在这里解析。
         # 未显式设置时 self._cache_ttl == DEFAULT_TTL，所以除真正用了该旗标之外
@@ -4514,7 +4562,11 @@ class MasterFetchServer:
         # §3-19: the ladder is the only public spelling of these six. Resolved
         # once here so every tier call below keeps reading them by name.
         _hardening = _anti_detect(anti_detect)
-        headless = _hardening["headless"]
+        headless = _hardening["headless"] and not headed
+        # `headed` 只动这一位，不动档位表：可见性不是反爬强度（`rungs.py` 每一档写死
+        # headless=True，那张表管的是"站点看到什么指纹"），它管的是**人看不看得见**。
+        # 起一台可见的系统浏览器在指纹上反而更接近真人 —— 但那是副作用，不是这一档的
+        # 定义，所以它不是一档，是一颗参数。
         real_chrome = _hardening["real_chrome"]
         hide_canvas = _hardening["hide_canvas"]
         block_webrtc = _hardening["block_webrtc"]
@@ -5017,7 +5069,12 @@ class MasterFetchServer:
                 # needs the same reconciliation the fetch path gets there.
                 hit._validators = env.get("cache_validators", {}) or {}
                 _stamp_robots_mode(hit)
-                _stamp_browser_mode(hit)
+                # 缓存命中没起过任何浏览器。那句 "visible window" 是**上一次真抓取**
+                # 写进信封的，讲的是别的时刻的那台机器 —— 而"现在有没有窗口开着"从
+                # 缓存里读不出来，所以这里只能把它摘掉，不能重说（与 robots 那颗不同：
+                # 合规姿态本进程有一份现值，窗口形态没有）。
+                hit.metadata = {k: v for k, v in (hit.metadata or {}).items()
+                                if k != "browser"}
                 return _apply_chunking(hit, max_chars=mc, offset=offset)
 
         # 3. actions: page interactions (click/fill/press/wait/scroll) require
@@ -5629,13 +5686,18 @@ class MasterFetchServer:
             # 在专用 context 上安全（共享 auto 会话灌 cookie = 跨会话泄露），且
             # 专用 context 让登录态跨调用存活（登录流兜底路径的载体）。
             caller_sid = _SESSION_ID.get() or ""
-            if proxy or cdp_url:
-                ssid = None
-            elif caller_sid:
-                ssid = await self._ensure_session_browser(caller_sid,
-                                                          headless=headless)
-            else:
-                ssid = await self._ensure_auto_session()
+            try:
+                if proxy or cdp_url:
+                    ssid = None
+                elif caller_sid:
+                    ssid = await self._ensure_session_browser(caller_sid,
+                                                              headless=headless)
+                else:
+                    ssid = await self._ensure_auto_session(headless=headless)
+            except _tier_refusals() as exc:
+                # 拿会话这一步也会设计好地拒绝（批次 11 的 `browser_busy`：要一台可见的
+                # 而这台 profile 上已经有一台在跑）。走信封，与闸门拒答同一只。
+                return _refusal_result(url, _tier_error_text(exc))
             _login_probe: dict = {}
             result = await self.stealthy_fetch(
                 url, extraction_type=extraction_type,
@@ -7211,6 +7273,7 @@ class MasterFetchServer:
                     "cdp_url": {"type": "string", "description": "Attach a running Chrome (its own logged-in profile) and act there; the first attach to a host needs confirm=true."},
                     "confirm": {"type": "boolean", "description": "Two things need it: a submit action, and the first CDP attach to a host. Neither acts until this says true - and only put it there on the user's explicit yes."},
                     "check_login": {"type": "boolean", "description": "Model-free login probe on the settled browser page; returns login_check (DOM signals + cookie NAMES, never values)."},
+                    "headed": {"type": "boolean", "description": "Run this chain in a VISIBLE window so the user can watch and step in (log in by hand, one CAPTCHA). Default hidden. A hidden browser already up on that profile is neither taken over nor closed - refused (browser_busy). Consequences: sys_guide(topic='config', section='Variables by scenario')."},
                 },
             },
             # 它会动页面，所以不是只读；同一串动作再跑一遍不保证同一个答案。真正不可
@@ -7438,7 +7501,7 @@ class MasterFetchServer:
                 except Exception as e:
                     _log_tool_call(params.name, False, (now() - started) * 1000, str(e))
                     # 兜底仍是裸 {"error": ...}：走到这里说明这不是 dhole 设计过的拒绝
-                    # —— 那些自己走信封（闸门拒答见 `_cdp_refusal_result`，端点连不上与
+                    # —— 那些自己走信封（闸门拒答见 `_refusal_result`，端点连不上与
                     # 没有登录上下文见 `stealthy_fetch`），所以这里有 summary /
                     # next_action 可放，不必让 transport 替它们编一句。
                     error_text = json.dumps({"error": redact_api_key(str(e)[:300])})

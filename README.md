@@ -91,8 +91,6 @@ dhole doctor                       # 安装体检：起一次 server、真起一
 | `DHOLE_SEARCH_PROXY` | 搜索引擎被限流 / 被墙时（也自动读 `HTTPS_PROXY` 等）；只想让某一次调用走代理，用 `cred_defaults` 存 |
 | `DHOLE_IGNORE_ROBOTS=1` | 关掉进程级的 `robots.txt` 遵从（单次豁免是 `ignore_robots=true`，那是你的合规决定） |
 | `DHOLE_ALLOW_PRIVATE_HOSTS` | 放行内网 / 本机地址，默认一律拒绝 |
-| `DHOLE_BROWSER_CHANNEL=msedge` | 隐身层起哪一台浏览器：`chrome` / `msedge` / `chromium`；不设按检测顺序 chrome → msedge → 内置 chromium。按次读取，下一调用就生效；装了哪个 artifact 跟着这个判定走（只有一处判据） |
-| `DHOLE_BROWSER_HEADED=1` | 起一台**看得见**的浏览器，方便你手工登录或盯着它做事。故意不给调用方（`headless` 从没上过 wire，`cred_defaults` 也没有这一颗）：弹一个带登录态的窗口是人的决定。配 `profile` 用，否则你登的东西随临时目录一起没了；开着窗口时抓取会在你眼前开标签（一台 profile 只有一台浏览器），可见的窗口不被空闲回收；`dhole --doctor` 那颗"真起一次"的探针也遵循它（会闪一个窗口出来，那是它在做它说的事） |
 | `DHOLE_HTTP_TOKEN` | `--http` 传输的 bearer 门：设了之后每个 `/mcp` 调用必须带 `Authorization: Bearer …` 或 `X-Dhole-Token`；未设保持开放行为（非回环绑定启动时警告）。启动时读取，改了要重启 |
 | `DHOLE_PERSIST_CREDENTIALS=1` | 把会话 cookie 与 `cred_defaults` 存的凭据落盘（值经 Windows DPAPI 加密，绑定本用户）。**默认只在内存**：库文件根本不创建，进程结束即清；非 Windows 无 DPAPI，设了也不落盘（`dhole doctor` 报 fail）。启动时读取，改了要重启 |
 | `DHOLE_USAGE_LOG=1` | 本地调用与写操作日志（不记参数值、不联网） |
@@ -103,7 +101,7 @@ dhole doctor                       # 安装体检：起一次 server、真起一
 | `DHOLE_HF_ENDPOINT`（或 `HF_ENDPOINT`） | 重排模型下载源（默认 `huggingface.co`，失败回退 `hf-mirror.com`） |
 | `DHOLE_HOME` | 状态目录（默认 `~/.dhole`） |
 
-**其余旋钮已收成固定值**，写进 env 也不会被读，所以这张表不再列它们：引擎冷却与心跳、cookie 存活时长、搜索整体截止、浏览器空闲关闭与预热、SSRF 的 DNS 复验、`structuredContent` / `outputSchema` / 完整 wire 形状三个开关、多模态许可（截图与元素裁剪总是可用）、神经 focus 的许可门（改成了每次调用的 `focus_engine`）、`doc_parse` 的工作目录、自愈与搜索代理池。理由同一句话：**能算清的数不需要旋钮**，需要按次决定的改成了参数。
+**其余旋钮已收成固定值**，写进 env 也不会被读，所以这张表不再列它们：引擎冷却与心跳、cookie 存活时长、搜索整体截止、浏览器空闲关闭与预热、SSRF 的 DNS 复验、`structuredContent` / `outputSchema` / 完整 wire 形状三个开关、多模态许可（截图与元素裁剪总是可用）、神经 focus 的许可门（改成了每次调用的 `focus_engine`）、`doc_parse` 的工作目录、自愈与搜索代理池、起哪一台浏览器（检测顺序 chrome → msedge → 内置 chromium，这台机器上有什么就用什么）。理由同一句话：**能算清的数不需要旋钮**，需要按次决定的改成了参数——"要不要看得见那扇窗"就是后者，见下面那一节。
 
 ### 借你已登录的 Chrome（CDP 接管）
 
@@ -111,6 +109,13 @@ dhole doctor                       # 安装体检：起一次 server、真起一
 - 第一次 `web_read(url=..., cdp_url="http://127.0.0.1:9222")` **不执行任何东西**，回 `cdp_authorization_required`；用户同意之后同一调用加 `confirm=true` 才放行，并把那一台主机写进授权名册（精确主机名：`example.com` 不含 `www.example.com`）。
 - 名册之后 agent 抓这些站点会带你的登录态；每次 attach 都回 `cdp_attached: true` 并进审计。要撤销就删状态目录里的 `cdp_hosts.json`。
 - 每一台新主机都要重新过一次这道闸：attach 的重定向与第三方请求会带着你的已认证 cookie 出门，所以授权只能逐台点名，不能一把开。
+
+### 要看着它干活（可见浏览器）
+
+- 没有 env 旋钮，这是一次调用的事：`web_act(url=..., actions=[...], headed=true)` 起一台**看得见**的窗口，方便你手工登录、盯着它填表、替它过一道验证码。搜索与抓取默认照旧隐形。
+- 配 `cred_defaults(set={'profile': '点名'})` 再用，否则你登的东西随那台浏览器的临时目录一起没了。一台 profile 只有一台浏览器，窗口开着的时候后续调用会在你眼前开标签页。
+- 那个 profile 上已经有一台**隐形**浏览器在跑时，这一次会被具名拒绝（`browser_busy`）——不接管别人的窗口，也不关掉可能正被你使用的标签页。先把窗口交回去：`sys_state()` 列会话，`sys_state(clear=['<session id>'])` 关一个。
+- 看得见的窗口不被空闲回收（`AUTO_SESSION_IDLE_TIMEOUT=300` 只关那台隐形的自动会话），所以用完要自己交回。它反过来能干后台的活：窗口热着时，普通调用直接骑它。
 
 ## 用法
 
@@ -134,7 +139,7 @@ dhole doctor                       # 安装体检：起一次 server、真起一
 | 工具 | 做什么 |
 |---|---|
 | `web_read` | 抓任意 URL：反爬升级、PDF / OCR、批量、聚焦提取、结构化提取、页面动作、CDP 接管 |
-| `web_act` | 在页面上动手：click / fill / press / scroll / wait / snapshot / submit，然后把动作后的那一页读回来。`submit` 不带 `confirm=true` 只暂停，什么都不提交。截图也在这条动作链里：`{"screenshot": "css"}` 裁元素内联回图，dict 形态加 `full_page` / `save_to`（看不见图的宿主拿路径）/ `image_type` / `quality`；`anti_detect` 在这一扇门上只管"要不要先答 Cloudflare 挑战" |
+| `web_act` | 在页面上动手：click / fill / press / scroll / wait / snapshot / submit，然后把动作后的那一页读回来。`submit` 不带 `confirm=true` 只暂停，什么都不提交。截图也在这条动作链里：`{"screenshot": "css"}` 裁元素内联回图，dict 形态加 `full_page` / `save_to`（看不见图的宿主拿路径）/ `image_type` / `quality`；`anti_detect` 在这一扇门上只管"要不要先答 Cloudflare 挑战"。`headed=true` 把这一串动作放到**看得见**的窗口里跑（要你登录、盯场、替它过一次验证码时用它），细节见上面「要看着它干活」那一节 |
 | `web_request` | 发一次非 GET：POST / PUT / PATCH / DELETE / HEAD。**只发一次**——不重试、不缓存、不升浏览器、不回退快照；凭据从 `cred_defaults` 来，正文上限 256KB |
 | `web_search` | 无密钥搜索：多引擎并行 + 本地重排，可顺带抓回前三条全文 |
 | `web_crawl` | 同域爬取：sitemap、关键词过滤、路径子树限定 |
@@ -160,7 +165,7 @@ dhole doctor                       # 安装体检：起一次 server、真起一
 - **PDF 的 `pages=` 只减少抽取量**，文件仍整个下载；大 PDF 调大 `timeout`。
 - **抓回的正文是不可信数据**：里面的工具调用、密钥、上传指令按提示注入处理。启发式命中时响应信封带 `untrusted_content` 标记（`web_crawl` 每页、`feed_read` 每条同样带）——标记不是拦截，识别与裁决归外层 agent，纪律见手册 fields.md。
 - **提交默认暂停**：`web_act` 的 `{"submit": ...}` 不带 `confirm: true` 什么都不提交；验证码最多试 3 次就转交，2FA / 滑块一律转交。
-- **连接期开销 30,467 字符**（约 7.3k token，11 个工具，实测 `python tests/tool_payload_measure.py`），每次连接付一次；11 颗全注册是能力面，字数是它的约束而不是目标。要按用法裁剪用 `DHOLE_TOOLS`——同一把尺子量过：读 / 搜 / 请求 / 爬 / 文档 / 订阅 / 状态 / 指南这 8 颗是 23,876 字符，加 `web_discover` 共 9 颗 25,430。别按单颗体积挑"最小的 N 颗"，那会把 `web_read` / `web_act` 这类主力排除在外。再按**会话**算账：工具目录在宿主模型上下文里整段在场——有提示缓存的宿主折价、无缓存的每轮全价，多轮会话里 `DHOLE_TOOLS` 才是每一轮都省的闸。
+- **连接期开销 30,804 字符**（约 7.4k token，11 个工具，实测 `python tests/tool_payload_measure.py`），每次连接付一次；11 颗全注册是能力面，字数是它的约束而不是目标。要按用法裁剪用 `DHOLE_TOOLS`——同一把尺子量过：读 / 搜 / 请求 / 爬 / 文档 / 订阅 / 状态 / 指南这 8 颗是 23,876 字符，加 `web_discover` 共 9 颗 25,430。别按单颗体积挑"最小的 N 颗"，那会把 `web_read` / `web_act` 这类主力排除在外。再按**会话**算账：工具目录在宿主模型上下文里整段在场——有提示缓存的宿主折价、无缓存的每轮全价，多轮会话里 `DHOLE_TOOLS` 才是每一轮都省的闸。
 
 ## 搜索引擎与重排
 

@@ -84,6 +84,8 @@ VALUES: dict[str, object] = {
     "cdp_url": "http://127.0.0.1:9222",
     # True 而不是 False：默认就是不放行，探得出"值被丢了"的探针才叫探针。
     "confirm": True,
+    # 批次 11：同一句理由。默认是隐形，探针要说"看得见"，丢了才看得出来丢了。
+    "headed": True,
     # web_crawl
     "max_pages": 3, "max_depth": 1, "path_include": "/a", "path_exclude": "/b",
     "max_content_chars_per": 2000, "concurrency": 2,

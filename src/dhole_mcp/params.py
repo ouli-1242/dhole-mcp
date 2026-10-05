@@ -422,6 +422,10 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
     "web_act": {
         "actions": "rawlist", "timeout": "number", "max_content_chars": "int",
         "confirm": "bool", "check_login": "bool",
+        # `headed` 也是"做决定的那颗"，而且是这一颗把窗口开到用户的屏幕上：字符串
+        # 客户端的 `headed: "false"` 按裸值传是非空字符串 = 真，于是没人要窗口的调用
+        # 弹出一个来。它与 confirm 走同一只归一化。
+        "headed": "bool",
     },
     "web_search": {
         "max_results": "int", "cache_ttl": "int", "page": "int",

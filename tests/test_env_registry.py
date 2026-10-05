@@ -221,17 +221,21 @@ def test_w1_3_registry_has_no_duplicate_names():
     assert len(names) == len(set(names))
 
 
-def test_registry_covers_all_15_env_vars():
+def test_registry_covers_all_13_env_vars():
     """17.0 大众化一刀切把注册表从 39 收到 11（§3-20：注销的旋钮运行时静默
     忽略，只有 --doctor 认识它们）；G25 评审为 HTTP 传输加回
     `DHOLE_HTTP_TOKEN` 到 12，为凭据落盘开关加回 `DHOLE_PERSIST_CREDENTIALS`
-    到 13；批次 10 加回两颗"这台机器上跑哪一台浏览器、要不要看得见"
-    （`DHOLE_BROWSER_CHANNEL` / `DHOLE_BROWSER_HEADED`）到 15。
+    到 13。
+
+    批次 10 加过两颗（`DHOLE_BROWSER_CHANNEL` / `DHOLE_BROWSER_HEADED`）到 15，
+    批次 11 又整对退掉回到 13 —— 这条账留着不是为了纪念，是因为"**什么时候需要
+    人在场**"只有正在做事的那一方知道：写死进机器配置，每次切换都得人跑去命令行，
+    而 17.0 的卖点正是配置面小。能力落在 `web_act(headed=true)` 一扇门上。
     再删一个必须先改这里 —— 在有人 --doctor 的输出说谎之前先红。
     加回或新增一个旋钮同理。
     """
-    assert len(env_registry.ALL) == 15, (
-        f"expected 15 env vars, found {len(env_registry.ALL)}: "
+    assert len(env_registry.ALL) == 13, (
+        f"expected 13 env vars, found {len(env_registry.ALL)}: "
         f"{sorted(e.name for e in env_registry.ALL)}"
     )
 
