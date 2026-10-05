@@ -437,6 +437,33 @@ def _paywall_evidence(html: str) -> tuple[str, bool]:
     return " ".join("".join(parser.visible_text).split()), parser.has_active_attribute
 
 
+def visible_text_chars(html: str) -> int:
+    """这一页**自己**有多少可见字符（不经过抽取器）。
+
+    `detect_page_type` 的列表判据、抽取塌陷的分岔、以及"正文这么少到底是站点没给还是
+    我没抽到"的那个问句，用的都是这一把尺 —— 各量一遍就会各有一套阈值。
+    """
+    return len(_paywall_evidence(html)[0])
+
+
+#: 抽取塌陷的分界：抽出来的字数少于这一页自身可见字数的 50%，且这页至少给自己写了
+#: 400 个字符。两处读它，所以只有一个定义 —— `trafilatura_extractor` 用它决定要不要换
+#: recall 臂重试，`quality` 用它决定"正文很少"该不该被说成"这是个 JS 壳"。
+#: 实测基准（同一把尺）：books.toscrape 的 travel 列表页 196/1374=0.14 ⇒ 塌；
+#: quotes.toscrape 首页 2179/1681=1.30、gnu.org free-sw 25785/25245=1.02 ⇒ 不塌。
+#: 下限那 400 个字符挡的是真壳：SPA 的空 #app 在 DOM 里本来就没几个字，visible 到不了
+#: 这个门，于是它照样被判成壳、照样值得起浏览器。
+EXTRACT_COLLAPSE_RATIO = 0.5
+EXTRACT_COLLAPSE_MIN_VISIBLE = 400
+
+
+def is_extraction_collapsed(extracted_chars: int, visible_chars: int) -> bool:
+    """抽出来的字相对页面自己的字少到不成比例。"""
+    if visible_chars < EXTRACT_COLLAPSE_MIN_VISIBLE:
+        return False
+    return extracted_chars < visible_chars * EXTRACT_COLLAPSE_RATIO
+
+
 # A redirect via <meta http-equiv=refresh> or a JS location.href assignment.
 # The attribute value may be unquoted (http-equiv=REFRESH) — measured on a real
 # page, and a quoted-only pattern classified it as an ordinary page.

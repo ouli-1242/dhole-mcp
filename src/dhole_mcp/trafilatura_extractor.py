@@ -19,6 +19,10 @@ import trafilatura
 from lxml.etree import tostring
 from lxml.html import fromstring as html_fromstring
 
+# envelope 只有标准库依赖，不会绕回这颗模块（fetcher 会，所以那边是函数内延迟导入）。
+# 塌陷的分界因此只有一份定义：抽取侧用它决定要不要换臂，判定侧用它决定"少"怎么说。
+from dhole_mcp.envelope import is_extraction_collapsed, visible_text_chars
+
 logger = logging.getLogger("dhole_mcp.trafilatura_extractor")
 
 
@@ -140,6 +144,26 @@ def _restore_table_markdown(text: str, tokens: list) -> str | None:
     return text
 
 
+def _trafilatura_extract(html: str, url: str, *, favor_recall: bool = False) -> str | None:
+    """这一颗旋钮的每一次 trafilatura 调用都长这样，只有一处写法。
+
+    三处各写一遍参数表，就是下一次"某一臂忘了 `include_links`"的来路 —— 而塌陷重试与
+    默认臂之间的差别**只有** `favor_recall` 这一个旗。
+    """
+    return trafilatura.extract(
+        html, url=url, include_comments=False, include_tables=True,
+        include_links=True, output_format="markdown", favor_recall=favor_recall,
+    )
+
+
+def _visible_text_chars(html: str) -> int:
+    """这一页自己有多少可见字符 —— 尺子坏了就当没塌陷，不许把抽取一起弄坏。"""
+    try:
+        return visible_text_chars(html)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _trafilatura_markdown(html: str, url: str = "") -> str | None:
     """Best-effort markdown extraction using trafilatura.extract().
 
@@ -153,12 +177,7 @@ def _trafilatura_markdown(html: str, url: str = "") -> str | None:
     """
     html_for_traf, tokens = _table_to_markdown_tokens(html)
     # First: try trafilatura's native markdown (fast, good content filtering)
-    result = trafilatura.extract(
-        html_for_traf, url=url,
-        include_comments=False, include_tables=True,
-        include_links=True,
-        output_format="markdown",
-    )
+    result = _trafilatura_extract(html_for_traf, url)
     if result and tokens:
         restored = _restore_table_markdown(result, tokens)
         if restored is not None:
@@ -166,10 +185,22 @@ def _trafilatura_markdown(html: str, url: str = "") -> str | None:
         else:
             # A table would have been dropped: redo the extraction from the
             # original markup so the page at least keeps its flattened cells.
-            result = trafilatura.extract(
-                html, url=url, include_comments=False, include_tables=True,
-                include_links=True, output_format="markdown") or result
+            result = _trafilatura_extract(html, url) or result
             tokens = []
+    visible = _visible_text_chars(html)
+    from dhole_mcp.envelope import is_extraction_collapsed
+    if is_extraction_collapsed(len(result or ""), visible):
+        # 默认的内容选择把整棵 `<h3><a>` 子树丢掉了，`include_links=True` 在这种页面上
+        # 救不回来（它只在正文已被选中之后负责保链接）。换臂重试，而不是换工具：塌陷的是
+        # 抽取的宽严，不是页面。
+        recalled = _trafilatura_extract(html_for_traf, url, favor_recall=True)
+        if recalled and tokens:
+            recalled = _restore_table_markdown(recalled, tokens) or recalled
+        if recalled and len(recalled) > len(result or ""):
+            logger.debug("extraction collapsed (%d chars against %d visible) - "
+                         "kept the recall pass (%d)", len(result or ""), visible,
+                         len(recalled))
+            result = recalled
     # If trafilatura produced content WITH links, use it directly
     if result and "](" in result:
         return result
@@ -189,7 +220,13 @@ def _trafilatura_markdown(html: str, url: str = "") -> str | None:
             md_with_links = _md(cleaned, heading_style="ATX", strip=['img'])
             # Only use markdownify version if it has links and isn't too bloated
             # (max 3x the trafilatura text length to avoid nav noise).
-            if "](" in md_with_links and len(md_with_links) < len(result) * 3:
+            #
+            # 那个 3× 假设的是"trafilatura 的输出≈完整正文"。塌陷时这个前提**正好**不
+            # 成立（实测 196 vs 恢复出的 2,406），所以比例闸会把唯一一份带书名的文本当
+            # 灌水丢掉。因此比例闸下面垫一道绝对下限：只要这份恢复文本没有明显超过页面
+            # 自己可见文本的两倍，它就还不是导航灌水。
+            bloat_cap = max(len(result) * 3, visible * 2)
+            if "](" in md_with_links and len(md_with_links) < bloat_cap:
                 return md_with_links.strip()
         except Exception:
             pass

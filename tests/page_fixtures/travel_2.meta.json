@@ -1,0 +1,14 @@
+{
+  "captured_at": "2026-10-05",
+  "captured_from_url": "http://books.toscrape.com/catalogue/category/books/travel_2/index.html",
+  "sha256": "12647dc86ef4e070",
+  "kind": "list",
+  "content_links": 0,
+  "extracted_markdown_chars": 1640,
+  "visible_text_chars": 1374,
+  "label_share": 0.0,
+  "longest_nonlabel_run_chars": 130,
+  "note": "2026-10-05 实测报告里那次「抽取塌陷 → js_shell 误判」的现场件：纯静态列表页，11 本书，正文就是 11 个书名 + 价格 + 库存。修之前 trafilatura 默认臂只给回 196 个字符（11 个价格 + 11 个 In stock，书名 0 个），恰好压在 quality._JS_SHELL_MIN_TEXT_CHARS=200 下面 4 个字符，于是被判成 JS 壳、content_ok=false，并换来一次注定失败的浏览器升级。修之后 1,640 个字符、11 个书名俱在。",
+  "why_list_shape_is_zero": "content_links/label_share 都是 0 不是量错：这一页的 href 全是相对路径（../its-only-the-himalayas_981/index.html），而 _count_content_links 按 host 匹配同一域的连接。也就是说 detect_page_type 的列表分支在这里本来就没有证据可用，再加上每本书包在 <article class=\"product_pod\"> 里被 :740 那道 article 闸门排除 —— 这份件因此是「判据不能只靠列表形状」的正面证据，而不是列表判据的回归件。",
+  "scrubbed": "否：判定的证据就是整页的链接/文本分布，裁剪会让测量失真"
+}
