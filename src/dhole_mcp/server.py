@@ -1150,10 +1150,11 @@ def _tier_error_text(exc: BaseException) -> str:
     """
     text = str(exc)
     try:
-        from dhole_mcp.browser import CDPHostNotAllowedError
-        if isinstance(exc, CDPHostNotAllowedError):
+        from dhole_mcp.browser import (CDPHostNotAllowedError,
+                                       CDPNoLoggedInContextError)
+        if isinstance(exc, (CDPHostNotAllowedError, CDPNoLoggedInContextError)):
             return text
-    except Exception:  # noqa: BLE001 - 没有浏览器层就没有这个异常类
+    except Exception:  # noqa: BLE001 - 没有浏览器层就没有这两个异常类
         pass
     return text[:200]
 

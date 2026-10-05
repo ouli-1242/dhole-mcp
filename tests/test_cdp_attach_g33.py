@@ -17,6 +17,7 @@ import pytest
 
 from dhole_mcp.browser import (
     CDPHostNotAllowedError,
+    CDPNoLoggedInContextError,
     _create_route_handler,
     _login_verdict,
     _resolve_cdp_context,
@@ -188,6 +189,32 @@ class TestTheRefusalReachesTheCallerWhole:
         noise = RuntimeError("playwright call log " + "y" * 400)
         assert len(_tier_error_text(noise)) == 200, "噪声仍然要剪，否则信封被 call log 灌满"
 
+    def test_the_no_context_refusal_also_survives_the_clip(self):
+        """批次 8 那一支的 remedy 同样写在**结尾**，帽子不许吃它。"""
+        from dhole_mcp.server import _tier_error_text
+
+        real = CDPNoLoggedInContextError(
+            "cdp_no_logged_in_context: connected to the CDP endpoint, but it exposed "
+            "0 browser context(s) (0 target(s)), so there was no logged-in profile to "
+            "ride and NOTHING was fetched. Re-call the same url once; if it repeats, "
+            "check --user-data-dir and --remote-debugging-port.")
+        assert _tier_error_text(real) == str(real)
+
+    def test_the_no_context_refusal_gets_its_own_words(self):
+        """这一态从前没有词：它长得像一次成功的抓取，只是少了一个字段。"""
+        from dhole_mcp.server import ResponseModel, _with_agent_hints
+
+        out = _with_agent_hints(ResponseModel(
+            url=self.SITE, status=0, content=[], fetcher_used="none",
+            extracted_type="markdown",
+            error="cdp_no_logged_in_context: connected to the CDP endpoint, but it "
+                  "exposed 0 browser context(s), so NOTHING was fetched."))
+        assert "no logged-in context" in out.summary, out.summary
+        assert "network error" not in out.summary, "端点答过话了，没什么网络可查"
+        assert "NOTHING was fetched" in out.next_action and "anonymous" in out.next_action, \
+            out.next_action
+        assert "the SAME url once" in out.next_action, "先给那条不要钱的出路"
+
 
 class TestAttachIsPerCallNotPerBatch:
     """``urls=`` + ``cdp_url=`` 必须在闸口**之前**拒绝。
@@ -282,31 +309,68 @@ class TestCdpLaneReachesTheBrowser:
 # ─── attach 语义: contexts[0] 复用 ───────────────────────────────────────────
 
 class _FakeBrowser:
-    def __init__(self, contexts):
+    def __init__(self, contexts, targets=()):
         self.contexts = list(contexts)
         self.new_context_calls = 0
+        self._targets = list(targets)
 
     async def new_context(self, **kwargs):
         self.new_context_calls += 1
         self.last_context_options = kwargs
         return SimpleNamespace(kind="fresh")
 
+    def targets(self):
+        return list(self._targets)
+
 
 class TestResolveCdpContext:
+    """批次 8 的后半：端点报不出 context 时**拒答**，不是退回一个匿名 context。
+
+    判据来自 2026-10-05 的实测：同一台 Chrome、同一个 URL，第一通的信封里没有
+    `cdp_attached`，后面每一通都有。那一支走的就是 `new_context()` —— 一个隔离
+    profile，页面照样 200、内容照样是真的，只是没有登录态，而"没有"在这条 wire
+    上只表现为一个缺席的字段（默认 False 被折叠）。调用方点名 attach 只有一个理由：
+    要那个登录态。
+    """
+
     def test_reuses_default_context(self):
         default = SimpleNamespace(kind="default")
         browser = _FakeBrowser(contexts=[default])
-        context, reused = asyncio.run(_resolve_cdp_context(browser, {"color_scheme": "dark"}))
-        assert context is default
-        assert reused is True
+        assert asyncio.run(_resolve_cdp_context(browser)) is default
         assert browser.new_context_calls == 0
 
-    def test_falls_back_to_new_context_when_none_exist(self):
-        browser = _FakeBrowser(contexts=[])
-        context, reused = asyncio.run(_resolve_cdp_context(browser, {"color_scheme": "dark"}))
-        assert reused is False
-        assert browser.new_context_calls == 1
-        assert browser.last_context_options == {"color_scheme": "dark"}
+    def test_no_context_refuses_instead_of_answering_anonymously(self):
+        browser = _FakeBrowser(contexts=[], targets=[1, 2])
+        with pytest.raises(CDPNoLoggedInContextError) as got:
+            asyncio.run(_resolve_cdp_context(browser))
+        assert browser.new_context_calls == 0, "拒答就是连一个隔离 context 都不建"
+        text = str(got.value)
+        assert text.startswith("cdp_no_logged_in_context")
+        assert "0 browser context(s) (2 target(s))" in text, "它看见几个就报几个"
+        assert "NOTHING was fetched" in text
+        assert "Re-call the same url once" in text and "--user-data-dir" in text, \
+            "两条出路都得在文案里：再发一次，以及核对启动旗"
+
+    def test_the_anonymous_fallback_is_gone_from_the_source(self):
+        """反向守卫：这一支不许被改回 `new_context()`（改回去就是新的谎）。"""
+        import inspect
+
+        from dhole_mcp import browser as B
+
+        assert "new_context" not in inspect.getsource(B._resolve_cdp_context).split('"""')[2], \
+            "端点没有 context 时又去建匿名 context 了 —— 那一态必须是拒答"
+
+    def test_a_refused_attach_is_not_recorded_as_a_launch_failure(self):
+        """端点答了话、只是没有登录态可借 —— 这不该写进"装上了但起不来"那块盘。"""
+        import inspect
+
+        from dhole_mcp import browser as B
+
+        body = inspect.getsource(B.BrowserSession.start)
+        cut = body.index("except CDPNoLoggedInContextError")
+        after = body[cut:body.index("except Exception as e:")]
+        assert "record_launch_failure" not in after
+        assert "_cleanup_playwright" in after, "拒答也要把连接断开，不许留着一个 playwright"
 
 
 # ─── host fence 在 route 层机制执行 ──────────────────────────────────────────

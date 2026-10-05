@@ -268,10 +268,12 @@ def test_cdp_attach_sees_login_state_that_new_context_misses():
                 pw2 = await async_playwright().start()
                 browser2 = await pw2.chromium.connect_over_cdp(endpoint_b)
 
-                # dhole's own G33 helper must pick the default context.
+                # dhole's own G33 helper must pick the default context (批次 8:
+                # 报不出 context 时它现在拒答，不再退回 new_context)。
                 from dhole_mcp.browser import _resolve_cdp_context
-                ctx0, reused = await _resolve_cdp_context(browser2, {})
-                assert reused is True, "_resolve_cdp_context did not reuse contexts[0]"
+                ctx0 = await _resolve_cdp_context(browser2)
+                assert ctx0 is browser2.contexts[0], (
+                    "_resolve_cdp_context did not reuse contexts[0]")
 
                 p0 = await ctx0.new_page()
                 await p0.goto(site.base_url + "/whoami")

@@ -701,6 +701,11 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         # instead of asking the one question that moves it.
         if (result.error or "").startswith("cdp_authorization_required"):
             parts.append("awaiting approval")
+        elif (result.error or "").startswith("cdp_no_logged_in_context"):
+            # 批次 8：attach 连上了却没有登录上下文可借，也是"一次请求都没发"。
+            # 说成 network error 会把人送去查代理，而这里没什么可查——那一窗口的
+            # profile 里没有可复用的上下文。
+            parts.append("no logged-in context")
         else:
             parts.append("local error" if result.fetcher_used == "parse" else "network error")
     else:
@@ -820,6 +825,19 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             "widens it. Re-call with cdp_url= plus confirm=true to authorize the "
             "host THIS call names, or revoke one you no longer want with "
             "sys_state(clear=['cdp:host=<name>'])."
+        )
+    elif err.startswith("cdp_no_logged_in_context"):
+        # 批次 8：这一态从前不报错——它退回一个匿名 context，200、真内容、没有
+        # cookie，而"没有"只表现为一个缺席的字段。现在它拒答，所以这里的任务是把
+        # 两条真的出路说清楚，别让读者把空回执当成"这页是空的"。
+        next_action = (
+            "the attached browser exposed no logged-in context, so NOTHING was "
+            "fetched - an empty result here is not an empty page. Re-call the SAME "
+            "url once (a just-started endpoint sometimes reports its contexts late); "
+            "if it repeats, that cdp_url is not the window holding your logins - "
+            "start the signed-in browser with --user-data-dir pointing at that "
+            "profile and --remote-debugging-port at this port. Dropping cdp_url= "
+            "answers a different question (the anonymous view of this page)."
         )
     elif err.startswith("schema_no_match"):
         next_action = ("no selector matched this page - re-check the selectors, or fetch "

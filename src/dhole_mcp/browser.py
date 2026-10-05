@@ -257,6 +257,17 @@ class CDPHostNotAllowedError(RuntimeError):
     """
 
 
+class CDPNoLoggedInContextError(RuntimeError):
+    """attach 连上了端点，可端点没有报出任何 browser context —— 没有登录态可借。
+
+    批次 8。这一态从前**不是失败**：`_resolve_cdp_context` 退回 `new_context()`，
+    那是一个隔离 profile，页面照样 200、内容照样是真的，只是没有你的 cookie；而
+    `cdp_attached` 默认 False 会被 wire 折叠掉，于是「登录态没跟上」与「这颗字段
+    不适用」字节相同。调用方点名 attach 只有一个理由——要那个登录态，所以答一个
+    匿名视图就是答非所问。判失败，一个字节都不抓。
+    """
+
+
 _PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 # 17.0：``DHOLE_BROWSER_PROFILE`` 已注销（运行时静默忽略）。命名 profile 的
@@ -264,8 +275,8 @@ _PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # launch 一律用一次性临时目录，storage-state 持久化经 session 桥仍可用。
 
 
-async def _resolve_cdp_context(browser: Any, context_options: Dict[str, Any]) -> Tuple[Any, bool]:
-    """attach 语义的核心（G33）：复用 CDP 端点已有的 default context。
+async def _resolve_cdp_context(browser: Any) -> Any:
+    """attach 语义的核心（G33 → 批次 8）：复用 CDP 端点已有的 default context。
 
     Playwright 语义：``connect_over_cdp`` 之后 ``browser.contexts[0]`` 是远端
     浏览器的 default context——用户 profile 的 cookie / storage 都在那里；
@@ -273,14 +284,28 @@ async def _resolve_cdp_context(browser: Any, context_options: Dict[str, Any]) ->
     200、但登录态是空的"）。MVP-0 证伪实验（tests/e2e_cdp_attach_test.py）
     验证的正是这个差别。
 
-    Returns ``(context, reused_default)``。端点没有任何 context 时（罕见的裸
-    headless 端点）退回 ``new_context()``——此时拿不到登录态，调用方的
-    cdp_attached 标记会如实反映。
+    批次 8 改的是**没有 context 时的那一支**：从前退回 ``new_context()``（一个
+    匿名视图，且 `cdp_attached=false` 会被 wire 折叠掉，读起来和成功一模一样），
+    现在**拒答**：一个字节都不抓，错误里带上端点报出的 target 数与两种解释
+    （端点冷得还没报出 context → 原样重发一次；attach 到的不是装着你登录的那个
+    窗口 → 去核对 `--user-data-dir` / `--remote-debugging-port`）。
     """
     contexts = list(getattr(browser, "contexts", None) or [])
     if contexts:
-        return contexts[0], True
-    return await browser.new_context(**context_options), False
+        return contexts[0]
+    targets = len(list(getattr(browser, "targets", lambda: [])() or []))
+    raise CDPNoLoggedInContextError(
+        f"cdp_no_logged_in_context: connected to the CDP endpoint, but it exposed "
+        f"0 browser context(s) ({targets} target(s)), so there was no logged-in "
+        "profile to ride and NOTHING was fetched. attach exists only to reuse the "
+        "cookies already in that browser, and an isolated context would answer "
+        "with an anonymous view that is only visible as an absent field - so it "
+        "is refused instead. Re-call the same url once (a just-started endpoint "
+        "sometimes reports its contexts late); if it repeats, the endpoint you "
+        "attached is not the window holding your logins - check that Chrome was "
+        "started with --user-data-dir pointing at that profile and "
+        "--remote-debugging-port at this port."
+    )
 
 
 # 登录探测（G35 check_login）。判定全在页面形状与 cookie 名上，不引入任何模型、
@@ -1420,8 +1445,9 @@ class BrowserSession:
                 # 用户 profile 的全部 cookie / storage。此前这里调 new_context()，
                 # 那是新建隔离 profile："连上已登录的 Chrome"实际拿到的永远是
                 # 空登录态（请求会通、内容是真的，就是没登录——最难发现的 bug）。
-                self._context, self._cdp_attached = await _resolve_cdp_context(
-                    self._browser, context_options)
+                # 批次 8：端点报不出 context 时不再退回 new_context()，而是拒答。
+                self._context = await _resolve_cdp_context(self._browser)
+                self._cdp_attached = True
             else:
                 # Persistent context: temp dir by default; a named profile under
                 # ~/.dhole/profiles/<name>/ when the caller (or
@@ -1466,6 +1492,11 @@ class BrowserSession:
             self._is_alive = True
             logger.info(f"Browser session started (stealthy={self._is_stealthy}, "
                         f"cdp_attached={self._cdp_attached})")
+        except CDPNoLoggedInContextError:
+            # 端点答了话，只是没有登录态可借：这不是"浏览器起不来"，不该进
+            # launch 故障记录（那一块盘是给下一个进程读"装上了但跑不起来"的）。
+            await self._cleanup_playwright()
+            raise
         except Exception as e:
             logger.error(f"Browser session start failed: {e}")
             # 三态里最难自己发现的那一态（在场、起不来）只有写下来才看得见：本进程
