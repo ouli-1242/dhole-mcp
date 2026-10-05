@@ -118,6 +118,8 @@ With a proxy running, the HTTP tier's loopback traffic can be intercepted by the
 
 This machine runs a source-installed personal fork with self-update off: `git pull && python -m pip install -e .` then restart the host. Any change to `env` in the MCP config also needs a host restart.
 
+- A code update reaches the **server** at that restart, but the **host may keep answering `tools/list` from its own cache**: a parameter added in this version can read as "does not exist" when you inspect the schema and still work when you call it (observed live 2026-10-05 with `web_act`'s `headed`). Behaviour is the authority - make the call. An unknown name is refused loudly and lists what that tool actually takes, so one probe settles it; concluding "this dhole lacks the capability" from a cached schema is how a working door gets walked past.
+
 ## Diagnostic command quick reference
 
 | Command | Purpose |
