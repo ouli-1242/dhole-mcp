@@ -73,6 +73,22 @@ def check(a: dict, calls: list[dict], text: str) -> tuple[bool, str]:
         # 读的是"那颗参数出现的那一次调用"，不是第一次调用（见 _best_args）。
         args = _best_args(calls, tool, path)
 
+    if kind == "any_of":
+        # 组合断言（F-A-J2）：分支内全要，分支间任一。存在是为了让「两条都合法
+        # 的路」不再被迫只判一条 —— tag-pages 三档全红量出的就是尺子与语料在
+        # 『哪条路才算对』上打架（nested 扇出 vs 贴上限的 urls= 批量）。
+        for branch in a.get("branches", []):
+            results = [check(sub, calls, text) for sub in branch]
+            if all(ok for ok, _ in results):
+                return True, " / ".join(w for _, w in results)
+        miss = [sub.get("name") or sub.get("path") or sub.get("type")
+                for branch in a.get("branches", []) for sub in branch]
+        return False, f"no branch matched (needs one of: {miss})"
+    if kind == "no_identical_retry":
+        seq = [json.dumps(c.get("args") or {}, ensure_ascii=False, sort_keys=True)
+               for c in calls if c.get("tool") == tool]
+        dupes = sum(1 for x, y in zip(seq, seq[1:]) if x == y)
+        return dupes == 0, f"{dupes} identical consecutive retry(ies)"
     if kind == "tool_count":
         n = sum(1 for c in calls if c.get("tool") == tool)
         ok = {">=": n >= want, "==": n == want, "<=": n <= want}[op]
@@ -100,6 +116,11 @@ def check(a: dict, calls: list[dict], text: str) -> tuple[bool, str]:
             return True, f"{path}={_string(got)[:60]}"
         if op == "contains":
             return _string(want) in _string(got), f"{path}={_string(got)[:60]}"
+        if op == "len_ge":
+            n = len(got) if isinstance(got, list) else None
+            if n is None:
+                return False, f"{path} is not a list (len_ge measures batches)"
+            return n >= want, f"{path} len={n} (>= {want})"
         n = _num(got)
         if n is None:
             return False, f"{path}={got!r} is not a number"
@@ -119,6 +140,26 @@ def check(a: dict, calls: list[dict], text: str) -> tuple[bool, str]:
             return bool(got), f"matched {got[:2]}" if got else f"none of {want[:3]}"
         return want in text, f"{'found' if want in text else 'missing'} {want!r}"
     raise ValueError(f"unknown assertion type {kind!r}")
+
+
+def score_case(case: dict, calls: list[dict], text: str) -> tuple[int, int, list]:
+    """一格的判分：返回 (计入的通过数, 计入的分母, [(断言行, ok, 说明)])。
+
+    record_only 的断言（few_calls，2026-10-06 判探针是合理保守行为）照印不进
+    分母 —— 它们记录行为形状，不再决定一格的红绿。
+    """
+    rows = []
+    row_pass = 0
+    n = 0
+    for a in case["assertions"]:
+        ok, why = check(a, calls, text)
+        if a.get("record_only"):
+            rows.append((a["name"], ok, why, True))
+            continue
+        row_pass += ok
+        n += 1
+        rows.append((a["name"], ok, why, False))
+    return row_pass, n, rows
 
 
 def main() -> int:
@@ -145,15 +186,13 @@ def main() -> int:
             if not calls:
                 print(f"  {case['id']:<{width}} NO EVIDENCE (run did not record)")
                 continue
-            row_pass = 0
-            for a in case["assertions"]:
-                ok, why = check(a, calls, text)
-                row_pass += ok
-                mark = "ok  " if ok else "MISS"
-                print(f"  {case['id']:<{width}}{mark} {a['name']}: {why}")
-            n = len(case["assertions"])
+            row_pass, n, rows = score_case(case, calls, text)
+            for name, ok, why, record in rows:
+                mark = ("note" if record else ("ok  " if ok else "MISS"))
+                print(f"  {case['id']:<{width}}{mark} {name}: {why}")
             passed += row_pass == n
-            print(f"  {case['id']:<{width}}→ {row_pass}/{n}")
+            print(f"  {case['id']:<{width}}→ {row_pass}/{n}"
+                  + (" (+record_only)" if any(r[3] for r in rows) else ""))
         print(f"  cells fully green: {passed}/{len(spec['evals'])}")
         total[arm] = passed
 

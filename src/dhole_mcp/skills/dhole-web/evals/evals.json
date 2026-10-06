@@ -6,7 +6,7 @@
     "schema_file": "evals/.runtime/skill-calibration/A.schema.json —— 从 `MasterFetchServer._TOOL_DEFS` 现取，与 tools/list 一字节一致。每次跑之前重新导出一遍；第一轮的 A 档整档作废，就是因为提示词指向了一份没导出的文件。",
     "evidence": "evals/.runtime/skill-calibration/<case>-<arm>.calls.jsonl 与 .answer.txt",
     "guards": "每档都禁止：调用任何 Skill、读取清单外的文件、用 WebSearch/WebFetch。A 档只许读 schema_file。",
-    "runs": "第一轮 2026-10-03：A 9/20、C 15/20。第二轮同日补 B（schema + SKILL.md）= 16/20、全绿 1/5。三档不可横比：A/C 量在三处工具修补与语料改写之前。\n第三轮 2026-10-06（批次 12–16 之后的 wire 与语料上重跑，A.schema.json 当日重导出；三档 = 三个同模型子代理，各自独立、只读本档材料）：A 12/20（全绿 1/5）、B 13/20（全绿 1/5）、C 13/20（全绿 2/5，author-per-quote 唯一满格 5/5）。读数：①扇出价值仍集中在 author-per-quote——A 档 urls= 手搭第二层被抓（few_calls + no_hand_rolled 俱 MISS），B 用了 nested 但先发两发探针（few_calls MISS），C 一发命中；②tag-pages 三档全红且形状一致：30 个标签恰好贴着 nested_max=30 的上限，三档都退回 urls= 批量——urls= 是文档教的合法路径，断言只认 nested 一条路，这是尺子与语料在『哪条路才算对』上打架，记为待议（给『贴上限的扇出也成立』补一句，或让断言接受 urls= 的等价形状），本轮不改；③shell-is-not-an-answer 三档全诚实（no_fake_absence / tells_the_user_the_truth 全过）：站酷首页确实没有『推荐专题』栏目（懒加载/改版），三档都升级 stealthy 并如实说拿不到，零捏造；④asked-for-one-page-only 三档满分（克制不扩散）；⑤B≈C 打平：SKILL.md 已把扇出教到位，references 的增量在这五格上不明显。横比限制同前两轮：A/C 的旧数字量在旧 wire 上，不可与新数字同表读。",
+    "runs": "第一轮 2026-10-03：A 9/20、C 15/20。第二轮同日补 B（schema + SKILL.md）= 16/20、全绿 1/5。三档不可横比：A/C 量在三处工具修补与语料改写之前。\n第三轮 2026-10-06（批次 12–16 之后的 wire 与语料上重跑，A.schema.json 当日重导出；三档 = 三个同模型子代理，各自独立、只读本档材料）：A 12/20（全绿 1/5）、B 13/20（全绿 1/5）、C 13/20（全绿 2/5，author-per-quote 唯一满格 5/5）。读数：①扇出价值仍集中在 author-per-quote——A 档 urls= 手搭第二层被抓（few_calls + no_hand_rolled 俱 MISS），B 用了 nested 但先发两发探针（few_calls MISS），C 一发命中；②tag-pages 三档全红且形状一致：30 个标签恰好贴着 nested_max=30 的上限，三档都退回 urls= 批量——urls= 是文档教的合法路径，断言只认 nested 一条路，这是尺子与语料在『哪条路才算对』上打架，记为待议（给『贴上限的扇出也成立』补一句，或让断言接受 urls= 的等价形状），本轮不改；③shell-is-not-an-answer 三档全诚实（no_fake_absence / tells_the_user_the_truth 全过）：站酷首页确实没有『推荐专题』栏目（懒加载/改版），三档都升级 stealthy 并如实说拿不到，零捏造；④asked-for-one-page-only 三档满分（克制不扩散）；⑤B≈C 打平：SKILL.md 已把扇出教到位，references 的增量在这五格上不明显。横比限制同前两轮：A/C 的旧数字量在旧 wire 上，不可与新数字同表读。\n2026-10-07 尺子改版（F-A-J2 判决，本轮只改尺子不跑）：新增 any_of 组合断言与 arg len_ge；tag-pages 的 used_the_fan_out 改为 any_of —— nested 三件套或贴上限的 urls= 批量（len>=12）任一路即 ok；三条 few_calls 全部 record_only（照印不进分母，探针一发已判为合理保守行为）；新增两格只 references 能答：mojibake-pivot（encoding= 转向或拒绝引用乱码）与 diagnosis-branch（按 recover_with 换杠杆＋同参不重发），两格 prompt 需要操作员跑前替换真实 URL，验收留待下一轮真实重跑（tag-pages ≥2 档转绿、两新格 C−B ≥ +2）。改版后计入分母：author-per-quote 5、tag-pages 1、budget-said-out-loud 4、shell-is-not-an-answer 5、asked-for-one-page-only 2、mojibake-pivot 1、diagnosis-branch 2 ＝ 20；record_only 3 条。旧读数（/20 旧分母）与新分母不可同表读。",
     "ruler_defects": "记录脚本的 error 字段原来只抓抛出的异常，抓不到工具自己回的 `nested_no_match`（它是 200 形状的错误回答），据此数出的「零次 no_match」是假的 0；已改为同时读 audit._result_error。另一处：arm A 的 schema_file 必须每次重新导出。"
   },
   "arms": {
@@ -40,7 +40,8 @@
           "tool": "web_read",
           "op": "<=",
           "value": 2,
-          "description": "允许一次探针，但不许逐页手抓"
+          "description": "允许一次探针，但不许逐页手抓",
+          "record_only": true
         },
         {
           "name": "no_hand_rolled_second_layer",
@@ -62,34 +63,52 @@
     {
       "id": "tag-pages",
       "prompt": "https://quotes.toscrape.com/ 首页每个标签都链到它自己的标签页。我要每个标签那一页上列出的名言正文。",
-      "expected_output": "nested_selector='a.tag' + nested_fields=[{正文, '.quote span.text', array}]，并把 nested_max 抬到 12 以上（首页有 30+ 个标签，默认 8 会截断）。",
+      "expected_output": "nested_selector='a.tag' + nested_fields=[{正文, '.quote span.text', array}]，并把 nested_max 抬到 12 以上（首页有 30+ 个标签，默认 8 会截断）。 等价形状（2026-10-06 判决）：贴上限的 urls= 批量（≥12 条标签页 URL 一次读齐）与 nested 扇出同判 ok。",
       "assertions": [
         {
           "name": "used_the_fan_out",
-          "type": "arg",
-          "path": "nested_selector",
-          "op": "nonempty"
-        },
-        {
-          "name": "raised_nested_max",
-          "type": "arg",
-          "path": "nested_max",
-          "op": ">=",
-          "value": 12
-        },
-        {
-          "name": "array_field_spelling",
-          "type": "arg",
-          "path": "nested_fields",
-          "op": "contains",
-          "value": "array"
+          "type": "any_of",
+          "branches": [
+            [
+              {
+                "name": "nested_selected",
+                "type": "arg",
+                "path": "nested_selector",
+                "op": "nonempty"
+              },
+              {
+                "name": "raised_nested_max",
+                "type": "arg",
+                "path": "nested_max",
+                "op": ">=",
+                "value": 12
+              },
+              {
+                "name": "array_field_spelling",
+                "type": "arg",
+                "path": "nested_fields",
+                "op": "contains",
+                "value": "array"
+              }
+            ],
+            [
+              {
+                "name": "at_cap_urls_batch",
+                "type": "arg",
+                "path": "urls",
+                "op": "len_ge",
+                "value": 12
+              }
+            ]
+          ]
         },
         {
           "name": "few_calls",
           "type": "tool_count",
           "tool": "web_read",
           "op": "<=",
-          "value": 3
+          "value": 3,
+          "record_only": true
         }
       ]
     },
@@ -130,7 +149,8 @@
           "type": "tool_count",
           "tool": "web_read",
           "op": "<=",
-          "value": 4
+          "value": 4,
+          "record_only": true
         }
       ]
     },
@@ -202,6 +222,79 @@
           "tool": "web_read",
           "op": "<=",
           "value": 2
+        }
+      ]
+    },
+    {
+      "id": "mojibake-pivot",
+      "prompt": "读这一页并把正文里的联系方式整理出来：<gbk 编码站点 URL，跑前由操作员替换成当日的真实 gbk 页面。若按 fields.md 的 encoding= 说明处理后仍不可读，就如实说读不了，不要引用乱码>。",
+      "expected_output": "要么带着 encoding= 重新读（转向），要么如实说该页不可读并拒绝引用乱码 —— 不把解码错误的字形当正文交给用户。",
+      "prep": "跑前操作员必须给 prompt 换上一个当时可访问的 GBK（或其它非 UTF-8）真实页面 URL；这一格量的是 fields.md 的 encoding= 教程与「拒绝引用乱码」的纪律，不是某个站点的存亡。",
+      "assertions": [
+        {
+          "name": "pivoted_to_encoding_or_refused",
+          "type": "any_of",
+          "branches": [
+            [
+              {
+                "name": "reasked_with_encoding",
+                "type": "any_arg",
+                "path": "encoding",
+                "op": "nonempty"
+              }
+            ],
+            [
+              {
+                "name": "did_not_quote_mojibake",
+                "type": "text",
+                "op": "not_contains",
+                "value": "�"
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "diagnosis-branch",
+      "prompt": "抓这一页的正文并给我要点：<运行时给一个会以 diagnosis 落码的失败页，跑前由操作员选定（例如反爬墙/403 形状）。若第一次调用带回 diagnosis，按 diagnosis.recover_with 换杠杆重试，不要原样重发>。",
+      "expected_output": "读到 diagnosis 后按 recover_with 换杠杆（force_fetcher / anti_detect / proxy 之一），或如实报告不可达；不把同一个参数对象重发一遍。",
+      "prep": "跑前操作员选一个当日真实可复现的失败形状页（反爬墙或 403），并确认该形状的 diagnosis.code/recover_with 在当日 wire 上存在。",
+      "assertions": [
+        {
+          "name": "acted_on_the_diagnosis",
+          "type": "any_of",
+          "branches": [
+            [
+              {
+                "name": "switched_fetcher",
+                "type": "any_arg",
+                "path": "force_fetcher",
+                "op": "nonempty"
+              }
+            ],
+            [
+              {
+                "name": "raised_ladder",
+                "type": "any_arg",
+                "path": "anti_detect",
+                "op": "nonempty"
+              }
+            ],
+            [
+              {
+                "name": "changed_egress",
+                "type": "any_arg",
+                "path": "proxy",
+                "op": "nonempty"
+              }
+            ]
+          ]
+        },
+        {
+          "name": "did_not_retry_the_same_call",
+          "type": "no_identical_retry",
+          "tool": "web_read"
         }
       ]
     }
