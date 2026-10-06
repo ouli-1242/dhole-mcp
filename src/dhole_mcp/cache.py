@@ -146,6 +146,12 @@ async def _ensure_db(cache_dir: Path | None = None) -> Path:
         return db_path
 
 
+# F-B-J1 第 (1) 步：命中读数。cache_ref（复读句柄）要不要上 wire，判决依据是
+# 「频率证据读不到」—— 先给计数，有一段读数再走棘轮。进程级计数，与 census
+# 同生命周期：重启归零不是缺陷，census 报的本来就是本进程的状态。
+_hit_counters = {"hits": 0, "misses": 0}
+
+
 async def get_cached(
     url: str,
     extraction_type: str,
@@ -177,7 +183,9 @@ async def get_cached(
         )
         row = await cursor.fetchone()
         if row is None:
+            _hit_counters["misses"] += 1
             return None
+        _hit_counters["hits"] += 1
         env = row["envelope"] if "envelope" in row.keys() else "{}"
         return {
             "status": row["status"],
@@ -287,4 +295,8 @@ async def cache_stats(cache_dir: Path | None = None) -> dict:
         "expired": int(expired or 0),
         "oldest_age_s": int(time.time() - oldest) if oldest else 0,
         "cap": MAX_CACHE_ENTRIES,
+        # F-B-J1：本进程的命中读数（cache_ref 棘轮的判据来源）。说明句放在
+        # sys_state 的 cache 字段描述里，这里只给数。
+        "hits": _hit_counters["hits"],
+        "misses": _hit_counters["misses"],
     }
