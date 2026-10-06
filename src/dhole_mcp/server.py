@@ -687,8 +687,8 @@ DEFAULT_MAX_CONTENT_CHARS = max(
 DHOLE_INSTRUCTIONS = (
     "Dhole is the web toolkit: use it when a built-in fetch/search fails or is blocked, or the page needs JavaScript, PDF/OCR, or multi-URL batching. Bypasses anti-bot walls (Cloudflare), reads PDFs incl. scans (OCR), and searches 8 engines keylessly.\n"
     "Routing:\n"
-    "- Content of a URL you already have (page or PDF): web_read. urls=[...] for a known list; focus= cuts tokens on long pages; pages= for PDF ranges.\n"
-    "- Many pages from one site and you don't have the URLs yet: web_crawl (sitemap=true maps it, then web_read(urls=[...]) reads the picks).\n"
+    "- Content of a URL you already have (page or PDF): web_read. urls=[...] for a known list; focus= cuts tokens on long pages.\n"
+    "- Many pages from one site, URLs unknown: web_discover maps it (sitemap=true = one request), web_crawl reads them, web_read(urls=[...]) a known list.\n"
     "- Finding what to fetch: web_search - then web_read the top hits. NEVER answer from search snippets alone.\n"
     "- RSS/Atom changelogs or release notes: feed_read.\n"
     "- Local file: doc_parse.\n"
@@ -719,9 +719,15 @@ _INSTRUCTIONS_INTRO = (
 )
 _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "web_read": "- Content of a URL you already have (page or PDF): web_read. "
-    "urls=[...] for a known list; focus= cuts tokens on long pages; pages= for PDF ranges.\n",
-    "web_crawl": "- Many pages from one site and you don't have the URLs yet: web_crawl "
-    "(sitemap=true maps it, then web_read(urls=[...]) reads the picks).\n",
+    "urls=[...] for a known list; focus= cuts tokens on long pages.\n",
+    # F-A-J1：web_discover 是注册了却没有路的目的地。map/crawl/read 三件事共享
+    # 一行：两把键挂同一句，_compose_instructions 按行文本去重 —— 全量只发一次，
+    # 任一只带其中一颗的子集也各有路可循（跨工具提名与 web_search 行点名
+    # web_read 是同一惯例）。
+    "web_discover": "- Many pages from one site, URLs unknown: web_discover maps it "
+    "(sitemap=true = one request), web_crawl reads them, web_read(urls=[...]) a known list.\n",
+    "web_crawl": "- Many pages from one site, URLs unknown: web_discover maps it "
+    "(sitemap=true = one request), web_crawl reads them, web_read(urls=[...]) a known list.\n",
     "web_search": "- Finding what to fetch: web_search - then web_read the top hits. "
     "NEVER answer from search snippets alone.\n",
     "feed_read": "- RSS/Atom changelogs or release notes: feed_read.\n",
@@ -770,11 +776,18 @@ def _compose_instructions(enabled: frozenset) -> str:
     The routing section names only ENABLED tools - routing an agent to a tool
     the server did not register just burns a failed call. Every tool with a
     routing line here is a destination, so a subset of tools that have none
-    gets no "Routing:" header at all.
+    gets no "Routing:" header at all. One line may route several tools
+    (web_discover / web_crawl / web_read(urls=) share theirs): the keys agree
+    on the text, and a shared line is emitted once per composition, not once
+    per key.
     """
-    lines = "".join(
-        line for name, line in _INSTRUCTIONS_ROUTING.items() if name in enabled
-    )
+    seen: set[str] = set()
+    parts: list[str] = []
+    for name, line in _INSTRUCTIONS_ROUTING.items():
+        if name in enabled and line not in seen:
+            seen.add(line)
+            parts.append(line)
+    lines = "".join(parts)
     routing = f"Routing:\n{lines}" if lines else ""
     return _INSTRUCTIONS_INTRO + routing + _INSTRUCTIONS_RULES
 

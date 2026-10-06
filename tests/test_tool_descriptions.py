@@ -68,7 +68,9 @@ def test_instructions_routes_known_url_list_to_fetch(tools):
     low = DHOLE_INSTRUCTIONS.lower()
     assert "web_read" in low and "web_crawl" in low
     assert "already have" in low, "未说明「已有 URL 用 web_read」"
-    assert "don't have the urls" in low, "未说明「需先发现 URL 才用 web_crawl」"
+    # F-A-J1 落地后 crawl 行与 web_discover 共享一句，发现侧的标记是 "URLs
+    # unknown"（旧措辞 "don't have the URLs" 随旧行一起退役）。
+    assert "urls unknown" in low, "未说明「需先发现 URL 才用 web_crawl/web_discover」"
 
 
 # ─── 事实性：描述里的声明必须和代码一致 ────────────────────────────────

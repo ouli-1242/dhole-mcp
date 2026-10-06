@@ -236,7 +236,13 @@ def test_connect_stays_inside_the_packed_budget():
 #: 不可逆 —— 写 False 是主动错报，删键落回 spec 默认 true，声明从错变保守。
 #: 实测 -24 → **31,026**（评审按源码字面量预估 -26，wire compact 序列化口径不同，
 #: 以尺子为准）。
-CONNECT_CEILING = 31_026
+#: 2026-10-07 web_discover 路由行（F-A-J1）：棘轮**往下**。11 颗注册工具里唯独
+#: 它在连接期没有路 —— map/crawl/read 三件事共享一行（两把键挂同一句，装配器按
+#: 行文本去重，全量只发一次；任一只带其一的子集也各有路）；web_read 行删
+#: `pages= for PDF ranges`（pages= 在 web_read 自己的 schema 里，不丢信息）。
+#: 实测 -10 → **31,016**（评审预估 -14：crawl 行 +13 实测一致，read 行估 -27
+#: 实为 -23，仍以尺子为准）。
+CONNECT_CEILING = 31_016
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

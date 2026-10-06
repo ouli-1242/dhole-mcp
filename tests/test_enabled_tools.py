@@ -178,8 +178,13 @@ class TestInstructionsFollowTheEnabledSet:
         assert "gov/edu/github" in text
 
     def test_no_routing_header_when_nothing_routable_is_enabled(self):
-        text = server_mod._compose_instructions(frozenset({"web_discover"}))
+        # F-A-J1 落地后每颗注册工具都有路由行 —— 这个用例原本拿 web_discover 当
+        # "无可路由"的例子，而 discover 没有路正是那一刀关掉的缺口。现在唯一的
+        # 无可路由情形是空集与表外名。
+        text = server_mod._compose_instructions(frozenset())
         assert "Routing:" not in text, "没有可路由的工具时留着空 Routing: 头是废话"
+        foreign = server_mod._compose_instructions(frozenset({"not_a_tool"}))
+        assert "Routing:" not in foreign
 
     def test_every_routing_line_names_its_own_tool(self):
         for name, line in server_mod._INSTRUCTIONS_ROUTING.items():
