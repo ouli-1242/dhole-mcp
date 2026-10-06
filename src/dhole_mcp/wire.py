@@ -80,6 +80,8 @@ _WIRE_OMIT: dict = {
         "engines_consensus", "source_type",
         # G4：official=False（绝大多数行）省略；True 才上线（+15 chars/行）。
         "official",
+        # 批次8 刀5：行级注入标记只在命中时上线（None=干净行，缺席即默认）。
+        "untrusted_content",
     }),
     "SearchResponseModel": frozenset({
         "engines_used", "engine_blocked", "engine_empty", "engine_preempted",
