@@ -289,6 +289,7 @@ from dhole_mcp.context import (
     _ARG_NOTES,
     _AUTH_SENT,
     _BODY,
+    _BOILERPLATE_LINES_COLLAPSED,
     _CACHE_CTX,
     _CONTENT_TYPE,
     _CSS_SELECTOR,
@@ -695,7 +696,7 @@ DHOLE_INSTRUCTIONS = (
     "- A non-GET request (POST / PUT / PATCH / DELETE / HEAD): web_request, never web_read. It is sent once - no retry, no cache, no replay, because a replay writes twice.\n"
     "- Cookies behind session_id=, the fetch cache, engine cooldowns: sys_state (no arguments = the census; clear= to erase).\n"
     "- The same proxy, credential or anti-detect rung on every call: cred_defaults stores it once (a credential needs its host) and each later response names what it used.\n"
-    "- Unsure how to write a call, what a field means, or why something failed: sys_guide(topic) reads dhole's own handbook - one call, no setup, and the deep syntax of actions / schema lives there.\n"
+    "- Unsure how to write a call or read a response: sys_guide(topic) - dhole's own handbook, no setup.\n"
     "Parameters:\n"
     "- Every parameter is named at the TOP LEVEL of the call: {\"url\": \"https://x\", \"focus\": \"q\"} - nothing is nested. A name the tool does not accept raises rather than being dropped.\n"
     "Reading any response:\n"
@@ -736,9 +737,8 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "cred_defaults": "- The same proxy, credential or anti-detect rung on every "
     "call: cred_defaults stores it once (a credential needs its host) and each "
     "later response names what it used.\n",
-    "sys_guide": "- Unsure how to write a call, what a field means, or why something failed: "
-    "sys_guide(topic) reads dhole's own handbook - one call, no setup, and the deep "
-    "syntax of actions / schema lives there.\n",
+    "sys_guide": "- Unsure how to write a call or read a response: "
+    "sys_guide(topic) - dhole's own handbook, no setup.\n",
 }
 _INSTRUCTIONS_RULES = (
     # 17.0 B4 · 放置规则只在连接期说一份：参数住在顶层，别处没有第二个家。
@@ -2664,6 +2664,9 @@ _SS_PARAMS = frozenset({
     # covers it and reported; `before` is refused by search.py with the reason.
     "after", "before",
     "min_raw_relevance",
+    # #8 共识感知扇出：只作用于 fetch_content 的自动取正文，是"够不够独立佐证"
+    # 的地板（不是第三个相关性排序旋钮）。
+    "fetch_min_consensus",
 })
 # The complete set of names each tool accepts at the top level. `url=` and
 # friends that are NOT in *_PARAMS (web_crawl's focus,
@@ -2686,7 +2689,8 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     "web_discover": frozenset({"url", "sitemap", "path_include", "path_exclude",
                                "max_pages", "search", "timeout"}),
     "web_search": _SS_PARAMS | {"query"},
-    "doc_parse": frozenset({"file_path", "cwd", "encoding", "offset"}),
+    "doc_parse": frozenset({"file_path", "cwd", "encoding", "offset",
+                            "pages", "password"}),
     "feed_read": frozenset({"urls", "max_items", "timeout", "since"}),
     # 17.0 §4：sys_state 是 cache_clear 与 close_session 合上来的一颗。三个参数全都
     # 可选 —— 裸调用是名册，而名册是"要关哪个"之前唯一能问的问题。这张表同时是已知
@@ -2837,6 +2841,10 @@ def _normalize_schema(schema: Any) -> Optional[dict]:
         text = schema.strip()
         if not text:
             return None
+        # `schema="auto"` 是文档承诺过的写法（见 structured.py 的 extract_structured），
+        # 但此前只有 `{"type":"auto"}` 能过 —— 裸串在 JSON 解析那一步就报错。补上。
+        if text.lower() == "auto":
+            return {"type": "auto"}
         try:
             schema = json.loads(text)
         except (ValueError, TypeError) as e:
@@ -2844,6 +2852,8 @@ def _normalize_schema(schema: Any) -> Optional[dict]:
                 f"schema was passed as a string but is not valid JSON ({e}). "
                 'Pass it as an object: {"properties": {"title": {"selector": "h1"}}}'
             ) from None
+        if isinstance(schema, str) and schema.strip().lower() == "auto":
+            return {"type": "auto"}
     if not isinstance(schema, dict):
         raise ValueError(
             f"schema must be a JSON object, got {type(schema).__name__}. "
@@ -4524,7 +4534,7 @@ class MasterFetchServer:
         method: Annotated[Optional[str], Field(description="HTTP verb for the request: GET (default), HEAD, POST, PUT, DELETE or PATCH. HEAD asks for status + size + content-type only and returns no body (size is the server's Content-Length, so 0 when the server omits it - example.com does). A non-GET is sent once (not retried, not cached, not escalated to the browser or the archive): a write must not be repeated, and a browser replay would answer about a GET to the same URL, not about your POST.")] = None,
         body: Annotated[Optional[Any], Field(description="Request body for POST/PUT/DELETE/PATCH (max 256 KB). A dict is sent as a form; with content_type=application/json it is sent as JSON; a string is sent as-is. Ignored for GET/HEAD (said so in the summary).")] = None,
         content_type: Annotated[Optional[str], Field(description="Content-Type for the body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json.")] = None,
-        schema: Annotated[Optional[Dict[str, Any]], Field(description="JSON schema for structured data extraction. Each property can have a 'selector' (CSS) for direct DOM extraction. Returns structured JSON instead of markdown. No LLM needed. Needs a non-empty 'properties' map (a JSON string is also accepted); an unusable schema raises instead of silently returning markdown. A property carrying its OWN 'properties' (or items.properties) plus a selector extracts one record per matched element, child selectors evaluated inside that element - how a repeated list (quotes, products, rows) keeps its grouping instead of flattening into one array of every tag on the page. Up to 200 records per field.")] = None,
+        schema: Annotated[Optional[Dict[str, Any]], Field(description="JSON schema for structured data extraction. Each property can have a 'selector' (CSS) for direct DOM extraction. Returns structured JSON instead of markdown. No LLM needed. Needs a non-empty 'properties' map (a JSON string is also accepted); an unusable schema raises instead of silently returning markdown. Pass the bare string 'auto' (or {\"type\": \"auto\"}) to detect the page's own structure with no selectors - the reply then also carries a reusable '_schema' proposal. A property carrying its OWN 'properties' (or items.properties) plus a selector extracts one record per matched element, child selectors evaluated inside that element - how a repeated list (quotes, products, rows) keeps its grouping instead of flattening into one array of every tag on the page. Up to 200 records per field.")] = None,
         confirm: Annotated[bool, Field(description="Approval for a first-time sensitive action on this call. Today that means cdp_url: attaching your real Chrome hands over every logged-in site's cookies, so the FIRST attach for a site is refused with cdp_authorization_required and nothing executed - re-call with confirm=true to authorize that site (remembered on disk; sys_state(clear=['cdp:host=<name>']) revokes one host, clear=['cdp_hosts'] revokes all). False (default) = nothing sensitive is approved.")] = False,
         # 17.0 §5 E-13：两层摊平。三颗参数一起读才读得通，所以描述里互相点名。
         nested_selector: Annotated[Optional[str], Field(description="Two layers in one call: a CSS selector on THIS page naming the elements to follow into the second layer (e.g. '.topic-card', 'a[href*=\"/works/\"]'). Each matched element becomes one record: its href is fetched (6 at a time, up to nested_max) and nested_fields are extracted from that page. The href is read from the element itself, else its first descendant <a>, else its nearest ancestor <a> - so a card that is not itself an <a> still resolves. Requires nested_fields; returns structured JSON; reads this page as a whole document. 0 links matched is reported as nested_no_match (the selector, or this page is a JS shell), not as an empty answer.")] = None,
@@ -4595,6 +4605,9 @@ class MasterFetchServer:
         extra_headers = None
         anti_detect = _idvals["anti_detect"]
         _IDENTITY_APPLIED.set(_idnote)
+        # 逐调用清零：抽取路径在缓存命中时根本不跑，不清就会把上一次的折叠条数
+        # 带到这一页的信封上（"这次删了几行"必须只讲这一次）。
+        _BOILERPLATE_LINES_COLLAPSED.set(0)
         # §5 E-13 的三颗参数在**任何请求发出之前**解析完：一个读不懂的字段规格如果
         # 走到第二层才被发现，调用方付了 1 + 8 次请求的钱，收到的却是 8 个空对象。
         _nested_n = 0
@@ -6809,13 +6822,16 @@ class MasterFetchServer:
 
     async def doc_parse(
         self,
-        file_path: Annotated[str, Field(description="Absolute or relative path to a local file. Supported: .html, .htm, .xhtml, .docx, .xlsx, .csv, .pdf, .md, .markdown, .txt, .json, .yaml, .yml, .pptx, .odt")],
+        file_path: Annotated[str, Field(description="Absolute or relative path to a local file. Supported: .html, .htm, .xhtml, .docx, .xlsx, .xlsm, .csv, .tsv, .pdf, .md, .markdown, .txt, .json, .yaml, .yml, .pptx, .odt")],
         cwd: Annotated[Optional[str], Field(description="Base directory for a relative file_path. Ignored for absolute paths.")] = None,
         encoding: Annotated[Optional[str], Field(description="Charset to decode text-based files with (.html/.csv/.md/.txt/.json/.yaml; e.g. 'gbk', 'big5', 'shift_jis', 'cp1252'). Leave unset to auto-detect; pass it when the result looks like mojibake or when metadata.encoding names the wrong charset.")] = None,
         offset: Annotated[Optional[int], Field(description="Character offset into the parsed document, to continue a truncated read (default 0). Same paging contract as web_read: when is_truncated is true the summary names a Next offset, and THAT number is what you pass back here.")] = 0,
+        pages: Annotated[Optional[str], Field(description="PDF only: '1-5' or '1,3,5-7'. Narrows what is EXTRACTED, not what is downloaded; pick ranges from table_of_contents. Ignored for every other format.")] = None,
+        password: Annotated[Optional[str], Field(description="PDF only: password for an encrypted PDF. Without it an encrypted file cannot be read at all. Ignored for every other format.")] = None,
     ) -> ResponseModel:
         """Parse a local file to Markdown. Supports .html/.htm/.xhtml, .docx,
-        .xlsx, .csv, .pdf, .md/.markdown/.txt, .json/.yaml/.yml, .pptx, .odt.
+        .xlsx/.xlsm, .csv/.tsv, .pdf, .md/.markdown/.txt, .json/.yaml/.yml,
+        .pptx, .odt.
 
         .html/.csv are decoded from bytes, not assumed UTF-8: BOM first, then
         your encoding argument, then UTF-8, then GB18030 (which covers GBK and
@@ -6824,13 +6840,19 @@ class MasterFetchServer:
         is reported as a failure rather than passed off as content.
 
         PDFs go through the same extractor web_read uses for PDF URLs, so a
-        local file gets identical handling (OCR fallback, quality signals).
-        A PDF that has a URL is still better served by web_read, which can
-        also do page ranges and passwords.
+        local file gets identical handling (OCR fallback, quality signals, page
+        ranges and passwords included). A PDF that has a URL is still better
+        served by web_read.
+
+        Pre-2007 Office files (.doc/.xls/.ppt) are OLE2/CFB rather than zips and
+        are refused BY MAGIC BYTES, so one renamed to .docx is named for what it
+        really is instead of surfacing python-docx's PackageNotFoundError. The
+        refusal says how to convert one.
 
         .pptx and .odt are read from the zip + XML they already are, so no extra
-        dependency is needed; what a text reader cannot carry (speaker notes,
-        layout, styles, images, comments) is named in the first line instead of
+        dependency is needed; .pptx speaker notes come through under the slide
+        they belong to (marked `> Notes:`), and what a text reader cannot carry
+        (layout, styles, images, comments) is named in the first line instead of
         going missing quietly. .json/.yaml are returned as text but validated:
         an invalid file is an error, not a dump of unreadable bytes.
         """
@@ -6864,7 +6886,8 @@ class MasterFetchServer:
             ))
 
         content, error, extras = await asyncio_to_thread(
-            parse_file_detailed, target, encoding or ""
+            parse_file_detailed, target, encoding or "",
+            pages=pages, password=password,
         )
         # A damaged decode is a failure to report, not content to hand over
         # quietly: the caller cannot tell mojibake from text, and a citation
@@ -7028,6 +7051,7 @@ class MasterFetchServer:
         before: Optional[str] = None,
         fetch_content: bool = False,
         fetch_schema: Optional[Dict[str, Any]] = None,
+        fetch_min_consensus: int = 0,
         min_relevance: float = 0.0,
         min_raw_relevance: float = 0.0,
     ) -> SearchResponseModel:
@@ -7056,6 +7080,27 @@ class MasterFetchServer:
             return SearchResponseModel(
                 query=query, results=[], total_results=0,
                 duration_ms=0, error=str(e),
+            )
+
+        # #8：共识地板的两条"表外用法"在发请求前就拒掉。静默忽略一颗显式给出的
+        # 参数，正是本项目一直在防的那类失败（"看起来成功、其实参数没生效"）——
+        # 一颗地板 1 什么也过滤不掉（每行至少一个家族），而没开 fetch_content 时
+        # 它根本没有作用对象。
+        if fetch_min_consensus and fetch_min_consensus < 2:
+            return SearchResponseModel(
+                query=query, results=[], total_results=0, duration_ms=0,
+                error=("fetch_min_consensus must be 0 (off) or >= 2: every result "
+                       "has at least one contributing index family, so a floor of 1 "
+                       "filters nothing."),
+                next_action="Drop fetch_min_consensus, or set it to 2 or more.",
+            )
+        if fetch_min_consensus >= 2 and not fetch_content:
+            return SearchResponseModel(
+                query=query, results=[], total_results=0, duration_ms=0,
+                error=("fetch_min_consensus only applies with fetch_content=true - "
+                       "without it nothing is auto-fetched, so the floor has nothing "
+                       "to gate."),
+                next_action="Add fetch_content=true, or drop fetch_min_consensus.",
             )
 
         try:
@@ -7092,6 +7137,17 @@ class MasterFetchServer:
             high_results = [r for r in result.results if r.fetch_relevance == "high"][:3]
             if not high_results:
                 high_results = result.results[:3]
+            # #8 共识感知扇出：地板只在调用方点名时施加（默认 0 = 行为逐位不变）。
+            # 闸门是纯函数，三条边界（分母≤1 不适用 / 清空则照实抓 0 页 / 逐条回报）
+            # 都在 search.gate_by_consensus 里写死并有独立测试。
+            from dhole_mcp.search import gate_by_consensus
+            high_results, _consensus_skipped, _consensus_note = gate_by_consensus(
+                high_results, fetch_min_consensus)
+            if _consensus_skipped:
+                result.consensus_skipped = [r.url for r in _consensus_skipped]
+            if _consensus_note:
+                result.summary = (f"{result.summary} | {_consensus_note}"
+                                  if result.summary else _consensus_note)
             for sr in high_results:
                 try:
                     page_result = await self.web_read(
@@ -7107,6 +7163,9 @@ class MasterFetchServer:
                         "title": sr.title,
                         "content": "\n".join(page_result.content)[:3000] if page_result.content else "",
                         "content_ok": page_result.content_ok,
+                        # 共识串跟着页面走：闸门没开时它也是"这页被几家独立索引
+                        # 确认过"的免费判据，让调用方不必回头对照结果列表。
+                        "engines_consensus": sr.engines_consensus,
                     })
                 except Exception as e:
                     # Surface the failure instead of silently dropping the page,
@@ -7116,6 +7175,7 @@ class MasterFetchServer:
                         "url": sr.url, "title": sr.title, "content": "",
                         "content_ok": False,
                         "error": redact_api_key(str(e)[:200]),
+                        "engines_consensus": sr.engines_consensus,
                     })
             result.fetched_pages = fetched_pages
 
@@ -7279,7 +7339,7 @@ class MasterFetchServer:
     _TOOL_DEFS: list[dict] = [
         {
             "name": "web_read",
-            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: web_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: on a hard block, content_ok can be true of a dated Wayback snapshot - check source + archived_at. No parameter disables it.\n- Every parameter has its own top-level name: pass it beside url=, nothing is nested; a name the tool does not accept raises.\n- Touching the page is web_act, and this tool changes nothing it fetches. The deep shape of schema and the browser/session knobs is not here: sys_guide(topic='behavior') is the handbook, sys_guide(topic='call') the placement traps.",
+            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: web_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: on a hard block, content_ok can be true of a dated Wayback snapshot - check source + archived_at. No parameter disables it.\n- Touching the page is web_act, and this tool changes nothing it fetches. The deep shape of schema and the browser/session knobs is not here: sys_guide(topic='behavior') is the handbook, sys_guide(topic='call') the placement traps.",
             "inputSchema": {
                 "type": "object",
                 # web_read needs one of the two; the schema said nothing at
@@ -7365,7 +7425,7 @@ class MasterFetchServer:
             # 17.0 §4 第 4 行。描述里那四条一次性规则是从 web_read 的 method 分支
             # 搬过来的：搬工具不许搬走规矩，所以它们在这里一个字都不能少。
             "name": "web_request",
-            "description": "Send ONE non-GET request (POST / PUT / PATCH / DELETE / HEAD) and read back what the server answered. Reading a page is web_read; GET here is refused.\n- A write is sent ONCE: not retried (an earlier call may already have committed), not cached, not escalated to the browser, never answered from archive.org.\n- A write acts only with confirm=true (the user's explicit yes): stored credentials for the host ride along automatically. HEAD is a probe and needs none.\n- Credentials are not a parameter: cred_defaults stores auth / cookies for that host and this call carries them; identity_applied names what it ran on. Bodies cap at 256KB - this retrieves, it does not upload.\n- There is no anti_detect here on purpose: a write never renders. Check where a URL goes first: web_read follows redirects and reports the landing URL. Answer shape: sys_guide(topic='behavior', section='web_request').",
+            "description": "Send ONE non-GET request (POST / PUT / PATCH / DELETE / HEAD) and read back what the server answered. Reading a page is web_read; GET here is refused.\n- A write is sent ONCE: not retried (an earlier call may already have committed), not cached, not escalated to the browser, never answered from archive.org.\n- A write acts only with confirm=true (the user's explicit yes). HEAD is a probe and needs none.\n- Credentials are not a parameter: cred_defaults stores auth / cookies for that host and this call carries them; identity_applied names what it ran on. Bodies cap at 256KB - this retrieves, it does not upload.\n- There is no anti_detect here on purpose: a write never renders. Check where a URL goes first: web_read follows redirects and reports the landing URL. Answer shape: sys_guide(topic='behavior', section='web_request').",
             "inputSchema": {
                 "type": "object", "required": ["url", "method"],
                 "properties": {
@@ -7384,7 +7444,7 @@ class MasterFetchServer:
         },
         {
             "name": "web_crawl",
-            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, web_read(urls=[...]) fetches them directly - no crawl needed.\n- Every parameter is a top-level argument; nothing is nested. url= names the site the crawl stays inside.\n- Caps: max_pages (1-40, default 10), max_depth(2), max_content_chars_per per page, max_total_chars for the whole run (default 60000), deadline_ms. Whichever one bites is named in the summary.\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed') and robots_skipped counts them. ignore_robots=true overrides.\n- Map-then-fetch: web_discover (or sitemap=true here) maps it, web_read(urls=[...]) reads the picks. Drop counters and politeness: sys_guide(topic='behavior', section='web_crawl').",
+            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, web_read(urls=[...]) fetches them directly - no crawl needed.\n- url= names the site the crawl stays inside.\n- Caps: max_pages (1-40, default 10), max_depth(2), max_content_chars_per per page, max_total_chars for the whole run (default 60000), deadline_ms. Whichever one bites is named in the summary.\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed') and robots_skipped counts them. ignore_robots=true overrides.\n- Map-then-fetch: web_discover (or sitemap=true here) maps it, web_read(urls=[...]) reads the picks. Drop counters and politeness: sys_guide(topic='behavior', section='web_crawl').",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
@@ -7429,7 +7489,7 @@ class MasterFetchServer:
         },
         {
             "name": "web_search",
-            "description": "Keyless multi-engine web search (default pool = all 8 engines: baidu,bing,sogou,so360,bing_global,yandex,brave,duckduckgo). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- fetch_content=true auto-fetches the top 3; otherwise web_read the high fetch_relevance hits with focus=. Don't search for a URL you already have - web_read it directly.\n- min_relevance / min_raw_relevance (0-1) drop low-relevance results - two different scales, read which one you are setting.\n- Result fields: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index FAMILIES, so a low value can mean a degraded pool - check consensus_basis. Engine matrix: sys_guide(topic='behavior', section='web_search').",
+            "description": "Keyless multi-engine web search (default pool = all 8 engines: baidu,bing,sogou,so360,bing_global,yandex,brave,duckduckgo). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- fetch_content=true auto-fetches up to 3; otherwise web_read the high fetch_relevance hits with focus=. Don't search for a URL you already have - web_read it directly.\n- min_relevance / min_raw_relevance (0-1) drop low-relevance results - two different scales, read which one you are setting.\n- Result fields: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index FAMILIES, so a low value can mean a degraded pool - check consensus_basis. Engine matrix: sys_guide(topic='behavior', section='web_search').",
             "inputSchema": {
                 "type": "object", "required": ["query"],
                 "properties": {
@@ -7451,6 +7511,7 @@ class MasterFetchServer:
                     "before": {"type": "string", "description": "REFUSED, not ignored: presets only bound 'not older than' and results carry no publish date, so nothing could honour it. For dated items use feed_read(since=)."},
                     "fetch_content": {"type": "boolean", "description": "Pull the top hits' full text inside this same call (default false) instead of returning snippets."},
                     "fetch_schema": {"type": "object", "additionalProperties": True, "description": "{properties: {...}} applied to the pages fetched by fetch_content, instead of their markdown - the same shape rules as web_read's schema."},
+                    "fetch_min_consensus": {"type": "integer", "description": "fetch_content only: keep only hits corroborated by >= N independent index families (min 2; 0 = off). Skipped URLs are in consensus_skipped."},
                     "min_relevance": {"type": "number", "description": "0-1 cutoff on the NORMALIZED rerank score. Below it results are dropped, not re-ordered."},
                     "min_raw_relevance": {"type": "number", "description": "0-1 floor on the reranker's RAW score instead - the one that can call a whole round irrelevant. fetch_hint reports the raw span the round had."},
                 },
@@ -7485,14 +7546,16 @@ class MasterFetchServer:
         },
         {
             "name": "doc_parse",
-            "description": "Use for LOCAL files the task references (the supported-extension list lives on file_path) -> Markdown, no web fetch. A PDF that has a URL is better served by web_read (page ranges, password, table_of_contents).\n.html/.csv are decoded by charset detection, not assumed UTF-8: metadata.encoding names the charset used, and a wrong guess comes back as an error whose next_action says to re-call with encoding=. .pptx/.odt need no extra install; what a text reader cannot carry (speaker notes, layout, images) is named in the output's first line rather than vanishing from it. .json/.yaml are validated, not just echoed. Relative paths: pass cwd when the host doesn't tell the server the working directory.",
+            "description": "Use for LOCAL files the task references (the supported-extension list lives on file_path) -> Markdown, no web fetch. A PDF that has a URL is better served by web_read - it takes the URL directly.\n.html/.csv are decoded by charset detection, not assumed UTF-8: metadata.encoding names the charset used, and a wrong guess comes back as an error whose next_action says to re-call with encoding=. .pptx/.odt need no extra install; what a text reader cannot carry (layout, images) is named in the output's first line rather than vanishing from it. .json/.yaml are validated, not just echoed. Relative paths: pass cwd when the host doesn't tell the server the working directory.",
             "inputSchema": {
                 "type": "object", "required": ["file_path"],
                 "properties": {
-                    "file_path": {"type": "string", "description": "Absolute or relative path to a local file. Supported: .html/.htm/.xhtml, .docx, .xlsx, .csv, .pdf, .md/.markdown/.txt, .json/.yaml/.yml, .pptx, .odt"},
+                    "file_path": {"type": "string", "description": "Absolute or relative path to a local file. Supported: .html/.htm/.xhtml, .docx, .xlsx/.xlsm, .csv/.tsv, .pdf, .md/.markdown/.txt, .json/.yaml/.yml, .pptx, .odt"},
                     "cwd": {"type": "string", "description": "Base directory for a relative file_path. Ignored for absolute paths."},
                     "encoding": {"type": "string", "description": "Charset for .html/.csv (e.g. 'gbk', 'big5', 'shift_jis', 'cp1252'). Leave unset to auto-detect; pass it when the result is mojibake."},
                     "offset": {"type": "integer", "description": "Character offset to continue a truncated read (default 0). When is_truncated is true, the Next offset this tool prints is what you pass back here - same paging contract as web_read."},
+                    "pages": {"type": "string", "description": "PDF only: '1-5' or '1,3,5-7'. Narrows what is EXTRACTED, not what is downloaded; pick ranges from table_of_contents."},
+                    "password": {"type": "string", "description": "PDF only: password for an encrypted PDF."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False},
@@ -7861,6 +7924,8 @@ class MasterFetchServer:
                 cwd=args.get("cwd"),
                 encoding=args.get("encoding"),
                 offset=args.get("offset", 0),
+                pages=args.get("pages"),
+                password=args.get("password"),
             )
             return _wire_result(result)
 

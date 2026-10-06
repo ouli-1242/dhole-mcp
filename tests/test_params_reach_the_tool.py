@@ -97,6 +97,10 @@ VALUES: dict[str, object] = {
     "before": "2026-01-01", "url": URL, "fetch_content": True,
     "fetch_schema": {"properties": {"t": {"selector": "p"}}},
     "min_relevance": 0.2, "min_raw_relevance": 0.1,
+    # #8：共识地板。探针取 2（合法下界）——1 会被 web_search 在发请求前拒掉，
+    # 那测的是拒绝路径而不是抵达性。BASE 里带着 fetch_content=True，所以这颗
+    # 有作用对象、不会被"没开 fetch_content"那条拒绝挡下。
+    "fetch_min_consensus": 2,
     # A1：screenshot 的六颗旋钮（quality/save_to/image_type/wait_selector/
     # full_page/selector/decode_qr）随 web_screenshot 一起离开顶层参数面 ——
     # 它们现在住在 web_act 截图动作的对象里（actions 归一化层守形状），不再

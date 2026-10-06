@@ -1,5 +1,5 @@
 {
-  "comment": "批次13：web_act 与带 actions 的 web_read 默认 60000→25000ms、web_crawl deadline_ms 120000→25000ms —— 内部预算必须赶在宿主 30s MCP 超时之前返回结构化超时（实测 60s 默认被宿主裸砍成 Tool execution timed out），wire 描述随默认值改口。工具颗数不变。",
+  "comment": "#8 共识感知扇出 + #6/#7a/#8/#9/#10 文档层缺口：`web_search` 增一颗可选参数 fetch_min_consensus（int，默认 0=现状），只作用于 fetch_content=true 的自动取正文，语义是「够不够独立佐证」的地板，不是第三个相关性排序旋钮——只抓被 >=N 个独立索引家族共同确认的结果，被跳过的 URL 进 consensus_skipped，每页回执带自己的 engines_consensus。**选可选参数而非改默认行为**：改默认会悄悄换掉每个既有调用抓回的页面，正是本项目最防的那类失败（看起来成功、结果被换了）。同批把 doc_parse 的文档层缺口补齐：新增 pages / password 两颗参数（逐字复用 web_read 同名同义字段的措辞，同一事实一个作者），file_path 描述放行 .xlsm / .tsv，并写清 OLE2/CFB 旧版 Office 按魔数拒收。**本批唯一一次「棘轮往下」**：pptx 讲者备注读进来之后，那一句里的 `speaker notes, ` 从「带不走」清单里划掉（同一事实一个作者，不新增句子——读取器总是读备注，「没看到备注」就无歧义地等于「这页没有备注」）。连接期 30,629 → 31,065（#8 共识扇出 +195、doc_parse 补齐 +241）→ **31,050**（备注 -15）。**参数名与判据必须在连接期到场**——表外名会被 dispatch 拒掉，藏在签名里没人调用得到。工具颗数不变（11）。",
   "tools": 11,
-  "sha256": "3ed9212cb1538c612ed7443668a6d376507e81d3a5680ffad13c5811039f1f3d"
+  "sha256": "e5939f0dc13609d052edd3b04a0c0891012b8f62acd728898653510cafa780e3"
 }

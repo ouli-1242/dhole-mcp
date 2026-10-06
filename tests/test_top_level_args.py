@@ -168,7 +168,10 @@ class TestUnknownTopLevelArgsRaise:
         ("web_search", {"query": "x", "sites": ["example.com"]}),
         ("web_read", {"url": "https://example.com/", "max_chars": 100}),
         ("sys_state", {"show": ["cache"], "everything": True}),
-        ("doc_parse", {"file_path": "a.pdf", "pages": "1-2"}),
+        # `sheet=` 是调用方很自然会想点的那颗（挑一个工作表），而 doc_parse 不收它。
+        # 这里曾经拿 `pages=` 当"未知键"的样例 —— 它现在是合法键了，再留着这行
+        # 就是拿一颗真参数去冒充表外名，测的就不是这条守卫想测的东西了。
+        ("doc_parse", {"file_path": "a.pdf", "sheet": 1}),
         ("feed_read", {"urls": ["https://example.com/f.xml"], "limit": 5}),
     ])
     def test_every_tool_rejects_its_own_unknown_keys(self, tool, args):

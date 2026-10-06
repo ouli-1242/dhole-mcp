@@ -195,7 +195,43 @@ def test_connect_stays_inside_the_packed_budget():
 #: web_crawl deadline_ms 120000→25000ms —— 内部预算必须赶在宿主 30s MCP 超时之前
 #: 返回结构化超时（实测 60s 默认被宿主裸砍成 "Tool execution timed out"，什么都
 #: 回不来）；描述随默认值改口，+164 → **30,968**。
-CONNECT_CEILING = 30_968
+#: 2026-10-06 批次 17：连接期去重（第一刀真往下，且是无损的那一类）。同一事实在
+#: INSTRUCTIONS 与工具描述里各写一遍 —— 放置规则（参数住顶层）仓库自己的决定就是
+#: "只在连接期说一份"（见 server.py 里 `_INSTRUCTIONS_RULES` 上方的注释），却仍在
+#: web_read / web_crawl 的描述里各留了一份副本；web_request 描述里的
+#: "stored credentials ... ride along" 与它自己的 confirm 参数重复；INSTRUCTIONS 的
+#: sys_guide 路由句与工具描述重复（四个触发词都在 sys_guide 描述里）。这些副本删掉
+#: 不减少任何 agent 能查到的信息（两份总是在同一个载荷里一起送到）。**web_request
+#: 路由句里的方法清单没有删**：它也在工具描述里，但 tests/test_web_request_b5.py 把
+#: "路由的家（INSTRUCTIONS）必须点名写方法"钉成了契约 —— 37 字不值一条契约。
+#: 跨工具的 timeout / ignore_robots / check_login 重复**不动** —— 每颗 schema 必须
+#: 自洽，一个只读单颗工具的客户端仍要懂，删它是有损的。实测 -339 → **30,629**。
+#: 这一条留在 30,968 的历史里是为了记住：上一版把这笔账记在"连接期重复"名下，
+#: 而其中大部分是承重的。
+#: 2026-10-06 #8 共识感知扇出：`web_search` 增一颗**可选**参数
+#: `fetch_min_consensus`（int，默认 0 = 现状），只作用于 `fetch_content=true` 的自动
+#: 取正文 —— 只抓被 >=N 个独立索引家族共同确认的结果，被跳过的 URL 进
+#: `consensus_skipped`，每页回执带自己的 `engines_consensus`。棘轮第三次上抬，理由与
+#: `headed` / `max_total_chars` 同一条：**参数名与判据必须在连接期到场**（表外名会被
+#: dispatch 拒掉，藏在签名里没人调用得到）。选可选参数而非改默认行为，是因为改默认会
+#: 悄悄换掉每个既有调用抓回的页面 —— 正是本项目最防的那类失败（看起来成功、结果被
+#: 换了）。顶层描述里与它重复的那句按「同一事实不说两遍」删掉，净 +195 → **30,824**。
+#: 判据细节（分母≤1 时不适用 / 清空候选则照实抓 0 页并报数 / 逐条回报被丢的 URL）全部
+#: 搬进 `sys_guide(topic='behavior', section='web_search')` 按需付，wire 上只留一句。
+#: 2026-10-06 doc_parse 补齐：同一颗工具加 `pages` / `password` 两颗参数（都只对 PDF
+#: 生效），`file_path` 描述放行 `.xlsm` / `.tsv`。棘轮第四次上抬，理由仍是同一条 ——
+#: **参数名与判据必须在连接期到场**：`pages` / `password` 若只活在签名里，表外名会被
+#: dispatch 拒掉，agent 永远调用不到（这正是 `doc_parse` 此前"报错教你传 password、
+#: 传了却 TypeError"的根因）。措辞**逐字复用 `web_read` 上同名同义字段的原文** ——
+#: 同一事实一个作者，最省也最不容易漂移；首版自己另写一句（含 "Ignored for every
+#: other format."）实测多付 116 字，删掉换回复用。净 +241 → **31,065**。
+#: 2026-10-06 pptx 讲者备注：棘轮**往下**。备注读进来之后，工具描述里那句
+#: `what a text reader cannot carry (speaker notes, layout, images)` 就不再成立 ——
+#: 备注不再属于「带不走」的那一类。**不新增句子，只把 `speaker notes, ` 划掉**：
+#: 第一行的职责是声明没带什么，带上了就从那张单子上下来；而读取器**总是**读备注，
+#: 于是「没看到备注」无歧义地等于「这页没有备注」，再解释一遍就是同一事实说两遍。
+#: 净 -15 → **31,050**（本批唯一一次向下：删掉的是一句不再为真的话，不是信息）。
+CONNECT_CEILING = 31_050
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

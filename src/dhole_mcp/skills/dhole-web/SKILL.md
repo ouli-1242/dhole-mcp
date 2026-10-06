@@ -35,7 +35,7 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 | Only want to know what URLs a site holds | `web_discover` — the map with no bodies read; `sitemap=true` is the one-request way to get it |
 | Track a site's latest updates | `feed_read` (pass the site homepage; it finds the feed); poll incrementally with `since=` |
 | Resolve a short/tracking link | `web_read` (follows the redirect and lands on the final page) |
-| Local file: `.docx` / `.xlsx` / `.pptx` / `.odt` / `.pdf` / `.csv` / `.html` | `doc_parse` — a docx/xlsx/pptx/odt is a zip and a pdf is a container, so a text reader sees bytes; a non-UTF-8 csv/html decodes to plausible-looking **wrong** text rather than an error |
+| Local file: `.docx` / `.xlsx` / `.xlsm` / `.pptx` / `.odt` / `.pdf` / `.csv` / `.tsv` / `.html` | `doc_parse` — a docx/xlsx/pptx/odt is a zip and a pdf is a container, so a text reader sees bytes; a non-UTF-8 csv/html decodes to plausible-looking **wrong** text rather than an error. Pre-2007 `.doc`/`.xls`/`.ppt` are OLE2/CFB (not a zip) and are refused by name with the convert command |
 | Local file: `.md` / `.txt` / `.json` / `.yaml` | Your own file tool is fine if you have one; `doc_parse` also works (it detects the encoding and validates json/yaml). MCP-only clients have no other path |
 | See rendered layout / verify UI | a `screenshot` action in `web_act`'s chain; if you can't see images, add `save_to` and read the file |
 | Page behind a login wall (user has a logged-in Chrome) | `web_read` with `cdp_url` (+ `check_login=true` to confirm state) — requires one-time user setup, see `references/configuration.md` "CDP attach" |

@@ -55,6 +55,12 @@ _WIRE_OMIT: dict = {
         "identity_applied",
         # G25 阶段4：干净的正文不点名（None 缺席）；命中启发式才上线。
         "untrusted_content",
+        # 一次干净成功不付诊断的钱（None 缺席）；有 code 才上线。
+        "diagnosis",
+        # 空正文的 0 不携带信息（缺席即"没有可计费的正文"）。
+        "approx_tokens",
+        # 没折叠任何样板时 0 不携带信息（缺席即"这页没有页内重复行"）。
+        "duplicate_lines_collapsed",
     }),
     "CrawlPage": frozenset({
         "depth", "fetcher_used", "title", "page_type", "content_chars",
@@ -79,6 +85,9 @@ _WIRE_OMIT: dict = {
         "engines_used", "engine_blocked", "engine_empty", "engine_preempted",
         "date_filter", "consensus_basis", "cached", "rerank_mode",
         "fetch_hint", "related_queries", "fetched_pages", "duration_ms",
+        # 没设共识地板（或它没丢任何东西）时，空名单不携带信息——缺席即"闸门
+        # 什么都没丢"。
+        "consensus_skipped",
     }),
     "FeedResult": frozenset({
         "source_title", "error", "discovered_from", "since",

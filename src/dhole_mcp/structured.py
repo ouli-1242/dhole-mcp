@@ -58,7 +58,9 @@ def extract_structured(
     4. Fallback: regex search in extracted text
 
     Special mode: schema={"type": "auto"} or schema="auto" triggers automatic
-    structure detection (tables, lists, JSON-LD, OG meta) without CSS selectors.
+    structure detection (tables, lists, JSON-LD, OG meta) without CSS selectors,
+    and adds a ``_schema`` proposal (a reusable container + field selectors) when
+    the page has a repeated structure — see :func:`_propose_schema`.
 
     Never raises — returns partial results with empty strings for failed fields.
     """
@@ -361,6 +363,86 @@ def _extract_by_pattern(root, field_name: str, field_type: str) -> Any:
     return None
 
 
+# auto 模式提议 schema 的边界：容器要重复 >= 3 次（"两页里各一次"的巧合不算），
+# 字段最多提 8 个（再多调用方也不会逐个用）。
+_MIN_GROUP = 3
+_MAX_PROPOSED_FIELDS = 8
+# 无 class 的后代里，这些标签太泛（"div" / "span" / "p"），当字段名没有意义；
+# 其余标签（h1-h6 / a / img / time …）用标签名当字段名。
+_GENERIC_TAGS = frozenset({
+    "div", "span", "p", "li", "ul", "ol", "section", "article", "main",
+    "body", "html", "table", "tr", "td", "th", "tbody", "thead", "form",
+    "nav", "header", "footer", "aside", "figure", "strong", "em", "b", "i",
+})
+
+
+def _css_sig(el) -> str:
+    """元素的选择器签名：`tag.cls1.cls2`（最多两个 class）。"""
+    tag = el.tag if isinstance(el.tag, str) else ""
+    cls = [c for c in (el.get("class") or "").split() if c][:2]
+    return tag + ("." + ".".join(cls) if cls else "")
+
+
+def _name_token(el) -> str:
+    """字段/容器名：class 的最后一个 token（snake_case），退化到标签名。
+
+    没有 class 且标签太泛时返回 ""（这个后代不当字段）。
+    """
+    cls = [c for c in (el.get("class") or "").split() if c]
+    if cls:
+        raw = cls[-1]
+    else:
+        tag = el.tag if isinstance(el.tag, str) else ""
+        if tag in _GENERIC_TAGS:
+            return ""
+        raw = tag
+    return re.sub(r"[^0-9a-zA-Z]+", "_", raw).strip("_").lower()
+
+
+def _propose_schema(root) -> Dict[str, Any]:
+    """从重复结构里推一份可复用的抽取 schema：容器 + 字段选择器。
+
+    确定性启发式，不猜语义：找带 class 的 `标签.class` 里重复 >= :data:`_MIN_GROUP`
+    次、成员带文本的组，取重复最多的那组当**记录容器**；在它的第一个实例里，把带
+    文本的后代按 `标签.class` 归类，每类给一个字段名。目的是让调用方抄一份选择器
+    用于同一站点的后续页，而不是每次自己猜（"动态 schema"）。
+    """
+    if root is None:
+        return {}
+    groups: Dict[str, list] = {}
+    for el in root.iter():
+        if not isinstance(el.tag, str):
+            continue
+        sig = _css_sig(el)
+        if "." not in sig:          # 无 class 的重复太泛，不作容器
+            continue
+        groups.setdefault(sig, []).append(el)
+    best_sig, best_n = "", 0
+    for sig, els in groups.items():
+        if len(els) > best_n and " ".join(els[0].text_content().split()):
+            best_sig, best_n = sig, len(els)
+    if best_n < _MIN_GROUP:
+        return {}
+    instance = groups[best_sig][0]
+    fields: Dict[str, Any] = {}
+    for el in instance.iter():
+        if not isinstance(el.tag, str) or el is instance:
+            continue
+        if not " ".join(el.text_content().split()):
+            continue
+        name = _name_token(el)
+        if not name or name in fields:
+            continue
+        fields[name] = {"selector": _css_sig(el)}
+        if len(fields) >= _MAX_PROPOSED_FIELDS:
+            break
+    if not fields:
+        return {}
+    container = _name_token(instance) or "records"
+    return {"type": "object", "properties": {container: {
+        "type": "array", "selector": best_sig, "properties": fields}}}
+
+
 def _extract_auto(html: str, metadata: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Auto-detect page structure and extract without explicit CSS selectors.
 
@@ -370,6 +452,10 @@ def _extract_auto(html: str, metadata: Optional[Dict[str, str]] = None) -> Dict[
     3. Repeated list items (<li> in <ul>/<ol>)
     4. OpenGraph meta tags
     5. Fallback: visible text summary
+
+    Also proposes a reusable `_schema` (container + field selectors) when the page
+    has a repeated structure, so the caller can pin it for sibling pages instead of
+    hand-writing selectors.
     """
     root = _parse_html(html)
     result: Dict[str, Any] = {"_mode": "auto"}
@@ -391,6 +477,11 @@ def _extract_auto(html: str, metadata: Optional[Dict[str, str]] = None) -> Dict[
     lists = _extract_lists(root)
     if lists:
         result["lists"] = lists
+
+    # 3b. Proposed schema: reusable selectors for the page's repeated structure
+    proposed = _propose_schema(root)
+    if proposed:
+        result["_schema"] = proposed
 
     # 4. OpenGraph / meta tags
     if metadata:

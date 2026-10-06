@@ -435,6 +435,9 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         # coerced to 0.0 there (silently disabling the floor).
         "min_relevance": "number",
         "min_raw_relevance": "number",
+        # 共识地板是"做决定的那颗"：字符串客户端写 "2" 时按裸值传会进到比较里
+        # （`"2" >= 2` 当场 TypeError），而它的判据是"够不够独立佐证"，不是排序。
+        "fetch_min_consensus": "int",
     },
     "feed_read": {"max_items": "int", "timeout": "int"},
     # sys_state normalizes its three arguments in _validate_tool_args, because its
@@ -443,7 +446,9 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
     # doc_parse 现在也有一颗要归一化：`offset` 是分页位置，字符串客户端写 "12000"
     # 时按裸值传会进到切片下标上（`content[\"12000\":]` 当场 TypeError），而它承诺的
     # 那个"Next offset: N"是响应里印出来的数字 —— 印出来的东西必须能原样传回去。
-    "doc_parse": {"offset": "int"},
+    # `pages` / `password` 与 web_read 同名同档（"strnum"）：`pages: 3` 是第 3 页、
+    # `password: 1234` 是 "1234" —— 一个只按字符串读的参数拿到整数时，那是同一个值。
+    "doc_parse": {"offset": "int", "pages": "strnum", "password": "strnum"},
 }
 
 _ARG_DEFAULTS: dict[Any, dict[str, Any]] = {}

@@ -123,6 +123,12 @@ The same key exists on `web_crawl`, where it matters more: the semantic path cos
 }}}}
 ```
 
+**Let the page propose the schema** (no selectors: `schema="auto"` detects JSON-LD / tables / lists / OpenGraph, and when the page has a repeated structure it adds a `_schema` you can paste back into `schema=` for the sibling pages of the same site):
+```json
+{"url": "https://books.toscrape.com/", "schema": "auto"}
+```
+Read the reply's `_schema` as a starting point, not a verdict: the container is the most-repeated `tag.class` group and each field is named from its class's last token, so a field called `link` is "an `<a class=\"link\">`", not "the link you wanted". No `_schema` key means the page had nothing repeated — an honest "no structure here", not a failure.
+
 **Two layers in one call** (the items live on their own pages, so `schema` nesting cannot reach them — `nested_selector` names the list entries on THIS page, `nested_fields` says what to read on each page they point to; 8 links by default, ceiling 30, robots checked per link):
 ```json
 {"url": "https://quotes.toscrape.com/", "nested_selector": "div.quote",
@@ -212,6 +218,11 @@ Measured: one call, 8 grouped records, `summary` carrying `nested: 8 links expan
 ```
 
 When searching without fetching: rank by `relevance_score` / `fetch_relevance` (high first), and treat `engines_consensus: 1 of N` as unverified — `web_read` before citing.
+
+**Spend the auto-fetch budget on corroborated hits** (`fetch_min_consensus: 2` keeps only hits corroborated by ≥2 independent index families; the ones it drops are named in `consensus_skipped` rather than silently lost — with a single-family pool the floor is not applied at all, and the summary says so):
+```json
+{"query": "MCP streamable HTTP spec", "fetch_content": true, "fetch_min_consensus": 2}
+```
 
 ## Big site: map, scope, read (web_discover then web_read)
 

@@ -72,6 +72,10 @@ _SESSION_ID: contextvars.ContextVar[str] = contextvars.ContextVar("_session_id",
 # every return path — live fetch, cache hit, robots block, archive fallback —
 # owes it to the caller. Bulk rows run in their own task, so each gets its own.
 _IDENTITY_APPLIED: contextvars.ContextVar[str] = contextvars.ContextVar("_identity_applied", default="")
+# 页内重复样板行的折叠条数（boilerplate.py）。抽取时累加、`_with_agent_hints` 读取，
+# 让"这次删了几行样板"在信封上可见 —— 静默删内容比留着样板更糟。默认 0 = 没删。
+_BOILERPLATE_LINES_COLLAPSED: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "_boilerplate_lines_collapsed", default=0)
 # A jar key is a plain word, nothing else (see _clean_session_id).
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 # Per-call HTTP method / request body (G8). Read where the request is actually

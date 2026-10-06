@@ -9,8 +9,10 @@
   读者要的文字。为读这一层再引 python-pptx / odfpy 不值。
 
 文本能带上的唯一增值是**校验**：一份 .json 是不是合法 JSON，正是把配置文件递给文档
-工具的人想问的问题。而一个文本工具读不到的部分（备注页、版式、样式、图片）必须写在
-输出的第一行里——少了备注的稿件和完整的稿件长得一样，读的人有权知道。
+工具的人想问的问题。而一个文本工具读不到的部分（版式、样式、图片）必须写在输出的第一
+行里——少了版式的稿件和完整的稿件长得一样，读的人有权知道。**备注页是个例外**：它现在
+读得进来（挂在它自己那一页下面，标成 `> Notes:`），因为幻灯片正文常常只有标题级短语，
+而讲稿、数据来源与要点住在备注里 —— 这一条推翻了本文件早期版本钉住的旧契约。
 """
 
 from __future__ import annotations
@@ -159,13 +161,33 @@ class TestSlidesComeThroughWithoutAPowerPoint:
 
         assert text.index("page 2") < text.index("page 10")
 
-    def test_speaker_notes_stay_out_and_the_output_says_so(self, tmp_path):
+    def test_a_notes_part_nothing_links_to_is_not_content(self, tmp_path):
+        """备注只有被某一页的 rels 挂上，才属于那一页。
+
+        这份夹具里躺着一个 `ppt/notesSlides/notesSlide1.xml`，但没有任何
+        `ppt/slides/_rels/slideN.xml.rels` 指向它。真实的稿子里备注总是被挂上的，
+        而一个孤儿部件不该被当成某一页的内容 —— 配对是唯一判据。
+        """
         path = _write(tmp_path, "deck.pptx", _pptx({"slide1": _slide_body([["On screen"]])}))
 
         text, _ = parse_file(path)
 
         assert "PRIVATE speaker note" not in text
-        assert "speaker notes" in text.splitlines()[0].lower()
+        assert "> Notes:" not in text
+
+    def test_the_first_line_names_what_is_really_left_out(self, tmp_path):
+        """第一行的职责是声明没带什么。
+
+        备注现在**带上了**（挂在它自己那一页下面），所以从那张单子上下来；但不能顺手
+        把版式也划掉 —— 那才是真的还在丢的东西。
+        """
+        path = _write(tmp_path, "deck.pptx", _pptx({"slide1": _slide_body([["On screen"]])}))
+
+        text, _ = parse_file(path)
+
+        first = text.splitlines()[0].lower()
+        assert "layout" in first
+        assert "speaker notes" not in first
 
     def test_xml_entities_are_decoded_back_to_text(self):
         runs = _pptx_paragraphs("<a:p><a:r><a:t>5 &lt; 7 &amp; 8 &gt; 2</a:t></a:r></a:p>")

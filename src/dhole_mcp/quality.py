@@ -24,6 +24,7 @@ from dhole_mcp.audit import _audit_event
 from dhole_mcp.context import (
     _ARG_NOTES,
     _AUTH_SENT,
+    _BOILERPLATE_LINES_COLLAPSED,
     _CSS_SELECTOR,
     _IDENTITY_APPLIED,
     _METHOD,
@@ -1195,6 +1196,155 @@ def _ignored_selector_note(result: ResponseModel) -> str:
             f"returned")
 
 
+# ─── 结构化诊断：把自由文本 `error` 归纳成可分支的枚举 ─────────────────────
+# 调用方要"推理而不是猜"：`error` 是一句话，agent 得字符串匹配才知道下一步。
+# diagnosis 把同一件事说成一个稳定的 code + 一个布尔 + 一个具体杠杆名，让 agent
+# 能 if/else 而不是正则。prose 一个字不删——它是给人读的那一份，diagnosis 是它的
+# 机器可读孪生。前缀优先，再退到子串，再退到"首词当作 code"（新错误也能有个稳定的
+# 枚举名，不至于静默缺席）。
+_DIAGNOSIS_PREFIXES: tuple[tuple[str, str, bool, str], ...] = (
+    ("js_shell_detected", "js_shell", True,
+     "re-fetch (auto-escalates to the stealthy browser tier), or extraction_type='html'"),
+    ("bot_challenge_detected", "bot_wall", True,
+     "retry with force_fetcher='stealthy', else switch source"),
+    ("bot_wall_detected", "bot_wall", True,
+     "retry with force_fetcher='stealthy', else switch source"),
+    ("auth_wall_detected", "auth_wall", False,
+     "switch source, or the Internet Archive copy; cred_defaults auth if you have it"),
+    ("auth_required", "auth_wall", False,
+     "store credentials with cred_defaults (auth) for this host"),
+    ("robots_disallowed", "robots_disallowed", False,
+     "switch source, or ignore_robots=true if you have the site's permission"),
+    ("proxy_unreachable", "proxy_unreachable", False,
+     "fix the proxy (DHOLE_SEARCH_PROXY / cred_defaults unset=['proxy']); raising timeout will not help"),
+    ("cdp_authorization_required", "cdp_authorization_required", True,
+     "re-call the SAME url with confirm=true to authorize this host"),
+    ("cdp_host_not_allowed", "cdp_host_not_allowed", False,
+     "re-call with cdp_url= plus confirm=true for this host, or sys_state(clear=['cdp:host=<name>'])"),
+    ("cdp_no_logged_in_context", "cdp_no_logged_in_context", True,
+     "re-call the SAME url once; else point cdp_url at the browser holding your logins"),
+    ("cdp_endpoint_unreachable", "cdp_endpoint_unreachable", False,
+     "start the browser with --remote-debugging-port / --user-data-dir; no parameter fixes this"),
+    ("browser_busy", "browser_busy", False,
+     "sys_state(clear=['<session id>']) to hand the browser back, or drop headed=true"),
+    ("schema_no_match", "schema_no_match", False,
+     "re-check the selectors, or re-fetch with extraction_type='html'"),
+    ("geo_redirect_detected", "geo_redirect", False,
+     "use a regional URL or a proxy"),
+    ("extraction_collapsed", "extraction_collapsed", False,
+     "re-call with extraction_type='html' or 'text' (a browser re-fetch hands the same markup)"),
+    ("encoding_undecodable", "encoding_undecodable", False,
+     "re-call with encoding='<charset>'"),
+    ("scanned_pdf", "scanned_pdf", False,
+     "install OCR ([all]) or read the page images with a vision model"),
+    ("image_ocr_empty", "image_ocr_empty", False,
+     "use a vision-capable model or a web_act screenshot action, or switch source"),
+    ("image_ocr_failed", "image_ocr_failed", False,
+     "use a vision-capable model or a web_act screenshot action, or switch source"),
+    ("encrypted_pdf", "encrypted_pdf", False, "pass password= for this PDF"),
+    ("pdf_deps_missing", "pdf_deps_missing", False, "install the PDF extra ([all])"),
+    ("not_a_pdf", "not_a_pdf", False, "the bytes are not a PDF - check the URL/content-type"),
+    ("pdf_open_failed", "pdf_open_failed", False, "the PDF could not be opened - see error"),
+    ("pdf_extract_failed", "pdf_extract_failed", False, "the PDF could not be parsed - see error"),
+    ("empty_pdf", "empty_pdf", False, "the PDF has no pages - nothing to read"),
+    ("no_pages_in_range", "no_pages_in_range", False, "the pages= range is out of bounds"),
+    ("empty or non-bytes PDF body", "empty_pdf", False, "the body was not a PDF"),
+    ("Response body too large", "body_too_large", False,
+     "fetch the page that links the file, or download it yourself and parse it locally"),
+    ("invalid_request", "invalid_request", False, "fix the named argument"),
+    ("schema validation error", "schema_validation_error", False, "fix the schema= / the page's markup"),
+    ("timeout", "timeout", True, "raise timeout, or switch source"),
+    ("File not found", "file_not_found", False, "pass an absolute path, or pass cwd="),
+    ("Access denied: path is in a restricted system directory", "path_restricted", False,
+     "choose a path outside the restricted system directory"),
+    ("network_error", "network", True,
+     "check network/proxy; the classifier hint in `error` names the fix"),
+)
+
+# 子串匹配（前缀认不出的）：升级整链失败、浏览器档缺席这两个是句中出现的。
+_DIAGNOSIS_CONTAINS: tuple[tuple[str, str, bool, str], ...] = (
+    ("all_tiers_failed", "all_tiers_failed", True,
+     "switch source, or check network/proxy - no single parameter fixes a full-tier failure"),
+    ("browser_binary_missing", "browser_unavailable", False,
+     "run `dhole --doctor`; do NOT retry with force_fetcher='stealthy'"),
+    ("browser_unavailable", "browser_unavailable", False,
+     "run `dhole --doctor`; do NOT retry with force_fetcher='stealthy'"),
+)
+
+_LEADING_CODE_RE = re.compile(r"[a-z][a-z0-9_]{2,}")
+
+
+def _diagnose(result: ResponseModel) -> Optional[Dict[str, Any]]:
+    """本次响应"不是干净成功"时的结构化原因，否则 None（缺席即成功）。
+
+    优先级：error 前缀 → error 子串 → error 首词；无 error 但 content_ok 为假 →
+    按 page_type 归类；都干净但被截断 → truncated。js_shell / bot_wall 的 retryable
+    要看这台机器上浏览器档能不能起（`_browser_cannot_help` / `_never_escalate`）——
+    建议"再抓一次会升级"对一台起不来的浏览器是假话。
+    """
+    err = result.error or ""
+    code = ""
+    retryable = False
+    recover = ""
+    if err:
+        for prefix, c, r, rec in _DIAGNOSIS_PREFIXES:
+            if err.startswith(prefix):
+                code, retryable, recover = c, r, rec
+                break
+        else:
+            for needle, c, r, rec in _DIAGNOSIS_CONTAINS:
+                if needle in err:
+                    code, retryable, recover = c, r, rec
+                    break
+            else:
+                m = _LEADING_CODE_RE.match(err)
+                if m:
+                    code = m.group(0)
+        if code in ("js_shell", "bot_wall"):
+            retryable = (not _never_escalate(result, result.url)
+                         and not _browser_cannot_help(result, result.url))
+            if not retryable:
+                recover = ("the browser tier is unavailable on this machine - switch "
+                           "source (see error / `dhole --doctor`)")
+    elif not result.content_ok:
+        code = {"auth_wall": "auth_wall", "paywall": "paywall",
+                "captcha": "bot_wall", "js_shell": "js_shell"}.get(
+                    result.page_type, "no_content")
+        retryable = code in ("bot_wall", "js_shell")
+        if code == "no_content":
+            recover = ("the page carried no usable text - switch source, or try "
+                       "extraction_type='html'")
+    elif result.is_truncated:
+        code = "truncated"
+        retryable = True
+        recover = (f"offset={result.next_offset} to continue"
+                   if result.next_offset
+                   else "focus='query' to narrow, or a smaller max_content_chars")
+    if not code:
+        return None
+    return {"code": code, "retryable": retryable, "recover_with": recover}
+
+
+# CJK 统一表意文字 / 扩展 A / 兼容 / 假名 / 谚文：这些字符在多数 tokenizer 里
+# 一字 ≈ 一 token，与拉丁文的 ~4 字/token 差一个量级。估计量级时分开算。
+_CJK_RE = re.compile(
+    r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]")
+
+
+def _approx_tokens(chunks) -> int:
+    """content 的粗略 token 估计：CJK/假名/谚文按 1 字 1 token，其余按 4 字 1 token。
+
+    不是分词器的精确数（dhole 不带 tokenizer），是一个**脚本感知**的量级信号：
+    英文用 chars/4 尚可，中文按同一把尺会低报约 4 倍——那正是要预算上下文的人
+    最不该被误导的方向。
+    """
+    text = "\n".join(c for c in (chunks or []) if isinstance(c, str))
+    if not text:
+        return 0
+    cjk = sum(1 for _ in _CJK_RE.finditer(text))
+    return cjk + round((len(text) - cjk) / 4)
+
+
 def _with_agent_hints(result: ResponseModel) -> ResponseModel:
     """Stamp the v10 envelope + agent-facing hints on a result.
 
@@ -1223,9 +1373,19 @@ def _with_agent_hints(result: ResponseModel) -> ResponseModel:
         result.untrusted_content = finding
         note = f"untrusted_content: {finding['total']} hit(s)"
         summary = f"{summary} · {note}" if summary else note
+    # 页内重复样板行折叠的条数：抽取时设定，这里报在信封上（删了内容就必须说）。
+    folded = _BOILERPLATE_LINES_COLLAPSED.get()
+    if folded:
+        result.duplicate_lines_collapsed = folded
+        note = f"duplicate_lines_collapsed: {folded}"
+        summary = f"{summary} · {note}" if summary else note
     result.summary = summary
     result.content_ok = content_ok
     result.next_action = next_action
+    # 结构化孪生：content_ok 已定，才能据它归类"不是干净成功"的原因；token 估计
+    # 只描述**这一份** content 的成本（信封本身不计——它是常数级）。
+    result.diagnosis = _diagnose(result)
+    result.approx_tokens = _approx_tokens(result.content)
     applied = _IDENTITY_APPLIED.get()
     if applied and not result.identity_applied:
         result.identity_applied = applied

@@ -37,16 +37,42 @@ def extract_content(
     from dhole_mcp.trafilatura_extractor import extract_with_trafilatura, _fallback_extract
 
     # Trafilatura is the primary extractor for all text-like types
+    result: Optional[List[str]] = None
     if extraction_type in ("markdown", "text", "article", "structured"):
         try:
-            result = extract_with_trafilatura(page, extraction_type=extraction_type, css_selector=css_selector)
-            if result and any(r.strip() for r in result):
-                return result
+            candidate = extract_with_trafilatura(page, extraction_type=extraction_type, css_selector=css_selector)
+            if candidate and any(r.strip() for r in candidate):
+                result = candidate
         except Exception as e:
             logger.debug(f"Trafilatura extraction failed: {e}")
 
     # Fallback: use markdownify for markdown/html, or raw text
-    return _fallback_extract(page, extraction_type, css_selector)
+    if result is None:
+        result = _fallback_extract(page, extraction_type, css_selector)
+    return _collapse_boilerplate(result, extraction_type)
+
+
+def _collapse_boilerplate(chunks: List[str], extraction_type: str) -> List[str]:
+    """页内重复样板行折叠（只对文本/正文类）。删掉的条数写进 context var，
+    由 quality._with_agent_hints 报在信封上 —— 静默删内容比留着样板更糟。"""
+    if extraction_type not in ("markdown", "text", "article"):
+        return chunks
+    from dhole_mcp.boilerplate import collapse_repeated_lines
+    from dhole_mcp.context import _BOILERPLATE_LINES_COLLAPSED
+
+    out: List[str] = []
+    dropped = 0
+    for chunk in chunks:
+        if isinstance(chunk, str):
+            new, n = collapse_repeated_lines(chunk)
+            out.append(new)
+            dropped += n
+        else:
+            out.append(chunk)
+    if dropped:
+        _BOILERPLATE_LINES_COLLAPSED.set(
+            _BOILERPLATE_LINES_COLLAPSED.get() + dropped)
+    return out
 
 
 def _is_xml_content_type(content_type: str) -> bool:

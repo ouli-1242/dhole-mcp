@@ -270,7 +270,8 @@ class SearchResponseModel(BaseModel):
     related_queries: list[str] = Field(default=[], description="Follow-up queries worth searching next, mined extractively from the result titles+snippets (no LLM). Empty if none derived. Use to refine a broad query.")
     summary: str = Field(default="", description="One-line status of the search (counts + engines + rerank).")
     next_action: str = Field(default="", description="The obvious next call: fetch the high results, rephrase, retry, etc. Empty = nothing more to do.")
-    fetched_pages: list[dict] = Field(default=[], description="When fetch_content=true: auto-fetched page content for top results. Each item: {url, title, content, content_ok}.")
+    fetched_pages: list[dict] = Field(default=[], description="When fetch_content=true: auto-fetched page content for top results. Each item: {url, title, content, content_ok, engines_consensus} - the consensus string is repeated per page so you can judge the fetched set without cross-referencing the result list.")
+    consensus_skipped: list[str] = Field(default_factory=list, description="The receipt for a gated auto-fetch: when fetch_min_consensus (>=2) is set with fetch_content=true, the URLs DROPPED from the fetch set for lacking that many corroborating index families. Empty = the floor dropped nothing (or was not set). Read this before asking 'why did fewer pages come back than I asked for'.")
 
 
 # ─── source type detection (zero-latency URL pattern matching) ──────────────
@@ -852,6 +853,64 @@ def _build_results(query: str, ranked: list[RawResult], scores: Optional[list[fl
             official=classify_source(r.url)[1],
         ))
     return out
+
+
+# ─── consensus-gated fan-out (#8) ───────────────────────────────────────────
+# 共识是搜索里唯一"免费"的权威信号：它已经在每一行上（engines_consensus），不花
+# 一次额外请求、不引模型、确定性。扇出（fetch_content 的自动取正文）是这条链上
+# 最贵的一步——每一页都是真实抓取加一份 token。所以让前者给后者当预算分配器：
+# 只在被足够多独立索引家族共同确认时才花那一笔。
+#
+# 三条边界写死在下面这个纯函数里，因为它们决定"少抓了"到底是诚实还是静默：
+#   1. 分母 ≤ 1 时闸门**不适用**（池子只回一个家族，没有任何"佐证"可言，把
+#      "1 of 1"读成"没人同意"是把降级池的沉默当成判断）。
+#   2. 闸门把候选清空时**照实抓 0 页并报数**，不回退到"反正都抓"——调用方显式
+#      点了地板，静默绕过它就是替他做了相反的决定。
+#   3. 被丢的 URL 逐条回报（consensus_skipped），否则"少抓了"与"这页本来就没有"
+#      在字节上不可区分。
+_CONSENSUS_RE = re.compile(r"^(\d+)\s+of\s+(\d+)")
+
+
+def _parse_consensus(text: str) -> tuple[int, int]:
+    """``'2 of 6'`` -> ``(2, 6)``；``'1 of 1 (no corroboration)'`` -> ``(1, 1)``。
+
+    读不出形状时返回 ``(0, 0)``：分母 0 让闸门走"不适用"那一条，而不是把一次
+    解析失败当成"零个家族同意"从而丢掉每一行。
+    """
+    m = _CONSENSUS_RE.match(text or "")
+    if not m:
+        return 0, 0
+    return int(m.group(1)), int(m.group(2))
+
+
+def gate_by_consensus(
+    candidates: list[SearchResult], min_consensus: int,
+) -> tuple[list[SearchResult], list[SearchResult], str]:
+    """按跨引擎共识给自动扇出的候选集设一道地板。返回 ``(kept, skipped, note)``。
+
+    ``min_consensus < 2`` 时原样放行（每行至少有一个家族，地板 1 什么都不过滤）。
+    ``note`` 是要写进 summary 的一句话：闸门生效时报保留/丢弃数，不适用时说明
+    为什么没施加——两种"少抓了"必须能被分开读。
+    """
+    if min_consensus < 2 or not candidates:
+        return candidates, [], ""
+    parsed = [(r, _parse_consensus(r.engines_consensus)) for r in candidates]
+    # 分母 ≤ 1：这一轮没有任何一行可能被"佐证"，地板在这里没有意义。
+    if all(m <= 1 for _, (_, m) in parsed):
+        return candidates, [], (
+            f"fetch_min_consensus={min_consensus} not applied: the pool returned a "
+            f"single index family, so no result could be corroborated")
+    kept = [r for r, (n, _) in parsed if n >= min_consensus]
+    skipped = [r for r, (n, _) in parsed if n < min_consensus]
+    if not kept:
+        return [], skipped, (
+            f"fetch_min_consensus={min_consensus} dropped all {len(candidates)} "
+            f"auto-fetch candidates (none corroborated by that many index families); "
+            f"nothing was fetched - see consensus_skipped")
+    return kept, skipped, (
+        f"fetch_min_consensus={min_consensus}: fetched {len(kept)}, "
+        f"skipped {len(skipped)} uncorroborated")
+
 
 
 def _quality_filter(results: list[SearchResult], min_keep: int = 3) -> list[SearchResult]:
