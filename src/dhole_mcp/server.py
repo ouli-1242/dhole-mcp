@@ -916,6 +916,15 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
     content_ok, next_action, fetched_at) on every returned result.
     """
     full_text = "\n".join(result.content)
+    # 注入扫描在 focus/截断之前做（对 full_text 整页）：models.py 对
+    # untrusted_content 的承诺是"页"级，被 focus 丢弃或落在返回窗口外的正文
+    # 也要被扫到。命中挂在 result 上，model_copy 原样带走；_with_agent_hints
+    # 见已有值跳过自扫。不经 chunking 的路径（_refusal_result 等）仍走原位
+    # 扫描作后备。归一化规则一个字符没动——改的是扫哪段，不是怎么扫。
+    from dhole_mcp.injection import scan as _scan_injection
+    _page_finding = _scan_injection(full_text)
+    if _page_finding:
+        result.untrusted_content = _page_finding
     # Query-focused filter (post-cache): if the caller passed `focus`, keep only
     # the relevant blocks so the agent loads less context on long pages.
     # Only applies to text-like extractions (not raw html). Runs before chunking
@@ -1767,8 +1776,11 @@ def _translate_response_body(
         return extract_with_trafilatura(page, extraction_type=extraction_type, css_selector=css_selector)
 
     if extraction_type in ("markdown", "text", "article", "structured"):
-        # Trafilatura-first path
-        content = _trafilatura_extract()
+        # Trafilatura-first path. 折叠主路也要过：承诺的 duplicate_lines_collapsed
+        # 不能只在空结果回退的路上兑现（主路成功时折叠恒缺席＝承诺的能力不跑）。
+        # _collapse_boilerplate 只对文本类动手，structured 原样返回。
+        from dhole_mcp.extractor import _collapse_boilerplate
+        content = _collapse_boilerplate(_trafilatura_extract(), extraction_type)
         if (not content or content == [""] or content == ["\n"]):
             content = _dhole_extract()
     else:
@@ -7191,7 +7203,7 @@ class MasterFetchServer:
                         # 倒进对话"——要全文有 web_read 的 offset 分页。
                         max_content_chars=3000, timeout=15000,
                     )
-                    fetched_pages.append({
+                    page_row = {
                         "url": sr.url,
                         "title": sr.title,
                         "content": "\n".join(page_result.content)[:3000] if page_result.content else "",
@@ -7199,7 +7211,13 @@ class MasterFetchServer:
                         # 共识串跟着页面走：闸门没开时它也是"这页被几家独立索引
                         # 确认过"的免费判据，让调用方不必回头对照结果列表。
                         "engines_consensus": sr.engines_consensus,
-                    })
+                    }
+                    # web_read 已算出的注入标记跟着页面走，不在这里丢：搜索摘要
+                    # 的正文进了转录，告警也得跟着进。只在命中时挂键——
+                    # None=缺席=信封缺席即默认的既有约定，干净页零字符。
+                    if page_result.untrusted_content:
+                        page_row["untrusted_content"] = page_result.untrusted_content
+                    fetched_pages.append(page_row)
                 except Exception as e:
                     # Surface the failure instead of silently dropping the page,
                     # so the agent sees a hole in fetched_pages (with the reason)

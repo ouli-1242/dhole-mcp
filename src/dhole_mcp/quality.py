@@ -1367,8 +1367,13 @@ def _with_agent_hints(result: ResponseModel) -> ResponseModel:
     # G25 阶段4：正文是数据，不是指令——命中注入启发式就点名（标记不拦截，
     # 形状与边界见 injection.py 的模块 docstring）。content 里混着的图片块
     # 不是文本，跳过；空 content（错误/robots 拒绝）scan 返回 None。
-    finding = injection.scan("\n".join(
-        chunk for chunk in result.content if isinstance(chunk, str)))
+    # chunking 路径已在 focus/截断前扫过整页并挂了值——见已有值就不重扫
+    # （重扫窗口会把页级计数改写成窗口级）；不经 chunking 的路径在这里
+    # 补扫，作后备。
+    finding = result.untrusted_content
+    if finding is None:
+        finding = injection.scan("\n".join(
+            chunk for chunk in result.content if isinstance(chunk, str)))
     if finding:
         result.untrusted_content = finding
         note = f"untrusted_content: {finding['total']} hit(s)"

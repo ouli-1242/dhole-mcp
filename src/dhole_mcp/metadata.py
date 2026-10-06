@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+# 本模块的参数名 html 遮蔽 stdlib 的 html 模块——直接取 unescape 函数。
+from html import unescape as _html_unescape
 from typing import Any
 from urllib.parse import urljoin
 
@@ -82,13 +84,15 @@ def extract_metadata(html: str, url: str) -> dict[str, Any]:
                 continue
             field = _KEY_MAP.get(key)
             if field and field not in meta:
-                meta[field] = val[:500]
+                # 与正文同一套实体口径：content 已解码，title 带着原始 &amp;
+                # 出引用就是两套口径。
+                meta[field] = _html_unescape(val)[:500]
 
     # <title> fallback.
     if "title" not in meta:
         t = _TITLE_RE.search(html)
         if t:
-            title = re.sub(r"\s+", " ", t.group(1)).strip()
+            title = _html_unescape(re.sub(r"\s+", " ", t.group(1)).strip())
             if title:
                 meta["title"] = title[:500]
 
@@ -131,7 +135,7 @@ def extract_metadata(html: str, url: str) -> dict[str, Any]:
             if "title" not in meta:
                 h = obj.get("headline") or obj.get("name")
                 if h:
-                    meta["title"] = str(h)[:500]
+                    meta["title"] = _html_unescape(str(h))[:500]
             if "description" not in meta:
                 d = obj.get("description")
                 if d:
