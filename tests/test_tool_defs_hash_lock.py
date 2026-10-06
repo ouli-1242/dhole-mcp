@@ -14,7 +14,7 @@ import hashlib
 import json
 import pathlib
 
-from dhole_mcp.server import MasterFetchServer
+from dhole_mcp.server import DHOLE_INSTRUCTIONS, MasterFetchServer
 
 LOCK = pathlib.Path(__file__).resolve().parent / "tool_defs_lock.json"
 
@@ -34,7 +34,29 @@ def test_the_tool_defs_digest_matches_the_lock():
 
 def test_the_lock_file_itself_is_well_formed():
     lock = json.loads(LOCK.read_text(encoding="utf-8"))
-    assert set(lock) == {"comment", "tools", "sha256"}
+    assert set(lock) == {"comment", "tools", "sha256", "sha256_wire_face"}
     assert len(lock["sha256"]) == 64 and all(
         c in "0123456789abcdef" for c in lock["sha256"]), "不是 sha256 的形状"
     assert len(lock["comment"]) > 50, "锁没有 comment 就是没有人说得清它为什么变"
+
+
+def test_the_lock_also_pins_the_default_wire_face():
+    """批次4 刀4（F-C1-1）：锁从「工具描述」扩到「整个连接期面孔」。
+
+    doctor 的 wire face digest 行（updater._append_wire_cost）报的是这条进程
+    实际 serve 的脸；锁里的 sha256_wire_face 存默认面（全部工具的 minimal
+    投影 ＋ DHOLE_INSTRUCTIONS）的同款指纹。算术两边各算各的 —— 这里独立复算。
+    """
+    lock = json.loads(LOCK.read_text(encoding="utf-8"))
+    minimal = [{"name": td["name"], "description": td["description"],
+                "inputSchema": td["inputSchema"],
+                **({"annotations": td["annotations"]}
+                   if "annotations" in td else {})}
+               for td in MasterFetchServer._TOOL_DEFS]
+    payload = {"tools": minimal, "instructions": DHOLE_INSTRUCTIONS}
+    digest = hashlib.sha256(json.dumps(
+        payload, separators=(",", ":"), ensure_ascii=False,
+        sort_keys=True).encode("utf-8")).hexdigest()
+    assert digest == lock["sha256_wire_face"], (
+        "默认连接期面孔变了而锁没动（或反过来）—— 面孔的基线与 doctor 的 "
+        "wire face digest 行对不上，升级比对就失去意义")

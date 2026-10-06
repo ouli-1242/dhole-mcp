@@ -202,7 +202,7 @@ Measured: one call, 8 grouped records, `summary` carrying `nested: 8 links expan
 {"url": "https://example.com/reports/q3.pdf", "method": "HEAD"}
 ```
 
-**A write that needs credentials** stores them first; the request carries them and `identity_applied` names what it ran on (values never enter the transcript):
+**A write that needs credentials** stores them first; the request carries them and `identity_applied` names what it ran on (the store never echoes values back; the arguments you pass do sit in the transcript — operator pre-configuration keeps a value out entirely):
 ```json
 {"tool": "cred_defaults", "arguments": {"set": {"host": "api.example.com", "auth": {"type": "bearer", "token": "eyJ..."}}}}
 {"url": "https://api.example.com/orders", "method": "POST", "body": "{\"item\": 1}", "content_type": "application/json"}

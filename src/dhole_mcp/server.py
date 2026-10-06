@@ -7774,11 +7774,18 @@ class MasterFetchServer:
             import uvicorn
 
             http_token = (env_registry.value_of("DHOLE_HTTP_TOKEN") or "").strip()
-            if host not in ("127.0.0.1", "localhost", "::1") and not http_token:
+            # F-C2-J1：共享是这条传输的固有属性，不随绑定地址变化 —— 回环上
+            # 同进程双实例就是两个客户端，零配置读走彼此的存储身份。警告不再
+            # 豁免回环，且把共享的内容说出口（说出口代替隔离：不做 per-client
+            # 命名空间）；token 是端口门禁，不是主体隔离，这句同样要说。
+            if not http_token:
                 print(
                     f"[dhole] WARNING: HTTP transport bound to {host} with no "
                     "DHOLE_HTTP_TOKEN - any process that can reach this port can "
-                    "call every tool, including writes and stored credentials.",
+                    "call every tool, including writes and stored credentials. "
+                    "Every client on this port shares one credential store, one "
+                    "session state and one cache; the token (when set) gates the "
+                    "port, it does not separate principals.",
                     flush=True)
 
             # G25 评审：此前这层不传 security_settings，SDK 缺省显式关闭 Host/Origin

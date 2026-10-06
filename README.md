@@ -91,7 +91,7 @@ dhole doctor                       # 安装体检：起一次 server、真起一
 | `DHOLE_SEARCH_PROXY` | 搜索引擎被限流 / 被墙时（也自动读 `HTTPS_PROXY` 等）；只想让某一次调用走代理，用 `cred_defaults` 存 |
 | `DHOLE_IGNORE_ROBOTS=1` | 关掉进程级的 `robots.txt` 遵从（单次豁免是 `ignore_robots=true`，那是你的合规决定） |
 | `DHOLE_ALLOW_PRIVATE_HOSTS` | 放行内网 / 本机地址，默认一律拒绝 |
-| `DHOLE_HTTP_TOKEN` | `--http` 传输的 bearer 门：设了之后每个 `/mcp` 调用必须带 `Authorization: Bearer …` 或 `X-Dhole-Token`；未设保持开放行为（非回环绑定启动时警告）。启动时读取，改了要重启 |
+| `DHOLE_HTTP_TOKEN` | `--http` 传输的 bearer 门：设了之后每个 `/mcp` 调用必须带 `Authorization: Bearer …` 或 `X-Dhole-Token`；未设保持开放行为（启动时警告——回环绑定同样警告）。令牌只做端口门禁，不做主体隔离：同一端口的所有客户端共享同一份存储凭据、会话与缓存，要按主体隔离就分端口/分进程各起一个实例。启动时读取，改了要重启 |
 | `DHOLE_PERSIST_CREDENTIALS=1` | 把会话 cookie 与 `cred_defaults` 存的凭据落盘（值经 Windows DPAPI 加密，绑定本用户）。**默认只在内存**：库文件根本不创建，进程结束即清；非 Windows 无 DPAPI，设了也不落盘（`dhole doctor` 报 fail）。启动时读取，改了要重启 |
 | `DHOLE_USAGE_LOG=1` | 本地调用与写操作日志（不记参数值、不联网） |
 | `DHOLE_TOOLS=web_read,web_search` | 只注册列出的工具，连接期省约一半；**写这个就等于关掉其余工具** |
@@ -130,7 +130,7 @@ dhole doctor                       # 安装体检：起一次 server、真起一
 | `dhole skill` | 安装 / 查看随包 agent 技能 |
 | `dhole --http --host --port` | 改用 streamable HTTP 传输（默认 stdio） |
 
-**传输**：`dhole --http` 的端点是 `http://<host>:<port>/mcp`，**这层默认不带鉴权**——设 `DHOLE_HTTP_TOKEN` 后每个调用必须带 bearer 令牌；未设时 `--host 0.0.0.0` 等于把「替你抓任意 URL（含写请求与存储凭据）」开放给整个网络，共享网络里自行套反代 / 认证 / 防火墙。传输层同时校验 Host / Origin 头（DNS rebinding 防护，按 `--host` 构建名单）。
+**传输**：`dhole --http` 的端点是 `http://<host>:<port>/mcp`，**这层默认不带鉴权**——设 `DHOLE_HTTP_TOKEN` 后每个调用必须带 bearer 令牌；未设时启动即警告（回环绑定同样警告），`--host 0.0.0.0` 等于把「替你抓任意 URL（含写请求与存储凭据）」开放给整个网络，共享网络里自行套反代 / 认证 / 防火墙。令牌只做端口门禁，不做主体隔离：同一端口的所有客户端共享同一份存储凭据、会话与缓存（同进程双实例就是两个客户端，回环上同样成立），要按主体隔离就分端口/分进程各起一个实例。传输层同时校验 Host / Origin 头（DNS rebinding 防护，按 `--host` 构建名单）。
 
 ## 工具
 

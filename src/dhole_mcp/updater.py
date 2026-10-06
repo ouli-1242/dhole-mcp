@@ -1359,6 +1359,7 @@ def _append_wire_cost(checks) -> None:
     出来的比值，不是通用常数，所以句子里把出处写在一起。
     """
     try:
+        import hashlib as _hashlib
         import json as _json
 
         from dhole_mcp import server as _srv
@@ -1370,6 +1371,13 @@ def _append_wire_cost(checks) -> None:
         compact = len(_json.dumps({"tools": minimal}, separators=(",", ":"),
                                   ensure_ascii=False))
         total = compact + len(_srv.DHOLE_INSTRUCTIONS)
+        # F-C1-1：字数相同内容不同（一次措辞改写）在 connect cost 行上看不出
+        # 来。指纹覆盖这条进程实际 serve 的脸（minimal defs ＋ instructions，
+        # 与上一行的计价口径同一份输入）；基线在仓库对应 tag 的锁文件里。
+        face_digest = _hashlib.sha256(_json.dumps(
+            {"tools": minimal, "instructions": _srv.ACTIVE_INSTRUCTIONS},
+            separators=(",", ":"), ensure_ascii=False, sort_keys=True,
+        ).encode("utf-8")).hexdigest()
     except Exception as exc:  # noqa: BLE001
         checks.append(("connect cost", "info",
                        f"unreadable: {type(exc).__name__}"[:60], ""))
@@ -1379,6 +1387,15 @@ def _append_wire_cost(checks) -> None:
         f"{len(defs)} tool(s), {total} chars on the wire "
         f"~{total / 4.16:.0f} tokens (4.16 is this payload's measured chars/token)"
         " - to pay less: DHOLE_TOOLS=web_read,web_search (restart the host)",
+        "",
+    ))
+    checks.append((
+        "wire face digest", "ok",
+        f"{face_digest} - sha256 of the face this process serves "
+        f"({len(defs)} tool defs + instructions); compare with "
+        "sha256_wire_face in tests/tool_defs_lock.json of this version's "
+        "source tag - a mismatch means the tools/list content is not the "
+        "reviewed one (differs by design when DHOLE_TOOLS narrows it)",
         "",
     ))
 

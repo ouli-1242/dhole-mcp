@@ -102,7 +102,7 @@ There is no operator knob for this, on purpose. "When does a human need to be in
 
 ### Scenario: serving dhole over HTTP beyond loopback
 
-- `DHOLE_HTTP_TOKEN` — bearer token for the `--http` transport: when set, every `/mcp` call must carry it (`Authorization: Bearer …` or `X-Dhole-Token`, constant-time compare); unset keeps the open-door behavior on whatever `--host` says (default 127.0.0.1), with a startup warning on non-loopback binds. Read at startup — changing it means restarting the server. The transport also validates Host/Origin headers against an allowlist built from `--host` (DNS-rebinding guard); a `0.0.0.0` bind cannot predict client Host headers, which is exactly why the token exists
+- `DHOLE_HTTP_TOKEN` — bearer token for the `--http` transport: when set, every `/mcp` call must carry it (`Authorization: Bearer …` or `X-Dhole-Token`, constant-time compare); unset keeps the open-door behavior on whatever `--host` says (default 127.0.0.1), with a startup warning on any no-token bind — loopback included, since two instances in one process are two clients either way. The token gates the port, it does not separate principals: every client on the port shares one credential store, one session state and one cache — to isolate principals, run one instance per principal (separate port/process). Read at startup — changing it means restarting the server. The transport also validates Host/Origin headers against an allowlist built from `--host` (DNS-rebinding guard); a `0.0.0.0` bind cannot predict client Host headers, which is exactly why the token exists
 
 ### Scenario: data location / privacy / diagnostics
 
