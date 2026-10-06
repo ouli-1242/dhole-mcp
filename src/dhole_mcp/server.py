@@ -309,12 +309,14 @@ from dhole_mcp.context import (
     _SESSION_ID_RE,
     _arg_notes_scope,
     _note_text,
+    _stamp_robots_mode,
+    out_of_band_confirm,
+    set_mcp_session,
     MAX_REQUEST_BODY_BYTES,
     _cache_context,
     _neural_focus_requested,
     _normalize_focus_engine,
     _note_clamped,
-    _stamp_robots_mode,
 )
 
 # Extended extraction types (beyond Scrapling's markdown/html/text)
@@ -1195,14 +1197,30 @@ def _cdp_target_hosts(targets) -> list[str]:
     return hosts
 
 
-def _cdp_attach_gate(cdp_url: Optional[str], confirm: bool = False,
+def _write_ask_text(verb: str, url: str, body: Any) -> str:
+    """out-of-band 写门弹窗的一句话：method / URL / body 摘要 / 凭据随行提示。
+
+    内容取自既有拒答文本已经说过的那几件事——人在弹窗上看到的，就是 agent
+    在转录里被教过的同一份事实，两个通道不许漂。
+    """
+    shape = ("no body" if body is None else
+             "a structured (form/JSON) body" if isinstance(body, (dict, list))
+             else f"a {len(str(body))}-character body")
+    return (f"Approve ONE {verb} request to {url} with {shape}? "
+            "Stored credentials for this host ride along automatically. "
+            "Nothing is sent without your approval.")
+
+
+async def _cdp_attach_gate(cdp_url: Optional[str], confirm: bool = False,
                      targets=()) -> tuple[Optional[str], Optional[frozenset]]:
-    """安全闸 1/2（G33 → 17.0 §3-16 → 批次 7）：CDP attach 改成**先问再记**。
+    """安全闸 1/2（G33 → 17.0 §3-16 → 批次 7 → 批次8 刀1）：CDP attach 先问再记。
 
     attach 用户真实 Chrome = 一次交出**所有已登录站点**的已认证读权限，比
     "写操作要确认"严重一个数量级。所以 cdp_url 默认拒绝；本次要读的**目标主机**里只要
-    有一台从未授权过，就不执行，返回待授权并转述（与 ``submit`` 同一套确认语义）：调用方
-    带 ``confirm=true`` 重发，才把这些主机落盘授权并放行。
+    有一台从未授权过，就不执行，返回待授权并转述（与 ``submit`` 同一套确认语义）。
+    钥匙的形状按连接分两段（F-D-J1）：客户端声明了 elicitation → 人按键授权
+    （out-of-band ask，confirm 参数不参与，拒答/问不到人一律 fail-closed）；能力为假
+    或无会话 → 一字不改，``confirm=true`` 重发才把这些主机落盘授权并放行。
 
     围栏 = 已授权的目标主机集合（机制层执行在 browser.py 的 route handler）。语义因此
     是"你的登录 cookie 只跟着你点名的那些站走"：页面里第三方 origin 的子资源、跳到别的
@@ -1219,7 +1237,24 @@ def _cdp_attach_gate(cdp_url: Optional[str], confirm: bool = False,
     missing = [h for h in wanted if h not in authorized]
     if not missing:
         return None, (authorized or None)
-    if confirm:
+    named = ", ".join(repr(h) for h in missing)
+    human = await out_of_band_confirm(
+        f"Approve attaching your real Chrome to read {named}? This hands over "
+        "the authenticated session of EVERY site you are logged into. The "
+        "approval is remembered per host and later requests to other origins "
+        "stay fenced out of your cookies.")
+    if human is False:
+        _audit_event("cdp_attach_refused", hosts=missing,
+                     endpoint=str(cdp_url)[:120],
+                     reason="out-of-band approval declined or unreachable")
+        return (
+            f"cdp_authorization_required: the approval ask was declined or could "
+            f"not reach a human for {named}, so nothing was executed. dhole asks "
+            "again on every re-call of this url; on connections that support "
+            "elicitation confirm=true does not replace the ask.",
+            None,
+        )
+    if human is True or confirm:
         for host in missing:
             _cdp_authorize_host(host)
         _audit_event("cdp_authorize", hosts=missing,
@@ -1229,7 +1264,6 @@ def _cdp_attach_gate(cdp_url: Optional[str], confirm: bool = False,
     _audit_event("cdp_attach_refused", hosts=missing,
                  endpoint=str(cdp_url)[:120],
                  reason="target host not authorized yet")
-    named = ", ".join(repr(h) for h in missing)
     revoke = " or ".join(f"clear=['cdp:host={h}']" for h in missing)
     return (
         f"cdp_authorization_required: this is the FIRST attach for {named}, so "
@@ -4292,7 +4326,7 @@ class MasterFetchServer:
         # 安全闸 1/2（G33 → 17.0 先问再记）：首次 attach 一台主机不执行，
         # 返回待授权；confirm=true 授权落盘并放行。围栏 = 已授权主机集合，
         # 在浏览器层 route handler 机制执行。
-        gate_err, cdp_allowed = _cdp_attach_gate(cdp_url, confirm=confirm,
+        gate_err, cdp_allowed = await _cdp_attach_gate(cdp_url, confirm=confirm,
                                                  targets=urls)
         if gate_err:
             raise ValueError(gate_err)
@@ -4471,17 +4505,33 @@ class MasterFetchServer:
                 next_action=("Call web_read(url=...) for a GET: it is the door with the "
                              "cache, the anti-bot escalation ladder and the archive "
                              "fallback. Nothing was sent."))
-        if verb in _FETCH_METHODS - {"GET", "HEAD"} and not confirm:
-            # 写操作确认门（G25 评审 Blocker）：submit 有闸、sys_state 清会话有闸、
-            # CDP 首挂有闸，唯独这扇门没有——而被注入的页面正文恰恰能诱导 agent
-            # 直发已认证写请求（cred_defaults 存的凭据按主机自动随行）。与 submit
-            # 同一语义：没有用户点过头，一个请求都不出。
-            return _invalid_request_result(
-                url, f"method={verb} is a write: it changes server state, and "
-                     "stored credentials for this host ride along automatically",
-                next_action=("Ask the user, then re-send the same call with "
-                             "confirm=true. HEAD probes need no confirm. "
-                             "Nothing was sent."))
+        if verb in _FETCH_METHODS - {"GET", "HEAD"}:
+            # 写操作确认门（G25 评审 Blocker；批次8 刀1 把钥匙搬到协议层）：
+            # submit 有闸、sys_state 清会话有闸、CDP 首挂有闸，唯独这扇门没有——
+            # 而被注入的页面正文恰恰能诱导 agent 直发已认证写请求（cred_defaults
+            # 存的凭据按主机自动随行）。声明了 elicitation 的连接上，钥匙来自人
+            # 按键（out-of-band ask），confirm 参数不参与开门、也不在拒答里复活；
+            # 能力为假 / 无会话的连接一字不改：confirm=true 照旧是钥匙。
+            human = await out_of_band_confirm(_write_ask_text(verb, url, body))
+            if human is None:
+                if not confirm:
+                    return _invalid_request_result(
+                        url, f"method={verb} is a write: it changes server state, and "
+                             "stored credentials for this host ride along automatically",
+                        next_action=("Ask the user, then re-send the same call with "
+                                     "confirm=true. HEAD probes need no confirm. "
+                                     "Nothing was sent."))
+            elif not human:
+                # fail-closed：人拒绝了，或 ask 根本没能到人（NoBackChannel 等）
+                # —— 同一答案，因为两种情况都不该回落到模型签名的参数。
+                return _invalid_request_result(
+                    url, f"method={verb} is a write: the approval ask was declined "
+                         "or could not reach a human",
+                    next_action=("Nothing was sent. dhole asks the human again on "
+                                 "every re-send of this call; on connections that "
+                                 "support elicitation confirm=true does not replace "
+                                 "the ask."))
+            # human=True 或（无会话且 confirm=true）→ 继续发送。
         # cache_ttl=0 is not a preference here: a write must never be answered from
         # the cache, and the pipeline reads that rule off the verb anyway. Saying it
         # at the door keeps the two statements from ever disagreeing.
@@ -4720,7 +4770,7 @@ class MasterFetchServer:
 
         # 安全闸 1/2（G33 → 17.0 先问再记）：CDP attach 的授权点在工具入口，
         # 单条与 bulk 两条路都在这里过闸；_open_session 只消费已过闸的结果。
-        gate_err, _cdp_allowed = _cdp_attach_gate(cdp_url, confirm=confirm,
+        gate_err, _cdp_allowed = await _cdp_attach_gate(cdp_url, confirm=confirm,
                                                   targets=(urls or [url]))
         if gate_err:
             return _refusal_result(url or "", gate_err)
@@ -7684,17 +7734,12 @@ class MasterFetchServer:
         """
         return [td for td in cls._TOOL_DEFS if td["name"] in _ENABLED_TOOLS]
 
-    def serve(self, http: bool = False, host: str = "127.0.0.1", port: int = 8765):
-        """Start the MCP server using low-level Server for minimal token overhead.
-
-        When ``http`` is False (default) the server runs over stdio, which is what
-        Claude Code, Cursor, OpenCode, and other local MCP clients expect. When
-        True it exposes the **streamable HTTP** transport (MCP 2025-03-26 spec)
-        at ``http://host:port/mcp``, which is what Open WebUI (v0.6.31+) and
-        other HTTP MCP clients connect to directly, no proxy needed. The legacy
-        SSE transport was removed (deprecated in the spec)."""
+    def _mcp_server(self):
+        """The lowlevel ``mcp.server.Server`` this instance serves — extracted so
+        tests can drive a REAL SDK round trip (in-memory transport) through the
+        same handlers stdio/HTTP run, not a parallel construction."""
         from mcp.server import Server
-        from mcp.types import CallToolResult, CallToolRequestParams, ListToolsResult, Tool, TextContent
+        from mcp.types import CallToolResult, CallToolRequestParams, ListToolsResult, Tool
 
         async def list_tools(ctx, params) -> ListToolsResult:
             return ListToolsResult(tools=[Tool(**td) for td in self._enabled_tool_defs()])
@@ -7708,6 +7753,10 @@ class MasterFetchServer:
             # document, and a per-attempt HTTP timeout came back silent: those layers
             # found no bucket and dropped the sentence on the floor.
             with _arg_notes_scope():
+                # 三扇写门（web_request / submit / CDP 首挂）的 out-of-band
+                # 确认要经这条会话把"问用户"送到协议层；调用结束必须摘下，
+                # 否则同进程下一个不经过 MCP 的调用会继承别人的会话。
+                set_mcp_session(getattr(ctx, "session", None))
                 try:
                     result = await self._dispatch(params.name, params.arguments or {})
                     _log_tool_call(params.name, True, (now() - started) * 1000,
@@ -7715,6 +7764,7 @@ class MasterFetchServer:
                     # _dispatch returns (content_list, structured_dict) or just content_list
                     return _call_result(result)
                 except Exception as e:
+                    from mcp.types import TextContent  # 局部导入与其余传输侧导入同一惯例
                     _log_tool_call(params.name, False, (now() - started) * 1000, str(e))
                     # 兜底仍是裸 {"error": ...}：走到这里说明这不是 dhole 设计过的拒绝
                     # —— 那些自己走信封（闸门拒答见 `_refusal_result`，端点连不上与
@@ -7725,6 +7775,8 @@ class MasterFetchServer:
                         content=[TextContent(type="text", text=error_text)],
                         is_error=True,
                     )
+                finally:
+                    set_mcp_session(None)
 
         # 只注册 tools 两面，不注册 resources/read（F-D-J3 判决，2026-10-06 复核
         # 维持）：ResourceLink 替不掉「大正文不进转录」——服务器无 resources 门、
@@ -7736,7 +7788,7 @@ class MasterFetchServer:
         #      dhole://cache/<id> 从缓存解引用，省掉第二轮）。
         # 若做：连接期代价为 0（响应内容类型不在 tools/list 面）；先失败的测试
         # 名 test_resource_link_uris_resolve_from_the_fetch_cache。
-        server = Server(
+        return Server(
             "Dhole",
             version=__version__,
             instructions=ACTIVE_INSTRUCTIONS,
@@ -7745,6 +7797,16 @@ class MasterFetchServer:
             on_call_tool=call_tool,
         )
 
+    def serve(self, http: bool = False, host: str = "127.0.0.1", port: int = 8765):
+        """Start the MCP server using low-level Server for minimal token overhead.
+
+        When ``http`` is False (default) the server runs over stdio, which is what
+        Claude Code, Cursor, OpenCode, and other local MCP clients expect. When
+        True it exposes the **streamable HTTP** transport (MCP 2025-03-26 spec)
+        at ``http://host:port/mcp``, which is what Open WebUI (v0.6.31+) and
+        other HTTP MCP clients connect to directly, no proxy needed. The legacy
+        SSE transport was removed (deprecated in the spec)."""
+        server = self._mcp_server()
         if not http:
             import anyio
             from mcp.server.stdio import stdio_server

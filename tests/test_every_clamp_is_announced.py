@@ -255,8 +255,10 @@ def test_every_tool_call_opens_one_bucket():
     开在 `_dispatch` 上也算"一处"，但那颗方法体是四条源码形状守卫共同的读取对象
     （"分发器不许把已删的参数名再 smuggle 回来"），把它的 body 搬进另一颗方法
     就等于悄悄让那四条各看一半。尺子跟着形状走：读 handler。
+    批次8 刀1 把 handler 随 Server 构造一起抽进 `_mcp_server()`（真 SDK in-memory
+    回路要拿到同一个对象）；桶的形状没动，守卫跟着搬，不是放宽。
     """
-    src = inspect.getsource(MasterFetchServer.serve)
+    src = inspect.getsource(MasterFetchServer._mcp_server)
     assert "_arg_notes_scope()" in src, "工具面又回到只有一种工具有桶的状态"
     # 而且桶必须包住整次调用（含 finalization），不然话记下了、summary 已经走了。
     handler = src.split("async def call_tool", 1)[1]

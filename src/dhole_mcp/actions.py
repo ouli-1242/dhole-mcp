@@ -59,7 +59,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from dhole_mcp import install as _install
-from dhole_mcp.context import _clamp_note, _note_text
+from dhole_mcp.context import _clamp_note, _note_text, out_of_band_confirm
 
 
 logger = logging.getLogger("dhole-mcp.actions")
@@ -1110,11 +1110,29 @@ def build_page_action(actions) -> Optional[Callable]:
                         shot["elements_truncated"] = True
                 elif "submit" in a:
                     s = a["submit"]
-                    if not s.get("confirm"):
-                        # 审批闸（安全红线 3）：提交是不可逆的一步。暂停而不是
-                        # 执行——行内标记 pending_approval，其余动作照常跑完
-                        # （页面停在提交前的状态），agent 转达用户，确认后带
-                        # {"confirm": true} 重跑同一条 actions 链。
+                    # 审批闸（安全红线 3）：提交是不可逆的一步。批次8 刀1 把
+                    # 钥匙按连接分段：声明了 elicitation 的连接上，人按键授权
+                    # （out-of-band ask）——confirm 参数不参与开门，拒答 / 问
+                    # 不到人一律 fail-closed；能力为假 / 无会话 → 一字不改，
+                    # {"confirm": true} 重跑同一条 actions 链照旧放行。
+                    human = await out_of_band_confirm(
+                        f"Approve ONE form submission on this page "
+                        f"(target: {label})? The submission is irreversible "
+                        "once sent. Nothing is submitted without your approval.")
+                    if human is False:
+                        outcomes.append({
+                            "action": label, "ok": False, "pending_approval": True,
+                            "error": ("pending_approval: the approval ask was "
+                                      "declined or could not reach a human - "
+                                      "nothing was submitted. dhole asks again on "
+                                      "any re-run of this chain; there is no "
+                                      "parameter that skips the ask."),
+                        })
+                        continue
+                    if human is None and not s.get("confirm"):
+                        # 暂停而不是执行——行内标记 pending_approval，其余动作
+                        # 照常跑完（页面停在提交前的状态），agent 转达用户，确认
+                        # 后带 {"confirm": true} 重跑同一条 actions 链。
                         outcomes.append({
                             "action": label, "ok": False, "pending_approval": True,
                             "error": ("pending_approval: submitting is an irreversible "

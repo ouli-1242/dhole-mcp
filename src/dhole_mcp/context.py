@@ -76,6 +76,58 @@ _IDENTITY_APPLIED: contextvars.ContextVar[str] = contextvars.ContextVar("_identi
 # 让"这次删了几行样板"在信封上可见 —— 静默删内容比留着样板更糟。默认 0 = 没删。
 _BOILERPLATE_LINES_COLLAPSED: contextvars.ContextVar[int] = contextvars.ContextVar(
     "_boilerplate_lines_collapsed", default=0)
+# 本次 MCP 调用的 ServerSession（call_tool 入口存，调用结束清）。写门的
+# out-of-band 确认（elicitation）靠它到达协议层的人机通道——放在 context.py
+# 是因为 submit 闸在 actions.py，而 lower-layer 模块不许 import server。
+_MCP_SESSION: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(
+    "_mcp_session", default=None)
+
+
+def set_mcp_session(session: Optional[Any]) -> None:
+    _MCP_SESSION.set(session)
+
+
+async def out_of_band_confirm(message: str) -> Optional[bool]:
+    """把"问用户"从模型签名的参数搬到协议层的人机通道（MCP elicitation）。
+
+    三态语义（批次8 刀1，F-D-J1）：
+      ``None``  本次调用没有 MCP 会话，或会话没声明 elicitation 能力 ——
+                各扇门保持既有参数行为，一字不改（CLI、直连 dispatch、旧宿主）。
+      ``True``  人在弹窗上点了接受。
+      ``False`` 人拒绝 / 取消，或问不到人（NoBackChannelError 等任何应答失败）
+                —— fail-closed：调用方必须拒答，**绝不回落参数 confirm**，否则
+                注入方制造一次 elicitation 故障就把门推回模型手里。
+
+    按连接协商、不按次：能力为真的连接上 confirm 参数不参与开门（照问），
+    避免同一连接两种门混用。requested_schema 为空：只借 accept/decline/cancel，
+    不向用户收字段。
+    """
+    session = _MCP_SESSION.get()
+    if session is None:
+        return None
+    from mcp.types import ClientCapabilities, ElicitationCapability
+    try:
+        capable = session.check_client_capability(
+            ClientCapabilities(elicitation=ElicitationCapability()))
+    except Exception:
+        # 能力读不出来 = 客户端没能成功声明它，按未声明走参数门。
+        return None
+    if not capable:
+        return None
+    from mcp.shared.exceptions import NoBackChannelError
+    # 空表单的最小合法形状：不带任何字段，只借 accept/decline/cancel。
+    # （裸 {} 会被客户端侧的请求校验拒成 Invalid request parameters —— 实测。）
+    try:
+        result = await session.elicit_form(
+            message, {"type": "object", "properties": {}})
+    except NoBackChannelError:
+        return False
+    except Exception:
+        # 其余应答失败同权：问不到人的门不能开。CancelledError 不在此列
+        # （BaseException），取消就该取消。
+        return False
+    return getattr(result, "action", None) == "accept"
+
 # A jar key is a plain word, nothing else (see _clean_session_id).
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 # Per-call HTTP method / request body (G8). Read where the request is actually
