@@ -6,7 +6,7 @@
     "schema_file": "evals/.runtime/skill-calibration/A.schema.json —— 从 `MasterFetchServer._TOOL_DEFS` 现取，与 tools/list 一字节一致。每次跑之前重新导出一遍；第一轮的 A 档整档作废，就是因为提示词指向了一份没导出的文件。",
     "evidence": "evals/.runtime/skill-calibration/<case>-<arm>.calls.jsonl 与 .answer.txt",
     "guards": "每档都禁止：调用任何 Skill、读取清单外的文件、用 WebSearch/WebFetch。A 档只许读 schema_file。",
-    "runs": "第一轮 2026-10-03：A 9/20、C 15/20。第二轮同日补 B（schema + SKILL.md）= 16/20、全绿 1/5。三档不可横比：A/C 量在三处工具修补与语料改写之前。",
+    "runs": "第一轮 2026-10-03：A 9/20、C 15/20。第二轮同日补 B（schema + SKILL.md）= 16/20、全绿 1/5。三档不可横比：A/C 量在三处工具修补与语料改写之前。\n第三轮 2026-10-06（批次 12–16 之后的 wire 与语料上重跑，A.schema.json 当日重导出；三档 = 三个同模型子代理，各自独立、只读本档材料）：A 12/20（全绿 1/5）、B 13/20（全绿 1/5）、C 13/20（全绿 2/5，author-per-quote 唯一满格 5/5）。读数：①扇出价值仍集中在 author-per-quote——A 档 urls= 手搭第二层被抓（few_calls + no_hand_rolled 俱 MISS），B 用了 nested 但先发两发探针（few_calls MISS），C 一发命中；②tag-pages 三档全红且形状一致：30 个标签恰好贴着 nested_max=30 的上限，三档都退回 urls= 批量——urls= 是文档教的合法路径，断言只认 nested 一条路，这是尺子与语料在『哪条路才算对』上打架，记为待议（给『贴上限的扇出也成立』补一句，或让断言接受 urls= 的等价形状），本轮不改；③shell-is-not-an-answer 三档全诚实（no_fake_absence / tells_the_user_the_truth 全过）：站酷首页确实没有『推荐专题』栏目（懒加载/改版），三档都升级 stealthy 并如实说拿不到，零捏造；④asked-for-one-page-only 三档满分（克制不扩散）；⑤B≈C 打平：SKILL.md 已把扇出教到位，references 的增量在这五格上不明显。横比限制同前两轮：A/C 的旧数字量在旧 wire 上，不可与新数字同表读。",
     "ruler_defects": "记录脚本的 error 字段原来只抓抛出的异常，抓不到工具自己回的 `nested_no_match`（它是 200 形状的错误回答），据此数出的「零次 no_match」是假的 0；已改为同时读 audit._result_error。另一处：arm A 的 schema_file 必须每次重新导出。"
   },
   "arms": {
