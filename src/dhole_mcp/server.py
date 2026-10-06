@@ -6628,7 +6628,9 @@ class MasterFetchServer:
             if "cred_defaults" in report:
                 counts.append(f"stored identity rows {len(cred_rows)}")
             if "cdp_hosts" in report:
-                counts.append(f"cdp-approved hosts {len(cdp_roster)}")
+                counts.append(f"cdp-approved hosts {len(cdp_roster)} "
+                              "(no expiry; keyed to the target host, not the "
+                              "cdp endpoint)")
             if "engine_state" in report:
                 counts.append("engine health "
                               + (f"{len(health)} row(s)" if health else "not reported"))

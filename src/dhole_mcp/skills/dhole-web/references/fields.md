@@ -28,6 +28,16 @@ Consult this when a response doesn't make sense or a field shows a non-default v
 | `content_age_days` + `is_stale` | Content age / staleness flag (news 30d, docs/reference/paper 730d, rest 365d) | On `is_stale=true`, label citations with dates; `null` = continuously-edited site with no mtime |
 | `extracted_type` | `structured` when schema extraction was applied | — |
 
+## Change receipt (`extraction_type='check'`)
+
+`check` answers "did it move" instead of returning the page (see tools.md, the sixth extraction value). Three rows cover everything the receipt can add to `status`/`fetcher`:
+
+| Field | Meaning | What to do when non-default |
+|---|---|---|
+| `changed` | `true` = the page moved since dhole's last stored html copy (the 7-day baseline); `false` = the origin answered 304 Not Modified, or the body is byte-identical to the baseline; `null` = no comparable baseline yet — this call fetched and recorded one; both body sizes ride `baseline_chars`/`fresh_chars` | On `true`, read `first_divergence_at`/`diff_window` and refetch with `extraction_type='markdown'` only if you need the page; on `null`, ask again with `check` |
+| `first_divergence_at` | Character position where the fresh text first departs from the baseline (present only when `changed=true`) | A tiny number = a preamble or timestamp moved; a large one = real content moved |
+| `diff_window` | Fresh-side text around the first divergence (~60 chars before it, ~140 after) — not a unified diff | Read it to judge what changed without refetching |
+
 ## Provenance (citations and trust)
 
 | Field | Meaning | What to do when non-default |
