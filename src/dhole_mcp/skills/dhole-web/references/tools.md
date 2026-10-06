@@ -93,6 +93,12 @@ A non-GET is its own tool: `web_request(url=, method=, body=, content_type=)`. `
 
 Unknown verbs are refused with the list of the five, before anything is sent; `method=GET` is refused with a pointer to web_read — GET stays out because **web_read owns** the cache, the escalation ladder and the archive fallback, and a write must not be read through those. Sending a write is the one call worth checking first: `web_read` follows redirects and reports where a URL actually lands.
 
+## What `readOnlyHint` promises (and what it leaves to you)
+
+Four tools carry `readOnlyHint: true` on the wire: web_read, web_crawl, web_discover, feed_read. The promise is exact and code-backed: they send GET requests only (anything else is web_request's gate above), and their local writes are process bookkeeping — the body cache, the cookie jar a site's session left, engine cooldowns. Identity is the one border: a `cdp_url` attach rides your logged-in Chrome, which is why the FIRST attach for a site stops at `cdp_authorization_required` until you approve it.
+
+A host that auto-approves readOnly tools on this hint should know what that includes: `ignore_robots=true` is a compliance call the agent makes itself — no human gate sits behind it. The hint is true; it is not supervision.
+
 ## Credentials, cookies and sessions
 - **`auth` and `cookies` are stored, not passed** `cred_defaults` `set={auth: ..., host: "api.example.com"}`. `auth` shapes are `{type:'basic',username,password}` / `{type:'bearer',token}` / `{type:'header',name,value}` (for `X-API-Key`-style headers — a one-off custom header is not a thing any more; the stored `auth` of type `header` is how such a site is reached). It only places the header — **no OAuth flows, no token refresh**; when a token expires, store a fresh one. Credential **values** are never echoed anywhere; bodies fetched with credentials are cached per-credential (an admin view is never replayed to anonymous requests)
 - **Credentials do not survive cross-origin redirects**: cookies and `Authorization` go only to the origin you named; a hop to another domain strips them (same-host hops and hosts already holding that cookie in the jar keep them)
