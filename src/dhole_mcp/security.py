@@ -241,6 +241,15 @@ def probe_fake_ip() -> tuple[str, str, str]:
 
     Uncertainty is never a reason to relax: an unresolvable probe (offline, or a
     resolver that hides the answer) returns ``unprobed`` and the recheck stays on.
+
+    F-C2-J2 判决（2026-10-06 复核维持）：探测定居为单域名、无旋钮、进程级一次。
+    残余攻击路径真实存在（敌意 LAN 控制解析器 → 本进程首次 hostname 校验前毒化
+    探测域 → 复验层永久关闭），但**手动旋钮不修它**——攻击者不经过旋钮；可见性
+    已在场（auto-note 进回执、crawl 回执 ssrf_recheck、resolver_probe.json 供
+    doctor 对质）。可选加固（收益/复杂度不成比例，非必需主张）：探测改双独立
+    域名合取，或 verdict 带 TTL 定期重探。若做，先失败的测试名
+    test_a_single_poisoned_answer_flips_the_verdict_off（症状：一个域名的答案
+    决定整机复验层）。
     """
     global _fake_ip_cache, _auto_note
     if _fake_ip_cache is not None:

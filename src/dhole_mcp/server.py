@@ -7726,6 +7726,16 @@ class MasterFetchServer:
                         is_error=True,
                     )
 
+        # 只注册 tools 两面，不注册 resources/read（F-D-J3 判决，2026-10-06 复核
+        # 维持）：ResourceLink 替不掉「大正文不进转录」——服务器无 resources 门、
+        # 宿主无 ResourceLink 渲染、agent 不会自发发第二轮读取，三个前提今天一
+        # 个都不在场；单信封 ＋ max_content_chars/offset/focus/schema 已把进转录
+        # 的量做成同调用旋钮。重开条件写死（两者取一即重开）：
+        #   a) 因为别的理由加了 resources/read 处理器；
+        #   b) 有证据显示 agent 在 40k 截断后反复 offset 重抓（届时
+        #      dhole://cache/<id> 从缓存解引用，省掉第二轮）。
+        # 若做：连接期代价为 0（响应内容类型不在 tools/list 面）；先失败的测试
+        # 名 test_resource_link_uris_resolve_from_the_fetch_cache。
         server = Server(
             "Dhole",
             version=__version__,
