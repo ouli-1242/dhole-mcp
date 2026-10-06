@@ -1,5 +1,5 @@
 {
-  "comment": "#8 共识感知扇出 + #6/#7a/#8/#9/#10 文档层缺口：`web_search` 增一颗可选参数 fetch_min_consensus（int，默认 0=现状），只作用于 fetch_content=true 的自动取正文，语义是「够不够独立佐证」的地板，不是第三个相关性排序旋钮——只抓被 >=N 个独立索引家族共同确认的结果，被跳过的 URL 进 consensus_skipped，每页回执带自己的 engines_consensus。**选可选参数而非改默认行为**：改默认会悄悄换掉每个既有调用抓回的页面，正是本项目最防的那类失败（看起来成功、结果被换了）。同批把 doc_parse 的文档层缺口补齐：新增 pages / password 两颗参数（逐字复用 web_read 同名同义字段的措辞，同一事实一个作者），file_path 描述放行 .xlsm / .tsv，并写清 OLE2/CFB 旧版 Office 按魔数拒收。**本批唯一一次「棘轮往下」**：pptx 讲者备注读进来之后，那一句里的 `speaker notes, ` 从「带不走」清单里划掉（同一事实一个作者，不新增句子——读取器总是读备注，「没看到备注」就无歧义地等于「这页没有备注」）。连接期 30,629 → 31,065（#8 共识扇出 +195、doc_parse 补齐 +241）→ **31,050**（备注 -15）。**参数名与判据必须在连接期到场**——表外名会被 dispatch 拒掉，藏在签名里没人调用得到。工具颗数不变（11）。",
+  "comment": "批次3 刀2（F-D-1，已独立复核）：删掉 web_act annotations 里的 \"destructiveHint\": False —— SDK 规范语义是 \"If false, the tool performs only additive updates … Default: true\"，而 submit 门自己承认不可逆（pending_approval：\"submitting is an irreversible …\"）。hint 的读者是宿主不是 confirm 门：写 False 是主动错报（错的声明让宿主把可破坏工具当加性工具对待），删键落回 spec 默认 true，声明从错变保守。连接期 31,050 → 31,026（实测 -24；报告按源码字面量预估 -26，wire compact 序列化口径不同，以尺子为准）。唯一改动的注解键是这一颗；web_request 的 destructive=true 是真话，未动。",
   "tools": 11,
-  "sha256": "e5939f0dc13609d052edd3b04a0c0891012b8f62acd728898653510cafa780e3"
+  "sha256": "9054c50855b07bf3d71f0e9d63d7178880a31c4a0da022ca94f075a74ff90c7b"
 }

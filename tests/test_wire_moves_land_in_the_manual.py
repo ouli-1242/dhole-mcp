@@ -231,7 +231,12 @@ def test_connect_stays_inside_the_packed_budget():
 #: 第一行的职责是声明没带什么，带上了就从那张单子上下来；而读取器**总是**读备注，
 #: 于是「没看到备注」无歧义地等于「这页没有备注」，再解释一遍就是同一事实说两遍。
 #: 净 -15 → **31,050**（本批唯一一次向下：删掉的是一句不再为真的话，不是信息）。
-CONNECT_CEILING = 31_050
+#: 2026-10-07 web_act 的 destructiveHint：棘轮**往下**。SDK 规范语义 "If false,
+#: the tool performs only additive updates … Default: true"，而 submit 门自己承认
+#: 不可逆 —— 写 False 是主动错报，删键落回 spec 默认 true，声明从错变保守。
+#: 实测 -24 → **31,026**（评审按源码字面量预估 -26，wire compact 序列化口径不同，
+#: 以尺子为准）。
+CONNECT_CEILING = 31_026
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

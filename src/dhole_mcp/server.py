@@ -4594,7 +4594,7 @@ class MasterFetchServer:
         - When you don't know which fetcher to use. This tool decides for you.
 
         When NOT to use:
-        - Taking screenshots: use the screenshot tool instead
+        - Taking screenshots: pass a screenshot action to web_act's chain
         - Web search: use web_search instead
         - You specifically need HTTP-only without escalation: set force_fetcher="http"
 
@@ -7271,7 +7271,10 @@ class MasterFetchServer:
         cache_ttl: int = DEFAULT_TTL,
         force_fetcher: Optional[str] = None,
         timeout: int = 30000,
-        deadline_ms: int = 120000,
+        # 25000 而不是 120000：wire 描述、tools.md、批次13 ledger 三处承诺的都是
+        # 25,000（内部预算必须赶在宿主 30s 超时之前）。库里那半截早已改到，
+        # 这里曾漏改 —— 库默认被这个入口默认原样盖住，永不生效。
+        deadline_ms: int = 25000,
         sitemap: str | bool = False,
         search: Optional[str] = None,
         ignore_robots: bool = False,
@@ -7467,10 +7470,12 @@ class MasterFetchServer:
                     "headed": {"type": "boolean", "description": "Run this chain in a VISIBLE window so the user can watch and step in (log in by hand, one CAPTCHA). Default hidden. A hidden browser already up on that profile is neither taken over nor closed - refused (browser_busy). Consequences: sys_guide(topic='config', section='Variables by scenario')."},
                 },
             },
-            # 它会动页面，所以不是只读；同一串动作再跑一遍不保证同一个答案。真正不可
-            # 逆的那一步（submit）由 confirm 单独设门，不是靠这颗注解提示客户端"小心"。
+            # 它会动页面，所以不是只读；同一串动作再跑一遍不保证同一个答案。
+            # destructiveHint 落回 spec 默认（true）：submit 那一步真的不可逆，
+            # 写 False（"only additive updates"）是主动错报，读者是宿主不是
+            # confirm 门。
             "annotations": {"readOnlyHint": False, "idempotentHint": False,
-                            "destructiveHint": False, "openWorldHint": True},
+                            "openWorldHint": True},
         },
         {
             # 17.0 §4 第 4 行。描述里那四条一次性规则是从 web_read 的 method 分支

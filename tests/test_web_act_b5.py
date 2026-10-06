@@ -72,14 +72,20 @@ class TestTheToolExists:
         assert set(schema["properties"]) == set(server_mod._TOP_LEVEL_ARGS["web_act"])
 
     def test_it_is_a_write_on_the_wire_but_not_the_irreversible_one(self):
-        """readOnly/idempotent 都是 False；destructive 留给 submit 那颗门去管。
+        """readOnly/idempotent 都是 False；destructive 落回 spec 默认（键不出现）。
 
         动作链会改页面，但真正不可逆的那一步（submit）不带 confirm 就暂停 —— 客户端
         要按"每次都要问"来标它，就会把 scroll 也一起问一遍，那道门的设计意义全没了。
+        2026-10-07 修正：destructiveHint 曾显式写 False，而 SDK 规范语义是
+        "If false, the tool performs only additive updates … Default: true" ——
+        submit 门自己承认不可逆，写 False 是主动错报（hint 的读者是宿主不是
+        confirm 门）。删键落回默认 true，声明从错变保守；本测试改为钉"键不出现"，
+        不许它再以任何显式值回来。
         """
         ann = _defs()["web_act"]["annotations"]
         assert ann["readOnlyHint"] is False and ann["idempotentHint"] is False
-        assert ann["destructiveHint"] is False and ann["openWorldHint"] is True
+        assert ann["openWorldHint"] is True
+        assert "destructiveHint" not in ann
 
     def test_the_three_rules_came_along_with_the_parameter(self):
         """搬工具不许搬走规矩：snapshot 先数 / submit 先问 / 验证码三次就转交。"""
