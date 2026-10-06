@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -174,6 +175,15 @@ def _resolve_save_to(save_to: str, image_type: str) -> Path:
         raise ValueError(
             f"refusing to create {str(target)!r} - it is not named like an image; "
             f"pass a path ending in .{image_type.lower()}")
+    # 读侧的房间黑名单对写侧同样生效：System32、~/.ssh、~/.dhole 不因为
+    # 「后缀像图片」就变成可写的目的地。realpath 先展开链接，与读侧共用
+    # 同一份清单 —— 就地 import：模块级 import server 会绕成循环。
+    from dhole_mcp.server import _blocked_path_prefix
+    blocked = _blocked_path_prefix(os.path.realpath(target))
+    if blocked:
+        raise ValueError(
+            f"refusing to write {str(target)!r} - it is in a restricted "
+            f"system directory ({blocked})")
     return target
 
 

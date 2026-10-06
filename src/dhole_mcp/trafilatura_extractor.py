@@ -21,7 +21,7 @@ from lxml.html import fromstring as html_fromstring
 
 # envelope 只有标准库依赖，不会绕回这颗模块（fetcher 会，所以那边是函数内延迟导入）。
 # 塌陷的分界因此只有一份定义：抽取侧用它决定要不要换臂，判定侧用它决定"少"怎么说。
-from dhole_mcp.envelope import is_extraction_collapsed, visible_text_chars
+from dhole_mcp.envelope import visible_text_chars
 
 logger = logging.getLogger("dhole_mcp.trafilatura_extractor")
 

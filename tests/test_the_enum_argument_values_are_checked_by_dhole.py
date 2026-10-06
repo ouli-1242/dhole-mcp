@@ -27,7 +27,6 @@ dhole 自己那条 `_validate_freshness` 早就写得更好：`Invalid freshness
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import get_args
 
 import pytest

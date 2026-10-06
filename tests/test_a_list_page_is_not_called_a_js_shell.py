@@ -34,7 +34,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 from bs4 import BeautifulSoup
 
 from dhole_mcp.envelope import (

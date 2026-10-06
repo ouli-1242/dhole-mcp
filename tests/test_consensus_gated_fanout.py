@@ -16,7 +16,6 @@
 一遍 `server.web_search`，确认接线与回执。
 """
 
-import json
 from unittest.mock import AsyncMock
 
 import pytest

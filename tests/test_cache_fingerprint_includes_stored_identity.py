@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
 
 from dhole_mcp import identity
 from dhole_mcp.server import MasterFetchServer, ResponseModel
@@ -63,7 +62,7 @@ def _read(url: str = URL) -> ResponseModel:
 
 def test_anonymous_reads_still_share_the_cache_entry(monkeypatch):
     calls = _counting_fetch(monkeypatch)
-    first = _read()
+    _read()
     second = _read()
     assert len(calls) == 1, "第二次读应命中缓存"
     assert "body-1" in second.content

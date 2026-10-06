@@ -137,7 +137,7 @@ class TestEdgeUserAgent:
     def test_headless_ua_carries_the_edg_token(self, monkeypatch, win_roots):
         """按真实 msedge.exe 版本构造 UA，带 Edg/ 令牌，不带 Headless。"""
         _force_win(monkeypatch)
-        exe = _install(win_roots / "pf86", "Microsoft/Edge/Application", "msedge.exe")
+        _install(win_roots / "pf86", "Microsoft/Edge/Application", "msedge.exe")
 
         class _Done:
             stdout = "139.0.3405.119\n"

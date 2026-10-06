@@ -427,7 +427,9 @@ def _hosts_file_pin(hostname: str) -> str | None:
                         continue
                     ip = parts[0]
                     for name in parts[1:]:
-                        table[name.rstrip(".").lower()] = ip
+                        # 首行赢，与 glibc / Windows 的 hosts 语义一致：黑洞钉位
+                        # （0.0.0.0）在前、后行改写的文件，OS 拒绝而这里曾放行。
+                        table.setdefault(name.rstrip(".").lower(), ip)
             _hosts_cache = (mtime, table)
             _hosts_cache_reset_dns()
         return table.get(hostname.rstrip(".").lower())
@@ -720,6 +722,15 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
                     pass  # Not resolvable to a valid IP after normalization
 
         if is_ip:
+            # 元数据字面量按规范化地址拦，且先于 allowlist 询问：100.64.0.0/10
+            # （CGNAT，阿里云 IMDS 所在）不在 _PRIVATE_NETWORKS，私网循环对它
+            # 不设防，allowlist 分支只在地址命中私网段时才被问 —— 不在这里拒，
+            # 点名放行也拦不住它。十进制/十六进制/短格式归一后是同一个地址，
+            # 一样命中。
+            if str(addr) in _METADATA_HOSTS:
+                raise SecurityError(
+                    f"URL targets internal cloud metadata endpoint ({addr})"
+                )
             # G9: an internal target the operator named in DHOLE_ALLOW_PRIVATE_HOSTS
             # or allow_private is fetched instead of refused. Cloud metadata
             # is never allowed (see _private_host_allowed).
@@ -749,6 +760,10 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
             hostname_lower = hostname.lower()
             if hostname_lower in _BLOCKED_HOSTNAMES and not _private_host_allowed(hostname_lower):
                 raise SecurityError(f"URL targets internal service: {hostname}")
+            # 裸主机名 `metadata` 不在 _BLOCKED_HOSTNAMES 里，但它在 _METADATA_HOSTS
+            # 里 —— 同一道门，没有 allowlist 出口。
+            if hostname_lower in _METADATA_HOSTS:
+                raise SecurityError(f"URL targets internal cloud metadata endpoint: {hostname}")
             # Block DNS rebinding services that resolve to internal IPs.
             # 没有 allowlist 出口：这类服务把任意域名解析到任意 IP，放行它就等于
             # 把整份内网判定交给了外部解析器。

@@ -1050,5 +1050,4 @@ class TestScreenshotErrorsAreActionableNotRawDriverLogs:
 
         asyncio.run(_capture())
         (row,) = pa.outcomes
-        text = row["error"]
         assert row["ok"] is False

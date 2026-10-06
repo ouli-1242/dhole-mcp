@@ -155,7 +155,6 @@ if TYPE_CHECKING:
     from dhole_mcp.fetcher import Response as _DholeResponse
     from dhole_mcp.crawl import CrawlResponseModel
     from dhole_mcp.search import SearchResponseModel
-    from mcp.types import ImageContent, TextContent
 
 from dhole_mcp.cache import (
     DEFAULT_TTL, cache_stats, clear_all_cache, get_cached, set_cached,
@@ -2399,7 +2398,11 @@ def _auth_request_headers(
         kind = "header"
 
     if kind not in _AUTH_KINDS:
-        raise ValueError(f"unsupported auth type {auth.get('type')!r}")
+        # 固定句，不回显 type 原文：调用方把 token 贴进 type 时，错误文本会
+        # 无界携带它。三个 kinds 在句尾点名，诊断价值不减。
+        raise ValueError(
+            "unsupported auth type — expected 'basic', 'bearer' or 'header' "
+            "(the shapes below name the fields each one needs)")
 
     if kind == "basic":
         if username is None or password is None:
@@ -2514,7 +2517,13 @@ def _identity_value_error(key: str, value: Any) -> str:
                     "{type:'header',name,value}")
         return ""
     if key == "cookies":
-        if not _safe_cookie_dict(value):
+        try:
+            usable = _safe_cookie_dict(value)
+        except (TypeError, AttributeError):
+            # 不可迭代的值（一个整数、一个数）按形状错处理，不砸 handler：
+            # 这条错误面的契约是 "the error names the seven keys"。
+            usable = None
+        if not usable:
             return ("cookies: nothing usable — pass a {{name: value}} dict, a list "
                     "of {{name, value, domain}}, or one 'a=1; b=2' header string")
         return ""
@@ -3013,14 +3022,25 @@ def _blocked_path_prefix(real_path: str) -> str:
     allowed directory cannot dodge the list.
     """
     blocked_dirs = (
-        # Windows system directories
-        "c:\\windows", "c:\\program files", "c:\\program files (x86)",
+        # Windows system directories. %SystemRoot% 派生而不是写死 C 盘：
+        # Windows 装在 D 盘的机器上，写死的 c:\windows 拦不住真正的系统目录。
+        (os.path.normpath(os.environ.get("SystemRoot") or "C:\\Windows")
+         if os.name == "nt" else "c:\\windows"),
+        "c:\\program files", "c:\\program files (x86)",
+        "c:\\programdata\\ssh",
         # Unix system directories
         "/etc", "/proc", "/sys", "/dev", "/boot", "/var/run",
         # Sensitive user directories
         os.path.expanduser("~/.ssh"),
         os.path.expanduser("~/.gnupg"),
         os.path.expanduser("~/.aws"),
+        # dhole 自己的秘密与常见凭据存放点：config.json 存 secret 级旋钮，
+        # 其余四个是各自工具链的默认凭据位置。
+        os.path.expanduser("~/.dhole"),
+        os.path.expanduser("~/.config/gcloud"),
+        os.path.expanduser("~/.config/gh"),
+        os.path.expanduser("~/.azure"),
+        os.path.expanduser("~/.kube"),
     )
     # 敏感文件/目录黑名单（追加，覆盖常见凭据文件）
     blocked_files = (
@@ -6735,8 +6755,10 @@ class MasterFetchServer:
         problems = [_identity_value_error(k, v) for k, v in items.items()]
         problems = [p for p in problems if p]
         if problems:
+            # 全库不变式：错误面全量过 redact。这条是最后一个没过的调用点。
             return CredDefaultsModel(
-                error="; ".join(problems), next_action="Nothing was stored.")
+                error=redact_api_key("; ".join(problems)),
+                next_action="Nothing was stored.")
 
         forgotten: List[str] = []
         if forget:
@@ -6874,6 +6896,17 @@ class MasterFetchServer:
                     fetcher_used="parse",
                     error=f"Access denied: path is in a restricted system directory ({blocked})",
                 ))
+            # NTFS 备用数据流：扩展名门按流名取后缀（report.txt:hidden.json
+            # 判成 .json），流内容会原文返回。盘符之后的冒号在 NTFS 上只能是
+            # 流语法。POSIX 的冒号是合法文件名字符，不启用。
+            if _os.name == "nt":
+                _drive, rest = _os.path.splitdrive(real)
+                if ":" in rest:
+                    return _with_agent_hints(ResponseModel(
+                        url=Path(target).as_uri(), status=0, content=[],
+                        fetcher_used="parse",
+                        error="Access denied: path names an NTFS alternate data stream",
+                    ))
             target = real
 
         if not target:

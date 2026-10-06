@@ -189,7 +189,7 @@ class TestSchemaCacheM3:
         """同一页换 schema 重抽：第二遍吃缓存，origin 的命中计数不动。"""
         url, srv = origin
         base = srv.hits
-        first = await MasterFetchServer().web_read(url, schema=SCHEMA_A, cache_ttl=600)
+        await MasterFetchServer().web_read(url, schema=SCHEMA_A, cache_ttl=600)
         assert srv.hits - base == 1
         second = await MasterFetchServer().web_read(url, schema=SCHEMA_B, cache_ttl=600)
         assert srv.hits - base == 1, "第二遍 schema 回源了 —— html 行没落或没命中"

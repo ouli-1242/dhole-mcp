@@ -159,7 +159,7 @@ class TestTheWriteGate:
             return OK
 
         monkeypatch.setattr(MasterFetchServer, "get", fake)
-        out = _dispatch("web_request", {"url": URL, "method": "head"})
+        _dispatch("web_request", {"url": URL, "method": "head"})
         assert sent, "HEAD 是探测，不该被确认门拦下"
 
     def test_the_gate_is_discoverable_on_the_wire(self):

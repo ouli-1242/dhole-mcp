@@ -29,6 +29,10 @@ class TestSSRFBypassVectors:
         "http://[::1]:8080/path",
         "http://169.254.169.254/latest/meta-data/",
         "http://169.254.169.254/computeMetadata/v1/",
+        "http://[fd00:ec2::254]/latest/meta-data/",
+        "http://100.100.100.200/latest/meta-data/",   # Aliyun IMDS (CGNAT 100.64.0.0/10)
+        "http://1684301000/latest/meta-data/",        # decimal -> 100.100.100.200
+        "http://metadata/latest/meta-data/",          # bare metadata hostname
     ])
     def test_rejects_private_and_metadata_ips(self, url):
         with pytest.raises(SecurityError, match="internal|private"):

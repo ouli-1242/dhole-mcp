@@ -21,8 +21,6 @@ import pytest
 
 from dhole_mcp import actions as actions_mod
 from dhole_mcp.actions import (
-    QUIET_SETTLE_MIN_MS,
-    QUIET_SETTLE_MS,
     _settle_quiet,
     _validate_actions,
     action_label,
