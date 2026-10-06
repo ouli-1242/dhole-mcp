@@ -266,7 +266,7 @@ def test_the_stateful_tools_are_announced_with_their_discipline():
 #
 # W10 的守卫抓出了 `fetch_schema`：功能活着、_SS_PARAMS 接受它、整个 wire 里
 # 没有任何一处提到过它的名字。那种缺陷不会自己冒出来，所以把它变成一条覆盖
-# 全部 14 个工具的断言 —— 参数存在而无人提及，等于这个能力不存在。
+# 全部注册工具的断言 —— 参数存在而无人提及，等于这个能力不存在。
 
 #: 名字本身已经说明用途的顶层必填项，一句短说明就够了。
 _OBVIOUS = {

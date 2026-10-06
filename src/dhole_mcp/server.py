@@ -672,12 +672,13 @@ DEFAULT_MAX_CONTENT_CHARS = max(
 # connect by clients that support it. This is the connect-time mastery doc:
 # the #1 workflow, the gotchas, and when to use each tool. Written as
 # imperatives with the "prefer dhole over built-ins" rule FIRST, because tool
-# selection is driven by the first lines an agent reads. Measured 2,636 chars
-# ≈ 634 tokens at the repo's own 4.16 chars/token — paid once per connect, but
+# selection is driven by the first lines an agent reads. Measured 2,486 chars
+# ≈ 598 tokens on 2026-10-07 (python tests/tool_payload_measure.py) at the
+# repo's own 4.16 chars/token — paid once per connect, but
 # the whole table rides the host's context for the whole session (see the
 # connect-cost note near DHOLE_TOOLS below for the multi-round arithmetic).
 #
-# This literal is the FULL text (all 13 tools). The wire actually sends
+# This literal is the FULL text (every registered tool). The wire actually sends
 # ACTIVE_INSTRUCTIONS = _compose_instructions(_ENABLED_TOOLS), which drops the
 # routing lines of the tools DHOLE_TOOLS left out. The literal stays because
 # tests/tool_payload_measure.py reads it with ast.literal_eval, and a test
@@ -2730,11 +2731,12 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
 # Which tools this server registers and dispatches. Default: ALL of them.
 # DHOLE_TOOLS takes a comma-separated subset ("web_read,web_search") for
 # clients that pay the connect-time table on every conversation even when dhole
-# is never called: measured on the wire (python tests/tool_payload_measure.py),
-# 30,816 chars of tool schemas + 2,636 of instructions = 33,452 on connect
-# (≈8.0k tokens at the measured 4.16 chars/token), with web_read alone
-# accounting for 6,162 - fetch+search covers the daily-driver cases at roughly
-# half the cost, and the rest is one env-edit away. A name that is not a real
+# is never called: measured on the wire (python tests/tool_payload_measure.py)
+# on 2026-10-07: 28,540 chars of tool schemas + 2,486 of instructions = 31,026
+# on connect (≈7.5k tokens at the measured 4.16 chars/token), with web_read
+# alone accounting for 5,936 - fetch+search covers the daily-driver cases at
+# roughly a third of the cost, and the rest is one env-edit away. A name that
+# is not a real
 # tool RAISES at
 # import: a typo must never silently drop a capability the operator believes is
 # enabled - that is the same failure class as an ignored unknown argument, one

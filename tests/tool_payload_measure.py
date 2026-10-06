@@ -3,14 +3,16 @@
 Why this exists: the wire payload size is published (README + CHANGELOG 16.0) and
 drifts whenever a description or schema changes. The one cl100k_base run that was
 actually made measured 2,141 / 19,254 / 21,395 chars as 514 / 4,631 / 5,145
-tokens - a ratio of 4.16 chars per token, which is why the usual chars/4 (5.4k
-today) and chars/3.88 (5.6k) rules of thumb both read high. Chars are the half
-this script can produce offline; where the table has since grown, the token
-figures quoted in the docs are estimates at that measured ratio, and this file
-says so rather than re-quoting a count nobody re-measured.
-Token counts are rendering-dependent, so the rendering is part of the number:
-today's table is 19,141 chars as the wire's compact ``{"tools":[...]}``, 19,512
-summed per-tool ``json.dumps`` defaults, 23,215 with ``indent=2``. An unstated
+tokens - a ratio of 4.16 chars per token. Chars are the half this script can
+produce offline; the token figures quoted in the docs are estimates at that
+measured ratio, and this file says so rather than re-quoting a count nobody
+re-measured.
+
+Token counts are rendering-dependent, so the rendering is part of the number.
+Every table size below is **dated** — a number without a date reads as the
+present and rots silently (this header itself rotted once: it claimed
+"today's table is 19,141 chars" from a 13-tool era long past). On 2026-10-07:
+2,486 instructions + 28,540 compact tools/list = 31,026 connect. An unstated
 rendering is not reproducible.
 There are two independent ways to get the real numbers:
 
@@ -25,9 +27,11 @@ assignment, and reconstructs the exact payload with `ast.literal_eval` + `json.d
 That makes this measurement independent of runtime state, HOME, env vars and network.
 
 This is the diagnostic behind the connect-cost numbers in README and CHANGELOG.
-The repo deliberately has no wire-size budget any more (`test_tool_descriptions.py`
-only asserts content rules, not lengths) - so the way a number goes stale here is
-a description getting longer without anyone re-measuring it, not a test going red.
+The wire-size budget is alive, not gone: `CONNECT_CEILING` in
+`tests/test_wire_moves_land_in_the_manual.py` (connect total, only down) plus
+the two shape ratchets in `tests/test_wire_shape.py` (per-tool params,
+per-description chars) — so a stale number here is a test going red, not just
+a description getting longer without anyone re-measuring it.
 
 Reported sizes:
   - character counts (exact, reproducible)
@@ -295,9 +299,9 @@ def budget_report(tool_defs: list[dict], top: int = 20) -> list[str]:
     """把 connect 面的字符拆开算在谁头上：工具描述、参数描述、还是 schema 骨架。
 
     瘦身的账要算在对的那一块上：一颗 900 字符的参数说明搬进 sys_guide 就省 900，
-    而 17 颗工具的键名 + 类型 + required 那一层骨架压不出多少。同理，**重复**是
+    而注册工具的键名 + 类型 + required 那一层骨架压不出多少。同理，**重复**是
     唯一一种不用牺牲信息就能拿回来的量 —— 同一句话在三颗工具里各写一遍，
-    下线其中两遍不减少任何人能查到的东西。
+    下线其中两遍不减少任何人能查到东西。
     """
     out: list[str] = ["", "-- where the connect chars go (per description) --"]
     rows: list[tuple[int, str, str]] = []

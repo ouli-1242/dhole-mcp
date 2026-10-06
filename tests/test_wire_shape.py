@@ -9,7 +9,9 @@
 
 真正的**总预算**不在这里，在
 `tests/test_wire_moves_land_in_the_manual.py` 的 `CONNECT_CEILING`
-（33,460，只降不升）—— 那一条管整条连接期的账，这两条管单颗工具的形状：一颗工具自己
+（钉在实测值，只降不升；数字见该文件的账本，本文件只引用它的模块名 ——
+下方守卫的 import 在模块改名/搬家时先红）—— 那一条管整条连接期的账，这两条
+管单颗工具的形状：一颗工具自己
 长胖、总账却被别处的收缩抵消掉时，只有这两条看得见。
 
 失败信息**不许写"太长"**（ce8af44：守卫惩罚的是编辑，不是缺陷）。参数超预算指向
@@ -19,10 +21,11 @@
 
 from dhole_mcp.server import _TOP_LEVEL_ARGS, MasterFetchServer
 
-# 棘轮：实测最大值，只准往下。改小是一次"瘦身"；改大要说明为什么，并同步
-# `test_wire_compaction.py` 的 CONNECT_CEILING。
-PARAM_CAP = 27   # web_read（其余 12 颗都 ≤19）
-DESC_CAP = 296   # sys_guide.topic
+# 棘轮：钉在今天实测最大值上（见下方守卫），只准往下 —— 不写"其余几颗 ≤几"
+# 这类次级断言，那类注释会被下一次形状变化悄悄否定。改小是一次"瘦身"；改大要
+# 说明为什么，并同步总账那份账本。
+PARAM_CAP = 27   # web_read（今天实测最大值，由下方守卫对照）
+DESC_CAP = 296   # sys_guide.topic（同上）
 
 
 def test_each_tool_stays_inside_the_param_budget():
@@ -50,3 +53,27 @@ def test_each_param_description_leaves_the_manual_to_the_guide():
         "每一次连接都在为它们付 token。把怎么用的细节搬进 sys_guide（sys_guide "
         "语料按需取段），常驻层只留路由需要的判断依据 —— 搬家，不是缩写。"
     )
+
+
+def test_the_ratchet_sits_on_todays_maximum_not_a_stale_number():
+    """两把棘轮必须钉在**今天**的实测最大值上（F-E-5 的守卫化）。
+
+    曾经 PARAM_CAP 的注释带次级断言「其余 12 颗都 ≤19」，被 web_search 的
+    20 参悄悄否定而断言本体照绿 —— 注释漂移无人对照。现在两个常量直接等于
+    当日真实最大值：形状变了而棘轮没跟着落，这里先红。
+    """
+    assert PARAM_CAP == max(len(p) for p in _TOP_LEVEL_ARGS.values()), (
+        "PARAM_CAP 不在今天实测最大值上 —— 要么工具瘦了（把棘轮落下来），"
+        "要么胖了（先解释为什么，再改这一格与总账）")
+    assert DESC_CAP == max(
+        len(p.get("description") or "")
+        for td in MasterFetchServer._TOOL_DEFS
+        for p in (td.get("inputSchema", {}).get("properties") or {}).values()
+    ), "DESC_CAP 不在今天实测最大值上 —— 同上"
+
+
+def test_the_ceiling_reference_is_a_module_name_not_a_number():
+    """总账的活引用走 import 不走数字（F-E-4）：本文件 docstring 曾把 ceiling
+    引作 33,460 —— 账本此后又动了至少 8 次没人扫。模块改名/搬家时这条先红。"""
+    from tests.test_wire_moves_land_in_the_manual import CONNECT_CEILING
+    assert isinstance(CONNECT_CEILING, int) and CONNECT_CEILING > 0
