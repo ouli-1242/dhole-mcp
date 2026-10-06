@@ -242,7 +242,13 @@ def test_connect_stays_inside_the_packed_budget():
 #: `pages= for PDF ranges`（pages= 在 web_read 自己的 schema 里，不丢信息）。
 #: 实测 -10 → **31,016**（评审预估 -14：crawl 行 +13 实测一致，read 行估 -27
 #: 实为 -23，仍以尺子为准）。
-CONNECT_CEILING = 31_016
+#: 2026-10-07 三句搬手册·可拆部分（F-C1-J2 ①③）：棘轮**往下**。web_act 的
+#: dict-form 枚举（手册 tools.md/examples.md 逐项承重，wire 换 sys_guide 指针）
+#: 实测 -193；doc_parse 的 charset 恢复 how-to（运行时错误＋fields.md 的
+#: metadata.encoding 行已承重，wire 留探测契约＋fields 指针）实测 -33。
+#: 合计 -226 → **30,790**。②web_crawl 的 Caps 句与 P11 回收互斥（同一句只计
+#: 一次），本批不动，留 P11 定夺。
+CONNECT_CEILING = 30_790
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

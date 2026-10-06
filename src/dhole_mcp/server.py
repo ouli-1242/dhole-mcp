@@ -2745,8 +2745,8 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
 # DHOLE_TOOLS takes a comma-separated subset ("web_read,web_search") for
 # clients that pay the connect-time table on every conversation even when dhole
 # is never called: measured on the wire (python tests/tool_payload_measure.py)
-# on 2026-10-07: 28,540 chars of tool schemas + 2,486 of instructions = 31,026
-# on connect (≈7.5k tokens at the measured 4.16 chars/token), with web_read
+# on 2026-10-07: 28,314 chars of tool schemas + 2,476 of instructions = 30,790
+# on connect (≈7.4k tokens at the measured 4.16 chars/token), with web_read
 # alone accounting for 5,936 - fetch+search covers the daily-driver cases at
 # roughly a third of the cost, and the rest is one env-edit away. A name that
 # is not a real
@@ -7469,7 +7469,7 @@ class MasterFetchServer:
             # （回执 / snapshot 先数 / submit 先问 / 验证码三次就转交）是原样搬过来的
             # —— 搬工具不许搬走规矩。
             "name": "web_act",
-            "description": "Act on one page - click / fill / press / scroll / wait / snapshot / submit - then read back what it became. Reading it without touching it is web_read.\n- The chain runs in order on the stealthy browser and never from cache; every action leaves a receipt in metadata.actions, and a failed one says what sat at that selector.\n- No selector? {\"snapshot\": true} first: elements come back numbered, later actions address them by index, and expect:'name' verifies the visible name so a stale index fails instead of clicking the wrong thing.\n- submit PAUSES without confirm=true (nothing is filled or sent): describe exactly what would go, and on the user's yes re-run the same chain. Captchas get at most 3 read-and-retry rounds, then hand off; the walls-and-2FA list lives in sys_guide(topic='behavior').\n- Credentials are never an argument: cred_defaults stores them, session_id names the cookie jar, cdp_url attaches the user's own Chrome.\n- VISUAL ASSIST: {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} crops one element of the SAME page instance and returns it inline - the way to read a CAPTCHA you are about to type. The dict form adds decode_qr, full_page (whole scrollable page, no selector), save_to (write the capture to disk and report the path - text-only hosts and the route around the inline size cap), image_type ('png'|'jpeg') and quality ('jpeg' only).\nAction-key shapes, index addressing and the lazy-feed discipline: sys_guide(topic='behavior', section='Page interaction').",
+            "description": "Act on one page - click / fill / press / scroll / wait / snapshot / submit - then read back what it became. Reading it without touching it is web_read.\n- The chain runs in order on the stealthy browser and never from cache; every action leaves a receipt in metadata.actions, and a failed one says what sat at that selector.\n- No selector? {\"snapshot\": true} first: elements come back numbered, later actions address them by index, and expect:'name' verifies the visible name so a stale index fails instead of clicking the wrong thing.\n- submit PAUSES without confirm=true (nothing is filled or sent): describe exactly what would go, and on the user's yes re-run the same chain. Captchas get at most 3 read-and-retry rounds, then hand off; the walls-and-2FA list lives in sys_guide(topic='behavior').\n- Credentials are never an argument: cred_defaults stores them, session_id names the cookie jar, cdp_url attaches the user's own Chrome.\n- VISUAL ASSIST: {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} crops one element of the SAME page instance and returns it inline - the way to read a CAPTCHA you are about to type. The dict form's options: sys_guide(topic='behavior').\nAction-key shapes, index addressing and the lazy-feed discipline: sys_guide(topic='behavior', section='Page interaction').",
             "inputSchema": {
                 "type": "object", "required": ["url", "actions"],
                 "properties": {
@@ -7619,7 +7619,7 @@ class MasterFetchServer:
         },
         {
             "name": "doc_parse",
-            "description": "Use for LOCAL files the task references (the supported-extension list lives on file_path) -> Markdown, no web fetch. A PDF that has a URL is better served by web_read - it takes the URL directly.\n.html/.csv are decoded by charset detection, not assumed UTF-8: metadata.encoding names the charset used, and a wrong guess comes back as an error whose next_action says to re-call with encoding=. .pptx/.odt need no extra install; what a text reader cannot carry (layout, images) is named in the output's first line rather than vanishing from it. .json/.yaml are validated, not just echoed. Relative paths: pass cwd when the host doesn't tell the server the working directory.",
+            "description": "Use for LOCAL files the task references (the supported-extension list lives on file_path) -> Markdown, no web fetch. A PDF that has a URL is better served by web_read - it takes the URL directly.\n.html/.csv are decoded by charset detection, not assumed UTF-8: metadata.encoding names the charset used (a wrong guess is recoverable: sys_guide(topic='fields')). .pptx/.odt need no extra install; what a text reader cannot carry (layout, images) is named in the output's first line rather than vanishing from it. .json/.yaml are validated, not just echoed. Relative paths: pass cwd when the host doesn't tell the server the working directory.",
             "inputSchema": {
                 "type": "object", "required": ["file_path"],
                 "properties": {

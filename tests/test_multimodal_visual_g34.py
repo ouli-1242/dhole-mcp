@@ -327,15 +327,20 @@ class TestTheDescriptions:
 
     def test_discipline_is_in_the_literal_itself(self):
         """VISUAL ASSIST 不再是运行时拼接：它在 _TOOL_DEFS 字面量里
-        （能力常开，纪律不是模式）。A1 之后只有 web_act 这扇门。"""
+        （能力常开，纪律不是模式）。A1 之后只有 web_act 这扇门。
+
+        2026-10-07 F-C1-J2 判决对齐：捕获旋钮的枚举撤到手册（tools.md 逐项
+        承重，wire 换 sys_guide 指针）—— 旋钮的「怎么选」按需付费，存在性
+        与验证码用途留在 wire。原断言「旋钮在描述里点得出名字」钉的是旧放置
+        决定，随本判决退役；手册侧由
+        test_visual_assist_options_live_in_the_manual_not_the_wire 钉住。
+        """
         defs = {td["name"]: td for td in MasterFetchServer._enabled_tool_defs()}
         assert "web_screenshot" not in defs, "独立工具该下线了"
         act = defs["web_act"]["description"]
         assert "VISUAL ASSIST" in act
         assert '{"screenshot"' in act
-        # 捕获旋钮在描述里点得出名字（选型发生在读描述的那一刻）。
-        for knob in ("full_page", "save_to", "image_type", "quality"):
-            assert knob in act
+        assert "The dict form's options" in act, "指针句要替掉枚举句"
         assert "actions" not in defs["web_read"]["inputSchema"]["properties"],             "web_read 还挂着动作链，两扇门就又是一扇"
         # 纪律（安全红线 6 的 ≤N 次与一律转交）：act 留 ≤3 次与转交动词，墙的
         # 枚举随 web_screenshot 下线搬进 behavior 卷 —— 指针从 act 的字面一路
