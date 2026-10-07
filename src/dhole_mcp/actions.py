@@ -373,6 +373,27 @@ async def _check_expect(page, index: int, expect: str) -> None:
             "and act on the fresh indices")
 
 
+def _screenshot_shape_error(i: int) -> ValueError:
+    """一颗参数一条规则一句报错（P2-8）。
+
+    校验器接受的形状就四种：selector 串、`{"selector": ...}`、`{"index": N}`、
+    `{"full_page": true}`。落在这四种之外的（bare `true`、没有目标的 dict）念的是
+    **同一句**，句里列全四种 —— 评审现场是三条各自说法：bare true 那句漏了
+    full_page（而 full_page 恰恰是当时唯一能成功的"无目标"写法），无目标 dict 那句
+    借用了 click/fill 的措辞、不提 full_page，于是纯整页截图在语法上读不出来。
+    花括号伪影也一并清掉：`{{...}}` 是字符串拼接漏进响应里的 Python 语法，不是
+    调用方该读的 JSON 形状。
+
+    bare `{"screenshot": true}` 要不要实现成视口截图是待 operator 判决项；判决落地
+    之前它仍然是拒绝，而拒绝的这句话不许假装它有机会成功。
+    """
+    return ValueError(
+        f"action {i} 'screenshot' takes a CSS selector string, or an object with "
+        'exactly one target: "selector" (CSS), "index" (from a snapshot), or '
+        '"full_page": true (the whole page). Optional knobs: image_type, quality, '
+        'decode_qr, save_to.')
+
+
 def _act_target(i: int, key: str, val) -> dict:
     """Normalize a click/fill/press/submit/screenshot target to exactly one of:
 
@@ -545,10 +566,7 @@ def _validate_actions(actions) -> list[dict]:
             elif isinstance(val, dict):
                 spec = dict(val)
             else:
-                raise ValueError(
-                    f"action {i} 'screenshot' must be a CSS selector string or "
-                    "{{selector, decode_qr, full_page, save_to, image_type, "
-                    "quality}}")
+                raise _screenshot_shape_error(i)
             want_qr = spec.pop("decode_qr", False)
             if not isinstance(want_qr, bool):
                 raise ValueError(f"action {i} 'screenshot.decode_qr' must be a boolean")
@@ -594,6 +612,11 @@ def _validate_actions(actions) -> list[dict]:
                                            "decode_qr": want_qr,
                                            **({"save_to": save_to} if save_to else {})}})
             else:
+                if "selector" not in spec and "index" not in spec:
+                    # 没有目标的 dict 与 bare true 是同一类形状错误：同一句报错，
+                    # 不去借 click/fill 那句「selector 或 index」（那句不知道
+                    # full_page 也是一种合法形状）。
+                    raise _screenshot_shape_error(i)
                 out.append({"screenshot": {**_act_target(i, key, spec),
                                            "image_type": image_type,
                                            **({"quality": quality} if quality is not None else {}),
