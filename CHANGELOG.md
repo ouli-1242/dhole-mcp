@@ -184,6 +184,7 @@
 - **本地文件与 SSRF 红线六刀（2026-10-07）**：①IMDS 门——规范化地址分支先于白名单拦截云元数据主机，裸名 `metadata`、整数 / 十六进制字面量（`1684301000` / `0x646464c8`）与阿里云备用端点 `100.100.100.200` 全部 SecurityError；②`doc_parse` 本地文件黑名单 +6（`~/.dhole`、`~/.config/gcloud`、`~/.config/gh`、`~/.azure`、`~/.kube`、`C:\ProgramData\ssh`），Windows 前缀改 %SystemRoot% 派生（装在 D 盘不再漏）；③`save_to` 过同一份黑名单（realpath 后判定，浏览器冷启动之前拒绝；`.png` 的覆盖语义不动）；④NTFS ADS 流路径（`file.txt:hidden` 的冒号流语法）拒绝，仅 nt 启用——POSIX 上冒号是合法文件名字符，报告给的无条件判定在本仓不成立；⑤hosts 解析首行赢（与 glibc / Windows 语义一致），黑洞钉位不再被后行翻成元数据钉位；⑥`cred_defaults` 错误面收口——auth.type 固定句不回显、cookies 非可迭代给形状句、拼装点过脱敏（全库最后一个不过脱敏的错误面）
 - **注入扫描前移到被丢弃的正文（2026-10-07）**：扫描此前挂在截断 / focus 分块之后——被丢弃或落在窗口外的段落里的注入形状以干净面貌进转录。现在对分块前的整页全文扫描，命中挂结果；不经分块的路径保留原位扫描作后备。`fetch_content` 扇出的每页（`fetched_pages`）携带同一标记（命中才挂键，干净页零字节）。`injection.py` 的归一化零改动，既有判定不受影响
 - **`--http` 无 token 的启动警告不再豁免回环（2026-10-07）**：同进程双实例就是两个客户端，零配置读走彼此的存储。警告删掉回环豁免并把共享内容说出口：同一端口共享一份凭据存储 / 会话 / 缓存，token 是端口门禁不是主体隔离——要主体隔离就分端口 / 分进程
+- **落在提交型控件上的 click 绕过了 submit 审批闸（2026-10-07）**：`{"submit": N}` 无 confirm 正确暂停，但同一个按钮换 `{"click": N}` 就直接提交——quotes.toscrape.com/login 实测无 confirm 登录成功，闸只认动作名不认动作效果，而安全红线管的是"提交须经确认"这个后果。现在 click 执行前对目标做一次提交型判定（`input[type=submit|image]`、form 关联的缺省 / submit 型 button；`role=link` 的按钮状链接除外），命中即走 submit 同一道闸：elicitation 能力的连接上人点头才放行，decline / 问不到人 fail-closed（`confirm=true` 救不回来）；无能力连接上 confirm 落在 click 的 dict 上（`{"click": {"index": N, "confirm": true}}`，字符串简写不带键、暂停行教它改写）。放行的回执带 `submitted: true` 进写审计；普通控件与探测不出的元素一字不改（探测失败不发明闸：元素等不到原样超时）。wire 零变化，手册 Page interaction 一节同步
 
 ## [16.2] - 2026-09-29
 

@@ -42,6 +42,14 @@ Action schema (one key per dict):
                                             ends take the same target shapes
                                             (a CSS selector string or
                                             {"index": N, "expect"?})
+  {"submit": {"selector"|"index", "confirm"?}}
+                                            the irreversible one: without
+                                            confirm:true it pauses for approval
+  {"click": {..., "confirm": true}}         a click that lands on a submit
+                                            control (input[type=submit|image],
+                                            a form's default button) passes the
+                                            SAME approval gate — the gate reads
+                                            what the action does, not its name
 
 Validation is strict (CSS selectors validated, counts/ms capped) so a bad action
 fails fast instead of hanging the browser. Per-action errors are caught so one
@@ -298,6 +306,20 @@ _NAME_JS = """(el) => {
 
 _COUNT_JS_INTERACTIVE = "(sel) => document.querySelectorAll(sel).length"
 
+# 提交型控件识别（评审R1刀1）：click 的闸只拦"这一下真的会发表单"的控件。
+# input 只认显式 type=submit|image（缺省 type 的 input 是 text，从不提交）；
+# button 的缺省 type 就是 submit，但 button/reset 类型与没有 form 关联的
+# 都够不着任何表单；role=link 是"长得像按钮的链接"——链接导航，不提交。
+_SUBMIT_CONTROL_JS = """el => {
+  const tag = (el.tagName || '').toLowerCase();
+  if (tag !== 'input' && tag !== 'button') return null;
+  if ((el.getAttribute('role') || '').toLowerCase() === 'link') return null;
+  const type = (el.getAttribute('type') || '').toLowerCase();
+  if (tag === 'button' && (type === 'button' || type === 'reset')) return null;
+  if (tag === 'input' && type !== 'submit' && type !== 'image') return null;
+  return el.form ? 'submit' : null;
+}"""
+
 
 async def snapshot_elements(page) -> tuple:
     """枚举当前页面的可交互元素。返回 (rows, total, truncated)。
@@ -432,7 +454,16 @@ def _validate_actions(actions) -> list[dict]:
                 validate_css_selector(val)  # raises SecurityError on bad selector
                 out.append({key: val})
             else:
-                out.append({key: _act_target(i, key, val)})
+                target = _act_target(i, key, val)
+                confirm = val.get("confirm", False)
+                if not isinstance(confirm, bool):
+                    raise ValueError(f"action {i} 'click.confirm' must be a boolean")
+                # confirm 只在一个场景被读：目标解析成提交型控件时，它就是
+                # submit 闸的钥匙（执行器里判定）。False 不落键——既有形状
+                # 逐位不变，快照/回执/审计读到的归一化产物照旧。
+                if confirm:
+                    target = {**target, "confirm": True}
+                out.append({key: target})
         elif key == "hover":
             # Same target grammar as click (string shorthand or the
             # {"selector"|"index", "expect"?} dict); no dict-only knobs exist.
@@ -882,6 +913,61 @@ async def _scroll(page, steps: int, selector, ms_per_step: int) -> None:
                     break
 
 
+async def _is_submit_control(loc) -> bool:
+    """True when the click target would submit a form (评审R1刀1).
+
+    闸认动作效果，不认动作名：input[type=submit|image] 与 form 关联的
+    submit 型 button，点击的后果与 ``{"submit": ...}`` 完全相同，就该过
+    同一道门。探测失败不发明闸——元素等不到（TimeoutError 原样传播：click
+    本来也会在这里超时，``_action_failure`` 给同一句友好文案，不双倍等）
+    或页面读不出类型（返回 False，click 走既有路径），都不虚构一道拦不住
+    任何东西的关卡。
+    """
+    try:
+        await loc.wait_for(state="attached", timeout=10_000)
+        kind = await loc.evaluate(_SUBMIT_CONTROL_JS)
+    except Exception as exc:
+        # 按类名判而非 isinstance：playwright 的 TimeoutError 不继承内建
+        # TimeoutError，但类名就是它。
+        if type(exc).__name__ == "TimeoutError":
+            raise
+        return False
+    return kind == "submit"
+
+
+async def _submit_gate_row(label: str, confirm: bool, rerun: str) -> Optional[dict]:
+    """提交审批闸（安全红线 3），``{"submit": ...}`` 与提交型控件上的 click
+    共用（评审R1刀1）。
+
+    返回要追加的 pending 行（调用方 append 后 continue），None = 放行。
+    两个分支与批次8 刀1 的语义逐位一致：声明了 elicitation 的连接上人按键
+    授权（out-of-band ask），decline / 问不到人一律 fail-closed——confirm
+    参数救不回来；能力为假 / 无会话 → 参数 confirm 是唯一的钥匙。rerun 是
+    pending 行里教的重跑写法（submit 与 click 的 confirm 落点不同）。
+    """
+    human = await out_of_band_confirm(
+        f"Approve ONE form submission on this page (target: {label})? "
+        "The submission is irreversible once sent. Nothing is submitted "
+        "without your approval.")
+    if human is False:
+        return {
+            "action": label, "ok": False, "pending_approval": True,
+            "error": ("pending_approval: the approval ask was declined or "
+                      "could not reach a human - nothing was submitted. dhole "
+                      "asks again on any re-run of this chain; there is no "
+                      "parameter that skips the ask."),
+        }
+    if human is None and not confirm:
+        return {
+            "action": label, "ok": False, "pending_approval": True,
+            "error": (f"pending_approval: submitting is an irreversible step "
+                      f"- ask the user to confirm this submission, then "
+                      f're-run the same actions with {{"confirm": true}} '
+                      f"{rerun}. Nothing was submitted."),
+        }
+    return None
+
+
 def _target_label(t) -> str:
     """One readable token for an action target: selector, or [index] (+expect)."""
     if isinstance(t, str):
@@ -988,7 +1074,24 @@ def build_page_action(actions) -> Optional[Callable]:
             try:
                 if "click" in a:
                     loc = await _target_locator(page, a["click"])
+                    submits = await _is_submit_control(loc)
+                    if submits:
+                        # 落在提交型控件上的 click 就是提交（评审R1刀1）：闸认
+                        # 动作效果，不认动作名。confirm 落在 click 的 dict 上
+                        # （字符串简写不带键，pending 行教它怎么改写）。
+                        click_val = a["click"]
+                        confirm = (click_val.get("confirm", False)
+                                   if isinstance(click_val, dict) else False)
+                        rerun = ("on this click" if isinstance(click_val, dict)
+                                 else 'on this click (as {"click": '
+                                      '{"selector": ..., "confirm": true}})')
+                        row = await _submit_gate_row(label, confirm, rerun)
+                        if row is not None:
+                            outcomes.append(row)
+                            continue
                     await _settle_after_click(page, loc)
+                    if submits:
+                        shot["submitted"] = True
                 elif "hover" in a:
                     loc = await _target_locator(page, a["hover"])
                     await loc.hover(timeout=10_000)
@@ -1114,33 +1217,13 @@ def build_page_action(actions) -> Optional[Callable]:
                     # 钥匙按连接分段：声明了 elicitation 的连接上，人按键授权
                     # （out-of-band ask）——confirm 参数不参与开门，拒答 / 问
                     # 不到人一律 fail-closed；能力为假 / 无会话 → 一字不改，
-                    # {"confirm": true} 重跑同一条 actions 链照旧放行。
-                    human = await out_of_band_confirm(
-                        f"Approve ONE form submission on this page "
-                        f"(target: {label})? The submission is irreversible "
-                        "once sent. Nothing is submitted without your approval.")
-                    if human is False:
-                        outcomes.append({
-                            "action": label, "ok": False, "pending_approval": True,
-                            "error": ("pending_approval: the approval ask was "
-                                      "declined or could not reach a human - "
-                                      "nothing was submitted. dhole asks again on "
-                                      "any re-run of this chain; there is no "
-                                      "parameter that skips the ask."),
-                        })
-                        continue
-                    if human is None and not s.get("confirm"):
-                        # 暂停而不是执行——行内标记 pending_approval，其余动作
-                        # 照常跑完（页面停在提交前的状态），agent 转达用户，确认
-                        # 后带 {"confirm": true} 重跑同一条 actions 链。
-                        outcomes.append({
-                            "action": label, "ok": False, "pending_approval": True,
-                            "error": ("pending_approval: submitting is an irreversible "
-                                      "step - ask the user to confirm this submission, "
-                                      "then re-run the same actions with "
-                                      '{"confirm": true} on this submit. Nothing was '
-                                      "submitted."),
-                        })
+                    # {"confirm": true} 重跑同一条 actions 链照旧放行。闸体在
+                    # _submit_gate_row：评审R1刀1 起，提交型控件上的 click 走
+                    # 同一道门。
+                    row = await _submit_gate_row(label, s.get("confirm", False),
+                                                 "on this submit")
+                    if row is not None:
+                        outcomes.append(row)
                         continue
                     loc = await _target_locator(page, s)
                     await _settle_after_click(page, loc)
