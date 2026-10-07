@@ -165,7 +165,8 @@ from dhole_mcp.envelope import (
 # robots.txt compliance: one cached check per origin, consulted before any tier
 # runs (see the robots module docstring for the fail-open policy).
 from dhole_mcp.robots import (
-    ENV_IGNORE_ROBOTS, UNAVAILABLE as ROBOTS_UNAVAILABLE, check as check_robots, env_disabled as robots_env_disabled,
+    ENV_IGNORE_ROBOTS, UNAVAILABLE as ROBOTS_UNAVAILABLE, check as check_robots,
+    env_disabled as robots_env_disabled, get_robots_cache,
 )
 # Cookie jar shared by every tier (G7). `get_robots_cache`'s sibling: one place
 # holds cross-call state, so `sys_state` can drop all of it at once.
@@ -183,6 +184,8 @@ from dhole_mcp.security import (
     validate_search_query,
     redact_api_key,
     SecurityError,
+    # 探测过期时那条拒绝的识别针与唯一出路（守卫侧定义，见 security 的这两枚常量）
+    RESOLVER_GUARD_NEEDLE, RESOLVER_GUARD_RECOVERY,
     # G9: the active private-host allowlist (see security.parse_allow_private).
     # 17.0 removed the per-call argument, so the only writers are the stored
     # cred_defaults value and the environment default.
@@ -1354,6 +1357,12 @@ def _tier_error_text(exc: BaseException) -> str:
     "navigation is fenced to" 上 —— 一条把话说一半的拒绝，读者只能去猜。
     """
     text = str(exc)
+    # dhole 自己写好的拒绝不在帽子的射程里：SecurityError 的句子是照着"读完就知道
+    # 下一步"写的，尾巴上往往就是唯一的那条路（DNS 复查那条 300 字符的解释被剪在
+    # 200 上，读者连"这是守卫"都读不出来 —— 评审 R3刀1）。帽子防的是 Playwright
+    # 的 call-log 那种整段灌进来的噪声。
+    if isinstance(exc, SecurityError):
+        return text
     try:
         if isinstance(exc, _tier_refusals()):
             return text
@@ -2927,6 +2936,25 @@ _PERMANENT_URL_REFUSALS = (
     "URL targets internal cloud metadata endpoint",
     "URL uses DNS rebinding service",
 )
+
+
+def _resolver_guard_result(url: str, msg: str) -> ResponseModel:
+    """探测过期时 DNS 复查层的那条拒绝：参数没错，错的是进程记住的那句话。
+
+    它过去和"你传错了"走同一只信封（`invalid_request` + 「Correct the argument」），
+    而那是一句假话：这台机器在启动探测之后才挂上 fake-ip TUN，公网名从此解析进保留段；
+    没有哪一处参数可以改成"不是这样"。真话只有一条 —— 重启宿主让探测重判，`dhole
+    --doctor` 能看见现判。diagnosis 同步落位（`resolver_guard` / retryable=false），
+    调用方分支不用匹配散文。
+    """
+    result = _refusal_result(url, msg)
+    result.next_action = (
+        "No argument on this call changes it - the resolver verdict was taken at "
+        f"process start. {RESOLVER_GUARD_RECOVERY}; nothing was fetched.")
+    result.summary = f"refused by the SSRF resolver guard · {msg[:80]}"
+    result.diagnosis = {"code": "resolver_guard", "retryable": False,
+                        "recover_with": RESOLVER_GUARD_RECOVERY}
+    return result
 
 
 def _reject_unknown_args(tool: str, args: dict) -> None:
@@ -4688,6 +4716,129 @@ class MasterFetchServer:
             confirm=confirm, check_login=check_login, cache_ttl=0, headed=headed,
         )
 
+    async def _cache_hit_response(self, *, url, extraction_type, css_selector,
+                                  cache_ttl, pages, mc, offset, check_login):
+        """这一发若能在缓存里答上就取回来，答不上返回 None —— 一个包都不发。
+
+        从 `web_read` 的第 2 步整块搬来（字段还原、robots 姿态对账、`browser` 键
+        摘除、chunking 与 login_check 缺口注记，一条不改）。搬的理由是评审 R3刀1：
+        探测过期时 hostname 复验会连**已有**的正文一起拒掉，而命中根本不发包 —— 没
+        有 SSRF 面，拒它只是让一次陈判定吞掉一次好答案。
+        """
+        if cache_ttl <= 0:
+            return None
+        cached = await get_cached(url, extraction_type, css_selector, ttl=cache_ttl, pages=pages if isinstance(pages, str) else None, ctx=_CACHE_CTX.get())
+        if cached is None:
+            return None
+        env = cached.get("envelope") or {}
+        hit = ResponseModel(
+            url=cached["url"], status=cached["status"], content=cached["content"],
+            cached=True, fetcher_used="cache", duration_ms=0,
+            extracted_type=extraction_type,
+            content_type=cached.get("content_type", ""),
+            total_size_bytes=cached.get("total_size_bytes", 0),
+            # v10: restore the envelope so cache hits keep metadata/links/
+            # quality_score/toc/page_type/source/archived_at (previously lost).
+            metadata=env.get("metadata", {}) or {},
+            media=env.get("media", []) or [],
+            links=env.get("links", {}) or {},
+            quality_score=env.get("quality_score"),
+            # Paired with quality_score: _agent_hints defers to this when
+            # the score is >0, so leaving it out made every cached PDF
+            # report content_ok=false next to a non-empty content array.
+            # Entries written before this key existed default to False,
+            # which is the old behaviour and self-heals on the next write.
+            content_ok=bool(env.get("content_ok", False)),
+            table_of_contents=env.get("table_of_contents", []) or [],
+            page_type=env.get("page_type", "unknown") or "unknown",
+            source=env.get("source", "live") or "live",
+            archived_at=env.get("archived_at", "") or "",
+        )
+        # The restored metadata carries the robots receipt of the fetch that
+        # wrote it, which is a statement about a past process, not this one.
+        # This path returns without going through _finalize_result, so it
+        # needs the same reconciliation the fetch path gets there.
+        hit._validators = env.get("cache_validators", {}) or {}
+        _stamp_robots_mode(hit)
+        # 缓存命中没起过任何浏览器。那句 "visible window" 是**上一次真抓取**
+        # 写进信封的，讲的是别的时刻的那台机器 —— 而"现在有没有窗口开着"从
+        # 缓存里读不出来，所以这里只能把它摘掉，不能重说（与 robots 那颗不同：
+        # 合规姿态本进程有一份现值，窗口形态没有）。
+        hit.metadata = {k: v for k, v in (hit.metadata or {}).items()
+                        if k != "browser"}
+        return _attach_login_probe_gap(
+            _apply_chunking(hit, max_chars=mc, offset=offset), check_login)
+
+    async def _cache_hit_under_resolver_guard(
+        self, *, url, extraction_type, css_selector, cache_ttl, pages,
+        max_content_chars, offset, check_login, ignore_robots, actions, schema,
+        nested_selector, cdp_url, method,
+    ):
+        """守卫要拦下这一发之前，先问一次缓存 —— 命中一个包都不发。
+
+        那道门的唯一理由是「不许往这个地址发包」，而一次命中根本不发包：让一次陈
+        判定吞掉一份已经躺在本机里的正文，守卫保护的东西一点没多，调用方丢的东西
+        却全是真的（评审 R3刀1）。
+
+        只服务普通的单 URL GET 文档读。actions 要的是交互之后的页面、schema 要在
+        原始 HTML 上重跑选择器、`check` 要的是站方对校验子的答复、cdp_url 要的是已
+        认证视角 —— 把匿名抓来的那一份交出去，是拿没被问过的内容冒充答案。
+
+        robots 只读缓存：为合规再发一发，发的正是守卫拦下的那一发。规则缓存说「不许」
+        就不读；没有记录时按既有的 fail-open 政策走，并把姿态如实写成「这次没查」。
+        """
+        if (actions or schema is not None or nested_selector is not None
+                or cdp_url or extraction_type == "check"
+                or _clean_method(method) != "GET"):
+            return None
+        try:
+            mc = _coerce_int_arg(max_content_chars, "max_content_chars",
+                                 lo=500, hi=200000, default=DEFAULT_MAX_CONTENT_CHARS)
+            off = _coerce_int_arg(offset, "offset", lo=0, hi=2 ** 31,
+                                  default=0, clamp=False)
+        except ValueError:
+            # 形状参数自己也错了就交不出命中（不能拿默认值替调用方改写它要的那一段），
+            # 于是回落到守卫那句 —— 与这条改动之前的报错顺序一致。
+            return None
+        _note_clamped("max_content_chars", max_content_chars, mc, lo=500, hi=200000)
+        # 注记要在读取之前挂上：`_apply_chunking` 里 `_with_agent_hints` 就把它们折进
+        # summary，读完再补已经来不及。交不出抄本时再整批收回（见 `_withdraw`）。
+        notes = _ARG_NOTES.get()
+        mark = len(notes) if notes is not None else 0
+
+        def _withdraw():
+            # 这一路没走到"把正文交出去"，那它说过的每句话（钳位、缓存来源）都不该
+            # 跟着守卫那句拒绝出门 —— 它们描述的是一次没有发生的回答。
+            if notes is not None:
+                del notes[mark:]
+            _ROBOTS_MODE.set("")
+
+        if ignore_robots:
+            _ROBOTS_MODE.set("bypassed (ignore_robots=true)")
+        elif robots_env_disabled():
+            _ROBOTS_MODE.set(f"bypassed ({ENV_IGNORE_ROBOTS}=1, process-wide)")
+        else:
+            allowed = get_robots_cache().cached(url)
+            if allowed is False:
+                _withdraw()
+                return None
+            _ROBOTS_MODE.set(
+                "complied (rules read from the cache, no request sent)"
+                if allowed else
+                "not checked (no cached robots.txt, and this call sends nothing)")
+        if notes is not None:
+            # 答案是真的，门也真的还堵着 —— 下一发包照样会被拒，出路要同条讲。
+            notes.append(
+                "served from the local cache: no request went out, so the stale resolver "
+                "verdict did not matter - any NEW fetch of this URL is still refused")
+        hit = await self._cache_hit_response(
+            url=url, extraction_type=extraction_type, css_selector=css_selector,
+            cache_ttl=cache_ttl, pages=pages, mc=mc, offset=off,
+            check_login=check_login)
+        if hit is None:
+            _withdraw()
+        return hit
+
     @_smart_fetch_request_context
     async def web_read(
         self,
@@ -4951,6 +5102,21 @@ class MasterFetchServer:
             # GET 的 method 只会来自 web_request）。SSRF 守卫的两类永久边界另给
             # 专属句：没有"改参数重试"这条路可指。
             msg = str(e)
+            if RESOLVER_GUARD_NEEDLE in msg:
+                # 这颗必须先于"参数错了"那条通用路：同一道 SSRF 守卫，两种真话。
+                # 而拒之前先问一次缓存（评审R3刀1）：命中不发包，这道守卫拦的东西
+                # 对它不成立，把已经在本机里的正文也拒掉才是真损失。
+                hit = await self._cache_hit_under_resolver_guard(
+                    url=url, extraction_type=extraction_type,
+                    css_selector=css_selector, cache_ttl=cache_ttl, pages=pages,
+                    max_content_chars=max_content_chars, offset=offset,
+                    check_login=check_login, ignore_robots=ignore_robots,
+                    actions=actions, schema=schema,
+                    nested_selector=nested_selector, cdp_url=cdp_url,
+                    method=method)
+                if hit is not None:
+                    return hit
+                return _resolver_guard_result(url or "", msg)
             if msg.startswith(_PERMANENT_URL_REFUSALS):
                 return _invalid_request_result(
                     url or "", msg,
@@ -5363,47 +5529,13 @@ class MasterFetchServer:
             return html_result
 
         # 2. Check cache
-        if cache_ttl > 0:
-            cached = await get_cached(url, extraction_type, css_selector, ttl=cache_ttl, pages=pages if isinstance(pages, str) else None, ctx=_CACHE_CTX.get())
-            if cached is not None:
-                env = cached.get("envelope") or {}
-                hit = ResponseModel(
-                    url=cached["url"], status=cached["status"], content=cached["content"],
-                    cached=True, fetcher_used="cache", duration_ms=0,
-                    extracted_type=extraction_type,
-                    content_type=cached.get("content_type", ""),
-                    total_size_bytes=cached.get("total_size_bytes", 0),
-                    # v10: restore the envelope so cache hits keep metadata/links/
-                    # quality_score/toc/page_type/source/archived_at (previously lost).
-                    metadata=env.get("metadata", {}) or {},
-                    media=env.get("media", []) or [],
-                    links=env.get("links", {}) or {},
-                    quality_score=env.get("quality_score"),
-                    # Paired with quality_score: _agent_hints defers to this when
-                    # the score is >0, so leaving it out made every cached PDF
-                    # report content_ok=false next to a non-empty content array.
-                    # Entries written before this key existed default to False,
-                    # which is the old behaviour and self-heals on the next write.
-                    content_ok=bool(env.get("content_ok", False)),
-                    table_of_contents=env.get("table_of_contents", []) or [],
-                    page_type=env.get("page_type", "unknown") or "unknown",
-                    source=env.get("source", "live") or "live",
-                    archived_at=env.get("archived_at", "") or "",
-                )
-                # The restored metadata carries the robots receipt of the fetch that
-                # wrote it, which is a statement about a past process, not this one.
-                # This path returns without going through _finalize_result, so it
-                # needs the same reconciliation the fetch path gets there.
-                hit._validators = env.get("cache_validators", {}) or {}
-                _stamp_robots_mode(hit)
-                # 缓存命中没起过任何浏览器。那句 "visible window" 是**上一次真抓取**
-                # 写进信封的，讲的是别的时刻的那台机器 —— 而"现在有没有窗口开着"从
-                # 缓存里读不出来，所以这里只能把它摘掉，不能重说（与 robots 那颗不同：
-                # 合规姿态本进程有一份现值，窗口形态没有）。
-                hit.metadata = {k: v for k, v in (hit.metadata or {}).items()
-                                if k != "browser"}
-                return _attach_login_probe_gap(
-                    _apply_chunking(hit, max_chars=mc, offset=offset), check_login)
+        hit = await self._cache_hit_response(url=url, extraction_type=extraction_type,
+                                             css_selector=css_selector,
+                                             cache_ttl=cache_ttl, pages=pages,
+                                             mc=mc, offset=offset,
+                                             check_login=check_login)
+        if hit is not None:
+            return hit
 
         # 3. actions: page interactions (click/fill/press/wait/scroll) require
         # the stealthy browser tier. Force it, bypass cache (post-action content

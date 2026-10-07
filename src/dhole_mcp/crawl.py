@@ -847,11 +847,18 @@ async def web_crawl(
     t0 = time()
     deadline_t = t0 + (deadline_ms / 1000.0)
 
-    def _err(msg: str, start: str = "", hint: str = "") -> CrawlResponseModel:
+    def _err(msg: str, start: str = "", hint: str = "",
+             refusal: bool = False) -> CrawlResponseModel:
+        """一次爬行级的拒绝。`refusal=True` 说的是"dhole 自己写的整句"：
+        200 字符的帽子防的是浏览器 call-log 那种噪声，不该把守卫的解释剪在句子中间
+        （评审 R3刀1：discover/crawl 把 300 字符的 fake-ip 解释截在 200，读者连
+        "这是守卫"都读不出来，而唯一出路那句在被剪掉的尾巴上）。
+        """
         from dhole_mcp.errors import classify_network_error
         if not hint:
             _, hint = classify_network_error(msg)
-        return CrawlResponseModel(start_url=start or url, pages=[], error=msg[:200],
+        return CrawlResponseModel(start_url=start or url, pages=[],
+                                  error=msg if refusal else msg[:200],
                                   duration_ms=(time() - t0) * 1000,
                                   summary=f"crawl failed: {msg[:120]}",
                                   next_action=hint)
@@ -864,7 +871,16 @@ async def web_crawl(
         from dhole_mcp import identity as _identity
         with allow_private_scope(_identity.get("allow_private")):
             url = validate_url(url)
-    except (SecurityError, ValueError) as e:
+    except SecurityError as e:
+        from dhole_mcp.security import (RESOLVER_GUARD_NEEDLE,
+                                        RESOLVER_GUARD_RECOVERY)
+        msg = str(e)
+        if RESOLVER_GUARD_NEEDLE in msg:
+            # 探测过期（进程记着 public，TUN 后来上线）—— 说清出路是重启宿主，
+            # 而不是让读者去改一颗没错的参数。
+            return _err(msg, hint=RESOLVER_GUARD_RECOVERY, refusal=True)
+        return _err(msg, refusal=True)
+    except ValueError as e:
         return _err(str(e))
     start_norm = normalize_url(url)  # canonical form for dedup + the response field
 

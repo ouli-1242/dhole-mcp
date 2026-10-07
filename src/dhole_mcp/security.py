@@ -618,6 +618,14 @@ def _normalize_ip_notation(host: str) -> str | None:
         return None
 
 
+# 探测说 public、这台机器现在却把公网名领进保留段时，那条拒绝的识别针与它唯一的出路。
+# 写在守卫旁边而不是各工具各写一句：判据只有一份定义（这条拒绝在 web_read / crawl /
+# discover 三条路上都出现，措辞一旦各自漂，调用方就读不出"这是同一件事"）。
+RESOLVER_GUARD_NEEDLE = "resolves to internal/private IP"
+RESOLVER_GUARD_RECOVERY = ("restart the MCP host so the startup resolver probe "
+                           "re-judges this machine, then confirm with `dhole --doctor`")
+
+
 def validate_url(url: str, allow_internal: bool = False) -> str:
     """Validate and sanitize a URL. Returns the validated URL.
 
