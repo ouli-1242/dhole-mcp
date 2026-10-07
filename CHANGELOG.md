@@ -58,6 +58,8 @@
 - **搜索结果的行级注入标记（2026-10-07）**：`web_search` 每行的 title＋snippet 过与页级正文同一把注入扫描，命中行携带 `untrusted_content: {hits, total}`，干净行缺席（省略即默认）。此前页级正文有标记而搜索行没有——被注入的标题 / 摘要以干净面貌进转录。钉住 `tests/test_search_rows_flag_injection_shapes_in_title_or_snippet.py`
 - **缓存命中读数（2026-10-07）**：`sys_state` 的 `cache` 读数新增本进程的 `hits` / `misses`（找到 / 落空各计一次，重启归零）。缓存该不该加 / 砍什么的判决依据第一次可测，不用再猜。钉住 `tests/test_cache_stats_counts_hits_and_misses.py`
 - **doctor 报出连接面孔的指纹（2026-10-07）**：wire cost 行之外新增 `wire face digest`——sha256 覆盖 tools/list 压缩面＋instructions（与计价同一份输入）；`tests/tool_defs_lock.json` 新增 `sha256_wire_face` 存默认面同款指纹。字数相同内容不同的措辞改写从此不再隐形——升级后与版本源码 tag 的锁文件比对即可。钉住 `tests/test_doctor_names_the_digest_of_the_face_it_serves.py`
+- **写操作的人身同意走出参数通道（MCP elicitation，2026-10-07）**：`web_request` 的写请求、`web_act` 的 `submit`、CDP attach 的首次授权——宿主声明 elicitation 能力时，服务器经协议直接向**人**要一次明确同意（accept 才执行）；问不到人（宿主不支持 / 用户拒绝 / 询问链路任何失败）一律拒绝执行——门是关的，不是开的，`confirm=true` 不再能替代那次同意（它表达的是"我去问过并得到许可"）。宿主不支持 elicitation 时行为照旧：先问操作员、得到许可再带 `confirm=true` 重发。同一连接内逐连接协商，不跨调用记忆。真实 SDK 回路（内存传输，accept 与 decline 两态）与三个降级分支钉在 `tests/test_write_gate_moves_out_of_band_when_client_elicts.py`（11 条）；宿主是否真支持 elicitation 以 `dhole --doctor` 与一次真实写调用为准——问不到人的宿主上行为与旧版一致
+- **大站翻页的断点续传（`plan_id` / `resume_token`，2026-10-07）**：上千个 URL 的站点此前要 agent 自己当传送带——每批把全部 URL 重新发一遍，十批就是七万字符的参数生成。现在 `web_discover` 收尾把 URL 清单存成 `plan_id`（1 小时 TTL，32 份上限），`web_crawl` 新增 `resume_token=` 断点续传＋`selector=` / `schema=` 投影：同一计划同一 offset 永远同一批页同一断点；预算（页数 / 总字符 / `deadline_ms`）在批间检查，到点在信封带回 `next_resume_token`，逐字传回即可从断点接着跑，计划跑尽回 "Plan exhausted"。投影参数没有 `resume_token` 时具名拒绝（一个请求都不发）；失败的页照常随行返回，不烂在服务器里。连接期净 −22（三参成本由 web_crawl 描述重写对冲，棘轮只降）。钉住 `tests/test_crawl_picks_up_a_selector_and_schema.py`（7 条，含 dispatch 级抵达性）
 
 ### 变更
 
@@ -88,7 +90,8 @@
 - **`web_discover` 有了连接期路由行（2026-10-07）**：11 颗里唯一「注册了却没有路」的工具补上——map / crawl / read 三件事共享一句（两把键同文，全量只发一次，任一只挂其一的子集也各有路）；`web_read` 行删 `pages=` 半句（schema 里已说，不丢信息）。31,026 → 31,016。守卫：每颗注册工具必须有路，反向不许有幽灵路
 - **wire 再省 226 字符：枚举与 how-to 撤到已承重的手册（2026-10-07）**：`web_act` 的 dict-form 旋钮清单（decode_qr / full_page / save_to / image_type / quality）与 `doc_parse` 的 encoding 恢复 how-to 各换成 `sys_guide` 指针——手册侧逐项承重、新守卫逐名钉住；VISUAL ASSIST 首句与 charset 契约句留在 wire。31,016 → **30,790**。`web_crawl` 的 Caps 句未动：它与「三阶段确定性批量」的回收是同一句，只计一次
 - **注释里的实测数要么带日期、要么 import 派生（2026-10-07）**：遗留的陈旧截面（13 颗时代的 instructions 数、「146 颗参数」、不可复现的子集数）清零或改日期戳＋复测命令；单工具形状守卫改为必须等于当日真实最大值；带日期的账本史行不删（删了才是篡改）
-- **评测尺子改版（2026-10-07）**：tag-pages 的扇出断言接受等价形状（nested 三件套或贴上限 `urls=` 批量 len≥12 任一）——上一轮三档全红量出的是「哪条路才算对」上尺子与语料打架；三条 few_calls 探针降为记录项（照印不进分母，先探针一发再扇出是合理保守）；新增两格只 references 能答的用例（mojibake-pivot / diagnosis-branch，跑前需操作员替换真实 URL）。新分母 20＋记录 3，与旧读数不可同表读
+- **评测尺子改版（2026-10-07）**：tag-pages 的扇出断言接受等价形状（nested 三件套或贴上限 `urls=` 批量 len≥12 任一）——上一轮三档全红量出的是「哪条路才算对」上尺子与语料打架；三条 few_calls 探针降为记录项（照印不进分母，先探针一发再扇出是合理保守），分母 **18＋记录 3**，与旧读数不可同表读；新增两格只 references 能答的用例（mojibake-pivot / diagnosis-branch，跑前需操作员替换真实 URL）
+- **三档校准第四轮读数（2026-10-07）**：A 17/18（整格绿 6/7）、B 15/18（5/7）、C 15/18（5/7）——tag-pages 三档全绿（本轮全部走 nested 扇出并顶格 nested_max，回执的 truncation 教会了补齐路径）、author-per-quote 三档满分；两新格 B 与 C 打平在满分处：SKILL.md 的排障表已把要的杠杆教到位，references 无可量的增量。两新格的「真实页面」当日两证不可得（真 GBK 页 charset 探测能解对，真反爬墙在抓取阶梯下不成立），可复现的失败形状由回环夹具供给，评测 CLI 因此新增 `--allow-private`（仅进程内生效，与测试夹具同一开关）。本轮顺带量出两个记录在案待议的缺陷：mojibake-pivot 的「转向」分支会奖励被拒的调用（`web_read` 没有 `encoding=`，any_arg 只看参数名不看成败）；浏览器超时信封的机器可读 `diagnosis` 是泛化句，点名 `force_fetcher='http'` 的专项建议只活在 `next_action` 里
 
 ### 移除
 

@@ -38,6 +38,14 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--record", default="")
     ap.add_argument("--tool", default="web_read")
+    ap.add_argument("--allow-private", action="store_true",
+                    help="eval-only: lifts the SSRF loopback refusal for THIS "
+                         "process so the operator fixture pages (GBK / bot-wall "
+                         "shapes served from 127.0.0.1, see "
+                         "evals/.runtime/skill-calibration/operator_fixtures.py) "
+                         "are reachable. Process-local like the pytest "
+                         "identity.set_value fixture; nothing is persisted, "
+                         "and real untrusted URLs never need it.")
     ap.add_argument("args_json")
     ns = ap.parse_args()
 
@@ -48,6 +56,9 @@ def main() -> int:
         return 2
 
     from dhole_mcp.server import MasterFetchServer
+    if ns.allow_private:
+        from dhole_mcp import identity
+        identity.set_value("allow_private", True)
 
     t0 = time.time()
     server = MasterFetchServer()
