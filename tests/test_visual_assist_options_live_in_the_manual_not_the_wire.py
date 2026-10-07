@@ -52,8 +52,15 @@ def test_the_charset_recovery_howto_lives_in_the_manual_not_the_wire():
         "手册的 fields 卷要接住恢复 how-to")
 
 
-def test_the_caps_sentence_is_untouched_for_p11():
-    """互斥注记：web_crawl 的 Caps 句与 P11 回收的是同一句，本刀不碰。"""
+def test_the_caps_sentence_is_settled_by_p11():
+    """互斥兑现：web_crawl 的 Caps 句是 P11 的账，P11 已在此一次性 claim。
+
+    批次8刀3 撤 web_act 枚举时把这句留给 P11 定夺；P11 落地 resume_token/
+    selector/schema 时重写了 web_crawl 描述，这句随判决改口（默认值枚举撤
+    给运行时回执与手册，只留"哪个到点说哪个"）。两案只计一次的约定由锁的
+    理由行记账。"""
     crawl = _desc("web_crawl")
-    assert "Whichever one bites is named in the summary" in crawl, (
-        "Caps 句被本刀动了 —— 它是 P11 的账，两案只能计一次")
+    assert "whichever bites is named" in crawl, (
+        "P11 压缩后的 Caps 句缺席 —— 互斥的那次 claim 丢了")
+    assert "(1-40, default 10)" not in crawl and "max_content_chars_per" not in crawl, (
+        "Caps 句的默认值/逐参枚举又回来了 —— 那是要按需付的部分")

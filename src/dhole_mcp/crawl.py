@@ -69,7 +69,6 @@ from dhole_mcp import injection
 # CrawlResponseModel，不是 ResponseModel），所以这里读的是那颗纯函数而不是
 # ContextVar —— 同一句话，两个通道。
 from dhole_mcp.context import _clamp_note
-
 # robots.txt compliance (v16.0). robots.py imports nothing from dhole at module
 # level, so this is cycle-free; the seed check + the discovered-URL peek both
 # need it, and keeping one import point is what makes the cache the shared one.
@@ -195,6 +194,8 @@ class CrawlResponseModel(BaseModel):
     summary: str = Field(default="", description="One-line crawl status.")
     next_action: str = Field(default="", description="Obvious next call when one exists (continue crawl / fetch a page).")
     ssrf_recheck: str = Field(default="", description="Non-empty only when the post-redirect IP recheck was skipped because of this machine's resolver (a fake-ip proxy) — the SSRF posture of the WHOLE crawl, stated once. Before this field existed a crawl said nothing about it at all: the per-page receipts live on the web_read results that crawl consumes internally and never reaches the caller, so the one security posture that a 40-page run should disclose was dropped with the pages' own metadata.")
+    plan_id: str = Field(default="", description="web_discover responses only: the URL map is held server-side under this id (1h TTL). Pass resume_token='<plan_id>:0' to web_crawl to fetch the plan without re-sending the URL list.")
+    next_resume_token: str = Field(default="", description="Set when a resumed plan run stopped with URLs left (page cap, char budget or deadline): pass it back as resume_token= to continue exactly where this run stopped. Absent when the plan is exhausted.")
 
     @model_serializer(mode="wrap")
     def _map_rows_carry_only_what_differs(self, handler):
@@ -1426,3 +1427,52 @@ async def web_crawl(
             )
 
     return result
+
+
+# ─── 千页确定性批量：plan 存储与续传 token（批次8 刀2，F-D-J2） ────────────────
+# 阶段1：web_discover 把 URL 清单留在服务器侧并回发 plan_id；阶段2：web_crawl
+# 用 resume_token=<plan_id>:<offset> 从任意断点继续——agent 不再做每轮 ~7.6KB
+# 的 URL 传送带。清单只存**内存**（与凭据存储同一档信任），TTL 与容量都有帽：
+# 过期的 plan 让下一次 resume 明说"重跑 web_discover"，绝不静默当成空计划。
+# 明确不落 MCP Tasks：那要客户端能力协商＋客户端改行为（宿主面未兑现）；
+# token 复用 offset/next_offset 语汇，宿主面兑现后可作降级层共存。
+PLAN_TTL_S = 3600
+PLAN_MAX = 32
+_PLANS: dict[str, tuple[float, list[str]]] = {}
+
+
+def plan_store(urls: list[str]) -> str:
+    """留一份 URL 清单，回发短 plan_id。过期与超容的老计划先挤出。"""
+    import secrets
+    now_s = time()
+    for pid in [p for p, (exp, _) in _PLANS.items() if exp <= now_s]:
+        _PLANS.pop(pid, None)
+    while len(_PLANS) >= PLAN_MAX:
+        _PLANS.pop(next(iter(_PLANS)))
+    pid = secrets.token_hex(6)
+    _PLANS[pid] = (now_s + PLAN_TTL_S, list(urls))
+    return pid
+
+
+def plan_load(plan_id: str) -> Optional[list[str]]:
+    """取回计划；过期/未知返回 None（调用方要给出明确的重跑指引，不能装空）。"""
+    row = _PLANS.get(plan_id)
+    if row is None:
+        return None
+    expires, urls = row
+    if expires <= time():
+        _PLANS.pop(plan_id, None)
+        return None
+    return urls
+
+
+def plan_token(plan_id: str, offset: int) -> str:
+    return f"{plan_id}:{offset}"
+
+
+def plan_parse(token: str) -> Optional[tuple[str, int]]:
+    """resume_token 形如 ``<plan_id>:<offset>``（复用 offset/next_offset 语汇）。"""
+    head, _, tail = (token or "").rpartition(":")
+    if not head or not tail.isdigit():
+        return None
+    return head, int(tail)

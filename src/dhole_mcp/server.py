@@ -2752,7 +2752,11 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     "web_request": _REQUEST_PARAMS,
     # 17.0 §4 第 2 行：页面动作那颗门。
     "web_act": _ACT_PARAMS | {"url"},
-    "web_crawl": _SC_PARAMS | {"url", "focus", "search"},
+    "web_crawl": _SC_PARAMS | {"url", "focus", "search"}
+    # P11 断点续传三颗：resume_token 带回 web_discover 存下的计划、selector/schema
+    # 是计划投影。它们与读法那几颗同住一条转发路（_forward 只认这一张表）；
+    # 不进 _SC_PARAMS 是因为它们不是爬行推进旋钮 —— 计划翻页不消费 max_depth。
+    | {"resume_token", "selector", "schema"},
     # 17.0 §4: the map got its own tool, and the flag it used to be is not an
     # argument any more -- `crawl.web_crawl` still takes it internally.
     "web_discover": frozenset({"url", "sitemap", "path_include", "path_exclude",
@@ -2779,7 +2783,7 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
 # DHOLE_TOOLS takes a comma-separated subset ("web_read,web_search") for
 # clients that pay the connect-time table on every conversation even when dhole
 # is never called: measured on the wire (python tests/tool_payload_measure.py)
-# on 2026-10-07: 28,314 chars of tool schemas + 2,476 of instructions = 30,790
+# on 2026-10-07: 28,292 chars of tool schemas + 2,476 of instructions = 30,768
 # on connect (≈7.4k tokens at the measured 4.16 chars/token), with web_read
 # alone accounting for 5,936 - fetch+search covers the daily-driver cases at
 # roughly a third of the cost, and the rest is one env-edit away. A name that
@@ -7318,10 +7322,21 @@ class MasterFetchServer:
         depend on remembering a switch -- so the switch became a tool and the
         engine stayed where it was.
         """
-        return await self.web_crawl(
+        result = await self.web_crawl(
             url, max_pages=max_pages, path_include=path_include,
             path_exclude=path_exclude, discover_only=True, sitemap=sitemap,
             search=search, timeout=timeout)
+        if not result.error and result.pages:
+            # P11 阶段1：地图留在服务器侧（1h TTL），回执只发一个短 id ——
+            # 千页任务的参数成本从每轮 ~7.6KB 的 URL 传送带降到 O(1)。
+            from dhole_mcp.crawl import plan_store, plan_token
+            result.plan_id = plan_store([p.url for p in result.pages])
+            result.next_action = (result.next_action or "").rstrip() + (
+                f" Plan {result.plan_id} is held here for 1h: "
+                f"web_crawl(url=..., resume_token='{plan_token(result.plan_id, 0)}')"
+                " fetches it without re-sending URLs (add selector=/schema= to "
+                "project each page); or web_read(urls=[...]) the picks directly.")
+        return result
 
     async def web_crawl(
         self,
@@ -7346,6 +7361,9 @@ class MasterFetchServer:
         search: Optional[str] = None,
         ignore_robots: bool = False,
         focus_engine: Optional[str] = None,
+        selector: Optional[str] = None,
+        schema: Optional[Any] = None,
+        resume_token: str = "",
     ) -> CrawlResponseModel:
         """Deep-crawl a site: best-first same-domain from `url`, returning each
         page as markdown with content_ok/summary/page_type. A URL map with no
@@ -7377,6 +7395,26 @@ class MasterFetchServer:
             refused, not downgraded (12.5s of CPU per page multiplied by
             max_pages is not a silent choice).
         """
+        # P11 阶段2：确定性投影的续传路径（F-D-J2）。计划来自 web_discover 的
+        # plan_id；这里按 offset 顺序逐页跑完预算，断点用 next_resume_token 带回。
+        # selector/schema 是对计划中每一页的投影（语义与 web_read 同名参数一致）；
+        # 没有 resume_token 时它们没有作用对象 —— 具名拒绝而不是静默忽略。
+        from dhole_mcp.crawl import CrawlResponseModel as _CRM
+        if resume_token or selector or schema is not None:
+            if not resume_token:
+                return _CRM(start_url=url, pages=[], error=(
+                    "invalid_request: selector=/schema= project a discovered plan; "
+                    "pass resume_token='<plan_id>:0' from web_discover (or drop "
+                    "them for a plain crawl). Nothing was fetched."))
+            return await self._crawl_plan_resume(
+                url=url, resume_token=resume_token, selector=selector,
+                schema=schema, max_pages=max_pages,
+                max_content_chars_per=max_content_chars_per,
+                max_total_chars=max_total_chars, concurrency=concurrency,
+                cache_ttl=cache_ttl, force_fetcher=force_fetcher,
+                timeout=timeout, deadline_ms=deadline_ms,
+                ignore_robots=ignore_robots)
+
         # M-1 闸：与 web_read 同一条规则（17.0 起无许可门 —— focus_engine=
         # 'neural' 点名才用语义分）。模型必须在场（缺模型显式报错，不静默下载）：
         # 爬取中途是同步循环，没有 async 入口可加载。
@@ -7429,6 +7467,122 @@ class MasterFetchServer:
                                          "the server log."))
         finally:
             _FOCUS_ENGINE.reset(token)
+
+    async def _crawl_plan_resume(
+        self, *, url: str, resume_token: str,
+        selector: Optional[str], schema: Optional[Any],
+        max_pages: int, max_content_chars_per: int, max_total_chars: int,
+        concurrency: int, cache_ttl: int, force_fetcher: Optional[str],
+        timeout: int, deadline_ms: int, ignore_robots: bool,
+    ) -> CrawlResponseModel:
+        """P11 阶段2/3：把 web_discover 留下的计划按 offset 顺序**确定性**投影。
+
+        确定性的含义：同一份计划 + 同一个 offset + 同样的预算 ⇒ 抓的是同一批
+        页、返回同一个断点。每页经 web_read（反爬阶梯 / 缓存 / SSRF 闸全在），
+        selector=/schema= 语义与 web_read 的同名参数逐字一致（无 selector 时
+        形状退化为整页 markdown，与今天的 crawl 行相同）。预算三闸到点即在
+        next_resume_token 里带回断点——阶段3 的 error/status!=2xx 行照常随行
+        返回，一个失败页不是一次失败调用。
+        """
+        from dhole_mcp.crawl import (CrawlPage, MAX_PAGES_CEILING, plan_load,
+                                     plan_parse, plan_token)
+        from dhole_mcp.crawl import CrawlResponseModel as _CRM
+        t0 = now()
+
+        deadline_t = t0 + (deadline_ms / 1000.0)
+        parsed = plan_parse(resume_token)
+        if parsed is None:
+            return _CRM(start_url=url, pages=[], error=(
+                "invalid_request: resume_token must be '<plan_id>:<offset>' - "
+                "pass back the token web_discover / the previous resume returned "
+                "verbatim. Nothing was fetched."),
+                summary="resume_token is not a plan cursor")
+        plan_id, offset = parsed
+        urls = plan_load(plan_id)
+        if urls is None:
+            return _CRM(start_url=url, pages=[], error=(
+                f"resume_token: plan {plan_id} is unknown or expired (plans live "
+                "1h server-side). Nothing was fetched."),
+                next_action=("Re-run web_discover (sitemap=true = one request) "
+                             "and start a fresh plan."),
+                summary="plan expired or unknown")
+        offset = max(0, min(offset, len(urls)))
+        remaining = urls[offset:]
+
+        max_pages = max(1, min(int(max_pages), MAX_PAGES_CEILING))
+        rows: list = []
+        total_chars = 0
+        truncated_pages = truncated_chars = truncated_time = False
+        idx = 0  # index into `remaining`
+        while idx < len(remaining):
+            if len(rows) >= max_pages:
+                truncated_pages = True
+                break
+            if max_total_chars and total_chars >= max_total_chars:
+                truncated_chars = True
+                break
+            if now() > deadline_t:
+                truncated_time = True
+                break
+            # 页帽内取批：一批不许越过 max_pages（帽外的页还没付请求，
+            # 留给下一次续传；确定性 offset 只数真抓过的行）。
+            batch = remaining[idx:idx + max(1, min(concurrency,
+                                                   max_pages - len(rows)))]
+            responses = await asyncio.gather(*[
+                self.web_read(
+                    url=u, extraction_type="markdown",
+                    css_selector=selector, schema=schema,
+                    max_content_chars=max_content_chars_per,
+                    cache_ttl=cache_ttl, force_fetcher=force_fetcher,
+                    timeout=timeout, ignore_robots=ignore_robots,
+                ) for u in batch], return_exceptions=True)
+            for u, resp in zip(batch, responses):
+                if isinstance(resp, BaseException):
+                    rows.append(CrawlPage(url=u, status=-1, content_ok=False,
+                                          content=[], content_chars=0,
+                                          error=redact_api_key(str(resp)[:200])))
+                    idx += 1
+                    continue
+                content = list(resp.content or [])
+                chars = sum(len(c) for c in content)
+                rows.append(CrawlPage(
+                    url=getattr(resp, "url", None) or u,
+                    status=getattr(resp, "status", 0),
+                    content_ok=bool(getattr(resp, "content_ok", False)),
+                    fetcher_used=getattr(resp, "fetcher_used", ""),
+                    title=getattr(resp, "title", "") or "",
+                    page_type=getattr(resp, "page_type", "") or "",
+                    content=content, content_chars=chars,
+                    untrusted_content=getattr(resp, "untrusted_content", None),
+                    error=getattr(resp, "error", "") or "",
+                ))
+                total_chars += chars
+                idx += 1
+
+        next_offset = offset + idx
+        done = next_offset >= len(urls)
+        result = _CRM(
+            start_url=url, pages=rows,
+            pages_crawled=len(rows),
+            pages_discovered=len(urls),
+            truncated_by_max_pages=truncated_pages,
+            truncated_by_time=truncated_time,
+            truncated_by_total_chars=truncated_chars,
+            duration_ms=(now() - t0) * 1000.0,
+            summary=(f"plan resumed at {offset + 1}-{next_offset} of {len(urls)}: "
+                     f"{sum(1 for r in rows if r.content_ok)} ok, "
+                     f"{sum(1 for r in rows if r.error)} with error"),
+        )
+        if not done:
+            result.next_resume_token = plan_token(plan_id, next_offset)
+            result.next_action = (
+                f"{len(urls) - next_offset} plan URL(s) left. Pass resume_token="
+                f"'{result.next_resume_token}' (same selector=/schema=) to "
+                "continue exactly where this run stopped.")
+        elif rows:
+            result.next_action = ("Plan exhausted: every URL has been fetched "
+                                  "once across these resumes.")
+        return result
 
     # ─── Serve ─────────────────────────────────────────────────────
 
@@ -7567,7 +7721,7 @@ class MasterFetchServer:
         },
         {
             "name": "web_crawl",
-            "description": "Use when the task needs many pages from one site (docs, wikis, listings) and you do not have the URL list. If you do have the exact URLs, web_read(urls=[...]) fetches them directly - no crawl needed.\n- url= names the site the crawl stays inside.\n- Caps: max_pages (1-40, default 10), max_depth(2), max_content_chars_per per page, max_total_chars for the whole run (default 60000), deadline_ms. Whichever one bites is named in the summary.\n- robots.txt is honoured per page: a disallowed URL is not fetched (its page comes back with error='robots_disallowed') and robots_skipped counts them. ignore_robots=true overrides.\n- Map-then-fetch: web_discover (or sitemap=true here) maps it, web_read(urls=[...]) reads the picks. Drop counters and politeness: sys_guide(topic='behavior', section='web_crawl').",
+            "description": "Many pages from one site (docs, wikis, listings) when the URL list is not in hand; exact URLs are web_read(urls=[...])'s job.\n- Caps: max_pages (1-40), max_depth, char budgets, deadline_ms; whichever bites is named.\n- robots.txt honoured per page (refused pages error='robots_disallowed', robots_skipped counts them); ignore_robots=true overrides.\n- Plans: web_discover's plan_id + resume_token= here fetches it without re-sending URLs. Drop counters and politeness: sys_guide(topic='behavior', section='web_crawl').",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
@@ -7586,9 +7740,12 @@ class MasterFetchServer:
                     "cache_ttl": {"type": "integer", "description": "Cache seconds per page (default 3600). 0 = force fresh."},
                     "force_fetcher": {"type": "string", "description": "Pin one tier for every page, skipping auto-escalation: 'http' fast but no JS/bot walls, 'stealthy' the anti-detect browser."},
                     "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000)."},
-                    "deadline_ms": {"type": "integer", "description": "Hard stop for the whole crawl in ms (default 25000 - aligned to a typical 30s host MCP timeout; raise it when your host allows more) - the budget that ends the run, unlike timeout= which is per page."},
+                    "deadline_ms": {"type": "integer", "description": "Whole-crawl hard stop in ms (default 25000; timeout= is per page)."},
                     "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check for this call (default false = comply). True only where you have the site's permission."},
                     "focus_engine": {"type": "string", "description": "Which scorer runs focus here: 'bm25' (default, cheap) or 'neural' (the local reranker model; asking without it is refused, not downgraded)."},
+                    "resume_token": {"type": "string", "description": "Pass back web_discover's plan_id:0 verbatim; next_resume_token continues where the budget bit."},
+                    "selector": {"type": "string", "description": "With resume_token=: project every planned page to this CSS selector."},
+                    "schema": {"description": "With resume_token=: JSON-schema projection of every planned page.", "anyOf": [{"type": "string"}, {"type": "object"}]},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},

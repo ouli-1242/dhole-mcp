@@ -71,6 +71,9 @@ _WIRE_OMIT: dict = {
         "discover_only", "truncated_by_max_pages",
         "truncated_by_time", "truncated_by_total_chars", "sitemap_truncated",
         "sitemaps", "robots_skipped", "error", "duration_ms", "ssrf_recheck",
+        # plan_id / next_resume_token are present only when a plan exists or a
+        # resumed run stopped early - absence stays the default (P11).
+        "plan_id", "next_resume_token",
     }),
     # 批量信封：`ssrf_recheck` 是"这台机器跳过了重查"的那一句，只在真跳过时上线
     # （它原先在每一行的 metadata 里重复一遍，见 BulkResponseModel 的序列化器）。

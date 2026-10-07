@@ -248,7 +248,14 @@ def test_connect_stays_inside_the_packed_budget():
 #: metadata.encoding 行已承重，wire 留探测契约＋fields 指针）实测 -33。
 #: 合计 -226 → **30,790**。②web_crawl 的 Caps 句与 P11 回收互斥（同一句只计
 #: 一次），本批不动，留 P11 定夺。
-CONNECT_CEILING = 30_790
+#: 2026-10-07 P11 三阶段断点续传（F-B-2，批次8 刀2）：棘轮**往下**。web_discover
+#: 收尾把 URL 清单存成 plan_id，web_crawl 增 resume_token/selector/schema 三颗
+#: 参数 —— 翻页从「agent 当传送带」（每批 re-emit 全部参数）变成 O(1) 断点续传
+#: （token 逐字带回）。三参骨架实测 +318 → 峰值 31,108，撞棘轮；抵扣来自
+#: web_crawl 描述重写：url= 路由句删除（resume_token 把路由事实说得更准）、
+#: Caps 句在此**一次性 claim**（互斥约定的兑现，不再两边各付一次）、deadline_ms
+#: 与 robots 两句压缩。回收 +340，净 **-22 → 30,768**。
+CONNECT_CEILING = 30_768
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

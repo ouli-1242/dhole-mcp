@@ -90,6 +90,9 @@ VALUES: dict[str, object] = {
     "max_pages": 3, "max_depth": 1, "path_include": "/a", "path_exclude": "/b",
     "max_content_chars_per": 2000, "concurrency": 2,
     "deadline_ms": 60000, "sitemap": True, "search": "topic",
+    # P11 断点续传三颗（selector 的形状探针与 web_read 的 schema 同款；
+    # resume_token 用 plan_id:offset 的真实形状，而不是任意串）。
+    "resume_token": "abcd1234ef56:0", "selector": "h1.title",
     # web_search
     "max_results": 5, "mode": "auto", "engines": ["bing"], "site": "example.com",
     "exclude_sites": ["other.example"], "location": "cn", "language": "zh",
