@@ -448,6 +448,11 @@ def _search_summary(query: str, results: list[SearchResult], engines_used: list[
             f"({high} high, {med} med, {low} low) from {eng}; rerank={rerank_mode}.")
 
 
+# keyed 引擎缺 key 的两份文案（search_metasearch：单引擎 raise 与 search_json
+# raise）。next_action 从 error 里把 env 名提出来点名，别再教人改写查询。
+_MISSING_KEY_RE = re.compile(r"requires (DHOLE_[A-Z_]+), which is not set")
+
+
 def _search_next_action(results: list[SearchResult], engine_blocked: list[str],
                          error: str, engines_used: list[str] | None = None, *,
                          engine_empty: list[str] | None = None,
@@ -475,6 +480,14 @@ def _search_next_action(results: list[SearchResult], engine_blocked: list[str],
                     "connection, or retry with engines=[...] to ask a different "
                     "index. The discarded titles are named in `error` so you can "
                     "judge for yourself whether the discard was right.")
+        # 缺 key 是配置问题不是查询问题（评审R1刀3）：error 已点名 env，next_action
+        # 却还在教「Rephrase」——换说法修不了一把不存在的钥匙。两份拼写都收：
+        # 单 keyed 引擎的 raise 带 "Engine '…'" 前缀，search_json 的不带。
+        _missing = _MISSING_KEY_RE.search(error)
+        if _missing:
+            return (f"No results: the engine you asked for needs {_missing.group(1)}, "
+                    "which is not set. Set it in the host's environment and restart "
+                    "the host - rephrasing the query cannot fix a missing key.")
         if error and ("rate-limited" in error.lower() or "timed out" in error.lower() or engine_blocked):
             return ("No results (engines rate-limited/timed out). Retry in a moment, "
                     "or set DHOLE_SEARCH_PROXY for sustained heavy use.")
@@ -764,7 +777,11 @@ def _rank(query: str, ranked: list[RawResult], mode: str, min_relevance: float =
     span.
     """
     note = ""
-    if mode in ("neural", "auto"):
+    if mode in ("neural", "auto") and ranked:
+        # 空输入不问重排器（评审R1刀3）：rerank 对空结果一律答 None——没有
+        # 东西可排，与重排器在不在无关。「真没跑过才说」由此成立：缺席说明
+        # 只能源自"有东西可排却排不了"的那条路，重排器暖着时的空结果错误
+        # 响应不再携带「has not run in this process yet」的假话。
         pairs = neural_rerank(query, ranked, min_relevance=min_relevance,
                               min_raw_relevance=min_raw_relevance, stats=stats)
         if pairs is not None:

@@ -2876,6 +2876,15 @@ _MOVED_TO = {
     "decode_qr": "web_act",
 }
 
+# SSRF 守卫的两类**永久**边界（评审R1刀3）：security.py 对它们的拒绝没有任何
+# 出口——云元数据端点与 DNS rebinding 服务任何拼写都不放行（allowlist 也进不去，
+# 见 security.py 的同段注释）。它们的 next_action 不能再走「Correct the
+# argument」模板：改参数永远不可能成功，那句话在指一条不存在的出路。
+_PERMANENT_URL_REFUSALS = (
+    "URL targets internal cloud metadata endpoint",
+    "URL uses DNS rebinding service",
+)
+
 
 def _reject_unknown_args(tool: str, args: dict) -> None:
     """Raise when a tool is called with a name it does not accept.
@@ -4520,7 +4529,8 @@ class MasterFetchServer:
         verb = _clean_method(method)
         if not (url or "").strip():
             return _invalid_request_result(
-                "", "url is required: the absolute http(s) URL to send this request to")
+                "", "url is required: the absolute http(s) URL to send this request to",
+                tool="web_request")
         if not (method or "").strip():
             # `_clean_method` reads an absent verb as GET, so this has to be asked
             # before the GET branch or the caller is told they asked for a read.
@@ -4613,7 +4623,8 @@ class MasterFetchServer:
         """
         if not (url or "").strip():
             return _invalid_request_result(
-                "", "url is required: the page to act on, one URL per call")
+                "", "url is required: the page to act on, one URL per call",
+                tool="web_act")
         if not actions:
             return _invalid_request_result(
                 url, "actions is required: a non-empty list of {action key: args} "
@@ -4889,7 +4900,24 @@ class MasterFetchServer:
                     url, extraction_type, css_selector, extra_headers, timeout, proxy, useragent,
                 )
         except (ValueError, SecurityError) as e:
-            return _invalid_request_result(url or "", str(e))
+            # 评审R1刀3：这条校验路是 web_read / web_act / web_request 三颗共用
+            # 的，样板却永远念 web_read 的名字——工具名跟着调用方走（actions 能
+            # 走到这里必来自 web_act：dispatch 对 web_read 拒收 actions 键；非
+            # GET 的 method 只会来自 web_request）。SSRF 守卫的两类永久边界另给
+            # 专属句：没有"改参数重试"这条路可指。
+            msg = str(e)
+            if msg.startswith(_PERMANENT_URL_REFUSALS):
+                return _invalid_request_result(
+                    url or "", msg,
+                    next_action=("No argument fixes this - it is a design boundary: "
+                                 "dhole never fetches cloud-metadata endpoints or "
+                                 "DNS-rebinding services (SSRF guard), whatever the "
+                                 "spelling. Nothing was sent; if you meant a public "
+                                 "site, the URL itself is wrong."))
+            caller = ("web_act" if actions else
+                      "web_request" if _clean_method(method) != "GET" else
+                      "web_read")
+            return _invalid_request_result(url or "", msg, tool=caller)
 
         # G25: credentials. Translated to headers ONCE, here, so both tiers send
         # them the same way (each takes a header dict), the cache fingerprint and

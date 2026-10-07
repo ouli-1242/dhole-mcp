@@ -1464,7 +1464,8 @@ def _is_over_budget(result) -> bool:
     return bool(result) and result.error.startswith("timeout: the ")
 
 
-def _invalid_request_result(url: str, msg: str, next_action: str = "") -> ResponseModel:
+def _invalid_request_result(url: str, msg: str, next_action: str = "",
+                            tool: str = "web_read") -> ResponseModel:
     """A call rejected before any request went out, shaped like a FetchResult.
 
     Input validation used to raise, and the generic handler turned that into an
@@ -1477,6 +1478,9 @@ def _invalid_request_result(url: str, msg: str, next_action: str = "") -> Respon
     (a malformed ``url``). A rejection about a *different* argument must pass its
     own: telling a caller who got ``max_content_chars`` wrong to "pass an
     absolute http(s) URL" sends them to fix the one thing that was already right.
+    ``tool`` names the tool the caller actually invoked (评审R1刀3): the URL
+    validation path is shared, and a web_request refusal quoting web_read's
+    boilerplate reads as advice about a different call.
     """
     result = ResponseModel(
         url=url, status=0, content=[], fetcher_used="none",
@@ -1485,7 +1489,7 @@ def _invalid_request_result(url: str, msg: str, next_action: str = "") -> Respon
         summary=f"invalid request · {msg[:80]}",
         next_action=next_action or (
             "Correct the argument and call again - no request was made. "
-            "web_read takes an absolute http(s) URL "
+            f"{tool} takes an absolute http(s) URL "
             "(e.g. https://example.com)."),
     )
     _apply_envelope(result)
