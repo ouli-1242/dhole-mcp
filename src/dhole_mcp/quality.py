@@ -1384,6 +1384,16 @@ def _with_agent_hints(result: ResponseModel) -> ResponseModel:
         result.duplicate_lines_collapsed = folded
         note = f"duplicate_lines_collapsed: {folded}"
         summary = f"{summary} · {note}" if summary else note
+    # 评审R2刀5：缓存按 URL 键，它不认识"当时是谁的 cookie"。命名会话登录之后，TTL
+    # 内的回读可以整批发自登录前的那一份，而响应原本只说这一发没发包 —— 调用方于是
+    # 把匿名页面当登录视图引用（评审实测：saucedemo 登录后回读还是 `Login`）。
+    # 注记而不是重取：`cache_ttl=0` 值不值一次抓取是调用方的决定；这一刀负责的是
+    # "这一发没问过站点"必须说得出。缓存按会话身份分键在评审的「不修清单」里。
+    if result.cached and result.session_id:
+        note = ("cached copy may predate this session's cookies - the cache is "
+                "keyed by URL, not by who was logged in; pass cache_ttl=0 to "
+                "re-fetch under this session")
+        summary = f"{summary} · {note}" if summary else note
     result.summary = summary
     result.content_ok = content_ok
     result.next_action = next_action
