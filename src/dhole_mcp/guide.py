@@ -46,6 +46,14 @@ TOPICS: dict[str, tuple[str, str]] = {
 #: What an agent types when it guesses: the volume's own file name.
 ALIASES: dict[str, str] = {pathlib.Path(p).stem.lower(): t for t, (p, _) in TOPICS.items()}
 
+# topic -> the file-name spellings that resolve to it. 半张表反过来才是主题行要的：
+# 读的人想知道"我猜的那个名字通向哪一卷"，而 `ALIASES.get(topic)` 给的是反方向的
+# 答案 —— 对不是别名的主题它就是 None，于是列表里打出过 `(aka None)`（评审 R3刀3）。
+_ALIASES_OF: dict[str, list[str]] = {}
+for _alias, _topic in ALIASES.items():
+    if _alias != _topic:
+        _ALIASES_OF.setdefault(_topic, []).append(_alias)
+
 _HEADING = re.compile(r"^## +(.+?)\s*$", re.M)
 
 
@@ -78,7 +86,8 @@ def index(reason: str = "") -> str:
     lines = [head + "sys_guide(topic) returns one handbook volume per call. "
              "Known topics (aliases in parentheses):"]
     for topic, (path, when) in TOPICS.items():
-        alias = "" if ALIASES.get(topic) == topic else f" (aka {ALIASES.get(topic)})"
+        others = _ALIASES_OF.get(topic) or []
+        alias = f" (aka {', '.join(repr(a) for a in others)})" if others else ""
         lines.append(f"- topic='{topic}'{alias} ({_volume_chars(path):,} chars): {when}")
     lines.append("")
     lines.append("Pass section='<heading text>' to get one section of a volume instead of "
@@ -131,11 +140,13 @@ def read(topic: str = "", section: str = "") -> tuple[str, str]:
         if hits:
             names, bodies = hits[0]
             return (f"{head}\nsection='{names}' of {len(parts)}", bodies.strip())
-        titles = ", ".join(h for h, _ in parts if h) or "(none)"
+        # 标题列表只列一遍：先逐条列出，再在同一回答里把它们用 " | " 重排一次，
+        # 是让一次"没猜中"付两遍字数（评审 R3刀3）。
         return (f"{head}\nsection={section!r} matched no heading",
                 f"No section matches {section!r}. Headings in this volume:\n"
                 + "\n".join(f"- {h}" for h, _ in parts if h)
-                + f"\n\n(to see them all in one call: {titles})")
+                + f"\n\nTo see them all with their text, re-read without section= "
+                  f"(the whole volume is {len(text):,} chars).")
 
     toc = [h for h, _ in parts if h]
     if not toc:

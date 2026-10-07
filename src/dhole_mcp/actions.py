@@ -496,7 +496,7 @@ def _validate_actions(actions) -> list[dict]:
             # 快照索引因此对被拖元素与落点都可用。
             if not isinstance(val, dict) or "to" not in val:
                 raise ValueError(
-                    f"action {i} 'drag' must be {{{{selector|index, to}}}} - the "
+                    f"action {i} 'drag' must be {{selector|index, to}} - the "
                     "element to drag plus where to drop it; 'to' takes the same "
                     "target shapes (a CSS selector string or "
                     '{"selector"|"index", "expect"?})')
@@ -509,7 +509,7 @@ def _validate_actions(actions) -> list[dict]:
             if val is not True:
                 raise ValueError(
                     f"action {i} 'snapshot' must be true - usage: "
-                    '{{"snapshot": true}}. The element list arrives in '
+                    '{"snapshot": true}. The element list arrives in '
                     "metadata.actions as a receipt row; act on it with "
                     '{"click": {"index": N}}')
             out.append({key: True})
@@ -521,7 +521,7 @@ def _validate_actions(actions) -> list[dict]:
             if not isinstance(val, dict):
                 raise ValueError(
                     f"action {i} 'submit' must be {{selector, confirm?}} or "
-                    "{{index, confirm?}} - a submit is an irreversible step and "
+                    "{index, confirm?} - a submit is an irreversible step and "
                     "is never implicit in a click")
             target = _act_target(i, key, {k: v for k, v in val.items()
                                           if k != "confirm"})
@@ -625,7 +625,7 @@ def _validate_actions(actions) -> list[dict]:
         elif key == "fill":
             if not isinstance(val, dict) or "text" not in val:
                 raise ValueError(f"action {i} 'fill' must be {{selector, text}} "
-                                 "or {{index, text}}")
+                                 "or {index, text}")
             text = val["text"]
             if not isinstance(text, str):
                 raise ValueError(f"action {i} 'fill.text' must be a string")

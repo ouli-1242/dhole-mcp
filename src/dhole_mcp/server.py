@@ -2633,8 +2633,8 @@ def _identity_value_error(key: str, value: Any) -> str:
             # 这条错误面的契约是 "the error names the seven keys"。
             usable = None
         if not usable:
-            return ("cookies: nothing usable — pass a {{name: value}} dict, a list "
-                    "of {{name, value, domain}}, or one 'a=1; b=2' header string")
+            return ("cookies: nothing usable — pass a {name: value} dict, a list "
+                    "of {name, value, domain}, or one 'a=1; b=2' header string")
         return ""
     if key == "proxy":
         if not isinstance(value, (str, dict)):
@@ -2663,9 +2663,14 @@ def _identity_value_error(key: str, value: Any) -> str:
         return ""
     if key == "allow_private":
         hosts, _ = parse_allow_private(value)
-        return "" if hosts else (
-            "allow_private: pass true (loopback only) or a list of host names — "
-            "cloud metadata endpoints are never allowed, by any spelling")
+        if hosts:
+            return ""
+        # 传 false / 空值最常见的意思是"把这扇门关上"，而那不是这颗键的一个取值：
+        # 关门是"这颗键不在库里"。不说出那条路，读者只能反复试同一颗被拒的参数。
+        closer = (" To turn it off, use unset=[\"allow_private\"] - closed is the "
+                  "absence of this key, not a value it takes." if not value else "")
+        return ("allow_private: pass true (loopback only) or a list of host names — "
+                "cloud metadata endpoints are never allowed, by any spelling." + closer)
     if key == "anti_detect":
         try:
             _coerce_anti_detect_arg(value)
@@ -2949,8 +2954,9 @@ def _resolver_guard_result(url: str, msg: str) -> ResponseModel:
     """
     result = _refusal_result(url, msg)
     result.next_action = (
-        "No argument on this call changes it - the resolver verdict was taken at "
-        f"process start. {RESOLVER_GUARD_RECOVERY}; nothing was fetched.")
+        "No argument on this call changes it - the resolver verdict was taken once, "
+        f"at this process's first hostname check. {RESOLVER_GUARD_RECOVERY}; "
+        "nothing was fetched.")
     result.summary = f"refused by the SSRF resolver guard · {msg[:80]}"
     result.diagnosis = {"code": "resolver_guard", "retryable": False,
                         "recover_with": RESOLVER_GUARD_RECOVERY}

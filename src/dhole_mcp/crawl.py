@@ -497,6 +497,30 @@ def _path_in_scope(path: str, pattern: str) -> bool:
     return path == pattern or path.startswith(pattern + "/")
 
 
+def _scope_hint(pending_urls: list) -> str:
+    """停早时该不该推荐 path_include，以及推荐哪一棵子树（评审 R3刀3）。
+
+    样板过去无脑写 `/docs`：站点没有 /docs 时那是一条修不了任何东西的建议，还顺手
+    教读者去猜一颗并不存在的目录。判据取自**没抓到的那批 URL** 的第一段路径 —— 一段
+    至少占 3 条、且过半，"只跑这一棵"才真把预算省下来；否则空串，调用方读到的是"抬
+    预算"这一条老实建议。
+    """
+    from collections import Counter
+    firsts = Counter()
+    for u in pending_urls:
+        seg = [s for s in (urlparse(u).path or "").split("/") if s]
+        if seg:
+            firsts["/" + seg[0]] += 1
+    if not firsts:
+        return ""
+    seg, n = firsts.most_common(1)[0]
+    if n < 3 or n * 2 < len(pending_urls):
+        return ""
+    return (f"path_include=['{seg}'] - that subtree holds {n} of the "
+            f"{len(pending_urls)} URLs still queued (a path subtree, not a string "
+            "prefix)")
+
+
 def path_allowed(path: str, path_include=None, path_exclude=None) -> bool:
     """The single decision point for BFS link discovery and the sitemap map.
 
@@ -1348,23 +1372,26 @@ async def web_crawl(
     summary = _summary_for(pages)
 
     next_action = ""
+    # 排队未发的 URL 是"能不能再砍一刀"的唯一依据：它们的第一段路径决定值不值得推荐
+    # 一棵子树（见 `_scope_hint`）。
+    scope_hint = _scope_hint([hu for _neg, _d, _s, hu, _t in heap])
     if truncated_total_chars:
         next_action = (
             f"crawl stopped at the whole-run character budget "
             f"(max_total_chars={max_total_chars:,}); {not_fetched:,} URL(s) were "
             "discovered but not fetched. Raise max_total_chars (up to "
             f"{MAX_TOTAL_CHARS_CEILING:,}) or pass 0 for no cap, lower "
-            "max_content_chars_per to fit more pages in the same budget, or scope "
-            "the run with path_include=['/docs'] (a path subtree, not a string "
-            "prefix). The pages you already have are the best-first ones - "
+            "max_content_chars_per to fit more pages in the same budget"
+            + (f", or scope the run with {scope_hint}" if scope_hint else "")
+            + ". The pages you already have are the best-first ones - "
             "web_read the picks you actually need instead of re-crawling.")
     elif truncated_maxpages or truncated_time:
         why = "time deadline" if truncated_time else "max_pages"
         next_action = (
             f"crawl stopped early ({why}); re-run web_crawl with a higher "
-            f"max_pages / deadline_ms, or scope it with "
-            f"path_include=['/docs'] (a path subtree, not a string prefix). "
-            f"{not_fetched} URL(s) were discovered but not fetched."
+            f"max_pages / deadline_ms"
+            + (f", or scope it with {scope_hint}" if scope_hint else "")
+            + f". {not_fetched} URL(s) were discovered but not fetched."
         )
         if discover_only:
             # This is the branch map mode actually lands in whenever the map is

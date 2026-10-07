@@ -579,6 +579,46 @@ def _validate_filters(site, exclude_sites, location, language, page):
     return page
 
 
+# 参数类拒绝的"怎么改"。错误句说的是哪里错了，next_action 说怎么修 —— 这些拒绝全部
+# 发生在任何一个引擎被问到之前，所以修好再调一次是零成本，前提是调用方看得见要修哪
+# 一颗（评审 R3刀3：这一族错误过去只带 error，读者只能自己猜形状）。engine 那条把
+# 别名念出来：`360` / `ddg` 在可选名清单里，读的人却不一定认得它们各自的正名。
+_PARAM_REPAIR_HINTS = (
+    ("Invalid engine:", "engines= takes the names listed above, lower-case - "
+                        "`360` is so360 and `ddg` is duckduckgo (both accepted as "
+                        "written). Omit engines= for the default pool."),
+    ("engines must be", 'engines= is a LIST of engine names, e.g. ["brave", "bing"] '
+                        "- one engine is still a list."),
+    ("engines list too long", f"ask for at most {MAX_ENGINES_PER_SEARCH} engines - "
+                              "more names add timeouts, not indexes."),
+    ("Invalid location:", "location= is an ISO country code ('US') or "
+                          "country-language ('us-en'); there is no 'worldwide' "
+                          "value, so omit it for the global index."),
+    ("Invalid language:", "language= is a 2-letter code ('en', 'zh')."),
+    ("Invalid page:", "page= counts result pages from 0 (0-10), so page 0 IS the "
+                      "first page - omit it for the first page."),
+    ("Invalid site filter:", "site= is one bare domain ('docs.python.org'), not a "
+                             "URL and not a path."),
+    ("Invalid exclude_sites entry:", "exclude_sites= is a list of bare domains, the "
+                                     "mirror of site= (up to 20)."),
+    ("exclude_sites must be", 'exclude_sites= is a LIST of up to 20 bare domains, '
+                              'e.g. ["github.com"].'),
+    ("must be a date string", "after= / before= take an ISO date ('2026-09-20') or a "
+                              "relative span ('30d', '2 weeks')."),
+    ("is not a date", "after= / before= take an ISO date ('2026-09-20') or a relative "
+                      "span ('30d') - an unreadable date is refused instead of being "
+                      "dropped, because a silently ignored window reads as 'no limits'."),
+)
+
+
+def _param_repair_hint(msg: str) -> str:
+    """The repair sentence for a pre-request parameter refusal ('' = nothing to add)."""
+    for prefix, hint in _PARAM_REPAIR_HINTS:
+        if prefix in msg:
+            return f"Nothing was searched - no engine was asked. {hint}"
+    return ""
+
+
 def _validate_engines(engines):
     if engines is None:
         return None
@@ -1266,6 +1306,7 @@ async def web_search(
         return SearchResponseModel(
             query=query, results=[], total_results=0,
             duration_ms=0, error=str(e),
+            next_action=_param_repair_hint(str(e)),
         )
 
     # G24: the date window is resolved against the pool that is about to run,
@@ -1276,7 +1317,8 @@ async def web_search(
             after, before, freshness, engines or list(DEFAULT_ENGINES))
     except Exception as e:
         return SearchResponseModel(
-            query=query, results=[], total_results=0, duration_ms=0, error=str(e))
+            query=query, results=[], total_results=0, duration_ms=0, error=str(e),
+            next_action=_param_repair_hint(str(e)))
     if date_rejected:
         return SearchResponseModel(
             query=query, results=[], total_results=0, duration_ms=0,

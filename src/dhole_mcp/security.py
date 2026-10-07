@@ -622,8 +622,10 @@ def _normalize_ip_notation(host: str) -> str | None:
 # 写在守卫旁边而不是各工具各写一句：判据只有一份定义（这条拒绝在 web_read / crawl /
 # discover 三条路上都出现，措辞一旦各自漂，调用方就读不出"这是同一件事"）。
 RESOLVER_GUARD_NEEDLE = "resolves to internal/private IP"
-RESOLVER_GUARD_RECOVERY = ("restart the MCP host so the startup resolver probe "
-                           "re-judges this machine, then confirm with `dhole --doctor`")
+RESOLVER_GUARD_RECOVERY = (
+    "restart the MCP host so the resolver probe re-judges this machine (it runs "
+    "once per process, on first use, and its answer is kept for the life of the "
+    "process), then confirm with `dhole --doctor`")
 
 
 def validate_url(url: str, allow_internal: bool = False) -> str:
