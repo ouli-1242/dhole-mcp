@@ -167,6 +167,8 @@ PLAUSIBLE_CASES = {
         # Engines are routed to the dead loopback proxy: no internet egress.
         ("minimal: query via dead loopback proxy", {"query": "dhole offline snapshot probe"}),
         ("minimal: find_similar with blocked source url", {"query": "probe", "mode": "find_similar", "url": "http://127.0.0.1/"}),
+        # 评审R2刀4：query 从 wire 的 required 里下来了 —— 这颗模式本来就不用它。
+        ("minimal: find_similar with no query at all", {"mode": "find_similar", "url": "http://127.0.0.1/"}),
     ],
     "sys_state": [
         ("minimal: no args (the census)", {}),

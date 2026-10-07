@@ -255,7 +255,16 @@ def test_connect_stays_inside_the_packed_budget():
 #: web_crawl 描述重写：url= 路由句删除（resume_token 把路由事实说得更准）、
 #: Caps 句在此**一次性 claim**（互斥约定的兑现，不再两边各付一次）、deadline_ms
 #: 与 robots 两句压缩。回收 +340，净 **-22 → 30,768**。
-CONNECT_CEILING = 30_768
+#: 2026-10-07 评审R2刀4（P2-7，本计划唯一动 wire 的那刀）：棘轮**往下**。
+#: web_search 的 `query` 从 wire 的 required 下来了 —— mode='find_similar' 的输入是一颗
+#: URL，宿主按 required:['query'] 先把这种调用拦下，那颗模式因此在正常宿主上做不到
+#: （不传被拒、硬传又被服务端整个忽略）。判决搬进服务端按 mode 判，wire 不再拦。
+#: 净额按实测：required 撤下(-21)、query 描述改说『除非 find_similar 可选』(+47)、
+#: url 描述瘦字(-24，同一事实的第二个作者)、min_relevance 那句瘦字(-21)。**净 -18 →
+#: 30,750**（mode 那句『'find_similar' needs url=』必须留着 ——
+#: test_the_enum_values_are_still_stated_where_a_reader_looks 要求一颗参数的描述自己
+#: 点得出全部合法值，摘掉它是一次能力失传，不是瘦身）。棘轮随实测回落。
+CONNECT_CEILING = 30_750
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

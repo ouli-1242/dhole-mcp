@@ -61,10 +61,17 @@ class TestABareClientMissingRequiredArgGetsTheEnvelope:
 
     @pytest.mark.asyncio
     async def test_web_search_without_query_is_an_envelope(self):
+        """评审R2刀4 之后这句由方法体说，不再由这张静态表说。
+
+        表不认识 mode，而 `mode='find_similar'` 正是一颗**没有**查询词的调用：把它
+        留在表里，那颗模式在裸客户端上就做不到。信封款式不变（invalid_request +
+        点名 query + 一个请求都不发），只是判据搬到了认识 mode 的那一侧。
+        """
         out = await MasterFetchServer()._dispatch("web_search", {})
         text = _text(out)
         assert "invalid_request" in text
-        assert "query" in text and "Missing required argument" in text
+        assert "query" in text
+        assert "find_similar" in text, "唯一不带查询词的出路要在报错里说得出"
 
     @pytest.mark.asyncio
     async def test_doc_parse_without_file_path_is_an_envelope(self):

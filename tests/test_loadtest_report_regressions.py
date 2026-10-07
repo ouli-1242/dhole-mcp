@@ -280,11 +280,20 @@ class TestToolSchemaRequired:
 
     def test_every_other_tool_still_declares_its_required_arg(self):
         for name, required in (
-            ("web_crawl", ["url"]),
-            ("web_search", ["query"]), ("doc_parse", ["file_path"]),
+            ("web_crawl", ["url"]), ("doc_parse", ["file_path"]),
             ("feed_read", ["urls"]),
         ):
             assert self._schema(name)["required"] == required
+
+    def test_web_search_declares_no_required_arg(self):
+        """评审R2刀4：`query` 从 wire 的 required 下来了。
+
+        宿主按 required 拦调用，而 `mode='find_similar'` 的输入是一颗 URL ——
+        留着这颗声明，那颗模式就撞死在宿主那一侧（不传被拒、硬传又被服务端忽略）。
+        "缺词"的判决搬到服务端按 mode 判（见
+        tests/test_find_similar_takes_url_and_no_query.py），wire 上不再拦。
+        """
+        assert "required" not in self._schema("web_search")
 
 
 # ─── D-04: focus tokenization ─────────────────────────────────────────

@@ -1252,11 +1252,16 @@ async def web_search(
     t0 = time()
 
     try:
-        query = validate_search_query(query)
+        mode = _validate_mode(mode)
+        # 评审R2刀4：find_similar 的输入是一颗 URL，它没有查询词可写 —— 那颗模式下
+        # 缺 query 是合法的（缺 url 另有那句真话，见下面的 find_sim_url 分支）。其余
+        # 模式缺词照旧在这里拒掉：一个引擎也不发。mode 先判，是因为这句判决认识 query
+        # 的合法性取决于它是哪颗模式。
+        if mode != "find_similar" or str(query or "").strip():
+            query = validate_search_query(query)
         page = _validate_filters(site, exclude_sites, location, language, page)
         engines = _validate_engines(engines)
         freshness = _validate_freshness(freshness)
-        mode = _validate_mode(mode)
     except Exception as e:
         return SearchResponseModel(
             query=query, results=[], total_results=0,

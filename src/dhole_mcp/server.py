@@ -2827,8 +2827,11 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
 _DISPATCH_REQUIRED: dict[str, tuple[str, ...]] = {
     "web_crawl": ("url",),
     "web_discover": ("url",),
-    "web_search": ("query",),
     "doc_parse": ("file_path",),
+    # web_search 的 `query` 在这张表里待过（评审R1刀2）。评审R2刀4 把它请出去了：
+    # 表是静态的、不认识 mode，而 mode='find_similar' 恰恰是一颗**没有**查询词的调用
+    # —— 留着它，那颗模式在正常宿主上就做不到（不传被拒、传了被忽略）。"缺词"现在由
+    # 方法体按 mode 判，信封同款（invalid_request + 点名 query + no request was made）。
 }
 
 
@@ -2850,7 +2853,7 @@ def _missing_required_args(tool: str, args: dict) -> list[str]:
 # DHOLE_TOOLS takes a comma-separated subset ("web_read,web_search") for
 # clients that pay the connect-time table on every conversation even when dhole
 # is never called: measured on the wire (python tests/tool_payload_measure.py)
-# on 2026-10-07: 28,292 chars of tool schemas + 2,476 of instructions = 30,768
+# on 2026-10-07: 28,274 chars of tool schemas + 2,476 of instructions = 30,750
 # on connect (≈7.4k tokens at the measured 4.16 chars/token), with web_read
 # alone accounting for 5,936 - fetch+search covers the daily-driver cases at
 # roughly a third of the cost, and the rest is one env-edit away. A name that
@@ -7267,7 +7270,7 @@ class MasterFetchServer:
 
     async def web_search(
         self,
-        query: str,
+        query: str = "",
         max_results: int = 6,
         cache_ttl: int = 300,
         mode: str = "auto",
@@ -7307,13 +7310,30 @@ class MasterFetchServer:
         (day|week|month|year). Results cached 5min.
         """
         from dhole_mcp.search import SearchResponseModel  # lazy: search.py pulls the metasearch engine chain
-        try:
-            query = validate_search_query(query)
-        except SecurityError as e:
-            return SearchResponseModel(
-                query=query, results=[], total_results=0,
-                duration_ms=0, error=str(e),
-            )
+        # 评审R2刀4：`query` 在 wire 上不再是全局必填的。`mode='find_similar'` 的输入
+        # 是一颗 URL，它没有查询词可写 —— 而 wire 过去的 required:["query"] 让宿主先
+        # 把这种调用拦下，于是那颗模式在正常宿主上做不到（不传被拒，硬传又整个忽略）。
+        # 判决搬进方法体，因为只有这里认识 mode：缺词在非 find_similar 上是标准
+        # invalid_request（缺席与空串同罪，一个请求都不发），在 find_similar 上被忽略。
+        if not str(query or "").strip():
+            if mode != "find_similar":
+                return SearchResponseModel(
+                    query="", results=[], total_results=0, duration_ms=0,
+                    error=("invalid_request: web_search needs query= - the words to "
+                           "search for. mode='find_similar' is the only mode that "
+                           "runs without it, and it takes url= instead."),
+                    next_action=("Pass query=<your words> and call again - no request "
+                                 "was made. To find pages like a page you already "
+                                 "have: mode='find_similar' with url=<that page>."),
+                )
+        else:
+            try:
+                query = validate_search_query(query)
+            except SecurityError as e:
+                return SearchResponseModel(
+                    query=query, results=[], total_results=0,
+                    duration_ms=0, error=str(e),
+                )
 
         # #8：共识地板的两条"表外用法"在发请求前就拒掉。静默忽略一颗显式给出的
         # 参数，正是本项目一直在防的那类失败（"看起来成功、其实参数没生效"）——
@@ -7916,13 +7936,13 @@ class MasterFetchServer:
         },
         {
             "name": "web_search",
-            "description": "Keyless multi-engine web search (default pool = all 8 engines: baidu,bing,sogou,so360,bing_global,yandex,brave,duckduckgo). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- fetch_content=true auto-fetches up to 3; otherwise web_read the high fetch_relevance hits with focus=. Don't search for a URL you already have - web_read it directly.\n- min_relevance / min_raw_relevance (0-1) drop low-relevance results - two different scales, read which one you are setting.\n- Result fields: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index FAMILIES, so a low value can mean a degraded pool - check consensus_basis. Engine matrix: sys_guide(topic='behavior', section='web_search').",
+            "description": "Keyless multi-engine web search (default pool = all 8 engines: baidu,bing,sogou,so360,bing_global,yandex,brave,duckduckgo). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- fetch_content=true auto-fetches up to 3; otherwise web_read the high fetch_relevance hits with focus=. Don't search for a URL you already have - web_read it directly.\n- min_relevance / min_raw_relevance (0-1) drop low-relevance hits - two scales, read which one you set.\n- Result fields: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index FAMILIES, so a low value can mean a degraded pool - check consensus_basis. Engine matrix: sys_guide(topic='behavior', section='web_search').",
             "inputSchema": {
-                "type": "object", "required": ["query"],
+                "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query"},
+                    "query": {"type": "string", "description": "Words to search for. Optional only with mode='find_similar'."},
                     # 17.0 B4 · 顶层只有一个家（这 18 个键今天也已经能从顶层传进来）。
-                    "url": {"type": "string", "description": "A page you already have, to find similar pages of. Requires mode='find_similar'."},
+                    "url": {"type": "string", "description": "The page to find similar pages of (mode='find_similar')."},
                     "mode": {"type": "string", "description": "Rerank mode: 'auto' (default) ranks with the local reranker when it can; 'neural' asks for it by name - if it cannot run, the reply says so instead of pretending. 'find_similar' needs url=."},
                     "max_results": {"type": "integer", "description": "Results to return (1-50, default 6)."},
                     "page": {"type": "integer", "description": "Result page, 0-10 (default 0)."},
@@ -8367,9 +8387,12 @@ class MasterFetchServer:
             return _wire_result(result, images=getattr(result, "_action_images", None) or None)
 
         elif name == "web_search":
+            # query 缺席是允许的（wire 上它已非必填）：mode='find_similar' 要的是
+            # url=。"缺词"的判决住在方法体里，因为只有它认识 mode —— 这张静态表
+            # 不认识，放这里就会把那一颗模式锁死。
             result = await self.web_search(
-                query=args["query"], **self._forward("web_search", args,
-                                                     skip=("query",)))
+                query=args.get("query", ""), **self._forward("web_search", args,
+                                                             skip=("query",)))
             return _wire_result(result)
 
         elif name == "sys_state":
