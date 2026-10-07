@@ -275,7 +275,7 @@ class SearchResponseModel(BaseModel):
     related_queries: list[str] = Field(default=[], description="Follow-up queries worth searching next, mined extractively from the result titles+snippets (no LLM). Empty if none derived. Use to refine a broad query.")
     summary: str = Field(default="", description="One-line status of the search (counts + engines + rerank).")
     next_action: str = Field(default="", description="The obvious next call: fetch the high results, rephrase, retry, etc. Empty = nothing more to do.")
-    fetched_pages: list[dict] = Field(default=[], description="When fetch_content=true: auto-fetched page content for top results. Each item: {url, title, content, content_ok, engines_consensus} - the consensus string is repeated per page so you can judge the fetched set without cross-referencing the result list.")
+    fetched_pages: list[dict] = Field(default=[], description="When fetch_content=true: auto-fetched page content for top results. Each item: {url, title, content, content_ok, engines_consensus} - the consensus string is repeated per page so you can judge the fetched set without cross-referencing the result list. A content_ok=false row always carries `error` saying why; error='inline_fetch_budget' means that page was never fetched - the call ran out of the ~30s a host will wait, so web_read it yourself.")
     consensus_skipped: list[str] = Field(default_factory=list, description="The receipt for a gated auto-fetch: when fetch_min_consensus (>=2) is set with fetch_content=true, the URLs DROPPED from the fetch set for lacking that many corroborating index families. Empty = the floor dropped nothing (or was not set). Read this before asking 'why did fewer pages come back than I asked for'.")
 
 

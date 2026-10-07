@@ -384,6 +384,7 @@ def _fallback_extract(page, extraction_type: str, css_selector: Optional[str]) -
                 )
         except Exception as e:
             logger.debug(f"CSS selector '{css_selector}' failed: {e}")
+            _note_selector_not_applied(css_selector, e)
 
     # Map extended types to what we can handle
     if extraction_type == "html":
@@ -418,6 +419,24 @@ def _fallback_extract(page, extraction_type: str, css_selector: Optional[str]) -
         return [html]
 
 
+def _note_selector_not_applied(selector: str, err: Exception) -> None:
+    """提取期真出事时给调用方留一句真话（同一个选择器一次调用只说一遍）。
+
+    可编译性已经前移到校验层（`security.validate_html_css_selector`），这里剩下的
+    是测不出的边角：lxml 在**这份文档**上匹配时抛的异常。静默回落到整页是评审现场
+    那类"看起来成功、其实参数没生效"，措辞与 XML content-type 那条同款（was NOT
+    applied），因为对调用方来说两件事一模一样：选择器没起作用。
+    """
+    from dhole_mcp.context import _ARG_NOTES, _note_text
+
+    head = f"css_selector '{selector}' was NOT applied"
+    notes = _ARG_NOTES.get()
+    if notes is not None and any(n.startswith(head) for n in notes):
+        return
+    _note_text(f"{head}: the extraction engine raised while matching it "
+               f"({str(err)[:120]}) - the whole document was returned")
+
+
 def _narrow_html_to_selector(html: str, css_selector: str) -> Optional[str]:
     """Return the markup of every node matching ``css_selector``, else None.
 
@@ -434,6 +453,7 @@ def _narrow_html_to_selector(html: str, css_selector: str) -> Optional[str]:
         matches = CSSSelector(css_selector)(tree)
     except Exception as e:
         logger.debug(f"CSS selector '{css_selector}' failed: {e}")
+        _note_selector_not_applied(css_selector, e)
         return None
     if not matches:
         return None

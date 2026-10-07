@@ -841,6 +841,48 @@ def validate_css_selector(selector: Optional[str]) -> Optional[str]:
     return selector
 
 
+def validate_html_css_selector(selector: Optional[str],
+                               param: str = "css_selector") -> Optional[str]:
+    """Injection guard **plus** compilability, for the selectors the extraction
+    engine (lxml + cssselect) will actually run.
+
+    ``validate_css_selector`` answers "is this hostile", not "does this parse".
+    The compile used to happen only inside the extractor, where
+    ``except Exception -> None`` swallowed it: a selector like ``a >> b {;}``
+    produced a 200 plus the **whole unfiltered document**, with nothing in
+    ``summary`` or ``next_action`` saying the selector never took effect. A
+    silently ignored argument is the failure this project keeps refusing, and it
+    is cheaper to refuse before the request goes out than to hand back a page the
+    caller asked to narrow.
+
+    The compile runs here, not in ``validate_css_selector``: the browser tier
+    (``wait_selector``, an action's ``selector``) speaks Chromium's CSS, which
+    accepts ``:visible`` and friends. Judging those selectors by lxml's scale
+    would take away a capability that works.
+
+    Args:
+        selector: The CSS selector string, or None.
+        param: Which argument to name in the error, since one guard serves
+            ``css_selector``, ``schema[...]["selector"]`` and ``nested_selector``.
+
+    Raises:
+        SecurityError: On the injection guard's own refusals, or when lxml's
+            cssselect cannot compile the selector.
+    """
+    validated = validate_css_selector(selector)
+    if validated is None:
+        return None
+    try:
+        from lxml.cssselect import CSSSelector
+        CSSSelector(validated)
+    except Exception as e:
+        raise SecurityError(
+            f"{param} {validated!r} is not a selector the extraction engine can "
+            f"compile ({type(e).__name__}: {str(e)[:120]}) - it would have been "
+            f"ignored and the whole page returned") from e
+    return validated
+
+
 def validate_headers(headers: Optional[dict]) -> Optional[dict]:
     """Validate custom HTTP headers for injection/prevention.
 

@@ -176,6 +176,7 @@ from dhole_mcp.sessions import (
 from dhole_mcp.security import (
     validate_url,
     validate_css_selector,
+    validate_html_css_selector,
     validate_headers,
     validate_proxy,
     validate_timeout,
@@ -420,6 +421,45 @@ def _record_latency(url: str, elapsed_ms: float, *, document: bool = False) -> N
 # caller's explicit `timeout=` raise, not a default the host will never honor.
 DEFAULT_CALL_TIMEOUT_MS = 30000
 ACTIONS_DEFAULT_TIMEOUT_MS = 25000
+
+# fetch_content 的内联扇出不带 timeout=，所以它不吃调用方的预算，只吃宿主的耐心。
+# 搜索 2–6s + 3 页 × 15s 的理论上限 ≈50s，宿主在 30s 就杀 —— 被杀的不止那几页，
+# 是整次调用，连已经拿到的搜索结果一起丢（评审实测两次）。这里把「宿主 30s」写成一
+# 笔可以分的钱：搜索花掉多少就少多少，剩下的按剩余页数分给每一页，到点即停。
+HOST_REPLY_BUDGET_MS = 30_000
+INLINE_FETCH_RESERVE_MS = 2_000     # 最后一页之后要留给信封组装与传输
+INLINE_PAGE_FLOOR_MS = 3_000        # 低于这个数，一页不值得再发出去
+INLINE_PAGE_CAP_MS = 15_000         # 单页原本无条件拿到的那 15s
+# 一页真正占用的时间不止它的 timeout：`_within_call_budget` 的兜底宽限与信封收尾在
+# 预算之外（quality._BACKSTOP_GRACE_S）。配额若按整个余额分，三页的最坏情况
+# 就是 28s + 3×宽限，照样撞过宿主的 30s —— 所以每页先把宽限扣出来再分。
+INLINE_PAGE_GRACE_MS = int(_BACKSTOP_GRACE_S * 1000) + 500
+
+
+def _inline_hole_reason(page_result) -> str:
+    """一页 content_ok=false 时那一行的 reason，保证非空。
+
+    组装处的注释承诺过 "every hole carries a reason"，但这一行此前只在 web_read
+    **抛异常**时才有 error：正常返回一条失败页时，页侧说出的 error 没被带上来，
+    content_ok=false + content="" 而 error 字段根本不在 —— 洞开着，reason 缺席。
+    这里按页侧已经说出的话逐级退让（error → diagnosis → page_type → summary），
+    实在没有也报得出「哪一层没给东西」。
+    """
+    for candidate in (page_result.error,
+                      (page_result.diagnosis or {}).get("code"),
+                      (page_result.page_type
+                       if page_result.page_type not in ("", "unknown") else ""),
+                      page_result.summary):
+        if candidate:
+            return str(candidate)[:200]
+    return (f"no content extracted (status {page_result.status}, "
+            f"fetcher {page_result.fetcher_used or 'none'})")
+
+
+def _inline_budget_hole(sr) -> dict:
+    """被内联预算砍掉的那一页：占一行、说清为什么是洞，字段形状与失败占位一致。"""
+    return {"url": sr.url, "title": sr.title, "content": "", "content_ok": False,
+            "error": "inline_fetch_budget", "engines_consensus": sr.engines_consensus}
 
 
 def _adaptive_timeout(url: str, default_ms: int = 30000) -> int:
@@ -3019,14 +3059,15 @@ def _validate_schema_selectors(properties: Any, _depth: int = 0) -> None:
             "extract the inner list as its own field")
     if not isinstance(properties, dict):
         return
-    for spec in properties.values():
+    for name, spec in properties.items():
         if not isinstance(spec, dict):
             continue
         sel = spec.get("selector")
         # Truthiness, not isinstance(str): a non-string selector is the guard's
         # problem to reject, exactly as it was before this walk went recursive.
         if sel:
-            spec["selector"] = validate_css_selector(sel)
+            spec["selector"] = validate_html_css_selector(
+                sel, param=f'schema["{name}"].selector')
         child = spec.get("properties")
         # A field that declares "array" AND carries a sub-schema promises one
         # record per repeating container, and the container is what `selector`
@@ -3704,7 +3745,7 @@ class MasterFetchServer:
                  validated_timeout, validated_proxy, validated_useragent).
         """
         url = validate_url(url)
-        css_selector = validate_css_selector(css_selector)
+        css_selector = validate_html_css_selector(css_selector)
         extra_headers = validate_headers(extra_headers)
         proxy = validate_proxy(proxy)
 
@@ -4047,7 +4088,7 @@ class MasterFetchServer:
         :param stealthy_headers: Generate real browser headers (default True).
         """
         url = validate_url(url)
-        validate_css_selector(css_selector)
+        validate_html_css_selector(css_selector)
         validate_proxy(proxy)
 
         t0 = now()
@@ -4114,7 +4155,7 @@ class MasterFetchServer:
         urls = [validate_url(u) for u in urls]
         if len(urls) > MAX_BULK_URLS:
             raise ValueError(f"Too many URLs ({len(urls)}). Maximum is {MAX_BULK_URLS} per call.")
-        validate_css_selector(css_selector)
+        validate_html_css_selector(css_selector)
         validate_proxy(proxy)
 
         # Credentials now actually apply (audit gap closed): auth -> an
@@ -4266,7 +4307,7 @@ class MasterFetchServer:
         :param session_id: Reuse existing browser session.
         """
         url = validate_url(url)
-        validate_css_selector(css_selector)
+        validate_html_css_selector(css_selector)
         validate_headers(extra_headers)
         validate_proxy(proxy)
 
@@ -4358,7 +4399,7 @@ class MasterFetchServer:
         urls = [validate_url(u) for u in urls]
         if len(urls) > MAX_BULK_URLS:
             raise ValueError(f"Too many URLs ({len(urls)}). Maximum is {MAX_BULK_URLS} per call.")
-        validate_css_selector(css_selector)
+        validate_html_css_selector(css_selector)
         validate_headers(extra_headers)
         validate_proxy(proxy)
         validate_css_selector(wait_selector)
@@ -4799,7 +4840,8 @@ class MasterFetchServer:
                     # 注入守卫跟着选择器进第二层（与 G14 对 schema 的要求同一待遇）：
                     # 只守第一层的话，nested_fields 就是绕过 validate_css_selector
                     # 的那条路。
-                    _nested_mod_selector = validate_css_selector(nested_selector)
+                    _nested_mod_selector = validate_html_css_selector(
+                        nested_selector, param="nested_selector")
                     _validate_schema_selectors(_nested_props)
                 except (ValueError, SecurityError) as e:
                     return _invalid_request_result(
@@ -7294,6 +7336,7 @@ class MasterFetchServer:
                 next_action="Add fetch_content=true, or drop fetch_min_consensus.",
             )
 
+        t_call = now()
         try:
             from dhole_mcp.search import web_search as _smart_search
             result = await _smart_search(
@@ -7339,7 +7382,28 @@ class MasterFetchServer:
             if _consensus_note:
                 result.summary = (f"{result.summary} | {_consensus_note}"
                                   if result.summary else _consensus_note)
-            for sr in high_results:
+            # 内联扇出的钱是宿主给的：从调用开始到第 N 页返回，全程按「宿主 30s」算。
+            # deadline 从 t_call 起（搜索已经花掉的时间因此自动扣掉），每页拿
+            # 剩余/剩余页数，所以一页慢不会把下一页的钱也花完。
+            _inline_deadline = t_call + (HOST_REPLY_BUDGET_MS
+                                         - INLINE_FETCH_RESERVE_MS) / 1000.0
+            _cut = 0
+            for _i, sr in enumerate(high_results):
+                _left_ms = (_inline_deadline - now()) * 1000
+                _pages_left = len(high_results) - _i
+                if _left_ms < INLINE_PAGE_FLOOR_MS + INLINE_PAGE_GRACE_MS:
+                    # 到点即停：剩下的页不再发包（再发就必然被宿主杀），但每页仍占
+                    # 一行并点名原因——「少了一页」和「那一页抓挂了」必须能分开读。
+                    _cut = _pages_left
+                    fetched_pages.extend(_inline_budget_hole(s)
+                                         for s in high_results[_i:])
+                    break
+                # 每页先留出兜底宽限，再把剩下的余额按剩余页数分 —— 最坏情况下
+                # 整条内联链仍然落在宿主的耐心之内。
+                _affordable_ms = _left_ms - _pages_left * INLINE_PAGE_GRACE_MS
+                _page_timeout = int(min(INLINE_PAGE_CAP_MS,
+                                        max(INLINE_PAGE_FLOOR_MS,
+                                            _affordable_ms / _pages_left)))
                 try:
                     page_result = await self.web_read(
                         url=sr.url, focus=query if not fetch_schema else None,
@@ -7347,7 +7411,7 @@ class MasterFetchServer:
                         # 每页帽 3000（G25 附注三/M4）：3 页满打满算 9,000 字符
                         # ≈2.2k token，是"带着焦点摘录回来"而不是"把三页全文
                         # 倒进对话"——要全文有 web_read 的 offset 分页。
-                        max_content_chars=3000, timeout=15000,
+                        max_content_chars=3000, timeout=_page_timeout,
                     )
                     page_row = {
                         "url": sr.url,
@@ -7363,6 +7427,8 @@ class MasterFetchServer:
                     # None=缺席=信封缺席即默认的既有约定，干净页零字符。
                     if page_result.untrusted_content:
                         page_row["untrusted_content"] = page_result.untrusted_content
+                    if not page_result.content_ok:
+                        page_row["error"] = _inline_hole_reason(page_result)
                     fetched_pages.append(page_row)
                 except Exception as e:
                     # Surface the failure instead of silently dropping the page,
@@ -7374,6 +7440,12 @@ class MasterFetchServer:
                         "error": redact_api_key(str(e)[:200]),
                         "engines_consensus": sr.engines_consensus,
                     })
+            if _cut:
+                note = (f"inline fetch budget spent: {_cut} of "
+                        f"{len(high_results)} candidate page(s) not fetched "
+                        "(fetched_pages rows carry error='inline_fetch_budget')")
+                result.summary = (f"{result.summary} | {note}"
+                                  if result.summary else note)
             result.fetched_pages = fetched_pages
 
         return result
