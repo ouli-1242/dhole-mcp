@@ -155,6 +155,7 @@
 
 - **手册与 README 对齐线路（2026-10-07，三批）**：①`extraction_type='check'` 第六类补齐（changed 三态 / first_divergence_at / diff_window，字段语义照实现逐条核对）——线路活着、手册查无此人，条件请求一节同步改真；②六颗全语料查无此人的参数（`web_crawl.max_depth`、`web_search` 的 max_results / exclude_sites / region / fetch_schema、`doc_parse.cwd`）与 `mode='find_similar'` 补进手册，两条守卫按参数表全工具参数化钉住「wire 上的每个参数都查得到」与「能力特征串必须可达」；③「凭据值不进转录」改双向真话（存储不回吐；传参就在转录里；要完全不出现就操作员预配置）——无条件的旧句是假话；④`cdp_hosts` 名册「无过期、与端点无关」显式化；⑤`cdp_attached` 的审计声明改条件句（审计通道默认关）；⑥readOnlyHint 一节把三重辩护（GET-only / 进程内簿记 / CDP 首挂围栏）与「据 hints 自动放行 readOnly 的宿主不会为 ignore_robots 再问人」的残余偏差同段写明；⑦README 的工具子集数改实跑口径（旧数是全量 instructions 口径，与裁剪路由行的真实行为不符）
 - **回执说真话（2026-10-07）**：页内样板折叠进 trafilatura 主路（`duplicate_lines_collapsed` 不再只在空结果回退路上兑现，折叠规则零改动）；`metadata.title` 三条来源统一过实体解码，与正文同一套口径——标题里的 `&amp;` 不再以原样进转录
+- **裸 MCP 客户端的缺参调用把 KeyError 当 error（2026-10-07）**：`web_crawl {resume_token}`（无 url 键）经裸 MCP 客户端（`ClientSession.call_tool` 不做客户端校验）调用，返回体就是 `{"error": "'url'"}`——KeyError repr 当 error 文本，无信封无 next_action；`web_discover` 缺 url 炸成 TypeError；`web_crawl {url: ""}` 的空串不被拒，静默落进 plan 校验链。宿主按 wire schema 的 required 拦缺参调用、碰不到这些分支，但服务端不能假设客户端会校验：dispatch 层新增必需键表（web_crawl / web_discover 的 `url`、web_search 的 `query`、doc_parse 的 `file_path`），缺席或空串一律回与「多余参数」同款式的标准 invalid_request 信封——error 点名缺哪个并列出该工具接受的全部参数名，`next_action` 教传什么重试，一个请求都不发。方法体自检信封更优的 web_read / web_act / web_request / feed_read 不进表；守卫测试把表与 wire 的 required 声明钉在一起防漂移
 
 ### 安全
 

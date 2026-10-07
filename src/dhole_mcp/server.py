@@ -2778,6 +2778,33 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
 }
 # （17.0：不存在 opt-in 组 —— 上面的注释是给全量注册做的注脚。）
 
+#: dispatch 层的必需键（评审R1刀2）：这张表里的分支直接 ``args[...]`` 读键、
+#: 或把键传给无默认值的形参——裸 MCP 客户端（``ClientSession.call_tool`` 不做
+#: 客户端校验）缺了它们，拿到的是 KeyError repr / TypeError 而不是信封。宿主
+#: 按 wire schema 的 required 拦在门外，正常宿主路径碰不到这道闸。表外零变化：
+#: web_read 的 required 是 anyOf（url 或 urls，dispatch 里已有专检），web_act /
+#: web_request / feed_read 的方法体自带"缺什么、去哪补"的更优信封。
+_DISPATCH_REQUIRED: dict[str, tuple[str, ...]] = {
+    "web_crawl": ("url",),
+    "web_discover": ("url",),
+    "web_search": ("query",),
+    "doc_parse": ("file_path",),
+}
+
+
+def _missing_required_args(tool: str, args: dict) -> list[str]:
+    """缺席或空串的必需键名单（评审R1刀2），空名单 = 放行。
+
+    空串与缺席同罪：``url=""`` 不是"爬空串"，是没传——放它进 plan 校验链
+    只会把一个参数错误拖成一层深处的莫名失败。
+    """
+    out: list[str] = []
+    for key in _DISPATCH_REQUIRED.get(tool, ()):
+        val = args.get(key)
+        if val is None or (isinstance(val, str) and not val.strip()):
+            out.append(key)
+    return out
+
 
 # Which tools this server registers and dispatches. Default: ALL of them.
 # DHOLE_TOOLS takes a comma-separated subset ("web_read,web_search") for
@@ -8137,6 +8164,21 @@ class MasterFetchServer:
                 "DHOLE_TOOLS (or unset it to enable every tool) and restart."
             )
         _reject_unknown_args(name, args)
+        missing = _missing_required_args(name, args)
+        if missing:
+            # 评审R1刀2：绕过宿主校验的裸客户端，缺参在这里拿与「多余参数」
+            # 同款式的标准信封，而不是分支里的 KeyError repr / TypeError。
+            # 一个请求都没发，所以 url 栏留空是如实。
+            result = _invalid_request_result(
+                "",
+                f"Missing required argument(s) for {name}: {missing}. "
+                f"Supported here: {sorted(_TOP_LEVEL_ARGS[name])}",
+                next_action=(
+                    f"Pass {missing[0]}=... and call again - no request was "
+                    "made. Every argument is a top-level parameter; the tool's "
+                    "schema lists their types."),
+            )
+            return _wire_result(result)
         try:
             args = _validate_tool_args(name, args)
             # Parsed and coerced inside the SAME guard: a bad number has to come
