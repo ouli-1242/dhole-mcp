@@ -133,10 +133,14 @@ def test_the_shipped_ruler_parses_and_uses_the_new_shapes():
     assert fan_out["type"] == "any_of" and len(fan_out["branches"]) >= 2
     record_only = [a for c in spec["evals"] for a in c["assertions"]
                    if a.get("record_only")]
-    assert {a["name"] for a in record_only} == {"few_calls"}, (
-        "降级成记录项的应该恰好是三条 few_calls")
+    assert {a["name"] for a in record_only} == {"few_calls", "tried_nested"}, (
+        "记录项 = 三条 few_calls + zcool 的 tried_nested（预设栏目存在的断言）")
     assert "mojibake-pivot" in cases and "diagnosis-branch" in cases, (
         "只 references 能答的两格还没进尺子")
+    budget = cases["budget-said-out-loud"]
+    assert "首页上所有标签的名言" not in budget["prompt"], (
+        "这句 prompt 三档读法分裂（A 遍历全部标签页，B/C 只读首页自己）——"
+        "消歧之后不许原样回来")
     moj = cases["mojibake-pivot"]
     pivot = next(a for a in moj["assertions"]
                  if a["name"] == "pivoted_to_encoding_or_refused")
