@@ -103,6 +103,12 @@ def check(a: dict, calls: list[dict], text: str) -> tuple[bool, str]:
         return not hits, f"{len(hits)} call(s) set {path}"
     if kind == "any_arg":
         hits = [c for c in calls if c.get("tool") == tool and _has(path, c.get("args") or {})]
+        if a.get("require_success"):
+            # 只认「这一发成了」的调用。CLI 的 JSONL 每发都带 error（含工具自判
+            # 的失败回答，见 ruler_defects）；参数出现在一个被拒的调用上不算数
+            # —— 那发调用什么都没读到。实测教训（第四轮）：web_read 没有
+            # encoding=，转向分支曾给被拒的 encoding=gbk 记 1/1 绿。
+            hits = [c for c in hits if not c.get("error")]
         if op == "nonempty":
             return bool(hits), f"{len(hits)} call(s) set {path}"
         got = any(_string(want) in _string(c["args"].get(path)) for c in hits)

@@ -95,6 +95,33 @@ def test_no_identical_retry_flags_same_args_sent_twice():
     assert ok, "换了杠杆的行动被误判成重试"
 
 
+def test_require_success_stops_rewarding_refused_calls():
+    """any_arg 只看参数名不看成败 —— mojibake 转向分支曾因此给被拒的调用记绿。
+
+    第四轮实测（2026-10-07）：web_read 没有 encoding=（那是 doc_parse 的参数），
+    A 档试发 encoding=gbk 被 invalid_request 拒掉，any_arg 记 "1 call(s) set
+    encoding"，该格 1/1 绿 —— 一发什么都没读到的调用成了满分答案。require_success
+    把「那发调用成了」变成前提：error 非空的调用不计入。
+    """
+    a = {"type": "any_arg", "path": "encoding", "op": "nonempty",
+         "require_success": True}
+    refused = [{"tool": "web_read", "args": {"url": "https://x/", "encoding": "gbk"},
+                "error": "invalid_request: Unknown argument: encoding"}]
+    ok, why = score.check(a, refused, "")
+    assert not ok, f"被拒的调用不该给转向分支记绿: {why}"
+
+    succeeded = [{"tool": "web_read",
+                  "args": {"url": "https://x/", "encoding": "gbk"},
+                  "error": None}]
+    ok, _ = score.check(a, succeeded, "")
+    assert ok, "真成功的那发该被认"
+
+    # 不带 require_success 的 any_arg 行为不变：参数在场即算（既有各格的语义）。
+    plain = {"type": "any_arg", "path": "encoding", "op": "nonempty"}
+    ok, _ = score.check(plain, refused, "")
+    assert ok, "没点名 require_success 的断言不该被顺带收紧"
+
+
 def test_the_shipped_ruler_parses_and_uses_the_new_shapes():
     """随仓库走的 evals.json 必须是尺子此刻认得的形状。"""
     spec = json.loads((Path(__file__).resolve().parents[1]
@@ -110,3 +137,9 @@ def test_the_shipped_ruler_parses_and_uses_the_new_shapes():
         "降级成记录项的应该恰好是三条 few_calls")
     assert "mojibake-pivot" in cases and "diagnosis-branch" in cases, (
         "只 references 能答的两格还没进尺子")
+    moj = cases["mojibake-pivot"]
+    pivot = next(a for a in moj["assertions"]
+                 if a["name"] == "pivoted_to_encoding_or_refused")
+    reask = pivot["branches"][0][0]
+    assert reask["name"] == "reasked_with_encoding" and reask.get("require_success"), (
+        "转向分支必须要求那发调用成功 —— 只看参数名会奖励被拒的调用")
