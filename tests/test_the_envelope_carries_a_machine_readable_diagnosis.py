@@ -44,6 +44,23 @@ class TestTheDiagnosis:
         assert out.diagnosis["code"] == "timeout"
         assert out.diagnosis["retryable"] is True
 
+    def test_a_diagnosis_written_at_construction_is_not_overwritten(self):
+        """专项路径构造时写好的结构化孪生不许被前缀表重新归一盖掉。
+
+        浏览器超时路径在 finalize 之前就知道这次的真相：HTTP 层已经答了，烧完的
+        是渲染 —— recover_with 点名 force_fetcher='http'。前缀表按 "timeout" 前缀
+        归一出的泛化句恰是 "raise timeout, or switch source"，正是那句专项建议
+        要拦的动作（第四轮校准在 /shell/slow 夹具上实测到的盖写）。
+        """
+        out = _hinted(
+            status=0, content=[],
+            error=("timeout: the 30000ms call budget ran out during the stealthy "
+                   "browser tier. No content was extracted."),
+            diagnosis={"code": "timeout", "retryable": False,
+                       "recover_with": "force_fetcher='http'"})
+        assert out.diagnosis["recover_with"] == "force_fetcher='http'"
+        assert out.diagnosis["retryable"] is False
+
     def test_an_unlisted_error_still_gets_a_stable_code(self):
         """新错误前缀也能有个稳定的枚举名，不至于静默缺席。"""
         out = _hinted(status=0, content=[], error="weird_new_failure: something happened")

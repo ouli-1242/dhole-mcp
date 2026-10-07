@@ -102,6 +102,7 @@
 
 ### 修复
 
+- **浏览器超时的机器可读 `diagnosis` 与专项建议各说各话（2026-10-07）**：HTTP 层已答出 200 壳页、升级后的浏览器渲染挂到预算烧尽时，`next_action` 里那句专项建议是对的（"是浏览器渲染超时，不是页面慢 —— `force_fetcher='http'` 直接拿 HTTP 层已得的答案"），但信封的 `diagnosis` 在 finalize 时被前缀表按 `timeout` 前缀重新归一成泛化句 "raise timeout, or switch source"——机器可读那份给的建议恰是专项 prose 要拦的动作（HTTP 层已经答了，再抬只是等一个到不了的渲染）。修法：`_over_budget_result` 直接携带结构化孪生（`retryable=false`，`recover_with` 点名杠杆），finalize 的前缀表归一降级为「没有现成值时的兜底」；prose 一字不删。三档校准第四轮在回环夹具上量出的 wire 侧发现，钉住 `tests/test_the_browser_timeout_twin_names_the_lever.py`
 - **`actions` 在两条车道上被静默丢弃**：`cdp_url` 与 `actions` 同传时动作从来不会执行（attach 车道与隐身车道各建各的动作对象，attach 那份没接上）；`schema` 与 `actions` 同传同样被静默忽略。前者修为两条车道都执行动作，后者修为显式报错——静默忽略一个调用方声明的参数比拒绝更糟
 - **截图动作拿不到图片像素（元素级截图 / `decode_qr` 的主路径失效）**：带 `actions` 的抓取在隐身层硬编码了 `disable_resources=True`（图 / 样式 / 字体全 abort 的提速开关），于是动作链里 `{"screenshot": {...}}` 截到的是**破图占位符**——页面自己的 `<img>` 连请求都没发出过，`decode_qr` 回 `[]`，而动作行照报 `ok: true`：调用方看到的是「这页没有二维码」，不是「我没拿到像素」。修法是截图动作让资源拦截让路（它的产品就是渲染结果，砍掉图与样式本身就是错的），其余动作链照旧提速。A/B 实测单变量确认因果：`disable_resources=True` 时浏览器发出 `GET /qr.png` 0 次，`False` 时 1 次
 - **索引寻址的动作在收执与审计里丢掉目标**：`click` / `submit` 按快照索引寻址（`{"index": N}`）时，动作标签渲染成 `click None` / `submit None (unconfirmed)`——`_act_target` 把索引归一化成不带 `selector` 键的形状，而标签仍按 `selector` 取值。难看是小，泄漏到**写操作审计**是大：`DHOLE_USAGE_LOG` 的 `channel=browser_submit` 行里，`action` 是唯一说明「提交了哪个元素」的字段，它当时写的是 `None`。修法是复用已有的 `_target_label`（它本来就同时认索引与 `expect`）

@@ -1388,8 +1388,12 @@ def _with_agent_hints(result: ResponseModel) -> ResponseModel:
     result.content_ok = content_ok
     result.next_action = next_action
     # 结构化孪生：content_ok 已定，才能据它归类"不是干净成功"的原因；token 估计
-    # 只描述**这一份** content 的成本（信封本身不计——它是常数级）。
-    result.diagnosis = _diagnose(result)
+    # 只描述**这一份** content 的成本（信封本身不计——它是常数级）。专项路径
+    # （浏览器超时的 _over_budget_result）构造时就写好了更懂的那一份 —— 前缀表按
+    # error 前缀归一出的泛化句不许把它盖掉（对浏览器超时说 "raise timeout" 恰是
+    # 那条路径的专项 prose 要拦的动作）。缺席时前缀表仍是兜底。
+    if result.diagnosis is None:
+        result.diagnosis = _diagnose(result)
     result.approx_tokens = _approx_tokens(result.content)
     applied = _IDENTITY_APPLIED.get()
     if applied and not result.identity_applied:
@@ -1419,7 +1423,8 @@ def _budget_advice(stage: str, fetcher_used: str) -> str:
 
 def _over_budget_result(url: str, budget_ms: float, elapsed_ms: float,
                         stage: str, fetcher_used: str,
-                        diagnosis: str = "") -> ResponseModel:
+                        diagnosis: str = "",
+                        diagnosis_struct: Optional[Dict[str, Any]] = None) -> ResponseModel:
     """The "call budget ran out" FetchResult - a normal response, not an exception.
 
     The caller asked for an answer inside `timeout`; this is the honest one. It
@@ -1430,10 +1435,13 @@ def _over_budget_result(url: str, budget_ms: float, elapsed_ms: float,
     ``diagnosis`` replaces the generic advice when the tier knows something the
     generic sentence would get wrong — a document download that was told to
     "pass force_fetcher='http' to skip browser rendering" when it never touched
-    a browser.
+    a browser. ``diagnosis_struct`` is that same knowledge in the machine-readable
+    twin: without it, finalize re-normalizes the error through the prefix table
+    and the envelope's recover_with says "raise timeout" for the one timeout
+    where raising is exactly the wrong move (the browser tier knew better).
     """
     head = f"Budget exhausted after {int(elapsed_ms)}ms at the {stage}."
-    return ResponseModel(
+    result = ResponseModel(
         url=url, status=0, content=[], fetcher_used=fetcher_used,
         duration_ms=elapsed_ms,
         error=(f"timeout: the {int(budget_ms)}ms call budget ran out during "
@@ -1442,6 +1450,9 @@ def _over_budget_result(url: str, budget_ms: float, elapsed_ms: float,
             f"{head} {diagnosis}" if diagnosis else
             f"{head} {_budget_advice(stage, fetcher_used)}"),
     )
+    if diagnosis_struct is not None:
+        result.diagnosis = diagnosis_struct
+    return result
 
 
 def _is_over_budget(result) -> bool:

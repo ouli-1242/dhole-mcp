@@ -6040,17 +6040,19 @@ class MasterFetchServer:
         def _left_s() -> float:
             return max(0.0, deadline - now())
 
-        async def _over_budget(stage: str, fetcher_used: str, diagnosis: str = ""):
+        async def _over_budget(stage: str, fetcher_used: str, diagnosis: str = "",
+                               diagnosis_struct: Optional[Dict[str, Any]] = None):
             """Finalized 'budget ran out' result, with this call's timings filled in."""
             elapsed = (now() - start_time) * 1000
             result = _over_budget_result(url, budget_ms, elapsed, stage, fetcher_used,
-                                         diagnosis)
+                                         diagnosis, diagnosis_struct=diagnosis_struct)
             result.escalation_path = (f"{fetcher_used}(timeout)" if fetcher_used
                                       else "timeout")
             return await self._finalize_result(
                 result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
 
-        async def _with_budget(coro, stage: str, fetcher_used: str, diagnosis: str = ""):
+        async def _with_budget(coro, stage: str, fetcher_used: str, diagnosis: str = "",
+                               diagnosis_struct: Optional[Dict[str, Any]] = None):
             """Await ``coro`` but never past the call budget.
 
             Returns the over-budget FetchResult when time runs out, or None when
@@ -6059,6 +6061,9 @@ class MasterFetchServer:
 
             ``diagnosis`` goes into that result, for the tiers that know why this
             one ran out and can say something better than "raise timeout".
+            ``diagnosis_struct`` is the machine-readable twin of the same fact —
+            finalize's prefix table would otherwise normalize the envelope back
+            to the generic advice (see _over_budget_result).
             """
             left = _left_s()
             if left <= 0:
@@ -6067,7 +6072,8 @@ class MasterFetchServer:
             try:
                 return await asyncio.wait_for(coro, timeout=left)
             except TimeoutError:
-                return await _over_budget(stage, fetcher_used, diagnosis)
+                return await _over_budget(stage, fetcher_used, diagnosis,
+                                          diagnosis_struct=diagnosis_struct)
 
         # The HTTP tier's own timeout is computed AT the tier, not here: it is a
         # share of what is left of this budget, so it has to read `_left_s()` after
@@ -6328,6 +6334,18 @@ class MasterFetchServer:
             "browser render, not the page, that ran out of time - "
             "force_fetcher='http' returns the HTTP tier's answer instead of "
             "waiting for a render that cannot arrive.")
+        # The twin of the same fact, written HERE because finalize's prefix table
+        # would re-normalize the "timeout" error into "raise timeout, or switch
+        # source" — the one move this path must not take. retryable=False per the
+        # field's own contract (fields.md): re-sending THIS exact call gets the
+        # same dead render; what changes the answer is the named lever.
+        _browser_timeout_diagnosis = {
+            "code": "timeout",
+            "retryable": False,
+            "recover_with": ("force_fetcher='http' - the HTTP tier already "
+                             "answered; a longer timeout only waits longer for "
+                             "a render that cannot arrive"),
+        }
         result = await _with_budget(self.stealthy_fetch(
             url, extraction_type=extraction_type,
             css_selector=css_selector,
@@ -6340,11 +6358,13 @@ class MasterFetchServer:
             useragent=useragent, cookies=_browser_cookies(cookies, url),
             session_id=ssid,
         ), "stealthy browser tier", "http→stealthy",
-            diagnosis=_browser_timeout_note)
+            diagnosis=_browser_timeout_note,
+            diagnosis_struct=_browser_timeout_diagnosis)
         if result is None or _is_over_budget(result):
             return result or await _over_budget("stealthy browser tier",
                                                 "http→stealthy",
-                                                diagnosis=_browser_timeout_note)
+                                                diagnosis=_browser_timeout_note,
+                                                diagnosis_struct=_browser_timeout_diagnosis)
         elapsed = (now() - start_time) * 1000
         result.duration_ms = elapsed
 
