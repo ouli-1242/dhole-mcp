@@ -898,12 +898,29 @@ def _login_probe_unavailable(reason: str) -> dict:
 def _attach_login_probe_gap(result: ResponseModel, check_login: bool) -> ResponseModel:
     """Honesty pass: mark check_login as unanswerable on non-browser results."""
     if check_login and result.login_check is None and result.fetcher_used != "stealthy":
+        # `!= "stealthy"` 认的是"这一档没跑到"，可它同样匹配"跑到了没跑完"：实测
+        # `fetcher_used='http→stealthy'` + 浏览器档超时，回执却说 "this result never
+        # reached the browser tier"，并劝人重发 `force_fetcher='stealthy'` —— 正是刚
+        # 烧完预算那一档。两种缺口两种说法。
+        reached = ("stealthy" in (result.fetcher_used or "")
+                   or "stealthy" in (result.escalation_path or ""))
         result.login_check = _login_probe_unavailable(
-            "this result never reached the browser tier")
-        result.next_action = (
-            (result.next_action + " " if result.next_action else "")
-            + "check_login is live-only on the browser tier: re-call with "
+            "the browser tier was reached but did not settle inside the budget"
+            if reached else "this result never reached the browser tier")
+        advice = (
+            "check_login needs a settled browser page and this one ran out of budget "
+            "there: raise timeout, or drop check_login and read the page it did get"
+            if reached else
+            "check_login is live-only on the browser tier: re-call with "
             "force_fetcher='stealthy' (or cdp_url=) to actually probe")
+        prior = (result.next_action or "").rstrip()
+        # 两条独立的建议之间要有句子 terminator。从前这里只加一个空格，实测读出来是
+        # 一句坏掉的长句："…offset=500 to continue paginating check_login is live-only
+        # on the browser tier…"。
+        seam = ""
+        if prior:
+            seam = " " if prior.endswith((".", "!", "?", ";", ":")) else ". "
+        result.next_action = prior + seam + advice
     return result
 
 
@@ -5787,13 +5804,20 @@ class MasterFetchServer:
             _cands = await asyncio_to_thread(
                 _nested_mod.suggest_link_selectors, html, url)
             _hint = _nested_mod.format_suggestions(_cands)
+            _why = (f"nested_selector '{nested_selector}' matched "
+                    f"{found['matched']} element(s) on this page and none of them "
+                    "has an http(s) href")
             return ResponseModel(
                 url=url, status=first.status, content=[],
                 fetcher_used=first.fetcher_used, extracted_type="structured",
                 page_type=first.page_type, metadata=first.metadata,
-                error=(f"nested_no_match: nested_selector '{nested_selector}' matched "
-                       f"{found['matched']} element(s) on this page and none of them "
-                       "has an http(s) href"),
+                error=f"nested_no_match: {_why}",
+                summary=f"no link group matched · {_summary_label(_why)}",
+                diagnosis={
+                    "code": "nested_no_match", "retryable": False,
+                    "recover_with": ("widen nested_selector to the element that "
+                                     "contains the link, or force_fetcher="
+                                     "'stealthy' when this page is a JS shell")},
                 # 0 命中有两件事要分清：选择器写窄了，和这页根本没有内容（壳页）。
                 # 后者换选择器是白换，所以 next_action 必须把两条路都摆出来。
                 next_action=(

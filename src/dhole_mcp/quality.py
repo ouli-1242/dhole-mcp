@@ -742,7 +742,16 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
     # "offset=... to continue paginating", sending the agent paging through an
     # error page. The status is the more specific fact, so error statuses fall
     # through to their own branches below.
-    if result.is_truncated and result.next_offset and result.status < 400:
+    #
+    # A login wall, an anti-bot challenge and a JS shell are the same mistake in
+    # a different costume: measured on github's redirect-to-login page, the
+    # truncation hint came FIRST and the wall's own advice second, in one string
+    # with no separator between them. Paginating a sign-in form cannot reach
+    # content, so that clause is not just out of order there - it is wrong.
+    _NOT_A_DOCUMENT = ("auth_wall_detected", "bot_wall_detected",
+                       "js_shell_detected")
+    if (result.is_truncated and result.next_offset and result.status < 400
+            and not err.startswith(_NOT_A_DOCUMENT)):
         next_action = f"page truncated. Use focus='query' to extract only relevant blocks, or offset={result.next_offset} to continue paginating"
     elif unchanged:
         next_action = ("304 not modified: the origin says this URL still serves the "
