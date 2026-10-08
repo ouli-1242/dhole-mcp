@@ -1223,6 +1223,38 @@ def _apply_quality_boost(ranked: list, scores: list[float], query: str
     return [r for r, _ in boosted], [s for _, s in boosted]
 
 
+def _page_key(url: str) -> str:
+    """host+path only: scheme, `www.`, trailing slash, query and fragment left out."""
+    try:
+        p = urlparse(url)
+    except Exception:  # noqa: BLE001 - an unparsable URL is simply not the source
+        return ""
+    host = (p.netloc or "").lower().split("@")[-1]
+    if host.startswith("www."):
+        host = host[4:]
+    path = (p.path or "/").rstrip("/") or "/"
+    return host + path
+
+
+def _same_page(a: str, b: str) -> bool:
+    """Is this the same DOCUMENT, ignoring how an engine chose to spell it?
+
+    Deliberately looser than `crawl.normalize_url` (which keeps real query params,
+    because dedup there asks "same link to enqueue"): the question here is "is this
+    row the page the caller already has", and `http://` vs `https://` or
+    `?highlight=abspath` is the same page wearing a different hat. Subdomains are
+    NOT folded beyond `www.`, and a different path is a different page.
+    """
+    ka = _page_key(a)
+    return bool(ka) and ka == _page_key(b)
+
+
+def _drop_the_source_page(rows: list, source_url: str) -> tuple[list, int]:
+    """Take the queried page out of its own "similar pages" list, and count what left."""
+    kept = [r for r in rows if not _same_page(getattr(r, "url", "") or "", source_url)]
+    return kept, len(rows) - len(kept)
+
+
 # ─── main entry ───────────────────────────────────────────────────────────────
 
 async def web_search(
@@ -1510,6 +1542,15 @@ async def web_search(
             )
         except Exception as e:
             error = redact_api_key(str(e)[:200])
+        # "Pages similar to this one" that return this one answered nothing. The
+        # candidates come from searching the source's own title and the
+        # cross-encoder scores (source text, candidate), so the source row wins by
+        # construction: measured url=https://clig.dev/ ranked clig.dev at #1, and
+        # url=https://docs.python.org/3/library/os.path.html ranked its own
+        # http + ?highlight=abspath twin at #4. The slots go to pages the caller
+        # does not have yet, and the drop is said out loud below (a list that lost
+        # a row without saying so reads as "the index has nothing").
+        ranked, _own_rows = _drop_the_source_page(ranked, find_sim_url)
         # Rerank candidates against the SOURCE page content (Exa find-similar,
         # local: the cross-encoder scores (source_content, candidate)).
         if _rerank_task:
@@ -1545,6 +1586,13 @@ async def web_search(
         fetch_hint = (fetch_hint + " | " + sim_note) if fetch_hint else sim_note
         if rerank_note:
             fetch_hint = (fetch_hint + " | " + rerank_note) if fetch_hint else rerank_note
+        if _own_rows:
+            # 去掉行要说出来：一份悄悄少了一行的列表，读者只能猜索引里没有那一页。
+            _own_note = (
+                f"{_own_rows} row(s) that WERE the page you asked about were dropped "
+                "from this list - find_similar returns pages like it, and that one is "
+                "the copy you already have")
+            fetch_hint = (fetch_hint + " | " + _own_note) if fetch_hint else _own_note
         sim_related = _related_queries(derived_query, results_list)
         if min_relevance > 0.0 or min_raw_relevance > 0.0:
             # Say it out loud rather than let the parameter silently do nothing:

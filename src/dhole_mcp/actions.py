@@ -1019,7 +1019,14 @@ def action_label(a: dict) -> str:
     if key == "scroll":
         return f"scroll x{val.get('steps')}"
     if key == "screenshot":
-        return f"screenshot {_target_label(val)}" + (
+        # 整页捕获按设计就没有 selector/index，`_target_label` 对这样的 dict 交回
+        # repr(None)，于是回执念出一个不存在的目标（"screenshot None"）。submit 为同
+        # 一种洞补过并留了注释，这一格漏了：整页就照整页说。
+        if isinstance(val, dict) and val.get("full_page"):
+            base = "screenshot whole page"
+        else:
+            base = f"screenshot {_target_label(val)}"
+        return base + (
             " + decode_qr" if isinstance(val, dict) and val.get("decode_qr") else "")
     if key == "snapshot":
         return "snapshot interactive elements"
