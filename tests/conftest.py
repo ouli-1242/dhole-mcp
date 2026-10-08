@@ -172,6 +172,40 @@ def pytest_addoption(parser):
     )
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _the_suites_verdict_stays_in_the_suites():
+    """挂具判词不许落到操作员真实的 ``resolver_probe.json`` —— 落了就大声失败。
+
+    函数级接管把这两个状态文件名 route 到 ``tmp_path``（见
+    ``_no_real_home_state_writes``），正常情况下泄漏不可能发生；但一次泄漏的代价不成
+    比例：那份镜像存在的意义就是"别的进程读它"，被写进假判词之后，用户的
+    ``dhole --doctor`` 会报告"抓取的进程测的是 fake-ip (…)"，而那次测量根本不存在。
+
+    判据用 pid，因此精确：测试泄漏写的是本进程的 pid；用户自己的 dhole 宿主、以及体检
+    期间真实发生的重新测量，写的是别的 pid，不该被这条闸拦住。
+    """
+    import json
+    import os
+
+    from dhole_mcp import paths
+
+    def _read():
+        try:
+            with open(paths.file("resolver_probe.json"), encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:  # noqa: BLE001 - 没有镜像本身就是合法状态
+            return {}
+
+    before = _read()
+    yield
+    after = _read()
+    if after and int(after.get("pid") or -1) == os.getpid() \
+            and after != before:
+        raise AssertionError(
+            "the suite wrote its stubbed resolver verdict into the real "
+            f"~/.dhole/resolver_probe.json: {after}")
+
+
 @pytest.fixture(autouse=True)
 def _no_real_home_state_writes(request, monkeypatch, tmp_path):
     """测试绝不把产品状态写进真实的 ``~/.dhole``。
