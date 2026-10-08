@@ -298,17 +298,38 @@ class TestSmartFetchSeesTheSession:
         assert rung == ["aggressive"] * 3, rung
 
     @pytest.mark.asyncio
-    async def test_an_unusable_id_is_said_out_loud_and_the_page_still_comes(self, monkeypatch):
+    async def test_an_unusable_id_is_refused_before_anything_is_fetched(self, monkeypatch):
+        """2026-10-08 验收（D-02）改的政策：过去回 200 只在 summary 里附一句
+        "was ignored"，于是"这次跑在谁的登录态里"这颗身份参数成了全站唯一被静默丢弃
+        的那一颗 —— 同一个面里 `location` / `freshness` / `anti_detect` / 没有 host
+        的 auth / 解析不出来的 allow_private 全部硬拒。方向也反了：越接近凭据越不该
+        猜。一个以为登录态在延续的调用方拿到的是匿名页 + 200。"""
+        fetched = []
+
         async def fake_get(self, url, **kwargs):
+            fetched.append(url)
             return _html_result(url)
         monkeypatch.setattr(MasterFetchServer, "get", fake_get)
 
         out = await MasterFetchServer().web_read(
             ME, cache_ttl=0, session_id="../etc/passwd")
 
-        assert out.status == 200, "rejecting the id must not reject the page"
+        assert fetched == [], "非法会话名不许先把页面抓下来再解释"
+        assert out.status == 0 and out.content_ok is False
+        assert out.error.startswith("invalid_request: session_id=")
+        assert "1-64 characters" in out.error
+        assert "ANONYMOUSLY" in out.next_action, "拒的理由正是那次静默降级"
         assert out.session_id == ""
-        assert "session_id" in out.summary and "ignored" in out.summary
+
+    @pytest.mark.asyncio
+    async def test_a_well_shaped_id_still_runs(self, monkeypatch):
+        """反向守卫：闸门只拦形状，不拦使用。"""
+        async def fake_get(self, url, **kwargs):
+            return _html_result(url)
+        monkeypatch.setattr(MasterFetchServer, "get", fake_get)
+        out = await MasterFetchServer().web_read(ME, cache_ttl=0, session_id="qa.ok-1_2")
+        assert out.status == 200
+        assert out.session_id == "qa.ok-1_2"
 
     def test_the_cache_key_separates_sessions(self):
         """A 会话取回的正文不能被 B 的回放命中——那等于把一个人的页面端给另一个人。"""

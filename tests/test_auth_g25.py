@@ -250,7 +250,12 @@ class TestTheTierIsHandedBothTheHeaderAndTheNames:
         out = await MasterFetchServer().web_read(URL, cache_ttl=0)
 
         assert "invalid auth" in out.error
-        assert "basic" in out.next_action and "bearer" in out.next_action
+        # D-01（2026-10-08 验收）：三形状列表在一颗回执里只有一个作者 —— raise 那一位。
+        # `next_action` 从前自己再抄一遍，现在它说"去哪看"和"什么都没发出去"。
+        assert "basic" in out.error and "bearer" in out.error and "header" in out.error
+        assert "No request was made" in out.next_action
+        assert out.error.count("{type:'bearer',token}") == 1
+        assert "{type:'bearer',token}" not in out.next_action
 
     @pytest.mark.asyncio
     async def test_a_stored_credential_does_not_smuggle_itself_into_the_next_host(

@@ -41,11 +41,14 @@ than a service to the caller.
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import logging
 import os
 import posixpath
 import re
+import threading
+from collections import OrderedDict
 
 logger = logging.getLogger("dhole_mcp.parse")
 
@@ -295,6 +298,90 @@ def parse_file_detailed(file_path: str, encoding: str = "",
         return "", f"Parse error ({ext}): {type(e).__name__}: {str(e)[:200]}", {}
 
     return "", f"Unsupported format: {ext}", {}
+
+
+# ─── One document, parsed once ───────────────────────────────────────────────
+#
+# `doc_parse(offset=N)` 是一条响应自己的 next_action 推荐的续读动作，而每一份续页
+# 都会把**整篇文档重新解析一遍**：实测 3.9 MB 的一篇 markdown，翻 8 页要读并解码
+# 8 次字节（每次 ~0.2s，其中 charset.charset_is_in_doubt 一项就占 0.196s）。PDF 更
+# 贵 —— 一份带 OCR 的扫描件每一页都要把整本再提一遍。
+#
+# 记账的是"这份字节 + 这组参数"，不是文件名：键里有 mtime_ns 与 size，所以文件被改
+# 就无法命中旧条目。剩下的那一种碰撞（一次编辑恰好既不改变字节数也不改变 mtime）不
+# 是缓存策略能治的，写在这里而不是假装处理过。
+#
+# 只记成功的那一次（error 为空且有正文）：失败要么便宜要么要求调用方换参数，把它钉
+# 在记忆里只是让同一个报错多活一会儿。密码不进键 —— 那是文档串，进键就等于在进程
+# 里多留一份明文；进键的是它的摘要。
+#
+# 记的是**内存里**的整篇文本，随进程走；不落 cache.db（那份文档可能刚被 password= 解
+# 开）。预算按字符记，超了就从头退。
+
+_PARSED_CACHE: "OrderedDict[tuple, tuple]" = OrderedDict()
+_PARSED_CACHE_LOCK = threading.Lock()
+_PARSED_MAX_ENTRIES = 8
+# 单进程里同时最多留 40M 字符（ASCII 正文约 40 MB；纯中文按 4 字节算更多，所以这一
+# 颗数是在"一次大 PDF 全篇"和"几篇长文"之间取的折中）。
+_PARSED_MAX_TOTAL_CHARS = 40_000_000
+_parsed_total_chars = 0
+
+
+def parse_file_cached(file_path: str, encoding: str = "",
+                      pages: str | None = None,
+                      password: str | None = None) -> tuple[str, str, dict]:
+    """``parse_file_detailed`` 的结果按内容记账复用。返回值形状完全一致。
+
+    Never raises（和它包着的那颗一样）。
+    """
+    global _parsed_total_chars
+    key = _parsed_cache_key(file_path, encoding, pages, password)
+    if key is not None:
+        with _PARSED_CACHE_LOCK:
+            hit = _PARSED_CACHE.get(key)
+            if hit is not None:
+                _PARSED_CACHE.move_to_end(key)
+                return hit[0], "", _copy_extras(hit[1])
+    content, error, extras = parse_file_detailed(file_path, encoding, pages, password)
+    if key is not None and not error and content:
+        # 交回与记下的必须是**不同**的 dict：解析出来的那一份直接给出去过一次，调用方
+        # 改过它的 metadata，之后每一次命中的都是被改过的那份 —— 而命中看起来与首次
+        # 完全一样，没有一条字段会说"这是复用"。
+        stored = _copy_extras(extras)
+        with _PARSED_CACHE_LOCK:
+            _PARSED_CACHE[key] = (content, stored)
+            _parsed_total_chars += len(content)
+            while _PARSED_CACHE and (_parsed_total_chars > _PARSED_MAX_TOTAL_CHARS
+                                     or len(_PARSED_CACHE) > _PARSED_MAX_ENTRIES):
+                _, (dropped, _) = _PARSED_CACHE.popitem(last=False)
+                _parsed_total_chars -= len(dropped)
+        return content, error, _copy_extras(stored)
+    return content, error, extras
+
+
+def _parsed_cache_key(file_path: str, encoding: str, pages: str | None,
+                      password: str | None) -> tuple | None:
+    """(哪份字节, 怎么解) —— stat 读不到就不记，让调用方走一次真解析。"""
+    try:
+        absolute = os.path.abspath(os.path.expanduser(file_path))
+        st = os.stat(absolute)
+    except (OSError, ValueError):
+        return None
+    digest = hashlib.blake2b((password or "").encode("utf-8", "surrogatepass"),
+                             digest_size=16).digest()
+    return (absolute, st.st_mtime_ns, st.st_size, (encoding or "").lower(),
+            pages or "", digest)
+
+
+def _copy_extras(extras: dict) -> dict:
+    """交回一份新的 extras：调用方会把 metadata 复制走、把 toc 塞进 ResponseModel，
+    但共享同一个 dict 意味着下一次命中读到的可能是别人改过的那一份。"""
+    out = dict(extras or {})
+    if isinstance(out.get("metadata"), dict):
+        out["metadata"] = dict(out["metadata"])
+    if isinstance(out.get("table_of_contents"), list):
+        out["table_of_contents"] = list(out["table_of_contents"])
+    return out
 
 
 def _parse_html(file_path: str, encoding: str = "") -> tuple[str, dict]:

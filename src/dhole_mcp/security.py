@@ -484,6 +484,29 @@ def _hosts_cache_reset_dns() -> None:
     _DNS_CHECK_CACHE.clear()
 
 
+def target_is_private(url: str) -> bool:
+    """Geography, not permission: does this URL name a loopback/private target?
+
+    Independent of the allowlist — "allowed" and "private" are different
+    questions, and a caller may legitimately allow what is private. Hostnames
+    answer False (geography unknown without a DNS roundtrip; the real attempt
+    decides those). Never raises.
+    """
+    try:
+        host = (urlparse(url).hostname or "").strip("[]").lower()
+    except Exception:
+        return False
+    if not host:
+        return False
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return addr.is_loopback or addr.is_private
+
+
 def url_targets_internal(url: str, allow_internal: bool = False) -> bool:
     """这个 URL 是否指向内网 / 回环 / 元数据端点。不抛异常，只答是或否。
 

@@ -13,13 +13,14 @@ fails still returns whatever items parsed, with the error surfaced per-source.
 
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from dhole_mcp import injection
 
@@ -60,6 +61,13 @@ class FeedResult(BaseModel):
     source_title: str = Field(default="", description="Feed/channel title")
     items: list[FeedItem] = Field(default=[], description="Entries, newest first")
     error: str = Field(default="", description="Fetch/parse error (empty = ok)")
+    diagnosis: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Set only when this row failed: {code, retryable, recover_with}, from the "
+                    "SAME table web_read's diagnosis reads. Without it a caller that branches "
+                    "on 'retry or switch source' has to re-parse the error sentence per tool - "
+                    "and feed used to be the one channel that carried no structured verdict at "
+                    "all. Null when the error is a shape this table does not name.")
     discovered_from: str = Field(
         default="",
         description="Set when the URL was a web page: the feed was found through "
@@ -80,6 +88,18 @@ class FeedResult(BaseModel):
                     "feed's own markers (lastBuildDate / pubDate / skipDays / updated) are "
                     "quoted. Empty for feeds with items that answered a plain request, and "
                     "wherever `error` or the since-receipts already explain it.")
+
+    @model_validator(mode="after")
+    def _diagnosis_from_error(self) -> "FeedResult":
+        """有 `error` 的行必须认得出 code，且不许靠"每个构造点记得填"来保证。
+
+        这一族行有四个产地（since 拒绝 / 抓取失败 / 解析失败 / 空文档），一处一格是最
+        容易漏的地方 —— 判据本身在 `quality.classify_error_text`，与 web_read 同一张表。
+        """
+        if self.error and self.diagnosis is None:
+            from dhole_mcp.quality import row_diagnosis
+            self.diagnosis = row_diagnosis(self.error)
+        return self
 
 
 def _parse_date(value: str) -> str:
@@ -278,7 +298,46 @@ async def _grab(url: str, timeout: int,
         return body, status, (getattr(resp, "encoding", None) or "utf-8"), "", hdrs
     except Exception as e:
         logger.debug("feed fetch failed for %s: %s", url, e)
-        return b"", 0, "", f"{type(e).__name__}: {str(e)[:160]}", {}
+        return b"", 0, "", await _fetch_failure_note(url, e), {}
+
+
+# primp 把**连接阶段**的失败统一套上同一件外衣。实测（2026-10-08）一个不存在的域名
+# （no-such-host-xyzq.invalid）交回的是
+# `error sending request for url (...) > tls handshake eof`，按串分类就得到 tls_error
+# 的出路："证书问题或网络拦截，别在没改代理之前重试" —— 而真因是那个名字根本没解析出来
+# （`socket.getaddrinfo` 答 gaierror，`tcp_preflight` 同判 dns_failure）。
+# 一句假出路比没有出路更贵：它会让人去改 TLS 配置。
+_CONNECT_STAGE_MASKS = frozenset({"tls_error", "connection_reset", "timeout", "unknown"})
+
+
+async def _name_resolves(url: str) -> bool:
+    """这个名字解析得出地址吗。**只查名字** —— 不拨端口，不构成可达性探测。
+    """
+    from urllib.parse import urlparse
+    host = urlparse(url).hostname
+    if not host:
+        return True          # 读不出主机名，就不是"名字不存在"这件事，保留原判
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.getaddrinfo(host, None)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+async def _fetch_failure_note(url: str, exc: Exception) -> str:
+    """一次 feed 抓取的失败，写成调用方照着能改的那句话。
+
+    两笔账：①异常类名（`RequestError:`）是实现内部的话，不该出现在给 agent 的信封里；
+    ②库的外衣会把 DNS 失败伪装成 TLS 失败（见 `_CONNECT_STAGE_MASKS` 上的实测），所以
+    分类命中那一族时额外问一次名字解析。前缀用 `network_error:` —— 与 web_read 同一族，
+    认 `diagnosis.code == "network"` 的调用方不必为 feed 再写一套。
+    """
+    from dhole_mcp.errors import classify_network_error, get_hint
+    category, hint = classify_network_error(str(exc))
+    if category in _CONNECT_STAGE_MASKS and not await _name_resolves(url):
+        category, hint = "dns_failure", get_hint("dns_failure")
+    return f"network_error: {category} - {hint}"
 
 
 # A feed's own site nearly always says where the feed is; the tag is the contract.

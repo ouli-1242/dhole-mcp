@@ -22,6 +22,7 @@ from urllib.parse import urljoin, urlparse
 import primp
 
 from dhole_mcp.charset import misdecode_score as _misdecode_score
+from dhole_mcp.extractor import _is_data_document_content_type
 from dhole_mcp import sessions
 from dhole_mcp.security import SecurityError, redact_api_key
 
@@ -305,6 +306,20 @@ async def response_from_browser_page(
     # Extract encoding from content-type
     ct = headers.get("content-type", "")
     encoding = _extract_encoding(ct)
+
+    # 浏览器不渲染数据文档，它给数据文档套一个自己的相框。实测
+    # https://httpbin.org/json 走 stealthy 档交回的是 616B 的 Chrome JSON viewer，
+    # 连原文里的 "<em>" 都被替成了 "&lt;em&gt;" —— 那不再是这份 JSON；XML 那一族更贵
+    # （428KB 的 sitemap 换成 2,335,300 个字符的 xml-viewer）。自动升级早就为同一个
+    # 理由拒绝走浏览器（quality._never_escalate），被 force_fetcher/cdp 按到这一档的
+    # 时候，原件仍然挂在这次导航的网络响应上 —— 取原件，别外交框。
+    if page_content and _is_data_document_content_type(ct):
+        try:
+            raw = await resp.body()
+        except Exception:
+            raw = b""
+        if raw:
+            page_content = raw
 
     # Extract status
     status = resp.status
@@ -601,6 +616,37 @@ def _hop_headers(
     return hop
 
 
+def _stealthy_baseline() -> Dict[str, str]:
+    """一份浏览器身份，整个会话用它 —— 不在每次 build header 时重新摇。
+
+    实测（2026-10-08，`HTTPSession._build_headers()` 连摇 12 次）：UA 的 Chrome 大版本
+    在 147 与 148 之间来回跳，另有两次连 UA 都没有。真实浏览器不会在一场会话里换版本，
+    而 TLS 指纹是 primp 在 init 那一刻定死的 —— 于是每重摇一次，头就和那个指纹错开一次，
+    而"同一连接的 UA 与 TLS 不是同一个浏览器"正是检测方最容易交叉核对的一位。
+
+    browserforge 缺席时交回空 dict：调用方照旧只带 referer，与这次改动之前一致。
+    """
+    try:
+        from browserforge.headers import HeaderGenerator
+        return {str(k).lower(): str(v)
+                for k, v in (HeaderGenerator().generate() or {}).items()}
+    except Exception:
+        return {}
+
+
+# primp 认这三颗（实测："IOS" / "ANDROID" 会被 `Invalid impersonate_os` 拒掉），
+# 而 browserforge 的 UA 里能读出的是同一族名字。对不上的（Android、Linux 上的
+# Firefox 写法等）交回空串，由调用方回落 "random"。
+_OS_BY_UA = (("Windows NT", "windows"), ("Macintosh", "macos"),
+             ("X11; Linux", "linux"), ("Android", "linux"), ("Linux", "linux"))
+
+
+def _os_from_ua(ua: str) -> str:
+    for needle, name in _OS_BY_UA:
+        if needle in ua:
+            return name
+    return ""
+
 
 class HTTPSession:
     """Async HTTP fetch session using primp for TLS impersonation.
@@ -609,7 +655,8 @@ class HTTPSession:
     - TLS fingerprint impersonation (Chrome, Firefox, Safari, Edge)
     - Proxy support (http, https, socks5)
     - Retry with backoff
-    - Stealthy headers (Google referer, realistic User-Agent)
+    - Stealthy headers (Google referer, realistic User-Agent) —— 一份身份用一整场
+      会话，且 primp 的 OS 跟着这份身份选（见 `_stealthy_baseline`）
 
     Usage:
         async with HTTPSession(impersonate="chrome") as session:
@@ -632,6 +679,9 @@ class HTTPSession:
         self._retry_delay = retry_delay
         self._timeout = timeout
         self._client: Optional[primp.Client] = None
+        # 会话级的那一份身份，在 `_init_client` 里定一次。空 dict = 这个会话没要
+        # 隐形头，或 primp 还没起来（`_build_headers` 也允许被单独调用）。
+        self._baseline: Dict[str, str] = {}
 
     async def __aenter__(self) -> "HTTPSession":
         await self._init_client()
@@ -649,10 +699,17 @@ class HTTPSession:
             import random
             impersonate = random.choice(impersonate)
 
+        # 身份在这一次决定，会话内不再变（见 `_stealthy_baseline` 的实测理由），
+        # 而 primp 的 TLS 档必须跟着**这份**身份选 OS：两边各抽一次 OS，实测约一半
+        # 的请求是"Windows 的头 + 别的系统的 TLS 指纹"出站 —— 那正是检测方最容易
+        # 交叉核对的一位。抽不到名字（browserforge 缺席 / Firefox 系 UA）才回落 random。
+        self._baseline = _stealthy_baseline()
+        os_name = _os_from_ua(self._baseline.get("user-agent", ""))
+
         def _create():
             kwargs: Dict[str, Any] = {
                 "impersonate": impersonate,
-                "impersonate_os": "random",
+                "impersonate_os": os_name or "random",
             }
             if self._proxy:
                 kwargs["proxy"] = self._proxy
@@ -680,16 +737,10 @@ class HTTPSession:
         final_headers: Dict[str, str] = {}
         if self._stealthy_headers:
             final_headers["referer"] = "https://www.google.com/"
-            try:
-                from browserforge.headers import HeaderGenerator
-                hg = HeaderGenerator()
-                generated = hg.generate()
-                # Merge browserforge headers (lowercase keys)
-                for k, v in generated.items():
-                    if k.lower() not in ("referer",):
-                        final_headers.setdefault(k.lower(), v)
-            except Exception:
-                pass
+            # 会话里那份**定好的**身份，不是每次重摇（`_stealthy_baseline` 记了实测）。
+            for k, v in self._baseline.items():
+                if k != "referer":
+                    final_headers.setdefault(k, v)
         # User-supplied headers override defaults
         if headers:
             for k, v in headers.items():
@@ -703,6 +754,13 @@ class HTTPSession:
         if useragent:
             self._drop_header(final_headers, "user-agent")
             final_headers["user-agent"] = useragent
+            # 换了指纹的另一半，就得把跟着它的那几颗一起换掉：`sec-ch-ua*` 是
+            # Chromium 一家才会发的（`Sec-Fetch-*` 各家都发，留着），配在一个人工
+            # 指定的 Firefox/Safari UA 上，等于自己把"这些头不是同一台机器"写给
+            # 检测方看。
+            if "Chrome/" not in useragent:
+                for name in [k for k in final_headers if k.startswith("sec-ch-ua")]:
+                    self._drop_header(final_headers, name)
         return final_headers
 
     async def get(

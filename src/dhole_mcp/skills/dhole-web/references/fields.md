@@ -26,7 +26,7 @@ Consult this when a response doesn't make sense or a field shows a non-default v
 | `quality_score` | Extraction quality (PDF only) | Cite OCR results cautiously when low |
 | `table_of_contents` | PDF outline (titles + page ranges) | Pick `pages` from it |
 | `content_age_days` + `is_stale` | Content age / staleness flag (news 30d, docs/reference/paper 730d, rest 365d) | On `is_stale=true`, label citations with dates; `null` = continuously-edited site with no mtime |
-| `extracted_type` | `structured` when schema extraction was applied | — |
+| `extracted_type` | The format the body is actually in: `structured` when schema extraction was applied; `text` when the document came back as it is (JSON / XML APIs and OCR'd images are never converted to markdown); `markdown` for an HTML page that went through the extractor | `page_type=json`/`xml` + `extracted_type=text` = parse `content[0]` yourself, do not expect article prose. On the browser tier a data document is still the document — Chromium frames those, dhole hands back the bytes it framed |
 
 ## Change receipt (`extraction_type='check'`)
 
@@ -64,7 +64,7 @@ Consult this when a response doesn't make sense or a field shows a non-default v
 | `results[].engines_consensus` | How many independent index FAMILIES agree (`x of N`) | `1 of N` = no cross-validation — verify via `web_read` before citing |
 | `engines_used` | Engines that actually answered | Only 1–2 names = degraded pool |
 | `engine_empty` / `engine_preempted` | Answered with zero results / didn't finish before the deadline | A long list = rate-limiting/blocking/cooling — follow the signal table |
-| `rerank_mode` | `neural` = cross-encoder ranked / `merge` = consensus ordering | `merge` = model still loading (first search of a process); one retry restores `neural` |
+| `rerank_mode` | The rerank that RAN: `neural` = cross-encoder against the query / `find_similar` = cross-encoder against the page you named / `merge` = consensus + engine-position order | `merge` = model still loading (first search of a process); one retry restores `neural`. A `mode=find_similar` round whose value is NOT `find_similar` did not rank by page similarity — `fetch_hint` names what ordered the rows instead (topical match, or plain position) |
 | `date_filter` | `.requested` / `.sent` / `.exact` / `.engines_filtered` / `.engines_unfiltered` / `.note` | **`.note` is the authoritative plain-language account**; state time ranges the way it does (preset substituted, some engines can't be date-filtered at all) |
 | `fetch_hint` | This round's raw-score span and filtering; reports error when the whole round was cleared | When `min_raw_relevance` filtered, it shows the span the raw scores covered |
 | `related_queries` | Related-search suggestions | Useful for a rephrase |

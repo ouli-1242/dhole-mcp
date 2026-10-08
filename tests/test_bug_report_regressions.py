@@ -271,12 +271,23 @@ class TestFailureContentIsEmpty:
         out = await _escalate(server, "https://blocked.example.com", 20000)
         assert out.content == []
         assert out.error.startswith("all_tiers_failed:")
-        # 13d 只改了这句的措辞：代理不再是一颗参数，而是 cred_defaults 里存的凭据，
-        # 建议随之改口。本题钉的仍是 BUG-5 那一半 —— 恢复建议在 error 里、不在正文里。
-        assert "Try a proxy stored with cred_defaults" in out.error \
-            or "unreachable" in out.error
+        # 13d 只改了这句的措辞：代理不再是一颗参数，而是 cred_defaults 里存的凭据。
+        # 本题钉的仍是 BUG-5 那一半 —— 恢复建议在 error 里、不在正文里。
+        assert "switch source" in out.error or "Retry once" in out.error
         assert "the proxy parameter" not in out.error, "退役的 proxy 参数措辞复活了"
         assert out.content_ok is False
+        # 2026-10-08 实连实测（D-20）：这里报的是 `unknown (HTTP status 0)` 并叫读者
+        # "先去查 DNS / 试个代理"——可是站点明明回了 503，只是浏览器渲染非 200 时自己
+        # 报 0。用一个档位的渲染结果去否认另一个档位收到的答复，是把事实说反。
+        # 现在钉的是：状态号来自源站真正回的那个，且文案不再把它说成够不着。
+        assert "HTTP status 503" in out.error, "报出去的是渲染码，不是站点的答案"
+        assert "unknown" not in out.error.split("\n")[0]
+        assert "No HTTP response was received" not in out.error, \
+            "站点回了 503，不能宣称没收到响应"
+        assert "Try a different URL on the same domain (some paths have lower protection)" \
+            not in out.error, "5xx 被当成反爬墙，指的是下一步做不成的事"
+        assert "A 5xx is not a bot block" in out.error
+        assert out.diagnosis["code"] == "all_tiers_failed"
 
     def test_exhausted_pagination_still_says_so(self):
         """The placeholder is correct - and expected - when a real page was read

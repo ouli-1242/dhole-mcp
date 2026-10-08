@@ -37,7 +37,8 @@ from dhole_mcp.envelope import (
     compute_freshness,
     page_type_from_error,
 )
-from dhole_mcp.extractor import _is_xml_content_type
+from dhole_mcp.extractor import (_is_data_document_content_type,
+                                 _is_xml_content_type)
 from dhole_mcp.models import ResponseModel
 from dhole_mcp.robots import (
     ENV_IGNORE_ROBOTS,
@@ -45,6 +46,7 @@ from dhole_mcp.robots import (
     Verdict as RobotsVerdict,
     robots_url_for,
 )
+from dhole_mcp.security import target_is_private
 
 
 # ─── Content quality detection (module-level, used by the class) ─────
@@ -280,7 +282,7 @@ def _never_escalate(result: ResponseModel, url: str) -> bool:
     ct = (result.content_type or "").lower()
     if ct.startswith("image/"):
         return True
-    if _is_xml_content_type(ct) or ct.startswith(("application/json", "text/json")):
+    if _is_data_document_content_type(ct):
         return True
     return _path.endswith((".xml", ".rss", ".atom", ".rdf", ".json"))
 
@@ -336,6 +338,15 @@ def _is_js_shell(result: ResponseModel) -> bool:
         # "JS shell" told agents to burn a 40s browser escalation that cannot
         # change the outcome. status 0 (network/local failure) keeps the old
         # answer - 0 < 400.
+        #
+        # 204/205/304 are excluded on the same grounds as 4xx, from the other
+        # direction: these three say "no body" IN THE STATUS LINE. Rendering
+        # them cannot produce content - a browser answers a 204 with
+        # ERR_ABORTED - so calling one a shell promises a fix that does not
+        # exist. Same verdict as `_detect_content_issue`'s early return; the two
+        # must not drift, or the label and the escalation disagree.
+        if result.status in (204, 205, 304):
+            return False
         return result.status < 400
     if any(signal in content_str for signal in _JS_SHELL_SIGNALS):
         return True
@@ -411,6 +422,23 @@ def _schema_value_empty(value: Any) -> bool:
     return value == 0
 
 
+_RASTER_IMAGE_TYPES = frozenset({
+    "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp",
+    "image/bmp", "image/tiff", "image/avif", "image/x-icon", "image/vnd.adobe.photoshop",
+})
+
+
+def _is_raster_image(result: ResponseModel) -> bool:
+    """True for a bit-mapped picture (the kind OCR transcribes), not for SVG.
+
+    The distinction is the body's own nature, not the MIME prefix: an SVG IS its
+    markup, so an empty read of one is a reader problem worth naming, while a PNG
+    has no text layer to read at all and OCR has already said what it could see.
+    """
+    ct = (result.content_type or "").lower().split(";")[0].strip()
+    return ct in _RASTER_IMAGE_TYPES
+
+
 def _detect_content_issue(result: ResponseModel) -> str:
     """Detect content quality issues in a response. Returns error string or ''.
 
@@ -427,7 +455,14 @@ def _detect_content_issue(result: ResponseModel) -> str:
     # judges the quality of a body that does not exist, and js_shell_detected
     # turned the correct answer to "has this changed?" into a failure the agent
     # then retried harder (with a browser launch, in the measured case).
-    if result.status == 304:
+    #
+    # 204/205 are the same shape from the other side: the ORIGIN declared "no
+    # content" in the status line itself. Measured on httpbin /status/204: the
+    # empty body fell through to the shell heuristic, escalated to a browser that
+    # can only produce ERR_ABORTED on a 204, and the call came back
+    # `all_tiers_failed` claiming no HTTP response had been received - about a
+    # response that had arrived with a status code in it.
+    if result.status in (304, 204, 205):
         return ""
 
     # PDFs are never JS shells. A scanned/image PDF with no text layer is a
@@ -438,6 +473,20 @@ def _detect_content_issue(result: ResponseModel) -> str:
         if not content_str or "no text detected" in content_str:
             return "pdf_no_text: scanned/image PDF with no extractable text layer (OCR found nothing)"
         # PDF with a text layer: fall through so status/error checks still apply.
+
+    # An image's OCR result is not a web page and must not be judged by the
+    # heuristics that describe one. Measured on httpbin /image/png: OCR ran and
+    # transcribed the single glyph it could find, and because 1 char is "a big
+    # body with almost no text", the response went out labelled
+    # `js_shell_detected` with content_ok=false — the OCR answer was right, the
+    # verdict about it was wrong, and the diagnosis went on to claim the browser
+    # tier was unavailable on a machine that had just rendered a page with it.
+    # A picture carrying no text is a fact about the picture; rendering it in a
+    # browser frames it instead of transcribing it (see _never_escalate). SVG is
+    # deliberately outside this: its markup is the content, so an empty read of
+    # one stays a reader problem worth saying out loud.
+    if _is_raster_image(result):
+        return ""
 
     # Walls are checked BEFORE the generic JS-shell heuristic. A login form or a
     # captcha is also "a big body with little text", so the shell heuristic used
@@ -657,6 +706,27 @@ def _best_list_targets(citations: list, page_url: str, limit: int = 3) -> list[s
         scored.append((-score, i, u))
     scored.sort()
     return [u for _score, _i, u in scored[:limit]]
+
+
+#: 只有"一次 HTTP 应答都没拿到"的这一族才换成那句本地诊断。`dns_failure` 也在里面：
+#: 私网目标的名字是 localhost 时，"域名不存在"同样不是调用方要做的事。
+_NO_ANSWER_CATEGORIES = ("connection_refused", "connection_reset", "timeout",
+                         "dns_failure")
+
+
+def _local_target_no_answer(category: str, url: str) -> str:
+    """回环 / 私网目标没拿到任何 HTTP 应答时的那句出路，否则空串。
+
+    通用那几句（"站点可能挂了、换个源"、"换个说法重试"）在这里都不是答案：调用方问
+    的是自己机器上某一个端口，而它没在听。TCP 预检定论的两条支路早就这么说（实测
+    回执 `this private target never answered a direct TCP probe…`），HTTP 档自己拨了
+    却被拒/没答的那一条却没有 —— 同一件事在两条路上两种说法（D-08b，本轮实测：同一
+    个死端口两次跑出两种回执）。句子本身在 `errors` 里只有一个作者。
+    """
+    if category in _NO_ANSWER_CATEGORIES and target_is_private(url or ""):
+        from dhole_mcp.errors import PRIVATE_TARGET_NO_ANSWER
+        return PRIVATE_TARGET_NO_ANSWER
+    return ""
 
 
 def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
@@ -962,8 +1032,25 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                 "work; attach to a browser you started yourself with "
                 "cdp_url='http://127.0.0.1:9222' plus confirm=true.")
         else:
-            next_action = ("All fetch tiers failed. The site may use unbypassable protection "
-                          "(DataDome/Akamai/Turnstile) or is unreachable - switch sources.")
+            if result.status >= 400:
+                # 站点**答了**一个状态码，catch-all 那两句就都是假的：它不是"不可达",
+                # 也不是"墙"。实测（2026-10-08，重启后的真 MCP）
+                # `web_read("https://httpbin.org/status/503")` 的 `error` 明写
+                # "A 5xx is not a bot block"，同一份回执的 `next_action` 却说
+                # "may use unbypassable protection (DataDome/Akamai/Turnstile) … switch
+                # sources" —— 两处判据各有作者：server 的 tips 按状态码说话，这里按
+                # 文本分类说话，而文本分类读不到状态码。这一族的答案已经在那份 error
+                # 里，指过去，别再猜一遍。
+                next_action = (
+                    f"every tier came back with the site's own HTTP {result.status} - the "
+                    "origin answered, so this is neither an unreachable host nor a render "
+                    "problem a browser could undo. What that status means and what can "
+                    "change it is in `error`; nothing else in this call moved it.")
+            else:
+                next_action = ("All fetch tiers failed. The site may use unbypassable protection "
+                              "(DataDome/Akamai/Turnstile) or is unreachable - switch sources.")
+        # 「换个源」对一个本地端口不是答案：这一族的失败在私网目标上只有一个解释。
+        next_action = _local_target_no_answer(category, result.url) or next_action
     elif err.startswith("encoding_undecodable"):
         # A guess that failed, not a network or path problem - the generic parse
         # hint below would send the caller off to check paths that are fine.
@@ -980,6 +1067,23 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                 "See the error field for the paths that were tried. Pass an absolute "
                 "path, or pass cwd=<your working directory> so relative paths resolve "
                 "against it."
+            )
+        elif err.startswith("Access denied: path is in a restricted system directory"):
+            # 这一族说的是路径，兜底那句说的也是路径，但意思正好相反。实测
+            # doc_parse(file_path='C:\\Windows\\System32\\drivers\\etc\\hosts')：
+            # diagnosis 让"换一个不在受限目录里的路径"，next_action 却说"路径没什么
+            # 可修的"—— 而**一个字节都没读过**，那份文件是被门挡住的，不是内容坏了。
+            next_action = (
+                "the PATH was refused before anything was read - the file's contents "
+                "were never looked at. Pick a path outside the restricted system "
+                "directory (copy the file somewhere else if you need it), and note "
+                "this is a guard, not a knob: no argument opens it."
+            )
+        elif err.startswith("Access denied: path names an NTFS alternate data stream"):
+            next_action = (
+                "the PATH was refused before anything was read. Drop the ':stream' "
+                "part and name the file itself - the stream's contents would come "
+                "back as the document."
             )
         else:
             # The path was NOT the problem: the file was found, opened and read, and
@@ -1048,8 +1152,8 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             "switch source. A 5xx is not a bot block.")
     elif result.status == 0 or result.status >= 400:
         from dhole_mcp.errors import classify_network_error
-        _, hint = classify_network_error(err)
-        next_action = hint
+        category, hint = classify_network_error(err)
+        next_action = _local_target_no_answer(category, result.url) or hint
 
     # v10 envelope-driven next actions: fire ONLY when the fetch succeeded with
     # real content and no error-driven next_action already fired. Turn the
@@ -1253,6 +1357,10 @@ _DIAGNOSIS_PREFIXES: tuple[tuple[str, str, bool, str], ...] = (
     ("encrypted_pdf", "encrypted_pdf", False, "pass password= for this PDF"),
     ("pdf_deps_missing", "pdf_deps_missing", False, "install the PDF extra ([all])"),
     ("not_a_pdf", "not_a_pdf", False, "the bytes are not a PDF - check the URL/content-type"),
+    # feed 的那一半此前没有格子：`not a feed: StartTag: ...` 走到首词兜底，量出来的
+    # code 是 "not" —— 一个由兜底规则发明的词，调用方按 code 分支时什么也认不出。
+    ("not a feed", "not_a_feed", False,
+     "pass the feed's own URL (the address in <link rel=alternate>), not the site page"),
     ("pdf_open_failed", "pdf_open_failed", False, "the PDF could not be opened - see error"),
     ("pdf_extract_failed", "pdf_extract_failed", False, "the PDF could not be parsed - see error"),
     ("empty_pdf", "empty_pdf", False, "the PDF has no pages - nothing to read"),
@@ -1283,6 +1391,63 @@ _DIAGNOSIS_CONTAINS: tuple[tuple[str, str, bool, str], ...] = (
 _LEADING_CODE_RE = re.compile(r"[a-z][a-z0-9_]{2,}")
 
 
+def classify_error_text(err: str) -> tuple[str, bool, str]:
+    """一份 error 串对应的 (code, retryable, recover_with) —— 只看串，不看信封。
+
+    存在这一层的唯一理由是**同一张判据表不许有两个读者**：`_diagnose` 认 ResponseModel，
+    而 feed 的行、别的通道的行也带着同一族串。各处各抄一遍前缀表，迟早有一处只抄到一半。
+
+    串自己就能定的那一步也在这里做掉：一个 `network_error` 前缀背着一整类成因，而它们
+    对"重发会不会变"的回答相反（名字不存在与对端拒绝不会变，重置与超时可能会），所以
+    布尔不猜，去 `errors` 那张表读 —— 同一张表正写着给人看的那句 hint。
+    """
+    code, retryable, recover = "", False, ""
+    for prefix, c, r, rec in _DIAGNOSIS_PREFIXES:
+        if err.startswith(prefix):
+            code, retryable, recover = c, r, rec
+            break
+    else:
+        for needle, c, r, rec in _DIAGNOSIS_CONTAINS:
+            if needle in err:
+                code, retryable, recover = c, r, rec
+                break
+        else:
+            # 首词兜底之前先问一次网络分类器。实测：HTTP 档把库的原文留在 `error` 上
+            # （`error sending request for url (…) > operation timed out…`），三张表都
+            # 认不出这形状，于是首词兜底交出 code="error" —— 一个由兜底规则发明的词，
+            # 而 retryable 停在 False，与同一份回执 next_action 里那句 "Retry once with
+            # a longer timeout" 正好相反。分类器认得出类别的，布尔也去 `is_retryable`
+            # 那张表读，不在这里另判一次。
+            from dhole_mcp.errors import (classify_network_error, get_hint,
+                                          is_retryable)
+            _category, _hint = classify_network_error(err)
+            if _category != "unknown":
+                return _category, is_retryable(_category), get_hint(_category)
+            m = _LEADING_CODE_RE.match(err)
+            if m:
+                code = m.group(0)
+    if code == "network":
+        from dhole_mcp.errors import classify_network_error, is_retryable
+        _category, _ = classify_network_error(err)
+        retryable = is_retryable(_category)
+    return code, retryable, recover
+
+
+def row_diagnosis(error: str) -> Optional[Dict[str, Any]]:
+    """一条**行级**失败（feed 的每个源、批量结果的每一行）的结构化判据。
+
+    与 `_diagnose` 共用同一张表，但不需要一份 ResponseModel —— 那些通道本来就没有信封
+    的其余格子。没有 error、或串里认不出任何 code，都交回 None：**缺席即成功**这一约定
+    不许在第二处变。
+    """
+    if not error:
+        return None
+    code, retryable, recover = classify_error_text(error)
+    if not code:
+        return None
+    return {"code": code, "retryable": retryable, "recover_with": recover}
+
+
 def _diagnose(result: ResponseModel) -> Optional[Dict[str, Any]]:
     """本次响应"不是干净成功"时的结构化原因，否则 None（缺席即成功）。
 
@@ -1296,19 +1461,7 @@ def _diagnose(result: ResponseModel) -> Optional[Dict[str, Any]]:
     retryable = False
     recover = ""
     if err:
-        for prefix, c, r, rec in _DIAGNOSIS_PREFIXES:
-            if err.startswith(prefix):
-                code, retryable, recover = c, r, rec
-                break
-        else:
-            for needle, c, r, rec in _DIAGNOSIS_CONTAINS:
-                if needle in err:
-                    code, retryable, recover = c, r, rec
-                    break
-            else:
-                m = _LEADING_CODE_RE.match(err)
-                if m:
-                    code = m.group(0)
+        code, retryable, recover = classify_error_text(err)
         if code in ("js_shell", "bot_wall"):
             retryable = (not _never_escalate(result, result.url)
                          and not _browser_cannot_help(result, result.url))

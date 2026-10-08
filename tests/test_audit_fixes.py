@@ -30,16 +30,13 @@ async def test_feed_fetch_returns_dict_structured(mock_logger=None):
     srv = MasterFetchServer(cache_ttl=0)
     args = {"urls": ["https://example.com/feed"], "max_items": 3}
 
-    class _FakeResp:
-        source_url = "https://example.com/feed"
-        source_title = "t"
-        error = ""
-        items = []
-        discovered_from = ""
-        since = ""
-        items_older_than_since = 0
-        items_without_date = 0
-        note = ""
+    # 真实的 FeedResult，不是一份手抄的替身：这一条测的就是"投影与模型一致"，
+    # 而替身会把模型的新字段挡在测试之外（替身少写一格，投影就少读一格，两边一起
+    # 过期 —— 与本文件注释里 `note` 溜过去的正是同一种漏法）。
+    from dhole_mcp.feed import FeedResult
+
+    _FakeResp = lambda: FeedResult(source_url="https://example.com/feed",  # noqa: E731
+                                   source_title="t")
 
     with patch("dhole_mcp.feed.fetch_feeds", new=AsyncMock(return_value=[_FakeResp()])):
         with patch("socket.getaddrinfo",

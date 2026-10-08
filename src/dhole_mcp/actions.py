@@ -67,7 +67,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from dhole_mcp import install as _install
-from dhole_mcp.context import _clamp_note, _note_text, out_of_band_confirm
+from dhole_mcp.context import (
+    _clamp_note, _note_text, out_of_band_confirm, report_progress)
 
 
 logger = logging.getLogger("dhole-mcp.actions")
@@ -1008,6 +1009,23 @@ def _target_label(t) -> str:
     return repr((t or {}).get("selector"))
 
 
+# `action_label` 在**执行之前**渲染，所以它能把"没有 confirm 旋钮"写成"(unconfirmed)"
+# —— pending 行带着这句话是对的，那一步确实没发出去。发出去的那一行不能再带着它。
+_UNCONFIRMED = " (unconfirmed)"
+
+
+def _row_label(label: str, shot: dict) -> str:
+    """一行**已经提交成功**的回执，不许还写着 "(unconfirmed)"。
+
+    人按键批准过的每一次提交（elicitation 那条路，`confirm` 参数不在场）都会被这半句
+    记成"未经确认"，而 DHOLE_USAGE_LOG 的写审计读的就是这一行 —— 审计里最该留下的
+    "这一步是谁允许的"，被一个执行之前算出来的字符串说反了。
+    """
+    if shot.get("submitted") and label.endswith(_UNCONFIRMED):
+        return label[:-len(_UNCONFIRMED)]
+    return label
+
+
 def action_label(a: dict) -> str:
     """One short line naming an action, for the outcome receipt in the response."""
     (key, val), = a.items()
@@ -1045,7 +1063,7 @@ def action_label(a: dict) -> str:
         # the audit trail lost the target of the very step it exists to record.
         base = f"submit {_target_label(val)}"
         return base + ("" if isinstance(val, dict) and val.get("confirm")
-                       else " (unconfirmed)")
+                       else _UNCONFIRMED)
     if key == "click":
         return f"click {_target_label(val)}"
     if key == "wait_selector":
@@ -1105,8 +1123,14 @@ def build_page_action(actions) -> Optional[Callable]:
 
     async def page_action(page) -> None:
         outcomes.clear()
-        for a in validated:
+        # 动作链是"几十秒到几分钟"的另一种形状：一步 click 可以等 settle，一步 wait
+        # 是显式的秒数。每**要执行**的一步报一次（在动作之前报，因为被 submit 闸拦下
+        # 的那一步不该被说成做过）；链里 continue 的分支因此也带着自己的那一格。
+        total_steps = len(validated)
+        for step_no, a in enumerate(validated, start=1):
             label = action_label(a)
+            await report_progress(float(step_no - 1), total=float(total_steps),
+                                  message=f"action {step_no}/{total_steps}: {label}")
             shot: dict = {}
             try:
                 if "click" in a:
@@ -1265,7 +1289,7 @@ def build_page_action(actions) -> Optional[Callable]:
                     loc = await _target_locator(page, s)
                     await _settle_after_click(page, loc)
                     shot["submitted"] = True
-                outcomes.append({"action": label, "ok": True, **shot})
+                outcomes.append({"action": _row_label(label, shot), "ok": True, **shot})
             except Exception as e:
                 outcomes.append({"action": label, "ok": False,
                                  "error": _action_failure(e)})

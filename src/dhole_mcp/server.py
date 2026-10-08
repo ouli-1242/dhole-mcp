@@ -174,6 +174,7 @@ from dhole_mcp.sessions import (
     clear as clear_cookie_jar, names_for as cookie_names_for,
     sessions as cookie_jar_census,
 )
+from dhole_mcp.errors import PRIVATE_TARGET_NO_ANSWER
 from dhole_mcp.security import (
     validate_url,
     validate_css_selector,
@@ -184,6 +185,9 @@ from dhole_mcp.security import (
     validate_search_query,
     redact_api_key,
     SecurityError,
+    # 「这个地址是不是私网/回环」的地理判据（不是许可判据）：升级门与 quality 那句
+    # "本地服务没起"共读这一份。
+    target_is_private,
     # 探测过期时那条拒绝的识别针与唯一出路（守卫侧定义，见 security 的这两枚常量）
     RESOLVER_GUARD_NEEDLE, RESOLVER_GUARD_RECOVERY,
     # 「地址是内网的」那类拒绝：识别针与出路同样只在守卫侧定义一份，六颗工具共用
@@ -319,6 +323,7 @@ from dhole_mcp.context import (
     _note_text,
     _stamp_robots_mode,
     out_of_band_confirm,
+    report_progress,
     set_mcp_session,
     MAX_REQUEST_BODY_BYTES,
     _cache_context,
@@ -925,6 +930,27 @@ def _attach_login_probe_gap(result: ResponseModel, check_login: bool) -> Respons
     return result
 
 
+def _archive_ran_out(origin: ResponseModel, archive_result: ResponseModel) -> ResponseModel:
+    """Keep the ORIGIN's verdict when the archive tier is the thing that failed.
+
+    `_with_budget` returns a fresh "timeout: the Nms call budget ran out during
+    the archive.org lookup" envelope, and returning that wholesale describes our
+    own clock while deleting what the site actually said. Measured on a controlled
+    origin answering 429: the call went out as `code=timeout, retryable=true` with
+    "raise timeout" advice - the throttle fact was gone, and the one move a 429
+    forbids (retry sooner with a longer budget) was recommended.
+
+    Three sites share this because the wrong claim is the same in all three, and
+    three copies of an apology are how the tiers drift apart.
+    """
+    detail = (archive_result.error or "")[:120]
+    note = f"archive.org fallback was tried and ran out of budget ({detail}) - it answered nothing"
+    origin.error = f"{origin.error}; {note}" if origin.error else note
+    origin.escalation_path = ((origin.escalation_path or "direct")
+                              + "+archive(no_budget)")
+    return origin
+
+
 def _all_tiers_failed_tips(category: str, status: int) -> str:
     """Recovery tips for the all-tiers-failed receipt, keyed by classification.
 
@@ -975,6 +1001,38 @@ def _all_tiers_failed_tips(category: str, status: int) -> str:
             "the install itself is refused.\n"
             "- HTTP-only tools (web_read without force_fetcher, web_request, "
             "web_search) still work while this is broken."
+        )
+    if category.startswith("http_"):
+        # A tier was ANSWERED with this status, so the honest sentence is about
+        # the status, and the two claims the generic branch makes are both false
+        # here: nothing is "unreachable", and a bot wall is not implicated by a
+        # 5xx the origin chose to send. Measured on a controlled origin: /429 came
+        # back "no free tool can bypass it / try a proxy" and /503 as
+        # "unknown (HTTP status 0)", each pointing the caller at work that cannot
+        # change a server's mind. A render cannot un-answer a status code.
+        _code = int(category[5:] or 0)
+        if _code == 429:
+            return (
+                "- The origin answered 429 Too Many Requests: it is throttling this "
+                "client, not hiding the page. Back off for the interval the response "
+                "asked for (Retry-After, when present) before sending this URL again.\n"
+                "- A browser render cannot lift a throttle - it is a second request.\n"
+                "- A dated snapshot is the archive tier's business, and its answer "
+                "arrives marked with `source` and `archived_at`."
+            )
+        if _code >= 500:
+            return (
+                f"- The origin answered {_code}: the failure is at the server, and "
+                "both tiers were told the same thing. Nothing in this request caused "
+                "it and no parameter fixes it.\n"
+                "- Retry once after a pause; if it persists the site is down or the "
+                "path is broken, so switch source.\n"
+                "- A 5xx is not a bot block."
+            )
+        return (
+            f"- The origin answered {_code} to both tiers - the site replied, so this "
+            "is neither a reachability failure nor a rendering gap.\n"
+            "- Check the URL; web_search names the page's current location if it moved."
         )
     return (
         "- If the site uses Cloudflare Turnstile or DataDome, no free tool can bypass it.\n"
@@ -1464,6 +1522,23 @@ def _smart_fetch_request_context(func):
         _pval = identity.get("proxy")
         if _pval not in (None, "", {}, []):
             _identity_bits["proxy"] = _pval
+        # 会话名是调用方选的，也是"这一次跑在谁的登录态里"的唯一声明。它不成形状时
+        # 过去只记一句 summary 然后匿名跑完并回 200 —— 同一个产品里，`location` /
+        # `freshness` / `anti_detect` / 没有 host 的 auth / 解析不出来的 allow_private
+        # 全部硬拒，唯独身份容器的名字被静默丢弃。方向也反了：越接近凭据的参数越不该
+        # 猜。现在拒绝，且在任何 ContextVar 被写之前 —— 半途 return 会把已经 set 的
+        # 会话留进下一个调用。
+        _sid_requested = options.get("session_id")
+        if _sid_requested not in (None, "") and not _clean_session_id(_sid_requested):
+            return _invalid_request_result(
+                options.get("url") or "",
+                f"session_id={_sid_requested!r} is not a usable jar name: 1-64 "
+                "characters of letters, digits, '.', '_' or '-'",
+                next_action=("Nothing was fetched. Rename it and call again - a "
+                             "session id that is silently dropped would run this call "
+                             "ANONYMOUSLY and still answer 200, which reads as \"the "
+                             "site lost my login\" rather than as the argument it is. "
+                             "One id covers a urls=[...] batch."))
         tokens = [
             (_PDF_PAGES, _PDF_PAGES.set(options["pages"] if isinstance(options["pages"], str) else None)),
             (_PDF_PASSWORD, _PDF_PASSWORD.set(options["password"] if isinstance(options["password"], str) else None)),
@@ -1519,8 +1594,12 @@ def _smart_fetch_request_context(func):
                          "takes true (loopback only) or a list of hosts")
         _sid = options.get("session_id")
         if _sid not in (None, "") and not _SESSION_ID.get():
-            notes.append(f"session_id={_sid!r} was ignored: use 1-64 characters of "
-                         "letters, digits, '.', '_' or '-'")
+            # 到这里只能有一种解释：上面那张 tokens 表被改动过而把闸门绕开了。闸门在
+            # 写 ContextVar 之前拒绝（见本函数开头），所以"名字非法但请求照跑"不再是
+            # 一条走得通的路径 —— 留这一句，是让改动它的人立刻看见矛盾，而不是让
+            # 一次匿名抓取带着 200 走出去。
+            raise AssertionError(
+                f"session_id={_sid!r} failed its shape check after the gate")
         try:
             result = await func(*args, **kwargs)
             return _stamp_session(_stamp_original_url(result, options.get("url") or ""))
@@ -1600,9 +1679,10 @@ def _clean_session_id(value) -> str:
     The id is caller-chosen text and it becomes a SQLite key, so it is restricted
     to a plain word: no path separators, no quotes, no control characters. Length
     is capped so one client cannot fill the jar directory with junk keys.
-    An rejected value is NOT a fetch failure — the page still comes back, stateless —
-    but the caller is told in the summary, because "my login did not stick" is
-    otherwise diagnosed as a site problem.
+    An unusable value is refused at the decorator before anything is fetched:
+    "my login did not stick" is a site-shaped story for the caller to chase, and
+    the same surface that hard-refuses `location`, `anti_detect` and an auth with
+    no host cannot quietly run one identity parameter anonymously instead.
     """
     if not isinstance(value, str):
         return ""
@@ -1751,6 +1831,31 @@ def _translate_response(page: _DholeResponse, *args, **kwargs) -> ResponseModel:
     return result
 
 
+def _ocr_failure_note(exc: Exception, fetcher_used: str, size: int) -> str:
+    """OCR's own words, with the process internals taken out.
+
+    Measured on httpbin /image/png via the browser tier: the message arrived as
+    `cannot identify image file <_io.BytesIO object at 0x0000017559546C50>`. A
+    memory address is not a diagnosis, it is a peek into this process's heap on
+    the way into a transcript that gets copied, cached and logged - the same
+    discipline that keeps cookie VALUES out of responses.
+
+    The sentence that IS a diagnosis is which tier handed over the bytes: a browser
+    frames an image document in its own viewer, so what reached OCR was a few
+    hundred bytes of markup, not the picture. Naming that gives the caller the one
+    lever that works (`force_fetcher='http'`).
+    """
+    detail = re.sub(r"<[A-Za-z_][\w.]* object at 0x[0-9a-fA-F]+>",
+                    "an in-memory buffer", str(exc)[:160])
+    if "stealthy" in (fetcher_used or "") or "cdp" in (fetcher_used or ""):
+        return (f"image_ocr_failed: {detail} - the browser tier FRAMES an image "
+                f"document in its own viewer, so OCR was handed {size} bytes of "
+                "markup rather than the picture. Re-call with "
+                "force_fetcher='http' to give OCR the bytes, or read the image "
+                "with a vision-capable model.")
+    return f"image_ocr_failed: {detail}"
+
+
 def _translate_response_body(
     page: _DholeResponse,
     extraction_type: str,
@@ -1797,6 +1902,9 @@ def _translate_response_body(
                 status=page.status, content=[json_text], url=page.url,
                 fetcher_used=fetcher_used, duration_ms=duration_ms,
                 content_type=raw_ct, total_size_bytes=total_size,
+                # 交出去的是文件自己的字节，一次 markdown 转换都没发生 —— 说
+                # "markdown" 是让摘要写 "429B markdown" 而那份 JSON 一寸没动过。
+                extracted_type="text",
             )
         except Exception:
             pass  # Fall through to normal extraction if JSON decode fails
@@ -1814,6 +1922,7 @@ def _translate_response_body(
                 status=page.status, content=[xml_text], url=page.url,
                 fetcher_used=fetcher_used, duration_ms=duration_ms,
                 content_type=raw_ct, total_size_bytes=total_size,
+                extracted_type="text",
             )
         except Exception:
             pass  # Fall through to normal extraction
@@ -1891,7 +2000,8 @@ def _translate_response_body(
                 content=[],
                 url=page.url, fetcher_used=fetcher_used, duration_ms=duration_ms,
                 content_type=raw_ct, total_size_bytes=total_size,
-                extracted_type="text", error=f"image_ocr_failed: {str(e)[:160]}",
+                extracted_type="text",
+                error=_ocr_failure_note(e, fetcher_used, total_size),
             )
 
     content: list[str]
@@ -2497,6 +2607,13 @@ def _conditional_headers(markers: Any) -> tuple:
     return out, ""
 
 
+#: 三种形状的**唯一作者**。一份回执原先把它说两遍（raise 的原文一份，调用方自己
+#: 追加的一份 —— 实测 cred_defaults 的一次拒绝在同一个 `error` 串里出现两次全文），
+#: 而一份列表被读了两遍不会多告诉调用方任何东西。
+_AUTH_SHAPES = ("{type:'basic',username,password}, {type:'bearer',token} or "
+                "{type:'header',name,value}")
+
+
 def _auth_request_headers(
     auth: Any,
     headers: Optional[Mapping[str, Optional[str]]],
@@ -2527,9 +2644,7 @@ def _auth_request_headers(
     if auth is None or auth == "" or auth == {}:
         return {}, "", (), None
     if not isinstance(auth, dict):
-        raise ValueError(
-            "auth must be an object: {type:'basic',username,password} / "
-            "{type:'bearer',token} / {type:'header',name,value}")
+        raise ValueError(f"auth must be an object - one of {_AUTH_SHAPES}")
 
     kind = str(auth.get("type") or "").strip().lower()
     token = auth.get("token")
@@ -2550,17 +2665,15 @@ def _auth_request_headers(
             kind = "header"
         else:
             raise ValueError(
-                "auth needs a 'type' (basic / bearer / header) — or give it the "
-                "matching fields: username+password, token, or name+value")
+                f"auth needs a 'type' - or the fields one of them needs: "
+                f"{_AUTH_SHAPES}")
     if kind == "apikey":
         kind = "header"
 
     if kind not in _AUTH_KINDS:
         # 固定句，不回显 type 原文：调用方把 token 贴进 type 时，错误文本会
-        # 无界携带它。三个 kinds 在句尾点名，诊断价值不减。
-        raise ValueError(
-            "unsupported auth type — expected 'basic', 'bearer' or 'header' "
-            "(the shapes below name the fields each one needs)")
+        # 无界携带它。三种形状在句尾点名（它们各自带着自己的 kind 名），诊断价值不减。
+        raise ValueError(f"unsupported auth type - expected one of {_AUTH_SHAPES}")
 
     if kind == "basic":
         if username is None or password is None:
@@ -2670,9 +2783,9 @@ def _identity_value_error(key: str, value: Any) -> str:
         try:
             _auth_request_headers(value, None)
         except (ValueError, SecurityError) as e:
-            return (f"auth: {e} — it is an object: "
-                    "{type:'basic',username,password}, {type:'bearer',token} or "
-                    "{type:'header',name,value}")
+            # 形状句由 raise 那一位作者说一次；这里再贴一遍就是同一份回执里的第二段
+            # 全文（实测：一个字符串 auth 值曾把三形状列表在同一行里写两次）。
+            return f"auth: {e}"
         return ""
     if key == "cookies":
         try:
@@ -2916,7 +3029,7 @@ def _missing_required_args(tool: str, args: dict) -> list[str]:
 # DHOLE_TOOLS takes a comma-separated subset ("web_read,web_search") for
 # clients that pay the connect-time table on every conversation even when dhole
 # is never called: measured on the wire (python tests/tool_payload_measure.py)
-# on 2026-10-07: 28,274 chars of tool schemas + 2,476 of instructions = 30,750
+# on 2026-10-08: 28,231 chars of tool schemas + 2,476 of instructions = 30,707
 # on connect (≈7.4k tokens at the measured 4.16 chars/token), with web_read
 # alone accounting for 5,936 - fetch+search covers the daily-driver cases at
 # roughly a third of the cost, and the rest is one env-edit away. A name that
@@ -4044,6 +4157,23 @@ class MasterFetchServer:
             alive = (entry is not None and entry.session_type == "stealthy"
                      and getattr(entry.session, "_is_alive", False))
         if alive:
+            # 可见性与 auto 路径同一条不对称规则，过去只写在那一侧：要看得见的那次
+            # 调用撞上这个会话上已活着的**隐藏**浏览器时，这里直接把它骑了。实测
+            # （2026-10-08，D-22）：`web_act(headed=true)` 对着一台已起的隐藏会话浏览器
+            # 回 200 且 `metadata.browser` 为空 —— 坐在屏幕前等窗口的人不会知道那一串
+            # 动作已经在隐形浏览器里跑完了。接管别人的隐藏浏览器是把 profile 突然搬到
+            # 台面上，关掉它是扔掉用户正站在里面的标签页，两条都不做：具名拒绝。
+            # 反方向照旧放行（可见的浏览器乐意服务隐藏的活）。
+            if not headless and getattr(entry.session, "_headless", True):
+                from dhole_mcp.browser import BrowserBusyError
+                raise BrowserBusyError(
+                    f"browser_busy: this call asked for a VISIBLE browser, but the "
+                    f"session '{sid}' already has a hidden one running, and dhole "
+                    "will neither take over a hidden browser nor close it - the second "
+                    "option throws away tabs and logins the user is standing in. Hand "
+                    "it back first (sys_state() lists session ids, "
+                    "sys_state(clear=['<session id>']) closes one), or drop headed=true "
+                    "and let this call ride the browser that is already up.")
             return sid
         if entry is not None:
             # 死会话占着名字：摘掉让 open_session 能重建（cookie jar 在会话
@@ -4194,9 +4324,8 @@ class MasterFetchServer:
         :param retry_delay: Seconds between retries (default 1).
         :param proxy: Proxy URL.
         :param proxy_auth: Proxy auth dict with 'username' and 'password'.
-        :param auth: Credential dict: {type:'basic',username,password} (the default
-            when type is omitted), {type:'bearer',token} or
-            {type:'header',name,value}. See _auth_request_headers.
+        :param auth: Credential dict - one of the three shapes in `_AUTH_SHAPES`;
+            _auth_request_headers says what each one needs.
         :param verify: Verify HTTPS certificates (default True).
         :param http3: Use HTTP/3 (default False).
         :param stealthy_headers: Generate real browser headers (default True).
@@ -5232,10 +5361,9 @@ class MasterFetchServer:
         except (ValueError, SecurityError) as e:
             return _invalid_request_result(
                 url or "", f"invalid auth: {e}",
-                next_action=("auth is an object: {type:'basic',username,password}, "
-                             "{type:'bearer',token} or {type:'header',name,value}. "
-                             "No request was made - a half-understood credential is "
-                             "not something to send off."))
+                next_action=("No request was made - a half-understood credential is "
+                             "not something to send off. `error` names the shape auth "
+                             "needs; fix it and call again."))
         if auth_ignored:
             _ARG_NOTES.get().append(auth_ignored)
         elif auth_headers:
@@ -6067,27 +6195,10 @@ class MasterFetchServer:
 
     @staticmethod
     def _target_is_private(url: str) -> bool:
-        """Geography, not permission: does this URL name a loopback/private target?
-
-        Independent of the allowlist — "allowed" and "private" are different
-        questions, and a caller may legitimately allow what is private. Hostnames
-        answer False (geography unknown without a DNS roundtrip; the real attempt
-        decides those). Never raises.
+        """`security.target_is_private` 的一个别名位（名字留在服务器上，因为它是
+        这一档判读的入口；判据只有一个作者 —— quality 那句"本地服务没起"读的是同一个）。
         """
-        from ipaddress import ip_address
-        try:
-            host = (urlparse(url).hostname or "").strip("[]").lower()
-        except Exception:
-            return False
-        if not host:
-            return False
-        if host == "localhost" or host.endswith(".localhost"):
-            return True
-        try:
-            addr = ip_address(host)
-        except ValueError:
-            return False
-        return addr.is_loopback or addr.is_private
+        return target_is_private(url)
 
     async def _private_health_probe(self, url, extra_headers, useragent, cookies, t0):
         """HTTP-level liveness probe for a private target before the forced
@@ -6221,18 +6332,12 @@ class MasterFetchServer:
                             duration_ms=(now() - _t0) * 1000,
                         )
                         result.escalation_path = f"preflight:{preflight_category}(skipped_stealthy)"
-                        finalized = await self._finalize_result(
+                        # 私网目标的那句"本地服务没起"不再在这里另写一遍：
+                        # `_finalize_result` → quality 对这一族失败说的是同一句
+                        # （errors.PRIVATE_TARGET_NO_ANSWER），两个作者迟早漂。
+                        return await self._finalize_result(
                             result, url, extraction_type, css_selector, cache_ttl,
                             offset, max_chars)
-                        if _private:
-                            # _finalize_result 会按错误类别写通用 next_action
-                            # （「站点可能挂了」），对回环 / 私网目标是误导——
-                            # 那里的问题从来不是站点慢，是服务没起。
-                            finalized.next_action = (
-                                "this private target never answered a direct TCP probe "
-                                "(refused or timed out) - no request reached any server. "
-                                "Is the local service actually running, and on this port?")
-                        return finalized
                     # G31 后续之二：TCP 探测不够——有的网络栈（透明代理 / 沙箱
                     # broker）对**任何**连接都先应答再失败，死端口在它眼里"可达"，
                     # 浏览器照样烧满预算（实测 30s）。私网目标在启动浏览器前再做
@@ -6432,6 +6537,10 @@ class MasterFetchServer:
         # 归因和旋钮都指错了（G21）。
         _env_proxy = env_registry.value_of("DHOLE_SEARCH_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("ALL_PROXY")
         from dhole_mcp.fetcher import tcp_preflight
+        # Both branches below may leave these unset; the archive gate and the
+        # finalize return read them, so they start at their neutral values.
+        _private_target = False
+        _private_note = ""
         if proxy or _env_proxy:
             # Only an EXPLICIT proxy is probed: an environment proxy is machine
             # config and must not decide whether one fetch succeeds. With any
@@ -6439,8 +6548,17 @@ class MasterFetchServer:
             # no target preflight here.
             result = await _dead_explicit_proxy(proxy, url, start_time)
         else:
+            # 私网/回环的定论规则和强制档（_fetch_one 的预检）共用同一句话：那里
+            # 不存在"2 秒才应答的合法服务"，connect 超时与 refused 同义（实测本机
+            # 防火墙 DROP 型栈把 8765 的死端口报成 `timeout` 而非 `connection_refused`，
+            # 于是自动档不认为它是定论失败，升级浏览器把 30011ms 预算烧满，而浏览器
+            # 拨的是同一个死端口）。规则本来就有，只是只装在了一条路径上。
+            _private_target = self._target_is_private(url)
             reachable, preflight_category = await asyncio_to_thread(tcp_preflight, url, 2.0)
-            if not reachable and preflight_category in ("connection_refused", "dns_failure"):
+            definitive = ("connection_refused", "dns_failure")
+            if _private_target:
+                definitive = definitive + ("timeout",)
+            if not reachable and preflight_category in definitive:
                 elapsed = (now() - start_time) * 1000
                 result = ResponseModel(
                     url=url, status=0, content=[],
@@ -6452,16 +6570,23 @@ class MasterFetchServer:
                 result = None
 
         if result is not None:
-            # Try archive.org before giving up
-            if _should_try_archive(result):
+            # Try archive.org before giving up. Never for a private target: a
+            # snapshot of http://127.0.0.1:8765 would be somebody else's page from
+            # some other date answering a question about a service on this machine,
+            # and it costs 10-30s of the budget the dead port already spent.
+            if _private_target:
+                pass
+            elif _should_try_archive(result):
                 archive_result = await _with_budget(self._fetch_from_archive(
                     url, extraction_type, css_selector, offset, max_chars,
                 ), "archive.org lookup", "archive.org")
                 if _is_over_budget(archive_result):
-                    return archive_result
-                if archive_result is not None:
+                    result = _archive_ran_out(result, archive_result)
+                elif archive_result is not None:
                     archive_result.duration_ms = (now() - start_time) * 1000
                     return await self._finalize_result(archive_result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
+            # 「站点可能挂了」那句由 quality 换成同一句本地诊断（一个作者），这里
+            # 不再按类别覆盖一次。
             return await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
 
         # Tier 1: HTTP (always try first — it's fast)
@@ -6571,6 +6696,17 @@ class MasterFetchServer:
             (result.status < 400 and _is_js_shell(result))
             or result.status in (403, 429, 503)
         ) and not _never_escalate(result, url)
+        if should_escalate and result.status == 0 and self._target_is_private(url):
+            # 预检没定论（防火墙先应答、或 DNS 之外才见分晓）时，HTTP 档对私网端口
+            # 的失败照样是"空正文 + status<400"的壳形状，于是起浏览器 —— 拨的是同
+            # 一个死端口（实测 30011ms 满预算）。一个没收到任何 HTTP 应答的回环目标,
+            # 渲染不会让它应答；强制档对此早已有 `_private_health_probe` 同一条判断。
+            should_escalate = False
+            result.escalation_path = "http(private_target_no_answer)"
+            note = ("the HTTP tier got no answer from this private target and the "
+                    "browser tier was skipped - it dials the same port. Is the local "
+                    "service running, and on this port?")
+            result.error = f"{result.error}; {note}" if result.error else note
         if not should_escalate:
             # Archive.org fallback for hard-blocks: the page is gone or legally
             # removed, but the Wayback Machine may have a snapshot. The tuple is
@@ -6582,8 +6718,9 @@ class MasterFetchServer:
                     url, extraction_type, css_selector, offset, max_chars,
                 ), "archive.org lookup", "archive.org")
                 if _is_over_budget(archive_result):
-                    return archive_result
-                if archive_result is not None:
+                    # The HTTP tier's answer stands; the snapshot lookup is ours.
+                    result = _archive_ran_out(result, archive_result)
+                elif archive_result is not None:
                     archive_result.duration_ms = (now() - start_time) * 1000
                     return await self._finalize_result(archive_result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
             result.duration_ms = elapsed
@@ -6631,6 +6768,14 @@ class MasterFetchServer:
         # socket; skip the browser").
         _http_verdict = (f"status {result.status}"
                          + (f": {result.error[:140]}" if result.error else ""))
+        # The status the ORIGIN actually answered. `result` is about to be
+        # replaced by the browser tier's own result, and a browser that cannot
+        # render a non-200 answers with status 0 - so reading `result.status`
+        # after the escalation reports the RENDER, not the site. Measured on
+        # httpbin /status/503: the receipt went out as "unknown (HTTP status 0)"
+        # plus "No HTTP response was received at all", about a response that had
+        # arrived carrying 503 in its status line.
+        http_answered = result.status
         # What is actually left, not `timeout - elapsed` floored at 5s: the floor
         # let the browser tier start a fresh 5s+ launch after the budget was
         # already spent, which is how a call turned into a client-side -32001.
@@ -6722,11 +6867,20 @@ class MasterFetchServer:
         # All tiers failed
         errors.append(f"Stealthy failed (status {result.status})"
                       + (f": {result.error[:140]}" if result.error else ""))
-        # Classify the failure for agent-actionable tips
+        # Classify the failure for agent-actionable tips. The status that gets
+        # reported and classified is the one ANY tier was answered with: a browser
+        # render of a 503 reads as status 0, and 0 is the number that drives both
+        # the tips branch and the "did the site reply" claim below. Preferring the
+        # origin's answer keeps a replied-from site from being described as silent.
+        answered = http_answered or result.status
         from dhole_mcp.errors import classify_network_error
         raw_error = result.error or " ".join(errors)
         category, _ = classify_network_error(raw_error)
-        tips = _all_tiers_failed_tips(category, result.status)
+        if answered >= 400:
+            # The origin replied with an error status, so this is not a
+            # reachability mystery: name the status, not "unknown".
+            category = f"http_{answered}"
+        tips = _all_tiers_failed_tips(category, answered)
         # The recovery tips belong in `error` ("Error + recovery hints"), not in
         # `content`: a caller that reads content[0] as the page body would take
         # this block for the article. Same contract as every other failure path.
@@ -6735,10 +6889,13 @@ class MasterFetchServer:
         result.retry_count = 2
         result.duration_ms = elapsed
         result.error = (
-            f"all_tiers_failed: {category} (HTTP status {result.status})\n"
+            f"all_tiers_failed: {category} (HTTP status {answered})\n"
             f"Attempted: HTTP -> Stealthy\nFailures: {'; '.join(errors)}\n"
             f"{tips}"
         )
+        # The caller's branching key is the status the site answered, not the
+        # browser's render code - a 503 stays a retryable server error here.
+        result.status = answered
 
         # Archive.org fallback: when the live site is unreachable, try the
         # Internet Archive's closest snapshot. Fires on hard-blocks, network
@@ -6748,8 +6905,8 @@ class MasterFetchServer:
                 url, extraction_type, css_selector, offset, max_chars,
             ), "archive.org lookup", "archive.org")
             if _is_over_budget(archive_result):
-                return archive_result
-            if archive_result is not None:
+                result = _archive_ran_out(result, archive_result)
+            elif archive_result is not None:
                 archive_result.duration_ms = (now() - start_time) * 1000
                 return await self._finalize_result(archive_result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
 
@@ -7331,7 +7488,7 @@ class MasterFetchServer:
         """
         import os as _os
         from pathlib import Path
-        from dhole_mcp.parse import parse_file_detailed
+        from dhole_mcp.parse import parse_file_cached
 
         t0 = now()
         target, candidates = _resolve_local_path(file_path, cwd)
@@ -7370,7 +7527,7 @@ class MasterFetchServer:
             ))
 
         content, error, extras = await asyncio_to_thread(
-            parse_file_detailed, target, encoding or "",
+            parse_file_cached, target, encoding or "",
             pages=pages, password=password,
         )
         # A damaged decode is a failure to report, not content to hand over
@@ -7509,6 +7666,10 @@ class MasterFetchServer:
                 # "nothing published" from "our parser drifted", and only the
                 # document's own markers can. Absent for any feed with items.
                 "note": r.note,
+                # 失败的行也要有结构化判据（feed 曾是唯一没有它的一条通道）。值不在这里
+                # 算：`FeedResult` 自己由 `error` 填（model_validator），这一格只做投影 ——
+                # 手写字段名与模型字段的一致性由 test_audit_fixes 那条锁钉着。
+                "diagnosis": r.diagnosis,
                 "items": [i.model_dump() for i in r.items],
             }
             for r in results
@@ -7936,6 +8097,13 @@ class MasterFetchServer:
         truncated_pages = truncated_chars = truncated_time = False
         idx = 0  # index into `remaining`
         while idx < len(remaining):
+            # 与 web_crawl 同一形状：批边界报一次，等待的一方看得见"在走"。
+            # `total` 用 max_pages 而不是 len(remaining)：前者是这次调用被允诺的上限，
+            # 后者会让一份续传计划的进度看起来比第一趟短。
+            await report_progress(float(len(rows)), total=float(max_pages),
+                                  message=f"reading a stored plan: {len(rows)} of up to "
+                                          f"{max_pages} pages done, "
+                                          f"{len(remaining) - idx} left to read")
             if len(rows) >= max_pages:
                 truncated_pages = True
                 break
@@ -8094,7 +8262,7 @@ class MasterFetchServer:
             # （回执 / snapshot 先数 / submit 先问 / 验证码三次就转交）是原样搬过来的
             # —— 搬工具不许搬走规矩。
             "name": "web_act",
-            "description": "Act on one page - click / fill / press / scroll / wait / snapshot / submit - then read back what it became. Reading it without touching it is web_read.\n- The chain runs in order on the stealthy browser and never from cache; every action leaves a receipt in metadata.actions, and a failed one says what sat at that selector.\n- No selector? {\"snapshot\": true} first: elements come back numbered, later actions address them by index, and expect:'name' verifies the visible name so a stale index fails instead of clicking the wrong thing.\n- submit PAUSES without confirm=true (nothing is filled or sent): describe exactly what would go, and on the user's yes re-run the same chain. Captchas get at most 3 read-and-retry rounds, then hand off; the walls-and-2FA list lives in sys_guide(topic='behavior').\n- Credentials are never an argument: cred_defaults stores them, session_id names the cookie jar, cdp_url attaches the user's own Chrome.\n- VISUAL ASSIST: {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} crops one element of the SAME page instance and returns it inline - the way to read a CAPTCHA you are about to type. The dict form's options: sys_guide(topic='behavior').\nAction-key shapes, index addressing and the lazy-feed discipline: sys_guide(topic='behavior', section='Page interaction').",
+            "description": "Act on one page - click / fill / press / scroll / wait / snapshot / submit - then read back what it became. Reading it without touching it is web_read.\n- The chain runs in order on the stealthy browser and never from cache; every action leaves a receipt in metadata.actions, and a failed one says what sat at that selector.\n- No selector? {\"snapshot\": true} first: elements come back numbered, later actions address them by index, and expect:'name' verifies the visible name so a stale index fails instead of clicking the wrong thing.\n- submit PAUSES without confirm=true (only that step; earlier actions in the chain have run): describe exactly what would go, and on the user's yes re-run the same chain. Captchas get at most 3 read-and-retry rounds, then hand off; the walls-and-2FA list lives in sys_guide(topic='behavior').\n- Credentials never go in an argument: cred_defaults stores them.\n- VISUAL ASSIST: {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} crops one element of the SAME page instance and returns it inline - the way to read a CAPTCHA you are about to type. The dict form's options: sys_guide(topic='behavior').\nAction-key shapes, index addressing and the lazy-feed discipline: sys_guide(topic='behavior', section='Page interaction').",
             "inputSchema": {
                 "type": "object", "required": ["url", "actions"],
                 "properties": {

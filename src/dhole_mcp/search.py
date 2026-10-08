@@ -820,6 +820,25 @@ def _rerank_absent_reason() -> str:
             "the model is installed and cached.")
 
 
+def _similarity_missed_note(ran: str, derived_query: str, why: str) -> str:
+    """What ranked the rows when the (source page, candidate) scoring did not run.
+
+    find_similar 的承诺就是"和这一页像"，而承载它的是 `rerank_mode` 这个字段。排
+    序换了来源、字段仍写 find_similar，调用方读到的就是"按页面相似排过"——而它拿到
+    的其实是标题词面的相关度。所以这里两半都要说：相似度这一步为什么没跑，以及这次
+    的顺序和分数实际出自哪里。
+    """
+    if ran == "neural":
+        basis = ("the cross-encoder ranked each row against the words taken from "
+                 f"that page ({derived_query[:60]!r}) - topical match, not page "
+                 "similarity")
+    else:
+        basis = ("no model scored anything: the rows are in cross-engine consensus "
+                 "+ engine-position order, and relevance_score restates that order")
+    return (f"find_similar's page-similarity scoring did NOT run - {basis}. "
+            f"Reason: {why.rstrip('.')}.")
+
+
 def _rank(query: str, ranked: list[RawResult], mode: str, min_relevance: float = 0.0,
           min_raw_relevance: float = 0.0, stats: dict | None = None):
     """Apply neural rerank (the ONLY reranker; BM25 was removed as redundant -
@@ -1587,15 +1606,21 @@ async def web_search(
                 ranked_list = [r for r, _ in pairs]
                 scores = [s for _, s in pairs]
                 rerank_used = "find_similar"
-            except Exception:
-                ranked_list, scores, _, _ = _rank(derived_query, ranked, "auto")
-                rerank_used = "find_similar"
+            except Exception as e:
+                # 真实复现（2026-10-08，强制 rer.score 抛错打 https://clig.dev/）：
+                # 这一条路原先把 `_rank` 报回的 mode 丢掉、硬写 "find_similar"，
+                # 于是 `rerank_mode`、`summary` 的 "rerank=find_similar" 与整份
+                # fetch_hint 一起声称"按那页的相似度排过"，而实际的分数来自对派生
+                # 查询词（那页的标题）的神经相关度 —— 词面/主题重合，不是页面相似。
+                # 调用方只读结构化字段时看不出这一层，D-19 说的就是它。
+                ranked_list, scores, rerank_used, _ = _rank(derived_query, ranked, "auto")
+                rerank_note = _similarity_missed_note(rerank_used, derived_query,
+                                                      f"the scoring raised {type(e).__name__}")
         else:
-            ranked_list, scores, _, _ = _rank(derived_query, ranked, "auto")
-            rerank_used = "find_similar"
+            ranked_list, scores, rerank_used, _ = _rank(derived_query, ranked, "auto")
             if ranked and get_reranker() is None:
-                rerank_note = ("find_similar used consensus + position order (neural unavailable). " +
-                               _rerank_absent_reason())
+                rerank_note = _similarity_missed_note(rerank_used, derived_query,
+                                                      _rerank_absent_reason())
         total_families, _contrib, _basis = _family_universe(engines, reports)
         ranked_list, scores = _apply_quality_boost(ranked_list, scores, query)
         ranked_list, scores = ranked_list[:max_results], scores[:max_results]

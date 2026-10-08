@@ -97,6 +97,8 @@ _WIRE_OMIT: dict = {
     "FeedResult": frozenset({
         "source_title", "error", "discovered_from", "since",
         "note",
+        # 与 ResponseModel.diagnosis 同一约定：一次干净成功不付诊断的钱（None=缺席）。
+        "diagnosis",
     }),
     "FeedItem": frozenset({"title", "published", "summary", "summary_truncated",
                            "untrusted_content"}),

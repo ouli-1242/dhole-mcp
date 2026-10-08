@@ -90,6 +90,14 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
 
 # ─── Actionable hints per category ───────────────────────────────────────────
 
+#: 回环 / 私网目标一次 HTTP 应答都没拿到时的那句出路。通用那几句（"站点可能挂了、
+#: 换个源"）对调用者自己机器上的一个端口不是答案 —— 换源换不掉一个没起的服务。
+#: 三个读者共用它：TCP 预检定论的两条支路（server），以及 HTTP 档自己拨了却被拒/
+#: 没答的那一条（quality —— 实测同一件事在两处回执里有两种说法，D-08b）。
+PRIVATE_TARGET_NO_ANSWER = (
+    "this private target answered nothing - no HTTP response came back from it. "
+    "Is the local service actually running, and on this port?")
+
 _HINTS: dict[str, str] = {
     "connection_refused": (
         "Target refused the connection. The site may be down, or your network "
@@ -131,6 +139,30 @@ _HINTS: dict[str, str] = {
         "source or retry with different parameters."
     ),
 }
+
+# 「重发这一条一模一样的调用能否改变答案」——`diagnosis.retryable` 的取值，
+# 按网络类别给。它必须和上面那段人话同处一地：两边分家时漂走过两次，实测
+# （2026-10-08）dns_failure 的 hint 写着 "do NOT retry" 而枚举那侧给 True，5xx
+# 的 next_action 写着 "Retry once after a pause" 而枚举那侧给 False —— 同一个
+# 响应里两只手互相否决，人读着困惑，脚本按其中一个字段分支就按另一个字段做错事。
+# 值按各类别的物理成因定：名字不存在、对端明确拒绝、TLS 证书被拒、代理没起来、
+# 浏览器进程起不来——重发同一字节都不改变结果；重置与超时可能是瞬变的。
+_RETRYABLE_BY_CATEGORY: dict[str, bool] = {
+    "connection_refused": False,
+    "connection_reset": True,
+    "dns_failure": False,
+    "timeout": True,
+    "browser_launch": False,
+    "tls_error": False,
+    "proxy_error": False,
+    # 分类不出来时也不许许诺"重试会变"：那句话的唯一依据是类别本身。
+    "unknown": False,
+}
+
+
+def is_retryable(category: str) -> bool:
+    """retryable for a network category, from the same table that writes its prose."""
+    return _RETRYABLE_BY_CATEGORY.get(category, False)
 
 
 def classify_network_error(error_str: str) -> Tuple[str, str]:

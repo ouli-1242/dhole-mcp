@@ -33,9 +33,11 @@ feed（FeedItem）三个正文落点调用，不反向依赖任何 dhole 模块�
 
 from __future__ import annotations
 
+import hashlib
 import re
 import unicodedata
-from typing import Any, Dict, List, Optional
+from collections import OrderedDict
+from typing import Any, Dict, List, Optional, Tuple
 
 # 信封上最多点名的形状类数；total 永远是全部命中次数（两类以上没列全时，
 # total 会大于 hits 里 count 之和——那是"还有没点名的形状"的信号）。
@@ -188,9 +190,59 @@ def scan(text: str) -> Optional[Dict[str, Any]]:
 
     每一类在归一后的各视角上都试一遍，取命中更多的那个视角（同数取"整字去除"）：
     一份文本里两种插入都可能出现，取并集会把同一处数两遍，取更多的那份是保守的。
+
+    按内容记账复用（见 :data:`_SCAN_MEMO`）：扫描代价随正文长度线性走，而一次
+    抓取的分页续读会把**同一份整篇文本**反复交进来。
     """
     if not text:
         return None
+    key = _scan_key(text)
+    if key is None:
+        return _scan_text(text)
+    if key in _SCAN_MEMO:
+        _SCAN_MEMO.move_to_end(key)
+        return _copy_finding(_SCAN_MEMO[key])
+    finding = _scan_text(text)
+    _SCAN_MEMO[key] = finding
+    if len(_SCAN_MEMO) > _SCAN_MEMO_MAX:
+        _SCAN_MEMO.popitem(last=False)
+    return _copy_finding(finding)
+
+
+def _copy_finding(finding: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """交回一份新写的结果，而不是记忆里那个对象。
+
+    结果会被塞进 ResponseModel 的 `untrusted_content`；调用方（或 pydantic 在某
+    个配置下）动过它一次，同一份正文的每一次后续扫描就都跟着变了。
+    """
+    if not finding:
+        return None
+    return {"hits": [dict(h) for h in finding.get("hits", [])],
+            "total": finding.get("total", 0)}
+
+
+# 同一份整篇文本会被反复交进来扫：`offset=` 续读是一条响应自己 next_action 推荐的
+# 动作（实测 2.4M 字符的一篇文档，每一次翻页都重付 0.72s 的全文扫描），crawl 的每页、
+# 缓存命中重放也是同一形状。而 scan 是纯函数 —— 模块 docstring 第③条就写着"结果只
+# 依赖文本本身"，所以按内容记一次是它与生俱来的性质，不需要失效策略。
+#
+# 键是 (字符数, blake2b 摘要)：拿字符串本身当键会把一份早该回收的 2.4M 字符正文一直
+# 吊在内存里，而摘要碰撞的代价（一次漏标）由长度一起压到可忽略。编码失败（落单代理位
+# 之类）时宁可不记，也不能让一份文本被误当成另一份。
+_SCAN_MEMO_MAX = 64
+_SCAN_MEMO: "OrderedDict[Tuple[int, bytes], Optional[Dict[str, Any]]]" = OrderedDict()
+
+
+def _scan_key(text: str) -> Optional[Tuple[int, bytes]]:
+    try:
+        digest = hashlib.blake2b(
+            text.encode("utf-8", "surrogatepass"), digest_size=16).digest()
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return None
+    return (len(text), digest)
+
+
+def _scan_text(text: str) -> Optional[Dict[str, Any]]:
     variants = tuple(_mask_code(v) for v in _scan_variants(text))
     hits: List[Dict[str, Any]] = []
     total = 0

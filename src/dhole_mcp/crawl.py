@@ -68,7 +68,7 @@ from dhole_mcp import injection
 # 钳制文案的唯一作者。crawl 的 summary 不经过 _with_agent_hints（它是
 # CrawlResponseModel，不是 ResponseModel），所以这里读的是那颗纯函数而不是
 # ContextVar —— 同一句话，两个通道。
-from dhole_mcp.context import _clamp_note
+from dhole_mcp.context import _clamp_note, report_progress
 # robots.txt compliance (v16.0). robots.py imports nothing from dhole at module
 # level, so this is cycle-free; the seed check + the discovered-URL peek both
 # need it, and keeping one import point is what makes the cache the shared one.
@@ -1161,6 +1161,13 @@ async def web_crawl(
         if time() > deadline_t:
             truncated_time = True
             break
+        # 一句话说清"这一轮在等什么"：一次 crawl 是几十秒到几分钟，客户端在响应
+        # 回来之前除了转圈什么也看不见，超时/取消策略只能瞎猜。批次边界是这里的
+        # 自然格点（一页一发没有意义，一批就是 concurrency 页）。
+        await report_progress(float(len(pages)), total=float(max_pages),
+                              message=(f"crawling {urlparse(url).netloc}: "
+                                       f"{len(pages)} of up to {max_pages} pages done, "
+                                       f"{len(heap)} queued"))
         remaining = max_pages - len(pages)
         batch: list[tuple[float, int, int, str, str]] = []
         while heap and len(batch) < min(concurrency, remaining):
@@ -1287,6 +1294,11 @@ async def web_crawl(
                         push(link_url, depth + 1, link_text)  # fetch original
 
     pages_crawled = len(pages)
+    # 收尾那一格要说**最终**数字：循环顶上那次报的是"最后一批开始前"的状态，
+    # 少报一批会让人以为任务停在半路。
+    await report_progress(float(pages_crawled), total=float(max_pages),
+                          message=f"crawl finished: {pages_crawled} pages fetched "
+                                  f"on {urlparse(url).netloc}")
     # Count any URLs still in the heap as discovered (they were found but not crawled).
     for _neg, _d, _s, hu, _t in heap:
         discovered.add(normalize_url(hu))
@@ -1353,14 +1365,25 @@ async def web_crawl(
             bits_now.append(f"{robots_skipped} URL(s) skipped by robots.txt")
         # 四颗钳制一起报（哪一颗没动就不出现），措辞与 web_read 的 summary 同一句。
         bits_now.extend(_clamp_notes)
-        if (path_include or path_exclude) and len(pages_now) <= 1:
-            # The filters are applied while links are discovered, so a pattern that
-            # matches nothing produces a crawl of exactly one page (the start URL is
-            # never filtered) and no count anywhere says a filter ran. Measured: a
+        if ((path_include or path_exclude) and len(pages_now) <= 1
+                and not truncated_total_chars and not heap):
+            # The filters run while links are discovered, so a pattern that matches
+            # nothing produces a crawl of exactly one page (the start URL is never
+            # filtered) and no count anywhere says a filter ran. Measured: a
             # path_include the site did not use returned the start page alone,
             # pages_discovered=1, empty next_action - it read as a successful crawl.
-            bits_now.append("only the start page was kept - path_include/path_exclude "
-                            "may have scoped out every discovered link")
+            #
+            # But the claim is only true when the queue is EMPTY. Measured the other
+            # way on 2026-10-08: `max_total_chars=1500` against a site whose pages
+            # run 4,346 chars each stopped after page one with 83 URLs still queued,
+            # and this note went out blaming path_include - about a pattern the run
+            # itself then proved right (the same scope admitted links on a second
+            # call). A character budget and a scope filter cannot both be the reason
+            # for one stop, so the budget's own bit above is what stands here.
+            bits_now.append("only the start page was kept - "
+                            f"path_include={list(path_include or [])} / "
+                            f"path_exclude={list(path_exclude or [])} scoped out every "
+                            "discovered link (nothing was left queued)")
         if interval_used > 0:
             # Saying the interval exists is the point: a crawl that took 40
             # seconds for 10 pages looks like a hang unless the stats line says

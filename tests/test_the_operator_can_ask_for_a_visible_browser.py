@@ -267,6 +267,48 @@ def test_headless_behaviour_is_unchanged(monkeypatch):
     assert asyncio.run(srv._ensure_auto_session(headless=True)) == "warm"
 
 
+# ─── 4b · 同一条规则也要管具名会话（2026-10-08 验收 D-22）───────────────────
+
+def _warm_named(monkeypatch, *, headless, sid="qa"):
+    """一台已经活着的**具名**会话浏览器。
+
+    具名会话走 `_ensure_session_browser`，不是 `_ensure_auto_session`：那里管的是共享的
+    auto 池，而具名会话的浏览器就是那个会话的意义本身（登录态在里面）。批次 11 把可见性
+    规则只写进了前者，于是实连测到：隐藏浏览器在场的同一个 session_id 上
+    `web_act(headed=true)` 回 200、`metadata.browser` 为空 —— 用户等的那个窗口从来没出现，
+    而回执一句话都没说。
+    """
+    srv = MasterFetchServer()
+    session = SimpleNamespace(_is_alive=True, _headless=headless)
+    srv._sessions = {sid: SimpleNamespace(session=session, session_type="stealthy",
+                                          _alive=True)}
+    monkeypatch.setattr("dhole_mcp.server._browser_deps_available", lambda: True)
+    return srv, sid
+
+
+def test_a_named_session_with_a_hidden_browser_refuses_a_visible_call(monkeypatch):
+    srv, sid = _warm_named(monkeypatch, headless=True)
+    closed = []
+    monkeypatch.setattr(MasterFetchServer, "_close_one_session",
+                        lambda self, s: closed.append(s))
+    with pytest.raises(BrowserBusyError) as boom:
+        asyncio.run(srv._ensure_session_browser(sid, headless=False))
+    assert closed == [], "为了让这次可见就把会话浏览器关了 —— 里面可能是用户的登录态"
+    assert sid in str(boom.value), "拒绝必须点名是哪个会话，否则没人知道要交回哪一台"
+    assert "sys_state(clear=" in str(boom.value), "出路要写在同一句里"
+
+
+def test_a_named_session_with_a_visible_browser_serves_a_hidden_call(monkeypatch):
+    """不对称照旧：可见的那台乐意干后台的活。"""
+    srv, sid = _warm_named(monkeypatch, headless=False)
+    assert asyncio.run(srv._ensure_session_browser(sid, headless=True)) == sid
+
+
+def test_a_named_visible_session_is_reused_by_a_visible_call(monkeypatch):
+    srv, sid = _warm_named(monkeypatch, headless=False)
+    assert asyncio.run(srv._ensure_session_browser(sid, headless=False)) == sid
+
+
 # ─── 5 · 那句话问实例，不问旋钮 ─────────────────────────────────────────────
 
 def test_a_headless_session_says_nothing():

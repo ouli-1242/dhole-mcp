@@ -166,3 +166,15 @@ def _is_xml_content_type(content_type: str) -> bool:
     return ct.endswith("+xml") or ct.startswith(
         ("application/xml", "text/xml", "application/rss", "application/atom",
          "application/rdf"))
+
+
+def _is_data_document_content_type(content_type: str) -> bool:
+    """JSON or XML —— "这一份是数据文档，不是一个要渲染的页面"的那一张判据表。
+
+    两个读者共用它，因为它们是同一个事实的两面：`quality._never_escalate` 用它拒绝
+    为一次浏览器渲染花钱（浏览器不渲染数据文档，它给数据文档套壳），而
+    `fetcher.response_from_browser_page` 在调用方点名要走浏览器档时用它取回网络上的
+    原始字节 —— 相框不该被当成正文交出去。
+    """
+    ct = (content_type or "").split(";")[0].strip().lower()
+    return _is_xml_content_type(ct) or ct.startswith(("application/json", "text/json"))

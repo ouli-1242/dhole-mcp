@@ -264,7 +264,14 @@ def test_connect_stays_inside_the_packed_budget():
 #: 30,750**（mode 那句『'find_similar' needs url=』必须留着 ——
 #: test_the_enum_values_are_still_stated_where_a_reader_looks 要求一颗参数的描述自己
 #: 点得出全部合法值，摘掉它是一次能力失传，不是瘦身）。棘轮随实测回落。
-CONNECT_CEILING = 30_750
+#: 2026-10-08 验收修复刀（D-07 + D-01，同一句账单）：棘轮**再往下**。
+#: web_act 的 submit 那句写的是 `(nothing is filled or sent)`，实测同一条链里 submit
+#: 之前的 `fill` **已经落在页面上** —— 这不是措辞问题而是常驻层里一句假话：调用方照它
+#: 决定要不要整条链重跑一次。改成的那句多 12 字。抵项来自同一颗工具的凭据句：
+#: `session_id` 与 `cdp_url` 各自的参数描述早就写着 jar 的名字 / 挂上用户自己的
+#: Chrome，DHOLE_INSTRUCTIONS 也写着凭据进 cred_defaults —— 同一件事第三次说，摘掉。
+#: **净 -43 → 30,707**。回落后的余量不许预支：上限仍钉在实测值 +0。
+CONNECT_CEILING = 30_707
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

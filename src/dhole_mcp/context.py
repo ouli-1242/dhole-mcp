@@ -128,6 +128,31 @@ async def out_of_band_confirm(message: str) -> Optional[bool]:
         return False
     return getattr(result, "action", None) == "accept"
 
+
+async def report_progress(progress: float, total: float | None = None,
+                          message: str | None = None) -> bool:
+    """把"这件事走到哪了"送给正在等的那位客户端（MCP notifications/progress）。
+
+    与 `out_of_band_confirm` 共用同一根管子：会话在 call_tool 入口存进
+    `_MCP_SESSION`，调用结束摘下。所以 CLI、直连 `_dispatch`、测试里都是 None ——
+    那时什么都发不出去，也**不该**发，返回值只是"这次送出去了没有"。
+
+    这颗不做能力判断：SDK 的 `ServerSession.report_progress` 自己就是"调用方没带
+    progressToken 时 no-op"（实测如此），照它再判一遍只会多一处会写错的地方。
+
+    任何发送失败都吞掉并返回 False。**一条进度通知不许弄坏正在跑的抓取** —— 这条
+    通道是给等待的人看的，不是任务的一部分；客户端不支持、连接半断、序列化出错，
+    后果都只能是"这一格没说出去"。取消（BaseException）照旧向上走，不在吞的范围内。
+    """
+    session = _MCP_SESSION.get()
+    if session is None:
+        return False
+    try:
+        await session.report_progress(progress, total=total, message=message)
+    except Exception:
+        return False
+    return True
+
 # A jar key is a plain word, nothing else (see _clean_session_id).
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 # Per-call HTTP method / request body (G8). Read where the request is actually

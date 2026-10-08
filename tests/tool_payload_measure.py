@@ -11,8 +11,8 @@ re-measured.
 Token counts are rendering-dependent, so the rendering is part of the number.
 Every table size below is **dated** — a number without a date reads as the
 present and rots silently (this header itself rotted once: it claimed
-"today's table is 19,141 chars" from a 13-tool era long past). On 2026-10-07:
-2,476 instructions + 28,274 compact tools/list = 30,750 connect. An unstated
+"today's table is 19,141 chars" from a 13-tool era long past). On 2026-10-08:
+2,476 instructions + 28,231 compact tools/list = 30,707 connect. An unstated
 rendering is not reproducible.
 There are two independent ways to get the real numbers:
 
