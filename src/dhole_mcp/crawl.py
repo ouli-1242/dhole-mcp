@@ -896,13 +896,18 @@ async def web_crawl(
         with allow_private_scope(_identity.get("allow_private")):
             url = validate_url(url)
     except SecurityError as e:
-        from dhole_mcp.security import (RESOLVER_GUARD_NEEDLE,
-                                        RESOLVER_GUARD_RECOVERY)
+        from dhole_mcp.security import (
+            PRIVATE_ADDRESS_REFUSAL_PREFIXES, PRIVATE_ADDRESS_RECOVERY,
+            RESOLVER_GUARD_NEEDLE, RESOLVER_GUARD_RECOVERY)
         msg = str(e)
         if RESOLVER_GUARD_NEEDLE in msg:
             # 探测过期（进程记着 public，TUN 后来上线）—— 说清出路是重启宿主，
             # 而不是让读者去改一颗没错的参数。
             return _err(msg, hint=RESOLVER_GUARD_RECOVERY, refusal=True)
+        if msg.startswith(PRIVATE_ADDRESS_REFUSAL_PREFIXES):
+            # 一个包都没发的地址拒绝，兜底那句 "Fetch failed ... retry with different
+            # parameters" 是条假出路：换参数不会让 127.0.0.1 变成公网。
+            return _err(msg, hint=PRIVATE_ADDRESS_RECOVERY, refusal=True)
         return _err(msg, refusal=True)
     except ValueError as e:
         return _err(str(e))

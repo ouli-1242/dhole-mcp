@@ -668,6 +668,28 @@ RESOLVER_GUARD_RECOVERY = (
     "host re-judges immediately (a verdict is otherwise kept for the life of the "
     "process), then confirm with `dhole --doctor`")
 
+# 内网地址被拒时的那句出路。写在守卫旁边、六颗工具共用一份（同一惯例）：从前它落进
+# `_invalid_request_result` 的**默认**模板 —— "web_read takes an absolute http(s) URL"，
+# 可这条 URL 本来就是绝对 http(s)，那句话把读者推去改一个本来就对的东西（正是
+# `_invalid_request_result` 自己 docstring 禁止的那类话）。web_crawl / web_discover
+# 退得更远："Fetch failed ... retry with different parameters" —— 一个包都没发。
+# 这一支与云元数据那一支不同，它**有**出口（allow_private），所以句子必须把门指出来。
+PRIVATE_ADDRESS_RECOVERY = (
+    "The URL is well-formed - what is refused is the address it points at, and "
+    "nothing was sent. If you meant a public site, this one names a private range: "
+    "search for the page instead. If this internal target is genuinely yours to "
+    "fetch, the door is cred_defaults(set={'allow_private': true}) for loopback or "
+    "{'allow_private': ['<host>']} to name one host - it never opens cloud metadata, "
+    "which stays refused whatever the spelling.")
+
+# 「这个地址是内网的」那两类拒绝的识别针。判据只有一份定义：web_read / web_request /
+# web_act / web_crawl / web_discover / feed_read 六条路都要说这句话，各自漂一份措辞，
+# 调用方就读不出"这是同一件事"（与 RESOLVER_GUARD_NEEDLE 同一惯例）。
+PRIVATE_ADDRESS_REFUSAL_PREFIXES = (
+    "URL targets internal/private IP",
+    "URL targets internal service:",
+)
+
 
 def validate_url(url: str, allow_internal: bool = False) -> str:
     """Validate and sanitize a URL. Returns the validated URL.
@@ -787,9 +809,15 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
             # 不设防，allowlist 分支只在地址命中私网段时才被问 —— 不在这里拒，
             # 点名放行也拦不住它。十进制/十六进制/短格式归一后是同一个地址，
             # 一样命中。
-            if str(addr) in _METADATA_HOSTS:
+            # IPv4-mapped IPv6 也算同一个地址：`::ffff:169.254.169.254` 与
+            # `0xA9FEA9FE` 是同一颗端点，只按字符串比就把"任何拼法都不放行"这件事
+            # 交给了写法。剥开映射再比一次，这条保证才是结构性的而不是巧合。
+            _mapped = (addr.ipv4_mapped
+                       if isinstance(addr, ipaddress.IPv6Address) else None)
+            if str(addr) in _METADATA_HOSTS or (
+                    _mapped is not None and str(_mapped) in _METADATA_HOSTS):
                 raise SecurityError(
-                    f"URL targets internal cloud metadata endpoint ({addr})"
+                    f"URL targets internal cloud metadata endpoint ({_mapped or addr})"
                 )
             # G9: an internal target the operator named in DHOLE_ALLOW_PRIVATE_HOSTS
             # or allow_private is fetched instead of refused. Cloud metadata

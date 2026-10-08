@@ -122,10 +122,23 @@ class TestTheTemplateNamesTheCaller:
 
     @pytest.mark.asyncio
     async def test_web_read_keeps_its_own_name(self):
+        """样板点名调用方这条锁的判据是**用默认模板的那类拒绝**。
+
+        2026-10-08 刀3 之后，内网地址那一类不再走默认模板（它有自己那句出路），所以
+        这颗改用一颗真的没写对的 URL 当载体 —— 契约不变：共享校验路不许把
+        web_request 的调用说成 web_read。
+        """
+        out = await MasterFetchServer().web_read(url="not-a-url-at-all")
+        assert "web_read takes an absolute http(s) URL" in (out.next_action or "")
+        assert "web_request takes" not in (out.next_action or "")
+
+    @pytest.mark.asyncio
+    async def test_a_private_address_no_longer_borrows_the_url_template(self):
+        """刀3 的另一半：地址被拒时，那句 URL 拼法教程本身就是错的话。"""
         out = await MasterFetchServer().web_read(url="http://10.0.0.5/")
         assert "internal/private IP" in (out.error or "")
-        # 可恢复类（点名 allowlist 就能进的内网目标）的样板照旧——本刀不动它。
-        assert "web_read takes an absolute http(s) URL" in (out.next_action or "")
+        assert "takes an absolute http(s) URL" not in (out.next_action or "")
+        assert "allow_private" in (out.next_action or ""), "这一类有出口，要指出来"
 
 
 class TestAPermanentBoundaryDoesNotOfferAnArgumentFix:

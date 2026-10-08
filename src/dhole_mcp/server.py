@@ -186,6 +186,8 @@ from dhole_mcp.security import (
     SecurityError,
     # 探测过期时那条拒绝的识别针与唯一出路（守卫侧定义，见 security 的这两枚常量）
     RESOLVER_GUARD_NEEDLE, RESOLVER_GUARD_RECOVERY,
+    # 「地址是内网的」那类拒绝：识别针与出路同样只在守卫侧定义一份，六颗工具共用
+    PRIVATE_ADDRESS_REFUSAL_PREFIXES, PRIVATE_ADDRESS_RECOVERY,
     # G9: the active private-host allowlist (see security.parse_allow_private).
     # 17.0 removed the per-call argument, so the only writers are the stored
     # cred_defaults value and the environment default.
@@ -2966,8 +2968,8 @@ def _resolver_guard_result(url: str, msg: str) -> ResponseModel:
     """
     result = _refusal_result(url, msg)
     result.next_action = (
-        "No argument on this call changes it - the resolver verdict was taken once, "
-        f"at this process's first hostname check. {RESOLVER_GUARD_RECOVERY}; "
+        "No argument on this call changes it - this process fetches on a resolver "
+        f"verdict it took earlier. {RESOLVER_GUARD_RECOVERY}; "
         "nothing was fetched.")
     result.summary = f"refused by the SSRF resolver guard · {_summary_label(msg)}"
     result.diagnosis = {"code": "resolver_guard", "retryable": False,
@@ -5182,6 +5184,15 @@ class MasterFetchServer:
             caller = ("web_act" if actions else
                       "web_request" if _clean_method(method) != "GET" else
                       "web_read")
+            if msg.startswith(PRIVATE_ADDRESS_REFUSAL_PREFIXES):
+                # 被拒的是**地址**，不是拼法。落到下面那行会取 `_invalid_request_result`
+                # 的默认模板 —— "web_read takes an absolute http(s) URL"，而这条 URL
+                # 本来就是绝对 http(s)：那句话把读者推去改一个本来就对的东西，正是这颗
+                # 函数自己的 docstring 立令禁止的那类话。它与上面那支也不同：这一支**有**
+                # 出口（allow_private），所以句子要把门指出来，而不是只说"没救"。
+                return _invalid_request_result(
+                    url or "", msg, next_action=PRIVATE_ADDRESS_RECOVERY,
+                    tool=caller)
             return _invalid_request_result(url or "", msg, tool=caller)
 
         # G25: credentials. Translated to headers ONCE, here, so both tiers send
@@ -8658,14 +8669,19 @@ class MasterFetchServer:
                 # is_error result whose payload was a bare {"error": ...}: a
                 # second error shape for callers to detect, with no next_action.
                 # Every other tool answers with an envelope, so this one does too.
+                _msg = str(e)
+                # 这颗 ValueError 有两种：URL 列表本身没写好（该教 `urls=` 的形状），
+                # 和 URL 形状没错、地址是内网的（那句在教一件本来就对的事）。后者与
+                # 其余五颗工具共用同一句出路 —— 校验失败那句把原话包在里面，所以按
+                # 包含判。
                 payload = {
                     "feeds": [],
-                    "error": str(e),
-                    "next_action": ("Pass urls=[...] with 1-50 absolute http(s) "
-                                    "RSS/Atom feed URLs. Internal addresses are "
-                                    "rejected until cred_defaults stores "
-                                    "allow_private (true = loopback, or a list "
-                                    "of hostnames)."),
+                    "error": _msg,
+                    "next_action": (
+                        PRIVATE_ADDRESS_RECOVERY
+                        if any(p in _msg for p in PRIVATE_ADDRESS_REFUSAL_PREFIXES)
+                        else "Pass urls=[...] with 1-50 absolute http(s) "
+                             "RSS/Atom feed URLs."),
                 }
                 text, compact = _wire_json(payload)
                 return [TextContent(type="text", text=text)], compact
