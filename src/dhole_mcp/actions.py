@@ -384,14 +384,21 @@ def _screenshot_shape_error(i: int) -> ValueError:
     花括号伪影也一并清掉：`{{...}}` 是字符串拼接漏进响应里的 Python 语法，不是
     调用方该读的 JSON 形状。
 
-    bare `{"screenshot": true}` 要不要实现成视口截图是待 operator 判决项；判决落地
-    之前它仍然是拒绝，而拒绝的这句话不许假装它有机会成功。
+    裸 `{"screenshot": true}` 的语义已有判决（2026-10-08，operator）：**维持拒绝**。
+    两条改判都量过 —— 当整页：实测 rfc9110 的整页捕获在内部 10s 上限里就超时失败，
+    短页能出图而那正被 `MAX_ACTION_SHOT_BYTES` 的注释称作弄错了；当视口：那是新能力，
+    要在描述里加字（连接面只降不升），还让"没有目标"有两种意思。
+    病根不在判决而在**相邻两扇门同一副语法**：`{"snapshot": true}` 收裸布尔。所以这句
+    话除了说"你写错了"，还要点名那扇隔壁的门（给一份可照抄的写法），并说一句为什么
+    这里收不下裸布尔 —— 拍照总得有"拍什么"。
     """
     return ValueError(
         f"action {i} 'screenshot' takes a CSS selector string, or an object with "
         'exactly one target: "selector" (CSS), "index" (from a snapshot), or '
         '"full_page": true (the whole page). Optional knobs: image_type, quality, '
-        'decode_qr, save_to.')
+        'decode_qr, save_to. A bare boolean is the shape of a different action: '
+        '{"snapshot": true} lists the page\'s interactive elements and needs no '
+        'target, while a capture always has to name something to look at.')
 
 
 def _act_target(i: int, key: str, val) -> dict:

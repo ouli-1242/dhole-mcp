@@ -12,8 +12,9 @@
 
 修法：一条规则一句报错 —— selector 串 / dict(selector) / dict(index) /
 dict(full_page=true) 四种形状合法；其余一律同一句话，句里列全四种，且不带花括号伪影。
-bare `true` 的语义（要不要实现成视口截图）是待 operator 判决项，这里不改它的判决，
-只让它的报错与事实一致。
+bare `true` 的语义（要不要实现成视口截图）曾是待 operator 判决项；2026-10-08 判决
+**维持拒绝**（两条改判路线的实测理由见 `TestTheRefusalNamesTheAdjacentDoor`）。这一刀
+不改那个判决，只让报错与事实一致，并在句尾点名那张长得一样的隔壁门。
 """
 
 import pytest
@@ -107,3 +108,60 @@ class TestTheBoundariesThatWereAlreadyRight:
         """click/fill 的「selector 或 index」那句不属于这颗刀，改动不许波及它们。"""
         with pytest.raises(ValueError, match="needs exactly one of"):
             _validate_actions([{"click": {}}])
+
+
+class TestTheRefusalNamesTheAdjacentDoor:
+    """2026-10-08 operator 判决：裸 `{"screenshot": true}` **维持拒绝**，报错要点名隔壁。
+
+    两条改判路线都先量过，都不干净：
+
+      * 改判成"整页"——实测 `rfc-editor.org/rfc/rfc9110.html` 的整页捕获在内部 10s
+        上限里就 `Page.screenshot: Timeout 10000ms exceeded`（长页直接失败）；短页能出图，
+        而 `MAX_ACTION_SHOT_BYTES` 自己的注释写着"这么大的一张就是弄错了 —— 它花的是
+        多模态客户端的上下文"。
+      * 改判成"视口"——那是一项**新能力**：要在描述里加字（连接面 30,750 只降不升，
+        眼下没有抵项），并且"没有目标"从此有两种意思。
+
+    病根不在判决，在**相邻的两扇门长得一模一样**：`{"screenshot": ...}` 与
+    `{"snapshot": true}` 同一副语法，后者收裸布尔（它不需要目标，列的就是整页的元素），
+    前者不收。于是这个错会反复出现。所以这一刀只动文本：那句话要说清裸 true 是从哪儿
+    学来的，并把两种"我其实想要的是这个"各写一遍给调用方照抄。
+    """
+
+    def test_the_refusal_names_the_sibling_that_takes_a_bare_true(self):
+        text = _err(True)
+        assert '"snapshot": true' in text, (
+            f"裸 true 是从 snapshot 学来的，那句话却不说隔壁长什么样: {text}")
+
+    def test_the_refusal_says_why_a_bare_boolean_cannot_work(self):
+        """不只列形状，还要说出**为什么**裸布尔在这一颗上做不到 —— 拍照得有个对象。"""
+        text = _err(True)
+        assert '"full_page": true' in text, text
+        assert "something to look at" in text, (
+            f"那句要点出这颗动作的规矩从哪来，不然读起来像任意的: {text}")
+
+    def test_the_targetless_dict_still_gets_the_very_same_sentence(self):
+        """R2刀3 的既有裁决不许分叉：裸 true 与无目标 dict 念同一句话。"""
+        assert _err(True) == _err({"decode_qr": True})
+
+    def test_the_knob_list_stays_where_the_manual_lock_reads_it(self):
+        """刀10 的锁从"Optional knobs:"这一段取名单：新句子往后加，这段不许动。"""
+        import re
+        text = _err(True)
+        found = re.search(r"Optional knobs: (.+?)\.", text)
+        assert found, text
+        assert found.group(1) == "image_type, quality, decode_qr, save_to", found.group(1)
+        assert text.index("Optional knobs") < text.index('"snapshot"'), (
+            "名单在前、隔壁在后 —— 打乱顺序会把上面那条锁读成别的东西")
+
+
+class TestTheManualSaysTheSameThing:
+    """同一句规矩在运行时报错与手册里必须是同一个说法 —— 报错是事后解释，手册是事前拦住。"""
+
+    def test_the_page_interaction_section_names_the_bare_boolean_rule(self):
+        from dhole_mcp import guide
+        body = guide.read("behavior", "Page interaction")[1]
+        assert "bare boolean" in body, (
+            "报错那半句刚立的规矩（只有 snapshot 收裸布尔）手册里没有，"
+            "下一次还是照样写错，只是换个地方学到")
+        assert '{"screenshot": true}' in body, body[:400]
