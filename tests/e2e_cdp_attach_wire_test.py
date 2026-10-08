@@ -11,7 +11,11 @@ validates exactly what an agent client sees:
 2. ask-then-remember: the same call with ``confirm: true`` attaches, rides the
    logged-in Chrome's cookie (``cdp_attached: true``, ``login_check.logged_in:
    true``), and writes the host into ``<DHOLE_HOME>/cdp_hosts.json``;
-3. host scope: a URL outside the authorized hosts is refused on the wire;
+3. host scope: a SECOND host asked about on the wire is refused until it is
+   approved for itself (per-host ask, and a refusal never writes the roster),
+   and a navigation that leaves the authorized hostname inside an attached
+   session never reaches the other origin (the local site keeps a per-Host
+   ledger, so "it did not arrive" is proved by the side it was aimed at);
 4. bulk: ``urls=`` + ``cdp_url=`` is refused (the attach is per call, so a batch
    would otherwise authorize a host and then fetch every page un-attached);
 5. audit: the refusal and the authorization both land in the ``DHOLE_USAGE_LOG``
@@ -227,17 +231,73 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
             assert "cdp_authorize" in audit, "authorization missing from the audit log"
             assert "cdp_attach" in audit, "attach attempt missing from the audit log"
 
-            # ── 3. host scope: 围栏外的导航在 route 层被拒 ──
+            # ── 3. host scope: 会话内部跳到白名单外的**另一个主机名** ──
+            # 顶层一个没授权过的主机走的是"先问一次"那一层（§1 钉的就是它），围栏层
+            # 管的是 attach 会话里被重定向走的那一跳 —— 两个形状不同。这一段从前把
+            # 前者当成后者，于是断言了一个这条路径永远走不到的错误码（D-30）。
             client = _WireClient(attach_home, {})   # 复用已授权过 127.0.0.1 的家
             try:
+                # 存下来的身份默认**按进程**活（`DHOLE_PERSIST_CREDENTIALS=1` 才落盘），
+                # 所以这个新进程要自己敲一次 127.0.0.1 的门 —— 上一段那次存储不属于
+                # 这里（实测：不存就直接吃 `invalid_request: URL targets internal/private IP`）。
+                _payload(client.call_tool("cred_defaults",
+                                          {"set": {"allow_private": True}}))
                 payload = _payload(client.call_tool("web_read", {
                     "url": "https://example.com/",
                     "cdp_url": endpoint,
                 }))
+                n0 = len(site._server.hits)
+                fence = _payload(client.call_tool("web_read", {
+                    "url": f"{site.base_url}/fence",
+                    "cdp_url": endpoint,
+                }))
+                n1 = len(site._server.hits)
+                fence_img = _payload(client.call_tool("web_read", {
+                    "url": f"{site.base_url}/fence-img",
+                    "cdp_url": endpoint,
+                }))
+                n2 = len(site._server.hits)
+                img_self = _payload(client.call_tool("web_read", {
+                    "url": f"{site.base_url}/img-self",
+                    "cdp_url": endpoint,
+                }))
+                n3 = len(site._server.hits)
             finally:
                 client.close()
-            assert "cdp_host_not_allowed" in payload.get("error", ""), \
-                f"expected host scope to refuse example.com: {payload}"
+            hits = site._server.hits
+            nav_out = [h for (_p, h) in hits[n0:n1] if "localhost" in h]
+            sub_out = [h for (_p, h) in hits[n1:n2] if "localhost" in h]
+            self_paths = [p for (p, _h) in hits[n2:n3]]
+            print("\nNAV window:", json.dumps(hits[n0:n1]))
+            print("SUB window:", json.dumps(hits[n1:n2]))
+            print("SELF window (同主机图片对照):", json.dumps(hits[n2:n3]))
+
+            # 三件事，只有第一件今天成立：
+            # 1) 同主机的图片一笔没到 —— route handler **装了也在跑**（`disable_resources`
+            #    那一支先把它掐了），所以围栏没生效不是"没装"，是它管不到主文档导航。
+            assert "/pixel.png" not in self_paths, (
+                f"同主机的图片本该被 disable_resources 掐掉: {self_paths}")
+            # 2) 子资源形状：那张 localhost 的图也没到（这一条不能算围栏的功 —— 它同样
+            #    会被上面那一支先掐掉，所以只作记录）。
+            # 3) 结果边界（今天成立）：落在授权名册外的那一页，不许当成"你点名的那一页"
+            #    交回去 —— 那是 attach 最容易被读错的一种答案。
+            assert "cdp_host_not_allowed" in (fence.get("error") or ""), (
+                f"围栏外的正文被当成结果交回来了: {fence}")
+            assert not (fence.get("content") or []), (
+                f"拒绝不许带正文: {fence}")
+            # 4) 请求边界（D-31，今天还不成立）：那一跳本来不该出得了浏览器。
+            assert not nav_out, (
+                f"主机围栏没拦住主文档重定向：靶站收到 {len(nav_out)} 笔 "
+                f"Host: localhost 的请求（正文那一半已被结果边界拦下，请求那一半还在"
+                f" D-31 上）")
+
+            assert "cdp_authorization_required" in payload.get("error", ""), (
+                "第二个主机也要各问一次，不能被第一个主机的批准顺带放行: "
+                f"{payload}")
+            authorized = json.loads(
+                (attach_home / "cdp_hosts.json").read_text(encoding="utf-8"))["hosts"]
+            assert "example.com" not in authorized, (
+                f"一次被拒的顶层请求不该把主机记进名册: {authorized}")
 
             # ── 4. bulk: urls= 与 cdp_url= 不兼容，必须在闸口之前拒绝 ──
             bulk_home = tmp_path / "home-bulk"

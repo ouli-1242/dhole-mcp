@@ -162,6 +162,22 @@ def _is_domain_blocked(hostname: str, blocked_domains: frozenset) -> bool:
     return False
 
 
+def _landed_host_outside_fence(landed: str,
+                               allowed: Optional[frozenset]) -> str:
+    """attach 会话落在白名单外时交出那个主机名，否则交回 ""。
+
+    这是围栏的**结果边界**：route handler 那一层本该在请求出去之前就 abort（D-31 记着
+    它对主文档重定向没生效），而"把另一个站点的正文当成你点名的那一页交回来"这一步
+    无论如何不该发生 —— 你带着已认证的 profile 读到的却是别的站的答案。
+    """
+    if allowed is None:
+        return ""
+    if not (landed or "").lower().startswith(("http://", "https://")):
+        return ""
+    host = (urlparse(landed).hostname or "").lower()
+    return "" if (not host or host in allowed) else host
+
+
 def _landed_url_refused(landed: str, entry_url: str) -> bool:
     """落地 URL 本身指向内网、且不是入口站点 → 这一页的正文不能交出去。"""
     if not (landed or "").lower().startswith(("http://", "https://")):
@@ -1844,6 +1860,19 @@ class BrowserSession:
                         "refused to load it. The entry URL was validated, but a redirect or a "
                         "page-script request pointed inside - nothing was fetched from it."
                     )
+
+                # 围栏终检（G33 host scope 的结果边界）：attach 会话落在授权名册外的
+                # 主机上，那一页的正文不能当成你点名的那一页交回去。
+                _fence_out = _landed_host_outside_fence(landed, self._allowed_hosts)
+                if _fence_out:
+                    raise CDPHostNotAllowedError(
+                        f"cdp_host_not_allowed: the page took the attached browser to "
+                        f"{_fence_out!r}, outside the authorized set "
+                        f"{sorted(self._allowed_hosts or ())} - so its content is not "
+                        "the logged-in view you asked for and was not returned. The "
+                        f"request itself already left the browser (D-31); to read that "
+                        f"site on purpose, name it as the url with confirm=true, which "
+                        "authorizes it for itself.")
 
                 # 登录探测（G35 check_login）：SSRF 终检之后——被拦的页面没有
                 # 探测价值；构建响应之前——探测的是导航稳定后的最终页面。

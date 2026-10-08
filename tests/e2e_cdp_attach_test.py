@@ -76,10 +76,32 @@ class _LoginSiteHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
+        # 每一笔都按 (path, Host 头) 记账：主机围栏那段要的判据是"这一跳根本没到"，
+        # 而"没到"只能由被指向的那一侧自己作证。
+        self.server.hits.append((self.path, self.headers.get("Host") or ""))
         if self.path.startswith("/whoami"):
             cookie = self.headers.get("Cookie") or ""
             logged = f"{_COOKIE_NAME}={_COOKIE_VALUE}" in cookie
             self._send(200, json.dumps({"logged_in": logged}))
+        elif self.path == "/fence":
+            # 围栏靶：入口在**已授权**的 127.0.0.1 上，302 指向 localhost —— 同一台
+            # 机器、同一个端口，但围栏按主机名精确匹配，所以这一跳属于"白名单外"。
+            # 精确匹配而不是 startswith：`startswith("/fence")` 会把 /fence-img 也吃掉。
+            host, port = self.server.server_address[:2]
+            self._send(302, "", [("Location", f"http://localhost:{port}/whoami")])
+        elif self.path.startswith("/pixel.png"):
+            self._send(200, "", [("Content-Type", "image/png")])
+        elif self.path.startswith("/img-self"):
+            # 判别用：图片指向**同一个授权主机**。它被掐掉 = route handler 在跑
+            # （那么围栏没生效只能是白名单没传进去）；它照样出去 = handler 没装。
+            self._send(200, '<html><body><img src="/pixel.png"><p>img-self</p>'
+                            '</body></html>')
+        elif self.path.startswith("/fence-img"):
+            # 同一件事的另一种形状：主文档留在授权主机上，页里拉一张来自
+            # localhost 的"图片"。子资源与主文档重定向走的是两条拦截路径。
+            host, port = self.server.server_address[:2]
+            self._send(200, f'<html><body><img src="http://localhost:{port}/whoami">'
+                            '<p>fence-img</p></body></html>')
         elif self.path.startswith("/home"):
             # A DOM-rich page for the G35 login probe: a logged-in view shows
             # a Sign-out control; the logged-out view IS the login form.
@@ -118,6 +140,7 @@ class _LoginSite:
 
     def __init__(self):
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), _LoginSiteHandler)
+        self._server.hits = []
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
     @property

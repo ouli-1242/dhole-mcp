@@ -19,6 +19,7 @@ from dhole_mcp.browser import (
     CDPHostNotAllowedError,
     CDPNoLoggedInContextError,
     _create_route_handler,
+    _landed_host_outside_fence,
     _login_verdict,
     _resolve_cdp_context,
 )
@@ -626,3 +627,42 @@ class TestTheDeadEndpointRefusal:
         assert not hasattr(server_mod, "_cdp_dead_endpoint_note"), (
             "那颗只读 arguments['cdp_url'] 的补丁又回来了 —— 存进 cred_defaults 的"
             "端点走不到它的条件，实测一个字都补不上")
+
+
+class TestTheLandedHostFence:
+    """围栏的**结果边界**：attach 会话落在名册外时，那一页不能当成点名的那一页交回去。
+
+    实测（2026-10-08，`-m e2e` 真 Chrome + 本地靶站）：入口在授权过的 127.0.0.1 上，
+    页面 302 到 `localhost:同一端口` —— 主机名不同，因此白名单外。route handler 那一层
+    没拦住这一跳（D-31 记的是那一半），而回执当时直接把 `http://localhost/…` 的正文
+    连同 `status:200` 一起交了回来：一次"我已认证的视角下这页长什么样"的提问，答案是
+    另一个站点的。这一类只认落地主机名，所以它是个纯函数，不必起浏览器就能钉。
+    """
+
+    ALLOWED = frozenset({"127.0.0.1"})
+
+    @pytest.mark.parametrize("landed,want", [
+        ("http://localhost:9222/whoami", "localhost"),
+        ("https://other.example.test/page", "other.example.test"),
+        ("http://LOCALHOST:80/x", "localhost"),
+    ])
+    def test_a_host_outside_the_roster_names_itself(self, landed, want):
+        assert _landed_host_outside_fence(landed, self.ALLOWED) == want
+
+    @pytest.mark.parametrize("landed", [
+        "http://127.0.0.1:9222/home",        # 授权过的主机：围栏不该说话
+        "about:blank",                        # 不是 http(s) 的落点没有主机可比
+        "https://127.0.0.1.example.test/",    # 子域不是同一个主机名，但也不该被吞成空
+    ])
+    def test_the_fence_stays_quiet_where_it_has_no_claim(self, landed):
+        out = _landed_host_outside_fence(landed, frozenset({"127.0.0.1",
+                                                            "127.0.0.1.example.test"}))
+        assert out == "", f"名单里有的主机被拦了：{landed} -> {out!r}"
+
+    def test_no_roster_means_no_fence(self):
+        """`allowed=None` = 这次根本没 attach：一个字都不许拦。"""
+        assert _landed_host_outside_fence("http://evil.example.test/", None) == ""
+
+    def test_a_hostless_url_is_not_invented_as_a_violation(self):
+        assert _landed_host_outside_fence("", self.ALLOWED) == ""
+        assert _landed_host_outside_fence("file:///etc/passwd", self.ALLOWED) == ""
