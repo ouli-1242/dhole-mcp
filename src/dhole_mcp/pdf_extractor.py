@@ -411,6 +411,27 @@ def _metadata_dict(meta: dict) -> dict[str, Any]:
     }
 
 
+def _toc_within_pages(toc: list[dict], pages: list[int]) -> list[dict]:
+    """The outline entries whose page range touches one of `pages`.
+
+    An entry with no usable page is KEPT: a section the map cannot place is not a
+    section that is out of range, and dropping it would trade a token saving for a
+    chapter nobody can find again.
+    """
+    want = set(pages)
+    kept: list[dict] = []
+    for entry in toc:
+        start = entry.get("page")
+        if not isinstance(start, int) or start <= 0:
+            kept.append(entry)
+            continue
+        end = entry.get("end_page")
+        end = end if isinstance(end, int) and end >= start else start
+        if any(p in want for p in range(start, end + 1)):
+            kept.append(entry)
+    return kept
+
+
 def _add_end_pages(toc: list[dict], total_pages: int) -> list[dict]:
     """Add `end_page` to each ToC entry from the outline structure.
 
@@ -653,6 +674,19 @@ def extract_pdf(
         # page range so the map matches what was actually returned.
         if not toc and heading_outline:
             toc = _heading_outline(heading_outline, page_nums, total_pages)
+
+        # 有书签的那一路读的是整本文档，`pages=` 只裁了正文没裁地图：实测 19 页论文的
+        # `pages='1-2'` 连 17-19 页的章节一起带回（29 条，约 1,000 token），而读者手上
+        # 没有那些页可对照。无书签那一路早就按提取范围构造（上面那行），两条路口径
+        # 不一致 —— 现在书签这一路也裁。
+        if toc and len(page_nums) < total_pages:
+            from dhole_mcp.context import _note_text
+            _kept = _toc_within_pages(toc, page_nums)
+            if len(_kept) != len(toc):
+                _note_text(f"table_of_contents narrowed to the {len(page_nums)} of "
+                           f"{total_pages} page(s) returned "
+                           f"({len(toc)} sections -> {len(_kept)})")
+                toc = _kept
 
         # --- All-scanned doc -> honest dead-end (caller runs the scanned-OCR) ---
         scanned = total_chars < _SCANNED_CHARS_PER_PAGE * len(page_nums)

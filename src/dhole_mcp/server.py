@@ -1015,6 +1015,15 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
     _page_finding = _scan_injection(full_text)
     if _page_finding:
         result.untrusted_content = _page_finding
+    # 续页不重付地图。`offset=` 正是这条响应自己的 next_action 推荐的动作，而 19 页
+    # 论文每翻一页都带回同一份 29 条章节地图（实测约 1,000 token）—— 读者手上的那一页
+    # 用不上其中任何一条。地图随第 0 片已经交过，所以这里省略，但**省略要 announce**：
+    # 字段缺席和不存在的两种意思不能混。改在局部副本上，缓存里那份仍是完整的。
+    if offset > 0 and result.table_of_contents:
+        from dhole_mcp.context import _note_text
+        _note_text("table_of_contents omitted on a continuation page - it came with "
+                   "offset=0 for this document")
+        result = result.model_copy(update={"table_of_contents": []})
     # Query-focused filter (post-cache): if the caller passed `focus`, keep only
     # the relevant blocks so the agent loads less context on long pages.
     # Only applies to text-like extractions (not raw html). Runs before chunking
