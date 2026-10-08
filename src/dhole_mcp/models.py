@@ -110,7 +110,7 @@ class BulkResponseModel(BaseModel):
     results: list[ResponseModel] = Field(description="Per-URL results")
     total: int = Field(description="Total URLs")
     successful: int = Field(description="Fetches with status<400 + no error")
-    ssrf_recheck: str = Field(default="", description="The SSRF posture for THIS WHOLE CALL, stated once instead of inside every row's metadata (a measured 20-URL batch carried the same 273-361-character sentence 20 times, ~5.5-7.2KB of duplicated boilerplate). Non-empty only when the post-redirect IP recheck was skipped because of this machine's resolver (fake-ip proxy); absent means the recheck ran. A property of the process, so every row would have said the same thing.")
+    ssrf_recheck: str = Field(default="", description="The SSRF posture for THIS WHOLE CALL, stated once instead of inside every row's metadata (a measured 20-URL batch carried the same 273-361-character sentence 20 times, ~5.5-7.2KB of duplicated boilerplate). Non-empty only when this machine's resolver is a measured fake-ip tunnel, in which case the DNS recheck tolerates those two ranges (198.18.0.0/15, fc00::/7) and still runs everywhere else; absent means nothing is tolerated beyond the normal guards. A property of the process, so every row would have said the same thing.")
 
     @model_serializer(mode="wrap")
     def _one_process_receipt_per_call(self, handler):

@@ -214,23 +214,39 @@ class SecurityError(ValueError):
 #
 # The asymmetry makes this detectable rather than configurable: a genuine public
 # resolver never answers 198.18.0.0/15 (RFC 2544 benchmarking) or a ULA
-# fc00::/7 AAAA for example.com. So the environment is asked once, per process,
-# and the answer is said out loud wherever it took effect.
+# fc00::/7 AAAA for example.com.
+#
+# 17.0 R3刀2 把三件事改了口径，都是往**严**的方向：
+#   1. 判定不再由一个域名的答案决定 —— 两颗独立注册的域名合取（见 probe_fake_ip）。
+#   2. 判成隧道也**不关掉这一层**：豁免精确到那两段地址本身。以前 verdict=fake-ip 时
+#      整个复验停摆，公网名解析到 127.0.0.1 或 169.254.169.254 也不再有人看；现在
+#      那些答案照拒，无论这台机器被判成什么。放宽守卫需要证据，而证据能支撑的只有
+#      "这两段是隧道的产物"这一句，支撑不了"整层不必看"。
+#   3. 判词仍是进程级缓存，但一次**因隧道段而起的拒绝**之前会重探一次（限流），
+#      会话中途才挂上 TUN 的机器因此不必重启宿主。
 
 _FAKE_IP_V4 = "198.18.0.0/15"
 _FAKE_IP_V6 = "fc00::/7"
-_PROBE_DOMAIN = "example.com"
+# 两颗不同 TLD、不同注册名的域名：一个被投毒、被 hosts 钉死、被某条 DIRECT 规则漏掉，
+# 都不再足以决定整台机器的复验层。
+_PROBE_DOMAINS = ("example.com", "example.org")
+_TUNNEL_NETWORKS = (ipaddress.ip_network(_FAKE_IP_V4), ipaddress.ip_network(_FAKE_IP_V6))
 _fake_ip_cache: tuple[str, str, str] | None = None
 _auto_note = ""
+# 重探的限流：一次拒绝付一次 `getaddrinfo` × 两颗域名，够便宜；不设限的话，
+# 一个持续把公网名领进 ULA 的解析器会让每一次抓取都重探一遍。
+_last_reprobe_mono = 0.0
+_REPROBE_MIN_GAP_S = 60.0
 
 
-def _recheck_skipped_by_environment() -> bool:
-    """True when dhole relaxed the recheck on this machine's behalf.
+def _tunnel_exempt_engaged() -> bool:
+    """True when this host's resolver is a measured fake-ip tunnel.
 
-    17.0: the ``DHOLE_SSRF_DNS_RECHECK`` knob is retired (silently ignored), so
-    the skip is decided by measurement alone — a fake-ip resolver is an
-    environment fact, not a preference. There is no override on purpose: the
-    historical reason to want one IS the fake-ip case, and that case is what the
+    It no longer means "the recheck layer is off" (R3刀2): it means the two tunnel
+    ranges are tolerated, because on such a host those addresses ARE every public
+    name. 17.0 retired the ``DHOLE_SSRF_DNS_RECHECK`` knob (silently ignored), so
+    the exemption is decided by measurement alone — there is no override on purpose:
+    the historical reason to want one IS the fake-ip case, and that case is what the
     probe detects.
     """
     return probe_fake_ip()[0] == "fake-ip"
@@ -239,57 +255,58 @@ def _recheck_skipped_by_environment() -> bool:
 def probe_fake_ip() -> tuple[str, str, str]:
     """``(verdict, address, detail)`` — verdict is public / fake-ip / unprobed.
 
-    Uncertainty is never a reason to relax: an unresolvable probe (offline, or a
-    resolver that hides the answer) returns ``unprobed`` and the recheck stays on.
+    Uncertainty is never a reason to relax: a resolver that cannot answer the probe
+    (offline, or one that hides the answer) returns ``unprobed`` and the recheck
+    applies in full.
 
-    F-C2-J2 判决（2026-10-06 复核维持）：探测定居为单域名、无旋钮、进程级一次。
-    残余攻击路径真实存在（敌意 LAN 控制解析器 → 本进程首次 hostname 校验前毒化
-    探测域 → 复验层永久关闭），但**手动旋钮不修它**——攻击者不经过旋钮；可见性
-    已在场（auto-note 进回执、crawl 回执 ssrf_recheck、resolver_probe.json 供
-    doctor 对质）。可选加固（收益/复杂度不成比例，非必需主张）：探测改双独立
-    域名合取，或 verdict 带 TTL 定期重探。若做，先失败的测试名
-    test_a_single_poisoned_answer_flips_the_verdict_off（症状：一个域名的答案
-    决定整机复验层）。
+    合取（R3刀2-A）：两颗独立注册的域名**都**答进隧道段才判 fake-ip。以前一颗
+    （example.com）就决定整台机器的复验层 —— 那条路径当年记在 F-C2-J2 判决里
+    （敌意 LAN 控制解析器 → 本进程首次 hostname 校验前毒化探测域），今天补上。
+    只有一颗答得出也不判隧道：一颗的答案说明不了"这台机器的解析器给每个公网名
+    都发保留地址"。
     """
     global _fake_ip_cache, _auto_note
     if _fake_ip_cache is not None:
         return _fake_ip_cache
-    import ipaddress
     import socket
-    try:
-        infos = socket.getaddrinfo(_PROBE_DOMAIN, None)
-    except Exception:  # noqa: BLE001 - offline is not a reason to lower a guard
+    answers: list[tuple[str, object]] = []
+    for name in _PROBE_DOMAINS:
+        try:
+            infos = socket.getaddrinfo(name, None)
+        except Exception:  # noqa: BLE001 - 问不到就是没有证据
+            continue
+        for info in infos:
+            try:
+                addr = ipaddress.ip_address(str(info[4][0]).split("%")[0])
+            except ValueError:
+                continue
+            answers.append((name, addr))
+
+    def in_tunnel(addr) -> bool:
+        return any(addr in net for net in _TUNNEL_NETWORKS)
+
+    outside = [f"{name} -> {addr}" for name, addr in answers if not in_tunnel(addr)]
+    if outside:
+        # 任何一颗答出了隧道段之外的地址，就是"这台机器的解析器正常"的证据 —— 复验全开。
+        _fake_ip_cache = ("public", "", "")
+        _record_resolver_probe("public", "")
+        return _fake_ip_cache
+    if {name for name, _a in answers} != set(_PROBE_DOMAINS):
         _fake_ip_cache = ("unprobed", "", "")
         _record_resolver_probe("unprobed", "")
         return _fake_ip_cache
-    v4 = v6 = ""
-    net4 = ipaddress.ip_network(_FAKE_IP_V4)
-    net6 = ipaddress.ip_network(_FAKE_IP_V6)
-    for info in infos:
-        try:
-            addr = ipaddress.ip_address(str(info[4][0]).split("%")[0])
-        except ValueError:
-            continue
-        if isinstance(addr, ipaddress.IPv4Address):
-            if addr in net4 and not v4:
-                v4 = str(addr)
-        elif addr in net6 and not v6:
-            v6 = str(addr)
-    if v4 or v6:
-        hit = v4 or v6
-        net = _FAKE_IP_V4 if v4 else _FAKE_IP_V6
-        both = (f" (and the AAAA record {v6} in {_FAKE_IP_V6} is what the recheck "
-                f"actually rejects)" if v4 and v6 else "")
-        _auto_note = (f"ssrf: DNS recheck auto-skipped on this host - {_PROBE_DOMAIN} "
-                      f"resolves to {hit} in {net}{both}, which is what a fake-ip TUN "
-                      f"proxy (Clash / sing-box) does to every public name. Only the DNS "
-                      f"recheck layer is off: IP-literal, hostname and cloud-metadata "
-                      f"guards still apply.")
-        _fake_ip_cache = ("fake-ip", hit, f"{_PROBE_DOMAIN} -> {hit} in {net}")
-        _record_resolver_probe("fake-ip", hit)
-    else:
-        _fake_ip_cache = ("public", "", "")
-        _record_resolver_probe("public", "")
+
+    hit = str(answers[0][1])
+    nets = sorted({str(net) for _n, a in answers for net in _TUNNEL_NETWORKS if a in net})
+    said = ", ".join(f"{name} -> {addr}" for name, addr in answers)
+    _auto_note = (
+        f"ssrf: DNS recheck tolerates the fake-ip ranges on this host - {said}, "
+        f"which is what a fake-ip TUN proxy (Clash / sing-box) hands out. Tolerated: "
+        f"{_FAKE_IP_V4} and {_FAKE_IP_V6} only. The recheck itself still runs: "
+        f"loopback, RFC1918, link-local, cloud metadata and every other reserved "
+        f"range are refused whatever this host measured.")
+    _fake_ip_cache = ("fake-ip", hit, f"{said} in {', '.join(nets)}")
+    _record_resolver_probe("fake-ip", hit)
     return _fake_ip_cache
 
 
@@ -330,7 +347,7 @@ def _record_resolver_probe(verdict: str, address: str) -> None:
             json.dump({
                 "verdict": verdict,
                 "address": address,
-                "probe": _PROBE_DOMAIN,
+                "probe": ", ".join(_PROBE_DOMAINS),
                 "pid": os.getpid(),
                 "probed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             }, f, ensure_ascii=False)
@@ -361,26 +378,42 @@ def resolver_probe_record() -> dict:
 
 
 def recheck_posture_note() -> str:
-    """Non-empty only when the recheck was skipped because of this machine.
+    """Non-empty only when this host's resolver is a measured fake-ip tunnel.
 
     Absent otherwise, so an ordinary host pays nothing on the wire for a note
     that only means something on a fake-ip one. Runs the probe if nothing has
     asked yet - a diagnostic that answers "what is this process doing?" has to
     know the answer, not just the cached one.
     """
-    return _auto_note if _recheck_skipped_by_environment() else ""
+    return _auto_note if _tunnel_exempt_engaged() else ""
 
 
-def _dns_recheck_enabled() -> bool:
-    """是否开启域名 DNS 解析内网复查。
+def _tunnel_range_refusal(internal: str) -> bool:
+    """这道拒绝命中的是不是隧道那两段（也只有那两段值得在拒绝前重探一次）。
 
-    17.0 写死为**开启**（fail-closed），``DHOLE_SSRF_DNS_RECHECK`` 已注销：
-    唯一需要关它的场景 —— fake-ip TUN（公网域名被解析到保留地址）—— 已由
-    W12 的自动判定（``_recheck_skipped_by_environment``）覆盖，一个需要用户
-    选择才能正确工作的旋钮不再是配置，是一个环境 bug。放宽守卫需要证据，
-    不需要猜测。
+    危险段（回环 / RFC1918 / 链路本地 / 元数据）的拒绝不来这里：那种答案不是隧道的
+    产物，拒它就是拒对了，重探只会把"拒对了"这件事弄成不确定的。
     """
-    return not _recheck_skipped_by_environment()
+    return any(str(net) in internal for net in _TUNNEL_NETWORKS)
+
+
+def _reprobe_before_tunnel_refusal(hostname: str, internal: str) -> str | None:
+    """会话中途才挂上的 TUN：判词是启动时探的，如今过期了 —— 现判一次再决定。
+
+    以前这种机器的唯一出路是重启宿主（丢掉内存里的会话与凭据、暖着的浏览器）；R3刀1
+    至少让缓存里的正文还能读，这一条把**新的**抓取也救回来。方向上仍然只有隧道段
+    能被放宽，且放宽要证据（重探的两颗域名都答进隧道段），限流到每分钟一次。
+    """
+    global _last_reprobe_mono, _fake_ip_cache, _auto_note
+    now = time.monotonic()
+    if now - _last_reprobe_mono < _REPROBE_MIN_GAP_S:
+        return internal
+    _last_reprobe_mono = now
+    _fake_ip_cache, _auto_note = None, ""
+    if probe_fake_ip()[0] != "fake-ip":
+        return internal
+    _DNS_CHECK_CACHE.pop(hostname, None)
+    return _resolves_to_internal(hostname)
 
 
 # DNS 复查结果短缓存：一次抓取会对初始 URL + 每一跳重定向各调一次
@@ -511,6 +544,7 @@ def _resolves_to_internal(hostname: str) -> str | None:
         return None
 
     verdict: str | None = None
+    exempt = _tunnel_exempt_engaged()
     try:
         import socket as _socket
         infos = _socket.getaddrinfo(hostname, None)
@@ -525,6 +559,11 @@ def _resolves_to_internal(hostname: str) -> str | None:
         for network in _PRIVATE_NETWORKS:
             try:
                 if resolved in network:
+                    if exempt and network in _TUNNEL_NETWORKS:
+                        # 隧道在场时这两段就是"公网名"的样子，不是内网证据。继续扫
+                        # 这个名的其余答案：一个名同时给出 ULA 与回环时，回环那一条
+                        # 必须仍然算数。
+                        continue
                     verdict = f"{info_ip} in {network}"
                     break
             except TypeError:
@@ -623,8 +662,10 @@ def _normalize_ip_notation(host: str) -> str | None:
 # discover 三条路上都出现，措辞一旦各自漂，调用方就读不出"这是同一件事"）。
 RESOLVER_GUARD_NEEDLE = "resolves to internal/private IP"
 RESOLVER_GUARD_RECOVERY = (
-    "restart the MCP host so the resolver probe re-judges this machine (it runs "
-    "once per process, on first use, and its answer is kept for the life of the "
+    "call again after a minute - a refusal naming one of the fake-ip ranges "
+    "re-probes this machine's resolver before it refuses (at most once per 60s), so a "
+    "tunnel that arrived mid-session is adopted without restarting; restarting the MCP "
+    "host re-judges immediately (a verdict is otherwise kept for the life of the "
     "process), then confirm with `dhole --doctor`")
 
 
@@ -789,19 +830,36 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
             if hostname_lower.endswith(_DNS_REBINDING_SUFFIXES):
                 raise SecurityError(f"URL uses DNS rebinding service: {hostname}")
             # 纵深防御（报告声明 4）：域名经 DNS 解析到的内网 IP 复查。
-            # 常开；唯一正当的关闭理由（fake-ip TUN 把公网域名解析进保留段）由
-            # 开机探测自动判定（见 _dns_recheck_enabled / probe_fake_ip）。
+            # 恒常开（R3刀2-B）：隧道在场时豁免的也只有 198.18.0.0/15 与 fc00::/7 这两段，
+            # 其余段无论这台机器被判成什么都照拒 —— 以前一个 fake-ip 判词会让整层停摆，
+            # 那时"公网名解析到 127.0.0.1"已经没人看了。
             # 只拒绝"解析成功且命中内网"；解析失败（gaierror/超时）容忍。
             # 存在 DNS rebinding TOCTOU 竞态，作为纵深防御而非唯一防线。
             # 点名放行的主机跳过这一条：它本来就该解析到内网。
-            if _dns_recheck_enabled() and not _private_host_allowed(hostname_lower):
+            if not _private_host_allowed(hostname_lower):
                 internal = _resolves_to_internal(hostname)
+                if internal and _tunnel_range_refusal(internal):
+                    # 即将因为隧道段拒绝：先问一次现判 —— 会话中途才挂上的 TUN 走这里自愈。
+                    internal = _reprobe_before_tunnel_refusal(hostname, internal)
                 if internal:
+                    if _tunnel_range_refusal(internal):
+                        # 隧道段的拒绝：现判没确认隧道（或限流窗口内还没轮到重探）。
+                        # 不许说成"这不是代理的产物" —— 它恰恰是代理最典型的产物。
+                        why = (
+                            "This guard is fail-closed: the two fake-ip ranges are "
+                            "tolerated only while this process measures a fake-ip tunnel, "
+                            f"and its probe did not confirm one (a refusal of these ranges "
+                            f"re-probes first, at most once per "
+                            f"{int(_REPROBE_MIN_GAP_S)}s).")
+                    else:
+                        why = (
+                            "This guard is fail-closed: on a fake-ip host only the tunnel "
+                            "ranges (198.18.0.0/15, fc00::/7) are tolerated, and this "
+                            "answer is in a range a proxy does not hand out - it is "
+                            "refused whatever this machine measured.")
                     raise SecurityError(
-                        f"URL hostname {hostname} resolves to internal/private IP ({internal}). "
-                        "This guard is fail-closed: dhole auto-detects fake-ip TUN resolvers "
-                        "(public names answering with reserved addresses) and skips the layer "
-                        "only for them; this hostname still resolved into a private range."
+                        f"URL hostname {hostname} resolves to internal/private IP "
+                        f"({internal}). {why}"
                     )
 
     return url

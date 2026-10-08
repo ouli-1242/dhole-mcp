@@ -134,8 +134,8 @@ async def test_max_redirects_bounded():
 def test_dns_recheck_rejects_internal_resolution(monkeypatch):
     """域名解析到内网应拒绝（默认开启，不需要设任何环境变量）。"""
     monkeypatch.delenv("DHOLE_SSRF_DNS_RECHECK", raising=False)
-    sp = __import__("dhole_mcp.security", fromlist=["_dns_recheck_enabled"])
-    assert sp._dns_recheck_enabled() is True
+    sp = __import__("dhole_mcp.security", fromlist=["_tunnel_exempt_engaged"])
+    assert sp._tunnel_exempt_engaged() is False
     with patch("socket.getaddrinfo",
                return_value=[(2, 1, 6, "", ("192.168.1.10", 0))]):
         with pytest.raises(SecurityError, match="resolves to internal"):
@@ -145,8 +145,8 @@ def test_dns_recheck_rejects_internal_resolution(monkeypatch):
 def test_dns_recheck_on_by_default(monkeypatch):
     """默认开启（fail-closed）：agent 抓来的 URL 不受信任，内网解析是主路径。"""
     monkeypatch.delenv("DHOLE_SSRF_DNS_RECHECK", raising=False)
-    sp = __import__("dhole_mcp.security", fromlist=["_dns_recheck_enabled"])
-    assert sp._dns_recheck_enabled() is True
+    sp = __import__("dhole_mcp.security", fromlist=["_tunnel_exempt_engaged"])
+    assert sp._tunnel_exempt_engaged() is False
 
 
 def test_retired_dns_recheck_knob_moves_nothing(monkeypatch):
@@ -157,14 +157,14 @@ def test_retired_dns_recheck_knob_moves_nothing(monkeypatch):
     复检这一层（见 test_fake_ip_auto.py）。整段都待在假 getaddrinfo 里跑：判定
     既然只来自探测，测试就必须把探测的答案钉死，否则红的会是本机网络。
     """
-    sp = __import__("dhole_mcp.security", fromlist=["_dns_recheck_enabled"])
+    sp = __import__("dhole_mcp.security", fromlist=["_tunnel_exempt_engaged"])
     with patch("socket.getaddrinfo",
                return_value=[(2, 1, 6, "", ("192.168.1.10", 0))]):
         sp.reset_fake_ip_probe()
         sp._DNS_CHECK_CACHE.clear()
         for value in ("0", "false", "off", "no"):
             monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", value)
-            assert sp._dns_recheck_enabled() is True, value
+            assert sp._tunnel_exempt_engaged() is False, value
         with pytest.raises(SecurityError, match="resolves to internal"):
             validate_url("https://mycorp.internal/x")
     sp.reset_fake_ip_probe()

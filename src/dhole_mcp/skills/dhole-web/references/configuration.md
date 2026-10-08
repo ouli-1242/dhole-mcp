@@ -35,7 +35,7 @@
 
 ### Scenario: Clash / sing-box TUN proxy (fake-IP mode)
 
-- Nothing to set. A fake-IP resolver (every public name answering with an address in `198.18.0.0/15` / `fc00::/7`) is detected by a one-time startup probe, and only the SSRF DNS-recheck layer skips itself — the reason travels in `ssrf_recheck` on every affected response — under `metadata` for a single URL, once on the envelope for a `urls=[...]` batch or a crawl (it is a property of the process, so repeating it per page would only repeat it), and `dhole --doctor`'s "resolver reality" row names the address/network. IP-literal, hostname and cloud-metadata guards stay on; there is no manual override (放宽守卫需要证据，不需要猜测)
+- Nothing to set. A fake-IP resolver (every public name answering with an address in `198.18.0.0/15` / `fc00::/7`) is detected by a probe of two independently registered names — both must answer inside those ranges, so one poisoned or hosts-pinned name cannot relax the machine. What it relaxes is exactly those two ranges: the SSRF DNS recheck itself keeps running and still refuses loopback / RFC1918 / link-local / metadata answers, by hostname as well as by literal. The reason travels in `ssrf_recheck` on every affected response — under `metadata` for a single URL, once on the envelope for a `urls=[...]` batch or a crawl (it is a property of the process, so repeating it per page would only repeat it), and `dhole --doctor`'s "resolver reality" row names the address/network. A tunnel that arrives mid-session re-probes itself before it can refuse one of those ranges (once per 60s). There is no manual override (放宽守卫需要证据，不需要猜测)
 
 ### Scenario: fetching intranet / local dev services
 

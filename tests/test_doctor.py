@@ -380,10 +380,10 @@ class TestDoctorResolverReality:
         assert "fc00::/7" in out
         # W12 → 17.0：自动判定没有覆盖开关 —— 体检说"已自动跳过、URL 照常可用"，
         # 不再教任何 env 写法（教了也是已经注销的旋钮）。
-        assert "automatically" in out
+        assert "tolerated" in out and "still refuses the rest" in out
         assert "DHOLE_SSRF_DNS_RECHECK" not in out
         # and the note about what disabling actually turns off:
-        assert "IP-literal" in out or "IP literal" in out
+        assert "IP-literal" not in out, "整层关闭那句话已经不再是事实"
 
     def test_the_verdict_of_the_process_that_fetches_is_what_gets_printed(
             self, isolated_home, monkeypatch, capsys):
@@ -419,7 +419,7 @@ class TestDoctorResolverReality:
         assert updater.doctor() == 0
         out = capsys.readouterr().out
         assert "fake-ip proxy detected" in out
-        assert "automatically" in out
+        assert "tolerated" in out and "still refuses the rest" in out
         assert "DHOLE_SSRF_DNS_RECHECK" not in out
 
     def test_offline_dns_never_counts_as_failure(
@@ -463,7 +463,7 @@ class TestDoctorResolverReality:
         out = capsys.readouterr().out
         assert "fake-ip" in out
         # 只有 A 记录命中也认得出来，而这一台机器上 dhole 已经自动跳过了那一层
-        assert "automatically" in out
+        assert "tolerated" in out and "still refuses the rest" in out
         assert "DHOLE_SSRF_DNS_RECHECK" not in out
 
     def test_resolver_reality_does_not_raise_even_if_patched_bad(

@@ -6,9 +6,10 @@ web_read / web_search 全部失败 —— 而唯一的出路是**事先知道**�
 `DHOLE_SSRF_DNS_RECHECK=0`。README 里那句"零配置即可用"在这台机器上是被实测证伪
 的（见 CHANGELOG W3）。
 
-现在改由环境自己回答：探测到 fake-ip 就跳过这一层，跳过这件事在回包里可见。17.0 连
-那条硬回的路也收掉了 —— 旋钮注销，判定只由探测结论给出。下面每一条都在守这个边界的
-一侧 —— 放宽的只有 DNS 复检这一层。
+现在改由环境自己回答：探测到 fake-ip 就豁免**那两段地址**（198.18.0.0/15、fc00::/7），
+豁免这件事在回包里可见。17.0 连那条硬回的路也收掉了 —— 旋钮注销，判定只由探测结论
+给出。R3刀2 把口径又收紧一格：判成隧道**不再让整层停摆**，复验照跑，只是那两段不算
+内网证据；下面每一条都守在"被放宽的只有这两段"这一侧。
 """
 
 import socket
@@ -30,8 +31,16 @@ def _clean_state(monkeypatch):
 
 
 def _answers(monkeypatch, *pairs):
-    """把 getaddrinfo 钉成给定的 (family, address) 集合。"""
+    """把 getaddrinfo 钉成给定的 (family, address) 集合（每颗探测名同一份答案）。"""
     def fake(host, port, *a, **kw):
+        return [(fam, 0, 0, "", (addr, 0)) for fam, addr in pairs]
+    monkeypatch.setattr(socket, "getaddrinfo", fake)
+
+
+def _answers_per_name(monkeypatch, table):
+    """按名字给不同答案 —— 合取判定与隧道自愈都要看"哪一颗域名答了什么"。"""
+    def fake(host, port, *a, **kw):
+        pairs = table.get(host, [])
         return [(fam, 0, 0, "", (addr, 0)) for fam, addr in pairs]
     monkeypatch.setattr(socket, "getaddrinfo", fake)
 
@@ -55,20 +64,20 @@ class TestTheProbe:
             raise OSError("no resolver")
         monkeypatch.setattr(socket, "getaddrinfo", boom)
         assert security.probe_fake_ip()[0] == "unprobed"
-        assert security._dns_recheck_enabled() is True
+        assert security._tunnel_exempt_engaged() is False
 
 
 class TestWhatTheVerdictChanges:
 
-    def test_recheck_is_skipped_only_on_a_fake_ip_host(self, monkeypatch):
+    def test_a_tunnel_verdict_tolerates_the_two_ranges_not_the_layer(self, monkeypatch):
         _answers(monkeypatch, (socket.AF_INET, "198.18.0.9"),
                  (socket.AF_INET6, "fd00::20"))
-        assert security._dns_recheck_enabled() is False
+        assert security._tunnel_exempt_engaged() is True
         note = security.recheck_posture_note()
-        assert "auto-skipped" in note
+        assert "tolerates the fake-ip ranges" in note
         assert "198.18.0.0/15" in note and "fc00::/7" in note
-        # 只放宽一层这件事也必须写在用户看得见的地方
-        assert "Only the DNS recheck layer is off" in note
+        # 只放宽那两段、复验本身照跑 —— 这件事也必须写在用户看得见的地方
+        assert "The recheck itself still runs" in note
         # 17.0：旋钮已注销，判定只来自探测 —— 文案里不许再指一条不存在的出路
         assert "DHOLE_SSRF_DNS_RECHECK" not in note
 
@@ -82,16 +91,16 @@ class TestWhatTheVerdictChanges:
         _answers(monkeypatch, (socket.AF_INET, "93.184.216.34"))
         for value in ("0", "off", "flase", "on"):
             monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", value)
-            assert security._dns_recheck_enabled() is True, value
+            assert security._tunnel_exempt_engaged() is False, value
 
         _answers(monkeypatch, (socket.AF_INET, "198.18.0.9"))
         security.reset_fake_ip_probe()
         monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", "on")
-        assert security._dns_recheck_enabled() is False
+        assert security._tunnel_exempt_engaged() is True
 
 
 class TestWhatDoesNotMove:
-    """自动跳过的只是 DNS 复检这一层。其余守卫在同一种机器上必须照旧。"""
+    """自动豁免的只有隧道那两段。其余守卫在同一种机器上必须照旧。"""
 
     @pytest.mark.parametrize("url,why", [
         ("http://127.0.0.1:8080/x", "loopback IP literal"),
@@ -101,7 +110,7 @@ class TestWhatDoesNotMove:
     def test_ip_literals_and_metadata_stay_blocked(self, monkeypatch, url, why):
         _answers(monkeypatch, (socket.AF_INET, "198.18.0.9"))   # 伪装成 fake-ip 机器
         security.reset_fake_ip_probe()
-        assert security._dns_recheck_enabled() is False, "前置：这台机器已自动跳过复检"
+        assert security._tunnel_exempt_engaged() is True, "前置：这台机器已被判成隧道"
         with pytest.raises(security.SecurityError):
             security.validate_url(url)
 

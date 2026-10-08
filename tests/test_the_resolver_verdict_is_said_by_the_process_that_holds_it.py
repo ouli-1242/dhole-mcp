@@ -103,7 +103,9 @@ class TestTheProcessThatMeasuresLeavesAnAnswer:
         record = _measure(monkeypatch, FAKE_V4)
         assert record["verdict"] == "fake-ip"
         assert record["address"] == FAKE_V4, "doctor 要点名它看见的那个保留地址"
-        assert record["probe"] == "example.com"
+        # 判词是谁家给的：镜像要列出这次判定所依据的**每一颗**域名（R3刀2 起是两颗
+        # 独立注册域名合取），只印一颗等于让 doctor 替一个更窄的证据说话。
+        assert record["probe"] == "example.com, example.org"
 
     def test_a_resolver_that_answered_nothing_is_recorded_as_unprobed(
             self, sandbox, monkeypatch):
@@ -186,7 +188,7 @@ class TestAnAbsentMirrorIsSaidOutLoud:
         line = _row(capsys.readouterr().out)
         assert "no dhole fetch has measured" in line, line
         # 这一支同时要说"会自动跳过"，因为下一行用户就会真的去抓一个 URL。
-        assert "skipped automatically" in line
+        assert "those two ranges are tolerated" in line
 
     def test_a_broken_mirror_reads_as_absent_and_never_raises(
             self, sandbox, monkeypatch, capsys):
@@ -242,11 +244,16 @@ class TestTheRowFitsAndTheDoctorStaysClean:
         assert not paths.file("resolver_probe.json").exists()
 
     def test_the_self_check_is_gone_from_the_call_graph(self):
-        """形状守卫：这一行不许再问本进程的 `_dns_recheck_enabled()` —— 它答的是
-        "doctor 这个马上就退出的进程会怎么做"，而报告那句话的主语是用户的 dhole。
-        走 AST 而不是文本：docstring 里正写着"从前它这么问"，文本守卫会把自己钉红。"""
+        """形状守卫：这一行不许再问本进程的判定 —— 它答的是"doctor 这个马上就退出的
+        进程会怎么做"，而报告那句话的主语是用户的 dhole。走 AST 而不是文本：docstring
+        里正写着"从前它这么问"，文本守卫会把自己钉红。
+
+        两个名字都守着：R3刀2 把 `_dns_recheck_enabled` 换成了 `_tunnel_exempt_engaged`，
+        守卫只认旧名的话，下一次改名就正好把它变成一条假话。
+        """
         tree = ast.parse(inspect.getsource(updater._append_resolver_reality))
         called = {node.attr for node in ast.walk(tree)
                   if isinstance(node, ast.Attribute)}
         assert "_dns_recheck_enabled" not in called, called
+        assert "_tunnel_exempt_engaged" not in called, called
         assert "resolver_probe_record" in called

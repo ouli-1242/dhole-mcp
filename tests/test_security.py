@@ -396,7 +396,7 @@ class TestHostsPinExemptionIsByValue:
     def test_blackhole_pin_is_no_longer_exempt(self, monkeypatch):
         from dhole_mcp import security as sec
         monkeypatch.setattr(sec, "_hosts_file_pin", lambda h: "0.0.0.0")
-        monkeypatch.setattr(sec, "_dns_recheck_enabled", lambda: True)
+        monkeypatch.setattr(sec, "_tunnel_exempt_engaged", lambda: False)
         sec._DNS_CHECK_CACHE.clear()
         verdict = sec._resolves_to_internal("ads.example-tracker.com")
         assert verdict and "blackhole" in verdict
@@ -411,7 +411,7 @@ class TestHostsPinExemptionIsByValue:
         """
         from dhole_mcp import security as sec
         monkeypatch.setattr(sec, "_hosts_file_pin", lambda h: "127.0.0.1")
-        monkeypatch.setattr(sec, "_dns_recheck_enabled", lambda: True)
+        monkeypatch.setattr(sec, "_tunnel_exempt_engaged", lambda: False)
         sec._DNS_CHECK_CACHE.clear()
         assert sec._resolves_to_internal("huggingface.co") is None
         sec._DNS_CHECK_CACHE.clear()

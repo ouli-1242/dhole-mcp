@@ -118,7 +118,7 @@ def test_dns_recheck_knob_is_gone_measurement_decides(monkeypatch):
     monkeypatch.setattr(sec, "probe_fake_ip", lambda: ("public", "", ""))
     for value in ("0", "false", "off", "no", "flase", ""):
         monkeypatch.setenv("DHOLE_SSRF_DNS_RECHECK", value)
-        assert sec._dns_recheck_enabled() is True, value
+        assert sec._tunnel_exempt_engaged() is False, value
     assert env_registry.warnings_snapshot() == ()
 
 

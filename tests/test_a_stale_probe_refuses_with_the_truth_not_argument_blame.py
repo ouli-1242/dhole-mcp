@@ -126,7 +126,7 @@ class TestDiscoverAndCrawlSayTheWholeSentence:
         _flip_the_resolver(monkeypatch, url)
         out = await MasterFetchServer().web_discover(url=url)
         assert "resolves to internal/private IP" in out.error, out.error
-        assert out.error.rstrip().endswith("private range."), out.error
+        assert out.error.rstrip().endswith("whatever this machine measured."), out.error
         assert "restart" in out.next_action and "doctor" in out.next_action
         assert len(out.error) > 200, "帽子还在：豁免必须是 SecurityError 才有"
 

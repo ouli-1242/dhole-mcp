@@ -726,9 +726,9 @@ def _append_resolver_reality(checks: list[tuple[str, str, str, str]]) -> None:
     record = _sec.resolver_probe_record()
     theirs = str(record.get("verdict") or "")
     who = f"pid {record.get('pid', '?')} at {record.get('probed_at', '?')}"
-    restart = ("restart dhole from its host launcher so the startup probe re-judges "
-               "this resolver - the cached verdict is the one validate_url applies, "
-               "and no manual override exists")
+    restart = ("a refusal naming a fake-ip range re-probes this resolver on its own "
+               "(once per 60s); restart dhole from its host launcher to re-judge now "
+               "- no manual override exists")
 
     if v4 is None:
         # 行宽预算 280，`_short` 保尾去头，所以每一段都要量过再写。
@@ -765,23 +765,22 @@ def _append_resolver_reality(checks: list[tuple[str, str, str, str]]) -> None:
     if v6:
         head += f"; AAAA {v6} in fc00::/7"
     if theirs in ("public", "unprobed"):
-        # 探测到了 fake-ip，但那个真正回答你调用的进程判的是别的：它现在还开着
-        # 复查层，所以在这台机器上"URL 全被拒"是它的现场，不是 doctor 的。
+        # 探测到了 fake-ip，但那个真正回答你调用的进程判的是别的：它两段都不豁免，
+        # 所以在这台机器上"URL 全被拒"是它的现场，不是 doctor 的。
         checks.append((
             "resolver reality", "info",
             f"{head}; the dhole process that fetched measured {theirs} at "
-            f"{record.get('probed_at')} and keeps it, so the recheck is still on "
-            "there",
-            restart + " (IP-literal, hostname and cloud-metadata guards always "
-                      "stay on)",
+            f"{record.get('probed_at')}, so it tolerates neither fake-ip range and "
+            "refuses the public names this tunnel answers",
+            restart,
         ))
         return
     tail = (f" - measured by {who}" if theirs == "fake-ip"
             else "; no dhole fetch has measured it yet")
     checks.append(("resolver reality", "ok",
-                   f"{head}; the DNS-recheck layer is skipped automatically here, "
-                   "so URLs work as-is (IP-literal, hostname, cloud-metadata "
-                   "guards stay on)" + tail, ""))
+                   f"{head}; those two ranges are tolerated and the recheck still "
+                   "refuses the rest (loopback, RFC1918, link-local, metadata)"
+                   + tail, ""))
 
 
 # ─── doctor 的检查项（B2-5：计划里的 12 项，重排而不是沿用旧表） ─────────────

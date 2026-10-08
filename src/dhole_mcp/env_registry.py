@@ -25,10 +25,10 @@ from dataclasses import dataclass
 from typing import Iterable, Literal, Optional
 
 # ─── shared token sets (W4.3) ───────────────────────────────────────────
-# ``ON_TOKENS`` / ``OFF_TOKENS`` are exported here so ``_env_flag``, ``robots``
-# and ``security`` stop maintaining three near-duplicates of the same list (the
-# third one, ``security._dns_recheck_enabled``, additionally omits ``"" / none /
-# null``, which is what makes the asymmetry observable).
+# ``ON_TOKENS`` / ``OFF_TOKENS`` are exported here so ``_env_flag`` and ``robots``
+# stop maintaining near-duplicates of the same list. There used to be a third one
+# in ``security._dns_recheck_enabled`` (which additionally omitted ``"" / none /
+# null``); that knob is retired and nothing reads it, so that copy is gone too.
 ON_TOKENS = frozenset({"1", "true", "yes", "on"})
 OFF_TOKENS = frozenset({"0", "false", "no", "off", "none", "null"})
 
