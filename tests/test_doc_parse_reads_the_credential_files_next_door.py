@@ -9,7 +9,7 @@
 
 黑名单 12 目录里只有 ~/.ssh / ~/.gnupg / ~/.aws 三个用户目录。dhole 自己的秘密
 （config.json 存 secret 级旋钮）与一批常见凭据存放点全在拦截面外。另一处同源
-漂移：Windows 目录前缀写死 "c:\\windows"，本机 %SystemRoot%=C:\WINDOWS 所以没炸，
+漂移：Windows 目录前缀写死 "c:\\windows"，本机 %SystemRoot%=C:\\WINDOWS 所以没炸，
 D 盘 Windows 安装的机器上这一条拦不住任何东西。
 
 判据：沙箱 HOME 下的每个凭据路径都 Access denied（内容不进回执）；前缀矩阵
