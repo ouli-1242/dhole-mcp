@@ -1383,8 +1383,11 @@ async def _cdp_attach_gate(cdp_url: Optional[str], confirm: bool = False,
     human = await out_of_band_confirm(
         f"Approve attaching your real Chrome to read {named}? This hands over "
         "the authenticated session of EVERY site you are logged into. The "
-        "approval is remembered per host and later requests to other origins "
-        "stay fenced out of your cookies.")
+        "approval is remembered per host. Requests to other origins are fenced: "
+        "a sub-resource or page script from outside it is blocked, and a page "
+        "that redirects out of the fence comes back refused rather than as an "
+        "answer - that redirect still leaves the browser, so fence what you "
+        "would not want your own cookies to ride on.")
     if human is False:
         _audit_event("cdp_attach_refused", hosts=missing,
                      endpoint=str(cdp_url)[:120],
@@ -1412,9 +1415,10 @@ async def _cdp_attach_gate(cdp_url: Optional[str], confirm: bool = False,
         "nothing was executed - attaching your real Chrome hands over the "
         "authenticated session of EVERY site you are logged into, and dhole asks "
         "once per host before doing that. Re-call the SAME url with confirm=true "
-        f"to authorize {named}; the approval is remembered per host, and every "
-        "later request to another origin (a redirect, a page-script fetch) stays "
-        f"fenced out of your cookies. Revoke with sys_state({revoke}) - deleting "
+        f"to authorize {named}; the approval is remembered per host, and later "
+        "requests to another origin are fenced - a sub-resource or page script "
+        "from outside it is blocked, and a page that redirects out of the fence "
+        f"comes back refused rather than as an answer. Revoke with sys_state({revoke}) - deleting "
         f"{_CDP_HOSTS_FILE_NAME} works too.",
         None,
     )
@@ -5075,7 +5079,7 @@ class MasterFetchServer:
         max_links: Annotated[Optional[int], Field(description="Cap for EACH links list (citations/navigation/external) when include_links=true; range 1-100. Omit for the documented defaults (30/20/20). links.total_found + links.is_truncated tell you what the cap hid.")] = None,
         ignore_robots: Annotated[bool, Field(description="Skip the robots.txt check for this call (default false = comply). When robots.txt disallows the URL, dhole makes NO request and returns error='robots_disallowed' with content_ok false. Set true only when you have the site's permission to fetch regardless; DHOLE_IGNORE_ROBOTS=1 disables the check process-wide.")] = False,
         check_login: Annotated[bool, Field(description="After the page settles on the browser tier, run a model-free login probe and return login_check: {logged_in: true|false|null, signals: [...], cookie_names: [...]}. DOM shape (logout control / password field / login form) + cookie NAMES only - values are never returned, no model involved. Null on HTTP-tier results and on cache hits (the probe is live-only, so pass check_login again with cache_ttl=0).")] = False,
-        cdp_url: Annotated[Optional[str], Field(description="Attach the user's real Chrome via CDP for THIS call: browser tier forced, HTTP tier and the public cache are skipped, and the fetch rides the attached profile's logged-in cookies. Refused by default - the FIRST attach for a site returns cdp_authorization_required and executes nothing; re-call with confirm=true once the user approved that site, which also fences navigation to the approved sites (anything outside them is aborted at the route level). Every response fetched this way returns cdp_attached=true; attach attempts are audited. Cannot be combined with schema=.")] = None,
+        cdp_url: Annotated[Optional[str], Field(description="Attach the user's real Chrome via CDP for THIS call: browser tier forced, HTTP tier and the public cache are skipped, and the fetch rides the attached profile's logged-in cookies. Refused by default - the FIRST attach for a site returns cdp_authorization_required and executes nothing; re-call with confirm=true once the user approved that site, which also fences navigation to the approved sites (a sub-resource from outside them is aborted). Every response fetched this way returns cdp_attached=true; attach attempts are audited. Cannot be combined with schema=.")] = None,
         session_id: Annotated[Optional[str], Field(description="Reuse cookies across calls under this name (1-64 chars: letters, digits, '.', '_', '-'). Cookies a site sets are kept for that exact host and sent back on the next call naming the same session_id, so a login (or a form POST) can be followed by the pages behind it. Default: no session - cookies live for one call only. Covers BOTH tiers: the HTTP tier reads/writes the jar per host, and browser-tier calls under a session_id run in a dedicated browser seeded from the jar and written back after each call (cookie two-way bridge) - an HTTP login is visible to the browser, a browser login survives to the HTTP tier. Values never leave the process and are never returned; session_cookie_names reports names only.")] = None,
         method: Annotated[Optional[str], Field(description="HTTP verb for the request: GET (default), HEAD, POST, PUT, DELETE or PATCH. HEAD asks for status + size + content-type only and returns no body (size is the server's Content-Length, so 0 when the server omits it - example.com does). A non-GET is sent once (not retried, not cached, not escalated to the browser or the archive): a write must not be repeated, and a browser replay would answer about a GET to the same URL, not about your POST.")] = None,
         body: Annotated[Optional[Any], Field(description="Request body for POST/PUT/DELETE/PATCH (max 256 KB). A dict is sent as a form; with content_type=application/json it is sent as JSON; a string is sent as-is. Ignored for GET/HEAD (said so in the summary).")] = None,

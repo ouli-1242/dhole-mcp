@@ -285,11 +285,14 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
                 f"围栏外的正文被当成结果交回来了: {fence}")
             assert not (fence.get("content") or []), (
                 f"拒绝不许带正文: {fence}")
-            # 4) 请求边界（D-31，今天还不成立）：那一跳本来不该出得了浏览器。
-            assert not nav_out, (
-                f"主机围栏没拦住主文档重定向：靶站收到 {len(nav_out)} 笔 "
-                f"Host: localhost 的请求（正文那一半已被结果边界拦下，请求那一半还在"
-                f" D-31 上）")
+            # 4) 机制上限也钉一颗：主文档 3xx 的下一跳**不进** page.route —— 纯 patchright
+            #    起新 Chrome 与 attach 结果一样（.scratch/liveverify/route_probe.py），所以
+            #    那一跳确实会出浏览器。这条把"确实出去了"钉成事实：哪天机制变了，它会红，
+            #    那时要一起改的是 configuration.md 里 "What it cannot do" 那一句，
+            #    以及关掉 D-31 —— 不是顺手删掉断言。
+            assert nav_out, (
+                "围栏现在连主文档重定向也拦得住？那 configuration.md 的机制上限要一起改，"
+                "D-31 也就可以关了")
 
             assert "cdp_authorization_required" in payload.get("error", ""), (
                 "第二个主机也要各问一次，不能被第一个主机的批准顺带放行: "
