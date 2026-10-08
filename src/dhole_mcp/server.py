@@ -2975,6 +2975,37 @@ def _resolver_guard_result(url: str, msg: str) -> ResponseModel:
     return result
 
 
+class ArgumentRefusal(ValueError):
+    """一句写完了的「你这参数不对」，走到协议边界才折成信封。
+
+    它是 ValueError 的子类而不是新分支：`_dispatch` 那一层照旧抛（CLI 读异常，全仓
+    十处 `raises(ValueError, match="Unsupported argument")` 的锁一字不动），只有
+    `call_tool` 认识它 —— 那里把它折成 `_invalid_request_result`，于是 agent 拿到的
+    是 summary / content_ok / next_action 齐全的信封，而不是 transport 兜底的裸
+    ``{"error": str(e)[:300]}``。
+
+    兜底的注释写着「走到这里说明这不是 dhole 设计过的拒绝」。实测证伪了它：陌生参数与
+    动作形状错都是设计过的拒绝，却都从那条兜底出去 —— 而 `[:300]` 剪掉的正是支持列表的
+    尾巴（schema/search/selector/sitemap/timeout/url），也就是"那我该怎么写"。与 R2刀1
+    同一类，只是发生在协议边界。
+    """
+
+    def __init__(self, msg: str, next_action: str = ""):
+        super().__init__(msg)
+        self.next_action = next_action
+
+
+_ARG_REFUSAL_WAY_OUT = (
+    "Nothing was sent. The name in `error` is not one this tool takes - rename or "
+    "drop it; the list in `error` is everything it does take. Every argument is a "
+    "top-level parameter.")
+
+_ACTION_REFUSAL_WAY_OUT = (
+    "Nothing was fetched. The action named in `error` has the wrong shape; "
+    "sys_guide(topic='behavior', section='Page interaction') lists every action "
+    "key and what each one takes.")
+
+
 def _reject_unknown_args(tool: str, args: dict) -> None:
     """Raise when a tool is called with a name it does not accept.
 
@@ -2992,28 +3023,33 @@ def _reject_unknown_args(tool: str, args: dict) -> None:
     if moved:
         # §4 把能力搬进了另一颗工具。这里只说"陌生键"会把人引向"这个 MCP 没这个
         # 能力"，而真相是"名字换了门"——与 options 袋子同一类谎，同一套说法修。
-        raise ValueError(
+        raise ArgumentRefusal(
             f"Unsupported argument(s) for {tool}: {unknown}. "
             + "; ".join(f"`{k}` moved to the {v} tool" for k, v in sorted(moved.items()))
             + " - the capability is still there, the door changed. "
-            f"Supported here: {sorted(allowed)}"
-        )
+            f"Supported here: {sorted(allowed)}",
+            next_action=(
+                "Nothing was sent. The key in `error` did not disappear - it moved, "
+                "and `error` names the tool it moved to. Call that one; no argument "
+                "of this call will bring it back."))
     if "options" in unknown:
         # 17.0 B4 删掉的就是这个袋子。老写法的调用现在会撞在这里，而"陌生键"三个字
         # 会把人引向"这工具没这个能力"——正好相反：能力全在，只是名字换了位置。
         leftover = sorted(k for k, v in (args.get("options") or {}).items()
                           if isinstance(args.get("options"), dict) and k in allowed)
-        raise ValueError(
+        raise ArgumentRefusal(
             f"Unsupported argument(s) for {tool}: {unknown}. The options object was "
             "removed in 17.0 - its keys are top-level parameters now, so pass them "
             "beside url, not inside an object"
             + (f" (this call's {', '.join(leftover)} can move out as-is)" if leftover
-               else "") + f". Supported: {sorted(allowed)}"
-        )
-    raise ValueError(
+               else "") + f". Supported: {sorted(allowed)}",
+            next_action=(
+                "Nothing was sent. Unwrap the options object: move its keys beside "
+                "`url` at the top level and call again with the same values."))
+    raise ArgumentRefusal(
         f"Unsupported argument(s) for {tool}: {unknown}. "
-        f"Supported: {sorted(allowed)}"
-    )
+        f"Supported: {sorted(allowed)}",
+        next_action=_ARG_REFUSAL_WAY_OUT)
 
 
 # ─── extraction schema normalization ───────────────────────────────
@@ -5334,11 +5370,21 @@ class MasterFetchServer:
         actions_need_resources = False
         if actions:
             if force_fetcher == "http":
-                raise ValueError("actions require the browser tier; use force_fetcher='stealthy' or omit it")
+                raise ArgumentRefusal(
+                    "actions require the browser tier; use force_fetcher='stealthy' "
+                    "or omit it",
+                    next_action=_ACTION_REFUSAL_WAY_OUT)
             from dhole_mcp.actions import build_page_action, actions_want_visual
-            page_action = build_page_action(actions)  # validates; raises on bad input
+            try:
+                # 校验器按 ValueError 说话（它不认识协议），这里替它翻成边界认识的那一种。
+                page_action = build_page_action(actions)
+            except ValueError as e:
+                raise ArgumentRefusal(str(e),
+                                      next_action=_ACTION_REFUSAL_WAY_OUT) from e
             if page_action is None:
-                raise ValueError("actions must be a non-empty list of action dicts")
+                raise ArgumentRefusal(
+                    "actions must be a non-empty list of action dicts",
+                    next_action=_ACTION_REFUSAL_WAY_OUT)
             # A screenshot action's product is the RENDERED page, so the speed
             # shortcut that drops image/stylesheet/font has to be off for it -
             # under blocking, the <img> is never even requested and the crop is a
@@ -8244,6 +8290,16 @@ class MasterFetchServer:
                                    _result_error(result))
                     # _dispatch returns (content_list, structured_dict) or just content_list
                     return _call_result(result)
+                except ArgumentRefusal as e:
+                    # 刀1：设计过的参数拒绝在这里折成信封，不交给下面那条兜底。兜底给的是
+                    # 裸 `{"error": str(e)[:300]}` —— 没有 summary / next_action /
+                    # content_ok，而且 300 那一刀剪掉的正是支持列表的尾巴，也就是调用方
+                    # 唯一能照着改的那一段。兜底注释里"走到这里说明这不是设计过的拒绝"
+                    # 说的没错，错的是这类拒绝以前没有自己的出口。
+                    _log_tool_call(params.name, False, (now() - started) * 1000, str(e))
+                    return _call_result(_wire_result(_invalid_request_result(
+                        (params.arguments or {}).get("url") or "", str(e),
+                        next_action=e.next_action, tool=params.name)))
                 except Exception as e:
                     from mcp.types import TextContent  # 局部导入与其余传输侧导入同一惯例
                     _log_tool_call(params.name, False, (now() - started) * 1000, str(e))
