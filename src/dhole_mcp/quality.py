@@ -1474,13 +1474,37 @@ def _is_over_budget(result) -> bool:
     return bool(result) and result.error.startswith("timeout: the ")
 
 
+# 剪 summary 标签时能停的地方，按"说完一件事"的程度分两级。两级都是**带尾随分隔符的
+# 二元组**，这样 `rfind` 找到的位置就是剪口，不必再判断标点是不是落在了句尾。
+_SENTENCE_BREAKS = (". ", "! ", "? ")
+_CLAUSE_BREAKS = ("; ", " - ", ", ", ": ", " (")
+
+
 def _summary_label(msg: str, cap: int = 80) -> str:
-    """A sentence shortened for the ``summary`` slot, ending where a word ends.
+    """A sentence shortened for the ``summary`` slot, ending where a **clause** ends.
 
     ``msg[:80]`` produced labels like "…can compile (S" — a reader can't tell a
-    shortened sentence from a broken string. The whole sentence stays in ``error``.
+    shortened sentence from a broken string. Breaking at the last *word* fixed that
+    and left a worse one behind: "…stored credentials for", "…POST / PUT / PATCH /",
+    "…Valid values:" (measured, three refusals in one session). Those are not short,
+    they are broken in a different way — a label that ends on a preposition or a
+    colon promises something the summary does not contain, and in the enumeration
+    case the thing cut off is exactly the list the caller needs. The whole sentence
+    stays in ``error`` either way, so the label owes the reader only one thing:
+    that it stops where the sentence stops.
+
+    Order is deliberate: a sentence boundary anywhere inside the cap beats a later
+    clause boundary, which beats the old word break (no boundary at all — a long
+    run of commas-free prose — must not produce an empty label).
     """
-    return msg if len(msg) <= cap else msg[:cap].rsplit(" ", 1)[0]
+    if len(msg) <= cap:
+        return msg
+    head = msg[:cap]
+    for group in (_SENTENCE_BREAKS, _CLAUSE_BREAKS):
+        at = max((head.rfind(sep) for sep in group), default=-1)
+        if at > 0:
+            return head[:at].rstrip()
+    return head.rsplit(" ", 1)[0]
 
 
 def _invalid_request_result(url: str, msg: str, next_action: str = "",

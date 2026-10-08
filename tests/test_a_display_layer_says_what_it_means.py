@@ -178,3 +178,59 @@ class TestTheRejectionSummaryBreaksAtAWord:
         """短句子不需要剪，也就不该多出词界的痕迹。"""
         out = quality._invalid_request_result("https://example.com", "url is required")
         assert out.summary == "invalid request · url is required"
+
+
+class TestTheRejectionSummaryStopsAtAClause:
+    """词界只保证不剪出半个 token，不保证那句话说得完（2026-10-08 真实使用模拟）。
+
+    同一轮真宿主调用里抓到三处：`…stored credentials for`（悬空介词）、
+    `…POST / PUT / PATCH /`（悬空斜杠）、`…Valid values:`（冒号后面正是那串合法值 ——
+    被剪掉的正是解药）。整句仍在 `error` 里，所以标签可以短；但一个以 "for" 或 ":"
+    收尾的标签不是"短"，是"坏"：它承诺了一个自己没有的东西。
+    """
+
+    # 四条都是这一轮实测打出来的原话，不是编的样本。
+    POST = ("method=POST is a write: it changes server state, and stored credentials "
+            "for this host ride along automatically")
+    GET = ("method=GET is a read, not a request - web_request takes POST / PUT / "
+           "PATCH / DELETE / HEAD")
+    ENUM = ("extraction_type='markdownx' is not a value this tool accepts. Valid "
+            "values: markdown, html, text, article, structured, check. No request "
+            "was made.")
+    GUARD = ("URL hostname localtest.me resolves to internal/private IP (127.0.0.1 in "
+             "127.0.0.0/8). This guard is fail-closed: on a fake-ip host only the "
+             "tunnel ranges are tolerated - it is refused whatever this machine measured.")
+
+    @pytest.mark.parametrize("msg", [POST, GET, ENUM, GUARD])
+    def test_the_label_never_ends_on_a_dangling_word_or_separator(self, msg):
+        label = quality._summary_label(msg)
+        assert label, "剪完什么都不剩就是另一种坏"
+        assert label.lower().split(" ")[-1] not in {
+            "for", "and", "the", "a", "to", "of", "with", "in", "not", "is", "takes"}, (
+            f"标签停在一个需要宾语的词上：{label!r}")
+        assert not label.rstrip().endswith((",", ":", ";", "-", "/", "(")), (
+            f"标签停在一个分隔符上，像在列一份没列完的东西：{label!r}")
+        assert msg.startswith(label), "标签必须是原话的前缀，不许改写"
+
+    def test_the_enumeration_is_not_promised_and_then_cut(self):
+        """`Valid values:` 收尾 = 承诺了一份不存在的清单；句子边界在那之前。"""
+        label = quality._summary_label(self.ENUM)
+        assert label == "extraction_type='markdownx' is not a value this tool accepts"
+
+    def test_a_clause_inside_the_cap_beats_a_word_at_the_edge(self):
+        """有子句边界就用它，哪怕词边界能多带几个字符。"""
+        label = quality._summary_label(self.POST)
+        assert label == "method=POST is a write: it changes server state"
+        assert "stored credentials" not in label
+
+    def test_no_boundary_in_the_cap_falls_back_to_the_word(self):
+        """一条边界都没有时，退回原来的词界规则 —— 这一条不许被新规则吃掉。"""
+        msg = "alpha " * 30 + "omega"
+        label = quality._summary_label(msg)
+        assert msg[len(label)] == " "
+        assert label == ("alpha " * 13).strip()
+
+    def test_the_whole_sentence_still_travels_in_error(self):
+        out = quality._invalid_request_result("https://example.com", self.ENUM)
+        assert out.error == f"invalid_request: {self.ENUM}"
+        assert "structured" in out.error, "剪的是标签，不是正文"
