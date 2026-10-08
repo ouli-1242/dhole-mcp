@@ -13,6 +13,7 @@ fails still returns whatever items parsed, with the error surfaced per-source.
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 from datetime import datetime, timezone
@@ -114,11 +115,52 @@ def _local_name(tag: str) -> str:
 
 
 def _text(elem: Any, *tags: str) -> str:
-    """First non-empty text of the given child tags (namespace-agnostic)."""
+    """First non-empty text of the given child tags (namespace-agnostic), raw.
+
+    An Atom ``type="xhtml"`` summary (and any child whose content is real markup
+    rather than an escaped string) keeps its text in the ELEMENTS below it, where
+    ``child.text`` cannot see it - the whole summary used to come back empty.
+    """
     for child in elem:
-        if _local_name(child.tag) in tags and child.text and child.text.strip():
-            return child.text.strip()
+        if _local_name(child.tag) not in tags:
+            continue
+        raw = "".join(child.itertext()) if len(child) else (child.text or "")
+        if raw.strip():
+            return raw.strip()
     return ""
+
+
+# 一份 HTML 描述里 `<` 后面跟空格是正文（"if a < b and c > d"），不是标签；只有紧跟
+# 字母或 `/` 的那个才是。宁可漏掉一个畸形标签，也不许吃掉一句比较。
+_TAG = re.compile(r"</?[a-zA-Z][^>]*>|<!--.*?-->")
+# 块级边界换成换行而不是空格：`<p>A</p><p>B</p>` 并成 "AB" 是坏掉的排版。
+_BLOCK = re.compile(r"(?i)<br\s*/?>|</?(?:p|div|li|ol|ul|tr|td|th|h[1-6]|"
+                    r"blockquote|pre|section|article)\b[^>]*>")
+_SPACES = re.compile(r"[ \t\f\v]+")
+_BLANK_RUNS = re.compile(r"\n{2,}")
+
+
+def _readable(text: str) -> str:
+    """Entities resolved, whitespace normalised; markup left alone.
+
+    The double-escape is the part that looks like a bug and isn't one: a feed that
+    writes ``&amp;#8217;`` hands the XML parser ``&#8217;`` as literal text, and
+    only a second pass reads it. Measured on theverge.com's feed - titles arrived
+    as ``Microsoft&#8217;s``.
+    """
+    out = html.unescape(text)
+    return _BLANK_RUNS.sub("\n", _SPACES.sub(" ", out)).strip()
+
+
+def _plain(text: str) -> str:
+    """What a reader of a headline list should see: prose, not source.
+
+    HN's front-page ``<description>`` is markup (escaped or CDATA-wrapped), and
+    ``feed_read`` is a tool for "what has this source published" - handing back
+    ``<p>Article URL: <a href="…">`` makes the caller parse a second document per
+    item to read a title-sized fact.
+    """
+    return _readable(_BLOCK.sub("\n", _TAG.sub("", text)))
 
 
 def _empty_feed_note(root: Any) -> str:
@@ -159,7 +201,7 @@ def _parse_feed_xml(raw: str, source_url: str) -> FeedResult:
     root = etree.fromstring(raw.encode("utf-8", errors="replace"))
     root_name = _local_name(root.tag)
 
-    source_title = _text(root, "title", "subtitle")
+    source_title = _readable(_text(root, "title", "subtitle"))
     items: list[FeedItem] = []
 
     if root_name == "feed":  # Atom
@@ -170,9 +212,9 @@ def _parse_feed_xml(raw: str, source_url: str) -> FeedResult:
             for child in entry:
                 if _local_name(child.tag) == "link":
                     link = child.get("href", "") or link
-            summary, cut = _preview(_text(entry, "summary", "content"))
+            summary, cut = _preview(_plain(_text(entry, "summary", "content")))
             items.append(FeedItem(
-                title=_text(entry, "title"),
+                title=_readable(_text(entry, "title")),
                 url=link,
                 published=_parse_date(_text(entry, "published", "updated", "date")),
                 summary=summary,
@@ -182,13 +224,13 @@ def _parse_feed_xml(raw: str, source_url: str) -> FeedResult:
     else:  # RSS 2.0 (channel/item), also handles rdf:RDF
         channel = next((c for c in root if _local_name(c.tag) == "channel"), None)
         if channel is not None:
-            source_title = _text(channel, "title")
+            source_title = _readable(_text(channel, "title"))
         for item in root.iter():
             if _local_name(item.tag) != "item":
                 continue
-            summary, cut = _preview(_text(item, "description"))
+            summary, cut = _preview(_plain(_text(item, "description")))
             items.append(FeedItem(
-                title=_text(item, "title"),
+                title=_readable(_text(item, "title")),
                 url=_text(item, "link"),
                 published=_parse_date(_text(item, "pubDate", "published", "date")),
                 summary=summary,
