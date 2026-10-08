@@ -104,6 +104,18 @@ class TestTheTailIsNotClipped:
     def test_the_cap_is_not_the_problem_for_an_ordinary_error(self):
         assert len(_tier_error_text(ValueError("y" * 900))) == 200
 
+    def test_the_guard_summary_ends_where_a_word_ends(self):
+        """重启后实测的另一处：summary 标签 `msg[:80]` 停在 "…can compile (S" 这种半截词上。
+
+        整句仍在 error 里，标签可以短，但不能短得像坏掉的字符串。
+        """
+        out = server_mod._resolver_guard_result("https://docs.example.com/", GUARD_MSG)
+        prefix = "refused by the SSRF resolver guard · "
+        assert out.summary.startswith(prefix)
+        tail = out.summary[len(prefix):]
+        assert GUARD_MSG[len(tail)] == " ", f"summary 停在词中间: {tail!r}"
+        assert out.error == GUARD_MSG
+
 
 class TestDiscoverAndCrawlSayTheWholeSentence:
     """评审现场的第二处：discover/crawl 把 300 字符的解释剪在 200，尾巴正是出路。"""

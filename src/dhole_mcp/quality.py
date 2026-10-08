@@ -1474,6 +1474,15 @@ def _is_over_budget(result) -> bool:
     return bool(result) and result.error.startswith("timeout: the ")
 
 
+def _summary_label(msg: str, cap: int = 80) -> str:
+    """A sentence shortened for the ``summary`` slot, ending where a word ends.
+
+    ``msg[:80]`` produced labels like "…can compile (S" — a reader can't tell a
+    shortened sentence from a broken string. The whole sentence stays in ``error``.
+    """
+    return msg if len(msg) <= cap else msg[:cap].rsplit(" ", 1)[0]
+
+
 def _invalid_request_result(url: str, msg: str, next_action: str = "",
                             tool: str = "web_read") -> ResponseModel:
     """A call rejected before any request went out, shaped like a FetchResult.
@@ -1496,7 +1505,7 @@ def _invalid_request_result(url: str, msg: str, next_action: str = "",
         url=url, status=0, content=[], fetcher_used="none",
         extracted_type="markdown",
         error=f"invalid_request: {msg}",
-        summary=f"invalid request · {msg[:80]}",
+        summary=f"invalid request · {_summary_label(msg)}",
         next_action=next_action or (
             "Correct the argument and call again - no request was made. "
             f"{tool} takes an absolute http(s) URL "

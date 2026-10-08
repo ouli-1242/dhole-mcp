@@ -246,6 +246,7 @@ from dhole_mcp.quality import (  # noqa: F401
     _robots_blocked_result,
     _schema_value_empty,
     _should_try_archive,
+    _summary_label,
     _with_agent_hints,
 )
 # 17.0 B6 第七刀上半：反爬档位搬进 rungs.py。这八颗都是再导出：抓取的三条路
@@ -437,6 +438,17 @@ INLINE_PAGE_CAP_MS = 15_000         # 单页原本无条件拿到的那 15s
 # 预算之外（quality._BACKSTOP_GRACE_S）。配额若按整个余额分，三页的最坏情况
 # 就是 28s + 3×宽限，照样撞过宿主的 30s —— 所以每页先把宽限扣出来再分。
 INLINE_PAGE_GRACE_MS = int(_BACKSTOP_GRACE_S * 1000) + 500
+# 一行 reason 的帽。200 是重启前实测剪到的地方：`extraction_collapsed` 那句在前 200
+# 字里讲完"为什么是洞"，出路（换哪个 extraction_type）在 200 字之后 —— 而那一句在这一
+# 行里没有第二个字段兜着。帽要留（外来的 dump 可以无限长），但它只能落在词界上。
+HOLE_REASON_CAP = 400
+
+
+def _clip_reason(text: str) -> str:
+    """Bound a hole's reason without beheading it: whole words, and say when it was cut."""
+    if len(text) <= HOLE_REASON_CAP:
+        return text
+    return text[:HOLE_REASON_CAP].rsplit(" ", 1)[0] + " [reason clipped]"
 
 
 def _inline_hole_reason(page_result) -> str:
@@ -454,7 +466,7 @@ def _inline_hole_reason(page_result) -> str:
                        if page_result.page_type not in ("", "unknown") else ""),
                       page_result.summary):
         if candidate:
-            return str(candidate)[:200]
+            return _clip_reason(str(candidate))
     return (f"no content extracted (status {page_result.status}, "
             f"fetcher {page_result.fetcher_used or 'none'})")
 
@@ -2957,7 +2969,7 @@ def _resolver_guard_result(url: str, msg: str) -> ResponseModel:
         "No argument on this call changes it - the resolver verdict was taken once, "
         f"at this process's first hostname check. {RESOLVER_GUARD_RECOVERY}; "
         "nothing was fetched.")
-    result.summary = f"refused by the SSRF resolver guard · {msg[:80]}"
+    result.summary = f"refused by the SSRF resolver guard · {_summary_label(msg)}"
     result.diagnosis = {"code": "resolver_guard", "retryable": False,
                         "recover_with": RESOLVER_GUARD_RECOVERY}
     return result

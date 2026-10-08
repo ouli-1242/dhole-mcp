@@ -246,6 +246,45 @@ class TestEveryHoleCarriesAReason:
         assert out.fetched_pages[0]["error"] == "http 503: upstream gave up"
 
     @pytest.mark.asyncio
+    async def test_a_long_reason_keeps_its_cure(self, monkeypatch):
+        """重启后实测：塌陷页那一行的 error 停在 "…Do NOT re-fetch for rendering; "。
+
+        页侧那句 200 字之后还有出路（`take extraction_type='html' (or 'text')`），而组装处
+        的 `[:200]` 把它剪掉了 —— 洞是解释了，能照做的那半句没了。这一行是响应里唯一带这句
+        话的地方（没有别的字段兜着），所以剪它等于剪掉答案。
+        """
+        reason = ("extraction_collapsed: this page's own markup holds 1895 characters of visible "
+                  "text while the extract returned 467 - the words ARE in the HTML, dhole's reader "
+                  "lost them. Do NOT re-fetch for rendering; take extraction_type='html' (or 'text') "
+                  "for this URL instead.")
+        assert len(reason) > 200, "夹具要长过旧帽，否则测不到这一刀"
+        _wire(monkeypatch, n_results=1, search_ms=500)
+        server = MasterFetchServer()
+        server.web_read = AsyncMock(return_value=ResponseModel(
+            url="https://a0.example.test/widgets", status=200, content=[],
+            content_ok=False, error=reason))
+
+        out = await server.web_search("widgets doc", fetch_content=True, cache_ttl=0)
+
+        assert out.fetched_pages[0]["error"] == reason
+
+    @pytest.mark.asyncio
+    async def test_an_oversized_reason_is_cut_at_a_word_and_says_so(self, monkeypatch):
+        """外来长文本仍要有帽，但帽落在词界上，并且明说被剪过 —— 不留半截词、不装作完整。"""
+        _wire(monkeypatch, n_results=1, search_ms=500)
+        server = MasterFetchServer()
+        server.web_read = AsyncMock(return_value=ResponseModel(
+            url="https://a0.example.test/widgets", status=200, content=[],
+            content_ok=False, error="parser dump token " * 200))
+
+        out = await server.web_search("widgets doc", fetch_content=True, cache_ttl=0)
+
+        row = out.fetched_pages[0]["error"]
+        assert len(row) <= server_mod.HOLE_REASON_CAP + 40
+        assert row.endswith(" [reason clipped]")
+        assert "dump token" in row and not row[:-len(" [reason clipped]")].endswith(" tok")
+
+    @pytest.mark.asyncio
     async def test_a_clean_page_still_carries_no_error_key(self, monkeypatch):
         """反向不许漂：给成功行硬塞一个空 error 会让调用方把"没问题"读成"有问题"。"""
         _wire(monkeypatch, n_results=1, search_ms=500)

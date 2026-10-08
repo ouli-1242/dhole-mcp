@@ -17,6 +17,7 @@
 import pytest
 
 from dhole_mcp import guide
+from dhole_mcp import quality
 from dhole_mcp.actions import build_page_action
 from dhole_mcp.crawl import _scope_hint
 from dhole_mcp.server import MasterFetchServer
@@ -150,3 +151,30 @@ class TestTheShapesUseOnePairOfBraces:
         assert "cookies" in out.error, out.error
         assert "{name: value}" in out.error, out.error
         assert "{{" not in out.error, out.error
+
+
+class TestTheRejectionSummaryBreaksAtAWord:
+    """`msg[:80]` 把拒绝句的 summary 剪成 "…can compile (S" —— 半截 token 看着像坏了的字符串。
+
+    整句仍在 `error` 里（summary 是标签，不是正文），所以这里只要求帽落在词界上。
+    """
+
+    MSG = ("css_selector 'a >> b {;}' is not a selector the extraction engine can compile "
+           "(SelectorSyntaxError: Expected selector, got <DELIM '>' at 3>) - it would have "
+           "been ignored and the whole page returned")
+
+    def test_the_summary_ends_where_a_word_ends(self):
+        out = quality._invalid_request_result("https://example.com", self.MSG)
+        prefix = "invalid request · "
+        assert out.summary.startswith(prefix)
+        tail = out.summary[len(prefix):]
+        assert self.MSG[len(tail)] == " ", f"summary 停在词中间: {tail!r}"
+
+    def test_the_error_still_carries_the_whole_sentence(self):
+        out = quality._invalid_request_result("https://example.com", self.MSG)
+        assert out.error == f"invalid_request: {self.MSG}"
+
+    def test_a_short_rejection_is_not_padded(self):
+        """短句子不需要剪，也就不该多出词界的痕迹。"""
+        out = quality._invalid_request_result("https://example.com", "url is required")
+        assert out.summary == "invalid request · url is required"
