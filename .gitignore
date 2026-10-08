@@ -58,6 +58,9 @@ research/
 notes/
 scratch/
 .scratch/
+# 自建进程验证用的临时 HOME 与夹具目录（各含一份模型副本，数百 MB）：本地一次性产物，
+# 不该出现在 git status 里。
+.tmp-*/
 .pi/
 .claude/
 .cursor/
