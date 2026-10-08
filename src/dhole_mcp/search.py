@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from dhole_mcp.cache import get_cached, set_cached
 from dhole_mcp.envelope import classify_source
 from dhole_mcp.injection import scan as _scan_injection
+from dhole_mcp.quality import _summary_label
 from dhole_mcp.security import validate_search_query, validate_url, redact_api_key, SecurityError
 from dhole_mcp.search_engines import (
     RawResult, multi_search, EngineReport, DEFAULT_ENGINES,
@@ -605,6 +606,16 @@ _PARAM_REPAIR_HINTS = (
                               'e.g. ["github.com"].'),
     ("must be a date string", "after= / before= take an ISO date ('2026-09-20') or a "
                               "relative span ('30d', '2 weeks')."),
+    # 这两条是同一族里最后两个只剩"哪错了"的：R3刀3 给 site/location/language/日期
+    # 都配了修法句，mode 与 freshness 漏了 —— 而 `Invalid mode: 'bogus'
+    # (auto|neural|find_similar)` 那句列的是合法值，不是"该怎么做"（实测它们连
+    # next_action 都是空串，读者只能自己把列表再读一遍）。
+    ("Invalid mode:", "mode= is one of 'auto' (consensus + position, no model), "
+                      "'neural' (cross-encoder rerank) or 'find_similar' (pass url= "
+                      "instead of a query). Omit it for the default pool."),
+    ("Invalid freshness:", "freshness= is a preset window ('day', 'week', 'month', "
+                           "'year'); for an exact span pass after= / before= dates "
+                           "instead."),
     ("is not a date", "after= / before= take an ISO date ('2026-09-20') or a relative "
                       "span ('30d') - an unreadable date is refused instead of being "
                       "dropped, because a silently ignored window reads as 'no limits'."),
@@ -617,6 +628,22 @@ def _param_repair_hint(msg: str) -> str:
         if prefix in msg:
             return f"Nothing was searched - no engine was asked. {hint}"
     return ""
+
+
+def _param_refusal(query: str, msg: str, *, next_action: str = "",
+                   duration_ms: float = 0.0) -> SearchResponseModel:
+    """一颗参数写错了的答复，三格齐全。
+
+    `_invalid_request_result` 那一族从来是 error + summary + next_action 一起给；这一族
+    从前只给到 error（有时连 next_action 也没有），而**成功**的搜索是带 summary 的
+    （"Searched 'x' -> 3 results…"）—— 于是一行用量日志里，失败那一行没有标签可读。
+    这里不套 `invalid_request:` 前缀：那颗参数名开头是
+    `test_the_enum_argument_values_are_checked_by_dhole` 立的规矩，前缀会把第一格词占掉。
+    """
+    return SearchResponseModel(
+        query=query, results=[], total_results=0, duration_ms=duration_ms,
+        error=msg, next_action=next_action or _param_repair_hint(msg),
+        summary=f"invalid request · {_summary_label(msg)}")
 
 
 def _validate_engines(engines):
@@ -1335,11 +1362,7 @@ async def web_search(
         engines = _validate_engines(engines)
         freshness = _validate_freshness(freshness)
     except Exception as e:
-        return SearchResponseModel(
-            query=query, results=[], total_results=0,
-            duration_ms=0, error=str(e),
-            next_action=_param_repair_hint(str(e)),
-        )
+        return _param_refusal(query, str(e))
 
     # G24: the date window is resolved against the pool that is about to run,
     # because "did the dates get applied?" is a question about these engines, not
@@ -1348,13 +1371,10 @@ async def web_search(
         freshness, date_filter, date_rejected = _date_window(
             after, before, freshness, engines or list(DEFAULT_ENGINES))
     except Exception as e:
-        return SearchResponseModel(
-            query=query, results=[], total_results=0, duration_ms=0, error=str(e),
-            next_action=_param_repair_hint(str(e)))
+        return _param_refusal(query, str(e))
     if date_rejected:
-        return SearchResponseModel(
-            query=query, results=[], total_results=0, duration_ms=0,
-            error=date_rejected,
+        return _param_refusal(
+            query, date_rejected,
             next_action=("Drop before= and use after=<date>, or fetch the source's "
                          "feed with feed_read(since=<date>) when it publishes one - "
                          "a feed carries per-item dates, which search results do not."),
@@ -1434,11 +1454,11 @@ async def web_search(
         except Exception:
             find_sim_url = ""
         if not find_sim_url:
-            return SearchResponseModel(
-                query=query, results=[], total_results=0,
-                duration_ms=(time() - t0) * 1000,
-                error="find_similar requires a url (pass url=, or the URL as query).",
-                next_action="Pass url= with a page URL to find pages similar to it (or pass the URL as the query).")
+            return _param_refusal(
+                query, "find_similar requires a url (pass url=, or the URL as query).",
+                next_action="Pass url= with a page URL to find pages similar to it "
+                            "(or pass the URL as the query).",
+                duration_ms=(time() - t0) * 1000)
 
     # Preserve an explicit region for cache identity before deriving the
     # location/language default used by search engines.

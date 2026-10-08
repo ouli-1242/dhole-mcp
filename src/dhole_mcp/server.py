@@ -270,6 +270,7 @@ from dhole_mcp.rungs import (  # noqa: F401
 # tests 也按 `dhole_mcp.server.<名字>` 读这一层（`test_context_budget.py` 更是直接
 # 扫 server 源码里的 `_coerce_int_arg(` 调用）。
 from dhole_mcp.params import (  # noqa: F401
+    ArgumentRefusal,
     _ARG_DEFAULTS,
     _ARG_TYPES,
     _BOOL_LITERALS,
@@ -3011,26 +3012,6 @@ def _resolver_guard_result(url: str, msg: str) -> ResponseModel:
     return result
 
 
-class ArgumentRefusal(ValueError):
-    """一句写完了的「你这参数不对」，走到协议边界才折成信封。
-
-    它是 ValueError 的子类而不是新分支：`_dispatch` 那一层照旧抛（CLI 读异常，全仓
-    十处 `raises(ValueError, match="Unsupported argument")` 的锁一字不动），只有
-    `call_tool` 认识它 —— 那里把它折成 `_invalid_request_result`，于是 agent 拿到的
-    是 summary / content_ok / next_action 齐全的信封，而不是 transport 兜底的裸
-    ``{"error": str(e)[:300]}``。
-
-    兜底的注释写着「走到这里说明这不是 dhole 设计过的拒绝」。实测证伪了它：陌生参数与
-    动作形状错都是设计过的拒绝，却都从那条兜底出去 —— 而 `[:300]` 剪掉的正是支持列表的
-    尾巴（schema/search/selector/sitemap/timeout/url），也就是"那我该怎么写"。与 R2刀1
-    同一类，只是发生在协议边界。
-    """
-
-    def __init__(self, msg: str, next_action: str = ""):
-        super().__init__(msg)
-        self.next_action = next_action
-
-
 _ARG_REFUSAL_WAY_OUT = (
     "Nothing was sent. The name in `error` is not one this tool takes - rename or "
     "drop it; the list in `error` is everything it does take. Every argument is a "
@@ -3040,6 +3021,18 @@ _ACTION_REFUSAL_WAY_OUT = (
     "Nothing was fetched. The action named in `error` has the wrong shape; "
     "sys_guide(topic='behavior', section='Page interaction') lists every action "
     "key and what each one takes.")
+
+
+def _envelope_url(args: dict | None) -> str:
+    """一颗拒绝里要写的那颗 url —— 只在它真是文本时写。
+
+    拒绝 `url=7` 的那封信不能把 7 再塞回 `ResponseModel(url=…)`：模型会在 pydantic 里
+    炸掉，调用方拿到的就是一句校验故事而不是"这颗参数该写成什么"（刀11 实测：门装上之后
+    `web_read(url=7)` 与 `web_search(url=7)` 正是这样坏的）。缺席与不可读都写成 `""`，
+    那本来就是"没有可用 URL"的意思。
+    """
+    value = (args or {}).get("url")
+    return value if isinstance(value, str) else ""
 
 
 def _reject_unknown_args(tool: str, args: dict) -> None:
@@ -7564,7 +7557,8 @@ class MasterFetchServer:
         location/language/region (geo), page (0-10), freshness
         (day|week|month|year). Results cached 5min.
         """
-        from dhole_mcp.search import SearchResponseModel  # lazy: search.py pulls the metasearch engine chain
+        from dhole_mcp.search import (  # lazy: search.py pulls the metasearch engine chain
+            SearchResponseModel, _param_refusal)
         # 评审R2刀4：`query` 在 wire 上不再是全局必填的。`mode='find_similar'` 的输入
         # 是一颗 URL，它没有查询词可写 —— 而 wire 过去的 required:["query"] 让宿主先
         # 把这种调用拦下，于是那颗模式在正常宿主上做不到（不传被拒，硬传又整个忽略）。
@@ -7595,21 +7589,18 @@ class MasterFetchServer:
         # 一颗地板 1 什么也过滤不掉（每行至少一个家族），而没开 fetch_content 时
         # 它根本没有作用对象。
         if fetch_min_consensus and fetch_min_consensus < 2:
-            return SearchResponseModel(
-                query=query, results=[], total_results=0, duration_ms=0,
-                error=("fetch_min_consensus must be 0 (off) or >= 2: every result "
-                       "has at least one contributing index family, so a floor of 1 "
-                       "filters nothing."),
-                next_action="Drop fetch_min_consensus, or set it to 2 or more.",
-            )
+            return _param_refusal(
+                query,
+                "fetch_min_consensus must be 0 (off) or >= 2: every result "
+                "has at least one contributing index family, so a floor of 1 "
+                "filters nothing.",
+                next_action="Drop fetch_min_consensus, or set it to 2 or more.")
         if fetch_min_consensus >= 2 and not fetch_content:
-            return SearchResponseModel(
-                query=query, results=[], total_results=0, duration_ms=0,
-                error=("fetch_min_consensus only applies with fetch_content=true - "
-                       "without it nothing is auto-fetched, so the floor has nothing "
-                       "to gate."),
-                next_action="Add fetch_content=true, or drop fetch_min_consensus.",
-            )
+            return _param_refusal(
+                query,
+                "fetch_min_consensus only applies with fetch_content=true - "
+                "without it nothing is auto-fetched, so the floor has nothing to gate.",
+                next_action="Add fetch_content=true, or drop fetch_min_consensus.")
 
         t_call = now()
         try:
@@ -7824,10 +7815,18 @@ class MasterFetchServer:
         from dhole_mcp.crawl import CrawlResponseModel as _CRM
         if resume_token or selector or schema is not None:
             if not resume_token:
-                return _CRM(start_url=url, pages=[], error=(
-                    "invalid_request: selector=/schema= project a discovered plan; "
-                    "pass resume_token='<plan_id>:0' from web_discover (or drop "
-                    "them for a plain crawl). Nothing was fetched."))
+                _msg = ("invalid_request: selector=/schema= project a discovered plan; "
+                        "pass resume_token='<plan_id>:0' from web_discover (or drop "
+                        "them for a plain crawl). Nothing was fetched.")
+                # 三格齐全才叫一封拒绝：这一族从前只有 error，而成功的那条路是带
+                # summary 的（"crawled N page(s)…"）—— 一行用量日志里失败行没标签可读。
+                return _CRM(start_url=url, pages=[], error=_msg,
+                            summary=f"invalid request · {_summary_label(_msg)}",
+                            next_action=(
+                                "Nothing was fetched. Either call web_discover first "
+                                "and pass its plan back here as "
+                                "resume_token='<plan_id>:0', or drop selector= / "
+                                "schema= and let this be a plain crawl."))
             return await self._crawl_plan_resume(
                 url=url, resume_token=resume_token, selector=selector,
                 schema=schema, max_pages=max_pages,
@@ -8350,7 +8349,7 @@ class MasterFetchServer:
                     # 说的没错，错的是这类拒绝以前没有自己的出口。
                     _log_tool_call(params.name, False, (now() - started) * 1000, str(e))
                     return _call_result(_wire_result(_invalid_request_result(
-                        (params.arguments or {}).get("url") or "", str(e),
+                        _envelope_url(params.arguments), str(e),
                         next_action=e.next_action, tool=params.name)))
                 except Exception as e:
                     from mcp.types import TextContent  # 局部导入与其余传输侧导入同一惯例
@@ -8584,7 +8583,7 @@ class MasterFetchServer:
             # falling back to advice about the URL, which was already right.
             bad_arg = str(e).split(" ", 1)[0].rstrip(".")
             result = _invalid_request_result(
-                args.get("url") or "", str(e),
+                _envelope_url(args), str(e),
                 next_action=(
                     f"Fix {bad_arg} and call again - no request was made. "
                     "Argument types are checked rather than guessed at: a "

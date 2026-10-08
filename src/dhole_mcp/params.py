@@ -20,6 +20,41 @@ from typing import Any, List, Optional
 from dhole_mcp.rungs import _ANTI_DETECT, _RUNG_TOOLS
 
 
+class ArgumentRefusal(ValueError):
+    """一句写完了的「你这参数不对」，走到协议边界才折成信封。
+
+    它是 ValueError 的子类而不是新分支：`_dispatch` 那一层照旧抛（CLI 读异常，全仓
+    十处 `raises(ValueError, match=...)` 的锁一字不动），只有 `call_tool` 认识它 ——
+    那里把它折成 `_invalid_request_result`，于是 agent 拿到的是 summary / content_ok /
+    next_action 齐全的信封，而不是 transport 兜底的裸 ``{"error": str(e)[:300]}``。
+
+    兜底的注释写着「走到这里说明这不是 dhole 设计过的拒绝」。2026-10-08 的全参数反类型
+    扫（111 颗参数各喂一个错类型的值，走真 SDK 回路）证伪了它：30 颗参数的句子本来就写完了
+    —— `confirm must be a boolean, got 'one'. Pass true or false (default false).` ——
+    却整条只回一个裸 `{"error": ...}`。与刀1 同一类，只是换了一整个出口面：刀1 收的是
+    陌生参数名与动作形状，这一层收的是共用的类型归一化本身。
+    """
+
+    def __init__(self, msg: str, next_action: str = ""):
+        super().__init__(msg)
+        self.next_action = next_action
+
+
+#: 每一颗 `_coerce_*` 的拒绝共用这一句：句子前半是"改哪一颗、改成什么是错的"已经写在
+#: `error` 里（各颗的说法本来就各不相同，不该在出路里重讲一遍），后半是"为什么门要拦
+#: 而不是猜" —— 那是这一层存在的全部理由，也是调用方最需要听的一句。
+_TYPE_REFUSAL_WAY_OUT = (
+    "Nothing was fetched or changed. The argument named at the start of `error` is the "
+    "one to rewrite, and `error` states the shape it takes. Types are checked at the "
+    "door rather than guessed at: a misread `urls` would otherwise come back looking "
+    "like a successful 19-URL fetch, and a string `confirm` would look like an approval.")
+
+
+def _refuse(msg: str) -> ArgumentRefusal:
+    """每一颗 `_coerce_*` 的拒绝都从这里出：句子各处不同，出路这一句共用。"""
+    return ArgumentRefusal(msg, next_action=_TYPE_REFUSAL_WAY_OUT)
+
+
 def _coerce_int_arg(
     value: Any, name: str, *, lo: Optional[int] = None, hi: Optional[int] = None,
     default: int, clamp: bool = True, allow_float: bool = False,
@@ -60,7 +95,7 @@ def _coerce_int_arg(
     example = (f"e.g. {name}={default}" if default is not None
                else f"or omit {name} to use the tool default")
     if isinstance(value, bool):
-        raise ValueError(
+        raise _refuse(
             f"{name} must be an integer, got a boolean. "
             f"Pass {name}={int(value)} ({example})."
         )
@@ -71,19 +106,19 @@ def _coerce_int_arg(
             value = int(text)
         except ValueError:
             if not allow_float:
-                raise ValueError(
+                raise _refuse(
                     f"{name} must be an integer, got {value!r}. "
                     f"Pass a number ({example})."
                 ) from None
             try:
                 value = float(text)
             except ValueError:
-                raise ValueError(
+                raise _refuse(
                     f"{name} must be a number, got {value!r}. "
                     f"Pass a number ({example})."
                 ) from None
     if not isinstance(value, number_types):
-        raise ValueError(
+        raise _refuse(
             f"{name} must be {'a number' if allow_float else 'an integer'}, got "
             f"{type(value).__name__}. Pass a number ({example})."
         )
@@ -94,7 +129,7 @@ def _coerce_int_arg(
             if hi is not None:
                 value = min(hi, value)
             return value
-        raise ValueError(
+        raise _refuse(
             f"{name} must be between {lo} and {hi}, got {value}."
         )
     return value
@@ -140,11 +175,11 @@ def _coerce_bool_arg(value: Any, name: str, *, default: bool = False) -> bool:
         key = value.strip().lower()
         if key in _BOOL_LITERALS:
             return _BOOL_LITERALS[key]
-        raise ValueError(
+        raise _refuse(
             f"{name} must be a boolean, got {value!r}. "
             f"Pass true or false (default {str(default).lower()})."
         )
-    raise ValueError(
+    raise _refuse(
         f"{name} must be a boolean, got {type(value).__name__}. "
         f"Pass true or false (default {str(default).lower()})."
     )
@@ -184,7 +219,7 @@ def _coerce_str_list_arg(
         if isinstance(parsed, list):
             return _coerce_str_list_arg(parsed, name, single_hint=single_hint,
                                         element_hint=element_hint)
-        raise ValueError(
+        raise _refuse(
             f"{name} must be an array of strings, got a single string. "
             + (single_hint or f'Pass {name}=["...", "..."] instead.')
         )
@@ -192,13 +227,13 @@ def _coerce_str_list_arg(
         out: List[str] = []
         for i, item in enumerate(value):
             if not isinstance(item, str):
-                raise ValueError(
+                raise _refuse(
                     f"{name}[{i}] must be a string, got {type(item).__name__} "
                     f"({item!r}). Every element of {name} has to be {element_hint}."
                 )
             out.append(item)
         return out
-    raise ValueError(
+    raise _refuse(
         f"{name} must be an array of strings, got {type(value).__name__}. "
         + (single_hint or f'Pass {name}=["...", "..."] instead.')
     )
@@ -216,7 +251,7 @@ def _coerce_anti_detect_arg(value: Any, name: str = "anti_detect") -> str:
         return "auto"
     if isinstance(value, str) and value.strip().lower() in _ANTI_DETECT:
         return value.strip().lower()
-    raise ValueError(
+    raise _refuse(
         f"{name} must be one of {', '.join(_ANTI_DETECT)}, got {value!r}. "
         "The rungs go weakest to strongest; there is no fifth, and no single "
         "fingerprint knob to override."
@@ -235,7 +270,7 @@ def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Option
     if value is None or value == "":
         return None
     if not isinstance(value, str):
-        raise ValueError(
+        raise _refuse(
             f"{name} must be a string, got {type(value).__name__}. "
             "Valid values: 'http', 'stealthy'."
         )
@@ -244,14 +279,14 @@ def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Option
         # Named rather than folded into "not a fetcher tier": a caller working
         # from old notes needs to be told where that name went, not asked to
         # guess between the two tiers that are left.
-        raise ValueError(
+        raise _refuse(
             f"{name}='dynamic' was the alias of the browser tier that left in "
             "v3.5.0, and the alias itself is gone in 17.0 - pass "
             "force_fetcher='stealthy' (anti-detect browser) or 'http'. "
             "No request was made."
         )
     if key not in _FORCE_FETCHER_VALUES:
-        raise ValueError(
+        raise _refuse(
             f"{name}={value!r} is not a fetcher tier. "
             "Valid values: 'http', 'stealthy'."
         )
@@ -332,13 +367,13 @@ def _coerce_enum_arg(value: Any, name: str, allowed: tuple[str, ...],
     if value is None or value == "":
         return None
     if not isinstance(value, str):
-        raise ValueError(
+        raise _refuse(
             f"{name} must be a string, got {type(value).__name__}. "
             f"Valid values: {', '.join(allowed)}."
         )
     key = value.strip().lower()
     if key not in allowed:
-        raise ValueError(
+        raise _refuse(
             f"{name}={value!r} is not a value this tool accepts. "
             f"Valid values: {', '.join(allowed)}."
             + (f" {note}" if note else "")
@@ -449,6 +484,10 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
     # `pages` / `password` 与 web_read 同名同档（"strnum"）：`pages: 3` 是第 3 页、
     # `password: 1234` 是 "1234" —— 一个只按字符串读的参数拿到整数时，那是同一个值。
     "doc_parse": {"offset": "int", "pages": "strnum", "password": "strnum"},
+    # cred_defaults 的 `set` 是唯一一颗装着配置的对象参数。从前没人查它，
+    # `set="github.com"` 答回来的是 `dict()` 自己的话（"dictionary update sequence
+    # element #0 has length 1; 2 is required"）—— 既不说哪颗参数错了，也不说该写成什么。
+    "cred_defaults": {"set": "dict"},
 }
 
 _ARG_DEFAULTS: dict[Any, dict[str, Any]] = {}
@@ -480,6 +519,69 @@ def _arg_defaults(tool: str) -> dict[str, Any]:
     return defaults
 
 
+def _coerce_str_arg(value: Any, name: str) -> Any:
+    """一颗工具只会当文本读的参数，就得是文本。
+
+    门前的两种坏法都实测到过：`web_request(url=7)` 答 `'int' object has no attribute
+    'strip'`（一句 Python 内部话），`web_read(url=7)` 更坏 —— 它**一路跑完**，在
+    `ResponseModel(url=…)` 装填响应时才炸出 pydantic 的校验文本。两种都把自己是哪颗参数
+    写错了藏了起来，而后一种还把事情做完了才拒绝。
+    """
+    if value is None or isinstance(value, str):
+        return value
+    raise _refuse(f"{name} must be a string, got {type(value).__name__} "
+                  f"({value!r}). Pass {name} as text.")
+
+
+def _coerce_dict_arg(value: Any, name: str) -> Any:
+    """一颗装着配置的对象参数得是对象。
+
+    `cred_defaults(set="host")` 从前答的是 `dictionary update sequence element #0 has
+    length 1; 2 is required` —— 那是 `dict()` 的 Python 话，说不出哪颗参数错了。与
+    `_coerce_str_list_arg` 同一口径：把整段 JSON 文本发过来的客户端收下来（序列化是
+    它们那一侧的常态），其余一律按形状拒。
+    """
+    if value is None or isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("{"):
+            try:
+                parsed = json.loads(text)
+            except (ValueError, TypeError):
+                parsed = None
+            if isinstance(parsed, dict):
+                return parsed
+    raise _refuse(f"{name} must be an object of key/value pairs, got "
+                  f"{type(value).__name__} ({value!r}). "
+                  f'Pass {name}={{"<key>": <value>, ...}}.')
+
+
+_WIRE_STRINGS: dict[str, tuple[str, ...]] = {}
+
+
+def _wire_string_params(tool: str) -> tuple[str, ...]:
+    """schema 上写着 string、而 `_ARG_TYPES` 没认领的那些参数名。
+
+    名单从 `_TOOL_DEFS` 现读而不是手抄：新增一颗参数就自动进门（手抄的名单正是那种会
+    漂的东西）。表里认领过的（`strnum` 的 `pages`/`password`、`list`、`bool`…）一律跳过
+    —— 它们各有自己那句按形状写的话，把 `pages=3` 当数字收下来是刻意的。
+    """
+    cached = _WIRE_STRINGS.get(tool)
+    if cached is not None:
+        return cached
+    from dhole_mcp.server import MasterFetchServer
+
+    spec = next((td for td in MasterFetchServer._TOOL_DEFS
+                 if td["name"] == tool), None)
+    taken = set(_ARG_TYPES.get(tool, {}))
+    props = (spec or {}).get("inputSchema", {}).get("properties", {})
+    names = tuple(n for n, s in props.items()
+                  if s.get("type") == "string" and n not in taken)
+    _WIRE_STRINGS[tool] = names
+    return names
+
+
 def _coerce_one_arg(kind: str, name: str, value: Any, default: Any) -> Any:
     """Apply one table entry to one value."""
     if kind == "int":
@@ -488,6 +590,10 @@ def _coerce_one_arg(kind: str, name: str, value: Any, default: Any) -> Any:
         return _coerce_int_arg(value, name, default=default, allow_float=True)
     if kind == "bool":
         return _coerce_bool_arg(value, name, default=bool(default))
+    if kind == "str":
+        return _coerce_str_arg(value, name)
+    if kind == "dict":
+        return _coerce_dict_arg(value, name)
     if kind == "list":
         return _coerce_str_list_arg(value, name)
     if kind == "rawlist":
@@ -501,13 +607,13 @@ def _coerce_one_arg(kind: str, name: str, value: Any, default: Any) -> Any:
                 parsed = None
             if isinstance(parsed, list):
                 return parsed
-            raise ValueError(
+            raise _refuse(
                 f"{name} must be an array of objects, got {value!r}. "
                 f"Pass {name}=[{{...}}, {{...}}]."
             )
         if value is None or isinstance(value, (list, tuple)):
             return value
-        raise ValueError(
+        raise _refuse(
             f"{name} must be an array of objects, got {type(value).__name__}. "
             f"Pass {name}=[{{...}}, {{...}}]."
         )
@@ -560,11 +666,17 @@ def _validate_tool_args(name: str, args: dict) -> dict:
     stealthy browser tier.
 
     Returning a normalized copy here means every branch below reads a value that
-    already has exactly one reading. Raises ValueError; the web_read branch
-    converts it to the ordinary invalid_request envelope, and anything else
-    surfaces through ``call_tool`` as an is_error result.
+    already has exactly one reading. Raises ArgumentRefusal (a ValueError): the
+    web_read branch converts it to the ordinary invalid_request envelope, and
+    ``call_tool`` folds every other tool's refusal into the same one.
     """
     out = dict(args)
+    # 每一颗"schema 写着 string、没人认领"的参数。这一格从前是空的：`web_read(url=7)`
+    # 一路抓到页、在装填响应时才炸出 pydantic 的校验文本，`doc_parse(file_path=7)` 答
+    # `'int' object has no attribute 'strip'` —— 两句都是真话，两句都不说在哪颗参数上。
+    for key in _wire_string_params(name):
+        if key in out:
+            out[key] = _coerce_str_arg(out[key], key)
     # 哪几颗工具读档位，就在这一处问一遍：`Literal[...]` 只到客户端为止，这台服务器
     # 自己读参数用 args.get()，一个不存在的档进了 `_ANTI_DETECT[level]` 就是 KeyError —
     # 那是一句 Python 栈，不是"这四颗里挑一个"的答案（`force_fetcher="magic"` 当年就是
