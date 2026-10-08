@@ -64,7 +64,10 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(
         r"browserType\.[a-zA-Z]*launch|failed to launch|could not launch|"
         r"cannot access executable|executable doesn't exist|"
-        r"access is denied|拒绝访问|\(0x5\)|spawn [^\s]+ ENOENT",
+        r"access is denied|拒绝访问|\(0x5\)|spawn [^\s]+ ENOENT|"
+        # 裸的那句驱动原话（不带 `browserType.launch:` 前缀）也会到分类器这里：
+        # actions.py 早就按这个片段认它，两份名单不该有出入。
+        r"while launching browser",
         re.IGNORECASE,
     ), "browser_launch"),
 

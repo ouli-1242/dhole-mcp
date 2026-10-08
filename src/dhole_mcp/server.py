@@ -6509,7 +6509,13 @@ class MasterFetchServer:
                 result.error = f"browser_unavailable: http status {result.status}, stealthy escalation skipped"
             return await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
 
-        errors.append(f"HTTP failed (status {result.status})")
+        # 每一档说过的话要带着走 —— `errors` 既喂分类（`classify_network_error`），也
+        # 拼进回执那一行。只写状态号的话，浏览器档一沉默，分类能读到的就只剩
+        # "HTTP failed (status 0)" 这种报纸标题：实测（2026-10-08 重启后）HTTP 档明明说了
+        # `(os error 10061)`，回执却报 `unknown` 并叫读者"先去查 DNS"。限长 140，与
+        # `_http_verdict` 同一个帽，报纸标题的前缀不变。
+        errors.append(f"HTTP failed (status {result.status})"
+                      + (f": {result.error[:140]}" if result.error else ""))
         # 17.0 B3：需要浏览器档时先确保二进制在。装一次是几分钟，所以这段时间必须
         # 从"这个页面的预算"里摘出去 —— 否则一次首用安装会把下一档的剩余时间读成
         # 0，用户收到的是一条关于站点的假故障。已经就绪时这里是几毫秒、waited_s=0。
@@ -6527,11 +6533,11 @@ class MasterFetchServer:
             logger.info("chromium installed on first use (%.1fs) - budget restored",
                         install.waited_s)
         # The tier's own words, kept for the browser over-budget message below.
-        # `errors` carries the status only because it also feeds the
-        # all_tiers_failed string, where a raw exception sentence would bloat it -
-        # but "the browser ran out of time" is worth more with what HTTP already
-        # learned attached to it (that is the whole difference between "raise your
-        # timeout" and "the origin reset the socket; skip the browser").
+        # Same 140-char bound as the `errors` line, so the two exits cannot drift
+        # into different stories about what HTTP learned - and "the browser ran out
+        # of time" is worth more with HTTP's verdict attached to it (that is the
+        # whole difference between "raise your timeout" and "the origin reset the
+        # socket; skip the browser").
         _http_verdict = (f"status {result.status}"
                          + (f": {result.error[:140]}" if result.error else ""))
         # What is actually left, not `timeout - elapsed` floored at 5s: the floor
@@ -6623,7 +6629,8 @@ class MasterFetchServer:
             return await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
 
         # All tiers failed
-        errors.append(f"Stealthy failed (status {result.status})")
+        errors.append(f"Stealthy failed (status {result.status})"
+                      + (f": {result.error[:140]}" if result.error else ""))
         # Classify the failure for agent-actionable tips
         from dhole_mcp.errors import classify_network_error
         raw_error = result.error or " ".join(errors)
