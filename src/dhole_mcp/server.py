@@ -1916,8 +1916,16 @@ def _translate_response_body(
         # Trafilatura-first path. 折叠主路也要过：承诺的 duplicate_lines_collapsed
         # 不能只在空结果回退的路上兑现（主路成功时折叠恒缺席＝承诺的能力不跑）。
         # _collapse_boilerplate 只对文本类动手，structured 原样返回。
-        from dhole_mcp.extractor import _collapse_boilerplate
-        content = _collapse_boilerplate(_trafilatura_extract(), extraction_type)
+        #
+        # 同一条教训的第二遍：`recover_a_lost_document` 也必须在这里过。检测器把整份
+        # 规范文档吃掉 99% 后交回一个非空切片，`extract_content` 里那道"还它一份完整
+        # 的"守卫就管不到线上这一路 —— 2026-10-06 那刀修的是"守卫钉住了函数没钉住
+        # 路径"，同一个洞换了个判据又出现一次。
+        from dhole_mcp.extractor import _collapse_boilerplate, recover_a_lost_document
+        content = _collapse_boilerplate(
+            recover_a_lost_document(page, _trafilatura_extract(),
+                                    extraction_type, css_selector),
+            extraction_type)
         if (not content or content == [""] or content == ["\n"]):
             content = _dhole_extract()
     else:
