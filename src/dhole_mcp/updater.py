@@ -1369,7 +1369,12 @@ def _append_wire_cost(checks) -> None:
                        if "annotations" in td else {})} for td in defs]
         compact = len(_json.dumps({"tools": minimal}, separators=(",", ":"),
                                   ensure_ascii=False))
-        total = compact + len(_srv.DHOLE_INSTRUCTIONS)
+        # 这一行报的是**这个进程**这次连接要付的字符数，所以 instructions 取
+        # ACTIVE_INSTRUCTIONS：DHOLE_TOOLS 裁掉工具时，被裁的那几行路由也跟着退出
+        # wire（真机 stdio 量过：全量 2,476 / 8 颗 2,116 / 两件套 1,502）。写
+        # DHOLE_INSTRUCTIONS 会让 doctor 在收窄过的注册面上报一个谁都没付的数，
+        # 而下面那句"想少付就用 DHOLE_TOOLS"正好只在收窄过时才成立。
+        total = compact + len(_srv.ACTIVE_INSTRUCTIONS)
         # F-C1-1：字数相同内容不同（一次措辞改写）在 connect cost 行上看不出
         # 来。指纹覆盖这条进程实际 serve 的脸（minimal defs ＋ instructions，
         # 与上一行的计价口径同一份输入）；基线在仓库对应 tag 的锁文件里。

@@ -1,13 +1,16 @@
 """Connect-time token spend: DHOLE_TOOLS registers only a subset of the tools.
 
 Why this file exists: the tools/list table plus instructions is paid on EVERY
-connect, even when dhole is never called. Measured on 2026-10-07 with
-``python tests/tool_payload_measure.py``: 28,292 chars of tool schemas + 2,476
-chars of instructions = 30,707 chars per connect (11 tools), which that
-tokenizer reads as ~7.4k cl100k tokens (4.16 chars per token for this payload),
-with web_read alone at 5,936 and web_act at 3,699.
-``DHOLE_TOOLS=web_read,web_search`` pays 11,423 — roughly a third of that
-cost; everything else stays one env-edit away.
+connect, even when dhole is never called. Measured on the wire (a real stdio
+server answering initialize + tools/list — see
+tests/test_the_dhole_tools_price_is_the_wire_itself.py) on 2026-10-09: 28,231
+chars of tool schemas + 2,476 chars of instructions = 30,707 chars per connect
+(11 tools), which that tokenizer reads as ~7.4k cl100k tokens (4.16 chars per
+token for this payload), with web_read alone at 5,936 and web_act at 3,656.
+``DHOLE_TOOLS=web_read,web_search`` pays 11,382 — roughly a third of that
+cost; everything else stays one env-edit away. (This docstring quoted 28,292 /
+3,699 / 11,423 until the wire was measured: three numbers that no longer added
+up to the total they claimed.)
 
 The knob is an import-time constant (like DHOLE_BROWSER_IDLE_TIMEOUT and
 DHOLE_DEFAULT_CONTENT_CHARS), so env-dependent behaviour is exercised in fresh

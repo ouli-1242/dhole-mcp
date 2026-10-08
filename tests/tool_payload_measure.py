@@ -257,9 +257,22 @@ def output_schema_report(compact_chars: int, instructions_chars: int) -> list[st
 
 
 def _wire_for(tool_defs: list[dict], names: set, parts: tuple[str, dict, str]) -> tuple[int, int]:
-    """(compact tools/list chars, instructions chars) for an enabled name set."""
+    """(compact tools/list chars, instructions chars) for an enabled name set.
+
+    路由行按**文本**去重，不是按工具数：`_INSTRUCTIONS_ROUTING` 里 web_discover 与
+    web_crawl 挂的是同一句（server.py 的 F-A-J1 那条），`_compose_instructions`
+    每次组装只发一次。不去重的尺子把全量 instructions 量成 2,626、连接总量 30,857，
+    而 2026-10-09 真机 stdio 量到的是 2,476 / 30,707（见
+    tests/test_the_dhole_tools_price_is_the_wire_itself.py）—— 这一节的名字是
+    "what an ordinary client pays"，多报 150 就是把钱算给了不存在的支付。
+    """
     intro, routing, rules = parts
-    lines = "".join(line for name, line in routing.items() if name in names)
+    seen: set[str] = set()
+    lines = ""
+    for name, line in routing.items():
+        if name in names and line not in seen:
+            seen.add(line)
+            lines += line
     instr = intro + (f"Routing:\n{lines}" if lines else "") + rules
     minimal = [
         {"name": td["name"], "description": td["description"],

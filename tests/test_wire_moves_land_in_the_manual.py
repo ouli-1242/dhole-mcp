@@ -280,25 +280,40 @@ def test_the_price_table_in_the_manual_is_the_current_one():
     这卷是 `sys_guide(topic='config')` 送出去的：操作员照它决定要不要裁注册面。
     一个过期的"总开销"不会报错，只会让人按错的价做决定 —— 所以这里只认逐字符相等，
     而且连价目表里那颗最贵的（`web_read`）一起钉住：它变了而文档没变，就是文档在说谎。
+
+    D-33（2026-10-09 真机 stdio 量）：这里的 `wire()` 曾经两侧都加**全量**
+    `DHOLE_INSTRUCTIONS`，于是算出的"单价"只含 tools/list 那一行，而注释和手册都写着
+    它是"总开销增量"。真机减掉 web_read 少付的是 6,061（5,937 行 + 它自己那句 124 字
+    路由），不是 5,937。改成 `_compose_instructions(sel)` —— 也就是 wire 实际发的
+    instructions —— 单价与"总开销"从此共用一把尺。
     """
     import json
 
-    from dhole_mcp.server import DHOLE_INSTRUCTIONS as IN, MasterFetchServer
+    from dhole_mcp.server import MasterFetchServer, _compose_instructions
 
     defs = {d["name"]: d for d in MasterFetchServer._TOOL_DEFS}
 
     def wire(sel):
         return len(json.dumps({"tools": [defs[n] for n in sel]}, ensure_ascii=False,
-                              separators=(",", ":"))) + len(IN)
+                              separators=(",", ":"))) + len(_compose_instructions(frozenset(sel)))
 
     allnames = list(defs)
     total = wire(allnames)
-    # 单价的口径写死在这里：注册这颗工具带来的**总开销增量**（含它前面那个逗号）。
-    # 手册里的价目表按同一个定义写，否则同一颗工具会有三个"成本"。
-    web_read = total - wire([n for n in allnames if n != "web_read"])
+    # 单价的口径写死在这里：从全量注册面里退掉这颗工具省下的**连接期总开销**
+    # （tools/list 那一行 + 它前面那个逗号 + 它自己的路由行；共用一句路由的工具
+    # 各退各的省不到 instructions）。手册里的价目表按同一个定义写，否则同一颗工具
+    # 会有三个"成本"。
+    #
+    # 钉全部 11 颗而不是最贵的一颗：这张表是操作员唯一的单价来源，而"哪些工具共用
+    # 路由行"恰是最容易写错的一列（web_crawl / web_discover 各退一次，instructions
+    # 一字不动 —— 真机量过）。
     cfg = (guide._ROOT / "references" / "configuration.md").read_text(encoding="utf-8")
     assert f"**{total:,} chars**" in cfg, (
         f"配置手册写的连接期总开销不是实测值（现在量到 {total:,}）—— 改文档，"
         "或说明为什么这次改动不该进 wire")
-    assert f"`web_read` {web_read:,}" in cfg, (
-        f"价目表里 web_read 的单价过期了（按增量口径实测 {web_read:,}）")
+    stale = []
+    for name in allnames:
+        price = total - wire([n for n in allnames if n != name])
+        if f"`{name}` {price:,}" not in cfg:
+            stale.append(f"{name}: 手册价 {price:,} 不在表里")
+    assert not stale, "价目表里有颗单价过期了（按退掉它省多少的口径实测）：\n" + "\n".join(stale)

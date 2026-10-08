@@ -503,7 +503,12 @@ class TestItem12ConnectCost:
 
     def test_the_row_matches_the_measured_payload(self, monkeypatch):
         """这一行印的是每次连接要付的固定成本，它必须与 tests/tool_payload_measure.py
-        量的是同一个数 —— 否则诊断命令自己就成了一个过期数字的来源。"""
+        量的是同一个数 —— 否则诊断命令自己就成了一个过期数字的来源。
+
+        口径写的是 `ACTIVE_INSTRUCTIONS`（这个进程真正发出去的那份），不是全量字面量：
+        默认注册面下两者同值，所以这条判据对未收窄的进程与上一条一样，收窄过的进程
+        由下面那条子进程用例负责。
+        """
         import json
 
         import dhole_mcp.server as srv_mod
@@ -518,9 +523,41 @@ class TestItem12ConnectCost:
                        if "annotations" in td else {})} for td in defs]
         expect = (len(json.dumps({"tools": minimal}, separators=(",", ":"),
                                  ensure_ascii=False))
-                  + len(srv_mod.DHOLE_INSTRUCTIONS))
+                  + len(srv_mod.ACTIVE_INSTRUCTIONS))
         assert f"{expect} chars" in row[2], row
         assert f"{len(defs)} tool(s)" in row[2], row
+
+    def test_a_narrowed_registration_prices_only_what_that_process_serves(self):
+        """DHOLE_TOOLS 收窄过的进程，doctor 报的必须是它自己付的那一笔。
+
+        真起一台解释器（这旋钮 import 期冻结，进程内改不了），只问 connect cost 那一行。
+        全量 instructions 是 2,476，`web_read,web_search` 的 wire 实发 1,502
+        （tests/test_the_dhole_tools_price_is_the_wire_itself.py 用真 stdio 量过 11,382
+        的总数）。按全量计价会报 12,356 —— 一个谁都没付的数，而且它恰好把"想少付就
+        用 DHOLE_TOOLS"这句建议变成了假话。
+        """
+        import os
+        import subprocess
+        import sys
+
+        code = (
+            "import dhole_mcp.server as s, dhole_mcp.updater as u\n"
+            "checks = []\n"
+            "u._append_wire_cost(checks)\n"
+            "print([c[2] for c in checks if c[0] == 'connect cost'][0])\n"
+            f"print('ACTIVE', len(s.ACTIVE_INSTRUCTIONS), 'FULL', len(s.DHOLE_INSTRUCTIONS))\n"
+        )
+        env = {k: v for k, v in os.environ.items() if k != "DHOLE_TOOLS"}
+        env["DHOLE_TOOLS"] = "web_read,web_search"
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                             text=True, env=env, timeout=180)
+        assert out.returncode == 0, out.stderr[-600:]
+        lines = [l for l in out.stdout.splitlines() if l.strip()]
+        row, face = lines[-2], lines[-1]
+        assert "11382 chars" in row, f"收窄后的 doctor 报的不是这台进程付的账：{row}"
+        assert "2 tool(s)" in row, row
+        assert "ACTIVE 1502" in face and "FULL 2476" in face, (
+            f"这道判据依赖两份 instructions 不同值：{face}")
 
     def test_an_unreadable_registry_degrades_to_a_note(self, monkeypatch):
         import dhole_mcp.server as srv_mod
