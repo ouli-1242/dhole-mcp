@@ -64,6 +64,32 @@ class _FakeLocator:
         await self._el.wait_for(**kw)
 
 
+class _FakeRequest:
+    def __init__(self, method="POST", resource_type="document"):
+        self.method = method
+        self.resource_type = resource_type
+
+
+class _FakePage:
+    """一页能听 request 的最小事理（D-29）：`submitted` 现在只认从这里发出去的请求。"""
+
+    def __init__(self):
+        self.url = "https://shop.example.com/checkout"
+        self._listeners: list = []
+
+    def on(self, event, handler):
+        if event == "request":
+            self._listeners.append(handler)
+
+    def remove_listener(self, event, handler):
+        if handler in self._listeners:
+            self._listeners.remove(handler)
+
+    def sent(self, request=None) -> None:
+        for handler in list(self._listeners):
+            handler(request or _FakeRequest())
+
+
 class _StubSession:
     """SDK ServerSession 的最小桩（与批次8 刀1 的测试同一形状）。"""
 
@@ -90,17 +116,20 @@ class TestAClickThatWouldSubmit:
     @staticmethod
     async def _run(monkeypatch, actions, **el_kwargs):
         el = _FakeElement(**el_kwargs)
+        page = _FakePage()
 
         async def fake_locator(page, target):
             return _FakeLocator(el)
 
         async def fake_settle(page, loc):
             await loc.click()
+            if el.kind == "submit":
+                page.sent()
 
         monkeypatch.setattr("dhole_mcp.actions._target_locator", fake_locator)
         monkeypatch.setattr("dhole_mcp.actions._settle_after_click", fake_settle)
         pa = build_page_action(actions)
-        await pa(None)
+        await pa(page)
         return pa, el
 
     @pytest.mark.asyncio

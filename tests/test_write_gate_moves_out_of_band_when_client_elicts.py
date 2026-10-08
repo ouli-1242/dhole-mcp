@@ -180,6 +180,31 @@ class _FakeLocator:
         self._el.clicked.append("clicked")
 
 
+class _FakeRequest:
+    method = "POST"
+    resource_type = "document"
+
+
+class _FakePage:
+    """一页能听 request 的最小事理 —— D-29 之后 `submitted` 只认从这里发出去的请求。"""
+
+    def __init__(self):
+        self.url = "https://shop.example.com/checkout"
+        self._listeners: list = []
+
+    def on(self, event, handler):
+        if event == "request":
+            self._listeners.append(handler)
+
+    def remove_listener(self, event, handler):
+        if handler in self._listeners:
+            self._listeners.remove(handler)
+
+    def sent(self) -> None:
+        for handler in list(self._listeners):
+            handler(_FakeRequest())
+
+
 def _submit_chain(confirm=None):
     submit = {"index": 2}
     if confirm is not None:
@@ -199,9 +224,10 @@ class TestTheSubmitGateMovesOutOfBand:
         monkeypatch.setattr("dhole_mcp.actions._target_locator", fake_locator)
         async def fake_settle(page, loc):
             await loc.click()  # 真执行器里点击发生在 settle 内部
+            page.sent()        # 这一发真的离开了这一页
         monkeypatch.setattr("dhole_mcp.actions._settle_after_click", fake_settle)
         pa = build_page_action(actions)
-        await pa(None)
+        await pa(_FakePage())
         return pa, el
 
     @pytest.mark.asyncio

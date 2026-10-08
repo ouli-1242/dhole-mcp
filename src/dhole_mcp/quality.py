@@ -1759,14 +1759,24 @@ def _report_action_outcomes(result: ResponseModel, page_action: Any) -> None:
     elif failed:
         detail = "; ".join(
             f"{o['action']}: {str(o.get('error', ''))[:120]}" for o in failed)
+        # "did not take effect", not "did not run": a step whose click landed on an
+        # element no click submits DID run - what it did not do is send anything.
         result.summary = (f"{result.summary} · {len(failed)} of {len(outcomes)} "
-                          f"actions did not run ({detail})")
+                          f"actions did not take effect ({detail})")
         if not result.next_action:
-            result.next_action = (
-                "these interactions never happened, so the content is the page "
-                "BEFORE them - check each failed selector against a fresh copy of "
-                "the page and retry just that action (metadata.actions lists one "
-                "row per action)")
+            if any(o.get("not_submitted") for o in failed):
+                result.next_action = (
+                    "a submit ran but no request left the page (not_submitted in "
+                    "metadata.actions) - the target is an element no click submits, "
+                    "so nothing was sent; that row's `error` names the element and "
+                    "the two ways that do submit. The steps that did land are on the "
+                    "page, so read the content as it stands")
+            else:
+                result.next_action = (
+                    "these interactions never happened, so the content is the page "
+                    "BEFORE them - check each failed selector against a fresh copy of "
+                    "the page and retry just that action (metadata.actions lists one "
+                    "row per action)")
     if result.page_type == "js_shell":
         # The post-action readback of an SPA is still the shell's "enable
         # JavaScript" text - that is what the DOM holds. Without this note the

@@ -60,8 +60,9 @@ class _FakeElement:
 
 
 class _FakeLocator:
-    def __init__(self, element: _FakeElement):
+    def __init__(self, element: _FakeElement, page=None):
         self._el = element
+        self._page = page
 
     @property
     def first(self):
@@ -72,6 +73,10 @@ class _FakeLocator:
 
     async def click(self, **kw):
         await self._el.click()
+        # 点下去 produces 什么，由这一页的 `emits` 说了算（D-29：`submitted` 只认
+        # 真的离得开这一页的请求）。
+        if self._page is not None:
+            self._page.sent()
 
     async def evaluate(self, js):
         return await self._el.evaluate(js)
@@ -86,19 +91,42 @@ class _FakeLocator:
         return await self._el.screenshot()
 
 
+class _FakeRequest:
+    def __init__(self, method: str, resource_type: str):
+        self.method = method
+        self.resource_type = resource_type
+
+
 class _FakePage:
     url = "https://example.com/login"
 
     def __init__(self, rows=ROWS, total=None, element: _FakeElement | None = None,
-                 enum_broken=False):
+                 enum_broken=False, emits=()):
         self._rows = rows
         self._total = len(rows) if total is None else total
         self.element = element or _FakeElement()
         self._enum_broken = enum_broken
+        self.url = "https://example.com/login"
+        # 点击之后这一页往外发什么：[(method, resource_type), ...]，默认什么都不发。
+        self.emits = list(emits)
+        self._listeners: list = []
 
     def locator(self, sel):
         assert sel == INTERACTIVE_SELECTOR or isinstance(sel, str)
-        return _FakeLocator(self.element)
+        return _FakeLocator(self.element, self)
+
+    def on(self, event, handler):
+        if event == "request":
+            self._listeners.append(handler)
+
+    def remove_listener(self, event, handler):
+        if handler in self._listeners:
+            self._listeners.remove(handler)
+
+    def sent(self) -> None:
+        for method, resource_type in self.emits:
+            for handler in list(self._listeners):
+                handler(_FakeRequest(method, resource_type))
 
     async def evaluate(self, js, arg=None):
         if self._enum_broken:
@@ -319,7 +347,7 @@ class TestSubmitGate:
     async def test_confirmed_submit_clicks(self):
         el = _FakeElement(name="确认下单")
         pa = await TestIndexedExecution._run(
-            _FakePage(element=el),
+            _FakePage(element=el, emits=[("POST", "document")]),
             [{"submit": {"index": 2, "confirm": True}}])
         (row,) = pa.outcomes
         assert row["ok"] is True
@@ -367,7 +395,7 @@ class TestWriteAudit:
         from dhole_mcp.server import _SESSION_ID
         el = _FakeElement(name="确认下单")
         pa = await TestIndexedExecution._run(
-            _FakePage(element=el),
+            _FakePage(element=el, emits=[("POST", "document")]),
             [{"submit": {"index": 2, "confirm": True}}])
         result = ResponseModel(url="https://shop.example.com/checkout",
                                status=200, content=["body"],

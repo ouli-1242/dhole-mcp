@@ -57,7 +57,7 @@ Four paths, cheapest first: (1) stored credentials — `cred_defaults` `set={coo
 
 1. `web_act` with `actions: [{"snapshot": true}]` — read the numbered element list (the chain is the browser tier: no `force_fetcher` to say)
 2. Address by index with `expect`: `{"fill": {"index": 3, "text": ...}}`, `{"click": {"index": 12, "expect": "Save"}}`; an `expect` mismatch = the page changed → re-snapshot, never retry a stale index
-3. Submission: `{"submit": {...}}` without `confirm` pauses (`pending_approval`, nothing sent) — describe what will be submitted to the user; only on their explicit yes re-run the **whole chain** with `confirm: true`. Every submit (paused or confirmed) is audit-logged
+3. Submission: `{"submit": {...}}` without `confirm` pauses (`pending_approval`, nothing sent) — describe what will be submitted to the user; only on their explicit yes re-run the **whole chain** with `confirm: true`. Every submit (paused or confirmed) is audit-logged. Aim it at the control that submits (a `button` / `input[type=submit]`), not at the `<form>` — a target no click submits answers `not_submitted: true` and nothing is sent
 4. Captchas / 2FA / sliders: ≤3 tries on image captchas, then hand off — see SKILL.md constraint 12
 
 ## Overhead compression (long sessions / bulk jobs)

@@ -44,7 +44,11 @@ Action schema (one key per dict):
                                             {"index": N, "expect"?})
   {"submit": {"selector"|"index", "confirm"?}}
                                             the irreversible one: without
-                                            confirm:true it pauses for approval
+                                            confirm:true it pauses for approval.
+                                            `submitted` in the receipt is earned
+                                            by a request leaving that page; a
+                                            target no click submits (<form>) gets
+                                            `not_submitted` and audits nothing
   {"click": {..., "confirm": true}}         a click that lands on a submit
                                             control (input[type=submit|image],
                                             a form's default button) passes the
@@ -64,7 +68,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from dhole_mcp import install as _install
 from dhole_mcp.context import (
@@ -320,6 +324,9 @@ _SUBMIT_CONTROL_JS = """el => {
   if (tag === 'input' && type !== 'submit' && type !== 'image') return null;
   return el.form ? 'submit' : null;
 }"""
+
+# 那一发没出去时，回执要点名它落在什么元素上（<FORM> 不会被"点击"提交）。
+_TAG_JS = "el => (el.tagName || '').toLowerCase()"
 
 
 async def snapshot_elements(page) -> tuple:
@@ -1013,17 +1020,105 @@ def _target_label(t) -> str:
 # —— pending 行带着这句话是对的，那一步确实没发出去。发出去的那一行不能再带着它。
 _UNCONFIRMED = " (unconfirmed)"
 
+#: 一次"交表"在网络上长什么样：载入一份新文档（任何方法，含 method=get 的表单），
+#: 或脚本自己发的写请求。`beacon` / 图片 / 埋点那一类不算证据 —— 它们恰好在点击时也会发。
+_EVIDENCE_WRITE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
+_EVIDENCE_WRITE_TYPES = ("xhr", "fetch")
 
-def _row_label(label: str, shot: dict) -> str:
-    """一行**已经提交成功**的回执，不许还写着 "(unconfirmed)"。
 
-    人按键批准过的每一次提交（elicitation 那条路，`confirm` 参数不在场）都会被这半句
-    记成"未经确认"，而 DHOLE_USAGE_LOG 的写审计读的就是这一行 —— 审计里最该留下的
-    "这一步是谁允许的"，被一个执行之前算出来的字符串说反了。
+class _SubmissionWitness:
+    """这一页真的往外发了东西吗 —— `submitted` 这个词唯一的依据。
+
+    实测（2026-10-08 真机，本地靶站）：`{"submit": {"selector": "form"}}` 点的是一棵
+    `<FORM>`，它不会被"点击"提交，页面一步没动，而这一支在 `_settle_after_click` 返回后
+    无条件写 `submitted: true`。后果不止于读者被骗 —— 这一行正是 DHOLE_USAGE_LOG
+    `browser_submit` 通道读的载荷，于是写审计里多了一笔根本没发生的写操作；同一发里换成
+    按钮选择器就真收到了 POST，两相对照才看得见那一格一直在猜。
+
+    只认**请求**，不认地址栏：`history.pushState` 让 URL 变而一个字节都不发，而那正是
+    这一格从前会误报的形状。代价是 `<form target=_blank>` 那一类（新页的请求挂在另一个
+    Page 上）会被说成没出去 —— 少报一笔写得回（换个选择器就看见），多报一笔写进审计就
+    拿不回来了。
     """
-    if shot.get("submitted") and label.endswith(_UNCONFIRMED):
-        return label[:-len(_UNCONFIRMED)]
-    return label
+
+    def __init__(self, page: Any) -> None:
+        self.page = page
+        self.evidence: list[str] = []
+        self._listening = False
+
+    def _add(self, token: str) -> None:
+        if token not in self.evidence:
+            self.evidence.append(token)
+
+    def _record(self, request) -> None:
+        try:
+            method = (request.method or "GET").upper()
+            rtype = getattr(request, "resource_type", "") or ""
+        except Exception:
+            return
+        if rtype == "document":
+            self._add(method)
+        elif method in _EVIDENCE_WRITE_METHODS and rtype in _EVIDENCE_WRITE_TYPES:
+            self._add(method)
+
+    def start(self) -> "_SubmissionWitness":
+        on = getattr(self.page, "on", None)
+        if callable(on):
+            try:
+                on("request", self._record)
+                self._listening = True
+            except Exception:
+                self._listening = False
+        return self
+
+    def stop(self) -> list[str]:
+        off = getattr(self.page, "remove_listener", None)
+        if self._listening and callable(off):
+            with contextlib.suppress(Exception):
+                off("request", self._record)
+        return self.evidence
+
+
+def _no_submission_note(tag: str) -> str:
+    """那一发没出去时怎么说：点名它落在什么元素上，并给两条真的能交表的路。"""
+    landed = (f" - it landed on a <{tag}>, which no click submits" if tag else "")
+    return (f"no_submission: nothing left this page{landed}. Name the control that "
+            'submits instead (a button or an input[type=submit]), or press Enter in '
+            'a field: {"press": {"selector": "<the field>", "key": "Enter"}}. The '
+            "page did not move, so re-run the whole chain once it does.")
+
+
+async def _no_submission_row(label: str, loc) -> dict:
+    """一行"这一发没出去"。`submitted` 因此**不设** —— 写审计（quality 的
+    browser_submit 通道）读的就是那个键，把没发生的写操作记进去比少记一行更糟。
+    """
+    tag = ""
+    with contextlib.suppress(Exception):
+        tag = str(await loc.evaluate(_TAG_JS) or "")
+    return {"action": label, "ok": False, "not_submitted": True,
+            "error": _no_submission_note(tag.lower())}
+
+
+async def _settle_after_submit(page, loc) -> list[str]:
+    """点下去、等它落定，并把"这一发真的出去了"的证据带回来。
+
+    Witness 挂在点击**之前**：request 事件在 settle 轮询观察到导航之前就走完了，事后
+    补听只会听到下一发。
+    """
+    witness = _SubmissionWitness(page).start()
+    await _settle_after_click(page, loc)
+    return witness.stop()
+
+
+def _permitted(label: str) -> str:
+    """闸放行之后，"(unconfirmed)" 就不再多说了 —— 它说的是"这一步还没被允许"。
+
+    `action_label` 在**执行之前**渲染，那时人按键 / `confirm` 都还不在场；放行之后这一
+    步的每一种结局（真发出去了、点了却没出去、点击本身失败）都已经是"被允许过的一步"，
+    再带着那半句就成了假话 —— 而这一行正是 DHOLE_USAGE_LOG 写审计读的载荷，审计存在的
+    意义就是回答"这一步是谁允许的"。被闸拦下的那一行不走这里：后缀归它留着。
+    """
+    return label[:-len(_UNCONFIRMED)] if label.endswith(_UNCONFIRMED) else label
 
 
 def action_label(a: dict) -> str:
@@ -1150,9 +1245,14 @@ def build_page_action(actions) -> Optional[Callable]:
                         if row is not None:
                             outcomes.append(row)
                             continue
-                    await _settle_after_click(page, loc)
-                    if submits:
+                        evidence = await _settle_after_submit(page, loc)
+                        if not evidence:
+                            outcomes.append(await _no_submission_row(label, loc))
+                            continue
                         shot["submitted"] = True
+                        shot["submission"] = "+".join(evidence)
+                    else:
+                        await _settle_after_click(page, loc)
                 elif "hover" in a:
                     loc = await _target_locator(page, a["hover"])
                     await loc.hover(timeout=10_000)
@@ -1286,10 +1386,15 @@ def build_page_action(actions) -> Optional[Callable]:
                     if row is not None:
                         outcomes.append(row)
                         continue
+                    label = _permitted(label)
                     loc = await _target_locator(page, s)
-                    await _settle_after_click(page, loc)
+                    evidence = await _settle_after_submit(page, loc)
+                    if not evidence:
+                        outcomes.append(await _no_submission_row(label, loc))
+                        continue
                     shot["submitted"] = True
-                outcomes.append({"action": _row_label(label, shot), "ok": True, **shot})
+                    shot["submission"] = "+".join(evidence)
+                outcomes.append({"action": label, "ok": True, **shot})
             except Exception as e:
                 outcomes.append({"action": label, "ok": False,
                                  "error": _action_failure(e)})

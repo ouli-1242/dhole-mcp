@@ -14,6 +14,11 @@ outcome 的 action 串），所以后果不是"读者看见一句别扭的话"�
   * 被闸拦下的行 —— 后缀必须留着（那一步真的没发出去，去掉它才是另一种假话）。
 
 `click` 落在提交型控件上走同一道闸（评审R1刀1），所以同一条规矩也管它那一族的行。
+
+第三种时刻是 D-29 那一刀顺手照出来的：**人已放行、动作随后失败**的那一行。它的 `ok` 是
+false，可"(unconfirmed)"说的从来不是成败而是"这一步还没被允许" —— 允许已经发生了。规矩
+因此挂在放行的那一刻（`_permitted`），不挂在结局上，否则每个失败行都会看起来像一次未经
+确认的成功。
 """
 from __future__ import annotations
 
@@ -56,6 +61,32 @@ class _FakeLocator:
         await self._el.wait_for(**kw)
 
 
+class _FakeRequest:
+    def __init__(self, method="POST", resource_type="document"):
+        self.method = method
+        self.resource_type = resource_type
+
+
+class _FakePage:
+    """一页能听 request 的最小事理 —— D-29 之后 `submitted` 只认从这里发出去的请求。"""
+
+    def __init__(self):
+        self.url = "https://shop.example.com/checkout"
+        self._listeners: list = []
+
+    def on(self, event, handler):
+        if event == "request":
+            self._listeners.append(handler)
+
+    def remove_listener(self, event, handler):
+        if handler in self._listeners:
+            self._listeners.remove(handler)
+
+    def sent(self) -> None:
+        for handler in list(self._listeners):
+            handler(_FakeRequest())
+
+
 class _StubSession:
     """SDK ServerSession 的最小桩，只回答两件事：能不能问、人按了哪个键。"""
 
@@ -72,7 +103,7 @@ class _StubSession:
         return ElicitResult(action=self._action)
 
 
-async def _run(monkeypatch, actions, el=None):
+async def _run(monkeypatch, actions, el=None, settle=None):
     el = el or _FakeElement()
 
     async def fake_locator(page, target):
@@ -80,11 +111,13 @@ async def _run(monkeypatch, actions, el=None):
 
     async def fake_settle(page, loc):
         await loc.click()
+        page.sent()
 
     monkeypatch.setattr("dhole_mcp.actions._target_locator", fake_locator)
-    monkeypatch.setattr("dhole_mcp.actions._settle_after_click", fake_settle)
+    monkeypatch.setattr("dhole_mcp.actions._settle_after_click",
+                        settle or fake_settle)
     pa = build_page_action(actions)
-    await pa(None)
+    await pa(_FakePage())
     return pa, el
 
 
@@ -144,23 +177,49 @@ async def test_a_paused_submit_keeps_the_marker(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_failed_submit_row_does_not_claim_confirmation(monkeypatch):
-    """动作本身失败（ locator 都解析不出来）时，行里的状态位与后缀各说各的。
+async def test_a_refused_submit_never_reaches_the_locator(monkeypatch):
+    """闸在解析之前：无会话又无 confirm 时连元素都不会去找，后缀也留在行上。
 
-    这一条守的是修补的边界：`_row_label` 只在**已提交**的时候去掉后缀，别的时候
-    一字不动 —— 否则失败行会看起来像"确认过的成功"。
+    这一条守的是修补的边界：`_permitted` 只在**放行之后**动那半句 —— 被拦下的一步
+    说的就是"还没被允许"，去掉它才是另一种假话。
     """
     set_mcp_session(None)
+    dialed: list = []
 
     async def boom(page, target):
+        dialed.append(target)
         raise RuntimeError("no such element")
 
     monkeypatch.setattr("dhole_mcp.actions._target_locator", boom)
     pa = build_page_action([{"submit": {"index": 2}}])
     await pa(None)
     (row,) = pa.outcomes
+    assert dialed == [], "被拦下的一步不许再去解析目标"
     assert row["ok"] is False and "submitted" not in row, row
+    assert row.get("pending_approval") is True, row
     assert row["action"].endswith(MARK), row["action"]
+
+
+@pytest.mark.asyncio
+async def test_a_failure_after_approval_still_drops_the_marker(monkeypatch):
+    """人按键放行之后动作才失败：失败照旧是失败，但那半句已经不是事实。
+
+    "(unconfirmed)" 说的是"这一步还没被允许"。批准之后允许这件事已经发生了，剩下的只是
+    这一发没做成；两件事挤在一个后缀里，审计里那笔就答不出"是谁允许的这一步"。
+    """
+    set_mcp_session(_StubSession(action="accept"))
+
+    async def never_clickable(page, loc):
+        raise RuntimeError("Timeout 10000ms exceeded. waiting for locator to be clickable")
+
+    pa, el = await _run(monkeypatch, [{"submit": {"index": 2}}],
+                        settle=never_clickable)
+    (row,) = pa.outcomes
+    assert row["ok"] is False and "submitted" not in row, row
+    assert "Timeout" in row["error"], row["error"]
+    assert el.clicked == []
+    assert not row["action"].endswith(MARK), (
+        f"人已放行，行里却还写着未经确认：{row['action']!r}")
 
 
 # ─── 3 · 标签函数本身的分工 ──────────────────────────────────────────────────

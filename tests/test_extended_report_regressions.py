@@ -564,7 +564,7 @@ class TestAnActionThatNeverRanSaysSo:
         _report_action_outcomes(result, _Runner())
 
         assert len(result.metadata["actions"]) == 2
-        assert "1 of 2 actions did not run" in result.summary
+        assert "1 of 2 actions did not take effect" in result.summary
         assert "scroll x5" in result.summary
         assert "never happened" in result.next_action
 
