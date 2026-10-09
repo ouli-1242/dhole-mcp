@@ -1,4 +1,4 @@
-"""next_action 要说真话：错误指引家族的三处（评审R1刀3）。
+"""next_action 要说真话：错误指引家族的四处（评审R1刀3 + D4）。
 
 三类同病的实测（2026-10-07 评审）：
   1. tavily 缺 key：error 正确说 ``DHOLE_TAVILY_API_KEY`` 未设，next_action
@@ -16,6 +16,8 @@ this process yet」的假话出去。
 """
 
 from __future__ import annotations
+
+import asyncio
 
 import pytest
 
@@ -166,3 +168,108 @@ class TestAPermanentBoundaryDoesNotOfferAnArgumentFix:
             url="http://127.0.0.1.nip.io/")
         assert "DNS rebinding service" in (out.error or "")
         assert "No argument fixes this" in (out.next_action or "")
+
+
+# ─── 4 · 登录墙的建议要看墙在哪台机器上（D4）────────────────────
+# 实测（2026-10-09 真人体验测试 C9）：`web_read("http://127.0.0.1:8765/admin")` 撞出
+# auth_wall，`next_action` 说「Switch source, or try the Internet Archive for a public
+# copy」。调用方点名要的就是这台机器上这个端口的东西 —— 换源换不掉它，而档案站**从不
+# 持有登录态后的那一份**。这句建议在这台机器上不是"偏弱"，是"永远不可能兑现"。
+#
+# 双向都要钉：只在私网这一侧收口，公网那条真退路（公开副本）不许被一起关掉。
+
+from dhole_mcp import quality
+from dhole_mcp.models import ResponseModel
+
+LOCAL = "http://127.0.0.1:8765/admin"
+PUBLIC_WALL = "https://news.example.com/premium/report"
+
+
+def _wall(url: str, **updates) -> ResponseModel:
+    base = dict(url=url, status=200, content=["Sign in to continue"],
+                fetcher_used="http", extracted_type="markdown",
+                total_size_bytes=4_200, page_type="auth_wall",
+                error="auth_wall_detected: page is a login/sign-in wall, not content")
+    base.update(updates)
+    return ResponseModel(**base)
+
+
+def _next_action(result: ResponseModel) -> str:
+    return quality._agent_hints(result)[1]
+
+
+class TestAWallOnYourOwnHostNamesYourOwnDoors:
+
+    def test_the_archive_is_taken_off_the_table_for_a_private_target(self):
+        """点名"档案站"是允许的 —— 只要那句话是"这次它答不了"，而不是"去试试"。
+
+        与 `test_advice_never_recommends_the_tier_that_just_failed.py` 里那颗旋钮同
+        一条判据：告诉调用方哪条路已经堵住，正是他能自己核对的那句。要禁的是祈使句。
+        """
+        hint = _next_action(_wall(LOCAL))
+        assert "try the Internet Archive" not in hint, hint
+        assert "Switch source" not in hint, hint
+        assert "never holds a logged-in copy" in hint, hint
+        assert "the host YOU named" in hint, hint
+
+    def test_the_two_doors_that_can_actually_open_it_are_named(self):
+        hint = _next_action(_wall(LOCAL))
+        assert "cred_defaults" in hint, hint
+        assert "web_act" in hint, "第二扇真门：页面上那个表单本来就能走"
+
+    def test_the_public_copy_is_still_on_the_table_for_a_public_host(self):
+        """反向半边：好机器不许被一起劝退 —— 公网确实可能有公开副本。"""
+        hint = _next_action(_wall(PUBLIC_WALL))
+        assert "Internet Archive" in hint, hint
+        assert "Switch source" in hint, hint
+        # 但要说清那份是什么：某一天的登出态快照，不是这个账号里的数据
+        assert "logged-out" in hint, hint
+        assert "web_act" not in hint, hint
+
+    def test_the_page_type_branch_agrees_with_the_error_branch(self):
+        """同一个决定有两条进来的路（error 串 / page_type），两处必须说同一句话。"""
+        page_only = _wall(LOCAL, error="", content_ok=True)
+        hint = _next_action(page_only)
+        assert "the host YOU named" in hint, hint
+        assert "Internet Archive" not in hint, hint
+
+    def test_the_machine_readable_twin_reads_the_same_geography(self):
+        """`diagnosis.recover_with` 与 `next_action` 是同一决定的两个落点。
+
+        表里那句 "or the Internet Archive copy" 是**没有 URL 可问**的那条路（feed 行、
+        批量行）的作者，公网形状留着它是对的；私网形状如果也从表里取，两个格子就
+        互相否决 —— D5 那条法点名的正是这个形状。
+        """
+        private = quality._diagnose(_wall(LOCAL))
+        public = quality._diagnose(_wall(PUBLIC_WALL))
+        assert private["code"] == public["code"] == "auth_wall"
+        assert "try the Internet Archive" not in private["recover_with"], private
+        assert "logged-in copy" in private["recover_with"], private
+        assert "cred_defaults" in private["recover_with"], private
+        assert "Internet Archive" in public["recover_with"], public
+
+    def test_the_row_shape_without_a_url_keeps_the_generic_door(self):
+        """没有 url 可判时不许猜：档案站那句仍然带着"登出态快照"的限定留下。"""
+        from dhole_mcp.quality import row_diagnosis
+        row = row_diagnosis("auth_wall_detected: login form")
+        assert row and "Internet Archive" in row["recover_with"], row
+        assert "logged-out" in row["recover_with"], row
+
+    def test_the_verdict_survives_the_real_dispatch(self, monkeypatch):
+        """走一次真 `web_read`：判据要认的是最终信封上的 url，不是调用方刚写的那串。
+
+        `force_fetcher='http'` 是为了让这一发只走 HTTP 一档 —— 否则一次墙判定会去
+        要浏览器，而 conftest 的守卫拦住真启动（那是另一件事的测试）。
+        """
+        monkeypatch.setenv("DHOLE_ALLOW_PRIVATE_HOSTS", "127.0.0.1")
+
+        async def fake(self, url, **kwargs):
+            return _wall(url)
+
+        monkeypatch.setattr(MasterFetchServer, "get", fake)
+        out = asyncio.run(MasterFetchServer().web_read(url=LOCAL, cache_ttl=0,
+                                                       force_fetcher="http"))
+        assert "login/sign-in wall" in out.next_action, out.next_action
+        assert "cred_defaults" in out.next_action, out.next_action
+        assert "try the Internet Archive" not in out.next_action, out.next_action
+        assert (out.diagnosis or {}).get("code") == "auth_wall", out.diagnosis

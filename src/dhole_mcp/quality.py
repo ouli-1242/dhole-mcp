@@ -346,6 +346,27 @@ def _render_tier_was_spent(result: ResponseModel) -> bool:
     return stealthy_ran and not _browser_cannot_help(result, result.url)
 
 
+def _auth_wall_step(url: str) -> str:
+    """登录墙的下一步，按**墙在哪台机器上**说。
+
+    D4 的现场：`web_read("http://127.0.0.1:8765/admin")` 撞出 auth_wall，而
+    `next_action` 建议"换个源，或去 Internet Archive 找公开副本"。调用方点名要的正是
+    这台机器上的这个端口，换源换不掉它，而档案站**从不持有登录态后的那一份** —— 这句
+    建议在这台机器上不是"没用"，是"永远不可能有用"。两扇真门：把凭据存进
+    cred_defaults，或让浏览器走页面自己的表单（web_act）。
+
+    公网那一半保留原句 —— 那里"公开副本"确实是一条真实在的退路 —— 但补一句它是什么：
+    某一天登出态的快照，不是你账号里的数据。
+    """
+    if target_is_private(url or ""):
+        return ("this login wall is on the host YOU named, so neither another source nor "
+                "a snapshot can answer it - the archive never holds a logged-in copy. "
+                "Two real doors: store the credentials for this host with cred_defaults "
+                "(auth / cookies), or drive the page's own sign-in form with web_act.")
+    return ("Switch source, or try the Internet Archive for a public copy - a snapshot "
+            "is a logged-out page from some past day, so it is not this account's data")
+
+
 def _is_js_shell(result: ResponseModel) -> bool:
     """Check if a response contains only a JS-only placeholder, not real content.
 
@@ -926,7 +947,7 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         # sets error, which forces content_ok false, and that block only runs
         # when content_ok is true - so it could never advise on a wall.
         next_action = ("page is a login/sign-in wall, not content - do NOT cite it. "
-                       "Switch source, or try the Internet Archive for a public copy")
+                       + _auth_wall_step(result.url))
     elif err.startswith("bot_wall_detected"):
         if _browser_cannot_help(result, result.url):
             _wall_step = ("The browser tier that would render it is unavailable on this "
@@ -1261,10 +1282,8 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                     "this URL, or fetch the linked pages directly"
                 )
         elif result.page_type == "auth_wall":
-            next_action = (
-                "content behind login/authentication; the Internet Archive may have a "
-                "snapshot, or switch sources"
-            )
+            next_action = ("content behind login/authentication - "
+                           + _auth_wall_step(result.url))
         elif result.page_type == "paywall":
             next_action = "paywalled content; try the Internet Archive or a different source"
         elif result.page_type == "redirect":
@@ -1403,7 +1422,8 @@ _DIAGNOSIS_PREFIXES: tuple[tuple[str, str, bool, str], ...] = (
     ("bot_wall_detected", "bot_wall", True,
      "retry with force_fetcher='stealthy', else switch source"),
     ("auth_wall_detected", "auth_wall", False,
-     "switch source, or the Internet Archive copy; cred_defaults auth if you have it"),
+     "switch source, or the Internet Archive copy (a logged-out snapshot from some "
+     "past day, not this account's data); cred_defaults auth if you have it"),
     ("auth_required", "auth_wall", False,
      "store credentials with cred_defaults (auth) for this host"),
     ("robots_disallowed", "robots_disallowed", False,
@@ -1573,6 +1593,12 @@ def _diagnose(result: ResponseModel) -> Optional[Dict[str, Any]]:
                 # 这一次调用能做的事才是这里的事。
                 recover = ("the browser tier already rendered this and returned what is "
                            "in `content` - no untried tier is left on this URL")
+        if code == "auth_wall":
+            # 表里那句是**没有 URL 可问**的那一条路的作者（`row_diagnosis` 给 feed 的
+            # 每一行、批量的每一行，它们手上只有 error 串）。这里手上有 url，就换成按
+            # 地理位置说话的那一句：墙在调用方自己点名的那台机器上时，"去档案站"不是
+            # 没用，是永远不可能有用 —— 档案站不持有登录态后的那份。
+            recover = _auth_wall_step(result.url)
     elif not result.content_ok:
         code = {"auth_wall": "auth_wall", "paywall": "paywall",
                 "captcha": "bot_wall", "js_shell": "js_shell"}.get(
