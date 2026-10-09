@@ -322,6 +322,7 @@ from dhole_mcp.context import (
     _arg_notes_scope,
     _note_text,
     _stamp_robots_mode,
+    call_deadline,
     out_of_band_confirm,
     report_progress,
     set_mcp_session,
@@ -5855,9 +5856,13 @@ class MasterFetchServer:
         credit = _BudgetCredit()
         token = _budget_credit.set(credit)
         try:
-            async with asyncio.timeout(asked_s + _BACKSTOP_GRACE_S) as cm:
-                credit.attach(cm)
-                return await coro
+            # 把这份预算交给下游的"问人"通道（`context.call_deadline`）。发布的值是
+            # `asked_s` 而不是 `asked_s + grace`：宽限只留给收尾（建模型 + 写缓存），
+            # 一次等人按键的等待不该指望它，也不该靠它才能被掐掉。
+            with call_deadline(asked_s):
+                async with asyncio.timeout(asked_s + _BACKSTOP_GRACE_S) as cm:
+                    credit.attach(cm)
+                    return await coro
         except TimeoutError:
             result = _with_agent_hints(_over_budget_result(
                 url, asked_s * 1000, (now() - started) * 1000, stage, ""))

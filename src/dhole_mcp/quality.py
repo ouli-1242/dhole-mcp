@@ -785,6 +785,11 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             # 批次 11：要一台可见的而这个 profile 上已经有一台在跑。没有任何请求发出，
             # 而"网络错误"会把人送去查代理，这里要查的是屏幕上有没有窗口。
             parts.append("browser in use")
+        elif _is_over_budget(result):
+            # 预算用完不是网络故障（D-35b 实测：一条已经跑完 `fill` 的动作链被 25 秒
+            # 预算掐断时，summary 写的是 "network error · 0B markdown"）。站点可能一路
+            # 都在应答，只是这次调用给它的时间用完了 —— 该拧的旋钮是 timeout，不是代理。
+            parts.append("out of time")
         else:
             parts.append("local error" if result.fetcher_used == "parse" else "network error")
     else:
@@ -1777,6 +1782,22 @@ def _report_action_outcomes(result: ResponseModel, page_action: Any) -> None:
                     "BEFORE them - check each failed selector against a fresh copy of "
                     "the page and retry just that action (metadata.actions lists one "
                     "row per action)")
+    ran = [o for o in outcomes if o.get("ok")]
+    if ran and _is_over_budget(result):
+        # 预算掐断一条动作链时，"什么都没发生"是最容易读错的一句话：列在这里的那几步是
+        # 真的落在页面上了（D-35b 实测：`fill` 那一行交回 ok:true，同一份回执的 error 说
+        # "No content was extracted"，而 next_action 的建议里有一条是"换个源" —— 换个源
+        # 丢掉的就是那个已经填好的框）。
+        names = "; ".join(str(o.get("action", ""))[:60] for o in ran)
+        prefix = f"{result.summary} · " if result.summary else ""
+        result.summary = (f"{prefix}{len(ran)} of {len(outcomes)} actions "
+                          f"already ran ({names})")
+        result.next_action = (
+            (result.next_action + " " if result.next_action else "")
+            + "those steps are ALREADY on the page, so re-running the whole chain "
+              "replays them: raise the timeout to finish this chain, or continue from "
+              "the action that did not run. Switching source discards what is already "
+              "filled in.")
     if result.page_type == "js_shell":
         # The post-action readback of an SPA is still the shell's "enable
         # JavaScript" text - that is what the DOM holds. Without this note the

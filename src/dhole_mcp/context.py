@@ -13,9 +13,11 @@ ast 分析过，它对 server 的模块级名字零依赖，只依赖 stdlib、`
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import contextvars
 import re
+import time
 from typing import Any, Optional
 
 from dhole_mcp.models import ResponseModel
@@ -87,6 +89,58 @@ def set_mcp_session(session: Optional[Any]) -> None:
     _MCP_SESSION.set(session)
 
 
+# ─── The human channel's own clock ───────────────────────────────────────────
+#
+# `out_of_band_confirm` waits for a person to press a button. That wait used to
+# have no ceiling of its own, so whichever ceiling the CALL had won first: with
+# the actions tier's default 25 s budget an unanswered ask ended as
+# "timeout: the 25000ms call budget ran out", the pending row was never written,
+# and the advice pointed at `timeout=` / `force_fetcher='http'` / switch source
+# —— none of which describes a button nobody pressed (measured on the real wire,
+# `.scratch/liveverify/d35_silence.py`, and recorded as D-35). These two knobs
+# give the ask a bound that is a fraction of what the call itself has left.
+ELICIT_WAIT_MAX_S = 30.0
+ELICIT_ASK_MIN_LEFT_S = 5.0
+
+_CALL_DEADLINE: contextvars.ContextVar[Optional[float]] = contextvars.ContextVar(
+    "_call_deadline", default=None)
+
+
+def elicit_wait_s() -> float:
+    """这一次问人最多能等多久（秒）。0 = 现在问，也没有地方放答案。
+
+    规则只有两条，都跟着**这次调用还剩多少**走：不超过 `ELICIT_WAIT_MAX_S`（一句
+    弹窗话读完按下按钮的时间），也不超过剩余预算的一半（剩下那一半要走完剩下的动作
+    并把信封交回去，问人不能把这次调用的时间吃掉大半）。为什么不写死一个数：默认
+    预算实测只有 25 秒（`ACTIONS_DEFAULT_TIMEOUT_MS`），写死 60 秒等于让调用预算先
+    炸 —— 那正是 D-35 量到的形状；而一次 120 秒的调用只给 12 秒，是把人赶出弹窗。
+
+    没有截止日期可问（CLI、直连 dispatch、工具入口的那道 CDP 先问再记）时按上限给，
+    因为那时没有一条在跑的预算会被这次等待挤掉。
+    """
+    deadline = _CALL_DEADLINE.get()
+    if deadline is None:
+        return ELICIT_WAIT_MAX_S
+    left = deadline - time.time()
+    if left < ELICIT_ASK_MIN_LEFT_S:
+        return 0.0
+    return min(ELICIT_WAIT_MAX_S, left / 2.0)
+
+
+@contextlib.contextmanager
+def call_deadline(seconds_from_now: float):
+    """把"这次调用还有多少墙钟"交给下游，出去就摘掉。
+
+    与 `_arg_notes_scope` 同一件事的另一半：按次的东西必须显式摘，长命的 task 上留
+    一颗截止日期，下一次调用就会按上一次的预算决定要不要问人。
+    """
+    token = _CALL_DEADLINE.set(time.time() + max(0.0, float(seconds_from_now)))
+    try:
+        yield
+    finally:
+        _CALL_DEADLINE.reset(token)
+
+
 async def out_of_band_confirm(message: str) -> Optional[bool]:
     """把"问用户"从模型签名的参数搬到协议层的人机通道（MCP elicitation）。
 
@@ -94,9 +148,10 @@ async def out_of_band_confirm(message: str) -> Optional[bool]:
       ``None``  本次调用没有 MCP 会话，或会话没声明 elicitation 能力 ——
                 各扇门保持既有参数行为，一字不改（CLI、直连 dispatch、旧宿主）。
       ``True``  人在弹窗上点了接受。
-      ``False`` 人拒绝 / 取消，或问不到人（NoBackChannelError 等任何应答失败）
-                —— fail-closed：调用方必须拒答，**绝不回落参数 confirm**，否则
-                注入方制造一次 elicitation 故障就把门推回模型手里。
+      ``False`` 人拒绝 / 取消，或问不到人（NoBackChannelError 等任何应答失败），
+                或者到了期限还没人答（`elicit_wait_s`）—— 三种都 fail-closed：
+                调用方必须拒答，**绝不回落参数 confirm**，否则注入方制造一次
+                elicitation 故障（或只是一台没人的键盘）就把门推回模型手里。
 
     按连接协商、不按次：能力为真的连接上 confirm 参数不参与开门（照问），
     避免同一连接两种门混用。requested_schema 为空：只借 accept/decline/cancel，
@@ -117,10 +172,21 @@ async def out_of_band_confirm(message: str) -> Optional[bool]:
     from mcp.shared.exceptions import NoBackChannelError
     # 空表单的最小合法形状：不带任何字段，只借 accept/decline/cancel。
     # （裸 {} 会被客户端侧的请求校验拒成 Invalid request parameters —— 实测。）
+    wait = elicit_wait_s()
+    if wait <= 0:
+        # 这次调用已经没地方放一个答案了。不问了，与问不到人同权 —— 一发几秒的弹窗
+        # 不是批准，是一次必然的到期，而它的代价（整条回执归错因）正是要避免的那件事。
+        return False
     try:
-        result = await session.elicit_form(
-            message, {"type": "object", "properties": {}})
+        result = await asyncio.wait_for(
+            session.elicit_form(
+                message, {"type": "object", "properties": {}}),
+            timeout=wait)
     except NoBackChannelError:
+        return False
+    except TimeoutError:
+        # 期限到了没人答。这一支与 decline 同一条出路：调用方拿到的是 pending 行，
+        # 而不是"这一档超时了"（D-35 —— 慢的不是网络，是没按的那颗按钮）。
         return False
     except Exception:
         # 其余应答失败同权：问不到人的门不能开。CancelledError 不在此列
