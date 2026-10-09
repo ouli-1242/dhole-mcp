@@ -364,16 +364,36 @@ Q↔D/J、B↔M。即"扭曲把字形推向易混对的另一侧"。
 
 ### 转交纪律在不在 wire 上
 
+`python evals/captcha_baseline.py --wire` 读的是**今天连接期那一份话**。这一格此前量的
+是两件已经不存在的旋钮，跑起来直接 `KeyError: 'screenshot'`（不是"没过"，是量具对着
+不存在的旋钮）：
+
+| 旧判据（已作废） | 为什么作废 |
+|---|---|
+| `DHOLE_MULTIMODAL=1` 时 `screenshot` / `smart_fetch` 描述变长（+592 / +689） | 元素捕获在 17.0 起**恒可用**（识别在 agent 一侧，dhole 不带视觉模型），实测开旗与关旗的 11 颗描述**逐颗等长**；而那两颗工具名一个并进了 `web_act` 的截图动作、一个早已下线 |
+| `hand off` 出现 screenshot 4 次 / smart_fetch 1 次 | 同上：读者拿这两行去查 today 的 wire，查不到的是工具而不是纪律 |
+
+今天问得出的五件（本轮实测全绿）：
+
 | 判据 | 结果 |
 |---|---|
-| `DHOLE_MULTIMODAL=1` 时 `screenshot` / `smart_fetch` 描述变长、关旗时不含 `VISUAL ASSIST` | **通过**（+592 / +689 字符） |
-| 描述写明 "at most 3" 与转交终点 | **通过**（`hand off` 出现 screenshot 4 次 / smart_fetch 1 次） |
+| 视觉辅助不再跟着 `DHOLE_MULTIMODAL` 上线 | **通过**（开/关两份描述逐颗等长，动的: 无） |
+| `web_act` 写明 ≤3 次上限与转交终点 | **通过**（含 `at most 3`；`hand off` 1 次） |
+| 『read-and-retry rounds』与『照着截图去打字』两句都退了场 | **通过**（带前者的工具: 无；`about to type` = 假） |
+| 链内读—答那一对形状在 `web_act` 上 | **通过**（`"read"` 例子与 `{=名字}` 记号都在） |
+| 为什么跨调用重试答不中，写在 `sys_guide` 送得出的那一卷里 | **通过**（`references/tools.md` 含 `already gone on the next`） |
 
-纪律**只跟着 flag 上线**：关着 flag 的调用方看不见像素，纪律对它是噪声，还白占
-connect tokens。
+后三行是这一轮加进来的。前一行原来写着**做不到**的承诺：每一次调用都重新导航，上一轮读到
+的挑战这一轮已经不在了 —— 上面那张独立假设的表（`normal` 36% / `hard` 12.5%）**本来就
+建立在"每次 GET 出一枚新 token"之上，也就是基线知道、常驻层文案不知道。`--emit 8
+--level normal` 重跑照旧出题 8 张（答案仍只在 `key.json`，出题者看不见），那一格量的
+是"能不能读出一枚图"，与"重试能不能答中同一枚"是两件事，别再混着读。
 
 不变式由 `tests/test_captcha_fixture.py`（9 个用例）钉住——重点是"答案只由 token
 决定、与难度档无关"，这条一旦悄悄破掉，基体会变成"用错的键判对的卷"且不报错。
+`/challenge/text`（文本挑战，每次导航换一枚）是另一格：它量的是**同一条链里读到并填回
+同一个页面实例**，跨调用在那里必然答错 —— 见 `tests/
+test_a_chain_answers_the_challenge_of_the_page_it_is_standing_on.py`。
 
 ---
 

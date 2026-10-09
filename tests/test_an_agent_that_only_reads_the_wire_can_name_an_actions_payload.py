@@ -46,6 +46,7 @@ PAYLOAD_BY_KEY: dict[str, set[str]] = {
     "hover": {"selector", "index", "expect"},
     "submit": {"selector", "index", "expect", "confirm"},
     "fill": {"selector", "index", "expect", "text"},
+    "read": {"selector", "index", "expect", "attribute", "as"},
     "press": {"key", "selector", "index"},
     "drag": {"selector", "index", "expect", "to"},
     "wait": set(),
@@ -83,6 +84,14 @@ def _legal_payloads(key: str) -> list[dict]:
         return [{"press": "Enter"},
                 {"press": {"key": "Enter", "selector": "#q"}},
                 {"press": {"key": "Enter", "index": 1}}]
+    if key == "read":
+        # `read` 是 A3-b 加的那一颗：名单里多一颗名字，本文件第一条判据就会红，
+        # 而它的可选旋钮（`as` / `attribute`）走的是同一套"能过真验证器"的量法。
+        return [{"read": "#cap"},
+                {"read": {"selector": "#cap", "as": "code"}},
+                {"read": {"index": 4, "attribute": "value"}},
+                {"read": {"selector": "#cap", "expect": "码", "attribute": "href",
+                          "as": "link"}}]
     if key == "drag":
         return [{"drag": {"selector": "#src", "expect": "滑块", "to": "#dst"}},
                 {"drag": {"index": 3, "to": {"index": 7, "expect": "落点"}}}]

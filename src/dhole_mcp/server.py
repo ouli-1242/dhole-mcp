@@ -5236,7 +5236,7 @@ class MasterFetchServer:
         confirm: Optional[bool] = None,
         check_login: Optional[bool] = None,
     ) -> ResponseModel:
-        """Act on a page (click / fill / press / scroll / wait / submit) and read back the page after.
+        """Act on a page (click / fill / read / press / scroll / wait / submit) and read it back.
 
         Why this is a tool and not one parameter on a read: an action chain is the
         one call in this server that changes something. It forces the browser tier,
@@ -5249,8 +5249,14 @@ class MasterFetchServer:
         What carried over unchanged: every action leaves a receipt in
         `metadata.actions`; `submit` pauses before acting until the user approves that
         exact submission; a captcha gets at most 3 attempts and then goes back to the
-        human; `schema=` still cannot combine with a chain (that path runs its own
-        fetch, without the actions). The full shape of each action key:
+        human - and each attempt is a fresh navigation, so a challenge read on the
+        previous call usually is not the one this call would be answering. What did
+        change is that a chain can now answer its OWN page: `{"read": {"selector":
+        ..., "as": "code"}}` takes this instance's text, and a later `fill` writes
+        `{=code}` into the field. That is the only shape in which a text challenge is
+        solvable here; an image challenge stays a hand-off, because a capture arrives
+        after the chain has run. `schema=` still cannot combine with a chain (that path
+        runs its own fetch, without the actions). The full shape of each action key:
         `sys_guide(topic='behavior', section='Page interaction')`.
 
         The four identity-ish arguments (`session_id`, `cdp_url`, `confirm`,
@@ -5265,8 +5271,8 @@ class MasterFetchServer:
         if not actions:
             return _invalid_request_result(
                 url, "actions is required: a non-empty list of {action key: args} "
-                     "objects - click / fill / press / wait / scroll / wait_selector / "
-                     "snapshot / screenshot / submit",
+                     "objects - click / fill / read / press / wait / scroll / "
+                     "wait_selector / snapshot / screenshot / submit",
                 next_action=("Name the chain, or read the page with web_read(url=...) "
                              "if nothing on it has to be touched. The first call is "
                              "usually {snapshot: true}, which returns the numbered "
@@ -8997,10 +9003,14 @@ class MasterFetchServer:
     # steps/ms_per_step/full_page/save_to/expect?/confirm?`）留在 references/tools.md 的
     # Page interaction 按需付（那一节本来就是全的），wire 只带三个**必填**载荷键：读不到
     # 键名的 agent 没法路由，而缺的从来不是知识，是它到不了第一次调用眼前。
+    # 名单与三颗必填键之外，这颗清单还带着 A3-b 新增的 `read` —— 那颗动作的用法
+    # （`{"read": {..., "as": "code"}}` 之后 `{"fill": {"text": "{=code}"}}`）写在
+    # 本工具的 description 那一份里：这颗参数的描述已经在 296 的闸边上（A2 试过整表
+    # 上 wire 是 519 字符），而"读了怎么用"是路由级的信息，不能只活在源码注释里。
     # 名单与 `actions._VALID_KEYS`、必填键与 `_validate_actions` 的报错文本，由
     # tests/test_an_agent_that_only_reads_the_wire_can_name_an_actions_payload.py 对齐。
     _ACTIONS_DESC = (
-        "ONE action key per object: [{scroll:3},{wait:1000}]. Keys: click, fill, press, "
+        "ONE action key per object: [{scroll:3},{wait:1000}]. Keys: click, fill, read, press, "
         "hover, drag, wait, scroll, wait_selector, snapshot, screenshot, submit - each "
         "targets a CSS selector or a snapshot index; fill needs text, press needs key, "
         "drag needs to (a drop target).")
@@ -9068,7 +9078,7 @@ class MasterFetchServer:
             # （回执 / snapshot 先数 / submit 先问 / 验证码三次就转交）是原样搬过来的
             # —— 搬工具不许搬走规矩。
             "name": "web_act",
-            "description": "Act on one page - click / fill / press / scroll / wait / snapshot / submit - then read back what it became. Reading it without touching it is web_read.\n- The chain runs in order on the stealthy browser and never from cache; every action leaves a receipt in metadata.actions, and a failed one says what sat at that selector.\n- No selector? {\"snapshot\": true} first: elements come back numbered, later actions address them by index, and expect:'name' verifies the visible name so a stale index fails instead of clicking the wrong thing.\n- submit PAUSES without confirm=true (only that step; earlier actions in the chain have run): describe exactly what would go, and on the user's yes re-run the same chain. Captchas get at most 3 read-and-retry rounds, then hand off; the walls-and-2FA list lives in sys_guide(topic='behavior').\n- Credentials never go in an argument: cred_defaults stores them.\n- VISUAL ASSIST: {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} crops one element of the SAME page instance and returns it inline - the way to read a CAPTCHA you are about to type. The dict form's options: sys_guide(topic='behavior').\nAction-key shapes, index addressing and the lazy-feed discipline: sys_guide(topic='behavior', section='Page interaction').",
+            "description": "Act on one page - click / fill / press / read / scroll / wait / snapshot / submit - then read back what it became. Reading it without touching it is web_read.\n- The chain runs in order on the stealthy browser and never from cache; every action leaves a receipt in metadata.actions, and a failed one says what sat at that selector.\n- No selector? {\"snapshot\": true} first: elements come back numbered, later actions address them by index, and expect:'name' verifies the visible name so a stale index fails instead of clicking the wrong thing.\n- submit PAUSES without confirm=true (only that step; earlier actions in the chain have run): describe exactly what would go, and on the user's yes re-run the same chain. Captchas: at most 3 attempts, then hand off - and a retry is a NEW page load, so the challenge you read last call belongs to a page that is gone unless the site binds it to the session. The walls-and-2FA list lives in sys_guide(topic='behavior').\n- Credentials never go in an argument: cred_defaults stores them.\n- VISUAL ASSIST: {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} crops one element of the SAME page instance and returns it inline AFTER the chain has run - a step of this chain cannot type what it cannot yet see, so a capture is for a human to read. Text the page holds is what a step CAN answer: {\"read\": {\"selector\": \"css\", \"as\": \"code\"}} then {\"fill\": {\"selector\": \"css\", \"text\": \"{=code}\"}}. The dict form's options: sys_guide(topic='behavior').\nAction-key shapes, index addressing and the lazy-feed discipline: sys_guide(topic='behavior', section='Page interaction').",
             "inputSchema": {
                 "type": "object", "required": ["url", "actions"],
                 "properties": {

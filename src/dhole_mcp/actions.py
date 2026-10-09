@@ -26,6 +26,16 @@ Action schema (one key per dict):
   {"screenshot": "css"}                     crop one element to an inline image
   {"screenshot": {"selector": "css", "decode_qr": true}}
                                             same, plus local QR decode of the crop
+  {"read": "css"}                           take THAT page instance's text back into
+  {"read": {"selector": "css", "as": "code"}}
+                                            the chain; `as` names it for a later
+  {"fill": {"index": 2, "text": "answer {=code}"}}
+                                            fill to answer what was just read — the
+                                            one shape that works for a challenge
+                                            written in the DOM (a fresh call means
+                                            a fresh challenge). Optional knobs:
+                                            `attribute` (read value/href instead of
+                                            text), `expect`.
   {"snapshot": true}                        numbered interactive-element list
                                             (index/tag/role/name) for the agent
                                             to act on by index — no CSS needed
@@ -66,6 +76,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -95,16 +106,42 @@ SCROLL_TOTAL_MS = 20_000
 CLICK_SETTLE_MS = 4_000
 CLICK_SETTLE_MIN_MS = 600
 _VALID_KEYS = {"click", "fill", "press", "wait", "scroll", "wait_selector",
-               "screenshot", "snapshot", "submit", "hover", "drag"}
+               "screenshot", "snapshot", "submit", "hover", "drag", "read"}
+
+# 链内读（A3-b）的三份边界。字符帽沿用回执那一族的口径：读回来的文本进
+# `metadata.actions`，而那是每一条响应都要带的行 —— 一整个 `<pre>` 的正文塞进
+# 回执，代价由每一个读到这行的会话付。截断必须点名（钳必须点名）：帽在几、原文
+# 共几，两个数都在行里，读的人不必猜那一枚验证码是不是被砍了一半。
+MAX_ACTION_READ_CHARS = 2_000
+# `fill.text` 的帽：验证期量的是发来的字面量，展开 `{=名字}` 之后还要再量一次
+# （见 _substitute_refs）—— 一次读回来的正文可能比帽长，那不该变成一次静默截断
+# 的填表，也不该变成一发给网站的半截答案。
+MAX_FILL_TEXT_CHARS = 5_000
+# `{=名字}` 是"把这一条链里更早那次 read 的结果填在这里"的记号。刻意不用裸
+# `{名字}`：填进表单的文本里出现 `{code}` 这种字面量是常事（模板、JSON、占位
+# 说明），把那种东西判成引用就等于悄悄改了调用方的字节。`=` 不是合法标识符的
+# 首字符，所以这个记号在真实文本里出现的概率接近零，而它一旦被写成没登记过的
+# 名字，是**具名拒绝**而不是原样填进去 —— 静默把 `{=cod}` 交给网站，填进去的就是
+# 那六个字符。
+_REF_RE = re.compile(r"\{=([a-z_][a-z0-9_]{0,30})\}")
+_AS_RE = re.compile(r"[a-z_][a-z0-9_]{0,30}")
+# HTML 属性名：`value` / `href` / `data-token` / `xml:lang` 都在这一形里。
+_ATTR_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.:-]{0,40}")
 
 # An element capture only exists to be LOOKED at. 17.0: always available ——
 # the recognition happens agent-side (dhole ships no vision model), and a
 # text-only caller simply never asks for {"screenshot"}.
 # Element captures ride the same page instance as the surrounding fill/click
-# actions — that is the whole point over a separate screenshot call: the
-# captcha read in this capture is the one the next action answers, on the page
-# load that is still alive. A capture this large is a mistake (the whole page,
-# not a cropped element), and shipping it spends a multimodal client's context.
+# actions — that is the whole point over a separate screenshot call: the crop is
+# taken of the page THIS chain navigated, before anything else replaces it.
+# It is not "the captcha the next action answers": a capture reaches the caller
+# only after the chain has run, so no step of that chain can type what it shows.
+# Answering inside one navigation is what {"read"} + {"fill": "{=name}"} is for
+# (text the page holds); an image challenge has no in-chain answer at all —
+# that case is a hand-off, and this comment used to claim the capture was the
+# way around it.
+# A capture this large is a mistake (the whole page, not a cropped element), and
+# shipping it spends a multimodal client's context.
 MAX_ACTION_SHOT_BYTES = 2_000_000
 
 # ─── 捕获内核（A1：自 server.py 的 web_screenshot 方法搬入）───────────────────
@@ -470,6 +507,9 @@ def _validate_actions(actions) -> list[dict]:
     if len(actions) > MAX_ACTIONS:
         raise ValueError(f"Too many actions ({len(actions)}). Maximum is {MAX_ACTIONS}.")
     out: list[dict] = []
+    # `read` 登记过的名字（`as`），按链的顺序累积 —— `fill` 的 `{=名字}` 只能引用
+    # **跑在它前面**的那一次读，否则那条引用指向的是还没发生的事。
+    stored: set[str] = set()
     for i, a in enumerate(actions):
         if not isinstance(a, dict) or len(a) != 1:
             raise ValueError(
@@ -644,11 +684,51 @@ def _validate_actions(actions) -> list[dict]:
             text = val["text"]
             if not isinstance(text, str):
                 raise ValueError(f"action {i} 'fill.text' must be a string")
-            if len(text) > 5000:
-                raise ValueError(f"action {i} 'fill.text' too long (max 5000 chars)")
+            if len(text) > MAX_FILL_TEXT_CHARS:
+                raise ValueError(
+                    f"action {i} 'fill.text' too long "
+                    f"(max {MAX_FILL_TEXT_CHARS} chars)")
+            # `{=名字}` 引用的是**同一条链里更早那次 read** 读回来的文本。名字不在
+            # 已登记的那一里就当场具名拒绝：把 `{=cod}` 原样填进表单，交给网站的就是
+            # 那六个字符，而那一发看起来是一次成功的 fill。
+            for name in _REF_RE.findall(text):
+                if name not in stored:
+                    raise ValueError(
+                        f"action {i} 'fill.text' references {{={name}}} but no "
+                        f"earlier action stored that name"
+                        + (f" (available: {sorted(stored)})" if stored else
+                           " (no {\"read\": ...} action runs before this one)"))
             target = _act_target(
                 i, key, {k: v for k, v in val.items() if k != "text"})
             out.append({key: {**target, "text": text}})
+        elif key == "read":
+            # 链内读（A3-b）：取回**当前这个页面实例**上某一处的文本，进回执，
+            # 登记成名字后供后面的 fill 用 `{=名字}` 取用。
+            #
+            # 它解决的是那一种挑战：答案就写在 DOM 里（"请抄写下方的字符"），而调用方
+            # 读得到却够不着 —— 跨调用重跑会重新导航，挑战换一枚，第二次填进去的是上一
+            # 枚实例的答案（实测靶站 `/captcha` 每次 GET 出新 token）。同一条链里
+            # read → fill → submit 是唯一"看到的就是答的那一个页面"的形状；
+            # `screenshot` 顶替不了它，因为那一张图要到整条链跑完才交得到调用方眼前。
+            target = _act_target(i, key, val)
+            if isinstance(val, dict):
+                attr = val.get("attribute")
+                if attr is not None:
+                    if not isinstance(attr, str) or not _ATTR_RE.fullmatch(attr):
+                        raise ValueError(
+                            f"action {i} 'read.attribute' must be an attribute name "
+                            f"like \"value\" or \"href\" (got {attr!r})")
+                    target["attribute"] = attr
+                as_name = val.get("as")
+                if as_name is not None:
+                    if not isinstance(as_name, str) or not _AS_RE.fullmatch(as_name):
+                        raise ValueError(
+                            f"action {i} 'read.as' must be a short name "
+                            "(a-z, 0-9, underscore, max 31) that a later "
+                            f"fill can reference as {{=name}} (got {as_name!r})")
+                    stored.add(as_name)
+                    target["as"] = as_name
+            out.append({key: target})
         elif key == "press":
             if isinstance(val, str):
                 k = val.strip()
@@ -1150,6 +1230,15 @@ def action_label(a: dict) -> str:
             " + decode_qr" if isinstance(val, dict) and val.get("decode_qr") else "")
     if key == "snapshot":
         return "snapshot interactive elements"
+    if key == "read":
+        # 回执那一行要说清读了什么、读回来存成了什么名字 —— 后面那条 fill 的
+        # `{=名字}` 是从这一行来的，读者不必回头数链。
+        base = f"read {_target_label(val)}"
+        if isinstance(val, dict) and val.get("attribute"):
+            base += f" @{val['attribute']}"
+        if isinstance(val, dict) and val.get("as"):
+            base += f" as {val['as']!r}"
+        return base
     if key == "submit":
         # _target_label(val), not val.get("selector"): a submit addressed by
         # snapshot index normalizes to {"index": N} with NO "selector" key, so
@@ -1165,6 +1254,29 @@ def action_label(a: dict) -> str:
         sel = val if isinstance(val, str) else (val or {}).get("selector")
         return f"wait_selector {sel!r}"
     return f"{key} {val}"
+
+
+def _substitute_refs(text: str, values: dict, where: str) -> str:
+    """把 `{=名字}` 换成同一条链里那次 read 读回来的文本。
+
+    验证期已经拒过"没登记过的名字"，所以这里还缺一颗名字只有一种意思：**那次 read
+    跑了却没读出东西**（它的回执行里带着 error）。此刻不填、并指名去看那一行 ——
+    把 `{=code}` 原样交给网站是一次看起来成功的提交，而提交出去的是那六个字符。
+    """
+    missing = sorted({n for n in _REF_RE.findall(text) if n not in values})
+    if missing:
+        raise ValueError(
+            f"{where} references " + ", ".join("{" + f"={m}" + "}" for m in missing)
+            + " but that read produced no value - its row in metadata.actions "
+              "carries the reason, and nothing was filled.")
+    out = _REF_RE.sub(lambda m: values[m.group(1)], text)
+    if len(out) > MAX_FILL_TEXT_CHARS:
+        raise ValueError(
+            f"{where} would fill {len(out):,} chars once "
+            "{{=name}} is substituted (fill.text caps at "
+            f"{MAX_FILL_TEXT_CHARS:,}) - the read it references is longer than "
+            "the field can take")
+    return out
 
 
 def _action_failure(exc: Exception) -> str:
@@ -1218,6 +1330,10 @@ def build_page_action(actions) -> Optional[Callable]:
 
     async def page_action(page) -> None:
         outcomes.clear()
+        # 这一条链的寄存器：`{"read": {..., "as": "code"}}` 把读回来的文本存在这里，
+        # 后面的 `fill` 用 `{=code}` 取用。每次导航重新起一条链（`outcomes` 同样清空），
+        # 所以下一页的挑战不会带着上一页的值 —— 那一件事正是这条链存在的理由。
+        values: dict[str, str] = {}
         # 动作链是"几十秒到几分钟"的另一种形状：一步 click 可以等 settle，一步 wait
         # 是显式的秒数。每**要执行**的一步报一次（在动作之前报，因为被 submit 闸拦下
         # 的那一步不该被说成做过）；链里 continue 的分支因此也带着自己的那一格。
@@ -1266,7 +1382,8 @@ def build_page_action(actions) -> Optional[Callable]:
                 elif "fill" in a:
                     f = a["fill"]
                     loc = await _target_locator(page, f)
-                    await loc.fill(f["text"], timeout=10_000)
+                    await loc.fill(_substitute_refs(f["text"], values, label),
+                                   timeout=10_000)
                 elif "press" in a:
                     p = a["press"]
                     if p.get("index") is not None:
@@ -1356,6 +1473,38 @@ def build_page_action(actions) -> Optional[Callable]:
                         except Exception as e:
                             shot["qr"] = []
                             shot["qr_error"] = f"{type(e).__name__}: {str(e)[:140]}"
+                elif "read" in a:
+                    r = a["read"]
+                    loc = await _target_locator(page, r)
+                    attr = r.get("attribute")
+                    if attr:
+                        raw = await loc.get_attribute(attr)
+                        text = "" if raw is None else str(raw)
+                        what = f"attribute {attr!r}"
+                        empty_hint = f"{attr!r} is absent or empty on this element"
+                    else:
+                        text = await loc.inner_text(timeout=10_000)
+                        what = "text"
+                        # 空读数最常被读成"这一页没有答案"，而真相通常是读错了地方：
+                        # 表单框的值不是元素的文本，图里的挑战更不是。这两扇门都点名，
+                        # 否则这一行只是把"没读到"原样交回给人猜。
+                        empty_hint = (
+                            'an input\'s value needs {"attribute": "value"}; a '
+                            "challenge drawn as an image needs a screenshot action")
+                    text = text.strip()
+                    if not text:
+                        raise ValueError(f"read found no {what}: {empty_hint}")
+                    if len(text) > MAX_ACTION_READ_CHARS:
+                        shot["read"] = text[:MAX_ACTION_READ_CHARS]
+                        shot["read_truncated"] = True
+                        shot["read_chars_total"] = len(text)
+                    else:
+                        shot["read"] = text
+                    if r.get("as"):
+                        # 寄存器存**全文**：帽是说给读这一行的人听的，填回表单的那一半
+                        # 不该拿到一枚被砍过的答案。
+                        values[r["as"]] = text
+                        shot["read_as"] = r["as"]
                 elif "snapshot" in a:
                     rows, total, truncated = await snapshot_elements(page)
                     if not total:

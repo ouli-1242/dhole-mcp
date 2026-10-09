@@ -54,6 +54,10 @@ MOVED_LESSONS = [
     # C5：`timeout=` 的声明单位（整次调用的毫秒）与这一档的钳（每次尝试 30s）不是一把尺。
     # 常驻层只能放一句上限，"这颗数该怎么拿来算"整段在 fields.md 的 `timeout_applied` 行。
     ("一次 HTTP 尝试封顶 30s，抬 timeout 买的是试次不是单发", "one HTTP attempt"),
+    # A3-a：那句 "at most 3 read-and-retry rounds" 从 wire 退场之后，完整理由（每一次
+    # 调用都重新导航，所以上一轮读到的挑战这一轮已经不在了）只在语料里 —— 少了这一条，
+    # 读者只知道"别重试"，不知道为什么，也就学不会"绑回会话才值得重试"那一句。
+    ("验证码的轮次答的是上一枚挑战：跨调用重读等于答上一页", "already gone on the next"),
     # 搜索
     ("consensus 数的是索引家族不是原始命中", "FAMILIES"),
     ("引擎池的上限与带 key 的引擎", "Keyed backends"),
@@ -337,7 +341,21 @@ def test_connect_stays_inside_the_packed_budget():
 #: 名单与 `actions._VALID_KEYS` 相等；三颗必填键由验证器自己的报错推出来（不手抄）并要求
 #: 声明里同句连读（`fill needs text`）。钉住这两件事的是
 #: tests/test_an_agent_that_only_reads_the_wire_can_name_an_actions_payload.py。
-CONNECT_CEILING = 31_451
+#: 2026-10-10 体验修复刀3-A3（a 文案 + b 链内 read，同一刀）：棘轮**上抬 +373**
+#: （31,451 → 31,824），抬它的是常驻层里那句做不到的承诺："Captchas get at most 3
+#: read-and-retry rounds"。每一次调用都重新导航，所以上一次读到的挑战属于已经不在了的那个
+#: 页面实例 —— 第二轮填进去的是上一轮那一枚的答案（实测靶站 `/captcha` 每次 GET 出新
+#: token：提交 `72G69` 而站点那枚是 `CJN2Y`）。同一句假话还有第二个作者：VISUAL ASSIST
+#: 那条写着截图是 "the way to read a CAPTCHA you are about to type"，而那张图要等整条链
+#: 跑完才交得到调用方眼前 —— 链里没有一步能照着它打字，顺序被说反了。
+#: 改完的两半都是结构事实：轮次只在站点把挑战绑回会话时才有意义；图像挑战一律转交；而页面
+#: **把挑战写成文本**的那一种，同一条链里读得到也用得上（A3-b 的 `{"read": {...,"as":
+#: "code"}}` + `{"fill": {"text": "{=code}"}}`）。这一对必须住在 wire 上：只读 `tools/list`
+#: 的调用方此前唯一的出路是再调一次，而那一次正好换掉挑战。
+#: 逐块实测：动作清单 +6（一颗动作名），工具描述 +367（撤一句做不到的、给一对用得上的）。
+#: `{=名字}` 的完整旋钮表与"为什么跨调用不行"整段在 references/tools.md 的 Page interaction
+#: —— 参数描述那颗 296 的闸装不下第二份（A2 刚试过），所以形状给在工具描述那一份。
+CONNECT_CEILING = 31_824
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

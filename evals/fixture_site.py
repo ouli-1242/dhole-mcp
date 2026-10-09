@@ -33,6 +33,9 @@
 /captcha             HTML 页，内嵌 <img src="/captcha.png?token=..."> + 提交表单
 /captcha.png         扭曲文字验证码 PNG（逐字旋转 + 正弦位移 + 干扰线；?level=hard 加码）
 /captcha/verify      POST token+answer；对错分别回不同页，每次尝试落盘
+/challenge/text      答案写在 DOM 文本里的抄写挑战（A3-b 的靶：同一条链里 read→fill→
+                     submit 才答得对；每次导航换一枚，所以跨调用重试必错）
+/challenge/verify    POST token+answer；尝试落 evals/.runtime/challenge.log
 
 服务端每次请求打印一行到 stdout，作为独立于 dhole 响应的旁证。
 订单日志默认 evals/.runtime/orders.log —— 场景 1 用它判断"提交是否真的发生了"。
@@ -62,6 +65,7 @@ RUNTIME = HERE / ".runtime"
 ORDERS = RUNTIME / "orders.log"
 REQUESTS = RUNTIME / "requests.log"
 CAPTCHA_LOG = RUNTIME / "captcha.log"
+CHALLENGE_LOG = RUNTIME / "challenge.log"
 
 QR_PAYLOAD = "https://example.com/checkin?token=DHOLE-EVAL-8399"
 
@@ -570,8 +574,32 @@ def _captcha_page(token: str) -> bytes:
 """)
 
 
+def _challenge_page(token: str) -> bytes:
+    """A3-b 的靶：答案**就在这页的文本里**（`<p id=challenge>`），而不是画在图里。
+
+    与 `/captcha` 的分工写在这里，免得有人把这一页当成"验证码后门"：`/captcha` 的答案
+    只在扭曲 PNG 里，读它要视觉，任何链内文本读取都够不着 —— 那一格量的是能不能看清。
+    这一页的答案是 DOM 里的字，所以它量的是另一件事：**同一次导航里读到、再填回同一个
+    页面实例**。token 仍每次 GET 新发（与 `/captcha` 同一形状），于是"这次调用读、下次
+    调用填"在这里必然答错 —— 那正是 A3-a 要在常驻层文案里写清的结构事实，也是
+    `{"read": ...}` + `{"fill": {"text": "{=code}"}}` 一条链就能答对的原因。
+    """
+    return _page("抄写挑战", f"""
+<h1>请按原样抄写下面的字符</h1>
+<p id="challenge">{captcha_text(token)}</p>
+<form method="post" action="/challenge/verify">
+  <input type="hidden" name="token" value="{token}" id="token">
+  <label for="answer">字符</label>
+  <input id="answer" name="answer" type="text" autocomplete="off">
+  <button type="submit" id="challenge-btn">提交</button>
+</form>
+""")
+
+
 CAPTCHA_OK = _page("验证码通过", "<h1>验证码正确</h1><p>可以继续。</p>")
 CAPTCHA_BAD = _page("验证码错误", "<h1>验证码错误</h1><p>请重试。</p>")
+CHALLENGE_OK = _page("挑战通过", "<h1>抄写正确</h1><p>同一条链里读到的就是填进去的那一枚。</p>")
+CHALLENGE_BAD = _page("挑战失败", "<h1>抄写不符</h1><p>填进来的不是这一页的字符。</p>")
 
 
 # ── 处理器 ──────────────────────────────────────────────────────────────
@@ -638,6 +666,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._html(QR_PAGE)
         if path == "/captcha":
             return self._html(_captcha_page(new_captcha_token()))
+        if path == "/challenge/text":
+            return self._html(_challenge_page(new_captcha_token()))
         if path == "/captcha.png":
             q = parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
             token = q.get("token", [""])[0]
@@ -744,6 +774,30 @@ class Handler(BaseHTTPRequestHandler):
                              f"ok={ok}\n")
             sys.stdout.flush()
             return self._html(CAPTCHA_OK if ok else CAPTCHA_BAD,
+                              200 if ok else 403)
+
+        if path == "/challenge/verify":
+            # 与 /captcha/verify 同一判法（token 派生答案、逐次落盘），区别只在答案
+            # 这一页是文本：它服务的是"同一条链里读到并填回"这一格，不是视觉那一格。
+            token = form.get("token", "")
+            answer = (form.get("answer", "") or "").strip().upper()
+            expected = captcha_text(token) if token else ""
+            ok = bool(expected) and answer == expected
+            RUNTIME.mkdir(parents=True, exist_ok=True)
+            record = {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "token": token,
+                "answer": answer,
+                "expected": expected,
+                "ok": ok,
+                "remote": self.client_address[0],
+            }
+            with CHALLENGE_LOG.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            sys.stdout.write(f"    !! CHALLENGE {token} answer={answer!r} "
+                             f"ok={ok}\n")
+            sys.stdout.flush()
+            return self._html(CHALLENGE_OK if ok else CHALLENGE_BAD,
                               200 if ok else 403)
 
         return self._html(_page("404", "<h1>404</h1>"), 404)

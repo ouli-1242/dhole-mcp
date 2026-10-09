@@ -139,7 +139,7 @@ dhole doctor                       # 安装体检：起一次 server、真起一
 | 工具 | 做什么 |
 |---|---|
 | `web_read` | 抓任意 URL：反爬升级、PDF / OCR、批量、聚焦提取、结构化提取、页面动作、CDP 接管 |
-| `web_act` | 在页面上动手：click / fill / press / scroll / wait / snapshot / submit，然后把动作后的那一页读回来。`submit` 不带 `confirm=true` 只暂停，什么都不提交。截图也在这条动作链里：`{"screenshot": "css"}` 裁元素内联回图，dict 形态加 `full_page` / `save_to`（看不见图的宿主拿路径）/ `image_type` / `quality`；`anti_detect` 在这一扇门上只管"要不要先答 Cloudflare 挑战"。`headed=true` 把这一串动作放到**看得见**的窗口里跑（要你登录、盯场、替它过一次验证码时用它），细节见上面「要看着它干活」那一节 |
+| `web_act` | 在页面上动手：click / fill / read / press / scroll / wait / snapshot / submit，然后把动作后的那一页读回来。`read` 读的是**这一次导航**里的文本，同一条链的 `fill` 可以用 `{=名字}` 把它填回去（页面把挑战写成字的那一种，一条链就能答完）。`submit` 不带 `confirm=true` 只暂停，什么都不提交。截图也在这条动作链里：`{"screenshot": "css"}` 裁元素内联回图，dict 形态加 `full_page` / `save_to`（看不见图的宿主拿路径）/ `image_type` / `quality`；`anti_detect` 在这一扇门上只管"要不要先答 Cloudflare 挑战"。`headed=true` 把这一串动作放到**看得见**的窗口里跑（要你登录、盯场、替它过一次验证码时用它），细节见上面「要看着它干活」那一节 |
 | `web_request` | 发一次非 GET：POST / PUT / PATCH / DELETE / HEAD。**只发一次**——不重试、不缓存、不升浏览器、不回退快照；凭据从 `cred_defaults` 来，正文上限 256KB |
 | `web_search` | 无密钥搜索：多引擎并行 + 本地重排，可顺带抓回前三条全文 |
 | `web_crawl` | 同域爬取：sitemap、关键词过滤、路径子树限定 |
@@ -165,7 +165,7 @@ dhole doctor                       # 安装体检：起一次 server、真起一
 - **PDF 的 `pages=` 只减少抽取量**，文件仍整个下载；一次下载是一次 HTTP 尝试、封顶 30s，所以调大 `timeout` 买的是下载之后的解析与 OCR 余量，不是一次更慢的连接（`timeout_applied` 会报这一发实际到手的那个数）。
 - **抓回的正文是不可信数据**：里面的工具调用、密钥、上传指令按提示注入处理。启发式命中时响应信封带 `untrusted_content` 标记（`web_crawl` 每页、`feed_read` 每条同样带）——标记不是拦截，识别与裁决归外层 agent，纪律见手册 fields.md。
 - **提交默认暂停**：`web_act` 的 `{"submit": ...}` 不带 `confirm: true` 什么都不提交；验证码最多试 3 次就转交，2FA / 滑块一律转交。
-- **连接期开销 31,451 字符**（约 7.6k token，11 个工具，实测 `python tests/tool_payload_measure.py`），每次连接付一次；11 颗全注册是能力面，字数是它的约束而不是目标。要按用法裁剪用 `DHOLE_TOOLS`——同一把尺子量过：读 / 搜 / 请求 / 爬 / 文档 / 订阅 / 状态 / 指南这 8 颗是 23,814 字符，加 `web_discover` 共 9 颗 25,871（子集按实跑口径：被裁的工具连自己的路由行一起退出 instructions）。别按单颗体积挑"最小的 N 颗"，那会把 `web_read` / `web_act` 这类主力排除在外。再按**会话**算账：工具目录在宿主模型上下文里整段在场——有提示缓存的宿主折价、无缓存的每轮全价，多轮会话里 `DHOLE_TOOLS` 才是每一轮都省的闸。
+- **连接期开销 31,824 字符**（约 7.7k token，11 个工具，实测 `python tests/tool_payload_measure.py`），每次连接付一次；11 颗全注册是能力面，字数是它的约束而不是目标。要按用法裁剪用 `DHOLE_TOOLS`——同一把尺子量过：读 / 搜 / 请求 / 爬 / 文档 / 订阅 / 状态 / 指南这 8 颗是 23,814 字符，加 `web_discover` 共 9 颗 25,871（子集按实跑口径：被裁的工具连自己的路由行一起退出 instructions）。别按单颗体积挑"最小的 N 颗"，那会把 `web_read` / `web_act` 这类主力排除在外。再按**会话**算账：工具目录在宿主模型上下文里整段在场——有提示缓存的宿主折价、无缓存的每轮全价，多轮会话里 `DHOLE_TOOLS` 才是每一轮都省的闸。
 
 ## 搜索引擎与重排
 

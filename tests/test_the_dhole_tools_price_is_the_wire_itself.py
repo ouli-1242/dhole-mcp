@@ -179,8 +179,8 @@ def _ruler_module():
     return mod
 
 
-def test_the_default_connect_is_the_published_31_451():
-    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：31,451。
+def test_the_default_connect_is_the_published_31_824():
+    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：31,824。
 
     这一条同时是量尺的回归锁：`tool_payload_measure._wire_for` 曾按工具数累加路由行，
     把默认连接报成 30,857（web_discover / web_crawl 共用那句被算了两遍）。修成按文本
@@ -216,6 +216,13 @@ def test_the_default_connect_is_the_published_31_451():
     调用方只能猜（实测猜错两次），而答案只住在报错里：那等于要求先失败一次。整表（含可选
     旋钮）的第一版是 519 字符，撞了 `test_wire_shape.py` 那颗 296 的闸；按那道闸自己的
     口径（搬家，不是缩写）可选项留在 references/tools.md，wire 只留必填的那三颗。
+    31,451 → 31,824（2026-10-10，体验修复刀3-A3）：一次**上抬 +373**，买的是把一句做不到
+    的承诺换成一对用得上的形状。常驻层写着 "Captchas get at most 3 read-and-retry rounds"，
+    而每次调用都重新导航 —— 第二轮读到的挑战已经不是第一轮那一枚（实测靶站每次 GET 出新
+    token）。同一句假话的第二个作者是 VISUAL ASSIST 那条：截图"就是你马上要照着打字的那一枚"，
+    可那张图要等整条链跑完才交得到调用方眼前。新的两半说的是结构与那一种真能做的：图像挑战
+    转交；页面把挑战写成文本时，`{"read": {..., "as": "code"}}` 再 `{"fill": 
+    {"text": "{=code}"}}` 在同一条链里读完。动作清单 +6，工具描述 +367。
     """
     ruler = _ruler_module()
     import ast
@@ -233,7 +240,7 @@ def test_the_default_connect_is_the_published_31_451():
         f"仓库量尺与 wire 的 tools/list 对不上：{ruler_compact} vs {wire['tools_compact']}")
     assert ruler_instr == len(wire["instructions"]), (
         f"仓库量尺多算了路由行：{ruler_instr} vs wire {len(wire['instructions'])}")
-    assert ruler_compact + ruler_instr == 31_451
+    assert ruler_compact + ruler_instr == 31_824
 
 
 def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():

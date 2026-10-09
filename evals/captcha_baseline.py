@@ -220,6 +220,14 @@ def score(answers_path: Path) -> int:
 # ── 3. 转交纪律在不在 wire 上 ──────────────────────────────────────────
 
 def wire_check() -> None:
+    """读一遍常驻层那一份话，量的是今天还成立的三件事。
+
+    这一格原本是 17.0 之前写的：它比 `DHOLE_MULTIMODAL` 开与关的两份描述，并去取
+    `on["screenshot"]` 与 `on["web_read"]` 两颗工具。两件前提都没了 —— 元素捕获在 17.0
+    起**恒可用**（识别发生在 agent 一侧，dhole 不带视觉模型），而 `web_screenshot` 独立
+    工具早已并入 `web_act` 的截图动作。上一次它不是"没过"，是 `KeyError: 'screenshot'`：
+    一把量具对着不存在的旋钮，读数再稳定也不说明被量的东西。所以这里换三件今天问得出的事。
+    """
     from dhole_mcp.server import MasterFetchServer
 
     saved = os.environ.get("DHOLE_MULTIMODAL")
@@ -236,21 +244,35 @@ def wire_check() -> None:
         else:
             os.environ["DHOLE_MULTIMODAL"] = saved
 
-    grew = (len(on["screenshot"]) > len(off["screenshot"])
-            and len(on["web_read"]) > len(off["web_read"]))
-    caps = ("at most 3" in on["screenshot"] or "at most 3" in on["web_read"])
-    hand = (on["screenshot"].count("hand off") >= 3
-            and on["web_read"].count("hand off") >= 1)
-    clean_off = "hand off" not in off["screenshot"] and "VISUAL ASSIST" not in off["screenshot"]
+    moved = [n for n in on if len(on[n]) != len(off[n])]
+    record("视觉辅助不再跟着 DHOLE_MULTIMODAL 上线（17.0 起恒可用）", not moved,
+           f"开旗与关旗的描述逐颗等长；有动的: {moved or '无'}")
 
-    record("DHOLE_MULTIMODAL=1 时，试读纪律只跟着 flag 上线", grew and clean_off,
-           f"开旗后 screenshot +{len(on['screenshot']) - len(off['screenshot'])} 字符、"
-           f"web_read +{len(on['web_read']) - len(off['web_read'])} 字符；"
-           f"关旗时描述里无 'VISUAL ASSIST'")
-    record("纪律写明 ≤3 次上限与转交终点", caps and hand,
-           f"含 'at most 3'={caps}；hand off 出现次数 "
-           f"screenshot={on['screenshot'].count('hand off')} "
-           f"web_read={on['web_read'].count('hand off')}")
+    act = on["web_act"]
+    caps = "at most 3" in act
+    hand = act.count("hand off") >= 1
+    record("web_act 写明 ≤3 次上限与转交终点", caps and hand,
+           f"含 'at most 3'={caps}；'hand off' 出现 {act.count('hand off')} 次")
+
+    # 那句做不到的承诺不许回来：每一次调用都重新导航，所以"读一次—重试一次"答的不是
+    # 同一枚挑战（靶站实测：第二轮提交的是第一轮那一枚）。
+    back = [n for n, d in on.items() if "read-and-retry" in d]
+    typed = "you are about to type" in act
+    record("『read-and-retry rounds』『照着截图去打字』两句都从 wire 上退了场",
+           not back and not typed,
+           f"仍带 read-and-retry 的工具: {back or '无'}；web_act 仍说 'about to type'={typed}")
+
+    # 而真能在同一条链里答完的那一对要在场 —— 不然退了假话，读者只剩"不能"没有"能"。
+    has_read = '"read"' in act
+    has_sigil = "{=" in act
+    record("链内读—答那一对形状在 web_act 上", has_read and has_sigil,
+           f"web_act 含 read 的例子={has_read}；含引用记号 {{=name}}={has_sigil}")
+
+    from dhole_mcp import guide
+    _header, behavior = guide.read("behavior")
+    reason = "already gone on the next" in behavior
+    record("为什么跨调用重试答不中：完整理由在 sys_guide 送得出的那一卷里", reason,
+           f"references/tools.md（topic='behavior'）含 'already gone on the next'={reason}")
 
 
 # ── main ───────────────────────────────────────────────────────────────
