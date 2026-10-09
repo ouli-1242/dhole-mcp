@@ -267,6 +267,13 @@ class SearchResponseModel(BaseModel):
     query: str = Field(description="Search query")
     results: list[SearchResult] = Field(description="Ranked search results (URLs + ranking, not page content)")
     total_results: int = Field(default=0, description="Results returned")
+    # S4："问 10 得 4" 此前只写在 `total_results` 一侧 —— 调用方要自己记住我要了几条，
+    # 再去数回来的条数，而"少掉的那几去哪了"在响应里根本没有对账的面。两个数成对出现、
+    # 且**只在不相等时出现**（相等时它们不携带任何信息，而 `wire.py` 的"缺省即默认"让
+    # 缺席不花钱）。少掉的部分另有 `fetch_hint` 逐因点名。
+    requested: Optional[int] = Field(default=None, description="How many results this call asked for (`max_results` as applied). Emitted ONLY when fewer came back - paired with `delivered`, so 'I asked 10, I got 4' is one glance instead of arithmetic. Absent = you got what you asked for.")
+    delivered: Optional[int] = Field(default=None, description="Rows actually returned, next to `requested`. Deliberately repeats `total_results`: the pair has to read together ('requested 10, delivered 4') without the caller cross-referencing another field - the same reason `fetched_pages[]` repeats each page's consensus string. Emitted only with `requested`.")
+
     engines_used: list[str] = Field(default=[], description="Engines that returned results")
     engine_blocked: list[str] = Field(default=[], description="Engines that were rate-limited / CAPTCHA'd / timed out / errored - they could not answer. See engine_empty for the different case of an engine that DID answer but yielded nothing usable.")
     engine_empty: list[str] = Field(default=[], description="Engines that answered (HTTP 200) but parsed zero usable results. NOT rate-limiting: either this query genuinely has nothing in that index, or that engine's parser has drifted out of sync with its page structure. Cross-check the 'engine yield' row of `dhole -v`.")
@@ -472,6 +479,44 @@ def compute_fetch_hint(results: list[SearchResult]) -> str:
                 "(no relevance verdict was made) - web_read what matches your need.")
     return (f"{high} high, {med} med, {low} low. Ranked by relevance_score; "
             f"web_read what fits your need (high first, but a lower tier can be the right call).")
+
+
+def _drop_causes(*, rank_dropped: int, low_dropped: int, off_topic: int,
+                 floors: list[str], verdict_ran: bool) -> str:
+    """逐因带数的丢弃账，两个分支（整轮清空 / 部分丢弃）共用一处措辞。
+
+    为什么必须逐因：三个因各有各的解药 —— 抬 `min_relevance` 治不了"没命中查询词"，
+    动 `min_raw_relevance` 治不了"被判 low"，换 `engines=` 治不了前两者。合并成一句
+    "dropped as off-topic/low-relevance" 之后，调用方手里只剩一个总数，而总数不指向
+    任何旋钮。
+
+    为什么 low 要带**作者**：S2 之后 low 有两个可能的来源 —— 模型的判决，或者没模型时
+    那条只准降级的位置尺。两句的含义相反（"模型认为不相关" vs "没人判断过，它只是排得
+    靠后"），合并的话调用方会把后者当成前者，然后去追一个从来没存在过的判决。
+    """
+    out: list[tuple[int, str]] = []
+    if rank_dropped:
+        out.append((rank_dropped, "below " + (" ".join(floors) if floors
+                                             else "the relevance floor you set")))
+    if low_dropped:
+        who = ("the model scored them off-topic" if verdict_ran
+               else "no reranker ran, the position rule only called them low")
+        out.append((low_dropped, f"labelled low ({who})"))
+    if off_topic:
+        out.append((off_topic, "matched no query term"))
+    return "; ".join(f"{n} {text}" for n, text in out)
+
+
+def _asked_pair(applied_max: int, delivered: int) -> dict:
+    """`requested` / `delivered` 的成对发射：**相等时一个都不发**。
+
+    不相等才是事实（"要 10 回 4"），相等什么都没说 —— 而"没说"在线上就该是缺席，
+    不是 `requested: 10, delivered: 10` 的 20 个字符噪音。展开进响应构造函数用，
+    两个入口（live 与缓存命中）共用一处判定，免得两条路径各自演化出不同的相等条件。
+    """
+    if delivered >= applied_max:
+        return {}
+    return {"requested": applied_max, "delivered": delivered}
 
 
 def _search_summary(query: str, results: list[SearchResult], engines_used: list[str],
@@ -1622,6 +1667,7 @@ async def web_search(
                 return SearchResponseModel(
                     query=cache_query, results=results_list,
                     total_results=len(results_list), cached=True,
+                    **_asked_pair(max_results, len(results_list)),
                     engines_used=_eu,
                     engine_blocked=_eb,
                     engine_empty=_ee,
@@ -1894,31 +1940,27 @@ async def web_search(
         # 查询没有结果"，next_action 还让人换个说法重试——实测本机 bing 对 DNS 查询回的
         # 全是 bilibili 首页（网络层拿走了回答），改查询不会有任何用。部分丢弃同样要留痕，
         # 否则"结果比预期少"又变回隐形降级。
+        # 三因的共同底稿：地板的名字与本次观察到的 raw 跨度（没有它，清空一轮的人
+        # 只能猜下一个数该报多少）。
+        _floors = [f"min_relevance={min_relevance}"] if min_relevance > 0.0 else []
+        if min_raw_relevance > 0.0:
+            _floors.append(f"min_raw_relevance={min_raw_relevance}")
+        if _rank_stats.get("raw_max") is not None:
+            _floors.append(f"(raw scores here spanned {_rank_stats['raw_min']:.4f}"
+                           f"-{_rank_stats['raw_max']:.4f})")
+        _reasons = _drop_causes(rank_dropped=_rank_dropped, low_dropped=_dropped_low,
+                                 off_topic=_off_topic, floors=_floors,
+                                 verdict_ran=(rerank_used == "neural"))
         if _dropped_total and not results_list:
-            _causes = []
-            if _rank_dropped:
-                _floors = [f"min_relevance={min_relevance}"] if min_relevance > 0.0 else []
-                if min_raw_relevance > 0.0:
-                    _floors.append(f"min_raw_relevance={min_raw_relevance}")
-                # The raw span is the calibration feedback: without it a caller
-                # who emptied the list has to guess the next number.
-                if _rank_stats.get("raw_max") is not None:
-                    _floors.append(f"(raw scores here spanned {_rank_stats['raw_min']:.4f}"
-                                   f"-{_rank_stats['raw_max']:.4f})")
-                _causes.append("scored below " + (" ".join(_floors) or "the relevance floor"))
-            if _dropped_low:
-                _causes.append("scored below the relevance floor")
-            if _off_topic:
-                _causes.append("matched no query term")
-            _why = " and ".join(_causes) or "were dropped"
             # When the floor alone emptied the list, _delivered is 0 (nothing
             # survived to be built) and quoting it would read as "the engines found
             # nothing" - the opposite of what happened. Quote the candidate count
             # the floor actually saw instead.
             _seen = len(_rank_candidates) if _rank_dropped else _delivered
             error = (
-                f"Engines delivered {_seen} results, but all {_dropped_total} {_why}, "
-                "so dhole dropped them rather than return noise. Off-topic "
+                f"Engines delivered {_seen} results, but none came back - dhole dropped "
+                f"them rather than return noise: {_reasons or 'no reason recorded'}. "
+                "Off-topic "
                 "results on a normal query usually mean a captive portal, DNS hijack "
                 "or proxy answered on the engine's behalf - rephrasing will not help; "
                 "check the network, or retry with engines=[...] to ask a different index."
@@ -1927,12 +1969,11 @@ async def web_search(
                 error += (" What the engines sent instead: "
                           + " | ".join(f"'{t}'" for t in _discarded) + ".")
         elif _dropped_total:
-            _drop_note = f"{_dropped_total} engine results were dropped as off-topic/low-relevance"
+            _drop_note = f"{_dropped_total} engine result(s) dropped: {_reasons}"
             if min_raw_relevance > 0.0 and _rank_stats.get("raw_max") is not None:
                 _drop_note += (f" (min_raw_relevance={min_raw_relevance} rejected "
                                f"{_rank_stats.get('dropped_raw', _rank_dropped)} of "
-                               f"{len(_rank_candidates)}; raw scores here spanned "
-                               f"{_rank_stats['raw_min']:.4f}-{_rank_stats['raw_max']:.4f})")
+                               f"{len(_rank_candidates)} candidates)")
             fetch_hint = f"{fetch_hint} | {_drop_note}" if fetch_hint else _drop_note
         main_related = _related_queries(query, results_list)
 
@@ -1987,6 +2028,7 @@ async def web_search(
 
     return SearchResponseModel(
         query=cache_query, results=results_list, total_results=len(results_list),
+        **_asked_pair(max_results, len(results_list)),
         engines_used=engines_used, engine_blocked=engine_blocked,
         engine_empty=engine_empty, engine_preempted=engine_preempted,
         rerank_mode=rerank_used, consensus_basis=_basis,

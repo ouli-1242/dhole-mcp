@@ -662,7 +662,12 @@ class TestOffTopicFilterIsVisible:
         )
         out = await S.web_search(None, "dns resolution", 6)
         assert len(out.results) < len(rows)
-        assert "dropped as off-topic/low-relevance" in out.fetch_hint
+        # 教训不变（部分丢弃必须留痕），句子换了形状：体验修复刀2-S4 把
+        # "dropped as off-topic/low-relevance" 这一句合并账拆成逐因带数，并点名
+        # 是哪把尺判的 low —— 抬 min_relevance 治不了"没命中查询词"，两因合并成
+        # 一句就等于让人猜该拧哪颗旋钮。
+        assert "engine result(s) dropped:" in out.fetch_hint
+        assert "labelled low" in out.fetch_hint, out.fetch_hint
         assert out.error == ""
 
     @pytest.mark.asyncio

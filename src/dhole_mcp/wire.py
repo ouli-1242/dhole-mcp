@@ -96,6 +96,8 @@ _WIRE_OMIT: dict = {
         "engines_used", "engine_blocked", "engine_empty", "engine_preempted",
         "date_filter", "consensus_basis", "cached", "rerank_mode",
         "fetch_hint", "related_queries", "fetched_pages", "duration_ms",
+        # S4：成对的"要了几条 / 回了几条"只在不相等时上线（相等时它不携带信息）。
+        "requested", "delivered",
         # 没设共识地板（或它没丢任何东西）时，空名单不携带信息——缺席即"闸门
         # 什么都没丢"。
         "consensus_skipped",
