@@ -8851,7 +8851,7 @@ class MasterFetchServer:
                 "properties": {
                     "url": {"type": "string", "description": "Start URL (crawl stays on this domain)"},
                     "focus": {"type": "string", "description": "Query: crawl the links relevant to this and focus-filter each page."},
-                    "search": {"type": "string", "description": "Filter discovered/crawled URLs by keyword (URL path + title)."},
+                    "search": {"type": "string", "description": "Filter URLs by keyword (URL path + title where a title was read)."},
                     # 17.0 B4 · 顶层只有一个家（这 15 个键今天也已经能从顶层传进来）。
                     "sitemap": {"anyOf": [{"type": "boolean"}, {"type": "string"}], "description": "Where the URL map comes from: true | 'auto' (default) | false. A tri-state, so the strings a serialized client sends are accepted too."},
                     "max_pages": {"type": "integer", "description": "Pages to fetch (1-40, default 10). The first budget a crawl hits."},
@@ -8885,7 +8885,7 @@ class MasterFetchServer:
                     "max_pages": {"type": "integer", "description": "URLs to expand through (1-40, default 10)."},
                     "path_include": {"type": "array", "items": {"type": "string"}, "description": "Keep only these path subtrees: '/docs', or '/docs/*'."},
                     "path_exclude": {"type": "array", "items": {"type": "string"}, "description": "Drop these path subtrees."},
-                    "search": {"type": "string", "description": "Filter the map by keyword (URL path + page title)."},
+                    "search": {"type": "string", "description": "Filter the map by keyword (URL path + title where one was read)."},
                     "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000)."},
                 },
             },

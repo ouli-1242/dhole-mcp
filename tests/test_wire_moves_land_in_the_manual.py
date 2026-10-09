@@ -289,7 +289,15 @@ def test_connect_stays_inside_the_packed_budget():
 #: 逐字符实测（wire 口径含 JSON 转义）：D1 158→192(+34)、D4 190→150(-40)。
 #: **净 -6 → 30,701**。auth 的三形态不进这里：references/tools.md 已逐字写着，
 #: 按需取段 —— 常驻层替说明书干活正是本文件要防的形状。
-CONNECT_CEILING = 30_701
+#: 2026-10-10 体验修复刀3-C2：棘轮**上抬 +18**，因为常驻层里有两句假话。
+#: `web_crawl.search` / `web_discover.search` 都写着 "(URL path + page title)"，
+#: 而 `sitemap=true` 的图只有站点自己发布的 `loc` —— 没有标题可比。C2 把那个参数
+#: 从"在帽之后筛"（在 sitemap 分支上等于根本没筛）推进 `accept`，响应侧从此自报
+#: 少掉的那一半；描述侧只需要不再承诺标题那一半：
+#: crawl 61→65(+4)、discover 50→64(+14)。**+18 → 30,719**。
+#: 刻意没有把"sitemap 分支只比 URL、且筛在帽之前"整段搬进常驻层 —— 那句话已经逐字
+#: 在 references/tools.md 里，按需付；这里只付"闭嘴于说不准的那半句"的钱。
+CONNECT_CEILING = 30_719
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

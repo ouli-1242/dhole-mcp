@@ -802,14 +802,24 @@ def _sitemap_passes_filters(path: str, path_include: Optional[list[str]],
 async def _sitemap_map(url: str, path_include: Optional[list[str]],
                        path_exclude: Optional[list[str]], *,
                        max_pages: int, deadline_t: float,
-                       diag: Optional[dict] = None) -> Optional[CrawlResponseModel]:
+                       diag: Optional[dict] = None,
+                       search: Optional[str] = None) -> Optional[CrawlResponseModel]:
     """Try to map the site via sitemap.xml. Returns a CrawlResponseModel on
     success (sitemap found + parsed), or None if NO sitemap was reachable so the
     caller can fall back to BFS ('auto'). A sitemap that was found but produced no
     rows is NOT None - it returns an empty map that says so, because reporting it
     as "not found" is a different (and false) answer. Same-domain + path filters
     applied BEFORE the cap, so max(1000, max_pages*10) is spent on the pages the
-    caller asked for (see discover_sitemap's `accept`)."""
+    caller asked for (see discover_sitemap's `accept`).
+
+    `search` joins those same filters (体验修复刀3-C2). It used to be applied only
+    at the end of the BFS path, and this function returns a whole response, so
+    `sitemap=true, search="pricing"` handed back the unfiltered map and said
+    nothing - a parameter that provably did nothing, which is the one thing
+    `params.py` does not license. Pushing it in before the cap is also what makes
+    it *work*: a keyword near the end of a 4,000-entry sitemap would otherwise be
+    cut by the cap and read as "no match on this site".
+    """
     from dhole_mcp.sitemap import discover_sitemap
 
     def _make_http_get():
@@ -851,8 +861,16 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
     # only way past it is a caller who asks for proportionally more.
     cap = min(5000, max(SITEMAP_MAP_FLOOR, max_pages * 10))
 
+    # `search` 在这里只兑现 URL 那一半：一条 sitemap 条目带得出来的字段就是 loc（还有
+    # lastmod），**没有标题可比**。兑现一半并说出少了哪一半，是 params.py 允许的两种
+    # 合法说法之一；另一种是具名拒绝，第三种"参数静默不做任何事"没有位置。
+    _terms = [t for t in (search or "").lower().split()]
+    # accept 对每个去重后的 URL 恰好跑一次（sitemap.py 先记 seen 再判，所以重复条目
+    # 不会把这两个数撑大），于是"筛掉多少"第一次成为一个可报告的事实而不是断言。
+    _counts = {"dropped_by_search": 0, "kept_by_search": 0}
+
     def _eligible(raw: str) -> bool:
-        """Same-domain + path filters, decided on the raw sitemap entry.
+        """Same-domain + path + search filters, decided on the raw sitemap entry.
 
         Pushed into the walk so the cap counts eligible URLs: filtering the
         already-capped list meant `path_include=["/docs/"]` on a site whose docs
@@ -866,7 +884,14 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
             return False
         if parsed.scheme not in ("http", "https") or parsed.netloc != root_netloc:
             return False  # sitemaps can list other hosts; keep same-domain only
-        return _sitemap_passes_filters(parsed.path or "/", path_include, path_exclude)
+        if not _sitemap_passes_filters(parsed.path or "/", path_include, path_exclude):
+            return False
+        if _terms and not any(t in raw.lower() for t in _terms):
+            _counts["dropped_by_search"] += 1
+            return False
+        if _terms:
+            _counts["kept_by_search"] += 1
+        return True
 
     try:
         result = await asyncio.to_thread(
@@ -922,9 +947,22 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
             fix = ("Re-run with a larger deadline_ms, or without sitemap=true to "
                    "discover by links instead.")
         elif result.filtered_out:
-            why = (f"none of its {result.filtered_out} URL(s) are {scope_desc}")
-            fix = ("Widen or drop the scope if that is not what you meant, or run "
-                   "without sitemap=true to discover by links instead.")
+            # 逐因带数（C1 在同一句话上认过账）：`filtered_out` 现在同时装着"被作用域
+            # 挡掉"和"被 search 挡掉"两种，把它们合成一句"都不在你要的分区里"就会把
+            # 调用方支去放宽他根本不需要放宽的那个旋钮。
+            _by_scope = result.filtered_out - _counts["dropped_by_search"]
+            bits = []
+            if _by_scope:
+                bits.append(f"{_by_scope} fell outside the scope ({scope_desc})")
+            if _counts["dropped_by_search"]:
+                bits.append(f"{_counts['dropped_by_search']} carried none of the terms in "
+                            f"search={search!r} - it compares the URL only, and a sitemap "
+                            f"entry has no title to compare")
+            why = (f"none of its {result.filtered_out} URL(s) became rows: "
+                   + "; ".join(bits))
+            fix = ("Widen path_include/path_exclude, drop search=, or use "
+                   "discover_only=false / web_search when the word you have is a page's "
+                   "TITLE rather than part of its URL - a sitemap cannot match on that.")
         else:
             why = "it lists no URLs"
             fix = "Run without sitemap=true to discover by links instead."
@@ -941,6 +979,14 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
     ok = len(pages)
     summary = (f"mapped {ok} URL(s) at {url} from sitemap.xml "
                f"(via {result.via}; {len(result.sitemaps_used)} sitemap file(s)) - one fetch, no BFS")
+    if _terms:
+        # 兑现了就报账：留下几条、按关键词筛掉几条、以及"这里只比 URL"。没有这句，
+        # 一个空手而归的调用方会以为整站只有这几条。用的数是 `accept` 见过的条数，
+        # 不是返回的行数 —— 后者被帽切过，两个数混在一句话里会把筛除说成截断。
+        summary += (f" · search={search!r} kept {_counts['kept_by_search']} of "
+                    f"{_counts['kept_by_search'] + _counts['dropped_by_search']} URL(s) "
+                    f"in scope ({_counts['dropped_by_search']} carried none of the terms - "
+                    "the URL is all a sitemap entry gives, so no title was compared)")
     next_action = (
         f"{ok} URLs mapped from the sitemap. web_read the ones you need - urls=[] "
         f"takes the whole subset in one call, no discovery and no re-crawl - or "
@@ -1260,7 +1306,7 @@ async def web_crawl(
         _sm_diag: dict = {}
         sm_result = await _sitemap_map(url, path_include, path_exclude,
                                        max_pages=max_pages, deadline_t=deadline_t,
-                                       diag=_sm_diag)
+                                       diag=_sm_diag, search=search)
         if sm_result is not None:
             # A found-but-empty map is a real answer ("the sitemap lists N URLs,
             # none in the section you asked for"), but only for an explicit
