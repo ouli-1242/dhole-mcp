@@ -86,7 +86,7 @@ A fake-IP TUN proxy (Clash / sing-box TUN mode) hands every public name an addre
 
 ### Fetch timeouts
 
-`timeout` is the wall-clock budget for the whole call (default 30s, max 120s); document **download** time counts fully — for big PDFs raise `timeout`. The 50MB body cap gates BEFORE download; oversized bodies fail with `Response body too large` and raising `timeout` won't help.
+`timeout` is the wall-clock budget for the whole call (default 30s, max 120s) and the HTTP tier's attempts share it — but **one attempt never exceeds 30s**, whatever you set. So a bigger `timeout=` buys more attempts, not a longer single wait: `timeout_applied` is the receipt that says the ceiling bit, and `summary` says the same in words. This is what a big file runs into — a document download is ONE attempt (a retry restarts it from byte zero), so a file that cannot arrive inside 30s of one connection is not fetchable over HTTP at any `timeout=`. When that happens the advice names the levers that do exist (another source, or fetch the file outside dhole and hand it to `doc_parse`); it does not tell you to raise a number that cannot move. The 50MB body cap gates BEFORE download; oversized bodies fail with `Response body too large` and raising `timeout` won't help.
 
 ### The summary says this call "ran on its own browser"
 

@@ -16,7 +16,7 @@ Tool descriptions cover parameters; this volume covers **how the tools actually 
 
 **`focus_engine` picks the scorer per call** (`"bm25"` | `"neural"`). There is no machine-wide license anymore — omitted or `"bm25"` always runs the cheap keyword focus, `"neural"` runs the local cross-encoder for this call only (~12.5s of CPU per page plus a ~280MB model, which is exactly why it is never the default). `"neural"` with the model missing is **refused** (`neural_focus_model_missing`, no request sent, no silent download): offer the one-time download (any neural `web_search` fetches it, resumable) or re-run with BM25. It applies to `web_crawl` too, where the per-page cost multiplies by `max_pages`.
 
-**PDF**: `pages=` only trims **extraction** — the file still downloads whole, so raise `timeout` (default 30s, max 120s; it is the wall-clock budget for the whole call) for big files. Responses carry `table_of_contents` (titles + page ranges) — pick pages from it. Scanned or CID-broken PDFs auto-OCR.
+**PDF**: `pages=` only trims **extraction** — the file still downloads whole, and a download is **one HTTP attempt of at most 30s**, so raising `timeout=` past 30s buys the call room to *parse and OCR* what arrived, not a longer download (`timeout_applied` names the figure when the ceiling bit). Responses carry `table_of_contents` (titles + page ranges) — pick pages from it. Scanned or CID-broken PDFs auto-OCR.
 
 **`css_selector` applies to HTML only**: on XML/JSON/plain text it matches nothing — the whole document comes back and `summary` states the selector was not applied. Don't mistake the full payload for your slice.
 

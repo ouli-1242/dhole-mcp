@@ -38,6 +38,13 @@ class ResponseModel(BaseModel):
     next_offset: int = Field(default=0, description="Next offset when is_truncated. 0=no more")
     escalation_path: str = Field(default="", description="e.g. http→stealthy. Pre-v3.5 logs may contain http→dynamic→stealthy entries from the old 3-tier path.")
     retry_count: int = Field(default=0, description="Retries")
+    # C5：`timeout=` 声明的是**整次调用**的毫秒，而这一档真正的钳是**每次尝试**的秒。
+    # 一个数活在两个单位上，所以一句"被钳了"没有算术价值：调用方拿不到用了多少。
+    # 实测（15 场真人体测 C13）：`timeout=120000` 的一份 PDF 每次尝试只有 30s，而文档
+    # 只有 1 次尝试 —— 那 120s 从来没有属于过这一次下载。
+    # 值只在**钳真的咬了**的时候发（0 被压实机制删掉，缺席=没咬），因为"每发都报一个
+    # 与你自己传的一模一样的数"是噪声，不是收据。
+    timeout_applied: int = Field(default=0, description="Milliseconds ONE HTTP attempt was actually given, present ONLY when this tier's own per-attempt ceiling cut it below what your timeout= implies: that ceiling is 30000ms per attempt, while timeout= is a WHOLE-CALL budget shared by the attempts. So a bigger timeout buys more ATTEMPTS, never a longer single one - a body that needs one connection of more than 30s is not fetchable at the HTTP tier by any timeout= (a document gets one attempt, because a retry restarts its download from byte zero). Absent = no ceiling bit: every attempt got the figure your budget implies, or no HTTP attempt ran at all (a cache hit, or the browser tier's own clock).")
     # Agent-facing signals (set by _with_agent_hints on every finalized response).
     summary: str = Field(default="", description="One-line status for quick reasoning, e.g. '200 OK · 12.4KB markdown · http · truncated'")
     content_ok: bool = Field(default=False, description="True = real content retrieved (status<400, no error, not a JS shell/login wall). Check this before trusting content.")

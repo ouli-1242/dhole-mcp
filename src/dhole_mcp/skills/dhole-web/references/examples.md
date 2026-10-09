@@ -147,7 +147,7 @@ Measured: one call, 8 grouped records, `summary` carrying `nested: 8 links expan
 {"urls": ["https://quotes.toscrape.com/author/Albert-Einstein", "…"], "schema": {"properties": {"author": {"selector": "h3"}}}}
 ```
 
-**PDF** (read `table_of_contents` in the response first, then pick `pages`; `pages` trims extraction only — the file downloads whole, so raise `timeout` for big files; scanned PDFs auto-OCR):
+**PDF** (read `table_of_contents` in the response first, then pick `pages`; `pages` trims extraction only — the file downloads whole, and the download is ONE attempt of at most 30s, so a bigger `timeout=` covers parsing and OCR after it, not a slower connection; scanned PDFs auto-OCR):
 ```json
 {"url": "https://arxiv.org/pdf/1706.03762", "pages": "1-3", "timeout": 60000}
 ```

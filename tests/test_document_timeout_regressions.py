@@ -281,12 +281,17 @@ class TestDocumentTimeoutAdviceIsTrue:
         assert "EXTRACTED, not what gets downloaded" in out.next_action
         assert "skip browser rendering" not in out.next_action
 
-    def test_a_call_already_at_the_ceiling_is_not_told_to_raise_it_higher(self):
+    def test_a_call_past_the_per_attempt_cap_is_not_told_to_raise_it_higher(self):
         """Dangling a raise the caller cannot make sends them round a loop that
-        cannot terminate."""
+        cannot terminate.
+
+        体验修复刀3-C5 把这道门从 120s 挪到它真实的位置：一次 HTTP 尝试封顶 30s
+        （`bulk_get` 的算式），而一份文档只有一次尝试。所以"已经到顶"的那一句在 30s
+        就该说出口 —— 原来它坐在 120s 上，中间那 90s 全是劝人抬一颗不动的数。
+        """
         advice = _document_budget_advice(DOC_URL, None, "", 120000, "HTTP tier")
 
-        assert "already the maximum budget" in advice
+        assert "already has the whole 30s" in advice
         assert "raise timeout" not in advice
 
     def test_a_host_that_couldnt_state_the_size_says_so(self):
@@ -294,7 +299,10 @@ class TestDocumentTimeoutAdviceIsTrue:
                                          30000, "HTTP tier")
 
         assert "chunked" in advice
-        assert "raise timeout" in advice
+        # 30000 已经是一试次的全部，所以这里剩下的出路不是 `timeout=`（C5）；那颗参数
+        # 能买的只剩解析与 OCR 的余量，句子要说的是这件事。
+        assert "raise timeout" not in advice
+        assert "switch source" in advice
 
     @pytest.mark.asyncio
     async def test_a_document_that_never_arrived_names_its_size_too(self):

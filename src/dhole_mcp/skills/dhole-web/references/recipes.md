@@ -38,7 +38,7 @@ Starting routes for multi-step tasks. Each recipe marks where to pivot on failur
 
 ## Reading PDFs
 
-- Online: `web_read` (`pages="1-5"` trims extraction only — the file downloads whole; raise `timeout` for big files; scanned PDFs auto-OCR; pick pages from `table_of_contents`)
+- Online: `web_read` (`pages="1-5"` trims extraction only — the file downloads whole, and one download is one HTTP attempt of at most 30s, so a bigger `timeout=` pays for parsing and OCR after the bytes land, not for a slower connection; scanned PDFs auto-OCR; pick pages from `table_of_contents`)
 - Local: `doc_parse` (also .docx/.xlsx/.xlsm/.pptx/.odt/.tsv; JSON/YAML are validated; PDFs take the same `pages=` / `password=`)
 - When citing, distinguish original text from OCR output; HTML tables come out as the same markdown table across all three entries (doc_parse / web_read / web_crawl)
 

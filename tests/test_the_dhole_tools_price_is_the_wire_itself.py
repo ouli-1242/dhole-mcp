@@ -179,8 +179,8 @@ def _ruler_module():
     return mod
 
 
-def test_the_default_connect_is_the_published_31_208():
-    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：31,208。
+def test_the_default_connect_is_the_published_31_423():
+    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：31,423。
 
     这一条同时是量尺的回归锁：`tool_payload_measure._wire_for` 曾按工具数累加路由行，
     把默认连接报成 30,857（web_discover / web_crawl 共用那句被算了两遍）。修成按文本
@@ -202,6 +202,13 @@ def test_the_default_connect_is_the_published_31_208():
     透支 1.9 倍而 `truncated_by_total_chars` 一路是 False；预算现在数的是序列化后的
     行。被切掉的行要有路可拿，否则修的就是一次静默截断，所以 `resume_token` 也上
     web_discover 这扇门（读已存下的地图，不走网络）。两颗参数行 +332、描述尾句 +157。
+
+    31,208 → 31,423（2026-10-10，体验修复刀3-C5）：一次**上抬 +215**，买的是
+    `timeout=` 从此不说两句单位。它声明的是整次调用的毫秒（max 120000），而 HTTP 一档
+    钳的是每次尝试的秒（30s），一份文档又只有一次尝试 —— 那句话在"大文件请抬 timeout"
+    这条真实用法上是一句够不着的承诺。三颗描述各补上限（web_read +102 / web_crawl +66 /
+    web_request +52），`feed_read` 顺手把印错的默认值说回 20s（−1：那颗参数从前根本
+    没换算，毫秒被当秒用）。收据本身（`timeout_applied`）是响应字段，不占这一页。
     """
     ruler = _ruler_module()
     import ast
@@ -219,13 +226,18 @@ def test_the_default_connect_is_the_published_31_208():
         f"仓库量尺与 wire 的 tools/list 对不上：{ruler_compact} vs {wire['tools_compact']}")
     assert ruler_instr == len(wire["instructions"]), (
         f"仓库量尺多算了路由行：{ruler_instr} vs wire {len(wire['instructions'])}")
-    assert ruler_compact + ruler_instr == 31_208
+    assert ruler_compact + ruler_instr == 31_423
 
 
 def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():
-    """`DHOLE_TOOLS=web_read,web_search` 的真机价：11,382（旧的注释写 11,423）。"""
+    """`DHOLE_TOOLS=web_read,web_search` 的真机价：11,480（旧的注释写 11,382）。
+
+    两次移动的账：11,423 → 11,382 是把签名影子摘掉时顺带瘦的字（那一刀量过真机），
+    11,382 → 11,480 是 C5 给 `web_read` 的 `timeout` 补上"一次尝试封顶 30s"那一句
+    （+98：web_read 在这一组里，`web_search` 那颗不谈下载所以没付）。
+    """
     assert _assert_price("web_read,web_search",
-                         ["web_read", "web_search"]) == 11_382
+                         ["web_read", "web_search"]) == 11_480
 
 
 def test_the_readme_eight_tool_price_is_what_the_server_sends():
@@ -237,13 +249,14 @@ def test_the_readme_eight_tool_price_is_what_the_server_sends():
 def test_the_ninth_tool_costs_its_own_row_and_no_routing_line():
     """加 web_discover 只多它自己那一行：路由行与 web_crawl 共用，去重后不再付第二次。
 
-    这是 F-A-J1 那把共享路由行在 wire 上的样子：README 的 9 颗 25,656 =
-    23,599 + 2,057，instructions 一字不变。C3 之后 `web_discover` 自己那一行涨了
-    （地图大小两颗旋钮上这门），涨的部分照旧只付一次。
+    这是 F-A-J1 那把共享路由行在 wire 上的样子：README 的 9 颗 25,871 =
+    23,814 + 2,057，instructions 一字不变。C3 之后 `web_discover` 自己那一行涨了
+    （地图大小两颗旋钮上这门），涨的部分照旧只付一次；C5 没动它（那一扇门一次尝试都不
+    走 HTTP 正文通道，所以它不欠那句上限）。
     """
     nine = SUB8 + ["web_discover"]
     assert _assert_price(",".join(nine), nine,
-                         published=("README.md", "共 9 颗 {total}")) == 25_656
+                         published=("README.md", "共 9 颗 {total}")) == 25_871
     eight = _connect(",".join(SUB8))
     assert len(_connect(",".join(nine))["instructions"]) == len(eight["instructions"]), (
         "两颗共用一句路由的工具，第二颗不该再收一次路由行的钱")

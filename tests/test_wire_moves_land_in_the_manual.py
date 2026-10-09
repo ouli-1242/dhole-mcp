@@ -51,6 +51,9 @@ MOVED_LESSONS = [
     ("地图的大小由站点决定，预算数的是序列化后的行（C3）", "serialized rows"),
     ("地图行不按 sitemap 的文档序交回，副本折到后面且只重排不删行（C4）",
      "locale variant"),
+    # C5：`timeout=` 的声明单位（整次调用的毫秒）与这一档的钳（每次尝试 30s）不是一把尺。
+    # 常驻层只能放一句上限，"这颗数该怎么拿来算"整段在 fields.md 的 `timeout_applied` 行。
+    ("一次 HTTP 尝试封顶 30s，抬 timeout 买的是试次不是单发", "one HTTP attempt"),
     # 搜索
     ("consensus 数的是索引家族不是原始命中", "FAMILIES"),
     ("引擎池的上限与带 key 的引擎", "Keyed backends"),
@@ -310,7 +313,17 @@ def test_connect_stays_inside_the_packed_budget():
 #: 描述尾句 +157。30,719 → **31,208**。
 #: 没有把"游标页只带 URL、lastmod 不在计划里"写进常驻层：那句话在 summary 里逐次
 #: 出口，而字段口径归 references/fields.md。
-CONNECT_CEILING = 31_208
+#: 2026-10-10 体验修复刀3-C5：棘轮**上抬 +215**，买的是 `timeout=` 不再一句说两种单位。
+#: 它声明的是**整次调用**的毫秒（"max 120000"），而 HTTP 一档钳的是**每次尝试**的 30s
+#: （`bulk_get` 的算式），一份文档又只有一次尝试（重试把下载从第 0 字节重启）—— 所以
+#: 超过 30s 之后是一句够不着的承诺，而 `_document_budget_advice` 还在原地劝人抬它。
+#: 按退掉一颗工具省多少的同一把尺实测：web_read +98、web_crawl +66、web_request +52、
+#: feed_read −1（那颗的默认值印的是 30000 而代码用的是 20s）。feed_read 那一处顺带修掉
+#: 一个真单位错：它的 `timeout` 原样下传给按秒算的 `HTTPSession`，`timeout=30000` 因此
+#: 是 30000 秒。收据本身（`timeout_applied`）与它的算术都在 references/fields.md，
+#: 不占这一页；上限为什么留在那一处不改（抬它是一次抓取行为的决定）写在
+#: tests/test_a_timeout_bigger_than_the_per_attempt_cap_says_what_it_bought.py 的头。
+CONNECT_CEILING = 31_423
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

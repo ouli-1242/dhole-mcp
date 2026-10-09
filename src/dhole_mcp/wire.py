@@ -61,6 +61,9 @@ _WIRE_OMIT: dict = {
         "approx_tokens",
         # 没折叠任何样板时 0 不携带信息（缺席即"这页没有页内重复行"）。
         "duplicate_lines_collapsed",
+        # C5：一次没被每次尝试的上限咬过的调用不该报一个与 `timeout=` 一模一样的数。
+        # 缺席就是"没咬"（或这一发根本没走 HTTP 一档），所以上线的每一发都是收据。
+        "timeout_applied",
     }),
     "CrawlPage": frozenset({
         "depth", "fetcher_used", "title", "page_type", "content_chars",

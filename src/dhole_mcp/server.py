@@ -518,6 +518,29 @@ def _adaptive_timeout(url: str, default_ms: int = 30000) -> int:
 # order to insure against a stalled one) and keeps only as many attempts as FIT.
 _HTTP_ATTEMPTS = 4      # get()'s default: 1 try + 3 retries
 MAX_HTTP_TIMEOUT_S = 120  # validate_timeout's own ceiling, restated as a bound here
+# 一次 HTTP 尝试的上限。**算式只有一个作者**（`bulk_get` 里那行 `min(int(timeout), 30)`，
+# 由 test_every_clamp_is_announced.py:216 钉住），这里这份是给"说话的地方"用的：建议文案
+# 要在 30s 那一道天花板处换一句话，而那句话不该自己再算一遍。三处之家（算式 / 这颗 /
+# 常驻层那两句描述）与响应字段描述里的同一个数，由
+# tests/test_a_timeout_bigger_than_the_per_attempt_cap_says_what_it_bought.py 逐一对齐。
+_HTTP_ATTEMPT_CAP_MS = 30_000
+
+# feed_read 的默认：现场一直用的是 20 **秒**，而 wire 那颗括号里印的是 default 30000。
+# 修单位（下面那颗函数）不该顺手改掉一次真实的等待，所以把话改成与数一致的那一个。
+_FEED_TIMEOUT_DEFAULT_MS = 20_000
+
+
+def _feed_timeout_s(timeout_ms: Optional[int | float]) -> int:
+    """`feed_read` 的 `timeout=`（毫秒）换算成 `fetch_feed` 那一层的单位（秒）。
+
+    这颗参数从前**没有换算**：线上传来的数字原样下传，而 `HTTPSession` 的 timeout 单位
+    是秒（`fetcher.py:715`）。于是按 wire 的口径写的 `timeout=30000`（=30s）在 primp
+    那里是 30000 秒 —— 一次挂死的取回从此没有任何时钟，而调用方以为自己点的正是最短的
+    那一档。上界由 `validate_timeout` 在门口**具名拒绝**而不是静默夹住；下界是一秒，因为
+    在这一层 0 不是"立刻"而是"不设超时"。
+    """
+    ms = _FEED_TIMEOUT_DEFAULT_MS if timeout_ms is None else float(timeout_ms)
+    return max(1, int(round(ms / 1000.0)))
 
 
 def _http_tier_budget(url: str, budget_ms: float, left_s: float, *,
@@ -638,6 +661,13 @@ def _document_budget_advice(url: str, size_bytes: Optional[int], size_note: str,
     as an unfixable server limit. It is only actionable once the caller can see
     what the file costs: its size, this host's observed document time, and
     whether dhole would accept the body at all (MAX_RESPONSE_BYTES).
+
+    And it stops being actionable earlier than `validate_timeout`'s 120000ms for a
+    document: a document takes ONE attempt, and one HTTP attempt is capped at 30s
+    whatever the call was budgeted (`bulk_get`). So the ceiling named here is the
+    attempt's, not the call's — telling a caller to raise `timeout` from 60s to 120s
+    for a PDF recommends a change that cannot move the only number that decides
+    whether the bytes arrive.
     """
     bits = [f"{stage} on a document download"]
     if size_bytes is None and size_note:
@@ -648,13 +678,18 @@ def _document_budget_advice(url: str, size_bytes: Optional[int], size_note: str,
     if rate:
         bits.append(f"this host has taken {max(1, int(rate / 1000))}s for documents "
                     f"here before, against your {int(budget_ms / 1000)}s budget")
-    ceiling = MAX_HTTP_TIMEOUT_S * 1000
-    if budget_ms < ceiling:
-        bits.append(f"raise timeout (e.g. timeout={min(int(budget_ms * 2), ceiling)}, "
-                    f"max {ceiling})")
+    # 那句建议的天花板是**一次尝试**的，不是整次调用的：一份文档只有一次尝试，而一次
+    # HTTP 尝试封顶 30s（`bulk_get` 的算式）。数从 `_HTTP_ATTEMPT_CAP_MS` 取，不在这里
+    # 再抄一遍。
+    _cap_s = _HTTP_ATTEMPT_CAP_MS // 1000
+    if budget_ms < _HTTP_ATTEMPT_CAP_MS:
+        bits.append(f"raise timeout (e.g. timeout="
+                    f"{min(int(budget_ms * 2), _HTTP_ATTEMPT_CAP_MS)}; one HTTP attempt "
+                    f"caps at {_cap_s}s whatever you pass)")
     else:
-        bits.append("this is already the maximum budget - switch source, or fetch the "
-                    "file outside dhole and hand it to parse")
+        bits.append(f"one HTTP attempt already has the whole {_cap_s}s it can ever get, "
+                    "so a bigger timeout= buys parsing room, not a faster download "
+                    "- switch source, or fetch the file outside dhole and hand it to parse")
     bits.append("pages=<range> narrows what gets EXTRACTED, not what gets downloaded")
     return "; ".join(bits)
 def _env_int(name: str, default: int) -> int:
@@ -4743,7 +4778,8 @@ class MasterFetchServer:
         # of it and said nothing; the wire says "max 120000", so the gap has to be
         # named in the response rather than left for the caller to time.
         _per_attempt_s = max(1, min(int(timeout), 30))
-        if _per_attempt_s != int(timeout):
+        _capped_ms = _per_attempt_s * 1000 if _per_attempt_s != int(timeout) else 0
+        if _capped_ms:
             _note_text(f"timeout clamped {int(timeout)}->{_per_attempt_s} s per "
                        "attempt (this tier caps one attempt at 30s)")
         async with HTTPSession(
@@ -4790,6 +4826,12 @@ class MasterFetchServer:
                             )
                         )))
         successful = sum(1 for r in results if r.status < 400 and not r.error)
+        if _capped_ms:
+            # 收据发给**每一行**，包括那些根本没拨通的：一次超时失败正是最需要知道
+            # "给的其实是 30s 而不是 120s"的那一发。算式仍只有一份（上面那行），这里
+            # 只是把已经算出的数抄到信封上。
+            for _r in results:
+                _r.timeout_applied = _capped_ms
         return BulkResponseModel(results=results, total=len(results), successful=successful)
 
 
@@ -8144,7 +8186,7 @@ class MasterFetchServer:
         self,
         urls: List[str],
         max_items: Optional[int] = 20,
-        timeout: Optional[int] = 20,
+        timeout: Optional[int] = None,
         since: Optional[str] = None,
     ) -> List[Any]:
         """Fetch RSS/Atom feeds and return their latest entries.
@@ -8182,7 +8224,14 @@ class MasterFetchServer:
                 urls = [validate_url(u) for u in urls]
             except SecurityError as se:
                 raise ValueError(f"feed_read URL 校验失败: {se}") from se
-            results = await fetch_feeds(urls, timeout=timeout or 20,
+            if timeout is not None:
+                try:
+                    validate_timeout(timeout)
+                except SecurityError as se:
+                    raise ValueError(f"feed_read timeout: {se}") from se
+            # 换算在这一层的门口做，不在 `fetch_feed` 里：那颗函数吃的一直是**秒**，而
+            # wire 上这颗是毫秒（`_feed_timeout_s` 记着这里曾经差掉的那一千倍）。
+            results = await fetch_feeds(urls, timeout=_feed_timeout_s(timeout),
                                         max_items=max_items if max_items is not None else 20,
                                         since=since or "")
         return [
@@ -8917,6 +8966,29 @@ class MasterFetchServer:
     # into `options`). When the agent-facing contract changes, change it
     # HERE; docstrings carry implementation rationale only.
     # tests/test_tool_descriptions.py guards this split.
+    #
+    # `timeout=` 的声明单位与这一档的实施单位不是一回事：那颗是**整次调用**的毫秒预算，
+    # 而 HTTP 一档每一试次封顶 30s（算式只有 `bulk_get` 里那一行）。一份文档只有 1 次
+    # 尝试，所以 "max 120000" 在那一发上从来没兑现过 120s（实测：120s 预算的 PDF 每一
+    # 试次只有 30s）。这句话因此在三扇门上都要出现，句中的 30 由
+    # tests/test_a_timeout_bigger_than_the_per_attempt_cap_says_what_it_bought.py
+    # 与算式对齐：数有两个家，就得有一个测试守着它们同值。
+    _TIMEOUT_DESC_HTTP = ("Whole-call budget in ms (default 30000, max 120000); "
+                          "one HTTP attempt caps at 30s (see timeout_applied).")
+    _TIMEOUT_DESC_READ = ("Whole-call budget in ms (default 30000; 25000 with actions; "
+                          "max 120000), shared by the HTTP retries; one HTTP attempt caps "
+                          "at 30s (timeout_applied names the figure). On a document URL it "
+                          "is spent on the DOWNLOAD, and a download gets one attempt.")
+    # web_crawl 的这颗从来不是"whole-call"：整轮的上司是下面那颗 deadline_ms，而它自己是
+    # 每一页的预算。两句话在同一张表里互相矛盾过（"Whole-call" 与 "timeout= is per page"）。
+    # 这里不点 `timeout_applied`：爬取的行是 CrawlPage，那颗收据住在 web_read 的行里。
+    _TIMEOUT_DESC_CRAWL = ("Per-PAGE budget in ms (default 30000, max 120000); the whole "
+                           "crawl stops at deadline_ms; one HTTP attempt caps at 30s.")
+    # feed_read 的这颗从前被当成**秒**下传（`fetch_feed(timeout=)` 原样进 HTTPSession，
+    # 那一层的单位是秒），而 wire 写的是毫秒：`timeout=30000` 在 primp 那里成了 30000 秒。
+    # 现在在门口换算，口径与其他十颗一致；默认仍是现场本来的 20s，所以括号里改的是
+    # **话**不是数 —— 修单位不该顺手改掉一次真实的等待。
+    _TIMEOUT_DESC_FEED = "Per-fetch budget in ms (default 20000, max 120000)."
     _TOOL_DEFS: list[dict] = [
         {
             "name": "web_read",
@@ -8943,7 +9015,7 @@ class MasterFetchServer:
                     "extraction_type": {"type": "string", "description": "Content format: markdown (default), html (raw markup), text, article, structured, or check (changed-since-last-fetch receipt, not the page)."},
                     "css_selector": {"type": "string", "description": "Narrows extracted content. HTML only - on XML/JSON/plain text the whole document comes back and the summary says so."},
                     "max_content_chars": {"type": "integer", "description": "Content cap in chars (500-200000; default from DHOLE_DEFAULT_CONTENT_CHARS). The rest stays reachable via offset/next_offset."},
-                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000; 25000 with actions; max 120000), shared by the HTTP retries. On a document URL it is spent on the DOWNLOAD."},
+                    "timeout": {"type": "integer", "description": _TIMEOUT_DESC_READ},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds (default 3600). 0 = force fresh."},
                     "force_fetcher": {"type": "string", "description": "Pin one tier, skipping auto-escalation: 'http' = fast, no JS/bot walls; 'stealthy' = anti-detect browser."},
                     "anti_detect": {"type": "string", "description": ANTI_DETECT_DESC},
@@ -9019,7 +9091,7 @@ class MasterFetchServer:
                     "body": {"description": "Request body (cap 256KB). A dict is sent as a form, or as JSON when content_type says json; a string is sent as-is. HEAD takes none."},
                     "content_type": {"type": "string", "description": "Content-Type for body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json."},
                     "extraction_type": {"type": "string", "description": "How the answer is read back: markdown (default), html, text, article or structured. A server answering a write with JSON still gets that JSON extracted."},
-                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000)."},
+                    "timeout": {"type": "integer", "description": _TIMEOUT_DESC_HTTP},
                     "confirm": {"type": "boolean", "description": "Required true for POST / PUT / PATCH / DELETE: a write acts only on the user's explicit yes, and stored credentials for the host ride along. HEAD needs none."},
                 },
             },
@@ -9047,7 +9119,7 @@ class MasterFetchServer:
                     "max_total_chars": {"type": "integer", "description": "Whole-run content cap (1000-200000, default 60000; 0 = no cap). When it bites the crawl stops before the next batch and the summary names the pages left."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds per page (default 3600). 0 = force fresh."},
                     "force_fetcher": {"type": "string", "description": "Pin one tier for every page, skipping auto-escalation: 'http' fast but no JS/bot walls, 'stealthy' the anti-detect browser."},
-                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000)."},
+                    "timeout": {"type": "integer", "description": _TIMEOUT_DESC_CRAWL},
                     "deadline_ms": {"type": "integer", "description": "Whole-crawl hard stop in ms (default 25000; timeout= is per page)."},
                     "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check for this call (default false = comply). True only where you have the site's permission."},
                     "focus_engine": {"type": "string", "description": "Which scorer runs focus here: 'bm25' (default, cheap) or 'neural' (the local reranker model; asking without it is refused, not downgraded)."},
@@ -9158,7 +9230,7 @@ class MasterFetchServer:
                 "properties": {
                     "urls": {"type": "array", "items": {"type": "string"}, "description": "One or more RSS/Atom feed URLs"},
                     "max_items": {"type": "integer", "description": "Max entries per feed (default 20; 0 = all)"},
-                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000)."},
+                    "timeout": {"type": "integer", "description": _TIMEOUT_DESC_FEED},
                     "since": {"type": "string", "description": "Incremental polling: keep entries published at or after this (ISO-8601 '2026-09-20' / '2026-09-20T08:00:00Z', or an RFC-822 stamp) - pass the newest published value from the previous call. items_older_than_since counts what it dropped; undated entries are kept, never dropped."},
                 },
             },
