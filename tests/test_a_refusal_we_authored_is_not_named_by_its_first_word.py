@@ -280,23 +280,32 @@ def directly_written_codes():
     写死的，不是从措辞取的，所以不违约；但它是**枚举的第二个作者**，所以这里把它连同位置
     一起量出来：手册必须点名它，而它不许悄悄长出第三处、第四处。
     """
-    codes, sites = set(), []
+    codes, sites = set(), set()
     for path in sorted(SRC_DIR.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
+        funcs = [n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
         for node in ast.walk(tree):
             if not isinstance(node, ast.Assign):
                 continue
-            for t in node.targets:
-                if not (isinstance(t, ast.Attribute) and t.attr == "diagnosis"):
+            if not any(isinstance(t, ast.Attribute) and t.attr == "diagnosis"
+                       for t in node.targets):
+                continue
+            if not isinstance(node.value, ast.Dict):
+                continue
+            for k, v in zip(node.value.keys, node.value.values):
+                if not (isinstance(k, ast.Constant) and k.value == "code"
+                        and isinstance(v, ast.Constant) and isinstance(v.value, str)):
                     continue
-                if isinstance(node.value, ast.Dict):
-                    for k, v in zip(node.value.keys, node.value.values):
-                        if (isinstance(k, ast.Constant) and k.value == "code"
-                                and isinstance(v, ast.Constant)
-                                and isinstance(v.value, str)):
-                            codes.add(v.value)
-                            sites.append(f"{path.name}:{node.lineno}={v.value}")
-    return codes, sites
+                codes.add(v.value)
+                # 记**函数名**不记行号：上一版钉的是 `server.py:3129`，同一批里 D-27
+                # 那把刀在它上面加了十几行，判据就红了 —— 而那件事（绕过表的产地仍然
+                # 只有这一条）根本没变。取最小的包住它的函数，嵌套时不报两个名字。
+                enclosing = [f for f in funcs if f.lineno <= node.lineno <= f.end_lineno]
+                enclosing.sort(key=lambda f: f.end_lineno - f.lineno)
+                label = enclosing[0].name if enclosing else "<module>"
+                sites.add(f"{path.name}:{label}={v.value}")
+    return codes, sorted(sites)
 
 
 class TestTheManualSaysWhatIsMeasured:
@@ -348,4 +357,4 @@ class TestTheManualSaysWhatIsMeasured:
         # 那条有理由的（resolver_guard）。第二处出现要先回答"为什么不进表"——表就是为
         # "一句人话 + 一颗稳定 token"存在的。
         _codes, sites = directly_written_codes()
-        assert sites == ["server.py:3129=resolver_guard"], sites
+        assert sites == ["server.py:_resolver_guard_result=resolver_guard"], sites

@@ -1837,7 +1837,19 @@ def _translate_response(page: _DholeResponse, *args, **kwargs) -> ResponseModel:
     return result
 
 
-def _ocr_failure_note(exc: Exception, fetcher_used: str, size: int) -> str:
+def _looks_like_document_shell(body: bytes) -> bool:
+    """这几列字节是一份**渲染出来的文档**，不是被请求的那个文件。
+
+    浏览器档取原件失败时会退回 `page.content()`，于是"内容类型说 image/png 而正文是
+    `<html>…`"这种自相矛盾的形状只可能有一种来路：Chrome 给那份文件套了它自己的框。
+    这一问交给字节自己答，不交给档位 —— 档位说"可能套了框"，字节才说"确实套了"。
+    """
+    head = (body or b"")[:256].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+    return head.startswith((b"<html", b"<!doctype", b"<iframe", b"<embed", b"<body"))
+
+
+def _ocr_failure_note(exc: Exception, fetcher_used: str, size: int,
+                      handed: bytes = b"") -> str:
     """OCR's own words, with the process internals taken out.
 
     Measured on httpbin /image/png via the browser tier: the message arrived as
@@ -1846,19 +1858,23 @@ def _ocr_failure_note(exc: Exception, fetcher_used: str, size: int) -> str:
     the way into a transcript that gets copied, cached and logged - the same
     discipline that keeps cookie VALUES out of responses.
 
-    The sentence that IS a diagnosis is which tier handed over the bytes: a browser
-    frames an image document in its own viewer, so what reached OCR was a few
-    hundred bytes of markup, not the picture. Naming that gives the caller the one
-    lever that works (`force_fetcher='http'`).
+    The sentence that IS a diagnosis is **which bytes reached OCR**. A browser
+    frames an image document in its own viewer, so what arrived can be a few
+    hundred bytes of markup rather than the picture - and only then does the one
+    lever that works exist (`force_fetcher='http'`). Since D-27 the browser tier
+    takes the original bytes for images and PDFs too, so this claim is no longer
+    a property of the tier: it is a property of *these* bytes, and it is said
+    only when they are actually a shell (a failed `resp.body()` still lands here).
     """
     detail = re.sub(r"<[A-Za-z_][\w.]* object at 0x[0-9a-fA-F]+>",
                     "an in-memory buffer", str(exc)[:160])
-    if "stealthy" in (fetcher_used or "") or "cdp" in (fetcher_used or ""):
-        return (f"image_ocr_failed: {detail} - the browser tier FRAMES an image "
-                f"document in its own viewer, so OCR was handed {size} bytes of "
-                "markup rather than the picture. Re-call with "
-                "force_fetcher='http' to give OCR the bytes, or read the image "
-                "with a vision-capable model.")
+    browser_tier = "stealthy" in (fetcher_used or "") or "cdp" in (fetcher_used or "")
+    if browser_tier and _looks_like_document_shell(handed):
+        return (f"image_ocr_failed: {detail} - what reached OCR was {size} bytes of a "
+                "rendered document, not the picture: this navigation could not hand "
+                "back the original bytes, so the browser's own viewer came through. "
+                "Re-call with force_fetcher='http' to give OCR the bytes, or read the "
+                "image with a vision-capable model.")
     return f"image_ocr_failed: {detail}"
 
 
@@ -2007,7 +2023,7 @@ def _translate_response_body(
                 url=page.url, fetcher_used=fetcher_used, duration_ms=duration_ms,
                 content_type=raw_ct, total_size_bytes=total_size,
                 extracted_type="text",
-                error=_ocr_failure_note(e, fetcher_used, total_size),
+                error=_ocr_failure_note(e, fetcher_used, total_size, raw_body),
             )
 
     content: list[str]

@@ -178,3 +178,29 @@ def _is_data_document_content_type(content_type: str) -> bool:
     """
     ct = (content_type or "").split(";")[0].strip().lower()
     return _is_xml_content_type(ct) or ct.startswith(("application/json", "text/json"))
+
+
+def _is_framed_document_content_type(content_type: str) -> bool:
+    """Chrome 只会给它套一层自己的查看器、不会给出原件的那一类。
+
+    数据文档之外再加两支，因为它们在线上撞的是同一件事：
+      · 图片 —— 实测（2026-10-09，`force_fetcher='stealthy'` 打
+        `https://httpbin.org/image/png`）交给 OCR 的是 **403 字节的 markup**，而
+        `content_type` 仍写着 `image/png`，`total_size_bytes` 跟着那 403 字节走，
+        OCR 因此报 "cannot identify image file"。相框比图片还小，这一发连"读不到字"
+        都算不上，是一次没发生的读取。
+      · PDF —— 内建查看器把文档画进 `<embed>`，`page.content()` 里没有正文；原件同样
+        挂在这次导航的网络响应上。
+
+    SVG 故意**不在**这一类里：一个 SVG 就是它的标记，浏览器渲染出来的那棵树是它的正当
+    读法（同一个分工在 `quality._is_raster_image` 里为 js_shell 判据写着 —— 那边问的
+    是"这张图有没有文本层"，这里问的是"Chrome 会不会给原件"，两问不并一张表）。
+
+    读它的只有一处：`fetcher.response_from_browser_page` 取原件那一步。
+    """
+    ct = (content_type or "").split(";")[0].strip().lower()
+    if _is_data_document_content_type(ct):
+        return True
+    if ct.startswith("image/"):
+        return ct != "image/svg+xml"
+    return ct.startswith("application/pdf")

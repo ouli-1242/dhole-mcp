@@ -22,7 +22,7 @@ from urllib.parse import urljoin, urlparse
 import primp
 
 from dhole_mcp.charset import misdecode_score as _misdecode_score
-from dhole_mcp.extractor import _is_data_document_content_type
+from dhole_mcp.extractor import _is_framed_document_content_type
 from dhole_mcp import sessions
 from dhole_mcp.security import SecurityError, redact_api_key
 
@@ -313,7 +313,10 @@ async def response_from_browser_page(
     # （428KB 的 sitemap 换成 2,335,300 个字符的 xml-viewer）。自动升级早就为同一个
     # 理由拒绝走浏览器（quality._never_escalate），被 force_fetcher/cdp 按到这一档的
     # 时候，原件仍然挂在这次导航的网络响应上 —— 取原件，别外交框。
-    if page_content and _is_data_document_content_type(ct):
+    # 同一处的射程在 D-27 扩到图片与 PDF：那张判据（哪些类型 Chrome 只套框）写在
+    # extractor._is_framed_document_content_type，图片那一支的实测是 403 字节的框喂给
+    # OCR，报的是"认不出这张图"。
+    if page_content and _is_framed_document_content_type(ct):
         try:
             raw = await resp.body()
         except Exception:
