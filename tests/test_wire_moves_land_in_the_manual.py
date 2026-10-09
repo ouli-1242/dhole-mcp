@@ -271,7 +271,20 @@ def test_connect_stays_inside_the_packed_budget():
 #: `session_id` 与 `cdp_url` 各自的参数描述早就写着 jar 的名字 / 挂上用户自己的
 #: Chrome，DHOLE_INSTRUCTIONS 也写着凭据进 cred_defaults —— 同一件事第三次说，摘掉。
 #: **净 -43 → 30,707**。回落后的余量不许预支：上限仍钉在实测值 +0。
-CONNECT_CEILING = 30_707
+#: 2026-10-09 独立审计修复刀（D1 + D4，同一句账单）：棘轮**再往下**。
+#: 两条都是常驻层里的**假话**，不是措辞问题：
+#:   D1 `web_act.confirm` 曾写「Two things need it ... Neither acts until this says
+#:   true」，实测顶层 confirm **不能**放行 submit（放行写在动作对象内，四条对照
+#:   组合的订单日志 delta 为 0/0/1/1）。读者照它做会在「暂停→加顶层 confirm→
+#:   仍暂停」之间循环，而写闸是安全控制 —— 这是必须每次连接都到的一句。
+#:   D4 `cred_defaults.set` 曾把 `host` 说成 auth / cookies 内部的一颗，实测取的是
+#:   兄弟键（`set={"host":..., "auth":{...}}`），五种「host 写进 auth 里」的形状
+#:   全被拒。改说 BESIDE，同时删掉「the last two only with ... in the same object」
+#:   那段既误导又长的从句。
+#: 逐字符实测（wire 口径含 JSON 转义）：D1 158→192(+34)、D4 190→150(-40)。
+#: **净 -6 → 30,701**。auth 的三形态不进这里：references/tools.md 已逐字写着，
+#: 按需取段 —— 常驻层替说明书干活正是本文件要防的形状。
+CONNECT_CEILING = 30_701
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

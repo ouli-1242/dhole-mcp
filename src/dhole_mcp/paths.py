@@ -32,6 +32,7 @@ import a third-party dependency.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 _HOME_DIR_NAME = ".dhole"
@@ -132,5 +133,56 @@ def profiles_dir() -> Path:
     profile ACL under the user's home directory is the real boundary).
     """
     return ensure_private_dir(home() / "profiles")
+
+
+#: 服务器侧两个根的**名字**。回执里写它们的绝对形式，就是把这台机器的目录布局与
+#: 用户名交给调用方 —— 契约 C15（错误不泄漏本机绝对路径）在 `File not found:`
+#: 那句上曾经被放宽（2026-10-09 审计 D11：实测错误里逐字带着
+#: `D:\tools\dhole-mcp\.scratch\...`，而进程 cwd 在 MCP 宿主下就是宿主自己的安装
+#: 目录）。可诊断性不该靠泄漏来换：调用方真正需要的是"你按什么顺序试了哪几处"，
+#: 而那件事用名字说得清。
+MASKED_CWD = "<server cwd>"
+MASKED_HOME = "~"
+
+
+def mask_machine_paths(text: str) -> str:
+    """Replace THIS machine's own roots in ``text`` with symbolic names.
+
+    Masks the two roots the *server* owns: the process working directory (under an
+    MCP host that is the host's own install directory — the very path a caller
+    never mentioned, see ``_resolve_local_path``) and the user's home. The home is
+    masked even when the caller typed it, because the username is part of what the
+    path leaks and ``~/report.csv`` is a *better* diagnostic than the full form.
+
+    A path with no machine root in it is returned unchanged: an absolute path the
+    caller invented is theirs to read back.
+
+    Longest root first, so a cwd nested inside home keeps its own, more specific
+    label. The separator lookahead matters: without it ``C:\\Users\\mel`` would be
+    read as a hit on the root ``C:\\Users\\me`` and rewritten into a path that
+    does not exist. Matching is case-insensitive because on Windows the same root
+    comes back spelled ``c:\\users\\ouli`` as often as not, and under-masking is
+    the failure that leaks.
+    """
+    if not text:
+        return text
+    roots: list[tuple[str, str]] = []
+    try:
+        home_dir = os.path.expanduser("~")
+        if home_dir and home_dir not in ("~", "/", "\\"):
+            roots.append((home_dir, MASKED_HOME))
+    except Exception:
+        pass
+    try:
+        cwd = os.getcwd()
+        if cwd:
+            roots.append((cwd, MASKED_CWD))
+    except Exception:
+        pass
+    for root, label in sorted(roots, key=lambda rl: -len(rl[0])):
+        text = re.sub(re.escape(root) + r"(?=[\\/]|$)", label, text,
+                      flags=re.IGNORECASE)
+    return text
+
 
 

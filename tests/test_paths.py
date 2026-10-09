@@ -8,6 +8,7 @@
 """
 
 from pathlib import Path
+import os
 
 import pytest
 
@@ -199,3 +200,85 @@ class TestPrivateModeHelpers:
         asyncio.run(cache.set_cached("https://x/a", "markdown", ["b"], 200, cache_dir=d))
         assert (d / "cache.db").exists()
         assert (str(d), oct(0o700)) in calls, calls
+
+
+class TestMaskingTheMachinesOwnRoots:
+    """回执里出现本机自己的根时，写名字，不写拼法。
+
+    2026-10-09 独立审计 D11：`doc_parse` 的回执逐字带着
+    ``D:\\tools\\dhole-mcp\\.scratch\\...`` —— 进程 cwd 在 MCP 宿主下就是宿主自己的
+    安装目录，用户主目录同理 —— 而调用方一个都没提过。契约 C15 说的是「错误不泄漏本机
+    绝对路径」，这条门在那句话上被放宽了。
+
+    判据问的不是"有没有遮蔽"，是**遮蔽得准不准**：漏掉一条 = 照样泄漏；多遮一条 =
+    调用方拿到一个不存在的路径，诊断力被买走了。所以两个方向都要钉。
+    """
+
+    def test_the_process_cwd_becomes_a_name(self):
+        cwd = os.getcwd()
+        masked = paths.mask_machine_paths(os.path.join(cwd, "sub", "report.csv"))
+        assert masked == paths.MASKED_CWD + os.sep + os.path.join("sub", "report.csv")
+        assert cwd not in masked
+
+    def test_the_home_becomes_a_tilde(self):
+        home = os.path.expanduser("~")
+        if home in ("~", "/", "\\"):
+            pytest.skip("这台机器上 ~ 展不开，遮蔽器按设计跳过它")
+        masked = paths.mask_machine_paths(os.path.join(home, "report.csv"))
+        assert masked == paths.MASKED_HOME + os.sep + "report.csv"
+        assert home not in masked
+
+    def test_the_root_itself_is_masked_not_only_its_children(self):
+        """`(?=[\\\\/]|$)` 的 `$` 那一支：根本身（后面没有分隔符）也得命中。
+
+        少这一支的话，`cwd=<恰好就是主目录>` 这种最干净的写法反而是唯一漏出去的那条。
+        """
+        assert paths.mask_machine_paths(os.getcwd()) == paths.MASKED_CWD
+        home = os.path.expanduser("~")
+        if home not in ("~", "/", "\\"):
+            assert paths.mask_machine_paths(home) == paths.MASKED_HOME
+
+    def test_a_sibling_sharing_the_prefix_is_not_a_hit(self):
+        """前缀不是命中：`C:\\Users\\mel` 不许被读成根 `C:\\Users\\me` 的命中。
+
+        没有这个后顾前瞻，遮蔽器会造出一个**不存在的**路径 —— 那比不遮蔽更坏，因为它
+        读起来像真的。
+        """
+        sibling = os.getcwd() + "X" + os.sep + "report.csv"
+        assert paths.mask_machine_paths(sibling) == sibling
+
+    def test_a_path_the_caller_invented_reads_back(self):
+        """本机根之外的绝对路径原样返回：那是调用方自己写的，本来就该读得回来。"""
+        foreign = (r"D:\somewhere\else\report.csv" if os.name == "nt"
+                   else "/srv/data/report.csv")
+        assert paths.mask_machine_paths(foreign) == foreign
+
+    def test_the_longest_root_wins(self, tmp_path, monkeypatch):
+        """cwd 嵌在 home 里时，更具体的那个名字必须赢。
+
+        否则结果是 `~\\...\\<server cwd>\\report.csv` 这种两层名字叠在一起的东西，
+        既没说出"这是服务器的工作目录"，也把主目录的布局又拼了一遍。
+        """
+        home = os.path.expanduser("~")
+        if home in ("~", "/", "\\") or not str(tmp_path).startswith(home):
+            pytest.skip("这台机器的临时目录不在主目录下，嵌套形状造不出来")
+        monkeypatch.chdir(tmp_path)
+        masked = paths.mask_machine_paths(str(tmp_path / "report.csv"))
+        assert masked == paths.MASKED_CWD + os.sep + "report.csv", masked
+        assert paths.MASKED_HOME not in masked, masked
+
+    def test_nothing_to_mask_is_a_no_op(self):
+        assert paths.mask_machine_paths("") == ""
+        assert paths.mask_machine_paths("File not found: nothing here") == \
+            "File not found: nothing here"
+
+    def test_it_never_raises(self, monkeypatch):
+        """遮蔽器长在报错路径上，自己抛异常就等于把原始报错换成自己的。"""
+        import os as _os
+
+        def _boom(*a, **k):
+            raise OSError("no cwd here")
+
+        monkeypatch.setattr(_os, "getcwd", _boom)
+        assert paths.mask_machine_paths("plain") == "plain"
+

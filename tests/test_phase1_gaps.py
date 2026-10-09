@@ -344,7 +344,7 @@ class TestSearchReportsAFullyFilteredFloor:
                             lambda q, r, **kw: [(x, 1.0) for x in r])
 
         out = await S.web_search(None, "dns resolution", 6, min_relevance=5.0)
-        assert "min_relevance=5.0 is outside 0-1" in out.fetch_hint, out.fetch_hint
+        assert "min_relevance=5.0 is outside 0-1" in out.summary, out.summary
 
 
 # ─── G15 / G17: envelope 精度 ────────────────────────────────────────

@@ -76,6 +76,15 @@ class SitemapResult:
     filtered_out: int = 0
     via: str = ""                                             # "robots" | "conventional" | ""
     robots_checked: bool = False
+    # robots.txt 的**诊断**：它到底有没有 Sitemap: 指令，以及有几条候选被 SSRF
+    # 守卫拦下。加这两颗是因为 web_crawl 在 sitemap 抓不到时会写一句总结，而那句
+    # 总结曾经逐字断言"robots.txt 没有 Sitemap 指令、且 /sitemap.xml 返回空"——
+    # 在一个 robots.txt 确有指令、/sitemap.xml 从未被请求的私网站点上，两半都是
+    # 假的（2026-10-09 审计 D2，真机复现）。报告要能说真话，先得有人把事实记下来；
+    # 而"守卫拦了什么"过去是彻底静默的（`continue` 一句注释都没有），地图短了一截
+    # 却没有任何一处能解释为什么。
+    robots_had_sitemap: bool = False
+    guard_refused: list[str] = field(default_factory=list)
 
 
 def _maybe_gunzip(body: bytes) -> bytes:
@@ -155,11 +164,17 @@ def _fetch(http_get: HttpGet, url: str) -> Optional[bytes]:
     return body
 
 
-def _robots_sitemaps(start_url: str, http_get: HttpGet) -> tuple[list[str], bool]:
+def _robots_sitemaps(start_url: str, http_get: HttpGet,
+                     *, report: Optional[dict] = None) -> tuple[list[str], bool]:
     """Fetch /robots.txt and return its Sitemap: directives (absolute URLs).
 
     SSRF 防护：robots.txt 的 ``Sitemap:`` 指令可能指向内网（攻击者站点
     声明 ``Sitemap: http://169.254.169.254/...``），抓取前逐条校验。
+
+    ``report`` 是可选的事实收集袋：填 ``had_directive``（robots.txt 里**有没有**
+    Sitemap 指令）与 ``refused``（被守卫拦下的候选，按出现顺序）。返回值形状保持
+    2 元组 —— 现有调用点与守卫都按 2 元组解包（tests/test_audit_fixes.py），
+    诊断走旁路加，不动那个已被钉住的接口。
     """
     p = urlparse(start_url)
     robots_url = f"{p.scheme or 'https'}://{p.netloc}/robots.txt"
@@ -171,19 +186,27 @@ def _robots_sitemaps(start_url: str, http_get: HttpGet) -> tuple[list[str], bool
     except Exception:
         return [], True
     out: list[str] = []
+    refused: list[str] = []
+    had_directive = False
     for line in text.splitlines():
         line = line.strip()
         if line.lower().startswith("sitemap:"):
             val = line.split(":", 1)[1].strip()
             if val:
+                had_directive = True
                 candidate = urljoin(robots_url, val)
-                # SSRF：拒绝指向内网/保留地址的 sitemap URL
+                # SSRF：拒绝指向内网/保留地址的 sitemap URL。
+                # 被拦下不是"没找到"：记进 refused，让调用方说得出是哪条、为什么。
                 try:
                     from dhole_mcp.security import validate_url
                     validate_url(candidate)
                 except Exception:
+                    refused.append(candidate)
                     continue
                 out.append(candidate)
+    if report is not None:
+        report["had_directive"] = had_directive
+        report["refused"] = refused
     # de-dup, preserve order
     seen: set[str] = set()
     uniq = [u for u in out if not (u in seen or seen.add(u))]
@@ -225,8 +248,12 @@ def discover_sitemap(start_url: str, *, http_get: HttpGet,
         return result
 
     candidates: list[str] = []
-    robots_smaps, robots_checked = _robots_sitemaps(start_url, http_get)
+    robots_report: dict = {}
+    robots_smaps, robots_checked = _robots_sitemaps(start_url, http_get,
+                                                    report=robots_report)
     result.robots_checked = robots_checked
+    result.robots_had_sitemap = bool(robots_report.get("had_directive"))
+    result.guard_refused.extend(robots_report.get("refused") or [])
     if robots_smaps:
         candidates.extend(robots_smaps)
         result.via = "robots"
@@ -257,11 +284,14 @@ def discover_sitemap(start_url: str, *, http_get: HttpGet,
         if sitemap_url in visited_sitemaps:
             return
         visited_sitemaps.add(sitemap_url)
-        # SSRF：sitemapindex 子 URL 可能指向内网，抓取前校验
+        # SSRF：sitemapindex 子 URL 可能指向内网，抓取前校验。
+        # 拦下要记账：这里过去是一句 `return`，于是"index 里 30 个子 sitemap、
+        # 其中 12 个指向私网"与"index 只有 18 个子 sitemap"在报告里长得一模一样。
         try:
             from dhole_mcp.security import validate_url
             validate_url(sitemap_url)
         except Exception:
+            result.guard_refused.append(sitemap_url)
             return
         body = _fetch(http_get, sitemap_url)
         if body is None:

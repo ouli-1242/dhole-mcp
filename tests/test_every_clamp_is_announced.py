@@ -14,6 +14,8 @@
 * 一句话只能有一个作者。`context._clamp_note` 是那句 `X clamped a->b (supported
   range L-H)` 的唯一持有者：web_read 走 ContextVar，crawl 走自己的 summary
   （它是 CrawlResponseModel，不经过 `_with_agent_hints`），两条通道读同一颗纯函数。
+* 而且只能有一个落点：那颗字段是 `summary`。三颗工具都这么说，所以只扫一个字段的
+  调用方不会漏掉任何一颗 —— 搜索侧曾经写在 `fetch_hint`（2026-10-09 审计 D5）。
 
 判据：
 
@@ -34,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import re
 
 import pytest
@@ -43,6 +46,7 @@ from dhole_mcp import crawl as crawl_mod
 from dhole_mcp import nested as nested_mod
 from dhole_mcp import params as params_mod
 from dhole_mcp import pdf_extractor as pdf_mod
+from dhole_mcp import server as server_mod
 from dhole_mcp.context import (
     _ARG_NOTES, _arg_notes_scope, _clamp_note, _note_text,
 )
@@ -287,3 +291,177 @@ def test_the_boundary_is_not_re_stated_above_the_layer_that_announces_it():
     src = inspect.getsource(params_mod._coerce_one_arg)
     assert "lo=" not in src and "hi=" not in src, (
         "归一化层开始夹范围了：那里的钳制没人上报")
+
+
+# ─── 7 · cache_ttl：负数不是时长（2026-10-09 审计 D5/D10）────────
+#
+# 这一族里唯一一颗**静默**的钳位。其余每一颗越界都在 summary 里点名，而
+# `cache_ttl=-1` 被当成 0（读也不读、写也不写）之后一个字都没有 —— 偏偏它是唯一
+# 一颗与"我到底有没有拿到新内容"直接相关的参数。三颗工具都有它，所以那句措辞
+# 也只有一个作者（`context._cache_ttl_note`），否则又是"同一件事两种说法"。
+#
+# 2026-10-09 审计 D5 收口：上面那句"其余每一颗都在 summary 里点名"当时并不全真 ——
+# 搜索侧那颗在 `fetch_hint`。现在两个轴都对齐了：措辞一个作者（context），落点一个
+# 字段（summary）。反向那一半（fetch_hint 不许吃回参数注记）也有守卫。
+
+def test_a_negative_cache_ttl_is_worded_once_for_all_three_tools():
+    from dhole_mcp.context import _cache_ttl_note
+
+    assert _cache_ttl_note(-1) == (
+        "cache_ttl=-1 is not a duration; using 0 - this call reads no cache "
+        "and writes none")
+    # 字符串客户端（{"cache_ttl": "-1"}）必须落到同一句上。
+    assert _cache_ttl_note("-1") == _cache_ttl_note(-1)
+
+
+@pytest.mark.parametrize("fine", [None, 0, 1, 3600, "0", "3600"])
+def test_a_cache_ttl_that_is_a_duration_says_nothing(fine):
+    """不许变成噪声：只有真的不是时长时才说话。"""
+    from dhole_mcp.context import _cache_ttl_note
+
+    assert _cache_ttl_note(fine) == ""
+
+
+def test_the_sentence_carries_the_half_of_zero_the_wire_never_states():
+    """`0` 的另一半是"也不写缓存" —— 那正是"续读为什么又抓了一次"的答案。"""
+    from dhole_mcp.context import _cache_ttl_note
+
+    assert "reads no cache and writes none" in _cache_ttl_note(-1)
+
+
+def _stub_one_tier(monkeypatch):
+    """把一档取数换成一具现成正文，好让 summary 真的被组装出来。"""
+    result = ResponseModel(url="https://ttl.example.com/", status=200,
+                           content=["<p>body</p>"], content_ok=True)
+
+    async def fake(self, *a, **kw):
+        return server_mod._apply_chunking(
+            result, max_chars=server_mod.DEFAULT_MAX_CONTENT_CHARS)
+
+    monkeypatch.setattr(MasterFetchServer, "_auto_escalate", fake)
+
+
+@pytest.mark.asyncio
+async def test_web_read_names_a_clamped_cache_ttl_in_its_summary(monkeypatch):
+    _stub_one_tier(monkeypatch)
+    out = await MasterFetchServer(cache_ttl=0).web_read(
+        "https://ttl.example.com/", cache_ttl=-1)
+    assert "cache_ttl=-1 is not a duration" in (out.summary or ""), out.summary
+
+
+@pytest.mark.asyncio
+async def test_web_read_does_not_invent_a_note_for_a_real_ttl(monkeypatch):
+    _stub_one_tier(monkeypatch)
+    out = await MasterFetchServer(cache_ttl=0).web_read(
+        "https://ttl.example.com/", cache_ttl=0)
+    assert "cache_ttl=" not in (out.summary or ""), out.summary
+
+
+@pytest.mark.asyncio
+async def test_web_crawl_names_a_clamped_cache_ttl_in_its_summary():
+    out = await crawl_mod.web_crawl(
+        _site({SEED: _linked(["/a"])}), SEED, max_pages=1, cache_ttl=-1)
+    assert "cache_ttl=-1 is not a duration" in out.summary, out.summary
+
+
+def test_web_search_reads_the_same_sentence_author():
+    """搜索那条路读同一颗措辞作者，落同一个字段（2026-10-09 审计 D5 收口）。
+
+    这里读形状而不是跑一次真搜索：`web_search` 的合法入参一定会发网络请求，而这条
+    判据要的是"有没有接上那句话"，不是"引擎答了什么"。手抄一句同义的话同样是失败
+    —— 那正是这条纪律（一句话一个作者）要防的形状。字段那一半由
+    `test_web_search_puts_the_clamp_where_the_other_two_tools_put_theirs` 跑真的。
+    """
+    from dhole_mcp import search as search_mod
+
+    src = inspect.getsource(search_mod.web_search)
+    assert "_cache_ttl_note(" in src, "搜索那条路又回到静默钳位了"
+    assert "is not a duration" not in src, (
+        "search.py 手抄了那句措辞：它必须读 context._cache_ttl_note")
+
+
+@pytest.mark.asyncio
+async def test_web_search_puts_the_clamp_where_the_other_two_tools_put_theirs(monkeypatch):
+    """一颗参数被钳，三颗工具必须说在**同一个字段**里。
+
+    搜索那条路曾经把它追加到 `fetch_hint`。那颗字段在 wire 上的自述是
+    *"How many high/med/low results + which to web_read first"* —— 说的是**结果**，
+    不是调用方传进来的参数；把"我钳了你的 max_results"写进去，等于让那颗字段说它
+    自己声明不说的事。`web_read`（经 `_with_agent_hints`）与 `web_crawl` 都写在
+    `summary`，于是只扫 `summary` 的调用方在三颗工具里有两颗看得见、一颗看不见 ——
+    2026-10-09 审计 D5 的第一次探针就是这么把「说在别处」读成了「没说」。
+    """
+    from dhole_mcp import search as search_mod
+    from dhole_mcp.search_engines import EngineReport, RawResult
+
+    async def fake_multi_search(query, max_results, **kwargs):
+        # 标题与摘录都带着查询词，否则它们会被"一个查询词都没命中"那道过滤器
+        # 整批丢掉，于是这条用例量到的 summary 只剩钳制那一句 —— 而它要守的正是
+        # "正常的状态行 + 那颗注记"两者同时在。
+        rows = [RawResult(title=f"DNS resolution note {i}", url=f"https://e{i}.example/",
+                          snippet="DNS resolution", source="bing", position=i + 1)
+                for i in range(3)]
+        return rows, [EngineReport(name="bing", ok=True)]
+
+    async def no_cache(*a, **k):
+        return None
+
+    async def no_set(*a, **k):
+        return None
+
+    async def fake_ensure():
+        return None
+
+    monkeypatch.setattr(search_mod, "multi_search", fake_multi_search)
+    monkeypatch.setattr(search_mod, "get_cached", no_cache)
+    monkeypatch.setattr(search_mod, "set_cached", no_set)
+    monkeypatch.setattr(search_mod, "ensure_reranker", fake_ensure)
+    monkeypatch.setattr(search_mod, "neural_rerank",
+                        lambda q, r, **kw: [(x, 1.0) for x in r])
+
+    out = await search_mod.web_search(None, "DNS resolution", 100)
+    assert out.results, "夹具被过滤器吃光了，这条用例就没在量它声称量的事"
+    assert "max_results=100 is outside the supported 1-50 range" in out.summary, out.summary
+    # 反向那一半：这颗字段不许再把参数注记吃回来。
+    assert "max_results=" not in out.fetch_hint, out.fetch_hint
+
+
+# ─── 8 · 钳还是拒：判据写下来了，而且两半都真的照它走 ──────────────
+#
+# 2026-10-09 审计 C16 记的是"同类参数的验证策略三分裂：拒绝 / 钳制并说明 / 静默强转
+# 三者混用"。上面七节把"钳制并说明"与"静默强转已消灭"钉住了，但**分界本身**（一颗
+# 越界的数什么时候该钳、什么时候该拒）当时没有任何一处写下来 —— 只能从代码里反读。
+# 分界就在 `params._coerce_int_arg(..., clamp=)`，所以判据也写在那里。
+
+def test_the_reject_or_clamp_rule_is_written_where_the_decision_is_made():
+    """判据必须住在做决定的那一层，而且必须把第三种策略明说不合法。
+
+    这条守的不是措辞好看：一条没有写下来的判据，下一个人加参数时只能靠猜，
+    而"猜"正是这一族缺陷唯一的产地。
+    """
+    src = inspect.getsource(params_mod)
+    assert "越界：钳还是拒" in src, "判据从 params 的文档里消失了"
+    assert "有没有唯一一种合理的读法" in src, "判据那句话被改成了别的意思"
+    assert "没有合法用法" in src, (
+        "第三种策略（静默强转）必须被明说不合法 —— 否则它随时可以回来")
+
+
+@pytest.mark.parametrize("tool,args,needle", [
+    ("web_read", {"url": "https://rule.example/", "offset": -5},
+     "offset must be between 0 and 2147483648, got -5."),
+    ("web_search", {"query": "x", "page": 99}, "Invalid page: 99 (0-10)"),
+])
+def test_a_value_whose_reading_would_change_is_refused_not_clamped(tool, args, needle):
+    """判据的另一半，跑真的：这两颗的越界值**没有**唯一读法，所以必须拒绝。
+
+    `offset=-5` 钳成 0 会把"最后 5 个字"当成"从第 0 个字开始"发回去；`page=99`
+    钳成 10 会把"第 99 页"当成"第 10 页"。两者都会以一个普通 200 交出**另一个问题
+    的答案** —— 那比报错坏得多。拒绝发生在发请求之前，所以这条用例不碰网络。
+    """
+    _content, structured = asyncio.run(MasterFetchServer()._dispatch(tool, args))
+    assert needle in structured["error"], structured["error"]
+    assert structured["next_action"], "拒绝必须自带出路"
+    # 两条路互斥：说了"我拒绝了"就不能同时说"我钳好了"—— 否则调用方无从判断哪句
+    # 算数。这是本用例真正的判据：`clamped` / `is outside` 是钳制那一族的措辞。
+    blob = json.dumps(structured)
+    assert "clamped" not in blob and "is outside" not in blob, blob

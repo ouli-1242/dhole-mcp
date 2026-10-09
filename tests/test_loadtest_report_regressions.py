@@ -392,7 +392,7 @@ class TestClampNotes:
         resp = asyncio.run(MasterFetchServer().web_search("clamp note", max_results=51))
 
         assert resp.cached is True
-        assert "outside the supported 1-50 range" in resp.fetch_hint
+        assert "outside the supported 1-50 range" in resp.summary
 
     def test_an_in_range_search_gets_no_note(self, monkeypatch):
         payload = json.dumps({
@@ -410,7 +410,7 @@ class TestClampNotes:
 
         monkeypatch.setattr(search_mod, "get_cached", fake_get_cached)
         resp = asyncio.run(MasterFetchServer().web_search("clamp note", max_results=10))
-        assert "outside the supported" not in resp.fetch_hint
+        assert "outside the supported" not in resp.summary
 
     def test_max_content_chars_below_the_floor_is_reported(self, monkeypatch):
         """D-08: 499 became 500 with no signal anywhere in the response.

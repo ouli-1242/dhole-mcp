@@ -55,6 +55,7 @@ Flagship design (v6):
 from __future__ import annotations
 
 import asyncio
+import functools
 import heapq
 import logging
 import re
@@ -68,7 +69,7 @@ from dhole_mcp import injection
 # 钳制文案的唯一作者。crawl 的 summary 不经过 _with_agent_hints（它是
 # CrawlResponseModel，不是 ResponseModel），所以这里读的是那颗纯函数而不是
 # ContextVar —— 同一句话，两个通道。
-from dhole_mcp.context import _clamp_note, report_progress
+from dhole_mcp.context import _cache_ttl_note, _clamp_note, report_progress
 # robots.txt compliance (v16.0). robots.py imports nothing from dhole at module
 # level, so this is cycle-free; the seed check + the discovered-URL peek both
 # need it, and keeping one import point is what makes the cache the shared one.
@@ -642,7 +643,8 @@ def _sitemap_passes_filters(path: str, path_include: Optional[list[str]],
 
 async def _sitemap_map(url: str, path_include: Optional[list[str]],
                        path_exclude: Optional[list[str]], *,
-                       max_pages: int, deadline_t: float) -> Optional[CrawlResponseModel]:
+                       max_pages: int, deadline_t: float,
+                       diag: Optional[dict] = None) -> Optional[CrawlResponseModel]:
     """Try to map the site via sitemap.xml. Returns a CrawlResponseModel on
     success (sitemap found + parsed), or None if NO sitemap was reachable so the
     caller can fall back to BFS ('auto'). A sitemap that was found but produced no
@@ -716,6 +718,14 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
     except Exception:
         return None
     if not result.sitemaps_used:
+        # 没有一份 sitemap 读通。**为什么**读不通是调用方接下来那句总结的全部
+        # 依据 —— 交出去，别让调用方去猜（2026-10-09 审计 D2：它当时猜错了，
+        # 而且是朝着"断言没发生过的事"那个方向猜错的）。
+        if diag is not None:
+            diag["robots_checked"] = result.robots_checked
+            diag["robots_had_sitemap"] = result.robots_had_sitemap
+            diag["guard_refused"] = list(result.guard_refused)
+            diag["via"] = result.via
         return None  # nothing reachable: the caller's "no sitemap here" answer is true
 
     pages: list[CrawlPage] = []
@@ -831,6 +841,75 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
     )
 
 
+def _crawl_shares_the_private_door(fn):
+    """把 cred_defaults 的 ``allow_private`` 铺满**整趟爬取**，不只是种子那一颗。
+
+    2026-10-09 审计 D2（真机复现）：作用域曾经只包住种子那一行
+    ``validate_url(url)`` 就退出，而 sitemap 的发现（sitemap.py 里逐条
+    ``validate_url``）、robots.txt 的复校验（robots.py ``_fetch_rules``）、
+    第二层链接的抓取全都发生在那之后 —— 于是同一个 ``allow_private`` 在**读**
+    的门上是开的、在**爬**的门上是死的：一个 robots.txt 明写 ``Sitemap:``、
+    ``/sitemap.xml`` 也确实返回 200 合法 XML 的本机 dev 站，``web_discover``
+    报的是「没找到」。
+
+    修法不是再补一个作用域（那是第二处会漂移的真相），而是让这扇门在整趟爬取里
+    只有一个位置：进来时推开一次，出去时关掉。``functools.wraps`` 保住了
+    ``__wrapped__``，所以 ``inspect.signature(web_crawl)`` 仍是原来那份 17 参签名
+    —— 形状守卫读的是它，不是包装器。
+
+    ContextVar 会被 ``asyncio.to_thread`` 带进工作线程（``copy_context``），
+    所以 sitemap 那条线程里的 ``validate_url`` 读到的是同一个答案。
+    """
+    @functools.wraps(fn)
+    async def _wrapped(server, url, *args, **kwargs):
+        from dhole_mcp import identity as _identity
+        from dhole_mcp.security import allow_private_scope
+        with allow_private_scope(_identity.get("allow_private")):
+            return await fn(server, url, *args, **kwargs)
+    return _wrapped
+
+
+def _no_sitemap_summary(start_norm: str, diag: dict) -> str:
+    """「没找到 sitemap」这句话必须由**发生过什么**决定，不能是一句固定文案。
+
+    2026-10-09 审计 D2：这句曾经逐字写着「robots.txt had no Sitemap directive
+    and /sitemap.xml returned nothing」。在一个 robots.txt **确有**该指令、而
+    ``/sitemap.xml`` **从未被请求**的私网站点上，两半都是假的 —— 读者照着去查
+    robots.txt 会发现自己没写错，然后失去对整条回执的信任。这正是本仓库反复点名
+    要杜绝的形状：调用看起来失败了，诊断却自信地答错。
+
+    分支顺序就是「越具体越先说」：守卫拦下 > 指令在但读不出 > robots 没读到 >
+    真的没有。
+    """
+    refused = diag.get("guard_refused") or []
+    if refused:
+        return (f"sitemap not read: robots.txt declares Sitemap: {refused[0]}, which "
+                f"the SSRF guard refuses (a private or reserved address) - so nothing "
+                f"was fetched from it")
+    if diag.get("robots_had_sitemap"):
+        return (f"no sitemap could be read at {start_norm}: robots.txt declares a "
+                f"Sitemap, but fetching or parsing it produced nothing (and "
+                f"/sitemap.xml answered nothing either)")
+    if not diag.get("robots_checked"):
+        return (f"no sitemap.xml found at {start_norm}: robots.txt could not be read, "
+                f"and /sitemap.xml returned nothing")
+    return (f"no sitemap.xml found at {start_norm} (robots.txt had no Sitemap "
+            f"directive and /sitemap.xml returned nothing)")
+
+
+def _no_sitemap_next_action(diag: dict) -> str:
+    """与上面那句配套的出路。守卫拦下时不能说「换个站」——那不是站的问题。"""
+    if diag.get("guard_refused"):
+        return ("This host is private/reserved and the SSRF guard refused its sitemap. "
+                "If it is your own dev site, waive it once with "
+                "cred_defaults(set={\"allow_private\": true}) (loopback only) or "
+                "set={\"allow_private\": [\"that.host\"]}, then call again. Otherwise "
+                "run web_crawl with sitemap=false to discover by links instead.")
+    return ("No sitemap found. Re-run web_crawl with sitemap=false (or omit it) "
+            "to use best-first BFS discovery instead.")
+
+
+@_crawl_shares_the_private_door
 async def web_crawl(
     server,
     url: str,
@@ -865,7 +944,7 @@ async def web_crawl(
     discovered URLs it already knows are disallowed (robots_skipped) instead of
     spending budget on a refusal.
     """
-    from dhole_mcp.security import validate_url, SecurityError, allow_private_scope
+    from dhole_mcp.security import validate_url, SecurityError
     from dhole_mcp.trafilatura_extractor import extract_html_title
 
     t0 = time()
@@ -888,13 +967,11 @@ async def web_crawl(
                                   next_action=hint)
 
     try:
-        # 种子 URL 的私网放行与 web_read / feed_read 同一扇门：cred_defaults 存的
-        # allow_private 在这里也要成立 —— 本机 dev 站是最常见的爬取对象，而每页的
-        # 真实抓取都过 web_read（它自己推存量放行），只有这颗种子校验漏了作用域，
-        # 于是同一个 allow_private 在读的门上是开的、在爬的门上是死的。
-        from dhole_mcp import identity as _identity
-        with allow_private_scope(_identity.get("allow_private")):
-            url = validate_url(url)
+        # 种子 URL 的私网放行：作用域在 `_crawl_shares_the_private_door` 里，
+        # 已经罩住整个函数体（种子、robots、sitemap、每一页）。这里不再单独推一次
+        # —— 两处作用域就是两处会漂移的真相，而 2026-10-09 审计 D2 的根因正是
+        # 「作用域只包了种子这一行就退出」。这颗 validate_url 读的是同一份策略。
+        url = validate_url(url)
     except SecurityError as e:
         from dhole_mcp.security import (
             PRIVATE_ADDRESS_REFUSAL_PREFIXES, PRIVATE_ADDRESS_RECOVERY,
@@ -947,6 +1024,12 @@ async def web_crawl(
     concurrency = max(1, min(int(concurrency), 5))
     max_content_chars_per = max(500, min(int(max_content_chars_per),
                                          PER_PAGE_CHARS_CEILING))
+    # 负的 cache_ttl：与 web_read / web_search 同一句话（作者在 context.py），
+    # 也同一颗行为 —— 每一页都按 0 传下去，读也不读、写也不写。爬取这条路上它
+    # 尤其要紧：一页一次默认 TTL 命中会让"这次爬到的正文"与"上一小时那次"混起来。
+    _ttl_note = _cache_ttl_note(cache_ttl)
+    if _ttl_note:
+        cache_ttl = 0
     # `max_total_chars=0`（和任何负数）是"这一轮不要帽"的写法 —— 与 nested_max=0
     # 同一颗拼法，所以负数不当越界处理、也就不进上报；>0 才在 1,000..200,000 里钳。
     _asked_total = int(max_total_chars or 0)
@@ -971,6 +1054,8 @@ async def web_crawl(
         _clamp_note("max_total_chars", _asked_total, max_total_chars,
                     lo=MIN_TOTAL_CHARS, hi=MAX_TOTAL_CHARS_CEILING)
         if _asked_total > 0 else "",
+        # 与上面四颗同一条纪律：钳位要出口。措辞的作者是 context._cache_ttl_note。
+        _ttl_note,
     ) if note]
     focus = focus.strip() if isinstance(focus, str) and focus.strip() else None
     # A bare string was iterated character-by-character by the prefix filters
@@ -1012,8 +1097,12 @@ async def web_crawl(
     # Runs before BFS. 'auto' uses the sitemap if found, else falls through to
     # BFS. 'on' returns the sitemap map (or an honest empty if none found).
     if sm_mode in ("on", "auto"):
+        # 诊断袋：只有"一份 sitemap 都没读通"时才会被填。总结与出路都由它决定，
+        # 不再是一句固定文案（D2：那句固定文案在私网站点上两半都是假的）。
+        _sm_diag: dict = {}
         sm_result = await _sitemap_map(url, path_include, path_exclude,
-                                       max_pages=max_pages, deadline_t=deadline_t)
+                                       max_pages=max_pages, deadline_t=deadline_t,
+                                       diag=_sm_diag)
         if sm_result is not None:
             # A found-but-empty map is a real answer ("the sitemap lists N URLs,
             # none in the section you asked for"), but only for an explicit
@@ -1028,9 +1117,8 @@ async def web_crawl(
                 start_url=start_norm, pages=[], pages_crawled=0,
                 pages_discovered=0, discover_only=True, sitemap_used=False,
                 duration_ms=(time() - t0) * 1000,
-                summary=f"no sitemap.xml found at {start_norm} (robots.txt had no Sitemap directive and /sitemap.xml returned nothing)",
-                next_action=("No sitemap found. Re-run web_crawl with sitemap=false (or omit it) "
-                             "to use best-first BFS discovery instead."),
+                summary=_no_sitemap_summary(start_norm, _sm_diag),
+                next_action=_no_sitemap_next_action(_sm_diag),
             )
 
     root = _same_root(url)

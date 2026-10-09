@@ -439,14 +439,27 @@ def compute_fetch_hint(results: list[SearchResult]) -> str:
 
 
 def _search_summary(query: str, results: list[SearchResult], engines_used: list[str],
-                    rerank_mode: str) -> str:
-    """One-line status for the agent (counts + engines + rerank mode)."""
+                    rerank_mode: str, *, notes: str = "") -> str:
+    """One-line status for the agent (counts + engines + rerank mode + notes).
+
+    ``notes`` is where a clamped argument is announced. It used to be appended to
+    ``fetch_hint`` instead, whose published contract (search.py, the field's own
+    ``description``) is *"How many high/med/low results + which to web_read
+    first"* — a fact about the RESULTS, not about the caller's arguments. The
+    other two tools that clamp (``web_read`` through ``_with_agent_hints``,
+    ``web_crawl`` in its own assembly) both put theirs in ``summary``, so a
+    caller that scans one field saw the note on two tools and not on the third.
+    ``summary`` is the field that describes THIS response, and it is also where
+    the auto-fetch consensus note already lands (server.py, ``web_search``), so
+    the argument notes join it rather than sharing a field with the ranking hint.
+    """
     high = sum(1 for r in results if r.fetch_relevance == "high")
     med = sum(1 for r in results if r.fetch_relevance == "med")
     low = sum(1 for r in results if r.fetch_relevance == "low")
     eng = ",".join(engines_used) if engines_used else "none"
-    return (f"Searched {query[:60]!r} -> {len(results)} results "
+    line = (f"Searched {query[:60]!r} -> {len(results)} results "
             f"({high} high, {med} med, {low} low) from {eng}; rerank={rerank_mode}.")
+    return f"{line} | {notes}" if notes else line
 
 
 # keyed 引擎缺 key 的两份文案（search_metasearch：单引擎 raise 与 search_json
@@ -1401,21 +1414,36 @@ async def web_search(
 
     _requested_max = max_results = _as_int(max_results, DEFAULT_MAX_RESULTS)
     max_results = max(1, min(max_results, 50))
-    cache_ttl = _as_int(cache_ttl, SEARCH_CACHE_TTL)
+    _requested_ttl = cache_ttl = _as_int(cache_ttl, SEARCH_CACHE_TTL)
+    # 负的 cache_ttl：与 web_read / web_crawl 同一颗行为、同一句话（作者在
+    # context.py）。搜索这条路尤其不该静默 —— `cache_ttl > 0` 是唯一的分支，
+    # 所以 -1 与 0 在行为上完全一样，而调用方无从分辨"我写错了"与"它没生效"。
+    from dhole_mcp.context import _cache_ttl_note
+    _ttl_note = _cache_ttl_note(_requested_ttl)
+    if _ttl_note:
+        cache_ttl = 0
 
     def _hint_with(base: str, note: str) -> str:
         """Append one clause to the fetch_hint sentence-assembly below.
 
         Named rather than repeated as an inline ternary: the assembly at the end of
-        the function now has five optional clauses, and a fifth copy of
+        the function has several optional clauses, and one more copy of
         ``x = f"{x} | {n}" if x and n else (n or x)`` is how the notes used to drift
         apart (each copy handled "empty base" slightly differently).
+
+        Every clause here describes the RESULTS (which to web_read, why some were
+        dropped). The one note that describes the CALLER's arguments — a clamped
+        ``max_results`` / ``min_relevance`` / ``cache_ttl`` — deliberately does not
+        come through here; it rides ``summary`` like it does on the other two
+        clamping tools. See :func:`_search_summary`.
         """
         return f"{base} | {note}" if base and note else (note or base)
 
     # G24: a date window that the engines could not match exactly has to be read
-    # where the agent looks first. `_clamp_note` is added later in the function, so
-    # this builds its own and both survive.
+    # where the agent looks first — this is a fact about the RESULTS, so it belongs
+    # on `fetch_hint` (the clamp note below does not: it describes the caller's own
+    # arguments, and rides `summary` — see `_search_summary`). The two therefore
+    # cannot collide, which is why this builds its own string.
     _date_note = ""
     if date_filter and not date_filter.get("exact", True):
         _date_note = date_filter.get("note") or (
@@ -1428,6 +1456,9 @@ async def web_search(
     if _requested_max != max_results:
         _clamp_note = (f"max_results={_requested_max} is outside the supported 1-50 "
                        f"range; returning at most {max_results}")
+    if _ttl_note:
+        # 与上面那颗同一处汇合：两条注记都可能同时存在，谁也不许吃掉谁。
+        _clamp_note = f"{_clamp_note} | {_ttl_note}" if _clamp_note else _ttl_note
 
     # min_relevance (G5): a 0-1 floor for the neural reranker. A string from the
     # wire is already normalized to a number by _ARG_TYPES; the float() here
@@ -1522,12 +1553,6 @@ async def web_search(
                 _notes = _pool_health_notes(results_list, _eb + _ee, _contrib_c)
                 if _notes:
                     _hint = (f"{_hint} | {_notes}" if _hint else _notes)
-                # _clamp_note is derived from THIS request (requested vs applied
-                # max_results), not stored in the cache row, so a cache hit used
-                # to drop it: the caller saw 50 results with nothing saying 50 was
-                # the ceiling rather than the count.
-                if _clamp_note:
-                    _hint = (f"{_hint} | {_clamp_note}" if _hint else _clamp_note)
                 return SearchResponseModel(
                     query=cache_query, results=results_list,
                     total_results=len(results_list), cached=True,
@@ -1541,7 +1566,13 @@ async def web_search(
                     related_queries=_rq,
                     duration_ms=(time() - t0) * 1000,
                     fetch_hint=_hint,
-                    summary=_search_summary(cache_query, results_list, _eu, _rm),
+                    # _clamp_note is derived from THIS request (requested vs applied
+                    # max_results), not stored in the cache row, so a cache hit used
+                    # to drop it: the caller saw 50 results with nothing saying 50
+                    # was the ceiling rather than the count. It rides `summary` for
+                    # the reason stated in _search_summary.
+                    summary=_search_summary(cache_query, results_list, _eu, _rm,
+                                            notes=_clamp_note),
                     next_action=_search_next_action(results_list, _eb, "", _eu,
                                                     engine_empty=_ee, engine_preempted=_ep,
                                                     rerank_mode=_rm),
@@ -1859,8 +1890,8 @@ async def web_search(
     _notes = _pool_health_notes(results_list, not_contributing, _contrib)
     if _notes:
         fetch_hint = _hint_with(fetch_hint, _notes)
-    if _clamp_note:
-        fetch_hint = _hint_with(fetch_hint, _clamp_note)
+    # _clamp_note deliberately does NOT join fetch_hint: see _search_summary. It
+    # rides `summary`, where web_read and web_crawl already say the same thing.
 
     # Cache successful results (+ engine metadata + related queries for cache hits)
     if cache_ttl > 0 and results_list:
@@ -1892,7 +1923,8 @@ async def web_search(
         related_queries=(sim_related if mode == "find_similar" else main_related),
         duration_ms=(time() - t0) * 1000, error=error,
         fetch_hint=fetch_hint,
-        summary=_search_summary(cache_query, results_list, engines_used, rerank_used),
+        summary=_search_summary(cache_query, results_list, engines_used, rerank_used,
+                                notes=_clamp_note),
         next_action=_search_next_action(results_list, engine_blocked, error, engines_used,
                                         engine_empty=engine_empty,
                                         engine_preempted=engine_preempted,

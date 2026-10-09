@@ -236,7 +236,11 @@ def parse_file_detailed(file_path: str, encoding: str = "",
         file_path = os.path.abspath(file_path)
 
     if not os.path.exists(file_path):
-        return "", f"File not found: {file_path}", {}
+        # 同一句话在这条路上还有第二个作者（server.doc_parse 那句），两处都要遮蔽：
+        # 走到这里说明文件在解析那一刻不在了，而 file_path 已经是绝对形式，里面
+        # 通常带着本机的根。（2026-10-09 审计 D11；见 paths.mask_machine_paths。）
+        from dhole_mcp import paths as _paths
+        return "", _paths.mask_machine_paths(f"File not found: {file_path}"), {}
 
     # Guard against OOM: reject files larger than 50 MB
     file_size = os.path.getsize(file_path)

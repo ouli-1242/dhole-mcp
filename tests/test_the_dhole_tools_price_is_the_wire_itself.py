@@ -179,12 +179,17 @@ def _ruler_module():
     return mod
 
 
-def test_the_default_connect_is_the_published_30_707():
-    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：30,707。
+def test_the_default_connect_is_the_published_30_701():
+    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：30,701。
 
     这一条同时是量尺的回归锁：`tool_payload_measure._wire_for` 曾按工具数累加路由行，
     把默认连接报成 30,857（web_discover / web_crawl 共用那句被算了两遍）。修成按文本
     去重后，脚本的读数、进程内预测与真机三者必须同值。
+
+    30,707 → 30,701（2026-10-09，审计 D1+D4）：`web_act.confirm` 的描述说清了
+    `confirm` 的两处门（净 +34），`cred_defaults.set` 的描述改掉了「host 在 auth
+    里面」那句错话并缩到真话（净 −40）。这一对是**往下**走的，所以 CONNECT_CEILING
+    也跟着降，而不是抬上限。同批的账在 test_wire_moves_land_in_the_manual.py。
     """
     ruler = _ruler_module()
     import ast
@@ -202,7 +207,7 @@ def test_the_default_connect_is_the_published_30_707():
         f"仓库量尺与 wire 的 tools/list 对不上：{ruler_compact} vs {wire['tools_compact']}")
     assert ruler_instr == len(wire["instructions"]), (
         f"仓库量尺多算了路由行：{ruler_instr} vs wire {len(wire['instructions'])}")
-    assert ruler_compact + ruler_instr == 30_707
+    assert ruler_compact + ruler_instr == 30_701
 
 
 def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():

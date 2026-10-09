@@ -319,6 +319,7 @@ from dhole_mcp.context import (
     _SESSION_ID,
     _SESSION_ID_RE,
     _arg_notes_scope,
+    _cache_ttl_note,
     _note_text,
     _stamp_robots_mode,
     call_deadline,
@@ -1039,6 +1040,102 @@ def _all_tiers_failed_tips(category: str, status: int) -> str:
         "- Try a different URL on the same domain (some paths have lower protection).\n"
         "- Try a proxy stored with cred_defaults."
     )
+
+
+# ─── D8 · 并发同一请求的合流 ────────────────────────────────────────
+#
+# 实测（2026-10-09 审计 D8，本机，冷缓存）：4 个并发的 `web_read(<同一个 URL>)`
+# 打出 **4 次源站请求**，4 份回执。缓存是**事后**才写进去的，而 4 个调用在写进去
+# 之前都已经各自过了"查缓存"那一步 —— 缓存对同时到达的调用一点用都没有。
+#
+# 修法不是共享回执对象（那要处理一堆按次的东西：robots 姿态、focus、参数钳制注记
+# 都长在调用自己的 ContextVar 上，借来的对象带的是别人的），而是**让缓存来传递
+# 答案**：同一请求只有一发真去取，其余等它落地，然后**用自己的参数重查一次缓存**。
+#
+# 这个形状有个很值钱的性质：**正确性不靠合流键**。跟随者拿到的每一份回执都是它
+# 自己那套参数经 `_cache_hit_response` 从缓存里还原的，命中与否由缓存键自己判定。
+# 所以合流键粗一点、甚至错一点，代价只是"多等了一会儿"，绝不会把别人的答案端给
+# 它。这也意味着不需要去证明"合流键覆盖了每一个塑形参数"—— 那是个证明不完的命题。
+#
+# 代价说清楚：**不可缓存的页面合不了流**。JS 壳、验证墙、错误状态都不写缓存
+# （`_finalize_result` 的 `_is_cacheable` 门），于是跟随者醒来、缓存仍空、各自去取
+# —— 也就是合并之前的行为。这不是漏，是"共享的媒介是缓存"这句话的直接推论：
+# 没有可共享的东西时就没有共享。
+
+
+class _InFlight:
+    """一次正在进行的取回。同一个 key 的并发调用都等这一个事件。"""
+
+    __slots__ = ("landed",)
+
+    def __init__(self) -> None:
+        self.landed = asyncio.Event()
+
+    def land(self) -> None:
+        """这一发落地了（成功、失败、被取消都算）。叫醒所有等的人。"""
+        self.landed.set()
+
+
+#: 按事件循环分家的登记处。**不能**只放一个模块级 dict：`asyncio.Event` 绑在创建
+#: 它的那个循环上，而本仓库的套件在一个进程里跑了几千次 `asyncio.run()`（每次一个新
+#: 循环）—— 留着上一轮的 Event，下一轮 await 它就会炸在"另一个循环"上。生产里一个
+#: 进程一个循环，所以这只是套件形状逼出来的正确性，不是优化。
+_MERGE_INFLIGHT: dict[str, _InFlight] = {}
+_MERGE_INFLIGHT_LOOP: Any = None
+
+
+def _merge_registry() -> dict[str, _InFlight]:
+    """当前事件循环的合流登记处，循环换了就换一本新的。
+
+    没有运行中的循环时（诊断、用例在同步上下文里问）就把手里这本交出去：没有"换了
+    一个循环"这回事可判。
+    """
+    global _MERGE_INFLIGHT_LOOP, _MERGE_INFLIGHT
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return _MERGE_INFLIGHT
+    if _MERGE_INFLIGHT_LOOP is not loop:
+        _MERGE_INFLIGHT = {}
+        _MERGE_INFLIGHT_LOOP = loop
+    return _MERGE_INFLIGHT
+
+
+def _merge_key(url: str, extraction_type: str, css_selector: Optional[str],
+               pages: Optional[str], ctx: str) -> str:
+    """合流键 = 缓存键。
+
+    刻意**不另发明一套**"同一个请求"的判据：缓存键已经是本仓库对这个问题的答案
+    （url / extraction_type / css_selector / pages / source / ctx，而 ctx 里装着
+    cookies / session / auth / headers / user-agent / proxy / PDF 口令 / 取回档 /
+    include_* 这一堆塑形位）。另写一份必然与它漂移，而漂移的方向是"把两个不同的
+    请求当成同一个"—— 那正是这套判据存在的理由。
+
+    `source` 固定 "live"：跟随者醒来后走的 `_cache_hit_response` 查的就是 live 槽
+    （它不传 source）。领头那一发若落到 archive.org 的快照上，跟随者等了个空、
+    自己去取 —— 多花一次等待，答案不受影响。
+    """
+    from dhole_mcp.cache import _cache_key
+    return _cache_key(url, extraction_type, css_selector, pages, "live", "fetch", ctx)
+
+
+async def _wait_for_the_sibling_fetch(flight: _InFlight, timeout_ms) -> float:
+    """等同一请求的另一发落地。返回**等了多少秒**（0 表示没等）。
+
+    上限就是这次调用自己的取回预算。合并是一次优化，它不许把一次调用推过那个本来
+    就限住它的预算：等到上限还没落地就自己去取 —— 那正是合并之前的行为。调用方
+    拿着这个秒数把后面的预算扣掉（见 `web_read`），所以整次调用仍在自己的预算里。
+
+    外层被取消（客户端断开）时不吞掉：等待被取消，登记处由领头的 `finally` 收尾。
+    """
+    budget_s = max(1.0, float(timeout_ms or DEFAULT_CALL_TIMEOUT_MS) / 1000.0)
+    started = now()
+    try:
+        await asyncio.wait_for(flight.landed.wait(), timeout=budget_s)
+    except (asyncio.TimeoutError, TimeoutError):
+        # 等到上限了。这不是失败，只是"这次没等到"。
+        pass
+    return now() - started
 
 
 def _stamp_focus_continuation(result: ResponseModel, focus_q: Optional[str], offset: int) -> ResponseModel:
@@ -3428,6 +3525,40 @@ def _resolve_local_path(file_path: str, cwd: str | None = None) -> tuple[str, li
     return "", candidates
 
 
+def _masked_file_uri(target: str) -> str:
+    """The receipt's ``file://`` identity for a resolved local path — masked.
+
+    ``_resolve_local_path`` mints candidates out of the server process cwd and the
+    user's home, and a receipt that echoes them back tells the caller where this
+    machine keeps its things: a path it never mentioned. Measured before the fix
+    (2026-10-09, audit D11): a successful ``doc_parse(file_path='d11_probe.txt')``
+    answered ``url = file:///D:/tools/dhole-mcp/.scratch/d11_probe.txt``.
+
+    Masking costs the caller nothing it was actually using. It still learns *which*
+    file was read — the symbolic root plus the rest of the path says exactly that,
+    and the suffix (what ``_PARSE_CONTENT_TYPES`` keys on) is untouched — and its
+    own ``file_path`` remains a valid input for the next call, which the masked
+    form was never meant to be.
+
+    Only the receipt is masked. Every filesystem call still gets the real path:
+    ``realpath``, ``Path(target).suffix`` and ``Path(target).stat()`` below are all
+    fed the unmasked form, so the bytes that come back are the bytes that were
+    asked for.
+
+    When nothing matched, ``Path.as_uri()`` is returned untouched — that keeps the
+    percent-encoding and the UNC spelling of a path the caller named itself exactly
+    what they always were. The masked branch is concatenated raw, the way the
+    ``File not found`` branch above already spells ``file://{file_path}``: a
+    percent-encoded ``%3Cserver%20cwd%3E`` would be correct and unreadable, and
+    this field's job here is to be read.
+    """
+    from dhole_mcp import paths as _paths
+    masked = _paths.mask_machine_paths(str(target))
+    if masked == str(target):
+        return pathlib.Path(target).as_uri()
+    return "file:///" + masked.replace("\\", "/")
+
+
 def _blocked_path_prefix(real_path: str) -> str:
     """The restricted prefix ``real_path`` falls under, or "" when it is fine.
 
@@ -3474,6 +3605,102 @@ def _blocked_path_prefix(real_path: str) -> str:
         if norm.startswith(blocked):
             return blocked
     return ""
+
+
+# ─── Transport: answer a frame the SDK could not parse ─────────────
+
+class _ParseErrorAnsweringReadStream:
+    """A ``ReadStream`` that answers the frames the stdio reader could not parse (D7).
+
+    The SDK's ``stdin_reader`` validates every line with
+    ``types.jsonrpc_message_adapter.validate_json``. When that raises -- an
+    argument nested past the parser's recursion limit, a truncated line,
+    anything that is not JSON at all -- the reader forwards the exception as a
+    *stream item* (the read stream is typed ``ReadStream[SessionMessage |
+    Exception]``) and moves on to the next line, writing nothing back. JSON-RPC
+    2.0 requires ``-32700 Parse error`` for exactly that case, so a caller that
+    sent one bad line waited forever for a reply that was never coming, with no
+    stderr and no log line to explain it.
+
+    The seam is here, not in the transport: ``ReadStream`` is a ``Protocol``,
+    so wrapping the read side satisfies it structurally, and the answer goes
+    out through the SDK's **own** write stream. That keeps a single writer on
+    stdout -- no interleaving with ``stdout_writer``, so no torn frames -- and
+    reuses the very construction the SDK's HTTP transport already uses for its
+    own parse errors.
+
+    This is deliberately *not* a substitute for dhole's own guards: an
+    argument that parses but is malformed still reaches
+    ``_validate_schema_selectors`` and its ``MAX_SCHEMA_DEPTH`` limit. The two
+    sit at different depths of the same funnel, and only the outer one can
+    speak when the line never became a message.
+
+    ``id`` is ``null`` because the frame failed to parse, so its id is not
+    knowable -- JSON-RPC 2.0 says a parse error carries a null id. ``data``
+    names the cause, because "Parse error" alone tells the caller nothing about
+    which of their inputs was wrong.
+    """
+
+    __slots__ = ("_inner", "_write")
+
+    def __init__(self, inner, write_stream):
+        self._inner = inner
+        self._write = write_stream
+
+    @property
+    def last_context(self):
+        # Forwarded so the runner's per-message sender context survives the wrap.
+        return getattr(self._inner, "last_context", None)
+
+    @staticmethod
+    def _why(exc):
+        text = str(exc)
+        if "recursion limit" in text:
+            return ("the JSON nests deeper than the parser can read - flatten it "
+                    "(dhole's own schema guard is 8 levels)")
+        if "Invalid JSON" in text:
+            return "the line is not valid JSON"
+        return "the line could not be parsed: " + text[:120]
+
+    async def _answer(self, exc):
+        from mcp.shared.message import SessionMessage
+        from mcp.types import PARSE_ERROR, ErrorData, JSONRPCError
+        await self._write.send(SessionMessage(JSONRPCError(
+            jsonrpc="2.0",
+            id=None,
+            error=ErrorData(code=PARSE_ERROR, message="Parse error",
+                            data=self._why(exc)),
+        )))
+
+    async def receive(self):
+        # A loop, not recursion: a client can send any number of bad frames in a
+        # row, and each one is owed its own answer.
+        while True:
+            item = await self._inner.receive()
+            if isinstance(item, Exception):
+                await self._answer(item)
+                continue
+            return item
+
+    async def __anext__(self):
+        while True:
+            item = await self._inner.__anext__()
+            if isinstance(item, Exception):
+                await self._answer(item)
+                continue
+            return item
+
+    def __aiter__(self):
+        return self
+
+    async def aclose(self):
+        return await self._inner.aclose()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        return None
 
 
 # ─── Main server class ─────────────────────────────────────────────
@@ -4973,23 +5200,37 @@ class MasterFetchServer:
         )
 
     async def _cache_hit_response(self, *, url, extraction_type, css_selector,
-                                  cache_ttl, pages, mc, offset, check_login):
+                                  cache_ttl, pages, mc, offset, check_login,
+                                  waited_ms: float = 0.0):
         """这一发若能在缓存里答上就取回来，答不上返回 None —— 一个包都不发。
 
         从 `web_read` 的第 2 步整块搬来（字段还原、robots 姿态对账、`browser` 键
         摘除、chunking 与 login_check 缺口注记，一条不改）。搬的理由是评审 R3刀1：
         探测过期时 hostname 复验会连**已有**的正文一起拒掉，而命中根本不发包 —— 没
         有 SSRF 面，拒它只是让一次陈判定吞掉一次好答案。
+
+        ``waited_ms`` 是 D8 合流的产物：跟随者先等同一请求的另一发落地，再回到这里
+        重查缓存。它确实等了墙钟时间，所以 `duration_ms` 报的是**这次调用等了多久**，
+        不是"0 = 没发包"。报 0 的话，一份等了 2 秒才拿到的回执会说这次调用没花时间
+        —— 那不叫简洁，叫账不对。普通命中不传它，仍是 0。
         """
         if cache_ttl <= 0:
             return None
         cached = await get_cached(url, extraction_type, css_selector, ttl=cache_ttl, pages=pages if isinstance(pages, str) else None, ctx=_CACHE_CTX.get())
         if cached is None:
             return None
+        if waited_ms > 0:
+            # 冷缓存上的 `cached=True` 读起来像个 bug（"我刚清过缓存"）。它是 D8 合流
+            # 的产物，所以把"缓存里为什么会有"说出来 —— 顺便说清这一发一个包都没发，
+            # 以及 duration_ms 那个非零值是什么。
+            _note_text(
+                "a concurrent call for this same request was already fetching this "
+                "URL, so this call waited for it and read the answer from the cache - "
+                "no request was sent for this call (the wait is in duration_ms)")
         env = cached.get("envelope") or {}
         hit = ResponseModel(
             url=cached["url"], status=cached["status"], content=cached["content"],
-            cached=True, fetcher_used="cache", duration_ms=0,
+            cached=True, fetcher_used="cache", duration_ms=waited_ms,
             extracted_type=extraction_type,
             content_type=cached.get("content_type", ""),
             total_size_bytes=cached.get("total_size_bytes", 0),
@@ -5206,6 +5447,26 @@ class MasterFetchServer:
         # 走到第二层才被发现，调用方付了 1 + 8 次请求的钱，收到的却是 8 个空对象。
         _nested_n = 0
         _nested_props: dict = {}
+        # 成对参数的反向组合（2026-10-09 审计 D6）。正向早就具名拒绝了
+        # （nested_selector 缺 nested_fields），反向却是**静默忽略**：
+        # `{"nested_fields": [...]}` 不带 nested_selector 时 summary 与普通读取
+        # 一模一样，调用方以为两层抽取生效了，实际拿到的是整页。
+        # 这条与本仓库的既定纪律直接冲突 —— 「A name the tool does not accept
+        # raises rather than being dropped」—— 而 `nested_max` 更糟：它看起来是
+        # 个"收窄"的旋钮，点了没反应。三颗参数缺了那一颗都读不通，就一起说。
+        if nested_selector is None and (
+                nested_fields is not None or nested_max is not None):
+            _asked = [n for n, v in (("nested_fields", nested_fields),
+                                     ("nested_max", nested_max)) if v is not None]
+            return _invalid_request_result(
+                url or "",
+                f"{' and '.join(_asked)}= needs nested_selector=: nothing on this "
+                "page says which elements to follow, so there is no second layer "
+                "to read and no link count to cap",
+                next_action=("Add nested_selector='<css>' naming the elements to "
+                             "follow on THIS page, or drop the nested_* argument - "
+                             "it was ignored rather than applied. Nothing was "
+                             "fetched."))
         if nested_selector is not None:
             from dhole_mcp import nested as _nested_mod
             _nested_n = _nested_mod.nested_cap(nested_max)
@@ -5278,6 +5539,28 @@ class MasterFetchServer:
         # 行为与原来完全一致。
         if cache_ttl is None:
             cache_ttl = self._cache_ttl
+        # 负的 cache_ttl 曾经被**静默**当成 0（读也不读、写也不写），而同一个工具
+        # 对 max_content_chars / max_links 的越界都会在 summary 里点名 —— 三种策略
+        # 里最糟的那种（静默强转）恰好落在唯一一颗与"我到底有没有拿到新内容"有关的
+        # 参数上。钳到 0 并把话说出口：0 的真实语义是"这一次不读缓存、也不写缓存"，
+        # 正是"为什么我 cache_ttl=0 之后按 next_offset 续读又抓了一次"的答案。
+        _ttl_note = _cache_ttl_note(cache_ttl)
+        if _ttl_note:
+            _note_text(_ttl_note)
+            cache_ttl = 0
+        # 成对参数的反向组合（2026-10-09 审计 D6）。schema 里 `focus_mode` 自己
+        # 明写着「Requires focus.」，而实测 `{"focus_mode": "best"}` 不带 `focus`
+        # 时被**静默忽略**：summary 与普通读取一字不差，调用方以为拿到的是最高分的
+        # 那一块，实际是整页。坏拼法（"Best"/"top"）不在这里管 —— `_coerce_enum_arg`
+        # 已经在门口按 `_FOCUS_MODES` 拒了，这里只补"配对"那半。
+        if focus_mode and not (isinstance(focus, str) and focus.strip()):
+            return _invalid_request_result(
+                url or "",
+                f"focus_mode='{focus_mode}' needs focus=: it decides the SHAPE of a "
+                "focus answer, and there is no focus query to shape",
+                next_action=("Add focus='<what you are looking for>', or drop "
+                             "focus_mode - it was ignored rather than applied. "
+                             "Nothing was fetched."))
         # `timeout` uses the same sentinel: an actions call always drives the
         # stealthy tier, so it gets a budget that covers a cold browser start.
         # §3-19: the ladder is the only public spelling of these six. Resolved
@@ -5806,69 +6089,112 @@ class MasterFetchServer:
                     _FOCUS.reset(_focus_token)
             return html_result
 
-        # 2. Check cache
-        hit = await self._cache_hit_response(url=url, extraction_type=extraction_type,
-                                             css_selector=css_selector,
-                                             cache_ttl=cache_ttl, pages=pages,
-                                             mc=mc, offset=offset,
-                                             check_login=check_login)
-        if hit is not None:
-            return hit
+        # 2. 合流 + 查缓存（D8）
+        #
+        # 顺序是有讲究的：**先占位，再查缓存**。反过来的话，一个调用在领头那一发
+        # 落地并注销之后才走到这里，会看到空登记处、自己当领头再取一遍 —— 而缓存里
+        # 其实已经有答案了，只是它"查缓存"那一步已经错过了。先占位就把这个窗口关掉：
+        # 晚到的调用要么看见登记处里的那一发并等它，要么自己占位后**在自己的占位期间**
+        # 查缓存（那时领头写进去的条目已经在了，它直接命中，一个包都不发）。
+        #
+        # cache_ttl<=0 时不登记：不读也不写缓存的调用没有可共享的媒介，合流对它们
+        # 只剩"白等一场"。
+        _flight: Optional[_InFlight] = None
+        _flight_key: Optional[str] = None
+        _waited_s = 0.0
+        if cache_ttl > 0:
+            _flight_key = _merge_key(
+                url, extraction_type, css_selector,
+                pages if isinstance(pages, str) else None, _CACHE_CTX.get())
+            _registry = _merge_registry()
+            _sibling = _registry.get(_flight_key)
+            if _sibling is not None:
+                # 跟随者。等它落地，然后**用自己的这套参数**重查缓存 ——
+                # 回执的正确性全在这一次重查里，不在合流键里（见 `_merge_key`）。
+                _waited_s = await _wait_for_the_sibling_fetch(_sibling, timeout)
+                _flight_key = None
+            else:
+                _flight = _InFlight()
+                _registry[_flight_key] = _flight
 
-        # 3. actions: page interactions (click/fill/press/wait/scroll) require
-        # the stealthy browser tier. Force it, bypass cache (post-action content
-        # is unique to the action sequence), and pass the page_action built and
-        # validated before the lane selection above.
-        if actions:
-            result = await self._within_call_budget(
-                self._force_fetch(
-                    url, "stealthy", extraction_type=extraction_type,
-                    css_selector=css_selector,
-                    cache_ttl=cache_ttl,
-                    offset=offset, headless=headless, real_chrome=real_chrome,
-                    proxy=proxy, timeout=timeout,
-                    solve_cloudflare=solve_cloudflare,
-                    block_webrtc=block_webrtc, hide_canvas=hide_canvas,
-                    extra_headers=extra_headers, useragent=useragent,
-                    cookies=cookies, max_chars=mc,
-                    page_action=page_action,
-                    check_login=check_login,
-                    disable_resources=not (actions_need_resources or load_everything),
-                ), url, timeout, "actions (stealthy) tier")
-            _report_action_outcomes(result, page_action)
-            return result
-
-        # 4. Force specific fetcher (explicit pin wins)
-        if force_fetcher:
-            return await self._within_call_budget(
-                self._force_fetch(
-                    url, force_fetcher, extraction_type=extraction_type,
-                    css_selector=css_selector,
-                    cache_ttl=cache_ttl,
-                    offset=offset, headless=headless, real_chrome=real_chrome,
-                    proxy=proxy, timeout=timeout,
-                    solve_cloudflare=solve_cloudflare,
-                    block_webrtc=block_webrtc, hide_canvas=hide_canvas,
-                    extra_headers=extra_headers, useragent=useragent,
-                    cookies=cookies, max_chars=mc,
-                    check_login=check_login,
-                    disable_resources=not load_everything,
-                ), url, timeout, f"forced {force_fetcher} tier")
-
-        # 5. Auto-escalation (HTTP -> stealthy) for everything else
-        return _attach_login_probe_gap(await self._within_call_budget(
-            self._auto_escalate(
-                url, extraction_type,
+        try:
+            hit = await self._cache_hit_response(
+                url=url, extraction_type=extraction_type,
                 css_selector=css_selector,
-                cache_ttl=0 if conditional else cache_ttl,
-                offset=offset,
-                headless=headless, real_chrome=real_chrome,
-                proxy=proxy, timeout=timeout,
-                solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
-                hide_canvas=hide_canvas, extra_headers=extra_headers,
-                useragent=useragent, cookies=cookies, max_chars=mc,
-                conditional=conditional, load_everything=load_everything,
-            ), url, timeout, "fetch tiers"), check_login)
+                cache_ttl=cache_ttl, pages=pages,
+                mc=mc, offset=offset,
+                check_login=check_login,
+                waited_ms=_waited_s * 1000.0)
+            if hit is not None:
+                return hit
+
+            # 等过就把预算扣掉：整次调用仍限在它自己的预算里，而不是"等一段 +
+            # 再跑一整份"。等的时间上限就是这份预算（见 _wait_for_the_sibling_fetch），
+            # 所以扣完之后至少还剩 1 秒给那一发真取回。
+            if _waited_s > 0:
+                timeout = max(1000, int(timeout - _waited_s * 1000))
+
+            # 3. actions: page interactions (click/fill/press/wait/scroll) require
+            # the stealthy browser tier. Force it, bypass cache (post-action content
+            # is unique to the action sequence), and pass the page_action built and
+            # validated before the lane selection above.
+            if actions:
+                result = await self._within_call_budget(
+                    self._force_fetch(
+                        url, "stealthy", extraction_type=extraction_type,
+                        css_selector=css_selector,
+                        cache_ttl=cache_ttl,
+                        offset=offset, headless=headless, real_chrome=real_chrome,
+                        proxy=proxy, timeout=timeout,
+                        solve_cloudflare=solve_cloudflare,
+                        block_webrtc=block_webrtc, hide_canvas=hide_canvas,
+                        extra_headers=extra_headers, useragent=useragent,
+                        cookies=cookies, max_chars=mc,
+                        page_action=page_action,
+                        check_login=check_login,
+                        disable_resources=not (actions_need_resources or load_everything),
+                    ), url, timeout, "actions (stealthy) tier")
+                _report_action_outcomes(result, page_action)
+                return result
+
+            # 4. Force specific fetcher (explicit pin wins)
+            if force_fetcher:
+                return await self._within_call_budget(
+                    self._force_fetch(
+                        url, force_fetcher, extraction_type=extraction_type,
+                        css_selector=css_selector,
+                        cache_ttl=cache_ttl,
+                        offset=offset, headless=headless, real_chrome=real_chrome,
+                        proxy=proxy, timeout=timeout,
+                        solve_cloudflare=solve_cloudflare,
+                        block_webrtc=block_webrtc, hide_canvas=hide_canvas,
+                        extra_headers=extra_headers, useragent=useragent,
+                        cookies=cookies, max_chars=mc,
+                        check_login=check_login,
+                        disable_resources=not load_everything,
+                    ), url, timeout, f"forced {force_fetcher} tier")
+
+            # 5. Auto-escalation (HTTP -> stealthy) for everything else
+            return _attach_login_probe_gap(await self._within_call_budget(
+                self._auto_escalate(
+                    url, extraction_type,
+                    css_selector=css_selector,
+                    cache_ttl=0 if conditional else cache_ttl,
+                    offset=offset,
+                    headless=headless, real_chrome=real_chrome,
+                    proxy=proxy, timeout=timeout,
+                    solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
+                    hide_canvas=hide_canvas, extra_headers=extra_headers,
+                    useragent=useragent, cookies=cookies, max_chars=mc,
+                    conditional=conditional, load_everything=load_everything,
+                ), url, timeout, "fetch tiers"), check_login)
+        finally:
+            # 成功、失败、被取消都要放人：漏掉任何一条，同一个 key 上等着的调用
+            # 就会一直等到自己那份预算用完（最坏情况是整批超时）。被取消时
+            # `asyncio.Event` 照样 set 得动 —— 它不属于任何一次等待。
+            if _flight is not None:
+                _flight.land()
+                _merge_registry().pop(_flight_key, None)
 
     async def _within_call_budget(self, coro, url: str, timeout_ms, stage: str):
         """Hard ceiling: finish a fetch tier inside the caller's own budget.
@@ -7328,7 +7654,15 @@ class MasterFetchServer:
 
     # ─── Default identity (cred_defaults) ───────────────────────────
 
-    _CRED_SET_DESC = """Keys to store: proxy, profile, cdp, allow_private, anti_detect, and auth / cookies - the last two only with a "host" (one name or a list) in the same object saying which site they belong to."""
+    # 2026-10-09 审计 D4：这句话曾经把 `host` 说成 auth / cookies 内部的一颗
+    # （"the last two only with a \"host\" ... in the same object"），而实现里
+    # `set={"host": ..., "auth": {...}}` 取的是**兄弟键**（cred_defaults 开头
+    # `items.pop("host")`），五种「host 写在 auth 里」的形状全被拒。改说 BESIDE，
+    # 并补上实测里最缺的那半句：host 给的是一个名字或一份名单。
+    # auth 的三形态（basic / bearer / header）不在这里：它已经在
+    # references/tools.md 里逐字写着，按需取段 —— 常驻层在替说明书干活是本项目
+    # 明令要避免的形状（见 tests/test_wire_shape.py 的 docstring）。
+    _CRED_SET_DESC = """Keys: proxy, profile, cdp, allow_private, anti_detect, auth, cookies. auth / cookies need a "host" BESIDE them (one name or a list) naming their site."""
 
     _CRED_UNSET_DESC = """Key names to forget, every host scope of them together. An unknown name is an error, never a silent no-op."""
 
@@ -7535,6 +7869,7 @@ class MasterFetchServer:
         """
         import os as _os
         from pathlib import Path
+        from dhole_mcp import paths as _paths
         from dhole_mcp.parse import parse_file_cached
 
         t0 = now()
@@ -7547,7 +7882,7 @@ class MasterFetchServer:
             blocked = _blocked_path_prefix(real)
             if blocked:
                 return _with_agent_hints(ResponseModel(
-                    url=Path(target).as_uri(), status=0, content=[],
+                    url=_masked_file_uri(target), status=0, content=[],
                     fetcher_used="parse",
                     error=f"Access denied: path is in a restricted system directory ({blocked})",
                 ))
@@ -7558,17 +7893,24 @@ class MasterFetchServer:
                 _drive, rest = _os.path.splitdrive(real)
                 if ":" in rest:
                     return _with_agent_hints(ResponseModel(
-                        url=Path(target).as_uri(), status=0, content=[],
+                        url=_masked_file_uri(target), status=0, content=[],
                         fetcher_used="parse",
                         error="Access denied: path names an NTFS alternate data stream",
                     ))
             target = real
 
         if not target:
+            # 这句 `File not found:` 逐字列出了 candidates，而 candidates 里至少
+            # 有一条是 `_relative_path_roots()` 自己造的机器根 —— 进程 cwd（在
+            # MCP 宿主下就是宿主自己的安装目录）和用户主目录 —— 调用方一个都没
+            # 提过。诊断力不必用泄漏换：`<server cwd>\report.csv` 同样说清了
+            # "你按什么顺序试了哪几处"，而调用方真正需要的正是那个顺序。
+            # （2026-10-09 审计 D11；遮蔽器见 paths.mask_machine_paths。）
+            _tried = _paths.mask_machine_paths(", ".join(candidates))
             return _with_agent_hints(ResponseModel(
                 url=f"file://{file_path}", status=0, content=[],
                 fetcher_used="parse",
-                error=("File not found: " + ", ".join(candidates)
+                error=("File not found: " + _tried
                        + ". Pass an absolute path, or pass cwd=<working directory> "
                          "so relative paths resolve against it."),
             ))
@@ -7612,7 +7954,11 @@ class MasterFetchServer:
         # content_ok to false. A hard failure still returns no content.
         hard_failure = bool(error) and not content
         result = ResponseModel(
-            url=Path(target).as_uri(),
+            # Masked here too, not just on the refusals: this is the branch that
+            # fires on every SUCCESS, and before the fix it was the more frequent
+            # of the two leaks. The real `target` still feeds every field below
+            # that has to touch the filesystem.
+            url=_masked_file_uri(target),
             status=0 if hard_failure else 200,
             content=[] if hard_failure else [content],
             fetcher_used="parse",
@@ -8322,7 +8668,7 @@ class MasterFetchServer:
                     "anti_detect": {"type": "string", "description": ANTI_DETECT_DESC_SHORT},
                     "session_id": {"type": "string", "description": "Act inside this named session, so the login it holds is the state the page starts from. Names only, never values."},
                     "cdp_url": {"type": "string", "description": "Attach a running Chrome (its own logged-in profile) and act there; the first attach to a host needs confirm=true."},
-                    "confirm": {"type": "boolean", "description": "Two things need it: a submit action, and the first CDP attach to a host. Neither acts until this says true - and only put it there on the user's explicit yes."},
+                    "confirm": {"type": "boolean", "description": "A submit reads it INSIDE the action: {\"submit\": {..., \"confirm\": true}} - a top-level confirm does NOT release it. Top-level it gates the first CDP attach. Only on the user's explicit yes."},
                     "check_login": {"type": "boolean", "description": "Model-free login probe on the settled browser page; returns login_check (DOM signals + cookie NAMES, never values)."},
                     "headed": {"type": "boolean", "description": "Run this chain in a VISIBLE window so the user can watch and step in (log in by hand, one CAPTCHA). Default hidden. A hidden browser already up on that profile is neither taken over nor closed - refused (browser_busy). Consequences: sys_guide(topic='config', section='Variables by scenario')."},
                 },
@@ -8631,7 +8977,12 @@ class MasterFetchServer:
                 # 第二条任务：两个等待者守着同一把锁，做的是同一件事。
                 try:
                     async with stdio_server() as (read, write):
-                        await server.run(read, write, server.create_initialization_options())
+                        # D7: the SDK drops a line it cannot parse without
+                        # answering it. The wrapper turns that silence into the
+                        # -32700 JSON-RPC 2.0 asks for, writing through the SDK's
+                        # own write stream so stdout still has one writer.
+                        await server.run(_ParseErrorAnsweringReadStream(read, write),
+                                         write, server.create_initialization_options())
                 finally:
                     # Bulletproof teardown: cancel prewarm tasks + close sessions,
                     # swallowing EVERYTHING (including 'Event loop is closed' and

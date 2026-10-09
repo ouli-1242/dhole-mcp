@@ -173,3 +173,56 @@ class TestCacheEviction:
         # Check newest entry is still there
         new = await get_cached("https://example.com/24", "markdown", cache_dir=cache_dir)
         assert new is not None
+
+
+# ─── 初始化锁不许跨事件循环活着 ────────────────────────────────────
+
+class TestTheInitLockBelongsToOneLoop:
+    """`asyncio.Lock` 绑在**创建它的那个循环**上，而 `acquire()` 只在**要排队**时
+    才去问是哪个循环 —— 不争用的时候它一路畅通。于是一个模块级锁看起来完全正确，
+    直到同一个进程里的**第二个**循环去争它。
+
+    实测（2026-10-09，做 D8 并发合流时踩到的，与本类无关但同属一个形状）：
+
+        两轮 asyncio.run()，每轮 6 个并发首次读（每轮换一个全新缓存目录）
+          第 1 轮：ok
+          第 2 轮：RuntimeError: <asyncio.Lock …> is bound to a different event loop
+
+    生产里一个进程一个循环，所以它不砸产品；它砸嵌入方，以及"前一个用例已经把锁
+    建出来了、这个用例又跑了并发"的套件 —— 那不是崩溃，那是随机红。
+    """
+
+    def test_a_new_loop_gets_a_new_lock(self):
+        import asyncio as _asyncio
+        from dhole_mcp import cache as cache_mod
+
+        seen = []
+
+        async def grab():
+            seen.append(cache_mod._get_db_lock())
+
+        _asyncio.run(grab())
+        _asyncio.run(grab())
+        assert seen[0] is not seen[1], "初始化锁跨事件循环活了下来"
+
+    def test_a_second_loop_can_still_contend_for_it(self, tmp_path):
+        """判据不是"锁换了个对象"，是"第二轮的并发读能跑完"。"""
+        import asyncio as _asyncio
+        from dhole_mcp import cache as cache_mod
+
+        async def one(d, i):
+            return await cache_mod.get_cached(f"https://x/{i}", "markdown",
+                                              ttl=3600, cache_dir=d)
+
+        def burst(n):
+            d = tmp_path / f"round{n}"
+            assert not d.exists(), "每一轮都要一个全新的目录，否则走的是已初始化快路"
+
+            async def main():
+                return await _asyncio.gather(*[one(d, i) for i in range(6)])
+
+            return _asyncio.run(main())
+
+        burst(1)
+        burst(2)      # 修复前炸在这一轮：bound to a different event loop
+        burst(3)

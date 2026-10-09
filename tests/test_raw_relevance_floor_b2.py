@@ -204,8 +204,8 @@ class TestTheSearchLayerReportsIt:
         out = await S.web_search(None, "q", max_results=5, cache_ttl=0,
                                    engines=["bing"], min_raw_relevance=5)
 
-        assert "outside 0-1" in out.fetch_hint, out.fetch_hint
-        assert "1.0" in out.fetch_hint, out.fetch_hint
+        assert "outside 0-1" in out.summary, out.summary
+        assert "1.0" in out.summary, out.summary
 
 @pytest.mark.live
 @pytest.mark.asyncio

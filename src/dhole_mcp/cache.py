@@ -35,14 +35,37 @@ _KEY_VERSION = 2
 # Shared DB path cache — avoids re-running PRAGMA on every operation
 _db_initialized: dict[Path, bool] = {}
 _db_init_lock: asyncio.Lock | None = None
+_db_init_lock_loop: asyncio.AbstractEventLoop | None = None
 
 
 def _get_db_lock() -> asyncio.Lock:
-    """Lazy-init the asyncio Lock to avoid issues when module is imported
-    outside a running event loop (e.g. during testing)."""
-    global _db_init_lock
-    if _db_init_lock is None:
+    """Lazy-init the asyncio Lock — **one per event loop**.
+
+    Lazy so importing this module outside a running loop is fine (during testing).
+    Per-loop because an `asyncio.Lock` is bound to the loop that created it, and
+    `acquire()` only asks which loop that was when it has to **queue**: the
+    uncontended fast path never calls `_get_loop()`. So a single module-level lock
+    looks correct right up until the second loop in one process contends it.
+
+    Measured (2026-10-09, while building the D8 single-flight and tripping over
+    this): two rounds of `asyncio.run()`, six concurrent first-time reads each —
+    round 1 `ok`, round 2 `RuntimeError: <asyncio.Lock …> is bound to a different
+    event loop`. The process has one loop in production, so this never fires
+    there; it lands on embedders and on any test that runs a concurrent cache
+    burst after an earlier test created the lock, which is a flake generator
+    rather than a crash anybody can read.
+
+    Rebuilding costs nothing: this lock guards one `mkdir` plus a handful of DDL
+    statements, once per database file.
+    """
+    global _db_init_lock, _db_init_lock_loop
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:                      # 不在循环里：交给调用方自己决定
+        loop = None
+    if _db_init_lock is None or _db_init_lock_loop is not loop:
         _db_init_lock = asyncio.Lock()
+        _db_init_lock_loop = loop
     return _db_init_lock
 
 

@@ -328,6 +328,34 @@ def _clamp_note(name: str, requested: Any, applied: int, *, lo: int, hi: int) ->
     return f"{name} clamped {asked}->{applied} (supported range {lo}-{hi})"
 
 
+def _cache_ttl_note(requested: Any) -> str:
+    """The ONE wording for "this ``cache_ttl`` was not a duration" ("" if it was).
+
+    Three tools take ``cache_ttl`` (``web_read`` / ``web_crawl`` / ``web_search``)
+    and all three silently treated a negative value as 0. The wire documents
+    "0 = force fresh" and says nothing about negatives, so a caller who wrote -1
+    had no way to learn it had been rewritten — while the same suite clamps
+    ``max_pages`` / ``max_depth`` and *says so* in the summary. 2026-10-09 审计
+    D5/D10 量到的就是这颗唯一的静默钳位。
+
+    Owned here for the same reason :func:`_clamp_note` is: two copies of one
+    sentence is how two tools start describing one event differently. The
+    sentence also carries the half of ``0`` that the wire never states — a ``0``
+    this call writes nothing back to the cache either, which is what makes a
+    later default-TTL call fetch again.
+    """
+    if requested is None:
+        return ""
+    try:
+        asked = int(str(requested).strip())
+    except (TypeError, ValueError):
+        return ""
+    if asked >= 0:
+        return ""
+    return (f"cache_ttl={asked} is not a duration; using 0 - this call reads no "
+            f"cache and writes none")
+
+
 def _note_text(note: str) -> None:
     """Append one already-worded argument note, when a call is listening.
 

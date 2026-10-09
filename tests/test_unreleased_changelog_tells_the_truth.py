@@ -49,6 +49,23 @@ _REMOVED_NAMES = ("web_recipe", "web_watch", "cred_vault", "cred_login")
 #: 一行里出现这些词，就算它是在"宣布移除"而不是"教人用"
 _REMOVAL_MARKERS = ("移除", "未发布即", "一并删", "下线") + _RETIRED_MARKERS
 
+#: 一行里的工具数不是今天的数时，同一行必须说明它已被取代 —— 手法同 `_RETIRED_MARKERS`：
+#: 数字出现不是问题，**冒充现行**才是。
+_SUPERSEDED_MARKERS = ("阶段7", "后为", "当时", "时代", "截面", "已被取代", "不再冒充")
+
+#: 把工具数说成"现在时"的说法。报告 D12 的来路就是这几句 —— 数字本身没错，错在
+#: 一个已经过去的形状被写成了今天的形状。只在**这些说法**所在的行上较真，是因为
+#: 「71 颗参数」「30 颗设计过的拒绝」里的数不是工具数，而「v16.2 是 9 颗工具」
+#: 那样的行本来就带着年份，不冒充谁。
+_CURRENT_CLAIM_MARKERS = ("定稿", "当前", "同步到", "默认注册面")
+
+
+def _today_tool_count() -> int:
+    """今天的工具数，从 `_TOOL_DEFS` 现读 —— 手抄的那个数每拆一次工具就要改一次。"""
+    from dhole_mcp.server import MasterFetchServer
+
+    return len(MasterFetchServer._TOOL_DEFS)
+
 
 def _text() -> str:
     return CHANGELOG.read_text(encoding="utf-8")
@@ -148,6 +165,50 @@ def test_the_options_bag_is_not_taught_as_current_in_this_version():
            if re.search(r"\boptions\.[a-z_]+|`options`", ln)
            and not any(m in ln for m in _RETIRED_MARKERS + ("拆平", "袋"))]
     assert not bad, "还有行把参数写成袋里的键（今天这么写会被拒）：\n" + "\n".join(bad)
+
+
+def test_every_tool_count_in_this_version_is_todays_or_says_it_was_superseded():
+    """本版小节里的「N 颗」要么是今天的数，要么同一行说明它已被取代（报告 D12）。
+
+    报告 D12 的来路：17.0 段落同时出现 11 / 13 / 17 三个工具数。13 不是抄错 ——
+    它是四颗状态工具移除后的**真实中间态**，阶段7 又移除 `web_screenshot` 与
+    `web_resolve` 才到 11（见「安全」）。错的是更早那几条 bullet 把 13 与 17 写成
+    了**现在时**（"本版定稿 13 颗"、"当前 17 颗"），读者落到那一条会以为今天还是
+    那个形状。判据与上面那张旋钮表同一个手法：数字出现不是问题，**冒充现行**才是。
+    """
+    today = _today_tool_count()
+    bad = []
+    for line in _lines(_current_version()):
+        if not any(m in line for m in _CURRENT_CLAIM_MARKERS):
+            continue
+        for n in re.findall(r"(\d+)\s*颗", line):
+            if int(n) == today:
+                continue
+            if any(m in line for m in _SUPERSEDED_MARKERS):
+                continue
+            bad.append(f"{n} 颗 ← {line[:140]}")
+    assert not bad, (
+        f"本版小节里把工具数写成了现在时，而那个数不是今天的（{today} 颗），"
+        "同一行也没说它已被取代：\n"
+        + "\n".join(bad)
+        + "\n要么改成今天的数，要么把『阶段7 后为 N 颗』写明。")
+
+
+def test_the_guard_notices_a_superseded_count():
+    """反证：把那一行的取代标记抹掉，同一个数就该被判为"冒充现行"（同下一条的手法）。"""
+    today = _today_tool_count()
+    line = next(ln for ln in _lines(_current_version())
+                if "阶段7" in ln and any(m in ln for m in _CURRENT_CLAIM_MARKERS)
+                and re.search(r"(\d+)\s*颗", ln))
+    stale = [n for n in re.findall(r"(\d+)\s*颗", line) if int(n) != today]
+    assert stale, "这一行本来就带着一个不是今天的数"
+    naked = line
+    for m in _SUPERSEDED_MARKERS:
+        naked = naked.replace(m, "")
+    assert any(m in naked for m in _CURRENT_CLAIM_MARKERS), "现在时说法仍应留着"
+    assert not any(m in naked for m in _SUPERSEDED_MARKERS)
+    assert [n for n in re.findall(r"(\d+)\s*颗", naked) if int(n) != today] == stale, \
+        "抹掉取代标记后仍应留下那些冒充现行的数，否则这条反证没有演到东西"
 
 
 def test_the_guard_notices_a_forgotten_knob():

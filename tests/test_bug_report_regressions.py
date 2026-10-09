@@ -702,7 +702,9 @@ class TestMaxResultsClampIsVisible:
     async def test_out_of_range_is_announced(self, monkeypatch):
         S = _patch_engines(monkeypatch, [_raw("A", "https://a.example/")])
         out = await S.web_search(None, "dns resolution test", 100)
-        assert "max_results=100 is outside the supported 1-50 range" in out.fetch_hint
+        # `summary`, not `fetch_hint`: the same sentence lands in the same field on
+        # all three clamping tools (see search._search_summary).
+        assert "max_results=100 is outside the supported 1-50 range" in out.summary
 
 
 # ─── BUG-9: no invented install instructions ───────────────────────────────

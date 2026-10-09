@@ -9,6 +9,38 @@
 依赖只有 stdlib、档位表 `_ANTI_DETECT` / `_RUNG_TOOLS`（rungs.py）与一处对
 `MasterFetchServer` 的回看 —— 那颗是刻意的：`_arg_defaults` 从方法签名现读默认值，
 抄来的默认值会漂，而签名是工具已经写明它们的地方。
+
+越界：钳还是拒（全仓唯一一条判据；2026-10-09 审计 D5 / C16 收口）
+--------------------------------------------------------------------
+C16 记的是"同类参数的验证策略三分裂：拒绝 / 钳制并说明 / 静默强转三者混用"。判据
+只有一句，写在这里因为分界就在这一层（`_coerce_int_arg(..., clamp=)`），而其余每一颗
+自钳的参数（`search.max_results` 的 `max(1, min(x, 50))`、crawl 的四颗上限）判的也是
+同一件事：
+
+  **越界的那个值，有没有唯一一种合理的读法。**
+
+* **有** —— 并且那个界是 wire 上写明的资源帽（"你要的比允许的多"）→ 钳到边界，
+  并且**点名**（`context._clamp_note` / `_note_clamped`，落进 `summary`）。
+  例：`max_content_chars`、`max_links`、`max_pages`、`max_depth`、`concurrency`、
+  `max_total_chars`、`cache_ttl<0`、`max_results`、`min_relevance`、
+  `min_raw_relevance`、动作的 `wait` / `scroll.steps`。
+* **没有** —— 猜一下就把这颗参数变成了**另一个意思** → **具名拒绝**（`_refuse`；
+  走到协议边界折成 invalid_request 信封，见
+  `test_a_designed_refusal_never_leaves_naked_through_the_transport`）。
+  例：`offset=-5`（Python 的负数切片从末尾数，钳到 0 等于把"最后 5 个字"当成"从第 0
+  个字开始"发回去 —— 一个错的正文以普通 200 交出去）、`page=99`（"第 99 页"不是
+  "第 10 页"）。
+
+两条伴生纪律，缺一条这条判据就白写：
+
+* **钳必须点名** —— 钳了不说，调用方以为自己点的那个数生效了。那正是审计 D5 原来
+  记的形状（"静默强转"）；现在这一类一条都复现不出来，守卫在
+  `test_every_clamp_is_announced.py`。
+* **拒必须具名** —— 拒绝要说清哪颗参数、它的范围、以及正确的写法（`_refuse` 的
+  `next_action` 那一句是共用的，理由见 `_TYPE_REFUSAL_WAY_OUT`）。
+
+三种策略里的第三种 —— **静默强转** —— 在本仓没有合法用法：一颗越界的数只许走上面
+两条之一。
 """
 
 from __future__ import annotations
@@ -76,6 +108,15 @@ def _coerce_int_arg(
       * out of ``[lo, hi]`` -> clamp when ``clamp`` (a resource cap, which is
         documented on the wire so it is a known bound rather than a surprise),
         otherwise raise (a nonsense value with no sensible reading).
+
+    ``clamp`` is the project's reject-vs-clamp boundary, so the decision it
+    encodes is written down once, in this module's docstring ("越界：钳还是拒"):
+    clamp when the out-of-range value still has ONE sensible reading and the
+    bound is a documented resource cap; refuse when honouring a guess would
+    change what the argument MEANS (``offset=-5`` would otherwise come back as
+    "start at 0", i.e. a wrong body delivered as an ordinary 200). Whichever way
+    it goes, the caller is told - a clamp is named in ``summary``, a refusal
+    names the argument, its range and the correct spelling.
 
     ``lo``/``hi`` are optional because the wire-boundary pass
     (:func:`_coerce_arg_types`) converts types ONLY and leaves the range to the
