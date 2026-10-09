@@ -5,8 +5,13 @@
 确定性排序。重放按 `web_search` 无神经模型时的真实调用顺序（`_rank(mode="merge")`
 → `_apply_quality_boost` → `_diversify` → `_build_results` → `_quality_filter` →
 `_filter_irrelevant_results`），解析用各家引擎自己的 parser 对冻结页跑。有 qrels
-的题目上报 P@5 / P@10 / MRR / nDCG@10；没有 qrels 的题目只出去重审计。**神经重排
-不在此处**——那是 B8 的事，量它的尺子是集 B。
+的题目上报 P@5 / P@10 / MRR / nDCG@10；没有 qrels 的题目只出去重审计。
+
+**`--neural` 是同一条链的第二个手臂**（不是另一套指标）：预热真实交叉编码器后只把
+`_rank` 的模式换成 `neural`，其余一字不改，于是能第一次在这份语料上量到 raw 分位、
+以及"badge 与人工标注对不对得上"。**集 B 仍然是换型判据**——它比的是纯模型
+（与引擎无关、跨版本可比），集 A 的神经臂比的是"模型进了这条链之后交付变不变"。
+两个问题不同，两笔账也分开写。
 
 **集 B（公开数据 qrels，MIRB / MTEB-zh）**：只测纯模型，接口只有
 `score(query, docs) -> [float]`，与引擎无关、跨版本可比。数据集几百 MB，**不进
@@ -22,6 +27,7 @@ key 不同：大概率是错的）——直接出数；其余等价性判断（�
     python evals/ranking_baseline.py            # 集 A（+去重审计）+ 集 B 状态
     python evals/ranking_baseline.py --json     # 另存 .runtime 下 JSON
     python evals/ranking_baseline.py --tiers    # 另加 high/med/low 直方图与空结果比率
+    python evals/ranking_baseline.py --neural --tiers   # 同一条链走 mode='neural'
 
 `--tiers` 存在的原因：P@k 只奖励**序**，而 `fetch_relevance` 是每行独立铸的 badge。
 把全部 high 改成 med 而不动顺序，P@5/P@10/MRR/nDCG 四个数一个都不变 —— 于是"相关性
@@ -115,7 +121,8 @@ def _merge_with_dedup(pages: list[tuple[str, list]]):
     return order, merges, raw_pairs
 
 
-def _replay_chain(query: str, ranked: list, tally: dict | None = None) -> list:
+def _replay_chain(query: str, ranked: list, tally: dict | None = None,
+                  mode: str = "merge", qid: str = "") -> list:
     """web_search 的确定性段，按真实调用顺序；返回最终序的 SearchResult 行。
 
     返回**行**而不是 URL：`--tiers` 要读 `fetch_relevance` 和 `relevance_score`，
@@ -124,23 +131,31 @@ def _replay_chain(query: str, ranked: list, tally: dict | None = None) -> list:
     `tally`（可选，就地累加）是 B0 的落点：P@k 看不出"档位塌方"——把所有 high 换成
     med，只要序不变，P@5 一个数都不动。所以要单独数 high/med/low 的直方图，以及
     三段的行数（铸出多少行 / 质量过滤后剩多少 / 相关性过滤后交付出多少）。
+
+    `mode="neural"` 是 `--neural` 的手臂：链上其余部分一字不改，只是 `_rank` 被允许
+    去问那颗已预热的交叉编码器。raw 从 S1 起跟着行走（`RawResult.neural_raw`），
+    而 `_build_results` 与行是 1:1 同序的，所以两侧可以按位置对齐取样。
     """
     from dhole_mcp import search as S
 
     cand = ranked[:CANDIDATE_CAP]
-    ranked_list, scores, _mode, _note = S._rank(query, cand, "merge")
+    ranked_list, scores, _mode, _note = S._rank(query, cand, mode)
     ranked_list, scores = S._apply_quality_boost(ranked_list, scores, query)
     ranked_list, scores = S._diversify(ranked_list, scores, max_per_domain=2)
     ranked_list, scores = ranked_list[:MAX_RESULTS], scores[:MAX_RESULTS]
     results_list = S._build_results(query, ranked_list, scores, total_families=6)
     if tally is not None:
         tally["built"] += len(results_list)
-        for r in results_list:
+        for i, r in enumerate(results_list):
             tally["tiers"][r.fetch_relevance] = tally["tiers"].get(r.fetch_relevance, 0) + 1
             # "high" 里有多少是 `rank == 1` 无条件发出来的（分数自己够不上 0.5）。
             # 这一格是 S2 要移动的量，不是裁判 —— 它只说明 badge 现在由位置而非证据铸。
             if r.fetch_relevance == "high" and (r.relevance_score or 0.0) < 0.5:
                 tally["high_from_rank_only"] += 1
+            # (本轮铸出的档, 该行自己的 raw, 归一分, qid) —— 取样，不改判决。
+            tally["rows"].append((r.fetch_relevance,
+                                  getattr(ranked_list[i], "neural_raw", None),
+                                  r.relevance_score, qid))
     results_list = S._quality_filter(results_list)
     if tally is not None:
         tally["after_quality_filter"] += len(results_list)
@@ -285,11 +300,106 @@ def _set_b() -> dict:
 # ── 主流程 ────────────────────────────────────────────────────────────────────
 
 
+def _warm_model():
+    """为 `--neural` 预热真实交叉编码器。
+
+    本脚本顶部把 DHOLE_HOME 指到一次性目录（集 A 不碰用户状态），而模型住在真实
+    ~/.dhole —— 所以这里在装载那一刻把真 home 还回去，装完立刻收回。装载后的
+    ONNX 会话是进程级单例，收回一次性目录不会影响它继续被 `get_reranker()` peek 到。
+    """
+    saved = os.environ.pop("DHOLE_HOME", None)
+    try:
+        from dhole_mcp import reranker as _rer
+        if not _rer.model_present():
+            print(f"  --neural: 真实 ~/.dhole 里没有模型（{pathlib.Path(str(_rer.active_model_dir()))}）"
+                  "—— 神经臂跑不了，如实跳过")
+            return None
+        rer = _rer._load_reranker()
+        if rer is None:
+            print("  --neural: 模型在但装载失败（缺 onnxruntime/tokenizers/numpy？）")
+        return rer
+    except Exception as exc:
+        print(f"  --neural: 预热异常: {exc}")
+        return None
+    finally:
+        if saved is not None:
+            os.environ["DHOLE_HOME"] = saved
+
+
+# S2 的候选规则，先在装置里预览、后在判决位落地（"两笔账分开写"）。
+# raw is None 那一支是**有方向的**：位置尺只准降级、不准升级 —— 它可以指出一条排得
+# 很后（`low` 保留，`_quality_filter` 的行为因此一字节不变），但说不出"这条相关"，
+# 所以 `high` 必须封顶到 med。
+PREVIEW_HIGH_AT = 0.5
+PREVIEW_MED_AT = 0.05
+
+
+def _preview_tier(current: str, raw, score: float) -> str:
+    if raw is None:
+        return "med" if current == "high" else current
+    if raw >= PREVIEW_HIGH_AT:
+        return "high"
+    if raw >= PREVIEW_MED_AT:
+        return "med"
+    return "low"
+
+
+def _print_tiers(tally: dict, label: str) -> None:
+    tiers = tally["tiers"]
+    total_rows = sum(tiers.values()) or 1
+    print(f"== 档位直方图 · {label}（这一层 P@k 看不见：序不变而 high 全变 med，P@5 一个数都不动）==")
+    for name in ("high", "med", "low"):
+        n = tiers.get(name, 0)
+        print(f"  {name}: {n} ({n / total_rows:.1%})")
+    for other, n in sorted(tiers.items()):
+        if other not in ("high", "med", "low"):
+            print(f"  {other}: {n} ({n / total_rows:.1%})  <- 词表外的取值")
+    print(f"  high 里仅因 rank==1（自身分数够不上 0.5）: "
+          f"{tally['high_from_rank_only']} / {tiers.get('high', 0)}")
+    print(f"  行数流水: 铸出 {tally['built']} → _quality_filter 后 "
+          f"{tally['after_quality_filter']} → 交付 {tally['delivered']}")
+    q = max(1, tally["queries"])
+    print(f"  空结果题面: {tally['empty_queries']}/{tally['queries']} "
+          f"({tally['empty_queries'] / q:.1%})")
+    rows = tally["rows"]
+    measured = [r for _c, r, _s, _q in rows if r is not None]
+    print(f"  有 raw 的行: {len(measured)}/{len(rows)} —— 其余是「这一轮没有模型量过」，"
+          "不是「量为 0」")
+    if measured:
+        ordered = sorted(measured)
+
+        def _pctl(p):
+            return ordered[min(len(ordered) - 1, int(p * len(ordered)))]
+        print(f"  raw 分位: p10={_pctl(.1):.5f} p25={_pctl(.25):.5f} "
+              f"p50={_pctl(.5):.5f} p75={_pctl(.75):.5f} p90={_pctl(.9):.5f} "
+              f"max={ordered[-1]:.5f}")
+    preview: dict[str, int] = {}
+    for current, raw, score, _q in rows:
+        nxt = _preview_tier(current, raw, score)
+        preview[nxt] = preview.get(nxt, 0) + 1
+    print(f"  预览（{PREVIEW_HIGH_AT}/{PREVIEW_MED_AT} 带 + None 封顶 med）: "
+          + " · ".join(f"{k} {preview.get(k, 0)}" for k in ("high", "med", "low")))
+    newly_low = sum(1 for c, r, s, _q in rows
+                    if r is not None and _preview_tier(c, r, s) == "low" and c != "low")
+    print(f"  新变成 low 的行（= _quality_filter 会**新增**丢掉多少）: {newly_low}")
+    demoted = sum(1 for c, r, _s, _q in rows if c == "high" and _preview_tier(c, r, _s) != "high")
+    print(f"  从 high 降下来的行: {demoted} / {tiers.get('high', 0)}")
+    # 这一行是整个 S2 的靶心：badge 说"值得直接抓"，而模型给这条的原始分连 0.05 都不到
+    # —— 体验测试里那个 `.cc` 黑料站排第 1、relevance_score 1.0、fetch_relevance high，
+    # 就是这个形状。题面数比行数更要紧：它回答"多少轮搜索撒过这个谎"。
+    lying = [(q, r) for c, r, _s, q in rows if c == "high" and r is not None
+             and r < PREVIEW_MED_AT]
+    print(f"  发着 high 而 raw < {PREVIEW_MED_AT}（模型认为离题）: "
+          f"{len(lying)} 行 / {len({q for q, _r in lying})} 题")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--tiers", action="store_true",
                     help="high/med/low 直方图 + 空结果比率（P@k 看不出档位塌方）")
+    ap.add_argument("--neural", action="store_true",
+                    help="预热真实交叉编码器，同一条链改走 mode='neural'（集 A 的盲区）")
     args = ap.parse_args()
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -302,19 +412,25 @@ def main() -> int:
         print("集 B：", json.dumps(_set_b(), ensure_ascii=False))
         return 1
 
+    mode = "merge"
+    if args.neural:
+        if _warm_model() is None:
+            return 1
+        mode = "neural"
+
     merges_by_q: dict[str, list] = {}
     raw_pairs_by_q: dict[str, list] = {}
     per_query: list[dict] = []
     tally: dict = {"built": 0, "after_quality_filter": 0, "delivered": 0,
                    "high_from_rank_only": 0, "tiers": {}, "empty_queries": 0,
-                   "queries": 0}
+                   "queries": 0, "rows": [], "mode": mode}
     for qid in sorted(corpus):
         pages = [(eng, _parse_page(eng, html)) for eng, _m, html in corpus[qid]]
         query = corpus[qid][0][1]["query"]
         ranked, merges, raw_pairs = _merge_with_dedup(pages)
         merges_by_q[qid] = merges
         raw_pairs_by_q[qid] = raw_pairs
-        results_now = _replay_chain(query, ranked, tally=tally)
+        results_now = _replay_chain(query, ranked, tally=tally, mode=mode, qid=qid)
         final_urls = [r.url for r in results_now]
         row = {"qid": qid, "engines": [e for e, _ in pages],
                "raw_items": sum(len(rows) for _, rows in pages),
@@ -348,23 +464,8 @@ def main() -> int:
                 print(f"    {k}: {sum(m[k] for m in ms)/len(ms):.3f}")
     else:
         print("  （还没有 qrels —— 先做盲评标注，见 evals/README.md 的标注协议）")
-    if args.tiers:
-        tiers = tally["tiers"]
-        total_rows = sum(tiers.values()) or 1
-        print("== 档位直方图（这一层 P@k 看不见：序不变而 high 全变 med，P@5 一个数都不动）==")
-        for name in ("high", "med", "low"):
-            n = tiers.get(name, 0)
-            print(f"  {name}: {n} ({n / total_rows:.1%})")
-        for other, n in sorted(tiers.items()):
-            if other not in ("high", "med", "low"):
-                print(f"  {other}: {n} ({n / total_rows:.1%})  <- 词表外的取值")
-        print(f"  high 里仅因 rank==1（自身分数够不上 0.5）: "
-              f"{tally['high_from_rank_only']} / {tiers.get('high', 0)}")
-        print(f"  行数流水: 铸出 {tally['built']} → _quality_filter 后 "
-              f"{tally['after_quality_filter']} → 交付 {tally['delivered']}")
-        q = max(1, tally["queries"])
-        print(f"  空结果题面: {tally['empty_queries']}/{tally['queries']} "
-              f"({tally['empty_queries'] / q:.1%})")
+    if args.tiers or args.neural:
+        _print_tiers(tally, f"mode={mode}")
 
     for r in per_query[:8]:
         extra = (f"  metrics={r['metrics']}" if "metrics" in r else "")
