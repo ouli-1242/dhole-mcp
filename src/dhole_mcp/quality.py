@@ -84,6 +84,142 @@ _JS_SHELL_SIGNALS_ZH = [
 # 那种「提到了这句话」的正常正文（与 _BOT_WALL_MAX_TEXT_CHARS 同一个道理）。
 _JS_SHELL_ZH_MAX_TEXT_CHARS = 1500
 
+# ─── 混淆载荷：长 body、抽取也"没塌"，因为抽出来的就是那堆噪声 ─────────────
+#
+# 上面那把尺子量的是「大 body + 几乎没字」。实测（2026-10-09，北极星那家）是另一形：
+# 3,559 个字符**全都抽到了** —— 抽取是忠实的，页面本身就是混淆脚本。于是
+# `status=200 content_ok=true`，批量里计入 `successful: 2`，而那几千个字里没有一个是一句
+# 人话。长度闸在这里帮不上忙（它恰恰通过了每一道长度闸），需要的是一把量**形状**的尺。
+_OBFUSC_HEX_RUN = re.compile(r"\b[0-9a-fA-F]{24,}\b")
+#: 候选的"一长串 base64 字母表字符"。光看长度不够 —— 一份术语表里
+#: `internationalization` 重复几十次也是 48 个字母一跑。真的编码块一定**同时**含大小写
+#: 与数字（那是 base64 字母表的性质），人写的词没有。这一条是 measure 那一刀在语料上
+#: 量出来的第一个假阳性，规则写在这里而不是藏在数里。
+_OBFUSC_RUN_CANDIDATE = re.compile(r"\b[A-Za-z0-9+/=]{40,}\b")
+#: 混淆器与反爬挑战留下的字面标记。`arg1=` 是"参数名就是挑战"的那类形状，`_0x` 是
+#: javascript-obfuscator 的默认变量前缀，`getRender` 是实测那枚壳的入口函数。
+_OBFUSC_MARKERS = ("_0x", "arg1=", "getrender", "string.fromcharcode")
+#: 连续两枚 `\xNN` 转义：人写的正文不会这样说话，打包过的载荷几乎一定有。
+_OBFUSC_ESCAPES = re.compile(r"\\x[0-9a-fA-F]{2}\\x[0-9a-fA-F]{2}")
+#: 词形合法度。人写的正文里 token 短、几乎全小写；base64/hex 载荷里 token 长、大小写
+#: 混排。三个都是**比值**，所以与页面长短无关 —— 一个绝对字符数在这里永远是错的尺。
+_OBFUSC_MIN_TOKENS = 30
+_OBFUSC_MEAN_TOKEN_LEN = 9.0
+_OBFUSC_LONG_TOKEN_RATIO = 0.25
+_OBFUSC_MIXED_CASE_RATIO = 0.35
+#: `mean_len` 那条支路单独不够长：一份全小写的术语表能把平均值顶到天上去。所以它必须
+#: 与"至少有些 token 是大小写混排"一起成立 —— 长度是必要条件，混排才是那类编码块的指纹。
+_OBFUSC_MIXED_CASE_FLOOR = 0.15
+
+
+def _encoded_runs(text: str) -> list:
+    """真正像 base64 编码块的那些长串：大写字母、小写字母、数字**三者都齐**。"""
+    out = []
+    for run in _OBFUSC_RUN_CANDIDATE.findall(text):
+        if (any(c.isupper() for c in run) and any(c.islower() for c in run)
+                and any(c.isdigit() for c in run)):
+            out.append(run)
+    return out
+
+
+def looks_obfuscated(text: str) -> dict:
+    r"""这串文本像不像混淆过的脚本载荷。干净时 {}，命中时交出证据。
+
+    要**两类独立证据**同时成立才算，这是整批的论点所在：单信号就翻结论位的闸，一定会
+    吃掉图集、changelog 和日语法语那种短词正文（`_JS_SHELL` 被限定在 HTTP 档就是同一
+    条教训的先前版本）。
+      ① 结构证据 —— 长 hex/base64 串，或 marker 表里的一项，或连续 `\xNN` 转义；
+      ② 词形合法度低 —— token 平均很长，或"长 token + 大小写混排"两样都占。
+    只有一类时返回 {}：一篇讲 base64 的教程有 ①，它的正文词形过不了 ②。
+
+    纯函数，不碰信封：它只回答"这堆字像不像人写的"。"那又该怎么处置"由调用它的闸决定
+    （档位、body 大小、抽取塌没塌、类型豁免）—— 两问分家，第二问的答案才不会把第一问
+    的形状扭歪（`_is_js_shell` 与 `extraction_collapsed` 就是这么分开的，见那两处注释）。
+    """
+    if not text or len(text) < 1000:
+        # 短到一千字以内谈"词形分布"没有意义：证据量不足，一律算干净。
+        return {}
+    lowered = text.lower()
+    evidence = []
+    hex_runs = len(_OBFUSC_HEX_RUN.findall(text))
+    b64_runs = len(_encoded_runs(text))
+    if hex_runs:
+        evidence.append(f"{hex_runs} long hex run(s)")
+    if b64_runs:
+        evidence.append(f"{b64_runs} long base64 run(s)")
+    hit_markers = [m for m in _OBFUSC_MARKERS if m in lowered]
+    if hit_markers:
+        evidence.append(", ".join(hit_markers))
+    if _OBFUSC_ESCAPES.search(text):
+        evidence.append(r"\xNN escape runs")
+    if not evidence:
+        return {}
+
+    tokens = re.findall(r"[A-Za-z]{2,}", text)
+    if len(tokens) < _OBFUSC_MIN_TOKENS:
+        return {}
+    mean_len = sum(len(t) for t in tokens) / len(tokens)
+    long_ratio = sum(1 for t in tokens if len(t) >= 12) / len(tokens)
+    mixed_ratio = sum(1 for t in tokens
+                      if any(c.islower() for c in t) and any(c.isupper() for c in t)
+                      ) / len(tokens)
+    illegible = (mean_len >= _OBFUSC_MEAN_TOKEN_LEN
+                 and mixed_ratio >= _OBFUSC_MIXED_CASE_FLOOR) or (
+        long_ratio >= _OBFUSC_LONG_TOKEN_RATIO
+        and mixed_ratio >= _OBFUSC_MIXED_CASE_RATIO)
+    if not illegible:
+        return {}
+    return {"signals": evidence,
+            "mean_token_len": round(mean_len, 2),
+            "long_token_ratio": round(long_ratio, 3),
+            "mixed_case_ratio": round(mixed_ratio, 3),
+            "chars": len(text)}
+
+
+def _obfuscation_gate_applies(result: ResponseModel) -> bool:
+    """这一发够不够格按混淆载荷来判。**measure 档**：只上报，不动 `content_ok`。
+
+    四道前置与 `_is_js_shell` 的长度闸同源，每一条都对应一次"误伤"：
+    * 只 HTTP 档 —— stealthy 的低文字页是合法页面（图集、canvas 应用）；
+    * body 要够大 —— 小响应里几串 base64 是正常的图标内联；
+    * `_never_escalate` 认得的那些先豁免（JSON/XML/CSV/PDF/图片/非 GET）：那是**数据
+      文档**，里面的长串就是数据本身，把 `api_schema.json` 判成壳是这批最不该出现的
+      那种新错；
+    * 抽取塌陷时不算 —— "DOM 里有字而抽取没交回"是另一件事，那条路已经有自己的 token。
+    """
+    if result.fetcher_used != "http" or result.status >= 400:
+        return False
+    if (result.total_size_bytes or 0) <= _JS_SHELL_MIN_BODY_BYTES:
+        return False
+    if _never_escalate(result, result.url):
+        return False
+    if extraction_collapsed(result):
+        return False
+    if (result.error or "").startswith(("js_shell_detected", "bot_wall_detected",
+                                        "bot_challenge_detected", "auth_wall_detected")):
+        # 已经有名字的失败不挂第二块牌子：一个响应里两个结论位各说各话正是 D5 点名的形状。
+        return False
+    return True
+
+
+def _report_obfuscation(result: ResponseModel) -> None:
+    """把混淆判定作为**事实**发进 `metadata`，一个字不动结论位。
+
+    这是 measure-then-flip 的第一刀。判定要翻 `content_ok` 之前，先要在这份语料上
+    看见它到底落在哪些页上 —— 在 `_is_js_shell` 那把尺子旁边动第二把尺，历史上咬过
+    两次（图集与 books.toscrape 的列表页）。所以第一笔提交唯一的可观察变化是这颗
+    字段：语料里每一发命中都留得下名字，摘掉它时守卫就红，而今天所有回执的结论位
+    逐字节不变。
+    """
+    if not _obfuscation_gate_applies(result):
+        return
+    finding = looks_obfuscated("\n".join(
+        chunk for chunk in (result.content or []) if isinstance(chunk, str)))
+    if not finding:
+        return
+    result.metadata = {**(result.metadata or {}), "obfuscated_body": finding}
+
+
 # Cloudflare challenge page markers. These appear in the raw HTML of CF
 # interstitial / Turnstile challenge pages (which can return 200). Used by
 # _is_js_shell to detect CF pages that bypass the generic JS-shell signals
@@ -1697,6 +1833,7 @@ def _with_agent_hints(result: ResponseModel) -> ResponseModel:
     """
     result.fetched_at = datetime.now(timezone.utc).isoformat()
     _apply_envelope(result)
+    _report_obfuscation(result)
     summary, next_action, content_ok = _agent_hints(result)
     # Argument notes (a value clamped to a documented bound) belong in the
     # one-line status: they describe THIS response, and next_action has to stay

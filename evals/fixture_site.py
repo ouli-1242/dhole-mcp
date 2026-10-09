@@ -23,6 +23,8 @@
 /collections         列表页：?items=N 张 .card，每张肚子里挂一个 /work/N 的链接（E-13 扇出靶）
 /work/<n>            详情页：一列每页不同、一列每页同值（页眉）、一列永不命中
 /shell               几百字符、组不成任何一组链接的页（壳页 → force_fetcher 那一支）
+/shell/obfuscated    混淆载荷壳页：正文**全抽得到**（>2,000 字符）而字是打包过的脚本
+                     （R1 的靶 —— 它穿得过每一道长度闸，量的是形状不是长短）
 /about               孤链接的去处（候选选择器不该把只有一条链接的组报出来）
 /captcha             HTML 页，内嵌 <img src="/captcha.png?token=..."> + 提交表单
 /captcha.png         扭曲文字验证码 PNG（逐字旋转 + 正弦位移 + 干扰线；?level=hard 加码）
@@ -40,6 +42,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import secrets
@@ -238,6 +241,35 @@ SHELL_PAGE = _page("加载中", """
 </script>
 <a href="/about">关于</a>
 """)
+
+
+def _obfuscated_shell_page() -> bytes:
+    """R1 要的那一形：**抽取是忠实的，页面本身就是噪声**。
+
+    `/shell` 抽出来只有两行，远在 `_JS_SHELL_MIN_TEXT_CHARS=200` 之下 —— 它今天就触发
+    现有那把长度闸，它证明的是**旧检测器有效**，它没法回归测试 R1 真正关心的东西：
+    实测那枚 3,559 字符的壳穿过每一道长度闸（正文全抽到了），因为它不是"没字"，是
+    "字全是打包过的脚本"。
+
+    载荷由路径哈希派生，不是随机数：靶站照旧无状态，同一个 URL 每次返回逐字节相同的
+    东西（与 `captcha_text` 由 token 派生答案同一手法）。放在 `<div>` 而不是 `<script>`
+    里也是刻意的 —— 抽取器把 `<script>` 整段丢掉，那只会退回"没字"那一形。
+    """
+    seed = hashlib.sha256(b"dhole-fixture:/shell/obfuscated").hexdigest()
+    chunks = []
+    for i in range(40):
+        digest = hashlib.sha256(f"{seed}:{i}".encode()).hexdigest()
+        blob = base64.b64encode(bytes.fromhex(digest + digest[:32])).decode()
+        # 真 bundle 里的字符串就是这一形：一长串**只有字母**、大小写混排的标识符状
+        # 载荷。留下 base64 的数字会把字母流切碎成两三个字符的 token，量出来的词形
+        # 合法度就成了测量数字而不是测量形状。
+        letters = "".join(c for c in blob if c.isalpha())
+        chunks.append(f'var _0x{digest[:6]}=["{letters}"]; arg1="{letters[:38]}"; '
+                      f'tid="{digest}"; render=getRender("{digest[:12]}");')
+    body = ('<div id="root"></div>'
+            f'<div class="waf-trace">{" ".join(chunks)}</div>'
+            '<a href="/about">关于</a>')
+    return _page("安全校验", body)
 
 ABOUT_PAGE = _page("关于", "<h1>关于</h1><p>靶站的孤链接去处。</p>")
 
@@ -604,6 +636,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._html(_work_page(n))
         if path == "/shell":
             return self._html(SHELL_PAGE)
+        if path == "/shell/obfuscated":
+            return self._html(_obfuscated_shell_page())
         if path == "/about":
             return self._html(ABOUT_PAGE)
         return self._html(_page("404", "<h1>404</h1>"), 404)
