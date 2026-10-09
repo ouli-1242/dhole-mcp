@@ -1379,6 +1379,11 @@ _DIAGNOSIS_PREFIXES: tuple[tuple[str, str, bool, str], ...] = (
     ("File not found", "file_not_found", False, "pass an absolute path, or pass cwd="),
     ("Access denied: path is in a restricted system directory", "path_restricted", False,
      "choose a path outside the restricted system directory"),
+    # 同一句门的两支，此前只有一支在册（实测 2026-10-09：备用数据流那条被 `_agent_hints`
+    # 按 startswith 认得出、diagnosis 认不出，于是 code 空 → 整格缺席，而 next_action 照样
+    # 说话）。一句我们自己写的话不该靠首词兜底 —— 兜底是给外人写的句子留的。
+    ("Access denied: path names an NTFS", "alternate_data_stream", False,
+     "drop the ':stream' segment and name the file itself - no argument opens this guard"),
     ("network_error", "network", True,
      "check network/proxy; the classifier hint in `error` names the fix"),
 )
@@ -1405,6 +1410,12 @@ def classify_error_text(err: str) -> tuple[str, bool, str]:
     串自己就能定的那一步也在这里做掉：一个 `network_error` 前缀背着一整类成因，而它们
     对"重发会不会变"的回答相反（名字不存在与对端拒绝不会变，重置与超时可能会），所以
     布尔不猜，去 `errors` 那张表读 —— 同一张表正写着给人看的那句 hint。
+
+    首词兜底（最后一档）的射程只该是**别人写的句子**：httpx 的原文、站方返回的解析器
+    报错。dhole 自己写的话不靠它 —— 那种串要么在表里，要么在产地就自带 `token:`，
+    因为"取第一个词"意味着改写句子就改写 code，而 fields.md 把 code 承诺成一个固定的
+    枚举。这条分工由 tests/test_a_refusal_we_authored_is_not_named_by_its_first_word.py
+    静态量着（它把产地拼的前缀也算进去，所以 `invalid_request: …` 那族算在册，不算兜底）。
     """
     code, retryable, recover = "", False, ""
     for prefix, c, r, rec in _DIAGNOSIS_PREFIXES:
