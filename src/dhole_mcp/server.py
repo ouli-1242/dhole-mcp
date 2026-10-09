@@ -31,7 +31,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from time import time as now
 from dataclasses import dataclass, field
-from typing import Annotated, Mapping, Sequence, Optional, Literal, Dict, List, Any, TYPE_CHECKING
+from typing import Mapping, Sequence, Optional, Literal, Dict, List, Any, TYPE_CHECKING
 from urllib.parse import quote as _url_quote, urlparse, urlsplit, urlunparse, urlunsplit
 import warnings as _warnings
 import traceback as _traceback
@@ -85,7 +85,6 @@ logger = logging.getLogger("dhole-mcp.server")
 
 
 from dhole_mcp import __version__
-from pydantic import Field
 
 # `paths` 跟着 audit.py 走了；server 里用到它的函数各自就地 import。
 from dhole_mcp import env_registry
@@ -4781,13 +4780,13 @@ class MasterFetchServer:
 
     async def web_request(
         self,
-        url: Annotated[str, Field(description="Absolute http(s) URL to send this request to. One URL per call: a write is not a batch.")],
-        method: Annotated[str, Field(description="The verb, and the reason this tool exists: POST, PUT, PATCH, DELETE or HEAD (case-insensitive). GET is refused - reading is web_read's job, with its cache, its escalation ladder and its archive fallback.")],
-        body: Annotated[Optional[Any], Field(description="Request body for POST/PUT/PATCH/DELETE (cap 256KB). A dict is sent as a form, or as JSON when content_type says json; a string is sent as-is. HEAD takes none.")] = None,
-        content_type: Annotated[Optional[str], Field(description="Content-Type for body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json.")] = None,
-        extraction_type: Annotated[Optional[Literal["markdown", "html", "text", "article", "structured"]], Field(description="How the answer is read back: markdown (default), html, text, article or structured. A server that answers a write with JSON still gets that JSON extracted.")] = None,
-        timeout: Annotated[Optional[int | float], Field(description="Whole-call budget in milliseconds (default 30000, max 120000). A write gets this budget once: it is never retried, so nothing shares it.")] = None,
-        confirm: Annotated[Optional[bool], Field(description="Required true for POST / PUT / PATCH / DELETE - a write acts only on the user's explicit yes, and stored credentials for the host ride along automatically. HEAD is a probe and needs none.")] = None,
+        url: str,
+        method: str,
+        body: Optional[Any] = None,
+        content_type: Optional[str] = None,
+        extraction_type: Optional[Literal["markdown", "html", "text", "article", "structured"]] = None,
+        timeout: Optional[int | float] = None,
+        confirm: Optional[bool] = None,
     ) -> ResponseModel:
         """Send one NON-GET request and read back what the server answered.
 
@@ -4875,20 +4874,20 @@ class MasterFetchServer:
 
     async def web_act(
         self,
-        url: Annotated[str, Field(description="Absolute http(s) URL of the page to act on. One page per call: an action chain is written against one DOM.")],
-        actions: Annotated[Optional[List[Dict[str, Any]]], Field(description="The chain, in order: [{click:'button.load-more'}, {fill:{selector:'#q', text:'x'}}, {press:'Enter'}, {wait:500}, {scroll:3}, {wait_selector:'.item'}], then {snapshot:true} to number the interactive elements and {click:{index:12, expect:'登录'}} to address one by index. ONE action key per object. submit is the irreversible one: without confirm:true it pauses for approval.")],
-        extraction_type: Annotated[Optional[Literal["markdown", "html", "text", "article", "structured"]], Field(description="How the page after the actions is read back: markdown (default), html, text, article or structured.")] = None,
-        max_content_chars: Annotated[Optional[int], Field(description="Max chars of that content (default 40000). The action receipts are never cut by it.")] = None,
-        focus: Annotated[Optional[str], Field(description="Query-focused extraction of the post-action page: only the blocks relevant to this come back.")] = None,
-        timeout: Annotated[Optional[int | float], Field(description="Whole-call budget in milliseconds (default 25000 here - sized to beat a typical 30s host MCP timeout, which would kill the call with nothing returned; raise it when your host allows more. max 120000).")] = None,
-        anti_detect: Annotated[Optional[Literal["off", "basic", "auto", "aggressive"]], Field(description=ANTI_DETECT_DESC_SHORT)] = None,
-        session_id: Annotated[Optional[str], Field(description="Act inside this named session, so a login made earlier (or a jar the HTTP tier filled) is the state the page starts from.")] = None,
+        url: str,
+        actions: Optional[List[Dict[str, Any]]],
+        extraction_type: Optional[Literal["markdown", "html", "text", "article", "structured"]] = None,
+        max_content_chars: Optional[int] = None,
+        focus: Optional[str] = None,
+        timeout: Optional[int | float] = None,
+        anti_detect: Optional[Literal["off", "basic", "auto", "aggressive"]] = None,
+        session_id: Optional[str] = None,
         # 批次 11：可见性是"人在不在场"，不是反爬强度（档位表每一档都写死 headless，那张表管站点看到
         # 什么指纹）。挂在 web_act 这一扇门上：要人辅助的活只有这一扇门。
-        headed: Annotated[bool, Field(description="Run this chain in a VISIBLE browser so the user can watch and step in - the login-by-hand case. Default false (headless, the tested rung). The ask is about the browser that RUNS this call: if a visible one is already warm, the chain rides it; if a hidden one is warm on the same profile, this is refused (browser_busy) rather than taking over someone's browser or closing their tabs. To hand that browser back first: sys_state(clear=['<session id>']).")] = False,
-        cdp_url: Annotated[Optional[str], Field(description="Attach to a running Chrome (its own logged-in profile) and act there. The FIRST host is refused until the user approves it: read the receipt, ask, re-call with confirm:true.")] = None,
-        confirm: Annotated[Optional[bool], Field(description="Two things need it and nothing else does: a submit action, and the first CDP attach to a host. Neither acts until this says true.")] = None,
-        check_login: Annotated[Optional[bool], Field(description="After the chain, run the model-free login probe on the settled page: login_check with DOM signals and cookie NAMES, never values.")] = None,
+        headed: bool = False,
+        cdp_url: Optional[str] = None,
+        confirm: Optional[bool] = None,
+        check_login: Optional[bool] = None,
     ) -> ResponseModel:
         """Act on a page (click / fill / press / scroll / wait / submit) and read back the page after.
 
@@ -5058,41 +5057,45 @@ class MasterFetchServer:
             _withdraw()
         return hit
 
+    # 参数说明的唯一作者是下面那张 `_TOOL_DEFS` —— 那才是发上 wire 的一份。签名里曾经
+    # 有第二份（实测 115 个参数位：逐字相同的只有 3 个，59 个各说一套，49 个压根没有），
+    # 而棘轮量的是表，改签名那一份不会让任何判据红 —— 它就是"读起来像权威而没人看"。
+    # 要改客户端读到的话，改表；守卫在 tests/test_the_wire_tool_descriptions_have_one_author.py
     @_smart_fetch_request_context
     async def web_read(
         self,
-        url: Annotated[str, Field(description="Single URL to fetch.")],
-        urls: Annotated[Optional[List[str]], Field(description="Multiple URLs to fetch in parallel. Returns bulk results. Use instead of calling web_read multiple times.")] = None,
-        extraction_type: Annotated[ReadExtractionType, Field(description="Content format: 'markdown' (default), 'html', 'text', 'article', 'structured', 'check' (changed-since-last-fetch receipt, not page content).")] = "markdown",
-        css_selector: Annotated[Optional[str], Field(description="CSS selector to narrow extracted content (e.g. 'article', '.main-content').")] = None,
-        cache_ttl: Annotated[Optional[int], Field(description="Cache duration in seconds. Default 3600 (1 hour). Set 0 to skip cache and force a fresh fetch.")] = None,
-        force_fetcher: Annotated[Optional[Literal["http", "stealthy"]], Field(description="Lock to one fetcher tier, skip auto-escalation. 'http' = fast HTTP-only (fails on JS/bot walls). 'stealthy' = anti-detect browser (Patchright). Two tiers: the third one and its 'dynamic' alias are gone.")] = None,
-        anti_detect: Annotated[Optional[Literal["off", "basic", "auto", "aggressive"]], Field(description=ANTI_DETECT_DESC)] = None,
-        timeout: Annotated[Optional[int | float], Field(description="Whole-call budget in milliseconds (default 30000; 25000 when actions are used - sized to beat a typical 30s host MCP timeout, which would kill the call with nothing returned; max 120000). Shared by the HTTP retries, and a document URL spends it on the download.")] = None,
-        offset: Annotated[int, Field(description="Resume from this character offset when content was truncated. The response tells you the next offset to use.")] = 0,
-        max_content_chars: Annotated[Optional[int], Field(description="Max chars of extracted content to return (default 40000). Lower this to save context tokens on big pages; the rest is paginated via offset/next_offset.")] = None,
-        pages: Annotated[Optional[str], Field(description="PDF only: page spec like '1-5' or '1,3,5-7' to extract a subset of pages. Saves tokens on big PDFs, NOT download time - the file is fetched in full before any page is picked. None = all pages.")] = None,
-        password: Annotated[Optional[str], Field(description="PDF only: password for an encrypted PDF.")] = None,
-        focus: Annotated[Optional[str], Field(description="Query-focused extraction: pass a query and only the BM25-relevant blocks (paragraphs/headings/tables) are returned, saving context on long pages. Works post-cache, so it never triggers a re-fetch. Re-pass the same focus when paginating with offset. Empty = full page.")] = None,
-        focus_mode: Annotated[Optional[str], Field(description="Shape of the focus answer: 'filter' (default) keeps every block past the relevance cut; 'best' returns only the single highest-scoring block plus its heading - 'which part of this page answers the question'. Requires focus.")] = None,
-        focus_engine: Annotated[Optional[str], Field(description="Which scorer runs this focus: 'bm25' (fast, keyword overlap, ~23ms/page) or 'neural' (semantic, ~12.5s of CPU per page, needs the local reranker model). Omit = 'bm25'. Asking for 'neural' when the model is not downloaded is refused rather than silently downgraded - it never downloads behind your back.")] = None,
-        actions: Annotated[Optional[List[Dict[str, Any]]], Field(description="Page interactions run on the stealthy browser AFTER load, BEFORE extraction: [{click:'button.load-more'}, {fill:{selector:'#q', text:'x'}}, {press:'Enter'}, {wait:500}, {scroll:3} or {scroll:{steps:5,selector:'.feed'}}, {wait_selector:'.item'} or {wait_selector:{selector:'.quote', count:40, state:'visible'}}]. Forces the stealthy tier; bypasses cache. Reaches content behind a click/form/infinite scroll: scroll re-reaches the bottom as the page grows instead of assuming one viewport plus a fixed pause is enough.")] = None,
-        include_media: Annotated[bool, Field(description="If true, populate the response .media field with up to 20 image URLs found on the page (for multimodal agents). Default false (keeps responses lean).")] = False,
-        include_links: Annotated[bool, Field(description="If true, populate the response .links field with the page's outgoing links classified as citations/navigation/external + a primary_source hint. Default false. Use when you want to follow a page's referenced sources in one step.")] = False,
-        max_links: Annotated[Optional[int], Field(description="Cap for EACH links list (citations/navigation/external) when include_links=true; range 1-100. Omit for the documented defaults (30/20/20). links.total_found + links.is_truncated tell you what the cap hid.")] = None,
-        ignore_robots: Annotated[bool, Field(description="Skip the robots.txt check for this call (default false = comply). When robots.txt disallows the URL, dhole makes NO request and returns error='robots_disallowed' with content_ok false. Set true only when you have the site's permission to fetch regardless; DHOLE_IGNORE_ROBOTS=1 disables the check process-wide.")] = False,
-        check_login: Annotated[bool, Field(description="After the page settles on the browser tier, run a model-free login probe and return login_check: {logged_in: true|false|null, signals: [...], cookie_names: [...]}. DOM shape (logout control / password field / login form) + cookie NAMES only - values are never returned, no model involved. Null on HTTP-tier results and on cache hits (the probe is live-only, so pass check_login again with cache_ttl=0).")] = False,
-        cdp_url: Annotated[Optional[str], Field(description="Attach the user's real Chrome via CDP for THIS call: browser tier forced, HTTP tier and the public cache are skipped, and the fetch rides the attached profile's logged-in cookies. Refused by default - the FIRST attach for a site returns cdp_authorization_required and executes nothing; re-call with confirm=true once the user approved that site, which also fences navigation to the approved sites (a sub-resource from outside them is aborted). Every response fetched this way returns cdp_attached=true; attach attempts are audited. Cannot be combined with schema=.")] = None,
-        session_id: Annotated[Optional[str], Field(description="Reuse cookies across calls under this name (1-64 chars: letters, digits, '.', '_', '-'). Cookies a site sets are kept for that exact host and sent back on the next call naming the same session_id, so a login (or a form POST) can be followed by the pages behind it. Default: no session - cookies live for one call only. Covers BOTH tiers: the HTTP tier reads/writes the jar per host, and browser-tier calls under a session_id run in a dedicated browser seeded from the jar and written back after each call (cookie two-way bridge) - an HTTP login is visible to the browser, a browser login survives to the HTTP tier. Values never leave the process and are never returned; session_cookie_names reports names only.")] = None,
-        method: Annotated[Optional[str], Field(description="HTTP verb for the request: GET (default), HEAD, POST, PUT, DELETE or PATCH. HEAD asks for status + size + content-type only and returns no body (size is the server's Content-Length, so 0 when the server omits it - example.com does). A non-GET is sent once (not retried, not cached, not escalated to the browser or the archive): a write must not be repeated, and a browser replay would answer about a GET to the same URL, not about your POST.")] = None,
-        body: Annotated[Optional[Any], Field(description="Request body for POST/PUT/DELETE/PATCH (max 256 KB). A dict is sent as a form; with content_type=application/json it is sent as JSON; a string is sent as-is. Ignored for GET/HEAD (said so in the summary).")] = None,
-        content_type: Annotated[Optional[str], Field(description="Content-Type for the body, e.g. application/json or application/x-www-form-urlencoded. A dict body defaults to the form encoding unless this says json.")] = None,
-        schema: Annotated[Optional[Dict[str, Any]], Field(description="JSON schema for structured data extraction. Each property can have a 'selector' (CSS) for direct DOM extraction. Returns structured JSON instead of markdown. No LLM needed. Needs a non-empty 'properties' map (a JSON string is also accepted); an unusable schema raises instead of silently returning markdown. Pass the bare string 'auto' (or {\"type\": \"auto\"}) to detect the page's own structure with no selectors - the reply then also carries a reusable '_schema' proposal. A property carrying its OWN 'properties' (or items.properties) plus a selector extracts one record per matched element, child selectors evaluated inside that element - how a repeated list (quotes, products, rows) keeps its grouping instead of flattening into one array of every tag on the page. Up to 200 records per field.")] = None,
-        confirm: Annotated[bool, Field(description="Approval for a first-time sensitive action on this call. Today that means cdp_url: attaching your real Chrome hands over every logged-in site's cookies, so the FIRST attach for a site is refused with cdp_authorization_required and nothing executed - re-call with confirm=true to authorize that site (remembered on disk; sys_state(clear=['cdp:host=<name>']) revokes one host, clear=['cdp_hosts'] revokes all). False (default) = nothing sensitive is approved.")] = False,
+        url: str,
+        urls: Optional[List[str]] = None,
+        extraction_type: ReadExtractionType = "markdown",
+        css_selector: Optional[str] = None,
+        cache_ttl: Optional[int] = None,
+        force_fetcher: Optional[Literal["http", "stealthy"]] = None,
+        anti_detect: Optional[Literal["off", "basic", "auto", "aggressive"]] = None,
+        timeout: Optional[int | float] = None,
+        offset: int = 0,
+        max_content_chars: Optional[int] = None,
+        pages: Optional[str] = None,
+        password: Optional[str] = None,
+        focus: Optional[str] = None,
+        focus_mode: Optional[str] = None,
+        focus_engine: Optional[str] = None,
+        actions: Optional[List[Dict[str, Any]]] = None,
+        include_media: bool = False,
+        include_links: bool = False,
+        max_links: Optional[int] = None,
+        ignore_robots: bool = False,
+        check_login: bool = False,
+        cdp_url: Optional[str] = None,
+        session_id: Optional[str] = None,
+        method: Optional[str] = None,
+        body: Optional[Any] = None,
+        content_type: Optional[str] = None,
+        schema: Optional[Dict[str, Any]] = None,
+        confirm: bool = False,
         # 17.0 §5 E-13：两层摊平。三颗参数一起读才读得通，所以描述里互相点名。
-        nested_selector: Annotated[Optional[str], Field(description="Two layers in one call: a CSS selector on THIS page naming the elements to follow into the second layer (e.g. '.topic-card', 'a[href*=\"/works/\"]'). Each matched element becomes one record: its href is fetched (6 at a time, up to nested_max) and nested_fields are extracted from that page. The href is read from the element itself, else its first descendant <a>, else its nearest ancestor <a> - so a card that is not itself an <a> still resolves. Requires nested_fields; returns structured JSON; reads this page as a whole document. 0 links matched is reported as nested_no_match (the selector, or this page is a JS shell), not as an empty answer.")] = None,
-        nested_fields: Annotated[Optional[Any], Field(description="What to read on each second-layer page, as a list: [{'name': '作品', 'selector': '.work-item a', 'type': 'array'}] or {'作品': '.work-item a'} (a JSON string is accepted). 'type': 'array' means every match on that page (a list of works); without it you get the first one. 1-12 fields, each selector guarded like schema= ones.")] = None,
-        nested_max: Annotated[Optional[int], Field(description="How many of THIS page's matched links to expand (default 8, max 30). What the cap hid is reported as truncation=nested_budget in the summary, so 'these 8' is never mistaken for 'all of them'. Pass 0 to fan out nothing and just read this page.")] = None,
+        nested_selector: Optional[str] = None,
+        nested_fields: Optional[Any] = None,
+        nested_max: Optional[int] = None,
         # 批次 11：这颗**不在 web_read 的 wire schema 上** —— 公开的门只有
         # web_act(headed=true)。web_act 把动作链委托给 web_read 执行（它自己 return
         # self.web_read(...)），所以可见性必须能从这里过；dispatch 按表外名拒掉调用方
@@ -6958,18 +6961,9 @@ class MasterFetchServer:
 
     async def sys_state(
         self,
-        show: Annotated[
-            Optional[List[str]],
-            Field(description="What to report without changing it: cache|engine_state|sessions|cred_defaults|cdp_hosts|config|all. A call with neither show= nor clear= reports the session census, the cache state, the stored identity defaults and the CDP attach approvals."),
-        ] = None,
-        clear: Annotated[
-            Optional[List[str]],
-            Field(description="What to erase: the clearable tokens (config is show-only - knobs go through `dhole config unset`), plus a bare session id to forget just that one, or cdp:host=<name> to revoke one CDP attach approval. An unknown token is an error listing what exists, never a no-op."),
-        ] = None,
-        confirm: Annotated[
-            bool,
-            Field(description="true to go through with an erasure you would not notice as it happened: sessions|cdp_hosts|all. Without it the call pauses and erases nothing. cache and engine_state need no confirm - their cost shows up on the next call."),
-        ] = False,
+        show: Optional[List[str]] = None,
+        clear: Optional[List[str]] = None,
+        confirm: bool = False,
     ) -> SysStateModel:
         """See what dhole keeps on this machine, or erase a named class of it.
 
@@ -7304,12 +7298,9 @@ class MasterFetchServer:
 
     async def cred_defaults(
         self,
-        set: Annotated[Optional[Dict[str, Any]],
-                       Field(description=_CRED_SET_DESC)] = None,
-        unset: Annotated[Optional[List[str]],
-                         Field(description=_CRED_UNSET_DESC)] = None,
-        show: Annotated[Optional[bool],
-                        Field(description=_CRED_SHOW_DESC)] = None,
+        set: Optional[Dict[str, Any]] = None,
+        unset: Optional[List[str]] = None,
+        show: Optional[bool] = None,
     ) -> CredDefaultsModel:
         """The identity a later call should assume: set once, read back every time.
 
@@ -7470,12 +7461,12 @@ class MasterFetchServer:
 
     async def doc_parse(
         self,
-        file_path: Annotated[str, Field(description="Absolute or relative path to a local file. Supported: .html, .htm, .xhtml, .docx, .xlsx, .xlsm, .csv, .tsv, .pdf, .md, .markdown, .txt, .json, .yaml, .yml, .pptx, .odt")],
-        cwd: Annotated[Optional[str], Field(description="Base directory for a relative file_path. Ignored for absolute paths.")] = None,
-        encoding: Annotated[Optional[str], Field(description="Charset to decode text-based files with (.html/.csv/.md/.txt/.json/.yaml; e.g. 'gbk', 'big5', 'shift_jis', 'cp1252'). Leave unset to auto-detect; pass it when the result looks like mojibake or when metadata.encoding names the wrong charset.")] = None,
-        offset: Annotated[Optional[int], Field(description="Character offset into the parsed document, to continue a truncated read (default 0). Same paging contract as web_read: when is_truncated is true the summary names a Next offset, and THAT number is what you pass back here.")] = 0,
-        pages: Annotated[Optional[str], Field(description="PDF only: '1-5' or '1,3,5-7'. Narrows what is EXTRACTED, not what is downloaded; pick ranges from table_of_contents. Ignored for every other format.")] = None,
-        password: Annotated[Optional[str], Field(description="PDF only: password for an encrypted PDF. Without it an encrypted file cannot be read at all. Ignored for every other format.")] = None,
+        file_path: str,
+        cwd: Optional[str] = None,
+        encoding: Optional[str] = None,
+        offset: Optional[int] = 0,
+        pages: Optional[str] = None,
+        password: Optional[str] = None,
     ) -> ResponseModel:
         """Parse a local file to Markdown. Supports .html/.htm/.xhtml, .docx,
         .xlsx/.xlsm, .csv/.tsv, .pdf, .md/.markdown/.txt, .json/.yaml/.yml,
@@ -7622,10 +7613,10 @@ class MasterFetchServer:
 
     async def feed_read(
         self,
-        urls: Annotated[List[str], Field(description="One or more RSS/Atom feed URLs to fetch.")],
-        max_items: Annotated[Optional[int], Field(description="Max entries per feed (default 20; 0 = all).")] = 20,
-        timeout: Annotated[Optional[int], Field(description="Per-feed timeout in seconds (default 20).")] = 20,
-        since: Annotated[Optional[str], Field(description="Incremental polling: keep only entries published at or after this date (ISO-8601 like '2026-09-20' / '2026-09-20T08:00:00Z', or an RFC-822 feed timestamp). Store the newest published value from the previous call and pass it back. What the filter removed is reported (items_older_than_since) rather than silently shrinking the list, so 'nothing new' is an answer you can act on; entries with no usable date are KEPT and counted (items_without_date) because an undated feed cannot be filtered honestly. An unreadable date is refused as an error instead of returning the whole feed as if it were new.")] = None,
+        urls: List[str],
+        max_items: Optional[int] = 20,
+        timeout: Optional[int] = 20,
+        since: Optional[str] = None,
     ) -> List[Any]:
         """Fetch RSS/Atom feeds and return their latest entries.
 

@@ -167,11 +167,11 @@ def test_wire_text_never_names_an_unregistered_knob():
     walk(server_mod.DHOLE_INSTRUCTIONS, "INSTRUCTIONS")
     for tool_def in server_mod.MasterFetchServer._TOOL_DEFS:
         walk(tool_def, tool_def.get("name", "?"))
-    for tool_def in server_mod.MasterFetchServer._TOOL_DEFS:
-        name = tool_def.get("name", "?")
-        method = getattr(server_mod.MasterFetchServer, name, None)
-        for pname, ann in (getattr(method, "__annotations__", None) or {}).items():
-            walk(getattr(ann, "description", None), f"{name}.{pname}")
+    # 这里曾有过第三个循环，走的是每颗工具签名上的 `Field(description=…)`。它一行都没读到
+    # 过：`server.py` 是 `from __future__ import annotations`，注解在运行时是**字符串**，
+    # `getattr(ann, "description", None)` 永远是 None —— 一条看着像覆盖、实际是空转的判据。
+    # 而那份文本本身已经在 D-32 里摘掉了（发上 wire 的描述唯一的作者是 `_TOOL_DEFS`，
+    # 守卫在 tests/test_the_wire_tool_descriptions_have_one_author.py）。
 
     assert not hits, (
         f"连接期文案点了未注册（多半是已注销）的旋钮: "
