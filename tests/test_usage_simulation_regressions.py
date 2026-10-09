@@ -239,6 +239,94 @@ class TestAMapIsNotOneThousandPageReports:
         assert {"status", "is_truncated", "next_offset", "content"} <= set(row)
 
 
+# ─── 3b: 体积闸第一次量到地图行（体验修复刀3-C3）────────────────────────
+
+# docs.vllm.ai 那一形状：76 字符的 URL + 一颗 lastmod，序列化后 117 字符/行。
+_LONG_PATHS = [f"/en/latest/api/vllm/entrypoints/openai/chatml_{i:05d}.html"
+               for i in range(1, 1201)]
+
+
+def _fake_walk(paths):
+    """`discover_sitemap` 的离线替身，口径抄 `sitemap.py:301-320`。
+
+    先记 seen 再过 accept、被拒的计入 filtered_out、够 max_urls 即停并置 capped ——
+    这四件事任一件走样，"预算花在哪些行上"就与真机不同。不打真 socket：这一族
+    回环用例本身依赖套件顺序才绿（台账 #41），而 C3 判的是账怎么算、怎么出口。
+    """
+    def _discover(start_url, *, http_get, max_urls, accept=None):
+        from dhole_mcp.sitemap import SitemapResult, SitemapURL
+        res = SitemapResult(sitemaps_used=[f"{start_url}/sitemap.xml"], via="direct")
+        seen: set[str] = set()
+        for path in paths:
+            u = f"{start_url.rstrip('/')}{path}"
+            if u in seen:
+                continue
+            seen.add(u)
+            if accept is not None and not accept(u):
+                res.filtered_out += 1
+                continue
+            res.urls.append(SitemapURL(url=u, lastmod="2026-09-27"))
+            if len(res.urls) >= max_urls:
+                res.capped = len(seen) < len(paths)
+                break
+        return res
+    return _discover
+
+
+@pytest.fixture
+def big_sitemap(monkeypatch):
+    monkeypatch.setattr("dhole_mcp.sitemap.discover_sitemap", _fake_walk(_LONG_PATHS))
+
+
+class TestTheCharBudgetPricesMapRows:
+    """`max_total_chars` 从前只累加 `content_md`，而地图行的 content 恒为空。
+
+    现场（2026-10-09 真实使用模拟 · 剧本卡 3）：一次默认预算的 web_discover 交回
+    116,173 字符（1,000 行 / ~32k token），信封里 `truncated_by_total_chars:false`，
+    预算 60,000 —— 一道对某类输出**从不应战**的闸，比没有闸更坏，因为它让调用方
+    以为自己设过上限。
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_default_budget_now_bounds_a_map(self, big_sitemap):
+        r = await MasterFetchServer().web_crawl(
+            "https://d.test", max_pages=10, sitemap="on", discover_only=True)
+        shipped, total = len(r.pages), r.pages_discovered
+        assert r.truncated_by_total_chars is True, r.summary
+        assert total == 1000, "地图的大小不该被预算改变"
+        assert shipped < total, "预算又躺平了"
+        rows = sum(len(crawl_mod._map_row_dict(p, sitemap_used=True)) for p in r.pages)
+        assert rows <= 60_000, f"序列化后的行超出了调用方设的预算：{rows:,}"
+        # 四件事作为一个整体出口：旗子、总量、游标、散文里的数。缺一件就是静默截断。
+        assert r.next_resume_token.endswith(f":{shipped}"), r.next_resume_token
+        assert f"{shipped} of {total} map row(s) shipped" in r.summary, r.summary
+        assert f"held {total - shipped} row(s) back" in r.summary, r.summary
+        # 被砍的行不是丢了：计划里存的是整张图（前半 + 尾巴）。
+        assert len(crawl_mod.plan_load(r.plan_id)) == total, (
+            "游标指向的计划只存了交出去的那些行 —— 续页将无行可续")
+
+    @pytest.mark.asyncio
+    async def test_a_budget_of_zero_means_no_cap_and_says_no_lie(self, big_sitemap):
+        r = await MasterFetchServer().web_crawl(
+            "https://d.test", max_pages=10, sitemap="on", discover_only=True,
+            max_total_chars=0)
+        assert len(r.pages) == 1000, len(r.pages)
+        assert r.truncated_by_total_chars is False
+        assert "held" not in r.summary, r.summary
+        # 0 是"这一轮不要帽"的合法写法（与 nested_max=0 同一拼法），所以 580KB 是
+        # 调用方自己点的菜 —— 但这一句必须说得出重量，不然"不要帽"读起来像"没有多少"。
+        assert "map capped at 1000 URLs" in r.summary, r.summary
+
+    @pytest.mark.asyncio
+    async def test_the_prose_slash_the_wire_still_fits_the_budget(self, big_sitemap):
+        """预算数行，信封自己也要能被同一句话解释 —— 而不是"设了 60,000 收到 90,000"。"""
+        r = await MasterFetchServer().web_crawl(
+            "https://d.test", max_pages=10, sitemap="on", discover_only=True)
+        whole = len(r.model_dump_json())
+        assert whole <= 60_000 + 4_000, (
+            f"整封回执 {whole:,} 字符，预算 60,000：信封的散文把自己挤出去了")
+
+
 # ─── 4: crawl 的分页契约 ─────────────────────────────────────────────
 
 def _article_html(chars: int) -> str:

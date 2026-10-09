@@ -179,8 +179,8 @@ def _ruler_module():
     return mod
 
 
-def test_the_default_connect_is_the_published_30_719():
-    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：30,719。
+def test_the_default_connect_is_the_published_31_208():
+    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：31,208。
 
     这一条同时是量尺的回归锁：`tool_payload_measure._wire_for` 曾按工具数累加路由行，
     把默认连接报成 30,857（web_discover / web_crawl 共用那句被算了两遍）。修成按文本
@@ -195,6 +195,13 @@ def test_the_default_connect_is_the_published_30_719():
     都写着 "(URL path + page title)"，而 `sitemap=true` 的图只有 `loc`，没有标题可比
     —— 常驻层里的这句话在一条真实的调用形状上是假的。改动只做"不再承诺标题那一半"
     （crawl +4 / discover +14），完整解释留在 references/tools.md 按需付。
+
+    30,719 → 31,208（2026-10-10，体验修复刀3-C3）：一次**上抬 +489**，买的是地图
+    的大小从此有主人。`max_total_chars` 从前只在 web_crawl 那颗门上，`web_discover`
+    转发时不传 → 一张 1,000 行的地图（实测 116,173 字符 / ~32k token）把默认预算
+    透支 1.9 倍而 `truncated_by_total_chars` 一路是 False；预算现在数的是序列化后的
+    行。被切掉的行要有路可拿，否则修的就是一次静默截断，所以 `resume_token` 也上
+    web_discover 这扇门（读已存下的地图，不走网络）。两颗参数行 +332、描述尾句 +157。
     """
     ruler = _ruler_module()
     import ast
@@ -212,7 +219,7 @@ def test_the_default_connect_is_the_published_30_719():
         f"仓库量尺与 wire 的 tools/list 对不上：{ruler_compact} vs {wire['tools_compact']}")
     assert ruler_instr == len(wire["instructions"]), (
         f"仓库量尺多算了路由行：{ruler_instr} vs wire {len(wire['instructions'])}")
-    assert ruler_compact + ruler_instr == 30_719
+    assert ruler_compact + ruler_instr == 31_208
 
 
 def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():
@@ -230,12 +237,13 @@ def test_the_readme_eight_tool_price_is_what_the_server_sends():
 def test_the_ninth_tool_costs_its_own_row_and_no_routing_line():
     """加 web_discover 只多它自己那一行：路由行与 web_crawl 共用，去重后不再付第二次。
 
-    这是 F-A-J1 那把共享路由行在 wire 上的样子：README 的 9 颗 25,167 =
-    23,599 + 1,568，instructions 一字不变。
+    这是 F-A-J1 那把共享路由行在 wire 上的样子：README 的 9 颗 25,656 =
+    23,599 + 2,057，instructions 一字不变。C3 之后 `web_discover` 自己那一行涨了
+    （地图大小两颗旋钮上这门），涨的部分照旧只付一次。
     """
     nine = SUB8 + ["web_discover"]
     assert _assert_price(",".join(nine), nine,
-                         published=("README.md", "共 9 颗 {total}")) == 25_167
+                         published=("README.md", "共 9 颗 {total}")) == 25_656
     eight = _connect(",".join(SUB8))
     assert len(_connect(",".join(nine))["instructions"]) == len(eight["instructions"]), (
         "两颗共用一句路由的工具，第二颗不该再收一次路由行的钱")

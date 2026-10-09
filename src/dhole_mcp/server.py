@@ -3151,8 +3151,13 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     | {"resume_token", "selector", "schema"},
     # 17.0 §4: the map got its own tool, and the flag it used to be is not an
     # argument any more -- `crawl.web_crawl` still takes it internally.
+    # C3：一张地图的大小由站点决定，所以它的两道闸都要在这扇门上够得着 ——
+    # `max_total_chars` 摊开一页，`resume_token` 从上一页的游标续下去。少了后者，
+    # 被体积闸留下的那些行就只有"重付前半张地图"一条路，而游标指向空无处比没有
+    # 游标更坏。
     "web_discover": frozenset({"url", "sitemap", "path_include", "path_exclude",
-                               "max_pages", "search", "timeout"}),
+                               "max_pages", "search", "timeout",
+                               "resume_token", "max_total_chars"}),
     "web_search": _SS_PARAMS | {"query"},
     "doc_parse": frozenset({"file_path", "cwd", "encoding", "offset",
                             "pages", "password"}),
@@ -8421,6 +8426,8 @@ class MasterFetchServer:
         max_pages: int = 10,
         search: Optional[str] = None,
         timeout: int = 30000,
+        max_total_chars: int = 60_000,
+        resume_token: str = "",
     ) -> CrawlResponseModel:
         """A site's URL map, with no page read for content.
 
@@ -8428,21 +8435,55 @@ class MasterFetchServer:
         asking for pages are two intentions, and the one a caller has should not
         depend on remembering a switch -- so the switch became a tool and the
         engine stayed where it was.
+
+        A map is the one output whose size is set by the SITE, which is why
+        `max_total_chars` and `resume_token` live here: the budget bounds how
+        many rows one response carries, and `resume_token` (a `plan_id:offset`
+        from this tool's own reply or its previous page) returns the rows the
+        budget held back without walking the site again.
         """
+        from dhole_mcp.crawl import (MAX_TOTAL_CHARS_CEILING, MIN_TOTAL_CHARS,
+                                    CrawlResponseModel as _CRM, plan_store,
+                                    plan_token)
+        # 与 web_crawl 同一条钳（0 与负数 = 这一轮不要帽，钳是幂等的所以传下去无妨）。
+        _asked_total = int(max_total_chars or 0)
+        max_total_chars = (0 if _asked_total <= 0 else
+                           max(MIN_TOTAL_CHARS,
+                               min(_asked_total, MAX_TOTAL_CHARS_CEILING)))
+        if resume_token:
+            # 续页读的是已经存下的地图：这里没有第二张图可走，所以 `sitemap=` 在这条
+            # 路上没有作用对象 —— 具名拒绝，而不是让它陪跑（params.py 只许可两种说法）。
+            if sitemap not in (False, None, "", "false", "off", 0):
+                _msg = ("invalid_request: resume_token reads a map already held "
+                        "server-side, so there is no second map to walk - sitemap= "
+                        "would decide nothing here. Nothing was read.")
+                return _CRM(
+                    start_url=url, pages=[], error=_msg,
+                    summary=f"invalid request · {_summary_label(_msg)}",
+                    next_action=(
+                        "Drop sitemap= to page the held map, or call web_discover "
+                        "without resume_token to walk the site's index again (that "
+                        "starts a fresh plan with a fresh cursor)."))
+            return await self.web_crawl(
+                url, resume_token=resume_token, discover_only=True,
+                path_include=path_include, path_exclude=path_exclude,
+                search=search, max_total_chars=max_total_chars, timeout=timeout)
         result = await self.web_crawl(
             url, max_pages=max_pages, path_include=path_include,
             path_exclude=path_exclude, discover_only=True, sitemap=sitemap,
-            search=search, timeout=timeout)
+            search=search, max_total_chars=max_total_chars, timeout=timeout)
         if not result.error and result.pages:
             # P11 阶段1：地图留在服务器侧（1h TTL），回执只发一个短 id ——
             # 千页任务的参数成本从每轮 ~7.6KB 的 URL 传送带降到 O(1)。
-            from dhole_mcp.crawl import plan_store, plan_token
-            result.plan_id = plan_store([p.url for p in result.pages])
-            result.next_action = (result.next_action or "").rstrip() + (
-                f" Plan {result.plan_id} is held here for 1h: "
-                f"web_crawl(url=..., resume_token='{plan_token(result.plan_id, 0)}')"
-                " fetches it without re-sending URLs (add selector=/schema= to "
-                "project each page); or web_read(urls=[...]) the picks directly.")
+            # 被体积闸砍过一刀的地图已经在 crawl 里整份存下了（连未交出的那些行），
+            # 这里再存一次只会把游标指向一个没有尾巴的新计划。
+            if not result.plan_id:
+                result.plan_id = plan_store([p.url for p in result.pages])
+                result.next_action = (result.next_action or "").rstrip() + (
+                    f" Plan {result.plan_id} is held here for 1h: "
+                    f"web_crawl(url=..., resume_token='{plan_token(result.plan_id, 0)}')"
+                    " fetches it without re-sending URLs (add selector=/schema= to "
+                    "project each page); or web_read(urls=[...]) the picks directly.")
         return result
 
     async def web_crawl(
@@ -8528,7 +8569,9 @@ class MasterFetchServer:
                 max_total_chars=max_total_chars, concurrency=concurrency,
                 cache_ttl=cache_ttl, force_fetcher=force_fetcher,
                 timeout=timeout, deadline_ms=deadline_ms,
-                ignore_robots=ignore_robots)
+                ignore_robots=ignore_robots, discover_only=discover_only,
+                path_include=path_include, path_exclude=path_exclude,
+                search=search)
 
         # M-1 闸：与 web_read 同一条规则（17.0 起无许可门 —— focus_engine=
         # 'neural' 点名才用语义分）。模型必须在场（缺模型显式报错，不静默下载）：
@@ -8589,6 +8632,10 @@ class MasterFetchServer:
         max_pages: int, max_content_chars_per: int, max_total_chars: int,
         concurrency: int, cache_ttl: int, force_fetcher: Optional[str],
         timeout: int, deadline_ms: int, ignore_robots: bool,
+        discover_only: bool = False,
+        path_include: Optional[List[str]] = None,
+        path_exclude: Optional[List[str]] = None,
+        search: Optional[str] = None,
     ) -> CrawlResponseModel:
         """P11 阶段2/3：把 web_discover 留下的计划按 offset 顺序**确定性**投影。
 
@@ -8623,6 +8670,45 @@ class MasterFetchServer:
                 summary="plan expired or unknown")
         offset = max(0, min(offset, len(urls)))
         remaining = urls[offset:]
+
+        if discover_only:
+            # `discover_only=true` 在这一支以前是**静默的**：计划里的 URL 一律被抓成
+            # 正文。参数从来没被读过，而一张被体积闸砍过的地图只剩这条续图的路 ——
+            # 不兑现它，`next_resume_token` 就是一把指向正文的地图游标。params.py 只
+            # 许可两种说法：兑现，或具名拒绝。
+            if selector or schema is not None:
+                _msg = ("invalid_request: discover_only=true returns map rows and "
+                        "fetches nothing, so selector=/schema= have no page to "
+                        "project. Nothing was fetched.")
+                return _CRM(start_url=url, pages=[], error=_msg,
+                            summary=f"invalid request · {_summary_label(_msg)}",
+                            next_action=(
+                                "Drop discover_only=true to fetch and project the plan, "
+                                "or drop selector= / schema= to keep reading the map."))
+            return self._plan_map_page(url=url, plan_id=plan_id, urls=urls,
+                                       offset=offset, remaining=remaining,
+                                       max_total_chars=max_total_chars,
+                                       path_include=path_include,
+                                       path_exclude=path_exclude,
+                                       search=search, t0=t0)
+
+        _inert = [n for n, v in (("search", search), ("path_include", path_include),
+                                 ("path_exclude", path_exclude)) if v]
+        if _inert:
+            # 与 selector/schema 同一条例：这三颗是**走图时**的谓词，而这一支不再走图。
+            # 在这一支兑现它们等于改变 offset 算术（跳过的行算不算被消费过），而那个
+            # 语义没人要 —— 所以具名拒绝，并把能兑现它们的那条路点名。
+            _msg = (f"invalid_request: {' / '.join(_inert)} scope a map while it is "
+                    "walked, and fetching a plan walks nothing. Nothing was fetched.")
+            return _CRM(start_url=url, pages=[], error=_msg,
+                        summary=f"invalid request · {_summary_label(_msg)}",
+                        next_action=(
+                            "For a filtered subset of a plan: web_discover with "
+                            f"resume_token='{plan_token(plan_id, offset)}' and these "
+                            "same keys returns the map ROWS they keep (it walks no "
+                            "network), then web_read(urls=[...]) reads exactly those. "
+                            "To narrow what gets FETCHED, drop these keys and page the "
+                            "plan with max_pages."))
 
         max_pages = max(1, min(int(max_pages), MAX_PAGES_CEILING))
         rows: list = []
@@ -8706,8 +8792,106 @@ class MasterFetchServer:
                                   "once across these resumes.")
         return result
 
-    # ─── Serve ─────────────────────────────────────────────────────
+    def _plan_map_page(self, *, url: str, plan_id: str, urls: list[str],
+                       offset: int, remaining: list[str],
+                       max_total_chars: int, t0: float,
+                       path_include: Optional[List[str]] = None,
+                       path_exclude: Optional[List[str]] = None,
+                       search: Optional[str] = None) -> CrawlResponseModel:
+        """The next ROWS of a map that was too big for one response (C3's cursor).
 
+        A map page ships rows and fetches nothing, so the bound that applies is
+        the byte budget that cut the first page - not max_pages (which bounds
+        page fetches), not concurrency, not cache_ttl. The arithmetic says so in
+        the summary: rows offset+1..next_offset of len(urls).
+
+        The rows carry the URL alone. Every other column is at its documented
+        default, so the map serializer drops it - including `content_ok=false`,
+        which is the honest value for a URL this call never opened (the old map
+        mode used to force it true, which made the summary claim "10 content_ok"
+        about ten pages that were only listed). `lastmod` came from the sitemap
+        and is not held in the plan, and that loss is said out loud rather than
+        left for the reader to diff between pages.
+        """
+        from dhole_mcp.crawl import (CrawlPage, CrawlResponseModel as _CRM,
+                                    _map_row_cost, _sitemap_passes_filters,
+                                    normalize_path_patterns, plan_token)
+        from urllib.parse import urlparse as _up
+
+        try:
+            path_include = normalize_path_patterns(path_include)
+            path_exclude = normalize_path_patterns(path_exclude)
+        except ValueError as e:
+            _msg = f"invalid_request: bad path filter: {e}"
+            return _CRM(start_url=url, pages=[], error=_msg,
+                        summary=f"invalid request · {_summary_label(_msg)}",
+                        next_action="Nothing was read from the plan. Fix the pattern.")
+        _terms = [t for t in (search or "").lower().split()]
+
+        rows: list = []
+        chars = 0
+        dropped = 0
+        idx = 0
+        for u in remaining:
+            idx += 1
+            # 谓词在游标这一支是合法的：地图里的行只有 URL，而这三颗判的就是 URL
+            # —— C2 给第一页定的正是同一口径（兑现一半并说明，比不兑现诚实）。
+            try:
+                _path = _up(u).path or "/"
+            except Exception:
+                _path = "/"
+            if not _sitemap_passes_filters(_path, path_include, path_exclude):
+                dropped += 1
+                continue
+            if _terms and not any(t in u.lower() for t in _terms):
+                dropped += 1
+                continue
+            row = CrawlPage(url=u)
+            cost = _map_row_cost(row, sitemap_used=False)
+            if max_total_chars and rows and chars + cost > max_total_chars:
+                idx -= 1
+                break
+            chars += cost
+            rows.append(row)
+        next_offset = offset + idx
+        left = len(urls) - next_offset
+        summary = (f"map rows {offset + 1}-{next_offset} of {len(urls)} held under "
+                   f"plan {plan_id}: {len(rows)} row(s), {chars:,} chars - listed "
+                   "URLs only, no page fetched (lastmod is not held in the plan)")
+        if _terms or path_include or path_exclude:
+            summary += (f" · the filters kept {len(rows)} of the {idx} row(s) this "
+                        f"page walked ({dropped} matched none of them)")
+        result = _CRM(
+            start_url=url, pages=rows, pages_crawled=0,
+            pages_discovered=len(urls), discover_only=True,
+            truncated_by_total_chars=bool(left), plan_id=plan_id,
+            duration_ms=(now() - t0) * 1000.0, summary=summary,
+        )
+        if left:
+            result.next_resume_token = plan_token(plan_id, next_offset)
+            result.next_action = (
+                f"{left} map row(s) left: web_discover(url='{url}', "
+                f"resume_token='{result.next_resume_token}') returns rows "
+                f"{next_offset + 1}-{len(urls)} without re-fetching the sitemap. "
+                "web_read(urls=[...]) takes any subset of the rows already in hand, "
+                "and the same resume_token on web_crawl fetches their content. "
+                "max_pages does not bound a map page - it bounds page fetches, and "
+                "this page fetched none.")
+        else:
+            # "exhausted" 说的必须是**地图**走完了还是**筛选后没剩**——两句话共用一个
+            # 结尾，调用方就会把"你的词不在这段里"读成"这个站就这么多页"。
+            result.next_action = (
+                f"Map exhausted: all {len(urls)} row(s) have shipped across these "
+                f"pages" + (f", and the filters you passed kept none of the "
+                            f"{idx} row(s) in this range"
+                            if (_terms or path_include or path_exclude) and not rows
+                            else "") + f". web_read(urls=[...]) the picks, or "
+                f"web_crawl(url='{url}', "
+                f"resume_token='{plan_token(plan_id, 0)}') to fetch every planned "
+                "page's content.")
+        return result
+
+    # ─── Serve ─────────────────────────────────────────────────────
     async def sys_guide(self, topic: str = "", section: str = "") -> str:
         """Serve one handbook volume from the packaged skill corpus.
 
@@ -8876,7 +9060,7 @@ class MasterFetchServer:
         },
         {
             "name": "web_discover",
-            "description": "A site's URL MAP, with no page read for content - one call answers 'what is on this site' before you choose what to read. pages_crawled=0 is the design, not a failure. The picks go to web_read(urls=[...]); many pages at once is web_crawl.\n- Two prices: sitemap=true reads the site's own index (one request, <lastmod> per row), unset walks links at one request per step up to max_pages; 'auto' tries the index, then walks.\n- path_include / path_exclude scope the map ('/docs' is a subtree, not a string prefix); search filters by path + title. How to read a map: sys_guide(topic='behavior', section='web_discover').",
+            "description": "A site's URL MAP, with no page read for content - one call answers 'what is on this site' before you choose what to read. pages_crawled=0 is the design, not a failure. The picks go to web_read(urls=[...]); many pages at once is web_crawl.\n- Two prices: sitemap=true reads the site's own index (one request, <lastmod> per row), unset walks links at one request per step up to max_pages; 'auto' tries the index, then walks.\n- path_include / path_exclude scope the map ('/docs' is a subtree, not a string prefix); search filters by path + title. A map's SIZE is the site's call: max_total_chars bounds one page of rows and resume_token returns the rows it held back. How to read a map: sys_guide(topic='behavior', section='web_discover').",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {
@@ -8886,6 +9070,8 @@ class MasterFetchServer:
                     "path_include": {"type": "array", "items": {"type": "string"}, "description": "Keep only these path subtrees: '/docs', or '/docs/*'."},
                     "path_exclude": {"type": "array", "items": {"type": "string"}, "description": "Drop these path subtrees."},
                     "search": {"type": "string", "description": "Filter the map by keyword (URL path + title where one was read)."},
+                    "max_total_chars": {"type": "integer", "description": "Chars one map page may carry (1000-200000, default 60000; 0 = no cap). A map's row count is set by the site, so this is the knob that sizes a page."},
+                    "resume_token": {"type": "string", "description": "Pass back plan_id:<rows shipped> verbatim to get the map rows the budget held back - same map, no re-walk, no re-pay."},
                     "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000)."},
                 },
             },

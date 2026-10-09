@@ -34,8 +34,13 @@ def _run(coro):
 
 # ─── web_discover：从 web_crawl 搬出「只出 URL 地图」──────────────────
 
+# §4 搬出来的那七颗之外，C3 又加了两颗 —— 它们不是"还没搬走的爬行旋钮"，是地图
+# 独有的大小旋钮：一张地图的行数由站点决定，所以预算与游标必须在这扇门上够得着
+# （`max_total_chars` 在 web_crawl 上有、web_discover 上没有的那段时间里，被预算
+# 砍掉的行只剩"重付前半张地图"一条路，而游标指向空无处比没有游标更坏）。
 DISCOVER_PARAMS = {"url", "sitemap", "path_include", "path_exclude",
-                   "max_pages", "search", "timeout"}
+                   "max_pages", "search", "timeout",
+                   "max_total_chars", "resume_token"}
 
 
 def test_web_discover_is_registered_with_its_own_param_set():
@@ -43,7 +48,8 @@ def test_web_discover_is_registered_with_its_own_param_set():
     assert "web_discover" in defs, sorted(defs)
     props = set(defs["web_discover"]["inputSchema"]["properties"])
     assert props == DISCOVER_PARAMS, (
-        f"§4 给 web_discover 的是这 7 个，多出的是还没搬走的旧旋钮：{props}")
+        f"§4 给 web_discover 的是这 7 颗，C3 给它的地图大小是这 2 颗，"
+        f"多出来的才是还没搬走的旧旋钮：{props}")
     assert props == set(server_mod._TOP_LEVEL_ARGS["web_discover"])
 
 

@@ -48,6 +48,7 @@ MOVED_LESSONS = [
     # 爬与 discover 的经济账
     ("整轮没有字符预算，只有每页 20000", "20000"),
     ("Crawl-delay 不是这里的旋钮", "Crawl-delay"),
+    ("地图的大小由站点决定，预算数的是序列化后的行（C3）", "serialized rows"),
     # 搜索
     ("consensus 数的是索引家族不是原始命中", "FAMILIES"),
     ("引擎池的上限与带 key 的引擎", "Keyed backends"),
@@ -297,7 +298,17 @@ def test_connect_stays_inside_the_packed_budget():
 #: crawl 61→65(+4)、discover 50→64(+14)。**+18 → 30,719**。
 #: 刻意没有把"sitemap 分支只比 URL、且筛在帽之前"整段搬进常驻层 —— 那句话已经逐字
 #: 在 references/tools.md 里，按需付；这里只付"闭嘴于说不准的那半句"的钱。
-CONNECT_CEILING = 30_719
+#: 2026-10-10 体验修复刀3-C3：棘轮**上抬 +489**，买的是"地图的大小从此有主人"。
+#: 一张地图的行数由站点决定，而 web_discover 这扇门上原来**两颗旋钮都没有**：
+#: `max_total_chars` 只在 web_crawl 上（web_discover 转发时不传，永远吃默认的
+#: 60,000），而游标 `resume_token` 只通向正文。C3 让预算第一次量到地图行（地图行
+#: 的 content 恒为空，所以那道闸从前对地图从不应战），代价是一刀切掉默认形状的
+#: 一部分 —— 被切掉的行必须有路可拿，否则就是新的静默截断，于是 `resume_token`
+#: 也上这张门（读的是已存下的地图，不再走网络）。逐字符实测：两颗参数行 +332、
+#: 描述尾句 +157。30,719 → **31,208**。
+#: 没有把"游标页只带 URL、lastmod 不在计划里"写进常驻层：那句话在 summary 里逐次
+#: 出口，而字段口径归 references/fields.md。
+CONNECT_CEILING = 31_208
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

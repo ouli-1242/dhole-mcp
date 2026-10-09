@@ -124,11 +124,22 @@ class TestTheWiringCarriesTheKeyword:
 
     @pytest.mark.asyncio
     async def test_the_same_entry_without_a_keyword_is_unchanged(self, walk):
+        """没有关键词时，**地图**一寸没变 —— 变的只是这一页交出多少行（C3 之后）。
+
+        这条用例原本断的是 `len(r.pages) == SITEMAP_MAP_FLOOR`。C3 让整轮字符预算第一
+        次量到地图（它从前只累加 `content_md`，而地图行的 content 恒为空），60,000 字符
+        在 910 行就花完了 —— 于是"多少行到手"不再是站点决定的数，而"地图有多大"仍然只
+        由关键词决定。所以这里读 `pages_discovered`：那才是地图。少掉的行带着游标，
+        不是丢了。
+        """
         from dhole_mcp.server import MasterFetchServer
 
         r = await MasterFetchServer().web_crawl(BASE, max_pages=10, max_depth=1,
                                                 sitemap="on", discover_only=True)
-        assert len(r.pages) == SITEMAP_MAP_FLOOR, len(r.pages)
+        assert r.pages_discovered == SITEMAP_MAP_FLOOR, r.pages_discovered
+        assert len(r.pages) < SITEMAP_MAP_FLOOR, "预算没咬：C3 那道闸又躺平了"
+        assert r.truncated_by_total_chars is True, r.summary
+        assert r.next_resume_token.endswith(f":{len(r.pages)}"), r.next_resume_token
         assert "search=" not in (r.summary or ""), r.summary
 
 

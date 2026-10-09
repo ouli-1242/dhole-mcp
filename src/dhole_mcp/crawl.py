@@ -57,6 +57,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import heapq
+import json
 import logging
 import re
 from time import time
@@ -185,11 +186,11 @@ class CrawlResponseModel(BaseModel):
     start_url: str = Field(description="The URL crawl started from (normalized).")
     pages: list[CrawlPage] = Field(description="Crawled pages (one CrawlPage each). In discover_only, content is empty and pages hold the discovered URL map.")
     pages_crawled: int = Field(default=0, description="Pages actually fetched.")
-    pages_discovered: int = Field(default=0, description="Total unique same-domain URLs found (including crawled).")
+    pages_discovered: int = Field(default=0, description="Total unique same-domain URLs found (including crawled). In map mode this is the size of the MAP, which is not the number of rows returned: when a budget or the deadline held rows back, pages_discovered is the whole map and len(pages) is the part that shipped.")
     discover_only: bool = Field(default=False, description="True = map mode (URLs only, no content).")
     truncated_by_max_pages: bool = Field(default=False, description="True = stopped early because max_pages was reached.")
     truncated_by_time: bool = Field(default=False, description="True = stopped early because the overall deadline (ms) was reached.")
-    truncated_by_total_chars: bool = Field(default=False, description="True = stopped early because the whole-run character budget (max_total_chars) was spent. The summary names how many pages were still queued and how many were fetched inside the last batch but not returned.")
+    truncated_by_total_chars: bool = Field(default=False, description="True = stopped early because the whole-run character budget (max_total_chars) was spent. The summary names how many pages were still queued and how many were fetched inside the last batch but not returned. In map mode it means the opposite of a page being dropped for being worthless: the rows were in hand and only their BYTES cost too much, so plan_id / next_resume_token carry the rest.")
     sitemap_used: bool = Field(default=False, description="True = the URL map came from the site's sitemap.xml (one fetch), not best-first BFS discovery.")
     sitemap_truncated: bool = Field(default=False, description="True = the map is SHORT OF THE SITE, not just short of your filters: it stopped at the URL cap, or the walk hit its own sitemap-index limit. pages_discovered is then a LOWER BOUND - the site's sitemap holds at least this many URLs. Absent (False) on a map that read the whole sitemap, but note that still is not a guarantee the sitemap lists every page: a sitemap is an index the site chooses to publish.")
     sitemaps: list[str] = Field(default=[], description="Sitemap.xml URLs that were fetched + parsed (sitemap mode only).")
@@ -199,49 +200,80 @@ class CrawlResponseModel(BaseModel):
     summary: str = Field(default="", description="One-line crawl status.")
     next_action: str = Field(default="", description="Obvious next call when one exists (continue crawl / fetch a page).")
     ssrf_recheck: str = Field(default="", description="Non-empty only when the post-redirect IP recheck was skipped because of this machine's resolver (a fake-ip proxy) — the SSRF posture of the WHOLE crawl, stated once. Before this field existed a crawl said nothing about it at all: the per-page receipts live on the web_read results that crawl consumes internally and never reaches the caller, so the one security posture that a 40-page run should disclose was dropped with the pages' own metadata.")
-    plan_id: str = Field(default="", description="web_discover responses only: the URL map is held server-side under this id (1h TTL). Pass resume_token='<plan_id>:0' to web_crawl to fetch the plan without re-sending the URL list.")
-    next_resume_token: str = Field(default="", description="Set when a resumed plan run stopped with URLs left (page cap, char budget or deadline): pass it back as resume_token= to continue exactly where this run stopped. Absent when the plan is exhausted.")
+    plan_id: str = Field(default="", description="The URL map is held server-side under this id (1h TTL). web_discover sets it on every map; web_crawl sets it when a map had rows held back, because those rows are only reachable through the plan. Pass resume_token='<plan_id>:0' to web_crawl to fetch the plan without re-sending the URL list, or resume_token='<plan_id>:<next row>' with discover_only=true for the rest of the map itself.")
+    next_resume_token: str = Field(default="", description="Set when a run stopped with URLs left (page cap, char budget or deadline): pass it back as resume_token= to continue exactly where this run stopped. A truncated MAP carries it too, and on a map it is the cursor into the held-back rows - web_crawl(resume_token=..., discover_only=true) returns the next rows without re-fetching the sitemap. Absent when the plan is exhausted.")
 
     @model_serializer(mode="wrap")
     def _map_rows_carry_only_what_differs(self, handler):
-        """In map mode a row is the URL, not a page report.
+        """In map mode a row is the URL, not a page report (see _map_row_dict).
 
-        A URL map is the one output whose size is set by the site rather than by
-        what the caller asked for, and the flow the tool description recommends
-        (map once with sitemap=true, then read the picks) hit it:
-        docs.vllm.ai serialized 1000 entries to 353KB of JSON for 70KB of URLs —
-        5.0x, because every row restated status/depth/content/content_chars/
-        is_truncated/next_offset/fetched_at/error as the same default and
-        page_type/fetcher_used/summary as the same constant. ~151k tokens in one
-        call is not a map an agent can read; it is a context-window accident that
-        punishes exactly the caller who followed the documented path.
+        The row shape lives in `_map_row_dict` because the budget has to price
+        the same thing the wire emits: `max_total_chars` counts serialized rows,
+        and a second copy of that shape would drift the moment one side changed.
 
-        So in map mode a field is emitted only when it differs from its default,
-        page_type goes in every map (the top-level discover_only flag states it),
-        and in sitemap mode the other three per-row constants go too
-        (sitemap_used already states them). Content mode is untouched: those
-        rows differ from each other, which is the whole test.
+        Why the length bound is NOT in `wire._wire_json`, since that is where a
+        reader may look first: `wire.py`'s contract is unconditional compaction
+        - it prunes fields at their documented default and never truncates, and
+        a response that quietly got shorter is the failure this whole batch is
+        about. A serializer cannot know that dropping half a URL map is the
+        right answer for this call; the crawl does, because it owns the cursor
+        that makes held-back rows reachable again. So the byte bound is enforced
+        where the rows are made, and `_wire_json` stays a compressor.
         """
         data = handler(self)
         if not self.discover_only:
             return data
-        defaults = {name: f.default for name, f in CrawlPage.model_fields.items()}
-        # page_type is constant in map mode BY CONSTRUCTION: _classify sets it to
-        # "discover_only" and every other assignment sits behind `if not
-        # discover_only` (crawl.py:1042), while the sitemap path reports
-        # "sitemap" and is covered by the sitemap_used branch below. The
-        # top-level discover_only flag already states the same thing, so the
-        # column repeats one value across a map whose length is set by the site
-        # rather than by the caller - 28 chars a row is 28KB on a 1000-URL map,
-        # and no row was ever distinguished by it.
-        constant = ("content_ok", "fetcher_used", "page_type", "summary") \
-            if self.sitemap_used else ("page_type",)
-        rows = []
-        for page in self.pages:
-            rows.append({k: v for k, v in page.model_dump().items()
-                         if k not in constant and v != defaults.get(k)})
-        data["pages"] = rows
+        data["pages"] = [_map_row_dict(p, sitemap_used=self.sitemap_used)
+                         for p in self.pages]
         return data
+
+
+def _map_row_dict(page: CrawlPage, *, sitemap_used: bool) -> dict:
+    """The one owner of what a map row costs the caller.
+
+    A URL map is the one output whose size is set by the site rather than by
+    what the caller asked for, and the flow the tool description recommends
+    (map once with sitemap=true, then read the picks) hit it:
+    docs.vllm.ai serialized 1000 entries to 353KB of JSON for 70KB of URLs -
+    5.0x, because every row restated status/depth/content/content_chars/
+    is_truncated/next_offset/fetched_at/error as the same default and
+    page_type/fetcher_used/summary as the same constant. ~151k tokens in one
+    call is not a map an agent can read; it is a context-window accident that
+    punishes exactly the caller who followed the documented path.
+
+    So in map mode a field is emitted only when it differs from its default,
+    page_type goes in every map (the top-level discover_only flag states it),
+    and in sitemap mode the other three per-row constants go too
+    (sitemap_used already states them). Content mode is untouched: those
+    rows differ from each other, which is the whole test.
+
+    page_type is constant in map mode BY CONSTRUCTION: _classify sets it to
+    "discover_only" and every other assignment sits behind `if not
+    discover_only` (crawl.py:1042), while the sitemap path reports
+    "sitemap" and is covered by the sitemap_used branch below. The
+    top-level discover_only flag already states the same thing, so the
+    column repeats one value across a map whose length is set by the site
+    rather than by the caller - 28 chars a row is 28KB on a 1000-URL map,
+    and no row was ever distinguished by it.
+    """
+    defaults = {name: f.default for name, f in CrawlPage.model_fields.items()}
+    constant = ("content_ok", "fetcher_used", "page_type", "summary") \
+        if sitemap_used else ("page_type",)
+    return {k: v for k, v in page.model_dump().items()
+            if k not in constant and v != defaults.get(k)}
+
+
+def _map_row_cost(page: CrawlPage, *, sitemap_used: bool) -> int:
+    """Chars this row adds to the wire, comma included.
+
+    Measured against the real serializer, not guessed: a 1,000-row map of
+    76-char URLs is 116,173 wire chars (1.53x the URLs alone, ~32k tokens), and
+    the budget that was supposed to bound it counted `content_md`, which is
+    empty in map mode - so the default 60,000-char budget was overdrawn 1.9x at
+    500 rows and 9.7x at 1,000 without a word said anywhere.
+    """
+    return len(json.dumps(_map_row_dict(page, sitemap_used=sitemap_used),
+                          ensure_ascii=False, separators=(",", ":"))) + 1
 
 
 def _same_root(start_url: str) -> str:
@@ -803,7 +835,8 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
                        path_exclude: Optional[list[str]], *,
                        max_pages: int, deadline_t: float,
                        diag: Optional[dict] = None,
-                       search: Optional[str] = None) -> Optional[CrawlResponseModel]:
+                       search: Optional[str] = None,
+                       max_total_chars: int = 0) -> Optional[CrawlResponseModel]:
     """Try to map the site via sitemap.xml. Returns a CrawlResponseModel on
     success (sitemap found + parsed), or None if NO sitemap was reachable so the
     caller can fall back to BFS ('auto'). A sitemap that was found but produced no
@@ -819,6 +852,14 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
     `params.py` does not license. Pushing it in before the cap is also what makes
     it *work*: a keyword near the end of a 4,000-entry sitemap would otherwise be
     cut by the cap and read as "no match on this site".
+
+    `max_total_chars` is priced here for the same reason (体验修复刀3-C3). The
+    whole-run budget used to accumulate `content_md`, which is empty for every
+    map row, so a map was the one output no size gate applied to - measured, the
+    default 60,000 chars was overdrawn 9.7x by a 1,000-row map without
+    `truncated_by_total_chars` ever becoming true. Rows the budget held back are
+    not discarded: they go to `held`, the plan holds them, and
+    `next_resume_token` is the cursor back into it.
     """
     from dhole_mcp.sitemap import discover_sitemap
 
@@ -911,24 +952,50 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
             diag["via"] = result.via
         return None  # nothing reachable: the caller's "no sitemap here" answer is true
 
+    # 预算数的是**序列化后的行**，不是 `content_md`。map 行的 content_md 恒为空，
+    # 所以这一族从前在整轮字符帽的账本上是 0：默认的 60,000 字符预算在 500 行时
+    # 已被透支 1.9 倍、在 1,000 行时 9.7 倍，而 `truncated_by_total_chars` 一路是
+    # False —— 一道对某类输出根本不复存在的闸，比没有闸更坏，因为它让调用方以为
+    # 自己设过上限。行的长度只在这里才量得准：`_map_row_dict` 是 wire 的那一行
+    # 形状的唯一作者，预算与线路共用同一把尺（见 _wire_json 为何不该管长度）。
     pages: list[CrawlPage] = []
+    held: list[str] = []          # 在地图里、在这一页之外的行（留给游标）
     seen: set[str] = set()
+    row_chars = 0
+    stopped_by = ""               # "budget" | "deadline" | ""
     for su in result.urls:
-        if time() > deadline_t:
-            break
         norm = normalize_url(su.url)
         if norm in seen:
             continue
         seen.add(norm)
-        pages.append(CrawlPage(
+        if stopped_by:
+            # 一旦停下，后面的条目仍然数得着：地图的大小要说得出，游标才有个指向。
+            held.append(norm)
+            continue
+        if time() > deadline_t:
+            stopped_by = "deadline"
+            held.append(norm)
+            continue
+        row = CrawlPage(
             url=norm, depth=0, status=0, content_ok=True, fetcher_used="sitemap",
             page_type="sitemap", content=[], content_chars=0, lastmod=su.lastmod,
             summary="sitemap entry",
-        ))
+        )
+        cost = _map_row_cost(row, sitemap_used=True)
+        if max_total_chars and pages and row_chars + cost > max_total_chars:
+            stopped_by = "budget"
+            held.append(norm)
+            continue
+        row_chars += cost
+        pages.append(row)
         if len(pages) >= cap:
             break
 
     listed = len(result.urls)
+    # 地图的大小与这一页交出的行数分开数：`map_total` 是本次走到的地图（在手上、
+    # 含被留下的），`ok` 是响应里的行数。两个数都出口，缺多少才是可核对的算术。
+    map_total = len(pages) + len(held)
+    hold_plan_id = _hold_map_tail(pages, held) if held else ""
     if not pages:
         # The sitemap WAS found and parsed; it just produced no rows. Returning
         # None here made web_crawl report "no sitemap.xml found ... /sitemap.xml
@@ -940,10 +1007,15 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
                                           ("path_exclude", path_exclude)) if v]
         scope_desc = " or match ".join(scoped) if scoped else "on this host"
         if listed:
-            # Eligible, but every one was a repeat after normalization, or the
-            # deadline was already spent before the first row.
-            why = (f"its {listed} URL(s) did not become rows (a repeat after "
-                   f"normalization, or the deadline)")
+            # Eligible, but none of them became a row. 有了计数就不必再并列两个
+            # 猜测：`held` 数的就是"条目在手上、时间不在了"的那些，剩下的才是
+            # 归一化后的重复。合在一起说，调用方分不清该抬 deadline 还是该查站点。
+            if held:
+                why = (f"its {listed} URL(s) did not become rows: the deadline came "
+                       f"before the first one ({len(held)} of them were in hand)")
+            else:
+                why = (f"its {listed} URL(s) did not become rows (a repeat after "
+                       f"normalization)")
             fix = ("Re-run with a larger deadline_ms, or without sitemap=true to "
                    "discover by links instead.")
         elif result.filtered_out:
@@ -966,9 +1038,22 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
         else:
             why = "it lists no URLs"
             fix = "Run without sitemap=true to discover by links instead."
+        if hold_plan_id:
+            # 一个字节都没交出去，但那些 URL 是在手上的 —— 游标对空地图同样有效，
+            # 丢掉它们就等于把已经付过的一次 sitemap 抓取再要一遍。指的门是
+            # web_discover：`discover_only` 不在 web_crawl 的 wire 面上（17.0 §4 把它
+            # 变成了工具），所以那句"传 discover_only=true"在真机上够不着。
+            fix = (f"The {len(held)} URL(s) already in hand are held under plan "
+                   f"{hold_plan_id}: web_discover(url='{url}', "
+                   f"resume_token='{plan_token(hold_plan_id, 0)}') returns them "
+                   "without re-fetching the sitemap. Otherwise re-run with a larger "
+                   "deadline_ms, or without sitemap=true to discover by links instead.")
         return CrawlResponseModel(
             start_url=normalize_url(url), pages=[], pages_crawled=0,
-            pages_discovered=0, discover_only=True, sitemap_used=True,
+            pages_discovered=map_total, discover_only=True, sitemap_used=True,
+            truncated_by_time=stopped_by == "deadline",
+            plan_id=hold_plan_id,
+            next_resume_token=plan_token(hold_plan_id, 0) if hold_plan_id else "",
             sitemaps=list(result.sitemaps_used),
             duration_ms=(time() - t0) * 1000,
             summary=(f"sitemap.xml was read at {url} "
@@ -1034,13 +1119,41 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
             # `/a/`), or a walk that ran out of deadline. Off-domain and filtered
             # entries cannot appear - `_eligible` already dropped them upstream.
             summary += (f" · {listed - ok} of the sitemap's {listed} eligible entries "
-                        f"did not become rows (a repeat after normalization, or the "
-                        f"deadline)")
+                        f"did not become rows"
+                        + (f" (the {stopped_by} stopped this response after {ok} "
+                           f"row(s); those {len(held)} are held for the cursor)"
+                           if held else " (a repeat after normalization)"))
+    if held:
+        # 预算或时限砍掉的行不是"站点的坏消息"，是**这一次响应的形状**。四件事必须
+        # 同时出口，缺一件就是一次静默截断——本次修复的整批罪名就是这一条：
+        #   ① 旗子：truncated_by_total_chars / truncated_by_time（下面 return 里置）；
+        #   ② 总量：pages_discovered=map_total（地图多大），len(pages)=交回几行；
+        #   ③ 游标：next_resume_token=<plan_id>:<下一个行号>，尾巴存在服务器侧；
+        #   ④ 散文：这一句里带数，用量日志一行也能读出"少了多少、为什么、怎么续"。
+        summary += (
+            f" · {'the char budget' if stopped_by == 'budget' else 'the deadline'} held "
+            f"{len(held)} row(s) back: {ok} of {map_total} map row(s) shipped, "
+            f"{row_chars:,} chars against the "
+            + (f"{max_total_chars:,} you set" if stopped_by == "budget"
+               else "deadline you set"))
+        next_action += (
+            f" {len(held)} map row(s) did not ship and are held server-side under plan "
+            f"{hold_plan_id}: web_discover(url='{url}', "
+            f"resume_token='{plan_token(hold_plan_id, ok)}') returns rows "
+            f"{ok + 1}-{map_total} without re-fetching the sitemap. To get them "
+            f"another way: raise max_total_chars (up to "
+            f"{MAX_TOTAL_CHARS_CEILING:,}, or 0 for no budget) ships more rows in one "
+            "call, and path_include/search make the map smaller instead of longer. "
+            "max_pages does not bound a map page - it bounds page fetches, and this "
+            "page fetched none.")
     return CrawlResponseModel(
         start_url=normalize_url(url), pages=pages, pages_crawled=0,
-        pages_discovered=ok, discover_only=True, sitemap_used=True,
+        pages_discovered=map_total, discover_only=True, sitemap_used=True,
+        truncated_by_total_chars=stopped_by == "budget",
+        truncated_by_time=stopped_by == "deadline",
         sitemap_truncated=bool(result.capped or result.index_truncated),
-        sitemaps=list(result.sitemaps_used),
+        sitemaps=list(result.sitemaps_used), plan_id=hold_plan_id,
+        next_resume_token=plan_token(hold_plan_id, ok) if held else "",
         duration_ms=(time() - t0) * 1000, summary=summary, next_action=next_action,
     )
 
@@ -1306,7 +1419,8 @@ async def web_crawl(
         _sm_diag: dict = {}
         sm_result = await _sitemap_map(url, path_include, path_exclude,
                                        max_pages=max_pages, deadline_t=deadline_t,
-                                       diag=_sm_diag, search=search)
+                                       diag=_sm_diag, search=search,
+                                       max_total_chars=max_total_chars)
         if sm_result is not None:
             # A found-but-empty map is a real answer ("the sitemap lists N URLs,
             # none in the section you asked for"), but only for an explicit
@@ -1936,3 +2050,13 @@ def plan_parse(token: str) -> Optional[tuple[str, int]]:
     if not head or not tail.isdigit():
         return None
     return head, int(tail)
+
+
+def _hold_map_tail(pages: list[CrawlPage], held: list[str]) -> str:
+    """把一张被体积闸砍过的地图**整份**存下来，返回 plan_id。
+
+    游标指向空无处比没有游标更坏：`next_resume_token='ab12:483'` 若后面只有 483
+    行，调用方按它再问一次只会拿到"计划到头了"，而它要的那 517 行从来没有存在过。
+    所以留下的尾巴要连着交出去的前半一起存 —— 计划的大小因此就是地图的大小。
+    """
+    return plan_store([p.url for p in pages] + list(held))
