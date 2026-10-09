@@ -51,6 +51,11 @@ MOVED_LESSONS = [
     # 搜索
     ("consensus 数的是索引家族不是原始命中", "FAMILIES"),
     ("引擎池的上限与带 key 的引擎", "Keyed backends"),
+    # 设计决策：域名声誉加权被**测掉**而不是漏掉，理由原来只活在 `_apply_quality_boost`
+    # 的源码注释里（`语料不许写维护者历史`那条闸正好禁止把它搬进手册），所以语料必须自己
+    # 把同一件事说成操作说法："high 不是安全判断，且这里没有黑白名单"。
+    ("高 fetch_relevance 是相关性不是安全；刻意不维护域名黑白名单",
+     "no domain allow-list"),
     # 状态与身份
     ("auth/cookies 必须同对象带 host", "per host"),
     ("identity_applied 只回名字和 host 范围", "identity_applied"),

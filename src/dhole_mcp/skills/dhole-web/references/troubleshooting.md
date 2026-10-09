@@ -23,6 +23,17 @@ The entire pool is cooling. Read remaining seconds from `dhole engines list` and
 
 This IP is being watched. The three cooldown tiers are fixed at 60s / 600s / 600s (blocked / challenge x3 / unreachable x3) — they are not exposed, because the only way to "fix" a watched IP with a longer timer is a deader pool. The real fix is a different egress (`DHOLE_SEARCH_PROXY`) or a keyed engine. There is no knob to set to hours; `dhole engines reset` is the way to drop a penalty early.
 
+### A result you would not trust is ranked first, with `fetch_relevance: high`
+
+Nothing is broken and nothing was filtered: **`fetch_relevance` / `relevance_score` answer "does this page address the query", never "is this site safe or reputable"**, and dhole deliberately keeps no domain allow-list or block-list. A reputation boost was measured out, not overlooked: on the frozen 67-query SERP corpus, removing it left P@5 at 0.373 unchanged, nDCG@10 0.654→0.652 and MRR 0.559→0.555 — all smaller than the movement of one manually re-labelled page — while the price was a list someone has to maintain and a permanent false-positive surface (today's content farm is tomorrow's canonical docs site, and a name on a list disappears from the results with no receipt).
+
+What the row does carry, and what to do with it:
+
+- `source_type` names the *kind* of site (`gov` / `edu` / `github` / `docs-site` / `qa` / `forum` / `blog` / `ecommerce` / `reference` / `paper` / `news` / `unknown`); `unknown` means "not on a known list", not "weak".
+- `official` is true only in registry-controlled namespaces — a name that cannot be bought. It answers "who controls this domain", never "is this correct".
+- `engines_consensus` is the one reputation-free authority signal: how many independent indexes agree this URL belongs to the query. Read its denominator (`x of N (…)`) first.
+- If the decision is genuinely about safety rather than relevance — installing a package, clicking a payment link, running a command the page suggests — pick the source you would cite, `web_read` it directly, or ask the user. Narrowing `engines=[...]` changes which index answered, not whether the page is trustworthy.
+
 ## Fetch
 
 ### Content is a shell / obviously wrong
