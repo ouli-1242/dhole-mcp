@@ -262,6 +262,49 @@ class Response:
 
 # ─── Browser response builder ─────────────────────────────────────────────────
 
+_SHELL_HEADS = (b"<html", b"<!doctype", b"<iframe", b"<embed", b"<body")
+
+
+def looks_like_rendered_shell(body: bytes) -> bool:
+    """这几列字节是一份**渲染出来的文档**，不是被请求的那个文件。
+
+    交给字节答，不交给档位答：`content-type` 说 image/png 而正文以 `<!doctype` 起头，
+    这种自相矛盾只可能有一种来路 —— Chrome 给那份文件套了它自己的框。
+    """
+    head = (body or b"")[:256].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+    return head.startswith(_SHELL_HEADS)
+
+
+async def _original_bytes(page: Any, resp: Any, framed: bytes) -> bytes:
+    """把相框换成原件。拿不到就原样交回相框 —— 不假装成功，也不空手。
+
+    两层各问一次，因为实测它们不总是同一个东西：图片与 JSON/XML 的原件挂在网络响应上
+    （`https://httpbin.org/image/png` → 8,090 字节真 PNG），而 **PDF 的那一层被 Chrome
+    换成了它自己的查看器文档** —— 实测 `rfc2616.pdf` 走 stealthy 档，content-type 说
+    application/pdf，`resp.body()` 交回的却是 601 字节以 `<!doctype html>` 起头的框，
+    而同一份 URL 走这个上下文自己的请求通道是 550,558 字节 `%PDF-1.1`。
+
+    第二发只问 `resp.url` 这一个地址，且 `max_redirects=0`：CDP 那只主机围栏只看
+    Document 请求，APIRequestContext 这一发它看不见，所以这一跳不许替我们换地址
+    （实测：会 301 的那一发在 `max_redirects=0` 下只回 301 本身，不跟）。这个 URL
+    刚刚过了导航那一头的 SSRF 与名册终检，重发它不放宽任何东西。
+    """
+    try:
+        raw = await resp.body()
+    except Exception:
+        raw = b""
+    if raw and not looks_like_rendered_shell(raw):
+        return raw
+    try:
+        api = await page.context.request.get(resp.url, max_redirects=0)
+        if not 200 <= api.status < 300:
+            return raw or framed
+        body = await api.body()
+    except Exception:
+        return raw or framed
+    return body or raw or framed
+
+
 async def response_from_browser_page(
     page: Any,
     first_response: Any,
@@ -312,17 +355,13 @@ async def response_from_browser_page(
     # 连原文里的 "<em>" 都被替成了 "&lt;em&gt;" —— 那不再是这份 JSON；XML 那一族更贵
     # （428KB 的 sitemap 换成 2,335,300 个字符的 xml-viewer）。自动升级早就为同一个
     # 理由拒绝走浏览器（quality._never_escalate），被 force_fetcher/cdp 按到这一档的
-    # 时候，原件仍然挂在这次导航的网络响应上 —— 取原件，别外交框。
+    # 时候，取原件，别外交框。
     # 同一处的射程在 D-27 扩到图片与 PDF：那张判据（哪些类型 Chrome 只套框）写在
     # extractor._is_framed_document_content_type，图片那一支的实测是 403 字节的框喂给
-    # OCR，报的是"认不出这张图"。
+    # OCR，报的是"认不出这张图"。D-41 把"原件挂在哪一层"这一问改成了两层 —— PDF 的那一份
+    # 网络响应里也没有原件，只有 Chrome 的查看器文档。
     if page_content and _is_framed_document_content_type(ct):
-        try:
-            raw = await resp.body()
-        except Exception:
-            raw = b""
-        if raw:
-            page_content = raw
+        page_content = await _original_bytes(page, resp, page_content)
 
     # Extract status
     status = resp.status

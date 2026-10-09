@@ -1854,17 +1854,6 @@ def _ocr_thin_read(text: str) -> int:
     return found if found < _OCR_THIN_BELOW else 0
 
 
-def _looks_like_document_shell(body: bytes) -> bool:
-    """这几列字节是一份**渲染出来的文档**，不是被请求的那个文件。
-
-    浏览器档取原件失败时会退回 `page.content()`，于是"内容类型说 image/png 而正文是
-    `<html>…`"这种自相矛盾的形状只可能有一种来路：Chrome 给那份文件套了它自己的框。
-    这一问交给字节自己答，不交给档位 —— 档位说"可能套了框"，字节才说"确实套了"。
-    """
-    head = (body or b"")[:256].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
-    return head.startswith((b"<html", b"<!doctype", b"<iframe", b"<embed", b"<body"))
-
-
 def _ocr_failure_note(exc: Exception, fetcher_used: str, size: int,
                       handed: bytes = b"") -> str:
     """OCR's own words, with the process internals taken out.
@@ -1886,7 +1875,8 @@ def _ocr_failure_note(exc: Exception, fetcher_used: str, size: int,
     detail = re.sub(r"<[A-Za-z_][\w.]* object at 0x[0-9a-fA-F]+>",
                     "an in-memory buffer", str(exc)[:160])
     browser_tier = "stealthy" in (fetcher_used or "") or "cdp" in (fetcher_used or "")
-    if browser_tier and _looks_like_document_shell(handed):
+    from dhole_mcp.fetcher import looks_like_rendered_shell
+    if browser_tier and looks_like_rendered_shell(handed):
         return (f"image_ocr_failed: {detail} - what reached OCR was {size} bytes of a "
                 "rendered document, not the picture: this navigation could not hand "
                 "back the original bytes, so the browser's own viewer came through. "

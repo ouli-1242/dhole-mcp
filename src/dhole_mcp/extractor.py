@@ -189,8 +189,11 @@ def _is_framed_document_content_type(content_type: str) -> bool:
         `content_type` 仍写着 `image/png`，`total_size_bytes` 跟着那 403 字节走，
         OCR 因此报 "cannot identify image file"。相框比图片还小，这一发连"读不到字"
         都算不上，是一次没发生的读取。
-      · PDF —— 内建查看器把文档画进 `<embed>`，`page.content()` 里没有正文；原件同样
-        挂在这次导航的网络响应上。
+      · PDF —— 内建查看器把文档画进 `<embed>`，`page.content()` 里没有正文。**但它的
+        原件不在网络响应那一层**（D-41 实测，2026-10-09，`rfc2616.pdf` 走 stealthy 档）：
+        Chrome 给 PDF 换的是它自己的查看器文档，`resp.body()` 交回的是 601 字节
+        `<!doctype html>`，而同一份 URL 走 `page.context.request` 才是 550,558 字节
+        `%PDF-1.1`。所以这一类要分两层问，见 `fetcher._original_bytes`。
 
     SVG 故意**不在**这一类里：一个 SVG 就是它的标记，浏览器渲染出来的那棵树是它的正当
     读法（同一个分工在 `quality._is_raster_image` 里为 js_shell 判据写着 —— 那边问的
