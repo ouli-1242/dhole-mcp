@@ -1837,6 +1837,23 @@ def _translate_response(page: _DholeResponse, *args, **kwargs) -> ResponseModel:
     return result
 
 
+_OCR_ALNUM_RE = re.compile(r"[0-9A-Za-z぀-ヿ㐀-䶿一-鿿]")
+# 实测（2026-10-09，`.scratch/liveverify/d38_ocr_samples.py` + 三张真图）：没有字的图上
+# RapidOCR 要么交回空串（噪声、渐变+形状、纯白，以及那张 35KB 的 JPEG 照片），要么交回
+# **一个**孤零零的字母（同一张图的 PNG，8090B → 'o'）；而一行真字（哪怕 14px）就有
+# 15-16 个字母数字。门槛落在两者之间的空档里，不取"一个字符"：四个以下才算"这张图没有
+# 文本层"，STOP / OK 那一类整词仍然算读到了。内容一个字都不删 —— 这一刀改的是**说法**。
+_OCR_THIN_BELOW = 4
+
+
+def _ocr_thin_read(text: str) -> int:
+    """OCR 交回的东西薄到什么程度就该说出来 —— 0 = 不是薄读，>0 = 薄读到几个字符。"""
+    if not text:
+        return 0
+    found = len(_OCR_ALNUM_RE.findall(text))
+    return found if found < _OCR_THIN_BELOW else 0
+
+
 def _looks_like_document_shell(body: bytes) -> bool:
     """这几列字节是一份**渲染出来的文档**，不是被请求的那个文件。
 
@@ -1993,12 +2010,27 @@ def _translate_response_body(
             from dhole_mcp.ocr import ocr_image_bytes, ocr_available
             if ocr_available():
                 text = ocr_image_bytes(raw_body)
-                if text:
+                thin = _ocr_thin_read(text)
+                if text and not thin:
                     return ResponseModel(
                         status=page.status, content=[text], url=page.url,
                         fetcher_used=fetcher_used, duration_ms=duration_ms,
                         content_type=raw_ct, total_size_bytes=total_size,
                         extracted_type="text",
+                    )
+                if thin:
+                    # 一个字符都不许多说成"读到了正文"，也不许多删掉 —— 那一发实测
+                    # （httpbin /image/png，8090B 的照片）交回 'o'，content_ok 为真而
+                    # diagnosis 缺席，于是调用方把噪声当成了这页的话。
+                    return ResponseModel(
+                        status=page.status, content=[text], url=page.url,
+                        fetcher_used=fetcher_used, duration_ms=duration_ms,
+                        content_type=raw_ct, total_size_bytes=total_size,
+                        extracted_type="text",
+                        error=(f"image_ocr_thin: OCR found only {thin} readable "
+                              "character(s) in this image - a stray glyph, not a "
+                              "text layer. The characters are in `content`; do not "
+                              "cite them as this page's text."),
                     )
                 return ResponseModel(
                     status=page.status,

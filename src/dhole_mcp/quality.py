@@ -990,6 +990,13 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         # that already has it. Reaching here with OCR installed means the
         # recovery produced nothing, which is a different sentence.
         next_action = f"scanned/image-only PDF - {ocr_advice()}"
+    elif err.startswith("image_ocr_thin"):
+        # 上面那一支说的是"一个字都没读到"；这一支读到过东西（所以正文里真有它），
+        # 要说的是**那不是这页的话**。两句不许互换。
+        next_action = ("this image has no text layer worth reading - the stray "
+                       "character(s) in `content` are OCR noise, not a quote. Read "
+                       "the picture with a vision-capable model, or a web_act "
+                       "screenshot action on the page that holds it")
     elif err.startswith("image_ocr"):
         # The image branches return content=[] (the placeholder text they used to
         # carry was an error message in the page body), so the recovery step has
@@ -1359,6 +1366,12 @@ _DIAGNOSIS_PREFIXES: tuple[tuple[str, str, bool, str], ...] = (
      "use a vision-capable model or a web_act screenshot action, or switch source"),
     ("image_ocr_failed", "image_ocr_failed", False,
      "use a vision-capable model or a web_act screenshot action, or switch source"),
+    # 认出来一个字符就说"读到了正文"，是把噪声当引文交给调用方（实测：httpbin
+    # /image/png 那张 8090B 的照片交回 'o'，而 diagnosis 整格缺席）。这一族的正文
+    # 仍然在 content 里 —— 这一条改的是说法，不是数据。
+    ("image_ocr_thin", "image_ocr_thin", False,
+     "read the image with a vision-capable model (or a web_act screenshot) - "
+     "what OCR found is a stray glyph, not this image's text"),
     ("encrypted_pdf", "encrypted_pdf", False, "pass password= for this PDF"),
     ("pdf_deps_missing", "pdf_deps_missing", False, "install the PDF extra ([all])"),
     ("not_a_pdf", "not_a_pdf", False, "the bytes are not a PDF - check the URL/content-type"),
