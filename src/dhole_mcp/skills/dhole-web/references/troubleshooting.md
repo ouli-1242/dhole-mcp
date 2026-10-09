@@ -86,7 +86,7 @@ The TCP probe used to be able to end a call by skipping both fetch tiers on `con
 
 ### Stale content / someone else's snapshot
 
-When `source` shows an archive fallback, that is a dated snapshot (`archived_at`). Label citations with the date; proactively flag time-sensitive claims. Two guarantees: the server's own JSON/XML error bodies are never replaced by snapshots (4xx/5xx with json/xml content-type are preserved as-is); an unreachable proxy never falls back to a snapshot (the request never went out — answering from a snapshot would answer a question nobody asked).
+When `source` shows an archive fallback, that is a dated snapshot (`archived_at`) — and the one-line `summary` says so too: `archived copy, <snapshot date> (via http→stealthy→archive.org)`. Do not answer from it as if it were today: label citations with the date, and check `metadata.snapshot_url` when you need to verify which copy you read. A relative `canonical` on the snapshot resolves to the archive host, so it is dropped and the drop is announced — `url` stays the page you asked for. Two guarantees: the server's own JSON/XML error bodies are never replaced by snapshots (4xx/5xx with json/xml content-type are preserved as-is); an unreachable proxy never falls back to a snapshot (the request never went out — answering from a snapshot would answer a question nobody asked).
 
 ### 401 / credential problems
 

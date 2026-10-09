@@ -1022,6 +1022,16 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         parts.append(f"{_format_size(size)} {result.extracted_type or 'markdown'}")
     if result.fetcher_used:
         parts.append(result.fetcher_used)
+    if (result.source or "").lower() == "archive.org":
+        # 降级要活在**结论**里，不是活在 metadata 第 14 行。这一发读的不是那个 URL，
+        # 是 Internet Archive 某一天的副本：`source` / `archived_at` / `escalation_path`
+        # 三个字段本来各说一段，而调用方扫的是 summary 那一行 —— 一行里看不见，就等于
+        # 没说过（实测一条 200 OK · 12.4KB markdown · http 的回执，正文其实来自 2023 年
+        # 的快照）。日期与整条路径都拼进来，因为"哪一年"与"怎么走到那儿的"是两个问题：
+        # 前者决定引用价值，后者决定这次要不要换源重问。
+        when = f", {result.archived_at}" if result.archived_at else ", date unknown"
+        route = f" (via {result.escalation_path})" if result.escalation_path else ""
+        parts.append(f"archived copy{when}{route}")
     if result.cached:
         parts.append("cached")
     if result.is_truncated:

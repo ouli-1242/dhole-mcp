@@ -6934,7 +6934,25 @@ class MasterFetchServer:
                 snap_resp.archived_at = f"{snapshot_date[:4]}-{snapshot_date[4:6]}-{snapshot_date[6:8]}"
             snap_resp.url = url  # report the ORIGINAL url, not the archive url
             snap_resp.escalation_path = "http→stealthy→archive.org"
-            snap_resp.error = ""  # clear any error from the HTTP fetch
+            # 快照那一发的真实地址不能跟着 `url` 改写一起消失：调用方要复核"我读到的是
+            # 哪一份副本"靠的就是它。记在 metadata 里，一句具名的话。
+            snap_metadata = {**(snap_resp.metadata or {}), "snapshot_url": snapshot_url}
+            # canonical 是调用方要**引用与缓存**的那个地址。快照页若带一条相对 canonical，
+            # `urljoin` 会把它补到 web.archive.org 名下 —— 那不是原站声明的规范地址，那是
+            # URL 解析的副产品。删掉它并说一声：静默删掉一个引用字段与本批要消灭的那些
+            # 静默同罪，而留着一个指向副本的 canonical 会让人去引用一个没人发布的 URL。
+            canon = str(snap_metadata.get("canonical") or "")
+            if canon and "archive.org" in urlparse(canon).netloc.lower():
+                snap_metadata.pop("canonical", None)
+                _note_text(f"the archived copy declares a canonical that resolves to "
+                           f"{canon} - that is the snapshot host, not a citation address, "
+                           "so it is dropped; `url` is the page you asked for")
+            if snap_resp.error:
+                # 整句抹掉会让一次硬拦截从 `_agent_hints` 唯一咨询的那个字段里消失；
+                # 原样留着又会把一次确实答出来的成功说成失败。所以给它名字，不给它判决。
+                snap_metadata["snapshot_error"] = snap_resp.error
+                snap_resp.error = ""
+            snap_resp.metadata = snap_metadata
             logger.info(f"Archive.org fallback succeeded for {url} (snapshot: {snap_resp.archived_at})")
             return snap_resp
         except Exception as e:

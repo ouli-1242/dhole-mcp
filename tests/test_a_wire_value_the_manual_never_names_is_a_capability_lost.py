@@ -28,6 +28,9 @@ CAPABILITY_NEEDLES = [
     # 调用方就会拿它去 parse 散文，或者更糟 —— 照着"长正文一定不是壳"的旧常识
     # 把它当成成功。特征串取那个前缀本身（手册讲它的时候不可能不写出这个名字）。
     ("error='obfuscated_payload' 的打包脚本壳", "obfuscated_payload"),
+    # 体验修复刀1b-R3：降级搬进结论位之后，那句话就是调用方唯一一定会读到的东西。
+    # 手册若不再提它，字段级的诚实就退回到"活在 metadata 第 14 行"。
+    ("archive 降级写在 summary 里的那一句", "archived copy"),
 ]
 
 
