@@ -16,10 +16,15 @@ Or run as a smoke script:
 If a regression lands in the MCP stdio wire protocol, run the e2e
 tests against the local dhole binary before tagging a release.
 """
+import contextlib
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -36,11 +41,14 @@ _MAX_EMPTY_READS = 50
 
 
 class MCPClient:
-    def __init__(self):
+    def __init__(self, env_extra=None):
         self.proc = subprocess.Popen(
             ["dhole"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env={**__import__("os").environ},
+            # env_extra 是给"会往身份存储里写东西"的那几条用的：探针指着自己的临时家跑，
+            # 不碰操作员自己的 ~/.dhole（allow_private 这类门一旦被留下，下一次调用就
+            # 不是公开姿态 —— 见 review §5 那条操作卫生）。
+            env={**__import__("os").environ, **(env_extra or {})},
         )
         self._id = 0
         self._send("initialize", {
@@ -146,11 +154,16 @@ def _drain_stderr(proc, max_bytes: int = 2000) -> str:
 
 @pytest.fixture
 def mcp():
-    client = MCPClient()
+    # 每条 e2e 都用自己临时的 DHOLE_HOME。这一文件的测试会往**身份存储**里写东西
+    # （allow_private 那一类门），留在默认的 ~/.dhole 上就是"探针改了操作员的姿态"，
+    # 而中途失败会把这个姿态留下来 —— 那是 review §5 那条操作卫生的同一个洞。
+    home = tempfile.mkdtemp(prefix="dhole_e2e_")
+    client = MCPClient(env_extra={"DHOLE_HOME": home})
     try:
         yield client
     finally:
         client.close()
+        shutil.rmtree(home, ignore_errors=True)
 
 
 def test_tool_definitions(mcp):
@@ -295,12 +308,56 @@ def test_smart_fetch_response_fields(mcp):
         assert next_off == 0
 
 
-def test_a_write_goes_out_on_its_own_door(mcp):
-    """wire 上的 web_request 真的走到 HTTP 层：一次 HEAD 探针 + 一次 POST。
+@contextlib.contextmanager
+def _echo_target():
+    """一个本机 echo 靶子：把收到的正文记在 `seen` 里，并原样回出去。
 
-    单元测试是在同一个进程里直接调 `web_request(...)`，绕过了「wire arguments →
-    分发器 → 形参」这一段。HEAD 是这一段最短的探针：不抽取正文、不升级浏览器，
-    一次请求就有答案。POST 补上另一半：正文确实跟着出去了，服务器怎么答就怎么回。
+    由**被指向的那一侧**作证，不靠回执自述 —— 这条 e2e 要说的那两件事（"门关着的时候
+    一个字节都不发"与"正文确实跟着出去了"）都只有靶子的账能证。
+    """
+    seen = []
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("content-length") or 0)
+            raw = self.rfile.read(length)
+            seen.append(raw.decode("utf-8", "replace"))
+            body = json.dumps({"echo": raw.decode("utf-8", "replace")}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}", seen
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_a_write_goes_out_on_its_own_door(mcp):
+    """wire 上的 `web_request`：HEAD 探针（只读）+ 一次被门管着的 POST。
+
+    单元测试是在同一个进程里直接调 `web_request(...)`，绕过了「wire arguments → 分发器
+    → 形参」这一段，所以这里量的是那一段。
+
+    **这一条以前是过期的**（2026-10-09 跑第四把 e2e 时量出来，记为 D-40）：旧版直接
+    POST 到 example.com 并断言 `status >= 400`，而写门（G25 → 批次 8 的 D-35 那条）落地
+    之后，一次没带 `confirm` 的写在门口就被拒了 —— 实测交回的是
+    `{status: 0, fetcher_used: "none"}`，那个 `>= 400` 从此量的是一条不存在的形状。
+    另一半更难看：那句 docstring 写着"正文确实跟着出去了"，而 4xx 的答复根本不回显正文，
+    所以那半句**从来没有被这条测试证过**。现在两半各自有据：
+
+      ① 门关着：靶子的账上一笔都没有（不是回执说自己没发）；
+      ② 门开了（这条连接没声明 elicitation，走的正是参数门那把钥匙 `confirm=true`）：
+         靶子收到的字节 == 我们交进去的字节，且回得来看得见。
     """
     resp = mcp.call_tool(
         "web_request",
@@ -313,16 +370,44 @@ def test_a_write_goes_out_on_its_own_door(mcp):
     assert not "".join(data.get("content") or [])
     assert "head probe" in data.get("summary", "").lower()
 
-    post = mcp.call_tool("web_request", {
-        "url": "https://example.com", "method": "POST",
-        "body": '{"item": 1}', "content_type": "application/json",
-        "timeout": 20000})
-    pdata = _extract_data(post.get("result", {}))
-    # example.com 不收款：这里要的是"这一趟真的发了、而且服务器答了"，不是 2xx。
-    assert pdata.get("status", 0) >= 400, pdata
-    # direct:http 那条路径在 wire 上被折掉了（默认值不占字节，见
-    # tests/test_wire_compaction.py），这里能验的是到层的那一颗是 HTTP 而不是浏览器。
-    assert pdata.get("fetcher_used") == "http", pdata
+    with _echo_target() as (base, seen):
+        # 私有目标只能存，不能逐次传（§3-17）：这条连接自己敲开门，跑完当场收回。
+        stored = _extract_data(mcp.call_tool(
+            "cred_defaults", {"set": {"allow_private": True}}).get("result", {}))
+        assert "allow_private" in json.dumps(stored), stored
+
+        # ── ① 没有 confirm：一次都不许发出去 ──
+        gate = _extract_data(mcp.call_tool("web_request", {
+            "url": f"{base}/echo", "method": "POST", "body": '{"item": 1}',
+            "content_type": "application/json", "timeout": 20000,
+        }).get("result", {}))
+        assert gate.get("status") == 0, gate
+        assert gate.get("fetcher_used") == "none", gate
+        assert "is a write" in (gate.get("error") or ""), gate
+        assert "confirm=true" in (gate.get("next_action") or ""), gate
+        assert seen == [], f"门还关着，靶子却收到了东西: {seen}"
+
+        # ── ② 带着 confirm=true（无 elicitation 的连接上，钥匙就是这个参数）──
+        sent = _extract_data(mcp.call_tool("web_request", {
+            "url": f"{base}/echo", "method": "POST", "body": '{"item": 1}',
+            "content_type": "application/json", "confirm": True, "timeout": 20000,
+        }).get("result", {}))
+        assert sent.get("status") == 200, sent.get("error")
+        assert sent.get("fetcher_used") == "http", sent
+        assert sent.get("content_ok") is True, sent
+        # 靶子把收到的字节原样裹回一个 JSON，所以这里读的是**那一份**，不是子串猜。
+        echoed = json.loads("".join(sent.get("content") or []))["echo"]
+        assert echoed == '{"item": 1}', echoed
+        assert seen == ['{"item": 1}'], f"靶子收到的字节与交出去的不是同一份: {seen}"
+
+        revoked = _extract_data(mcp.call_tool(
+            "cred_defaults", {"unset": ["allow_private"]}).get("result", {}))
+        assert "allow_private" in json.dumps(revoked), revoked
+        # 收回要有证人：再问一次这台连接自己存了什么。"用完当场收回"这句话的
+        # 反面形状是"错误地以为自己收回了"，所以看的是清单，不是那句回执。
+        left = _extract_data(mcp.call_tool(
+            "cred_defaults", {"show": True}).get("result", {}))
+        assert "allow_private" not in json.dumps(left), left
 
 
 def test_the_old_write_spelling_is_refused_naming_the_new_door(mcp):
