@@ -250,7 +250,8 @@ class SearchResult(BaseModel):
     relevance_raw: Optional[float] = Field(default=None, description="The cross-encoder's UNNORMALIZED sigmoid for this row (0.0-1.0, not rescaled to this round), so it can say 'this result is off-topic' even when it ranks first. `fetch_relevance` is minted from it when present. Absent / null = no model scored this round (the order is cross-engine consensus + engine position) — that is NOT a score of 0.0, and with no raw anywhere on the response no row can be labelled 'high'.")
     fetch_relevance: str = Field(default="", description="high|med|low - relative relevance hint. web_read what matches your need; the tiers rank results but a lower tier can be the right one - use your judgment. 'high' means WORTH FETCHING by the model's own verdict (relevance_raw >= 0.5) — measured on a 67-query labeled corpus, rows labelled high are relevant about two thirds of the time, so this is not a claim of correctness and not a safety judgment. With no reranker on this round the tiers can only demote (no row is 'high'), and `fetch_hint` says so.")
 
-    engines_consensus: str = Field(default="", description="How many independent index families returned this URL over how many could have (e.g. '2 of 6'; the default 8-engine pool is 6 families since bing, bing_global and duckduckgo all sit on the Bing index). '1 of 1 (no corroboration)' means a single family contributed at all - that is a degraded or tiny pool, NOT agreement. A free authority signal only when the denominator is >1.")
+    engines_consensus: str = Field(default="", description="How many independent index FAMILIES returned this URL over how many could have (e.g. '2 of 6'; the default 8-engine pool is 6 families since bing, bing_global and duckduckgo all sit on the Bing index). When the denominator was NOT the full pool the reason rides the same string: '1 of 4 (degraded_pool)' means four families could have agreed and only four were asked/answered, '… (partial_pool)' means you narrowed the pool. '1 of 1 (no corroboration)' means a single family contributed at all. A free authority signal only when the denominator is >1 - and read the parenthetical before treating a small number as disagreement.")
+
     source_type: str = Field(default="", description="What kind of site this URL is, from the SAME classifier that labels a fetched page: gov|edu|github|repo|docs-site|qa|forum|blog|ecommerce|reference|paper|news|unknown. One field, one vocabulary - `unknown` means 'not on a known list', not 'weak'.")
     # G4（评审 Medium）：搜索行此前的信任轴只有引擎共识。fetch 侧的 is_official
     # （envelope.classify_source——名字本身买不来的注册表命名空间：gov/edu/github
@@ -961,8 +962,15 @@ def _pool_health_notes(results: list[SearchResult], engine_blocked: list[str],
 
 
 def _build_results(query: str, ranked: list[RawResult], scores: Optional[list[float]] = None,
-                   total_families: int = 1) -> list[SearchResult]:
-    """Convert RawResults (already ranked) into SearchResults with tiers + consensus."""
+                   total_families: int = 1, basis: str = "") -> list[SearchResult]:
+    """Convert RawResults (already ranked) into SearchResults with tiers + consensus.
+
+    `basis` 是这个分母是怎么来的（`_family_universe`：full | partial_pool |
+    degraded_pool | single_family）。它此前只活在响应顶层的 `consensus_basis` 上，
+    行里那句 "1 of 4" 不带出处 —— 而读行的人就在那一刻决定要不要信这条结果：等他
+    抬头去看顶层那颗，他已经把这行当成"四家只有一个同意"读完了。同一句话的两个部分
+    分在两个地方，等于少了一半。
+    """
     total = len(ranked)
     out: list[SearchResult] = []
     for i, r in enumerate(ranked):
@@ -976,6 +984,9 @@ def _build_results(query: str, ranked: list[RawResult], scores: Optional[list[fl
         n = min(max(1, getattr(r, "consensus", 1)), m)
         # 只有一个家族时没有"佐证"可报告 —— 不再伪装成一个比率。
         consensus = f"{n} of {m}" if m > 1 else "1 of 1 (no corroboration)"
+        if m > 1 and basis and basis != "full":
+            # `single_family` 已经在上面那句里说尽了，不再叠第二个括号。
+            consensus = f"{consensus} ({basis})"
         # 一颗分类器、两个字段：此前这一行同时用两套域名表 —— `source_type` 走
         # `_source_type`，`official` 走 `classify_source`，于是同一个字段名在搜索行
         # 和抓取行上是两套枚举（搜索行产不出 github/qa/ecommerce/docs-site，抓取行
@@ -1673,7 +1684,8 @@ async def web_search(
         total_families, _contrib, _basis = _family_universe(engines, reports)
         ranked_list, scores = _apply_quality_boost(ranked_list, scores, query)
         ranked_list, scores = ranked_list[:max_results], scores[:max_results]
-        results_list = _build_results(cache_query, ranked_list, scores, total_families)
+        results_list = _build_results(cache_query, ranked_list, scores, total_families,
+                                      basis=_basis)
         results_list = _quality_filter(results_list)
         sim_note = f"find_similar to {find_sim_url} (searched: {derived_query[:60]!r})"
         # `_date_note` 在这个分支曾经没被接上：`freshness=`/`after=` 照样转发给了
@@ -1822,7 +1834,8 @@ async def web_search(
         if not site:
             ranked_list, scores = _diversify(ranked_list, scores, max_per_domain=2)
         ranked_list, scores = ranked_list[:max_results], scores[:max_results]
-        results_list = _build_results(query, ranked_list, scores, total_families)
+        results_list = _build_results(query, ranked_list, scores, total_families,
+                                      basis=_basis)
         _delivered = len(results_list)
         results_list = _quality_filter(results_list)
         _dropped_low = _delivered - len(results_list)

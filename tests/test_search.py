@@ -763,8 +763,10 @@ class TestDegradedPoolIsHonest:
     async def test_consensus_counts_the_universe_not_the_survivors(self, degraded_pool):
         r = await search.web_search(None, "sqlite WAL mode", max_results=6, mode="auto")
         n_families = len({se._INDEX_FAMILY.get(n, n) for n in se.DEFAULT_ENGINES})
-        # 只有一个家族活着，分母仍是整个池子的家族数（否则 "1 of 1" 与全员一致同形）
-        assert r.results and r.results[0].engines_consensus == f"1 of {n_families}"
+        # 只有一个家族活着，分母仍是整个池子的家族数（否则 "1 of 1" 与全员一致同形）。
+        # 体验修复刀2-S9 之后这句还带着出处：分母是"本该表态的家族数"这件事，读行的
+        # 人也要看得到，不能只写在顶层那颗 `consensus_basis` 上。
+        assert r.results and r.results[0].engines_consensus == f"1 of {n_families} (degraded_pool)"
         assert r.consensus_basis == "degraded_pool"
 
     @pytest.mark.asyncio
