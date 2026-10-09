@@ -243,8 +243,13 @@ class SearchResult(BaseModel):
     snippet: str = Field(default="", description="Result snippet from the engine")
     source: str = Field(default="", description="Backend(s) that returned this result (baidu/bing/bing_global/brave/duckduckgo/so360/sogou/yandex). Multiple = cross-backend consensus.")
     position: int = Field(default=0, description="1-indexed rank after merge + rerank")
-    relevance_score: float = Field(default=0.0, description="0.0-1.0 relevance to the query (neural cross-encoder score in neural mode, min-max normalized), boosted by cross-backend consensus. 1.0 = most relevant in this set.")
-    fetch_relevance: str = Field(default="", description="high|med|low - relative relevance hint. web_read what matches your need; the tiers rank results but a lower tier can be the right one - use your judgment.")
+    relevance_score: float = Field(default=0.0, description="0.0-1.0 relevance to the query, NORMALIZED WITHIN THIS ROUND (min-max over the returned set, then boosted by cross-backend consensus). Read it as a seat, not as a verdict: the best row of a set where nothing is relevant is 1.0 by construction, and when every score is identical they all normalize to 1.0. `relevance_raw` is the number that can say 'this one is off-topic'.")
+    # S2：badge 的原料必须和 badge 一起端出去。调用方拿着 `fetch_relevance` 只能信或
+    # 不信；拿着 raw 能自己复核"0.5 这条线对我来说够不够"。未跑重排器时它是 null，
+    # 而 null 是被省略的（缺席 = 这一轮没有模型量过），不是 0.0。
+    relevance_raw: Optional[float] = Field(default=None, description="The cross-encoder's UNNORMALIZED sigmoid for this row (0.0-1.0, not rescaled to this round), so it can say 'this result is off-topic' even when it ranks first. `fetch_relevance` is minted from it when present. Absent / null = no model scored this round (the order is cross-engine consensus + engine position) — that is NOT a score of 0.0, and with no raw anywhere on the response no row can be labelled 'high'.")
+    fetch_relevance: str = Field(default="", description="high|med|low - relative relevance hint. web_read what matches your need; the tiers rank results but a lower tier can be the right one - use your judgment. 'high' means WORTH FETCHING by the model's own verdict (relevance_raw >= 0.5) — measured on a 67-query labeled corpus, rows labelled high are relevant about two thirds of the time, so this is not a claim of correctness and not a safety judgment. With no reranker on this round the tiers can only demote (no row is 'high'), and `fetch_hint` says so.")
+
     engines_consensus: str = Field(default="", description="How many independent index families returned this URL over how many could have (e.g. '2 of 6'; the default 8-engine pool is 6 families since bing, bing_global and duckduckgo all sit on the Bing index). '1 of 1 (no corroboration)' means a single family contributed at all - that is a degraded or tiny pool, NOT agreement. A free authority signal only when the denominator is >1.")
     source_type: str = Field(default="", description="Source type from URL pattern: docs|paper|repo|blog|forum|reference|news|other. Helps pick the right source.")
     # G4（评审 Medium）：搜索行此前的信任轴只有引擎共识。fetch 侧的 is_official
@@ -417,13 +422,37 @@ def _diversify(ranked: list, scores: list[float], max_per_domain: int = 2) -> tu
 
 # ─── tier derivation + hint ──────────────────────────────────────────────────
 
-def _tier(score: float, rank: int, total: int) -> str:
-    """Derive high|med|low from relevance score + rank. Top result is never 'low'."""
-    if score >= 0.5 or rank == 1:
-        return "high"
-    if score >= 0.15:
-        return "med"
-    if rank <= max(2, total // 3):
+# 阈值带取自 `evals/ranking_baseline.py --neural --tiers` 在 67 题 / 756 行冻结语料上
+# 量的 raw 分位（p10 0.00013 · p25 0.01463 · p50 0.91955 · p90 0.99851 —— 双峰，两峰
+# 之间是大空档），并与 `reranker.py` 自己的标定记录对齐（离题 p90 1e-4 / max 0.0104，
+# 在题 0.93+，同主题不同侧面的硬负例 p50 0.005 / p90 0.18）：high 线 0.5 落在硬负例
+# p90 之上、在题群之下；med 线 0.05 落在离题群 max 之上。
+_RAW_HIGH_AT = 0.5
+_RAW_MED_AT = 0.05
+
+
+def _tier(score: float, rank: int, total: int, raw: Optional[float] = None) -> str:
+    """Derive high|med|low from the evidence, and only from the evidence.
+
+    `or rank == 1` 删了。它此前无条件把"座位"当成"置信"：链上流转的 `score` 是集合内
+    归一的（`_apply_quality_boost` 除以最大值、`reranker.rerank` 用 min-max），所以
+    第一名按构造恒为 1.0 —— 一句"这一轮里它最靠前"被铸成了"这条值得抓"。删掉那半句
+    本身不改任何 badge（B0 量的：归一之后它与 `score >= 0.5` 恒同真），要改的是**问哪
+    一把尺**。
+
+    有模型判决时档位只问未归一的 raw —— 那是唯一能表达"这一整轮没有一条相关"的数，
+    归一分说不出这句话（一整轮全离题时，最离题的那条仍然归一成 1.0）。
+    没量过时（`raw is None`）位置尺**只准降级、不准升级**：它可以指出一条排得很后，
+    说不出这条相关。所以 high 不再可能由位置发出，而 low 的集合与此前一字节不变 ——
+    `_quality_filter` 只看 low，交付集合因此不因这次改动而清空或缩窄。
+    """
+    if raw is not None:
+        if raw >= _RAW_HIGH_AT:
+            return "high"
+        if raw >= _RAW_MED_AT:
+            return "med"
+        return "low"
+    if score >= 0.15 or rank <= max(2, total // 3):
         return "med"
     return "low"
 
@@ -434,6 +463,13 @@ def compute_fetch_hint(results: list[SearchResult]) -> str:
     high = sum(1 for r in results if r.fetch_relevance == "high")
     med = sum(1 for r in results if r.fetch_relevance == "med")
     low = sum(1 for r in results if r.fetch_relevance == "low")
+    if all(r.relevance_raw is None for r in results):
+        # S3：冷启动那把 `1.0 - i/n` 此前会铸出 "high"，读起来像置信度。现在位置尺
+        # 只准降级，所以这里的 high 恒为 0 —— 而"恒为 0"必须说得出原因，否则调用方
+        # 读到的是"这一轮没有一条值得抓"，实情是"这一轮没有人判断过值不值得抓"。
+        return (f"{high} high, {med} med, {low} low. no reranker on this round: order is "
+                "cross-engine consensus + engine position, so nothing is claimed 'high' "
+                "(no relevance verdict was made) - web_read what matches your need.")
     return (f"{high} high, {med} med, {low} low. Ranked by relevance_score; "
             f"web_read what fits your need (high first, but a lower tier can be the right call).")
 
@@ -985,6 +1021,10 @@ def _build_results(query: str, ranked: list[RawResult], scores: Optional[list[fl
     out: list[SearchResult] = []
     for i, r in enumerate(ranked):
         score = scores[i] if scores and i < len(scores) else 0.0
+        # 行上那颗 raw 是 S1 送过来的：模型量过就有值，没量过就是 None（None ≠ 0.0）。
+        # 档位问它，`relevance_raw` 把它原样端出去 —— 调用方必须能用同一把尺复核
+        # 自己看到的 badge，而不是只能信或不信。
+        raw = getattr(r, "neural_raw", None)
         src = ",".join(r.sources) if r.sources else (r.source or "")
         m = max(1, total_families)
         n = min(max(1, getattr(r, "consensus", 1)), m)
@@ -994,7 +1034,8 @@ def _build_results(query: str, ranked: list[RawResult], scores: Optional[list[fl
         out.append(SearchResult(
             title=r.title, url=r.url, snippet=r.snippet, source=src,
             position=i + 1, relevance_score=round(score, 4),
-            fetch_relevance=_tier(score, i + 1, total),
+            relevance_raw=raw,
+            fetch_relevance=_tier(score, i + 1, total, raw),
             engines_consensus=consensus,
             source_type=_source_type(r.url),
             official=classify_source(r.url)[1],

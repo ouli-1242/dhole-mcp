@@ -449,7 +449,8 @@ def main() -> int:
 
     with_metrics = [r for r in per_query if "metrics" in r]
 
-    print("== 集 A：整条链（冻结语料重放，无神经重排）==")
+    print(f"== 集 A：整条链（冻结语料重放，_rank mode={mode}"
+          f"{'，无神经重排' if mode == 'merge' else '，交叉编码器已预热'}）==")
     print(f"queries={len(per_query)}  with_qrels={len(with_metrics)}  "
           f"raw_items={sum(r['raw_items'] for r in per_query)}  "
           f"unique_after_dedup={sum(r['unique_after_dedup'] for r in per_query)}")

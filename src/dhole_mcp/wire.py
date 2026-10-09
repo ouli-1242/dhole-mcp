@@ -83,6 +83,12 @@ _WIRE_OMIT: dict = {
         "engines_consensus", "source_type",
         # G4：official=False（绝大多数行）省略；True 才上线（+15 chars/行）。
         "official",
+        # S2：raw 的缺席**就是**它的含义（"这一轮没有模型量过"），所以默认值必须是
+        # None 而不是 0.0 —— `_wire_omittable` 比的是 `value == default and
+        # type(value) is type(default)`，于是 0.0（量过、判为不相关）留在线上，
+        # None（没量过）才消失。把 0.0 也省掉就是把"量为零"说成"没量"，那是 R4 那颗
+        # 谎在新位置重生。
+        "relevance_raw",
         # 批次8 刀5：行级注入标记只在命中时上线（None=干净行，缺席即默认）。
         "untrusted_content",
     }),
