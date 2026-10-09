@@ -898,6 +898,10 @@ def _rank(query: str, ranked: list[RawResult], mode: str, min_relevance: float =
     """
     note = ""
     if mode in ("neural", "auto") and ranked:
+        # 交叉编码器的原始 sigmoid 由 `reranker.rerank` 盖在行上（`neural_raw`），
+        # 不经过这里 —— 这一层交回的 `scores` 是集合内归一的，它说得出序，说不出
+        # "这一整轮都不相关"。两条路都空手时（下面那支回退）行上的 raw 保持 None，
+        # 那是"没量过"，不是"量为 0"。
         # 空输入不问重排器（评审R1刀3）：rerank 对空结果一律答 None——没有
         # 东西可排，与重排器在不在无关。「真没跑过才说」由此成立：缺席说明
         # 只能源自"有东西可排却排不了"的那条路，重排器暖着时的空结果错误

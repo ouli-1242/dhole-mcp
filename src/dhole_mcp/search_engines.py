@@ -118,6 +118,15 @@ class RawResult:
     position: int = 0        # 1-indexed within the merged order
     consensus: int = 1       # distinct independent index-families that returned this URL
     sources: tuple = ()      # all backends that returned this URL (set by multi_search)
+    # 交叉编码器的**未归一** sigmoid，由 reranker.rerank() 盖在行上；None = 这一轮
+    # 没有模型量过它。它必须跟着行走完整条链，理由是那句 badge 的合法性：链上流转的
+    # 分数是集合内归一的（第一名按构造恒为 1.0，min/max 相同时全体为 1.0），而一个
+    # "集合内最好"的数永远说不出"这一整轮都不相关"。要让用户可见的 `high` 由证据铸、
+    # 而不是由位置铸，证据就得活着走到铸 badge 那一步（体验修复刀2-S1）。
+    # 带在行上而不是第三个元组元素：`rerank()` 交回 (result, score) 对是它 docstring
+    # 里写明的兼容契约，五处测试桩也按二元组喂 —— 改元组数会把"加一条证据"变成一次
+    # 破坏性改动。
+    neural_raw: Optional[float] = None
 
 
 @dataclass

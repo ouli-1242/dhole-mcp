@@ -515,7 +515,10 @@ def rerank(query: str, results: list, *, min_relevance: float = 0.0,
     ``stats`` (optional dict) is filled with ``{"raw_min", "raw_max", "kept",
     "dropped_raw"}`` — the observed raw span of this candidate set. It is an
     out-param rather than a richer return type so every existing caller unpacking
-    ``(result, score)`` pairs keeps working.
+    ``(result, score)`` pairs keeps working. The per-row raw goes a different way
+    for the same reason: it is stamped on the row as ``RawResult.neural_raw``
+    (None = no model measured it this round) instead of becoming a third element
+    nobody asked for.
 
     **When a floor removes everything, the result is an EMPTY list, not None.**
     The two mean different things and the caller must not conflate them: None =
@@ -547,6 +550,14 @@ def rerank(query: str, results: list, *, min_relevance: float = 0.0,
     # (result, normalized, raw) — the raw score has to travel with its pair, or a
     # raw floor cannot be applied after the first filter without re-deriving it.
     rows = list(zip(results, scores, raw))
+    # 原始分数另外盖在行上（`RawResult.neural_raw`）：交回二元组 `(result, score)`
+    # 是这颗函数的公开契约，而 score 是集合内归一的 —— "这一轮里最好的一条"和
+    # "这条到底相关不相关"是两个问句，第二个的答案只在 raw 里。归一分数继续走它的
+    # 老路（排序、地板、`relevance_score`），raw 跟着行走完 `_rank` → boost →
+    # diversify → 铸 badge 那一步。
+    for _r, _s, _raw_v in rows:
+        _r.neural_raw = _raw_v
+
     if min_relevance > 0.0:
         kept = [r for r in rows if r[1] >= min_relevance]
         if len(kept) != len(rows):
