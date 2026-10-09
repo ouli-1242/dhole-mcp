@@ -801,7 +801,7 @@ def page_type_from_error(error: str) -> str:
     if not error:
         return ""
     e = error.lower()
-    if e.startswith("js_shell_detected"):
+    if e.startswith(("js_shell_detected", "obfuscated_payload")):
         return "js_shell"
     # auth_wall_detected comes from _is_auth_wall on the extracted content;
     # auth_required/not_a_pdf+auth from the PDF pipeline. Both were expected to

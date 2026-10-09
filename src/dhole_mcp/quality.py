@@ -177,7 +177,7 @@ def looks_obfuscated(text: str) -> dict:
 
 
 def _obfuscation_gate_applies(result: ResponseModel) -> bool:
-    """这一发够不够格按混淆载荷来判。**measure 档**：只上报，不动 `content_ok`。
+    """这一发够不够格按混淆载荷来判。两处咨询它：上报证据，和翻结论位。
 
     四道前置与 `_is_js_shell` 的长度闸同源，每一条都对应一次"误伤"：
     * 只 HTTP 档 —— stealthy 的低文字页是合法页面（图集、canvas 应用）；
@@ -186,6 +186,10 @@ def _obfuscation_gate_applies(result: ResponseModel) -> bool:
       文档**，里面的长串就是数据本身，把 `api_schema.json` 判成壳是这批最不该出现的
       那种新错；
     * 抽取塌陷时不算 —— "DOM 里有字而抽取没交回"是另一件事，那条路已经有自己的 token。
+
+    measure 那一刀（0e1369d）里这道闸只喂 `metadata`；语料上假阳性为零之后，同一道闸
+    现在也喂 `_detect_content_issue`。**闸只有一道**，所以两处永远同判 —— 不会出现
+    "结论说是壳而证据说不是"那种两个作者的分歧。
     """
     if result.fetcher_used != "http" or result.status >= 400:
         return False
@@ -203,13 +207,13 @@ def _obfuscation_gate_applies(result: ResponseModel) -> bool:
 
 
 def _report_obfuscation(result: ResponseModel) -> None:
-    """把混淆判定作为**事实**发进 `metadata`，一个字不动结论位。
+    """把混淆判定的**证据**发进 `metadata`，与 `error` 里那句话是同一次判定。
 
-    这是 measure-then-flip 的第一刀。判定要翻 `content_ok` 之前，先要在这份语料上
-    看见它到底落在哪些页上 —— 在 `_is_js_shell` 那把尺子旁边动第二把尺，历史上咬过
-    两次（图集与 books.toscrape 的列表页）。所以第一笔提交唯一的可观察变化是这颗
-    字段：语料里每一发命中都留得下名字，摘掉它时守卫就红，而今天所有回执的结论位
-    逐字节不变。
+    measure-then-flip 的第一刀里这是唯一的出口（0e1369d：结论位逐字节不动，语料上每
+    一发命中留得下名字）。翻闸之后它仍然要走 —— 结论会翻转，证据不该要调用方去解析
+    一句散文：`signals` / `mean_token_len` / `long_token_ratio` / `mixed_case_ratio`
+    是结构化的，可以按数字分支。两处都由 `_obfuscation_gate_applies` 说话，所以它们
+    不会各判各的。
     """
     if not _obfuscation_gate_applies(result):
         return
@@ -721,6 +725,20 @@ def _detect_content_issue(result: ResponseModel) -> str:
     if _is_js_shell(result):
         return "js_shell_detected: page requires JavaScript rendering but fetcher returned placeholder"
 
+    if _obfuscation_gate_applies(result):
+        # 第二把尺：`_is_js_shell` 量的是「大 body + 几乎没字」，而实测那一枚壳把
+        # 3,559 个字符**全都交回来了** —— 抽取是忠实的，页面本身就是打包过的脚本。
+        # 每一道长度闸都放行，因为它通过的正是那些闸。这里量的不是多少个字，是
+        # **这些字像不像人写的**（两条独立证据都要成立，见 `looks_obfuscated`）。
+        finding = looks_obfuscated("\n".join(
+            chunk for chunk in (result.content or []) if isinstance(chunk, str)))
+        if finding:
+            return (f"obfuscated_payload: the body is a packed script challenge, not "
+                    f"prose ({'; '.join(finding['signals'])}; mean token "
+                    f"{finding['mean_token_len']} chars across {finding['chars']} "
+                    "extracted) - the extractor was faithful, this page has no words "
+                    "in it")
+
     if any(signal in content_str for signal in _GEO_REDIRECT_SIGNALS):
         return "geo_redirect_detected: page returned region/country selector instead of content"
 
@@ -1024,7 +1042,7 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
     # with no separator between them. Paginating a sign-in form cannot reach
     # content, so that clause is not just out of order there - it is wrong.
     _NOT_A_DOCUMENT = ("auth_wall_detected", "bot_wall_detected",
-                       "js_shell_detected")
+                       "js_shell_detected", "obfuscated_payload")
     if (result.is_truncated and result.next_offset and result.status < 400
             and not err.startswith(_NOT_A_DOCUMENT)):
         _repeat = _focus_repeat_warning(
@@ -1042,9 +1060,13 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                        "is a successful answer, do NOT report it as a failed fetch. "
                        "Revalidation is asked internally, never by a caller; to read the "
                        "body again, make a plain fetch (nothing to compare against).")
-    elif err.startswith("js_shell_detected") or err.startswith("bot_challenge_detected"):
+    elif err.startswith(("js_shell_detected", "bot_challenge_detected",
+                         "obfuscated_payload")):
         _wall = ("bot challenge page" if err.startswith("bot_challenge_detected")
-                 else "JS shell")
+                 else "JS shell" if err.startswith("js_shell_detected")
+                 # 说清是哪一形：它不是"没字"，是"字全是载荷"，而这两形的下一步其实
+                 # 相同（渲染），所以共用上面那三档建议；不同的是调用方读到的事实。
+                 else "packed script payload")
         if _browser_cannot_help(result, result.url):
             if _never_escalate(result, result.url):
                 # The advice cannot promise what the pipeline refuses to do. A data
@@ -1599,6 +1621,11 @@ def _focus_ignored_note() -> str:
 # 枚举名，不至于静默缺席）。
 _DIAGNOSIS_PREFIXES: tuple[tuple[str, str, bool, str], ...] = (
     ("js_shell_detected", "js_shell", True,
+     "re-fetch (auto-escalates to the stealthy browser tier), or extraction_type='html'"),
+    # 同一个 code 的第二块产地牌子：`obfuscated_payload` 说的是"字全抽到了，字是载荷"，
+    # 而下一步与空壳完全一致（渲染，或换 extraction_type）—— 两个前缀一个 code 的先例
+    # 就在下面两行（bot_challenge_detected / bot_wall_detected 都归 bot_wall）。
+    ("obfuscated_payload", "js_shell", True,
      "re-fetch (auto-escalates to the stealthy browser tier), or extraction_type='html'"),
     ("bot_challenge_detected", "bot_wall", True,
      "retry with force_fetcher='stealthy', else switch source"),

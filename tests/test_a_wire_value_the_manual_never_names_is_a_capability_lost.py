@@ -24,6 +24,10 @@ from dhole_mcp import guide
 CAPABILITY_NEEDLES = [
     ("extraction_type='check' 的变更收据", "first_divergence_at"),
     ("web_search.mode='find_similar' 相似页查找", "find_similar"),
+    # 体验修复刀1b-R1：`error` 的新前缀也是一种新取值。线路活着而手册不点名，
+    # 调用方就会拿它去 parse 散文，或者更糟 —— 照着"长正文一定不是壳"的旧常识
+    # 把它当成成功。特征串取那个前缀本身（手册讲它的时候不可能不写出这个名字）。
+    ("error='obfuscated_payload' 的打包脚本壳", "obfuscated_payload"),
 ]
 
 

@@ -1,27 +1,32 @@
-r"""R1 第一刀（measure）：混淆壳页先被**量到**，结论位一个字不动。
+r"""混淆壳页：先被量到（measure，0e1369d），再翻结论位（这一笔）。
 
 实测（2026-10-09，北极星那家）：`status: 200`、`content_ok: true`，正文 3,559 个字符
 —— 全抽到了，抽取是忠实的，而那几千个字里没有一句人话：它是一枚打包过的 JS 挑战。
 批量读五个链接时它计入 `successful: 2`。这不是"缺一个检测器"，是**长度这把尺量不到
 形状**：正文长过每一道闸，于是每一道闸都放行。
 
-为什么分两笔提交（这附近被咬过两次，README 里 D-38/D-41 那条血脉）：`_is_js_shell`
-旁边动第二把尺，风险不是"漏判"而是"过度开火" —— 图集、仪表盘、changelog、表格、
-日语法语的短词正文、以及**任何把数据当正文的 JSON**都会开始被叫成壳。所以第一笔只
-把判定当**上报字段**发出去（`metadata.obfuscated_body`），在语料上把每一发命中留下
-名字；假阳性为零，第二笔才让它翻 `content_ok`（那一笔会同时重基 `tests/mcp_snapshot.py`
-的 isError 计数，并且要读那个 diff）。
+为什么分两笔（这附近被咬过两次，README 里 D-38/D-41 那条血脉）：`_is_js_shell` 旁边动
+第二把尺，风险不是"漏判"而是"过度开火" —— 图集、仪表盘、changelog、表格、日语法语的
+短词正文、以及**任何把数据当正文的 JSON**都会开始被叫成壳。所以第一笔只把判定当
+**上报字段**发出去（`metadata.obfuscated_body`），在语料上把每一发命中留下名字；假阳性
+为零，这一笔才让它翻 `content_ok`。两笔账分开写，出了事才分得清是尺不准还是闸开过头。
+第一笔里那条 `assert out.content_ok is True` 是**当下的事实**不是期望，它在这一笔被翻
+过来 —— 那正是这一刀唯一的可观察变化，所以它先被写下来、被命名，再被改。
 
 判据的两条腿（缺一条就不算，这是这一批的核心论点：单信号就翻结论位的闸一定吃掉合法
 页面）：
   ① 结构证据 —— 长 hex/base64 串、`_0x`/`arg1=`/`getRender`/`String.fromCharCode`
      这类混淆器与 WAF 留下的字面标记、连续 `\xNN` 转义；
-  ② 词形合法度低 —— token 平均很长，或"长 token + 大小写混排"两样都占。
-一篇讲 base64 的教程有 ①，它的正文过不了 ②；一段没有标记的长表格有 ②，它没有 ①。
+  ② 词形合法度低 —— token 平均很长**且**有大小写混排的 token，或"长 token + 高混排"。
+一篇讲 base64 的教程有 ①，它的正文过不了 ②；一段没有标记的长表格有 ②，它没有 ①；
+一跑只有字母的 `SomeLongCamelCaseIdentifier…`（CSS 类名表那一形）两条腿都像是要成立，
+但它不是编码块 —— base64 的字母表数字与大小写都齐，人起的标识符名没有数字。
 
-本文件里有一条**故意写下今天的错**：`test_measure_arm_moves_no_verdict` 断言混淆载荷
-现在仍然是 `content_ok=true`。第二笔提交要把那句断言翻过来 —— 那不是测试坏了，那是
-那一刀唯一的可观察变化，所以它必须先在这里被写下来、被命名。
+翻闸之后仍然守着的：`_obfuscation_gate_applies` 的四道前置（只 HTTP 档、body 够大、
+`_never_escalate` 认得的数据文档先豁免、抽取塌陷是另一件事），以及真语料逐份还是成功页。
+新前缀 `obfuscated_payload` 归到既有 code `js_shell`（两个前缀一个 code 的先例就在下面：
+bot_challenge_detected / bot_wall_detected 都归 bot_wall）—— 所以枚举没有长胖，而
+R6 那道"档已经跑过就不再推荐"的门自动对这个形状生效。
 """
 
 from __future__ import annotations
@@ -32,7 +37,7 @@ from pathlib import Path
 
 from dhole_mcp.models import ResponseModel
 from dhole_mcp.quality import (
-    _obfuscation_gate_applies, looks_obfuscated,
+    _obfuscation_gate_applies, _annotate_quality, looks_obfuscated,
 )
 from dhole_mcp.server import _attach_dom_visible_chars, _with_agent_hints
 from dhole_mcp.trafilatura_extractor import extract_content_from_html
@@ -73,6 +78,17 @@ def _http_page(html: str, *, fetcher: str = "http", status: int = 200,
 def the_target(**kw) -> ResponseModel:
     """R1 关心的那一发：HTTP 档、body 够大、抽取没塌、正文全是打包过的脚本。"""
     return _http_page(fs._obfuscated_shell_page().decode(), **kw)
+
+
+def judged(result: ResponseModel) -> ResponseModel:
+    """按产品里的顺序把判定跑到结论位。
+
+    `_annotate_quality` 才是往 `error` 里写 token 的那一步（`server.py:4219` 的
+    `_finalize_result`，批量那一支在 `:4780` 也是同一个复合式），`_with_agent_hints`
+    只咨询已经落好的 `error`。挂具少跑第一步，测到的就是一个产品里不存在的形状：
+    `error` 永远空着，于是一堆断言会"因为错误的理由"通过。
+    """
+    return _with_agent_hints(_annotate_quality(result))
 
 
 class TestTheDetectorReadsShapeNotLength:
@@ -194,23 +210,71 @@ class TestTheExemptionsComeBeforeTheVerdict:
         assert not _obfuscation_gate_applies(out)
 
 
-class TestMeasureArmMovesNoVerdict:
-    """这一笔提交唯一的可观察变化是那颗字段。"""
+class TestTheFlipMovesTheVerdict:
+    """第二笔：判定开始翻结论位。这一笔改的就是这一个可观察的东西。
 
-    def test_measure_arm_moves_no_verdict(self):
-        out = _with_agent_hints(the_target())
-        assert out.content_ok is True, (
-            "content_ok 在第二笔之前就翻了 —— 那一笔的编号写在提交信息里，不在这")
-        assert "obfuscated_body" in (out.metadata or {}), out.metadata
-        assert out.summary and "obfuscated" not in out.summary.lower(), out.summary
+    上一笔（0e1369d）里这条断言写的是 `content_ok is True`，那是**当下的事实**，不是
+    期望；翻它之前先在语料上把每一发命中留下名字，假阳性为零才动结论位。两笔账分开
+    写，是为了出了事能分清是尺不准还是闸开过头。
 
-    def test_the_findings_are_the_same_numbers_the_detector_returned(self):
+    每一条都走 `judged()`：error 由 `_annotate_quality` 写，结论位由
+    `_with_agent_hints` 读，两个函数各测一半等于什么都没测。
+    """
+
+    def test_the_obfuscated_body_is_no_longer_reported_as_a_success(self):
+        out = judged(the_target())
+        assert out.error.startswith("obfuscated_payload"), out.error
+        assert out.content_ok is False, (out.summary, out.content_ok)
+        assert out.page_type == "js_shell", out.page_type
+        assert (out.diagnosis or {}).get("code") == "js_shell", out.diagnosis
+        # 证据不因为结论翻了就消失：error 串里有一份，metadata 里有一份结构化的
+        assert out.metadata.get("obfuscated_body"), out.metadata
+
+    def test_the_evidence_names_both_legs_that_fired(self):
         finding = looks_obfuscated("\n".join(the_target().content))
-        out = _with_agent_hints(the_target())
-        assert out.metadata["obfuscated_body"] == finding
+        for token in ("hex", "arg1="):
+            assert any(token in s for s in finding["signals"]), finding
+        assert finding["mixed_case_ratio"] > 0, finding
 
-    def test_a_clean_page_gets_no_new_metadata_key(self):
-        out = _with_agent_hints(_http_page(
-            (ROOT / "page_fixtures" / "gnu_free_sw_definition.html")
-            .read_text(encoding="utf-8", errors="replace")))
-        assert "obfuscated_body" not in (out.metadata or {}), out.metadata
+    def test_the_bulk_success_count_follows_without_a_second_author(self):
+        """`successful = status<400 and not error` —— 翻 error 就是翻它，不再抄一遍。
+
+        C13 的批量之所以把一枚壳页计成 `successful: 2`，机制就在这条公式只认 error。
+        这一条钉的是"没人为了批量又写第二个判据"。
+        """
+        out = judged(the_target())
+        assert out.status == 200 and out.error
+        # 与 server.bulk 那处公式同判：status<400 且 error 空才算成功
+        assert not (out.status < 400 and not out.error)
+
+    def test_the_advice_still_routes_through_the_tier_gate(self):
+        """R6 的那道门对这个新前缀同样成立：浏览器已经答过的，不再叫你去叫它。"""
+        fresh = judged(the_target(escalation_path="direct:http"))
+        assert "stealthy" in fresh.next_action, fresh.next_action
+        spent = judged(the_target(
+            escalation_path="http→stealthy(all_failed)"))
+        assert "Retry once with force_fetcher='stealthy'" not in spent.next_action, \
+            spent.next_action
+        assert "ALREADY rendered" in spent.next_action, spent.next_action
+
+    def test_a_legitimate_page_still_comes_out_clean(self):
+        """正向锁：翻闸之后，真语料仍然逐份是成功页（第二笔真正要守的东西）。"""
+        html = (ROOT / "page_fixtures" / "gnu_free_sw_definition.html").read_text(
+            encoding="utf-8", errors="replace")
+        out = judged(_http_page(html))
+        assert out.content_ok is True, out.summary
+        assert not out.error, out.error
+        assert "obfuscated_body" not in (out.metadata or {})
+
+    def test_the_error_token_survives_into_the_cache_gate(self):
+        """壳页不许被缓存成 TTL 里的"好页面"。
+
+        `_is_cacheable` 只看 `result.error` 非空就拒，所以这一条钉的是**顺序**而不是
+        那函数：判定必须发生在任何缓存写入之前。把 `_annotate_quality` 挪到写缓存之后
+        （它是可以被挪的，两处调用点在结构上独立），这一条就红。
+        """
+        from dhole_mcp.quality import _is_cacheable
+
+        out = judged(the_target())
+        assert not _is_cacheable(out), "一枚壳被判定为值得缓存的内容"
+

@@ -125,7 +125,7 @@ python evals/focus_baseline.py --json
 # 3. 图片拦截 A/B 实验（需要靶站在跑）
 python evals/check_image_blocking.py
 
-# 4. 修复复验（需要靶站在跑）：走完整 smart_fetch 路径确认 D1/D2 已修好
+# 4. 修复复验（需要靶站在跑）：走完整 web_read 路径确认 D1/D2 与 R1 已修好
 python evals/verify_fixes.py
 
 # 5. feed_fetch 的 since 增量端到端（需要靶站在跑，D3 之后才走得通）
