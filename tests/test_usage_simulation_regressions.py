@@ -331,6 +331,99 @@ class TestACutPageSaysItWasCut:
                                           max_depth=1, path_include="/nowhere")
         assert len(out.pages) == 1
         assert "only the start page was kept" in out.summary, out.summary
+        # 那句 blame 现在还带得上它声称的数：2 条候选、2 条被作用域挡下。
+        assert "the 2 same-domain candidate link(s)" in out.summary, out.summary
+        assert "(2 rejected" in out.summary, out.summary
+
+    @pytest.mark.asyncio
+    async def test_a_link_that_repeats_forty_times_is_one_rejection(self):
+        """计数要说人话：一条导航链接在页里出现 40 次，被挡下的是**一个候选**，
+        不是 40 个。写"40 条被作用域吃掉"的数字没人能拿来决策。"""
+        class _Srv:
+            async def web_read(self, url, **kwargs):
+                html = '<html><body>' + '<a href="/other/x">x</a>' * 40 + '</body></html>'
+                return _result(url=url, content=[html], content_type="text/html",
+                               fetcher_used="http", content_ok=True)
+
+        out = await crawl_mod.web_crawl(_Srv(), "https://d.test/", max_pages=5,
+                                          max_depth=1, path_include="/nowhere")
+        assert "the 1 same-domain candidate link(s)" in out.summary, out.summary
+        assert "(1 rejected" in out.summary, out.summary
+
+
+# ─── 10b: 甩锅的那句话要由计数选，不能由"参数在不在"选 ────────────────
+
+class TestTheScopeBlameIsChosenByCounts:
+    """体验修复刀1b-C1：`only the start page was kept - path_include 吃光了链接`
+    这一句在三种"过滤器从未拿到过任何东西可吃"的形状里也照样开火，而它给出的解药
+    （改模式）在这些形状上修不了任何东西。实测起点是我自己那次体验测试：
+    `path_include=["/docs"]` 回来 `pages_discovered: 1` —— 那颗 1 已经证明没有链接
+    可被过滤，响应却把原因端给了过滤器。
+
+    反过来说，匹配器**没有** bug：`/docs` 保住的是它自己的子树，`path_allowed` 在
+    两条作用域路径上是一致的（`:659`）。所以这一刀不动匹配器，只动那句 blame 的
+    选题依据。
+    """
+
+    @staticmethod
+    def _srv(html: str):
+        class _Srv:
+            async def web_read(self, url, **kwargs):
+                return _result(url=url, content=[html], content_type="text/html",
+                               fetcher_used="http", content_ok=True)
+        return _Srv()
+
+    @pytest.mark.asyncio
+    async def test_a_page_with_no_same_domain_links_does_not_blame_the_filter(self):
+        html = ('<html><body><a href="https://other.test/a">a</a>'
+                '<a href="https://cdn.test/b">b</a></body></html>')
+        out = await crawl_mod.web_crawl(self._srv(html), "https://d.test/docs/intro",
+                                        max_pages=5, max_depth=1, path_include="/docs")
+        assert len(out.pages) == 1
+        assert "scoped out" not in out.summary, out.summary
+        assert "0 same-domain candidate links" in out.summary, out.summary
+        assert "is NOT the reason" in out.summary, out.summary
+
+    @pytest.mark.asyncio
+    async def test_max_depth_zero_does_not_blame_a_filter_that_never_ran(self):
+        html = '<html><body><a href="/docs/a">a</a><a href="/docs/b">b</a></body></html>'
+        out = await crawl_mod.web_crawl(self._srv(html), "https://d.test/docs/intro",
+                                        max_pages=5, max_depth=0, path_include="/docs")
+        assert len(out.pages) == 1
+        assert "scoped out" not in out.summary, out.summary
+        assert "max_depth=0 does no link discovery" in out.summary, out.summary
+
+    @pytest.mark.asyncio
+    async def test_links_the_scope_kept_are_not_blamed_on_the_scope(self):
+        """候选全部通过作用域，却仍然只剩一页 —— 因为那条链接就是起始页自己。
+        这时"过滤器吃光了链接"两头都不成立：既没吃，也没东西剩下可吃。"""
+        html = '<html><body><a href="/">home</a></body></html>'
+        out = await crawl_mod.web_crawl(self._srv(html), "https://d.test/",
+                                        max_pages=5, max_depth=1, path_include="/")
+        assert len(out.pages) == 1
+        assert "scoped out" not in out.summary, out.summary
+        assert "kept all 1 candidate link(s)" in out.summary, out.summary
+
+    def test_the_counters_come_out_of_the_matcher_that_made_the_decision(self):
+        """计数与判决必须同源：一句 blame 由另一套算法数出来，就会再次和它自己反悔。"""
+        html = ('<html><body><a href="/docs/a">a</a><a href="/other/b">b</a>'
+                '<a href="/docs/a">a again</a></body></html>')
+        stats: dict = {}
+        kept = crawl_mod.extract_same_domain_links(
+            html, "https://d.test/x", "https://d.test/", ["docs"], None, stats=stats)
+        assert [u for u, _t in kept] == ["https://d.test/docs/a"]
+        assert stats == {"links_seen": 2, "links_rejected_by_scope": 1}, stats
+
+    def test_a_caller_that_passes_no_stats_gets_the_same_links(self):
+        """默认参数不许改变交付集合 —— 否则"加计数器"本身就是一次静默的行为改动。"""
+        html = ('<html><body><a href="/docs/a">a</a><a href="/other/b">b</a>'
+                '<a href="https://cdn.test/c.png">c</a></body></html>')
+        plain = crawl_mod.extract_same_domain_links(
+            html, "https://d.test/x", "https://d.test/", ["docs"])
+        counted = crawl_mod.extract_same_domain_links(
+            html, "https://d.test/x", "https://d.test/", ["docs"], None, stats={})
+        assert plain == counted
+
 
 
 # ─── 5 + 6: 空结果的两句话不能互相拆台 ───────────────────────────────

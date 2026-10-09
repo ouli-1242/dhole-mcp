@@ -679,6 +679,7 @@ def extract_same_domain_links(
     start_url: str,
     path_include: Optional[list[str]] = None,
     path_exclude: Optional[list[str]] = None,
+    stats: Optional[dict] = None,
 ) -> list[tuple[str, str]]:
     """Extract absolute same-domain (anchor URL, anchor text) pairs from HTML.
 
@@ -686,10 +687,22 @@ def extract_same_domain_links(
     netloc, drops fragments/assets/non-http schemes, applies path include/exclude
     subtree scoping (see path_allowed), and dedupes by the NORMALIZED URL (so
     `/docs` and `/docs/` collapse to one). Order-preserving.
+
+    ``stats`` (optional, mutated in place) carries the two counts that make the
+    scope decision reportable: `links_seen` (unique same-domain candidates the
+    filters were asked about) and `links_rejected_by_scope`. A one-page crawl can
+    mean "the page held no links", "the scope ate them", "the scope kept them and
+    something else stopped the run", or "discovery never ran" — those read
+    identically in the response and have different fixes, so the sentence that
+    names the reason has to be chosen from counts, not from whether a filter
+    parameter happened to be present.
     """
     root_netloc = urlparse(start_url).netloc
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
+    if stats is not None:
+        stats.setdefault("links_seen", 0)
+        stats.setdefault("links_rejected_by_scope", 0)
     if not html:
         return out
     # Normalized once per page rather than per link.
@@ -709,16 +722,27 @@ def extract_same_domain_links(
         if parsed.netloc != root_netloc:
             continue  # external -> dropped (same_domain_only default)
         path = _normalize_url_path(parsed.path or "/")
-        if include and not any(_path_in_scope(path, pat) for pat in include):
-            continue
-        if exclude and any(_path_in_scope(path, pat) for pat in exclude):
-            continue
         if _ASSET_RE.search(path):
             continue
+        # Dedup happens BEFORE the scope test so the counters speak about unique
+        # candidates: a nav bar that repeats one out-of-scope link 40 times is one
+        # rejected candidate, not 40, and "40 of these were scoped out" would be a
+        # number no reader can use. Membership of the returned set is unchanged —
+        # these filters are ANDed, so their order cannot add or drop a URL.
         clean = normalize_url(absu)
         if clean in seen:
             continue
         seen.add(clean)
+        if stats is not None:
+            stats["links_seen"] += 1
+        if include and not any(_path_in_scope(path, pat) for pat in include):
+            if stats is not None:
+                stats["links_rejected_by_scope"] += 1
+            continue
+        if exclude and any(_path_in_scope(path, pat) for pat in exclude):
+            if stats is not None:
+                stats["links_rejected_by_scope"] += 1
+            continue
         text = _TAG_RE.sub(" ", m.group(2) or "").strip()
         out.append((absu, text))  # original absolute URL (for fetching); dedup by `clean`
     return out
@@ -1260,6 +1284,11 @@ async def web_crawl(
     discovered: set[str] = {start_norm}
     pages: list[CrawlPage] = []
     robots_skipped = 0
+    # 链接发现的两个计数（`extract_same_domain_links` 逐页累加）。第三件事不必计数，
+    # 它是"发现这一趟到底跑没跑"——`links_seen=0` 既可能是页面真的没给候选链接，也可
+    # 能是我们从来没解析过任何页（`max_depth=0` 时正是如此），两句话不能共用一个 0。
+    link_stats: dict[str, int] = {"links_seen": 0, "links_rejected_by_scope": 0}
+    pages_scanned_for_links = 0
     truncated_maxpages = False
     truncated_time = False
     truncated_total_chars = False
@@ -1512,9 +1541,11 @@ async def web_crawl(
 
             # Discover links for deeper layers.
             if depth < max_depth and html:
+                pages_scanned_for_links += 1
                 try:
                     links = extract_same_domain_links(
-                        html, resp.url or u, url, path_include, path_exclude)
+                        html, resp.url or u, url, path_include, path_exclude,
+                        stats=link_stats)
                 except Exception:
                     links = []
                 for link_url, link_text in links:
@@ -1650,10 +1681,52 @@ async def web_crawl(
             # itself then proved right (the same scope admitted links on a second
             # call). A character budget and a scope filter cannot both be the reason
             # for one stop, so the budget's own bit above is what stands here.
-            bits_now.append("only the start page was kept - "
-                            f"path_include={list(path_include or [])} / "
-                            f"path_exclude={list(path_exclude or [])} scoped out every "
-                            "discovered link (nothing was left queued)")
+            #
+            # 同一把尺子的第二次自我否定（体验修复刀1b-C1）：上面那条把"队列空"当成
+            # "过滤器吃光了链接"的充分条件，其实不是。现场是 `path_include=["/docs"]`
+            # 的一次爬取，回来的 `pages_discovered: 1` 已经证明**没有任何链接被提出过**
+            # ——可那句 blame 照样开火，并把解药（改模式）端给了调用方，而改模式修不了
+            # 任何事。本地靶站复现同一条形状：同一个 URL 在 `max_depth=0` 下也是 1 页
+            # 队列空，而那一次过滤器根本没运行（发现这一趟没跑）。
+            #
+            # 所以 blame 现在由**计数**选，不由"参数在不在 + 队列空不空"选：只有真被
+            # 作用域挡下的候选存在时，才准说过滤器吃光了什么。匹配器**没有** bug ——
+            # `/docs` 保住的是它自己的子树，两条作用域路径共用 `path_allowed`（`:659`），
+            # 这一刀一行判定都不动。
+            rejected = link_stats["links_rejected_by_scope"]
+            seen = link_stats["links_seen"]
+            scoped = (f"path_include={list(path_include or [])} / "
+                      f"path_exclude={list(path_exclude or [])}")
+            if rejected:
+                bits_now.append(
+                    f"only the start page was kept - {scoped} scoped out every one of "
+                    f"the {seen} same-domain candidate link(s) the page(s) offered "
+                    f"({rejected} rejected, nothing was left queued)")
+            elif max_depth < 1:
+                bits_now.append(
+                    f"only the start page came back - {scoped} is NOT the reason: "
+                    f"max_depth={max_depth} does no link discovery, so the scope never "
+                    "ran on anything (raise max_depth to let it filter anything)")
+            elif pages_scanned_for_links == 0:
+                bits_now.append(
+                    f"only the start page came back - {scoped} is NOT the reason: no "
+                    "page returned HTML to parse for links, so link discovery never ran "
+                    "(that row's status and error carry what actually happened)")
+            elif seen == 0:
+                bits_now.append(
+                    f"only the start page came back - {scoped} is NOT the reason: the "
+                    "HTML we parsed held 0 same-domain candidate links, so the scope "
+                    "never had anything to filter (its nav is script-rendered or points "
+                    "off-domain - web_read this URL with extraction_type='html' to see "
+                    "the markup)")
+            else:
+                bits_now.append(
+                    f"only the start page came back - {scoped} kept all {seen} "
+                    "candidate link(s), so the scope is NOT the reason; the queue is "
+                    "empty, which means those links were already known or were skipped "
+                    "before they were queued (a robots.txt bit appears when that is "
+                    "why) - read that row's status and error")
+
         if interval_used > 0:
             # Saying the interval exists is the point: a crawl that took 40
             # seconds for 10 pages looks like a hang unless the stats line says

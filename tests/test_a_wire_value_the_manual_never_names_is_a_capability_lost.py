@@ -31,6 +31,10 @@ CAPABILITY_NEEDLES = [
     # 体验修复刀1b-R3：降级搬进结论位之后，那句话就是调用方唯一一定会读到的东西。
     # 手册若不再提它，字段级的诚实就退回到"活在 metadata 第 14 行"。
     ("archive 降级写在 summary 里的那一句", "archived copy"),
+    # 体验修复刀1b-C1：一次只回起始页的 crawl 有四种成因，选哪一种靠的是链接发现器
+    # 交回来的计数，而那计数只活在 summary 那句话里。手册不再写它，调用方就退回
+    # "改一下 path_include 再试" —— 一条对其中三种形状完全无效的解药。
+    ("crawl 一页不涨时点名成因的那组 summary", "same-domain candidate"),
 ]
 
 

@@ -44,6 +44,18 @@ This IP is being watched. The three cooldown tiers are fixed at 60s / 600s / 600
 
 The first two are the same ruling `web_read` already made on those bytes — before this, one URL could come back `content_ok=false` from `web_read` and `content_ok=true` inside a `web_crawl`. A row that says nothing is a row that was measured and matched its verdict.
 
+### `web_crawl` came back with only the start page
+
+Four different runs look identical from `pages_crawled: 1`, and their fixes are mutually wrong, so `summary` names the one that happened and the number it was chosen from:
+
+- `path_include=[…] scoped out every one of the 7 same-domain candidate link(s) (7 rejected, nothing was left queued)` — the scope really did it. Change the pattern (a pattern names a path subtree; `'/docs'` does not match `/docs-old`).
+- `path_include=[…] is NOT the reason: max_depth=0 does no link discovery` — you asked for one page; the scope never ran on anything. Raise `max_depth`.
+- `is NOT the reason: no page returned HTML to parse for links` — the fetch itself failed; read that row's `status` and `error`.
+- `the HTML we parsed held 0 same-domain candidate links, so the scope never had anything to filter` — the page genuinely hands dhole no links to work with (script-rendered nav, or links that point off-domain). `web_read` it with `extraction_type='html'` to see the markup, or start from a page that carries links.
+- `kept all 3 candidate link(s)` — the scope admitted them and they were dropped as already-known or by robots (a `N URL(s) skipped by robots.txt` bit appears when that is why).
+
+Counts are unique candidates per normalized URL, so a menu that repeats one link 40 times is reported as 1, not 40.
+
 ### `nested_no_match` / `nested_empty` / fewer records than the page has
 
 Both are failures to fix, not empty answers to report — and **no second-layer request was sent** for the first one, so retrying costs nothing until the selector changes.
