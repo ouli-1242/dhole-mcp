@@ -285,6 +285,13 @@ class _DocumentFence:
         asyncio.ensure_future(self._resolve(params))
 
     async def _resolve(self, params: dict) -> None:
+        if self._session is None:
+            # 摘掉的闸既不应答，也不该替这次导航作证。少了这一行，晚到的那笔事件会
+            # 只把主机记进围栏账上而没人把它掐掉 —— 而 `fetch` 读这本账时说的是
+            # "那一跳在发出之前就被终止"（left_browser=False）。那一跳其实出去了，
+            # 只是被结果边界拦住的 —— 账本写着 True/False 的那一位，必须由真应答过
+            # 请求的那一侧来填。
+            return
         url = ((params.get("request") or {}).get("url")) or ""
         host = (urlparse(url).hostname or "").lower()
         request_id = params.get("requestId")

@@ -316,6 +316,93 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
             assert "example.com" not in authorized, (
                 f"一次被拒的顶层请求不该把主机记进名册: {authorized}")
 
+            # ── 3b. 装不上那一支（D-39）：退路必须既拒绝、又说实话、又不留半只钩子 ──
+            # §3 里这条一直挂着"未验"：`BrowserSession.fetch` 那三百行只在**装得上**的那一支
+            # 被真机走过，单元测试量的是 `_DocumentFence` 自己与那条接线的形状。这里把同一台
+            # Chrome、同一个靶站再用一次，只把 `_DocumentFence.install` 换成一定抛的那一只，
+            # 于是四件事第一次被真发一遍：
+            #   ⓪ 门的**顺序**：这一发第一次量到"私有门先说话"。靶站在回环上，名册外那一跳
+            #      指向的也是回环（localhost:同一端口），所以没敲开 `allow_private` 时交回来的是
+            #      `ssrf_blocked: … (localhost:PORT)`，`cdp_host_not_allowed` 那句压根没轮到。
+            #      这不是这次注入造成的形状，是 wire 那三段一直靠 `cred_defaults(set=allow_private)`
+            #      才绕开的第一道门 —— 现在两面都有了真机账。
+            #   ① 敲开那道门之后，名册外那一跳**确实出去了** —— 由靶站的 Host 账作证，不靠回执自述；
+            #   ② 正文仍然被结果边界拒掉，而那句拒绝改成"已经离开浏览器"（不许还说"在发出
+            #      之前终止"——那是装得上的那一支才有的功劳）；
+            #   ③ 摘得干净的证据是**这台浏览器之后还能用**：D-31b 在真机上量过"每一笔 paused
+            #      必须应答，否则导航吊到 20 秒"，留了半只钩子的话，随后那一发 /home 出不来。
+            import contextlib
+
+            from dhole_mcp import browser as _browser_mod
+            from dhole_mcp.browser import CDPHostNotAllowedError
+            from dhole_mcp.security import allow_private_scope
+
+            async def _drive_install_failure(grant_private: bool):
+                real = _browser_mod._DocumentFence.install
+
+                async def _boom(self):
+                    raise RuntimeError("Fetch.enable refused (injected by D-39)")
+
+                _browser_mod._DocumentFence.install = _boom
+                out, hits = {}, []
+                try:
+                    scope = allow_private_scope(True) if grant_private \
+                        else contextlib.nullcontext()
+                    with scope:
+                        session = _browser_mod.BrowserSession(
+                            cdp_url=endpoint, headless=True, humanize=False,
+                            allowed_hosts=frozenset({"127.0.0.1"}))
+                        await session.start()
+                        n = len(site._server.hits)
+                        try:
+                            await session.fetch(f"{site.base_url}/fence")
+                            out["refusal"] = "<no exception: the body came back>"
+                        except CDPHostNotAllowedError as exc:
+                            out["refusal"] = str(exc)
+                        except Exception as exc:        # 形状变了也要看得见
+                            out["refusal"] = f"{type(exc).__name__}: {exc}"
+                        hits = list(site._server.hits[n:])
+                        # 同一台浏览器随后那一发：半只钩子会把它吊死在这里。
+                        resp = await session.fetch(f"{site.base_url}/home")
+                        out["follow_status"] = getattr(resp, "status", 0)
+                        out["follow_bytes"] = len(resp.body or b"")
+                        await session.close()
+                finally:
+                    _browser_mod._DocumentFence.install = real
+                return out, hits
+
+            blocked, blocked_hits = asyncio.run(
+                asyncio.wait_for(_drive_install_failure(False), timeout=90))
+            fell, fell_hits = asyncio.run(
+                asyncio.wait_for(_drive_install_failure(True), timeout=90))
+            print("\nD-39 (no allow_private) said:", str(blocked.get("refusal"))[:200])
+            print("D-39 (install refused) said:", str(fell.get("refusal"))[:260])
+            print("D-39 windows:", json.dumps({"private_closed": blocked_hits,
+                                               "fenced": fell_hits}), flush=True)
+
+            # ⓪ 私有门在前：它说话时不该带围栏那句
+            assert "ssrf_blocked" in str(blocked.get("refusal")), blocked
+            assert "cdp_host_not_allowed" not in str(blocked.get("refusal")), blocked
+            assert blocked.get("follow_status") == 200, (
+                f"被 SSRF 拦下也不许把这台浏览器用废: {blocked}")
+            # 两轮账上都有那一跳 —— 这正是"没有请求边界"的意思：两道门都在**它出去之后**
+            # 才说话，区别只是各自的名字与给谁的出路。装得上那一支（上面第 3 段）账上是空的。
+            assert any("localhost" in str(h) for (_p, h) in blocked_hits), (
+                f"围栏缺席时那一跳该真的出去: {blocked_hits}")
+
+            refusal = str(fell.get("refusal"))
+            assert "cdp_host_not_allowed" in refusal, (
+                f"装不上围栏时，结果边界必须仍然把名册外那一页拒掉: {refusal}")
+            assert "already left the browser" in refusal, (
+                f"装不上那一支要说实话（旧那句是'在发出之前终止'）: {refusal}")
+            assert "ended before it left" not in refusal, (
+                f"这一支没有请求边界可言，不许冒领: {refusal}")
+            assert any("localhost" in str(h) for (_p, h) in fell_hits), (
+                f"退路里那一跳本该真的出去（靶站账上一笔都没有）: {fell_hits}")
+            assert fell.get("follow_status") == 200, (
+                f"install 失败之后这台浏览器不能废掉（半只钩子的形状）: {fell}")
+            assert fell.get("follow_bytes", 0) > 0, fell
+
             # ── 4. bulk: urls= 与 cdp_url= 不兼容，必须在闸口之前拒绝 ──
             bulk_home = tmp_path / "home-bulk"
             client = _WireClient(bulk_home, {})
