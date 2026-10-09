@@ -49,6 +49,8 @@ MOVED_LESSONS = [
     ("整轮没有字符预算，只有每页 20000", "20000"),
     ("Crawl-delay 不是这里的旋钮", "Crawl-delay"),
     ("地图的大小由站点决定，预算数的是序列化后的行（C3）", "serialized rows"),
+    ("地图行不按 sitemap 的文档序交回，副本折到后面且只重排不删行（C4）",
+     "locale variant"),
     # 搜索
     ("consensus 数的是索引家族不是原始命中", "FAMILIES"),
     ("引擎池的上限与带 key 的引擎", "Keyed backends"),

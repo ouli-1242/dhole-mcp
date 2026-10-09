@@ -122,6 +122,11 @@ _SKIP_SCHEMES = ("javascript:", "mailto:", "tel:", "data:", "#")
 # this floor once it exceeds SITEMAP_MAP_FLOOR // 10.
 SITEMAP_MAP_FLOOR = 1000
 
+# 一份站点内容在地图里最多占几个位置（见 _order_map_entries）。取 3 而不是 1：
+# 一个真用 /ja/ 做主语言的站，它的前三条就是 /ja/、/en/、/de/ —— 折到 1 会把它
+# 自己的内容折没；折到 3 只吃掉"第 4 种语言开始"的重复。
+MIRROR_VARIANTS_KEPT = 3
+
 # Tracking / analytics query params that don't change page content -> stripped
 # during normalization so two URLs differing only in these don't get crawled twice.
 _TRACKING_PARAMS = {
@@ -812,6 +817,77 @@ def score_link(url: str, text: str, focus: str) -> float:
     return focus_score + content_score
 
 
+# 一份站点内容在地图里的坐标：开头那一段是语言码时把它摘掉。
+# 只认**开头**一段的两字母（可带地区后缀：/bn/、/zh-cn/、/pt_BR/），因为那是 i18n
+# 路由的常见形状。`/api/v1/x` 的首段不是两字母，不会被误折；`/id/1234` 这种"用两字母
+# 当路径名"的形状确实会被折错 —— 所以判定不是"看起来像语言码"就够了，还要同一 key 下
+# 真的存在 ≥ MIRROR_VARIANTS_KEPT+1 个变体（见 _order_map_entries），单个孤立段一律不动。
+_LOCALE_SEGMENT_RE = re.compile(r"^/([a-z]{2}(?:[-_][A-Za-z]{2,4})?)(?=/|$)")
+
+
+def _fold_locale_path(path: str) -> tuple[str, str]:
+    """(去掉开头语言段后的路径, 摘掉的那一段或 "") —— 同一份内容的两个坐标。"""
+    m = _LOCALE_SEGMENT_RE.match(path or "/")
+    if not m:
+        return path or "/", ""
+    rest = (path or "/")[len(m.group(0)):]
+    return (rest or "/"), m.group(1)
+
+
+def _order_map_entries(entries: list, query: str = "") -> tuple[list, dict]:
+    """Which map rows ship first, and what the reordering cost. One owner (C4).
+
+    站点自己的 sitemap 是**文档序**的索引，而文档序表达的是"站点先列了什么"，不是
+    "哪一页对这次的问题有用"。现场：一份 1,011 条的 sitemap，前 1,000 条是 20 篇文档
+    的 50 种语言/版本副本，默认预算全花在副本上 —— 交回 634 行、覆盖 20 篇内容。
+    回执读起来像"这就是这个站"。
+
+    只做**重排**，不删行（重排可逆，删行不可逆，而"这一页其实存在"是不可收回的谎）：
+
+    1. `score_link` 稳定排序 —— 查询词在场时它是相关度，不在场时就是那套内容先验
+       （docs/api 抬、login/cart 压）。与 BFS 的 `push()` 同一把尺；地图这条路上从前
+       **从不咨询它**，`score_link` 只在 `push()` 里被叫过一次。
+    2. 同一页的第 MIRROR_VARIANTS_KEPT+1 个语言副本排到整张地图的最后。它们仍然是地图
+       的行：`pages_discovered` 照数、游标照得到、计划里照存。
+
+    分组要**两趟**：先按去掉语言段的路径归组，再在组内定代表。单趟"先到先得"会让
+    `/bn/a` 抢下代表位而把原文 `/a` 折到后面 —— 那与本缺陷同形，不是修复。代表由
+    `score_link` 判（摘掉语言段的那条路径少一个噪声 token，分更高），同分则文档序在前。
+    """
+    groups: dict[str, list[tuple[int, float, bool]]] = {}
+    folded_of: dict[int, str] = {}
+    for i, su in enumerate(entries):
+        try:
+            path = urlparse(su.url).path or "/"
+        except Exception:
+            path = su.url
+        folded, locale = _fold_locale_path(path)
+        folded_of[i] = folded
+        # 代表的第一判据是"这条没有语言段"，也就是原文自己；`locale` 是摘下来的那段
+        # 名字，直接当排序键会变成按语言字母序选代表（/ja/ 因此被 /de/ 挤掉）。
+        groups.setdefault(folded, []).append((i, score_link(su.url, "", query),
+                                              bool(locale)))
+    demote: set[int] = set()
+    for members in groups.values():
+        if len(members) <= MIRROR_VARIANTS_KEPT:
+            continue  # 不超过三个变体：一行都不许动（一个真用 /ja/ 的站就长这样）
+        keep = sorted(members, key=lambda m: (-m[1], m[2], m[0]))
+        demote.update(i for (i, _s, _h) in keep[MIRROR_VARIANTS_KEPT:])
+
+    front = sorted(((score_link(su.url, "", query), i, su)
+                    for i, su in enumerate(entries) if i not in demote),
+                   key=lambda t: (-t[0], t[1]))
+    back = sorted(((score_link(entries[i].url, "", query), i, entries[i])
+                   for i in demote), key=lambda t: (-t[0], t[1]))
+    shipping = [su for _sc, _i, su in front] + [su for _sc, _i, su in back]
+    before = [su.url for su in entries]
+    after = [su.url for _sc, _i, su in front]
+    moved = sum(1 for b, a in zip(before, after) if b != a)
+    return shipping, {"mirrors_demoted": len(demote),
+                      "mirror_pages": len({folded_of[i] for i in demote}),
+                      "moved": moved, "paths_total": len(set(folded_of.values()))}
+
+
 def _error_status(resp) -> int:
     """Honest status: -1 for network errors (no HTTP response), else the real
     HTTP status. Lets downstream logic distinguish 'server returned 500' from
@@ -952,6 +1028,12 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
             diag["via"] = result.via
         return None  # nothing reachable: the caller's "no sitemap here" answer is true
 
+    # 地图里谁先走：文档序说的是"站点先列了谁"，不是"哪一页对这次有用"（C4）。
+    # `_order_map_entries` 是这条判断的唯一作者（`evals/sitemap_map_baseline.py` 量的
+    # 也是它），所以"前后对比"与"这次交了什么序"共用一把尺。
+    map_order, _order_stats = _order_map_entries(result.urls, query=search or "")
+    listed = len(result.urls)
+
     # 预算数的是**序列化后的行**，不是 `content_md`。map 行的 content_md 恒为空，
     # 所以这一族从前在整轮字符帽的账本上是 0：默认的 60,000 字符预算在 500 行时
     # 已被透支 1.9 倍、在 1,000 行时 9.7 倍，而 `truncated_by_total_chars` 一路是
@@ -963,7 +1045,7 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
     seen: set[str] = set()
     row_chars = 0
     stopped_by = ""               # "budget" | "deadline" | ""
-    for su in result.urls:
+    for su in map_order:
         norm = normalize_url(su.url)
         if norm in seen:
             continue
@@ -1064,6 +1146,20 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
     ok = len(pages)
     summary = (f"mapped {ok} URL(s) at {url} from sitemap.xml "
                f"(via {result.via}; {len(result.sitemaps_used)} sitemap file(s)) - one fetch, no BFS")
+    if _order_stats["moved"]:
+        # 重排要出口，否则"这一页为什么不是我 expected 的顺序"变成一个新的谜；而"覆盖
+        # 了多少份不同内容"是唯一能区分"634 行=634 页"与"634 行=20 页的副本"的数。
+        shipped_paths = len({_fold_locale_path(urlparse(p.url).path or "/")[0]
+                             for p in pages})
+        summary += (
+            f" · rows ordered by relevance then the sitemap's own order "
+            f"({_order_stats['moved']} of {listed} moved"
+            + (f"; {_order_stats['mirrors_demoted']} locale variant(s) of "
+               f"{_order_stats['mirror_pages']} page(s) placed behind the "
+               f"{MIRROR_VARIANTS_KEPT} copies kept up front"
+               if _order_stats["mirrors_demoted"] else "") + f") · the {ok} row(s) "
+            f"shipped cover {shipped_paths} of the map's {_order_stats['paths_total']} "
+            "distinct page(s)")
     if _terms:
         # 兑现了就报账：留下几条、按关键词筛掉几条、以及"这里只比 URL"。没有这句，
         # 一个空手而归的调用方会以为整站只有这几条。用的数是 `accept` 见过的条数，
@@ -1078,6 +1174,13 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
         f"re-run web_crawl with discover_only=false to crawl content from the "
         f"start URL. Use path_include/path_exclude to scope."
     )
+    if _order_stats["mirrors_demoted"] and not held:
+        # 没被预算砍到的时候，被折到后面的副本也必须说得出在哪 —— 否则"这张地图覆盖
+        # 了 30 页"与"我要的那一页怎么不在 30 行里"是同一个谜的两面。
+        next_action += (f" The {listed} rows include "
+                        f"{_order_stats['mirrors_demoted']} locale variant(s) ordered "
+                        "last; they are all still in the map above, and "
+                        "path_include='/<locale>/' reads one language in full.")
     if result.capped:
         # P2-9: a sitemap with 50,000 URLs and one with exactly `cap` produce the
         # same number here, and "mapped 5000 URL(s)" reads as "this is the site".
