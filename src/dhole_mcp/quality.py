@@ -710,8 +710,10 @@ def _best_list_targets(citations: list, page_url: str, limit: int = 3) -> list[s
 
 #: 只有"一次 HTTP 应答都没拿到"的这一族才换成那句本地诊断。`dns_failure` 也在里面：
 #: 私网目标的名字是 localhost 时，"域名不存在"同样不是调用方要做的事。
+#: `private_target_blocked` **不在**里面：那一支一根线都没拨，"本地服务起了吗"是对
+#: 一扇关着的门说话 —— 它自己的 hint 点名的是 `allow_private`。
 _NO_ANSWER_CATEGORIES = ("connection_refused", "connection_reset", "timeout",
-                         "dns_failure")
+                         "dns_failure", "dns_unresolvable")
 
 
 def _local_target_no_answer(category: str, url: str) -> str:
@@ -1029,9 +1031,9 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         elif category == "timeout":
             next_action = ("All fetch tiers failed: timeout. The site is unresponsive. "
                           "Retry once with a longer timeout, or switch sources.")
-        elif category == "dns_failure":
-            next_action = ("All fetch tiers failed: DNS resolution failed. Verify the URL "
-                          "is correct; do NOT retry.")
+        elif category in ("dns_failure", "dns_unresolvable"):
+            next_action = ("All fetch tiers failed: DNS resolution failed. Verify the "
+                          "URL is correct; do NOT retry.")
         elif category == "browser_launch":
             # Say which of the three states this is instead of recommending the tier
             # that just failed: "re-fetch auto-escalates to the stealthy browser" is

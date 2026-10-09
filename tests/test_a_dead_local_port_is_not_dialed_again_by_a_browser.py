@@ -12,8 +12,12 @@ archive.org 的预算。强制档早就有 `_private_health_probe` 那条判断�
 都量到过），结果一样是死端口。公网保持 timeout=继续 —— filtered port 在公网上是
 常态，把它当死端口会掐掉本来抓得到的页。
 
+（R5 之后这份名单窄了一半：`dns_failure` 从定论里出去了，公网的 `connection_refused`
+也出去了 —— 见 tests/test_a_dns_verdict_from_the_probe_is_not_final.py。留在这里的
+全是**私网**那一支，它一个字没动。）
+
 本轮实测过、当时没落成断言的三条都在这里：
-1. 预检定论（refused / dns / 私网 timeout）→ 直接回信，浏览器档一次都不被问、archive
+1. 预检定论（私网的 refused / timeout）→ 直接回信，浏览器档一次都不被问、archive
    一分预算不花；
 2. 预检过了而 HTTP 档仍没拿到应答（真慢服务 + 短 timeout）→ 私网目标不升级，回执写
    `http(private_target_no_answer)` 并把"浏览器拨的是同一个端口"说出口；

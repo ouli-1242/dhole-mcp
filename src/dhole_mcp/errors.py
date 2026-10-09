@@ -113,6 +113,24 @@ _HINTS: dict[str, str] = {
         "DNS resolution failed. The domain may not exist or your DNS is blocked. "
         "Verify the URL is correct; do NOT retry."
     ),
+    # 预探测自己的两级结论。分成两颗而不是一颗，是因为一次 gaierror 和两次是两件
+    # 不同的事：实测 lwn.net 抖动时，一次失败换来的回执写着 `retryable: false` 和
+    # "do NOT retry"，而调用方原样重试 1643ms 就拿到了页面。
+    "dns_unresolvable": (
+        "The name did not resolve on two probes 150ms apart, so this is not one "
+        "blip in the resolver - either the domain does not exist or this network "
+        "cannot see it. The TCP probe does not get the last word: the HTTP and "
+        "browser tiers still ran, so read `escalation_path` for what the real "
+        "attempt said. Fix the name or the resolver - resending the same URL "
+        "changes neither."
+    ),
+    "private_target_blocked": (
+        "dhole did not dial this address: it is a private / loopback / metadata "
+        "target and the waiver does not cover it. No request was sent, so nothing "
+        "about the service itself is known yet. If this is a machine you operate, "
+        "open the door deliberately in cred_defaults - its allow_private setting "
+        "accepts this host; otherwise point at the public URL."
+    ),
     "timeout": (
         "Request timed out. The site may be slow or your network is restricted. "
         "Retry once with a longer timeout; if it persists, switch sources."
@@ -151,6 +169,11 @@ _RETRYABLE_BY_CATEGORY: dict[str, bool] = {
     "connection_refused": False,
     "connection_reset": True,
     "dns_failure": False,
+    # 两颗新结论的"不可重试"有各自的依据，都不是"网络类失败一律如此"：
+    # dns_unresolvable 是**两次**探针都失败（一次不算，见上），private_target_blocked
+    # 是一次策略决定 —— 重发同一字节不会改动名册。
+    "dns_unresolvable": False,
+    "private_target_blocked": False,
     "timeout": True,
     "browser_launch": False,
     "tls_error": False,
@@ -171,7 +194,10 @@ def classify_network_error(error_str: str) -> Tuple[str, str]:
     Categories:
     - connection_refused: target refused TCP connection (site down / env blocked)
     - connection_reset: remote host forcibly closed connection (anti-bot / firewall)
-    - dns_failure: domain name resolution failed
+    - dns_failure: domain name resolution failed (a tier's own error text)
+    - dns_unresolvable: the TCP probe's two 150ms-apart attempts both failed
+    - private_target_blocked: dhole declined to dial a private target (no request
+      was sent — this is a policy verdict, not a network one)
     - browser_launch: the browser process itself could not be started (not a site
       problem — checked before `timeout` so "Timed out while launching browser"
       does not get read as a slow target)
@@ -201,7 +227,8 @@ def classify_network_error(error_str: str) -> Tuple[str, str]:
     # "timeout" is deliberately absent: `timed? ?out` already catches it.
     _lc = error_str.lower()
     for _token in ("connection_refused", "connection_reset", "tls_error",
-                   "proxy_error", "dns_failure"):
+                   "proxy_error", "dns_failure", "dns_unresolvable",
+                   "private_target_blocked"):
         if _token in _lc:
             return _token, _HINTS[_token]
 

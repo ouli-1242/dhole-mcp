@@ -1117,11 +1117,30 @@ def proxy_preflight(proxy_url: str, timeout: float = 5.0) -> tuple[bool, str]:
         return False, "proxy_unreachable"
 
 
+def _preflight_category(error: Exception) -> str:
+    """一次拨失败属于哪一类。唯一的作者：预探测的两条支路都从这里取标签。"""
+    import socket
+    if isinstance(error, ConnectionRefusedError):
+        return "connection_refused"
+    if isinstance(error, socket.gaierror):
+        return "dns_unresolvable"
+    if isinstance(error, (socket.timeout, TimeoutError)):
+        return "timeout"
+    # Windows: os error 10061 = connection refused, 10054 = reset
+    err_str = str(error)
+    if "10061" in err_str or "refused" in err_str.lower():
+        return "connection_refused"
+    if "10054" in err_str or "reset" in err_str.lower():
+        return "connection_reset"
+    return "unknown"
+
+
 def tcp_preflight(url: str, timeout: float = 2.0) -> tuple[bool, str]:
     """Quick TCP connect check to fail fast before a full HTTP/browser fetch.
 
     Returns (reachable: bool, error_category: str). error_category is empty
-    when reachable, otherwise one of: connection_refused, dns_failure, timeout.
+    when reachable, otherwise one of: connection_refused, connection_reset,
+    dns_unresolvable, private_target_blocked, timeout, unknown.
 
     Synchronous — call from a worker thread via asyncio.to_thread().
     Never raises.
@@ -1129,33 +1148,56 @@ def tcp_preflight(url: str, timeout: float = 2.0) -> tuple[bool, str]:
     import socket
     try:
         from dhole_mcp.security import url_targets_internal
-        # 这个"快速可达性探测"本身就是一次对内网的裸 TCP 连接，而且它的分类结果会
-        # 原样回报给 agent（connection_refused vs dns_failure = 端口开/关的信号），
-        # 等于一个内网端口扫描 oracle。先判一次，命中内网时返回与"真的不可达"**同形**
-        # 的类别，不给指纹留下可区分的东西。
+        # 这个"快速可达性探测"本身就是一次对内网的裸 TCP 连接，而它的分类结果会原样
+        # 回报给 agent。它**不拨**内网地址，这一条没变（`test_internal_targets_
+        # never_connect` 钉着）；变的是它怎么说。曾经报 `dns_failure`，而
+        # 10.1.2.3 是一颗字面 IP，整个过程一次都没问过 DNS —— 那个标签给调用方的是
+        # 一条假线索：他会去核域名拼写、去查 resolver，两件事都与这次失败无关。
+        # 系统其他地方对同一件事说的是真话（`validate_url` 的 "URL targets
+        # internal/private IP"，回执里的 `ssrf_recheck`），只有这一处在掩。掩它当初
+        # 是为了不做端口扫描 oracle —— 而那个目的不靠撒谎达成：这一支对所有内网目标
+        # 同形返回（开着死着的字都不差），oracle 从来就不在这句话里。
         if url_targets_internal(url):
-            return False, "dns_failure"
+            return False, "private_target_blocked"
         parsed = urlparse(url)
         host = parsed.hostname
         if not host:
-            return False, "dns_failure"
+            # 没有主机名可问：这不是解析失败，是压根没有名字（`http:///x`）。
+            return False, "dns_unresolvable"
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        sock = socket.create_connection((host, port), timeout=timeout)
-        sock.close()
-        return True, ""
-    except ConnectionRefusedError:
-        return False, "connection_refused"
-    except socket.gaierror:
-        return False, "dns_failure"
-    except (socket.timeout, TimeoutError):
-        return False, "timeout"
-    except OSError as e:
-        # Windows: os error 10061 = connection refused, 10054 = reset
-        err_str = str(e)
-        if "10061" in err_str or "refused" in err_str.lower():
-            return False, "connection_refused"
-        if "10054" in err_str or "reset" in err_str.lower():
-            return False, "connection_reset"
-        return False, "unknown"
+
+        def _dial():
+            sock = socket.create_connection((host, port), timeout=timeout)
+            sock.close()
+
+        try:
+            _dial()
+            return True, ""
+        except socket.gaierror:
+            # 一次解析失败**不是定论**。实测（2026-10-09，lwn.net）：预探测一次
+            # gaierror → 回执 `dns_failure` + `retryable: false` + "do NOT retry"，
+            # 而调用方按 `cache_ttl=0` 原样重试，1643ms 就拿到了页面。这颗牙判决的是
+            # resolver 的一帧抖动，交付的却是一句"别再试了"。再拨一次，间隔 150ms：
+            # 第二次成功就照常去抓，并把"这台机器的 resolver 要两次才答"说给调用方
+            # （`_note_text` 落 summary —— 一次被吸收掉的故障如果毫无痕迹，就又是一次
+            # 静默降级）；两次都失败才叫 `dns_unresolvable`。
+            import time
+            time.sleep(0.15)
+            try:
+                _dial()
+            except socket.gaierror:
+                return False, "dns_unresolvable"
+            except Exception as second_error:
+                # 第二次名字答了、端口没答：按第二次的实情分类，别让第一句 gaierror
+                # 替它命名。
+                return False, _preflight_category(second_error)
+            from dhole_mcp.context import _note_text
+            _note_text(
+                f"DNS for {host} failed on the first probe and resolved on the second, "
+                "150ms later - this machine's resolver is flaky for this name. The "
+                "fetch went ahead; nothing was retried at the HTTP layer to get here")
+            return True, ""
+        except Exception as error:
+            return False, _preflight_category(error)
     except Exception:
         return False, "unknown"

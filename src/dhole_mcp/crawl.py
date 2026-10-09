@@ -1180,8 +1180,8 @@ async def web_crawl(
         """Fetch one page as HTML. Returns (url, ResponseModel, html_str).
 
         Transient errors (timeout, connection_reset) get one automatic retry
-        after a 1s delay. Deterministic errors (connection_refused, dns_failure)
-        are not retried (they will fail again).
+        after a 1s delay. Deterministic errors (connection_refused, dns_failure,
+        dns_unresolvable) are not retried (they will fail again).
         """
         async with sem:
             await _pace(u)

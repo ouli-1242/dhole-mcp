@@ -453,7 +453,12 @@ class TestUrlTargetsInternalPredicate:
 
 
 class TestTcpPreflightIsNotAPortOracle:
-    """预探测本身是一次裸 TCP 连接，且分类会原样回报给 agent。"""
+    """预探测本身是一次裸 TCP 连接，且分类会原样回报给 agent。
+
+    它**不拨**内网地址，且对所有内网目标同形返回 —— 这两条是"不做端口扫描 oracle"
+    的全部依据。曾经它还顺手把这件事说成 `dns_failure`，而 10.1.2.3 是一颗从没被问
+    过的字面 IP：掩盖geo不是防oracle的手段，同形返回才是。现在它说自己是什么。
+    """
 
     @pytest.mark.parametrize("url", [
         "http://127.0.0.1:9999/", "http://[::1]/", "http://169.254.169.254/",
@@ -468,8 +473,27 @@ class TestTcpPreflightIsNotAPortOracle:
         monkeypatch.setattr(socket, "create_connection", _boom)
         ok, category = tcp_preflight(url, timeout=0.2)
         assert ok is False
-        # 与"真的不可达"同形：不暴露端口开/关
-        assert category == "dns_failure"
+        # 一个标签，覆盖开着的和死着的：端口状态一个字都没漏
+        assert category == "private_target_blocked"
+
+    def test_the_internal_verdict_is_the_same_whether_the_port_is_open(
+            self, monkeypatch):
+        """oracle 检查：同一个内网地址，"有人听"与"没人听"必须给出同一个回执。
+
+        上面那条只测了"不拨"。这一条把 create_connection 换成**成功**再比一次 ——
+        如果哪天有人把这一支改成先拨后判，那才是真的把端口表交出去了。
+        """
+        import socket
+        from dhole_mcp.fetcher import tcp_preflight
+
+        class _Sock:
+            def close(self):
+                pass
+
+        monkeypatch.setattr(socket, "create_connection",
+                            lambda addr, timeout=None: _Sock())
+        assert tcp_preflight("http://10.1.2.3:6379/", timeout=0.2) == (
+            False, "private_target_blocked")
 
     def test_public_target_still_probes(self, monkeypatch):
         import socket

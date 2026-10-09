@@ -970,7 +970,7 @@ def _all_tiers_failed_tips(category: str, status: int) -> str:
             "an anti-bot wall is unlikely (walls answer with a status, not silence).\n"
             "- Do NOT retry the same URL; if the name is correct, switch sources."
         )
-    if category in ("connection_refused", "dns_failure"):
+    if category in ("connection_refused", "dns_failure", "dns_unresolvable"):
         return (
             "- The site is unreachable from this network (site down or outbound blocked).\n"
             "- Do NOT retry the same URL - switch to a different source.\n"
@@ -6754,8 +6754,9 @@ class MasterFetchServer:
             # G31 后续：浏览器导航不把 connection-refused 浮出成快速失败，不可达
             # 目标照样烧满整个 timeout（实测本机死端口 127.0.0.1:1 烧掉 45s）。自动
             # 路径在 HTTP 层之前有 tcp_preflight 快失败，但强制调用不走那条路——
-            # 这里补上同一条预检，规则一致：只有**定论性**失败（connection_refused /
-            # dns_failure）跳层，timeout 仍然交给浏览器。显式代理在函数入口已探测，
+            # 这里补上同一条预检，规则一致：**定论性**失败只剩 refused（私网再加
+            # timeout —— 那里"2 秒才应答的合法服务"不存在），一次解析失败不再算
+            # 定论（R5，见下面 definitive 那一段）。显式代理在函数入口已探测，
             # 且此时目标不由我们直连，不再探目标；环境代理在场时只探私网/回环目标
             # ——G31 之后它们不再走环境代理，直连探测重新准确，公网目标仍由真实
             # 尝试决定（机器配置不该替一次抓取下结论）。
@@ -6769,7 +6770,12 @@ class MasterFetchServer:
                     from dhole_mcp.fetcher import tcp_preflight
                     _t0 = now()
                     reachable, preflight_category = await asyncio.to_thread(tcp_preflight, url, 2.0)
-                    definitive = ("connection_refused", "dns_failure")
+                    # `dns_failure` 从这份名单里出去了：一颗 TCP 预探测没有资格替
+                    # 浏览器档宣布"这个域名不存在"。预探测现在自己拨两次
+                    # （fetcher.tcp_preflight），两次都失败也只算一次**没拨成**，最后
+                    # 那句"域名不存在"由真实那一档自己去说。refused 留在这里：强制档
+                    # 只有这一档可跑，而浏览器对 RST 的应答不比裸 socket 快多少。
+                    definitive = ("connection_refused",)
                     if _private:
                         # 回环 / 私网地址不存在「2 秒才应答」的合法服务：connect
                         # 超时在那里就是"没东西在听"（实测：防火墙 DROP 型栈把
@@ -6867,13 +6873,27 @@ class MasterFetchServer:
 
         Uses the Wayback Availability API (free, no key):
         https://archive.org/wayback/available?url=<url>
+
+        Every path that answers nothing is said out loud. The tier is the call's
+        only **second opinion**, and it used to vanish: `content_ok=false` with
+        "site may be down, switch sources" read the same whether archive.org had
+        been asked and had nothing, or had never been consulted. Now the reason
+        lands in `summary` (a fact about the RESULTS, so that is its field) and in
+        the log at the level the event deserves - "no snapshot exists" is a normal
+        answer, an API error or an empty snapshot page is not.
         """
+        from dhole_mcp.context import _note_text
         try:
             # 1. Query the Wayback Availability API for the closest snapshot
             # (_url_quote is imported at module level).
             api_url = f"https://archive.org/wayback/available?url={_url_quote(url, safe='')}"
             api_resp = await _fallback_http_get(api_url, timeout=10)
             if api_resp.status != 200 or not api_resp.body:
+                logger.warning(f"Archive.org lookup failed for {url}: availability API "
+                               f"answered HTTP {api_resp.status}")
+                _note_text("the archive.org fallback was asked and the availability API "
+                           f"answered HTTP {api_resp.status} - the second opinion got "
+                           "nothing, so the failure above is the origin's own")
                 return None
             import json as _json
             data = _json.loads(api_resp.body)
@@ -6881,6 +6901,9 @@ class MasterFetchServer:
             snapshot_url = snapshot.get("url", "")
             snapshot_date = snapshot.get("timestamp", "")  # YYYYMMDDHHmmss
             if not snapshot_url or not snapshot.get("available"):
+                logger.info(f"No archive.org snapshot for {url}")
+                _note_text("archive.org was asked and holds no snapshot of this URL - "
+                           "nothing else in this response came from a second source")
                 return None
 
             # 2. Fetch the snapshot page via HTTP tier
@@ -6890,6 +6913,11 @@ class MasterFetchServer:
                 timeout=15,
             )
             if snap_resp.status >= 400 or not snap_resp.content or not any(c.strip() for c in snap_resp.content):
+                logger.warning(f"Archive.org snapshot for {url} was unusable "
+                               f"(HTTP {snap_resp.status}, empty body)")
+                _note_text(f"archive.org does hold a snapshot of this URL but that "
+                           f"snapshot answered HTTP {snap_resp.status} with no readable "
+                           "body - the origin's failure above stands")
                 return None
 
             # 3. Mark as archive-sourced
@@ -6903,7 +6931,9 @@ class MasterFetchServer:
             logger.info(f"Archive.org fallback succeeded for {url} (snapshot: {snap_resp.archived_at})")
             return snap_resp
         except Exception as e:
-            logger.debug(f"Archive.org fallback failed for {url}: {e}")
+            logger.warning(f"Archive.org fallback failed for {url}: {e}")
+            _note_text(f"the archive.org fallback raised before it could answer "
+                       f"({type(e).__name__}) - the second opinion got nothing")
             return None
 
     async def _auto_escalate(
@@ -6978,8 +7008,9 @@ class MasterFetchServer:
         # the TCP preflight below has spent some of it.
 
         # TCP preflight: fail fast if the host is unreachable, saving 30-60s of
-        # HTTP+Stealthy timeouts. Only for definitive failures
-        # (connection_refused, dns_failure); timeout/unknown still try HTTP.
+        # HTTP+Stealthy timeouts. The only verdict with that power is a refused or
+        # silent connection **to a private target** — for anything public the probe
+        # is information, not a decision (see the `definitive` line below).
         #
         # 代理感知：配置了代理（HTTP 请求走代理而非直连）时，直连探测目标会误报
         # connection_refused/dns_failure —— 所以改成探测**代理端点**。此前这里只是
@@ -7007,9 +7038,14 @@ class MasterFetchServer:
             # 拨的是同一个死端口）。规则本来就有，只是只装在了一条路径上。
             _private_target = self._target_is_private(url)
             reachable, preflight_category = await asyncio_to_thread(tcp_preflight, url, 2.0)
-            definitive = ("connection_refused", "dns_failure")
-            if _private_target:
-                definitive = definitive + ("timeout",)
+            # 公网目标这一支现在是**空的**：一次 TCP refused 在公网上可能出自中间设备
+            # （防火墙 / 透明代理先应答再失败），而这一处一跳跳掉的是两档（HTTP 与
+            # 浏览器）。实测的形状就是那条判决权太贵的证据：lwn.net 一次 gaierror 换来
+            # `retryable: false` + "do NOT retry"，调用方原样重试 1643ms 拿到页面。
+            # 回环 / 私网保留 refused+timeout：那里不存在"2 秒才应答的合法服务"，
+            # 而浏览器拨的是同一个死端口（G31 的 45s 就是这么烧的），跳过它省的是整笔
+            # 预算，且这个目标是不是在听，裸 socket 与浏览器会给出同一个答案。
+            definitive = ("connection_refused", "timeout") if _private_target else ()
             if not reachable and preflight_category in definitive:
                 elapsed = (now() - start_time) * 1000
                 result = ResponseModel(

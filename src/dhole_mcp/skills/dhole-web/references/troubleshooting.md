@@ -61,6 +61,17 @@ The rung you asked for is not what the shared browser was started with: canvas n
 
 `proxy_unreachable` means the stored `proxy` failed its 5s TCP precheck — no request was sent (no browser escalation, no snapshot fallback). Raising `timeout` is useless: check the proxy's address / port / liveness, or `unset=["proxy"]` for a direct connection.
 
+### `dns_unresolvable`, `private_target_blocked`, and a name that resolved on the second try
+
+A name that will not resolve arrives under one of two different labels, and they owe you different actions. The label is the token inside `error` (`network_error: <label> …`); `diagnosis.code` for this whole family is `network` — branch on `error`, not on a per-label `code`:
+
+- **`dns_unresolvable`** — the cheap TCP probe dialled the name **twice, 150ms apart**, and neither answered. That is the strongest claim a 2-second socket is allowed to make, and it is still not the last word: the probe no longer has the power to skip the fetch tiers (see below), so `escalation_path` shows what HTTP and the browser each said. Fix the name or the resolver — resending the same URL changes neither. `retryable: false`.
+- **`dns_failure`** — a fetch tier's own message (`net::ERR_NAME_NOT_RESOLVED`, `getaddrinfo failed`). Same advice; different author.
+- **`private_target_blocked`** — nothing was dialled and no DNS was ever asked: the address is private / loopback / metadata and the waiver does not cover it. `Verify the URL is correct` would be a false errand here — the fix is `cred_defaults` `allow_private` naming that host, or the public URL. `retryable: false`, because a policy does not move on its own.
+- **A note in `summary` saying the name failed on the first probe and resolved on the second** — the fetch went ahead normally. This machine's resolver is flaky for that name. It is reported because a fault absorbed inside one call is otherwise indistinguishable from a clean run, and it is the reason an earlier round of this tool told you `do NOT retry` about a site that answered 1.6 seconds later.
+
+The TCP probe used to be able to end a call by skipping both fetch tiers on `connection_refused` and on DNS failures for **any** host. It does not anymore: on a public target a refused connection can come from a middlebox that answers first and fails after, and the tiers may route differently than a bare socket. The probe keeps that power only for **private / loopback** targets, where refused and timeout both mean "nothing is listening" and the browser would dial the same dead port (measured: 45s burned doing exactly that).
+
 ### Stale content / someone else's snapshot
 
 When `source` shows an archive fallback, that is a dated snapshot (`archived_at`). Label citations with the date; proactively flag time-sensitive claims. Two guarantees: the server's own JSON/XML error bodies are never replaced by snapshots (4xx/5xx with json/xml content-type are preserved as-is); an unreachable proxy never falls back to a snapshot (the request never went out — answering from a snapshot would answer a question nobody asked).

@@ -305,7 +305,8 @@ async def _grab(url: str, timeout: int,
 # （no-such-host-xyzq.invalid）交回的是
 # `error sending request for url (...) > tls handshake eof`，按串分类就得到 tls_error
 # 的出路："证书问题或网络拦截，别在没改代理之前重试" —— 而真因是那个名字根本没解析出来
-# （`socket.getaddrinfo` 答 gaierror，`tcp_preflight` 同判 dns_failure）。
+# （`socket.getaddrinfo` 答 gaierror；`tcp_preflight` 对同一件事的答案现在叫
+# `dns_unresolvable` —— 它自己拨两次才敢这么写，见 fetcher.tcp_preflight）。
 # 一句假出路比没有出路更贵：它会让人去改 TLS 配置。
 _CONNECT_STAGE_MASKS = frozenset({"tls_error", "connection_reset", "timeout", "unknown"})
 
