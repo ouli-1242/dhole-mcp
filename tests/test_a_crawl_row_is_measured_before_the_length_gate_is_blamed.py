@@ -1,4 +1,4 @@
-r"""R2 第一刀（measure）：crawl 的一行先被**量到**，而计划里那颗"50 字符的闸"被量掉了。
+r"""R2 两刀：crawl 的一行先被**量到**（0b4cb15），然后判决去读那把尺（这一笔）。
 
 计划对这一刀的判断是："`content_ok = len(md) >= 50` 就是缺陷本身 —— 把它抬到 web_read
 那侧标定过的档位（塌陷比 + 列表要有 ≥3 个条目 + 按 kind 分档）。"量完之后三条里只有
@@ -23,7 +23,11 @@ r"""R2 第一刀（measure）：crawl 的一行先被**量到**，而计划里�
 
 分两笔的理由与 R1 同一条：这一族闸的失败模式从来不是漏判而是过度开火，而 `content_ok`
 在 crawl 里被三处读（`pages_crawled` 那几句 summary、批量数学、以及 `resp.content_ok`
-的门）。第一笔唯一的可观察变化是**话**：量到的写进那一行的 summary 与整轮的 summary。
+的门）。1/2 唯一的可观察变化是**话**。这一笔让判决去读那两把尺：`_row_verdict` 拒掉
+`extraction_collapsed` 与 `thin_list` 两形，依据是实测 —— 同一个 URL 走 `web_read` 早已
+是 false（`/longaside` 两条路径都真跑过，一边 true 一边 false 就是这批一直在消灭的
+"一个工具两种真相"）。长度那把尺**保持 50 不动**，`/nav` 那一行**不翻**：没有站得住的
+单行判据，宁可不说明也不误杀。
 """
 
 from __future__ import annotations
@@ -46,7 +50,7 @@ import fixture_site as fs  # noqa: E402
 from dhole_mcp import identity  # noqa: E402
 from dhole_mcp.crawl import (  # noqa: E402
     CHROME_REPEAT_MIN, LIST_ITEMS_MIN, _chrome_rows, _classify_and_extract,
-    _measure_note, _measure_row,
+    _measure_note, _measure_row, _row_verdict,
 )
 from dhole_mcp.envelope import is_extraction_collapsed  # noqa: E402
 from dhole_mcp.server import MasterFetchServer  # noqa: E402
@@ -132,25 +136,33 @@ class TestTheCollapseRulerIsTheOneWebReadAlreadyCalibrated:
     def test_the_sentence_names_both_numbers_and_the_way_out(self):
         """上报的那一句话要自带证据与解药，不是"有点问题"。"""
         note = _measure_note({"extraction_collapsed": True, "visible_chars": 1374,
-                              "extracted_chars": 196}, content_ok=True)
+                              "extracted_chars": 196})
         assert "1,374" in note and "196" in note and "14%" in note, note
         assert "extraction_type='html'" in note, note
         assert "dhole's reader lost them" in note, note
 
-    def test_a_row_that_already_failed_says_nothing_more(self):
-        """上报落在**缝隙**上：一行已经写着 content_ok=false 时再补一句是噪音。"""
-        assert _measure_note({"extraction_collapsed": True, "visible_chars": 1374,
-                              "extracted_chars": 196}, content_ok=False) == ""
+    def test_a_refusal_names_its_own_reason(self):
+        """第二笔之后的语义：被这两个发现拒掉的行，必须把理由一起交出去。
+
+        这一条在 1/2 里写的是「已经 false 的行不再补一句」（那时闸还没动，补一句是
+        噪音）。翻闸之后同一个输入是**被这个发现拒的**，没有理由的 false 与本批要消灭
+        的那些假 true 是同一种罪，所以那句断言在这里被反过来 —— 不是测试坏了。
+        """
+        stats = {"extraction_collapsed": True, "visible_chars": 1374,
+                 "extracted_chars": 196}
+        assert _row_verdict("article", "x" * 196, stats) is False
+        assert _measure_note(stats), "拒了这一行却没有给理由"
 
 
-class TestMeasuringMovesNoVerdict:
-    """这一刀唯一的可观察变化是话，不是结论。这一条要在下一笔之前一直是绿的。"""
+class TestTheVerdictNowComesFromTheRuler:
+    """第二笔：判定开始读那两把尺。这一节钉的是翻完之后每一形落在哪一边。"""
 
-    def test_every_corpus_page_judges_the_same_with_and_without_the_ruler(self):
+    def test_every_corpus_page_judges_the_same_with_and_without_the_stats_outlet(self):
+        """`stats=` 只决定证据给不给调用方看，不决定判决 —— 两处必须是同一次判定。"""
         pages = [(name, getattr(fs, name)) for name in dir(fs)
                  if isinstance(getattr(fs, name), bytes)]
         pages.append(("_obfuscated_shell_page", fs._obfuscated_shell_page()))
-        assert len(pages) >= 12, sorted(n for n, _ in pages)
+        assert len(pages) >= 13, sorted(n for n, _ in pages)
         for name, raw in pages:
             html = raw.decode("utf-8", "replace")
             a = _classify_and_extract(html, f"{START}x", START, None, 40_000)
@@ -158,13 +170,14 @@ class TestMeasuringMovesNoVerdict:
                                       stats={})
             assert a[1:] == b[1:], (name, a[1], b[1])
 
-    def test_the_nav_only_row_is_still_called_a_success_today(self):
-        """这一条写下的是**当下的事实**，不是期望，也不是这一刀要改的东西。
+    def test_the_nav_only_row_still_comes_back_a_success(self):
+        """`/nav` 的 content_ok 翻闸后**仍然是 true** —— 这一条守的是"没证据就不开火"。
 
-        `/nav` 的 12 条链接全在 `<nav>` 里、主内容区为空，今天它是
-        `kind="list"`、`content_ok=true`、448 个字符。这一刀只把它量出来
-        （`list_items` 12 与那个 item set）；把它说成菜单需要**别的行**也带着同一组
-        链接，那是跨行的事，见 `TestTheChromeRuleNeedsMoreThanOneRow`。
+        它是这批的反面承诺：一行看起来确实像菜单（12 条链接全在 `<nav>` 里、主区为空），
+        但单行之内没有站得住的判据（剥标签会吃掉 travel 那 11 本书，按 URL 形状聚会把
+        `/about`、`/cart` 与 `/quote/1`、`/quote/2` 混为一谈），所以宁可不说也不误杀。
+        能说的是跨行那一组同集，而它只上报。断言里把 12 这个数字钉住：判据哪天找到了，
+        是这一条先红，不是某个闸悄悄生效。
         """
         md, kind, ok, stats = _run(fs.NAV_PAGE.decode(), f"{START}nav", START)
         assert (kind, ok) == ("list", True), (kind, ok, stats)
@@ -187,7 +200,15 @@ class TestMeasuringMovesNoVerdict:
         _measure_row(thin, '<a href="/one">一</a><a href="/two">二</a>',
                      "* [一](/one)\n* [二](/two)", "list", f"{START}x", START)
         assert thin.get("thin_list") is True, thin
-        assert "2 item link(s)" in _measure_note(thin, content_ok=True), thin
+        assert "2 item link(s)" in _measure_note(thin), thin
+
+        # 翻闸的那一半：发现要真的接进判决。两行都用够 50 字的 md，否则两边的差别会被
+        # 长度那把尺先判掉，这一条量的就不是薄列表而是长度。
+        roomy = ("* [一](/one) 一条足够长的条目说明，长到不会被长度那把尺先判掉\n"
+                 "* [二](/two) 另一条同样长的说明文字，形状与上面一致")
+        assert len(roomy) >= 50, len(roomy)
+        assert _row_verdict("list", roomy, thin) is False, "薄列表没被拒"
+        assert _row_verdict("list", roomy, {"list_items": 12}) is True
 
 
 class TestTheRejectedFloorStaysRejected:
@@ -247,18 +268,19 @@ class TestTheLiveCrawlCarriesTheDisclosure:
     """端到端：这一族尺在真 HTTP 字节上不误伤，而报出来的话落在该行与整轮上。"""
 
     @pytest.mark.asyncio
-    async def test_a_collapsing_row_says_it_in_the_row_and_in_the_run(self, live_site):
-        """管路证明：量到塌陷的那一行要把话说在**自己的 summary** 里，整轮要数得出几行。
+    async def test_a_collapsing_row_is_refused_and_says_why(self, live_site):
+        """管路 + 判决一起证：塌陷的那一行现在写 false，而且把理由与解药一起交出来。
 
-        挂具 `/longaside` 是量出来的形状（正文 2.5k 抽得到、aside 里 4.6k 个可见字被主内容
-        过滤器整块丢掉），不是照着断言捏的：先确认抽取器确实丢，才立成路由。
+        这一条在 1/2 里断言的是 `content_ok is True`（"这一刀不动结论位"），翻闸之后
+        反过来 —— 挂具 `/longaside` 是量出来的形状（正文 2.5k 抽得到、aside 里 4.6k 个
+        可见字被主内容过滤器整块丢掉），不是照着断言捏的：先确认抽取器确实丢，才立成路由。
         """
         result = await MasterFetchServer().web_crawl(
             f"{live_site}/longaside", max_pages=1, max_depth=0)
         assert result.pages, result.error
         row = result.pages[0]
         assert row.page_type == "article", row.summary
-        assert row.content_ok is True, "这一刀不动结论位：" + (row.summary or "")
+        assert row.content_ok is False, (row.summary, row.error)
         found = re.search(r"holds ([\d,]+) visible characters while we returned "
                           r"([\d,]+) \((\d+)%\)", row.summary or "")
         assert found, row.summary
@@ -268,6 +290,25 @@ class TestTheLiveCrawlCarriesTheDisclosure:
         assert "extraction_type='html'" in row.summary, row.summary
         assert "1 page(s) hold far more text in their own markup" in result.summary, \
             result.summary
+
+    @pytest.mark.asyncio
+    async def test_the_read_path_and_the_crawl_path_agree_on_the_same_bytes(self, live_site):
+        """`/longaside` 上两条路径过去给出相反的结论；这一笔之后它们一致。
+
+        修复前实测：同一份字节，`web_read` 回 `content_ok=false` +
+        `error="extraction_collapsed: … holds 7,149 characters…"`，而 `web_crawl` 的那一
+        行写着 `content_ok=true`。这不是新加的闸，是把爬取接回读取侧早就存在的那把尺。
+        """
+        server = MasterFetchServer()
+        via_read = await server.web_read(url=f"{live_site}/longaside",
+                                         force_fetcher="http")
+        via_crawl = await server.web_crawl(f"{live_site}/longaside", max_pages=1,
+                                           max_depth=0)
+        assert "extraction_collapsed" in (via_read.error or ""), via_read.error
+        assert via_read.content_ok is False
+        row = via_crawl.pages[0]
+        assert row.content_ok is False, row.summary
+        assert "extraction collapsed" in (row.summary or ""), row.summary
 
     @pytest.mark.asyncio
     async def test_legit_rows_carry_no_measurement_noise(self, live_site):
@@ -282,10 +323,11 @@ class TestTheLiveCrawlCarriesTheDisclosure:
 
     @pytest.mark.asyncio
     async def test_the_nav_seed_row_still_comes_back_as_a_list(self, live_site):
-        """翻闸不在这这一笔：`/nav` 这一行今天仍然 `content_ok=true`。
+        """翻闸翻不到 `/nav`：这一行仍然 `content_ok=true`。
 
-        下一笔也**不**打算凭单行判据翻它 —— 上面 TestTheChromeRule 那组用例说清了
-        为什么（单行分不开菜单与列表），能说的是跨行那一组同集。
+        不是没想到它 —— 是单行判据不存在（`TestTheChromeRuleNeedsMoreThanOneRow` 那组
+        用例说清了为什么：剥标签会吃掉 travel 的 11 本书，按 URL 形状聚会把 section 菜单
+        与 slug 列表混为一谈）。能说的是跨行那一组同集，而它只上报。
         """
         result = await MasterFetchServer().web_crawl(
             f"{live_site}/nav", max_pages=1, max_depth=0)

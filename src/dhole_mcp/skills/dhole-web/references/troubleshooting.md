@@ -38,11 +38,11 @@ This IP is being watched. The three cooldown tiers are fixed at 60s / 600s / 600
 
 `web_crawl` measures every row with the same rulers `web_read` is calibrated on, and says so in that row's `summary` when the measurement contradicts the verdict:
 
-- `extraction collapsed: … holds 1,374 visible characters while we returned 196 (14%)` — the site DID give text; dhole's main-content filter dropped it. Nothing to re-fetch: `web_read` that one URL with `extraction_type='html'` (or `'text'`) and the words come back. The crawl-level `summary` counts how many rows carry it.
-- `thin list: 2 item link(s)` — a row was rendered as a link list but only holds one or two entries, which is not an index.
-- `the same 12 item link(s) as 6 of these rows — that group is site chrome` — those rows' "content" is the site menu. This one is only sayable across rows: inside a single page a menu and a list are structurally identical (measured: books.toscrape puts its whole product grid inside `<aside>`, so stripping nav/header/footer/aside leaves 2 links on a page that has 11 books). Treat those rows as navigation and read the pages they point at.
+- `extraction collapsed: … holds 1,374 visible characters while we returned 196 (14%)` — the site DID give text; dhole's main-content filter dropped it. The row is refused (`content_ok=false`) and the sentence is the reason. Nothing to re-fetch for rendering: `web_read` that one URL with `extraction_type='html'` (or `'text'`) and the words come back. The crawl-level `summary` counts how many rows carry it.
+- `thin list: 2 item link(s)` — a row was rendered as a link list but only holds one or two entries, which is not an index. Also refused.
+- `the same 12 item link(s) as 6 of these rows — that group is site chrome` — those rows' "content" is the site menu. This one is a disclosure only, and it is deliberately not a gate: inside a single page a menu and a list are structurally identical (measured: books.toscrape puts its whole product grid inside `<aside>`, so stripping nav/header/footer/aside leaves 2 links on a page that has 11 books). Treat those rows as navigation and read the pages they point at.
 
-None of the three changes `content_ok` — a crawl row's verdict still comes from the length gate plus the page classification. They are disclosures, so a row that says nothing is a row that was measured and matched its verdict.
+The first two are the same ruling `web_read` already made on those bytes — before this, one URL could come back `content_ok=false` from `web_read` and `content_ok=true` inside a `web_crawl`. A row that says nothing is a row that was measured and matched its verdict.
 
 ### `nested_no_match` / `nested_empty` / fewer records than the page has
 

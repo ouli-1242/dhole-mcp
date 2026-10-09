@@ -403,15 +403,38 @@ def _chrome_rows(measured: dict) -> dict:
             if m.get("item_set") and counts[m["item_set"]] >= CHROME_REPEAT_MIN}
 
 
-def _measure_note(stats: dict, content_ok: bool) -> str:
-    """把与**这一行已有的结论**相矛盾的那把尺写成一句话。不矛盾就不说话。
+def _row_verdict(kind: str, md: str, measured: dict) -> bool:
+    """这一行算不算"给用户拿到了内容"。R2 的第二笔在这里翻闸。
 
-    一行已经写着 `content_ok=false` 时再补一句"这页其实没字"是噪音；上报要落在**缝隙**
-    上：今天的闸说是内容，而标定过的尺说不是。缝隙为空本身就是量到的结果 —— 它就是
-    下一笔敢翻闸的依据（语料里没有一行落在 50..200 之间，翻上去不会弄坏任何一页）。
+    两条依据都是**实测**，不是品味：
+
+    * `extraction_collapsed` —— 同一个 URL 走 `web_read` 回来写着
+      `content_ok=false` + `error="extraction_collapsed: … holds 7,149 characters…"`，
+      走 `web_crawl` 这一行却写着 `content_ok=true`（`/longaside`，同一份字节，两边都真
+      跑过）。一个工具两种真相，而这一族闸在读取侧早就存在 —— 这里是**对齐**，不是新闸。
+    * `thin_list` —— 渲染成列表却只有 0-2 条条目链接的行，交回去的"清单"里没有人。
+      语料里最窄的那一页也有 12 条（`/nav`），travel 52 条，所以这颗下限不吃掉任何一页。
+
+    长度那把尺**保持 50**：计划里"抬到 200 对齐 `_JS_SHELL_MIN_TEXT_CHARS`"那一档被
+    `/collections?items=1` 挡在门外（见 `LIST_ITEMS_MIN` 上面那段）。这不是"一颗都不许动"，
+    是这一颗的数值没有依据。
     """
-    if not content_ok:
-        return ""
+    if kind == "js_shell" or not md:
+        return False
+    if measured.get("extraction_collapsed") or measured.get("thin_list"):
+        return False
+    return len(md) >= 50
+
+
+def _measure_note(stats: dict) -> str:
+    """把量到的东西写成一句话。闸翻了之后这句话**更要说**：它是被拒的那一行的理由，
+    也是它唯一的解药（塌陷 → `extraction_type='html'`；薄列表 → 别把这一行当索引）。
+
+    第一笔（0b4cb15）里这一句只在 `content_ok=true` 时说话，理由是"一行已经写着 false
+    时再补一句是噪音"。那个前提在闸翻掉之后就不成立了：现在被拒的行正是**由这两个发现**
+    拒的，调用方读到的必须包括为什么 —— 一个没有理由的 false 与本批要消灭的那些假 true
+    是同一种罪。
+    """
     if stats.get("extraction_collapsed"):
         visible = stats["visible_chars"]
         got = stats["extracted_chars"]
@@ -431,13 +454,14 @@ def _classify_and_extract(html: str, url: str, start_url: str, focus: Optional[s
                           ) -> tuple[str, str, bool, bool]:
     """Content-adaptive extraction. Returns (markdown, page_type, content_ok, cut).
 
-    page_type is one of: article / list / js_shell / fallback. content_ok is
-    False only when we genuinely got nothing usable (js_shell that didn't
-    render, or an empty/error page). cut is True when the page held more than
-    max_chars and this function returned only the first max_chars of it.
+    page_type is one of: article / list / js_shell / fallback. cut is True when
+    the page held more than max_chars and this function returned only the first
+    max_chars of it. `content_ok` comes from `_row_verdict` — js_shell that
+    didn't render, an empty page, an extraction the page's own markup says we
+    lost, or a "list" with no group of entries behind it.
 
-    `stats` 是**上报**出口（照 `focus_content(..., stats=)` 的先例）：这一行被两把
-    已标定的尺量过之后落在哪，调用方与原函数都看得见，而 `content_ok` 一个字节不动。
+    `stats` 是这一行被那两把尺量过之后的**证据**出口（照 `focus_content(..., stats=)`
+    的先例）：数字与发现都从那里交给调用方，判决本身在返回值里。
     """
     from dhole_mcp.trafilatura_extractor import extract_content_from_html
     from dhole_mcp.focus import focus_content
@@ -492,10 +516,11 @@ def _classify_and_extract(html: str, url: str, start_url: str, focus: Optional[s
         md = md or _visible_text(html)
         kind = "fallback"
 
-    content_ok = bool(md and len(md) >= 50 and kind != "js_shell")
-
+    measured: dict = {}
+    _measure_row(measured, html, md, kind, url, start_url)
     if stats is not None:
-        _measure_row(stats, html, md, kind, url, start_url)
+        stats.update(measured)
+    content_ok = _row_verdict(kind, md, measured)
 
     # Truncate to the per-page budget. `cut` is the answer the caller cannot
     # recover afterwards: once md has been sliced to max_chars, `len(md) >
@@ -1423,12 +1448,15 @@ async def web_crawl(
                         row_stats = {}
                     page_type = kind
                     content_ok = ok and bool(md)
-                    note = _measure_note(row_stats, content_ok)
-                    if note:
+                    if row_stats:
+                        # 每一行的证据都登记：跨行的"这是菜单"判据要拿到各行的条目集合
+                        # 才数得出，而整轮那句"N page(s) hold far more text"要数得出
+                        # 被塌陷拒掉的行 —— 两者都不是"有话要说"才记账。
                         measured[u_norm] = row_stats
+                    note = _measure_note(row_stats)
+                    if note:
                         # 量到的东西要走在这一行**在场**的那句话里。一行的 summary 是
-                        # crawl 行唯一的抬头（这一族没有 metadata），而 `_summary_for`
-                        # 按这张表数出全局那一句"几页被量出来了"。
+                        # crawl 行唯一的抬头（这一族没有 metadata）。
                         row_summary = f"{row_summary} · {note}" if row_summary else note
                     if md:
                         # The extraction already holds the whole page up to the
