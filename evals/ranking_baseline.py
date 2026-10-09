@@ -21,6 +21,12 @@ key 不同：大概率是错的）——直接出数；其余等价性判断（�
 用法：
     python evals/ranking_baseline.py            # 集 A（+去重审计）+ 集 B 状态
     python evals/ranking_baseline.py --json     # 另存 .runtime 下 JSON
+    python evals/ranking_baseline.py --tiers    # 另加 high/med/low 直方图与空结果比率
+
+`--tiers` 存在的原因：P@k 只奖励**序**，而 `fetch_relevance` 是每行独立铸的 badge。
+把全部 high 改成 med 而不动顺序，P@5/P@10/MRR/nDCG 四个数一个都不变 —— 于是"相关性
+档位塌方"这种故障在这套指标下是隐形的。改档位规则之前必须先看直方图，改完也要再看
+同一张直方图，这才是可比较的前后两态。
 """
 
 from __future__ import annotations
@@ -109,8 +115,16 @@ def _merge_with_dedup(pages: list[tuple[str, list]]):
     return order, merges, raw_pairs
 
 
-def _replay_chain(query: str, ranked: list) -> list[str]:
-    """web_search 的确定性段，按真实调用顺序；返回最终序的 URL。"""
+def _replay_chain(query: str, ranked: list, tally: dict | None = None) -> list:
+    """web_search 的确定性段，按真实调用顺序；返回最终序的 SearchResult 行。
+
+    返回**行**而不是 URL：`--tiers` 要读 `fetch_relevance` 和 `relevance_score`，
+    而它们只在行上。指标侧仍按 URL 判（`_metrics` 收 URL 列表），调用点各取各的。
+
+    `tally`（可选，就地累加）是 B0 的落点：P@k 看不出"档位塌方"——把所有 high 换成
+    med，只要序不变，P@5 一个数都不动。所以要单独数 high/med/low 的直方图，以及
+    三段的行数（铸出多少行 / 质量过滤后剩多少 / 相关性过滤后交付出多少）。
+    """
     from dhole_mcp import search as S
 
     cand = ranked[:CANDIDATE_CAP]
@@ -119,9 +133,21 @@ def _replay_chain(query: str, ranked: list) -> list[str]:
     ranked_list, scores = S._diversify(ranked_list, scores, max_per_domain=2)
     ranked_list, scores = ranked_list[:MAX_RESULTS], scores[:MAX_RESULTS]
     results_list = S._build_results(query, ranked_list, scores, total_families=6)
+    if tally is not None:
+        tally["built"] += len(results_list)
+        for r in results_list:
+            tally["tiers"][r.fetch_relevance] = tally["tiers"].get(r.fetch_relevance, 0) + 1
+            # "high" 里有多少是 `rank == 1` 无条件发出来的（分数自己够不上 0.5）。
+            # 这一格是 S2 要移动的量，不是裁判 —— 它只说明 badge 现在由位置而非证据铸。
+            if r.fetch_relevance == "high" and (r.relevance_score or 0.0) < 0.5:
+                tally["high_from_rank_only"] += 1
     results_list = S._quality_filter(results_list)
+    if tally is not None:
+        tally["after_quality_filter"] += len(results_list)
     results_list = S._filter_irrelevant_results(results_list, query)
-    return [r.url for r in results_list]
+    if tally is not None:
+        tally["delivered"] += len(results_list)
+    return results_list
 
 
 # ── qrels 与指标 ──────────────────────────────────────────────────────────────
@@ -262,6 +288,8 @@ def _set_b() -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--tiers", action="store_true",
+                    help="high/med/low 直方图 + 空结果比率（P@k 看不出档位塌方）")
     args = ap.parse_args()
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -277,16 +305,21 @@ def main() -> int:
     merges_by_q: dict[str, list] = {}
     raw_pairs_by_q: dict[str, list] = {}
     per_query: list[dict] = []
+    tally: dict = {"built": 0, "after_quality_filter": 0, "delivered": 0,
+                   "high_from_rank_only": 0, "tiers": {}, "empty_queries": 0,
+                   "queries": 0}
     for qid in sorted(corpus):
         pages = [(eng, _parse_page(eng, html)) for eng, _m, html in corpus[qid]]
         query = corpus[qid][0][1]["query"]
         ranked, merges, raw_pairs = _merge_with_dedup(pages)
         merges_by_q[qid] = merges
         raw_pairs_by_q[qid] = raw_pairs
-        final_urls = _replay_chain(query, ranked)
+        results_now = _replay_chain(query, ranked, tally=tally)
+        final_urls = [r.url for r in results_now]
         row = {"qid": qid, "engines": [e for e, _ in pages],
                "raw_items": sum(len(rows) for _, rows in pages),
-               "unique_after_dedup": len(ranked), "final_order": len(final_urls)}
+               "unique_after_dedup": len(ranked), "final_order": len(final_urls),
+               "tiers": [r.fetch_relevance for r in results_now]}
         qr = _load_qrels(qid)
         if qr:
             row["metrics"] = {}
@@ -295,6 +328,8 @@ def main() -> int:
                 m["labeler"] = labeler
                 row["metrics"][labeler] = m
         per_query.append(row)
+    tally["queries"] = len(per_query)
+    tally["empty_queries"] = sum(1 for r in per_query if r["final_order"] == 0)
 
     with_metrics = [r for r in per_query if "metrics" in r]
 
@@ -313,6 +348,24 @@ def main() -> int:
                 print(f"    {k}: {sum(m[k] for m in ms)/len(ms):.3f}")
     else:
         print("  （还没有 qrels —— 先做盲评标注，见 evals/README.md 的标注协议）")
+    if args.tiers:
+        tiers = tally["tiers"]
+        total_rows = sum(tiers.values()) or 1
+        print("== 档位直方图（这一层 P@k 看不见：序不变而 high 全变 med，P@5 一个数都不动）==")
+        for name in ("high", "med", "low"):
+            n = tiers.get(name, 0)
+            print(f"  {name}: {n} ({n / total_rows:.1%})")
+        for other, n in sorted(tiers.items()):
+            if other not in ("high", "med", "low"):
+                print(f"  {other}: {n} ({n / total_rows:.1%})  <- 词表外的取值")
+        print(f"  high 里仅因 rank==1（自身分数够不上 0.5）: "
+              f"{tally['high_from_rank_only']} / {tiers.get('high', 0)}")
+        print(f"  行数流水: 铸出 {tally['built']} → _quality_filter 后 "
+              f"{tally['after_quality_filter']} → 交付 {tally['delivered']}")
+        q = max(1, tally["queries"])
+        print(f"  空结果题面: {tally['empty_queries']}/{tally['queries']} "
+              f"({tally['empty_queries'] / q:.1%})")
+
     for r in per_query[:8]:
         extra = (f"  metrics={r['metrics']}" if "metrics" in r else "")
         print(f"  {r['qid']}: raw={r['raw_items']} unique={r['unique_after_dedup']} "
@@ -334,7 +387,8 @@ def main() -> int:
         out = RUNTIME / f"ranking_baseline-{stamp}.json"
         out.write_text(json.dumps(
             {"at": dt.datetime.now().isoformat(timespec="seconds"),
-             "set_a": per_query, "dedup_audit": audit, "set_b": b},
+             "set_a": per_query, "tier_tally": tally,
+             "dedup_audit": audit, "set_b": b},
             indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         print(f"saved: {out}")
     return 0

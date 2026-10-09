@@ -22,6 +22,8 @@
 - `evals/ranking_baseline.py`：整条链重放（引擎 parser → `_normalize_url` 去重 →
   `_rank(mode="merge")` → `_apply_quality_boost` → `_diversify` → 两级过滤，与
   `smart_search` 无神经模型路径同序）。有 qrels 的题出 P@5 / P@10 / MRR / nDCG@10。
+  `--tiers` 另出 high/med/low 直方图 + 空结果比率：**P@k 只奖励序，档位塌方在这四个
+  数里是隐形的**（把所有 high 换成 med 而不动序，P@5 一个都不变）。
   **神经重排不在此处**——它归集 B。
 - **去重准确率**：集 A 的免费副产品，不另造数据集。机械可判两类直接出数：
   可疑合并（host 不同并成一个 key=必错）、可疑拆分（host+path 相同分成不同 key）；
@@ -81,6 +83,39 @@ qrels 记 labeler 身份与盲表 sha256，没记录就不可复现，等于没�
 - 两标各自的全量指标同量级（agent-a n=67：P@5 0.373 / MRR 0.559 / nDCG@10
   0.654；agent-b n=12：P@5 0.333 / MRR 0.472 / nDCG@10 0.520）——尺子本身
   没有系统分歧。
+
+### 档位前态（S2 的 B0 前置，2026-10-10 在 `8d05e78` 量）
+
+`python evals/ranking_baseline.py --tiers` —— 冻结语料 67 题 / 777 条唯一结果、无神经重排。
+
+| 数 | 值 |
+|---|---|
+| P@5 / P@10 / MRR / nDCG@10（agent-a n=67） | **0.373 / 0.324 / 0.555 / 0.652** |
+| 档位直方图 | high **454 (60.1%)** · med 266 (35.2%) · low 36 (4.8%) |
+| high 里仅因 `rank == 1`（自身分数 <0.5） | **0 / 454** |
+| 行数流水 | 铸出 756 → `_quality_filter` 后 720 → 交付 715 |
+| 空结果题面 | 1 / 67（1.5%） |
+
+两处纠正我自己写计划时的判断，都是测量给的：
+
+1. **`or rank == 1` 在这一臂上量不出来。** `_rank` 的无模型回退把分数写成
+   `1.0 - i/n`（search.py:920），`_apply_quality_boost` 再按最大值归一 ——
+   **第一名按构造就是 1.0**，于是 `score >= 0.5` 与 `rank == 1` 两条件恒同真，
+   删掉后者一个 badge 都不动。真正让 60% 的行拿到 "high" 的不是那半句冗余分支，
+   是**位置-derived 的分数被当成证据端出去**（reranker.py 的 docstring 早就记着：
+   归一分数下的地板永远否不掉一整个集合，因为最好的一条恒等于 1.0）。
+   所以 S2 的落点从"删 `or rank == 1`"移到"`raw is None` 时封顶 med 并说明原因"
+   —— 那才是把 454 条 high 变成"只是序"的那一刀。
+2. **担心的方向反了。** 计划怕"去掉 rank==1 后 high 变罕见 → `_quality_filter`
+   清空集合"。实测：`_quality_filter` 只丢 **low**（search.py:1069），而封顶 med
+   是 high→med 的降档，**不动 low 的计数**，所以交付集合按构造不变
+   （715 行还是 715 行）。B0 的 `--tiers` 直方图仍然必须跑 —— 它现在是用来*证明*
+   这条不变量的（改前改后 low 都是 36、空结果都是 1/67），不是用来看有没有塌方。
+
+已知缺口（不许拿这张表替神经臂说话）：这条链**没有** raw cross-encoder 分数
+（README:22-25 明写神经重排归集 B），所以 `relevance_raw` 的 high/med/low 阈值带
+在这份语料上**测不出来**。那部分只能靠 `tests/test_raw_relevance_floor_b2.py`
+的 `@pytest.mark.live` 用例 + `evals/model_swap_b8.py`；本表对它们的覆盖为零。
 
 ---
 
