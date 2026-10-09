@@ -6,8 +6,8 @@ Ground rule: **read the response fields before acting**. Every failure names its
 
 ### Sparse / empty / slow results
 
-1. Read the response: how many engines in `engines_used`? `engines_consensus` x of what? A long `engine_preempted` / `engine_empty` list? — the pool is degraded (rate-limited / blocked / cooling)
-2. Retry once as-is (transient jitter is common)
+1. Read the response: how many engines in `engines_used`? `engines_consensus` x of what? Which of the three lists is long — `engine_blocked` (refused), `engine_empty` (answered with nothing usable), `engine_preempted` (never asked, because enough indexes had already answered)? Only the first two are a degraded pool
+2. Retry once as-is **only when `engine_blocked` is the long list** — transient jitter and the cooldowns genuinely clear themselves. Two cases where a retry is a waste: an `engine_empty` name already answered (same query, same nothing → rephrase or change index), and an `engine_preempted` name was never asked (the same call reaches the same stop point → raise `max_results`, or ask it alone with `engines=["<name>"]`; naming it alongside others does not protect it). A third: if `cached=true`, no engine was asked at all — the stored round replays byte-identically until the TTL expires, so change part of the cache identity (`max_results`, `engines=`, the query) or pass `cache_ttl=0`
 3. Still thin: CLI `dhole engines list` for each engine's verdict and remaining cooldown; `dhole engines probe` for one real query per engine (hits / latency / block reason)
 4. Fix:
    - Per-call: re-search naming live engines (`engines=["baidu","bing","so360"]`)

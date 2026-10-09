@@ -932,9 +932,13 @@ class TestEngineEmptyIsVisible:
 
     @pytest.mark.asyncio
     async def test_pool_health_notes_cover_empty_engines_too(self):
+        """empty 与 blocked 要分开交（体验修复刀2-S7）：两类各配自己的解药，混成一串
+        就没法说"哪一类可以被重试治好"。"""
         got = search._pool_health_notes(
-            [SearchResult(title="t", url="https://a.test")], ["brave", "yandex"], 1)
-        assert "didn't contribute" in got and "LOW CONFIDENCE" in got
+            [SearchResult(title="t", url="https://a.test")], [], 1,
+            engine_empty=["brave", "yandex"])
+        assert "2 answered but parsed nothing usable" in got and "LOW CONFIDENCE" in got
+        assert "retry after the cooldown clears" not in got, "它答了，等冷却治不好一个已经开口的引擎"
 
     @pytest.mark.asyncio
     async def test_cache_hit_keeps_empty_visible(self, monkeypatch):

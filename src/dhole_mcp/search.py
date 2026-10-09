@@ -450,12 +450,77 @@ def _search_summary(query: str, results: list[SearchResult], engines_used: list[
 _MISSING_KEY_RE = re.compile(r"requires (DHOLE_[A-Z_]+), which is not set")
 
 
+def _silent_kinds(engine_blocked: list[str], engine_empty: list[str]) -> str:
+    """没贡献的引擎分两类说：拒答的、和答了但一无所获的。修法相反。"""
+    bits = []
+    if engine_blocked:
+        bits.append(f"{len(engine_blocked)} blocked")
+    if engine_empty:
+        bits.append(f"{len(engine_empty)} answered but parsed nothing usable")
+    return ", ".join(bits)
+
+
+def _replay_provenance() -> str:
+    """缓存回放的出处句：它说的是"这一轮是什么"，不是"下一步做什么"，所以两个结论位
+    都可以带 —— 而 `retry shortly` 那句在回放里兑现能力最弱（一个引擎都没被重新问）。"""
+    return ("This round was replayed from the cache, so re-asking it unchanged returns "
+            "these same rows until the TTL expires - change max_results or engines=[...] "
+            "(both are part of the cache identity), or set cache_ttl=0 for a fresh round.")
+
+
+def _recall_levers(engine_blocked: list[str], engine_empty: list[str], *,
+                   replay: bool) -> str:
+    """每个杠杆挂在一个具体的因上（体验修复刀2-S7）。
+
+    旧文案对被墙、被解析空、被早停三类各说同一句 "retry shortly for more recall"，
+    而其中只有一类会被重试治好：
+
+      · blocked     冷却是真的会自己清（硬 block 60s，反复吃挑战页/连不上 600s）
+      · empty       它答了，HTTP 200，重试只是再要一次同样的空
+      · preempted   配额一到就取消慢的那几家 —— 重试必然撞上同一个停止点
+                    （这一类由 _preemption_note 单独说，不挤进这里，免得一句话两遍）
+
+    `replay=True`（缓存命中）时更彻底：整轮根本没重新问引擎，原样重试在 TTL 内
+    逐字节返回同一批行。要换答案只能换缓存身份（max_results / engines 都在键里）
+    或 cache_ttl=0。
+    """
+    if replay:
+        return _replay_provenance()
+    bits = []
+    if engine_blocked:
+        bits.append("retry after the cooldown clears (60s after a hard block, 600s after "
+                    "repeated challenge pages or connection failures - `dhole engines list` "
+                    "names who is still cooling)")
+        bits.append("set DHOLE_SEARCH_PROXY for sustained heavy use")
+    if engine_empty:
+        bits.append("rephrase if the query is narrow (an engine that answered with nothing "
+                    "may genuinely not have it in that index)")
+    if not bits:
+        return ""
+    return "For more recall: " + "; ".join(bits) + "."
+
+
+def _preemption_note(engine_preempted: list[str]) -> str:
+    """早停单独成桶。它此前既占分母又没人解释，于是两个相反的局面同形：
+
+      · 8 家池子里 2 家被墙 —— 结果确实残，重试有用
+      · 8 家池子里 6 家被取消 —— 池子健康，只是够数了就收工，等待不会多给召回
+
+    健康快池**每轮**都会取消慢的那几家，所以这句必须短：一句长长的正确话出现在
+    每一次成功搜索里，读者的训练结果是跳过整个字段。
+    """
+    return (f" {', '.join(engine_preempted)} were cancelled once enough indexes had answered "
+            f"- the diversity quorum, not a failure, so waiting and retrying reaches the same "
+            f"stop point; raise max_results or name them in engines=[...] to ask them anyway.")
+
+
 def _search_next_action(results: list[SearchResult], engine_blocked: list[str],
                          error: str, engines_used: list[str] | None = None, *,
                          engine_empty: list[str] | None = None,
                          engine_preempted: list[str] | None = None,
                          total_engines: int | None = None,
-                         rerank_mode: str = "") -> str:
+                         rerank_mode: str = "",
+                         replay: bool = False) -> str:
     """A judgment-empowering nudge, not a rigid directive. The ranking is a HINT:
     the agent may legitimately need a lower-ranked result, so we point it at the
     signals (relevance_score + fetch_relevance) and trust it to pick, instead of
@@ -502,22 +567,30 @@ def _search_next_action(results: list[SearchResult], engine_blocked: list[str],
                  " No 'high' matches - if none of these fit, rephrase (more specific) or try mode=neural.")
     # 分母要算上 empty：只看 blocked 时，"5 个引擎里 4 个解析器坏了"会被读成
     # 1/1 = 健康，多样性警告永远不触发。
+    # 但不许算上 preempted（体验修复刀2-S7）：它不是"少了的贡献"，是"故意没问"。
+    # 实测 2 家被墙 + 4 家被取消 + 1 家应答时，旧分母给 2/7 = 0.29，警告因此永不
+    # 触发 —— 而同一轮里真正读得出来的只有那 1 家。早停另立一桶，见 _preemption_note。
     silent = [n for n in engine_blocked if n] + [n for n in engine_empty if n]
     silent = list(dict.fromkeys(silent))
     if total_engines is None:
-        total_engines = len(silent) + len(engine_preempted) + len(engines_used or [])
+        total_engines = len(silent) + len(engines_used or [])
     if silent:
         blocked_ratio = len(silent) / max(1, total_engines)
+        kinds = _silent_kinds(engine_blocked, engine_empty)
+        levers = _recall_levers(engine_blocked, engine_empty, replay=replay)
         if blocked_ratio >= 0.6:
-            base += (f" WARNING: {len(silent)} of {total_engines} engines didn't contribute"
-                     + (f" ({len(engine_blocked)} blocked"
-                        + (f", {len(engine_empty)} answered but parsed nothing usable" if engine_empty else "")
-                        + ")" if engine_blocked else " (parsed nothing usable)")
-                     + f" - results have LOW diversity "
-                       f"(only from {', '.join(engines_used or ['unknown'])}). "
-                       f"For better recall: set DHOLE_SEARCH_PROXY, retry in 60s, or rephrase the query.")
+            # "N of M" 的 M 是**被问过**的引擎数，不是池子大小：早停的那几家在下
+            # 一句里单独说。把两者混在一个分母里正是原缺陷。
+            base += (f" WARNING: {len(silent)} of the {total_engines} engines it asked "
+                     f"didn't contribute"
+                     f" ({kinds}) - results have LOW diversity"
+                     f" (only from {', '.join(engines_used or ['unknown'])}). {levers}")
         else:
-            base += " Some engines didn't contribute; retry shortly for more recall."
+            base += f" Some engines didn't contribute ({kinds}). {levers}"
+    if engine_preempted:
+        # 早停单独一句：没有 blocked/empty 时也照样要说 —— 调用方看到
+        # `engine_preempted` 非空，而响应里任何结论位都不提它，它就只能猜。
+        base += _preemption_note(engine_preempted)
     return base
 
 
@@ -944,19 +1017,36 @@ def _family_universe(engines: Optional[list[str]],
 
 
 def _pool_health_notes(results: list[SearchResult], engine_blocked: list[str],
-                       contributing: int) -> str:
-    """降级池的两条诚实标注。live 与缓存命中两条路径共用。
+                       contributing: int, *, engine_empty: list[str] | None = None,
+                       replay: bool = False) -> str:
+    """降级池的诚实标注。live 与缓存命中两条路径共用。
 
     以前只有 live 路径往 fetch_hint 上追加，TTL 内的重复查询（agent 的常态）一条
     提示都不带 —— 同一份降级结果，第二次问就被包装成干净结果。
+
+    共用不等于同话（体验修复刀2-S7）：缓存命中那一轮**根本没重新问引擎**，所以它对
+    "retry shortly" 的兑现能力比 live 更弱 —— 原样重试在 TTL 内返回的是同一批字节，
+    于是 `replay=True` 时那句改口成回放的出处（`_replay_provenance`）。
+
+    这里不提 `engine_preempted`，也不抄"下一步做什么"：快池每轮都取消慢的那几家，
+    而杠杆句归 `next_action`（_recall_levers / _preemption_note）。同一句话在两个结论
+    位各写一遍，读者学会的是整段跳过 —— 这一句只报"谁没贡献、属于哪一桶"，回放的
+    出处（`_replay_provenance`）是事实不是建议，两边都要说。
     """
-    if not (results and engine_blocked):
+    engine_empty = engine_empty or []
+    names = [n for n in engine_blocked if n] + [n for n in engine_empty if n]
+    names = list(dict.fromkeys(names))
+    if not (results and names):
         return ""
-    notes = [f"Engines {', '.join(engine_blocked)} didn't contribute (rate-limited/timed out/"
-             f"no results); results are from the rest - retry shortly for more recall."]
+    note = (f"Engines {', '.join(names)} didn't contribute"
+            f" ({_silent_kinds(engine_blocked, engine_empty)});"
+            f" results are from the rest.")
+    if replay:
+        note = f"{note} {_replay_provenance()}"
+    notes = [note]
     if contributing <= 1:
         notes.append(f"LOW CONFIDENCE: only {max(1, contributing)} index family contributed "
-                     f"({len(engine_blocked)} engines blocked). Cross-engine consensus is "
+                     f"({len(names)} engines did not). Cross-engine consensus is "
                      f"unavailable - verify results via web_read before relying on them.")
     return " | ".join(notes)
 
@@ -1578,7 +1668,8 @@ async def web_search(
                 _fam = {_INDEX_FAMILY.get(e, e) for e in _eu}
                 _contrib_c = data.get("families_contributing", len(_fam) or 1)
                 _hint = compute_fetch_hint(results_list)
-                _notes = _pool_health_notes(results_list, _eb + _ee, _contrib_c)
+                _notes = _pool_health_notes(results_list, _eb, _contrib_c,
+                                            engine_empty=_ee, replay=True)
                 if _notes:
                     _hint = (f"{_hint} | {_notes}" if _hint else _notes)
                 return SearchResponseModel(
@@ -1604,7 +1695,7 @@ async def web_search(
                                             notes=_clamp_note),
                     next_action=_search_next_action(results_list, _eb, "", _eu,
                                                     engine_empty=_ee, engine_preempted=_ep,
-                                                    rerank_mode=_rm),
+                                                    rerank_mode=_rm, replay=True),
                 )
             except (json.JSONDecodeError, KeyError, TypeError) as e:
                 logger.warning(f"Corrupt search cache for '{cache_query[:50]}': {e}")
@@ -1913,12 +2004,13 @@ async def web_search(
     # that already has its answer, and it is a no-op unless something is cooling
     # and the probe interval has elapsed.
     schedule_engine_heartbeat()
-    not_contributing = engine_blocked + engine_empty
 
     # Pool-health notes (partial pool / no corroboration). Same helper the cache
     # hit uses, so a repeated query inside the TTL reports the same thing a fresh
-    # one does.
-    _notes = _pool_health_notes(results_list, not_contributing, _contrib)
+    # one does - and same helper, same split of the reasons: which engines could
+    # not answer and which answered with nothing are two different repairs.
+    _notes = _pool_health_notes(results_list, engine_blocked, _contrib,
+                                engine_empty=engine_empty)
     if _notes:
         fetch_hint = _hint_with(fetch_hint, _notes)
     # _clamp_note deliberately does NOT join fetch_hint: see _search_summary. It

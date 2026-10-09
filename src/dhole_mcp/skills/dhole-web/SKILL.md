@@ -90,7 +90,9 @@ These signals mean **a problem is happening that the user likely doesn't see**. 
 
 | Signal in the response | What it means | What to do |
 |---|---|---|
-| `engines_consensus: 1 of 6`, sparse results, a long `engine_empty` / `engine_preempted` list | Search pool degraded (rate-limited / blocked / cooling / silent) | Retry once as-is; then `dhole engines probe` to see who's alive and re-search naming live engines; recurring → suggest a search proxy |
+| `engines_consensus: 1 of 6`, sparse results, a long `engine_blocked` / `engine_empty` list | Search pool degraded (rate-limited / blocked / cooling / silent) | Retry once as-is **only for `engine_blocked`** (a cooldown genuinely clears on its own); `engine_empty` means it answered with nothing, so re-asking returns the same nothing — rephrase or switch index. Then `dhole engines probe` to see who's alive and re-search naming live engines; recurring → suggest a search proxy |
+| A long `engine_preempted` list and nothing else wrong | Not degradation: the fan-out stopped as soon as enough indexes had answered, so those engines were never asked | Do NOT "retry once as-is" — the same call reaches the same stop point. Raise `max_results`, or ask the engine you want alone with `engines=[...]` |
+| `cached=true` next to a degraded-pool note | The stored round replayed; no engine was asked again | Retrying unchanged cannot help until the TTL expires. Change part of the cache identity (`max_results`, `engines=`, the query) or pass `cache_ttl=0` |
 | Whole round empty, `fetch_hint` reports error | Entire pool cooling | `dhole engines list` for remaining seconds; if urgent `sys_state(clear=["engine_state"])` or `dhole engines reset`, and tell the user engines were rate-limited |
 | `content_ok=true` but only a few hundred chars | Shell/placeholder page | Retry once with `force_fetcher='stealthy'`; if still thin, tell the user it's login-walled or unbeatable — never answer from the shell |
 | `error=robots_disallowed` | Site's robots.txt forbids it | Explain this is default compliance and zero requests were sent; ask before a one-shot `ignore_robots=true` — it's the user's compliance call |
