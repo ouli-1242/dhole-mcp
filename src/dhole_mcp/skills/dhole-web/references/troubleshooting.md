@@ -34,6 +34,16 @@ This IP is being watched. The three cooldown tiers are fixed at 60s / 600s / 600
 3. Still thin: the site needs login (→ "Sites behind login" below) or runs DataDome / Akamai / interactive Turnstile (unbeatable) — **say so honestly**; never answer from the shell
 4. Tell the user: "This site blocks plain scraping; what I got is the pre-login shell. For real content I'd need your session cookie, or we use a public source."
 
+### A crawled row is not the page it names
+
+`web_crawl` measures every row with the same rulers `web_read` is calibrated on, and says so in that row's `summary` when the measurement contradicts the verdict:
+
+- `extraction collapsed: … holds 1,374 visible characters while we returned 196 (14%)` — the site DID give text; dhole's main-content filter dropped it. Nothing to re-fetch: `web_read` that one URL with `extraction_type='html'` (or `'text'`) and the words come back. The crawl-level `summary` counts how many rows carry it.
+- `thin list: 2 item link(s)` — a row was rendered as a link list but only holds one or two entries, which is not an index.
+- `the same 12 item link(s) as 6 of these rows — that group is site chrome` — those rows' "content" is the site menu. This one is only sayable across rows: inside a single page a menu and a list are structurally identical (measured: books.toscrape puts its whole product grid inside `<aside>`, so stripping nav/header/footer/aside leaves 2 links on a page that has 11 books). Treat those rows as navigation and read the pages they point at.
+
+None of the three changes `content_ok` — a crawl row's verdict still comes from the length gate plus the page classification. They are disclosures, so a row that says nothing is a row that was measured and matched its verdict.
+
 ### `nested_no_match` / `nested_empty` / fewer records than the page has
 
 Both are failures to fix, not empty answers to report — and **no second-layer request was sent** for the first one, so retrying costs nothing until the selector changes.

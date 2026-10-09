@@ -74,6 +74,10 @@ from dhole_mcp.context import _cache_ttl_note, _clamp_note, report_progress
 # level, so this is cycle-free; the seed check + the discovered-URL peek both
 # need it, and keeping one import point is what makes the cache the shared one.
 from dhole_mcp.robots import check as check_robots, get_robots_cache
+# 量的尺要只有**一把**。`visible_text_chars` / `is_extraction_collapsed` /
+# `distinct_content_links` 是 web_read 那侧已经拿真实页面标定过的三把尺（比值带、
+# 导航栏剥离），crawl 若自己再数一遍就会各有一套阈值 —— 同一个工具两种真相。
+from dhole_mcp.envelope import is_extraction_collapsed, visible_text_chars
 
 logger = logging.getLogger("dhole-mcp.crawl")
 
@@ -324,14 +328,116 @@ def _page_signals(html: str) -> tuple[int, int, int, bool, int]:
     return (text_len, script_count, link_count, has_fw, link_text_len)
 
 
+#: 一行列表至少要几条**带文字的互异条目链接**才还配叫列表。
+#:
+#: 这里原本还打算加第二颗下限（fallback 行的整页可见字要 ≥200，对齐 web_read 的
+#: `_JS_SHELL_MIN_TEXT_CHARS`）。量过之后**删了**：靶站的正对照 `/collections?items=1`
+#: 整页可见字 37 而 markdown 80 —— 那一页的内容就是三张卡片，`visible_text_chars` 那把
+#: 尺天生量不到以链接与数据为正文的页面。把"字少"当成"没内容"吃掉的正是这批不能吃的
+#: 那一类（与 R1 语料清扫里那两发假阳性同形：术语表被判成编码块、全小写长标识符被判成
+#: base64）。`visible_chars` 仍然报出来，因为它是事实；"够不够 200"不是事实，是判断。
+LIST_ITEMS_MIN = 3
+
+#: 同一组条目链接在**一次爬取里**重复到第几行就被说成站点菜单。3：一次两行的爬取里
+#: "两行同集"还可能是两个姊妹栏目页真的列了同一批东西；三行相同就不是内容了。这一句
+#: 今天只上报（`site_chrome`），不翻任何一行的 `content_ok`。
+CHROME_REPEAT_MIN = 3
+
+
+def _item_links(html: str, base_url: str, start_url: str) -> list[str]:
+    """这一页的条目链接（互异的绝对 URL，且锚文本非空）。
+
+    走 `extract_same_domain_links` —— crawl 自己那把解析相对 href 的尺。这里刻意不借
+    web_read 的 `_count_content_links`：它先剥 `<nav|header|footer|aside>`，而 books.toscrape
+    的 travel 列表页把**全部 11 本书**装在 `<aside class="sidebar">` 里（实测：剥完之后
+    主内容区只剩 2 条链接，而那一页恰恰是这批不能误伤的正对照）。类名与标签都靠不住，
+    一页之内的"菜单 vs 列表"没有结构判据。
+    """
+    return [normalize_url(h) for h, t in extract_same_domain_links(html, base_url, start_url)
+            if (t or "").strip()]
+
+
+def _measure_row(stats: dict, html: str, md: str, kind: str, url: str,
+                 start_url: str) -> None:
+    """把 web_read 那侧标定过的尺量在这一行上，**不动结论位**（measure 那一刀）。
+
+    今天 crawl 的一行只问"抽回来的 markdown 够不够 50 个字符"。这一问混了两件不同的
+    事：① 字在页上而我的抽取器把它们丢了（`is_extraction_collapsed` —— web_read 用它把
+    "塌陷"和"壳"分开，见 quality.py 那一处注释）；② 这一行的"列表"是真有一组条目，还是
+    只有零星几条链接。各量一遍就会各有一套阈值，所以两问都用现成的尺，数字一律报出来
+    （`visible_chars` / `extracted_chars` / `list_items` 是事实，阈值之下该说什么才是判断）。
+
+    塌陷那一问只在 `kind == "article"` 这支里问：list 的 md 是渲染出来的链接清单，它
+    **故意**丢掉非链接的字 —— travel 页 5,874/1,374 在渲染成列表之后比值 4.3，拿整页
+    可见字去比是拿错的量具量对的东西。
+    """
+    visible = visible_text_chars(html)
+    stats["visible_chars"] = visible
+    stats["extracted_chars"] = len(md)
+    if kind == "article" and is_extraction_collapsed(len(md), visible):
+        stats["extraction_collapsed"] = True
+    if kind == "list":
+        items = _item_links(html, url, start_url)
+        stats["list_items"] = len(items)
+        stats["item_set"] = frozenset(items)
+        if len(items) < LIST_ITEMS_MIN:
+            stats["thin_list"] = True
+
+
+def _chrome_rows(measured: dict) -> dict:
+    """`{行 URL: 它那一组条目链接在本次爬取里出现了几行}`，只收重复到
+    `CHROME_REPEAT_MIN` 行以上的组。
+
+    纯函数，收的是 `_measure_row` 那张表：跨行的判据要等行都进来才成立，而把它单列出来
+    才量得动 —— 靶站今天没有一页共享导航的站点（`_page()` 不给每页挂同一个 nav，加上去会
+    挪动 E-13 扇出与 R1 语料清扫的每一格），所以这一支由这张表直接喂，端到端只证它**不
+    误伤**。
+    """
+    counts: dict = {}
+    for m in measured.values():
+        key = m.get("item_set")
+        if key:
+            counts[key] = counts.get(key, 0) + 1
+    return {url: counts[m["item_set"]]
+            for url, m in measured.items()
+            if m.get("item_set") and counts[m["item_set"]] >= CHROME_REPEAT_MIN}
+
+
+def _measure_note(stats: dict, content_ok: bool) -> str:
+    """把与**这一行已有的结论**相矛盾的那把尺写成一句话。不矛盾就不说话。
+
+    一行已经写着 `content_ok=false` 时再补一句"这页其实没字"是噪音；上报要落在**缝隙**
+    上：今天的闸说是内容，而标定过的尺说不是。缝隙为空本身就是量到的结果 —— 它就是
+    下一笔敢翻闸的依据（语料里没有一行落在 50..200 之间，翻上去不会弄坏任何一页）。
+    """
+    if not content_ok:
+        return ""
+    if stats.get("extraction_collapsed"):
+        visible = stats["visible_chars"]
+        got = stats["extracted_chars"]
+        return (f"extraction collapsed: this page's own markup holds {visible:,} "
+                f"visible characters while we returned {got:,} "
+                f"({got / max(visible, 1):.0%}) - the words ARE in the HTML, dhole's "
+                "reader lost them. web_read this URL with extraction_type='html' "
+                "rather than trusting this row")
+    if stats.get("thin_list"):
+        return (f"thin list: {stats['list_items']} item link(s) on a row rendered as a "
+                "list - an index needs a group of entries, not one or two links")
+    return ""
+
+
 def _classify_and_extract(html: str, url: str, start_url: str, focus: Optional[str],
-                          max_chars: int) -> tuple[str, str, bool, bool]:
+                          max_chars: int, stats: Optional[dict] = None
+                          ) -> tuple[str, str, bool, bool]:
     """Content-adaptive extraction. Returns (markdown, page_type, content_ok, cut).
 
     page_type is one of: article / list / js_shell / fallback. content_ok is
     False only when we genuinely got nothing usable (js_shell that didn't
     render, or an empty/error page). cut is True when the page held more than
     max_chars and this function returned only the first max_chars of it.
+
+    `stats` 是**上报**出口（照 `focus_content(..., stats=)` 的先例）：这一行被两把
+    已标定的尺量过之后落在哪，调用方与原函数都看得见，而 `content_ok` 一个字节不动。
     """
     from dhole_mcp.trafilatura_extractor import extract_content_from_html
     from dhole_mcp.focus import focus_content
@@ -387,6 +493,9 @@ def _classify_and_extract(html: str, url: str, start_url: str, focus: Optional[s
         kind = "fallback"
 
     content_ok = bool(md and len(md) >= 50 and kind != "js_shell")
+
+    if stats is not None:
+        _measure_row(stats, html, md, kind, url, start_url)
 
     # Truncate to the per-page budget. `cut` is the answer the caller cannot
     # recover afterwards: once md has been sliced to max_chars, `len(md) >
@@ -1244,6 +1353,10 @@ async def web_crawl(
     # 整轮字符帽在**发下一批之前**判，不是返回之后再砍：一版只在装配时截的预算一次
     # 网络也省不下来，只是把已经付过钱的结果藏起来。这里停下来的是"还没发的那些"。
     total_chars = 0
+    # 每一行被那两把尺量到的东西，按 URL 存着。存在这里而不是塞进 CrawlPage：
+    # 一行多一颗字段，在 content 模式里是每行都要序列化一遍的字节，而这张表只有
+    # summary 那一句话要读它（还有 `_summary_for` 要按"实际返回的那些行"数）。
+    measured: dict[str, dict] = {}
     while heap and len(pages) < max_pages and (
             not max_total_chars or total_chars < max_total_chars):
         if time() > deadline_t:
@@ -1297,15 +1410,26 @@ async def web_crawl(
             is_trunc = False
             next_off = 0
             content_ok = bool(resp.content_ok)
+            row_summary = resp.summary
+            row_stats: dict = {}
             if not discover_only and html:
                 if resp.content_ok:
                     try:
                         md, kind, ok, cut = _classify_and_extract(
-                            html, resp.url or u, url, focus, max_content_chars_per)
+                            html, resp.url or u, url, focus,
+                            max_content_chars_per, stats=row_stats)
                     except Exception:
                         md, kind, ok, cut = "", "fallback", False, False
+                        row_stats = {}
                     page_type = kind
                     content_ok = ok and bool(md)
+                    note = _measure_note(row_stats, content_ok)
+                    if note:
+                        measured[u_norm] = row_stats
+                        # 量到的东西要走在这一行**在场**的那句话里。一行的 summary 是
+                        # crawl 行唯一的抬头（这一族没有 metadata），而 `_summary_for`
+                        # 按这张表数出全局那一句"几页被量出来了"。
+                        row_summary = f"{row_summary} · {note}" if row_summary else note
                     if md:
                         # The extraction already holds the whole page up to the
                         # per-page cap; `cut` says whether more exists. next_offset
@@ -1342,7 +1466,7 @@ async def web_crawl(
                 content=[content_md] if content_md else [],
                 content_chars=len(content_md), is_truncated=is_trunc,
                 next_offset=next_off, fetched_at=getattr(resp, "fetched_at", ""),
-                summary=resp.summary, error=resp.error,
+                summary=row_summary, error=resp.error,
                 untrusted_content=injection.scan(content_md or ""),
             )
             pages.append(page)
@@ -1401,6 +1525,22 @@ async def web_crawl(
         truncated_total_chars = True
     not_fetched = max(pages_discovered - pages_crawled, 0)
 
+    # 菜单是按**整轮**才看得见的那一形：同一组条目链接逐字出现在好几行里，说明那是站点
+    # 的导航件，不是这一页的内容。一页之内分不开 —— 实测两边都会挑错：books.toscrape 的
+    # travel 页把全部 11 本书装在 `<aside class="sidebar">` 里（剥 aside 之后主内容区只剩
+    # 2 条链接），而靶站那枚 12 链接的导航页与一个扁平 slug 列表在 URL 形状上同构
+    # （`/about`、`/cart` 与 `/quote/1`、`/quote/2` 都是"一段路径、末段可变"）。所以这句
+    # 只能由"跨行同集"来作证，而且它今天只上报，不翻任何一行的结论位。
+    chrome_rows = _chrome_rows(measured)
+    for _page in pages:
+        _m = measured.get(_page.url)
+        repeats = chrome_rows.get(_page.url)
+        if _m is not None and repeats:
+            _m["site_chrome"] = True
+            note = (f"the same {_m['list_items']} item link(s) as {repeats} of these "
+                    "rows - that group is site chrome, not this page's content")
+            _page.summary = f"{_page.summary} · {note}" if _page.summary else note
+
     def _summary_for(pages_now: list) -> str:
         """Stats line for ``pages_now``.
 
@@ -1410,6 +1550,12 @@ async def web_crawl(
         to pages_crawled=0 and pages=[].
         """
         ok_now = sum(1 for p in pages_now if p.content_ok)
+        # "N content_ok" 旁边必须站着"这几行我们知道自己没读全"。数的是**实际返回的**
+        # 那些行：search 过滤器砍掉的行不再被这一句替它作证（同 _summary_for 存在的理由）。
+        collapsed_now = sum(1 for p in pages_now
+                            if measured.get(p.url, {}).get("extraction_collapsed"))
+        chrome_now = sum(1 for p in pages_now
+                         if measured.get(p.url, {}).get("site_chrome"))
         by_type_now: dict[str, int] = {}
         for p in pages_now:
             if p.page_type:
@@ -1430,6 +1576,14 @@ async def web_crawl(
                         f"using {len(pages_now)} page fetch(es); no content extracted"]
             if type_bits_now:
                 bits_now.append(type_bits_now)
+        if collapsed_now:
+            bits_now.append(
+                f"{collapsed_now} page(s) hold far more text in their own markup than "
+                "we returned (see those rows' summary)")
+        if chrome_now:
+            bits_now.append(
+                f"{chrome_now} row(s) carry the same item-link group as other rows "
+                "(site chrome, not per-page content)")
         if truncated_maxpages:
             bits_now.append("stopped: max_pages reached")
         if truncated_time:

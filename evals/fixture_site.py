@@ -26,6 +26,10 @@
 /shell/obfuscated    混淆载荷壳页：正文**全抽得到**（>2,000 字符）而字是打包过的脚本
                      （R1 的靶 —— 它穿得过每一道长度闸，量的是形状不是长短）
 /about               孤链接的去处（候选选择器不该把只有一条链接的组报出来）
+/nav                 12 条链接全在 <nav> 里、主内容区为空的页（R2 的负对照 —— crawl
+                     今天把它数成 kind="list" 并交出 ~280 字符，content_ok=true）
+/longaside           正文抽得到、aside 里还挂着 4,600 可见字被整块丢掉的页（R2 塌陷
+                     上报的正对照：2577/7168=36%，量到的是抽取器不是站点）
 /captcha             HTML 页，内嵌 <img src="/captcha.png?token=..."> + 提交表单
 /captcha.png         扭曲文字验证码 PNG（逐字旋转 + 正弦位移 + 干扰线；?level=hard 加码）
 /captcha/verify      POST token+answer；对错分别回不同页，每次尝试落盘
@@ -240,6 +244,49 @@ SHELL_PAGE = _page("加载中", """
   window.__fixture = {"items": []};
 </script>
 <a href="/about">关于</a>
+""")
+
+
+# R2 的负对照：一枚**只有导航件**的页面。crawl 的分类器数的是整份 HTML 里的 `<a>`
+# （`_page_signals`），所以这 12 个链接今天让它判成 kind="list" 并交出 ~280 个字符，
+# 于是 `content_ok=true` —— 一行站点菜单被报成了"这一页的内容是一个列表"。
+# 链接全摆在 <nav> 里是刻意的：web_read 那侧的列表判据（`distinct_content_links`）
+# 剥掉 nav/header/footer/aside 之后再数，量到 0。两把尺在这一页上给出不同的答案，
+# 而那正是 R2 要修的不对称 —— 同一个工具，爬取路径与读取路径两套真相。
+NAV_PAGE = _page("站点导航", """
+<nav class="site-nav">
+  <a href="/">首页</a><a href="/about">关于</a><a href="/login">登录</a>
+  <a href="/account">我的账户</a><a href="/cart">购物车</a><a href="/checkout">结算</a>
+  <a href="/article">文档</a><a href="/collections">集合</a><a href="/work/1">作品一</a>
+  <a href="/feed.xml">订阅</a><a href="/captcha">验证</a><a href="/shell">外壳</a>
+</nav>
+<main class="content">
+  <!-- 主内容区是空的：这一页除了菜单没有给用户别的东西。 -->
+</main>
+""")
+
+
+def _longaside_page() -> bytes:
+    """R2 塌陷上报的正对照：正文抽到了，而**这页自己的字**远多于此。
+
+    与 `/shell` 那族的区别很窄但关键：这里 trafilatura 的主内容过滤器**确实**交回一段
+    完整的散文（`<article>`，约 2,600 字，kind=article、content_ok=true），同时
+    `<aside>` 里还挂着约 4,600 个字符的可见文本被整块丢掉 —— `is_extraction_collapsed`
+    量到 2577/7168 = 36%，正好落在那把尺的塌陷带里（比值 <0.5 且本页可见字 ≥400）。
+
+    这一形不是凭空捏的：先按这个结构造了页，再**实测**抽取器确实丢掉 aside（不是假设
+    它会丢），才立成路由。它要证的不是"塌陷存在"，而是**上报的管路**：那一句话要走到
+    该行的 `summary`，计数要走到整轮的 `summary`。
+    """
+    prose = " ".join(
+        f"第 {i} 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。"
+        for i in range(60))
+    aside = " ".join(
+        f"侧栏注记 {i}：这一大段挂在 aside 里，主内容过滤器把它整块丢掉了。"
+        for i in range(120))
+    return _page("专题长文", f"""
+<article class="main"><h1>专题长文</h1><p>{prose}</p></article>
+<aside class="side">{aside}</aside>
 """)
 
 
@@ -636,6 +683,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._html(_work_page(n))
         if path == "/shell":
             return self._html(SHELL_PAGE)
+        if path == "/nav":
+            return self._html(NAV_PAGE)
+        if path == "/longaside":
+            return self._html(_longaside_page())
         if path == "/shell/obfuscated":
             return self._html(_obfuscated_shell_page())
         if path == "/about":
