@@ -21,6 +21,9 @@ stealthy **之前**就写好了（`server.py` 的升级段），而 `_finalize_r
    分发四处同颗；而且真续得上（第二次调用从 N 开始，内容与第一次不重叠）。
 6. 形状守卫：`next_action` 里"建议换档"的句子必须在 `_browser_cannot_help` 的 else 枝上，
    不许有人把它抄回一条无条件的话。
+7. （R6）还有**第三种**"这一档帮不上"：它跑了、答了、交回来的就是手里这份。前六节
+   的门只认"没跑"，于是 `fetcher_used="stealthy"` 的回执还在叫调用方去重试那一档
+   —— 判据在 §7，含 rule 3 的镜像（那一档没跑过时原建议一个字不许变弱）。
 """
 
 from __future__ import annotations
@@ -249,3 +252,130 @@ def test_recommending_the_failed_tier_is_gated_not_hardcoded():
     assert gates >= 3, f"门比上一次少了（现在 {gates} 处）"
     assert source.count("force_fetcher='stealthy'") <= gates + 2, (
         "有点名 stealthy 的句子没在门上")
+    # R6 加的那一道门：认"档跑了、答了、答案是垃圾"的门也必须至少有同样的三处，
+    # 否则"已经升过级"这一族又会退回到叫调用方去重试那一档。
+    spent = source.count("_render_tier_was_spent(result)")
+    assert spent >= 3, f"'那一档已经交过这份答案'的门只剩 {spent} 处"
+
+
+# ─── 7 · 档跑了、答了、答案就是手里这份（R6）───────────────────
+#
+# 上面 1–6 全是**这一档没跑**的形状：起不来、被跳过、被拒升。R5/C13 量到的是第三种，
+# 而门认不出它：`fetcher_used="stealthy"` + `escalation_path="http→stealthy(all_failed)"`
+# —— 浏览器档跑了、答了、交回一张壳页。回执于是自己打自己：`error` 说这是 shell，
+# `next_action` 还在说 "re-fetch auto-escalates to the stealthy browser"。那次换档重试
+# 实测烧掉 31.5s 到超时，而它照的就是这条建议。
+#
+# 判据仍然是 rule 3 那一族：只认**这次信封上真跑过的档**，别把一台好机器也劝退。
+
+SPENT = "http→stealthy(all_failed)"
+
+
+def _rendered_shell(**updates) -> ResponseModel:
+    """浏览器交回来的那张壳页 —— 与 `_shell()` 只差 `fetcher_used` 与行程单。"""
+    base = dict(fetcher_used="stealthy", escalation_path=SPENT)
+    base.update(updates)
+    return _shell(**base)
+
+
+class TestWhichTiersRan:
+    """`_tiers_that_ran` 认的是 server 写下的形状，两种 skip 写法都得认。"""
+
+    @pytest.mark.parametrize("path, http, stealthy", [
+        ("http→stealthy", True, True),
+        (SPENT, True, True),
+        ("http→stealthy→archive.org", True, True),
+        ("direct:http", True, False),
+        ("direct:stealthy", False, True),
+        ("http(stealthy_skipped_no_budget)", True, False),
+        ("preflight:timeout(skipped_stealthy)", False, False),
+        ("preflight:dns_unresolvable(skipped_http+stealthy)", False, False),
+        ("http(private_target_no_answer)", True, False),
+        ("http->stealthy:browser_binary_missing", True, True),
+        ("", False, False),
+    ])
+    def test_the_itinerary_is_read_as_written(self, path, http, stealthy):
+        assert quality._tiers_that_ran(_shell(escalation_path=path,
+                                              fetcher_used="")) == (http, stealthy), path
+
+    def test_the_answer_came_from_the_tier_that_is_claiming_it(self):
+        """行程单缺席时，`fetcher_used` 自己就是证据。"""
+        assert quality._tiers_that_ran(_shell(escalation_path="",
+                                              fetcher_used="stealthy")) == (False, True)
+
+    def test_a_cache_hit_claims_no_tier_for_this_call(self):
+        assert quality._tiers_that_ran(_shell(escalation_path="",
+                                              fetcher_used="cache")) == (False, False)
+
+    def test_spent_means_ran_and_not_already_exempted(self):
+        assert quality._render_tier_was_spent(_rendered_shell()) is True
+        # 同一份行程单 + 起不来的记号 = 那一档没真答过
+        assert quality._render_tier_was_spent(
+            _rendered_shell(escalation_path=f"http->stealthy:{MARKS[0]}")) is False
+        assert quality._render_tier_was_spent(
+            _shell(escalation_path="preflight:timeout(skipped_stealthy)")) is False
+
+
+class TestSpentTierIsNoLongerRecommended:
+
+    def test_a_rendered_shell_does_not_get_sent_back_to_the_same_tier(self):
+        hint = _hint(_rendered_shell())
+        assert "auto-escalates" not in hint and "Retry once with force_fetcher" not in hint, hint
+        assert "ALREADY rendered" in hint, hint
+        assert "extraction_type='html'" in hint, "拒绝要给一条还能做的事"
+
+    def test_a_rendered_bot_wall_says_the_tier_is_not_the_untried_option(self):
+        hint = _hint(_rendered_shell(error="bot_wall_detected: captcha on the body",
+                                     page_type="captcha"))
+        assert "Retry once with force_fetcher='stealthy'" not in hint, hint
+        assert "no tier left to escalate to" in hint, hint
+
+    def test_a_rendered_403_does_not_promise_the_render_again(self):
+        hint = _hint(_rendered_shell(status=403, error="http_error_403",
+                                     content=["Forbidden"], page_type="unknown"))
+        assert "Retry once with force_fetcher='stealthy'" not in hint, hint
+        assert "already made this request" in hint, hint
+
+    def test_the_machine_readable_twin_agrees_with_the_sentence(self):
+        """`next_action` 与 `diagnosis.recover_with` 是同一个决定的两个落点。
+
+        表里那两句模板（"retry with force_fetcher='stealthy'"）写的是这一族的通用
+        杠杆，它们不认识"这一次那根杠杆已经拉过"。两只手互相否决正是 D5 点名的形状。
+        """
+        for err, page in (("js_shell_detected: 48,000-byte body", "js_shell"),
+                          ("bot_wall_detected: captcha", "captcha")):
+            d = quality._diagnose(_rendered_shell(error=err, page_type=page))
+            assert d and "force_fetcher='stealthy'" not in d["recover_with"], (err, d)
+            assert "no untried tier is left" in d["recover_with"], (err, d)
+
+    def test_retryable_is_not_collateral_of_a_reworded_hint(self):
+        """建议改了口，`retryable` 不跟着翻 —— 墙撤不撤是站点的事。
+
+        这一条是给"顺手把布尔也改了"留的桩：`retryable` 的唯一依据是这次调用还剩
+        什么可动，而这里的"不能重试"曾经专属于"这台机器起不来浏览器"。
+        """
+        d = quality._diagnose(_rendered_shell())
+        assert d["retryable"] is True, d
+
+
+class TestUnspentTierStillGetsTheRetry:
+    """rule 3 在这一族上的镜像：那一档没跑过时，原建议一个字不许变弱。"""
+
+    def test_an_http_only_shell_still_hears_about_the_browser(self):
+        hint = _hint(_shell(escalation_path="direct:http"))
+        assert "re-fetch auto-escalates to the stealthy browser" in hint, hint
+
+    def test_a_shell_the_probe_skipped_still_has_its_untried_tier(self):
+        """预检跳掉两档 ≠ 档跑过 —— 强制那一档正是剩下的出路。"""
+        hint = _hint(_shell(escalation_path="preflight:timeout(skipped_stealthy)"))
+        assert "re-fetch auto-escalates to the stealthy browser" in hint, hint
+
+    def test_a_403_from_the_http_tier_still_gets_the_retry(self):
+        hint = _hint(_shell(status=403, error="http_error_403", content=["Forbidden"],
+                            page_type="unknown", escalation_path="direct:http"))
+        assert "Retry once with force_fetcher='stealthy'" in hint, hint
+
+    def test_a_bot_wall_from_the_http_tier_still_gets_the_retry(self):
+        hint = _hint(_shell(error="bot_wall_detected: captcha", page_type="captcha",
+                            escalation_path="direct:http"))
+        assert "Retry once with force_fetcher='stealthy'" in hint, hint

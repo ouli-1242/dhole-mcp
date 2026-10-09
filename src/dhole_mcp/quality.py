@@ -306,6 +306,46 @@ def _browser_cannot_help(result: ResponseModel, url: str) -> bool:
                for mark in _BROWSER_UNAVAILABLE_MARKS)
 
 
+def _tiers_that_ran(result: ResponseModel) -> tuple[bool, bool]:
+    """这次调用真跑过哪几档，返回 (http, stealthy)。
+
+    事实只有两个产地，都在信封上，所以这里不需要新状态：`fetcher_used` 是**交回这份
+    答案的那一档**，`escalation_path` 是 server 在跳档**之前**写好的行程单
+    （`http→stealthy` / `direct:http` / `preflight:timeout(skipped_stealthy)` /
+    `http(stealthy_skipped_no_budget)` / `http->stealthy:browser_binary_missing`）。
+
+    认识的形状按"名字出现过、且没被写成 skipped"判。两种 skip 写法都要认：
+    `skipped_http+stealthy`（预检一跳出两个）与 `stealthy_skipped_no_budget`
+    （只跳一个，且名字在前）。漏掉后者就是把一次没跑的档当成跑过 —— 那会把
+    "还有一档没试"的建议一起杀错。
+    """
+    path = (result.escalation_path or "").lower()
+    used = (result.fetcher_used or "").lower()
+    m = re.search(r"skipped_([a-z_+]+)", path)
+    skipped_names = set(m.group(1).split("+")) if m else set()
+
+    def _skipped(name: str) -> bool:
+        return name in skipped_names or f"{name}_skipped" in path
+
+    http_ran = ("http" in path and not _skipped("http")) or used == "http"
+    stealthy_ran = (("stealthy" in path and not _skipped("stealthy"))
+                    or used == "stealthy")
+    return http_ran, stealthy_ran
+
+
+def _render_tier_was_spent(result: ResponseModel) -> bool:
+    """浏览器档**跑了、答了、交回来的就是手里这一份**。
+
+    与"这一档被跳过 / 起不来"是三件事，而 `_agent_hints` 的门只认前两件。于是实测
+    形状变成一句自相否决的回执：`fetcher_used="stealthy"`、escalation_path 写着
+    `http→stealthy(all_failed)`，`next_action` 却还在说 "re-fetch auto-escalates to
+    the stealthy browser" —— 叫调用方去重试那一档，而那一档刚刚把这张页交出来。
+    C13 那次换档重试因此烧掉 31.5s 才超时：建议本身就是那条死路。
+    """
+    _http_ran, stealthy_ran = _tiers_that_ran(result)
+    return stealthy_ran and not _browser_cannot_help(result, result.url)
+
+
 def _is_js_shell(result: ResponseModel) -> bool:
     """Check if a response contains only a JS-only placeholder, not real content.
 
@@ -867,6 +907,17 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                     "promises was already attempted and skipped. `dhole --doctor` names "
                     "the state and the directory it searched; meanwhile this HTTP body "
                     "is what there is (extraction_type='html' shows it as sent).")
+        elif _render_tier_was_spent(result):
+            # 门里第三件事：那一档不是起不来、也不是不肯升，是**已经升过了**。这一支
+            # 从前不存在，所以浏览器交回一张壳页时，建议还在叫调用方去叫那一档 ——
+            # 而那一次重试除了把预算烧到超时（实测 31.5s）不会带回别的东西。
+            next_action = (
+                f"page is a {_wall} that the browser tier ALREADY rendered and "
+                f"returned as-is - `fetcher_used='{result.fetcher_used}'`. No untried "
+                "tier is left on this URL, so re-fetching (with or without "
+                "force_fetcher) is not a plan. What the site sent is readable with "
+                "extraction_type='html'; otherwise switch source, or leave this one "
+                "to a human.")
         else:
             next_action = (f"page is a {_wall}; re-fetch auto-escalates to the "
                            "stealthy browser")
@@ -877,14 +928,21 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         next_action = ("page is a login/sign-in wall, not content - do NOT cite it. "
                        "Switch source, or try the Internet Archive for a public copy")
     elif err.startswith("bot_wall_detected"):
-        next_action = ("page is an anti-bot/CAPTCHA challenge, not content - do NOT cite it. "
-                       + ("The browser tier that would render it is unavailable on this "
+        if _browser_cannot_help(result, result.url):
+            _wall_step = ("The browser tier that would render it is unavailable on this "
                           "machine (the skip is recorded in error/escalation_path), so "
                           "force_fetcher='stealthy' cannot help this time - switch source "
-                          "or `dhole --doctor` to see why."
-                          if _browser_cannot_help(result, result.url) else
-                          "Retry once with force_fetcher='stealthy' (renders the "
-                          "challenge), otherwise switch source"))
+                          "or `dhole --doctor` to see why.")
+        elif _render_tier_was_spent(result):
+            _wall_step = ("the browser tier already rendered this page and the challenge "
+                          "is what it got back - there is no tier left to escalate to, "
+                          "so another re-fetch is not an untried option. "
+                          "Switch source, or ask for a copy that does not gate.")
+        else:
+            _wall_step = ("Retry once with force_fetcher='stealthy' (renders the "
+                          "challenge), otherwise switch source")
+        next_action = ("page is an anti-bot/CAPTCHA challenge, not content - do NOT cite it. "
+                       + _wall_step)
     elif err.startswith("robots_disallowed"):
         # A pre-flight refusal, not a site failure: say so without the generic
         # "retry / switch source" wording, and name the documented override.
@@ -1143,13 +1201,21 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                 "- no fetcher "
                 "tier can invent them, so a browser retry is wasted here.")
     elif result.status == 403:
+        if _browser_cannot_help(result, result.url):
+            _denied_step = ("A browser render is the usual move and it is not available on "
+                            "this machine right now (see error/`dhole --doctor`), so do not "
+                            "spend a call on force_fetcher='stealthy' - switch source.")
+        elif _render_tier_was_spent(result):
+            _denied_step = (f"the browser tier already made this request "
+                            f"(fetcher_used='{result.fetcher_used}') and the site refused "
+                            "it the same way - rendering is not the untried lever here. "
+                            "Switch source, or re-call later if the refusal looks "
+                            "session-dependent.")
+        else:
+            _denied_step = ("Retry once with force_fetcher='stealthy', otherwise switch "
+                            "source")
         next_action = ("access denied (HTTP 403) - the site is refusing this client. "
-                       + ("A browser render is the usual move and it is not available on "
-                          "this machine right now (see error/`dhole --doctor`), so do not "
-                          "spend a call on force_fetcher='stealthy' - switch source."
-                          if _browser_cannot_help(result, result.url) else
-                          "Retry once with force_fetcher='stealthy', otherwise switch "
-                          "source"))
+                       + _denied_step)
     elif result.status == 429:
         next_action = ("rate limited (HTTP 429) - wait before retrying, or switch source")
     elif result.status >= 500:
@@ -1499,6 +1565,14 @@ def _diagnose(result: ResponseModel) -> Optional[Dict[str, Any]]:
             if not retryable:
                 recover = ("the browser tier is unavailable on this machine - switch "
                            "source (see error / `dhole --doctor`)")
+            elif _render_tier_was_spent(result):
+                # 表里那句模板（"retry with force_fetcher='stealthy'"）是**无条件**的：
+                # 它写的是这一族失败的通用杠杆，而这一次那根杠杆已经拉过了。同一个响应
+                # 里 `next_action` 与 `diagnosis.recover_with` 两只手不许互相否决 —— 这
+                # 是 D5 那条法在建议位的形状。retryable 不动：墙会不会撤是站点的事，
+                # 这一次调用能做的事才是这里的事。
+                recover = ("the browser tier already rendered this and returned what is "
+                           "in `content` - no untried tier is left on this URL")
     elif not result.content_ok:
         code = {"auth_wall": "auth_wall", "paywall": "paywall",
                 "captcha": "bot_wall", "js_shell": "js_shell"}.get(

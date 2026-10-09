@@ -28,7 +28,7 @@ This IP is being watched. The three cooldown tiers are fixed at 60s / 600s / 600
 ### Content is a shell / obviously wrong
 
 1. Check `total_extracted_chars` and `page_type`: a few hundred chars plus a wrong `page_type` = placeholder
-2. Retry with `force_fetcher='stealthy'`
+2. Retry with `force_fetcher='stealthy'` — **only if `fetcher_used` is not already `stealthy` and `escalation_path` does not say the tier was skipped.** The browser tier is one of three different "cannot help" cases and they take different actions: it was skipped/could not start (`dhole --doctor`), or **it ran and this shell is its answer** — in which case a re-fetch, forced or not, is the same bytes and a longer wait (measured: 31.5s to a timeout, following advice that named the tier that had just answered). `next_action` and `diagnosis.recover_with` both read the itinerary and stop recommending it; do not re-derive the recommendation from the failure name.
 3. Still thin: the site needs login (→ "Sites behind login" below) or runs DataDome / Akamai / interactive Turnstile (unbeatable) — **say so honestly**; never answer from the shell
 4. Tell the user: "This site blocks plain scraping; what I got is the pre-login shell. For real content I'd need your session cookie, or we use a public source."
 
