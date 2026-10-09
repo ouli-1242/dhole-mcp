@@ -247,19 +247,32 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
                     "cdp_url": endpoint,
                 }))
                 n0 = len(site._server.hits)
+                # `force_fetcher="stealthy"` 是把这一段判据钉在**attach 的那台浏览器**上：
+                # 不加它，读档先走 HTTP 档，而 HTTP 档会跟着这条 302 打到名册外的主机名
+                # （它没有 cookie，名册不是它的合同）。混在一个窗口里量，量到的就不是这一刀
+                # 要判的那件事。UA 不是判别器（实测 `.scratch/liveverify/fence_attrib.py`：
+                # 两条栈都会发 Windows/Macintosh 的 Chrome UA，primp 的指纹还会一轮一变），
+                # 所以判据按**代码路径**下：窗口里一笔 `Host: localhost` 都不许有。
+                # 这一把也量出了第二件事：attach 路径上私网目标的探活（`_private_health_probe`）
+                # 原先会跟着那一跳跑出去，账上多一笔与围栏无关的 `Host: localhost`。它现在不跟
+                # 重定向（3xx 本身就是"有人应答"），所以这条断言覆盖的是**整个调用窗口**，
+                # 不只是浏览器那一侧。
                 fence = _payload(client.call_tool("web_read", {
                     "url": f"{site.base_url}/fence",
                     "cdp_url": endpoint,
+                    "force_fetcher": "stealthy",
                 }))
                 n1 = len(site._server.hits)
                 fence_img = _payload(client.call_tool("web_read", {
                     "url": f"{site.base_url}/fence-img",
                     "cdp_url": endpoint,
+                    "force_fetcher": "stealthy",
                 }))
                 n2 = len(site._server.hits)
                 img_self = _payload(client.call_tool("web_read", {
                     "url": f"{site.base_url}/img-self",
                     "cdp_url": endpoint,
+                    "force_fetcher": "stealthy",
                 }))
                 n3 = len(site._server.hits)
             finally:
@@ -271,28 +284,29 @@ def test_cdp_attach_over_the_mcp_wire(tmp_path):
             print("\nNAV window:", json.dumps(hits[n0:n1]))
             print("SUB window:", json.dumps(hits[n1:n2]))
             print("SELF window (同主机图片对照):", json.dumps(hits[n2:n3]))
+            print("FENCE refusal said:", str(fence.get("error"))[:260], flush=True)
 
-            # 三件事，只有第一件今天成立：
+            # 三件事，形状各不相同：
             # 1) 同主机的图片一笔没到 —— route handler **装了也在跑**（`disable_resources`
-            #    那一支先把它掐了），所以围栏没生效不是"没装"，是它管不到主文档导航。
+            #    那一支先把它掐了）。留着它是为了在围栏失败时区分"没装"与"没管到"。
             assert "/pixel.png" not in self_paths, (
                 f"同主机的图片本该被 disable_resources 掐掉: {self_paths}")
             # 2) 子资源形状：那张 localhost 的图也没到（这一条不能算围栏的功 —— 它同样
             #    会被上面那一支先掐掉，所以只作记录）。
-            # 3) 结果边界（今天成立）：落在授权名册外的那一页，不许当成"你点名的那一页"
-            #    交回去 —— 那是 attach 最容易被读错的一种答案。
+            # 3) 结果边界：落在授权名册外的那一页，不许当成"你点名的那一页"交回去 ——
+            #    那是 attach 最容易被读错的一种答案。
             assert "cdp_host_not_allowed" in (fence.get("error") or ""), (
                 f"围栏外的正文被当成结果交回来了: {fence}")
             assert not (fence.get("content") or []), (
                 f"拒绝不许带正文: {fence}")
-            # 4) 机制上限也钉一颗：主文档 3xx 的下一跳**不进** page.route —— 纯 patchright
-            #    起新 Chrome 与 attach 结果一样（.scratch/liveverify/route_probe.py），所以
-            #    那一跳确实会出浏览器。这条把"确实出去了"钉成事实：哪天机制变了，它会红，
-            #    那时要一起改的是 configuration.md 里 "What it cannot do" 那一句，
-            #    以及关掉 D-31 —— 不是顺手删掉断言。
-            assert nav_out, (
-                "围栏现在连主文档重定向也拦得住？那 configuration.md 的机制上限要一起改，"
-                "D-31 也就可以关了")
+            # 4) 请求边界（D-31b，2026-10-09 起成立）：主文档那一跳**不许再出现在账上**。
+            #    这颗钉子原本钉的是反面（"确实出去了"），为的是哪天机制变了就红一下，
+            #    逼着把 configuration.md 那句 "What it cannot do" 一起改掉 —— 今天机制真
+            #    变了，所以它翻到这一头，手册同批改。将来翻回来时也别顺手删：两面都是判据。
+            assert not nav_out, (
+                f"名册外那一跳还是发出去了（请求边界的 Fetch 监听器没生效？）: {nav_out}")
+            assert "ended before it left the browser" in (fence.get("error") or ""), (
+                f"拒绝的话要说清这一跳没出去，别退回旧那句: {fence}")
 
             assert "cdp_authorization_required" in payload.get("error", ""), (
                 "第二个主机也要各问一次，不能被第一个主机的批准顺带放行: "

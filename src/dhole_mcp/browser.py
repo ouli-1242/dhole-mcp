@@ -166,9 +166,11 @@ def _landed_host_outside_fence(landed: str,
                                allowed: Optional[frozenset]) -> str:
     """attach 会话落在白名单外时交出那个主机名，否则交回 ""。
 
-    这是围栏的**结果边界**：route handler 那一层本该在请求出去之前就 abort（D-31 记着
-    它对主文档重定向没生效），而"把另一个站点的正文当成你点名的那一页交回来"这一步
-    无论如何不该发生 —— 你带着已认证的 profile 读到的却是别的站的答案。
+    这是围栏的**结果边界**，站在 `_DocumentFence` 那道请求边界之后：主文档那一跳通常
+    已经在那里被终止，这一层管的是没装上那只闸的通道（以及 `page.route` 一直看不见的
+    形状 —— D-31 实测：靶站按 `Host` 头记的账里，route 从没看见过主文档重定向的下一跳）。
+    "把另一个站点的正文当成你点名的那一页交回来"这一步无论如何不该发生 —— 你带着已登录
+    的 profile 读到的却是别的站的答案。
     """
     if allowed is None:
         return ""
@@ -186,6 +188,144 @@ def _landed_url_refused(landed: str, entry_url: str) -> bool:
         return False
     from dhole_mcp.security import url_targets_internal
     return url_targets_internal(landed)
+
+
+def _fence_blocked_error(hosts: List[str], allowed: Optional[frozenset],
+                         left_browser: bool) -> "CDPHostNotAllowedError":
+    """名册外那一跳的拒绝 —— 请求边界与结果边界共用这一句（唯一的作者）。
+
+    `left_browser` 说的是这一发出没出去：请求边界装上时它是 False（那一跳在发出之前
+    就被终止，靶站一个字节都没收到）；只剩结果边界时它是 True（Fetch 监听器没装上的
+    那些通道 —— 例如同一条会话被别的通道复用、或 CDP 那一侧报错 —— 承诺必须跟着
+    实际发生的走，不跟着愿望走）。
+    """
+    roster = sorted(allowed or ())
+    named = ", ".join(hosts)
+    if left_browser:
+        what = (f"the page took the attached browser to {named}, outside the "
+                f"authorized set {roster} - so its content is not the logged-in "
+                "view you asked for and was not returned. The request itself "
+                "already left the browser (D-31); ")
+    else:
+        what = (f"the page tried to take the attached browser to {named}, outside "
+                f"the authorized set {roster} - the request was ended before it "
+                "left the browser, so nothing was read from it. ")
+    return CDPHostNotAllowedError(
+        f"cdp_host_not_allowed: {what}"
+        f"to read that site on purpose, name it as the url with confirm=true, "
+        "which authorizes it for itself.")
+
+
+class _DocumentFence:
+    """围栏的请求边界：把跑出名册的**主文档**请求终止在发出之前（D-31b）。
+
+    为什么需要它：`page.route` 那一层看不见主文档重定向的下一跳（D-31 实测，靶站按
+    `Host` 头记的账），所以一条 302 就能带着已登录的 profile 走出名册，只在落地之后
+    被结果边界拒绝 —— 内容没交出去，请求却已经发出去了。CDP `Fetch` 域看得见那一跳。
+
+    形状是 2026-10-09 在**真 attach**（`connect_over_cdp` + 临时 profile 副本）上量出来的，
+    三条都不容调整（`.scratch/liveverify/attach_fetch_bypass.py`、`attach_fetch_frames.py`）：
+
+      · patterns 必须限死 `resourceType: "Document"`。管所有类型时 route 从 2 笔掉到 1 笔 ——
+        先应答的那一侧会把子资源直接放出去，route 里的内网复检与跨源凭据头剥离就没机会了，
+        那是拆围栏而不是加围栏。限到 Document 之后 route 两笔都还看得见。
+      · 每一笔 paused 都必须应答：故意不回的那一笔把导航吊到 20 秒超时（`Fetch.doNothing`
+        在这台 Chrome 上直接报错，也不是选项）。所以应答失败只许吞掉，不许冒出去。
+      · 名册内的主文档仍然由 route 说了算：对照实验里这只监听器已经 continue，route 的
+        abort 照样把那笔终止（net::ERR_FAILED，靶站一个字节都没收到）。所以这里只管
+        "出不出名册"这一件事，其余判据留在 route 那一张表里，不在第二处复述。
+
+    主文档与 iframe 用 `Page.getFrameTree` 的根 frame id 分开（实测：主文档跳转的下一跳
+    带着根 id，iframe 的文档带着另一个 id）。混为一谈会把"嵌了一张名册外 iframe"的正常
+    站点整条拒掉 —— 那是回归，那种形状今天只是 iframe 被拦、页面照返。取不到根 id 时
+    按 fail-closed 处理（每一笔 Document 都当主文档），因为结果边界还在下一行等着，
+    而漏报一笔跑得掉的跳转比多拒一个 iframe 严重得多。
+    """
+
+    def __init__(self, page: Any, allowed_hosts: frozenset, watch: List[tuple]):
+        self._page = page
+        self._allowed = allowed_hosts
+        self._watch = watch
+        self._session: Any = None
+        self._root_frame = ""
+        self._escaped = asyncio.Event()
+
+    async def wait_for_escape(self) -> None:
+        """等到这只闸拦下一笔主文档导航（调用方拿它跟稳定等待赛跑）。"""
+        await self._escaped.wait()
+
+    async def install(self) -> None:
+        """打开这只监听器。失败就抛 —— 调用方退回 route + 结果边界那条线。"""
+        self._session = await self._page.context.new_cdp_session(self._page)
+        try:
+            tree = await self._session.send("Page.getFrameTree")
+            self._root_frame = ((tree or {}).get("frameTree") or {}).get(
+                "frame", {}).get("id") or ""
+        except Exception:
+            self._root_frame = ""
+        self._session.on("Fetch.requestPaused", self._on_paused)
+        await self._session.send("Fetch.enable", {"patterns": [
+            {"urlPattern": "http://*", "requestStage": "Request",
+             "resourceType": "Document"},
+            {"urlPattern": "https://*", "requestStage": "Request",
+             "resourceType": "Document"}]})
+
+    async def remove(self) -> None:
+        """摘掉监听器。页面已经关了就算摘成 —— 那意味着这一趟已经没有请求会被它拦。"""
+        if self._session is None:
+            return
+        for method in ("Fetch.disable", "detach"):
+            try:
+                await self._session.send(method)
+            except Exception:
+                break
+        self._session = None
+
+    def _on_paused(self, params: dict) -> None:
+        asyncio.ensure_future(self._resolve(params))
+
+    async def _resolve(self, params: dict) -> None:
+        url = ((params.get("request") or {}).get("url")) or ""
+        host = (urlparse(url).hostname or "").lower()
+        request_id = params.get("requestId")
+        if not host or host in self._allowed:
+            await self._send("Fetch.continueRequest", request_id)
+            return
+        is_main = bool(self._root_frame) and params.get("frameId") == self._root_frame
+        if not self._root_frame or is_main:
+            self._watch.append((host or urlparse(url).netloc, True))
+            self._escaped.set()
+        await self._send("Fetch.failRequest", request_id,
+                         errorReason="BlockedByClient")
+
+    async def _send(self, method: str, request_id, **extra) -> None:
+        """应答这一笔。失败一律吞掉 —— 页面关完之后还有事件进来是实测有的事
+        （TargetClosedError），这里没有可救的请求，让它冒出去只会把一次关闭竞态
+        变成一条 traceback。
+        """
+        if self._session is None or request_id is None:
+            return
+        try:
+            await self._session.send(method, {"requestId": request_id, **extra})
+        except Exception:
+            pass
+
+
+async def _await_stable_or_escape(stability_coro, fence: "_DocumentFence") -> None:
+    """等页面稳定，或者等围栏拦下一笔主文档 —— 谁先到算谁。
+
+    不这么写的话发生在真机上（2026-10-09 `-m e2e`）：主文档那一跳被掐之后，导航
+    永远不会再报 load / domcontentloaded，于是稳定等待把整个调用预算花光，最后说话的
+    是那句"这一档超时了"。围栏实际上成功了，可回执把它说成了一次慢网络。
+    """
+    tasks = [asyncio.ensure_future(stability_coro),
+             asyncio.ensure_future(fence.wait_for_escape())]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 # ─── Resource blocking handler ───────────────────────────────────────────────
@@ -1740,8 +1880,13 @@ class BrowserSession:
         # 声明在循环外，这样 except 分支读它永远有定义（否则早失败会变成 NameError，
         # 把真正的错误盖掉）。
         ssrf_watch: list = []
+        # 围栏的请求边界（D-31b）同一族：`_DocumentFence` 往里追加 (host, 是否主文档)。
+        fence_watch: list = []
         for attempt in range(actual_retries):
             ssrf_watch.clear()
+            fence_watch.clear()
+            fence = None
+            page = None
             try:
                 page = await self._context.new_page()
                 page.set_default_navigation_timeout(actual_timeout)
@@ -1767,6 +1912,21 @@ class BrowserSession:
                         allowed_hosts=self._allowed_hosts,
                     ),
                 )
+
+                # 围栏的请求边界（D-31b）：route 那一层看不见主文档重定向的下一跳，
+                # 所以那条 302 会带着已登录的 profile 走出名册（今天只拦得住落地之后的
+                # 正文）。名册只存在于 CDP attach 这一条通道，闸也就只在这里装 ——
+                # 没有名册可判时它一分钱也不该花。装不上就退回今天这条线（route +
+                # 结果边界），并且让拒绝话说实话（见 _fence_blocked_error 的 left_browser）。
+                if self._allowed_hosts is not None:
+                    candidate = _DocumentFence(page, self._allowed_hosts, fence_watch)
+                    try:
+                        await candidate.install()
+                        fence = candidate
+                    except Exception:
+                        fence = None
+                        await candidate.remove()
+                        logger.debug("host fence (CDP Fetch) not installed", exc_info=True)
 
                 # Response capture
                 final_response: List[Any] = [None]
@@ -1808,8 +1968,15 @@ class BrowserSession:
                     except Exception as e:
                         logger.debug(f"Stealth script injection error: {e}")
 
-                # Wait for page stability (full load)
-                await self._wait_for_stability(page)
+                # Wait for page stability (full load). 围栏装着的时候这一等要与
+                # "拦下了一笔主文档"赛跑：被掐掉的导航不会再有 load 事件，实测
+                # （2026-10-09 的 `-m e2e`）那一次等待把 30 秒预算整个花光，于是调用级预算
+                # 先说话，交回的是"这一档超时了"而不是那条拒绝 —— 围栏做了它的
+                # 工作，回执说的却是另一件事。
+                if fence is not None:
+                    await _await_stable_or_escape(self._wait_for_stability(page), fence)
+                else:
+                    await self._wait_for_stability(page)
 
                 if not first_response:
                     raise RuntimeError(f"Failed to get response for {url}")
@@ -1861,18 +2028,17 @@ class BrowserSession:
                         "page-script request pointed inside - nothing was fetched from it."
                     )
 
-                # 围栏终检（G33 host scope 的结果边界）：attach 会话落在授权名册外的
-                # 主机上，那一页的正文不能当成你点名的那一页交回去。
+                # 围栏终检（G33 host scope）。两段判据读的不是同一件事，顺序不能反：
+                # 先问这只请求边界闸拦下了什么（那一跳根本没出去，落地地址自然还留在
+                # 名册里 —— 浏览器停在一张错误页上），再问有没有漏网的真的落在了名册外。
+                if fence_watch:
+                    raise _fence_blocked_error(
+                        sorted({h for h, _ in fence_watch}),
+                        self._allowed_hosts, left_browser=False)
                 _fence_out = _landed_host_outside_fence(landed, self._allowed_hosts)
                 if _fence_out:
-                    raise CDPHostNotAllowedError(
-                        f"cdp_host_not_allowed: the page took the attached browser to "
-                        f"{_fence_out!r}, outside the authorized set "
-                        f"{sorted(self._allowed_hosts or ())} - so its content is not "
-                        "the logged-in view you asked for and was not returned. The "
-                        f"request itself already left the browser (D-31); to read that "
-                        f"site on purpose, name it as the url with confirm=true, which "
-                        "authorizes it for itself.")
+                    raise _fence_blocked_error([_fence_out], self._allowed_hosts,
+                                               left_browser=True)
 
                 # 登录探测（G35 check_login）：SSRF 终检之后——被拦的页面没有
                 # 探测价值；构建响应之前——探测的是导航稳定后的最终页面。
@@ -1908,21 +2074,23 @@ class BrowserSession:
                 except Exception:
                     pass
 
-                await page.close()
                 return response
 
             except BrowserSSRFBlockedError:
                 # 安全拒绝不是网络抖动：不重试，原样抛（消息里已经说明了原因）。
-                try:
-                    await page.close()
-                except Exception:
-                    pass
+                raise
+            except CDPHostNotAllowedError:
+                # 同上：名册边界是用户给的授权范围，不是可重试的失败 —— 重试等于朝
+                # 同一台名册外的主机再打三次，而每一次都带着已登录的 profile。
                 raise
             except Exception as e:
-                try:
-                    await page.close()
-                except Exception:
-                    pass
+                # 主文档被围栏掐在请求边界上时（D-31b），goto 报的就是那一次
+                # net::ERR_BLOCKED_BY_CLIENT —— 这是拒绝，不是网络抖动，也不许重试；
+                # 判据读在 SSRF 之前：这一跳是被名册拦下的，route 那侧根本没看见它。
+                if fence_watch:
+                    raise _fence_blocked_error(
+                        sorted({h for h, _ in fence_watch}),
+                        self._allowed_hosts, left_browser=False) from e
                 # 主文档被 SSRF 守卫拦下时，goto 会以 ERR_ABORTED 之类的形式报出来 ——
                 # 别把它当可重试的网络抖动（那会朝同一个内网目标再打三次），也别让
                 # 最终错误丢掉"这是被拦下的内网跳转"这个信息。
@@ -1949,6 +2117,19 @@ class BrowserSession:
                     if category != "unknown":
                         raise RuntimeError(f"[{category}] {err_str[:150]}") from e
                     raise
+            finally:
+                # 收尾的顺序是实测出来的（2026-10-09 真 attach）：**先摘闸，再关页**。
+                # 挂着 Fetch 拦截器去 `page.close()`，那一页会停在半路直到 Playwright 的
+                # 默认超时 —— 拒绝本身 1.2 秒就判出来了，账却记在 20 秒之后，交出去的
+                # 还是"这一档超时了"。摘掉监听器既让页面能正常关，也让下一次调用按它
+                # 自己的名册判断（`Fetch.enable` 是页级的，留着就是一支按旧名册行事的钩子）。
+                if fence is not None:
+                    await fence.remove()
+                if page is not None:
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
 
         raise RuntimeError(f"Browser fetch failed for {url}")
 

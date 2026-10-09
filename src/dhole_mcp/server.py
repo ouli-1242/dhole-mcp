@@ -1386,8 +1386,10 @@ async def _cdp_attach_gate(cdp_url: Optional[str], confirm: bool = False,
         "approval is remembered per host. Requests to other origins are fenced: "
         "a sub-resource or page script from outside it is blocked, and a page "
         "that redirects out of the fence comes back refused rather than as an "
-        "answer - that redirect still leaves the browser, so fence what you "
-        "would not want your own cookies to ride on.")
+        "answer - the request for that redirect is ended inside the browser, "
+        "before it leaves it (a channel whose hook cannot be installed refuses "
+        "the same way and says in the error that the request had already left). "
+        "Fence what you would not want your own cookies to ride on.")
     if human is False:
         _audit_event("cdp_attach_refused", hosts=missing,
                      endpoint=str(cdp_url)[:120],
@@ -6228,12 +6230,19 @@ class MasterFetchServer:
 
         Direct, 3s, no retries — a loopback/LAN answer is immediate. A probe
         that itself blows up never decides anything: the real attempt goes ahead.
+
+        不跟重定向（D-31b 同批，实测 `.scratch/liveverify/http_tier_stack.py`）：探活问的是
+        "这个主机这个端口有没有人应答"，而跟一跳会把这笔请求带到**另一个主机名**上（靶站
+        `127.0.0.1` 的一条 302 指向同机的 `localhost`，账上就多了一笔 `Host: localhost`）。
+        那一跳由 dhole 自己的 HTTP 档发出：没有 cookie，也不在 attach 的主机名册里，围栏
+        管不到它 —— 而判"活"根本不需要读完下一跳。3xx 自己就是"有人应答"。
         """
         try:
             probe = await self.get(
                 url, proxy=None, headers=extra_headers,
                 cookies=_safe_cookie_dict(cookies), useragent=useragent,
                 timeout=3.0, retries=0, stealthy_headers=False,
+                follow_redirects=False,
             )
         except Exception:
             return None
