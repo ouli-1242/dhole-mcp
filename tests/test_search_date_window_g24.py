@@ -13,6 +13,12 @@
 那一行，要拿到它得给每个引擎加一段 HTML 正则 —— 那正是 G15/G16/G17 那类「字段要么
 真要么别给」的坑。这里记下不做的理由，而不是造一个假数字。
 
+同一条理由管着**逐条刮发布日期再过滤**：那也是个"没做"，而响应不许把它说成"这家不能
+按日期过滤"。收不到日期过滤的引擎分两种责任方（`search_engines._DATE_PARAM_UNWIRED`）：
+一种确实没有可登记的日期参数，话只说"线路里没发"；另一种的参数是 dhole 自己的注释点名
+存在、却没接线的（baidu 的 gpc/stf），那就写成我们的缺口。替第三方断言能力，和替它
+掩盖我们的缺口，是同一句谎的两种拼法。
+
 `exact` 曾经是一颗硬编的字面量（freshness 分支）或只看"发出去的那一档等于最窄覆盖档"
 （after 分支）。两种都在同一件事上说谎：默认池里 baidu/so360/sogou/yandex **收了同样
 的查询、一个字都没按日期过滤**，而那颗字段自述（`SearchResponseModel.date_filter`）写的
@@ -184,8 +190,8 @@ class TestTheWindowTranslation:
         assert info["requested"] == "freshness=week"
         assert "baidu" in info["engines_unfiltered"]
         assert info["exact"] is False, (
-            "有引擎根本不能按日期过滤却仍然应答了，这一轮就不是 exact")
-        assert "cannot be date-filtered" in info["note"]
+            "有引擎根本没收到日期过滤却仍然应答了，这一轮就不是 exact")
+        assert "no date filter" in info["note"]
         assert "baidu" in info["note"]
 
     def test_a_pool_that_can_all_be_filtered_is_exact(self):
@@ -199,11 +205,19 @@ class TestTheWindowTranslation:
         assert info["note"] == ""
 
     def test_a_pool_of_only_date_blind_engines_names_them(self):
-        """全都不能过滤：告诫要点名，不能只说"不 exact"。"""
+        """全都收不到过滤：告诫要点名，而且**两种责任方要分开说**（S8-full）。
+
+        sogou 是"线路里没有这一说"，baidu 是"dhole 自己没接线它的 gpc/stf"。把后者也
+        写成前者的措辞，就是替一个第三方断言它做不到的事，而 dhole 的代码注释里明明
+        写着那个参数存在 —— 声明与线路必须一致。
+        """
         _applied, info, _why = _date_window(None, None, "month", ["baidu", "sogou"])
         assert info["engines_filtered"] == []
         assert info["exact"] is False
-        assert "baidu, sogou cannot be date-filtered at all" in info["note"]
+        assert "dhole sent sogou no date filter" in info["note"], info["note"]
+        assert "dhole has not wired a date filter for baidu (gpc/stf)" in info["note"]
+        assert "cannot be date-filtered" not in info["note"], \
+            "这句把我们的没做说成它的不能"
 
     def test_an_empty_pool_still_says_why_it_is_not_exact(self):
         """空池：既没有 filtered 也没有 unfiltered，note 不许拼出一个空主语。
@@ -340,7 +354,7 @@ class TestTheNoteReachesTheAnswer:
         out = self._run(monkeypatch, ["yandex"])
         assert out.date_filter and out.date_filter["exact"] is False
         hint = out.fetch_hint or ""
-        assert "cannot be date-filtered" in hint, (
+        assert "no date filter" in hint, (
             f"exact 报 False 而告诫没上线，调用方仍会按字面信 freshness: {hint!r}")
         assert "yandex" in hint
 
@@ -367,7 +381,7 @@ class TestTheNoteReachesTheAnswer:
         """反向半边：能过滤的池不许也吐一段告诫 —— 那会把信号磨成噪声。"""
         out = self._run(monkeypatch, ["bing"])
         assert out.date_filter["exact"] is True
-        assert "cannot be date-filtered" not in (out.fetch_hint or "")
+        assert "no date filter" not in (out.fetch_hint or "")
 
     def test_the_similar_page_path_hears_it_too(self, monkeypatch):
         """find_similar 是第二条建 `fetch_hint` 的路，它曾经不接 `_date_note`。
@@ -389,7 +403,7 @@ class TestTheNoteReachesTheAnswer:
         # `_rank` 被换成了桩，它回什么 mode 就是什么。
         assert "find_similar to" in hint, f"根本没走到 find_similar 分支: {hint!r}"
         assert out.date_filter["exact"] is False, out.date_filter
-        assert "cannot be date-filtered" in hint, (
+        assert "no date filter" in hint, (
             f"date_filter 报了 not-exact 而这条路的 hint 没接上: {hint!r}")
 
     def test_no_window_report_can_omit_the_exact_key(self):

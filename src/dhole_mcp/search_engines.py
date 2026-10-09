@@ -109,6 +109,29 @@ def date_support(engines) -> tuple:
     return sorted(pool & _DATE_AWARE_ENGINES), sorted(pool - _DATE_AWARE_ENGINES)
 
 
+# 收了 `timelimit` 形参、payload 里却一个字节都不落的引擎，此前只在吞掉它的那一行留了
+# 一句 `# noqa: ARG002`。这一族其实分两种，而**责任方不同**，响应里的说法必须跟着分：
+#
+#   · 在下面列出的：dhole 自己的代码点名了那个时间参数（就是那句"未实现"注释里的名字），
+#     所以这是 **dhole 没接线**，不是那家的能力问题 —— 报告不许替第三方断言"它不能按
+#     日期过滤"。
+#   · 不在下面、也不在 `_DATE_AWARE_ENGINES` 的：dhole 不知道该家有什么可发的日期参数，
+#     于是只说"dhole 没给它发日期过滤" —— 一句只关于我们线路的事实。
+#
+# 值 = dhole 注释里点名的参数名（一条自述，不是核实过的上游文档结论）。加一家就必须同时
+# 改它自己那行注释，`test_a_date_claim_blames_the_side_that_is_ours.py` 会钉住这两处。
+_DATE_PARAM_UNWIRED: dict[str, str] = {
+    "baidu": "gpc/stf",
+}
+
+
+def split_date_blindness(blind) -> tuple[list[str], list[str]]:
+    """把"没收到日期过滤"的引擎按责任方分成 (dhole 没接线的, 线路里没有这一说的)。"""
+    names = [n for n in blind if n]
+    return ([n for n in names if n in _DATE_PARAM_UNWIRED],
+            [n for n in names if n not in _DATE_PARAM_UNWIRED])
+
+
 @dataclass
 class RawResult:
     title: str

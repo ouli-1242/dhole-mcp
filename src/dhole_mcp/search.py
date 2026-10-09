@@ -38,6 +38,7 @@ from dhole_mcp.security import validate_search_query, validate_url, redact_api_k
 from dhole_mcp.search_engines import (
     RawResult, multi_search, EngineReport, DEFAULT_ENGINES,
     fetch_source_for_similar, _INDEX_FAMILY, date_support,
+    _DATE_PARAM_UNWIRED, split_date_blindness,
 )
 from dhole_mcp.search_metasearch import schedule_engine_heartbeat, KEYED_ENGINES
 
@@ -280,7 +281,7 @@ class SearchResponseModel(BaseModel):
     engine_empty: list[str] = Field(default=[], description="Engines that answered (HTTP 200) but parsed zero usable results. NOT rate-limiting: either this query genuinely has nothing in that index, or that engine's parser has drifted out of sync with its page structure. Cross-check the 'engine yield' row of `dhole -v`.")
     engine_preempted: list[str] = Field(default=[], description="Engines cancelled because enough results had already arrived. Normal on a healthy fast pool - this is NOT a failure or a block.")
     rerank_mode: str = Field(default="merge", description="Rerank used: merge|neural|find_similar.")
-    date_filter: dict = Field(default_factory=dict, description="What the engines were actually asked about dates, when you asked (freshness= or after=): {requested, sent, exact, engines_filtered, engines_unfiltered, note}. {} = no date constraint was requested. READ THIS BEFORE TRUSTING FRESHNESS: the engines offer day/week/month/year and nothing finer, so after=<a date> is widened to the narrowest preset that covers it. 'exact: true' is the strong claim - it means every engine that answered applied the narrowest preset covering your window, so the rows are date-limited. It is false whenever the wire sent a broader window than you named OR any engine in the pool cannot be date-filtered at all (the default pool has four of those: baidu, so360, sogou, yandex - named in engines_unfiltered), so a mixed round is NOT a date-limited result set. exact false always comes with a note saying which of the two it is; exact true comes with an empty note. before= is refused rather than ignored: search results carry no publish date, so 'older than' could neither be asked nor verified.")
+    date_filter: dict = Field(default_factory=dict, description="What the engines were actually asked about dates, when you asked (freshness= or after=): {requested, sent, exact, engines_filtered, engines_unfiltered, note}. {} = no date constraint was requested. READ THIS BEFORE TRUSTING FRESHNESS: the engines offer day/week/month/year and nothing finer, so after=<a date> is widened to the narrowest preset that covers it. 'exact: true' is the strong claim - it means every engine that answered applied the narrowest preset covering your window, so the rows are date-limited. It is false whenever the wire sent a broader window than you named OR some engine in the pool was sent no date filter at all (named in engines_unfiltered, never a fixed list - it moves with the pool you chose); the note then says which side that gap is on, because for one engine in the default pool it is a date parameter dhole has not wired, not the index having none. A mixed round is NOT a date-limited result set. exact false always comes with a note saying which of the two it is; exact true comes with an empty note. before= is refused rather than ignored: search results carry no publish date, so 'older than' could neither be asked nor verified.")
     consensus_basis: str = Field(default="", description="Whether engines_consensus can be trusted on this response: full | single_family | partial_pool | degraded_pool. 'degraded_pool' = at least one engine didn't answer, so a low consensus number may reflect the pool being down rather than the URL being weak. 'single_family' = no corroboration was possible at all.")
     cached: bool = Field(default=False, description="Served from cache?")
     duration_ms: float = Field(default=0, description="Duration ms")
@@ -771,6 +772,26 @@ def _parse_date_arg(value: Any, name: str):
     return dt.astimezone(timezone.utc)
 
 
+def _blind_date_clause(unfiltered: list[str]) -> str:
+    """谁没收到日期过滤 —— 按**责任方**说，而不是替引擎断言能力（S8-full）。
+
+    "so360 不能按日期过滤" 是一个关于第三方索引的说法，而 dhole 只知道自己发出去什么。
+    所以线路侧的事实说 "dhole sent X no date filter"；唯独 `_DATE_PARAM_UNWIRED` 里那
+    几家（dhole 自己的代码点名了它的时间参数、却没接线）写成我们的缺口 —— 把我们的没做
+    说成它的不能，是本批缺陷母题换了个方向。
+
+    只给从句，尾巴由调用方接：两条分支（`freshness=` / `after=`）的后半句不同。
+    """
+    unwired, never = split_date_blindness(unfiltered)
+    bits = []
+    if never:
+        bits.append(f"dhole sent {', '.join(never)} no date filter")
+    if unwired:
+        _params = ", ".join(f"{n} ({_DATE_PARAM_UNWIRED[n]})" for n in unwired)
+        bits.append(f"dhole has not wired a date filter for {_params}")
+    return "; ".join(bits)
+
+
 def _date_window(after: Any, before: Any, freshness: Any, engines: list[str]) -> tuple:
     """Resolve what the caller asked about dates into what the pool can do.
 
@@ -793,12 +814,12 @@ def _date_window(after: Any, before: Any, freshness: Any, engines: list[str]) ->
 
     if before not in (None, "", False):
         _parse_date_arg(before, "before")  # raises on an unreadable value
-        rejection = ("before is not supported: no engine in the pool can bound "
-                     "results to older-than-a-date (the ones that filter at all "
-                     "offer day/week/month/year only), and search results carry no "
-                     "publish date for dhole to filter on either. Use after=<date> "
-                     "for 'newer than', or feed_read(since=) for dated items from "
-                     "a source that publishes them.")
+        rejection = ("before is not supported: dhole has no window that bounds results to "
+                     "older-than-a-date (the presets it can send are day/week/month/year, "
+                     "and each is only a 'not older than' bound), and search results carry "
+                     "no publish date for dhole to filter on either. Use after=<date> for "
+                     "'newer than', or feed_read(since=) for dated items from a source that "
+                     "publishes them.")
         return applied, info, rejection
 
     filtered, unfiltered = date_support(engines)
@@ -819,10 +840,9 @@ def _date_window(after: Any, before: Any, freshness: Any, engines: list[str]) ->
                 "engines_filtered": filtered,
                 "engines_unfiltered": unfiltered,
                 "note": ("" if exact else
-                         (f"{', '.join(unfiltered)} cannot be date-filtered at all "
-                          "and answered anyway"
+                         (_blind_date_clause(unfiltered) + ", and all of them answered anyway"
                           if unfiltered else
-                          "no engine in this pool can be date-filtered, so "
+                          "no engine in this pool gets a date filter from dhole, so "
                           "freshness asked for nothing the results can honour")
                          + " - the window is what was ASKED, not what the rows "
                          "satisfy; check dates yourself before citing freshness"),
@@ -839,13 +859,17 @@ def _date_window(after: Any, before: Any, freshness: Any, engines: list[str]) ->
         # than what was asked and drop pages the caller wanted. Send nothing.
         info = {
             "requested": f"after={after}",
-            "sent": "nothing (wider than the engines' coarsest window)",
+            "sent": "nothing (no window dhole can send reaches that far)",
             "exact": False,
             "engines_filtered": [],
             "engines_unfiltered": sorted(engines),
-            "note": (f"after={after} is {age_days:.0f} days back; no engine answers "
-                     "beyond a year, so none of the results are date-filtered - "
-                     "verify dates yourself before citing freshness."),
+            # "没有引擎能回答一年之前" 是关于第三方索引的断言，而 dhole 只知道自己
+            # 发得出哪四档。改成只说我们这一侧的事实（S8-full）。
+            "note": (f"after={after} is {age_days:.0f} days back; the coarsest window "
+                     "dhole can send is 'year' (365 days), which would be NARROWER than "
+                     "what you asked and would drop pages you wanted, so nothing was sent "
+                     "and none of the results are date-filtered - verify dates yourself "
+                     "before citing freshness."),
         }
         return applied, info, ""
 
@@ -872,8 +896,8 @@ def _date_window(after: Any, before: Any, freshness: Any, engines: list[str]) ->
         "note": ("" if exact else
                  f"{applied} ({_PRESET_DAYS[applied]} days) is what the engines were "
                  f"asked for, which covers your window rather than matching it"
-                 + (f"; {', '.join(unfiltered)} cannot be date-filtered at all and "
-                    "answered unfiltered" if unfiltered else "")
+                 + (f"; {_blind_date_clause(unfiltered)}, so they came back unfiltered"
+                    if unfiltered else "")
                  + ". Results may therefore sit outside the dates you named, and they "
                    "carry no publish date, so dhole cannot check."),
     }

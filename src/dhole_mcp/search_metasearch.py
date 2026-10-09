@@ -536,7 +536,9 @@ class Yandex(BaseSearchEngine):
     }
 
     def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
-                      timelimit: str | None,  # noqa: ARG002
+                      timelimit: str | None,  # noqa: ARG002 - 故意忽略：dhole 不给这一家
+                      # 发日期过滤，也没登记过它能发什么。这不是断言 yandex 没有时间过滤
+                      # —— 只说明 dhole 的线路里没有。见 search_engines._DATE_AWARE_ENGINES
                       page: int = 1, **kwargs: str) -> dict[str, Any]:
         payload = {"text": query, "web": "1", "searchid": f"{random.randint(1000000, 9999999)}"}
         if page > 1:
@@ -756,7 +758,10 @@ class Baidu(BaseSearchEngine):
     prefers_raw_query = True
 
     def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
-                      timelimit: str | None,  # noqa: ARG002 - 时间过滤（gpc/stf）未实现
+                      timelimit: str | None,  # noqa: ARG002 - 时间过滤（gpc/stf）未实现：
+                      # 这一家的**参数存在**是 dhole 自己的注释说的，没接线的是 dhole，
+                      # 所以它登记在 search_engines._DATE_PARAM_UNWIRED，响应里那句
+                      # "dhole has not wired a date filter for baidu (gpc/stf)" 由那张表生成
                       page: int = 1, **kwargs: str) -> dict[str, Any]:
         payload = {"wd": query, "ie": "utf-8"}
         if page > 1:
@@ -887,7 +892,8 @@ class So360(BaseSearchEngine):
         self.results: list[Any] = []
 
     def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
-                      timelimit: str | None,  # noqa: ARG002 - 未实现时间过滤
+                      timelimit: str | None,  # noqa: ARG002 - 故意忽略：dhole 不给这一家
+                      # 发日期过滤，也没登记过它能发什么（见 search_engines._DATE_AWARE_ENGINES）
                       page: int = 1, **kwargs: str) -> dict[str, Any]:
         payload = {"q": query}
         if page > 1:
@@ -944,7 +950,8 @@ class Sogou(BaseSearchEngine):
         self.results: list[Any] = []
 
     def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
-                      timelimit: str | None,  # noqa: ARG002 - 未实现时间过滤
+                      timelimit: str | None,  # noqa: ARG002 - 故意忽略：dhole 不给这一家
+                      # 发日期过滤，也没登记过它能发什么（见 search_engines._DATE_AWARE_ENGINES）
                       page: int = 1, **kwargs: str) -> dict[str, Any]:
         payload = {"query": query}
         if page > 1:
