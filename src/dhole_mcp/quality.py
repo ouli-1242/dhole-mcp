@@ -26,6 +26,7 @@ from dhole_mcp.context import (
     _AUTH_SENT,
     _BOILERPLATE_LINES_COLLAPSED,
     _CSS_SELECTOR,
+    _FOCUS_OUTCOME,
     _IDENTITY_APPLIED,
     _METHOD,
     _SESSION_ID,
@@ -890,7 +891,15 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                        "js_shell_detected")
     if (result.is_truncated and result.next_offset and result.status < 400
             and not err.startswith(_NOT_A_DOCUMENT)):
-        next_action = f"page truncated. Use focus='query' to extract only relevant blocks, or offset={result.next_offset} to continue paginating"
+        _repeat = _focus_repeat_warning(
+            f"offset={result.next_offset} continues THIS filtered text, or pass focus='' "
+            "to get the whole page back")
+        if _repeat:
+            next_action = f"page truncated. {_repeat}."
+        else:
+            next_action = (
+                f"page truncated. Use focus='query' to extract only relevant blocks, "
+                f"or offset={result.next_offset} to continue paginating")
     elif unchanged:
         next_action = ("304 not modified: the origin says this URL still serves the "
                        "version dhole already holds, so no body was transferred - that "
@@ -1263,7 +1272,10 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
     # (list/auth/paywall/redirect) > freshness.
     if not next_action and content_ok:
         if result.page_type == "pdf" and result.total_extracted_chars > 20000:
-            next_action = (
+            _repeat = _focus_repeat_warning(
+                "pages='X-Y' fetches specific sections from the table_of_contents "
+                "instead of cutting this one down")
+            next_action = _repeat or (
                 f"large PDF ({result.total_extracted_chars} chars extracted). "
                 "Use focus='query' to extract only relevant paragraphs, or "
                 "pages='X-Y' to fetch specific sections from the table_of_contents"
@@ -1406,6 +1418,41 @@ def _ignored_selector_note(result: ResponseModel) -> str:
     return (f"css_selector '{selector}' was NOT applied: content-type '{ctype}' is "
             f"not HTML (css_selector only narrows HTML) - the whole document was "
             f"returned")
+
+
+def _focus_effect() -> dict:
+    """本次 focus 实际做成了什么（`_apply_chunking` 从 focus_content 的 stats 抄来）。"""
+    outcome = _FOCUS_OUTCOME.get()
+    return outcome if isinstance(outcome, dict) else {}
+
+
+def _focus_repeat_warning(alternative: str) -> str:
+    """一句"用 focus= 再窄一点"的建议；focus 已经切过并删掉结构性正文时改口。
+
+    C4 的形状：调用方**已经**用了 `focus='3.5 电池包 里程碑'`，用户点名要的 3.5 节那张
+    表就是这一次 focus 删掉的（focus 的安全网只保"与 query 共享至少一个词"的表），而
+    `next_action` 紧接着推荐 `focus=`。同一颗 query 只会把同一样东西再删一遍 —— 工具
+    在给自己挖坑，而那句话是响应里教调用方做的事。
+    """
+    dropped = _focus_effect().get("dropped") or []
+    if not dropped:
+        return ""
+    named = ", ".join(f"{d['label']}" for d in dropped)
+    return (f"focus= is already on this call and it dropped {named} - the same query "
+            f"drops them again. {alternative}")
+
+
+def _focus_ignored_note() -> str:
+    """focus 点名了却一刀没切时的那句说法，否则空串。
+
+    与 `_ignored_selector_note` 同一条规矩：整页原样返回是**可用内容**，不是失败，
+    所以进 summary 而不是翻 `content_ok`。但没有那句说法时，调用方分不清"这页只有一
+    块所以没什么可切"与"切了、恰好什么都留着"。
+    """
+    reason = _focus_effect().get("ignored") or ""
+    if not reason:
+        return ""
+    return f"focus was NOT applied: {reason}"
 
 
 # ─── 结构化诊断：把自由文本 `error` 归纳成可分支的枚举 ─────────────────────
@@ -1610,9 +1657,12 @@ def _diagnose(result: ResponseModel) -> Optional[Dict[str, Any]]:
     elif result.is_truncated:
         code = "truncated"
         retryable = True
-        recover = (f"offset={result.next_offset} to continue"
-                   if result.next_offset
-                   else "focus='query' to narrow, or a smaller max_content_chars")
+        if result.next_offset:
+            recover = f"offset={result.next_offset} to continue"
+        else:
+            recover = (_focus_repeat_warning(
+                "pass focus='' for the whole page, or a smaller max_content_chars")
+                or "focus='query' to narrow, or a smaller max_content_chars")
     if not code:
         return None
     return {"code": code, "retryable": retryable, "recover_with": recover}
@@ -1657,6 +1707,9 @@ def _with_agent_hints(result: ResponseModel) -> ResponseModel:
     selector_note = _ignored_selector_note(result)
     if selector_note:
         summary = f"{summary} · {selector_note}" if summary else selector_note
+    focus_note = _focus_ignored_note()
+    if focus_note:
+        summary = f"{summary} · {focus_note}" if summary else focus_note
     # G25 阶段4：正文是数据，不是指令——命中注入启发式就点名（标记不拦截，
     # 形状与边界见 injection.py 的模块 docstring）。content 里混着的图片块
     # 不是文本，跳过；空 content（错误/robots 拒绝）scan 返回 None。

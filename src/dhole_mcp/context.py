@@ -36,6 +36,11 @@ _PDF_PASSWORD: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_
 _FOCUS: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_focus", default=None)
 # focus 的形态（M-2）：filter（默认，现有行为）| best（只回打分最高的答案块）。
 _FOCUS_MODE: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_focus_mode", default=None)
+# 这次 focus **实际做成了什么**：{"dropped": [点名的结构性正文], "ignored": "为什么
+# 一刀没切"}。`_apply_chunking` 从 `focus_content` 的 stats 里抄过来，`quality` 读它。
+# 需要它的原因是那两处建议：`_agent_hints` 手上只有 `result`，而"用 focus= 再窄一点"
+# 那句话与 focus 刚刚删掉的东西之间，隔着一个模块。
+_FOCUS_OUTCOME: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar("_focus_outcome", default=None)
 # 本次调用用哪个 focus 打分器："" = 由操作者的 flag 决定（默认，行为与以前逐字节
 # 相同）；"bm25" = 这一页明确要便宜的那条路；"neural" = 明确要语义分（仅在操作者
 # 17.0：focus 打分引擎是纯按次选择（无许可门），别名只剩意愿侧判定。

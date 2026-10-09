@@ -189,6 +189,56 @@ def _is_code(block: str) -> bool:
     return indented >= len(non_blank) * 0.8
 
 
+#: 结构性正文的两种名字。它们与散文的区别不是长度，是**能不能重排出来**：一段
+#: 掉了两句的正文读者还能读懂，一张掉了三列的表读起来是假数据。
+_STRUCTURAL_KINDS = (_is_table, _is_code)
+
+
+def _structural_kind(block: str) -> str:
+    for probe, name in zip(_STRUCTURAL_KINDS, ("table", "code block")):
+        if probe(block):
+            return name
+    return ""
+
+
+def _dropped_structural(blocks: list[str], keep: set) -> list[dict]:
+    """被这次过滤**丢掉**的结构性正文，逐条点名。
+
+    C4 的现场：用户点名要 3.5 节那张表，`focus=` 把它整块删了，回执里只剩
+    "showing 6 of 11 blocks" —— 一个数。删掉的是散文还是表格，那个数分不出来，
+    而这两件事对调用方是两个结论（前者顶多少两句闲话，后者是答案没了）。
+    """
+    tally: dict[str, dict] = {}
+    for i, block in enumerate(blocks):
+        kind = _structural_kind(block)
+        if not kind:
+            continue
+        row = tally.setdefault(kind, {"total": 0, "gone": 0, "chars": 0})
+        row["total"] += 1
+        if i not in keep:
+            row["gone"] += 1
+            row["chars"] += len(block.strip())
+    out = []
+    for kind, row in tally.items():
+        if not row["gone"]:
+            continue
+        if row["total"] == 1:
+            label = f"the page's only {kind}"
+            why = "it shares no token with your query"
+        else:
+            label = f"{row['gone']} of the page's {row['total']} {kind}s"
+            why = "they share no token with your query"
+        out.append({"kind": kind, "chars": row["chars"], "gone": row["gone"],
+                    "label": f"{label} ({row['chars']:,} chars)", "why": why})
+    return out
+
+
+def _dropped_structural_note(dropped: list[dict]) -> str:
+    if not dropped:
+        return ""
+    return "; " + "; ".join(f"dropped {d['label']} - {d['why']}" for d in dropped)
+
+
 def _split_blocks(text: str) -> list[str]:
     """Split markdown into blocks separated by blank lines. A block is a
     heading, paragraph, table, or list — kept verbatim (order preserved)."""
@@ -410,21 +460,30 @@ def focus_content(
     ``stats`` (out-param, M-3): ``{"scorer": "neural"|"bm25", "best_score": ...}``
     lets the caller report an intent-miss hint without reparsing the output.
     ``best_score`` is filled only for the neural scorer — BM25's unbounded
-    scale has no calibrated reading.
+    scale has no calibrated reading. Two more keys are the caller's for the same
+    reason (no reparse): ``dropped_structural`` names the tables/code this filter
+    deleted, and ``ignored`` says why no filtering happened at all when the text
+    came back untouched.
     """
-    if not query or not text or not text.strip():
+    stats_out = stats if isinstance(stats, dict) else None
+
+    def _untouched(reason: str) -> str:
+        """一条 no-op 也要有个说法：静默原样返回与"过滤了但什么都没删"不可分辨。"""
+        if stats_out is not None:
+            stats_out["ignored"] = reason
         return text
+
+    if not query or not text or not text.strip():
+        return text  # 没点名 focus：这本来就不是"该做而没做"，不需要说法
     blocks = _split_blocks(text)
     if len(blocks) <= 1:
-        return text
+        return _untouched("this page is one block, so there is nothing to filter")
     qterms = set(_tokens(query))
     if not qterms:
-        return text
+        return _untouched(f"focus={query!r} has no searchable word in it")
 
     block_tokens = [_tokens(bl) for bl in blocks]
     n = len(blocks)
-
-    stats_out = stats if isinstance(stats, dict) else None
 
     scorer_note = "BM25 relevance"
     neural_used = False
@@ -476,8 +535,12 @@ def focus_content(
         top_set = {top}
         if top > 0 and _is_heading(blocks[top - 1]) and not _is_heading(blocks[top]):
             top_set.add(top - 1)
+        dropped = _dropped_structural(blocks, top_set)
+        if stats_out is not None:
+            stats_out["dropped_structural"] = dropped
         header = (
-            f"[Focus best block: {query!r}; top of {n} by {scorer_note}. "
+            f"[Focus best block: {query!r}; top of {n} by {scorer_note}"
+            f"{_dropped_structural_note(dropped)}. "
             f"Pass focus='' for the full page, or keep mode unset for the filtered page.]"
         )
         if len(blocks[top].strip()) < 200:
@@ -490,9 +553,13 @@ def focus_content(
                 "(filter) or reword the focus query.")
         return header + "\n\n" + "\n\n".join(blocks[i] for i in range(n) if i in top_set)
 
+    dropped = _dropped_structural(blocks, keep_set)
+    if stats_out is not None:
+        stats_out["dropped_structural"] = dropped
     kept = "\n\n".join(blocks[i] for i in range(n) if i in keep_set)
     header = (
         f"[Focus: {query!r}; showing {len(keep_set)} of {n} blocks "
-        f"by {scorer_note}. Pass focus='' for the full page.]"
+        f"by {scorer_note}{_dropped_structural_note(dropped)}. "
+        "Pass focus='' for the full page.]"
     )
     return header + "\n\n" + kept

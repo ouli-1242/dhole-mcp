@@ -307,6 +307,7 @@ from dhole_mcp.context import (
     _FOCUS,
     _FOCUS_ENGINE,
     _FOCUS_MODE,
+    _FOCUS_OUTCOME,
     _IDENTITY_APPLIED,
     _INCLUDE_LINKS,
     _INCLUDE_MEDIA,
@@ -1192,6 +1193,9 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
     # only the answer block.
     focus_q = _FOCUS.get()
     focus_stats: Optional[dict] = None
+    # 每一发都重挂：上一发的删除记录如果留在同一个进程 context 里，`quality` 会给
+    # 下一发读出"这一发删过表"—— 批量里一行接一行时正是这种情况。
+    _FOCUS_OUTCOME.set({})
     if focus_q and result.extracted_type in ("markdown", "text", "article", "structured"):
         try:
             from dhole_mcp.focus import focus_content
@@ -1201,6 +1205,9 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
             full_text = focus_content(
                 full_text, focus_q, reranker=reranker,
                 mode=_FOCUS_MODE.get() or "filter", stats=focus_stats)
+            _FOCUS_OUTCOME.set({
+                "dropped": focus_stats.get("dropped_structural") or [],
+                "ignored": focus_stats.get("ignored") or ""})
         except Exception as e:
             focus_stats = None
             logger.debug("focus filter failed: %s", e)
