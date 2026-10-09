@@ -8989,6 +8989,21 @@ class MasterFetchServer:
     # 现在在门口换算，口径与其他十颗一致；默认仍是现场本来的 20s，所以括号里改的是
     # **话**不是数 —— 修单位不该顺手改掉一次真实的等待。
     _TIMEOUT_DESC_FEED = "Per-fetch budget in ms (default 20000, max 120000)."
+    # 载荷键必须上 wire（A2）。症状不是难看：`text` 与 `key` 这两个名字从前在任何 wire
+    # 文本里都不出现，只读 `tools/list` 的调用方只能猜 —— 实测猜错两次（`{"fill":
+    # {"selector": ..., "value": ...}}`，以及把 `press` 的键名也写成 `text`），每一次都是
+    # 一条报错加一次重跑，而答案一直躺在报错里（"must be {selector, text}"），不在声明里。
+    # 这条与 B5 的规矩同源：**搬家，不是缩写** —— 可选旋钮（`count/state/timeout_ms/
+    # steps/ms_per_step/full_page/save_to/expect?/confirm?`）留在 references/tools.md 的
+    # Page interaction 按需付（那一节本来就是全的），wire 只带三个**必填**载荷键：读不到
+    # 键名的 agent 没法路由，而缺的从来不是知识，是它到不了第一次调用眼前。
+    # 名单与 `actions._VALID_KEYS`、必填键与 `_validate_actions` 的报错文本，由
+    # tests/test_an_agent_that_only_reads_the_wire_can_name_an_actions_payload.py 对齐。
+    _ACTIONS_DESC = (
+        "ONE action key per object: [{scroll:3},{wait:1000}]. Keys: click, fill, press, "
+        "hover, drag, wait, scroll, wait_selector, snapshot, screenshot, submit - each "
+        "targets a CSS selector or a snapshot index; fill needs text, press needs key, "
+        "drag needs to (a drop target).")
     _TOOL_DEFS: list[dict] = [
         {
             "name": "web_read",
@@ -9058,7 +9073,7 @@ class MasterFetchServer:
                 "type": "object", "required": ["url", "actions"],
                 "properties": {
                     "url": {"type": "string", "description": "The page to act on. One per call - a chain is written against one DOM."},
-                    "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": "ONE action key per object: [{scroll:3},{wait:1000}]. Keys: click, fill, press, hover, drag, wait, scroll, wait_selector, snapshot, screenshot, submit - each targets a CSS selector or a snapshot index; drag needs a source and a to-target."},
+                    "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}, "description": _ACTIONS_DESC},
                     "extraction_type": {"type": "string", "description": "How the post-action page is read back (default markdown; also html, text, article, structured)."},
                     "max_content_chars": {"type": "integer", "description": "Max chars of that content (default 40000); the action receipts are never cut by it."},
                     "focus": {"type": "string", "description": "After the chain, return only blocks relevant to this query instead of the whole page."},

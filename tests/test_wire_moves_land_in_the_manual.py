@@ -323,7 +323,21 @@ def test_connect_stays_inside_the_packed_budget():
 #: 是 30000 秒。收据本身（`timeout_applied`）与它的算术都在 references/fields.md，
 #: 不占这一页；上限为什么留在那一处不改（抬它是一次抓取行为的决定）写在
 #: tests/test_a_timeout_bigger_than_the_per_attempt_cap_says_what_it_bought.py 的头。
-CONNECT_CEILING = 31_423
+#: 2026-10-10 体验修复刀3-A2：棘轮**上抬 +28**（31,423 → 31,451），买的是"必填载荷键第一次
+#: 上 wire"。`actions` 那句从前数完 11 个动作名就只说"each targets a CSS selector or a
+#: snapshot index"，一个载荷键都没点名 —— 于是 `text` 与 `key` 在任何 wire 文本里都不存在，
+#: 只读 `tools/list` 的调用方只能猜（实测猜错两次：`{"fill": {..., "value": ...}}`、把 press
+#: 的键也写成 text），每次一句报错加一次重跑；答案一直住在报错里而不在声明里，而那正是
+#: "先失败一次才知道怎么写"的定义。
+#: 第一版把整表（含 `count/state/timeout_ms/steps/ms_per_step/full_page/save_to/expect?/
+#: confirm?`）都搬上常驻层，实测 519 字符，撞了 `tests/test_wire_shape.py` 那颗 296 的闸。
+#: 那道闸 prescribed 的修法从来不是抬闸，是**搬家**：可选旋钮留在 references/tools.md 的
+#: Page interaction（那一节本来就是全的，缺的从来不是知识，是它到不了第一次调用眼前），
+#: wire 只带三颗**必填**键 —— 少带一颗就退回原来那桩错，多带一颗就是白付。
+#: 名单与 `actions._VALID_KEYS` 相等；三颗必填键由验证器自己的报错推出来（不手抄）并要求
+#: 声明里同句连读（`fill needs text`）。钉住这两件事的是
+#: tests/test_an_agent_that_only_reads_the_wire_can_name_an_actions_payload.py。
+CONNECT_CEILING = 31_451
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():
