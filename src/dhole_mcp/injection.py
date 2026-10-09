@@ -70,9 +70,20 @@ _PATTERNS = (
         r"(?:指令|提示词?|规则|要求)")),
     # 角色劫持：把"读页面的你"改写成"页面想要的你"。多词短语内部也按
     # `[\s\-_]*` 连写，否则 `you\u200bare now` 归一后拼成 `youare now` 会漏。
+    #
+    # `act as` 那一支原本是裸的（`act as a|an|the|my`），它被真实正文否掉了：
+    # 实测 https://en.wikipedia.org/wiki/Agent_(law) 里 "A legal entity may also
+    # act as an agent" —— 一篇讲代理法的页面上挂着"角色劫持"的标记。这一族标记是
+    # 挂在**每一封**回执上的非拦截旗子，一个在日常散文中稳定出现的形状会让调用方
+    # 学会跳过整个 `untrusted_content`，那比漏一端更糟（"讲注入的文章也会命中"这条
+    # 边界说的是*偶尔*，不是*每一页法律文本*）。留下的两支都只在祈使句里说得通：
+    # "act as if you are…"、"act as my assistant"。不加带上下文的 lookbehind ——
+    # `_SCAN_MEMO` 按内容哈希缓存判定，一条脆正则会在进程里悄悄长存。
     ("role_hijack", re.compile(
-        r"\b(?:you[\s\-_]*are[\s\-_]*now|pretend[\s\-_]*to[\s\-_]*be|act[\s\-_]*as)"
+        r"\b(?:you[\s\-_]*are[\s\-_]*now|pretend[\s\-_]*to[\s\-_]*be)"
         r"[\s\-_]*(?:a|an|the|my)\b|"
+        r"\bact[\s\-_]*as[\s\-_]*(?:if|though|like)[\s\-_]+you\b|"
+        r"\bact[\s\-_]*as[\s\-_]*my\b|"
         r"你现在是|从现在开始.{0,4}你是|扮演(?:一个)?(?:系统|管理员)", re.I)),
     # 工具点名：页面文本里出现本服务器工具的调用形状（名字来自 _TOOL_DEFS，
     # 13 颗的原文名单，硬编码在这里而不是 import——模块不许反向依赖 server）。
