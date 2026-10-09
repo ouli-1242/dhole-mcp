@@ -117,47 +117,68 @@ class TestFetchContentSchema:
 # ─── source_type detection ────────────────────────────────────────────────────
 
 class TestSourceType:
-    """Test _source_type domain classification."""
+    """域名分类只有一套词表（体验修复刀2-S6）。
+
+    此前搜索行走 `search._source_type`、抓取行走 `envelope.classify_source`，同一个
+    字段名两套枚举：搜索行产不出 `github|qa|ecommerce|docs-site`，抓取行产不出
+    `repo`，而手册只能描述其中一套。合并的实测理由在 `envelope` 的表头 —— 直接把
+    搜索行改调抓取侧那颗函数会**净亏 121 个标签**（747 条真实 SERP URL 里 191 行从
+    有名掉成 unknown），所以是把两份知识折进一套词表，不是扔掉一套表。
+    """
+
+    @staticmethod
+    def _st(url: str) -> str:
+        from dhole_mcp.envelope import classify_source
+        return classify_source(url)[0]
 
     def test_docs_domains(self):
-        from dhole_mcp.search import _source_type
-        assert _source_type("https://docs.python.org/3/tutorial") == "docs"
-        assert _source_type("https://huggingface.co/models") == "docs"
-        assert _source_type("https://kubernetes.io/docs/") == "docs"
+        assert self._st("https://docs.python.org/3/tutorial") == "docs-site"
+        assert self._st("https://huggingface.co/models") == "docs-site"
+        assert self._st("https://kubernetes.io/docs/") == "docs-site"
 
     def test_paper_domains(self):
-        from dhole_mcp.search import _source_type
-        assert _source_type("https://arxiv.org/abs/2301.00001") == "paper"
-        assert _source_type("https://nature.com/articles/xyz") == "paper"
+        assert self._st("https://arxiv.org/abs/2301.00001") == "paper"
+        assert self._st("https://nature.com/articles/xyz") == "paper"
 
     def test_repo_domains(self):
-        from dhole_mcp.search import _source_type
-        assert _source_type("https://github.com/user/repo") == "repo"
-        assert _source_type("https://pypi.org/project/dhole-mcp/") == "repo"
+        # github 现在是**独立取值**且 is_official —— 名字是注册局控制的，这正是
+        # 搜索行此前发不出来的那个值。
+        assert self._st("https://github.com/user/repo") == "github"
+        assert self._st("https://gitlab.com/user/repo") == "repo"
+        # 包注册表不是"代码托管"：它决定一个名字解析到什么，所以归 reference/official。
+        assert self._st("https://pypi.org/project/dhole-mcp/") == "reference"
+
+    def test_the_registry_claim_survives_the_merge(self):
+        """两套表并一张时，权威位不许跟着漂移。"""
+        from dhole_mcp.envelope import classify_source
+        assert classify_source("https://pypi.org/project/dhole-mcp/")[1] is True
+        assert classify_source("https://gitlab.com/user/repo")[1] is False
 
     def test_forum_domains(self):
-        from dhole_mcp.search import _source_type
-        assert _source_type("https://stackoverflow.com/questions/123") == "forum"
-        assert _source_type("https://zhihu.com/question/456") == "forum"
+        # stackoverflow 在合并后拿到更具体的那个词（此前一侧叫 forum、一侧叫 qa）。
+        assert self._st("https://stackoverflow.com/questions/123") == "qa"
+        assert self._st("https://zhihu.com/question/456") == "forum"
 
     def test_news_domains(self):
-        from dhole_mcp.search import _source_type
-        assert _source_type("https://bbc.com/news/article") == "news"
-        assert _source_type("https://36kr.com/p/123") == "news"
+        assert self._st("https://bbc.com/news/article") == "news"
+        assert self._st("https://36kr.com/p/123") == "news"
 
     def test_blog_domains(self):
-        from dhole_mcp.search import _source_type
-        assert _source_type("https://medium.com/@user/post") == "blog"
-        assert _source_type("https://csdn.net/article/123") == "blog"
+        assert self._st("https://medium.com/@user/post") == "blog"
+        assert self._st("https://csdn.net/article/123") == "blog"
 
     def test_path_heuristic(self):
-        from dhole_mcp.search import _source_type
-        assert _source_type("https://example.com/docs/api") == "docs"
-        assert _source_type("https://example.com/blog/post-1") == "blog"
+        assert self._st("https://example.com/docs/api") == "docs-site"
+        assert self._st("https://example.com/blog/post-1") == "blog"
 
-    def test_unknown_returns_other(self):
-        from dhole_mcp.search import _source_type
-        assert _source_type("https://randomsite12345.com/page") == "other"
+    def test_an_api_endpoint_is_not_documentation(self):
+        """/api/ 那一半**刻意没有**折过来：机器端点不是文档，而把 docs-site 发给它
+        还会连带换上 730 天的过期视野（`compute_freshness`）—— 那是行为改动，不是
+        标签改动，不能靠一套表顺手做掉。"""
+        assert self._st("https://example.com/api/v1/users") == "unknown"
+
+    def test_unknown_returns_unknown(self):
+        assert self._st("https://randomsite12345.com/page") == "unknown"
 
 
 # ─── ddg alias ────────────────────────────────────────────────────────────────

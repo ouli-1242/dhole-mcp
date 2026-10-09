@@ -66,15 +66,67 @@ _GITHUB_DOMAINS = (
 
 # Encyclopedia / standards / canonical-reference sites: durable pages, and the
 # staleness bucket they land in is what this list is for (730 days, not 30).
-# "reference" is deliberately the same word search._source_type uses for search
-# hits, so a fetched page and a search result describe the same site the same
-# way. The ones that RUN a namespace (iana.org / rfc-editor.org / w3.org /
-# ietf.org / unicode.org) also get is_official — see
-# _REGISTRY_CONTROLLED_DOMAINS, which is checked before this list.
+# "reference" is deliberately the same word used for search hits, so a fetched
+# page and a search result describe the same site the same way — and since the
+# two row-types now share THIS function, they cannot drift apart again.
+# (体验修复刀2-S6：此前 `search._source_type` 另养了一套域名表，同一个字段名两套词表。
+#  合并的理由不是整洁，是实测：拿 777 条真实 SERP URL 直接换调这颗函数，有 191 行
+#  从"有名"掉成"unknown"（blog 88 / docs 40 / forum 33 …），净亏 121 个标签。所以
+#  这一套表被折进来，而不是那一套被扔掉 —— 一套词表，两份知识。)
 _REFERENCE_DOMAINS = (
     "wikipedia.org", "wikimedia.org", "wikiwand.com", "britannica.com",
     "iana.org", "ietf.org", "rfc-editor.org", "w3.org", "unicode.org",
     "w3schools.com", "geeksforgeeks.org", "tutorialspoint.com", "caniuse.com",
+    "mdn.io",
+)
+
+# Documentation sites by NAME rather than by subdomain shape (the `docs.` /
+# `developer.` test above cannot see kubernetes.io or pytorch.org, which are
+# documentation sites by every reasonable reading). Long-lived like docs-site,
+# and NOT official: any company can register a domain that publishes docs.
+_DOCS_SITE_DOMAINS = (
+    # Python / ML
+    "docs.python.org", "realpython.com", "python.readthedocs.io",
+    "docs.anthropic.com", "docs.openai.com", "platform.openai.com",
+    "pytorch.org", "tensorflow.org", "huggingface.co",
+    "docs.llama.com", "docs.mistral.ai", "docs.cohere.com",
+    # Web
+    "developer.mozilla.org", "developers.google.com", "web.dev",
+    "react.dev", "vuejs.org", "angular.dev", "svelte.dev", "nextjs.org",
+    "nodejs.org", "expressjs.com", "fastapi.tiangolo.com",
+    # Systems / cloud / vendor docs
+    "docs.rs", "doc.rust-lang.org", "go.dev", "docs.golang.org",
+    "learn.microsoft.com", "docs.microsoft.com", "docs.github.com",
+    "docs.aws.amazon.com", "cloud.google.com", "docs.docker.com",
+    "kubernetes.io", "developer.android.com", "developer.apple.com",
+    "flutter.dev", "docs.flutter.dev", "kotlinlang.org", "swift.org",
+    "pandas.pydata.org", "numpy.org", "scipy.org", "docs.sqlalchemy.org",
+    "readthedocs.io", "gitbook.io", "docusaurus.io", "nginx.org",
+)
+
+# Source hosts that are repositories but not GitHub. Registries (pypi, npm,
+# crates, pkg.go.dev) are checked ABOVE this list and stay `reference` with
+# is_official — they decide what a name resolves to, which is a different
+# property from hosting code.
+_CODE_HOST_DOMAINS = (
+    "gitlab.com", "bitbucket.org", "codeberg.org", "sourceforge.net",
+    "gitee.com", "gitea.com", "sr.ht",
+)
+
+# Q&A and community sites the search-side table knew and this one did not.
+# `qa` is checked BEFORE `forum`: stackoverflow used to be reported as "forum"
+# by one side and "qa" by the other, and the more specific word is the point of
+# merging.
+_COMMUNITY_DOMAINS = (
+    "reddit.com", "zhihu.com", "v2ex.com", "segmentfault.com", "discord.com",
+    "news.ycombinator.com", "discuss.python.org", "internals.rust-lang.org",
+    "forum.rust-lang.org",
+)
+
+_BLOG_PLATFORM_DOMAINS = (
+    "medium.com", "wordpress.com", "substack.com", "dev.to", "hashnode.com",
+    "freecodecamp.org", "blogspot.com", "ghost.io", "notion.so", "telegra.ph",
+    "juejin.cn", "csdn.net", "cnblogs.com", "jianshu.com",
 )
 
 # Peer-reviewed / preprint literature. Same reasoning as _REFERENCE_DOMAINS:
@@ -84,6 +136,8 @@ _PAPER_DOMAINS = (
     "semanticscholar.org", "biorxiv.org", "medrxiv.org", "nature.com",
     "science.org", "sciencedirect.com", "link.springer.com", "pnas.org",
     "nejm.org", "pubmed.ncbi.nlm.nih.gov",
+    "ieee.org", "springer.com", "wiley.com", "cell.com", "thelancet.com",
+    "paperswithcode.com", "scholar.google.com",
 )
 
 # Collaborative reference sites that are CONTINUOUSLY EDITED. Their "published"
@@ -174,18 +228,32 @@ def classify_source(url: str) -> tuple[str, bool]:
     if host.startswith("docs.") or host.startswith("developer.") or host.startswith("developers."):
         return "docs-site", False
 
-    # Q&A sites.
+    # Documentation sites recognized by NAME — the shape rule above cannot see
+    # kubernetes.io, pytorch.org or learn.microsoft.com, which are documentation
+    # sites by any reasonable reading. Same NOT-official reasoning as the shape.
+    if any(host == d or host.endswith("." + d) for d in _DOCS_SITE_DOMAINS):
+        return "docs-site", False
+
+    # Source hosts that are repositories but not GitHub (github is caught above,
+    # with is_official, because the name is registry-controlled).
+    if any(host == d or host.endswith("." + d) for d in _CODE_HOST_DOMAINS):
+        return "repo", False
+
+    # Q&A sites — BEFORE the community/forum list, because stackoverflow used to
+    # be "forum" on one side and "qa" on the other, and the more specific word is
+    # the whole reason these two lists merged.
     if host in _QA_DOMAINS or host.endswith(".stackexchange.com") or host.endswith(".stackoverflow.com"):
         return "qa", False
 
     # Forums / community.
     if any(m in host for m in ("forum", "forums", "community", "discourse", "board")):
         return "forum", False
-    if host in ("reddit.com", "www.reddit.com", "old.reddit.com", "new.reddit.com") or host.endswith(".reddit.com"):
+    if any(host == d or host.endswith("." + d) for d in _COMMUNITY_DOMAINS):
         return "forum", False
 
     # Blogs.
-    if host.startswith("blog.") or host in ("medium.com", "wordpress.com", "substack.com") or host.endswith(".substack.com") or host.endswith(".medium.com"):
+    if host.startswith("blog.") or any(host == d or host.endswith("." + d)
+                                       for d in _BLOG_PLATFORM_DOMAINS):
         return "blog", False
 
     # Ecommerce.
@@ -204,6 +272,21 @@ def classify_source(url: str) -> tuple[str, bool]:
     # News (known set).
     if any(host == d or host.endswith("." + d) for d in _NEWS_DOMAINS):
         return "news", False
+
+    # Last, a path shape that says what the page IS with no domain knowledge: a
+    # URL under /docs/ is documentation and one under /blog/ or /post/ is a post.
+    # Folded over from the search-side table, which measured 14 of 747 real SERP
+    # URLs whose ONLY claim to a name was that path — every one of them a docs
+    # page on a site no table knew (typescriptlang.org, redis.io, an MDN mirror).
+    # `/api/` deliberately does NOT fold: an API path is a machine endpoint, not
+    # documentation, and naming it docs-site would also hand it the 730-day
+    # staleness horizon (see compute_freshness). The domain tables are checked
+    # ABOVE this rule, so a news site's "/post/" URL still says "news".
+    path = (urlparse(url).path or "").lower()
+    if "/docs/" in path:
+        return "docs-site", False
+    if "/blog/" in path or "/post/" in path:
+        return "blog", False
 
     return "unknown", False
 
@@ -239,16 +322,22 @@ def _is_continuously_edited(url: str) -> bool:
 def _stale_days_for(url: str) -> int:
     """How long a source of THIS KIND usually stays true (G15).
 
-    news -> 30 days; reference / paper / docs / repo(github) / qa -> 730 days;
-    everything else keeps the original flat 365. A URL-less caller therefore sees
-    exactly the pre-16.0 behaviour.
+    news -> 30 days; reference / paper / docs-site / github / repo / qa -> 730
+    days; everything else keeps the original flat 365. A URL-less caller therefore
+    sees exactly the pre-16.0 behaviour.
+
+    `repo` joins `github` here on purpose: the two used to be split only because
+    GitHub sits in the registry-controlled list and got the long horizon as a
+    side effect. A gitlab or codeberg repository page is no less durable than a
+    github one, and the horizon is a claim about the KIND of page, not about who
+    owns the name (that is `is_official`'s separate job).
     """
     if not url:
         return STALE_DAYS
     st, _ = classify_source(url)
     if st == "news":
         return NEWS_STALE_DAYS
-    if st in ("reference", "paper", "docs-site", "github", "qa"):
+    if st in ("reference", "paper", "docs-site", "github", "repo", "qa"):
         return LONG_LIVED_STALE_DAYS
     return STALE_DAYS
 

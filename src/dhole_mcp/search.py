@@ -251,7 +251,7 @@ class SearchResult(BaseModel):
     fetch_relevance: str = Field(default="", description="high|med|low - relative relevance hint. web_read what matches your need; the tiers rank results but a lower tier can be the right one - use your judgment. 'high' means WORTH FETCHING by the model's own verdict (relevance_raw >= 0.5) — measured on a 67-query labeled corpus, rows labelled high are relevant about two thirds of the time, so this is not a claim of correctness and not a safety judgment. With no reranker on this round the tiers can only demote (no row is 'high'), and `fetch_hint` says so.")
 
     engines_consensus: str = Field(default="", description="How many independent index families returned this URL over how many could have (e.g. '2 of 6'; the default 8-engine pool is 6 families since bing, bing_global and duckduckgo all sit on the Bing index). '1 of 1 (no corroboration)' means a single family contributed at all - that is a degraded or tiny pool, NOT agreement. A free authority signal only when the denominator is >1.")
-    source_type: str = Field(default="", description="Source type from URL pattern: docs|paper|repo|blog|forum|reference|news|other. Helps pick the right source.")
+    source_type: str = Field(default="", description="What kind of site this URL is, from the SAME classifier that labels a fetched page: gov|edu|github|repo|docs-site|qa|forum|blog|ecommerce|reference|paper|news|unknown. One field, one vocabulary - `unknown` means 'not on a known list', not 'weak'.")
     # G4（评审 Medium）：搜索行此前的信任轴只有引擎共识。fetch 侧的 is_official
     # （envelope.classify_source——名字本身买不来的注册表命名空间：gov/edu/github
     # 与标准组织、包注册表）一直没应用到搜索行。同一函数、单一权威；默认 False
@@ -292,73 +292,9 @@ class SearchResponseModel(BaseModel):
     consensus_skipped: list[str] = Field(default_factory=list, description="The receipt for a gated auto-fetch: when fetch_min_consensus (>=2) is set with fetch_content=true, the URLs DROPPED from the fetch set for lacking that many corroborating index families. Empty = the floor dropped nothing (or was not set). Read this before asking 'why did fewer pages come back than I asked for'.")
 
 
-# ─── source type detection (zero-latency URL pattern matching) ──────────────
-
-_DOCS_DOMAINS = frozenset({
-    # Python
-    "docs.python.org", "realpython.com", "python.readthedocs.io",
-    # AI/ML
-    "docs.anthropic.com", "docs.openai.com", "platform.openai.com",
-    "pytorch.org", "tensorflow.org", "huggingface.co",
-    "docs.llama.com", "docs.mistral.ai", "docs.cohere.com",
-    # Web
-    "developer.mozilla.org", "developers.google.com", "web.dev",
-    "react.dev", "vuejs.org", "angular.dev", "svelte.dev", "nextjs.org",
-    "nodejs.org", "expressjs.com", "fastapi.tiangolo.com",
-    # Systems
-    "docs.rs", "doc.rust-lang.org", "go.dev", "docs.golang.org",
-    "learn.microsoft.com", "docs.microsoft.com", "docs.github.com",
-    # Cloud
-    "docs.aws.amazon.com", "cloud.google.com", "learn.microsoft.com",
-    "docs.docker.com", "kubernetes.io",
-    # Mobile
-    "developer.android.com", "developer.apple.com", "flutter.dev",
-    "docs.flutter.dev", "kotlinlang.org", "swift.org",
-    # Data
-    "pandas.pydata.org", "numpy.org", "scipy.org", "docs.sqlalchemy.org",
-    # General
-    "readthedocs.io", "gitbook.io", "docusaurus.io",
-})
-_PAPER_DOMAINS = frozenset({
-    "arxiv.org", "dl.acm.org", "ieee.org", "ieeexplore.ieee.org",
-    "openreview.net", "semanticscholar.org", "scholar.google.com",
-    "paperswithcode.com", "biorxiv.org", "medrxiv.org",
-    "nature.com", "science.org", "sciencedirect.com", "springer.com",
-    "link.springer.com", "wiley.com", "pnas.org", "thelancet.com",
-    "nejm.org", "cell.com", "pubmed.ncbi.nlm.nih.gov",
-})
-_REPO_DOMAINS = frozenset({
-    "github.com", "gitlab.com", "bitbucket.org", "codeberg.org",
-    "sourceforge.net", "gitee.com", "gitea.com", "sr.ht",
-    "npmjs.com", "pypi.org", "crates.io", "pkg.go.dev",
-})
-_FORUM_DOMAINS = frozenset({
-    "stackoverflow.com", "serverfault.com", "superuser.com", "askubuntu.com",
-    "stackexchange.com", "mathoverflow.com",
-    "reddit.com", "news.ycombinator.com", "discuss.python.org",
-    "forum.rust-lang.org", "internals.rust-lang.org",
-    "v2ex.com", "segmentfault.com", "zhihu.com",
-    "discord.com",
-})
-_BLOG_DOMAINS = frozenset({
-    "medium.com", "substack.com", "dev.to", "hashnode.com",
-    "freecodecamp.org", "blogspot.com", "wordpress.com",
-    "ghost.io", "notion.so", "telegra.ph",
-    "juejin.cn", "csdn.net", "cnblogs.com", "jianshu.com",
-})
-_REFERENCE_DOMAINS = frozenset({
-    "wikipedia.org", "wikimedia.org", "britannica.com",
-    "w3schools.com", "geeksforgeeks.org", "tutorialspoint.com",
-    "mdn.io", "caniuse.com", "compat-table.github.io",
-})
-_NEWS_DOMAINS = frozenset({
-    "reuters.com", "bloomberg.com", "techcrunch.com", "theverge.com",
-    "arstechnica.com", "wired.com", "cnet.com", "zdnet.com",
-    "bbc.com", "bbc.co.uk", "nytimes.com", "theguardian.com",
-    "cnbc.com", "ft.com", "wsj.com", "apnews.com",
-    "36kr.com", "ithome.com", "huxiu.com", "pingwest.com",
-})
-
+# ─── domain grouping (one classifier lives in envelope.classify_source)
+# 体验修复刀2-S6：这里原本养着第二套域名表与第二个分类器（`_source_type`）。合并后搜索行与抓取行
+# 共用 envelope.classify_source 一套词表；这里只留下它的一件事：把一个 URL 归到可比较的主机。
 
 def _get_domain(url: str) -> str:
     """Extract registrable domain from URL (strip www. and subdomains for grouping)."""
@@ -371,41 +307,6 @@ def _get_domain(url: str) -> str:
         return ""
 
 
-def _source_type(url: str) -> str:
-    """Classify a URL by domain pattern: docs|paper|repo|forum|reference|blog|news|other."""
-    host = _get_domain(url)
-    if not host:
-        return "other"
-
-    def _matches(domain_set: frozenset) -> bool:
-        if host in domain_set:
-            return True
-        return any(host.endswith(f".{d}") for d in domain_set)
-
-    if _matches(_DOCS_DOMAINS):
-        return "docs"
-    if _matches(_PAPER_DOMAINS):
-        return "paper"
-    if _matches(_REPO_DOMAINS):
-        return "repo"
-    if _matches(_FORUM_DOMAINS):
-        return "forum"
-    if _matches(_REFERENCE_DOMAINS):
-        return "reference"
-    if _matches(_NEWS_DOMAINS):
-        return "news"
-    if _matches(_BLOG_DOMAINS):
-        return "blog"
-    # Path-based heuristics
-    try:
-        path = (urlparse(url).path or "").lower()
-    except Exception:
-        path = ""
-    if "/docs/" in path or "/api/" in path:
-        return "docs"
-    if "/blog/" in path or "/post/" in path:
-        return "blog"
-    return "other"
 
 
 def _diversify(ranked: list, scores: list[float], max_per_domain: int = 2) -> tuple[list, list[float]]:
@@ -1075,6 +976,11 @@ def _build_results(query: str, ranked: list[RawResult], scores: Optional[list[fl
         n = min(max(1, getattr(r, "consensus", 1)), m)
         # 只有一个家族时没有"佐证"可报告 —— 不再伪装成一个比率。
         consensus = f"{n} of {m}" if m > 1 else "1 of 1 (no corroboration)"
+        # 一颗分类器、两个字段：此前这一行同时用两套域名表 —— `source_type` 走
+        # `_source_type`，`official` 走 `classify_source`，于是同一个字段名在搜索行
+        # 和抓取行上是两套枚举（搜索行产不出 github/qa/ecommerce/docs-site，抓取行
+        # 产不出 repo）。合并的实测理由见 envelope._REFERENCE_DOMAINS 上方那段。
+        st, official = classify_source(r.url)
         # 批次8 刀5：title＋snippet 过同一把注入扫描（页级链路用的是同一函数）。
         out.append(SearchResult(
             title=r.title, url=r.url, snippet=r.snippet, source=src,
@@ -1082,8 +988,8 @@ def _build_results(query: str, ranked: list[RawResult], scores: Optional[list[fl
             relevance_raw=raw,
             fetch_relevance=_tier(score, i + 1, total, raw),
             engines_consensus=consensus,
-            source_type=_source_type(r.url),
-            official=classify_source(r.url)[1],
+            source_type=st,
+            official=official,
             untrusted_content=_scan_injection(f"{r.title}\n{r.snippet}"),
         ))
     return out
