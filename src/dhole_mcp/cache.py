@@ -9,6 +9,7 @@ import hashlib
 import json
 import sqlite3
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import aiosqlite
@@ -216,8 +217,29 @@ async def get_cached(
             "url": row["url"],
             "content_type": row["content_type"],
             "total_size_bytes": row["total_size_bytes"],
+            # 存的时候就有这一列（`fetched_at REAL NOT NULL`，建表语句里就是它做 TTL
+            # 判定的），读的时候却把它丢了 —— 于是"这份正文是什么时候抓的"只剩调用方
+            # 自己那一刻的时间，一次 400 秒前的缓存回放与一次刚抓完的回执在
+            # `fetched_at` / `content_age_days` / `is_stale` 三个字段上完全同形。
+            "fetched_at": row["fetched_at"],
             "envelope": json.loads(env) if env else {},
         }
+
+
+def fetched_at_iso(cached: dict | None) -> str:
+    """把 `get_cached` 那一条的抓取时刻翻成 ISO-8601（信封上 `fetched_at` 的形状）。
+
+    存的是 epoch float（SQLite 的 REAL，TTL 判定就用的那一列），信封要的是带时区的串
+    —— 翻译只在这一处发生。两个缓存命中的重建点各自 `fromtimestamp` 一遍，就会一个
+    带 `+00:00` 一个不带，而那正是"同一个事实两个作者"的下一种修法。
+    """
+    raw = (cached or {}).get("fetched_at")
+    if not raw:
+        return ""
+    try:
+        return datetime.fromtimestamp(float(raw), timezone.utc).isoformat()
+    except (TypeError, ValueError, OSError):
+        return ""
 
 
 async def set_cached(

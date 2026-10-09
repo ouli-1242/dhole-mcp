@@ -947,6 +947,23 @@ def _local_target_no_answer(category: str, url: str) -> str:
     return ""
 
 
+def _replay_age_seconds(fetched_at: str) -> float | None:
+    """这封回执读到的正文是多久**抓**的；时间戳读不出来就返回 None（不说假话）。
+
+    负值钳到 0：本机时钟与写缓存那一刻的时钟可能差几秒，而"3 分钟前抓的"说成
+    "-3 分钟前"是一次毫无意义的炫技。
+    """
+    if not fetched_at:
+        return None
+    try:
+        stamp = datetime.fromisoformat(fetched_at)
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - stamp).total_seconds())
+
+
 def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
     """Build (summary, next_action, content_ok) for a finalized fetch result.
 
@@ -1033,7 +1050,17 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         route = f" (via {result.escalation_path})" if result.escalation_path else ""
         parts.append(f"archived copy{when}{route}")
     if result.cached:
-        parts.append("cached")
+        # 一个 "cached" 说的是机制，不说时刻：一次 400 秒前的回放与一次刚写进去的回放
+        # 在那一行上同形，而调用方读的正是那一行。这里的年龄是从 `fetched_at` 到此刻
+        # 的**回放年龄**，不是 `content_age_days` —— 那颗是"这一页发布于多久之前"，
+        # 两个问句共用一个词就会开始互相冒充（R4 本体要修的正是这种冒充）。
+        replay = _replay_age_seconds(result.fetched_at)
+        if replay is None:
+            parts.append("cached")
+        elif replay < 14400:
+            parts.append(f"cached copy, fetched {replay / 60:.1f} min ago")
+        else:
+            parts.append(f"cached copy, fetched {replay / 3600:.1f} h ago")
     if result.is_truncated:
         parts.append("truncated")
     summary = " · ".join(parts)
@@ -1868,7 +1895,16 @@ def _with_agent_hints(result: ResponseModel) -> ResponseModel:
     return: live fetches, cache hits, robots blocks, archive fallback), so the
     envelope appears on every response an agent ever sees.
     """
-    result.fetched_at = datetime.now(timezone.utc).isoformat()
+    # `fetched_at` 是"这份**内容**什么时候被抓取"，不是"这封回执什么时候生成的"。
+    # 一次缓存命中没有去抓任何东西：盖上当下的时刻，等于把一次回放化妆成一次新核验
+    # （实测：`cached: true` + `duration_ms: 0` 的回执，`fetched_at` 与真重抓那一发
+    # 逐位相同，`content_age_days` / `is_stale` 也一起说谎）。缓存那两条路径负责把
+    # 存进去的时间带回来。
+    #
+    # 带不回来时（存量老行没有这一列）留**空**而不是补一个 now：一句"没说"好过一句
+    # 假话 —— 那正是这一刀要消灭的形状。summary 那一支看见空值就只说 `cached`。
+    if not result.cached:
+        result.fetched_at = datetime.now(timezone.utc).isoformat()
     _apply_envelope(result)
     _report_obfuscation(result)
     summary, next_action, content_ok = _agent_hints(result)

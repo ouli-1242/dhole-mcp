@@ -156,7 +156,8 @@ if TYPE_CHECKING:
     from dhole_mcp.search import SearchResponseModel
 
 from dhole_mcp.cache import (
-    DEFAULT_TTL, cache_stats, clear_all_cache, get_cached, set_cached,
+    DEFAULT_TTL, cache_stats, clear_all_cache, fetched_at_iso, get_cached,
+    set_cached,
 )
 from dhole_mcp.envelope import (
     detect_page_type,
@@ -5246,10 +5247,13 @@ class MasterFetchServer:
         ``waited_ms`` 是 D8 合流的产物：跟随者先等同一请求的另一发落地，再回到这里
         重查缓存。它确实等了墙钟时间，所以 `duration_ms` 报的是**这次调用等了多久**，
         不是"0 = 没发包"。报 0 的话，一份等了 2 秒才拿到的回执会说这次调用没花时间
-        —— 那不叫简洁，叫账不对。普通命中不传它，仍是 0。
+        —— 那不叫简洁，叫账不对。普通命中现在也不再报 0：查缓存 + 还原信封本身就是
+        几毫秒的活，`0.0` 读起来像"这一次什么都没发生"，而那正是缓存回放冒充新核验
+        的一半（另一半是 `fetched_at`，见下）。
         """
         if cache_ttl <= 0:
             return None
+        t0 = now()
         cached = await get_cached(url, extraction_type, css_selector, ttl=cache_ttl, pages=pages if isinstance(pages, str) else None, ctx=_CACHE_CTX.get())
         if cached is None:
             return None
@@ -5264,7 +5268,11 @@ class MasterFetchServer:
         env = cached.get("envelope") or {}
         hit = ResponseModel(
             url=cached["url"], status=cached["status"], content=cached["content"],
-            cached=True, fetcher_used="cache", duration_ms=waited_ms,
+            cached=True, fetcher_used="cache",
+            duration_ms=waited_ms + (now() - t0) * 1000.0,
+            # 存进去的抓取时刻，不是此刻。`_with_agent_hints` 看见 `cached` 且这里
+            # 已经填了值，就不会再盖一个新的 —— 一次回放必须看得见它是回放。
+            fetched_at=fetched_at_iso(cached),
             extracted_type=extraction_type,
             content_type=cached.get("content_type", ""),
             total_size_bytes=cached.get("total_size_bytes", 0),
@@ -6102,6 +6110,7 @@ class MasterFetchServer:
             # 那份缓存的正文。conditional 的调用照旧回源（它的语义是"问源站还
             # 站不站"，吃缓存等于撒谎——G23 的裁决），cache_ttl=0 同理。
             html_result = None
+            _t_lookup = now()
             if not conditional and cache_ttl != 0:
                 cached_html = await get_cached(
                     url, "html", css_selector, ttl=cache_ttl,
@@ -6113,10 +6122,13 @@ class MasterFetchServer:
                 if (cached_html is not None and cached_html["status"] < 400
                         and cached_html["content"]):
                     _env = cached_html.get("envelope") or {}
+                    _t_cache = now()
                     html_result = ResponseModel(
                         url=cached_html["url"], status=cached_html["status"],
                         content=cached_html["content"], cached=True,
-                        fetcher_used="cache", duration_ms=0,
+                        fetcher_used="cache",
+                        duration_ms=(_t_cache - _t_lookup) * 1000.0,
+                        fetched_at=fetched_at_iso(cached_html),
                         extracted_type="html",
                         content_type=cached_html.get("content_type", ""),
                         total_size_bytes=cached_html.get("total_size_bytes", 0),
