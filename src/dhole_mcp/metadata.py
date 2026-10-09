@@ -17,7 +17,7 @@ import re
 # 本模块的参数名 html 遮蔽 stdlib 的 html 模块——直接取 unescape 函数。
 from html import unescape as _html_unescape
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 logger = logging.getLogger("dhole-mcp.metadata")
 
@@ -153,6 +153,24 @@ def extract_metadata(html: str, url: str) -> dict[str, Any]:
     return meta
 
 
+_IMG_LIST_SEP_RE = re.compile(r",\s+")
+
+
+def _src_candidates(raw: str) -> list[str]:
+    """把一个属性值拆成候选 URL。
+
+    两条理由：(1) HTML 实体要还原 —— `&amp;` 不解开，交出去的 URL 带着
+    `&amp;`，请求方一定拿 404；(2) 懒加载清单会把多个候选写进同一个属性
+    （实测 Bing：`//th.bing.com, https://r.bing.com/th?id=...&amp;pid=2.1`），
+    整串喂给 urljoin 会原样通过 `http(s)://` 前缀检查，于是 include_media
+    交出的是一个含两个地址的字符串，而不是两个地址。
+
+    分隔符要求逗号后跟空白：路径里合法的裸逗号（`/a,b.png`）不该被拆。
+    """
+    unescaped = _html_unescape(raw or "")
+    return [p.strip() for p in _IMG_LIST_SEP_RE.split(unescaped) if p.strip()]
+
+
 def extract_image_urls(html: str, url: str, max_n: int = 20) -> list[str]:
     """Extract absolute image URLs from <img> tags. Deduped, order-preserving,
     capped at max_n. Skips data: URIs. Prefers src; falls back to data-src for
@@ -163,28 +181,44 @@ def extract_image_urls(html: str, url: str, max_n: int = 20) -> list[str]:
         return []
     out: list[str] = []
     seen: set[str] = set()
+
+    def _collect(src: str) -> bool:
+        """True once max_n is reached, so the caller stops scanning."""
+        for cand in _src_candidates(src):
+            if cand.lower().startswith(_ASSET_SKIP):
+                continue
+            try:
+                absu = urljoin(url, cand)
+            except Exception:
+                continue
+            if not absu.startswith(("http://", "https://")):
+                continue
+            # 一个地址不该含空白、也不该有第二个 scheme：那是「两个 URL 挤在
+            # 一个属性值里」的残留，交出去只会让调用方以为拿到了一张图。
+            if any(c.isspace() for c in absu) or absu.count("://") != 1:
+                continue
+            if not urlparse(absu).netloc:
+                continue
+            if absu in seen:
+                continue
+            seen.add(absu)
+            out.append(absu)
+            if len(out) >= max_n:
+                return True
+        return False
+
     for tag in _IMG_TAG_RE.finditer(html):
         tag_html = tag.group(0)
         src = ""
         m = _IMG_SRC_RE.search(tag_html)
         if m:
-            src = (m.group(1) or "").strip()
-        if not src or src.lower().startswith(_ASSET_SKIP):
+            src = m.group(1) or ""
+        if not src.strip() or src.strip().lower().startswith(_ASSET_SKIP):
             m = _IMG_DATASRC_RE.search(tag_html)
             if m:
-                src = (m.group(1) or "").strip()
-        if not src or src.lower().startswith(_ASSET_SKIP):
+                src = m.group(1) or ""
+        if not src.strip():
             continue
-        try:
-            absu = urljoin(url, src)
-        except Exception:
-            continue
-        if not absu.startswith(("http://", "https://")):
-            continue
-        if absu in seen:
-            continue
-        seen.add(absu)
-        out.append(absu)
-        if len(out) >= max_n:
+        if _collect(src):
             break
     return out

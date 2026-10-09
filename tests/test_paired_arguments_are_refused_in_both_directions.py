@@ -90,3 +90,64 @@ async def test_the_forward_pairing_is_still_refused_too(server):
     """反向修好了，正向不许被顺手改坏 —— 两个方向是同一条纪律。"""
     r = await server.web_read("https://site.test/", nested_selector=".card")
     assert "nested_fields" in _err(r), r.error
+
+
+# ── url= 与 urls= 同时给：曾经由实现单方面选边，且注释说的是反话 ──────────────
+#
+# 真机复现（2026-10-09 体测）：`web_read(url="…/go/exporters",
+# urls=["…/collector/configuration"])` 回 `total: 1, successful: 1` —— 只有
+# urls 里那条被取，url 那条**静默消失**，error 空、diagnosis 空、summary 与
+# 一次正常批量一字不差。而 wire 边上第 8628 行的注释写的是 "url wins"。
+
+
+@pytest.mark.asyncio
+async def test_url_alongside_urls_is_refused_not_resolved(server):
+    r = await server.web_read("https://dropped.test/x",
+                              urls=["https://kept.test/1",
+                                    "https://kept.test/2"])
+    assert r.successful == 0
+    assert "url=" in _err(r.results[0]) and "urls=" in _err(r.results[0]), r.results[0].error
+
+
+@pytest.mark.asyncio
+async def test_every_named_url_gets_its_own_receipt(server):
+    """拒绝也要占满点名的地址：total 报 3 而 results 只有 1 行，就是这一刀
+    正在修的那个形状 —— 拿它去"修"静默丢弃，等于换个地方继续丢。"""
+    r = await server.web_read("https://dropped.test/x",
+                              urls=["https://kept.test/1",
+                                    "https://kept.test/2"])
+    assert r.total == 3
+    assert len(r.results) == r.total, "有一个点名的 URL 没拿到回执"
+    assert {row.url for row in r.results} == {
+        "https://dropped.test/x", "https://kept.test/1", "https://kept.test/2"}
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_says_neither_name_won(server):
+    """出路不能暗示"其中一个其实被读了" —— 那会让调用方继续信那份不存在的结果。"""
+    r = await server.web_read("https://dropped.test/x", urls=["https://kept.test/1"])
+    action = r.results[0].next_action or ""
+    assert "Nothing was fetched" in action or "nothing was fetched" in action
+    assert "Neither name won" in action, action
+
+
+@pytest.mark.asyncio
+async def test_a_batch_without_url_still_reaches_the_fetch_layer(server):
+    """正向半边：拒绝成对不等于拒绝批量 —— `urls=` 单飞必须照常往下走。
+
+    批量路径把每行的异常**收进 row.error** 而不是往外抛（与单条路径不同），所以
+    绊线的证据在行里。断言两件事：走到了取数层，且没有任何一行带着成对拒绝的话。
+    没有这一条，"永远拒绝"这种改法也能让上面几条全绿。
+    """
+    r = await server.web_read("", urls=["https://a.test/1", "https://a.test/2"])
+    assert r.total == 2 and len(r.results) == 2
+    for row in r.results:
+        assert "不该发出任何请求" in (row.error or ""), \
+            f"没走到取数层，成对拒绝被顺手扩大成了拒绝批量: {row.error!r}"
+        assert "cannot be combined with urls=" not in (row.error or "")
+
+
+@pytest.mark.asyncio
+async def test_a_single_url_still_reaches_the_fetch_layer(server):
+    with pytest.raises(AssertionError, match="不该发出任何请求"):
+        await server.web_read("https://a.test/1")

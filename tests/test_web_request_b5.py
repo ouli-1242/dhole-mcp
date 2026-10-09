@@ -328,6 +328,111 @@ class TestReadSideLostTheThreeNames:
         assert "method" not in branch, branch
 
 
+class TestTheDeclaredContentTypeMustMatchTheBytesOnTheWire:
+    """W2：声明的 content_type 与实际编码不许各说各话。
+
+    真机复现（2026-10-09 体测）：`content_type="text/plain"` + dict body，回显
+    出来的请求头是 `content-type: text/plain`，而 `body_raw` 是
+    `amount=3&item=%E6%89%93%E5%8D%B0%E7%BA%B8&...`、`content-length: 128` ——
+    表单字节套着纯文本的帽子。前端照这份回显抄实现就会踩坑。
+
+    判据取"头与字节一致"而不是"调用成功"：一条自相矛盾的请求恰恰是**成功的**
+    （服务端 200 回显），只有比对两边才看得见。
+    """
+
+    def _sent(self, monkeypatch, **call):
+        """抓 HTTP 层真正带出去的 header 与 body 字节。
+
+        两者都不走 `get()` 的形参：body 走 `_BODY`、content-type 走
+        `_CONTENT_TYPE` 这两颗 ContextVar，在 fetcher 里才并进请求头。所以
+        断言必须读那两颗变量 —— 读 `kwargs["headers"]` 会永远拿到空字典，
+        测的是"参数怎么传"而不是"请求发出去长什么样"。
+        """
+        seen: dict = {}
+
+        async def fake(self, url, **kwargs):
+            seen["headers"] = dict(kwargs.get("headers") or {})
+            seen["declared"] = server_mod._CONTENT_TYPE.get()
+            seen["body"] = server_mod._BODY.get()
+            return ResponseModel(url=url, status=200, content=["body"],
+                                 fetcher_used="http")
+
+        monkeypatch.setattr(MasterFetchServer, "get", fake)
+        args = {"url": URL, "method": "POST", "confirm": True}
+        args.update(call)
+        out = _dispatch("web_request", args)
+        return seen, out
+
+    @classmethod
+    def _declared(cls, seen) -> str:
+        """请求头上那条 content-type —— 显式给的就用它，否则回落到变量。"""
+        headers = {k.lower(): v for k, v in (seen.get("headers") or {}).items()}
+        return str(headers.get("content-type") or seen.get("declared") or "")
+
+    def test_a_type_the_encoder_cannot_produce_is_refused_before_any_request(
+            self, monkeypatch):
+        seen, out = self._sent(monkeypatch, body={"item": "打印纸", "n": 3},
+                               content_type="text/plain")
+        assert seen == {}, "拒绝必须发生在门口：一个字节都不该发出去"
+        err = json.dumps(out, ensure_ascii=False)
+        assert "text/plain" in err and "dict/list" in err
+
+    def test_the_refusal_names_all_three_ways_out(self, monkeypatch):
+        _seen, out = self._sent(monkeypatch, body={"a": 1},
+                                content_type="text/plain")
+        action = json.dumps(out, ensure_ascii=False).lower()
+        assert "application/json" in action, "出路一：改声明"
+        assert "x-www-form-urlencoded" in action, "出路二：改声明"
+        assert "string" in action, "出路三：把 body 变成字符串，原样发"
+
+    def test_declaring_json_sends_json_under_json(self, monkeypatch):
+        seen, _ = self._sent(monkeypatch, body={"item": "打印纸", "n": 3},
+                             content_type="application/json")
+        assert "json" in self._declared(seen).lower()
+        assert json.loads(seen["body"].decode("utf-8")) == {"item": "打印纸", "n": 3}
+
+    def test_declaring_a_form_sends_a_form_under_a_form(self, monkeypatch):
+        seen, _ = self._sent(monkeypatch, body={"item": "a"},
+                             content_type="application/x-www-form-urlencoded")
+        assert "urlencoded" in self._declared(seen).lower()
+        assert seen["body"] == b"item=a"
+
+    def test_declaring_nothing_stamps_the_type_it_actually_used(self, monkeypatch):
+        """未声明时由工具自己补齐 —— 这条一直是对的，别被新闸改坏。"""
+        seen, _ = self._sent(monkeypatch, body={"item": "a"})
+        assert "urlencoded" in self._declared(seen).lower()
+        assert seen["body"] == b"item=a"
+
+    def test_a_string_body_still_goes_verbatim_under_any_name(self, monkeypatch):
+        """字符串 body 本来就能是 text/plain —— 新闸不许把它一起拦掉。"""
+        seen, _ = self._sent(monkeypatch, body="just plain text",
+                             content_type="text/plain")
+        assert seen["body"] == b"just plain text"
+        assert self._declared(seen) == "text/plain"
+
+    @pytest.mark.parametrize("declared", [
+        "text/plain", "text/csv", "application/xml", "application/x-ndjson",
+        "application/octet-stream", "text/html",
+    ])
+    def test_no_declared_type_is_ever_paired_with_the_wrong_bytes(
+            self, monkeypatch, declared):
+        """性质：对任何声明，要么具名拒绝，要么 header 与字节说的是同一件事。"""
+        seen, _out = self._sent(monkeypatch, body={"a": 1},
+                                content_type=declared)
+        if not seen:
+            return  # 具名拒绝：两边都没发出去，自然一致
+        head = self._declared(seen).lower()
+        body = seen["body"] or b""
+        if "json" in head:
+            json.loads(body.decode("utf-8"))
+        elif "urlencoded" in head:
+            assert b"=" in body and b"{" not in body, body
+        else:
+            raise AssertionError(
+                f"header 说 {head!r} 而字节是 {body!r}：既不是 json 也不是表单，"
+                "这条组合就是 W2 的形状")
+
+
 class TestIdentityStillComesFromTheStore:
 
     def test_a_stored_proxy_and_credential_reach_a_write(self, monkeypatch):

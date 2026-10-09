@@ -242,8 +242,11 @@ def test_the_rung_survives_the_bulk_fanout(monkeypatch):
 
     monkeypatch.setattr(Server, "stealthy_fetch", fake)
     monkeypatch.setattr(Server, "_ensure_auto_session", fake_session)
+    # 只给 urls=：这一条测的是批量路径。从前这里把 URL 又按位置传了一遍，而
+    # 实现让 urls 赢、url 静默消失，于是断言（2 行而不是 3 行）照样绿 —— 一条
+    # 手写的测试都能把"少了一个地址"吞下去，这正是那个静默能活到今天的原因。
     out = asyncio.run(Server().web_read(
-        URL, urls=[URL, "https://other.example.org/"],
+        "", urls=[URL, "https://other.example.org/"],
         force_fetcher="stealthy", cache_ttl=0, anti_detect="aggressive"))
     assert out.successful == out.total == len(seen) == 2, \
         f"bulk 里有一行没走到浏览器层：{[r.error for r in out.results]}"

@@ -267,7 +267,7 @@ class SearchResponseModel(BaseModel):
     engine_empty: list[str] = Field(default=[], description="Engines that answered (HTTP 200) but parsed zero usable results. NOT rate-limiting: either this query genuinely has nothing in that index, or that engine's parser has drifted out of sync with its page structure. Cross-check the 'engine yield' row of `dhole -v`.")
     engine_preempted: list[str] = Field(default=[], description="Engines cancelled because enough results had already arrived. Normal on a healthy fast pool - this is NOT a failure or a block.")
     rerank_mode: str = Field(default="merge", description="Rerank used: merge|neural|find_similar.")
-    date_filter: dict = Field(default_factory=dict, description="What the engines were actually asked about dates, when you asked (freshness= or after=): {requested, sent, exact, engines_filtered, engines_unfiltered, note}. {} = no date constraint was requested. READ THIS BEFORE TRUSTING FRESHNESS: the engines offer day/week/month/year and nothing finer, so after=<a date> is widened to the narrowest preset that covers it - 'exact: false' means the window on the wire is broader than what you named. engines_unfiltered names the engines that cannot be date-filtered at all and answered anyway, so a mixed round is NOT a date-limited result set. before= is refused rather than ignored: search results carry no publish date, so 'older than' could neither be asked nor verified.")
+    date_filter: dict = Field(default_factory=dict, description="What the engines were actually asked about dates, when you asked (freshness= or after=): {requested, sent, exact, engines_filtered, engines_unfiltered, note}. {} = no date constraint was requested. READ THIS BEFORE TRUSTING FRESHNESS: the engines offer day/week/month/year and nothing finer, so after=<a date> is widened to the narrowest preset that covers it. 'exact: true' is the strong claim - it means every engine that answered applied the narrowest preset covering your window, so the rows are date-limited. It is false whenever the wire sent a broader window than you named OR any engine in the pool cannot be date-filtered at all (the default pool has four of those: baidu, so360, sogou, yandex - named in engines_unfiltered), so a mixed round is NOT a date-limited result set. exact false always comes with a note saying which of the two it is; exact true comes with an empty note. before= is refused rather than ignored: search results carry no publish date, so 'older than' could neither be asked nor verified.")
     consensus_basis: str = Field(default="", description="Whether engines_consensus can be trusted on this response: full | single_family | partial_pool | degraded_pool. 'degraded_pool' = at least one engine didn't answer, so a low consensus number may reflect the pool being down rather than the URL being weak. 'single_family' = no corroboration was possible at all.")
     cached: bool = Field(default=False, description="Served from cache?")
     duration_ms: float = Field(default=0, description="Duration ms")
@@ -748,12 +748,28 @@ def _date_window(after: Any, before: Any, freshness: Any, engines: list[str]) ->
     filtered, unfiltered = date_support(engines)
     if after in (None, "", False):
         if freshness:
+            # 「exact」在这个分支里曾经是硬编的 `True`，而它当时只声明了一件事：
+            # 调用方那颗预设**原样发出去了**。它对结果集一个字没提 —— 而
+            # `engines_unfiltered` 就在同一份 info 里，列的正是**根本不会按日期
+            # 过滤**的那些引擎。实测（2026-10-09）：`freshness="month"` +
+            # yandex 应答，`exact` 报 true，回包里却躺着 2025-02 的稿子。
+            # 现在它说的是同一件事的两半：窗口被发出去了，**且**每个能过滤的都
+            # 过滤了、没有一个不能过滤的偷偷答了。
+            exact = bool(filtered) and not unfiltered
             info = {
                 "requested": f"freshness={freshness}",
                 "sent": f"freshness={freshness}",
-                "exact": True,
+                "exact": exact,
                 "engines_filtered": filtered,
                 "engines_unfiltered": unfiltered,
+                "note": ("" if exact else
+                         (f"{', '.join(unfiltered)} cannot be date-filtered at all "
+                          "and answered anyway"
+                          if unfiltered else
+                          "no engine in this pool can be date-filtered, so "
+                          "freshness asked for nothing the results can honour")
+                         + " - the window is what was ASKED, not what the rows "
+                         "satisfy; check dates yourself before citing freshness"),
             }
         return applied, info, ""
 
@@ -781,18 +797,23 @@ def _date_window(after: Any, before: Any, freshness: Any, engines: list[str]) ->
         applied = freshness  # the caller's own preset is at least as tight: honour it
     else:
         applied = cover
-    # "exact" means the wire request is the NARROWEST preset that still covers the
-    # window. Anything else (a caller-set preset that is tighter, or engines that
-    # cannot be filtered at all) sends the results a little wider or a little
-    # narrower than asked, which is why the note spells out both directions.
-    exact = applied == cover
+    # "exact" 在这个分支和 freshness 分支必须是同一个意思，否则一份响应里两颗
+    # 字段各说各话：这里曾经是 `applied == cover`，只看"发出去的那一档是不是最窄
+    # 的覆盖档"，而 `engines_unfiltered` 就在下面三行——列着**根本没按日期过滤**的
+    # 引擎。默认池里那四家（baidu/so360/sogou/yandex）永远在列，于是 `exact` 在
+    # 默认池上恒为 true，而那颗字段的自述（SearchResponseModel.date_filter）写的
+    # 恰恰是"a mixed round is NOT a date-limited result set"。字段和它自己的描述
+    # 相反，就是本批要消灭的那类谎。
+    # 不变量：**note 非空 ⟺ exact 为 false**（下面每个分支都按这条建）。调用方只读
+    # 一个布尔就能决定要不要细看，而读到 false 时一定有原因可看。
+    exact = bool(filtered) and not unfiltered and applied == cover
     info = {
         "requested": f"after={after}",
         "sent": f"freshness={applied}",
         "exact": exact,
         "engines_filtered": filtered,
         "engines_unfiltered": unfiltered,
-        "note": ("" if exact and not unfiltered else
+        "note": ("" if exact else
                  f"{applied} ({_PRESET_DAYS[applied]} days) is what the engines were "
                  f"asked for, which covers your window rather than matching it"
                  + (f"; {', '.join(unfiltered)} cannot be date-filtered at all and "
@@ -1445,7 +1466,7 @@ async def web_search(
     # arguments, and rides `summary` — see `_search_summary`). The two therefore
     # cannot collide, which is why this builds its own string.
     _date_note = ""
-    if date_filter and not date_filter.get("exact", True):
+    if date_filter and not date_filter.get("exact", False):
         _date_note = date_filter.get("note") or (
             f"the engines were asked for {date_filter.get('sent', '')}, which covers "
             "your date window rather than matching it")
@@ -1658,7 +1679,12 @@ async def web_search(
         results_list = _build_results(cache_query, ranked_list, scores, total_families)
         results_list = _quality_filter(results_list)
         sim_note = f"find_similar to {find_sim_url} (searched: {derived_query[:60]!r})"
-        fetch_hint = compute_fetch_hint(results_list)
+        # `_date_note` 在这个分支曾经没被接上：`freshness=`/`after=` 照样转发给了
+        # multi_search（上面 1631 行），`date_filter` 照样建了、`exact` 照样是 false，
+        # 而这条路的 `fetch_hint` 从 `compute_fetch_hint` 直接起句，把告诫整段丢掉。
+        # 同一个字段在两条模式下走两条路，其中一条不表态 —— 修法与 auto/neural 那
+        # 条共用一个 `_hint_with`，不再有"第三份拼接写法"。
+        fetch_hint = _hint_with(_date_note, compute_fetch_hint(results_list))
         fetch_hint = (fetch_hint + " | " + sim_note) if fetch_hint else sim_note
         if rerank_note:
             fetch_hint = (fetch_hint + " | " + rerank_note) if fetch_hint else rerank_note

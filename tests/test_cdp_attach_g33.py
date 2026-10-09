@@ -269,6 +269,67 @@ class TestAttachIsPerCallNotPerBatch:
         assert _cdp_authorized_hosts() == frozenset({"a.example.test"})
 
 
+class TestCdpRevokeTakesEffectInProcess:
+    """D3：撤销的生效不该押在文件系统时间戳的粒度上。
+
+    实测形状：`_cdp_revoke_hosts` 的缓存刷新写在 `return removed` **之下**，
+    永远执行不到（且函数没声明 global，即使执行到也只会绑一个局部名）。原
+    docstring 说的是"缓存失效交给下次 stat（mtime/size 必然变化）"—— 在
+    ext4 上确实成立，所以这不是一个已观测到的故障，而是一句把正确性外包给
+    时间戳粒度的依赖：FAT/exFAT 的 mtime 粒度是 2 秒，网络盘更糟。
+
+    因此守卫必须把 stat 钉成常量才 discriminating —— 否则写文件自己就会改
+    mtime，摘掉修复照样绿，那是假守卫。
+    """
+
+    CDP = "http://127.0.0.1:9222"
+
+    def _freeze_cdp_stat(self, monkeypatch):
+        """让 cdp_hosts.json 的 stat 永远返回同一个 stamp。"""
+        import pathlib
+
+        real_stat = pathlib.Path.stat
+        fixed = SimpleNamespace(st_mtime=1.0, st_size=100)
+
+        def fake_stat(self, *a, **k):
+            if self.name == "cdp_hosts.json":
+                return fixed
+            return real_stat(self, *a, **k)
+
+        monkeypatch.setattr(pathlib.Path, "stat", fake_stat)
+
+    def test_revoked_host_is_gone_even_when_stat_never_moves(self, monkeypatch):
+        asyncio.run(_cdp_attach_gate(self.CDP, confirm=True,
+                                     targets=["https://a.example.test/1"]))
+        asyncio.run(_cdp_attach_gate(self.CDP, confirm=True,
+                                     targets=["https://b.example.test/2"]))
+        assert server_mod._cdp_authorized_hosts() == frozenset(
+            {"a.example.test", "b.example.test"})
+
+        self._freeze_cdp_stat(monkeypatch)
+        # 先让缓存热起来并记下这个常量 stamp
+        server_mod._cdp_authorized_hosts()
+
+        assert server_mod._cdp_revoke_hosts(["a.example.test"]) == 1
+        assert server_mod._cdp_authorized_hosts() == frozenset({"b.example.test"}), \
+            "撤掉的主机在本进程后续调用里又回来了"
+
+    def test_revoke_of_the_last_host_leaves_nothing_behind(self, monkeypatch):
+        """清空名册走的是 unlink 分支，同样要当场反映为「谁都没授权」。"""
+        asyncio.run(_cdp_attach_gate(self.CDP, confirm=True,
+                                     targets=["https://a.example.test/1"]))
+        self._freeze_cdp_stat(monkeypatch)
+        server_mod._cdp_authorized_hosts()
+
+        assert server_mod._cdp_revoke_hosts(["a.example.test"]) == 1
+        assert server_mod._cdp_authorized_hosts() == frozenset()
+
+    def test_an_empty_revoke_list_is_a_legal_zero(self):
+        """`clear=['cdp_hosts']` 打在空名册上是合法的零撤销，不是错误。"""
+        assert server_mod._cdp_revoke_hosts([]) == 0
+        assert server_mod._cdp_authorized_hosts() == frozenset()
+
+
 class _Stop(Exception):
     """抓到"参数已经算好了"这一刻：桩不需要真起浏览器就能看见传进去的 kwargs。"""
 

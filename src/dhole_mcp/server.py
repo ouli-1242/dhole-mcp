@@ -1387,11 +1387,15 @@ def _cdp_revoke_hosts(hosts: List[str]) -> int:
 
     空名单（调用方传 `clear=["cdp_hosts"]` 而名册本来是空的）是合法的零撤销，
     返回 0。写回与 `_cdp_authorize_host` 同一形状；名册清空时删掉整个文件，
-    与「从没授权过任何主机」的磁盘形状一致。缓存失效交给下次 stat（mtime/size
-    必然变化），不在这里手搓。
+    与「从没授权过任何主机」的磁盘形状一致。
+
+    缓存与 `_cdp_authorize_host` 一样当场刷新，不留给下一次 stat 去撞：撤销
+    是安全动作，「已撤掉的主机在本进程后续调用里仍然可用」不该取决于文件系统
+    时间戳的粒度够不够细。
     """
     import json as _json
     from dhole_mcp import paths
+    global _cdp_hosts_cache, _cdp_hosts_stamp
     drop = {h.strip().lower() for h in (hosts or []) if h and h.strip()}
     path = pathlib.Path(_cdp_hosts_file())
     current = sorted(_cdp_authorized_hosts())
@@ -1408,12 +1412,13 @@ def _cdp_revoke_hosts(hosts: List[str]) -> int:
             path.unlink(missing_ok=True)
     except OSError as e:
         raise ValueError(f"could not update {str(path)!r}: {str(e)[:160]}") from None
-    return removed
+    _cdp_hosts_cache = frozenset(remaining)
     try:
         stat = path.stat()
         _cdp_hosts_stamp = (stat.st_mtime, stat.st_size)
     except OSError:
         _cdp_hosts_stamp = None
+    return removed
 
 
 def _cdp_target_hosts(targets) -> list[str]:
@@ -1744,6 +1749,28 @@ def _clean_method(value) -> str:
         return "GET"
     method = value.strip().upper()
     return method if method in _FETCH_METHODS else (method or "GET")
+
+
+def _body_encoding_mismatch(value, content_type) -> str:
+    """结构化 body 与声明的 content_type 编不到一起时，返回那句不一致的名字。
+
+    `_clean_body` 只有一个开关：声明里带 "json" 就发 JSON，否则一律
+    urlencoded。所以「声明了类型」和「实际编码」只有三种关系 ——
+    声明含 json（两边一致）、声明就是 urlencoded（一致）、声明的是别的什么
+    （**不一致**：字节是表单，header 却说 text/plain）。
+
+    这里只报告，不改写也不静默迁就：把 header 悄悄换成 urlencoded 是替调用方
+    改了它点名的东西，把 text/plain 原样盖在表单字节上则是发一个自相矛盾的请求
+    —— 服务端要么 415、要么按纯文本解析出一堆垃圾，而回包里 `content_ok=true`。
+    两种都是「静默强转」，params.py 那条法没有给它留位置。
+    """
+    if not isinstance(value, (dict, list)):
+        return ""
+    declared = str(content_type or "").strip()
+    low = declared.lower()
+    if not low or "json" in low or "urlencoded" in low:
+        return ""
+    return declared
 
 
 def _clean_body(value, content_type) -> Optional[bytes]:
@@ -5610,6 +5637,29 @@ class MasterFetchServer:
 
         # Bulk mode: fetch multiple URLs in parallel
         if urls is not None:
+            if url:
+                # 两个都给了，就没有"哪个是意图"可猜：实现一直让 urls 赢、url 那
+                # 一条静默消失（曾经连注释都在说反话，说 url 赢）。成对参数要么
+                # 具名拒绝、要么静默强转，没有第三种 —— 见 params.py 的那条法。
+                #
+                # 拒绝要占满每一个点名的 URL：只回一行而 total 报 len(urls)+1，
+                # 就又变成"你点了 N 个地址、拿回 1 条回执"的那种静默 —— 而这正是
+                # 这一刀要消灭的形状。
+                _both_msg = (
+                    "url= cannot be combined with urls=: both were given, so "
+                    "which one is the request is not yours to leave to us - a "
+                    "batch that quietly drops the URL you named first is how a "
+                    "caller ends up believing they read a page they never read")
+                _both_fix = (
+                    "Pass the single page as url= alone, or put every URL you "
+                    "want in urls= alone (include this one in the list if you "
+                    "want it too). Neither name won: nothing was fetched.")
+                return BulkResponseModel(
+                    results=[_invalid_request_result(u, _both_msg,
+                                                     next_action=_both_fix)
+                             for u in [url, *urls]],
+                    total=len(urls) + 1, successful=0,
+                )
             if actions:
                 msg = ("actions are not supported in bulk mode; "
                        "call web_read once per URL")
@@ -5778,6 +5828,23 @@ class MasterFetchServer:
                              "for is not one this tool speaks."),
             )
         _METHOD.set(verb)
+        _ct_lie = _body_encoding_mismatch(body, content_type)
+        if _ct_lie:
+            return _invalid_request_result(
+                url or "",
+                f"content_type={_ct_lie!r} cannot carry a dict/list body: this "
+                "tool encodes a structured body as JSON (when the declared type "
+                "says json) or as application/x-www-form-urlencoded (otherwise), "
+                "so the header and the bytes would disagree",
+                next_action=(
+                    "Say what you actually want on the wire: declare "
+                    "'application/json' to send the structure as JSON, declare "
+                    "'application/x-www-form-urlencoded' (or drop content_type) "
+                    "to send it as a form, or pass body= as a string to send "
+                    "those exact bytes under whatever type you named. No "
+                    "request was made - neither half of the pair was silently "
+                    "changed to fit the other."),
+            )
         request_body = _clean_body(body, content_type)
         if request_body is not None and verb in ("GET", "HEAD"):
             request_body = None
@@ -8601,9 +8668,11 @@ class MasterFetchServer:
                 "type": "object",
                 # web_read needs one of the two; the schema said nothing at
                 # all, so a client could not tell before calling. anyOf (not
-                # required) because either one satisfies it, and they are not
-                # used together: url wins for a single page, urls switches to
-                # the parallel bulk path.
+                # required) because either one satisfies it. Giving BOTH is
+                # refused by name at the dispatch door: this comment used to
+                # claim "url wins" while the code let urls win and url vanish
+                # silently, which is the contract's two halves saying opposite
+                # things. Neither name is privileged; one of them has to go.
                 # Two branches, both real: url= for one page, urls=[...] for a
                 # known list. The third one this carried existed only because
                 # `urls` could also arrive inside the options bag, and a

@@ -392,7 +392,9 @@ class TestTheWireIn:
         monkeypatch.setattr(Server, "_force_fetch", fake)
         _set(host="example.com", auth={"type": "basic", "username": "u",
                                        "password": SECRET})
-        out = asyncio.run(Server().web_read(API, urls=[API, OTHER],
+        # 只填 urls=：`url=` 与 `urls=` 同时给现在是具名拒绝（A1），而这条的主语是
+        # 「每行按自己的主机判凭据」。拒绝行也带 url 字段，读起来像两行都抓过了。
+        out = asyncio.run(Server().web_read("", urls=[API, OTHER],
                                             force_fetcher="stealthy", cache_ttl=0))
         assert len(out.results) == 2
         assert "authorization" in {k.lower() for k in

@@ -921,8 +921,11 @@ class TestSmartFetchFocusContext:
         server = MasterFetchServer(cache_ttl=0)
         server.get = AsyncMock(return_value=self._long_content_result())
 
+        # url= 与 urls= 同时给现在是具名拒绝（A1），所以这里只走批量那一颗入口。
+        # 这条测试的主语是 focus 有没有转发进每一行，两颗参数都传会让它读到拒绝行
+        # 而不是抓取行 —— 而拒绝行恰好也会带上 url，看起来像"跑过了"。
         result = await server.web_read(
-            "https://example.com",
+            "",
             urls=["https://example.com"],
             focus="bananas",
             cache_ttl=0,

@@ -205,3 +205,47 @@ class TestExtractImageUrls:
         html = '<img srcset="/a.png 1x, /b.png 2x">'
 
         assert extract_image_urls(html, "https://example.com/") == []
+
+    def test_html_entities_in_src_are_decoded(self):
+        """R8：`&amp;` 不还原，交出去的 URL 请求方一定拿 404。
+
+        本模块在 title/description/canonical 三处都做了 unescape
+        （metadata.py:89/:95/:138），唯独媒体这条路径漏了。
+        """
+        html = '<img src="/th?id=abc&amp;pid=2.1">'
+
+        assert extract_image_urls(html, "https://example.com/") == [
+            "https://example.com/th?id=abc&pid=2.1"
+        ]
+
+    def test_two_urls_crammed_into_one_src_do_not_become_one_entry(self):
+        """R8 的实测脏元素：Bing 的懒加载把两个地址写进了同一个 src。
+
+        整串喂给 urljoin 会原样通过 `http(s)://` 前缀检查 —— 于是
+        include_media 交出的是一个含两个地址的字符串。
+        """
+        html = ('<img src="//th.bing.com, '
+                'https://r.bing.com/th?id=Gmm%5C1px.jpg&amp;pid=2.1">')
+
+        out = extract_image_urls(html, "https://www.bing.com/search?q=x")
+
+        assert all(", " not in u for u in out), f"两个地址挤成了一个元素：{out}"
+        assert all(" " not in u for u in out), f"元素里还有空白：{out}"
+        assert "https://r.bing.com/th?id=Gmm%5C1px.jpg&pid=2.1" in out
+
+    def test_bare_comma_in_a_path_is_not_a_candidate_separator(self):
+        """拆候选要求逗号后跟空白 —— 路径里合法的裸逗号不该被拆。"""
+        html = '<img src="/img/a,b.png">'
+
+        assert extract_image_urls(html, "https://example.com/") == [
+            "https://example.com/img/a,b.png"
+        ]
+
+    def test_scheme_relative_second_entry_is_not_kept_bare(self):
+        """逗号+空白拆开后，协议相对的第一个候选自己补全，不该带出残片。"""
+        html = '<img src="/first.png, /second.png">'
+
+        assert extract_image_urls(html, "https://example.com/") == [
+            "https://example.com/first.png",
+            "https://example.com/second.png",
+        ]
