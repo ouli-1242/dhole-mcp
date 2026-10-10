@@ -1,17 +1,21 @@
-"""PDF 黄金集：把提取器**今天**的输出钉住，P1/P2/P3 动的每一格都要看得见（P5）。
+"""PDF 黄金集：把提取器的输出钉住，表格形状每一次改动都要看得见（P5 建，P1 翻）。
 
 为什么建在改动之前：这批要动的是表格渲染、标题层级和 TOC 的页码上界，而
 `tests/test_pdf_real.py` 里 6 条用例**没有一条**断言过表格、TOC、标题或图。改完之后
 "看起来对了"是这句被点名的失败在本仓库的又一次出场 —— 唯一能让"我只修了合并单元格"
-这句话成立的证人，是**其余部分逐字节没动**。
+这句话成立的证人，是**没被修的那部分逐字节没动**。
 
 两个证人各有各的活，缺一个都不算：
 
-- **字符串**（`tests/pdf_golden/<fixture>.md`）：现场。它说"今天这台 pdfplumber 交回
-  的就是这段字节"。一次全表输出的漂移不许靠"性质还成立"混过去。
-- **性质**（下面 `test_every_*` 那几条）：方向。字符串钉死会把 pdfplumber 的版本号也
-  钉进仓库，所以真正要长期守的是"不存在非空单元格数与表头不符的行""TOC 的 end_page
-  不许越过这份文档的页数"这类不依赖版本的断言。
+- **字符串**（`tests/pdf_golden/<fixture>.md`）：现场。它说"这台 pdfplumber 交回的就是
+  这段字节"。一次全表输出的漂移不许靠"性质还成立"混过去。
+- **性质**（下面 `test_every_*` / `test_the_degraded_form_*` 那几条）：方向。字符串钉死会
+  把 pdfplumber 的版本号也钉进仓库，所以真正要长期守的是"不存在非空单元格数与表头不符的
+  行""降级不许丢任何一格文本"这类不依赖版本的断言。
+
+P1 落地时刷过一次黄金集（规整表那一段**逐字节未变**，变的是两张合并表），diff 读进提交
+信息；`TestTheMergedGeometryIsRestored` 就是 P5 那三条"今天记录错在哪"翻过来的样子 —— 翻
+不全就是没修完，所以翻转本身也钉在用例里。
 
 刷新黄金集 = `python tests/pdf_golden_record.py`，而它是一次**有意识的**决定：把
 markdown 的 diff 读完再刷，并把 delta 写进提交信息（与 `tests/mcp_snapshot.py` 的
@@ -111,9 +115,9 @@ class TestTheStructureProperties:
     def test_every_row_has_as_many_cells_as_its_header(self, extracted, name):
         """一张 markdown 表里不许出现"格子数与表头不符"的行。
 
-        今天它是靠 `_table_to_markdown` 补 `""` 才成立的 —— 补出来的空格正是 P1 要
-        处理的谎：跨列合并的续格被写成"这一格没有数据"。所以这条守的是**结构完整性**
-        （不塌列），而下面那条命名的才是**语义**损失。
+        P1 之后这条只管**规整表**（不规则的已经改发对齐文本，见
+        `test_an_irregular_table_is_never_written_as_a_grid`），所以它守的是"规整表不许
+        塌列"，而语义损失那一半由下面两条看着。
         """
         for idx, table in enumerate(_tables(_markdown(extracted[name])), 1):
             header = table[0]
@@ -126,6 +130,67 @@ class TestTheStructureProperties:
         for idx, table in enumerate(_tables(_markdown(extracted[name])), 1):
             assert any(any(c for c in row) for row in table[1:] or table), \
                 f"{name} 第 {idx} 张表除了表头全是空格"
+
+    @pytest.mark.parametrize("name", FIXTURES)
+    def test_an_irregular_table_is_never_written_as_a_grid(self, extracted, name):
+        """降级不许半途：被判为不规则的表不能既发 `[merged-cell table:` 抬头又留一张网格。
+
+        这条与上面那条合起来才封住"合并格被写成空数据"那一条路 —— 只要网格里还有
+        `| --- |`，读者就会把第二行表头当第一行数据。
+        """
+        import pdfplumber
+
+        from dhole_mcp.pdf_extractor import table_geometry, table_is_rectangular
+
+        rect = []
+        with pdfplumber.open(str(HERE / name)) as pdf:
+            for page in pdf.pages:
+                for t in page.find_tables(table_settings={"text_x_tolerance": 2,
+                                                          "text_y_tolerance": 3}):
+                    g = table_geometry(t)
+                    if g:
+                        rect.append(table_is_rectangular(g))
+        md = _markdown(extracted[name])
+        irregular = [i for i, ok in enumerate(rect) if not ok]
+        if not irregular:
+            assert "[merged-cell table:" not in md, md
+            return
+        assert md.count("[merged-cell table:") == len(irregular), (
+            f"{len(irregular)} 张不规则表，抬头却有 "
+            f"{md.count('[merged-cell table:')} 段")
+        for block in md.split("[merged-cell table:")[1:]:
+            body = block.split("\n\n")[0]
+            assert "\n| --- |" not in body, f"降级块里混进了网格分隔行: {body[:200]}"
+            assert "row 1:" in body, body[:200]
+
+    @pytest.mark.parametrize("name", FIXTURES)
+    def test_the_degraded_form_loses_no_cell_text(self, extracted, name):
+        """降级只换形状，不换内容：几何层每一个非空格的文本都要在正文里出现。
+
+        这条是 P1 的反面守卫 —— 把横向合并"收起来"（不逐个列出被盖住的位置）很容易
+        顺手把数据也收掉，而那比一张错网格更糟。地面真值取 `table.extract()`
+        （pdfplumber 自己数出来的每一格），不取渲染器的话。
+        """
+        import pdfplumber
+
+        md = _markdown(extracted[name])
+        seen = 0
+        with pdfplumber.open(str(HERE / name)) as pdf:
+            for page in pdf.pages:
+                for t in page.find_tables(table_settings={"text_x_tolerance": 2,
+                                                          "text_y_tolerance": 3}):
+                    for row in t.extract():
+                        for cell in row:
+                            text = re.sub(r"\s+", " ", str(cell or "").strip())
+                            if not text:
+                                continue
+                            seen += 1
+                            assert text in md, f"{name}: 降级渲染丢了格子文本 {text[:60]!r}"
+        if not seen:
+            # dummy.pdf 是扫描件：它一张表都没有，这条守卫在那份夹具上是空转，
+            # 所以明说它没跑，而不是让"没有文本"冒充"文本都没丢"。
+            assert extracted[name].scanned is True, name
+            pytest.skip(f"{name} 里没有表 —— 这条守卫没有可查的东西")
 
     def test_the_heading_tree_matches_the_document(self, extracted):
         """四行标题就是四条：1 个 level-1 + 3 个 level-2，且都在第 1 页。
@@ -153,45 +218,181 @@ class TestTheStructureProperties:
             assert entry["end_page"] >= entry["page"], entry
 
 
-class TestWhatTodayGetsWrong:
-    """把今天的**错**写在断言里，P1 落地时这两条要一起翻，翻不全就是没修完。"""
+class TestTheMergedGeometryIsRestored:
+    """P5 录下这三条时它们是"今天的错"；P1 落地，三条一起翻 —— 翻不全就是没修完。"""
 
-    def test_a_merged_subtotal_is_written_as_an_empty_cell_today(self, extracted):
-        """跨列的 "North subtotal" 今天被补成 `| North subtotal |  | 545 |`。
+    def test_a_merged_subtotal_is_not_written_as_an_empty_cell(self, extracted):
+        """跨列的 "North subtotal" 从前被补成 `| North subtotal |  | 545 |`。
 
-        读的人无从区分"这一格属于左边那一格"与"这一格真的没数据"—— 一次静默的语义
-        丢失，而它出现在一张自称成功的表格里（`content_ok: true`）。P1 之后这一行
-        不该再以网格形式出现（非矩形表降级为对齐文本/列表），这条断言随之改写。
+        那时读的人无从区分"这一格属于左边那一格"与"这一格真的没数据"，而这句话出自
+        一张自称成功的表格（`content_ok: true`）。现在跨度写在格子上，被盖住的位置
+        不再冒充数据。
         """
         md = _markdown(extracted["merged_cells.pdf"])
-        assert "| North subtotal |  | 545 |" in md, md
+        assert "| North subtotal |  | 545 |" not in md, md
+        assert '"North subtotal" [spans 2 columns]' in md, md
 
-    def test_a_two_row_header_collapses_into_the_data_rows_today(self, extracted):
+    def test_a_two_row_header_no_longer_collapses_into_the_data_rows(self, extracted):
         """表二有两行表头（`Revenue by quarter` 跨两列），markdown 只容得下一行。
 
-        后果是第二行表头（Third quarter / Fourth quarter / Year）被当成**数据行**发出
-        —— 现场还原里那一页 "Fourth quarter 掉进数据行" 就是这么来的。P1 之后这张表
-        要产出一个诚实的降级渲染，而不是这张自信的错网格。
+        前果是第二行表头（Third quarter / Fourth quarter / Year）作为**数据行**发出
+        —— 体验测试里那句"Fourth quarter 掉进数据行"就是这么来的。现在这张表不出网格，
+        两行都按行号列出，谁继承谁也说得出。
         """
-        tables = _tables(_markdown(extracted["merged_cells.pdf"]))
-        spanned = [t for t in tables
-                   if any(r[1:3] == ["Third quarter", "Fourth quarter"] for r in t)]
-        assert spanned, "表二今天是被当网格发的 —— 这条记录着 P1 要改的现场"
-        header, sub_header = spanned[0][0], spanned[0][1]
-        assert "Revenue by quarter" in header and "Revenue by quarter" not in sub_header
+        md = _markdown(extracted["merged_cells.pdf"])
+        assert _tables(md), "规整表仍在（正对照不许被误伤）"
+        for table in _tables(md):
+            flat = " ".join(" ".join(r) for r in table)
+            assert "Fourth quarter" not in flat, f"仍有网格把第二行表头当数据: {flat[:160]}"
+        assert 'row 2: (as row 1, column 1) | "Third quarter" | "Fourth quarter"' in md, md
 
-    def test_the_wide_real_world_table_is_fifty_percent_phantom_today(self, extracted):
+    def test_the_wide_real_world_table_no_longer_pays_a_phantom_column_each(self, extracted):
         """`background_checks.pdf`（仓库里既有的真 PDF）是同一件事的真实尺寸证人。
 
-        表头 25 颗格子里绝大多数是补出来的空位，而每一行数据都被摊进那 25 列。
-        记这个数不是为了好看：P1 若只把玩具表修好而让真文件更糟，这个数会动。
+        从前那张 25 列网格的表头里有一半以上是补出来的空位。现在它按行列出，跨度自己
+        说话；P1 若只把玩具表修好而让真文件更糟，这里的数字会动 —— 记着改前的实测：
+        6,716 字符 / 一张 25 列网格，改后 7,565 字符（+12.6%，多出来的是跨度说明）。
         """
-        tables = _tables(_markdown(extracted["background_checks.pdf"]))
-        assert tables, "这份真 PDF 里确实有表"
-        widest = max(tables, key=lambda t: len(t[0]))
-        phantom = sum(1 for c in widest[0] if not c)
-        assert phantom >= len(widest[0]) // 2, (
-            f"表头 {len(widest[0])} 格里只有 {phantom} 格是空的，与记录不符")
+        md = _markdown(extracted["background_checks.pdf"])
+        assert "[merged-cell table:" in md
+        assert "| --- |" not in md, "这份真 PDF 已经不规则，不该再出网格"
+        assert '"NICS Firearm Background Checks November - 2015" [spans 25 columns]' in md
+        assert len(md) < 6_716 * 2, (
+            f"降级把正文放大到 {len(md)} 字符 —— 那就不叫降级，叫放大（实测过逐位列出"
+            "被盖住位置会把 6.7k 变成 33k）")
+
+
+class TestTheGeometryItself:
+    """几何层单独钉：跨度是从 bbox 推的，推错了整个渲染就建立在错数据上。
+
+    这里的 `_Table` 是**纯函数的桩**（`rows[i].cells` 的 bbox 形状取自
+    `tests/merged_cells.pdf` 的实测读数），不是内容夹具 —— 被钉的是"给一堆 bbox，
+    跨度算得对不对"，与哪份 PDF 无关。
+    """
+
+    def test_spans_come_from_the_boxes_not_from_the_padded_list(self):
+        from dhole_mcp.pdf_extractor import (
+            _merged_table_to_text, table_geometry, table_is_rectangular)
+
+        class _Row:
+            def __init__(self, cells):
+                self.cells = cells
+
+        class _Table:
+            # 两列网格，首行那一格横向盖住两列：`extract()` 只会给 ['North subtotal', None]，
+            # 是 x 边缘序列才说出"那是 2 列"而不是"这里空着"。
+            rows = [_Row([(0.0, 0.0, 100.0, 10.0), None]),
+                    _Row([(0.0, 10.0, 50.0, 20.0), (50.0, 10.0, 100.0, 20.0)])]
+
+            @staticmethod
+            def extract():
+                return [["North subtotal", None], ["First quarter", "120"]]
+
+        grid = table_geometry(_Table)
+        assert grid is not None
+        assert grid[0][0]["cspan"] == 2 and grid[0][1]["covered"] is True
+        assert table_is_rectangular(grid) is False
+        # 横向被盖住的位置不再逐个列出，也不许冒充一列数据
+        assert _merged_table_to_text(grid).splitlines()[1] == \
+            'row 1: "North subtotal" [spans 2 columns]'
+
+    def test_a_rowspan_is_reported_as_a_carried_value_not_a_blank(self):
+        from dhole_mcp.pdf_extractor import _merged_table_to_text, table_geometry
+
+        class _Row:
+            def __init__(self, cells):
+                self.cells = cells
+
+        class _Table:
+            # 两行的表，第一列那一格纵向盖住两行（y 边缘 0/15/30 与两个单行格对齐）。
+            rows = [_Row([(0.0, 0.0, 50.0, 30.0), (50.0, 0.0, 100.0, 15.0)]),
+                    _Row([None, (50.0, 15.0, 100.0, 30.0)])]
+
+            @staticmethod
+            def extract():
+                return [["North", "First quarter"], [None, "Second quarter"]]
+
+        grid = table_geometry(_Table)
+        assert grid[0][0]["rspan"] == 2
+        assert 'row 2: (as row 1, column 1) | "Second quarter"' in \
+            _merged_table_to_text(grid)
+
+    def test_geometry_backs_off_when_the_two_views_disagree(self):
+        """`extract()` 与 `rows` 对不上形状时交回 None，让调用方回落到补齐的那份。
+
+        宁可用旧的（会撒谎的）形状，也不许拿一份**猜出来的**几何去渲染。
+        """
+        from dhole_mcp.pdf_extractor import table_geometry
+
+        class _Row:
+            def __init__(self, cells):
+                self.cells = cells
+
+        class _Table:
+            rows = [_Row([(0.0, 0.0, 50.0, 10.0), (50.0, 0.0, 100.0, 10.0)])]
+
+            @staticmethod
+            def extract():
+                return [["A", "B", "C"]]
+
+        assert table_geometry(_Table) is None
+
+    def test_the_fallback_refuses_a_header_row_that_carries_a_span(self):
+        """读不到几何时的兜底判据：首行里有 `None` 延续就不许提它当表头。"""
+        from dhole_mcp.pdf_extractor import _table_to_markdown
+
+        padded = [["Region", "Revenue by quarter", None, "Share"],
+                  [None, "Third quarter", "Fourth quarter", "Year"]]
+        out = _table_to_markdown(padded)
+        assert "| --- |" not in out, out
+        assert "Third quarter" in out
+        clean = _table_to_markdown([["A", "B"], ["1", "2"]])
+        assert clean.startswith("| A | B |\n| --- | --- |"), clean
+
+
+class TestTheDegradationIsAnnounced:
+    """降级要出口：只写在正文里的一段话，按 `summary` 读的人看不见（R3 的那条教训）。"""
+
+    def test_summary_says_the_table_came_back_as_text_rows(self):
+        import asyncio
+
+        from dhole_mcp.context import _arg_notes_scope
+        from dhole_mcp.server import MasterFetchServer
+
+        async def run():
+            with _arg_notes_scope():
+                return await MasterFetchServer().doc_parse(str(HERE / "merged_cells.pdf"))
+
+        out = asyncio.run(run())
+        assert "merged cells" in (out.summary or ""), out.summary
+        assert "not a markdown grid" in out.summary
+
+    def test_a_page_with_no_merging_says_nothing_about_merging(self):
+        """没发生降级就不许说这句话 —— 告警的默认值是沉默。"""
+        import asyncio
+
+        from dhole_mcp.context import _arg_notes_scope
+        from dhole_mcp.pdf_extractor import _announce_merged_table
+
+        async def run():
+            with _arg_notes_scope() as notes:
+                _announce_merged_table(0, 0)
+                return list(notes)
+
+        assert asyncio.run(run()) == []
+
+    def test_the_manual_says_a_merged_table_is_not_a_grid(self):
+        """形状的突然改变要写在调用方会读的那一卷里，而不是只写在正文的那一段抬头里。
+
+        只读 `tools/list` 与说明书的人遇到 `row 1: …` 会以为是解析失败；这句话把"这是
+        刻意的降级"说在前面。
+        """
+        from dhole_mcp.guide import _ROOT
+
+        text = (_ROOT / "references" / "tools.md").read_text(encoding="utf-8")
+        for needle in ("merged-cell table", "not a markdown grid", "(as row 1, column 1)",
+                       "Rectangular tables are unaffected"):
+            assert needle in text, f"tools.md 没写着「{needle}」"
 
 
 class TestTheFixtureItselfIsReproducible:

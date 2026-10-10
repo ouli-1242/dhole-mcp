@@ -277,6 +277,156 @@ def _clean_text(s: str) -> str:
     return re.sub(r"[ \t]+", " ", s).strip()
 
 
+# ── 表格几何：合并格在 `extract()` 之前就得读出来 ───────────────────────────
+#
+# `Table.extract()` 交回的是已经补过齐的 `list[list[str | None]]`：跨列、跨行与
+# "这一格真的没数据"在它的输出里是同一个 `None`，几何那时就没了。所以形状要从
+# `table.rows[i].cells` 那一层拿 —— 那里 `None` 说的是"这个格位被别的格子盖住了"，
+# 而不是"这里是空的"，一句之差就是 P1 全部的内容。
+#
+# 一条对计划的更正：`explicit_physical_rows` / `explicit_vertical_edges` 在
+# pdfplumber 0.11.10 上不存在（实测 AttributeError），所以边界是从 `row.cells` 的
+# bbox 集合自己推的 —— 同一张表里所有格子的 x/y 边缘，就是这张表的列边界与行边界。
+
+
+def _edge_positions(values: Iterable[float], tol: float = 0.75) -> list[float]:
+    """把一堆边缘坐标收成去重后的边界序列（浮点边按 tol 合并）。"""
+    out: list[float] = []
+    for v in sorted(values):
+        if not out or v - out[-1] > tol:
+            out.append(v)
+    return out
+
+
+def _nearest(edges: list[float], value: float) -> int:
+    return min(range(len(edges)), key=lambda i: abs(edges[i] - value))
+
+
+def table_geometry(table: Any) -> list[list[dict]] | None:
+    """One row per table row, one dict per grid position: text + what it spans.
+
+    Returns None when the geometry cannot be read (no rows, or `extract()`
+    disagrees with `rows` about the shape) — the caller then falls back to the
+    padded `extract()` output, which is what this module did before.
+
+    Keys per cell: ``text``, ``covered`` (this position is owned by another
+    cell's span), ``rspan``/``cspan`` (1 when the cell is a plain grid square).
+    """
+    try:
+        rows = list(table.rows or [])
+        texts = table.extract()
+    except Exception:
+        return None
+    if not rows:
+        return None
+    bboxes = [c for r in rows for c in (r.cells or []) if c]
+    if not bboxes:
+        return None
+    xs = _edge_positions([b[0] for b in bboxes] + [b[2] for b in bboxes])
+    ys = _edge_positions([b[1] for b in bboxes] + [b[3] for b in bboxes])
+    grid: list[list[dict]] = []
+    for ri, r in enumerate(rows):
+        cells = list(r.cells or [])
+        line_texts = list(texts[ri]) if ri < len(texts) and texts[ri] else []
+        if len(cells) != len(line_texts):
+            return None
+        line: list[dict] = []
+        for ci, box in enumerate(cells):
+            raw = line_texts[ci]
+            text = "" if raw is None else re.sub(r"\s+", " ", str(raw).strip())
+            if box is None:
+                line.append({"text": "", "covered": True, "rspan": 1, "cspan": 1})
+                continue
+            c0, c1 = _nearest(xs, box[0]), _nearest(xs, box[2])
+            r0, r1 = _nearest(ys, box[1]), _nearest(ys, box[3])
+            line.append({"text": text, "covered": False,
+                         "rspan": max(1, r1 - r0), "cspan": max(1, c1 - c0)})
+        grid.append(line)
+    return grid
+
+
+def table_is_rectangular(grid: list[list[dict]] | None) -> bool:
+    """规整表 = 没有一个位置被盖住，也没有一个格子跨行跨列。"""
+    if not grid:
+        return False
+    return all(not c["covered"] and c["rspan"] == 1 and c["cspan"] == 1
+               for row in grid for c in row)
+
+
+def _covering_cell(grid: list[list[dict]], ri: int, ci: int) -> tuple[int, int] | None:
+    """这一空格位是被哪个真格子盖住的 —— 按跨度算，不按"往上/往左第一眼"猜。
+
+    写这层时先试的是"往上扫到第一个非空格"，实测草稿立刻把横向合并说成了纵向继承
+    （`North subtotal` 那一行的中间格报成"承自上一行"）：一句看起来是解释、其实是错的
+    解释。既然有 bbox 跨度可算，就没有理由去猜。
+    """
+    for r0, row in enumerate(grid):
+        for c0, cell in enumerate(row):
+            if cell["covered"]:
+                continue
+            if r0 <= ri < r0 + cell["rspan"] and c0 <= ci < c0 + cell["cspan"]:
+                return r0, c0
+    return None
+
+
+def _span_note(cell: dict) -> str:
+    if cell["rspan"] > 1 and cell["cspan"] > 1:
+        return f" [spans {cell['rspan']} rows x {cell['cspan']} columns]"
+    if cell["cspan"] > 1:
+        return f" [spans {cell['cspan']} columns]"
+    if cell["rspan"] > 1:
+        return f" [spans {cell['rspan']} rows]"
+    return ""
+
+
+def _merged_table_to_text(grid: list[list[dict]]) -> str:
+    """一张有合并格的表 → 按行的对齐文本，而不是一张 markdown 网格。
+
+    为什么不用网格：`| --- |` 那一行只在"首行是表头"时合法，而一张有合并格的表恰恰
+    经常在首行就塌 —— 表二的首行是 `Region(跨2行) | Revenue by quarter(跨2列) | Share`，
+    它的**第二行才是列名**。把首行提为表头，第二行就作为数据行发出（体验测试里那句
+    "Fourth quarter 掉进数据行"就是这么来的），而读者看不出那张网格里有两行是表头。
+    一个诚实的降级渲染胜过一张自信的错误网格 —— 这就是整批的论点。
+
+    横向被盖住的位置**不逐个列出**（实测教训）：跨列那一格自己已经说了 "spans 25
+    columns"，再把 24 个 "(covered by …)" 跟在后面，`background_checks.pdf` 从 6,716
+    字涨到 33,307 字 —— 一次降级把正文放大近 5 倍，那是用一个新问题换掉旧问题，而这批
+    修的正是体积。纵向继承留着，因为它在这一行里读不出来；给的是行号与列号而不是原文
+    （原文跟着行号可查，重复它同样是在放大）。
+    """
+    spans = sum(1 for row in grid for c in row
+                if not c["covered"] and (c["rspan"] > 1 or c["cspan"] > 1))
+    out = [f"[merged-cell table: {spans} merged cell(s) - a markdown grid cannot "
+           "carry spans, so this is one line per row; the columns a wide cell sits "
+           "over are counted in that cell's own note]"]
+    for ri, row in enumerate(grid):
+        parts = []
+        for ci, cell in enumerate(row):
+            if cell["covered"]:
+                src = _covering_cell(grid, ri, ci)
+                if src is None:
+                    parts.append("(covered)")
+                    continue
+                r0, c0 = src
+                if r0 != ri:
+                    parts.append(f"(as row {r0 + 1}, column {c0 + 1})")
+                continue
+            parts.append((f'"{cell["text"]}"' if cell["text"] else "(blank)")
+                         + _span_note(cell))
+        out.append(f"row {ri + 1}: " + " | ".join(parts))
+    return "\n".join(out)
+
+
+def _announce_merged_table(spans_on_page: int, tables_on_page: int) -> None:
+    """降级要出口：只活在 markdown 里的一段话，调用方按 `summary` 读的时候看不见。"""
+    from dhole_mcp.context import _note_text
+    if not spans_on_page:
+        return
+    _note_text(f"table(s) with merged cells rendered as text rows, not a markdown "
+               f"grid ({spans_on_page} merged cell(s) across "
+               f"{tables_on_page} irregular table(s) on this page)")
+
+
 def _dehyphenate_join(prev: str, nxt: str) -> tuple[str, bool]:
     """Join two consecutive lines, de-hyphenating a soft hyphen break."""
     prev = prev.rstrip()
@@ -292,12 +442,18 @@ def _table_to_markdown(table: list[list[str | None]], text_mode: bool = False) -
         return ""
     rows = [[("" if cell is None else re.sub(r"\s+", " ", str(cell).strip()))
              for cell in row] for row in table]
+    raw_first = list(table[0]) if table else []
     rows = [r for r in rows if any(c for c in r)]
     if not rows:
         return ""
     width = max(len(r) for r in rows)
     rows = [r + [""] * (width - len(r)) for r in rows]
-    if text_mode:
+    # 首行里有 `None` 延续 = 这一行本身带合并（几何层读不到它时的兜底判据），那它就
+    # 不是表头，而是一张会误导人的网格里第一行。宁可不提表头，也不把"看着像列名的一行"
+    # 和"其实是列名的第二行"一起当数据发出去。
+    header_ok = (len(raw_first) == width
+                 and not any(c is None for c in raw_first))
+    if text_mode or not header_ok:
         return "\n".join(" | ".join(r) for r in rows)
     header = rows[0]
     sep = ["---"] * width
@@ -890,7 +1046,8 @@ def _render_page(page: Any, body_size: float, text_mode: bool,
         except Exception:
             data = []
         if data and any(any(cell for cell in row) for row in data):
-            blocks.append((float(t.bbox[1]), "table", data))
+            blocks.append((float(t.bbox[1]), "table",
+                           (data, table_geometry(t))))
 
     blocks.sort(key=lambda b: b[0])
 
@@ -901,6 +1058,8 @@ def _render_page(page: Any, body_size: float, text_mode: bool,
 
     out: list[str] = []
     para: list[str] = []
+    merged_tables = 0
+    merged_cells_total = 0
 
     def flush_paragraph():
         if not para:
@@ -918,7 +1077,15 @@ def _render_page(page: Any, body_size: float, text_mode: bool,
         if kind == "table":
             flush_paragraph()
             prev_bottom = None
-            md = _table_to_markdown(payload, text_mode=text_mode)
+            data, geometry = payload
+            if geometry and not table_is_rectangular(geometry):
+                spans = sum(1 for row in geometry for c in row
+                            if not c["covered"] and (c["rspan"] > 1 or c["cspan"] > 1))
+                merged_tables += 1
+                merged_cells_total += spans
+                md = _merged_table_to_text(geometry)
+            else:
+                md = _table_to_markdown(data, text_mode=text_mode)
             if md:
                 out.append(md)
             continue
@@ -936,6 +1103,7 @@ def _render_page(page: Any, body_size: float, text_mode: bool,
         para.append(txt)
         prev_bottom = line_bottom
     flush_paragraph()
+    _announce_merged_table(merged_cells_total, merged_tables)
 
     return "\n\n".join(out).strip()
 
