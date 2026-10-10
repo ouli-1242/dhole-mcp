@@ -1,0 +1,39 @@
+{
+  "author": "",
+  "content_ok": true,
+  "encrypted": false,
+  "error": "",
+  "pages_extracted": [
+    1
+  ],
+  "pages_total": 1,
+  "quality_score": 1.0,
+  "scanned": false,
+  "table_of_contents": [
+    {
+      "end_page": 1,
+      "level": 1,
+      "page": 1,
+      "title": "Quarterly revenue fixtures"
+    },
+    {
+      "end_page": 1,
+      "level": 2,
+      "page": 1,
+      "title": "Table one: rectangular"
+    },
+    {
+      "end_page": 1,
+      "level": 2,
+      "page": 1,
+      "title": "Table two: a header that spans two columns"
+    },
+    {
+      "end_page": 1,
+      "level": 2,
+      "page": 1,
+      "title": "Table three: rowspan plus a merged subtotal"
+    }
+  ],
+  "title": "Merged cell fixtures"
+}

@@ -1,0 +1,14 @@
+{
+  "author": "",
+  "content_ok": false,
+  "encrypted": false,
+  "error": "scanned_pdf: this PDF is image-only (no extractable text). OCR is installed but recovered no text here - use a vision tool / a web_act screenshot action, or another source.",
+  "pages_extracted": [
+    1
+  ],
+  "pages_total": 1,
+  "quality_score": 0.0,
+  "scanned": true,
+  "table_of_contents": [],
+  "title": "dummy"
+}

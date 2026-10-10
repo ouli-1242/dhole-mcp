@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<!--
+  merged_cells.html —— tests/merged_cells.pdf 的**作者**。
+
+  为什么要有这个文件：CONTRIBUTING 立着"never hand-write a fixture to make a test
+  pass"，而 PDF 是二进制，手写的说法在这里更成问题 —— 手写的 PDF 只会画出**我以为**
+  表格长成的样子。所以这个夹具是**可编辑的源**，PDF 是它的打印结果，命令原样记在
+  tests/test_the_pdf_golden_set_pins_what_the_extractor_does_today.py 的抬头：
+
+      "C:/Program Files/Google/Chrome/Application/chrome.exe" \
+        --headless=new --disable-gpu --no-pdf-header-footer \
+        --print-to-pdf="D:/tools/dhole-mcp/tests/merged_cells.pdf" \
+        "file:///D:/tools/dhole-mcp/tests/merged_cells.html"
+
+  页面上三张表各有各的用途，不许顺手"整理"成一张：
+  1. `#rectangular` —— 正对照。今天它渲染成规整 markdown 网格，P1 之后必须**逐字节
+     不变**，否则"我修的是合并单元格"这句话就没有证人。
+  2. `#colspan` —— 跨列表头。`extract()` 交回来的是补过齐的 list，几何那时已经没了，
+     于是 "Fourth quarter" 掉进数据行。
+  3. `#rowspan` —— 跨行 + 跨列混在一格里（`North` 跨 4 行、末行小计跨 2 列）。
+
+  内容刻意全部是英文且带明确数字：断言要按性质写（非空单元格数与表头一致），数字
+  只是让它在人眼里也认得出对错的锚点。
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Merged cell fixtures</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #000; }
+  h1 { font-size: 20pt; }
+  h2 { font-size: 15pt; }
+  table { border-collapse: collapse; margin: 12pt 0 20pt 0; }
+  th, td { border: 1px solid #000; padding: 4pt 8pt; text-align: left; }
+  th { background: #e8e8e8; }
+</style>
+</head>
+<body>
+<h1>Quarterly revenue fixtures</h1>
+<p>Reference sentence for the plain-text path: 31415-merged-cell-probe.</p>
+
+<h2>Table one: rectangular</h2>
+<table id="rectangular">
+  <thead>
+    <tr><th>Region</th><th>Quarter</th><th>Revenue</th><th>Share</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>North</td><td>First quarter</td><td>120</td><td>18%</td></tr>
+    <tr><td>North</td><td>Second quarter</td><td>135</td><td>19%</td></tr>
+    <tr><td>South</td><td>First quarter</td><td>90</td><td>12%</td></tr>
+    <tr><td>South</td><td>Second quarter</td><td>101</td><td>13%</td></tr>
+  </tbody>
+</table>
+
+<h2>Table two: a header that spans two columns</h2>
+<table id="colspan">
+  <thead>
+    <tr><th rowspan="2">Region</th><th colspan="2">Revenue by quarter</th><th>Share</th></tr>
+    <tr><th>Third quarter</th><th>Fourth quarter</th><th>Year</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>North</td><td>140</td><td>150</td><td>545</td></tr>
+    <tr><td>South</td><td>95</td><td>110</td><td>396</td></tr>
+  </tbody>
+</table>
+
+<h2>Table three: rowspan plus a merged subtotal</h2>
+<table id="rowspan">
+  <thead>
+    <tr><th>Region</th><th>Quarter</th><th>Revenue</th></tr>
+  </thead>
+  <tbody>
+    <tr><td rowspan="4">North</td><td>First quarter</td><td>120</td></tr>
+    <tr><td>Second quarter</td><td>135</td></tr>
+    <tr><td>Third quarter</td><td>140</td></tr>
+    <tr><td>Fourth quarter</td><td>150</td></tr>
+    <tr><td colspan="2">North subtotal</td><td>545</td></tr>
+  </tbody>
+</table>
+
+<p>Trailing paragraph so the last table is not the end of the document.</p>
+</body>
+</html>

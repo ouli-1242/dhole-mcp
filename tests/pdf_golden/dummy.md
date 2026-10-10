@@ -1,0 +1,1 @@
+[Scanned/image-only PDF - no extractable text. OCR is installed but recovered no text here - use a vision tool / a web_act screenshot action, or another source.]
