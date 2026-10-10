@@ -643,20 +643,53 @@ def _add_end_pages(toc: list[dict], total_pages: int) -> list[dict]:
     level[j] <= L) - 1, or total_pages if no such entry. This gives the agent a
     page RANGE per section (e.g. 'Methodology: 23-31') so it can call
     pages='23-31' to grab exactly that section. Entries with no start page are
-    left as-is (end_page not set)."""
+    left as-is (end_page not set).
+
+    Both ends of the range are pinned to pages this file actually has. The
+    outline is the document's own claim and it can be stale — measured on a
+    3-page PDF whose bookmarks pointed at a longer edition: a section got
+    `end_page: 98` (95 pages that do not exist) and the entry after it got
+    `end_page: 3` while starting at page 99, an inverted range. `pages=` is
+    picked from these ranges, so an out-of-bounds range is not extra
+    information, it is a dispatch to a page that is not there.
+    """
     n = len(toc)
     for i, entry in enumerate(toc):
         lvl = entry.get("level", 1)
         start = entry.get("page")
         if start is None:
             continue
-        end = total_pages
+        # 页数读不出来（`len(pdf)` 失败的兜底路径给的是 0）时不猜上界：一节只报到
+        # 它自己那一页，比报到一个算不出来的区间诚实。
+        end = total_pages if total_pages > 0 else int(start)
         for j in range(i + 1, n):
             if toc[j].get("level", 1) <= lvl and toc[j].get("page") is not None:
-                end = max(int(start), int(toc[j]["page"]) - 1)
+                end = int(toc[j]["page"]) - 1
                 break
-        entry["end_page"] = int(end)
+        if total_pages > 0:
+            end = min(end, total_pages)
+        entry["end_page"] = max(int(start), end)
     return toc
+
+
+def _outline_inside_the_file(toc: list[dict], total_pages: int
+                             ) -> tuple[list[dict], list[tuple[str, int]]]:
+    """Split an outline into entries this file can honour and entries it cannot.
+
+    A bookmark to page 99 of a 3-page document cannot be clamped into truth:
+    there is no page to point it at. Dropping it silently would be the usual
+    sin of this batch, so the caller says the count and the titles out loud.
+    """
+    if total_pages <= 0:
+        return list(toc), []
+    kept, dropped = [], []
+    for entry in toc:
+        start = entry.get("page")
+        if isinstance(start, int) and not (1 <= start <= total_pages):
+            dropped.append((str(entry.get("title") or "(untitled)"), start))
+            continue
+        kept.append(entry)
+    return kept, dropped
 
 
 def _extract_toc(body: bytes) -> list[dict]:
@@ -694,7 +727,19 @@ def _extract_toc(body: bytes) -> list[dict]:
                 page = None
             toc.append({"level": int(level), "title": str(title).strip(), "page": page})
         pdf.close()
-        return _add_end_pages(toc, total_pages)
+        # 先算区间（区间本身要钳），再挑掉起点就不在这份文件里的条目 —— 顺序反了
+        # 就会先丢条目、后算区间，让"下一节"的缺席被当成"这一节到末页"。
+        toc, dropped = _outline_inside_the_file(_add_end_pages(toc, total_pages),
+                                                total_pages)
+        if dropped:
+            from dhole_mcp.context import _note_text
+            _note_text(f"the PDF's own outline points "
+                       f"{len(dropped)} section(s) at pages this file does not have "
+                       f"({'; '.join(f'{t} -> page {p}' for t, p in dropped[:3])}"
+                       f"{', …' if len(dropped) > 3 else ''}) - those entries are left "
+                       f"out of the section map rather than clamped onto a page they "
+                       f"never named; the file has {total_pages} page(s)")
+        return toc
     except Exception as e:
         logger.debug("ToC extraction failed: %s", e)
         return []
