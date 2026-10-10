@@ -68,6 +68,9 @@ VALUES: dict[str, object] = {
     "nested_max": 5,
     # B5-13a：档位是字符串枚举，探针值要和默认值 "auto" 不同才探得出丢没丢。
     "anti_detect": "aggressive",
+    # W1：一颗对象参数。探针值避开"没传"（None）与空字典
+    # （那在管道里同罪于没传），名字也不是任何一族拒绝的住户。
+    "headers": {"x-probe": "1"},
     "max_links": 5, "session_id": "probe-session",
     # 整轮字符帽（批次 5 新增）：探针值要避开默认 60000，也避开 0（"不要帽"）——
     # 两个都不撞，丢了才分辨得出是丢了。

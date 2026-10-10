@@ -355,7 +355,26 @@ def test_connect_stays_inside_the_packed_budget():
 #: 逐块实测：动作清单 +6（一颗动作名），工具描述 +367（撤一句做不到的、给一对用得上的）。
 #: `{=名字}` 的完整旋钮表与"为什么跨调用不行"整段在 references/tools.md 的 Page interaction
 #: —— 参数描述那颗 296 的闸装不下第二份（A2 刚试过），所以形状给在工具描述那一份。
-CONNECT_CEILING = 31_824
+#: 2026-10-10 体验修复刀3-W1：棘轮**上抬 +642**（31,824 → 32,466），买的是这一批里
+#: 唯一一句"调用方对自己那一发请求没有任何说法"。缺陷的原文是人的话："我没设过的头"。
+#: 实测一次零点名的 `web_read` 往站点发 **15** 颗头：一枚编造的 `referer:
+#: https://www.google.com/`、browserforge 生成的 UA 与 `sec-ch-ua*` 一家，外加
+#: `sec-fetch-site: "?1"` —— 那是 `Sec-Fetch-User` 的值，真 Chrome 在 `Sec-Fetch-Site`
+#: 这一位发 none / same-origin / cross-site。16 发抽样里 13 发带着它，3 发把手机 UA
+#: 配在 `sec-ch-ua-platform: "Linux"` 上。而旧参数面上没有任何一颗能改它：
+#: `extra_headers` 是 §3-17 具名拒绝的旧拼写（它当年搬走的是**身份**，不是话），
+#: `referer` 硬编在两个调用点上（`stealthy_headers=True` 那两颗字面量）。
+#: 这一刀做三件事，其中两件动 wire：① `headers=` 上 web_read（+386，含三族拒绝各自
+#: 那扇门的地址）与 web_request（+256）；② 那两颗字面量交给 `anti_detect` 档位表读
+#: （公开面**没有**多第二颗伪装旋钮：`off` 才是"只发我点名的"那句话的落点，实测剩
+#: 14 颗、无 referer，`summary` 在真跑过 HTTP 层的那一发上说这句话）；③ 库层的不自洽
+#: 写成明说的限制（references/troubleshooting.md），连同一条**自我更正**：计划里曾把
+#: `sec-purpose` 与 `upgrade-insecure-requests` 记成"primp 编译层之下、dhole 的字典
+#: 覆盖不掉"，实测**覆盖得掉** —— primp 只补字典里没有的名字。所以拒绝名单上没有
+#: "技术上做不到"这一类，只有三条设计边界（凭据 / UA / 校验子），每条都点名自己的门。
+#: §3-17 那条边界一个字没动：`auth` / `cookies` / `proxy` / `extra_headers` /
+#: `allow_private` 五个旧拼写仍以名字被拒，`headers=` 里点名 cookie/authorization 也一样拒。
+CONNECT_CEILING = 32_466
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

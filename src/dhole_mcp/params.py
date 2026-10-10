@@ -464,6 +464,10 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         # sys_state's `confirm` already fell into once.
         "confirm": "bool", "check_login": "bool",
         "timeout": "number",
+        # W1：`headers=` 是键值对，不是字符串。字符串客户端把整段 JSON 发过来是常态
+        # （`_coerce_dict_arg` 收下来），其余形状当场点名 —— 一个读成 `{"a": "b"}`
+        # 之外的东西的调用，宁可拒绝，不要"安静地什么头都没带"。
+        "headers": "dict",
         # A numeric PDF page request ("pages": 3) is unambiguous; reading it only
         # as a string used to drop the range silently and return the whole file.
         "pages": "strnum", "password": "strnum",
@@ -489,6 +493,9 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
     # 授权，而它授权的是一次带存储凭据的写。
     "web_request": {
         "method": "str", "content_type": "str", "timeout": "number",
+        # W1：写请求那一侧的同一颗门。同一个 coerce、同一份拒绝名单（`_header_door`），
+        # 因为两边必须读同一份东西。
+        "headers": "dict",
         "confirm": "bool",
     },
     # §4 页面动作那颗。rawlist：动作链的每一个对象都是一个不同键的形状

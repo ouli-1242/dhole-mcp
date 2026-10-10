@@ -163,10 +163,17 @@ Measured: one call, 8 grouped records, `summary` carrying `nested: 8 links expan
 {"url": "https://hard-site.com/page", "force_fetcher": "stealthy"}
 ```
 
-**How hard to hide that it is a browser** (`anti_detect` is the only fingerprint dial — `off` / `basic` / `auto` / `aggressive`, no per-knob override. `auto` is already the tested configuration, so the two worth writing are `aggressive` when a site scores the subresources dhole trims, and `off` when the hardening itself is what trips it):
+**How hard to hide that it is a browser** (`anti_detect` is the only fingerprint dial — `off` / `basic` / `auto` / `aggressive`, no per-knob override. `auto` is already the tested configuration, so the two worth writing are `aggressive` when a site scores the subresources dhole trims, and `off` when the hardening itself is what trips it — or when you want the request to carry nothing dhole synthesized: at `off` the HTTP tier sends no fabricated `referer` and no generated UA, which the summary says out loud):
 ```json
 {"url": "https://hard-site.com/page", "anti_detect": "aggressive"}
 {"url": "https://legacy-app.example.com/report", "anti_detect": "off"}
+```
+
+**Headers you name** (`headers=` — every key you write beats the value dhole would have sent, on both tiers; caps 50 keys and 8KB each. Three families come back refused with the door they belong to: `cookie` / `authorization` / `proxy-authorization` → `cred_defaults`, `user-agent` → it is paired with the TLS profile (`off` or `cdp_url=` are the self-consistent ways to change it), `if-*` → `extraction_type='check'`. Your keys ride ON TOP of dhole's own set unless the rung is `off`, and they are part of the cache key — a different `accept` never replays another answer):
+```json
+{"url": "https://api.example.com/v1/orders", "headers": {"accept": "application/json", "x-request-id": "a3f1"}}
+{"url": "https://example.com/preise", "headers": {"accept-language": "de-DE,de;q=0.9"}}
+{"url": "https://example.com/report", "anti_detect": "off", "headers": {"x-client-tag": "only-what-i-named"}}
 ```
 
 **CDP attach — login-walled page via the user's real Chrome** (requires the user's one-time setup: copy-profile Chrome with `--remote-debugging-port=9222` — configuration.md "CDP attach"; the FIRST attach to a host is refused with `cdp_authorization_required` and authorizing it is one re-call with `"confirm": true` after the user says yes). `check_login` returns `{logged_in: true/false/null, signals, cookie_names}` — cookie names only, never values; `schema=` cannot combine with `cdp_url`:

@@ -41,6 +41,11 @@ RETIRED = ("headless", "real_chrome", "hide_canvas", "block_webrtc",
 # 用来证明 auto 档没动行为。
 OLD_DEFAULTS = {"headless": True, "real_chrome": False, "hide_canvas": True,
                 "block_webrtc": True, "solve_cloudflare": True, "useragent": None}
+# 第七位（W1 的 `stealthy_headers`）不在这张表里：它从前不是签名上的一颗，是 HTTP 层
+# 两个调用点上的字面量 `True`，而 `_tier_kwargs` 的汇点在浏览器层 —— 拿它当对照会
+# 测到 `None`（那颗根本没经过这条路）。逐位对照住在下面的
+# test_the_rung_decides_whether_dhole_synthesizes_request_headers 里，同样证明
+# `auto` 一位没动。
 
 
 def _tier_kwargs(monkeypatch, **call):
@@ -77,6 +82,30 @@ def _defs():
     return {td["name"]: td for td in Server._TOOL_DEFS}
 
 
+def _http_tier_kwargs(monkeypatch, **call):
+    """走一次真实分发，抓 **HTTP 层** 那一发实际收到的参数。
+
+    `_tier_kwargs` 的汇点在浏览器层，而档位表第五位（W1 的 `stealthy_headers`）只有
+    这一层读得到 —— 两位分开测，是因为它们本来就走两条不同的路：强制浏览器层的调用
+    根本不经过 HTTP 层，那句"这一档关掉了合成头"就不该出现在它的回执里。
+    """
+    seen: dict = {}
+
+    async def fake(self, url, **kwargs):
+        seen.update(kwargs)
+        seen["url"] = url
+        from dhole_mcp.server import ResponseModel
+        return ResponseModel(url=url, status=200, content=["body"],
+                             fetcher_used="http", content_ok=True,
+                             content_type="text/html")
+
+    monkeypatch.setattr(Server, "get", fake)
+    args = {"url": URL, "force_fetcher": "http", "cache_ttl": 0}
+    args.update(call)
+    asyncio.run(Server()._dispatch("web_read", args))
+    return seen
+
+
 # ─── 公开面：一颗换掉六颗 ──────────────────────────────────────────
 
 def test_web_read_advertises_one_level_param_and_no_hardening_knobs():
@@ -100,11 +129,17 @@ def test_web_read_advertises_one_level_param_and_no_hardening_knobs():
     # B5-14d 加了两层扇出的三颗（nested_selector / nested_fields / nested_max），24 → 27：
     # 它们不是又一组装饰，而是"一次调用替 agent 发 8 次"这件事的接口 —— 没有它们，
     # 列表页→详情页只能靠 agent 自己排队，而排队的那 8 次里没人保证 robots 逐条查过。
-    # §3-12 的 ≤20 已由作者裁决**放宽成棘轮 27**（"能力优先"，与作废 ≤26,000 同一句
+    # §3-12 的 ≤20 已由作者裁决**放宽成棘轮**（"能力优先"，与作废 ≤26,000 同一句
     # 话）：这 7 颗里没有一颗是"没人用的装饰"——cdp_url / confirm / check_login 是
     # §3-16 那道门（"逐次留着"是定过的决定），nested_* 是扇出，剩的是读法本身。守卫
-    # 在 tests/test_wire_shape.py，数字钉在 27、只准往下。
-    assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 27, \
+    # 在 tests/test_wire_shape.py，数字钉在当天的最大值、只准往下。
+    # W1 是 27 → 28 的那一颗 `headers`。它不是又一个装饰：这批缺陷的原文是"我没设过
+    # 的头"—— 调用方看见站点收到一整套自己没点名的头（实测 15 颗，含一枚编造的
+    # google referer），而参数面上**没有任何一颗**能改它：`extra_headers` 是 §3-17
+    # 具名拒绝的旧拼写，`referer` 硬编在两处。加它买到的不是旋钮，是"我说的话能说出去"。
+    # 同一次还把 `stealthy_headers` 那两颗字面量交给档位表读（`rungs.py`），公开面
+    # 因此**没有**多第二颗伪装旋钮。
+    assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 28, \
         len(server_mod._TOP_LEVEL_ARGS["web_read"])
 
 
@@ -171,6 +206,25 @@ def test_each_level_sets_the_hardening_it_claims(monkeypatch, level, expected):
     seen = _tier_kwargs(monkeypatch, anti_detect=level)
     for name, want in expected.items():
         assert seen.get(name) is want, f"{level} 档的 {name} 不是 {want}"
+
+
+@pytest.mark.parametrize("level,want", [
+    ("off", False), ("basic", True), ("auto", True), ("aggressive", True),
+])
+def test_the_rung_decides_whether_dhole_synthesizes_request_headers(monkeypatch,
+                                                                    level, want):
+    """档位表的第五位（W1）：`off` 从此在 HTTP 层也真的关得掉东西。
+
+    这一位从前是两个调用点上的字面量 `stealthy_headers=True`，所以那一档在纯 HTTP 的
+    路上**什么都不关**：一次零点名的调用实测发 15 颗头，其中 `referer:
+    https://www.google.com/` 是编出来的来路，`sec-fetch-site: "?1"` 是一个错值（真
+    Chrome 在这一位发 none / same-origin / cross-site）。`auto` 那一位必须仍是 True
+    —— 它与上面那条 OLD_DEFAULTS 的逐位对照同一条命：红了就是在改反爬效果，不是在
+    改参数名。
+    """
+    seen = _http_tier_kwargs(monkeypatch, anti_detect=level)
+    assert seen.get("stealthy_headers") is want, (
+        f"{level} 档把 HTTP 层的合成头设成了 {seen.get('stealthy_headers')!r}")
 
 
 def test_aggressive_stops_trimming_resources(monkeypatch):

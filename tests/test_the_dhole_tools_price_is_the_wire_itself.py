@@ -179,8 +179,8 @@ def _ruler_module():
     return mod
 
 
-def test_the_default_connect_is_the_published_31_824():
-    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：31,824。
+def test_the_default_connect_is_the_published_32_466():
+    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：32,466。
 
     这一条同时是量尺的回归锁：`tool_payload_measure._wire_for` 曾按工具数累加路由行，
     把默认连接报成 30,857（web_discover / web_crawl 共用那句被算了两遍）。修成按文本
@@ -223,6 +223,15 @@ def test_the_default_connect_is_the_published_31_824():
     可那张图要等整条链跑完才交得到调用方眼前。新的两半说的是结构与那一种真能做的：图像挑战
     转交；页面把挑战写成文本时，`{"read": {..., "as": "code"}}` 再 `{"fill": 
     {"text": "{=code}"}}` 在同一条链里读完。动作清单 +6，工具描述 +367。
+    31,824 → 32,466（2026-10-10，体验修复刀3-W1）：一次**上抬 +642**，买的是这一批里
+    只剩最后一格的那句"调用方对自己那一发请求没有任何说法"。一次零点名的 `web_read`
+    实测发 15 颗头 —— 一枚编造的 `referer: https://www.google.com/`、browserforge 的 UA
+    与 `sec-ch-ua*` 一家（16 发抽样里 3 发把手机 UA 配在 `sec-ch-ua-platform: "Linux"`，
+    13 发带着 `sec-fetch-site: "?1"` 那个错值），而旧参数面上没有任何一颗能改它。
+    `headers=` 上 web_read（+386）与 web_request（+256）；同一刀把 `stealthy_headers`
+    那两颗字面量交给 `anti_detect` 档位表读，公开面因此**没有**多第二颗伪装旋钮。
+    三条设计边界（凭据 / UA / 校验子）各带自己那扇门的地址，而计划里那句
+    "primp 编译层覆盖不掉" 被实测推翻了 —— 覆盖得掉，所以拒绝名单上没有"做不到"这一类。
     """
     ruler = _ruler_module()
     import ast
@@ -240,22 +249,25 @@ def test_the_default_connect_is_the_published_31_824():
         f"仓库量尺与 wire 的 tools/list 对不上：{ruler_compact} vs {wire['tools_compact']}")
     assert ruler_instr == len(wire["instructions"]), (
         f"仓库量尺多算了路由行：{ruler_instr} vs wire {len(wire['instructions'])}")
-    assert ruler_compact + ruler_instr == 31_824
+    assert ruler_compact + ruler_instr == 32_466
 
 
 def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():
-    """`DHOLE_TOOLS=web_read,web_search` 的真机价：11,480（旧的注释写 11,382）。
+    """`DHOLE_TOOLS=web_read,web_search` 的真机价：11,866（上一版注释写 11,480）。
 
-    两次移动的账：11,423 → 11,382 是把签名影子摘掉时顺带瘦的字（那一刀量过真机），
+    三次移动的账：11,423 → 11,382 是把签名影子摘掉时顺带瘦的字（那一刀量过真机），
     11,382 → 11,480 是 C5 给 `web_read` 的 `timeout` 补上"一次尝试封顶 30s"那一句
-    （+98：web_read 在这一组里，`web_search` 那颗不谈下载所以没付）。
+    （+98：web_read 在这一组里，`web_search` 那颗不谈下载所以没付），11,480 → 11,866
+    是 W1 的 `headers=`（+386：这一组里只有 `web_read` 付它 —— `web_search` 不发请求，
+    而一颗搜索的参数长不出一条 HTTP 头的账）。同一条拒绝名单在 `web_request` 那一扇门上
+    只花 256，因为它的描述指着 `web_read.headers` 而不是重说一遍。
     """
     assert _assert_price("web_read,web_search",
-                         ["web_read", "web_search"]) == 11_480
+                         ["web_read", "web_search"]) == 11_866
 
 
 def test_the_readme_eight_tool_price_is_what_the_server_sends():
-    """README 的 23,595 不再只是算术 —— 真机同一值，且文档印的就是它。"""
+    """README 的 8 颗价不再只是算术 —— 真机同一值，且文档印的就是它（24,456）。"""
     _assert_price(",".join(SUB8), SUB8,
                   published=("README.md", "这 8 颗是 {total} 字符"))
 
@@ -263,14 +275,14 @@ def test_the_readme_eight_tool_price_is_what_the_server_sends():
 def test_the_ninth_tool_costs_its_own_row_and_no_routing_line():
     """加 web_discover 只多它自己那一行：路由行与 web_crawl 共用，去重后不再付第二次。
 
-    这是 F-A-J1 那把共享路由行在 wire 上的样子：README 的 9 颗 25,871 =
-    23,814 + 2,057，instructions 一字不变。C3 之后 `web_discover` 自己那一行涨了
+    这是 F-A-J1 那把共享路由行在 wire 上的样子：README 的 9 颗 26,513 =
+    24,456 + 2,057，instructions 一字不变。C3 之后 `web_discover` 自己那一行涨了
     （地图大小两颗旋钮上这门），涨的部分照旧只付一次；C5 没动它（那一扇门一次尝试都不
     走 HTTP 正文通道，所以它不欠那句上限）。
     """
     nine = SUB8 + ["web_discover"]
     assert _assert_price(",".join(nine), nine,
-                         published=("README.md", "共 9 颗 {total}")) == 25_871
+                         published=("README.md", "共 9 颗 {total}")) == 26_513
     eight = _connect(",".join(SUB8))
     assert len(_connect(",".join(nine))["instructions"]) == len(eight["instructions"]), (
         "两颗共用一句路由的工具，第二颗不该再收一次路由行的钱")

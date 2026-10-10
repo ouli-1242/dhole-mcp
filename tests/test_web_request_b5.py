@@ -75,11 +75,13 @@ def _capture_get(monkeypatch, **call):
 
 class TestTheToolExists:
 
-    def test_it_is_registered_with_the_seven_names_it_can_honour(self):
+    def test_it_is_registered_with_the_eight_names_it_can_honour(self):
         assert "web_request" in _defs(), sorted(_defs())
+        # 第七颗之后再加的是 W1 的 `headers`：写请求从前连非凭据的头都递不进去
+        # （`content_type` 已经是一颗头的特例，所以"够不着"是漏，不是设计）。
         assert server_mod._TOP_LEVEL_ARGS["web_request"] == frozenset({
             "url", "method", "body", "content_type", "extraction_type", "timeout",
-            "confirm"})
+            "confirm", "headers"})
 
     def test_it_is_a_write_on_the_wire(self):
         """annotations 是客户端决定"要不要先问用户"的输入，不是装饰。"""
@@ -306,8 +308,9 @@ class TestReadSideLostTheThreeNames:
             assert key not in props, key
         # 这颗数字的来龙去脉写在 tests/test_anti_detect_b5.py:94（28→25→24→27）。
         # 这里再钉一遍是因为这条用例的主语就是"读的那扇门还剩几颗"：扇出（B5-14d）
-        # 加的三颗要在这里被看见，而不是只在别人的文件里解释。
-        assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 27, \
+        # 加的三颗要在这里被看见，而不是只在别人的文件里解释。27 → 28 是 W1 的
+        # `headers`（一次零点名的抓取实测发 15 颗头，而门上那颗都改不了）。
+        assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 28, \
             sorted(server_mod._TOP_LEVEL_ARGS["web_read"])
 
     @pytest.mark.parametrize("key", ["method", "body", "content_type"])

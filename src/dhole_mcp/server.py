@@ -1690,6 +1690,15 @@ def _smart_fetch_request_context(func):
                              "ANONYMOUSLY and still answer 200, which reads as \"the "
                              "site lost my login\" rather than as the argument it is. "
                              "One id covers a urls=[...] batch."))
+        # W1 的闸门开在这里，与 session_id 同一处：`headers=` 里有一个名字这条路走不通
+        # （凭据、UA、校验子三族），拒绝就必须赶在任何请求发出之前、在任何 ContextVar
+        # 被写之前 —— 半途 return 会把已经 set 的会话留进下一个调用。量出来的事实是
+        # 调用方点名的**每一颗**头都能到线上，所以这里没有"技术上做不到"的那种拒绝，
+        # 只有设计边界，每条都把自己那道门的地址一起交出（见 _header_door）。
+        _caller_hdr, _hdr_err, _hdr_way = _caller_headers(options.get("headers"))
+        if _hdr_err is not None:
+            return _invalid_request_result(
+                options.get("url") or "", _hdr_err, next_action=_hdr_way)
         tokens = [
             (_PDF_PAGES, _PDF_PAGES.set(options["pages"] if isinstance(options["pages"], str) else None)),
             (_PDF_PASSWORD, _PDF_PASSWORD.set(options["password"] if isinstance(options["password"], str) else None)),
@@ -1733,7 +1742,11 @@ def _smart_fetch_request_context(func):
                 # 校验子不是参数了，但它是"这一次问的是哪个版本"的一部分，所以仍然
                 # 要进缓存指纹（_cache_context 保持纯函数，值由这里并进去）。存量
                 # 身份同理：上面并入的 auth / cookies / proxy 改变"回来的是什么"。
-                {**options, "_revalidate": _REVALIDATE.get(), **_identity_bits}))),
+                # W1 的 `headers=` 同一类：`accept: application/json` 与 `accept: text/html`
+                # 是两个答案，少这一位就是"换了协商头却回放上一份正文"—— 而指纹读的是
+                # **过了闸的那一份**（键名与值都已 strip），与真发出去的字节同一个决定。
+                {**options, "extra_headers": _caller_hdr,
+                 "_revalidate": _REVALIDATE.get(), **_identity_bits}))),
             (_ROBOTS_MODE, _ROBOTS_MODE.set("")),
             (_ARG_NOTES, _ARG_NOTES.set(notes)),
         ]
@@ -2818,6 +2831,100 @@ def _conditional_headers(markers: Any) -> tuple:
     return out, ""
 
 
+# ─── `headers=`：调用方点名的那一份头（W1）───────────────────────────
+# 拒绝名单上没有"技术上做不到"这一类。它是量出来的：一次本地 echo 抓取（发端 dhole
+# 的 HTTP 层，收端记下每一颗头）证明**调用方点名的每一颗都赢了**，包括曾被记在
+# 手册里"primp 编译层覆盖不掉"的 `sec-purpose` 与 `upgrade-insecure-requests`
+# —— primp 只补 dhole 字典里没有的名字，名字在场时它让路。所以剩下的三条边界
+# 全是设计边界，每一条都把自己那道门的地址一起交出去（params.py：拒必须具名）。
+_CREDENTIAL_HEADER_NAMES = ("cookie", "authorization", "proxy-authorization")
+#: RFC 7232 那一族校验子。公开的那扇门只有一扇（`extraction_type='check'`）。
+_CONDITIONAL_HEADER_NAMES = ("if-match", "if-none-match", "if-modified-since",
+                             "if-unmodified-since", "if-range")
+
+
+def _header_door(low: str) -> Optional[tuple[str, str]]:
+    """这颗头名撞在哪一条设计边界上：`(说清为什么, 唯一的那条出路)`，没有则 None。"""
+    if low in _CREDENTIAL_HEADER_NAMES:
+        return (
+            f"headers= names {low!r}, and a credential is not something a call carries: "
+            "cred_defaults stores it FOR ONE HOST, so it never rides to a site you did "
+            "not name and a cross-origin redirect strips it off",
+            "Store it instead - cred_defaults set={auth: {type: 'bearer', token: '…'}, "
+            "host: 'api.example.com'} (or {type: 'header', name: 'X-API-Key', value: '…'}). "
+            "The call to that host then sends it and identity_applied names what it ran "
+            "on. Nothing was fetched.")
+    if low == "user-agent":
+        return (
+            "headers= names 'user-agent', and the UA is not free to pick here: the HTTP "
+            "tier chooses its TLS impersonation OS from dhole's own generated UA *before* "
+            "your dict is merged, so a UA you name goes out with another browser's "
+            "handshake under it",
+            "Two doors that stay self-consistent: anti_detect='off' stops dhole "
+            "synthesizing a UA at all (measured: primp's own UA and TLS profile then "
+            "travel together, and no google referer goes out), or cdp_url= runs in the "
+            "user's real Chrome. Nothing was fetched.")
+    if low in _CONDITIONAL_HEADER_NAMES:
+        return (
+            f"headers= names {low!r}, and conditional requests are dhole's own business: "
+            "one public parameter asks the origin 'did this change', and an ordinary call "
+            "never sends a validator - while the browser tier cannot carry one (it renders "
+            "an empty view and reports status 0)",
+            "extraction_type='check' is that one door (it returns the changed / unchanged "
+            "receipt, not the page). For everything else dhole revalidates on its own "
+            "terms. Nothing was fetched.")
+    return None
+
+
+def _caller_headers(headers: Optional[dict]) -> tuple[Optional[Dict[str, str]],
+                                                     Optional[str], Optional[str]]:
+    """Turn a caller-named dict into the pipeline's ``extra_headers``.
+
+    Returns `(headers, error, way_out)`; the last two are both None when the dict is
+    usable. Validation is the same gate every other header path already goes through
+    (`validate_headers`: shape, CRLF injection, internally-managed names, caps) plus
+    the named refusals above, and it runs here rather than deeper because a header the
+    pipeline cannot honour must stop the call before a request spends it.
+    """
+    if headers is None:
+        return None, None, None
+    for name in headers:
+        door = _header_door((name or "").strip().lower())
+        if door:
+            return None, door[0], door[1]
+    try:
+        validated = validate_headers(headers)
+    except (ValueError, SecurityError) as e:
+        return None, f"headers=: {e}", (
+            "Fix the dict and call again - one bad name stops the whole call, because "
+            "half a header set is a request you did not ask for. Nothing was fetched.")
+    return (validated or None), None, None
+
+
+def _headers_note(caller: Optional[Dict[str, str]], synthesized: bool) -> str:
+    """What the caller's headers rode on, in the one field clamp notes live in.
+
+    Two shapes read as a promise otherwise: `headers=` does not replace dhole's own
+    template (it wins per key *over* it), and `headers={}` names nothing at all. Both
+    said only in code would leave a caller believing they had sent their own request
+    shape when the google referer went out anyway.
+
+    An empty string means "the rung already says this": with `anti_detect='off'` the
+    HTTP-tier note names the dropped synthesis itself, and saying it twice in one
+    `summary` is noise that reads like emphasis.
+    """
+    if not caller:
+        return ("headers={} names no header: nothing about the request changed - to "
+                "send no dhole-synthesized headers at all the dial is anti_detect='off'")
+    if not synthesized:
+        return ""
+    # 说机制不说"这一发"：同一条路也走缓存命中，而那一发根本没有包可发，一句
+    # "你的头正骑在模板之上"就成了一句关于没发生过的事的断言。
+    return ("headers= wins key by key over dhole's own browser template (that template "
+            "is what adds a google referer and a generated UA) - anti_detect='off' is "
+            "the rung that sends yours alone")
+
+
 #: 三种形状的**唯一作者**。一份回执原先把它说两遍（raise 的原文一份，调用方自己
 #: 追加的一份 —— 实测 cred_defaults 的一次拒绝在同一个 `error` 串里出现两次全文），
 #: 而一份列表被读了两遍不会多告诉调用方任何东西。
@@ -3115,6 +3222,10 @@ _SF_PARAMS = frozenset({
     # 它属于另一颗工具。
     "cache_ttl", "offset", "focus", "focus_mode", "focus_engine",
     "extraction_type", "force_fetcher", "urls",
+    # W1：调用方点名的头。它**不是** §3-17 搬走的那颗 `extra_headers` 换了个名字 ——
+    # 旧拼写照样以名字被拒（见 _header_door 的三族），新的这一颗只收非凭据的头，
+    # 而且每一条设计边界都把自己那道门的地址一起交出去。
+    "headers",
     # 17.0 §5 E-13：「列表页 → 每项详情页」这两层的一次摊平。它们是读法参数不是
     # 伪装参数，所以留在这扇门；`schema=` 的嵌套解决的是同一篇文档里的作用域，
     # 这两层是另外 N 篇文档。
@@ -3132,6 +3243,10 @@ _SC_PARAMS = frozenset({
 # 内部管线照旧收这三颗（一次性那条规则住在管线里，不住在工具名上）。
 _REQUEST_PARAMS = frozenset({
     "url", "method", "body", "content_type", "extraction_type", "timeout",
+    # W1：写请求也要有头可点。`content_type` 已经是一颗头的特例，所以"其余的头
+    # 够不着"从来不是设计，只是漏。同 web_read 那一条边界（凭据 / UA / 校验子
+    # 三族具名拒绝），因为传的必须是同一份东西。
+    "headers",
     # 写操作确认门（G25 评审 Blocker）：confirm 必须是已知名，否则被注入内容
     # 诱导后的重试会被 dispatch 当表外名拒掉——闸门要在，通往闸门的路也要在。
     "confirm",
@@ -5134,6 +5249,9 @@ class MasterFetchServer:
         extraction_type: Optional[Literal["markdown", "html", "text", "article", "structured"]] = None,
         timeout: Optional[int | float] = None,
         confirm: Optional[bool] = None,
+        # W1：写请求也要有头可点。`content_type` 本来就是一颗头的特例，所以"其余的头
+        # 够不着"从来不是设计，只是漏。同 web_read 一条路、同一份拒绝名单。
+        headers: Optional[Dict[str, Any]] = None,
     ) -> ResponseModel:
         """Send one NON-GET request and read back what the server answered.
 
@@ -5155,6 +5273,9 @@ class MasterFetchServer:
         stores auth / cookies per host, and a write to that host carries them -
         so the key is typed once instead of being copied into the transcript with
         every request, and the response names what it ran on in `identity_applied`.
+        `headers` is the non-credential half of that sentence: a header you name
+        wins per key, while `cookie` / `authorization` / `proxy-authorization` are
+        refused back by name because the host scoping is what makes them safe.
 
         Every verb here that changes state is one-shot by rule rather than by
         spec: RFC calls PUT and DELETE idempotent, which is a claim about the
@@ -5216,7 +5337,7 @@ class MasterFetchServer:
         return await self.web_read(
             url=url, method=verb, body=body, content_type=content_type,
             extraction_type=extraction_type,
-            timeout=timeout, cache_ttl=0,
+            timeout=timeout, cache_ttl=0, headers=headers,
         )
 
     async def web_act(
@@ -5461,6 +5582,10 @@ class MasterFetchServer:
         check_login: bool = False,
         cdp_url: Optional[str] = None,
         session_id: Optional[str] = None,
+        # W1：调用方点名的头，逐键压过 dhole 自己那一份模板。三族名字在这扇门就被
+        # 点名退回（凭据 → cred_defaults、user-agent → TLS 配对、if-* → check），
+        # 所以 §3-17 的那条边界一个字没动：它搬走的是**身份**，不是"你说的话"。
+        headers: Optional[Dict[str, Any]] = None,
         method: Optional[str] = None,
         body: Optional[Any] = None,
         content_type: Optional[str] = None,
@@ -5532,7 +5657,11 @@ class MasterFetchServer:
         cookies = _idvals["cookies"]
         proxy = _idvals["proxy"]
         cdp_url = _idvals["cdp_url"]
-        extra_headers = None
+        # W1 之前这里是死的一句 `extra_headers = None`：调用方没有门把一颗头递进来，
+        # 而下游每一层（HTTP 的 `_build_headers`、浏览器的 context 头、缓存指纹、
+        # 逐跳的凭据剥离）早就为这份字典写好了规矩。门开了以后它读的是 `_caller_headers`
+        # 那份已经过闸的形状 —— 闸门在装饰器里，赶在任何 ContextVar 与请求之前。
+        extra_headers = _caller_headers(headers)[0]
         anti_detect = _idvals["anti_detect"]
         _IDENTITY_APPLIED.set(_idnote)
         # 逐调用清零：抽取路径在缓存命中时根本不跑，不清就会把上一次的折叠条数
@@ -5672,6 +5801,17 @@ class MasterFetchServer:
         solve_cloudflare = _hardening["solve_cloudflare"]
         useragent = _hardening["useragent"]
         load_everything = _hardening["load_everything"]
+        # W1：这一位从前是 HTTP 层两个调用点上的字面量 `stealthy_headers=True`，
+        # 所以 `off` 那一档在纯 HTTP 的路上什么都不关 —— 站点照样收到 15 颗 dhole 合成
+        # 的头，包括一枚编造的 google `referer`。现在它跟着档位走（`auto` 逐位不变，
+        # `test_auto_is_bit_for_bit_the_pre_refactor_default` 钉着），而"我只发我点名的头"
+        # 这句话第一次有了落点。
+        stealthy_headers = _hardening["stealthy_headers"]
+        if headers is not None:
+            # 说在合流之前：再往下 `extra_headers` 还要并上凭据头与校验子，那时"你点名的
+            # 那一份"就分不出来了。落点是 `summary` —— 每一颗钳与每一次悄悄的改变都只
+            # 住在这一个字段里（test_every_clamp_is_announced 钉着）。
+            _note_text(_headers_note(extra_headers, stealthy_headers))
         # An explicit value still wins.
         if timeout is None:
             timeout = ACTIONS_DEFAULT_TIMEOUT_MS if actions else DEFAULT_CALL_TIMEOUT_MS
@@ -5742,6 +5882,10 @@ class MasterFetchServer:
                 # call, so a batch carries it to every row; credentials need no
                 # forwarding — each row resolves its own host from the store.
                 anti_detect=anti_detect,
+                # W1 的 `headers=` 与档位同一类：它是"这一次说的话"，不是身份，
+                # 所以一批里每一行都带着同一份。不转下去的代价是一条静默的路：
+                # 调用方点了 accept-language，十个 URL 里九个答的是默认语言。
+                headers=headers,
                 max_chars=max_content_chars,
                 include_media=include_media, include_links=include_links,
                 focus=focus, schema=schema,
@@ -6044,6 +6188,7 @@ class MasterFetchServer:
                     solve_cloudflare=solve_cloudflare,
                     block_webrtc=block_webrtc, hide_canvas=hide_canvas,
                     extra_headers=extra_headers, useragent=useragent,
+                    stealthy_headers=stealthy_headers,
                     cookies=cookies, max_chars=mc,
                     check_login=check_login, cdp_url=cdp_url,
                     page_action=page_action,
@@ -6084,6 +6229,7 @@ class MasterFetchServer:
             # cap applies to the JSON that comes back (see re-chunk below).
             max_chars=_SCHEMA_SOURCE_MAX_CHARS,
             conditional=conditional, load_everything=load_everything,
+            stealthy_headers=stealthy_headers,
         )
         # G1（评审 High）：extraction_type="check" 问的是「这页变了吗」，不是「把页面
         # 给我」。基线就是 web_read 自己落的 html 缓存（envelope 带着源站校验子，
@@ -6115,7 +6261,8 @@ class MasterFetchServer:
                     timeout=timeout, solve_cloudflare=solve_cloudflare,
                     block_webrtc=block_webrtc, hide_canvas=hide_canvas,
                     extra_headers=extra_headers, useragent=useragent,
-                    cookies=cookies, load_everything=load_everything))
+                    cookies=cookies, load_everything=load_everything,
+                    stealthy_headers=stealthy_headers))
 
         if nested_selector is not None and _nested_n > 0:
             return await self._nested_read(
@@ -6288,6 +6435,7 @@ class MasterFetchServer:
                         solve_cloudflare=solve_cloudflare,
                         block_webrtc=block_webrtc, hide_canvas=hide_canvas,
                         extra_headers=extra_headers, useragent=useragent,
+                        stealthy_headers=stealthy_headers,
                         cookies=cookies, max_chars=mc,
                         page_action=page_action,
                         check_login=check_login,
@@ -6308,6 +6456,7 @@ class MasterFetchServer:
                         solve_cloudflare=solve_cloudflare,
                         block_webrtc=block_webrtc, hide_canvas=hide_canvas,
                         extra_headers=extra_headers, useragent=useragent,
+                        stealthy_headers=stealthy_headers,
                         cookies=cookies, max_chars=mc,
                         check_login=check_login,
                         disable_resources=not load_everything,
@@ -6324,6 +6473,7 @@ class MasterFetchServer:
                     proxy=proxy, timeout=timeout,
                     solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
                     hide_canvas=hide_canvas, extra_headers=extra_headers,
+                    stealthy_headers=stealthy_headers,
                     useragent=useragent, cookies=cookies, max_chars=mc,
                     conditional=conditional, load_everything=load_everything,
                 ), url, timeout, "fetch tiers"), check_login)
@@ -6414,6 +6564,7 @@ class MasterFetchServer:
                 solve_cloudflare=tier["solve_cloudflare"],
                 block_webrtc=tier["block_webrtc"], hide_canvas=tier["hide_canvas"],
                 extra_headers=tier["extra_headers"], useragent=tier["useragent"],
+                stealthy_headers=tier["stealthy_headers"],
                 cookies=tier["cookies"], max_chars=tier["max_chars"],
                 check_login=check_login,
                 disable_resources=not tier["load_everything"]),
@@ -6663,6 +6814,7 @@ class MasterFetchServer:
         focus: Optional[str] = None, schema=None,
         max_links: Optional[int] = None, ignore_robots: bool = False,
         session_id: Optional[str] = None,
+        headers: Optional[Dict[str, Any]] = None,
         method: Optional[str] = None, body=None, content_type: Optional[str] = None,
     ) -> BulkResponseModel:
         """Fetch multiple URLs in parallel through the smart fetch pipeline.
@@ -6689,6 +6841,7 @@ class MasterFetchServer:
                     focus=focus, schema=schema,
                     max_links=max_links, ignore_robots=ignore_robots,
                     session_id=session_id,
+                    headers=headers,
                     method=method, body=body, content_type=content_type,
                 )
             except Exception as e:
@@ -6770,6 +6923,10 @@ class MasterFetchServer:
         headless, real_chrome, proxy, timeout,
         solve_cloudflare, block_webrtc, hide_canvas, extra_headers,
         useragent, cookies, max_chars: int = DEFAULT_MAX_CONTENT_CHARS,
+        # 默认 True = 今天的行为（`auto` 档），只有 `anti_detect='off'` 把它交下来。
+        # 它不是一颗新的公开旋钮：要不要发 dhole 合成的那一套头，是**档位**决定的事，
+        # `headers=` 只决定点名的那几颗赢在哪一层之上（实测：两种档位下你点的都到）。
+        stealthy_headers: bool = True,
         page_action=None,
         check_login: bool = False,
         cdp_url: Optional[str] = None,
@@ -6808,8 +6965,16 @@ class MasterFetchServer:
                 proxy=proxy_url,
                 headers=extra_headers, cookies=http_cookies,
                 useragent=useragent, timeout=http_timeout, retries=http_retries,
-                stealthy_headers=True,
+                stealthy_headers=stealthy_headers,
             )
+            if not stealthy_headers:
+                # `off` 这一档从前在 HTTP 层什么都不关（那两位是字面量）。现在它关了，
+                # 所以这句话必须跟着走：调用方看见的是"少了一整套头"，而少的那几颗里
+                # 有一枚是过墙的承重件 —— 墙开始失败时，这句是唯一的线索。
+                _note_text("anti_detect='off': the HTTP tier sent no dhole-synthesized "
+                           "headers - no fabricated google referer, no generated UA. "
+                           "What went out is what you named plus the client's own "
+                           "Chrome profile")
             result.escalation_path = "direct:http"
             return _attach_login_probe_gap(
                 await self._finalize_result(result, url, extraction_type,
@@ -7030,6 +7195,9 @@ class MasterFetchServer:
         self, url, extraction_type, css_selector, cache_ttl, offset, headless, real_chrome,
         proxy, timeout, solve_cloudflare, block_webrtc,
         hide_canvas, extra_headers, useragent, cookies, max_chars: int = DEFAULT_MAX_CONTENT_CHARS,
+        # 同 `_force_fetch`：这一位由 `anti_detect` 档位决定，HTTP 层那两颗硬编的
+        # `stealthy_headers=True` 就是它替下来的地方。
+        stealthy_headers: bool = True,
         conditional: Optional[dict] = None, load_everything: bool = False,
     ) -> ResponseModel:
         """Auto-escalation: try HTTP first, fall back to stealthy if it fails.
@@ -7205,7 +7373,7 @@ class MasterFetchServer:
             css_selector=css_selector,
             proxy=_proxy_to_url(proxy, None),
             headers=extra_headers, cookies=http_cookies,
-            useragent=useragent, stealthy_headers=True,
+            useragent=useragent, stealthy_headers=stealthy_headers,
             timeout=http_timeout, retries=http_retries,
         ), "HTTP tier", "http",
             diagnosis=(_document_budget_advice(url, doc_size, doc_size_note, budget_ms,
@@ -7217,6 +7385,13 @@ class MasterFetchServer:
                                                    "HTTP tier") if document else ""))
         elapsed = (now() - start_time) * 1000
         result.duration_ms = elapsed
+        if not stealthy_headers:
+            # 同 `_force_fetch` 里那一句：这一档真的关掉了 HTTP 层的合成头，而它关掉的
+            # 里面有一枚是过墙的承重件（google referer）。改动的账要写在改动的那一层上。
+            _note_text("anti_detect='off': the HTTP tier sent no dhole-synthesized "
+                       "headers - no fabricated google referer, no generated UA. "
+                       "What went out is what you named plus the client's own "
+                       "Chrome profile")
 
         # ─── 304: the conditional answer (G23) ─────────────────────────
         # A 304 carries no body BY DESIGN, so each test below ("empty content =
@@ -9061,6 +9236,11 @@ class MasterFetchServer:
                     "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check for this call (default false = comply). True only where you have the site's permission."},
                     "check_login": {"type": "boolean", "description": "Model-free login probe on the settled browser page; returns login_check (DOM signals + cookie NAMES, never values). Live-only: null on HTTP-tier results and on cache hits."},
                     "cdp_url": {"type": "string", "description": "Attach the user's Chrome over CDP: rides that profile's logged-in cookies, skips the HTTP tier and public cache; answers say cdp_attached=true. First attach per host needs confirm=true."},
+                    # W1：调用方点名的头。三族拒绝各带着自己那道门的地址（params.py：
+                    # 拒必须具名），而"你的键赢在哪一层之上"这句必须在这一颗描述里 ——
+                    # 读不到它的人会以为 `headers=` 就是"这次发出去的全部头"，而实测
+                    # 今天默认发 15 颗，一颗都不是你点的。
+                    "headers": {"type": "object", "additionalProperties": {"type": ["string", "null"]}, "description": "Your keys win, key by key, over what dhole synthesizes. Refused by name, each with its door: cookie / authorization / proxy-authorization -> cred_defaults, user-agent -> the TLS profile, if-* -> extraction_type='check'. anti_detect='off' sends yours alone; caps: sys_guide(topic='behavior')."},
                     "include_links": {"type": "boolean", "description": "Also return outgoing links, classified as citations / navigation / external, with a primary_source hint (default false)."},
                     "max_links": {"type": "integer", "description": "Per-list cap for include_links (1-100; default 30/20/20); links.total_found and links.is_truncated report what it hid."},
                     "include_media": {"type": "boolean", "description": "Also return up to 20 image URLs found on the page in .media (default false)."},
@@ -9118,6 +9298,9 @@ class MasterFetchServer:
                     "extraction_type": {"type": "string", "description": "How the answer is read back: markdown (default), html, text, article or structured. A server answering a write with JSON still gets that JSON extracted."},
                     "timeout": {"type": "integer", "description": _TIMEOUT_DESC_HTTP},
                     "confirm": {"type": "boolean", "description": "Required true for POST / PUT / PATCH / DELETE: a write acts only on the user's explicit yes, and stored credentials for the host ride along. HEAD needs none."},
+                    # 同 web_read.headers：一门规矩两处够得着，描述在这颗上只说差异
+                    # （一次写不带升档，也不带缓存，所以"赢在哪一层"只有一层）。
+                    "headers": {"type": "object", "additionalProperties": {"type": ["string", "null"]}, "description": "Headers to send, winning key by key over what dhole synthesizes. The same three families are refused here by name and for the same reason - see web_read.headers."},
                 },
             },
             # 写操作默认不是只读；重复调用不保证同一个答案，所以不是幂等。

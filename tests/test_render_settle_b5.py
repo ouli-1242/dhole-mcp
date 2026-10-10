@@ -132,8 +132,8 @@ class TestTheCallSurfaceLostBothKnobs:
             for knob in ("wait", "network_idle"):
                 assert knob not in props, f"{tool} 还在教 {knob}"
 
-    def test_web_read_advertises_twenty_seven_names(self):
-        """35 → 30（13c 身份）→ 28（13d 时机）→ 25（14a 写操作）→ 24（14b 动作链）→ 27（14d nested_*）。
+    def test_web_read_advertises_twenty_eight_names(self):
+        """35 → 30（13c 身份）→ 28（13d 时机）→ 25（14a 写操作）→ 24（14b 动作链）→ 27（14d nested_*）→ 28（W1 headers）。
 
         §3-12 的 ≤20 已由作者裁决**放宽成棘轮 27**（"能力优先"）：差的那几颗是
         §3-16 那道门与读法本身，守卫在 tests/test_wire_shape.py。
@@ -143,8 +143,12 @@ class TestTheCallSurfaceLostBothKnobs:
         报一个不存在的数字。普查写死是有意义的（少一颗就是能力从门上消失），但它的
         意义全在于**跟着改** —— 一条常年红着没人理的普查比没有普查更糟，因为它教会
         大家红是可以接受的。
+
+        27 → 28 是体验修复刀3-W1 的 `headers`：一次零点名的抓取实测发 15 颗头而参数面
+        上没有一颗能改它（旧拼写 `extra_headers` 是 §3-17 具名拒绝的身份通道）。同一刀
+        把 `stealthy_headers` 那两颗字面量交给档位表读，公开面因此只多这一颗。
         """
-        assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 27, \
+        assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 28, \
             sorted(server_mod._TOP_LEVEL_ARGS["web_read"])
 
     def test_web_act_carries_no_timing_knob_either(self):

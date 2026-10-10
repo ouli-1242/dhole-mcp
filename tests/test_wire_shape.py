@@ -24,7 +24,12 @@ from dhole_mcp.server import _TOP_LEVEL_ARGS, MasterFetchServer
 # 棘轮：钉在今天实测最大值上（见下方守卫），只准往下 —— 不写"其余几颗 ≤几"
 # 这类次级断言，那类注释会被下一次形状变化悄悄否定。改小是一次"瘦身"；改大要
 # 说明为什么，并同步总账那份账本。
-PARAM_CAP = 27   # web_read（今天实测最大值，由下方守卫对照）
+PARAM_CAP = 28   # web_read（今天实测最大值，由下方守卫对照）
+# 27 → 28 的那一颗是 W1 的 `headers`（账写在
+# tests/test_anti_detect_b5.py 的档位面那条注释里）：这批的缺陷原文是"我没设过的头"，
+# 而旧拼写 `extra_headers` 是 §3-17 具名拒绝的身份通道 —— 补的是能力面，不是装饰。
+# 同一次没有加第二颗伪装旋钮：`stealthy_headers` 由 `anti_detect` 档位表读，
+# 公开面上它根本不存在（`rungs.py`）。
 DESC_CAP = 296   # sys_guide.topic（同上）
 
 
