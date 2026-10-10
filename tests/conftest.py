@@ -300,6 +300,26 @@ def _no_real_home_state_writes(request, monkeypatch, tmp_path):
     _envreg.invalidate_file_cache()
 
 
+@pytest.fixture(autouse=True)
+def _one_process_face_does_not_leak_across_tests():
+    """W3 · 进程级身份备忘录必须在每条用例前后被忘掉。
+
+    `_PROCESS_IDENTITY` 是这颗改动的全部机制（一场进程一副脸），也是它唯一能被挂具
+    伤到的地方：不清的话，第一条真的建过 `HTTPSession` 的用例摇出的那张脸，就决定了
+    后面每条用例从 `_build_headers()` 里看到什么 UA。那不是假设——本仓库为了一颗没有
+    复位的过程状态（`_ALLOW_PRIVATE`）付过一次这个代价：同一套件里后面 20 条"私网必须
+    被拒"的守卫全绿变全红，而且单独跑每一条都是绿的。
+
+    复位放在挂具里而不是用例里，因为需要它的用例不止一个文件（`test_one_face_*`、
+    `test_one_browser_identity_*`、`test_anti_detect_*` 都会在同一个进程里建会话）。
+    """
+    from dhole_mcp import fetcher as _fetcher
+
+    _fetcher.reset_process_identity()
+    yield
+    _fetcher.reset_process_identity()
+
+
 @pytest.fixture
 def temp_dir():
     """Create a temporary directory for test artifacts."""

@@ -658,27 +658,92 @@ def _hop_headers(
     return hop
 
 
-def _stealthy_baseline() -> Dict[str, str]:
-    """一份浏览器身份，整个会话用它 —— 不在每次 build header 时重新摇。
+def _stealthy_baseline(family: str = "") -> Dict[str, str]:
+    """一副浏览器身份，而且必须是**这一次要冒充的那一家**的身份。
 
-    实测（2026-10-08，`HTTPSession._build_headers()` 连摇 12 次）：UA 的 Chrome 大版本
-    在 147 与 148 之间来回跳，另有两次连 UA 都没有。真实浏览器不会在一场会话里换版本，
-    而 TLS 指纹是 primp 在 init 那一刻定死的 —— 于是每重摇一次，头就和那个指纹错开一次，
-    而"同一连接的 UA 与 TLS 不是同一个浏览器"正是检测方最容易交叉核对的一位。
+    两个抽签各自独立就是缺陷本身。实测（2026-10-09，同一进程连开 8 个会话，每会话发
+    一次真请求）：8 次摇出 **7 副**身份，其中最后一次线上是
+    `user-agent: ...iPhone; CPU iPhone OS 18_7... Version/26.3 Mobile Safari/604.1`
+    配上 `sec-ch-ua: "Google Chrome";v="149"` 和 `sec-ch-ua-platform: "iOS"` —— 三颗
+    头来自三台机器。成因分两层：生成器默认四个家族两种设备（实测 40 次里 safari 6 次、
+    手机形状 2 次），而 primp 的 `impersonate` 是写死 "chrome" 的；于是 browserforge 交出的
+    那几颗头**逐颗盖掉**了 primp 自己那一套自洽的头，只盖掉一部分 —— 没盖掉的
+    `sec-ch-ua*` 还是 Chrome 预设的。另外 `impersonate_os="random"` 也不是"中性"：
+    实测 16 次里 1 次抽中**手机**预设（线上就是 `"Android"` + `Mobile Safari` 的 UA），
+    它换掉的是一整台机器的形状，不是一位字段。
+
+    所以这里钉两位：`browser=[family]`（对得上 primp 那一份 TLS 预设）和
+    `device=["desktop"]`（primp 的预设全是桌面的）。这两颗都不认的旧版生成器不许把
+    能力一起弄丢 —— 见下面那圈回退。
 
     browserforge 缺席时交回空 dict：调用方照旧只带 referer，与这次改动之前一致。
     """
     try:
         from browserforge.headers import HeaderGenerator
-        return {str(k).lower(): str(v)
-                for k, v in (HeaderGenerator().generate() or {}).items()}
     except Exception:
         return {}
+    pinned: Dict[str, Any] = {"device": ["desktop"]}
+    if family:
+        pinned["browser"] = [family]
+    for kwargs in (pinned, {}):
+        try:
+            generated = HeaderGenerator(**kwargs).generate() or {}
+        except Exception:
+            # 这一版不认这颗参数（或摇不出这一家）：退回它一定认的那次调用。
+            # 少钉一位可以，因为一颗头都发不出去是能力从路上消失了。
+            continue
+        return {str(k).lower(): str(v) for k, v in generated.items()}
+    return {}
+
+
+# browserforge 认这四个家族名（`HeaderGenerator` 的默认值就是这四个），primp 的
+# `impersonate` 用的也是同一族词。对不上的（"opera" / "random" / 版本化写法之外的怪名）
+# 交回空串 = 不钉家族，只钉桌面形状 —— 宁可少钉一位，也不把一个它不认识的名字塞进去。
+_HEADER_FAMILIES = ("chrome", "firefox", "safari", "edge")
+
+# UA 里读不出操作系统、但头确实说了某一家的桌面形状时，握手用这一家在桌面上最常见的
+# 那个系统。这不是"猜一个最像的"：另一条路是把 OS 交给 primp 抽签，而实测它会抽中手机
+# 预设 —— 那和头里的桌面 Chrome 是两台机器，错配只是交给了概率。
+_OS_BY_FAMILY = {"chrome": "windows", "edge": "windows",
+                 "firefox": "windows", "safari": "macos"}
+
+
+def _header_family(impersonate: Any) -> str:
+    """`impersonate` 里那个能被头发成的家族；读不出来交回空串（= 不钉家族）。"""
+    name = str(impersonate or "").split("_")[0].strip().lower()
+    return name if name in _HEADER_FAMILIES else ""
+
+
+# 一场进程一副身份，按家族分开存。存在的理由是"会话"这个词在真实使用里撑不住：
+# `bulk_get` 每次调用都新建一个 `HTTPSession`（server.py 那一个 `async with`），
+# 而一次 web_read 的重试、批量里的每一条、升级路上的每一档都是新会话。上一版把身份
+# 定在会话级，实测下来等于每次调用重摇（8 个会话 7 副脸）。
+_PROCESS_IDENTITY: Dict[str, Dict[str, str]] = {}
+
+
+def _process_identity(family: str) -> Dict[str, str]:
+    """这一家的身份：进程里第一次要时摇一次，之后每个会话读同一份。
+
+    同一进程内只有一份，是因为"这台机器的浏览器"只有一个。`primp.Client` 是在 init
+    那一刻按 `impersonate`/`impersonate_os` 定死握手的，头跟着那份握手走才是自洽的；
+    反过来（每会话重摇头、握手不动）就是上一版的缺陷。
+    """
+    got = _PROCESS_IDENTITY.get(family)
+    if got is None:
+        got = _stealthy_baseline(family)
+        _PROCESS_IDENTITY[family] = got
+    return got
+
+
+def reset_process_identity() -> None:
+    """忘掉进程摇过的那几副身份。测试挂具用它，免得第一条用例摇出的那张脸决定
+    后面每条用例看到什么头（本仓库为了一颗 ContextVar 付过一次这个代价）。"""
+    _PROCESS_IDENTITY.clear()
 
 
 # primp 认这三颗（实测："IOS" / "ANDROID" 会被 `Invalid impersonate_os` 拒掉），
 # 而 browserforge 的 UA 里能读出的是同一族名字。对不上的（Android、Linux 上的
-# Firefox 写法等）交回空串，由调用方回落 "random"。
+# Firefox 写法等）交回空串，由调用方按家族回落到桌面主力系统。
 _OS_BY_UA = (("Windows NT", "windows"), ("Macintosh", "macos"),
              ("X11; Linux", "linux"), ("Android", "linux"), ("Linux", "linux"))
 
@@ -697,8 +762,9 @@ class HTTPSession:
     - TLS fingerprint impersonation (Chrome, Firefox, Safari, Edge)
     - Proxy support (http, https, socks5)
     - Retry with backoff
-    - Stealthy headers (Google referer, realistic User-Agent) —— 一份身份用一整场
-      会话，且 primp 的 OS 跟着这份身份选（见 `_stealthy_baseline`）
+    - Stealthy headers (Google referer, realistic User-Agent) —— 一场进程一副身份，
+      跨会话跨调用都读同一份，且 primp 的 OS 跟着**这份**身份选
+      （见 `_process_identity` 与 `_stealthy_baseline` 的实测理由）
 
     Usage:
         async with HTTPSession(impersonate="chrome") as session:
@@ -741,12 +807,17 @@ class HTTPSession:
             import random
             impersonate = random.choice(impersonate)
 
-        # 身份在这一次决定，会话内不再变（见 `_stealthy_baseline` 的实测理由），
-        # 而 primp 的 TLS 档必须跟着**这份**身份选 OS：两边各抽一次 OS，实测约一半
-        # 的请求是"Windows 的头 + 别的系统的 TLS 指纹"出站 —— 那正是检测方最容易
-        # 交叉核对的一位。抽不到名字（browserforge 缺席 / Firefox 系 UA）才回落 random。
-        self._baseline = _stealthy_baseline()
-        os_name = _os_from_ua(self._baseline.get("user-agent", ""))
+        # 身份在**进程**这一层决定（`_process_identity` 记了为什么"会话级"撑不住），
+        # 而 primp 的 TLS 档必须跟着**这份**身份选 OS：两边各抽一次签，实测约一半的请求
+        # 是"Windows 的头 + 别的系统的 TLS 指纹"出站 —— 那正是检测方最容易交叉核对的一位。
+        # UA 里读不出系统时按家族落到桌面的主力系统；只有 browserforge 缺席（头里根本没有
+        # UA，谁也没声称自己是哪台机器）才真的回落 "random"，那才是"不许瞎猜"适用的形状。
+        family = _header_family(impersonate)
+        self._baseline = _process_identity(family)
+        _ua = self._baseline.get("user-agent", "")
+        os_name = _os_from_ua(_ua)
+        if _ua and not os_name:
+            os_name = _OS_BY_FAMILY.get(family, "")
 
         def _create():
             kwargs: Dict[str, Any] = {

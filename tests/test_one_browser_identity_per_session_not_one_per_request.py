@@ -17,6 +17,11 @@ UA 里的 Chrome 大版本在 **147 与 148 之间来回跳**，另有两次连 
 存进会话；primp 的 `impersonate_os` 从这份 UA 里读出来。browserforge 不在（这是可选
 依赖）时交回空身份并回落 `"random"` —— 那种机器上的行为与改动前一字相同。
 
+（W3 把那"一次"又抬了一层：会话级撑不住，因为 `bulk_get` 每次调用新建一个会话 ——
+现在是一场进程一副身份，见
+`tests/test_one_browser_face_per_process_not_one_per_call.py`。本文件量的仍然是
+**会话内**那一段：一次会话里的 12 次 `_build_headers()` 必须同一副。）
+
 三处反向守卫不许松：人工指定的 UA 仍然最大；非 Chromium 的 UA 不许带着 `sec-ch-ua*`
 出去（那是 Chromium 一家才发的）；`Sec-Fetch-*` 各家都发，不许跟着一起摘。
 """
@@ -62,9 +67,9 @@ def test_the_identity_is_decided_once_at_init_not_per_request(monkeypatch):
     calls = []
     real = FT._stealthy_baseline
 
-    def _spy():
-        calls.append(1)
-        return real()
+    def _spy(family: str = ""):
+        calls.append(family)
+        return real(family)
 
     monkeypatch.setattr(FT, "_stealthy_baseline", _spy)
     monkeypatch.setattr(FT.primp, "Client", lambda **kw: object())
@@ -77,8 +82,15 @@ def test_the_identity_is_decided_once_at_init_not_per_request(monkeypatch):
     assert len(calls) == 1, f"身份被摇了 {len(calls)} 次（应为 1）"
 
 
-def test_two_sessions_may_still_differ():
-    """反向：会话内固定 ≠ 全局固定。跨会话仍各抽一份，轮换还在。"""
+def test_two_families_do_not_share_one_face():
+    """会话内固定 ≠ 全局固定：换家族时头要跟着这一次冒充的那一家走。
+
+    这条从前叫 `test_two_sessions_may_still_differ`，它当时的主张是"跨会话仍各抽一份，
+    轮换还在"。那个主张被实测撤了：`bulk_get` 每次调用新建一个 `HTTPSession`，所以
+    "跨会话各抽一份"在真实使用里就是"每次调用换一副脸"（同一进程 8 个会话 7 副）。
+    撤掉的只有"会话之间还要再摇"这一半，"家族之间不许共用一副"这一半留着，它的家现在在
+    `tests/test_one_browser_face_per_process_not_one_per_call.py`。
+    """
     a = FT.HTTPSession(stealthy_headers=True)
     b = FT.HTTPSession(stealthy_headers=True)
     a._baseline = {"user-agent": CHROME_UA}
@@ -97,14 +109,20 @@ def test_primp_gets_the_os_the_headers_claim(monkeypatch):
             seen.update(kw)
 
     monkeypatch.setattr(FT.primp, "Client", _Client)
-    monkeypatch.setattr(FT, "_stealthy_baseline", lambda: dict(BASELINE))
+    monkeypatch.setattr(FT, "_stealthy_baseline", lambda family="": dict(BASELINE))
     s = FT.HTTPSession(stealthy_headers=True)
     asyncio.run(s._init_client())
     assert seen["impersonate_os"] == "windows", seen
 
 
-def test_an_unknown_os_falls_back_to_random(monkeypatch):
-    """认不出 OS（browserforge 缺席 / Android 那类写法）时不许瞎猜一个。"""
+def test_no_headers_at_all_leaves_the_handshake_to_primp(monkeypatch):
+    """browserforge 缺席的那台机器：头里一颗 UA 都没有，谁也没声称自己是哪台机器。
+
+    这时钉一个操作系统就是**新造一个声称**，所以 "random" 留着 —— primp 自己那一套
+    （UA + `sec-ch-ua-platform` + 握手）本来就是同一台机器出的。头里**有** UA 却读不出
+    系统时不再走这里，那是 W3 的家族回落，见
+    `tests/test_one_browser_face_per_process_not_one_per_call.py`。
+    """
     seen = {}
 
     class _Client:
@@ -112,7 +130,7 @@ def test_an_unknown_os_falls_back_to_random(monkeypatch):
             seen.update(kw)
 
     monkeypatch.setattr(FT.primp, "Client", _Client)
-    monkeypatch.setattr(FT, "_stealthy_baseline", lambda: {})
+    monkeypatch.setattr(FT, "_stealthy_baseline", lambda family="": {})
     asyncio.run(FT.HTTPSession(stealthy_headers=True)._init_client())
     assert seen["impersonate_os"] == "random", seen
 

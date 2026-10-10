@@ -494,6 +494,9 @@ def test_the_manual_names_the_caps_and_the_measured_asymmetry():
         assert needle in behavior, needle
     assert "Adding is not replacing" in behavior, "没说清这是加，不是换"
     _h, trouble = guide.read("troubleshooting")
+    # "not one coherent machine" 是 W1 那句话的形状；W3 把这条限制量掉了一半（手机 UA
+    # 配桌面平台那半边），文字改成"曾经是三台机器 + 现在留下的那一位"，针跟着走。
+    # 留着的仍然是同一条主张：这套头不是**你这台**浏览器的头。
     for needle in ("sec-purpose", "upgrade-insecure-requests",
-                   "referer", "self-consistent"):
+                   "referer", "not one coherent machine"):
         assert needle in trouble, needle
