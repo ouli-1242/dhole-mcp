@@ -113,9 +113,26 @@ def private_site_with_sitemap(monkeypatch):
 
 # ───────────────────────── 真 socket 组：门 ─────────────────────────
 
+def _assert_the_door_starts_closed():
+    """这颗用例的门必须是它自己开的，不是上一个用例留下的。
+
+    这一组曾被记为"全量套件里绿、单独跑红"。今天量不到那个现场（文件单独跑绿、这两颗单独挑
+    出来跑也绿，退回 D1 那一刀之前同样绿），但它防的形状是真的：一条没有前置检查的门守卫，
+    可以因为别人留着的态而绿着测不到东西。证人：在下面的断言之前先
+    `identity.set_value("allow_private", True)`，这条断言立刻红。
+
+    这里只看见得上的那一条缝：identity 的连接是模块级单例，conftest 每颗用例换一份 tmp_path
+    的 identity.db **并且** close() 断掉旧句柄（不 close 就等于什么都没隔离，旧句柄还指着
+    上一颗用例那份文件）。门本身（`_ALLOW_PRIVATE` 那颗 ContextVar）由 conftest 的
+    `_private_door_does_not_leak_across_tests` 逐颗复位，不在这里重复一道。
+    """
+    assert not identity.get("allow_private", ""), identity.all_rows()
+
+
 @pytest.mark.asyncio
 async def test_the_door_is_open_on_the_sitemap_too(private_site_with_sitemap):
     """存了 allow_private，sitemap 就必须**真被读到** —— 这是 D2 的正面判据。"""
+    _assert_the_door_starts_closed()
     identity.set_value("allow_private", True)
     result = await MasterFetchServer().web_discover(
         private_site_with_sitemap, sitemap=True)
@@ -134,6 +151,7 @@ async def test_without_the_door_the_refusal_names_the_address(private_site_with_
     探测；种子的拒绝本来是说得清的（点名私网段 + 给出 allow_private 那条路），
     这条守卫把它钉住，防止"修失实摘要"时把这条正确的拒绝一起改坏。
     """
+    _assert_the_door_starts_closed()
     result = await MasterFetchServer().web_discover(
         private_site_with_sitemap, sitemap=True)
     assert result.sitemap_used is False
@@ -154,6 +172,7 @@ async def test_the_old_sentence_survives_where_it_is_true(monkeypatch):
     srv = _serve(ROBOTS_WITHOUT_SITEMAP, serve_conventional_sitemap=False)
     try:
         base = f"http://127.0.0.1:{srv.server_address[1]}"
+        _assert_the_door_starts_closed()
         identity.set_value("allow_private", True)   # 让种子过门，走到 sitemap 那一段
         result = await MasterFetchServer().web_discover(base, sitemap=True)
         assert result.sitemap_used is False

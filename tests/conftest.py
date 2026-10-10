@@ -320,6 +320,35 @@ def _one_process_face_does_not_leak_across_tests():
     _fetcher.reset_process_identity()
 
 
+@pytest.fixture(autouse=True)
+def _private_door_does_not_leak_across_tests():
+    """`_ALLOW_PRIVATE` 这颗 ContextVar 必须在每条用例前后被忘掉 —— 同步用例那条路才漏得出去。
+
+    本仓库为这颗没复位的过程状态付过一次代价（上面 W3 那颗挂具的原话：同一套件里后面
+    20 条"私网必须被拒"的守卫全绿变全红）。今天把两条方向都量了：
+
+    - **异步用例里推的门出不去**：pytest-asyncio 每条跑在自己 Task 的 context **副本**里，
+      `set` 随 Task 死掉（实测：在 `test_the_door_is_open_on_the_sitemap_too` 里推门不 reset，
+      下一颗用例读到的还是空门）。
+    - **同步用例里推的门写得进主 context**，之后每条用例拿到的副本都带着它。实测：前一枚
+      文件里加一颗忘了 reset 的同步用例（放行 `192.168.1.50`），下一枚文件的
+      `test_phase2_gaps.py::TestAllowPrivateIsNarrow::test_the_allowlist_can_be_reset_so_it_does_not_leak`
+      当场红 —— 它那句 `assert _verdict("http://192.168.1.50/") == "blocked"` 读到的门是别人开的。
+      摘掉这颗挂具就红，装上就绿。
+
+    同一条泄漏对**走工具**的用例没这么显：`_smart_fetch_request_context` 每次调用都从存储
+    重推一次（D1 量的就是那颗钉子），所以那类用例读到的是自己该读的值。漏的就是绕过工具、
+    直接问 `validate_url` 的那一群 —— 而"私网必须被拒"的判据正是这一群。
+    """
+    from dhole_mcp import security as _sec
+
+    token = _sec._ALLOW_PRIVATE.set((frozenset(), False))
+    try:
+        yield
+    finally:
+        _sec._ALLOW_PRIVATE.reset(token)
+
+
 @pytest.fixture
 def temp_dir():
     """Create a temporary directory for test artifacts."""
