@@ -330,6 +330,20 @@ def applied_note(host: str = "") -> str:
                      for r in rows)
 
 
+def credentials_held_for(url: str) -> tuple[str, ...]:
+    """这台 host 上存着哪几颗**需要 host 的**凭据 —— 只报名，值一眼都不读出去。
+
+    与 :func:`applied_note` 分别是范围：那颗回答"这一次跑的是什么身份"（连全局那几颗
+    一起报），这一颗只问"有没有凭据是为这一台机器存的"。它存在的全部理由是一条实测：
+    `feed_read` 与 sitemap 那一发都不带凭据出门，而调用方可能已经存过了 —— 要说破这
+    个不一致，需要的是"存了什么"，不是"这次用了什么"。
+    """
+    host = host_of(url or "")
+    if not host:
+        return ()
+    return tuple(k for k in SCOPED_KEYS if get(k, host) not in (None, "", {}, []))
+
+
 def redact(key: str, value: Any) -> Any:
     """The shareable half of a stored value. Anything not listed here is not said.
 

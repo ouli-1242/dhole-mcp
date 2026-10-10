@@ -81,12 +81,17 @@ class FeedResult(BaseModel):
     # lost its subject when conditional polling came off the tool surface (17.0 §6).
     note: str = Field(
         default="",
-        description="One line the caller could not otherwise infer from this result. Set "
-                    "when the document parsed as a feed and genuinely carried zero "
-                    "entries - an empty items list with no error cannot tell 'nothing "
-                    "published today' from 'our parser stopped matching this feed', so the "
-                    "feed's own markers (lastBuildDate / pubDate / skipDays / updated) are "
-                    "quoted. Empty for feeds with items that answered a plain request, and "
+        description="One line the caller could not otherwise infer from this result. Two "
+                    "subjects qualify, joined by ' · ' when both apply: (1) the document "
+                    "parsed as a feed and genuinely carried zero entries - an empty items "
+                    "list with no error cannot tell 'nothing published today' from 'our "
+                    "parser stopped matching this feed', so the feed's own markers "
+                    "(lastBuildDate / pubDate / skipDays / updated) are quoted; (2) "
+                    "cred_defaults holds a credential for THIS host and feed_read sent "
+                    "none of it - a feed fetch is anonymous here, so the items are the "
+                    "public view of that address even when you have a token stored (web_read, "
+                    "web_request and web_crawl do carry it). Empty otherwise: feeds with "
+                    "items that answered a plain request, hosts with nothing stored, and "
                     "wherever `error` or the since-receipts already explain it.")
 
     @model_validator(mode="after")

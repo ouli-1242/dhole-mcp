@@ -3160,6 +3160,25 @@ def _identity_value_error(key: str, value: Any) -> str:
     return f"{key} is not a key cred_defaults stores"
 
 
+def _feed_anonymity_note(row) -> str:
+    """这一行该说的"哪几颗身份在场而这次没用上"，只报名。
+
+    实测（本地 echo 站点，2026-10-10）：`cred_defaults` 存着这台 host 的 auth，一次
+    `feed_read` 发出去的那一发**没有** Authorization —— feed 这条路零凭据。而手册当时
+    写的是"同一条规则适用于每个工具"。要么改线上的字节，要么说破这一句：改的是文档与
+    这一格，因为把凭据流向一条新通道要一起决定 cookie 罐、按凭据分键的缓存与逐跳剥离，
+    那些不在这一刀的射程里（记录在提交信息）。
+    """
+    held = identity.credentials_held_for(getattr(row, "source_url", "") or "")
+    parts = [p for p in (getattr(row, "note", "") or "",) if p]
+    if held:
+        parts.append(
+            f"cred_defaults holds {'/'.join(held)} for this host and feed_read sent "
+            "none of it: this is the PUBLIC view of that address. web_read, "
+            "web_request and web_crawl do carry the stored credential")
+    return " · ".join(parts)
+
+
 def _cred_hosts_of(host_arg: Any) -> List[str]:
     """The `host` inside `set={...}`, as a normalized list.
 
@@ -8433,7 +8452,9 @@ class MasterFetchServer:
                 # The zero-entries-but-no-error case: an empty list cannot tell
                 # "nothing published" from "our parser drifted", and only the
                 # document's own markers can. Absent for any feed with items.
-                "note": r.note,
+                # 第二格主语（D1 量的那条）：这一台 host 上存着凭据，而 feed 这条路
+                # 一颗都不发 —— 不说的话，"公开的那一份"就像"你登录后的那一份"。
+                "note": _feed_anonymity_note(r),
                 # 失败的行也要有结构化判据（feed 曾是唯一没有它的一条通道）。值不在这里
                 # 算：`FeedResult` 自己由 `error` 填（model_validator），这一格只做投影 ——
                 # 手写字段名与模型字段的一致性由 test_audit_fixes 那条锁钉着。

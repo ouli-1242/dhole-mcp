@@ -205,6 +205,7 @@ class CrawlResponseModel(BaseModel):
     summary: str = Field(default="", description="One-line crawl status.")
     next_action: str = Field(default="", description="Obvious next call when one exists (continue crawl / fetch a page).")
     ssrf_recheck: str = Field(default="", description="Non-empty only when the post-redirect IP recheck was skipped because of this machine's resolver (a fake-ip proxy) — the SSRF posture of the WHOLE crawl, stated once. Before this field existed a crawl said nothing about it at all: the per-page receipts live on the web_read results that crawl consumes internally and never reaches the caller, so the one security posture that a 40-page run should disclose was dropped with the pages' own metadata.")
+    identity_applied: str = Field(default="", description="Names only (never values) of what `cred_defaults` supplied for the pages this run fetched — one line for the whole run, gathered from each page's own receipt rather than recomputed from the store. It exists for the same reason as `ssrf_recheck`: a crawl row is a trimmed page report, so the per-page 'this was fetched with your credentials' died inside crawl. Read it before concluding the crawl saw the site the way a visitor does — a run carrying your stored auth is your logged view of that host, page after page.")
     plan_id: str = Field(default="", description="The URL map is held server-side under this id (1h TTL). web_discover sets it on every map; web_crawl sets it when a map had rows held back, because those rows are only reachable through the plan. Pass resume_token='<plan_id>:0' to web_crawl to fetch the plan without re-sending the URL list, or resume_token='<plan_id>:<next row>' with discover_only=true for the rest of the map itself.")
     next_resume_token: str = Field(default="", description="Set when a run stopped with URLs left (page cap, char budget or deadline): pass it back as resume_token= to continue exactly where this run stopped. A truncated MAP carries it too, and on a map it is the cursor into the held-back rows - web_crawl(resume_token=..., discover_only=true) returns the next rows without re-fetching the sitemap. Absent when the plan is exhausted.")
 
@@ -1139,7 +1140,8 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
             sitemaps=list(result.sitemaps_used),
             duration_ms=(time() - t0) * 1000,
             summary=(f"sitemap.xml was read at {url} "
-                     f"({len(result.sitemaps_used)} file(s)) but the map is empty: {why}"),
+                     f"({len(result.sitemaps_used)} file(s)) but the map is empty: {why}"
+                     + _held_credential_clause(url)),
             next_action=fix,
         )
 
@@ -1289,6 +1291,19 @@ def _crawl_shares_the_private_door(fn):
     return _wrapped
 
 
+def _collect_row_identity(names: set, resp) -> None:
+    """把**这一页自己的收据**并进整趟的名字集合（只报名，不重算策略）。
+
+    为什么不从存储现算：存储里有没有一颗 auth 是"这台机器知道什么"，而这一页有没有
+    带着它出去是"这一次发了什么"。前者的聚合会把从没发出去的东西声称成发过（一张
+    连不上手的页、一趟只走了 sitemap 的地图模式），而 `identity_applied` 这句话的
+    全部用处就在于它敢说"这几颗真的在这次的字节里"。
+    """
+    for one in (getattr(resp, "identity_applied", "") or "").split(","):
+        if one.strip():
+            names.add(one.strip())
+
+
 def _no_sitemap_summary(start_norm: str, diag: dict) -> str:
     """「没找到 sitemap」这句话必须由**发生过什么**决定，不能是一句固定文案。
 
@@ -1300,6 +1315,11 @@ def _no_sitemap_summary(start_norm: str, diag: dict) -> str:
 
     分支顺序就是「越具体越先说」：守卫拦下 > 指令在但读不出 > robots 没读到 >
     真的没有。
+
+    末尾那一颗 ` · ` 是另一件事，四支都要挂：调用方可能**已经**为这台 host 存过凭据，
+    而 sitemap 那一发是零凭据出去的（`_make_http_get` 用的是一个裸 primp 客户端）。
+    一道要 token 才给人的 sitemap 在这里读起来就是"这站没地图"，而那正是有人存过
+    凭据却看不见它起作用的样子 —— 所以说出事实，而不是让调用方去猜站点。
     """
     refused = diag.get("guard_refused") or []
     if refused:
@@ -1307,14 +1327,33 @@ def _no_sitemap_summary(start_norm: str, diag: dict) -> str:
                 f"the SSRF guard refuses (a private or reserved address) - so nothing "
                 f"was fetched from it")
     if diag.get("robots_had_sitemap"):
-        return (f"no sitemap could be read at {start_norm}: robots.txt declares a "
+        base = (f"no sitemap could be read at {start_norm}: robots.txt declares a "
                 f"Sitemap, but fetching or parsing it produced nothing (and "
                 f"/sitemap.xml answered nothing either)")
-    if not diag.get("robots_checked"):
-        return (f"no sitemap.xml found at {start_norm}: robots.txt could not be read, "
+    elif not diag.get("robots_checked"):
+        base = (f"no sitemap.xml found at {start_norm}: robots.txt could not be read, "
                 f"and /sitemap.xml returned nothing")
-    return (f"no sitemap.xml found at {start_norm} (robots.txt had no Sitemap "
-            f"directive and /sitemap.xml returned nothing)")
+    else:
+        base = (f"no sitemap.xml found at {start_norm} (robots.txt had no Sitemap "
+                f"directive and /sitemap.xml returned nothing)")
+    return base + _held_credential_clause(start_norm)
+
+
+def _held_credential_clause(url: str) -> str:
+    """存过凭据而这一发用不上时的那一句；没存过就空串（不占字数）。
+
+    两句"地图是空的"的话都要挂它 —— 守卫抓到过只挂一处：读通了 sitemap 而里面一个
+    URL 都没有，与根本没读到一份，是同一条不一致的两张脸（一道要 token 的站点回你的
+    可能是一页 HTML，parse 出来正好是"空"）。
+    """
+    from dhole_mcp import identity as _identity
+    held = _identity.credentials_held_for(url)
+    if not held:
+        return ""
+    return (f" · cred_defaults holds {'/'.join(held)} for this host and neither "
+            "robots.txt nor the sitemap was fetched with it: a sitemap the site only "
+            "serves to an authenticated caller reads here as nothing. Pages fetched "
+            "by web_crawl do carry the credential (see identity_applied).")
 
 
 def _no_sitemap_next_action(diag: dict) -> str:
@@ -1546,6 +1585,8 @@ async def web_crawl(
     visited: set[str] = set()
     discovered: set[str] = {start_norm}
     pages: list[CrawlPage] = []
+    # 每页自己的身份收据并到这一趟的信封上（行是裁剪过的报告，逐页那句到不了调用方）。
+    row_identity: set[str] = set()
     robots_skipped = 0
     # 链接发现的两个计数（`extract_same_domain_links` 逐页累加）。第三件事不必计数，
     # 它是"发现这一趟到底跑没跑"——`links_seen=0` 既可能是页面真的没给候选链接，也可
@@ -1790,6 +1831,7 @@ async def web_crawl(
                 untrusted_content=injection.scan(content_md or ""),
             )
             pages.append(page)
+            _collect_row_identity(row_identity, resp)
             total_chars += len(content_md)
 
             # Browser auto-escalation: if the start page (depth 0) failed with
@@ -2079,6 +2121,10 @@ async def web_crawl(
         # 一次读取进程事实的调用：探针已经在这次爬取里跑过了（每页的 web_read 都
         # 过那道门），这里只是把它的判词拿到调用方看得见的一层。
         ssrf_recheck=recheck_posture_note(),
+        # 存储的身份在这一趟里**实际被发出去过**的那几颗（逐页收据并上来的，不是
+        # 从存储现算的）：一张带着调用方 token 爬回来的 40 页站点，读起来和一张公开
+        # 站点一模一样，而这两个东西不该长得一样。
+        identity_applied=", ".join(sorted(row_identity)),
         duration_ms=(time() - t0) * 1000,
         robots_skipped=robots_skipped,
         summary=summary, next_action=next_action,
