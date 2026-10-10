@@ -1,0 +1,21 @@
+{
+  "author": "",
+  "content_ok": true,
+  "encrypted": false,
+  "error": "",
+  "pages_extracted": [
+    1
+  ],
+  "pages_total": 1,
+  "quality_score": 1.0,
+  "scanned": false,
+  "table_of_contents": [
+    {
+      "end_page": 1,
+      "level": 2,
+      "page": 1,
+      "title": "Monthly revenue, drawn with strokes thinner than 3pt"
+    }
+  ],
+  "title": "Line chart fixture"
+}

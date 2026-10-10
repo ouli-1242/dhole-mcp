@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<!--
+  deco_rules.html —— tests/deco_rules.pdf 的**作者**（P4 的反面对照）。
+
+  这一份存在的理由是一次实测把 P4 自己的坏法暴露出来了：一页**只有装饰线**的正文
+  （三条 `<hr>` + 一段带左边框的引文 + 一张有边框的表）在旧计数下报的是"15 个本提取
+  器没渲染的矢量对象"，而那一页的文字**整整齐齐全回来了**。"这一页有你读不到的内容"
+  在这种情况下是假的 —— 一句会误报的告示与一句静默是同一种罪的两面，它教读者忽略这条
+  消息。所以这里钉住的是：细线（rule / divider / border，短边不足 3pt）不算内容。
+
+  与 merged_cells.html / wrapped_heading.html / figure_page.html 同一规矩：源入库、PDF
+  是打印结果、命令两处都写着。
+
+      "C:/Program Files/Google/Chrome/Application/chrome.exe" \
+        --headless=new --disable-gpu --no-pdf-header-footer \
+        --print-to-pdf="D:/tools/dhole-mcp/tests/deco_rules.pdf" \
+        "file:///D:/tools/dhole-mcp/tests/deco_rules.html"
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Decorative rules fixture</title>
+<style>
+  body { font-family: Georgia, "Times New Roman", serif; font-size: 11pt; color: #000;
+         margin: 36pt; }
+  h2 { font-size: 14pt; margin: 0 0 8pt 0; }
+  hr { margin: 14pt 0; }
+  blockquote { border-left: 2pt solid #444; margin: 10pt 0; padding-left: 10pt; }
+  table { border-collapse: collapse; margin-top: 12pt; }
+  th, td { border: 1pt solid #000; padding: 3pt 8pt; font-size: 10pt; }
+</style>
+</head>
+<body>
+<h2>Rules and borders, no figures</h2>
+
+<p>An ordinary paragraph of readable prose that a text extractor carries back whole,
+followed by nothing but decoration.</p>
+
+<hr>
+<hr>
+<hr>
+
+<blockquote>A pull quote whose only extra ink is a left border. The words inside it
+are text and must still come back as text.</blockquote>
+
+<p>Another paragraph of ordinary prose, so the page is clearly a text page and not a
+figure page wearing a caption.</p>
+
+<table>
+  <tr><th>Division</th><th>Revenue</th></tr>
+  <tr><td>North</td><td>1,240</td></tr>
+  <tr><td>South</td><td>2,310</td></tr>
+</table>
+
+<p>7653-deco-rules-anchor closes the page.</p>
+</body>
+</html>

@@ -18,6 +18,9 @@
 夹具从哪来：
   - `tests/merged_cells.pdf` 由 `tests/merged_cells.html` 经真 Chrome 打印而来，命令写在
     `tests/test_the_pdf_golden_set_pins_what_the_extractor_does_today.py` 的抬头；
+  - `tests/wrapped_heading.pdf` / `tests/figure_page.pdf` / `tests/deco_rules.pdf` /
+    `tests/line_chart.pdf` 同理，各自的命令写在自己的 `.html` 抬头里（标题折行、画出来的
+    图、只有装饰线的一页、由细线构成的真图 —— 后两份是同一判据的两侧对照）；
   - `tests/background_checks.pdf` / `tests/dummy.pdf` 是仓库里既有的真 PDF。
 """
 from __future__ import annotations
@@ -32,7 +35,8 @@ from dhole_mcp.pdf_extractor import extract_pdf  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "pdf_golden"
-FIXTURES = ["merged_cells.pdf", "wrapped_heading.pdf", "background_checks.pdf",
+FIXTURES = ["merged_cells.pdf", "wrapped_heading.pdf", "figure_page.pdf",
+             "deco_rules.pdf", "line_chart.pdf", "background_checks.pdf",
              "dummy.pdf"]
 
 # 记录下来的事实必须**只是**被检查过的那些：时间戳会随 pdfplumber 版本漂的东西不进 JSON。

@@ -331,6 +331,44 @@ _PARSED_MAX_TOTAL_CHARS = 40_000_000
 _parsed_total_chars = 0
 
 
+def _parse_and_capture_notes(file_path: str, encoding: str, pages: str | None,
+                             password: str | None) -> tuple[str, str, dict, list[str]]:
+    """解析一次，并把**这一次**说过的附注一起带回来（正文、报错、extras、附注）。
+
+    附注桶是每次调用装的，而 `_note_text` 对没装桶的人整段消失：装桶的是 MCP 那一层
+    （`call_tool` 每次都装），没装桶的是直接 import 的人 —— 测试、embedder。放任它记一条
+    "没有解释"的正文进缓存，之后每一次命中都跟着少一句话，于是这条缺陷就改成看调用顺序。
+    所以解析永远在自己的桶里跑；桶里已有的东西不算进来（只取本次新增的那一段），否则同一发
+    里上一个文件说过的话会被记到这一个文件头上。
+    """
+    from dhole_mcp.context import _ARG_NOTES, _arg_notes_scope
+    bucket = _ARG_NOTES.get()
+    if bucket is not None:
+        before = len(bucket)
+        content, error, extras = parse_file_detailed(file_path, encoding, pages, password)
+        return content, error, extras, list(bucket[before:])
+    with _arg_notes_scope() as own:
+        content, error, extras = parse_file_detailed(file_path, encoding, pages, password)
+        return content, error, extras, list(own)
+
+
+def _replay_arg_notes(notes: list[str]) -> None:
+    """把记下过的附注重新挂到这一发调用上。
+
+    附注记在 ContextVar 里，而那份桶是**每次调用**的：命中缓存时解析根本没跑，于是
+    桶是空的，交回的正文里明明写着 `[merged-cell table: …]`、`metadata.figures` 明明
+    带着账，`summary` 却一句都不说。两次调用读起来一模一样，而其中一次什么都没做过 ——
+    与 R4 那条"缓存回放冒充新核验"是同一种形状，只是这次丢的是解释不是时间戳。
+    """
+    from dhole_mcp.context import _ARG_NOTES
+    bucket = _ARG_NOTES.get()
+    if bucket is None or not notes:
+        return
+    for note in notes:
+        if note and note not in bucket:
+            bucket.append(note)
+
+
 def parse_file_cached(file_path: str, encoding: str = "",
                       pages: str | None = None,
                       password: str | None = None) -> tuple[str, str, dict]:
@@ -345,20 +383,23 @@ def parse_file_cached(file_path: str, encoding: str = "",
             hit = _PARSED_CACHE.get(key)
             if hit is not None:
                 _PARSED_CACHE.move_to_end(key)
+                _replay_arg_notes(hit[2])
                 return hit[0], "", _copy_extras(hit[1])
-    content, error, extras = parse_file_detailed(file_path, encoding, pages, password)
+    content, error, extras, noted = _parse_and_capture_notes(
+        file_path, encoding, pages, password)
     if key is not None and not error and content:
         # 交回与记下的必须是**不同**的 dict：解析出来的那一份直接给出去过一次，调用方
         # 改过它的 metadata，之后每一次命中的都是被改过的那份 —— 而命中看起来与首次
         # 完全一样，没有一条字段会说"这是复用"。
         stored = _copy_extras(extras)
+        # 这次解析说过的附注与这份正文是同一件事的两半，所以要一起记账、一起回放。
         with _PARSED_CACHE_LOCK:
-            _PARSED_CACHE[key] = (content, stored)
+            _PARSED_CACHE[key] = (content, stored, noted)
             _parsed_total_chars += len(content)
             while _PARSED_CACHE and (_parsed_total_chars > _PARSED_MAX_TOTAL_CHARS
                                      or len(_PARSED_CACHE) > _PARSED_MAX_ENTRIES):
-                _, (dropped, _) = _PARSED_CACHE.popitem(last=False)
-                _parsed_total_chars -= len(dropped)
+                dropped = _PARSED_CACHE.popitem(last=False)[1]
+                _parsed_total_chars -= len(dropped[0])
         return content, error, _copy_extras(stored)
     return content, error, extras
 

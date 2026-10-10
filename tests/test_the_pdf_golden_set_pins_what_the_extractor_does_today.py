@@ -46,7 +46,8 @@ from dhole_mcp.pdf_extractor import extract_pdf
 
 HERE = Path(__file__).resolve().parent
 GOLDEN = HERE / "pdf_golden"
-FIXTURES = ["merged_cells.pdf", "wrapped_heading.pdf", "background_checks.pdf",
+FIXTURES = ["merged_cells.pdf", "wrapped_heading.pdf", "figure_page.pdf",
+            "deco_rules.pdf", "line_chart.pdf", "background_checks.pdf",
             "dummy.pdf"]
 
 _TABLE_SEP = re.compile(r"^\|(?: :?---:? \|)+$", re.MULTILINE)

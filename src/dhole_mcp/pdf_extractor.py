@@ -34,6 +34,9 @@ Agent design:
   * Page-range param (``pages="1-5"``) — extract only what you need.
   * ``include_media`` -> per-page embedded-image metadata (count + dimensions)
     so multimodal agents know which pages have figures to screenshot.
+  * ``metadata.figures`` (always on, never inlined) — which pages draw something
+    the text path cannot carry. A text reader that returns only a caption has to
+    say so, or "no figures" and "the figure did not come back" are one sentence.
   * Honest ``scanned`` / ``encrypted`` detection with actionable errors.
 """
 
@@ -472,6 +475,20 @@ def _in_bbox(obj: dict, bbox: tuple[float, float, float, float], tol: float = 1.
     return (x0 - tol) <= cx <= (x1 + tol) and (top - tol) <= cy <= (bottom + tol)
 
 
+#: A mark thinner than this on its SHORT side encloses no area: a rule, a divider,
+#: a cell border. `_figures_on_page` measures the number against two fixtures that
+#: disagree about nothing else (13 hairline objects on a prose page, one 2pt data
+#: stroke on a chart page).
+_FIGURE_MIN_SIDE_PT = 3.0
+
+
+def _encloses_area(obj: dict) -> bool:
+    """围得出一块面积才算"画了个东西"，判据是 bbox 的短边而不是笔画粗细。"""
+    width = abs(obj.get("x1", 0) - obj.get("x0", 0))
+    height = abs(obj.get("bottom", 0) - obj.get("top", 0))
+    return min(width, height) >= _FIGURE_MIN_SIDE_PT
+
+
 def _dominant_size(chars: Iterable[dict]) -> float:
     sizes = [c.get("size", 0) for c in chars if c.get("text", "").strip()]
     if not sizes:
@@ -804,6 +821,102 @@ def _ocr_pages(body: bytes, page_nums: list[int], password: Optional[str]) -> di
     return out
 
 
+def _figures_on_page(page: Any, table_bboxes: list = ()) -> dict[str, Any]:
+    """One page's non-text payload, counted from what the page actually draws.
+
+    `_render_page` walks `page.chars` and `find_tables` — it never looks at
+    `page.images` or `page.rects`. So a page that is mostly a chart returns its
+    caption and nothing else, and the reader cannot tell "this document has no
+    figures" from "the figure on page 7 did not come back". Counts are cheap and
+    are the honest half: the pixels and the vector paths are not extractable into
+    text by anything in this module.
+
+    Two exclusions, both measured rather than assumed:
+
+    **Table regions are not counted.** The borders of a rendered table are
+    `page.rects` too — counting them would announce "141 object(s) this
+    extraction did not render" about a table whose text came back whole
+    (`tests/merged_cells.pdf`: 141; `tests/background_checks.pdf`: 446).
+
+    **Marks that enclose no area are not content.** A rule, a divider, a
+    quote's left border draws across the page but carries nothing a reader could
+    retrieve by looking at it, so the tell is the SHORT side of the bounding box,
+    not the stroke width. Measured on `tests/deco_rules.pdf` (three `<hr>`, a
+    bordered blockquote, prose): 13 objects outside the table, all of them
+    0.75-1.5pt on their short side, so the count is 0 and nothing is announced —
+    while the same page before this rule announced 13.
+
+    The second exclusion is deliberately bounded, because a real line chart is
+    built almost entirely out of thin strokes. On `tests/line_chart.pdf` the axes
+    and grid lines are four 0pt-short-side lines and the data path is a 2pt stroke
+    spanning 285x90pt: a stroke-width test would have called that page decoration
+    and put P4 straight back, so the test is on extent — and it keeps the data path
+    while dropping the axes and grid. Raster images get neither filter — a picture
+    inside a table cell is exactly as unread as one in the body.
+    """
+    figures: dict[str, Any] = {}
+    try:
+        imgs = list(page.images or [])
+    except Exception:
+        imgs = []
+    if imgs:
+        figures["raster"] = len(imgs)
+        largest = max(imgs, key=lambda im: (im.get("width", 0) * im.get("height", 0)))
+        figures["largest_px"] = (f"{int(largest.get('width', 0))}"
+                                 f"x{int(largest.get('height', 0))}")
+    outside = 0
+    for key in ("rects", "lines", "curves"):
+        try:
+            objects = list(getattr(page, key, None) or [])
+        except Exception:
+            continue
+        for obj in objects:
+            if table_bboxes and any(_in_bbox(obj, b) for b in table_bboxes):
+                continue
+            if not _encloses_area(obj):
+                continue
+            outside += 1
+    if outside:
+        figures["vector_objects"] = outside
+    return figures
+
+
+def _figures_metadata(figures: dict[int, dict], page_nums: list[int],
+                      total_pages: int) -> list[dict]:
+    """`metadata.figures`: per-page non-text payload, only for pages that have any.
+
+    Deliberately NOT inlined into the extracted body. A `[Figure on page N]`
+    string is a character count, and the thin-extraction / quality maths reads
+    characters — an inlined marker can therefore flip `content_ok` on a page
+    whose only change is that we admitted it has a figure. The list rides beside
+    the text instead, where it can be read without touching that arithmetic.
+    """
+    out = []
+    for n in page_nums:
+        facts = figures.get(n) or {}
+        if not facts:
+            continue
+        out.append({"page": n, **facts})
+    return out
+
+
+def _announce_figures(figures: list[dict], total_pages: int) -> None:
+    """降级要出口：图没进来这件事得在 `summary` 说一次，不是只躺在 metadata 里。"""
+    from dhole_mcp.context import _note_text
+    if not figures:
+        return
+    pages = len(figures)
+    raster = sum(int(f.get("raster", 0)) for f in figures)
+    vector = sum(int(f.get("vector_objects", 0)) for f in figures)
+    kinds = ", ".join(p for p in (
+        f"{raster} embedded image(s)" if raster else "",
+        f"{vector} vector object(s)" if vector else "") if p)
+    _note_text(f"{pages} of {total_pages} page(s) "
+               f"{'carries' if pages == 1 else 'carry'} non-text content this "
+               f"extraction does not render ({kinds}) - see metadata.figures for "
+               "which pages; a vision tool or web_act screenshot is how to read them")
+
+
 def _extract_images_metadata(pdf, page_nums: list[int]) -> list[str]:
     """Per-page embedded raster-image metadata as agent-readable strings (P4).
     Vector graphics are NOT extractable; we report counts + dimensions so a
@@ -891,13 +1004,15 @@ def extract_pdf(
         rendered: dict[int, str] = {}
         cid_pages: list[int] = []
         scan_pages: list[int] = []  # image-only pages in a MIXED PDF (per-page OCR)
+        figures: dict[int, dict] = {}  # P4: 每页的非文本载荷（图 / 矢量），逐页数
         total_chars = 0
         heading_outline: list[dict] = []  # v8: heading-based section-map fallback
         for n in page_nums:
             p = pdf.pages[n - 1]
             try:
                 page_md = _render_page(p, body_size, text_mode,
-                                       page_num=n, headings=heading_outline)
+                                       page_num=n, headings=heading_outline,
+                                       figures_out=figures)
             except Exception as e:
                 logger.debug("PDF page %d render failed: %s", n, e)
                 page_md = f"[Failed to render this page: {str(e)[:120]}]"
@@ -938,12 +1053,18 @@ def extract_pdf(
                 toc = _kept
 
         # --- All-scanned doc -> honest dead-end (caller runs the scanned-OCR) ---
+        # 图的账要在这里就结好：扫描件那一路也带图（它就是由图组成的），那条返回
+        # 同样得说得出"哪几页有什么在文本之外"，否则 P4 只修了一半的静默。
+        figure_list = _figures_metadata(figures, page_nums, total_pages)
+        if figure_list:
+            meta_dict["figures"] = figure_list
         scanned = total_chars < _SCANNED_CHARS_PER_PAGE * len(page_nums)
         if scanned:
             # Capability-aware: reaching this branch with OCR installed means the
             # recovery path produced nothing, NOT that the user is missing the
             # extra. Saying "install [all]" there is a false instruction.
             advice = ocr_advice()
+            _announce_figures(figure_list, total_pages)
             return PdfResult(
                 title=meta_dict.get("title", ""), author=meta_dict.get("author", ""),
                 subject=meta_dict.get("subject", ""), keywords=meta_dict.get("keywords", ""),
@@ -1017,6 +1138,7 @@ def extract_pdf(
         # --- Quality score + honest content_ok (P3) ---
         # `quality` was computed above from raw page text + OCR recovery.
         content_ok = quality >= _QUALITY_OK_THRESHOLD and not scanned
+        _announce_figures(figure_list, total_pages)
 
         return PdfResult(
             content=[full],
@@ -1097,13 +1219,23 @@ def _rotated_is_artifact(page: Any) -> bool:
 
 
 def _render_page(page: Any, body_size: float, text_mode: bool,
-                 page_num: int | None = None, headings: list[dict] | None = None) -> str:
-    """Render one page to markdown: layout-aware text + tables merged by y-position."""
+                 page_num: int | None = None, headings: list[dict] | None = None,
+                 figures_out: dict[int, dict] | None = None) -> str:
+    """Render one page to markdown: layout-aware text + tables merged by y-position.
+
+    The figure census happens here rather than in `extract_pdf` because "what this
+    page draws that did not come back" is answerable only next to the table
+    bboxes this function already computed — see `_figures_on_page`.
+    """
     try:
         tables = page.find_tables(table_settings={"text_x_tolerance": _X_TOL, "text_y_tolerance": 3})
     except Exception:
         tables = []
     table_bboxes = [t.bbox for t in tables] if tables else []
+    if figures_out is not None and page_num is not None:
+        facts = _figures_on_page(page, table_bboxes)
+        if facts:
+            figures_out[page_num] = facts
 
     drop_rotated = _rotated_is_artifact(page)
     if table_bboxes or drop_rotated:

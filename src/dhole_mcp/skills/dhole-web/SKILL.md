@@ -72,6 +72,7 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 - Tool defaults are sized to a 30s host MCP timeout, because a call the host kills first returns nothing at all (a bare "tool execution timed out"). web_act and web_crawl default to 25s internally; when your host allows longer, raise `timeout` / `deadline_ms` explicitly instead of expecting the default to cover a slow page
 - Whether robots are honored in this process: read `metadata.robots` on every response (it may say `bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)`).
 - PDF responses carry `table_of_contents` — pick `pages` from it. `pages` trims extraction only; the file still downloads whole.
+- A PDF page that **draws** instead of writing (chart, diagram, embedded picture) comes back with its caption only. `metadata.figures` names which pages and `summary` states the count, so "no figures" and "the figure did not come back" are different answers. Read those pages with a vision tool or a `web_act` screenshot, not by re-extracting the text.
 
 ## Token-saving habits
 

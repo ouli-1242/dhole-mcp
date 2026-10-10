@@ -14,7 +14,7 @@
 所以两笔都要堵：解析结果按"这份字节 + 这组参数"记一次，注入扫描按正文内容记一次。
 修完同一串翻页：**首屏 1.03s，续页 0.028s，第二轮整 8 页 0.13s**。
 
-四条不能弯的规矩：
+五条不能弯的规矩：
 
 一、**文件改了必须重来**。键里有 mtime_ns 与 size；被改过的文档不能还交旧内容 ——
 那比慢更糟，因为读到的是一份不存在的版本。
@@ -27,6 +27,13 @@
 四、**只记成功**。失败钉在记忆里 = 同一个报错多活一会儿，而调用方恰恰会在改了参数
 之后重试。
 
+五、**命中要连解释一起还**。附注（哪张表被降级成文本行、哪几页画着文本之外的东西）
+存在**每次调用**的桶里，而命中时解析根本没跑，桶就是空的：正文里明明写着
+`[merged-cell table: …]`、`metadata.figures` 明明带着账，`summary` 却一句不说。两次
+调用读起来一模一样，其中一次却什么都没解释 —— 与缓存回放冒充新核验（R4）同形，只
+是这次丢的是解释不是时间戳。所以附注与正文同进同出，而**没人听着的那一次也要记账**
+（解析在自己的桶里跑）：不然"存下一条没有解释的正文"就把这条缺陷改成看调用顺序。
+
 `injection.scan` 的复用另有一条：交回的必须是副本。它直接挂上 ResponseModel 的
 `untrusted_content`，谁改一次，同一份正文之后每一次命中都跟着变 —— 一个安全标记
 被上一次调用改过，比没有标记更难发现。
@@ -34,6 +41,7 @@
 import asyncio
 import os
 import time
+from pathlib import Path
 
 import pytest
 
@@ -322,3 +330,66 @@ def test_a_hit_carries_the_same_envelope_as_the_first_read(tmp_path):
     assert a.content == b.content
     assert a.total_extracted_chars == b.total_extracted_chars
     assert (a.metadata or {}) == (b.metadata or {}), "命中路径把 metadata 弄丢了/换了"
+
+
+def test_a_hit_still_says_what_the_parse_said(monkeypatch):
+    """命中不重解析，但那一发说过的解释必须照说（规矩五）。
+
+    夹具是仓库里的 `tests/merged_cells.pdf`：它的正文里就带着
+    `[merged-cell table: …]` 那行降级抬头，而 `summary` 里那句"rendered as text
+    rows"来自解析末尾的一次附注 —— 命中时解析没跑，附注也就没了，于是第二次读起来
+    像"这张表本来就是文本行"。
+    """
+    from dhole_mcp.context import _arg_notes_scope
+
+    calls = _counting_parses(monkeypatch)
+    srv = MasterFetchServer()
+    pdf = str(Path(__file__).resolve().parent / "merged_cells.pdf")
+    with _arg_notes_scope() as first_notes:
+        asyncio.run(srv.doc_parse(file_path=pdf))
+        once = " ".join(first_notes)
+    with _arg_notes_scope() as second_notes:
+        asyncio.run(srv.doc_parse(file_path=pdf))
+        twice = " ".join(second_notes)
+    assert len(calls) == 1, f"第二发又解析了一遍（{len(calls)} 次），命中根本没发生"
+    assert "merged cells rendered as text rows" in once, once
+    assert once == twice, f"命中把解释丢了：\n{once}\n→\n{twice}"
+
+
+def test_a_replayed_note_is_not_said_twice():
+    """回放的方向只有一个：补齐丢掉的那一句，不是把同一句再说一遍。
+
+    同一次调用里先后两次读同一份 PDF（第一次真解析、第二次命中）是现实形状，比如
+    先取整篇再按 `pages=` 取一节。桶是这次调用共享的，回放不做去重就会长出两行
+    一模一样的告示 —— 那条罪与静默是同一种的反面。
+    """
+    from dhole_mcp.context import _arg_notes_scope
+
+    srv = MasterFetchServer()
+    pdf = str(Path(__file__).resolve().parent / "figure_page.pdf")
+    with _arg_notes_scope() as notes:
+        asyncio.run(srv.doc_parse(file_path=pdf))
+        asyncio.run(srv.doc_parse(file_path=pdf))
+    announcements = [n for n in notes if "non-text content" in n]
+    assert len(announcements) == 1, notes
+
+
+def test_a_parse_nobody_listened_to_still_comes_back_explained(monkeypatch):
+    """没装桶的那一发不许把"没有解释"永久记进缓存。
+
+    `_note_text` 对没装桶的调用整段消失：装桶的是 MCP 那一层（`call_tool` 每次都装），
+    没装桶的是直接 import 的人 —— 测试、embedder、任何走 `parse_file_detailed` 的上层。
+    如果解析只在"有人听着"的时候才记账，那样一次调用就存下一条没有解释的正文，之后每一次
+    命中都跟着少一句话 —— 这条缺陷就从"每次都丢"变成"看调用顺序"。
+    """
+    from dhole_mcp.context import _arg_notes_scope
+
+    calls = _counting_parses(monkeypatch)
+    srv = MasterFetchServer()
+    pdf = str(Path(__file__).resolve().parent / "figure_page.pdf")
+    asyncio.run(srv.doc_parse(file_path=pdf))            # 没人听着：这一发自己没有 summary 可写
+    with _arg_notes_scope() as notes:
+        asyncio.run(srv.doc_parse(file_path=pdf))        # 命中
+        breath = " ".join(notes)
+    assert len(calls) == 1, f"第二发没命中（解析 {len(calls)} 次），这条就在测别的东西"
+    assert "non-text content" in breath, f"没人听着的那一次把解释永久丢了：{breath!r}"

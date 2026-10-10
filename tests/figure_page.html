@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<!--
+  figure_page.html —— tests/figure_page.pdf 的**作者**（P4 的夹具）。
+
+  为什么这一份要单独存在：`_render_page` 从前只看 `page.chars` 与 `find_tables`，一页
+  里**画**出来的东西（图、矢量图表）不会出现在正文里，也不会有任何地方说它存在过。
+  于是"这份文档没有图"与"第 1 页那幅图没进来"在响应里是同一句话 —— 而后者需要的下一步
+  动作完全不同（vision / screenshot），前者需要的是换来源。
+
+  与 merged_cells.html / wrapped_heading.html 同一规矩：源入库、PDF 是打印结果、命令两处
+  都写着。这里刻意用**内联 SVG** 而不是位图：SVG 是人能读能改的文本（"never hand-write a
+  fixture" 在二进制上尤其成立，而一张手写的 PNG 只是我以为的图），而 Chrome 会把它作为
+  矢量画进 PDF —— 正好是"dhole 的文本路径拿不回来"那一类内容。
+
+      "C:/Program Files/Google/Chrome/Application/chrome.exe" \
+        --headless=new --disable-gpu --no-pdf-header-footer \
+        --print-to-pdf="D:/tools/dhole-mcp/tests/figure_page.pdf" \
+        "file:///D:/tools/dhole-mcp/tests/figure_page.html"
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Figure page fixture</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #000;
+         margin: 36pt; }
+  h2 { font-size: 15pt; margin: 0 0 10pt 0; }
+  .caption { font-size: 10pt; margin-top: 6pt; }
+</style>
+</head>
+<body>
+<h2>Quarterly revenue by division</h2>
+
+<!-- 三根柱 + 一根基线 + 坐标刻度：全是画出来的，文本层里只有下面那行图注。 -->
+<svg width="420" height="200" viewBox="0 0 420 200" role="img"
+     aria-label="bar chart of quarterly revenue">
+  <line x1="10" y1="170" x2="410" y2="170" stroke="black" stroke-width="2"/>
+  <rect x="40"  y="110" width="60" height="60" fill="#cfe3f7" stroke="black"/>
+  <rect x="130" y="80"  width="60" height="90" fill="#cfe3f7" stroke="black"/>
+  <rect x="220" y="55"  width="60" height="115" fill="#cfe3f7" stroke="black"/>
+  <rect x="310" y="30"  width="60" height="140" fill="#9fc9ee" stroke="black"/>
+  <polyline points="40,100 130,70 220,45 310,20" fill="none" stroke="black"
+            stroke-width="1.5"/>
+  <path d="M 10 20 L 410 20" stroke="#999" stroke-width="1"/>
+</svg>
+
+<p class="caption">Figure 1: revenue rose every quarter (31415-figure-probe).</p>
+<p>The sentence above is the only part of this page that a text extractor can
+   return. Everything between the heading and the caption was drawn.</p>
+</body>
+</html>
