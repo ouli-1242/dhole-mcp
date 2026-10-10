@@ -508,6 +508,54 @@ def _heading_level(line_size: float, body_size: float, bold: bool, text: str) ->
     return level
 
 
+# 同一行标题折出来的两行，字号差通常来自一个数字或大写字母（实测 `…2026` 那一行里
+# 只有数字，众数字号仍与首行一致，但别的字体会差 0.1-0.5pt）。0.75 是"同一行"的容差，
+# 不是"同一级"的容差 —— 两级标题的字号差远大于此。
+_HEAD_SIZE_TOL = 0.75
+
+
+def _fold_heading_lines(blocks: list, start: int, gap_threshold: float
+                        ) -> tuple[str, int]:
+    """把**同一行印刷标题**被页面框折断的后续行折回第 `start` 行。
+
+    判据全在几何层，与标签无关：同一众数字号、同一粗细、垂直间距不超过一行、且中间
+    没有插进表格。长度帽兜住失控合并。
+
+    为什么必须折（实测 `tests/wrapped_heading.pdf`，三条各有各的坏法）：
+      - 封面式两行大字，两行都过闸 → 今天交回**两条同级标题**，第二条还替自己算出
+        一个 `end_page` 覆盖到文档末页（一条不存在的章节）。
+      - 第二行以 `.` 收尾 → `_SENTENCE_END` 那道闸把它降级成正文，标题只剩半截，
+        尾串变成一段话跟着下一个标题跑。
+      - 窄栏里一个标题折成四行 → 今天交回**四条** level-2 标题，正文一行不剩。
+    `_SENTENCE_END` 那道闸本身是对的（一句完整的句子不是标题），坏的是它被逐行独立
+    地应用 —— 一行是不是标题，取决于它前面那行是什么。
+    """
+    top, kind, payload = blocks[start]
+    text, chars, _, bottom = payload
+    size = _dominant_size(chars)
+    bold = _is_bold(chars)
+    last = start
+    j = start
+    while j + 1 < len(blocks):
+        n_top, n_kind, n_payload = blocks[j + 1]
+        if n_kind != "text":
+            break
+        n_text, n_chars, n_line_top, n_line_bottom = n_payload
+        if not n_chars or _is_bold(n_chars) != bold:
+            break
+        if abs(_dominant_size(n_chars) - size) > _HEAD_SIZE_TOL:
+            break
+        if n_line_top - bottom > gap_threshold:
+            break
+        if text.rstrip()[-1:] in _SENTENCE_END:
+            break  # 标题已经收句，下一行是另一个标题，不是它的尾巴
+        joined = f"{text.rstrip()} {n_text.strip()}".strip()
+        if len(joined) > _HEADING_MAX_LEN:
+            break
+        text, last, j, bottom = joined, j + 1, j + 1, n_line_bottom
+    return text, last
+
+
 def _clean_date(d: str) -> str:
     if not d:
         return ""
@@ -1073,7 +1121,10 @@ def _render_page(page: Any, body_size: float, text_mode: bool,
         para.clear()
 
     prev_bottom: float | None = None
-    for top, kind, payload in blocks:
+    bi = 0
+    while bi < len(blocks):
+        top, kind, payload = blocks[bi]
+        bi += 1
         if kind == "table":
             flush_paragraph()
             prev_bottom = None
@@ -1093,10 +1144,15 @@ def _render_page(page: Any, body_size: float, text_mode: bool,
         level = _heading_level(_dominant_size(chars), body_size, _is_bold(chars), txt) if chars else 0
         if level and not text_mode:
             flush_paragraph()
-            out.append(f"{'#' * level} {txt}")
+            # 被页面框折断的那几行折回来再说它是几行：标题是"这一行印刷"的单位，
+            # 不是"这一行文本"的单位（判据全在几何，见 _fold_heading_lines）。
+            title, consumed = _fold_heading_lines(blocks, bi - 1, gap_threshold)
+            bi = consumed + 1
+            out.append(f"{'#' * level} {title}")
             if headings is not None and page_num is not None:
-                headings.append({"level": level, "title": txt.strip(), "page": page_num})
-            prev_bottom = line_bottom
+                headings.append({"level": level, "title": title.strip(),
+                                 "page": page_num})
+            prev_bottom = None
             continue
         if prev_bottom is not None and (line_top - prev_bottom) > gap_threshold:
             flush_paragraph()

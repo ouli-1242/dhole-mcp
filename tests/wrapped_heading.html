@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<!--
+  wrapped_heading.html —— tests/wrapped_heading.pdf 的**作者**（P2 的夹具，P3 共用）。
+
+  与 merged_cells.html 同一规矩：源入库、PDF 是打印结果、命令写在这里也写在
+  tests/test_a_wrapped_heading_is_one_title_not_two.py 的抬头。CONTRIBUTING 那句
+  "never hand-write a fixture" 在 PDF 上尤其硬 —— 手写的 PDF 只会画出我以为换行
+  发生的地方，而这里要钉的恰恰是**换行真的发生在哪里**。
+
+      "C:/Program Files/Google/Chrome/Application/chrome.exe" \
+        --headless=new --disable-gpu --no-pdf-header-footer \
+        --print-to-pdf="D:/tools/dhole-mcp/tests/wrapped_heading.pdf" \
+        "file:///D:/tools/dhole-mcp/tests/wrapped_heading.html"
+
+  页面里的每一行大字都有用途，别"顺手整理"：
+
+  1. `#split-both` —— 封面式标题，用 `<br>` 断成两行，**两行都不以句读结尾**。
+     字号判定各跑各的 → 今天交回**两条同级标题**（体验测试里那个 45 页文件"只有 2 条
+     TOC、两条都是标题"就是这么来的：一条标题被腰斩成两条）。
+  2. `#split-tail-period` —— 同一形状的另一种：第二行以 `.` 收尾，于是被
+     `_SENTENCE_END` 那道闸降级成正文。标题留下半截，尾串变成一段话。
+  3. `#narrow-wrap` —— 不用 `<br>`，靠窄栏让浏览器自己折行，证明修复靠的是几何
+     （同字号 + 行距 + 紧邻）而不是 HTML 标签。
+  4. 三个跨页的小节（`Section one/two/three`）给 P3 用：最后一节其后没有同级条目，
+     书签路径 `end_page` 从前不钳，会一路报到文档末页之外。
+
+  正文句子刻意写得长且重复度低，让字号比（标题 20pt / 16pt vs 正文 11pt）稳定越过
+  `_H1_RATIO` / `_H2_RATIO` —— 夹具要测的是判定，不是运气。
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Wrapped heading fixtures</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #000;
+         line-height: 1.45; margin: 36pt; }
+  .cover { page-break-after: always; }
+  .t20 { font-size: 20pt; font-weight: bold; margin: 0 0 10pt 0; }
+  .t16 { font-size: 16pt; font-weight: bold; margin: 14pt 0 8pt 0; }
+  .narrow { width: 150pt; font-size: 16pt; font-weight: bold; margin: 14pt 0 8pt 0; }
+  p { margin: 0 0 9pt 0; }
+  h1, h2, h3 { margin: 0; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <!-- 1. 两行都不以句读收尾：今天产两条同级标题 -->
+  <div class="t20" id="split-both">Quarterly Revenue Review<br>for the Fiscal Year 2026</div>
+  <p>A fixture document for the PDF heading outline. This paragraph is ordinary
+     body text at eleven points and must never be read as a title.</p>
+
+  <!-- 2. 第二行以句点收尾：今天被降级成正文，标题只剩半截 -->
+  <div class="t16" id="split-tail-period">Divisional Results Discussed<br>In This Review.</div>
+  <p>Between the two big lines above and the narrow one below there is ordinary
+     body text, so a continuation cannot be guessed from distance alone.</p>
+
+  <!-- 3. 浏览器自己折行（窄栏），几何判定要在这里也成立 -->
+  <div class="narrow" id="narrow-wrap">Revenue Review By Division For The Fiscal Year 2026</div>
+  <p>The narrow heading above is one title broken across lines by the page box,
+     not two headings, and the reader should not have to know CSS to tell.</p>
+</div>
+
+<div class="t16">Section one: the northern division</div>
+<p>The northern division reports growth across every quarter of the review period,
+   and the narrative below exists to keep this page from ending on a heading.</p>
+<p>Revenue rose while the cost base held flat, which is the combination that
+   produces the margin movement described in the tables of the companion fixture.</p>
+
+<div class="cover" style="page-break-after: always"></div>
+
+<div class="t16">Section two: the southern division</div>
+<p>The southern division is smaller and noisier quarter to quarter. Two paragraphs
+   sit here so that the section boundary is unambiguous at the page level.</p>
+<p>Its share of the total is reported in the final row of the companion table,
+   together with the subtotal that spans two columns.</p>
+
+<div class="t16">Section three: outlook</div>
+<p>The last section of this document has no sibling after it. That is the whole
+   point of putting it here: a section map that cannot find the next heading has
+   to stop at the last page of the file rather than invent one.</p>
+<p>A second paragraph keeps the page from being empty after the heading.</p>
+
+</body>
+</html>

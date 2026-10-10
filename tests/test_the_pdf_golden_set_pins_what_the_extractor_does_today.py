@@ -46,7 +46,8 @@ from dhole_mcp.pdf_extractor import extract_pdf
 
 HERE = Path(__file__).resolve().parent
 GOLDEN = HERE / "pdf_golden"
-FIXTURES = ["merged_cells.pdf", "background_checks.pdf", "dummy.pdf"]
+FIXTURES = ["merged_cells.pdf", "wrapped_heading.pdf", "background_checks.pdf",
+            "dummy.pdf"]
 
 _TABLE_SEP = re.compile(r"^\|(?: :?---:? \|)+$", re.MULTILINE)
 
@@ -187,9 +188,8 @@ class TestTheStructureProperties:
                             seen += 1
                             assert text in md, f"{name}: 降级渲染丢了格子文本 {text[:60]!r}"
         if not seen:
-            # dummy.pdf 是扫描件：它一张表都没有，这条守卫在那份夹具上是空转，
-            # 所以明说它没跑，而不是让"没有文本"冒充"文本都没丢"。
-            assert extracted[name].scanned is True, name
+            # 没有表的夹具（dummy.pdf 是扫描件、wrapped_heading.pdf 全文没有表）在这条
+            # 守卫上是空转，那就明说它没跑 —— 不让"没有文本"冒充"文本都没丢"。
             pytest.skip(f"{name} 里没有表 —— 这条守卫没有可查的东西")
 
     def test_the_heading_tree_matches_the_document(self, extracted):

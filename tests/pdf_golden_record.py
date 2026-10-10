@@ -32,7 +32,8 @@ from dhole_mcp.pdf_extractor import extract_pdf  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "pdf_golden"
-FIXTURES = ["merged_cells.pdf", "background_checks.pdf", "dummy.pdf"]
+FIXTURES = ["merged_cells.pdf", "wrapped_heading.pdf", "background_checks.pdf",
+             "dummy.pdf"]
 
 # 记录下来的事实必须**只是**被检查过的那些：时间戳会随 pdfplumber 版本漂的东西不进 JSON。
 FIELDS = ["error", "scanned", "encrypted", "pages_total", "pages_extracted",

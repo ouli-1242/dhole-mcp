@@ -1,0 +1,53 @@
+{
+  "author": "",
+  "content_ok": true,
+  "encrypted": false,
+  "error": "",
+  "pages_extracted": [
+    1,
+    2,
+    3
+  ],
+  "pages_total": 3,
+  "quality_score": 1.0,
+  "scanned": false,
+  "table_of_contents": [
+    {
+      "end_page": 3,
+      "level": 1,
+      "page": 1,
+      "title": "Quarterly Revenue Review for the Fiscal Year 2026"
+    },
+    {
+      "end_page": 1,
+      "level": 2,
+      "page": 1,
+      "title": "Divisional Results Discussed In This Review."
+    },
+    {
+      "end_page": 1,
+      "level": 2,
+      "page": 1,
+      "title": "Revenue Review By Division For The Fiscal Year 2026"
+    },
+    {
+      "end_page": 2,
+      "level": 2,
+      "page": 2,
+      "title": "Section one: the northern division"
+    },
+    {
+      "end_page": 3,
+      "level": 2,
+      "page": 3,
+      "title": "Section two: the southern division"
+    },
+    {
+      "end_page": 3,
+      "level": 2,
+      "page": 3,
+      "title": "Section three: outlook"
+    }
+  ],
+  "title": "Wrapped heading fixtures"
+}
