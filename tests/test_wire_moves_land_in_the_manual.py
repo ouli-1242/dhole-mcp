@@ -374,7 +374,16 @@ def test_connect_stays_inside_the_packed_budget():
 #: "技术上做不到"这一类，只有三条设计边界（凭据 / UA / 校验子），每条都点名自己的门。
 #: §3-17 那条边界一个字没动：`auth` / `cookies` / `proxy` / `extra_headers` /
 #: `allow_private` 五个旧拼写仍以名字被拒，`headers=` 里点名 cookie/authorization 也一样拒。
-CONNECT_CEILING = 32_466
+#: 2026-10-10 体验修复刀3-D2：棘轮**上抬 +30**（32,466 → 32,496），买的是常驻层不再对
+#: 一台三个月前批过的主机说"这是第一次"。名册从前是无时间戳的裸 host 列表 —— 三月的按键
+#: 到十月还在放行，而这台机器上那两条残留批准证明的是**撤销不可发现**，不是 TTL 多余。
+#: 现在磁盘形状是 `{host: 批准的 ISO 时间戳}`，过窗（30 天）重新征询而不是静默失效；旧形状
+#: 读成"无日期"，同样要再按一次，不替用户补盖他没按过的戳。三处描述改了词（confirm +24 /
+#: web_read.cdp_url +4 / web_act.cdp_url +2），三处成因各说各话（从未批过 / 过窗并引用日期 /
+#: 无日期可读），`sys_state` 的 census 与撤销回执一起点名每台日期、年龄、名册路径与撤销命令。
+#: 连带修的一处漂移：`dhole doctor` 的 cdp fence 行从前自己抄一遍名册算术，会把过窗的算成
+#: "已授权"，与闸门说的正好相反 —— 现在它读 server 的那一份，判活只有一个属主。
+CONNECT_CEILING = 32_496
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

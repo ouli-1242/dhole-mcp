@@ -4,6 +4,9 @@ route 层的 host fence 机制，context 复用，以及无模型登录判定。
 17.0 没有总开关了：attach 的许可是**每台主机一次提问** —— 第一次对未授权主机的
 attach 被拒绝（什么都不执行），confirm=true 重发才落盘授权；围栏 = 已授权主机
 集合，持久在 ``~/.dhole/cdp_hosts.json``（conftest 把它指到 tmp_path）。
+批过的那台也不是永久通行证：名册记的是 `{host: 批准时间}`，超出窗口后同一个闸门
+重新征询（年龄与措辞的守卫在
+``tests/test_a_cdp_approval_is_asked_again_rather_than_trusted_forever.py``）。
 
 The e2e falsification of the attach main path itself lives in
 tests/e2e_cdp_attach_test.py (manual, real Chrome). Everything here is the
@@ -11,6 +14,7 @@ mock-level regression net that runs in the default suite.
 """
 import asyncio
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -34,9 +38,9 @@ def _fresh_cdp_store(monkeypatch, tmp_path):
     store = tmp_path / "cdp_hosts.json"
     if store.exists():
         store.unlink()
-    server_mod._cdp_hosts_cache, server_mod._cdp_hosts_stamp = frozenset(), None
+    server_mod._cdp_forget_roster()
     yield
-    server_mod._cdp_hosts_cache, server_mod._cdp_hosts_stamp = frozenset(), None
+    server_mod._cdp_forget_roster()
 
 
 class TestCdpAttachGate:
@@ -69,8 +73,10 @@ class TestCdpAttachGate:
         assert error is None
         assert allowed == frozenset({"site.example.test"})
         raw = json.loads((tmp_path / "cdp_hosts.json").read_text(encoding="utf-8"))
-        assert raw == {"hosts": ["site.example.test"]}, (
+        assert list(raw["hosts"]) == ["site.example.test"], (
             "名册里出现 127.0.0.1 就是这次事故的形状：它匹配不上任何目标请求")
+        assert str(raw["hosts"]["site.example.test"]).startswith("20"), \
+            "批准要带日期：没有年龄的名册让三月那一次按键一直放行到以后（D2）"
 
     @pytest.mark.asyncio
     async def test_second_call_to_the_same_target_needs_no_confirm(self):
@@ -97,7 +103,12 @@ class TestCdpAttachGate:
         assert "a.example.test" in error and "b.example.test" in error, "缺哪台说要哪台"
         await _cdp_attach_gate(self.CDP, confirm=True, targets=urls)
         raw = json.loads((tmp_path / "cdp_hosts.json").read_text(encoding="utf-8"))
-        assert raw["hosts"] == ["a.example.test", "b.example.test"], "去重且小写"
+        assert list(raw["hosts"]) == ["a.example.test", "b.example.test"], "去重且小写"
+        # 名册带年龄才有"三个月前按的那一下还在放行"这回事，所以磁盘形状是
+        # `{host: 批准时间}`，不是裸 host 列表。
+        for host, when in raw["hosts"].items():
+            assert str(when)[:10] == datetime.now(timezone.utc).strftime("%Y-%m-%d"), \
+                f"{host} 的批准没有盖今天的戳: {when!r}"
 
     @pytest.mark.asyncio
     async def test_the_gate_and_the_fence_read_the_same_name_list(self):
@@ -128,7 +139,7 @@ class TestCdpAttachGate:
         await _cdp_attach_gate(self.CDP, confirm=True, targets=["https://a.example.test/"])
         await _cdp_attach_gate(self.CDP, confirm=True, targets=["https://b.example.test/"])
         raw = json.loads((tmp_path / "cdp_hosts.json").read_text(encoding="utf-8"))
-        assert raw["hosts"] == ["a.example.test", "b.example.test"]
+        assert list(raw["hosts"]) == ["a.example.test", "b.example.test"]
 
     @pytest.mark.asyncio
     async def test_no_cdp_url_is_a_noop(self):

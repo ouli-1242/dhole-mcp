@@ -1371,7 +1371,18 @@ class _TokenGate:
 
 
 _CDP_HOSTS_FILE_NAME = "cdp_hosts.json"
-_cdp_hosts_cache: Optional[frozenset] = None
+# 一次 attach 交出的是"你所有已登录站点"的读权限，而批准是某一天针对**当时那一个页面**
+# 按下的。没有年龄的名册意味着三月的按键到十月还在放行 —— 这台机器的名册里就躺着两条
+# 那样的残留，它们证明的是撤销不可发现，不是 TTL 多余。所以批准记下时间，
+# `_CDP_APPROVAL_DAYS` 之后**重新征询**。这是"再问一次"而不是"静默失效"：失效会把一套
+# 能用的配置变成谜样失败，而再问只多花一次按键 —— 安全动作的代价该出在按键上，不该出
+# 在"为什么今天不灵了"上。
+_CDP_APPROVAL_DAYS = 30
+# 名册的进程内读数：`{host: 批准的 ISO 时间戳}`，`""` = 比这颗字段更早记下的批准（旧形状
+# 的名册，或人手写过的文件）。
+# 缓存的是**原始读数**而不是"哪些还活着"：年龄随墙上时钟变，而文件的 mtime 不变 ——
+# 一个活过边界的 MCP 进程如果缓存判活后的集合，会把过期的批准一直认下去。
+_cdp_hosts_cache: Optional[Dict[str, str]] = None
 _cdp_hosts_stamp: Optional[tuple[float, int]] = None
 
 
@@ -1381,8 +1392,28 @@ def _cdp_hosts_file() -> str:
     return str(paths.file(_CDP_HOSTS_FILE_NAME))
 
 
-def _cdp_authorized_hosts() -> frozenset:
-    """已授权的 CDP 端点主机集合。按 mtime 缓存，与引擎状态文件同一约定。"""
+def _approval_age_days(iso: str) -> Optional[int]:
+    """这颗批准距今几天。读不出时间交回 None —— 不许替旧名册猜一个"还新鲜"。"""
+    if not iso:
+        return None
+    from datetime import datetime, timezone
+    try:
+        stamp = datetime.fromisoformat(str(iso).strip().replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+    return max(0, int((datetime.now(timezone.utc) - stamp).total_seconds() // 86400))
+
+
+def _cdp_records() -> Dict[str, str]:
+    """名册的原始形状（按 mtime 缓存，与引擎状态文件同一约定）。
+
+    两种磁盘形状都认：`{"hosts": {"a.test": "2026-10-01T…"}}`（现在写的这一种）与
+    `{"hosts": ["a.test", …]}`（17.0 §3-16 到过 2026-10 的那一种）。旧形状读成
+    `{host: ""}` —— 也就是说：**它不再自动有效**，那台主机要走一次重新征询才拿得到
+    时间戳。把它悄悄盖章成"今天批的"等于替用户补做一次他没做过的按键。
+    """
     global _cdp_hosts_cache, _cdp_hosts_stamp
     import json as _json
     try:
@@ -1390,39 +1421,83 @@ def _cdp_authorized_hosts() -> frozenset:
         stat = path.stat()
         stamp = (stat.st_mtime, stat.st_size)
     except OSError:
-        _cdp_hosts_cache, _cdp_hosts_stamp = frozenset(), None
+        _cdp_hosts_cache, _cdp_hosts_stamp = {}, None
         return _cdp_hosts_cache
     if _cdp_hosts_cache is not None and stamp == _cdp_hosts_stamp:
         return _cdp_hosts_cache
+    records: Dict[str, str] = {}
     try:
         data = _json.loads(path.read_text(encoding="utf-8"))
-        hosts = frozenset(str(h).strip().lower() for h in (data.get("hosts") or [])
-                          if str(h).strip())
+        raw = data.get("hosts") if isinstance(data, dict) else None
+        if isinstance(raw, dict):
+            pairs = list(raw.items())
+        elif isinstance(raw, (list, tuple)):
+            pairs = [(h, "") for h in raw]
+        else:
+            pairs = []
+        for host, when in pairs:
+            name = str(host).strip().lower()
+            if name:
+                records[name] = str(when or "").strip()
     except Exception:
-        hosts = frozenset()
-    _cdp_hosts_cache, _cdp_hosts_stamp = hosts, stamp
-    return _cdp_hosts_cache
+        records = {}
+    _cdp_hosts_cache, _cdp_hosts_stamp = records, stamp
+    return records
 
 
-def _cdp_authorize_host(host: str) -> None:
-    """把一台用户已同意的 CDP 端点主机写进落盘围栏。撤销不再走「删整个文件」：
-    `sys_state(clear=['cdp:host=<name>'])` 撤一台，`clear=['cdp_hosts']` 撤全部
-    （G25 评审把这两条路补上了，见 `_cdp_revoke_hosts`）。"""
+def _cdp_forget_roster() -> None:
+    """丢掉名册的进程内读数。测试挂具每条用例一次 —— 缓存的形状（`{host: 时间戳}`）是
+    这一层自己的事，不该让挂具去抄一个字面量：抄错的那次不会红，只会读到一个假名册。
+    """
+    global _cdp_hosts_cache, _cdp_hosts_stamp
+    _cdp_hosts_cache, _cdp_hosts_stamp = None, None
+
+
+def _cdp_authorized_hosts() -> frozenset:
+    """还活着的那半张名册。判活每次现算（理由见 `_cdp_hosts_cache` 上方那段）。"""
+    return frozenset(
+        host for host, when in _cdp_records().items()
+        if (age := _approval_age_days(when)) is not None and age < _CDP_APPROVAL_DAYS)
+
+
+def _cdp_write_records(records: Dict[str, str]) -> None:
     import json as _json
     from dhole_mcp import paths
     global _cdp_hosts_cache, _cdp_hosts_stamp
-    host = host.strip().lower()
     path = pathlib.Path(_cdp_hosts_file())
-    current: list[str] = sorted(_cdp_authorized_hosts())
-    if host in current:
-        return
-    current.append(host)
-    data = {"hosts": current}
+    body = {"hosts": {k: records[k] for k in sorted(records)}}
     paths.ensure_private_dir(path.parent)
-    path.write_text(_json.dumps(data, indent=2, sort_keys=True) + "\n",
+    path.write_text(_json.dumps(body, indent=2, sort_keys=True) + "\n",
                     encoding="utf-8")
     paths.harden_file(path)
-    _cdp_hosts_cache = frozenset(current)
+    _cdp_hosts_cache = records
+    try:
+        stat = path.stat()
+        _cdp_hosts_stamp = (stat.st_mtime, stat.st_size)
+    except OSError:
+        _cdp_hosts_stamp = None
+
+
+def _cdp_approved_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _cdp_authorize_host(host: str) -> None:
+    """把一台用户**刚刚**同意的 CDP 目标主机写进落盘围栏，盖上今天的戳。
+
+    撤销不走「删整个文件」那一条路：`sys_state(clear=['cdp:host=<name>'])` 撤一台，
+    `clear=['cdp_hosts']` 撤全部（G25 评审把这两条路补上了，见 `_cdp_revoke_hosts`）。
+
+    重新征询之后的第二次按键走的是同一个函数，所以它必须**刷新**那颗时间戳 —— 旧名册里
+    那台 host 的 `""` 也一样被替换掉，否则"批过了"这件事永远读不出年龄。
+    """
+    host = host.strip().lower()
+    records = dict(_cdp_records())
+    if records.get(host) and (_approval_age_days(records[host]) or 0) < _CDP_APPROVAL_DAYS:
+        return
+    records[host] = _cdp_approved_iso()
+    _cdp_write_records(records)
 
 
 def _cdp_revoke_hosts(hosts: List[str]) -> int:
@@ -1436,31 +1511,20 @@ def _cdp_revoke_hosts(hosts: List[str]) -> int:
     是安全动作，「已撤掉的主机在本进程后续调用里仍然可用」不该取决于文件系统
     时间戳的粒度够不够细。
     """
-    import json as _json
-    from dhole_mcp import paths
     global _cdp_hosts_cache, _cdp_hosts_stamp
     drop = {h.strip().lower() for h in (hosts or []) if h and h.strip()}
     path = pathlib.Path(_cdp_hosts_file())
-    current = sorted(_cdp_authorized_hosts())
-    remaining = [h for h in current if h not in drop]
+    current = sorted(_cdp_records())
+    remaining = {h: when for h, when in _cdp_records().items() if h not in drop}
     removed = len(current) - len(remaining)
     try:
         if remaining:
-            paths.ensure_private_dir(path.parent)
-            path.write_text(
-                _json.dumps({"hosts": remaining}, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8")
-            paths.harden_file(path)
+            _cdp_write_records(remaining)
         else:
             path.unlink(missing_ok=True)
+            _cdp_hosts_cache, _cdp_hosts_stamp = {}, None
     except OSError as e:
         raise ValueError(f"could not update {str(path)!r}: {str(e)[:160]}") from None
-    _cdp_hosts_cache = frozenset(remaining)
-    try:
-        stat = path.stat()
-        _cdp_hosts_stamp = (stat.st_mtime, stat.st_size)
-    except OSError:
-        _cdp_hosts_stamp = None
     return removed
 
 
@@ -1498,6 +1562,38 @@ def _write_ask_text(verb: str, url: str, body: Any) -> str:
             "Nothing is sent without your approval.")
 
 
+def _cdp_roster_phrase(host: str, records: Dict[str, str]) -> str:
+    """名册里一台的可见年龄：`a.test (approved 2026-10-01, 9 days ago)`。
+
+    这台机器上的两条残留批准证明的不是 TTL 缺失，是**撤销不可发现**：读不到年龄就
+    读不出"这条是三月按的"，也就想不起要去撤。所以名册这一口气里要有日期、天数、
+    文件在哪、以及撤掉一台的那句命令。
+    """
+    when = str(records.get(host) or "")
+    age = _approval_age_days(when)
+    if age is None:
+        return f"{host} (approved before approvals carried a date)"
+    return f"{host} (approved {when[:10]}, {age} day(s) ago)"
+
+
+def _cdp_ask_reason(records: Dict[str, str], host: str) -> str:
+    """为什么要为这一台主机再按一次 —— 三种成因各有各的话，不许共用一句"第一次"。
+
+    旧句子写死 "this is the FIRST attach"，而它现在会在一台**三个月前批过**的主机上说
+    这句：那张名册里明明有它的名字，读者照着"第一次"去理解，就会以为自己从没批过，
+    而不是去查那颗过期。本仓库对这种"看起来失败了而诊断自信地答错"记过不止一次案。
+    """
+    when = records.get(host)
+    if when is None:
+        return f"{host!r} has never been approved"
+    age = _approval_age_days(when)
+    if age is None:
+        return (f"{host!r} is in the roster from before approvals carried a date, "
+                "so its age cannot be read")
+    return (f"{host!r} was approved on {str(when)[:10]} - {age} days ago, and an "
+            f"approval is re-asked after {_CDP_APPROVAL_DAYS} days")
+
+
 async def _cdp_attach_gate(cdp_url: Optional[str], confirm: bool = False,
                      targets=()) -> tuple[Optional[str], Optional[frozenset]]:
     """安全闸 1/2（G33 → 17.0 §3-16 → 批次 7 → 批次8 刀1）：CDP attach 先问再记。
@@ -1524,11 +1620,16 @@ async def _cdp_attach_gate(cdp_url: Optional[str], confirm: bool = False,
     missing = [h for h in wanted if h not in authorized]
     if not missing:
         return None, (authorized or None)
+    records = _cdp_records()
     named = ", ".join(repr(h) for h in missing)
+    why = "; ".join(_cdp_ask_reason(records, h) for h in missing)
     human = await out_of_band_confirm(
         f"Approve attaching your real Chrome to read {named}? This hands over "
         "the authenticated session of EVERY site you are logged into. The "
-        "approval is remembered per host. Requests to other origins are fenced: "
+        f"approval is remembered per host for {_CDP_APPROVAL_DAYS} days, then "
+        "asked again. "
+        f"(Why this ask: {why}.) "
+        "The approval is remembered per host. Requests to other origins are fenced: "
         "a sub-resource or page script from outside it is blocked, and a page "
         "that redirects out of the fence comes back refused rather than as an "
         "answer - the request for that redirect is ended inside the browser, "
@@ -1558,15 +1659,15 @@ async def _cdp_attach_gate(cdp_url: Optional[str], confirm: bool = False,
                  reason="target host not authorized yet")
     revoke = " or ".join(f"clear=['cdp:host={h}']" for h in missing)
     return (
-        f"cdp_authorization_required: this is the FIRST attach for {named}, so "
-        "nothing was executed - attaching your real Chrome hands over the "
-        "authenticated session of EVERY site you are logged into, and dhole asks "
-        "once per host before doing that. Re-call the SAME url with confirm=true "
-        f"to authorize {named}; the approval is remembered per host, and later "
-        "requests to another origin are fenced - a sub-resource or page script "
-        "from outside it is blocked, and a page that redirects out of the fence "
-        f"comes back refused rather than as an answer. Revoke with sys_state({revoke}) - deleting "
-        f"{_CDP_HOSTS_FILE_NAME} works too.",
+        f"cdp_authorization_required: nothing was executed - {why}. Attaching your "
+        "real Chrome hands over the authenticated session of EVERY site you are "
+        f"logged into, so dhole asks once per host per {_CDP_APPROVAL_DAYS} days "
+        "before doing that. "
+        f"Re-call the SAME url with confirm=true to authorize {named}; the approval "
+        "is remembered per host, and later requests to another origin are fenced - "
+        "a sub-resource or page script from outside it is blocked, and a page that "
+        "redirects out of the fence comes back refused rather than as an answer. "
+        f"Revoke with sys_state({revoke}) - the roster is {_cdp_hosts_file()}.",
         None,
     )
 
@@ -7788,15 +7889,18 @@ class MasterFetchServer:
             )
         # 撤销一台名册里没有的主机与 `clear=["cahce"]` 同罪：装没看见就是 no-op。
         if cdp_named:
-            roster = sorted(_cdp_authorized_hosts())
+            # 判"在不在名册"看**磁盘**那一份，不是活着的那一份：一台已过窗口的批准仍然
+            # 躺在文件里，而"撤掉它"正是用户在这句话里要做的动作。拿活集合去比，撤销会
+            # 报"名册里没有这台"，把一条确实存在的记录说成不存在。
+            roster = sorted(_cdp_records())
             unknown = [h for h in cdp_named if h not in roster]
             if unknown:
                 return SysStateModel(
                     error=(f"Nothing matches 'cdp:host={', '.join(sorted(unknown))}': "
                            f"the CDP attach roster holds "
                            f"{', '.join(roster) if roster else 'no hosts'}."),
-                    next_action=("show=['cdp_hosts'] lists the authorized hosts. "
-                                 "Nothing was revoked."),
+                    next_action=("show=['cdp_hosts'] lists the approved hosts "
+                                 "(with their ages). Nothing was revoked."),
                     sessions=rows, open_count=len(rows),
                 )
 
@@ -7897,15 +8001,26 @@ class MasterFetchServer:
             # 撤销 CDP 授权（G25 评审：从「删整个文件」收到主机粒度）。丢掉的
             # 后果与 sessions 同类——下次 attach 那台主机才暴露——所以同一道闸。
             try:
-                roster = sorted(_cdp_authorized_hosts())
+                # 同上：撤销清的是**磁盘**上的名册。只清活着的那半会留下一堆
+                # "已经撤过但还在文件里"的过期批准，而下文那句"revoked"就不成立。
+                roster = sorted(_cdp_records())
                 targets = roster if "cdp_hosts" in want else list(cdp_named)
                 removed = _cdp_revoke_hosts(targets)
                 cleared.append("cdp_hosts")
                 detail = (f" ({', '.join(sorted(targets))})"
                           if targets and "cdp_hosts" not in want else "")
-                parts.append(f"{removed} CDP attach approval(s) revoked{detail}"
-                             " - the next attach to a revoked host is refused "
-                             "until the user approves it again")
+                # 撤销这一口气要把**剩下的**名册、它的年龄和文件在哪一起说完：
+                # 这台机器上的残留证明的不是 TTL 多余，是"撤了之后还剩谁"读不出来。
+                left = _cdp_records()
+                parts.append(
+                    f"{removed} CDP attach approval(s) revoked{detail}"
+                    " - the next attach to a revoked host is refused until the user "
+                    "approves it again"
+                    + (f". Still on disk: {', '.join(_cdp_roster_phrase(h, left) for h in sorted(left))}"
+                       if left else ". Nothing is left on disk")
+                    + f" - the roster is {_cdp_hosts_file()}.")
+                # 撤销后的"还剩谁"由下面的 `report |= set(cleared)` 负责重数：
+                # cleared 里已经有 cdp_hosts，回执那段就是刚重读过的名册。
             except Exception as e:
                 failed.append(f"cdp_hosts: {str(e)[:120]}")
 
@@ -7953,8 +8068,17 @@ class MasterFetchServer:
                 logger.debug("identity census failed: %s", e)
 
         cdp_roster: List[str] = []
-        if "cdp_hosts" in report:
+        cdp_ages: List[str] = []
+        cdp_out_of_window: List[str] = []
+        cdp_records: Dict[str, str] = {}
+        if "cdp_hosts" in report or "cdp_hosts" in want:
+            cdp_records = _cdp_records()
             cdp_roster = sorted(_cdp_authorized_hosts())
+            cdp_ages = [_cdp_roster_phrase(h, cdp_records) for h in cdp_roster]
+            # 磁盘上还活着的那半张名册才是 `cdp_hosts` 的意义（"现在 attach 会放行
+            # 的是谁"），但文件里过窗的那些既不能报成"已批准"，也不能当不存在 ——
+            # 它们占着文件名册的行数，也是 `clear=['cdp:host=…']` 撤得掉的东西。
+            cdp_out_of_window = sorted(h for h in cdp_records if h not in set(cdp_roster))
 
         config_keys: List[str] = []
         if "config" in report:
@@ -7986,8 +8110,12 @@ class MasterFetchServer:
                 counts.append(f"stored identity rows {len(cred_rows)}")
             if "cdp_hosts" in report:
                 counts.append(f"cdp-approved hosts {len(cdp_roster)} "
-                              "(no expiry; keyed to the target host, not the "
-                              "cdp endpoint)")
+                              f"(keyed to the target host, not the cdp endpoint; an "
+                              f"approval is re-asked after {_CDP_APPROVAL_DAYS} days)"
+                              + (f" - plus {len(cdp_out_of_window)} on disk that are "
+                                 f"NOT approved right now ({', '.join(cdp_out_of_window)}: "
+                                 "out of the window or undated; the next attach to them "
+                                 "asks again)" if cdp_out_of_window else ""))
             if "engine_state" in report:
                 counts.append("engine health "
                               + (f"{len(health)} row(s)" if health else "not reported"))
@@ -8018,12 +8146,15 @@ class MasterFetchServer:
                 next_action = ("No session is open. The content cache holds "
                                f"{cache_view['entries']} entry(ies) - "
                                "sys_state(clear=['cache']) erases them.")
-            if cdp_roster:
+            if cdp_roster or cdp_out_of_window:
+                _lines = cdp_ages + [_cdp_roster_phrase(h, cdp_records)
+                                     for h in cdp_out_of_window]
                 next_action = ((next_action + " " if next_action else "")
-                               + "CDP attach is approved for "
-                               + ", ".join(cdp_roster)
-                               + " - clear=['cdp:host=<name>'] revokes one, "
-                                 "clear=['cdp_hosts'] all (confirm=true).")
+                               + "CDP attach roster: " + ", ".join(_lines)
+                               + f" - clear=['cdp:host=<name>'] revokes one, "
+                                 "clear=['cdp_hosts'] all (confirm=true). The roster "
+                                 f"is {_cdp_hosts_file()}; an approval is re-asked "
+                                 f"after {_CDP_APPROVAL_DAYS} days.")
 
         return SysStateModel(
             message=message, cleared=cleared,
@@ -9247,7 +9378,7 @@ class MasterFetchServer:
                     "focus_mode": {"type": "string", "description": "Shape of the focus answer: 'filter' (default) keeps every block past the relevance cut; 'best' returns only the highest-scoring block plus its heading. Requires focus."},
                     "focus_engine": {"type": "string", "description": "Which scorer runs focus: 'bm25' (default, keyword overlap) or 'neural' (a local cross-encoder, needing the reranker model). Per-page cost: sys_guide(topic='behavior')."},
                     "schema": {"type": "object", "description": "CSS-driven structured extraction instead of markdown: {properties: {...}} (a JSON string is accepted). Which keys are read, first match vs \"type\": \"array\", per-element grouping, the invented-keyword trap and the record ceilings: sys_guide(topic='behavior', section='Structured extraction').", "additionalProperties": True},
-                    "confirm": {"type": "boolean", "description": "Approval for a first-time sensitive action on this call - today only cdp_url: the FIRST attach for a site is refused with cdp_authorization_required and nothing executes without it. False (default) approves nothing."},
+                    "confirm": {"type": "boolean", "description": "Approval for a sensitive action on this call - today only cdp_url: an attach is refused with cdp_authorization_required unless that host's approval is younger than 30 days, and nothing executes without it. False (default) approves nothing."},
                     # 17.0 B4 · 下面这 27 个一直都能从顶层传进来（分发器读 args，
                     # _TOP_LEVEL_ARGS 认它们），只是 schema 从没露过脸 —— 而
                     # `options` 那段散文把它们和"袋子的键"绑在了一起。参数只有一个家：
@@ -9256,7 +9387,7 @@ class MasterFetchServer:
                     "session_id": {"type": "string", "description": "Carry cookies across calls under this name (1-64 chars: letters, digits, . _ -). Covers both tiers; values never leave the process."},
                     "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check for this call (default false = comply). True only where you have the site's permission."},
                     "check_login": {"type": "boolean", "description": "Model-free login probe on the settled browser page; returns login_check (DOM signals + cookie NAMES, never values). Live-only: null on HTTP-tier results and on cache hits."},
-                    "cdp_url": {"type": "string", "description": "Attach the user's Chrome over CDP: rides that profile's logged-in cookies, skips the HTTP tier and public cache; answers say cdp_attached=true. First attach per host needs confirm=true."},
+                    "cdp_url": {"type": "string", "description": "Attach the user's Chrome over CDP: rides that profile's logged-in cookies, skips the HTTP tier and public cache; answers say cdp_attached=true. Attach needs confirm=true per host (30 days)."},
                     # W1：调用方点名的头。三族拒绝各带着自己那道门的地址（params.py：
                     # 拒必须具名），而"你的键赢在哪一层之上"这句必须在这一颗描述里 ——
                     # 读不到它的人会以为 `headers=` 就是"这次发出去的全部头"，而实测
@@ -9291,7 +9422,7 @@ class MasterFetchServer:
                     "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 25000 - sized to beat a typical 30s host MCP timeout; raise it when your host allows more. max 120000)."},
                     "anti_detect": {"type": "string", "description": ANTI_DETECT_DESC_SHORT},
                     "session_id": {"type": "string", "description": "Act inside this named session, so the login it holds is the state the page starts from. Names only, never values."},
-                    "cdp_url": {"type": "string", "description": "Attach a running Chrome (its own logged-in profile) and act there; the first attach to a host needs confirm=true."},
+                    "cdp_url": {"type": "string", "description": "Attach a running Chrome (its own logged-in profile) and act there; an attach needs confirm=true per host (30 days)."},
                     "confirm": {"type": "boolean", "description": "A submit reads it INSIDE the action: {\"submit\": {..., \"confirm\": true}} - a top-level confirm does NOT release it. Top-level it gates the first CDP attach. Only on the user's explicit yes."},
                     "check_login": {"type": "boolean", "description": "Model-free login probe on the settled browser page; returns login_check (DOM signals + cookie NAMES, never values)."},
                     "headed": {"type": "boolean", "description": "Run this chain in a VISIBLE window so the user can watch and step in (log in by hand, one CAPTCHA). Default hidden. A hidden browser already up on that profile is neither taken over nor closed - refused (browser_busy). Consequences: sys_guide(topic='config', section='Variables by scenario')."},

@@ -292,9 +292,9 @@ def _no_real_home_state_writes(request, monkeypatch, tmp_path):
     monkeypatch.setattr(_identity, "_PERSIST", False)
     _identity.close()
     from dhole_mcp import server as _srv
-    _srv._cdp_hosts_cache, _srv._cdp_hosts_stamp = frozenset(), None
+    _srv._cdp_forget_roster()
     yield
-    _srv._cdp_hosts_cache, _srv._cdp_hosts_stamp = frozenset(), None
+    _srv._cdp_forget_roster()
     _sessions.reset_for_tests()
     _identity.close()
     _envreg.invalidate_file_cache()

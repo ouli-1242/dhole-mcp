@@ -62,9 +62,9 @@ def _fresh_cdp_store(tmp_path):
     from pathlib import Path as _Path
     store = _Path(tmp_path) / "cdp_hosts.json"
     import dhole_mcp.server as _sm
-    _sm._cdp_hosts_cache, _sm._cdp_hosts_stamp = frozenset(), None
+    _sm._cdp_forget_roster()
     yield
-    _sm._cdp_hosts_cache, _sm._cdp_hosts_stamp = frozenset(), None
+    _sm._cdp_forget_roster()
     store.unlink(missing_ok=True)
 
 

@@ -532,10 +532,11 @@ class TestItem12ConnectCost:
 
         真起一台解释器（这旋钮 import 期冻结，进程内改不了），只问 connect cost 那一行。
         全量 instructions 是 2,476，`web_read,web_search` 的 wire 实发 1,502
-        （tests/test_the_dhole_tools_price_is_the_wire_itself.py 用真 stdio 量过 11,866
+        （tests/test_the_dhole_tools_price_is_the_wire_itself.py 用真 stdio 量过 11,894
         的总数；11,382 → 11,480 是体验修复刀3-C5 给 `web_read` 的 `timeout` 补上
         "一次尝试封顶 30s"那一句，11,480 → 11,866 是刀3-W1 的 `headers` —— 这一组里
-        只有读的那扇门付它）。按全量计价会报一个谁都没付的数，而且它恰好把"想少
+        只有读的那扇门付它；11,866 → 11,894 是刀3-D2 的 `confirm`/`cdp_url` 两句 +28，
+        两颗都长在 `web_read` 身上）。按全量计价会报一个谁都没付的数，而且它恰好把"想少
         付就用 DHOLE_TOOLS"这句建议变成了假话。
         """
         import os
@@ -556,7 +557,7 @@ class TestItem12ConnectCost:
         assert out.returncode == 0, out.stderr[-600:]
         lines = [l for l in out.stdout.splitlines() if l.strip()]
         row, face = lines[-2], lines[-1]
-        assert "11866 chars" in row, f"收窄后的 doctor 报的不是这台进程付的账：{row}"
+        assert "11894 chars" in row, f"收窄后的 doctor 报的不是这台进程付的账：{row}"
         assert "2 tool(s)" in row, row
         assert "ACTIVE 1502" in face and "FULL 2476" in face, (
             f"这道判据依赖两份 instructions 不同值：{face}")

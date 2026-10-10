@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+from datetime import datetime, timezone
 
 import pytest
 
@@ -123,7 +124,12 @@ class TestOtherStateFiles:
 
         assert (str(tmp_path), oct(0o700)) in chmod_spy, chmod_spy
         assert (str(target), oct(0o600)) in chmod_spy, chmod_spy
-        assert json.loads(target.read_text(encoding="utf-8"))["hosts"] == ["127.0.0.1"]
+        hosts = json.loads(target.read_text(encoding="utf-8"))["hosts"]
+        # 形状本身也是这条守卫的一部分：名册记的是 {host: 批准时间}，一台主机要能
+        # 读出年龄，权限才只是它必须和别的凭据文件同级的那一半。
+        assert list(hosts) == ["127.0.0.1"]
+        assert str(hosts["127.0.0.1"])[:10] == datetime.now(timezone.utc).strftime(
+            "%Y-%m-%d"), f"批准没盖上今天的戳: {hosts}"
 
     def test_circuit_state_tightens_dir(self, chmod_spy, monkeypatch, tmp_path):
         from dhole_mcp import search_metasearch as ms

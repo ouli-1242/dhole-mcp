@@ -590,41 +590,57 @@ def _append_config_audit(checks: list[tuple[str, str, str, str]]) -> None:
     # The one capability where "it works" and "it is safe" are different
     # statements: attaching your real Chrome hands every request the attached
     # browser makes the cookies of every site the user is logged into. 17.0
-    # 先问再记（§3-16）：attach 没有总开关，围栏是落盘的已授权主机集合 —— 从未
-    # 授权过的主机第一次 attach 会被拒绝并等待 confirm，所以这里报告的是磁盘上
-    # 的授权现实，而不是任何配置项。保持 stdlib-only：直接读
-    # ~/.dhole/cdp_hosts.json（server._cdp_authorized_hosts 的镜像）。
+    # 先问再记（§3-16）：attach 没有总开关，围栏是落盘的已授权主机集合 —— 未授权
+    # 主机第一次 attach 会被拒绝并等待 confirm，所以这里报告的是磁盘上的授权现实，
+    # 而不是任何配置项。
+    # 判活规则不在这里抄第二遍：批准现在带时间戳，窗口外的要重新征询，doctor 若
+    # 自己实现一遍年龄算术，它就会说"这台已授权"而闸门其实会再问 —— 两句相反的
+    # 话由两个人各自维护，正是本仓库反复记账的那种漂移。所以读 server 的那一份。
     try:
-        import json as _json
-        from dhole_mcp import paths as _paths
-        _cdp_path = pathlib.Path(_paths.file("cdp_hosts.json"))
-        _cdp_hosts: list = []
-        if _cdp_path.exists():
-            _cdp_hosts = sorted(str(h).strip().lower()
-                                for h in (_json.loads(_cdp_path.read_text(encoding="utf-8"))
-                                          .get("hosts") or []) if str(h).strip())
+        from dhole_mcp import server as _srv
+        _cdp_records = dict(_srv._cdp_records())
+        _cdp_live = sorted(_srv._cdp_authorized_hosts())
+        _cdp_stale = sorted(h for h in _cdp_records if h not in set(_cdp_live))
+        _cdp_window = _srv._CDP_APPROVAL_DAYS
+        _cdp_phrase = _srv._cdp_roster_phrase
+        _cdp_path = pathlib.Path(_srv._cdp_hosts_file())
     except Exception:
-        _cdp_hosts = []
-    if _cdp_hosts:
-        if len(_cdp_hosts) == 1:
-            listing = _cdp_hosts[0]
-        else:
-            listing = (", ".join(_cdp_hosts[:3])
-                       + (", …" if len(_cdp_hosts) > 3 else ""))
+        _cdp_records, _cdp_live, _cdp_stale = {}, [], []
+        _cdp_window, _cdp_phrase = 30, None
+        _cdp_path = pathlib.Path(paths.file("cdp_hosts.json"))
+    if _cdp_live or _cdp_stale:
+        def _listing(names):
+            return (names[0] if len(names) == 1
+                    else ", ".join(names[:3]) + (", …" if len(names) > 3 else ""))
         checks.append((
             "cdp fence", "info",
-            f"CDP attach is authorized for {len(_cdp_hosts)} "
-            f"{'host: ' + listing if len(_cdp_hosts) == 1 else 'hosts: ' + listing}; "
-            "every attach is fenced to these - a new host is refused once and "
-            "asks for confirm first",
-            f"revoke: sys_state(clear=['cdp_hosts']) from the agent side, or "
-            f"delete cdp_hosts.json in {_cdp_path.parent}"))
+            f"CDP attach is authorized for {len(_cdp_live)} "
+            + (f"host: {_listing(_cdp_live)}" if len(_cdp_live) == 1
+               else f"hosts: {_listing(_cdp_live)}")
+            + (f" - {len(_cdp_stale)} more on disk are outside the window and will "
+               f"be asked again ({_listing(_cdp_stale)})" if _cdp_stale else "")
+            + f"; every attach is fenced to these, a new host is asked once, and an "
+              f"approval is re-asked after {_cdp_window} days",
+            f"revoke: sys_state(clear=['cdp:host=<name>']) for one, "
+            f"sys_state(clear=['cdp_hosts']) for all (confirm=true), or delete "
+            f"{_cdp_path}"))
+        # 年龄单独成行，不接在上面那句尾巴里：doctor 的渲染对 detail 做一次
+        # `_short(detail, 280)`，而那个裁剪**保留尾部**（见 updater.py 渲染处），
+        # 把逐台日期拼进去正好会把主机名和数量挤出可见区 —— 那行就白写了。
+        if _cdp_phrase:
+            checks.append((
+                "cdp approvals", "info",
+                " ; ".join(_cdp_phrase(h, _cdp_records)
+                           for h in sorted(_cdp_records)),
+                f"the roster is {_cdp_path} - a host listed as outside the window "
+                "is asked again on its next attach"))
     else:
         checks.append((
             "cdp fence", "ok",
             "no CDP host authorized yet - the first attach to your real Chrome "
             "is refused with an authorization ask (nothing executes until you "
-            "confirm it)",
+            f"confirm it; an approval is remembered per host for {_cdp_window} "
+            "days, then asked again)",
             ""))
 
     checks.append((
