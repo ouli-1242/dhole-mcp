@@ -777,6 +777,16 @@ IDLE_CHECK_INTERVAL = 60  # How often to check for idle sessions (seconds)
 DEFAULT_MAX_CONTENT_CHARS = max(
     500, min(200000, _env_int("DHOLE_DEFAULT_CONTENT_CHARS", MAX_CONTENT_CHARS)))
 
+# What ONE batched `web_read(urls=[...])` is allowed to hand back per page, in
+# characters, when the caller named nothing. A batch shares ONE return: 9 pages x
+# the 40,000 default is 360,000 chars, and the host truncates the payload long
+# before the ninth page (measured 2026-10-11 全真模拟 S6: "怎么只回来一半" — only the
+# first 6 of 9 rows were readable, and the assistant had to re-fetch the rest).
+# Splitting the same total across the rows costs no page its head: 48,000 / 9 is
+# 5,333 chars each, which is still a full summary-length read, and every row says
+# so and can be re-read alone at the default.
+BULK_TOTAL_CONTENT_CHARS = 48_000
+
 # MCP initialize `instructions` — injected into the agent's context ONCE on
 # connect by clients that support it. This is the connect-time mastery doc:
 # the #1 workflow, the gotchas, and when to use each tool. Written as
@@ -7218,15 +7228,42 @@ class MasterFetchServer:
                 f"Too many URLs ({len(urls)}). Maximum is {MAX_BULK_URLS} per call."
             )
 
+        # 一批共用**一次**返回预算，而这一族从前没人算过这笔账：9 个 URL 各拿满默认
+        # 40,000 字符就是 360,000，宿主在远早于第九页的地方把载荷截了（2026-10-11 全真
+        # 模拟 S6 实测"怎么只回来一半"：9 条里只有前 6 条读得出来，剩下三条必须逐条补抓
+        # —— 那既更慢，又把"我要了 9 条"变成了一次返工）。
+        #
+        # 只在调用方**没有点名** `max_content_chars` 时压（`max_chars is None`）：点了数
+        # 就是显式决定，替他改等于把他的参数当成建议 —— 这一族对显式值的规矩写在
+        # `web_read` 里那行 "An explicit value still wins"。
+        #
+        # 说必须逐行说：批次里每一页都各被压过一次，而这句话的读者正在读的是那一页。
+        # 落点是每一行自己的 `summary`（`test_every_clamp_is_announced` 不认"静默改变"
+        # 这一档），出路两句都给：点名 `max_content_chars=` 多花，或单独读那一页回到默认。
+        per_page = max_chars
+        bulk_note = ""
+        if len(urls) > 1 and max_chars is None:
+            share = BULK_TOTAL_CONTENT_CHARS // len(urls)
+            if share < DEFAULT_MAX_CONTENT_CHARS:
+                per_page = max(500, share)
+                bulk_note = (
+                    f"this batch shares one return budget: each page is capped at "
+                    f"{per_page} content chars, because {len(urls)} x the "
+                    f"{DEFAULT_MAX_CONTENT_CHARS} default is "
+                    f"{len(urls) * DEFAULT_MAX_CONTENT_CHARS} - more than a host keeps, "
+                    f"and the tail of the batch would be cut off the answer. Pass "
+                    f"max_content_chars= to spend more per page, or read one URL alone "
+                    f"to get the default back")
+
         async def _fetch_one(u: str) -> ResponseModel:
             try:
-                return await self.web_read(
+                row = await self.web_read(
                     url=u, extraction_type=extraction_type,
                     css_selector=css_selector,
                     cache_ttl=cache_ttl,
                     force_fetcher=force_fetcher,
                     timeout=timeout, anti_detect=anti_detect,
-                    max_content_chars=max_chars,
+                    max_content_chars=per_page,
                     include_media=include_media, include_links=include_links,
                     focus=focus, schema=schema,
                     max_links=max_links, ignore_robots=ignore_robots,
@@ -7234,6 +7271,12 @@ class MasterFetchServer:
                     headers=headers,
                     method=method, body=body, content_type=content_type,
                 )
+                # 一笔账一行：这一页被压过，读这一页的人必须当场看见。失败的那一行不
+                # 追加 —— 它一个字都没被截，那句解释会变成一句关于没发生过的事的断言。
+                if bulk_note and not row.error:
+                    row.summary = (f"{row.summary} | {bulk_note}" if row.summary
+                                   else bulk_note)
+                return row
             except Exception as e:
                 return _with_agent_hints(ResponseModel(
                     url=u, status=0, content=[],
