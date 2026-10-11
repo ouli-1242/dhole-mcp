@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import re
 from collections import Counter
 from datetime import date
@@ -45,7 +46,8 @@ from dhole_mcp.search_engines import (
     fetch_source_for_similar, _INDEX_FAMILY, date_support,
     _DATE_PARAM_UNWIRED, split_date_blindness,
 )
-from dhole_mcp.search_metasearch import schedule_engine_heartbeat, KEYED_ENGINES
+from dhole_mcp.search_metasearch import (KEYED_ENGINES, cooldowns,
+                                         schedule_engine_heartbeat)
 
 logger = logging.getLogger("dhole-mcp.search")
 
@@ -515,7 +517,7 @@ def _replay_provenance() -> str:
 
 
 def _recall_levers(engine_blocked: list[str], engine_empty: list[str], *,
-                   replay: bool) -> str:
+                   replay: bool, asked: int = 0) -> str:
     """每个杠杆挂在一个具体的因上（体验修复刀2-S7）。
 
     旧文案对被墙、被解析空、被早停三类各说同一句 "retry shortly for more recall"，
@@ -529,14 +531,33 @@ def _recall_levers(engine_blocked: list[str], engine_empty: list[str], *,
     `replay=True`（缓存命中）时更彻底：整轮根本没重新问引擎，原样重试在 TTL 内
     逐字节返回同一批行。要换答案只能换缓存身份（max_results / engines 都在键里）
     或 cache_ttl=0。
+
+    验收刀9-4（F11）：那一句"60s / 600s"从前是**档位表**，而本轮真正的数是量得到的 ——
+    `search_metasearch.cooldowns()` 读的就是 `_BACKEND_HEALTH` 里那份绝对解禁时刻，
+    `search_engines.py` 给 `circuit_open` 那一格写 "retried in Ns" 用的也是它。报告里
+    "越用越难搜但没人说为什么"缺的从来不是"哪家坏了"（`engine_blocked` 一直在报），
+    而是"还要多久才回来"。所以现在名字与秒数一起端出来，档位句留在括号里解释那个数是
+    怎么来的；量不到（这一轮没有观测，或引擎是被别的原因拒的）就只说档位，不编秒数。
     """
     if replay:
         return _replay_provenance()
     bits = []
     if engine_blocked:
-        bits.append("retry after the cooldown clears (60s after a hard block, 600s after "
-                    "repeated challenge pages or connection failures - `dhole engines list` "
-                    "names who is still cooling)")
+        cooling = _cooling_seconds(engine_blocked)
+        if len(cooling) >= 2 and asked:
+            # F11 要的是一句能照着做的数：这一轮问过几家、现在还有几家能答。`fetch_hint`
+            # 那句报的是"谁没贡献"（名字），这里报的是"只剩几家"（数）—— 两句话不重叠，
+            # 而 ratio 压在 0.6 以下时那条 LOW diversity 的 WARNING 根本不触发，
+            # "8 家掉到 2 家"这件事在响应里就一处都读不出来。
+            bits.append(f"the pool is down to {max(0, asked - len(engine_blocked))} of the "
+                        f"{asked} engines it asked")
+        who = ("; cooling right now: "
+               + ", ".join(f"{n} {s:.0f}s" for n, s in cooling) + "; "
+               + f"the pool is whole again in {int(math.ceil(cooling[0][1]))}s - "
+               if cooling else "")
+        bits.append("retry after the cooldown clears (" + who
+                    + "60s after a hard block, 600s after repeated challenge pages or "
+                    "connection failures - `dhole engines list` names who is still cooling)")
         bits.append("set DHOLE_SEARCH_PROXY for sustained heavy use")
     if engine_empty:
         bits.append("rephrase if the query is narrow (an engine that answered with nothing "
@@ -544,6 +565,20 @@ def _recall_levers(engine_blocked: list[str], engine_empty: list[str], *,
     if not bits:
         return ""
     return "For more recall: " + "; ".join(bits) + "."
+
+
+def _cooling_seconds(engine_blocked: list[str]) -> list[tuple[str, float]]:
+    """本轮被拒的那几家还剩几秒，按剩下的多的排在前面（第一对就是"池子何时整"）。
+
+    取不到就当没有：`cooldowns()` 读的是进程内那份熔断表，而 `_recall_levers` 也会被
+    替身层与不带引擎状态的调用直接调到 —— 一句关于没量过的事的秒数，比不报更坏。
+    """
+    try:
+        left = cooldowns()
+    except Exception:
+        return []
+    hit = [(n, left[n]) for n in engine_blocked if n and left.get(n, 0) > 0]
+    return sorted(hit, key=lambda kv: -kv[1])
 
 
 def _preemption_note(engine_preempted: list[str]) -> str:
@@ -623,7 +658,8 @@ def _search_next_action(results: list[SearchResult], engine_blocked: list[str],
     if silent:
         blocked_ratio = len(silent) / max(1, total_engines)
         kinds = _silent_kinds(engine_blocked, engine_empty)
-        levers = _recall_levers(engine_blocked, engine_empty, replay=replay)
+        levers = _recall_levers(engine_blocked, engine_empty, replay=replay,
+                                asked=total_engines)
         if blocked_ratio >= 0.6:
             # "N of M" 的 M 是**被问过**的引擎数，不是池子大小：早停的那几家在下
             # 一句里单独说。把两者混在一个分母里正是原缺陷。
