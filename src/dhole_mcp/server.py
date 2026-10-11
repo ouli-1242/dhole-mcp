@@ -787,6 +787,20 @@ DEFAULT_MAX_CONTENT_CHARS = max(
 # so and can be re-read alone at the default.
 BULK_TOTAL_CONTENT_CHARS = 48_000
 
+# 刀9-6b（F5）：`web_discover(search=)` 空手而归时，补一次内容级 focus 扫描的代价帽。
+# 两件事都要帽住，因为这个洞不是"再走一遍图"：`search` 只比 URL 路径与标题（地图行
+# 只有这两样），而人手里的那个词常常只在正文里 —— 2026-10-11 全真模拟 S7 实测
+# docs.python-requests.org `search='timeout'` 筛掉整张图、0 行，答案站在两个页面正文的
+# 锚点上，没有任何一条 URL 拼得出它。
+#
+# 帽为什么是 3 页：这是一次**代答**，不是调用方要的扫描，所以宁可窄。返工那一轮自己
+# 抬到 10 页 / depth 3，结果被 29.7s 的时间帽掐断 —— 补考不该比重考还贵。
+# 帽为什么有"最少时钟"这一半：剩下的秒数不够走完一次内容扫描时，交回来的会是一份被
+# 同一口时钟砍过、读起来像"站点慢"的爬取。那种情况下把"没补考"和原因写在地图上，比
+# 假装有结果诚实。
+DISCOVER_FALLBACK_PAGES = 3
+DISCOVER_FALLBACK_MIN_MS = 4000
+
 # MCP initialize `instructions` — injected into the agent's context ONCE on
 # connect by clients that support it. This is the connect-time mastery doc:
 # the #1 workflow, the gotchas, and when to use each tool. Written as
@@ -9153,6 +9167,15 @@ class MasterFetchServer:
         from this tool's own reply or its previous page) returns the rows the
         budget held back without walking the site again.
 
+        `search=` filters the map on the URL path plus whatever title a row has, and
+        that is not a content search. When a map that DID hold URLs keeps none of them,
+        this call spends the clock it has left on a content-level `focus` read of a few
+        pages: rows that carry the word come back as page content (the `summary` says
+        so, and the map is then not stored as a plan), and when the scan finds nothing
+        the map answer says it looked. Measured 2026-10-11 全真模拟 S7: on the requests
+        docs, `search='timeout'` kept 0 of the whole map while the answer sat inside two
+        pages' prose -- "0 条？那我 Ctrl+F 去了".
+
         `timeout=` is this call's clock, and it is enforced as one. It used to be
         handed to the engine as a PER-PAGE budget while the map ran on the
         engine's own `deadline_ms` (25000) and each index request on a hardcoded
@@ -9204,12 +9227,23 @@ class MasterFetchServer:
                 path_include=path_include, path_exclude=path_exclude,
                 search=search, max_total_chars=max_total_chars, timeout=timeout,
                 deadline_ms=_clock_ms)
+        _t_map = now()
         result = await self.web_crawl(
             url, max_pages=max_pages, path_include=path_include,
             path_exclude=path_exclude, discover_only=True, sitemap=sitemap,
             search=search, max_total_chars=max_total_chars, timeout=timeout,
             deadline_ms=_clock_ms)
-        if not result.error and result.pages:
+        _by_content = False
+        if search and not result.error and not result.pages:
+            # 0 行有两种成因，只有其中一种值得补考：`pages_discovered` 是地图本身
+            # 多大（筛掉的行不算没有），所以"图是空的"那一支仍由 crawl 自己那句解释，
+            # 这里不替它编一个扫描。
+            result, _by_content = await self._discover_search_fallback(
+                result, url=url, search=search,
+                path_include=path_include, path_exclude=path_exclude,
+                max_total_chars=max_total_chars,
+                clock_ms=_clock_ms, spent_ms=(now() - _t_map) * 1000)
+        if not result.error and result.pages and not _by_content:
             # P11 阶段1：地图留在服务器侧（1h TTL），回执只发一个短 id ——
             # 千页任务的参数成本从每轮 ~7.6KB 的 URL 传送带降到 O(1)。
             # 被体积闸砍过一刀的地图已经在 crawl 里整份存下了（连未交出的那些行），
@@ -9222,6 +9256,104 @@ class MasterFetchServer:
                     " fetches it without re-sending URLs (add selector=/schema= to "
                     "project each page); or web_read(urls=[...]) the picks directly.")
         return result
+
+    async def _discover_search_fallback(self, result, *, url: str, search: str,
+                                        path_include: Optional[List[str]],
+                                        path_exclude: Optional[List[str]],
+                                        max_total_chars: int, clock_ms: int,
+                                        spent_ms: float):
+        """Empty-handed on a map that HAD URLs means the question is about content.
+
+        Returns ``(result, answered_by_content)``. ``answered_by_content`` is the
+        flag that keeps the caller's map from being re-stored as a plan: the rows
+        the scan adopts already carry their text, so a cursor over them would
+        promise a re-fetch of content nobody asked to resume.
+
+        `search` compares the URL path and the page title, which is all a map row
+        has. The word a caller is holding is usually in the prose -- measured
+        2026-10-11 全真模拟 S7: docs.python-requests.org with `search='timeout'`
+        kept 0 of the whole map, and the answer lived in two headings inside
+        Quickstart/Advanced that no URL spells out. So the call spends the clock
+        it has LEFT on a content-level `focus` scan and either hands back the rows
+        that actually carry the word or says out loud that it looked.
+
+        Three lines this does not cross:
+        * a map that held NO urls is not this case -- `pages_discovered` is the
+          size of the map, so an empty map (and the sitemap branch, which reports
+          its own "kept 0 of N" sentence from inside crawl) keeps the explanation
+          it already has instead of being handed a scan invented for it;
+        * too little clock left means no scan, and that is said with the number,
+          rather than returning a crawl truncated by the same clock and readable
+          as "the site is slow";
+        * whatever ships is labelled as the downgrade in `summary`, because rows
+          with `content` in them are not what this tool promised.
+        """
+        if result.pages_discovered <= 0:
+            return result, False
+
+        terms = [t.lower() for t in search.split() if t]
+        left = int(clock_ms - spent_ms)
+        clause = (f"search={search!r} compares the URL path and the page title, which "
+                  f"is all a map row carries - it kept none of the "
+                  f"{result.pages_discovered} URL(s) the map found")
+        # 出路要点名真正管事的旋钮：`web_search` 有 `site=` 这颗参数（`search.py` 会把它
+        # 拼进每引擎查询并对结果域名过滤），所以这里给的是那个写法，而不是让人往 query
+        # 里塞 "site:" 碰运气。hostname 取不到（异常 URL）时退回不带站的问法。
+        _host = urlparse(url).hostname or ""
+        _ask_the_web = (f"web_search(query={search!r}, site={_host!r})" if _host
+                        else f"web_search(query={search!r})")
+        if not terms or left < DISCOVER_FALLBACK_MIN_MS:
+            result.summary = (result.summary or "") + (
+                f" · {clause}. No content scan was run: this call had {left}ms of its "
+                f"{clock_ms}ms clock left after the map, under the "
+                f"{DISCOVER_FALLBACK_MIN_MS}ms floor that scan needs to finish honestly")
+            result.next_action = (
+                f"Raise timeout= (this call's whole clock, up to 120000ms) and re-ask to "
+                f"get the content scan, or {_ask_the_web} asks the web for that host. "
+                f"web_discover without search= returns the whole map; web_crawl(url='"
+                f"{url}', focus={search!r}) reads pages instead of filtering them.")
+            return result, False
+
+        scan = await self.web_crawl(
+            url, max_pages=DISCOVER_FALLBACK_PAGES, focus=search,
+            discover_only=False, path_include=path_include,
+            path_exclude=path_exclude, max_total_chars=max_total_chars,
+            timeout=left, deadline_ms=left)
+        read = [p for p in scan.pages if not p.error]
+        hits = [p for p in read if any(
+            t in " ".join(p.content).lower() or t in (p.title or "").lower()
+            for t in terms)]
+        if hits:
+            # 内容行接管地图行：pages_crawled 跟着"交回几行"走，与 crawl 自己那个
+            # search 过滤器同一套记账（它也是 `pages_crawled = len(pages)`），而"读了
+            # 几页、其中几页带这个词"两个数都写在句子里，不会被读成"这站只有两页"。
+            scan.pages = hits
+            scan.pages_crawled = len(hits)
+            scan.summary = (
+                f"answered by CONTENT, not by the map: {clause}. The {left}ms this call "
+                f"had left went into a focus={search!r} read: {len(read)} page(s) read, "
+                f"{len(hits)} of them carrying the word - these rows hold page text, "
+                f"which a map would not. · {scan.summary or ''}")
+            scan.next_action = (
+                f"The word is in {len(hits)} page(s)' text. web_read(url='<row>', "
+                f"focus={search!r}) gives the keyword-window excerpt around it; "
+                f"web_crawl(url='{url}', focus={search!r}, max_pages=<more>) scans "
+                "deeper. web_discover without search= returns the whole map.")
+            return scan, True
+
+        result.summary = (result.summary or "") + (
+            f" · {clause}. A content scan of {len(read)} page(s) (focus={search!r}, "
+            f"the {left}ms left of this call's {clock_ms}ms) found none of it either"
+            + (f" - that scan reported: {scan.error}" if scan.error else ""))
+        # 这一句是**改写**而不是追加：crawl 原文劝人 "pass focus=" 或 "drop it"，而
+        # `focus=` 不在 web_discover 的 wire 面上（17.0 §4 把地图变成独立工具时，那颗旋钮
+        # 留在了 crawl 那一侧）—— 把调用方支到他够不着的旋钮上，正是 C2 认过账的那类错。
+        result.next_action = (
+            f"A map cannot answer a word that lives in prose: web_crawl(url='{url}', "
+            f"focus={search!r}, max_pages=<more>) reads and ranks pages, "
+            f"{_ask_the_web} asks the web for that host, and web_discover without "
+            "search= returns the whole map.")
+        return result, False
 
     async def web_crawl(
         self,
