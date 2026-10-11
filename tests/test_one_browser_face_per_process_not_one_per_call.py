@@ -157,6 +157,13 @@ def test_the_face_a_call_rolled_does_not_decide_the_next_call(site, monkeypatch)
     （备忘录有没有跨调用活着），抽签本身由 `test_a_real_roll_matches_the_family...` 那组
     量。挂真抽签测管道会偶发红：实测一次跑里两次调用的 `sec-ch-ua` 一个是 browserforge
     的、一个是 primp 自己的，而钉住之后 40 次重跑全绿。
+
+    运输是回环 echo，**判词必须是公网**：这一条量的是"合成出来的那副脸跨调用活着"，
+    而合成只在公网那一侧发生 —— 刀9-1 之后私网目标收不到 dhole 的模板（一枚编造的
+    google referer 落进用户自己的服务日志不是反爬，是污染），于是备忘录根本不参与，
+    两次调用各自落到 primp 自己的 Chrome 预设上（实测 144 → 147）。那不是漂移，是
+    那条路本来就不该由 dhole 声称身份。私网那一侧的语义由
+    `test_a_private_target_gets_no_invented_referrer.py` 钉，这里只把门钉回公网的答案。
     """
     face = {"user-agent": CHROME_DESKTOP_UA,
             "sec-ch-ua": '"Google Chrome";v="147", "Chromium";v="147"',
@@ -164,6 +171,8 @@ def test_the_face_a_call_rolled_does_not_decide_the_next_call(site, monkeypatch)
     rolls: list[str] = []
     monkeypatch.setattr(FT, "_stealthy_baseline",
                         lambda family="": rolls.append(family) or dict(face))
+    monkeypatch.setattr(MasterFetchServer, "_target_is_private",
+                        lambda self, u: False)
     url, rec = site
     s = MasterFetchServer()
     asyncio.run(s._dispatch("web_read", {"url": url, "cache_ttl": -1}))
