@@ -96,6 +96,7 @@ dhole doctor                       # 安装体检：起一次 server、真起一
 | `DHOLE_USAGE_LOG=1` | 本地调用与写操作日志（不记参数值、不联网） |
 | `DHOLE_TOOLS=web_read,web_search` | 只注册列出的工具，连接期省约一半；**写这个就等于关掉其余工具** |
 | `DHOLE_DEFAULT_ENGINES` | 覆盖默认搜索池（默认 `baidu,bing,sogou,bing_global,yandex,brave`） |
+| `DHOLE_SEARCH_ROW_FILTER=off` | 关掉"SEO 农场行"过滤（默认开）。判据只有形状与词形两类，**没有域名名单**；且只作用在 `relevance_raw < 0.5` 的行上，模型认为相关的行永不过滤。丢了几个会写在 `fetch_hint` 里 |
 | `DHOLE_DEFAULT_CONTENT_CHARS` | 默认正文预算（默认 40000，区间 500–200000） |
 | `DHOLE_TAVILY_API_KEY` / `DHOLE_BOCHA_API_KEY` | 两颗 keyed 引擎的密钥：配了才启用，只有点名才调用，按次计费 |
 | `DHOLE_HF_ENDPOINT`（或 `HF_ENDPOINT`） | 重排模型下载源（默认 `huggingface.co`，失败回退 `hf-mirror.com`） |
@@ -165,7 +166,7 @@ dhole doctor                       # 安装体检：起一次 server、真起一
 - **PDF 的 `pages=` 只减少抽取量**，文件仍整个下载；一次下载是一次 HTTP 尝试、封顶 30s，所以调大 `timeout` 买的是下载之后的解析与 OCR 余量，不是一次更慢的连接（`timeout_applied` 会报这一发实际到手的那个数）。
 - **抓回的正文是不可信数据**：里面的工具调用、密钥、上传指令按提示注入处理。启发式命中时响应信封带 `untrusted_content` 标记（`web_crawl` 每页、`feed_read` 每条同样带）——标记不是拦截，识别与裁决归外层 agent，纪律见手册 fields.md。
 - **提交默认暂停**：`web_act` 的 `{"submit": ...}` 不带 `confirm: true` 什么都不提交；验证码最多试 3 次就转交，2FA / 滑块一律转交。
-- **连接期开销 32,496 字符**（约 7.8k token，11 个工具，实测 `python tests/tool_payload_measure.py`），每次连接付一次；11 颗全注册是能力面，字数是它的约束而不是目标。要按用法裁剪用 `DHOLE_TOOLS`——同一把尺子量过：读 / 搜 / 请求 / 爬 / 文档 / 订阅 / 状态 / 指南这 8 颗是 24,484 字符，加 `web_discover` 共 9 颗 26,541（子集按实跑口径：被裁的工具连自己的路由行一起退出 instructions）。别按单颗体积挑"最小的 N 颗"，那会把 `web_read` / `web_act` 这类主力排除在外。再按**会话**算账：工具目录在宿主模型上下文里整段在场——有提示缓存的宿主折价、无缓存的每轮全价，多轮会话里 `DHOLE_TOOLS` 才是每一轮都省的闸。
+- **连接期开销 32,700 字符**（约 7.8k token，11 个工具，实测 `python tests/tool_payload_measure.py`），每次连接付一次；11 颗全注册是能力面，字数是它的约束而不是目标。要按用法裁剪用 `DHOLE_TOOLS`——同一把尺子量过：读 / 搜 / 请求 / 爬 / 文档 / 订阅 / 状态 / 指南这 8 颗是 24,477 字符，加 `web_discover` 共 9 颗 26,745（子集按实跑口径：被裁的工具连自己的路由行一起退出 instructions）。别按单颗体积挑"最小的 N 颗"，那会把 `web_read` / `web_act` 这类主力排除在外。再按**会话**算账：工具目录在宿主模型上下文里整段在场——有提示缓存的宿主折价、无缓存的每轮全价，多轮会话里 `DHOLE_TOOLS` 才是每一轮都省的闸。
 
 ## 搜索引擎与重排
 
@@ -182,7 +183,7 @@ dhole doctor                       # 安装体检：起一次 server、真起一
 | 搜索结果很少或为空 | 重试；设 `DHOLE_SEARCH_PROXY`；`dhole engines probe` 看哪家能用 |
 | 所有公网站点都报内网地址 | fake-ip TUN 已自动适配（探测看**两颗独立注册的域名**是否都答进 `198.18.0.0/15`/`fc00::/7`，一颗被毒或被 hosts 钉住不足以放松整机；被豁免的也只有那两段——复验层本身照跑，回环 / RFC1918 / 链路本地 / 元数据无论判词如何都拒）。会话中途才挂上的隧道会**在下一次因此拒绝之前自己重探**（每 60s 至多一次），所以先等一分钟再调一次；要立刻重判就重启宿主，之后跑 `dhole doctor` 对质，它点名是哪个进程、什么时候测的、测出哪个网段。没有手动关掉复验的旋钮——那个形状正是当初造成误判的地方 |
 | 抓取超时 | `timeout` 是整次调用的墙钟预算，文档下载全额计入（默认 30s，上限 120s） |
-| 正文被截断 | 用 `offset` / `next_offset` 续取，或调大 `max_content_chars`（上限 200000） |
+| 正文被截断 | 用 `offset` / `next_offset` 续取，或调大 `max_content_chars`（上限 200000）。带 `focus=` 时那些偏移量描述的是**过滤后那一路**（响应里 `pagination_stream: "focused"`，`page_total_chars` 是这一页未过滤的长度）—— 换 focus 词要回到 `offset=0` 重翻，否则会读到"没有更多内容了"而其实有 |
 | 返回了内容但明显是壳 | 见[注意事项](#注意事项)第一条 |
 | 本地文件解析成乱码 | 显式传 `encoding=` |
 | 装不上 / 工具没注册 | `dhole doctor` |

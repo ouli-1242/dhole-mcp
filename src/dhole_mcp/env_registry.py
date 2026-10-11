@@ -177,6 +177,15 @@ ALL: tuple[EnvVar, ...] = (
         read_by=("robots", "server"),
     ),
     EnvVar(
+        name="DHOLE_SEARCH_ROW_FILTER",
+        kind="flag",
+        default="on",
+        read_at="call",
+        scenario="search result quality",
+        summary="Drop SEO-farm result rows (host shape + spam wording, only below the relevance line).",
+        read_by=("search",),
+    ),
+    EnvVar(
         name="DHOLE_SEARCH_PROXY",
         kind="url",
         default="",
