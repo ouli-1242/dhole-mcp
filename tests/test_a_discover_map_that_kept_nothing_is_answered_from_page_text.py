@@ -183,6 +183,17 @@ class TestTheScanSpendsOnlyWhatTheClockLeft:
         assert r.pages_discovered == MAP_ROWS, "地图多大这件事不能被降级说明改掉"
         assert r.discover_only is True
 
+    @pytest.mark.asyncio
+    async def test_a_clock_the_map_overspent_is_reported_as_none_left(self, stub):
+        """复测（requests 文档站）量到的形状：地图把 60,000ms 花到比 0 还少。
+        "还剩 -975 毫秒"是调用方没法用的数 —— 它说的是"一秒都不剩"，就该写成 0。"""
+        stub["advance"]["map"] = 26.0
+        stub["results"] = [_map()]
+        r = await MasterFetchServer().web_discover(BASE, search="timeout", timeout=25000)
+        assert "0ms of its 25000ms clock" in r.summary, r.summary
+        assert "-975" not in r.summary and "-1000" not in r.summary, r.summary
+        assert len(stub["calls"]) == 1, "花超了的那一口钟不许再开第二次网络"
+
 
 class TestAnEmptyMapIsNotGivenAnInventedScan:
 

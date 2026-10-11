@@ -9419,7 +9419,10 @@ class MasterFetchServer:
             return result, False
 
         terms = [t.lower() for t in search.split() if t]
-        left = int(clock_ms - spent_ms)
+        # 地图把整口钟吃掉时 `clock_ms - spent_ms` 是负的：交回一个负数的"还剩多少"是
+        # 一个调用方无法使用的数（它不是"还剩 -975 毫秒"，它是"一秒都不剩"）。钳到 0，
+        # 判据不变（0 与负数同样在门槛下）。
+        left = max(0, int(clock_ms - spent_ms))
         clause = (f"search={search!r} compares the URL path and the page title, which "
                   f"is all a map row carries - it kept none of the "
                   f"{result.pages_discovered} URL(s) the map found")
