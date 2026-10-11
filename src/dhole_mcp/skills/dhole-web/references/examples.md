@@ -71,6 +71,16 @@ A rejection names the key and lists the keys that tool accepts — follow the er
 ]}
 ```
 
+**The same addressing written as the number itself** (`{"click": 12}` == `{"click": {"index": 12}}`; `{hover:5}`, `{read:5}`, `{submit:4}`, `{screenshot:2}` and a drag's `to:7` take the bare row too. The dict is only needed when something rides BESIDE the index — `text`, `expect`, `key`, `confirm` — and `{"press": 5}` deliberately stays a key name, not a row):
+```json
+{"url": "https://example.com/settings", "actions": [
+  {"snapshot": true},
+  {"fill": {"index": 3, "text": "new value"}},
+  {"press": {"index": 3, "key": "Enter"}},
+  {"click": 12}
+]}
+```
+
 **Hover to reveal, drag to reorder** (hover menus and tooltips render synchronously, so the chain can click what the hover exposed; a drag names BOTH endpoints and each takes selector or index):
 ```json
 {"url": "https://example.com/admin", "actions": [

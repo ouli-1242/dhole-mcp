@@ -73,6 +73,7 @@ it reached.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import os
@@ -83,7 +84,8 @@ from typing import Any, Callable, Optional
 
 from dhole_mcp import install as _install
 from dhole_mcp.context import (
-    _clamp_note, _note_text, out_of_band_confirm, report_progress)
+    BACKSTOP_GRACE_S, _clamp_note, _note_text, call_budget_left_s,
+    out_of_band_confirm, report_progress)
 
 
 logger = logging.getLogger("dhole-mcp.actions")
@@ -105,8 +107,138 @@ SCROLL_TOTAL_MS = 20_000
 # it must stay a fast no-op rather than a 4-second nap per action.
 CLICK_SETTLE_MS = 4_000
 CLICK_SETTLE_MIN_MS = 600
+#: 一步的等待在**没人点预算**时用的那颗数（playwright 的缺省值，沿用至今的行为）。
+STEP_WAIT_MS = 10_000
+#: 收窄之后最少给一步留的时间。再小这一步注定超时，而那种超时与站点无关，只与
+#: "我们没给时间"有关 —— 报出去是一条怪错站的谎。
+STEP_MIN_MS = 1_000
+
+
+def _step_deadline_ms(own_ms: int = STEP_WAIT_MS) -> int:
+    """这一步最多能等多少毫秒：自己的预算与**这次调用剩下的**取小。
+
+    为什么不是"整个余额"：交账要时间。`_within_call_budget` 的兜底在
+    `asked + BACKSTOP_GRACE_S` 上掐，实测一次 `timeout=60000` 的调用里，一步 10 秒的
+    等待把整条链带过那条线，回来的是 61,529ms 加 0 字节（体验模拟报告场景 10，靶站
+    `/captcha`）。预算之外那一段由兜底结，预算之内的每一步都得自己结 —— 这一步收窄
+    之后，链是在余额里停下来的，信封与已有的回执因此还交得出去。
+
+    不在预算作用域里（CLI、直连 `dispatch`、单测）时原样交回 `own_ms`：那颗数今天就
+    是行为，动它等于改所有没点名预算的调用。余额已经不够一步时同样交回原值 ——
+    让兜底说那句"预算用完"（真话），而不是造一个 1 毫秒的等待冒充站点的失败。
+    """
+    left = call_budget_left_s()
+    if left is None:
+        return own_ms
+    cap_ms = int(left * 1000) - int(BACKSTOP_GRACE_S * 1000)
+    if cap_ms < STEP_MIN_MS:
+        return own_ms
+    return min(own_ms, cap_ms)
+
 _VALID_KEYS = {"click", "fill", "press", "wait", "scroll", "wait_selector",
                "screenshot", "snapshot", "submit", "hover", "drag", "read"}
+
+
+def _target_payload_keys() -> set[str]:
+    """`_act_target` 那一支共用的寻址键，同样从它自己的正文里挖。"""
+    import ast
+    import inspect
+
+    found: set[str] = set()
+    for sub in ast.walk(ast.parse(inspect.getsource(_act_target))):
+        if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
+                and sub.func.attr == "get"
+                and isinstance(sub.func.value, ast.Name)
+                and sub.func.value.id == "val"
+                and sub.args and isinstance(sub.args[0], ast.Constant)
+                and isinstance(sub.args[0].value, str)):
+            found.add(sub.args[0].value)
+    return found
+
+
+def action_payload_keys() -> dict[str, set[str]]:
+    """每一颗动作**看得见**的载荷键，从 `_validate_actions` 的正文推出来。
+
+    为什么不是另一张表：同一张形状表此前有三份作者 —— 校验器的正文（唯一真的那份）、
+    常驻层那句 `fill needs text, press needs key, drag needs to`，以及 `tests` 里手抄的
+    一份 `PAYLOAD_BY_KEY`。手抄的那份每加一颗动作就得跟着改，而忘了改的后果不是测试红，
+    是测试**照绿**：一张不再等于行为的形状清单，正是这一族"声明里没写、只能先失败一次
+    才知道"的老洞（`/hoverdrag` 那一次量到的三条 0 秒拒参、约 90 秒白烧）。
+    现在表跟着正文走，唯一的作者就是读键的那一步。
+
+    读法只有三种，都是这份函数体自己的写法：`val["k"]`、`val.get("k")` /
+    `spec.pop("k")`、以及 `"k" in val`；再加 `_act_target` 那一支共用的寻址键
+    （`selector` / `index` / `expect`，只给真的调用它的动作 —— `press` 自己读这两颗，
+    `scroll` 只读 `selector`，把三者一律发给每颗动作就是又一张贴在行为上的标签）。
+    """
+    import ast
+    import inspect
+
+    payload_bases = ("val", "spec")
+
+    def walked(body):
+        """一支分支的语句表摊成节点流（`ast.walk` 只吃节点，不吃列表）。"""
+        for stmt in body:
+            yield from ast.walk(stmt)
+
+    def reads(body) -> set[str]:
+        found: set[str] = set()
+        for sub in walked(body):
+            if (isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name)
+                    and sub.value.id in payload_bases
+                    and isinstance(sub.slice, ast.Constant)
+                    and isinstance(sub.slice.value, str)):
+                found.add(sub.slice.value)
+            elif (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
+                    and sub.func.attr in ("get", "pop")
+                    and isinstance(sub.func.value, ast.Name)
+                    and sub.func.value.id in payload_bases
+                    and sub.args and isinstance(sub.args[0], ast.Constant)
+                    and isinstance(sub.args[0].value, str)):
+                found.add(sub.args[0].value)
+            elif (isinstance(sub, ast.Compare)
+                    and isinstance(sub.ops[0], (ast.In, ast.NotIn))
+                    and isinstance(sub.comparators[0], ast.Name)
+                    and sub.comparators[0].id in payload_bases
+                    and isinstance(sub.left, ast.Constant)
+                    and isinstance(sub.left.value, str)):
+                found.add(sub.left.value)
+        return found
+
+    def calls_target(body) -> bool:
+        return any(isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+                   and sub.func.id == "_act_target"
+                   for stmt in body for sub in ast.walk(stmt))
+
+    def branch_of(node) -> str:
+        """`if key == "X"` 的那颗 X，不是这一形就返回空串。"""
+        test = node.test
+        if not (isinstance(test, ast.Compare) and isinstance(test.left, ast.Name)
+                and test.left.id == "key" and isinstance(test.ops[0], ast.Eq)
+                and isinstance(test.comparators[0], ast.Constant)
+                and isinstance(test.comparators[0].value, str)):
+            return ""
+        name = test.comparators[0].value
+        return name if name in out else ""
+
+    tree = ast.parse(inspect.getsource(_validate_actions))
+    out: dict[str, set[str]] = {k: set() for k in _VALID_KEYS}
+    addressing = _target_payload_keys()
+    # `ast.walk` 而不是顺着 orelse 走：那条 if/elif 链套在 `for i, a in
+    # enumerate(actions)` 的循环体里，顺着 If 的 else 支爬会在循环那里断掉
+    # （第一版就是这么量的到一张全空的表 —— 一张全空的表看起来像"这些动作没有载荷键"，
+    # 而那正是这一刀要消灭的那句话）。
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        name = branch_of(node)
+        if not name:
+            continue
+        keys = reads(node.body)
+        if calls_target(node.body):
+            keys |= addressing
+        out[name] |= keys
+    return out
 
 # 链内读（A3-b）的三份边界。字符帽沿用回执那一族的口径：读回来的文本进
 # `metadata.actions`，而那是每一条响应都要带的行 —— 一整个 `<pre>` 的正文塞进
@@ -127,6 +259,37 @@ _REF_RE = re.compile(r"\{=([a-z_][a-z0-9_]{0,30})\}")
 _AS_RE = re.compile(r"[a-z_][a-z0-9_]{0,30}")
 # HTML 属性名：`value` / `href` / `data-token` / `xml:lang` 都在这一形里。
 _ATTR_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.:-]{0,40}")
+# `read.property` 收的那三个名字 —— 它们在这一族元素上**只以 DOM property 存在**，
+# 标签上对应的那个 attribute 从来不会跟着动。见 _READ_PROPERTY_JS 上面那段。
+_READ_PROPERTY_RE = re.compile(r"(value|checked|selected)")
+
+# 表单域上的 value/checked/selected 是 property：fill 改的是 property，标签上的
+# attribute 一个字都不动。拿 `get_attribute("value")` 去验证自己刚填进去的东西，
+# 交回的是**一枚看起来像证据的旧数** —— 实测过的那一例：靶站 `/checkout` 上
+# `fill '#qty'` 回执 `ok:true`、真正 POST 出去的也确实是 3（服务端 orders.log 为证），
+# 而 `read{attribute:"value"}` 报回 "1"。那一读是按下不可逆提交之前唯一的回读手段，
+# 于是它把一次正确的操作说成了一次失败的，代价是 4 次复验调用约 44 秒的"不敢发"。
+#
+# 这一族还有一处自相矛盾的证据在同一文件里：`snapshot`/`expect` 认的名字走的是
+# 活的那一层（见 _NAME_JS 里 `el.value` 那两行），所以 fill 之后索引寻址能看见新值，
+# 而 read 看不见 —— 同一个页面，两套口径，人只能挑一个信。这里统一到 _NAME_JS 那一侧。
+_VALUEISH_ATTRS = frozenset({"value", "checked", "selected"})
+# 大小写跟着**发出去的那颗 JS** 走：本文件唯一一份 `_TAG_JS`（下面 snapshot 那一节
+# 上方）返回的是 `toLowerCase()`，所以这里必须是小写。这条不是风格：第一版把它写成
+# 大写集合，而我在它上面又"定义"了一遍 `_TAG_JS`（同名、后被覆盖），于是真机上
+# `tag in _VALUEISH_TAGS` 恒为假 —— 靶站复验量到的原形状就是它：`fill` 之后
+# `read{attribute:"value"}` 照旧回死值 "1"，改的只有 `property` 那一读。集合小写 +
+# 一名一个定义，两条都由 `test_the_tag_probe_is_case_matched_by_the_js_it_ships` 钉住。
+_VALUEISH_TAGS = frozenset({"input", "textarea", "select"})
+# 返回 null 表示"这个元素没有这一层"，调用处把它说成一次具名失败而不是空串 ——
+# 把"够不着"读成"值是空的"，正是这一族最贵的误读（一张空的验证码框和一个不存在
+# value 属性的 <div>，在回执里长得一模一样）。
+_READ_PROPERTY_JS = """(el, name) => {
+  if (name === 'value') return ('value' in el) ? el.value : null;
+  if (name === 'checked') return ('checked' in el) ? !!el.checked : null;
+  if (name === 'selected') return ('selected' in el) ? !!el.selected : null;
+  return (el[name] === undefined || el[name] === null) ? null : el[name];
+}"""
 
 # An element capture only exists to be LOOKED at. 17.0: always available ——
 # the recognition happens agent-side (dhole ships no vision model), and a
@@ -421,9 +584,9 @@ async def _check_expect(page, index: int, expect: str) -> None:
 def _screenshot_shape_error(i: int) -> ValueError:
     """一颗参数一条规则一句报错（P2-8）。
 
-    校验器接受的形状就四种：selector 串、`{"selector": ...}`、`{"index": N}`、
-    `{"full_page": true}`。落在这四种之外的（bare `true`、没有目标的 dict）念的是
-    **同一句**，句里列全四种 —— 评审现场是三条各自说法：bare true 那句漏了
+    校验器接受的形状就五种：selector 串、裸行号（刀9-6c · F8）、`{"selector": ...}`、
+    `{"index": N}`、`{"full_page": true}`。落在这五种之外的（bare `true`、没有目标的
+    dict）念的是**同一句**，句里列全五种 —— 评审现场是三条各自说法：bare true 那句漏了
     full_page（而 full_page 恰恰是当时唯一能成功的"无目标"写法），无目标 dict 那句
     借用了 click/fill 的措辞、不提 full_page，于是纯整页截图在语法上读不出来。
     花括号伪影也一并清掉：`{{...}}` 是字符串拼接漏进响应里的 Python 语法，不是
@@ -435,24 +598,32 @@ def _screenshot_shape_error(i: int) -> ValueError:
     要在描述里加字（连接面只降不升），还让"没有目标"有两种意思。
     病根不在判决而在**相邻两扇门同一副语法**：`{"snapshot": true}` 收裸布尔。所以这句
     话除了说"你写错了"，还要点名那扇隔壁的门（给一份可照抄的写法），并说一句为什么
-    这里收不下裸布尔 —— 拍照总得有"拍什么"。
+    这里收不下裸布尔 —— 拍照总得有"拍什么"。裸**整数**不受这条判决影响：它有明确的
+    "拍什么"（snapshot 那一行），所以它是第五种合法形状，不是裸布尔的另一种拼法。
     """
     return ValueError(
-        f"action {i} 'screenshot' takes a CSS selector string, or an object with "
-        'exactly one target: "selector" (CSS), "index" (from a snapshot), or '
-        '"full_page": true (the whole page). Optional knobs: image_type, quality, '
-        'decode_qr, save_to. A bare boolean is the shape of a different action: '
-        '{"snapshot": true} lists the page\'s interactive elements and needs no '
-        'target, while a capture always has to name something to look at.')
+        f"action {i} 'screenshot' takes a CSS selector string, a bare snapshot row "
+        'number, or an object with exactly one target: "selector" (CSS), "index" '
+        '(from a snapshot), or "full_page": true (the whole page). Optional knobs: '
+        'image_type, quality, decode_qr, save_to. A bare boolean is the shape of a '
+        'different action: {"snapshot": true} lists the page\'s interactive elements '
+        'and needs no target, while a capture always has to name something to look at.')
 
 
 def _act_target(i: int, key: str, val) -> dict:
-    """Normalize a click/fill/press/submit/screenshot target to exactly one of:
+    """Normalize a click/hover/drag/fill/submit/read/screenshot target to exactly
+    one of:
 
     ``{"selector": "css"}`` or ``{"index": N}``, plus the optional ``expect``
     name-check. Both spellings address the same element set — the CSS selector
     (the original path) and the snapshot index (MVP-2, "用户不用懂" via the
     outer agent) — and a dict carrying both is a typo, not a combination.
+    A bare integer is the snapshot index written the way the snapshot showed it
+    (刀9-6c · F8), so the number a caller reads off a row is the number it sends.
+
+    `press` is not here: its bare value is already the KEY string ("Enter"), so a
+    bare integer would read as a key name. Its target stays
+    ``{"index": N, "key": "Enter"}``.
     """
     from dhole_mcp.security import validate_css_selector
 
@@ -462,6 +633,14 @@ def _act_target(i: int, key: str, val) -> dict:
             raise ValueError(f"action {i} {key!r} must be a non-empty CSS selector")
         validate_css_selector(val)
         return {"selector": val}
+    if isinstance(val, int) and not isinstance(val, bool):
+        # 刀9-6c（F8）：一个裸整数就是一个快照行号，`{"click": 3}` 与
+        # `{"click": {"index": 3}}` 从此同义。这不是赏一个新写法，是收回一条会让人连犯
+        # 四次的规则：`{"snapshot": true}` 交回来的那一列本身就写着 0/1/2/3，而抄那个数
+        # 的人先写下的一定是裸数（2026-10-11 全真模拟 S10：hover 裸数✗、drag 落点✗、
+        # screenshot 空 obj✗、confirm 位置✗ —— 同一类形状错连撞四次，第四次用户说
+        # "又格式错了？"）。区间与布尔那两位仍由下面 dict 那一支裁决，这里不立第二个作者。
+        val = {"index": val}
     if not isinstance(val, dict):
         raise ValueError(
             f"action {i} {key!r} must be a CSS selector string, "
@@ -531,7 +710,10 @@ def _validate_actions(actions) -> list[dict]:
                 out.append({key: val})
             else:
                 target = _act_target(i, key, val)
-                confirm = val.get("confirm", False)
+                # `confirm` 只长在 dict 那一支：裸行号（刀9-6c · F8）没有放它的格子，
+                # 缺席即 False —— 与 `{"index": N}` 不写 confirm 时逐字同形。
+                confirm = (val.get("confirm", False) if isinstance(val, dict)
+                           else False)
                 if not isinstance(confirm, bool):
                     raise ValueError(f"action {i} 'click.confirm' must be a boolean")
                 # confirm 只在一个场景被读：目标解析成提交型控件时，它就是
@@ -573,6 +755,10 @@ def _validate_actions(actions) -> list[dict]:
             # confirm 缺省 = 执行时暂停并返回 pending_approval（破坏性操作必须
             # 经用户确认，安全红线 3）；confirm=true = agent 已向用户转达并拿到
             # 确认后才该传的值。
+            if isinstance(val, int) and not isinstance(val, bool):
+                # 裸行号（刀9-6c · F8）= 提交第 N 行那个表单。简写只替掉寻址那一层，
+                # confirm 缺席仍然是缺席 —— 破坏性操作的暂停门不因少写一层花括号而松动。
+                val = {"index": val}
             if not isinstance(val, dict):
                 raise ValueError(
                     f"action {i} 'submit' must be {{selector, confirm?}} or "
@@ -618,6 +804,9 @@ def _validate_actions(actions) -> list[dict]:
             # costs an instant error instead of a browser cold start.
             if isinstance(val, str):
                 spec: dict = {"selector": val}
+            elif isinstance(val, int) and not isinstance(val, bool):
+                # 裸行号（刀9-6c · F8）：拍 snapshot 那一行，与 {"index": N} 同义。
+                spec = {"index": val}
             elif isinstance(val, dict):
                 spec = dict(val)
             else:
@@ -713,12 +902,27 @@ def _validate_actions(actions) -> list[dict]:
             target = _act_target(i, key, val)
             if isinstance(val, dict):
                 attr = val.get("attribute")
+                prop = val.get("property")
+                if attr is not None and prop is not None:
+                    # 同 _act_target 的规矩：一个 dict 里带两个来源是笔误，不是组合。
+                    # 读法只有"标签上那一层"和"页面上现在这一层"两种，同时要就无从解释。
+                    raise ValueError(
+                        f"action {i} 'read' takes either 'attribute' (the markup's own "
+                        f"value) or 'property' (what the page holds now), not both "
+                        f"(got attribute={attr!r} property={prop!r})")
                 if attr is not None:
                     if not isinstance(attr, str) or not _ATTR_RE.fullmatch(attr):
                         raise ValueError(
                             f"action {i} 'read.attribute' must be an attribute name "
                             f"like \"value\" or \"href\" (got {attr!r})")
                     target["attribute"] = attr
+                if prop is not None:
+                    if not isinstance(prop, str) or not _READ_PROPERTY_RE.fullmatch(prop):
+                        raise ValueError(
+                            f"action {i} 'read.property' must be one of "
+                            "\"value\", \"checked\", \"selected\" — the fields a fill "
+                            f"actually changes (got {prop!r})")
+                    target["property"] = prop
                 as_name = val.get("as")
                 if as_name is not None:
                     if not isinstance(as_name, str) or not _AS_RE.fullmatch(as_name):
@@ -930,9 +1134,12 @@ async def _settle_after_click(page, click_locator) -> None:
     A click nothing answers gets out at ``CLICK_SETTLE_MIN_MS``.
     """
     before = await _dom_snapshot(page)
-    await click_locator.click(timeout=10_000)
+    await click_locator.click(timeout=_step_deadline_ms())
     started = time.monotonic()
-    deadline = started + CLICK_SETTLE_MS / 1000.0
+    # 这一颗重新读一次余额：上面那发 click 已经花掉了一截，settle 拿的是**剩下的**，
+    # 不是同一个 4 秒的再一遍 —— 两步各自合规、加起来越过调用方点名的预算，正是场景 10
+    # 那句"你要 60000，我给你 61529 加 0 字节"的形状。
+    deadline = started + _step_deadline_ms(CLICK_SETTLE_MS) / 1000.0
     quiet_polls = 0
     navigated = False
     while time.monotonic() < deadline:
@@ -1008,7 +1215,7 @@ async def _scroll(page, steps: int, selector, ms_per_step: int) -> None:
     fetch that never returns. Measured after all three: 10 items -> 100 (the
     whole feed) on the page that used to return 10.
     """
-    deadline = time.monotonic() + SCROLL_TOTAL_MS / 1000.0
+    deadline = time.monotonic() + _step_deadline_ms(SCROLL_TOTAL_MS) / 1000.0
     arg = selector or ""
     for _ in range(max(0, int(steps))):
         if time.monotonic() >= deadline:
@@ -1042,7 +1249,7 @@ async def _is_submit_control(loc) -> bool:
     任何东西的关卡。
     """
     try:
-        await loc.wait_for(state="attached", timeout=10_000)
+        await loc.wait_for(state="attached", timeout=_step_deadline_ms())
         kind = await loc.evaluate(_SUBMIT_CONTROL_JS)
     except Exception as exc:
         # 按类名判而非 isinstance：playwright 的 TimeoutError 不继承内建
@@ -1233,7 +1440,13 @@ def action_label(a: dict) -> str:
     if key == "read":
         # 回执那一行要说清读了什么、读回来存成了什么名字 —— 后面那条 fill 的
         # `{=名字}` 是从这一行来的，读者不必回头数链。
+        #
+        # 两层的名字要分开：`@value` 是标签上那一层，`@value (property)` 是页面上
+        # 现在那一层。分不开，"我填进去的到底还在不在"就只能靠猜 —— 而这一行的全部
+        # 意义就是替人省掉那次猜（细节在 `read_via`，标签给一眼能比的形状）。
         base = f"read {_target_label(val)}"
+        if isinstance(val, dict) and val.get("property"):
+            return f"{base} @{val['property']} (property)"
         if isinstance(val, dict) and val.get("attribute"):
             base += f" @{val['attribute']}"
         if isinstance(val, dict) and val.get("as"):
@@ -1371,27 +1584,27 @@ def build_page_action(actions) -> Optional[Callable]:
                         await _settle_after_click(page, loc)
                 elif "hover" in a:
                     loc = await _target_locator(page, a["hover"])
-                    await loc.hover(timeout=10_000)
+                    await loc.hover(timeout=_step_deadline_ms())
                     await _settle_quiet(page)
                 elif "drag" in a:
                     d = a["drag"]
                     src = await _target_locator(page, d)
                     dst = await _target_locator(page, d["to"])
-                    await src.drag_to(dst, timeout=10_000)
+                    await src.drag_to(dst, timeout=_step_deadline_ms())
                     await _settle_quiet(page)
                 elif "fill" in a:
                     f = a["fill"]
                     loc = await _target_locator(page, f)
                     await loc.fill(_substitute_refs(f["text"], values, label),
-                                   timeout=10_000)
+                                   timeout=_step_deadline_ms())
                 elif "press" in a:
                     p = a["press"]
                     if p.get("index") is not None:
                         loc = await _target_locator(page, p)
-                        await loc.press(p["key"], timeout=10_000)
+                        await loc.press(p["key"], timeout=_step_deadline_ms())
                     elif p.get("selector"):
                         await page.locator(p["selector"]).first.press(
-                            p["key"], timeout=10_000)
+                            p["key"], timeout=_step_deadline_ms())
                     else:
                         await page.keyboard.press(p["key"])
                 elif "wait" in a:
@@ -1406,10 +1619,10 @@ def build_page_action(actions) -> Optional[Callable]:
                         # match has been on the page since it rendered.
                         await page.wait_for_function(
                             _COUNT_JS, arg=[w["selector"], w["count"]],
-                            timeout=w["timeout"])
+                            timeout=_step_deadline_ms(w["timeout"]))
                     else:
                         await page.locator(w["selector"]).first.wait_for(
-                            state=w["state"], timeout=w["timeout"])
+                            state=w["state"], timeout=_step_deadline_ms(w["timeout"]))
                 elif "screenshot" in a:
                     import base64
                     s = a["screenshot"]
@@ -1421,7 +1634,7 @@ def build_page_action(actions) -> Optional[Callable]:
                         # 但此刻浏览器已经起来了——至少让它在写盘前一刻而不是
                         # 之后才炸。归一化时已验过形状，这里只落盘。
                         save_target = _resolve_save_to(s["save_to"], image_type)
-                    shot_kwargs: dict = {"type": image_type, "timeout": 10_000}
+                    shot_kwargs: dict = {"type": image_type, "timeout": _step_deadline_ms()}
                     if s.get("quality") is not None:
                         shot_kwargs["quality"] = s["quality"]
                     if full_page:
@@ -1477,23 +1690,68 @@ def build_page_action(actions) -> Optional[Callable]:
                     r = a["read"]
                     loc = await _target_locator(page, r)
                     attr = r.get("attribute")
-                    if attr:
-                        raw = await loc.get_attribute(attr)
-                        text = "" if raw is None else str(raw)
-                        what = f"attribute {attr!r}"
-                        empty_hint = f"{attr!r} is absent or empty on this element"
+                    prop = r.get("property")
+                    if prop:
+                        raw = await loc.evaluate(_READ_PROPERTY_JS, prop)
+                        if raw is None:
+                            tag = await loc.evaluate(_TAG_JS)
+                            raise ValueError(
+                                f"read found no property {prop!r}: <{tag.lower()}> "
+                                f"has no such field — it is not a form control, so "
+                                'there is no live value to read')
+                        text = str(raw)
+                        what = f"property {prop!r}"
+                        read_via = f"property:{prop}"
+                    elif attr:
+                        if attr in _VALUEISH_ATTRS:
+                            tag = await loc.evaluate(_TAG_JS)
+                        else:
+                            tag = ""
+                        if tag in _VALUEISH_TAGS:
+                            # 问的是 attribute，答的是 property —— 并且把标签上那一层
+                            # 一起带回去。两个数不等就是"填进去的那些字此刻在页面上"
+                            # 的凭据；相等则说明这次读分辨不了（值本来就等于默认）。
+                            # 这一行的意义在于：它让"按下提交之前我到底填没填上"
+                            # 成为一次调用就能回答的问题，而不是四次。
+                            live = await loc.evaluate(_READ_PROPERTY_JS, attr)
+                            if live is None:
+                                raise ValueError(
+                                    f"read found no property {attr!r} on <"
+                                    f"{tag.lower()}> {attr!r} attribute read")
+                            text = str(live)
+                            shadow = await loc.get_attribute(attr)
+                            read_via = f"property:{attr} (asked as attribute)"
+                            if (shadow or "") != text:
+                                shot["attribute_says"] = "" if shadow is None else str(shadow)
+                            what = f"attribute {attr!r}"
+                        else:
+                            raw = await loc.get_attribute(attr)
+                            text = "" if raw is None else str(raw)
+                            what = f"attribute {attr!r}"
+                            read_via = f"get_attribute:{attr}"
+                        empty_hint = (
+                            f"{attr!r} is absent or empty on this element"
+                            if tag not in _VALUEISH_TAGS else
+                            f"{attr!r} is empty on this <{tag.lower()}> — that is the "
+                            "field's current value, not a missing read")
                     else:
-                        text = await loc.inner_text(timeout=10_000)
+                        text = await loc.inner_text(timeout=_step_deadline_ms())
                         what = "text"
+                        read_via = "inner_text"
                         # 空读数最常被读成"这一页没有答案"，而真相通常是读错了地方：
                         # 表单框的值不是元素的文本，图里的挑战更不是。这两扇门都点名，
                         # 否则这一行只是把"没读到"原样交回给人猜。
+                        #
+                        # 2026-10-10：这里原先指的是 `{"attribute": "value"}` —— 那一读
+                        # 拿到的是标签上的死值，正是它把一次成功的 fill 说成失败的。
+                        # 指向错的门比不指门更糟：调用方会照着它信一个假证据。
                         empty_hint = (
-                            'an input\'s value needs {"attribute": "value"}; a '
-                            "challenge drawn as an image needs a screenshot action")
+                            "a form field's live value needs {\"property\": \"value\"}"
+                            "; a challenge drawn as an image needs a screenshot action")
                     text = text.strip()
                     if not text:
                         raise ValueError(f"read found no {what}: {empty_hint}")
+                    shot["read_via"] = read_via
                     if len(text) > MAX_ACTION_READ_CHARS:
                         shot["read"] = text[:MAX_ACTION_READ_CHARS]
                         shot["read_truncated"] = True
@@ -1544,6 +1802,27 @@ def build_page_action(actions) -> Optional[Callable]:
                     shot["submitted"] = True
                     shot["submission"] = "+".join(evidence)
                 outcomes.append({"action": label, "ok": True, **shot})
+            except asyncio.CancelledError:
+                # 调用预算掐死这一步的时候，链到这里就结束了 —— 而下面那条
+                # `except Exception` 接不到它（CancelledError 自 3.8 起不再是
+                # Exception 的子类，它从 BaseException 来）。后果是这一格交回
+                # "什么都没有"：8 步跑完 6 步和一步没跑，在字节上长得一模一样。
+                #
+                # 实测的形状（15 场景体测，场景 10）：一次元素截图烧掉 61,529ms，
+                # 响应写着 "No content was extracted"，`metadata.actions` 一个字都
+                # 没有 —— 于是连"这一刀切在哪一步"都无从知道，而那正是决定要不要再
+                # 来一次的唯一依据。
+                #
+                # 这一刀不改任何截止：它只让被掐掉的那一步留下自己的一行，然后原样
+                # 交回，让外面那道 backstop 继续建它的超时响应。
+                outcomes.append({
+                    "action": label, "ok": False, "cut_by_budget": True,
+                    "step": f"{step_no}/{total_steps}",
+                    "error": ("cut by the caller's own timeout - this step never "
+                              "finished, so whatever it changes on the page may be "
+                              "half-done"),
+                })
+                raise
             except Exception as e:
                 outcomes.append({"action": label, "ok": False,
                                  "error": _action_failure(e)})
@@ -1557,4 +1836,7 @@ def build_page_action(actions) -> Optional[Callable]:
                 logger.warning("page action %s failed: %s", label, str(e)[:160])
 
     page_action.outcomes = outcomes  # type: ignore[attr-defined]
+    # 链一共要走几步。`len(outcomes)` 只说得出记了几行，说不出被掐断的那条链本来
+    # 还有几步没走 —— 而"切在第几步"是读的人唯一关心的那件事。
+    page_action.total_steps = len(validated)  # type: ignore[attr-defined]
     return page_action

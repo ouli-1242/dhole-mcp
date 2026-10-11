@@ -40,12 +40,22 @@ class TestHoverShapes:
             [{"hover": {"index": 12, "expect": "文件"}}])[0]["hover"]
         assert spec == {"index": 12, "expect": "文件"}
 
+    def test_a_bare_row_number_hovers_that_row(self):
+        """刀9-6c（F8）：`{"hover": 12}` 从前是一句拒绝，现在就是 `{"index": 12}`。
+
+        这一格原本钉的是"裸数字不是合法形状"，而它钉住的正是用户连撞四次的那一类
+        （2026-10-11 全真模拟 S10："又格式错了？"）—— 所以它按新语义改口，不是删掉。
+        """
+        assert _validate_actions([{"hover": 12}]) == [{"hover": {"index": 12}}]
+        assert _validate_actions([{"hover": 0}]) == [{"hover": {"index": 0}}]
+
     @pytest.mark.parametrize("bad", [
         {"hover": "   "},
-        {"hover": 12},
         {"hover": {}},
         {"hover": {"selector": "#a", "index": 1}},
         {"hover": {"index": 1, "expect": 9}},
+        {"hover": 12.5},
+        {"hover": True},
     ])
     def test_a_hover_that_cannot_be_addressed_is_refused_up_front(self, bad):
         # 一个跑不起来的动作值一整个浏览器调用的时间（校验在前，浏览器冷启动在后）。
@@ -70,13 +80,19 @@ class TestDragShapes:
             [{"drag": {"index": 3, "to": ".trash"}}])[0]["drag"]
         assert spec["to"] == {"selector": ".trash"}
 
+    def test_the_to_side_accepts_a_bare_row_number(self):
+        """两端同一套寻址语法（上面那句注释就是这么写的），落点也接裸行号。"""
+        spec = _validate_actions(
+            [{"drag": {"index": 3, "to": 7}}])[0]["drag"]
+        assert spec == {"index": 3, "to": {"index": 7}}, spec
+
     @pytest.mark.parametrize("bad", [
         {"drag": "#src"},                       # 没有落点 = 没意义，不是简写
         {"drag": {"selector": "#src"}},          # 同上，dict 形态也不放行
         {"drag": {"to": "#dst"}},                # 没有源
-        {"drag": {"selector": "#a", "to": 42}},  # 落点既不是串也不是 target
         {"drag": {"selector": "#a", "to": {}}},
-        {"drag": 12},
+        {"drag": {"selector": "#a", "to": 4.5}},
+        {"drag": 12},                            # 一个裸数说不清是哪一端，drag 不设简写
     ])
     def test_a_drag_that_cannot_be_run_is_refused_up_front(self, bad):
         with pytest.raises(ValueError):

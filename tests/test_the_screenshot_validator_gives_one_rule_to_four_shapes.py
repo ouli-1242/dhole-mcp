@@ -10,11 +10,13 @@
   3. `{"screenshot": {"full_page": true}}`（同样没有 selector/index）→ **成功**。
 三条放一起读不出规则，纯视口截图在语法上做不到。
 
-修法：一条规则一句报错 —— selector 串 / dict(selector) / dict(index) /
-dict(full_page=true) 四种形状合法；其余一律同一句话，句里列全四种，且不带花括号伪影。
-bare `true` 的语义（要不要实现成视口截图）曾是待 operator 判决项；2026-10-08 判决
-**维持拒绝**（两条改判路线的实测理由见 `TestTheRefusalNamesTheAdjacentDoor`）。这一刀
-不改那个判决，只让报错与事实一致，并在句尾点名那张长得一样的隔壁门。
+修法：一条规则一句报错 —— selector 串 / 裸行号 / dict(selector) / dict(index) /
+dict(full_page=true) 五种形状合法；其余一律同一句话，句里列全合法形状，且不带花括号
+伪影。bare `true` 的语义曾是待 operator 判决项；2026-10-08 判决**维持拒绝**（两条改判
+路线的实测理由见 `TestTheRefusalNamesTheAdjacentDoor`）。这一刀不改那个判决，只让报错与
+事实一致，并在句尾点名那张长得一样的隔壁门。裸**整数**不是裸布尔的另一种拼法：它指着
+snapshot 那一行，有明确的"拍什么"，所以 刀9-6c（F8）把它列为第五种合法形状 —— 与
+click/hover/drag/read/submit 同一句规矩（一个数就是从那一列读来的行号）。
 """
 
 import pytest
@@ -23,6 +25,7 @@ from dhole_mcp.actions import _validate_actions
 
 LEGAL = [
     ("h1", {"selector": "h1", "image_type": "png", "decode_qr": False}),
+    (2, {"index": 2, "image_type": "png", "decode_qr": False}),
     ({"selector": "h1"}, {"selector": "h1", "image_type": "png",
                           "decode_qr": False}),
     ({"index": 2}, {"index": 2, "image_type": "png", "decode_qr": False}),
@@ -37,13 +40,18 @@ def _err(val):
     return str(e.value)
 
 
-class TestTheFourLegalShapes:
-    """四种形状各一条：说出规则就得接住规则自己列的每一种写法。"""
+class TestTheAcceptedShapes:
+    """每一种合法形状各一条：说出规则就得接住规则自己列的每一种写法。"""
 
     @pytest.mark.parametrize("val,expected", LEGAL)
     def test_each_shape_is_accepted(self, val, expected):
         (action,) = _validate_actions([{"screenshot": val}])
         assert action["screenshot"] == expected
+
+    def test_row_zero_is_a_row_not_an_absence(self):
+        """0 是 snapshot 的第一行，不是"没有目标"：falsy 不许把它吃掉。"""
+        (action,) = _validate_actions([{"screenshot": 0}])
+        assert action["screenshot"]["index"] == 0, action
 
     def test_full_page_needs_no_target(self):
         """第 3 条读数本来就是对的：整页截图没有元素可言，不该被要求指一个元素。"""
@@ -52,7 +60,7 @@ class TestTheFourLegalShapes:
 
 
 class TestTheRefusalsSayOneThing:
-    @pytest.mark.parametrize("val", [True, 1, 3.5, "  ", [1],
+    @pytest.mark.parametrize("val", [True, 3.5, "  ", [1],
                                      {"decode_qr": True}, {}, {"foo": 1}])
     def test_refused(self, val):
         with pytest.raises(ValueError):
@@ -66,10 +74,12 @@ class TestTheRefusalsSayOneThing:
         text = _err(True)
         for needle in ("selector", "index", "full_page"):
             assert needle in text, text
+        # 刀9-6c 之后这句还许得出裸行号 —— 列形状的那句漏一种，就等于教人再撞一次
+        assert "bare snapshot row" in text, text
 
     def test_no_python_brace_artifact(self):
         """`{{` 是字符串拼接漏出的伪影，不是给调用方的语法。"""
-        for val in (True, {"decode_qr": True}, 3):
+        for val in (True, {"decode_qr": True}, 3.5):
             assert "{{" not in _err(val) and "}}" not in _err(val)
 
     def test_the_rule_names_the_optional_knobs_too(self):

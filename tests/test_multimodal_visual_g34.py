@@ -126,12 +126,19 @@ class TestNoActionGate:
         assert b == {"screenshot": {"selector": "img.qr", "image_type": "png",
                                     "decode_qr": False}}
 
+    def test_a_bare_row_number_is_the_index_form(self):
+        """刀9-6c（F8）：从 snapshot 那一列读来的数可以原样写回来，与 {"index": N} 同义。"""
+        (c,) = _validate_actions([{"screenshot": 3}])
+        assert c == {"screenshot": {"index": 3, "image_type": "png",
+                                    "decode_qr": False}}, c
+
     @pytest.mark.parametrize("bad", [
         {"screenshot": {"selector": "img.qr", "decode_qr": "yes"}},
         {"screenshot": {"decode_qr": True}},
         {"screenshot": {"selector": ""}},
         {"screenshot": {"selector": None}},
-        {"screenshot": 3},
+        {"screenshot": 3.5},
+        {"screenshot": True},
     ])
     def test_bad_shapes_are_refused(self, bad):
         with pytest.raises((ValueError, Exception)) as e:
