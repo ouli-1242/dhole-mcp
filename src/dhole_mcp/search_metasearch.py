@@ -45,8 +45,10 @@ from fake_useragent import UserAgent
 from lxml import html
 from lxml.etree import HTMLParser as LHTMLParser
 
+from dhole_mcp import engine_yield
 from dhole_mcp import env_registry
 from dhole_mcp import paths
+from dhole_mcp import serp_dates
 from dhole_mcp.security import redact_api_key
 
 logger = logging.getLogger(__name__)
@@ -82,6 +84,26 @@ _SEARCH_DEADLINE = 16.0  # 17.0 写死：整个搜索的硬期限是能算清的
 # 软截止：结果凑够就早退，不为慢/死的引擎等到硬截止。提成模块常量只为了让测试能
 # 把它压到毫秒级（否则验早退归属的测试每条都要真睡 2s）。
 _SOFT_DEADLINE = 2.0
+# 只有 **一个索引家族**在说话时，早退之前多给的一小段等待。它买的东西很具体：跨家族
+# 共识是这条链上唯一免费、零模型、确定性的权威信号，而一家说话时它按构造不存在
+# （每一行都是 "1 of 1 (no corroboration)"）。抬 `_SOFT_DEADLINE` 是把这笔钱花在每一次
+# 早退上；这一段只花在买得到的那一次上。
+#
+# 值落在量出来的空带上。样本是 `second − first`：**第二个答话的家族**相对**第一家答完**
+# 的到达偏移。`evals/pool_baseline.py` 那一层没有时钟（`_ENGINE_YIELD` 记 status/节点数，
+# 不记时间），所以这两次是临时给每个引擎套一只表跑出来的真联网探测，各 12 问：
+#   网络尚可：0.19 / 0.59 / 1.15 / 2.27
+#   网络劣化（12/12 轮在 2.0s 时**连一家都没有**，第一家落在 2.6-7.1s）：0.77 / 2.95 / 2.95 / 5.68
+# 四个样本挤在 1.15 及以下，下一个已经在 2.27 —— 1.2 坐在 1.15…2.27 这条空带的下沿：
+# 收得进挤着的那一簇（8 个里的 4 个），又不为孤零零的长尾付钱。代价上界就是这 1.2 秒，
+# 且只付给"到点还没凑出第二个家族"的轮次；到点照旧取消，账记 preempted（不是超时、不是
+# 失败）。这台机器的池子延迟在几分钟里能差一个量级，所以这条空带不许被读成常数 —— 改了
+# 引擎名单或出口就重跑那两次探测。
+_LONE_FAMILY_GRACE = 1.2
+# 共识至少要有两家才叫共识：一家说什么都构不成佐证（响应里每一行都写成
+# "1 of 1 (no corroboration)"）。地板按**家族**算而不是按实例算，理由见 metasearch 里
+# `families_answered` 那段：bing / bing_global / duckduckgo 同一套索引，数它们等于没数。
+_MIN_CONSENSUS_FAMILIES = 2
 _ua = UserAgent()
 
 
@@ -285,6 +307,15 @@ class TextResult:
     title: str = ""
     href: str = ""
     body: str = ""
+    # 期4.1：这一行**版面自带的**发布日期。三颗一组的理由是 4.0 那把尺：一个日期
+    # 不带精度就是一次冒充（"3 hours ago" 存成光秃秃的 ISO 等于声称那天发布）。
+    # `published` 出链时是本模块唯一作者（`serp_dates.read_row`）写回的 ISO 串，
+    # 空串 = 这一行没有日期（线上零字节，见 wire._WIRE_OMIT）。
+    # 只有实测过容器的四家（sogou / baidu 两套版面 / so360 / bing 系）会落值；
+    # 其余家与 keyed API 交回空串，不是"它没有"，是"dhole 没在它上面量过"。
+    published: str = ""
+    published_precision: str = ""   # day|month|year|relative（空=无日期）
+    published_basis: str = ""       # 命中的版面原文，让读者能复核日期从哪几个字读出来
 
 
 # ─── 结果可用性谓词 ──────────────────────────────────────────────────────────
@@ -299,6 +330,21 @@ def _is_usable(row: Any) -> bool:
 
 def _usable_count(rows: Any) -> int:
     return sum(1 for r in rows if _is_usable(r))
+
+
+def _stamp_row_date(row: Any) -> Any:
+    """把行上那段版面日期读成三颗字段（值 + 精度 + 原文），原地盖好。
+
+    读不出日期就交回三个空串：干净行因此在 wire 上零字节，而不是"-published=''”。
+    行上没有 `published` 这一格（keyed API 的 SimpleNamespace 形状）就原样退回 —— 那
+    是"dhole 没在那家页面上量过日期"，不是"那家没有日期"。
+    """
+    if not hasattr(row, "published"):
+        return row
+    rd = serp_dates.read_row(row.published)
+    row.published, row.published_precision, row.published_basis = (
+        rd.value.isoformat() if rd.value else "", rd.precision, rd.basis)
+    return row
 
 
 def _split_region(region: str) -> tuple[str, str]:
@@ -418,6 +464,19 @@ class BaseSearchEngine:
     def post_extract_results(self, results: list[Any]) -> list[Any]:
         return results
 
+    def extract_kept(self, html_text: str) -> list[Any]:
+        """版面 → 交出去的最后一批行：解析 → 引擎自滤 → 逐行盖日期。
+
+        这是**唯一**一处读日方的地方：`BaseSearchEngine.search` 与 `Baidu.search`
+        （它为了重试挑战页自己调 request，不走 super）都从这一个出口出去。日期只有
+        一个作者、一次判决，且发生在引擎自滤之后 —— 被丢掉的本就不该出现在账上。
+
+        xpath 只负责把版面那段字**取回来**；把它读成 (日期, 精度, 原文) 的是
+        `serp_dates.read_row`，那里是唯一的一份解析（4.0 的叶子）。
+        """
+        return [_stamp_row_date(r) for r in
+                (self.post_extract_results(self.extract_results(html_text)) or [])]
+
     def _check_challenge(self, html_text: str) -> None:
         """解析前调用：几 KB 的 200 校验页 = 被拦，不是"没有结果"。
 
@@ -440,7 +499,7 @@ class BaseSearchEngine:
             return None
         if self._detect_challenge_shell:
             self._check_challenge(html_text)
-        kept = self.post_extract_results(self.extract_results(html_text)) or []
+        kept = self.extract_kept(html_text)
         # 记的是条数而非可用数：usable 已由 last_extract 承载。两者分开才能分出
         # "解析器坏了"（usable==0）与"过滤器把结果吃光了"（bing 的 ck/a、ddg 的
         # y.js）—— 前者要修 xpath，后者要修解码，是两类不同的故障。
@@ -589,6 +648,12 @@ class Bing(BaseSearchEngine):
         # 的一个样式类名绑在一起，改名就会再烂一次。
         "href": "(.//h2/a/@href | .//h2/ancestor::a/@href)[1]",
         "body": ".//p//text()",
+        # 期4.2（实测）：这一格是新闻/时间卡片的 `span.news_dt`。冻结夹具里
+        # bing_global 10 个容器 1 个有，且写的是 "1 day ago"（relative，4.0 的叶子
+        # 如实记精度，绝不落成一个光秃秃的 ISO 日）；cn 版那一套版面 A 4/4、B 1/4
+        # 是绝对日期（"Oct 11, 2024"）。没有这一格的行交回空串 → wire 上零字节。
+        # BingGlobal 继承这张表，两家同一格，不再抄第二份。
+        "published": ".//span[contains(@class,'news_dt')]//text()",
     }
     # Bing 对单 IP 高频请求随机限流（连接重置/空结果），重试可显著提高命中率
     _retries = 2
@@ -719,6 +784,12 @@ def _clean_result_href(raw: str, drop_hosts: tuple[str, ...]) -> str:
     return href
 
 
+#: dhole 的短码 → 百度 `gpc=stf=` 那个绝对区间的天数跨度（day/week/month/year 四档，
+#: 与 `_FRESHNESS_TO_TIMELIMIT` 同一批取值）。这一颗只描述**我们发出去什么**，
+#: 不是百度按它筛了什么；离线可证的只有差分，行级真值归 `published`/`date_coverage`。
+_BAIDU_STF_DAYS = {"d": 1, "w": 7, "m": 31, "y": 366}
+
+
 class Baidu(BaseSearchEngine):
     """百度搜索（www.baidu.com/s?wd=）：国内裸网直连，实测无反爬（1.6s / 1MB 真 SERP，
     无需 stealthy/cookie）。
@@ -751,6 +822,14 @@ class Baidu(BaseSearchEngine):
         # 旧版版面叫 c-abstract。两个都不在时该条摘要是空串（不是解析器漂移）。
         "body": (".//*[contains(@class,'summary-text') "
                  "or contains(@class,'c-abstract')]//text()"),
+        # 期4.2（实测，冻结夹具 tests/engine_fixtures/baidu_variant_{a,b}.html）：
+        # 两套版面各处一格日期 —— A 版 `div.cos-row` 里的 `span.cos-space-mr-3xs`
+        # （5 个容器 2 个有，"2024年9月5日"），B 版 `div.cosc-card-footer` 里的
+        # `span.cosc-source-caption`（6 个容器 3 个有）。类名带构建 hash，所以按
+        # 前缀取并集；读不出来的那一格交回空串（B 版有一条 "4月23日" 没有年份，
+        # 4.0 的叶子如实拒判 —— 补一个年份就是替读者编日期）。
+        "published": (".//span[contains(@class,'cos-space-mr-3xs') "
+                      "or contains(@class,'cosc-source-caption')]//text()"),
     }
     headers_update: ClassVar[Mapping[str, str]] = {"Accept-Language": "zh-CN,zh;q=0.9"}
     _detect_challenge_shell = True
@@ -758,14 +837,23 @@ class Baidu(BaseSearchEngine):
     prefers_raw_query = True
 
     def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
-                      timelimit: str | None,  # noqa: ARG002 - 时间过滤（gpc/stf）未实现：
-                      # 这一家的**参数存在**是 dhole 自己的注释说的，没接线的是 dhole，
-                      # 所以它登记在 search_engines._DATE_PARAM_UNWIRED，响应里那句
-                      # "dhole has not wired a date filter for baidu (gpc/stf)" 由那张表生成
+                      timelimit: str | None,
                       page: int = 1, **kwargs: str) -> dict[str, Any]:
         payload = {"wd": query, "ie": "utf-8"}
         if page > 1:
             payload["pn"] = f"{(page - 1) * 10}"
+        # 期4.4：`gpc=stf=<起>,<止>|stf_type=2`（Unix 秒）是这一家时间过滤的写法，
+        # dhole 现在真的发出去了 —— 判据是差分（`build_payload(timelimit=None)` vs
+        # `('w')` 多出的那颗键），由 `tests/test_search_date_window_g24.py` 与
+        # `test_a_date_claim_blames_the_side_that_is_ours.py` 钉住，所以 baidu 从
+        # `_DATE_PARAM_UNWIRED` 搬进 `_DATE_AWARE_ENGINES`。
+        # **说的是"dhole 发了这一颗"，不是"百度按它筛过结果"**：语义（stf 是绝对时间
+        # 区间、含不含当天）离线无法核实，所以这一档与其余已接线的家一样只在
+        # `date_filter` 里报"问了什么"，行级真值仍由 `published` + `date_coverage` 说。
+        if timelimit in _BAIDU_STF_DAYS:
+            _now = int(time())
+            payload["gpc"] = (f"stf={_now - _BAIDU_STF_DAYS[timelimit] * 86400},{_now}"
+                              "|stf_type=2")
         return payload
 
     @staticmethod
@@ -793,7 +881,7 @@ class Baidu(BaseSearchEngine):
             if not html_text:
                 return None
             if not _is_challenge_shell(html_text):
-                kept = self.post_extract_results(self.extract_results(html_text)) or []
+                kept = self.extract_kept(html_text)
                 self.kept_after_filter = len(kept)
                 return kept
             if attempt == 0:
@@ -875,6 +963,10 @@ class So360(BaseSearchEngine):
         "href": ".//@data-mdurl",
         "body": (".//*[contains(@class,'res-desc') "
                  "or contains(@class,'res-list-summary')]//text()"),
+        # 期4.2（实测）：辅助信息那一格 `span.g-c-dark` 里带"发贴时间：2026年5月8日"
+        # —— 冻结夹具 7 个容器 1 个有这一格。取不到日期时交回空串（该页那一条原文里
+        # 还混着上游写坏的 "&nbsp"，4.0 的叶子读不出年份就不判，不替它补）。
+        "published": ".//span[contains(@class,'g-c-dark')]//text()",
     }
     headers_update: ClassVar[Mapping[str, str]] = {"Accept-Language": "zh-CN,zh;q=0.9"}
     _detect_challenge_shell = True
@@ -934,6 +1026,10 @@ class Sogou(BaseSearchEngine):
         "title": ".//h3//text()",
         "href": ".//@data-url",
         "body": ".//*[contains(@class,'fz-mid')]//text()",
+        # 期4.2（实测）：`span.cite-date` 是绝对到日的那一格（"2020-08-31" /
+        # "2024-11-22"）。冻结夹具 8 个结果容器里 4 个带它，其余交回空串 —— 这就是
+        # `date_coverage.rows_with_date` 是个真分数而不是全有/全无的形状。
+        "published": ".//span[contains(@class,'cite-date')]//text()",
     }
     headers_update: ClassVar[Mapping[str, str]] = {"Accept-Language": "zh-CN,zh;q=0.9"}
     _detect_challenge_shell = True
@@ -1472,12 +1568,11 @@ def engine_state_snapshot() -> dict:
 # 这里记的就是那一格。开销：每引擎每轮一次 dict 更新 + 至多 60s 一次的原子落盘。
 # 判据只用当轮的结构量，不依赖历史基线：新装机器第一次搜索就能判"容器在、条目空"。
 _YIELD_EWMA = 0.3            # 新样本权重
-_MIN_SAMPLES_FOR_BASELINE = 8  # 少于此数不下"这引擎平时有多少产出"的结论
-_DRIFT_STREAK = 2            # 连续几轮 item_nodes>0 而 usable==0 才算确认漂移
+# 判据与它的三个阈值住在 engine_yield.py（stdlib-only 叶子模块）：`dhole -v` 的诊断行也
+# 要用同一把尺，而它不许 import 这一层（会拖 primp/lxml/httpx/fake_useragent）。两处各抄
+# 一遍正是这一族判据最坏的历史故障 —— 同一个引擎在两个读处给出两个结论。
 _ENGINE_YIELD: dict[str, dict] = {}
 _ENGINE_STATS_SAVE_INTERVAL = 60.0
-# verdict 的有效期：超过这个时间没再跑过搜索，上一轮的结论就不该再被当作现状。
-_ENGINE_YIELD_TTL = 3600.0
 _engine_stats_last_save = 0.0
 
 
@@ -1522,29 +1617,15 @@ def _save_engine_stats() -> None:
         pass
 
 
-def _classify_yield(stats: dict, status: str, nodes: int, usable: int) -> str:
-    """这一轮该引擎的健康判定。关键是区分"上游真的没结果"和"我们的解析器坏了"。
+def _classify_yield(stats: dict, status: str, nodes: int, usable: int,
+                    *, now: Optional[float] = None) -> str:
+    """这一轮该引擎的健康判定 —— 判据在 engine_yield.classify_yield（唯一的作者）。
 
-    只有 item_nodes==0 且 HTTP 200 那一格是真正含糊的（可能是查询本身在该索引里
-    就没东西），它需要基线才可能收窄 —— 样本不够时如实报 unknown，不猜。
+    这颗名字留着是这条链的读法。`now` 传了才判新鲜度（超龄的行 = `stale`），这里传，
+    因为 engine_health 交的是"池子此刻怎么看它"。阶梯本体不许在这里重写，理由见
+    engine_yield 的模块 docstring 与 tests/test_one_engines_yield_verdict_has_one_author.py。
     """
-    if status == "preempted":
-        return "not_asked"          # 够数了被取消，本轮无观测
-    if status in ("blocked", "circuit_open"):
-        return "blocked"
-    if status == "timeout":
-        return "timeout"
-    if status.startswith(("error", "init_error", "no_key")):
-        return "unreachable"
-    if nodes < 0:
-        return "not_instrumented"   # JSON API 引擎，或这轮没走到解析
-    if nodes > 0 and usable == 0:
-        return "parser_drift" if stats.get("drift", 0) >= _DRIFT_STREAK else "parser_suspect"
-    if nodes == 0 and usable == 0:
-        if stats.get("n", 0) >= _MIN_SAMPLES_FOR_BASELINE and stats.get("mean", 0) >= 1.0:
-            return "upstream_empty"  # 平时有产出、这轮容器都没了
-        return "unknown_empty"
-    return "healthy"
+    return engine_yield.classify_yield(stats, status, nodes, usable, now=now)
 
 
 def _record_engine_outcomes(status: dict[str, str],
@@ -1592,8 +1673,9 @@ def _record_engine_outcomes(status: dict[str, str],
 def engine_health() -> dict[str, dict]:
     """每引擎产出的只读快照（含 verdict），给诊断命令用。
 
-    verdict 只描述**最近一轮**：超过 _ENGINE_YIELD_TTL 没再出现的引擎标成
-    "stale"，否则上一次运行的结论会被当成当前状态 —— 那正是这次要修的毛病。
+    verdict 只描述**最近一轮**：超过 `engine_yield.YIELD_TTL_S` 没再出现的引擎标成
+    "stale"，否则上一次运行的结论会被当成当前状态 —— 那正是这次要修的毛病。那一步判据
+    也在叶模块里（`now=` 传进去才判），这里不再自己比一次时间。
     """
     now = time()
     out: dict[str, dict] = {}
@@ -1602,10 +1684,7 @@ def engine_health() -> dict[str, dict]:
         status = str(row.get("status", ""))
         nodes = int(row.get("last_nodes", -1))
         usable = int(row.get("last", -1))
-        if now - float(row.get("ts", 0.0)) > _ENGINE_YIELD_TTL:
-            row["verdict"] = "stale"
-        else:
-            row["verdict"] = _classify_yield(row, status, nodes, usable)
+        row["verdict"] = _classify_yield(row, status, nodes, usable, now=now)
         out[name] = row
     return out
 
@@ -1730,6 +1809,7 @@ async def metasearch(
     page: int = 1,
     engines: Optional[list[str]] = None,
     query_map: Optional[dict[str, str]] = None,
+    round_stats: Optional[dict] = None,
 ) -> tuple[list[dict[str, str]], dict[str, str]]:
     """Run the backends in PARALLEL and return (results, per-backend-status).
 
@@ -1815,6 +1895,116 @@ async def metasearch(
     min_engines = min(3, len(instances))
     soft_deadline = _SOFT_DEADLINE
     quorum_results = max_results + 4  # a little extra for the neural reranker
+    # 配额那一步按**实例**数人（`engines_ok`），而共识那一句按**家族**说话：bing /
+    # bing_global / duckduckgo 坐的是同一套索引，三家同时"有贡献"仍然只是一个家族把
+    # 同一句话说三遍。早退因此要另外知道自己放掉过谁 —— 下面那把家族账就是为此而记的。
+    # 家族表住在 search_engines（dhole 那一层薄适配器），这里按需 import 而不写顶层：
+    # 那边惰性 import 回本模块（为了不把 primp/lxml 拖进启动与缓存命中路径），写成顶层
+    # 就是一对循环 import；而本层是 vendored 的，"家族"这个概念本来也不属于它。
+    from dhole_mcp.search_engines import _INDEX_FAMILY, cn_index_engines
+    families_answered: set[str] = set()   # 本轮真的说了话的独立索引家族
+    # 中文查询要等的那几家（非 CJK 交回空集，下面每一处判断因此对英文逐字无效）。
+    cn_wait = cn_index_engines(query)
+
+    def _merge_rows(name: str, res: list[Any]) -> None:
+        """一家引擎的答案并进合并表，并把它的下落记进 status。
+
+        两条路共用这一个函数：主循环里完成的，和**已经答完却撞上取消那一步**的。原先
+        只有前者有记法，于是同一个事实有两种下场（见 `_stop_laggards` 上面那段）。
+        """
+        nonlocal engines_ok
+        added = 0
+        touched = False  # returned a valid result that matched an existing key (dupe)
+        for r in res:
+            if not _is_usable(r):
+                continue
+            key = _normalize_url(r.href)
+            if not key:
+                continue
+            if key in seen:
+                # another backend already returned this URL -> record the
+                # agreement (cross-backend consensus authority signal).
+                seen[key]["backends"].add(name)
+                touched = True
+                continue
+            entry = {"title": r.title, "href": r.href, "body": getattr(r, "body", "") or "",
+                     # 期4.1：日期跟着行走完整条合并链。这里只**搬运**（值已在
+                     # `extract_kept` 那一步由唯一的作者读好），合并时先到先得 ——
+                     # 同一 URL 后到的那家带来的日期不进账（两条来源各自的数会被读成
+                     # 一次测量；`backends` 记的是谁答过，日期记的是交出那一行的版面）。
+                     "published": getattr(r, "published", "") or "",
+                     "published_precision": getattr(r, "published_precision", "") or "",
+                     "published_basis": getattr(r, "published_basis", "") or "",
+                     "backend": name, "backends": {name}}
+            seen[key] = entry
+            order.append(entry)
+            added += 1
+        if added:
+            engines_ok += 1
+        # 'ok' = contributed a valid result (new OR a dupe that confirms
+        # consensus). 'empty' = returned nothing usable. (A backend whose
+        # only result was a dupe still contributed - it confirmed the URL.)
+        if added or touched:
+            status[name] = "ok"
+            families_answered.add(_INDEX_FAMILY.get(name, name))
+            _record_success(name)  # backend is healthy -> clear any prior block
+        else:
+            status[name] = "empty"
+
+    def _take_answer(pt) -> None:
+        """收下已经完成的任务；报错按各家失败归桶，与主循环同一份记法。"""
+        name = tasks[pt]
+        try:
+            _, res = pt.result()
+        except MetaBlockedException as ex:
+            # Backend refused us (CAPTCHA/403/rate-limit) -> circuit-open it
+            # for the cooldown so we stop hammering it.
+            _record_block(name, challenge=getattr(ex, "challenge", False))
+            status[name] = "blocked"
+            return
+        except BaseException as ex:  # CancelledError is BaseException in py3.11+
+            status[name] = f"error:{type(ex).__name__}"
+            _record_conn_failure(name)
+            return
+        _merge_rows(name, res)
+
+    async def _stop_laggards(pend: set, *, reason: str) -> set:
+        """先收已经答完的，再取消还在飞的。交回仍在飞的（keyed 那两家不取消，照旧等）。
+
+        `reason` 分开两笔账是必须的：软截止后取消的叫 preempted（不是失败也不是限速），
+        硬截止还没答完的叫 timeout（进 engine_blocked）。把后者写成前者就是把一次超时
+        说成一次收工 —— 而这两个桶各自主张相反的修法。
+
+        `Task.cancel()` 对一个**已完成**的任务是 no-op，而原来这一步随后 `await pt` 把它的
+        返回值丢掉、还给它记上 `preempted` —— 唯一一家在软截止那一瞬答完的权威家族，于
+        是同时被丢了答案、又被说成"根本没轮到它说话"。收账与取消因此必须分成两趟走。
+        """
+        finished: set = set()
+        nonlocal round_wait_s, trip_at
+        if trip_at and reason == "preempted":
+            # 这一段就是本轮为"第二个家族"实际多花的墙钟：从早退条件成立那刻算到收账。
+            round_wait_s = max(round_wait_s, time() - trip_at)
+            trip_at = 0.0
+        for pt in list(pend):
+            if pt.done() and not pt.cancelled():
+                _take_answer(pt)
+                finished.add(pt)
+                continue
+            if tasks.get(pt) in ("tavily", "bocha"):
+                continue  # let keyed engines finish (they're paid APIs, don't waste credits)
+            pt.cancel()
+        for pt in list(pend):
+            nm = tasks[pt]
+            if nm not in status:
+                status[nm] = reason
+            try:
+                await pt
+            except BaseException:
+                pass
+        # 已经收过账的必须**离开** pending：留在里面下一轮 `asyncio.wait` 会立刻把它当
+        # 新完成的任务再收一遍，而 `if not pending: break` 也就永远不成立（这一族空转
+        # 原先靠"取消过的任务才算处理完"躲开，收账这条路一开就要自己说清楚）。
+        return {pt for pt in pend if not pt.cancelled() and pt not in finished}
 
     async def _run(name: str, eng: BaseSearchEngine) -> tuple[str, list[Any]]:
         # Stagger delay for rate-limit-sensitive engines (DuckDuckGo's scraping
@@ -1849,58 +2039,36 @@ async def metasearch(
     deadline = time() + _SEARCH_DEADLINE
     start = time()
     engines_ok = 0
+    grace_until = 0.0        # 0 = 这一轮那段短等还没放行；每轮至多放行一次
+    trip_at = 0.0            # 早退条件第一次成立的那一刻（短等就是从这一刻算起的）
+    round_wait_s = 0.0       # 本轮为"第二个家族"多等的实际秒数（0 = 一次都没等）
+
+    def _cn_still_flying() -> bool:
+        """境内索引里还有谁在飞（非 CJK 查询永远是 False）。
+
+        等谁必须说得出名字，所以这里读的是任务表而不是"家族数"：baidu 已经答完、已经
+        熔断、或这一轮根本没被点到时，都不构成继续等的理由 —— 只有"还没回话的那一家
+        恰好是中文长尾唯一有的那几家"才是。
+        """
+        return any(tasks.get(pt) in cn_wait and not pt.done() for pt in pending)
 
     while pending and time() < deadline:
         timeout = max(0.1, deadline - time())
+        if grace_until:
+            # 短等到点就要收账，所以这一发的 wait 不能按硬截止睡过去。
+            timeout = min(timeout, max(0.05, grace_until - time()))
         try:
             done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED, timeout=timeout)
         except Exception:
             break
         if not done:
+            if grace_until and pending and time() < deadline:
+                # 短等用到头而第二个家族始终没来：它们是我们决定不等的，照旧记
+                # preempted（限速/超时是两回事，各自主张相反的修法）。
+                pending = await _stop_laggards(pending, reason="preempted")
             break
         for t in done:
-            name = tasks[t]
-            try:
-                _, res = t.result()
-            except MetaBlockedException as ex:
-                # Backend refused us (CAPTCHA/403/rate-limit) -> circuit-open it
-                # for the cooldown so we stop hammering it.
-                _record_block(name, challenge=getattr(ex, "challenge", False))
-                status[name] = "blocked"
-                continue
-            except BaseException as ex:  # CancelledError is BaseException in py3.11+
-                status[name] = f"error:{type(ex).__name__}"
-                _record_conn_failure(name)
-                continue
-            added = 0
-            touched = False  # returned a valid result that matched an existing key (dupe)
-            for r in res:
-                if not _is_usable(r):
-                    continue
-                key = _normalize_url(r.href)
-                if not key:
-                    continue
-                if key in seen:
-                    # another backend already returned this URL -> record the
-                    # agreement (cross-backend consensus authority signal).
-                    seen[key]["backends"].add(name)
-                    touched = True
-                    continue
-                entry = {"title": r.title, "href": r.href, "body": getattr(r, "body", "") or "",
-                         "backend": name, "backends": {name}}
-                seen[key] = entry
-                order.append(entry)
-                added += 1
-            if added:
-                engines_ok += 1
-            # 'ok' = contributed a valid result (new OR a dupe that confirms
-            # consensus). 'empty' = returned nothing usable. (A backend whose
-            # only result was a dupe still contributed - it confirmed the URL.)
-            if added or touched:
-                status[name] = "ok"
-                _record_success(name)  # backend is healthy -> clear any prior block
-            else:
-                status[name] = "empty"
+            _take_answer(t)
         # early-return: enough engines contributed enough results, OR enough
         # results after the soft deadline (don't hold for dead backends).
         elapsed = time() - start
@@ -1913,33 +2081,34 @@ async def metasearch(
         if enough_results and (
             engines_ok >= min_engines or elapsed >= soft_deadline
         ):
-            for pt in pending:
-                if tasks.get(pt) in ("tavily", "bocha"):
-                    continue  # let keyed engines finish (they're paid APIs, don't waste credits)
-                pt.cancel()
-            for pt in list(pending):
-                nm = tasks[pt]
-                if nm not in status:
-                    status[nm] = "preempted"  # cancelled because enough backends delivered
-                try:
-                    await pt
-                except BaseException:
-                    pass
-            pending = {pt for pt in pending if not pt.cancelled()}
+            if _cn_still_flying():
+                # 配额是境外索引填的，而中文那一半不在它们的库里 —— 这一刻早退买到的
+                # 是"快"，交回的是答不出用户问题的那一页（2026-10-11 全真模拟 S3：
+                # 混搜里 baidu 被这样砍掉，两轮中文查询全 low，手动 engines=["baidu"]
+                # 一次就出公众号与知乎）。等的上限不新开：就是本轮本来就有的硬期限，
+                # 到点它自己会被记成 timeout（一次真的没等到），而不是 preempted
+                # （一次我们决定不等）。纯英文查询走进来的次数是零 —— cn_wait 是空集。
+                continue
+            if (pending and len(families_answered) < _MIN_CONSENSUS_FAMILIES
+                    and grace_until == 0.0):
+                # 只有一家在说话而还有人在飞：这时候的早退买走的是本轮唯一的佐证机会。
+                # 等的对象是"第二个家族"，不是"更多条"——条数一家就能填满配额。
+                trip_at = time()
+                grace_until = trip_at + _LONE_FAMILY_GRACE
+                continue
+            pending = await _stop_laggards(pending, reason="preempted")
             if not pending:
                 break
 
-    # cancel + record any still-pending (timed out) backends
-    for pt in pending:
-        pt.cancel()
-    for pt in list(pending):
-        name = tasks[pt]
-        if name not in status:
-            status[name] = "timeout"
-        try:
-            await pt
-        except BaseException:
-            pass
+    # cancel + record any still-pending (timed out) backends。到这一步还在飞的，是硬期限
+    # 没答完 —— 与上面那笔"我们决定不等了"是两件事，别并成一个 token。
+    if pending:
+        pending = await _stop_laggards(pending, reason="timeout")
+    if round_stats is not None:
+        # 本轮真的为第二个家族多等了多久。抬这段预算的人必须先看见它值多少 ——
+        # `evals/pool_baseline.py` 报的是响应里已有的四桶，而四桶说不出"多花的那几秒"。
+        round_stats["lone_family_wait_s"] = round(round_wait_s, 3)
+        round_stats["lone_family_grace_s"] = _LONE_FAMILY_GRACE
 
     # 产出统计：一处覆盖全部终态 token（ok/empty/blocked/circuit_open/timeout/
     # error:*/init_error:*/no_key:*/preempted），含那些根本没拿到 instance 就被跳过

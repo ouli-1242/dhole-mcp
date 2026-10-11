@@ -26,6 +26,7 @@ per-IP throttling - the one thing no scraper can escape from one IP.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse
@@ -86,6 +87,31 @@ _INDEX_FAMILY = {
     "baidu": "baidu", "so360": "so360",
 }
 
+# 谁的索引答得出中文。与 `_CN_DIRECT` 不是一回事：那张表说的是"这台机器直连拨不拨得通"
+# （环境问题，实测会飘），这张表说的是"中文长尾在谁的库里"（索引归属）。2026-10-11 全真
+# 模拟 S3 量的正是这两者的差：混合搜索里 baidu 被"凑够数就取消"提前砍掉，两轮中文查询
+# 全 low，手动 `engines=["baidu"]` 一次就出公众号与知乎 —— 而那一刻还在飞的那几家境外
+# 索引，填满的只是英文那一半的配额。
+_CN_INDEX_ENGINES = frozenset({"baidu", "sogou", "so360"})
+
+# 中日韩字符，不是"中文语言检测"：一条混着术语的查询（`PCIe 7.0 规范 发布 128GT/s`）
+# 英文索引也能答一半，但它要的中文那一半只有上面那三家有。判据只问"有没有这些字符"，
+# 所以一条纯英文查询永远走不到这里 —— 英文那一侧的行为逐字不变，与既有那条
+# 「快引擎填满配额就该早退」的钉子同一条命。
+_CJK_RE = re.compile(
+    "[\u3040-\u30ff\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
+
+
+def cn_index_engines(query: str) -> frozenset:
+    """仍在飞、而这一轮还不能不等的那几家（非 CJK 查询交回空集）。
+
+    交回集合而不是布尔，是因为等谁必须说得出名字：`_stop_laggards` 那一刀原来不分
+    对象，一家还没答话的引擎只要不在 keyed 名单里就取消掉，并把它的下落写成
+    `preempted`（"别人够说了，不等它了"）。中文查询里那一顶帽子扣到 baidu 头上，
+    就是 S3 两连败的全部机制。
+    """
+    return _CN_INDEX_ENGINES if _CJK_RE.search(query or "") else frozenset()
+
 _FRESHNESS_TO_TIMELIMIT = {"day": "d", "week": "w", "month": "m", "year": "y"}
 
 # Which backends actually put a date constraint on the wire. Measured (16.0) by
@@ -98,6 +124,7 @@ _DATE_AWARE_ENGINES = frozenset({
     "bing", "bing_global",     # filters=ex1:"ez{d|w|m|y}"
     "brave",                   # tf=p{d|w|m|y}
     "duckduckgo",              # df={d|w|m|y}
+    "baidu",                   # gpc=stf=<起>,<止>|stf_type=2（期4.4 接线，判据是差分）
     "bocha",                   # keyed: freshness=oneWeek
     "tavily",                  # keyed: time_range=week
 })
@@ -120,9 +147,12 @@ def date_support(engines) -> tuple:
 #
 # 值 = dhole 注释里点名的参数名（一条自述，不是核实过的上游文档结论）。加一家就必须同时
 # 改它自己那行注释，`test_a_date_claim_blames_the_side_that_is_ours.py` 会钉住这两处。
-_DATE_PARAM_UNWIRED: dict[str, str] = {
-    "baidu": "gpc/stf",
-}
+#
+# 期4.4 之后这张表**是空的**：baidu 是它唯一的住户，而 `gpc=stf=` 现在真的差分得出
+# 一颗键（`Baidu.build_payload`），于是它搬进了 `_DATE_AWARE_ENGINES`。表留着而不是
+# 删掉，因为它同时是那句归责措辞的唯一作者 —— 下一次有人点名一家"参数存在但没接线"，
+# 就得在这里登记一行，并在它自己的 `# noqa` 注释里写同名参数。
+_DATE_PARAM_UNWIRED: dict[str, str] = {}
 
 
 def split_date_blindness(blind) -> tuple[list[str], list[str]]:
@@ -150,6 +180,13 @@ class RawResult:
     # 里写明的兼容契约，五处测试桩也按二元组喂 —— 改元组数会把"加一条证据"变成一次
     # 破坏性改动。
     neural_raw: Optional[float] = None
+    # 期4.1（同上例：三颗都是带默认值的**字段**，元组宽度一字不动）。值是
+    # `search_metasearch.extract_kept` 用 `serp_dates.read_row` 读好的 ISO 串，
+    # 精度取 day|month|year|relative，basis 是命中的版面原文。空串 = 这一行没有日期
+    # （线上零字节）。只有实测过容器的四家会落值，keyed API 交回空串。
+    published: str = ""
+    published_precision: str = ""
+    published_basis: str = ""
 
 
 @dataclass
@@ -280,6 +317,7 @@ async def multi_search(
     page: int = 0,
     server=None,  # accepted for signature compat; search is 100% HTTP (no browser)
     query_map: Optional[dict[str, str]] = None,
+    round_stats: Optional[dict] = None,
 ) -> tuple[list[RawResult], list[EngineReport]]:
     """Run the keyless metasearch backends in parallel; return (ranked, reports).
 
@@ -289,6 +327,11 @@ async def multi_search(
     URL (a safety net for backends that do not). `page` is 0-indexed (dhole API)
     -> 1-indexed for the backends. `server` is unused (kept for call-site compat;
     search never touches the browser).
+
+    `round_stats` 是一只**调用方传进来的袋子**：metasearch 把"这一轮的墙钟账"（为第二个
+    家族多等的那一段）写进去。它不走返回值，因为 `(ranked, reports)` 是这个适配层的既有
+    契约（五处测试桩与 `dhole engines` 探针按二元组解包）；它也绝不走模块级全局，因为
+    搜索会并发，一个全局数会把上一轮的等待报进下一次响应里。
     """
     # Build the query with site:/-site: prefixes (best-effort upstream filter).
     def _apply_site(q: str) -> str:
@@ -312,6 +355,7 @@ async def multi_search(
     results_dicts, status = await metasearch(
         q, max_results, region=region, timelimit=timelimit,
         page=backend_page, engines=mapped, query_map=query_map,
+        round_stats=round_stats,
     )
 
     # Map to RawResult with cross-backend consensus + apply the final site filter.
@@ -330,6 +374,12 @@ async def multi_search(
             position=i,
             consensus=len(families),
             sources=tuple(backends),
+            # 期4.1：日期三颗跟着行走完 metasearch → RawResult → SearchResult 这条链
+            # （搬运，不判断；唯一的作者仍是 serp_dates.read_row）。keyed API 的行没有
+            # 这几颗 → 空串，缺席即零字节。
+            published=d.get("published", "") or "",
+            published_precision=d.get("published_precision", "") or "",
+            published_basis=d.get("published_basis", "") or "",
         ))
 
     # Per-backend reports from the metasearch status. 每个分支都带上原始 token：
