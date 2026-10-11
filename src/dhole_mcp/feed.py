@@ -81,18 +81,22 @@ class FeedResult(BaseModel):
     # lost its subject when conditional polling came off the tool surface (17.0 §6).
     note: str = Field(
         default="",
-        description="One line the caller could not otherwise infer from this result. Two "
-                    "subjects qualify, joined by ' · ' when both apply: (1) the document "
-                    "parsed as a feed and genuinely carried zero entries - an empty items "
-                    "list with no error cannot tell 'nothing published today' from 'our "
+        description="One line the caller could not otherwise infer from this result. Three "
+                    "subjects qualify, joined by ' · ' when more than one applies: (1) the "
+                    "document parsed as a feed and genuinely carried zero entries - an empty "
+                    "items list with no error cannot tell 'nothing published today' from 'our "
                     "parser stopped matching this feed', so the feed's own markers "
                     "(lastBuildDate / pubDate / skipDays / updated) are quoted; (2) "
                     "cred_defaults holds a credential for THIS host and feed_read sent "
                     "none of it - a feed fetch is anonymous here, so the items are the "
                     "public view of that address even when you have a token stored (web_read, "
-                    "web_request and web_crawl do carry it). Empty otherwise: feeds with "
-                    "items that answered a plain request, hosts with nothing stored, and "
-                    "wherever `error` or the since-receipts already explain it.")
+                    "web_request and web_crawl do carry it); (3) this row spent MORE time "
+                    "than it was asked to - a timeout retried once at double the seconds, "
+                    "said here whether that retry answered or failed again, because a source "
+                    "that is slow and a source that is flaky want different next calls. "
+                    "Empty otherwise: feeds with items that answered a plain request, hosts "
+                    "with nothing stored, and wherever `error` or the since-receipts already "
+                    "explain it.")
 
     @model_validator(mode="after")
     def _diagnosis_from_error(self) -> "FeedResult":
@@ -277,7 +281,7 @@ def _parse_feed_xml(raw: str, source_url: str) -> FeedResult:
 
 async def _grab(url: str, timeout: int,
                 headers: dict | None = None) -> tuple[bytes, int, str, str, dict]:
-    """(body, status, encoding, error, response-headers) for one URL. Never raises.
+    """一发就走的抓取：(body, status, encoding, error, response-headers)。Never raises.
 
     The response headers come back too (17.0 keeps the tuple's shape; nothing in
     this module reads them now that conditional polling is off the tool surface).
@@ -478,6 +482,59 @@ def _keep_newer(result: FeedResult, cutoff_iso: str, cutoff, max_items: int) -> 
     return result
 
 
+# `validate_timeout` 的上限（`security.TIMEOUT_MAX_MS` = 120,000ms）换算成秒：这一族的
+# 时间单位是秒，翻倍不许越过那道门 —— 越过就等于这一刀自己造了一个非法值。
+_TIMEOUT_CEILING_S = 120
+
+
+def _is_timeout_failure(err: str) -> bool:
+    """`_fetch_failure_note` 交回的是 `network_error: timeout - <hint>`。"""
+    return err.startswith("network_error: timeout")
+
+
+async def _grab_with_retry(url: str, timeout: int, headers: dict | None = None
+                           ) -> tuple[bytes, int, str, str, dict, str]:
+    """超时的那一族在同一次调用里以**双倍秒数**再走一发；交回 (五元组, 这笔账)。
+
+    报告 S5 的形状是"少数派怎么又超时"：sspai 在默认 20 秒上连挂两次，第三次手动
+    `timeout=60000` 才成 —— 而那第三发是助手**猜到了有这么一颗旋钮**才发的。慢站不罕见,
+    把一个"要想到 60000 这个数才能用"的功能留在参数面上，等于它不存在。
+
+    只认 `timeout`。DNS / TLS / 被拒 / 限流加倍不会改变任何东西，而再敲一次同一扇门正是
+    `MetaBlockedException` 那份文档要避免的 hammering，熔断存在的理由也是它。
+
+    第六位那句账不许省：一次调用等了 40 秒与等了 20 秒是两个事实，而"再等久一点"这句话
+    在加倍之后仍然失败时已经作废 —— 两种情况长成同一个样子，下一次调用就会照旧多烧 40 秒
+    去试一件已经试过没用的事。
+    """
+    body, status, encoding, err, hdrs = await _grab(url, timeout, headers)
+    if not _is_timeout_failure(err):
+        return body, status, encoding, err, hdrs, ""
+    second = min(2 * timeout, _TIMEOUT_CEILING_S)
+    if second <= timeout:
+        return body, status, encoding, err, hdrs, ""
+    note = (f"the first try timed out at {timeout}s, so this call retried once at "
+            f"{second}s")
+    b2, s2, e2, err2, h2 = await _grab(url, second, headers)
+    if not err2:
+        return (b2, s2, e2, "", h2,
+                f"{note} - and it answered. This source is slow, not down: pass "
+                f"timeout={int(second * 1000)} to skip the first try next time")
+    return (body, status, encoding, err, hdrs,
+            f"{note}; it timed out again, so waiting longer is not the fix here")
+
+
+def _with_retry_note(result: FeedResult, note: str) -> FeedResult:
+    """把"这一发自己多花了一次"并进去 —— `note` 已有的那一句不动，两句用 ' · ' 接。
+
+    为什么必须逐行说而不是一句批次级的话：一次 `feed_read` 里每个源各走各的 `_grab`，
+    慢的是 sspai 不是 ifanr，而读者正在决定要不要信这一行的那一条恰好是这一行。
+    """
+    if note:
+        result.note = " · ".join(p for p in (result.note, note) if p)
+    return result
+
+
 async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20,
                      since: str = "") -> FeedResult:
     """Fetch and parse a single RSS/Atom feed. Never raises.
@@ -514,14 +571,18 @@ async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20,
             result.items = result.items[:max_items]
         return result
 
-    body, _status, encoding, err, _hdrs = await _grab(url, timeout)
+    body, _status, encoding, err, _hdrs, retry_note = await _grab_with_retry(url, timeout)
     if err and not body:
-        return FeedResult(source_url=url, error=err)
+        row = FeedResult(source_url=url, error=err)
+        # 失败的那一行也要带着这笔账：一次已经试过双倍秒数的超时，与一次从没试过的超时，
+        # 主张相反的修法（前者不该再劝人等久一点）。
+        row.note = retry_note
+        return row
 
     raw = body.decode(encoding or "utf-8", errors="replace")
     parsed, parse_exc = _parse_or_none(raw, url)
     if parsed is not None and parsed.items:
-        return _shape(parsed)
+        return _with_retry_note(_shape(parsed), retry_note)
 
     # Not a feed (or a feed we could not read): try what the page itself says.
     is_html = _looks_like_html(body)
@@ -532,7 +593,7 @@ async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20,
         except SecurityError as se:
             logger.debug("discovered feed target refused: %s", str(se)[:120])
             continue
-        cbody, _cst, cenc, cerr, _chdrs = await _grab(feed_url, timeout)
+        cbody, _cst, cenc, cerr, _chdrs, cnote = await _grab_with_retry(feed_url, timeout)
         if cerr and not cbody:
             continue
         cparsed, _cexc = _parse_or_none(
@@ -540,11 +601,11 @@ async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20,
         if cparsed is not None and cparsed.items:
             cparsed.source_url = feed_url
             cparsed.discovered_from = url
-            return _shape(cparsed)
+            return _with_retry_note(_shape(cparsed), cnote)
 
     if parsed is not None and (parsed.items or parsed.source_title):
         # Parsed as XML and said something, just no entries: honest, not an error.
-        return _shape(parsed)
+        return _with_retry_note(_shape(parsed), retry_note)
 
     error = _friendly_parse_error(parse_exc, raw, is_html)
     if candidates:
