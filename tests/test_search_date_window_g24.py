@@ -95,10 +95,39 @@ class TestTheTableIsTheEngines:
                 _url, _h, payload = build("q", 5, short)
                 assert payload.get(param) == wanted, (name, short, payload)
 
+    def test_baidu_sends_an_absolute_stf_range_that_widens_with_the_preset(self):
+        """`bool(diff)` 说得出"多了一颗键"，说不出那颗键发的是什么。
+
+        `gpc=stf=<起>,<止>|stf_type=2` 是绝对时间戳区间，而 dhole 只有 day/week/month/
+        year 四档 —— 所以判据是"区间随档位变宽，且止点始终是此刻"：这一家收到的是
+        一个真窗口，而不是一个被上游当无效忽略的短名。
+        **这一条钉的是 dhole 发出去什么**，不是百度按它筛了什么（离线核不了后者）；
+        结果集能不能按日期说话仍由 `date_filter` + `date_coverage` 说。
+        """
+        import re
+        import time
+
+        from dhole_mcp import search_metasearch as ms
+
+        build = ms._TEXT_ENGINES["baidu"]().build_payload
+        assert "gpc" not in build("q", "us-en", "moderate", None, 1)
+        widths = {}
+        for short in ("d", "w", "m", "y"):
+            gpc = build("q", "us-en", "moderate", short, 1)["gpc"]
+            m = re.fullmatch(r"stf=(\d+),(\d+)\|stf_type=2", gpc)
+            assert m, (short, gpc)
+            start, end = int(m.group(1)), int(m.group(2))
+            assert abs(end - int(time.time())) <= 5, (short, gpc)
+            widths[short] = end - start
+        assert widths["d"] < widths["w"] < widths["m"] < widths["y"], widths
+
     def test_the_default_pool_split_is_what_the_report_measured(self):
+        # 期4.4 移动的那一格（实测方式=这张表自己的判据）：`baidu` 的
+        # `build_payload(timelimit='w')` 现在比 `None` 多出 `gpc=stf=<起>,<止>`，
+        # 差分当场可验，所以它从"收不到过滤"搬进"收得到"。剩下三家仍是线路事实。
         filtered, unfiltered = date_support(POOL)
-        assert filtered == ["bing", "bing_global", "brave", "duckduckgo"]
-        assert unfiltered == ["baidu", "so360", "sogou", "yandex"]
+        assert filtered == ["baidu", "bing", "bing_global", "brave", "duckduckgo"]
+        assert unfiltered == ["so360", "sogou", "yandex"]
 
     def test_an_unknown_engine_counts_as_unfiltered(self):
         assert date_support(["newengine"]) == ([], ["newengine"])
@@ -110,9 +139,11 @@ class TestTheWindowTranslation:
         applied, info, why = _date_window(days_ago(3), None, None, POOL)
         assert why == ""
         assert (applied, info["sent"]) == ("week", "freshness=week")
-        assert info["engines_filtered"] == ["bing", "bing_global", "brave",
-                                            "duckduckgo"]
-        assert "baidu" in info["engines_unfiltered"]
+        # 期4.4 移动的那一格：baidu 现在收了 `gpc=stf=`（差分当场可验），所以它从下面
+        # 那份名单搬到上面那份；名单本身仍是实测的，不是手抄的。
+        assert info["engines_filtered"] == ["baidu", "bing", "bing_global",
+                                            "brave", "duckduckgo"]
+        assert "so360" in info["engines_unfiltered"]
 
     def test_a_window_the_wire_sent_widely_is_never_called_exact(self):
         """反向半边：`after=` 算出最窄覆盖档 ≠ 结果集被过滤过。
@@ -188,11 +219,14 @@ class TestTheWindowTranslation:
         """
         _applied, info, _why = _date_window(None, None, "week", POOL)
         assert info["requested"] == "freshness=week"
-        assert "baidu" in info["engines_unfiltered"]
+        # 期4.4：baidu 从这一份名单里出去了（它的 `gpc=stf=` 差分可见），剩下三家仍是
+        # "线路里没有这一说"。这一条的前提也跟着改口：池子仍有一半引擎收不到过滤。
+        assert "baidu" not in info["engines_unfiltered"]
+        assert "so360" in info["engines_unfiltered"]
         assert info["exact"] is False, (
             "有引擎根本没收到日期过滤却仍然应答了，这一轮就不是 exact")
         assert "no date filter" in info["note"]
-        assert "baidu" in info["note"]
+        assert "so360" in info["note"]
 
     def test_a_pool_that_can_all_be_filtered_is_exact(self):
         """正向半边：exact 不许被改成永远 False —— 那只是把谎换成了另一个方向。
@@ -205,17 +239,19 @@ class TestTheWindowTranslation:
         assert info["note"] == ""
 
     def test_a_pool_of_only_date_blind_engines_names_them(self):
-        """全都收不到过滤：告诫要点名，而且**两种责任方要分开说**（S8-full）。
+        """全都收不到过滤：告诫要点名，而且只说线路这一侧的事实（S8-full）。
 
-        sogou 是"线路里没有这一说"，baidu 是"dhole 自己没接线它的 gpc/stf"。把后者也
-        写成前者的措辞，就是替一个第三方断言它做不到的事，而 dhole 的代码注释里明明
-        写着那个参数存在 —— 声明与线路必须一致。
+        期4.4 之前这一格住着两家：sogou 是"线路里没有这一说"，baidu 是"dhole 自己点名
+        了 gpc/stf 却没接线"。后者现在接线了（判据 = `gpc` 出现在
+        `build_payload(timelimit='w')` 而 `None` 那发没有），把它的名字留在"未接线"
+        那一格就会反过来冤枉 dhole —— 那张表自己的测试钉的正是这条。
         """
-        _applied, info, _why = _date_window(None, None, "month", ["baidu", "sogou"])
+        _applied, info, _why = _date_window(
+            None, None, "month", ["so360", "sogou", "yandex"])
         assert info["engines_filtered"] == []
         assert info["exact"] is False
-        assert "dhole sent sogou no date filter" in info["note"], info["note"]
-        assert "dhole has not wired a date filter for baidu (gpc/stf)" in info["note"]
+        assert "dhole sent so360, sogou, yandex no date filter" in info["note"], info["note"]
+        assert "baidu" not in info["note"], info["note"]
         assert "cannot be date-filtered" not in info["note"], \
             "这句把我们的没做说成它的不能"
 
@@ -248,16 +284,51 @@ class TestTheWindowTranslation:
 
 
 class TestBeforeIsRefusedNotIgnored:
+    """`before=` 的旧契约（整颗参数被拒）与被量到的新事实。
+
+    前值（实测 2026-10-10）：拒绝句写着 "search results carry no publish date"。那句话
+    当时是真话，而期4.2 把它作废了 —— 冻结夹具上 sogou 8 个结果容器读出 4 个到日的
+    日期、baidu 两套版面各 2/5 与 3/6、bing 系 10 个里 1 个。行**开始**带日期了，
+    所以整颗参数的拒绝从"诚实"变成了"把一个能做的判决藏起来"。
+
+    这一类现在钉的是**换掉之后的那半句真话**，而原来那三条一句没松：
+      · 不许静默（旧：拒绝要给出理由；新：账要在 `date_coverage` 上，丢了几行要说）
+      · 替代路径仍要点名（`feed_read(since=)` 仍然在句子里）
+      · 读不懂的 `before=` 仍然当场抛，不降级成"没问"
+    """
 
     def test_before_comes_back_as_a_reason_not_a_silent_no_op(self):
         applied, info, why = _date_window(None, days_ago(30), None, POOL)
-        assert (applied, info) == (None, {})
-        assert "before is not supported" in why
-        assert "feed_read(since=" in why
+        assert (applied, why) == (None, "")
+        # 旧的 `assert (applied, info) == (None, {})` 钉的是"这颗参数什么也没建"；
+        # 现在它建的是这一轮的判决记录，而那颗布尔必须仍是 False —— 一行都没被送进
+        # 引擎，`exact` 翻上来就是替引擎发了一句它没发过的话。
+        assert info["exact"] is False, info
+        assert info["before"]["cutoff"] == days_ago(30), info
+        assert "before is not supported" not in why
+        assert "feed_read(since=" in info["note"], info["note"]
 
     def test_the_alternative_is_named(self):
-        _a, _i, why = _date_window(None, "2026-01-01", None, POOL)
-        assert "after=" in why
+        _a, info, _why = _date_window(None, "2026-01-01", None, POOL)
+        assert "after=" in self._after_plus_before("2026-01-01"), \
+            "两颗一起问时 after 那一半的账不能被吃掉"
+        assert info["requested"].endswith("before=2026-01-01"), info["requested"]
+
+    def _after_plus_before(self, before):
+        """`after=` + `before=` 一起问：窗口那一半照旧，逐行那一半并进来。"""
+        _a, info, _w = _date_window(days_ago(3), before, None, POOL)
+        assert info["sent"] == "freshness=week", info
+        assert info["before"]["cutoff"] == before, info
+        return info["note"]
+
+    def test_the_per_row_verdict_is_described_where_it_can_be_acted_on(self):
+        """丢掉一行就得说：`before` 那一格必须讲清"谁被丢了、谁留下了、为什么留下"。"""
+        _a, info, _w = _date_window(None, "2026-01-01", None, POOL)
+        applied = info["before"]["applied"]
+        assert "row by row" in applied, applied
+        assert "rows_dropped_by_before" in applied, applied
+        assert info["before"]["sent_to_engines"].startswith("nothing"), \
+            "把逐行判决说成引擎过滤，是替八家引擎编一句它们没说过的话"
 
     def test_an_unreadable_before_is_still_a_date_error(self):
         from dhole_mcp.security import SecurityError
@@ -272,10 +343,29 @@ class TestTheWireText:
         tools = {t["name"]: t for t in MasterFetchServer._TOOL_DEFS}
         props = tools["web_search"]["inputSchema"]["properties"]
         # 判据是「键有没有被 advertised」：after 要说清窗口被放宽并回读 date_filter，
-        # before 要说清是被拒而不是被忽略，并给出替代路径。
+        # before 要说清它是**逐行**做的（不是整颗被拒、也不是被忽略），并给出替代路径。
         assert "date_filter" in props["after"]["description"], "after= 的窗口语义没上线"
-        assert "REFUSED" in props["before"]["description"], "before= 被拒的说明没上线"
-        assert "feed_read" in props["before"]["description"], "没给出带日期条目的替代路径"
+        before_desc = props["before"]["description"]
+        # 旧句写着 "REFUSED, not ignored: ... results carry no publish date"。那半句
+        # 在期4.2 之后是假话（sogou/baidu/bing 的容器实测带着日期），所以这里改钉
+        # 现在真的那一套：逐行 + 丢掉要有计数 + 判不了的留下。
+        assert "per row" in before_desc, before_desc
+        assert "date_coverage" in before_desc, "丢了几行没上常驻层: " + before_desc
+        assert "publish date" not in before_desc, f"还在说行上没有日期: {before_desc}"
+        # 方向必须住在参数上：这是调用方决定传不传 `before=` 之前就要读到的那一句话，
+        # 搬到响应侧就晚了（按需付付不了"要不要花这一发"这个决定）。
+        assert "Upper bound" in before_desc and "newer" in before_desc, before_desc
+        # 旧句里那颗 "feed_read(since=)" 是**搬家**不是删掉：拒辞时代它指"想要带日期的条目
+        # 去哪儿"，而今天 `before=` 自己就执行判决，出路换成同一轮的那句 note —— 它既指
+        # 反向的 `after=`，也指 `feed_read(since=)`。常驻层 159 字买不下两份指针，而响应侧
+        # 那句只在真问过日期的那一发才送到，位置更便宜也更准。下面这条钉搬到的那处没空。
+        assert "feed_read" not in before_desc, before_desc
+        _applied, _info, _rej = _date_window(None, "2026-01-01", None, POOL)
+        note = _info["note"]
+        assert "feed_read(since=)" in note, f"出路没写在眼前那句里: {note}"
+        assert "after=<date>" in note, f"反向的门没点名: {note}"
+        # 常驻面是锁死的（32,828，余量 0）：这句改一个字都要当场量。
+        assert len(before_desc) <= 152, len(before_desc)
 
     def test_the_method_accepts_both(self):
         import inspect
@@ -369,7 +459,9 @@ class TestTheNoteReachesTheAnswer:
         assert out.date_filter["exact"] is False
         hint = out.fetch_hint or ""
         assert "covers your window rather than matching it" in hint
-        assert "baidu" in hint, f"没点名的告诫等于没说: {hint!r}"
+        # 期4.4 之后要点名的是仍收不到过滤的那几家（baidu 已经在线路上了，再让它
+        # 出现在这句里就是替一家已接线的引擎背一个它没有的缺口）。
+        assert "so360" in hint, f"没点名的告诫等于没说: {hint!r}"
 
     def _run_after(self, monkeypatch, engines, after):
         out = self._run(monkeypatch, engines, after=after, freshness=None)

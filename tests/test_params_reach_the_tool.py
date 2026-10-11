@@ -89,6 +89,11 @@ VALUES: dict[str, object] = {
     "confirm": True,
     # 批次 11：同一句理由。默认是隐形，探针要说"看得见"，丢了才看得出来丢了。
     "headed": True,
+    # 刀9-7（F9）：驻留那颗也必须走完全程 —— `web_act(pin=true)` → `web_read` →
+    # `_force_fetch` → `stealthy_fetch` → `bulk_stealthy_fetch` → 浏览器层，少一环
+    # 就等于调用方说了话而下面没人听见（这一颗的"听见"由
+    # test_a_pinned_page_... 那组量，这里只钉它到得了方法）。
+    "pin": True,
     # web_crawl
     "max_pages": 3, "max_depth": 1, "path_include": "/a", "path_exclude": "/b",
     "max_content_chars_per": 2000, "concurrency": 2,

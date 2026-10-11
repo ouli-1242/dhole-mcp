@@ -509,6 +509,10 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         # 客户端的 `headed: "false"` 按裸值传是非空字符串 = 真，于是没人要窗口的调用
         # 弹出一个来。它与 confirm 走同一只归一化。
         "headed": "bool",
+        # 刀9-7（F9）`pin` 同一族：它决定的是"下一次调用站在哪一页上"。字符串客户端
+        # 把 `pin: "false"` 发过来时按裸值读是真，于是调用方明明说了不要驻留，页却被
+        # 留在会话上（并且下一次调用真的复用了它）。与 confirm / headed 同一只归一化。
+        "pin": "bool",
     },
     "web_search": {
         "max_results": "int", "cache_ttl": "int", "page": "int",

@@ -61,10 +61,12 @@ class TestTheToolExists:
 
     def test_it_is_registered_with_the_names_it_can_honour(self):
         assert "web_act" in _defs(), sorted(_defs())
+        # `pin`（刀9-7 · F9）是这一扇门的公开参数：驻留的话必须在连接期说得出，
+        # sys_guide 那一卷救不回来（参数不在 tools/list 上就根本传不进来）。
         assert server_mod._TOP_LEVEL_ARGS["web_act"] == frozenset({
             "url", "actions", "extraction_type", "max_content_chars", "focus",
             "timeout", "anti_detect", "session_id", "cdp_url", "confirm",
-            "check_login", "headed"})
+            "check_login", "headed", "pin"})
 
     def test_both_required_names_are_on_the_schema(self):
         schema = _defs()["web_act"]["inputSchema"]

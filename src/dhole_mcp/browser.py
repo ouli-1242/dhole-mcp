@@ -357,7 +357,13 @@ _BROWSER_CREDENTIAL_HEADERS = frozenset({
 # 脚本就等于没人能测它、也没人能改它）。200 与 server 侧抽取后的壳页判定同值：两边
 # 一错位，就会出现"一条轴认得出、另一条轴白等 5 秒"的裂缝。
 _UNRENDERED_MAX_TEXT_CHARS = 200
-_SETTLE_IDLE_MS = 5000
+SETTLE_IDLE_MS = 5000
+
+#: 起一台浏览器进程在这台机器上要多久：3–5 秒量级（`LAUNCH_PROBE_TIMEOUT_S` 那句注释
+#: 记的就是这一格实测）。这颗数的用途只有一个 —— 给"这次调用装不装得下一张截图"
+#: （`server._min_visual_call_ms`）提供一个**有出处的**加数，而不是把 5 秒写成直觉。
+#: 它不是超时：真的慢机器由调用方点名的预算与那道兜底管。
+BROWSER_LAUNCH_TYPICAL_MS = 5_000
 
 _UNRENDERED_PROBE_JS = """() => {
   const b = document.body;
@@ -1458,6 +1464,14 @@ async def _simulate_human_behavior(page: Any) -> None:
 
 # ─── Browser session base ─────────────────────────────────────────────────────
 
+# 一张**驻留**页能活多久（刀9-7 · F9）。时长与 `server.AUTO_SESSION_IDLE_TIMEOUT`
+# 同一个数，理由也同一个：一个人看完一张图、把答案抄进下一次调用，用的是几十秒，
+# 不是几毫秒；而 300 秒之后还把这页留着，占的是一份浏览器上下文与一个标签。
+# 到期不是"关掉浏览器"，只是**放掉这一页** —— 复用的那一刻惰性检查（见
+# `BrowserSession._pin_take`），因为具名会话刻意不进空闲回收那条监控。
+PIN_TTL_S = 300
+
+
 class BrowserSession:
     """Base browser session using patchright's async API.
 
@@ -1559,6 +1573,15 @@ class BrowserSession:
         # gone), and the plumbing stays for B5's cred_defaults parameter --
         # until then every launch is a scratch dir.
         self._persistent_profile: bool = False
+        # 刀9-7（F9）驻留槽：`{"page", "route", "listener", "stamp"}` 或 None。
+        # 默认每一次 fetch 都是 `new_page()` + `goto()`，于是"上一调用读到的那一枚
+        # token / 那一张图"属于一张已经不存在的页面 —— 靶站 `/captcha` 每次 GET 换新
+        # token，人读到的永远是上一张（体验报告 S10："我明明看清了它说我错！"）。
+        # `pin=True` 让下一次同会话、同站点的调用**站在这一页上**做事，不导航。
+        # 槽挂在这个对象上而不是 server 的 `_SessionEntry`：拆会话那条路本来就经过
+        # `session.close()`，多一个字段买不到东西；而 TTL 必须在复用那一刻量，不能
+        # 指望空闲监控（它只管 auto 会话）。
+        self._pin: Optional[Dict[str, Any]] = None
 
     # ── Lifecycle ─────────────────────────────────────────────────
 
@@ -1688,6 +1711,13 @@ class BrowserSession:
                 else:
                     self._user_data_dir = tempfile.mkdtemp(prefix="dhole_browser_")
                 persistent_opts = {**browser_options, **context_options, "user_data_dir": self._user_data_dir}
+                # 2.2 · 起进程是这次调用里最像"网络慢"的一段时间（这台机器实测 3–5 秒，
+                # `LAUNCH_PROBE_TIMEOUT_S` 那句注释里量的就是它），而它今天一句都不发。
+                # 惰性导入与本模块同口径（browser 是重模块，context 只在要说话时进来）。
+                from dhole_mcp.context import report_stage
+                await report_stage(
+                    f"starting a {'stealthy' if self._is_stealthy else 'plain'} "
+                    "browser process (a few seconds)")
                 self._context = await self._playwright.chromium.launch_persistent_context(
                     **persistent_opts
                 )
@@ -1742,6 +1772,9 @@ class BrowserSession:
             return
 
         try:
+            # 驻留槽先清：context 一关，那一页就不存在了，而槽里若还留着它，
+            # 下一次 `_pin_take` 读到的是"页面 is_closed() 了"这种半截事实。
+            await self._pin_release()
             if self._context:
                 # attach 模式绝不能 close 这个 context——那是用户 Chrome 的
                 # default context，close 会带走用户自己开着的页面。对
@@ -1813,6 +1846,104 @@ class BrowserSession:
                 out[str(c["name"])] = str(c["value"])
         return out
 
+    async def _pin_take(self, url: str) -> Tuple[Optional[Dict[str, Any]], str]:
+        """驻留的那一页能不能给这一次调用用 —— 判据全在这里，一条不过就交回原因。
+
+        取走即从槽里摘下（`self._pin = None`），所以这一发失败时 finally 会照旧把
+        那一页关掉：一个没人复用的驻留页，不该活成第二次调用的意外。
+
+        四条拒绝各是一件具体的事：
+          * `attach` —— 那是用户自己的浏览器、用户自己的标签页，dhole 不替他留着；
+            而且 attach 那条通道压根不装驻留（见 `fetch` 里存槽那一支的守卫）。
+          * `ttl` —— 过了 `PIN_TTL_S`，这一页可能早被站点侧的会话超时换掉了，
+            站上去做事比重新导航更容易拿到一个错答案。
+          * `closed` —— 页面被人（或 Chrome 自己）关了。
+          * `host` —— 这一次要的是别的站点。同站判定用 `_is_entry_target` 那一个作者
+            （端口、80↔443 升级都算同一站），不在这里重写第二份。
+        """
+        slot = self._pin
+        if slot is None:
+            return None, ""
+        self._pin = None
+        if self._allowed_hosts is not None or self._cdp_attached:
+            await self._pin_close(slot, "attach")
+            return None, "attach"
+        if time.monotonic() - float(slot["stamp"]) > PIN_TTL_S:
+            await self._pin_close(slot, "ttl")
+            return None, "ttl"
+        page = slot["page"]
+        try:
+            gone = page.is_closed()
+        except Exception:
+            gone = True
+        if gone:
+            return None, "closed"
+        if not _is_entry_target(url, page.url):
+            await self._pin_close(slot, "host")
+            return None, "host"
+        return slot, ""
+
+    @staticmethod
+    async def _pin_close(slot: Dict[str, Any], reason: str) -> None:
+        """放掉一张不再被复用的驻留页。摘监听器在关页之前 —— 与摘围栏闸同一条实测
+        经验（挂着钩子 `page.close()`，那一页会停在半路直到 Playwright 的默认超时）。"""
+        page = slot.get("page")
+        if page is None:
+            return
+        try:
+            if slot.get("listener"):
+                page.remove_listener("response", slot["listener"])
+        except Exception:
+            logger.debug("pinned listener for %s would not come off", reason,
+                         exc_info=True)
+        try:
+            if not page.is_closed():
+                await page.close()
+        except Exception:
+            logger.debug("pinned page (%s) would not close", reason, exc_info=True)
+
+    async def _pin_release(self) -> None:
+        """会话收尾时放掉驻留页（`close()` 调；崩溃路径由 context 自己兜）。"""
+        slot, self._pin = self._pin, None
+        if slot is not None:
+            await self._pin_close(slot, "session")
+
+    async def _install_page_guards(self, page: Any, *, entry_url: str,
+                                   disable_resources: bool,
+                                   sent_headers: Optional[Dict[str, str]],
+                                   ssrf_watch: list):
+        """装上**这一发自己的**两道守卫，并把摘钩要用的三样东西交回去。
+
+        route 那一层（资源拦截 + SSRF + 凭据绑在入口主机上）与 response 捕获都只在这
+        里装一次 —— 驻留复用那条分支必须把上一次的两枚钩子摘干净再装，两处写法一漂移，
+        复用的那一页就带着上一次的 `entry_url`、上一次的记录本做事：那是 SSRF 边界，
+        不接受"大概没事"。
+
+        `entry_url` 由调用方给：新导航是请求的那个 URL，驻留复用是这一页自己的 URL
+        （同站豁免的参照物必须是它实际站在哪里）。
+        """
+        route_handler = _create_route_handler(
+            disable_resources, None, ssrf_watch, entry_url=entry_url,
+            main_frame=page.main_frame,
+            sent_headers=sent_headers,
+            allowed_hosts=self._allowed_hosts,
+        )
+        await page.route("**/*", route_handler)
+
+        final_response: List[Any] = [None]
+
+        async def _handle_response(resp: Any) -> None:
+            try:
+                if (resp.request.resource_type == "document"
+                        and resp.request.is_navigation_request()
+                        and resp.request.frame == page.main_frame):
+                    final_response[0] = resp
+            except Exception:
+                pass
+
+        page.on("response", _handle_response)
+        return route_handler, _handle_response, final_response
+
     async def fetch(
         self,
         url: str,
@@ -1829,6 +1960,8 @@ class BrowserSession:
         page_setup: Optional[Callable] = None,
         retries: Optional[int] = None,
         probe_out: Optional[dict] = None,
+        pin: bool = False,
+        pin_out: Optional[dict] = None,
         **kwargs: Any,
     ) -> "Any":
         """Navigate to a URL and return a Response object.
@@ -1838,6 +1971,13 @@ class BrowserSession:
 
         probe_out（G35 check_login）：传入一个 dict，导航稳定后在页面上做一次
         登录探测（DOM 形状 + cookie 名，无模型、无值出境），结果写进这个 dict。
+
+        pin（刀9-7 · F9）：True = 这一发结束后把页面留在手上；下一次带 pin 的调用若
+        落在同一站点，就**站在这一页上**继续做事，不再 new_page、不再 goto。这买回来的
+        正是"我读到的那道题就是我答的那一道"—— 每次重新导航的站点（验证码、单次
+        token）在跨调用重试时必然答错。pin_out 写回这一发实际发生了什么：
+        `{"outcome": "pinned" | "reused" | "dropped", "dropped": "<原因>"}`，
+        文案的作者在上层（server.py），这里只交事实。
         """
         if not self._is_alive:
             raise RuntimeError("Session not started")
@@ -1889,13 +2029,48 @@ class BrowserSession:
         ssrf_watch: list = []
         # 围栏的请求边界（D-31b）同一族：`_DocumentFence` 往里追加 (host, 是否主文档)。
         fence_watch: list = []
+        # 驻留的车道：dhole 自己起的那台浏览器、没有名册围栏、不是用户自己的 attach。
+        # 这三件事在一次调用的长度里都不会变，所以在循环外量一次 —— 取页与存页读同一把
+        # 尺（两处各写一遍的话，一处改口就留下"取了不存"或"存到用户的标签页上"）。
+        _pin_lane = bool(pin) and self._allowed_hosts is None and not self._cdp_attached
         for attempt in range(actual_retries):
             ssrf_watch.clear()
             fence_watch.clear()
             fence = None
             page = None
+            # `keep` 只有一种方式立起来：这一发真的把页面留在了手上（成功路径存槽）。
+            # 除此之外 finally 一律关页 —— 与今天逐字一致，包括失败的那一发。
+            keep = False
+            reused = False
+            final_response: List[Any] = [None]
+            _route: Any = None
+            _listener: Any = None
+            first_response: Any = None
             try:
-                page = await self._context.new_page()
+                slot: Optional[Dict[str, Any]] = None
+                if _pin_lane and attempt == 0:
+                    slot, _why = await self._pin_take(url)
+                    if _why and pin_out is not None:
+                        pin_out["dropped"] = _why
+                if slot is not None:
+                    # 复用 = **不导航**，这就是这一刀的全部意义：那张题、那枚 token、
+                    # 那个填了一半的表单都还在。但守卫必须是这一发自己的 —— 先把上一次
+                    # 那两枚钩子摘干净（route 里坐着上一次的 ssrf_watch 和上一次的
+                    # entry_url）；摘不掉就宁可弃页：带着一张旧地图开车是 SSRF 边界，
+                    # 不接受"大概没事"。
+                    try:
+                        await slot["page"].unroute("**/*", slot["route"])
+                        slot["page"].remove_listener("response", slot["listener"])
+                    except Exception:
+                        await self._pin_close(slot, "unhook")
+                        if pin_out is not None:
+                            pin_out["dropped"] = "unhook"
+                        slot = None
+                    else:
+                        page = slot["page"]
+                        reused = True
+                if not reused:
+                    page = await self._context.new_page()
                 page.set_default_navigation_timeout(actual_timeout)
                 page.set_default_timeout(actual_timeout)
 
@@ -1905,20 +2080,22 @@ class BrowserSession:
                 # Routes which breaks DNS. Instead, we use wait_until='commit'
                 # + page.evaluate() to inject patches before page JS runs.
 
-                if actual_extra_headers:
+                if reused:
+                    # 这一发的凭据头由这一发决定：上一页留下的那份不许悄悄跟着走
+                    # （`set_extra_http_headers` 是替换语义，传空就是把它们摘掉）。
+                    await page.set_extra_http_headers(actual_extra_headers or {})
+                elif actual_extra_headers:
                     await page.set_extra_http_headers(actual_extra_headers)
 
                 # Route handler: 资源拦截 + SSRF 守卫（每条路径都装 —— 截图/交互
                 # session 里浏览器同样会被重定向走，那条路径此前一道防线都没有）。
-                await page.route(
-                    "**/*",
-                    _create_route_handler(
-                        actual_disable_resources, None, ssrf_watch, entry_url=url,
-                        main_frame=page.main_frame,
-                        sent_headers=actual_extra_headers,
-                        allowed_hosts=self._allowed_hosts,
-                    ),
-                )
+                # 新导航按请求的 URL 判同站，驻留复用按这一页自己的 URL 判。
+                _route, _listener, final_response = await self._install_page_guards(
+                    page, entry_url=(page.url if reused else url),
+                    disable_resources=actual_disable_resources,
+                    sent_headers=actual_extra_headers, ssrf_watch=ssrf_watch)
+                if reused:
+                    first_response = slot["response"]
 
                 # 围栏的请求边界（D-31b）：route 那一层看不见主文档重定向的下一跳，
                 # 所以那条 302 会带着已登录的 profile 走出名册（今天只拦得住落地之后的
@@ -1935,63 +2112,79 @@ class BrowserSession:
                         await candidate.remove()
                         logger.debug("host fence (CDP Fetch) not installed", exc_info=True)
 
-                # Response capture
-                final_response: List[Any] = [None]
-                async def _handle_response(resp: Any) -> None:
+                # Page setup callback / Navigate / stealth injection —— 三件都是
+                # "为这一张新文档"做的事，驻留复用那一页早就做完了一轮，再跑一遍等于
+                # 把同一份补丁往同一个 document 上第二次按下去。响应捕获不在这里：
+                # 那枚钩子与 route 同一次装上（`_install_page_guards`），两条分支共用
+                # 一个作者，否则复用的那一发会带着上一次留下的监听器干活。
+                if not reused:
+                    if actual_page_setup:
+                        try:
+                            await actual_page_setup(page)
+                        except Exception as e:
+                            logger.warning(f"page_setup callback error: {e}")
+
+                    # Navigate - use 'commit' to get control as soon as HTML is
+                    # received but BEFORE page JS runs. Then immediately inject
+                    # stealth patches via page.evaluate(). This is the only
+                    # injection mechanism that works with patchright (CDP
+                    # Page.addScriptToEvaluateOnNewDocument requires Runtime.enable
+                    # which patchright patches out; add_init_script uses Routes
+                    # which breaks DNS).
                     try:
-                        if (resp.request.resource_type == "document"
-                                and resp.request.is_navigation_request()
-                                and resp.request.frame == page.main_frame):
-                            final_response[0] = resp
+                        first_response = await page.goto(url, referer=referer,
+                                                          wait_until="commit")
                     except Exception:
-                        pass
-                page.on("response", _handle_response)
+                        # 'commit' may not be supported in older versions, fall back
+                        first_response = await page.goto(url, referer=referer)
 
-                # Page setup callback
-                if actual_page_setup:
-                    try:
-                        await actual_page_setup(page)
-                    except Exception as e:
-                        logger.warning(f"page_setup callback error: {e}")
+                    # Inject stealth patches IMMEDIATELY after commit, before
+                    # the page's own scripts execute.
+                    if self._init_script and first_response:
+                        try:
+                            await page.evaluate(self._init_script)
+                        except Exception as e:
+                            logger.debug(f"Stealth script injection error: {e}")
 
-                # Navigate - use 'commit' to get control as soon as HTML is
-                # received but BEFORE page JS runs. Then immediately inject
-                # stealth patches via page.evaluate(). This is the only
-                # injection mechanism that works with patchright (CDP
-                # Page.addScriptToEvaluateOnNewDocument requires Runtime.enable
-                # which patchright patches out; add_init_script uses Routes
-                # which breaks DNS).
-                try:
-                    first_response = await page.goto(url, referer=referer, wait_until="commit")
-                except Exception:
-                    # 'commit' may not be supported in older versions, fall back
-                    first_response = await page.goto(url, referer=referer)
-
-                # Inject stealth patches IMMEDIATELY after commit, before
-                # the page's own scripts execute.
-                if self._init_script and first_response:
-                    try:
-                        await page.evaluate(self._init_script)
-                    except Exception as e:
-                        logger.debug(f"Stealth script injection error: {e}")
-
-                # Wait for page stability (full load). 围栏装着的时候这一等要与
+                # Wait for page stability. 围栏装着的时候这一等要与
                 # "拦下了一笔主文档"赛跑：被掐掉的导航不会再有 load 事件，实测
                 # （2026-10-09 的 `-m e2e`）那一次等待把 30 秒预算整个花光，于是调用级预算
                 # 先说话，交回的是"这一档超时了"而不是那条拒绝 —— 围栏做了它的
                 # 工作，回执说的却是另一件事。
+                # 驻留复用只等"它当前这一笔导航（若有）落地"，不再跑那个 5 秒的
+                # "看着还没渲染"探针 —— 那一等是给新文档的，而这一页不是新文档。
                 if fence is not None:
                     await _await_stable_or_escape(self._wait_for_stability(page), fence)
+                elif reused:
+                    for _state in ("load", "domcontentloaded"):
+                        try:
+                            await page.wait_for_load_state(_state)
+                        except Exception:
+                            pass
                 else:
                     await self._wait_for_stability(page)
 
                 if not first_response:
                     raise RuntimeError(f"Failed to get response for {url}")
 
-                # Solve Cloudflare if requested
-                if actual_solve_cf:
+                # Solve Cloudflare if requested（那是一次导航的事：驻留页要么已经解过，
+                # 要么正等着人来看，重跑一次解法会把这一页的形态再改一遍）
+                if actual_solve_cf and not reused:
                     await _solve_cloudflare(page)
                     await self._wait_for_stability(page)
+
+                # 驻留页要告诉动作链它自己站在哪：那句"重跑同一串动作"的合同在这一页
+                # 上是假话（前面的 fill 已经跑过、页也变过了）。动作链读的是挂在它自己
+                # 身上的那一格状态（`actions.build_page_action` 的 `pin_state`），不是
+                # 某个全局 —— 浏览器层与动作层之间不许有隐形的共享真相。
+                # 两个键各有各的时候：`reused` = 这一发站在上一发留下的那一页上；
+                # `pinned` = 这一发结束后这一页要被留下（下一发不必重新导航）。提交闸要
+                # 的是后一件 —— 只要这一页还会被人接着用，"把同一串动作再跑一遍"就不再
+                # 是全部的真话。
+                _pin_state = getattr(actual_page_action, "pin_state", None)
+                if isinstance(_pin_state, dict):
+                    _pin_state["reused"] = reused
+                    _pin_state["pinned"] = _pin_lane
 
                 # Page action callback
                 if actual_page_action:
@@ -2015,7 +2208,10 @@ class BrowserSession:
                 # Adds ~1.5-2.5s of mouse movement + scroll + dwell.
                 # Passes Cloudflare v9 behavioral scoring.
                 # attach 模式不做：那是在驱动用户自己的浏览器。
-                if self._is_stealthy and self._humanize and not self._cdp_attached:
+                # 驻留复用也不做：那是一段"刚到站"的动作轨迹，而这一页是上一发就来过
+                # 的那一页 —— 再滚一遍只会让下一次截图站在不同的滚动位置上。
+                if self._is_stealthy and self._humanize and not self._cdp_attached \
+                        and not reused:
                     try:
                         await _simulate_human_behavior(page)
                     except Exception as e:
@@ -2073,14 +2269,34 @@ class BrowserSession:
                 # processes. Lightweight (~5ms), prevents RAM creep across
                 # many sequential fetches. Non-disruptive: "moderate" level
                 # does not crash tabs or affect page content.
-                try:
-                    cdp = await page.context.new_cdp_session(page)
-                    await cdp.send("Memory.simulatePressureNotification",
-                                   {"level": "moderate"})
-                    await cdp.detach()
-                except Exception:
-                    pass
+                # 驻留的那一页不做：它下一次要被站着用，而"丢掉可回收的图像缓存"对
+                # 一张还要截图的页面是一次重取资源的机会 —— 那个机会属于站点，不属于人。
+                if not _pin_lane:
+                    try:
+                        cdp = await page.context.new_cdp_session(page)
+                        await cdp.send("Memory.simulatePressureNotification",
+                                       {"level": "moderate"})
+                        await cdp.detach()
+                    except Exception:
+                        pass
 
+                # 只有成功路径存槽（异常路径的页面在 finally 里已经关了）。存下来的
+                # 是这一页 + 这一发的两枚钩子 + 它当前那一笔导航的响应：下一次复用
+                # 时这三样都要被换掉，而 `response` 是 `first_response` 的缺席兜底 ——
+                # 这一发若因动作而导航了，留下的就该是那一笔的答案，不是上一发的。
+                if _pin_lane:
+                    self._pin = {"page": page, "route": _route,
+                                 "listener": _listener,
+                                 "response": final_response[0] or first_response,
+                                 "stamp": time.monotonic()}
+                    keep = True
+                    if pin_out is not None:
+                        pin_out["outcome"] = "reused" if reused else "pinned"
+                elif pin and pin_out is not None:
+                    # 调用方要驻留、这一条车道不给留（用户自己的 attach、或名册围栏）。
+                    # 上层normally已经说过这句 —— 这里补一次，是为了"页没留下"这件事
+                    # 永远有一个出处，而不是靠上游记得。
+                    pin_out["dropped"] = "attach"
                 return response
 
             except BrowserSSRFBlockedError:
@@ -2132,7 +2348,10 @@ class BrowserSession:
                 # 自己的名册判断（`Fetch.enable` 是页级的，留着就是一支按旧名册行事的钩子）。
                 if fence is not None:
                     await fence.remove()
-                if page is not None:
+                # `keep` 只在这一发真的把页面存进驻留槽时才立起来。除此之外（包括
+                # 失败的那一发、包括调用方没要驻留的每一发）关页与今天逐字一致 ——
+                # 默认行为一寸不动，是这一刀的合同。
+                if page is not None and not keep:
                     try:
                         await page.close()
                     except Exception:
@@ -2159,8 +2378,15 @@ class BrowserSession:
             reading = None
         if not _looks_unrendered(reading):
             return False
+        # 2.2 · 这一等最多 5 秒，而且只在"页面看着还没渲染"的时候花 —— 它是体验报告
+        # 里那五个"≥5 秒静默窗口"之一，等待的人看到的却是同一段沉默。说的这句带上
+        # 帽是多少：`SETTLE_IDLE_MS` 是这一等的属主，别在话里再抄一个 5。
+        from dhole_mcp.context import report_stage
+        await report_stage(
+            f"the page rendered nothing yet - waiting up to "
+            f"{SETTLE_IDLE_MS}ms for its network to go quiet")
         try:
-            await page.wait_for_load_state("networkidle", timeout=_SETTLE_IDLE_MS)
+            await page.wait_for_load_state("networkidle", timeout=SETTLE_IDLE_MS)
         except Exception:
             pass
         return True

@@ -1260,7 +1260,8 @@ async def _is_submit_control(loc) -> bool:
     return kind == "submit"
 
 
-async def _submit_gate_row(label: str, confirm: bool, rerun: str) -> Optional[dict]:
+async def _submit_gate_row(label: str, confirm: bool, rerun: str,
+                           pinned: bool = False) -> Optional[dict]:
     """提交审批闸（安全红线 3），``{"submit": ...}`` 与提交型控件上的 click
     共用（评审R1刀1）。
 
@@ -1269,6 +1270,11 @@ async def _submit_gate_row(label: str, confirm: bool, rerun: str) -> Optional[di
     授权（out-of-band ask），decline / 问不到人一律 fail-closed——confirm
     参数救不回来；能力为假 / 无会话 → 参数 confirm 是唯一的钥匙。rerun 是
     pending 行里教的重跑写法（submit 与 click 的 confirm 落点不同）。
+
+    `pinned`（刀9-7 · F9）只往那句话上**追加**一条事实，默认串的每一个字不动：
+    站在驻留页上时，"把同一串动作再跑一遍"是假话 —— 前面那些 fill 已经跑过、
+    表单还填着、页也可能已经不是刚进来的时候那一页。所以这里给它第二条出路
+    （只重跑被拦下的这一步 / 去掉 pin 从新页开始），而不是让人去猜哪一种是对的。
     """
     human = await out_of_band_confirm(
         f"Approve ONE form submission on this page (target: {label})? "
@@ -1288,7 +1294,15 @@ async def _submit_gate_row(label: str, confirm: bool, rerun: str) -> Optional[di
             "error": (f"pending_approval: submitting is an irreversible step "
                       f"- ask the user to confirm this submission, then "
                       f're-run the same actions with {{"confirm": true}} '
-                      f"{rerun}. Nothing was submitted."),
+                      f"{rerun}. Nothing was submitted."
+                      + ("" if not pinned else
+                         " · THIS PAGE IS PINNED (pin=true), so that sentence is "
+                         "only half right: the steps before this one already ran "
+                         "on the page you are standing on (a form still holds what "
+                         "they filled). Two honest ways: re-run just this submit step "
+                         "with {{\"confirm\": true}} on the same pinned session, or "
+                         "drop pin=true to start from a fresh navigation (a fresh "
+                         "challenge, a blank form)."))
         }
     return None
 
@@ -1535,11 +1549,21 @@ def build_page_action(actions) -> Optional[Callable]:
     fetch path publishes it into the response (`metadata.actions` + summary),
     because an action that failed quietly used to look like an action that
     happened and did nothing — see _report_action_outcomes in server.py.
+
+    It also carries `.pin_state`, a dict the browser layer writes before running
+    the chain (刀9-7 · F9): `{"reused": bool}` = this chain stands on the page a
+    previous pinned call left open, `{"pinned": bool}` = this page will be kept
+    for the next call. The submit gate reads it: on a page that stays open,
+    "re-run the same actions with confirm=true" is not the truth any more - the
+    earlier fills already ran and the page has changed since. A dict on the
+    callable, not a global, because the browser layer and the action layer must
+    not share an invisible fact.
     """
     if not actions:
         return None
     validated = _validate_actions(actions)
     outcomes: list[dict] = []
+    pin_state: dict = {}
 
     async def page_action(page) -> None:
         outcomes.clear()
@@ -1547,6 +1571,12 @@ def build_page_action(actions) -> Optional[Callable]:
         # 后面的 `fill` 用 `{=code}` 取用。每次导航重新起一条链（`outcomes` 同样清空），
         # 所以下一页的挑战不会带着上一页的值 —— 那一件事正是这条链存在的理由。
         values: dict[str, str] = {}
+        # 这一条链站的是不是驻留的那一页（刀9-7 · F9）。浏览器层在调用这条链之前把
+        # `pin_state` 写好：`reused` = 站在上一发留下的那一页上，`pinned` = 这一发结束后
+        # 这一页会被留下。提交闸要这两件事的或 —— 只要这一页还会被人接着用，"把同一串
+        # 动作再跑一遍"就不再是全部的真话。默认（没有写）就是 False，于是提交闸那句合同
+        # 与从前逐字相同。
+        _pinned_now = bool(pin_state.get("reused") or pin_state.get("pinned"))
         # 动作链是"几十秒到几分钟"的另一种形状：一步 click 可以等 settle，一步 wait
         # 是显式的秒数。每**要执行**的一步报一次（在动作之前报，因为被 submit 闸拦下
         # 的那一步不该被说成做过）；链里 continue 的分支因此也带着自己的那一格。
@@ -1570,7 +1600,8 @@ def build_page_action(actions) -> Optional[Callable]:
                         rerun = ("on this click" if isinstance(click_val, dict)
                                  else 'on this click (as {"click": '
                                       '{"selector": ..., "confirm": true}})')
-                        row = await _submit_gate_row(label, confirm, rerun)
+                        row = await _submit_gate_row(label, confirm, rerun,
+                                                     pinned=_pinned_now)
                         if row is not None:
                             outcomes.append(row)
                             continue
@@ -1789,7 +1820,8 @@ def build_page_action(actions) -> Optional[Callable]:
                     # _submit_gate_row：评审R1刀1 起，提交型控件上的 click 走
                     # 同一道门。
                     row = await _submit_gate_row(label, s.get("confirm", False),
-                                                 "on this submit")
+                                                 "on this submit",
+                                                 pinned=_pinned_now)
                     if row is not None:
                         outcomes.append(row)
                         continue
@@ -1836,6 +1868,9 @@ def build_page_action(actions) -> Optional[Callable]:
                 logger.warning("page action %s failed: %s", label, str(e)[:160])
 
     page_action.outcomes = outcomes  # type: ignore[attr-defined]
+    # 驻留页的告示牌（见上面 docstring）：浏览器层在跑这条链之前往里写 `reused`，
+    # 提交闸读它。默认缺席 = 这一页是这一发导航出来的，合同照旧。
+    page_action.pin_state = pin_state  # type: ignore[attr-defined]
     # 链一共要走几步。`len(outcomes)` 只说得出记了几行，说不出被掐断的那条链本来
     # 还有几步没走 —— 而"切在第几步"是读的人唯一关心的那件事。
     page_action.total_steps = len(validated)  # type: ignore[attr-defined]

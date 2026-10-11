@@ -216,6 +216,7 @@ p90 0.99851 · max 0.99996** —— 双峰，与 `reranker.py` 自己的标定�
 python evals/fixture_site.py            # 127.0.0.1:8399
 
 # 2. M-1 基线（BM25 vs 神经 focus，零网络）
+#    保留率按**字符**加权（Σchars_kept/Σchars_total）；整页一块的页面自己标注，不从分母里消失
 python evals/focus_baseline.py --json
 
 # 3. 图片拦截 A/B 实验（需要靶站在跑）
@@ -233,12 +234,17 @@ python evals/captcha_baseline.py
 python evals/captcha_baseline.py --emit 8 --level normal
 python evals/captcha_baseline.py --score evals/.runtime/captcha/answers.txt
 
+# 7. 池子健康基线（要联网，不需要靶站）：每问真有几个独立家族答了、没答的各家是因为什么
+#    改 quorum / 超时 / 引擎名单之前跑一遍、之后再跑一遍——它量的是代价，不是好坏
+python evals/pool_baseline.py                            # 12 问 × 3 轮
+python evals/pool_baseline.py --queries 4 --rounds 1 --json
+
 ```
 
 场景 1/2/5/6 由**外层 agent 直接调 dhole 工具**执行，逐条调用见下。
 
 运行时产物都在 `evals/.runtime/`（已 gitignore）：
-`orders.log` 订单日志、`requests.log` 请求落盘、`focus_baseline.json` 基线数据。
+`orders.log` 订单日志、`requests.log` 请求落盘、`focus_baseline.json` 基线数据、`pool_baseline.json` 池子逐问次记录。
 
 ---
 
@@ -547,6 +553,16 @@ test_a_chain_answers_the_challenge_of_the_page_it_is_standing_on.py`。
 ```
 
 对比修复前：D1 是 `qr: []` + 破图占位符；D2 两处都是 `submit None (unconfirmed)`。
+
+> 2026-10-11 更新：上面那段是当时那一跑的**转录**（两项），不是今天的清单。今天
+> `verify_fixes.py` 有 **13 项**，最后一跑 **13/13 通过**，新增的几项分别验期 1（填进去的
+> 值读得回来）、期 2.5（装不下截图的预算在起浏览器之前拒绝）、期 3（focus 总数认领哪一路、
+> 块数上信封、薄正文说出它是哪一种薄）、期 4（`before=` 逐行判决且账对得上）、期 5（每一家
+> 没说话的引擎带着它自己的理由）。跑法不变：先起靶站 `python evals/fixture_site.py`，再
+> `python -X utf8 evals/verify_fixes.py`（`-X utf8` 不是讲究：Windows 控制台代码页会把
+> 中文断言烧成乱码，看不清的通过记录等于没有记录）。连接期开销当时是 23,572；今天同一把尺
+> 量到 **32,828**（11 颗，`python tests/tool_payload_measure.py`），差的是这几期的参数与
+> 描述，逐项账在 `tests/test_wire_moves_land_in_the_manual.py` 的棘轮历史块里。
 
 **代价**：连接期开销 +352 字符（两段选项描述），由仓库自己的
 `tests/tool_payload_measure.py` 从源码独立测得：**23,572**（`tools/list` 21,431 + `instructions` 2,141）。

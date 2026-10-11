@@ -54,10 +54,20 @@ MOVED_LESSONS = [
     # C5：`timeout=` 的声明单位（整次调用的毫秒）与这一档的钳（每次尝试 30s）不是一把尺。
     # 常驻层只能放一句上限，"这颗数该怎么拿来算"整段在 fields.md 的 `timeout_applied` 行。
     ("一次 HTTP 尝试封顶 30s，抬 timeout 买的是试次不是单发", "one HTTP attempt"),
+    # #42：地图那一程空手回来有两种，wire 只放得下"这颗数就是图的时钟"一句；「预算用完」
+    # 与「站点答了空话」为什么是两句不同的话、以及各自下一步是什么，整段留在 tools.md。
+    ("图空了要说是谁的时钟砍的：预算用完不等于站点说了不", "not a 'no' from the site"),
     # A3-a：那句 "at most 3 read-and-retry rounds" 从 wire 退场之后，完整理由（每一次
     # 调用都重新导航，所以上一轮读到的挑战这一轮已经不在了）只在语料里 —— 少了这一条，
     # 读者只知道"别重试"，不知道为什么，也就学不会"绑回会话才值得重试"那一句。
     ("验证码的轮次答的是上一枚挑战：跨调用重读等于答上一页", "already gone on the next"),
+    # 刀9-7（F9）：常驻层那句 "a retry is a NEW page load, so the challenge you read last
+    # call belongs to a page that is gone unless the site binds it to the session" 从描述里
+    # 退场 —— 它的**病**（每次调用重导航）现在有治法（`pin=true`），而完整那一段（为什么
+    # 每次导航都换一道题、驻留买回什么、TTL/换站/关页各是什么下场）一直住在 tools.md 这一节。
+    # 少了这一条，读者只剩"3 次就交回人"，学不会"第 2 次之前先问页还在不在"。
+    ("跨调用重试答的是上一枚挑战；驻留（pin）才是让第 2 次答第 1 次那道题的那扇门",
+     "already gone on the next"),
     # 搜索
     ("consensus 数的是索引家族不是原始命中", "FAMILIES"),
     ("引擎池的上限与带 key 的引擎", "Keyed backends"),
@@ -383,7 +393,35 @@ def test_connect_stays_inside_the_packed_budget():
 #: 无日期可读），`sys_state` 的 census 与撤销回执一起点名每台日期、年龄、名册路径与撤销命令。
 #: 连带修的一处漂移：`dhole doctor` 的 cdp fence 行从前自己抄一遍名册算术，会把过窗的算成
 #: "已授权"，与闸门说的正好相反 —— 现在它读 server 的那一份，判活只有一个属主。
-CONNECT_CEILING = 32_496
+#: 2026-10-10 体验修复刀4-#42：棘轮**上抬 +211**（32,496 → 32,707），买的是 `web_discover`
+#: 那颗 `timeout=` 第一次有它自己说的时钟。常驻层从前写 "Whole-call budget"，而地图那一程跑在
+#: 引擎自己的 `deadline_ms`（25000）上、那一发索引请求又写死 15 秒：实测一台 20s 才答的站点，
+#: `timeout=30000` 与 `timeout=120000` 交出同一次 30.0s、同一张空地图、同一句怪站点的话
+#: （"fetching or parsing it produced nothing"）。现在那颗数同时是整发的 deadline 与那一发请求的
+#: 时钟，越界具名拒绝，而被时钟砍掉与站点答了空话分成两句话 —— 完整的一把尺留在 tools.md，
+#: wire 只付这一颗参数的 +211。
+#: 2026-10-11 期4 第六刀：棘轮**随实测回落 -7**（32,707 → 32,700，余量仍 0）。`web_search`
+#: 的 `before=` 拒辞换成逐行判决的说法，而这一句还修掉一个方向错误：第一版按行丢的是"比
+#: 截止更早的行"，而 `before=` 是一轮的**上界**（与 `after=` 成对，也是所有搜索 API 里
+#: `before:` 的意思）—— 写反的那一版丢掉的恰好是调用方要的那批，而回包字面上仍然像"过滤过
+#: 了"（有计数、有 summary、`exact:false` 也写着）。旧句 "REFUSED, not ignored: … results
+#: carry no publish date" 在 4.1-4.3 之后已不是真话（sogou/baidu/bing 的容器实测带着日期），
+#: 新句 152 字把"这是上界""逐行做的""丢掉的是证明更晚的""判不了的留下并计入 date_coverage"
+#: 四件事一起说完，替代路径的指针搬进响应侧的 `date_filter.note`（那一发真问过日期才送到，
+#: 比每次连接都付一份便宜，也更准）。搬走的理由与钉子都在
+#: `tests/test_search_date_window_g24.py::TestTheWireText`。
+#: 2026-10-11 验收刀9-7（F9）：棘轮**上抬 +128**（32,700 → 32,828），买的是 `web_act` 的
+#: 新公开参数 `pin=true` —— 页面驻留。这一颗必须住在连接期而不是 sys_guide 那一卷：参数
+#: 不在 tools/list 上就根本说不出来（dispatch 按表外名拒掉，而"读到的那道题不是正在答的
+#: 那道题"是体验报告里唯一一条**骂人级且机械性必错**的摩擦：靶站每次 GET 换一枚 token，
+#: 跨调用重试在结构上不可能答对，人第二次 403 之后就直接放弃了）。付法逐笔：新属性的
+#: JSON 成本 +215（描述 174 字 + 那颗键的壳），同一段里从前那句
+#: "a retry is a NEW page load, so the challenge you read last call belongs to a page that
+#: is gone unless the site binds it to the session"（138 字）整段退场，换成 50 字的指针
+#: （"each call is a fresh page unless pin=true keeps it"），−88；完整理由一直住在
+#: tools.md 的 Page interaction 一节，MOVED_LESSONS 新加的那一对把它钉在语料里。
+#: 净 +128 = 常驻层的 0.39%，买一次结构性必错的修法。
+CONNECT_CEILING = 32_828
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

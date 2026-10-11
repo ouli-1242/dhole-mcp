@@ -801,6 +801,61 @@ BULK_TOTAL_CONTENT_CHARS = 48_000
 DISCOVER_FALLBACK_PAGES = 3
 DISCOVER_FALLBACK_MIN_MS = 4000
 
+# 刀9-7（F9）· 页面驻留（`web_act(pin=true)`）要出口的每一句话，只有一个作者。
+#
+# 浏览器层（`browser.BrowserSession.fetch`）只交回两个**词**：`pin_out["outcome"]`
+# （这一发把页留下了 / 站在留下的那一页上）与 `pin_out["dropped"]`（上一次那一页为什么
+# 没了）。谁能把话说全谁就说 —— 时刻是它量的、钩子是它摘的、同站判定是它做的，所以这些
+# 句子由这一份表翻成调用方下一步要用的话。走 `summary` 这条路不是风格：
+# `tests/test_every_clamp_is_announced.py` 认的落地字段只有 `summary` 一颗，而一次
+# 没人听见的"我没驻留"恰好等于一次"它大概驻留了"。
+PIN_NOTES: dict[str, str] = {
+    "pinned": ("page pinned: this one stays open on that session for the next call that "
+               "passes pin=true, so the challenge, the token and the half-filled form on "
+               "it are the ones that next call answers. Released after 300s, when the "
+               "host changes, or when the session closes."),
+    "reused": ("pin hit: this call ran on the page your previous pinned call left open - "
+               "no navigation happened, so nothing on it was re-issued. What you read here "
+               "is the same image / token the previous call showed you."),
+    # 三条"驻留不了"的路，各是一件具体的事。
+    "auto": ("pin=true could not be honored: an anonymous auto session is shared between "
+             "callers and is recycled when idle, so there is no page of yours to keep "
+             "open. Name a session_id= (the one you use for logins) and pass pin=true "
+             "again."),
+    "transport": ("pin=true could not be honored on this lane: a CDP attach drives the "
+                  "user's own browser and their own tabs (dhole does not hold those open "
+                  "for you), and a call that runs through a proxy starts one throwaway "
+                  "browser per call. Name a session_id= and ask again without the "
+                  "attach - that is the lane where a page can be kept."),
+    "identity": ("pin=true could not be honored: anti_detect asked for hardening that "
+                 "this session's browser was not started with, so the call ran on its own "
+                 "browser - the page your pinned call left open is on the other one, and "
+                 "this call did not touch it."),
+    "bulk": ("pin=true was not applied: this call fetched several URLs at once, and their "
+             "fetches run in parallel - one page cannot be pinned by more than one of them. "
+             "Call web_act once per URL with pin=true."),
+    # 三条"上一次那一页没了"的原因。
+    "ttl": ("the page your previous pinned call left open is older than 300s, so this call "
+            "started a fresh one - and on a site that re-issues a challenge per load, that "
+            "means a NEW challenge. Read it again before answering; do not answer what the "
+            "earlier call saw."),
+    "closed": ("the pinned page was closed (by the browser or by you) since the last "
+               "pinned call, so this call started a fresh one - what you read on the "
+               "previous call belongs to a page that no longer exists."),
+    "host": ("pin=true asked for the page left open on this session, but that page is on a "
+             "different site than the URL of this call, so it was dropped and this URL was "
+             "navigated normally. Pinning is same-site by design: a page from another host "
+             "is not the page you meant."),
+    "unhook": ("dhole could not take last call's guards off the pinned page, so the page "
+               "was dropped instead of being used - acting under the previous call's SSRF "
+               "map is not a trade worth a saved navigation. This call navigated afresh."),
+    # 浏览器层自己那第二道门（车道在两次调用之间变了：会话被 attach 接管、或装上了
+    # 名册围栏）。上层通常先说过 "transport"，这一句是"那一页已经不在"的出处。
+    "attach": ("the page cannot be kept on this session: it drives the user's own browser "
+               "or a fenced host roster, and dhole does not hold those tabs open. Any page "
+               "pinned earlier on it was closed."),
+}
+
 # MCP initialize `instructions` — injected into the agent's context ONCE on
 # connect by clients that support it. This is the connect-time mastery doc:
 # the #1 workflow, the gotchas, and when to use each tool. Written as
@@ -3592,6 +3647,7 @@ _REQUEST_PARAMS = frozenset({
 _ACT_PARAMS = frozenset({
     "actions", "extraction_type", "max_content_chars", "focus", "timeout",
     "anti_detect", "session_id", "cdp_url", "confirm", "check_login", "headed",
+    "pin",
 })
 
 _SS_PARAMS = frozenset({
@@ -5356,6 +5412,8 @@ class MasterFetchServer:
         session_id: Optional[str] = None,
         page_action=None,
         probe_out: Optional[dict] = None,
+        pin: bool = False,
+        pin_out: Optional[dict] = None,
     ) -> ResponseModel:
         """Stealthy fetcher with anti-bot bypass via Patchright (rebrowser-playwright fork).
 
@@ -5393,6 +5451,9 @@ class MasterFetchServer:
         :param wait_selector_state: Selector wait state.
         :param additional_args: Extra Playwright context args.
         :param session_id: Reuse existing browser session.
+        :param pin: Keep this page open on that session for the next pinned call
+            (刀9-7 · F9); pin_out carries back what actually happened. Only a
+            named, non-attached, single-URL lane can pin - see PIN_NOTES.
         """
         url = validate_url(url)
         validate_html_css_selector(css_selector)
@@ -5419,6 +5480,7 @@ class MasterFetchServer:
                 allow_webgl=allow_webgl, solve_cloudflare=solve_cloudflare,
                 additional_args=additional_args, session_id=session_id,
                 page_action=page_action, probe_out=probe_out,
+                pin=pin, pin_out=pin_out,
             )
         except _tier_refusals() as exc:
             # 批次 9：设计好的拒绝走信封。让它逃出去，`call_tool` 的兜底会把整条响应
@@ -5458,6 +5520,8 @@ class MasterFetchServer:
         page_action=None,
         probe_out: Optional[dict] = None,
         confirm: bool = False,
+        pin: bool = False,
+        pin_out: Optional[dict] = None,
     ) -> BulkResponseModel:
         """Async parallel stealthy fetch with browser fingerprint randomization.
 
@@ -5545,6 +5609,15 @@ class MasterFetchServer:
             # 属性，每一条车道起来的都是它的实例。默认成 "" 就是把"这句话缺席"变成
             # 一件正常的事 —— 而那正是这批要消灭的形状。
             launch_note = entry.session.launch_note
+            # 刀9-7（F9）：驻留的"能不能"在这一层才量得到（这台浏览器是不是用户的、
+            # 这一发是不是并发多 URL、这一趟有没有走到会话自己的那台机器上），而每一
+            # 条形不成的路都出声 —— 一句"我没驻留"都没说过的 pin=true，读起来就是
+            # "页留下了"。cookie 桥不在这里改：播种是往 context 里补 jar 的那几颗，
+            # 驻留页不会重新读它们，但也不会有人因此读到错的东西；收耕照旧要跑
+            # （这一发的表单可能刚种下新的 sid，那是要带回 jar 的事实）。
+            _pin_lane = bool(pin) and not attached and len(urls) == 1
+            if pin and not _pin_lane:
+                _note_text(PIN_NOTES["transport" if attached else "bulk"])
             bridged = bool(bridge_sid) and not attached \
                 and not getattr(entry.session, "cdp_attached", False)
             if bridged:
@@ -5556,6 +5629,7 @@ class MasterFetchServer:
                     wait_selector=wait_selector, wait_selector_state=wait_selector_state,
                     proxy=proxy, solve_cloudflare=solve_cloudflare,
                     page_action=page_action, probe_out=_probe,
+                    pin=_pin_lane, pin_out=pin_out if _pin_lane else None,
                 ))
                 for url in urls
             ]
@@ -5563,6 +5637,10 @@ class MasterFetchServer:
             if bridged:
                 await self._bridge_harvest(entry.session, urls, bridge_sid)
         else:
+            if pin:
+                # 走到这一支意味着这一发没落在那台会话浏览器上（身份不符、或压根没有
+                # 命名会话）。那一页留在另一台机器上，与这一发无关。
+                _note_text(PIN_NOTES["identity"])
             from dhole_mcp.browser import StealthyBrowser
             async with StealthyBrowser(
                 proxy=proxy, locale=locale, cdp_url=cdp_url,
@@ -5733,6 +5811,9 @@ class MasterFetchServer:
         cdp_url: Optional[str] = None,
         confirm: Optional[bool] = None,
         check_login: Optional[bool] = None,
+        # 刀9-7（F9）：把这一页留在手上，下一次带 pin 的调用站在它上面做事，不重新
+        # 导航。它买回来的正是"我读到的那道题就是我答的那一道"。
+        pin: bool = False,
     ) -> ResponseModel:
         """Act on a page (click / fill / read / press / scroll / wait / submit) and read it back.
 
@@ -5747,9 +5828,17 @@ class MasterFetchServer:
         What carried over unchanged: every action leaves a receipt in
         `metadata.actions`; `submit` pauses before acting until the user approves that
         exact submission; a captcha gets at most 3 attempts and then goes back to the
-        human - and each attempt is a fresh navigation, so a challenge read on the
-        previous call usually is not the one this call would be answering. What did
-        change is that a chain can now answer its OWN page: `{"read": {"selector":
+        human - and by default each attempt is a fresh navigation, so a challenge read
+        on the previous call usually is not the one this call would be answering.
+        `pin=true` is what changes that: the page stays open on that session (released
+        after 300s, or when the host changes), and the next pinned call on the same
+        site acts on THAT page without navigating - so the token it reads is the token
+        it answers, and an image challenge becomes answerable across calls because the
+        image itself stops changing under the reader. `pin` needs `session_id=` (an
+        auto session is shared and recycled), and is refused on a batch (`urls=`) and
+        on a CDP attach (that is the user's own browser and the user's own tabs). A
+        refusal or a drop (expired / closed / different host) is said in `summary`,
+        never silent. A chain can already answer its OWN page: `{"read": {"selector":
         ..., "as": "code"}}` takes this instance's text, and a later `fill` writes
         `{=code}` into the field. That is the only shape in which a text challenge is
         solvable here; an image challenge stays a hand-off, because a capture arrives
@@ -5783,6 +5872,7 @@ class MasterFetchServer:
             max_content_chars=max_content_chars, focus=focus, timeout=timeout,
             anti_detect=anti_detect, session_id=session_id, cdp_url=cdp_url,
             confirm=confirm, check_login=check_login, cache_ttl=0, headed=headed,
+            pin=pin,
         )
 
     async def _cache_hit_response(self, *, url, extraction_type, css_selector,
@@ -5985,6 +6075,10 @@ class MasterFetchServer:
         # self.web_read(...)），所以可见性必须能从这里过；dispatch 按表外名拒掉调用方
         # 直接传 headed，那是设计，不是漏。
         headed: bool = False,
+        # 刀9-7（F9）：与 `headed` 同一先例 —— 这颗**不在 web_read 的 wire schema 上**，
+        # 公开的门只有 web_act(pin=true)。web_act 把动作链委托给 web_read 执行，所以
+        # 驻留必须能从这里过；dispatch 按表外名拒掉直接传给 web_read 的调用方。
+        pin: bool = False,
     ) -> ResponseModel:
         """Fetch a URL (or multiple URLs) with automatic anti-bot escalation.
 
@@ -6853,6 +6947,7 @@ class MasterFetchServer:
                         cookies=cookies, max_chars=mc,
                         page_action=page_action,
                         check_login=check_login,
+                        pin=pin,
                         disable_resources=not (actions_need_resources or load_everything),
                     ), url, timeout, "actions (stealthy) tier")
                 _report_action_outcomes(result, page_action)
@@ -7378,6 +7473,9 @@ class MasterFetchServer:
         check_login: bool = False,
         cdp_url: Optional[str] = None,
         disable_resources: bool = True,
+        # 刀9-7（F9）：把这一页留在手上。谁都不许静默不驻留，所以每一条形路的拒绝
+        # 在这里就说完（`PIN_NOTES` 是唯一的作者）。
+        pin: bool = False,
     ) -> ResponseModel:
         """Execute a forced fetcher tier and finalize the result."""
         dead = await _dead_explicit_proxy(proxy, url)
@@ -7504,6 +7602,25 @@ class MasterFetchServer:
             # 在专用 context 上安全（共享 auto 会话灌 cookie = 跨会话泄露），且
             # 专用 context 让登录态跨调用存活（登录流兜底路径的载体）。
             caller_sid = _SESSION_ID.get() or ""
+            # 刀9-7（F9）：驻留要有"这一次调用自己的那一页"。三条车道上没有这种东西，
+            # 所以在这里具名退回，而不是让调用方以为页留下了：
+            #   * attach —— 那是用户自己的浏览器、用户自己的标签页，dhole 不替他挂着；
+            #   * 显式代理 —— 每一发新起一台一次性浏览器，没有跨调用可留的会话；
+            #   * 匿名 auto 会话 —— 共享且会被空闲回收，把某一次调用的页留在上面等于
+            #     把它交给别人，也会在回收时不明不白地消失。
+            # 只有真的能驻留（或已经驻留）时才把 pin 交下去：一层层传一个会被忽略的
+            # True，就是让下一层替这一句拒绝负责。
+            _pin_out: Optional[dict] = None
+            _pin_asked = pin
+            if _pin_asked:
+                if cdp_url or proxy:
+                    _note_text(PIN_NOTES["transport"])
+                    _pin_asked = False
+                elif not caller_sid:
+                    _note_text(PIN_NOTES["auto"])
+                    _pin_asked = False
+                else:
+                    _pin_out = {}
             try:
                 if proxy or cdp_url:
                     ssid = None
@@ -7530,6 +7647,7 @@ class MasterFetchServer:
                 session_id=ssid,
                 page_action=page_action,
                 probe_out=_login_probe if check_login else None,
+                pin=_pin_asked, pin_out=_pin_out,
                 cdp_url=cdp_url,
             )
             if (result.error or "").startswith("cdp_"):
@@ -7538,6 +7656,15 @@ class MasterFetchServer:
                 result.escalation_path = "cdp-attach:refused"
             else:
                 result.escalation_path = "cdp-attach" if cdp_url else "direct:stealthy"
+            if _pin_out:
+                # 驻留这一发到底发生了什么，只有浏览器层知道（它才是那个摘钩子、量
+                # 时刻的人）。它交回两个词，句子在这里说 —— 事实先行、点名值、给出路，
+                # 与 `browser_busy` / "logins did not ride along" 同一族形状。
+                # 顺序是原因在前、结果在后：先听懂"那一页没了"，再看"这一发新留了一页"。
+                for _key in (_pin_out.get("dropped"), _pin_out.get("outcome")):
+                    _line = PIN_NOTES.get(_key or "")
+                    if _line:
+                        _note_text(_line)
             finalized = await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
             if check_login and _login_probe:
                 finalized.login_check = _login_probe
@@ -9908,7 +10035,7 @@ class MasterFetchServer:
             # （回执 / snapshot 先数 / submit 先问 / 验证码三次就转交）是原样搬过来的
             # —— 搬工具不许搬走规矩。
             "name": "web_act",
-            "description": "Act on one page - click / fill / press / read / scroll / wait / snapshot / submit - then read back what it became. Reading it without touching it is web_read.\n- The chain runs in order on the stealthy browser and never from cache; every action leaves a receipt in metadata.actions, and a failed one says what sat at that selector.\n- No selector? {\"snapshot\": true} first: elements come back numbered, later actions address them by index, and expect:'name' verifies the visible name so a stale index fails instead of clicking the wrong thing.\n- submit PAUSES without confirm=true (only that step; earlier actions in the chain have run): describe exactly what would go, and on the user's yes re-run the same chain. Captchas: at most 3 attempts, then hand off - and a retry is a NEW page load, so the challenge you read last call belongs to a page that is gone unless the site binds it to the session. The walls-and-2FA list lives in sys_guide(topic='behavior').\n- Credentials never go in an argument: cred_defaults stores them.\n- VISUAL ASSIST: {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} crops one element of the SAME page instance and returns it inline AFTER the chain has run - a step of this chain cannot type what it cannot yet see, so a capture is for a human to read. Text the page holds is what a step CAN answer: {\"read\": {\"selector\": \"css\", \"as\": \"code\"}} then {\"fill\": {\"selector\": \"css\", \"text\": \"{=code}\"}}. The dict form's options: sys_guide(topic='behavior').\nAction-key shapes, index addressing and the lazy-feed discipline: sys_guide(topic='behavior', section='Page interaction').",
+            "description": "Act on one page - click / fill / press / read / scroll / wait / snapshot / submit - then read back what it became. Reading it without touching it is web_read.\n- The chain runs in order on the stealthy browser and never from cache; every action leaves a receipt in metadata.actions, and a failed one says what sat at that selector.\n- No selector? {\"snapshot\": true} first: elements come back numbered, later actions address them by index, and expect:'name' verifies the visible name so a stale index fails instead of clicking the wrong thing.\n- submit PAUSES without confirm=true (only that step; earlier actions in the chain have run): describe exactly what would go, and on the user's yes re-run the same chain. Captchas: at most 3 attempts, then hand off - each call is a fresh page unless pin=true keeps it. The walls-and-2FA list lives in sys_guide(topic='behavior').\n- Credentials never go in an argument: cred_defaults stores them.\n- VISUAL ASSIST: {\"screenshot\": {\"selector\": \"css\", \"decode_qr\": true}} crops one element of the SAME page instance and returns it inline AFTER the chain has run - a step of this chain cannot type what it cannot yet see, so a capture is for a human to read. Text the page holds is what a step CAN answer: {\"read\": {\"selector\": \"css\", \"as\": \"code\"}} then {\"fill\": {\"selector\": \"css\", \"text\": \"{=code}\"}}. The dict form's options: sys_guide(topic='behavior').\nAction-key shapes, index addressing and the lazy-feed discipline: sys_guide(topic='behavior', section='Page interaction').",
             "inputSchema": {
                 "type": "object", "required": ["url", "actions"],
                 "properties": {
@@ -9924,6 +10051,7 @@ class MasterFetchServer:
                     "confirm": {"type": "boolean", "description": "A submit reads it INSIDE the action: {\"submit\": {..., \"confirm\": true}} - a top-level confirm does NOT release it. Top-level it gates the first CDP attach. Only on the user's explicit yes."},
                     "check_login": {"type": "boolean", "description": "Model-free login probe on the settled browser page; returns login_check (DOM signals + cookie NAMES, never values)."},
                     "headed": {"type": "boolean", "description": "Run this chain in a VISIBLE window so the user can watch and step in (log in by hand, one CAPTCHA). Default hidden. A hidden browser already up on that profile is neither taken over nor closed - refused (browser_busy). Consequences: sys_guide(topic='config', section='Variables by scenario')."},
+                    "pin": {"type": "boolean", "description": "Keep this page for the next call with pin=true on that session: it acts on THIS page, no re-navigation, so the captcha you just read is the one you answer. Needs session_id=."},
                 },
             },
             # 它会动页面，所以不是只读；同一串动作再跑一遍不保证同一个答案。
