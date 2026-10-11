@@ -19,6 +19,13 @@ primp 只补字典里没有的名字。所以本文件没有"技术上做不到"
   就由 dhole 自己的基线 UA 定了）
 * `if-*` 校验子 → 公开的那扇门只有 `extraction_type='check'`（浏览器层带不动校验子）
 
+验收刀9-1 之后，上面那句"往站点发 15 颗头"只对**公网**成立：靶站是回环，而回环/内网
+目标现在收不到 dhole 合成的那一份（一枚编造的 google `referer` 落进用户自己的服务日志
+不是反爬，是污染）。所以本文件留下的两条"默认档仍发模板"的对照搬到了能判公网的位置上
+（`_build_headers()` 与替身层的 `stealthy_headers`），回环那一侧的新语义在
+`test_a_private_target_gets_no_invented_referrer.py`。"你点名的每一颗都到线上"这一半
+不受影响 —— 摘的是 dhole 合成的，从来不是你点的。
+
 真 socket 组测的是**抵达**（不发一封就谈不上赢）；替身组测形状、指纹、批量与两处
 描述。摘掉修复的对照写在提交信息里。
 """
@@ -186,24 +193,36 @@ def test_a_named_header_wins_over_dholes_own_synthesized_value(site):
     assert rec.page_headers()["sec-fetch-site"] == "same-origin", rec.page_headers()
 
 
-def test_the_template_still_rides_when_you_only_add_to_it(site):
-    """`headers=` 是**加**，不是**换**：默认那一档仍发 dhole 自己的模板。
+def test_the_template_still_rides_when_you_only_add_to_it(site, monkeypatch):
+    """`headers=` 是**加**，不是**换**：默认那一档的模板仍在你那份之下垫着。
 
-    这句话有两个读者。一个是以为"点了头就等于我控制这一发"的人 —— 编造的 google
-    referer 照样出去，它是过墙的承重件，删它会开始失败；另一个是以为 `off` 档
+    这句话有两个读者。一个是以为"点了头就等于我控制这一发"的人 —— 公网目标照样收到
+    dhole 自己的模板，它是过墙的承重件，删它会开始失败；另一个是以为 `off` 档
     什么都没关的人 —— 下面两条测的就是它。
+
+    靶站是回环，而回环从验收刀9-1 起**不再**收到那枚编造的来路（那一句由
+    `test_a_private_target_is_sent_your_headers_only.py` 测）。所以这一条测"加不是换"
+    的**公网**那一半用替身层量（模板在不在，看交给 HTTP 层的 `stealthy_headers`），
+    真 socket 这一半只测点名的那几颗到不到 —— 那正是这条命令原本要回答的问题。
     """
     url, rec = site
     _call("web_read", {"url": url, "force_fetcher": "http", "cache_ttl": 0,
                        "ignore_robots": True, "headers": {"x-dhole-probe": "1"}})
-    assert rec.page_headers()["referer"] == "https://www.google.com/", rec.page_headers()
+    assert rec.page_headers()["x-dhole-probe"] == "1", rec.page_headers()
+
+    calls = _stub_tiers(monkeypatch)
+    out = _call("web_read", {"url": URL, "force_fetcher": "http", "cache_ttl": 0,
+                             "headers": {"x-dhole-probe": "1"}})
+    assert calls[0]["stealthy_headers"] is True, calls[0]
+    assert calls[0]["headers"] == {"x-dhole-probe": "1"}, calls[0]
+    assert "wins key by key over dhole" in (out.get("summary") or ""), out.get("summary")
 
     url2, rec2 = site
     _call("web_read", {"url": url2, "force_fetcher": "http", "cache_ttl": 0,
                        "ignore_robots": True})
     synthesized = rec2.page_headers()
-    assert synthesized["referer"] == "https://www.google.com/", synthesized
-    assert "user-agent" in synthesized, sorted(synthesized)
+    assert "referer" not in synthesized, (
+        f"回环目标还收到编造的来路（验收刀9-1 之后不该有）: {synthesized}")
 
 
 def test_the_off_rung_sends_no_dhole_synthesized_header(site):
@@ -258,19 +277,28 @@ def test_the_auto_path_sends_no_invented_referrer_when_the_rung_is_off(site):
     assert got["x-dhole-probe"] == "auto", got
 
 
-def test_the_default_rung_still_synthesizes_the_template(site):
-    """零回归的那一半：`auto`（默认）这一档发出去的字节与改动前同一个形状。
+def test_the_default_rung_still_synthesizes_the_template():
+    """零回归的那一半：`auto`（默认）那一发仍然把 dhole 自己的模板垫在你那份之下。
 
-    编造的 google `referer` 是过墙的承重件，它**留着** —— 这一条不是为它辩护，
+    编造的 google `referer` 是过墙的承重件，它在公网上**留着** —— 这一条不是为它辩护，
     是把"默认没动"钉住，防止下一次有人把它当漏掉的分支删了。
+
+    量的是 `_build_headers()` 这一层（先例：`test_a_machine_without_browserforge_builds_
+    what_it_always_built` 也直接读它）。真 socket 那半边量不了了：靶站是回环，而回环从
+    验收刀9-1 起由 dhole 自己把模板摘掉（那一句在
+    `test_a_private_target_gets_no_invented_referrer.py` 里测）。这里也不许断言"线上没有
+    user-agent"：primp 自己那份 Chrome 画像照样在发，摘掉的只是 dhole 合成的那一份。
     """
-    url, rec = site
-    _call("web_read", {"url": url, "force_fetcher": "http", "cache_ttl": 0,
-                       "ignore_robots": True})
-    got = rec.page_headers()
-    assert got["referer"] == "https://www.google.com/", got
-    assert got["user-agent"].startswith("Mozilla/5.0"), got
-    assert len([k for k in got if k != "host"]) >= 12, sorted(got)
+    from dhole_mcp.fetcher import HTTPSession
+
+    assert HTTPSession(stealthy_headers=True)._build_headers()["referer"] == \
+        "https://www.google.com/"
+    merged = HTTPSession(stealthy_headers=True)._build_headers({"x-dhole-probe": "1"})
+    assert merged["x-dhole-probe"] == "1", merged
+    assert merged["referer"] == "https://www.google.com/", merged
+    # 模板被摘掉的那一发（`off` 档与回环共用这一位）只剩你点名的那几颗。
+    assert HTTPSession(stealthy_headers=False)._build_headers({"x-dhole-probe": "1"}) \
+        == {"x-dhole-probe": "1"}
 
 
 def test_the_browser_tier_is_given_the_named_headers(monkeypatch):

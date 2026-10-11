@@ -223,6 +223,7 @@ from dhole_mcp.models import (
 # 17.0 B6 第六刀：内容质量判定与 agent 提示搬进 quality.py。
 # 列在这里的名字有两个来源：server 自己抓取层要用的，以及 tests 按
 # `dhole_mcp.server.<名字>` 读的（21 个测试文件走的是这扇门，不去改它们）。
+from dhole_mcp.focus import snap_to_boundary  # 分块与摘要标签共用那颗边界规则（作者是 focus）
 from dhole_mcp.quality import (  # noqa: F401
     _ARCHIVE_FALLBACK_STATUSES,
     _BACKSTOP_GRACE_S,
@@ -278,6 +279,7 @@ from dhole_mcp.params import (  # noqa: F401
     _ARG_DEFAULTS,
     _ARG_TYPES,
     _BOOL_LITERALS,
+    _ENUM_ARGS,
     _FORCE_FETCHER_VALUES,
     _URLS_SINGLE_HINT,
     _arg_defaults,
@@ -309,6 +311,7 @@ from dhole_mcp.context import (
     _FOCUS_ENGINE,
     _FOCUS_MODE,
     _FOCUS_OUTCOME,
+    _HEADERS_OFF_BY,
     _IDENTITY_APPLIED,
     _INCLUDE_LINKS,
     _INCLUDE_MEDIA,
@@ -320,6 +323,7 @@ from dhole_mcp.context import (
     _ROBOTS_MODE,
     _SESSION_ID,
     _SESSION_ID_RE,
+    _TOOL,
     _arg_notes_scope,
     _cache_ttl_note,
     _note_text,
@@ -327,7 +331,9 @@ from dhole_mcp.context import (
     call_deadline,
     out_of_band_confirm,
     report_progress,
+    report_stage,
     set_mcp_session,
+    tool_scope,
     MAX_REQUEST_BODY_BYTES,
     _cache_context,
     _neural_focus_requested,
@@ -1175,6 +1181,30 @@ async def _wait_for_the_sibling_fetch(flight: _InFlight, timeout_ms) -> float:
     return now() - started
 
 
+def _pagination_basis(focus_q: Optional[str], page_chars: int, kept_chars: int) -> dict:
+    """分页那三个数描述的是**哪一路**文字 —— 一句话，一处作者。
+
+    存在的理由是一条量过的事实：同一个 URL、同一页正文，`total_extracted_chars` 随 focus
+    词交出过六个不同的值（30994 / 12819 / 19843 / 45312 / 9829 / 2396）。那不是随机数 ——
+    分页算的是 focus 过滤**之后**那一路的长度，而这件事今天只在"删掉了结构化块"时才出口，
+    于是 `[No more content.]` 骗过两次：换一个 focus 词，第 3 页可以是最后一页，也可以是
+    中间一页，而两种情况的修法相反（前者该停，后者该回到 offset=0 重翻）。
+
+    focus 没上、或上了而一个字没删时回空 dict：那时这一路就是全文，一句"这些数描述全文"
+    与它的缺席说的是同一件事，而绝大多数调用是这一种（默认值也会被压实机制删掉）。
+    """
+    if not focus_q or kept_chars == page_chars:
+        return {}
+    return {
+        "pagination_stream": "focused",
+        "page_total_chars": page_chars,
+        "pagination_basis": (
+            f"pagination counts the focus-filtered text: {kept_chars:,} of "
+            f"{page_chars:,} chars this page holds. Change focus= and these offsets "
+            f"move - re-read from offset=0 (or drop focus=) for the whole page"),
+    }
+
+
 def _stamp_focus_continuation(result: ResponseModel, focus_q: Optional[str], offset: int) -> ResponseModel:
     """The focus header lives inside the paginated text, so an offset>0 window
     starts past it: the readback then LOOKS unfocused even though focus ran
@@ -1199,6 +1229,9 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
     content_ok, next_action, fetched_at) on every returned result.
     """
     full_text = "\n".join(result.content)
+    # focus 会就地改写 `full_text`，所以"这一页原本多长"必须在这里取住 —— 分页基准
+    # 那句话的两个加数之一（见 `_pagination_basis`）。
+    page_chars = len(full_text)
     # 注入扫描在 focus/截断之前做（对 full_text 整页）：models.py 对
     # untrusted_content 的承诺是"页"级，被 focus 丢弃或落在返回窗口外的正文
     # 也要被扫到。命中挂在 result 上，model_copy 原样带走；_with_agent_hints
@@ -1247,7 +1280,17 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
         except Exception as e:
             focus_stats = None
             logger.debug("focus filter failed: %s", e)
+    # 3.6 · 块的账。正文头部那句 "showing 3 of 17 blocks" 会被分页切走（第 2 片起
+    # 就没了），而 3.5 之后一页能分出的块比空行规则给的多出一个量级 —— "少掉的是
+    # 正文还是版面"必须有一处读者每次都看得见的数。没跑 focus 的一发不带这两个字段。
+    block_ledger: dict = {}
+    if focus_stats is not None:
+        block_ledger = {
+            "focus_blocks_total": int(focus_stats.get("blocks_total") or 0),
+            "focus_blocks_kept": int(focus_stats.get("blocks_kept") or 0),
+        }
     total_len = len(full_text)
+    pagination = _pagination_basis(focus_q, page_chars, total_len)
 
     if offset >= total_len:
         # Two different situations reach this branch. Pagination exhausted on a
@@ -1266,6 +1309,8 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
             "total_extracted_chars": total_len,
             "is_truncated": False,
             "next_offset": 0,
+            **pagination,
+            **block_ledger,
         })), focus_q, focus_stats), focus_q, offset)
 
     chunk = full_text[offset:offset + max_chars]
@@ -1276,13 +1321,31 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
     # Avoids wasteful round-trip where agent calls again for 55 chars.
     truncated = False
     next_off = 0
+    snapped_back = 0
     if remaining > MIN_CHUNK_CHARS:
+        # 切口不许落在词中间：这一窗退回到最近的句末 / 子句末 / 词末，退回去的那几个字
+        # **不是丢了** —— 它们随 next_offset 出现在下一页（所以只在"还有下一页"的这一支
+        # 里吸附；最后一片一个字都不退）。吸附的排序与摘要标签共用一颗函数，见
+        # `focus.snap_to_boundary`。
+        keep = snap_to_boundary(chunk)
+        snapped_back = chunk_len - keep
+        chunk_len = keep
+        chunk = chunk[:keep]
+        remaining = total_len - offset - chunk_len
         truncated = True
         next_off = offset + chunk_len
         remaining_hint = total_len - next_off
+        # 被 focus 切过的话，这一句里的"of N extracted chars"就不是整页那个 N ——
+        # 括号里补的是同一页未过滤的长度，两个数各说各的事，读者不必猜哪一个在动。
+        of_whom = (f" of {total_len:,} extracted chars (this page holds "
+                   f"{page_chars:,} before focus)" if pagination
+                   else f" of {total_len:,} extracted chars")
+        snap_note = (f" ({snapped_back:,} chars moved to the next window so this one "
+                     f"ends at a clause, not mid-word)" if snapped_back else "")
         chunk += (
-            f"\n\n[Truncated: showing {chunk_len:,} of {total_len:,} extracted chars. "
+            f"\n\n[Truncated: showing {chunk_len:,}{of_whom}. "
             f"{remaining_hint:,} chars remaining. Next offset: {next_off}]"
+            f"{snap_note}"
         )
     elif remaining > 0:
         # Remaining is small — include it all, no truncation flag
@@ -1296,6 +1359,9 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
         "total_extracted_chars": total_len,
         "is_truncated": truncated,
         "next_offset": next_off,
+        "chars_snapped_back": snapped_back,
+        **pagination,
+        **block_ledger,
     })), focus_q, focus_stats), focus_q, offset)
 
 
@@ -1849,6 +1915,7 @@ def _smart_fetch_request_context(func):
                 {**options, "extra_headers": _caller_hdr,
                  "_revalidate": _REVALIDATE.get(), **_identity_bits}))),
             (_ROBOTS_MODE, _ROBOTS_MODE.set("")),
+            (_HEADERS_OFF_BY, _HEADERS_OFF_BY.set("")),
             (_ARG_NOTES, _ARG_NOTES.set(notes)),
         ]
         _ap = identity.get("allow_private")
@@ -2438,28 +2505,50 @@ def _translate_response_body(
         content_type=raw_ct, total_size_bytes=total_size, metadata=page_metadata,
         media=page_media, links=page_links, page_type=_page_type,
         extracted_type=_etype,
-    ), page_html)
+    ), page_html, page.url)
 
 
-#: 算整页可见文本要把 HTML 再解析一遍，所以只在**抽得薄**的那一支算。这条上限就是
-#: "薄"的定义：远高于 `quality._JS_SHELL_MIN_TEXT_CHARS`（200，壳页判据），低到
-#: 让正常的正文页一律跳过这次解析。
-_THIN_EXTRACTION_PROBE_MAX_CHARS = 2_000
+#: 值不值得再看一眼"内容区长什么样"的窗口。长正文由定义就是有实质，不必为它多付一次
+#: 解析；薄正文才需要，而薄的那一段正是当年两处假阳性住的地方：666 字与 833 字的纯导航
+#: 既过得了 `quality._JS_SHELL_MIN_TEXT_CHARS`（200 字）那道壳闸，也够不着混淆闸的
+#: `len < 1000` 早退 —— 两道闸中间这一段没人管，substance 就是来管这一段的。
+_SUBSTANCE_PROBE_MAX_CHARS = 2_000
 
 
-def _attach_dom_visible_chars(result: ResponseModel, page_html: str) -> ResponseModel:
-    """把"这一页自己有多少字"记在信封的私有一面（批次 2 的壳页/塌陷分岔用）。
+def _attach_dom_visible_chars(result: ResponseModel, page_html: str,
+                              page_url: str = "") -> ResponseModel:
+    """把"这一页自己有多少字"与"内容区长什么样"记在信封上（3.3 上线，3.4 用来判实质）。
 
     放在 HTML 还在手边的这里，而不是让 `quality` 去猜：抽取器给出 196 个字符的时候，
     "站点给的是空壳"与"抽取器没读懂这页"在响应面上**一模一样**，而只有 DOM 能分开它们。
+
+    期 3.3 起整页可见字数**每个 HTML 响应都量**并直接上线（`visible_text_chars`）——
+    从前只在抽得薄的那一支量，所以一份 3,000 字的塌陷页连对照数都没有。内容区的形状
+    （标签占比 / 最长非标签串 / 内容区自身字数）是 3.4 那颗判决的输入，仍留在私有面：
+    判决自己会带着背后的数上线（`substance_basis`），再发一遍原始数就是四个字段说同一件事。
     """
     try:
-        if not page_html or sum(len(c) for c in result.content) >= _THIN_EXTRACTION_PROBE_MAX_CHARS:
+        if not page_html:
             return result
-        from dhole_mcp.envelope import _paywall_evidence
-        result._dom_visible_chars = len(_paywall_evidence(page_html)[0])
+        from dhole_mcp.envelope import page_content_shape, visible_text_chars
+        from dhole_mcp.extractor import is_markup_response
+        if not is_markup_response(result.content_type):
+            return result
+        result.visible_text_chars = visible_text_chars(page_html)
+        if sum(len(c) for c in result.content) >= _SUBSTANCE_PROBE_MAX_CHARS:
+            return result
+        try:
+            host = urlparse(page_url or "").netloc.lower()
+        except Exception:
+            host = ""
+        if ":" in host:
+            host = host.split(":", 1)[0]
+        share, run, area = page_content_shape(page_html, host)
+        result._dom_label_share = share
+        result._dom_main_run = run
+        result._dom_content_area = area
     except Exception as exc:  # noqa: BLE001 - 一个判据的输入不许弄坏一次抓取
-        logger.debug("dom visible chars not measured: %r", exc)
+        logger.debug("dom shape not measured: %r", exc)
     return result
 
 
@@ -2561,6 +2650,13 @@ async def ensure_chromium_async(real_chrome: bool = False):
     credit = _budget_credit.get()
     loop = asyncio.get_running_loop()
     started = loop.time()
+    if not _browser.chromium_status(real_chrome)["present"]:
+        # 2.2 · 首用那一次是分钟级的下载，而这条路上今天一句都不发。这里不提"还剩多少"：
+        # 装完之后这一步还剩多少由调用方那条 deadline 说，此刻报剩余等于替它撒一次谎
+        # （`_apply_install_shift` 才是把这段时间还给预算的那一步，见下面）。
+        await report_stage("preparing the JS tier: no browser binary installed yet - "
+                           "downloading it now (first use, ~193MB, can take minutes)",
+                           show_left=False)
     if credit is not None:
         credit.begin_install(_browser.INSTALL_TIMEOUT_S)
     try:
@@ -2944,8 +3040,34 @@ _CONDITIONAL_HEADER_NAMES = ("if-match", "if-none-match", "if-modified-since",
                              "if-unmodified-since", "if-range")
 
 
+def _knob_here(param: str, value: Optional[str] = None) -> bool:
+    """这一次调用的那扇门，收不收这颗参数（带了 `value` 就连取值一起问）。
+
+    存在它的理由是一条被实测付过的账（15 场景体测，场景 9）：一次
+    `web_request(headers={'User-Agent': …})` 的拒绝在 `next_action` 里教人传
+    `anti_detect='off'`，而那一颗参数在这扇门上根本不存在 —— 照着做的那一发 0 秒弹回
+    `Unsupported argument(s) for web_request`。建议不许点名一颗调用方传不进来的参数。
+
+    两张名单都不是这里的作者：参数面是 `_TOP_LEVEL_ARGS`（dispatch 逐颗工具读的那份），
+    取值面是 `params._ENUM_ARGS`（`_coerce_arg_types` 当场按它拒）。这里只把它们接到
+    `_TOOL` 那颗按次的名字上 —— 所以加一扇工具门、或给一扇门加一颗参数，不必改这里。
+    """
+    tool = _TOOL.get() or "web_read"
+    if param not in _TOP_LEVEL_ARGS.get(tool, ()):
+        return False
+    if value is not None:
+        allowed = _ENUM_ARGS.get(tool, {}).get(param)
+        if allowed is not None and value not in allowed:
+            return False
+    return True
+
+
 def _header_door(low: str) -> Optional[tuple[str, str]]:
-    """这颗头名撞在哪一条设计边界上：`(说清为什么, 唯一的那条出路)`，没有则 None。"""
+    """这颗头名撞在哪一条设计边界上：`(说清为什么, 唯一的那条出路)`，没有则 None。
+
+    每一条的"为什么"是同一件事，不分工具；每一条的"出路"必须按这一扇门上真的能传什么
+    生成（`_knob_here`），否则这句话把人送去一次 0 秒的参数拒绝。
+    """
     if low in _CREDENTIAL_HEADER_NAMES:
         return (
             f"headers= names {low!r}, and a credential is not something a call carries: "
@@ -2956,24 +3078,43 @@ def _header_door(low: str) -> Optional[tuple[str, str]]:
             "The call to that host then sends it and identity_applied names what it ran "
             "on. Nothing was fetched.")
     if low == "user-agent":
-        return (
-            "headers= names 'user-agent', and the UA is not free to pick here: the HTTP "
-            "tier chooses its TLS impersonation OS from dhole's own generated UA *before* "
-            "your dict is merged, so a UA you name goes out with another browser's "
-            "handshake under it",
-            "Two doors that stay self-consistent: anti_detect='off' stops dhole "
-            "synthesizing a UA at all (measured: primp's own UA and TLS profile then "
-            "travel together, and no google referer goes out), or cdp_url= runs in the "
-            "user's real Chrome. Nothing was fetched.")
+        fact = ("headers= names 'user-agent', and the UA is not free to pick here: the "
+                "HTTP tier chooses its TLS impersonation OS from dhole's own generated "
+                "UA *before* your dict is merged, so a UA you name goes out with another "
+                "browser's handshake under it")
+        if _knob_here("anti_detect") and _knob_here("cdp_url"):
+            return fact, (
+                "Two doors that stay self-consistent: anti_detect='off' stops dhole "
+                "synthesizing a UA at all (measured: primp's own UA and TLS profile "
+                "then travel together, and no google referer goes out), or cdp_url= "
+                "runs in the user's real Chrome. Nothing was fetched.")
+        # 写的那一扇门：a write never renders，所以这上没有 anti_detect= 也没有 cdp_url=
+        # —— `web_request` 自己的描述就是这么说的。剩下的两条都当场能做：删掉那一颗头
+        # （请求照样发出，用 dhole 成套的那份 UA + TLS），或把档位存进 cred_defaults ——
+        # 那是这一扇门唯一够得着档位的地址。
+        return fact, (
+            "Nothing on this call moves the UA: this tool takes no anti_detect= and no "
+            "cdp_url= (a write never renders). Two things still work - drop the "
+            "user-agent key and the request goes out on dhole's matched UA + TLS pair, "
+            "or cred_defaults set={anti_detect: 'off'} puts that rung on the store this "
+            "call reads. Nothing was sent.")
     if low in _CONDITIONAL_HEADER_NAMES:
-        return (
-            f"headers= names {low!r}, and conditional requests are dhole's own business: "
-            "one public parameter asks the origin 'did this change', and an ordinary call "
-            "never sends a validator - while the browser tier cannot carry one (it renders "
-            "an empty view and reports status 0)",
-            "extraction_type='check' is that one door (it returns the changed / unchanged "
-            "receipt, not the page). For everything else dhole revalidates on its own "
-            "terms. Nothing was fetched.")
+        fact = (f"headers= names {low!r}, and conditional requests are dhole's own "
+                "business: one public parameter asks the origin 'did this change', and "
+                "an ordinary call never sends a validator - while the browser tier "
+                "cannot carry one (it renders an empty view and reports status 0)")
+        if _knob_here("extraction_type", "check"):
+            return fact, (
+                "extraction_type='check' is that one door (it returns the changed / "
+                "unchanged receipt, not the page). For everything else dhole revalidates "
+                "on its own terms. Nothing was fetched.")
+        # 同一颗参数名、这一个取值不在这扇门上（`params._ENUM_ARGS` 就是它拒的那份名单）。
+        # 这里不许把"另一扇门的合法值"写成"这一扇门的出路" —— 那是场景 9 的形状换了一颗
+        # 取值：照着传 `extraction_type='check'` 到的是一句 enum 拒绝，不是收据。
+        return fact, (
+            "Drop that validator - this call does not revalidate, and this tool does not "
+            "take extraction_type='check' (that changed-since-last receipt is web_read's). "
+            "Nothing was sent.")
     return None
 
 
@@ -3013,17 +3154,59 @@ def _headers_note(caller: Optional[Dict[str, str]], synthesized: bool) -> str:
     An empty string means "the rung already says this": with `anti_detect='off'` the
     HTTP-tier note names the dropped synthesis itself, and saying it twice in one
     `summary` is noise that reads like emphasis.
+
+    两版话按 `_knob_here` 分岔：`anti_detect=` 是 `web_read` / `web_act` 的参数，而
+    `web_request` 收不下它（场景 9 实测：一次写在 0 秒里被送回一句它自己传不出来的
+    出路）。这一颗是常驻的 `summary` 说话位，所以"这一扇门上够不着"要跟着一起改口。
     """
     if not caller:
-        return ("headers={} names no header: nothing about the request changed - to "
-                "send no dhole-synthesized headers at all the dial is anti_detect='off'")
+        if _knob_here("anti_detect"):
+            return ("headers={} names no header: nothing about the request changed - to "
+                    "send no dhole-synthesized headers at all the dial is anti_detect='off'")
+        return ("headers={} names no header: nothing about the request changed, and this "
+                "call has no anti_detect= to switch the synthesized set off with - that "
+                "rung lives in cred_defaults here")
     if not synthesized:
+        # 合成头这一位现在有两个能把它扳下来的人（档位 `off`，与"打的是你自己的服务"
+        # 那一发自动脱伪装）。`_headers_off_note` 只由扳下它的那一层说一次；这句话再
+        # 跟着点头脑一遍，同一个 `summary` 里就出现两个作者写同一件事。
         return ""
     # 说机制不说"这一发"：同一条路也走缓存命中，而那一发根本没有包可发，一句
     # "你的头正骑在模板之上"就成了一句关于没发生过的事的断言。
-    return ("headers= wins key by key over dhole's own browser template (that template "
-            "is what adds a google referer and a generated UA) - anti_detect='off' is "
-            "the rung that sends yours alone")
+    if _knob_here("anti_detect"):
+        return ("headers= wins key by key over dhole's own browser template (that "
+                "template is what adds a google referer and a generated UA) - "
+                "anti_detect='off' is the rung that sends yours alone, and a "
+                "loopback/private target drops it on its own")
+    return ("headers= wins key by key over dhole's own browser template (that "
+            "template is what adds a google referer and a generated UA) - this call "
+            "has no anti_detect= to drop it with, so the rung that does is in "
+            "cred_defaults; a loopback/private target drops it here on its own")
+
+
+def _headers_off_note() -> str:
+    """The ONE wording for "this request carried no dhole-synthesized browser
+    headers" — said by the tier that actually withheld them, because that is the
+    only layer that knows whether a packet went out at all (a cache replay reads
+    the same flag and sends nothing).
+
+    Two hands can lower `stealthy_headers` and they must not be described by the
+    same sentence. `anti_detect='off'` is a rung the caller chose. The private
+    target is not: dhole used to ship a fabricated google referer and a
+    browserforge UA to `127.0.0.1` like everywhere else, and the report's user
+    found his own service log full of headers he never sent — for a local API
+    call those headers are pollution, not protection.
+    """
+    if _HEADERS_OFF_BY.get() == "private":
+        # 同一件事，两个扳法两句原因：把 `anti_detect='off'` 写在回环那一发上，等于让
+        # 调用方去找一把他根本没碰、而且这扇门上（`web_request`）也够不着的开关。
+        return ("the target is loopback/private, so dhole dropped its own synthesized "
+                "header template - no fabricated google referer, no generated UA. "
+                "What went out is what you named plus the client's own Chrome profile")
+    return ("anti_detect='off': the HTTP tier sent no dhole-synthesized "
+            "headers - no fabricated google referer, no generated UA. "
+            "What went out is what you named plus the client's own "
+            "Chrome profile")
 
 
 #: 三种形状的**唯一作者**。一份回执原先把它说两遍（raise 的原文一份，调用方自己
@@ -3587,6 +3770,24 @@ _ACTION_REFUSAL_WAY_OUT = (
     "key and what each one takes.")
 
 
+def _min_visual_call_ms() -> int:
+    """一次带 `screenshot` 的调用最少要多少墙钟才可能交得出去（2.5）。
+
+    三个加数**各有别的属主**，这里只做加法：起进程（`browser.BROWSER_LAUNCH_TYPICAL_MS`，
+    本机实测 3–5 秒）、导航之后那一等网络安静（`browser.SETTLE_IDLE_MS`，只在页面还没
+    渲染时花满），以及捕获这一步自己的等待（`actions.STEP_WAIT_MS`）。相加而不是各抄一份
+    字面量 —— 帽改了这句话要跟着改，而没人会记得改一句人话里的数。
+
+    为什么要在**开始之前**拒：全资源加载一旦跑起来，这笔预算一定花光在它身上，交回来的是
+    "什么都没抽到"而不是"这一步装不下"。实测过的那一次（体验模拟场景 10，靶站 `/captcha`）
+    是 `timeout=60000` → 61,529ms → 0 字节，而 8 步链跑了 6 步与一步没跑在字节上不可区分
+    —— 那一半由期 1.2 补上了行，这一半（根本不该开始）由这里管。
+    """
+    from dhole_mcp import browser as _browser
+    from dhole_mcp.actions import STEP_WAIT_MS
+    return (_browser.BROWSER_LAUNCH_TYPICAL_MS + _browser.SETTLE_IDLE_MS + STEP_WAIT_MS)
+
+
 def _envelope_url(args: dict | None) -> str:
     """一颗拒绝里要写的那颗 url —— 只在它真是文本时写。
 
@@ -4014,6 +4215,27 @@ class _ParseErrorAnsweringReadStream:
 
 
 # ─── Main server class ─────────────────────────────────────────────
+
+
+def _named_call(func):
+    """把"这次调用叫什么名字"按 `_dispatch` 收到的那颗名字交给下游，出去就摘掉。
+
+    读者目前是 `_knob_here` 一颗，而它问的是"一句建议点名的参数，是不是调用方命名的那
+    一扇门收得下的东西"（场景 9 实测：`web_request` 被教去传 `anti_detect='off'`，0 秒
+    弹回 `Unsupported argument(s)`）。
+
+    挂在 `_dispatch` 而不是 `call_tool` 上，是因为前者才是三条入口的共用漏斗（MCP 的
+    `call_tool`、`updater` 的真握手、eval 的 CLI）—— 一处写，三条入口都读到；挂在各颗
+    工具方法上就要每颗各写一次，而"名字"的作者只能是收到名字的那一步。按次显式摘的
+    规矩同 `call_deadline`：`_TOOL` 留着，下一次直调 `web_read` 的 eval 就会读到上上
+    次那扇门的名字。
+    """
+    @wraps(func)
+    async def wrapped(self, name, args):
+        with tool_scope(name):
+            return await func(self, name, args)
+    return wrapped
+
 
 class MasterFetchServer:
     """Enhanced MCP server built on Scrapling with smart routing, caching, and Trafilatura."""
@@ -4526,6 +4748,17 @@ class MasterFetchServer:
                     # without being stored, so a cached PDF came back with
                     # content_ok=false next to a non-empty content array (问题-3).
                     "content_ok": result.content_ok,
+                    # 期3.3/3.4 的三颗读数必须跟着进缓存，否则回放是第二个作者：
+                    # `_agent_hints` 每次都会从 status/content **重算** `content_ok`，而
+                    # 3.4 那颗闸读的是 `substance`。缓存里没有这一颗（= `""`，"没判过"）时
+                    # 重算就失去判据，于是一张 live 判为 `nav_only`、`content_ok=false`
+                    # 的页面，第二次读同一颗 URL 拿回的是 `content_ok=true` —— 同一颗 URL
+                    # 两个答案，正是这一族最贵的那种错（实测：靶站 /shell，live 6 个可见字
+                    # → false，回放 → true 且三颗读数全默认）。存的是**那一刻量到的数**，
+                    # 与 `fetched_at` 同一口径：回放可以说它是旧的，不许说它没这回事。
+                    "substance": result.substance,
+                    "substance_basis": result.substance_basis,
+                    "visible_text_chars": result.visible_text_chars,
                     "table_of_contents": result.table_of_contents,
                     "page_type": result.page_type,
                     "source": result.source,
@@ -5582,6 +5815,14 @@ class MasterFetchServer:
             # Entries written before this key existed default to False,
             # which is the old behaviour and self-heals on the next write.
             content_ok=bool(env.get("content_ok", False)),
+            # 与上面那颗同一次判定留下的三颗读数（作者仍是 `quality.body_substance`，
+            # 这里只是搬运）。缺了它们，`_agent_hints` 从 status/content 重算 `content_ok`
+            # 时看不见 3.4 那把闸，一次 `nav_only` 的回放就会绿。旧行（写入时还没有这三颗）
+            # 取到空串 = "这一份没被判过"，而 `content_ok` 此时照旧取存量、不重翻 —— 诚实的
+            # 无知，而不是凭缺席编造的绿灯。
+            substance=env.get("substance", "") or "",
+            substance_basis=env.get("substance_basis", "") or "",
+            visible_text_chars=int(env.get("visible_text_chars", 0) or 0),
             table_of_contents=env.get("table_of_contents", []) or [],
             page_type=env.get("page_type", "unknown") or "unknown",
             source=env.get("source", "live") or "live",
@@ -5927,6 +6168,18 @@ class MasterFetchServer:
         # `test_auto_is_bit_for_bit_the_pre_refactor_default` 钉着），而"我只发我点名的头"
         # 这句话第一次有了落点。
         stealthy_headers = _hardening["stealthy_headers"]
+        if stealthy_headers and url and self._target_is_private(url):
+            # 伪装头是为"过一道不认识你的墙"存在的：一枚编造的 google `referer`、一套
+            # browserforge 生成的 UA/`sec-ch-ua*`。打回环或内网时没有那道墙 —— 它们只
+            # 落进你自己的服务日志（2026-10-11 全真模拟 S9 量到：一次本地 echo 的调用
+            # 在用户的日志里留下 15 颗他从未点名的头），而 `web_request` 收不下
+            # `anti_detect=`，调用方手里没有关的把手。摘掉的是 dhole 合成那一份，你点名
+            # 的每一颗照旧到线上（`test_a_header_you_named_is_a_header_the_site_receives`）。
+            # 公网那一条逐位不变：`test_auto_is_bit_for_bit_the_pre_refactor_default`。
+            stealthy_headers = False
+            _HEADERS_OFF_BY.set("private")
+        elif not stealthy_headers:
+            _HEADERS_OFF_BY.set("off")
         if headers is not None:
             # 说在合流之前：再往下 `extra_headers` 还要并上凭据头与校验子，那时"你点名的
             # 那一份"就分不出来了。落点是 `summary` —— 每一颗钳与每一次悄悄的改变都只
@@ -6287,6 +6540,23 @@ class MasterFetchServer:
             # broken-image placeholder (decode_qr then answers [] while the action
             # reports ok). Everything else keeps the shortcut.
             actions_need_resources = actions_want_visual(actions)
+            if actions_need_resources and timeout is not None:
+                floor = _min_visual_call_ms()
+                if int(timeout) < floor:
+                    # 2.5 · 装不下就在**开始之前**点名拒绝，而不是把它吃掉：一旦浏览器
+                    # 起来、整页资源开始加载，这笔预算必然花光在那上面，回来的是 0 字节
+                    # 加一句关于站点的错话。拒绝这一支一个请求都没发。
+                    raise ArgumentRefusal(
+                        f"a screenshot needs the page's real resources (images, stylesheets, "
+                        f"fonts), and {int(timeout)}ms cannot hold one: a browser start, the "
+                        f"navigation with its idle wait, and the capture itself need about "
+                        f"{floor}ms together",
+                        next_action=(
+                            f"Nothing was fetched and no browser was started. Two doors: "
+                            f"raise timeout= to at least {floor}, or drop the "
+                            f"{{\"screenshot\": ...}} step - it is the only action whose "
+                            f"product is the rendered page, so the rest of the chain runs "
+                            f"under the resource shortcut."))
 
         # CDP attach（G33）拥有最高路由优先级：显式 cdp_url = 调用方要的是
         # "用户已认证视角下的这个页面"。HTTP 层给不了这个视角，公开缓存（匿名
@@ -7090,11 +7360,9 @@ class MasterFetchServer:
             if not stealthy_headers:
                 # `off` 这一档从前在 HTTP 层什么都不关（那两位是字面量）。现在它关了，
                 # 所以这句话必须跟着走：调用方看见的是"少了一整套头"，而少的那几颗里
-                # 有一枚是过墙的承重件 —— 墙开始失败时，这句是唯一的线索。
-                _note_text("anti_detect='off': the HTTP tier sent no dhole-synthesized "
-                           "headers - no fabricated google referer, no generated UA. "
-                           "What went out is what you named plus the client's own "
-                           "Chrome profile")
+                # 有一枚是过墙的承重件 —— 墙开始失败时，这句是唯一的线索。内网/回环那一
+                # 发也少这一整套，但它不是档位扳的 —— 两个扳法两句话，见 `_headers_off_note`。
+                _note_text(_headers_off_note())
             result.escalation_path = "direct:http"
             return _attach_login_probe_gap(
                 await self._finalize_result(result, url, extraction_type,
@@ -7508,10 +7776,7 @@ class MasterFetchServer:
         if not stealthy_headers:
             # 同 `_force_fetch` 里那一句：这一档真的关掉了 HTTP 层的合成头，而它关掉的
             # 里面有一枚是过墙的承重件（google referer）。改动的账要写在改动的那一层上。
-            _note_text("anti_detect='off': the HTTP tier sent no dhole-synthesized "
-                       "headers - no fabricated google referer, no generated UA. "
-                       "What went out is what you named plus the client's own "
-                       "Chrome profile")
+            _note_text(_headers_off_note())
 
         # ─── 304: the conditional answer (G23) ─────────────────────────
         # A 304 carries no body BY DESIGN, so each test below ("empty content =
@@ -7609,6 +7874,14 @@ class MasterFetchServer:
             else:
                 result.error = f"browser_unavailable: http status {result.status}, stealthy escalation skipped"
             return await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
+
+        # 2.2 · 这一跃是整条路上最长的一次静默：起浏览器（这台机器实测 3–5 秒）或首用
+        # 下载（193MB，分钟级），而等待的人在字节上什么都看不见 —— 体验模拟场景 10 那
+        # 61.5 秒就是在这里一句没发地烧掉的。宿主没要 progressToken 时这颗干净空转。
+        await report_stage(
+            f"escalating to the JS tier for {urlparse(url).netloc} "
+            f"(HTTP said status {result.status}); starting the browser",
+            (now() - start_time) * 1000)
 
         # 每一档说过的话要带着走 —— `errors` 既喂分类（`classify_network_error`），也
         # 拼进回执那一行。只写状态号的话，浏览器档一沉默，分类能读到的就只剩
@@ -8776,6 +9049,12 @@ class MasterFetchServer:
                         page_row["untrusted_content"] = page_result.untrusted_content
                     if not page_result.content_ok:
                         page_row["error"] = _inline_hole_reason(page_result)
+                    # 期4.5：这一页**自己**写的发表日期写回它那一行。这里只搬运不判断：
+                    # 读 metadata 的是 `serp_dates.page_stated_date`，解析日期的仍是那一个
+                    # 作者。它不覆盖 `published`（引擎的说法），也不据它丢任何一行 ——
+                    # 页面自述的日期与 SERP 的印章不同时，两行并排让调用者自己看见分歧。
+                    from dhole_mcp import serp_dates as _sd
+                    sr.published_verified = _sd.page_stated_date(page_result.metadata)
                     fetched_pages.append(page_row)
                 except Exception as e:
                     # Surface the failure instead of silently dropping the page,
@@ -8794,6 +9073,13 @@ class MasterFetchServer:
                 result.summary = (f"{result.summary} | {note}"
                                   if result.summary else note)
             result.fetched_pages = fetched_pages
+            # 日期账在建模型时算过一次，而"有几行的源站自己报了发表日期"这一格只有抓完
+            # 才存在。只在真核验到东西时落账 —— 一笔都没核验到的轮次维持原样（那格本来
+            # 就该是缺席的默认值，凭空写一份全零的账等于替读者宣布"判过了"）。
+            if any(r.published_verified for r in result.results):
+                from dhole_mcp.search import recount_row_dates
+                result.date_coverage = recount_row_dates(
+                    result.results, result.date_coverage)
 
         return result
 
@@ -8807,7 +9093,7 @@ class MasterFetchServer:
         path_exclude: Optional[List[str]] = None,
         max_pages: int = 10,
         search: Optional[str] = None,
-        timeout: int = 30000,
+        timeout: int = 25000,
         max_total_chars: int = 60_000,
         resume_token: str = "",
     ) -> CrawlResponseModel:
@@ -8823,10 +9109,34 @@ class MasterFetchServer:
         many rows one response carries, and `resume_token` (a `plan_id:offset`
         from this tool's own reply or its previous page) returns the rows the
         budget held back without walking the site again.
+
+        `timeout=` is this call's clock, and it is enforced as one. It used to be
+        handed to the engine as a PER-PAGE budget while the map ran on the
+        engine's own `deadline_ms` (25000) and each index request on a hardcoded
+        15s -- measured on a site whose /sitemap.xml answers after 20s,
+        `timeout=30000` and `timeout=120000` returned the same 30.0s wall clock,
+        the same empty map, and the same sentence blaming the SITE ("robots.txt
+        declares a Sitemap, but fetching or parsing it produced nothing"). A
+        parameter with no object is what `params.py` does not license; a parameter
+        whose budget gets blamed on the site is worse. Out of range it is refused
+        by name -- now that this number really decides how long a call hangs,
+        `timeout=999999` would mean a thousand-second wait, and silence about that
+        is not a clamp, it is a surprise.
         """
         from dhole_mcp.crawl import (MAX_TOTAL_CHARS_CEILING, MIN_TOTAL_CHARS,
                                     CrawlResponseModel as _CRM, plan_store,
                                     plan_token)
+        try:
+            _clock_ms = int(validate_timeout(timeout))
+        except SecurityError as se:
+            _msg = f"invalid_request: timeout= {se} - nothing was read."
+            return _CRM(
+                start_url=url, pages=[], error=_msg,
+                summary=f"invalid request · {_summary_label(_msg)}",
+                next_action=(
+                    "timeout= is this call's whole budget in milliseconds: 1-120000. "
+                    "On a sitemap map it is also the clock that one index request "
+                    "runs on, so a slow index wants the number raised, not a retry."))
         # 与 web_crawl 同一条钳（0 与负数 = 这一轮不要帽，钳是幂等的所以传下去无妨）。
         _asked_total = int(max_total_chars or 0)
         max_total_chars = (0 if _asked_total <= 0 else
@@ -8849,11 +9159,13 @@ class MasterFetchServer:
             return await self.web_crawl(
                 url, resume_token=resume_token, discover_only=True,
                 path_include=path_include, path_exclude=path_exclude,
-                search=search, max_total_chars=max_total_chars, timeout=timeout)
+                search=search, max_total_chars=max_total_chars, timeout=timeout,
+                deadline_ms=_clock_ms)
         result = await self.web_crawl(
             url, max_pages=max_pages, path_include=path_include,
             path_exclude=path_exclude, discover_only=True, sitemap=sitemap,
-            search=search, max_total_chars=max_total_chars, timeout=timeout)
+            search=search, max_total_chars=max_total_chars, timeout=timeout,
+            deadline_ms=_clock_ms)
         if not result.error and result.pages:
             # P11 阶段1：地图留在服务器侧（1h TTL），回执只发一个短 id ——
             # 千页任务的参数成本从每轮 ~7.6KB 的 URL 传送带降到 O(1)。
@@ -9322,6 +9634,17 @@ class MasterFetchServer:
     # 现在在门口换算，口径与其他十颗一致；默认仍是现场本来的 20s，所以括号里改的是
     # **话**不是数 —— 修单位不该顺手改掉一次真实的等待。
     _TIMEOUT_DESC_FEED = "Per-fetch budget in ms (default 20000, max 120000)."
+    # web_discover 的这颗从前**没有作用对象**：它被交给引擎当每页预算，而地图那一程跑在
+    # 引擎自己的 `deadline_ms`（25000）上，那一发索引请求又写死 15 秒（primp 与 urllib
+    # 两处）。实测一台 20s 才答的站点：`timeout=30000` 与 `timeout=120000` 交出同一次
+    # 30.0s、同一张空地图、同一句怪站点的报告。现在它是这发调用的时钟，也是那一发请求的
+    # 时钟，所以这句话说的数必须与站点实际等到的数一致 —— 默认写 25000 而不是 30000，
+    # 与 web_act 那颗同一条理由：内部预算要赶在宿主常见的 30s 之前自己收摊。
+    _TIMEOUT_DESC_DISCOVER = (
+        "Whole-call budget in ms (default 25000 - sized to beat a typical 30s host MCP "
+        "timeout; max 120000, outside 1-120000 refused). On a map this IS the clock: it "
+        "bounds the call and the single request sitemap=true needs, so a slow index "
+        "wants this raised, not a retry.")
     # 载荷键必须上 wire（A2）。症状不是难看：`text` 与 `key` 这两个名字从前在任何 wire
     # 文本里都不出现，只读 `tools/list` 的调用方只能猜 —— 实测猜错两次（`{"fill":
     # {"selector": ..., "value": ...}}`，以及把 `press` 的键名也写成 `text`），每一次都是
@@ -9504,7 +9827,7 @@ class MasterFetchServer:
                     "search": {"type": "string", "description": "Filter the map by keyword (URL path + title where one was read)."},
                     "max_total_chars": {"type": "integer", "description": "Chars one map page may carry (1000-200000, default 60000; 0 = no cap). A map's row count is set by the site, so this is the knob that sizes a page."},
                     "resume_token": {"type": "string", "description": "Pass back plan_id:<rows shipped> verbatim to get the map rows the budget held back - same map, no re-walk, no re-pay."},
-                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (default 30000, max 120000)."},
+                    "timeout": {"type": "integer", "description": _TIMEOUT_DESC_DISCOVER},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -9530,7 +9853,7 @@ class MasterFetchServer:
                     "region": {"type": "string", "description": "Engine region, passed through as given and folded into the cache key. Omitted, it is derived from location + language."},
                     "freshness": {"type": "string", "description": "Time window preset - 'day', 'week', 'month' or 'year', and only these four: anything else is refused. The engines offer nothing finer, so no absolute date range can be asked."},
                     "after": {"type": "string", "description": "'Newer than' a date. No engine takes an absolute range, so this is widened to the narrowest preset that covers it and date_filter reports what was actually sent."},
-                    "before": {"type": "string", "description": "REFUSED, not ignored: presets only bound 'not older than' and results carry no publish date, so nothing could honour it. For dated items use feed_read(since=)."},
+                    "before": {"type": "string", "description": "Upper bound, applied per row (not sent to any engine): rows provably newer than it are dropped and counted in date_coverage; undated/relative rows stay."},
                     "fetch_content": {"type": "boolean", "description": "Pull the top hits' full text inside this same call (default false) instead of returning snippets."},
                     "fetch_schema": {"type": "object", "additionalProperties": True, "description": "{properties: {...}} applied to the pages fetched by fetch_content, instead of their markdown - the same shape rules as web_read's schema."},
                     "fetch_min_consensus": {"type": "integer", "description": "fetch_content only: keep only hits corroborated by >= N independent index families (min 2; 0 = off). Skipped URLs are in consensus_skipped."},
@@ -9853,6 +10176,7 @@ class MasterFetchServer:
         return {k: v for k, v in args.items()
                 if v is not None and k in allowed and k not in skip}
 
+    @_named_call
     async def _dispatch(self, name: str, args: dict) -> list | tuple:
         """Route MCP tool calls to internal methods and format responses.
 

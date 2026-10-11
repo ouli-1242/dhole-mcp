@@ -94,6 +94,30 @@ def set_mcp_session(session: Optional[Any]) -> None:
     _MCP_SESSION.set(session)
 
 
+# 这一次调用是**从哪一扇工具门进来的**（call_tool 入口存，调用结束清 —— 与
+# `_MCP_SESSION` 同一处、同一条理由）。它存在的唯一原因是有一句建议要按它生成：
+# "把 `anti_detect='off'` 传进来" 对 `web_read` 是一扇门，对 `web_request` 是一句
+# `Unsupported argument(s)`（实测场景 9：一次写在 0 秒里被送回它自己收不下的参数）。
+# 参数面本身不在这里复制 —— 读的人去查 `_TOP_LEVEL_ARGS` 与 `params._ENUM_ARGS`，
+# 这颗只回答"名字是谁"。
+#
+# 空串 = 这一次没经过工具面（内部 bulk、直接调方法的测试与 evals）。那里没有"这一扇
+# 门"这个概念，最接近的事实就是发起调用的那颗方法自己的签名，而仓库里的这些建议全部
+# 生在 `web_read` 这条路上 —— 所以按 `web_read` 算，与 `_METHOD` 的 "GET" 默认值同一
+# 条理由：默认值要让每条既有路一字不改。
+_TOOL: contextvars.ContextVar[str] = contextvars.ContextVar("_tool", default="")
+
+
+@contextlib.contextmanager
+def tool_scope(name: str):
+    """把"这次调用叫什么名字"交给下游，出去就摘掉（同 `call_deadline` 的规矩）。"""
+    token = _TOOL.set(name or "")
+    try:
+        yield
+    finally:
+        _TOOL.reset(token)
+
+
 # ─── The human channel's own clock ───────────────────────────────────────────
 #
 # `out_of_band_confirm` waits for a person to press a button. That wait used to
@@ -109,6 +133,29 @@ ELICIT_ASK_MIN_LEFT_S = 5.0
 
 _CALL_DEADLINE: contextvars.ContextVar[Optional[float]] = contextvars.ContextVar(
     "_call_deadline", default=None)
+
+#: How much later than the caller's own budget the `_within_call_budget` backstop
+#: fires. See its docstring: it must lose the race to the tiers' own accounting.
+#: 这颗数今天有**三处读者**：兜底自己（`server._within_call_budget`）、把预算说回给
+#: 调用方的那句建议（`quality._budget_advice`），以及链里每一步自算的截止
+#: （`actions._step_deadline_ms`）。作者只留一个，因为"交账要留多少"是一个事实而不是
+#: 三个可调项 —— 步内那处从前没有读者，于是一步 10 秒的等待可以越过调用方点名的整笔
+#: 预算，实测被掐在 60,000 那一次交回来的字节数是 0（体验模拟报告场景 10）。
+BACKSTOP_GRACE_S = 1.5
+
+
+def call_budget_left_s() -> Optional[float]:
+    """这次调用还剩多少墙钟秒；不在预算作用域里时回 **None**。
+
+    回 None 而不是回一个大数是有意的：下游拿它决定"这一步要不要收窄"，一个假的余额会
+    把"没人点过预算"（CLI、直连 `dispatch`、预热）读成"预算很大"，而那句读错在报表上
+    与真话长得一样。`elicit_wait_s` 在同一条边界上选的是另一个方向（那里按上限给，
+    因为那时没有一条在跑的预算会被这次等待挤掉）—— 两处不同是各自的后果决定的，不是漂移。
+    """
+    deadline = _CALL_DEADLINE.get()
+    if deadline is None:
+        return None
+    return deadline - time.time()
 
 
 def elicit_wait_s() -> float:
@@ -224,6 +271,60 @@ async def report_progress(progress: float, total: float | None = None,
         return False
     return True
 
+
+def stage_message(stage: str, spent_ms: Optional[float] = None,
+                  show_left: bool = True) -> str:
+    """一句阶段话：这一档在做什么 +（知道才说）已经花了多少 +（点了预算才有）还剩多少。
+
+    作者只留一个，因为三处发射（档位跃迁、起浏览器、等 network-idle 稳定）说的是同一件事
+    的三个时刻，各写一遍就会各自漂。**剩余一律从 `call_deadline` 那颗 ContextVar 现读**，
+    不是参数 —— 让调用方自己估一个"还剩 30000ms"，正是这一族最便宜的谎。读不到预算
+    （CLI、直连 dispatch、预热）时那半句整个缺席，而不是补一个看起来合理的数。
+
+    `show_left=False` 不是关掉了算术，是关掉一次误导：首用的那一发下载走的是
+    `_apply_install_shift` 事后**还给预算**的那段时间（装机成本不是这个页面的响应
+    时间），此刻读到的剩余往往是 0，印出来就成了"0ms 还剩，而我要开始下一场几分钟"。
+    """
+    parts = [stage]
+    if spent_ms is not None:
+        parts.append(f"spent {int(round(spent_ms))}ms")
+    left = call_budget_left_s() if show_left else None
+    if left is not None:
+        parts.append(f"{int(round(max(0.0, left * 1000)))}ms left in this call's budget")
+    return " | ".join(parts)
+
+
+async def report_stage(stage: str, spent_ms: Optional[float] = None,
+                       *, show_left: bool = True) -> bool:
+    """发一句阶段话，走**两条**通道：`notifications/progress` 与 `notifications/message`。
+
+    progress 用"已花的秒数"（知道才给，否则 0 —— 这一类等待没有分母，编一个 `total` 就是
+    编一个百分比）。为什么还要第二条：宿主对这两条的支持不重合 —— 只实现 logging 的宿主
+    在 progress 上什么都不显示，那一句"这一等要几分钟"就又只剩开发者看得见了。
+
+    两条各自 fail-soft：任何一条送不出去都不许弄坏正在跑的抓取，也不影响另一条。都不出
+    去时返回 False（调用方不读这个返回值做事，它是一条消息的可观测性，不是任务的一部分）。
+    SDK 在两条上都已经自己判过能力（没带 progressToken / `_meta` 的 log-level 键时 no-op），
+    这里不重复判 —— 判第二遍就是第二个会写错的地方。
+    """
+    message = stage_message(stage, spent_ms, show_left)
+    session = _MCP_SESSION.get()
+    if session is None:
+        return False
+    sent = False
+    try:
+        await session.report_progress(round((spent_ms or 0.0) / 1000.0, 3),
+                                      message=message)
+        sent = True
+    except Exception:
+        pass
+    try:
+        await session.send_log_message("info", message, logger="dhole.stage")
+        sent = True
+    except Exception:
+        pass
+    return sent
+
 # A jar key is a plain word, nothing else (see _clean_session_id).
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 # Per-call HTTP method / request body (G8). Read where the request is actually
@@ -309,6 +410,16 @@ _REVALIDATE: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
 # summary by _with_agent_hints. None (not an empty list) means "not inside a
 # web_read call", which keeps the wrapper a no-op everywhere else.
 _ARG_NOTES: contextvars.ContextVar[Optional[list]] = contextvars.ContextVar("_arg_notes", default=None)
+
+# WHO took dhole's synthesized browser headers away for this call: "" = nobody did,
+# "off" = the `anti_detect='off'` rung, "private" = dhole took them away itself
+# because the target is loopback/private. They share one slot because the place that
+# says the sentence (inside the HTTP tier) only ever sees the single boolean
+# `stealthy_headers` — and that boolean cannot tell "the rung was off all along"
+# apart from "this call is hitting your own service, so a fabricated google referer
+# would land in your logs". Scoped by _smart_fetch_request_context like _ARG_NOTES.
+_HEADERS_OFF_BY: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_headers_off_by", default="")
 
 
 def _clamp_note(name: str, requested: Any, applied: int, *, lo: int, hi: int) -> str:
