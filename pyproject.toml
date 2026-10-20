@@ -98,6 +98,10 @@ dev = [
     # 仅测试用：tests/test_pdf_real.py 现场生成加密 PDF 样本（不往仓库里塞二进制件）。
     # 运行时不需要它 —— PDF 提取走 pdfplumber（已并入 default deps）。
     "pypdf>=5.0",
+    # 仅测试用：三份测试现场造带书签的多页 PDF 来钉大纲契约（同一理由，不落二进制）。
+    # 运行时不 import 它 —— tests/test_a_continuation_page_does_not_repay_the_whole_map.py
+    # 在模块顶层 import，缺了会在 collection 阶段就断掉整条 CI。
+    "pymupdf>=1.24",
 ]
 all = [
     # W7 keeps the `all` extra alive with its pre-W7 contents. Deleting it

@@ -34,5 +34,23 @@ jobs:
         # 不是失败，CI 一样。
         run: python -m pip install -e ".[dev]"
 
+      - name: Start the fixture site
+        # 25 个测试文件把 127.0.0.1:8399 当靶站（续爬判决、批量回执、私网门……）。
+        # 本地跑法是手动先起 evals/fixture_site.py；CI 没有这一步，这些用例会在
+        # 连接层红——而连接层红不是产品缺陷，是缺了夹具。
+        run: |
+          Start-Process -FilePath python -ArgumentList 'evals/fixture_site.py', '--port', '8399'
+          $ready = $false
+          for ($i = 0; $i -lt 40; $i++) {
+            try {
+              Invoke-WebRequest -Uri 'http://127.0.0.1:8399/article' -UseBasicParsing -TimeoutSec 2 | Out-Null
+              $ready = $true
+              break
+            } catch {
+              Start-Sleep -Milliseconds 500
+            }
+          }
+          if (-not $ready) { throw 'fixture site never answered on 127.0.0.1:8399' }
+
       - name: Test
         run: python -m pytest -q
