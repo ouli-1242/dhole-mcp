@@ -47,8 +47,15 @@ NEWLINE = chr(10).encode()
 
 # 每一颗页的延迟是钉出来的：慢的那几颗保证 gather 全部返回时帽子已经过点，
 # 于是"发过、答了、行被丢"那一格必然出现；而快的与慢的分在两侧，余量都留着一大段。
-DELAY = {"/slow-start": 0.55, "/fast": 0.02, "/p1": 0.02, "/p2": 0.02,
-         "/p3": 0.45, "/p4": 0.45, "/p5": 0.45, "/p6": 0.45}
+#
+# 2026-10-20 CI 实测：原来这一格钉的是 300ms 帽 + 0.45s 慢页，而满载的 runner 上
+# 「起点页 + 首次 robots.txt + 抽取器冷启动」自己就吃掉 300ms 以上 —— 四颗链接根本没
+# 轮到发出，靶站日志只剩 `['/']`，这一发测的就不再是"付了没返回"，而是"这台机器多快"。
+# 判据要的只是**快批赶得上帽子、慢批赶不上**这一个相对形状，所以两边一起放大：帽子
+# 1000ms、慢页 2.0s、快页 0.05s（比值与原来同一），并在计时之前先预热一发，把一次性
+# 的 robots 抓取与冷启动挪出帽子之外。
+DELAY = {"/slow-start": 0.55, "/fast": 0.05, "/p1": 0.05, "/p2": 0.05,
+         "/p3": 2.0, "/p4": 2.0, "/p5": 2.0, "/p6": 2.0}
 LINKS = "".join(f'<a href="/p{i}">p{i}</a>' for i in range(1, 7))
 HITS: list[str] = []
 
@@ -104,6 +111,17 @@ async def _crawl(origin, path="/p1", **kw):
     return await MasterFetchServer().web_crawl(url=origin + path, cache_ttl=0, **kw)
 
 
+async def _warm(origin):
+    """把一次性开销（首次 robots.txt、抽取器冷启动）挪到帽子之外，然后把日志清空。
+
+    这两发钉的是"快批赶得上帽子、慢批赶不上"这一个相对形状；让冷启动留在计时窗口里，
+    测出来的就是这台机器的负载而不是那个形状（2026-10-20 CI 实测：四颗链接一颗都没发出，
+    日志只剩 `['/']`）。预热之后 `HITS.clear()`，日志证据仍然只属于被审的那一发。
+    """
+    await MasterFetchServer().web_read(url=origin + "/", cache_ttl=0)
+    HITS.clear()
+
+
 # ─── 1 · 付过请求的那几颗，不许被说成没发过 ───
 
 
@@ -111,10 +129,11 @@ async def _crawl(origin, path="/p1", **kw):
 async def test_pages_the_site_answered_are_not_called_unsent(origin):
     """现场那一格：四颗都发出去了，帽子在 gather 回来之后才过点。
 
-    300ms 的帽子落在第二批的飞行途中：p1/p2 各 0.02s、p3/p4 各 0.45s，四颗同一批
+    1000ms 的帽子落在第二批的飞行途中：p1/p2 各 0.05s、p3/p4 各 2.0s，四颗同一批
     发出，gather 要等最慢的那颗 —— 回到循环时点已过，四行一起被丢在批次里。
     """
-    r = await _crawl(origin, "/", max_pages=5, concurrency=4, deadline_ms=300)
+    await _warm(origin)
+    r = await _crawl(origin, "/", max_pages=5, concurrency=4, deadline_ms=1000)
 
     assert r.truncated_by_time, f"这一发应当被时钟砍：{r.summary}"
     dials = [h for h in HITS if not h.endswith("robots.txt")]
@@ -135,7 +154,8 @@ async def test_the_two_counts_are_separated_not_merged_into_one_number(origin):
     靶上四颗链接都在同一批里发出，行数 = 起点那一页 + 来得及吐出来的那些，所以
     「答了却被丢下」的颗数是可以从回执自己算出来的（不必信句子）。
     """
-    r = await _crawl(origin, "/", max_pages=5, concurrency=4, deadline_ms=300)
+    await _warm(origin)
+    r = await _crawl(origin, "/", max_pages=5, concurrency=4, deadline_ms=1000)
 
     dropped = 4 - (len(r.pages) - 1)
     never_sent = max(r.pages_discovered - r.pages_crawled, 0) - dropped
