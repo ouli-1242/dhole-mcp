@@ -46,6 +46,7 @@ from dhole_mcp.quality import _detect_content_issue, _is_js_shell, extraction_co
 from dhole_mcp.trafilatura_extractor import (
     extract_content_from_html, extract_with_trafilatura,
 )
+from tests._extraction_ledger import recorded_markdown_chars
 
 FIXTURES = Path(__file__).parent / "page_fixtures"
 TRAVEL_URL = "http://books.toscrape.com/catalogue/category/books/travel_2/index.html"
@@ -91,12 +92,17 @@ class TestTheTitlesComeBack:
         assert not missing, f"11 本书里没回到 markdown 的：{missing}"
 
     def test_the_sidecar_still_describes_the_bytes_on_disk(self):
-        """阈值与"塌没塌"都记在 sidecar 里；页面变了或口径变了就要重新看，不许默默漂。"""
+        """阈值与"塌没塌"都记在 sidecar 里；页面变了或口径变了就要重新看，不许默默漂。
+
+        长度那一格按 trafilatura 版本登记：同一份字节在 2.2.0 抽成 1,640、在 2.3.1 抽成
+        1,566。写成一个裸数字等于把"这台机器装了哪版抽取器"钉进判据 —— CI 与全新克隆
+        就是因此在 2026-10-20 一起红的（查表口径见 `tests/_extraction_ledger.py`）。
+        """
         meta = _meta("travel_2.html")
         html = _html("travel_2.html")
         md = extract_content_from_html(html, TRAVEL_URL) or ""
-        assert meta["extracted_markdown_chars"] == len(md), (
-            meta["extracted_markdown_chars"], len(md))
+        want = recorded_markdown_chars(meta, "travel_2.html")
+        assert want == len(md), (want, len(md))
         assert meta["visible_text_chars"] == visible_text_chars(html)
         assert meta["captured_from_url"] == TRAVEL_URL
 
@@ -176,14 +182,18 @@ class TestTheExemptionIsNotABlanket:
         assert is_extraction_collapsed(100, EXTRACT_COLLAPSE_MIN_VISIBLE) is True
 
     def test_the_health_pages_do_not_change_shape(self):
-        """批次 2 最大的风险是"召回上来了、导航也涌进来"。健康页逐字节不变是它唯一的证人。"""
+        """批次 2 最大的风险是"召回上来了、导航也涌进来"。健康页逐字节不变是它唯一的证人。
+
+        这位证人只在量它的那版抽取器面前立誓：长度按版本查表，没登记的版本直接红 ——
+        quotes_index 在 2.2.0 是 2,179 字、在 2.3.1 是 2,864 字，静悄悄放过等于没测。
+        """
         for name, url in (("quotes_index.html", QUOTES_URL),
                           ("gnu_free_sw_definition.html", GNU_URL)):
             meta = _meta(name)
             html = _html(name)
             md = extract_content_from_html(html, url) or ""
-            assert meta["extracted_markdown_chars"] == len(md), (
-                f"{name}: {meta['extracted_markdown_chars']} -> {len(md)}")
+            want = recorded_markdown_chars(meta, name)
+            assert want == len(md), f"{name}: {want} -> {len(md)}"
 
 
 # ─── 4 · 塌陷要作为事实说出来（而不是被"壳"盖住）─────────────────────────

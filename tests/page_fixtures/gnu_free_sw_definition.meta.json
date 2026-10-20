@@ -4,7 +4,10 @@
   "sha256": "0459a78c1793e00b",
   "kind": "article",
   "content_links": 112,
-  "extracted_markdown_chars": 25785,
+  "extracted_markdown_chars": {
+    "2.2.0": 25785,
+    "2.3.1": 25787
+  },
   "visible_text_chars": 25245,
   "label_share": 0.051,
   "longest_nonlabel_run_chars": 756,

@@ -177,5 +177,11 @@ def _source_of(engine):
 
 
 def _sha(path: Path) -> str:
+    """记录端与守卫端折的是同一刀：按**仓库字节**（`* text=auto eol=lf`）算指纹。
+
+    本机 `core.autocrlf=true` 会把工作树换成 CRLF；不折叠就会记下一个只有这台机器
+    复现得出的指纹，全新克隆一 checkout 立刻红（tests/test_engine_parsers.py 的
+    `_repo_bytes` 是这条记录的读者）。
+    """
     import hashlib
-    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()[:16]

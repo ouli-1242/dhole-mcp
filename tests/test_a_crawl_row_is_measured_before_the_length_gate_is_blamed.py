@@ -54,6 +54,7 @@ from dhole_mcp.crawl import (  # noqa: E402
 )
 from dhole_mcp.envelope import is_extraction_collapsed  # noqa: E402
 from dhole_mcp.server import MasterFetchServer  # noqa: E402
+from tests._extraction_ledger import recorded_markdown_chars  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 FIXTURES = ROOT / "page_fixtures"
@@ -118,20 +119,24 @@ class TestTheCollapseRulerIsTheOneWebReadAlreadyCalibrated:
         assert "extraction_collapsed" not in stats, stats
         assert len(rendered_md) > 1374, "渲染出来的列表比整页可见字还短，比值那一问就跑偏了"
 
-    @pytest.mark.parametrize("name,md_len,visible", [
-        ("gnu_free_sw_definition.html", 25785, 25245),
-        ("quotes_index.html", 2179, 1681),
-    ])
-    def test_a_faithful_extraction_is_not_reported_as_a_failure(self, name, md_len,
-                                                                visible):
-        """这两份页的比值带（1.02 / 1.30）就是 sidecar 里那组数 —— 抽取是忠实的。"""
-        url = json.loads((FIXTURES / name).with_suffix(".meta.json")
-                         .read_text(encoding="utf-8"))["captured_from_url"]
+    @pytest.mark.parametrize("name", ["gnu_free_sw_definition.html",
+                                      "quotes_index.html"])
+    def test_a_faithful_extraction_is_not_reported_as_a_failure(self, name):
+        """这两份页的比值带（1.02 / 1.30）就是 sidecar 里那组数 —— 抽取是忠实的。
+
+        两个数都从 sidecar 现读，不再在参数表里手抄一份：长度那一格按 trafilatura 版本
+        登记（同一份字节 2,179 与 2,864 的差是抽取器换版量出来的），第二个作者迟早和
+        第一个对不上账 —— 本条 2026-10-20 就是这样在 CI 上红的。
+        """
+        meta = json.loads((FIXTURES / name).with_suffix(".meta.json")
+                          .read_text(encoding="utf-8"))
+        url = meta["captured_from_url"]
         _, kind, ok, stats = _run(_html(name), url, url)
         assert kind == "article", (name, kind)
         assert ok is True
         assert not stats.get("extraction_collapsed"), stats
-        assert (stats["extracted_chars"], stats["visible_chars"]) == (md_len, visible)
+        assert (stats["extracted_chars"], stats["visible_chars"]) == (
+            recorded_markdown_chars(meta, name), meta["visible_text_chars"])
 
     def test_the_sentence_names_both_numbers_and_the_way_out(self):
         """上报的那一句话要自带证据与解药，不是"有点问题"。"""

@@ -112,6 +112,14 @@ def _meta_of(html_name: str) -> Path:
     return (FIXTURE_DIR / html_name).with_suffix(".meta.json")
 
 
+def _repo_bytes(p: Path) -> bytes:
+    """夹具的**仓库字节**：`.gitattributes` 钉的是 `* text=auto eol=lf`，而本机
+    `core.autocrlf=true` 会把工作树换成 CRLF。指纹要钉的是那份字节，不是这台机器的
+    checkout —— 记录端（`tests/test_engine_fixtures_live.py` 的 `_sha`）折的是同一刀。
+    """
+    return p.read_bytes().replace(b"\r\n", b"\n")
+
+
 CONTRACT_IDS = [c.fixture for c in CONTRACTS]
 
 
@@ -224,11 +232,13 @@ class TestFixtureAntiRot:
     它的解析器一起删了），所以这里钉的是机制，不是某一个人的记性。"""
 
     def test_every_fixture_is_content_addressed(self):
-        """记录的 sha256 按 **git 里的字节** 算，行尾以仓库为准（`* text=auto eol=lf`）。
+        """记录的 sha256 是 **仓库字节** 的指纹：先把行尾折回 `* text=auto eol=lf` 的形状再算。
 
-        所以它只在工作树与仓库字节一致时成立 —— 一份 CRLF 残留的工作树会红，
-        而那并不代表"fixture 被改过"。这条 2026-09-22 修过一次同类烂法：记录值
-        按 CRLF 算、blob 是 LF，于是任何全新克隆一 checkout 就失败。
+        2026-09-22 那一版把这条写成"只在工作树与仓库字节一致时成立"，于是 CRLF 残留的
+        工作树让它红 —— 而它红的那一句是"fixture 被改动过"，一句假话：守卫本该测
+        "这份夹具还是不是当初那份"，结果它测的是"这台机器怎么 checkout 的"。CI 与克隆者
+        拿到 LF、本机 `core.autocrlf=true` 拿到 CRLF，同一份字节两种指纹，谁都不算错。
+        现在折叠只发生在这条守卫的读数上：仓库里存的字节一字未动，改夹具仍然照红。
         """
         missing = [p.name for p in FIXTURE_DIR.glob("*.html")
                    if not _meta_of(p.name).exists()]
@@ -238,7 +248,7 @@ class TestFixtureAntiRot:
             if not meta.exists():
                 continue
             want = json.loads(meta.read_text(encoding="utf-8")).get("sha256")
-            got = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+            got = hashlib.sha256(_repo_bytes(p)).hexdigest()[:16]
             assert want == got, (
                 f"{p.name} 被改动过（{want} → {got}）。改 fixture 必须同时重新"
                 f"记录 sha256，否则'契约'就只是看起来存在")
