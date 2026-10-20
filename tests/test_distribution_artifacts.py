@@ -73,9 +73,18 @@ def test_the_publish_workflow_only_pushes_on_a_version_tag():
 
 
 def test_the_readme_states_the_release_gate_and_tenant_boundary():
+    """README 不许宣称一条已经过去的门槛，也不许把今天真成立的那条说漏。
+
+    这一条原先钉的是「树是 17.0、索引还是 16.2」—— 那是发版**之前**那句假话的解药。
+    17.0 发到 PyPI 的当天，它自己变成了新的假话：一句「还差 PyPI 那一发」留在说明书里，
+    读者就会去 `pip install git+…` 绕开本来直接装得到的那一发。所以现在钉双向：README
+    必须给出一发点名版本的安装命令，而那句过期的门槛不许还留着。
+    """
     readme = _text("README.md")
-    assert "PyPI" in readme and "16.2" in readme, (
-        "the tree is 17.0 while the index is 16.2 - distribution docs must say "
-        "that the registry/pip path becomes live at release, not claim it now")
+    assert "PyPI" in readme
+    assert 'pip install "dhole-mcp==' in readme, (
+        "README 要给人一发装得动的命令，而不是只说「索引上有这个包」")
+    assert "当前最新是 16.2" not in readme, (
+        "这条发布门槛已经过去了，留着就是「照着打字就绕远路」的说明书")
     assert "OAuth" in readme, "hosted mode has no OAuth; a bearer token/proxy is the boundary"
     assert "按主体隔离" in readme

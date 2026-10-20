@@ -62,7 +62,7 @@ MCP 客户端（宿主配置的字段名各异，认准 url + 请求头）：
 
 **远程暴露前必须套 TLS 反代**（Caddy / nginx），并保留 bearer 令牌或由反代做 OIDC。dhole **没有内置 OAuth**：令牌只是端口门禁，不区分主体；同一进程的所有客户端共享存储凭据、会话与正文缓存。要按主体隔离，就**一人一容器 / 一端口，各自的数据卷**，不要把多个用户接到同一个 dhole 上。
 
-`ghcr.io/ouli-1242/dhole-mcp` 在推送 `v*` 标签时由 `.github/workflows/docker.yml` 构建发布：`v17.0` 已上线，镜像标签是 `:v17.0` 与 `:latest`（`v17.0` 不是三段式 semver，所以没有 `:17.0` 这颗）。`server.json` 是 MCP Registry 的发布清单。**还差的那一步**：PyPI 当前最新是 16.2，所以 `pip install dhole-mcp` 今天拿到的是旧版，registry 清单要等 PyPI 发布 17.0 之后才生效；在那之前用 `pip install "git+https://github.com/ouli-1242/dhole-mcp.git@v17.0"`、从 checkout `pip install .`，或直接跑 GHCR 镜像。
+`ghcr.io/ouli-1242/dhole-mcp` 在推送 `v*` 标签时由 `.github/workflows/docker.yml` 构建发布：`v17.0` 已上线，镜像标签是 `:v17.0` 与 `:latest`（`v17.0` 不是三段式 semver，所以没有 `:17.0` 这颗）。PyPI 同一版已经发出去：`pip install "dhole-mcp==17.0"`，`server.json` 那份 MCP Registry 清单也是到这一刻才成立。
 
 ### 让 agent 自己装
 
