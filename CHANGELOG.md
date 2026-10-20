@@ -6,32 +6,7 @@
 
 > 自 13.14 起本仓库为个人衍生作品，版本号是自己的序号、不承诺语义化版本，与上游版本不可比；包内的 `__version__` 是唯一权威来源。
 
-## [Unreleased]
-
-### 新增
-
-- **默认搜索池扩到 10 家：新增 `yahoo` 与 `marginalia`**：`yahoo` 是 Bing 索引的第二个入口（与 `bing` / `bing_global` / `duckduckgo` 同家族，补可用性、不加共识家族）；`marginalia` 是独立小网索引（自己的爬虫，英文为主，连续请求会回 200 反爬页，报告为 blocked 而不是 empty）。默认池因此从 8 家 / 6 家族变成 10 家 / 7 家族，`engines=` 单次上限从 10 变成 12。两家都补了真页面裁剪件：Yahoo 两套版面各一份契约，Marginalia 一份；`DHOLE_DEFAULT_ENGINES`、README、手册与 `dhole -v` 的名单同步。Mojeek/Ecosia/Startpage/Yep 在 2026-10-20 的实测中分别被验证码、403 或 JS 壳挡住，没有加入默认池。
-- **纵向搜索有了可复现评测与公开的 benchmark 目标**：新增 `evals/vertical_search_baseline.py`、固定题集 `evals/vertical_queries.jsonl` 与 2026-10-20 抓取的冻结语料（7 份 API 响应）。默认离线重放，不需要网络：可用率、known-item Hit@5、日级日期覆盖、重复 URL 与逐源行数都会出数，目标不达标时退出码非零；`--live` 另出当前网络的可用率与 p50/p95，`--capture` 更新语料。冻结语料上可用率 100%、known-item 5/5、日期覆盖 100%；同日两次实时采样都是 71.4%（Stack Exchange/GitHub 连接层错误与 GDELT 连接超时），如实记入 `evals/README.md`。SLA 只对这四条 benchmark 目标成立，**不是对免密公共 API 的服务承诺**。
-- **托管分发：容器镜像与发布清单**：新增 `Dockerfile`（多阶段、非 root、只读根可跑、健康检查、数据卷 `/data`）、`docker-compose.yml`（未设 `DHOLE_HTTP_TOKEN` 直接拒绝启动，默认只绑回环）、`.dockerignore`、GHCR 发布 workflow（`v*` 标签构建推送）与 MCP Registry 的 `server.json`。镜像默认是 streamable HTTP，并**内置 Chromium**（`INSTALL_BROWSER=0` 可退回纯 HTTP 的较小镜像）；HTTP 抓取 / 搜索 / PDF / 重排本来就不依赖浏览器。README 新增托管章节，写明反向代理 / OIDC 的边界：dhole 没有内置 OAuth，bearer 令牌不分主体，共享进程共享凭据、会话与缓存，按主体隔离必须一人一容器。诚实门槛写在同一节：仓库是 17.0、PyPI 当前最新 16.2，registry 清单与 17.0 镜像在正式发布后才生效。
-- **变更检查可以批量，并且能被 cron 调度**：`web_read(urls=[...], extraction_type='check')`（最多 10 个 URL）逐条复用单 URL 的 check 语义，每行保留自己的 `changed` / `status` / `diff_window`，顶层给 `changed_urls` / `unchanged_urls` / `baseline_urls` / `error_urls`、`results` 与 `summary`；坏一行不会吞掉邻行。`actions=` / `schema=` / `nested_selector=` / `cdp_url=` 与超过 10 个 URL 在发出任何请求之前具名拒绝。此前这条组合会掉进普通批读、在全部页面抓完后崩在 `successful = sum(...)`，工作做了却没有回执。CLI 新增 `dhole watch add|list|remove|run`：清单落 `~/.dhole/watchlist.json`（0600，只存 URL / 标签 / 最近判决，不存正文），`run` 复用同一条 check 路径，逐条落盘，退出码 0=无变化 / 1=有变化 / 2=检查失败；首轮只落基线并明确说「baseline recorded」，不会把第一次见面冒充成没变。`--json` 给调度器读，详见 README「变更监控与定时任务」。
-- **`web_search` 多了五类免密纵向源与按日排序（P0）**：`sources=['news','academic','qa','code','community']` 分别接 GDELT（真实媒体 URL + 发布日期）、arXiv、Stack Exchange、GitHub 仓库搜索（按星数）与 Hacker News；省略 `web` 就只问纵向源，此时 `engines=` 被拒。纵向行共用重排、日期窗与质量过滤，但**不冒充 web 索引家族**：`engines_consensus` 为空串，绝不抬高 `x of N`。回执新增 `sources_used`、`source_detail`（逐家 `status|count|delivered|duration_ms`）与 `sort_applied`；`sort='newest'` 只把声明了发布日的行倒序，月/年地板与无日期行留在后面，summary 报的是**实际交付**的日期行数。纵向源上的 `after`/`before` 按行精确执行（`after` 丢掉无法证明在窗口内的无日期行）。一条源超时/限流不抹掉别家，失败如实进报告行。
-- **本地重排有了第二档 `mmarco`（可选、实测过）**：`DHOLE_RERANK_MODEL` 选择本机打分的 cross-encoder，默认仍是中文更强的 `bge-zh`（~279MB）；`mmarco` 是多语 MiniLM int8（~119MB，x86-64/arm64 各自量化），同一份 67 题冻结语料上 P@5 0.552 vs 0.549、MRR 0.749 vs 0.737、CPU 1.8× 快，中文略低、英文更高。模型会话是进程级单例，所以该变量在启动时读取一次，**换档要重启宿主**。首次使用才下载、可续传；每条搜索回执新增 `rerank_model` 点名真正打分的模型，`sys_state(show=['models'])` 的 `available` 列出两档的盘上状态。旧的 `~/.dhole/config/reranker.json` 仍然不选任何东西，日志会指向新变量。
-
-### 修复
-
-- **PDF 回执交出自己的页数**：`pages_total` 与 `pages_returned` 现在随 PDF 响应上线（`web_read` 与 `doc_parse` 同一来源）。此前正文写着 "pages 1-2 of 3"，调用方却只能从正文里读这颗数；`pages_total - pages_returned` 现在是“这次没读多少”的直接读数。非 PDF 两者均为 0 并从 wire 上省略。
-- **文档下载失败不再一律说成 timeout**：证书过期、连接被拒、代理失败与真正的超时都走 `status=0` 分支，而文档路径此前无条件用“提高 timeout”的建议覆盖分类器的判决。现在先问 `classify_network_error`，只有 timeout 才给文档预算建议；过期证书保留 `tls_error`，不会再劝调用方去抬一个没用的时钟。
-- **重定向在 summary 里说清两头**：`original_url` 早已存在，但调用方实际扫的那一行只在 `url` 里看到落点。现在发生重定向时，`summary` 直接写 `redirected from <original> to <final>`，旧 setid / 跳转页不再冒充调用方要的那一页。
-- **`sys_guide(topic='start')` 回到一页纸**：`start` 现在指向新的 `references/start.md`（三条路线 + 硬约束 + 深入卷指针，实测 3,877 字符），完整 SKILL.md 改由 `topic='manual'` 提供。四次实测的 27,276 字首答不再出现，全本仍可达。
-- **重导航不再把完整文章判成抽取塌陷**：塌陷判决现在同时看整页可见字与“去掉 nav/header/footer、保留 `<aside>` 的正文底线”；只有两把尺都说丢字才判塌陷。实测形状：19k 抽取 / 39k 整页、正文已读到页尾的 c-api 文章不再被误伤；`/longaside` 那种真的丢掉 aside 正文的页仍然判塌陷。
-
-### 变更
-
-- **arXiv 查询改成短语搜索**：未加引号的多词查询下，精确标题 "Attention Is All You Need" 的原论文不在前 5（2026-10-20 冻结语料实测）；改成 `all:"<query>"` 后原论文回到第 2，宽泛短语（"transformer attention" / "large language model"）仍然返回相关工作。含 `AND` / `OR` / `ANDNOT` 的查询保持原样，不把布尔表达式包成短语。
-- **无模型搜索先看词面覆盖，不再直接照抄引擎顺序**：`rerank_mode=merge` 的免费回退按「标题/摘要/URL 中出现几个不同的查询词」分桶（2+ / 1 / 0），桶内再按跨引擎共识与引擎位置排；只重排、不丢行。同一 67 题冻结语料（agent-a）P@5 0.370→0.525、MRR 0.550→0.731、nDCG@10 0.646→0.759，14 道题变化全为正；q001 那种「泛化页带一个宽词、真正答案带两个具体词」的题从 0 抬到 1.0。只要这一轮有任何模型判决（`relevance_raw` 存在），分桶一步都不运行，神经臂指标与改动前逐位一致（0.549 / 0.737 / 0.764）。
-- **越界 `max_content_chars` 的既有行为被钉住**：R04-029 记录的“999999 静默接受”在 2026-10-20 用原参数复现——回执 summary 里已有 `max_content_chars clamped 999999->200000`。本次不改行为，只补一条端到端回归测试，防止这句注记将来消失。
-
-## [17.0] - 2026-10-01
+## [17.0] - 2026-10-20
 
 从「网页研究工具」迈向「agent 的个人 Web 操作助手」的第一块：**带登录态抓取**与**页面操作**——CDP 接管你已登录的 Chrome，让已登录页面第一次可读；元素快照 + 索引化动作让 agent 能点、能填、能提交（提交默认暂停，等人确认）。边界不变：识别与决策归外层 agent，dhole 是零模型、零密钥的确定性工具层。
 
@@ -183,6 +158,18 @@
 
 - **验收刀9（2026-10-11，按一次真实体验报告逐条修）**：15 个用户场景真跑（搜索 / 批量读 / feed / 文档站 / 验证码操作）记下 11 条摩擦，其中 4 条"骂人级"。这一批不动架构，动的是"说了却做不到"与"做到了却不说"。①**回环与内网目标自动脱掉 dhole 的合成浏览器头**（F7）：一次 `web_request` POST 到自己的 8901 端口，回显里躺着 15 颗调用方从未点名的头（其中一枚编造的 `referer: https://www.google.com/`）——那一份模板在公网上是过墙的承重件，在回环上只剩一个去处，就是用户自己的服务日志；`_HEADERS_OFF_BY` 记住是谁扳的，所以回执分得开"档位本来就 off"与"这次打的是你自己的机器"，公网那一发逐字不变。②**中文查询不再因为境外索引先填满配额就收工**（F2）：混搜里 baidu 被"凑够数就取消"砍掉、交回的全是 low 结果，而那一家的库里才有那些长尾；现在"等不等"按这条查询用什么文字写来回答（唯一作者 `search_engines.cn_index_engines`，非 CJK 交回空集，纯英文那一族既有钉子一字未改地继续绿），到点记 `timeout`（真的没等到）而不是 `preempted`（我们决定不等）——两桶主张相反的修法，写反等于编出"baidu 挂了"。③**搜索结果按形状与词形丢行**（F1）：模型早说过那些垃圾不相关（`relevance_raw` 实测 ~1e-4），但 `relevance_score` 是本轮内 min-max、第一名恒 1.0，账面反过来替垃圾作了证；现在两级字母+数字混排的子域链与紧凑的成人/赌博搭配会丢掉**模型已经认为弱**的那些行，域名名单一条都不要（判据免维护，阈值坐在 67 题冻结页、799 条真实结果行的实测空带里：两条形状判据各 0 命中），旋钮 `DHOLE_SEARCH_ROW_FILTER` 默认开、关了就回到今天。④**引擎冷却报得出"还剩几秒"**（F11）：越用越难搜却没人说为什么——`_BACKEND_HEALTH` 一直存着每家的解禁时刻，只有那句建议把它写成了"60s / 600s 两档"；现在量到了就说 `cooling right now: brave 41s, sogou 611s`，两家以上在冷却时补一句"池子只剩 N of M"（比例警告在 8 家掉到 2 家时根本不触发），量不到则一个字都不许多说。⑤**一批 URL 共用一次返回预算**（F4）：9 个链接各拿满 40,000 字符 = 360,000，宿主把整份截断只剩前 6 条，"我要了 9 条"变成调用方的活儿；现在按页数摊（9 页各 5,333、9 条齐全），三条例外是刻意的——单条不压、点了 `max_content_chars=` 不压、份额触到 500 地板就不再往下，压过的每一行在自己的 `summary` 里说清三个数。⑥**三件速赢**：慢站的超时在同一次调用里以双倍秒数再走一次（只认 `network_error: timeout` 那一族，翻倍不许越过 120,000 的门，加倍后仍失败就把"再等久一点"从账上划掉）；`web_discover(search=)` 把地图筛成 0 行时换一层来答（`search` 只比 URL 路径与标题，那个词站在正文里，于是用剩下的时钟最多读 3 页并明写 `answered by CONTENT, not by the map`，剩下的时钟不足 4,000ms 就不补）；快照那一列写着几就发几回去（`{"hover": 2}` / `{"screenshot": 0}` 与 dict 写法逐字节同形，`fill` / `press` / `drag` 顶层那三扇门各有它不开的理由）。⑦**`web_act(pin=true)` 页面驻留**（F9，唯一动连接期面孔的一刀）：靶站每次 `GET` 换一枚 token，而每次调用都重新导航，于是"上一发看清了图、这一发填进去"在结构上必然答的是上一道题——跨调用重试永远 403，人在第二次被拒之后就放弃了。现在这一发可以把**这一页**留在那个命名会话上，下一次同会话同站点的 pin 调用站在它上面做事、不导航；驻留槽 300 秒、用单调钟在复用时刻量，四条拒绝（匿名 auto 会话 / CDP attach 或代理车道 / 一批多 URL / 落到另一台浏览器）与四种弃页（过期 / 被人关了 / 换了站 / 上一发的钩子摘不掉）每一条都落进 `summary`，摘不掉就宁可弃页重新导航（带着上一次的 SSRF 地图开车不是省一次导航能买的）。提交闸在驻留页上改口："把同一串动作带 `confirm` 重跑一遍"只有半句是真话，于是它给两条诚实出路。连接期 32,700 → **32,828**（实测 +215 属性 / −88 那段已被这颗参数取代的话 = 净 +128，0.39% 的常驻层买一次结构性必错的修法），锁由 `dhole wire lock --write` 重写。真机验证：`-m live` 那组在本地靶站上两次调用读到同一枚 token、站点自己的 `captcha.log` 判 `ok: true`，而去掉 `pin` 的同一条路交回另一枚 token 并被 403。钉住 `tests/test_a_private_target_gets_no_invented_referrer.py`、`tests/test_a_pinned_page_is_the_one_the_next_call_stands_on.py`（14 条）、`tests/test_the_pinned_page_is_dropped_by_the_guards_that_hold_it.py`（23 条）、`tests/test_a_pinned_page_answers_the_captcha_the_previous_call_show_it.py`（3 条 live）及各刀各自的守卫组
 
+- **默认搜索池扩到 10 家：新增 `yahoo` 与 `marginalia`**：`yahoo` 是 Bing 索引的第二个入口（与 `bing` / `bing_global` / `duckduckgo` 同家族，补可用性、不加共识家族）；`marginalia` 是独立小网索引（自己的爬虫，英文为主，连续请求会回 200 反爬页，报告为 blocked 而不是 empty）。默认池因此从 8 家 / 6 家族变成 10 家 / 7 家族，`engines=` 单次上限从 10 变成 12。两家都补了真页面裁剪件：Yahoo 两套版面各一份契约，Marginalia 一份；`DHOLE_DEFAULT_ENGINES`、README、手册与 `dhole -v` 的名单同步。Mojeek/Ecosia/Startpage/Yep 在 2026-10-20 的实测中分别被验证码、403 或 JS 壳挡住，没有加入默认池。
+
+- **纵向搜索有了可复现评测与公开的 benchmark 目标**：新增 `evals/vertical_search_baseline.py`、固定题集 `evals/vertical_queries.jsonl` 与 2026-10-20 抓取的冻结语料（7 份 API 响应）。默认离线重放，不需要网络：可用率、known-item Hit@5、日级日期覆盖、重复 URL 与逐源行数都会出数，目标不达标时退出码非零；`--live` 另出当前网络的可用率与 p50/p95，`--capture` 更新语料。冻结语料上可用率 100%、known-item 5/5、日期覆盖 100%；同日两次实时采样都是 71.4%（Stack Exchange/GitHub 连接层错误与 GDELT 连接超时），如实记入 `evals/README.md`。SLA 只对这四条 benchmark 目标成立，**不是对免密公共 API 的服务承诺**。
+
+- **托管分发：容器镜像与发布清单**：新增 `Dockerfile`（多阶段、非 root、只读根可跑、健康检查、数据卷 `/data`）、`docker-compose.yml`（未设 `DHOLE_HTTP_TOKEN` 直接拒绝启动，默认只绑回环）、`.dockerignore`、GHCR 发布 workflow（`v*` 标签构建推送）与 MCP Registry 的 `server.json`。镜像默认是 streamable HTTP，并**内置 Chromium**（`INSTALL_BROWSER=0` 可退回纯 HTTP 的较小镜像）；HTTP 抓取 / 搜索 / PDF / 重排本来就不依赖浏览器。README 新增托管章节，写明反向代理 / OIDC 的边界：dhole 没有内置 OAuth，bearer 令牌不分主体，共享进程共享凭据、会话与缓存，按主体隔离必须一人一容器。诚实门槛写在同一节：PyPI 当前最新是 16.2，registry 清单要等 PyPI 发布 17.0 之后才生效；GHCR 镜像随 `v17.0` 标签已经上线（`:v17.0` / `:latest`）。
+
+- **变更检查可以批量，并且能被 cron 调度**：`web_read(urls=[...], extraction_type='check')`（最多 10 个 URL）逐条复用单 URL 的 check 语义，每行保留自己的 `changed` / `status` / `diff_window`，顶层给 `changed_urls` / `unchanged_urls` / `baseline_urls` / `error_urls`、`results` 与 `summary`；坏一行不会吞掉邻行。`actions=` / `schema=` / `nested_selector=` / `cdp_url=` 与超过 10 个 URL 在发出任何请求之前具名拒绝。此前这条组合会掉进普通批读、在全部页面抓完后崩在 `successful = sum(...)`，工作做了却没有回执。CLI 新增 `dhole watch add|list|remove|run`：清单落 `~/.dhole/watchlist.json`（0600，只存 URL / 标签 / 最近判决，不存正文），`run` 复用同一条 check 路径，逐条落盘，退出码 0=无变化 / 1=有变化 / 2=检查失败；首轮只落基线并明确说「baseline recorded」，不会把第一次见面冒充成没变。`--json` 给调度器读，详见 README「变更监控与定时任务」。
+
+- **`web_search` 多了五类免密纵向源与按日排序（P0）**：`sources=['news','academic','qa','code','community']` 分别接 GDELT（真实媒体 URL + 发布日期）、arXiv、Stack Exchange、GitHub 仓库搜索（按星数）与 Hacker News；省略 `web` 就只问纵向源，此时 `engines=` 被拒。纵向行共用重排、日期窗与质量过滤，但**不冒充 web 索引家族**：`engines_consensus` 为空串，绝不抬高 `x of N`。回执新增 `sources_used`、`source_detail`（逐家 `status|count|delivered|duration_ms`）与 `sort_applied`；`sort='newest'` 只把声明了发布日的行倒序，月/年地板与无日期行留在后面，summary 报的是**实际交付**的日期行数。纵向源上的 `after`/`before` 按行精确执行（`after` 丢掉无法证明在窗口内的无日期行）。一条源超时/限流不抹掉别家，失败如实进报告行。
+
+- **本地重排有了第二档 `mmarco`（可选、实测过）**：`DHOLE_RERANK_MODEL` 选择本机打分的 cross-encoder，默认仍是中文更强的 `bge-zh`（~279MB）；`mmarco` 是多语 MiniLM int8（~119MB，x86-64/arm64 各自量化），同一份 67 题冻结语料上 P@5 0.552 vs 0.549、MRR 0.749 vs 0.737、CPU 1.8× 快，中文略低、英文更高。模型会话是进程级单例，所以该变量在启动时读取一次，**换档要重启宿主**。首次使用才下载、可续传；每条搜索回执新增 `rerank_model` 点名真正打分的模型，`sys_state(show=['models'])` 的 `available` 列出两档的盘上状态。旧的 `~/.dhole/config/reranker.json` 仍然不选任何东西，日志会指向新变量。
+
 ### 变更
 
 - **`cdp_url` 默认拒绝（breaking-adjacent）**：此前 `cdp_url` 是 agent 可自由传的参数——这正是要收口的洞：attach 你的真实 Chrome 等于交出其中**所有**已登录站点的读权限，而外层 agent 的规划循环不可预测。收口的形状经过两次：先是一颗机器级旗 `DHOLE_CDP_ATTACH`（本版随大众化批次注销，设了也不再被读），定稿是**逐主机的一次性授权** —— 第一次 attach 某个主机返回 `cdp_authorization_required`、一个请求都不发，带 `confirm=true` 重跑才放行并把该主机记进 `cdp_hosts.json`（删掉它即撤销）。受影响的是「给 cdp_url 传值但没批准过」的既有调用：以前是静默跑通但登录态为空（`new_context()` 的旧 bug），现在是明确失败
@@ -216,6 +203,12 @@
 - **评测尺子补丁：`require_success`（2026-10-07）**：`any_arg` 类断言原本只看「参数出现在某发调用上」不看成败——mojibake-pivot 的「转向」分支因此给过一发被拒的调用记绿（`web_read` 没有 `encoding=`，A 档试发 `encoding=gbk` 被 `invalid_request` 拒掉，该格仍记满）。断言新增 `require_success` 限定：转向分支只认那发调用真正成功的情况；`encoding=` 今天只在 `doc_parse`（且只收本地路径）上，转向判分的实质由「拒绝引用乱码」承担，分支保留是为杠杆哪天到场时尺子已经就位。第四轮证据回放：三档读数不变（原先的绿走的本来就是诚实分支），封死的只是假绿那条路
 - **评测语料消歧与断言降级（2026-10-07）**：budget-said-out-loud 的 prompt「首页上所有标签的名言」同一模型三档读法分裂（A 读成遍历全部标签页并满分，B/C 只读首页自己 1/3），改写为「首页每个标签都链到它自己的标签页；把每个标签页上的名言都收齐，一条都不要漏」——只消歧读法，验收三句（nested_max 顶格、truncation 说出口）不变；shell-is-not-an-answer 的 tried_nested 降为记录项——prompt 预设的「推荐专题」栏目当日已不存在（三档多层核实一致），预设存在的断言量的是站点改版不是 agent，诚实三断言（no_fake_absence / tells_the_user_the_truth / escalated_tier）成为判分主体，换上有真实栏目的站时升回。降级后分母 **17＋记录 4**，旧读数（/18）不可同表读；新 prompt 的验收读数留下一轮真实重跑
 - **三档校准第四轮读数（2026-10-07）**：A 17/18（整格绿 6/7）、B 15/18（5/7）、C 15/18（5/7）——tag-pages 三档全绿（本轮全部走 nested 扇出并顶格 nested_max，回执的 truncation 教会了补齐路径）、author-per-quote 三档满分；两新格 B 与 C 打平在满分处：SKILL.md 的排障表已把要的杠杆教到位，references 无可量的增量。两新格的「真实页面」当日两证不可得（真 GBK 页 charset 探测能解对，真反爬墙在抓取阶梯下不成立），可复现的失败形状由回环夹具供给，评测 CLI 因此新增 `--allow-private`（仅进程内生效，与测试夹具同一开关）。本轮顺带量出两个记录在案待议的缺陷：mojibake-pivot 的「转向」分支会奖励被拒的调用（`web_read` 没有 `encoding=`，any_arg 只看参数名不看成败）；浏览器超时信封的机器可读 `diagnosis` 是泛化句，点名 `force_fetcher='http'` 的专项建议只活在 `next_action` 里
+
+- **arXiv 查询改成短语搜索**：未加引号的多词查询下，精确标题 "Attention Is All You Need" 的原论文不在前 5（2026-10-20 冻结语料实测）；改成 `all:"<query>"` 后原论文回到第 2，宽泛短语（"transformer attention" / "large language model"）仍然返回相关工作。含 `AND` / `OR` / `ANDNOT` 的查询保持原样，不把布尔表达式包成短语。
+
+- **无模型搜索先看词面覆盖，不再直接照抄引擎顺序**：`rerank_mode=merge` 的免费回退按「标题/摘要/URL 中出现几个不同的查询词」分桶（2+ / 1 / 0），桶内再按跨引擎共识与引擎位置排；只重排、不丢行。同一 67 题冻结语料（agent-a）P@5 0.370→0.525、MRR 0.550→0.731、nDCG@10 0.646→0.759，14 道题变化全为正；q001 那种「泛化页带一个宽词、真正答案带两个具体词」的题从 0 抬到 1.0。只要这一轮有任何模型判决（`relevance_raw` 存在），分桶一步都不运行，神经臂指标与改动前逐位一致（0.549 / 0.737 / 0.764）。
+
+- **越界 `max_content_chars` 的既有行为被钉住**：R04-029 记录的“999999 静默接受”在 2026-10-20 用原参数复现——回执 summary 里已有 `max_content_chars clamped 999999->200000`。本次不改行为，只补一条端到端回归测试，防止这句注记将来消失。
 
 ### 移除
 
@@ -308,6 +301,16 @@
 
   ③一句建议点名的参数，必须是这一扇门上真的传得进去的那一颗。`headers=` 三族拒绝的出路现在按工具生成：`web_read` 那两支一字未改（那扇门上 `anti_detect=` 与 `cdp_url=` 都在），`web_request` 那两支不再教人传 `anti_detect='off'` / `extraction_type='check'`——这两颗在它的参数面上根本不存在（写请求不渲染，而那颗取值属于读的那一扇门），改成当场能做的两件事：删掉那一颗头（请求照样发出，用 dhole 成套的 UA + TLS 画像），或把档位放进 `cred_defaults`（身份的存量键里就有它）。查表不抄名单：参数面读 `_TOP_LEVEL_ARGS`、取值面读 `params._ENUM_ARGS`，而"这次调用叫什么名字"由协议层按次交给下游（`_dispatch` 一处写，三条入口——MCP 的 call_tool、真握手、eval CLI——都读到）。前值（场景 9）：照着建议传 `anti_detect='off'` 的那一发 0 秒弹回 `Unsupported argument(s) for web_request`，副作用良性（一个字节都没发出去）而那一发仍然是白烧。手册 `references/tools.md` 的 `headers=` 一节同步写明写请求缺的那两扇门。钉住 `tests/test_advice_names_only_the_knobs_this_tool_can_take.py`（22 条：两扇门的逐条对照、一条"参数面加了这颗就自动换回长句"的反向件、一张扫两扇门全部出路的表，以及一条走真 `_dispatch` 的接线守卫）
 
+
+- **PDF 回执交出自己的页数**：`pages_total` 与 `pages_returned` 现在随 PDF 响应上线（`web_read` 与 `doc_parse` 同一来源）。此前正文写着 "pages 1-2 of 3"，调用方却只能从正文里读这颗数；`pages_total - pages_returned` 现在是“这次没读多少”的直接读数。非 PDF 两者均为 0 并从 wire 上省略。
+
+- **文档下载失败不再一律说成 timeout**：证书过期、连接被拒、代理失败与真正的超时都走 `status=0` 分支，而文档路径此前无条件用“提高 timeout”的建议覆盖分类器的判决。现在先问 `classify_network_error`，只有 timeout 才给文档预算建议；过期证书保留 `tls_error`，不会再劝调用方去抬一个没用的时钟。
+
+- **重定向在 summary 里说清两头**：`original_url` 早已存在，但调用方实际扫的那一行只在 `url` 里看到落点。现在发生重定向时，`summary` 直接写 `redirected from <original> to <final>`，旧 setid / 跳转页不再冒充调用方要的那一页。
+
+- **`sys_guide(topic='start')` 回到一页纸**：`start` 现在指向新的 `references/start.md`（三条路线 + 硬约束 + 深入卷指针，实测 3,877 字符），完整 SKILL.md 改由 `topic='manual'` 提供。四次实测的 27,276 字首答不再出现，全本仍可达。
+
+- **重导航不再把完整文章判成抽取塌陷**：塌陷判决现在同时看整页可见字与“去掉 nav/header/footer、保留 `<aside>` 的正文底线”；只有两把尺都说丢字才判塌陷。实测形状：19k 抽取 / 39k 整页、正文已读到页尾的 c-api 文章不再被误伤；`/longaside` 那种真的丢掉 aside 正文的页仍然判塌陷。
 
 ### 安全
 
@@ -703,6 +706,8 @@ agent 技能随包分发；修掉「代理环境下抓不了本机服务」这�
 ### 修复
 
 - **日志凭据泄漏**：重试时会把含 `user:pass@` 的代理 URL 写进日志。
+
+[17.0]: https://github.com/ouli-1242/dhole-mcp/compare/v16.2...v17.0
 
 [16.2]: https://github.com/ouli-1242/dhole-mcp/compare/v16.1...v16.2
 
