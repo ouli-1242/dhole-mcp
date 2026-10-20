@@ -21,7 +21,7 @@ Design principles:
 from __future__ import annotations
 
 import re
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urlparse
@@ -347,6 +347,97 @@ def _stale_days_for(url: str) -> int:
 _DATE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%d %b %Y")
 
 
+_DATE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%d %b %Y",
+                 "%Y年%m月%d日")
+
+# SERP 上那一枚日期章的形状。相对与绝对必须分开识别，因为它们的**精度**不同：
+# "2 days ago" 的意义依赖抓取那一刻，而 `2026-10-01` 不依赖（4.6 的 `before=` 逐行判决
+# 要拒的正是前者）。单位表按各家版面实测的形状列：bing_global 是英文 "… ago"，
+# 中文三家是 "N天/周/月/年前"，另有 "刚刚 / 昨天 / 前天" 这一族不带数字的写法。
+_RELATIVE_DATE_RE = re.compile(
+    r"\d+\s*(?:second|minute|hour|day|week|month|year)s?\s+ago"
+    r"|刚刚|刚才|just now"
+    r"|\d+\s*(?:个月|秒|分钟|小时|天|日|周|星期|月|年)前"
+    r"|前天|昨天", re.I)
+_RELATIVE_UNIT_RE = re.compile(
+    r"(\d+)\s*(second|minute|hour|day|week|month|year|秒|分钟|小时|天|日|周|星期|个月|月|年)",
+    re.I)
+# 只到月的写法：`2026-03` / `2026年3月` / `2026.3`。那一眼后面的 `-`、`/`、`日`、数字
+# 是"还有日"的证据，必须让整条规则让位给 `_parse_date`，否则 `2026-03-14` 会被降级成
+# 一个月精度并且把日子补成 1 —— 那是把一个已知的事实改写成猜测。
+_MONTH_ONLY_RE = re.compile(r"(20\d{2})\s*[-/年.]\s*(\d{1,2})\s*月?(?![-/日\d月])")
+_BARE_YEAR_RE = re.compile(r"(?:19|20)\d{2}")
+
+
+def parse_serp_date(text: str, now: "date | None" = None) -> tuple[date | None, str, str]:
+    """把 SERP 上那一段日期文本读成 (日期, 精度, 原文)。精度取 day/month/year/relative。
+
+    存在的理由是**一句看着精确的谎**：搜索结果上写的是 "3 hours ago"、"5天前"、"昨天"，
+    存成光秃秃的 ISO 就等于声称"这一天发布"，而那句话的真实精度是"按抓取那一刻推算"。
+    4.6 的 `before=` 逐行判决要拒的正是这些行 —— 拒得对的前提是精度跟着值一起走。
+
+    三条规则，每条都有它的理由：
+      · 绝对形式**交给 `_parse_date`**（这一族唯一的作者），这里只负责判它到 day 的精度；
+        所以 `2026-10-01`、`October 1, 2026`、`2026年10月1日` 都是 `day`。
+      · 只到月或只到年的写法回 `month` / `year`，且**日补成 1**（那是"这一月/这一年"的
+        最小值，不是一月一日发布的断言）；裸年份只在整个字符串就是一个年份时才认 ——
+        "See 1984 by Orwell" 不是一条发布日期。
+      · 相对写法回 `relative`，日期按 `now`（默认今天）推算；`now` 可注入是因为这条必须
+        能被测试钉住，而 `date.today()` 会让守卫在某个跨月的凌晨自己变红。
+
+    返回的第三个值是**命中的原文**，给 `published_basis` 引用：读者要能复核这一行的日期
+    是从哪几个字读出来的，而不是相信有一个解析器猜对了。
+
+    一条实测到的限度（so360 冻存页）：一行上同时写着相对与绝对两截时
+    （`1个月前 · 55次浏览 · 发布时间：2026年5月8日`），命中的是**相对**那一截。绝对形式
+    要求整串就是一个日期（`_parse_date` 走的是整串口径），而那一截前面还有别的字。后果
+    是这一行落在 `relative`、因此不参与 `before=` 的比较 —— 是保守的那一侧（宁可少判一行
+    并计入 `rows_relative_precision`，不猜一个日期把行丢掉），而 `published_basis` 印出的
+    正是被读走的那几个字，读者看得见漏掉的是哪一截。
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return None, "", ""
+    today = now or datetime.now(timezone.utc).date()
+
+    rel = _RELATIVE_DATE_RE.search(raw)
+    if rel:
+        token = rel.group(0)
+        if "前天" in token:
+            return today - timedelta(days=2), "relative", token
+        if "昨天" in token:
+            return today - timedelta(days=1), "relative", token
+        c = _RELATIVE_UNIT_RE.search(token)
+        if c is None:                      # 刚刚 / 刚才 / just now
+            return today, "relative", token
+        n, unit = int(c.group(1)), c.group(2).lower().rstrip("s")
+        if unit in ("秒", "分钟", "小时", "second", "minute", "hour"):
+            # 一小时前的"那一天"与今天在这一格里不可分辨：给今天，精度说 relative。
+            return today, "relative", token
+        days = {"day": 1, "天": 1, "日": 1, "week": 7, "周": 7, "星期": 7,
+                "个月": 30, "month": 30, "月": 30, "year": 365, "年": 365}.get(unit)
+        if days:
+            return today - timedelta(days=n * days), "relative", token
+
+    if (m := _MONTH_ONLY_RE.search(raw)):
+        y, mo = int(m.group(1)), int(m.group(2))
+        if 1 <= mo <= 12:
+            return date(y, mo, 1), "month", m.group(0)
+    for fmt in ("%B %Y", "%b %Y"):
+        try:
+            return datetime.strptime(raw, fmt).date(), "month", raw
+        except ValueError:
+            continue
+
+    d = _parse_date(raw)
+    if d is not None:
+        return d, "day", raw
+
+    if (y := _BARE_YEAR_RE.fullmatch(raw)) and 1900 <= int(y.group(0)) <= today.year + 1:
+        return date(int(y.group(0)), 1, 1), "year", y.group(0)
+    return None, "", ""
+
+
 def _parse_date(s: str) -> date | None:
     """Parse a date from a metadata string. Handles ISO (with offset/Z),
     compact YYYYMMDD, and a few human formats. Returns None if unparseable."""
@@ -535,6 +626,26 @@ def visible_text_chars(html: str) -> int:
     return len(_paywall_evidence(html)[0])
 
 
+#: Chrome that the extractor is *supposed* to drop. Deliberately does NOT include
+#: <aside>: an aside can be the substantive text (the `/longaside` fixture is
+#: exactly that control), so removing it would hide a real extraction loss.
+_STRIP_CHROME_RE = re.compile(
+    r"<(nav|header|footer|script|style|noscript)\b[^>]*>.*?</\1>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def visible_text_chars_without_chrome(html: str) -> int:
+    """Visible text after removing nav/header/footer — the pages' own prose floor.
+
+    The collapse gate's whole-page count includes site chrome; a complete article
+    under a heavy nav can therefore look lost (R04-016a). This is the second
+    ruler, measured only when the first one already fired. It keeps <aside>:
+    dropping it would make a real aside loss invisible (the `/longaside` control).
+    """
+    return len(_paywall_evidence(_STRIP_CHROME_RE.sub("", html))[0])
+
+
 #: 抽取塌陷的分界：抽出来的字数少于这一页自身可见字数的 50%，且这页至少给自己写了
 #: 400 个字符。两处读它，所以只有一个定义 —— `trafilatura_extractor` 用它决定要不要换
 #: recall 臂重试，`quality` 用它决定"正文很少"该不该被说成"这是个 JS 壳"。
@@ -703,14 +814,34 @@ def _list_shape(html: str, host: str) -> tuple[float, int]:
 
     See LIST_LABEL_SHARE_MIN and LIST_PROSE_RUN_MAX for what each one separates.
     """
+    return page_content_shape(html, host)[:2]
+
+
+def page_content_shape(html: str, host: str) -> tuple[float, int, int]:
+    """内容区的三个形状读数：(链接标签占比, 最长非标签串, 内容区自己的可见字数)。
+
+    第三颗是 3.4 新要的：整页可见字数（`visible_text_chars`）与内容区字数的差，说的
+    是"这页的字住在 chrome 里还是住在正文里"。一处解析给三个数，两处读者（`detect_page_type`
+    的列表/文章闸、`quality` 的 substance 判决）才不会各数一遍再互相矛盾。
+    """
     parser = _ListShapeParser(host)
     try:
         parser.feed(_STRIP_BLOCK_RE.sub("", html))
         parser.close()
     except Exception:
-        return 0.0, 0
+        return 0.0, 0, 0
     parser._end_run()
-    return parser.anchor_chars / max(parser.visible_chars, 1), parser.longest_run
+    return (parser.anchor_chars / max(parser.visible_chars, 1),
+            parser.longest_run, parser.visible_chars)
+
+
+def main_content_run(html: str, host: str) -> int:
+    """内容区里最长一段"不是别人链接标签"的连续文字 —— 3.4 与列表判据共用的那一把尺。
+
+    它回答的是"这页有没有一段能引用的话"，而 `visible_text_chars` 只回答"有多少字"：
+    实测一份 666 字的导航壳与一篇 387 字的正文，字数同一量级，最长串却差一个量级。
+    """
+    return page_content_shape(html, host)[1]
 
 
 def _label_share(html: str, host: str) -> float:

@@ -15,6 +15,9 @@
     旧：## slide1.xml / ## slide2.xml      ← 反了，零提示
     新：## slide2.xml / ## slide1.xml
 
+（后来小节标题改成了「第几页」（R02-025 那一把：包内文件名是给人看的正文里的
+机器面向噪声），顺序的证据因此改读每页自己的文字，见 `_pages` 那段。）
+
 判据落在**两件事**上，缺一不可：① 有清单时按清单排；② 清单读不到（残缺包、第三方
 导出器只写一半）时**退回文件名顺序而不是丢页** —— 修一个"顺序错"不能换来一个"少几页"。
 """
@@ -78,9 +81,23 @@ def _deck(tmp_path, name: str, play_order: list[str], texts: dict[str, str], *,
     return str(path)
 
 
-def _headings(text: str) -> list[str]:
-    """The slide part names, in the order they came out."""
-    return [ln[3:] for ln in text.splitlines() if ln.startswith("## ")]
+def _pages(text: str) -> list[str]:
+    """每一节的第一行正文，按它们出来的先后排 —— 这才是顺序的证据。
+
+    （窗口换过一次：小节标题从前是包内文件名，那串名字正好能当顺序的读数；
+    标题改成「第几页」之后（R02-025 那一把），文件名不再出现在输出里，
+    顺序的证据改由每页自己的文字来作 —— 它同样指得出**是哪一页**排在了哪儿，
+    不比旧窗口弱。判据没放宽，只是换了可观察量。）
+    """
+    out: list[str] = []
+    seen = False
+    for ln in text.splitlines():
+        if ln.startswith("## "):
+            seen = True
+        elif seen and ln.strip() and not ln.startswith("["):
+            out.append(ln.strip())
+            seen = False
+    return out
 
 
 class TestTheDeckOrderWins:
@@ -95,7 +112,7 @@ class TestTheDeckOrderWins:
         text, err = parse_file(path)
 
         assert err == ""
-        assert _headings(text) == ["slide2.xml", "slide1.xml"]
+        assert _pages(text) == ["乙页", "甲页"]
         # 旧行为：按文件名数字，甲页（slide1）排在前
         assert text.index("乙页") < text.index("甲页")
 
@@ -110,7 +127,7 @@ class TestTheDeckOrderWins:
         text, err = parse_file(path)
 
         assert err == ""
-        assert _headings(text) == ["slide3.xml", "slide1.xml", "slide2.xml"]
+        assert _pages(text) == ["丙页", "甲页", "乙页"]
         positions = [text.index(m) for m in ("丙页", "甲页", "乙页")]
         assert positions == sorted(positions)
 
@@ -129,7 +146,7 @@ class TestTheDeckOrderWins:
         text, err = parse_file(path)
 
         assert err == ""
-        assert _headings(text) == ["slide2.xml", "slide1.xml"]
+        assert _pages(text) == ["乙页", "甲页"], "取的是清单先后，不是 id 数字"
 
     def test_an_unreordered_deck_is_unchanged(self, tmp_path):
         """没拖过页序的稿子（绝大多数）输出与从前逐字相同。"""
@@ -141,7 +158,7 @@ class TestTheDeckOrderWins:
         text, err = parse_file(path)
 
         assert err == ""
-        assert _headings(text) == ["slide1.xml", "slide2.xml"]
+        assert _pages(text) == ["甲页", "乙页"]
 
 
 class TestTheFallbackNeverLosesASlide:
@@ -157,7 +174,7 @@ class TestTheFallbackNeverLosesASlide:
         text, err = parse_file(path)
 
         assert err == ""
-        assert _headings(text) == ["slide1.xml", "slide2.xml"], "退回文件名数字"
+        assert _pages(text) == ["甲页", "乙页"], "退回文件名数字"
 
     def test_missing_rels_falls_back_instead_of_dropping(self, tmp_path):
         """清单在、rels 不在：`r:id` 翻不成部件名，不许因此一页都不出。"""
@@ -170,7 +187,7 @@ class TestTheFallbackNeverLosesASlide:
         text, err = parse_file(path)
 
         assert err == ""
-        assert _headings(text) == ["slide1.xml", "slide2.xml"]
+        assert _pages(text) == ["甲页", "乙页"]
 
     def test_a_partial_id_list_keeps_every_slide(self, tmp_path):
         """清单只点名了一部分：点名的按它的顺序在前，其余按文件名补齐。"""
@@ -182,7 +199,7 @@ class TestTheFallbackNeverLosesASlide:
         text, err = parse_file(path)
 
         assert err == ""
-        assert _headings(text) == ["slide2.xml", "slide1.xml"], "不许丢页"
+        assert _pages(text) == ["乙页", "甲页"], "不许丢页"
         assert "甲页" in text and "乙页" in text
 
     def test_an_id_pointing_at_nothing_is_skipped_not_fatal(self, tmp_path):
@@ -195,8 +212,7 @@ class TestTheFallbackNeverLosesASlide:
         text, err = parse_file(path)
 
         assert err == ""
-        assert _headings(text) == ["slide1.xml"]
-        assert "甲页" in text
+        assert _pages(text) == ["甲页"]
 
 
 class TestTheOutputContractIsUnchanged:

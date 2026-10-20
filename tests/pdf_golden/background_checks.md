@@ -1,5 +1,6 @@
-> Date: 2015-12-12
+> Created: 2015-12-12 · Modified: 2015-12-12 (the file's own stamps - when this PDF was written, not when the work was written)
 > PDF · 1 pages
+> dates readable in the returned text, most specific first: 2015 (page 1) - these are printed on the pages; no date here is a stated publication date for the work
 
 --- Page 1 ---
 

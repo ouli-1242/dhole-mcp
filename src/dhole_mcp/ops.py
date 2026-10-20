@@ -32,6 +32,8 @@ def _help_epilog() -> str:
         f"  {ui.cyan('dhole --doctor')}     {ui.dim('same as `dhole doctor` (accepted for backwards compatibility)')}",
         f"  {ui.cyan('dhole engines')}      {ui.dim('show / reset / live-test engine health (list|reset|probe)')}",
         f"  {ui.cyan('dhole config')}       {ui.dim('list / set / unset persisted knobs in ~/.dhole/config.json (no host restart for per-call knobs)')}",
+        f"  {ui.cyan('dhole watch')}        {ui.dim('add/list/remove/run a page-change watchlist (checks reuse web_read check; exit 0 none, 1 changed, 2 error)')}",
+        f"  {ui.cyan('dhole wire')}         {ui.dim('the connect-face ledger (what each wire sentence costs every connection) and its lock: ledger|lock [--write --reason]')}",
         f"  {ui.cyan('dhole skill')}        {ui.dim('install the bundled agent skill (status|install)')}",
         "",
         ui.dim("docs:") + "  " + ui.cyan("https://github.com/ouli-1242/dhole-mcp"),
@@ -46,6 +48,124 @@ def _skill_manifest(root) -> dict:
         if p.is_file():
             out[p.relative_to(root).as_posix()] = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
     return out
+
+
+def _tool_defs_lock_path():
+    """锁文件的位置：源码仓库里的 `tests/tool_defs_lock.json`。
+
+    单独一颗函数是为了**可测** —— `--write` 的往返要在临时目录里跑，不能碰真锁。
+    装好的 wheel 里没有 `tests/`，所以读不到时上面那条命令会具名拒绝（不猜、不新建）。
+    """
+    from pathlib import Path
+    return Path(__file__).resolve().parents[2] / "tests" / "tool_defs_lock.json"
+
+
+def _cmd_wire(argv: list[str]) -> int:
+    """`dhole wire [ledger | lock [--write --reason "…"]]` — 常驻层的账与它的锁。
+
+    为什么值得有一扇命令门：`tools/list` 的每一个字符都是**每次连接**付一次的钱，而
+    今天这笔账的余量是 0（`tests/test_wire_moves_land_in_the_manual.py` 把棘轮钉在实测
+    值上，多一个字就红）。在此之前想知道"某一句值多少字符"只能改完再跑测试 —— 那把
+    一次措辞决定变成一次试错，而试错的反馈是"红了"，不是"这句 211 字、可以从那句 168
+    字里腾出来"。这里把测量交到命令上：按工具、按参数拆开。
+
+    `--write` 是锁的**唯一写者**。那条锁文件的 docstring 早就写着"不许手抄"（阶段 7
+    作者手抄时丢过一个开头的 3），而一条只能被"记得去算"的规矩迟早被破；现在算的人
+    只有一个，而写它必须附一句理由 —— 理由进 `comment`，那是这块面孔的变更史，
+    没有理由的改写不是更新锁，是抹掉一次决定。
+    """
+    import json
+
+    from dhole_mcp import cli_ui as ui
+    from dhole_mcp import wire as _wire
+    from dhole_mcp.server import ACTIVE_INSTRUCTIONS, DHOLE_INSTRUCTIONS
+
+    action = (argv[0].lower() if argv else "ledger")
+    if action in ("ledger", "ls", "list", "cost", ""):
+        all_defs = MasterFetchServer._TOOL_DEFS
+        active = MasterFetchServer._enabled_tool_defs()
+        n_all, chars_all = _wire.face_cost(all_defs, DHOLE_INSTRUCTIONS)
+        n_act, chars_act = _wire.face_cost(active, ACTIVE_INSTRUCTIONS)
+        print("  " + ui.dim("connect face (paid once per MCP connection):"))
+        print(f"    default  {n_all:>2} tool(s)  {chars_all:>6} chars"
+              f"  ~{chars_all / 4.16:.0f} tokens (4.16 = this payload's measured chars/token)")
+        if chars_act != chars_all:
+            print(f"    this run {n_act:>2} tool(s)  {chars_act:>6} chars"
+                  "  (DHOLE_TOOLS narrowed the face)")
+        rows = sorted(_wire.face_ledger(all_defs), key=lambda r: -r["chars"])
+        if "--all" in argv[1:]:
+            print("  " + ui.dim("every parameter, most expensive first:"))
+            for row in rows:
+                print(f"    {row['tool']} ({row['chars']} chars)")
+                for name, chars in sorted(row["params"].items(), key=lambda kv: -kv[1]):
+                    print(f"      {name:<22} {chars:>4}")
+            return 0
+        print("  " + ui.dim("where the characters go (compact json per tool, incl. schema):"))
+        for row in rows:
+            print(f"    {row['tool']:<13} {row['chars']:>5} chars"
+                  f"  description {row['description_chars']:>5}")
+            for name, chars in sorted(row["params"].items(),
+                                      key=lambda kv: -kv[1])[:3]:
+                print(f"      · {name:<18} {chars:>4}")
+        print("  " + ui.dim("every parameter of every tool: dhole wire ledger --all"
+                            " · 锁: dhole wire lock"))
+        return 0
+
+    if action == "lock":
+        write = "--write" in argv[1:]
+        reason = _flag_value(argv[1:], "--reason")
+        lock_path = _tool_defs_lock_path()
+        if not lock_path.exists():
+            print(ui.err(f"no lock file at {lock_path} (an installed wheel ships no tests/;"
+                         " the lock lives in the source repo)"), file=sys.stderr)
+            return 2
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        defs = MasterFetchServer._TOOL_DEFS
+        want_tools = _wire.tool_defs_digest(defs)
+        want_face = _wire.wire_face_digest(defs, DHOLE_INSTRUCTIONS)
+        drift = [k for k, want in (("sha256", want_tools),
+                                   ("sha256_wire_face", want_face),
+                                   ("tools", str(len(defs))))
+                 if str(lock.get(k)) != want]
+        if not write:
+            if drift:
+                print(ui.err(f"the lock disagrees on: {', '.join(drift)}"), file=sys.stderr)
+                print(ui.dim("  代码确实变了 -> dhole wire lock --write --reason \"…\"；"
+                             "没改代码 -> 查依赖/构建链路里谁动了描述"), file=sys.stderr)
+                return 1
+            print("  " + ui.ok("lock matches the face this build serves"))
+            print("  " + ui.dim(f"    sha256={want_tools[:12]}… "
+                                f"face={want_face[:12]}… tools={len(defs)}"))
+            return 0
+        if not reason:
+            print(ui.err("--write needs --reason: the lock's comment is the change log "
+                         "of this face; writing without one erases a decision"),
+                 file=sys.stderr)
+            return 2
+        import datetime
+        stamp = datetime.date.today().isoformat()
+        lock["comment"] = f"{stamp} {_flag_value(argv[1:], '--reason')}\n{lock['comment']}"
+        lock["tools"] = len(defs)
+        lock["sha256"] = want_tools
+        lock["sha256_wire_face"] = want_face
+        lock_path.write_text(json.dumps(lock, ensure_ascii=False, indent=2) + "\n",
+                             encoding="utf-8")
+        print("  " + ui.ok(f"lock written by this command: {', '.join(drift) or 'no field'}"))
+        return 0
+
+    print(ui.err(f"unknown subcommand: dhole wire {action} "
+                 "(try: dhole wire ledger|lock)"), file=sys.stderr)
+    return 2
+
+
+def _flag_value(args: list[str], flag: str) -> str:
+    """`--reason 一句话` 或 `--reason=一句话`，没有则空串。"""
+    for i, part in enumerate(args):
+        if part == flag and i + 1 < len(args):
+            return args[i + 1]
+        if part.startswith(f"{flag}="):
+            return part.split("=", 1)[1]
+    return ""
 
 
 def _cmd_config(argv: list[str]) -> int:
@@ -135,6 +255,180 @@ def _cmd_config(argv: list[str]) -> int:
     print(ui.err(f"unknown subcommand: {action} (try: dhole config list|set|unset)"),
           file=sys.stderr)
     return 2
+
+
+def _cmd_watch(argv: list[str], checker=None) -> int:
+    """`dhole watch add|list|remove|run` — a persistent change watchlist.
+
+    The MCP tool answers one URL at a time; a scheduler needs a list that
+    survives restarts and an exit code a cron job can branch on. ``run`` still
+    calls the same ``web_read(extraction_type='check')`` path (through a real
+    server instance), so the baseline, conditional request and diff window are
+    the product's, not a second implementation.
+
+    Exit codes are the contract: 0 = nothing changed, 1 = at least one page
+    changed, 2 = at least one check failed (including a corrupt watchlist or a
+    run already in progress). Errors outrank changes: a sweep that lost half its
+    URLs must not look like a quiet "nothing changed" night.
+    """
+    import asyncio
+    import json as _json
+
+    from dhole_mcp import cli_ui as ui
+    from dhole_mcp import watch as watch_mod
+
+    args = [a for a in argv if a and a.strip()]
+    action = args[0].lower() if args and not args[0].startswith("-") else "list"
+    rest = args[1:] if action == args[0].lower() and args else args
+    json_out = "--json" in rest
+    rest = [a for a in rest if a != "--json"]
+
+    try:
+        if action in ("list", "ls", "status"):
+            state = watch_mod.load_state()
+            if json_out:
+                print(_json.dumps(state, ensure_ascii=False, indent=2))
+                return 0
+            print("  " + ui.dim(f"file: {watch_mod.state_path()}"))
+            if not state["watches"]:
+                print("  " + ui.dim("nothing watched yet") + "  " + ui.dim("|") + "  "
+                      + ui.cmd("dhole watch add https://example.com/page"))
+                return 0
+            for row in state["watches"]:
+                verdict = row.get("last_verdict") or "never checked"
+                paint = {"changed": ui.warn, "error": ui.err,
+                         "baseline": ui.dim, "unchanged": ui.ok}.get(verdict, ui.dim)
+                label = row.get("label") or ""
+                print(f"    {paint(verdict.ljust(13))} {ui.cmd(row['url'])}"
+                      + (ui.dim(f"  [{label}]") if label else ""))
+                if row.get("last_checked_at"):
+                    extra = f"last {row['last_checked_at']} · HTTP {row.get('last_status')}"
+                    if row.get("last_error"):
+                        extra += f" · {row['last_error']}"
+                    print("      " + ui.dim(extra))
+            print("  " + ui.dim("run with") + "  " + ui.cmd("dhole watch run"))
+            return 0
+
+        if action == "add":
+            positional = [a for a in rest if not a.startswith("-")]
+            if not positional:
+                print(ui.err("usage: dhole watch add <url> [--label TEXT] [--json]"),
+                      file=sys.stderr)
+                return 2
+            label = _flag_value(rest, "--label")
+            try:
+                saved = watch_mod.add(positional[0], label=label)
+            except (ValueError, watch_mod.WatchStateError) as exc:
+                print(ui.err(str(exc)), file=sys.stderr)
+                return 2
+            if json_out:
+                print(_json.dumps(saved, ensure_ascii=False, indent=2))
+                return 0
+            verb = "watching" if saved["created"] else "already watching (label updated)"
+            print(ui.branded(ui.ok(verb), ui.cmd(saved["watch"]["url"])))
+            print("  " + ui.dim("the first `dhole watch run` records its baseline; "
+                                "the next run can answer changed/unchanged"))
+            return 0
+
+        if action in ("remove", "rm", "delete"):
+            positional = [a for a in rest if not a.startswith("-")]
+            if not positional:
+                print(ui.err("usage: dhole watch remove <url>"), file=sys.stderr)
+                return 2
+            try:
+                removed = watch_mod.remove(positional[0].split("#", 1)[0])
+            except watch_mod.WatchStateError as exc:
+                print(ui.err(str(exc)), file=sys.stderr)
+                return 2
+            if json_out:
+                print(_json.dumps({"removed": removed, "url": positional[0]},
+                                  ensure_ascii=False))
+            if removed:
+                print(ui.ok(f"stopped watching {positional[0]}"))
+                return 0
+            print(ui.dim(f"{positional[0]} was not in the watchlist"), file=sys.stderr)
+            return 1
+
+        if action == "run":
+            only = []
+            for i, a in enumerate(rest):
+                if a.startswith("--only="):
+                    only.append(a.split("=", 1)[1])
+                elif a == "--only" and i + 1 < len(rest):
+                    only.append(rest[i + 1])
+            timeout_raw = _flag_value(rest, "--timeout") or "30000"
+            try:
+                timeout_ms = int(timeout_raw)
+                if timeout_ms <= 0:
+                    raise ValueError
+            except ValueError:
+                print(ui.err("--timeout must be a positive number of milliseconds"),
+                      file=sys.stderr)
+                return 2
+            force = _flag_value(rest, "--force-fetcher") or None
+            if force not in (None, "http", "stealthy"):
+                print(ui.err("--force-fetcher must be http or stealthy"), file=sys.stderr)
+                return 2
+
+            srv = MasterFetchServer()
+
+            async def _default_checker(u: str) -> dict:
+                row = await srv.web_read(url=u, extraction_type="check",
+                                         timeout=timeout_ms, force_fetcher=force)
+                if isinstance(row, dict):
+                    return row
+                return {"changed": None, "status": int(row.status or 0),
+                        "error": row.error or "check returned no verdict",
+                        "note": row.next_action}
+
+            async def _sweep():
+                return await watch_mod.run_locked(
+                    checker or _default_checker,
+                    only=only or None)
+
+            try:
+                result = asyncio.run(_sweep())
+            except watch_mod.WatchBusy as exc:
+                print(ui.err(str(exc)), file=sys.stderr)
+                return 2
+            except watch_mod.WatchStateError as exc:
+                print(ui.err(str(exc)), file=sys.stderr)
+                return 2
+            if json_out:
+                print(_json.dumps(result, ensure_ascii=False, indent=2))
+                return result["exit_code"]
+            if result["unknown"]:
+                print(ui.err("not watched: " + ", ".join(result["unknown"])),
+                      file=sys.stderr)
+                return 2
+            if not result["checked"]:
+                print("  " + ui.dim("nothing watched yet") + "  " + ui.dim("|") + "  "
+                      + ui.cmd("dhole watch add https://example.com/page"))
+                return result["exit_code"]
+            for row in result["rows"]:
+                paint = {"changed": ui.warn, "error": ui.err,
+                         "baseline": ui.dim, "unchanged": ui.ok}.get(row["verdict"], ui.dim)
+                line = (f"    {paint(row['verdict'].ljust(10))} {ui.cmd(row['url'])}"
+                        f"  " + ui.dim(f"HTTP {row['status']}"))
+                if row.get("label"):
+                    line += ui.dim(f"  [{row['label']}]")
+                if row.get("error"):
+                    line += "  " + ui.err(row["error"])
+                print(line)
+            print("  " + ui.dim(f"{result['checked']} checked · "
+                                f"{len(result['changed'])} changed · "
+                                f"{len(result['unchanged'])} unchanged · "
+                                f"{len(result['baseline'])} baseline · "
+                                f"{len(result['errors'])} error")
+                  + ui.dim(f"  (exit {result['exit_code']})"))
+            return result["exit_code"]
+
+        print(ui.err(f"unknown subcommand: {action} "
+                     "(try: dhole watch add|list|remove|run)"), file=sys.stderr)
+        return 2
+    except watch_mod.WatchStateError as exc:
+        print(ui.err(str(exc)), file=sys.stderr)
+        return 2
 
 
 def _cmd_skill(argv: list[str], target=None) -> int:
@@ -377,11 +671,15 @@ def _engines_probe(args: list[str]) -> int:
                 # 出错时 status 本身就是最具体的信息（"error:MetaSearchException: …"），
                 # 别把同一个字符串再印一遍当原因 —— 但列宽截掉的那一截要挪到原因栏，
                 # 不然异常类型留下了、真正有用的尾巴（哪个 OSError）反而丢了。
+                # 断点只能在 `: ` 那一个界上：实测 `error:MetaSearchException` 被 18 列宽
+                # 切成 "error:MetaSearchEx" + 换到原因栏的 "ception"，一个断在标识符中间的
+                # 尾巴读起来像坏掉的输出，不像一句理由（同一个口径见 `_summary_label`）。
                 detail = "" if err == status else err
-                if err == status and len(status) > 18:
-                    detail = status[18:]
+                _head, _sep, _tail = status.rpartition(": ")
+                if err == status and len(status) > 26 and _tail:
+                    status, detail = (_head + _sep)[:26], _tail
                 print(f"    {name.ljust(14)} " + ui.err(
-                    f"{status[:18].ljust(18)}  -  {elapsed:5.1f}s  {detail[:52]}"))
+                    f"{status.ljust(26)}  -  {elapsed:5.1f}s  {detail[:52]}"))
         print("  " + (ui.ok(f"{usable} of {len(names)} engine(s) usable right now")
                       if usable else ui.err(f"no engine answered {query!r}"))
               + ui.dim("  (cooldowns are honored here; `dhole engines reset` clears them)"))
@@ -408,7 +706,7 @@ def main():
     # through to argparse, which errored with "unrecognized arguments: doctor"
     # and never mentioned --doctor. Both spellings now go through the same
     # `updater.doctor()` call, so their stdout AND exit code are identical.
-    _SUBCOMMANDS = ("engines", "skill", "doctor", "config")
+    _SUBCOMMANDS = ("engines", "skill", "doctor", "config", "watch", "wire")
     if len(_sys.argv) > 1:
         first = _sys.argv[1].lower()
         if first == "engines":
@@ -417,6 +715,10 @@ def main():
             raise SystemExit(_cmd_skill(_sys.argv[2:]))
         if first == "config":
             raise SystemExit(_cmd_config(_sys.argv[2:]))
+        if first == "watch":
+            raise SystemExit(_cmd_watch(_sys.argv[2:]))
+        if first == "wire":
+            raise SystemExit(_cmd_wire(_sys.argv[2:]))
         if first == "doctor":
             raise SystemExit(updater.doctor())
         # Anything that is not a flag and not a known subcommand is a typo.

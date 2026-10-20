@@ -336,9 +336,11 @@ def _private_door_does_not_leak_across_tests():
       当场红 —— 它那句 `assert _verdict("http://192.168.1.50/") == "blocked"` 读到的门是别人开的。
       摘掉这颗挂具就红，装上就绿。
 
-    同一条泄漏对**走工具**的用例没这么显：`_smart_fetch_request_context` 每次调用都从存储
-    重推一次（D1 量的就是那颗钉子），所以那类用例读到的是自己该读的值。漏的就是绕过工具、
-    直接问 `validate_url` 的那一群 —— 而"私网必须被拒"的判据正是这一群。
+    同一条泄漏对**走工具**的用例没这么显：R02-141 之前 `_smart_fetch_request_context`
+    每次调用都从存储重推一次（D1 量的就是那颗钉子），所以那类用例读到的是自己该读的值。
+    今天守卫自己并存量（`private_hosts_allowed`），漏不问门记不记得 —— 而这颗挂具仍然
+    要有：它复位的是**作用域那一层**，绕过工具直接问 `validate_url` 的那一群用例
+    （"私网必须被拒"的判据正是这一群）读的就是这一层加存量加 env 的合并值。
     """
     from dhole_mcp import security as _sec
 

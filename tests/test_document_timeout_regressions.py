@@ -74,35 +74,39 @@ class TestDocumentsAreNotPricedByPageHabit:
         """The report's exact shape: 0.8s of page habit, 5s for a 40MB download."""
         server_mod._DOMAIN_LATENCY["docs.test"] = 800.0
 
-        page_s, page_retries = _http_tier_budget(PAGE_URL, 60000, 60.0)
-        doc_s, doc_retries = _http_tier_budget(DOC_URL, 60000, 60.0, document=True)
+        page_s, page_retries, page_bound = _http_tier_budget(PAGE_URL, 60000, 60.0)
+        doc_s, doc_retries, doc_bound = _http_tier_budget(DOC_URL, 60000, 60.0, document=True)
 
         assert (page_s, page_retries) == (5, 3), "a host that answers in 0.8s should not hold a page call open"
         assert (doc_s, doc_retries) == (60, 0), "and that habit must not price a download"
+        # 第三位是 R02-041 的原料：谁把这颗数压到 5s。文档那一发不戴这顶帽，所以也
+        # 不该被说成 learned。（数值一位没改，改的只是函数肯把"是哪一颗"一起交回来。）
+        assert page_bound == "learned", page_bound
+        assert doc_bound == "", doc_bound
 
     def test_a_document_takes_one_attempt_because_a_retry_restarts_it(self):
         """Four attempts of 15s cannot deliver a file that needs 60s, ever; one
         attempt of 60s can. The caller retries the call if it was a blip."""
-        _s, retries = _http_tier_budget(DOC_URL, 60000, 60.0, document=True)
+        _s, retries, _bound = _http_tier_budget(DOC_URL, 60000, 60.0, document=True)
         assert retries == 0
 
     def test_pages_keep_the_attempt_count_that_fits_the_budget_left(self):
         """Each attempt stays as long as the host needs; only the COUNT is what
         the budget affords. Shrinking an attempt to buy more of them would fail a
         slow-but-healthy site to insure against a stalled one."""
-        assert _http_tier_budget(PAGE_URL, 60000, 60.0) == (60, 0)   # one attempt already fills the call
-        assert _http_tier_budget(PAGE_URL, 30000, 30.0) == (30, 0)   # 4x30 would not fit 30 -> one try
-        assert _http_tier_budget(PAGE_URL, 6000, 6.0) == (6, 0)
-        assert _http_tier_budget(PAGE_URL, 1500, 1.5) == (1, 0)
+        assert _http_tier_budget(PAGE_URL, 60000, 60.0) == (60, 0, "")   # one attempt already fills the call
+        assert _http_tier_budget(PAGE_URL, 30000, 30.0) == (30, 0, "")   # 4x30 would not fit 30 -> one try
+        assert _http_tier_budget(PAGE_URL, 6000, 6.0) == (6, 0, "")
+        assert _http_tier_budget(PAGE_URL, 1500, 1.5) == (1, 0, "")
         # A host learned to answer in 0.8s keeps its four short attempts, because
         # they fit: 4 x 5s inside the 60s that is left.
         server_mod._DOMAIN_LATENCY["docs.test"] = 800.0
-        assert _http_tier_budget(PAGE_URL, 60000, 60.0) == (5, 3)
+        assert _http_tier_budget(PAGE_URL, 60000, 60.0) == (5, 3, "learned")
 
     def test_the_tier_never_asks_for_more_wall_time_than_is_left(self):
         for left in (1.5, 5, 8, 20, 31, 90, 120):
             for document in (False, True):
-                per_attempt, retries = _http_tier_budget(
+                per_attempt, retries, _bound = _http_tier_budget(
                     DOC_URL if document else PAGE_URL, left * 1000, left,
                     document=document)
                 assert per_attempt * (retries + 1) <= left + 1, (left, document)
@@ -276,7 +280,10 @@ class TestDocumentTimeoutAdviceIsTrue:
         out = await _escalate(srv, DOC_URL, 1000, body_size=40 * 1024 * 1024)
 
         assert out.error.startswith("timeout: the ")
-        assert "the file is 40.0MB" in out.next_action
+        # "file is" 而不是 "the file is"：这句现在开在字段的第一位，作者会把它句首大写
+        # （R01-010 的文案规矩，见 `quality._as_sentence`）。这里量的是"尺寸被点名"，
+        # 不是第一个字母的大小写。
+        assert "file is 40.0MB" in out.next_action
         assert "raise timeout" in out.next_action
         assert "EXTRACTED, not what gets downloaded" in out.next_action
         assert "skip browser rendering" not in out.next_action
@@ -309,12 +316,33 @@ class TestDocumentTimeoutAdviceIsTrue:
         """primp reports a stalled download as a failed RESPONSE (status 0), which
         is not the over-budget result — so the tier's advice has to reach that
         path as well, or the common real failure still gets the generic sentence."""
-        srv, _seen = _server_with_captured_get(ResponseModel(url=DOC_URL, status=0, content=[]))
+        srv, _seen = _server_with_captured_get(ResponseModel(
+            url=DOC_URL, status=0, content=[],
+            error="network_error: timeout while downloading"))
 
         out = await _escalate(srv, DOC_URL, 30000, body_size=8 * 1024 * 1024)
 
-        assert "the file is 8.0MB" in out.next_action
+        assert "file is 8.0MB" in out.next_action
         assert "skip browser rendering" not in out.next_action
+
+    @pytest.mark.asyncio
+    async def test_an_expired_certificate_is_not_rewritten_as_a_timeout(self):
+        """R05-001: status 0 + no body is not a synonym for timeout.
+
+        A certificate that expired fails before a single byte of the download;
+        the document branch used to overwrite the classifier's `tls_error` with
+        "raise timeout", sending the caller after a clock that never mattered.
+        """
+        srv, _seen = _server_with_captured_get(ResponseModel(
+            url=DOC_URL, status=0, content=[],
+            error="tls_error: certificate has expired"))
+
+        out = await _escalate(srv, DOC_URL, 30000, body_size=8 * 1024 * 1024)
+
+        assert out.diagnosis and out.diagnosis["code"] == "tls_error", out.diagnosis
+        assert "raise timeout" not in out.next_action
+        assert "file is" not in out.next_action, (
+            "the size of a file that never started downloading is not the story")
 
     @pytest.mark.asyncio
     async def test_a_pdf_that_arrived_keeps_its_own_advice(self):
@@ -328,7 +356,7 @@ class TestDocumentTimeoutAdviceIsTrue:
         out = await _escalate(srv, DOC_URL, 30000, body_size=3 * 1024 * 1024)
 
         assert "OCR" in out.next_action
-        assert "the file is" not in out.next_action
+        assert "file is" not in out.next_action
 
 
 # ─── C: the forced tier, same bug through a different door ──────────────────

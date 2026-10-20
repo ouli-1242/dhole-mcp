@@ -108,16 +108,24 @@ def _deck(tmp_path, name: str, slides: dict[str, str], *,
     return str(path)
 
 
-def _headings(text: str) -> list[str]:
-    return [ln for ln in text.splitlines() if ln.startswith("## ")]
+def _blocks(text: str) -> list[list[str]]:
+    """每一节从自己的**正文第一行**起算，装着它自己的正文与备注。
+
+    窗口从前是部件名（`## slide1.xml`）—— 那既能当节的地址也能当顺序的读数。
+    小节标题改成「第几页」之后（R02-025 那一把），部件名不再出场，这里改按
+    **每页自己的文字**取节：它同样指得出是哪一页，备注挂在哪儿这条判据一点没变松。
+    """
+    out: list[list[str]] = []
+    for ln in text.splitlines():
+        if ln.startswith("## "):
+            out.append([])
+        elif out and ln.strip():
+            out[-1].append(ln.strip())
+    return out
 
 
-def _block_of(text: str, heading: str) -> list[str]:
-    """Everything between one slide's heading and the next — body and notes."""
-    lines = text.splitlines()
-    rest = lines[lines.index(heading) + 1:]
-    end = next((i for i, ln in enumerate(rest) if ln.startswith("## ")), len(rest))
-    return [ln for ln in rest[:end] if ln]
+def _by_body(text: str) -> dict:
+    return {b[0]: b for b in _blocks(text) if b}
 
 
 class TestNotesComeWithTheirSlide:
@@ -132,10 +140,11 @@ class TestNotesComeWithTheirSlide:
         text, err = parse_file(path)
 
         assert err == ""
-        assert _block_of(text, "## slide1.xml") == [
+        blocks = _by_body(text)
+        assert blocks["第三季度营收"] == [
             "第三季度营收", "> Notes: 这里要强调华东区的增长"]
         # 另一页没有备注，它的块里就只有正文
-        assert _block_of(text, "## slide2.xml") == ["成本结构"]
+        assert blocks["成本结构"] == ["成本结构"]
 
     def test_notes_are_labeled_so_they_are_not_mistaken_for_slide_text(self, tmp_path):
         """不标就和正文糊在一起 —— 读的人会把讲者备注当幻灯片内容引用。"""
@@ -181,9 +190,10 @@ class TestNotesComeWithTheirSlide:
 
         text, _ = parse_file(path)
 
-        assert _headings(text) == ["## slide2.xml", "## slide1.xml"], "页序没生效"
-        assert _block_of(text, "## slide2.xml") == ["乙页", "> Notes: 乙页的备注"]
-        assert _block_of(text, "## slide1.xml") == ["甲页"]
+        assert [b[0] for b in _blocks(text)] == ["乙页", "甲页"], "页序没生效"
+        blocks = _by_body(text)
+        assert blocks["乙页"] == ["乙页", "> Notes: 乙页的备注"]
+        assert blocks["甲页"] == ["甲页"]
 
     def test_a_notes_part_with_no_authored_text_gets_no_block(self, tmp_path):
         """备注页存在但里面只有编号字段：那不是备注，不该凭空长出一个 `> Notes:`。"""

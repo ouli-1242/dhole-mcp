@@ -99,9 +99,24 @@ def test_a_content_failure_keeps_the_content_advice(tmp_path):
 
 
 def test_a_missing_file_still_names_the_paths_tried(tmp_path):
-    r = _parse(file_path=str(tmp_path / "nope.pdf"))
-    assert r.error.startswith("File not found")
-    assert "cwd=" in r.next_action and "PATH was refused" not in r.next_action
+    """缺失那一支的正面锁：逐字列出被找过哪几处，且不滑进「路径被拒」。
+
+    原本这一格只钉 `"cwd=" in next_action`，而且传的是绝对写法 —— R02-062 之后那句出路
+    只有一位作者（server 按 `os.path.isabs` 写进 `error`），所以这一格改钉两件更硬的事：
+    两种形状都还在这一支里（`error` 逐字列出被找过的地方）、相对那一发的 `cwd=` 一字没丢，
+    而 next_action 不许把缺失说成拒绝。负向锁（"PATH was refused" 不在）原样保留。
+    """
+    ab = _parse(file_path=str(tmp_path / "nope.pdf"))
+    rel = _parse(file_path="r02-062-refused-lock.txt")
+
+    for r in (ab, rel):
+        assert r.error.startswith("File not found"), r.error
+        assert "nope.pdf" in r.error or "r02-062-refused-lock.txt" in r.error, r.error
+        assert "PATH was refused" not in r.next_action, r.next_action
+        assert "error" in r.next_action.lower(), r.next_action
+    assert "cwd=" in rel.error, rel.error
+    # 绝对那一发不许留着一扇打不开的门当出路：它必须自己说清 `cwd=` 在这发上不生效
+    assert "cwd=" not in ab.error or "does nothing" in ab.error, ab.error
 
 
 def test_the_guard_is_not_a_knob():

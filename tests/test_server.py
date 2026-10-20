@@ -496,7 +496,14 @@ class TestFinalizeResult:
         assert finalized.content_ok is True
         assert finalized.fetched_at != ""
         assert finalized.page_type is not None
-        mock_set_cached.assert_not_called()  # cache_ttl=0 → no cache write
+        # 写侧的账跟着 R02-032 改：旧断言写的是「cache_ttl=0 → 不写缓存」，而那颗参数
+        # 管的是**读侧**（这一发别看缓存）。把旧断言留着就是把缺陷当规格，所以这里改成
+        # 锁新契约：fresh 那一发照样落盘，用的是本工具的默认 TTL。
+        from dhole_mcp.cache import DEFAULT_TTL
+
+        mock_set_cached.assert_called_once()
+        stored_ttl = mock_set_cached.await_args.args[5]
+        assert stored_ttl == DEFAULT_TTL, stored_ttl
 
     @pytest.mark.asyncio
     @patch("dhole_mcp.server.set_cached", new_callable=AsyncMock)
@@ -543,9 +550,19 @@ class TestBulkGetEnvelope:
     Regression test for P0: get()/bulk_get() must call _with_agent_hints()."""
 
     @staticmethod
-    def _mock_http_response(status=200, body=b"<html><body><p>Test</p></body></html>",
+    def _mock_http_response(status=200,
+                            body=b"<html><body><p>This page describes the cache.</p>"
+                                 b"<p>Entries expire after a set time.</p>"
+                                 b"<p>The fetcher runs in two tiers.</p>"
+                                 b"<p>Escalation happens only on failure.</p></body></html>",
                             content_type="text/html", url="https://example.com"):
-        """Create a minimal mock HTTP response object."""
+        """Create a minimal mock HTTP response object.
+
+        正文原本是 `<p>Test</p>`（整页可见 4 字）。3.4 之后那一页会被判成 `nav_only`
+        （整页自己不足 200 字、只有一行标签），于是 `content_ok` 变假 —— 而这一族的
+        判据是"干净 200 要有完整信封"，不是"一个字节的页面也算内容"。所以改的是**标本**
+        （给它一段真的有正文的页面），不是那句断言。
+        """
         m = MagicMock()
         m.status = status
         m.body = body

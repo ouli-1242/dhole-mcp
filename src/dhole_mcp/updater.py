@@ -180,17 +180,51 @@ def _has_module(name: str) -> bool:
         return False
 
 
+def _yield_line(verdict: str, row: dict, nodes: int, usable: int) -> str:
+    """`dhole -v` 那一行的措辞：判据在 engine_yield，这里只把 token 翻成短语加本轮的数。
+
+    词表按 token 取，一格都不许自己再判一遍（历史上这里抄过第二把阶梯，漂了不报错）。
+    缺格不许静默 —— 宁可打印 `unclassified verdict 'x'`，让读的人看见词表少了一格。
+    """
+    from dhole_mcp import engine_yield
+    label = engine_yield.VERDICT_CLI_LABEL.get(verdict)
+    if label is None:
+        return f"unclassified verdict '{verdict}' (no line for it in the CLI table)"
+    mean = _row_float(row, "mean")
+    if verdict in ("parser_drift", "parser_suspect"):
+        return (f"{label} ({nodes} item nodes, {usable} usable)"
+                f" {'[confirmed]' if verdict == 'parser_drift' else '[suspect]'}")
+    if verdict == "not_instrumented":
+        return f"{max(usable, 0)} results"
+    if verdict == "upstream_empty":
+        return f"0 nodes (usually {mean:.1f}/run)"
+    if verdict == "unknown_empty":
+        return "0 this query"
+    if verdict == "healthy":
+        return f"{usable} usable ({mean:.1f}/run avg)"
+    return label
+
+
+def _row_float(row: dict, key: str, default: float = 0.0) -> float:
+    # 不能用 `row.get(k) or default`：0 在这里是**最有意义**的值（0 条可用正是漂移），
+    # `or` 会把它变成"没有观测"。
+    try:
+        return float(row.get(key, default))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
 def _engine_yield_row() -> tuple[str, str, bool] | None:
     """每个引擎最近一轮的产出 —— 静默降级唯一能被看见的地方。
 
     刻意不 import 搜索层：诊断命令要在精简安装 / 半坏安装上也能跑（那时才最需要
-    看它），而 search_metasearch 会拉 primp/lxml/httpx/fake_useragent。这里只做
-    文件系统读，判据与 _classify_yield 保持同构。
+    看它），而 search_metasearch 会拉 primp/lxml/httpx/fake_useragent。这里只做文件系统
+    读，判据走 engine_yield —— 与响应侧那颗 verdict 是同一把尺，不是它的第二个作者。
     """
     try:
         import json
 
-        from dhole_mcp import paths
+        from dhole_mcp import engine_yield, paths
         path = paths.file("engine_stats.json")
         if not os.path.exists(path):
             return ("engine yield", "no data yet (run a search first)", True)
@@ -201,19 +235,12 @@ def _engine_yield_row() -> tuple[str, str, bool] | None:
         import time as _t
         now = _t.time()
 
-        def _num(key: str, default: float) -> float:
-            # 不能用 `st.get(k) or default`：0 在这里是**最有意义**的值（0 条可用
-            # 产出正是漂移），`or` 会把它悄悄变成"没有观测"。
-            try:
-                return float(st.get(key, default))  # type: ignore[arg-type]
-            except (TypeError, ValueError):
-                return default
-
         parts: list[str] = []
         suspect = False
-        # 只印还存在的引擎。engine_stats.json 是历史累加，17.0 删掉的 6 家后端
-        # 在里面仍各有一条 —— 点名一个已经不存在的引擎，用户会去 `engines=` 里
-        # 指它，然后收到一句看起来像我们坏了的 invalid_request。
+        # 只印还存在的引擎。engine_stats.json 是历史累加，17.0 删掉的 5 家后端
+        # 在里面仍各有一条（yahoo 在 17.1 作为 Bing 家族冗余返回，重新算已知）——
+        # 点名一个已经不存在的引擎，用户会去 `engines=` 里指它，然后收到一句
+        # 看起来像我们坏了的 invalid_request。
         from dhole_mcp.search_engines import _INDEX_FAMILY
         known = set(_INDEX_FAMILY)
         retired = [n for n in sorted(stats) if n not in known]
@@ -223,33 +250,12 @@ def _engine_yield_row() -> tuple[str, str, bool] | None:
             st = stats[name]
             if not isinstance(st, dict):
                 continue
-            status = str(st.get("status", ""))
-            nodes = int(_num("last_nodes", -1))
-            usable = int(_num("last", -1))
-            mean = _num("mean", 0.0)
-            drift = int(_num("drift", 0))
-            if now - _num("ts", 0.0) > 3600:
-                parts.append(f"{name}: no recent run")
-                continue
-            if status in ("blocked", "circuit_open"):
-                parts.append(f"{name}: blocked/cooled")
-            elif status == "timeout":
-                parts.append(f"{name}: timeout")
-            elif status.startswith(("error", "init_error", "no_key")):
-                parts.append(f"{name}: unreachable")
-            elif status == "preempted":
-                parts.append(f"{name}: not asked")
-            elif nodes < 0:
-                parts.append(f"{name}: {usable if usable >= 0 else 0} results")
-            elif nodes > 0 and usable == 0:
-                suspect = True
-                parts.append(f"{name}: PARSER BROKEN ({nodes} item nodes, 0 usable)"
-                             + (" [confirmed]" if drift >= 2 else " [suspect]"))
-            elif nodes == 0 and usable == 0:
-                parts.append(f"{name}: 0 nodes (usually {mean:.1f}/run)" if mean >= 1
-                             else f"{name}: 0 this query")
-            else:
-                parts.append(f"{name}: {usable} usable ({mean:.1f}/run avg)")
+            nodes = int(_row_float(st, "last_nodes", -1))
+            usable = int(_row_float(st, "last", -1))
+            verdict = engine_yield.classify_yield(
+                st, str(st.get("status", "")), nodes, usable, now=now)
+            suspect = suspect or verdict in ("parser_drift", "parser_suspect")
+            parts.append(f"{name}: {_yield_line(verdict, st, nodes, usable)}")
         if retired:
             parts.append(f"(+{len(retired)} record(s) from backends 17.0 deleted)")
         if not parts:
@@ -388,29 +394,23 @@ def capabilities() -> list[tuple[str, str, bool]]:
         _append_engine_yield(caps)
         return caps
     try:
-        from dhole_mcp.reranker import active_model, active_model_dir
-        model = active_model()
-        d = active_model_dir()
-        ready = ((d / "model.onnx").exists()
-                 and (d / "tokenizer.json").exists())
+        from dhole_mcp.reranker import missing_model_phrase, model_status
+        st = model_status()
     except Exception:
         caps.append(("neural rerank", "registry unreadable - reinstall dhole-mcp", False))
         _append_engine_yield(caps)
         return caps
-    if ready:
+    # 判决不在这里算：`reranker.model_present()` 是「模型在不在盘上」唯一的作者，它带着
+    # `min_bytes` 那道闸（半个文件就是没在）。从前这一行自己数 `.exists()`，于是下载被
+    # 截断的那台机器上 `dhole -v` 说 ready、而加载那一侧说不在（R02-054 量到的第二件事）。
+    if st["present"]:
         caps.append((
             "neural rerank",
-            f"ready ({model.name}: {model.label})",
+            f"ready ({st['model']}: {st['label']})",
             True,
         ))
     else:
-        caps.append((
-            "neural rerank",
-            f"{model.name} not downloaded yet "
-            f"(~{model.approx_bytes // 1_000_000}MB, resumable; "
-            "the first neural search fetches it)",
-            False,
-        ))
+        caps.append(("neural rerank", missing_model_phrase(st), False))
 
     # 这行以前是写死的字面量，换引擎池时漏改过一次（`dhole -v` 报旧池）——现在从
     # DEFAULT_ENGINES 推导，由 tests/test_cli.py 的 pool 断言钉住。
@@ -641,7 +641,10 @@ def _append_config_audit(checks: list[tuple[str, str, str, str]]) -> None:
             "is refused with an authorization ask (nothing executes until you "
             f"confirm it; an approval is remembered per host for {_cdp_window} "
             "days, then asked again)",
-            ""))
+            # 这一行从前是空的，于是「名册在哪」这个答案在**名册为空时**恰好问不到 ——
+            # 而那正是回执上那句 "run `dhole doctor`" 最常出现的时刻（第一次 attach 被拒）。
+            # 体检报告是操作员那一侧，绝对路径属于这里（R02-055：回执只给文件名）。
+            f"the roster file is {_cdp_path} (nothing in it yet)"))
 
     checks.append((
         "config", "ok",
@@ -1124,9 +1127,10 @@ def _append_rerank_model(checks) -> None:
                        "runtime absent - consensus order only", ""))
         return
     try:
-        from dhole_mcp.reranker import active_model, active_model_dir
+        from dhole_mcp.reranker import (active_model, active_model_dir,
+                                        missing_model_phrase, model_status)
         model = active_model()
-        d = active_model_dir()
+        st = model_status()
     except Exception as exc:  # noqa: BLE001
         checks.append((
             "rerank model", "fail",
@@ -1134,14 +1138,13 @@ def _append_rerank_model(checks) -> None:
             "reinstall dhole-mcp (registry unreadable)",
         ))
         return
-    if not (d / "model.onnx").exists():
-        checks.append((
-            "rerank model", "info",
-            f"{model.name} not downloaded (~{model.approx_bytes // 1_000_000}MB, "
-            "resumable; the first neural search fetches it)", "",
-        ))
+    # 在不在读 `reranker.model_present()` 那一位，这里只数体积与摘要可对性。从前这一行
+    # 只看 `model.onnx` 存不存在：缺 tokenizer.json 也报 ok、只有半个文件的截断下载也报
+    # ok（实测 `ok · bge-zh: 0.0MB in 2 file(s)`），而加载那一侧同一格说「不在」。
+    if not st["present"]:
+        checks.append(("rerank model", "info", missing_model_phrase(st), ""))
         return
-    mb, files = _dir_mb(str(d))
+    mb, files = _dir_mb(str(active_model_dir()))
     authority = (f"publisher digest for {len(model.publisher_sha256)} file(s)"
                  if model.publisher_sha256 else
                  "self-hash only - no publisher digest to compare against")
@@ -1374,30 +1377,21 @@ def _append_wire_cost(checks) -> None:
     出来的比值，不是通用常数，所以句子里把出处写在一起。
     """
     try:
-        import hashlib as _hashlib
-        import json as _json
-
+        # 算术不在这里：同一串字节的指纹此前有三处各算一遍（这里、锁的两半、CLI），
+        # 而它的价值全在"三处算的是同一件事"上。搬进 `wire.py`，这里只当读者。
         from dhole_mcp import server as _srv
+        from dhole_mcp import wire as _wire
         defs = _srv.MasterFetchServer._enabled_tool_defs()
-        minimal = [{"name": td["name"], "description": td["description"],
-                    "inputSchema": td["inputSchema"],
-                    **({"annotations": td["annotations"]}
-                       if "annotations" in td else {})} for td in defs]
-        compact = len(_json.dumps({"tools": minimal}, separators=(",", ":"),
-                                  ensure_ascii=False))
         # 这一行报的是**这个进程**这次连接要付的字符数，所以 instructions 取
         # ACTIVE_INSTRUCTIONS：DHOLE_TOOLS 裁掉工具时，被裁的那几行路由也跟着退出
         # wire（真机 stdio 量过：全量 2,476 / 8 颗 2,116 / 两件套 1,502）。写
         # DHOLE_INSTRUCTIONS 会让 doctor 在收窄过的注册面上报一个谁都没付的数，
         # 而下面那句"想少付就用 DHOLE_TOOLS"正好只在收窄过时才成立。
-        total = compact + len(_srv.ACTIVE_INSTRUCTIONS)
+        _n, total = _wire.face_cost(defs, _srv.ACTIVE_INSTRUCTIONS)
         # F-C1-1：字数相同内容不同（一次措辞改写）在 connect cost 行上看不出
         # 来。指纹覆盖这条进程实际 serve 的脸（minimal defs ＋ instructions，
         # 与上一行的计价口径同一份输入）；基线在仓库对应 tag 的锁文件里。
-        face_digest = _hashlib.sha256(_json.dumps(
-            {"tools": minimal, "instructions": _srv.ACTIVE_INSTRUCTIONS},
-            separators=(",", ":"), ensure_ascii=False, sort_keys=True,
-        ).encode("utf-8")).hexdigest()
+        face_digest = _wire.wire_face_digest(defs, _srv.ACTIVE_INSTRUCTIONS)
     except Exception as exc:  # noqa: BLE001
         checks.append(("connect cost", "info",
                        f"unreadable: {type(exc).__name__}"[:60], ""))

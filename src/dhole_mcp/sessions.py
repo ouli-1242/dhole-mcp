@@ -182,8 +182,8 @@ def _reencrypt_plaintext_values(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE cookies SET value=? WHERE rowid=?",
                      (secretbox.protect(value), rowid))
     conn.commit()
-    logger.info("re-encrypted %d plaintext cookie value(s) from a pre-17.1 "
-                "sessions.db", len(rows))
+    logger.info("re-encrypted %d cookie value(s) that the legacy sessions.db "
+                "kept in plaintext", len(rows))
 
 
 def _hosts_of(url: str) -> str:

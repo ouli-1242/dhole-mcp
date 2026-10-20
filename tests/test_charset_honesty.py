@@ -22,7 +22,7 @@
 
 判据：
 
-1. `encoding_was_guessed` 的真值表 —— gb18030 + 无人声明 + 无 BOM + 头部无 NUL 才
+1. `encoding_basis` 的真值表 —— gb18030 + 无人声明 + 无 BOM + 头部无 NUL 才
    为真；声明过、BOM 说过、UTF-8 解开的、头部有 NUL 的都别声称"这是猜的"。
 2. `doc_parse` 在 SJIS/EUC-KR 样本上：`metadata.encoding_basis == "guessed"`、
    `next_action` 说出这是猜测并给出 `encoding=` 与四个候选名，而 `content_ok` **不
@@ -33,7 +33,7 @@
    而非"我怀疑读错了"；措辞里不许出现指责。
 5. 不需要说话的时候一个字都不说：UTF-8、带 BOM、以及已经报 `encoding_undecodable`
    的那一支（错误已经点名编码了）。
-6. 这条链只有一个作者：判词在 `charset.encoding_was_guessed`，搬运会是
+6. 这条链只有一个作者：判词在 `charset.encoding_basis`，搬运会是
    `parse._decode_body` → `server.doc_parse` → `quality._agent_hints`，中间不许长出
    第二个决定"猜没猜"的地方。
 """
@@ -69,56 +69,63 @@ def _parse(tmp_path, name, payload: bytes, **kwargs):
 
 class TestTheGuessIsNamedOnlyWhereItIsTrue:
     def test_strict_gb18030_with_no_declaration_is_a_guess(self):
-        assert charset_mod.encoding_was_guessed(
+        assert charset_mod.encoding_basis(
             ZH_TEXT.encode("gbk"), "", "gb18030"
-        ) is True
+        ) == "guessed"
 
     def test_a_declared_charset_is_a_verdict_not_a_guess(self):
         """Passing encoding= is the caller taking the reading. Saying "guessed"
-        there would make the remedy look like the thing still in doubt."""
-        for declared in ("gbk", "shift_jis", "GBK"):
+        there would make the remedy look like the thing still in doubt.
+
+        2026-10-14（R02-021）改过一次输入，没改这句意图：这一族名字与赢家的**配对**必须
+        是解码器真能产出的那一族。原来这格喂的是 (`declared='gbk'`, `used='gb18030'`) ——
+        gbk 明明解得开这份 gbk 字节，`decode_file_bytes` 就会直接返回 gbk，这对名字在线
+        上凑不出来。现在按线上样子写：点中了是 verdict，点不开而由检测顶上是 fallback
+        （后者正是那一发被静默掉的那一支，另加一条测试钉住）。
+        """
+        for declared in ("gbk", "GBK", " gbk "):
             assert (
-                charset_mod.encoding_was_guessed(
-                    ZH_TEXT.encode("gbk"), declared, "gb18030"
-                )
-                is False
+                charset_mod.encoding_basis(ZH_TEXT.encode("gbk"), declared, "gbk")
+                == "declared"
             )
+        body = KO_TEXT.encode("euc-kr")
+        assert charset_mod.encoding_basis(body, "shift_jis", "gb18030") == "fallback"
 
     def test_a_bom_or_a_utf8_read_states_itself(self):
         body = ZH_TEXT.encode("utf-16")
-        assert charset_mod.encoding_was_guessed(body, "", "utf-16") is False
-        assert charset_mod.encoding_was_guessed(
+        assert charset_mod.encoding_basis(body, "", "utf-16") == ""
+        assert charset_mod.encoding_basis(
             ZH_TEXT.encode("utf-8-sig"), "", "utf-8-sig"
-        ) is False
+        ) == ""
 
     def test_a_utf16_body_with_a_stripped_bom_is_not_called_a_guess(self):
         """The NUL head is the case where gb18030 "succeeds" on someone else's
         bytes; charset.py already handles it, and the flag would be redundant
         next to a decoder that does not need one."""
         assert (
-            charset_mod.encoding_was_guessed(
+            charset_mod.encoding_basis(
                 ZH_TEXT.encode("utf-16-le"), "", "gb18030"
             )
-            is False
+            == ""
         )
 
     def test_the_helper_is_the_only_place_that_decides(self):
-        """One sentence, one owner: parse ships the flag, server names the
-        metadata key, quality says the sentence. A second module computing
-        "was this gb18030?" is a second opinion that will drift."""
+        """One sentence, one owner: charset decides, parse ships the flag, server
+        names the metadata keys, quality says the sentence. A second module
+        computing "was this gb18030 / did the named charset run?" is a second
+        opinion that will drift."""
         src = pathlib.Path(charset_mod.__file__).parent
-        writers = sorted(
-            p.name
-            for p in src.glob("*.py")
-            if p.name != "charset.py" and "encoding_guessed" in p.read_text("utf-8")
-        )
-        assert writers == ["parse.py", "server.py"], writers
-        holders = sorted(
-            p.name
-            for p in src.glob("*.py")
-            if "encoding_basis" in p.read_text("utf-8")
-        )
-        assert holders == ["quality.py", "server.py"], holders
+        read = {p.name: p.read_text("utf-8") for p in src.glob("*.py")}
+        deciders = sorted(name for name, text in read.items()
+                          if "def encoding_basis" in text)
+        assert deciders == ["charset.py"], deciders
+        carriers = sorted(name for name, text in read.items()
+                          if name != "charset.py" and "encoding_basis" in text)
+        assert carriers == ["parse.py", "quality.py", "server.py"], carriers
+        # 「你点的那一颗名字」也只许有一个作者：装配在 parse，落键在 server，说话在 quality
+        asked = sorted(name for name, text in read.items()
+                       if "encoding_asked" in text)
+        assert asked == ["parse.py", "quality.py", "server.py"], asked
 
 
 # ─── 2 · 乱码不再顶着绿灯 ───
@@ -189,10 +196,15 @@ class TestTheRemedyTurnsTheGuessIntoAVerdict:
         assert out.metadata["encoding"] == "shift_jis"
 
     def test_a_declared_read_says_nothing_about_a_guess(self, tmp_path):
+        """职责：点了名而那颗确实在跑 —— 这一发永远不许被叫成"猜"。
+
+        R02-F8 改的是这颗**值**（同一批字节的第二种干净读法现在要交代，basis 写成
+        `contested`），不改这一格的职责：`guessed` 那一句在这发里一个字也不许出现。
+        """
         out = _parse(tmp_path, "euckr.csv", KO_TEXT.encode("euc-kr"),
                      encoding="euc-kr")
         assert "한국어" in out.content[0]
-        assert "encoding_basis" not in out.metadata
+        assert out.metadata.get("encoding_basis") != "guessed"
         assert "charset here is a guess" not in out.next_action
 
 

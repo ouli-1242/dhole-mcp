@@ -521,7 +521,11 @@ class TestAnEmptyRoundStopsContradictingItself:
     def test_the_off_topic_discard_does_not_tell_you_to_rephrase(self):
         err = ("Engines delivered 5 results, but all 5 matched no query term, so "
                "dhole dropped them rather than return noise.")
-        na = _search_next_action([], [], err, ["bing"])
+        # R02-004：那句出路读的是**本轮自己的**判定表（上线时 `_search_next_action` 一直
+        # 拿到 `engine_detail`，这里补上同一形状）。没有一家答好时那句改成指向自检，
+        # 那一支由 tests/test_a_way_out_that_names_a_key_the_caller_can_press.py 钉住。
+        na = _search_next_action([], [], err, ["bing"],
+                                 engine_detail=[{"name": "bing", "verdict": "healthy"}])
         assert "Rephrase" not in na, na
         assert "engines=[" in na
 
@@ -555,14 +559,23 @@ class TestAFailureBlamesTheRightThing:
                     "Unsupported file type '.exe'. Supported: .csv, .docx"):
             _, na, _ = _agent_hints(_result(status=0, content=[], error=err,
                                             fetcher_used="parse", content_ok=False))
-            assert "paths that were tried" not in na, err
+            assert "places it tried" not in na, err
             assert "found and read" in na, err
 
     def test_a_file_that_was_not_found_still_gets_path_advice(self):
+        """这一层只拿得到 message，拿不到形状 ⇒ 它不该自己写出路（R02-062）。
+
+        原本这一格钉的是那句「Pass an absolute path, or pass cwd=...」在 next_action 里。
+        那句现在由 server 按 `os.path.isabs` 写一次、进 `error`；这里改钉两件更硬的事：
+        回执把读者送去 `error`（那里逐字列着被找过哪几处），以及这一层不许凭空发明一扇门
+        —— 它看不到形状，替调用方决定「换成绝对形式」正是本条要修的错话。
+        """
         _, na, _ = _agent_hints(_result(status=0, content=[],
                                         error="File not found: notes.md",
                                         fetcher_used="parse", content_ok=False))
-        assert "paths that were tried" in na
+        assert "places it tried" in na, na
+        assert "error" in na.lower(), na
+        assert "absolute path" not in na.lower(), na
 
     @pytest.mark.parametrize("probe,expected", [
         ("network_error: dns_failure (TCP preflight)", "dns_failure"),

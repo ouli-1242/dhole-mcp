@@ -21,13 +21,13 @@ def test_bundled_skill_is_complete():
     assert refs.is_dir()
     names = {p.name for p in refs.glob("*.md")}
     assert {"tools.md", "examples.md", "fields.md", "troubleshooting.md",
-            "configuration.md", "recipes.md"} <= names
+            "configuration.md", "recipes.md", "start.md"} <= names
     manifest = _skill_manifest(_BUNDLED)
-    # 语料是 7 份（SKILL.md + 六篇 serve 出去的 references）。第 8 份
+    # 语料是 8 份（SKILL.md + 七篇 serve 出去的 references）。第 9 份
     # evals/evals.json 是技能自己的校准跑规格：它进包是为了装完之后技能目录是完整的，
     # 但它不在 guide.TOPICS 里，所以永远不会被当成说明书的一节端出去 —— 下面那条就是
     # 钉这一点的，否则"多塞一份"从一次改包变成一条谎。
-    assert len(manifest) == 8
+    assert len(manifest) == 9
     assert manifest["evals/evals.json"]
     from dhole_mcp.guide import TOPICS
     served = {path for (path, _when) in TOPICS.values()}

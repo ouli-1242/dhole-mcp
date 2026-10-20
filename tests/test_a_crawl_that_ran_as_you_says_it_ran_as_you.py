@@ -225,10 +225,19 @@ def test_every_no_map_answer_names_the_credential_it_did_not_use(sitemap_body, r
 # ─── 3 · 计划担心的那一件事，今天不成立（钉成守卫）───────────────────────────
 
 def test_the_stored_allowance_does_not_stay_open_after_the_call(site):
-    """放行只活在这次调用里：装饰器推的是 ContextVar，`finally` 逐颗 reset。
+    """放行不许漏成一次调用之外的一层作用域：存量是存量，作用域是作用域。
 
-    计划里那句"为进程里后续所有无关调用撑开了栅栏"量的就是这个形状。今天它不成立，
-    所以要留一条会红的记录 —— 实验拆掉复位（`finally` 里跳过那颗）之后，红的就是这里。
+    计划里那句"为进程里后续所有无关调用撑开了栅栏"量的就是这个形状，而它问的对象
+    换了（评审 R02-141 · F122）：存下来的 `allow_private` **本来就该**对后续每一次
+    调用生效（§3-17「set once, every later call reads them back」），所以"合并之后的
+    答案在调用之外仍是开的"不再是缺陷，而是那颗参数的定义。真正的缺陷是另一件事 ——
+    有一层作用域活过了它自己的调用。R02-141 之前这一问由 `_ALLOW_PRIVATE` 那一次
+    push 承载（门自己从存储读一次再推），所以问合并答案与问作用域是同一个问题；
+    今天守卫自己读存量，两者必须分开问：
+
+      · 作用域那一层（`_ALLOW_PRIVATE`）在进用例前后都必须是空的 —— 它一旦漏出去，
+        就是本仓库为这颗 ContextVar 记过的那次"20 条守卫全绿变全红"；
+      · 合并后的门只由存量决定：最后那三行 `unset` 之后立刻回拒，证明开的不是残留。
 
     **问的时刻要在同一条协程里**：`_dispatch` 是直接 await 处理函数的，所以它与调用方
     共用同一个 context，漏下来的写入在这里看得见；而 `asyncio.run` 起的是新任务，任务
@@ -239,14 +248,14 @@ def test_the_stored_allowance_does_not_stay_open_after_the_call(site):
     from dhole_mcp import security
 
     url = f"{site[0]}/"
-    assert security.private_hosts_allowed() == (frozenset(), False), \
-        "进用例之前门就开着：那是别处的进程级写入"
+    assert security._ALLOW_PRIVATE.get() == (frozenset(), False), \
+        "进用例之前作用域那一层就开着：那是别处的进程级写入"
 
     async def _sequence():
         opened = await MasterFetchServer()._dispatch(
             "web_read", {"url": url, "cache_ttl": -1})
         payload = opened[1] if isinstance(opened, tuple) else {}
-        return payload, security.private_hosts_allowed()
+        return payload, security._ALLOW_PRIVATE.get()
 
     payload, after = _a.run(_sequence())
     assert not payload.get("error"), f"存了放行，这一次就该读得到回环: {payload.get('error')}"

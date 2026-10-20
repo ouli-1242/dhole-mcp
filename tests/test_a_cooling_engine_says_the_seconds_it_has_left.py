@@ -111,3 +111,20 @@ def test_the_pool_count_is_not_said_without_a_denominator(cooled):
     got = S._recall_levers(["brave", "sogou"], [], replay=False)
     assert "the pool is down to" not in got, got
     assert "cooling right now" in got, got
+
+
+def test_the_parenthesis_opens_on_a_word_not_on_a_semicolon(cooled):
+    """R01-047（R01-016 真 CLI 复验时读到）：那对括号里第一眼是一个分号。
+
+    ```
+    retry after the cooldown clears (; cooling right now: so360 58s; the pool is whole
+    again in 59s - 60s after a hard block …)
+    ```
+
+    `who` 那一段是为"接在前一句话后面"写的，所以自带一个 "; " 前缀；把它整个塞进
+    "(" 之后，读者第一眼看到的是一件还没开始就说完的事。分句的接缝由句子的作者收尾，
+    不由被拼接的那一段自己带。
+    """
+    got = S._recall_levers(["brave", "so360"], [], replay=False)
+    assert "(; " not in got, got
+    assert "(cooling right now: brave 41s" in got or "(cooling right now: so360 61s" in got, got

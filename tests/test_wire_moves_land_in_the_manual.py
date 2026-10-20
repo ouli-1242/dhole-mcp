@@ -421,7 +421,26 @@ def test_connect_stays_inside_the_packed_budget():
 #: （"each call is a fresh page unless pin=true keeps it"），−88；完整理由一直住在
 #: tools.md 的 Page interaction 一节，MOVED_LESSONS 新加的那一对把它钉在语料里。
 #: 净 +128 = 常驻层的 0.39%，买一次结构性必错的修法。
-CONNECT_CEILING = 32_828
+#: 2026-10-15 R02-F34（R02-054）：棘轮**上抬 +260**（32,828 → 33,088）。买的是「这台机器的
+#: 语义重排器装了没有」第一次在 wire 上点名问得出：`show` 的枚举多一颗 `models`，sys_state
+#: 的描述多一行路由（这一类存在、且它是只读的 —— dhole 不抹模型文件）。必须每次连接都到的
+#: 理由与 G25 那次 confirm 门同类：宿主在**调用之前**就得决定要不要问这一格，而只住在
+#: sys_guide 语料里的名字，调用方不知道可以问，也就永远不会问。四格 `state` 怎么读、
+#: 截断下载为什么算「不在」——这些解释一律留在 tools.md，按需付。
+# 2026-10-20：sys_guide topic 描述 296→285（start/manual 拆分），总量 33,088→33,077。
+# 棘轮跟着实测往下收，不留在旧数上。
+# 2026-10-20 P0 纵向搜索：web_search 增 `sources`（web|news|academic|qa|code|community）
+# 与 `sort`（relevance|newest）两颗可选参数。棘轮**上抬 +133**（33,077 → 33,210）：
+# 参数名与值集必须住在连接期（表外名会被 dispatch 拒掉；enum 数组按批次 6c 的裁决
+# 不进 wire，值集改由描述与 dhole 自己的拒绝文案点全）。买的是"一次调用就能问
+# 新闻/论文/问答/代码/社区"这条新搜索维度 —— 五个后端（GDELT/arXiv/Stack Exchange/
+# GitHub/Hacker News）的细节、限速与日期窗语义全在
+# sys_guide(topic='behavior', section='web_search') 按需付；wire 上只留参数面、
+# 一条行为句，以及"纵向行不参与 engines_consensus"这句读响应时必须知道的语义。
+# 首版那两张带 enum 的完整描述实测 +860；按"同一事实不说两遍"收短旧描述
+# （min_relevance/min_raw_relevance 两颗参数自己的描述已经说清两把尺子）并摘掉
+# enum 数组后压到 +133。
+CONNECT_CEILING = 33_210
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

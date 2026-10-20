@@ -165,16 +165,41 @@ from dhole_mcp.envelope import (
 # robots.txt compliance: one cached check per origin, consulted before any tier
 # runs (see the robots module docstring for the fail-open policy).
 from dhole_mcp.robots import (
-    ENV_IGNORE_ROBOTS, UNAVAILABLE as ROBOTS_UNAVAILABLE, check as check_robots,
+    ENV_IGNORE_ROBOTS, REFUSED_BY_POLICY as ROBOTS_REFUSED_BY_POLICY,
+    UNAVAILABLE as ROBOTS_UNAVAILABLE, check as check_robots,
     env_disabled as robots_env_disabled, get_robots_cache,
 )
+
+
+def _robots_mode_label(ignore_robots: bool, verdict) -> str:
+    """What `metadata.robots` may honestly say about this fetch.
+
+    Four different situations used to share two strings, and one of the pair was a
+    lie: dhole refusing to dial the robots URL (its own SSRF policy) printed the
+    same "robots.txt unreadable" as a host that really would not serve the file. An
+    auditor reading the field takes "unreadable" as a fact about the site, so the
+    two must be spelled differently. `unavailable` with no recorded cause keeps the
+    old sentence — that is what an unfetchable file looks like, and
+    `test_usage_simulation_regressions.TestRobotsLabelTellsTheTruth` pins it.
+    """
+    if ignore_robots:
+        return "bypassed (ignore_robots=true)"
+    if robots_env_disabled():
+        return f"bypassed ({ENV_IGNORE_ROBOTS}=1, process-wide)"
+    if verdict is None:
+        return "not checked (the robots.txt check itself failed)"
+    if verdict.reason == ROBOTS_UNAVAILABLE:
+        if getattr(verdict, "unavailable_reason", "") == ROBOTS_REFUSED_BY_POLICY:
+            return ("not checked (dhole's own SSRF policy refused to fetch "
+                    "robots.txt for this target)")
+        return "not checked (robots.txt unreadable)"
+    return "complied"
 # Cookie jar shared by every tier (G7). `get_robots_cache`'s sibling: one place
 # holds cross-call state, so `sys_state` can drop all of it at once.
 from dhole_mcp.sessions import (
     clear as clear_cookie_jar, names_for as cookie_names_for,
     sessions as cookie_jar_census,
 )
-from dhole_mcp.errors import PRIVATE_TARGET_NO_ANSWER
 from dhole_mcp.security import (
     validate_url,
     validate_css_selector,
@@ -182,6 +207,7 @@ from dhole_mcp.security import (
     validate_headers,
     validate_proxy,
     validate_timeout,
+    validate_deadline,
     validate_search_query,
     redact_api_key,
     SecurityError,
@@ -189,17 +215,34 @@ from dhole_mcp.security import (
     # "本地服务没起"共读这一份。
     target_is_private,
     # 探测过期时那条拒绝的识别针与唯一出路（守卫侧定义，见 security 的这两枚常量）
-    RESOLVER_GUARD_NEEDLE, RESOLVER_GUARD_RECOVERY,
+    RESOLVER_GUARD_NEEDLE, RESOLVER_GUARD_RECOVERY, url_refusal_family,
     # 「地址是内网的」那类拒绝：识别针与出路同样只在守卫侧定义一份，六颗工具共用
-    PRIVATE_ADDRESS_REFUSAL_PREFIXES, PRIVATE_ADDRESS_RECOVERY,
-    # G9: the active private-host allowlist (see security.parse_allow_private).
-    # 17.0 removed the per-call argument, so the only writers are the stored
-    # cred_defaults value and the environment default.
-    _ALLOW_PRIVATE, parse_allow_private, set_allow_private,
-    # Same policy, scoped to one call, for the two tools that read the stored
-    # value themselves instead of going through the fetch path
-    # (web_act / feed_read).
-    allow_private_scope,
+    PRIVATE_ADDRESS_RECOVERY,
+    # 同一族的第三、第四颗（评审 R02-098 / R02-100）：拼法拒绝的出路本体与云元数据那一族
+    # 的设计边界句。两句都**只留本体**，开头那半句申报由各调用方按门装配 —— 从前地址那句
+    # 把 "nothing was sent" 焊在正文里，六扇里五扇听见的不是自己的动词。
+    PERMANENT_URL_RECOVERY,
+    # 同一惯例的第二族：`validate_timeout` 那句预算（评审 R02-096/097 —— 这颗错曾被三条
+    # 路各写一份前缀，第四路 crawl 干脆不验）。识别针与出路都只住在 security 这一份里。
+    TIMEOUT_CEILING_RECOVERY,
+    # 同一族的第四颗（评审 R02-120 · 真机 `r209_deadline_radius.json`）：`deadline_ms=`
+    # 从前只有类型门、没有取值门，0 与负数都进了循环被自己的零预算砍掉。那句出路由守卫写，
+    # 门话照惯例在这装配。
+    DEADLINE_RECOVERY,
+    # 同一族的第三颗：`validate_proxy` 那六类拒绝（评审 R02-105）。识别针与出路都在
+    # 守卫这一份里 —— 存储那一侧现在也读同一位裁判，两侧不会再各说一套。
+    PROXY_REFUSAL_PREFIXES, PROXY_RECOVERY,
+    # G9: the private-host door. 17.0 removed the per-call argument and R02-141
+    # moved the reading of the stored value into the guard itself, so no door here
+    # pushes a scope any more — this module only parses a value (to refuse a bad
+    # one at set time) and asks the guard's own reader when it has to report one.
+    parse_allow_private,
+    # The stored row behind that gate — asked here only to say "that one does
+    # nothing", never to decide a fetch.
+    stored_allow_private,
+    # Whether that stored policy has any bearing on one target — the question
+    # `identity_applied` may answer with the key's name.
+    allow_private_covers,
 )
 
 # 17.0 B6 第二刀：响应模型本身搬进 models.py，这里只留名字。
@@ -209,6 +252,8 @@ from dhole_mcp.security import (
 from dhole_mcp.models import (
     BulkResponseModel,
     CredDefaultsModel,
+    FeedRefusalModel,
+    ToolRosterRefusalModel,
     ResponseModel,
     SessionCensusRow,
     SessionCreatedModel,
@@ -234,6 +279,7 @@ from dhole_mcp.quality import (  # noqa: F401
     _agent_hints,
     _annotate_quality,
     _apply_envelope,
+    _as_sentence,
     _best_list_targets,
     _detect_content_issue,
     _format_size,
@@ -253,8 +299,10 @@ from dhole_mcp.quality import (  # noqa: F401
     _robots_blocked_result,
     _schema_value_empty,
     _should_try_archive,
+    _stamp_chain_receipts,
     _summary_label,
     _with_agent_hints,
+    status_error_sentence,
 )
 # 17.0 B6 第七刀上半：反爬档位搬进 rungs.py。这八颗都是再导出：抓取的三条路
 # 按名字读 `_session_identity` / `_anti_detect`，tests 也照 `dhole_mcp.server.<名字>`
@@ -276,6 +324,7 @@ from dhole_mcp.rungs import (  # noqa: F401
 # 扫 server 源码里的 `_coerce_int_arg(` 调用）。
 from dhole_mcp.params import (  # noqa: F401
     ArgumentRefusal,
+    ToolRosterRefusal,
     _ARG_DEFAULTS,
     _ARG_TYPES,
     _BOOL_LITERALS,
@@ -294,7 +343,8 @@ from dhole_mcp.params import (  # noqa: F401
 )
 from dhole_mcp.audit import _audit_event, _log_tool_call, _result_error
 from dhole_mcp.extractor import _is_xml_content_type
-from dhole_mcp.wire import _call_result, _wire_json, _wire_result
+from dhole_mcp.wire import (_call_result, _wire_json, _wire_result,
+                            _wire_scalar)
 # 17.0 B6 第四刀：按次调用的上下文搬进 context.py。server 读的还是同一批对象
 # （ContextVar 是对象，跨模块 .get()/.set() 命中同一份状态），tests 里那些
         # `from dhole_mcp.server import _SESSION_ID` 也因此不必改。
@@ -312,11 +362,14 @@ from dhole_mcp.context import (
     _FOCUS_MODE,
     _FOCUS_OUTCOME,
     _HEADERS_OFF_BY,
+    REFERER_OFF_NOTE,
     _IDENTITY_APPLIED,
     _INCLUDE_LINKS,
     _INCLUDE_MEDIA,
+    _MAX_CHARS_NAMED,
     _MAX_LINKS,
     _METHOD,
+    _NO_STORE,
     _PDF_PAGES,
     _PDF_PASSWORD,
     _REVALIDATE,
@@ -325,8 +378,11 @@ from dhole_mcp.context import (
     _SESSION_ID_RE,
     _TOOL,
     _arg_notes_scope,
+    _attempt_budget_note,
     _cache_ttl_note,
     _note_text,
+    _over_cap_note,
+    _timeout_floor_note,
     _stamp_robots_mode,
     call_deadline,
     out_of_band_confirm,
@@ -443,6 +499,12 @@ def _record_latency(url: str, elapsed_ms: float, *, document: bool = False) -> N
 DEFAULT_CALL_TIMEOUT_MS = 30000
 ACTIONS_DEFAULT_TIMEOUT_MS = 25000
 
+# 一整次调用的预算最小的那一格。在那一层 `0` 不是"立刻"而是"不设时钟"，所以秒级颗粒
+# 必须有个下界 —— 下界本身是设计（本文件那两处 `max(...)` 就是它）；R02-039 量的是它
+# **从不申报**：`timeout=250` 跑的是 1000ms，而回执里没有一个字说过 250 被改过。
+# 一颗作者，两处用法（整轮那颗 ms、_budget_scope 那颗换算成 s）。
+MIN_CALL_BUDGET_MS = 1000
+
 # fetch_content 的内联扇出不带 timeout=，所以它不吃调用方的预算，只吃宿主的耐心。
 # 搜索 2–6s + 3 页 × 15s 的理论上限 ≈50s，宿主在 30s 就杀 —— 被杀的不止那几页，
 # 是整次调用，连已经拿到的搜索结果一起丢（评审实测两次）。这里把「宿主 30s」写成一
@@ -488,10 +550,23 @@ def _inline_hole_reason(page_result) -> str:
             f"fetcher {page_result.fetcher_used or 'none'})")
 
 
+def _carry_serp_title(row: dict, sr) -> dict:
+    """R02-003：这一行的标题是从搜索行抄来的，那颗「标题位上住的是本行地址」跟着标题走。
+
+    `fetched_pages` 的行是裸 dict，没有 `wire._WIRE_OMIT` 那张省略表兜底，所以只在命中时
+    挂键 —— 干净行一个字都不付（与 `untrusted_content` 同一族约定）。读的是 `getattr`：
+    行上没有这颗键就是"它什么也没说"（测试里的假行与别的产地都走这一路），不是异常。
+    """
+    if getattr(sr, "title_is_address", False):
+        row["title_is_address"] = True
+    return row
+
+
 def _inline_budget_hole(sr) -> dict:
     """被内联预算砍掉的那一页：占一行、说清为什么是洞，字段形状与失败占位一致。"""
-    return {"url": sr.url, "title": sr.title, "content": "", "content_ok": False,
-            "error": "inline_fetch_budget", "engines_consensus": sr.engines_consensus}
+    return _carry_serp_title({
+        "url": sr.url, "title": sr.title, "content": "", "content_ok": False,
+        "error": "inline_fetch_budget", "engines_consensus": sr.engines_consensus}, sr)
 
 
 def _adaptive_timeout(url: str, default_ms: int = 30000) -> int:
@@ -551,7 +626,12 @@ def _feed_timeout_s(timeout_ms: Optional[int | float]) -> int:
 
 def _http_tier_budget(url: str, budget_ms: float, left_s: float, *,
                       document: bool = False, slow_domain: bool = False) -> tuple[int, int]:
-    """(per-attempt seconds, retries) for one HTTP tier inside this call budget.
+    """(per-attempt seconds, retries, which lever bound them) for one HTTP tier.
+
+    第三位是 R02-041 要的那一句的原料：这一档把点名的预算改成现在这个数时，**是谁**改的
+    （"" = 没人改；"left" = 这一档只剩这么多；"learned" = 该主机此前答得多快；
+    "slow-domain" = 慢站的最低保障把它抬宽）。数值一位没因这个返回值而改变 —— 判据与
+    上面那几行是同一套 min/max，这里只是把"哪一颗生效"记下来。
 
     The caller's budget is the contract, and the tier used to break it in both
     directions: a learned 5s undercut a 60s call, and "at least 20s for a slow
@@ -563,19 +643,34 @@ def _http_tier_budget(url: str, budget_ms: float, left_s: float, *,
     splitting the budget across attempts would guarantee that none of them finish.
     """
     left = max(1.0, min(float(left_s), MAX_HTTP_TIMEOUT_S))
+    asked_s = max(1.0, float(budget_ms or 0) / 1000.0)
     allowance_s = min(max(1.0, budget_ms / 1000.0), left)
+    # 哪一颗约束把点名的那颗数改了？本函数自己知道，而调用方只知道结果 —— R02-041 量的
+    # 就是这里：`attempt_cap_ms` 的自述只点得出 30s 那顶帽，可 `timeout=5000` 现场被压到
+    # 4000 的因是「这一档还剩多少」。三个 token（left / learned / slow-domain）由
+    # `context._attempt_budget_note` 各配一句话；都不生效时交 ""。
+    bound = ""
+    if allowance_s < asked_s - 0.5:
+        bound = "left"
     if not document:
-        allowance_s = min(allowance_s,
-                          max(1.0, _adaptive_timeout(url, int(budget_ms)) / 1000.0))
+        _learned_s = max(1.0, _adaptive_timeout(url, int(budget_ms)) / 1000.0)
+        if _learned_s < allowance_s - 0.5:
+            allowance_s = _learned_s
+            bound = "learned"
+        else:
+            allowance_s = min(allowance_s, _learned_s)
     if slow_domain:
         # Known slow-but-plainly-HTTP sites get at least 20s, which is still never
         # more than what is left of this call.
-        allowance_s = min(left, max(allowance_s, 20.0))
+        _floor_s = min(left, max(allowance_s, 20.0))
+        if _floor_s > allowance_s + 0.5:
+            bound = "slow-domain"
+        allowance_s = _floor_s
 
     attempts = 1 if document else _HTTP_ATTEMPTS
     while attempts > 1 and allowance_s * attempts > left:
         attempts -= 1
-    return max(1, int(allowance_s)), attempts - 1
+    return max(1, int(allowance_s)), attempts - 1, bound
 
 
 def _human_bytes(n: int) -> str:
@@ -659,6 +754,26 @@ def _oversized_document_result(url: str, doc_size: Optional[int]) -> Optional[Re
     )
 
 
+def _document_timeout_lever(budget_ms: float) -> str:
+    """一份文档还剩哪颗旋钮 —— 散文建议与机器可读孪生共用这一个作者。
+
+    这一句的两个分支说的不是同一件事，所以它必须只有一个家：`next_action` 讲它的时候
+    `diagnosis.recover_with` 从前讲通用前缀表那一句（"raise timeout, or switch source"），
+    两只手在同一封响应里互相否决（R01-044 归的根因，R01-010 是它在建议位的形状）。
+
+    天花板是**一次尝试**的，不是整次调用的：一份文档只有一次尝试，而一次 HTTP 尝试封顶
+    30s（`bulk_get` 的算式）。数从 `_HTTP_ATTEMPT_CAP_MS` 取，不在这里再抄一遍。
+    """
+    _cap_s = _HTTP_ATTEMPT_CAP_MS // 1000
+    if budget_ms < _HTTP_ATTEMPT_CAP_MS:
+        return (f"raise timeout (e.g. timeout="
+                f"{min(int(budget_ms * 2), _HTTP_ATTEMPT_CAP_MS)}; one HTTP attempt "
+                f"caps at {_cap_s}s whatever you pass)")
+    return (f"one HTTP attempt already has the whole {_cap_s}s it can ever get, "
+            "so a bigger timeout= buys parsing room, not a faster download "
+            "- switch source, or fetch the file outside dhole and hand it to parse")
+
+
 def _document_budget_advice(url: str, size_bytes: Optional[int], size_note: str,
                             budget_ms: float, stage: str) -> str:
     """What to tell the caller about a document that did not arrive in time.
@@ -668,12 +783,9 @@ def _document_budget_advice(url: str, size_bytes: Optional[int], size_note: str,
     what the file costs: its size, this host's observed document time, and
     whether dhole would accept the body at all (MAX_RESPONSE_BYTES).
 
-    And it stops being actionable earlier than `validate_timeout`'s 120000ms for a
-    document: a document takes ONE attempt, and one HTTP attempt is capped at 30s
-    whatever the call was budgeted (`bulk_get`). So the ceiling named here is the
-    attempt's, not the call's — telling a caller to raise `timeout` from 60s to 120s
-    for a PDF recommends a change that cannot move the only number that decides
-    whether the bytes arrive.
+    The lever itself is authored once, in `_document_timeout_lever`: for a document
+    it stops being actionable earlier than `validate_timeout`'s 120000ms, because the
+    ceiling that decides whether the bytes arrive is the attempt's, not the call's.
     """
     bits = [f"{stage} on a document download"]
     if size_bytes is None and size_note:
@@ -684,20 +796,11 @@ def _document_budget_advice(url: str, size_bytes: Optional[int], size_note: str,
     if rate:
         bits.append(f"this host has taken {max(1, int(rate / 1000))}s for documents "
                     f"here before, against your {int(budget_ms / 1000)}s budget")
-    # 那句建议的天花板是**一次尝试**的，不是整次调用的：一份文档只有一次尝试，而一次
-    # HTTP 尝试封顶 30s（`bulk_get` 的算式）。数从 `_HTTP_ATTEMPT_CAP_MS` 取，不在这里
-    # 再抄一遍。
-    _cap_s = _HTTP_ATTEMPT_CAP_MS // 1000
-    if budget_ms < _HTTP_ATTEMPT_CAP_MS:
-        bits.append(f"raise timeout (e.g. timeout="
-                    f"{min(int(budget_ms * 2), _HTTP_ATTEMPT_CAP_MS)}; one HTTP attempt "
-                    f"caps at {_cap_s}s whatever you pass)")
-    else:
-        bits.append(f"one HTTP attempt already has the whole {_cap_s}s it can ever get, "
-                    "so a bigger timeout= buys parsing room, not a faster download "
-                    "- switch source, or fetch the file outside dhole and hand it to parse")
+    bits.append(_document_timeout_lever(budget_ms))
     bits.append("pages=<range> narrows what gets EXTRACTED, not what gets downloaded")
-    return "; ".join(bits)
+    # 两处用途都把这句放在句首（`next_action` 直接赋值、以及背板把它拼在 head 之后），
+    # 而分句是为 "; " 之后写的 —— 规矩与作者都在 `quality._as_sentence`。
+    return _as_sentence("; ".join(bits))
 def _env_int(name: str, default: int) -> int:
     """Read an integer env var, falling back to ``default`` on missing/invalid.
 
@@ -817,6 +920,16 @@ PIN_NOTES: dict[str, str] = {
     "reused": ("pin hit: this call ran on the page your previous pinned call left open - "
                "no navigation happened, so nothing on it was re-issued. What you read here "
                "is the same image / token the previous call showed you."),
+    # R01-027: the pinned page and the page this call named are two different
+    # documents on one host. An action's `index` counts the named page's elements,
+    # so the chain runs there and the pin is not taken away from the next call -
+    # the sentence has to say all three, with both URLs named, or the reader is
+    # back to guessing which page their click landed on.
+    "target": ("pin not used for this call: the pinned page is {pinned} while this call "
+               "named {named}, and an action's index is counted on the page you name - so "
+               "this call navigated to what you named instead of acting on the other page. "
+               "The pin stays: the next call that passes pin=true for {pinned} still stands "
+               "on it, no re-navigation there."),
     # 三条"驻留不了"的路，各是一件具体的事。
     "auto": ("pin=true could not be honored: an anonymous auto session is shared between "
              "callers and is recycled when idle, so there is no page of yours to keep "
@@ -873,7 +986,7 @@ PIN_NOTES: dict[str, str] = {
 # asserts _compose_instructions(<every tool>) reproduces it exactly, so the
 # parts below and this literal cannot drift.
 DHOLE_INSTRUCTIONS = (
-    "Dhole is the web toolkit: use it when a built-in fetch/search fails or is blocked, or the page needs JavaScript, PDF/OCR, or multi-URL batching. Bypasses anti-bot walls (Cloudflare), reads PDFs incl. scans (OCR), and searches 8 engines keylessly.\n"
+    "Dhole is the web toolkit: use it when a built-in fetch/search fails or is blocked, or the page needs JavaScript, PDF/OCR, or multi-URL batching. Bypasses anti-bot walls (Cloudflare), reads PDFs incl. scans (OCR), and searches 10 keyless engines.\n"
     "Routing:\n"
     "- Content of a URL you already have (page or PDF): web_read. urls=[...] for a known list; focus= cuts tokens on long pages.\n"
     "- Many pages from one site, URLs unknown: web_discover maps it (sitemap=true = one request), web_crawl reads them, web_read(urls=[...]) a known list.\n"
@@ -903,7 +1016,7 @@ _INSTRUCTIONS_INTRO = (
     "Dhole is the web toolkit: use it when a built-in fetch/search fails or is "
     "blocked, or the page needs JavaScript, PDF/OCR, or multi-URL batching. "
     "Bypasses anti-bot walls (Cloudflare), reads PDFs incl. scans (OCR), and "
-    "searches 8 engines keylessly.\n"
+    "searches 10 keyless engines.\n"
 )
 _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "web_read": "- Content of a URL you already have (page or PDF): web_read. "
@@ -990,25 +1103,65 @@ class _SessionEntry:
 
 def _focus_intent_hint(finalized: ResponseModel, focus_q: Optional[str],
                        stats: Optional[dict]) -> ResponseModel:
-    """M-3 意图命中检查：神经分落在实测跑题带（< ``_INTENT_MISS_FLOOR``）时，
-    往 next_action 里放一句诚实的提示。
+    """M-3 意图命中检查：交回的块是不是真答案，这一句要说出口。
 
     不翻转 content_ok——content_ok 说的是"拿到的是真内容"，意图命中说的是
     "这内容答没答那个问题"；两件事挤进一个布尔，任何一边都会开始说谎。
-    只在神经分存在时工作：BM25 的分没有校准过的读数，套用这条线是胡说。
+    两条档两条判据，各用自己的那个：神经档的分是校准过的（sigmoid），落在实测跑题带
+    （< ``_INTENT_MISS_FLOOR``）就说"这一页可能不答这个问题"；BM25 档的分没有校准过的
+    读数，套那条线是胡说 —— 它说的是**可核对的事实**：留下的块有没有过阈值，点名的词
+    在这一页出现过没有（R01-036）。
     """
     if not focus_q or not isinstance(stats, dict):
         return finalized
-    if stats.get("scorer") != "neural":
-        return finalized
-    best = stats.get("best_score")
-    if not isinstance(best, (int, float)) or best >= _INTENT_MISS_FLOOR:
-        return finalized
-    hint = (f"focus match is weak: the best block scored {best:.3f} on the focus "
-            f"query, below the {_INTENT_MISS_FLOOR} off-topic floor - this page may "
-            "not answer it. Verify before citing, or search for a page that does.")
-    finalized.next_action = (f"{finalized.next_action} {hint}".strip()
-                             if finalized.next_action else hint)
+    # R01-036 · BM25 那一档的"没找到"：分数没有校准过的读数，所以这句话不靠阈值，
+    # 靠两件可核对的事实 —— 留下的块是过阈值的（cut）还是"一块都没过、只好给最接近的"
+    # （closest），以及点名的词在这一页出现过没有。P08 那两次就是被这句救不回来的：
+    # 头部写着 "showing 6 of 105 blocks by BM25 relevance"，他于是自己去开浏览器，
+    # 一条待审引用就此放弃。
+    parts: list[str] = []
+    if stats.get("selection") == "closest" or stats.get("terms_absent"):
+        absent = list(stats.get("terms_absent") or [])
+        total = int(stats.get("terms_total") or 0)
+        named = ", ".join(f"'{w}'" for w in absent[:6])
+        if len(absent) > 6:
+            named += f" (+{len(absent) - 6} more)"
+        if absent and total and len(absent) == total:
+            scope = f"none of the {total} words you named occurs on this page"
+        elif absent:
+            scope = (f"{len(absent)} of the {total} words you named occur nowhere on "
+                     f"this page ({named})")
+        else:
+            scope = ("the words you named do appear here, but no block cleared the "
+                     "relevance cut")
+        if stats.get("selection") == "closest":
+            lead = ("focus found nothing that answers the query: "
+                    f"{scope}. What is in `content` is the closest the page has, "
+                    "NOT a match - do not cite this page for that claim.")
+        else:
+            # 块确实过了阈值（靠页面上有的那几个通用词），而他点名的专名一个字都不在
+            # 这一页上 —— `selection=='cut'` 不等于"找到了那句话"。P08 那两条引用正是
+            # 在这一格被当成"已核实"的。
+            lead = (f"focus kept blocks on the words that ARE here; {scope} - so this "
+                    "page is not evidence for the words it does not carry. "
+                    "Verify before citing it for them.")
+        parts.append(lead + " Two moves: focus='' to read the whole page "
+                     "(the phrase can sit in a block the splitter cut away), or take "
+                     "the claim to a source that carries those words.")
+    if stats.get("scorer") == "neural":
+        best = stats.get("best_score")
+        if isinstance(best, (int, float)) and best < _INTENT_MISS_FLOOR:
+            # 神经档那句与上面那段说的是两件不同的事（校准过的分数 vs 字面存在性），
+            # 两句都要留着：从前只有一句时，另一件就成了没说。
+            parts.append(
+                f"focus match is weak: the best block scored {best:.3f} on the focus "
+                f"query, below the {_INTENT_MISS_FLOOR} off-topic floor - this page "
+                "may not answer it. Verify before citing, or search for a page "
+                "that does.")
+    if parts:
+        finalized.next_action = (
+            " ".join([finalized.next_action, *parts]).strip()
+            if finalized.next_action else " ".join(parts))
     return finalized
 
 
@@ -1325,7 +1478,6 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
     # 用不上其中任何一条。地图随第 0 片已经交过，所以这里省略，但**省略要 announce**：
     # 字段缺席和不存在的两种意思不能混。改在局部副本上，缓存里那份仍是完整的。
     if offset > 0 and result.table_of_contents:
-        from dhole_mcp.context import _note_text
         _note_text("table_of_contents omitted on a continuation page - it came with "
                    "offset=0 for this document")
         result = result.model_copy(update={"table_of_contents": []})
@@ -1367,6 +1519,12 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
         block_ledger = {
             "focus_blocks_total": int(focus_stats.get("blocks_total") or 0),
             "focus_blocks_kept": int(focus_stats.get("blocks_kept") or 0),
+            # R01-036：块数说的是"留下几块"，说不出"这几块是不是答案"。这两个数与
+            # 那一个词把后一半交出去，且与头部同源（`focus._record_match_stats`），
+            # 不在这里重算。
+            "focus_terms_total": int(focus_stats.get("terms_total") or 0),
+            "focus_terms_absent": len(focus_stats.get("terms_absent") or []),
+            "focus_selection": str(focus_stats.get("selection") or ""),
         }
     total_len = len(full_text)
     pagination = _pagination_basis(focus_q, page_chars, total_len)
@@ -1401,6 +1559,7 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
     truncated = False
     next_off = 0
     snapped_back = 0
+    note = ""
     if remaining > MIN_CHUNK_CHARS:
         # 切口不许落在词中间：这一窗退回到最近的句末 / 子句末 / 词末，退回去的那几个字
         # **不是丢了** —— 它们随 next_offset 出现在下一页（所以只在"还有下一页"的这一支
@@ -1416,19 +1575,30 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
         remaining_hint = total_len - next_off
         # 被 focus 切过的话，这一句里的"of N extracted chars"就不是整页那个 N ——
         # 括号里补的是同一页未过滤的长度，两个数各说各的事，读者不必猜哪一个在动。
+        # 那句坐标的话还要把"这些 offset 数的是过滤之后那一路"说出口（R01-005 并入
+        # R01-024）：换 focus 词这一路就变长变短，读者拿上一页的 offset 续下一页会续错。
         of_whom = (f" of {total_len:,} extracted chars (this page holds "
-                   f"{page_chars:,} before focus)" if pagination
+                   f"{page_chars:,} before focus; these offsets count against the "
+                   f"filtered text)" if pagination
                    else f" of {total_len:,} extracted chars")
         snap_note = (f" ({snapped_back:,} chars moved to the next window so this one "
                      f"ends at a clause, not mid-word)" if snapped_back else "")
-        chunk += (
-            f"\n\n[Truncated: showing {chunk_len:,}{of_whom}. "
-            f"{remaining_hint:,} chars remaining. Next offset: {next_off}]"
-            f"{snap_note}"
-        )
+        # R01-024：这句话从前 `chunk += …` 接在正文尾巴上交付 —— 于是翻出去复用的人每页
+        # 手删一次，而它自己那 174 个字符又被算进"这一窗给了多少"（`showing 357` 对
+        # `len(content[0])==531`）。它现在住 `truncation_note`，正文块只装这页自己的话，
+        # 两套坐标并成一套。搬走的是位置，一个数字都没少。
+        note = (f"[Truncated: showing {chunk_len:,}{of_whom}. "
+                f"{remaining_hint:,} chars remaining. Next offset: {next_off}]"
+                f"{snap_note}")
     elif remaining > 0:
-        # Remaining is small — include it all, no truncation flag
+        # Remaining is small — include it all, no truncation flag.
+        # 并回本身留着（少一次往返，且这条地板有测试守着），走掉的是**这份沉默**：
+        # 调用方点过的帽被超过时，回执必须说出超了多少、为什么、以及什么都没丢
+        # （R02-007：cap 1200 交回 1,446，`is_truncated/next_offset/truncation_note`
+        # 三者全空，读者只能把「比预算多」当成「没截断」）。句子的作者不在这儿，
+        # 见 `context._over_cap_note`。
         chunk = full_text[offset:]
+        _note_text(_over_cap_note(_MAX_CHARS_NAMED.get(), len(chunk), MIN_CHUNK_CHARS))
 
     # model_copy(update=...) preserves every field by construction — no more
     # hand-maintained field list that silently dropped envelope fields on
@@ -1439,6 +1609,7 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
         "is_truncated": truncated,
         "next_offset": next_off,
         "chars_snapped_back": snapped_back,
+        "truncation_note": note,
         **pagination,
         **block_ledger,
     })), focus_q, focus_stats), focus_q, offset)
@@ -1535,6 +1706,27 @@ def _cdp_hosts_file() -> str:
     """``~/.dhole/cdp_hosts.json`` —— 先问再记的落盘处（17.0，§3-16）。"""
     from dhole_mcp import paths
     return str(paths.file(_CDP_HOSTS_FILE_NAME))
+
+
+def _cdp_roster_hint() -> str:
+    """名册在哪，用一句可以进 transcript 的话说（R02-055 · R02-F72）。
+
+    从前三处句子直接把 `_cdp_hosts_file()` 拼进回执，理由是「读不出文件在哪，撤销就只能靠猜」。
+    那两条出路都不需要地址：**撤销**走的是 `sys_state(clear=['cdp:host=<name>'])`，它自己找得到
+    文件；要地址的是**手删/巡检**那一侧，而那侧的读者坐在自己的 terminal 前 —— `dhole doctor`
+    今天就在打印绝对路径（`updater.py` 的 cdp 两行，并被测试钉着"体检报告里要有落脚点"）。
+    于是这一把不是"哪一族赢了"，是让两句相反的话各管各的读者：回执给名字与"去哪问位置"，
+    位置由体检报告给。
+
+    不用 `paths.mask_machine_paths` 兜底是刻意的：靠遮蔽器意味着先把绝对路径拼进句子再折回去，
+    而那位只认得本进程的家与 cwd 两个根 —— `DHOLE_HOME` 指向别处（`D:\\data\\dhole`）时它一个
+    都不折，路径照样上线。第一句就不写地址才与 `paths.py` 那条条例一致。
+
+    结尾不带句号：三个调用点各自的标点不同（` `.` / `;`），而句子由这**一位**作者写成，免得
+    下一把只改一处又把相反的两句话放回同一个产品里。
+    """
+    return (f"the roster is the file `{_CDP_HOSTS_FILE_NAME}` in dhole's home directory"
+            " - run `dhole doctor` for its full path on this machine")
 
 
 def _approval_age_days(iso: str) -> Optional[int]:
@@ -1812,7 +2004,7 @@ async def _cdp_attach_gate(cdp_url: Optional[str], confirm: bool = False,
         "is remembered per host, and later requests to another origin are fenced - "
         "a sub-resource or page script from outside it is blocked, and a page that "
         "redirects out of the fence comes back refused rather than as an answer. "
-        f"Revoke with sys_state({revoke}) - the roster is {_cdp_hosts_file()}.",
+        f"Revoke with sys_state({revoke}) - {_cdp_roster_hint()}.",
         None,
     )
 
@@ -1871,6 +2063,61 @@ _NEURAL_FOCUS_UNAVAILABLE = (
     "neural_focus_model_missing: focus_engine='neural' needs the local reranker "
     "model, which is not downloaded yet. No request was made."
 )
+
+
+def _neural_focus_refusal(subject: str = "call") -> tuple[str, str]:
+    """这道门的两句（error 与 next_action）由同一个作者按它读得到的那一半来写。
+
+    `get_reranker() is None` 一颗同时回答三种情形：①模型不在盘上；②模型在盘上、
+    依赖装不上；③模型在盘上、依赖齐全但加载抛错。17.0 之前三支都写成「not downloaded
+    yet」，于是盘上真有模型的那一发被支去**重下一份已经在的东西**，而过程自己知道的
+    成因（`unavailable_reason()` 里那条 "reranker init failed: …"）一个字没上回执
+    （评审 R02-042 —— `install.rerank_install_advice()` 在依赖齐全时都写着 "the failure
+    was model state, not deps"，同一台机器上两句话互相否认）。
+
+    判决位不动：两支同一个 `neural_focus_model_missing` 开头（那个名字标识的是**这道门**，
+    不是成因 —— 成因由句子说）、同一句 "No request was made"。盘上确实没有模型那一支
+    逐字保留 R02-F11 的那句话（反面锁：这一刀不许把真话改花）。
+    """
+    from dhole_mcp import reranker as _reranker
+    if not _reranker.model_present():
+        return _NEURAL_FOCUS_UNAVAILABLE, _neural_focus_remedy(subject)
+    reason = (_reranker.unavailable_reason() or "").strip()
+    known = (f"What this process recorded: {reason}." if reason else
+             "This process recorded nothing beyond the load attempt itself.")
+    error = (
+        "neural_focus_model_missing: focus_engine='neural' needs the local "
+        "reranker model. Its files ARE on disk here, but the reranker would not "
+        f"load. {known} No request was made.")
+    return error, (
+        "The reranker model is already on disk, so there is nothing to download "
+        "and re-downloading it would not change this outcome. " + known + " To "
+        "finish this " + subject + " without the model, pass "
+        "`focus_engine='bm25'` for keyword-overlap focus. No request was made for "
+        "this " + subject + ".")
+
+
+def _neural_focus_remedy(subject: str = "call") -> str:
+    """这把拒绝只给一条出路作者：点名的每颗参数都必须真的收得到（评审 R02-017）。
+
+    前一版在 web_read / web_crawl 两处各抄了一份（只有 "this call" / "this crawl" 不同），
+    内容都是"它会在第一次点 neural 的那一发 web_search 上自动下载"。那半句把调用方支到一门不存在的门
+    上：`web_search` 的参数表里没有 `focus_engine`（`_TOP_LEVEL_ARGS` 当场查得到），照那句话
+    点名就撞 `Unsupported argument(s) for web_search`。而真相更简单 —— web_search 默认排序
+    就用这颗模型（`mode` 默认 `auto`，search 里 `mode in ("neural","auto","find_similar")`
+    起 `ensure_reranker()`），所以**一发什么参数都不点的普通 web_search** 就会把模型取回来。
+    于是旧话既指向一个不可达的形状，又多派了一个不需要的动作。
+
+    现在的说法把两件事分开说死：要模型就发一发普通 `web_search`（并当场拦住它不收的那颗名字），
+    不要模型就在本行工具上点 `focus_engine='bm25'`。`subject` 只换主语，句子仍是一位作者。
+    """
+    return (
+        "The reranker model is not downloaded yet. A plain web_search brings it "
+        "down on its first run (one-time, resumable) - web_search already ranks "
+        "with this model under its default `mode`, so name nothing there, and it "
+        "has no `focus_engine` of its own. To finish this "
+        + subject + " without the model, pass `focus_engine='bm25'` for "
+        "keyword-overlap focus. No request was made for this " + subject + ".")
 
 # M-3：神经分低于这条线 = 落在实测的"明显跑题"带（off-topic ~0.0001，on-topic
 # 0.93+，rerank 的实测分布）——提示"这页多半没答 focus 的问题"，不翻转 content_ok
@@ -1960,18 +2207,21 @@ def _smart_fetch_request_context(func):
             (_MAX_LINKS, _MAX_LINKS.set(
                 options["max_links"] if isinstance(options["max_links"], int)
                 and not isinstance(options["max_links"], bool) else 0)),
+            # R02-007: the body cap the CALLER pointed, raw — before the default
+            # filled it and before the 500/200000 clamp moved it. Only the chunking
+            # layer can see a tail being merged back over it, and "no cap named" is
+            # a different fact from "cap = the default", so it travels as its own
+            # value rather than being re-derived from the applied number.
+            (_MAX_CHARS_NAMED, _MAX_CHARS_NAMED.set(
+                options.get("max_content_chars"))),
             (_CSS_SELECTOR, _CSS_SELECTOR.set(
                 options["css_selector"]
                 if isinstance(options["css_selector"], str)
                 and options["css_selector"].strip() else None)),
-            # G9. .get() rather than options[...]: this one is genuinely absent
-            # from most calls, and a missing key must mean "no allowlist", never
-            # a KeyError. A value that parses to nothing is reported in the
-            # summary - a security-relevant option being ignored silently is the
-            # worst possible shape.
-            # G9 → §3-17: the private-host allowance is cred_defaults' now, so the
-            # scope is pushed from the store. Nothing on the call can open it.
-            (_ALLOW_PRIVATE, set_allow_private(identity.get("allow_private"))),
+            # G9 → §3-17 → R02-141: the private-host allowance is not this door's
+            # to deliver. The guard merges the stored value itself, so a door that
+            # never pushed a scope (web_search's find_similar leg) stopped being an
+            # exception instead of getting a fifth copy of this line.
             (_SESSION_ID, _SESSION_ID.set(_clean_session_id(options.get("session_id")))),
             # G8. .get() everywhere: these are optional and absent from most
             # calls, and the decorator must not be the thing that raises.
@@ -1995,12 +2245,19 @@ def _smart_fetch_request_context(func):
                  "_revalidate": _REVALIDATE.get(), **_identity_bits}))),
             (_ROBOTS_MODE, _ROBOTS_MODE.set("")),
             (_HEADERS_OFF_BY, _HEADERS_OFF_BY.set("")),
+            # R02-032：一条动作链的正文不许留在缓存里。这件事从前由门口压的那颗
+            # `cache_ttl=0` **顺带**办成；这一刀把那颗参数的两半分开（读侧 / 写侧），
+            # "不许存"就需要一个自己的名字。作者是这里（唯一看得见 `actions` 的一层），
+            # 读者是 `_store_ttl`。
+            (_NO_STORE, _NO_STORE.set(bool(options.get("actions")))),
             (_ARG_NOTES, _ARG_NOTES.set(notes)),
         ]
-        _ap = identity.get("allow_private")
+        _ap = stored_allow_private()
         if _ap not in (None, False, "") and not parse_allow_private(_ap)[0]:
             # A security-relevant default that parses to nothing must not fail
             # silently: the caller stored it and needs to know it did nothing.
+            # Asked of the guard's own reader, so this report and that gate can
+            # never be told two different things about the same row.
             notes.append(f"the stored allow_private ({_ap!r}) does nothing: cred_defaults "
                          "takes true (loopback only) or a list of hosts")
         _sid = options.get("session_id")
@@ -2153,7 +2410,31 @@ def _stamp_original_url(result, requested: str):
         return result
     if not _same_url(result.url, requested):
         result.original_url = requested
+        # R05-005 / R05-018: the field alone was not enough. A stale DailyMed
+        # setid answering index.cfm, or a recipe that redirected, still read as
+        # the page that was asked for unless the status line said the move.
+        # `summary` is built before this stamp runs, so this is the one place
+        # that knows both ends and can put them where the caller scans.
+        note = f"redirected from {requested} to {result.url}"
+        result.summary = f"{result.summary} · {note}" if result.summary else note
     return result
+
+
+def _pdf_only_inert_note() -> str:
+    """这两颗参数只在 PDF 那条腿上被读过；这一发不是 PDF 时它们一个字节都没碰过正文。
+
+    一个作者，两扇门共用（URL 这一路在 `_translate_response_body` 里报，本地那一扇门由
+    F48 的 `doc_parse` 那一行报）。点名的是**参数名**，`password` 的值永不回显 ——
+    申报不许把口令带进回执。
+    """
+    given = [name for name, value in (("pages", _PDF_PAGES.get()),
+                                      ("password", _PDF_PASSWORD.get())) if value]
+    if not given:
+        return ""
+    names = " / ".join(f"`{n}=`" for n in given)
+    return (f"{names} only apply to a PDF response, and this answer is not one: nothing was "
+            f"trimmed and nothing was unlocked - the body is byte-for-byte what a call without "
+            f"those arguments gets")
 
 
 def _extract_pdf_response(body: bytes, raw_ct: str, total_size: int, url: str,
@@ -2199,6 +2480,8 @@ def _extract_pdf_response(body: bytes, raw_ct: str, total_size: int, url: str,
         content_ok=result.content_ok, metadata=base_meta or result.metadata,
         table_of_contents=base_toc or result.table_of_contents,
         quality_score=result.quality_score, media=base_media or result.media,
+        pages_total=result.pages_total,
+        pages_returned=len(result.pages_extracted),
     )
 
 
@@ -2391,6 +2674,11 @@ def _translate_response_body(
     if is_pdf and raw_body:
         return _extract_pdf_response(raw_body, raw_ct, total_size, page.url,
                                      extraction_type, fetcher_used, duration_ms)
+    # 走到这里就是「这一发不是 PDF」，而 `pages=` / `password=` 只有 PDF 那条腿读过它们
+    # （`_extract_pdf_response` 是唯一的读者）。F48 给本地那一扇门补了这句话，URL 这一扇门
+    # 一直开着（R02-063，活体：`web_read('http://127.0.0.1:8399/article', pages='1-2')` 的正文
+    # 与不带 `pages=` 的那一发逐字节相同，而 `summary` 里说的是别的事）。
+    _note_text(_pdf_only_inert_note())
     # PDF-intent URL (.pdf) that returned HTML, not a PDF: a login/paywall/error
     # redirect. Don't extract the login HTML as if it were content (P6/P14).
     _url_path = (page.url or '').lower().split('?')[0]
@@ -2609,13 +2897,25 @@ def _attach_dom_visible_chars(result: ResponseModel, page_html: str,
     try:
         if not page_html:
             return result
-        from dhole_mcp.envelope import page_content_shape, visible_text_chars
+        from dhole_mcp.envelope import (
+            is_extraction_collapsed, page_content_shape, visible_text_chars,
+            visible_text_chars_without_chrome)
         from dhole_mcp.extractor import is_markup_response
         if not is_markup_response(result.content_type):
             return result
         result.visible_text_chars = visible_text_chars(page_html)
-        if sum(len(c) for c in result.content) >= _SUBSTANCE_PROBE_MAX_CHARS:
+        _extracted = sum(len(c) for c in result.content)
+        # The content-area count costs a second parse, so it stays lazy: thin
+        # bodies need it for the substance gate, and a large body needs it only
+        # when the whole-page ratio already says "collapsed" (R04-016a: the
+        # whole-page denominator includes chrome and can call a complete article
+        # lost). A large, healthy body pays nothing.
+        if (_extracted >= _SUBSTANCE_PROBE_MAX_CHARS
+                and not is_extraction_collapsed(_extracted, result.visible_text_chars)):
             return result
+        # The second ruler asks "how much of the page's own prose survived",
+        # with nav/header/footer removed but <aside> kept (it can be content).
+        result._dom_chrome_free_chars = visible_text_chars_without_chrome(page_html)
         try:
             host = urlparse(page_url or "").netloc.lower()
         except Exception:
@@ -2820,6 +3120,78 @@ def _timeout_reschedule(cm, when: float) -> None:
 
 _budget_credit: contextvars.ContextVar[Optional["_BudgetCredit"]] = contextvars.ContextVar(
     "_budget_credit", default=None)
+
+
+class _TierFacts:
+    """这一次调用里，正在跑的那一层已经学到的事实 —— 写给掐它的那个人看。
+
+    作用域与 `_BudgetCredit` 同一套：`_within_call_budget` 放账本，`await` 进去的那一层
+    往里写（同一个 Task，所以深处改的就是外层拿着的那个对象）。
+    """
+
+    __slots__ = ("document", "size_bytes", "size_note")
+
+    def __init__(self):
+        self.document = False
+        self.size_bytes: Optional[int] = None
+        self.size_note = ""
+
+    def mark_document(self, size_bytes: Optional[int] = None,
+                      size_note: str = "") -> None:
+        self.document = True
+        if size_bytes is not None:
+            self.size_bytes = size_bytes
+        if size_note:
+            self.size_note = size_note
+
+
+_tier_facts: contextvars.ContextVar[Optional["_TierFacts"]] = contextvars.ContextVar(
+    "_tier_facts", default=None)
+
+
+def _note_tier_facts(size_bytes: Optional[int] = None, size_note: str = "") -> None:
+    """把"这一发是整篇文档（尺寸是 …）"登进本次调用的账本。
+
+    不在背板作用域里（CLI、预热、别的入口）时账本不存在，这里就什么都不做 —— 与
+    `_budget_credit` 那本账一样的规矩：记账的人不在，不许自己造一个。
+    """
+    facts = _tier_facts.get()
+    if facts is not None:
+        facts.mark_document(size_bytes, size_note)
+
+
+def _document_timeout_diagnosis(url: str, size_bytes: Optional[int], size_note: str,
+                                budget_ms: float, stage: str) -> tuple[str, Dict[str, Any]]:
+    """一份文档没赶上预算 —— 散文与机器可读孪生同一次写成，两只手不许各说一套。
+
+    `next_action` 换成 `_document_budget_advice` 是 §9-6a 那一刀做的，而
+    `diagnosis.recover_with` 一直由 finalize 的前缀表按 error 前缀归一 —— 于是同一封
+    响应里散文说"a bigger timeout= buys parsing room"，信封说"Retry once with a longer
+    timeout"（R01-010 复验时又量到一次，两发都是）。孪生引用 `_document_timeout_lever`
+    那一句，所以它不可能再与散文分家。
+    """
+    prose = _document_budget_advice(url, size_bytes, size_note, budget_ms, stage)
+    return prose, {"code": "timeout", "retryable": False,
+                   "recover_with": _document_timeout_lever(budget_ms)}
+
+
+def _cancelled_tier_advice(url: str, facts: _TierFacts, budget_ms: float,
+                           stage: str) -> tuple[str, Optional[Dict[str, Any]]]:
+    """背板只许说被它掐掉的那一层**自己学到**的东西，否则交白卷。
+
+    通用那一句（"Raise timeout … dhole accepts up to 120000ms"）对一份文档是反话：一次
+    尝试钳在 30s，抬 `timeout=` 改变不了决定字节到不到得了的那个数。实测付的账就是这句
+    反话（R01-010：调用方照着抬到 90000，第二发跑了 33051ms，而那一封自己的建议写着
+    "a bigger timeout= buys parsing room, not a faster download"）；R01-014 是同根因的第二
+    半 —— 尺寸预检定在下载之前，结果跟着那次取消一起丢了，所以第一封里一个尺寸都没有。
+
+    散文与机器可读孪生共用 `_document_timeout_lever` 这一个作者：两只手在同一封响应里
+    互相否决，是 R01-044 归的那条根因。
+    """
+    if not facts.document:
+        return "", None
+    return _document_timeout_diagnosis(url, facts.size_bytes, facts.size_note,
+                                       budget_ms, f"the {stage}")
 
 
 def _apply_install_shift(deadline: float, waited_s: float) -> float:
@@ -3141,6 +3513,53 @@ def _knob_here(param: str, value: Optional[str] = None) -> bool:
     return True
 
 
+def _nothing_went_out(door: Optional[str] = None) -> str:
+    """"这一发什么也没发生"那半句，按门取词：会走缓存的那扇说 fetched，写的那一扇说 sent。
+
+    只有一位作者的理由是量到的（评审 R02-084）：同一条拒绝链上从前有六个句子位置各写各的，
+    于是 `web_request` 的四条 headers= 拒绝里两条说 "Nothing was fetched."、两条说
+    "Nothing was sent."（真机读数 `review/.runtime/p1/r87_resend.json` 的 B1/B2 与 W11）。
+    这一扇门外写着 "A write is sent ONCE: not retried (an earlier call may already have
+    committed)"，被拦下时调用方要判的是"对面有没有收过这一发"；"没抓到"在写门上还可能被读成
+    "到了对面、响应没回来" —— 那正是此刻最不该相信的一句。反过来在读门上说 sent 也不对：
+    那一扇能从缓存答题，压根没付出去过请求。
+
+    第三种门是动作那一扇（评审 R02-087）：`web_act` 既不抓也不写，它跑一段动作，而它的三格
+    形状拒绝从前都写着 "Nothing was fetched."（真机 `r92_act_shape.json` 的 A1/A2/A3）。
+    分岔判据用参数面而不是工具名：只有 `web_act` 收 `actions`（`_TOP_LEVEL_ARGS` 现读），
+    所以哪天多一扇动作门也不必改这里 —— 与 `_knob_here` 同一条理由。
+
+    但 `door=` 这一颗不是多余的：`web_act` 的动作段是**在 `web_read` 的实现里跑的**
+    （`server.py` 的 web_act → self.web_read(…actions…)），那一层的名字装饰器把 `_TOOL`
+    设成了 `web_read`，所以正在拒绝动作形状的代码，按参数面问出来的是读的那一扇。调用方
+    用的门与实现所在的门在这里不是同一个名字 —— 出路要按**调用方的门**说话，所以由站在
+    那一条车道上的调用点把门名交进来。（`_TOOL` 在动作车道上是旧的吗？那是另一件事，
+    量到才记行。）
+
+    取词的作者搬到了 `context.nothing_went_out()`（评审 R02-089）：那里按**门类**逐扇声明，
+    而不是问"这扇收不收某颗参数" —— 旧的 `cache_ttl` 判据只对 3/11 扇成立，其余被默认支
+    推到 `sent`。这里保留两件事：动作车道那颗 `door=`，以及按参数面认动作门的兜底分岔。
+    """
+    from dhole_mcp.context import nothing_went_out
+    if door == "action" or _knob_here("actions"):
+        # 动作车道：调用方的门与实现所在的门不是同一个名字，门名由调用点交进来；
+        # 词仍向同一位作者取（写死那句在这里等于第二位作者）。
+        return nothing_went_out("web_act")
+    return nothing_went_out(door or _TOOL.get() or "web_read")
+
+
+def _nothing_erased() -> str:
+    """`sys_state` 的 erasure 面那半句，向 `context` 取（评审 R02-116）。
+
+    它从前焊在 `server.py:9108` 的文案里，于是这一扇的两条拒绝路各有各的写法：打错状态类
+    那一条说 `Nothing was erased.`（自己写的），打错参数名那一条听表外默认支说
+    `Nothing was fetched or changed.`（没人替它写的）。两句说的都是真话，也确实是两件不同的
+    事 —— 收的不是句子，是**作者的归属**。
+    """
+    from dhole_mcp.context import nothing_erased
+    return nothing_erased()
+
+
 def _header_door(low: str) -> Optional[tuple[str, str]]:
     """这颗头名撞在哪一条设计边界上：`(说清为什么, 唯一的那条出路)`，没有则 None。
 
@@ -3155,7 +3574,7 @@ def _header_door(low: str) -> Optional[tuple[str, str]]:
             "Store it instead - cred_defaults set={auth: {type: 'bearer', token: '…'}, "
             "host: 'api.example.com'} (or {type: 'header', name: 'X-API-Key', value: '…'}). "
             "The call to that host then sends it and identity_applied names what it ran "
-            "on. Nothing was fetched.")
+            "on. " + _nothing_went_out())
     if low == "user-agent":
         fact = ("headers= names 'user-agent', and the UA is not free to pick here: the "
                 "HTTP tier chooses its TLS impersonation OS from dhole's own generated "
@@ -3166,7 +3585,7 @@ def _header_door(low: str) -> Optional[tuple[str, str]]:
                 "Two doors that stay self-consistent: anti_detect='off' stops dhole "
                 "synthesizing a UA at all (measured: primp's own UA and TLS profile "
                 "then travel together, and no google referer goes out), or cdp_url= "
-                "runs in the user's real Chrome. Nothing was fetched.")
+                "runs in the user's real Chrome. " + _nothing_went_out())
         # 写的那一扇门：a write never renders，所以这上没有 anti_detect= 也没有 cdp_url=
         # —— `web_request` 自己的描述就是这么说的。剩下的两条都当场能做：删掉那一颗头
         # （请求照样发出，用 dhole 成套的那份 UA + TLS），或把档位存进 cred_defaults ——
@@ -3176,7 +3595,7 @@ def _header_door(low: str) -> Optional[tuple[str, str]]:
             "cdp_url= (a write never renders). Two things still work - drop the "
             "user-agent key and the request goes out on dhole's matched UA + TLS pair, "
             "or cred_defaults set={anti_detect: 'off'} puts that rung on the store this "
-            "call reads. Nothing was sent.")
+            "call reads. " + _nothing_went_out())
     if low in _CONDITIONAL_HEADER_NAMES:
         fact = (f"headers= names {low!r}, and conditional requests are dhole's own "
                 "business: one public parameter asks the origin 'did this change', and "
@@ -3186,14 +3605,14 @@ def _header_door(low: str) -> Optional[tuple[str, str]]:
             return fact, (
                 "extraction_type='check' is that one door (it returns the changed / "
                 "unchanged receipt, not the page). For everything else dhole revalidates "
-                "on its own terms. Nothing was fetched.")
+                "on its own terms. " + _nothing_went_out())
         # 同一颗参数名、这一个取值不在这扇门上（`params._ENUM_ARGS` 就是它拒的那份名单）。
         # 这里不许把"另一扇门的合法值"写成"这一扇门的出路" —— 那是场景 9 的形状换了一颗
         # 取值：照着传 `extraction_type='check'` 到的是一句 enum 拒绝，不是收据。
         return fact, (
             "Drop that validator - this call does not revalidate, and this tool does not "
             "take extraction_type='check' (that changed-since-last receipt is web_read's). "
-            "Nothing was sent.")
+            + _nothing_went_out())
     return None
 
 
@@ -3218,7 +3637,7 @@ def _caller_headers(headers: Optional[dict]) -> tuple[Optional[Dict[str, str]],
     except (ValueError, SecurityError) as e:
         return None, f"headers=: {e}", (
             "Fix the dict and call again - one bad name stops the whole call, because "
-            "half a header set is a request you did not ask for. Nothing was fetched.")
+            "half a header set is a request you did not ask for. " + _nothing_went_out())
     return (validated or None), None, None
 
 
@@ -3263,7 +3682,7 @@ def _headers_note(caller: Optional[Dict[str, str]], synthesized: bool) -> str:
             "cred_defaults; a loopback/private target drops it here on its own")
 
 
-def _headers_off_note() -> str:
+def _headers_off_note(by: str, replay: bool = False) -> str:
     """The ONE wording for "this request carried no dhole-synthesized browser
     headers" — said by the tier that actually withheld them, because that is the
     only layer that knows whether a packet went out at all (a cache replay reads
@@ -3275,13 +3694,45 @@ def _headers_off_note() -> str:
     browserforge UA to `127.0.0.1` like everywhere else, and the report's user
     found his own service log full of headers he never sent — for a local API
     call those headers are pollution, not protection.
+
+    `replay=True` is the cache's voice, and it is a different tense on purpose:
+    the page being handed back IS the page that was fetched without those headers,
+    so the disclosure has to survive the replay (a security user quotes it as
+    evidence about what the site saw) — but no packet left this process, so the
+    sentence may not claim what "went out" now. An empty `by` says nothing at all:
+    an old cache row carries no receipt, and absence is not a claim of innocence.
     """
-    if _HEADERS_OFF_BY.get() == "private":
+    if not by:
+        return ""
+    if replay:
+        if by == "private_referer":
+            return ("replayed from the cache: the fetch that stored this answer navigated "
+                    "without dhole's invented google referer, because the target is "
+                    "loopback/private. That browser's own headers (UA, `sec-ch-ua*`, "
+                    "`sec-fetch-*`) went as the browser sends them. This replay sent no "
+                    "request, so it says nothing about what would go out now - read that "
+                    "part off the fetch above.")
+        head = ("replayed from the cache: the fetch that stored this answer "
+                + ("dropped dhole's own synthesized header template because the "
+                   "target is loopback/private" if by == "private" else
+                   "ran with anti_detect='off', so it carried no dhole-synthesized "
+                   "headers"))
+        return (f"{head} - no fabricated google referer, no generated UA. "
+                "This replay sent no request, so it says nothing about what would "
+                "go out now - read that part off the fetch above.")
+    if by == "private":
         # 同一件事，两个扳法两句原因：把 `anti_detect='off'` 写在回环那一发上，等于让
         # 调用方去找一把他根本没碰、而且这扇门上（`web_request`）也够不着的开关。
+        # 这一句只管 HTTP 那条腿（`no generated UA` 是它的话）；浏览器那条腿少的是另一颗，
+        # 由 `private_referer` 那一支说 —— 把两条腿塞进一句话，读者会去找一台没发出去的请求。
         return ("the target is loopback/private, so dhole dropped its own synthesized "
                 "header template - no fabricated google referer, no generated UA. "
                 "What went out is what you named plus the client's own Chrome profile")
+    if by == "private_referer":
+        # 浏览器那条腿少的那一枚是 dhole 编出来的来路；那一发是真 Chromium 发的，它自己那些颗
+        # 一颗没动，写成"没发 UA"就是谎。这句话的作者是 `context.REFERER_OFF_NOTE`，
+        # 由那颗门在决定的地方说一次（`_note_referer_off`），这里只是把同一句抄给回放读。
+        return REFERER_OFF_NOTE
     return ("anti_detect='off': the HTTP tier sent no dhole-synthesized "
             "headers - no fabricated google referer, no generated UA. "
             "What went out is what you named plus the client's own "
@@ -3452,6 +3903,32 @@ def _browser_cookies(cookies: Any, url: str) -> Any:
 # 有了这个家；`profile` 是第七颗，它今天根本没有别的入口（DHOLE_BROWSER_PROFILE
 # 已注销，而 browser.py 的持久上下文一直等着有人给它取名）。
 #
+def _allow_private_entry_problem(entry: str) -> str:
+    """这一颗条目为什么成不了主机名。空串 = 能（评审 R02-104）。
+
+    `parse_allow_private` 拿条目去和 **URL 里的字面主机名**比。主机名里没有端口、没有
+    方案、没有路径 —— 带这些写法的条目不是「错得轻一点」，是永远匹配不上一条规矩。量在
+    两处（`r127_allow_private_shapes.json` / `r134_store_shapes_b64.json`）：`["127.0.0.1:8399"]`
+    与 `["bad host name!"]` 都被收下，回执还报「1 key(s) in force」，此后每一发照旧被拒。
+    IPv6 那一族（`::1`、`fe80::1`）不止一颗冒号，落在下面的「不止一个冒号就交回守卫」，
+    不在这一位挨打。
+    """
+    text = str(entry).strip()
+    if "://" in text:
+        return ("it carries a scheme - the guard compares host names, so pass "
+                "'127.0.0.1', not 'http://127.0.0.1'")
+    if re.search(r"[\s/?#@]", text):
+        return ("it carries a space, a path, a query, a user info or an @ - none of "
+                "those are part of a host name")
+    if text.count(":") == 1:
+        head, _, tail = text.partition(":")
+        if tail.isdigit():
+            return (f"it carries a port, and a port has nothing to match against - "
+                    f"the entry that matches this site is '{head}'")
+        return "it is not a host name - pass '127.0.0.1' or 'localhost'"
+    return ""
+
+
 def _identity_value_error(key: str, value: Any) -> str:
     """为什么这一颗不能这么存。空串 = 可以。
 
@@ -3484,12 +3961,20 @@ def _identity_value_error(key: str, value: Any) -> str:
             # A bool/int here would reach urlparse and raise an AttributeError
             # about `decode` — a Python traceback where a shape refusal belongs.
             return "proxy: a URL string or a dict with server/username/password"
-        try:
-            url = _proxy_to_url(value, None)
-        except (ValueError, SecurityError) as e:
-            return f"proxy: {e}"
-        if not url:
+        if (isinstance(value, str) and not value.strip()) or (
+                isinstance(value, dict) and not value):
             return "proxy: pass a URL like 'http://host:port' or a dict with server"
+        # 存与用同一位裁判（评审 R02-105 · 真机 `r132_store_value_shapes.json`：四种写法
+        # 全部存得下、`show` 还报 in force，代价由**下一发无关的调用**付 —— 用到时才在
+        # 出门那一侧响）。这里不另立判据，只问 `validate_proxy`：它本来就是发包前那一位
+        # （`_validate_smart_fetch_params` 每一次都过它），所以「存得下」与「用得上」
+        # 从这一行起不可能再分家，也不会收紧出第二套规矩。
+        try:
+            validate_proxy(value)
+        except SecurityError as e:
+            return f"proxy: {e}"
+        except (ValueError, AttributeError, TypeError) as e:
+            return f"proxy: {e} - pass a URL string or a dict whose values are strings"
         return ""
     if key == "profile":
         from dhole_mcp import browser as _browser
@@ -3506,6 +3991,13 @@ def _identity_value_error(key: str, value: Any) -> str:
         return ""
     if key == "allow_private":
         hosts, _ = parse_allow_private(value)
+        not_hosts = [f"'{h}' is not a host name - {_allow_private_entry_problem(h)}"
+                     for h in sorted(hosts) if _allow_private_entry_problem(h)]
+        if not_hosts:
+            # 说在存的那一侧，而不是等下一发被拒：这一颗门是安全门，静默收下会让读者
+            # 以为门开了（实测那句 "1 key(s) in force"）。申报那句归 next_action 的
+            # 门话（R02-F87 立的轴），这里不焊第二份。
+            return ("allow_private: " + "; ".join(not_hosts))
         if hosts:
             return ""
         # 传 false / 空值最常见的意思是"把这扇门关上"，而那不是这颗键的一个取值：
@@ -3542,6 +4034,99 @@ def _feed_anonymity_note(row) -> str:
     return " · ".join(parts)
 
 
+def _feed_no_delivery_action(rows: List[dict]) -> str:
+    """整批没交回任何条目时，出路只有一句话的位置：三种原因各有各的说法。
+
+    「全部报错」「`since` 筛完没有新的」「源应答了但一条都没写」是三件事：把第二件说成
+    第一件会让人换源，把第一件说成第二件会让人继续等一个已经死掉的地址 —— 所以这里按
+    行的形状分支，不按形容词分支。
+    """
+    answered = len(rows)
+    if not rows:
+        return ("No row came back for the URL(s) asked, so this reply carries no feed to "
+                "read: feed_read reports one row per source - check the URLs and call again.")
+    errored = sum(1 for r in rows if r.get("error"))
+    if errored == answered:
+        return (f"None of the {answered} source(s) delivered a feed: every row carries an "
+                "error. Each row's `diagnosis` names `retryable` and `recover_with` - retry "
+                "only what is marked retryable, and web_read the site page when the feed "
+                "itself is gone.")
+    filtered = [r for r in rows if r.get("since")]
+    if errored == 0 and len(filtered) == answered:
+        older = sum(int(r.get("items_older_than_since") or 0) for r in rows)
+        return (f"No entry at or after since={filtered[0].get('since')} in any source: "
+                f"{older} entrie(s) were older than that cutoff and each row counts them in "
+                "`items_older_than_since`. For the next poll pass the newest `published` "
+                "value this batch returned (or an unfiltered one).")
+    return (f"{answered - errored} source(s) answered with zero entries"
+            + (f" and {errored} errored" if errored else "")
+            + ": there is nothing to read in this reply. A row's `note` quotes the feed's own "
+            "date markers when the document parsed but listed no entries; web_read the site "
+            "page if you need its current text.")
+
+
+def _blank_url_split(urls: List[Any]) -> tuple:
+    """把调用方点名的 URL 分成「要去取的」与「空白的那几颗（记位置）」—— 一处判据，两处读者。
+
+    空白项本来就被丢掉，丢掉本身是对的（一颗空串没什么可取的）；缺陷是丢完之后
+    这件事在回执里查无此格（R02-053）。位置而不是内容：空白项的内容只有空与空白，
+    点名内容没有信息量，「第几颗」才是调用方能对回自己清单的那个数。
+    """
+    kept: List[Any] = []
+    blank_at: List[int] = []
+    for i, u in enumerate(urls, start=1):
+        if u and str(u).strip():
+            kept.append(u)
+        else:
+            blank_at.append(i)
+    return kept, blank_at
+
+
+def _feed_batch_envelope(asked: int, rows: List[dict],
+                         blank_positions: Optional[List[int]] = None) -> dict:
+    """给 `feed_read` 的成功回执配上其余每一扇读取工具都在用的那层信封（R02-015）。
+
+    三颗数都**从行里算**，不在信封上另数一遍网络：`usable` 那条纪律（BulkResponseModel）
+    说的就是派生自行的数不可能与行 disagree。非列表的一批按 0 行算 —— 线压缩早就对
+    `{"feeds": None}` 许过同一条承诺（不炸），这一层不能成为新的崩点（tests 里的桩就交回
+    None：那是产品运行时不会有的形状，但它是这条承诺唯一的读者）。
+
+    「这一份是不是缓存的旧版」在这一条路有一个正面答案：`feed.py` 自己不缓存（模块说明
+    第一行就是 No caching —— 一份缓存下来的 feed 正好废掉它唯一的用途）。所以这里说的是
+    **它没有缓存**，而不是发一颗 `cached=false` 去冒充 web_read 那套缓存语义：那一颗在
+    那边回答的是「这次一个包都没发」，在这边从来没有发生过那种事。
+    """
+    rows = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+    answered = len(rows)
+    items = sum(len(r.get("items") or []) for r in rows)
+    errored = sum(1 for r in rows if r.get("error"))
+    # 剪子请现成的那一位：`_wire_scalar` 是线上 `fetched_at` 唯一的形状作者，而它只剪
+    # **键名命中的标量**，剪不到写在散文里的同一颗时刻。不请它，同一封回信里就会出现
+    # 两个精度、两个形状（行上 `…T12:00:01Z`，句子里 `…T12:00:01.002000+00:00`）。
+    stamps = sorted({_wire_scalar("fetched_at", r["fetched_at"])
+                     for r in rows if r.get("fetched_at")})
+    parts = [f"{asked} URLs asked · {answered} rows answered",
+             f"{answered - errored} rows carried {items} items, newest first"]
+    if errored:
+        parts.append(f"{errored} rows errored (each row names its own error and diagnosis)")
+    if stamps:
+        when = (f"at {stamps[0]}" if len(stamps) == 1
+                else f"between {stamps[0]} and {stamps[-1]}")
+        parts.append(f"fetched live {when} - this path holds no cache, so each row's "
+                     "`fetched_at` is when that document arrived")
+    if blank_positions:
+        where = ("position " if len(blank_positions) == 1 else "positions ")
+        parts.append(f"{len(blank_positions)} of the {asked} entries named were blank "
+                     f"({where}{', '.join(str(i) for i in blank_positions)}) and nothing was "
+                     "fetched for them - they are counted in the asked number, not as rows")
+    env = {"summary": " · ".join(parts)}
+    if blank_positions:
+        env["skipped_blank_urls"] = len(blank_positions)
+    if items == 0:
+        env["next_action"] = _feed_no_delivery_action(rows)
+    return env
+
+
 def _cred_hosts_of(host_arg: Any) -> List[str]:
     """The `host` inside `set={...}`, as a normalized list.
 
@@ -3562,6 +4147,19 @@ def _identity_scope_error(key: str, host: str) -> str:
             "'api.example.com' (or a list) in the same set. A stored credential "
             "with no host would ride along to the NEXT site you read, which is a "
             "different site's request.")
+
+
+def _cred_refusal(msg: str, extra: str = "") -> CredDefaultsModel:
+    """`cred_defaults` 的门口拒绝统一走这一处：一副信封、一句本门申报（评审 R02-102）。
+
+    这一扇从前五处各写一遍 "Nothing was stored…"（有的带 "- pick one"、有的只到句号），
+    而 schema 层的陌生参数名那颗根本不知道有人写过 —— 它落 `context` 的表外默认支，
+    于是同一扇并存两种申报（真机 C4 与 C6）。词从此只向 `_nothing_went_out("cred_defaults")`
+    取一份，前缀按 R02-097 立的契约在这里统一补。
+    """
+    return CredDefaultsModel(
+        error=msg if msg.startswith("invalid_request:") else f"invalid_request: {msg}",
+        next_action=" ".join(x for x in (_nothing_went_out("cred_defaults"), extra) if x))
 
 
 CRED_DEFAULTS_DESC = """Set the identity once instead of passing it on every call: proxy, a named browser profile, the CDP endpoint to attach, the private-host allowance, the anti-detect rung, and (with a host) auth and cookies. Stored locally, applied to later calls whose argument is absent, and echoed as names only - values never come back."""
@@ -3651,7 +4249,7 @@ _ACT_PARAMS = frozenset({
 })
 
 _SS_PARAMS = frozenset({
-    "max_results", "cache_ttl", "mode", "engines", "url",
+    "max_results", "cache_ttl", "mode", "engines", "sources", "sort", "url",
     "site", "exclude_sites", "location", "language", "region", "page",
     "freshness", "fetch_content", "fetch_schema", "min_relevance",
     # G24: the date window. `after` is widened to the engines' coarsest preset that
@@ -3813,10 +4411,9 @@ _MOVED_TO = {
 # 出口——云元数据端点与 DNS rebinding 服务任何拼写都不放行（allowlist 也进不去，
 # 见 security.py 的同段注释）。它们的 next_action 不能再走「Correct the
 # argument」模板：改参数永远不可能成功，那句话在指一条不存在的出路。
-_PERMANENT_URL_REFUSALS = (
-    "URL targets internal cloud metadata endpoint",
-    "URL uses DNS rebinding service",
-)
+# 识别针与句子现在都住在守卫侧那一份（`security.PERMANENT_URL_REFUSAL_PREFIXES` /
+# `PERMANENT_URL_RECOVERY`）：crawl 引擎也认这一族，两处各抄一份就是两位作者
+# （评审 R02-098 的 M4/M5 —— 这一族在 discover/crawl 上曾被通用兜底句接走）。
 
 
 def _resolver_guard_result(url: str, msg: str) -> ResponseModel:
@@ -3828,26 +4425,44 @@ def _resolver_guard_result(url: str, msg: str) -> ResponseModel:
     --doctor` 能看见现判。diagnosis 同步落位（`resolver_guard` / retryable=false），
     调用方分支不用匹配散文。
     """
-    result = _refusal_result(url, msg)
+    result = _refusal_result(url, f"invalid_request: {msg}")
+    # 信封三件齐全才算一次拒绝（评审 R02-113 · 尺 `test_a_guard_refusal_wears_the_same_envelope.py`）：
+    # 前缀、**本门**的申报句在行首、出路。从前这里把申报缀在句尾且写成 "nothing was fetched" ——
+    # 于是写门与行动门（都经 web_read 的实现跑）被这份共用文案推去说读门的话，与 R02-100/110/111
+    # 是同一个形状：装配点共用、动词写死。申报改由 `context.nothing_went_out()` 按本次调用的门取。
     result.next_action = (
-        "No argument on this call changes it - this process fetches on a resolver "
-        f"verdict it took earlier. {RESOLVER_GUARD_RECOVERY}; "
-        "nothing was fetched.")
+        f"{_nothing_went_out()} No argument on this call changes it - this process fetches "
+        f"on a resolver verdict it took earlier. {RESOLVER_GUARD_RECOVERY}.")
     result.summary = f"refused by the SSRF resolver guard · {_summary_label(msg)}"
     result.diagnosis = {"code": "resolver_guard", "retryable": False,
                         "recover_with": RESOLVER_GUARD_RECOVERY}
     return result
 
 
-_ARG_REFUSAL_WAY_OUT = (
-    "Nothing was sent. The name in `error` is not one this tool takes - rename or "
-    "drop it; the list in `error` is everything it does take. Every argument is a "
-    "top-level parameter.")
+_ARG_REFUSAL_BODY = (
+    "The name in `error` is not one this tool takes - rename or drop it; the list in "
+    "`error` is everything it does take. Every argument is a top-level parameter.")
 
-_ACTION_REFUSAL_WAY_OUT = (
-    "Nothing was fetched. The action named in `error` has the wrong shape; "
-    "sys_guide(topic='behavior', section='Page interaction') lists every action "
-    "key and what each one takes.")
+
+def _arg_refusal_way_out() -> str:
+    """陌生参数名那扇门的出路。
+
+    从前整个句子是一份模块常量、开头写死 `Nothing was sent.` —— 于是全部 11 扇（包括只读的
+    `doc_parse`/`feed_read`/`web_discover` 与根本不碰网络的 `sys_guide`）都听到"这一发没寄出去"
+    （评审 R02-089 · `r100_door_vocabulary.json` 11/11）。本体仍是这一位作者，申报那半句按门取。
+    """
+    return f"{_nothing_went_out()} {_ARG_REFUSAL_BODY}"
+
+def _action_refusal_way_out() -> str:
+    """动作形状被顶回来时的出路。
+
+    从前它是模块常量 `_ACTION_REFUSAL_WAY_OUT` —— 而常量没法按门取词，这就是那一扇门上写着
+    "Nothing was fetched." 的来路（评审 R02-087）。申报的那半句从 `_nothing_went_out()` 取，
+    出路本体（指 `sys_guide` 那一节）仍是一位作者。
+    """
+    return (_nothing_went_out("action") + " The action named in `error` has the wrong shape; "
+            "sys_guide(topic='behavior', section='Page interaction') lists every action "
+            "key and what each one takes.")
 
 
 def _min_visual_call_ms() -> int:
@@ -3880,6 +4495,69 @@ def _envelope_url(args: dict | None) -> str:
     return value if isinstance(value, str) else ""
 
 
+# 有自己的回执模型的**非抓取**门（评审 R02-103）。名字即门名；不在表里的门走
+# `_invalid_request_result` 那副 FetchResult 壳，那是它们本来该穿的衣服。
+# `sys_guide` 故意外表缺席：`models.py` 里没有 `SysGuideModel` —— 没有模型就没有
+# "自己的形状"可回，那是另一行账，不在这一把里编一副临时模型出来。
+_STATE_DOOR_MODELS = {"sys_state": SysStateModel, "cred_defaults": CredDefaultsModel}
+
+# 按设计**不说 JSON** 的门（评审 R02-115）：`sys_guide` 交的是手册卷，成功面与 unknown-topic
+# 面都是散文，所以它的参数拒绝也说散文。名单里只剩这一扇 —— 其余十扇的回执都是模型。
+_PROSE_DOORS = {"sys_guide"}
+
+
+def _url_guard_refusal(url: str, msg: str, caller: str):
+    """URL 守卫那句话该配哪一条出路 —— 全仓唯一的装配处（评审 R02-118 抽出来的）。
+
+    从前这段住在 `web_read` 的 except 里，于是 `web_request` 想**先**问一句"这一发到底发得
+    出去吗"时没有可借的作者：要么复制一份（第二位裁判，本仓已经为这件事修过四轮），要么把
+    问题拖到确认闸之后再问（拖出来的就是 R02-118：用户被请去批准一件设计上不可能成功的事）。
+    族由 `security.url_refusal_family` 判，句子由 `security` 那几个常量一份写，门话由
+    `_nothing_went_out(caller)` 装配 —— 这里只把它们排成信封。
+    """
+    _fam = url_refusal_family(msg)
+    if _fam == "permanent":
+        # 设计边界那句由守卫侧一份写（评审 R02-098 · 真机 `r119b_boundary_clauses.json`
+        # 的 M1/M3：这一支从前自带 `Nothing was sent;`，于是 `web_read` 与 `web_act`
+        # 上听到的是写门的话）。申报那半句按门装配，放在行首。
+        return _invalid_request_result(
+            url or "", msg,
+            next_action=f"{_nothing_went_out(caller)} {PERMANENT_URL_RECOVERY}",
+            tool=caller)
+    if _fam == "private":
+        # 被拒的是**地址**，不是拼法。落到下面那行会取 `_invalid_request_result`
+        # 的默认模板 —— "web_read takes an absolute http(s) URL"，而这条 URL
+        # 本来就是绝对 http(s)：那句话把读者推去改一个本来就对的东西，正是这颗
+        # 函数自己的 docstring 立令禁止的那类话。它与上面那支也不同：这一支**有**
+        # 出口（allow_private），所以句子要把门指出来，而不是只说"没救"。
+        # 门话同样在这里装配（评审 R02-100 · 同一趟的地址族六格）。
+        return _invalid_request_result(
+            url or "", msg,
+            next_action=(f"{_nothing_went_out(caller)} "
+                         f"{PRIVATE_ADDRESS_RECOVERY}"),
+            tool=caller)
+    if _fam == "timeout":
+        # 同一个陷阱的第二颗（评审 R02-096 · 真机 `r110_timeout_gate_sweep.json` /
+        # `r113_feed_prefix.json`）：被拒的是那颗**数字**（超帽 / 非正数 / 不是数字），
+        # 出路却念 URL 的拼法 —— 五发读数里 `error` 点名 Timeout、`next_action` 逐字是
+        # "web_read takes an absolute http(s) URL"，而门话那一格是空的。
+        # 句子由 `security.TIMEOUT_CEILING_RECOVERY` 一份写，门话按门装配。
+        return _invalid_request_result(
+            url or "", msg,
+            next_action=f"{_nothing_went_out(caller)} {TIMEOUT_CEILING_RECOVERY}",
+            tool=caller)
+    if msg.startswith(PROXY_REFUSAL_PREFIXES):
+        # 第三颗同一个陷阱（评审 R02-105 · 真机 `r132b_broken_proxy.json`）：
+        # `error` 点名 proxy，出路教的还是 URL 的拼法。与上面两族不同的是**主人**：
+        # 这颗值可能来自 `cred_defaults` 的库，那一发里根本没有 proxy= 这颗参数，
+        # 所以那句要点名两位可能的给法，而不是假定是本发写错了。
+        return _invalid_request_result(
+            url or "", msg,
+            next_action=f"{_nothing_went_out(caller)} {PROXY_RECOVERY}",
+            tool=caller)
+    return _invalid_request_result(url or "", msg, tool=caller)
+
+
 def _reject_unknown_args(tool: str, args: dict) -> None:
     """Raise when a tool is called with a name it does not accept.
 
@@ -3903,7 +4581,7 @@ def _reject_unknown_args(tool: str, args: dict) -> None:
             + " - the capability is still there, the door changed. "
             f"Supported here: {sorted(allowed)}",
             next_action=(
-                "Nothing was sent. The key in `error` did not disappear - it moved, "
+                f"{_nothing_went_out(tool)} The key in `error` did not disappear - it moved, "
                 "and `error` names the tool it moved to. Call that one; no argument "
                 "of this call will bring it back."))
     if "options" in unknown:
@@ -3912,18 +4590,18 @@ def _reject_unknown_args(tool: str, args: dict) -> None:
         leftover = sorted(k for k, v in (args.get("options") or {}).items()
                           if isinstance(args.get("options"), dict) and k in allowed)
         raise ArgumentRefusal(
-            f"Unsupported argument(s) for {tool}: {unknown}. The options object was "
-            "removed in 17.0 - its keys are top-level parameters now, so pass them "
-            "beside url, not inside an object"
+            f"Unsupported argument(s) for {tool}: {unknown}. This tool has no options "
+            "object - its keys are top-level parameters, so pass them beside url, not "
+            "inside an object"
             + (f" (this call's {', '.join(leftover)} can move out as-is)" if leftover
                else "") + f". Supported: {sorted(allowed)}",
             next_action=(
-                "Nothing was sent. Unwrap the options object: move its keys beside "
+                f"{_nothing_went_out(tool)} Unwrap the options object: move its keys beside "
                 "`url` at the top level and call again with the same values."))
     raise ArgumentRefusal(
         f"Unsupported argument(s) for {tool}: {unknown}. "
         f"Supported: {sorted(allowed)}",
-        next_action=_ARG_REFUSAL_WAY_OUT)
+        next_action=_arg_refusal_way_out())
 
 
 # ─── extraction schema normalization ───────────────────────────────
@@ -4099,6 +4777,11 @@ def _resolve_local_path(file_path: str, cwd: str | None = None) -> tuple[str, li
     failed against "D:\\Program Files\\Qoder\\report.csv", a path the caller had
     never mentioned. Every documented root is now tried in order, and a miss
     names all of them so the next call can be an absolute path.
+
+    A candidate that exists but is a DIRECTORY is not a miss — it is a different
+    answer, and `_directory_answer` says so. `isfile()` alone cannot tell the two
+    apart, and the sentence it produced for both sent folder-callers off to check
+    a spelling that was never wrong.
     """
     raw = (file_path or "").strip()
     if not raw:
@@ -4114,6 +4797,57 @@ def _resolve_local_path(file_path: str, cwd: str | None = None) -> tuple[str, li
         if os.path.isfile(cand):
             return cand, candidates
     return "", candidates
+
+
+#: 一次点名最多列几颗文件。大目录（node_modules 那一类）会把整封回执挤成一堵墙，
+#: 而墙里没有一个答案是调用方能用的 —— 数照报，名字少列。
+_DIRECTORY_LISTING_CAP = 5
+
+
+def _directory_answer(candidates: list[str]) -> str:
+    """一条解析得到、却是目录的路径：说「这是目录 + 里面有这些文件」。
+
+    判据是 os 层当场给得出的形状（`isdir`），不是词表。列名字受三条约束：只列**这一层**
+    的普通文件（本工具不走树，明说不走比沉默诚实）；有上限，上限之外报数；给的是 basename
+    —— 回执按契约 C15 把机器根遮成 `<server cwd>`，遮过的整路径复制了也不能用，而调用方
+    自己打的那颗目录名她当然知道。
+    """
+    from dhole_mcp import paths as _paths
+    for cand in candidates:
+        if not cand:
+            continue
+        try:
+            if not os.path.isdir(cand):
+                continue
+            names = sorted(os.listdir(cand), key=str.casefold)
+        except OSError:
+            continue
+        files, subdirs = [], 0
+        for n in names:
+            try:
+                if os.path.isdir(os.path.join(cand, n)):
+                    subdirs += 1
+                else:
+                    files.append(n)
+            except OSError:
+                files.append(n)
+        shown = files[:_DIRECTORY_LISTING_CAP]
+        head = ("Path is a directory, not a file: "
+                + _paths.mask_machine_paths(cand)
+                + " · doc_parse reads one file per call")
+        if not files:
+            return head + (
+                "; it holds no regular file at this level, only "
+                f"{subdirs} subdirector(ies), which this call does not walk"
+                if subdirs else "; it holds no regular file")
+        tail = (f" ({len(files)} file(s) at this level, "
+                f"{len(shown)} listed")
+        if subdirs:
+            tail += f", {subdirs} subdirector(ies) this call does not walk"
+        tail += ")"
+        return (head + ". Append one of these names to the directory you passed: "
+                + ", ".join(shown) + tail)
+    return ""
 
 
 def _masked_file_uri(target: str) -> str:
@@ -4151,12 +4885,18 @@ def _masked_file_uri(target: str) -> str:
 
 
 def _blocked_path_prefix(real_path: str) -> str:
-    """The restricted prefix ``real_path`` falls under, or "" when it is fine.
+    """The restricted entry ``real_path`` falls under, or "" when it is fine.
 
     Symlinks are resolved by the caller before this runs, so a link out of an
     allowed directory cannot dodge the list.
+
+    交回的是**名单被作者写下的那一形**（`~/.ssh` → Windows 上 `~\\.ssh`），不是展开之后的绝对路径
+    （评审 R02-126 · 真机 `r227_server_resolved_paths.json`：读侧 `error` 与写侧 `ValueError`
+    都把 `c:\\users\\<user>\\.ssh` 交到了会进 transcript 的那一格，而同一封回执的 `url` 早过了作者）。
+    展开只发生在比较那一步；`server.py:1718` 那条偏好（别把绝对路径拼进句子再靠遮蔽器折回去）
+    在这里的落法是：**根本不拼进去**。名单一个字没动。
     """
-    blocked_dirs = (
+    symbolic = (
         # Windows system directories. %SystemRoot% 派生而不是写死 C 盘：
         # Windows 装在 D 盘的机器上，写死的 c:\windows 拦不住真正的系统目录。
         (os.path.normpath(os.environ.get("SystemRoot") or "C:\\Windows")
@@ -4165,36 +4905,34 @@ def _blocked_path_prefix(real_path: str) -> str:
         "c:\\programdata\\ssh",
         # Unix system directories
         "/etc", "/proc", "/sys", "/dev", "/boot", "/var/run",
-        # Sensitive user directories
-        os.path.expanduser("~/.ssh"),
-        os.path.expanduser("~/.gnupg"),
-        os.path.expanduser("~/.aws"),
+        # Sensitive user directories —— 写成 `~` 的那一形，报出去也是这一形
+        "~/.ssh", "~/.gnupg", "~/.aws",
         # dhole 自己的秘密与常见凭据存放点：config.json 存 secret 级旋钮，
         # 其余四个是各自工具链的默认凭据位置。
-        os.path.expanduser("~/.dhole"),
-        os.path.expanduser("~/.config/gcloud"),
-        os.path.expanduser("~/.config/gh"),
-        os.path.expanduser("~/.azure"),
-        os.path.expanduser("~/.kube"),
+        "~/.dhole", "~/.config/gcloud", "~/.config/gh", "~/.azure", "~/.kube",
     )
     # 敏感文件/目录黑名单（追加，覆盖常见凭据文件）
-    blocked_files = (
-        os.path.expanduser("~/.env"),
-        os.path.expanduser("~/.bash_history"),
-        os.path.expanduser("~/.zsh_history"),
-        os.path.expanduser("~/.git-credentials"),
-        os.path.expanduser("~/.netrc"),
+    symbolic += (
+        "~/.env", "~/.bash_history", "~/.zsh_history", "~/.git-credentials",
+        "~/.netrc",
     )
     norm = (
         real_path.lower().replace("/", "\\") if os.name == "nt" else real_path
     )
-    prefixes = tuple(
-        b.lower().replace("/", "\\") if os.name == "nt" else b
-        for b in blocked_dirs + blocked_files
-    )
-    for blocked in prefixes:
-        if norm.startswith(blocked):
-            return blocked
+    # 边界：名单里每一颗是一个**目录或一颗文件**，不是一个字符串前缀。
+    # `norm.startswith(blocked)` 把兄弟目录一起挡了 —— 实测（2026-10-16）把 TEMP 指到
+    # `C:\Users\ouli\.dhole-tmp` 之后，`doc_parse` 对 `~\.dhole-tmp\a.txt` 回的是
+    # "restricted system directory (c:\\users\\ouli\\.dhole)"，而它不是 `~\.dhole` 的孩子，
+    # 只是名字蹭上了前缀；同一把尺还冤枉了 `~\.envrc`、`~\.aws-keys`、`~\.kubelet`
+    # （R02-079）。本仓库在另一族里早就把这条规矩写清楚了：`cred_defaults` 的主机匹配
+    # 是点边界的（"`evil-example.com` does not match `example.com`"）。
+    # 名单一个字没动：等于它、或在它之后紧跟一颗分隔符，仍然拒。
+    sep = "\\" if os.name == "nt" else "/"
+    for sym in symbolic:
+        cand = os.path.expanduser(sym)
+        cand = cand.lower().replace("/", "\\") if os.name == "nt" else cand
+        if norm == cand or norm.startswith(cand + sep):
+            return sym.replace("/", sep)
     return ""
 
 
@@ -4315,6 +5053,37 @@ def _named_call(func):
         with tool_scope(name):
             return await func(self, name, args)
     return wrapped
+
+
+def _store_ttl(result: ResponseModel, cache_ttl: int, *, chain_ran: bool = False,
+               non_read: bool = False) -> int:
+    """这一发的正文在缓存里值多少秒；0 = 这一发不进缓存。写侧唯一的作者。
+
+    一颗参数从前同时回答两个问题。`cache_ttl=0` 说的是「这一发别看缓存」—— 读侧，用户
+    点名的；它顺手也说了「这一发不值得存」—— 写侧，从来没有用户点过名。后果是 R02-032
+    那一串：先强制刷新看一眼（4.4 秒、正文到手），再普通读一次继续往下走 —— 拿回的却是
+    **更旧的一份**，刚抓到的那些字节被丢了。读侧那一半（`_cache_hit_response` 的
+    `cache_ttl <= 0`）本刀一个字不动；这里只把写侧还回它本来该回答的问题。
+
+    两件事确实不该存，而它们不该继续借一颗单位不同的参数说话：
+      * **一次动作链落地的那一页** —— 正文只存在于那条链之后，回放它等于回答一条链从没
+        问过的问题。它由门口的 `_NO_STORE` 说（`web_act` 压的那颗 0 从前是唯一的挡块，
+        而 R01-028 把链的判词从 `error` 里降级之后，那道挡块已经是"顺带"而不是设计）；
+      * **一次不是「读」的请求** —— `non_read` 由 `_METHOD` 说话：除了 GET，任何具名
+        动词都只可能来自 `web_request`（那颗门自己写着"this tool never sends a bare
+        GET"，并把 `cache_ttl=0` 压在门口）。POST 的回执不是公共正文，HEAD 是一颗探针，
+        两者的应答都不许被下一次普通读端出来当正文。
+    `_is_cacheable` 那道闸（错误状态 / 带 `error` 判词的壳页与挑战页 / 空正文）先问、
+    一字未削；页型抬 TTL 的规则只在「调用方没有自己点名一颗」时生效，也没动 —— 那张表
+    里曾经有过 `{"docs": 86400}`，那个值说的是「这是个文档站」，而缓存时长跟的是页面结构
+    （`source_type` 才回答站点类别），手册类页面从此按默认 1h。
+    """
+    if chain_ran or non_read or not _is_cacheable(result):
+        return 0
+    base = cache_ttl if cache_ttl > 0 else DEFAULT_TTL
+    if base == DEFAULT_TTL:
+        return _TTL_BY_PAGE_TYPE.get(result.page_type, base)
+    return base
 
 
 class MasterFetchServer:
@@ -4705,6 +5474,76 @@ class MasterFetchServer:
     # 在一周内都有可比对象。基线条目本身仍是普通缓存行，到期自然淘汰，无特殊待遇。
     _CHECK_BASELINE_TTL = 7 * 24 * 3600
 
+    # 一次批量 check 的上限。批读能收 100 个 URL，因为那是同一条 HTTP 路径；
+    # check 每个 URL 要问一次 robots、一次条件请求，10 个已经是一次监控轮询的
+    # 合理上限，再大该由调度器分成多轮（而不是让一次调用替调度器排队）。
+    _CHECK_BATCH_MAX = 10
+
+    async def _check_batch(self, urls: List[str], *, css_selector: Optional[str],
+                           force_fetcher: Optional[str], anti_detect: Optional[str],
+                           timeout, extra_headers, ignore_robots: bool) -> dict:
+        """A batch of independent change checks, one verdict per URL.
+
+        Each URL goes back through ``web_read``'s single-URL check path, so the
+        batch inherits every gate (SSRF, robots, auth translation) instead of
+        growing a second copy of them. Rows keep the caller's order; one failed
+        URL does not erase the verdicts of its neighbours. The top-level fields
+        are deliberately named ``*_urls``: a batch has no single ``changed``
+        boolean, and pretending it does is how a caller ends up reporting
+        "unchanged" for nine rows while the tenth moved.
+        """
+        import asyncio as _asyncio
+
+        rows: List[dict] = []
+        # Four at a time: enough to make a watchlist useful, few enough that one
+        # origin with ten watched pages does not receive ten simultaneous probes.
+        gate = _asyncio.Semaphore(4)
+
+        async def _one(u: str) -> dict:
+            async with gate:
+                try:
+                    row = await self.web_read(
+                        url=u, extraction_type="check",
+                        css_selector=css_selector, force_fetcher=force_fetcher,
+                        anti_detect=anti_detect, timeout=timeout,
+                        headers=extra_headers, ignore_robots=ignore_robots,
+                    )
+                except Exception as exc:  # one row's bug is not the batch's answer
+                    return {"url": u, "changed": None, "status": 0,
+                            "error": redact_api_key(str(exc)[:300])}
+            if isinstance(row, dict):
+                return {"url": u, **row}
+            # Refused before any fetch (SSRF/robots/argument gate) comes back as a
+            # ResponseModel. Keep that row's sentence instead of inventing a
+            # verdict from its empty content.
+            return {"url": u, "changed": None, "status": int(row.status or 0),
+                    "error": row.error or "no change verdict was produced",
+                    **({"note": row.next_action} if row.next_action else {})}
+
+        rows = list(await _asyncio.gather(*(_one(u) for u in urls)))
+        changed = [r["url"] for r in rows if r.get("changed") is True]
+        unchanged = [r["url"] for r in rows if r.get("changed") is False]
+        failed = [r for r in rows
+                  if r.get("error") or int(r.get("status") or 0) == 0
+                  or int(r.get("status") or 0) >= 400]
+        primed = [r["url"] for r in rows
+                  if r.get("changed") is None and r not in failed]
+        summary = (f"checked {len(rows)} URL(s): {len(changed)} changed, "
+                   f"{len(unchanged)} unchanged, {len(primed)} baseline recorded, "
+                   f"{len(failed)} error")
+        return {
+            "checked": len(rows),
+            "changed_urls": changed,
+            "unchanged_urls": unchanged,
+            "baseline_urls": primed,
+            "error_urls": [r["url"] for r in failed],
+            "results": rows,
+            "summary": summary,
+            "note": ("each row compares the live page with dhole's own html "
+                     "baseline; changed=null with a 2xx status means this call "
+                     "recorded that URL's first baseline, not that it failed"),
+        }
+
     async def _check_read(self, url: str, *, css_selector: Optional[str],
                           force_fetcher: Optional[str], tier: dict) -> dict:
         """extraction_type='check' 的整条答复链（G1，评审 High）。
@@ -4796,19 +5635,16 @@ class MasterFetchServer:
         # 事实记在两个地方**。现在只有一个地方。
         result = _annotate_quality(result)
         _stamp_robots_mode(result)
-        # Only cache CLEAN content. Caching JS shells / bot challenges / geo
-        # redirects / error statuses would serve broken pages from cache for
-        # the whole TTL (and the cache-hit path doesn't restore the error field,
-        # so content_ok would come back True — the agent would trust garbage).
-        if cache_ttl > 0 and _is_cacheable(result):
-            # Auto-adjust TTL by page_type when using the default TTL. Articles
-            # change occasionally (6h); list/other pages use the default (1h).
-            # User-explicit TTL is always respected (cache_ttl != DEFAULT_TTL
-            # means user chose it). 这里曾有 {"docs": 86400}：那个值说的是「这是个
-            # 文档站」，§3 第 28 条把它归给 source_type，而缓存时长跟的是页面结构。
-            # 手册类页面从此按默认 1h 缓存 —— 代价是最多多取一次，换不到更旧的内容。
-            effective_ttl = _TTL_BY_PAGE_TYPE.get(
-                result.page_type, cache_ttl) if cache_ttl == DEFAULT_TTL else cache_ttl
+        # 写侧的问题只在这里问一次，作者是 `_store_ttl`：CLEAN 正文（壳页 / 挑战页 /
+        # 错误 / 空正文一律不进，否则整个 TTL 都在端出坏页 —— 而命中路径不还原 error，
+        # content_ok 会绿，agent 会信）· 一条动作链的页 · 一次不是「读」的请求。
+        # `cache_ttl=0` 不在这一列里：那是**读侧**的点名（"这一发别看缓存"），不是
+        # "这一发不值得存"（R02-032：把刚花 4.4 秒取回的正文丢掉，让下一次普通读退回
+        # 更旧的一份）。
+        effective_ttl = _store_ttl(
+            result, cache_ttl, chain_ran=bool(_NO_STORE.get()),
+            non_read=(_METHOD.get() or "GET") != "GET")
+        if effective_ttl:
             await set_cached(
                 url, extraction_type, result.content, result.status,
                 css_selector, effective_ttl,
@@ -4846,6 +5682,10 @@ class MasterFetchServer:
                     # 源站的版本标记：缓存里那份正文得知道自己对应哪一版，否则
                     # 下一次复验无从问起。键名沿用旧拼写，老缓存行仍然读得出来。
                     "cache_validators": result._validators,
+                    # 摘头的是发包那一层，回放这一层从没摘过任何东西 —— 所以它得从信封里
+                    # 读回"当初是哪只手摘的"，否则同一颗 URL 的实时回执说了、回放不说，
+                    # 而被人引用去写证据的往往是没说话的那一份（R01-021）。
+                    "headers_off_by": _HEADERS_OFF_BY.get(),
                 },
             )
         return _apply_chunking(result, max_chars=max_chars, offset=offset)
@@ -5028,6 +5868,10 @@ class MasterFetchServer:
             entry = browsers.get(sid)
             alive = bool(entry is not None
                          and getattr(entry.session, "_is_alive", True))
+            # 驻留那一格问的是会话自己（`PIN_TTL_S` 与槽里那一笔 `stamp` 都在它手上，
+            # 这里不重写第二条算式）。答不出这一格的 session 对象就是没钉着页。
+            pin = entry.session.pin_census() if (
+                alive and hasattr(entry.session, "pin_census")) else {}
             rows.append(SessionCensusRow(
                 session_id=sid,
                 hosts=info.get("hosts") or {},
@@ -5036,6 +5880,8 @@ class MasterFetchServer:
                 browser_open=alive,
                 browser_type=(entry.session_type if (entry and alive) else ""),
                 browser_created=(entry.created_at if (entry and alive) else ""),
+                pinned_url=pin.get("pinned_url", ""),
+                pinned_left_s=pin.get("pinned_left_s"),
             ))
         return rows
 
@@ -5380,6 +6226,10 @@ class MasterFetchServer:
             # 只是把已经算出的数抄到信封上。
             for _r in results:
                 _r.timeout_applied = _capped_ms
+        # 没被帽咬的那一格同样要有数（R02-031）：`timeout_applied` 自己的口径是「只有
+        # 被砍才写」，这一颗管平时 —— 同一份算式（上面那行）抄过去，行不再各算一遍。
+        for _r in results:
+            _r.attempt_cap_ms = int(round(_per_attempt_s * 1000))
         return BulkResponseModel(results=results, total=len(results), successful=successful)
 
 
@@ -5674,12 +6524,14 @@ class MasterFetchServer:
                 )))
             else:
                 page, elapsed = resp
-                results.append(_with_agent_hints(_annotate_quality(
-                        _translate_response(
-                            page, extraction_type, css_selector,
-                            fetcher_used="stealthy", duration_ms=elapsed,
-                        )
-                    )))
+                translated = _translate_response(
+                    page, extraction_type, css_selector,
+                    fetcher_used="stealthy", duration_ms=elapsed,
+                )
+                # 判决落笔前先接上这条链的回执（R01-028）：这里是浏览器档写内容判决的
+                # 唯一地方，`_annotate_quality` 就在下一行。
+                _stamp_chain_receipts(translated, page_action)
+                results.append(_with_agent_hints(_annotate_quality(translated)))
         if launch_note:
             # 起的是看得见的那台，就得在回执里说一次：谁在看着、登录
             # 留不留得住、以及怎么把它交回去。headless 是常态，不说。
@@ -5750,16 +6602,30 @@ class MasterFetchServer:
             return _invalid_request_result(
                 url, "method is required and must be one of POST / PUT / PATCH / "
                      "DELETE / HEAD - this tool never sends a bare GET",
-                next_action=("Name the verb, or read the page with web_read(url=...). "
-                             "Nothing was sent."))
+                next_action=(f"{_nothing_went_out()} Name the verb, or read the page with "
+                             "web_read(url=...)."))
         if verb == "GET":
             return _invalid_request_result(
                 url, "method=GET is a read, not a request - web_request takes "
                      "POST / PUT / PATCH / DELETE / HEAD",
-                next_action=("Call web_read(url=...) for a GET: it is the door with the "
-                             "cache, the anti-bot escalation ladder and the archive "
-                             "fallback. Nothing was sent."))
+                next_action=(f"{_nothing_went_out()} Call web_read(url=...) for a GET: it is "
+                             "the door with the cache, the anti-bot escalation ladder and "
+                             "the archive fallback."))
         if verb in _FETCH_METHODS - {"GET", "HEAD"}:
+            # 先问"这一发发得出去吗"，再问人"要不要发"（评审 R02-118 · 真机
+            # `r205_confirm_gate_order.json` · 4 种写 method × 5 族 URL 全 20 格都是
+            # 确认闸先说话）。顺序改了，钥匙没改：能发出去的写照旧要先问人。
+            # 这一问读的闸门与真正发送那一步**同一个**（评审 R02-141：存量的
+            # `allow_private` 由守卫自己并进来，不再由这扇门替管线深处的谁 push 一层
+            # 作用域）—— 从前这里包一层 scope 才问得出"能不能发"，那是第五扇要修就得
+            # 写第五处的形状。
+            try:
+                validate_url(url)
+            except (ValueError, SecurityError) as e:
+                _msg = str(e)
+                if RESOLVER_GUARD_NEEDLE in _msg:
+                    return _resolver_guard_result(url, _msg)
+                return _url_guard_refusal(url, _msg, "web_request")
             # 写操作确认门（G25 评审 Blocker；批次8 刀1 把钥匙搬到协议层）：
             # submit 有闸、sys_state 清会话有闸、CDP 首挂有闸，唯独这扇门没有——
             # 而被注入的页面正文恰恰能诱导 agent 直发已认证写请求（cred_defaults
@@ -5772,9 +6638,9 @@ class MasterFetchServer:
                     return _invalid_request_result(
                         url, f"method={verb} is a write: it changes server state, and "
                              "stored credentials for this host ride along automatically",
-                        next_action=("Ask the user, then re-send the same call with "
-                                     "confirm=true. HEAD probes need no confirm. "
-                                     "Nothing was sent."))
+                        next_action=(f"{_nothing_went_out()} Ask the user, then re-send the "
+                                     "same call with confirm=true. HEAD probes need no "
+                                     "confirm."))
             elif not human:
                 # fail-closed：人拒绝了，或 ask 根本没能到人（NoBackChannel 等）
                 # —— 同一答案，因为两种情况都不该回落到模型签名的参数。
@@ -5860,10 +6726,10 @@ class MasterFetchServer:
                 url, "actions is required: a non-empty list of {action key: args} "
                      "objects - click / fill / read / press / wait / scroll / "
                      "wait_selector / snapshot / screenshot / submit",
-                next_action=("Name the chain, or read the page with web_read(url=...) "
-                             "if nothing on it has to be touched. The first call is "
-                             "usually {snapshot: true}, which returns the numbered "
-                             "element list to address by index. Nothing was sent."))
+                next_action=(f"{_nothing_went_out('web_act')} Name the chain, or read the "
+                             "page with web_read(url=...) if nothing on it has to be "
+                             "touched. The first call is usually {snapshot: true}, which "
+                             "returns the numbered element list to address by index."))
         # cache_ttl=0 says at the door what the pipeline already does with a chain:
         # an action's content exists only after the actions, so a cached page would
         # answer a question the chain never asked.
@@ -5954,6 +6820,12 @@ class MasterFetchServer:
         # 合规姿态本进程有一份现值，窗口形态没有）。
         hit.metadata = {k: v for k, v in (hit.metadata or {}).items()
                         if k != "browser"}
+        # 「这一份内容是在没有 dhole 合成头的情况下取回的」讲的是**写缓存那一发**，
+        # 与本发无关也本发无从重说 —— 但它必须跟着内容回来，因为安全用户引用的是
+        # 这句的有无，不是这句的作者。过去时那句话由同一个作者写（`_headers_off_note`）。
+        _off_by = env.get("headers_off_by", "") or ""
+        if _off_by:
+            _note_text(_headers_off_note(_off_by, replay=True))
         return _attach_login_probe_gap(
             _apply_chunking(hit, max_chars=mc, offset=offset), check_login)
 
@@ -6106,6 +6978,64 @@ class MasterFetchServer:
         (suggested next call), summary, page_type (article/list/auth_wall/paywall/...),
         content_age_days + is_stale, source_type + is_official, source + archived_at.
         """
+        # check 的批量形状在**任何闸门之前**分流：它的每一行都是一个 dict（与单条
+        # check 同一份判决），而下面所有按 ResponseModel 写的批量守卫都会把它当成
+        # 普通行去读 `row.status`。放在这里还有一个好处：actions=/schema=/nested_*/
+        # cdp_url= 的拒绝都不经过 CDP 授权闸口，不会为一次注定被拒的调用留下待授权。
+        if urls is not None and extraction_type == "check":
+            def _check_batch_refusal(message: str, fix: str) -> dict:
+                return {
+                    "checked": 0, "changed_urls": [], "unchanged_urls": [],
+                    "baseline_urls": [], "error_urls": [], "results": [],
+                    "error": message, "next_action": fix,
+                }
+            if url:
+                return _check_batch_refusal(
+                    "url= cannot be combined with urls=: a check batch names "
+                    "every page in urls= alone, so a single url= alongside it "
+                    "would be silently dropped",
+                    "Pass the page as url= alone, or put every URL you want in "
+                    "urls= (include this one if you want it too). Nothing was "
+                    "fetched.")
+            if actions:
+                return _check_batch_refusal(
+                    "actions= cannot be combined with extraction_type='check': "
+                    "a change check reads the page as it stands and has no "
+                    "action chain to run",
+                    "Run the actions with web_act, or drop actions and check the "
+                    "page's content instead. Nothing was fetched.")
+            if schema is not None or nested_selector is not None:
+                return _check_batch_refusal(
+                    "schema= / nested_selector= cannot be combined with "
+                    "extraction_type='check': a check compares the page with its "
+                    "baseline and returns a changed/unchanged verdict, not "
+                    "extracted fields",
+                    "Run check on its own, or read the pages with the regular "
+                    "formats. Nothing was fetched.")
+            if cdp_url or identity.get("cdp"):
+                return _check_batch_refusal(
+                    "cdp_url= cannot be combined with a check batch: the attach "
+                    "is per call, so a batch would compare every URL without that "
+                    "logged-in view" + ("" if cdp_url else
+                                        " (a stored cdp default is in force; pass "
+                                        "cdp_url=null for this batch)"),
+                    "Call web_read once per URL with cdp_url= and "
+                    "extraction_type='check', or drop cdp_url. Nothing was "
+                    "fetched.")
+            if len(urls) > self._CHECK_BATCH_MAX:
+                return _check_batch_refusal(
+                    f"a check batch takes at most {self._CHECK_BATCH_MAX} URLs "
+                    f"({len(urls)} were given): every row costs a robots check and "
+                    "a conditional request, and a larger list is a scheduler's "
+                    "job, not one call's",
+                    f"Split the list into batches of {self._CHECK_BATCH_MAX} or "
+                    "fewer; each batch returns independent verdicts. Nothing was "
+                    "fetched.")
+            return await self._check_batch(
+                urls, css_selector=css_selector, force_fetcher=force_fetcher,
+                anti_detect=anti_detect, timeout=timeout,
+                extra_headers=headers, ignore_robots=ignore_robots)
+
         # bulk 与 attach 不兼容：attach 是「这一次调用挂哪个浏览器」的事，而批量里
         # 每个 URL 各自再进一次 web_read，cdp_url 传不下去。让闸口先过，效果就是
         # 「把主机写进授权名册，然后每一页都不 attach」—— 静默降级，还留下一个用户
@@ -6136,6 +7066,19 @@ class MasterFetchServer:
         cookies = _idvals["cookies"]
         proxy = _idvals["proxy"]
         cdp_url = _idvals["cdp_url"]
+        if extraction_type == "check" and cdp_url:
+            # check has no cdp lane. Left to fall through, the generic attach
+            # below sends the literal string "check" into _force_fetch as an
+            # extraction format, and the attach prompt fires for a call that can
+            # never use the view. Say the boundary here, before the gate.
+            return _invalid_request_result(
+                url or "",
+                "cdp_url= cannot be combined with extraction_type='check': a "
+                "change check compares the public page with its baseline and has "
+                "no attached-browser variant",
+                next_action=("Drop cdp_url to check the page as anyone sees it, "
+                             "or read it with web_read(url=..., cdp_url=...) "
+                             "without extraction_type='check'. Nothing was fetched."))
         # W1 之前这里是死的一句 `extra_headers = None`：调用方没有门把一颗头递进来，
         # 而下游每一层（HTTP 的 `_build_headers`、浏览器的 context 头、缓存指纹、
         # 逐跳的凭据剥离）早就为这份字典写好了规矩。门开了以后它读的是 `_caller_headers`
@@ -6166,10 +7109,13 @@ class MasterFetchServer:
                 f"{' and '.join(_asked)}= needs nested_selector=: nothing on this "
                 "page says which elements to follow, so there is no second layer "
                 "to read and no link count to cap",
-                next_action=("Add nested_selector='<css>' naming the elements to "
-                             "follow on THIS page, or drop the nested_* argument - "
-                             "it was ignored rather than applied. Nothing was "
-                             "fetched."))
+                next_action=(
+                    # 申报由按门取词的那位作者装配，且落在**行首**（R02-111：动词对但缀在
+                    # 句尾同样算缺陷 · 真机 `r216_web_read_clause_faces.json` 的第一句原本是
+                    # 「Add nested_selector=…」）。评审 R02-122。
+                    f"{_nothing_went_out('web_read')} Add nested_selector='<css>' "
+                    "naming the elements to follow on THIS page, or drop the "
+                    "nested_* argument - it was ignored rather than applied."))
         if nested_selector is not None:
             from dhole_mcp import nested as _nested_mod
             _nested_n = _nested_mod.nested_cap(nested_max)
@@ -6325,14 +7271,9 @@ class MasterFetchServer:
                 if get_reranker() is None:
                     rer = await ensure_reranker(download=False)
                     if rer is None:
-                        return _invalid_request_result(
-                            url or "", _NEURAL_FOCUS_UNAVAILABLE,
-                            next_action=(
-                                "The reranker model is not downloaded yet. It downloads "
-                                "automatically on the first neural web_search (one-time, "
-                                "resumable). "
-                                "For this call only, pass focus_engine='bm25' to use "
-                                "keyword-overlap focus."))
+                        refusal, remedy = _neural_focus_refusal("call")
+                        return _invalid_request_result(url or "", refusal,
+                                                       next_action=remedy)
 
         # Bulk mode: fetch multiple URLs in parallel
         if urls is not None:
@@ -6413,27 +7354,10 @@ class MasterFetchServer:
                 if hit is not None:
                     return hit
                 return _resolver_guard_result(url or "", msg)
-            if msg.startswith(_PERMANENT_URL_REFUSALS):
-                return _invalid_request_result(
-                    url or "", msg,
-                    next_action=("No argument fixes this - it is a design boundary: "
-                                 "dhole never fetches cloud-metadata endpoints or "
-                                 "DNS-rebinding services (SSRF guard), whatever the "
-                                 "spelling. Nothing was sent; if you meant a public "
-                                 "site, the URL itself is wrong."))
             caller = ("web_act" if actions else
                       "web_request" if _clean_method(method) != "GET" else
                       "web_read")
-            if msg.startswith(PRIVATE_ADDRESS_REFUSAL_PREFIXES):
-                # 被拒的是**地址**，不是拼法。落到下面那行会取 `_invalid_request_result`
-                # 的默认模板 —— "web_read takes an absolute http(s) URL"，而这条 URL
-                # 本来就是绝对 http(s)：那句话把读者推去改一个本来就对的东西，正是这颗
-                # 函数自己的 docstring 立令禁止的那类话。它与上面那支也不同：这一支**有**
-                # 出口（allow_private），所以句子要把门指出来，而不是只说"没救"。
-                return _invalid_request_result(
-                    url or "", msg, next_action=PRIVATE_ADDRESS_RECOVERY,
-                    tool=caller)
-            return _invalid_request_result(url or "", msg, tool=caller)
+            return _url_guard_refusal(url or "", msg, caller)
 
         # G25: credentials. Translated to headers ONCE, here, so both tiers send
         # them the same way (each takes a header dict), the cache fingerprint and
@@ -6495,8 +7419,14 @@ class MasterFetchServer:
             return _invalid_request_result(
                 url or "", str(e),
                 next_action=(
-                    "Pass an integer for that argument and call again - no request "
-                    "was made. max_content_chars takes 500-200000 (omit it for the "
+                    # 行首那半句交给取词的作者（评审 R02-122 · 真机
+                    # `r216_web_read_clause_faces.json`：这一支原本没有本门申报出门）。
+                    # 「no request was made」留着：`tests/test_bug_report2_regressions.py`
+                    # 的 max_content_chars 那一格钉着它，这一把补的是缺的那一格，
+                    # 不是替掉有人钉着的那句。
+                    f"{_nothing_went_out('web_read')} Pass an integer for that "
+                    "argument and call again - no request was made. "
+                    "max_content_chars takes 500-200000 (omit it for the "
                     f"{DEFAULT_MAX_CONTENT_CHARS} default); offset takes a non-negative "
                     "character position - use next_offset from the previous response."),
             )
@@ -6588,28 +7518,13 @@ class MasterFetchServer:
         except Exception as e:
             logger.debug("robots.txt check failed for %s: %s", url, e)
             verdict = None
-        # Which of the three ways this fetch got permission, recorded for the
-        # response: both test rounds asked for it from opposite sides. A reader
-        # who sees only "no robots error" cannot tell "the site allows this path"
-        # from "compliance is off on this machine" — and those are different
-        # things to be true when the content gets cited.
-        if bool(ignore_robots):
-            _ROBOTS_MODE.set("bypassed (ignore_robots=true)")
-        elif robots_env_disabled():
-            _ROBOTS_MODE.set(f"bypassed ({ENV_IGNORE_ROBOTS}=1, process-wide)")
-        elif verdict is None or verdict.reason == ROBOTS_UNAVAILABLE:
-            # `check()` does not raise when the file cannot be read — it returns
-            # allowed=True with reason='unavailable', because failing open is the
-            # documented policy. Testing `verdict is None` alone therefore labelled
-            # every unreadable robots.txt as "complied". Measured on this machine
-            # right after the env var was removed: httpbin.org/robots.txt itself
-            # answers 10054 connection_reset, the fetch of /deny — a path that file
-            # Disallows — still went out, and the response said "complied". A
-            # reader auditing compliance takes that as the site's permission, which
-            # is the one thing this field must not do.
-            _ROBOTS_MODE.set("not checked (robots.txt unreadable)")
-        else:
-            _ROBOTS_MODE.set("complied")
+        # Which of the ways this fetch got permission, recorded for the response:
+        # both test rounds asked for it from opposite sides. A reader who sees only
+        # "no robots error" cannot tell "the site allows this path" from "compliance
+        # is off on this machine" — and those are different things to be true when
+        # the content gets cited. The sentence is built by `_robots_mode_label`,
+        # which is where the four causes are kept apart.
+        _ROBOTS_MODE.set(_robots_mode_label(bool(ignore_robots), verdict))
         if verdict is not None and not verdict.allowed:
             return _robots_blocked_result(url, verdict)
 
@@ -6640,18 +7555,18 @@ class MasterFetchServer:
                 raise ArgumentRefusal(
                     "actions require the browser tier; use force_fetcher='stealthy' "
                     "or omit it",
-                    next_action=_ACTION_REFUSAL_WAY_OUT)
+                    next_action=_action_refusal_way_out())
             from dhole_mcp.actions import build_page_action, actions_want_visual
             try:
                 # 校验器按 ValueError 说话（它不认识协议），这里替它翻成边界认识的那一种。
                 page_action = build_page_action(actions)
             except ValueError as e:
                 raise ArgumentRefusal(str(e),
-                                      next_action=_ACTION_REFUSAL_WAY_OUT) from e
+                                      next_action=_action_refusal_way_out()) from e
             if page_action is None:
                 raise ArgumentRefusal(
                     "actions must be a non-empty list of action dicts",
-                    next_action=_ACTION_REFUSAL_WAY_OUT)
+                    next_action=_action_refusal_way_out())
             # A screenshot action's product is the RENDERED page, so the speed
             # shortcut that drops image/stylesheet/font has to be off for it -
             # under blocking, the <img> is never even requested and the crop is a
@@ -7007,19 +7922,25 @@ class MasterFetchServer:
         It arrives LATE on purpose. ``_auto_escalate`` computes its own deadline
         from a ``start_time`` taken after ``started`` below, so an equal budget
         makes this backstop win the race by microseconds — and the result it
-        builds knows nothing about which tier was in flight or what that tier had
-        already found. Measured on this machine: a URL whose HTTP tier diagnosed
-        ``connection reset (os error 10054)`` in 5.0s came back at 30.0s as a bare
-        "timeout: raise your timeout", with an empty escalation_path, three times
-        running. The grace is for finalization only (model build + cache write,
+        builds starts out knowing nothing about which tier was in flight or what
+        that tier had already found. Measured on this machine: a URL whose HTTP tier
+        diagnosed ``connection reset (os error 10054)`` in 5.0s came back at 30.0s as
+        a bare "timeout: raise your timeout", with an empty escalation_path, three
+        times running. The grace is for finalization only (model build + cache write,
         milliseconds); the tiers' own accounting still answers first.
+
+        What the tier learned before it was cut is carried by ``_tier_facts`` (see
+        ``_cancelled_tier_advice``) — not by this scope's own knowledge, which stays
+        empty for anything the tier never published.
         """
         started = now()
-        asked_s = max(1.0, float(timeout_ms or 30000) / 1000.0)
+        asked_s = max(MIN_CALL_BUDGET_MS / 1000.0, float(timeout_ms or 30000) / 1000.0)
         # 17.0 B3 · 首用安装不算在这个预算里。见 `_BudgetCredit`：这里只负责把账本
         # 放进 ContextVar 并接上真正的截止对象，等待发生在里面的 `ensure_chromium_async`。
         credit = _BudgetCredit()
         token = _budget_credit.set(credit)
+        # 同一本机制的第二本账：这一层被掐掉时它已经学到的东西（R01-010，见 `_TierFacts`）。
+        facts_token = _tier_facts.set(_TierFacts())
         try:
             # 把这份预算交给下游的"问人"通道（`context.call_deadline`）。发布的值是
             # `asked_s` 而不是 `asked_s + grace`：宽限只留给收尾（建模型 + 写缓存），
@@ -7029,14 +7950,20 @@ class MasterFetchServer:
                     credit.attach(cm)
                     return await coro
         except TimeoutError:
+            # 账本是这里唯一能拿到的"那一层已经知道什么"。空着（没登记过）时交白卷，
+            # 通用建议照旧 —— 背板不是第二个建议作者。
+            advice, twin = _cancelled_tier_advice(url, _tier_facts.get(),
+                                                  asked_s * 1000, stage)
             result = _with_agent_hints(_over_budget_result(
-                url, asked_s * 1000, (now() - started) * 1000, stage, ""))
+                url, asked_s * 1000, (now() - started) * 1000, stage, "", advice,
+                diagnosis_struct=twin))
             # No tier returned, so there is no trail to name - say that plainly
             # instead of leaving escalation_path empty, which reads as "no tier
             # ran" when in fact one ran and never came back.
             result.escalation_path = f"{stage}(timeout: no tier returned)"
             return result
         finally:
+            _tier_facts.reset(facts_token)
             _budget_credit.reset(token)
 
     async def _document_tier(self, url: str, *, tier: dict,
@@ -7119,9 +8046,17 @@ class MasterFetchServer:
             _cands = await asyncio_to_thread(
                 _nested_mod.suggest_link_selectors, html, url)
             _hint = _nested_mod.format_suggestions(_cands)
-            _why = (f"nested_selector '{nested_selector}' matched "
-                    f"{found['matched']} element(s) on this page and none of them "
-                    "has an http(s) href")
+            # 一句只说一件事：`matched` 是 0 时"它们"没有指头，给空集断一个性质是句无法
+            # 验证的陈述。两副形状共用一颗 code（出路同一条：抬到带链接的那一层），
+            # 但不共用同一句话。
+            if found["matched"] == 0:
+                _why = (f"nested_selector '{nested_selector}' matched 0 elements "
+                        "on this page - it names nothing here")
+            else:
+                _why = (f"nested_selector '{nested_selector}' matched "
+                        f"{found['matched']} element(s) on this page and none of "
+                        "them carries a usable http(s) link (not on the element, "
+                        "not inside it, not on an ancestor)")
             return ResponseModel(
                 url=url, status=first.status, content=[],
                 fetcher_used=first.fetcher_used, extracted_type="structured",
@@ -7207,7 +8142,12 @@ class MasterFetchServer:
                     return rec, "failed"
                 body = "\n".join(res.content) if res.content else ""
                 if not body or res.status >= 400:
-                    rec["error"] = (res.error or f"HTTP {res.status}")[:200]
+                    # 这一句的作者不在这里（R02-145 的①半边 · F116 同一把判据）。`res.error`
+                    # 今天多半已经写着 `http_error_404: …`（r301 实测：12 行扇出里 `/cart` 那一行
+                    # 交的就是那位作者的话），所以 `or` 的右半边是兜底 —— 兜底也不许有第二个名字：
+                    # 同一颗 4xx 在信封、在爬行的行、在 feed 的行都叫 `http_error_<status>`，
+                    # 在这里叫 `HTTP 404` 就是让调用方的分支对不上账。
+                    rec["error"] = (res.error or status_error_sentence(res.status))[:200]
                     return rec, "failed"
                 page = await asyncio_to_thread(
                     extract_structured, body, {"properties": nested_props},
@@ -7279,7 +8219,7 @@ class MasterFetchServer:
                               + ". Read ONE of those pages without nested_* and "
                               "re-derive the selector.")
             _hint = "re-derive nested_fields (" + "; ".join(_bits) + ")"
-        payload["nested"] = records
+        payload["nested"] = _nested_mod.with_row_handles(records)
 
         import json as _json_mod
         first.content = [_json_mod.dumps(payload, ensure_ascii=False, indent=2)]
@@ -7442,7 +8382,21 @@ class MasterFetchServer:
         `127.0.0.1` 的一条 302 指向同机的 `localhost`，账上就多了一笔 `Host: localhost`）。
         那一跳由 dhole 自己的 HTTP 档发出：没有 cookie，也不在 attach 的主机名册里，围栏
         管不到它 —— 而判"活"根本不需要读完下一跳。3xx 自己就是"有人应答"。
+
+        这一发是**多发请求**（R02-075，实测 2026-10-16）：强制浏览器档时，靶站自己的
+        日志上会并排躺着两条 —— 这一发直连的（primp 预设那一副脸）和浏览器导航那一发
+        （真 Chromium，带 dhole 的 google `referer`）。而回执从前只说一件事：
+        `escalation_path` = `direct:stealthy`，好像只有一档跑过。判决不该改（死端口
+        不配再被浏览器拨一遍，`test_a_dead_local_port_is_not_dialed_again_by_a_browser.py`
+        钉着），该改的是沉默：多发的那一发要在事前说得清，所以这一句写在拨号之前
+        —— 探测自己失败的那一支（`except`）也照样要留名，因为请求已经发出去了。
         """
+        _note_text(
+            "this call makes 1 extra direct request to the target before the browser "
+            "runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no "
+            "redirect hop). Your service's own log will show that one next to the "
+            "browser's navigation - it is dhole dialing, not the page."
+        )
         try:
             probe = await self.get(
                 url, proxy=None, headers=extra_headers,
@@ -7490,15 +8444,18 @@ class MasterFetchServer:
         # bounds the tier by the caller's own budget instead, up to the ceiling
         # validate_timeout already enforces on that budget.
         document = _is_document_url(url)
-        http_timeout, http_retries = _http_tier_budget(
+        http_timeout, http_retries, _bound = _http_tier_budget(
             url, timeout, float(timeout) / 1000.0, document=document)
+        _note_text(_attempt_budget_note(timeout, http_timeout, _bound))
         if force_fetcher == "http":
             http_cookies = _safe_cookie_dict(cookies)
             proxy_url = _proxy_to_url(proxy, None)
             if document:
+                _note_tier_facts()
                 doc_size, _note = await _document_size(
                     url, proxy_url, extra_headers, http_cookies, useragent,
                     budget_s=min(3.0, float(http_timeout)))
+                _note_tier_facts(doc_size, _note)
                 too_big = _oversized_document_result(url, doc_size)
                 if too_big is not None:
                     too_big.escalation_path = "direct:http(size preflight)"
@@ -7517,7 +8474,7 @@ class MasterFetchServer:
                 # 所以这句话必须跟着走：调用方看见的是"少了一整套头"，而少的那几颗里
                 # 有一枚是过墙的承重件 —— 墙开始失败时，这句是唯一的线索。内网/回环那一
                 # 发也少这一整套，但它不是档位扳的 —— 两个扳法两句话，见 `_headers_off_note`。
-                _note_text(_headers_off_note())
+                _note_text(_headers_off_note(_HEADERS_OFF_BY.get()))
             result.escalation_path = "direct:http"
             return _attach_login_probe_gap(
                 await self._finalize_result(result, url, extraction_type,
@@ -7663,8 +8620,17 @@ class MasterFetchServer:
                 # 顺序是原因在前、结果在后：先听懂"那一页没了"，再看"这一发新留了一页"。
                 for _key in (_pin_out.get("dropped"), _pin_out.get("outcome")):
                     _line = PIN_NOTES.get(_key or "")
-                    if _line:
-                        _note_text(_line)
+                    if not _line:
+                        continue
+                    _vals = _pin_out.get(_key)
+                    if isinstance(_vals, dict):
+                        # 这句有值要点名（`target` 那一条要说清两页各是谁）。填不上
+                        # 也不能把半成品交出去 —— 宁可退回不带值的那句通用话。
+                        try:
+                            _line = _line.format(**_vals)
+                        except Exception:
+                            continue
+                    _note_text(_line)
             finalized = await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
             if check_login and _login_probe:
                 finalized.login_check = _login_probe
@@ -7792,7 +8758,10 @@ class MasterFetchServer:
         # FetchResult. Everything below is bounded by this deadline, and the HTTP
         # tier's share of it comes from _http_tier_budget, which divides what is
         # left between the attempts it actually asks for.
-        budget_ms = max(1000.0, float(timeout or 30000))
+        budget_ms = max(float(MIN_CALL_BUDGET_MS), float(timeout or 30000))
+        # 抬宽也要出口（R02-039）：`timeout_applied` 的口径是"只有被上限砍才写"，所以
+        # 被下界抬的那一格从来没人说话 —— 读者手上只剩 250 与 1000 两个数与中间那段空白。
+        _note_text(_timeout_floor_note(timeout, int(budget_ms)))
         deadline = start_time + budget_ms / 1000.0
 
         def _left_s() -> float:
@@ -7867,23 +8836,28 @@ class MasterFetchServer:
             # 于是自动档不认为它是定论失败，升级浏览器把 30011ms 预算烧满，而浏览器
             # 拨的是同一个死端口）。规则本来就有，只是只装在了一条路径上。
             _private_target = self._target_is_private(url)
-            reachable, preflight_category = await asyncio_to_thread(tcp_preflight, url, 2.0)
-            # 公网目标这一支现在是**空的**：一次 TCP refused 在公网上可能出自中间设备
-            # （防火墙 / 透明代理先应答再失败），而这一处一跳跳掉的是两档（HTTP 与
-            # 浏览器）。实测的形状就是那条判决权太贵的证据：lwn.net 一次 gaierror 换来
-            # `retryable: false` + "do NOT retry"，调用方原样重试 1643ms 拿到页面。
-            # 回环 / 私网保留 refused+timeout：那里不存在"2 秒才应答的合法服务"，
-            # 而浏览器拨的是同一个死端口（G31 的 45s 就是这么烧的），跳过它省的是整笔
-            # 预算，且这个目标是不是在听，裸 socket 与浏览器会给出同一个答案。
-            definitive = ("connection_refused", "timeout") if _private_target else ()
-            if not reachable and preflight_category in definitive:
-                elapsed = (now() - start_time) * 1000
-                result = ResponseModel(
-                    url=url, status=0, content=[],
-                    fetcher_used="none", error=f"network_error: {preflight_category} (TCP preflight)",
-                    duration_ms=elapsed,
-                )
-                result.escalation_path = f"preflight:{preflight_category}(skipped_http+stealthy)"
+            # 判决权在哪一支，拨号就只在哪一支发生（评审 R02-086 · 真机 `r142` / `r143`）。
+            # 公网那一支的 `definitive` 本来就是空的：一次 TCP refused 在公网上可能出自中间
+            # 设备（防火墙 / 透明代理先应答再失败），而这一处一跳跳掉的是两档（HTTP 与浏览器）
+            # —— lwn.net 一次 gaierror 换来 `retryable: false` + "do NOT retry"，调用方原样
+            # 重试 1643ms 就拿到了页面。既然不据它下结论，就不该让调用方为它付那一根连接：
+            # 三颗公网活靶各付 383 / 50 / 44ms 与一根零字节的连接，而整份回执里 `preflight`
+            # 出现 0 次（`escalation_path="direct:http"`）—— 事后谁也问不到它。
+            if _private_target:
+                # 回环 / 私网保留 refused+timeout：那里不存在"2 秒才应答的合法服务"，
+                # 而浏览器拨的是同一个死端口（G31 的 45s 就是这么烧的），跳过它省的是整笔
+                # 预算，且这个目标是不是在听，裸 socket 与浏览器会给出同一个答案。
+                reachable, preflight_category = await asyncio_to_thread(tcp_preflight, url, 2.0)
+                if not reachable and preflight_category in ("connection_refused", "timeout"):
+                    elapsed = (now() - start_time) * 1000
+                    result = ResponseModel(
+                        url=url, status=0, content=[],
+                        fetcher_used="none", error=f"network_error: {preflight_category} (TCP preflight)",
+                        duration_ms=elapsed,
+                    )
+                    result.escalation_path = f"preflight:{preflight_category}(skipped_http+stealthy)"
+                else:
+                    result = None
             else:
                 result = None
 
@@ -7921,8 +8895,11 @@ class MasterFetchServer:
         slow_domain = (_domain in _SLOW_HTTP_DOMAINS
                        or any(_domain.endswith("." + d) for d in _SLOW_HTTP_DOMAINS))
         document = _is_document_url(url)
-        http_timeout, http_retries = _http_tier_budget(
+        http_timeout, http_retries, _bound = _http_tier_budget(
             url, budget_ms, _left_s(), document=document, slow_domain=slow_domain)
+        # 这颗数被动过就要说是哪一颗约束动的（R02-041）：`timeout_applied` 管 30s 那顶帽，
+        # `_timeout_floor_note` 管 1s 那层地，这一句管本档自己的分账 —— 三位各说一件事。
+        _note_text(_attempt_budget_note(timeout, http_timeout, _bound))
 
         # A document is read only once the whole body is in memory, so ask its
         # size first: refusing a 200MB PDF in one round trip beats spending the
@@ -7930,9 +8907,13 @@ class MasterFetchServer:
         doc_size: Optional[int] = None
         doc_size_note = ""
         if document:
+            # 登进账本两笔：先登"这一发是整篇文档"（下载还没开始，背板此刻掐掉也知道），
+            # 再登刚量到的尺寸。R01-014 那半就是缺了这两笔 —— 尺寸在失败之前明明已经量好。
+            _note_tier_facts()
             doc_size, doc_size_note = await _document_size(
                 url, _proxy_to_url(proxy, None), extra_headers, http_cookies, useragent,
                 budget_s=min(3.0, max(1.0, _left_s())))
+            _note_tier_facts(doc_size, doc_size_note)
             too_big = _oversized_document_result(url, doc_size)
             if too_big is not None:
                 too_big.escalation_path = "http(size preflight)"
@@ -7940,6 +8921,11 @@ class MasterFetchServer:
                     too_big, url, extraction_type, css_selector, cache_ttl, offset,
                     max_chars)
 
+        # 这一档自己收尾的两条出口共用同一次写成的一份建议（散文 + 孪生）；不是文档时
+        # 交白卷，通用那句照旧。
+        doc_advice, doc_twin = (_document_timeout_diagnosis(
+            url, doc_size, doc_size_note, budget_ms, "HTTP tier") if document
+            else ("", None))
         result = await _with_budget(self.get(
             url, extraction_type=extraction_type,
             css_selector=css_selector,
@@ -7948,19 +8934,17 @@ class MasterFetchServer:
             useragent=useragent, stealthy_headers=stealthy_headers,
             timeout=http_timeout, retries=http_retries,
         ), "HTTP tier", "http",
-            diagnosis=(_document_budget_advice(url, doc_size, doc_size_note, budget_ms,
-                                               "HTTP tier") if document else ""))
+            diagnosis=doc_advice, diagnosis_struct=doc_twin)
         if result is None or _is_over_budget(result):
-            return result or await _over_budget(
-                "HTTP tier", "none",
-                diagnosis=(_document_budget_advice(url, doc_size, doc_size_note, budget_ms,
-                                                   "HTTP tier") if document else ""))
+            return result or await _over_budget("HTTP tier", "none",
+                                                diagnosis=doc_advice,
+                                                diagnosis_struct=doc_twin)
         elapsed = (now() - start_time) * 1000
         result.duration_ms = elapsed
         if not stealthy_headers:
             # 同 `_force_fetch` 里那一句：这一档真的关掉了 HTTP 层的合成头，而它关掉的
             # 里面有一枚是过墙的承重件（google referer）。改动的账要写在改动的那一层上。
-            _note_text(_headers_off_note())
+            _note_text(_headers_off_note(_HEADERS_OFF_BY.get()))
 
         # ─── 304: the conditional answer (G23) ─────────────────────────
         # A 304 carries no body BY DESIGN, so each test below ("empty content =
@@ -7993,9 +8977,25 @@ class MasterFetchServer:
             if result.status == 0 and not result.content:
                 # The classifier's generic "retry with a longer timeout" is the
                 # sentence that sent the last report hunting for a server-side
-                # limit. Here the size and the budget are both known, so say them.
-                result.next_action = _document_budget_advice(
-                    url, doc_size, doc_size_note, budget_ms, "the HTTP tier")
+                # limit. Here the size and the budget are both known, so say them
+                # — and say them to BOTH hands of this response: until now only
+                # `next_action` was rewritten and the envelope kept the prefix
+                # table's "Retry once with a longer timeout", which is the one
+                # move this file cannot be fetched with (R01-010, measured live).
+                #
+                # But "status 0 and no body" is not a synonym for "timeout": an
+                # expired certificate, a refused connection and a proxy failure
+                # all arrive here too. This override used to swallow all of them
+                # and report the certificate case as a timeout, with advice to
+                # raise a clock that was never the problem (R05-001, live).
+                # Ask the same classifier the envelope asked; only its timeout
+                # branch is the clock's story. Everything else keeps the verdict
+                # `_finalize_result` already wrote.
+                from dhole_mcp.errors import classify_network_error
+                _category, _ = classify_network_error(result.error or "")
+                if _category == "timeout":
+                    result.next_action, result.diagnosis = _document_timeout_diagnosis(
+                        url, doc_size, doc_size_note, budget_ms, "the HTTP tier")
             return result
 
         # Accept if status is OK and content is real (not a JS shell).
@@ -8249,11 +9249,29 @@ class MasterFetchServer:
     # 那句警告写在另一颗工具的描述里，拿着"清缓存"意图的人正好读不到它。词表把类别
     # 摊开之后，§3-32 的闸才有地方落：只有"抹完不会立刻察觉"的那一类要 confirm。
     _STATE_TOKENS = ("cache", "engine_state", "sessions",
-                     "cred_defaults", "cdp_hosts", "config", "all")
+                     "cred_defaults", "cdp_hosts", "config", "models", "all")
     # show-only：配置旋钮的另一扇门在操作员侧（`dhole config unset`）。留两扇
     # 会各自漂走的门是这个仓库自己裁决过的事（17.0 删 `dhole init` 的同一句话），
     # 所以 clear 这一类要被点名拒绝，而不是悄悄吞掉。
-    _SHOW_ONLY = ("config",)
+    _SHOW_ONLY = ("config", "models")
+    # 每一类 show-only 各有自己的"那扇门在哪"：把它们合成一句，抹模型的人就会被
+    # 指去 `dhole config unset`（一扇根本不存在的门）。R02-054 加 `models` 时先量过：
+    # dhole 没有"删掉重排器模型"这个动作，所以这一类只能问、不能抹。
+    _SHOW_ONLY_REASON = {
+        "config": ("configuration knobs are erased from the operator side "
+                   "(`dhole config unset <name>`), not by a tool call."),
+        "models": ("the reranker model files are not a class dhole erases - this tool "
+                   "only reports them. Freeing the space is a filesystem action on the "
+                   "operator side; the model comes back on the first neural search that "
+                   "needs it (resumable)."),
+    }
+    _SHOW_ONLY_NEXT = {
+        "config": ("show=['config'] lists the knob NAMES set in config.json - values "
+                   "ride `dhole config list`. Nothing was erased."),
+        "models": ("show=['models'] answers which cross-encoder this machine has, whether "
+                   "its files are complete, and what this process tried. Nothing was "
+                   "erased."),
+    }
     _ERASE_EVERYTHING = "all"
     # 抹掉后不会立刻察觉的那一类：登录态要到下次访问那个站才暴露；CDP 授权要到
     # 下次 attach 那台主机才暴露（此前一直静默放行的门突然要重新问一遍）。清缓存
@@ -8327,7 +9345,7 @@ class MasterFetchServer:
                        + (f", or the name of an open session ({', '.join(sorted(known))})."
                           if known else ", or the name of a session that is open - "
                                        "and none is.")),
-                next_action=("Nothing was erased. clear= takes a state class or one "
+                next_action=(f"{_nothing_erased()} clear= takes a state class or one "
                              "open session id; show= takes only the classes."),
                 sessions=rows, open_count=len(rows),
             )
@@ -8336,12 +9354,9 @@ class MasterFetchServer:
         show_only = [t for t in clear_tokens if t in self._SHOW_ONLY]
         if show_only:
             return SysStateModel(
-                error=(f"{', '.join(show_only)} is show-only: configuration knobs "
-                       "are erased from the operator side (`dhole config unset "
-                       "<name>`), not by a tool call."),
-                next_action=("show=['config'] lists the knob NAMES set in "
-                             "config.json - values ride `dhole config list`. "
-                             "Nothing was erased."),
+                error=(f"{', '.join(show_only)} is show-only: "
+                       + " ".join(self._SHOW_ONLY_REASON[t] for t in show_only)),
+                next_action=(" ".join(self._SHOW_ONLY_NEXT[t] for t in show_only)),
                 sessions=rows, open_count=len(rows),
             )
         # 撤销一台名册里没有的主机与 `clear=["cahce"]` 同罪：装没看见就是 no-op。
@@ -8466,8 +9481,9 @@ class MasterFetchServer:
                 cleared.append("cdp_hosts")
                 detail = (f" ({', '.join(sorted(targets))})"
                           if targets and "cdp_hosts" not in want else "")
-                # 撤销这一口气要把**剩下的**名册、它的年龄和文件在哪一起说完：
-                # 这台机器上的残留证明的不是 TTL 多余，是"撤了之后还剩谁"读不出来。
+                # 撤销这一口气要把**剩下的**名册与它的年龄一起说完：这台机器上的残留证明的
+                # 不是 TTL 多余，是"撤了之后还剩谁"读不出来。名册**在哪**只给文件名 ——
+                # 绝对路径由 `dhole doctor` 说（R02-055：这句从前把本机根印进 transcript）。
                 left = _cdp_records()
                 parts.append(
                     f"{removed} CDP attach approval(s) revoked{detail}"
@@ -8475,7 +9491,7 @@ class MasterFetchServer:
                     "approves it again"
                     + (f". Still on disk: {', '.join(_cdp_roster_phrase(h, left) for h in sorted(left))}"
                        if left else ". Nothing is left on disk")
-                    + f" - the roster is {_cdp_hosts_file()}.")
+                    + f" - {_cdp_roster_hint()}")
                 # 撤销后的"还剩谁"由下面的 `report |= set(cleared)` 负责重数：
                 # cleared 里已经有 cdp_hosts，回执那段就是刚重读过的名册。
             except Exception as e:
@@ -8546,6 +9562,18 @@ class MasterFetchServer:
             except Exception as e:
                 logger.debug("config census failed: %s", e)
 
+        reranker_view: Dict[str, Any] = {}
+        if "models" in report:
+            # R02-054：这台机器的重排器是什么状态，以前只有操作员侧的 `dhole -v` 答得出，
+            # 只用 MCP 的客户端问不到（名册词表里一颗与模型有关的都没有）。判决不在这里
+            # 算 —— `reranker.model_status()` 是唯一的作者，CLI 那两行也读它，所以两侧
+            # 对同一次截断下载只能说同一个故事。也没有磁盘路径：本机信息的那道篱笆。
+            try:
+                from dhole_mcp import reranker as _reranker
+                reranker_view = _reranker.model_status()
+            except Exception as e:
+                logger.debug("reranker census failed: %s", e)
+
         n = len(rows)
         if cleared:
             message = f"Erased {', '.join(cleared)}: {'; '.join(parts)}."
@@ -8582,6 +9610,31 @@ class MasterFetchServer:
                                  "0 - none are persisted, so every knob is at its "
                                  "built-in default (this is not a missing read; set "
                                  "one with `dhole config set <key> <value>`)"))
+            if "models" in report:
+                if reranker_view:
+                    _st = reranker_view["state"]
+                    if _st == "loaded":
+                        counts.append(f"reranker {reranker_view['model']}: loaded in this "
+                                      f"process ({reranker_view['label']})")
+                    elif _st == "on_disk":
+                        counts.append(
+                            f"reranker {reranker_view['model']}: on disk but this process "
+                            f"is not using it - "
+                            + (f"the load failed: {reranker_view['recorded_reason']} "
+                               f"({reranker_view['load_attempts']} attempt(s), last "
+                               f"{reranker_view['last_attempt_ms']} ms)"
+                               if reranker_view["recorded_reason"] else
+                               f"no load attempt here yet "
+                               f"({reranker_view['load_attempts']} attempt(s))"))
+                    elif _st == "deps_absent":
+                        counts.append(f"reranker {reranker_view['model']}: the python "
+                                      "extras are absent, so no cross-encoder can run here "
+                                      "even with the model on disk (needs dhole-mcp[all])")
+                    else:
+                        from dhole_mcp.reranker import missing_model_phrase
+                        counts.append(f"reranker {missing_model_phrase(reranker_view)}")
+                else:
+                    counts.append("reranker state unreadable - the census did not reach it")
             message = (f"Reported {', '.join(sorted(report - {self._ERASE_EVERYTHING}))}: "
                        + "; ".join(counts) + ". Nothing erased.")
         elif n:
@@ -8609,9 +9662,9 @@ class MasterFetchServer:
                 next_action = ((next_action + " " if next_action else "")
                                + "CDP attach roster: " + ", ".join(_lines)
                                + f" - clear=['cdp:host=<name>'] revokes one, "
-                                 "clear=['cdp_hosts'] all (confirm=true). The roster "
-                                 f"is {_cdp_hosts_file()}; an approval is re-asked "
-                                 f"after {_CDP_APPROVAL_DAYS} days.")
+                                 "clear=['cdp_hosts'] all (confirm=true); an approval "
+                                 f"is re-asked after {_CDP_APPROVAL_DAYS} days. "
+                                 f"{_cdp_roster_hint()}.")
 
         return SysStateModel(
             message=message, cleared=cleared,
@@ -8623,6 +9676,7 @@ class MasterFetchServer:
             engine_state_reset=engine_reset, engine_health=health,
             cred_defaults=cred_rows, identity_count=len(cred_rows),
             cdp_hosts=cdp_roster, config_keys=config_keys,
+            reranker=reranker_view,
             error="; ".join(failed),
             next_action=next_action,
         )
@@ -8690,39 +9744,40 @@ class MasterFetchServer:
         unknown = sorted(dict.fromkeys(
             k for k in list(items) + forget if k not in identity.KEYS))
         if unknown:
-            return CredDefaultsModel(
-                error=(f"Unknown key(s) {', '.join(unknown)}: cred_defaults stores "
-                       f"{', '.join(identity.KEYS)} (and 'host' inside set= to say "
-                       "which site a credential belongs to)."),
-                next_action="Nothing was stored or forgotten.")
+            return _cred_refusal(
+                f"Unknown key(s) {', '.join(unknown)}: cred_defaults stores "
+                f"{', '.join(identity.KEYS)} (and 'host' inside set= to say "
+                "which site a credential belongs to).")
 
         clash = sorted(k for k in items if k in forget)
         if clash:
-            return CredDefaultsModel(
-                error=(f"{', '.join(clash)} appears in both set= and unset=: one call "
-                       "cannot both store a key and forget it."),
-                next_action="Nothing was stored or forgotten - pick one.")
+            return _cred_refusal(
+                f"{', '.join(clash)} appears in both set= and unset=: one call "
+                "cannot both store a key and forget it.",
+                extra="Pick one side.")
 
         needs_host = sorted(k for k in items if k in identity.CREDENTIAL_KEYS)
         if needs_host and not hosts:
-            return CredDefaultsModel(
-                error=_identity_scope_error(needs_host[0], ""),
-                next_action=("Nothing was stored. Re-call with set={..., \"host\": "
-                             "\"api.example.com\"}, or with a list of hosts."))
+            return _cred_refusal(
+                _identity_scope_error(needs_host[0], ""),
+                extra=("Re-call with set={..., \"host\": \"api.example.com\"}, "
+                       "or with a list of hosts."))
         if hosts and not needs_host:
-            return CredDefaultsModel(
-                error=("host only means something alongside auth or cookies: proxy, "
-                       "profile, cdp, allow_private and anti_detect are global by "
-                       "nature (one egress, one browser context, one ladder)."),
-                next_action="Nothing was stored.")
+            return _cred_refusal(
+                "host only means something alongside auth or cookies: proxy, "
+                "profile, cdp, allow_private and anti_detect are global by "
+                "nature (one egress, one browser context, one ladder).")
 
         problems = [_identity_value_error(k, v) for k, v in items.items()]
         problems = [p for p in problems if p]
         if problems:
             # 全库不变式：错误面全量过 redact。这条是最后一个没过的调用点。
-            return CredDefaultsModel(
-                error=redact_api_key("; ".join(problems)),
-                next_action="Nothing was stored.")
+            # 出路点名本门（评审 R02-105 的另一半）：被拒的是**这颗存值**，不是任何一发
+            # 的 URL —— 从前这一格的 next_action 只有门话，读者手里没有「怎么改」那半句。
+            return _cred_refusal(
+                redact_api_key("; ".join(problems)),
+                extra=("Fix the named key and re-call cred_defaults: a value this door "
+                       "refuses never reaches the store, so nothing has to be unwound."))
 
         forgotten: List[str] = []
         if forget:
@@ -8802,6 +9857,15 @@ class MasterFetchServer:
                 if stored[key] is not None
                 and not (key == "cdp" and cdp_url)
                 and not (key == "anti_detect" and anti_detect)]
+        # `allow_private` is stored without a host, so it would otherwise be named on
+        # every target after the day someone opened their dev-service door — including
+        # public pages, where it says "this came through your private-host waiver"
+        # about a door that never stood over the request. Geography or a literal name
+        # on the allowlist is what makes the claim true; `values` keeps shipping the
+        # gate either way, so no target's validation changes.
+        if "allow_private" in used and not allow_private_covers(
+                stored["allow_private"], url):
+            used.remove("allow_private")
         return values, ", ".join(used)
 
     # ─── Parse (local file) ─────────────────────────────────────────
@@ -8845,7 +9909,15 @@ class MasterFetchServer:
         import os as _os
         from pathlib import Path
         from dhole_mcp import paths as _paths
-        from dhole_mcp.parse import parse_file_cached
+        from dhole_mcp.parse import BODY_UNREAD, parse_file_cached
+
+        # 先问这颗数字合不合法，再去碰文件（评审 R02-121 · 真机 `r212_guard_sweep.json`）：
+        # `offset` 从前只过类型归一（`params.py:560`），负数原样交给 `_apply_chunking` 的切片 ——
+        # Python 的负数下标从末尾数，于是 113B 的文件交回末尾 6 个字而 summary 仍写「113B」，
+        # 再狠一点（`-(len+1)`）交空正文再加一句「把同一个负数再发一遍」的续读建议。
+        # 裁判早就在（`web_read` 那一扇一直叫它：`server.py:6771`），这一扇只是没去叫它。
+        offset = _coerce_int_arg(offset, "offset", lo=0, hi=2 ** 31,
+                                 default=0, clamp=False)
 
         t0 = now()
         target, candidates = _resolve_local_path(file_path, cwd)
@@ -8875,6 +9947,15 @@ class MasterFetchServer:
             target = real
 
         if not target:
+            _dir = _directory_answer(candidates)
+            if _dir:
+                # 解析成功了，只是成功在一颗目录上 —— 那句 "File not found" 会把人送去
+                # 复查拼写，而这里没有拼写错误（台账 R02-026，实测 2026-10-16：
+                # doc_parse('review/.runtime/p06') 与 doc_parse('…/p06/nope.docx') 交回
+                # 同一族句子、同一个下一步）。`url` 与下面那一支同一条遮蔽口径。
+                return _with_agent_hints(ResponseModel(
+                    url="file://" + _paths.mask_machine_paths(file_path),
+                    status=0, content=[], fetcher_used="parse", error=_dir))
             # 这句 `File not found:` 逐字列出了 candidates，而 candidates 里至少
             # 有一条是 `_relative_path_roots()` 自己造的机器根 —— 进程 cwd（在
             # MCP 宿主下就是宿主自己的安装目录）和用户主目录 —— 调用方一个都没
@@ -8882,12 +9963,26 @@ class MasterFetchServer:
             # "你按什么顺序试了哪几处"，而调用方真正需要的正是那个顺序。
             # （2026-10-09 审计 D11；遮蔽器见 paths.mask_machine_paths。）
             _tried = _paths.mask_machine_paths(", ".join(candidates))
+            # 那句出路按**形状**说，而形状在这里判一次就够（`os.path.isabs` 只有这一维，
+            # 不认盘符、不认目录、不认某个名字）。绝对那一发不需要人教它怎么变绝对，而
+            # `cwd=` 对它的行为写在它自己的 schema 里（"Ignored for absolute paths"）——
+            # 一句出路不许点名一颗按自己的定义在这一发上不起作用的参数。相对那一支一字
+            # 不改（收紧不是放松）。下游两处不再复述这句：三个抄本改一个就自相矛盾。
+            _door = (
+                "`cwd=<working directory>` does nothing for a path that is already absolute "
+                "(that argument's own schema says it is ignored for one), so re-sending this "
+                "string cannot change the answer - what can is the NAME (spelling, extension, "
+                "is it really a file?) and the PLACE (name the directory plus the file inside it)"
+                if os.path.isabs(file_path)
+                else "Pass an absolute path, or pass cwd=<working directory> so relative "
+                     "paths resolve against it"
+            )
             return _with_agent_hints(ResponseModel(
-                url=f"file://{file_path}", status=0, content=[],
+                # 同一封回执里 `error` 走了遮蔽而 `url` 没有 —— 散文遮了、字段漏了，
+                # 两侧复验量到的正是这一格（两种拼法都从 `url` 原样交回过）。
+                url="file://" + _paths.mask_machine_paths(file_path), status=0, content=[],
                 fetcher_used="parse",
-                error=("File not found: " + _tried
-                       + ". Pass an absolute path, or pass cwd=<working directory> "
-                         "so relative paths resolve against it."),
+                error="File not found: " + _tried + ". " + _door + ".",
             ))
 
         content, error, extras = await asyncio_to_thread(
@@ -8915,19 +10010,39 @@ class MasterFetchServer:
             # Which charset won, so a wrong auto-detection is visible and the
             # caller can correct it with encoding=.
             metadata["encoding"] = extras["encoding"]
-        if extras.get("encoding_guessed"):
+        if extras.get("encoding_asked"):
+            # 你点的那一颗名字，单独摆着。它与上面那颗**不一定同名** —— 点名的解不开时
+            # 跑的是检测那一颗（R02-021）。两个名字都在场，替换这件事才看得见；只留一个
+            # 名字的话，「没有 basis 键」会被读成「按你要的读的」。
+            metadata["encoding_asked"] = extras["encoding_asked"]
+        if extras.get("encoding_basis"):
             # "encoding: gb18030" alone reads like a measurement. It is not
             # always one: GB18030 strictly decodes Shift_JIS/EUC-KR bytes too
             # (charset.py records the measurement), so the name can be a guess
-            # that came out clean. The field says which of the two it was; the
+            # that came out clean ("guessed"), or the caller's own name never ran
+            # at all ("fallback"). The field says which of them it was; the
             # sentence explaining it is in next_action, and content_ok is NOT
             # touched - see quality._agent_hints.
-            metadata["encoding_basis"] = "guessed"
+            metadata["encoding_basis"] = extras["encoding_basis"]
+        if extras.get("encoding_rival"):
+            # contested 那一支的第二个名字：点名的那颗在跑，而同一批字节还允许另一颗
+            # 干净的读法（R02-037）。句子要说两个名字，名字得跟着一起搬过来。
+            metadata["encoding_rival"] = extras["encoding_rival"]
         # A decode that came out damaged keeps its content - it is exactly what
         # the caller needs to look at - but must not read as a success. status
         # stays 200 because the file *was* read; the error field is what flips
         # content_ok to false. A hard failure still returns no content.
         hard_failure = bool(error) and not content
+        # 出路的话由作者交出，申报那半句由门装配（评审 R02-124 · r241 数到的两颗：
+        # `Unsupported file type` 与 `File too large` 都发生在**读正文之前**，而它们从前
+        # 一起落进 `quality._agent_hints` 那条 else —— 那条 else 同时装着两种事实，
+        # 后一颗还被兜底句说成 "the file was found and read"（一个字节都没读过）。
+        # `parse` 交回的是**事实**（BODY_UNREAD），动词是这扇门的话，所以在这里拼一次；
+        # 读过而内容坏的几面（坏 JSON / 坏 YAML / 真是 CFB 的文档）不带这颗事实，
+        # 它们的下一步仍由 `quality` 那一位作者写 —— F105 那颗边界格子中的一面。
+        _way = extras.get("way_forward", "") if error else ""
+        if _way and extras.get(BODY_UNREAD):
+            _way = f"{_nothing_went_out()} {_way}"
         result = ResponseModel(
             # Masked here too, not just on the refusals: this is the branch that
             # fires on every SUCCESS, and before the fix it was the more frequent
@@ -8948,7 +10063,14 @@ class MasterFetchServer:
             # soon as quality_score is set, and a default False would flag a
             # perfectly good PDF as "do not cite".
             content_ok=bool(extras.get("content_ok", False)),
+            # 出路有作者时才由作者说话：parse 的拒绝点各自交出下一步（R02-022），
+            # `_agent_hints` 看见它就不再转述。没有作者的形状（坏 JSON / 坏 YAML /
+            # 不是 %PDF）仍然落回那句与扩展名无关的通用话。上面拼好的 `_way` 已经带上
+            # 了「读之前就拒」那两族的申报（R02-124）。
+            next_action=_way,
             table_of_contents=extras.get("table_of_contents", []),
+            pages_total=extras.get("pages_total", 0),
+            pages_returned=extras.get("pages_returned", 0),
             metadata=metadata,
             # None, not 0.0, when nothing scored it: this field's own contract is
             # "null for anything that is not a PDF, because a 0.0 there reads as
@@ -8995,33 +10117,33 @@ class MasterFetchServer:
         discovered_from records where the caller pointed. Parse failures come
         back as one readable sentence, not lxml's parse dump.
         """
-        # 17.0 §3-17: the private-host gate is cred_defaults' business now.
-        allow_private = identity.get("allow_private")
+        # 17.0 §3-17: the private-host gate is cred_defaults' business, and
+        # R02-141 made it the *guard's* reading of that row — this door no longer
+        # fetches the value to push a scope around its own two steps.
         from dhole_mcp.feed import fetch_feeds
         from dhole_mcp.security import SecurityError, validate_url
-        urls = [u for u in urls if u and u.strip()]
+        urls, blank_at = _blank_url_split(urls)
         if not urls:
-            raise ValueError("feed_read requires at least one URL")
+            raise ValueError(f"feed_read requires at least one URL "
+                             f"(all {len(blank_at)} entries you named were blank)")
         if len(urls) > 50:
             raise ValueError("feed_read supports at most 50 URLs per call")
-        # SSRF 防护：每个 feed URL 先经 validate_url 校验。
-        # allow_private（G35）把作用域开在这里，覆盖校验与真正的抓取两步：只放开
-        # 校验那一步，等于放行了 URL 又在取文档时把它拒掉。
-        with allow_private_scope(allow_private):
+        # SSRF 防护：每个 feed URL 先经 validate_url 校验。校验与取文档两步读的是
+        # 同一份闸门答案（守卫那一步），所以这里不再需要"只放开校验那一步"的那种担心。
+        try:
+            urls = [validate_url(u) for u in urls]
+        except SecurityError as se:
+            raise ValueError(f"feed_read URL 校验失败: {se}") from se
+        if timeout is not None:
             try:
-                urls = [validate_url(u) for u in urls]
+                validate_timeout(timeout)
             except SecurityError as se:
-                raise ValueError(f"feed_read URL 校验失败: {se}") from se
-            if timeout is not None:
-                try:
-                    validate_timeout(timeout)
-                except SecurityError as se:
-                    raise ValueError(f"feed_read timeout: {se}") from se
-            # 换算在这一层的门口做，不在 `fetch_feed` 里：那颗函数吃的一直是**秒**，而
-            # wire 上这颗是毫秒（`_feed_timeout_s` 记着这里曾经差掉的那一千倍）。
-            results = await fetch_feeds(urls, timeout=_feed_timeout_s(timeout),
-                                        max_items=max_items if max_items is not None else 20,
-                                        since=since or "")
+                raise ValueError(f"feed_read timeout: {se}") from se
+        # 换算在这一层的门口做，不在 `fetch_feed` 里：那颗函数吃的一直是**秒**，而
+        # wire 上这颗是毫秒（`_feed_timeout_s` 记着这里曾经差掉的那一千倍）。
+        results = await fetch_feeds(urls, timeout=_feed_timeout_s(timeout),
+                                    max_items=max_items if max_items is not None else 20,
+                                    since=since or "")
         return [
             {
                 "source_url": r.source_url,
@@ -9035,6 +10157,9 @@ class MasterFetchServer:
                 # The since-filter's receipts (G23): without them an empty items
                 # list cannot tell "the feed is quiet" from "your date was wrong".
                 "since": r.since,
+                # 这一份文档到达的时刻（R02-015）。抓取失败的行留空 —— 线压缩把空值摘掉，
+                # 于是「没有这一颗」读作「这一行没有拿到文档」，而不是「刚才取到过什么」。
+                "fetched_at": r.fetched_at,
                 "items_older_than_since": r.items_older_than_since,
                 "items_without_date": r.items_without_date,
                 # The zero-entries-but-no-error case: an empty list cannot tell
@@ -9061,6 +10186,8 @@ class MasterFetchServer:
         cache_ttl: int = 300,
         mode: str = "auto",
         engines: Optional[List[str]] = None,
+        sources: Optional[List[str]] = None,
+        sort: Optional[str] = None,
         url: Optional[str] = None,
         site: Optional[str] = None,
         exclude_sites: Optional[List[str]] = None,
@@ -9093,7 +10220,12 @@ class MasterFetchServer:
         relevance_score + fetch_relevance + engines_consensus. Filters:
         site/exclude_sites (domain include/exclude on the final URL),
         location/language/region (geo), page (0-10), freshness
-        (day|week|month|year). Results cached 5min.
+        (day|week|month|year). `sources=` adds the keyless vertical pools
+        (news=GDELT, academic=arXiv, qa=Stack Exchange, code=GitHub repositories,
+        community=Hacker News); their rows carry an empty engines_consensus and a
+        per-source receipt in source_detail, and a source may be asked without the
+        web pool (engines= is then refused). `sort='newest'` orders rows that state
+        a publish day newest-first. Results cached 5min.
         """
         from dhole_mcp.search import (  # lazy: search.py pulls the metasearch engine chain
             SearchResponseModel, _param_refusal)
@@ -9104,23 +10236,22 @@ class MasterFetchServer:
         # invalid_request（缺席与空串同罪，一个请求都不发），在 find_similar 上被忽略。
         if not str(query or "").strip():
             if mode != "find_similar":
-                return SearchResponseModel(
-                    query="", results=[], total_results=0, duration_ms=0,
-                    error=("invalid_request: web_search needs query= - the words to "
-                           "search for. mode='find_similar' is the only mode that "
-                           "runs without it, and it takes url= instead."),
-                    next_action=("Pass query=<your words> and call again - no request "
-                                 "was made. To find pages like a page you already "
-                                 "have: mode='find_similar' with url=<that page>."),
-                )
+                return _param_refusal(
+                    "",
+                    "invalid_request: web_search needs query= - the words to "
+                    "search for. mode='find_similar' is the only mode that "
+                    "runs without it, and it takes url= instead.",
+                    next_action="Pass query=<your words> and call again. To find "
+                                "pages like a page you already have: "
+                                "mode='find_similar' with url=<that page>.")
         else:
             try:
                 query = validate_search_query(query)
             except SecurityError as e:
-                return SearchResponseModel(
-                    query=query, results=[], total_results=0,
-                    duration_ms=0, error=str(e),
-                )
+                # 手搓信封的那一处（实测 3000 字符的 query）从前只给到 error：既没有那半句
+                # 声明、也没有 summary —— 用量日志里这一行的标签是空的。搬进 `_param_refusal`
+                # 之后三格由同一处装配（评审 R02-088）。
+                return _param_refusal(query, str(e))
 
         # #8：共识地板的两条"表外用法"在发请求前就拒掉。静默忽略一颗显式给出的
         # 参数，正是本项目一直在防的那类失败（"看起来成功、其实参数没生效"）——
@@ -9145,7 +10276,8 @@ class MasterFetchServer:
             from dhole_mcp.search import web_search as _smart_search
             result = await _smart_search(
                 self, query, max_results, cache_ttl,
-                mode=mode, engines=engines, url=url,
+                mode=mode, engines=engines,
+                sources=sources, sort=sort, url=url,
                 site=site, exclude_sites=exclude_sites,
                 location=location, language=language, region=region,
                 page=page, freshness=freshness, after=after, before=before,
@@ -9226,6 +10358,8 @@ class MasterFetchServer:
                         # 确认过"的免费判据，让调用方不必回头对照结果列表。
                         "engines_consensus": sr.engines_consensus,
                     }
+                    # R02-003：这一行的标题是从搜索行抄来的，那颗旗子跟着标题一起抄。
+                    _carry_serp_title(page_row, sr)
                     # web_read 已算出的注入标记跟着页面走，不在这里丢：搜索摘要
                     # 的正文进了转录，告警也得跟着进。只在命中时挂键——
                     # None=缺席=信封缺席即默认的既有约定，干净页零字符。
@@ -9244,12 +10378,12 @@ class MasterFetchServer:
                     # Surface the failure instead of silently dropping the page,
                     # so the agent sees a hole in fetched_pages (with the reason)
                     # rather than wondering why a top result has no content.
-                    fetched_pages.append({
+                    fetched_pages.append(_carry_serp_title({
                         "url": sr.url, "title": sr.title, "content": "",
                         "content_ok": False,
                         "error": redact_api_key(str(e)[:200]),
                         "engines_consensus": sr.engines_consensus,
-                    })
+                    }, sr))
             if _cut:
                 note = (f"inline fetch budget spent: {_cut} of "
                         f"{len(high_results)} candidate page(s) not fetched "
@@ -9322,14 +10456,18 @@ class MasterFetchServer:
         try:
             _clock_ms = int(validate_timeout(timeout))
         except SecurityError as se:
-            _msg = f"invalid_request: timeout= {se} - nothing was read."
+            # 申报由按门取词的那位作者装配（评审 R02-092）：这一处从前把 `read` 抄在句尾
+            # （`… - nothing was read.`，还因小写躲过了本轮的判据正则），而同一扇的其余拒绝
+            # 都说 `Nothing was fetched.`。真机 `r107c_timeout_verb.json` 的 C1/C2。
+            _msg = f"invalid_request: timeout= {se}"
             return _CRM(
                 start_url=url, pages=[], error=_msg,
                 summary=f"invalid request · {_summary_label(_msg)}",
                 next_action=(
-                    "timeout= is this call's whole budget in milliseconds: 1-120000. "
-                    "On a sitemap map it is also the clock that one index request "
-                    "runs on, so a slow index wants the number raised, not a retry."))
+                    f"{_nothing_went_out('web_discover')} {TIMEOUT_CEILING_RECOVERY} "
+                    "On a sitemap map this number is also the clock that one index "
+                    "request runs on, so a slow index wants it raised **within** that "
+                    "range - above the ceiling it is refused, not retried."))
         # 与 web_crawl 同一条钳（0 与负数 = 这一轮不要帽，钳是幂等的所以传下去无妨）。
         _asked_total = int(max_total_chars or 0)
         max_total_chars = (0 if _asked_total <= 0 else
@@ -9339,9 +10477,12 @@ class MasterFetchServer:
             # 续页读的是已经存下的地图：这里没有第二张图可走，所以 `sitemap=` 在这条
             # 路上没有作用对象 —— 具名拒绝，而不是让它陪跑（params.py 只许可两种说法）。
             if sitemap not in (False, None, "", "false", "off", 0):
+                # 申报由按门取词的那位作者装配（评审 R02-092 · 真机 `r107_resume_family.json`
+                # 的 R3/R5）：这一处从前自己抄了一句 `Nothing was read.`，而同扇的其余拒绝
+                # 说 `Nothing was fetched.`。
                 _msg = ("invalid_request: resume_token reads a map already held "
                         "server-side, so there is no second map to walk - sitemap= "
-                        "would decide nothing here. Nothing was read.")
+                        "would decide nothing here. " + _nothing_went_out("web_discover"))
                 return _CRM(
                     start_url=url, pages=[], error=_msg,
                     summary=f"invalid request · {_summary_label(_msg)}",
@@ -9459,10 +10600,17 @@ class MasterFetchServer:
             # 几页、其中几页带这个词"两个数都写在句子里，不会被读成"这站只有两页"。
             scan.pages = hits
             scan.pages_crawled = len(hits)
+            # R01-039：交回的是 `scan` 那份模型，而它的 `duration_ms` 量的只是补考这
+            # 一步 —— 地图那 44 秒在响应里就这样消失了（实测字段 269 / 墙钟 44.65s，
+            # 差 165 倍）。整发调用用的钟才是这一列该说的钟。
+            _scan_ms = scan.duration_ms
+            scan.duration_ms = spent_ms + _scan_ms
             scan.summary = (
-                f"answered by CONTENT, not by the map: {clause}. The {left}ms this call "
-                f"had left went into a focus={search!r} read: {len(read)} page(s) read, "
-                f"{len(hits)} of them carrying the word - these rows hold page text, "
+                f"answered by CONTENT, not by the map: {clause}. The map used "
+                f"{int(spent_ms):,}ms of this call's {clock_ms}ms; the "
+                f"focus={search!r} read that followed used {_scan_ms:,.0f}ms of the "
+                f"{left}ms left and read {len(read)} page(s), {len(hits)} of them "
+                f"carrying the word - these rows hold page text, "
                 f"which a map would not. · {scan.summary or ''}")
             scan.next_action = (
                 f"The word is in {len(hits)} page(s)' text. web_read(url='<row>', "
@@ -9471,9 +10619,14 @@ class MasterFetchServer:
                 "deeper. web_discover without search= returns the whole map.")
             return scan, True
 
+        # 补考跑了、词还是没命中：交回的是地图那份模型，所以它的钟同样要并上补考那一段
+        # （同一处根因，另一支路 —— 见上面 `hits` 那一支的注释）。`left` 在这里仍然只
+        # 说它本来说的东西：余额。用了多少是 `scan.duration_ms`，两个数各说各的事。
+        result.duration_ms = spent_ms + scan.duration_ms
         result.summary = (result.summary or "") + (
             f" · {clause}. A content scan of {len(read)} page(s) (focus={search!r}, "
-            f"the {left}ms left of this call's {clock_ms}ms) found none of it either"
+            f"it used {scan.duration_ms:,.0f}ms of the {left}ms left after this call's "
+            f"{clock_ms}ms clock) found none of it either"
             + (f" - that scan reported: {scan.error}" if scan.error else ""))
         # 这一句是**改写**而不是追加：crawl 原文劝人 "pass focus=" 或 "drop it"，而
         # `focus=` 不在 web_discover 的 wire 面上（17.0 §4 把地图变成独立工具时，那颗旋钮
@@ -9547,11 +10700,43 @@ class MasterFetchServer:
         # selector/schema 是对计划中每一页的投影（语义与 web_read 同名参数一致）；
         # 没有 resume_token 时它们没有作用对象 —— 具名拒绝而不是静默忽略。
         from dhole_mcp.crawl import CrawlResponseModel as _CRM
+        # 门口验一次这颗数字（评审 R02-093 · 真机 `r110_timeout_gate_sweep.json` 的两发：
+        # `timeout=999999` 与 `120001` 都原样走进引擎，页抓取时才由 `validate_timeout` 抛，
+        # 再由页级汇总包成 `1/1 pages failed with network errors (timeout)` +
+        # `Retry once with a longer timeout` —— 一句永远不可执行的建议）。同一颗错在
+        # `web_discover` 上一直是具名拒绝；那句话由 `security` 那份共享出路写。
+        try:
+            validate_timeout(timeout)
+        except SecurityError as se:
+            _msg = f"invalid_request: timeout= {se}"
+            return _CRM(
+                start_url=url, pages=[], error=_msg,
+                summary=f"invalid request · {_summary_label(_msg)}",
+                next_action=(
+                    f"{_nothing_went_out('web_crawl')} {TIMEOUT_CEILING_RECOVERY} "
+                    "The whole-run clock is `deadline_ms`, not this number; this one "
+                    "is what a single page is allowed to take."))
+        # 同族另一颗预算（评审 R02-120 · 真机 `r209_deadline_radius.json`）：`deadline_ms=0`
+        # 与 `=-1` 从前照收，进循环后被自己的零/负预算当场砍掉，交回「stopped: time deadline」，
+        # 而申报整趟预算的那颗字段在 0 那一发**缺席**（`wire.py` 把「等于默认值」省掉，它的默认
+        # 值正是 0）—— 同一封里「进了循环」与「从没进到抓取循环」（`crawl.py:205` 那句契约）
+        # 互相反驳。拒在门外，那句契约重新成立；这颗不设帽，判据写在 `validate_deadline`。
+        try:
+            validate_deadline(deadline_ms)
+        except SecurityError as se:
+            _msg = f"invalid_request: deadline_ms= {se}"
+            return _CRM(
+                start_url=url, pages=[], error=_msg,
+                summary=f"invalid request · {_summary_label(_msg)}",
+                next_action=(
+                    f"{_nothing_went_out('web_crawl')} {DEADLINE_RECOVERY} "
+                    "The whole-run clock is `deadline_ms`, not `timeout=`; that one "
+                    "is what a single page is allowed to take."))
         if resume_token or selector or schema is not None:
             if not resume_token:
                 _msg = ("invalid_request: selector=/schema= project a discovered plan; "
                         "pass resume_token='<plan_id>:0' from web_discover (or drop "
-                        "them for a plain crawl). Nothing was fetched.")
+                        "them for a plain crawl).")
                 # 三格齐全才叫一封拒绝：这一族从前只有 error，而成功的那条路是带
                 # summary 的（"crawled N page(s)…"）—— 一行用量日志里失败行没标签可读。
                 return _CRM(start_url=url, pages=[], error=_msg,
@@ -9586,14 +10771,9 @@ class MasterFetchServer:
                     if get_reranker() is None:
                         rer = await ensure_reranker(download=False)
                         if rer is None:
+                            refusal, remedy = _neural_focus_refusal("crawl")
                             return _CRM(start_url=url, pages=[],
-                                        error=_NEURAL_FOCUS_UNAVAILABLE,
-                                        next_action=(
-                                            "The reranker model is not downloaded yet. It downloads "
-                                            "automatically on the first neural web_search (one-time, "
-                                            "resumable). "
-                                            "For this crawl only, pass focus_engine='bm25' to use "
-                                            "keyword-overlap focus."))
+                                        error=refusal, next_action=remedy)
             try:
                 # Lazy import to break circular dependency (crawl.py imports
                 # ResponseModel from server.py; server.py imports web_crawl
@@ -9653,19 +10833,32 @@ class MasterFetchServer:
         deadline_t = t0 + (deadline_ms / 1000.0)
         parsed = plan_parse(resume_token)
         if parsed is None:
+            # 三格齐全才叫一次拒绝（评审 R02-095 · 真机 `r107_resume_family.json` 的 R1/R2：
+            # `next_action` 从来没被传过，交回的是空串）。R02-095 当年说"不重复签一次字"是对的，
+            # 位置错了：申报写在 `error` 里，而契约让调用方读 `next_action` 的第一句。
+            # 现在**搬**过来而不是补一遍 —— 同一句申报只许有一位作者、出现在一个字段（R02-112）。
             return _CRM(start_url=url, pages=[], error=(
                 "invalid_request: resume_token must be '<plan_id>:<offset>' - "
                 "pass back the token web_discover / the previous resume returned "
-                "verbatim. Nothing was fetched."),
+                "verbatim."),
+                next_action=(
+                    f"{_nothing_went_out('web_crawl')} The cursor comes back in "
+                    "`next_resume_token` on the reply that held "
+                    "rows back (and `plan_id` names the plan itself): copy that value "
+                    "verbatim into resume_token=, together with the same url=. To start "
+                    "over instead, call web_discover with no resume_token."),
                 summary="resume_token is not a plan cursor")
         plan_id, offset = parsed
         urls = plan_load(plan_id)
         if urls is None:
+            # 同一族的另两处（上面 10545 与下面 discover_only 那两支）都带 `invalid_request:`，
+            # 只有这一支不带 —— 调用方按前缀分类的分支会把它读成"抓完没结果"而不是"参数被拒"。
+            # 这一处也是同一位作者：申报搬到 `next_action` 行首，`error` 只留理由。
             return _CRM(start_url=url, pages=[], error=(
-                f"resume_token: plan {plan_id} is unknown or expired (plans live "
-                "1h server-side). Nothing was fetched."),
-                next_action=("Re-run web_discover (sitemap=true = one request) "
-                             "and start a fresh plan."),
+                f"invalid_request: resume_token: plan {plan_id} is unknown or expired "
+                "(plans live 1h server-side)."),
+                next_action=(f"{_nothing_went_out('web_crawl')} Re-run web_discover "
+                             "(sitemap=true = one request) and start a fresh plan."),
                 summary="plan expired or unknown")
         offset = max(0, min(offset, len(urls)))
         remaining = urls[offset:]
@@ -9760,6 +10953,14 @@ class MasterFetchServer:
                     title=getattr(resp, "title", "") or "",
                     page_type=getattr(resp, "page_type", "") or "",
                     content=content, content_chars=chars,
+                    # 理由跟着行一起走（评审 R02-013）：`nav_only` / `collapsed` 那一族是
+                    # **不带 error 的 false** —— 这张字段表从前不抄 `substance`，被拒的续传
+                    # 行就落在两个桶之外（既不绿也不红，也不给原因）。普通爬取那一路早就填了
+                    # 这两颗（见 crawl.py 的 _row_verdict 那一处），这里不是新闸，是同一件
+                    # 事实在第二份行信封里掉了地。
+                    substance=getattr(resp, "substance", "") or "",
+                    substance_basis=getattr(resp, "substance_basis", "") or "",
+                    summary=getattr(resp, "summary", "") or "",
                     untrusted_content=getattr(resp, "untrusted_content", None),
                     error=getattr(resp, "error", "") or "",
                 ))
@@ -9768,6 +10969,16 @@ class MasterFetchServer:
 
         next_offset = offset + idx
         done = next_offset >= len(urls)
+        ok_rows = sum(1 for r in rows if r.content_ok)
+        err_rows = sum(1 for r in rows if r.error)
+        # 两个桶必须加得回行数（评审 R02-013）。从前这里只有 `ok` 与 `with error`，
+        # 而"不带 error 的 false"（`nav_only` / `collapsed` 那一族）落在两者之外：
+        # 「2 ok, 0 with error」对着 3 行，用户的自然动作是把两个数加起来 —— 加不上
+        # 就是一句假话，而中间那一档既不绿也不红也不给原因。
+        silent_rows = len(rows) - ok_rows - err_rows
+        resume_counts = (f"{ok_rows} ok, {err_rows} with error"
+                         + (f", {silent_rows} refused without an error "
+                            f"(read that row's `substance`)" if silent_rows else ""))
         result = _CRM(
             start_url=url, pages=rows,
             pages_crawled=len(rows),
@@ -9777,8 +10988,7 @@ class MasterFetchServer:
             truncated_by_total_chars=truncated_chars,
             duration_ms=(now() - t0) * 1000.0,
             summary=(f"plan resumed at {offset + 1}-{next_offset} of {len(urls)}: "
-                     f"{sum(1 for r in rows if r.content_ok)} ok, "
-                     f"{sum(1 for r in rows if r.error)} with error"),
+                     f"{resume_counts}"),
         )
         if not done:
             result.next_resume_token = plan_token(plan_id, next_offset)
@@ -9822,9 +11032,12 @@ class MasterFetchServer:
             path_exclude = normalize_path_patterns(path_exclude)
         except ValueError as e:
             _msg = f"invalid_request: bad path filter: {e}"
+            # 申报按门取词（评审 R02-092 · 真机 `r107b_plan_family.json` 的 R6：这一处从前写的是
+            # `Nothing was read from the plan.`）。「从计划里」这层信息在 `error` 里已经点名了
+            # 是哪一颗参数，而这一支两扇门（discover 续图 / crawl 续正文）都是读门，取到的是同一句。
             return _CRM(start_url=url, pages=[], error=_msg,
                         summary=f"invalid request · {_summary_label(_msg)}",
-                        next_action="Nothing was read from the plan. Fix the pattern.")
+                        next_action=f"{_nothing_went_out()} Fix the pattern.")
         _terms = [t for t in (search or "").lower().split()]
 
         rows: list = []
@@ -9991,8 +11204,8 @@ class MasterFetchServer:
                 "anyOf": [{"required": ["url"]}, {"required": ["urls"]}],
                 "properties": {
                     "url": {"type": "string", "description": "URL to fetch"},
-                    "urls": {"type": "array", "items": {"type": "string"}, "description": "Multiple URLs (parallel; one result per URL)"},
-                    "extraction_type": {"type": "string", "description": "Content format: markdown (default), html (raw markup), text, article, structured, or check (changed-since-last-fetch receipt, not the page)."},
+                    "urls": {"type": "array", "items": {"type": "string"}, "description": "URLs (parallel; one result each; check is at most 10)"},
+                    "extraction_type": {"type": "string", "description": "Format: markdown (default), html (raw markup), text, article, structured, or check (changed-since-last-fetch; urls= batch, max 10)."},
                     "css_selector": {"type": "string", "description": "Narrows extracted content. HTML only - on XML/JSON/plain text the whole document comes back and the summary says so."},
                     "max_content_chars": {"type": "integer", "description": "Content cap in chars (500-200000; default from DHOLE_DEFAULT_CONTENT_CHARS). The rest stays reachable via offset/next_offset."},
                     "timeout": {"type": "integer", "description": _TIMEOUT_DESC_READ},
@@ -10109,7 +11322,7 @@ class MasterFetchServer:
                     "cache_ttl": {"type": "integer", "description": "Cache seconds per page (default 3600). 0 = force fresh."},
                     "force_fetcher": {"type": "string", "description": "Pin one tier for every page, skipping auto-escalation: 'http' fast but no JS/bot walls, 'stealthy' the anti-detect browser."},
                     "timeout": {"type": "integer", "description": _TIMEOUT_DESC_CRAWL},
-                    "deadline_ms": {"type": "integer", "description": "Whole-crawl hard stop in ms (default 25000; timeout= is per page)."},
+                    "deadline_ms": {"type": "integer", "description": "Whole-crawl budget ms (default 25000; timeout= per page); soft cap"},
                     "ignore_robots": {"type": "boolean", "description": "Skip the robots.txt check for this call (default false = comply). True only where you have the site's permission."},
                     "focus_engine": {"type": "string", "description": "Which scorer runs focus here: 'bm25' (default, cheap) or 'neural' (the local reranker model; asking without it is refused, not downgraded)."},
                     "resume_token": {"type": "string", "description": "Pass back web_discover's plan_id:0 verbatim; next_resume_token continues where the budget bit."},
@@ -10140,31 +11353,33 @@ class MasterFetchServer:
         },
         {
             "name": "web_search",
-            "description": "Keyless multi-engine web search (default pool = all 8 engines: baidu,bing,sogou,so360,bing_global,yandex,brave,duckduckgo). Returns ranked URLs + relevance, NOT page content - never answer from snippets alone.\n- fetch_content=true auto-fetches up to 3; otherwise web_read the high fetch_relevance hits with focus=. Don't search for a URL you already have - web_read it directly.\n- min_relevance / min_raw_relevance (0-1) drop low-relevance hits - two scales, read which one you set.\n- Result fields: relevance_score 0-1; fetch_relevance high/med/low - fetch high first. engines_consensus counts index FAMILIES, so a low value can mean a degraded pool - check consensus_basis. Engine matrix: sys_guide(topic='behavior', section='web_search').",
+            "description": "Keyless search, all 10 default web engines: baidu,bing,sogou,so360,bing_global,yahoo,yandex,brave,duckduckgo,marginalia. Returns ranked URLs + relevance, not page content; never answer from snippets only.\n- fetch_content=true auto-fetches 3; else web_read high fetch_relevance hits with focus=. A URL you already have: web_read it, don't search.\n- sources= adds keyless vertical pools; sort='newest' = stated publish-day order.\n- relevance_score 0-1; fetch_relevance high/med/low: fetch high first. engines_consensus counts index FAMILIES (low = maybe degraded pool; see consensus_basis). Engine matrix + source details: sys_guide(topic='behavior', section='web_search').",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Words to search for. Optional only with mode='find_similar'."},
                     # 17.0 B4 · 顶层只有一个家（这 18 个键今天也已经能从顶层传进来）。
                     "url": {"type": "string", "description": "The page to find similar pages of (mode='find_similar')."},
-                    "mode": {"type": "string", "description": "Rerank mode: 'auto' (default) ranks with the local reranker when it can; 'neural' asks for it by name - if it cannot run, the reply says so instead of pretending. 'find_similar' needs url=."},
+                    "mode": {"type": "string", "description": "Rerank: 'auto' (default) uses the local reranker when it can; 'neural' demands it (a refusal is named, not disguised); 'find_similar' needs url=."},
                     "max_results": {"type": "integer", "description": "Results to return (1-50, default 6)."},
                     "page": {"type": "integer", "description": "Result page, 0-10 (default 0)."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds (default 300). 0 = force fresh."},
-                    "engines": {"type": "array", "items": {"type": "string"}, "description": "Narrow the pool, max 10 names. The selectable names are the 8 engines listed above plus the keyed engines that need an API key (sys_guide(topic='behavior', section='web_search'))."},
+                    "engines": {"type": "array", "items": {"type": "string"}, "description": "Narrow the pool, max 12 names: the 10 above plus keyed engines that need a key (sys_guide(topic='behavior', section='web_search'))."},
+                    "sources": {"type": "array", "items": {"type": "string"}, "description": "Pools (default ['web']): 'web','news','academic','qa','code','community'. Verticals are keyless; omitting 'web' searches only them and refuses engines=. Their rows never add to engines_consensus."},
+                    "sort": {"type": "string", "description": "'relevance' (default) or 'newest': newest orders rows with a stated publish day newest-first; undated rows stay after."},
                     "site": {"type": "string", "description": "Restrict to one domain."},
                     "exclude_sites": {"type": "array", "items": {"type": "string"}, "description": "Drop results from these domains."},
                     "location": {"type": "string", "description": "ISO country code ('US'), optionally with a region suffix ('US-CN'). Anything else is refused rather than guessed at."},
                     "language": {"type": "string", "description": "2-letter language code."},
                     "region": {"type": "string", "description": "Engine region, passed through as given and folded into the cache key. Omitted, it is derived from location + language."},
-                    "freshness": {"type": "string", "description": "Time window preset - 'day', 'week', 'month' or 'year', and only these four: anything else is refused. The engines offer nothing finer, so no absolute date range can be asked."},
-                    "after": {"type": "string", "description": "'Newer than' a date. No engine takes an absolute range, so this is widened to the narrowest preset that covers it and date_filter reports what was actually sent."},
-                    "before": {"type": "string", "description": "Upper bound, applied per row (not sent to any engine): rows provably newer than it are dropped and counted in date_coverage; undated/relative rows stay."},
+                    "freshness": {"type": "string", "description": "Time window: 'day', 'week', 'month' or 'year' only; anything else is refused. No engine takes a finer or absolute range."},
+                    "after": {"type": "string", "description": "'Newer than' a date: widened to the narrowest engine preset that covers it; date_filter reports what was actually sent."},
+                    "before": {"type": "string", "description": "Upper bound, applied per row (not sent to engines): provably newer rows are dropped and counted in date_coverage; undated/relative rows stay."},
                     "fetch_content": {"type": "boolean", "description": "Pull the top hits' full text inside this same call (default false) instead of returning snippets."},
                     "fetch_schema": {"type": "object", "additionalProperties": True, "description": "{properties: {...}} applied to the pages fetched by fetch_content, instead of their markdown - the same shape rules as web_read's schema."},
                     "fetch_min_consensus": {"type": "integer", "description": "fetch_content only: keep only hits corroborated by >= N independent index families (min 2; 0 = off). Skipped URLs are in consensus_skipped."},
                     "min_relevance": {"type": "number", "description": "0-1 cutoff on the NORMALIZED rerank score. Below it results are dropped, not re-ordered."},
-                    "min_raw_relevance": {"type": "number", "description": "0-1 floor on the reranker's RAW score instead - the one that can call a whole round irrelevant. fetch_hint reports the raw span the round had."},
+                    "min_raw_relevance": {"type": "number", "description": "0-1 floor on the reranker's RAW score - the one that can call a whole round irrelevant. fetch_hint reports the raw span."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
@@ -10184,12 +11399,12 @@ class MasterFetchServer:
         },
         {
             "name": "sys_state",
-            "description": "What dhole keeps on this machine, and how to erase a class of it: the fetch cache, session cookies (keyed by session_id=), engine cooldowns, the stored identity default, the CDP attach approvals, and the config knobs.\n- No arguments = the census, erasing nothing: every open session with its hosts and cookie NAMES (a value is a credential - it would land in the transcript), plus cache state.\n- clear=[\"cache\"] wipes the content cache; one fresh URL is cache_ttl=0 instead.\n- clear=[\"<session id>\"] forgets that session and its browser; clear=[\"sessions\"] needs confirm=true (the loss shows up at your next visit to that site).\n- clear=[\"engine_state\"] forgets engine cooldowns + yield history.\n- clear=[\"cdp:host=<name>\"] / [\"cdp_hosts\"] revoke CDP approvals (confirm=true); show=[\"config\"] lists knob NAMES; values via `dhole config list`.",
+            "description": "What dhole keeps on this machine, and how to erase a class of it: the fetch cache, session cookies (keyed by session_id=), engine cooldowns, the stored identity default, the CDP attach approvals, the config knobs, and the reranker's model state (read-only).\n- No arguments = the census, erasing nothing: every open session with its hosts and cookie NAMES (a value is a credential - it would land in the transcript), plus cache state.\n- clear=[\"cache\"] wipes the content cache; one fresh URL is cache_ttl=0 instead.\n- clear=[\"<session id>\"] forgets that session and its browser; clear=[\"sessions\"] needs confirm=true (the loss shows up at your next visit to that site).\n- clear=[\"engine_state\"] forgets engine cooldowns + yield history.\n- clear=[\"cdp:host=<name>\"] / [\"cdp_hosts\"] revoke CDP approvals (confirm=true); show=[\"config\"] lists knob NAMES; values via `dhole config list`.\n- show=[\"models\"]: which cross-encoder this machine has, whether its files are complete, what THIS process tried. Read-only - dhole erases no model files; sys_guide(topic='fields') for the reading.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "show": {"type": "array", "items": {"type": "string"}, "description": "State classes to report without touching them: cache|engine_state|sessions|cred_defaults|cdp_hosts|config|all."},
-                    "clear": {"type": "array", "items": {"type": "string"}, "description": "State classes to erase (config is show-only), or one open session id; cdp:host=<name> revokes one CDP approval."},
+                    "show": {"type": "array", "items": {"type": "string"}, "description": "State classes to report without touching them: cache|engine_state|sessions|cred_defaults|cdp_hosts|config|models|all."},
+                    "clear": {"type": "array", "items": {"type": "string"}, "description": "State classes to erase (config and models are show-only), or one open session id; cdp:host=<name> revokes one CDP approval."},
                     "confirm": {"type": "boolean", "description": "true for an erasure you would not notice as it happened (sessions|cdp_hosts|all)."},
                 },
             },
@@ -10237,7 +11452,7 @@ class MasterFetchServer:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "topic": {"type": "string", "description": "Which volume: start = which tool + the hard constraints. call = writing a call (placement, patterns). fields = reading a response. behavior = deep per-tool behavior. fix = a failure to diagnose. config = a knob to change. recipes = a multi-step task. The volume's own file name works as an alias."},
+                    "topic": {"type": "string", "description": "Volumes: start = one-page route map + hard constraints. manual = full SKILL.md. call = writing a call (placement, patterns). fields = reading a response. behavior = deep per-tool behavior. fix = a failure to diagnose. config = a knob. recipes = a multi-step task. Filename is an alias."},
                     "section": {"type": "string", "description": "One heading inside the volume, matched case-insensitively (e.g. 'actions', 'PDF', 'engine matrix'). No match answers with the headings that exist."},
                 },
             },
@@ -10291,6 +11506,18 @@ class MasterFetchServer:
                                    _result_error(result))
                     # _dispatch returns (content_list, structured_dict) or just content_list
                     return _call_result(result)
+                except ToolRosterRefusal as e:
+                    # 门名那一族也走信封（评审 R02-130 的 unknown-tool 半边 · F123）：它不是
+                    # 参数错，而是"这一扇门这台机器没有"，所以它不借 `_invalid_request_result`
+                    # 那副 14 格的抓取壳 —— 一扇不存在的门不许带着 `content` / `duration_ms` /
+                    # `fetcher_used` 回家（R02-103 那条法在边界上的样子）。三格加把手由
+                    # `ToolRosterRefusalModel` 交，名字仍由 `quality` 那张表写（这里不手搓
+                    # `diagnosis={…}`），句子里的名册与开关那一段整句到达，不再被 300 剪掉。
+                    _log_tool_call(params.name, False, (now() - started) * 1000, str(e))
+                    return _call_result(_wire_result(ToolRosterRefusalModel(
+                        error=str(e),
+                        summary=f"invalid request · {_summary_label(str(e))}",
+                        next_action=e.next_action)))
                 except ArgumentRefusal as e:
                     # 刀1：设计过的参数拒绝在这里折成信封，不交给下面那条兜底。兜底给的是
                     # 裸 `{"error": str(e)[:300]}` —— 没有 summary / next_action /
@@ -10298,9 +11525,32 @@ class MasterFetchServer:
                     # 唯一能照着改的那一段。兜底注释里"走到这里说明这不是设计过的拒绝"
                     # 说的没错，错的是这类拒绝以前没有自己的出口。
                     _log_tool_call(params.name, False, (now() - started) * 1000, str(e))
-                    return _call_result(_wire_result(_invalid_request_result(
+                    _refusal = _invalid_request_result(
                         _envelope_url(params.arguments), str(e),
-                        next_action=e.next_action, tool=params.name)))
+                        next_action=e.next_action, tool=params.name)
+                    # 文案仍由上面那唯一一位作者装配；这里只把**壳**换成该门自己的模型
+                    # （评审 R02-103 · 真机 r183）。`_invalid_request_result` 交的是一副
+                    # FetchResult：非抓取的门借它说话时，一次什么都没读的被拒回执会带着
+                    # `content` / `duration_ms` / `fetcher_used` 回家，而同门自己校验器那条
+                    # 路只交 4 格 —— 同一扇门两条路两副形状，那是漂移不是两种道理。
+                    # 抓取那一族一格不减：它们不在 `_STATE_DOOR_MODELS` 里。
+                    _own = _STATE_DOOR_MODELS.get(params.name)
+                    if _own is not None:
+                        _refusal = _own(error=_refusal.error,
+                                        next_action=_refusal.next_action)
+                        return _call_result(_wire_result(_refusal))
+                    if params.name in _PROSE_DOORS:
+                        # 这扇按设计不说 JSON（r192：成功面与 unknown-topic 面都是散文），
+                        # 所以它的参数拒绝也说散文，抬头沿用它自己那种 `sys_guide:`。
+                        # 信封三件一件不少，只是不住在格子里：前缀与被拒的键点名在 `error`
+                        # 那一行，本门申报在出路那一行的行首（评审 R02-115）。
+                        from mcp.types import TextContent
+                        return _call_result([TextContent(
+                            type="text",
+                            text=(f"{params.name}: refused\n"
+                                  f"{_refusal.next_action}\n"
+                                  f"{_refusal.error}")[:6000])])
+                    return _call_result(_wire_result(_refusal))
                 except Exception as e:
                     from mcp.types import TextContent  # 局部导入与其余传输侧导入同一惯例
                     _log_tool_call(params.name, False, (now() - started) * 1000, str(e))
@@ -10494,15 +11744,29 @@ class MasterFetchServer:
 
         if name not in _TOP_LEVEL_ARGS:
             hint = _REMOVED_TOOL_HINTS.get(name, "")
-            raise ValueError(
+            # 这一族走信封，不交给 transport 兜底（评审 R02-130 的 unknown-tool 半边 ·
+            # F123 · 现场 r337/r338）：兜底交的是裸 `{"error": str(e)[:300]}`，而 300 那一刀
+            # 在旧名带 hint 的那一发上剪掉的正是"新家怎么写"那一段（`web_resolve` 355 字符 /
+            # `web_screenshot` 394 字符，两处实测）。抛的仍是 ValueError 的子类，全仓那三处
+            # `raises(ValueError, match="Unknown tool")` 的锁一字不动。
+            raise ToolRosterRefusal(
                 f"Unknown tool: {name}. Registered names: {sorted(_TOP_LEVEL_ARGS)}"
-                + (f" - {hint}" if hint else ""))
+                + (f" - {hint}" if hint else ""),
+                next_action=(
+                    f"{_nothing_went_out(name)} Call one of the names `error` lists - "
+                    "a name that is not in this server ran nothing. `sys_guide(topic=...)` "
+                    "answers what the toolset does."))
         if name not in _ENABLED_TOOLS:
-            raise ValueError(
+            raise ToolRosterRefusal(
                 f"Tool '{name}' is not enabled in this server: DHOLE_TOOLS "
                 f"enables only {sorted(_ENABLED_TOOLS)}. Add '{name}' to "
-                "DHOLE_TOOLS (or unset it to enable every tool) and restart."
-            )
+                "DHOLE_TOOLS (or unset it to enable every tool) and restart.",
+                # 取词在抛出的那一刻做：`tool_scope` 随异常一起退出，等到边界再问，
+                # 被关掉的 `web_read` 也只能听到默认支那句（它自己那扇说的是 fetched）。
+                next_action=(
+                    f"{_nothing_went_out(name)} Add '{name}' to DHOLE_TOOLS (or unset it "
+                    "to enable every tool) and restart this server - this build has the "
+                    "door; the process switched it off."))
         _reject_unknown_args(name, args)
         missing = _missing_required_args(name, args)
         if missing:
@@ -10514,9 +11778,11 @@ class MasterFetchServer:
                 f"Missing required argument(s) for {name}: {missing}. "
                 f"Supported here: {sorted(_TOP_LEVEL_ARGS[name])}",
                 next_action=(
+                    f"{_nothing_went_out(name)} "
                     f"Pass {missing[0]}=... and call again - no request was "
                     "made. Every argument is a top-level parameter; the tool's "
                     "schema lists their types."),
+                tool=name,
             )
             return _wire_result(result)
         try:
@@ -10541,7 +11807,14 @@ class MasterFetchServer:
             result = _invalid_request_result(
                 _envelope_url(args), str(e),
                 next_action=(
-                    f"Fix {bad_arg} and call again - no request was made. "
+                    # 门话由按门取词的那位作者装配（评审 R02-094 · 真机
+                    # `r107d_read_radius.json` 的 D1/D3/D4：这一支交回的拒绝里从来没有
+                    # `Nothing was …`，而同一层在别的扇上由 `params._refuse` 装配）。
+                    # `no request was made` 那半句留着：它钉的是既有契约
+                    # （`tests/test_bug_report2_regressions.py` 的 max_content_chars 那一格），
+                    # 这一把加的是缺的那一格，不是替掉有人钉着的那句。
+                    f"{_nothing_went_out('web_read')} Fix {bad_arg} and call again - "
+                    "no request was made. "
                     "Argument types are checked rather than guessed at: a "
                     "misread `urls` would otherwise come back looking like a "
                     "successful 19-URL fetch."),
@@ -10666,21 +11939,52 @@ class MasterFetchServer:
                 # second error shape for callers to detect, with no next_action.
                 # Every other tool answers with an envelope, so this one does too.
                 _msg = str(e)
+                # 信封前缀也是契约（评审 R02-097 · 真机 `r113_feed_prefix.json`）：这一族的
+                # `error` 从前是 `feed_read timeout: Timeout exceeds…` / `feed_read supports at
+                # most 50 URLs per call` —— 宿主按 `invalid_request:` 归类失败，这一发在它眼里
+                # 不是参数拒绝。门里那些 ValueError 文本本来就没带前缀，这里统一补上。
+                if not _msg.startswith("invalid_request:"):
+                    _msg = f"invalid_request: {_msg}"
                 # 这颗 ValueError 有两种：URL 列表本身没写好（该教 `urls=` 的形状），
                 # 和 URL 形状没错、地址是内网的（那句在教一件本来就对的事）。后者与
                 # 其余五颗工具共用同一句出路 —— 校验失败那句把原话包在里面，所以按
                 # 包含判。
-                payload = {
-                    "feeds": [],
-                    "error": _msg,
-                    "next_action": (
-                        PRIVATE_ADDRESS_RECOVERY
-                        if any(p in _msg for p in PRIVATE_ADDRESS_REFUSAL_PREFIXES)
-                        else "Pass urls=[...] with 1-50 absolute http(s) "
-                             "RSS/Atom feed URLs."),
-                }
-                text, compact = _wire_json(payload)
-                return [TextContent(type="text", text=text)], compact
+                _fam = url_refusal_family(_msg)
+                if _fam == "private":
+                    # 门话同样按门装配（评审 R02-100 · 真机 `r119_url_shape_clauses.json`
+                    # 的 A6：这一格从前只交共用文案，那句里焊的是写门的动词）。
+                    _feed_way_out = (f"{_nothing_went_out('feed_read')} "
+                                     f"{PRIVATE_ADDRESS_RECOVERY}")
+                elif _fam == "resolver":
+                    # 表外两族（评审 R02-114 · 半径 `r178_feed_way_out_table.json`）：守卫与云元数据
+                    # 的拒绝都不是 `urls=` 的形状问题，落进通用提示等于在教一件本来就对的事
+                    # （R02-096 那一族在同一张表上的复发）。出路各自住在守卫侧，这里只登记。
+                    _feed_way_out = (f"{_nothing_went_out('feed_read')} "
+                                     f"{RESOLVER_GUARD_RECOVERY}")
+                elif _fam == "permanent":
+                    _feed_way_out = (f"{_nothing_went_out('feed_read')} "
+                                     f"{PERMANENT_URL_RECOVERY}")
+                elif _fam == "timeout":
+                    _feed_way_out = (f"{_nothing_went_out('feed_read')} "
+                                     f"{TIMEOUT_CEILING_RECOVERY}")
+                else:
+                    _feed_way_out = (f"{_nothing_went_out('feed_read')} Pass urls=[...] "
+                                     "with 1-50 absolute http(s) RSS/Atom feed URLs.")
+                # 这副壳不是装饰（评审 R02-133 · 现场 `r271_feed_refusal_faces.json`）：
+                # 四格 dict 直接进 `_wire_json` 时没有类名可查，`RefusalHandle` 与
+                # `_attach_diagnosis` 那两位作者都够不到，于是这一扇自己写的 9 张拒绝面
+                # 戴着 `error` 却没有把手，而同门的参数层脸有 —— 手册承诺的是每副戴
+                # `error` 的回执自己认领把手，`feeds` / `error` / `summary` / `next_action`
+                # 四格一格不改，只把把手那一格交回 `quality` 那张表。
+                return _wire_result(FeedRefusalModel(
+                    feeds=[],
+                    error=_msg,
+                    # 一发都没出去也要有那一行状态：其余工具的被拒回执都带 summary，
+                    # 这颗缺席时读起来就像"这一封没有信封这种东西"（R02-015 的同一格）。
+                    summary="no request went out: the call was refused before any "
+                            "source was contacted, so nothing was fetched",
+                    next_action=_feed_way_out,
+                ))
             # One shape on both channels. content[0].text used to be a bare array
             # while structured_content was {"feeds": [...]}, so the same call had
             # two types depending on which field the client read.
@@ -10690,7 +11994,10 @@ class MasterFetchServer:
             # no longer pays for error:"" / since:"" once per feed. The two since
             # receipts (items_older_than_since, items_without_date) are not in that
             # policy and still ship.
-            payload = {"feeds": feeds}
+            payload = {"feeds": feeds,
+                       **_feed_batch_envelope(len(args.get("urls") or []), feeds,
+                                              blank_positions=_blank_url_split(
+                                                  args.get("urls") or [])[1])}
             text, compact = _wire_json(payload)
             return [TextContent(type="text", text=text)], compact
 
@@ -10703,4 +12010,11 @@ class MasterFetchServer:
             return [TextContent(type="text", text=text)]
 
         else:
-            raise ValueError(f"Unknown tool: {name}")
+            # 这句话从前是 `ValueError("Unknown tool: …")` —— 名册那句的第二位作者，而它说的
+            # 根本不是"调用方报了个不存在的名字"（那一步在函数开头已经判掉了，11 扇在册门
+            # 各有分支 · r339 现数）。走到这里只有一种解释：这副树注册了一扇却没有分支，
+            # 是 dhole 自己的错。它照旧走 transport 兜底（兜底收的正是这类没人设计过的失败），
+            # 但不许再冒充一句门名的判决。
+            raise AssertionError(
+                f"Tool '{name}' is registered but this build has no handler for it - "
+                "a dhole bug, not a bad call")

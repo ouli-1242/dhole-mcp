@@ -41,7 +41,9 @@ def _fake_search(monkeypatch):
     monkeypatch.setattr(search_mod, "multi_search", fake_multi_search)
     monkeypatch.setattr(search_mod, "ensure_reranker", AsyncMock(return_value=None))
     monkeypatch.setattr(search_mod, "fetch_source_for_similar",
-                        AsyncMock(return_value=("Widgets", "widget body text")))
+                        AsyncMock(return_value={
+                            "title": "Widgets", "body": "widget body text",
+                            "status": 200, "reason": "", "detail": ""}))
 
 
 def _payload(result) -> dict:

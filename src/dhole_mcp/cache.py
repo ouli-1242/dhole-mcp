@@ -30,8 +30,16 @@ MAX_CACHE_ENTRIES = 10000  # hard cap so a long-lived agent's cache DB can't gro
 # affected subset rather than invalidating the whole cache, because for this tool
 # a wiped cache can be unrecoverable on some networks (see
 # paths.migrate_legacy_cache_dir). v2: the ctx fingerprint gained the PDF
-# password (server._cache_context).
-_KEY_VERSION = 2
+# password (server._cache_context). v3: a fetch row's envelope gained the
+# substance verdict (server._finalize_result). Rows written before it carry no
+# `substance` key at all, and the replay path then re-derives `content_ok` from
+# status + content alone - which hands out a green light the 期3.4 gate never
+# backed. Measured on this machine's own cache: 132 of 134 fetch rows lacked the
+# verdict and 128 of those stored content_ok=true, so "self-heals on the next
+# write" would have left the whole existing cache speaking without evidence.
+# Only HTML rows are dropped (PDF / JSON / image rows legitimately have no
+# substance verdict, and refetching them buys nothing).
+_KEY_VERSION = 3
 
 # Shared DB path cache — avoids re-running PRAGMA on every operation
 _db_initialized: dict[Path, bool] = {}
@@ -158,10 +166,23 @@ async def _ensure_db(cache_dir: Path | None = None) -> Path:
             # user_version 不能参数绑定，这里拼的是模块级整数常量，非外部可控。
             (ver,) = await (await db.execute("PRAGMA user_version")).fetchone()
             if (ver or 0) < _KEY_VERSION:
-                await db.execute(
-                    "DELETE FROM cache WHERE scope = 'fetch' AND ("
-                    "lower(url) LIKE '%.pdf%' OR lower(content_type) LIKE '%pdf%')"
-                )
+                if (ver or 0) < 2:
+                    await db.execute(
+                        "DELETE FROM cache WHERE scope = 'fetch' AND ("
+                        "lower(url) LIKE '%.pdf%' OR lower(content_type) LIKE '%pdf%')"
+                    )
+                if (ver or 0) < 3:
+                    # v3：没有实质判决的 HTML 行一律不作答。留着的后果不是"少一个字段"，
+                    # 是回放路径从 status + content **重算** 出一个 `content_ok=true`，
+                    # 而那一发从没被判过（本机实测：134 行 fetch 里 132 行缺这颗读数，
+                    # 其中 128 行存的是 true）。非 HTML 不删 —— PDF / JSON / 图片本来
+                    # 就没有 substance 这一说，重取一次买不到任何东西。判据用 LIKE 而不
+                    # 是 json_extract：不赌这台机器的 SQLite 编译带 JSON1。
+                    await db.execute(
+                        "DELETE FROM cache WHERE scope = 'fetch' AND "
+                        "COALESCE(envelope, '') NOT LIKE '%substance%' AND ("
+                        "lower(content_type) LIKE '%html%' OR lower(url) LIKE '%.html%')"
+                    )
                 await db.execute(f"PRAGMA user_version={_KEY_VERSION}")
 
             await db.commit()

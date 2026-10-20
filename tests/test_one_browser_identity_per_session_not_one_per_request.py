@@ -197,16 +197,27 @@ def test_a_machine_without_browserforge_builds_what_it_always_built(monkeypatch)
 
 
 def test_the_ua_and_the_brand_list_agree_in_the_baseline():
-    """生成器给的那一份身份，UA 与 sec-ch-ua 的版本自己得对得上。
+    """生成器给的那一份身份，UA 与 sec-ch-ua 的版本自己得对得上 —— 连摇 K 副都算。
 
-    这一条测的是**取来的那副身份**，不是我们造的字面量：browserforge 缺席时跳过，
-    在场时它必须交出内部一致的一套（这是它存在的意义）。
+    这一格从前"摇一副"：抽中非 Chromium 就 skip，抽中 Chromium 而字典里没有 brand 表就红
+    （实测 0.40% 的抽签是那一副）。两种结局都由运气决定，而 §14 的『全量绿』门不许建在
+    概率上 —— 台账 R02-056 记的就是它在全量线里红、单跑里绿。
+
+    现在判的是**规则**而不是**一次抽签**：skip 只在 browserforge 缺席（这台机器没有身份可测），
+    在场就连摇 25 副，每一副自称 Chromium 的都必须带着一颗与自己大版本同源的 brand 表。
+    为什么这一颗缺席非拦不可（线上不是"少发一颗头"而是"两台机器各说一颗"）写在
+    `tests/test_a_chromium_identity_that_cannot_name_its_brands_is_not_shipped.py` 的模块头，
+    原始数据在 `review/.runtime/p4/r56-wire-measure.json`。
     """
-    baseline = FT._stealthy_baseline()
-    ua = baseline.get("user-agent", "")
-    if not baseline or "Chrome/" not in ua:
-        pytest.skip("这台机器上没有 browserforge，或非 Chromium 的一次抽签")
-    ua_major = re.search(r"Chrome/(\d+)", ua).group(1)
-    brands = re.findall(r'"(?:Google Chrome|Chromium)";v="(\d+)"',
-                        baseline.get("sec-ch-ua", ""))
-    assert brands and all(b == ua_major for b in brands), (ua, baseline["sec-ch-ua"])
+    if not FT._stealthy_baseline("chrome"):
+        pytest.skip("这台机器上没有 browserforge")
+    bad = []
+    for _ in range(25):
+        baseline = FT._stealthy_baseline()
+        ua = baseline.get("user-agent", "")
+        m = re.search(r"(?:Chrome|Edg)/(\d+)", ua)
+        if not m:
+            continue          # firefox / safari 不发 Client Hints，缺得合法
+        if f';v="{m.group(1)}"' not in baseline.get("sec-ch-ua", ""):
+            bad.append((ua[:50], baseline.get("sec-ch-ua", "")))
+    assert not bad, f"{len(bad)} 副说不出自己的 brand 表：{bad[:3]}"

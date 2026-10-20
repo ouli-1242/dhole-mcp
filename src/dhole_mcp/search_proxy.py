@@ -61,8 +61,8 @@ def configured_proxy() -> tuple[str | None, str]:
     if "," in raw:
         listed = [p.strip() for p in raw.split(",") if p.strip()]
         logger.warning(
-            "%s lists %d proxies; 17.0 removed the pool and rotates nothing - "
-            "using the first one only", source, len(listed))
+            "%s lists %d proxies; there is no pool here and nothing rotates - the "
+            "first one is used", source, len(listed))
         raw = listed[0]
 
     scheme = urlparse(raw).scheme.lower()

@@ -237,9 +237,12 @@ def test_registry_covers_all_14_env_vars():
     验收刀9-3 加第 14 颗 `DHOLE_SEARCH_ROW_FILTER`（default on）。它为什么必须是
     一颗旋钮而不是一个决定：这一族丢掉的是**别人家的内容**，判据是形状与词形而不是
     名单，而形状这种东西会变异 —— 关掉它不需要重新发版，也不需要谁去维护一张表。
+
+    模型档位那次加了第 15 颗 `DHOLE_RERANK_MODEL`：它选的是本机加载哪一份权重，
+    而模型会话是进程级单例 —— 不重启就换档，同一进程会拿两个打分器给检索计分。
     """
-    assert len(env_registry.ALL) == 14, (
-        f"expected 14 env vars, found {len(env_registry.ALL)}: "
+    assert len(env_registry.ALL) == 15, (
+        f"expected 15 env vars, found {len(env_registry.ALL)}: "
         f"{sorted(e.name for e in env_registry.ALL)}"
     )
 
@@ -334,6 +337,7 @@ def test_read_at_import_matches_plan_a1():
         "DHOLE_DEFAULT_CONTENT_CHARS",
         "DHOLE_HTTP_TOKEN",
         "DHOLE_PERSIST_CREDENTIALS",
+        "DHOLE_RERANK_MODEL",
         "DHOLE_TOOLS",
     ])
 

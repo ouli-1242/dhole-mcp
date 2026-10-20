@@ -103,12 +103,16 @@ class TestSmartSearchRegionCache:
             None, "regional cache test", engines=["brave"],
         )
 
-        # v6: the key gained the `after` segment (G24) — a date window changes what
-        # is on the wire, so two windows must not share a row. An OMITTED window
-        # still contributes an empty slot, which is the point of this test: nothing
-        # extra is appended for parameters the caller did not pass.
+        # v7: the key gained the `before` segment (期4.6) — `before=` now decides row by
+        # row which rows survive, so two cutoffs must not share a row any more than two
+        # `after` windows may (that was v6's reason). An OMITTED date still contributes an
+        # empty slot, which is the point of this test: nothing extra is appended for
+        # parameters the caller did not pass. The `:model=` suffix is NOT a caller
+        # parameter: `auto`/`neural` rounds carry the scorer that minted their raw scores
+        # and tiers, so switching profiles cannot replay the other model's rows.
         assert list(cache) == [
-            ("regional cache test", "search:v6:6:::::0:brave:::auto:regional cache test"),
+            ("regional cache test",
+             "search:v7:6:::::0:brave::::auto:regional cache test:model=bge-zh"),
         ]
 
 
@@ -643,10 +647,24 @@ class TestIrrelevantFilter:
         out = search._filter_irrelevant_results(results, "python asyncio")
         assert len(out) == 2
 
-    def test_cjk_query_never_filtered(self):
+    def test_cjk_round_is_judged_by_the_same_two_signatures_as_latin(self):
+        """R02-046 改的就是这一格：旧期望「CJK 永不参与词面判定」正是那条缺陷本身。
+
+        过去它成立的唯一原因是分词器对中文交出空集（词面这一维对中文 no-op），于是引擎
+        （和模型）的判断独自撑着，噪声行也照样站在响应里。现在中文有词面这一维了，
+        保护不变的是**两根桩**：词面全不命中时，只有模型也没说「值得取」才清空整轮。
+        """
         results = [self._res("Some English page", "https://example.com/")]
-        # '量子计算' has no latin terms -> engines' judgment stands
-        assert search._filter_irrelevant_results(results, "量子计算 最新进展") == results
+        # 两根桩都在（词面零命中 + 没有任何一行被评到值得取）→ 与拉丁同形，清
+        assert search._filter_irrelevant_results(results, "量子计算 最新进展") == []
+        # 模型说这一轮里有值得取的行 → 词面一根桩不许单独清空整轮
+        scored = [search.SearchResult(title="Some English page", url="https://example.com/",
+                                      relevance_raw=0.97)]
+        assert search._filter_irrelevant_results(scored, "量子计算 最新进展") == scored
+        # 词面命中一行就一行都不丢（实测 9 发中文轮里 7 发是这一支）
+        hits = [self._res("量子计算最新进展综述", "https://example.com/a"),
+                self._res("完全无关的一页", "https://example.com/b")]
+        assert search._filter_irrelevant_results(hits, "量子计算 最新进展") == hits
 
     def test_empty_results_returns_empty(self):
         assert search._filter_irrelevant_results([], "anything") == []

@@ -1,6 +1,7 @@
-# Wrapped heading fixtures
-> Date: 2026-10-10
+> Title: Wrapped heading fixtures (this file's own info dictionary - recorded by the app that wrote the file, not text printed on its pages)
+> Created: 2026-10-10 · Modified: 2026-10-10 (the file's own stamps - when this PDF was written, not when the work was written)
 > PDF · 3 pages
+> dates readable in the returned text, most specific first: 2026 (page 1) - these are printed on the pages; no date here is a stated publication date for the work
 
 --- Page 1 ---
 

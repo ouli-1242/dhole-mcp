@@ -111,7 +111,59 @@ def _sniff_cfb(file_path: str) -> bool:
         return False
 
 
-def _cfb_refusal(ext: str) -> str:
+#: 未支持扩展名那一族的下一步，由点名支持集的人自己写（评审 R02-022）。同一串字进
+#: `error` 也进 `next_action`；兜底句从前替这一族转述过一次，转述就是第二个作者。
+_UNTEXTED_EXT_WAY_FORWARD = ("If the file is plain text under another extension, "
+                             "copy or rename it to .txt (or .md) and parse that.")
+
+#: 大小超限那一族的下一步（评审 R02-124 · r241 现场：这一族从前没有作者，于是落进
+#: `quality` 那句「the file was found and read」的兜底 —— 而 `os.path.getsize` 之后
+#: 一个字节都没读过，那句是假话）。帽顶 `MAX_PARSE_FILE_SIZE` 是一颗模块常量，没有
+#: 任何环境变量或参数能抬它，所以「这是门不是旋钮」这句在这里是真的。
+_OVERSIZE_WAY_FORWARD = (
+    "no byte of this file was read - the limit is on the file's total size, which "
+    "`error` names, so `pages=` and `offset=` cannot change the answer. Split it, or "
+    "copy the part you need into a smaller file and parse that; this is a guard, not "
+    "a knob: no argument raises it."
+)
+
+#: 交回给门的那个事实：这一支在真去读内容之前就把这一发拒了。它是**形状**，不是句子 ——
+#: 句子（「这一发什么也没发生」那半句的动词）由 `context.nothing_went_out()` 按门装配，
+#: 这里手抄一份就是第二位作者（评审 R02-089/F83 那条通则）。
+BODY_UNREAD = "body_unread"
+
+
+def _cfb_way_forward(target: str) -> str:
+    """CFB 那一族唯一的下一步，由写拒绝的人自己交（评审 R02-022）。
+
+    同一串字既进 `error`（读判决的人在那里看）也进 `next_action`（读下一步的人在那里看）——
+    一处作者、两处搬运，不是两个人各说一遍。前一是 `quality` 的兜底句替**所有** parse 失败
+    说「按 error 建议的那个改名去修」，而这条 error 明说"改名不改字节"：同一封响应里两句话
+    互相否认，而假的那句才是调用方照着行动的。
+    """
+    return (f"Convert it first - `soffice --headless --convert-to {target} <file>` "
+            f"(LibreOffice), or the authoring app's 'Save As .{target}' - then "
+            f"parse the result.")
+
+
+def _cfb_unknown_way_forward() -> str:
+    """未知 CFB 容器的那一句：没有转换目标可点名。
+
+    `_cfb_way_forward(target)` 教的是一条**文档**的路（LibreOffice 转格式、原作者应用
+    另存）。对一颗 .msi / .msg 那不是出路而是零信息 —— error 自己已经说了"这不是本文
+    读取器开的文档格式"，出路却把它当 Word 教它另存（评审 R02-043：R02-F12 把这句话从
+    error 尾巴搬进 next_action 之后，它升格成唯一下一步，错得更显眼）。这一支不兜任何
+    目标名：目标由 `_CFB_LEGACY` 那三对（加改名的两支）给，查不到就是没有。
+    """
+    return ("This container cannot be opened here, and there is no conversion "
+            "target to name: an OLE2/CFB file that is not a legacy Office "
+            "document is a package of streams (an installer, a mail message, a "
+            "stored object), not text. Say what you need out of it and take it "
+            "from the app that owns that format - parsing this file will not "
+            "produce text.")
+
+
+def _cfb_refusal(ext: str) -> tuple[str, str]:
     """The refusal for an OLE2/CFB file, named for what it actually is.
 
     Both shapes this replaces were worse. A `.doc` was answered with "rename it
@@ -120,20 +172,21 @@ def _cfb_refusal(ext: str) -> str:
     and came back as ``Parse error (.docx): PackageNotFoundError: Package not
     found at '...'``, an internal exception naming neither the real format nor
     any way forward. Both measured.
+
+    Returns ``(error, way_forward)``: the diagnosis and the one sentence telling
+    the caller what to do, so the way forward never needs a second author.
     """
     entry = _CFB_LEGACY.get(ext)
     if entry:
         head, target = entry
+        way = _cfb_way_forward(target)
     else:
-        target = "docx"
         head = ("This file starts with the OLE2/CFB signature: a pre-2007 "
                 "Office document, or another CFB container (msi, msg, ...) - "
                 "not a document format this reader opens")
+        way = _cfb_unknown_way_forward()
     return (f"{head}. There is no text layer a reader can walk here, and "
-            f"renaming it does not change the bytes. Convert it first - "
-            f"`soffice --headless --convert-to {target} <file>` (LibreOffice), "
-            f"or the authoring app's 'Save As .{target}' - then parse the "
-            f"result.")
+            f"renaming it does not change the bytes. {way}"), way
 
 
 #: Rows a sheet may render, header included. Reading stops here on purpose (a
@@ -171,20 +224,38 @@ def _html_declared_charset(body: bytes) -> str:
     return match.group(1).decode("ascii", errors="ignore") if match else ""
 
 
-def _decode_body(body: bytes, declared: str = "") -> tuple[str, dict]:
-    """Decode file bytes and package the envelope fields. See charset.decode_file_bytes."""
-    from dhole_mcp.charset import decode_file_bytes, encoding_was_guessed
+def _decode_body(body: bytes, declared: str = "", asked: "str | None" = None
+                 ) -> tuple[str, dict]:
+    """Decode file bytes and package the envelope fields. See charset.decode_file_bytes.
+
+    `asked` 是**调用方自己点名的那一颗**（`encoding=`），与 `declared` 分开：后者还包含
+    文件里 meta 自己说的字符集，而 HTML 那条路上两个来源会撞在一起。谁点的名要单独说得
+    出来，否则「你点的 shift_jis」与「这份 html 写的 utf-8」在回执里长成一个样子。
+    None（默认）= 这一条路上 declared 就是调用方的名字。
+    """
+    from dhole_mcp.charset import (contested_rival, decode_file_bytes,
+                                   encoding_basis)
 
     text, used, damage = decode_file_bytes(body, declared)
     extras: dict = {"encoding": used}
     if damage:
         extras["decode_damage"] = damage
-    if encoding_was_guessed(body, declared, used):
-        # 这一颗不是"检测结果可疑"的意思，是"这个名字是猜出来的"：GB18030 严格解得开
-        # Shift_JIS / EUC-KR 的字节（charset.py 上面记着这条实测边界），所以日/韩旧
-        # 编码在这里出来的是**看着像中文的错字**，damage 0、content_ok true。能诚实说
-        # 的只有 weaker 的那半句 —— 没有人声明过编码，而这一个是 dhole 选的。
-        extras["encoding_guessed"] = True
+    basis = encoding_basis(body, declared, used)
+    if basis == "contested":
+        # 那句话要点名**两个**名字，而竞争者的名字只有这一层量得出来。让 quality 自己去
+        # 猜"另一个是谁"就是给同一件事添第二个作者。
+        extras["encoding_rival"] = contested_rival(body, used)
+    if basis in ("guessed", "fallback", "contested"):
+        # 「这一份是按谁读的」——只有需要说的时候才写。guessed 那一支是 gb18030 严格解得开
+        # Shift_JIS / EUC-KR 的字节（charset.py 记着这条实测边界），出来的是**看着像中文的
+        # 错字**、damage 0、content_ok true；fallback 那一支是调用点了名而那颗名字解不开、
+        # 由检测顶上（R02-021）；contested 那一支是点名的那颗**解得开**、正文也照它交，
+        # 但这批字节还有第二种干净的读法而文本不同（R02-037：GBK 件点名 big5，三把现成的
+        # 尺子全读 0/False）。两支都由 quality._agent_hints 说那句话，都不动判词。
+        extras["encoding_basis"] = basis
+    name_asked = declared if asked is None else asked
+    if (name_asked or "").strip():
+        extras["encoding_asked"] = name_asked.strip()
     return text, extras
 
 
@@ -193,6 +264,45 @@ def _read_text_file(file_path: str, declared: str = "") -> tuple[str, dict]:
     with open(file_path, "rb") as f:
         body = f.read()
     return _decode_body(body, declared)
+
+
+_NO_MODULE_RE = re.compile(r"No module named '([^']+)'")
+
+
+def _parse_refusal(err: str) -> str:
+    """两支异常交出的句子都过同一位遮蔽作者（评审 R02-044）。
+
+    解析库的消息里带着它收到的那个绝对路径（`PackageNotFoundError: Package not found at
+    'D:\\tools\\dhole-mcp\\…'`），而那条路径属于**装了 dhole 的这台机器** —— 宿主型客户端的
+    cwd 就是 host 的安装目录，用户从没提过它。同一封响应的 `url` 那一格早就写成
+    `file:///<server cwd>/…`，`File not found:` 那一句 17.0 也过了遮蔽（审计 D11）；
+    漏的是异常那两支。判决一个字不少：类名、扩展名、库那句的其余部分照旧在。
+    """
+    from dhole_mcp import paths as _paths
+    return _paths.mask_machine_paths(err)
+
+
+_CANNOT_IMPORT_RE = re.compile(r"cannot import name '[^']+' from '([^']+)'")
+
+
+def _failed_import_name(exc: BaseException) -> str:
+    """这一发 ImportError blame 的是哪一颗模块 —— 由异常自己回答，不是猜。
+
+    `e.name` 是导入机制留下的名字（`from .charset import X` → 'dhole_mcp.charset'，
+    `import absent_pkg` → 'absent_pkg'）；手工抛出的那颗（测试里的 import hook）只有
+    消息，所以名字从消息里读 —— Python 的两句消息都带着模块名（"No module named 'x'"
+    与 "cannot import name 'Y' from 'x'"）。三处都给不出时返回 "" —— 那一刻这句响应
+    就没有资格点任何一颗包的名（评审 R02-040）。
+    """
+    named = getattr(exc, "name", "") or ""
+    if named:
+        return named
+    text = str(exc)
+    for pattern in (_NO_MODULE_RE, _CANNOT_IMPORT_RE):
+        match = pattern.search(text)
+        if match:
+            return match.group(1)
+    return ""
 
 
 def parse_file(file_path: str, encoding: str = "", pages: str | None = None,
@@ -224,9 +334,62 @@ def parse_file_detailed(file_path: str, encoding: str = "",
 
     ``encoding`` overrides auto-detection; leave it empty unless the caller
     knows better than the bytes do. ``pages`` / ``password`` are .pdf only and
-    carry web_read's meaning; they are ignored for every other format, exactly
-    as web_read ignores them on a non-PDF response.
+    carry web_read's meaning; every other format says so in one declared line
+    instead of answering as if nothing had been asked.
     """
+    content, error, extras = _parse_one_file(file_path, encoding, pages, password)
+    if error or not content:
+        return content, error, extras
+    ext = os.path.splitext(os.path.expanduser(file_path))[1].lower()
+    if ext == ".pdf":
+        # 这一条腿上两个参数都真的作用到了（`_parse_pdf` 把它们交给抽取器），
+        # 于是没有东西要申报 —— 报"没作用"反而是假话。
+        return content, error, extras
+    lines = _inert_parameter_lines(ext, pages, password)
+    if not lines:
+        return content, error, extras
+    return _insert_declaration_after_first_line(content, lines), error, extras
+
+
+def _inert_parameter_lines(ext: str, pages: str | None,
+                           password: str | None) -> list[str]:
+    """一颗被收下、却没有作用到这份文件身上的参数，自己说一声。
+
+    `pages` / `password` 只在 .pdf 那条腿上被读（`_parse_pdf`）。实测 2026-10-16
+    （9202 · 本地文件）：`doc_parse(week1-导读.docx, pages="1-2")` 交回 384 字符，与不带
+    `pages` 逐字节相同，整封回执里连 "pages" 这个字都没出现 ——
+    调用方读到的是"这文档就这么长"，而她自己要求的是两页。沉默在这里不是简洁，是把
+    一次没发生的过滤伪装成一次完整的交付。
+
+    两条各说各的理由（一个是"没有页可切"，一个是"不需要密码"），`password` 的**值
+    永不回显** —— 参数名就是它的全部身份。正文一寸不动：这一行是加在交付上的申报，
+    不是内容。
+    """
+    lines: list[str] = []
+    if pages:
+        lines.append(
+            f'> pages="{pages}" did nothing here: {ext or "this file"} has no page '
+            "concept (pages= slices .pdf only). What is below is the whole file, "
+            "not a page range.")
+    if password:
+        lines.append(
+            f"> password= did nothing here: {ext or 'this file'} is not opened with a "
+            "password (password= is read for an encrypted .pdf only). What is below is "
+            "the whole file.")
+    return lines
+
+
+def _insert_declaration_after_first_line(content: str, lines: list[str]) -> str:
+    """格式自己的首行（`[Word document; …]`）继续领第一行，申报紧跟其后。"""
+    head, sep, rest = content.partition("\n")
+    if head.startswith("["):
+        return head + "\n" + "\n".join(lines) + sep + rest
+    return "\n".join(lines) + "\n\n" + content
+
+
+def _parse_one_file(file_path: str, encoding: str = "",
+                    pages: str | None = None,
+                    password: str | None = None) -> tuple[str, str, dict]:
     if not file_path:
         return "", "file_path is required", {}
 
@@ -245,10 +408,13 @@ def parse_file_detailed(file_path: str, encoding: str = "",
     # Guard against OOM: reject files larger than 50 MB
     file_size = os.path.getsize(file_path)
     if file_size > MAX_PARSE_FILE_SIZE:
+        # 这一支此后一个字节都不读：它量的是大小。所以它既要交出下一步（那位作者就是
+        # 写这条 error 的人），也要交出「没读过正文」这个**事实**给门去装配申报
+        # （评审 R02-124 · r241 数到的两颗假脸之一）。
         return "", (
             f"File too large ({file_size / 1024 / 1024:.1f} MB). "
             f"Maximum supported size is {MAX_PARSE_FILE_SIZE // 1024 // 1024} MB."
-        ), {}
+        ), {"way_forward": _OVERSIZE_WAY_FORWARD, BODY_UNREAD: True}
 
     ext = os.path.splitext(file_path)[1].lower()
 
@@ -258,17 +424,20 @@ def parse_file_detailed(file_path: str, encoding: str = "",
     # useless answer (a rename hint that cannot work, and python-docx's
     # PackageNotFoundError).
     if _sniff_cfb(file_path):
-        return "", _cfb_refusal(ext), {}
+        _err, _way = _cfb_refusal(ext)
+        return "", _err, ({"way_forward": _way} if _way else {})
 
     if ext not in SUPPORTED_EXTENSIONS:
         # 报错点名支持集，再给一条下一步。只写「不支持」的话，agent 会以为这条路
         # 整个走不通而放弃读文件——而它手里那份 .log/.rst/.ini 多半就是文本。
+        #
+        # 这一族和上面那颗超限的是同一件事的两面（评审 R02-124）：扩展名不认识 ⇒ 连
+        # 「要不要按这个格式解」都没问到，正文一个字节没读过。所以它也交出 BODY_UNREAD。
         return "", (
             f"Unsupported file type '{ext}'. Supported: "
-            f"{', '.join(sorted(SUPPORTED_EXTENSIONS))}. If the file is plain "
-            "text under another extension, copy or rename it to .txt (or .md) "
-            "and parse that."
-        ), {}
+            f"{', '.join(sorted(SUPPORTED_EXTENSIONS))}. "
+            f"{_UNTEXTED_EXT_WAY_FORWARD}"
+        ), {"way_forward": _UNTEXTED_EXT_WAY_FORWARD, BODY_UNREAD: True}
 
     try:
         if ext in (".html", ".htm", ".xhtml"):
@@ -293,13 +462,55 @@ def parse_file_detailed(file_path: str, encoding: str = "",
         elif ext == ".odt":
             return _parse_odt(file_path), "", {}
     except ImportError as e:
+        # 一颗 None 不许有三种读法，一句 ImportError 也一样（评审 R02-040）。这个
+        # `except` 罩着整个分派块，块里既有第三方 import（docx / openpyxl / pdf），也有
+        # dhole 自己的 `_read_text_file` / `_parse_csv` 与从 `.charset` 的取符号。从前
+        # 全都落进同一句「Missing dependency for {ext} parsing」，紧跟其后的
+        # `docx_install_advice()` 又自己否认（"python-docx is installed - the parse
+        # failure was not a missing dependency"）—— 一封响应两句话互相否认，而
+        # `content_ok=false` 把调用方支去装一颗根本不缺的包；那份建议还固定点名 docx，
+        # 于是一份 .xlsx 的失败听人说 python-docx。
+        # 谁缺东西这件事，Python 自己已经分了名字，不需要再探一次环境（再探一次还会被
+        # import hook 之类的中间状态骗过去 —— 实测）：类型名就是这一发的根据。四种形状
+        # 各量过一次：
+        #   from .charset import X   → ImportError, name='dhole_mcp.charset' → dhole 自己的失败
+        #   import some_absent_pkg   → ModuleNotFoundError, name='some_absent_pkg' → 真缺，点名+给装法
+        #   cannot import name Y from docx → ImportError, name='docx' → 包在盘上，是它里面的符号对不上
+        #   ImportError("…") 无 name 也无包名 → 这一发不知道谁缺东西，于是谁的名都不点
+        # 判决位一支都不动：失败仍记失败（error 非空、content 空），本刀改的是那句话。
+        failed = _failed_import_name(e)
+        failed_top = failed.split(".")[0]
+        if failed_top == "dhole_mcp":
+            return "", _parse_refusal(
+                f"Parse error ({ext}): dhole's own import failed - {e}. Nothing is "
+                "missing on your side, so there is nothing to add to the "
+                "environment: this is a bug in this build (or a process holding a "
+                "half-loaded module set). Restarting the server is the only action "
+                "that can change the outcome."
+            ), {}
         from dhole_mcp import install as _install
-        return "", (
-            f"Missing dependency for {ext} parsing: {e}. "
-            f"{_install.docx_install_advice()}"
+        if failed and isinstance(e, ModuleNotFoundError):
+            return "", _parse_refusal(
+                f"Missing dependency for {ext} parsing: `{failed}` cannot be "
+                f"imported here - {e}. Install it with: "
+                f"{_install.full_install_command()}"
+            ), {}
+        if failed:
+            return "", _parse_refusal(
+                f"Parse error ({ext}): the `{failed_top}` package is on disk, but "
+                f"what dhole imports out of it is not there - {e}. Nothing is "
+                "missing from the environment, so this is a version mismatch inside "
+                f"that package; `{failed_top}` is what to look at, not dhole's "
+                "install."
+            ), {}
+        return "", _parse_refusal(
+            f"Parse error ({ext}): {type(e).__name__}: {str(e)[:200]}. The failing "
+            "import names no module, so this response cannot say which package, "
+            "if any, is missing."
         ), {}
     except Exception as e:
-        return "", f"Parse error ({ext}): {type(e).__name__}: {str(e)[:200]}", {}
+        return "", _parse_refusal(
+            f"Parse error ({ext}): {type(e).__name__}: {str(e)[:200]}"), {}
 
     return "", f"Unsupported format: {ext}", {}
 
@@ -438,7 +649,8 @@ def _parse_html(file_path: str, encoding: str = "") -> tuple[str, dict]:
         body = f.read()
     # The document's own <meta charset> is a hint; an explicit caller encoding
     # outranks it. decode_file_bytes falls back to detection if either fails.
-    html, extras = _decode_body(body, encoding or _html_declared_charset(body))
+    html, extras = _decode_body(body, encoding or _html_declared_charset(body),
+                               asked=encoding)
     from dhole_mcp.trafilatura_extractor import extract_content_from_html
     result = extract_content_from_html(html, file_path, "markdown")
     if result:
@@ -616,18 +828,32 @@ def _parse_pptx(file_path: str) -> str:
         if not names:
             return "(no slides found in this .pptx)"
         declared = _pptx_declared_order(zf, names)
+        ordered_by_list = bool(declared)
         if declared:
             # A partial id list must not cost a slide: whatever it named comes
             # first, in its order; anything it did not name follows by filename.
+            named = len(declared)
             names = declared + _pptx_filename_order(
                 [n for n in names if n not in declared])
         else:
+            named = 0
             names = _pptx_filename_order(names)
+        # 小节标题说的是**这是第几页**，不是包里那个文件叫什么（评审 R02-025）：
+        # `## slide2.xml` 是给人粘进讲义的正文里住着一个给工具看的名字，而且那个数字
+        # 连位置都不是（播放顺序住在 presentation.xml 的清单里）。标题既然声称位置，
+        # 这个位置是从哪儿来的就得写在第一行上，而不是让读者猜这一发有没有走退路。
+        order_note = ""
+        if not ordered_by_list:
+            order_note = (" - order taken from the file names, this package has no "
+                          "readable slide list")
+        elif named < len(names):
+            order_note = (f" - the deck's own list named {named} of {len(names)}, "
+                          "the rest ordered by file name")
         lines = [f"[{len(names)} slide(s); text only - layout and diagram text "
-                 "are not included]"]
-        for n in names:
+                 f"are not included{order_note}]"]
+        for i, n in enumerate(names, 1):
             xml = zf.read(n).decode("utf-8", "replace")
-            lines.append(f"\n## {n.rsplit('/', 1)[-1]}")
+            lines.append(f"\n## Slide {i} of {len(names)}")
             body = _pptx_paragraphs(xml)
             lines.extend(body or ["(no text on this slide)"])
             notes_part = _pptx_notes_part(zf, n)
@@ -752,6 +978,227 @@ def _docx_dropped_parts(doc) -> list[str]:
     return [f"{n} {label}(s)" for label, n in counts.items() if n]
 
 
+_MD_HEADING_RUNGS = 6
+_DOCX_DECLARED_BODY = -1
+
+
+def _docx_outline_value(el) -> int | None:
+    """The level a ``w:outlineLvl`` element claims ("" not at all)."""
+    from docx.oxml.ns import qn
+
+    if el is None:
+        return None
+    try:
+        val = int(el.get(qn("w:val")))
+    except (TypeError, ValueError):
+        return None
+    return val if 0 <= val < 9 else None
+
+
+def _docx_declared_levels(doc) -> dict[str, int | None]:
+    """``styleId -> the outline level this file declares``, following ``w:basedOn``.
+
+    ``w:outlineLvl`` is OOXML's own answer to "which rung is this line" - the one
+    Word's navigation pane reads. It survives what the display name does not: a
+    Chinese Word writes `标题 1` in ``w:name`` while the level stays declared, a
+    custom style built on Heading 2 inherits its level through ``w:basedOn``, and
+    some exporters declare levels 5-9 that a four-name list can never reach.
+    """
+    from docx.oxml.ns import qn
+
+    own: dict[str, int | None] = {}
+    parent: dict[str, str | None] = {}
+    for st in doc.styles.element.findall(qn("w:style")):
+        if st.get(qn("w:type")) != "paragraph":
+            continue
+        sid = st.get(qn("w:styleId"))
+        if sid is None:
+            continue
+        ppr = st.find(qn("w:pPr"))
+        own[sid] = _docx_outline_value(
+            ppr.find(qn("w:outlineLvl")) if ppr is not None else None)
+        based = st.find(qn("w:basedOn"))
+        parent[sid] = based.get(qn("w:val")) if based is not None else None
+
+    resolved: dict[str, int | None] = {}
+    for sid in own:
+        level, cur, seen = None, sid, set()
+        while cur in own and cur not in seen:
+            seen.add(cur)
+            if own[cur] is not None:
+                level = own[cur]
+                break
+            cur = parent[cur]
+        resolved[sid] = level
+    return resolved
+
+
+def _docx_paragraph_level(paragraph, declared: dict[str, int | None]) -> int | None:
+    """The level of this paragraph, from the file - or ``None`` if it declares none.
+
+    A level written on the paragraph itself outranks the style's, and
+    ``w:val="9"`` on the paragraph is Word's own spelling of "this line is body
+    text": that comes back as ``_DOCX_DECLARED_BODY`` so the caller does not
+    re-heading a line the file just disclaimed.
+    """
+    from docx.oxml.ns import qn
+
+    ppr = paragraph._p.find(qn("w:pPr"))
+    el = ppr.find(qn("w:outlineLvl")) if ppr is not None else None
+    if el is not None:
+        raw = el.get(qn("w:val"))
+        if raw is not None and raw.isdigit() and int(raw) >= 9:
+            return _DOCX_DECLARED_BODY
+        val = _docx_outline_value(el)
+        if val is not None:
+            return val
+    return declared.get(paragraph.style.style_id)
+
+
+def _docx_outline_note(titles: int, level_ones: int, clamped: int) -> str:
+    """What the outline could NOT be carried as, in one clause each ("" if nothing).
+
+    Both cases are collisions between the file and markdown, not mistakes: a Word
+    document title is not an outline entry but lands on the same `#` as a level-1
+    heading, and Word declares nine levels while markdown has six rungs. Silent
+    would read as "this document has no structure to tell apart".
+    """
+    notes = []
+    if titles and level_ones:
+        notes.append(f"its document title rides the same # rung as the file's "
+                     f"{level_ones} level-1 heading(s)")
+    if clamped:
+        notes.append(f"{clamped} deep heading(s) flattened to ######, "
+                     "markdown has no rung below that")
+    return ("; " + "; ".join(notes)) if notes else ""
+
+
+def _docx_numbering(doc) -> dict[str, dict[int, str]]:
+    """``numId -> the marker each level draws``, read from word/numbering.xml.
+
+    `w:numPr` (on the paragraph or its style) says "this line is a list item";
+    only the numbering part says WHICH marker that level draws - `bullet`,
+    `decimal`, `lowerRoman`, or OOXML's own `none` ("this level draws nothing").
+    A numId the part cannot resolve to keeps an empty level map, which the caller
+    reads as "a list whose shape is not readable here" rather than a guess.
+    """
+    from docx.oxml import parse_xml
+    from docx.oxml.ns import qn
+
+    blob = None
+    for part in doc.part.package.parts:
+        if str(part.partname).endswith("/numbering.xml"):
+            blob = part.blob
+            break
+    if blob is None:
+        return {}
+    try:
+        root = parse_xml(blob)
+    except Exception:  # a numbering part that will not parse says nothing about shape
+        return {}
+
+    abstracts: dict[str, dict[int, str]] = {}
+    for an in root.findall(qn("w:abstractNum")):
+        per: dict[int, str] = {}
+        for lvl in an.findall(qn("w:lvl")):
+            try:
+                i = int(lvl.get(qn("w:ilvl")) or 0)
+            except (TypeError, ValueError):
+                continue
+            fmt = lvl.find(qn("w:numFmt"))
+            if fmt is not None:
+                per[i] = (fmt.get(qn("w:val")) or "").strip().lower()
+        abstracts[an.get(qn("w:abstractNumId"))] = per
+
+    out: dict[str, dict[int, str]] = {}
+    for num in root.findall(qn("w:num")):
+        num_id = num.get(qn("w:numId"))
+        ref = num.find(qn("w:abstractNumId"))
+        if num_id is None or ref is None:
+            continue
+        out[num_id] = abstracts.get(ref.get(qn("w:val")), {})
+    return out
+
+
+def _docx_style_numbering(doc) -> dict[str, tuple[str, int]]:
+    """``styleId -> (numId, ilvl)``, following ``w:basedOn`` when a style inherits it.
+
+    Word documents put the numbering on the style, not on the paragraph, so
+    "which list does this line belong to" has to be looked up the same way.
+    """
+    from docx.oxml.ns import qn
+
+    own: dict[str, tuple[str, int] | None] = {}
+    parent: dict[str, str | None] = {}
+    for st in doc.styles.element.findall(qn("w:style")):
+        if st.get(qn("w:type")) != "paragraph":
+            continue
+        sid = st.get(qn("w:styleId"))
+        if sid is None:
+            continue
+        ppr = st.find(qn("w:pPr"))
+        numpr = ppr.find(qn("w:numPr")) if ppr is not None else None
+        num_id = ilvl = None
+        if numpr is not None:
+            nid = numpr.find(qn("w:numId"))
+            lvl = numpr.find(qn("w:ilvl"))
+            num_id = nid.get(qn("w:val")) if nid is not None else None
+            ilvl = lvl.get(qn("w:val")) if lvl is not None else None
+        own[sid] = (num_id, int(ilvl or 0)) if num_id else None
+        based = st.find(qn("w:basedOn"))
+        parent[sid] = based.get(qn("w:val")) if based is not None else None
+
+    resolved: dict[str, tuple[str, int]] = {}
+    for sid, decl in own.items():
+        cur, seen = sid, set()
+        while cur in own and cur not in seen:
+            seen.add(cur)
+            if own[cur] is not None:
+                resolved[sid] = own[cur]
+                break
+            cur = parent[cur]
+    return resolved
+
+
+def _docx_paragraph_list(paragraph, style_lists: dict[str, tuple[str, int]],
+                         numbering: dict[str, dict[int, str]]) -> tuple[str, int] | None:
+    """``(marker, depth)`` this paragraph's file declares, or ``None`` if it declares none.
+
+    The paragraph's own `w:numPr` outranks its style's; `w:ilvl` is the indent
+    depth (OOXML defaults it to 0); `w:numId="0"` is how Word REMOVES a line from a
+    list, and `w:numFmt="none"` is how it says "this level draws no marker" - both
+    come back as no list. Any other resolved format is an ordered item; a declared
+    list whose numbering part cannot be read keeps the bullet, because the file
+    said "list item" and only the shape is missing.
+    """
+    from docx.oxml.ns import qn
+
+    ppr = paragraph._p.find(qn("w:pPr"))
+    numpr = ppr.find(qn("w:numPr")) if ppr is not None else None
+    if numpr is not None:
+        nid = numpr.find(qn("w:numId"))
+        lvl = numpr.find(qn("w:ilvl"))
+        num_id = nid.get(qn("w:val")) if nid is not None else None
+        ilvl = lvl.get(qn("w:val")) if lvl is not None else None
+    else:
+        decl = style_lists.get(paragraph.style.style_id)
+        if decl is None:
+            return None
+        num_id, ilvl = decl
+    if not num_id or num_id == "0":
+        return None
+    try:
+        depth = max(int(ilvl or 0), 0)
+    except (TypeError, ValueError):
+        depth = 0
+    fmt = numbering.get(num_id, {}).get(depth, "")
+    if fmt == "none":
+        return None
+    if fmt in ("", "bullet"):
+        return "- ", depth
+    return "1. ", depth
+
+
 def _parse_docx(file_path: str) -> str:
     """Parse .docx to Markdown: body paragraphs and tables, in document order.
 
@@ -761,9 +1208,15 @@ def _parse_docx(file_path: str) -> str:
     from docx import Document
 
     doc = Document(file_path)
+    declared = _docx_declared_levels(doc)
+    numbering = _docx_numbering(doc)
+    style_lists = _docx_style_numbering(doc)
     lines: list[str] = []
     n_paras = 0
     n_tables = 0
+    n_titles = 0
+    n_level_ones = 0
+    n_clamped = 0
 
     for kind, block in _docx_blocks(doc):
         if kind == "tbl":
@@ -781,9 +1234,32 @@ def _parse_docx(file_path: str) -> str:
             lines.append("")
             continue
         n_paras += 1
-        # Map heading styles to Markdown headings
         style = (block.style.name or "").lower()
-        if "heading 1" in style or style == "title":
+        level = _docx_paragraph_level(block, declared)
+        if level is not None and level >= 0:
+            if level < _MD_HEADING_RUNGS:
+                lines.append(f"{'#' * (level + 1)} {text}")
+                if level == 0:
+                    n_level_ones += 1
+            else:
+                lines.append(f"{'#' * _MD_HEADING_RUNGS} {text}")
+                n_clamped += 1
+            continue
+        listed = _docx_paragraph_list(block, style_lists, numbering)
+        if listed is not None:
+            marker, depth = listed
+            lines.append(f"{'    ' * depth}{marker}{text}")
+            continue
+        # Nothing in the file declares this line's shape: the display name is all
+        # there is to go on, and it still earns the heading or bullet it used to.
+        # Losing a heading or a list item to a shape fix is the worse misread.
+        if level == _DOCX_DECLARED_BODY:
+            lines.append(text)
+        elif "heading 1" in style or style == "title":
+            if style == "title":
+                n_titles += 1
+            else:
+                n_level_ones += 1
             lines.append(f"# {text}")
         elif "heading 2" in style:
             lines.append(f"## {text}")
@@ -800,8 +1276,8 @@ def _parse_docx(file_path: str) -> str:
     dropped = _docx_dropped_parts(doc)
     tail = (", dropped: " + ", ".join(dropped) if dropped
             else "; headers/footers, footnotes, comments and images not included")
-    head = (f"[Word document; {n_paras} paragraph(s), {n_tables} table(s) "
-            f"read{tail}]")
+    head = (f"[Word document; {n_paras} paragraph(s), {n_tables} table(s) read"
+            f"{_docx_outline_note(n_titles, n_level_ones, n_clamped)}{tail}]")
     return head + "\n\n" + (body or "(no body text)")
 
 
@@ -832,6 +1308,51 @@ def _xlsx_uncached_formulas(file_path: str) -> dict[tuple[str, int, int], str]:
     finally:
         wb.close()
     return out
+
+
+def _xlsx_grid_note(header_cells: list[str], data_rows: list[list[str]],
+                    sheet_rows: list[int]) -> str:
+    """The ONE wording for "this grid is the sheet's used range, not one table's columns" ("" if not).
+
+    openpyxl pads every row to the widest row on the sheet, so a stray pair like
+    F2/G2 arrives as two extra columns and lands in the FIRST data row — which
+    reads as though that record had those two fields (R02-024: a 4-column table
+    came back 7 wide, three cells titled nothing). The fix is deliberately NOT
+    trimming: measured first, an all-empty column means one of two opposite things
+    — the gap in front of an off-table summary (persona), or the ONLY separator
+    between two side-by-side tables (A:C and E:F). Deleting it would glue two
+    records together, a worse misread than the silence. So no cell moves and none
+    is dropped; the receipt just says which columns carry no title and where their
+    values actually sit, in sheet row numbers (the same coordinates as F2/G2).
+    """
+    unheaded = [j for j, h in enumerate(header_cells) if not h.strip()]
+    if not unheaded:
+        return ""
+    try:
+        from openpyxl.utils import get_column_letter
+    except Exception:  # noqa: BLE001 - 到这一步 openpyxl 必然在；不在就没什么可说的
+        return ""
+    bits = []
+    for j in unheaded:
+        hit = [r for r, row in zip(sheet_rows, data_rows) if row[j].strip()]
+        letter = get_column_letter(j + 1)
+        if not hit:
+            bits.append(f"{letter} carries no value in any row")
+        elif len(hit) == len(data_rows):
+            bits.append(f"{letter} holds data in every row - the title is missing, "
+                        "the column is not")
+        elif len(hit) == 1:
+            bits.append(f"{letter} holds a value only in row {hit[0]}")
+        else:
+            shown = ", ".join(str(r) for r in hit[:5])
+            more = f" (+{len(hit) - 5} more rows)" if len(hit) > 5 else ""
+            bits.append(f"{letter} holds values only in rows {shown}{more}")
+    width = len(header_cells)
+    titled = width - len(unheaded)
+    return (f"the grid is this sheet's used range, not one table's columns: "
+            f"{width} column(s) wide - {titled} carry a title, "
+            f"{len(unheaded)} carry no header cell: " + "; ".join(bits)
+            + " - no cell was moved or dropped")
 
 
 def _parse_xlsx(file_path: str) -> str:
@@ -886,15 +1407,20 @@ def _parse_xlsx(file_path: str) -> str:
 
             header_idx, header = kept[0]
             col_count = len(header)
-            header_str = "| " + " | ".join(
-                cell_text(header_idx, j, header[j] if j < len(header) else None)
-                for j in range(col_count)) + " |"
+            header_cells = [cell_text(header_idx, j, header[j] if j < len(header) else None)
+                            for j in range(col_count)]
+            header_str = "| " + " | ".join(header_cells) + " |"
             sep_str = "| " + " | ".join("---" for _ in range(col_count)) + " |"
-            data_strs = []
+            data_rows: list[list[str]] = []
+            data_sheet_rows: list[int] = []
             for row_idx, row in kept[1:]:
                 cells = list(row) + [None] * (col_count - len(row))  # pad short rows
-                data_strs.append("| " + " | ".join(
-                    cell_text(row_idx, j, cells[j]) for j in range(col_count)) + " |")
+                data_rows.append([cell_text(row_idx, j, cells[j])
+                                  for j in range(col_count)])
+                # 纸上的行号（1 基）：`kept` 会跳过空行，所以这一颗必须是原来的 row_idx，
+                # 不是这一片的第几行 —— 注记里说的"F2"要和用户在 Excel 里点到的那一格同名。
+                data_sheet_rows.append(row_idx + 1)
+            data_strs = ["| " + " | ".join(r) + " |" for r in data_rows]
 
             section = (f"## {sheet_name}\n\n"
                        + "\n".join([header_str, sep_str] + data_strs))
@@ -903,6 +1429,9 @@ def _parse_xlsx(file_path: str) -> str:
             if uncached:
                 notes.append(f"{len(uncached)} formula cell(s) had no cached value "
                              "and are shown as their formula")
+            grid_note = _xlsx_grid_note(header_cells, data_rows, data_sheet_rows)
+            if grid_note:
+                notes.append(grid_note)
             rendered_rows = 1 + len(data_strs)
             total = getattr(ws, "max_row", None)
             if isinstance(total, int) and total > rendered_rows:
@@ -1022,6 +1551,8 @@ def _parse_pdf(file_path: str, pages: str | None = None,
     extras = {
         "table_of_contents": result.table_of_contents or [],
         "metadata": result.metadata or {},
+        "pages_total": result.pages_total,
+        "pages_returned": len(result.pages_extracted),
         "quality_score": result.quality_score,
         # The extractor's own verdict, not a guess: _agent_hints defers to it
         # once quality_score is set, so a healthy PDF that reported

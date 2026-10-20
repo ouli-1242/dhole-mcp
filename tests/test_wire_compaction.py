@@ -52,7 +52,6 @@ from dhole_mcp.crawl import CrawlPage, CrawlResponseModel
 from dhole_mcp.search import SearchResponseModel, SearchResult
 from dhole_mcp.server import (
     BulkResponseModel,
-    CredDefaultsModel,
     ResponseModel,
     SessionCensusRow,
     SysStateModel,
@@ -382,18 +381,25 @@ class TestThePolicyTableItself:
 
         The table is the whole contract, so an entry that matches nothing has to
         fail here rather than quietly cost bytes forever.
+
+        模型名单是**扫**出来的，不是手抄的（B-75 那一族：手抄的登记表每加一副回执就要有人
+        记得补一行，忘的那一次红的是"名单没抄全"而不是"策略点错了字段"—— R02-133 新加的
+        `FeedRefusalModel` 正好撞在这行上）。改名仍会红：策略表里那个名字在派生名单里找不到。
         """
-        models = {"ResponseModel": ResponseModel,
-                  "CrawlPage": CrawlPage,
-                  "CrawlResponseModel": CrawlResponseModel,
-                  "BulkResponseModel": BulkResponseModel,
-                  "SearchResult": SearchResult,
-                  "SearchResponseModel": SearchResponseModel,
-                  "SysStateModel": SysStateModel,
-                  "CredDefaultsModel": CredDefaultsModel}
-        from dhole_mcp.feed import FeedItem, FeedResult
-        models.update({"FeedItem": FeedItem, "FeedResult": FeedResult,
-                       "SessionCensusRow": SessionCensusRow})
+        import inspect
+
+        from pydantic import BaseModel
+
+        import dhole_mcp.crawl as _crawl
+        import dhole_mcp.feed as _feed
+        import dhole_mcp.models as _models
+        import dhole_mcp.search as _search
+
+        models = {}
+        for mod in (_models, _feed, _crawl, _search):
+            for name, obj in inspect.getmembers(mod, inspect.isclass):
+                if obj.__module__ == mod.__name__ and issubclass(obj, BaseModel):
+                    models[name] = obj
         assert set(_WIRE_OMIT) <= set(models), \
             "策略表点名了不存在的模型（模型改名会让整组压缩静默失效）"
         for name, fields in _WIRE_OMIT.items():

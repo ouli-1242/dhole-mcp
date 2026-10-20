@@ -30,7 +30,7 @@ PARAM_CAP = 28   # web_read（今天实测最大值，由下方守卫对照）
 # 而旧拼写 `extra_headers` 是 §3-17 具名拒绝的身份通道 —— 补的是能力面，不是装饰。
 # 同一次没有加第二颗伪装旋钮：`stealthy_headers` 由 `anti_detect` 档位表读，
 # 公开面上它根本不存在（`rungs.py`）。
-DESC_CAP = 296   # sys_guide.topic（同上）
+DESC_CAP = 292   # web_act.headed（同上；sys_guide.topic 拆分后降到 285）
 
 
 def test_each_tool_stays_inside_the_param_budget():

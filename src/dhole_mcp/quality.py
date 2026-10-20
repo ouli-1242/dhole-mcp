@@ -21,8 +21,11 @@ from urllib.parse import urlparse
 from dhole_mcp import install as _install
 from dhole_mcp import injection
 from dhole_mcp.audit import _audit_event
+from dhole_mcp.focus import snap_to_boundary
 from dhole_mcp.context import (
+    BACKSTOP_GRACE_S,
     _ARG_NOTES,
+    _note_text,
     _AUTH_SENT,
     _BOILERPLATE_LINES_COLLAPSED,
     _CSS_SELECTOR,
@@ -30,6 +33,7 @@ from dhole_mcp.context import (
     _IDENTITY_APPLIED,
     _METHOD,
     _SESSION_ID,
+    nothing_went_out,
 )
 from dhole_mcp.envelope import (
     is_extraction_collapsed,
@@ -39,7 +43,7 @@ from dhole_mcp.envelope import (
     page_type_from_error,
 )
 from dhole_mcp.extractor import (_is_data_document_content_type,
-                                 _is_xml_content_type)
+                                 _is_xml_content_type, served_as_page)
 from dhole_mcp.models import ResponseModel
 from dhole_mcp.robots import (
     ENV_IGNORE_ROBOTS,
@@ -47,7 +51,7 @@ from dhole_mcp.robots import (
     Verdict as RobotsVerdict,
     robots_url_for,
 )
-from dhole_mcp.security import target_is_private
+from dhole_mcp.security import (TIMEOUT_MAX_MS, URL_SHAPE_RECOVERY, target_is_private)
 
 
 # ─── Content quality detection (module-level, used by the class) ─────
@@ -571,20 +575,62 @@ def _is_js_shell(result: ResponseModel) -> bool:
     # page is a genuinely low-text page (image gallery / canvas), not a shell.
     if result.fetcher_used == "http" and result.status == 200 \
             and result.total_size_bytes > _JS_SHELL_MIN_BODY_BYTES:
-        text_len = sum(len(c) for c in result.content)
+        text_len = extracted_chars(result)
         if text_len < _JS_SHELL_MIN_TEXT_CHARS:
             # 同一个"字少"有两种成因，而它们要求的下一步正好相反：
             #   * 站点给了空壳 —— DOM 自己也没几个字（内容要 JS 才长出来），起浏览器对。
             #   * 抽取器没读懂这页 —— DOM 里明明写着话，抽出来的却少。起浏览器只是把
             #     同一份静态标记再交给同一个抽取器，多付 3–5 秒拿回同样少的字。
-            # 分岔用的数在 HTML 还在手边时就量好了（`_dom_visible_chars`），这里只读。
+            # 分岔用的数在 HTML 还在手边时就量好了（`visible_text_chars`，期 3.3 起直接
+            # 上线给调用方），这里只读。
             # 实测：books.toscrape 的 travel 列表页 196 个抽出字符对 1,374 个 DOM 可见
             # 字符，被旧判据当成壳 —— 差 4 个字符就过 200 那条线，而它是个纯静态页面。
-            if is_extraction_collapsed(text_len,
-                                       getattr(result, "_dom_visible_chars", 0)):
+            if _collapsed_by_both_rulers(result, text_len):
                 return False
             return True
     return False
+
+
+def extracted_chars(result: ResponseModel) -> int:
+    """抽取器自己交回了多少字 —— 不含调用方点名的那一刀（评审 R02-016）。
+
+    `content[]` 是**切完之后**的那份：用户点了 `focus='缓存'`，10 块里留 1 块，字数就从
+    387 掉到 130。而和它比的那颗 `visible_text_chars` 是切之前的整页量 —— 一把尺的两端
+    不在同一条时间线上，塌陷判据就把"按你说的筛过了"读成"正文提取失败"，并开出
+    `focus=''`（用户那一句的反面）当"没试过的杠杆"。
+
+    切之前的那颗数这一封信里本来就带着，而且是两颗，各管一段：
+      * `page_total_chars` —— focus 切之前的整页长度，只在 focus 真的删了字时在场；
+      * `total_extracted_chars` —— 预算切之前的长度（`_apply_chunking` 与 `content[]`
+        同一次装配），每一发都带。
+    这里按"最靠前的那一段"取：focus 切过 → 用 `page_total_chars`；只有 `max_content_chars`
+    /`offset` 这一刀 → 用 `total_extracted_chars`。两条都没有才退回 `content[]` 自己的
+    长度 —— 三条路上量的是同一件事：抽取器交回的那份。
+    """
+    return (result.page_total_chars or result.total_extracted_chars
+            or sum(len(c) for c in result.content))
+
+
+def _collapsed_by_both_rulers(result: ResponseModel, extracted: int) -> bool:
+    """The extractor lost text on BOTH rulers this response carries.
+
+    `visible_text_chars` counts the whole page, chrome included;
+    `_dom_chrome_free_chars` removes nav/header/footer but keeps <aside>, and is
+    measured lazily by `server._attach_dom_visible_chars` — for thin bodies
+    always, and for a large body only when the whole-page ratio already fired. A
+    complete article under a heavy nav can look collapsed on the first ruler
+    while the second says the extractor covered the prose (R04-016a: 19k
+    extracted against a 39k page, with the article running to its last section).
+    Ask both; an unmeasured second ruler (-1) keeps the old verdict. <aside> is
+    kept on purpose: the `/longaside` control loses real text there, and a
+    denominator that strips it would call that loss invisible.
+    """
+    if not is_extraction_collapsed(extracted, result.visible_text_chars):
+        return False
+    prose = result._dom_chrome_free_chars
+    if prose > 0 and not is_extraction_collapsed(extracted, prose):
+        return False
+    return True
 
 
 def extraction_collapsed(result: ResponseModel) -> bool:
@@ -593,14 +639,161 @@ def extraction_collapsed(result: ResponseModel) -> bool:
     为什么要单独一个谓词而不是让 `_is_js_shell` 直接返回个元组：前者回答"要不要起
     浏览器"（答否），后者回答"这次回得少该怎么说"。一个函数答两问，第二问的答案迟早
     被第一问的形状扭成"壳"。
+
+    量的那颗是 `extracted_chars` —— 抽取器交回的份，不是调用方点名的 `focus=` 切过的份。
+
+    `structured` 一支不参与：`schema=` / `nested_*` 交回的是**投影**，它按定义丢掉不匹配
+    的字，拿整页可见字去比是拿错的量具量对的东西。投影抽得太窄是真问题，但它要求的下一步
+    是**改选择器**，不是 `extraction_type='html'`；让塌陷闸在这里说话，开出的就是反药。
     """
     if result.fetcher_used not in ("http", "stealthy") or result.status >= 400:
         return False
     if "application/pdf" in (result.content_type or "").lower():
         return False
-    text_len = sum(len(c) for c in result.content)
-    return is_extraction_collapsed(text_len,
-                                   getattr(result, "_dom_visible_chars", 0))
+    if (result.extracted_type or "") == "structured":
+        return False
+    return _collapsed_by_both_rulers(result, extracted_chars(result))
+
+
+# ─── 3.4 · 实质（substance）：`content_ok` 第一次看内容长什么样 ───────────
+#
+# 在这一刀之前，`content_ok` 完全由 status 与 error 驱动 —— 没有任何一条判据量过"拿回来
+# 的这堆字是不是一段能引用的东西"。实测两处假阳性正是从两道闸中间漏过去的：666 字与 833
+# 字的纯导航，既超不过 200 字的壳闸（`_JS_SHELL_MIN_TEXT_CHARS`，它只管"字极少"），也够不
+# 着混淆闸的 `len < 1000` 早退（它要"字够多才值得像不像话"）。中间那一大段没人管。
+#
+# 三条读数都算在**返回正文**上 —— `content_ok` 说的就是这一堆字，不是那页 HTML。阈值取在
+# 实测的两簇中间的空带上（同一把尺，靶站与三份存页夹具，2026-10-10）：
+#   导航壳 /nav          12 行 · 标签行占比 1.00 · 均行 2.3 字
+#   站点根 /              8 行 · 1.00 · 3.6 字
+#   真目录 /collections  15 行 · 1.00 · 16.1 字   ← 目录是答案，不该翻闸
+#   真正文 /article      10 行 · 0.00 · 36.9 字
+# 8 与 16 之间没有样本，所以线划在 8：高于一切量过的菜单条，低于一切量过的目录与正文行。
+# 一条"标签行"= 24 字以内且整行没有句末标点（`_LABEL_LINE_MAX_CHARS`）。
+_NAV_LINES_MIN = 4
+_NAV_LABEL_SHARE_MIN = 0.8
+_NAV_MEAN_LINE_MAX = 8
+_LABEL_LINE_MAX_CHARS = 24
+#: 一行算"句子"的地板：带句末标点**且**至少这么长。5 个字的「好的。」仍是碎片，
+#: 而靶站那一句 25 字的正文一定过。取 8 是量出来的空带下沿 —— 一切量过的菜单碎片
+#: 都在 4 字以内（/nav 均行 2.3、/work 的碎片行 2-4），一切量过的正文句都在 24 字
+#: 以上（评审 R02-006：这一族以前没有地板，判决只看占比）。
+_SENTENCE_LINE_MIN_CHARS = 8
+_SENTENCE_PUNCT = re.compile(r"[.!?。！？]")
+
+#: `content_ok` 要为假的那些判决。`""`（没判）不在里面 —— 缺席是"这一发不归这条闸管"
+#: （非 HTML / HEAD / 304），不是"判过了且没问题"，两种意思不能混。
+_NOT_SUBSTANTIVE = ("nav_only", "collapsed", "no_words")
+
+
+def _body_line_shape(body: str) -> tuple[int, float, float, int]:
+    """正文的形状读数：(非空行数, 标签行占比, 平均行长度, 句子行数)。
+
+    第四颗读数是 R02-006 补的：`nav_only` 这句话的意思就是"没有散文"（手册里那格写的
+    是 `no prose (menu fragments only)`），所以判决必须**看见**一颗句子行就不判 ——
+    以前它只看占比，而占比 `>= 0.8` 本来就容许两成的行不是标签，于是"多一枚标签"
+    就把带着整句正文的页翻成了菜单残渣（靶站 /work 的 18 条里精确翻掉 6 条）。
+    同一函数第二支的 basis 早就写着 "with no sentence in them" —— 一把尺的两个刻度，
+    一处要求没有句子，一处不要求。
+    """
+    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+    if not lines:
+        return 0, 0.0, 0.0, 0
+    labels = [ln for ln in lines
+              if len(ln) <= _LABEL_LINE_MAX_CHARS and not _SENTENCE_PUNCT.search(ln)]
+    prose = [ln for ln in lines if len(ln) >= _SENTENCE_LINE_MIN_CHARS
+             and _SENTENCE_PUNCT.search(ln)]
+    return (len(lines), len(labels) / len(lines), sum(map(len, lines)) / len(lines),
+            len(prose))
+
+
+def _substance_verdict(result: ResponseModel) -> tuple[str, str]:
+    """这封回执拿回来的正文有没有可引用的实质 —— 判决与它背后的数一起出口。
+
+    四个取值各有自己的作者：`collapsed` 是 `extraction_collapsed` 那条比例闸（它同时
+    也是一条 error，这里只是把同一个事实放进 content_ok 的算术里）；`no_words` 是混淆闸
+    已经点名的那种"整页是打包脚本"（判决由那句 error 映射而来，不重跑一次形状判定）；
+    `nav_only` 是这一刀新加的、专管两道旧闸中间那一段的形状判据；`ok` 是"量过了，没什么
+    可说的" —— 它要求正文**有得出形状的那么多行**，一两行的短标签既不能证明是菜单也不能
+    证明是正文，那种行留空（不判），而**整页自己**不足壳闸那 200 字的判成 `nav_only`。
+
+    只在**有正文可判**时判：非 HTML（PDF/JSON/图片）、HEAD、304 与那些"这一行根本没有
+    正文"的 error（墙、壳、网络、robots）一律留空 —— 那些行有自己的说法，这里插一句就是
+    第二个作者。这一道门用的是 `extractor.served_as_page` 而不是抽取那一侧的
+    `is_markup_response`：**"这页没有话"是一句关于页面的断言**，它要正面证据（类型写着
+    html）。缺 Content-Type 的 2 字节 API 回执与一个真空壳页面在三个形状读数上同值，
+    分不开的时候判就是拿载荷当页面（实测见那颗函数自己的 docstring）。
+
+    但 error 门**不挡**`extraction_collapsed` 与 `obfuscated_payload`：那两句说的就是正文
+    本身，`substance` 是同一件事的另一个面。把它们一起挡掉曾让这两个取值在线上永远取不到
+    （实测 2026-10-10：靶站 `/longaside` 带着 `extraction_collapsed` 回来，`substance`
+    却是空的）。一个声明了却永远取不到的取值比少一个取值更糟 —— 读手册的人会以为判过了。
+    """
+    _BODY_IS_THE_ERROR = ("extraction_collapsed", "obfuscated_payload")
+    _err = result.error or ""
+    if (result.status == 0 or result.status >= 400
+            or (_err and not _err.startswith(_BODY_IS_THE_ERROR))):
+        return "", ""
+    if _METHOD.get() == "HEAD" or result.status == 304:
+        return "", ""
+    if not served_as_page(result.content_type):
+        return "", ""
+    if not result.content or not any(c.strip() for c in result.content):
+        return "", ""
+    if extraction_collapsed(result):
+        visible = result.visible_text_chars
+        got = extracted_chars(result)
+        return "collapsed", (f"this page's own markup holds {visible:,} visible characters "
+                             f"while the extractor returned {got:,}")
+    body = "\n".join(c for c in result.content if isinstance(c, str))
+    if _err.startswith("obfuscated_payload"):
+        # 作者是混淆闸本身（`_detect_content_issue` 那句 error），这里只把它的判决映进
+        # 实质这一维。**不重跑一次形状判定**：从前这一支写的是 `len(body) < 1_000`，而混淆
+        # 闸判的正是**长**正文（实测靶站 `/shell/obfuscated`：正文 9,017 字、error 已经
+        # 写着 `obfuscated_payload`，`substance` 却报 `ok`）—— 那一版把 `no_words` 做成了
+        # 一个线上取不到的取值，与它声称要修的谎是同一族。
+        return "no_words", (f"the body is {len(body):,} characters and dhole's shape check "
+                            f"reads them as a packed payload, not prose")
+    return body_substance(body, result.visible_text_chars)
+
+
+def body_substance(body: str, visible: int) -> tuple[str, str]:
+    """正文形状这一维的唯一作者：读 `web_read` 的抽取正文，也读 `web_crawl` 的一行。
+
+    两个入口必须同判（这一族的旧账：同一个 URL 走 read 写着 `content_ok=false`、走
+    crawl 写着 `true`，`_row_verdict` 的 docstring 就是为那笔账写的）。所以这里只收
+    `(正文, 整页可见字)` 两个数，不收 ResponseModel —— 爬取的一行没有那封信，但它有
+    同样这两个量。
+
+    返回 `("ok"｜"nav_only"｜"", basis)`；`""` 是"薄到没有形状意见可给"（见
+    `_substance_verdict` 那一处），`collapsed` / `no_words` 两支不在这里判 —— 它们各有
+    自己的作者（比例闸与混淆闸），这里重复一遍就是第二个作者。
+    """
+    lines, label_share, mean_line, prose = _body_line_shape(body)
+    if (lines >= _NAV_LINES_MIN and label_share >= _NAV_LABEL_SHARE_MIN
+            and mean_line <= _NAV_MEAN_LINE_MAX and prose == 0):
+        return "nav_only", (f"{lines} lines, {label_share:.0%} of them are short fragments "
+                            f"without sentence punctuation, mean line {mean_line:.1f} "
+                            f"characters (page holds {visible:,} "
+                            f"visible characters in total)")
+    if (1 <= lines < _NAV_LINES_MIN and label_share == 1.0
+            and 0 < visible < _JS_SHELL_MIN_TEXT_CHARS):
+        # 行数不够那一族的门，但**整页自己**就没写字：判据从"几行碎片"换成"这页一共
+        # 多少可见字"，而那颗数是 3.3 刚上线的 `visible_text_chars`。靶站 `/shell` 实测
+        # 正文 2 字、整页可见 6 字 —— 说它"判过了，有正文"是一句谎；它确实只有版面碎片，
+        # 而出路（渲染，或跟进链接）与 `nav_only` 是同一扇。用壳闸自己那 200 字作帽，
+        # 是为了让"页面几乎是空的"这一维只有一位作者。
+        # 上限 `_NAV_LINES_MIN` 是**误报侧**的量出来的：第一版没写它，靶站 `/collections`
+        # （15 行、12 条链接、整页可见 117 字）就被翻成 nav_only —— 那一页的内容正是那些
+        # 链接。行数够一族门的情形归上面那一支判，这一支只管"整页一两个标签字"那种壳。
+        return "nav_only", (f"the whole page holds {visible:,} visible "
+                            f"characters and the body is {lines} label line(s) with no "
+                            f"sentence in them")
+    if lines < _NAV_LINES_MIN:
+        # 薄到没有形状意见可给：一两行既不能证明是菜单，也不能证明是正文 —— 留空，
+        # 让读者知道这一维**没判**，而不是"判过且干净"。
+        return "", ""
+    return "ok", ""
 
 
 def _schema_value_empty(value: Any) -> bool:
@@ -639,6 +832,28 @@ def _is_raster_image(result: ResponseModel) -> bool:
     """
     ct = (result.content_type or "").lower().split(";")[0].strip()
     return ct in _RASTER_IMAGE_TYPES
+
+
+#: `extraction_collapsed` 的出路，**一个作者、三个落点**（`error` 散文 /
+#: `next_action` / `diagnosis.recover_with`）。
+#:
+#: `extraction_type` 那几枚分两族：markdown / text / article 都过**同一个抽取器**，
+#: 而塌陷正是那个抽取器出的事 —— 在这三枚之间换一枚，量的还是同一件坏掉的东西。只有
+#: `html`（以及 `schema=` 那条结构化路）绕开抽取器、把标记原样交回。
+#:
+#: 实测的形状（15 场景体测，场景 3）：一处静态文本站触发 collapsed，dhole 三处话里并列劝
+#: 了 'html' 与 'text' 两枚；照 'text' 试的那一发仍是 527/1998 字、仍报同一条 collapsed、
+#: 仍劝同样那两句 —— 一句建议把人送回他刚刚失败的那一步，而那一发确实花了 1.5 秒和一次
+#: 往返。所以这里只推荐真能换档的那两枚，并说清其余几枚为什么**不算**换档。
+#:
+#: 长度是判据的一部分，不是排版：`server._inline_hole_reason` 给一行的 reason 有
+#: `HOLE_REASON_CAP=400` 的帽，而那一行是爬取通道上唯一带着这句话的地方（没有别的字段兜
+#: 着）。前缀那句实测 170 字，所以这一句必须留在 230 字以内，否则爬取回执里的出路被剪成
+#: 半截。这条对齐由 `test_a_collapsed_page_offers_only_the_doors_that_change_the_reader.py` 量。
+_COLLAPSE_RECOVERY = (
+    "take extraction_type='html' (or schema=) for this URL - both skip the reader, "
+    "while markdown / text / article all re-run the reader that just lost the text, "
+    "and a browser hands that reader the same markup")
 
 
 def _detect_content_issue(result: ResponseModel) -> str:
@@ -710,17 +925,17 @@ def _detect_content_issue(result: ResponseModel) -> str:
         # 抽取塌陷与 JS 壳在"正文很少"这一条上长得一模一样，而下一步正好相反：壳靠渲染
         # 补，塌陷是 dhole 自己的读取问题 —— 起浏览器是把同一份静态标记交给同一个抽取器
         # 再说一次。所以这一支排在 `_is_js_shell` **前面**，给的也不是"再抓一次"而是
-        # "换个 extraction_type"。
+        # `_COLLAPSE_RECOVERY` 那两枚真能换档的取值（这一族的建议只有一个作者：散文、
+        # `next_action` 与 `diagnosis.recover_with` 都读那颗常量，见那里的说明）。
         #
         # 它同时改写了 page_type 的命运：`page_type_from_error` 只认 `js_shell_detected`
         # 那个前缀，所以这个新 token 不会把 `detect_page_type` 的结构化判定覆盖成壳 ——
         # 那正是"用一个猜测盖掉一个检查"的本体。
-        visible = getattr(result, "_dom_visible_chars", 0)
+        visible = result.visible_text_chars
         return (f"extraction_collapsed: this page's own markup holds {visible} "
                 f"characters of visible text while the extract returned "
-                f"{sum(len(c) for c in result.content)} - the words ARE in the HTML, "
-                "dhole's reader lost them. Do NOT re-fetch for rendering; take "
-                "extraction_type='html' (or 'text') for this URL instead.")
+                f"{extracted_chars(result)} - the words ARE in the HTML, "
+                f"dhole's reader lost them. Recover: {_COLLAPSE_RECOVERY}")
 
     if _is_js_shell(result):
         return "js_shell_detected: page requires JavaScript rendering but fetcher returned placeholder"
@@ -752,7 +967,7 @@ def _detect_content_issue(result: ResponseModel) -> str:
     # content (error="" -> agent trusts it). Set the error field so agents,
     # cache, and archive fallback all see it as a failure.
     if result.status >= 400:
-        return f"http_error_{result.status}: server returned error status"
+        return status_error_sentence(result.status)
     if result.status == 0:
         # Preserve the original error content (from stealthy_fetch / HTTP layer)
         # so downstream classify_network_error() can identify the failure type.
@@ -762,6 +977,77 @@ def _detect_content_issue(result: ResponseModel) -> str:
         return "network_error: request failed (DNS/timeout/connection refused)"
 
     return ""
+
+
+def _action_receipts(result: ResponseModel) -> list:
+    """这一发自己的动作回执，无论它此刻住在哪一格。
+
+    两个住处，一件事：`metadata.actions` 是**上线以后**的样子（由
+    `_report_action_outcomes` 在信封写好之后填），`_action_outcomes` 是浏览器层跑完链
+    随响应交回来的原件（同一批 dict）。判决必须读得到后者，否则"这一发办成了没有"是由
+    一个还不知道链跑过的人写的（round 01, R01-028 —— P4/P5 两轮真调用复验量出来的：
+    降级逻辑写对了，却跑在信息到场之前）。
+    """
+    wire = (result.metadata or {}).get("actions")
+    if isinstance(wire, list) and wire:
+        return [one for one in wire if isinstance(one, dict)]
+    early = getattr(result, "_action_outcomes", None)
+    if isinstance(early, list):
+        return [one for one in early if isinstance(one, dict)]
+    return []
+
+
+def _stamp_chain_receipts(result: ResponseModel, page_action: Any) -> None:
+    """浏览器档跑完链之后、写判决之前，把回执随这份响应同行。
+
+    接线为什么在 `bulk_stealthy_fetch` 的结果循环里而不是在 `server._force_fetch`：
+    插桩实测（review/.runtime/p4/spy_r01_028.py）显示 `stealthy_fetch` 交回来的响应
+    **已经**过了一遍 `_annotate_quality`，在那里贴只会晚于判决 —— 第一版就是这么写的，
+    单测绿而真调用照旧。同一批 dict，不是第二份事实；PrivateAttr 不上线也不进缓存信封。
+    """
+    if page_action is None:
+        return
+    result._action_outcomes = list(getattr(page_action, "outcomes", None) or [])
+
+
+def _chain_ran_ok(result: ResponseModel) -> bool:
+    """Did this call's own action chain run to the end?
+
+    A receipt with `ok=false` but a deliberate stop key (`pending_approval` /
+    `not_submitted` / `cut_by_budget`) is not a failure — it is the submit gate
+    doing exactly what it was built to do, and the earlier steps really ran.
+
+    This exists because a page-quality verdict and an action chain answer different
+    questions, and the top-level `error` slot can only hold one sentence (round 01,
+    R01-028): a chain that filled a form and stopped at the confirm gate came back
+    `error="auth_wall_detected…"` + `content_ok=false`, which an L1 reader took as
+    "nothing worked" — and the advice they got was to run the chain again, i.e. to
+    fill the form twice.
+    """
+    receipts = _action_receipts(result)
+    if not receipts:
+        return False
+    _stops = ("pending_approval", "not_submitted", "cut_by_budget")
+    for one in receipts:
+        if one.get("ok") is True:
+            continue
+        if not any(one.get(k) for k in _stops):
+            return False
+    return True
+
+
+def _quality_way_out(result: ResponseModel) -> str:
+    """A failing content verdict always owes a next step (R01-028, P08: the call
+    was judged failed with `next_action=""` — the reader learned only "no")."""
+    fired = (result.error
+             or (result.metadata or {}).get("content_issue")
+             or "the content check found no usable body on this page")
+    return (f"content_ok=false because of this verdict: {fired}. "
+            "The page was fetched; what failed is the extraction of a readable body. "
+            "Untried levers on THIS url: extraction_type='html' (the raw structure), "
+            "css_selector='…' (name the block), focus='' (the whole page without "
+            "selection), offset= (the next slice). Switching source is the last move, "
+            "not the first — this page answered.")
 
 
 def _annotate_quality(result: ResponseModel) -> ResponseModel:
@@ -775,7 +1061,30 @@ def _annotate_quality(result: ResponseModel) -> ResponseModel:
     if not result.error and _METHOD.get() != "HEAD":
         issue = _detect_content_issue(result)
         if issue:
-            result.error = issue
+            if _chain_ran_ok(result):
+                # The chain question is answered by `metadata.actions`; this slot
+                # describes the PAGE. Putting the page's verdict here would make the
+                # call itself look failed, and the advice built on it would be
+                # "run it again" (R01-028). The finding still has to reach the
+                # reader: `metadata.content_issue` keeps it addressable, and the
+                # note bucket puts it in `summary` where nothing is silently dropped.
+                #
+                # Idempotent by the recorded verdict, not by a counter: a browser
+                # page is annotated twice on the real path (once in
+                # `bulk_stealthy_fetch`, once in `_finalize_result`), and saying the
+                # same sentence twice in one summary line reads as two findings
+                # (measured live, R01-028 P5).
+                already = (result.metadata or {}).get("content_issue")
+                if already == issue:
+                    return result
+                try:
+                    if isinstance(result.metadata, dict):
+                        result.metadata["content_issue"] = issue
+                except Exception:
+                    pass
+                _note_text(issue)
+            else:
+                result.error = issue
     return result
 
 
@@ -785,6 +1094,13 @@ def _is_cacheable(result: ResponseModel) -> bool:
     Excludes: error statuses (4xx/5xx), JS shells, bot-challenge pages, geo
     redirects, all_tiers_failed, and blank/empty extractions. Caching any of
     those would serve broken pages from cache for the whole TTL.
+
+    A page an action chain stood on never reaches here at all: `web_act` forces
+    ``cache_ttl=0`` at the door (server.py, "an action's content exists only after
+    the actions"), so this gate is not the one holding that line — checked while
+    demoting the chain's page verdict out of `error` (R01-028), because the
+    demotion removes an *accidental* protection: that body used to be refused here
+    only since the wall verdict still sat in `error`.
     """
     if not (0 < result.status < 400):
         return False
@@ -995,6 +1311,19 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             and not result.error
             and (has_content or probe_ok or unchanged)
         )
+    # 3.4 · 实质判决。它必须在上面那段算完之后判：那时 `error` 已经是最终形态
+    # （`_detect_content_issue` 的塌陷/壳/混淆 token 都在里面），判决才不会与 error 那条
+    # 说法各写各的。判决顺手盖在信封上（`substance` / `substance_basis`），因为调用方
+    # 需要能复核那个数，而不只是接受一个布尔。
+    substance, substance_basis = _substance_verdict(result)
+    result.substance = substance
+    result.substance_basis = substance_basis
+    if substance in _NOT_SUBSTANTIVE:
+        content_ok = False
+    if result.page_type == "redirect":
+        # 客户端跳转页的正文是一段脚本，不是这一页；page_type 已经判过，判决位不能
+        # 再说「可引用」（R05-023：同一封里 redirect 与 content_ok=true 互相否决）。
+        content_ok = False
 
     size = result.total_extracted_chars or sum(len(c) for c in result.content)
     parts: list[str] = []
@@ -1063,16 +1392,16 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             parts.append(f"cached copy, fetched {replay / 3600:.1f} h ago")
     if result.is_truncated:
         parts.append("truncated")
+    if substance in _NOT_SUBSTANTIVE:
+        # 降级要活在**结论行**里：一个 39 字的"200 OK"与一篇 4 万字的正文在同一行上只差
+        # 一个数字，而调用方扫的就是这一行。
+        parts.append({"nav_only": "no prose (menu fragments only)",
+                      "collapsed": "words lost by the extractor",
+                      "no_words": "no words in the body"}[substance])
     summary = " · ".join(parts)
 
     next_action = ""
     err = result.error or ""
-    # A 404 page can still be long enough to be truncated, and the truncation
-    # hint used to win on ordering: a Wikipedia 404 was answered with
-    # "offset=... to continue paginating", sending the agent paging through an
-    # error page. The status is the more specific fact, so error statuses fall
-    # through to their own branches below.
-    #
     # A login wall, an anti-bot challenge and a JS shell are the same mistake in
     # a different costume: measured on github's redirect-to-login page, the
     # truncation hint came FIRST and the wall's own advice second, in one string
@@ -1080,8 +1409,53 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
     # content, so that clause is not just out of order there - it is wrong.
     _NOT_A_DOCUMENT = ("auth_wall_detected", "bot_wall_detected",
                        "js_shell_detected", "obfuscated_payload")
-    if (result.is_truncated and result.next_offset and result.status < 400
-            and not err.startswith(_NOT_A_DOCUMENT)):
+    if substance == "nav_only":
+        # 出路必须是**真换管路**的那两枚：壳页靠渲染，目录页靠跟进链接 —— 而
+        # "再抓一次同样的"只是把同一堆菜单字再拿一遍（1.4 那一刀定的口径）。
+        # 渲染那一枚照旧要过门：渲染帮不上（数据文档、这一档从来不渲染这一族）或**已经
+        # 渲染过而答案就是这堆碎片**时还劝人去那一档，正是这一族守卫钉着的那句谎。
+        _nav_can_render = (not _browser_cannot_help(result, result.url)
+                           and not _render_tier_was_spent(result))
+        if _nav_can_render:
+            next_action = (
+                "the body returned is short menu-style fragments, not prose: this page's "
+                "content is rendered by JavaScript or lives behind those links. Two doors: "
+                "re-read with force_fetcher='stealthy' (which renders), or follow the links. "
+                "Do not cite this body as the article.")
+        else:
+            next_action = (
+                "the body returned is short menu-style fragments, not prose, and rendering "
+                "will not change that answer (this URL was already rendered, or this tier is "
+                "not one a browser helps). The only door left is the links themselves: "
+                "follow them or take a different source. Do not cite this body as the article.")
+    elif result.page_type == "redirect":
+        # 页面自己写着跳转；正文只是脚本。HTTP 档不会跟随，浏览器档会 —— P3 实测
+        # 浏览器档落到目标页并返回真实内容（R05-023）。与别处同一条门：这台机器
+        # 起不来的浏览器不许被点名。
+        _redirect_can_render = (
+            not _browser_cannot_help(result, result.url)
+            and not _never_escalate(result, result.url))
+        if _redirect_can_render:
+            next_action = (
+                "this URL is a client-side redirect: the body is the redirect script, "
+                "not the page. Re-fetch with force_fetcher='stealthy' (a browser follows "
+                "it), or open the target the script names directly. Do not cite this body.")
+        else:
+            next_action = (
+                "this URL is a client-side redirect: the body is the redirect script, "
+                "not the page. Open the target the script names directly - the browser "
+                "tier is unavailable here, so it cannot follow it for you. "
+                "Do not cite this body.")
+    # A 404 page can still be long enough to be truncated, and the truncation
+    # hint used to win on ordering: a Wikipedia 404 was answered with
+    # "offset=... to continue paginating", sending the agent paging through an
+    # error page. The status is the more specific fact, so error statuses fall
+    # through to their own branches below.
+    elif (result.is_truncated and result.next_offset and result.status < 400
+            and not err.startswith(_NOT_A_DOCUMENT)
+            and not err.startswith("extraction_collapsed")):
+        # 塌陷时更具体的事实是「抽取器丢字」，不是「还有下一页」：`diagnosis` 已经在
+        # 说 `extraction_type='html'`，翻页提示不许在同一封里改口（R04-016b）。
         _repeat = _focus_repeat_warning(
             f"offset={result.next_offset} continues THIS filtered text, or pass focus='' "
             "to get the whole page back")
@@ -1248,10 +1622,12 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
     elif err.startswith("extraction_collapsed"):
         # 批次 2：这一页的字在 HTML 里，是 dhole 没抽到。推荐"再抓一次/起浏览器"会把
         # 调用方送回同一条抽取管路 —— 唯一真的换个结果的旋钮是 extraction_type。
-        next_action = ("the extract lost this page's own text - do NOT re-fetch for "
-                       "rendering (the browser hands the same markup to the same "
-                       "reader). Re-call with extraction_type='html' or 'text' to get "
-                       "the body as it is, or web_crawl this one URL.")
+        #
+        # 场景 3 的那次实测把这条建议自己也送回了管路：'text' 与 'html' 并列劝过一次，
+        # 而 'text' 与默认的 markdown 过的是同一个读取器（换了它，527/1998 那发一模一样）。
+        # 原先句尾还挂着"or web_crawl this one URL" —— 同一枚读取器的第三个入口，同样
+        # 不算出路，所以没有搬进 `_COLLAPSE_RECOVERY`。
+        next_action = (f"the extract lost this page's own text - {_COLLAPSE_RECOVERY}")
     elif "browser_binary_missing" in err or "browser_unavailable" in err:
         # 批次 3：这一句是全场最多发的一条建议，而它以前每次都在推荐刚刚失败的那一档。
         # 升级被跳过时 `escalation_path` 与 `error` 里已经带着事实（server 在跳过
@@ -1359,42 +1735,75 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
     elif result.fetcher_used == "parse" and err:
         # Local-file failures are never a network problem, so they must not pick
         # up the network hints the status==0 branch below would otherwise give.
-        if err.startswith("File not found"):
-            next_action = (
-                "See the error field for the paths that were tried. Pass an absolute "
-                "path, or pass cwd=<your working directory> so relative paths resolve "
-                "against it."
+        #
+        # 这一族四支讲的是同一件事：**一个字节都没读过**（名字没找到 / 是目录 / 被两道门
+        # 挡住）。所以它们的行首申报只许装配一次（评审 R02-123 · 真机 `r219b_doc_parse_faces.json`：
+        # 同扇参数层 5 发行首交 `Nothing was fetched.`，这一族 5 发行首要么是小写手抄的另一套
+        # 申报 `nothing was read - …`，要么根本没占申报位 —— 一扇两种口径）。
+        # 下面的 else 不在这一族：那一支的文件**读过**，「这一发什么也没发生」对它是假话。
+        _refusal_way_out = None
+        if err.startswith("Path is a directory"):
+            # 这一发的路径**解析成功了**，所以那句「换绝对路径 / 传 cwd」是往错的方向
+            # 指（实测：绝对写法的目录照样收到那句）。要说的只有一件：一次调用读一颗
+            # 文件，而名字在 error 里列着。
+            _refusal_way_out = (
+                "The directory was FOUND - nothing about the path is wrong, and "
+                "retrying with an absolute path or cwd= cannot change the answer. "
+                "doc_parse opens one file per call: pick one of the names listed "
+                "in `error` and pass the directory plus that name. Listing a folder "
+                "is not what this tool does."
+            )
+        elif err.startswith("File not found"):
+            # 出路那句由 server 那一侧按形状写一次（`os.path.isabs(file_path)` 在那儿），
+            # 这里不复述它：一句出路在回执里写三遍，改一处漏两处就自相矛盾 —— 而实测正是
+            # 三遍都写着「换成绝对形式」，包括那一发**本来就是绝对形式**的那两遍（R02-062）。
+            # 指回 `error` 既不逼下游去猜形状，也不许它把不该说的话说错。
+            _refusal_way_out = (
+                "The name you gave is not where this call looked. `error` "
+                "lists the places it tried and, for the shape of the path you passed, what "
+                "could still change the answer; re-sending the same string unchanged reaches "
+                "the same stop."
             )
         elif err.startswith("Access denied: path is in a restricted system directory"):
             # 这一族说的是路径，兜底那句说的也是路径，但意思正好相反。实测
             # doc_parse(file_path='C:\\Windows\\System32\\drivers\\etc\\hosts')：
             # diagnosis 让"换一个不在受限目录里的路径"，next_action 却说"路径没什么
             # 可修的"—— 而**一个字节都没读过**，那份文件是被门挡住的，不是内容坏了。
-            next_action = (
-                "the PATH was refused before anything was read - the file's contents "
+            _refusal_way_out = (
+                "The PATH was refused before anything was read - the file's contents "
                 "were never looked at. Pick a path outside the restricted system "
                 "directory (copy the file somewhere else if you need it), and note "
                 "this is a guard, not a knob: no argument opens it."
             )
         elif err.startswith("Access denied: path names an NTFS alternate data stream"):
-            next_action = (
-                "the PATH was refused before anything was read. Drop the ':stream' "
+            _refusal_way_out = (
+                "The PATH was refused before anything was read. Drop the ':stream' "
                 "part and name the file itself - the stream's contents would come "
                 "back as the document."
             )
+        if _refusal_way_out is not None:
+            next_action = f"{nothing_went_out()} {_refusal_way_out}"
         else:
             # The path was NOT the problem: the file was found, opened and read, and
             # then something about its contents failed. Measured on four cases -
             # invalid JSON, invalid YAML, a body that is not %PDF, an unsupported
             # extension - all four were sent to the path advice above, which reads
             # as "your route is wrong" about a route that had already resolved.
-            next_action = (
-                "the file was found and read; what failed is its contents, named in "
-                "the error field. Nothing to fix about the path. An unsupported "
-                "extension is fixed by the rename the error suggests; a .pdf/.docx/"
-                ".xlsx whose bytes disagree with the name is a mislabelled file, not "
-                "a missing one."
-            )
+            #
+            # 但这四种形状不该共用**同一句**下一步（评审 R02-022）：前一句还替它们所有人
+            # 说「按 error 建议的那个改名去修」，而 CFB 那一发的 error 明说"改名不改字节"——
+            # 一封响应里两句话互相否认，假的那句才是调用方照着行动的；坏 JSON 那一发根本没人
+            # 问过扩展名。所以下一步现在由写 error 的人交出（parse 的 `way_forward`），这里
+            # 只在没有作者说话时补一句与扩展名无关的实话。
+            if result.next_action:
+                next_action = result.next_action
+            else:
+                next_action = (
+                    "the file was found and read; what failed is its contents, named "
+                    "in the error field. Nothing to fix about the path; a .pdf/.docx/"
+                    ".xlsx whose bytes disagree with the name is a mislabelled file, "
+                    "not a missing one."
+                )
     elif err.startswith("timeout: the ") and result.next_action:
         # The budget result already names which tier ran out and what to change.
         # The generic network hint below is blander, so keep the specific one.
@@ -1450,11 +1859,41 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         # parameters". No parameter of this call moves a server-side failure, and
         # dhole already refuses to escalate a 5xx into a browser for exactly that
         # reason - the hint must not imply the browser tier was the untried option.
-        next_action = (
-            f"the server failed at the server (HTTP {result.status}). Nothing in "
-            "this request caused it and no parameter fixes it. Retry once after a "
-            "pause; if it persists the site is down or the path is broken, so "
-            "switch source. A 5xx is not a bot block.")
+        #
+        # One shape among 5xx is NOT the server speaking, and saying it is costs an
+        # on-call engineer the wrong ticket (round 01, R01-041): an empty 502 that
+        # comes back in tens of milliseconds on a path with an intermediary in it.
+        # `no-such-host-*.invalid` (a name RFC 6761 guarantees will not resolve)
+        # answered 502/0B/32ms here because the machine's own proxy intercepted the
+        # fake-IP lookup and answered for a target it could not reach - while the
+        # receipt said "the server failed at the server… nothing in this request
+        # caused it… the site is down". Attribution therefore needs two facts, and
+        # only fires when both hold: no bytes came back, and something upstream of
+        # the origin is configured for this host (G31's loopback exemption means a
+        # local target keeps the old, correct sentence).
+        from dhole_mcp.fetcher import system_proxy_for
+        _no_bytes = not has_content and (result.total_size_bytes or 0) == 0
+        _via = system_proxy_for(result.url or "") if _no_bytes else ""
+        if _via:
+            next_action = (
+                f"HTTP {result.status} with no bytes at all, after "
+                f"{int(result.duration_ms or 0)}ms, and this machine hands that "
+                f"scheme to a proxy ({_via}) which dhole's HTTP tiers inherit. "
+                "An empty answer that fast is the shape of that proxy speaking for a "
+                "target it could not reach - nothing here proves the site itself "
+                "returned this status, so the site is NOT established as down. "
+                "Tell them apart: ask the same URL where no proxy is configured, or "
+                "read the proxy's own log for this request. dhole inherits an "
+                "OS-level proxy and has no per-call switch for it; a proxy stored "
+                "with cred_defaults does have one (cred_defaults(unset=[\"proxy\"])). "
+                "A 5xx is still not a bot block, and no parameter fixes it - on "
+                "either side of that proxy.")
+        else:
+            next_action = (
+                f"the server failed at the server (HTTP {result.status}). Nothing in "
+                "this request caused it and no parameter fixes it. Retry once after a "
+                "pause; if it persists the site is down or the path is broken, so "
+                "switch source. A 5xx is not a bot block.")
     elif result.status == 0 or result.status >= 400:
         from dhole_mcp.errors import classify_network_error
         category, hint = classify_network_error(err)
@@ -1518,7 +1957,8 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
     # "这一个是 dhole 选的"，不能说"这一个猜错了"。
     # 不进 content_ok：那会把一次正确的中文读取报成失败，而读者从此不信这个字段 —— 用一
     # 个新的谎换掉一句旧的含糊，是本仓库反复拒绝的那种修法。
-    if (result.metadata or {}).get("encoding_basis") == "guessed" and not result.error:
+    _basis = (result.metadata or {}).get("encoding_basis")
+    if _basis == "guessed" and not result.error:
         hedge = (
             "the charset here is a guess, not a declaration: this file named no "
             "encoding and gb18030 decoded it cleanly - but gb18030 decodes Shift_JIS "
@@ -1528,6 +1968,56 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             "- that turns the guess into a verdict. The content is not being doubted "
             "by this note.")
         next_action = f"{next_action} {hedge}" if next_action else hedge
+    elif _basis == "fallback" and not result.error:
+        # 点名的那一颗没在跑。这一句要说得出**两个名字**，因为缺席会被读成一个肯定：
+        # 「没有 encoding_basis 键」在高杉那发里被读成「这就是我要的编码」，而回执正文是
+        # gb18030 从 EUC-KR 字节里解出的错中文（R02-021，P3 又在 GBK 件点名 big5 上重演）。
+        _md = result.metadata or {}
+        hedge = (
+            f"the encoding you named ({_md.get('encoding_asked', '?')!r}) is not the "
+            f"one that read this file: those bytes do not decode under it, so dhole's "
+            f"detection used {_md.get('encoding', 'an unknown charset')!r} instead. "
+            "That is a detection, not your instruction - if the text reads like the "
+            "wrong language, name the charset that does decode it ('euc-kr', "
+            "'shift_jis', 'big5', 'gbk'). The content is not being doubted by this note.")
+        next_action = f"{next_action} {hedge}" if next_action else hedge
+    elif _basis == "contested" and not result.error:
+        # 点名的那颗**在跑**，正文也是它的读数 —— 这一句不能说"猜"，也不能说"换"。
+        # 它说的是同一件事的另一半（R02-037）：名字与字节相容不等于字节属于那个名字。
+        # GBK 件点名 big5 时，仓库里三把现成的尺子全读 0/False（错语言的每一个字都是
+        # big5 表里的合法字符），所以 dhole 唯一能交代的实话是"还有第二种干净的读法，
+        # 它叫 gb18030"，并把可执行的解药给出来。判词一位不动，理由与 guessed 那一支
+        # 同一条：一个新的谎不换一句旧的含糊。
+        _md = result.metadata or {}
+        hedge = (
+            f"this text was read as you asked ({_md.get('encoding_asked', _md.get('encoding', '?'))!r}) - "
+            f"that name decodes these bytes cleanly. The same bytes also decode "
+            f"cleanly under {_md.get('encoding_rival', 'another charset')!r}, and "
+            f"those are DIFFERENT texts: which one this file really is cannot be "
+            "told from the bytes. If the words above are not the language you "
+            f"expected, re-call with encoding="
+            f"{_md.get('encoding_rival', '…')!r}. Nothing about this content is "
+            "being doubted by this note.")
+        next_action = f"{next_action} {hedge}" if next_action else hedge
+    _issue = (result.metadata or {}).get("content_issue")
+    if _issue:
+        # A demoted page verdict stays a content verdict: `content_ok` keeps saying
+        # what the body is, while `error` stops claiming the call itself failed.
+        content_ok = False
+        _chain_note = (f"the page reads as: {_issue}. That is about the content, "
+                       "not about this call: `metadata.actions` holds the receipts "
+                       "of the chain that ran. Do not re-issue the same chain - "
+                       "every step already marked ok would run again.")
+        if not next_action:
+            next_action = _chain_note
+        else:
+            # 别的建议先占了这个格子（实测那一发是"正文太薄，去读它的链接"）。它回答的
+            # 是内容那一半，说不出"这一发办成了没有"，所以不许把它当成已经说过 —— 降级
+            # 之后读者手上只剩两条路：照着别的建议重发，或自己猜。两句都留下，顺序是
+            # 先内容出路、后"别重发这条链"。
+            next_action = f"{next_action} {_chain_note}"
+    if not content_ok and not next_action:
+        next_action = _quality_way_out(result)
     return summary, next_action, content_ok
 
 
@@ -1550,7 +2040,14 @@ def _apply_envelope(result: ResponseModel) -> None:
     inputs (url, metadata, fetched_at) are always present.
     """
     # page_type override: definitive signals win over the structural guess.
-    err_type = page_type_from_error(result.error)
+    # A chain's page verdict lives in `metadata.content_issue` (its `error` slot is
+    # free because the chain itself ran — R01-028), so the shape of the PAGE is read
+    # from wherever that verdict ended up; otherwise demoting the sentence would
+    # also delete the envelope's statement of what kind of page this is (measured
+    # live: `page_type` went from "auth_wall" to absent).
+    err_type = page_type_from_error(result.error
+                                    or (result.metadata or {}).get("content_issue")
+                                    or "")
     if err_type:
         result.page_type = err_type
     else:
@@ -1689,10 +2186,16 @@ _DIAGNOSIS_PREFIXES: tuple[tuple[str, str, bool, str], ...] = (
      "sys_state(clear=['<session id>']) to hand the browser back, or drop headed=true"),
     ("schema_no_match", "schema_no_match", False,
      "re-check the selectors, or re-fetch with extraction_type='html'"),
+    # 扇出那一族的**行**：每个请求的字段都在第二层页面上落空（`server._nested_read`）。
+    # 与 schema_no_match 同一件事实的两个位置 —— 一处是一篇文档里的作用域，一处是另一篇
+    # 文档的整页 —— 所以名字分开、杠杆同一句（r301 现场：12 行里 `/feed.xml` 那一行交的就是它）。
+    ("fields_no_match", "fields_no_match", False,
+     "read ONE of those pages without nested_* and re-derive the selector - name the "
+     "element that holds the value, not the bare tag"),
     ("geo_redirect_detected", "geo_redirect", False,
      "use a regional URL or a proxy"),
     ("extraction_collapsed", "extraction_collapsed", False,
-     "re-call with extraction_type='html' or 'text' (a browser re-fetch hands the same markup)"),
+     _COLLAPSE_RECOVERY),
     ("encoding_undecodable", "encoding_undecodable", False,
      "re-call with encoding='<charset>'"),
     ("scanned_pdf", "scanned_pdf", False,
@@ -1724,7 +2227,23 @@ _DIAGNOSIS_PREFIXES: tuple[tuple[str, str, bool, str], ...] = (
     ("invalid_request", "invalid_request", False, "fix the named argument"),
     ("schema validation error", "schema_validation_error", False, "fix the schema= / the page's markup"),
     ("timeout", "timeout", True, "raise timeout, or switch source"),
-    ("File not found", "file_not_found", False, "pass an absolute path, or pass cwd="),
+    ("File not found", "file_not_found", False,
+     "name a file that exists - `error` says where this call looked and what could still "
+     "change the answer"),
+    # 目录不是"没找到"：这一句是我们自己写的，按 startswith 认得出，所以它在册
+    # （兜底规则会给首词，把 "Path" 当成 code —— 外人写的句子才归兜底）。
+    ("Path is a directory", "path_is_directory", False,
+     "pass a file inside the directory - doc_parse opens one file per call"),
+    # parse 自家那两句大写开头的句子（评审 R02-129 · r247/r251 数到）：兜底那条
+    # `_LEADING_CODE_RE` 只认小写开头的 token（它是给**外人写的**句子留的），于是这两句
+    # 既进不了表也兜不出词，`_diagnose` 交回 None ⇒ 手册教的那根把手（`diagnosis.code`）
+    # 在两颗设计过的拒绝上整格缺席。补进表而不是放宽兜底：放宽会把外人的句子也发明成 token。
+    # `file_too_large` 与 fetch 侧那颗 `body_too_large` 是**两颗**：一顶帽管的是本地文件的大小，
+    # 另一顶管的是发回来的正文，读者按 code 分支时要能分辨（合并成一颗就是叫读者去改错的那一只手）。
+    ("Unsupported file type", "unsupported_file_type", False,
+     "rename a plain-text file to .txt/.md, or pick one of the extensions `error` lists"),
+    ("File too large", "file_too_large", False,
+     "split the file or copy out a smaller one - no argument raises this cap"),
     ("Access denied: path is in a restricted system directory", "path_restricted", False,
      "choose a path outside the restricted system directory"),
     # 同一句门的两支，此前只有一支在册（实测 2026-10-09：备用数据流那条被 `_agent_hints`
@@ -1732,8 +2251,28 @@ _DIAGNOSIS_PREFIXES: tuple[tuple[str, str, bool, str], ...] = (
     # 说话）。一句我们自己写的话不该靠首词兜底 —— 兜底是给外人写的句子留的。
     ("Access denied: path names an NTFS", "alternate_data_stream", False,
      "drop the ':stream' segment and name the file itself - no argument opens this guard"),
+    # 两扇状态门的自家判决句（评审 R02-130 · 真机 `r258_state_door_faces.json`）：此前都不在册，
+    # 于是一句大写开头的 `Nothing matches …` 量出 code 空（整格缺席，`error` 明明写着），
+    # 而 `models is show-only …` 被首词兜底发明成一颗 'models' —— 兜底的射程只该是外人写的句子。
+    ("Nothing matches", "unknown_state_token", False,
+     "name one of the tokens `error` lists - a state class, or an open session id"),
     ("network_error", "network", True,
      "check network/proxy; the classifier hint in `error` names the fix"),
+    # find_similar 读不到源页那一面（评审 R02-137 · 现场 r276）：这句是 dhole 自己写的，
+    # 从前表里没有它的格子，于是上线的 code 是小写首词兜底发明的 `could` —— 换措辞就换名字，
+    # 而手册教调用方 switch on `code`。这颗 token 只命名门里**确实知道**的事（源页没读出来），
+    # 不替它猜原因：`fetch_source_for_similar` 把「异常 / 被挡 / 空正文」三种看见的东西都
+    # 扔掉了（search_engines.py:301-308），原因归谁是另一行账（R02-138）。`retryable=true`
+    # 与同封 `next_action` 第一句「Retry, or web_read…」说的是同一件事（两只手不许互相否决）。
+    ("could not fetch the source URL", "source_unreadable", True,
+     "web_read that URL first - it names which cause this is (blocked / offline / an "
+     "empty page), then call find_similar again on one that answers"),
+    # 协议边界上那两颗门名判决（评审 R02-130 的 unknown-tool 半边 · F123 · 现场 r337/r338）：
+    # 这两句都是大写开头，兜底那条 `_LEADING_CODE_RE` 对它们交回**空** code（不是造一个错名字），
+    # 于是线上读数是 `is_error=True` 加一格 `error` —— 申报、summary、把手三格全无，而同一对
+    # 出口在参数那一族早就齐了。补进表而不是放宽兜底，与上面 `Unsupported file type` 同一判据。
+    ("Unknown tool", "unknown_tool", False,
+     "call one of the names `error` lists - a name that is not in this server ran nothing"),
 )
 
 # 子串匹配（前缀认不出的）：升级整链失败、浏览器档缺席这两个是句中出现的。
@@ -1744,9 +2283,35 @@ _DIAGNOSIS_CONTAINS: tuple[tuple[str, str, bool, str], ...] = (
      "run `dhole --doctor`; do NOT retry with force_fetcher='stealthy'"),
     ("browser_unavailable", "browser_unavailable", False,
      "run `dhole --doctor`; do NOT retry with force_fetcher='stealthy'"),
+    # 与上面那颗前缀同一族的第二句自家话（R02-130）：句子以**类名**开头（`models is show-only: …`），
+    # 所以它天生进不了前缀表 —— 首词兜底会把那个类名当成 code。
+    ("is show-only", "show_only_class", False,
+     "read it with show=[] instead - no tool call erases this class (config knobs go on the "
+     "operator side, model files have no erasure)"),
+    # 边界上那第二颗门名判决（R02-130 的另一支 · F123）：句子以 `Tool '<name>' is not
+    # enabled in this server:` 开头，门名夹在中间，所以它进不了前缀表 —— 与上面那颗同一块
+    # 牌子的规矩。修一颗留一颗就是把同一种事交成两个名字：这两发都出自 `_dispatch` 门口、
+    # 都在任何请求之前返回，差别只在"这副树没有这一扇"与"这台进程把它关了"。
+    ("is not enabled in this server", "tool_not_enabled", False,
+     "add the name to DHOLE_TOOLS (or unset it to enable every tool) and restart - "
+     "this build has the door, this process switched it off"),
 )
 
 _LEADING_CODE_RE = re.compile(r"[a-z][a-z0-9_]{2,}")
+
+
+def _lookup_prefix_row(code: str) -> tuple[str, bool, str]:
+    """按 code 取表里那一行的 (code, retryable, recover_with) —— 一位读者，不重抄句子。"""
+    for _prefix, c, r, rec in _DIAGNOSIS_PREFIXES:
+        if c == code:
+            return c, r, rec
+    return "", False, ""
+
+
+def _is_search_arg_refusal(err: str) -> bool:
+    """这句是不是搜索门那族"某个参数写错了"的判决。名单的作者是那颗修法表，不是这里。"""
+    from dhole_mcp.search import _PARAM_REPAIR_HINTS
+    return any(err.startswith(prefix) for prefix, _hint in _PARAM_REPAIR_HINTS)
 
 
 def classify_error_text(err: str) -> tuple[str, bool, str]:
@@ -1782,6 +2347,21 @@ def classify_error_text(err: str) -> tuple[str, bool, str]:
             # 而 retryable 停在 False，与同一份回执 next_action 里那句 "Retry once with
             # a longer timeout" 正好相反。分类器认得出类别的，布尔也去 `is_retryable`
             # 那张表读，不在这里另判一次。
+            # 那位在册作者写的状态句（`status_error_sentence`）：名字、布尔、杠杆三样都
+            # 出自同一处。这里只是读者 —— 不在第二处再判一遍「重发会不会变」。
+            _answered = _HTTP_ERROR_RE.match(err)
+            if _answered:
+                _st = int(_answered.group(1))
+                _retry, _lever = status_verdict(_st)
+                return status_error_code(_st), _retry, _lever
+            if _is_search_arg_refusal(err):
+                # 搜索门那一族以**参数名**打头（`Invalid engine: …`）：那是它自己立的规矩
+                # （`test_the_enum_argument_values_are_checked_by_dhole` 说前缀会把第一格词
+                # 占掉），所以它进不了大写前缀档，而首词兜底只会拿"Invalid" 后面那颗词当 code。
+                # 种类与别扇的参数拒绝同一颗 `invalid_request`，recover 那一行仍由表里那格
+                # 一份写；名单的作者也不在这里，是 `search._PARAM_REPAIR_HINTS` 的键
+                # （那颗表本来就在回答"哪颗参数错、怎么改"），这里只是读者。
+                return _lookup_prefix_row("invalid_request")
             from dhole_mcp.errors import (classify_network_error, get_hint,
                                           is_retryable)
             _category, _hint = classify_network_error(err)
@@ -1795,6 +2375,46 @@ def classify_error_text(err: str) -> tuple[str, bool, str]:
         _category, _ = classify_network_error(err)
         retryable = is_retryable(_category)
     return code, retryable, recover
+
+
+# ─── 一颗状态码说了什么：句子与判决同一位作者（评审 R02-134 · F116）──────────
+#
+# 实测（`review/.runtime/p1/r282_same_404_across_doors.json` · 本机靶站 · 零外网）：同一件
+# 事实「origin 回了 404」曾有**两位句子作者** —— 这里的一位写
+# `http_error_404: server returned error status`（`web_read` 的信封与 `web_crawl` 的行都从它
+# 取词），`feed._grab` 那一位写裸的 `HTTP 404`。裸句子既不在三张表里也不带自记号，判据认不出，
+# 于是那一行带着 `error` 却**整格没有把手**，而同门的 `next_action` 正指着「逐行的 diagnosis」。
+# 修法不是给裸句子在表里补一格（那是给第二位作者补户口：从此一件事实两个名字），而是让别的
+# 通道来问这里 —— 名字、布尔、杠杆三样都出自同一处，跨门就无从各判一遍。
+#
+# 布尔与那句杠杆不是新立的意见：同一封回执的 `next_action` 早就按状态码说过话
+# （429「wait before retrying」/ 5xx「Retry once after a pause」，见 `_agent_hints`），
+# 而把手从前一律答 `false` —— 两只手互相否决就是 D5 那条法在判决位的形状。4xx 的其余支
+# （404 / 410 / 451…）照旧 false：站方说的是「没有这个页面」，重发同一串改不了它。
+
+_RETRYABLE_STATUSES = frozenset({408, 425, 429})
+_HTTP_ERROR_RE = re.compile(r"^http_error_(\d{3})\b")
+
+
+def status_error_code(status: int) -> str:
+    """这颗状态码的 code —— 句子的名字与句子同一位作者（改措辞不许改 code）。"""
+    return f"http_error_{status}"
+
+
+def status_error_sentence(status: int) -> str:
+    """站点回了 4xx/5xx 时那一句人话 —— 唯一的作者（别的通道要写这件事就来问这里）。"""
+    return f"{status_error_code(status)}: server returned error status"
+
+
+def status_verdict(status: int) -> tuple[bool, str]:
+    """这颗状态码对「重发同一发会不会变」的回答，加上那一格的杠杆 —— 与句子同一位作者。"""
+    if status == 429:
+        return True, ("the limit is on rate, not on your arguments - wait for the window, "
+                      "then re-call this exact URL")
+    if status in _RETRYABLE_STATUSES or status >= 500:
+        return True, ("the origin failed at the origin - re-call after a pause; if it "
+                      "persists, switch source")
+    return False, ""
 
 
 def row_diagnosis(error: str) -> Optional[Dict[str, Any]]:
@@ -1824,6 +2444,21 @@ def _diagnose(result: ResponseModel) -> Optional[Dict[str, Any]]:
     code = ""
     retryable = False
     recover = ""
+    if _chain_ran_ok(result):
+        # R01-028: a chain that ran owns the answer to "did this call work", and the
+        # one thing the advice must never be is "issue the same chain again" — the
+        # steps already marked ok would run a second time (a fill would fill twice).
+        # `retryable=false` is what makes the two hands of this response agree
+        # instead of vetoing each other.
+        _issue = (result.metadata or {}).get("content_issue") or err
+        _code = (_issue.split(":")[0].split("_detected")[0] if _issue else "no_content")
+        return {"code": _code, "retryable": False,
+                "recover_with": ("the action chain ran — `metadata.actions` holds one "
+                                 "receipt per step, and that is the answer about this "
+                                 "call. The content verdict describes the page it left "
+                                 "behind, not the chain. Do NOT re-issue the same "
+                                 "chain: every step already marked ok would run "
+                                 "again (a fill would fill twice).")}
     if err:
         code, retryable, recover = classify_error_text(err)
         if code in ("js_shell", "bot_wall"):
@@ -1847,13 +2482,39 @@ def _diagnose(result: ResponseModel) -> Optional[Dict[str, Any]]:
             # 没用，是永远不可能有用 —— 档案站不持有登录态后的那份。
             recover = _auth_wall_step(result.url)
     elif not result.content_ok:
+        if result.page_type == "redirect":
+            # 与 `_agent_hints` 的 redirect 分支同一位作者：正文是跳转脚本，出路是
+            # 让浏览器跟随（R05-023）。不落到下面的 no_content/extraction_collapsed。
+            _redirect_can_render = (
+                not _browser_cannot_help(result, result.url)
+                and not _never_escalate(result, result.url))
+            if _redirect_can_render:
+                return {"code": "redirect", "retryable": True,
+                        "recover_with": ("re-fetch with force_fetcher='stealthy' (a "
+                                         "browser follows it), or open the target the "
+                                         "script names")}
+            return {"code": "redirect", "retryable": False,
+                    "recover_with": ("open the target the script names directly - the "
+                                     "browser tier is unavailable here")}
         code = {"auth_wall": "auth_wall", "paywall": "paywall",
                 "captcha": "bot_wall", "js_shell": "js_shell"}.get(
                     result.page_type, "no_content")
         retryable = code in ("bot_wall", "js_shell")
         if code == "no_content":
-            recover = ("the page carried no usable text - switch source, or try "
-                       "extraction_type='html'")
+            # R01-028, P09's现场: the delivered `content` WAS the quotable official
+            # text while this sentence taught the caller to change source. A verdict
+            # may not deny what the same response holds.
+            _chars = sum(len(str(c)) for c in (result.content or []))
+            if _chars >= 200:
+                code = "extraction_collapsed"
+                recover = ("the text below IS on the page - what collapsed is the "
+                           "extraction of a readable body, not the page. Before "
+                           "changing source, try the untried levers on THIS url: "
+                           "extraction_type='html', css_selector='…', focus='' "
+                           "(whole page), or offset= for the next slice")
+            else:
+                recover = ("the page carried no usable text - switch source, or try "
+                           "extraction_type='html'")
     elif result.is_truncated:
         code = "truncated"
         retryable = True
@@ -1958,8 +2619,7 @@ def _with_agent_hints(result: ResponseModel) -> ResponseModel:
     # （浏览器超时的 _over_budget_result）构造时就写好了更懂的那一份 —— 前缀表按
     # error 前缀归一出的泛化句不许把它盖掉（对浏览器超时说 "raise timeout" 恰是
     # 那条路径的专项 prose 要拦的动作）。缺席时前缀表仍是兜底。
-    if result.diagnosis is None:
-        result.diagnosis = _diagnose(result)
+    _attach_diagnosis(result)
     result.approx_tokens = _approx_tokens(result.content)
     applied = _IDENTITY_APPLIED.get()
     if applied and not result.identity_applied:
@@ -1968,23 +2628,58 @@ def _with_agent_hints(result: ResponseModel) -> ResponseModel:
 
 
 # How much later than the caller's own budget the _within_call_budget backstop
-# fires. See its docstring: it must lose the race to the tiers' own accounting.
-_BACKSTOP_GRACE_S = 1.5
+# fires —— 那颗数的作者在 `context.BACKSTOP_GRACE_S`（链里每一步的截止也读它），这里
+# 只是把同一个名字留给本模块的建议句用。See its docstring: it must lose the race to
+# the tiers' own accounting.
+_BACKSTOP_GRACE_S = BACKSTOP_GRACE_S
 
 
-def _budget_advice(stage: str, fetcher_used: str) -> str:
+def _as_sentence(text: str) -> str:
+    """Advice assembled from clause fragments still opens its field like a sentence.
+
+    These strings are built to sit after a "; " or inside a parenthesis, where a
+    lower-case start is right. Copied to the front of `next_action` the same
+    fragment opens the field with a lower-case word, which reads as a clause the
+    previous sentence never finished (measured live, R01-010: "Budget exhausted
+    after 32033ms at the fetch tiers. the fetch tiers on a document download").
+    A leading figure already looks sentence-initial, so digits pass through.
+    """
+    return text[:1].upper() + text[1:] if text[:1].isalpha() else text
+
+
+def _budget_advice(stage: str, fetcher_used: str, asked_ms: float = 0.0) -> str:
     """超时建议里不许出现这次根本没用到的旋钮（批次 3 的同一条规矩）。
 
     `force_fetcher='http'` 只有在浏览器档真的参与过这次调用时才是一个选项。实测的形状是
     一次 PDF 下载在 HTTP 档耗尽预算，而建议写着"传 force_fetcher='http' 以跳过浏览器渲染"
     —— 那次调用离渲染一步都没沾，读者因此以为浏览器是成本所在，去查一个不存在的环节。
+
+    同一族里另一半从前是空的：那句 "Raise timeout (e.g. timeout=60000)" **不看你已经给了
+    多少**。实测（15 场景体测，场景 10）：调用方传的正是 `timeout=60000`，61,529ms 之后
+    被掐，交回的建议劝他"抬到 60000" —— 一句劝人去做他刚刚做过的事的话，比不说更贵，
+    因为它让人怀疑自己没读懂参数。文档那一路早有对应的写法
+    （`server._document_budget_advice`：预算已经越过一次尝试的上限就不再劝抬），这一颗
+    通用建议照同一条口径补齐：说清这次已经带了哪颗数、dhole 还收得到多大、以及抬上去
+    买到的究竟是什么（浏览器时间，不是更快的下载）。
     """
-    head = "Raise timeout (e.g. timeout=60000) for a slow host"
+    asked = int(asked_ms or 0)
+    if asked >= TIMEOUT_MAX_MS:
+        head = (f"timeout was already at dhole's ceiling ({TIMEOUT_MAX_MS}ms), so there "
+                "is nothing left to raise - the lever is less work in one call")
+    elif asked:
+        # 说的数是**还剩多少**，不是再报一遍调用方刚给过的那一颗。
+        head = (f"Raise timeout - this call already had {asked}ms and dhole accepts up "
+                f"to {TIMEOUT_MAX_MS}ms ({TIMEOUT_MAX_MS - asked}ms more); raising buys "
+                "more time at this stage, not a faster site")
+    else:
+        head = "Raise timeout (e.g. timeout=60000) for a slow host"
     lowered = (stage or "").lower()
     if "browser" in lowered or "stealthy" in lowered or fetcher_used == "stealthy":
-        return f"{head}, pass force_fetcher='http' to skip browser rendering, or switch source."
-    return (f"{head}, or switch source - the browser tier never ran on this call (it "
-            f"ran out at the {stage}), so there is no rendering here to skip.")
+        return _as_sentence(f"{head}, pass force_fetcher='http' to skip browser rendering, "
+                            "or switch source.")
+    return _as_sentence(
+        f"{head}, or switch source - the browser tier never ran on this call (it "
+        f"ran out at the {stage}), so there is no rendering here to skip.")
 
 
 def _over_budget_result(url: str, budget_ms: float, elapsed_ms: float,
@@ -2007,14 +2702,35 @@ def _over_budget_result(url: str, budget_ms: float, elapsed_ms: float,
     where raising is exactly the wrong move (the browser tier knew better).
     """
     head = f"Budget exhausted after {int(elapsed_ms)}ms at the {stage}."
+    # One response, two figures, and until now no word about their relation: the
+    # error named the asked budget while `next_action` named the time actually
+    # spent (round 01, R01-042 — measured 10000 asked / 10876 spent on the local
+    # slow server, and 10000 / 68113 in the persona's live case). The gap has two
+    # honest readings and they lead to different actions, so say which one this is:
+    # a spill inside the backstop grace (an in-flight step finishing), or a real
+    # overrun past it (something inside this call did not stop when told).
+    asked, spent = int(budget_ms), int(elapsed_ms)
+    grace = int(_BACKSTOP_GRACE_S * 1000)
+    spill = spent - asked
+    if spill > grace:
+        relation = (f"it ran {spill}ms past the budget and its {grace}ms grace - the "
+                    "budget is not a hard kill, and something inside this call did not "
+                    "stop when told")
+    elif spill > 0:
+        relation = (f"{spill}ms over it is the {grace}ms grace that lets an in-flight "
+                    "step finish, not a second budget")
+    else:
+        relation = "it stopped inside the figure you asked for"
     result = ResponseModel(
         url=url, status=0, content=[], fetcher_used=fetcher_used,
         duration_ms=elapsed_ms,
-        error=(f"timeout: the {int(budget_ms)}ms call budget ran out during "
-               f"the {stage}. No content was extracted."),
+        error=(f"timeout: the {asked}ms call budget ran out during "
+               f"the {stage} (spent {spent}ms; {relation}). "
+               "No content was extracted."),
         next_action=(
-            f"{head} {diagnosis}" if diagnosis else
-            f"{head} {_budget_advice(stage, fetcher_used)}"),
+            f"{head} {_as_sentence(diagnosis)}" if diagnosis else
+            f"{head} {_as_sentence(relation)}. "
+            f"{_budget_advice(stage, fetcher_used, budget_ms)}"),
     )
     if diagnosis_struct is not None:
         result.diagnosis = diagnosis_struct
@@ -2032,10 +2748,6 @@ def _is_over_budget(result) -> bool:
 
 # 剪 summary 标签时能停的地方，按"说完一件事"的程度分两级。两级都是**带尾随分隔符的
 # 二元组**，这样 `rfind` 找到的位置就是剪口，不必再判断标点是不是落在了句尾。
-_SENTENCE_BREAKS = (". ", "! ", "? ")
-_CLAUSE_BREAKS = ("; ", " - ", ", ", ": ", " (")
-
-
 def _summary_label(msg: str, cap: int = 80) -> str:
     """A sentence shortened for the ``summary`` slot, ending where a **clause** ends.
 
@@ -2049,18 +2761,13 @@ def _summary_label(msg: str, cap: int = 80) -> str:
     stays in ``error`` either way, so the label owes the reader only one thing:
     that it stops where the sentence stops.
 
-    Order is deliberate: a sentence boundary anywhere inside the cap beats a later
-    clause boundary, which beats the old word break (no boundary at all — a long
-    run of commas-free prose — must not produce an empty label).
+    排序与判据现在住在 `snap_to_boundary`（分页那一路也要它，见 `server._apply_chunking`）；
+    这一层只负责"短到 cap"和"收尾不留悬空空白"。
     """
     if len(msg) <= cap:
         return msg
     head = msg[:cap]
-    for group in (_SENTENCE_BREAKS, _CLAUSE_BREAKS):
-        at = max((head.rfind(sep) for sep in group), default=-1)
-        if at > 0:
-            return head[:at].rstrip()
-    return head.rsplit(" ", 1)[0]
+    return head[:snap_to_boundary(head)].rstrip()
 
 
 def _invalid_request_result(url: str, msg: str, next_action: str = "",
@@ -2080,6 +2787,11 @@ def _invalid_request_result(url: str, msg: str, next_action: str = "",
     ``tool`` names the tool the caller actually invoked (评审R1刀3): the URL
     validation path is shared, and a web_request refusal quoting web_read's
     boilerplate reads as advice about a different call.
+
+    默认那一句**以本门的申报开头**（评审 R02-098 · 真机 `r119_url_shape_clauses.json`）：
+    形状那一族（scheme / 空 url / 反斜杠）14 格里 13 格只有"改参数"没有"这一发没出去过"，
+    因为申报那半句从来不住在这里，而这一支正是形状拒绝的落点。句子本体仍由
+    `security.URL_SHAPE_RECOVERY` 一份写，动词由 `context.nothing_went_out()` 按门取。
     """
     result = ResponseModel(
         url=url, status=0, content=[], fetcher_used="none",
@@ -2087,12 +2799,28 @@ def _invalid_request_result(url: str, msg: str, next_action: str = "",
         error=f"invalid_request: {msg}",
         summary=f"invalid request · {_summary_label(msg)}",
         next_action=next_action or (
-            "Correct the argument and call again - no request was made. "
-            f"{tool} takes an absolute http(s) URL "
-            "(e.g. https://example.com)."),
+            f"{nothing_went_out(tool)} {URL_SHAPE_RECOVERY.format(tool=tool)}"),
     )
     _apply_envelope(result)
+    # 拒绝信封也要交出那根把手（评审 R02-129 · r250 数到 10 扇 JSON 门全缺）：句子已由
+    # `invalid_request:` 前缀在册，缺的从来不是判据，是有人去问它。
+    _attach_diagnosis(result)
     return result
+
+
+def _attach_diagnosis(result: ResponseModel) -> None:
+    """把「结构化孪生」那一格交给**判据表**写 —— 一处守卫，两处信封共用（评审 R02-129）。
+
+    从前只有 `_agent_hints` 那条路问过表；`_invalid_request_result`（全部 10 扇 JSON 门的
+    参数层与 URL 守卫拒绝）与 robots 那扇预检拒绝各自造完信封就收工，于是设计过的拒绝
+    `diagnosis` 整格缺席，而手册写的正是「ABSENT = 干净成功 / switch on `code`」
+    （`references/fields.md:67`、`models.py:143`）。同一封回执里 `content_ok: false` 与
+    「没有把手」并排，就是 D5 那条法在建议位的形状。
+
+    守卫（已有则不覆盖）留着：专项路径（浏览器超时、动作链）构造时就写好了更懂的那一份。
+    """
+    if result.diagnosis is None:
+        result.diagnosis = _diagnose(result)
 
 
 def _report_action_outcomes(result: ResponseModel, page_action: Any) -> None:
@@ -2166,11 +2894,38 @@ def _report_action_outcomes(result: ResponseModel, page_action: Any) -> None:
                     "the two ways that do submit. The steps that did land are on the "
                     "page, so read the content as it stands")
             else:
-                result.next_action = (
-                    "these interactions never happened, so the content is the page "
-                    "BEFORE them - check each failed selector against a fresh copy of "
-                    "the page and retry just that action (metadata.actions lists one "
-                    "row per action)")
+                ran_first = [o for o in outcomes if o.get("ok")]
+                if ran_first:
+                    # 从前这一句是 "these interactions never happened, so the content
+                    # is the page BEFORE them" —— 而它是在**至少有一步成功了**的时候
+                    # 说出口的（实测：`fill '#qty' ok:true` 与 `read '#qty'` 失败同在一
+                    # 条链里）。一句话抹掉已经落地的动作，读的人就只剩两个选择：要么信
+                    # 一句假话，要么重跑整条链 —— 而重跑会再填一遍那个框。这比不说更贵。
+                    names = "; ".join(str(o.get("action", ""))[:60]
+                                      for o in ran_first)
+                    result.next_action = (
+                        "the step(s) listed as ok DID take effect on this page "
+                        f"({names}); the failed one never happened - retry just that "
+                        "action against a fresh copy of the page (metadata.actions "
+                        "lists one row per action). Re-running the whole chain "
+                        "replays the ok steps")
+                else:
+                    result.next_action = (
+                        "these interactions never happened, so the content is the "
+                        "page BEFORE them - check each failed selector against a "
+                        "fresh copy of the page and retry just that action "
+                        "(metadata.actions lists one row per action)")
+    cut = [o for o in outcomes if o.get("cut_by_budget")]
+    if cut:
+        # 预算掐在**第几步**是这一格唯一决定下一步动作的信息：8 步的链断在第 7 步，
+        # 该从那一步续上；一步没走，该整条重来。从前这两种都只写成
+        # "No content was extracted"，读的人只能重跑整条链，代价是一整轮浏览器时间
+        # （实测：一次元素截图 61,529ms，回执一个字节都没有）。
+        where = "; ".join(str(o.get("step", "?")) for o in cut)
+        landed = len([o for o in outcomes if o.get("ok")])
+        prefix = f"{result.summary} · " if result.summary else ""
+        result.summary = (f"{prefix}chain cut by the budget at step {where} - "
+                          f"{landed} step(s) landed before it")
     ran = [o for o in outcomes if o.get("ok")]
     if ran and _is_over_budget(result):
         # 预算掐断一条动作链时，"什么都没发生"是最容易读错的一句话：列在这里的那几步是
@@ -2223,4 +2978,7 @@ def _robots_blocked_result(url: str, verdict: RobotsVerdict) -> ResponseModel:
         ),
     )
     _apply_envelope(result)
+    # 同一颗病、同一个修法（r250 之后在同一个文件里读到的第三位）：这也是一封「什么都没发出去」
+    # 的预检拒绝，`robots_disallowed:` 前缀早就在册，缺的还是那句「有人去问表」。
+    _attach_diagnosis(result)
     return result

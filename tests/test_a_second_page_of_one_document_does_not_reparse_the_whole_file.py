@@ -110,17 +110,24 @@ def test_paging_is_still_correct_and_contiguous(big_md):
     """
     srv = MasterFetchServer()
     whole = open(big_md, encoding="utf-8").read()
-    pages, o = [], 0
+    pages, stops, o = [], [], 0
     for _ in range(5):
         r = asyncio.run(srv.doc_parse(file_path=big_md, offset=o))
         pages.append(r.content[0])
+        stops.append(r.next_offset)
         if not r.is_truncated:
             break
         o = r.next_offset
     assert len(pages) >= 3, f"翻页没翻起来（{len(pages)} 页），这条在测别的东西"
     assert pages[0] != pages[1]
-    assert pages[1][:300] in whole[40_000:], "第二页切错了位置（不是第 40k 之后的原文）"
-    assert pages[0][:300] in whole[:40_000], "第一页不是文件开头的原文"
+    # 位置由响应自己报的那颗 `next_offset` 决定，而不是"每页固定 40k"这个假设：
+    # 现在切口会退到最近的界上（不退就剪断词），所以第 40,000 字这个数已经不再是界。
+    # 换成钉位置反而更强 —— 原来是" somewhere 在 40k 之后"，现在是"就从上一片停下的
+    # 那个字开始"，跳一页和重一页都过不了这条。
+    assert pages[1][:300] == whole[stops[0]:stops[0] + 300], (
+        f"第二页不是从第一页报的 {stops[0]} 开始的（跳页或重页）")
+    assert pages[2][:300] == whole[stops[1]:stops[1] + 300], "第三页与第二页不接续"
+    assert pages[0][:300] == whole[:300], "第一页不是文件开头的原文"
     assert all(p for p in pages), "有一页交回了空正文"
 
 

@@ -127,7 +127,7 @@ class TestTheTableIsTheEngines:
         # 差分当场可验，所以它从"收不到过滤"搬进"收得到"。剩下三家仍是线路事实。
         filtered, unfiltered = date_support(POOL)
         assert filtered == ["baidu", "bing", "bing_global", "brave", "duckduckgo"]
-        assert unfiltered == ["so360", "sogou", "yandex"]
+        assert unfiltered == ["marginalia", "so360", "sogou", "yahoo", "yandex"]
 
     def test_an_unknown_engine_counts_as_unfiltered(self):
         assert date_support(["newengine"]) == ([], ["newengine"])
@@ -485,7 +485,9 @@ class TestTheNoteReachesTheAnswer:
         from dhole_mcp import search
 
         async def fake_source(url, timeout=6):
-            return "一个源页的标题", "源页正文，够长的一段文字用来派生查询词。" * 8
+            return {"title": "一个源页的标题",
+                    "body": "源页正文，够长的一段文字用来派生查询词。" * 8,
+                    "status": 200, "reason": "", "detail": ""}
 
         monkeypatch.setattr(search, "fetch_source_for_similar", fake_source)
         out = self._run(monkeypatch, ["yandex"],

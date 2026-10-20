@@ -47,7 +47,10 @@ async def test_the_handler_returns_the_shape_error_not_a_transport_crash():
     server = MasterFetchServer()
     r = await server.cred_defaults(set={"cookies": 42, "host": "api.example.com"})
     assert r.error
-    assert r.error.startswith("cookies:")
+    # 评审 R02-102 之后这一扇的门口拒绝统一带 `invalid_request:`（R02-097 立的信封契约，
+    # 从前这一扇是漏网的那一扇）。原句 `startswith("cookies:")` 守的是"回执开头就在点名被拒的
+    # 那颗键、不是裸兜底 repr" —— 这份意思照守，只是名字跟着前缀往后挪了一格。
+    assert r.error.startswith("invalid_request: cookies:"), r.error
     assert r.next_action  # 形状错误自带走向，不是裸兜底
 
 

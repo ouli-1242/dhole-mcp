@@ -271,6 +271,18 @@ def test_every_tool_call_opens_one_bucket():
     assert scope_at < dispatch_at, "桶开在分发之后，那些话没有 summary 可进"
 
 
+@pytest.mark.asyncio
+async def test_web_read_announces_a_cap_above_the_ceiling(monkeypatch):
+    """R04-029 的原参数（web_read, 999999）在 2026-10-20 复现：summary 里已经有
+    `max_content_chars clamped 999999->200000`，所以「静默接受」不成立，产品不改。
+    这条把那次读数钉住 —— 将来若有人把夹取改成拒绝，或者把注记丢掉，这里会红。"""
+    _stub_one_tier(monkeypatch)
+    out = await MasterFetchServer(cache_ttl=0).web_read(
+        "https://ttl.example.com/", cache_ttl=0, max_content_chars=999_999)
+    assert ("max_content_chars clamped 999999->200000 (supported range 500-200000)"
+            in out.summary), out.summary
+
+
 @pytest.mark.parametrize("tool,arg,asked,applied,lo,hi", [
     ("web_read", "max_content_chars", 1, 500, 500, 200_000),
     ("web_read", "max_links", 0, 1, 1, 100),
@@ -308,8 +320,8 @@ def test_a_negative_cache_ttl_is_worded_once_for_all_three_tools():
     from dhole_mcp.context import _cache_ttl_note
 
     assert _cache_ttl_note(-1) == (
-        "cache_ttl=-1 is not a duration; using 0 - this call reads no cache "
-        "and writes none")
+        "cache_ttl=-1 is not a duration; using 0 - this call reads no cache, "
+        "and the copy it fetches is stored like any other read")
     # 字符串客户端（{"cache_ttl": "-1"}）必须落到同一句上。
     assert _cache_ttl_note("-1") == _cache_ttl_note(-1)
 
@@ -323,10 +335,17 @@ def test_a_cache_ttl_that_is_a_duration_says_nothing(fine):
 
 
 def test_the_sentence_carries_the_half_of_zero_the_wire_never_states():
-    """`0` 的另一半是"也不写缓存" —— 那正是"续读为什么又抓了一次"的答案。"""
+    """`0` 的那一半是"这一发不读缓存" —— 而它**从来不是**"也不写缓存"。
+
+    旧句子写的正是后者，因为旧实施把两件事合在了一颗参数上；R02-032 把写侧还给普通读
+    之后，那句承诺就成了假话，所以句子与实施一起改（同一把刀，两个落点）。这里锁的是
+    新边界：说清读侧，不许再许诺一次它已经不再做的"不写"。
+    """
     from dhole_mcp.context import _cache_ttl_note
 
-    assert "reads no cache and writes none" in _cache_ttl_note(-1)
+    note = _cache_ttl_note(-1)
+    assert "reads no cache" in note, note
+    assert "writes none" not in note, f"句子还停在旧实施上：{note}"
 
 
 def _stub_one_tier(monkeypatch):

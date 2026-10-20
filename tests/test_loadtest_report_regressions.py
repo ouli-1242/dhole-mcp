@@ -487,14 +487,23 @@ class TestFeedContract:
         assert payload["next_action"]
 
     def test_both_channels_carry_the_same_shape(self, monkeypatch):
-        """D-11: content[0].text was a bare array, structured_content a dict."""
+        """D-11: content[0].text was a bare array, structured_content a dict.
+
+        期望随 R02-015 改写，理由写在这里：这一格守的从来不是「顶层只能有 `feeds` 一颗键」，
+        而是**两条通道是同一个形状**。原先那句 `structured == {"feeds": []}` 把当时的顶层键
+        集合当成了契约，而 R02-015 证的正是「一条通道的回信没有信封」—— 于是这条锁与缺陷
+        同形。改写后守的东西只多不少：两条通道逐字相等（D-11 的本意）、`feeds` 照旧在，
+        而信封（summary / 空手时的 next_action）现在也被钉住。
+        """
         async def fake_feed(self, **kwargs):
             return []
 
         monkeypatch.setattr(server_mod.MasterFetchServer, "feed_read", fake_feed)
         content, structured = _dispatch("feed_read", {"urls": ["https://example.test/feed"]})
 
-        assert structured == {"feeds": []}
+        assert structured["feeds"] == []
+        assert set(structured) == {"feeds", "summary", "next_action"}, structured
+        assert "0 rows answered" in structured["summary"], structured
         assert json.loads(content[0].text) == structured
 
     def test_a_missing_urls_argument_is_reported_as_an_envelope(self, monkeypatch):
@@ -591,6 +600,22 @@ class TestOriginalUrl:
         ))
         assert out.url == "https://example.com/final"
         assert out.original_url == "https://example.com/start"
+
+    def test_the_summary_names_both_ends_of_a_rewrite(self, monkeypatch):
+        """R05-005/018: the field was correct but the status line never said it.
+
+        A caller scanning `summary` (the one line the receipt is built around)
+        could not tell a stale id that redirected from the page it asked for.
+        """
+        _stub_fetch_layer(monkeypatch, ResponseModel(
+            url="https://example.com/final", status=200, content=["body"],
+            content_type="text/html", total_extracted_chars=4,
+        ))
+        out = asyncio.run(MasterFetchServer().web_read(
+            "https://example.com/start", cache_ttl=0,
+        ))
+        assert ("redirected from https://example.com/start to "
+                "https://example.com/final") in out.summary, out.summary
 
     def test_an_unchanged_url_leaves_the_field_empty(self, monkeypatch):
         _stub_fetch_layer(monkeypatch, ResponseModel(

@@ -114,7 +114,14 @@ class TestTheTailIsNotClipped:
         assert out.summary.startswith(prefix)
         tail = out.summary[len(prefix):]
         assert GUARD_MSG[len(tail)] == " ", f"summary 停在词中间: {tail!r}"
-        assert out.error == GUARD_MSG
+        # 【原判据搬家 · 评审 R02-113】这一颗从前钉的是 `out.error == GUARD_MSG` —— 那句裸文本
+        # 正是"不穿信封"的那一副脸：同一族的私网拒绝、URL 形状拒绝、存储门拒绝都带
+        # `invalid_request:` 前缀，只有守卫这一族五扇门不带（r172 的六张脸）。产品补齐前缀之后，
+        # 这条断言若原样留着就等于把缺陷钉成契约。**没有放宽**：整句仍然逐字必须在，
+        # 只是按信封契约带着前缀在 —— 剪词那一害（上面那颗）与"不许把责任推给参数"那一族断言
+        # 一字未动，16 格同文件其余全绿。
+        assert out.error == f"invalid_request: {GUARD_MSG}", out.error
+        assert GUARD_MSG in out.error, "整句被换了，不只是加了前缀"
 
 
 class TestDiscoverAndCrawlSayTheWholeSentence:

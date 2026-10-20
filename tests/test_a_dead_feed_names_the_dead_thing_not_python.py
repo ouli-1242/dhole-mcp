@@ -149,7 +149,13 @@ def test_row_and_envelope_agree_on_every_shape():
     cases = [f"network_error: dns_failure - x", DNS_AS_TLS, "not a feed: StartTag: …",
              "invalid_request: bad since", "HTTP 500", "all_tiers_failed: …",
              "browser_binary_missing: no chrome", "feed too large (9 bytes, cap 1)",
-             "timeout: the 1500ms call budget ran out"]
+             "timeout: the 1500ms call budget ran out",
+             # 状态码那一族换了一位作者之后，两只手仍要同答（R02-134 · F116）：
+             # 404 不许多发一次、503 可以 —— 布尔不许在这一格各判一遍。
+             "http_error_404: server returned error status",
+             "http_error_503: server returned error status",
+             "body_too_large: the feed document is 20 bytes, over the 10 cap",
+             "invalid_request: since must be a date string (ISO-8601 or an RSS timestamp)"]
     # 只比"有 error 的串"：空 error 时 `_diagnose` 转去读 page_type / content_ok
     # （no_content、truncated 那一族），而行级判据手上只有那一串 —— 两边不该同答。
     for err in cases:
@@ -222,3 +228,125 @@ def test_every_feed_failure_shape_names_a_code(monkeypatch):
             assert row["diagnosis"] and row["diagnosis"]["code"] not in ("", "not",
                                                                         "error"), (
                 f"{which}：行上的 code 是兜底发明的词 —— {row['diagnosis']}")
+
+
+# ─── 5 · 站点**答过**的状态码只许有一位句子作者（R02-134 · F116）─────────────
+#
+# 现场（`review/.runtime/p1/r282_same_404_across_doors.json` · 本机靶站 · 零外网）：同一
+# 件事实「origin 回了 404」有两位句子作者 —— 在册的那位写 `http_error_404: server returned
+# error status`（`quality._detect_content_issue`，`web_read` 的信封与 `web_crawl` 的行都从
+# 它取词），第二位是 `feed._grab` 的裸 `HTTP 404`。裸的那一句既不在三张表里也不带自记号，
+# 于是 `row_diagnosis` 认不出、那一行**整格没有把手**，而这扇门的 `next_action` 正指着
+# 「逐行的 diagnosis」。r284 又量出同族两支：`feed too large (…)` 与 `since …` 两句由
+# feed 自家写、code 却由首词兜底发明（`feed` / `since`）—— 那是同一件事的第二种坏法。
+#
+# 边界（不许顺手做的两件事）：
+#   · 不许把裸的 `HTTP 404` 塞进 `_DIAGNOSIS_PREFIXES`（那是给第二位作者补户口，从此一件
+#     事实两个名字）；要改的是**产地**，让它问那位在册作者；
+#   · `retryable` 不许在这一格另判一遍：那颗数说什么，与同一封回执 `next_action` 说的
+#     「Retry once after a pause」（5xx）/「wait before retrying」（429）必须是同一句话，
+#     否则两只手又互相否决（D5）。404 那一支照旧 false —— 站方说「没有这个页面」，重发
+#     同一发不会变。
+
+class _Answers:
+    """假 HTTPSession：`get` 交回一个**答过的**状态码（不是异常，也没有正文）。"""
+
+    def __init__(self, status, body=b""):
+        self.status, self.body = status, body
+
+    async def get(self, url, **kw):
+        return _Answered(self.status, self.body)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return None
+
+
+class _Answered:
+    status_code = 0
+    body = b""
+    headers = None
+    encoding = "utf-8"
+
+    def __init__(self, status, body):
+        self.status_code, self.body, self.encoding = status, body, "utf-8"
+        self.headers = {}
+
+
+def _grab_answer(monkeypatch, status, body=b"", cap=None):
+    """跑一次真的 `_grab`（只有 session 是桩），把上线那一格的原句读回来。"""
+    monkeypatch.setattr("dhole_mcp.fetcher.HTTPSession", lambda **kw: _Answers(status, body))
+    if cap is not None:
+        monkeypatch.setattr(F, "_MAX_FEED_BYTES", cap)
+    return asyncio.run(F._grab(URL, 5))
+
+
+def test_an_answered_status_is_named_by_the_registered_author(monkeypatch):
+    """feed 的行不许自己造一句「HTTP 404」：它要问那位在册作者，取到同一串。"""
+    from dhole_mcp.quality import status_error_sentence
+
+    err = _grab_answer(monkeypatch, 404)[3]
+    assert err == status_error_sentence(404), err
+    assert err != "HTTP 404", "第二位作者还在写裸句子"
+    diag = row_diagnosis(err)
+    assert diag and diag["code"] == "http_error_404", diag
+    assert diag["retryable"] is False, diag
+
+
+def test_the_same_answered_status_is_named_once_in_every_channel(monkeypatch):
+    """同一颗 404 在 feed 行 / web_read 信封 / 爬行的行上是同一个名字（三处都读作者）。"""
+    from dhole_mcp import quality as Q
+    from dhole_mcp.models import ResponseModel
+
+    feed_err = _grab_answer(monkeypatch, 404)[3]
+    web_read_err = Q._detect_content_issue(
+        ResponseModel(url="https://origin.test/page", status=404, content=[], error=""))
+    assert feed_err == web_read_err, (feed_err[:70], web_read_err[:70])
+    assert row_diagnosis(feed_err)["code"] == row_diagnosis(web_read_err)["code"]
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 408, 429])
+def test_a_status_that_invites_a_retry_says_so_in_both_hands(monkeypatch, status):
+    """布尔不许比建议保守：同一封回执里 `next_action` 让人等一会儿再发，`retryable` 就是真。"""
+    from dhole_mcp import quality as Q
+    from dhole_mcp.models import ResponseModel
+
+    err = _grab_answer(monkeypatch, status)[3]
+    diag = row_diagnosis(err)
+    assert diag and diag["code"] == f"http_error_{status}", diag
+    assert diag["retryable"] is True, f"{status} 说「重发不会变」：{diag}"
+    assert diag["recover_with"], f"说要重发却不指杠杆：{diag}"
+    advice = Q._agent_hints(ResponseModel(url="https://origin.test/page", status=status,
+                                         content=[], error=err))[1]
+    assert "retry" in advice.lower(), f"两只手对不上：{advice[:120]} vs {diag}"
+
+
+@pytest.mark.parametrize("status", [404, 410, 451])
+def test_a_permanent_answer_is_not_invited_into_a_second_try(monkeypatch, status):
+    """反向锁：不许有人为了让 5xx 说真话而把这族一并翻成「可重试」。"""
+    err = _grab_answer(monkeypatch, status)[3]
+    diag = row_diagnosis(err)
+    assert diag and diag["code"] == f"http_error_{status}", diag
+    assert diag["retryable"] is False, f"{status} 的把手在劝人重发同一发：{diag}"
+
+
+def test_a_feed_bigger_than_its_own_cap_is_named_by_a_token(monkeypatch):
+    """`feed too large (…)` 的 code 从前是兜底按第一个词造的（`feed`）—— 名字要住在作者侧。"""
+    err = _grab_answer(monkeypatch, 200, body=b"x" * 40, cap=10)[3]
+    assert err.startswith("body_too_large:"), err
+    assert not err.startswith("feed too large"), err
+    diag = row_diagnosis(err)
+    assert diag["code"] == "body_too_large", diag
+    assert diag["retryable"] is False, diag
+
+
+def test_a_rejected_since_is_named_as_the_parameter_refusal_it_is():
+    """`since` 读不出日期是**参数**拒绝：它的名字与该门别面的参数拒绝同一颗，不是 `since`。"""
+    row = asyncio.run(F.fetch_feed(URL, since="not-a-date"))
+    assert row.error.startswith("invalid_request: "), row.error
+    assert row.diagnosis["code"] == "invalid_request", row.diagnosis
+    again = asyncio.run(F.fetch_feed(URL, since=12345))
+    assert again.diagnosis["code"] == "invalid_request", again.diagnosis
+

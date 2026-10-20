@@ -49,6 +49,8 @@ from dhole_mcp import feed as feed_mod
 from dhole_mcp import wire
 from dhole_mcp.context import _arg_notes_scope
 from dhole_mcp.models import ResponseModel
+from dhole_mcp.quality import _budget_advice, _over_budget_result
+from dhole_mcp.security import TIMEOUT_MAX_MS, validate_timeout
 from dhole_mcp.server import (
     _HTTP_ATTEMPT_CAP_MS,
     _document_budget_advice,
@@ -267,6 +269,67 @@ def test_a_document_under_the_attempt_cap_is_still_told_the_lever_works():
     suggested = int(re.search(r"timeout=(\d+)", advice).group(1))
     assert suggested <= _HTTP_ATTEMPT_CAP_MS, advice
     assert f"caps at {_HTTP_ATTEMPT_CAP_MS // 1000}s" in advice, advice
+
+
+def test_the_generic_advice_never_pitches_the_number_already_in_play():
+    """通用那一句（非文档路径）从前只有一个写死的例子：`Raise timeout (e.g.
+    timeout=60000)` —— 而它不看调用方已经给了多少。
+
+    现场（15 场景体测，场景 10）：`timeout=60000` 的一发元素截图跑了 61,529ms 被掐，
+    建议劝的就是"抬到 60000"。一句劝人去做他刚刚做过的事的话不是建议，是让人怀疑自己
+    没读懂参数（实测之后那一格没有再试，直接换了路）。
+    """
+    advice = _budget_advice("actions (stealthy) tier", "", 60_000)
+    assert "timeout=60000" not in advice, advice
+    assert "already had 60000ms" in advice, advice
+    assert "120000" in advice, advice
+
+
+def test_the_advice_shows_the_room_rather_than_a_second_guess_at_the_ceiling():
+    """剩下的余量直接算出来给人看，人就不必去猜 dhole 还收不收得下。"""
+    advice = _budget_advice("actions (stealthy) tier", "", 60_000)
+    assert f"{TIMEOUT_MAX_MS - 60_000}ms more" in advice, advice
+
+
+def test_a_budget_at_the_ceiling_is_told_there_is_nothing_left_to_raise():
+    """另一半：已经碰到门的那一发，"再抬抬"是一句做不到的话。"""
+    advice = _budget_advice("HTTP tier", "", TIMEOUT_MAX_MS)
+    assert "Raise" not in advice, advice
+    assert "nothing left to raise" in advice, advice
+
+
+def test_a_default_sized_budget_still_hears_the_verb():
+    """反面守卫：25000（actions 那一档的默认）时候 "Raise timeout" 必须还在 ——
+    这一刀是把谎撤掉，不是把一句有用的话删了。"""
+    advice = _budget_advice("actions (stealthy) tier", "", 25_000)
+    assert advice.startswith("Raise timeout"), advice
+
+
+def test_the_built_over_budget_answer_carries_what_was_asked():
+    """整条线：`_over_budget_result` 传下去的就是它自己那发用的预算，不是别的常数。"""
+    r = _over_budget_result("http://127.0.0.1:8399/captcha", 60_000, 61_529,
+                            "actions (stealthy) tier", "")
+    assert "already had 60000ms" in r.next_action, r.next_action
+    assert "timeout=60000" not in r.next_action, r.next_action
+
+
+def test_the_ceiling_the_advice_names_is_the_ceiling_the_door_enforces():
+    """一个数的几个家必须同值：门口拒的那颗、建议里念的那颗、常驻层写的那句。
+
+    与 `_HTTP_ATTEMPT_CAP_MS` 那条对齐守卫同一个理由 —— 数有两处家而没有测试，
+    就是漂移的开始。
+    """
+    from dhole_mcp.security import SecurityError
+
+    assert validate_timeout(TIMEOUT_MAX_MS) == TIMEOUT_MAX_MS
+    with pytest.raises(SecurityError, match=str(TIMEOUT_MAX_MS)):
+        validate_timeout(TIMEOUT_MAX_MS + 1)
+    # 常驻层那颗 `timeout` 描述的口径（"max 120000"）必须与门一致
+    named = [t["name"] for t in MasterFetchServer._TOOL_DEFS
+             if (t["inputSchema"].get("properties") or {}).get("timeout")
+             and f"max {TIMEOUT_MAX_MS}" in
+             t["inputSchema"]["properties"]["timeout"]["description"]]
+    assert named, "没有任何一颗 `timeout` 描述写着这道门：建议与门口各说一套"
 
 
 def test_the_cap_and_the_receipt_are_explained_where_an_agent_will_look():

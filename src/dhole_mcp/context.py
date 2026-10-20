@@ -61,6 +61,15 @@ _INCLUDE_LINKS: contextvars.ContextVar[bool] = contextvars.ContextVar("_include_
 # that anything had been left out; links.total_found + links.is_truncated now
 # report it, and this knob decides where the cut lands.
 _MAX_LINKS: contextvars.ContextVar[int] = contextvars.ContextVar("_max_links", default=0)
+# The body cap the CALLER NAMED (web_read `max_content_chars`), before any default
+# or clamp was applied. A context var because the one place that can see the merge
+# happen (`server._apply_chunking`) is four layers below the entry that knows
+# whether a number was pointed at all. `None` means the caller never named one and
+# ran on the documented default budget — then "over the cap" is not an event that
+# happened to anybody, and :func:`_over_cap_note` stays silent for the same reason
+# :func:`_timeout_floor_note` does.
+_MAX_CHARS_NAMED: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(
+    "_max_chars_named", default=None)
 # Per-call css_selector (web_read). Read by _with_agent_hints rather than at the
 # extraction site, so a selector that could not apply to the response is reported on
 # EVERY return path (fresh fetch, cache hit, bulk, archive) instead of only where
@@ -106,6 +115,85 @@ def set_mcp_session(session: Optional[Any]) -> None:
 # 生在 `web_read` 这条路上 —— 所以按 `web_read` 算，与 `_METHOD` 的 "GET" 默认值同一
 # 条理由：默认值要让每条既有路一字不改。
 _TOOL: contextvars.ContextVar[str] = contextvars.ContextVar("_tool", default="")
+
+
+#: 这一发"什么也没发生"该怎么说，按**门类**取词（评审 R02-089）。
+#:
+#: 判据从前问的是参数面：`_nothing_went_out()` 拿"这扇收不收 `cache_ttl`"分 fetched/sent。
+#: 数过之后这条轴是错的 —— 11 扇里只有 3 扇收 `cache_ttl`（`web_read`/`web_crawl`/`web_search`），
+#: 其余 8 扇全被默认支推到 `sent`，包括纯读的 `web_discover`/`doc_parse`/`feed_read` 和根本不碰
+#: 网络的 `sys_state`/`sys_guide`/`cred_defaults`。真机 `r105_one_door_three_verbs.json`：同一扇
+#: `web_discover` 上并存 `fetched`（本门的 resume 拒绝）、`sent`（陌生参数名那层）、
+#: `fetched or changed`（类型层）三种说法 —— 一扇门三个口径，调用方按哪一句判断都不对。
+#:
+#: 所以类别是**逐扇声明**的，不是推断的：每一扇该说的那句，证据就在它自己已有的拒绝里
+#: （discover 说的是 fetched，因为它要交回的是"这一发没去取过站点"）。表外的门沿用旧原话：
+#: 那三扇既不抓不写不跑动作，本轮也没量到"现在这句害到谁" —— 不为没量到的句子发明新词。
+_DOOR_KIND: dict[str, str] = {
+    "web_read": "read", "web_crawl": "read", "web_discover": "read",
+    "feed_read": "read", "doc_parse": "read",
+    "web_request": "write",
+    "web_act": "action",
+    "web_search": "search",
+    # 存储门（评审 R02-102 · 真机 `r121_sys_doors.json` 的 C4/C6）：这一扇**自己已经在说**
+    # `Nothing was stored or forgotten.`（`server.py` 里五处字面量），而陌生参数名那颗落到
+    # 表外默认支听见的却是 `fetched or changed` —— 一扇两种申报。进表用的就是它自己那句，
+    # 不是本轮发明的新词。
+    "cred_defaults": "store",
+    # 状态门（评审 R02-116 · 真机 `r188_door_table_census.json` + `r189_sys_state_clause_authors.json`）：
+    # F97 已经让它穿自己的模型，句子却仍住表外 —— 而表外那一支的意思是"这扇门没人认领"。
+    # 进来的那句话**与默认支逐字相同**：登记不是改口，变的只是它从此有作者。它另一面（erasure）
+    # 说的是 `Nothing was erased.`，那一句也归这位作者（`nothing_erased()`），两种句子都留着。
+    "sys_state": "state",
+    # 手册门（评审 R02-115 · 真机 `r192_sys_guide_faces.json`）：这一扇交的就是手册，
+    # 按设计没有 JSON 回执（`models.py` 里也没有 `SysGuideModel`）。从前它的陌生参数拒绝
+    # 却穿一副刚抓完网页的壳，而它的 unknown-topic 那一面说的是散文 —— 一扇两种语言。
+    # 这句是新的：R02-102 那条"不许发明新词"在这里没有可取的旧词，因为这扇从没在任何地方
+    # 申报过"这一发什么也没发生"（它连申报位都没有）。词按它自己的名词造：它服务的是手册。
+    "sys_guide": "guide",
+}
+_UNDECLARED_DOOR_WAY_OUT = "Nothing was fetched or changed."
+#: `sys_state` 在册之后说的那句。与上面那句**今天同字**是刻意的（登记不是改口，R02-116），
+#: 但它是自己的一颗字面量：默认支哪天改了词，不许顺带把一扇有主的门也改了口。
+_STATE_CLAUSE = "Nothing was fetched or changed."
+#: `sys_guide`：这一扇给的是手册卷，不接受"抓回来的一页"那种说法（评审 R02-115）。
+_GUIDE_CLAUSE = "Nothing was served from the handbook."
+#: `sys_state` 的 erasure 面：这一发没抹掉任何东西。与上面那句不是一回事，所以不合并。
+_ERASURE_CLAUSE = "Nothing was erased."
+
+
+def nothing_erased() -> str:
+    """`sys_state` 的 erasure 面该在行首说的那半句（评审 R02-116）。
+
+    它与 `nothing_went_out()` 一样只许有一位作者：`server.py:9108` 从前把这句申报焊在文案里，
+    于是同一扇门的两条拒绝路各有各的写法 —— 说的都对，但其中一条没人负责。
+    """
+    return _ERASURE_CLAUSE
+
+
+def nothing_went_out(door: str = "") -> str:
+    """这一发什么都没发生时，本门该说的那半句 —— 全部拒绝链共用的一位作者。
+
+    `door` 留给"调用方的门与实现所在的门不是同一个名字"那种车道（`web_act` 的动作段跑在
+    `web_read` 的实现里，评审 R02-087）；不传就按这一次调用登记的门名问。
+    """
+    kind = _DOOR_KIND.get(door or _TOOL.get() or "web_read")
+    if kind == "read":
+        return "Nothing was fetched."
+    if kind == "write":
+        return "Nothing was sent."
+    if kind == "action":
+        return "Nothing was run."
+    if kind == "search":
+        return "Nothing was searched - no engine was asked."
+    if kind == "store":
+        return "Nothing was stored or forgotten."
+    if kind == "state":
+        # 有主的句子。今天与默认支同字，从这儿起它不再由"没人认领"那一支代答（R02-116）。
+        return _STATE_CLAUSE
+    if kind == "guide":
+        return _GUIDE_CLAUSE
+    return _UNDECLARED_DOOR_WAY_OUT
 
 
 @contextlib.contextmanager
@@ -422,6 +510,40 @@ _HEADERS_OFF_BY: contextvars.ContextVar[str] = contextvars.ContextVar(
     "_headers_off_by", default="")
 
 
+#: 私网那道门在**浏览器**那条腿少发的那一颗，只有一句话的作者。`_note_referer_off` 在门决定
+#: 的地方说它，`server._headers_off_note("private_referer")`（以及缓存回放的过去时形状）抄的
+#: 也是这一句 —— 两条腿各说各的话，合成一句就会出现"关于一台没发过的请求的断言"。
+REFERER_OFF_NOTE = (
+    "the target is loopback/private, so the browser tier navigated without dhole's "
+    "invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, "
+    "`sec-fetch-*`) arrived as it always does, plus every header you named")
+
+
+def _note_referer_off() -> None:
+    """那一枚 referer 是 dhole 编的；编不编要在这颗门决定的地方说一次。
+
+    为什么写在这里而不是由服务器那一层补一句：浏览器那一发可能跑在**另一个上下文**里（会话、
+    线程、复制过的 context），`_HEADERS_OFF_BY.set(...)` 那种"换个值"的写法回不到调用方，
+    而往 `_ARG_NOTES` 那一份**列表**里 append 是改对象不是改名 —— 两条路都通。这一发少发了
+    东西，回执上必须有这句话，否则它就是一次静默截断。
+    """
+    _HEADERS_OFF_BY.set("private_referer")
+    notes = _ARG_NOTES.get()
+    if notes is None or REFERER_OFF_NOTE in notes:
+        return
+    notes.append(REFERER_OFF_NOTE)
+
+
+#: 这一次调用**不许把正文留在缓存里**。它不是一颗公开旋钮：门口读 `actions` 的那一位
+#: 就是它唯一的 setter（`_smart_fetch_request_context`），而 `_store_ttl` 是唯一的读者。
+#: 为什么需要它：`cache_ttl=0` 从前同时说了两件事 —— "这一发别看缓存"（读侧，用户点名的）
+#: 与"这一发不值得存"（写侧，没有人点名过）。R02-032 把写侧还给普通读之后，"不许存"这个
+#: 真实存在的产品决定（一次动作链的正文只存在于那条链之后；一次写的应答不是公共正文）就
+#: 需要一个自己的名字，而不是继续借一颗单位不同的参数说话。
+_NO_STORE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_no_store", default=False)
+
+
 def _clamp_note(name: str, requested: Any, applied: int, *, lo: int, hi: int) -> str:
     """The ONE wording for "this argument moved to a documented bound" ("" if not).
 
@@ -456,9 +578,11 @@ def _cache_ttl_note(requested: Any) -> str:
 
     Owned here for the same reason :func:`_clamp_note` is: two copies of one
     sentence is how two tools start describing one event differently. The
-    sentence also carries the half of ``0`` that the wire never states — a ``0``
-    this call writes nothing back to the cache either, which is what makes a
-    later default-TTL call fetch again.
+    sentence also carries the half of ``0`` the wire never states: ``0`` is a
+    READ-side instruction (this call consults no cached body), and what it
+    fetches is stored for later calls like any other read — the exception is a
+    call that ran an action chain or wrote to the site, which stores nothing
+    regardless of ``cache_ttl`` (see ``_NO_STORE``).
     """
     if requested is None:
         return ""
@@ -469,7 +593,126 @@ def _cache_ttl_note(requested: Any) -> str:
     if asked >= 0:
         return ""
     return (f"cache_ttl={asked} is not a duration; using 0 - this call reads no "
-            f"cache and writes none")
+            f"cache, and the copy it fetches is stored like any other read")
+
+
+def _timeout_floor_note(requested: Any, applied_ms: int) -> str:
+    """The ONE wording for "the ``timeout=`` you named was RAISED to a floor" ("" if not).
+
+    :func:`_clamp_note` speaks about a value moved to a documented *range*, and
+    `timeout_applied` speaks only when a ceiling bit — so both of them are
+    correctly silent about the other direction this parameter moves. A whole call
+    is measured in seconds and `0` there would mean "no clock at all", so a named
+    budget below the floor is widened to it (measured: `timeout=250` ran with
+    1000ms). Since R02-031 that number is visible on `attempt_cap_ms`, and a
+    caller holding `250` next to `1000` with no word between them cannot tell a
+    widened budget from an ignored parameter — the same class as the crawl
+    envelope that said "discovered but not fetched" about pages it had already
+    paid for.
+
+    Owned here, not at the call site, because the sentence is one event: the
+    floor is what moved, the floor is what the sentence must name.
+    """
+    if requested is None:
+        return ""
+    try:
+        asked = int(str(requested).strip())
+    except (TypeError, ValueError):
+        # The parameter layer already refused anything unparseable; this note is
+        # not the place to invent a number for it.
+        return ""
+    if asked <= 0 or asked >= applied_ms:
+        # 0 / 负数 = "不要时钟"那一支由参数层说；没被抬过就没有话要说。
+        return ""
+    return (f"timeout={asked} is under the {applied_ms}ms floor a whole call is "
+            f"measured in; it was raised to {applied_ms}ms, which is what one HTTP "
+            f"attempt got (see attempt_cap_ms)")
+
+
+def _over_cap_note(named: Any, delivered: int, floor: int) -> str:
+    """The ONE wording for "the body you got is LONGER than the ``max_content_chars=`` you named" ("" if not).
+
+    ``server._apply_chunking`` merges a tail back into the current window when what
+    is left is shorter than ``MIN_CHUNK_CHARS`` — a deliberate saving of one
+    round-trip, not an accident, and the behaviour is under test elsewhere (B-17
+    measured that the clause snap can eat part of that floor). What was missing is
+    the OTHER half of the same event: measured over a total×cap×offset grid, every
+    one of the 8 rows that delivered more than the caller named did it with
+    `is_truncated=false`, `next_offset=0`, an empty `truncation_note` and no
+    argument note at all — a caller budgeting its context was told nothing about a
+    body that had just gone over budget (R02-007, 1,446 chars against a named 1,200).
+
+    Owned here rather than at the chunking site because the sentence is one event
+    with two numbers: the amount that went over is `delivered - named` (what the
+    caller is actually holding), while `floor` is only the REASON and must not be
+    printed as if it were the amount. `named is None` keeps it silent for the same
+    reason :func:`_timeout_floor_note` does: with no cap pointed at, there is no
+    instruction whose execution needs explaining.
+    """
+    if named is None:
+        return ""
+    try:
+        asked = int(str(named).strip())
+    except (TypeError, ValueError):
+        # The parameter layer refuses anything unparseable; this is not where to
+        # invent a number for it.
+        return ""
+    over = int(delivered) - asked
+    if over <= 0:
+        return ""
+    return (f"max_content_chars={asked} was passed by {over:,} "
+            f"{'char' if over == 1 else 'chars'}: what remained of the page is "
+            f"shorter than the {floor}-character window that would be worth a "
+            f"second call, so it came along with this one - nothing was dropped, "
+            f"there is no next offset")
+
+
+_ATTEMPT_BOUND_SENTENCES = {
+    # {asked} / {given} 已经带着 "ms" 了（真 CLI 第一趟就把这个_double suffix_ 量了出来：
+    # 「not your 60000msms」），所以模板里不许再补单位。
+    "left": ("one HTTP attempt is bound by what is left of this call: {asked} was "
+             "named, but only {given} of it remained when the HTTP tier was reached"),
+    "learned": ("one HTTP attempt is bound by the learned ceiling for this host "
+                "(it answers pages fast, so the tier gives it {given}, not your "
+                "{asked}) — a per-host habit, not a cap you set"),
+    "slow-domain": ("one HTTP attempt is bound UP to {given} rather than down: this "
+                    "host is on the known-slow list, so the tier guarantees at least "
+                    "20s even though {asked} was named"),
+}
+
+
+def _attempt_budget_note(requested: Any, given_s: Any, cause: str) -> str:
+    """The ONE wording for "the HTTP tier's own division moved this number" ("" if not).
+
+    R02-041 measured the silence: ``timeout=5000`` came back with
+    ``attempt_cap_ms: 4000`` while that field's own sentence explained only the 30s
+    per-attempt ceiling. At least three levers move the figure (what is left of the
+    call, the learned per-host ceiling, the slow-domain guarantee) and ``server.
+    _http_tier_budget`` — the function that applies them — is the only place that
+    knows which one did. It hands the lever back as a token; this function owns the
+    sentence, the same way :func:`_timeout_floor_note` owns the floor and
+    ``bulk_get``'s note owns the ceiling. Three levers, three authors, one event
+    each — and no response gets two sentences about the same number.
+
+    An unrecognized token returns "" rather than borrowing another lever's sentence:
+    a confident wrong reason is worse than the silence this file exists to end.
+    """
+    template = _ATTEMPT_BOUND_SENTENCES.get(cause or "")
+    if requested is None or not template:
+        return ""
+    try:
+        asked = int(str(requested).strip())
+        given = int(given_s)
+    except (TypeError, ValueError):
+        return ""
+    if asked <= 0 or asked == given * 1000:
+        return ""
+    if cause == "left" and given * 1000 * 2 > asked:
+        # 每一发有时限的调用都会在到 HTTP 这一档之前花掉一点预算，所以"还剩多少"**经常**
+        # 把这颗数压低一点 —— 每次都报它就是噪声。只有当一个命名过的预算在自己到站之前
+        # 就丢了一半以上，那才是调用方该听见的事实（而不是 5000→4000 这种必然的零头）。
+        return ""
+    return template.format(asked=f"{asked}ms", given=f"{given * 1000}ms")
 
 
 def _note_text(note: str) -> None:

@@ -145,7 +145,7 @@ class TestAListPageIsNotCalledAJsShell:
             status=200, content=["£45.17 In stock " * 11], url=TRAVEL_URL,
             fetcher_used="http", content_type="text/html",
             total_size_bytes=len(html.encode("utf-8")), page_type="article")
-        collapsed._dom_visible_chars = visible_text_chars(html)
+        collapsed.visible_text_chars = visible_text_chars(html)
         assert _is_js_shell(collapsed) is False, "塌陷不该起浏览器"
         issue = _detect_content_issue(collapsed)
         assert issue.startswith("extraction_collapsed"), issue
@@ -197,10 +197,15 @@ class TestACollapseIsStatedAsACollapse:
             status=200, content=["£45.17 In stock"] * 11, url=TRAVEL_URL,
             fetcher_used="http", content_type="text/html",
             total_size_bytes=len(html.encode("utf-8")), page_type="article")
-        collapsed._dom_visible_chars = visible
+        collapsed.visible_text_chars = visible
         issue = _detect_content_issue(collapsed)
         assert str(visible) in issue, issue
-        assert "Do NOT re-fetch for rendering" in issue, issue
+        # 这句的措辞在 1.4 收拢成了一个作者（`quality._COLLAPSE_RECOVERY`：散文、
+        # `next_action`、`diagnosis.recover_with` 三处读同一颗常量），祈使句"do NOT
+        # re-fetch for rendering"换成了它的事实依据 —— 浏览器只是把同一份静态标记交给
+        # 刚刚丢掉正文的那个读取器。要禁的还是同一件事，判决位上点名这条的守卫见
+        # tests/test_a_collapsed_page_offers_only_the_doors_that_change_the_reader.py
+        assert "a browser hands that reader the same markup" in issue, issue
         assert "extraction_type='html'" in issue, issue
 
     def test_the_collapse_predicate_only_answers_for_html_bodies(self):
@@ -209,5 +214,5 @@ class TestACollapseIsStatedAsACollapse:
         pdf = ResponseModel(status=200, content=["a"], url="https://x/y.pdf",
                             fetcher_used="http", content_type="application/pdf",
                             total_size_bytes=9_000)
-        pdf._dom_visible_chars = 5_000
+        pdf.visible_text_chars = 5_000
         assert extraction_collapsed(pdf) is False

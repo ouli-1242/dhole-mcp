@@ -40,13 +40,16 @@ _METADATA_HOSTS = frozenset({
     "fd00:ec2::254", "100.100.100.200",
 })
 
-# 当前生效的 allowlist（抓取入口把 cred_defaults 的存储值 push 进来，
-# web_act / feed_read 用 allow_private_scope 就地开）。放在这里而不是当作
-# 参数层层下传，是为了让**每一个** validate_url 调用点 —— 包括抓取循环里的重定向
-# 复校验、robots.txt 那条旁路、tcp_preflight 的裸连接预检（它走
-# url_targets_internal -> validate_url）—— 共用同一个答案，不会出现
-# 「主路径放行、复校验又拒」。
-# 值是 (点名的主机集合, 是否放开整个 127.0.0.0/8)。
+# 当前生效的 allowlist 有三个来源，合并在**守卫**这一步（见 private_hosts_allowed）：
+#   · DHOLE_ALLOW_PRIVATE_HOSTS —— 进程级；
+#   · cred_defaults 的 allow_private —— 落盘的存量，每次判定读回；
+#   · _ALLOW_PRIVATE 这颗 ContextVar —— 一层作用域内的加宽（allow_private_scope）。
+# 放在守卫而不是当作参数层层下传、也不是让每扇门自己从存储里读一次再 push，是为了让
+# **每一个** validate_url 调用点 —— 包括抓取循环里的重定向复校验、robots.txt 那条旁路、
+# tcp_preflight 的裸连接预检（它走 url_targets_internal -> validate_url）、以及从来没
+# 推过作用域的那几扇门（web_search 的 find_similar 取源页那条腿就是 R02-141 量到的漏扇）
+# —— 共用同一个答案，不会出现「主路径放行、复校验又拒」，也不会出现「五扇里有四扇记得」。
+# 值是 (点名的主机集合, 是否放开整个 127.0.0.0/8)；默认空 = 这一层什么也没加。
 _ALLOW_PRIVATE: contextvars.ContextVar[tuple] = contextvars.ContextVar(
     "_allow_private", default=(frozenset(), False))
 
@@ -99,17 +102,15 @@ def set_allow_private(value) -> Any:
 
 @contextlib.contextmanager
 def allow_private_scope(value):
-    """Run a block under a per-call private-host policy.
+    """Run a block with one more host allowed than the standing policy names.
 
-    ``web_read`` gets this from its options decorator, which pushes the
-    contextvar for the whole call. Tools that never went through that decorator
-    (``screenshot``, ``feed_read``) had no way to name a private target at all,
-    so the same product decision read as "loopback is fetchable" in one tool and
-    "loopback is refused outright" in the next. This gives them the identical
-    mechanism instead of a second policy to keep in sync.
+    This layer is **additive**: the guard merges it with the environment list and
+    the stored `cred_defaults` value (see private_hosts_allowed), so a block can
+    name a target that neither of them names, and can never un-name one that
+    they do. That is the whole contract — nothing reads the stored value on
+    behalf of a tool any more, so no door has to remember to do it.
 
-    ``None``/``False``/``""`` is a no-op push (empty allowlist), which is the
-    default state — so an absent option changes nothing.
+    ``None``/``False``/``""`` is a no-op push (empty allowlist).
     """
     token = set_allow_private(value)
     try:
@@ -118,10 +119,34 @@ def allow_private_scope(value):
         _ALLOW_PRIVATE.reset(token)
 
 
+def stored_allow_private():
+    """The raw stored `cred_defaults` value for the private-host door, or None.
+
+    The one place the store is asked about this key. A caller that has to *report*
+    the stored value (web_read's "that one does nothing" note) asks here, so the
+    report and the gate can never read different rows.
+
+    Fail-closed: a store that cannot be read widens nothing — the answer is the
+    same one a process with no stored defaults gives.
+    """
+    try:
+        from dhole_mcp import identity
+        return identity.get("allow_private")
+    except Exception:
+        return None
+
+
 def private_hosts_allowed() -> tuple[frozenset, bool]:
-    """``(hosts, loopback_net)``：环境变量名单 并上 本次调用的选项。"""
-    hosts, loopback = _ALLOW_PRIVATE.get()
-    hosts = hosts | _env_private_hosts()
+    """``(hosts, loopback_net)``：作用域那一层 并上 环境变量名单 并上 存量默认。
+
+    三位一起并，是因为它们回答的是同一个问题（这台机器是不是调用方点名过的），而
+    一个答案不许有三位读者：从前存量那一半只由四扇门各自读一次再 push，第五扇
+    （`web_search` 取源页那条腿）就永久读不到它（评审 R02-141 · r329 同进程读数）。
+    """
+    scope_hosts, scope_loopback = _ALLOW_PRIVATE.get()
+    stored_hosts, stored_loopback = parse_allow_private(stored_allow_private())
+    hosts = scope_hosts | stored_hosts | _env_private_hosts()
+    loopback = scope_loopback or stored_loopback
     if loopback:
         hosts = hosts | _LOOPBACK_ALLOWED
     return hosts, loopback
@@ -507,6 +532,33 @@ def target_is_private(url: str) -> bool:
     return addr.is_loopback or addr.is_private
 
 
+def allow_private_covers(value: Any, url: str) -> bool:
+    """Whether a stored `allow_private` has any bearing on this target.
+
+    Two ways it can. The URL names private/loopback geography literally, and the
+    stored value is the policy the gate reads for that class of target. Or the
+    target's host is one the value names — which is the other half of why anyone
+    lists a host: a `my-service.local` name has no known geography until DNS
+    answers, and the listing is what lets the attempt happen at all. A public name
+    matched by neither has no door standing over it.
+
+    Matching is the same literal match `_private_host_allowed` uses, so this can
+    never claim a broader reach than the gate really has. Never raises.
+    """
+    if value is None or value is False or value == "":
+        return False
+    if target_is_private(url):
+        return True
+    try:
+        host = (urlparse(url).hostname or "").strip("[]").lower()
+    except Exception:
+        return False
+    if not host:
+        return False
+    hosts, _loopback = parse_allow_private(value)
+    return host in hosts
+
+
 def url_targets_internal(url: str, allow_internal: bool = False) -> bool:
     """这个 URL 是否指向内网 / 回环 / 元数据端点。不抛异常，只答是或否。
 
@@ -697,13 +749,41 @@ RESOLVER_GUARD_RECOVERY = (
 # `_invalid_request_result` 自己 docstring 禁止的那类话）。web_crawl / web_discover
 # 退得更远："Fetch failed ... retry with different parameters" —— 一个包都没发。
 # 这一支与云元数据那一支不同，它**有**出口（allow_private），所以句子必须把门指出来。
+#
+# 正文里**不许**焊任何一扇的申报句（评审 R02-100 · 真机 `r119_url_shape_clauses.json`
+# 的地址族六格）：这里从前写着 ", and nothing was sent."，六扇里只有写门 `web_request`
+# 说对了，`web_read`/`web_discover`/`web_crawl`/`feed_read`（read 类，该说 fetched）与
+# `web_act`（action 类，该说 run）全被这一份文案推去听别的门的话。申报那半句由
+# `context.nothing_went_out()` 装配，装配点在各调用方（与 `TIMEOUT_CEILING_RECOVERY` 同一分工）。
 PRIVATE_ADDRESS_RECOVERY = (
-    "The URL is well-formed - what is refused is the address it points at, and "
-    "nothing was sent. If you meant a public site, this one names a private range: "
+    "The URL is well-formed - what is refused is the address it points at. "
+    "If you meant a public site, this one names a private range: "
     "search for the page instead. If this internal target is genuinely yours to "
     "fetch, the door is cred_defaults(set={'allow_private': true}) for loopback or "
     "{'allow_private': ['<host>']} to name one host - it never opens cloud metadata, "
     "which stays refused whatever the spelling.")
+
+# 「这颗 URL 的**拼法**过不了门」那一路的出路本体（评审 R02-098 · 真机同一趟的形状族 14 格：
+# ftp / 空串 / 空格 / 反斜杠，六扇门没有一扇说得出本门的动词）。`{tool}` 由装配点填：
+# 同一句话在 `web_read` 与 `web_request` 上指的是不同的门，名字必须由站在门外的调用方交进来
+# （`_invalid_request_result` 的 `tool=` 参数、crawl 引擎里的 `_TOOL`）。
+URL_SHAPE_RECOVERY = ("Correct the argument and call again - no request was made. "
+                     "{tool} takes an absolute http(s) URL (e.g. https://example.com).")
+
+# 云元数据 / DNS-rebinding 服务名那一族的识别针与设计边界句（原先住在 `server.py` 的
+# `_PERMANENT_URL_REFUSALS`，只有那一条路读得到）。搬到守卫旁边是为了 crawl 引擎也能认：
+# 真机 `r119b_boundary_clauses.json` 的 M4/M5 里，`web_discover`/`web_crawl` 对这颗地址
+# 交的是通用兜底句 `Fetch failed … retry with different parameters` —— 而这一族**没有**
+# 任何参数可以改，那句假出路比不说更坏。
+PERMANENT_URL_REFUSAL_PREFIXES = (
+    "URL targets internal cloud metadata endpoint",
+    "URL uses DNS rebinding service",
+)
+PERMANENT_URL_RECOVERY = (
+    "No argument fixes this - it is a design boundary: dhole never fetches "
+    "cloud-metadata endpoints or DNS-rebinding services (SSRF guard), whatever the "
+    "spelling. If you meant a public site, the URL itself is wrong.")
+
 
 # 「这个地址是内网的」那两类拒绝的识别针。判据只有一份定义：web_read / web_request /
 # web_act / web_crawl / web_discover / feed_read 六条路都要说这句话，各自漂一份措辞，
@@ -712,6 +792,186 @@ PRIVATE_ADDRESS_REFUSAL_PREFIXES = (
     "URL targets internal/private IP",
     "URL targets internal service:",
 )
+
+
+def url_refusal_family(msg: str) -> str:
+    """一句守卫拒绝属于哪一族：`permanent` / `private` / `resolver` / `timeout` / `shape`。
+
+    以前这一族由四处装配点各自扫两张前缀表来认（`server.py` 两处、`crawl.py` 一处、feed 的
+    出路表一处），于是同一个形状修了三轮还在复发（R02-114 / R02-116 / R02-117）。真正住不下的
+    是前缀表这一层：`URL targets internal service:` 由 `validate_url` 为 `_BLOCKED_HOSTNAMES`
+    **整张名单**发出，那张名单里既有 `localhost`（allow_private 的 loopback 那一支真有门），
+    也有 `metadata.google.internal`（永不开门，守卫自己就这么写着）。所以一颗前缀跨两个族，
+    按前缀分派必然有一半年份说错话。
+
+    判决因此改由**主机名归属**来定：句子里带着主机名的，先问它在不在元数据/重绑定名单里。
+    只认族，不改判 —— 两族照旧全拒，出路句子也仍由 `security` 那几个常量一份写。
+    """
+    if RESOLVER_GUARD_NEEDLE in msg:
+        return "resolver"
+    # 认族用**包含**而不是 `startswith`：`feed_read` 那条路把守卫原话包在
+    # `feed_read URL 校验失败: …` 里送上来（旧代码用 `in` 正是为此），只按开头匹配会让这一扇
+    # 整个落到通用形状提示 —— 也就是 F100 要修的那颗在另一扇上复发。
+    if any(p in msg for p in PERMANENT_URL_REFUSAL_PREFIXES):
+        return "permanent"
+    if any(p in msg for p in PRIVATE_ADDRESS_REFUSAL_PREFIXES):
+        name = msg.rsplit(": ", 1)[-1].strip().lower().strip("[]") if ": " in msg else ""
+        if name in _METADATA_HOSTS or name.endswith(_DNS_REBINDING_SUFFIXES):
+            # 同一句话里的元数据名：这一族没有门（`localhost` 那种才留在 private）
+            return "permanent"
+        return "private"
+    if any(n in msg for n in TIMEOUT_REFUSAL_NEEDLES):
+        return "timeout"
+    return "shape"
+
+
+def url_refusal_recovery(msg: str, door: str) -> str:
+    """一句守卫拒绝的**整条出路**：本门的申报 + 这一族共用的那段话（评审 R02-131）。
+
+    从前这四支住在 `crawl.py` 的 except 块里（resolver / private / permanent / 其余皆形状），
+    搜索门那条 `find_similar` 路要同一件事就得把四支再抄一遍 —— 而"同一颗参数在不同门上
+    同一位裁判"正是这条轴上一次缺陷的形状（真机 `r265_bad_url_across_doors.json`：五扇交回
+    `invalid_request: <守卫原话>` + 这段出路，`web_search` 那一扇交回的是一句否认调用方
+    自己动作的"requires a url"）。句子本体仍只在这里一份，动词仍向 `context.nothing_went_out()`
+    按门取；`URL_SHAPE_RECOVERY` 那一句里插的 `{tool}` 是唯一一处按门换字的共用文案。
+    """
+    from dhole_mcp.context import nothing_went_out
+    family = url_refusal_family(msg)
+    if family == "resolver":
+        body = RESOLVER_GUARD_RECOVERY
+    elif family == "private":
+        body = PRIVATE_ADDRESS_RECOVERY
+    elif family == "permanent":
+        body = PERMANENT_URL_RECOVERY
+    else:
+        body = URL_SHAPE_RECOVERY.format(tool=door)
+    return f"{nothing_went_out(door)} {body}"
+
+# `validate_timeout` 那句预算的识别针（评审 R02-096 · R02-097）。同一惯例：判据与句子都只许
+# 一份定义 —— 这颗错从前由六条路各自接手，三种前缀（`invalid_request: Timeout…` /
+# `invalid_request: timeout= Timeout…` / `feed_read timeout: Timeout…`）加上 crawl 那种
+# **根本没有拒绝**（页级汇总把它说成"站点慢"）。读数 `review/.runtime/p1/r110_timeout_gate_sweep.json`。
+TIMEOUT_REFUSAL_NEEDLES = (
+    "Timeout exceeds maximum",
+    "Timeout must be positive",
+    "Timeout must be a number",
+)
+
+# 出路只有一份，措辞对三种成因都成立（超帽 / 非正数 / 不是数字），所以它点名的是**区间**而不是方向。
+TIMEOUT_CEILING_RECOVERY = (
+    "timeout= is this call's whole budget in milliseconds: 1-120000 (2 minutes). "
+    "The value named in `error` is outside that range, so no retry with a bigger "
+    "number can ever be honoured - rewrite the number, or omit timeout= to take "
+    "this tool's own default.")
+
+# `deadline_ms=` 的出路（评审 R02-120 · 同一趟 r209）。它点名的是**符号**而不是区间，
+# 因为这一颗真没有上限 —— 与上面那句 timeout 的差别是判据，不是抄漏了。默认数不在这里写：
+# 那个数住在引擎的签名里，抄进文案就成了「一个数两个家」（R02-093 记的正是这一族的漂移）。
+DEADLINE_RECOVERY = (
+    "deadline_ms= is this crawl's whole-run budget in milliseconds: any positive "
+    "number, and it has no ceiling - omit it to take this tool's own default. "
+    "Zero and negatives are not budgets: the value named in `error` would stop the "
+    "run before its first page, so rewrite the number rather than retry it.")
+
+# `validate_proxy` 的六类拒绝的识别针（评审 R02-105 · 真机 `r132b_broken_proxy.json`）。
+# 六颗都从 `validate_proxy` 一处 raise，所以这份名单与那位守卫同源；调用方需要它是因为
+# **出路**不同：被拒的是代理那颗值，而 fall-through 取的是 URL 拼法模板（"web_read takes
+# an absolute http(s) URL"），那句话会把读者推去改一颗本来就写对的 URL。
+PROXY_REFUSAL_PREFIXES = (
+    "Invalid proxy URL",
+    "Invalid proxy server URL",
+    "Proxy scheme must be",
+    "Unknown proxy config keys",
+    "Proxy dict must include",
+    "Proxy must be a URL string",
+)
+# 一句要过两道旧闸（本仓已各有判据钉着）：**门话不许焊进共用常量**（申报那半句由各调用方
+# 按门装配，见 `context.nothing_went_out`），**退役参数不许以调用形状出现**（17.0 的抓取工具
+# 不收 proxy 这颗参数，所以这句说「没有这颗参数」而不写 `名字=` 那种传法 —— 写了就等于让
+# 调用方以为自己试过了）。
+PROXY_RECOVERY = (
+    "The proxy in force is not something this call carries: the 17.0 fetch tools have "
+    "no proxy argument of their own - the value belongs to cred_defaults. Replace it "
+    "there (set={'proxy': 'http://host:port'}; schemes http/https/socks5/socks5h) or "
+    "close it with unset=['proxy']. The value named in `error` is the one that failed "
+    "this check.")
+
+# `got:` 那一格引用多少字符。帽是为了回执可读，不是为了省内存：一条超长的串本来就被
+# MAX_URL_LENGTH 拦在别处，这一格的职责是**让人认出是自己那发**，不是复述全文。
+_SCHEME_FACE_QUOTE_CHARS = 120
+
+
+def _unsupported_scheme_face(url: str, scheme: str) -> str:
+    """「只支持 http/https」那一发的措辞作者：引用**调用方发出去的那串**，不是解析残片。
+
+    从前这句写 `got: {parsed.scheme}`（评审 R02-018）。两张脸都因此说错了话：
+
+      * 不带 scheme 的输入（`上一条里最新的那篇` / `example.com/page` / `/tmp/a.pdf`）
+        解析出的 scheme 是空串 ⇒ 回执是 `got: ` —— **冒号后面空的**，读起来像参数没传过去；
+      * `localhost:8399/x` 的 scheme 被解析成 `localhost` ⇒ `got: localhost`，
+        把一个 host 说成了 scheme，比空白更进一步：它把人往错方向指。
+
+    所以引用的是输入本身，而解析读出来的那个词要写明是**读出来的**（`as read from`），
+    不是对输入的判断。三条随引用一起付的成本：截断并说出截断、`repr` 转义控制字符
+    （换行原样上路会伪造行）、`redact_api_key`（引用别人的输入不等于把凭据抄进回执）。
+    这一格只说看到了什么；怎么改是 `next_action` 那句话的活（一句处方一个作者）。
+    """
+    quoted = redact_api_key(url)
+    hidden = max(len(quoted) - _SCHEME_FACE_QUOTE_CHARS, 0)
+    if hidden:
+        quoted = quoted[:_SCHEME_FACE_QUOTE_CHARS] + f"…[{hidden} more chars not quoted]"
+    seen = (f"no scheme in {quoted!r}" if not scheme
+            else f"{scheme!r} as read from {quoted!r}")
+    return f"Only http and https URLs are supported, got: {seen}"
+
+
+# 引用控制字符左右那一小段的帽。与 `_SCHEME_FACE_QUOTE_CHARS` 同一分工：引用是为了让人认得出
+# 是自己那一发，不是为了复述全文；超长的输入在更上面已经被 MAX_URL_LENGTH 拦在别处。
+_CONTROL_CHAR_QUOTE_CHARS = 60
+
+
+_CONTROL_CHAR_NAMES = {0x00: "NUL", 0x09: "tab", 0x0a: "newline", 0x0b: "vertical tab",
+                       0x0c: "form feed", 0x0d: "carriage return", 0x7f: "delete"}
+
+
+def _control_char_face(url: str) -> str:
+    """第一颗控制字符的名字与它为什么不能被"修好"。没有控制字符 = 空串。
+
+    为什么在这里拒，而不是像过去那样让下面两件事各自发生（实测 `r146` / `r147` · 一台自造的
+    echo 服务记它自己收到了什么）：
+
+      * 空格与 `0x7F` 在送出之前被**百分号编码** —— `/r146 x` 到服务端是 `/r146%20x`，
+        资源还是那颗资源；
+      * LF / CR / TAB 到服务端是 `/r146x` —— 字符被**删掉**了，`/r146\\nx` 与 `/r146x`
+        打到同一颗资源，而回执是 200、一切正常。`urlparse` 在这一支上已经与传输层同见
+        （它对同一串的 path 视图就是 `/r146x`），所以连校验器自己都不觉得那里有什么。
+
+    静默换目标不是"宽容"：调用方拿着 200 去引用一份他从未点名的资源。拆头/拆行这一族
+    实测**没有**打通（服务端始终 14 颗头，与干净基准同数），所以这里按实测记：害处是换目标，
+    不写成 CVE。首尾的空白在更上面已被 `strip()` 收掉，那正是"从终端粘一颗 URL 带了个换行"
+    的合法形状 —— 这一句只管**地址中间**的那一颗，粘帖那一族不受影响。
+
+    引用形状走码位（`U+000A`）并把那颗字符**左右那一小段**一起交出：转义、有帽、过 redaction。
+    三张成本一张都不能少 —— 回执里一颗真换行等于让一次调用伪造一行输出，而只报偏移不报上下文
+    等于让读者手里没有可改的东西（`_unsupported_scheme_face` 与
+    `test_a_refusal_that_quotes_what_the_caller_actually_sent` 钉的是同一条轴）。
+    """
+    for offset, ch in enumerate(url):
+        code = ord(ch)
+        if code <= 0x1F or code == 0x7F:
+            name = _CONTROL_CHAR_NAMES.get(code, "control")
+            start = max(0, offset - _CONTROL_CHAR_QUOTE_CHARS // 2)
+            window = url[start:offset + _CONTROL_CHAR_QUOTE_CHARS]
+            hidden = len(url) - start - len(window)
+            quoted = redact_api_key(repr(window))
+            if hidden > 0:
+                quoted += f"…[{hidden} more chars not quoted]"
+            return (f"URL contains a control character ({name}, U+{code:04X}) at offset "
+                    f"{offset}; around it: {quoted}. A space is percent-encoded on the way "
+                    "out and keeps its target; this one is dropped, so the resource fetched "
+                    "would not be the one named here. Send the address without it - leading "
+                    "and trailing whitespace is already trimmed for you.")
+    return ""
 
 
 def validate_url(url: str, allow_internal: bool = False) -> str:
@@ -755,6 +1015,9 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
     # This enables SSRF: http://evil.com\\@127.0.0.1/ passes urlparse validation
     # (hostname=127.0.0.1) but fetches from evil.com.
     # See: corCTF 2025 "Python URL Parsing Confusion"; CVE-2025-0454
+    face = _control_char_face(url)
+    if face:
+        raise SecurityError(face)
     if "\\" in url:
         raise SecurityError("URL contains backslash character (potential SSRF bypass)")
 
@@ -769,7 +1032,7 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
         raise SecurityError(f"URL scheme '{scheme}' is not allowed")
 
     if scheme not in ("http", "https"):
-        raise SecurityError(f"Only http and https URLs are supported, got: {scheme}")
+        raise SecurityError(_unsupported_scheme_face(url, scheme))
 
     # Block bracketed hosts that aren't valid IPv6 — CVE-2024-11168
     # urlparse in Python <3.12.7 improperly validated bracketed hosts, allowing
@@ -1125,8 +1388,20 @@ def validate_proxy(proxy: Optional[str | dict]) -> Optional[str | dict]:
     raise SecurityError("Proxy must be a URL string, dict, or None")
 
 
+#: `timeout=` 能给的最大的那一颗数（120 秒）。它有三处读者：门口拒绝、常驻层的
+#: "max 120000" 那句、以及预算用完时给建议的那句话 —— 三处各抄一份就是漂移的开始
+#: （同 `_HTTP_ATTEMPT_CAP_MS` 那条对齐守卫的理由）。
+TIMEOUT_MAX_MS = 120_000
+
+
 def validate_timeout(timeout: int | float) -> int | float:
     """Validate timeout value.
+
+    ``TIMEOUT_MAX_MS`` is the one author of the ceiling: the wire descriptions of
+    `timeout=` quote "max 120000" and `quality._budget_advice` names it when the
+    caller has already spent a large budget, so a number with two homes and no
+    test is where this family drifts (see the alignment guard in
+    `tests/test_a_timeout_bigger_than_the_per_attempt_cap_says_what_it_bought.py`).
 
     Args:
         timeout: Timeout in milliseconds (browser) or seconds (HTTP).
@@ -1141,9 +1416,26 @@ def validate_timeout(timeout: int | float) -> int | float:
         raise SecurityError("Timeout must be a number")
     if timeout <= 0:
         raise SecurityError("Timeout must be positive")
-    if timeout > 120_000:  # 120 seconds max for browser
-        raise SecurityError("Timeout exceeds maximum of 120000ms (2 minutes)")
+    if timeout > TIMEOUT_MAX_MS:
+        raise SecurityError(f"Timeout exceeds maximum of {TIMEOUT_MAX_MS}ms (2 minutes)")
     return timeout
+
+
+def validate_deadline(deadline_ms: int | float) -> int | float:
+    """`deadline_ms=` 的取值门（评审 R02-120 · 真机 `r209_deadline_radius.json`）。
+
+    只管符号，**不管上限** —— 这是刻意的不对称，不是漏了一顶帽：`timeout=` 帽住的是单次
+    HTTP 尝试（放任它会挂住这台机器），而这一颗只决定整轮什么时候停，行数与单发各自还有帽
+    （`max_pages` / `attempt_cap_ms`）。取舍记在 `review/decisions.md`。
+
+    非正数不是一种预算：0 会让这一发在第一页之前停下，而线格式把「0」与「没点这颗」压成
+    同一件事（`wire.py` 那张 omittable 名单里 `deadline_ms_applied` 的默认值正是 0），
+    所以从前这一发的回执同时说「进了循环并被时钟砍掉」和「从没进到抓取循环」。
+    拒在门外，那句「缺席 = 没进循环」的契约就重新成立。
+    """
+    if deadline_ms <= 0:
+        raise SecurityError("Deadline must be positive")
+    return deadline_ms
 
 
 def validate_search_query(query: str) -> str:

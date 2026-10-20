@@ -17,8 +17,10 @@
 2. **说法**：拒答要点名是三种成因里的哪一种（从未批过 / 过窗并引用日期 / 日期读不出来）。
    旧句子写死 "this is the FIRST attach"，在一台三个月前批过的主机上是错的诊断，而它会
    引导调用方去解释成"用户从没同意过"。
-3. **可见**：`sys_state` 在给出撤销命令的同一口气里点名每台日期、年龄、名册文件路径；
-   `dhole doctor` 不许把过窗的报成"已授权"（判活只有一份属主）。
+3. **可见**：`sys_state` 在给出撤销命令的同一口气里点名每台日期、年龄与名册**文件名**（绝对
+   路径不在回执上 —— R02-055 把那句相反的话挪给了 `dhole doctor`，那里继续印全路径，因为
+   需要地址的是坐在 terminal 前的那位读者）；`dhole doctor` 不许把过窗的报成"已授权"
+   （判活只有一份属主）。
 
 旧形状（裸列表 / 无日期）读成"年龄读不出来"，**不**自动有效：把别人的记录悄悄盖章成
 "今天批的"等于替用户补做一次他没做过的按键。它要走一次重新征询才拿到时间戳。
@@ -207,13 +209,21 @@ class TestAnApprovalHasAnAge:
 
 class TestTheRosterIsReadableFromTheAgentSide:
 
-    def test_the_census_names_age_path_and_the_revoke_command(self):
+    def test_the_census_names_age_file_and_the_revoke_command(self):
+        """从前这一格钉的是 `_cdp_hosts_file()` 的**绝对路径**（R02-055 记下的是与本族相反的
+        一句裁决）。改写的理由不是那条要求错了，而是它被拆给了两位读者：撤销走的是命令，
+        地址走的是 `dhole doctor`（`TestDoctorDoesNotContradictTheGate` 那一格还钉着它）。
+        现在钉的是"名字要在、本机根不能在" —— 少任一半这一格都白钉。
+        """
         _cdp_write_records({HOST: _iso(9)})
         out = _sys_state(show=["cdp_hosts"])
         assert out.cdp_hosts == [HOST]
         breath = " ".join([out.message, out.next_action])
         assert "9 day(s) ago" in breath, out.next_action
-        assert _cdp_hosts_file() in breath, "读不出文件在哪，撤销就只能靠猜"
+        assert "cdp_hosts.json" in breath, "连是哪个文件都不说，读者只剩猜"
+        assert str(pathlib.Path(_cdp_hosts_file()).parent) not in breath, \
+            "回执替这台机器留了地址: " + breath[-200:]
+        assert "dhole doctor" in breath, "没给问位置的去处: " + breath[-200:]
         assert "clear=['cdp:host=" in breath and "re-asked" in breath
 
     def test_the_field_only_lists_hosts_the_gate_would_admit(self):
@@ -232,11 +242,17 @@ class TestTheRosterIsReadableFromTheAgentSide:
         assert "1 CDP attach approval(s) revoked" in out.message
         assert OTHER not in _cdp_records()
 
-    def test_the_revoke_receipt_says_who_is_left_and_where(self):
+    def test_the_revoke_receipt_says_who_is_left_and_in_which_file(self):
+        """`…_and_where` 的"where"从前指的是绝对路径（R02-055 记的那处相反裁决）；撤销回执里
+        的"还剩谁"与"在哪个文件里"两半都还在，只是后者收成文件名 —— 地址由 `dhole doctor`
+        那一格（`TestDoctorDoesNotContradictTheGate`）继续钉着。
+        """
         _cdp_write_records({HOST: _iso(2), OTHER: _iso(20)})
         out = _sys_state(clear=[f"cdp:host={OTHER}"], confirm=True)
         breath = " ".join([out.message, out.next_action])
-        assert f"{HOST} (approved" in breath and _cdp_hosts_file() in breath, out.message
+        assert f"{HOST} (approved" in breath, out.message
+        assert "cdp_hosts.json" in breath, out.message
+        assert str(pathlib.Path(_cdp_hosts_file()).parent) not in breath, breath[-200:]
         # 撤销成功却同时记一句"某个存储拒绝了"，是同一口气里的自相矛盾：读的人
         # 分不清到底撤没撤。这条也是那次 `report.add` 写在未定义名字上时的捕手。
         assert not out.error, f"成功的撤销回执里记了一次存储失败: {out.error}"

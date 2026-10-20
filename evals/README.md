@@ -760,6 +760,131 @@ Link groups actually on this page: a[href^="/tag/"] (36 links, e.g. "change")
 `None`。两处一起，它只会永远报 `no local model (lean install)` —— 一个看着很确定、
 其实从没跑过的结论。已修。
 
+### 多档重排：mmarco 快档（2026-10-20）
+
+恢复第二档之前，用同一条 67 题冻结语料链（`--neural`，agent-a 的 qrels）重跑了三颗
+模型。表里是整条链的交付款（`_rank → boost → diversify → _build_results → 过滤器`），
+不是纯模型排序：
+
+| 档 | P@5 | MRR | nDCG@10 | 中文 P@5（n=36） | 英文 P@5（n=31） | 预热后 ms/题 | 文件 |
+|---|---|---|---|---|---|---|---|
+| `bge-zh`（默认） | 0.549 | 0.737 | 0.764 | 0.517 | 0.587 | 263 | 279MB |
+| `mmarco`（新增快档） | **0.552** | **0.749** | **0.770** | 0.506 | **0.606** | **143** | **119MB** |
+| `ms-marco`（未入册） | 0.546 | 0.754 | 0.762 | 0.517 | 0.581 | **64** | **23MB** |
+
+`mmarco` 整体与默认档打平（中文略低、英文更高），体积小 2.4×、打分快 1.8×，所以
+进注册表当**快档**，但没有替换中文更强的默认档。`ms-marco` 没进注册表不是因为它排序
+差：在 570 条已标注行上它的 raw 分数饱和（阈值 0.5 时精确率 0.76，而 bge-zh 是 0.92；
+相关与不相关都挤在 0.99+），`high` 这条 tier 线失去区分度 —— 一个让 badge 说谎的模型
+不该因为文件小而进表。**多档的前置条件是每颗都有自己的 raw 线与实测，而不是多一个名字。**
+
+复现（模型文件在真实 `~/.dhole/models/<name>/` 里时）：
+
+```
+DHOLE_RERANK_MODEL=mmarco python evals/ranking_baseline.py --neural --tiers
+python evals/ranking_baseline.py --neural --tiers          # bge-zh 默认档
+```
+
+### 免费排序：词面覆盖分桶（2026-10-20）
+
+没有模型判决的 merge 臂此前直接照抄引擎顺序。先按「标题/摘要/URL 中出现了几个
+不同的查询词」分桶（2+ / 1 / 0），桶内再按 consensus + 引擎位置排；只重排、不丢行。
+同一份 67 题冻结语料，真实链重放：
+
+| 臂 | labeler | P@5 | P@10 | MRR | nDCG@10 |
+|---|---|---|---|---|---|
+| merge 前 | agent-a (n=67) | 0.370 | 0.325 | 0.550 | 0.646 |
+| merge 后 | agent-a | **0.525** | **0.404** | **0.731** | **0.759** |
+| neural `bge-zh` | agent-a | 0.549 | 0.428 | 0.737 | 0.764 |
+| merge 前 | agent-b (n=12) | 0.333 | 0.275 | 0.472 | 0.520 |
+| merge 后 | agent-b | **0.400** | 0.292 | **0.625** | **0.610** |
+| neural `bge-zh` | agent-b | 0.467 | 0.308 | 0.625 | 0.637 |
+
+agent-a 上 14 道题变化、全部为正（q001 / q018 / q026 等从 0 抬到 0.6–1.0）；
+空结果题面仍是 2/67，交付 708 行（改动前 710）——少掉的两行是位置尺判 low 的
+零词面行，不是相关行。神经臂完全没有变化（0.549 / 0.737 / 0.764），因为只要
+`any(neural_raw is not None)` 就跳过整个分桶：模型说同义改写相关时，字面不重合
+不能成为降级理由。**模型仍然更好，但免费回退不再明显掉队**；这也让"不下载模型"
+成为一个可用选择，而不是一个空白页。
+
+复现：`python evals/ranking_baseline.py --tiers`（merge 臂）；
+`python evals/ranking_baseline.py --neural --tiers`（神经臂，需本机已有模型）。
+
+## V1 · 纵向搜索可复现基线（2026-10-20 动工）
+
+五类免密纵向源接进 `web_search` 之后，`evals/` 里一直没有量它们的那把尺子：排序
+基线只量 web 池，`--tiers` 也只覆盖 web 行。V1 补上的是**解析与可达性**，不是排序
+质量——没有 qrels 就不冒充 P@k。
+
+### 方法
+
+- 固定题集 `evals/vertical_queries.jsonl`（6 题，只增不减）：每题点名 `sources`、
+  期望（`url_prefix` / `title_contains` / `min_rows` / `require_dated`）与理由。
+- `evals/vertical_search_baseline.py` 默认**离线重放** `evals/corpus/verticals/`
+  里冻结的 API 响应（7 份，2026-10-20 抓取；含请求 URL、状态、抓取时刻、sha256、
+  base64 正文与解析后状态）。重放走的是产品自己的 adapter 与 `search_many`，
+  `fetch` 只替换网络层。零真实站点流量、可重复。
+- 指标：可用率（answered 且 rows>0 / 尝试数）、known-item Hit@5、结构性检查
+  （最少行数 + 日级日期覆盖）、重复 URL、逐源行数；`--live` 另出 p50/p95 与
+  wall time。SLA 是**这把尺子的目标**，不是服务承诺。
+- 失败源在离线快照里标记 `comparable=false`，既算可用率失败，也不把「API 当时
+  没给行」误判成解析器坏了。
+
+### 冻结语料（默认臂）
+
+| 数 | 值 |
+|---|---|
+| 题 / 源响应 / 交付行 | 6 / 7 / 35 |
+| 可用率 | **100%** |
+| known-item Hit@5 | **5/5** |
+| 结构性检查 | 1/1（news：≥1 行且全部带日级日期） |
+| 日级日期覆盖 | **100%**（35/35） |
+| 重复 URL | 0 |
+
+逐源：academic 10 行 · qa 5 · code 5 · community 10 · news 5。这道基线抓出过一次
+真实缺陷：arXiv 对精确标题 "Attention Is All You Need" 的前 5 名里没有原论文；
+adapter 改成短语查询后原论文回到第 2（`1706.03762`）。同一处修复在
+`tests/test_vertical_baseline_replay.py` 里钉住。
+
+### 实时采样（不是 SLA 兑现）
+
+同一脚本 `--live` 在 2026-10-20 的两次采样，如实记录：
+
+| 采样 | 可用率 | known-item | 日期覆盖 | p50 / p95 | 外部失败 |
+|---|---|---|---|---|---|
+| 第一次 | 71.4%（5/7） | 4/4（可比项） | 100% | 1,098 / 8,326ms | Stack Exchange 一次 `ConnectError`；GDELT 连接超时 |
+| 第二次 | 71.4%（5/7） | 4/4（可比项） | 100% | 1,052 / 8,331ms | GitHub 一次 `RemoteProtocolError`；GDELT 连接超时 |
+
+两次失败都来自公共 API 的连接层，不是解析：Stack Exchange 随后单源复测成功
+（1.2s / 5 行）。GDELT 的 5 秒限流与不稳定连接是外部事实，产品按 `blocked` /
+`timeout` 如实进报告行，不伪装成"没有新闻"。**可用率与 p95 会随网络移动，冻结
+语料臂才是可比较的那一半**；实时臂只在带日期的报告里引用。两次采样的 p95 都略高于
+8,000ms 目标（8,326 / 8,331ms），因为失败源会等满 8s 上限——这是目标未达，不是被
+四舍五入掉的。
+
+### 目标（benchmark targets，不是 guarantee）
+
+| 目标 | 值 |
+|---|---|
+| availability（可用源 / 尝试） | ≥ 80% |
+| known-item Hit@5（可比项） | ≥ 80% |
+| 日级日期覆盖 | ≥ 90% |
+| 实时 p95（单源） | ≤ 8,000ms |
+
+复现：
+
+```bash
+python evals/vertical_search_baseline.py            # 离线，退出码即目标判决
+python evals/vertical_search_baseline.py --json
+python evals/vertical_search_baseline.py --live     # 当前网络采样
+python evals/vertical_search_baseline.py --capture  # 重抓冻结语料（--force 覆盖）
+```
+
+边界：6 题是 smoke baseline，不是排序 qrels；冻结语料是 2026-10-20 的公开 API
+快照，不随上游更新；`--live` 的可用率取决于本机网络与 API 限流；没有覆盖
+`fetch_content` 之后的正文质量，也没有覆盖神经重排。扩展题集时只增不减，并为每题
+写清期望的来源，不拿一次偶然结果当标准答案。
+
 ### 已知未覆盖
 
 - A/C 两档需要在当前版本上重跑，三档才可比；A 档还得先把 `A.schema.json` 真的导出

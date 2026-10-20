@@ -190,7 +190,7 @@ def test_the_offset_it_prints_is_one_it_accepts():
     assert 'args.get("offset"' in source, "分发器没有真的把这颗读出来"
 
 
-def test_doc_parse_continues_where_the_marker_said(tmp_path):
+def test_doc_parse_continues_where_the_note_said(tmp_path):
     """两刀拼起来必须**恰好**是整页：不重叠、不缺口、第二刀收口。
 
     这条不拿源文件比对（markdown 规范化会让字节对不上），而是拿两次响应自己的数字：
@@ -198,6 +198,10 @@ def test_doc_parse_continues_where_the_marker_said(tmp_path):
     正好等于 `total_extracted_chars`。帽是 40,000 字（`MAX_CONTENT_CHARS`，这颗工具
     没有自己的尺寸参数），所以夹具要落进 (40k, 80k] —— 短文件从来不截断，也就从来
     没人发现续读那颗参数不存在。
+
+    R01-024 之后那句话不再接在正文尾巴上（它在 `truncation_note` 里），所以这一条
+    从前要先 `split("\\n\\n[Truncated:")` 剪掉旁注才能拿到正文 —— 现在拿到的就是正文，
+    断言反而更硬：`len(first.content[0])` 直接参与拼合，没有一个字符是被剪掉的。
     """
     text = "\n".join(f"line-{i:05d} {'x' * 50}" for i in range(1_100))
     doc = tmp_path / "long.md"
@@ -207,8 +211,8 @@ def test_doc_parse_continues_where_the_marker_said(tmp_path):
     assert first.is_truncated and first.next_offset > 0, (
         f"这份 {len(text):,} 字的文件没被截断，测不到续读")
     body = first.content[0]
-    assert f"Next offset: {first.next_offset}]" in body, "标记没印那颗数字"
-    head = body.split("\n\n[Truncated:")[0]
+    assert f"Next offset: {first.next_offset}]" in first.truncation_note, "那颗数字没被说出口"
+    assert "[Truncated" not in body, "旁注不许再混在这页自己的文字里交付"
 
     second = asyncio.run(server_mod.MasterFetchServer().doc_parse(
         str(doc), offset=first.next_offset))
@@ -217,8 +221,8 @@ def test_doc_parse_continues_where_the_marker_said(tmp_path):
         "两刀量到的不是同一份全文")
     assert not second.is_truncated and (second.next_offset or 0) == 0, (
         "读到结尾了还在给下一刀的地址")
-    assert len(head) + len(second.content[0]) == first.total_extracted_chars, (
-        f"第一刀 {len(head):,} + 第二刀 {len(second.content[0]):,} ≠ 全文 "
+    assert len(body) + len(second.content[0]) == first.total_extracted_chars, (
+        f"第一刀 {len(body):,} + 第二刀 {len(second.content[0]):,} ≠ 全文 "
         f"{first.total_extracted_chars:,} —— 那颗 offset 要么重叠要么缺口")
 
 

@@ -34,28 +34,18 @@ import re
 import pytest
 
 from dhole_mcp import guide
-from dhole_mcp.actions import _VALID_KEYS, _validate_actions
+from dhole_mcp.actions import (_VALID_KEYS, _validate_actions,
+                               action_payload_keys)
 from dhole_mcp.server import MasterFetchServer
 
 WIRE = next(td for td in MasterFetchServer._TOOL_DEFS
             if td["name"] == "web_act")["inputSchema"]["properties"]["actions"]["description"]
 
-# 抄自 `_validate_actions` 的读取点：每颗动作真正**看得见**的载荷键。
-PAYLOAD_BY_KEY: dict[str, set[str]] = {
-    "click": {"selector", "index", "expect", "confirm"},
-    "hover": {"selector", "index", "expect"},
-    "submit": {"selector", "index", "expect", "confirm"},
-    "fill": {"selector", "index", "expect", "text"},
-    "read": {"selector", "index", "expect", "attribute", "as"},
-    "press": {"key", "selector", "index"},
-    "drag": {"selector", "index", "expect", "to"},
-    "wait": set(),
-    "scroll": {"steps", "selector", "ms_per_step"},
-    "wait_selector": {"selector", "count", "state", "timeout_ms"},
-    "snapshot": set(),
-    "screenshot": {"selector", "index", "expect", "full_page", "decode_qr",
-                   "image_type", "quality", "save_to"},
-}
+# 那张表只有一个作者：`_validate_actions` 的正文（`action_payload_keys` 从它自己推出）。
+# 这里原先手抄了一份，而手抄的那份已经在 `read` 上落后一颗（1.1 加的 `property` 不在表里，
+# 于是这一整份守卫当时量的是一张不再等于行为的清单 —— 表跟着正文走之后，这类落后不可能
+# 再发生，理由钉在 tests/test_the_action_key_table_has_one_author.py）。
+PAYLOAD_BY_KEY: dict[str, set[str]] = action_payload_keys()
 
 ALL_KEYS = set().union(*PAYLOAD_BY_KEY.values())
 

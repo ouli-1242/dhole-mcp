@@ -50,7 +50,7 @@ class TestTheParser:
 class TestTheGate:
 
     def test_off_by_default(self):
-        rows = [_row("https://a/1", "1 of 6"), _row("https://a/2", "3 of 6")]
+        rows = [_row("https://a/1", "1 of 6"), _row("https://a/2", "3 of 7")]
         kept, skipped, note = gate_by_consensus(rows, 0)
         assert kept == rows and skipped == [] and note == ""
 
@@ -61,7 +61,7 @@ class TestTheGate:
         assert kept == rows and skipped == [] and note == ""
 
     def test_it_keeps_only_corroborated_rows(self):
-        rows = [_row("https://a/1", "1 of 6"), _row("https://a/2", "3 of 6"),
+        rows = [_row("https://a/1", "1 of 6"), _row("https://a/2", "3 of 7"),
                 _row("https://a/3", "2 of 6")]
         kept, skipped, note = gate_by_consensus(rows, 2)
         assert [r.url for r in kept] == ["https://a/2", "https://a/3"]
@@ -159,7 +159,7 @@ class TestTheSearchCall:
 
         out = await server.web_search("widgets guide", fetch_content=True, cache_ttl=0)
 
-        assert all(p["engines_consensus"] == "3 of 6" for p in out.fetched_pages)
+        assert all(p["engines_consensus"] == "3 of 7" for p in out.fetched_pages)
 
     @pytest.mark.asyncio
     async def test_a_failed_fetch_still_carries_its_consensus(self, monkeypatch):
@@ -171,7 +171,7 @@ class TestTheSearchCall:
 
         out = await server.web_search("widgets guide", fetch_content=True, cache_ttl=0)
 
-        assert out.fetched_pages[0]["engines_consensus"] == "3 of 6"
+        assert out.fetched_pages[0]["engines_consensus"] == "3 of 7"
         assert out.fetched_pages[0]["content_ok"] is False
 
     @pytest.mark.asyncio

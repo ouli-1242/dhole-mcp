@@ -1472,6 +1472,37 @@ async def _simulate_human_behavior(page: Any) -> None:
 PIN_TTL_S = 300
 
 
+def _invented_referer(url: str, google_search: Any,
+                      request_headers: Dict[str, str]) -> Optional[str]:
+    """`google_search` 那一枚编出来的来路该不该发 —— 私网那一支没有作用对象。
+
+    这道门本来只管一条腿：`server.py` 在参数合流处判 `target_is_private`，私网就把 dhole 合成的
+    那一整套头摘掉，理由写在那一句注释里（「打回环或内网时没有那道墙，它们只落进你自己的服务
+    日志」）。浏览器这一发读的是另一颗旋钮（`google_search`），于是同一句话对它从未被问过 ——
+    实测同一只回环 echo 上两发：探活那一发 14 颗无 referer，真 Chromium 导航那一发 17 颗，
+    其中 `referer: https://www.google.com/` 是敲进去的字面量。
+
+    只管 dhole 打字打出来的那一颗：那台浏览器自己会发的 UA / `sec-ch-ua*` / `sec-fetch-*`
+    一颗都不动（摘掉只会让这一发更像机器人），调用方**点名**给的那颗 referer 也照旧到线上。
+    摘了就要说：申报位与 HTTP 腿共用同一个 `_HEADERS_OFF_BY`，两条腿读同一把尺
+    （`security.target_is_private`），这样"少了什么、为什么少"在 `summary` 里读得到，
+    而不是静默改掉调用方看见的那一颗参数。
+    """
+    if "referer" in request_headers:
+        return None
+    if not google_search:
+        return None
+    from dhole_mcp.security import target_is_private
+    if target_is_private(url):
+        # 立起来并说出来都在这一颗门里：`_note_referer_off` 往这一发的 notes 列表里 append
+        # （改对象，跨复制过的上下文也通），而只 `_HEADERS_OFF_BY.set(...)` 那种"换个值"的写法
+        # 在浏览器这一层可能回不到调用方 —— 少发东西却没人说，就是静默截断。
+        from dhole_mcp.context import _note_referer_off
+        _note_referer_off()
+        return None
+    return "https://www.google.com/"
+
+
 class BrowserSession:
     """Base browser session using patchright's async API.
 
@@ -1846,7 +1877,29 @@ class BrowserSession:
                 out[str(c["name"])] = str(c["value"])
         return out
 
-    async def _pin_take(self, url: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    @staticmethod
+    def _same_document(a: str, b: str) -> bool:
+        """Are these two strings the same **page**?
+
+        Only used to decide whether an action chain may stand on a pinned page.
+        Trailing slash and fragment are the same document; a different path or a
+        different query is a different one — and so is anything unparseable,
+        because "unknown" must not buy the right to act on a page nobody named.
+        """
+        try:
+            pa, pb = urlparse(a or ""), urlparse(b or "")
+            if not pa.netloc or not pb.netloc:
+                return False
+            if pa.netloc.lower() != pb.netloc.lower():
+                return False
+            if (pa.path or "/").rstrip("/") != (pb.path or "/").rstrip("/"):
+                return False
+            return (pa.query or "") == (pb.query or "")
+        except Exception:
+            return False
+
+    async def _pin_take(self, url: str, *, for_actions: bool = False
+                        ) -> Tuple[Optional[Dict[str, Any]], str]:
         """驻留的那一页能不能给这一次调用用 —— 判据全在这里，一条不过就交回原因。
 
         取走即从槽里摘下（`self._pin = None`），所以这一发失败时 finally 会照旧把
@@ -1860,6 +1913,9 @@ class BrowserSession:
           * `closed` —— 页面被人（或 Chrome 自己）关了。
           * `host` —— 这一次要的是别的站点。同站判定用 `_is_entry_target` 那一个作者
             （端口、80↔443 升级都算同一站），不在这里重写第二份。
+          * `target` —— 带着动作链的一发点名了**另一张页**（同站不同页）。`index` 是在
+            点名的那一页上数出来的，所以这一发宁可重新导航；页仍在槽里，下一发照旧驻留
+            （R01-027：实测 `hover index 0` 落在驻留的账户页上就是「退出登录」那颗按钮）。
         """
         slot = self._pin
         if slot is None:
@@ -1881,7 +1937,52 @@ class BrowserSession:
         if not _is_entry_target(url, page.url):
             await self._pin_close(slot, "host")
             return None, "host"
+        if for_actions and not self._same_document(url, page.url):
+            # R01-027. Same host is not the same page: an action's `index` counts
+            # the elements of the page the caller NAMED, so running the chain on a
+            # different page of that host acts on a target nobody chose (measured:
+            # `hover index 0` on the pinned /account is the 退出登录 button, while
+            # the call named /hoverdrag). Refuse the reuse but KEEP the pin — this
+            # call navigates to what it named; the page stays in the slot for the
+            # next call that stands on it. Dropping the page here would turn a
+            # disclosure bug into the loss of H8's whole point.
+            self._pin = slot
+            return None, "target"
         return slot, ""
+
+    def pin_census(self) -> Dict[str, Any]:
+        """驻留这一页的**事前**账：地址 + 还剩几秒（`sys_state` 普查读它）。
+
+        判据不重写：`pinned_left_s` 就是 `_pin_take` 里那道 `ttl` 门的同一个算式
+        （`PIN_TTL_S` 减去 `stamp` 的年岁），所以普查说「还剩 40 秒」而下一发被拒
+        是办不到的。倒计时而不是时刻，是因为 `stamp` 来自 `time.monotonic()` ——
+        它不是一个能对外的钟；同一张表里的 `expires_in_s` 早就是这个形状
+        （「还剩 21 小时」能行动，`1790566780.9` 不能）。
+
+        三种状态各自说得出自己：`{"", None}` = 什么都没钉（含别人已把那张页关了）；
+        `{地址, 0}` = 窗口过了但那一页还没被下一发收走；`{地址, n}` = 还能站 n 秒。
+        只读：不改槽、不关页、不动 `_pin_take` 的判据。
+        """
+        def nothing_pinned() -> Dict[str, Any]:
+            """没钉着那一支不许交出一个 0：压实层省略的是「等于自己的默认值」，而
+            带地址的 0 是**判决**（窗口过了），缺席才是「没有这一页」。把缺席写成 0，
+            线上就把两种状态压成一种（R02-073，P5 第一趟量到的正是这一格）。"""
+            return {"pinned_url": "", "pinned_left_s": None}
+
+        slot = self._pin
+        if not slot:
+            return nothing_pinned()
+        try:
+            page = slot.get("page")
+            if page is None or page.is_closed():
+                return nothing_pinned()
+            url = page.url or ""
+        except Exception:
+            return nothing_pinned()
+        if not url:
+            return nothing_pinned()
+        left = PIN_TTL_S - (time.monotonic() - float(slot["stamp"]))
+        return {"pinned_url": url, "pinned_left_s": max(0, int(left))}
 
     @staticmethod
     async def _pin_close(slot: Dict[str, Any], reason: str) -> None:
@@ -2019,9 +2120,7 @@ class BrowserSession:
         request_headers = {}
         if actual_extra_headers:
             request_headers = {h.lower(): v for h, v in actual_extra_headers.items()}
-        referer = None
-        if actual_google and "referer" not in request_headers:
-            referer = "https://www.google.com/"
+        referer = _invented_referer(url, actual_google, request_headers)
 
         # SSRF 守卫的记录本：route handler 往里追加 (host, 是否主文档)，重试之间清空。
         # 声明在循环外，这样 except 分支读它永远有定义（否则早失败会变成 NameError，
@@ -2049,9 +2148,16 @@ class BrowserSession:
             try:
                 slot: Optional[Dict[str, Any]] = None
                 if _pin_lane and attempt == 0:
-                    slot, _why = await self._pin_take(url)
+                    slot, _why = await self._pin_take(
+                        url, for_actions=bool(actual_page_action))
                     if _why and pin_out is not None:
                         pin_out["dropped"] = _why
+                        if _why == "target":
+                            # 那句话要说得出两页各是谁，而只有这一层看得见驻留页自己。
+                            _kept = self._pin or {}
+                            pin_out["target"] = {
+                                "pinned": getattr(_kept.get("page"), "url", "") or "",
+                                "named": url}
                 if slot is not None:
                     # 复用 = **不导航**，这就是这一刀的全部意义：那张题、那枚 token、
                     # 那个填了一半的表单都还在。但守卫必须是这一发自己的 —— 先把上一次

@@ -1,55 +1,63 @@
 """Reranker model registry: which cross-encoder scores search results.
 
 The registry lives in ``reranker.MODELS`` (that module owns ONNX loading, so it
-owns the model list too). 17.0 B8 collapsed it to a **single** entry — the
-semantic-swap evaluation (set B) found the candidate ``gte-multilingual-base``
-indistinguishable from ``bge-zh`` on nDCG (Δ+0.0030, 95% CI spans 0) while being
-2.3× slower on CPU, so "choose a model" was removed rather than kept as a lever
-that buys nothing.
+owns the model list too). 17.0 collapsed it to a single entry; this batch brings
+back a **second, measured** profile: ``bge-zh`` stays the default (best Chinese),
+``mmarco`` is the faster/smaller multilingual option. ``ms-marco`` (23MB,
+English-only) is deliberately NOT registered: on the same 67-query corpus its raw
+scores saturate and the tier line loses discrimination.
 
-This file covers what is left of the user-facing surface: the default, the fact
-that the registry is one model by design, and the one honest leftover — a
-``~/.dhole/config/reranker.json`` written by a 16.x machine no longer selects
-anything, but we **say so** instead of silently switching the scorer.
+The selection is process-level (``DHOLE_RERANK_MODEL``), because the ONNX session
+is a singleton: two models in one process would score different searches. The
+default is unchanged unless the operator names the fast profile.
 """
+
+import dataclasses
+import hashlib
+import re
 
 import pytest
 
-from dhole_mcp import reranker
+from dhole_mcp import env_registry, reranker
+
+
+@pytest.fixture(autouse=True)
+def fresh_selection(tmp_path, monkeypatch):
+    """每个测试都是"新进程"：环境、配置文件与启动期缓存都从零开始。"""
+    home = tmp_path / ".dhole"
+    monkeypatch.setattr(reranker.paths, "home", lambda: home)
+    monkeypatch.setattr(env_registry, "_load_file", lambda: {})
+    monkeypatch.delenv("DHOLE_RERANK_MODEL", raising=False)
+    reranker.reset_selection_cache()
+    yield
+    reranker.reset_selection_cache()
 
 
 @pytest.fixture
-def legacy_config(tmp_path, monkeypatch):
-    """Point ``~/.dhole`` at a temp dir; return the legacy config file path.
-
-    ``_legacy_selection`` reads ``paths.home() / config / reranker.json``, so
-    redirecting ``home`` is the whole isolation this needs.
-    """
-    home = tmp_path / ".dhole"
-    monkeypatch.setattr(reranker.paths, "home", lambda: home)
-    return home / "config" / "reranker.json"
+def legacy_config(tmp_path):
+    """Path of the 16.x selection file (reads go through the patched home)."""
+    return tmp_path / ".dhole" / "config" / "reranker.json"
 
 
 def _write_legacy(path, model: str) -> None:
-    """Write the 16.x selection file the way a user can only do it by hand now."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('{"model": "%s"}' % model, encoding="utf-8")
 
 
-def test_default_model_is_the_chinese_capable_one():
-    """Default must be the cross-lingual model, not an English-only one."""
+def test_default_is_the_chinese_capable_balanced_model():
+    """Default must stay the cross-lingual model, not the fast one."""
     assert reranker.DEFAULT_MODEL == "bge-zh"
     assert reranker.active_model().name == "bge-zh"
+    assert reranker.active_model().role == "balanced"
 
 
-def test_registry_is_a_single_model():
-    """收敛是有意的产品决定，不是某次重构漏掉的入口。
-
-    留一颗以上的话，``min_raw_relevance`` 的标定值就得按模型分叉 —— 而集 B 已经
-    证明那颗候选换不来质量。所以"不给选"是结论，不是妥协。
-    """
-    assert set(reranker.MODELS) == {"bge-zh"}
-    assert reranker.DEFAULT_MODEL in reranker.MODELS
+def test_registry_has_a_fast_multilingual_alternative():
+    """多模型不是把"多一个旋钮"当卖点：第二颗必须有自己的取舍与语言面。"""
+    assert set(reranker.MODELS) == {"bge-zh", "mmarco"}
+    fast = reranker.MODELS["mmarco"]
+    assert fast.role == "fast"
+    assert "zh" in fast.languages and "en" in fast.languages
+    assert fast.approx_bytes < reranker.MODELS["bge-zh"].approx_bytes / 2
 
 
 def test_registry_entries_are_complete():
@@ -59,28 +67,100 @@ def test_registry_entries_are_complete():
         assert "/" in model.repo
         assert len(model.rev) >= 12, "revision must be pinned"
         assert set(model.relpaths) == {"model.onnx", "tokenizer.json", "vocab.txt"}
+        for variant in model.variants.values():
+            assert set(variant) == {"model.onnx", "tokenizer.json", "vocab.txt"}
         assert model.approx_bytes > 10_000_000
         assert 0 < model.min_bytes <= model.approx_bytes
         assert model.label
+        assert model.role in {"balanced", "fast"}
+        assert 0.0 < model.raw_med < model.raw_high <= 1.0
+
+
+def test_mmarco_picks_the_onnx_for_this_cpu(monkeypatch):
+    model = reranker.MODELS["mmarco"]
+    monkeypatch.setattr(reranker.platform, "machine", lambda: "AMD64")
+    assert reranker.paths_for(model)["model.onnx"] == "onnx/model_quint8_avx2.onnx"
+    monkeypatch.setattr(reranker.platform, "machine", lambda: "arm64")
+    assert reranker.paths_for(model)["model.onnx"] == "onnx/model_qint8_arm64.onnx"
+
+
+def test_an_unsupported_arch_has_no_variant(monkeypatch):
+    """没有可用变体时不许猜一份"能跑"的文件 —— 返回空映射，加载侧明确拒绝。"""
+    model = reranker.MODELS["mmarco"]
+    monkeypatch.setattr(reranker.platform, "machine", lambda: "riscv64")
+    assert reranker.paths_for(model) == {}
+    assert reranker._present_for(model) is False
+
+
+def test_env_selection_is_read_once_per_process(monkeypatch):
+    """启动期选择：改环境不重启，就不该让同一进程换打分器。"""
+    monkeypatch.setenv("DHOLE_RERANK_MODEL", "mmarco")
+    reranker.reset_selection_cache()
+    assert reranker.active_model().name == "mmarco"
+
+    monkeypatch.setenv("DHOLE_RERANK_MODEL", "bge-zh")
+    assert reranker.active_model().name == "mmarco", "运行中改环境不该换档"
+
+    reranker.reset_selection_cache()          # 新进程
+    assert reranker.active_model().name == "bge-zh"
+
+
+def test_unknown_model_name_warns_and_falls_back(monkeypatch, caplog):
+    monkeypatch.setenv("DHOLE_RERANK_MODEL", "does-not-exist")
+    reranker.reset_selection_cache()
+    with caplog.at_level("WARNING", logger="dhole-mcp.reranker"):
+        assert reranker.active_model().name == "bge-zh"
+    assert "does-not-exist" in caplog.text
+    assert "Known: bge-zh, mmarco" in caplog.text
+
+
+def test_raw_thresholds_come_from_the_active_model(monkeypatch):
+    """同一颗模型换了 raw 分布，tier 线必须跟着走，不能套默认模型那一把。"""
+    custom = dataclasses.replace(reranker.MODELS["mmarco"], raw_high=0.7, raw_med=0.2)
+    monkeypatch.setitem(reranker.MODELS, "mmarco", custom)
+    monkeypatch.setenv("DHOLE_RERANK_MODEL", "mmarco")
+    reranker.reset_selection_cache()
+    assert reranker.raw_thresholds() == (0.7, 0.2)
+    from dhole_mcp import search
+    assert search._raw_thresholds() == (0.7, 0.2)
+
+
+def test_tier_reads_the_thresholds_it_is_given():
+    from dhole_mcp.search import _tier
+    assert _tier(0.9, 1, 10, 0.6, raw_high=0.7, raw_med=0.2) == "med"
+    assert _tier(0.9, 1, 10, 0.8, raw_high=0.7, raw_med=0.2) == "high"
+    assert _tier(0.9, 1, 10, 0.1, raw_high=0.7, raw_med=0.2) == "low"
+
+
+def test_build_results_mints_tiers_with_the_active_models_lines(monkeypatch):
+    """档位铸在行上时必须用当前模型那两条线，而不是默认模型抄下来的常数。"""
+    custom = dataclasses.replace(reranker.MODELS["mmarco"], raw_high=0.7, raw_med=0.2)
+    monkeypatch.setitem(reranker.MODELS, "mmarco", custom)
+    monkeypatch.setenv("DHOLE_RERANK_MODEL", "mmarco")
+    reranker.reset_selection_cache()
+    from dhole_mcp.search import _build_results
+    from dhole_mcp.search_engines import RawResult
+    row = RawResult(title="t", url="https://example.com/x", snippet="s",
+                    source="bing", position=1, consensus=1, sources=("bing",))
+    row.neural_raw = 0.6          # above bge's 0.5, below mmarco's custom 0.7
+    out = _build_results("q", [row], [0.6], total_families=1)
+    assert out[0].fetch_relevance == "med"
 
 
 # ─── 16.x 遗留的选择文件：不再选，但不静默 ─────────────────────────────────
 
 def test_legacy_config_warns_but_does_not_switch(legacy_config, caplog):
-    """手写过的 reranker.json 不再选模型，但**不许静默换掉打分器**。
-
-    一台 16.x 上选了 ``ms-marco`` 的机器升上来，唯一能证明它"被换掉了"的就是这句
-    日志。删掉它 = 让升级变成一次看不见的变更。
-    """
+    """手写过的 reranker.json 不再选模型，但**不许静默换掉打分器**。"""
     _write_legacy(legacy_config, "ms-marco")
     with caplog.at_level("WARNING", logger="dhole-mcp.reranker"):
         assert reranker.active_model().name == "bge-zh"
     assert "ms-marco" in caplog.text
-    assert "removed" in caplog.text and "bge-zh" in caplog.text
+    assert "DHOLE_RERANK_MODEL" in caplog.text
+    assert "bge-zh" in caplog.text
 
 
 def test_naming_the_default_is_silent(legacy_config, caplog):
-    """文件里写的就是那颗唯一的模型 —— 没有"被换掉"这回事，不该吵。"""
+    """文件里写的就是默认那颗 —— 没有"被换掉"这回事，不该吵。"""
     _write_legacy(legacy_config, "bge-zh")
     with caplog.at_level("WARNING", logger="dhole-mcp.reranker"):
         assert reranker.active_model().name == "bge-zh"
@@ -107,8 +187,8 @@ def test_active_model_dir_is_under_models_dir(tmp_path, monkeypatch):
     assert reranker.active_model_dir() == models_dir / "bge-zh"
 
 
-def test_model_present_uses_the_single_model(tmp_path, monkeypatch):
-    """present() 描述的是那颗唯一的模型，不是"随便哪些文件在"。"""
+def test_model_present_uses_the_active_model(tmp_path, monkeypatch):
+    """present() 描述的是当前那一颗，不是"随便哪些文件在"。"""
     models_dir = tmp_path / "models"
     monkeypatch.setattr(reranker.paths, "models_dir", lambda: models_dir)
     model = reranker.MODELS["bge-zh"]
@@ -117,12 +197,11 @@ def test_model_present_uses_the_single_model(tmp_path, monkeypatch):
     (d / "model.onnx").write_bytes(b"x" * model.min_bytes)
     (d / "tokenizer.json").write_bytes(b"{}")
     assert reranker.model_present() is True
-    # 截断的模型不算"在"（min_bytes 下限）。
     (d / "model.onnx").write_bytes(b"x" * 10)
     assert reranker.model_present() is False
 
 
-def test_capabilities_names_the_single_model(tmp_path, monkeypatch):
+def test_capabilities_names_the_active_model(tmp_path, monkeypatch):
     from dhole_mcp import updater
 
     monkeypatch.setattr(reranker.paths, "models_dir", lambda: tmp_path / "models")
@@ -168,13 +247,8 @@ def _fake_download(content: bytes, log: list):
 
 
 def test_publisher_digest_rejects_a_foreign_payload(tiny_env, monkeypatch):
-    """镜像给了不同字节时必须拒用，而不是悄悄拿它打分。
-
-    修前的行为是：下载完算**自己刚下的字节**的哈希写盘 —— 那只证明以后没损坏，
-    任何端点给什么就"验证"通过什么。
-    """
+    """镜像给了不同字节时必须拒用，而不是悄悄拿它打分。"""
     holder, model_dir = tiny_env
-    import hashlib
     bad = b"C" * 40                      # 与发布方摘要不符
     want = hashlib.sha256(b"R" * 40).hexdigest()   # 作者实际发布的那份
     holder["model"] = _tiny_model(publisher={"model.onnx": want})
@@ -189,7 +263,6 @@ def test_publisher_digest_rejects_a_foreign_payload(tiny_env, monkeypatch):
 
 def test_publisher_digest_accepts_the_published_bytes(tiny_env, monkeypatch):
     holder, model_dir = tiny_env
-    import hashlib
     good = b"R" * 40
     holder["model"] = _tiny_model(publisher={"model.onnx": hashlib.sha256(good).hexdigest()})
     log: list = []
@@ -210,22 +283,43 @@ def test_no_publisher_digest_still_records_self_hash(tiny_env, monkeypatch):
     assert (model_dir / "model.sha256").exists()
 
 
+def test_a_failed_download_names_the_file_not_just_offline(tiny_env, monkeypatch):
+    """下载失败要留得下具体是哪一颗文件失败，下一句建议才不是"检查网络"。"""
+    holder, model_dir = tiny_env
+    monkeypatch.setattr(reranker, "_download_model_file", lambda name, dest: False)
+    assert reranker._ensure_model() is None
+    assert "download failed for model.onnx" in reranker._reranker_unavailable_reason
+
+
 def test_registry_digests_are_well_formed_and_verifiable():
     """注册表里填了的摘要必须能核对：64 位小写十六进制。
 
     值本身来自仓库元数据（LFS oid），没法在离线测试里重新推导 —— 这里钉的是"别写坏
-    格式"，以及"该字段的用途只有一个"：填错一个字符 = 所有下载都被拒用。收敛成单模型
-    后，在册的每一颗都必须有摘要 —— 它是真实性的唯一来源（此前 zh-full 留空是因为
-    从未在本机下载过、无从核对；那颗已随 B8 下线）。
+    格式"与"摘要指向的文件确实会下载"。
     """
-    import re
     hex64 = re.compile(r"^[0-9a-f]{64}$")
     for name, m in reranker.MODELS.items():
-        for fname, digest in (m.publisher_sha256 or {}).items():
+        digests = list(m.publisher_sha256.values()) + list(m.variant_sha256.values())
+        assert digests, f"{name} 的摘要不能空着 —— 空了等于没有真实性校验"
+        for fname, digest in m.publisher_sha256.items():
             assert hex64.match(digest), f"{name}/{fname} 的摘要不是 64 位十六进制: {digest!r}"
             assert fname in m.relpaths, f"{name} 的摘要指向一个不下载的文件: {fname}"
-        assert m.publisher_sha256, \
-            f"{name} 的摘要不能空着 —— 空了等于没有真实性校验"
+        for remote, digest in m.variant_sha256.items():
+            assert hex64.match(digest), f"{name}/{remote} 的摘要不是 64 位十六进制"
+            assert any(remote in v.values() for v in m.variants.values()), \
+                f"{name} 的变体摘要指向一个不下载的文件: {remote}"
+
+
+def test_mmarco_digest_follows_the_selected_variant(monkeypatch):
+    model = reranker.MODELS["mmarco"]
+    monkeypatch.setattr(reranker.platform, "machine", lambda: "AMD64")
+    selected = reranker.paths_for(model)
+    assert reranker._publisher_digest(model, selected) == \
+        model.variant_sha256[selected["model.onnx"]]
+    monkeypatch.setattr(reranker.platform, "machine", lambda: "arm64")
+    selected = reranker.paths_for(model)
+    assert reranker._publisher_digest(model, selected) == \
+        model.variant_sha256[selected["model.onnx"]]
 
 
 def test_vocab_txt_is_fetched_best_effort(tiny_env, monkeypatch):
@@ -238,11 +332,7 @@ def test_vocab_txt_is_fetched_best_effort(tiny_env, monkeypatch):
 
 
 def test_preprovisioned_model_dir_downloads_nothing(tiny_env, monkeypatch):
-    """文件齐了就不许再联网：README 让用户「整个目录拷过去」，这条钉住那句话。
-
-    KB-5 的另一半：行为（首次搜索下载）是有意的、也已在 README 写明；缺的是
-    "离线/多机怎么办"的说明 —— 那句话只有在这个不变量成立时才敢写。
-    """
+    """文件齐了就不许再联网：README 让用户「整个目录拷过去」，这条钉住那句话。"""
     holder, model_dir = tiny_env
     for name, blob in (("model.onnx", b"M" * 8), ("tokenizer.json", b"{}"),
                        ("vocab.txt", b"v")):

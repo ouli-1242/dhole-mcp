@@ -65,18 +65,27 @@ ALLOWED = "allowed"
 DISALLOWED = "disallowed"
 UNAVAILABLE = "unavailable"
 DISABLED = "disabled"
+# Which kind of "no answer" this is, so the receipt can say a true sentence about
+# it. Failing open is the documented policy either way; what must not be blurred is
+# the CAUSE — "that file could not be read" and "dhole refused to dial it here"
+# point at different things to fix and different things to write in an audit.
+FETCH_FAILED = "fetch_failed"
+REFUSED_BY_POLICY = "refused_by_policy"
 
 
 class Verdict(NamedTuple):
     """Outcome of one robots.txt check.
 
     ``reason`` is ``allowed`` | ``disallowed`` | ``unavailable`` | ``disabled``;
-    ``robots_url`` is the file that was consulted (empty when unknown).
+    ``robots_url`` is the file that was consulted (empty when unknown);
+    ``unavailable_reason`` is ``fetch_failed`` | ``refused_by_policy`` when
+    ``reason`` is ``unavailable``, and "" otherwise.
     """
 
     allowed: bool
     reason: str
     robots_url: str = ""
+    unavailable_reason: str = ""
 
 
 def env_disabled() -> bool:
@@ -162,7 +171,18 @@ def _blocking_fetch(robots_url: str, proxy: Optional[str], timeout_s: float
     Mirrors the sitemap fetcher's shape (primp first, stdlib as the fallback for
     hosts that reject primp's fingerprint) so dhole's two side-channel fetches
     behave the same way.
+
+    It also has to make the fetcher's own loopback rule true *here*: that rule
+    merges localhost/127.0.0.1/::1 into NO_PROXY at `fetcher` import, and the
+    robots check runs before any tier has imported the fetcher. Without this call
+    the first private-target fetch of a process hands `http://127.0.0.1:PORT
+    /robots.txt` to the system proxy — which cannot reach the caller's own
+    loopback and answers 502, so the host's rules go unenforced and the receipt
+    blames the file. Measured 2026-10-14 (round 01, R01-020): 502 with NO_PROXY
+    absent, 200 with the guard run first, same URL, same server.
     """
+    from dhole_mcp.fetcher import _ensure_loopback_no_proxy
+    _ensure_loopback_no_proxy()
     try:
         import primp  # type: ignore
     except Exception:
@@ -221,11 +241,15 @@ class RobotsCache:
         self._fetch = fetch
         self._entries: dict[str, _Entry] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        # origin -> which kind of no-answer the cached entry stands for. Lives
+        # beside _entries because the answer itself is what got lost.
+        self._why: dict[str, str] = {}
 
     # ─── cache surface ───────────────────────────────────────────────
 
     def clear(self) -> None:
         self._entries.clear()
+        self._why.clear()
 
     def _fresh(self, origin: str) -> Optional[_Entry]:
         entry = self._entries.get(origin)
@@ -329,19 +353,26 @@ class RobotsCache:
         if not robots_url:
             return Verdict(True, UNAVAILABLE, "")
         origin = _origin(url)
+
+        def _no_answer(extra: str = "") -> Verdict:
+            # "unavailable" is one answer in four different stories; the field
+            # that says which story is what makes the receipt auditable.
+            return Verdict(True, UNAVAILABLE, robots_url,
+                           self._why.get(origin, "") or extra or FETCH_FAILED)
+
         entry = self._fresh(origin)
         if entry is None:
             entry = await self._load(origin, robots_url, proxy)
         if entry is None:
-            return Verdict(True, UNAVAILABLE, robots_url)
+            return _no_answer()
         if entry.disallow_all:
             return Verdict(False, DISALLOWED, robots_url)
         if entry.parser is None:
-            return Verdict(True, UNAVAILABLE, robots_url)
+            return _no_answer()
         try:
             ok = bool(entry.parser.can_fetch(user_agent, url))
         except Exception:
-            return Verdict(True, UNAVAILABLE, robots_url)
+            return _no_answer()
         return Verdict(ok, ALLOWED if ok else DISALLOWED, robots_url)
 
     async def _load(self, origin: str, robots_url: str, proxy: Optional[str]
@@ -351,10 +382,11 @@ class RobotsCache:
             entry = self._fresh(origin)  # a concurrent task may have filled it
             if entry is not None:
                 return entry
-            status, text, answered = await self._fetch_rules(robots_url, proxy)
+            status, text, answered, why = await self._fetch_rules(robots_url, proxy)
             if not answered:
                 # No answer at all: allow, and retry soon instead of caching an
                 # allow for the full TTL.
+                self._why[origin] = why
                 self._entries[origin] = _Entry(
                     time.monotonic() + self._unavailable_ttl, None)
                 return None
@@ -362,6 +394,7 @@ class RobotsCache:
                 # The host refuses to serve the rules to this client. RFC 9309
                 # reads that as no access; honouring it is the conservative
                 # choice, and it is reported as such.
+                self._why.pop(origin, None)
                 entry = _Entry(time.monotonic() + self._ttl,
                                _disallow_all(robots_url))
                 self._entries[origin] = entry
@@ -375,18 +408,24 @@ class RobotsCache:
                 # full hour, so one bad moment kept a host's rules unknown - and
                 # therefore unenforced - for as long as a real rules file.)
                 short = status >= 500 or status == 429
+                self._why[origin] = FETCH_FAILED if short else ""
                 self._entries[origin] = _Entry(
                     time.monotonic() + (self._unavailable_ttl if short else self._ttl),
                     None)
                 return None
+            self._why.pop(origin, None)
             entry = _Entry(time.monotonic() + self._ttl, _parse(text, robots_url))
             self._entries[origin] = entry
             return entry
 
 
     async def _fetch_rules(self, robots_url: str, proxy: Optional[str]
-                           ) -> tuple[int, str, bool]:
-        """``(status, text, answered)``; ``answered=False`` = no usable answer.
+                           ) -> tuple[int, str, bool, str]:
+        """``(status, text, answered, why)``; ``answered=False`` = no usable answer.
+
+        ``why`` says which kind of no-answer this is, and it is the only honest way
+        to fill ``Verdict.unavailable_reason`` — the receipt must not call dhole's
+        own refusal a broken file.
 
         The robots URL derives from an already-validated page URL, but it is
         re-validated here: a redirect or a hostile DNS answer must not turn this
@@ -397,7 +436,7 @@ class RobotsCache:
             validate_url(robots_url)
         except Exception as e:
             logger.debug("robots.txt target refused for %s: %s", robots_url, e)
-            return 0, "", False
+            return 0, "", False, REFUSED_BY_POLICY
         try:
             if self._fetch is not None:
                 result = await self._fetch(robots_url, proxy)  # type: ignore[misc]
@@ -406,9 +445,9 @@ class RobotsCache:
                     _blocking_fetch, robots_url, proxy, FETCH_TIMEOUT_S)
         except Exception as e:
             logger.debug("robots.txt fetch failed for %s: %s", robots_url, e)
-            return 0, "", False
+            return 0, "", False, FETCH_FAILED
         if not result:
-            return 0, "", False
+            return 0, "", False, FETCH_FAILED
         status, body = result  # type: ignore[misc]
         try:
             status_code = int(status)
@@ -416,7 +455,7 @@ class RobotsCache:
             # An unusable status is "no answer", NOT "no rules". Treating it as
             # an answer would let a broken fetcher latch allow-all onto a host
             # for a full TTL.
-            return 0, "", False
+            return 0, "", False, FETCH_FAILED
         try:
             if isinstance(body, str):
                 # An injected fetcher may hand back text rather than bytes.
@@ -428,7 +467,7 @@ class RobotsCache:
             text = bytes(body or b"")[:MAX_BYTES].decode("utf-8", errors="replace")
         except Exception:
             text = ""
-        return status_code, text, True
+        return status_code, text, True, ""
 
 
 _CACHE: Optional[RobotsCache] = None

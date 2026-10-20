@@ -121,7 +121,8 @@ ALL: tuple[EnvVar, ...] = (
     EnvVar(
         name="DHOLE_DEFAULT_ENGINES",
         kind="hostlist",
-        default="baidu,bing,sogou,so360,bing_global,yandex,brave,duckduckgo",
+        default=("baidu,bing,sogou,so360,bing_global,yahoo,yandex,brave,"
+                 "duckduckgo,marginalia"),
         read_at="call",
         scenario="poor search results / want a different pool",
         summary="Override the keyless default engine pool.",
@@ -175,6 +176,17 @@ ALL: tuple[EnvVar, ...] = (
         summary="Disable robots.txt compliance process-wide.",
         fail_safe="closed",
         read_by=("robots", "server"),
+    ),
+    EnvVar(
+        name="DHOLE_RERANK_MODEL",
+        kind="enum",
+        default="bge-zh",
+        read_at="import",
+        scenario="model choice / speed vs Chinese quality",
+        summary="Local reranker: bge-zh (default, bilingual, ~279MB) or mmarco "
+                "(fast, ~119MB). First use downloads; restart to switch.",
+        bounds=("bge-zh", "mmarco"),
+        read_by=("reranker",),
     ),
     EnvVar(
         name="DHOLE_SEARCH_ROW_FILTER",

@@ -1,0 +1,6 @@
+{"id": "v01", "query": "Attention Is All You Need", "sources": ["academic"], "max_results": 5, "expect": [{"source": "academic", "url_prefix": "https://arxiv.org/abs/1706.03762", "title_contains": "attention is all you need"}]}
+{"id": "v02", "query": "asyncio.TaskGroup", "sources": ["qa"], "max_results": 5, "expect": [{"source": "qa", "url_prefix": "https://stackoverflow.com/questions/", "title_contains": "taskgroup"}]}
+{"id": "v03", "query": "fastapi", "sources": ["code"], "max_results": 5, "expect": [{"source": "code", "url_prefix": "https://github.com/fastapi/fastapi", "title_contains": "fastapi/fastapi"}]}
+{"id": "v04", "query": "sqlite", "sources": ["community"], "max_results": 5, "expect": [{"source": "community", "title_contains": "sqlite", "min_rows": 1}]}
+{"id": "v05", "query": "climate change", "sources": ["news"], "max_results": 5, "expect": [{"source": "news", "min_rows": 1, "require_dated": true}]}
+{"id": "v06", "query": "transformer attention", "sources": ["academic", "community"], "max_results": 5, "expect": [{"source": "academic", "title_contains": "transformer"}]}

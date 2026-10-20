@@ -143,6 +143,25 @@ def profiles_dir() -> Path:
 #: 而那件事用名字说得清。
 MASKED_CWD = "<server cwd>"
 MASKED_HOME = "~"
+#: 用户名出现在**任何一段**里都要折成这个名字（评审 R02-090）。
+MASKED_USER = "<user>"
+
+
+def _identity_names() -> tuple[str, ...]:
+    """这台机器"是谁"的那几个写法：home 的最后一段 + `USERNAME` / `USER`。
+
+    三个来源都要：Windows 的 `USERNAME` 与 POSIX 的 `USER` 在不同启动路径下各可能为空
+    （服务化启动时 `USER` 常缺，`expanduser` 又可能给出改写过的家目录），而漏一个来源就是
+    漏一次遮蔽。长名排在前面，免得短名先把长名的一段吃掉。少于两个字符的名字不参与：
+    那种"名字"在任何一段正文里都会撞到，遮蔽会退化成涂掉句子。
+    """
+    names: set[str] = set()
+    for candidate in (os.path.basename(os.path.expanduser("~") or ""),
+                      (os.environ.get("USERNAME") or "").strip(),
+                      (os.environ.get("USER") or "").strip()):
+        if candidate and len(candidate) >= 2 and candidate not in ("~", ".", ".."):
+            names.add(candidate)
+    return tuple(sorted(names, key=len, reverse=True))
 
 
 def mask_machine_paths(text: str) -> str:
@@ -157,10 +176,25 @@ def mask_machine_paths(text: str) -> str:
     A path with no machine root in it is returned unchanged: an absolute path the
     caller invented is theirs to read back.
 
+    …except for the username, which is masked wherever it sits (:func:
+    ``_identity_names``, review R02-090). That exception is not a new root: the
+    reason the home is masked above is "the username rides along with the path",
+    and a *prefix* rule can't see a username that lives outside both roots.
+    Measured on the wire (`review/.runtime/p1/r98b_user_segment.json`): a file
+    under a temp root on another drive, in a directory named ``probe-of-<user>``
+    (pytest's own naming is exactly this shape), came back verbatim in both the
+    successful ``url`` and the ``File not found`` sentence.
+
     Longest root first, so a cwd nested inside home keeps its own, more specific
-    label. The separator lookahead matters: without it ``C:\\Users\\mel`` would be
-    read as a hit on the root ``C:\\Users\\me`` and rewritten into a path that
-    does not exist. Matching is case-insensitive because on Windows the same root
+    label. The boundary after a root has to be a real stopping point — anything
+    that is not a path-name character (separator, quote, bracket, space, end of
+    text): without it a shorter root would fold a longer directory that merely
+    starts with it (``C:\\Users\\mel`` read as a hit on ``C:\\Users\\me``), while
+    a stricter one (separator-or-end only) leaves the quoted form
+    (``at 'D:\\tools\\dhole-mcp'``) and the POSIX spelling of the SAME root
+    untouched, which is how a root leaks. Both spellings are masked because a
+    normalized path is the same directory wearing another hat. Matching is
+    case-insensitive because on Windows the same root
     comes back spelled ``c:\\users\\ouli`` as often as not, and under-masking is
     the failure that leaks.
     """
@@ -179,9 +213,32 @@ def mask_machine_paths(text: str) -> str:
             roots.append((cwd, MASKED_CWD))
     except Exception:
         pass
+    #: 根之后必须**不是路径名字符**才算收尾：分隔符、引号、括号、空格、串尾都算，
+    #: 而字母/数字/`-`/`_` 不算 —— 这一格守的仍是原来那个意图（`C:\Users\me` 不许把
+    #: `C:\Users\mel` 折掉），只是把"只认分隔符或串尾"放宽到"认任何真正的收尾"：库交出的
+    #: 消息常把路径打在引号里（`Package not found at 'D:\tools\dhole-mcp'`），那种形状
+    #: 从前一个字都不改。
+    #:
+    #: `.` 单独一条判据（评审 R02-049）：从前它和字母数字并列，于是**句子里收尾的根**
+    #: 整格漏掉（`searched under D:\tools\dhole-mcp.` —— 库里最常见的「在这里没找到」
+    #: 就长这样，而同一句里的逗号冒号引号都遮）。句号是不是"名字的一部分"，看它后面
+    #: 还有没有名字字符：`.mirror` / `.db` 是另一颗目录或扩展名（不许折），
+    #: `.` 接串尾、空白或别的标点就是句子（要遮）。
+    _root_boundary = r"(?![A-Za-z0-9_\-]|\.[A-Za-z0-9_\-])"
     for root, label in sorted(roots, key=lambda rl: -len(rl[0])):
-        text = re.sub(re.escape(root) + r"(?=[\\/]|$)", label, text,
-                      flags=re.IGNORECASE)
+        # 同一个根的两种拼法都要遮。`re.escape(root)` 在 Windows 上只生成反斜杠形式，
+        # 而响应里到处是归一化过的 POSIX 路径（pathlib 的 `.as_posix()`、zip/fsspec 内部
+        # 路径、`file:///` 那一格的形状）—— 换一种写法不是换一台机器。
+        for spelling in dict.fromkeys((root, root.replace("\\", "/"),
+                                       root.replace("/", "\\"))):
+            text = re.sub(re.escape(spelling) + _root_boundary, label, text,
+                          flags=re.IGNORECASE)
+    #: 身份那一条：用户名是**内容**，不是前缀，所以它在任何一段里都算。边界只认字母/数字/
+    #: 下划线连着的不算一段（`<user>project` 是另一颗目录，反向守卫钉着这一条），而 `-` 与 `/`
+    #: 都算收尾 —— `probe-of-<user>` 正是被 `-` 连起来的一段，也是这条判据存在的全部理由。
+    for name in _identity_names():
+        text = re.sub(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])",
+                      MASKED_USER, text, flags=re.IGNORECASE)
     return text
 
 

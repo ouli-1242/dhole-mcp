@@ -6,6 +6,31 @@
 
 > 自 13.14 起本仓库为个人衍生作品，版本号是自己的序号、不承诺语义化版本，与上游版本不可比；包内的 `__version__` 是唯一权威来源。
 
+## [Unreleased]
+
+### 新增
+
+- **默认搜索池扩到 10 家：新增 `yahoo` 与 `marginalia`**：`yahoo` 是 Bing 索引的第二个入口（与 `bing` / `bing_global` / `duckduckgo` 同家族，补可用性、不加共识家族）；`marginalia` 是独立小网索引（自己的爬虫，英文为主，连续请求会回 200 反爬页，报告为 blocked 而不是 empty）。默认池因此从 8 家 / 6 家族变成 10 家 / 7 家族，`engines=` 单次上限从 10 变成 12。两家都补了真页面裁剪件：Yahoo 两套版面各一份契约，Marginalia 一份；`DHOLE_DEFAULT_ENGINES`、README、手册与 `dhole -v` 的名单同步。Mojeek/Ecosia/Startpage/Yep 在 2026-10-20 的实测中分别被验证码、403 或 JS 壳挡住，没有加入默认池。
+- **纵向搜索有了可复现评测与公开的 benchmark 目标**：新增 `evals/vertical_search_baseline.py`、固定题集 `evals/vertical_queries.jsonl` 与 2026-10-20 抓取的冻结语料（7 份 API 响应）。默认离线重放，不需要网络：可用率、known-item Hit@5、日级日期覆盖、重复 URL 与逐源行数都会出数，目标不达标时退出码非零；`--live` 另出当前网络的可用率与 p50/p95，`--capture` 更新语料。冻结语料上可用率 100%、known-item 5/5、日期覆盖 100%；同日两次实时采样都是 71.4%（Stack Exchange/GitHub 连接层错误与 GDELT 连接超时），如实记入 `evals/README.md`。SLA 只对这四条 benchmark 目标成立，**不是对免密公共 API 的服务承诺**。
+- **托管分发：容器镜像与发布清单**：新增 `Dockerfile`（多阶段、非 root、只读根可跑、健康检查、数据卷 `/data`）、`docker-compose.yml`（未设 `DHOLE_HTTP_TOKEN` 直接拒绝启动，默认只绑回环）、`.dockerignore`、GHCR 发布 workflow（`v*` 标签构建推送）与 MCP Registry 的 `server.json`。镜像默认是 streamable HTTP，并**内置 Chromium**（`INSTALL_BROWSER=0` 可退回纯 HTTP 的较小镜像）；HTTP 抓取 / 搜索 / PDF / 重排本来就不依赖浏览器。README 新增托管章节，写明反向代理 / OIDC 的边界：dhole 没有内置 OAuth，bearer 令牌不分主体，共享进程共享凭据、会话与缓存，按主体隔离必须一人一容器。诚实门槛写在同一节：仓库是 17.0、PyPI 当前最新 16.2，registry 清单与 17.0 镜像在正式发布后才生效。
+- **变更检查可以批量，并且能被 cron 调度**：`web_read(urls=[...], extraction_type='check')`（最多 10 个 URL）逐条复用单 URL 的 check 语义，每行保留自己的 `changed` / `status` / `diff_window`，顶层给 `changed_urls` / `unchanged_urls` / `baseline_urls` / `error_urls`、`results` 与 `summary`；坏一行不会吞掉邻行。`actions=` / `schema=` / `nested_selector=` / `cdp_url=` 与超过 10 个 URL 在发出任何请求之前具名拒绝。此前这条组合会掉进普通批读、在全部页面抓完后崩在 `successful = sum(...)`，工作做了却没有回执。CLI 新增 `dhole watch add|list|remove|run`：清单落 `~/.dhole/watchlist.json`（0600，只存 URL / 标签 / 最近判决，不存正文），`run` 复用同一条 check 路径，逐条落盘，退出码 0=无变化 / 1=有变化 / 2=检查失败；首轮只落基线并明确说「baseline recorded」，不会把第一次见面冒充成没变。`--json` 给调度器读，详见 README「变更监控与定时任务」。
+- **`web_search` 多了五类免密纵向源与按日排序（P0）**：`sources=['news','academic','qa','code','community']` 分别接 GDELT（真实媒体 URL + 发布日期）、arXiv、Stack Exchange、GitHub 仓库搜索（按星数）与 Hacker News；省略 `web` 就只问纵向源，此时 `engines=` 被拒。纵向行共用重排、日期窗与质量过滤，但**不冒充 web 索引家族**：`engines_consensus` 为空串，绝不抬高 `x of N`。回执新增 `sources_used`、`source_detail`（逐家 `status|count|delivered|duration_ms`）与 `sort_applied`；`sort='newest'` 只把声明了发布日的行倒序，月/年地板与无日期行留在后面，summary 报的是**实际交付**的日期行数。纵向源上的 `after`/`before` 按行精确执行（`after` 丢掉无法证明在窗口内的无日期行）。一条源超时/限流不抹掉别家，失败如实进报告行。
+- **本地重排有了第二档 `mmarco`（可选、实测过）**：`DHOLE_RERANK_MODEL` 选择本机打分的 cross-encoder，默认仍是中文更强的 `bge-zh`（~279MB）；`mmarco` 是多语 MiniLM int8（~119MB，x86-64/arm64 各自量化），同一份 67 题冻结语料上 P@5 0.552 vs 0.549、MRR 0.749 vs 0.737、CPU 1.8× 快，中文略低、英文更高。模型会话是进程级单例，所以该变量在启动时读取一次，**换档要重启宿主**。首次使用才下载、可续传；每条搜索回执新增 `rerank_model` 点名真正打分的模型，`sys_state(show=['models'])` 的 `available` 列出两档的盘上状态。旧的 `~/.dhole/config/reranker.json` 仍然不选任何东西，日志会指向新变量。
+
+### 修复
+
+- **PDF 回执交出自己的页数**：`pages_total` 与 `pages_returned` 现在随 PDF 响应上线（`web_read` 与 `doc_parse` 同一来源）。此前正文写着 "pages 1-2 of 3"，调用方却只能从正文里读这颗数；`pages_total - pages_returned` 现在是“这次没读多少”的直接读数。非 PDF 两者均为 0 并从 wire 上省略。
+- **文档下载失败不再一律说成 timeout**：证书过期、连接被拒、代理失败与真正的超时都走 `status=0` 分支，而文档路径此前无条件用“提高 timeout”的建议覆盖分类器的判决。现在先问 `classify_network_error`，只有 timeout 才给文档预算建议；过期证书保留 `tls_error`，不会再劝调用方去抬一个没用的时钟。
+- **重定向在 summary 里说清两头**：`original_url` 早已存在，但调用方实际扫的那一行只在 `url` 里看到落点。现在发生重定向时，`summary` 直接写 `redirected from <original> to <final>`，旧 setid / 跳转页不再冒充调用方要的那一页。
+- **`sys_guide(topic='start')` 回到一页纸**：`start` 现在指向新的 `references/start.md`（三条路线 + 硬约束 + 深入卷指针，实测 3,877 字符），完整 SKILL.md 改由 `topic='manual'` 提供。四次实测的 27,276 字首答不再出现，全本仍可达。
+- **重导航不再把完整文章判成抽取塌陷**：塌陷判决现在同时看整页可见字与“去掉 nav/header/footer、保留 `<aside>` 的正文底线”；只有两把尺都说丢字才判塌陷。实测形状：19k 抽取 / 39k 整页、正文已读到页尾的 c-api 文章不再被误伤；`/longaside` 那种真的丢掉 aside 正文的页仍然判塌陷。
+
+### 变更
+
+- **arXiv 查询改成短语搜索**：未加引号的多词查询下，精确标题 "Attention Is All You Need" 的原论文不在前 5（2026-10-20 冻结语料实测）；改成 `all:"<query>"` 后原论文回到第 2，宽泛短语（"transformer attention" / "large language model"）仍然返回相关工作。含 `AND` / `OR` / `ANDNOT` 的查询保持原样，不把布尔表达式包成短语。
+- **无模型搜索先看词面覆盖，不再直接照抄引擎顺序**：`rerank_mode=merge` 的免费回退按「标题/摘要/URL 中出现几个不同的查询词」分桶（2+ / 1 / 0），桶内再按跨引擎共识与引擎位置排；只重排、不丢行。同一 67 题冻结语料（agent-a）P@5 0.370→0.525、MRR 0.550→0.731、nDCG@10 0.646→0.759，14 道题变化全为正；q001 那种「泛化页带一个宽词、真正答案带两个具体词」的题从 0 抬到 1.0。只要这一轮有任何模型判决（`relevance_raw` 存在），分桶一步都不运行，神经臂指标与改动前逐位一致（0.549 / 0.737 / 0.764）。
+- **越界 `max_content_chars` 的既有行为被钉住**：R04-029 记录的“999999 静默接受”在 2026-10-20 用原参数复现——回执 summary 里已有 `max_content_chars clamped 999999->200000`。本次不改行为，只补一条端到端回归测试，防止这句注记将来消失。
+
 ## [17.0] - 2026-10-01
 
 从「网页研究工具」迈向「agent 的个人 Web 操作助手」的第一块：**带登录态抓取**与**页面操作**——CDP 接管你已登录的 Chrome，让已登录页面第一次可读；元素快照 + 索引化动作让 agent 能点、能填、能提交（提交默认暂停，等人确认）。边界不变：识别与决策归外层 agent，dhole 是零模型、零密钥的确定性工具层。

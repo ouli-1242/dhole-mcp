@@ -123,7 +123,11 @@ class TestNoRotationAnymore:
         with caplog.at_level(logging.WARNING, logger="dhole-mcp.search_proxy"):
             proxy, _source = configured_proxy()
         assert proxy == "http://p1:80"
-        assert "rotates nothing" in caplog.text and "using the first one only" in caplog.text
+        # R02-F49：句子去掉「17.0」，守的三件事一件不少 —— 池子不存在、什么都不轮换、
+        # 只用第一颗。断言跟着换成新的字面，标准没放松（三句都要在）。
+        assert "no pool" in caplog.text, caplog.text
+        assert "nothing rotates" in caplog.text, caplog.text
+        assert "first one is used" in caplog.text, caplog.text
 
     def test_repeated_calls_give_the_same_egress(self, monkeypatch):
         """轮转没了：同一进程里每次搜索走同一个出口。这条断言是"没有隐藏状态"的

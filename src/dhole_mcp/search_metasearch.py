@@ -6,9 +6,10 @@ async-native parallel aggregation with early-return-on-quorum, no CLI / API
 server / MCP / images / videos / news / books / extract / cache / network bloat.
 See the ddgs LICENSE notice in NOTICE.ddgs.txt for full attribution.
 
-Backends (all keyless, no API key, no account): the pool IS the registry - 8
-names (baidu, bing, sogou, so360, bing_global, yandex, brave, duckduckgo), all
-run every round. There are no opt-in keyless backends since §3-23.
+Backends (all keyless, no API key, no account): the pool IS the registry - 10
+names (baidu, bing, sogou, so360, bing_global, yahoo, yandex, brave,
+duckduckgo, marginalia), all run every round. There are no opt-in keyless
+backends since §3-23.
 They run in PARALLEL; a backend that
 CAPTCHAs / rate-limits / has no topic-match simply yields
 nothing and the others carry - so search is robust without any single point of
@@ -27,6 +28,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import ssl
 import threading
 from collections.abc import Mapping
@@ -926,19 +928,26 @@ _DHOLE_TO_BACKEND = {
     # bing_global 是 www.bing.com 那套国际索引（与 cn 版结果几乎不重合，但国内直连常需
     # 代理），占默认池的国际席位。
     "bing_global": "bing_global",
+    # yahoo 与 bing 同一套索引（provider 都是 bing），是 Bing 家族的**第二个入口**：
+    # 不增加共识家族，只在 bing/bing_global/ddg 被按 IP 限流时留一条可答的路。
+    "yahoo": "yahoo",
+    # marginalia 是独立索引（自己的小网爬虫），英文为主、商业长尾很浅；放在池子
+    # 末位，答得上时提供独立家族，答不上时由其余引擎兜住。
+    "marginalia": "marginalia",
     # Paid JSON backends: selectable by name, run on their own track (see
     # KeyedApiEngine) -- absent from _TEXT_ENGINES by design. 名字必须与
     # KEYED_ENGINES 严格一致：留一个没有实现的键，点名它会通过校验却什么都不返回。
     "tavily": "tavily",
     "bocha": "bocha",
 }
-# 默认池 = 注册表的全部 8 家 keyless（§3-22）：国内 4（baidu/bing/sogou/so360）+
-# 国际 4（bing_global/yandex/brave/duckduckgo）。不再有"显式点名才跑"的免密引擎：
-# 删掉的 6 家（yahoo/sogou_weixin/wikipedia/grokipedia/mwmbl/baidu_baike）里，
-# 一家是 bing 家族的重复入口（yahoo），五家是知识库、垂直索引或社区小型索引（覆盖窄）。
-# duckduckgo 与 bing 同家族：它在池里多一个入口不多一个家族，家族数固定为 6。
+# 默认池 = 注册表的全部 10 家 keyless（§3-22）：国内 4（baidu/bing/sogou/so360）+
+# 国际 6（bing_global/yahoo/yandex/brave/duckduckgo/marginalia）。不再有"显式点名
+# 才跑"的免密引擎。17.0 删掉的 5 家（sogou_weixin/wikipedia/grokipedia/mwmbl/
+# baidu_baike）是知识库/垂直索引/社区小型索引；yahoo 在 17.1 作为 Bing 家族的
+# 可用性冗余返回（同索引，不加家族），marginalia 是新的独立索引。
+# duckduckgo/yahoo 与 bing 同家族：池里多两个入口不多两个家族，家族数固定为 7。
 _DEFAULT_BACKENDS = ["baidu", "bing", "sogou", "so360", "bing_global",
-                     "yandex", "brave", "duckduckgo"]
+                     "yahoo", "yandex", "brave", "duckduckgo", "marginalia"]
 
 
 # ─── 360 搜索（so.com，独立索引，默认池） ────────────────────────────────────
@@ -1022,9 +1031,39 @@ class Sogou(BaseSearchEngine):
     search_url = "https://www.sogou.com/web"
     search_method = "GET"
     items_xpath = "//div[contains(@class,'vrwrap')][.//@data-url]"
+    # Which attribute holds **this result's** target, decided on structure and on
+    # the shape of the URL — never on a host name or a keyword.
+    #
+    # Measured 2026-10-14 on a live SERP (10 cards, `review/.runtime/p4/sogou_serp.html`):
+    # every card carries its target in a `@data-url`, and 9 of those live on a
+    # `div.r-sech…[style="display:none"][data-async="1"]` slot — sogou's normal
+    # mechanism, so "hidden/async" is NOT a reason to distrust one. The card's own
+    # `<h3>` anchor is a relative `/link?url=` wrapper in those 9. The 10th card
+    # (a 公众号 result) is the one that differs: its slot holds
+    # `http://mp.weixin.qq.com/count/<sig>/<mid>/<idx>&scene=6` — a click-count
+    # wrapper whose `&` has no `?` in front of it, i.e. a URL that addresses no
+    # resource and 404s (round 01, R01-015) — while the real article link
+    # (`mp.weixin.qq.com/s?src=11&…`) sits on the title anchor.
+    #
+    # So: prefer a data-url that is *formable as a URL*, and take the absolute
+    # title anchor only when the card has no such data-url. The two branches are
+    # mutually exclusive by construction, because the anchor branch's guard is the
+    # same predicate as the first branch. Exactly one node must come back:
+    # `extract_results` glues whatever an XPath returns with no separator, and two
+    # candidates would become one unusable string — a lost row, not a fixed one.
+    _MALFORMED = "contains({attr},'&') and not(contains({attr},'?'))"
+    _CARD = ("ancestor::div[contains(concat(' ', normalize-space(@class), ' '),"
+             " 'vrwrap')][1]")
     elements_xpath: ClassVar[Mapping[str, str]] = {
         "title": ".//h3//text()",
-        "href": ".//@data-url",
+        "href": (
+            "(. | .//*)[@data-url and not("
+            + _MALFORMED.format(attr="@data-url") + ")][1]/@data-url"
+            " | .//h3//a[@href and starts-with(@href,'http') and not("
+            + _MALFORMED.format(attr="@href") + ")"
+            " and not(" + _CARD + "/@data-url[not(" + _MALFORMED.format(attr=".") + ")])"
+            " and not(" + _CARD + "//*[@data-url and not("
+            + _MALFORMED.format(attr="@data-url") + ")])][1]/@href"),
         "body": ".//*[contains(@class,'fz-mid')]//text()",
         # 期4.2（实测）：`span.cite-date` 是绝对到日的那一格（"2020-08-31" /
         # "2024-11-22"）。冻结夹具 8 个结果容器里 4 个带它，其余交回空串 —— 这就是
@@ -1065,8 +1104,172 @@ class Sogou(BaseSearchEngine):
         return out
 
 
+# ─── Yahoo (Bing index, second endpoint) ─────────────────────────────────────
+def _yahoo_decode_url(href: str) -> str:
+    """Unwrap Yahoo's r.search.yahoo.com/.../RU=<percent-encoded> redirect.
+
+    Yahoo serves two layouts (a ``div.algo.relsrch`` card and a
+    ``section.algo.Sr`` card); both wrap the target in the same redirect. A
+    wrapper that cannot be decoded is dropped rather than handed out as a
+    result URL - it expires and carries a session token.
+    """
+    from urllib.parse import unquote, urlparse
+    host = (urlparse(href).netloc or "").lower()
+    if not host.endswith("yahoo.com"):
+        return href
+    # The target lives in the PATH (`/RU=https%3a%2f%2f...`), not the query;
+    # Yahoo rotates between r.search.yahoo.com and rd.search.yahoo.com.
+    match = re.search(r"/RU=([^/]+)", href)
+    if match:
+        target = unquote(match.group(1))
+    else:
+        from urllib.parse import parse_qs
+        target = parse_qs(urlparse(href).query).get("RU", [""])[0]
+    if target.startswith(("http://", "https://")):
+        return target
+    # A redirect we cannot decode is dropped; a real yahoo.com result URL is not.
+    return "" if host.startswith(("r.search.", "rd.search.", "search.")) else href
+
+
+class Yahoo(BaseSearchEngine):
+    """Yahoo web search: the second entry into the Bing index.
+
+    Same index family as bing / bing_global / duckduckgo, so it adds an
+    endpoint (availability under per-IP blocks) but not a consensus vote.
+    Yahoo rotates two result layouts; the union below covers both, and the
+    fixture set keeps one contract per layout so a layout change cannot go
+    unnoticed.
+    """
+
+    name = "yahoo"
+    provider = "bing"
+    search_url = "https://search.yahoo.com/search"
+    search_method = "GET"
+    # Variant A: one div.algo.relsrch per result. Variant B: a section.richAlgo
+    # holding the first result, then section.Sr cards nested inside one another.
+    # Sections overlap, so every element selector is scoped to the first h3 /
+    # first compText - otherwise a card's title runs into its nested siblings.
+    items_xpath = (
+        "//div[contains(@class,'algo') and contains(@class,'relsrch') and .//h3]"
+        " | //section[contains(concat(' ',normalize-space(@class),' '),' Sr ')]"
+        " | //section[contains(concat(' ',normalize-space(@class),' '),' richAlgo ')]"
+    )
+    elements_xpath: ClassVar[Mapping[str, str]] = {
+        # Variant B's h3 prefixes the result with its site/URL breadcrumb inside
+        # span.title-url; only the text outside that span is the title.
+        "title": "(.//h3)[1]//text()[not(ancestor::span[contains(@class,'title-url')])]",
+        "href": "((.//h3)[1]/a/@href | .//a/@href)[1]",
+        "body": "(.//div[contains(@class,'compText')])[1]//text()",
+        "published": "(.//span[contains(@class,'fc-smoke')])[1]//text()",
+    }
+    headers_update: ClassVar[Mapping[str, str]] = {
+        "Accept-Language": "en-US,en;q=0.9"}
+
+    def __init__(self, proxy: str | None = None, timeout: int | None = None, *,
+                 verify: bool = True) -> None:
+        # A fixed Chrome fingerprint: primp's random pick occasionally hits a
+        # TLS profile Yahoo answers with a handshake EOF (observed live).
+        self.http_client = _PrimpClient(proxy=proxy, timeout=timeout, verify=verify,
+                                        impersonate="chrome", impersonate_os="windows")
+        self.http_client.client.headers_update(self.headers_update)
+        self.results: list[Any] = []
+
+    def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
+                      timelimit: str | None,  # noqa: ARG002 - not wired (see _DATE_AWARE_ENGINES)
+                      page: int = 1, **kwargs: str) -> dict[str, Any]:
+        payload = {"p": query}
+        if page > 1:
+            payload["b"] = f"{10 * (page - 1) + 1}"
+        return payload
+
+    def post_extract_results(self, results: list[Any]) -> list[Any]:
+        out = []
+        for r in results:
+            href = _yahoo_decode_url((r.href or "").strip())
+            if not href.startswith(("http://", "https://")):
+                continue
+            r.href = href
+            out.append(r)
+        return out
+
+
+# ─── Marginalia (independent small-web index) ────────────────────────────────
+class Marginalia(BaseSearchEngine):
+    """Marginalia: an independent, non-commercial index of the small web.
+
+    Server-rendered and keyless. Its corpus is English-heavy and shallow on
+    commercial long-tail queries, so it is deliberately last in the default
+    pool: it contributes diversity when it answers, and the other engines
+    carry when it does not. Pagination needs a per-session ``sst`` token, so
+    this backend answers page 1 only; later pages return nothing rather than
+    pretending page 1 is page N.
+    """
+
+    name = "marginalia"
+    provider = "marginalia"
+    search_url = "https://search.marginalia.nu/search"
+    search_method = "GET"
+    items_xpath = (
+        "//div[contains(@class,'bg-white') and contains(@class,'p-4') "
+        "and .//h2/a]")
+    elements_xpath: ClassVar[Mapping[str, str]] = {
+        "title": ".//h2//text()",
+        "href": ".//h2/a/@href",
+        "body": ".//p[contains(@class,'mt-2')]//text()",
+    }
+    headers_update: ClassVar[Mapping[str, str]] = {
+        "Accept-Language": "en-US,en;q=0.9"}
+    _detect_challenge_shell = True
+    # Marginalia answers a rate-limited client with 400 as well as a 200
+    # challenge page; both mean "cool down", not "this query had no results".
+    _challenge_statuses = (400, 403, 429, 503)
+
+    def __init__(self, proxy: str | None = None, timeout: int | None = None, *,
+                 verify: bool = True) -> None:
+        self.http_client = _PrimpClient(proxy=proxy, timeout=timeout, verify=verify,
+                                        impersonate="chrome", impersonate_os="windows")
+        self.http_client.client.headers_update(self.headers_update)
+        self.results: list[Any] = []
+
+    def _check_challenge(self, html_text: str) -> None:
+        # Marginalia's 200 anti-bot page is ~37KB ("Wait A Moment / aggressive
+        # bot activity"), above the generic shell size gate. Mark it blocked so
+        # the engine cools down instead of reporting "no results".
+        if "aggressive bot activity" in html_text or "Wait A Moment" in html_text:
+            raise MetaBlockedException(
+                "marginalia rate limit (HTTP 200 challenge)", challenge=True)
+        super()._check_challenge(html_text)
+
+    def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
+                      timelimit: str | None,  # noqa: ARG002 - not wired
+                      page: int = 1, **kwargs: str) -> dict[str, Any]:
+        return {"query": query}
+
+    def search(self, query: str, region: str = "us-en",
+               safesearch: str = "moderate", timelimit: str | None = None,
+               page: int = 1, **kwargs: str) -> list[Any] | None:
+        if page > 1:
+            return None  # not fetched, not "empty"
+        return super().search(query, region=region, safesearch=safesearch,
+                              timelimit=timelimit, page=page, **kwargs)
+
+    def post_extract_results(self, results: list[Any]) -> list[Any]:
+        out = []
+        for r in results:
+            href = (r.href or "").strip()
+            if not href.startswith(("http://", "https://")):
+                continue
+            if urlparse(href).netloc.endswith("marginalia.nu"):
+                continue
+            r.href = href
+            out.append(r)
+        return out
+
+
 _TEXT_ENGINES["so360"] = So360
 _TEXT_ENGINES["sogou"] = Sogou
+_TEXT_ENGINES["yahoo"] = Yahoo
+_TEXT_ENGINES["marginalia"] = Marginalia
 
 # ─── keyed JSON search APIs (Tavily / Bocha) ────────────────────────────────
 # 这些后端不走 BaseSearchEngine 的 HTML 抓取契约：都是 POST JSON + Bearer key。
@@ -1552,12 +1755,27 @@ def engine_state_reset() -> dict:
 
 
 def engine_state_snapshot() -> dict:
-    """Read-only pool health: per-engine verdict + any active cooldown."""
+    """Read-only pool health: per-engine verdict + any active cooldown.
+
+    `cooldown_seconds_left` is on **every** row now: the live seconds when this process
+    holds a cooldown record, and 0 when it does not. Leaving the key out was the defect
+    (R01-032, merged into R01-016) — a row reading `status: circuit_open` with no such
+    key means two different things ("cooling, unknown how long" and "was refused last
+    round, not cooling now"), and the one caller who asked four times in a row concluded
+    the number did not exist and went to write their own breaker log.
+
+    0 is scoped to *this process*: the breaker table is in-memory (persisted at import,
+    written by whoever ran the last search), so "no record here" is what the field can
+    honestly claim.
+    """
     health = engine_health()
     cool = cooldowns()
-    for name, seconds in cool.items():
-        row = health.setdefault(name, {})
-        row["cooldown_seconds_left"] = seconds
+    for name in cool:
+        # 冷却中有记录、却还没有产出行的一家（例如别处写入的落盘表被本进程读回）：
+        # 从前 setdefault 会给它一行，这一步不许在重写这一格时顺手丢掉。
+        health.setdefault(name, {})
+    for name, row in health.items():
+        row["cooldown_seconds_left"] = round(cool.get(name, 0.0), 1)
     return health
 
 

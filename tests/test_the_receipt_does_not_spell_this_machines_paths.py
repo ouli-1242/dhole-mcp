@@ -96,18 +96,39 @@ def test_the_names_are_there_so_the_order_is_still_readable():
         r.error
 
 
-def test_a_named_cwd_is_masked_too_because_the_username_rides_along():
-    """调用方自己给的 `cwd=` 也要遮蔽 —— 主目录的拼法里带着用户名。
+def test_a_cwd_whose_name_carries_the_username_does_not_ride_along():
+    """调用方自己给的 `cwd=` 里，**机器身份**那一格不许出去。
 
-    这不是"过度遮蔽"：`~\\proj\\gone.txt` 比 `C:\\Users\\ouli\\proj\\gone.txt`
-    **更好**读（一眼看出是哪一支根），而用户名没有理由跟着出门。
+    这一格从前写的是「临时目录整条不许出现在 error 里」，而它成立的条件没写在句子里：
+    临时目录恰好住在主目录下，于是它作为"主目录的一段"被遮掉了。评审 R02-090 量到的
+    正是这个假设的另一面 —— 把 `TMP` 指到别的盘，整条路径原样回显，目录名里还带着用户名
+    （pytest 自己的 `pytest-of-<user>` 就是这个形状）。这条承诺的对象从来是**身份**，
+    不是"临时目录"：所以这里造一颗名字里带用户名的目录来撞，并把判据写成身份不许出去。
     """
     import tempfile
-    with tempfile.TemporaryDirectory() as d:
+    user = os.path.basename(os.path.expanduser("~"))
+    with tempfile.TemporaryDirectory() as base:
+        d = os.path.join(base, f"probe-of-{user}")
+        os.mkdir(d)
         r = _parse(file_path="gone.txt", cwd=d)
         assert r.error.startswith("File not found"), r.error
-        assert d not in r.error, "调用方给的 cwd 也不该逐字回显：它在主目录下"
-        assert "gone.txt" in r.error
+        assert user.lower() not in r.error.lower(), r.error
+        assert "gone.txt" in r.error, r.error
+
+
+def test_a_foreign_cwd_the_caller_wrote_is_still_readable_back(tmp_path):
+    """反向守卫：遮蔽不许吞掉调用方自己写的路径 —— 那句承诺写在遮蔽器的 docstring 里。
+
+    这一格刻意用一颗**名字里没有身份**的目录：没有身份、又不撞任何机器根的 `cwd=` 是调用方
+    的字符串，回执里要逐字读得回来。把它一起遮掉就退化成"把路径删掉"（同一反面在
+    `test_the_names_are_there_so_the_order_is_still_readable` 里钉过）。
+    """
+    d = tmp_path / "caller-eyes-only"
+    d.mkdir()
+    r = _parse(file_path="gone.txt", cwd=str(d))
+    assert r.error.startswith("File not found"), r.error
+    assert "caller-eyes-only" in r.error, r.error
+    assert "gone.txt" in r.error, r.error
 
 
 # ─── 2 · 成功那一句（更常出现的那一处）──────────────────────────
@@ -119,10 +140,17 @@ def test_a_successful_parse_does_not_spell_the_resolved_path(a_readable_file):
 
 
 def test_the_masked_url_still_names_the_file(a_readable_file):
-    """`url` 是回执的身份字段：遮掉根之后仍要答得出"读的是哪一份"。"""
+    """`url` 是回执的身份字段：遮过之后仍要答得出"读的是哪一份"。
+
+    从前这一格断言 `MASKED_HOME in r.url` —— 那句里的"遮过"其实是环境给的（临时目录恰好
+    住在主目录下）。评审 R02-090 之后判据写成它本来的样子：**名字要在**，**机器身份不许在**。
+    两条都不依赖 `TMP` 被指到哪个盘。
+    """
     r = _parse(file_path=str(a_readable_file))
+    user = os.path.basename(os.path.expanduser("~"))
     assert r.url.endswith("report.txt"), r.url
-    assert paths.MASKED_HOME in r.url, r.url
+    assert not _spells_a_machine_root(r.url), r.url
+    assert user.lower() not in r.url.lower(), r.url
 
 
 def test_the_masked_url_is_still_a_usable_uri(a_readable_file):
@@ -162,6 +190,10 @@ def test_both_branches_name_a_root_the_same_way(tmp_path):
 
     这正是本仓库反复点名的那类缺陷（"同一件事在两条路上两种说法"）：一处写
     `<server cwd>`、另一处写 `~\\...\\<server cwd>`，读的人会以为那是两个地方。
+
+    判据不许写成"那一格一定是 `~`"（评审 R02-090 的教训）：那个名字由**这个根今天住在哪个盘**
+    决定 —— 主目录下是 `~`，别的根就是它自己的拼法。两条路一致这件事与它一致与否无关，
+    所以这里比的是"两条路用的是不是同一个名字"。
     """
     good = tmp_path / "report.txt"
     good.write_text("x\n", encoding="utf-8")
@@ -169,23 +201,38 @@ def test_both_branches_name_a_root_the_same_way(tmp_path):
     bad = _parse(file_path="missing.txt", cwd=str(tmp_path))
     assert ok.status == 200, ok.error
     assert bad.error.startswith("File not found"), bad.error
-    assert paths.MASKED_HOME in ok.url, ok.url
-    assert paths.MASKED_HOME in bad.error, bad.error
-    # 反过来：两条路上都不许出现机器自己的拼法
+
+    user = os.path.basename(os.path.expanduser("~"))
+    #: 两条路要认的是**同一个名字**，而不是"那个名字一定是 `~`"。遮蔽之后的调用方根就是
+    #: 那个名字 —— 成功格把它写成 POSIX 拼法、失败格写成反斜杠拼法（这一条差异本身记在
+    #: R02-090 的 repro 里），所以这里按分隔符归一之后再比。
+    def _norm(s: str) -> str:
+        return s.replace("\\", "/").lower()
+
+    named = _norm(paths.mask_machine_paths(str(tmp_path)))
+    assert named and named in _norm(ok.url), ok.url
+    assert named in _norm(bad.error), bad.error
+    # 反过来：两条路上都不许出现机器自己的拼法，也不许出现身份
     assert not _spells_a_machine_root(ok.url), ok.url
     assert not _spells_a_machine_root(bad.error), bad.error
+    assert user.lower() not in (ok.url + bad.error).lower(), (ok.url, bad.error)
 
 
 # ─── 5 · 那两格下游不许被这次修补改坏 ───────────────────────────
 
 def test_the_path_advice_survives_the_masking():
-    """`quality` 按 `startswith("File not found")` 与 `"cwd="` 认这两格。
+    """`quality` 按 `startswith("File not found")` 认这一格，而遮蔽发生在句子内部。
 
-    遮蔽发生在句子内部，首词与尾句都没动 —— 但这是"改完顺手确认"，不是"以为它不会动"。
+    原本这一格钉的是 `"cwd=" in next_action`。R02-062 之后那句出路只有一位作者（server 按
+    `os.path.isabs` 写一次，进 `error`），下游改为指回 `error` 而不复述 —— 所以这里钉的
+    还是同一件事（那句出路没被遮蔽改动），只是去它现在住的地方钉，并且钉的是**整句原文**：
+    这一发传的是相对写法，两句出路必须逐字还在。
     """
     r = _parse(file_path="definitely-missing-d11.docx")
     assert (r.diagnosis or {}).get("code") == "file_not_found", r.diagnosis
-    assert "cwd=" in r.next_action, r.next_action
+    assert "Pass an absolute path, or pass cwd=<working directory> so relative paths " \
+           "resolve against it." in r.error, r.error
+    assert "error" in r.next_action.lower(), r.next_action
     assert "PATH was refused" not in r.next_action, r.next_action
 
 

@@ -207,3 +207,30 @@ def _is_framed_document_content_type(content_type: str) -> bool:
     if ct.startswith("image/"):
         return ct != "image/svg+xml"
     return ct.startswith("application/pdf")
+
+
+def is_markup_response(content_type: str) -> bool:
+    """这一份响应是不是"一个页面"，而不是数据文档 / 需要另作处理的原件。
+
+    只有两张旧表：数据文档（JSON/XML）与被 Chrome 套框的那些（图片/PDF）。它们已经
+    把"这不是 markup"判完了，新建第三张表只会让两处对同一个 content_type 说两种话。
+    类型缺失时算 markup —— 走到这里的调用方手里已经有一份 markup，而"没人说过它不是"
+    与"有人说它是别的东西"是两件事。
+    """
+    return not _is_framed_document_content_type(content_type)
+
+
+def served_as_page(content_type: str) -> bool:
+    """有没有**正面证据**说这一份是一个网页。
+
+    与 `is_markup_response` 是两问，不是两张表：那一颗问"抽取按不按页面走"，缺类型时
+    按页面处理是安全的一侧（调用方手里本来就有一份 markup）；这一颗问"能不能断言这页
+    没有话可引用"，而缺类型时没有东西可依据 —— 实测（2026-10-10，
+    `test_write_gate_moves_out_of_band_when_client_elicts.py` 的回环 POST）一个只回
+    2 字节 `ok` 的 API 回执不带 Content-Type，于是被当成页面，`substance` 判成
+    `nav_only`、`content_ok` 翻成 false，`recover_with` 还教调用者"这页没字，换个源"。
+    三个形状读数（1 行、100% 标签行、整页 2 字）与一个真正的空壳页面**完全同值**，
+    分不清的时候下判就是把载荷当页面 —— 留空是这里唯一诚实的一侧。
+    """
+    ct = (content_type or "").split(";")[0].strip().lower()
+    return ct in ("text/html", "application/xhtml+xml")

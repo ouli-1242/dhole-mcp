@@ -156,8 +156,8 @@ def _reencrypt_plaintext_values(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE defaults SET value=? WHERE rowid=?",
                      (secretbox.protect(value), rowid))
     conn.commit()
-    logger.info("re-encrypted %d plaintext value(s) from a pre-17.1 "
-                "identity.db", len(rows))
+    logger.info("re-encrypted %d value(s) that the legacy identity.db kept in "
+                "plaintext", len(rows))
 
 
 def _decode(raw: str) -> Any:

@@ -270,9 +270,13 @@ _READ_PROPERTY_RE = re.compile(r"(value|checked|selected)")
 # 而 `read{attribute:"value"}` 报回 "1"。那一读是按下不可逆提交之前唯一的回读手段，
 # 于是它把一次正确的操作说成了一次失败的，代价是 4 次复验调用约 44 秒的"不敢发"。
 #
-# 这一族还有一处自相矛盾的证据在同一文件里：`snapshot`/`expect` 认的名字走的是
-# 活的那一层（见 _NAME_JS 里 `el.value` 那两行），所以 fill 之后索引寻址能看见新值，
-# 而 read 看不见 —— 同一个页面，两套口径，人只能挑一个信。这里统一到 _NAME_JS 那一侧。
+# 这一族曾经还有一处自相矛盾的证据在同一文件里：`read` 读标签那一层，而 fill 改的是
+# property 那一层，同一个页面两套口径，人只能挑一个信。这里统一到活的那一侧 ——
+# 现在答 property 的就是 `_READ_PROPERTY_JS` 与 `_NAME_LADDER_JS` 上方那句 `expect`
+# 说明里划清的那两扇门。
+# 名字那一族（snapshot / expect）**不跟着走活层**，且是有意的：它要的是元素的稳定
+# 身份，而字段此刻打着什么字会随输入变；跟着走就等于把用户数据抄进上下文
+# （`e2e_the_snapshot_name_and_the_expect_check_name_the_same_thing.py` 钉着这一条）。
 _VALUEISH_ATTRS = frozenset({"value", "checked", "selected"})
 # 大小写跟着**发出去的那颗 JS** 走：本文件唯一一份 `_TAG_JS`（下面 snapshot 那一节
 # 上方）返回的是 `toLowerCase()`，所以这里必须是小写。这条不是风格：第一版把它写成
@@ -465,49 +469,77 @@ INTERACTIVE_SELECTOR = (
 SNAPSHOT_CAP = 80
 MAX_ELEMENT_INDEX = 5000
 
+# ─── 元素名字怎么取，只在这里写一遍 ───────────────────────────────────────────
+# 两位读者：`{"snapshot": true}` 列出的那一列（_ENUM_JS），和 `expect` 核对用的那一个
+# （_NAME_JS，`_check_expect` 与 `_target_locator` 各取一次）。`references/tools.md:29`
+# 把两者都说成 "the element's name / visible name"，所以它们**必须**是同一个字符串：
+# 列表里写着"手机号"，`expect:"手机号"` 就得认。从前是两份各写一遍的 JS，于是
+# snapshot 那一侧刚堵住 value（`e2e_a_snapshot_does_not_name_an_element_by_its_contents
+# .py`），expect 这一侧还留着 `el.value` —— 同一元素两套名字，正确写法当场失败，而失败
+# 那句 `element 2 reads 'hunter2secret'` 把密码框此刻的字抄进了上下文（真 chromium 实测，
+# 见 `e2e_the_snapshot_name_and_the_expect_check_name_the_same_thing.py`）。
+#
+# `value` 在哪一类元素上**就是**它的标签，在哪一类元素上**是用户的数据**：
+# `input[type=submit]` 的 value 是按钮上写着的那两个字，而 tel / text / hidden /
+# password 的 value 是手机号、身份证、会话 token。不区分这两种的写法，一次快照或一次
+# `expect` 失配就把整张表最敏感的一列原样交出去。取值的能力没有收走 —— 它在那扇写明了
+# 的门后面：{"read": {"selector": "#phone", "property": "value"}}。
+_NAME_LADDER_JS = """(el) => {
+  const tag = el.tagName.toLowerCase();
+  const itype = tag === 'input' ? String(el.type || 'text').toLowerCase() : '';
+  const VALUE_IS_LABEL = tag === 'input'
+      && (itype === 'submit' || itype === 'button' || itype === 'reset');
+  // textarea 的 innerText 就是它的内容，所以它和 input 一样算"装着数据"。
+  const HOLDS_DATA = (tag === 'input' && !VALUE_IS_LABEL
+                      && itype !== 'checkbox' && itype !== 'radio'
+                      && itype !== 'file') || tag === 'textarea';
+  let name = el.getAttribute('aria-label') || '';
+  if (!name && !HOLDS_DATA) name = (el.innerText || '').trim();
+  // 关联的 <label> 比 name 属性更像人会说出口的那句话（"手机号" 而不是 "phone"）。
+  if (!name && el.labels && el.labels.length)
+    name = (el.labels[0].innerText || '').trim();
+  if (!name && VALUE_IS_LABEL && el.value !== undefined && el.value !== null)
+    name = String(el.value);
+  if (!name) name = el.placeholder || el.title || el.alt || el.name
+                    || el.id || '';
+  return String(name).trim();
+}"""
+
 _ENUM_JS = """(sel) => {
+  const nameOf = """ + _NAME_LADDER_JS + """;
   const els = document.querySelectorAll(sel);
   const out = [];
   for (let i = 0; i < els.length && i < """ + str(MAX_ELEMENT_INDEX) + """; i++) {
     const el = els[i];
     const tag = el.tagName.toLowerCase();
+    const itype = tag === 'input' ? String(el.type || 'text').toLowerCase() : '';
     let role = el.getAttribute('role') || '';
     if (!role) {
       const implicit = {a: 'link', button: 'button', select: 'combobox',
                         textarea: 'textbox', option: 'option', input: 'textbox'};
       role = implicit[tag] || '';
       if (tag === 'input') {
-        const t = (el.type || 'text').toLowerCase();
         const byType = {checkbox: 'checkbox', radio: 'radio', button: 'button',
                         submit: 'button', file: 'button', range: 'slider',
                         number: 'spinbutton', search: 'searchbox'};
-        role = byType[t] || 'textbox';
+        role = byType[itype] || 'textbox';
       }
     }
-    let name = el.getAttribute('aria-label') || '';
-    if (!name) name = (el.innerText || '').trim().slice(0, 80);
-    if (!name && el.value !== undefined && el.value !== null)
-      name = String(el.value).slice(0, 80);
-    if (!name) name = el.placeholder || el.title || el.alt || el.name
-                      || el.id || '';
-    out.push([i, tag, role, String(name).trim().slice(0, 80),
+    out.push([i, tag, role, nameOf(el).slice(0, 80),
               !!el.disabled || el.getAttribute('aria-disabled') === 'true',
-              tag === 'input' ? String(el.type || 'text') : '']);
+              tag === 'input' ? itype : '']);
   }
   return [out, els.length];
 }"""
 
-# act 时核对元素可访问名（`expect` 的实现）：索引在两次页面加载之间可能指到
-# 不同的元素——核对名字让"过期的索引"大声失败，而不是点到别的东西。
-_NAME_JS = """(el) => {
-  let name = el.getAttribute('aria-label') || '';
-  if (!name) name = (el.innerText || '').trim().slice(0, 120);
-  if (!name && el.value !== undefined && el.value !== null)
-    name = String(el.value).slice(0, 120);
-  if (!name) name = el.placeholder || el.title || el.alt || el.name
-                    || el.id || '';
-  return String(name).trim();
-}"""
+# act 时核对元素名（`expect` 的实现）：索引在两次页面加载之间可能指到不同的元素——
+# 核对名字让"过期的索引"大声失败，而不是点到别的东西。它**用的就是上面那一份阶梯**，
+# 因为"编号处现在写着什么"必须与快照列出的那一列逐字相等，否则快照之后按编号操作的
+# 标准写法（expect 复述列表里那个名字）会在填过的字段上永远失配。
+# `expect` 要的是元素的**稳定身份**：字段此刻打着什么字会随输入变，不配当身份；要验
+# "填进去的字此刻在页面上"走的是另一扇门（`read` 的 property:"value" 与 `attribute_says`，
+# 见 references/fields.md:147）。
+_NAME_JS = _NAME_LADDER_JS
 
 _COUNT_JS_INTERACTIVE = "(sel) => document.querySelectorAll(sel).length"
 
@@ -1260,6 +1292,12 @@ async def _is_submit_control(loc) -> bool:
     return kind == "submit"
 
 
+#: 提交闸那一步**唯一可抄**的形状，两处出路都引用这串字（评审 R02-028）。从前一处写在
+#: f-string 里（花括号转义生效），另一处写在普通字符串拼接里（转义没人处理，双花括号原样
+#: 上线）—— 同一封响应给出两种抄法，抄哪一种都可能撞一次非法 JSON。
+_CONFIRM_SNIPPET = '{"confirm": true}'
+
+
 async def _submit_gate_row(label: str, confirm: bool, rerun: str,
                            pinned: bool = False) -> Optional[dict]:
     """提交审批闸（安全红线 3），``{"submit": ...}`` 与提交型控件上的 click
@@ -1293,16 +1331,16 @@ async def _submit_gate_row(label: str, confirm: bool, rerun: str,
             "action": label, "ok": False, "pending_approval": True,
             "error": (f"pending_approval: submitting is an irreversible step "
                       f"- ask the user to confirm this submission, then "
-                      f're-run the same actions with {{"confirm": true}} '
+                      f're-run the same actions with {_CONFIRM_SNIPPET} '
                       f"{rerun}. Nothing was submitted."
                       + ("" if not pinned else
                          " · THIS PAGE IS PINNED (pin=true), so that sentence is "
-                         "only half right: the steps before this one already ran "
-                         "on the page you are standing on (a form still holds what "
-                         "they filled). Two honest ways: re-run just this submit step "
-                         "with {{\"confirm\": true}} on the same pinned session, or "
-                         "drop pin=true to start from a fresh navigation (a fresh "
-                         "challenge, a blank form)."))
+                         f"only half right: the steps before this one already ran "
+                         f"on the page you are standing on (a form still holds what "
+                         f"they filled). Two honest ways: re-run just this submit step "
+                         f"with {_CONFIRM_SNIPPET} on the same pinned session, or "
+                         f"drop pin=true to start from a fresh navigation (a fresh "
+                         f"challenge, a blank form)"))
         }
     return None
 
@@ -1496,13 +1534,14 @@ def _substitute_refs(text: str, values: dict, where: str) -> str:
             f"{where} references " + ", ".join("{" + f"={m}" + "}" for m in missing)
             + " but that read produced no value - its row in metadata.actions "
               "carries the reason, and nothing was filled.")
+    found = sorted({m.group(1) for m in _REF_RE.finditer(text) if m.group(1) in values})
     out = _REF_RE.sub(lambda m: values[m.group(1)], text)
     if len(out) > MAX_FILL_TEXT_CHARS:
         raise ValueError(
-            f"{where} would fill {len(out):,} chars once "
-            "{{=name}} is substituted (fill.text caps at "
-            f"{MAX_FILL_TEXT_CHARS:,}) - the read it references is longer than "
-            "the field can take")
+            f"{where} would fill {len(out):,} chars after substituting "
+            + " / ".join(f"{{={n}}}" for n in sorted(found))
+            + f" (fill.text caps at {MAX_FILL_TEXT_CHARS:,}) - the read it "
+            "references is longer than the field can take")
     return out
 
 
@@ -1819,6 +1858,14 @@ def build_page_action(actions) -> Optional[Callable]:
                     # {"confirm": true} 重跑同一条 actions 链照旧放行。闸体在
                     # _submit_gate_row：评审R1刀1 起，提交型控件上的 click 走
                     # 同一道门。
+                    #
+                    # 闸**排在解析之前**，这一条有专门的钉子守着
+                    # （`test_a_submit_that_went_out_is_not_marked_unconfirmed.py
+                    # ::test_a_refused_submit_never_reaches_the_locator`）：被拦下
+                    # 的一步不许去问页面任何问题。我曾把它挪到解析之后（越界的
+                    # index 不该让人去批准一件办不成的事 —— 实测 S12/S15 那句
+                    # pending 原样回显 [7]），撞在那颗钉子上让位了：钉子说的是
+                    # 安全侧，我说的是省一次往返。
                     row = await _submit_gate_row(label, s.get("confirm", False),
                                                  "on this submit",
                                                  pinned=_pinned_now)

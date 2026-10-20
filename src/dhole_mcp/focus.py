@@ -141,6 +141,76 @@ def _tokens(text: str) -> list[str]:
     return out
 
 
+def _query_runs(query: str) -> list[str]:
+    """点名的那些"词"，按出现序去重 —— 存在性要说的是词，不是切出来的二元组。"""
+    seen: set = set()
+    runs: list[str] = []
+    for run in _WORD_RUN_RE.findall((query or "").lower()):
+        if len(run) >= 2 and run not in seen:
+            seen.add(run)
+            runs.append(run)
+    return runs
+
+
+def _runs_on_page(runs: list[str], block_tokens: list[list]) -> tuple[list, list]:
+    """每个点名的词在这一页出现过没有（词级：一个 CJK 词只要有任一大二元组落地就算在）。
+
+    保守的方向是对的：核对引用的人要知道的是"这话到底在不在这一页"，而"在不在"由字面
+    存在性回答，不由分数回答 —— BM25 的分没有校准过的读数（见 `focus_content` 的
+    docstring），而"页面上找不到这个词"是一个可核对的事实。
+    """
+    pool: set = set()
+    for tokens in block_tokens:
+        pool.update(tokens)
+    found: list[str] = []
+    absent: list[str] = []
+    for run in runs:
+        (found if set(_tokens(run)) & pool else absent).append(run)
+    return found, absent
+
+
+def _presence_clause(total: int, absent: list[str]) -> str:
+    """"你点名的词里有几个在这一页找不到"那一句；没有词可说时是空串。"""
+    if not total or not absent:
+        return ""
+    shown = ", ".join(f"'{w}'" for w in absent[:6])
+    if len(absent) > 6:
+        shown += f" (+{len(absent) - 6} more)"
+    if len(absent) == total:
+        return (f" none of the {total} words you named occurs on this page"
+                f" ({shown}).")
+    return (f" {len(absent)} of the {total} words you named occur nowhere on this"
+            f" page ({shown}).")
+
+
+def _focus_header(*pieces: str) -> str:
+    """把头部的几段话各成一句：相关性/来源 → 缺席的点名词 → 删掉的结构块 → 出路。
+
+    为什么要有这一颗函数：三段话此前是字符串直接相接的，实测（真 CLI 的 S3a）拼出来是
+    "…shares no token with your query 5 of the 6 words you named occur nowhere…" ——
+    两句话黏成一句，读的人分不清哪个数是说什么的。段内不许自带结束符，由这里统一加。
+    """
+    body = []
+    for piece in pieces:
+        text = (piece or "").strip().lstrip(";").strip().rstrip(".;")
+        if text:
+            body.append(text)
+    return "[" + ". ".join(body) + ".]"
+
+
+def _record_match_stats(stats: dict, selection: str, total: int,
+                        found: list[str], absent: list[str]) -> None:
+    """把"找没找到"记进 caller 交来的那份 stats。
+
+    一处作者：两条头部（filter / best）与信封上那几个数读的都是这一份，谁都不许自己
+    再算一遍（同一个响应里两个作者迟早漂，见 `_presence_clause`）。
+    """
+    stats["selection"] = selection
+    stats["terms_total"] = total
+    stats["terms_matched"] = len(found)
+    stats["terms_absent"] = list(absent)
+
+
 def _is_heading(block: str) -> bool:
     """True if the block's first non-blank line is a valid ATX markdown heading."""
     return _heading_level(block) <= 6
@@ -239,21 +309,143 @@ def _dropped_structural_note(dropped: list[dict]) -> str:
     return "; " + "; ".join(f"dropped {d['label']} - {d['why']}" for d in dropped)
 
 
+# ─── 界：一句在哪里停，一块在哪里结束 ─────────────────────────────
+#
+# 两个家族共用一颗函数（摘要标签 `quality._summary_label` 与这里的分块）。它们的**排序**
+# 是同一条事实：帽内任何一处句末都好过一处更靠后的子句末，两者都好过词末，而"一个边界
+# 都没有"不等于"可以剪半截"。各写一遍就是下一次漂移的开始。
+_SENTENCE_BREAKS = (". ", "! ", "? ", "。", "！", "？")
+_CLAUSE_BREAKS = ("; ", " - ", ", ", ": ", " (", "；", "，", "：")
+
+
+def snap_to_boundary(head: str, keep_mark: bool = False) -> int:
+    """这一串应当在哪里停 —— 返回**保留的字符数**（`<= len(head)`）。
+
+    `keep_mark` 分开两件事：
+      False（标签）—— 断点落在标点**之前**，摘要不以逗号或冒号收尾，与原 `_summary_label`
+        的既有行为逐字一致；
+      True（分块）—— 断点落在标点**之后**，因为块是正文本身：把"。"吃掉就是丢内容，
+        而 `focus_content` 交回的是保留块的拼接，丢一个字符都说不出口。
+    """
+    for group in (_SENTENCE_BREAKS, _CLAUSE_BREAKS):
+        # 自己写循环而不是 `max(rfind(sep) for sep in group)`：生成式里的那个 `sep`
+        # 出了生成式就不存在，而 `keep_mark` 要的就是"这颗界符有多长"。
+        best_at, best_len = -1, 0
+        for sep in group:
+            at = head.rfind(sep)
+            if at > best_at:
+                best_at, best_len = at, len(sep)
+        if best_at > 0:
+            return best_at + best_len if keep_mark else best_at
+    space = head.rfind(" ")
+    if space > 0:
+        return space + 1 if keep_mark else space
+    return len(head)
+
+
+#: 一块的上限。超过它，"这一块讲什么"就不成立：BM25 的平均文档长度被一个巨块拉平，
+#: 语义打分读的是一整块。真实的来路是一份 81,000 字、段落之间只有单换行的在线文档 ——
+#: 在只认空行的切法下整页就是**一块**，focus 一刀切不动（`focus_content` 为此留着一句
+#: 道歉："this page is one block, so there is nothing to filter" —— 那句诚实，而它的
+#: 存在本身就是缺陷）。2400 是把"够长以自成一义"与"够短以能排序"放在一起量出来的取舍。
+MAX_BLOCK_CHARS = 2_400
+
+_ATX_HEADING = re.compile(r"^ {0,3}#{1,6}(?: |$)")
+_FENCE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
+_HR = re.compile(r"^ {0,3}([-*_])(?:\s*\1){2,}\s*$")
+_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
+_TABLE_SEP = re.compile(r"^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$")
+
+
+def _is_table_start(lines: list[str], i: int) -> bool:
+    """表头行的形状：这一行有 `|`，下一行是 `---|:--:` 那一种分隔行。"""
+    if "|" not in lines[i]:
+        return False
+    return i + 1 < len(lines) and bool(_TABLE_SEP.match(lines[i + 1]))
+
+
+def _is_table_row(line: str) -> bool:
+    return line.count("|") >= 2
+
+
+def _cap_block(block: str) -> list[str]:
+    """超长的一块在句界断开；表格与代码围栏不断。
+
+    结构性的一块断了就等于允许丢掉三行而没人知道 —— `_structural_kind` 那一族已经把
+    "掉了两句的正文还能读，掉了三行的表是假数据"写成了判据，这里照它办。切法用
+    `keep_mark=True`：断点落在标点之后，`"".join(parts)` 与原来那块**逐字相等**。
+    """
+    if len(block) <= MAX_BLOCK_CHARS or _is_table(block) or _is_code(block):
+        return [block]
+    parts: list[str] = []
+    rest = block
+    while len(rest) > MAX_BLOCK_CHARS:
+        keep = snap_to_boundary(rest[:MAX_BLOCK_CHARS], keep_mark=True)
+        parts.append(rest[:keep])
+        rest = rest[keep:]
+    if rest:
+        parts.append(rest)
+    return parts
+
+
 def _split_blocks(text: str) -> list[str]:
-    """Split markdown into blocks separated by blank lines. A block is a
-    heading, paragraph, table, or list — kept verbatim (order preserved)."""
+    """把 markdown 切成块 —— 空行是一种界，**形状**也是，超长的一块再在句界断开。
+
+    原来只认空行。真实站点上大量正文是"段落之间只有单换行"的（在线文档、被 markdownify
+    压平的表格页），那一类页面在这里就是一整块，focus 对它什么都做不了。现在认五种界：
+    ATX 标题、代码围栏（**围栏内永不切**）、表格（表头前切一刀，行内不切）、水平线、
+    列表串的开始；再加 `MAX_BLOCK_CHARS` 的断句上限。
+
+    标题后面紧跟的正文归进标题那一块 —— 这正是 `_bm25_scores` 的 heading boost 假设的
+    形状，块自带标题比把标题单列一块更贴近"这一块讲什么"。
+
+    一块的内容逐字来自原文：拼接所有块能还原整页（`_cap_block` 的 `keep_mark` 守的就是
+    这一条），所以"切得更细"不会变成"悄悄少了几行"。
+    """
     blocks: list[str] = []
     current: list[str] = []
-    for line in text.splitlines():
-        if line.strip() == "":
-            if current:
-                blocks.append("\n".join(current))
-                current = []
-        else:
+    in_fence = False
+
+    def flush() -> None:
+        if current:
+            blocks.append("\n".join(current))
+            current.clear()
+
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if not line.strip():
+            flush()
+            continue
+        opens_fence = bool(_FENCE.match(line))
+        if in_fence:
+            # 围栏里的一切（包括看起来像标题、表格或列表的行）都属于这一块
             current.append(line)
-    if current:
-        blocks.append("\n".join(current))
-    return blocks
+            if opens_fence:
+                in_fence = False
+                flush()
+            continue
+
+        prev = current[-1] if current else ""
+        boundary = (opens_fence
+                    or bool(_ATX_HEADING.match(line))
+                    or bool(_HR.match(line))
+                    or _is_table_start(lines, i)
+                    # 表格结束：上一行是表格行而这一行不是
+                    or (bool(prev) and _is_table_row(prev) and not _is_table_row(line))
+                    # 列表串只在**开始**处切：连续的条目是一件事
+                    or (bool(_LIST_ITEM.match(line))
+                        and bool(prev) and not bool(_LIST_ITEM.match(prev))))
+        if boundary:
+            flush()
+        current.append(line)
+        if opens_fence:
+            in_fence = True
+    flush()
+
+    out: list[str] = []
+    for block in blocks:
+        out.extend(_cap_block(block))
+    return out
 
 
 def _bm25_scores(
@@ -460,17 +652,26 @@ def focus_content(
     ``stats`` (out-param, M-3): ``{"scorer": "neural"|"bm25", "best_score": ...}``
     lets the caller report an intent-miss hint without reparsing the output.
     ``best_score`` is filled only for the neural scorer — BM25's unbounded
-    scale has no calibrated reading. Two more keys are the caller's for the same
+    scale has no calibrated reading. Three more keys are the caller's for the same
     reason (no reparse): ``dropped_structural`` names the tables/code this filter
-    deleted, and ``ignored`` says why no filtering happened at all when the text
-    came back untouched.
+    deleted, ``ignored`` says why no filtering happened at all when the text
+    came back untouched, and ``blocks_total`` / ``blocks_kept`` is the block
+    ledger — since 3.5 a page is cut into far more blocks than the blank-line
+    rule gave it, so "how many were dropped" no longer reads as "how much of the
+    document you got"; these are the numbers that make the loss auditable.
     """
     stats_out = stats if isinstance(stats, dict) else None
 
     def _untouched(reason: str) -> str:
-        """一条 no-op 也要有个说法：静默原样返回与"过滤了但什么都没删"不可分辨。"""
+        """一条 no-op 也要有个说法：静默原样返回与"过滤了但什么都没删"不可分辨。
+
+        账本在这一支也要填：整页原样留下意味着「一块都没丢」，而不是「没数」——
+        两者对读者是不同的事，后者会让人以为过滤器坏掉了。
+        """
         if stats_out is not None:
             stats_out["ignored"] = reason
+            stats_out["blocks_total"] = len(blocks)
+            stats_out["blocks_kept"] = len(blocks)
         return text
 
     if not query or not text or not text.strip():
@@ -519,10 +720,18 @@ def focus_content(
     if not neural_used:
         cut = max(threshold, cut)
     keep = [i for i in range(n) if scores[i] >= cut]
+    selection = "cut"
     if not keep:
         # Nothing cleared the threshold — keep the closest blocks so the agent
-        # has something to judge rather than an empty response.
+        # has something to judge rather than an empty response. Since R01-036 this
+        # branch is *named*: the header used to say "showing 5 of 28 blocks by
+        # BM25 relevance" here, which reads as "these matched" for a page that
+        # answered nothing (measured: every block scored 0.0).
         keep = sorted(range(n), key=lambda i: scores[i], reverse=True)[:fallback_top]
+        selection = "closest"
+    runs = _query_runs(query)
+    found_runs, absent_runs = _runs_on_page(runs, block_tokens)
+    presence = _presence_clause(len(runs), absent_runs)
 
     keep_set = set(keep) | preserved
     # Preserve a heading immediately preceding a kept non-heading block.
@@ -538,11 +747,24 @@ def focus_content(
         dropped = _dropped_structural(blocks, top_set)
         if stats_out is not None:
             stats_out["dropped_structural"] = dropped
-        header = (
-            f"[Focus best block: {query!r}; top of {n} by {scorer_note}"
-            f"{_dropped_structural_note(dropped)}. "
-            f"Pass focus='' for the full page, or keep mode unset for the filtered page.]"
-        )
+            stats_out["blocks_total"] = n
+            stats_out["blocks_kept"] = len(top_set)
+            _record_match_stats(stats_out, selection, len(runs), found_runs,
+                                absent_runs)
+        if selection == "closest":
+            header = _focus_header(
+                f"Focus best block: {query!r}; NO block cleared the relevance cut "
+                f"(best score {round(best, 3)} against a cut of {round(cut, 3)}) - "
+                f"this block is the highest-scored of {n}, not a match to the query",
+                _dropped_structural_note(dropped), presence,
+                "Pass focus='' for the full page, or keep mode unset for the "
+                "filtered page")
+        else:
+            header = _focus_header(
+                f"Focus best block: {query!r}; top of {n} by {scorer_note}",
+                _dropped_structural_note(dropped), presence,
+                "Pass focus='' for the full page, or keep mode unset for the "
+                "filtered page")
         if len(blocks[top].strip()) < 200:
             # The BM25 arm has no calibrated score to name a weak hit (unlike
             # the neural intent floor), but a tiny best block is checkable
@@ -556,10 +778,23 @@ def focus_content(
     dropped = _dropped_structural(blocks, keep_set)
     if stats_out is not None:
         stats_out["dropped_structural"] = dropped
+        # 3.6 · 切得更细之后，"不许静默丢内容"这笔税要当场结：这一页被分成几块、留下
+        # 几块，是读者唯一能核对"少掉的是正文还是版面"的数。
+        stats_out["blocks_total"] = n
+        stats_out["blocks_kept"] = len(keep_set)
+        _record_match_stats(stats_out, selection, len(runs), found_runs, absent_runs)
     kept = "\n\n".join(blocks[i] for i in range(n) if i in keep_set)
-    header = (
-        f"[Focus: {query!r}; showing {len(keep_set)} of {n} blocks "
-        f"by {scorer_note}{_dropped_structural_note(dropped)}. "
-        "Pass focus='' for the full page.]"
-    )
+    if selection == "closest":
+        header = _focus_header(
+            f"Focus: {query!r}; NO block cleared the relevance cut (best score "
+            f"{round(best, 3)} against a cut of {round(cut, 3)}) - these "
+            f"{len(keep_set)} of {n} blocks are the highest-scored, not matches",
+            _dropped_structural_note(dropped), presence,
+            "Pass focus='' for the full page")
+    else:
+        header = _focus_header(
+            f"Focus: {query!r}; showing {len(keep_set)} of {n} blocks "
+            f"by {scorer_note}",
+            _dropped_structural_note(dropped), presence,
+            "Pass focus='' for the full page")
     return header + "\n\n" + kept

@@ -68,6 +68,69 @@ def _ensure_loopback_no_proxy() -> None:
 _ensure_loopback_no_proxy()
 
 
+def _no_proxy_entries() -> list[str]:
+    """Every NO_PROXY entry the tiers would see, both spellings merged."""
+    out: list[str] = []
+    for name in ("NO_PROXY", "no_proxy"):
+        for part in os.environ.get(name, "").split(","):
+            part = part.strip().lower().lstrip(".")
+            if part and part not in out:
+                out.append(part)
+    return out
+
+
+def system_proxy_for(url: str) -> str:
+    """The proxy this machine would hand ``url`` to, or "" when it dials direct.
+
+    Read from the same two places the tiers inherit from (`urllib.getproxies()`
+    covers the environment and, on Windows, the registry's system proxy) with the
+    same exemption the tiers honor (`NO_PROXY`, plus G31's unconditional loopback
+    exclusion). This is *geography*, not a verdict: it answers "is there an
+    intermediary between dhole and that host", which is the fact a 5xx attribution
+    is allowed to rest on. Never raises.
+    """
+    try:
+        import urllib.request as _urllib_req
+        proxies = dict(_urllib_req.getproxies_environment())
+        # `getproxies()` is "environment if non-empty, else registry", and
+        # `no_proxy` alone counts as non-empty — it parses to a key named "no".
+        # G31 keeps NO_PROXY set in this process at all times, so that path would
+        # answer "no proxy" on a machine whose Windows registry says otherwise
+        # (measured 2026-10-14: getproxies() == {'no': 'localhost,127.0.0.1,::1'}
+        # while the registry holds http://127.0.0.1:7890). Take the real proxy from
+        # the environment when one is there, otherwise from the registry.
+        if not any(v for k, v in proxies.items() if k != "no"):
+            registry = getattr(_urllib_req, "getproxies_registry", None)
+            if registry is not None:
+                try:
+                    for k, v in registry().items():
+                        if k != "no" and not proxies.get(k):
+                            proxies[k] = v
+                except Exception:
+                    pass
+    except Exception:
+        return ""
+    if not proxies:
+        return ""
+    try:
+        parts = urlparse(url or "")
+        host = (parts.hostname or "").lower().strip("[]")
+        scheme = (parts.scheme or "http").lower()
+    except Exception:
+        return ""
+    if not host:
+        return ""
+    if host in _LOOPBACK_NO_PROXY_ENTRIES:
+        return ""
+    bypass = _no_proxy_entries()
+    if "*" in bypass:
+        return ""
+    for entry in bypass:
+        if host == entry or host.endswith("." + entry):
+            return ""
+    return proxies.get(scheme) or proxies.get("all") or proxies.get("http") or ""
+
+
 def _urljoin(base: str, location: str) -> str:
     """解析重定向 Location（相对/绝对）为完整 URL。"""
     return urljoin(base, location)
@@ -658,11 +721,57 @@ def _hop_headers(
     return hop
 
 
+# browserforge 给「这颗头可以留空」写的记号是 `?n`。它不是一个值：fetch 族的取值是枚举词
+# （none / same-origin / same-site / cross-site …），里面没有 `?n` 这一种拼法。实测（本地回环
+# echo 逐条落档）`_stealthy_baseline()` 的字典在 600 副里 537 副写着 `sec-fetch-site: ?1`，
+# 而 `HTTPSession` 连打 6 发就是 6/6 行收到 `?1` —— 我们把字典逐颗盖下去，正好盖掉了 primp
+# 自己那份合法的 `none`，换成一个语法非法、又恰好是「合成头」招牌的形状。
+#
+# 布尔 hint 是**另一种语法**：`sec-ch-ua-mobile: ?0` / `?1` 就是 Client Hints 的正经写法
+# （600 副里 531 副带着它，全部合法），一颗都不许动。所以这里的判据是「这颗头的语法里没有
+# ?n 这一种拼法」，不是「值看起来怪」，也不是某个域名或某颗 UA。
+_MARKER_KEYS = ("sec-fetch-site", "sec-fetch-mode", "sec-fetch-user", "sec-fetch-dest")
+_EMPTY_MARKER = re.compile(r"\?\d+\Z")
+
+
+def _drop_empty_markers(headers: Dict[str, str]) -> Dict[str, str]:
+    """丢掉带着「可以留空」记号的 fetch 头 —— 让 TLS 预设自己那一颗枚举词成为出处。
+
+    不补一个"更像"的值：那一颗头该说什么由发出请求的那一层决定，我们替它编一个就是第二份判决。
+    """
+    return {k: v for k, v in headers.items()
+            if not (k in _MARKER_KEYS and _EMPTY_MARKER.match(v))}
+
+
+def _brands_follow_the_ua(headers: Dict[str, str]) -> bool:
+    """一副身份有没有说出**它自己**那一个大版本 —— primp 的预设不算它说的话。
+
+    判的是形状不是运气：UA 声称 Chromium 一家（`Chrome/` 或 `Edg/`）时，`sec-ch-ua` 里必须
+    有一颗与本 UA 同大版本的 brand；声称 firefox / safari 时不发 Client Hints 本来就合法，
+    一颗都不许多摇。
+
+    为什么"字典里少一颗头"要拦到交出去之前，而不是让它上线后自然缺席：实测（本地回环 echo，
+    钉 chrome 家族摇 1500 副抓到 6 副缺 brand 表，把其中一副真发出去）线上收到的不是空，而是
+    `sec-ch-ua: "Google Chrome";v="149"` 配上 `Chrome/114` 的 UA —— 字典缺位时那颗头由 primp
+    自己的预设补上，而预设的版本同一进程里两发还各摇出 149 与 152。于是 UA 与 brand 表来自
+    两台机器，正是本文件立过的那条罪（"三颗头来自三台机器"）。
+    """
+    m = re.search(r"(?:Chrome|Edg)/(\d+)", headers.get("user-agent", ""))
+    if not m:
+        return True
+    return f';v="{m.group(1)}"' in headers.get("sec-ch-ua", "")
+
+
+# 摇不到自洽的一副时有界重试：0.40% 是实测到的单次概率，所以八次里一次都摇不到自洽的
+# 是十几次之外的运气（0.004^8），而兜底交回最后一副而不是空手 —— 不比不重试时差。
+_IDENTITY_REDRAWS = 8
+
+
 def _stealthy_baseline(family: str = "") -> Dict[str, str]:
     """一副浏览器身份，而且必须是**这一次要冒充的那一家**的身份。
 
-    两个抽签各自独立就是缺陷本身。实测（2026-10-09，同一进程连开 8 个会话，每会话发
-    一次真请求）：8 次摇出 **7 副**身份，其中最后一次线上是
+    两个抽签各自独立就是缺陷本身。实测（同一进程连开 8 个会话，每会话发一次真请求）：
+    8 次摇出 **7 副**身份，其中最后一次线上是
     `user-agent: ...iPhone; CPU iPhone OS 18_7... Version/26.3 Mobile Safari/604.1`
     配上 `sec-ch-ua: "Google Chrome";v="149"` 和 `sec-ch-ua-platform: "iOS"` —— 三颗
     头来自三台机器。成因分两层：生成器默认四个家族两种设备（实测 40 次里 safari 6 次、
@@ -674,7 +783,8 @@ def _stealthy_baseline(family: str = "") -> Dict[str, str]:
 
     所以这里钉两位：`browser=[family]`（对得上 primp 那一份 TLS 预设）和
     `device=["desktop"]`（primp 的预设全是桌面的）。这两颗都不认的旧版生成器不许把
-    能力一起弄丢 —— 见下面那圈回退。
+    能力一起弄丢 —— 见下面那圈回退。第三位是 `_brands_follow_the_ua`：交出去之前这一副
+    得能说出自己的 brand 表，说不出就重摇（缺的那一颗会被 primp 的预设补成另一台机器）。
 
     browserforge 缺席时交回空 dict：调用方照旧只带 referer，与这次改动之前一致。
     """
@@ -685,15 +795,20 @@ def _stealthy_baseline(family: str = "") -> Dict[str, str]:
     pinned: Dict[str, Any] = {"device": ["desktop"]}
     if family:
         pinned["browser"] = [family]
+    last: Dict[str, str] = {}
     for kwargs in (pinned, {}):
-        try:
-            generated = HeaderGenerator(**kwargs).generate() or {}
-        except Exception:
-            # 这一版不认这颗参数（或摇不出这一家）：退回它一定认的那次调用。
-            # 少钉一位可以，因为一颗头都发不出去是能力从路上消失了。
-            continue
-        return {str(k).lower(): str(v) for k, v in generated.items()}
-    return {}
+        for _attempt in range(_IDENTITY_REDRAWS):
+            try:
+                generated = HeaderGenerator(**kwargs).generate() or {}
+            except Exception:
+                # 这一版不认这颗参数（或摇不出这一家）：退回它一定认的那次调用。
+                # 少钉一位可以，因为一颗头都发不出去是能力从路上消失了。
+                break
+            last = _drop_empty_markers(
+                {str(k).lower(): str(v) for k, v in generated.items()})
+            if _brands_follow_the_ua(last):
+                return last
+    return last
 
 
 # browserforge 认这四个家族名（`HeaderGenerator` 的默认值就是这四个），primp 的
@@ -712,6 +827,49 @@ def _header_family(impersonate: Any) -> str:
     """`impersonate` 里那个能被头发成的家族；读不出来交回空串（= 不钉家族）。"""
     name = str(impersonate or "").split("_")[0].strip().lower()
     return name if name in _HEADER_FAMILIES else ""
+
+
+#: 只有这两家把版本钉上去。实测两趟（`r80-shape.json` / `r80-shape2.json`，只打回环 echo）：
+#: chrome 与 edge 的整个接受窗口（144–153）在钉住 windows/macos/linux 之后**全部**交回桌面形状，
+#: 且 UA 里的 major 与名字一致。firefox 有 `firefox_141…145` 那种"名字被接受、钉了桌面 OS 仍交出
+#: 手机形状"的洞；safari 的版本名基本会被拒（生成器摇出的是 17/18）。这两族不钉：宁可留着
+#: "版本各自摇"这一位**已知**的不一致，也不引入"头是桌面、握手是手机"这一位**未知**的。
+_VERSION_PIN_FAMILIES = frozenset({"chrome", "edge"})
+
+#: 能钉 OS 的那三个值。`""` 与 `"random"` 都不在此列 —— 手机形状就是从 `random` 那一支钻进来的
+#: （F40 的实测：16 次里抽中 1 次手机预设）。
+_DESKTOP_OS = ("windows", "macos", "linux")
+
+
+def _impersonate_for(impersonate: Any, baseline: Dict[str, str], os_name: str) -> Any:
+    """把 TLS 握手拉到**这份身份自己声称的那个 major** 上；读不出就原样交回。
+
+    修的是 R02-080：`impersonate="chrome"` 不带版本，primp 每次新建客户端自选一个大版本（同一进程
+    三发分别 149 / 153 / 150），而头钉在进程那份身份上 ⇒ UA 说 147、握手可能是 153 的那一套。这是
+    R02-F70 的另一半：那一把拦掉的是"字典缺 brand 表时由预设说话"（两颗头互相否认），这一把要的是
+    **版本**这一位也有唯一作者。
+
+    三位一起读才钉：家族在 `_VERSION_PIN_FAMILIES` 里、major 读得出（UA 优先，`sec-ch-ua` 次之）、
+    OS 读得出且是桌面的那三个值之一。缺任何一位就交回原值 —— 不猜一个更像的。
+    名字被 primp 拒掉时由调用方退回（见 `_init_client`），所以这里**不**维护版本表：窗口会随
+    primp 升级变，硬编的表会腐烂，而被拒静默退回等于自动维持今天的形状。
+    """
+    if os_name not in _DESKTOP_OS:
+        return impersonate
+    family = _header_family(impersonate)
+    if family not in _VERSION_PIN_FAMILIES:
+        return impersonate
+    ua = str((baseline or {}).get("user-agent") or "")
+    needle = r"Edg/(\d+)" if family == "edge" else r"Chrome/(\d+)"
+    m = re.search(needle, ua)
+    major = m.group(1) if m else ""
+    if not major:
+        sec = str((baseline or {}).get("sec-ch-ua") or "")
+        found = re.findall(r'"(?:Google Chrome|Microsoft Edge)";v="(\d+)"', sec)
+        major = found[0] if found else ""
+    if not major:
+        return impersonate
+    return f"{family}_{major}"
 
 
 # 一场进程一副身份，按家族分开存。存在的理由是"会话"这个词在真实使用里撑不住：
@@ -818,15 +976,28 @@ class HTTPSession:
         os_name = _os_from_ua(_ua)
         if _ua and not os_name:
             os_name = _OS_BY_FAMILY.get(family, "")
+        #: 第三位：握手的大版本跟着这份身份走（R02-080）。读不出 major 或读不出桌面 OS 时
+        #: 交回原值，于是那一发与今天逐字节相同。
+        pinned = _impersonate_for(impersonate, self._baseline, os_name)
 
         def _create():
             kwargs: Dict[str, Any] = {
-                "impersonate": impersonate,
                 "impersonate_os": os_name or "random",
             }
             if self._proxy:
                 kwargs["proxy"] = self._proxy
-            return primp.Client(**kwargs)
+            if pinned != impersonate:
+                try:
+                    return primp.Client(impersonate=pinned, **kwargs)
+                except Exception as exc:
+                    # 只兜"这颗名字这一版 primp 不认识"：窗口会随 primp 升级移动，被拒就退回
+                    # 今天那颗（零网络往返，也不需要谁去维护一张版本表）。别的构造期故障照常
+                    # 冒出去 —— 把 libprimp 缺失也吞掉就又是一次"看起来成功了"。
+                    if "invalid impersonate" not in str(exc).lower():
+                        raise
+                    logger.debug("primp 不接受 %r（%s）：按 %r 建客户端",
+                                 pinned, str(exc)[:80], impersonate)
+            return primp.Client(impersonate=impersonate, **kwargs)
 
         self._client = await asyncio.to_thread(_create)
 

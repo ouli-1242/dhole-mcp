@@ -41,6 +41,16 @@ def _preview(text: str) -> tuple[str, bool]:
     return text[:_SUMMARY_CHARS], len(text) > _SUMMARY_CHARS
 
 
+def _utc_now() -> datetime:
+    """这一条路上「此刻」唯一的来源：文档到达的时刻由它盖（测试也只需要换它）。
+
+    表达式与 `quality._with_agent_hints` 那一支一致（`datetime.now(timezone.utc).isoformat()`
+    带微秒），因为线上的 `_wire_scalar` 认的就是这个形状 —— 它把 `fetched_at` 的
+    小数秒剪成一秒精度并补 `Z`。留空而不是补一个假时刻的那一格见 `FeedResult.fetched_at`。
+    """
+    return datetime.now(timezone.utc)
+
+
 class FeedItem(BaseModel):
     """A single entry from an RSS/Atom feed."""
     title: str = Field(default="", description="Entry title")
@@ -74,6 +84,14 @@ class FeedResult(BaseModel):
                     "that page's <link rel=\"alternate\" type=\"application/rss+xml\">, "
                     "so source_url is the page and the parsed feed is elsewhere.")
     since: str = Field(default="", description="The cutoff this result was filtered by (normalized to ISO-8601 UTC), empty when no filter was asked for.")
+    fetched_at: str = Field(
+        default="",
+        description="ISO-8601 UTC when THIS document arrived from this source. feed_read holds "
+                    "no cache, so this is the fetch of your call - not a copy kept from an "
+                    "earlier one (unlike web_read, where a cache hit stamps the moment the "
+                    "cached body was really fetched). Absent on a row that brought no document "
+                    "back: an error row has nothing to date, and stamping the attempt would "
+                    "read like a timestamp on content that does not exist.")
     items_older_than_since: int = Field(default=0, description="Entries dropped because they were published BEFORE `since` - the 'nothing new' half of a poll. Reported rather than hidden: a bare list of items cannot tell 'the feed has 3 items total' apart from '50 were filtered out and 3 are new'.")
     items_without_date: int = Field(default=0, description="Entries KEPT despite having no usable publish date. A feed that does not date its items cannot be filtered honestly, so these are returned and counted instead of silently dropped.")
     # `note` used to carry a second subject as well: "the origin answered our
@@ -301,9 +319,15 @@ async def _grab(url: str, timeout: int,
             return b"", 304, "", "", hdrs
         body = getattr(resp, "body", b"") or b""
         if len(body) > _MAX_FEED_BYTES:
-            return b"", 0, "", f"feed too large ({len(body)} bytes, cap {_MAX_FEED_BYTES})", hdrs
+            return (b"", 0, "",
+                    f"body_too_large: the document is {len(body)} bytes, over this "
+                    f"channel's {_MAX_FEED_BYTES}-byte cap", hdrs)
         if status >= 400:
-            return b"", status, "", f"HTTP {status}", hdrs
+            # 这一句的作者不在这里 —— 状态码那句话由 `quality` 写（评审 R02-134）：从前
+            # 这一支自己造一句裸的 `HTTP 404`，判据认不出，于是这一行带着 `error` 却整格
+            # 没有把手，而同样的 404 在 `web_read` 与爬行的行上是 `http_error_404`。
+            from dhole_mcp.quality import status_error_sentence
+            return b"", status, "", status_error_sentence(status), hdrs
         return body, status, (getattr(resp, "encoding", None) or "utf-8"), "", hdrs
     except Exception as e:
         logger.debug("feed fetch failed for %s: %s", url, e)
@@ -433,17 +457,36 @@ def _since_cutoff(value: Any) -> tuple:
     if value in (None, "", False):
         return None, "", ""
     if not isinstance(value, str):
-        return None, "", "since must be a date string (ISO-8601 or an RSS timestamp)"
+        return None, "", ("invalid_request: since must be a date string "
+                          "(ISO-8601 or an RSS timestamp)")
     iso = _parse_date(value)
     if not iso:
-        return None, "", (f"since={value[:60]!r} is not a date - use ISO-8601 "
-                          "(2026-09-20 or 2026-09-20T08:00:00Z) or an RFC-822 feed "
-                          "timestamp (Sat, 20 Sep 2026 08:00:00 +0000)")
+        return None, "", (f"invalid_request: since={value[:60]!r} is not a date - use "
+                          "ISO-8601 (2026-09-20 or 2026-09-20T08:00:00Z) or an RFC-822 "
+                          "feed timestamp (Sat, 20 Sep 2026 08:00:00 +0000)")
     # Same rule as _parse_date: a date with no offset is UTC, not local time.
     stamp = datetime.fromisoformat(iso)
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=timezone.utc)
     return stamp, iso, ""
+
+
+def _cap_applied(result: FeedResult, max_items: int) -> None:
+    """上限在这里切，也只在这里切 —— 所以切过的那一笔由同一位作者申报（评审 R02-014）。
+
+    `items_without_date` / `items_older_than_since` 是**整源口径**的数（不随 `max_items`
+    变），而返回的是子集。从前响应里没有任何一句"共 N 条 / 交回 M 条"，于是同一条源在
+    `max_items=3` 那一发读起来像"这个源没有不带日期的条目"。切过就要说；没切过不多打一句。
+    """
+    total = len(result.items)
+    if max_items <= 0 or total <= max_items:
+        return
+    result.items = result.items[:max_items]
+    said = (f"this source has {total} entries after the filters above; "
+            f"{max_items} are returned (`max_items=`) - the counts "
+            f"(`items_without_date`, `items_older_than_since`) are for all {total}, "
+            f"not for the {max_items} shipped")
+    result.note = " · ".join(p for p in (result.note, said) if p)
 
 
 def _keep_newer(result: FeedResult, cutoff_iso: str, cutoff, max_items: int) -> FeedResult:
@@ -477,8 +520,7 @@ def _keep_newer(result: FeedResult, cutoff_iso: str, cutoff, max_items: int) -> 
     result.items = kept
     result.items_older_than_since = older
     result.items_without_date = undated
-    if max_items > 0:
-        result.items = result.items[:max_items]
+    _cap_applied(result, max_items)
     return result
 
 
@@ -567,8 +609,12 @@ async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20,
     def _shape(result: FeedResult) -> FeedResult:
         if cutoff is not None:
             return _keep_newer(result, cutoff_iso, cutoff, max_items)
-        if max_items > 0:
-            result.items = result.items[:max_items]
+        # 没有 `since` 的那一路从前一个都不数：`items_without_date` 唯一的写者是
+        # `_keep_newer`，于是源里明明躺着两条不带日期的条目、这一封报 0，而字段自己的
+        # 说明写着 "Entries KEPT despite having no usable publish date"（评审 R02-014）。
+        # 口径与 since 那一路对齐：数的是整源，切在 `_cap_applied` 那一处并申报。
+        result.items_without_date = sum(1 for it in result.items if not it.published)
+        _cap_applied(result, max_items)
         return result
 
     body, _status, encoding, err, _hdrs, retry_note = await _grab_with_retry(url, timeout)
@@ -581,6 +627,10 @@ async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20,
 
     raw = body.decode(encoding or "utf-8", errors="replace")
     parsed, parse_exc = _parse_or_none(raw, url)
+    if parsed is not None:
+        # 时刻盖在**这一份文档**到达的地方：抓取失败的那一行不盖（没有文档可定时刻，
+        # 补一个此刻等于给不存在的内容盖时间戳 —— 那一格由线压缩摘掉）。
+        parsed.fetched_at = _utc_now().isoformat()
     if parsed is not None and parsed.items:
         return _with_retry_note(_shape(parsed), retry_note)
 
@@ -598,6 +648,10 @@ async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20,
             continue
         cparsed, _cexc = _parse_or_none(
             cbody.decode(cenc or "utf-8", errors="replace"), feed_url)
+        if cparsed is not None:
+            # 第二个文档的时刻，不是第一个的：那一发取回来的是一张网页，网页到达的时间
+            # 答不了「这份 feed 什么时候拿的」。
+            cparsed.fetched_at = _utc_now().isoformat()
         if cparsed is not None and cparsed.items:
             cparsed.source_url = feed_url
             cparsed.discovered_from = url

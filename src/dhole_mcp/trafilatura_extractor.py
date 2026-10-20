@@ -26,12 +26,53 @@ from dhole_mcp.envelope import visible_text_chars
 logger = logging.getLogger("dhole_mcp.trafilatura_extractor")
 
 
-def _is_probably_binary(data: bytes) -> bool:
-    """Check if data looks like binary content (PDF, image, etc.) rather than text."""
-    if not data:
-        return False
-    printable = sum(1 for b in data if 32 <= b <= 126 or b in (9, 10, 13))
-    return (printable / len(data)) < 0.1
+def _control_char_ratio(body: bytes, declared: str = "") -> float:
+    """Share of the decoded window that no text encoding would write.
+
+    Counting *decoded characters* is the whole point. The byte-level version of
+    this question ("how many bytes land in ASCII 32-126") measured "is this page
+    ASCII", and so answered "binary" for every page written mostly in Chinese,
+    Japanese or Korean - UTF-8 puts not one of those bytes in the printable ASCII
+    range. Measured over the repo's own real files
+    (`review/.runtime/p4/measure_binary_test.py`, 4,096-byte window):
+
+        /longaside (text/html; charset=utf-8, 中文)   0.0006   <- 文本
+        tests/page_fixtures/gnu_free_sw_definition    0.0000   <- 文本
+        tests/dummy.pdf                               0.5226   <- 二进制
+        tests/sample.docx                             0.5606   <- 二进制
+        tests/figure_page.pdf                         0.2782   <- 二进制
+
+    Two orders of magnitude between the sides, so the line sits at 0.05.
+    """
+    import unicodedata
+
+    from dhole_mcp.fetcher import _decode_html_bytes
+
+    text = _decode_html_bytes(body[:_BINARY_WINDOW_BYTES], declared or "utf-8")
+    if not text:
+        return 1.0
+    bad = sum(1 for ch in text
+              if ch == "\ufffd" or (ch not in " \t\n\r\f\v"
+                                    and unicodedata.category(ch) in ("Cc", "Cf", "Cn", "Zl")))
+    return bad / len(text)
+
+
+#: 判据只看开头这一窗：一次判断不值把整本 PDF 解一遍。
+_BINARY_WINDOW_BYTES = 4096
+#: 上面那个量出来的空档里取的那条线（文本侧 <=0.001，真件侧 >=0.25）。
+BINARY_CONTROL_MAX = 0.05
+
+
+def _is_binary_payload(body: bytes, content_type: str = "", declared: str = "") -> bool:
+    """这一份载荷是不是**不是文本**。字符集先听响应的（`declared` 是 dhole 解析过的，
+    其次才是 Content-Type 里那个 `charset=`），因为「二进制」与「非 ASCII 文本」的
+    区别只在解码之后才存在。
+    """
+    charset = (declared or "").strip()
+    if not charset:
+        match = re.search(r'charset\s*=\s*["\']?([\w:.-]+)', content_type or "", re.I)
+        charset = match.group(1) if match else ""
+    return _control_char_ratio(body, charset) > BINARY_CONTROL_MAX
 
 
 def _get_html_from_page(page) -> str | None:
@@ -164,6 +205,87 @@ def _visible_text_chars(html: str) -> int:
         return 0
 
 
+# ─── 块覆盖：两条臂谁盖住的块多 ────────────────────────────────────────────
+#: 重试带：抽回来的字数低于整页可见字的这个比值就去试宽内容选择那一趟（`favor_recall`）。
+#: 0.90 是量出来的（`review/.runtime/p4/sample_ratio_band.py`，119 份页面 = 111 份存档真
+#: SERP + gnu.org 定义页 + quotes.toscrape 首页 + books.toscrape travel 页 + 5 份缺陷靶页）：
+#: 宽臂按块覆盖**严格占优**的页面共 12 份，它们的比值全在 0.13–0.75；比值 >= 0.90 的一份
+#: 都没有（12/12）。0.50 那条塌陷线（`envelope.EXTRACT_COLLAPSE_RATIO`）**一字未动** ——
+#: `quality` 拿它判 JS 壳，放宽它等于让浏览器档去背抽取的债；这里加的是一条只作用于
+#: 「要不要再抽一趟」的重试带。
+EXTRACT_RECALL_BAND = 0.90
+
+#: 叶子块：读者一次读到的那一个单元。`<li>` 是一个块，装着它的 `<ul>` 不再算第二次 ——
+#: 按容器算会把「12 条丢了 9 条」读成「一块没丢」，而本缺陷现场正是整块消失。
+_LEAF_BLOCK_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "dt", "dd",
+                    "td", "th", "blockquote", "pre", "caption")
+#: 按标签剥的套壳。**明知**这一剥不干净：books.toscrape 把全部 11 本书装在
+#: `<aside class="sidebar">` 里（见 crawl.py `_item_links` 记的那笔账），标签与类名在
+#: 一页之内分不出「菜单」与「列表」。这把尺敢用这个剥法，是因为它只用于**同一页上两条
+#: 抽取臂互相比较**：块集合与剥法两边同分，误差对消；它从不单独回答「这页丢了内容」。
+_CHROME_BLOCK_TAGS = frozenset(("nav", "header", "footer", "aside", "script",
+                                "style", "noscript", "form"))
+
+
+def visible_leaf_blocks(html: str) -> list:
+    """``[(tag, 归一化文本), …]`` —— 这一页自己写出来的非套壳叶子块。
+
+    量不到（没有 lxml、markup 坏了、传进来的不是字符串）就交回空表：空表意味着两条臂
+    打平，而打平保留默认臂 —— 判据失灵时不许换掉任何一次成功的抽取（同款 fail closed
+    见 `extractor._document_text_chars`）。
+    """
+    try:
+        doc = html_fromstring(html)
+        out = []
+        for el in doc.iter(*_LEAF_BLOCK_TAGS):
+            if el.tag not in _LEAF_BLOCK_TAGS:
+                continue
+            if any(a.tag in _LEAF_BLOCK_TAGS for a in el.iter() if a is not el):
+                continue  # 有嵌套块时以叶子里那一个为单元
+            text = " ".join((el.text_content() or "").split())
+            if not text:
+                continue
+            if any((a.tag in _CHROME_BLOCK_TAGS) for a in el.iterancestors()):
+                continue
+            out.append((el.tag, text))
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _block_survives(text: str, answer: str) -> bool:
+    """这一块的字有没有留在答复里（至少一处四字连串对得上）。
+
+    取四处采样而不是逐词全比：markdown 会改写行首与强调，一处都对不上才是整块没了。
+    """
+    words = text.split()
+    if len(words) < 4:
+        return text in answer
+    step = max(1, (len(words) - 3) // 4)
+    return any(" ".join(words[i:i + 4]) in answer
+               for i in range(0, len(words) - 3, step))
+
+
+def omitted_body_chars(html: str, answer: str) -> int:
+    """答复整块漏掉的页面自身字符数（越小越好；0 = 一块没漏）。"""
+    ans = " ".join((answer or "").split())
+    return sum(len(text) for _tag, text in visible_leaf_blocks(html)
+               if not _block_survives(text, ans))
+
+
+def _wants_a_wider_pass(extracted_chars: int, visible_chars: int) -> bool:
+    """要不要再抽一趟：比值落在重试带之下。
+
+    可见字少于塌陷下限（`EXTRACT_COLLAPSE_MIN_VISIBLE`）的页面一律不重试 —— 那是塌陷
+    那条线本来就划给小页的空档，这一刀不扩大它。
+    """
+    from dhole_mcp.envelope import EXTRACT_COLLAPSE_MIN_VISIBLE
+
+    if visible_chars < EXTRACT_COLLAPSE_MIN_VISIBLE:
+        return False
+    return extracted_chars < visible_chars * EXTRACT_RECALL_BAND
+
+
 def _trafilatura_markdown(html: str, url: str = "") -> str | None:
     """Best-effort markdown extraction using trafilatura.extract().
 
@@ -188,19 +310,27 @@ def _trafilatura_markdown(html: str, url: str = "") -> str | None:
             result = _trafilatura_extract(html, url) or result
             tokens = []
     visible = _visible_text_chars(html)
-    from dhole_mcp.envelope import is_extraction_collapsed
-    if is_extraction_collapsed(len(result or ""), visible):
+    if _wants_a_wider_pass(len(result or ""), visible):
         # 默认的内容选择把整棵 `<h3><a>` 子树丢掉了，`include_links=True` 在这种页面上
         # 救不回来（它只在正文已被选中之后负责保链接）。换臂重试，而不是换工具：塌陷的是
         # 抽取的宽严，不是页面。
         recalled = _trafilatura_extract(html_for_traf, url, favor_recall=True)
         if recalled and tokens:
             recalled = _restore_table_markdown(recalled, tokens) or recalled
-        if recalled and len(recalled) > len(result or ""):
-            logger.debug("extraction collapsed (%d chars against %d visible) - "
-                         "kept the recall pass (%d)", len(result or ""), visible,
-                         len(recalled))
-            result = recalled
+        # 选哪一趟看的是**块覆盖**，不是字数：默认臂整块漏掉页面自己的字、宽臂把它们
+        # 盖回来了，才换；只是更长而一块也没多盖住的不换。这两条规则在真语料上方向
+        # 相反过：存档的 `evals/corpus/serp/q041__baidu.html` 宽臂更长（745 对 518 字符）
+        # 而整块漏掉的字符更多（141 对 58）—— 按字数换会把答复换成一个更长而更空的文本。
+        # 空答复是这条规则自己开出来的口子：一页若没有非套壳的叶子块，两边覆盖打平，
+        # 那时"有字"必须赢过"没字"。
+        if recalled:
+            kept_gone = omitted_body_chars(html, recalled)
+            default_gone = omitted_body_chars(html, result)
+            if not result or kept_gone < default_gone:
+                logger.debug("content selection left out %d chars of this page's "
+                             "own blocks - kept the recall pass (%d over %d chars)",
+                             default_gone, len(recalled), len(result or ""))
+                result = recalled
     # If trafilatura produced content WITH links, use it directly
     if result and "](" in result:
         return result
@@ -492,7 +622,10 @@ def extract_with_trafilatura(
         raw = getattr(page, 'body', None) or getattr(page, 'content', None)
         if raw:
             raw_bytes = raw if isinstance(raw, bytes) else str(raw).encode('latin-1', errors='replace')
-            if b'\x00' in raw_bytes[:1000] or _is_probably_binary(raw_bytes[:4096]):
+            if _is_binary_payload(raw_bytes,
+                                  declared=getattr(page, 'encoding', '') or '',
+                                  content_type=(getattr(page, 'headers', None) or {}).get(
+                                      'content-type', '')):
                 return [f"[Binary content detected. Cannot extract text from this URL. Content type may be PDF, image, or other non-text format. Size: {len(raw_bytes):,} bytes]"]
 
         html = _get_html_from_page(page)

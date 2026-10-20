@@ -1,0 +1,38 @@
+services:
+  dhole:
+    build:
+      context: .
+      # BuildKit's isolated network corrupted large wheel downloads on this
+      # host (pip hash mismatch on retry); host networking builds cleanly.
+      network: host
+      args:
+        # Chromium is built in by default; set INSTALL_BROWSER=0 for HTTP-only.
+        INSTALL_BROWSER: ${INSTALL_BROWSER:-1}
+    image: ${DHOLE_IMAGE:-dhole-mcp:local}
+    environment:
+      # Required: exposes a process that can fetch arbitrary URLs with any
+      # credentials stored in this container. Compose refuses to start without it.
+      DHOLE_HTTP_TOKEN: ${DHOLE_HTTP_TOKEN:?set DHOLE_HTTP_TOKEN in .env or the shell}
+      DHOLE_HOME: /data
+    ports:
+      # Loopback by default. For a remote host, keep this and put a TLS reverse
+      # proxy in front; do NOT publish 0.0.0.0 without one.
+      - "127.0.0.1:${DHOLE_PORT:-8765}:8765"
+    volumes:
+      - dhole-data:/data
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /home/dhole/.cache
+      - /home/dhole/.config
+    # Chromium's shared memory: Docker's 64MB default is a common browser crash.
+    shm_size: "1gb"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+volumes:
+  dhole-data:

@@ -310,3 +310,30 @@ def format_suggestions(rows: List[Dict[str, Any]]) -> str:
              + (f", e.g. \u201c{r['example']}\u201d" if r["example"] else "")
              + ")" for r in rows]
     return " | ".join(parts)
+
+
+def with_row_handles(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """给扇出的行戴上把手 —— 这一族**唯一**的装配位（R02-145 · 现场 r301）。
+
+    这些行是裸 dict（`{"url":…, "label":…, "<字段>":…}`，失败时多一个 `error`），最后被
+    `json.dumps` 塞进 `first.content` 里那段 JSON：它们不经任何模型，所以
+    `models.RefusalHandle` 那副"由 error 自己长出 diagnosis"的机制够不到它们，而
+    `wire._WIRE_OMIT` 是按类名查表的，对裸 dict 也无话可说。r301 在一发普通扇出里量到两行
+    带判决却没有把手（`/cart` 交 `http_error_404: …`、`/feed.xml` 交 `fields_no_match`）。
+
+    修法因此只许有一种：在这一族的**出口**替每一行问那位唯一的读者
+    （`quality.row_diagnosis`，与 feed 的行、爬行的行、两扇状态门同一处判词），而不是在
+    `_one` 的五处写入里各手写一次 —— 后者正是本仓一轮一轮在修的那条"靠每个构造点记得填"。
+    干净行整格缺席：「缺席即成功」在住在正文里的 JSON 上也一样。
+    """
+    from dhole_mcp.quality import row_diagnosis
+
+    out = []
+    for rec in records:
+        row = dict(rec)
+        row.pop("diagnosis", None)
+        error = str(row.get("error") or "")
+        if error:
+            row["diagnosis"] = row_diagnosis(error)
+        out.append(row)
+    return out

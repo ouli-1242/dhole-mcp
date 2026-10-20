@@ -91,16 +91,6 @@ def pdf_install_advice() -> str:
         return f"Install PDF support with: {full_install_command()}"
 
 
-def docx_install_advice() -> str:
-    """Advice for ``doc_parse`` refusing a .docx because python-docx is not there."""
-    try:
-        import docx  # noqa: F401
-        return ("python-docx is installed - the parse failure was not a missing "
-                "dependency (corrupt file? wrong extension?)")
-    except Exception:  # noqa: BLE001
-        return f"Install docx support with: {full_install_command()}"
-
-
 def qr_install_advice() -> str:
     """Advice for a QR decode failure caused by OpenCV not being there."""
     try:
@@ -118,7 +108,8 @@ def rerank_install_advice() -> str:
         import onnxruntime  # noqa: F401
         import tokenizers  # noqa: F401
         return ("reranker packages are installed - the failure was model state, "
-                "not deps; a neural web_search re-fetches the model, and "
+                "not deps; a plain web_search re-fetches the model (its default `mode` "
+                "ranks with it, and web_search has no `focus_engine`), and "
                 "~/.dhole/models holds whatever was already downloaded")
     except Exception:  # noqa: BLE001
         return (f"Install the neural rerank tier with: {full_install_command()}; "

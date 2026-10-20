@@ -27,8 +27,10 @@ _ROOT = pathlib.Path(__file__).resolve().parent / "skills" / "dhole-web"
 
 #: topic -> (path relative to the skill root, when it is worth a call)
 TOPICS: dict[str, tuple[str, str]] = {
-    "start": ("SKILL.md",
-              "which tool for which job, the hard constraints, how to read a result that looks off"),
+    "start": ("references/start.md",
+              "the one-page route map: three paths, hard constraints, where to read next"),
+    "manual": ("SKILL.md",
+               "the full handbook: tool-selection tables, signal triage, config quick reference"),
     "call": ("references/examples.md",
              "writing any call: parameter placement with counterexamples, copy-ready patterns"),
     "fields": ("references/fields.md",
@@ -118,9 +120,16 @@ def read(topic: str = "", section: str = "") -> tuple[str, str]:
     """
     resolved = _resolve(topic)
     if resolved is None:
-        return "sys_guide: topics", index(
-            f"unknown topic {topic!r}." if (topic or "").strip() else
-            "no topic given.")
+        _why = (f"unknown topic {topic!r}." if (topic or "").strip()
+                else "no topic given.")
+        if (section or "").strip():
+            # 这一页的页尾教人 `Pass section='<heading text>'`，而这一发正是用了它 —— 没有
+            # volume 可切，这颗就被丢了，整页一个字都没说（评审 R02-101 · 真机
+            # `r124_section_object.json`：`sys_guide(section='timeout')` 与裸问逐字节相同）。
+            # 有 volume 那条路上 `section=` 不管中不中都有话说，这一支不许比它沉默。
+            _why += (f" section={section!r} did nothing here - a section cuts one volume, "
+                     "and this call named no volume.")
+        return "sys_guide: topics", index(_why)
 
     rel, when = TOPICS[resolved]
     path = _ROOT / rel

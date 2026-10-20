@@ -434,7 +434,10 @@ class TestTheFeedCutoff:
     async def test_a_bad_cutoff_costs_no_request(self):
         out = await _fetch_with(_feed_xml(["Sat, 27 Sep 2026 10:00:00 +0000"]),
                                 since="whenever")
-        assert out.error.startswith("since=")
+        # 口径（R02-134 · F116）：这一句由 feed 自家写，名字从前是首词兜底发明的 `since`。
+        # 现在它带着那颗在册的参数拒绝 token，句子仍点名那一颗旋钮（下面两半都要成立）。
+        assert out.error.startswith("invalid_request: since="), out.error
+        assert out.diagnosis["code"] == "invalid_request", out.diagnosis
         assert out._grab_calls == []
 
     @pytest.mark.asyncio

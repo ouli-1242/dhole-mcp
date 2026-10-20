@@ -66,6 +66,15 @@ CONTRACTS = [
     # （cn 版多数是直链）—— 解码器坏掉时 cn 版可能看不出来，这条就是为它出的。
     Contract("bing_global", "bing_global.html", "li[class*='b_algo']",
              must_not_start=("https://www.bing.com/ck/a",)),
+    # 独立小网索引：容器是普通卡片，链接是直链；解析器只认卡片里的 h2/a。
+    Contract("marginalia", "marginalia.html", "div.bg-white.p-4:has(h2 a)"),
+    # Yahoo 两套版面各出一份契约。A 版是 div.algo.relsrch 卡片；B 版把首条放在
+    # section.richAlgo、后续条目嵌套在 section.Sr 里 —— fixture 已剪掉嵌套子树，
+    # 契约只钉“每张卡自己的第一个 h3/compText”。
+    Contract("yahoo", "yahoo_variant_a.html", "div.algo.relsrch",
+             must_not_start=("https://r.search.yahoo.com",)),
+    Contract("yahoo", "yahoo_variant_b.html", "section.Sr, section.richAlgo",
+             must_not_start=("https://r.search.yahoo.com",)),
 ]
 
 JS_SHELL = ("<html><body><div id='root'></div>"
@@ -476,3 +485,49 @@ class TestYieldDataReachesTheReport:
 async def _run_multi_search():
     from dhole_mcp.search_engines import multi_search
     return await multi_search("q", 6)
+
+
+class TestYahooRedirectWrappers:
+    """Yahoo rotates between r.search. and rd.search.; both are the same wrapper.
+
+    实测（2026-10-20）：同一查询在不同轮次里交回直接链接或 rd.search.yahoo.com
+    包装。只认 r.search 会让后一种把带会话 token 的跳转页当成结果 URL 交出去。
+    """
+
+    def test_both_redirect_hosts_decode_to_the_target(self):
+        from dhole_mcp.search_metasearch import _yahoo_decode_url
+
+        for host in ("r.search.yahoo.com", "rd.search.yahoo.com"):
+            url = (f"https://{host}/_ylt=x/RV=2/RE=1/RO=10/"
+                   "RU=https%3a%2f%2fexample.com%2fa/RK=2/RS=y")
+            assert _yahoo_decode_url(url) == "https://example.com/a", host
+
+    def test_an_undecodable_redirect_is_dropped(self):
+        from dhole_mcp.search_metasearch import _yahoo_decode_url
+
+        assert _yahoo_decode_url(
+            "https://rd.search.yahoo.com/_ylt=x/RK=2") == ""
+
+    def test_direct_links_pass_through(self):
+        from dhole_mcp.search_metasearch import _yahoo_decode_url
+
+        assert _yahoo_decode_url("https://example.com/a") == "https://example.com/a"
+
+
+class TestMarginaliaRateLimit:
+    def test_the_200_challenge_is_blocked_not_empty(self):
+        from dhole_mcp.search_metasearch import (
+            MetaBlockedException, _TEXT_ENGINES,
+        )
+
+        eng = _TEXT_ENGINES["marginalia"](timeout=5)
+        with pytest.raises(MetaBlockedException):
+            eng._check_challenge(
+                "<html><body>The search engine is currently seeing a lot of "
+                "fairly aggressive bot activity. Please wait for 1 seconds"
+                "</body></html>")
+
+    def test_http_400_is_a_challenge_status(self):
+        from dhole_mcp.search_metasearch import _TEXT_ENGINES
+
+        assert 400 in _TEXT_ENGINES["marginalia"]._challenge_statuses

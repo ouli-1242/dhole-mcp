@@ -234,7 +234,13 @@ def test_the_family_is_read_from_the_impersonate_value(value, expect):
 
 
 def test_the_generator_is_asked_for_the_family_and_a_desktop(monkeypatch):
-    """钉住的是两颗参数，而且钉的是**这次要冒充的那一家** —— 不是恒定 chrome。"""
+    """钉住的是两颗参数，而且钉的是**这次要冒充的那一家** —— 不是恒定 chrome。
+
+    挂具交出的那副身份现在必须**能说出自己的 brand 表**（`Chrome/147` 配 `";v="147"`）：
+    交一副声称 Chrome 而没有 `sec-ch-ua` 的字典会被 `_brands_follow_the_ua` 拦下重摇，
+    那时这一格读到的最后一次调用就已经是兜底那一次裸调用，量的就不再是"钉没钉住"了。
+    顺手多钉一句"自洽的一副只摇一次"。
+    """
     asked = []
 
     class _Gen:
@@ -242,11 +248,14 @@ def test_the_generator_is_asked_for_the_family_and_a_desktop(monkeypatch):
             asked.append(kw)
 
         def generate(self):
-            return {"User-Agent": CHROME_DESKTOP_UA}
+            return {"User-Agent": CHROME_DESKTOP_UA,
+                    "Sec-CH-UA": '"Google Chrome";v="147", "Chromium";v="147"',
+                    "Sec-CH-UA-Platform": '"Windows"'}
 
     _fake_browserforge(monkeypatch, _Gen)
-    assert FT._stealthy_baseline("firefox")["user-agent"] == CHROME_DESKTOP_UA
-    assert asked[-1] == {"browser": ["firefox"], "device": ["desktop"]}, asked
+    got = FT._stealthy_baseline("firefox")
+    assert got["user-agent"] == CHROME_DESKTOP_UA
+    assert asked == [{"browser": ["firefox"], "device": ["desktop"]}], asked
 
 
 def test_a_generator_that_refuses_the_pinned_call_still_delivers_headers(monkeypatch):

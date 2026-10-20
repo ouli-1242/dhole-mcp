@@ -55,7 +55,11 @@ class TestTheRefusalNamesTheShapeOnce:
             set={"auth": FAKE, "host": "api.example.test"})
         _said_once(r.error, "cred_defaults 回执的 error")
         assert PROBE not in r.next_action, r.next_action
-        assert "Nothing was stored." in r.next_action, r.next_action
+        # 评审 R02-102：这一扇从前两种说法并存（门内写 `Nothing was stored.`、装配层的陌生
+        # 参数名那颗听见 `Nothing was fetched or changed.`）。现在整扇说它自己那句
+        # `Nothing was stored or forgotten.` —— 这一格守的仍是"拒绝要说这一颗没进库"，
+        # 词换成那位唯一作者的句子。
+        assert "Nothing was stored or forgotten." in r.next_action, r.next_action
 
     @pytest.mark.asyncio
     async def test_a_refusal_stores_nothing(self):

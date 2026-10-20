@@ -231,7 +231,10 @@ def test_an_empty_text_read_fails_the_step_and_names_the_other_two_doors():
     rows = _run(CHAIN, page)
     assert rows[0]["ok"] is False
     err = rows[0]["error"]
-    assert "attribute" in err and "value" in err
+    # 那扇门从前叫 `attribute`，而 attribute 读的是标签上那一层 —— 填过的框里它报的是
+    # 旧值（实测：fill 成功、POST 出去的也是新值，这一读却说"还是 1"）。现在它叫
+    # `property`。见 tests/test_the_probe_that_reads_a_filled_input_reads_the_value_the_page_holds.py
+    assert "property" in err and "value" in err
     assert "screenshot" in err
 
 

@@ -24,13 +24,14 @@ import json
 import logging
 import math
 import re
+import unicodedata
 from collections import Counter
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from time import time
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from dhole_mcp.cache import get_cached, set_cached
 from dhole_mcp import engine_yield
@@ -39,12 +40,15 @@ from dhole_mcp import serp_dates
 from dhole_mcp.envelope import classify_source
 from dhole_mcp.injection import mark_url_shape as _mark_url_shape
 from dhole_mcp.injection import scan as _scan_injection
-from dhole_mcp.quality import _summary_label
-from dhole_mcp.security import validate_search_query, validate_url, redact_api_key, SecurityError
+from dhole_mcp.models import RefusalHandle
+from dhole_mcp.quality import (classify_error_text, status_error_sentence,
+                               _summary_label)
+from dhole_mcp.security import (SecurityError, redact_api_key, url_refusal_recovery,
+                                validate_search_query, validate_url)
 from dhole_mcp.search_engines import (
     RawResult, multi_search, EngineReport, DEFAULT_ENGINES,
     fetch_source_for_similar, _INDEX_FAMILY, date_support,
-    _DATE_PARAM_UNWIRED, split_date_blindness,
+    _passes_site_filter, _DATE_PARAM_UNWIRED, split_date_blindness,
 )
 from dhole_mcp.search_metasearch import (KEYED_ENGINES, cooldowns,
                                          schedule_engine_heartbeat)
@@ -76,6 +80,17 @@ def unavailable_reason() -> str:
     return _unavailable_reason()
 
 
+def load_attempts() -> int:
+    """这个进程试过几次加载/下载 —— 读的是 `reranker` 那一本账，不是这里另数的。"""
+    from dhole_mcp.reranker import load_attempts as _load_attempts
+    return _load_attempts()
+
+
+def last_attempt_ms() -> float:
+    from dhole_mcp.reranker import last_attempt_ms as _ms
+    return _ms()
+
+
 def get_reranker():
     from dhole_mcp.reranker import get_reranker as _get_reranker
     return _get_reranker()
@@ -104,6 +119,9 @@ _STOPWORDS = {
     "which", "about", "also", "more", "most", "than", "then", "them", "they",
 }
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9'+-]{2,}")
+#: CJK 连段（中日韩统一表意 + 扩展 A + 假名 + 谚文）。标点/空格天然是分隔符，全角逗号 U+FF0C
+#: 不在这个范围里，所以连段不会缝过句子。词面这条腿用它产相邻二元组，见 `_query_terms`。
+_CJK_TERM_RE = re.compile(r"[㐀-䶿一-鿿぀-ヿ가-힯]+")
 
 
 def _query_tokens(query: str) -> set[str]:
@@ -135,7 +153,8 @@ def _registrable_domain(url: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
-def _related_queries(query: str, results: list["SearchResult"], *, n: int = 6) -> list[str]:
+def _related_queries(query: str, results: list["SearchResult"], *, n: int = 6,
+                   stats: Optional[dict] = None) -> list[str]:
     """Mine follow-up queries from result titles + snippets.
 
     A phrase counts once per *domain*, so "appears in 2 results" means two
@@ -145,23 +164,55 @@ def _related_queries(query: str, results: list["SearchResult"], *, n: int = 6) -
     Phrases opening with a function word are dropped for the same reason: they
     are sentence fragments. Too little evidence returns too few phrases - the
     field is optional, padding it is not.
+
+    相邻按**原文**算，而且只有一条判据：两个候选词之间那段原文必须**全是空白**。建议词的单位是
+    「行里真出现过的那个说法」，而 `_WORD_RE` 连着找之后中间站着什么都可能：中文（`…的，on 发布
+    per 要求…` ⇒ `on per`）、路径分隔（`new.qq.com/rain/a/…` ⇒ `com rain`）、点（`wxy88.top` ⇒
+    `wxy88 top`、`asyncio.gather` ⇒ `asyncio gather`）、连词（`Definition & Meaning` ⇒
+    `definition meaning`）、句号加括号（`maps (SOM). The cluster` ⇒ `som cluster`）。最后这几格
+    都在本轮已入账的真 SERP 里（R02-069 的第二、第三格），量程序 `review/.runtime/p4/f55_measure.py`。
+    代价贴在账上（同一趟，20 发去重真 SERP：13 条交回 → 8 条）：标识符里那一点也一起挡了，
+    因为 `.gap` 分不清 `asyncio.gather` 与 `wxy88.top` —— 要分清就得查公共后缀表，那是词表路线，
+    本轮不走。
+
+    同一条原则的另一半：title 与 snippet 的接缝也不算相邻 —— 那是本函数自己拼出来的
+    文本，不是行里连续的原文。
+
+    `stats` 是这一发**为什么空**的证据出口（照 `focus_content(..., stats=)` 与 crawl
+    那三把尺的先例）：判决在返回值里，数字从那里交给调用方，这样"空"这件事由
+    同一位作者说出，而不是让下一个读 fetch_hint 的人再挖一遍矿。
     """
     if not results:
+        if stats is not None:
+            stats.update(words_total=0, recurring=0, shipped=0, spaced_pairs=0)
         return []
     q_tokens = _query_tokens(query)
-    docs: list[tuple[str, list[str]]] = []
+    docs: list[tuple[str, list[tuple[str, str, str]]]] = []
+    tokens_total = 0
+    spaced_pairs = 0
     for r in results:
-        text = (f"{r.title} {r.snippet}").lower()
-        words = [w for w in _WORD_RE.findall(text) if w not in _STOPWORDS]
-        docs.append((_registrable_domain(r.url) or r.url.lower(), words))
+        # 「相邻」只在**同一字段内**算：title 与 snippet 是我们自己拼起来的，两段的接缝
+        # 不是原文里的相邻（现场：标题收尾 `…guide` 与摘要开头 `async…` 配成 `guide async`）。
+        pairs: list[tuple[str, str, str]] = []
+        for field in (r.title or "", r.snippet or ""):
+            text = field.lower()
+            hits = [m for m in _WORD_RE.finditer(text) if m.group() not in _STOPWORDS]
+            tokens_total += len(hits)
+            for prev, cur in zip(hits, hits[1:]):
+                gap = text[prev.end():cur.start()]
+                if gap and gap.strip() == "":
+                    spaced_pairs += 1
+                pairs.append((prev.group(), gap, cur.group()))
+        docs.append((_registrable_domain(r.url) or r.url.lower(), pairs))
     if not docs:
         return []
 
     bigram_domains: dict[str, set[str]] = {}
-    for domain, words in docs:
+    for domain, pairs in docs:
         uniq_bi = set()
-        for i in range(len(words) - 1):
-            a, b = words[i], words[i + 1]
+        for a, gap, b in pairs:
+            if not gap or gap.strip():  # 中间站着任何东西（含标点）都不是一个词组
+                continue
             if len(a) < 3 or len(b) < 3:
                 continue
             uniq_bi.add(f"{a} {b}")
@@ -184,6 +235,7 @@ def _related_queries(query: str, results: list["SearchResult"], *, n: int = 6) -
         lead = phrase.split()[0]
         return lead in _PHRASE_LEAD_FUNCTION_WORDS or lead.endswith("ing")
 
+    recurring = sum(1 for domains in bigram_domains.values() if len(domains) >= 2)
     scored = []
     for bi, domains in bigram_domains.items():
         if len(domains) < 2:  # one source's wording is not a topic
@@ -205,7 +257,43 @@ def _related_queries(query: str, results: list["SearchResult"], *, n: int = 6) -
         seen_words.update(toks)
         if len(out) >= n:
             break
+    if stats is not None:
+        stats.update(words_total=tokens_total, recurring=recurring,
+                     shipped=len(out[:n]), spaced_pairs=spaced_pairs)
     return out[:n]
+
+
+def _follow_up_cause(stats: dict, shipped: list[str]) -> str:
+    """空着的 `related_queries` 必须说出是哪一种空 —— 三种空对调用方是三种出路。
+
+    量出来的分布（本轮 16 发已入账真 SERP，`f52_cause.py`）：切不出词的 2 发、切得出词
+    但没有跨源重复的 7 发、候选都被形状门挡掉的（R02-F52 修完之后新增的一种）—— 三者在
+    交付面上都长成一个 `[]`，而字段说明只写「Empty if none derived」。
+
+    - 切不出词（`words_total == 0`）：出路**不是**换个问法 —— 挖词的单位是空白分开的词，
+      这一轮的行没有词边界（本仓库不带分词器）。判据只看形状，不看语言。
+    - 有跨源重复的词组、但全被两道门（句子片段 / 与自己查询重合）挡掉：说得出**个数**，
+      因为「有证据但都不成词组」与「根本没有重复」是两件事。
+    - 什么都没重复：保持今天那句诚实的沉默（`Too little evidence returns too few phrases -
+      the field is optional, padding it is not`）—— 给最常见的情况加一句客套，
+      只会让真正需要出路的那两格淹掉。
+    """
+    if shipped or not stats:
+        return ""
+    if not stats.get("spaced_pairs", stats.get("words_total", 1)):
+        return (f"no follow-up phrases this round: this miner pairs two words that stand "
+                f"next to each other with only space between, and this round's rows contain "
+                f"no such pair - {stats.get('words_total', 0)} whitespace-separated word(s) "
+                f"were found in them, but no segmenter is bundled, so rewording the query "
+                f"cannot change that answer")
+    recurring = stats.get("recurring", 0)
+    if recurring and not stats.get("shipped", 0):
+        return (f"no follow-up phrases this round: {recurring} word pair(s) recurred "
+                "across 2+ independent sources but every one was dropped - either it "
+                "opens with a function word (a sentence fragment, not a query) or it "
+                "restates words your own query already carries")
+    return ""
+
 
 
 # ─── zero-result query rewrite ────────────────────────────────────────────────
@@ -245,11 +333,66 @@ def _rewrite_query(query: str) -> str:
 
 # ─── response model ──────────────────────────────────────────────────────────
 
+# R02-003（P02-01 庄砚：「标题就是那个 URL，我分不清是站没给标题还是标题真长这样」）。
+# 判据只有一位作者，行模型与内联抓取那几行都问它。
+_ADDRESS_HEADLINE_ELLIPSIS = re.compile(r"(\s*\.\.\.|\s*…)\s*$")
+
+
+def _address_face(text: str) -> str:
+    """An address the way a results page prints one: no scheme, no leading `www.`,
+    no trailing slash or query punctuation, case-folded and width-folded."""
+    s = unicodedata.normalize("NFKC", (text or "")).strip().lower()
+    s = re.sub(r"^[a-z0-9+.-]*://", "", s)
+    s = re.sub(r"^www\.", "", s)
+    return s.rstrip("/.?& ")
+
+
+def _headline_is_own_address(title: str, url: str) -> bool:
+    """True when this row's headline slot holds its own address, not a title a page wrote.
+
+    语料 1,067 行（15 轮真检索 134 + `evals/corpus/serp` 冻结页 890 + `tests/engine_fixtures`
+    真版面 43）里命中 14 行（1.4%），全部出自 yandex：它的版面在文档没有标题时把地址印在
+    标题位上（`cnblogs.com/paihangbang/p/20553999`），版面放不下时截成一个省略号。
+    三条闸门各有实测反证，缺一条判据就开始说谎：
+      * 锚在**本行**的 url 上。只看标题形状（无空格 + 含点）那条尺在同一批语料里另外
+        误伤 39 行 —— 代码名里的点（`asyncio.Semaphore()信号量控制…`）和版面截断的
+        省略号（`从32元到105元，年内涨幅超150...`）都会响。
+      * 标题里必须有一个点。否则「站名印在标题位」那一族会被读成地址：冻结页实测 3 行
+        （`Medium` 对 medium.com/@… ×2、`Kubernetes` 对 kubernetes.io）。站名是可分辨的
+        信息而不是缺失，所以那一族**不标**。
+      * 标题里不许有空格。版面印地址时印不出空格。
+    题面说的「title 逐字等于 URL」在这批语料里是 **0 行**（0.0%）：交回的地址总是少了协议
+    那一段，所以比较的是去协议后的形状，而不是两个字符串相等。
+    """
+    face = _address_face(_ADDRESS_HEADLINE_ELLIPSIS.sub("", title or ""))
+    return (bool(face) and "." in face and " " not in (title or "").strip()
+            and _address_face(url).startswith(face))
+
+
 class SearchResult(BaseModel):
     title: str = Field(description="Result title")
     url: str = Field(description="Result URL")
+    # R02-003：标题位上住的是这一行自己的地址时，这件事必须跟着行走。不住顶层注记 ——
+    # 读行的人就在那一刻决定点哪一条，把同一句话的另一半留在回执顶部等于少了一半
+    # （`consensus_basis` 那一刀同理）。默认 False 被省略表扣下，绝大多数行零字符。
+    title_is_address: bool = Field(
+        default=False,
+        description=("True when this row's `title` is its OWN ADDRESS rather than a headline "
+                     "someone wrote: the same characters as `url` with the scheme, a leading "
+                     "www. and the trailing slash/query dropped (or such an address cut short "
+                     "with '...' where the results page had no room). Shape only - it is not a "
+                     "claim about the page or about the engine: it says the slot where a title "
+                     "would sit holds an address, so judge this row by its `snippet` and the "
+                     "address itself. Measured on 1,067 rows (15 live rounds + the frozen SERP "
+                     "corpus): 14 rows carry it, every one from a single engine, and 0 of them "
+                     "were real headlines - a headline that merely LOOKS like an address "
+                     "(`asyncio.Semaphore()...`, `...年内涨幅超150...`) is NOT marked, and "
+                     "neither is a site name in the title slot (`Medium`, `Kubernetes`), which "
+                     "is information you can read. The title text itself was NOT rewritten or "
+                     "invented - it is exactly what the engine handed. Absent = this row "
+                     "carries a headline that is not its own address."))
     snippet: str = Field(default="", description="Result snippet from the engine")
-    source: str = Field(default="", description="Backend(s) that returned this result (baidu/bing/bing_global/brave/duckduckgo/so360/sogou/yandex). Multiple = cross-backend consensus.")
+    source: str = Field(default="", description="Backend(s) that returned this result. Web backends are baidu/bing/bing_global/yahoo/brave/duckduckgo/so360/sogou/yandex/marginalia; vertical sources add arxiv/gdelt/stackexchange/github/hackernews when sources= named them. Multiple = more than one backend returned the URL (cross-backend for web, cross-source when a vertical and a web row deduped).")
     position: int = Field(default=0, description="1-indexed rank after merge + rerank")
     relevance_score: float = Field(default=0.0, description="0.0-1.0 relevance to the query, NORMALIZED WITHIN THIS ROUND (min-max over the returned set, then boosted by cross-backend consensus). Read it as a seat, not as a verdict: the best row of a set where nothing is relevant is 1.0 by construction, and when every score is identical they all normalize to 1.0. `relevance_raw` is the number that can say 'this one is off-topic'.")
     # S2：badge 的原料必须和 badge 一起端出去。调用方拿着 `fetch_relevance` 只能信或
@@ -258,7 +401,7 @@ class SearchResult(BaseModel):
     relevance_raw: Optional[float] = Field(default=None, description="The cross-encoder's UNNORMALIZED sigmoid for this row (0.0-1.0, not rescaled to this round), so it can say 'this result is off-topic' even when it ranks first. `fetch_relevance` is minted from it when present. Absent / null = no model scored this round (the order is cross-engine consensus + engine position) — that is NOT a score of 0.0, and with no raw anywhere on the response no row can be labelled 'high'.")
     fetch_relevance: str = Field(default="", description="high|med|low - relative relevance hint. web_read what matches your need; the tiers rank results but a lower tier can be the right one - use your judgment. 'high' means WORTH FETCHING by the model's own verdict (relevance_raw >= 0.5) — measured on a 67-query labeled corpus, rows labelled high are relevant about two thirds of the time, so this is not a claim of correctness and not a safety judgment. With no reranker on this round the tiers can only demote (no row is 'high'), and `fetch_hint` says so.")
 
-    engines_consensus: str = Field(default="", description="How many independent index FAMILIES returned this URL over how many could have (e.g. '2 of 6'; the default 8-engine pool is 6 families since bing, bing_global and duckduckgo all sit on the Bing index). When the denominator was NOT the full pool the reason rides the same string: '1 of 4 (degraded_pool)' means four families could have agreed and only four were asked/answered, '… (partial_pool)' means you narrowed the pool. '1 of 1 (no corroboration)' means a single family contributed at all. A free authority signal only when the denominator is >1 - and read the parenthetical before treating a small number as disagreement.")
+    engines_consensus: str = Field(default="", description="How many independent WEB index FAMILIES returned this URL over how many could have (e.g. '2 of 6'; the default 8-engine pool is 6 families since bing, bing_global and duckduckgo all sit on the Bing index). When the denominator was NOT the full pool the reason rides the same string: '1 of 4 (degraded_pool)' means four families could have agreed and only four were asked/answered, '… (partial_pool)' means you narrowed the pool. '1 of 1 (no corroboration)' means a single family contributed at all. EMPTY on a vertical-only row (sources='academic'/'news'/'qa'/'code'/'community'): a vertical source is not an index family, so there is no web consensus to report - read `source` and `source_detail` instead. A free authority signal only when the denominator is >1 - and read the parenthetical before treating a small number as disagreement.")
 
     source_type: str = Field(default="", description="What kind of site this URL is, from the SAME classifier that labels a fetched page: gov|edu|github|repo|docs-site|qa|forum|blog|ecommerce|reference|paper|news|unknown. One field, one vocabulary - `unknown` means 'not on a known list', not 'weak'.")
     # G4（评审 Medium）：搜索行此前的信任轴只有引擎共识。fetch 侧的 is_official
@@ -289,8 +432,45 @@ class SearchResult(BaseModel):
     # 自述日期"的是 `serp_dates.page_stated_date`，读日期的仍是同一个解析器。
     published_verified: str = Field(default="", description="The publish date THIS ROW'S OWN PAGE stated, ISO, read from the page's metadata (`article:published_time` / JSON-LD) when `fetch_content=true` brought that page back in this same call. This is the one date class dhole can vouch for: `published` is a search engine's claim about the row, this is the source speaking about itself. Empty = nothing was verified, which covers both 'the row was not fetched' (the auto-fetch reaches at most the top 3 rows of the round) and 'the page states no publish date of its own' - neither is a claim that the page is undated. Same floor convention as `published`: a page that writes only its month or only its year comes back as the 1st of that month / Jan 1 of that year. It never overwrites `published`: when the two disagree both stay on the row and you read the disagreement. The count of these rows is `date_coverage.rows_verified_by_fetch`.")
 
+    @model_validator(mode="after")
+    def _mint_title_is_address(self) -> "SearchResult":
+        """这颗旗子在**没人填它**的时候由行上那两颗字符串现铸（`FeedResult.diagnosis` 同族）。
 
-class SearchResponseModel(BaseModel):
+        为什么是"缺席才铸"而不是"每次重铸"：`tests/test_wire_compaction.py` 那条门按
+        「每一格都能被独立设成非默认值」构造探针，覆盖式的判据会把那颗旗子按回 False，
+        于是门报的是"这一格被省略表吞了" —— 那是门自己的合法前提，不该为了一颗旗子去改门
+        （§12：不弱化门禁）。行只有两个产地（`_build_results` 与缓存回放
+        `SearchResult(**payload)`），两处都不传这颗，所以"缺席才铸"覆盖的就是它们的全部
+        实际形状：写在这条判据之前的旧 payload 没有这颗键 → 现算，而不是当成 false 交回去。
+        """
+        if not self.title_is_address:
+            self.title_is_address = _headline_is_own_address(self.title, self.url)
+        return self
+
+
+#: 同文判据的第二条腿。两侧复验时真撞上一次假合并：`milvus vector database documentation`
+#: 那一发的 1/2/4/5 行剥掉站点后缀后头一模一样（都叫 "Milvus Vector Database"），可那是四个
+#: 不同页面共享一颗**产品名**（sessions/P02-R5-F24-post.jsonl 的 C 格）。产品名会相同，
+#: 一份文件的正文不会 —— 所以成组还要看见一段共同的 literal。线划在实测的那一对真同文旁边：
+#: 入账那份补充公告的两个站在摘要里共享 34 个字（`review/.runtime/p4/f24_measure_overlap.py`），
+#: 取 20 留出一截余量，又远高于偶然撞上的两句广告词。
+_DOC_SNIPPET_RUN_MIN_CHARS = 20
+#: 第二个读数（R02-047）：共享的那段**占较短那条摘要的几成**。
+#:
+#: 绝对长度这把尺单独用是歪的 —— 引擎摘要从 26 字到 300 字不等，量出来的两堆因此叠在一起
+#: （`review/.runtime/p4/f38_measure.py`：`evals/corpus/serp` 的 67 条人工标注真查询、931 行，
+#: 标题相合且跨 host 的配对 367 条）：按字数看，假合并那 362 条最大共享 46 个字，而**入账**
+#: 那一发只共享 34 个字 —— 线放到 34 就放行 173 条假合并，放到 47 以上就把这条腿存在的理由
+#: 本身切掉。按占比看两堆是分开的：假合并全部 ≤ 0.3197，真镜像四档 1.000/1.000/1.000/0.795，
+#: 入账那一发 0.415（34 字 / 较短摘要 82 字）⇒ 0.3197 与 0.415 之间是一条空的带（宽 0.095），
+#: 线坐在带子里，两端各留 0.04 与 0.055 的余量。
+#:
+#: 绝对地板留在上面那颗常数里不动：它守的是另一件事 —— 两段各 45 字的摘要共享 18 个字，
+#: 占比过线而字数不过地板，那还是偶然撞上的两句广告词（两把尺各管一头，缺一条就复现另一堆）。
+_DOC_SNIPPET_RUN_MIN_RATIO = 0.36
+
+
+class SearchResponseModel(RefusalHandle):
     query: str = Field(description="Search query")
     results: list[SearchResult] = Field(description="Ranked search results (URLs + ranking, not page content)")
     total_results: int = Field(default=0, description="Results returned")
@@ -310,9 +490,13 @@ class SearchResponseModel(BaseModel):
     # 阶梯交的，why 是引擎层已经写好的那句（冷却还剩几秒 / HTTP 几几几 / 被谁取消 /
     # 页面有容器而解析出 0 条）。它们此前只活在这个进程里，从未上过线。
     engine_detail: list[dict] = Field(default=[], description="Per-engine account of THIS round, one row per engine the pool asked: {name, family, status, verdict, why}. `status` is the raw upstream token (ok / empty / blocked / circuit_open / timeout / error:.. / init_error:.. / no_key:.. / preempted); `family` is the index family that engine sits on (bing, bing_global and duckduckgo all share the bing index, so three engines can be one family); `verdict` is the pool's own yield verdict for this round (healthy / blocked / not_asked / parser_drift / parser_suspect / upstream_empty / unknown_empty / timeout / unreachable / not_instrumented / stale); `why` names the concrete reason for THAT row this round - the seconds left on a cooldown, the HTTP code that ate the page, the 8 result containers that parsed into 0 usable rows. The four bucket lists (engines_used / engine_blocked / engine_empty / engine_preempted) stay the vocabulary for WHO; this says WHY, because blocked / cancelled / region-gated / parser-broken have mutually exclusive fixes.")
+    sources_used: list[str] = Field(default=[], description="Vertical backends that returned at least one candidate row this round: arxiv | gdelt | stackexchange | github | hackernews. A backend listed here may still have delivered 0 rows to `results` - read `delivered` in source_detail for that. Empty = no vertical source was asked, or every one of them returned nothing. These are NOT web index families and never contribute to engines_consensus.")
+    source_detail: list[dict] = Field(default=[], description="One row per vertical source this call asked, whether it answered or not: {source, backend, status, count, delivered, duration_ms, error?}. source is the kind you named (news|academic|qa|code|community), backend is the concrete API (gdelt|arxiv|stackexchange|github|hackernews), status is ok|empty|blocked|timeout|error. `count` is candidate rows left AFTER the site/exact-date filters (before the max_results cap); `delivered` is how many of them are in this response's `results`. A source that returned nothing still has a row here - 'I asked and it was empty' must not look like 'I never asked'.")
+    sort_applied: str = Field(default="", description="relevance|newest. Empty = the default relevance order. 'newest' orders rows that state a publish day newest-first; rows with no usable date keep their relative order after every dated row. Read this when the order looks unlike relevance - it is a caller choice, not a ranking change.")
     # 期5.3：`consensus_basis` 那颗 token 从此带得出分母。三个数的出处都是 _family_tally。
     families_answered_of_asked: str = Field(default="", description="How many independent index families ANSWERED over how many were ASKED this round ('2 of 6'; '1 of 6 asked, 4 could answer' when whole families were cancelled before they got the chance - the parenthetical is the row-level consensus denominator, which excludes families that never got to speak). This is the count behind `consensus_basis`: 'degraded_pool' beside '1 of 6' says how thin the round was, instead of leaving 'degraded' to mean anything from one engine on cooldown to the whole pool refusing. A low number here is NOT disagreement between engines; disagreement is what a per-row '1 of N' with N>1 means.")
     rerank_mode: str = Field(default="merge", description="Rerank used: merge|neural|find_similar.")
+    rerank_model: str = Field(default="", description="Which local cross-encoder produced this round's relevance verdicts (bge-zh or mmarco). Empty when no model ran (rerank_mode=merge) - and only then: the name is set from the model that actually scored, not from the registry default. The raw thresholds behind `fetch_relevance` are model-specific, so this is the name to quote when calibrating `min_raw_relevance`.")
     date_filter: dict = Field(default_factory=dict, description="What the engines were actually asked about dates, when you asked (freshness= or after=): {requested, sent, exact, engines_filtered, engines_unfiltered, note}. {} = no date constraint was requested. READ THIS BEFORE TRUSTING FRESHNESS: the engines offer day/week/month/year and nothing finer, so after=<a date> is widened to the narrowest preset that covers it. 'exact: true' is the strong claim - it means every engine that answered applied the narrowest preset covering your window, so the rows are date-limited. It is false whenever the wire sent a broader window than you named OR some engine in the pool was sent no date filter at all (named in engines_unfiltered, never a fixed list - it moves with the pool you chose); the note then says which side that gap is on, and it words the gap as OURS either way - 'dhole sent X no date filter' (the wire carried none for that engine: a fact about the pool you chose, not about that index's ability), or, for an engine whose date parameter dhole's own code names but has not connected, that missing work stated as ours. Neither wording is evidence the index holds no dates. A mixed round is NOT a date-limited result set. exact false always comes with a note saying which of the two it is; exact true comes with an empty note. `before=` is a different kind of limit and this field says so in its own `before` key: no preset bounds results to 'older than', so dhole applies it ROW BY ROW to the dates on `published` (the ledger is `date_coverage`) - rows it cannot date stay in the list, which is why `exact` is false whenever it is set.")
     consensus_basis: str = Field(default="", description="Whether engines_consensus can be trusted on this response: full | single_family | partial_pool | degraded_pool. 'degraded_pool' = at least one engine didn't answer, so a low consensus number may reflect the pool being down rather than the URL being weak. 'single_family' = no corroboration was possible at all.")
     # 期4.3：这一轮的日期账（叶子 `serp_dates.coverage` 的收据，逐行数出来的一次遍历）。
@@ -334,6 +518,10 @@ class SearchResponseModel(BaseModel):
     next_action: str = Field(default="", description="The obvious next call: fetch the high results, rephrase, retry, etc. Empty = nothing more to do.")
     fetched_pages: list[dict] = Field(default=[], description="When fetch_content=true: auto-fetched page content for top results. Each item: {url, title, content, content_ok, engines_consensus} - the consensus string is repeated per page so you can judge the fetched set without cross-referencing the result list. A content_ok=false row always carries `error` saying why; error='inline_fetch_budget' means that page was never fetched - the call ran out of the ~30s a host will wait, so web_read it yourself.")
     consensus_skipped: list[str] = Field(default_factory=list, description="The receipt for a gated auto-fetch: when fetch_min_consensus (>=2) is set with fetch_content=true, the URLs DROPPED from the fetch set for lacking that many corroborating index families. Empty = the floor dropped nothing (or was not set). Read this before asking 'why did fewer pages come back than I asked for'.")
+    # R02-001：两份计数数的都是**引擎家数**（几家索引返回过这个 URL、几家本可以表态），
+    # 而跨引擎去重唯一的键是归一化 URL —— 同一份文件挂在四个域名上就是四行，四行读起来像
+    # 四个独立来源。这一维此前在响应里根本没有作者。
+    same_document_groups: list[dict] = Field(default=[], description=f"Which rows in THIS page are the same DOCUMENT hanging at different addresses: [{{positions: [1,4,5,6], hosts: 3, title: '<一行一字未改的原文>'}}]. Minted from two conditions together - with the site suffix stripped off each title one name equals another or the shorter one sits at either END of the longer (a site decorating the document it republishes with its own name), AND the hosts differ. A shorter name buried in the MIDDLE of a longer title does not count - that is a shared product name, not one document (measured live). AND the two rows share a stretch of literal text clearing TWO readings at once: at least {_DOC_SNIPPET_RUN_MIN_CHARS} characters AND at least {_DOC_SNIPPET_RUN_MIN_RATIO:.0%} of whichever snippet is shorter. The share is what separates one document mirrored from two sites that each wrote their own explainer of the same topic - measured on 931 rows from 67 booked queries (362 cross-host same-title pairs: every one sits under 0.32 of the shorter snippet even when it shares up to 46 characters; the real mirrors sit at 0.795 to 1.0 and a booked republication at 0.42). Both readings are needed: the character floor alone merges each vendor's own glossary of the same term, while a pure share merges two 45-character snippets that happen to open with the same ad line. The leg stays conservative by design - a republication whose portals each rewrote the summary shares no long run and is NOT grouped, so a group UNDER-reports rather than over-claims. A group is an accounting of REPUBLICATION, not of agreement: `engines_consensus` counts index families and nothing here counts publishers, so 'four independent sources' is a claim this field exists to stop you making. It never drops, reorders or re-tiers a row - every member stays exactly where it is. Absent / [] = no two rows on this page share a title across hosts, which is the common case.")
 
 
 # ─── domain grouping (one classifier lives in envelope.classify_source)
@@ -354,13 +542,25 @@ def _get_domain(url: str) -> str:
 
 
 def _diversify(ranked: list, scores: list[float], max_per_domain: int = 2) -> tuple[list, list[float]]:
-    """Cap same-domain results in top positions. Excess deferred to bottom (not dropped)."""
+    """Cap same-domain results in top positions. Excess deferred to bottom (not dropped).
+
+    A vertical row is exempt. Every Stack Overflow answer lives on
+    stackoverflow.com, every arXiv paper on arxiv.org, every GitHub repository on
+    github.com - the source IS the host, and the caller named that source. Capping
+    them at 2 per domain would silently shrink `sources=['qa']` to two answers and
+    push the rest below unrelated hosts; that is the web pool's anti-domination
+    rule applied where there is no competition between sites to keep.
+    """
     if not ranked:
         return ranked, scores
     domain_counts: Counter = Counter()
     kept, kept_scores = [], []
     deferred, deferred_scores = [], []
     for r, s in zip(ranked, scores):
+        if getattr(r, "vertical", False):
+            kept.append(r)
+            kept_scores.append(s)
+            continue
         domain = _get_domain(r.url)
         if domain_counts[domain] < max_per_domain:
             kept.append(r)
@@ -383,7 +583,30 @@ _RAW_HIGH_AT = 0.5
 _RAW_MED_AT = 0.05
 
 
-def _tier(score: float, rank: int, total: int, raw: Optional[float] = None) -> str:
+def _active_model_name() -> str:
+    """The registry name of the model this process would score with ('' if none)."""
+    try:
+        from dhole_mcp.reranker import active_model
+        return active_model().name
+    except Exception:
+        return ""
+
+
+def _raw_thresholds() -> tuple[float, float]:
+    """The ACTIVE model's own raw-score lines (see RerankerModel.raw_high/raw_med).
+
+    The constants above are the default model's lines and stay the fallback for
+    every caller that has no model on the round (and for direct callers of
+    `_tier` in tests). The live answer comes from the model registry because raw
+    distributions are model-specific: reusing one model's 0.5 on another silently
+    redefines what 'high' means.
+    """
+    from dhole_mcp.reranker import raw_thresholds
+    return raw_thresholds()
+
+
+def _tier(score: float, rank: int, total: int, raw: Optional[float] = None,
+          raw_high: float = _RAW_HIGH_AT, raw_med: float = _RAW_MED_AT) -> str:
     """Derive high|med|low from the evidence, and only from the evidence.
 
     `or rank == 1` 删了。它此前无条件把"座位"当成"置信"：链上流转的 `score` 是集合内
@@ -399,9 +622,9 @@ def _tier(score: float, rank: int, total: int, raw: Optional[float] = None) -> s
     `_quality_filter` 只看 low，交付集合因此不因这次改动而清空或缩窄。
     """
     if raw is not None:
-        if raw >= _RAW_HIGH_AT:
+        if raw >= raw_high:
             return "high"
-        if raw >= _RAW_MED_AT:
+        if raw >= raw_med:
             return "med"
         return "low"
     if score >= 0.15 or rank <= max(2, total // 3):
@@ -409,21 +632,233 @@ def _tier(score: float, rank: int, total: int, raw: Optional[float] = None) -> s
     return "low"
 
 
-def compute_fetch_hint(results: list[SearchResult]) -> str:
+#: 一份文件的标题至少要长到几个字才载得动它的身份。线划在实测两簇之间的空带上
+#: （473 行真搜索行 · 两轮画像的 266 份会话存档 · 2026-10-15）：假组是那两族站点把同一个
+#: <title> 印在每一页上，其归一头分别是 9 与 6 个字符（"Community" / "GitHub"），真组
+#: （同一份征集公告被 4 个地址挂着）是 24 个。
+_DOC_TITLE_MIN_CHARS = 12
+
+#: 版面把"这份文件叫什么"和"哪个站在挂它"写在同一串里，分隔符两边都有（"标题 - 开封本地宝"
+#: / "标题 | 中国采购与招标网" / "标题–站点"）。剥后缀这一步只为归一比较存在，端出去的
+#: 标题仍是某一行的一字原文。
+_SITE_SUFFIX_SEP_RE = re.compile(r"\s[-–—|｜·»]\s|[-–—|｜]\s")
+
+
+def _document_title(title: str) -> str:
+    """这一行自称的那份文件的名字（剥掉站点后缀、抹掉版面标点，只为比较）。"""
+    head = _SITE_SUFFIX_SEP_RE.split((title or "").strip(), maxsplit=1)[0]
+    return re.sub(r"[^\w\u4e00-\u9fff]+", "", head, flags=re.UNICODE).lower()
+
+
+def _shared_literal_run(a: str, b: str) -> int:
+    """两段文字之间最长的公共连续片段（字符数）。滚动 DP，句子级的长度够用。"""
+    a, b = (a or ""), (b or "")
+    if not a or not b:
+        return 0
+    prev = [0] * (len(b) + 1)
+    best = 0
+    for i in range(1, len(a) + 1):
+        cur = [0] * (len(b) + 1)
+        ca = a[i - 1]
+        for j in range(1, len(b) + 1):
+            if ca == b[j - 1]:
+                cur[j] = prev[j - 1] + 1
+                if cur[j] > best:
+                    best = cur[j]
+        prev = cur
+    return best
+
+
+
+
+def _same_name(a: str, b: str) -> bool:
+    """两个标题是不是同一份文件的名字：相等，或一方只是**把自己的站名贴在两端**。
+
+    出现在**中间**的那种包含不算：两侧都是长串时，中间含住的那颗通常是共同的产品名或主题词
+    （"Milvus Vector Store" 被一条更长的教程标题含在中间 —— 两侧复验时真撞上的那一次假合并
+    就是这个形状），它说的是同一件事，不是同一份文件。
+    """
+    if a == b:
+        return True
+    shorter, longer = (a, b) if len(a) < len(b) else (b, a)
+    return longer.startswith(shorter) or longer.endswith(shorter)
+
+
+def _shares_document_text(flat_a: str, flat_b: str) -> bool:
+    """The ONE ruler behind the second leg: a shared literal run that is long ENOUGH
+    and covers enough of the shorter snippet (both readings, on two normalized strings).
+
+    Both arms are measured, and each guards a pile the other one lets through (the
+    counts sit next to ``_DOC_SNIPPET_RUN_MIN_RATIO``): the share alone would merge two
+    45-character snippets that happen to open with the same ad line, the character
+    count alone would merge every vendor's own glossary of one term while cutting the
+    booked republication that only shares 34 characters. One author, one reading per pair.
+    """
+    run = _shared_literal_run(flat_a, flat_b)
+    if run < _DOC_SNIPPET_RUN_MIN_CHARS:
+        return False
+    shorter = max(1, min(len(flat_a), len(flat_b)))
+    return run / shorter >= _DOC_SNIPPET_RUN_MIN_RATIO
+
+
+def _same_document_groups(results: list[SearchResult]) -> list[dict]:
+    """Which rows are the SAME DOCUMENT hanging at different addresses.
+
+    回应的那一维在响应里本来没有：`engines_consensus` 与 `families_answered_of_asked` 数的都是
+    **引擎家数**（几家索引返回过这个 URL / 几家本可以表态），跨引擎去重唯一的键是归一化 URL
+    （`search_metasearch._normalize_url`）—— 同一份文件挂在四个不同域名上，就是四行，
+    而四行读起来像四个独立来源（R02-001 里那位记者要写的正是"多来源互证"）。
+
+    判据是**两条一起**，缺一条就复现实测的假合并：剥掉站点后缀后的标题相合，**且** 交出它们的
+    host 不同。473 行真搜索行里标题相合的组共 6 个，5 个假组全部落在同一个 host 里（文档站
+    把站名印在每页标题上：一组 31 行、一组 17 行），唯一的跨 host 组就是那份被四个地址挂着的
+    公告。再加一道标题长度闸（`_DOC_TITLE_MIN_CHARS`）挡住 "Community" / "GitHub" 这类
+    跨站也会相同的通用词 —— 它载不下一份文件的身份。
+
+    "相合"含**首尾相接的那种包含**：中文站点常把**自己的名字写在标题前面**（"河南省商务厅-河南省…
+    补充公告"），那与写在后面是同一件事，只按相等会漏掉官方那一份 —— 而漏掉官方那一份的组，正是
+    调用方最需要看见的那一个。但"包含"不能是**出现在中间**的那种：两侧都过长度闸之后，
+    "Milvus Vector Store" 被一条更长的教程标题在中间含住，量到的是一句共同的产品名，不是同一份
+    文件（这一格是两侧复验时真撞上的假合并，因此规则只认前缀/后缀）。实测：锚定式包含在 473 行
+    真语料上多出的配对是 1，而那一配就是现场那份（跨 3 个 host）。
+
+    只读不改：这一函数不丢行、不重排、不动档位，也不参与任何一次取舍。
+    host 数由既有的 `_registrable_domain` 数 —— 域名身份在这里不许有第二个作者。
+    """
+    clusters: list[dict] = []
+    for r in results:
+        key = _document_title(r.title)
+        if len(key) < _DOC_TITLE_MIN_CHARS:
+            continue
+        target = next((c for c in clusters if any(_same_name(key, k) for k in c["keys"])), None)
+        if target is None:
+            clusters.append({"keys": {key}, "rows": [r]})
+        else:
+            target["keys"].add(key)
+            target["rows"].append(r)
+    groups: list[dict] = []
+    for c in clusters:
+        rows = sorted(c["rows"], key=lambda r: r.position)
+        # 第二条腿：共享一段 literal 的行才算同一份文件（产品名相同、正文不同的那一族在这里被切掉）。
+        # 够不着闸门的行**留在响应里**，只是不进组 —— 一维读数不许拿走任何一行。
+        #
+        # 比的是**分量**，不是"代表行的追随者"（R02-047 量到的第二格）：从前只跟已入组的行比，
+        # 而第一行是按 position 挑的 —— 一簇里若排在最前面的那份是"标题撞名而正文不同"，
+        # 剩下两份真镜像即使逐字共享 271 个字也永远进不了组（实测 q024：五行一簇，
+        # web.dev 与它的镜像都在里面，组里却只剩代表行 ⇒ 整个响应一个组都不出）。
+        # 分量把"与组内任何一行共享"这句话按它本来想说的那样实现：一份文件的两个拷贝之间
+        # 不需要有人先被承认，它们自己就该连上。
+        flats = [re.sub(r"\s+", " ", (r.snippet or "")).lower() for r in rows]
+        comps: list[list[int]] = []
+        for i in range(len(rows)):
+            joined = [g for g in comps
+                      if any(_shares_document_text(flats[i], flats[j]) for j in g)]
+            if joined:
+                merged = [i]
+                for g in joined:
+                    merged.extend(g)
+                comps = [g for g in comps if g not in joined]
+                comps.append(merged)
+            else:
+                comps.append([i])
+        for comp in comps:
+            members = sorted((rows[i] for i in comp), key=lambda r: r.position)
+            hosts = {d for d in (_registrable_domain(r.url) for r in members) if d}
+            if len(members) < 2 or len(hosts) < 2:
+                continue  # 同站同名 = 实测的假组形状，一份都不并
+            groups.append({
+                "positions": [r.position for r in members],
+                "hosts": len(hosts),
+                "title": members[0].title,
+            })
+    return sorted(groups, key=lambda g: g["positions"][0])
+
+
+def compute_fetch_hint(results: list[SearchResult], query: str = "",
+                       same_document_groups: list[dict] | None = None) -> str:
     if not results:
         return ""
     high = sum(1 for r in results if r.fetch_relevance == "high")
     med = sum(1 for r in results if r.fetch_relevance == "med")
     low = sum(1 for r in results if r.fetch_relevance == "low")
+    # 这一维与档位无关，所以两条return（有没有 reranker）都得带上它：一份公告被四个地址挂着，
+    # 在冷启动那一轮一样会被读成四个来源。默认自己数（一位作者），调用方带来现成的组时不重算。
+    if same_document_groups is None:
+        same_document_groups = _same_document_groups(results)
+    doc_note = ""
+    for g in (same_document_groups or []):
+        # 这份账必须报**位置**：顶层那颗 `families_answered_of_asked` 给的是家数，而调用方要
+        # 知道的是"我手里的这四行其实是一份文件"——四行分布在哪儿只有逐行位置说得出。
+        doc_note += (f"Rows {', '.join(str(p) for p in g['positions'])} carry the same title on "
+                     f"{g['hosts']} different hosts - that is ONE document republished, not "
+                     f"{g['hosts']} independent sources (`engines_consensus` counts index "
+                     "families, nothing else counts documents). ")
+    # R02-002：同一把尺子两条路要说得出走的是哪条。`_filter_irrelevant_results` 只在
+    # **全轮**一条都不命中查询词时才弃发，于是「六行里四行零重合」的那一轮四行照留 ——
+    # 判据本身是对的（全部离题才是噪声信号，一部分不是），坏在回执里没有这一维：
+    # 读者分不清"产品认为它们相关"与"闸只管整轮"，也没法预测下一发拿到哪一种
+    # （实测 16 发真 SERP / 86 行里 14 行零重合，3 轮是这一族）。
+    # 数零重合用的就是词面互证那一位作者（R02-046 之后它对中文也长得出腿），
+    # 这一维与档位无关，所以两条 return 都得带上它 —— 与 `doc_note` 同一个理由。
+    surface_note = ""
+    q_terms = _query_terms(query) if query else set()
+    if q_terms:
+        zero = sum(1 for r in results if not any(
+            t in f"{r.title} {r.snippet} {r.url}".lower() for t in q_terms))
+        if 0 < zero < len(results):
+            surface_note = (f"{zero} of {len(results)} rows carry no query term at all and were "
+                            "kept: the surface-miss gate drops a round only when NO row carries "
+                            "one (all of them missing is the noise signal, some is not), so this "
+                            "count is a reading and not a verdict on those rows. ")
     if all(r.relevance_raw is None for r in results):
         # S3：冷启动那把 `1.0 - i/n` 此前会铸出 "high"，读起来像置信度。现在位置尺
         # 只准降级，所以这里的 high 恒为 0 —— 而"恒为 0"必须说得出原因，否则调用方
         # 读到的是"这一轮没有一条值得抓"，实情是"这一轮没有人判断过值不值得抓"。
         return (f"{high} high, {med} med, {low} low. no reranker on this round: order is "
                 "cross-engine consensus + engine position, so nothing is claimed 'high' "
-                "(no relevance verdict was made) - web_read what matches your need.")
-    return (f"{high} high, {med} med, {low} low. Ranked by relevance_score; "
-            f"web_read what fits your need (high first, but a lower tier can be the right call).")
+                f"(no relevance verdict was made) - web_read what matches your need. "
+                f"{surface_note}{doc_note}"
+                .rstrip())
+    # 两把尺各有作者，那句话以前只报了一位：`fetch_relevance` 在 raw 存在时**只读 raw**
+    # （`_tier`），而 `relevance_score` 是本轮内的 min-max 座位 —— 第一名按构造恒为 1.0，
+    # 一整轮全离题时也是 1.0。旧句写「Ranked by relevance_score」，于是逐行那颗 1.0 顶着
+    # 一句"这是排名依据"的背书站在一个 0 high 的轮次里（实测：raw 最高 0.0295）。
+    top_raw = max((r.relevance_raw or 0.0) for r in results)
+    hint = (f"{high} high, {med} med, {low} low. Tiers are minted from `relevance_raw` "
+            "(the model's own agreement), not from `relevance_score`: that one only orders "
+            "these rows, and its 1.0 on the first row is a seat within this round, not a "
+            "percentage of correctness. ")
+    if not high:
+        high_at, _med_at = _raw_thresholds()
+        hint += (f"Nothing cleared the worth-fetching line (raw >= {high_at:g}) - the "
+                 f"best agreement this round returned is {top_raw:.2f}, so the first row's "
+                 "1.0 says only 'least off among these'. ")
+    # R02-030 那一维：档位有没有第二根桩。`_query_terms` 是词面互证唯一的既有作者，R02-046 之前
+    # 它对中文永远交出空集，所以那句话过去挂在「词集为空」上；现在中文有了相邻二元组这一维，
+    # 空集只剩符号那族 —— 于是这把尺改成量**本轮自己**：查询交出的词面里有几个真的出现在这些行上。
+    # 线画在「一根桩」而不是查询的长度上：实测 16 发已入账的真轮，corroborated ≤ 1 的只有 3 发
+    # （`那个` 那一发，和两发被整轮清掉的噪声），其余 13 发在 2–11；而 F23 已经量过任何长度线
+    # 都会误伤正常的短中文问法。词面薄是这一轮的证据形状，不是对用户提问质量的判决。
+    q_terms = _query_terms(query) if query else set()
+    if query and not q_terms:
+        hint += (f"No query term corroborates any row this round (`{len(query.strip())} "
+                 "characters` tokenized to nothing this scorer can check), so every tier here "
+                 "rests on the model's text agreement alone - a single post, not two. If this "
+                 "query was a follow-up whose subject lives in the conversation, name the "
+                 "subject: agreement against a few characters is not a topic verdict. ")
+    elif q_terms:
+        _blob = " ".join(f"{r.title} {r.snippet} {r.url}".lower() for r in results)
+        corroborated = sum(1 for t in q_terms if t in _blob)
+        if corroborated <= 1:
+            hint += (f"Only {corroborated} of {len(q_terms)} query term(s) appear anywhere in "
+                     f"these rows (`{len(query.strip())} characters` on this side, nothing on "
+                     "the conversation this response cannot see), so every tier here rests on "
+                     "the model's text agreement plus that one surface hit - a single post, "
+                     "not two. If this query was a follow-up whose subject lives in the "
+                     "conversation, name the subject: agreement against a few characters is "
+                     "not a topic verdict. ")
+    return hint + surface_note + doc_note + ("web_read what fits your need (high first, but a "
+                                             "lower tier can be the right call).")
 
 
 def _drop_causes(*, rank_dropped: int, low_dropped: int, off_topic: int,
@@ -551,7 +986,9 @@ def _recall_levers(engine_blocked: list[str], engine_empty: list[str], *,
             # "8 家掉到 2 家"这件事在响应里就一处都读不出来。
             bits.append(f"the pool is down to {max(0, asked - len(engine_blocked))} of the "
                         f"{asked} engines it asked")
-        who = ("; cooling right now: "
+        # 括号里第一眼必须是一个词，不是一个分号（R01-047）：这一段从前自带 "; " 前缀，
+        # 那时它接在别的话后面；现在它开在一对括号里，接缝由本句的作者收，不由被拼的段落带。
+        who = ("cooling right now: "
                + ", ".join(f"{n} {s:.0f}s" for n, s in cooling) + "; "
                + f"the pool is whole again in {int(math.ceil(cooling[0][1]))}s - "
                if cooling else "")
@@ -565,6 +1002,24 @@ def _recall_levers(engine_blocked: list[str], engine_empty: list[str], *,
     if not bits:
         return ""
     return "For more recall: " + "; ".join(bits) + "."
+
+
+def _cooling_wait(engines: list[str]) -> str:
+    """"还要等多久"那一段：`in 61s (brave 41s, so360 61s cooling)`，量不到就交白串。
+
+    F11 把这个数交给了 `_recall_levers`，而那一句只在一轮**带回了结果**时才写。零结果
+    那一发自己写着 "Retry in a moment" —— 三个读法里它是第三个（R01-016，实测：三家正在
+    冷却 41s/61s/611s，`error` 与 `next_action` 都说"a moment"）。调用方要的从来不是
+    安慰，是一个能照着等的数；`_is_circuit_open` 用的就是这份表，数本来就量得到。
+
+    与 F11 同一个门槛：量不到不写秒。空串就是"这里没有观测"，由各调用点保留它自己的
+    兜底话（"in a moment"），不编一个兑现不了的数。
+    """
+    cooling = _cooling_seconds(engines)
+    if not cooling:
+        return ""
+    who = ", ".join(f"{n} {s:.0f}s" for n, s in cooling)
+    return f"in {int(math.ceil(cooling[0][1]))}s ({who} cooling)"
 
 
 def _cooling_seconds(engine_blocked: list[str]) -> list[tuple[str, float]]:
@@ -595,13 +1050,39 @@ def _preemption_note(engine_preempted: list[str]) -> str:
             f"stop point; raise max_results or name them in engines=[...] to ask them anyway.")
 
 
+def _way_out_for_a_dead_end(engine_detail: Optional[list[dict]] = None) -> str:
+    """一轮什么都没交回来时，那句「下一步」的唯一作者：要么点名这一发答过的引擎，
+    要么在没人答的时候指向真有的那把自检 —— 不许留一个让调用方自己填空的参数。
+
+    实测的洞（`review/.runtime/p4/f40_measure.py`，三发零结果形状）：今天的话术写的是
+    `retry with engines=[...]` —— 一个**空参数**，而同一发的 `engine_detail` 里已经写着
+    bing 与 yandex `verdict=healthy`；另一发只指 `DHOLE_SEARCH_PROXY`（环境变量，调用方
+    按不下去）。名字表读的就是上线那一份 `engine_detail`（`_engine_detail_rows` 是唯一
+    分类者），所以这里不再发明第二种判据；`stale` / `upstream_empty` / `not_instrumented`
+    都不算「答过」—— 一个按下去不会响的名字，比不给名字更坏。
+    """
+    rows = engine_detail or []
+    answered = [str(r.get("name")) for r in rows if r.get("verdict") == "healthy"]
+    if answered:
+        listed = ", ".join(f'"{n}"' for n in answered)
+        return (f'Ask only the engines that answered this round: engines=[{listed}] - '
+                f"these come from this round's own verdict table "
+                f"({len(rows)} engine(s) were asked), and answering this round is "
+                f"not a promise they answer the next one.")
+    return ('nothing on this pool answered healthily this round, so no engine name is '
+            'worth re-asking yet - `sys_state(show=["engine_state"])` is the self-check '
+            'for this: it says who is cooling and for how long, and which engine read 0 '
+            'rows out of a page that carried result containers.')
+
+
 def _search_next_action(results: list[SearchResult], engine_blocked: list[str],
                          error: str, engines_used: list[str] | None = None, *,
                          engine_empty: list[str] | None = None,
                          engine_preempted: list[str] | None = None,
                          total_engines: int | None = None,
                          rerank_mode: str = "",
-                         replay: bool = False) -> str:
+                         replay: bool = False,
+                         engine_detail: Optional[list[dict]] = None) -> str:
     """A judgment-empowering nudge, not a rigid directive. The ranking is a HINT:
     the agent may legitimately need a lower-ranked result, so we point it at the
     signals (relevance_score + fetch_relevance) and trust it to pick, instead of
@@ -619,10 +1100,10 @@ def _search_next_action(results: list[SearchResult], engine_blocked: list[str],
             return ("No results: the engines answered, and dhole discarded every "
                     "answer because it held none of the query's terms. On a normal "
                     "query that means something on this network replied on the "
-                    "engine's behalf - rephrasing cannot fix it. Check the "
-                    "connection, or retry with engines=[...] to ask a different "
-                    "index. The discarded titles are named in `error` so you can "
-                    "judge for yourself whether the discard was right.")
+                    "engine's behalf - rephrasing cannot fix it. "
+                    + _way_out_for_a_dead_end(engine_detail)
+                    + " The discarded titles are named in `error` so you can "
+                      "judge for yourself whether the discard was right.")
         # 缺 key 是配置问题不是查询问题（评审R1刀3）：error 已点名 env，next_action
         # 却还在教「Rephrase」——换说法修不了一把不存在的钥匙。两份拼写都收：
         # 单 keyed 引擎的 raise 带 "Engine '…'" 前缀，search_json 的不带。
@@ -632,16 +1113,30 @@ def _search_next_action(results: list[SearchResult], engine_blocked: list[str],
                     "which is not set. Set it in the host's environment and restart "
                     "the host - rephrasing the query cannot fix a missing key.")
         if error and ("rate-limited" in error.lower() or "timed out" in error.lower() or engine_blocked):
-            return ("No results (engines rate-limited/timed out). Retry in a moment, "
-                    "or set DHOLE_SEARCH_PROXY for sustained heavy use.")
+            return ("No results (engines rate-limited/timed out). Retry "
+                    + (_cooling_wait(engine_blocked) or "in a moment")
+                    + ", or set DHOLE_SEARCH_PROXY for sustained heavy use. "
+                    + _way_out_for_a_dead_end(engine_detail))
         if rerank_mode == "neural":
             return ("No results. Rephrase with more specific / different terms "
-                    "(mode=neural is already the semantic matcher this call used).")
-        return "No results. Rephrase (more specific / different terms) or try mode=neural for semantic matching."
+                    "(mode=neural is already the semantic matcher this call used). "
+                    + _way_out_for_a_dead_end(engine_detail))
+        return ("No results. Rephrase (more specific / different terms) or try "
+                "mode=neural for semantic matching. "
+                + _way_out_for_a_dead_end(engine_detail))
     high = [r for r in results if r.fetch_relevance == "high"]
-    base = ("Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). "
-            "web_read the ones that match what you actually need - the ranking is a hint, "
-            "not a directive; a lower-ranked result can be the right one, so trust your judgment.")
+    if all(not (r.engines_consensus or "") for r in results):
+        # Vertical-only round: telling the reader to compare cross-engine
+        # consensus would point at a field that is empty by design.
+        base = ("Results are ranked by relevance. These rows come from vertical "
+                "sources, so `engines_consensus` is empty by design - `source` names "
+                "the backend and `source_detail` carries the per-source receipt. "
+                "web_read the ones that match what you actually need - the ranking "
+                "is a hint, not a directive.")
+    else:
+        base = ("Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). "
+                "web_read the ones that match what you actually need - the ranking is a hint, "
+                "not a directive; a lower-ranked result can be the right one, so trust your judgment.")
     if not high:
         base += (" No 'high' matches - if none of these fit, rephrase (more specific)."
                  if rerank_mode == "neural" else
@@ -767,34 +1262,167 @@ _PARAM_REPAIR_HINTS = (
     ("Invalid freshness:", "freshness= is a preset window ('day', 'week', 'month', "
                            "'year'); for an exact span pass after= / before= dates "
                            "instead."),
+    ("Invalid source:", "sources= is a list of source kinds: web, news, academic, "
+                        "qa, code, community. Omit it for the web pool; add a vertical "
+                        "kind only when you want that index."),
+    ("sources must be", 'sources= is a list, e.g. ["web", "academic"] - one source '
+                        "is still a list."),
+    ("Invalid sort:", "sort= is 'relevance' (default) or 'newest'. 'newest' uses "
+                      "each row's stated publish day; undated rows stay after the "
+                      "dated ones."),
+    ("sort must be", "sort= is the string 'relevance' or 'newest'."),
     ("is not a date", "after= / before= take an ISO date ('2026-09-20') or a relative "
                       "span ('30d') - an unreadable date is refused instead of being "
                       "dropped, because a silently ignored window reads as 'no limits'."),
+    # 这三颗是 R02-136 把首词那把尺的名单改成扫出来之后才现身的：它们与上面那些是同一位
+    # 作者（`_param_refusal`），却因为不在名单里而由措辞顶替了 code（`find_similar` /
+    # `fetch_min_consensus`），而同扇门别颗参数拒绝交的是 `invalid_request` —— 一颗输入
+    # 在同一位裁判面前不该读出两种种类（评审 R02-121 / R02-139）。
+    ("find_similar requires a url", "pass url= with the page to be similar TO (mode="
+                                    "'find_similar' takes a URL instead of a query), "
+                                    "or pass that URL as the query."),
+    ("fetch_min_consensus must be", "drop fetch_min_consensus, or set it to 2 or more - "
+                                    "every row already carries one contributing family, "
+                                    "so a floor of 1 filters nothing."),
+    ("fetch_min_consensus only applies", "add fetch_content=true (the floor gates the "
+                                         "fetched copies), or drop fetch_min_consensus."),
 )
 
 
+def _nothing_was_searched() -> str:
+    """搜索门上那半句「这一发什么也没发生」—— 词由跨门那一位作者按门类给（评审 R02-088/089）。
+
+    量到的形状（`review/.runtime/p1/r96_declaration.json`，12 发请求前拒绝）：同一扇
+    `web_search` 上五种说法加一处没有 —— 三句这句话、两句**什么都没有**（find_similar 与
+    fetch_min_consensus：自己写了出路的那两颗站点）、一句 `no request was made`（空 query
+    的手搓信封）。后两处不是选词分歧，是**没有作者**：那半句从前焊在 `_param_repair_hint` 的
+    返回值里，而 `_param_refusal` 写的是 `next_action or _param_repair_hint(msg)` ——
+    调用点自带出路，声明就整条被顶掉。
+
+    修法句可以没有（表里查不到就回空串），声明句不可以没有，所以它不能住在兜底支里。现在它
+    是拒绝信封的属性，由 `_param_refusal` 装配。而**词本身**的作者又上移了一层到
+    `context.nothing_went_out()`：那一处按门类逐扇声明，本门的类别是 `search`，
+    要判的事是"有没有哪家索引被问过"，不是"对面收没收到"（评审 R02-084/087/089 同一条轴）。
+    """
+    from dhole_mcp.context import nothing_went_out
+    return nothing_went_out("web_search")
+
+
 def _param_repair_hint(msg: str) -> str:
-    """The repair sentence for a pre-request parameter refusal ('' = nothing to add)."""
+    """The repair sentence for a pre-request parameter refusal ('' = nothing to add).
+
+    只交修法句。从前这里把声明句焊在前面（`f"{declaration} {hint}"`），于是「调用点没写
+    next_action」成了声明存在的前提 —— 装配搬到 `_param_refusal` 之后，两件事各自独立。
+    """
     for prefix, hint in _PARAM_REPAIR_HINTS:
         if prefix in msg:
-            return f"Nothing was searched - no engine was asked. {hint}"
+            return hint
     return ""
 
 
 def _param_refusal(query: str, msg: str, *, next_action: str = "",
-                   duration_ms: float = 0.0) -> SearchResponseModel:
-    """一颗参数写错了的答复，三格齐全。
+                   duration_ms: float = 0.0,
+                   input_refusal: bool = False) -> SearchResponseModel:
+    """一颗参数写错了的答复，三格齐全 + 把手一格。
 
     `_invalid_request_result` 那一族从来是 error + summary + next_action 一起给；这一族
     从前只给到 error（有时连 next_action 也没有），而**成功**的搜索是带 summary 的
     （"Searched 'x' -> 3 results…"）—— 于是一行用量日志里，失败那一行没有标签可读。
     这里不套 `invalid_request:` 前缀：那颗参数名开头是
     `test_the_enum_argument_values_are_checked_by_dhole` 立的规矩，前缀会把第一格词占掉。
+    `input_refusal=True` 是另一种脸（评审 R02-131）：**一颗 URL 被守卫挡下**，那一族的句子
+    在别的五扇门上都是 `invalid_request: <守卫原话>`，同一颗输入在同一位裁判面前不该读出
+    两种种类 —— 那一支因此按别扇的写法补前缀（补法与 `crawl._err` / `_cred_refusal` 同一处
+    惯例），参数名开头那族一个字不动。
+
+    出路那一格永远是「声明 + 修法句」：修法句可以缺（表里没有这条），声明不可以缺。
+    `diagnosis` 由模型自己问表（`models.RefusalHandle`）：这一族的 code 与别扇的参数拒绝
+    同一颗 `invalid_request`，而写它的是判据表那一行，不是这里。
     """
+    if input_refusal and not msg.startswith("invalid_request:"):
+        msg = f"invalid_request: {msg}"
+    way_out = (next_action or _param_repair_hint(msg)).strip()
+    clause = _nothing_was_searched()
+    declaration = way_out if way_out.startswith(clause) else f"{clause} {way_out}".strip()
     return SearchResponseModel(
         query=query, results=[], total_results=0, duration_ms=duration_ms,
-        error=msg, next_action=next_action or _param_repair_hint(msg),
+        error=msg, next_action=declaration,
         summary=f"invalid request · {_summary_label(msg)}")
+
+
+# 源页那条腿的五种看见 → 本门的一句话 + 本门的出路。名字一律问跨门那张表：同一种事在
+# 取回门上已经叫 `bot_wall` / `no_content` / `extraction_collapsed` / `http_error_<status>`，
+# 为这条腿另造名字就是让同一个事实有两个 code（评审 R02-138 的修法边界）。
+_SOURCE_LEVER_BY_REASON = {
+    "blocked": ("web_read that URL with force_fetcher='stealthy', or point "
+                "find_similar at a page that answers - a wall has no page text to "
+                "rank candidates against"),
+    "no-response": ("confirm the address answers at all (web_read it, or check the "
+                    "host/port) - find_similar ranks against the source page, so "
+                    "there is nothing to rank until it replies"),
+    "http-error": ("pass a url= that answers 200 (or web_read it first to see what "
+                   "is there) - the source page is what find_similar compares "
+                   "candidates against"),
+    "no-bytes": ("web_read that URL to see the empty response (it may be a redirect "
+                 "target or an API endpoint that needs a different method), then "
+                 "pick a page with text"),
+    "no-text": ("web_read that URL with extraction_type='html' (or schema=) to see "
+                "what the markup actually holds - find_similar needs page text, and "
+                "a JS shell gives it none"),
+}
+
+
+def _source_leg_sentence(src: dict) -> str:
+    """源页这条腿没拿到正文时的那一句 —— 每种原因一句，句首带在册的名字。"""
+    reason = src.get("reason") or ""
+    status = int(src.get("status") or 0)
+    detail = str(src.get("detail") or "")
+    if reason == "blocked":
+        # 用这一族自己的产地牌子（`bot_wall_detected`），不是 code 名本身：表里的杠杆与
+        # retryable 挂在牌子上，裸 code 名进去会被当成无杠杆的陌生串。
+        return ("bot_wall_detected: the source page for find_similar is behind a wall - "
+                "it printed a check it wants answered, so no page text reached the "
+                "ranking step")
+    if reason == "no-response":
+        code = classify_error_text(detail)[0] or "source_unreadable"
+        return (f"{code}: the source page for find_similar never answered"
+                + (f" - {detail[:160]}" if detail else ""))
+    if reason == "http-error":
+        return (f"{status_error_sentence(status)} - the source page for find_similar "
+                f"answered {status} and gave no text to compare candidates against")
+    if reason == "no-bytes":
+        return ("no_content: the source page for find_similar answered 200 with zero "
+                "bytes - there is no page text to compare candidates against")
+    if reason == "no-text":
+        return ("extraction_collapsed: the source page for find_similar answered with "
+                "markup but no readable text came out of it")
+    return ("source_unreadable: the source page for find_similar produced no text "
+            "and no cause was recorded for it")
+
+
+def _source_leg_refusal(url: str, src: dict, *,
+                        duration_ms: float = 0.0) -> SearchResponseModel:
+    """源页那条腿失败的一封答复：申报 + summary + error + 出路，一处装配（评审 R02-140）。
+
+    从前这里是门里手搓的一封：`error` 是「(blocked or offline)」那种两可的话，`next_action`
+    行首没有本门的申报，`summary` 整格缺席 —— 而同门九张参数拒绝脸两样都齐（`r278b`）。
+    这不借 `_param_refusal` 的壳：那颗申报的是「参数写错了」，而这一族的句子说的是「源页
+    没答上来」，`code` 也不该是 `invalid_request`。`diagnosis` 仍然由模型问表 —— 句首那个
+    名字就是它的 code，所以 `retryable` 跟着原因走，不再整颗 True。
+    """
+    msg = _source_leg_sentence(src)
+    lever = _SOURCE_LEVER_BY_REASON.get(src.get("reason") or "",
+                                        _SOURCE_LEVER_BY_REASON["no-response"])
+    clause = _nothing_was_searched()
+    # 建议位与把手不许互相否决（R02-137 立的那条法）：表说"重发同一发可能变"的时候，
+    # 出路里要真的写着 retry；表说不可能变的时候，出路里不许写着 retry。
+    if classify_error_text(msg)[1]:
+        lever = f"Retry this exact call once - it can come out differently. {lever}"
+    way_out = f"{clause} {lever}"
+    return SearchResponseModel(
+        query=url, results=[], total_results=0, duration_ms=duration_ms,
+        error=msg, next_action=way_out,
+        summary=f"source page unreadable · {_summary_label(msg)}")
 
 
 def _validate_engines(engines):
@@ -819,6 +1447,43 @@ def _validate_freshness(freshness):
     if freshness not in ("day", "week", "month", "year"):
         raise SecurityError(f"Invalid freshness: {freshness!r} (day|week|month|year)")
     return freshness
+
+
+def _validate_sources(sources):
+    """Which pools this call searches. Default is the web pool alone."""
+    from dhole_mcp.search_verticals import SOURCE_KINDS
+    if sources is None or sources == []:
+        return ["web"]
+    if isinstance(sources, str):
+        sources = [sources]
+    if not isinstance(sources, list):
+        raise SecurityError(
+            f"sources must be a list, got {type(sources).__name__} "
+            f"(one or more of {', '.join(SOURCE_KINDS)})")
+    out: list[str] = []
+    for value in sources:
+        if not isinstance(value, str):
+            raise SecurityError(
+                f"Invalid source: {value!r} (one of {', '.join(SOURCE_KINDS)})")
+        key = value.strip().lower()
+        if key not in SOURCE_KINDS:
+            raise SecurityError(
+                f"Invalid source: {value!r} (one of {', '.join(SOURCE_KINDS)})")
+        if key not in out:
+            out.append(key)
+    return out
+
+
+def _validate_sort(sort):
+    if sort is None or sort == "":
+        return "relevance"
+    if not isinstance(sort, str):
+        raise SecurityError(
+            f"sort must be a string (relevance|newest), got {type(sort).__name__}")
+    key = sort.strip().lower()
+    if key not in ("relevance", "newest"):
+        raise SecurityError(f"Invalid sort: {sort!r} (relevance|newest)")
+    return key
 
 
 # How many days back each preset reaches. The engines' own granularity (measured:
@@ -1074,7 +1739,7 @@ def _validate_mode(mode):
     return mode.lower()
 
 
-def _rerank_absent_reason() -> str:
+def _rerank_absent_reason(attempted_here: bool = False) -> str:
     """Why neural rerank did not run, phrased so the caller can act on it.
 
     The old fallback said "install dhole-mcp[all] and retry" whenever no reason
@@ -1082,13 +1747,26 @@ def _rerank_absent_reason() -> str:
     reranker simply had not loaded yet. Measured in a live response: "neural
     rerank is NOT active despite its deps being installed ... install
     dhole-mcp[all] and retry" - advice that contradicts its own first clause.
+
+    主语是这一发（R02-020 复验后剩下的那一半）：冷启动的第一发为一次失败的下载付了
+    8043 ms，同进程的第二发 1648 ms 里一个包都没发（`ensure_reranker` 见过失败就不在本
+    进程重试），而回执交回的是**逐字相同的一句过去式**。两种情况下该做的事完全不同 ——
+    前者是等/换网/离线放模型，后者是再发一百遍也不会变。那颗毫秒数只从 `reranker`
+    那本账里读（`last_attempt_ms()`），这句话不自己掐表。
     """
     reason = unavailable_reason()
-    if reason:
+    if not reason:
+        return ("no reason recorded - the reranker has not run in this process yet "
+                "(the first search may still be loading it). `dhole -v` shows whether "
+                "the model is installed and cached.")
+    cost = round(last_attempt_ms())
+    if not cost:
         return reason
-    return ("no reason recorded - the reranker has not run in this process yet "
-            "(the first search may still be loading it). `dhole -v` shows whether "
-            "the model is installed and cached.")
+    if attempted_here:
+        return (f"{reason} - this call made that attempt and waited {cost} ms for it; "
+                "one attempt per process, so a later call will not retry it")
+    return (f"{reason} - that attempt cost {cost} ms earlier in this process and this "
+            "call did not retry it (one attempt per process)")
 
 
 def _similarity_missed_note(ran: str, derived_query: str, why: str) -> str:
@@ -1111,7 +1789,8 @@ def _similarity_missed_note(ran: str, derived_query: str, why: str) -> str:
 
 
 def _rank(query: str, ranked: list[RawResult], mode: str, min_relevance: float = 0.0,
-          min_raw_relevance: float = 0.0, stats: dict | None = None):
+          min_raw_relevance: float = 0.0, stats: dict | None = None,
+          attempted_here: bool = False):
     """Apply neural rerank (the ONLY reranker; BM25 was removed as redundant -
     neural matches its speed and ranks better). Returns (ranked_list, scores,
     mode_used, note).
@@ -1147,7 +1826,7 @@ def _rank(query: str, ranked: list[RawResult], mode: str, min_relevance: float =
                               min_raw_relevance=min_raw_relevance, stats=stats)
         if pairs is not None:
             return [r for r, _ in pairs], [s for _, s in pairs], "neural", note
-        reason = _rerank_absent_reason()
+        reason = _rerank_absent_reason(attempted_here)
         if mode == "neural":
             note = "neural rerank unavailable - using consensus + engine-position order. " + reason
         elif not reason.startswith("neural rerank needs dhole-mcp[all]"):
@@ -1297,6 +1976,7 @@ def _build_results(query: str, ranked: list[RawResult], scores: Optional[list[fl
     分在两个地方，等于少了一半。
     """
     total = len(ranked)
+    raw_high, raw_med = _raw_thresholds()
     out: list[SearchResult] = []
     for i, r in enumerate(ranked):
         score = scores[i] if scores and i < len(scores) else 0.0
@@ -1305,13 +1985,20 @@ def _build_results(query: str, ranked: list[RawResult], scores: Optional[list[fl
         # 自己看到的 badge，而不是只能信或不信。
         raw = getattr(r, "neural_raw", None)
         src = ",".join(r.sources) if r.sources else (r.source or "")
+        vertical = bool(getattr(r, "vertical", False))
         m = max(1, total_families)
         n = min(max(1, getattr(r, "consensus", 1)), m)
-        # 只有一个家族时没有"佐证"可报告 —— 不再伪装成一个比率。
-        consensus = f"{n} of {m}" if m > 1 else "1 of 1 (no corroboration)"
-        if m > 1 and basis and basis != "full":
-            # `single_family` 已经在上面那句里说尽了，不再叠第二个括号。
-            consensus = f"{consensus} ({basis})"
+        if vertical:
+            # A vertical source is not a web index family; there is no
+            # cross-engine consensus to report. `source`/`source_detail` say
+            # where the row came from.
+            consensus = ""
+        else:
+            # 只有一个家族时没有"佐证"可报告 —— 不再伪装成一个比率。
+            consensus = f"{n} of {m}" if m > 1 else "1 of 1 (no corroboration)"
+            if m > 1 and basis and basis != "full":
+                # `single_family` 已经在上面那句里说尽了，不再叠第二个括号。
+                consensus = f"{consensus} ({basis})"
         # 一颗分类器、两个字段：此前这一行同时用两套域名表 —— `source_type` 走
         # `_source_type`，`official` 走 `classify_source`，于是同一个字段名在搜索行
         # 和抓取行上是两套枚举（搜索行产不出 github/qa/ecommerce/docs-site，抓取行
@@ -1322,7 +2009,8 @@ def _build_results(query: str, ranked: list[RawResult], scores: Optional[list[fl
             title=r.title, url=r.url, snippet=r.snippet, source=src,
             position=i + 1, relevance_score=round(score, 4),
             relevance_raw=raw,
-            fetch_relevance=_tier(score, i + 1, total, raw),
+            fetch_relevance=_tier(score, i + 1, total, raw,
+                                  raw_high=raw_high, raw_med=raw_med),
             engines_consensus=consensus,
             source_type=st,
             official=official,
@@ -1416,13 +2104,23 @@ def gate_by_consensus(
     if min_consensus < 2 or not candidates:
         return candidates, [], ""
     parsed = [(r, _parse_consensus(r.engines_consensus)) for r in candidates]
+    # A vertical row has an empty consensus string: there is no web family to
+    # corroborate it, so this gate has nothing to judge. Passing it through is
+    # the only reading that does not turn "not applicable" into "zero said yes".
     # 分母 ≤ 1：这一轮没有任何一行可能被"佐证"，地板在这里没有意义。
     if all(m <= 1 for _, (_, m) in parsed):
+        if all(not (r.engines_consensus or "") for r in candidates):
+            return candidates, [], (
+                f"fetch_min_consensus={min_consensus} not applied: these rows carry "
+                "no web index consensus (they come from vertical sources), so the "
+                "floor has nothing to judge")
         return candidates, [], (
             f"fetch_min_consensus={min_consensus} not applied: the pool returned a "
             f"single index family, so no result could be corroborated")
-    kept = [r for r, (n, _) in parsed if n >= min_consensus]
-    skipped = [r for r, (n, _) in parsed if n < min_consensus]
+    kept = [r for r, (n, _) in parsed
+            if not (r.engines_consensus or "") or n >= min_consensus]
+    skipped = [r for r, (n, _) in parsed
+               if (r.engines_consensus or "") and n < min_consensus]
     if not kept:
         return [], skipped, (
             f"fetch_min_consensus={min_consensus} dropped all {len(candidates)} "
@@ -1432,6 +2130,189 @@ def gate_by_consensus(
         f"fetch_min_consensus={min_consensus}: fetched {len(kept)}, "
         f"skipped {len(skipped)} uncorroborated")
 
+
+
+def _source_note(kinds: list[str], detail: list[dict], *,
+                 window: Optional[dict] = None) -> str:
+    """One sentence for summary: which vertical sources ran and what they gave."""
+    if not kinds:
+        return ""
+    bits: list[str] = []
+    for row in detail:
+        source = row.get("source", "")
+        backend = row.get("backend", "")
+        status = row.get("status", "error")
+        count = int(row.get("count", 0) or 0)
+        label = f"{source}={backend}" if backend else source
+        if status == "ok":
+            delivered = int(row.get("delivered", count) or 0)
+            suffix = (f", {delivered} in this response"
+                      if delivered != count else "")
+            bits.append(f"{label} {count} row(s){suffix}")
+        elif status == "empty":
+            err = str(row.get("error", "") or "")[:90]
+            bits.append(f"{label} empty" + (f" ({err})" if err else ""))
+        else:
+            err = str(row.get("error", "") or "")[:90]
+            bits.append(f"{label} {status}" + (f" ({err})" if err else ""))
+    if not bits:
+        bits.append("no vertical report")
+    line = "sources: " + ", ".join(bits)
+    if window:
+        drops: list[str] = []
+        if window.get("dropped_after"):
+            drops.append(f"{window['dropped_after']} older than after=")
+        if window.get("undated_dropped_after"):
+            drops.append(f"{window['undated_dropped_after']} undated dropped by after=")
+        if window.get("dropped_before"):
+            drops.append(f"{window['dropped_before']} newer than before=")
+        if drops:
+            line += " | vertical date window dropped " + ", ".join(drops)
+    if window:
+        if window.get("pool_error"):
+            line += f" | web pool failed: {str(window['pool_error'])[:120]}"
+        if window.get("task_error"):
+            line += f" | vertical task failed: {str(window['task_error'])[:120]}"
+    return line
+
+
+def _source_failure_note(detail: list[dict]) -> str:
+    bad = [row for row in detail
+           if row.get("status") not in ("ok", "empty")]
+    if not bad:
+        return ""
+    bits = []
+    for row in bad:
+        label = f"{row.get('source', '')}={row.get('backend', '')}"
+        status = row.get("status", "error")
+        err = str(row.get("error", "") or "")[:90]
+        bits.append(f"{label} {status}" + (f" ({err})" if err else ""))
+    return "vertical source(s) did not answer: " + ", ".join(bits)
+
+
+def _vertical_dead_end(detail: list[dict], task_error: str = "") -> str:
+    if not detail:
+        if task_error:
+            return ("No results from the requested vertical source(s): the fan-out "
+                    f"failed before any source reported ({task_error}). "
+                    "Rephrase, or try sources=['web'].")
+        return "No results: no vertical source was asked."
+    bits = []
+    for row in detail:
+        label = f"{row.get('source', '')}={row.get('backend', '')}"
+        status = row.get("status", "error")
+        err = str(row.get("error", "") or "")[:120]
+        bits.append(f"{label} {status}" + (f" ({err})" if err else ""))
+    return ("No results from the requested vertical source(s): "
+            + ", ".join(bits) + ". Rephrase, or try sources=['web'].")
+
+
+def _merge_vertical_hits(web_rows: list[RawResult], hits: list) -> list[RawResult]:
+    """Interleave vertical rows with web rows, deduping on the same URL key.
+
+    A URL present in both keeps the web row (it carries the consensus count)
+    and gains the vertical backend in `sources`; a vertical-only row carries
+    `vertical=True` so `_build_results` leaves `engines_consensus` empty.
+    """
+    from dhole_mcp.search_metasearch import _normalize_url
+
+    out: list[RawResult] = []
+    by_key: dict[str, RawResult] = {}
+    seen_titles: set[tuple[str, str]] = set()
+
+    def _key(row) -> str:
+        return _normalize_url(getattr(row, "url", "") or "") or (getattr(row, "url", "") or "")
+
+    def _title_seen(row) -> bool:
+        host = (urlparse(getattr(row, "url", "") or "").hostname or "").lower()
+        title = re.sub(r"\s+", " ", (getattr(row, "title", "") or "").casefold()).strip()
+        if not host or not title:
+            return False
+        key = (host, title)
+        if key in seen_titles:
+            return True
+        seen_titles.add(key)
+        return False
+
+    def _add(row: RawResult) -> None:
+        key = _key(row)
+        if not key:
+            return
+        existing = by_key.get(key)
+        if existing is None:
+            # One story republished under several URLs (syndicated news, the same
+            # repo surfaced by two verticals) adds nothing the reader can choose
+            # between; it only eats the max_results cap. Web rows are exempt:
+            # their consensus count is the cross-index agreement, so two indexes
+            # carrying the same title are corroboration, not duplication.
+            if getattr(row, "vertical", False) and _title_seen(row):
+                return
+            by_key[key] = row
+            out.append(row)
+            return
+        merged_sources = tuple(dict.fromkeys(
+            tuple(getattr(existing, "sources", ()) or ())
+            + tuple(getattr(row, "sources", ()) or ())))
+        if not getattr(existing, "published", "") and getattr(row, "published", ""):
+            existing.published = row.published
+            existing.published_precision = row.published_precision
+            existing.published_basis = row.published_basis
+        existing.sources = merged_sources
+        if getattr(existing, "vertical", False) and not getattr(row, "vertical", False):
+            # The web row owns the consensus; keep its title/snippet/position.
+            row.sources = merged_sources
+            if not row.published and existing.published:
+                row.published = existing.published
+                row.published_precision = existing.published_precision
+                row.published_basis = existing.published_basis
+            row.consensus = max(row.consensus, existing.consensus)
+            by_key[key] = row
+            out[out.index(existing)] = row
+        else:
+            existing.consensus = max(existing.consensus, row.consensus)
+
+    wi = vi = 0
+    while wi < len(web_rows) or vi < len(hits):
+        if wi < len(web_rows):
+            _add(web_rows[wi])
+            wi += 1
+        if vi < len(hits):
+            hit = hits[vi]
+            vi += 1
+            _add(RawResult(
+                title=hit.title, url=hit.url, snippet=hit.snippet,
+                source=hit.backend, position=0, consensus=0,
+                sources=(hit.backend,),
+                published=hit.published,
+                published_precision=hit.published_precision,
+                published_basis=hit.published_basis,
+                vertical=True, vertical_kind=hit.kind,
+            ))
+    return out
+
+
+def _sort_newest(rows: list[RawResult], scores: list[float]):
+    """Stable newest-first order over rows that state a publish DAY.
+
+    Month/year floors and relative stamps are not a stated day; they stay in
+    their previous relative order after every dated row. Returns the reordered
+    pair plus (dated, undated) counts for the summary.
+    """
+    pairs = list(zip(rows, scores))
+
+    def _day(row: RawResult) -> Optional[date]:
+        if (getattr(row, "published_precision", "") or "") != "day":
+            return None
+        try:
+            return date.fromisoformat(getattr(row, "published", "") or "")
+        except ValueError:
+            return None
+
+    dated = sum(1 for row, _ in pairs if _day(row) is not None)
+    pairs.sort(key=lambda pair: (
+        0, -_day(pair[0]).toordinal()) if _day(pair[0]) is not None else (1, 0))
+    return ([row for row, _ in pairs], [score for _, score in pairs],
+            dated, len(pairs) - dated)
 
 
 def _quality_filter(results: list[SearchResult], min_keep: int = 3) -> list[SearchResult]:
@@ -1596,14 +2477,34 @@ def _filter_irrelevant_results(results: list[SearchResult], query: str) -> list[
     latin terms and NO result's title/snippet/url contains any of them, the
     results are pure noise — return empty so the agent doesn't chase garbage.
 
-    Queries with no latin terms (CJK, symbols) are never filtered — the
-    engines' own judgment stands, since we can't tokenize them reliably.
+    Queries that yield no term at all (pure symbols / fullwidth punctuation) are
+    never filtered — there is nothing on this side to check against, so the
+    engines' own judgment stands alone.
+
+    This used to read「queries with no latin terms (CJK, symbols)」, and CJK was
+    right only because the tokenizer could not cut Chinese at all. It can now
+    (R02-046: `_query_terms` also yields CJK bigrams), so this branch clears a
+    Chinese round for the first time — measured on this round's own booked SERPs:
+    two of nine CJK-only rounds were cleared and both were what they looked like
+    (gore image boards and an uptime-checker farm answering 「储能 电芯 出口 数据」),
+    seven were kept. A wholesale discard is not an unannounced one: `_drop_causes`
+    books it as 「matched no query term」 and the `error` of a round that was emptied
+    names the titles it dropped (the caller can check what the engines really sent).
     """
     terms = _query_terms(query)
     if not terms:
         return results
     blob = " ".join(f"{r.title} {r.snippet} {r.url}".lower() for r in results)
     if any(t in blob for t in terms):
+        return results
+    # 词面只是**一根桩**。这一支过去只可能因拉丁词形而清空，中文那侧它从不表态；
+    # 现在它第一次能清空一轮，就必须同时带上另一根桩 —— 模型对这一轮的判决。
+    # 有任一行被评到「值得取」以上时，词面不匹配不再单独构成清空整轮的理由：
+    # 「`AI视频 生成工具` 答不上 `最近很火的 AI 产品` 的字面，但模型说它 0.97」这种
+    # 一轮里，说词面不匹配是事实，说整轮是噪声就不是事实了。与农场行那一族同一条教义
+    # （有判决时两个签名都要在才动手；没判决时只准降级，不准清空）。
+    high_at, _med_at = _raw_thresholds()
+    if any((r.relevance_raw or 0.0) >= high_at for r in results):
         return results
     return []
 
@@ -1624,7 +2525,26 @@ def _is_technical_query(query: str) -> bool:
 
 
 def _query_terms(query: str) -> set:
-    return {w.lower() for w in _WORD_RE.findall(query or "") if w.lower() not in _STOPWORDS and len(w) >= 3}
+    """词面互证唯一的作者：拉丁词形 + CJK 相邻二元组。
+
+    第二条腿是补 R02-046 那一维的：拉丁那条腿要 `[A-Za-z]` 起头且 ≥3 字符，中文没有空格分词，
+    于是产品自己的 67 条真查询里 14 条（21%）交出空集 —— 整轮清空、两颗加成、丢弃账那句话
+    对它们**同时** no-op。二元组是「中文里最短一段还能核对的东西」：单字太容易撞，
+    整句在页面里常被改写。连段由空格/标点切开，所以「河南省 家电」不会缝出「省家」这种
+    页面里根本不存在的词；长度 1 的连段交出自己（`嗯` → {嗯}）。
+    实测（f26_measure_cjk.py）：装上之后 67 条真查询的零集变成 0；本轮已入账的 40 发真 SERP 里
+    9 发是「只有中文词」的轮，其中 2 发被清空（引擎给的是猎奇图集与 uptime 查询站），
+    7 发保留 —— 含 `那个` / `这个呢` 两发，所以这条腿不把代词追问那族误清。
+    """
+    latin = {w.lower() for w in _WORD_RE.findall(query or "")
+             if w.lower() not in _STOPWORDS and len(w) >= 3}
+    cjk: set = set()
+    for run in _CJK_TERM_RE.findall(query or ""):
+        if len(run) == 1:
+            cjk.add(run)
+        else:
+            cjk.update(run[i:i + 2] for i in range(len(run) - 1))
+    return latin | cjk
 
 
 def _title_relevance(query: str, title: str) -> float:
@@ -1781,6 +2701,19 @@ def _generate_query_map(query: str, intent: str, engines: list[str] | None) -> d
     return query_map
 
 
+def _row_query_term_count(r: RawResult, terms: set[str]) -> int:
+    """How many distinct query terms this row's own surface carries.
+
+    The same three-way surface `_filter_irrelevant_results` uses. This is a
+    ranking prior, not a verdict: a synonym-only row can be the right answer, so
+    the caller only uses it when no model scored the round.
+    """
+    if not terms:
+        return 0
+    blob = f"{r.title or ''} {getattr(r, 'snippet', '') or ''} {r.url or ''}".lower()
+    return sum(1 for t in terms if t in blob)
+
+
 def _apply_quality_boost(ranked: list, scores: list[float], query: str
                          ) -> tuple[list, list[float]]:
     """Three-signal composite boost: consensus + title terms + URL path terms.
@@ -1795,25 +2728,47 @@ def _apply_quality_boost(ranked: list, scores: list[float], query: str
     的查询是噪声。
     留下的三路都是**这条结果自己带的**证据（几家独立索引同意它 / 查询词出现在
     标题里 / 出现在 URL 路径里），不需要任何外部名单，也不会随站点改版腐烂。
+
+    **无模型时的词面分桶**：没有模型判决的轮次（merge 回退），第一行是引擎自己的
+    顺序 —— 实测 q001 这类题里，泛化的首页/文档站会占满前 5，而真正含 asyncio /
+    semaphore 的行被压在 9-12 位。只把"零词面"的行挪走还不够：泛化页标题常带一个
+    宽词（"python"），仍与真正答案同组。所以这条路径按**命中了几个不同的查询词**
+    分成三桶：`>=2` 在最前，`1` 次之，`0` 最后；桶内仍按 consensus + 位置。
+    行只重排、不丢。同一份 67 题语料上（agent-a 的 qrels）P@5 0.370→0.525、
+    MRR 0.550→0.731、nDCG@10 0.646→0.759，14 道题变化全部为正（q001/q018/q026
+    等从 0 抬到 0.6-1.0）。对于单词查询，这条规则退化成"有词面 > 无词面"。
+    有模型判决时**一步都不做**：模型说同义改写相关、而词面不重合，正是这条守则
+    存在的理由（`any(neural_raw is not None)` 即视为有判决，混血轮也不覆盖）。
     """
     if not ranked:
         return ranked, scores
+    terms = _query_terms(query)
+    model_scored = any(getattr(r, "neural_raw", None) is not None for r in ranked)
     boosted = []
-    for r, s in zip(ranked, scores):
+    for idx, (r, s) in enumerate(zip(ranked, scores)):
         c = max(1, getattr(r, "consensus", 1))
         total_boost = (
             0.2 * (c - 1) +                    # consensus
             _title_relevance(query, r.title) +  # query terms in the title
             _url_relevance(query, r.url)        # query terms in the URL path
         )
-        boosted.append((r, s + total_boost))
-    order = {id(r): i for i, (r, _) in enumerate(boosted)}
-    boosted.sort(key=lambda rs: (-rs[1], -getattr(rs[0], "consensus", 1), rs[0].position, order[id(rs[0])]))
-    mx = max((s for _, s in boosted), default=0.0)
+        bucket = 0
+        if terms and not model_scored:
+            hits = _row_query_term_count(r, terms)
+            bucket = 0 if hits >= 2 else (1 if hits == 1 else 2)
+        boosted.append((r, s + total_boost, idx, bucket))
+    boosted.sort(key=lambda t: (
+        t[3],
+        -t[1],
+        -getattr(t[0], "consensus", 1),
+        t[0].position,
+        t[2],
+    ))
+    mx = max((s for _, s, _, _ in boosted), default=0.0)
     if mx > 1.0:
-        boosted = [(r, round(s / mx, 4)) for r, s in boosted]
+        boosted = [(r, round(s / mx, 4)) for r, s, _, _ in boosted]
     else:
-        boosted = [(r, round(s, 4)) for r, s in boosted]
+        boosted = [(r, round(s, 4)) for r, s, _, _ in boosted]
     return [r for r, _ in boosted], [s for _, s in boosted]
 
 
@@ -1858,6 +2813,8 @@ async def web_search(
     cache_ttl: int = SEARCH_CACHE_TTL,
     mode: str = "auto",
     engines: Optional[list[str]] = None,
+    sources: Optional[list[str]] = None,
+    sort: Optional[str] = None,
     url: Optional[str] = None,
     site: Optional[str] = None,
     exclude_sites: Optional[list[str]] = None,
@@ -1872,14 +2829,14 @@ async def web_search(
     min_raw_relevance: float = 0.0,
 ) -> SearchResponseModel:
     """Local keyless web search (no API key, no account). The default pool
-    (baidu, bing, sogou, so360, bing_global, yandex, brave, duckduckgo - all
-    HTTP, no browser, and all 8 registered engines: there is no opt-in tier)
-    is scraped in parallel, merged, deduped,
-    and ranked. A URL returned by several **independent index families** is a
-    consensus hit (engines_consensus field) and gets a ranking boost - a free
-    authority signal. Note the pool has 8 engines but only 6 families
-    (bing, bing_global and duckduckgo sit on the same Bing index, just
-    different entries), so '6 of 6' is the max.
+    (baidu, bing, sogou, so360, bing_global, yahoo, yandex, brave, duckduckgo,
+    marginalia - all HTTP, no browser, and all 10 registered engines: there is
+    no opt-in tier) is scraped in parallel, merged, deduped, and ranked. A URL
+    returned by several **independent index families** is a consensus hit
+    (engines_consensus field) and gets a ranking boost - a free authority
+    signal. Note the pool has 10 engines but only 7 families (bing, bing_global,
+    yahoo and duckduckgo sit on the same Bing index, just different entries),
+    so '7 of 7' is the max.
     Returns URLs + ranking (NOT page content) so the agent runs its own
     web_read over the ones it wants.
 
@@ -1929,10 +2886,23 @@ async def web_search(
         if mode != "find_similar" or str(query or "").strip():
             query = validate_search_query(query)
         page = _validate_filters(site, exclude_sites, location, language, page)
+        sources = _validate_sources(sources)
+        sort = _validate_sort(sort)
         engines = _validate_engines(engines)
+        if "web" not in sources and engines:
+            raise SecurityError(
+                "engines= only applies to sources=['web'] - the web pool is not "
+                "in this call, so the engine list has nothing to narrow.")
+        if mode == "find_similar" and (sources != ["web"] or sort != "relevance"):
+            raise SecurityError(
+                "find_similar runs on the web pool only; sources= and sort= are "
+                "not available in this mode.")
         freshness = _validate_freshness(freshness)
     except Exception as e:
         return _param_refusal(query, str(e))
+
+    run_web = "web" in sources
+    vertical_kinds = [name for name in sources if name != "web"]
 
     # G24: the date window is resolved against the pool that is about to run,
     # because "did the dates get applied?" is a question about these engines, not
@@ -1941,6 +2911,8 @@ async def web_search(
         freshness, date_filter, date_rejected = _date_window(
             after, before, freshness, engines or list(DEFAULT_ENGINES))
         cutoff = _before_cutoff(before)
+        after_cutoff = (_parse_date_arg(after, "after").date()
+                        if after not in (None, "", False) else None)
     except Exception as e:
         return _param_refusal(query, str(e))
     if date_rejected:
@@ -1949,6 +2921,21 @@ async def web_search(
             next_action=("Re-read `date_filter` for what the pool can be sent; for items "
                          "that publish their own dates use feed_read(since=)."),
         )
+
+    # Vertical sources get an exact row-level window. `after` is the lower
+    # bound; freshness= is the same lower bound expressed as a preset. `before`
+    # is handled by the shared serp_dates ledger after the rows are built.
+    vertical_after = after_cutoff
+    if freshness:
+        _preset_after = (datetime.now(timezone.utc).date()
+                         - timedelta(days=_PRESET_DAYS[freshness]))
+        vertical_after = max(
+            [d for d in (vertical_after, _preset_after) if d is not None],
+            default=None)
+    if not run_web:
+        # Nothing was sent to a web engine, so the web date ledger is empty.
+        # The exact vertical window is reported in `source_detail`/summary.
+        date_filter = {}
 
     _requested_max = max_results = _as_int(max_results, DEFAULT_MAX_RESULTS)
     max_results = max(1, min(max_results, 50))
@@ -1988,6 +2975,10 @@ async def web_search(
             f"the engines were asked for {date_filter.get('sent', '')}, which covers "
             "your date window rather than matching it")
     fetch_hint = _date_note
+    # `related_queries` 的账与那句「空的是哪一种空」：两条装配路径（find_similar 与
+    # 主路径）都可能不经过挖词那一步，所以先给空值，句子只在真的空着且有话说时才接上。
+    _main_stats: dict = {}
+    main_related: list[str] = []
     # 越界的 max_results 此前被静默钳制：调用方要 100 条、拿到 50 条，响应里没有任何
     # 一处说明这 50 是上限而不是"只有 50 条结果"。
     _clamp_note = ""
@@ -2037,15 +3028,28 @@ async def web_search(
     find_sim_url = ""
     if mode == "find_similar":
         cand = (url or "").strip() or (query if query.startswith("http") else "")
-        try:
-            find_sim_url = validate_url(cand) if cand else ""
-        except Exception:
-            find_sim_url = ""
-        if not find_sim_url:
+        if not cand:
+            # 只有**真的什么都没交**才说 "requires a url"。从前 `validate_url` 的拒绝也被
+            # 折进这一句（`except Exception: find_sim_url = ""`），于是传了 `url=` 的人在
+            # 屏幕上读到自己没传 —— 同一封回执里两只手互相否决（评审 R02-131 · 真机
+            # r263 / `r265_bad_url_across_doors.json`：五种坏形状在这扇门得到"没传"，
+            # 在另外五扇得到的是守卫原话）。
             return _param_refusal(
                 query, "find_similar requires a url (pass url=, or the URL as query).",
                 next_action="Pass url= with a page URL to find pages similar to it "
                             "(or pass the URL as the query).",
+                duration_ms=(time() - t0) * 1000)
+        try:
+            find_sim_url = validate_url(cand)
+        except SecurityError as e:
+            reason = str(e)
+            # 守卫的原话交回，出路那一族与别扇同一位作者（`security.url_refusal_recovery`）。
+            # 门不因此松一寸：这一支仍然一个引擎都不问、仍然全拒（尺
+            # `test_the_gate_still_closes`）。
+            return _param_refusal(
+                query, reason,
+                next_action=url_refusal_recovery(reason, "web_search"),
+                input_refusal=True,
                 duration_ms=(time() - t0) * 1000)
 
     # Preserve an explicit region for cache identity before deriving the
@@ -2071,6 +3075,16 @@ async def web_search(
         cache_type = f"{cache_type}:minrel={min_relevance}"
     if min_raw_relevance > 0.0:
         cache_type = f"{cache_type}:minraw={min_raw_relevance}"
+    if sources != ["web"]:
+        cache_type = f"{cache_type}:sources={','.join(sources)}"
+    if sort != "relevance":
+        cache_type = f"{cache_type}:sort={sort}"
+    # 打分器是结果的一部分：raw 分数、tier 线和排序都随模型变，所以换档后的
+    # 缓存不能命中另一颗模型跑出来的行。只有可能用模型的模式才带这一格。
+    if mode in ("auto", "neural", "find_similar"):
+        _cache_model = _active_model_name()
+        if _cache_model:
+            cache_type = f"{cache_type}:model={_cache_model}"
     if cache_ttl > 0:
         cached = await get_cached(cache_query, cache_type, None, ttl=cache_ttl, scope="search")
         if cached and cached.get("content"):
@@ -2082,16 +3096,44 @@ async def web_search(
                 _ee = data.get("engine_empty", [])
                 _ep = data.get("engine_preempted", [])
                 _rm = data.get("rerank_mode", "merge")
+                _rmodel = data.get("rerank_model", "")
                 _rq = data.get("related_queries", [])
+                _su = data.get("sources_used", []) or []
+                _sd = data.get("source_detail", []) or []
+                _sort = data.get("sort_applied", "") or ""
                 # Rows written before consensus_basis existed fall back to
                 # "whatever contributed" — i.e. the old behavior, not a guess.
                 _fam = {_INDEX_FAMILY.get(e, e) for e in _eu}
                 _contrib_c = data.get("families_contributing", len(_fam) or 1)
-                _hint = compute_fetch_hint(results_list)
+                _hint = compute_fetch_hint(results_list, query=query)
                 _notes = _pool_health_notes(results_list, _eb, _contrib_c,
                                             engine_empty=_ee, replay=True)
                 if _notes:
                     _hint = (f"{_hint} | {_notes}" if _hint else _notes)
+                _cached_source_failure = _source_failure_note(_sd)
+                if _cached_source_failure:
+                    _hint = _hint_with(_hint, _cached_source_failure)
+                _cached_source_note = _source_note(
+                    [row.get("source", "") for row in _sd], _sd)
+                if _sort == "newest":
+                    _nd = sum(
+                        1 for r in results_list
+                        if (getattr(r, "published_precision", "") or "") == "day"
+                        and getattr(r, "published", ""))
+                    _nu = len(results_list) - _nd
+                    if _nd:
+                        _sort_replay = (
+                            f"sort=newest: delivered {_nd} dated row(s) newest-first, "
+                            f"{_nu} undated/coarser row(s) after them "
+                            "(replayed from cache)")
+                    else:
+                        _sort_replay = (
+                            f"sort=newest: no delivered row states a publish day; "
+                            f"{_nu} row(s) keep their relevance order "
+                            "(replayed from cache)")
+                    _cached_source_note = (
+                        f"{_cached_source_note} | {_sort_replay}"
+                        if _cached_source_note else _sort_replay)
                 # 期4.6：这一轮问的 `before=` 与存下来那一次是同一个（它在缓存键上），
                 # 所以那句"丢了几行"必须跟着回放再讲一遍 —— 少了它，回放就把一次判过
                 # 的行级筛选读成什么都没发生过。账本体是存的那份，这里不重算。
@@ -2109,6 +3151,12 @@ async def web_search(
                     # 逐家的账跟着回放走：这一轮没重新问过任何引擎，能说的只有当初那
                     # 一次的观测（行写于这两颗存在之前 → 空，不补一份看起来像的）。
                     engine_detail=data.get("engine_detail", []) or [],
+                    sources_used=_su,
+                    source_detail=_sd,
+                    sort_applied=_sort,
+                    # 同文那一维是**这一页行**的读数（不是这一轮的引擎账），所以回放也数得出：
+                    # 交回的仍是那几行，标题与 host 都在行上，没有向缓存要一份它没存的观测。
+                    same_document_groups=_same_document_groups(results_list),
                     families_answered_of_asked=data.get(
                         "families_answered_of_asked", "") or "",
                     # 回放交回的是**存下来那一轮**的账（这一发没重新问过任何引擎，
@@ -2117,6 +3165,7 @@ async def web_search(
                     engine_waited_for_family_s=float(
                         data.get("engine_waited_for_family_s", 0.0) or 0.0),
                     rerank_mode=_rm,
+                    rerank_model=_rmodel,
                     consensus_basis=data.get("consensus_basis", ""),
                     date_filter=data.get("date_filter", {}) or {},
                     # 期4.3/4.6：这一页的日期账是**存下来那一轮**结的（回放没重新问过
@@ -2132,12 +3181,14 @@ async def web_search(
                     # to drop it: the caller saw 50 results with nothing saying 50
                     # was the ceiling rather than the count. It rides `summary` for
                     # the reason stated in _search_summary.
-                    summary=_with_ledger(_search_summary(cache_query, results_list, _eu,
-                                                         _rm, notes=_clamp_note),
-                                         _replay_ledger),
+                    summary=_with_ledger(_search_summary(
+                        cache_query, results_list, _eu or _su, _rm,
+                        notes=" | ".join(n for n in (_clamp_note, _cached_source_note) if n)),
+                        _replay_ledger),
                     next_action=_with_ledger(_search_next_action(
                         results_list, _eb, "", _eu,
                         engine_empty=_ee, engine_preempted=_ep,
+                        engine_detail=data.get("engine_detail", []) or [],
                         rerank_mode=_rm, replay=True), _replay_ledger),
                 )
             except (json.JSONDecodeError, KeyError, TypeError) as e:
@@ -2160,16 +3211,27 @@ async def web_search(
     # load with the startup prewarm; awaited below before the rerank step so the
     # result is warm by then (usually already done, loaded during the fetch).
     _rerank_task = asyncio.create_task(ensure_reranker()) if mode in ("neural", "auto", "find_similar") else None
+    # 「这一发有没有为那次尝试付过钱」的判据：账本在 `reranker` 手里，这里只在起任务前
+    # 读一个数、等完之后再读一次 —— 多了就是这一发做的，没多就是它在引用本进程早前的那笔。
+    _rerank_attempts_before = load_attempts()
+
+    _vertical_task = None
+    _vertical_hits: list = []
+    _vertical_reports: list = []
+    _vertical_window: dict = {}
+    _sort_note = ""
+    if vertical_kinds:
+        from dhole_mcp.search_verticals import search_many
+        _vertical_task = asyncio.create_task(search_many(
+            vertical_kinds, query, max_results, page=page, region=region,
+            language=language))
 
     if mode == "find_similar":
-        src_title, src_text = await fetch_source_for_similar(find_sim_url, timeout=6)
-        if not src_text:
-            return SearchResponseModel(
-                query=find_sim_url, results=[], total_results=0,
-                duration_ms=(time() - t0) * 1000,
-                error="could not fetch the source URL for find_similar (blocked or offline).",
-                next_action="Retry, or web_read the source URL first to confirm it is reachable, then call web_search with mode=find_similar.")
-        derived_query = src_title or " ".join(src_text.split()[:8]) or query
+        src = await fetch_source_for_similar(find_sim_url, timeout=6)
+        if not src["body"]:
+            return _source_leg_refusal(find_sim_url, src,
+                                       duration_ms=(time() - t0) * 1000)
+        derived_query = src["title"] or " ".join(src["body"].split()[:8]) or query
         try:
             ranked, reports = await multi_search(
                 derived_query, max_results, engines=engines, site=site,
@@ -2194,11 +3256,12 @@ async def web_search(
                 await _rerank_task
             except Exception:
                 pass
+        _paid_here = load_attempts() > _rerank_attempts_before
         rer = get_reranker()
         if rer is not None and ranked:
             docs = [f"{r.title} {r.snippet}" for r in ranked]
             try:
-                scores = rer.score(src_text[:2000], docs)
+                scores = rer.score(src["body"][:2000], docs)
                 pairs = sorted(zip(ranked, scores), key=lambda rs: (-rs[1], rs[0].position))
                 ranked_list = [r for r, _ in pairs]
                 scores = [s for _, s in pairs]
@@ -2210,14 +3273,16 @@ async def web_search(
                 # fetch_hint 一起声称"按那页的相似度排过"，而实际的分数来自对派生
                 # 查询词（那页的标题）的神经相关度 —— 词面/主题重合，不是页面相似。
                 # 调用方只读结构化字段时看不出这一层，D-19 说的就是它。
-                ranked_list, scores, rerank_used, _ = _rank(derived_query, ranked, "auto")
+                ranked_list, scores, rerank_used, _ = _rank(derived_query, ranked, "auto",
+                                                            attempted_here=_paid_here)
                 rerank_note = _similarity_missed_note(rerank_used, derived_query,
                                                       f"the scoring raised {type(e).__name__}")
         else:
-            ranked_list, scores, rerank_used, _ = _rank(derived_query, ranked, "auto")
+            ranked_list, scores, rerank_used, _ = _rank(derived_query, ranked, "auto",
+                                                        attempted_here=_paid_here)
             if ranked and get_reranker() is None:
                 rerank_note = _similarity_missed_note(rerank_used, derived_query,
-                                                      _rerank_absent_reason())
+                                                      _rerank_absent_reason(_paid_here))
         _asked_families, _could_families, _contrib, _basis = _family_tally(engines, reports)
         total_families = max(1, _could_families)
         ranked_list, scores = _apply_quality_boost(ranked_list, scores, query)
@@ -2225,13 +3290,23 @@ async def web_search(
         results_list = _build_results(cache_query, ranked_list, scores, total_families,
                                       basis=_basis)
         results_list = _quality_filter(results_list)
-        sim_note = f"find_similar to {find_sim_url} (searched: {derived_query[:60]!r})"
+        sim_note = (f"find_similar to {find_sim_url} (searched: {derived_query[:60]!r}; "
+                    f"the source answered HTTP {src['status']} and gave "
+                    f"{len(src['body'])} chars of text to rank against)")
+        if src["status"] >= 400:
+            # 状态页也可以真写着东西，所以这一支不改变行为（照样拿它去搜）—— 但「源是一张
+            # 错误页」这件事不许只活在门里：读列表的人有权知道它是照着哪张纸排出来的
+            # （评审 R02-149：夹具的 404 页今天让门拿 '404' 当查询，回执一句不说）。
+            sim_note += (f" - note that the SOURCE page itself answered "
+                         f"HTTP {src['status']}: these rows are similar to an error "
+                         "page, so re-run find_similar on a page that answers 200 "
+                         "before trusting them")
         # `_date_note` 在这个分支曾经没被接上：`freshness=`/`after=` 照样转发给了
         # multi_search（上面 1631 行），`date_filter` 照样建了、`exact` 照样是 false，
         # 而这条路的 `fetch_hint` 从 `compute_fetch_hint` 直接起句，把告诫整段丢掉。
         # 同一个字段在两条模式下走两条路，其中一条不表态 —— 修法与 auto/neural 那
         # 条共用一个 `_hint_with`，不再有"第三份拼接写法"。
-        fetch_hint = _hint_with(_date_note, compute_fetch_hint(results_list))
+        fetch_hint = _hint_with(_date_note, compute_fetch_hint(results_list, query=query))
         fetch_hint = (fetch_hint + " | " + sim_note) if fetch_hint else sim_note
         if rerank_note:
             fetch_hint = (fetch_hint + " | " + rerank_note) if fetch_hint else rerank_note
@@ -2242,7 +3317,11 @@ async def web_search(
                 "from this list - find_similar returns pages like it, and that one is "
                 "the copy you already have")
             fetch_hint = (fetch_hint + " | " + _own_note) if fetch_hint else _own_note
-        sim_related = _related_queries(derived_query, results_list)
+        _sim_stats: dict = {}
+        sim_related = _related_queries(derived_query, results_list, stats=_sim_stats)
+        _sim_cause = _follow_up_cause(_sim_stats, sim_related)
+        if _sim_cause:
+            fetch_hint = _hint_with(fetch_hint, _sim_cause)
         if min_relevance > 0.0 or min_raw_relevance > 0.0:
             # Say it out loud rather than let the parameter silently do nothing:
             # this mode scores candidates against the source PAGE, on a different
@@ -2265,17 +3344,52 @@ async def web_search(
         _intent = _detect_intent(query)
         _fan_engines = list(engines) if engines is not None else list(DEFAULT_ENGINES)
         _qmap = _generate_query_map(query, _intent, _fan_engines)
-        try:
-            ranked, reports = await multi_search(
-                query, max_results, engines=engines, site=site,
-                exclude_sites=exclude_sites, region=region, freshness=freshness,
-                page=page, server=server, query_map=_qmap if _qmap else None,
-                round_stats=_round_stats,
-            )
-        except Exception as e:
-            error = redact_api_key(str(e)[:200])
+        if run_web:
+            try:
+                ranked, reports = await multi_search(
+                    query, max_results, engines=engines, site=site,
+                    exclude_sites=exclude_sites, region=region, freshness=freshness,
+                    page=page, server=server, query_map=_qmap if _qmap else None,
+                    round_stats=_round_stats,
+                )
+            except Exception as e:
+                error = redact_api_key(str(e)[:200])
 
-        if not ranked and not error:
+        _vertical_hits: list = []
+        _vertical_reports: list = []
+        _vertical_window: dict = {}
+        if _vertical_task is not None:
+            try:
+                _vertical_hits, _vertical_reports = await _vertical_task
+            except Exception as e:
+                _vertical_window["task_error"] = redact_api_key(str(e)[:160])
+            # site/exclude_sites apply to the final URL, just like the web rows.
+            _vertical_hits = [
+                h for h in _vertical_hits
+                if _passes_site_filter(h.url, site, exclude_sites)]
+            from dhole_mcp.search_verticals import filter_by_window
+            _vertical_hits, _vertical_window = filter_by_window(
+                _vertical_hits, after=vertical_after, before=cutoff)
+            for report in _vertical_reports:
+                report.count = sum(
+                    1 for h in _vertical_hits if h.backend == report.backend)
+                if report.status == "ok" and report.count == 0:
+                    # The adapter did answer, but site=/the date window removed
+                    # every row. "ok, 0 rows" would read as a healthy source
+                    # that had nothing; say what actually happened.
+                    report.status = "empty"
+                    if site or exclude_sites or vertical_after or cutoff:
+                        report.error = (
+                            "source_filtered: every row the source returned was "
+                            "removed by site=/exclude_sites= or the date window")
+            ranked = _merge_vertical_hits(ranked, _vertical_hits)
+            if ranked and error and not error.startswith("NOTE:"):
+                # The web pool failed but a vertical source answered. Keep the
+                # rows, move the web failure into the source receipt.
+                _vertical_window["pool_error"] = error
+                error = ""
+
+        if run_web and not ranked and not error:
             blocked_any = bool([r for r in reports if r.blocked])
             all_blocked = blocked_any and not bool([r for r in reports if r.ok])
             # 池子"全沉默"（都答了、都没产出）时，坏的是解析器还是查询，用产出计数分：
@@ -2320,45 +3434,64 @@ async def web_search(
                     except Exception:
                         pass
             if not ranked and not error:
+                # R02-004：这几张零结果的脸各有不同的成因，但出路只有两种写法 —— 点名这一发
+                # 答过的引擎，或在没人答的时候指向那把真存在的自检。同一位作者，`error` 与
+                # `next_action` 才不会被读成两条互相拆台的指示（冷却秒数那一族同样的口径）。
+                _way_out = " " + _way_out_for_a_dead_end(_engine_detail_rows(reports))
                 if skip_retry:
                     error = (
                         f"Engines answered but parsed 0 usable results ({', '.join(drifted)} "
                         "saw result containers it could not read). That is usually our parser "
                         "falling out of sync with the engine's page structure, not the query "
                         "being wrong - no second round was issued. Run `dhole -v` for "
-                        "per-engine yield, or rephrase with different terms.")
+                        "per-engine yield, or rephrase with different terms." + _way_out)
                 elif site:
                     if blocked_any:
-                        names = ", ".join(r.name for r in reports if r.blocked)
+                        blocked_names = [r.name for r in reports if r.blocked]
+                        names = ", ".join(blocked_names)
                         error = (
                             f"No results for this query inside site={site} - but {names} was "
                             "blocked/CAPTCHA'd this round, so this is not proof the query is "
-                            "absent. Retry in a moment, or drop site= and filter the results "
-                            "yourself.")
+                            "absent. Retry "
+                            + (_cooling_wait(blocked_names) or "in a moment")
+                            + ", or drop site= and filter the results yourself." + _way_out)
                     else:
                         error = (
                             f"No results for this query inside site={site}. The site filter was "
                             "kept on the rewritten query too, so these are genuinely absent rather "
                             "than off-domain. Try the query without site=, or check the domain is "
                             "indexed (a landing page alone often is not)."
+                            + _way_out
                         )
                 else:
                     error = (
                         "No results from any engine. " +
-                        ("Engines were rate-limited/CAPTCHA'd; retry in a moment, rephrase, or set DHOLE_SEARCH_PROXY for sustained heavy use. "
+                        ("Engines were rate-limited/CAPTCHA'd; retry "
+                         + (_cooling_wait([r.name for r in reports if r.blocked])
+                            or "in a moment")
+                         + ", rephrase, or set DHOLE_SEARCH_PROXY for sustained heavy use. "
                          if blocked_any else "Try rephrasing the query.")
+                        + _way_out
                     )
+
+        if not ranked and vertical_kinds:
+            _vdead = _vertical_dead_end(
+                [report.as_dict() for report in _vertical_reports],
+                str(_vertical_window.get("task_error", "") or ""))
+            error = f"{error} {_vdead}".strip() if error else _vdead
 
         if _rerank_task:
             try:
                 await _rerank_task
             except Exception:
                 pass
-        _rank_candidates = ranked[:max(2 * max_results, 12)]
+        _paid_here = load_attempts() > _rerank_attempts_before
+        _rank_candidates = ranked[:max(2 * max_results, 12 + len(_vertical_hits))]
         _rank_stats: dict = {}
         ranked_list, scores, rerank_used, rerank_note = _rank(
             query, _rank_candidates, mode, min_relevance=min_relevance,
-            min_raw_relevance=min_raw_relevance, stats=_rank_stats)
+            min_raw_relevance=min_raw_relevance, stats=_rank_stats,
+            attempted_here=_paid_here)
         # How many candidates the relevance floor rejected outright (G5). They are
         # not part of _delivered - they never reached _build_results - so without
         # this the "all results were dropped" branch below would see
@@ -2367,21 +3500,34 @@ async def web_search(
         # prevent. The fallback branch of _rank returns every candidate, so this
         # is 0 whenever no reranker ran.
         _rank_dropped = len(_rank_candidates) - len(ranked_list)
-        _asked_families, _could_families, _contrib, _basis = _family_tally(engines, reports)
-        total_families = max(1, _could_families)
+        if run_web:
+            _asked_families, _could_families, _contrib, _basis = _family_tally(engines, reports)
+            total_families = max(1, _could_families)
+        else:
+            # No web engine was asked: there is no web family universe to count.
+            _asked_families = _could_families = _contrib = 0
+            _basis = ""
+            total_families = 1
         ranked_list, scores = _apply_quality_boost(ranked_list, scores, query)
         # Diversity: cap same-domain results at 2 in top positions
         if not site:
             ranked_list, scores = _diversify(ranked_list, scores, max_per_domain=2)
+        if sort == "newest":
+            # Order before truncation so the cap keeps the newest dated rows; the
+            # counts in the note are filled in AFTER every filter below, because
+            # "12 dated rows" on a response that delivered 4 is a false receipt.
+            ranked_list, scores, _newest_dated, _newest_undated = _sort_newest(
+                ranked_list, scores)
         ranked_list, scores = ranked_list[:max_results], scores[:max_results]
         results_list = _build_results(query, ranked_list, scores, total_families,
                                       basis=_basis)
         _delivered = len(results_list)
         results_list = _quality_filter(results_list)
         _dropped_low = _delivered - len(results_list)
-        # 农场行排在 `low` 之后、话题地板之前：那一族对中文查询是 no-op（`_query_terms`
-        # 切不出 >=3 字符的拉丁词），所以 S2 那一屏黄暴站是走到这里才第一次有人管 ——
-        # 也是它必须**在写缓存之前**的原因：缓存里存滤后的行，回放不复活垃圾。
+        # 农场行排在 `low` 之后、话题地板之前，且必须**在写缓存之前**：缓存里存滤后的行，
+        # 回放不复活垃圾。`_row_is_junk` 自己不看查询词（它读的是 host 形状与措辞），
+        # 所以下游那一支话题地板才是中文噪声的去处 —— R02-046 之后它真的会说话
+        # （词面这条腿有 CJK 二元组了），并且清空整轮时还要再过一道「模型有没有说某一行值得取」。
         _before_farm_filter = len(results_list)
         results_list = _reputation_filter(results_list)
         _dropped_farm = _before_farm_filter - len(results_list)
@@ -2397,7 +3543,22 @@ async def web_search(
                       [(r.title or r.url or "")[:60] for r in results_list[:3]])
         results_list = _kept
         _dropped_total = _dropped_low + _dropped_farm + _off_topic + _rank_dropped
-        fetch_hint = _hint_with(_date_note, compute_fetch_hint(results_list))
+        if sort == "newest":
+            _newest_dated = sum(
+                1 for r in results_list
+                if (getattr(r, "published_precision", "") or "") == "day"
+                and getattr(r, "published", ""))
+            _newest_undated = len(results_list) - _newest_dated
+            if _newest_dated:
+                _sort_note = (f"sort=newest: delivered {_newest_dated} dated row(s) "
+                              f"newest-first, {_newest_undated} undated/coarser row(s) "
+                              "after them")
+            else:
+                _sort_note = (f"sort=newest: no delivered row states a publish day; "
+                              f"{_newest_undated} row(s) keep their relevance order")
+        else:
+            _sort_note = ""
+        fetch_hint = _hint_with(_date_note, compute_fetch_hint(results_list, query=query))
         if rerank_note:
             fetch_hint = _hint_with(fetch_hint, rerank_note)
         # 引擎确实给了结果、是 dhole 自己把结果丢掉时，必须说出来。否则响应同时写着
@@ -2429,7 +3590,10 @@ async def web_search(
                 "Off-topic "
                 "results on a normal query usually mean a captive portal, DNS hijack "
                 "or proxy answered on the engine's behalf - rephrasing will not help; "
-                "check the network, or retry with engines=[...] to ask a different index."
+                # 出路要点名**这一发**答过的引擎，用的就是上线那份 `engine_detail` 的同一位
+                # 作者（`_detail` 在下面建响应时才算，这一发已经判了死刑，就地算一次；
+                # 零结果轮才走到这里，正常轮不付这一步）。
+                + _way_out_for_a_dead_end(_engine_detail_rows(reports))
             )
             if _discarded:
                 error += (" What the engines sent instead: "
@@ -2441,7 +3605,8 @@ async def web_search(
                                f"{_rank_stats.get('dropped_raw', _rank_dropped)} of "
                                f"{len(_rank_candidates)} candidates)")
             fetch_hint = f"{fetch_hint} | {_drop_note}" if fetch_hint else _drop_note
-        main_related = _related_queries(query, results_list)
+        _main_stats: dict = {}
+        main_related = _related_queries(query, results_list, stats=_main_stats)
 
     # 期4.6：`before=` 的逐行判决。放在行都建好、也都筛完之后（相关性地板、话题地板、
     # 域多样性都在上面跑过了），因为这一刀丢的必须是**交出去的那一页**，账才对得上；
@@ -2492,6 +3657,9 @@ async def web_search(
                                 engine_empty=engine_empty)
     if _notes:
         fetch_hint = _hint_with(fetch_hint, _notes)
+    _main_cause = _follow_up_cause(_main_stats, main_related)
+    if _main_cause:
+        fetch_hint = _hint_with(fetch_hint, _main_cause)
     # _clamp_note deliberately does NOT join fetch_hint: see _search_summary. It
     # rides `summary`, where web_read and web_crawl already say the same thing.
 
@@ -2501,9 +3669,32 @@ async def web_search(
     _detail = _engine_detail_rows(reports)
     _families = _families_phrase(_asked_families, _could_families, _contrib)
     _waited = float(_round_stats.get("lone_family_wait_s", 0.0) or 0.0)
+    # 这一轮真正打分的模型（不是注册表默认）。merge 轮没有模型参与，留空。
+    _model_used = _active_model_name() if rerank_used in ("neural", "find_similar") else ""
 
-    # Cache successful results (+ engine metadata + related queries for cache hits)
-    if cache_ttl > 0 and results_list:
+    for report in _vertical_reports:
+        # count is what the source contributed to the merged candidate pool;
+        # delivered is what survived ranking, the cap and every quality filter.
+        # A receipt that stops at "6 rows" invites "but I only see 2" - name both.
+        report.delivered = sum(
+            1 for r in results_list if getattr(r, "source", "") == report.backend)
+    _source_detail = [report.as_dict() for report in _vertical_reports]
+    _sources_used = [
+        row["backend"] for row in _source_detail
+        if int(row.get("count", 0) or 0) > 0]
+    _source_text = _source_note(vertical_kinds, _source_detail, window=_vertical_window)
+    _source_failure = _source_failure_note(_source_detail)
+    if _source_failure:
+        fetch_hint = _hint_with(fetch_hint, _source_failure)
+    if _sort_note:
+        fetch_hint = _hint_with(fetch_hint, _sort_note)
+
+    # Cache successful results (+ engine metadata + related queries for cache hits).
+    # 写侧与读侧分开问（R02-032 的搜索那一半）：`cache_ttl=0` 点的是"这一轮重新问过
+    # 引擎"，不是"这一轮不值得存" —— 丢掉刚跑完的一轮，下一次普通搜索就会回放更旧的
+    # 一轮，与 web_read 那边付的是同一笔账。存的仍是这一轮自己。
+    _round_ttl = cache_ttl if cache_ttl > 0 else SEARCH_CACHE_TTL
+    if results_list:
         _rq_cache = sim_related if mode == "find_similar" else main_related
         cache_data = json.dumps({
             "results": [r.model_dump() for r in results_list],
@@ -2517,7 +3708,11 @@ async def web_search(
             "engine_detail": _detail,
             "families_answered_of_asked": _families,
             "engine_waited_for_family_s": _waited,
+            "sources_used": _sources_used,
+            "source_detail": _source_detail,
+            "sort_applied": sort if sort != "relevance" else "",
             "rerank_mode": rerank_used,
+            "rerank_model": _model_used,
             "related_queries": _rq_cache,
             "consensus_basis": _basis,
             "family_universe": total_families,
@@ -2531,7 +3726,8 @@ async def web_search(
             # 看起来像的数）。`before=` 丢掉的行也不在里头 —— 存的就是判完剩下的。
             "date_coverage": date_coverage,
         })
-        await set_cached(cache_query, cache_type, [cache_data], 200, None, cache_ttl, scope="search")
+        await set_cached(cache_query, cache_type, [cache_data], 200, None, _round_ttl,
+                         scope="search")
 
     return SearchResponseModel(
         query=cache_query, results=results_list, total_results=len(results_list),
@@ -2539,8 +3735,13 @@ async def web_search(
         engines_used=engines_used, engine_blocked=engine_blocked,
         engine_empty=engine_empty, engine_preempted=engine_preempted,
         engine_detail=_detail, families_answered_of_asked=_families,
+        sources_used=_sources_used,
+        source_detail=_source_detail,
+        sort_applied=sort if sort != "relevance" else "",
+        same_document_groups=_same_document_groups(results_list),
         engine_waited_for_family_s=_waited,
-        rerank_mode=rerank_used, consensus_basis=_basis,
+        rerank_mode=rerank_used, rerank_model=_model_used,
+        consensus_basis=_basis,
         date_filter=date_filter,
         date_coverage=date_coverage,
         related_queries=(sim_related if mode == "find_similar" else main_related),
@@ -2549,12 +3750,14 @@ async def web_search(
         # 期4.6：`before=` 丢了几行要说出口，而且要出现在调用方第一眼扫的那两颗上
         # （`summary` 是账，`next_action` 是这一笔账对应的动作）。`describe_ledger`
         # 自己先报丢掉的数，所以这里不重排它。
-        summary=_with_ledger(_search_summary(cache_query, results_list, engines_used,
-                                             rerank_used, notes=_clamp_note),
-                             _date_ledger_line),
+        summary=_with_ledger(_search_summary(
+            cache_query, results_list, engines_used or _sources_used, rerank_used,
+            notes=" | ".join(n for n in (_clamp_note, _source_text, _sort_note) if n)),
+            _date_ledger_line),
         next_action=_with_ledger(_search_next_action(
             results_list, engine_blocked, error, engines_used,
             engine_empty=engine_empty,
             engine_preempted=engine_preempted,
+            engine_detail=_detail,
             rerank_mode=rerank_used), _date_ledger_line),
     )

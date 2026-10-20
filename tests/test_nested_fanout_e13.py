@@ -274,6 +274,55 @@ class TestNothingWasSentSilently:
         # 两条出路都得在场上：选择器写窄了，和这页是壳。
         assert "force_fetcher='stealthy'" in out.next_action
 
+    def test_a_selector_naming_nothing_does_not_accuse_the_elements(self, monkeypatch):
+        """R02-148：`matched=0` 的那一发不许说「它们都没有 href」。
+
+        「它们」在这句话里指一个空集 —— 给空集断一个性质，调用方读到的是一条它无法
+        验证的陈述（这页上确实没有任何东西能被称为"它们"），而真正的事实只有一句：
+        这个选择器在这页上什么都不是。两副形状共用一颗 code 是对的（出路同一条），
+        共用一句话不是。
+        """
+        calls: list = []
+        _stub_pages(monkeypatch, {LIST_URL: LIST_HTML, **DETAIL}, calls=calls)
+        _stub_robots(monkeypatch)
+        out = _run(url=LIST_URL, nested_selector=".nope", nested_fields=FIELDS,
+                   cache_ttl=0)
+        assert out.error.startswith("nested_no_match"), out.error
+        assert "matched 0" in out.error, out.error
+        assert "none of them" not in out.error, \
+            f"给空集断了一个性质：{out.error}"
+
+    def test_a_selector_that_matched_without_a_link_says_both_facts(
+            self, monkeypatch):
+        """另一副形状：命中了 2 个 `span`，它们确实都不带可用的 http(s) 链接。
+
+        这一发"它们"有指头，所以断言归断言 —— 但两个数都要说出来，否则调用方分不清
+        自己是写错了选择器（换就是了）还是选对了容器而链接不在这层（那要抬到父级）。
+        """
+        calls: list = []
+        _stub_pages(monkeypatch, {LIST_URL: LIST_HTML, **DETAIL}, calls=calls)
+        _stub_robots(monkeypatch)
+        out = _run(url=LIST_URL, nested_selector="span", nested_fields=FIELDS,
+                   cache_ttl=0)
+        assert out.error.startswith("nested_no_match"), out.error
+        assert "matched 2" in out.error, out.error
+        assert "none of them" in out.error, \
+            f"命中非空却不说链接这件事：{out.error}"
+        assert [u for u, _ in calls] == [LIST_URL]
+
+    def test_the_two_shapes_stay_one_code(self, monkeypatch):
+        """分的是句子，不是 code：两副形状的出路同一条（换到带链接的那一层）。
+
+        钉这一条是因为"一句只说一件事"最省事的走法是拆成 `nested_no_selector` /
+        `nested_no_href` —— 那会把上线名册改出不存在的两颗，还会让读过手册的人在手
+        册里找不到它们。
+        """
+        _stub_pages(monkeypatch, {LIST_URL: LIST_HTML, **DETAIL}, calls=[])
+        _stub_robots(monkeypatch)
+        codes = [_run(url=LIST_URL, nested_selector=sel, nested_fields=FIELDS,
+                      cache_ttl=0).diagnosis["code"] for sel in (".nope", "span")]
+        assert codes == ["nested_no_match", "nested_no_match"], codes
+
     def test_a_shell_first_layer_is_handed_back_not_flattened(self, monkeypatch):
         """第一层没读到 DOM 时，扇出不能造一个"0 条记录"的成功。"""
         calls: list = []

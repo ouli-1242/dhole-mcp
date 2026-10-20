@@ -222,16 +222,29 @@ class TestItem4RerankModel:
     class _Model:
         def __init__(self, digest):
             self.name = "bge-zh"
+            self.label = "bge cross-encoder"
             self.approx_bytes = 279_000_000
+            self.min_bytes = 1_000_000
             self.publisher_sha256 = digest
 
     def _patch(self, monkeypatch, tmp_path, *, downloaded, digest):
+        """`downloaded=True` 现在写的是一份**完整**的模型：两颗文件齐、onnx 过 `min_bytes`。
+
+        R02-F34 之前这个挂具只写一颗 5,000 字节的 `model.onnx` 就要求体检行报 `ok` ——
+        那正是缺陷本身：判决当时由体检行自己数文件（既不看 `tokenizer.json` 也不看大小）。
+        现在判决只有一位作者（`reranker.model_present()`），挂具要「装好了」就得真装好。
+        **三条断言一字未改** —— 它们守的是「发布方摘要」与「只有本机自算 hash」那句区别，
+        这一句在本刀同一侧；这里补上的只是那两个真实注册表对象本来就有的字段。
+        半装与截断那两格的新行为由
+        `tests/test_the_reranker_model_state_is_askable_on_the_wire.py` 正面钉住。
+        """
         from dhole_mcp import reranker
 
         d = tmp_path / "models" / "bge-zh"
         d.mkdir(parents=True)
         if downloaded:
-            (d / "model.onnx").write_bytes(b"x" * 5000)
+            (d / "model.onnx").write_bytes(b"x" * 1_000_010)
+            (d / "tokenizer.json").write_text("{}", encoding="utf-8")
         monkeypatch.setattr(reranker, "active_model",
                             lambda: self._Model(digest))
         monkeypatch.setattr(reranker, "active_model_dir", lambda: d)
@@ -531,12 +544,14 @@ class TestItem12ConnectCost:
         """DHOLE_TOOLS 收窄过的进程，doctor 报的必须是它自己付的那一笔。
 
         真起一台解释器（这旋钮 import 期冻结，进程内改不了），只问 connect cost 那一行。
-        全量 instructions 是 2,476，`web_read,web_search` 的 wire 实发 1,502
-        （tests/test_the_dhole_tools_price_is_the_wire_itself.py 用真 stdio 量过 11,894
+        全量 instructions 是 2,475，`web_read,web_search` 的 wire 实发 1,501
+        （tests/test_the_dhole_tools_price_is_the_wire_itself.py 用真 stdio 量过 12,020
         的总数；11,382 → 11,480 是体验修复刀3-C5 给 `web_read` 的 `timeout` 补上
         "一次尝试封顶 30s"那一句，11,480 → 11,866 是刀3-W1 的 `headers` —— 这一组里
         只有读的那扇门付它；11,866 → 11,894 是刀3-D2 的 `confirm`/`cdp_url` 两句 +28，
-        两颗都长在 `web_read` 身上）。按全量计价会报一个谁都没付的数，而且它恰好把"想少
+        两颗都长在 `web_read` 身上；11,894 → 11,887 是期4 第六刀 −7：`web_search` 那颗
+        `before=` 的拒辞换成逐行判决的说法，新句比旧句短 7 字；11,887 → 12,020 是 P0
+        纵向搜索给 `web_search` 的 `sources` / `sort` 两颗参数 +133）。按全量计价会报一个谁都没付的数，而且它恰好把"想少
         付就用 DHOLE_TOOLS"这句建议变成了假话。
         """
         import os
@@ -557,9 +572,9 @@ class TestItem12ConnectCost:
         assert out.returncode == 0, out.stderr[-600:]
         lines = [l for l in out.stdout.splitlines() if l.strip()]
         row, face = lines[-2], lines[-1]
-        assert "11894 chars" in row, f"收窄后的 doctor 报的不是这台进程付的账：{row}"
+        assert "12020 chars" in row, f"收窄后的 doctor 报的不是这台进程付的账：{row}"
         assert "2 tool(s)" in row, row
-        assert "ACTIVE 1502" in face and "FULL 2476" in face, (
+        assert "ACTIVE 1501" in face and "FULL 2475" in face, (
             f"这道判据依赖两份 instructions 不同值：{face}")
 
     def test_an_unreadable_registry_degrades_to_a_note(self, monkeypatch):

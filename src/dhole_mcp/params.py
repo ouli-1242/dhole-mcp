@@ -72,19 +72,48 @@ class ArgumentRefusal(ValueError):
         self.next_action = next_action
 
 
-#: 每一颗 `_coerce_*` 的拒绝共用这一句：句子前半是"改哪一颗、改成什么是错的"已经写在
+class ToolRosterRefusal(ValueError):
+    """一句写完了的「这一扇门不存在」，走到协议边界才折成信封（评审 R02-130 · F123）。
+
+    与 :class:`ArgumentRefusal` 同一套分工：`_dispatch` 照旧抛（三处
+    `raises(ValueError, match="Unknown tool")` 的旧锁一字不动），只有 `call_tool` 认识它，
+    于是 agent 拿到的是申报 / summary / 把手齐全的信封，而不是 transport 兜底那副
+    ``{"error": str(e)[:300]}``。兜底自己的注释写着「走到这里说明这不是 dhole 设计过的拒绝」,
+    而这两发（门名不在名册里 / 门被 `DHOLE_TOOLS` 关掉）恰恰是设计过的 —— 量到的形状见
+    `review/.runtime/p1/r337_two_faces_pre_fix.json` 与 `r338_boundary_faces.json`：
+    `is_error=True` 加一格 `error`，没有申报、没有 summary、没有 code（分类器对大写开头的
+    这句交 `('', False, '')`，所以今天不是"一个错名字"，是"没有名字"），而 300 那一刀在旧名
+    带 hint 的那一发上剪掉的正是"新家怎么写"那一段。
+
+    `next_action` 在**抛出的那一刻**按门取词（`_nothing_went_out(name)`）：被关掉的
+    `web_read` 说的是它自己的动词，而不是默认支那句 —— 等到边界再取，`tool_scope` 早已随
+    异常退出，整族只会剩下 `Nothing was fetched or changed.`。
+    """
+
+    def __init__(self, msg: str, next_action: str = ""):
+        super().__init__(msg)
+        self.next_action = next_action
+
+
+#: 每一颗 `_coerce_*` 的拒绝共用这**半句**：句子前半是"改哪一颗、改成什么是错的"已经写在
 #: `error` 里（各颗的说法本来就各不相同，不该在出路里重讲一遍），后半是"为什么门要拦
 #: 而不是猜" —— 那是这一层存在的全部理由，也是调用方最需要听的一句。
-_TYPE_REFUSAL_WAY_OUT = (
-    "Nothing was fetched or changed. The argument named at the start of `error` is the "
-    "one to rewrite, and `error` states the shape it takes. Types are checked at the "
-    "door rather than guessed at: a misread `urls` would otherwise come back looking "
-    "like a successful 19-URL fetch, and a string `confirm` would look like an approval.")
+#:
+#: 开头那半句「这一发什么也没发生」从前也焊在这里（`Nothing was fetched or changed.`），
+#: 于是这一层在全部 11 扇门上只有一种说法 —— 评审 R02-089：那一扇只读的 `doc_parse` 与
+#: 会写服务器的 `web_request` 听到的都是同一句"抓过或改过"。现在那半句由 `context.
+#: nothing_went_out()` 按门取，本体仍是这一位作者，两半在这里拼一次。
+_TYPE_REFUSAL_BODY = (
+    "The argument named at the start of `error` is the one to rewrite, and `error` "
+    "states the shape it takes. Types are checked at the door rather than guessed at: "
+    "a misread `urls` would otherwise come back looking like a successful 19-URL "
+    "fetch, and a string `confirm` would look like an approval.")
 
 
 def _refuse(msg: str) -> ArgumentRefusal:
-    """每一颗 `_coerce_*` 的拒绝都从这里出：句子各处不同，出路这一句共用。"""
-    return ArgumentRefusal(msg, next_action=_TYPE_REFUSAL_WAY_OUT)
+    """每一颗 `_coerce_*` 的拒绝都从这里出：句子各处不同，出路这一句按门取词后共用。"""
+    from dhole_mcp.context import nothing_went_out
+    return ArgumentRefusal(msg, next_action=f"{nothing_went_out()} {_TYPE_REFUSAL_BODY}")
 
 
 def _coerce_int_arg(
@@ -487,6 +516,22 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         # a serialized client sends. Forcing it through _coerce_bool_arg here is
         # the one spelling 'auto' would not survive.
     },
+    # 这一扇从前**整张表里都没有**，而 `_coerce_arg_types` 的第一行是
+    # `if not spec: return args` —— "没有这一扇"与"这一扇没有要归一的参数"在运行时是同一个
+    # 样子，所以一颗字符串写来的 `max_pages` 一路走进引擎，撞出
+    # `invalid literal for int() with base 10: 'not-a-number'`，再由 `web_crawl` 的
+    # `except Exception` 翻成 "Internal error, not a blocked site: retry the same call once"
+    # —— 一句教人重试一颗永远不该重试的错（评审 R02-091；半径见
+    # `review/.runtime/p1/r102_wrongtype_sweep.json`：61 颗里只有这两颗是这个形状）。
+    # 同一颗错在 `web_crawl` 上一直被具名拒掉：两边现在共用那位作者。
+    "web_discover": {
+        "max_pages": "int", "max_total_chars": "int",
+        # 三样刻意留在这里外面，理由与 web_crawl 上面那两条一字不差：
+        # `path_include`/`path_exclude` 的裸字符串就是"一个前缀"，`sitemap` 是三态
+        # （`_coerce_bool_arg` 活不下 'auto'）。`timeout` 也不列：这一扇自己有一句更具体的
+        # 具名拒绝（`invalid_request: timeout= Timeout must be a number` + 1-120000 那段预算
+        # 说明，门话由 `server._nothing_went_out()` 装配 —— R02-092 之前那句抄的是 `read`）。
+    },
     # §4 写操作那颗：method/content_type 是字符串（大小写与空白是字符串客户端
     # 最容易带进来的噪声），timeout 是数字，body 不 coerce（dict 与 string 都合法）。
     # confirm 同 web_act：字符串写法要归一化——"false" 按裸值传是非空字符串 =
@@ -516,7 +561,8 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
     },
     "web_search": {
         "max_results": "int", "cache_ttl": "int", "page": "int",
-        "engines": "list", "exclude_sites": "list", "fetch_content": "bool",
+        "engines": "list", "sources": "list", "sort": "str",
+        "exclude_sites": "list", "fetch_content": "bool",
         # min_relevance arrives as a string from clients that JSON-stringify
         # numbers ("0.3"); without this it would reach search.py as text and be
         # coerced to 0.0 there (silently disabling the floor).

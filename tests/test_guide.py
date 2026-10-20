@@ -69,7 +69,7 @@ def test_every_topic_carries_a_when(topic_def):
 def test_aliases_resolve_to_their_volume():
     """agent 会按文件名猜 topic。猜中就该拿到内容，而不是拿到一次道歉。"""
     assert guide._resolve("tools") == "behavior"
-    assert guide._resolve("SKILL") == "start"          # 大小写不敏感
+    assert guide._resolve("SKILL") == "manual"         # 全本不再是 start 那一页
     assert guide._resolve("troubleshooting") == "fix"
     for alias, topic in guide.ALIASES.items():
         assert guide._resolve(alias) == topic
@@ -92,6 +92,20 @@ def test_a_real_topic_returns_its_volume():
     header, body = guide.read("fields")
     assert "references/fields.md" in header
     assert len(body) > 500, f"fields 卷只有 {len(body)} 字符，通道在送存根"
+
+
+def test_start_is_a_one_page_route_map_and_the_full_handbook_stays_reachable():
+    """R06-009：start 四次实测都是 27k 整本手册。起点必须是一页纸，
+    全本另挂 manual —— 不是把 SKILL.md 删掉，也不是让 start 变成截断版。"""
+    header, body = guide.read("start")
+    assert "references/start.md" in header
+    assert len(body) <= 4000, f"start 又长回 {len(body)} 字符"
+    for needle in ("web_read", "web_search", "web_act", "Hard constraints"):
+        assert needle in body, f"start 少了 {needle}"
+
+    full_header, full = guide.read("manual")
+    assert "SKILL.md" in full_header
+    assert len(full) > 20_000, "全本没接上：manual 不该是一页纸"
 
 
 def test_section_returns_one_chunk_not_the_volume():

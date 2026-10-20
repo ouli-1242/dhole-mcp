@@ -113,7 +113,8 @@ def _guard(request):
     return mode
 
 
-@pytest.mark.parametrize("engine", ["bing", "duckduckgo", "brave", "yandex"])
+@pytest.mark.parametrize("engine", ["bing", "duckduckgo", "brave", "yandex",
+                                    "marginalia"])
 def test_engine_fixture_contract(engine, _guard):
     mode = _guard
     fixture = FIXTURE_DIR / f"{engine}.html"

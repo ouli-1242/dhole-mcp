@@ -108,6 +108,9 @@ VALUES: dict[str, object] = {
     "before": "2026-01-01", "url": URL, "fetch_content": True,
     "fetch_schema": {"properties": {"t": {"selector": "p"}}},
     "min_relevance": 0.2, "min_raw_relevance": 0.1,
+    # P0 纵向搜索：两颗都在 web_search 上。sources 取一个纵向池而不是默认
+    # ['web']，sort 取非默认值，丢了才分辨得出是丢了。
+    "sources": ["academic"], "sort": "newest",
     # #8：共识地板。探针取 2（合法下界）——1 会被 web_search 在发请求前拒掉，
     # 那测的是拒绝路径而不是抵达性。BASE 里带着 fetch_content=True，所以这颗
     # 有作用对象、不会被"没开 fetch_content"那条拒绝挡下。
@@ -252,19 +255,22 @@ class TestAWrongNameIsRefused:
 
     def test_the_removed_bag_is_named_as_removed_not_as_unknown(self):
         """老写法的调用撞上来时，"陌生键"三个字会把人引向"这工具没这个能力"——
-        正好相反：能力全在，只是位置换了。所以这句话必须点名 17.0 与能搬出去的键。
+        正好相反：能力全在，只是位置换了。所以这句话必须点名**袋子没有、键在顶层**，
+        并把能原样搬出去的那几颗点名。
+        （R02-F49：这句从前写「removed in 17.0」—— 版本号对不在那一版上的调用方是假话，
+        而它站在处方位上。守的两件事一件不少，字面跟着改。）
         """
         with pytest.raises(ValueError) as ei:
             _dispatch("web_search", {"query": "q", "options": {"max_results": 5}})
         msg = str(ei.value)
-        assert "removed in 17.0" in msg, msg
+        assert "no options object" in msg, msg
         assert "max_results" in msg, msg
 
     def test_a_bag_key_that_could_not_move_anywhere_says_so(self):
         """袋子里装了一个哪儿都不存在的键：不能假装它"可以搬出来"。"""
         with pytest.raises(ValueError) as ei:
             _dispatch("web_search", {"query": "q", "options": {"frobnicate": 1}})
-        assert "frobnicate" not in str(ei.value).split("removed in 17.0")[1]
+        assert "frobnicate" not in str(ei.value).split("no options object")[1]
 
 
 class TestTheTwoChoiceKnobsAreGone:

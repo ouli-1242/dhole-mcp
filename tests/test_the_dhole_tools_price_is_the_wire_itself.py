@@ -179,8 +179,8 @@ def _ruler_module():
     return mod
 
 
-def test_the_default_connect_is_the_published_32_828():
-    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：32,828。
+def test_the_default_connect_is_the_published_33_210():
+    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：33,210。
 
     这一条同时是量尺的回归锁：`tool_payload_measure._wire_for` 曾按工具数累加路由行，
     把默认连接报成 30,857（web_discover / web_crawl 共用那句被算了两遍）。修成按文本
@@ -262,6 +262,26 @@ def test_the_default_connect_is_the_published_32_828():
     （−88）。它不在 tools/list 上就说不出来：dispatch 按表外名把调用方的 `pin=` 拒在门外，
     而一次没人听见的驻留请求读起来就是一次成功的驻留。web_act 那颗 4,287 → 4,415；
     8 颗与 9 颗那两组不含 web_act，照旧不改 —— 这也是这一族子集账的判据本身。
+
+    32,828 → 33,088（2026-10-15，R02-F34 · R02-054）：一次**上抬 +260**，买的是「这台机器的
+    语义重排器装了没有」第一次在 wire 上点名问得出。`show` 的枚举多一颗 `models`（+8），
+    `clear` 那句「config is show-only」改成两类各自点名（+12），sys_state 描述多一行路由
+    （+240：这一类存在、它是只读的 —— dhole 不抹模型文件、以及往 sys_guide 的那句指针）。
+    必须每次连接都到的理由与 G25 那次 confirm 门同类：**宿主在调用之前**就得决定要不要问这一格，
+    而只住在 sys_guide 语料里的名字，调用方不知道可以问，也就永远不会问（画像那一发
+    `sys_state(show=['config'])` 就是问错了门之后没再问的样子）。四格 `state` 怎么读、截断下载
+    为什么算「不在」——解释全部留在 references/tools.md，按需付。sys_state 那颗 1,654 → 1,914；
+    它住在 8 颗与 9 颗那两组里，所以两组随实测一起走：24,477 → 24,737、26,745 → 27,005（2026-10-20 起再 −11：24,726 / 26,994）。
+
+    33,077 → 33,210（2026-10-20，P0 纵向搜索）：一次**上抬 +133**，买的是
+    `web_search` 的 `sources`（web|news|academic|qa|code|community）与 `sort`
+    （relevance|newest）两颗可选参数在连接期到场：表外名会被 dispatch 拒掉，
+    而五个纵向后端（GDELT/arXiv/Stack Exchange/GitHub/Hacker News）的细节、
+    限速与日期窗语义都住在 sys_guide 按需付。首版两张带 enum 的完整描述实测
+    +860，按批次 6c 的裁决摘掉 enum、并收短 web_search 里与参数描述重复的
+    "两把尺子"一句后，净 +133。web_search 那颗 4,032 → 4,165；它住在 8 颗与
+    9 颗两组里，所以两组随实测走到 24,859 / 27,127；read+search 那一对
+    11,887 → 12,020。
     """
     ruler = _ruler_module()
     import ast
@@ -279,11 +299,11 @@ def test_the_default_connect_is_the_published_32_828():
         f"仓库量尺与 wire 的 tools/list 对不上：{ruler_compact} vs {wire['tools_compact']}")
     assert ruler_instr == len(wire["instructions"]), (
         f"仓库量尺多算了路由行：{ruler_instr} vs wire {len(wire['instructions'])}")
-    assert ruler_compact + ruler_instr == 32_828
+    assert ruler_compact + ruler_instr == 33_210
 
 
 def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():
-    """`DHOLE_TOOLS=web_read,web_search` 的真机价：11,887（这一族的起点是注释里的 11,480）。
+    """`DHOLE_TOOLS=web_read,web_search` 的真机价：12,020（这一族的起点是注释里的 11,480）。
 
     四次移动的账：11,423 → 11,382 是把签名影子摘掉时顺带瘦的字（那一刀量过真机），
     11,382 → 11,480 是 C5 给 `web_read` 的 `timeout` 补上"一次尝试封顶 30s"那一句
@@ -295,13 +315,15 @@ def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():
     法，新句比旧句短 7 字 —— 这一组里只有 `web_search` 付它。
     同一条拒绝名单在 `web_request` 那一扇门上只花 256，因为它的描述指着
     `web_read.headers` 而不是重说一遍。
+    11,887 → 12,020（+133，P0 纵向搜索）：`sources` / `sort` 两颗都长在
+    `web_search` 身上，这一组正是买下"免费搜索一次问五类源"的那一对。
     """
     assert _assert_price("web_read,web_search",
-                         ["web_read", "web_search"]) == 11_887
+                         ["web_read", "web_search"]) == 12_020
 
 
 def test_the_readme_eight_tool_price_is_what_the_server_sends():
-    """README 的 8 颗价不再只是算术 —— 真机同一值，且文档印的就是它（24,477）。"""
+    """README 的 8 颗价不再只是算术 —— 真机同一值，且文档印的就是它（24,859）。"""
     _assert_price(",".join(SUB8), SUB8,
                   published=("README.md", "这 8 颗是 {total} 字符"))
 
@@ -309,15 +331,15 @@ def test_the_readme_eight_tool_price_is_what_the_server_sends():
 def test_the_ninth_tool_costs_its_own_row_and_no_routing_line():
     """加 web_discover 只多它自己那一行：路由行与 web_crawl 共用，去重后不再付第二次。
 
-    这是 F-A-J1 那把共享路由行在 wire 上的样子：README 的 9 颗 26,745 =
-    24,477 + 2,268，instructions 一字不变。C3 之后 `web_discover` 自己那一行涨了
+    这是 F-A-J1 那把共享路由行在 wire 上的样子：README 的 9 颗 27,127 =
+    24,859 + 2,268，instructions 一字不变。C3 之后 `web_discover` 自己那一行涨了
     （地图大小两颗旋钮上这门），涨的部分照旧只付一次；C5 没动它（那一扇门一次尝试都不
     走 HTTP 正文通道，所以它不欠那句上限）。D2 的 +28 全部落在 `web_read`，所以这一组
     与 8 颗那组同幅上涨。
     """
     nine = SUB8 + ["web_discover"]
     assert _assert_price(",".join(nine), nine,
-                         published=("README.md", "共 9 颗 {total}")) == 26_745
+                         published=("README.md", "共 9 颗 {total}")) == 27_127
     eight = _connect(",".join(SUB8))
     assert len(_connect(",".join(nine))["instructions"]) == len(eight["instructions"]), (
         "两颗共用一句路由的工具，第二颗不该再收一次路由行的钱")

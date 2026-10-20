@@ -671,12 +671,24 @@ class TestOffTopicFilterIsVisible:
         assert out.error == ""
 
     @pytest.mark.asyncio
-    async def test_cjk_queries_are_never_filtered(self, monkeypatch):
-        """The filter can only judge latin terms; CJK must pass through untouched."""
+    async def test_a_cjk_round_is_dropped_only_with_two_signatures(self, monkeypatch):
+        """旧期望「分词器只认拉丁，所以 CJK 一律放行」正是 R02-046 那条缺陷本身。
+
+        它守的东西一条都没减，只是换了守法：**两根桩**（词面全不命中 + 模型也没说哪一行值得取）
+        都在才清空整轮，而清空必须是看得见的 —— 这一类（`TestOffTopicFilterIsVisible`）
+        守的一直是后半句。中文有词面这一维之后，两句都要重新钉一遍。
+        """
         S = _patch_engines(monkeypatch, [_raw("标题", "https://example.com/a", "正文")])
         out = await S.web_search(None, "大模型 推理优化", 6)
-        assert len(out.results) == 1
-        assert out.error == ""
+        assert out.results == [], out.results
+        stated = (out.fetch_hint or "") + " " + (out.error or "")
+        assert "matched no query term" in stated, stated
+        assert "标题" in (out.error or ""), out.error  # 丢了哪几行，调用方自己核得上
+
+        # 同一支查询，行上带着「值得取」的判决时，词面一根桩不许单独清空整轮
+        S2 = _patch_engines(monkeypatch, [_raw("大模型推理优化实践", "https://example.com/b", "正文")])
+        out2 = await S2.web_search(None, "大模型 推理优化", 6)
+        assert len(out2.results) == 1, out2.results
 
 
 class TestSiteFilterSurvivesRewrite:
@@ -724,9 +736,24 @@ class TestRerankHintWording:
         assert "dhole -v" in reason
 
     def test_recorded_reason_is_passed_through(self, monkeypatch):
+        """BUG-9 的承诺：记下的原因**逐字**交回，并且不许编安装指引。
+
+        R02-F33 给这句话加了主语，所以「逐字」从全等改成「以原话开头」—— 这是加账不是
+        降口径：三种形状（没记下耗时 / 这一发付的那次 / 引用别人付过的账）都断言原话在前、
+        `install dhole-mcp[all] and retry` 不在内。顺带把这把锁自己的坑填了：耗时它从
+        `reranker` 的账里读，从前那本账没钉，全等式只是**恰好**这一发没人 append 过东西
+        才成立（同进程里另一条测试真跑过一次加载时，1563 ms 就挂在句子尾巴上）。
+        """
         from dhole_mcp import search as S
+        from dhole_mcp import reranker as R
         monkeypatch.setattr(S, "unavailable_reason", lambda: "model file missing")
+        monkeypatch.setattr(R, "last_attempt_ms", lambda: 0.0)
         assert S._rerank_absent_reason() == "model file missing"
+        monkeypatch.setattr(R, "last_attempt_ms", lambda: 1563.4)
+        for paid_here in (True, False):
+            said = S._rerank_absent_reason(paid_here)
+            assert said.startswith("model file missing"), said
+            assert "install dhole-mcp[all] and retry" not in said, said
 
 
 # ─── BUG-1: related_queries mined from one site's boilerplate ──────────────

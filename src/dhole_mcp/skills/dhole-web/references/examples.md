@@ -123,7 +123,7 @@ A rejection names the key and lists the keys that tool accepts — follow the er
 ```json
 {"url": "https://docs.example.com/guide", "focus": "retry policy", "focus_engine": "bm25"}
 ```
-The same key exists on `web_crawl`, where it matters more: the semantic path costs ~12.5s of CPU per page times `max_pages`, so the cheap default is what runs when nobody names it. `"neural"` with the model missing is **refused** (`neural_focus_model_missing`) instead of silently downloading ~280MB — the first neural `web_search` fetches it once (resumable), or re-run with `"bm25"`.
+The same key exists on `web_crawl`, where it matters more: the semantic path costs ~12.5s of CPU per page times `max_pages`, so the cheap default is what runs when nobody names it. `"neural"` with the model unusable is **refused** (`neural_focus_model_missing`) instead of silently downloading ~280MB, and the two causes read differently: files absent says `not downloaded yet` and points at a plain `web_search` (its default `mode` already ranks with it, so name nothing there; it has no `focus_engine`; one-time, resumable); files on disk but not loading says so and prints what this process recorded, because downloading again changes nothing. To skip the model either way, re-run with `"bm25"`.
 
 **Structured extraction** (repeated records REQUIRE a "container selector + sub-schema": sub-selectors evaluate inside each container, one record per container; a bare top-level selector returns a page-wide union with no record attribution):
 ```json
@@ -197,6 +197,28 @@ Measured: one call, 8 grouped records, `summary` carrying `nested: 8 links expan
 {"url": "https://example.com"}
 ```
 
+## Change monitoring (check + dhole watch)
+
+**One page, then a batch** — the first check records a baseline (`changed=null`), the next answers changed/unchanged. A `urls=` batch keeps one verdict per row:
+```json
+{"url": "https://example.com/pricing", "extraction_type": "check"}
+{"urls": ["https://example.com/pricing", "https://example.com/status"], "extraction_type": "check"}
+```
+
+**A persistent list for a scheduler** (state lives in `~/.dhole/watchlist.json`; the first `run` primes baselines):
+```bash
+dhole watch add https://example.com/pricing --label pricing
+dhole watch add https://status.example.com --label status
+dhole watch run                 # exit 0 = none changed, 1 = changed, 2 = error
+dhole watch run --json          # machine-readable receipt
+```
+Cron every 30 minutes; the exit code is the alert (0 none / 1 changed / 2 error),
+so let cron see it and mail or trigger on non-zero:
+```cron
+*/30 * * * * dhole watch run --json >> ~/.dhole/watch.log 2>&1
+```
+The checks are conditional requests against dhole's own 7-day baseline; they do not render the page and do not use a browser. A 404/blocked fetch is an error row (exit 2), never "unchanged".
+
 ## web_request
 
 **JSON POST** (sent once: the transport will not retry it, the answer is not cached, and no browser replays it — a replay answers about a GET to that URL, not about your write; body ≤256KB):
@@ -229,7 +251,7 @@ Measured: one call, 8 grouped records, `summary` carrying `nested: 8 links expan
 
 ## web_search
 
-**Vertical + dated + threshold + pull full text** (`before` does not exist; `after` is widened to a day/week/month/year preset — read `date_filter.note`; `fetch_content` also fetches the top 3 results' full text):
+**Dated + threshold + pull full text** (`after` is widened to a day/week/month/year preset — read `date_filter.note`; `before` is a per-row upper bound; `fetch_content` also fetches the top 3 results' full text):
 ```json
 {"query": "MCP streamable HTTP spec", "engines": ["bing", "so360"], "after": "2026-09-01", "min_raw_relevance": 0.1, "fetch_content": true}
 ```
@@ -240,6 +262,13 @@ When searching without fetching: rank by `relevance_score` / `fetch_relevance` (
 ```json
 {"query": "MCP streamable HTTP spec", "fetch_content": true, "fetch_min_consensus": 2}
 ```
+
+**Ask the keyless vertical pools** (`sources` takes `web`, `news`, `academic`, `qa`, `code`, `community`; omitting `web` means vertical-only, and `engines=` is then refused). Vertical rows carry an **empty** `engines_consensus`; `source_detail` reports each source's `count` and `delivered`:
+```json
+{"query": "asyncio task group", "sources": ["qa", "code", "community"], "sort": "newest", "max_results": 8}
+{"query": "transformer architecture", "sources": ["academic"], "after": "2024-06-01", "sort": "newest"}
+```
+`news` is GDELT and rate-limits hard (one query per 5s; a `status=blocked` report row means exactly that, not "no news"). A vertical-only date window is exact per row: `after=` drops undated rows, `before=` keeps them.
 
 ## Big site: map, scope, read (web_discover then web_read)
 

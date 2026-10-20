@@ -299,6 +299,10 @@ class TestCacheContextIsolation:
                          cache_dir=temp_dir)
         await set_cached("https://x/page.html", "markdown", ["normal page"], 200,
                          cache_dir=temp_dir)
+        await set_cached("https://x/judged.html", "markdown", ["judged page"], 200,
+                         cache_dir=temp_dir, content_type="text/html; charset=utf-8",
+                         envelope={"content_ok": False, "substance": "nav_only",
+                                   "substance_basis": "12 lines", "visible_text_chars": 36})
 
         # 假装这是升级前写的库：键版本退回 1
         db = await aiosqlite.connect(temp_dir / "cache.db")
@@ -311,8 +315,15 @@ class TestCacheContextIsolation:
         assert await get_cached("https://x/a.pdf", "markdown", cache_dir=temp_dir) is None
         assert await get_cached("https://x/other.pdf?v=2", "markdown",
                                 cache_dir=temp_dir) is None
-        hit = await get_cached("https://x/page.html", "markdown", cache_dir=temp_dir)
-        assert hit is not None and hit["content"] == ["normal page"], "误伤了非 PDF 行"
+        # v3 之后 `page.html` 是**受影响的子集**，不是误伤：那是一份没有实质判决的 HTML，
+        # 回放路径会从 status + content 重算出一个 `content_ok=true`，而那一发从来没被判过
+        # —— 留在缓存里就是一张没有判据的绿灯（本机实测 134 行 fetch 里 132 行缺那颗读数）。
+        assert await get_cached("https://x/page.html", "markdown",
+                                cache_dir=temp_dir) is None, "没判决的 HTML 行不许继续作答"
+        # 而"带着判决的 HTML 行"不许被牵连：它交回的正是当初那一份，一个字都没重取。
+        judged = await get_cached("https://x/judged.html", "markdown", cache_dir=temp_dir)
+        assert judged is not None and judged["content"] == ["judged page"], "误伤了带判决的行"
+        assert (judged.get("envelope") or {}).get("substance") == "nav_only"
 
         # 幂等：版本已到位后，新写的 PDF 行不能再被清掉
         await set_cached("https://x/new.pdf", "markdown", ["fresh pdf"], 200, cache_dir=temp_dir)

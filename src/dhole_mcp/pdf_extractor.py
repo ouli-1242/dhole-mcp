@@ -525,6 +525,26 @@ def _heading_level(line_size: float, body_size: float, bold: bool, text: str) ->
     return level
 
 
+# R01-049：有的材料把小节号排成正文的样子 —— 同字号、同样距、不加粗，几何层一点优待
+# 都没有，于是 `_heading_level` 认不出它，段落合并（只看行距）就把 `2. Data` 和它领的
+# 那句粘成一句交回。形状是这份材料里唯一的记号，所以判据只写形状、不写词汇表：
+# ①以 1-2 位编号起头（可带级次 `1.2.4`；四位年份与 `1.2984` 这类小数都进不来），
+# ②整行不超过一行标题该有的长度，③行末不收句（沿用 `_SENTENCE_END` 那道既有闸）。
+# 只断段，不升 `#`：我们知道"这是一行独立编号"，不知道它是几级；写进章节地图同样是
+# 过度声称。
+_NUMBERED_TITLE = re.compile(r"^\d{1,2}(?:\.\d{1,2})*\.?\s+\S")
+_NUMBERED_TITLE_MAX_CHARS = 60
+
+
+def _is_numbered_title_line(text: str) -> bool:
+    t = text.strip()
+    if not t or len(t) > _NUMBERED_TITLE_MAX_CHARS:
+        return False
+    if t.rstrip()[-1:] in _SENTENCE_END:
+        return False
+    return bool(_NUMBERED_TITLE.match(t))
+
+
 # 同一行标题折出来的两行，字号差通常来自一个数字或大写字母（实测 `…2026` 那一行里
 # 只有数字，众数字号仍与首行一致，但别的字体会差 0.1-0.5pt）。0.75 是"同一行"的容差，
 # 不是"同一级"的容差 —— 两级标题的字号差远大于此。
@@ -582,8 +602,22 @@ def _clean_date(d: str) -> str:
     return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else d
 
 
-def _format_metadata(meta: dict) -> list[str]:
-    """Build the markdown metadata header lines from pdfplumber's .metadata."""
+def _format_metadata(meta: dict, own_outline: bool = False,
+                     outline_titles: tuple[str, ...] = ()) -> list[str]:
+    """Build the markdown metadata header lines from pdfplumber's .metadata.
+
+    The Title field is **file furniture**, the same kind as Author and Subject,
+    and it says what the producing app wrote, not what the document prints:
+    ReportLab hands out `untitled` / `anonymous` / `unspecified` to every file
+    nobody titled. So the outline top line belongs to the pages - when this
+    delivery carries a section map of its own (measured from bookmarks or font
+    sizes, the same thing `table_of_contents` ships), the field is delivered in
+    the labeled line instead of heading the outline as if it were structure. When
+    the pages offer no outline at all the field is the only title there is, and it
+    stays on the top line - fixing a false claim must not hand back a titleless
+    document. A field whose string the pages print anyway appears once: in the
+    outline.
+    """
     def g(*keys):
         for k in keys:
             v = meta.get(k)
@@ -595,20 +629,39 @@ def _format_metadata(meta: dict) -> list[str]:
     subject = g("Subject", "subject")
     keywords = g("Keywords", "keywords")
     created = _clean_date(g("CreationDate", "creationdate"))
+    modified = _clean_date(g("ModDate", "moddate"))
     out = []
+    fields = []
     if title:
-        out.append(f"# {title}")
-    facts = []
+        if own_outline:
+            if title.strip().casefold() not in outline_titles:
+                fields.append(f"Title: {title}")
+        else:
+            out.append(f"# {title}")
     if author:
-        facts.append(f"Author: {author}")
-    if created:
-        facts.append(f"Date: {created}")
+        fields.append(f"Author: {author}")
     if subject:
-        facts.append(f"Subject: {subject}")
+        fields.append(f"Subject: {subject}")
     if keywords:
-        facts.append(f"Keywords: {keywords}")
-    if facts:
-        out.append("> " + " · ".join(facts))
+        fields.append(f"Keywords: {keywords}")
+    if fields:
+        # 这四格是**信息字典**里的记录：写文件那台应用留下的，不是页面印出来的。
+        # ReportLab 在没人填字段时会交 anonymous / unspecified —— 一句关于作者的话
+        # 与一句文件戳的话不是一回事，各说各自的来源，读的人才不会把缺省串当署名。
+        out.append("> " + " · ".join(fields)
+                   + (" (this file's own info dictionary - recorded by the app "
+                      "that wrote the file, not text printed on its pages)"))
+    stamps = []
+    if created:
+        stamps.append(f"Created: {created}")
+    if modified:
+        stamps.append(f"Modified: {modified}")
+    if stamps:
+        # R01-048：一枚 `Date:` 承载不了两种意思。这两戳各自是"这台机器什么时候写下这个
+        # 文件"，与"这篇东西什么时候写的"是两件事 —— 所以各自点名，并一起把身份说出口。
+        out.append("> " + " · ".join(stamps)
+                   + (" (the file's own stamps - when this PDF was written, "
+                      "not when the work was written)"))
     return out
 
 
@@ -937,6 +990,266 @@ def _extract_images_metadata(pdf, page_nums: list[int]) -> list[str]:
     return out
 
 
+# --- 页边重复行（running header / footer）------------------------------------
+# R01-037（P08 谢临 S2 的火气 #1："看起来抽到了，其实抽的是页眉"）：学术期刊的刊头与
+# 下载水印每页都印一遍，抽取按 y 顺序输出文本行，于是它们与正文同权重混在交付里 ——
+# 把正文复制出去（翻译、引用、排稿）的人每翻一页手删一次。
+#
+# 判据只有形状，一条都不认内容：不许写"看到 Journal of 就当页眉"这种为一个刊名开的特例
+# （§12）—— 那种实现换一份别的出版物就失效，还会把正文里合法的短句删掉。三条同时成立
+# 才算页边行：①它是本页第一段或最后一段，②它是一行且短，③规范化后同一颗行在 ≥2 页的
+# 同一侧出现。摘走的是位置不是信息：每颗摘掉的行都在文档头部逐字引用，并点名它的位置、
+# 摘自哪几页、数字是否每页不同。
+_FURNITURE_MAX_CHARS = 120   # 页边行是短句。长行按正文处理：误删一段话比留一行噪声贵
+_FURNITURE_MIN_PAGES = 2     # 一页无从比较：只抽一页时不claim，两页同侧才算"每页都有"
+
+
+def _furniture_key(line: str) -> str:
+    """比较键：空白折叠 + 大小写折叠 + 数字折成 `#`。
+
+    数字必须折起来 —— 页脚本来就每页换一个页码（`[page 2 of 4]` / `[page 3 of 4]`），
+    逐字比较会因为一颗数字放过整页噪声。折叠只作用于比较，摘出去的那句话仍然逐字引用。
+    """
+    return re.sub(r"\d+", "#", " ".join(line.split())).casefold()
+
+
+def _page_span(pages: list[int]) -> str:
+    """[1,2,3] -> "1-3"；[1,3] -> "1, 3"。说得出摘了哪几页，读者才敢信少掉的是版面。"""
+    out: list[str] = []
+    run: list[int] = []
+    for n in [*pages, None]:
+        if run and n is not None and n == run[-1] + 1:
+            run.append(n)
+            continue
+        if run:
+            out.append(str(run[0]) if len(run) == 1 else f"{run[0]}-{run[-1]}")
+        run = [n] if n is not None else []
+    return ", ".join(out)
+
+
+def _edge_note_suffix(texts: list[str], pages_hit: list[int],
+                      pages_in_window: list[int]) -> str:
+    """两条路共用的那一串尾巴：数字是否每页换号、证据来自哪几页、本窗口交付哪几页。
+
+    单一作者（R02-023 与 R01-037 的两半在同一颗候选上说话）：摘除那一支与申报那一支
+    必须用同一句话说清「这几页是从哪来的」，否则读者只能从两条不同的旁注里猜哪条覆盖了
+    窗口外的那些页。
+    """
+    vary = "; numbers vary page to page" if len(set(texts)) > 1 else ""
+    beyond = sorted(set(pages_hit) - set(pages_in_window))
+    window_note = (f"; evidence from pages {_page_span(beyond)} outside this window, "
+                   f"delivered here: page {_page_span(pages_in_window)}" if beyond else "")
+    return vary + window_note
+
+
+def _blocks_with_offsets(md: str) -> tuple[list[str], list[tuple[int, str]]]:
+    """把一页 markdown 按空行切成块，并留着重组用的分隔符。
+
+    返回 `(parts, blocks)`：`parts` 是 `re.split` 的原样切片（奇数位是空行），
+    `blocks` 是 `(parts 下标, 去空白后的文本)`。带着分隔符重组，摘掉一块之后其余字节
+    一个字都不动 —— 表格、代码块这些多行块不会被这次切分改形。
+    """
+    parts = re.split(r"(\n[ \t]*\n)", md)
+    blocks = [(i, parts[i].strip()) for i in range(0, len(parts), 2) if parts[i].strip()]
+    return parts, blocks
+
+
+def _edge_lines_outside_window(body: bytes, password: str | None,
+                               window: list[int], total_pages: int) -> dict[int, tuple[str, str]]:
+    """窗口外每一页的「首行 / 末行」—— 只为准页边行这一判而读，交回的是证据，不是交付。
+
+    R02-023：`pages=` 缩窄的是**交付**，不是判据的输入。整份文件本来就在产品手里，而单页窗口
+    里天然没有第二页可比 —— 于是「每页都印的那一行」在最常用的那一支上不再兑现（用户按页取，
+    正因为她只想要那一页；R01-037 的动机是抄正文的人不必每翻一页手删一次）。
+
+    读的是 pypdfium2 的文本层（实测 200 页 0.06s，pdfplumber 做同一件活要 0.66s）：这一页印着
+    什么，不需要把整份重排一遍。读不到（依赖缺失、损坏的 PDF、口令不对）就交回空 dict ——
+    那一情形下这一支的形状与改之前**逐字相同**：宁可不摘，也不交出一句关于没发生过的事的谎。
+    """
+    out: dict[int, tuple[str, str]] = {}
+    if len(window) >= total_pages:
+        return out
+    in_window = set(window)
+    try:
+        import pypdfium2 as pdfium
+        doc = pdfium.PdfDocument(body, password=password or None)
+    except Exception:
+        return out
+    for n in range(1, total_pages + 1):
+        if n in in_window:
+            continue
+        try:
+            text = doc[n - 1].get_textpage().get_text_bounded()
+        except Exception:
+            continue
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if len(lines) < 2:
+            # 只印了一行的页说不出哪一侧是页边：它不当证据（也不当正文 —— 它本来就不在窗口里）
+            continue
+        out[n] = (lines[0], lines[-1])
+    return out
+
+
+def _strip_running_furniture(rendered: dict[int, str], page_nums: list[int],
+                             outside: dict[int, tuple[str, str]] | None = None,
+                             edges: dict[int, tuple[str, str]] | None = None) -> list[str]:
+    """摘掉"每页同一侧的同一个短句"，返回交代它去了哪的头部行；就地改 `rendered`。
+
+    先摘页眉再摘页脚：页脚那一轮看到的已经是摘过页眉的页面，于是"摘完就空"这一条
+    （本页至少还剩一段正文才允许摘）自然在两轮里都成立。候选不足 `_FURNITURE_MIN_PAGES`
+    页时一个字都不动 —— 宁可不摘，也不交出一页空白或一句关于没发生过的事。
+
+    第四道闸管的是数字折叠的副作用：把数字折成 `#` 之后，"Chapter 1 …" 与 "Chapter 2 …"
+    这类**每页换一个号的编号标题**也成了同一颗候选，而那种行正是不能碰的正文。挡它的不
+    是新判据，是渲染器自己已经做过的判断 —— 按字号认出来的标题在 markdown 里带 `#`，
+    带 `#` 的行就不是页边行。仍是形状，不认内容。
+
+    `outside` 是窗口外各页的首末行（R02-023）：它们**只加证据，不决定摘除** —— 摘不摘仍由
+    窗口内那一块过不过四道闸决定（包括 `#` 那一条：窗口内的编号标题照旧受保护），
+    所以一位窗口外的假证据不会摘掉窗口内的一段正文。交代那一行去向的那句话会把
+    「证据来自窗口外的哪几页、本窗口交付的是哪几页」一并说出口。
+
+    两条陈述共用同一把尺（`_furniture_key` 与「同侧 ≥2 页」与 120 字符那道闸），只是**动作**
+    不同：独立成块的那一行摘走并逐字引用（`running … removed from the body`）；同一颗行落在
+    一个比它长的段落里时**一个字都不删**，改为交出一句位置陈述（`… printed line repeats on
+    pages … but stays in the body`，R02-010）。第二句不许写成第一句的词 —— 「这是页眉/页脚」
+    是一个功能判断，而这一刀的整个前提是手上没有一把尺能把页边行与段末的正文行分开
+    （量过：字号比与离边距离两堆完全重叠）。所以它说的是"每页首/末**印着**的这一行重复了、
+    它没有被删、它为什么删不掉"，三件都是这一支真知道的事。
+    """
+    outside = outside or {}
+    #: 每页**印着**的首/末行（R02-052）。缺这份信息时（外部直接调用）退回按块判 ——
+    #: 不猜，也不因为拿不到就多摘什么。
+    edges = edges or {}
+    notes: list[str] = []
+    for side, ordinal, pick in (("header", "first", 0), ("footer", "last", 1)):
+        groups: dict[str, dict[int, tuple[int, str]]] = {}
+        for n in page_nums:
+            _parts, blocks = _blocks_with_offsets(rendered[n])
+            if len(blocks) < 2:
+                continue
+            idx, text = blocks[0] if side == "header" else blocks[-1]
+            if "\n" in text or len(text) > _FURNITURE_MAX_CHARS:
+                continue
+            if text.startswith("#"):
+                continue
+            #: 「它是一行」量的必须是**印刷**的那一行：块比这一页的首/末印行长，
+            #: 说明那是段落合并拼出来的（两行印刷行、行距不够开新块）—— 正文不是页脚。
+            pair = edges.get(n)
+            if pair and text != pair[0 if side == "header" else 1]:
+                continue
+            groups.setdefault(_furniture_key(text), {})[n] = (idx, text)
+        evidence: dict[str, set[int]] = {}
+        for n, pair in outside.items():
+            line = pair[pick]
+            if "\n" in line or len(line) > _FURNITURE_MAX_CHARS:
+                continue
+            evidence.setdefault(_furniture_key(line), set()).add(n)
+        # 页边那一行**印着**也存在，只是被段落合并吸住了（它落在一个比自己长的段落里）——
+        # 这一族只申报、不动手（R02-010）：切它就会开始删真正文（R02-052）。
+        merged_away: dict[str, dict[int, str]] = {}
+        for n in page_nums:
+            pair = edges.get(n)
+            if not pair:
+                continue
+            line = pair[pick]
+            if not line or "\n" in line or len(line) > _FURNITURE_MAX_CHARS:
+                continue
+            key = _furniture_key(line)
+            if key in groups:
+                continue                     # 独立成块那一支已经在管它了
+            _parts, blocks = _blocks_with_offsets(rendered[n])
+            # 只在**能证明它被吞了**的时候才说这句话：它的块比这一行长。整页只有这一行
+            # （块 == 行）不是"被段落吸住"，是"摘完就空"那一格 —— 那一格早就有别的说法，
+            # 这里不许给它编一个新的理由。
+            if not any(len(text) > len(line) and line in text for _i, text in blocks):
+                continue
+            merged_away.setdefault(key, {})[n] = line
+        for key, hits in groups.items():
+            pages_hit = sorted(set(hits) | evidence.get(key, set()))
+            if len(pages_hit) < _FURNITURE_MIN_PAGES:
+                continue
+            pages_hit_in_window = sorted(hits)
+            texts = [hits[n][1] for n in pages_hit_in_window]
+            for n in pages_hit_in_window:
+                idx = hits[n][0]
+                parts, _b = _blocks_with_offsets(rendered[n])
+                parts[idx] = ""
+                # 连着它后面那个空行一起摘；本页最后一块则摘前面那个
+                sep = idx + 1 if idx + 1 < len(parts) else idx - 1
+                parts[sep] = ""
+                rendered[n] = "".join(parts)
+            notes.append(f'> running {side} removed from the body: "{texts[0]}" '
+                         f'({ordinal} line of pages {_page_span(pages_hit)})'
+                         f'{_edge_note_suffix(texts, pages_hit, pages_hit_in_window)}')
+
+        # 申报这一半（R02-010）：删不掉不代表可以不说。字号与离页边距离都分不开
+        # 「页边行」与「段末的正文行」—— 量过仓里 4 份 ≥2 页的 PDF / 22 条边行：
+        # 重复那一堆的 字号/正文字号 ratio 一直到 1.000（现场那份通报的刊头与页脚就是按
+        # 正文字号印的），只出现那一堆低到 0.687，两堆重叠没有空带。
+        # 所以这里**不切**（切它就会删真正文），只把"重复了、留下了、为什么"交出去。
+        # 用词也不越过硬的那一半：这一句说的是**位置**（这一页首/末印着的那一行）与
+        # **重复**（同一颗折叠键跨 ≥2 页），不说"它是页眉/页脚" —— 这一刀的整个论点就是
+        # 手上没有一把尺能把两者分开，所以句子不许同时声称分过了。
+        for key, lines in merged_away.items():
+            pages_hit = sorted(set(lines) | evidence.get(key, set()))
+            if len(pages_hit) < _FURNITURE_MIN_PAGES:
+                continue
+            pages_hit_in_window = sorted(lines)
+            texts = [lines[n] for n in pages_hit_in_window]
+            notes.append(f'> {ordinal} printed line repeats on pages '
+                         f'{_page_span(pages_hit)} but stays in the body: '
+                         f'"{texts[0]}"{_edge_note_suffix(texts, pages_hit, pages_hit_in_window)}'
+                         ' - on those pages it sits inside a longer paragraph instead of standing '
+                         'as its own line, and nothing in size or margin tells that line apart '
+                         'from the prose around it on this file, so dhole deletes nothing here. '
+                         'Delete that line by hand if you want it gone.')
+    return notes
+
+
+# --- 页面上印着的日期形状（R01-048）------------------------------------------
+# P08 数过一遍：一份文件里同时躺着四个日期 —— info 字典的 2026、水印的 2024、刊头的
+# (c) 2023、正文自述的数据窗 2021-03 / 2022-09 —— 而回执只给了一行 `Date:`。他问的不是
+# "哪个值最大"，是"哪个才是这篇东西的年份"。这一格最容易修坏的方式正是替他挑一个：
+# 把 CreationDate 当文献年份印出去，等于把"这台机器什么时候导出 PDF"说成"论文哪年发表"。
+# 所以这里只做形状能做的事：把页面上**印着的**日期形状数出来、按精确度排、点名在哪几页，
+# 并明说这些都不是发表声明。不认 "Copyright" 一类的词，判据全在数字形状上。
+_DATE_SHAPE = re.compile(
+    r"(?<![\d.\-])(20\d{2}|1[89]\d{2})(?:-(\d{2})(?:-(\d{2}))?)?(?!\d)")
+_DATE_LIST_CAP = 8
+
+
+def _date_candidate_line(rendered: dict[int, str], page_nums: list[int]) -> str:
+    """把返回的那几页里日期形状数成一行；一个都没有就交回空串（不占一行）。
+
+    最长形状优先：`2024-01-01` 的一个位置不再另外产出 `2024-01` 与 `2024`。
+    裸年太多时**报数不报清单** —— 参考列表里那二十个年份不是"这份文件的日期"。
+    """
+    seen: dict[str, tuple[int, set[int]]] = {}
+    for n in page_nums:
+        for m in _DATE_SHAPE.finditer(rendered[n]):
+            token = m.group(0)
+            parts = sum(1 for i in (1, 2, 3) if m.group(i))
+            spec, pages = seen.get(token, (parts, set()))
+            pages.add(n)
+            seen[token] = (max(spec, parts), pages)
+    if not seen:
+        return ""
+    ordered = sorted(seen.items(), key=lambda kv: (-kv[1][0], kv[0]))
+    shown, rest = ordered[:_DATE_LIST_CAP], ordered[_DATE_LIST_CAP:]
+
+    def where(pages: set[int]) -> str:
+        rows = sorted(pages)
+        return f"page {rows[0]}" if len(rows) == 1 else f"pages {_page_span(rows)}"
+
+    bits = ", ".join(f"{token} ({where(pages)})" for token, (_spec, pages) in shown)
+    if rest:
+        bits += f", and {len(rest)} more year-shaped number(s) not listed"
+    return (f"> dates readable in the returned text, most specific first: {bits} - "
+            "these are printed on the pages; no date here is a stated publication "
+            "date for the work")
+
+
 def extract_pdf(
     body: bytes,
     extraction_type: str = "markdown",
@@ -1002,6 +1315,7 @@ def extract_pdf(
 
         # --- Pass 2: render each page; detect CID corruption + scanned pages ---
         rendered: dict[int, str] = {}
+        edges: dict[int, tuple[str, str]] = {}
         cid_pages: list[int] = []
         scan_pages: list[int] = []  # image-only pages in a MIXED PDF (per-page OCR)
         figures: dict[int, dict] = {}  # P4: 每页的非文本载荷（图 / 矢量），逐页数
@@ -1012,7 +1326,7 @@ def extract_pdf(
             try:
                 page_md = _render_page(p, body_size, text_mode,
                                        page_num=n, headings=heading_outline,
-                                       figures_out=figures)
+                                       figures_out=figures, edges_out=edges)
             except Exception as e:
                 logger.debug("PDF page %d render failed: %s", n, e)
                 page_md = f"[Failed to render this page: {str(e)[:120]}]"
@@ -1094,6 +1408,15 @@ def extract_pdf(
             total_w += q * plen
             total_len += plen
         quality = (total_w / total_len) if total_len else 0.0
+        # R01-048 的账要数在摘除**之前**：它数的是"这一页印着什么"，不是"那句话最后住在
+        # 信封的哪一格"—— 被 R01-037 当成页眉页脚存档的那些行，日期仍是页面上印着的。
+        date_line = _date_candidate_line(rendered, page_nums)
+        # R01-037：页边重复行。账算在摘除**之前** —— 上面那段 quality 用的还是原始页文本，
+        # 这一刀只动 `rendered`，页数、质量分、`--- Page N ---` 页界一概不动。
+        furniture_notes = _strip_running_furniture(
+            rendered, page_nums,
+            outside=_edge_lines_outside_window(body, password, page_nums, total_pages),
+            edges=edges)
         # Now replace CID pages with markers (display only; quality already scored).
         for n in cid_pages:
             if n in ocr_map:
@@ -1123,7 +1446,15 @@ def extract_pdf(
                 )
 
         # --- Assemble: metadata header + pages ---
-        header = _format_metadata(meta)
+        # The outline this delivery ships, in the reader's own terms: bookmarks if
+        # the file has them, otherwise the font-size measurement (see `toc` above).
+        # Its titles are what the pages print, so a Title field equal to one of
+        # them is already on the page and needs no second printing.
+        outline_titles = tuple(
+            {(h.get("title") or "").strip().casefold() for h in heading_outline}
+            | {(t.get("title") or "").strip().casefold() for t in toc})
+        header = _format_metadata(meta, own_outline=bool(toc),
+                                  outline_titles=outline_titles)
         if len(page_nums) == total_pages:
             scope = f"{total_pages} pages"
         else:
@@ -1132,6 +1463,11 @@ def extract_pdf(
         header.append(f"> PDF · {scope}")
         if ocr_used:
             header.append(f"> OCR fallback used on page(s): {', '.join(str(n) for n in sorted(ocr_map.keys()))}")
+        # 摘走的每一颗都在这里逐字留一次底：正文干净了，但那两行仍可查（见
+        # `_strip_running_furniture`）。没有页边行时这一串是空的，不多占一行。
+        header.extend(furniture_notes)
+        if date_line:
+            header.append(date_line)
         body_md = "\n\n".join(f"--- Page {n} ---\n\n{rendered[n]}" for n in page_nums).strip()
         full = ("\n".join(header).strip() + "\n\n" + body_md).strip()
 
@@ -1220,7 +1556,8 @@ def _rotated_is_artifact(page: Any) -> bool:
 
 def _render_page(page: Any, body_size: float, text_mode: bool,
                  page_num: int | None = None, headings: list[dict] | None = None,
-                 figures_out: dict[int, dict] | None = None) -> str:
+                 figures_out: dict[int, dict] | None = None,
+                 edges_out: dict[int, tuple[str, str]] | None = None) -> str:
     """Render one page to markdown: layout-aware text + tables merged by y-position.
 
     The figure census happens here rather than in `extract_pdf` because "what this
@@ -1298,6 +1635,11 @@ def _render_page(page: Any, body_size: float, text_mode: bool,
         para.clear()
 
     prev_bottom: float | None = None
+    #: 这一页**印着**的第一行与最后一行（合并之前）。渲染器本来就一行一行地走，
+    #: 页边行那一判要的就是这个 —— 块是合并之后的东西，「它是一行」量在块上会把自己
+    #: 拼出来的段落当成页边行（R02-052）。单一作者：下游不许再切一次行。
+    edge_first: str | None = None
+    edge_last: str | None = None
     bi = 0
     while bi < len(blocks):
         top, kind, payload = blocks[bi]
@@ -1305,6 +1647,8 @@ def _render_page(page: Any, body_size: float, text_mode: bool,
         if kind == "table":
             flush_paragraph()
             prev_bottom = None
+            # 这一页以表格收尾时，最后一行正文不是它的底边 —— 那一格不当页边候选
+            edge_last = None
             data, geometry = payload
             if geometry and not table_is_rectangular(geometry):
                 spans = sum(1 for row in geometry for c in row
@@ -1331,11 +1675,22 @@ def _render_page(page: Any, body_size: float, text_mode: bool,
                                  "page": page_num})
             prev_bottom = None
             continue
+        if not text_mode and _is_numbered_title_line(txt):
+            # 前后都断开：先把手上的段落交出去，自己单独一块，并让下一行从新段落起。
+            flush_paragraph()
+            out.append(txt)
+            prev_bottom = None
+            continue
         if prev_bottom is not None and (line_top - prev_bottom) > gap_threshold:
             flush_paragraph()
+        if edge_first is None:
+            edge_first = _clean_text(txt)
+        edge_last = _clean_text(txt)
         para.append(txt)
         prev_bottom = line_bottom
     flush_paragraph()
+    if edges_out is not None and page_num is not None and edge_first and edge_last:
+        edges_out[page_num] = (edge_first, edge_last)
     _announce_merged_table(merged_cells_total, merged_tables)
 
     return "\n\n".join(out).strip()

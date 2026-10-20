@@ -78,7 +78,14 @@ from dhole_mcp.robots import check as check_robots, get_robots_cache
 # 量的尺要只有**一把**。`visible_text_chars` / `is_extraction_collapsed` /
 # `distinct_content_links` 是 web_read 那侧已经拿真实页面标定过的三把尺（比值带、
 # 导航栏剥离），crawl 若自己再数一遍就会各有一套阈值 —— 同一个工具两种真相。
-from dhole_mcp.envelope import is_extraction_collapsed, visible_text_chars
+from dhole_mcp.envelope import (
+    is_extraction_collapsed, visible_text_chars, visible_text_chars_without_chrome)
+# 把一句话切成"还能核对的几块"这件事只有一位作者。crawl 曾自己写过一只
+# `[A-Za-z0-9]+`（见 `_query_terms`），那条腿只认拉丁，中文/日文的 `focus=` 交出空集，
+# 于是 score_link 的 focus_score 恒为 0 —— 参数成了装饰。`focus._tokens` 早就为同一件事
+# 定过判据（Unicode 词段 + 无空格文字相邻二元组），这里读它，不再写第三只。
+from dhole_mcp.focus import _tokens as _tokenize
+from dhole_mcp.models import RefusalHandle
 
 logger = logging.getLogger("dhole-mcp.crawl")
 
@@ -167,7 +174,15 @@ def _is_transient_error(error_str: str) -> bool:
     return category in ("timeout", "connection_reset", "unknown")
 
 
-class CrawlPage(BaseModel):
+class CrawlPage(RefusalHandle):
+    """爬行里的一行。戴 `RefusalHandle` 那一格把手（评审 R02-142 · 现场 r282）。
+
+    这一行的 `error` 从来不是它自己造的：它是转手 `web_read` 那一份信封的判决句
+    （`http_error_404: …` / `network_error: …`），可 `diagnosis` 这一格从前只住在信封上，
+    于是同一件事在 `web_read` 里有把手、在爬行的行上没有 —— 手册教的分支办法
+    （`switch on diagnosis.code`）在这一行读不到东西。行的形状由模型管，不由「每个构造点
+    记得填」管，所以这里戴同一副基类，与 `FeedResult` 的行、状态门的格子同一机制。
+    """
     url: str = Field(description="Page URL (final, after redirects). Normalized.")
     depth: int = Field(default=0, description="Hop depth from the start URL (0 = start).")
     status: int = Field(default=0, description="HTTP status. -1 = network error (no response / connection failed). 0 = no response yet.")
@@ -177,6 +192,8 @@ class CrawlPage(BaseModel):
     page_type: str = Field(default="", description="How the page was extracted: article / list / js_shell / fallback / discover_only. Tells the agent what kind of content it got.")
     content: list[str] = Field(default=[], description="Page markdown (empty in discover_only mode). For list pages, a structured link list.")
     content_chars: int = Field(default=0, description="Chars of markdown returned for this page.")
+    substance: str = Field(default="", description="What this row's body actually holds: `ok` (judged, and there are enough lines to have a shape opinion) / `nav_only` (menu-style fragments, or a page whose entire visible text is under 200 chars) / `no_words` (a packed payload) / empty = not judged. SAME AUTHOR AND SAME VALUES as web_read's `substance`: the same URL must not read as content one page at a time and as a shell inside a crawl. `nav_only`/`no_words` flip this row's `content_ok` to false.")
+    substance_basis: str = Field(default="", description="The numbers that verdict was made from (line count, share of short fragment lines without sentence punctuation, mean line length, the page's own visible character count). Read it before accepting the verdict - a genuine link index stays `ok` because there the links ARE the content.")
     is_truncated: bool = Field(default=False, description="True = this page has more content; web_read it with offset=next_offset.")
     next_offset: int = Field(default=0, description="Next offset if is_truncated; 0 = no more.")
     fetched_at: str = Field(default="", description="ISO-8601 UTC when this page was fetched (may show cache age).")
@@ -187,7 +204,7 @@ class CrawlPage(BaseModel):
     untrusted_content: Optional[Dict[str, Any]] = Field(default=None, description="Present ONLY when this page's text matched an injection heuristic ({hits: [{kind, excerpt, count}], total} — see web_read's untrusted_content for the shapes and the discipline). Per-page marking keeps a flagged page findable inside a 50-page crawl without rereading every row.")
 
 
-class CrawlResponseModel(BaseModel):
+class CrawlResponseModel(RefusalHandle):
     start_url: str = Field(description="The URL crawl started from (normalized).")
     pages: list[CrawlPage] = Field(description="Crawled pages (one CrawlPage each). In discover_only, content is empty and pages hold the discovered URL map.")
     pages_crawled: int = Field(default=0, description="Pages actually fetched.")
@@ -195,6 +212,10 @@ class CrawlResponseModel(BaseModel):
     discover_only: bool = Field(default=False, description="True = map mode (URLs only, no content).")
     truncated_by_max_pages: bool = Field(default=False, description="True = stopped early because max_pages was reached.")
     truncated_by_time: bool = Field(default=False, description="True = stopped early because the overall deadline (ms) was reached.")
+    deadline_ms_applied: int = Field(default=0, description="The whole-call time budget THIS run was held to, in ms: the `deadline_ms=` you named, or this tool's own cap when you named none. It is NOT `timeout=` - that one bounds ONE HTTP attempt, and the two units were confused often enough to need the number. 0/absent = the call never reached the crawl loop (a refusal, or a run that errored before the first round).")
+    budget_overrun_ms: int = Field(default=0, description="Milliseconds this run took OVER `deadline_ms_applied` while still shipping every row it had. Non-zero = the call outlived its own time budget WITHOUT being cut short: the loop reads the clock between rounds, so a fetch already in flight is allowed to finish (a deliberate choice - killing it would throw away a completed download). 0/absent = the run finished inside its budget. `truncated_by_time=true` is a different event (rows held back); when both appear, the truncation sentence carries the count and this number carries the cost.")
+    attempt_cap_ms: int = Field(default=0, description="Milliseconds ONE HTTP attempt was given on this run (the `timeout=` figure, or this tool's own default when none was named). It is the unit that `budget_overrun_ms` and `duration_ms` are NOT measured in: a run longer than this number did not ignore anything - it made more attempts, or a slower round. 0/absent = this path cannot name one (a map built without per-attempt caps).")
+
     truncated_by_total_chars: bool = Field(default=False, description="True = stopped early because the whole-run character budget (max_total_chars) was spent. The summary names how many pages were still queued and how many were fetched inside the last batch but not returned. In map mode it means the opposite of a page being dropped for being worthless: the rows were in hand and only their BYTES cost too much, so plan_id / next_resume_token carry the rest.")
     sitemap_used: bool = Field(default=False, description="True = the URL map came from the site's sitemap.xml (one fetch), not best-first BFS discovery.")
     sitemap_truncated: bool = Field(default=False, description="True = the map is SHORT OF THE SITE, not just short of your filters: it stopped at the URL cap, or the walk hit its own sitemap-index limit. pages_discovered is then a LOWER BOUND - the site's sitemap holds at least this many URLs. Absent (False) on a map that read the whole sitemap, but note that still is not a guarantee the sitemap lists every page: a sitemap is an index the site chooses to publish.")
@@ -206,8 +227,8 @@ class CrawlResponseModel(BaseModel):
     next_action: str = Field(default="", description="Obvious next call when one exists (continue crawl / fetch a page).")
     ssrf_recheck: str = Field(default="", description="Non-empty only when the post-redirect IP recheck was skipped because of this machine's resolver (a fake-ip proxy) — the SSRF posture of the WHOLE crawl, stated once. Before this field existed a crawl said nothing about it at all: the per-page receipts live on the web_read results that crawl consumes internally and never reaches the caller, so the one security posture that a 40-page run should disclose was dropped with the pages' own metadata.")
     identity_applied: str = Field(default="", description="Names only (never values) of what `cred_defaults` supplied for the pages this run fetched — one line for the whole run, gathered from each page's own receipt rather than recomputed from the store. It exists for the same reason as `ssrf_recheck`: a crawl row is a trimmed page report, so the per-page 'this was fetched with your credentials' died inside crawl. Read it before concluding the crawl saw the site the way a visitor does — a run carrying your stored auth is your logged view of that host, page after page.")
-    plan_id: str = Field(default="", description="The URL map is held server-side under this id (1h TTL). web_discover sets it on every map; web_crawl sets it when a map had rows held back, because those rows are only reachable through the plan. Pass resume_token='<plan_id>:0' to web_crawl to fetch the plan without re-sending the URL list, or resume_token='<plan_id>:<next row>' with discover_only=true for the rest of the map itself.")
-    next_resume_token: str = Field(default="", description="Set when a run stopped with URLs left (page cap, char budget or deadline): pass it back as resume_token= to continue exactly where this run stopped. A truncated MAP carries it too, and on a map it is the cursor into the held-back rows - web_crawl(resume_token=..., discover_only=true) returns the next rows without re-fetching the sitemap. Absent when the plan is exhausted.")
+    plan_id: str = Field(default="", description="The URL list is held server-side under this id (1h TTL). web_discover sets it on every map, and on a map the id holds the WHOLE map: the rows this answer shipped first, then the rows that were never sent. A page-by-page web_crawl sets it whenever it stopped with URLs still queued (max_pages, the whole-run character budget, or the deadline) and the id then holds exactly those never-requested URLs, in the order this run would have sent them. Pass resume_token='<plan_id>:0' to web_crawl to fetch the plan without re-sending the URL list, or resume_token='<plan_id>:<rows shipped>' to web_discover for the rest of the map itself.")
+    next_resume_token: str = Field(default="", description="Set when a run stopped with URLs left (page cap, char budget or deadline): pass it back as resume_token= to continue exactly where this run stopped, without re-fetching the pages it already returned. A truncated MAP carries it too, and on a map it is the cursor into the held-back rows - web_discover(resume_token=...) returns the next rows without re-walking the site. Absent when the plan is exhausted.")
 
     @model_serializer(mode="wrap")
     def _map_rows_carry_only_what_differs(self, handler):
@@ -413,13 +434,27 @@ def _measure_row(stats: dict, html: str, md: str, kind: str, url: str,
     stats["visible_chars"] = visible
     stats["extracted_chars"] = len(md)
     if kind == "article" and is_extraction_collapsed(len(md), visible):
-        stats["extraction_collapsed"] = True
+        # Same second ruler as web_read (R04-016a): the whole-page count includes
+        # chrome, so a complete article under a heavy nav can look collapsed.
+        # Keep <aside>: it can be substantive text (the /longaside control).
+        prose = visible_text_chars_without_chrome(html)
+        if prose <= 0 or is_extraction_collapsed(len(md), prose):
+            stats["extraction_collapsed"] = True
     if kind == "list":
         items = _item_links(html, url, start_url)
         stats["list_items"] = len(items)
         stats["item_set"] = frozenset(items)
         if len(items) < LIST_ITEMS_MIN:
             stats["thin_list"] = True
+    # 正文形状这一维**两个入口同一位作者**（`quality.body_substance`）。存在的理由是一条
+    # 实测：靶站 `/nav` 走 `web_read` 写着 `content_ok=false`（3.4 的 `nav_only`），走
+    # `web_crawl` 同一份字节却写着 `content_ok=true · 509B html` —— 与 `_row_verdict`
+    # docstring 为 `extraction_collapsed` 记下的那笔账是同一族，只是新的一维。
+    from dhole_mcp.quality import body_substance
+    verdict, basis = body_substance(md, visible)
+    if verdict:
+        stats["substance"] = verdict
+        stats["substance_basis"] = basis
 
 
 def _chrome_rows(measured: dict) -> dict:
@@ -453,15 +488,20 @@ def _row_verdict(kind: str, md: str, measured: dict) -> bool:
     * `thin_list` —— 渲染成列表却只有 0-2 条条目链接的行，交回去的"清单"里没有人。
       语料里最窄的那一页也有 12 条（`/nav`），travel 52 条，所以这颗下限不吃掉任何一页。
 
-    长度那把尺**保持 50**：计划里"抬到 200 对齐 `_JS_SHELL_MIN_TEXT_CHARS`"那一档被
-    `/collections?items=1` 挡在门外（见 `LIST_ITEMS_MIN` 上面那段）。这不是"一颗都不许动"，
-    是这一颗的数值没有依据。
+    长度不设第二条尺：`web_read` 对 6/10 字的真实正文都回 `content_ok=true`（实测
+    `/tiny`、`/tiny5`），crawl 这边再留一条 `len(md) >= 50` 就把同一个 URL 判成两种
+    真相（靶站 `/work/1`：39 字、`substance=ok`、`content_ok=false`、理由为空）。
+    "空 / 菜单 / 薄列表 / 塌陷"各有自己的作者（`not md`、`substance`、`thin_list`、
+    `extraction_collapsed`），不需要第五条长度闸来替它们说话。
     """
     if kind == "js_shell" or not md:
         return False
     if measured.get("extraction_collapsed") or measured.get("thin_list"):
         return False
-    return len(md) >= 50
+    if measured.get("substance") in ("nav_only", "no_words"):
+        # 与读取侧同判：一行全是菜单碎片时，够 50 个字符也不叫内容（3.4 那一维）。
+        return False
+    return True
 
 
 def _measure_note(stats: dict) -> str:
@@ -484,6 +524,11 @@ def _measure_note(stats: dict) -> str:
     if stats.get("thin_list"):
         return (f"thin list: {stats['list_items']} item link(s) on a row rendered as a "
                 "list - an index needs a group of entries, not one or two links")
+    if stats.get("substance") in ("nav_only", "no_words"):
+        # 翻闸之后这句更要说：它是被拒那一行的理由，也是它唯一的解药。
+        return (f"no prose in this row: {stats.get('substance_basis', '')} - do not cite "
+                "this row as content; web_read the URL with force_fetcher='stealthy' "
+                "(which renders) or follow the links it carries")
     return ""
 
 
@@ -671,12 +716,27 @@ def _path_in_scope(path: str, pattern: str) -> bool:
 
 
 def _scope_hint(pending_urls: list) -> str:
-    """停早时该不该推荐 path_include，以及推荐哪一棵子树（评审 R3刀3）。
+    """停早时该不该推荐 path_include，以及推荐哪一棵子树（评审 R3刀3 · R02-008 补全）。
 
     样板过去无脑写 `/docs`：站点没有 /docs 时那是一条修不了任何东西的建议，还顺手
     教读者去猜一颗并不存在的目录。判据取自**没抓到的那批 URL** 的第一段路径 —— 一段
     至少占 3 条、且过半，"只跑这一棵"才真把预算省下来；否则空串，调用方读到的是"抬
     预算"这一条老实建议。
+
+    过半那一格还漏放了一种**恰好全中**：候选装着整条队列时（`n == len(pending_urls)`），
+    推荐它等于推荐"保持现状"。台账现场是 `path_include=['/work']` 的一发早停，回执仍说
+    "scope it with path_include=['/work'] — that subtree holds **111 of the 111** URLs
+    still queued"：数字没错，行动性是零，而调用方这一发往往刚点过同一颗参数。这种句子不许
+    再当动作推荐；这里只把事实说出来（整条队列都在这一段里），把"抬预算"那条真能变的留着。
+
+    两处装配点（字符预算 / 页数与时间）从前各起各的头：一个把"scope"后面接"the run"，
+    一个接"it" —— 同一句推荐两个连接词，也是同一把尺子该并的账。现在连接词跟着
+    作者走，装配点只加一个逗号。
+
+    交回的是**整条后半句**，连它自己的连接词（"or scope it with …"）一起 —— 两种话读法
+    不同：推荐要接在"or scope it with"后面，而那条事实不能接（接上去就成了
+    "or scope it with every URL still queued is…"，一处装配把两种话都说坏了）。作者在这里，
+    装配点就不许再替它起头。
     """
     from collections import Counter
     firsts = Counter()
@@ -687,11 +747,55 @@ def _scope_hint(pending_urls: list) -> str:
     if not firsts:
         return ""
     seg, n = firsts.most_common(1)[0]
+    if n == len(pending_urls):
+        return (f"and note that every URL still queued is under {seg}, so a path "
+                "subtree cannot select a subset here")
     if n < 3 or n * 2 < len(pending_urls):
         return ""
-    return (f"path_include=['{seg}'] - that subtree holds {n} of the "
+    return (f"or scope it with path_include=['{seg}'] - that subtree holds {n} of the "
             f"{len(pending_urls)} URLs still queued (a path subtree, not a string "
             "prefix)")
+
+
+def _shortfall_sentence(shortfall: int, dropped_after_answering: int) -> str:
+    """少了的那几颗只有一句话的作者：付过请求的不许说成没发过（评审 R02-038）。
+
+    `shortfall` 是 `pages_discovered - pages_crawled` —— 一个把两种"少"合在一起的代数式。
+    两种少的解药不同，而调用方照着这句话决定抬哪一颗预算：
+
+      * **已经发过、答案也回来了**，只是回到循环时预算已用完，行被丢在批次里
+        （`dropped_after_answering`）—— 抬预算救不回这些字节，它们已经付过钱；
+      * **队列里从来没轮到的**（其余那部分）—— 抬预算才真的多发几颗。
+
+    一版把两者合并成一句「N 颗 URL 发现了却没 fetch」，等于把第一种说成第二种：实测一次
+    `deadline_ms=1000` 的爬取里，靶站在 0.80s 和 1.98s 各答过两颗被那样描述成"没发过"的
+    URL（服务方自己的日志为证）。句子按两种各给一个数，没丢过任何一行时只说"never sent"，
+    不许反过来把没发的吹成付过钱。
+    """
+    if not dropped_after_answering:
+        return f"{shortfall:,} URL(s) were discovered but never sent."
+    never_sent = max(shortfall - dropped_after_answering, 0)
+    return (f"{dropped_after_answering} URL(s) of those had already been requested "
+            f"(their answers arrived after the run stopped, so those rows were "
+            f"dropped rather than returned); {never_sent} were never sent.")
+
+
+def _resume_sentence(token: str, held: int, kept: int) -> str:
+    """早停留下的那串没发出去的队列怎么**按回去**：坐标、它指着什么、它省下什么。
+
+    `_shortfall_sentence` 早就数过"几条 URL 发现了却没发"，而这一发留下的出路只有
+    "把帽抬大重跑" —— 重跑那一发抓回来的是**同样那几页**（靶站实测：`max_pages=3` 之后
+    照旧出路跑 `max_pages=6`，交回的六行里前三行逐字就是上一发已经交回的那三行）。
+    计划的那套设施今天就在（`plan_store`/`plan_token`/`plan_parse`，服务器侧 resume 那一支
+    在读），缺的只是把这一串交给它。评审 R02-009。
+
+    `kept` 是这一发已经交回的页数 —— 那句话要说得出"不重付"具体指哪一段，否则它只是
+    一句形容词。地图那一停不走这句（见调用处那段注释：那颗 `plan_id` 另有作者、另有含义），
+    所以这里只有正文爬取一种形状。
+    """
+    return (f"Or pass resume_token='{token}' to web_crawl: it sends exactly those "
+            f"{held} queued URL(s), without re-fetching the {kept} page(s) this run "
+            "already returned.")
 
 
 def path_allowed(path: str, path_include=None, path_exclude=None) -> bool:
@@ -786,8 +890,17 @@ def extract_same_domain_links(
     return out
 
 
-def _query_terms(query: str) -> set[str]:
-    return {w.lower() for w in re.findall(r"[A-Za-z0-9]+", query or "") if len(w) >= 2}
+@functools.lru_cache(maxsize=32)
+def _query_terms(query: str) -> frozenset[str]:
+    """抓取排序用的词面依据 —— 切词由 `focus._tokens` 回答，这里只加一层缓存。
+
+    缓存的理由是热路形状：`score_link` 是逐链接调用的（页面里每条 `<a>` 一次，站点地图
+    入口每条最多三次），而一次抓取的 `focus` 是个常数。实测单次切词 8-22 µs，40 页、
+    每页上百条链接不缓存就白烧几十毫秒。
+    返回 frozenset：`lru_cache` 交回的是**同一只**集合，调用方可变就等于这一次抓取改写
+    下一次抓取的词表。
+    """
+    return frozenset(_tokenize(query))
 
 
 def score_link(url: str, text: str, focus: str) -> float:
@@ -908,6 +1021,21 @@ def _sitemap_passes_filters(path: str, path_include: Optional[list[str]],
     return path_allowed(path, path_include, path_exclude)
 
 
+#: 请求被时钟砍掉时，这一族抛的类型名。判据用**类型名**而不是消息文本（"格子不许由措辞
+#: 决定"是本仓库点过的形状），也不能只认内建那颗：primp 抛的是它自己一家的 `TimeoutError`
+#: （挂在 RequestError/PrimpError 下面，与 `builtins.TimeoutError` 没有继承关系），而
+#: urllib/socket 抛的才是内建那颗。两家的 MRO 里都只出现这些名字。
+_CLOCK_CLASS_NAMES = frozenset({
+    "TimeoutError", "ConnectTimeoutError", "ReadTimeoutError",
+    "ConnectionTimeout", "ConnectTimeout", "ReadTimeout",
+})
+
+
+def _is_the_clock(exc: BaseException) -> bool:
+    """这发请求是没答，还是答了而站点本来就空 —— 两句话，别混着说。"""
+    return any(cls.__name__ in _CLOCK_CLASS_NAMES for cls in type(exc).__mro__)
+
+
 async def _sitemap_map(url: str, path_include: Optional[list[str]],
                        path_exclude: Optional[list[str]], *,
                        max_pages: int, deadline_t: float,
@@ -937,15 +1065,37 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
     `truncated_by_total_chars` ever becoming true. Rows the budget held back are
     not discarded: they go to `held`, the plan holds them, and
     `next_resume_token` is the cursor back into it.
+
+    The clock each request here runs on used to be a hardcoded 15s in two places
+    (primp + the urllib fallback). Measured on a site whose /sitemap.xml answers
+    after 20s: `timeout=30000` and `timeout=120000` both returned the same 30.0s
+    wall clock (15s primp, then 15s urllib), the same empty map, and a sentence
+    blaming the site - the call overran its own 25s deadline while spending a
+    budget the caller had explicitly made larger. A request now gets what the call
+    has LEFT, and a fetch that ran out of it is recorded as `clock_cut` so the
+    report says whose number decided it. There is deliberately no 30s per-attempt
+    cap here (the one `bulk_get` enforces exists to fit four attempts into a
+    call); this path makes one attempt per client per URL and the deadline is what
+    bounds it.
     """
     from dhole_mcp.sitemap import discover_sitemap
+
+    _clock: dict = {"cut": [], "erred": []}
+
+    def _left_s() -> float:
+        """这一发还剩下多少秒 —— 时钟归调用方那句预算，不归一个写死的 15。"""
+        return deadline_t - time()
+
+    def _note(u: str, exc: BaseException) -> None:
+        (_clock["cut"] if _is_the_clock(exc) else _clock["erred"]).append(u)
 
     def _make_http_get():
         from dhole_mcp.search_proxy import configured_proxy
         _sitemap_proxy = configured_proxy()[0]
+        _cap = max(1.0, _left_s())
         try:
             import primp  # type: ignore
-            client = primp.Client(proxy=_sitemap_proxy, timeout=15, impersonate="random",
+            client = primp.Client(proxy=_sitemap_proxy, timeout=_cap, impersonate="random",
                                   impersonate_os="random", verify=True)
         except Exception:
             client = None
@@ -958,16 +1108,21 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
                     if r.status_code == 200 and r.content:
                         return (int(r.status_code), bytes(r.content))
                     return None
-                except Exception:
-                    pass  # fall back to urllib
+                except Exception as e:
+                    _note(u, e)
+                    # fall through to urllib - but only while there is time to ask
+            if _left_s() < 1.0:
+                _clock["cut"].append(u)
+                return None
             # stdlib fallback (some hosts reject primp fingerprints, accept urllib)
             try:
                 req = _urllib_req.Request(u, headers={"User-Agent": "Dhole-Sitemap/8.0"})
-                with _urllib_req.urlopen(req, timeout=15) as resp:  # noqa: S310
+                with _urllib_req.urlopen(req, timeout=max(1.0, _left_s())) as resp:  # noqa: S310
                     body = resp.read()
                     if body:
                         return (int(resp.status), body)
-            except Exception:
+            except Exception as e:
+                _note(u, e)
                 return None
             return None
         return _get
@@ -1027,6 +1182,8 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
             diag["robots_had_sitemap"] = result.robots_had_sitemap
             diag["guard_refused"] = list(result.guard_refused)
             diag["via"] = result.via
+            diag["clock_cut"] = list(_clock["cut"])
+            diag["fetch_errors"] = list(_clock["erred"])
         return None  # nothing reachable: the caller's "no sitemap here" answer is true
 
     # 地图里谁先走：文档序说的是"站点先列了谁"，不是"哪一页对这次有用"（C4）。
@@ -1096,11 +1253,18 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
             if held:
                 why = (f"its {listed} URL(s) did not become rows: the deadline came "
                        f"before the first one ({len(held)} of them were in hand)")
+                fix = ("Re-run with a larger budget - `timeout=` is the clock a "
+                       "web_discover call runs on, `deadline_ms` the one web_crawl runs on "
+                       "- or without sitemap=true to discover by links instead.")
             else:
                 why = (f"its {listed} URL(s) did not become rows (a repeat after "
                        f"normalization)")
-            fix = ("Re-run with a larger deadline_ms, or without sitemap=true to "
-                   "discover by links instead.")
+                # 这一支不怪时钟：条目全在手上、也走完了循环，只是每一条归一化之后都是
+                # 前一条。叫调用方"抬预算"是把他支去拧一颗与原因无关的旋钮（同一类错在
+                # C2 的 `search=` 上刚认过账 —— 出路要点名真正管事的那颗参数）。
+                fix = ("Every entry the site listed normalizes to a URL already in the "
+                       "map, so a larger budget changes nothing here. Run without "
+                       "sitemap=true to discover by links instead.")
         elif result.filtered_out:
             # 逐因带数（C1 在同一句话上认过账）：`filtered_out` 现在同时装着"被作用域
             # 挡掉"和"被 search 挡掉"两种，把它们合成一句"都不在你要的分区里"就会把
@@ -1126,11 +1290,15 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
             # 丢掉它们就等于把已经付过的一次 sitemap 抓取再要一遍。指的门是
             # web_discover：`discover_only` 不在 web_crawl 的 wire 面上（17.0 §4 把它
             # 变成了工具），所以那句"传 discover_only=true"在真机上够不着。
+            # 游标之后接的是**本因**那句 remedy（不再是硬编的 "larger deadline_ms"）：
+            # 走到这里只可能是时钟砍的，而 web_discover 的 wire 上没有 deadline_ms 那颗
+            # 旋钮 —— 对拿着 `timeout=` 的人喊抬 `deadline_ms`，就是 C2 那一族"把调用方
+            # 支到一个他够不着的旋钮上"。
             fix = (f"The {len(held)} URL(s) already in hand are held under plan "
                    f"{hold_plan_id}: web_discover(url='{url}', "
                    f"resume_token='{plan_token(hold_plan_id, 0)}') returns them "
-                   "without re-fetching the sitemap. Otherwise re-run with a larger "
-                   "deadline_ms, or without sitemap=true to discover by links instead.")
+                   "without re-fetching the sitemap. Otherwise "
+                   + fix[0].lower() + fix[1:])
         return CrawlResponseModel(
             start_url=normalize_url(url), pages=[], pages_crawled=0,
             pages_discovered=map_total, discover_only=True, sitemap_used=True,
@@ -1173,8 +1341,9 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
     next_action = (
         f"{ok} URLs mapped from the sitemap. web_read the ones you need - urls=[] "
         f"takes the whole subset in one call, no discovery and no re-crawl - or "
-        f"re-run web_crawl with discover_only=false to crawl content from the "
-        f"start URL. Use path_include/path_exclude to scope."
+        f"web_crawl(url=...) from this same start to get bodies as it walks "
+        f"(web_crawl returns content; a map comes only from web_discover). "
+        f"Use path_include/path_exclude to scope."
     )
     if _order_stats["mirrors_demoted"] and not held:
         # 没被预算砍到的时候，被折到后面的副本也必须说得出在哪 —— 否则"这张地图覆盖
@@ -1251,44 +1420,25 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
             "call, and path_include/search make the map smaller instead of longer. "
             "max_pages does not bound a map page - it bounds page fetches, and this "
             "page fetched none.")
+    # 这一支只拿到 deadline_t（整趟帽子的**到期时刻**），开工时还剩多少就是它被约束的
+    # 那段时间；一次尝试的帽子在这里不可知（不是这颗函数的参数），就不报那一笔。
+    _m_applied, _m_overrun, _m_cap, _m_dur, _m_words = _time_budget_reading(
+        t0, int(round((deadline_t - t0) * 1000)), 0)
+    if _m_words:
+        summary += _m_words
     return CrawlResponseModel(
         start_url=normalize_url(url), pages=pages, pages_crawled=0,
         pages_discovered=map_total, discover_only=True, sitemap_used=True,
         truncated_by_total_chars=stopped_by == "budget",
         truncated_by_time=stopped_by == "deadline",
+        deadline_ms_applied=_m_applied,
+        budget_overrun_ms=_m_overrun,
+        timeout_applied=_m_cap,
         sitemap_truncated=bool(result.capped or result.index_truncated),
         sitemaps=list(result.sitemaps_used), plan_id=hold_plan_id,
         next_resume_token=plan_token(hold_plan_id, ok) if held else "",
-        duration_ms=(time() - t0) * 1000, summary=summary, next_action=next_action,
+        duration_ms=_m_dur, summary=summary, next_action=next_action,
     )
-
-
-def _crawl_shares_the_private_door(fn):
-    """把 cred_defaults 的 ``allow_private`` 铺满**整趟爬取**，不只是种子那一颗。
-
-    2026-10-09 审计 D2（真机复现）：作用域曾经只包住种子那一行
-    ``validate_url(url)`` 就退出，而 sitemap 的发现（sitemap.py 里逐条
-    ``validate_url``）、robots.txt 的复校验（robots.py ``_fetch_rules``）、
-    第二层链接的抓取全都发生在那之后 —— 于是同一个 ``allow_private`` 在**读**
-    的门上是开的、在**爬**的门上是死的：一个 robots.txt 明写 ``Sitemap:``、
-    ``/sitemap.xml`` 也确实返回 200 合法 XML 的本机 dev 站，``web_discover``
-    报的是「没找到」。
-
-    修法不是再补一个作用域（那是第二处会漂移的真相），而是让这扇门在整趟爬取里
-    只有一个位置：进来时推开一次，出去时关掉。``functools.wraps`` 保住了
-    ``__wrapped__``，所以 ``inspect.signature(web_crawl)`` 仍是原来那份 17 参签名
-    —— 形状守卫读的是它，不是包装器。
-
-    ContextVar 会被 ``asyncio.to_thread`` 带进工作线程（``copy_context``），
-    所以 sitemap 那条线程里的 ``validate_url`` 读到的是同一个答案。
-    """
-    @functools.wraps(fn)
-    async def _wrapped(server, url, *args, **kwargs):
-        from dhole_mcp import identity as _identity
-        from dhole_mcp.security import allow_private_scope
-        with allow_private_scope(_identity.get("allow_private")):
-            return await fn(server, url, *args, **kwargs)
-    return _wrapped
 
 
 def _collect_row_identity(names: set, resp) -> None:
@@ -1313,10 +1463,11 @@ def _no_sitemap_summary(start_norm: str, diag: dict) -> str:
     robots.txt 会发现自己没写错，然后失去对整条回执的信任。这正是本仓库反复点名
     要杜绝的形状：调用看起来失败了，诊断却自信地答错。
 
-    分支顺序就是「越具体越先说」：守卫拦下 > 指令在但读不出 > robots 没读到 >
-    真的没有。
+    分支顺序就是「越具体越先说」：守卫拦下 > 本次调用的时钟砍掉 > 指令在但读不出 >
+    robots 没读到 > 真的没有。
 
-    末尾那一颗 ` · ` 是另一件事，四支都要挂：调用方可能**已经**为这台 host 存过凭据，
+    末尾那一颗 ` · ` 是另一件事，除守卫那支之外都要挂（守卫那支根本没走到取候选的
+    一步，谈不上"带凭据去要过"）：调用方可能**已经**为这台 host 存过凭据，
     而 sitemap 那一发是零凭据出去的（`_make_http_get` 用的是一个裸 primp 客户端）。
     一道要 token 才给人的 sitemap 在这里读起来就是"这站没地图"，而那正是有人存过
     凭据却看不见它起作用的样子 —— 所以说出事实，而不是让调用方去猜站点。
@@ -1326,6 +1477,16 @@ def _no_sitemap_summary(start_norm: str, diag: dict) -> str:
         return (f"sitemap not read: robots.txt declares Sitemap: {refused[0]}, which "
                 f"the SSRF guard refuses (a private or reserved address) - so nothing "
                 f"was fetched from it")
+    cut = diag.get("clock_cut") or []
+    if cut:
+        # 这一支从前并入「fetching or parsing it produced nothing」——那是把**调用方的
+        # 预算**说不成**站点的选择**：实测一台 20s 才答的站点，在 15s 的写死时钟下回的就是
+        # 这句话，而调用方明明写了 timeout=120000。时钟砍掉与站点答了空话是两件事，
+        # 而下一步完全不同（抬预算 vs 换来源）。
+        return (f"no sitemap could be read at {start_norm}: the request for {cut[0]} "
+                f"ran out this call's time budget before the site answered - that is "
+                f"the clock this call was given, not a 'no' from the site"
+                + _held_credential_clause(start_norm))
     if diag.get("robots_had_sitemap"):
         base = (f"no sitemap could be read at {start_norm}: robots.txt declares a "
                 f"Sitemap, but fetching or parsing it produced nothing (and "
@@ -1342,7 +1503,7 @@ def _no_sitemap_summary(start_norm: str, diag: dict) -> str:
 def _held_credential_clause(url: str) -> str:
     """存过凭据而这一发用不上时的那一句；没存过就空串（不占字数）。
 
-    两句"地图是空的"的话都要挂它 —— 守卫抓到过只挂一处：读通了 sitemap 而里面一个
+    这几句"地图是空的"的话都要挂它 —— 守卫抓到过只挂一处：读通了 sitemap 而里面一个
     URL 都没有，与根本没读到一份，是同一条不一致的两张脸（一道要 token 的站点回你的
     可能是一页 HTML，parse 出来正好是"空"）。
     """
@@ -1363,12 +1524,23 @@ def _no_sitemap_next_action(diag: dict) -> str:
                 "If it is your own dev site, waive it once with "
                 "cred_defaults(set={\"allow_private\": true}) (loopback only) or "
                 "set={\"allow_private\": [\"that.host\"]}, then call again. Otherwise "
-                "run web_crawl with sitemap=false to discover by links instead.")
-    return ("No sitemap found. Re-run web_crawl with sitemap=false (or omit it) "
-            "to use best-first BFS discovery instead.")
+                "omit sitemap= (or pass sitemap=false) and this same call builds the "
+                "map by walking links instead.")
+    if diag.get("clock_cut"):
+        # 出路要点名**这把时钟归哪颗参数管**：web_discover 的 wire 上没有 deadline_ms，
+        # 对它说「抬 deadline_ms」等于把调用方支到一个它够不着的旋钮上（同一个坏法在
+        # C2 的 `search=` 那一族里刚认过账）。
+        return ("The index request ran out this call's budget. Give it more of one: "
+                "timeout= is the clock a web_discover call runs on (raise it), and "
+                "deadline_ms is the one web_crawl runs on - or run with sitemap=false "
+                "to walk links instead of reading the index.")
+    # 「没有 sitemap」不是走错门：这扇门上省略 sitemap= 就改成游链。把调用方支到
+    # web_crawl 会同时换掉成本模型（那一扇门每页抓正文），而它要的是地图。
+    return ("No sitemap found. Omit sitemap= (or pass sitemap=false) and this same "
+            "call builds the map by walking links instead - one request per page - "
+            "or pass max_pages=1 to map just this page's own links.")
 
 
-@_crawl_shares_the_private_door
 async def web_crawl(
     server,
     url: str,
@@ -1410,41 +1582,57 @@ async def web_crawl(
     deadline_t = t0 + (deadline_ms / 1000.0)
 
     def _err(msg: str, start: str = "", hint: str = "",
-             refusal: bool = False) -> CrawlResponseModel:
+             refusal: bool = False, input_refusal: bool = False) -> CrawlResponseModel:
         """一次爬行级的拒绝。`refusal=True` 说的是"dhole 自己写的整句"：
         200 字符的帽子防的是浏览器 call-log 那种噪声，不该把守卫的解释剪在句子中间
         （评审 R3刀1：discover/crawl 把 300 字符的 fake-ip 解释截在 200，读者连
         "这是守卫"都读不出来，而唯一出路那句在被剪掉的尾巴上）。
+
+        `input_refusal=True` 说的是另一种失败：**一发都没出去**，错在调用方交来的那颗
+        `url=`。这一族要同一副信封（评审 R02-097 立的前缀契约 · R02-098 真机
+        `r119_url_shape_clauses.json`）：`error` 带 `invalid_request:`，`summary` 说
+        "invalid request"，而不是 `crawl failed:` —— 后者把一次参数拒绝算在站点头上，
+        读的人下一步就去查那个站了。
         """
         from dhole_mcp.errors import classify_network_error
+        if input_refusal and not msg.startswith("invalid_request:"):
+            msg = f"invalid_request: {msg}"
         if not hint:
             _, hint = classify_network_error(msg)
+        if input_refusal:
+            from dhole_mcp.quality import _summary_label
+            _summ = f"invalid request · {_summary_label(msg)}"
+        else:
+            _summ = f"crawl failed: {msg[:120]}"
         return CrawlResponseModel(start_url=start or url, pages=[],
                                   error=msg if refusal else msg[:200],
                                   duration_ms=(time() - t0) * 1000,
-                                  summary=f"crawl failed: {msg[:120]}",
+                                  summary=_summ,
                                   next_action=hint)
 
     try:
-        # 种子 URL 的私网放行：作用域在 `_crawl_shares_the_private_door` 里，
-        # 已经罩住整个函数体（种子、robots、sitemap、每一页）。这里不再单独推一次
-        # —— 两处作用域就是两处会漂移的真相，而 2026-10-09 审计 D2 的根因正是
-        # 「作用域只包了种子这一行就退出」。这颗 validate_url 读的是同一份策略。
+        # 种子 URL 的私网放行：读的是**守卫那一步**自己并进来的存量（R02-141）。
+        # 这里与 sitemap.py 逐条的 validate_url、robots.py 的复校验、每一页的抓取
+        # 共用同一个答案，不需要任何一层作用域 —— 2026-10-09 审计 D2 的根因是
+        # 「作用域只包了种子这一行就退出」，而把存量交给守卫读，包住的就不再是
+        # 一行，是每一个走守卫的调用点（包括 `asyncio.to_thread` 那条工作线程）。
         url = validate_url(url)
     except SecurityError as e:
-        from dhole_mcp.security import (
-            PRIVATE_ADDRESS_REFUSAL_PREFIXES, PRIVATE_ADDRESS_RECOVERY,
-            RESOLVER_GUARD_NEEDLE, RESOLVER_GUARD_RECOVERY)
+        from dhole_mcp.context import _TOOL
+        from dhole_mcp.security import url_refusal_recovery
         msg = str(e)
-        if RESOLVER_GUARD_NEEDLE in msg:
-            # 探测过期（进程记着 public，TUN 后来上线）—— 说清出路是重启宿主，
-            # 而不是让读者去改一颗没错的参数。
-            return _err(msg, hint=RESOLVER_GUARD_RECOVERY, refusal=True)
-        if msg.startswith(PRIVATE_ADDRESS_REFUSAL_PREFIXES):
-            # 一个包都没发的地址拒绝，兜底那句 "Fetch failed ... retry with different
-            # parameters" 是条假出路：换参数不会让 127.0.0.1 变成公网。
-            return _err(msg, hint=PRIVATE_ADDRESS_RECOVERY, refusal=True)
-        return _err(msg, refusal=True)
+        # 这一族的两半各有作者：动词按门取自 `context.nothing_went_out()`，句子本体住在
+        # 守卫侧的共用文案里 —— 两处合起来的那条出路现在由 `security.url_refusal_recovery`
+        # 一份装配（评审 R02-131：从前这四支住在这里，搜索门要同一件事就得再抄一遍）。
+        # 门名从 `tool_scope` 拿 —— `web_discover` 就是经这条引擎路拒绝的，写死 "web_crawl"
+        # 会让 discover 的读者听见别的门的名字（评审 R02-083）。
+        _door = _TOOL.get() or "web_crawl"
+        # 一次都没发出去（resolver / private / permanent / 形状四族全由 `url_refusal_family`
+        # 认族，判决照旧全拒，出路各说各的：R02-113 / R02-097 / R02-098 / R02-117 四批真机
+        # 读数在册 —— `r119_url_shape_clauses.json` 与 `r119b_boundary_clauses.json`）。
+        # 信封三件齐全，前缀由 `input_refusal=True` 给。
+        return _err(msg, hint=url_refusal_recovery(msg, _door),
+                    refusal=True, input_refusal=True)
     except ValueError as e:
         return _err(str(e))
     start_norm = normalize_url(url)  # canonical form for dedup + the response field
@@ -1596,9 +1784,10 @@ async def web_crawl(
     truncated_maxpages = False
     truncated_time = False
     truncated_total_chars = False
-    # 被字符帽挡下的两种页要分开数：`chars_dropped_fetched` 是这批已经发过请求、
-    # 只是没返回的；队列里剩下的那些从来没付过钱。
-    chars_dropped_fetched = 0
+    # 被帽挡下的页有两种，必须分开数：`dropped_after_answering` 是这一批**已经发过请求、
+    # 答案也回来了**只是没吐出来的；队列里剩下的那些从来没付过钱。三处 break（max_pages /
+    # 字符帽 / 时钟）都写这一颗 —— 合进 `discovered - crawled` 那一个数就是假话（R02-038）。
+    dropped_after_answering = 0
 
     sem = asyncio.Semaphore(concurrency)
 
@@ -1737,6 +1926,9 @@ async def web_crawl(
                 zip(batch, results)):
             if len(pages) >= max_pages:
                 truncated_maxpages = True
+                # 名额在这一格用完，可这一批的请求早就发出去了 —— 那些字节是付过钱
+                # 又扔掉的，不能和队列里没发的混在同一个"没 fetch 过"里。
+                dropped_after_answering = len(batch) - _bi
                 break
             # 整轮的字符帽在批内也要判：一批最多 `concurrency` 颗，一次 while 检查
             # 最坏会多吐出一整批。被这一格挡下的页是**已经付过请求**的，所以 summary
@@ -1744,10 +1936,11 @@ async def web_crawl(
             # 调用方就分不清是该抬预算还是该换 max_pages。
             if max_total_chars and total_chars >= max_total_chars:
                 truncated_total_chars = True
-                chars_dropped_fetched = len(batch) - _bi
+                dropped_after_answering = len(batch) - _bi
                 break
             if time() > deadline_t:
                 truncated_time = True
+                dropped_after_answering = len(batch) - _bi
                 break
             u_norm = normalize_url(resp.url or u)
             # Guard: if a redirect took us off-domain, skip it (don't crawl external).
@@ -1823,6 +2016,8 @@ async def web_crawl(
             page = CrawlPage(
                 url=u_norm, depth=depth, status=_error_status(resp),
                 content_ok=content_ok, fetcher_used=resp.fetcher_used,
+                substance=row_stats.get("substance", ""),
+                substance_basis=row_stats.get("substance_basis", ""),
                 title=title, page_type=page_type,
                 content=[content_md] if content_md else [],
                 content_chars=len(content_md), is_truncated=is_trunc,
@@ -1964,8 +2159,8 @@ async def web_crawl(
                 f"{total_chars:,} chars against the {max_total_chars:,} you set "
                 f"(a page's length is only known once it is fetched); "
                 f"{queued_now:,} URL(s) still queued"
-                + (f", {chars_dropped_fetched} fetched in the last batch and not "
-                   "returned" if chars_dropped_fetched else "")
+                + (f", {dropped_after_answering} fetched in the last batch and not "
+                   "returned" if dropped_after_answering else "")
                 + " - max_total_chars=0 removes the cap")
         if robots_skipped:
             bits_now.append(f"{robots_skipped} URL(s) skipped by robots.txt")
@@ -2051,41 +2246,71 @@ async def web_crawl(
     # 排队未发的 URL 是"能不能再砍一刀"的唯一依据：它们的第一段路径决定值不值得推荐
     # 一棵子树（见 `_scope_hint`）。
     scope_hint = _scope_hint([hu for _neg, _d, _s, hu, _t in heap])
+    # 同一串 URL 从前只被**数**出来（`_shortfall_sentence` 报几条 never sent），留下来
+    # 的那一份什么都没有 —— 于是"出路"只剩抬帽重跑，而重跑付的是同一批页的钱（评审
+    # R02-009）。顺序按这一发本会发出的顺序排：`sorted(heap)` 就是 heappop 的序。
+    #
+    # 地图那一停也交队列，但交给另一位存储者（`_emit_map_tail`，就在 return 前）：
+    # 正文支的计划只装一次都没发过的 URL，因为那一支的游标每前进一步都付一次请求，把
+    # 已交出的行存进去等于教调用方重付；地图支的行只是清单，所以存的是"已交出的 + 尾巴"
+    # —— 计划的大小就是地图的大小，`<id>:0` 与 `<id>:<N>` 因此都读得出东西（评审 R02-057：
+    # 从前这一支把队列清空了事，`next_action` 报得出少了 39 行、却没有一行能续回来）。
+    stop_queue = ([] if discover_only
+                  else [hu for _neg, _d, _s, hu, _t in sorted(heap)])
+    # 规范化：交出的行本来就是这个形状，混着两种写法的一张地图会让调用方把同一个
+    # 页面数两次。
+    map_tail = ([normalize_url(hu) for _neg, _d, _s, hu, _t in sorted(heap)]
+                if discover_only else [])
+    stop_plan_id = plan_store(stop_queue) if stop_queue else ""
+    stop_cursor = plan_token(stop_plan_id, 0) if stop_plan_id else ""
     if truncated_total_chars:
         next_action = (
             f"crawl stopped at the whole-run character budget "
-            f"(max_total_chars={max_total_chars:,}); {not_fetched:,} URL(s) were "
-            "discovered but not fetched. Raise max_total_chars (up to "
+            f"(max_total_chars={max_total_chars:,}); "
+            + _shortfall_sentence(not_fetched, dropped_after_answering)
+            + " Raise max_total_chars (up to "
             f"{MAX_TOTAL_CHARS_CEILING:,}) or pass 0 for no cap, lower "
             "max_content_chars_per to fit more pages in the same budget"
-            + (f", or scope the run with {scope_hint}" if scope_hint else "")
+            + (f", {scope_hint}" if scope_hint else "")
             + ". The pages you already have are the best-first ones - "
             "web_read the picks you actually need instead of re-crawling.")
+        if stop_cursor:
+            next_action += " " + _resume_sentence(stop_cursor, len(stop_queue), pages_crawled)
     elif truncated_maxpages or truncated_time:
         why = "time deadline" if truncated_time else "max_pages"
-        next_action = (
-            f"crawl stopped early ({why}); re-run web_crawl with a higher "
-            f"max_pages / deadline_ms"
-            + (f", or scope it with {scope_hint}" if scope_hint else "")
-            + f". {not_fetched} URL(s) were discovered but not fetched."
-        )
         if discover_only:
-            # This is the branch map mode actually lands in whenever the map is
-            # incomplete: "discovered > crawled" in map mode always means the loop
-            # hit max_pages, so the truncation branch above wins and the dedicated
-            # map-mode branch below is only reachable via an off-domain redirect.
-            # Put the cost disclosure where it will actually be read.
-            next_action += (
-                " Map mode costs one request per page, so raising max_pages buys a "
-                "deeper map with more requests; for a ONE-request map use max_pages=1 "
-                "(start URL's links) or sitemap=true (whole site)."
+            # 这一支是地图早停时**真的**走到的那一支：map mode 里 "discovered > crawled"
+            # 永远意味着循环撞了 max_pages，所以下面那支专用的地图文案只有经一次 off-domain
+            # redirect 才到（2026-10-16 实测：A9a 那发读到的就是这里的旧句子）。
+            # 出路的第一条必须点名**这扇门上就有的**那颗旋钮：web_discover 收 max_pages
+            # 与时钟 timeout=（真机 C3/C5 各一发通过），不收 deadline_ms（C2 当场拒），
+            # 而正文那一支保持原句 —— 那一扇门上 deadline_ms 才是它唯一的整轮时钟。
+            lever = ("timeout=" if truncated_time
+                     else f"max_pages= (up to {MAX_PAGES_CEILING})")
+            lead = f"map stopped early ({why}); raise {lever} on this same call"
+            tail = (
+                ". " + _shortfall_sentence(not_fetched, dropped_after_answering)
+                + " A map costs one request per page, so a deeper map is paid in "
+                  "requests; for a ONE-request map pass max_pages=1 (this page's own "
+                  "links) or sitemap=true (whole site, if it publishes one). For "
+                  "bodies rather than a URL list, web_crawl(url=...) from the same "
+                  "start is the other door."
             )
+        else:
+            lead = (f"crawl stopped early ({why}); re-run web_crawl with a higher "
+                    f"max_pages / deadline_ms")
+            tail = ". " + _shortfall_sentence(not_fetched, dropped_after_answering)
+        # 连接词只在这一处装配：两支各写一遍是"同一句话两个连接词"的来路。
+        next_action = lead + (f", {scope_hint}" if scope_hint else "") + tail
+        if stop_cursor:
+            next_action += " " + _resume_sentence(stop_cursor, len(stop_queue), pages_crawled)
     elif discover_only and pages_discovered > pages_crawled:
         next_action = (
             f"{pages_discovered} URLs mapped at a cost of {pages_crawled} page "
             f"fetch(es) (map mode fetches one page per expansion step to find more "
-            f"links). web_read the ones you need, or re-run web_crawl with "
-            f"discover_only=false to fetch content from the start URL. For a "
+            f"links). web_read the ones you need, or web_crawl(url=...) from the "
+            f"same start to fetch content (web_crawl returns bodies; a map comes "
+            f"only from web_discover). For a "
             f"ONE-request map, pass max_pages=1 (start URL's links) or "
             f"sitemap=true (whole site, if it publishes one)."
         )
@@ -2112,11 +2337,18 @@ async def web_crawl(
                           "Try web_read on a specific URL for more diagnostics.")
 
     from dhole_mcp.security import recheck_posture_note
+    _applied, _overrun, _cap, _dur_ms, _budget_words = _time_budget_reading(
+        t0, deadline_ms, timeout)
+    if _budget_words:
+        summary += _budget_words
     result = CrawlResponseModel(
         start_url=start_norm, pages=pages, pages_crawled=pages_crawled,
         pages_discovered=pages_discovered, discover_only=discover_only,
         truncated_by_max_pages=truncated_maxpages,
         truncated_by_time=truncated_time,
+        deadline_ms_applied=_applied,
+        budget_overrun_ms=_overrun,
+        attempt_cap_ms=_cap,
         truncated_by_total_chars=truncated_total_chars,
         # 一次读取进程事实的调用：探针已经在这次爬取里跑过了（每页的 web_read 都
         # 过那道门），这里只是把它的判词拿到调用方看得见的一层。
@@ -2125,8 +2357,13 @@ async def web_crawl(
         # 从存储现算的）：一张带着调用方 token 爬回来的 40 页站点，读起来和一张公开
         # 站点一模一样，而这两个东西不该长得一样。
         identity_applied=", ".join(sorted(row_identity)),
-        duration_ms=(time() - t0) * 1000,
+        duration_ms=_dur_ms,
         robots_skipped=robots_skipped,
+        # 早停那队列的续跑坐标（`stop_plan_id` 只在队列非空时有值）：从前这两格在
+        # 一页一页爬的那一路恒为空，只有地图那一路会填 —— 而 `next_resume_token`
+        # 的字段说明早就写着"page cap, char budget or deadline"。
+        plan_id=stop_plan_id,
+        next_resume_token=stop_cursor,
         summary=summary, next_action=next_action,
     )
 
@@ -2149,7 +2386,47 @@ async def web_crawl(
                 "prioritize relevant links instead of filtering."
             )
 
+    # 三条停因（帽 / 字符预算 / 时限）在这里合成一条出口：只要这一发还留着没轮过的
+    # URL，地图就整份存下来（`search` 已在上面筛过，交出的那几行就是计划的前半）。
+    if map_tail:
+        _emit_map_tail(result, url=url, held=map_tail)
+
     return result
+
+
+def _time_budget_reading(t0: float, deadline_ms: int, attempt_ms: int = 0) -> tuple:
+    """(整趟受哪颗数字管, 越线多少 ms, 一次尝试的帽子, 这次跑了多久, 要补的那一句).
+
+    两笔不同的账，今天两笔都是静默：
+
+      * `deadline_ms` 是**整趟**的预算。跑得比它久通常意味着有行被砍（那一支自己有句子，
+        说行数与游标），但也可以只是最后一发回来时已经过了钟点而队列正好空了 —— 那一格
+        今天一个字都没有（本刀的罪名：R02-012，字符预算超额申报、时间预算超额不申报）。
+      * `timeout=` 是**一次 HTTP 尝试**的帽子。整趟跑过它完全正常（一发接一发），但调用方
+        按整趟去理解它 —— 于是「我点了 6000，它跑了 12018」在 S4 变成了一次直接放弃。
+        这一支的句子必须把分工说清，而不是道歉。
+
+    只报事实，不改判词：一次越线不是失败，`status` 与行的 `content_ok` 都不动。
+    """
+    dur_ms = (time() - t0) * 1000
+    applied = int(round(deadline_ms or 0))
+    overrun = int(round(dur_ms - applied)) if applied > 0 else 0
+    cap = int(round(attempt_ms or 0))
+    words = ""
+    if overrun > 0:
+        words += (
+            f" · the run outlived its whole-call budget by {overrun:,}ms "
+            f"(deadline_ms={applied:,} is what bounds the run, and the clock is read "
+            "between rounds, so a fetch already in flight finishes rather than being "
+            "thrown away)")
+    if cap > 0 and dur_ms > cap:
+        words += (
+            f" · the {dur_ms:,.0f}ms this call took is NOT what `timeout=` was "
+            f"promising: timeout={cap:,}ms is the cap on ONE HTTP attempt, while the "
+            "whole run is bounded by "
+            + (f"deadline_ms={applied:,}ms" if applied else "no deadline you named")
+            + " - a longer run means more attempts, not a longer single one")
+    return applied, max(overrun, 0), cap, dur_ms, words
 
 
 # ─── 千页确定性批量：plan 存储与续传 token（批次8 刀2，F-D-J2） ────────────────
@@ -2209,3 +2486,41 @@ def _hold_map_tail(pages: list[CrawlPage], held: list[str]) -> str:
     所以留下的尾巴要连着交出去的前半一起存 —— 计划的大小因此就是地图的大小。
     """
     return plan_store([p.url for p in pages] + list(held))
+
+
+def _emit_map_tail(result, *, url: str, held: list[str]) -> None:
+    """走链接的地图早停：把没轮过的 URL 连着已交出的那几行存成**整张地图**。
+
+    sitemap 那一路早就这样收（`_hold_map_tail`），这一支以前在交给存储之前先把队列
+    清空，于是同一颗 `plan_id` 在两种地图上说的是两种话：一种装着地图，一种只装着
+    已经交出的那几行 —— 而调用方照着回执里那句"39 URL(s) were discovered but never
+    sent"去问，读回的还是上一次的 3 行，下一句是 "Map exhausted"。计划只有 3 行、
+    地图有 42 行时，那句 "exhausted" 说的是计划，不是这个站。
+
+    下一句因此要点齐四样：存了几行（= 地图多大）、游标落在已交出的行数上、`<id>:<N>`
+    读回没发过的那段、`<id>:0` 从头重读整张图，每一式都带上 `url=`（这颗门非要有 url，
+    照抄不跑的建议不算出路）。正文那一支不学这个形状：它每走一步付一次请求。
+    """
+    shipped = [p.url for p in result.pages]
+    tail = [u for u in held if u not in set(shipped)]
+    if not tail:
+        return
+    plan_id = _hold_map_tail(result.pages, tail)
+    total = len(shipped) + len(tail)
+    result.plan_id = plan_id
+    result.next_resume_token = plan_token(plan_id, len(shipped))
+    result.summary += (f" · plan {plan_id} holds the whole map: {total} row(s), "
+                       f"{len(shipped)} shipped here, {len(tail)} never sent")
+    bits = (
+        f" The {len(tail)} map row(s) that were never sent are held here with the "
+        f"{len(shipped)} that shipped, under plan {plan_id} ({total} row(s) = the "
+        f"whole map, 1h): web_discover(url='{url}', "
+        f"resume_token='{plan_token(plan_id, len(shipped))}') lists rows "
+        f"{len(shipped) + 1}-{total} and spends no request.")
+    if shipped:
+        bits += (f" web_discover(url='{url}', resume_token='{plan_token(plan_id, 0)}')"
+                 f" re-lists the map from row 1.")
+    bits += (f" web_crawl(url='{url}', resume_token='{plan_token(plan_id, len(shipped))}')"
+             " fetches the CONTENT of those held-back rows, and raising max_pages"
+             " reaches them the slow way - one request per row.")
+    result.next_action = (result.next_action or "").rstrip() + bits

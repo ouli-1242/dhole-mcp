@@ -139,28 +139,94 @@ _AUTO_ENCODINGS = ("utf-8", "gb18030")
 _SCORED_ENCODINGS = ("utf-8", "gb18030")
 
 
-def encoding_was_guessed(body: bytes, declared: str, used: str) -> bool:
-    """True when the charset is dhole's guess rather than anyone's statement.
+def _canon_charset(name: str) -> str:
+    """`GBK` / `gbk` / ` utf_8 ` / `UTF-8` 是两颗字符集，不是四颗。"""
+    return (name or "").strip().lower().replace("-", "").replace("_", "")
 
-    Measured boundary (module note above): GB18030 decodes Shift_JIS and EUC-KR
-    bytes STRICTLY, so a Japanese or Korean legacy file comes back as plausible
-    Chinese with damage 0 and nothing in the text betrays it — there is no cheap
-    discriminator, and pretending otherwise would be a new kind of green light.
-    What can be said without overreaching is the weaker, true thing: nobody
-    declared this charset, no BOM stated it, and the answer came from the
-    strict-gb18030 branch. That is a guess, and a caller who passed `encoding=`
-    would get a verdict instead.
 
-    A declared name that decoded successfully is NOT a guess (the caller owns
-    that reading), and neither is anything a BOM or a UTF-16/32 body stated.
+def encoding_was_declared(body: bytes, declared: str) -> bool:
+    """声明的那一颗是不是**真的解得开**这份字节。
+
+    这是 `encoding_basis` 的一半问题，也是 R02-021 那一刀的落点：判据说的是「有没有人
+    声明过」，而设计说的是「解不开的名字落回检测」（本模块上面第 2 条）。名字解不开时
+    跑的是检测那颗 —— 「有人说过」就再也不等于「这一份按谁读」。
     """
-    if used != "gb18030":
+    name = (declared or "").strip()
+    if not name:
         return False
-    if (declared or "").strip():
+    try:
+        body.decode(name)
+    except (LookupError, UnicodeError):
         return False
-    if any(body.startswith(bom) for bom, _ in _BOM_ENCODINGS):
-        return False
-    return b"\x00" not in body[:64]
+    return True
+
+
+def contested_rival(body: bytes, used: str) -> str:
+    """点名的这颗解得开时，同一批字节的**第二种干净读法**叫什么名字（没有则 ""）。
+
+    三个条件都要成立，否则这一格不开口（做成噪声比不做更坏）：
+
+      * 竞争者自己无可疑（``decode_damage`` 非 0 就出局 —— 真 big5 件被 gb18030 读成一堆
+        PUA 时，那份读数没有资格说"我也能读"，实测 damage 14）；
+      * 它是个**不同的名字**（归一化之后）；
+      * 它的**文本与点名的这一份逐字不同**（GBK 件点名 gbk 时自动那颗走 gb18030，名字不同
+        而同一份文本 —— 没有第二种读数可交代）。
+    """
+    try:
+        named = body.decode(used)
+    except (LookupError, UnicodeError):  # pragma: no cover - `used` just decoded fine
+        return ""
+    rival_text, rival_used, rival_damage = decode_file_bytes(body, "")
+    if rival_damage or not rival_used or _canon_charset(rival_used) == used:
+        return ""
+    if rival_text == named:
+        return ""
+    return _canon_charset(rival_used)
+
+
+def encoding_basis(body: bytes, declared: str, used: str) -> str:
+    """这一份是**按谁**读的：``declared`` / ``contested`` / ``fallback`` / ``guessed`` / ``""``。
+
+    一个作者回答一族问题，因为这五个读数在调用方手里是同一个问句（「我看到的这个编码
+    名字是谁说了算的」）：
+
+      * ``declared`` —— 声明的那一颗自己解开了，而且这份字节**没有第二种干净的读法**，
+        读的就是它（调用方的，或文件里 meta 说过的那一颗）。这是判定。
+      * ``contested`` —— 声明的那一颗解开了，正文也照它交，可同一批字节还有第二颗名字
+        同样严格解得开、那份读数自身无可疑，而两份文本逐字不同。R02-037 量的是这一格：
+        一份 GBK 文件点名 ``big5``，交回「詩寢艦瘧婓盄潰聆ㄩ疏…」—— 而
+        ``decode_damage`` = 0、``misdecode_score`` = 0、``charset_is_in_doubt`` = False，
+        因为错语言的每一个字都是 big5 表里的合法字符。名字与字节**相容**不等于字节**属于**
+        那个名字；便宜的判别器不存在（上面 ``guessed`` 那条实测边界就是原因），能诚实说的
+        只有「另一份读数也在，它叫 gb18030」。
+      * ``fallback`` —— 有人声明过，但那颗名字解不开这份字节，最后跑的是检测那一颗。
+        **这一格是 R02-021**：旧判据只看「有没有人声明过」，于是把检测的果实标成调用方
+        的种子，连带关掉 `quality._agent_hints` 里那句唯一说真话的申报。
+      * ``guessed`` —— 没人声明，gb18030 干净地解开了。GB18030 严格解得开 Shift_JIS 与
+        EUC-KR 的字节（本模块上面那条实测边界），出来的是看着像中文的错字、damage 0，
+        便宜的判别器不存在 —— 能诚实说的只有「这一个是 dhole 选的」。
+      * ``""`` —— 不需要说话：UTF-8 严格解开的、BOM / UTF-16 自己说过自己的。
+
+    搬运不许长第二个作者：`parse._decode_body` → `server.doc_parse` →
+    `quality._agent_hints`。
+    """
+    decl = _canon_charset(declared)
+    win = _canon_charset(used)
+    if decl:
+        if not encoding_was_declared(body, declared):
+            return "fallback"
+        if decl != win:
+            return "fallback"
+        return "contested" if contested_rival(body, win) else "declared"
+    if win == "gb18030":
+        if any(body.startswith(bom) for bom, _ in _BOM_ENCODINGS):
+            return ""
+        # A UTF-16/32 body with its BOM stripped decodes "cleanly" as GB18030 into
+        # text full of NULs; that decoder does not need a flag next to it.
+        if b"\x00" in body[:64]:
+            return ""
+        return "guessed"
+    return ""
 
 
 def decode_file_bytes(body: bytes, declared: str = "") -> tuple[str, str, int]:

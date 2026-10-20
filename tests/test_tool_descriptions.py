@@ -80,7 +80,7 @@ def test_engine_count_in_instructions_matches_real_pool():
 
     这个数字是人手写的，没有守卫就会一直漂。改成从常量算。
     """
-    assert f"searches {len(DEFAULT_ENGINES)} engines" in DHOLE_INSTRUCTIONS
+    assert f"searches {len(DEFAULT_ENGINES)} keyless engines" in DHOLE_INSTRUCTIONS
 
 
 def test_search_description_lists_the_real_default_pool(tools):
@@ -105,7 +105,8 @@ def _engine_tokens(text: str) -> set[str]:
 def test_search_engine_list_never_names_a_retired_engine(tools):
     """`web_search` 的每一处引擎点名都不许指着已经不存在的后端。
 
-    17.0 删了 6 家引擎、并把 opt-in 层一起去掉（池子=注册表），所以这条守卫换了
+    17.0 删了 6 家引擎（yahoo 在 17.1 作为 Bing 家族冗余返回）、并把 opt-in 层
+    一起去掉（池子=注册表），所以这条守卫换了
     形状：过去它比对「点名的 opt-in 清单别只列一半」，现在比对「点名的名字里不许
     有退役的那几家」。留着退役名字比漏列更糟 —— 调用方照着点会收到 invalid_request，
     那句话读起来像是我们坏了。
@@ -113,8 +114,7 @@ def test_search_engine_list_never_names_a_retired_engine(tools):
     **逐个位置判，不把整份载荷当一个字符串扫**（写下第一条版本时的真实错误：一处
     列全了就把另一处的漏列"补"成通过，变异实验实测）。
     """
-    retired = {"sogou_weixin", "baidu_baike", "wikipedia", "grokipedia",
-               "mwmbl", "yahoo"}
+    retired = {"sogou_weixin", "baidu_baike", "wikipedia", "grokipedia", "mwmbl"}
 
     # 机制自检：整词匹配不该把 sogou_weixin 读成 sogou
     assert _engine_tokens("sogou_weixin only") & retired == {"sogou_weixin"}
@@ -144,7 +144,7 @@ def test_search_engine_list_never_names_a_retired_engine(tools):
 def test_the_engines_description_quotes_the_derived_cap(tools):
     """常驻层那句「max N names」的 N 必须等于推导出来的上限 —— 手抄的数字会漂。
 
-    上限由 `search.MAX_ENGINES_PER_SEARCH`（8 免密 + 2 keyed）推导，注册表一变它跟着变；
+    上限由 `search.MAX_ENGINES_PER_SEARCH`（10 免密 + 2 keyed）推导，注册表一变它跟着变；
     描述是静态字符串，抄不了，只能在这里钉住。
     """
     from dhole_mcp.search import MAX_ENGINES_PER_SEARCH

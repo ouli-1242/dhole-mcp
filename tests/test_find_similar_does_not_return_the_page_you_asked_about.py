@@ -92,9 +92,11 @@ def _stub_engines(monkeypatch, urls, *, reranker_scores=None):
     monkeypatch.setattr(search_mod, "multi_search", fake_multi_search)
     monkeypatch.setattr(search_mod, "ensure_reranker", AsyncMock(return_value=None))
     monkeypatch.setattr(search_mod, "fetch_source_for_similar",
-                        AsyncMock(return_value=("The Command Line Interface Guidelines",
-                                                "an open-source guide to help you write "
-                                                "better command-line interfaces")))
+                        AsyncMock(return_value={
+                            "title": "The Command Line Interface Guidelines",
+                            "body": "an open-source guide to help you write better "
+                                    "command-line interfaces",
+                            "status": 200, "reason": "", "detail": ""}))
     if reranker_scores is not None:
 
         class _Rer:

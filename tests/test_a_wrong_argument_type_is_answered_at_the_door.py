@@ -19,11 +19,20 @@
     出口没接上。
 
 契约（本文件钉住，扫的对象是 `_TOOL_DEFS` 自己，新增参数自动在册）：
-  * 只要回来的带 `error`，就必须同时带 `summary` 与 `next_action` —— 哪颗错了、该改成
-    什么、下一步做什么。成功的那条路三格都齐，失败反而更瘦是没道理的。
+  * 只要回来的带 `error`，就必须同时带 `next_action` —— 哪颗错了、该改成什么、下一步做什么。
+    成功的那条路三格都齐，失败反而更瘦是没道理的。
+    【评审 R02-103 更正这一条的适用范围 · 原判据本身带着它守的洞】它原来还要求每一扇的拒绝
+    都带 `summary` 与 `content_ok=False`。量在 `review/.runtime/p1/r184_state_door_shapes.json`：
+    `SysStateModel` / `CredDefaultsModel` **没有**这两格（模型里没有的字段不可能出现在该扇的
+    成功回执里，sys_state 成功交 3 格、cred_defaults 交 4 格），于是这两扇唯一的满足方式是让
+    拒绝穿一副它成功时从不穿的衣服 —— r183 量到的正是那样：13 格、带着 `content` /
+    `duration_ms` / `fetcher_used`。那正是 R02-103 要修的漂移，所以这里把"要 summary /
+    content_ok"的适用范围从"每一扇"更正为"模型里真有这两格的每一扇"，并给那两扇换上更强的
+    正面锁：拒绝回执的格集合必须是**自己模型的子集**。
+    其余各格一条没松：前缀、点名那颗参数、出路在、一个包都没发。
   * 共用类型门（`params._coerce_*`）拒掉的那一批走标准 `invalid_request` 信封：`error`
-    以 `invalid_request:` 开头、点名那颗参数、`content_ok` false。住在 `search.py` 的
-    两颗枚举拒绝按老规矩以参数名/值开头（`test_the_enum_argument_values_are_checked_by
+    以 `invalid_request:` 开头、点名那颗参数、`content_ok` false（该扇模型里有这一格时）。
+    住在 `search.py` 的两颗枚举拒绝按老规矩以参数名/值开头（`test_the_enum_argument_values_are_checked_by
     _dhole` 立的），这里只补它们缺的那格出路。
   * 那句话里不许出现 Python 内部话（`has no attribute` / `validation error for` /
     `Traceback` / `pydantic_core`）。
@@ -41,10 +50,21 @@ import threading
 
 import pytest
 
+from dhole_mcp.models import CredDefaultsModel, SysStateModel
 from dhole_mcp.server import MasterFetchServer
 
+# 有"自己一副模型"的非抓取门（评审 R02-103）。这两扇按自己的模型交拒绝，
+# 抓取壳里的那两格对它们无意义：`content_ok` 问的是"抓回来的内容行不行"，
+# 而这一扇什么内容都没抓。tests/test_a_state_door_refuses_in_its_own_shape.py
+# 按门名钉这两扇确实交这副形状，本表不是它们唯一的证人。
+OWN_MODEL_DOORS = {'sys_state': SysStateModel, 'cred_defaults': CredDefaultsModel}
+
 INTERNAL_TALK = ("has no attribute", "validation error for", "Traceback",
-                 "pydantic_core", "object of type", "is not defined")
+                 "pydantic_core", "object of type", "is not defined",
+                 # 兜底那封也是内部话：它把一次调用方的类型错说成服务器的事，还教人重试
+                 # （R02-091 的现场就是这一句 + `invalid literal for int()`）
+                 "invalid literal for", "Internal error, not a blocked site",
+                 "retry the same call once", "traceback is in the server log")
 
 PAGE = (b"<html><head><title>Fixture</title></head><body><p>plain fixture page</p>"
         b"</body></html>")
@@ -72,11 +92,19 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
 
 def _wrong_value(spec: dict):
-    """一颗与 schema 声明相反的值：array←字符串，string/number←另一种标量。"""
+    """一颗与 schema 声明相反的值：array/integer/number/boolean/object←字符串，string←数字。
+
+    这一支从前对 `integer`/`number` 交回的是 **7** —— 一颗合法的数字。也就是说这张扫表
+    从来没反类型地扫过整数与数字那两面（只有手抄的 `WRONG_TYPE_CASES` 撞过字符串），
+    于是 `web_discover(max_pages='…')` 那两颗洞在它眼皮底下活了一整轮（评审 R02-091 ·
+    半径见 `review/.runtime/p1/r102_wrongtype_sweep.json`）。改成真相反的值，并把兜底
+    那封的句子也列进 `INTERNAL_TALK`：那句 "Internal error … retry the same call once"
+    教的是重试一颗永远不该重试的错，它本身就是洞的形状。
+    """
     t = spec.get("type")
     if isinstance(t, list):
         t = next((x for x in t if x != "null"), "string")
-    return {"array": "one", "integer": 7, "number": 7, "string": 7,
+    return {"array": "one", "integer": "one", "number": "one", "string": 7,
             "boolean": "one", "object": "one"}.get(t or "string", "one")
 
 
@@ -169,7 +197,13 @@ async def test_every_wrong_typed_argument_arrives_as_a_sentence(origin):
                         bad.append(
                             f"{tool}.{param}: 拒绝只说了哪错了，没说出路"
                             f" {str(payload.get('error'))[:120]}")
-                    if not payload.get("summary"):
+                    if tool in OWN_MODEL_DOORS:
+                        # 这一族按自己模型交拒绝（R02-103）：要钉的是"不许越出那副模型"，
+                        # 而不是"要带抓取壳里的某一格"。
+                        extra = sorted(set(payload) - set(OWN_MODEL_DOORS[tool].model_fields))
+                        if extra:
+                            bad.append(f"{tool}.{param}: 拒绝带着本门模型以外的格 {extra}")
+                    elif not payload.get("summary"):
                         bad.append(
                             f"{tool}.{param}: 拒绝到达时没有 summary"
                             f" {str(payload.get('error'))[:120]}")
@@ -226,8 +260,18 @@ async def test_a_type_mistake_names_its_parameter_and_sends_nothing(
     assert error.startswith("invalid_request"), (
         f"{tool}.{param}={value!r} 从 transport 兜底裸逃: {text[:200]}")
     assert param in error, f"那句拒绝没点名是哪颗参数: {error}"
-    assert payload.get("summary") and payload.get("next_action"), payload
-    assert payload.get("content_ok") is False, payload
+    assert payload.get("next_action"), f"拒绝只说了哪错了，没说出路: {payload}"
+    if tool in OWN_MODEL_DOORS:
+        # 【评审 R02-103】这两扇的模型没有 summary / content_ok 两格（r184：成功回执
+        # 3 格 / 4 格）。从前这两行断言靠的是拒绝**借**抓取壳 —— 换个形状说话，正是这条
+        # 要修的洞。如今钉的是更硬的一面：格集合必须是本门模型的子集。
+        own = set(OWN_MODEL_DOORS[tool].model_fields)
+        assert set(payload) <= own, (
+            f"{tool} 的类型拒绝穿着本门以外的格: {sorted(set(payload) - own)}")
+        assert "content_ok" not in payload and "duration_ms" not in payload, payload
+    else:
+        assert payload.get("summary"), f"拒绝到达时没有 summary: {payload}"
+        assert payload.get("content_ok") is False, payload
     assert "has no attribute" not in text and "validation error for" not in text
     assert len(_Handler.hits) == mark, "一句类型拒绝却把包发出去了"
 

@@ -64,9 +64,11 @@ def _stub(monkeypatch, urls, *, reranker=None, neural=None):
     monkeypatch.setattr(search_mod, "multi_search", fake_multi_search)
     monkeypatch.setattr(search_mod, "ensure_reranker", AsyncMock(return_value=None))
     monkeypatch.setattr(search_mod, "fetch_source_for_similar",
-                        AsyncMock(return_value=("The Command Line Interface Guidelines",
-                                                "an open-source guide to help you write "
-                                                "better command-line interfaces")))
+                        AsyncMock(return_value={
+                            "title": "The Command Line Interface Guidelines",
+                            "body": "an open-source guide to help you write better "
+                                    "command-line interfaces",
+                            "status": 200, "reason": "", "detail": ""}))
     monkeypatch.setattr(search_mod, "get_reranker", lambda: reranker)
     monkeypatch.setattr(search_mod, "unavailable_reason",
                         lambda: "reranker model download failed (offline?)")

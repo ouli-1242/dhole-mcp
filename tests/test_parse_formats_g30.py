@@ -146,7 +146,11 @@ class TestSlidesComeThroughWithoutAPowerPoint:
         text, err = parse_file(path)
 
         assert err == ""
-        assert "## slide1.xml" in text and "## slide2.xml" in text
+        # 小节标题是**位置**，不是包里的部件名（R02-025 那一把）：这一发的判据是
+        # 「每页各成一节、按页序排」，用位置标题来读同样成立，还多锁住一件事 ——
+        # 给人粘的正文里不许住着 `.xml`。
+        assert "## Slide 1 of 2" in text and "## Slide 2 of 2" in text
+        assert ".xml" not in text
         assert text.index("First slide") < text.index("Second slide")
         assert "bullet A" in text
         assert "2 slide(s)" in text.splitlines()[0]

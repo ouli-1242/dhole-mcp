@@ -271,8 +271,8 @@ class TestDefaultPoolEnv:
         # 这一行是默认池的快照，不是逻辑：池子换组合时跟着改（两处定义的一致性由
         # test_default_pool_definitions_agree 保证，这里只钉住"env 没设时用的是它"）。
         assert m._DEFAULT_BACKENDS == ["baidu", "bing", "sogou", "so360",
-                                       "bing_global", "yandex", "brave",
-                                       "duckduckgo"]
+                                       "bing_global", "yahoo", "yandex", "brave",
+                                       "duckduckgo", "marginalia"]
 
 
 class TestConnectionFailureCooldown:
@@ -419,7 +419,7 @@ def test_readme_engine_roster_matches_the_registry():
     这条钉的是归属。G25 附注一/M1 的教训是**扫描面**：原来只扫「搜索引擎与重排」一节，
     于是 env 表里「默认池 6 颗」的旧账在节外绿着活了整整一版 —— 判据扫不到的位置必然
     漂移。现在扫 README **全文**（引擎名可以出现在任何一节：env 表、变体表、doctor），
-    并把 DEFAULT_ENGINES 的字面钉死（默认免密池 8 颗）——池子变了必须动这条测试，
+    并把 DEFAULT_ENGINES 的字面钉死（默认免密池 10 颗）——池子变了必须动这条测试，
     不许静默。
     """
     import re
@@ -428,10 +428,10 @@ def test_readme_engine_roster_matches_the_registry():
     from dhole_mcp import search_metasearch as ms
     from dhole_mcp.search_engines import DEFAULT_ENGINES
 
-    # 字面钉死（G25 附注一）：默认免密池就是这 8 颗。改池子 = 显式改这里。
+    # 字面钉死（G25 附注一）：默认免密池就是这 10 颗。改池子 = 显式改这里。
     assert DEFAULT_ENGINES == (
-        "baidu", "bing", "sogou", "so360", "bing_global", "yandex",
-        "brave", "duckduckgo",
+        "baidu", "bing", "sogou", "so360", "bing_global", "yahoo",
+        "yandex", "brave", "duckduckgo", "marginalia",
     ), f"默认免密池变了（现值 {DEFAULT_ENGINES}）—— 改池子要同时改 README/手册/这里"
 
     readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
@@ -440,8 +440,7 @@ def test_readme_engine_roster_matches_the_registry():
     # `sogou_weixin`（子串陷阱，与 test_tool_descriptions._engine_tokens 同类）。
     words = set(re.findall(r"[a-z0-9_]+", readme.lower()))
 
-    retired = {"sogou_weixin", "baidu_baike", "wikipedia", "grokipedia",
-               "mwmbl", "yahoo"}
+    retired = {"sogou_weixin", "baidu_baike", "wikipedia", "grokipedia", "mwmbl"}
     assert not (words & retired), (
         f"README 引擎段还点名了 17.0 已删除的引擎: {sorted(words & retired)} —— "
         "调用方照着点会收到 invalid_request，读起来像是我们坏了")
@@ -473,10 +472,11 @@ def test_index_family_map_covers_the_default_pool():
     missing = [n for n in DEFAULT_ENGINES
                if ms._DHOLE_TO_BACKEND.get(n, n) not in _INDEX_FAMILY]
     assert not missing, f"这些默认引擎不在 _INDEX_FAMILY 里: {missing}"
-    # 默认池 8 引擎 / 6 家族（bing、bing_global、duckduckgo 同属 bing 索引）：
-    # 渲染出来只可能是 "x of 6"，"x of 7" 及往上不可能出现
+    # 默认池 10 引擎 / 7 家族（bing、bing_global、yahoo、duckduckgo 同属 bing 索引）：
+    # 渲染出来只可能是 "x of 7"，"x of 8" 及往上不可能出现
     families = {_INDEX_FAMILY[ms._DHOLE_TO_BACKEND.get(n, n)] for n in DEFAULT_ENGINES}
-    assert families == {"baidu", "bing", "brave", "so360", "sogou", "yandex"}, families
+    assert families == {"baidu", "bing", "brave", "so360", "sogou", "yandex",
+                        "marginalia"}, families
 
 
 class TestSoftDeadlinePreemption:

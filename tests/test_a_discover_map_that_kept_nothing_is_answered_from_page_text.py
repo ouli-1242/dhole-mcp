@@ -112,8 +112,10 @@ class TestTheScanRunsWhenTheMapHadUrls:
         assert _sent(stub, -1)["focus"] == "timeout"
         assert _sent(stub, -1)["max_pages"] == DISCOVER_FALLBACK_PAGES
         # 只留带词的那一行，而"读了几页、其中几页带词"两个数都在句子里
+        # （R01-039 之后同一句先说地图用了多少、补考又用了多少，那两个数跟着挪了位置，
+        # 主张本身一字未减：仍是"读了 3 页、其中 1 页带这个词"）
         assert [p.url for p in r.pages] == [HIT], [p.url for p in r.pages]
-        assert "3 page(s) read, 1 of them carrying the word" in r.summary, r.summary
+        assert "read 3 page(s), 1 of them carrying the word" in r.summary, r.summary
 
     @pytest.mark.asyncio
     async def test_the_downgrade_admits_itself_in_the_summary(self, stub):

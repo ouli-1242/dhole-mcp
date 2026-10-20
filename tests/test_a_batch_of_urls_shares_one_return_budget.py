@@ -133,6 +133,12 @@ def test_the_share_grows_when_the_batch_is_small_and_stops_at_the_floor(monkeypa
     100 是 `urls=` 的上限（`MAX_BULK_URLS`），那正是份额最小的一发 —— 48,000 / 100 = 480
     落在地板以下，所以每一页拿到 500 而不是 480：宁肯总载荷超出预算一点，也不交回一页
     读不出东西的正文。超出那部分是刻意的，且每一行都照样说清了压到了几。
+
+    R01-024 之后这一条的数钉在"这一页自己的字"上：切口退到子句末时退回去的那几个字随
+    `next_offset` 走下一窗，所以带内的正文可以少于 500 —— 只要 `chars_snapped_back` 报出
+    差额、两者相加正好是 500。原来那句 `>= 500` 一直绿着，是因为 dhole 自己那句
+    "[Truncated: …]"（实测 173 字）就挂在正文尾巴上把它垫过了头：地板是被缺陷垫出来的，
+    而那一行 `summary` 明明写着 "capped at 500 content chars"。
     """
     _stub(monkeypatch)
     two = _call({"urls": URLS9[:2], "force_fetcher": "http", "cache_ttl": 0})
@@ -143,5 +149,7 @@ def test_the_share_grows_when_the_batch_is_small_and_stops_at_the_floor(monkeypa
     out = _call({"urls": hundred, "force_fetcher": "http", "cache_ttl": 0})
     assert len(out["results"]) == 100, out.get("total")
     for r in out["results"]:
-        assert _chars(r) >= 500, _chars(r)
+        body = _chars(r)
+        snap = r.get("chars_snapped_back") or 0
+        assert body + snap == 500, (body, snap)
         assert "capped at 500 content chars" in (r.get("summary") or ""), r.get("summary")
