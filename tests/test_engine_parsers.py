@@ -67,7 +67,10 @@ CONTRACTS = [
     Contract("bing_global", "bing_global.html", "li[class*='b_algo']",
              must_not_start=("https://www.bing.com/ck/a",)),
     # 独立小网索引：容器是普通卡片，链接是直链；解析器只认卡片里的 h2/a。
-    Contract("marginalia", "marginalia.html", "div.bg-white.p-4:has(h2 a)"),
+    # oracle 数的是「卡片里的 h2 链接」而不是「含 h2 链接的卡片」：soupsieve 3.0 起
+    # `:has()` 里不许放后代选择器（严格 CSS），而 2.x 允许 —— 数出来的都是 4，
+    # 但 3.x 直接抛 SelectorSyntaxError。夹具里 4 张卡各有 1 颗 h2/a，两种数法同值。
+    Contract("marginalia", "marginalia.html", "div.bg-white.p-4 h2 > a"),
     # Yahoo 两套版面各出一份契约。A 版是 div.algo.relsrch 卡片；B 版把首条放在
     # section.richAlgo、后续条目嵌套在 section.Sr 里 —— fixture 已剪掉嵌套子树，
     # 契约只钉“每张卡自己的第一个 h3/compText”。

@@ -9947,6 +9947,19 @@ class MasterFetchServer:
             target = real
 
         if not target:
+            # 门不许站在存在性检查后面（2026-10-20 CI 实测）：同一颗 `~/.ssh/id_ed25519`，
+            # 在这台机器上（文件在）回 "Access denied: … restricted system directory"，
+            # 在 runner 上（文件不在）回 "File not found" —— 于是"这间屋子被禁"这一判决
+            # 变成了由这台机器有没有那个文件来决定，而那台机器的目录形状正是这条守卫
+            # 不肯交出去的东西。写侧 `_resolve_save_to` 一直是无条件过名单的，读侧补齐。
+            blocked = _blocked_path_prefix(_os.path.realpath(
+                _os.path.expanduser(str(file_path))))
+            if blocked:
+                return _with_agent_hints(ResponseModel(
+                    url="file://" + _paths.mask_machine_paths(file_path), status=0,
+                    content=[], fetcher_used="parse",
+                    error=f"Access denied: path is in a restricted system directory ({blocked})",
+                ))
             _dir = _directory_answer(candidates)
             if _dir:
                 # 解析成功了，只是成功在一颗目录上 —— 那句 "File not found" 会把人送去

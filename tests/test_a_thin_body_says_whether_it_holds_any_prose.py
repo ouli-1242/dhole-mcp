@@ -182,6 +182,23 @@ def test_an_almost_empty_page_is_called_no_prose_not_clean():
     assert "no prose" in out.summary, out.summary
 
 
+def test_a_bare_link_whose_url_has_dots_is_not_a_sentence():
+    """同一具壳，抽取器换了版本后交回的是 `[关于](http://127.0.0.1:8399/about)`。
+
+    33 个字符、URL 里两颗点 —— 形状读数把它记成一句散文（`prose=1`），于是 `nav_only`
+    那一支的门根本走不进去，一具整页只有几个可见字的壳被判成 `content_ok=true`。
+    2026-10-20 在 trafilatura 2.3.1 下实测到（本机 2.2.0 不把页脚那枚链接吐进正文，
+    洞一直藏着）。**URL 不是页面说出口的话**：判形状数的是摆在页面上的字，
+    而"这一行交回来多少字符"那把尺照旧数交出去的字节 —— 两把尺各有各的作者。
+    """
+    html = ("<html><body><div id='root'></div>"
+            "<a href='http://127.0.0.1:8399/about'>关于</a></body></html>")
+    out = _read(html, body=["[关于](http://127.0.0.1:8399/about)"])
+    assert out.visible_text_chars < 200, out.visible_text_chars
+    assert out.substance == "nav_only", out.substance_basis
+    assert out.content_ok is False
+
+
 def test_a_small_link_index_is_not_a_shell_however_thin_the_page_is():
     """误报侧：靶站 /collections 实测整页只有 117 个可见字、15 行全是链接标签。
 

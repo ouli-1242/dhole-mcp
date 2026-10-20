@@ -680,6 +680,21 @@ _LABEL_LINE_MAX_CHARS = 24
 #: 以上（评审 R02-006：这一族以前没有地板，判决只看占比）。
 _SENTENCE_LINE_MIN_CHARS = 8
 _SENTENCE_PUNCT = re.compile(r"[.!?。！？]")
+#: markdown 链接的目标（`文字](http://…)` 里那半截）。它不是页面说出口的话，
+#: 而它里面的 `.` 会被 `_SENTENCE_PUNCT` 当成句点 —— 见 `_visible_line`。
+_LINK_TARGET = re.compile(r"\]\([^)]*\)")
+
+
+def _visible_line(line: str) -> str:
+    """一行**摆在页面上的字**：把 markdown 链接的目标剪掉，只留链接文字与它前后的话。
+
+    靶站 `/shell` 的实测形状（2026-10-20）：抽取器把页脚那一枚 `<a>` 交回成
+    `[关于](http://127.0.0.1:8399/about)` —— 33 个字符、含两颗点，于是"整页只有 6 个
+    可见字的一枚裸链接"被读成了一句散文（`prose=1`），`nav_only` 那一支的门就此走不进
+    去，一具壳页被判 `content_ok=true`。URL 里的点不是句点：形状判据量的是字，不是跳转
+    地址的字节数。
+    """
+    return _LINK_TARGET.sub("", line).strip()
 
 #: `content_ok` 要为假的那些判决。`""`（没判）不在里面 —— 缺席是"这一发不归这条闸管"
 #: （非 HTML / HEAD / 304），不是"判过了且没问题"，两种意思不能混。
@@ -699,9 +714,14 @@ def _body_line_shape(body: str) -> tuple[int, float, float, int]:
     lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
     if not lines:
         return 0, 0.0, 0.0, 0
-    labels = [ln for ln in lines
+    # 标签/散文这两支量的是**摆在页面上的字**（`_visible_line`）；平均行长那一颗量的
+    # 是"这一行交出去多少字符"，故意不折 —— 靶站 /collections 的 15 行是
+    # `[专辑 1](/work/1)3 本` 那种形状，把目标剪掉后均行从 16.1 掉到 8 以下，
+    # 那一页就会被翻成 nav_only，而它的内容正是那些链接（评审 R02 量过的那一侧）。
+    shown = [_visible_line(ln) for ln in lines]
+    labels = [ln for ln in shown
               if len(ln) <= _LABEL_LINE_MAX_CHARS and not _SENTENCE_PUNCT.search(ln)]
-    prose = [ln for ln in lines if len(ln) >= _SENTENCE_LINE_MIN_CHARS
+    prose = [ln for ln in shown if len(ln) >= _SENTENCE_LINE_MIN_CHARS
              and _SENTENCE_PUNCT.search(ln)]
     return (len(lines), len(labels) / len(lines), sum(map(len, lines)) / len(lines),
             len(prose))

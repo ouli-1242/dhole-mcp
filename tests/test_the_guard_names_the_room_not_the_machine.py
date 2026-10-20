@@ -86,9 +86,12 @@ async def _call(tool: str, args: dict) -> dict:
 async def test_the_guard_names_the_room_not_this_home(rel, room):
     r"""门照旧拒，但报出来的是名单作者写的那一形：`~\\<room>`，不是这台的家目录。
 
-    三颗格子都得是**这台机器上真存在**的文件：存在性检查走在守卫之前（r227 的第一版就是
-    拿了一颗不存在的 `~\.dhole\profiles\p.txt`，那一发落进 `File not found` 而不是守卫，
-    账面看着像「守卫没到场」—— 量具的形状错，不是产品的事）。
+    格子**不必在这台机器上存在**：门走在存在性检查之前（2026-10-20 CI 实测 —— runner
+    上没有 `~\.ssh`，这一发落进 `File not found` 而不是守卫。那一版把"这间屋子被禁"的
+    判决交给了这台机器的目录形状：同一颗路径在一台装过 ssh 的机器上拒、在一台干净的
+    机器上"没找到"，而"这台没有这个文件"本身就是只有服务器知道的答案）。写侧
+    `_resolve_save_to` 一直无条件过名单，读侧补齐同一纪律；r227 第一版那颗不存在的
+    `~\.dhole\profiles\p.txt` 当年判不动，今天判得动。
     """
     payload = await _call("doc_parse", {"file_path": os.path.join(HOME, rel)})
     err = str(payload.get("error") or "")
