@@ -41,14 +41,13 @@ dhole doctor                       # 安装体检：起一次 server、真起一
 - 开发本仓库：`pip install -e ".[dev]"`，改源码立即生效，测试 `python -m pytest`（细节见 [CONTRIBUTING.md](CONTRIBUTING.md)）。
 - 卸载：`pip uninstall dhole-mcp`；运行数据全在 `~/.dhole`，删目录即清干净。
 
-### Docker / 自托管 HTTP（托管分发）
+### HTTP 远程接入（自托管）
 
-常驻、多客户端或远程使用时，容器是比 stdio 更合适的形态。镜像默认跑 streamable HTTP，**内置 Chromium**（浏览器档开箱即用；HTTP 抓取 / 搜索 / PDF / 重排本来就不依赖它）。要更小的纯 HTTP 镜像，构建时传 `INSTALL_BROWSER=0`。从当前 checkout 构建：
+常驻、多客户端或远程使用时，走 streamable HTTP 而不是 stdio：
 
 ```bash
-export DHOLE_HTTP_TOKEN="$(openssl rand -hex 32)"   # 必需；compose 没它拒绝启动
-docker compose up -d --build
-# 端点: http://127.0.0.1:8765/mcp  ·  数据卷: dhole-data  ·  非 root / 只读根 / 去掉全部 capabilities
+export DHOLE_HTTP_TOKEN="$(openssl rand -hex 32)"   # 设了即强制 Bearer 校验；不设则端口不设防
+dhole --http                                        # 默认 127.0.0.1:8765/mcp，可用 --host/--port 改
 ```
 
 MCP 客户端（宿主配置的字段名各异，认准 url + 请求头）：
@@ -60,9 +59,9 @@ MCP 客户端（宿主配置的字段名各异，认准 url + 请求头）：
 }}}
 ```
 
-**远程暴露前必须套 TLS 反代**（Caddy / nginx），并保留 bearer 令牌或由反代做 OIDC。dhole **没有内置 OAuth**：令牌只是端口门禁，不区分主体；同一进程的所有客户端共享存储凭据、会话与正文缓存。要按主体隔离，就**一人一容器 / 一端口，各自的数据卷**，不要把多个用户接到同一个 dhole 上。
+**远程暴露前必须套 TLS 反代**（Caddy / nginx），并保留 bearer 令牌或由反代做 OIDC。dhole **没有内置 OAuth**：令牌只是端口门禁，不区分主体；同一进程的所有客户端共享存储凭据、会话与正文缓存。要按主体隔离，就**一人一进程 / 一端口，各自的数据目录**，不要把多个用户接到同一个 dhole 上。
 
-`ghcr.io/ouli-1242/dhole-mcp` 在推送 `v*` 标签时由 `.github/workflows/docker.yml` 构建发布：`v17.0` 已上线，镜像标签是 `:v17.0` 与 `:latest`（`v17.0` 不是三段式 semver，所以没有 `:17.0` 这颗）。PyPI 同一版已经发出去：`pip install "dhole-mcp==17.0"`，`server.json` 那份 MCP Registry 清单也是到这一刻才成立。
+PyPI 上同一版本可直接装：`pip install "dhole-mcp==17.0"`，`server.json` 那份 MCP Registry 清单也是到这一刻才成立。
 
 ### 让 agent 自己装
 

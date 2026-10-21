@@ -1,14 +1,17 @@
-"""``dhole_mcp.metadata`` 单元测试（纯函数：正则 + json，无网络）。
+"""test_metadata.py —— 由 2 个单一行为文件合并
 
-该模块此前无测试覆盖。它给每个 HTML 抓取结果补齐 title/description/
-canonical/lang/published_time 等字段，agent 据此判断相关性与引用来源，
-字段缺失或解析错的代价是 agent 拿到误导性元数据。
+由 2026-10-21 的测试重组合并而来；每个来源文件的原首段说明保留为小节注释。
 """
 
 from __future__ import annotations
 
 from dhole_mcp.metadata import extract_image_urls, extract_metadata
 
+
+# ============================================================================
+# 来源：test_metadata.py
+# ============================================================================
+# ``dhole_mcp.metadata`` 单元测试（纯函数：正则 + json，无网络）。
 
 class TestExtractMetadata:
     def test_empty_html_returns_empty_dict(self):
@@ -249,3 +252,34 @@ class TestExtractImageUrls:
             "https://example.com/first.png",
             "https://example.com/second.png",
         ]
+
+
+# ============================================================================
+# 来源：test_metadata_title_decodes_entities.py
+# ============================================================================
+# metadata.title 保留原始 HTML 实体而正文已解码 —— 同一响应两套实体口径。
+
+def test_a_title_fallback_decodes_entities():
+    meta = extract_metadata("<html><title>a &amp; b</title></html>", "https://x/")
+    assert meta["title"] == "a & b"
+
+
+def test_an_og_title_decodes_entities():
+    html = ('<html><head>'
+            '<meta property="og:title" content="Sale &amp; Clearance">'
+            '</head><body></body></html>')
+    meta = extract_metadata(html, "https://x/")
+    assert meta["title"] == "Sale & Clearance"
+
+
+def test_a_json_ld_headline_decodes_entities():
+    html = ('<html><head><script type="application/ld+json">'
+            '{"headline": "Q3 &amp; Beyond"}'
+            '</script></head><body></body></html>')
+    meta = extract_metadata(html, "https://x/")
+    assert meta["title"] == "Q3 & Beyond"
+
+
+def test_a_title_that_never_had_entities_is_untouched():
+    meta = extract_metadata("<html><title>Plain Title</title></html>", "https://x/")
+    assert meta["title"] == "Plain Title"

@@ -27,7 +27,6 @@ UA 里的 Chrome 大版本在 **147 与 148 之间来回跳**，另有两次连 
 """
 import asyncio
 import re
-import sys
 
 import pytest
 
