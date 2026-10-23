@@ -61,7 +61,7 @@ MCP 客户端（宿主配置的字段名各异，认准 url + 请求头）：
 
 **远程暴露前必须套 TLS 反代**（Caddy / nginx），并保留 bearer 令牌或由反代做 OIDC。dhole **没有内置 OAuth**：令牌只是端口门禁，不区分主体；同一进程的所有客户端共享存储凭据、会话与正文缓存。要按主体隔离，就**一人一进程 / 一端口，各自的数据目录**，不要把多个用户接到同一个 dhole 上。
 
-PyPI 上同一版本可直接装：`pip install "dhole-mcp==17.0"`，`server.json` 那份 MCP Registry 清单也是到这一刻才成立。
+PyPI 上同一版本可直接装：`pip install "dhole-mcp==17.1"`，`server.json` 那份 MCP Registry 清单也是到这一刻才成立。
 
 ### 让 agent 自己装
 
