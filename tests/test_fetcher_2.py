@@ -62,9 +62,11 @@ class TestTheToolExists:
         assert "web_request" in _defs(), sorted(_defs())
         # 第七颗之后再加的是 W1 的 `headers`：写请求从前连非凭据的头都递不进去
         # （`content_type` 已经是一颗头的特例，所以"够不着"是漏，不是设计）。
+        # 第九颗是 R3 的 `include_headers`（一次 HEAD 探针的全部价值就是那几颗头），
+        # 与 `web_read` 那颗同名同义同一只归一化 —— 两边读的必须是同一份东西。
         assert server_mod._TOP_LEVEL_ARGS["web_request"] == frozenset({
             "url", "method", "body", "content_type", "extraction_type", "timeout",
-            "confirm", "headers"})
+            "confirm", "headers", "include_headers"})
 
     def test_it_is_a_write_on_the_wire(self):
         """annotations 是客户端决定"要不要先问用户"的输入，不是装饰。"""
@@ -293,7 +295,12 @@ class TestReadSideLostTheThreeNames:
         # 这里再钉一遍是因为这条用例的主语就是"读的那扇门还剩几颗"：扇出（B5-14d）
         # 加的三颗要在这里被看见，而不是只在别人的文件里解释。27 → 28 是 W1 的
         # `headers`（一次零点名的抓取实测发 15 颗头，而门上那颗都改不了）。
-        assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 28, \
+        # 28 → 31 是 2026-10-23 那三颗，它们共用一条轴："这一次要回来的，除了正文
+        # 还有什么" —— R3 `include_headers`（证据：状态行 / 头 / 302 链）与 R4
+        # `save_to` + `max_save_bytes`（字节本身）。数的不是三颗无关的旋钮，是这扇门
+        # 的第三种产出：这里记"还剩几颗"，`tests/test_wire_shape.py` 的 PARAM_CAP
+        # 记"为什么还能再加三颗、以及拆成第四颗工具要付多少钱"。
+        assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 31, \
             sorted(server_mod._TOP_LEVEL_ARGS["web_read"])
 
     @pytest.mark.parametrize("key", ["method", "body", "content_type"])

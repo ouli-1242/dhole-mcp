@@ -83,6 +83,11 @@ _WIRE_OMIT: dict = {
         # 都至少是 1（`_untouched` 那一路也交 1/1 —— 整页一块正是读者唯一看不见的形状，
         # 0.3 的量具在这一格上翻过车，所以这里不许静默）。
         "focus_blocks_total", "focus_blocks_kept",
+        # 同一族的另外三颗此前**没有**登记，于是不带 focus 的每一次调用都在付
+        # `"focus_terms_total":0,"focus_terms_absent":0,"focus_selection":""` 这 64 个字符
+        # （2026-10-23 实测：example.com 一发 wire 1,109 字符里有它们）。缺席 = 没跑 focus，
+        # 与上面两颗是同一句话；上线的每一发都非默认值。
+        "focus_terms_total", "focus_terms_absent", "focus_selection",
         # 实质（3.3/3.4）：0/"" = 这一发不是 HTML（PDF/JSON/图片/HEAD），或没什么可判的。
         # 判决上线的每一发都带着它背后的数（`substance_basis`），读者能自己核。
         "visible_text_chars", "substance", "substance_basis",

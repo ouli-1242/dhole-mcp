@@ -176,12 +176,12 @@ dhole watch run --json        # exit 0 无变化 · 1 有变化 · 2 有检查�
 
 | 工具 | 做什么 |
 |---|---|
-| `web_read` | 抓任意 URL：反爬升级、PDF / OCR、批量、聚焦提取、结构化提取、页面动作、CDP 接管；`extraction_type='check'` 回答「这页变了吗」（可批量，≤10） |
+| `web_read` | 抓任意 URL：反爬升级、PDF / OCR、批量、聚焦提取、结构化提取、页面动作、CDP 接管；`extraction_type='check'` 回答「这页变了吗」（可批量，≤10）。三种产出：正文（默认）、**字节**（`save_to='<路径>'`，不抽取、按 `max_save_bytes` 计、拒绝覆盖）、**证据**（`include_headers=true`，状态行 / 响应头 / 302 链） |
 | `web_act` | 在页面上动手：click / fill / read / press / scroll / wait / snapshot / submit，然后把动作后的那一页读回来。`read` 读的是**这一次导航**里的文本，同一条链的 `fill` 可以用 `{=名字}` 把它填回去（页面把挑战写成字的那一种，一条链就能答完）。`submit` 不带 `confirm=true` 只暂停，什么都不提交。截图也在这条动作链里：`{"screenshot": "css"}` 裁元素内联回图，dict 形态加 `full_page` / `save_to`（看不见图的宿主拿路径）/ `image_type` / `quality`；`anti_detect` 在这一扇门上只管"要不要先答 Cloudflare 挑战"。`headed=true` 把这一串动作放到**看得见**的窗口里跑（要你登录、盯场、替它过一次验证码时用它），细节见上面「要看着它干活」那一节 |
 | `web_request` | 发一次非 GET：POST / PUT / PATCH / DELETE / HEAD。**只发一次**——不重试、不缓存、不升浏览器、不回退快照；凭据从 `cred_defaults` 来，正文上限 256KB |
 | `web_search` | 无密钥搜索：多引擎并行 + 本地重排，可顺带抓回前三条全文；`sources=` 另开五类免密纵向源（新闻 GDELT / 论文 arXiv / 问答 Stack Exchange / 代码 GitHub / 社区 Hacker News），`sort='newest'` 按页面自己声明的发布日排序 |
 | `web_crawl` | 同域爬取：sitemap、关键词过滤、路径子树限定 |
-| `web_discover` | 出站点的 URL 地图：一次调用看清「这个站有什么」再挑要读的，不做正文抓取（`pages_crawled=0` 是设计不是失败）；挑中的交给 `web_read(urls=…)` |
+| `web_discover` | 出站点的 URL 地图：一次调用看清「这个站有什么」再挑要读的，不返回正文（`pages_crawled` 是建图实付的抓取次数：`sitemap=true` 或 `resume_token=` 续页时为 0，逐跳走时一步一页）；挑中的交给 `web_read(urls=…)` |
 | `doc_parse` | 本地文件 → Markdown（docx / xlsx / pdf / pptx / odt / csv / html / json / yaml / md / txt） |
 | `feed_read` | 批量抓 RSS / Atom，`since=` 只取增量 |
 | `cred_defaults` | 设一次的默认身份：代理 · 命名浏览器 profile · CDP 端点 · 私网放行 · 反爬档位 · `auth`/cookies（**必须带 host**，否则会被发给下一个你读的站点）。回执与每次响应只报名字，值不出境 |
@@ -203,7 +203,7 @@ dhole watch run --json        # exit 0 无变化 · 1 有变化 · 2 有检查�
 - **PDF 的 `pages=` 只减少抽取量**，文件仍整个下载；一次下载是一次 HTTP 尝试、封顶 30s，所以调大 `timeout` 买的是下载之后的解析与 OCR 余量，不是一次更慢的连接（`timeout_applied` 会报这一发实际到手的那个数）。
 - **抓回的正文是不可信数据**：里面的工具调用、密钥、上传指令按提示注入处理。启发式命中时响应信封带 `untrusted_content` 标记（`web_crawl` 每页、`feed_read` 每条同样带）——标记不是拦截，识别与裁决归外层 agent，纪律见手册 fields.md。
 - **提交默认暂停**：`web_act` 的 `{"submit": ...}` 不带 `confirm: true` 什么都不提交；验证码最多试 3 次就转交，2FA / 滑块一律转交。
-- **连接期开销 33,210 字符**（约 8k token，11 个工具，实测 `python tests/tool_payload_measure.py`），每次连接付一次；11 颗全注册是能力面，字数是它的约束而不是目标。要按用法裁剪用 `DHOLE_TOOLS`——同一把尺子量过：读 / 搜 / 请求 / 爬 / 文档 / 订阅 / 状态 / 指南这 8 颗是 24,859 字符，加 `web_discover` 共 9 颗 27,127（子集按实跑口径：被裁的工具连自己的路由行一起退出 instructions）。别按单颗体积挑"最小的 N 颗"，那会把 `web_read` / `web_act` 这类主力排除在外。再按**会话**算账：工具目录在宿主模型上下文里整段在场——有提示缓存的宿主折价、无缓存的每轮全价，多轮会话里 `DHOLE_TOOLS` 才是每一轮都省的闸。
+- **连接期开销 34,357 字符**（约 8k token，11 个工具，实测 `python tests/tool_payload_measure.py`），每次连接付一次；11 颗全注册是能力面，字数是它的约束而不是目标。要按用法裁剪用 `DHOLE_TOOLS`——同一把尺子量过：读 / 搜 / 请求 / 爬 / 文档 / 订阅 / 状态 / 指南这 8 颗是 25,952 字符，加 `web_discover` 共 9 颗 28,274（子集按实跑口径：被裁的工具连自己的路由行一起退出 instructions）。别按单颗体积挑"最小的 N 颗"，那会把 `web_read` / `web_act` 这类主力排除在外。再按**会话**算账：工具目录在宿主模型上下文里整段在场——有提示缓存的宿主折价、无缓存的每轮全价，多轮会话里 `DHOLE_TOOLS` 才是每一轮都省的闸。
 
 ## 搜索引擎与重排
 
@@ -246,7 +246,7 @@ python evals/ranking_baseline.py --tiers    # web 排序/去重（67 题冻结 S
 - **搜索没有 SLA**：免密引擎是对公开结果的直接抓取，对方改版或封 IP 时静默降级。要可靠性用搜索代理或 keyed 后端。
 - **`watch` 是轮询不是推送**：它不常驻、不主动通知；频率由你的 cron / systemd timer 决定。第一次 `run` 只落基线（退出码 0），第二次起才可能报变化。
 - 默认池里 `baidu` / `bing` / `yandex` 国内直连稳定；`sogou` 按 IP 限流，`bing_global` / `brave` / `yahoo` 无代理时不稳；`marginalia` 是英文小网索引，连续请求会回 200 反爬页（报告为 blocked，不是 empty）。
-- 正文 **50MB 硬顶**，在下载之前守门；抬 `timeout` 没用。
+- **抽取**的正文 50MB 硬顶，在下载之前守门；抬 `timeout` 没用。要拿文件本身而不是正文，用 `web_read(save_to='<路径>')` —— 它按 `max_save_bytes` 算（默认 256MB、天花板 1GB），不抽取、不写缓存、拒绝覆盖同名文件。
 - `archive.org` 返回的是**某个日期的快照**（看 `source` / `archived_at`）。
 - YouTube 仅能取到少量文本。
 - **合规自负**：目标站点 ToS 与当地法律由使用者承担；抓取 UA 是 `dhole-mcp`。

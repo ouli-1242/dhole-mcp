@@ -55,6 +55,16 @@ from dhole_mcp.focus import (  # noqa: F401
 # Opt-in: populate ResponseModel.media with the page's image URLs (multimodal).
 _INCLUDE_MEDIA: contextvars.ContextVar[bool] = contextvars.ContextVar("_include_media", default=False)
 _INCLUDE_LINKS: contextvars.ContextVar[bool] = contextvars.ContextVar("_include_links", default=False)
+# Opt-in: 回执带上状态行、响应头与重定向端点（web_read / web_request 的
+# `include_headers`）。默认关：多数调用要的是正文，头是给"这页为什么是这样"的
+# 追问用的。作者的记号在这里，读取在两处 —— `_translate_response`（头来自这一发）
+# 与装饰器收尾（端点对来自 requested vs final）。
+_INCLUDE_HEADERS: contextvars.ContextVar[bool] = contextvars.ContextVar("_include_headers", default=False)
+# 原始响应体落盘（web_read 的 `save_to`）。取的是**没过抽取器**的字节，所以这两个
+# 记号必须比抽取更早被读到：`_translate_response_body` 的第一件事就是看它。
+# 0 = 没设上限，由 `_save_response_body` 用文档化的默认值填。
+_SAVE_TO: contextvars.ContextVar[str] = contextvars.ContextVar("_save_to", default="")
+_SAVE_MAX_BYTES: contextvars.ContextVar[int] = contextvars.ContextVar("_save_max_bytes", default=0)
 # Per-list cap for ResponseModel.links when include_links=true (web_read
 # `max_links`; 0 = the documented per-category defaults in links.py). Links were
 # capped silently at 30/20/20 with no way to ask for more or fewer and no signal

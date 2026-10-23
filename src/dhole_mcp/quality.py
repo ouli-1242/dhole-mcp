@@ -62,6 +62,8 @@ from dhole_mcp.security import (TIMEOUT_MAX_MS, URL_SHAPE_RECOVERY, target_is_pr
 # pages (image galleries, canvas apps) don't false-positive.
 _JS_SHELL_MIN_BODY_BYTES = 3000   # raw HTML body must be at least this large
 _JS_SHELL_MIN_TEXT_CHARS = 200    # ...while extracted text is below this
+_JS_SHELL_SMALL_FLOOR_BYTES = 500  # a small shell still has to be this heavy...
+_JS_SHELL_MARKUP_RATIO = 8         # ...and hold this many bytes per visible char
 
 _JS_SHELL_SIGNALS = [
     "enable javascript", "you need to enable javascript",
@@ -588,6 +590,24 @@ def _is_js_shell(result: ResponseModel) -> bool:
             if _collapsed_by_both_rulers(result, text_len):
                 return False
             return True
+    # 反向的一格：不是"壳很大而字很少"，是"壳本身就只有一两行"。
+    # 上面那道 3,000 字节的下限按设计只管大壳（它要排除的是"小响应里几串正常文本"），
+    # 于是今天最常见的一种 SPA 入口从它下面漏过去 —— 实测 dsh.market：HTTP 档 200、
+    # 正文 1,936 字节、抽出 34 字符（页面标题），`content_ok=true`、无任何下一步提示。
+    # 判据要的是**脚本壳的证据**，不是"字少"本身：小体量（500-3,000 字节）、整页可见字
+    # 低于壳闸、字节数至少是可见字的 8 倍（1,936/34 ≈ 57；一条真答案的短页是 3-8 倍），
+    # 且整页没有一句人话。任何一条不成立都不动 —— 这条闸每误判一次，调用方就白付一次
+    # 3-5 秒的浏览器启动（本仓库的测试夹具正是这种小页面，2026-10-23 第一版宽判据把它们
+    # 全部打成了"壳"，conftest 当场拦下了真实浏览器启动）。
+    _visible_tiny = result.visible_text_chars or 0
+    _size = result.total_size_bytes or 0
+    if (result.fetcher_used == "http" and result.status == 200
+            and served_as_page(result.content_type)
+            and 0 < _visible_tiny < _JS_SHELL_MIN_TEXT_CHARS
+            and _JS_SHELL_SMALL_FLOOR_BYTES <= _size <= _JS_SHELL_MIN_BODY_BYTES
+            and _size >= _JS_SHELL_MARKUP_RATIO * _visible_tiny
+            and not _has_a_sentence(content_str)):
+        return True
     return False
 
 
@@ -651,6 +671,12 @@ def extraction_collapsed(result: ResponseModel) -> bool:
     if "application/pdf" in (result.content_type or "").lower():
         return False
     if (result.extracted_type or "") == "structured":
+        return False
+    if (result.metadata or {}).get("recovered_as") == "link_list":
+        # 只给**真的被渲染成链接清单**的那一发让路，而不是给所有 `page_type=list`
+        # 让路：清单按定义丢掉非链接的字，拿整页可见字去比是拿错的量具；而一个被判
+        # list 却仍在丢正文的页面，塌陷那句话照旧要说。实测人民网首页：清单 1,883
+        # 字符 / 整页可见 6,969 —— 旧判据把它写成 `content_ok=false` 并建议换 html 档。
         return False
     return _collapsed_by_both_rulers(result, extracted_chars(result))
 
@@ -727,6 +753,21 @@ def _body_line_shape(body: str) -> tuple[int, float, float, int]:
             len(prose))
 
 
+_CJK_SENTENCE_ENDERS = "。！？；…"
+
+
+def _has_a_sentence(text: str) -> bool:
+    """这一页有没有一句人话 —— ASCII 的句读之外，中文的句末标点也算。
+
+    `_body_line_shape` 的 `prose` 只认它自己那张 ASCII 标点表，于是「答案：四十二。」
+    这类中文单句会被读成"没有句子的标签行"（实测：靶站那条短页控制组正是这个形状）。
+    两支判据（`nav_only` 的短页一支、壳闸的小页一支）问的是同一个问题，所以答案只算一处。
+    """
+    if _body_line_shape(text)[3] > 0:
+        return True
+    return any(ch in text for ch in _CJK_SENTENCE_ENDERS)
+
+
 def _substance_verdict(result: ResponseModel) -> tuple[str, str]:
     """这封回执拿回来的正文有没有可引用的实质 —— 判决与它背后的数一起出口。
 
@@ -774,10 +815,10 @@ def _substance_verdict(result: ResponseModel) -> tuple[str, str]:
         # 一个线上取不到的取值，与它声称要修的谎是同一族。
         return "no_words", (f"the body is {len(body):,} characters and dhole's shape check "
                             f"reads them as a packed payload, not prose")
-    return body_substance(body, result.visible_text_chars)
+    return body_substance(body, result.visible_text_chars, result.total_size_bytes or 0)
 
 
-def body_substance(body: str, visible: int) -> tuple[str, str]:
+def body_substance(body: str, visible: int, page_bytes: int = 0) -> tuple[str, str]:
     """正文形状这一维的唯一作者：读 `web_read` 的抽取正文，也读 `web_crawl` 的一行。
 
     两个入口必须同判（这一族的旧账：同一个 URL 走 read 写着 `content_ok=false`、走
@@ -796,7 +837,7 @@ def body_substance(body: str, visible: int) -> tuple[str, str]:
                             f"without sentence punctuation, mean line {mean_line:.1f} "
                             f"characters (page holds {visible:,} "
                             f"visible characters in total)")
-    if (1 <= lines < _NAV_LINES_MIN and label_share == 1.0
+    if (1 <= lines < _NAV_LINES_MIN and not _has_a_sentence(body)
             and 0 < visible < _JS_SHELL_MIN_TEXT_CHARS):
         # 行数不够那一族的门，但**整页自己**就没写字：判据从"几行碎片"换成"这页一共
         # 多少可见字"，而那颗数是 3.3 刚上线的 `visible_text_chars`。靶站 `/shell` 实测
@@ -806,9 +847,18 @@ def body_substance(body: str, visible: int) -> tuple[str, str]:
         # 上限 `_NAV_LINES_MIN` 是**误报侧**的量出来的：第一版没写它，靶站 `/collections`
         # （15 行、12 条链接、整页可见 117 字）就被翻成 nav_only —— 那一页的内容正是那些
         # 链接。行数够一族门的情形归上面那一支判，这一支只管"整页一两个标签字"那种壳。
-        return "nav_only", (f"the whole page holds {visible:,} visible "
-                            f"characters and the body is {lines} label line(s) with no "
-                            f"sentence in them")
+        #
+        # "字少"不是证据（2026-10-23 两次量出来的）：一整页就是一个 34 字标题的小型 SPA
+        # 挂载页（dsh.market：1,936 字节 / 34 可见字 / 没有一句人话）与一页真的只写了一行
+        # 的短答案（"one page"）在正文形状上一模一样，分开它们的是**标记的重量**：前者
+        # 字节数是可见字的 57 倍，后者是个位数倍。取不到字节数（爬取的一行）时退回旧判据
+        # ——"每一行都是 ≤8 字的标签"——也就是这一支从前的那句话。
+        markup_heavy = (page_bytes >= _JS_SHELL_MARKUP_RATIO * visible
+                        if page_bytes else label_share == 1.0)
+        if markup_heavy:
+            return "nav_only", (f"the whole page holds {visible:,} visible "
+                                f"characters and the body is {lines} line(s) with no "
+                                f"sentence in them")
     if lines < _NAV_LINES_MIN:
         # 薄到没有形状意见可给：一两行既不能证明是菜单，也不能证明是正文 —— 留空，
         # 让读者知道这一维**没判**，而不是"判过且干净"。
@@ -1079,6 +1129,13 @@ def _annotate_quality(result: ResponseModel) -> ResponseModel:
     status, the length and the type — all of which are populated.
     """
     if not result.error and _METHOD.get() != "HEAD":
+        # 一次 `save_to` 的回执不是一页，别拿页面判词去读它（R4）。它交出去的是
+        # `saved 62,914,560 bytes to D:\...`，于是"大字少"的每一条启发式都会命中它 ——
+        # 实测 60MB 的 .bin 被读成 `js_shell_detected`，一句话把一个成功的下载说成
+        # "这页需要 JS 渲染"。判据是**回执自己点的名**，不是 `_SAVE_TO` 这颗作用域变量：
+        # 爬行/批读也在同一层作用域里，而它们读到的每一页都该照常接受判读。
+        if "saved_to" in (result.metadata or {}):
+            return result
         issue = _detect_content_issue(result)
         if issue:
             if _chain_ran_ok(result):

@@ -535,8 +535,8 @@ def _ruler_module():
     return mod
 
 
-def test_the_default_connect_is_the_published_33_210():
-    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：33,210。
+def test_the_default_connect_is_the_published_33_902():
+    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：34,357。
 
     这一条同时是量尺的回归锁：`tool_payload_measure._wire_for` 曾按工具数累加路由行，
     把默认连接报成 30,857（web_discover / web_crawl 共用那句被算了两遍）。修成按文本
@@ -638,6 +638,32 @@ def test_the_default_connect_is_the_published_33_210():
     "两把尺子"一句后，净 +133。web_search 那颗 4,032 → 4,165；它住在 8 颗与
     9 颗两组里，所以两组随实测走到 24,859 / 27,127；read+search 那一对
     11,887 → 12,020。
+
+    33,210 → 33,264（2026-10-23，web_discover 计数口径纠错）：一次**上抬 +54**。
+    原句 "pages_crawled=0 is the design, not a failure" 在默认的逐跳建图路径上是假的：
+    `max_pages=3` 实测回 `pages_crawled=3`，summary 写 "using 3 page fetch(es); no
+    content extracted"，stop_reason 是 max_pages reached；`crawl.py` 的 docstring 也
+    一直写着 map 模式 "costs up to max_pages requests"。这句话会把真实发生的抓取读成
+    0，让"建图不花钱"这个前提进到调用方的取舍里。新句改成记账：0 只在 `sitemap=true`
+    与 `resume_token=` 续页这两条不联网的路径上成立，逐跳走时一步一页。web_discover
+    那颗现在是 2,321（+54 全在描述上）；9 颗那组 27,127 → 27,181，8 颗与 read+search
+    两组不含它，照旧 24,859 / 12,020。完整口径（含 `max_pages` 只约束逐跳那一半）
+    住在 references/tools.md 的 web_discover 一节，按需付。
+
+    33,264 → 33,902（2026-10-23，R3 `include_headers`）：一次**上抬 +638**，两颗
+    工具各长各的：`web_read` 6,573 → 6,926（+353）、`web_request` 2,707 → 2,992
+    （+285）。买的是"这页为什么是这样"的证据 —— 状态行、响应头、重定向端点与一条
+    真走出来的 302 链；在此之前只能退回 curl，而 curl 不在这条链路上（没有缓存、
+    没有身份、没有反爬台阶）。`set-cookie` 只交名字，值不落 transcript。它住在
+    8/9 颗两组里，所以两组随实测走到 25,497 / 27,819；read+search 那一对
+    12,020 → 12,373（+353，全在 `web_read` 身上）。
+
+    33,902 → 34,357（2026-10-23，R4 `save_to` / `max_save_bytes`）：一次**上抬 +455**,
+    两颗全在 `web_read` 身上（6,926 → 7,419），其余十颗逐字未动。买的是"给我这个
+    文件"：此前 49MB 的 plugins.json 只换回一句 "too large"，而落盘这条路不存在。
+    这三组都含 `web_read`，所以三格同步走 +455 —— read+search 12,373 → 12,866、
+    8 颗 25,497 → 25,952、9 颗 27,819 → 28,274。**同一颗数字的第四格**，
+    不是四次巧合：`save_to` 住在 `web_read` 上，而这四组都留着它。
     """
     ruler = _ruler_module()
     import ast
@@ -655,7 +681,7 @@ def test_the_default_connect_is_the_published_33_210():
         f"仓库量尺与 wire 的 tools/list 对不上：{ruler_compact} vs {wire['tools_compact']}")
     assert ruler_instr == len(wire["instructions"]), (
         f"仓库量尺多算了路由行：{ruler_instr} vs wire {len(wire['instructions'])}")
-    assert ruler_compact + ruler_instr == 33_210
+    assert ruler_compact + ruler_instr == 34_357
 
 
 def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():
@@ -673,13 +699,17 @@ def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():
     `web_read.headers` 而不是重说一遍。
     11,887 → 12,020（+133，P0 纵向搜索）：`sources` / `sort` 两颗都长在
     `web_search` 身上，这一组正是买下"免费搜索一次问五类源"的那一对。
+    12,020 → 12,373（+353，R3 `include_headers`）：这一组里只有 `web_read` 付它，
+    `web_search` 不发请求，也没有响应头可交。
+    12,373 → 12,866（+455，R4 `save_to`）：同一句话的第二次 —— 落盘也是 `web_read`
+    的活，`web_search` 连字节都没有。
     """
     assert _assert_price("web_read,web_search",
-                         ["web_read", "web_search"]) == 12_020
+                         ["web_read", "web_search"]) == 12_866
 
 
 def test_the_readme_eight_tool_price_is_what_the_server_sends():
-    """README 的 8 颗价不再只是算术 —— 真机同一值，且文档印的就是它（24,859）。"""
+    """README 的 8 颗价不再只是算术 —— 真机同一值，且文档印的就是它（25,952）。"""
     _assert_price(",".join(SUB8), SUB8,
                   published=("README.md", "这 8 颗是 {total} 字符"))
 
@@ -687,15 +717,15 @@ def test_the_readme_eight_tool_price_is_what_the_server_sends():
 def test_the_ninth_tool_costs_its_own_row_and_no_routing_line():
     """加 web_discover 只多它自己那一行：路由行与 web_crawl 共用，去重后不再付第二次。
 
-    这是 F-A-J1 那把共享路由行在 wire 上的样子：README 的 9 颗 27,127 =
-    24,859 + 2,268，instructions 一字不变。C3 之后 `web_discover` 自己那一行涨了
+    这是 F-A-J1 那把共享路由行在 wire 上的样子：README 的 9 颗 28,274，
+    instructions 一字不变。C3 之后 `web_discover` 自己那一行涨了
     （地图大小两颗旋钮上这门），涨的部分照旧只付一次；C5 没动它（那一扇门一次尝试都不
     走 HTTP 正文通道，所以它不欠那句上限）。D2 的 +28 全部落在 `web_read`，所以这一组
     与 8 颗那组同幅上涨。
     """
     nine = SUB8 + ["web_discover"]
     assert _assert_price(",".join(nine), nine,
-                         published=("README.md", "共 9 颗 {total}")) == 27_127
+                         published=("README.md", "共 9 颗 {total}")) == 28_274
     eight = _connect(",".join(SUB8))
     assert len(_connect(",".join(nine))["instructions"]) == len(eight["instructions"]), (
         "两颗共用一句路由的工具，第二颗不该再收一次路由行的钱")

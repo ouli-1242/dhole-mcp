@@ -59,15 +59,27 @@ def _text() -> str:
     return CHANGELOG.read_text(encoding="utf-8")
 
 
-def _current_version() -> str:
-    from dhole_mcp import __version__
+def _section(version: str) -> str:
+    """切出某一版的小节（到下一个 `## [` 为止）。
 
+    反证类用例必须点名**真装着那份标本**的版本，不能读 `_current_version()`：
+    17.1 发版那天，17.0 段落里的「阶段7 后为 N 颗」与 `DHOLE_MULTIMODAL` 那一行
+    就不在"本版"里了，两条反证会以 `StopIteration` 收场 —— 而那个异常看起来像
+    "语料变了"，实际是尺子指错了地方。反证要演的是"标记表还在起作用"，标本在哪
+    一版就该读哪一版。
+    """
     s = _text()
-    head = f"## [{__version__}]"
-    assert head in s, f"CHANGELOG 里没有本版（{__version__}）的小节"
+    head = f"## [{version}]"
+    assert head in s, f"CHANGELOG 里没有 {version} 的小节"
     i = s.index(head)
     j = s.find("\n## [", i + len(head))
     return s[i:(j if j > 0 else len(s))]
+
+
+def _current_version() -> str:
+    from dhole_mcp import __version__
+
+    return _section(__version__)
 
 
 def _lines(body: str) -> list[str]:
@@ -185,7 +197,7 @@ def test_every_tool_count_in_this_version_is_todays_or_says_it_was_superseded():
 def test_the_guard_notices_a_superseded_count():
     """反证：把那一行的取代标记抹掉，同一个数就该被判为"冒充现行"（同下一条的手法）。"""
     today = _today_tool_count()
-    line = next(ln for ln in _lines(_current_version())
+    line = next(ln for ln in _lines(_section("17.0"))
                 if "阶段7" in ln and any(m in ln for m in _CURRENT_CLAIM_MARKERS)
                 and re.search(r"(\d+)\s*颗", ln))
     stale = [n for n in re.findall(r"(\d+)\s*颗", line) if int(n) != today]
@@ -206,7 +218,7 @@ def test_the_guard_notices_a_forgotten_knob():
     拿真语料演一遍，防止标记表退化成什么都放行。
     """
     registered = {getattr(n, "name", n) for n in env_registry.ALL}
-    line = next(ln for ln in _lines(_current_version()) if "DHOLE_MULTIMODAL" in ln)
+    line = next(ln for ln in _lines(_section("17.0")) if "DHOLE_MULTIMODAL" in ln)
     assert "DHOLE_MULTIMODAL" not in registered
     assert any(m in line for m in _RETIRED_MARKERS), "这一行本来就该带注销标记"
     naked = line

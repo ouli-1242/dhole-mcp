@@ -440,7 +440,20 @@ def test_connect_stays_inside_the_packed_budget():
 # 首版那两张带 enum 的完整描述实测 +860；按"同一事实不说两遍"收短旧描述
 # （min_relevance/min_raw_relevance 两颗参数自己的描述已经说清两把尺子）并摘掉
 # enum 数组后压到 +133。
-CONNECT_CEILING = 33_210
+# 2026-10-23 web_discover 计数口径纠错：棘轮**上抬 +54**（33,210 → 33,264）。原句
+# "pages_crawled=0 is the design, not a failure" 在默认的逐跳建图路径上是假的 ——
+# 实测 `max_pages=3` 的 link-walk 回 `pages_crawled=3`（"using 3 page fetch(es)"、
+# "stopped: max_pages reached"），crawl.py 的 docstring 也一直写着 map 模式
+# "costs up to max_pages requests"。这句话让调用方把真实发生的 3 次抓取读成 0，
+# 于是"建图不花钱"这个前提进了 agent 的取舍。新句改成记账：0 只在 `sitemap=true`
+# 与 `resume_token=` 续页这两条不联网的路径上成立，逐跳走时一步一页。完整口径
+# （含 max_pages 只约束逐跳那一半）住 references/tools.md，wire 只留这一句。
+CONNECT_CEILING = 34_357
+# 2026-10-23 R3 include_headers：上抬 +638（33,264 → 33,902）——
+# `web_read` +353、`web_request` +285，买的是状态行 / 响应头 / 302 链。
+# 2026-10-23 R4 save_to / max_save_bytes：再上抬 +455（33,902 → 34,357），两颗都在
+# `web_read` 身上。买的是"给我这个文件"—— 在此之前 50MB 以上只有一句"too large"，
+# 而落盘这条路根本不存在（49MB 的 plugins.json 实测就卡在那儿）。
 
 
 def test_the_price_table_in_the_manual_is_the_current_one():

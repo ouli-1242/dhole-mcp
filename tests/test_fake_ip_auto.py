@@ -74,10 +74,10 @@ class TestWhatTheVerdictChanges:
                  (socket.AF_INET6, "fd00::20"))
         assert security._tunnel_exempt_engaged() is True
         note = security.recheck_posture_note()
-        assert "tolerates the fake-ip ranges" in note
+        assert "fake-ip tunnel" in note
         assert "198.18.0.0/15" in note and "fc00::/7" in note
         # 只放宽那两段、复验本身照跑 —— 这件事也必须写在用户看得见的地方
-        assert "The recheck itself still runs" in note
+        assert "loopback, RFC1918, link-local and cloud metadata are still refused" in note
         # 17.0：旋钮已注销，判定只来自探测 —— 文案里不许再指一条不存在的出路
         assert "DHOLE_SSRF_DNS_RECHECK" not in note
 

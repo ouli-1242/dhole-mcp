@@ -325,11 +325,9 @@ def probe_fake_ip() -> tuple[str, str, str]:
     nets = sorted({str(net) for _n, a in answers for net in _TUNNEL_NETWORKS if a in net})
     said = ", ".join(f"{name} -> {addr}" for name, addr in answers)
     _auto_note = (
-        f"ssrf: DNS recheck tolerates the fake-ip ranges on this host - {said}, "
-        f"which is what a fake-ip TUN proxy (Clash / sing-box) hands out. Tolerated: "
-        f"{_FAKE_IP_V4} and {_FAKE_IP_V6} only. The recheck itself still runs: "
-        f"loopback, RFC1918, link-local, cloud metadata and every other reserved "
-        f"range are refused whatever this host measured.")
+        f"ssrf: fake-ip tunnel on this host ({said}); only {_FAKE_IP_V4} + "
+        f"{_FAKE_IP_V6} are tolerated - loopback, RFC1918, link-local and cloud "
+        f"metadata are still refused.")
     _fake_ip_cache = ("fake-ip", hit, f"{said} in {', '.join(nets)}")
     _record_resolver_probe("fake-ip", hit)
     return _fake_ip_cache

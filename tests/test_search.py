@@ -116,6 +116,58 @@ class TestSmartSearchRegionCache:
         ]
 
 
+# ─── 查询串里的 site: / -site:（2026-10-23） ──────────────────────
+
+class TestSiteOperatorsInQuery:
+    """`site:` 写在查询串里也要真的过滤，而不只是转发给引擎。
+
+    实测现场：`web_search(query="site:docs.python.org asyncio timeout")` 的第 3-5 条
+    是 YouTube —— 操作符被原样交给上游，本地过滤读的是参数，漏进来的行无人拦。
+    """
+
+    def test_a_site_operator_becomes_the_site_filter(self):
+        q, site, ex = search._lift_site_operators(
+            "site:docs.python.org asyncio timeout", None, None)
+        assert (q, site, ex) == ("asyncio timeout", "docs.python.org", [])
+
+    def test_a_negated_operator_joins_exclude_sites(self):
+        q, site, ex = search._lift_site_operators(
+            "asyncio timeout -site:youtube.com", None, ["spam.example"])
+        assert (q, site) == ("asyncio timeout", None)
+        assert ex == ["spam.example", "youtube.com"]
+
+    def test_a_quoted_operator_is_a_phrase_not_a_constraint(self):
+        q, site, ex = search._lift_site_operators(
+            '"site:example.com" as a literal phrase', None, None)
+        assert site is None and ex == [] and "site:example.com" in q
+
+    def test_a_path_after_the_domain_is_left_to_the_engines(self):
+        """本地过滤只认 host：把 /docs 摘掉再声称按它过滤了，是另一种谎。"""
+        q, site, ex = search._lift_site_operators("site:example.com/docs asyncio", None, None)
+        assert site is None and ex == []
+        assert q == "site:example.com/docs asyncio"
+
+    def test_the_same_domain_given_twice_is_not_a_conflict(self):
+        q, site, _ = search._lift_site_operators(
+            "site:docs.python.org asyncio", "docs.python.org", None)
+        assert (q, site) == ("asyncio", "docs.python.org")
+
+    def test_two_different_domains_are_refused(self):
+        with pytest.raises(Exception) as err:
+            search._lift_site_operators("site:a.com site:b.com x", None, None)
+        assert "two sites" in str(err.value) or "different site:" in str(err.value)
+
+    def test_parameter_and_operator_that_disagree_are_refused(self):
+        with pytest.raises(Exception) as err:
+            search._lift_site_operators("site:a.com x", "b.com", None)
+        assert "disagree" in str(err.value)
+
+    def test_a_standalone_operator_keeps_a_non_empty_query(self):
+        """只写 site: 时不能把查询删空 —— 空查询引擎不受理。"""
+        q, site, _ = search._lift_site_operators("site:docs.python.org", None, None)
+        assert q == "site:docs.python.org" and site == "docs.python.org"
+
+
 # ─── Hostname boundary filtering (PR #7) ──────────────────────────
 
 class TestSiteFilter:

@@ -457,6 +457,12 @@ VALUES: dict[str, object] = {
     # 就等于调用方说了话而下面没人听见（这一颗的"听见"由
     # test_a_pinned_page_... 那组量，这里只钉它到得了方法）。
     "pin": True,
+    # R3：证据那颗。True 而不是 False —— 默认就是关，探针要探得出"值被丢了"。
+    "include_headers": True,
+    # R4：落盘那两颗。`save_to` 的探针值是一行合法的相对路径（方法被桩替换，不会
+    # 真的写盘，所以它只需要是一颗**认得出**的字符串）；`max_save_bytes` 避开默认的
+    # 268435456，也避开 0（那是"没给"），丢了才分辨得出是丢了。
+    "save_to": "probe-download.bin", "max_save_bytes": 33_554_432,
     # web_crawl
     "max_pages": 3, "max_depth": 1, "path_include": "/a", "path_exclude": "/b",
     "max_content_chars_per": 2000, "concurrency": 2,
@@ -935,47 +941,51 @@ class TestTheLiveCrawlCarriesTheDisclosure:
     """端到端：这一族尺在真 HTTP 字节上不误伤，而报出来的话落在该行与整轮上。"""
 
     @pytest.mark.asyncio
-    async def test_a_collapsing_row_is_refused_and_says_why(self, live_site):
-        """管路 + 判决一起证：塌陷的那一行现在写 false，而且把理由与解药一起交出来。
+    async def test_a_collapsing_row_recovers_in_place_and_says_so(self, live_site):
+        """管路 + 判决一起证：markdown 路塌陷的那一行现在**就地补回**，且把这笔账说出口。
 
-        这一条在 1/2 里断言的是 `content_ok is True`（"这一刀不动结论位"），翻闸之后
-        反过来 —— 挂具 `/longaside` 是量出来的形状（正文 2.5k 抽得到、aside 里 4.6k 个
-        可见字被主内容过滤器整块丢掉），不是照着断言捏的：先确认抽取器确实丢，才立成路由。
+        历史契约演变：1/2 里断言 `content_ok is True`（"这一刀不动结论位"）→ 翻闸后改为
+        拒绝并交出处方（`extraction_type='html'`）→ 2026-10-23 起与 `web_read` 的坍缩补救
+        同一刀：同一份字节的 html 路就地接管，不发第二个请求，行 summary 写明接管与形态。
+        挂具 `/longaside` 是量出来的形状（markdown 路 2.5k 抽得到、aside 里 4.6k+ 个可见
+        字被主内容过滤器整块丢掉），不是照着断言捏的。
         """
         result = await MasterFetchServer().web_crawl(
             f"{live_site}/longaside", max_pages=1, max_depth=0)
         assert result.pages, result.error
         row = result.pages[0]
         assert row.page_type == "article", row.summary
-        assert row.content_ok is False, (row.summary, row.error)
-        found = re.search(r"holds ([\d,]+) visible characters while we returned "
-                          r"([\d,]+) \((\d+)%\)", row.summary or "")
+        assert row.content_ok is True, (row.summary, row.error)
+        assert row.content_chars >= 7_000, (row.summary, row.content_chars)
+        found = re.search(r"collapsed on the markdown pass \(([\d,]+) of "
+                          r"([\d,]+) visible", row.summary or "")
         assert found, row.summary
-        visible, got = (int(x.replace(",", "")) for x in found.groups()[:2])
-        assert got < visible * 0.5, (visible, got)
+        md_got, visible = (int(x.replace(",", "")) for x in found.groups())
+        assert md_got < visible * 0.5, (visible, md_got)
         assert visible > 4_000, visible
-        assert "extraction_type='html'" in row.summary, row.summary
-        assert "1 page(s) hold far more text in their own markup" in result.summary, \
-            result.summary
+        assert "recovered in place from the same bytes by the plain converter" in row.summary
+        assert "rather than the main-content detector" in row.summary
 
     @pytest.mark.asyncio
     async def test_the_read_path_and_the_crawl_path_agree_on_the_same_bytes(self, live_site):
-        """`/longaside` 上两条路径过去给出相反的结论；这一笔之后它们一致。
+        """`/longaside` 上两条路径给出同一份字节、同一个结论。
 
-        修复前实测：同一份字节，`web_read` 回 `content_ok=false` +
-        `error="extraction_collapsed: … holds 7,149 characters…"`，而 `web_crawl` 的那一
-        行写着 `content_ok=true`。这不是新加的闸，是把爬取接回读取侧早就存在的那把尺。
+        历史实测三阶段：修复前 read 说 `content_ok=false`、crawl 写 `content_ok=true`
+        （各说各话）→ 翻闸后两边都拒 → 2026-10-23 坍缩补救两侧同刀后，两边都就地补回
+        同一份标记。一致指：字数一致、结论一致、且都是接管后的产物。
         """
         server = MasterFetchServer()
         via_read = await server.web_read(url=f"{live_site}/longaside",
                                          force_fetcher="http")
         via_crawl = await server.web_crawl(f"{live_site}/longaside", max_pages=1,
                                            max_depth=0)
-        assert "extraction_collapsed" in (via_read.error or ""), via_read.error
-        assert via_read.content_ok is False
+        assert via_read.content_ok is True, via_read.error
+        assert via_read.extracted_type == "markdown", via_read.extracted_type
         row = via_crawl.pages[0]
-        assert row.content_ok is False, row.summary
-        assert "extraction collapsed" in (row.summary or ""), row.summary
+        assert row.content_ok is True, row.summary
+        assert "plain converter" in (row.summary or ""), row.summary
+        read_chars = sum(len(x) for x in via_read.content)
+        assert abs(read_chars - row.content_chars) < 60, (read_chars, row.content_chars)
 
     @pytest.mark.asyncio
     async def test_legit_rows_carry_no_measurement_noise(self, live_site):

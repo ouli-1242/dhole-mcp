@@ -131,7 +131,7 @@ class TestATunnelToleratesRangesNotTheLayer:
     def test_the_posture_says_what_is_tolerated_and_what_is_not(self, tunnel_host):
         note = security.recheck_posture_note()
         assert "198.18.0.0/15" in note and "fc00::/7" in note
-        assert "The recheck itself still runs" in note
+        assert "still refused" in note
 
 
 # ── 3. 中途自愈：隧道迟到不必重启宿主 ──────────────────────────────────────

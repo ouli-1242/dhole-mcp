@@ -1187,6 +1187,81 @@ def _as_int(value, default: int) -> int:
         return default
 
 
+_SITE_TOKEN_RE = re.compile(r"(?<!\S)(-?)site:([^\s\"']+)", re.IGNORECASE)
+_DOMAIN_SHAPE_RE = re.compile(r"^(?!-)[A-Za-z0-9.-]{1,253}(?<!-)$")
+
+
+def _inside_quotes(text: str, pos: int) -> bool:
+    """`pos` 是否落在一对引号里面（"site:x.com" 是一句话，不是约束）。"""
+    return (text.count('"', 0, pos) % 2 == 1) or (text.count("'", 0, pos) % 2 == 1)
+
+
+def _lift_site_operators(query: str, site, exclude_sites):
+    """把查询串里的 `site:` / `-site:` 提成真正的域名过滤。
+
+    为什么要有这一刀：参数面上早就有 `site=`，但真人写搜索词的习惯是 Google 那套
+    操作符 —— 实测 `web_search(query="site:docs.python.org asyncio timeout")` 回来的
+    第 3-5 条是 YouTube 页面：`site:` 只被**原样转发**给上游引擎（引擎愿不愿意照做
+    是它的事），本地那道 `_passes_site_filter` 读的是参数，于是漏进来的行无人拦。
+
+    规则（宁可变小声，不要装作听懂了）：
+    * 只认"独立的" token（前面是空白/行首），引号里的不算；
+    * 只认裸域名（`example.com`）。带路径/端口的 token 原样留在查询里 —— 本地过滤
+      只认 host，把 `/docs` 摘掉再声称"按你说的过滤了"是另一种谎；
+    * 多个 `site:` 指向**不同**域名时拒绝：一条结果不可能同时在两个站上；同名重复
+      只保留一次。`-site:` 与参数合并去重（排除更多不构成歧义）；
+    * 显式 `site=` 与查询串里的 `site:` 冲突时拒绝 —— 两个互相否决的约束不该由
+      服务端猜哪个算数（`url=`/`urls=` 那一对同款纪律）；
+    * 提出来的 token 从查询里删掉，只留真正的问题词；删空时保留原串（引擎自己认
+      `site:`，且空查询本来就不合法）。
+    """
+    if not query:
+        return query, site, list(exclude_sites or [])
+    found_sites: list[str] = []
+    found_excludes: list[str] = []
+    spans: list[tuple[int, int]] = []
+    for m in _SITE_TOKEN_RE.finditer(query):
+        if _inside_quotes(query, m.start()):
+            continue
+        negated, raw = m.group(1) == "-", m.group(2)
+        domain = raw.lower().rstrip(".")
+        if not _DOMAIN_SHAPE_RE.match(domain) or "." not in domain:
+            continue          # 路径/端口/怪形状：留给引擎，本地不假装认识
+        spans.append((m.start(), m.end()))
+        (found_excludes if negated else found_sites).append(domain)
+
+    excludes = list(dict.fromkeys(list(exclude_sites or []) + found_excludes))
+    if len(excludes) > 20:
+        raise SecurityError("exclude_sites would exceed 20 domains after reading the "
+                            "query's -site: operators")
+
+    lifted_site = None
+    if found_sites:
+        distinct = list(dict.fromkeys(found_sites))
+        if len(distinct) > 1:
+            raise SecurityError(
+                f"the query names {len(distinct)} different site: domains "
+                f"({', '.join(distinct)}) - one result cannot live on two sites, so "
+                "which one you meant is not ours to guess. Keep one site: or use "
+                "exclude_sites=.")
+        lifted_site = distinct[0]
+        if site is not None:
+            if str(site).lower().rstrip(".") != lifted_site:
+                raise SecurityError(
+                    f"site={site!r} and the query's site:{lifted_site} disagree - "
+                    "both were given, so one of them is not what you meant. Keep one.")
+    effective_site = site if site is not None else lifted_site
+
+    if spans:
+        cleaned = query
+        for start, end in reversed(spans):
+            cleaned = cleaned[:start] + cleaned[end:]
+        cleaned = " ".join(cleaned.split())
+        if cleaned:
+            query = cleaned
+    return query, effective_site, excludes
+
+
 def _validate_filters(site, exclude_sites, location, language, page):
     """Validate the geo/pagination filters; returns the page as an int.
 
@@ -2885,6 +2960,12 @@ async def web_search(
         # 的合法性取决于它是哪颗模式。
         if mode != "find_similar" or str(query or "").strip():
             query = validate_search_query(query)
+        # 查询串里的 `site:` / `-site:` 提到参数层（2026-10-23）：真人写搜索词用的是
+        # Google 那套操作符，而本地过滤读的是参数 —— 只转发不兜底的后果实测过一次：
+        # `site:docs.python.org` 的查询里第 3-5 条是 YouTube。冲突与歧义在这里拒绝，
+        # 不猜。
+        if mode != "find_similar":
+            query, site, exclude_sites = _lift_site_operators(query, site, exclude_sites)
         page = _validate_filters(site, exclude_sites, location, language, page)
         sources = _validate_sources(sources)
         sort = _validate_sort(sort)

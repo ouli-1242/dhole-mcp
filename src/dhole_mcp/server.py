@@ -302,6 +302,7 @@ from dhole_mcp.quality import (  # noqa: F401
     _stamp_chain_receipts,
     _summary_label,
     _with_agent_hints,
+    extraction_collapsed,
     status_error_sentence,
 )
 # 17.0 B6 第七刀上半：反爬档位搬进 rungs.py。这八颗都是再导出：抓取的三条路
@@ -364,7 +365,10 @@ from dhole_mcp.context import (
     _HEADERS_OFF_BY,
     REFERER_OFF_NOTE,
     _IDENTITY_APPLIED,
+    _INCLUDE_HEADERS,
     _INCLUDE_LINKS,
+    _SAVE_MAX_BYTES,
+    _SAVE_TO,
     _INCLUDE_MEDIA,
     _MAX_CHARS_NAMED,
     _MAX_LINKS,
@@ -733,6 +737,22 @@ async def _document_size(url: str, proxy: Optional[str],
     return total, ""
 
 
+def _body_ceiling() -> int:
+    """这一发最多愿意收多少字节 —— `save_to` 打开时问的是另一个问题。
+
+    `MAX_RESPONSE_BYTES`（50MB）是**抽取**的上限：那个字符串要进上下文、要过一遍
+    主内容检测，收得越多越亏。而 `save_to` 要的是字节本身，抽取根本不发生（见
+    `_translate_response_body` 的第一段分叉）—— 拿抽取的红线去拦一次下载，等于
+    "因为文本装不下所以不给你文件"，实测里 49MB 的 plugins.json 就卡在这条线上。
+    落盘自己的上限是 `max_save_bytes`（默认 256MB，天花板 1GB），作者是
+    `_save_response_body`；这里只把同一颗数字提前给"下载前那一问"用。
+    """
+    if not _SAVE_TO.get():
+        return MAX_RESPONSE_BYTES
+    limit = _SAVE_MAX_BYTES.get() or DEFAULT_MAX_SAVE_BYTES
+    return min(limit, MAX_SAVE_BYTES_CAP)
+
+
 def _oversized_document_result(url: str, doc_size: Optional[int]) -> Optional[ResponseModel]:
     """A refusal to download a document that cannot fit, or None when it can.
 
@@ -743,13 +763,17 @@ def _oversized_document_result(url: str, doc_size: Optional[int]) -> Optional[Re
     caller has one fact to learn ("this body is over the cap") and should not have
     to recognize it in two shapes depending on which side of the download dhole
     happened to notice it.
+
+    "The cap" 是 `_body_ceiling()`，不是常量 50MB：一次 `save_to` 的下载拿落盘上限
+    当红线，否则"我要这个文件"会在自己的上限之前被抽取的红线挡掉。
     """
-    if not doc_size or doc_size <= MAX_RESPONSE_BYTES:
+    ceiling = _body_ceiling()
+    if not doc_size or doc_size <= ceiling:
         return None
     return ResponseModel(
         url=url, status=0, content=[], fetcher_used="http",
         error=(f"Response body too large ({doc_size:,} bytes = {_human_bytes(doc_size)}, "
-               f"max {MAX_RESPONSE_BYTES:,} bytes) - the host says so, and nothing was "
+               f"max {ceiling:,} bytes) - the host says so, and nothing was "
                "downloaded"),
     )
 
@@ -2204,6 +2228,11 @@ def _smart_fetch_request_context(func):
                 _normalize_focus_engine(options.get("focus_engine")))),
             (_INCLUDE_MEDIA, _INCLUDE_MEDIA.set(bool(options["include_media"]))),
             (_INCLUDE_LINKS, _INCLUDE_LINKS.set(bool(options["include_links"]))),
+            (_INCLUDE_HEADERS, _INCLUDE_HEADERS.set(bool(options.get("include_headers")))),
+            (_SAVE_TO, _SAVE_TO.set(str(options.get("save_to") or ""))),
+            (_SAVE_MAX_BYTES, _SAVE_MAX_BYTES.set(
+                options["max_save_bytes"] if isinstance(options.get("max_save_bytes"), int)
+                and not isinstance(options.get("max_save_bytes"), bool) else 0)),
             (_MAX_LINKS, _MAX_LINKS.set(
                 options["max_links"] if isinstance(options["max_links"], int)
                 and not isinstance(options["max_links"], bool) else 0)),
@@ -2270,7 +2299,11 @@ def _smart_fetch_request_context(func):
                 f"session_id={_sid!r} failed its shape check after the gate")
         try:
             result = await func(*args, **kwargs)
-            return _stamp_session(_stamp_original_url(result, options.get("url") or ""))
+            result = _stamp_original_url(result, options.get("url") or "")
+            if _INCLUDE_HEADERS.get():
+                result = await _attach_header_evidence(
+                    result, options.get("url") or "")
+            return _stamp_session(result)
         finally:
             for variable, token in reversed(tokens):
                 variable.reset(token)
@@ -2527,6 +2560,108 @@ def _backfill_article_json(content: list[str], meta: Dict[str, Any]) -> list[str
     return [json.dumps(data, indent=2)]
 
 
+_COOKIE_NAME_RE = re.compile(r"(?:^|,\s*)([^=;,\s]+)=")
+
+
+def _header_snapshot(headers, *, limit: int = 40, value_cap: int = 400) -> dict:
+    """这一发响应头的可引用副本：名字小写、值有帽、cookie 只留名。
+
+    为什么不是原样交回：`set-cookie` 的值就是会话令牌，把它写进回执等于把凭据抄进
+    对话记录 —— 与"cookie VALUES never reach the transcript"是同一条纪律。调用方
+    需要的是"服务端设了哪几颗 cookie"，不是它们的内容。
+
+    帽（40 颗 / 400 字符）两处都记在 `headers_truncated` 上，不静默剪。
+    """
+    out: dict = {}
+    truncated = False
+    items = list(headers.items()) if hasattr(headers, "items") else []
+    if len(items) > limit:
+        items = items[:limit]
+        truncated = True
+    for key, value in items:
+        name = str(key).lower()
+        text = str(value)
+        if name == "set-cookie":
+            names = _COOKIE_NAME_RE.findall(text)
+            text = ("cookie name(s) only: " + ", ".join(dict.fromkeys(names))) if names \
+                else "[redacted: value not returned]"
+        elif len(text) > value_cap:
+            text = text[:value_cap] + "…"
+            truncated = True
+        out[name] = text
+    if truncated:
+        out["_truncated"] = "some headers/values were cut to fit the response"
+    return out
+
+
+def _trace_redirect_chain_sync(url: str, max_hops: int = 8, timeout: float = 5.0):
+    """HEAD 逐跳走一遍 `Location`，记下状态行与被指向的地址。
+
+    只在 `include_headers=true` 且这一发真的换了地址时调用：primp 的响应对象没有
+    `history`，`Response` 只留最终 URL，所以"302 链"只能自己走。每跳重新过
+    `validate_url` —— 一个站把 `Location` 指向 `127.0.0.1` 与直接请求它是一件事。
+
+    失败不抛：链是**附加证据**，拿不到就交空表，正文与状态照旧成立。
+    """
+    from urllib.parse import urljoin as _urljoin
+    try:
+        import primp
+        client = primp.Client(impersonate="chrome", timeout=timeout)
+    except Exception:
+        return []
+    hops: list[dict] = []
+    current = url
+    for _ in range(max_hops):
+        try:
+            validate_url(current)
+        except Exception:
+            hops.append({"url": current, "status": 0,
+                         "location": "", "note": "refused by the URL guard"})
+            break
+        try:
+            resp = client.head(current, follow_redirects=False, timeout=timeout)
+        except Exception as e:
+            hops.append({"url": current, "status": 0, "location": "",
+                         "note": f"HEAD failed: {type(e).__name__}"})
+            break
+        location = ""
+        try:
+            location = str((resp.headers or {}).get("location") or "")
+        except Exception:
+            location = ""
+        hops.append({"url": current, "status": int(resp.status_code),
+                     "location": location})
+        if resp.status_code not in (301, 302, 303, 307, 308) or not location:
+            break
+        current = _urljoin(current, location)
+    return hops
+
+
+async def _attach_header_evidence(result: ResponseModel, requested: str) -> ResponseModel:
+    """`include_headers=true` 的收尾：端点对 + 真 302 链（仅这一发没走缓存时）。
+
+    端点对从 `original_url`（`_stamp_original_url` 只在不同时才写）读；链是一次额外
+    的 HEAD 走查，所以缓存回放不重走 —— 那条链属于**写入缓存的那一发**，现在再问
+    一次是问网络"今天怎么跳"，不是这一份内容的事实。
+    """
+    if not isinstance(result, ResponseModel) or not requested:
+        return result
+    meta = result.metadata if isinstance(result.metadata, dict) else {}
+    if result.original_url:
+        meta["redirect"] = {"from": result.original_url, "to": result.url,
+                            "hops": 0}
+        if not result.cached:
+            try:
+                chain = await asyncio.to_thread(_trace_redirect_chain_sync, requested)
+            except Exception:
+                chain = []
+            if chain:
+                meta["redirect"]["hops"] = len(chain)
+                meta["redirect"]["chain"] = chain
+    result.metadata = meta
+    return result
+
+
 def _translate_response(page: _DholeResponse, *args, **kwargs) -> ResponseModel:
     """Extract a response into a ResponseModel, plus the header-derived fields.
 
@@ -2537,6 +2672,12 @@ def _translate_response(page: _DholeResponse, *args, **kwargs) -> ResponseModel:
     """
     result = _translate_response_body(page, *args, **kwargs)
     headers = getattr(page, "headers", None) or {}
+    # `include_headers=true`：这一发的响应头随回执走（cookie 只留名）。缓存命中不走
+    # 这里 —— 缓存里那份头属于**写它的那一发**，拿它回答"现在服务端说什么"是错的，
+    # 所以两个缓存命中口在 `include_headers` 打开时直接放行到网络。
+    if _INCLUDE_HEADERS.get() and isinstance(headers, dict) and headers:
+        result.metadata = {**(result.metadata or {}),
+                           "response_headers": _header_snapshot(headers)}
     if isinstance(headers, dict) and not result._validators:
         _etag = headers.get("etag") or ""
         _lm = headers.get("last-modified") or ""
@@ -2595,6 +2736,166 @@ def _ocr_failure_note(exc: Exception, fetcher_used: str, size: int,
     return f"image_ocr_failed: {detail}"
 
 
+def _recover_collapsed_document(page, html: str, url: str) -> tuple[list[str], str, int]:
+    """塌陷补救：按**页面形状**选一条路，只交可读的那一种。
+
+    两条路都只用同一份已经抓到的字节，不发第二个请求：
+    - 列表 / 索引页（链接密度 ≥ 0.5 且链接数 ≥ 10）→ 渲染成 `* [标题](链接)` 清单。
+      对这类页"正文"就是条目；把它们当散文抽只会剩几个栏目名。实测人民网首页：
+      35,596 字符的原始标记 → 1,883 字符的标题清单（web_crawl 早就是这样渲染的，
+      这条只是把读取侧接回同一个判断）。
+    - 其余页面 → 纯转换器 markdown（`plain_markdown_from_html`，不做主内容判断）。
+      它保留版面与链接，能读、能引用；代价是带上页面 chrome，这一点由调用方的备注
+      说清楚。
+
+    返回 `(content, how, items)`：`how ∈ {"link_list", "plain_converter"}`，`items`
+    是清单条数（非清单路为 0）。**不在这里判"值不值得接管"** —— 清单的价值是结构，
+    不是字数；散文路的门槛由调用方按 1.5 倍判。
+    """
+    from dhole_mcp.crawl import _link_list_markdown, _page_signals
+    from dhole_mcp.trafilatura_extractor import plain_markdown_from_html
+
+    text_len, _script_count, link_count, _has_fw, link_text_len = _page_signals(html or "")
+    density = (link_text_len / text_len) if text_len else (1.0 if link_count else 0.0)
+    if link_count >= 10 and density >= 0.5:
+        listed = _link_list_markdown(html, url, url)
+        if listed:
+            items = sum(1 for line in listed.splitlines() if line.startswith("* ["))
+            if items >= 10:
+                return [listed], "link_list", items
+    plain = plain_markdown_from_html(html or "")
+    return ([plain] if plain else []), "plain_converter", 0
+
+
+#: 落盘默认上限。内存里先收完整个 body 才写（primp 这条路没有流式），所以这不是
+#: "磁盘能放多少"，是"一次调用最多愿意占多少内存"；调用方可以显式抬到 `MAX_SAVE_BYTES_CAP`。
+DEFAULT_MAX_SAVE_BYTES = 256 * 1024 * 1024
+MAX_SAVE_BYTES_CAP = 1024 * 1024 * 1024
+
+
+def _resolve_download_target(raw: str):
+    """在**发请求之前**把 save_to 验成一条可写的路径；不行就抛 ValueError。
+
+    "先验后发"与截图那条 save_to 同一条纪律：一个打错的路径不该先付一次下载再来报错。
+    清单与写侧共用（`security._blocked_path_prefix`），不因为"这次写的是网页字节"就
+    放宽 —— System32 与 ~/.ssh 不是下载目的地。
+
+    已存在的文件**拒绝覆盖**：一次静默覆盖可能删掉用户自己的同名文件，而"换个名字"
+    这个修法零成本、可逆。
+    """
+    from pathlib import Path
+    text = (raw or "").strip()
+    if not text:
+        raise ValueError("save_to needs a file path to write the raw response body to")
+    target = Path(text).expanduser()
+    try:
+        if target.is_dir():
+            raise ValueError(f"save_to {str(target)!r} is a directory, not a file")
+        parent = target.parent
+        if not parent.exists():
+            raise ValueError(
+                f"save_to parent directory {str(parent)!r} does not exist - create it "
+                "first; this call writes one file and creates no directories")
+        if target.exists():
+            raise ValueError(
+                f"save_to {str(target)!r} already exists - refusing to overwrite it. "
+                "Pick another name or remove the file first.")
+    except OSError as e:
+        raise ValueError(f"save_to {str(target)!r} cannot be used: {e}") from e
+    blocked = _blocked_path_prefix(os.path.realpath(target))
+    if blocked:
+        raise ValueError(
+            f"refusing to write {str(target)!r} - it is in a restricted system "
+            f"directory ({blocked})")
+    return target
+
+
+def _write_download(target, body: bytes) -> str:
+    """原子写：同目录 `.part` → fsync → rename。返回 sha256（十六进制）。
+
+    rename 之前**再问一次"这个文件还在不在"**，这不是多余：`_resolve_download_target`
+    的那一问发生在**发请求之前**，两问之间隔着整段下载（实测 60MB 要几十秒）。一次
+    60MB 的等待里，用户完全可能在同一个地方建了自己的同名文件，而 `os.replace` 会
+    静默把它换成刚下下来的那份 —— "拒绝覆盖"如果只在出发前成立，就只是句关于出发
+    的话。缩到 rename 前，窗口从"几十秒"变成"两次系统调用"，而这正好是能免费拿到
+    的宽度（真要封死得用 hardlink，代价是 FAT32 与部分网络盘直接不支持）。
+    """
+    import hashlib
+    from pathlib import Path
+    tmp = Path(str(target) + ".part")
+    digest = hashlib.sha256(body).hexdigest()
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(body)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if Path(target).exists():
+            raise FileExistsError(
+                f"{str(target)!r} appeared while this body was downloading - "
+                "refusing to overwrite it")
+        os.replace(tmp, target)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+    return digest
+
+
+def _save_response_body(page: _DholeResponse, target, *,
+                        fetcher_used: str = "http",
+                        duration_ms: float = 0) -> ResponseModel:
+    """`save_to` 的唯一出口：交字节，不交正文。
+
+    在抽取之前分叉，理由有两条：① 大文件（49MB 的 plugins.json）过一遍主内容检测
+    只为了丢掉它，是白付 CPU 与内存；② 二进制（zip / 图片 / PDF）本来就没有"正文"，
+    抽取器的产出对调用方是噪声。回执只留一行人类可读的落点，其余账目在 metadata：
+    `saved_to` / `bytes` / `sha256` / `content_type`。
+    """
+    body = getattr(page, "body", None)
+    if not isinstance(body, (bytes, bytearray)):
+        return ResponseModel(
+            url=getattr(page, "url", ""), status=int(getattr(page, "status", 0) or 0),
+            content=[], fetcher_used="http", extracted_type="text",
+            error="save_to_no_body: this response carried nothing to write")
+    size = len(body)
+    limit = _SAVE_MAX_BYTES.get() or DEFAULT_MAX_SAVE_BYTES
+    if limit > MAX_SAVE_BYTES_CAP:
+        limit = MAX_SAVE_BYTES_CAP
+    if size > limit:
+        return ResponseModel(
+            url=getattr(page, "url", ""), status=int(getattr(page, "status", 0) or 0),
+            content=[], fetcher_used="http", extracted_type="text",
+            total_size_bytes=size,
+            error=(f"Response body too large ({size:,} bytes = {_human_bytes(size)}, "
+                   f"over the save_to limit of {limit:,}) - nothing was written. Raise "
+                   f"max_save_bytes (cap {MAX_SAVE_BYTES_CAP:,}) or use "
+                   "web_request/curl for this file."))
+    try:
+        digest = _write_download(target, bytes(body))
+    except OSError as e:
+        return ResponseModel(
+            url=getattr(page, "url", ""), status=int(getattr(page, "status", 0) or 0),
+            content=[], fetcher_used="http", extracted_type="text",
+            total_size_bytes=size,
+            error=f"save_to_failed: could not write {str(target)!r}: {e}")
+    headers = getattr(page, "headers", {}) or {}
+    ctype = headers.get("content-type", "") if isinstance(headers, dict) else ""
+    return ResponseModel(
+        status=int(getattr(page, "status", 0) or 0), url=getattr(page, "url", ""),
+        content=[f"saved {size:,} bytes to {target}"],
+        # 报 0 会让一份 60MB 的下载说"这一次什么都没花" —— 这个项目对 `duration_ms=0`
+        # 的读法一向是"没发包"。这里抄的是**取回这份 body** 花的时间（body 到手才轮到
+        # 写盘，落盘的几毫秒不在里面，也不值得为它再造一颗字段）。
+        fetcher_used=fetcher_used or "http", duration_ms=duration_ms,
+        content_type=ctype,
+        total_size_bytes=size, extracted_type="text",
+        metadata={"saved_to": str(target), "bytes": size, "sha256": digest,
+                  "max_save_bytes": limit},
+    )
+
+
 def _translate_response_body(
     page: _DholeResponse,
     extraction_type: str,
@@ -2611,6 +2912,22 @@ def _translate_response_body(
     For JSON responses (content-type: application/json), extraction is skipped
     and the raw JSON is returned directly to avoid mangling by HTML extractors.
     """
+    # `save_to`：在抽取**之前**分叉，交字节、不交正文（大文件与二进制本来就没有
+    # "正文"，过一遍主内容检测只为丢掉它是白付）。路径在这里再验一次：从门口到这一发
+    # 之间文件系统可能变过（同名文件刚被创建、父目录被删），而"写到一半才发现"是最差
+    # 的时机。
+    if _SAVE_TO.get():
+        try:
+            target = _resolve_download_target(_SAVE_TO.get())
+        except ValueError as exc:
+            return _invalid_request_result(
+                getattr(page, "url", "") or "", str(exc),
+                next_action=("Nothing was written. Fix save_to and call again - the "
+                             "body was fetched but deliberately not kept."),
+                tool="web_read")
+        return _save_response_body(page, target, fetcher_used=fetcher_used,
+                                   duration_ms=duration_ms)
+
     # Enforce response size limit before any processing
     _check_response_size(page)
 
@@ -2866,7 +3183,7 @@ def _translate_response_body(
     if _meta_hop and isinstance(page_metadata, dict):
         page_metadata["meta_refresh"] = _meta_hop
 
-    return _attach_dom_visible_chars(ResponseModel(
+    result = _attach_dom_visible_chars(ResponseModel(
         status=page.status, content=content, url=page.url,
         fetcher_used=fetcher_used, duration_ms=duration_ms,
         content_type=raw_ct, total_size_bytes=total_size, metadata=page_metadata,
@@ -2874,12 +3191,65 @@ def _translate_response_body(
         extracted_type=_etype,
     ), page_html, page.url)
 
+    # 抽取坍缩的内部补救（2026-10-23）：同一份 body 再走一条**不判断主内容**的路，
+    # **不发第二个请求**。此前这条路只把处方交回调用方（`extraction_type='html'` 的建议），
+    # 于是一次可以用几十毫秒 CPU 解决的损失变成了一次完整往返 —— 实测 dshmarketplace.dev：
+    # markdown 路交出 7,623 字符 / 整页可见 23,844。
+    #
+    # 交回什么由页面形状决定（`_recover_collapsed_document`）：
+    # - 列表页 → 链接清单。它的"正文"就是条目，抽成散文只会剩栏目名；实测人民网首页
+    #   35,596 字符的原始标记（`<!DOCTYPE html>` 打头，agent 读不了）→ 1,883 字符清单。
+    # - 其余 → 纯转换器 markdown。第一版这里交的是**原始标记**，把 35k 标签当正文，
+    #   与"能读"这个目标正相反。
+    #
+    # 只在三件事同时成立时接管：默认文本档（`structured`/`schema=` 的投影按定义丢字，
+    # 见 `quality.extraction_collapsed` 的注释）、调用方没自己缩范围（`css_selector=`）、
+    # 且确实换到了更好的东西（清单 ≥10 条；散文多拿回 ≥1.5 倍）。接管就改
+    # `extracted_type`/`page_type` 并写备注，不假装这还是原来那一路的产物。
+    if (extraction_type in ("markdown", "text", "article") and not css_selector
+            and extraction_collapsed(result)):
+        try:
+            reclaimed, _how, _items = _recover_collapsed_document(page, page_html, page.url)
+        except Exception as e:  # noqa: BLE001 - 补救失败不该盖掉这次抓取
+            logger.debug("collapse recovery failed for %s: %s", page.url, e)
+            reclaimed, _how, _items = [], "", 0
+        got = sum(len(c) for c in result.content if isinstance(c, str))
+        _worth_it = bool(reclaimed) and (
+            _how == "link_list"
+            or sum(len(c) for c in reclaimed) > got * _COLLAPSE_RETRY_GAIN)
+        if _worth_it:
+            result.content = reclaimed
+            result.extracted_type = "markdown"
+            if _how == "link_list":
+                result.page_type = "list"
+                # 给 `quality.extraction_collapsed` 一个可核对的记号：这一发的少字
+                # 是形状（清单只留条目），不是读取器丢了东西。
+                result.metadata["recovered_as"] = "link_list"
+                _note_text(
+                    f"the markdown pass kept {got:,} characters of this page's "
+                    f"{result.visible_text_chars:,} visible ones - it is an index, so "
+                    f"this answer is its {_items} links rendered as a list instead "
+                    "(* [title](url)), not a prose extraction")
+            else:
+                _note_text(
+                    f"the markdown extract kept {got:,} characters of this page while "
+                    f"its markup holds {result.visible_text_chars:,} visible ones; this "
+                    "answer comes from the plain converter over the same bytes "
+                    "(markdown, page chrome included) rather than from the main-content "
+                    "detector")
+    return result
+
 
 #: 值不值得再看一眼"内容区长什么样"的窗口。长正文由定义就是有实质，不必为它多付一次
 #: 解析；薄正文才需要，而薄的那一段正是当年两处假阳性住的地方：666 字与 833 字的纯导航
 #: 既过得了 `quality._JS_SHELL_MIN_TEXT_CHARS`（200 字）那道壳闸，也够不着混淆闸的
 #: `len < 1000` 早退 —— 两道闸中间这一段没人管，substance 就是来管这一段的。
 _SUBSTANCE_PROBE_MAX_CHARS = 2_000
+
+#: 坍缩后内部重抽要"多拿回多少"才值得接管这次回答。1.5 是保守的：塌陷的实测样本远高于
+#: 它（dshmarketplace.dev 7,623 → 39,645，5.2 倍），而两条路只差几个百分点的页不该被换掉
+#: —— 换掉意味着调用方拿到的正文形态变了（html 那一路保留版面，噪声也多）。
+_COLLAPSE_RETRY_GAIN = 1.5
 
 
 def _attach_dom_visible_chars(result: ResponseModel, page_html: str,
@@ -2932,11 +3302,18 @@ def _attach_dom_visible_chars(result: ResponseModel, page_html: str,
 
 
 def _check_response_size(page: _DholeResponse) -> None:
-    """Raise if response body exceeds safety limit."""
+    """Raise if response body exceeds safety limit.
+
+    红线是 `_body_ceiling()`：抽取走 50MB，`save_to` 走它自己的落盘上限。这条函数
+    在落盘分叉**之后**才跑到，所以正常路径上 `save_to` 根本到不了这里 —— 但
+    `_translate_response` 的其他入口（多 URL 批读、爬行）共用它，而"同一颗数字只有
+    一个作者"比"多一条注释"便宜。
+    """
     body = getattr(page, 'body', None)
-    if body and isinstance(body, bytes) and len(body) > MAX_RESPONSE_BYTES:
+    ceiling = _body_ceiling()
+    if body and isinstance(body, bytes) and len(body) > ceiling:
         raise ValueError(
-            f"Response body too large ({len(body):,} bytes, max {MAX_RESPONSE_BYTES:,} bytes)"
+            f"Response body too large ({len(body):,} bytes, max {ceiling:,} bytes)"
         )
 
 
@@ -4210,6 +4587,12 @@ _SF_PARAMS = frozenset({
     # 伪装参数，所以留在这扇门；`schema=` 的嵌套解决的是同一篇文档里的作用域，
     # 这两层是另外 N 篇文档。
     "nested_selector", "nested_fields", "nested_max",
+    # R3：这一发的响应头与重定向端点（默认关）。它是"这页为什么是这样"的证据，与
+    # 正文分开收费 —— 打开它同时意味着不吃缓存（缓存里的头属于上一次抓取）。
+    "include_headers",
+    # R4：交字节而不是正文。`save_to` 是"这份东西落到哪"，`max_save_bytes` 是它自己
+    # 的红线；两颗一起读才读得通，所以描述里互相点名。
+    "save_to", "max_save_bytes",
 })
 _SC_PARAMS = frozenset({
     "max_pages", "max_depth", "path_include", "path_exclude",
@@ -4230,6 +4613,8 @@ _REQUEST_PARAMS = frozenset({
     # 写操作确认门（G25 评审 Blocker）：confirm 必须是已知名，否则被注入内容
     # 诱导后的重试会被 dispatch 当表外名拒掉——闸门要在，通往闸门的路也要在。
     "confirm",
+    # R3：写请求的答复头（HEAD 探针最常用）。与 web_read 同一颗、同一份手。
+    "include_headers",
 })
 
 # 17.0 §4 第 2 行：页面动作那颗门。施工图给它留了 7 个名字，这里落 11 个 —— 多出来
@@ -5077,8 +5462,12 @@ def _store_ttl(result: ResponseModel, cache_ttl: int, *, chain_ran: bool = False
     一字未削；页型抬 TTL 的规则只在「调用方没有自己点名一颗」时生效，也没动 —— 那张表
     里曾经有过 `{"docs": 86400}`，那个值说的是「这是个文档站」，而缓存时长跟的是页面结构
     （`source_type` 才回答站点类别），手册类页面从此按默认 1h。
+
+    第三件不该存的：**一次 `save_to` 的回执**。它交出去的不是这一页，是一句
+    "saved N bytes to /path"；存进去之后，那个 URL 在 TTL 内的每一次普通读都会拿到
+    这句话当正文。字节落的是调用方点名的磁盘路径，缓存在这里既帮不上忙也赔不起。
     """
-    if chain_ran or non_read or not _is_cacheable(result):
+    if chain_ran or non_read or _SAVE_TO.get() or not _is_cacheable(result):
         return 0
     base = cache_ttl if cache_ttl > 0 else DEFAULT_TTL
     if base == DEFAULT_TTL:
@@ -6559,6 +6948,7 @@ class MasterFetchServer:
         # W1：写请求也要有头可点。`content_type` 本来就是一颗头的特例，所以"其余的头
         # 够不着"从来不是设计，只是漏。同 web_read 一条路、同一份拒绝名单。
         headers: Optional[Dict[str, Any]] = None,
+        include_headers: Optional[bool] = None,
     ) -> ResponseModel:
         """Send one NON-GET request and read back what the server answered.
 
@@ -6659,6 +7049,7 @@ class MasterFetchServer:
             url=url, method=verb, body=body, content_type=content_type,
             extraction_type=extraction_type,
             timeout=timeout, cache_ttl=0, headers=headers,
+            include_headers=bool(include_headers),
         )
 
     async def web_act(
@@ -6758,7 +7149,11 @@ class MasterFetchServer:
         几毫秒的活，`0.0` 读起来像"这一次什么都没发生"，而那正是缓存回放冒充新核验
         的一半（另一半是 `fetched_at`，见下）。
         """
-        if cache_ttl <= 0:
+        if cache_ttl <= 0 or _INCLUDE_HEADERS.get() or _SAVE_TO.get():
+            # 问的是"服务端现在怎么答"，缓存里的头是上一次的回答 —— 不能拿来冒充。
+            # `save_to` 更要命：缓存里存的是**抽取出来的正文**，从来没有原始 body；
+            # 拿一份正文去覆盖一个"这次要写文件"的调用，交出的是一份空文件加一句
+            # "saved"。两件事都只能回到网络。
             return None
         t0 = now()
         cached = await get_cached(url, extraction_type, css_selector, ttl=cache_ttl, pages=pages if isinstance(pages, str) else None, ctx=_CACHE_CTX.get())
@@ -6843,12 +7238,16 @@ class MasterFetchServer:
         只服务普通的单 URL GET 文档读。actions 要的是交互之后的页面、schema 要在
         原始 HTML 上重跑选择器、`check` 要的是站方对校验子的答复、cdp_url 要的是已
         认证视角 —— 把匿名抓来的那一份交出去，是拿没被问过的内容冒充答案。
+        `save_to` 与 `include_headers` 是同一句话的另外两票：前者要的是**原始字节**
+        （缓存里只存抽取后的正文），后者要的是**这一次**的响应头。给它们一次命中，
+        就是把"没发包"这件事说成一个它没有的答案。
 
         robots 只读缓存：为合规再发一发，发的正是守卫拦下的那一发。规则缓存说「不许」
         就不读；没有记录时按既有的 fail-open 政策走，并把姿态如实写成「这次没查」。
         """
         if (actions or schema is not None or nested_selector is not None
-                or cdp_url or extraction_type == "check"
+                or cdp_url or extraction_type == "check" or _SAVE_TO.get()
+                or _INCLUDE_HEADERS.get()
                 or _clean_method(method) != "GET"):
             return None
         try:
@@ -6925,6 +7324,18 @@ class MasterFetchServer:
         include_media: bool = False,
         include_links: bool = False,
         max_links: Optional[int] = None,
+        # 2026-10-23 · D：把这一发的状态行、响应头与重定向端点交出来（默认关）。
+        # 从前要看 `Content-Type` / 302 链只能退回 curl，而 curl 不在这条链路上：
+        # 它没有缓存、没有身份、没有反爬台阶。头是"这页为什么是这样"的证据，与正文
+        # 分开收费 —— 打开它同时意味着**不吃缓存**（缓存里的头属于上一次抓取）。
+        include_headers: bool = False,
+        # 2026-10-23 · R4：把原始响应体**写成文件**，而不是抽成正文。外部 agent 的实测
+        # 里"大文件下不动"是唯一一条真正办不成的事：49MB 的 plugins.json 交回的是一句
+        # "too large"，而它要的只是那个文件。`save_to` 因此在抽取**之前**分叉：交字节、
+        # 不交文本（大文件与二进制本来就没有"正文"）。它照 17.0 的老账走最后一颗参数，
+        # 因为它是"这一发拿去干什么"，不是读法。
+        save_to: Optional[str] = None,
+        max_save_bytes: Optional[int] = None,
         ignore_robots: bool = False,
         check_login: bool = False,
         cdp_url: Optional[str] = None,
@@ -7175,6 +7586,75 @@ class MasterFetchServer:
                                      "(add \"type\": \"array\" for a list), and "
                                      "nested_selector is one CSS selector on THIS page."))
                 nested_selector = _nested_mod_selector
+
+        # R4：`save_to` 的三道门在**发请求之前**，因为这三件事打错的代价是"先付一次
+        # 下载再来报错"，而 49MB 的单价不是零。① 批量读与落盘互斥（N 页写一个文件是
+        # 一句没有意义的话，写最后一个赢是最坏的那种"成功"）；② 上限自带范围，越界
+        # 具名拒绝而不是钳（钳下去调用方会以为自己拿到了那一份）；③ 路径当场验成一条
+        # 可写的路径 —— 这是 `_resolve_download_target` 的 docstring 承诺的那半步。
+        #
+        # 位置在 CDP 授权闸**之前**：`save_to + cdp_url` 是一对永远办不成的组合（浏览器
+        # 交回 DOM，没有原始 body），而授权闸会先说"这个 host 没批准过、去 approve"。
+        # 让调用方先批一次准、再撞上"这两颗互斥"，是一次错误花两次往返 —— 而"不可能
+        # 成立的组合"本来就该在"要不要授权"之前说完。
+        if save_to is not None or max_save_bytes is not None:
+            if not (isinstance(save_to, str) and save_to.strip()):
+                return _invalid_request_result(
+                    url or "",
+                    "max_save_bytes= was given without save_to=: it caps a download, "
+                    "and this call is not downloading anything",
+                    next_action=("Add save_to='<file path>' to write the body, or drop "
+                                 "max_save_bytes - nothing was fetched."))
+            if urls is not None:
+                return _invalid_request_result(
+                    url or "",
+                    "save_to= writes ONE body to ONE file, and this call is a batch "
+                    f"({len(urls)} URLs) - there is no single body to save",
+                    next_action=("Read that URL on its own with save_to=, or split the "
+                                 "batch. Nothing was fetched."))
+            # 三颗"先渲染再说"的参数与落盘互斥，因为渲染出来的那一页没有原始 body：
+            # 浏览器档交回的是 DOM，`cdp_url` 交回的是你已登录的那一页，动作链交回的是
+            # 动作之后的那一页。这三条都不是"我要这个文件"，而 save_to 只办那一件事。
+            _render_only = [n for n, v in (
+                ("actions", bool(actions)),
+                ("force_fetcher='stealthy'", force_fetcher == "stealthy"),
+                ("cdp_url", bool(cdp_url)),
+            ) if v]
+            if _render_only:
+                return _invalid_request_result(
+                    url or "",
+                    "save_to= returns the response's raw BYTES, and "
+                    f"{_render_only[0]} asks for a RENDERED page - a browser hands "
+                    "back a DOM, never the original body, so there is nothing to "
+                    "write",
+                    next_action=("Drop save_to to read the rendered page, or drop "
+                                 f"{_render_only[0]} to save the file. Nothing was "
+                                 "fetched."))
+            save_to = save_to.strip()
+            if max_save_bytes is not None:
+                if (not isinstance(max_save_bytes, int)
+                        or isinstance(max_save_bytes, bool)):
+                    return _invalid_request_result(
+                        url or "",
+                        f"max_save_bytes must be an integer, got "
+                        f"{type(max_save_bytes).__name__}",
+                        next_action=("Give it a byte count (e.g. 33554432 for 32MB), "
+                                     "or omit it for the 256MB default. Nothing was "
+                                     "fetched."))
+                if max_save_bytes <= 0 or max_save_bytes > MAX_SAVE_BYTES_CAP:
+                    return _invalid_request_result(
+                        url or "",
+                        f"max_save_bytes takes 1-{MAX_SAVE_BYTES_CAP:,}, got "
+                        f"{max_save_bytes:,}",
+                        next_action=("Omit it for the 256MB default, or name a value "
+                                     "inside that range. Nothing was fetched."))
+            try:
+                _resolve_download_target(save_to)
+            except ValueError as exc:
+                return _invalid_request_result(
+                    url or "", str(exc),
+                    next_action=("Nothing was fetched and nothing was written - fix "
+                                 "save_to and call again."))
 
         # 安全闸 1/2（G33 → 17.0 先问再记）：CDP attach 的授权点在工具入口，
         # 单条与 bulk 两条路都在这里过闸；_open_session 只消费已过闸的结果。
@@ -7807,11 +8287,13 @@ class MasterFetchServer:
         # 查缓存（那时领头写进去的条目已经在了，它直接命中，一个包都不发）。
         #
         # cache_ttl<=0 时不登记：不读也不写缓存的调用没有可共享的媒介，合流对它们
-        # 只剩"白等一场"。
+        # 只剩"白等一场"。`save_to` / `include_headers` 是同一句的另外两票 —— 它们
+        # 也绕开缓存（见 `_cache_hit_response`），于是跟随者等到落地的是一份它读不到
+        # 的答案，还得自己再发一次。
         _flight: Optional[_InFlight] = None
         _flight_key: Optional[str] = None
         _waited_s = 0.0
-        if cache_ttl > 0:
+        if cache_ttl > 0 and not _SAVE_TO.get() and not _INCLUDE_HEADERS.get():
             _flight_key = _merge_key(
                 url, extraction_type, css_selector,
                 pages if isinstance(pages, str) else None, _CACHE_CTX.get())
@@ -8959,6 +9441,22 @@ class MasterFetchServer:
         if result.status == 304:
             result.escalation_path = "direct:http"
             _record_latency(url, elapsed, document=document)
+            return await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
+
+        # ─── save_to: 这一档的答复就是答案（R4） ────────────────────────────
+        # `save_to` 要的是**字节**，而字节只存在于 HTTP 这一档：浏览器档交回的是渲染后
+        # 的 DOM，没有原始 body 可交。所以这一发到这儿就结束 —— 无论落盘成功、被自己的
+        # 上限拒掉、还是写文件时报错，答案都是那一句，而"再渲染一次"只会把真正的原因
+        # （"over the save_to limit of 1,048,576"）埋进 `all_tiers_failed` 里。实测就是
+        # 这样：cap 到 1MB 的那一发起了浏览器，交回的是 "js_shell_detected / Page.goto:
+        # Download is starting"。一条本来只差一行字就能读完的拒绝。
+        #
+        # 排在 304 之后、document/PDF 之前：前三者都还是"页面型"的分支，而这里连判词
+        # 都不该产生 —— 没有页面可判。账记成 download（`document=True`）：26 秒的文件不该
+        # 变成这台主机的翻页预算。
+        if _SAVE_TO.get():
+            result.escalation_path = "direct:http(save_to)"
+            _record_latency(url, elapsed, document=True)
             return await self._finalize_result(result, url, extraction_type, css_selector, cache_ttl, offset, max_chars)
 
         # A PDF is binary whether or not its URL says so (arxiv serves them at
@@ -11250,6 +11748,12 @@ class MasterFetchServer:
                     "include_links": {"type": "boolean", "description": "Also return outgoing links, classified as citations / navigation / external, with a primary_source hint (default false)."},
                     "max_links": {"type": "integer", "description": "Per-list cap for include_links (1-100; default 30/20/20); links.total_found and links.is_truncated report what it hid."},
                     "include_media": {"type": "boolean", "description": "Also return up to 20 image URLs found on the page in .media (default false)."},
+                    "include_headers": {"type": "boolean", "description": "Also return this response's status line, headers and redirect endpoints in metadata (default false). Set-Cookie comes back as cookie NAMES only; a redirect chain is walked with HEAD, and the call skips the cache because stored headers describe an earlier fetch."},
+                    # R4：跑题的两颗（"交字节"而不是"交正文"）。描述里互相点名，因为
+                    # 单看一颗会以为另一个是可选装饰 —— 而不会给 save_to 配上限的人,
+                    # 会在第一次 300MB 的文件上遇到一个他没读过的地方写的红线。
+                    "save_to": {"type": "string", "description": "Write this response's BYTES to this file instead of extracting text. Parent must exist; an existing file is refused, never overwritten. Returns one receipt line (metadata.saved_to/bytes/sha256); skips cache and extraction. Pairs with max_save_bytes."},
+                    "max_save_bytes": {"type": "integer", "description": "Ceiling for save_to: default 268435456 (256MB), cap 1073741824 (1GB). Over it nothing is written and the size is reported. The 50MB extraction cap does not apply to a save_to download."},
                     # §5 E-13：一次调用摊平两层。三颗都在场上，缺一条描述就没人会
                     # 想到它们存在 —— 而 agent 的默认做法是发 8 次 web_read。
                     "nested_selector": {"type": "string", "description": "Two layers in one call: a CSS selector on THIS page naming the elements to follow; each one's href (its own, a descendant's or an ancestor's <a>) is fetched and nested_fields read there."},
@@ -11308,6 +11812,7 @@ class MasterFetchServer:
                     # 同 web_read.headers：一门规矩两处够得着，描述在这颗上只说差异
                     # （一次写不带升档，也不带缓存，所以"赢在哪一层"只有一层）。
                     "headers": {"type": "object", "additionalProperties": {"type": ["string", "null"]}, "description": "Headers to send, winning key by key over what dhole synthesizes. The same three families are refused here by name and for the same reason - see web_read.headers."},
+                    "include_headers": {"type": "boolean", "description": "Also return this answer's status line and headers in metadata (default false). Best on HEAD probes: Content-Length / Content-Type / cache headers, no body. Set-Cookie returns cookie NAMES only."},
                 },
             },
             # 写操作默认不是只读；重复调用不保证同一个答案，所以不是幂等。
@@ -11347,7 +11852,7 @@ class MasterFetchServer:
         },
         {
             "name": "web_discover",
-            "description": "A site's URL MAP, with no page read for content - one call answers 'what is on this site' before you choose what to read. pages_crawled=0 is the design, not a failure. The picks go to web_read(urls=[...]); many pages at once is web_crawl.\n- Two prices: sitemap=true reads the site's own index (one request, <lastmod> per row), unset walks links at one request per step up to max_pages; 'auto' tries the index, then walks.\n- path_include / path_exclude scope the map ('/docs' is a subtree, not a string prefix); search filters by path + title. A map's SIZE is the site's call: max_total_chars bounds one page of rows and resume_token returns the rows it held back. How to read a map: sys_guide(topic='behavior', section='web_discover').",
+            "description": "A site's URL MAP, with no page read for content - one call answers 'what is on this site' before you choose what to read. pages_crawled counts the map's own fetches: 0 for sitemap=true or a held plan, one per step walked. The picks go to web_read(urls=[...]); many pages at once is web_crawl.\n- Two prices: sitemap=true reads the site's own index (one request, <lastmod> per row), unset walks links at one request per step up to max_pages; 'auto' tries the index, then walks.\n- path_include / path_exclude scope the map ('/docs' is a subtree, not a string prefix); search filters by path + title. A map's SIZE is the site's call: max_total_chars bounds one page of rows and resume_token returns the rows it held back. How to read a map: sys_guide(topic='behavior', section='web_discover').",
             "inputSchema": {
                 "type": "object", "required": ["url"],
                 "properties": {

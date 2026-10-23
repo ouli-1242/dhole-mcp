@@ -579,7 +579,10 @@ class TestItem12ConnectCost:
         assert out.returncode == 0, out.stderr[-600:]
         lines = [l for l in out.stdout.splitlines() if l.strip()]
         row, face = lines[-2], lines[-1]
-        assert "12020 chars" in row, f"收窄后的 doctor 报的不是这台进程付的账：{row}"
+        # 12,020 → 12,866：R3 `include_headers`（+353，`web_read` 付）与 R4 `save_to`
+        # + `max_save_bytes`（+455，同一颗工具的同一句账）。两次都只有 `web_read`
+        # 长，`web_search` 一字未动 —— 另两颗不在这一组里。
+        assert "12866 chars" in row, f"收窄后的 doctor 报的不是这台进程付的账：{row}"
         assert "2 tool(s)" in row, row
         assert "ACTIVE 1501" in face and "FULL 2475" in face, (
             f"这道判据依赖两份 instructions 不同值：{face}")

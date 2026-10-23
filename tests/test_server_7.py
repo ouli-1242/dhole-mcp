@@ -798,8 +798,8 @@ class TestTheCallSurfaceLostBothKnobs:
             for knob in ("wait", "network_idle"):
                 assert knob not in props, f"{tool} 还在教 {knob}"
 
-    def test_web_read_advertises_twenty_eight_names(self):
-        """35 → 30（13c 身份）→ 28（13d 时机）→ 25（14a 写操作）→ 24（14b 动作链）→ 27（14d nested_*）→ 28（W1 headers）。
+    def test_web_read_advertises_thirty_one_names(self):
+        """35 → 30（13c 身份）→ 28（13d 时机）→ 25（14a 写操作）→ 24（14b 动作链）→ 27（14d nested_*）→ 28（W1 headers）→ 31（R3/R4）。
 
         §3-12 的 ≤20 已由作者裁决**放宽成棘轮 27**（"能力优先"）：差的那几颗是
         §3-16 那道门与读法本身，守卫在 tests/test_wire_shape.py。
@@ -813,8 +813,14 @@ class TestTheCallSurfaceLostBothKnobs:
         27 → 28 是体验修复刀3-W1 的 `headers`：一次零点名的抓取实测发 15 颗头而参数面
         上没有一颗能改它（旧拼写 `extra_headers` 是 §3-17 具名拒绝的身份通道）。同一刀
         把 `stealthy_headers` 那两颗字面量交给档位表读，公开面因此只多这一颗。
+
+        28 → 31（2026-10-23）：`include_headers` / `save_to` / `max_save_bytes`。这三颗
+        不是三个新旋钮，是**这扇门的另外两种产出**——`web_read` 从前只会交出"抽出来的
+        正文"，现在"这一发的证据"（状态行 / 响应头 / 逐跳 302 链）与"这一发的字节"
+        （原样落盘）也接上了同一条链路。挤不挤得进来的账写在 tests/test_wire_shape.py
+        的 PARAM_CAP 上：那里是决定，这里只是让"还剩几颗"跟着动。
         """
-        assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 28, \
+        assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 31, \
             sorted(server_mod._TOP_LEVEL_ARGS["web_read"])
 
     def test_web_act_carries_no_timing_knob_either(self):

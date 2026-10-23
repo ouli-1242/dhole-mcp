@@ -214,11 +214,23 @@ class TestUnknownTopLevelArgsRaise:
 
 class TestAcceptedSetCoversTheContract:
     def test_every_declared_schema_property_is_accepted(self):
-        """A property the tool advertises can never be a rejected call."""
+        """A property the tool advertises can never be a rejected call.
+
+        2026-10-23 真的发生过一次（R3 `include_headers`）：两颗工具的 schema 都把
+        它列了进去、签名也接了它、实现也读它 —— 唯独 `_SF_PARAMS` / `_REQUEST_PARAMS`
+        没有它，于是 dispatch 按表外名把每一次调用都拒了。套件当时是绿的，因为那条
+        用例只跑了子集：**一个只在全量里才绿的守卫，等于没有守卫**。
+
+        这条断言因此把名字点出来，而不是只说工具名 —— "web_read 里有个东西不对" 要
+        人去翻 31 个参数，而 "web_read: ['include_headers']" 是直接可动手的那一句。
+        """
         for td in MasterFetchServer._TOOL_DEFS:
             declared = set((td.get("inputSchema") or {}).get("properties") or {})
             allowed = set(server_mod._TOP_LEVEL_ARGS[td["name"]])
-            assert declared <= allowed, td["name"]
+            ghost = declared - allowed
+            assert not ghost, (
+                f"{td['name']}: {sorted(ghost)} 在 schema 里露着脸，却会被 dispatch "
+                "当表外名拒掉 —— 补进 *_PARAMS，或者从 schema 里删掉")
 
     def test_every_accepted_name_is_advertised(self):
         """17.0 B4 的那半边：能被读的键就必须能在 schema 里看到 —— 参数只有一个家，

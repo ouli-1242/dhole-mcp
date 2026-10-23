@@ -513,6 +513,14 @@ def _measure_note(stats: dict) -> str:
     拒的，调用方读到的必须包括为什么 —— 一个没有理由的 false 与本批要消灭的那些假 true
     是同一种罪。
     """
+    if stats.get("recovered_by_plain_converter"):
+        # 接管了就要说出口 —— 静默换正文形态与"看起来成功、其实没生效"是同一种罪。
+        # 这一句也是调用方的量具提醒：这一行来自不判断主内容的转换器，带页面 chrome。
+        _md_got = stats.get("markdown_extracted_chars")
+        return (f"extraction collapsed on the markdown pass ({_md_got:,} of "
+                f"{stats['visible_chars']:,} visible characters) - recovered in place "
+                "from the same bytes by the plain converter (markdown, page chrome "
+                "included) rather than the main-content detector")
     if stats.get("extraction_collapsed"):
         visible = stats["visible_chars"]
         got = stats["extracted_chars"]
@@ -546,7 +554,8 @@ def _classify_and_extract(html: str, url: str, start_url: str, focus: Optional[s
     `stats` 是这一行被那两把尺量过之后的**证据**出口（照 `focus_content(..., stats=)`
     的先例）：数字与发现都从那里交给调用方，判决本身在返回值里。
     """
-    from dhole_mcp.trafilatura_extractor import extract_content_from_html
+    from dhole_mcp.trafilatura_extractor import (
+        extract_content_from_html, plain_markdown_from_html)
     from dhole_mcp.focus import focus_content
 
     md = ""
@@ -563,6 +572,31 @@ def _classify_and_extract(html: str, url: str, start_url: str, focus: Optional[s
     #    Render the same-domain links as a structured `* [title](url)` list so
     #    the agent gets the page's actual content (the items).
     link_density = (link_text_len / text_len) if text_len else (1.0 if link_count else 0.0)
+
+    # 与 web_read 同一刀（2026-10-23）：字在 DOM 里而 markdown 只拿回一小撮时，用**同一份
+    # html** 再抽一遍 html 那一路（它保留版面，通常拿得更多）。只修读取侧就是新的不一致：
+    # 同一份字节，read 说"补回来了"、crawl 这一行还说"塌陷"，两个入口各说各话正是这一族
+    # 旧账的形状。列表页不参与 —— 它的 md 是渲染出来的链接清单，按定义丢掉非链接的字，
+    # 拿整页可见字去比是拿错的量具（见 `_measure_row`）。
+    if md and link_density < 0.5:
+        _visible_all = visible_text_chars(html)
+        _prose_all = visible_text_chars_without_chrome(html)
+        if (is_extraction_collapsed(len(md), _visible_all)
+                and (_prose_all <= 0 or is_extraction_collapsed(len(md), _prose_all))):
+            # 与读取侧同一刀（2026-10-23）：坍缩时用**同一份 html** 走不判断主内容的
+            # 纯转换器（`plain_markdown_from_html`），读/爬两个入口交同一种正文。
+            # 这一支只看非列表页（密度 < 0.5）：列表页由下面的 list 分支渲染成清单，
+            # 那是另一种形状，不该先被 markdownify 洗一遍。
+            # 第一版这里交的是**原始标记**（`_reclaimed = html`），把 35k 标签当正文；
+            # 也试过 `extract_content_from_html(html, url, "html")` —— 那个函数对 "html"
+            # 按设计回 None，补救从未生效（实测 /longaside：读 7,326 / 爬 2,577）。
+            _plain = plain_markdown_from_html(html)
+            if len(_plain) > len(md) * 1.5:
+                _md_before = len(md)
+                md = _plain
+                if stats is not None:
+                    stats["recovered_by_plain_converter"] = True
+                    stats["markdown_extracted_chars"] = _md_before
     if link_count >= 10 and link_density >= 0.5:
         list_md = _link_list_markdown(html, url, start_url)
         if list_md:

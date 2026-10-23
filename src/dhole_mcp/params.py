@@ -500,6 +500,15 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         # A numeric PDF page request ("pages": 3) is unambiguous; reading it only
         # as a string used to drop the range silently and return the whole file.
         "pages": "strnum", "password": "strnum",
+        # R3：`include_headers` 决定"这一次要不要交出证据"，而字符串客户端的
+        # `"false"` 按裸值传是非空字符串 = 真 —— 于是调用方说了不要，回执里却多出一
+        # 份响应头，而且这一次调用**绕开了缓存**（打开它就不吃缓存）。它不看任何
+        # 别的东西，只是被读成真，所以后果是"多花了钱、多了一份没人要的证据"。
+        "include_headers": "bool",
+        # R4：落盘那两颗。`save_to` 是路径（字符串），空串与空白在这里就是"没给"，
+        # 由 `web_read` 门口具名拒掉；`max_save_bytes` 是数字，字符串客户端把 256MB
+        # 写成 "268435456" 是常态，而按裸字符串比较会当场 TypeError。
+        "save_to": "str", "max_save_bytes": "int",
     },
     "web_crawl": {
         "max_pages": "int", "max_depth": "int", "max_content_chars_per": "int",
@@ -542,6 +551,10 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         # 因为两边必须读同一份东西。
         "headers": "dict",
         "confirm": "bool",
+        # R3：与 `web_read` 那一颗同一句话、同一只归一化。它尤其要紧在这儿 ——
+        # 一次 HEAD 探针的全部价值就是那几颗头，而 `"false"` 被读成真会让"我只要个
+        # 状态码"变成"把整份响应头也抄进 transcript"。
+        "include_headers": "bool",
     },
     # §4 页面动作那颗。rawlist：动作链的每一个对象都是一个不同键的形状
     # （{click:…} / {fill:…} / {wait:…}），逐颗归一化会读掉那些键本身。

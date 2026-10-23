@@ -136,7 +136,10 @@ def test_web_read_advertises_one_level_param_and_no_hardening_knobs():
     # 具名拒绝的旧拼写，`referer` 硬编在两处。加它买到的不是旋钮，是"我说的话能说出去"。
     # 同一次还把 `stealthy_headers` 那两颗字面量交给档位表读（`rungs.py`），公开面
     # 因此**没有**多第二颗伪装旋钮。
-    assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 28, \
+    # 28 → 31（2026-10-23）：`include_headers` / `save_to` / `max_save_bytes`，同一扇门的
+    # 另外两种产出（证据、字节）。它们挤不挤得进来这件事，账在 tests/test_wire_shape.py
+    # 的 PARAM_CAP 上 —— 那一处是决定，这一处只让"还剩几颗"跟着动。
+    assert len(server_mod._TOP_LEVEL_ARGS["web_read"]) == 31, \
         len(server_mod._TOP_LEVEL_ARGS["web_read"])
 
 
