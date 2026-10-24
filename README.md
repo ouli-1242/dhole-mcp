@@ -71,9 +71,9 @@ dhole --http                                        # 127.0.0.1:8765/mcp
 
 从模型看不见今天的网，到它自己抓回证据。
 
-<a href="assets/dhole-promo.mp4"><img src="https://raw.githubusercontent.com/ouli-1242/dhole-mcp/main/assets/consent.png" alt="Dhole 宣传片" width="100%"></a>
+<video controls width="100%" poster="https://raw.githubusercontent.com/ouli-1242/dhole-mcp/main/assets/consent.png" src="https://github.com/user-attachments/assets/b59a7b13-fab2-41df-a029-cbc41d8a378e"></video>
 
-[▶ 播放完整宣传片](assets/dhole-promo.mp4)（720p，86 秒，带旁白）
+播放器起不来（登录态偶发被浏览器 CSP 拦）？[点此直接看同一个文件](https://github.com/user-attachments/assets/b59a7b13-fab2-41df-a029-cbc41d8a378e)。（720p，86 秒，带旁白）
 
 ## 它做什么
 
