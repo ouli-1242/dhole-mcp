@@ -3,7 +3,7 @@
   "name": "io.github.ouli-1242/dhole-mcp",
   "title": "Dhole",
   "description": "Keyless web fetch, crawl, and multi-engine search with anti-bot escalation for AI agents.",
-  "version": "17.1",
+  "version": "17.2",
   "websiteUrl": "https://github.com/ouli-1242/dhole-mcp",
   "repository": {
     "url": "https://github.com/ouli-1242/dhole-mcp",
@@ -15,7 +15,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "dhole-mcp",
-      "version": "17.1",
+      "version": "17.2",
       "transport": {
         "type": "stdio"
       }

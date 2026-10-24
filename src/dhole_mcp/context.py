@@ -142,6 +142,13 @@ _TOOL: contextvars.ContextVar[str] = contextvars.ContextVar("_tool", default="")
 _DOOR_KIND: dict[str, str] = {
     "web_read": "read", "web_crawl": "read", "web_discover": "read",
     "feed_read": "read", "doc_parse": "read",
+    # 3.2 · 证据包门：搜索 + 读取的编排，产物是读回来的证据 —— 按产物归类
+    # （read），不按第一步（search）：这句门话说的是"这一发什么也没发生"时
+    # 这扇门交付的到底是什么。
+    "web_research": "read",
+    # 提升清单 2 · 本地缓存的检索门：一个字节的外网流量都不发，产物是读回来的
+    # 指针 —— 与证据包同款（read）。
+    "web_recall": "read",
     "web_request": "write",
     "web_act": "action",
     "web_search": "search",

@@ -136,7 +136,25 @@ def _step_deadline_ms(own_ms: int = STEP_WAIT_MS) -> int:
     return min(own_ms, cap_ms)
 
 _VALID_KEYS = {"click", "fill", "press", "wait", "scroll", "wait_selector",
-               "screenshot", "snapshot", "submit", "hover", "drag", "read"}
+               "screenshot", "snapshot", "submit", "hover", "drag", "read",
+               "upload", "dialog", "tab"}
+
+#: tab 动作的帽。页签是浏览器进程里的真实页面，一枚上下文开几十个是自找内存病；
+#: 50 个对"填一半、查资料、回来提交"绰绰有余。
+MAX_TABS = 50
+_TAB_VERBS = ("new", "close", "list")
+
+# upload 的两个帽。文件是**读**进浏览器的那一侧，所以路径按读侧纪律走（realpath
+# 展开链接后过系统目录名单）；大小帽是给浏览器进程留的余量——set_input_files 会把
+# 文件字节装进浏览器，一枚 4GB 的 ISO 装进去是把自己打挂。
+MAX_UPLOAD_FILES = 10
+MAX_UPLOAD_FILE_BYTES = 50_000_000
+
+#: dialog 的两种答案。缺省（没武装）时页面上弹出的对话框按 Playwright 的默认
+#: 处置：自动 dismiss——安全侧正确（一个 confirm 永远不该在没人点头时被 accept），
+#: 但它**静默**：agent 点了"删除"却什么都没发生，回执里一个字都没有。账本式监听
+#: 器把这层哑巴亏补上（见 build_page_action 里那段）。
+_DIALOG_ANSWERS = ("accept", "dismiss")
 
 
 def _target_payload_keys() -> set[str]:
@@ -404,6 +422,55 @@ def _resolve_save_to(save_to: str, image_type: str) -> Path:
     return target
 
 
+def _resolve_upload_files(files, where: str) -> list[str]:
+    """Validate the upload file list BEFORE a browser starts; return real paths.
+
+    upload 把本机文件交给页面——它是这个工具面里第一个「读本机」的动作，路径
+    纪律按**读侧**走：realpath 先展开符号链接（/tmp 里一枚指向 ~/.ssh 的链接
+    不能绕过名单），再过 `_blocked_path_prefix` 的系统目录与凭据清单。写侧
+    （save_to）管的是"往哪里写"，这里管的是"从哪里读"——同一个名单，两个方向。
+
+    大小帽在交浏览器之前也拦一道：set_input_files 会把文件字节装进浏览器进程，
+    一枚巨大的文件是把自己打挂，拒绝要发生在浏览器还没起来的时候。
+    """
+    if not isinstance(files, list) or not files:
+        raise ValueError(
+            "action 'upload' must be {selector|index, files} - a list of "
+            f"1..{MAX_UPLOAD_FILES} file paths (e.g. "
+            '{"upload": {"selector": "input[type=file]", '
+            '"files": ["./report.pdf"]}})')
+    if len(files) > MAX_UPLOAD_FILES:
+        raise ValueError(
+            f"{where} lists {len(files)} files - the cap is {MAX_UPLOAD_FILES}")
+    out: list[str] = []
+    for raw in files:
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValueError(
+                f"{where}.files must be non-empty path strings, got {raw!r}")
+        target = Path(raw).expanduser()
+        if not target.exists():
+            raise ValueError(
+                f"{where}: file not found: {raw!r} - the path is resolved on "
+                "this machine, before the browser runs")
+        if target.is_dir():
+            raise ValueError(f"{where}: {raw!r} is a directory, not a file")
+        real = os.path.realpath(target)
+        from dhole_mcp.server import _blocked_path_prefix
+        blocked = _blocked_path_prefix(real)
+        if blocked:
+            raise ValueError(
+                f"refusing to upload {raw!r} - it is in a restricted system "
+                f"directory ({blocked})")
+        size = target.stat().st_size
+        if size > MAX_UPLOAD_FILE_BYTES:
+            raise ValueError(
+                f"{where}: {raw!r} is {size:,} bytes (cap "
+                f"{MAX_UPLOAD_FILE_BYTES:,}) - the bytes load into the browser "
+                "process, so a huge file is refused rather than loaded")
+        out.append(real)
+    return out
+
+
 def _write_screenshot(data: bytes, target: Path) -> str:
     """Write captured bytes to a validated path; return the absolute path.
 
@@ -567,23 +634,72 @@ async def snapshot_elements(page) -> tuple:
     rows 是 [index, tag, role, name, disabled, input_type] 的列表（截断到
     SNAPSHOT_CAP），total 是页面上的全量数——截断要如实说，不能让 agent 以为
     看到了全部。
+
+    子 iframe 的可交互元素跟在主框后面，全局编号连续，每行多一格 `frame`（帧的
+    URL）；主框行的第七格不存在——老消费者按 len>=6 读，形状照旧。索引 → 帧 的
+    映射记在 `page._dhole_frame_map`（快照是它唯一的作者，`resolve_index` 是唯一
+    的读者），于是快照行号对 iframe 内的元素照样可用——「用户不用懂」的合同
+    不在框边上破。
     """
     try:
         got = await page.evaluate(_ENUM_JS, INTERACTIVE_SELECTOR)
     except Exception:
-        return [], 0, False
+        got = []
     rows, total = (got if isinstance(got, list) and len(got) == 2 else ([], 0))
     if not isinstance(rows, list):
         rows, total = [], 0
-    shown = rows[:SNAPSHOT_CAP]
+    all_rows: list = list(rows)
+    frame_map: dict[int, tuple] = {}
+    frame_total = 0
+    try:
+        children = [f for f in page.frames if f is not page.main_frame]
+    except Exception:
+        children = []
+    offset = len(all_rows)
+    for fr in children:
+        url = fr.url or ""
+        if not url or url == "about:blank":
+            continue
+        try:
+            fg = await fr.evaluate(_ENUM_JS, INTERACTIVE_SELECTOR)
+        except Exception:
+            continue
+        frows, ftotal = (fg if isinstance(fg, list) and len(fg) == 2
+                         else ([], 0))
+        ftotal = int(ftotal or 0) if isinstance(frows, list) else 0
+        if not ftotal:
+            continue
+        for local, r in enumerate(frows):
+            if offset >= MAX_ELEMENT_INDEX:
+                break
+            if not (isinstance(r, list) and len(r) >= 6):
+                continue
+            all_rows.append([offset, r[1], r[2], r[3], r[4], r[5], url])
+            frame_map[offset] = (fr, local)
+            offset += 1
+        frame_total += ftotal
+    if frame_map:
+        try:
+            page._dhole_frame_map = frame_map
+        except Exception:
+            pass
+    shown = all_rows[:SNAPSHOT_CAP]
     # 截断在截取之后判定：JS 侧的上限是 MAX_ELEMENT_INDEX（防失控页），这里的
     # 上限是 SNAPSHOT_CAP（防上下文爆炸）——total 超过"实际展示数"才是截断。
-    truncated = int(total or 0) > len(shown)
-    return shown, int(total or 0), truncated
+    truncated = (int(total or 0) + frame_total) > len(shown)
+    return shown, int(total or 0) + frame_total, truncated
 
 
 async def resolve_index(page, index: int):
-    """索引 → Playwright locator（与快照同一选择器、同一文档序）。"""
+    """索引 → Playwright locator（与快照同一选择器、同一文档序）。
+
+    快照枚举过的子 iframe 行（`page._dhole_frame_map`，snapshot_elements 写）
+    在这里认领自己的帧；没枚举过的帧内元素不存在索引——主框的行号从不说谎。
+    """
+    fmap = getattr(page, "_dhole_frame_map", None)
+    if isinstance(fmap, dict) and index in fmap:
+        fr, local = fmap[index]
+        return fr.locator(INTERACTIVE_SELECTOR).nth(local)
     try:
         count = await page.evaluate(_COUNT_JS_INTERACTIVE, INTERACTIVE_SELECTOR)
     except Exception:
@@ -706,6 +822,18 @@ def _act_target(i: int, key: str, val) -> dict:
         target = {"index": idx}
     if expect:
         target["expect"] = expect
+    frame = val.get("frame") if isinstance(val, dict) else None
+    if frame is not None:
+        # iframe 内的元素。三种拼法在**解析时**（_target_locator）分派：frame 的
+        # name 精确匹配、URL 前缀匹配、或 iframe 元素自己的 CSS。校验期只验形状
+        # ——URL 里带 :// ，当 CSS 验会误杀合法拼法；CSS 那一支的真正校验挪到
+        # 解析前一刻（resolve 里的 frame_locator 分支）。
+        if not isinstance(frame, str) or not frame.strip() or len(frame) > 300:
+            raise ValueError(
+                f"action {i} {key!r}.frame must be a short string naming the "
+                '<iframe>: its name, a URL prefix, or a CSS selector for the '
+                '<iframe> element (e.g. {"selector": "#save", "frame": "#app"})')
+        target["frame"] = frame.strip()
     return target
 
 
@@ -772,6 +900,92 @@ def _validate_actions(actions) -> list[dict]:
             src = _act_target(i, key, {k: v for k, v in val.items() if k != "to"})
             to = _act_target(i, f"{key}.to", val["to"])
             out.append({key: {**src, "to": to}})
+        elif key == "upload":
+            # {"upload": {selector|index, files: [path, ...]}} — 把本机文件装进
+            # <input type=file>。字符串简写在这里不设：files 没地方放。设置文件
+            # 本身只是页面状态（fill 的同侪），真正的外发发生在表单提交那一刻
+            # ——那一步照旧由 submit 闸把关，upload 不设第二道确认门。
+            # 路径校验在**这里**（浏览器还没起来的时刻），与 save_to 同一条
+            # 理由：拼错的路径值一次即时拒绝，不值一次 10 秒冷启动。
+            if not isinstance(val, dict):
+                raise ValueError(
+                    f"action {i} 'upload' must be {{selector|index, files}} - "
+                    'e.g. {"upload": {"selector": "input[type=file]", '
+                    '"files": ["./report.pdf"]}}; files is required')
+            target = _act_target(i, key, val)
+            resolved = _resolve_upload_files(val.get("files"), f"action {i} 'upload'")
+            out.append({key: {**target, "files": resolved}})
+        elif key == "dialog":
+            # {"dialog": "accept"|"dismiss"} 或 {"dialog": {"answer": ...,
+            # "prompt_text": ...}} — 武装**下一个**弹出的对话框。缺省时页面弹的
+            # 一切都按 Playwright 默认自动 dismiss（安全侧正确、但静默）；这一颗
+            # 让 confirm/prompt 有人作答，弹没弹、谁答的、答了什么，链尾的账本行
+            # 如实交回。没有"先弹后答"：Playwright 的对话框必须当场处置，
+            # 武装必须在触发它的动作之前。
+            if isinstance(val, str):
+                answer, prompt_text = val, None
+            elif isinstance(val, dict):
+                answer = val.get("answer")
+                prompt_text = val.get("prompt_text")
+            else:
+                answer, prompt_text = None, None
+            if answer not in _DIALOG_ANSWERS:
+                raise ValueError(
+                    f"action {i} 'dialog' must be {{answer}} - a bare "
+                    "\"accept\"/\"dismiss\", or {\"answer\": ..., "
+                    '"prompt_text"?: ...} (the text that answers a prompt()) - '
+                    "arm it BEFORE the action that pops the dialog")
+            if prompt_text is not None and (
+                    not isinstance(prompt_text, str) or len(prompt_text) > 200):
+                raise ValueError(
+                    f"action {i} 'dialog.prompt_text' must be a string of at "
+                    "most 200 chars (it answers a prompt() dialog)")
+            normalized: dict = {"answer": answer}
+            if prompt_text is not None:
+                normalized["prompt_text"] = prompt_text
+            out.append({key: normalized})
+        elif key == "tab":
+            # {"tab": "new"|"close"|"list"|N} 或 {"tab": {"open": "https://..."}}。
+            # 页签属于**这次调用的浏览器上下文**：new 开一枚（可带 open 的 URL）、
+            # 整数切到第 N 枚（不导航）、close 关当前枚（关后回 0 号位；最后一枚
+            # 拒关——链总要有一页来交答案）、list 交回清单。跨调用持久走 pin：
+            # 钉住的调用把页签留进会话，下一次带 pin 的调用 {"tab": N} 直达。
+            if isinstance(val, bool):
+                raise ValueError(
+                    f"action {i} 'tab' must be \"new\"|\"close\"|\"list\", a tab "
+                    "number to switch to, or {{\"open\": \"https://...\"}} - a "
+                    "bare boolean says nothing")
+            if isinstance(val, str):
+                if val not in _TAB_VERBS:
+                    raise ValueError(
+                        f"action {i} 'tab' must be \"new\"|\"close\"|\"list\", a "
+                        "tab number, or {{\"open\": \"https://...\"}}; got "
+                        f"{val!r}")
+                out.append({key: val})
+            elif isinstance(val, int):
+                if not 0 <= val <= MAX_TABS:
+                    raise ValueError(
+                        f"action {i} 'tab' switch must be a tab number in "
+                        f"0..{MAX_TABS} (take it from a tab list row)")
+                out.append({key: val})
+            elif isinstance(val, dict):
+                if set(val) != {"open"}:
+                    raise ValueError(
+                        f"action {i} 'tab' object takes exactly one key: "
+                        '{{"open": "https://..."}} - a new tab with that URL')
+                target = val["open"]
+                if not isinstance(target, str) or not target.strip():
+                    raise ValueError(
+                        f"action {i} 'tab.open' must be a non-empty URL")
+                if not target.lower().startswith(("http://", "https://")):
+                    raise ValueError(
+                        f"action {i} 'tab.open' must be an http(s) URL, got "
+                        f"{target!r}")
+                out.append({key: {"open": target.strip()}})
+            else:
+                raise ValueError(
+                    f"action {i} 'tab' must be \"new\"|\"close\"|\"list\", a tab "
+                    "number, or {{\"open\": \"https://...\"}}")
         elif key == "snapshot":
             # {"snapshot": true} — 编号交互元素列表。无参数形态是刻意的：快照
             # 没有可调的东西（上限是保护，不是旋钮），多一个键就多一种拼错法。
@@ -1111,6 +1325,29 @@ async def _dom_snapshot(page):
     return tuple(got) if isinstance(got, list) else None
 
 
+async def _frame_locator(page, frame: str, sel: str):
+    """frame 寻址的三种拼法 → locator：name 精确匹配、URL 前缀、iframe 的 CSS。
+
+    顺序即优先级：名字最具体，URL 前缀次之（快照的 frame 行交回的就是 URL，
+    抄那一行的前缀是最省事的拼法），CSS 最后——只有它走 `validate_css_selector`
+    的真校验（URL 里带 ://，当 CSS 验会误杀）。跨域 iframe 照样可达：frame_locator
+    / Frame.locator 都过 CDP，不受同源策略约束。
+    """
+    try:
+        frames = [f for f in page.frames if f is not page.main_frame]
+    except Exception:
+        frames = []
+    for f in frames:
+        if f.name == frame:
+            return f.locator(sel).first
+    for f in frames:
+        if (f.url or "").startswith(frame):
+            return f.locator(sel).first
+    from dhole_mcp.security import validate_css_selector
+    validate_css_selector(frame)
+    return page.frame_locator(frame).locator(sel).first
+
+
 async def _target_locator(page, target):
     """Resolve a validated action target (a bare selector string, {"selector"}
     or {"index", "expect"?}) to a Playwright locator, running the `expect`
@@ -1126,14 +1363,19 @@ async def _target_locator(page, target):
     """
     if isinstance(target, str):
         return page.locator(target).first
+    frame = target.get("frame")
     if "index" in target and target.get("index") is not None:
         if target.get("expect"):
             await _check_expect(page, target["index"], target["expect"])
-        return await resolve_index(page, target["index"])
+        loc = await resolve_index(page, target["index"])
+        return loc
     sel = target.get("selector")
     if not sel:
         raise ValueError(f"action target has neither selector nor index: {target!r}")
-    loc = page.locator(sel).first
+    if frame:
+        loc = await _frame_locator(page, frame, sel)
+    else:
+        loc = page.locator(sel).first
     if target.get("expect"):
         try:
             name = await loc.evaluate(_NAME_JS)
@@ -1463,6 +1705,20 @@ def _permitted(label: str) -> str:
 def action_label(a: dict) -> str:
     """One short line naming an action, for the outcome receipt in the response."""
     (key, val), = a.items()
+    if key == "upload":
+        n = len(val.get("files") or []) if isinstance(val, dict) else 0
+        return f"upload {n} file(s) into {_target_label(val)}"
+    if key == "dialog":
+        answer = val.get("answer") if isinstance(val, dict) else val
+        extra = (" +prompt_text"
+                 if isinstance(val, dict) and val.get("prompt_text") else "")
+        return f"dialog {answer} (armed){extra}"
+    if key == "tab":
+        if isinstance(val, dict):
+            return f"tab open {str(val.get('open', ''))[:60]!r}"
+        if isinstance(val, int):
+            return f"tab switch to {val}"
+        return f"tab {val}"
     if key == "fill":
         return f"fill {_target_label(val)}"
     if key == "hover":
@@ -1616,304 +1872,483 @@ def build_page_action(actions) -> Optional[Callable]:
         # 动作再跑一遍"就不再是全部的真话。默认（没有写）就是 False，于是提交闸那句合同
         # 与从前逐字相同。
         _pinned_now = bool(pin_state.get("reused") or pin_state.get("pinned"))
-        # 动作链是"几十秒到几分钟"的另一种形状：一步 click 可以等 settle，一步 wait
-        # 是显式的秒数。每**要执行**的一步报一次（在动作之前报，因为被 submit 闸拦下
-        # 的那一步不该被说成做过）；链里 continue 的分支因此也带着自己的那一格。
         total_steps = len(validated)
-        for step_no, a in enumerate(validated, start=1):
-            label = action_label(a)
-            await report_progress(float(step_no - 1), total=float(total_steps),
-                                  message=f"action {step_no}/{total_steps}: {label}")
-            shot: dict = {}
-            try:
-                if "click" in a:
-                    loc = await _target_locator(page, a["click"])
-                    submits = await _is_submit_control(loc)
-                    if submits:
-                        # 落在提交型控件上的 click 就是提交（评审R1刀1）：闸认
-                        # 动作效果，不认动作名。confirm 落在 click 的 dict 上
-                        # （字符串简写不带键，pending 行教它怎么改写）。
-                        click_val = a["click"]
-                        confirm = (click_val.get("confirm", False)
-                                   if isinstance(click_val, dict) else False)
-                        rerun = ("on this click" if isinstance(click_val, dict)
-                                 else 'on this click (as {"click": '
-                                      '{"selector": ..., "confirm": true}})')
-                        row = await _submit_gate_row(label, confirm, rerun,
+        # 页签表：0 号位是这一发导航/复用的那一页；tab 动作往里追加/摘除，`page`
+        # 的重绑跟着走。收尾（finally）把 1..N 号位写成 `tab_pages`——浏览器层靠
+        # 这一格决定"多出来的页签留进驻留登记表还是关掉"。
+        chain_pages: list = [page]
+
+        async def _run_chain(page, _listen_dialogs) -> None:
+            # 页签表住在 page_action 作用域（`chain_pages`）：0 号位是这一发导航/
+            # 复用的那一页，1..N 是链里开的（或上一次钉住留下来的）。`page` 这个
+            # 名字跟着活动页走——tab 分支重绑它，后面的每一步就都站在新活动页上；
+            # 快照的帧表、对话框监听器按页各归各。收尾的 tab_pages 记账在
+            # page_action 的 finally（链被预算掐断时也要交）。
+            for p in (pin_state.get("prior_tabs") or []):
+                try:
+                    alive = not p.is_closed()
+                except Exception:
+                    alive = False
+                if alive and not any(p is q for q in chain_pages):
+                    chain_pages.append(p)
+            _listen_dialogs(page)
+            entry_url = str(pin_state.get("entry_url") or "")
+            # 动作链是"几十秒到几分钟"的另一种形状：一步 click 可以等 settle，一步
+            # wait 是显式的秒数。每**要执行**的一步报一次（在动作之前报，因为被
+            # submit 闸拦下的那一步不该被说成做过）；链里 continue 的分支因此也带
+            # 着自己的那一格。
+            for step_no, a in enumerate(validated, start=1):
+                label = action_label(a)
+                await report_progress(float(step_no - 1), total=float(total_steps),
+                                      message=f"action {step_no}/{total_steps}: {label}")
+                shot: dict = {}
+                try:
+                    if "click" in a:
+                        loc = await _target_locator(page, a["click"])
+                        submits = await _is_submit_control(loc)
+                        if submits:
+                            # 落在提交型控件上的 click 就是提交（评审R1刀1）：闸认
+                            # 动作效果，不认动作名。confirm 落在 click 的 dict 上
+                            # （字符串简写不带键，pending 行教它怎么改写）。
+                            click_val = a["click"]
+                            confirm = (click_val.get("confirm", False)
+                                       if isinstance(click_val, dict) else False)
+                            rerun = ("on this click" if isinstance(click_val, dict)
+                                     else 'on this click (as {"click": '
+                                          '{"selector": ..., "confirm": true}})')
+                            row = await _submit_gate_row(label, confirm, rerun,
+                                                         pinned=_pinned_now)
+                            if row is not None:
+                                outcomes.append(row)
+                                continue
+                            evidence = await _settle_after_submit(page, loc)
+                            if not evidence:
+                                outcomes.append(await _no_submission_row(label, loc))
+                                continue
+                            shot["submitted"] = True
+                            shot["submission"] = "+".join(evidence)
+                        else:
+                            await _settle_after_click(page, loc)
+                    elif "hover" in a:
+                        loc = await _target_locator(page, a["hover"])
+                        await loc.hover(timeout=_step_deadline_ms())
+                        await _settle_quiet(page)
+                    elif "drag" in a:
+                        d = a["drag"]
+                        src = await _target_locator(page, d)
+                        dst = await _target_locator(page, d["to"])
+                        await src.drag_to(dst, timeout=_step_deadline_ms())
+                        await _settle_quiet(page)
+                    elif "upload" in a:
+                        u = a["upload"]
+                        loc = await _target_locator(page, u)
+                        await loc.set_input_files(u["files"],
+                                                  timeout=_step_deadline_ms())
+                        shot["uploaded"] = [os.path.basename(p) for p in u["files"]]
+                        shot["files"] = len(u["files"])
+                    elif "dialog" in a:
+                        d = a["dialog"]
+                        armed.append(d)
+                        shot["dialog_armed"] = d["answer"]
+                    elif "tab" in a:
+                        if pin_state.get("attach"):
+                            raise ValueError(
+                                "tab actions are refused on a CDP-attached "
+                                "session - those tabs live in the user's own "
+                                "browser; use a dhole session (session_id=) "
+                                "for multi-tab work")
+                        spec = a["tab"]
+                        if spec == "new" or (isinstance(spec, dict)
+                                             and "open" in spec):
+                            open_url = (str(spec.get("open") or "")
+                                        if isinstance(spec, dict) else "")
+                            newp = await page.context.new_page()
+                            chain_pages.append(newp)
+                            _listen_dialogs(newp)
+                            if open_url:
+                                try:
+                                    _nav = await newp.goto(
+                                        open_url, wait_until="load",
+                                        timeout=_step_deadline_ms())
+                                    # 这一页自己的导航响应跟着页走：fetch 落账
+                                    # 时读它（`_dhole_nav_response`），状态行/
+                                    # 响应头说的是这一页的这一笔，不是入口页的。
+                                    newp._dhole_nav_response = _nav
+                                except Exception as exc:
+                                    with contextlib.suppress(Exception):
+                                        await newp.close()
+                                    chain_pages[:] = [q for q in chain_pages
+                                                      if q is not newp]
+                                    raise ValueError(
+                                        "tab open failed for "
+                                        f"{open_url!r}: {_action_failure(exc)}"
+                                    ) from None
+                                from dhole_mcp.browser import _landed_url_refused
+                                if entry_url and _landed_url_refused(
+                                        newp.url, entry_url):
+                                    with contextlib.suppress(Exception):
+                                        await newp.close()
+                                    chain_pages[:] = [q for q in chain_pages
+                                                      if q is not newp]
+                                    raise ValueError(
+                                        "tab open refused: the new tab landed "
+                                        "at an internal/private address instead "
+                                        f"of the entry site ({open_url!r}) - "
+                                        "nothing was read from it")
+                            page = newp
+                            pin_state["active_page"] = page
+                            shot["tab_opened"] = len(chain_pages) - 1
+                            shot["url"] = page.url
+                        elif isinstance(spec, int):
+                            if not 0 <= spec < len(chain_pages):
+                                raise ValueError(
+                                    f"tab {spec} does not exist - inventory: "
+                                    f"{[q.url for q in chain_pages]}")
+                            page = chain_pages[spec]
+                            pin_state["active_page"] = page
+                            _listen_dialogs(page)
+                            shot["tab_active"] = spec
+                            shot["url"] = page.url
+                        elif spec == "close":
+                            if len(chain_pages) == 1:
+                                raise ValueError(
+                                    "refusing to close the only tab - the chain "
+                                    "still needs a page to answer from; use "
+                                    '{"tab": "new"} first')
+                            idx = next(i for i, q in enumerate(chain_pages)
+                                       if q is page)
+                            with contextlib.suppress(Exception):
+                                await page.close()
+                            chain_pages.pop(idx)
+                            page = chain_pages[0]
+                            pin_state["active_page"] = page
+                            shot["tab_closed"] = idx
+                            shot["tab_active_now"] = 0
+                            shot["url"] = page.url
+                        elif spec == "list":
+                            shot["tabs"] = [{"index": i, "url": q.url}
+                                            for i, q in enumerate(chain_pages)]
+                    elif "fill" in a:
+                        f = a["fill"]
+                        loc = await _target_locator(page, f)
+                        await loc.fill(_substitute_refs(f["text"], values, label),
+                                       timeout=_step_deadline_ms())
+                    elif "press" in a:
+                        p = a["press"]
+                        if p.get("index") is not None:
+                            loc = await _target_locator(page, p)
+                            await loc.press(p["key"], timeout=_step_deadline_ms())
+                        elif p.get("selector"):
+                            await page.locator(p["selector"]).first.press(
+                                p["key"], timeout=_step_deadline_ms())
+                        else:
+                            await page.keyboard.press(p["key"])
+                    elif "wait" in a:
+                        await page.wait_for_timeout(a["wait"])
+                    elif "scroll" in a:
+                        s = a["scroll"]
+                        await _scroll(page, s["steps"], s["selector"], s["ms_per_step"])
+                    elif "wait_selector" in a:
+                        w = a["wait_selector"]
+                        if w["count"] > 1:
+                            # "N items exist" is the lazy-list question; the first
+                            # match has been on the page since it rendered.
+                            await page.wait_for_function(
+                                _COUNT_JS, arg=[w["selector"], w["count"]],
+                                timeout=_step_deadline_ms(w["timeout"]))
+                        else:
+                            await page.locator(w["selector"]).first.wait_for(
+                                state=w["state"], timeout=_step_deadline_ms(w["timeout"]))
+                    elif "screenshot" in a:
+                        import base64
+                        s = a["screenshot"]
+                        full_page = s.get("full_page")
+                        image_type = s.get("image_type", "png")
+                        save_target = None
+                        if s.get("save_to"):
+                            # 同 web_screenshot 时代：坏路径在快门前一刻也值一次拒绝，
+                            # 但此刻浏览器已经起来了——至少让它在写盘前一刻而不是
+                            # 之后才炸。归一化时已验过形状，这里只落盘。
+                            save_target = _resolve_save_to(s["save_to"], image_type)
+                        shot_kwargs: dict = {"type": image_type, "timeout": _step_deadline_ms()}
+                        if s.get("quality") is not None:
+                            shot_kwargs["quality"] = s["quality"]
+                        if full_page:
+                            # 整页捕获没有元素盒子可依：page.screenshot 接 full_page。
+                            try:
+                                data = await page.screenshot(full_page=True,
+                                                             **shot_kwargs)
+                            except Exception as exc:
+                                logger.debug("capture failed: %r", exc)
+                                # 净化器把驱动方的 "Call log" 掉段砍掉，换成能改的
+                                # 那个旋钮的名字（timeout / 会话 / 二进制）——与
+                                # web_screenshot 时代同一张映射表，只是家搬了。
+                                raise RuntimeError(
+                                    _screenshot_error_message(exc)) from None
+                        else:
+                            if s.get("index") is not None:
+                                loc = await _target_locator(page, s)
+                            else:
+                                loc = await _locator_or_raise(page, s["selector"])
+                            try:
+                                data = await loc.screenshot(**shot_kwargs)
+                            except Exception as exc:
+                                logger.debug("capture failed: %r", exc)
+                                raise RuntimeError(
+                                    _screenshot_error_message(exc)) from None
+                        if save_target is not None:
+                            # save_to 是 text-only 宿主的整条出路：字节走盘，路径进
+                            # 回执，inline 一张都不发——大图也不再受 inline 帽约束。
+                            saved = _write_screenshot(data, save_target)
+                            shot["saved"] = saved
+                            shot["saved_bytes"] = len(data)
+                        else:
+                            if len(data) > MAX_ACTION_SHOT_BYTES:
+                                raise ValueError(
+                                    f"capture is {len(data):,} bytes "
+                                    f"(cap {MAX_ACTION_SHOT_BYTES:,} for inline "
+                                    "images) - crop a smaller element, or pass "
+                                    '{"save_to": "..."} to write the full capture '
+                                    "to disk instead of the transcript")
+                            shot["image_b64"] = base64.b64encode(data).decode("ascii")
+                            shot["image_mime"] = f"image/{image_type}"
+                        if s["decode_qr"]:
+                            # Auxiliary to the capture: a decoder problem (missing
+                            # extra, no code in the crop) reports in the row and
+                            # never fails the action — the pixels are the product.
+                            try:
+                                from dhole_mcp.qr import decode_qr_bytes
+                                shot["qr"] = decode_qr_bytes(data)
+                            except Exception as e:
+                                shot["qr"] = []
+                                shot["qr_error"] = f"{type(e).__name__}: {str(e)[:140]}"
+                    elif "read" in a:
+                        r = a["read"]
+                        loc = await _target_locator(page, r)
+                        attr = r.get("attribute")
+                        prop = r.get("property")
+                        if prop:
+                            raw = await loc.evaluate(_READ_PROPERTY_JS, prop)
+                            if raw is None:
+                                tag = await loc.evaluate(_TAG_JS)
+                                raise ValueError(
+                                    f"read found no property {prop!r}: <{tag.lower()}> "
+                                    f"has no such field — it is not a form control, so "
+                                    'there is no live value to read')
+                            text = str(raw)
+                            what = f"property {prop!r}"
+                            read_via = f"property:{prop}"
+                        elif attr:
+                            if attr in _VALUEISH_ATTRS:
+                                tag = await loc.evaluate(_TAG_JS)
+                            else:
+                                tag = ""
+                            if tag in _VALUEISH_TAGS:
+                                # 问的是 attribute，答的是 property —— 并且把标签上那一层
+                                # 一起带回去。两个数不等就是"填进去的那些字此刻在页面上"
+                                # 的凭据；相等则说明这次读分辨不了（值本来就等于默认）。
+                                # 这一行的意义在于：它让"按下提交之前我到底填没填上"
+                                # 成为一次调用就能回答的问题，而不是四次。
+                                live = await loc.evaluate(_READ_PROPERTY_JS, attr)
+                                if live is None:
+                                    raise ValueError(
+                                        f"read found no property {attr!r} on <"
+                                        f"{tag.lower()}> {attr!r} attribute read")
+                                text = str(live)
+                                shadow = await loc.get_attribute(attr)
+                                read_via = f"property:{attr} (asked as attribute)"
+                                if (shadow or "") != text:
+                                    shot["attribute_says"] = "" if shadow is None else str(shadow)
+                                what = f"attribute {attr!r}"
+                            else:
+                                raw = await loc.get_attribute(attr)
+                                text = "" if raw is None else str(raw)
+                                what = f"attribute {attr!r}"
+                                read_via = f"get_attribute:{attr}"
+                            empty_hint = (
+                                f"{attr!r} is absent or empty on this element"
+                                if tag not in _VALUEISH_TAGS else
+                                f"{attr!r} is empty on this <{tag.lower()}> — that is the "
+                                "field's current value, not a missing read")
+                        else:
+                            text = await loc.inner_text(timeout=_step_deadline_ms())
+                            what = "text"
+                            read_via = "inner_text"
+                            # 空读数最常被读成"这一页没有答案"，而真相通常是读错了地方：
+                            # 表单框的值不是元素的文本，图里的挑战更不是。这两扇门都点名，
+                            # 否则这一行只是把"没读到"原样交回给人猜。
+                            #
+                            # 2026-10-10：这里原先指的是 `{"attribute": "value"}` —— 那一读
+                            # 拿到的是标签上的死值，正是它把一次成功的 fill 说成失败的。
+                            # 指向错的门比不指门更糟：调用方会照着它信一个假证据。
+                            empty_hint = (
+                                "a form field's live value needs {\"property\": \"value\"}"
+                                "; a challenge drawn as an image needs a screenshot action")
+                        text = text.strip()
+                        if not text:
+                            raise ValueError(f"read found no {what}: {empty_hint}")
+                        shot["read_via"] = read_via
+                        if len(text) > MAX_ACTION_READ_CHARS:
+                            shot["read"] = text[:MAX_ACTION_READ_CHARS]
+                            shot["read_truncated"] = True
+                            shot["read_chars_total"] = len(text)
+                        else:
+                            shot["read"] = text
+                        if r.get("as"):
+                            # 寄存器存**全文**：帽是说给读这一行的人听的，填回表单的那一半
+                            # 不该拿到一枚被砍过的答案。
+                            values[r["as"]] = text
+                            shot["read_as"] = r["as"]
+                    elif "snapshot" in a:
+                        rows, total, truncated = await snapshot_elements(page)
+                        if not total:
+                            raise ValueError(
+                                "could not enumerate interactive elements - the "
+                                "document may still be loading; add "
+                                '{"wait_selector": ...} before the snapshot')
+                        shot["elements"] = [
+                            {"index": r[0], "tag": r[1], "role": r[2], "name": r[3],
+                             **({"disabled": True} if r[4] else {}),
+                             **({"input_type": r[5]} if r[5] else {}),
+                             **({"frame": r[6]} if len(r) > 6 and r[6] else {})}
+                            for r in rows if isinstance(r, list) and len(r) >= 6]
+                        shot["elements_total"] = total
+                        if truncated:
+                            # 截断要如实说：agent 以为看到全部才会把"没有"当成"不存在"。
+                            shot["elements_truncated"] = True
+                    elif "submit" in a:
+                        s = a["submit"]
+                        # 审批闸（安全红线 3）：提交是不可逆的一步。批次8 刀1 把
+                        # 钥匙按连接分段：声明了 elicitation 的连接上，人按键授权
+                        # （out-of-band ask）——confirm 参数不参与开门，拒答 / 问
+                        # 不到人一律 fail-closed；能力为假 / 无会话 → 一字不改，
+                        # {"confirm": true} 重跑同一条 actions 链照旧放行。闸体在
+                        # _submit_gate_row：评审R1刀1 起，提交型控件上的 click 走
+                        # 同一道门。
+                        #
+                        # 闸**排在解析之前**，这一条有专门的钉子守着
+                        # （`test_a_submit_that_went_out_is_not_marked_unconfirmed.py
+                        # ::test_a_refused_submit_never_reaches_the_locator`）：被拦下
+                        # 的一步不许去问页面任何问题。我曾把它挪到解析之后（越界的
+                        # index 不该让人去批准一件办不成的事 —— 实测 S12/S15 那句
+                        # pending 原样回显 [7]），撞在那颗钉子上让位了：钉子说的是
+                        # 安全侧，我说的是省一次往返。
+                        row = await _submit_gate_row(label, s.get("confirm", False),
+                                                     "on this submit",
                                                      pinned=_pinned_now)
                         if row is not None:
                             outcomes.append(row)
                             continue
+                        label = _permitted(label)
+                        loc = await _target_locator(page, s)
                         evidence = await _settle_after_submit(page, loc)
                         if not evidence:
                             outcomes.append(await _no_submission_row(label, loc))
                             continue
                         shot["submitted"] = True
                         shot["submission"] = "+".join(evidence)
-                    else:
-                        await _settle_after_click(page, loc)
-                elif "hover" in a:
-                    loc = await _target_locator(page, a["hover"])
-                    await loc.hover(timeout=_step_deadline_ms())
-                    await _settle_quiet(page)
-                elif "drag" in a:
-                    d = a["drag"]
-                    src = await _target_locator(page, d)
-                    dst = await _target_locator(page, d["to"])
-                    await src.drag_to(dst, timeout=_step_deadline_ms())
-                    await _settle_quiet(page)
-                elif "fill" in a:
-                    f = a["fill"]
-                    loc = await _target_locator(page, f)
-                    await loc.fill(_substitute_refs(f["text"], values, label),
-                                   timeout=_step_deadline_ms())
-                elif "press" in a:
-                    p = a["press"]
-                    if p.get("index") is not None:
-                        loc = await _target_locator(page, p)
-                        await loc.press(p["key"], timeout=_step_deadline_ms())
-                    elif p.get("selector"):
-                        await page.locator(p["selector"]).first.press(
-                            p["key"], timeout=_step_deadline_ms())
-                    else:
-                        await page.keyboard.press(p["key"])
-                elif "wait" in a:
-                    await page.wait_for_timeout(a["wait"])
-                elif "scroll" in a:
-                    s = a["scroll"]
-                    await _scroll(page, s["steps"], s["selector"], s["ms_per_step"])
-                elif "wait_selector" in a:
-                    w = a["wait_selector"]
-                    if w["count"] > 1:
-                        # "N items exist" is the lazy-list question; the first
-                        # match has been on the page since it rendered.
-                        await page.wait_for_function(
-                            _COUNT_JS, arg=[w["selector"], w["count"]],
-                            timeout=_step_deadline_ms(w["timeout"]))
-                    else:
-                        await page.locator(w["selector"]).first.wait_for(
-                            state=w["state"], timeout=_step_deadline_ms(w["timeout"]))
-                elif "screenshot" in a:
-                    import base64
-                    s = a["screenshot"]
-                    full_page = s.get("full_page")
-                    image_type = s.get("image_type", "png")
-                    save_target = None
-                    if s.get("save_to"):
-                        # 同 web_screenshot 时代：坏路径在快门前一刻也值一次拒绝，
-                        # 但此刻浏览器已经起来了——至少让它在写盘前一刻而不是
-                        # 之后才炸。归一化时已验过形状，这里只落盘。
-                        save_target = _resolve_save_to(s["save_to"], image_type)
-                    shot_kwargs: dict = {"type": image_type, "timeout": _step_deadline_ms()}
-                    if s.get("quality") is not None:
-                        shot_kwargs["quality"] = s["quality"]
-                    if full_page:
-                        # 整页捕获没有元素盒子可依：page.screenshot 接 full_page。
-                        try:
-                            data = await page.screenshot(full_page=True,
-                                                         **shot_kwargs)
-                        except Exception as exc:
-                            logger.debug("capture failed: %r", exc)
-                            # 净化器把驱动方的 "Call log" 掉段砍掉，换成能改的
-                            # 那个旋钮的名字（timeout / 会话 / 二进制）——与
-                            # web_screenshot 时代同一张映射表，只是家搬了。
-                            raise RuntimeError(
-                                _screenshot_error_message(exc)) from None
-                    else:
-                        if s.get("index") is not None:
-                            loc = await _target_locator(page, s)
-                        else:
-                            loc = await _locator_or_raise(page, s["selector"])
-                        try:
-                            data = await loc.screenshot(**shot_kwargs)
-                        except Exception as exc:
-                            logger.debug("capture failed: %r", exc)
-                            raise RuntimeError(
-                                _screenshot_error_message(exc)) from None
-                    if save_target is not None:
-                        # save_to 是 text-only 宿主的整条出路：字节走盘，路径进
-                        # 回执，inline 一张都不发——大图也不再受 inline 帽约束。
-                        saved = _write_screenshot(data, save_target)
-                        shot["saved"] = saved
-                        shot["saved_bytes"] = len(data)
-                    else:
-                        if len(data) > MAX_ACTION_SHOT_BYTES:
-                            raise ValueError(
-                                f"capture is {len(data):,} bytes "
-                                f"(cap {MAX_ACTION_SHOT_BYTES:,} for inline "
-                                "images) - crop a smaller element, or pass "
-                                '{"save_to": "..."} to write the full capture '
-                                "to disk instead of the transcript")
-                        shot["image_b64"] = base64.b64encode(data).decode("ascii")
-                        shot["image_mime"] = f"image/{image_type}"
-                    if s["decode_qr"]:
-                        # Auxiliary to the capture: a decoder problem (missing
-                        # extra, no code in the crop) reports in the row and
-                        # never fails the action — the pixels are the product.
-                        try:
-                            from dhole_mcp.qr import decode_qr_bytes
-                            shot["qr"] = decode_qr_bytes(data)
-                        except Exception as e:
-                            shot["qr"] = []
-                            shot["qr_error"] = f"{type(e).__name__}: {str(e)[:140]}"
-                elif "read" in a:
-                    r = a["read"]
-                    loc = await _target_locator(page, r)
-                    attr = r.get("attribute")
-                    prop = r.get("property")
-                    if prop:
-                        raw = await loc.evaluate(_READ_PROPERTY_JS, prop)
-                        if raw is None:
-                            tag = await loc.evaluate(_TAG_JS)
-                            raise ValueError(
-                                f"read found no property {prop!r}: <{tag.lower()}> "
-                                f"has no such field — it is not a form control, so "
-                                'there is no live value to read')
-                        text = str(raw)
-                        what = f"property {prop!r}"
-                        read_via = f"property:{prop}"
-                    elif attr:
-                        if attr in _VALUEISH_ATTRS:
-                            tag = await loc.evaluate(_TAG_JS)
-                        else:
-                            tag = ""
-                        if tag in _VALUEISH_TAGS:
-                            # 问的是 attribute，答的是 property —— 并且把标签上那一层
-                            # 一起带回去。两个数不等就是"填进去的那些字此刻在页面上"
-                            # 的凭据；相等则说明这次读分辨不了（值本来就等于默认）。
-                            # 这一行的意义在于：它让"按下提交之前我到底填没填上"
-                            # 成为一次调用就能回答的问题，而不是四次。
-                            live = await loc.evaluate(_READ_PROPERTY_JS, attr)
-                            if live is None:
-                                raise ValueError(
-                                    f"read found no property {attr!r} on <"
-                                    f"{tag.lower()}> {attr!r} attribute read")
-                            text = str(live)
-                            shadow = await loc.get_attribute(attr)
-                            read_via = f"property:{attr} (asked as attribute)"
-                            if (shadow or "") != text:
-                                shot["attribute_says"] = "" if shadow is None else str(shadow)
-                            what = f"attribute {attr!r}"
-                        else:
-                            raw = await loc.get_attribute(attr)
-                            text = "" if raw is None else str(raw)
-                            what = f"attribute {attr!r}"
-                            read_via = f"get_attribute:{attr}"
-                        empty_hint = (
-                            f"{attr!r} is absent or empty on this element"
-                            if tag not in _VALUEISH_TAGS else
-                            f"{attr!r} is empty on this <{tag.lower()}> — that is the "
-                            "field's current value, not a missing read")
-                    else:
-                        text = await loc.inner_text(timeout=_step_deadline_ms())
-                        what = "text"
-                        read_via = "inner_text"
-                        # 空读数最常被读成"这一页没有答案"，而真相通常是读错了地方：
-                        # 表单框的值不是元素的文本，图里的挑战更不是。这两扇门都点名，
-                        # 否则这一行只是把"没读到"原样交回给人猜。
-                        #
-                        # 2026-10-10：这里原先指的是 `{"attribute": "value"}` —— 那一读
-                        # 拿到的是标签上的死值，正是它把一次成功的 fill 说成失败的。
-                        # 指向错的门比不指门更糟：调用方会照着它信一个假证据。
-                        empty_hint = (
-                            "a form field's live value needs {\"property\": \"value\"}"
-                            "; a challenge drawn as an image needs a screenshot action")
-                    text = text.strip()
-                    if not text:
-                        raise ValueError(f"read found no {what}: {empty_hint}")
-                    shot["read_via"] = read_via
-                    if len(text) > MAX_ACTION_READ_CHARS:
-                        shot["read"] = text[:MAX_ACTION_READ_CHARS]
-                        shot["read_truncated"] = True
-                        shot["read_chars_total"] = len(text)
-                    else:
-                        shot["read"] = text
-                    if r.get("as"):
-                        # 寄存器存**全文**：帽是说给读这一行的人听的，填回表单的那一半
-                        # 不该拿到一枚被砍过的答案。
-                        values[r["as"]] = text
-                        shot["read_as"] = r["as"]
-                elif "snapshot" in a:
-                    rows, total, truncated = await snapshot_elements(page)
-                    if not total:
-                        raise ValueError(
-                            "could not enumerate interactive elements - the "
-                            "document may still be loading; add "
-                            '{"wait_selector": ...} before the snapshot')
-                    shot["elements"] = [
-                        {"index": r[0], "tag": r[1], "role": r[2], "name": r[3],
-                         **({"disabled": True} if r[4] else {}),
-                         **({"input_type": r[5]} if r[5] else {})}
-                        for r in rows if isinstance(r, list) and len(r) >= 6]
-                    shot["elements_total"] = total
-                    if truncated:
-                        # 截断要如实说：agent 以为看到全部才会把"没有"当成"不存在"。
-                        shot["elements_truncated"] = True
-                elif "submit" in a:
-                    s = a["submit"]
-                    # 审批闸（安全红线 3）：提交是不可逆的一步。批次8 刀1 把
-                    # 钥匙按连接分段：声明了 elicitation 的连接上，人按键授权
-                    # （out-of-band ask）——confirm 参数不参与开门，拒答 / 问
-                    # 不到人一律 fail-closed；能力为假 / 无会话 → 一字不改，
-                    # {"confirm": true} 重跑同一条 actions 链照旧放行。闸体在
-                    # _submit_gate_row：评审R1刀1 起，提交型控件上的 click 走
-                    # 同一道门。
+                    outcomes.append({"action": label, "ok": True, **shot})
+                except asyncio.CancelledError:
+                    # 调用预算掐死这一步的时候，链到这里就结束了 —— 而下面那条
+                    # `except Exception` 接不到它（CancelledError 自 3.8 起不再是
+                    # Exception 的子类，它从 BaseException 来）。后果是这一格交回
+                    # "什么都没有"：8 步跑完 6 步和一步没跑，在字节上长得一模一样。
                     #
-                    # 闸**排在解析之前**，这一条有专门的钉子守着
-                    # （`test_a_submit_that_went_out_is_not_marked_unconfirmed.py
-                    # ::test_a_refused_submit_never_reaches_the_locator`）：被拦下
-                    # 的一步不许去问页面任何问题。我曾把它挪到解析之后（越界的
-                    # index 不该让人去批准一件办不成的事 —— 实测 S12/S15 那句
-                    # pending 原样回显 [7]），撞在那颗钉子上让位了：钉子说的是
-                    # 安全侧，我说的是省一次往返。
-                    row = await _submit_gate_row(label, s.get("confirm", False),
-                                                 "on this submit",
-                                                 pinned=_pinned_now)
-                    if row is not None:
-                        outcomes.append(row)
-                        continue
-                    label = _permitted(label)
-                    loc = await _target_locator(page, s)
-                    evidence = await _settle_after_submit(page, loc)
-                    if not evidence:
-                        outcomes.append(await _no_submission_row(label, loc))
-                        continue
-                    shot["submitted"] = True
-                    shot["submission"] = "+".join(evidence)
-                outcomes.append({"action": label, "ok": True, **shot})
-            except asyncio.CancelledError:
-                # 调用预算掐死这一步的时候，链到这里就结束了 —— 而下面那条
-                # `except Exception` 接不到它（CancelledError 自 3.8 起不再是
-                # Exception 的子类，它从 BaseException 来）。后果是这一格交回
-                # "什么都没有"：8 步跑完 6 步和一步没跑，在字节上长得一模一样。
-                #
-                # 实测的形状（15 场景体测，场景 10）：一次元素截图烧掉 61,529ms，
-                # 响应写着 "No content was extracted"，`metadata.actions` 一个字都
-                # 没有 —— 于是连"这一刀切在哪一步"都无从知道，而那正是决定要不要再
-                # 来一次的唯一依据。
-                #
-                # 这一刀不改任何截止：它只让被掐掉的那一步留下自己的一行，然后原样
-                # 交回，让外面那道 backstop 继续建它的超时响应。
-                outcomes.append({
-                    "action": label, "ok": False, "cut_by_budget": True,
-                    "step": f"{step_no}/{total_steps}",
-                    "error": ("cut by the caller's own timeout - this step never "
-                              "finished, so whatever it changes on the page may be "
-                              "half-done"),
-                })
-                raise
-            except Exception as e:
-                outcomes.append({"action": label, "ok": False,
-                                 "error": _action_failure(e)})
-                # `label`, never `a`: a fill action's dict carries its `text`,
-                # and that text can be a password (the login flow builds exactly
-                # such a chain). Logging the raw action wrote the secret to the
-                # log while the response, the receipt and the audit row were all
-                # careful not to - the one channel nobody audits was the leak.
-                # The label names the target and never the value, so it is what
-                # every other consumer of this action already records.
-                logger.warning("page action %s failed: %s", label, str(e)[:160])
+                    # 实测的形状（15 场景体测，场景 10）：一次元素截图烧掉 61,529ms，
+                    # 响应写着 "No content was extracted"，`metadata.actions` 一个字都
+                    # 没有 —— 于是连"这一刀切在哪一步"都无从知道，而那正是决定要不要再
+                    # 来一次的唯一依据。
+                    #
+                    # 这一刀不改任何截止：它只让被掐掉的那一步留下自己的一行，然后原样
+                    # 交回，让外面那道 backstop 继续建它的超时响应。
+                    outcomes.append({
+                        "action": label, "ok": False, "cut_by_budget": True,
+                        "step": f"{step_no}/{total_steps}",
+                        "error": ("cut by the caller's own timeout - this step never "
+                                  "finished, so whatever it changes on the page may be "
+                                  "half-done"),
+                    })
+                    raise
+                except Exception as e:
+                    outcomes.append({"action": label, "ok": False,
+                                     "error": _action_failure(e)})
+                    # `label`, never `a`: a fill action's dict carries its `text`,
+                    # and that text can be a password (the login flow builds exactly
+                    # such a chain). Logging the raw action wrote the secret to the
+                    # log while the response, the receipt and the audit row were all
+                    # careful not to - the one channel nobody audits was the leak.
+                    # The label names the target and never the value, so it is what
+                    # every other consumer of this action already records.
+                    logger.warning("page action %s failed: %s", label, str(e)[:160])
 
+        # ── 对话框账本（dialog 动作的另一半）───────────────────────────
+        # 监听器挂在**链首**：Playwright 的默认是「没人监听就自动 dismiss」，安全侧
+        # 正确，但它静默——agent 点了"删除"却什么都没发生，连为什么都没人说。装上
+        # 监听器之后，这一条链上弹的每一个对话框都从这里走：有人武装（{"dialog":
+        # "accept"/"dismiss"} 先行）就照武装的答，没人武装就照旧 dismiss——**并把它
+        # 记下来**。链尾多交一行 "dialogs"，弹没弹、弹的什么、谁答的，一眼可查。
+        dialogs: list[dict] = []
+        armed: list[dict] = []
+
+        async def _on_dialog(dlg) -> None:
+            entry: dict = {"type": str(getattr(dlg, "type", "") or ""),
+                           "message": str(getattr(dlg, "message", "") or "")[:160]}
+            answer = armed.pop(0) if armed else None
+            accepted = answer is not None
+            try:
+                if accepted and answer.get("answer") == "dismiss":
+                    await dlg.dismiss()
+                elif accepted and answer.get("prompt_text") is not None \
+                        and entry["type"] == "prompt":
+                    await dlg.accept(answer["prompt_text"])
+                elif accepted:
+                    await dlg.accept()
+                else:
+                    await dlg.dismiss()
+            except Exception:
+                accepted = False
+                with contextlib.suppress(Exception):
+                    await dlg.dismiss()
+            _was_dismiss = accepted and answer.get("answer") == "dismiss"
+            entry["answered"] = ("dismissed (armed)" if _was_dismiss
+                                 else "accepted (armed)" if accepted
+                                 else "auto-dismissed")
+            if answer is not None and not accepted:
+                entry["arm_failed"] = ("the armed answer itself raised - the "
+                                       "dialog was dismissed instead")
+            if answer is None:
+                entry["note"] = ('no {"dialog": "accept"} was armed before the '
+                                 "action that popped this - arm one to answer it")
+            dialogs.append(entry)
+
+        _dialog_pages: list = []
+
+        def _listen_dialogs(p) -> None:
+            """把对话框账本挂到一页上。tab 动作切页后新活动页也要挂——否则切过去
+            之后弹的 confirm 又回到"静默被关"的旧世界。有借有还：page_action 的
+            finally 对 `_dialog_pages` 里每一页摘监听器。"""
+            try:
+                p.on("dialog", _on_dialog)
+                _dialog_pages.append(p)
+            except Exception:
+                pass
+
+        try:
+            await _run_chain(page, _listen_dialogs)
+        finally:
+            # 全表如实交出去（含 0 号位与活动页）：浏览器层存槽时自己排除活动页、
+            # 收尾时自己排除正在关的那一页。切过页的链里 0 号位（导航那页）也要交
+            # ——不交它就成了没人管也没人记的漏页。
+            pin_state["tab_pages"] = list(chain_pages)
+            for p in _dialog_pages:
+                with contextlib.suppress(Exception):
+                    p.remove_listener("dialog", _on_dialog)
+            if armed:
+                dialogs.append({"armed_unused": len(armed),
+                                "note": "armed answer(s) that never met a dialog"})
+            if dialogs:
+                outcomes.append({"action": "dialogs", "ok": True,
+                                 "seen": dialogs})
     page_action.outcomes = outcomes  # type: ignore[attr-defined]
     # 驻留页的告示牌（见上面 docstring）：浏览器层在跑这条链之前往里写 `reused`，
     # 提交闸读它。默认缺席 = 这一页是这一发导航出来的，合同照旧。

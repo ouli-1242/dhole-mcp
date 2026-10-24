@@ -160,6 +160,7 @@ from dhole_mcp.cache import (
     set_cached,
 )
 from dhole_mcp.envelope import (
+    answer_is_prose,
     detect_page_type,
 )
 # robots.txt compliance: one cached check per origin, consulted before any tier
@@ -303,6 +304,7 @@ from dhole_mcp.quality import (  # noqa: F401
     _summary_label,
     _with_agent_hints,
     extraction_collapsed,
+    extraction_lost_text,
     status_error_sentence,
 )
 # 17.0 B6 第七刀上半：反爬档位搬进 rungs.py。这八颗都是再导出：抓取的三条路
@@ -459,9 +461,21 @@ def _is_document_url(url: str) -> bool:
     response, use _is_document: arxiv-style URLs (`/pdf/2103.00020`) serve a PDF
     with no extension to see, and classing those as pages is what let a 26-second
     download set the page budget for a whole host.
+
+    3.3（提升计划）：无扩展名的 `/pdf/<id>` 路径（arxiv / openreview 一族）同样是
+    文档 URL。不认它的代价量过两遍：11MB 的 arxiv PDF 按「页面」预算走 —— 学习
+    天花板先把 HTTP 档掐死，空 status 0 又不满足 `.pdf` 那颗手抄判据（`quality.
+    _never_escalate`），于是起浏览器下同一个更慢的文件，45s 预算两档皆输。判据收在
+    「**首个**路径段等于 pdf」：arxiv.org/pdf/<id> 与 openreview.net/pdf?id= 都是这个
+    形状，而 en.wikipedia.org/wiki/PDF（一个讲 PDF 的页面）与 /pdf-tools/guide 这类
+    前缀段都不中；误判面窄，且响应回来后 `_is_document` 会按 content-type 改判。
     """
     try:
-        return urlparse(url).path.lower().endswith(_DOCUMENT_EXTENSIONS)
+        path = urlparse(url).path.lower()
+        if path.endswith(_DOCUMENT_EXTENSIONS):
+            return True
+        segments = [s for s in path.split("/") if s]
+        return bool(segments) and segments[0] == "pdf"
     except (ValueError, AttributeError):
         return False
 
@@ -1015,6 +1029,8 @@ DHOLE_INSTRUCTIONS = (
     "- Content of a URL you already have (page or PDF): web_read. urls=[...] for a known list; focus= cuts tokens on long pages.\n"
     "- Many pages from one site, URLs unknown: web_discover maps it (sitemap=true = one request), web_crawl reads them, web_read(urls=[...]) a known list.\n"
     "- Finding what to fetch: web_search - then web_read the top hits. NEVER answer from search snippets alone.\n"
+    "- One question needing CITED evidence from several pages at once: web_research returns a [n]+URL evidence pack in one call.\n"
+    "- A page you (or dhole) fetched earlier and want again without the network: web_recall searches the local cache, pointers only.\n"
     "- RSS/Atom changelogs or release notes: feed_read.\n"
     "- Local file: doc_parse.\n"
     "- A page you have to click, fill or submit on: web_act - the browser tier, never from cache; submit pauses until the user approves that exact submission, and screenshots ride its action chain.\n"
@@ -1055,6 +1071,10 @@ _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "(sitemap=true = one request), web_crawl reads them, web_read(urls=[...]) a known list.\n",
     "web_search": "- Finding what to fetch: web_search - then web_read the top hits. "
     "NEVER answer from search snippets alone.\n",
+    "web_research": "- One question needing CITED evidence from several pages at once: "
+    "web_research returns a [n]+URL evidence pack in one call.\n",
+    "web_recall": "- A page you (or dhole) fetched earlier and want again without the "
+    "network: web_recall searches the local cache, pointers only.\n",
     "feed_read": "- RSS/Atom changelogs or release notes: feed_read.\n",
     "doc_parse": "- Local file: doc_parse.\n",
     "web_act": "- A page you have to click, fill or submit on: web_act - the browser tier, "
@@ -2671,6 +2691,12 @@ def _translate_response(page: _DholeResponse, *args, **kwargs) -> ResponseModel:
     endpoints that return before the HTML path runs.
     """
     result = _translate_response_body(page, *args, **kwargs)
+    # 浏览器档的网络账（`Response.network`，作者是 browser 的收集器）。HTTP 档没有
+    # 这一格，缓存命中也没有 —— 后者是**对的**：那一发一个请求都没发，带上一份
+    # "刚才网络里发生了什么"就是假话，而 `cached` 命中路径根本不经过这里。
+    _net = getattr(page, "network", None)
+    if _net:
+        result.network = _net
     headers = getattr(page, "headers", None) or {}
     # `include_headers=true`：这一发的响应头随回执走（cookie 只留名）。缓存命中不走
     # 这里 —— 缓存里那份头属于**写它的那一发**，拿它回答"现在服务端说什么"是错的，
@@ -3123,6 +3149,32 @@ def _translate_response_body(
         note = "[503 via stealthy fetcher. The target server may block headless browser fingerprints. Retry with force_fetcher='http' if the page does not need JS.]"
         content = [note]
 
+    # 2.2 · 数据岛：现代 SPA 常把完整正文塞在 script[type='application/json'] /
+    # __NEXT_DATA__ 里——数据已经在 HTML 里，只是不在可见 DOM 里。**抽取稀疏时**
+    # （webclaw 同款纪律：稀疏才试）把这些块拼起来当候选，且必须过与正文同一套
+    # 质量闸：候选得是一段话（`answer_is_prose`）、明显多于现有答案（≥2 倍且
+    # ≥500 字）、整体替换而非拼接（不与已有正文重复）。过不了闸就当这页没有岛
+    # ——空答案照旧让壳闸说话、阶梯照旧升级。`schema=`/`css_selector=` 不参与：
+    # 投影是调用方自己的决定。干净页（没有能过闸的岛）一个字节不变。
+    _island_used = False
+    if (extraction_type in ("markdown", "text", "article") and not css_selector
+            and raw_body and isinstance(raw_body, (bytes, bytearray))
+            and sum(len(c) for c in content if isinstance(c, str)) < _ISLAND_SPARSE_CHARS):
+        try:
+            _ihtml = raw_body.decode(
+                getattr(page, 'encoding', None) or 'utf-8', errors='replace')
+            from dhole_mcp.data_island import extract_data_islands
+            _blocks = extract_data_islands(_ihtml)
+        except Exception as e:  # noqa: BLE001 - 岛失败不该盖掉这次抓取
+            logger.debug("data island pass failed for %s: %s", page_url, e)
+            _blocks = []
+        _island_text = "\n\n".join(_blocks)
+        _got = sum(len(c) for c in content if isinstance(c, str))
+        if (_blocks and answer_is_prose(_island_text)
+                and len(_island_text) > max(2 * _got, 500)):
+            _island_used = True
+            content = [_island_text]
+
     # Metadata enrichment (OpenGraph + JSON-LD + canonical + <title>) for HTML
     # pages. JSON/PDF/image responses return earlier with metadata={}. Cheap
     # regex pass over the raw body; never blocks the response.
@@ -3173,6 +3225,7 @@ def _translate_response_body(
     # this structural guess).
     _page_type = detect_page_type(
         page_html, page_url, raw_ct, sum(len(c) for c in content),
+        extracted_text="\n".join(c for c in content if isinstance(c, str)),
     )
 
     # G29 — the address the caller passed answered 200 and the DOCUMENT named
@@ -3183,6 +3236,11 @@ def _translate_response_body(
     if _meta_hop and isinstance(page_metadata, dict):
         page_metadata["meta_refresh"] = _meta_hop
 
+    if _island_used:
+        # 与 link_list 补救同一个键位：这一发的正文从哪条路来。quality 只认
+        # "link_list"，data_island 只是给回执与缓存留的诚实记号。
+        page_metadata["recovered_as"] = "data_island"
+
     result = _attach_dom_visible_chars(ResponseModel(
         status=page.status, content=content, url=page.url,
         fetcher_used=fetcher_used, duration_ms=duration_ms,
@@ -3190,6 +3248,14 @@ def _translate_response_body(
         media=page_media, links=page_links, page_type=_page_type,
         extracted_type=_etype,
     ), page_html, page.url)
+
+    if _island_used:
+        _note_text(
+            "the visible DOM had almost nothing to extract, but this page ships "
+            "its content as embedded JSON (script[type='application/json'] / "
+            "__NEXT_DATA__); this answer is the prose blocks collected from that "
+            "data island, passed through the same shape gates as any extraction "
+            "(it had to read as prose to be handed over at all)")
 
     # 抽取坍缩的内部补救（2026-10-23）：同一份 body 再走一条**不判断主内容**的路，
     # **不发第二个请求**。此前这条路只把处方交回调用方（`extraction_type='html'` 的建议），
@@ -3206,17 +3272,36 @@ def _translate_response_body(
     # 见 `quality.extraction_collapsed` 的注释）、调用方没自己缩范围（`css_selector=`）、
     # 且确实换到了更好的东西（清单 ≥10 条；散文多拿回 ≥1.5 倍）。接管就改
     # `extracted_type`/`page_type` 并写备注，不假装这还是原来那一路的产物。
+    #
+    # 第四件事（2026-10-24 真实站点实测）：**别拿一段正文去换一堆 chrome**。塌陷闸量的
+    # 是"抽取回来的字比整页可见字少"，而中文门户的正文页正是这个形状 —— 正文 2,844 字、
+    # 整页 8,548 字（33%），闸响，补救把这段真正文换成了 117 条侧栏推荐链接
+    # （`_how == "link_list"` 那一支当时无条件接管）；同样的形状还让一篇 772 字的通稿
+    # 被换成 37,206 字的整页 markdown（chrome 全带上）。
+    #
+    # 但"当前答案是一段话"本身不能当否决票：`/longaside` 那类页面里，主内容过滤器丢掉
+    # 的确实是一整块真正文（aside 里 4.6k 字），补救把它补回来是对的。两件事的区别在
+    # **候选里是什么**，所以按路分别判：
+    # - 链接清单：当前答案已经是一段话时不许接管（清单按定义只有标签，换过去一定更差）；
+    # - 纯转换器：候选自己也得是一段话（`answer_is_prose`），否则那就是把导航倒进来。
+    # 当前答案本来只是标签时，两条路都照旧 —— 那才是"读不到正文"的原形。
+    _got_text = "\n".join(c for c in result.content if isinstance(c, str))
+    _got_is_prose = answer_is_prose(_got_text)
     if (extraction_type in ("markdown", "text", "article") and not css_selector
-            and extraction_collapsed(result)):
+            and extraction_lost_text(result)):
         try:
             reclaimed, _how, _items = _recover_collapsed_document(page, page_html, page.url)
         except Exception as e:  # noqa: BLE001 - 补救失败不该盖掉这次抓取
             logger.debug("collapse recovery failed for %s: %s", page.url, e)
             reclaimed, _how, _items = [], "", 0
         got = sum(len(c) for c in result.content if isinstance(c, str))
-        _worth_it = bool(reclaimed) and (
-            _how == "link_list"
-            or sum(len(c) for c in reclaimed) > got * _COLLAPSE_RETRY_GAIN)
+        _cand_text = "\n".join(c for c in reclaimed if isinstance(c, str))
+        if _how == "link_list":
+            _worth_it = bool(reclaimed) and not _got_is_prose
+        else:
+            _worth_it = bool(reclaimed) and (
+                sum(len(c) for c in reclaimed) > got * _COLLAPSE_RETRY_GAIN
+                and (answer_is_prose(_cand_text) or not _got_is_prose))
         if _worth_it:
             result.content = reclaimed
             result.extracted_type = "markdown"
@@ -3250,6 +3335,11 @@ _SUBSTANCE_PROBE_MAX_CHARS = 2_000
 #: 它（dshmarketplace.dev 7,623 → 39,645，5.2 倍），而两条路只差几个百分点的页不该被换掉
 #: —— 换掉意味着调用方拿到的正文形态变了（html 那一路保留版面，噪声也多）。
 _COLLAPSE_RETRY_GAIN = 1.5
+
+#: 2.2 · 数据岛的"稀疏"线：抽取回来的字低于它才去看 JSON 岛（webclaw 500 词阈值的
+#: 字符量级换算；中文 500 字、英文约 3,000 字，2,000 落在中间）。高过它的抽取已经
+#: "读到了东西"，再换岛是拿配置冒充正文的风险换不到什么。
+_ISLAND_SPARSE_CHARS = 2_000
 
 
 def _attach_dom_visible_chars(result: ResponseModel, page_html: str,
@@ -3323,6 +3413,32 @@ async def _timed(coro):
     result = await coro
     elapsed = (now() - t0) * 1000
     return result, elapsed
+
+
+#: 一批 `web_read(urls=[...])` 里同时在渲染档上跑的任务上限（提升计划 2.1）。
+#: 实测（2026-10，11 站冷缓存批量）：n=5 全活（10.7s），n=11 只剩 5/11 —— 同批
+#: 五六个渲染任务在共享浏览器上争抢，维基与 GitHub 以 status 0 死掉，而同一 URL
+#: 单发全部成功（维基 134,420 字 / GitHub 15,683 字）。临界点量在 5-6 个渲染任务，
+#: 取 4 留一格余量；并发换可用性是正确的取舍 —— 一次 60s 的批量里丢掉 4 个 URL，
+#: 比多等 20s 更贵。只约束浏览器档：HTTP 档的瓶颈是网络不是浏览器，不限。
+_BATCH_BROWSER_CONCURRENCY = 4
+
+#: 这一批自己的浏览器档车道。`_smart_fetch_bulk` 在多 URL 批次上放一根进去；行里的
+#: `web_read → _auto_escalate → bulk_stealthy_fetch` 读到它就在同一根上排队。放在
+#: 上下文而不是参数里，是因为"这一行要不要上浏览器"是升级阶梯当场决定的事、事先
+#: 不知道 —— 纯 HTTP 的行永远不该为渲染档的拥挤付等待。缺席 = 不在任何批次里
+#: （单发路径一行不多等）。每次调用创建、不跨批复用：asyncio 原语记住了第一根
+#: 事件循环，跨测试/跨循环复用会在第二根循环上炸掉。
+_batch_browser_lane: "contextvars.ContextVar[object | None]" = contextvars.ContextVar(
+    "dhole_batch_browser_lane", default=None)
+
+
+async def _lane_gated(lane, coro):
+    """在这一批的浏览器档车道里跑一个抓取；车道不在场时原样跑（单发路径零改动）。"""
+    if lane is None:
+        return await coro
+    async with lane:
+        return await coro
 
 
 def _browser_binary_ready() -> bool:
@@ -4675,6 +4791,14 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
                                "max_pages", "search", "timeout",
                                "resume_token", "max_total_chars"}),
     "web_search": _SS_PARAMS | {"query"},
+    # 3.2 · 一问一证据包那颗门（提升计划）：参数面刻意只有四颗 —— 读几源、每源
+    # 多少字、总预算，编排的本质就这三件事；搜索与抓取的全部语义复用 web_search /
+    # web_read 自己的参数，这里不出现第二份。
+    "web_research": frozenset({"query", "max_sources", "per_source_chars",
+                               "timeout"}),
+    # 提升清单 2：本地缓存的检索面就两颗参数——问什么、要几行。没有 freshness
+    # 开关：过期行照样召回但带 is_stale 标注，「读过哪儿」不因 TTL 过期而消失。
+    "web_recall": frozenset({"query", "limit"}),
     "doc_parse": frozenset({"file_path", "cwd", "encoding", "offset",
                             "pages", "password"}),
     "feed_read": frozenset({"urls", "max_items", "timeout", "since"}),
@@ -4701,6 +4825,10 @@ _DISPATCH_REQUIRED: dict[str, tuple[str, ...]] = {
     "web_crawl": ("url",),
     "web_discover": ("url",),
     "doc_parse": ("file_path",),
+    # web_research 没有 web_search 那颗 mode 的豁免：证据包没有"无词"的形状。
+    "web_research": ("query",),
+    # 提升清单 2：同款——查询词就是这颗门的全部输入，没有 mode 能豁免它。
+    "web_recall": ("query",),
     # web_search 的 `query` 在这张表里待过（评审R1刀2）。评审R2刀4 把它请出去了：
     # 表是静态的、不认识 mode，而 mode='find_similar' 恰恰是一颗**没有**查询词的调用
     # —— 留着它，那颗模式在正常宿主上就做不到（不传被拒、传了被忽略）。"缺词"现在由
@@ -5868,6 +5996,34 @@ class MasterFetchServer:
     # 合理上限，再大该由调度器分成多轮（而不是让一次调用替调度器排队）。
     _CHECK_BATCH_MAX = 10
 
+    #: 3.1 · check 的 diff 上限。「变了」的那一回，调用方下一个问题一定是「变了什么」，
+    #: unified diff 就是那句回答；上限 2KB 是因为回执要整个进 transcript —— 全量 diff
+    #: 对长页可以比正文本身还长。超限**截断**而不是不给：前 2KB 说的常常已经够定位，
+    #: 而总数（hunk 数）如实报。
+    _CHECK_DIFF_CAP = 2048
+
+    @staticmethod
+    def _unified_diff_capped(old: str, new: str, *,
+                             cap: int = _CHECK_DIFF_CAP) -> dict:
+        """基线 → 新文的 unified diff，带 2KB 帽与 hunk 计数（3.1）。
+
+        `lineterm=""` 让每行自带换行进 join，块与块之间不留空行 —— 每一行都是内容，
+        帽按内容的字节数算才诚实。截断在行边界上切，最后一块残行丢弃而不是撕半行。
+        """
+        import difflib
+        lines = list(difflib.unified_diff(
+            old.splitlines(), new.splitlines(), lineterm="",
+            fromfile="baseline", tofile="fresh", n=2))
+        hunks = sum(1 for ln in lines if ln.startswith("@@"))
+        text = "\n".join(lines)
+        if len(text) <= cap:
+            return {"text": text, "hunks": hunks, "truncated": False}
+        cut = text[:cap]
+        nl = cut.rfind("\n")
+        if nl > cap // 2:
+            cut = cut[:nl]
+        return {"text": cut, "hunks": hunks, "truncated": True}
+
     async def _check_batch(self, urls: List[str], *, css_selector: Optional[str],
                            force_fetcher: Optional[str], anti_detect: Optional[str],
                            timeout, extra_headers, ignore_robots: bool) -> dict:
@@ -5955,12 +6111,24 @@ class MasterFetchServer:
             result = await self._document_tier(url, tier={
                 **base_tier, "cache_ttl": self._CHECK_BASELINE_TTL},
                 force_fetcher=force_fetcher)
+            fetched_ok = (not result.error
+                          and 200 <= int(result.status or 0) < 300)
+            # 抓取失败时不能说"已记下基线"——失败的抓取不落缓存，什么都没记。
+            # 实测（2026-10-24 活体剧本）：worldtimeapi 两档全败的那一回，回执
+            # 仍带着 recorded 一句；批量回执那层分得清失败行，单 URL 形状却在
+            # 说"看起来成功了"。
+            note = ("no comparable baseline for this URL (or it expired) - "
+                    "this call fetched and recorded one; ask again with "
+                    "extraction_type='check' to learn whether it changed"
+                    if fetched_ok else
+                    "no comparable baseline for this URL (or it expired), and "
+                    "this fetch failed too - nothing was recorded, so asking "
+                    "again would not compare anything; make the page fetchable "
+                    "first")
             return {
                 "url": url, "changed": None, "status": result.status,
                 "fetcher": result.fetcher_used,
-                "note": ("no comparable baseline for this URL (or it expired) - "
-                         "this call fetched and recorded one; ask again with "
-                         "extraction_type='check' to learn whether it changed"),
+                "note": note,
                 **({"error": result.error} if result.error else {}),
             }
         markers = (baseline.get("envelope") or {}).get("cache_validators") or {}
@@ -5992,15 +6160,26 @@ class MasterFetchServer:
                    if old_text[k] != new_text[k]),
                   min(len(old_text), len(new_text)))
         _lo = max(0, _i - 60)
+        # 3.1 · 「变了」的回执要回答「变了什么」：unified diff（baseline → fresh），
+        # 2KB 帽。首分叉窗口照旧保留 —— 那一格是「第一处在哪里」的坐标，diff 是
+        # 「每一处是什么」，两问不是一问。
+        _ud = self._unified_diff_capped(old_text, new_text)
         return {
             "url": url, "changed": True, "status": 200,
             "fetcher": fresh.fetcher_used,
             "first_divergence_at": _i,
             "diff_window": new_text[_lo:_i + 140],
+            "diff": _ud["text"],
+            "diff_hunks": _ud["hunks"],
+            "diff_truncated": _ud["truncated"],
             "baseline_chars": len(old_text), "fresh_chars": len(new_text),
-            "note": ("diff_window shows the fresh text around the first "
-                     "divergence - refetch with extraction_type='markdown' "
-                     "to read the page"),
+            "note": ("diff is a unified diff (baseline -> fresh); "
+                     + (f"the first {self._CHECK_DIFF_CAP} bytes of "
+                        f"{_ud['hunks']} hunk(s), the rest is cut - "
+                        if _ud["truncated"] else "")
+                     + "diff_window shows the fresh text around the first "
+                       "divergence - refetch with extraction_type='markdown' "
+                       "to read the page"),
         }
 
     async def _finalize_result(
@@ -6815,6 +6994,12 @@ class MasterFetchServer:
             )
 
 
+        # 浏览器档车道：自己就是一批（多 URL）就用自己那根；单 URL 而来自一个
+        # `web_read(urls=[...])` 批次，就排调用方放进上下文的那根。两样都没有 =
+        # 单发路径，一行不多等（2.1 的边界：信号量只在批量上生效）。
+        _lane = (asyncio.Semaphore(_BATCH_BROWSER_CONCURRENCY) if len(urls) > 1
+                 else _batch_browser_lane.get())
+
         attached = False
         # 批次 11：这台浏览器**实际**是怎么起来的（可见与否问的是实例，
         # 不是问这次的请求）；两条车道各填一次，收尾统一说。
@@ -6861,15 +7046,18 @@ class MasterFetchServer:
                 and not getattr(entry.session, "cdp_attached", False)
             if bridged:
                 await self._bridge_seed(entry.session, urls, bridge_sid)
+            # 车道包在 `_timed` 外面：排队的等待不写进这一行的 `duration_ms` ——
+            # 那颗数喂 per-host 延迟学习，让站点替 dhole 自己的调度付账，
+            # 学出来的 ceiling 就是假的。
             timed_tasks = [
-                _timed(entry.session.fetch(
+                _lane_gated(_lane, _timed(entry.session.fetch(
                     url, timeout=timeout, google_search=google_search,
                     extra_headers=extra_headers, disable_resources=disable_resources,
                     wait_selector=wait_selector, wait_selector_state=wait_selector_state,
                     proxy=proxy, solve_cloudflare=solve_cloudflare,
                     page_action=page_action, probe_out=_probe,
                     pin=_pin_lane, pin_out=pin_out if _pin_lane else None,
-                ))
+                )))
                 for url in urls
             ]
             timed_responses = await gather(*timed_tasks, return_exceptions=True)
@@ -6897,7 +7085,8 @@ class MasterFetchServer:
                 attached = session.cdp_attached
                 launch_note = session.launch_note
                 timed_tasks = [
-                    _timed(session.fetch(url, page_action=page_action, probe_out=_probe))
+                    _lane_gated(_lane, _timed(session.fetch(
+                        url, page_action=page_action, probe_out=_probe)))
                     for url in urls
                 ]
                 timed_responses = await gather(*timed_tasks, return_exceptions=True)
@@ -8817,12 +9006,24 @@ class MasterFetchServer:
         # Small delay between URL batches to avoid hammering the same server
         results = []
         batch_size = 10
-        for i in range(0, len(urls), batch_size):
-            batch = urls[i:i + batch_size]
-            batch_results = await gather(*[_fetch_one(u) for u in batch])
-            results.extend(batch_results)
-            if i + batch_size < len(urls):
-                await asyncio_sleep(0.5)
+        # 这一批的浏览器档车道（`_BATCH_BROWSER_CONCURRENCY`）：行要不要升到渲染档
+        # 是升级阶梯当场决定的事，车道于是放在上下文里，由真正渲染的那几行自己去排
+        # （`bulk_stealthy_fetch` 读 `_batch_browser_lane`）；纯 HTTP 的行不碰它。
+        # gather 里的任务各自拷贝创建时刻的上下文，所以这里放进去的那根每行都读得到。
+        _lane_token = None
+        if len(urls) > 1:
+            _lane_token = _batch_browser_lane.set(
+                asyncio.Semaphore(_BATCH_BROWSER_CONCURRENCY))
+        try:
+            for i in range(0, len(urls), batch_size):
+                batch = urls[i:i + batch_size]
+                batch_results = await gather(*[_fetch_one(u) for u in batch])
+                results.extend(batch_results)
+                if i + batch_size < len(urls):
+                    await asyncio_sleep(0.5)
+        finally:
+            if _lane_token is not None:
+                _batch_browser_lane.reset(_lane_token)
 
         successful = sum(1 for r in results if r.status > 0 and r.status < 400 and not r.error)
         return BulkResponseModel(results=results, total=len(results), successful=successful)
@@ -10690,6 +10891,122 @@ class MasterFetchServer:
 
     # ─── Search ────────────────────────────────────────────────────
 
+    async def web_research(
+        self,
+        query: str = "",
+        max_sources: int = 3,
+        per_source_chars: int = 4000,
+        timeout: int = 120_000,
+    ) -> dict:
+        """一次调用交回一份带引用的证据包（提升计划 3.2）。
+
+        「搜索 → 取前 N → 证据包 + 引用」从前要调用方自己串：N 次往返、自己拼
+        [n]。这颗门是**薄编排层**——搜索、抓取、focus 过滤、判决全部复用 web_search
+        / web_read 自己的机器，这里只负责「串」与引用格式：每条证据带 [n] 与 URL，
+        失败的行说明为什么且**从不拖垮整包**。预算按剩余量逐源分摊（先到的源不许
+        把后面的源饿死），一个源失败只烧掉它自己那一份。
+        """
+        q = (query or "").strip()
+        if not q:
+            raise ValueError(
+                "web_research needs a query - it is both the search words and the "
+                "focus= filter every source is read with. No request was made.")
+        clamped: list[str] = []
+        if not (1 <= int(max_sources) <= 5):
+            max_sources = max(1, min(5, int(max_sources)))
+            clamped.append(f"max_sources -> {max_sources} (1-5)")
+        if not (500 <= int(per_source_chars) <= 20_000):
+            per_source_chars = max(500, min(20_000, int(per_source_chars)))
+            clamped.append(f"per_source_chars -> {per_source_chars} (500-20000)")
+        _asked_ms = int(timeout or 120_000)
+        budget_ms = float(max(30_000, min(_asked_ms, 300_000)))
+        if _asked_ms != int(budget_ms):
+            clamped.append(f"timeout -> {int(budget_ms)}ms (30000-300000)")
+
+        search = await self.web_search(query=q,
+                                       max_results=max(8, max_sources * 2))
+        if getattr(search, "error", "") and not search.results:
+            return {
+                "query": q, "sources": [], "evidence": [], "failed": [],
+                "summary": "the search leg failed, so no source was read",
+                "error": search.error,
+                "next_action": search.next_action or "",
+            }
+        picked = [r for r in search.results if getattr(r, "url", "")][:max_sources]
+
+        started = now()
+        sources: list[dict] = []
+        evidence: list[str] = []
+        failed: list[dict] = []
+        for n, row in enumerate(picked, start=1):
+            left_ms = budget_ms - (now() - started) * 1000
+            share_ms = int(left_ms / max(1, len(picked) - n + 1))
+            if left_ms < 5_000:
+                failed.append({
+                    "n": n, "url": row.url,
+                    "why": f"the call budget ran out before this source was read "
+                           f"({int(left_ms)}ms left of {int(budget_ms)}ms) - raise "
+                           "timeout= or web_read this URL yourself"})
+                continue
+            try:
+                page = await self.web_read(
+                    url=row.url, focus=q, max_content_chars=int(per_source_chars),
+                    timeout=max(5_000, share_ms))
+            except Exception as exc:  # noqa: BLE001 - 一个源的崩溃不是整包的答案
+                failed.append({"n": n, "url": row.url,
+                               "why": redact_api_key(str(exc)[:200])})
+                continue
+            text = "\n".join(c for c in page.content
+                             if isinstance(c, str)).strip()
+            if page.error or not text:
+                failed.append({
+                    "n": n, "url": row.url,
+                    "why": (page.error or "no content was extracted")
+                    .splitlines()[0][:200]})
+                continue
+            sources.append({
+                "n": n, "url": row.url, "title": getattr(row, "title", ""),
+                "chars": len(text), "fetcher": page.fetcher_used,
+                "content_ok": bool(page.content_ok),
+            })
+            evidence.append(f"[{n}] {row.url}\n{text}")
+
+        leftover = [r for r in search.results if r not in picked][:5]
+        return {
+            "query": q,
+            "sources": sources,
+            "evidence": evidence,
+            "failed": failed,
+            "more_hits": [{"url": r.url, "title": getattr(r, "title", "")}
+                          for r in leftover],
+            "summary": f"{len(sources)} of {len(picked)} source(s) read into an "
+                       f"evidence pack for {q!r}"
+                       + (f"; {len(failed)} failed (each row says why)"
+                          if failed else ""),
+            **({"clamped": clamped} if clamped else {}),
+            "note": ("each evidence block starts with [n] and its URL - cite that "
+                     "pair. Per-source text is focus-filtered to the query, not the "
+                     "whole page; web_read a source (urls= batches work) for "
+                     "everything it says. more_hits are the search rows not read"),
+        }
+
+    async def web_recall(self, query: str = "", limit: int = 8) -> dict:
+        """对本地缓存里「这台机器已经读过的页」做检索（提升清单 2）。
+
+        零网络、零抓取：只在 cache.db 的 fetch 行里找，回答「我之前读到过哪一页
+        说过 X」，交回**指针**（url + 标题 + 摘录 + 抓取时刻 + 过期与否），不是
+        正文——正文让调用方拿 URL 去走 web_read（新鲜或命中缓存，由它自己判）。
+        语义重排复用 reranker 的交叉编码器（模型在场才用，绝不因一次回忆触发
+        119MB 的下载）；召回与排序的数学与实测依据住在 recall 模块自己的 docstring。
+        """
+        from dhole_mcp.recall import recall_pages
+        q = (query or "").strip()
+        if not q:
+            raise ValueError(
+                "web_recall needs a query - it searches the local cache for pages "
+                "fetched earlier on this machine; no network call was made")
+        return await recall_pages(q, limit=limit)
+
     async def web_search(
         self,
         query: str = "",
@@ -11689,10 +12006,10 @@ class MasterFetchServer:
     # 名单与 `actions._VALID_KEYS`、必填键与 `_validate_actions` 的报错文本，由
     # tests/test_an_agent_that_only_reads_the_wire_can_name_an_actions_payload.py 对齐。
     _ACTIONS_DESC = (
-        "ONE action key per object: [{scroll:3},{wait:1000}]. Keys: click, fill, read, press, "
-        "hover, drag, wait, scroll, wait_selector, snapshot, screenshot, submit - each "
-        "targets a CSS selector or a snapshot index; fill needs text, press needs key, "
-        "drag needs to (a drop target).")
+        "ONE action key per object: [{scroll:3},{wait:1000}]. Keys: click, fill, read, "
+        "press, hover, drag, wait, scroll, wait_selector, snapshot, screenshot, submit, "
+        "upload, dialog, tab; fill=text, press=key, drag=to, "
+        "upload=files, dialog=answer; tab (new/N/close).")
     _TOOL_DEFS: list[dict] = [
         {
             "name": "web_read",
@@ -11901,6 +12218,34 @@ class MasterFetchServer:
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
+        },
+        {
+            "name": "web_research",
+            "description": "One question, one cited evidence pack: searches, reads the top sources, returns each as [n] + URL + its query-relevant text (focus-filtered, not whole pages). Failed sources say why and never fail the pack. For citing, not exhaustive reading - web_read a source (urls= batches) for all of it; more_hits lists the search rows not read.",
+            "inputSchema": {
+                "type": "object", "required": ["query"],
+                "properties": {
+                    "query": {"type": "string", "description": "The question the evidence must speak to; it is also the focus= filter applied to every page read."},
+                    "max_sources": {"type": "integer", "description": "Sources to read (1-5, default 3)."},
+                    "per_source_chars": {"type": "integer", "description": "Chars per source after focus (500-20000, default 4000)."},
+                    "timeout": {"type": "integer", "description": "Whole-call budget in ms (30000-300000, default 120000), split across the sources."},
+                },
+            },
+            "annotations": {"readOnlyHint": True, "idempotentHint": False, "openWorldHint": True},
+        },
+        {
+            # 提升清单 2：缓存内检索。openWorldHint=False 是这颗门独有的诚实——
+            # 全 13 颗里唯一一比特外网流量都不发的（readOnly + 不联网）。
+            "name": "web_recall",
+            "description": "Search pages this machine's dhole ALREADY fetched (the local content cache). No network, no fetch: answers 'which page I read said X' with url + title + snippet + when fetched. Expired rows still recall, labeled is_stale. Pointers, not text - web_read the URL for the page itself. Nothing here knows pages fetched outside dhole.",
+            "inputSchema": {
+                "type": "object", "required": ["query"],
+                "properties": {
+                    "query": {"type": "string", "description": "Words to recall by (any language; CJK matches by character bigram)."},
+                    "limit": {"type": "integer", "description": "Rows to return (1-20, default 8), best first."},
+                },
+            },
+            "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False},
         },
         {
             "name": "cred_defaults",
@@ -12404,6 +12749,19 @@ class MasterFetchServer:
             result = await self.web_search(
                 query=args.get("query", ""), **self._forward("web_search", args,
                                                              skip=("query",)))
+            return _wire_result(result)
+
+        elif name == "web_research":
+            result = await self.web_research(
+                query=args.get("query", ""),
+                **self._forward("web_research", args, skip=("query",)))
+            return _wire_result(result)
+
+        elif name == "web_recall":
+            # 只碰本地 cache.db 的读路径——连缓存命中都不会发生的那颗门。
+            result = await self.web_recall(
+                query=args.get("query", ""),
+                **self._forward("web_recall", args, skip=("query",)))
             return _wire_result(result)
 
         elif name == "sys_state":

@@ -1,8 +1,16 @@
 """SQLite-based content cache with TTL support.
 
 Stores fetched content keyed by URL+params hash. Auto-expires entries past TTL.
-Uses a shared DB connection pool for efficiency instead of opening a new
-connection per operation.
+
+Each operation opens its own aiosqlite connection (connect → query → close).
+Measured (2026-10-24, evals/.runtime/measure_cache_hit*.py): a hit costs
+~3.0ms p50 and a miss probe ~2.8ms, while the same query on a reused
+connection costs 0.21ms — the connect/close is ~93% of the price, and it is
+paid on every call's miss probe. A persistent per-loop connection would take
+that to ~0.2ms if it ever matters; a separate in-memory LRU layer was measured
+out (see docs/improvement-plan.md §4: it saves 3ms on a path that already
+replaced a 17ms–36s live fetch, at the price of a second copy of the
+TTL/ctx/clear semantics that this one DB is the sole authority for).
 """
 import asyncio
 import hashlib

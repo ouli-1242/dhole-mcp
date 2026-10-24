@@ -1,0 +1,15 @@
+{
+  "captured_at": "2026-10-24",
+  "captured_from_url": "https://news.ycombinator.com/",
+  "sha256": "7a4b3b641deba67c",
+  "kind": "list",
+  "content_links": 2,
+  "extracted_markdown_chars": {
+    "2.2.0": 14015
+  },
+  "visible_text_chars": 3921,
+  "label_share": 0.001,
+  "longest_nonlabel_run_chars": 82,
+  "note": "HN 首页：反例锁 —— 2.3 的技术文档信号不许把它判成 article。",
+  "scrubbed": "否：判定的证据就是整页的链接/文本分布，裁剪会让测量失真"
+}

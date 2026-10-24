@@ -1,273 +1,192 @@
 <div align="center">
 
-# Dhole
+<img src="https://raw.githubusercontent.com/ouli-1242/dhole-mcp/main/assets/cover.png" alt="Dhole —— 让 AI 真的上网" width="100%">
 
-**让 AI 代理访问互联网：抓取 · 爬取 · 搜索，内置反爬，$0 无密钥。**
+<p><strong>给 AI 一副能真正上网的手。</strong></p>
 
-<a href="https://pypi.org/project/dhole-mcp/"><img src="https://img.shields.io/pypi/v/dhole-mcp.svg" alt="PyPI version"></a>
-<img src="https://img.shields.io/pypi/pyversions/dhole-mcp.svg" alt="Python 3.11+">
-<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License"></a>
-<img src="https://img.shields.io/badge/transport-stdio%20%C2%B7%20HTTP-blueviolet.svg" alt="MCP stdio and streamable HTTP transports">
+<p>抓取 · 搜索 · 爬站 · 读 PDF · 页面操作 · 变更监控<br>
+13 个工具，一个本地进程 · 零密钥 · 零模型 · 零遥测</p>
+
+<p>
+<a href="https://pypi.org/project/dhole-mcp/"><img src="https://img.shields.io/pypi/v/dhole-mcp" alt="PyPI"></a>
+<a href="https://pepy.tech/projects/dhole-mcp"><img src="https://static.pepy.tech/personalized-badge/dhole-mcp?period=total&amp;units=INTERNATIONAL_SYSTEM&amp;left_color=BLACK&amp;right_color=GREEN&amp;left_text=downloads" alt="PyPI Downloads"></a>
+<img src="https://img.shields.io/pypi/pyversions/dhole-mcp" alt="Python 3.11+">
+<a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT"></a>
+</p>
 
 </div>
 
-Dhole 是一个 [MCP](https://modelcontextprotocol.io) 服务器：抓网页、爬整站、搜资料、读 PDF、截图、操作页面，全部本地运行，不需要任何 API key。
+## 为什么要有它
 
-## 30 秒理解
+模型会思考，可它看不见今天的网。
 
-- **是什么**：给 AI 用的上网工具包。
-- **怎么用**：正常提要求，AI 自己选工具，你不用记命令。
-- **11 个工具默认全部注册**：搜网页 · 抓网址 · 在页面上动手（截图在内）· 发一次非 GET 请求 · 爬整站 · 出 URL 地图 · 读本地文件 · RSS 订阅 · 设一次的默认身份 · 看与清本地状态 · 读 dhole 自己的说明书。
-- **没有"要额外打开"的能力**：每一颗都默认注册，`DHOLE_TOOLS` 是唯一的子集开关，写了它才会少注册。
-- **代理环境自己适配**：Clash / sing-box 的 TUN + fake-ip 不需要先设任何变量。
-- **要调设置**：见[配置](#配置)；出问题先跑 `dhole doctor`。
+训练数据有截止日期。搜索 API 要密钥、要额度。抓一页，可能只回来一串 403。
+Dhole 把这条断掉的路接回来：一个 [MCP](https://modelcontextprotocol.io) 服务器，装进任何宿主，AI 自己挑工具，你不用记命令。
 
 ## 安装
 
-需要 Python 3.11+。
-
 ```bash
-pip install dhole-mcp              # 默认即完整版：浏览器 / PDF / OCR / 解析器 / 重排
-python -m patchright install chromium   # 浏览器二进制（~193MB），pip 装不到这一步。
-                                  # 跳过也行：第一次用到浏览器档时 dhole 会装它自己要起的那一份；
-                                  # 上游 playwright 那一颗不行——patchright 的 driver 只认自己清单里的版本
-dhole doctor                       # 安装体检：起一次 server、真起一次浏览器，再跑一次真实搜索 + 真实抓取
+pip install dhole-mcp  # 完整版：浏览器 / PDF / OCR / 解析器 / 重排，一次装齐
+dhole doctor           # 体检：起服务、起浏览器、真搜一次、真抓一次
 ```
 
-- `pip install "dhole-mcp[all]"` 等价于默认安装（老文档里的写法，仍然有效）。
-- 没有 Playwright wheel 的平台（Termux / aarch64）会卡在浏览器依赖；真要 HTTP-only 得 `pip install --no-deps dhole-mcp` 再手挑运行核心。
-- 缺浏览器依赖时自动降级为纯 HTTP，并在失败点给可复制的命令；那是降级不是故障。
-- 可选：`dhole skill install` 把随包说明书装成宿主原生 skill；不装也有 `sys_guide` 兜底。
-- 开发本仓库：`pip install -e ".[dev]"`，改源码立即生效，测试 `python -m pytest`（细节见 [CONTRIBUTING.md](CONTRIBUTING.md)）。
-- 卸载：`pip uninstall dhole-mcp`；运行数据全在 `~/.dhole`，删目录即清干净。
+Python 3.11+。只剩一样东西 pip 装不到这一步：Chromium 本体（另一份约 193MB 的下载，不在 wheel 里）。
 
-### HTTP 远程接入（自托管）
+- 什么都不用做：第一次真正需要渲染时，dhole 自己会装它要用的那一份。
+- 想提前装好、或上一次没装完，补一句 `python -m patchright install chromium` 就行——可重复执行，只补缺的那一份。
+- 装不上也不影响其余能力：缺浏览器时自动降级为纯 HTTP，降级不是故障。`dhole doctor` 会点名缺的是哪一件，并给出可复制的修复命令。
 
-常驻、多客户端或远程使用时，走 streamable HTTP 而不是 stdio：
-
-```bash
-export DHOLE_HTTP_TOKEN="$(openssl rand -hex 32)"   # 设了即强制 Bearer 校验；不设则端口不设防
-dhole --http                                        # 默认 127.0.0.1:8765/mcp，可用 --host/--port 改
-```
-
-MCP 客户端（宿主配置的字段名各异，认准 url + 请求头）：
+接进宿主（Claude Desktop / Cursor / Codex / Cherry Studio 字段名各异，认 `command`）：
 
 ```json
-{"mcpServers": {"dhole": {
-  "url": "http://127.0.0.1:8765/mcp",
-  "headers": {"Authorization": "Bearer <DHOLE_HTTP_TOKEN>"}
-}}}
+{"mcpServers": {"dhole": {"command": "dhole", "args": []}}}
 ```
 
-**远程暴露前必须套 TLS 反代**（Caddy / nginx），并保留 bearer 令牌或由反代做 OIDC。dhole **没有内置 OAuth**：令牌只是端口门禁，不区分主体；同一进程的所有客户端共享存储凭据、会话与正文缓存。要按主体隔离，就**一人一进程 / 一端口，各自的数据目录**，不要把多个用户接到同一个 dhole 上。
+没有参数，没有密钥，没有环境变量。重启宿主，然后正常提要求。
 
-PyPI 上同一版本可直接装：`pip install "dhole-mcp==17.1"`，`server.json` 那份 MCP Registry 清单也是到这一刻才成立。
-
-### 让 agent 自己装
-
-把下面整块粘给编码 agent：
+<details>
+<summary>也可以把安装交给 agent 自己做</summary>
 
 ```
-在这台机器上安装 Dhole MCP 服务器，逐步执行，失败就停下报告。
+在这台机器上安装 Dhole MCP 服务器，逐步执行，失败就停下来报告。
 
-1. 认清你所在的 agent 宿主，查出它的 MCP 配置文件位置与添加本地服务器的格式（读宿主文档，不要猜）。
-2. pip install dhole-mcp，然后 python -m patchright install chromium（已装则跳过；不装会在第一次抓取时自动装）。
-3. 备份配置文件，添加名为 "dhole" 的服务器：command 为 "dhole"，无参数、无密钥、无环境变量。
-4. 让用户重启 agent，再运行 dhole doctor 确认体检通过。
-5. 可选：dhole skill install。
+1. 认清你所在的宿主，读出它的 MCP 配置位置与添加本地服务器的格式（读文档，不要猜）。
+2. pip install dhole-mcp（已经是完整版）。
+3. 备份配置文件，添加名为 "dhole" 的服务器：command 为 "dhole"，无参数、无密钥、无 env。
+4. 让用户重启宿主，再跑 dhole doctor 确认体检通过；若报浏览器缺失，补一次 python -m patchright install chromium（可重复执行）。
 ```
 
-## 配置
+</details>
 
-### 两条门
-
-| 门 | 怎么写 | 什么时候生效 |
-|---|---|---|
-| **文件**（推荐） | `dhole config set DHOLE_IGNORE_ROBOTS 1`，落在 `~/.dhole/config.json` | 按次读取的旋钮下一次调用就生效，不用重启；`dhole config list` 看当前值与来源 |
-| **env 块** | 宿主 MCP 配置里的 `env`，值一律写成字符串 | 重启宿主之后 |
-
-**env 永远优先**——一个文件不会悄悄覆盖你已经做出来的决定。`dhole doctor` 两个门一起审计。
-
-### 配置形状
-
-```json
-{
-  "mcpServers": {
-    "dhole": {
-      "command": "dhole",
-      "args": [],
-      "env": { 
-        "DHOLE_SEARCH_PROXY": "http://127.0.0.1:7890" 
-      }
-    }
-  }
-}
-```
-
-变量名与取值见下面这张表。**默认行为通常就是你要的**，不确定就先别设。
-
-### 常用变量
-
-| 变量 | 什么时候设 |
-|---|---|
-| `DHOLE_SEARCH_PROXY` | 搜索引擎被限流 / 被墙时（也自动读 `HTTPS_PROXY` 等）；只想让某一次调用走代理，用 `cred_defaults` 存 |
-| `DHOLE_IGNORE_ROBOTS=1` | 关掉进程级的 `robots.txt` 遵从（单次豁免是 `ignore_robots=true`，那是你的合规决定） |
-| `DHOLE_ALLOW_PRIVATE_HOSTS` | 放行内网 / 本机地址，默认一律拒绝 |
-| `DHOLE_HTTP_TOKEN` | `--http` 传输的 bearer 门：设了之后每个 `/mcp` 调用必须带 `Authorization: Bearer …` 或 `X-Dhole-Token`；未设保持开放行为（启动时警告——回环绑定同样警告）。令牌只做端口门禁，不做主体隔离：同一端口的所有客户端共享同一份存储凭据、会话与缓存，要按主体隔离就分端口/分进程各起一个实例。启动时读取，改了要重启 |
-| `DHOLE_PERSIST_CREDENTIALS=1` | 把会话 cookie 与 `cred_defaults` 存的凭据落盘（值经 Windows DPAPI 加密，绑定本用户）。**默认只在内存**：库文件根本不创建，进程结束即清；非 Windows 无 DPAPI，设了也不落盘（`dhole doctor` 报 fail）。启动时读取，改了要重启 |
-| `DHOLE_USAGE_LOG=1` | 本地调用与写操作日志（不记参数值、不联网） |
-| `DHOLE_TOOLS=web_read,web_search` | 只注册列出的工具，连接期省约一半；**写这个就等于关掉其余工具** |
-| `DHOLE_DEFAULT_ENGINES` | 覆盖默认搜索池（默认 `baidu,bing,sogou,so360,bing_global,yahoo,yandex,brave,duckduckgo,marginalia`） |
-| `DHOLE_SEARCH_ROW_FILTER=off` | 关掉"SEO 农场行"过滤（默认开）。判据只有形状与词形两类，**没有域名名单**；且只作用在 `relevance_raw < 0.5` 的行上，模型认为相关的行永不过滤。丢了几个会写在 `fetch_hint` 里 |
-| `DHOLE_DEFAULT_CONTENT_CHARS` | 默认正文预算（默认 40000，区间 500–200000） |
-| `DHOLE_TAVILY_API_KEY` / `DHOLE_BOCHA_API_KEY` | 两颗 keyed 引擎的密钥：配了才启用，只有点名才调用，按次计费 |
-| `DHOLE_HF_ENDPOINT`（或 `HF_ENDPOINT`） | 重排模型下载源（默认 `huggingface.co`，失败回退 `hf-mirror.com`） |
-| `DHOLE_RERANK_MODEL` | 本机重排档位：`bge-zh`（默认，中文更强，~279MB）或 `mmarco`（多语快档，~119MB，约 1.8× 快）。**启动时读取，换档要重启宿主**；首次用到才下载，可续传 |
-| `DHOLE_HOME` | 状态目录（默认 `~/.dhole`） |
-
-**其余旋钮已收成固定值**，写进 env 也不会被读，所以这张表不再列它们：引擎冷却与心跳、cookie 存活时长、搜索整体截止、浏览器空闲关闭与预热、SSRF 的 DNS 复验、`structuredContent` / `outputSchema` / 完整 wire 形状三个开关、多模态许可（截图与元素裁剪总是可用）、神经 focus 的许可门（改成了每次调用的 `focus_engine`）、`doc_parse` 的工作目录、自愈与搜索代理池、起哪一台浏览器（检测顺序 chrome → msedge → 内置 chromium，这台机器上有什么就用什么）。理由同一句话：**能算清的数不需要旋钮**，需要按次决定的改成了参数——"要不要看得见那扇窗"就是后者，见下面那一节。
-
-### 借你已登录的 Chrome（CDP 接管）
-
-- `chrome.exe --user-data-dir=D:\dhole-chrome --remote-debugging-port=9222`（Chrome 136+ 不许对默认 profile 开调试），在这个窗口登录一次目标站点。Edge 同样是 CDP 端点，把这行换成 `msedge.exe --user-data-dir=… --remote-debugging-port=9222` 即可，dhole 这边只改端口。
-- 第一次 `web_read(url=..., cdp_url="http://127.0.0.1:9222")` **不执行任何东西**，回 `cdp_authorization_required`；用户同意之后同一调用加 `confirm=true` 才放行，并把那一台主机写进授权名册（精确主机名：`example.com` 不含 `www.example.com`）。
-- 名册之后 agent 抓这些站点会带你的登录态；每次 attach 都回 `cdp_attached: true` 并进审计。要撤销就删状态目录里的 `cdp_hosts.json`。
-- 每一台新主机都要重新过一次这道闸：attach 的重定向与第三方请求会带着你的已认证 cookie 出门，所以授权只能逐台点名，不能一把开。
-
-### 要看着它干活（可见浏览器）
-
-- 没有 env 旋钮，这是一次调用的事：`web_act(url=..., actions=[...], headed=true)` 起一台**看得见**的窗口，方便你手工登录、盯着它填表、替它过一道验证码。搜索与抓取默认照旧隐形。
-- 配 `cred_defaults(set={'profile': '点名'})` 再用，否则你登的东西随那台浏览器的临时目录一起没了。一台 profile 只有一台浏览器，窗口开着的时候后续调用会在你眼前开标签页。
-- 那个 profile 上已经有一台**隐形**浏览器在跑时，这一次会被具名拒绝（`browser_busy`）——不接管别人的窗口，也不关掉可能正被你使用的标签页。先把窗口交回去：`sys_state()` 列会话，`sys_state(clear=['<session id>'])` 关一个。
-- 看得见的窗口不被空闲回收（`AUTO_SESSION_IDLE_TIMEOUT=300` 只关那台隐形的自动会话），所以用完要自己交回。它反过来能干后台的活：窗口热着时，普通调用直接骑它。
-
-## 用法
-
-装好重启后直接说人话：「抓 `https://example.com/pricing` 列成表」→ `web_read`；「查官方文档挑两条最相关的读给我」→ `web_search` + `web_read`；「`/guide` 下面都收一遍」→ `web_crawl`；「这份 `report.pdf` 讲了什么」→ `doc_parse`。
-
-| 命令 | 用途 |
-|---|---|
-| `dhole -v` | 版本 + 能力面板 |
-| `dhole doctor` | 安装体检，逐项给修复命令 |
-| `dhole config` | `list` / `set <NAME> <value>` / `unset <NAME>` |
-| `dhole engines list` / `probe` / `reset` | 引擎冷却状态 / 实测健康 / 立即清空 |
-| `dhole watch add` / `list` / `remove` / `run` | 页面变更监控清单；`run` 复用 `web_read` 的 check，退出码 0=无变化 / 1=有变化 / 2=检查失败 |
-| `dhole skill` | 安装 / 查看随包 agent 技能 |
-| `dhole --http --host --port` | 改用 streamable HTTP 传输（默认 stdio） |
-
-**传输**：`dhole --http` 的端点是 `http://<host>:<port>/mcp`，**这层默认不带鉴权**——设 `DHOLE_HTTP_TOKEN` 后每个调用必须带 bearer 令牌；未设时启动即警告（回环绑定同样警告），`--host 0.0.0.0` 等于把「替你抓任意 URL（含写请求与存储凭据）」开放给整个网络，共享网络里自行套反代 / 认证 / 防火墙。令牌只做端口门禁，不做主体隔离：同一端口的所有客户端共享同一份存储凭据、会话与缓存（同进程双实例就是两个客户端，回环上同样成立），要按主体隔离就分端口/分进程各起一个实例。传输层同时校验 Host / Origin 头（DNS rebinding 防护，按 `--host` 构建名单）。
-
-### 变更监控与定时任务
-
-`web_read(extraction_type='check')` 回答「这页变了吗」：基线是 dhole 自己 7 天内的 html 缓存，回源走条件请求，304 就是站方亲口说没变；变了给首个分叉位置与窗口。传 `urls=[...]`（≤10）就是批量检查，每行独立判决，坏一行不会吞掉别人。第一次见某页返回 `changed=null` 并落基线，第二次起才有可比对象。
-
-要在重启后仍记得清单、并让 cron / systemd 直接消费结果，用 CLI：
+常驻或远程使用，改走 streamable HTTP：
 
 ```bash
-dhole watch add https://example.com/pricing --label pricing
-dhole watch run --json        # exit 0 无变化 · 1 有变化 · 2 有检查失败
+export DHOLE_HTTP_TOKEN="$(openssl rand -hex 32)"   # 设了即强制 Bearer 校验
+dhole --http                                        # 127.0.0.1:8765/mcp
 ```
 
-清单存 `~/.dhole/watchlist.json`（`DHOLE_HOME` 可换位置）；每轮逐条落盘，进程中断不丢已完成的判决。它**是轮询不是推送**：频率由你的调度器决定，dhole 不常驻、不主动通知。示例见 `sys_guide(topic='examples')` 或随包 skill 的 examples.md。
+远程暴露前必须套 TLS 反代。dhole 没有内置 OAuth，令牌只是端口门禁，不做主体隔离——要按人隔离就一人一进程。
 
-## 工具
+## 宣传片
 
-**11 颗默认全部注册**：
+从模型看不见今天的网，到它自己抓回证据。
+
+<a href="assets/dhole-promo.mp4"><img src="https://raw.githubusercontent.com/ouli-1242/dhole-mcp/main/assets/consent.png" alt="Dhole 宣传片" width="100%"></a>
+
+[▶ 播放完整宣传片](assets/dhole-promo.mp4)（720p，86 秒，带旁白）
+
+## 它做什么
+
+13 颗工具默认全部注册，装完即用，没有「还要额外打开」的能力。
 
 | 工具 | 做什么 |
 |---|---|
-| `web_read` | 抓任意 URL：反爬升级、PDF / OCR、批量、聚焦提取、结构化提取、页面动作、CDP 接管；`extraction_type='check'` 回答「这页变了吗」（可批量，≤10）。三种产出：正文（默认）、**字节**（`save_to='<路径>'`，不抽取、按 `max_save_bytes` 计、拒绝覆盖）、**证据**（`include_headers=true`，状态行 / 响应头 / 302 链） |
-| `web_act` | 在页面上动手：click / fill / read / press / scroll / wait / snapshot / submit，然后把动作后的那一页读回来。`read` 读的是**这一次导航**里的文本，同一条链的 `fill` 可以用 `{=名字}` 把它填回去（页面把挑战写成字的那一种，一条链就能答完）。`submit` 不带 `confirm=true` 只暂停，什么都不提交。截图也在这条动作链里：`{"screenshot": "css"}` 裁元素内联回图，dict 形态加 `full_page` / `save_to`（看不见图的宿主拿路径）/ `image_type` / `quality`；`anti_detect` 在这一扇门上只管"要不要先答 Cloudflare 挑战"。`headed=true` 把这一串动作放到**看得见**的窗口里跑（要你登录、盯场、替它过一次验证码时用它），细节见上面「要看着它干活」那一节 |
-| `web_request` | 发一次非 GET：POST / PUT / PATCH / DELETE / HEAD。**只发一次**——不重试、不缓存、不升浏览器、不回退快照；凭据从 `cred_defaults` 来，正文上限 256KB |
-| `web_search` | 无密钥搜索：多引擎并行 + 本地重排，可顺带抓回前三条全文；`sources=` 另开五类免密纵向源（新闻 GDELT / 论文 arXiv / 问答 Stack Exchange / 代码 GitHub / 社区 Hacker News），`sort='newest'` 按页面自己声明的发布日排序 |
-| `web_crawl` | 同域爬取：sitemap、关键词过滤、路径子树限定 |
-| `web_discover` | 出站点的 URL 地图：一次调用看清「这个站有什么」再挑要读的，不返回正文（`pages_crawled` 是建图实付的抓取次数：`sitemap=true` 或 `resume_token=` 续页时为 0，逐跳走时一步一页）；挑中的交给 `web_read(urls=…)` |
-| `doc_parse` | 本地文件 → Markdown（docx / xlsx / pdf / pptx / odt / csv / html / json / yaml / md / txt） |
-| `feed_read` | 批量抓 RSS / Atom，`since=` 只取增量 |
-| `cred_defaults` | 设一次的默认身份：代理 · 命名浏览器 profile · CDP 端点 · 私网放行 · 反爬档位 · `auth`/cookies（**必须带 host**，否则会被发给下一个你读的站点）。回执与每次响应只报名字，值不出境 |
-| `sys_state` | 看与清本地状态：正文缓存 · 会话 cookie（值一律不出境）· 引擎冷却 · 落盘的默认身份。抹掉「事后才察觉」的那几类要 `confirm=true` |
-| `sys_guide` | 读 dhole 自己的说明书：选工具、写参数、字段含义、失败怎么修、配置改哪个 |
+| `web_read` | 抓任意 URL：反爬阶梯、PDF / OCR、批量、聚焦提取；产出正文、**字节**（`save_to`）或**证据**（状态行 / 响应头 / 302 链）；`check` 回答「这页变了吗」并附一份 unified diff |
+| `web_act` | 在页面上动手：点击、填写、按键、拖拽、滚动、截图、**上传文件**、**应答弹窗**、**多页签**；提交默认暂停，等你点头 |
+| `web_request` | 发一次非 GET（POST / PUT / PATCH / DELETE / HEAD），只发一次：不重试、不缓存、不升浏览器 |
+| `web_search` | 10 个免密引擎并行 + 本地重排，可顺带抓回前三条全文；另开五类纵向源（新闻 / 论文 / 问答 / 代码 / 社区） |
+| `web_research` | 一个问题，一次调用，一份带 `[n] URL` 引用的证据包；坏的源自己说明为什么，从不拖垮整包 |
+| `web_recall` | 检索**本机读过的页**：零网络、零模型，回指针、摘录与过期标注 |
+| `web_crawl` | 同域爬取：sitemap、关键词过滤、路径子树 |
+| `web_discover` | 出站点的 URL 地图，先看清有什么再挑着读 |
+| `doc_parse` | 本地 docx / xlsx / pdf / pptx / odt / csv / html / json / yaml → Markdown |
+| `feed_read` | 批量 RSS / Atom，`since=` 只取增量 |
+| `cred_defaults` | 设一次的默认身份：代理、浏览器 profile、CDP 端点、cookie、auth |
+| `sys_state` | 看与清本地状态：正文缓存、会话 cookie、引擎冷却 |
+| `sys_guide` | 读 dhole 自己的说明书：选工具、写参数、字段含义、失败怎么修 |
 
-参数摆放：**每个参数都是顶层那一份**，没有袋子——塞 `options` 会被拒绝，并列出这颗工具真正接受的键。每个工具只接受自己那组名字（`since=` 属于 `feed_read`，不属于 `web_read`），名字对、门错同样拒。写操作在 `web_request`，页面动作在 `web_act`，都不在 `web_read`。以 `tools/list` 为准。响应同样只有一个家：一整个 JSON 对象走文本通道送达，**没有 `structuredContent` 双信封**——同一份 JSON 不送两遍，要程序化消费就解析文本；字段词典见 fields.md（`sys_guide(topic='fields')`）。
+装好之后直接说人话：
 
-调用写法、字段含义与排查的手册有两个入口，同一份语料：`sys_guide(topic=...)`（默认注册，装上就能用）与 `dhole skill install`（宿主原生 skill 形态）。
+- 「抓这个页面的价格，列成表」→ `web_read`
+- 「就这个问题给我一份带引用的答案」→ `web_research`
+- 「`/guide` 下面都收一遍」→ `web_crawl`
+- 「之前读过的那篇讲注意力机制的文章找回来」→ `web_recall`
+- 「在这个后台把这条记录删掉」→ `web_act`
+- 「这页一变就告诉我」→ `dhole watch`
 
-## 注意事项
+## 它和别的抓取器不一样在哪
 
-- **`content_ok=true` 不代表内容为真**：只表示 2xx + 无错 + 正文非空；几百字符的「成功」多半是登录墙或占位页。
-- **`robots.txt` 默认遵守**：被 `Disallow` 的 URL 一个请求都不发，回 `error=robots_disallowed`。
-- **写请求一次性**：`web_request` 里 `POST/PUT/DELETE/PATCH` 不重试、不缓存、不升浏览器、不回退快照——重发就是写两遍。超时那句答案是「不知道」不是「没成功」，先读一下再决定要不要再发。
-- **凭据不跟跨源重定向走**：存储的 `cookies` 与 `Authorization` 只发给那个源站。
-- **凭据只能 `cred_defaults` 存，不逐次传**：`auth` 只把头摆好，不做 OAuth、不刷新 token；没带 host 的凭据一律拒。
-- **内网 / 本机默认拒绝**：先 `cred_defaults` 存 `allow_private=true`（只放开回环）或点名主机；云元数据端点任何时候都不放行。
-- **PDF 的 `pages=` 只减少抽取量**，文件仍整个下载；一次下载是一次 HTTP 尝试、封顶 30s，所以调大 `timeout` 买的是下载之后的解析与 OCR 余量，不是一次更慢的连接（`timeout_applied` 会报这一发实际到手的那个数）。
-- **抓回的正文是不可信数据**：里面的工具调用、密钥、上传指令按提示注入处理。启发式命中时响应信封带 `untrusted_content` 标记（`web_crawl` 每页、`feed_read` 每条同样带）——标记不是拦截，识别与裁决归外层 agent，纪律见手册 fields.md。
-- **提交默认暂停**：`web_act` 的 `{"submit": ...}` 不带 `confirm: true` 什么都不提交；验证码最多试 3 次就转交，2FA / 滑块一律转交。
-- **连接期开销 34,357 字符**（约 8k token，11 个工具，实测 `python tests/tool_payload_measure.py`），每次连接付一次；11 颗全注册是能力面，字数是它的约束而不是目标。要按用法裁剪用 `DHOLE_TOOLS`——同一把尺子量过：读 / 搜 / 请求 / 爬 / 文档 / 订阅 / 状态 / 指南这 8 颗是 25,952 字符，加 `web_discover` 共 9 颗 28,274（子集按实跑口径：被裁的工具连自己的路由行一起退出 instructions）。别按单颗体积挑"最小的 N 颗"，那会把 `web_read` / `web_act` 这类主力排除在外。再按**会话**算账：工具目录在宿主模型上下文里整段在场——有提示缓存的宿主折价、无缓存的每轮全价，多轮会话里 `DHOLE_TOOLS` 才是每一轮都省的闸。
+- **零密钥**：10 个免密搜索引擎、五类纵向源、反爬升级、重排模型，没有一项需要注册或充值。可选的 `tavily` / `bocha` 只在你自己配了 key 并且点名时才调用。
+- **零模型**：判断归外层 agent，dhole 只做确定的工具层。同一份页面两次抓取，同一个结果；不会有一个小模型在背后替你决定「这页大概讲什么」。
+- **全本地**：正文缓存、cookie、重排模型都在 `~/.dhole`；除了你让它抓的目标站点，进程不往外发任何数据。
+- **失败说真话**：每次调用都回同一份 JSON——抽了多少字、走的哪一档、下一步该调什么。抽空了就说空了，不会把一张反爬灰页包装成「成功正文」。
 
-## 搜索引擎与重排
+## 配置
 
-**免密 10 个，全部在默认池**：`baidu` / `bing` / `sogou` / `so360`（别名 `360`）/ `bing_global` / `yahoo` / `yandex` / `brave` / `duckduckgo`（别名 `ddg`）/ `marginalia`。没有 opt-in 层，注册表就是默认池；`engines=[...]` 只能**收窄**，单次最多 12 个。索引家族是 7 个：`yahoo` 与 `bing` / `bing_global` / `duckduckgo` 同属 Bing 索引（多入口、不多家族），`marginalia` 是独立小网索引。另有 2 个 keyed 后端（`tavily` / `bocha`）：配了 key 即启用，只有点名才调用，按次计费。
+两条门：宿主配置里的 `env` 块（改完要重启），或 `dhole config set NAME value` 写进 `~/.dhole/config.json`（下一次调用就生效）。**env 永远优先**。默认行为通常就是你要的，不确定就先别设。
 
-**五类纵向源也免密**：`sources=['news','academic','qa','code','community']` 分别问 GDELT（新闻）、arXiv（论文）、Stack Exchange（问答）、GitHub 仓库（按星数）与 Hacker News；默认只问 `web`，去掉 `web` 就只问纵向源（此时 `engines=` 被拒）。纵向行不参与 `engines_consensus`（它数的是 web 索引家族），所以那一格是空串；`source_detail` 逐家报 `status`、`count`（候选行）与 `delivered`（真正进了结果的）。一条源被限流不会抹掉别家：GDELT 每 5 秒只收一次查询，GitHub 未认证每分钟 10 次请求，失败如实进报告行。`sort='newest'` 只把**声明了发布日**的行倒序，月/年地板与无日期行留在后面。
+<details>
+<summary>全部 15 个旋钮</summary>
 
-**日期**只有 day / week / month / year 四档：`after=<日期>` 会被放宽到最窄的覆盖档；`before` 是**逐行上界**（没有引擎接受绝对区间），只丢可证更晚的行，无日期与相对时间保留。纵向源这一侧 `after`/`before` 则按行精确执行：`after` 会丢掉无日期的行（无法证明在窗口内）。按日期取增量用 `feed_read(since=)`。
-
-### 公开评测与 SLA
-
-评测代码与语料都在仓里，默认零网络、可重复：
-
-```bash
-python evals/vertical_search_baseline.py    # 五类纵向源，离线重放冻结语料
-python evals/ranking_baseline.py --tiers    # web 排序/去重（67 题冻结 SERP）
-```
-
-纵向基线的冻结语料（2026-10-20 抓取，7 份 API 响应 / 6 题）上：**可用率 100%**、known-item Hit@5 **5/5**、日级日期覆盖 **100%**、重复 URL 0。同一个脚本的 `--live` 臂在当天的两次采样都是 71.4%（5/7）——失败分别是 Stack Exchange/GitHub 的一次连接层错误与 GDELT 连接超时，单源复测可恢复；GDELT 每 5 秒限流是外部事实。**我们不为免密公共 API 承诺 SLA**；可承诺的是：失败如实进 `source_detail`、不冒充"没结果"，以及冻结语料臂的回归可复现。benchmark 目标（不是保证）：可用率 ≥80% · known-item@5 ≥80% · 日期覆盖 ≥90% · 实时 p95 ≤8s。完整方法与两次采样记录见 [evals/README.md](evals/README.md)。
-
-**重排模型**：两颗本地 cross-encoder，免费、无密钥、都在本机跑。默认 `bge-zh`（中英双语 int8，~279MB，中文更强）；`DHOLE_RERANK_MODEL=mmarco` 切到多语快档（mMARCO MiniLM int8，~119MB，约 1.8× 快）。同一份 67 题冻结语料上，快档 P@5 0.552 / MRR 0.749 / nDCG@10 0.770，默认档 0.549 / 0.737 / 0.764 —— 整体打平（中文快档略低、英文更高），所以默认不换，只给需要速度/体积的人一个实测过的选择。首次神经搜索自动下到 `~/.dhole/models/<name>/`，可续传；**换档要重启宿主**（模型会话是进程级单例）。`web_search` 回执里的 `rerank_model` 点名这一轮真正打分的模型；`sys_state(show=['models'])` 列出两颗的盘上状态。`min_raw_relevance` 判断「这一轮有没有相关结果」，起点 **0.1**（以默认档实测：离题 ~1e-4、勉强 0.2、真命中 0.93+；换档后 raw 分布可能不同，`fetch_hint` 每轮报实际跨度）。离线复用：拷 `models/<name>/` 整个目录。
-
-**没有模型时的免费排序**：`rerank_mode=merge`（未装 `[all]`、模型还没下、或加载失败）不再直接照抄引擎顺序。它先按「标题/摘要/URL 里出现了几个不同的查询词」分桶：2 个及以上在最前，1 个次之，0 个最后；桶内再按跨引擎共识与引擎位置排，行只重排、不丢。同一 67 题 agent-a 上 P@5 0.370→0.525、MRR 0.550→0.731，14 道题变化全为正；神经臂仍是 0.549 / 0.737。只要这一轮有任何模型判决，分桶就完全不运行——模型说同义改写相关时，不会因为字面没重合被降级。
-
-## 故障排查
-
-| 症状 | 怎么办 |
+| 变量 | 什么时候设 |
 |---|---|
-| 搜索结果很少或为空 | 重试；设 `DHOLE_SEARCH_PROXY`；`dhole engines probe` 看哪家能用 |
-| 所有公网站点都报内网地址 | fake-ip TUN 已自动适配（探测看**两颗独立注册的域名**是否都答进 `198.18.0.0/15`/`fc00::/7`，一颗被毒或被 hosts 钉住不足以放松整机；被豁免的也只有那两段——复验层本身照跑，回环 / RFC1918 / 链路本地 / 元数据无论判词如何都拒）。会话中途才挂上的隧道会**在下一次因此拒绝之前自己重探**（每 60s 至多一次），所以先等一分钟再调一次；要立刻重判就重启宿主，之后跑 `dhole doctor` 对质，它点名是哪个进程、什么时候测的、测出哪个网段。没有手动关掉复验的旋钮——那个形状正是当初造成误判的地方 |
-| 抓取超时 | `timeout` 是整次调用的墙钟预算，文档下载全额计入（默认 30s，上限 120s） |
-| 正文被截断 | 用 `offset` / `next_offset` 续取，或调大 `max_content_chars`（上限 200000）。带 `focus=` 时那些偏移量描述的是**过滤后那一路**（响应里 `pagination_stream: "focused"`，`page_total_chars` 是这一页未过滤的长度）—— 换 focus 词要回到 `offset=0` 重翻，否则会读到"没有更多内容了"而其实有 |
-| 返回了内容但明显是壳 | 见[注意事项](#注意事项)第一条 |
-| 本地文件解析成乱码 | 显式传 `encoding=` |
-| 装不上 / 工具没注册 | `dhole doctor` |
+| `DHOLE_SEARCH_PROXY` | 搜索引擎被限流 / 被墙时（也自动读 `HTTPS_PROXY`） |
+| `DHOLE_IGNORE_ROBOTS` | 关掉进程级的 `robots.txt` 遵从；单次豁免用 `ignore_robots=true` |
+| `DHOLE_ALLOW_PRIVATE_HOSTS` | 放行内网 / 本机地址，默认一律拒绝 |
+| `DHOLE_HTTP_TOKEN` | `--http` 传输的 bearer 门；不设则端口不设防 |
+| `DHOLE_PERSIST_CREDENTIALS` | 把会话 cookie 与凭据落盘（Windows DPAPI 加密）。默认只在内存，进程结束即清 |
+| `DHOLE_USAGE_LOG` | 本地调用与写操作日志，不记参数值、不联网 |
+| `DHOLE_TOOLS` | 只注册列出的工具，**写了就等于关掉其余** |
+| `DHOLE_DEFAULT_ENGINES` | 覆盖默认搜索池 |
+| `DHOLE_SEARCH_ROW_FILTER` | `off` 关掉 SEO 农场行过滤（默认开） |
+| `DHOLE_DEFAULT_CONTENT_CHARS` | 默认正文预算，40000（500–200000） |
+| `DHOLE_TAVILY_API_KEY` / `DHOLE_BOCHA_API_KEY` | 两颗 keyed 引擎的密钥，配了才启用、点名才调用 |
+| `DHOLE_HF_ENDPOINT` | 重排模型下载源，默认 huggingface.co，失败回退镜像 |
+| `DHOLE_RERANK_MODEL` | `bge-zh`（默认，中文更强）或 `mmarco`（快档，约 1.8×） |
+| `DHOLE_HOME` | 状态目录，默认 `~/.dhole` |
 
-## 已知限制
+</details>
 
-- 绕不过 DataDome / Akamai / 交互式 Turnstile；2FA 与 CAPTCHA 不自动解。需要登录的页面可借自己的登录态（CDP attach，或 `cred_defaults` 存一次 cookie / auth）。
-- **搜索没有 SLA**：免密引擎是对公开结果的直接抓取，对方改版或封 IP 时静默降级。要可靠性用搜索代理或 keyed 后端。
-- **`watch` 是轮询不是推送**：它不常驻、不主动通知；频率由你的 cron / systemd timer 决定。第一次 `run` 只落基线（退出码 0），第二次起才可能报变化。
-- 默认池里 `baidu` / `bing` / `yandex` 国内直连稳定；`sogou` 按 IP 限流，`bing_global` / `brave` / `yahoo` 无代理时不稳；`marginalia` 是英文小网索引，连续请求会回 200 反爬页（报告为 blocked，不是 empty）。
-- **抽取**的正文 50MB 硬顶，在下载之前守门；抬 `timeout` 没用。要拿文件本身而不是正文，用 `web_read(save_to='<路径>')` —— 它按 `max_save_bytes` 算（默认 256MB、天花板 1GB），不抽取、不写缓存、拒绝覆盖同名文件。
-- `archive.org` 返回的是**某个日期的快照**（看 `source` / `archived_at`）。
-- YouTube 仅能取到少量文本。
-- **合规自负**：目标站点 ToS 与当地法律由使用者承担；抓取 UA 是 `dhole-mcp`。
+<details>
+<summary>搜索引擎与重排</summary>
+
+默认池 10 个免密引擎：`baidu` / `bing` / `sogou` / `so360`（`360`）/ `bing_global` / `yahoo` / `yandex` / `brave` / `duckduckgo`（`ddg`）/ `marginalia`。`engines=` 只能收窄，不能新增。索引家族是 7 个：`yahoo` 与 `bing` / `bing_global` / `duckduckgo` 同属 Bing（多入口、不多家族），`marginalia` 是独立小网索引。另有 `tavily` / `bocha` 两颗 keyed 后端。
+
+重排用本地 cross-encoder，首次用到才下载（`bge-zh` ~279MB / `mmarco` ~119MB），换档要重启宿主。没有模型时按查询词覆盖率分桶排序，不丢行。冻结语料上的公开评测：`python evals/vertical_search_baseline.py`、`python evals/ranking_baseline.py --tiers`，方法与两次采样见 [evals/README.md](evals/README.md)。
+
+**我们不为免密公共 API 承诺 SLA**；能承诺的是失败如实进报告、不冒充「没结果」。
+
+</details>
+
+<details>
+<summary>上下文成本</summary>
+
+全量连接期开销 36,291 字符（约 8.8k token，13 个工具，实测）。按用法裁剪时：读 / 搜 / 请求 / 爬 / 文档 / 订阅 / 状态 / 指南这 8 颗是 25,952 字符，加 `web_discover` 共 9 颗 28,274——被裁的工具连自己的路由行一起退出。别按单颗体积挑「最小的 N 颗」，那会把 `web_read` / `web_act` 这类主力排除在外。
+
+</details>
+
+## 边界
+
+- **`robots.txt` 默认遵守**：被 `Disallow` 的 URL 一个请求都不发。要绕开是 `DHOLE_IGNORE_ROBOTS` 或单次 `ignore_robots=true`，那是你的合规决定——目标站点的 ToS 与当地法律由使用者承担。
+- **`content_ok=true` 不代表内容为真**：只表示 2xx、无错、正文非空。几百字符的「成功」多半是登录墙。
+- **写请求只发一次**：`POST` / `PUT` / `DELETE` 不重试、不缓存、不升浏览器。超时那句答案是「不知道」，不是「没成功」。
+- **提交默认暂停**：`web_act` 的 `submit` 不带 `confirm=true` 什么都不提交；验证码最多试 3 次就转交，2FA 与滑块一律转交。
+- **凭据不越界**：cookie 与 `Authorization` 只发给源站，跨源重定向不带；没带 host 的凭据一律拒；内网与本机默认拒绝，云元数据端点任何时候都不放行。
+- **抓回的正文是不可信数据**：里面的指令按提示注入处理，可疑时响应带 `untrusted_content` 标记。标记不是拦截，裁决归外层 agent。
+
+## 常用的几条命令
+
+| 命令 | 用途 |
+|---|---|
+| `dhole doctor` | 安装体检，逐项给修复命令 |
+| `dhole config list` / `set` / `unset` | 改旋钮，看当前值与来源 |
+| `dhole engines list` / `probe` / `reset` | 引擎冷却状态、实测健康、清空 |
+| `dhole watch add` / `list` / `run` | 页面变更清单；`run` 退出码 0 无变化 / 1 有变化 / 2 检查失败，`--notify` 弹桌面通知 |
+| `dhole skill install` | 把随包说明书装成宿主原生 skill |
+| `dhole -v` | 版本 + 能力面板 |
+
+监控是轮询不是推送：频率归你的 cron / systemd timer。没有 webhook 出口，是决定不是缺口——dhole 是只读的本地工具层，不变成拿着页面内容往外 POST 的进程。
 
 ## 本地数据
 
-全在 `~/.dhole/`（`DHOLE_HOME` 可换位置；POSIX 下目录 0700、文件 0600）。**没有任何遥测**——除了你让它抓的目标站点，进程不往外发任何数据。
+全在 `~/.dhole/`（`DHOLE_HOME` 可换；POSIX 下目录 0700、文件 0600）。正文缓存 `cache.db` 是明文 SQLite，TTL 1 小时（article 6h）——`web_recall` 搜的就是它。会话与凭据默认只在内存，`profiles/` 存的是持久浏览器 profile，**含登录态**，删目录即注销。没有任何遥测。
 
-| 位置 | 内容 |
-|---|---|
-| `cache.db` | 抓到的正文（明文 SQLite），TTL 默认 1 小时（article 6h） |
-| `sessions.db` / `identity.db` | **默认不存在**：会话 cookie jar（24 小时过期）与 `cred_defaults` 存的凭据只在内存里，进程结束即清；`DHOLE_PERSIST_CREDENTIALS=1` 才落盘，值经 Windows DPAPI 加密（绑定本用户，防的是文件被拷走/同步外带，不防同用户进程）。旧版明文库会在首次使用时吸收进内存并删除（落盘模式则原地重加密） |
-| `profiles/<name>/` | 持久浏览器 profile，**含登录态**，删目录即注销 |
-| `models/bge-zh/`、`models/mmarco/` | 重排模型；只下载实际用到的那一颗 |
-| `config.json` | `dhole config set` 写的旋钮；**secret 同样明文落盘**，不想进文件就继续用 env 块 |
-| `watchlist.json` | `dhole watch` 的监控清单与最近一次判决（只有 URL、标签、状态，不含正文）；写时 0600 |
-| `usage.jsonl`、引擎状态 | 调用与写审计、引擎冷却 |
+## 文档
 
-## 贡献
-
-欢迎 issue 与 PR；开发环境、测试与引擎契约见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- [CONTRIBUTING.md](CONTRIBUTING.md) —— 开发环境、测试、引擎契约
+- [evals/README.md](evals/README.md) —— 公开评测的方法与读数
+- [CHANGELOG.md](CHANGELOG.md) —— 每个版本改了什么，以及为什么
+- 手册两个入口，同一份语料：`sys_guide(topic=...)` 或 `dhole skill install`
 
 ## 致谢
 

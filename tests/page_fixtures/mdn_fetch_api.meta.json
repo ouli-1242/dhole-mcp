@@ -1,0 +1,15 @@
+{
+  "captured_at": "2026-10-24",
+  "captured_from_url": "https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API",
+  "sha256": "fc2c9d7495f685ec",
+  "kind": "tech-doc",
+  "content_links": 35,
+  "extracted_markdown_chars": {
+    "2.2.0": 4965
+  },
+  "visible_text_chars": 5359,
+  "label_share": 0.179,
+  "longest_nonlabel_run_chars": 196,
+  "note": "MDN 概念文档：正文被代码块与定义列表切成短段（run 196），无 <article>，只有 <main>。2.3 的验收目标 —— 必须判 article 而不是 list。",
+  "scrubbed": "否：判定的证据就是整页的链接/文本分布，裁剪会让测量失真"
+}

@@ -660,9 +660,9 @@ class TestTheEnvVarIsParsed:
         payload = json.loads(out.stdout)
         assert payload["enabled"] == sorted(
             n.strip() for n in value.split(",") if n.strip())
-        assert len(payload["all"]) == 11, \
-            "全集是 11 个工具（17.0 删掉 web_recipe/web_watch/cred_vault/cred_login " \
-            "四颗，17.1 阶段7 又下线 web_screenshot/web_resolve（前者并入 web_act 的截图动作））；默认关闭的也留在这里，守卫继续覆盖它们"
+        assert len(payload["all"]) == 13, \
+            "全集是 13 个工具（17.0 删掉 web_recipe/web_watch/cred_vault/cred_login " \
+            "四颗，17.1 阶段7 又下线 web_screenshot/web_resolve（前者并入 web_act 的截图动作），2026-10 提升 3.2 增设 web_research、提升清单 2 增设 web_recall）；默认关闭的也留在这里，守卫继续覆盖它们"
 
     @pytest.mark.parametrize("value", [None, "", "   "])
     def test_unset_means_every_tool(self, value):

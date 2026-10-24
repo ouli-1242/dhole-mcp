@@ -36,6 +36,7 @@ from dhole_mcp.context import (
     nothing_went_out,
 )
 from dhole_mcp.envelope import (
+    answer_is_prose,
     is_extraction_collapsed,
     _stale_days_for,
     classify_source,
@@ -424,7 +425,17 @@ def _never_escalate(result: ResponseModel, url: str) -> bool:
     if _METHOD.get() != "GET":
         return True
     _path = url.lower().split("?")[0]
-    if _path.endswith(".pdf"):
+    # PDF 的 URL 判据与 `server._is_document_url` 是**双份定义**（quality 不能 import
+    # server——那是循环；两份由 tests/test_a_pdf_by_any_other_name_still_gets_a_download_
+    # budget.py 的一致性用例钉住，改一边不改另一边会当场红）。首段 `pdf` 是 3.3 补的：
+    # arxiv 一族的无扩展名 PDF URL，手抄版只认 `.pdf` 结尾时它们漏过这道闸。段要按
+    # `urlparse().path` 切——对整条 URL 切会把 scheme/host 也切成段。
+    try:
+        _pdf_path = urlparse(url).path.lower()
+    except (ValueError, AttributeError):
+        _pdf_path = _path
+    _segments = [s for s in _pdf_path.split("/") if s]
+    if _pdf_path.endswith(".pdf") or (_segments and _segments[0] == "pdf"):
         return True
     ct = (result.content_type or "").lower()
     if ct.startswith("image/"):
@@ -653,6 +664,50 @@ def _collapsed_by_both_rulers(result: ResponseModel, extracted: int) -> bool:
     return True
 
 
+def _ruler_applies(result: ResponseModel) -> bool:
+    """这一发量不量塌陷：只有"真抓回来一份 HTML"的那几档才量。
+
+    四种不量的情形，各自不是"没塌陷"而是"这一问不成立"：缓存/浏览器之外的回放没有
+    整页对照数；4xx/5xx 的正文是错误页；PDF 走 `pdf_extractor`，`visible_text_chars`
+    对它从来没有数；`structured`（`schema=` / `nested_*`）交回的是**投影**，按定义丢掉
+    不匹配的字，拿整页可见字去比是拿错的量具量对的东西 —— 投影抽得太窄是真问题，但它
+    要求的下一步是**改选择器**，不是 `extraction_type='html'`；让塌陷闸在这里说话，
+    开出的就是反药。
+    """
+    if result.fetcher_used not in ("http", "stealthy") or result.status >= 400:
+        return False
+    if "application/pdf" in (result.content_type or "").lower():
+        return False
+    if (result.extracted_type or "") == "structured":
+        return False
+    return True
+
+
+def extraction_lost_text(result: ResponseModel) -> bool:
+    """尺子本身：抽取器交回来的字，比这页自己的可见字少了一大截吗？
+
+    与 `extraction_collapsed` 分开是因为两问的答案**可以不同**：
+      * 补救（`server._translate_response_body`）问"值不值得再抽一次" —— 一段正文也可能
+        丢掉了一整块 aside，所以这一问不许被答案的形状豁免；
+      * 判决（`content_ok` / `substance`）问"该不该说它塌陷了" —— 一段话读得好好的，
+        分母里大半是导航时不该被报成失败。
+    一个函数答两问，第二问迟早被第一问的形状扭弯（`_is_js_shell` 的注释里同一个教训）。
+
+    两问共用 `extracted_chars` 这一颗数（预算切/focus 切之前的那份），谁也不许自己再数
+    一遍 `content[]` —— 否则同一页在两条路上会得到两个"丢了多少"。
+    """
+    if not _ruler_applies(result):
+        return False
+    return _collapsed_by_both_rulers(result, extracted_chars(result))
+
+
+#: 链接标签占内容区可见字的比例，高过这条线才承认"这页的可见字大半是导航"。
+#: 两个实测簇之间：文章页 0.01–0.05（`envelope._label_share` 的注释）、目录页
+#: 0.16–0.43；三处被误报的中文门户正文页落在 0.22–0.46。取 0.15 而不是某个簇的中位数，
+#: 是因为空带本身就在 0.05–0.16 之间，线落在哪里都不该由样本数决定。
+_PROSE_EXEMPT_LABEL_SHARE = 0.15
+
+
 def extraction_collapsed(result: ResponseModel) -> bool:
     """这页有字而抽取没给回来 —— 把"塌陷"作为一个**说得出口的事实**留出来。
 
@@ -661,24 +716,55 @@ def extraction_collapsed(result: ResponseModel) -> bool:
     被第一问的形状扭成"壳"。
 
     量的那颗是 `extracted_chars` —— 抽取器交回的份，不是调用方点名的 `focus=` 切过的份。
+    与 `extraction_lost_text` 读的是**同一颗数、同一把尺**，只是判决多两条让路（清单、
+    门户正文），所以两个函数各自把 `extracted_chars(result)` 传进 `_collapsed_by_both_rulers`，
+    谁也不自己数 `content[]`。
 
-    `structured` 一支不参与：`schema=` / `nested_*` 交回的是**投影**，它按定义丢掉不匹配
-    的字，拿整页可见字去比是拿错的量具量对的东西。投影抽得太窄是真问题，但它要求的下一步
-    是**改选择器**，不是 `extraction_type='html'`；让塌陷闸在这里说话，开出的就是反药。
+    为什么量不量的四种情形在 `_ruler_applies` 里：它们与判决无关，两问共用。
     """
-    if result.fetcher_used not in ("http", "stealthy") or result.status >= 400:
-        return False
-    if "application/pdf" in (result.content_type or "").lower():
-        return False
-    if (result.extracted_type or "") == "structured":
-        return False
     if (result.metadata or {}).get("recovered_as") == "link_list":
         # 只给**真的被渲染成链接清单**的那一发让路，而不是给所有 `page_type=list`
         # 让路：清单按定义丢掉非链接的字，拿整页可见字去比是拿错的量具；而一个被判
         # list 却仍在丢正文的页面，塌陷那句话照旧要说。实测人民网首页：清单 1,883
         # 字符 / 整页可见 6,969 —— 旧判据把它写成 `content_ok=false` 并建议换 html 档。
         return False
-    return _collapsed_by_both_rulers(result, extracted_chars(result))
+    if not _ruler_applies(result):
+        return False
+    if not _collapsed_by_both_rulers(result, extracted_chars(result)):
+        return False
+    if (answer_is_prose("\n".join(c for c in result.content if isinstance(c, str)))
+            and result._dom_label_share >= _PROSE_EXEMPT_LABEL_SHARE):
+        # 第五种让路（2026-10-24 真实站点实测）：答案是一段话，而**这页的可见字大半是
+        # 链接标签**。
+        #
+        # 这把尺子量的是"抽取回来的字 ÷ 整页可见字"，而中文门户的正文页里那个分母
+        # 大部分不是正文 —— 实测 163 的一条稿子：正文 2,844 字、整页 8,548 字（33%），
+        # 缺的 5,700 字是导航与侧栏推荐；东南网同形（772/6,362，12%），而 772 字就是
+        # 那篇新华社通稿的全部。两处都被判 `content_ok=false` 并收到一句假话
+        # （"the words ARE in the HTML, dhole's reader lost them"）—— 读取器没丢，
+        # 是分母里本来就有大半不是正文。第二把尺子（`visible_text_chars_without_chrome`）
+        # 在这两页上给出同一个数，救不了：门户导航住在裸 `<div>` 里，按标签剥不掉它。
+        #
+        # 所以豁免要的是**页面自己的证据**，不是答案的形状：`_dom_label_share` 是内容区
+        # 里"算作链接标签的字"的占比，剥掉 nav/header/footer/aside 之后仍然量出来的那份
+        # —— 它高，就说明分母确实是导航与推荐。实测三处 163 / 东南网 / 81.cn = 0.40 /
+        # 0.46 / 0.22，而 `envelope._label_share` 的注释记着文章页 0.01–0.05、目录页
+        # 0.16–0.43 —— 0.15 这条线落在那条空带里，不是现调出来的。
+        #
+        # 两条同时成立才让路，缺一不可：
+        #   * 答案是一段话（`answer_is_prose`：≥200 字、每 100 字 ≥1 个句末标点）——
+        #     一串标签过不了这一条，所以目录页不会被豁免；
+        #   * 这页的链接标签占比够高 —— 一篇干净的文章页过不了这一条，所以"正文真的被
+        #     截断了"照旧报塌陷。没有 DOM 证据时 `_dom_label_share` 是 -1（没量过），
+        #     这一支不放行：豁免是**关于页面的主张**，没有页面就不许主张。
+        #
+        # 代价说清楚：链接占比低于 0.15 的门户页仍会被报成塌陷（真阳性里的假阳性），
+        # 一篇真被截断的正文也可能落进来（假阴性）。选这个方向是因为"把好答案报成失败"
+        # 会让调用方重抓一次，而重抓会拿到同一份东西。补救那一问不受这条豁免影响
+        # （`extraction_lost_text` 照旧量），真正丢了一整块 aside 的页面仍会被补回来。
+        return False
+    # 走到这里：尺子说"丢了"，而交回来的不是一段话（或这页看不出是门户）—— 塌陷成立。
+    return True
 
 
 # ─── 3.4 · 实质（substance）：`content_ok` 第一次看内容长什么样 ───────────
@@ -1355,6 +1441,36 @@ def _replay_age_seconds(fetched_at: str) -> float | None:
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=timezone.utc)
     return max(0.0, (datetime.now(timezone.utc) - stamp).total_seconds())
+
+
+def _network_clause(result: ResponseModel) -> str:
+    """这一发自己记下的网络事实 —— 只在**有东西没成**时说话。
+
+    js_shell / nav_only 的每一句话都在猜"为什么渲染出来还是空的"，而答案常常就在
+    这一发已经量到的账上：数据接口 403、被护栏拦下。把它说出来，下一步才从"再试
+    一次"变成"带 cookie 重来"或"这条路走不通"。
+
+    只在 `content_ok` 为假时由 `_agent_hints` 追加：正文已经拿到的那一发不需要一份
+    "某个图标 404"的账 —— 那是噪声，不是诊断。
+    """
+    net = getattr(result, "network", None) or {}
+    failed = [f for f in (net.get("failed") or []) if isinstance(f, dict)]
+    guard = [str(h) for h in (net.get("blocked_by_guard") or []) if h]
+    if not failed and not guard:
+        return ""
+    total = int(net.get("requests") or 0)
+    bits: list[str] = []
+    if failed:
+        named = "; ".join(
+            f"{f.get('type') or 'request'} {f.get('status')} {f.get('url')}"
+            for f in failed[:2])
+        more = f" (+{len(failed) - 2} more)" if len(failed) > 2 else ""
+        bits.append(f"{len(failed)} of {total} requests failed - {named}{more}")
+    if guard:
+        bits.append("dhole refused to load " + ", ".join(guard)
+                    + " (an internal address, or outside the host fence): that is a "
+                      "security boundary, not a site error - do not route around it")
+    return "This call's own network log says why: " + "; ".join(bits) + "."
 
 
 def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
@@ -2095,6 +2211,12 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             next_action = f"{next_action} {_chain_note}"
     if not content_ok and not next_action:
         next_action = _quality_way_out(result)
+    if not content_ok:
+        # 排在最后：先给这一发**该做什么**，再说**已经发生了什么**。两句的顺序不能反
+        # —— 网络账是证据，不是出路；把它放在前面会让"再试一次"那类建议读起来像结论。
+        _net_note = _network_clause(result)
+        if _net_note:
+            next_action = f"{next_action} {_net_note}".strip() if next_action else _net_note
     return summary, next_action, content_ok
 
 

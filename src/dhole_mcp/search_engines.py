@@ -108,6 +108,36 @@ _CJK_RE = re.compile(
     "[\u3040-\u30ff\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
 
 
+# 2.4 · 语言车道。查询自己的字符构成是唯一免费的语种信号（`region` 参数说的是
+# 「结果给哪个市场」，管不到引擎偏好）。实测（2026-10，提升计划 2.4 的现场）：英文查询
+# `transformer attention mechanism survey` 回 8 条全中文站点——默认池里境内三家 +
+# cn.bing 在本网络快、先答、先填满配额，境外索引还在飞就被「够数早退」砍掉。车道只做
+# 两件事，都在 metasearch 层：早退别砍 preferred 车道里一家都没答话的那侧（等到第一
+# 家答完即可，硬期限照旧兜底），以及合并序 preferred 车道在前（稳定分区，不是重排，
+# 一条不丢）。
+#
+# 两条线来自提升计划（>30% / <5%），中间地带是混合查询（中文意图 + 英文术语，
+# `PCIe 7.0 规范 发布 128GT/s`）—— 它不选边，行为与从前逐字相同。bing 归中文车道是
+# 因为它是 cn.bing 那套境内索引（`_INDEX_FAMILY` 注释：与 bing_global 几乎不重合），
+# 与「这台机器直连拨不拨得通」的 `_CN_DIRECT` 不是一回事。
+_CN_LANE = frozenset({"baidu", "sogou", "so360", "bing"})
+_EN_LANE = frozenset({"bing_global", "duckduckgo", "yahoo", "brave",
+                      "yandex", "marginalia"})
+
+
+def language_lane(query: str) -> frozenset:
+    """这条查询的 preferred 引擎车道；空集 = 中间地带，不选边。"""
+    stripped = "".join((query or "").split())
+    if not stripped:
+        return frozenset()
+    ratio = len(_CJK_RE.findall(stripped)) / len(stripped)
+    if ratio > 0.30:
+        return _CN_LANE
+    if ratio < 0.05:
+        return _EN_LANE
+    return frozenset()
+
+
 def cn_index_engines(query: str) -> frozenset:
     """仍在飞、而这一轮还不能不等的那几家（非 CJK 查询交回空集）。
 

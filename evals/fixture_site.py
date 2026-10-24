@@ -85,6 +85,43 @@ def _page(title: str, body: str) -> bytes:
     ).encode("utf-8")
 
 
+# /upload 的靶：一个 multipart 表单。POST 侧只回执"收到了什么"（文件名 + 字节数），
+# 让动作链的 receipt 有东西可断言。
+UPLOAD_PAGE = _page("上传", """
+<h1>Upload a file</h1>
+<form method="POST" action="/upload" enctype="multipart/form-data">
+  <input type="file" name="doc" id="doc">
+  <button type="submit" id="send">Send</button>
+</form>
+<p id="receipt">nothing uploaded yet</p>
+""")
+
+# /dialog 的靶：alert / confirm 闸 / prompt 三种弹窗，结果都写进 #status ——
+# 「谁答了对话框」由页面上看得见的状态说话，回执才有的对。
+DIALOG_PAGE = _page("对话框", """
+<h1>Dialogs</h1>
+<button id="alertbtn" onclick="alert('hello from alert'); return false;">Alert</button>
+<button id="delbtn" onclick="if(confirm('delete this item?')){document.getElementById('status').textContent='DELETED'}else{document.getElementById('status').textContent='CANCELLED'}">Delete</button>
+<button id="namebtn" onclick="const v=prompt('your name?');if(v!==null){document.getElementById('status').textContent='NAMED:'+v}">Name</button>
+<p id="status">idle</p>
+""")
+
+# /frame 的靶：外层只有一枚同源 iframe；可交互元素全在内层 —— 快照的 frame 行、
+# frame 寻址（index 与 selector 两种）都有实靶。
+FRAME_PAGE = _page("框架", """
+<h1>Outer page (no interactive elements here)</h1>
+<iframe src="/frame/inner" name="app" id="app" style="width:600px;height:200px"></iframe>
+""")
+
+FRAME_INNER = _page("内层", """
+<h1>Inner controls</h1>
+<input id="note" placeholder="note">
+<button id="save" onclick="document.getElementById('saved').textContent='SAVED:'+(document.getElementById('note').value||'empty')">Save</button>
+<p id="saved">not saved</p>
+<a href="/about" id="innerlink">inner link</a>
+""")
+
+
 INDEX = _page("靶站索引", """
 <h1>dhole 模拟测试靶站</h1>
 <ul>
@@ -662,6 +699,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._html(CHECKOUT_PAGE)
         if path == "/hoverdrag":
             return self._html(HOVERDRAG_PAGE)
+        if path == "/upload":
+            return self._html(UPLOAD_PAGE)
+        if path == "/dialog":
+            return self._html(DIALOG_PAGE)
+        if path == "/frame":
+            return self._html(FRAME_PAGE)
+        if path == "/frame/inner":
+            return self._html(FRAME_INNER)
         if path == "/qr":
             return self._html(QR_PAGE)
         if path == "/captcha":
@@ -753,6 +798,27 @@ class Handler(BaseHTTPRequestHandler):
             sys.stdout.write(f"    !! ORDER WRITTEN: {record}\n")
             sys.stdout.flush()
             return self._html(QR_DONE)
+
+        if path == "/upload":
+            ctype = self.headers.get("Content-Type") or ""
+            if "multipart/form-data" not in ctype:
+                return self._html(_page("400", "<h1>要 multipart</h1>"), 400)
+            # 极简 multipart：只为回执服务——文件名 + 那一段的字节数。不落盘。
+            import re as _re
+            body_bytes = raw.encode("utf-8", "replace") if isinstance(raw, str) else raw
+            m = _re.search(rb'filename="([^"]*)"', body_bytes)
+            name = m.group(1).decode("utf-8", "replace") if m else "(unnamed)"
+            size = 0
+            for part in body_bytes.split(b"\r\n--"):
+                if b"Content-Disposition" in part and b"filename=" in part:
+                    _, _, payload = part.partition(b"\r\n\r\n")
+                    size = max(0, len(payload) - 2)  # 尾部 \r\n 边界
+                    break
+            receipt = f"received {name} ({size} bytes)"
+            page = UPLOAD_PAGE.replace(
+                b'<p id="receipt">nothing uploaded yet</p>',
+                f'<p id="receipt">{receipt}</p>'.encode("utf-8"))
+            return self._html(page)
 
         if path == "/captcha/verify":
             token = form.get("token", "")

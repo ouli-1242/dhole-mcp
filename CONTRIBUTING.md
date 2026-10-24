@@ -30,10 +30,32 @@ degradation is a supported configuration and is covered by tests.
 ## Tests
 
 ```bash
-pytest                    # default run; e2e tests are deselected
-pytest -m e2e             # spawns a real dhole.exe subprocess
+pytest                    # default run; e2e tests are deselected, 8 workers
+pytest -n 0               # one process, for debugging a single test
+pytest -m e2e -n 0        # spawns a real dhole.exe subprocess
 pytest tests/test_search.py -q
 ```
+
+The default run is **parallel** (`-n 8` in `addopts`) because the suite is
+7,415 tests whose slowest single case is 16s — there is no hotspot to optimise,
+only volume. Measured on a 32-core/16GB box:
+
+| command | wall clock |
+|---|---|
+| `pytest -n 0` | 617s |
+| `pytest` (default, `-n 8`) | 131s |
+| `pytest -n 16` | 107s |
+| `pytest -n 32` | crashes |
+
+**Never use `-n auto`.** xdist resolves `auto` to `cpu_count`, and every worker
+imports its own copy of `trafilatura` + `patchright`; on a many-core box that
+exhausts RAM and the workers die, which surfaces as an opaque
+`INTERNALERROR> KeyError: <WorkerController gw9>` rather than an OOM message.
+Raise `-n` only as far as your RAM allows (~0.4GB per worker).
+
+`--timeout=120` is the other half: without it a deadlocked run sits at 0% CPU
+forever with no output. It is 7x the slowest real test, so it can only fire on a
+genuine hang — if it does, the failing name is the one to look at, not the clock.
 
 Two things worth knowing before you debug a "test doesn't see my change":
 

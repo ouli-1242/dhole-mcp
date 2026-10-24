@@ -716,6 +716,60 @@ LIST_PROSE_RUN_MAX = 400
 ARTICLE_PROSE_RUN_MIN = 600
 ARTICLE_VISIBLE_TEXT_MIN = 4000
 
+# 2.3 · 技术文档信号组的三条线。量自 2026-10-24 四个真页（tests/page_fixtures
+# 里有当日字节）：MDN Fetch_API <main> 内 <p>=20、<pre>+<code>=38、run 只有 196 ——
+# 正文被代码块与定义列表切成短段，`longest_run` 这把尺对它结构性失真（够不到
+# ARTICLE_PROSE_RUN_MIN 的 600），链接密度又被侧栏推荐抬高，整篇文档于是落进
+# list 闸。反例三页的读数：HN <p>=0 / code=0，Python genindex <p>=3 / code=0，
+# gov.cn 门户 <p>=12 / h2+h3=23 而 code=0 —— **段落数与标题数都拦不住门户**，
+# 真正判别的是"这页用代码教东西"的密度；5 颗 <pre>/<code> 以下一概不算文档。
+_TECH_DOC_MIN_PARAS = 8
+_TECH_DOC_MIN_CODE = 5
+
+
+class _TechDocParser(HTMLParser):
+    """数技术文档那三样：<main> 在场、main 内的 <p>、全文的 <pre>/<code>。"""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.saw_main = False
+        self.in_main = 0
+        self.paras_in_main = 0
+        self.code_marks = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "main":
+            self.saw_main = True
+            self.in_main += 1
+        elif tag == "p" and self.in_main:
+            self.paras_in_main += 1
+        elif tag in ("pre", "code"):
+            self.code_marks += 1
+
+    def handle_endtag(self, tag):
+        if tag == "main" and self.in_main:
+            self.in_main -= 1
+
+
+def _tech_doc_shape(html: str) -> bool:
+    """这页是不是一篇被代码块切成短段的技术文档。
+
+    只在 list 闸的最后一步被问（见 `detect_page_type`）：那里的两把尺
+    （share / longest_run）对技术文档都在说谎 —— 量出的是"侧栏链接密、正文碎"，
+    而这页分明是一篇文章，`list` 那句 next_action 会把调用方送去爬一堆它已经
+    读到的页面。三条信号缺一不可，每条都对应一个实测的反例：没 <main> 的
+    quotes 索引、<p> 不够的 genindex、没代码密度的 gov.cn 门户。
+    """
+    parser = _TechDocParser()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception:
+        return False
+    return (parser.saw_main
+            and parser.paras_in_main >= _TECH_DOC_MIN_PARAS
+            and parser.code_marks >= _TECH_DOC_MIN_CODE)
+
 
 def _is_content_href(href: str, host: str) -> bool:
     """Whether this ``<a href>`` is a same-domain content link (not chrome-by-kind).
@@ -875,11 +929,39 @@ def _count_content_links(html: str, host: str) -> int:
     )
 
 
+#: 句末标点（中英各一套）。量的是"这段字像不像人说的话"，不是它有多长 —— 一条
+#: 导航标签再长也没有句号，一段 40 字的导语也带着它。
+_PROSE_SENTENCE_RE = re.compile(r"[。！？；]|[.!?](?=\s|$)")
+
+
+def answer_is_prose(text: str, *, min_chars: int = 200,
+                    sentences_per_100: float = 1.0) -> bool:
+    """这堆字是一段话，还是一串标签？
+
+    只看一个形状：每 100 字符里有多少个句末标点。实测（2026-10-24，六个真页）：
+    中文新闻正文 1.5–2.0、英文索引页 0.3–0.5（HN 0.31、Python 文档 0.49、arXiv 摘要页
+    0.30）。1.0 落在两簇中间的空带上。
+
+    两个前置条件各有理由：`min_chars` 让极短的答案不参与这个判断（40 个字的片段里
+    一个句号就是 2.5/100，比例在分母很小时没有意义），200 与壳闸的
+    `_JS_SHELL_MIN_TEXT_CHARS` 同一条线，也让被 `max_content_chars` 切到 500 字的那一发
+    仍然判得出来（切完的片段正是 478 字 —— 拿 500 当下限会让"调用方点了小预算"变成
+    "这页塌陷了"）；`sentences_per_100` 取 1.0 而不是 0.5，是因为误判成"这是正文"会让
+    调用方不去取那些链接，代价比多读一段带链接的正文更高。
+    """
+    body = (text or "").strip()
+    if len(body) < min_chars:
+        return False
+    hits = len(_PROSE_SENTENCE_RE.findall(body))
+    return hits * 100 >= len(body) * sentences_per_100
+
+
 def detect_page_type(
     html: str,
     url: str,
     content_type: str = "",
     extracted_text_len: int = 0,
+    extracted_text: str = "",
 ) -> str:
     """Classify a page's structure from raw HTML + content-type.
 
@@ -988,6 +1070,20 @@ def detect_page_type(
     if list_candidate and share is not None \
             and not _ARTICLE_TAG_RE.search(low):
         if share >= LIST_LABEL_SHARE_MIN and longest_run <= LIST_PROSE_RUN_MAX:
+            # 链接密度高不等于"这页的答案是那些链接"。中文门户的正文页常年挂着几十条
+            # 同域推荐（实测 163 一条 2,844 字的正文配 228 条同域链接、share 0.38），
+            # 而真正的索引页靠 `share` 反而过不了这道闸 —— 判据量的是"同域链接占了多少
+            # 字"，不是"这页要人点走"。所以最后再问一次答案自己的形状：抽取器交回的
+            # 是一段带句号的话时，这页就有正文，`list` 那句话会把调用方送去爬一堆它
+            # 已经读到的页面。
+            if answer_is_prose(extracted_text):
+                return "article"
+            if _tech_doc_shape(html):
+                # 技术文档（2.3）：走到这一步的页面 share 与 run 都在说"这是索引"，
+                # 而 `<main>` 里 ≥8 段落、全文 ≥5 颗代码标记说的是"这是一篇被代码块
+                # 切碎的文章"——两把尺对它都失真（MDN 实测 run 196 / p 20 / code 38），
+                # 信后一组。
+                return "article"
             return "list"
 
     # Article: an <article> tag is a strong article signal.

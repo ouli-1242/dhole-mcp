@@ -75,8 +75,11 @@ class TestTheToolExists:
         assert ann.get("idempotentHint") is False
         assert ann.get("openWorldHint") is True
 
-    def test_the_default_surface_is_eleven_tools(self):
-        assert len(_defs()) == 11, sorted(_defs())
+    def test_the_default_surface_is_thirteen_tools(self):
+        # 17.0 删掉 web_recipe/web_watch/cred_vault/cred_login 四颗；17.1 阶段7
+        # 下线 web_screenshot/web_resolve（并入 web_act）；提升 3.2 增设
+        # web_research、提升清单 2 增设 web_recall（第 13 颗）。
+        assert len(_defs()) == 13, sorted(_defs())
 
     def test_every_property_description_stays_within_the_budget(self):
         props = _defs()["web_request"]["inputSchema"]["properties"]

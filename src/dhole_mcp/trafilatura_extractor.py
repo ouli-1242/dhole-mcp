@@ -548,15 +548,26 @@ def _fallback_extract(page, extraction_type: str, css_selector: Optional[str]) -
         text = re.sub(r'<noscript[^>]*>.*?</noscript>', '', text, flags=re.DOTALL | re.IGNORECASE)
         text = re.sub(r'<[^>]+>', ' ', text)
         text = re.sub(r'\s+', ' ', text).strip()
-        return [text] if text else [html]
+        # 转不出字就是转不出字。这里从前交回的是 `[html]` —— 整页标记当"text"，
+        # 而调用方拿到的 `content` 以 `<!DOCTYPE html>` 打头、`extracted_chars` 还
+        # 因此虚高，壳闸看见"字很多"于是不升级。实测 2026-10-24：
+        # `www.bilibili.com/v/popular/rank/all` 的 HTTP 档回一张 4,927 字节的灰页
+        # （`window._GreyResult`），markdownify 对它产出 0 字符，这条路把 4,376 个
+        # 标记字符当正文交回，`content_ok=true`、`substance=ok`，而同一 URL 走
+        # stealthy 档拿到的是真实榜单（11,946 字符）。空答案才是诚实的答案：它让
+        # `quality._is_js_shell` 看见"200 + 无正文"，阶梯才有机会升级。
+        return [text]
     # markdown, article, structured: use markdownify
     try:
         result = plain_markdown_from_html(html)
         logger.info(f"Falling back to markdownify extraction (type={extraction_type})")
-        return [result] if result else [html]
+        return [result]
     except ImportError:
-        # markdownify not installed: return raw HTML
-        return [html]
+        # markdownify 不在（安装不完整）：同样不交原始标记。这条路上"有内容"是假的，
+        # 而假的内容比没有内容更贵 —— 调用方会把它当正文引用。缺依赖由 `dhole doctor` 报。
+        logger.warning("markdownify is not installed; returning no content for %s",
+                       getattr(page, "url", ""))
+        return [""]
 
 
 def _note_selector_not_applied(selector: str, err: Exception) -> None:

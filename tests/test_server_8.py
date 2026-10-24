@@ -169,7 +169,7 @@ def test_no_wire_face_moved_while_this_landed():
     from pathlib import Path
     lock = json.loads((Path(__file__).resolve().parents[1] / "tests"
                        / "tool_defs_lock.json").read_text(encoding="utf-8"))
-    assert lock["tools"] == 11
+    assert lock["tools"] == 13
     assert "screenshot" not in str(
         [p for d in MasterFetchServer._TOOL_DEFS
          for p in d["inputSchema"]["properties"]])

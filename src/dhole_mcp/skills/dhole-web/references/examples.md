@@ -217,6 +217,15 @@ so let cron see it and mail or trigger on non-zero:
 ```cron
 */30 * * * * dhole watch run --json >> ~/.dhole/watch.log 2>&1
 ```
+**Desktop notification**: `dhole watch run --notify` pops one OS toast on a
+changed sweep (Windows WinRT / macOS osascript / Linux notify-send — no
+dependency, and a machine without an outlet says so instead of pretending).
+Off by default: a headless cron has no toast, and `--json` stays quiet either
+way — the flag is for the human who is not looking at the terminal. It never
+touches the exit code: a failed toast cannot turn "changed" into "quiet".
+There is deliberately **no webhook outlet**: dhole is a read-only local tool
+layer, and a server-side POST-with-page-content would add an outbound exfil
+surface the agent host already covers (it receives `changed=true` in band).
 The checks are conditional requests against dhole's own 7-day baseline; they do not render the page and do not use a browser. A 404/blocked fetch is an error row (exit 2), never "unchanged".
 
 ## web_request

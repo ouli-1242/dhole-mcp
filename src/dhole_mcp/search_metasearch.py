@@ -1938,6 +1938,23 @@ def _resolve_backends(engines: Optional[list[str]]) -> list[str]:
     return out or _configured_default_backends()
 
 
+def _prefer_lane(order: list, lane: frozenset) -> list:
+    """合并序的稳定分区（2.4 · 语言车道）：preferred 车道的行在前，一条不丢。
+
+    不是重排：各车道内部保持 first-seen 序（谁的答案先落地谁在前），被换位置的只有
+    车道之间的先后。行的归属按 `backends` 集合与车道的交集判——一条被 baidu 与
+    bing_global 同时确认的 URL 属于两侧的共识，任何一侧把它选进 preferred 都成立。
+    空车道 / 单侧独占时逐字原样交回。
+    """
+    if not lane or len(order) < 2:
+        return order
+    head = [e for e in order if lane.intersection(e.get("backends") or ())]
+    tail = [e for e in order if not lane.intersection(e.get("backends") or ())]
+    if not head or not tail:
+        return order
+    return head + tail
+
+
 _SEARCH_TRACKING_PARAMS = {
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
     "fbclid", "gclid", "ref", "ref_src", "source", "_ga", "mc_cid", "mc_eid",
@@ -2119,10 +2136,14 @@ async def metasearch(
     # 家族表住在 search_engines（dhole 那一层薄适配器），这里按需 import 而不写顶层：
     # 那边惰性 import 回本模块（为了不把 primp/lxml 拖进启动与缓存命中路径），写成顶层
     # 就是一对循环 import；而本层是 vendored 的，"家族"这个概念本来也不属于它。
-    from dhole_mcp.search_engines import _INDEX_FAMILY, cn_index_engines
+    from dhole_mcp.search_engines import _INDEX_FAMILY, cn_index_engines, language_lane
     families_answered: set[str] = set()   # 本轮真的说了话的独立索引家族
     # 中文查询要等的那几家（非 CJK 交回空集，下面每一处判断因此对英文逐字无效）。
     cn_wait = cn_index_engines(query)
+    # 2.4 · 语言车道：查询的字符构成选 preferred 侧（中间地带空集 = 不选边）。
+    # 早退的等待按**引擎**答没答话判（`status == "ok"`），不按家族——bing 与
+    # bing_global 同属 bing 家族，cn.bing 答了不该让英文查询的等待提前结束。
+    lane_pref = language_lane(query)
 
     def _merge_rows(name: str, res: list[Any]) -> None:
         """一家引擎的答案并进合并表，并把它的下落记进 status。
@@ -2270,6 +2291,21 @@ async def metasearch(
         """
         return any(tasks.get(pt) in cn_wait and not pt.done() for pt in pending)
 
+    def _lane_first_answer_missing() -> bool:
+        """preferred 车道一家都还没答话，而它还有人在飞（空车道永远 False）。
+
+        与 `_cn_still_flying` 等的量不同：那边等的是**中文长尾完整性**（几家全到），
+        这边只等 preferred 侧的**第一条**——车道随后还靠合并序（`_prefer_lane`）把
+        preferred 的行排到前面，所以第一条落地之后的等待买不到东西。判据按引擎的
+        status 而不是家族：bing（cn）与 bing_global 同属一个家族，cn.bing 先答不该
+        结束英文查询对境外侧的等待。
+        """
+        if not lane_pref:
+            return False
+        if any(status.get(b) == "ok" for b in lane_pref):
+            return False
+        return any(tasks.get(pt) in lane_pref and not pt.done() for pt in pending)
+
     while pending and time() < deadline:
         timeout = max(0.1, deadline - time())
         if grace_until:
@@ -2299,13 +2335,15 @@ async def metasearch(
         if enough_results and (
             engines_ok >= min_engines or elapsed >= soft_deadline
         ):
-            if _cn_still_flying():
+            if _cn_still_flying() or _lane_first_answer_missing():
                 # 配额是境外索引填的，而中文那一半不在它们的库里 —— 这一刻早退买到的
                 # 是"快"，交回的是答不出用户问题的那一页（2026-10-11 全真模拟 S3：
                 # 混搜里 baidu 被这样砍掉，两轮中文查询全 low，手动 engines=["baidu"]
                 # 一次就出公众号与知乎）。等的上限不新开：就是本轮本来就有的硬期限，
                 # 到点它自己会被记成 timeout（一次真的没等到），而不是 preempted
                 # （一次我们决定不等）。纯英文查询走进来的次数是零 —— cn_wait 是空集。
+                # 第二个条件的量不一样（2.4）：preferred 车道一条都没落地时，早退交回
+                # 的是**答非所问语种**的那一页；等的是第一条，不是完整性。
                 continue
             if (pending and len(families_answered) < _MIN_CONSENSUS_FAMILIES
                     and grace_until == 0.0):
@@ -2327,6 +2365,8 @@ async def metasearch(
         # `evals/pool_baseline.py` 报的是响应里已有的四桶，而四桶说不出"多花的那几秒"。
         round_stats["lone_family_wait_s"] = round(round_wait_s, 3)
         round_stats["lone_family_grace_s"] = _LONE_FAMILY_GRACE
+        if lane_pref:
+            round_stats["language_lane"] = sorted(lane_pref)
 
     # 产出统计：一处覆盖全部终态 token（ok/empty/blocked/circuit_open/timeout/
     # error:*/init_error:*/no_key:*/preempted），含那些根本没拿到 instance 就被跳过
@@ -2336,6 +2376,9 @@ async def metasearch(
     # freeze backends sets to sorted lists for the caller
     for e in order:
         e["backends"] = sorted(e["backends"])
+    # 2.4 · 语言车道的最后一步：preferred 侧的行排到前面（稳定分区，一条不丢）。
+    # 放在 backends 冻结之后，分区的归属判断读的就是冻结后的那份名单。
+    order = _prefer_lane(order, lane_pref)
 
     # 17.0: 这里原来有一段"整池连不上就把这个代理冷却掉"的追踪。代理池删掉之后
     # 没有可冷却的对象了，而失败本身已经如实写在 status 里（error:/timeout 每家

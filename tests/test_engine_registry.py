@@ -487,6 +487,10 @@ class TestSoftDeadlinePreemption:
     留下的这条是它的对照组 —— 早退行为本身不许被那次改动带走。
 
     时钟：快引擎 0s / 慢引擎 5s，软截止 0 秒 —— 判据只依赖"谁先完成"，不依赖真实秒数。
+
+    2.4 之后的边界：查询选了语言车道时，preferred 侧一条都没答话的等待**压过**软截止
+    （快的那侧填的是答非所问语种的一页）。所以「preempted」这条用中间地带的查询钉，
+    车道等待这条用纯英文查询钉 —— 两个契约各有一条，谁也不许吃掉谁。
     """
 
     @staticmethod
@@ -521,11 +525,26 @@ class TestSoftDeadlinePreemption:
     async def test_a_full_engine_preempts_the_slow_one(self, monkeypatch):
         from dhole_mcp import search_metasearch as m
 
+        # 中间地带的查询（CJK 占比 0.25，不选车道）：软截止纪律原样成立。
         self._install(monkeypatch, {"bing": (0.0, 10), "yandex": (5.0, 14)})
-        results, status = await m.metasearch("q", 6, engines=["bing", "yandex"])
+        results, status = await m.metasearch("transformer 注意力", 6,
+                                             engines=["bing", "yandex"])
 
         assert status["yandex"] == "preempted", status
         assert all(r["backend"] != "yandex" for r in results)
+
+    @pytest.mark.asyncio
+    async def test_a_laned_query_holds_past_soft_deadline_for_its_side(self, monkeypatch):
+        from dhole_mcp import search_metasearch as m
+
+        # 纯英文查询选了英文车道，而 preferred 侧只有 yandex 一家、5 秒才答 ——
+        # 这一刻软截止买走的是"答非所问语种"的一页，所以等它（上限是硬期限）。
+        self._install(monkeypatch, {"bing": (0.0, 10), "yandex": (5.0, 14)})
+        results, status = await m.metasearch("transformer", 6,
+                                             engines=["bing", "yandex"])
+
+        assert status["yandex"] == "ok", status
+        assert any(r["backend"] == "yandex" for r in results)
 
 
 class TestChallengePageCooldown:

@@ -39,6 +39,7 @@ PROBE_VALUE = {
     "confirm": True, "steps": 5, "ms_per_step": 700, "count": 6,
     "state": "hidden", "timeout_ms": 4000, "full_page": True, "decode_qr": True,
     "image_type": "jpeg", "quality": 50, "save_to": "somewhere.png",
+    "frame": "#frame-a",
 }
 #: 载荷的起点：一颗元素动作总得有个目标，而两颗动作少了这一颗键就根本不成形。
 SEED = {"press": {"key": "Enter"}, "fill": {"text": "hi"}, "drag": {"to": "#b"}}
@@ -122,17 +123,22 @@ def test_an_unknown_payload_key_is_not_in_the_table():
 # ─── 3 · 常驻层点名的必填键 ───────────────────────────────────────
 
 def test_the_three_required_keys_the_wire_names_are_read_by_the_validator():
-    """`fill needs text, press needs key, drag needs to` 那句不许说出表里没有的名字。
+    """wire 那句必填键的话不许说出表里没有的名字。
 
     常驻层是第 2 份作者：它只有在这一句与第 1 份一致时才是真话。这一条读的是当天
-    serve 的那颗描述，不是一句抄在测试里的字符串。
+    serve 的那颗描述，不是一句抄在测试里的字符串。两种写法都算说过：老的
+    "fill needs text" 和 292 帽压出来的紧缩形 "fill=text"（upload/dialog 进场时
+    描述超帽，needs 那句换成等号，账没变：等号两侧同样是动作与它必填的键）。
     """
     wire = next(td for td in MasterFetchServer._TOOL_DEFS
                 if td["name"] == "web_act")["inputSchema"]["properties"]
     text = wire["actions"]["description"]
-    named = re.findall(r"(\w+) needs (\w+)", text)
+    named = []
+    for a, b, c, d in re.findall(r"(\w+) needs (\w+)|(\w+)=(\w+)", text):
+        named.append((a, b) if a else (c, d))
     assert named, f"常驻层那句必填键的话读不到形状：{text!r}"
     for action, key in named:
+        assert action in TABLE, (action, key)
         assert key in TABLE[action], (action, key, sorted(TABLE[action]))
 
 
@@ -381,7 +387,7 @@ class TestTheWireTableDoesNotGainAKey:
     def test_the_shorthand_adds_no_literal_key_anywhere(self):
         from dhole_mcp.actions import _target_payload_keys
 
-        assert _target_payload_keys() == {"selector", "index", "expect"}, \
+        assert _target_payload_keys() == {"selector", "index", "expect", "frame"}, \
             sorted(_target_payload_keys())
 
 

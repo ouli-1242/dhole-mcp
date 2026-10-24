@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import re
 import pytest
+from pathlib import Path
 from dhole_mcp import guide
 from dhole_mcp.actions import _VALID_KEYS, _validate_actions, action_payload_keys
 from dhole_mcp.server import MasterFetchServer
@@ -71,6 +72,16 @@ def _legal_payloads(key: str) -> list[dict]:
     if key == "drag":
         return [{"drag": {"selector": "#src", "expect": "滑块", "to": "#dst"}},
                 {"drag": {"index": 3, "to": {"index": 7, "expect": "落点"}}}]
+    if key == "upload":
+        # files 必须指向这台机器上真实存在的文件——校验在浏览器起来之前就发生
+        return [{"upload": {"selector": "#doc", "files": [str(Path(__file__))]}},
+                {"upload": {"index": 4, "files": [str(Path(__file__))]}}]
+    if key == "dialog":
+        return [{"dialog": "accept"},
+                {"dialog": {"answer": "dismiss", "prompt_text": "no thanks"}}]
+    if key == "tab":
+        return [{"tab": "new"}, {"tab": "close"}, {"tab": "list"},
+                {"tab": 2}, {"tab": {"open": "https://fixture.test/next"}}]
     if key == "screenshot":
         return [{"screenshot": "#cap"},
                 {"screenshot": {"selector": "#cap", "decode_qr": True}},
@@ -148,12 +159,16 @@ def test_the_listing_mechanism_actually_notices_a_new_action():
 # ─── 2 · 必填载荷键：从验证器的报错推出来，再要求 wire 说得出 ──────
 
 def test_the_probe_actually_probes():
-    """机制自检：报错点名必填键这件事今天真实存在，且点名的就是那三颗。
+    """机制自检：报错点名必填键这件事今天真实存在，且点名的是这五颗。
 
     若验证器改了措辞不再在花括号组里列必填键，`REQUIRED` 会空掉，下面两条判据就此变成
-    摆设 —— 所以这里先钉住"探针有效"，再钉住 wire。
+    摆设 —— 所以这里先钉住"探针有效"，再钉住 wire。upload/dialog 是 2026-10-24 加的
+    两颗，报错各自点名 files / answer。
     """
-    assert REQUIRED == {"drag": {"to"}, "fill": {"text"}, "press": {"key"}}, REQUIRED
+    # tab 不在这张表里：它的拒绝句把形状写在引号里（"open": "https://..."），
+    # 探针的裸键名花括号抓不到它——形状由 `_legal_payloads` 与手册守卫管。
+    assert REQUIRED == {"drag": {"to"}, "fill": {"text"}, "press": {"key"},
+                        "upload": {"files"}, "dialog": {"answer"}}, REQUIRED
     for name in REQUIRED.values():
         assert name <= ALL_KEYS, f"报错点名的 {sorted(name)} 不在手抄表里 —— 表该更新了"
 

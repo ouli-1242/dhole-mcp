@@ -14,6 +14,7 @@
 *.ico binary
 *.svg text
 *.pdf binary
+*.mp4 binary
 
 # A GBK-encoded fixture: git sees no NUL byte, so `text=auto` would classify it
 # as text and rewrite line endings on checkout. The decode tests assert exact

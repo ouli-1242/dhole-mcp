@@ -228,6 +228,28 @@ def _no_real_home_state_writes(request, monkeypatch, tmp_path):
     monkeypatch.setattr(ms, "_circuit_state_file", lambda: str(tmp_path / "circuit_breaker.json"))
     monkeypatch.setattr(ms, "_ENGINE_YIELD", {})
     monkeypatch.setattr(ms, "_engine_stats_last_save", 0.0)
+    # 熔断的内存态与文件重置同等对待。文件早就指到临时目录，但 `_BACKEND_HEALTH`
+    # 是模块级 dict：先跑的用例把一家引擎熔断（或 import 期 `_load_circuit_state`
+    # 从真实 ~/.dhole 恢复了还没过期的冷却）之后，同 worker 里之后每一个驱动
+    # metasearch 的用例都少一家引擎——实测（2026-10-24 全量 xdist）语言车道用例
+    # 在 brave 被前一个用例熔断时拿到 `circuit_open`，单跑永远复现不了。冷却类
+    # 用例都自布状态（monkeypatch.setattr 或 clear），统一清空对它们无感。
+    monkeypatch.setattr(ms, "_BACKEND_HEALTH", {})
+    monkeypatch.setattr(ms, "_CHALLENGE_COUNTS", {})
+    # reranker 单例同理（同一类跨用例泄漏，2026-10-24 实验证实：evals/.runtime/
+    # prove_reranker_leak.py）。test_search_5 那对「live round」用例把引擎/缓存/
+    # ensure_reranker 全桩了，输入完全确定，但 `_rank` 在排名时问的是**暖着的
+    # 单例**——同 worker 里任何一个先跑的用例把真模型加载起来之后，真分数会盖在
+    # 预置的 neural_raw 上（rerank 的设计就是「盖在行上」），农场行拿到高分就
+    # 过了农场闸。单跑 6/6 绿、全量偶发红，就是这个差。要真模型的用例自己在测试
+    # 体里加载；这里给每个用例同一个「冷启动」基线。
+    from dhole_mcp import reranker as _reranker_mod
+    monkeypatch.setattr(_reranker_mod, "_reranker", None)
+    monkeypatch.setattr(_reranker_mod, "_reranker_tried", False)
+    monkeypatch.setattr(_reranker_mod, "_reranker_unavailable_reason", "")
+    monkeypatch.setattr(_reranker_mod, "_reranker_lock", None)
+    monkeypatch.setattr(_reranker_mod, "_load_attempts", 0)
+    monkeypatch.setattr(_reranker_mod, "_last_attempt_ms", 0.0)
     # 17.0 B2: 代理池（第四个可写状态文件 search_proxies.json）连同它的重定向一起
     # 删了 —— 现在代理只来自环境变量，没有落盘可污染。
     # The cookie jar (G7) is the state file that still holds credentials, and

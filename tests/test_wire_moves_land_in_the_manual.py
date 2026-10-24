@@ -448,7 +448,18 @@ def test_connect_stays_inside_the_packed_budget():
 # 于是"建图不花钱"这个前提进了 agent 的取舍。新句改成记账：0 只在 `sitemap=true`
 # 与 `resume_token=` 续页这两条不联网的路径上成立，逐跳走时一步一页。完整口径
 # （含 max_pages 只约束逐跳那一半）住 references/tools.md，wire 只留这一句。
-CONNECT_CEILING = 34_357
+CONNECT_CEILING = 36_291
+# 2026-10-24 提升清单 2 web_recall：上抬 +842（35,449 → 36,291），第 13 颗工具
+# （工具行 +714、路由行 +128）。买的是「本机已读页面的检索」——零网络、零新模型，
+# LIKE 预筛（json 转义翻存储层形状）+ 页级 BM25 + 在场才用的交叉编码器重排。
+# 十二兄弟的逐字账见下两节。
+# 2026-10-24 web_act 动作面：upload/dialog 两颗动作 + frame 寻址 + tab 页签管理
+# 全住在 actions 描述里（web_act 4,415 → 4,400）；描述被 292 帽压着（今 256 字符），
+# 细节全住 tools.md 的 Page interaction 一节。其余十一颗逐字未动。
+# 2026-10-24 提升 3.2 web_research：上抬 +1,107（34,357 → 35,464），第 12 颗工具
+# （工具行 + 路由行）。买的是"一问一证据包"—— 搜索→取前 N→focus 读取→[n]+URL
+# 引用格式这条链从前要调用方自己串（N 次往返 + 自己拼 [n]）。与"能力面是产品"的
+# 立场一致；深度语义住 sys_guide 按需付，wire 只留四颗参数与一句行为描述。
 # 2026-10-23 R3 include_headers：上抬 +638（33,264 → 33,902）——
 # `web_read` +353、`web_request` +285，买的是状态行 / 响应头 / 302 链。
 # 2026-10-23 R4 save_to / max_save_bytes：再上抬 +455（33,902 → 34,357），两颗都在

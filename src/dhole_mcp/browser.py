@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from random import randint
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from dhole_mcp.install import browser_binary_command
 
@@ -128,6 +128,96 @@ DISABLED_RESOURCE_TYPES: Set[str] = {
     "font", "image", "media", "beacon", "object",
     "imageset", "texttrack", "websocket", "csp_report", "stylesheet",
 }
+
+# ─── 这一发的网络账 ──────────────────────────────────────────────────────────
+#
+# 为什么只记"有东西没成"：实测 163 正文页实际发出 55 个请求、失败 0；B 站 40 个、
+# 失败 0。把这份账每次都带上等于给绝大多数调用加 3-4KB 噪声，而它唯一有用的时刻
+# 是页面**没说清为什么**的时候 —— js_shell 的正文缺口背后常常是一个 403 的数据接口。
+#
+# 为什么没有 console：同一批实测里 163 的 117 条 console error 与 B 站的 11 条全部是
+# `Failed to load resource` —— 那是我们自己 abort 图片/样式表的回声，不是站点的问题；
+# 过滤掉之后两页各有 0 条真 error（剩的只是 document.domain 弃用、parser-blocking
+# 建议这类 warning）。装一个只会产出回声的监听器是纯税，所以第一版不做。
+
+_NET_FAILED_CAP = 10
+_NET_URL_MAX = 160
+
+
+def _mask_url(url: str, *, max_len: int = _NET_URL_MAX) -> str:
+    """URL 的骨架，查询串的**值**打码。
+
+    凭据最常见的泄漏面是查询串（`?token=…`、`?sig=…`），而仓库的硬约束是凭据值
+    不进 transcript。键名留着 —— "失败的那条请求上带着哪个参数"才是诊断信息，
+    "那个参数是什么"不是。
+    """
+    try:
+        parts = urlsplit(url or "")
+    except Exception:
+        return (url or "")[:max_len]
+    if parts.query:
+        kept = []
+        for pair in parts.query.split("&"):
+            if not pair:
+                continue
+            key = pair.split("=", 1)[0]
+            kept.append(f"{key}=***" if "=" in pair else key)
+        parts = parts._replace(query="&".join(kept))
+    # fragment 不参与请求，留着只会让人以为它被发出去了
+    return urlunsplit(parts._replace(fragment=""))[:max_len]
+
+
+def _note_net_response(watch: dict, resp: Any) -> None:
+    """把一条响应记进这一发的账本（作者只有这里，读者是 `_net_payload`）。
+
+    数的是**拿到响应**的请求：被 route abort 的资源根本没有 response 事件，所以
+    "页面实际发出的请求"这个口径不用另设过滤。主文档的 4xx 不记 —— 它已经是
+    `result.status`，在信封里重复一次只是噪声。
+    """
+    try:
+        req = getattr(resp, "request", None)
+        rt = str(getattr(req, "resource_type", "") or "")
+        if rt in DISABLED_RESOURCE_TYPES:
+            return
+        watch["requests"] = int(watch.get("requests") or 0) + 1
+        status = int(getattr(resp, "status", 0) or 0)
+        if status >= 400 and rt != "document":
+            failed = watch.setdefault("failed", [])
+            if len(failed) < _NET_FAILED_CAP:
+                failed.append({
+                    "status": status,
+                    "type": rt,
+                    "url": _mask_url(str(getattr(resp, "url", "") or "")),
+                })
+    except Exception:
+        pass
+
+
+def _net_payload(watch: Optional[dict], ssrf_watch: Optional[list] = None) -> Optional[dict]:
+    """账本 → 上线的那一格。**什么都没坏就交 None**（缺席即"这一页很干净"）。
+
+    `blocked_by_guard` 从 `ssrf_watch` 派生，不另设收集器：那件事的作者只有一个
+    （route handler 的 SSRF 闸），抄第二份就会有两个各自漂走的答案。
+    """
+    if not watch:
+        return None
+    failed = watch.get("failed") or []
+    guard: List[str] = []
+    for item in (ssrf_watch or []):
+        try:
+            host = str(item[0] or "")
+        except Exception:
+            continue
+        if host:
+            guard.append(host)
+    if not failed and not guard:
+        return None
+    out: Dict[str, Any] = {"requests": int(watch.get("requests") or 0)}
+    if failed:
+        out["failed"] = list(failed)
+    if guard:
+        out["blocked_by_guard"] = sorted(set(guard))[:5]
+    return out
 
 # Cloudflare challenge iframe URL pattern
 __CF_PATTERN = re.compile(
@@ -1613,6 +1703,12 @@ class BrowserSession:
         # `session.close()`，多一个字段买不到东西；而 TTL 必须在复用那一刻量，不能
         # 指望空闲监控（它只管 auto 会话）。
         self._pin: Optional[Dict[str, Any]] = None
+        # 多页签登记表（2026-10-24 可提升清单 1d）：钉住的调用链里 `{"tab": ...}`
+        # 开出来的额外页面，随主槽一起活到下一次钉住的调用（`{"tab": N}` 直达）。
+        # 每格 {"page", "stamp"}——这些页是链内 goto 的，没有 route/响应钩子
+        # （钩子只装在 fetch 自己导航的那一页上），因此 `_pin_close` 对它们
+        # 的 `slot.get("listener")` 天然缺席即跳过。
+        self._pin_tabs: List[Dict[str, Any]] = []
 
     # ── Lifecycle ─────────────────────────────────────────────────
 
@@ -1923,9 +2019,11 @@ class BrowserSession:
         self._pin = None
         if self._allowed_hosts is not None or self._cdp_attached:
             await self._pin_close(slot, "attach")
+            await self._pin_close_tabs("attach")
             return None, "attach"
         if time.monotonic() - float(slot["stamp"]) > PIN_TTL_S:
             await self._pin_close(slot, "ttl")
+            await self._pin_close_tabs("ttl")
             return None, "ttl"
         page = slot["page"]
         try:
@@ -1933,9 +2031,11 @@ class BrowserSession:
         except Exception:
             gone = True
         if gone:
+            await self._pin_close_tabs("closed")
             return None, "closed"
         if not _is_entry_target(url, page.url):
             await self._pin_close(slot, "host")
+            await self._pin_close_tabs("host")
             return None, "host"
         if for_actions and not self._same_document(url, page.url):
             # R01-027. Same host is not the same page: an action's `index` counts
@@ -2003,16 +2103,25 @@ class BrowserSession:
         except Exception:
             logger.debug("pinned page (%s) would not close", reason, exc_info=True)
 
+    async def _pin_close_tabs(self, reason: str) -> None:
+        """放掉登记表里的全部额外页签（驻留被拒、会话收尾时）。摘取即清空：
+        留着只会变成"没有主人还活着的页面"。"""
+        tabs, self._pin_tabs = self._pin_tabs, []
+        for slot in tabs:
+            await self._pin_close(slot, reason)
+
     async def _pin_release(self) -> None:
-        """会话收尾时放掉驻留页（`close()` 调；崩溃路径由 context 自己兜）。"""
+        """会话收尾时放掉驻留页与页签登记表（`close()` 调；崩溃路径由 context 自己兜）。"""
         slot, self._pin = self._pin, None
         if slot is not None:
             await self._pin_close(slot, "session")
+        await self._pin_close_tabs("session")
 
     async def _install_page_guards(self, page: Any, *, entry_url: str,
                                    disable_resources: bool,
                                    sent_headers: Optional[Dict[str, str]],
-                                   ssrf_watch: list):
+                                   ssrf_watch: list,
+                                   net_watch: Optional[dict] = None):
         """装上**这一发自己的**两道守卫，并把摘钩要用的三样东西交回去。
 
         route 那一层（资源拦截 + SSRF + 凭据绑在入口主机上）与 response 捕获都只在这
@@ -2022,6 +2131,12 @@ class BrowserSession:
 
         `entry_url` 由调用方给：新导航是请求的那个 URL，驻留复用是这一页自己的 URL
         （同站豁免的参照物必须是它实际站在哪里）。
+
+        `net_watch` 是这一发的网络账本（调用方每次新建，不跨发复用）。它挂在**已有的**
+        response 钩子上，不另装监听器 —— 那个钩子在复用分支上会被摘掉重装，多装一个
+        request/console 监听器就得同步改三处摘钩点，而实测 console 的有效信号是 0 条
+        （见文件头那段注释）。守卫拦下的主机不在这里记：`ssrf_watch` 本来就是那件事的
+        唯一作者，`_net_payload` 从它派生。
         """
         route_handler = _create_route_handler(
             disable_resources, None, ssrf_watch, entry_url=entry_url,
@@ -2041,6 +2156,8 @@ class BrowserSession:
                     final_response[0] = resp
             except Exception:
                 pass
+            if net_watch is not None:
+                _note_net_response(net_watch, resp)
 
         page.on("response", _handle_response)
         return route_handler, _handle_response, final_response
@@ -2165,8 +2282,13 @@ class BrowserSession:
                     # entry_url）；摘不掉就宁可弃页：带着一张旧地图开车是 SSRF 边界，
                     # 不接受"大概没事"。
                     try:
-                        await slot["page"].unroute("**/*", slot["route"])
-                        slot["page"].remove_listener("response", slot["listener"])
+                        # 链内切过页签的驻留主槽不带钩子（route/listener 只在
+                        # fetch 自己导航的那一页上）——缺席即跳过，别 KeyError。
+                        if slot.get("route") is not None:
+                            await slot["page"].unroute("**/*", slot["route"])
+                        if slot.get("listener") is not None:
+                            slot["page"].remove_listener("response",
+                                                         slot["listener"])
                     except Exception:
                         await self._pin_close(slot, "unhook")
                         if pin_out is not None:
@@ -2196,10 +2318,14 @@ class BrowserSession:
                 # Route handler: 资源拦截 + SSRF 守卫（每条路径都装 —— 截图/交互
                 # session 里浏览器同样会被重定向走，那条路径此前一道防线都没有）。
                 # 新导航按请求的 URL 判同站，驻留复用按这一页自己的 URL 判。
+                # `net_watch` 每次 fetch 新建：账本记的是**这一发**发生了什么，驻留
+                # 复用的那一页上还留着上一发的历史，串过来就是一句假话。
+                net_watch: Dict[str, Any] = {"requests": 0, "failed": []}
                 _route, _listener, final_response = await self._install_page_guards(
                     page, entry_url=(page.url if reused else url),
                     disable_resources=actual_disable_resources,
-                    sent_headers=actual_extra_headers, ssrf_watch=ssrf_watch)
+                    sent_headers=actual_extra_headers, ssrf_watch=ssrf_watch,
+                    net_watch=net_watch)
                 if reused:
                     first_response = slot["response"]
 
@@ -2291,8 +2417,30 @@ class BrowserSession:
                 if isinstance(_pin_state, dict):
                     _pin_state["reused"] = reused
                     _pin_state["pinned"] = _pin_lane
+                    # 页签（1d）的供给：attach 的会话不许开页签（那是用户自己的
+                    # 浏览器）；入口 URL 是 tab.open 落地检查的锚；prior_tabs 把
+                    # 上一次钉住的登记表交给这条链（`{"tab": N}` 直达）。
+                    _pin_state["attach"] = (self._allowed_hosts is not None
+                                            or self._cdp_attached)
+                    _pin_state["entry_url"] = url
+                    if _pin_lane:
+                        # 页签交接：0 号位永远是导航去的那个 URL，但钉住的那一页
+                        # （含「target 拒复用、链点名了同站另一页」的情形）与登记表
+                        # 里的页签按号递补进 1..N——`{"tab": 1}` 直达。这些页从此
+                        # 归这一次调用管：存槽时重建状态，失败由 finally 收。
+                        _prior: List[Any] = []
+                        _slot_page = (slot or self._pin or {}).get("page")
+                        if _slot_page is not None:
+                            _prior.append(_slot_page)
+                        _prior.extend(s.get("page") for s in self._pin_tabs)
+                        _pin_state["prior_tabs"] = _prior
+                        if slot is None and self._pin is not None:
+                            self._pin = None      # 链接管了这一页
+                        self._pin_tabs = []
 
                 # Page action callback
+                orig_page = page
+                _chain_tabs: Optional[List[Any]] = None
                 if actual_page_action:
                     try:
                         result = actual_page_action(page)
@@ -2300,6 +2448,19 @@ class BrowserSession:
                             await result
                     except Exception as e:
                         logger.warning(f"page_action callback error: {e}")
+                    # 链内 tab 动作重绑了活动页：读回/落账/截图从此跟着新活动页走
+                    # （`active_page` 只在链真的切过页时才在）。原页的 route/响应
+                    # 钩子不属于新活动页——落账那一发诚实地不带导航响应（见下）。
+                    _active = _pin_state.get("active_page") \
+                        if isinstance(_pin_state, dict) else None
+                    if _active is not None and _active is not page:
+                        try:
+                            if not _active.is_closed():
+                                page = _active
+                        except Exception:
+                            pass
+                    if isinstance(_pin_state, dict):
+                        _chain_tabs = _pin_state.get("tab_pages")
 
                 # Wait for selector
                 if actual_wait_selector:
@@ -2316,8 +2477,9 @@ class BrowserSession:
                 # attach 模式不做：那是在驱动用户自己的浏览器。
                 # 驻留复用也不做：那是一段"刚到站"的动作轨迹，而这一页是上一发就来过
                 # 的那一页 —— 再滚一遍只会让下一次截图站在不同的滚动位置上。
+                # 链内切过页签也不做：轨迹属于"刚到站的那一页"，活动页是链里挑的。
                 if self._is_stealthy and self._humanize and not self._cdp_attached \
-                        and not reused:
+                        and not reused and page is orig_page:
                     try:
                         await _simulate_human_behavior(page)
                     except Exception as e:
@@ -2365,9 +2527,24 @@ class BrowserSession:
 
                 # Build response
                 from dhole_mcp.fetcher import response_from_browser_page
-                response = await response_from_browser_page(
-                    page, first_response, final_response[0]
-                )
+                if page is orig_page:
+                    response = await response_from_browser_page(
+                        page, first_response, final_response[0]
+                    )
+                else:
+                    # 活动页是链里切过去的页签：first/final response 是**入口页**
+                    # 那一笔导航的，安在它头上就是"状态行说 A、正文说 B"。tab.open
+                    # 在开页时把这一页自己的导航响应挂在页上（`_dhole_nav_response`），
+                    # 落账用它；没有（链内切到一枚没导航过的页）就诚实缺席。
+                    response = await response_from_browser_page(
+                        page, getattr(page, "_dhole_nav_response", None), None)
+                # 网络账挂在抓取层的响应上（`Response.network`，slots 里的一格）：
+                # 抓取层不知道线格式长什么样，转成 ResponseModel 字段是 server 层的事
+                # （`_translate_response`）。干净的一页这里是 None。
+                try:
+                    response.network = _net_payload(net_watch, ssrf_watch)
+                except Exception:
+                    logger.debug("could not attach the network ledger", exc_info=True)
 
                 # Memory cleanup: trigger Chrome's internal GC + cache drop
                 # via CDP Memory.simulatePressureNotification. This releases
@@ -2391,10 +2568,27 @@ class BrowserSession:
                 # 时这三样都要被换掉，而 `response` 是 `first_response` 的缺席兜底 ——
                 # 这一发若因动作而导航了，留下的就该是那一笔的答案，不是上一发的。
                 if _pin_lane:
-                    self._pin = {"page": page, "route": _route,
-                                 "listener": _listener,
-                                 "response": final_response[0] or first_response,
+                    self._pin = {"page": page,
+                                 # 钩子只长在 fetch 自己导航的那一页上；活动页是
+                                 # 链里切过去的页签时，原页的 route/response 不许
+                                 # 冒充它的（下一次复用的摘钩会按缺席跳过）。
+                                 "route": _route if page is orig_page else None,
+                                 "listener": (_listener
+                                              if page is orig_page else None),
+                                 "response": (final_response[0] or first_response)
+                                 if page is orig_page else None,
                                  "stamp": time.monotonic()}
+                    # 链交回来的页签表（原页之外的每一页）留进登记表，下一次钉住
+                    # 的调用 `{"tab": N}` 直达；已关/已死的条目就地摘除。
+                    kept: List[Dict[str, Any]] = []
+                    for tp in (_chain_tabs or []):
+                        try:
+                            if tp is not page and not tp.is_closed():
+                                kept.append({"page": tp,
+                                             "stamp": time.monotonic()})
+                        except Exception:
+                            pass
+                    self._pin_tabs = kept
                     keep = True
                     if pin_out is not None:
                         pin_out["outcome"] = "reused" if reused else "pinned"
@@ -2454,6 +2648,21 @@ class BrowserSession:
                 # 自己的名册判断（`Fetch.enable` 是页级的，留着就是一支按旧名册行事的钩子）。
                 if fence is not None:
                     await fence.remove()
+                # `keep=False`（没驻留、或这一发失败）：链开出来的额外页签连同
+                # 登记表里任何残留一起收——没驻留就没主人。keep=True 时页签刚
+                # 存进登记表（存槽那一步），这里一步都不碰。
+                if not keep:
+                    for tp in (_chain_tabs or []):
+                        if tp is page:
+                            continue
+                        try:
+                            if not tp.is_closed():
+                                await tp.close()
+                        except Exception:
+                            pass
+                    for s in self._pin_tabs:
+                        await self._pin_close(s, "no-keep")
+                    self._pin_tabs = []
                 # `keep` 只在这一发真的把页面存进驻留槽时才立起来。除此之外（包括
                 # 失败的那一发、包括调用方没要驻留的每一发）关页与今天逐字一致 ——
                 # 默认行为一寸不动，是这一刀的合同。

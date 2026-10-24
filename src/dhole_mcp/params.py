@@ -556,6 +556,15 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         # 状态码"变成"把整份响应头也抄进 transcript"。
         "include_headers": "bool",
     },
+    # 3.2 · 证据包那颗门：三颗数字按数字读（字符串客户端把 "3" 写成 3 是常态），
+    # query 是字符串。夹取的宣告住在方法体里（clamped 行），这里只管类型。
+    "web_research": {
+        "max_sources": "int", "per_source_chars": "int", "timeout": "number",
+    },
+    # 提升清单 2 · 本地缓存检索：limit 按数字读（1-20 的夹取住在 recall_pages）。
+    "web_recall": {
+        "limit": "int",
+    },
     # §4 页面动作那颗。rawlist：动作链的每一个对象都是一个不同键的形状
     # （{click:…} / {fill:…} / {wait:…}），逐颗归一化会读掉那些键本身。
     # 两颗会做决定的布尔同样要读字符串写法：`confirm: "false"` 如果按裸值传，

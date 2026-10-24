@@ -32,7 +32,7 @@ def _help_epilog() -> str:
         f"  {ui.cyan('dhole --doctor')}     {ui.dim('same as `dhole doctor` (accepted for backwards compatibility)')}",
         f"  {ui.cyan('dhole engines')}      {ui.dim('show / reset / live-test engine health (list|reset|probe)')}",
         f"  {ui.cyan('dhole config')}       {ui.dim('list / set / unset persisted knobs in ~/.dhole/config.json (no host restart for per-call knobs)')}",
-        f"  {ui.cyan('dhole watch')}        {ui.dim('add/list/remove/run a page-change watchlist (checks reuse web_read check; exit 0 none, 1 changed, 2 error)')}",
+        f"  {ui.cyan('dhole watch')}        {ui.dim('add/list/remove/run a page-change watchlist (checks reuse web_read check; exit 0 none, 1 changed, 2 error; run --notify pops a desktop toast on changes)')}",
         f"  {ui.cyan('dhole wire')}         {ui.dim('the connect-face ledger (what each wire sentence costs every connection) and its lock: ledger|lock [--write --reason]')}",
         f"  {ui.cyan('dhole skill')}        {ui.dim('install the bundled agent skill (status|install)')}",
         "",
@@ -369,6 +369,7 @@ def _cmd_watch(argv: list[str], checker=None) -> int:
             if force not in (None, "http", "stealthy"):
                 print(ui.err("--force-fetcher must be http or stealthy"), file=sys.stderr)
                 return 2
+            notify = "--notify" in rest
 
             srv = MasterFetchServer()
 
@@ -415,6 +416,15 @@ def _cmd_watch(argv: list[str], checker=None) -> int:
                 if row.get("error"):
                     line += "  " + ui.err(row["error"])
                 print(line)
+            # 通知出口（提升清单 3）：默认关——cron 在无头机器上没有 toast，
+            # 沉默是诚实的默认。--notify 把 changed 行弹成桌面通知；它是旁路，
+            # 弹不弹、成不成都不动退出码的合同（0/1/2 只说页面的事）。
+            if notify and result["changed"]:
+                changed_rows = [r for r in result["rows"]
+                                if r["verdict"] == "changed"]
+                line = watch_mod.notify_changed(changed_rows)
+                if line:
+                    print("  " + ui.dim(line))
             print("  " + ui.dim(f"{result['checked']} checked · "
                                 f"{len(result['changed'])} changed · "
                                 f"{len(result['unchanged'])} unchanged · "

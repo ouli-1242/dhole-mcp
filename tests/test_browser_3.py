@@ -229,7 +229,10 @@ class TestTheReuseItself:
             pass
         action.pin_state = {}
         await _fetch(session, page_action=action)
-        assert action.pin_state == {"reused": True, "pinned": True}, action.pin_state
+        # 只钉合同（reused/pinned），不冻结整格：页签（1d）往里添了 attach /
+        # entry_url / prior_tabs 三颗链内键，那是同一格通信的另一面。
+        assert action.pin_state["reused"] is True and \
+            action.pin_state["pinned"] is True, action.pin_state
 
     @pytest.mark.asyncio
     async def test_a_chain_on_a_pinning_call_is_told_the_page_will_stay(self, session):
@@ -239,7 +242,8 @@ class TestTheReuseItself:
             pass
         action.pin_state = {}
         await _fetch(session, page_action=action)
-        assert action.pin_state == {"reused": False, "pinned": True}, action.pin_state
+        assert action.pin_state["reused"] is False and \
+            action.pin_state["pinned"] is True, action.pin_state
 
     @pytest.mark.asyncio
     async def test_a_chain_on_an_unpinned_call_is_told_nothing_was_kept(self, session):
@@ -247,7 +251,8 @@ class TestTheReuseItself:
             pass
         action.pin_state = {}
         await session.fetch(URL, page_action=action)
-        assert action.pin_state == {"reused": False, "pinned": False}, action.pin_state
+        assert action.pin_state["reused"] is False and \
+            action.pin_state["pinned"] is False, action.pin_state
 
 
 class TestTheGuardsAreReinstalledNotInherited:

@@ -535,7 +535,7 @@ def _ruler_module():
     return mod
 
 
-def test_the_default_connect_is_the_published_33_902():
+def test_the_default_connect_is_the_published_36_291():
     """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：34,357。
 
     这一条同时是量尺的回归锁：`tool_payload_measure._wire_for` 曾按工具数累加路由行，
@@ -676,12 +676,12 @@ def test_the_default_connect_is_the_published_33_902():
         defs, {td["name"] for td in defs}, parts)
 
     wire = _connect(None)
-    assert len(wire["names"]) == 11
+    assert len(wire["names"]) == 13
     assert ruler_compact == wire["tools_compact"], (
         f"仓库量尺与 wire 的 tools/list 对不上：{ruler_compact} vs {wire['tools_compact']}")
     assert ruler_instr == len(wire["instructions"]), (
         f"仓库量尺多算了路由行：{ruler_instr} vs wire {len(wire['instructions'])}")
-    assert ruler_compact + ruler_instr == 34_357
+    assert ruler_compact + ruler_instr == 36_291
 
 
 def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():

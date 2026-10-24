@@ -59,6 +59,9 @@ _WIRE_OMIT: dict = {
         "untrusted_content",
         # 一次干净成功不付诊断的钱（None 缺席）；有 code 才上线。
         "diagnosis",
+        # 浏览器档的网络账同理：干净的一页一个字节都不付（实测 163 页 55 个请求、0 失败）。
+        # 只有失败响应 / 安全拦截时才上线，形状见 models.ResponseModel.network。
+        "network",
         # 空正文的 0 不携带信息（缺席即"没有可计费的正文"）。
         "approx_tokens",
         # 没折叠任何样板时 0 不携带信息（缺席即"这页没有页内重复行"）。

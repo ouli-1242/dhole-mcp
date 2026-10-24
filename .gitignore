@@ -57,6 +57,8 @@ ROADMAP-personal.md
 research/
 notes/
 review/
+# 本地工作稿（提升计划、调研笔记）：只在本机存在，不进版本库。
+docs/
 loop/
 scratch/
 .scratch/

@@ -94,6 +94,14 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "pytest-mock>=3.14",
+    # 7,400 条用例单进程要 10 分钟，而最慢的一条只有 16 秒 —— 没有热点可优化，
+    # 只有并行能救（实测 16 worker 107 秒）。`-n auto` 不要用：xdist 把 auto 解成
+    # cpu_count（本机 32），而每个 worker 都要装一份 trafilatura + patchright，
+    # 32 份会把 16GB 机器压到 worker 非正常退出、xdist 自己抛 INTERNALERROR。
+    "pytest-xdist>=3.6",
+    # addopts 里的 `--timeout=120` 来自它（挂起守卫：一次死锁曾在 0% CPU 上坐了
+    # 17 分钟）。不声明的话，干净机器装完 dev 组跑 pytest 会直接死在不认识的参数上。
+    "pytest-timeout>=2.3",
     "ruff>=0.6",
     # 仅测试用：tests/test_pdf_real.py 现场生成加密 PDF 样本（不往仓库里塞二进制件）。
     # 运行时不需要它 —— PDF 提取走 pdfplumber（已并入 default deps）。
@@ -147,6 +155,10 @@ path = "src/dhole_mcp/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/dhole_mcp"]
 
+[tool.hatch.build.targets.sdist]
+# README 的封面、宣传片只在 GitHub 上取（走 raw URL），不进源码包。
+exclude = ["/assets"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Always import dhole_mcp from src/, never from a built wheel installed in
@@ -154,7 +166,23 @@ testpaths = ["tests"]
 # silently runs the stale installed copy and src/ edits go untested. This has
 # bitten the project 4+ times. pythonpath (pytest 7+) wins over install.
 pythonpath = ["src"]
-addopts = ["-m", "not e2e and not live"]
+# `-n 8` and `--timeout=120` are not decoration; both were measured on this tree
+# (7,415 tests, 2026-10-24):
+#   serial      617s
+#   -n 8        131s   ← the default
+#   -n 16       107s   (diminishing; use it when the box has the RAM)
+#   -n 32      CRASH   xdist INTERNALERROR — `-n auto` resolves to cpu_count, and
+#                      each worker imports its own trafilatura + patchright, so 32
+#                      copies exhaust a 16GB box and workers die under it. Never
+#                      use `-n auto` here.
+# There is no hotspot to optimise: the slowest single test is 16s, the slowest 45
+# add up to 34% of the run, and the other 7,370 average 55ms. Parallelism is the
+# only lever that moves this suite.
+# `--timeout=120` is the hang guard: a deadlocked run used to sit at 0% CPU for
+# 17 minutes with no output. 120s is 7x the slowest real test, so it can only fire
+# on a genuine hang. `pytest -n 0` is the escape hatch when debugging one test or
+# running `-m e2e` (real subprocesses).
+addopts = ["-m", "not e2e and not live", "-n", "8", "--timeout=120"]
 markers = [
     "e2e: end-to-end tests that spawn a real dhole.exe subprocess. Skip by default in CI; run manually with `pytest -m e2e`.",
     "real_state_paths: opt out of the autouse state-file isolation; the test asserts where paths.py resolves state files, so redirecting them would make it verify nothing.",

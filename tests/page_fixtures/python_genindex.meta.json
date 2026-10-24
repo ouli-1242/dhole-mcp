@@ -1,0 +1,15 @@
+{
+  "captured_at": "2026-10-24",
+  "captured_from_url": "https://docs.python.org/3/genindex.html",
+  "sha256": "9edbeed17efcf20b",
+  "kind": "list",
+  "content_links": 2,
+  "extracted_markdown_chars": {
+    "2.2.0": 177
+  },
+  "visible_text_chars": 866,
+  "label_share": 0.041,
+  "longest_nonlabel_run_chars": 115,
+  "note": "Python 文档索引：反例锁 —— 索引页哪怕长在 docs 域上也还是索引。",
+  "scrubbed": "否：判定的证据就是整页的链接/文本分布，裁剪会让测量失真"
+}

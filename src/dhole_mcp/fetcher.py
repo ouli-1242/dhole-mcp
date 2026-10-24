@@ -190,6 +190,13 @@ class Response:
     __slots__ = (
         "_status", "_url", "_headers", "_body", "_encoding",
         "_reason", "_cookies", "_root", "_content_cached", "_meta_refresh",
+        # 浏览器档的网络账：只有浏览器那一档会写它（server 层再抄进
+        # ResponseModel.network）。放进 slots 是因为 Response 用 slots ——
+        # 没有这一格时 setattr 会抛 AttributeError，而那正是"收集器装好了却
+        # 传不出去"的失败形态。公开名而不是 property：一个 getter+setter 同名对
+        # 是合法 Python，但 `test_server_10` 的 AST 守卫会把它读成"后者遮蔽前者"，
+        # 而那条守卫护的是真缺陷 —— 不为一个属性去放宽它。
+        "network",
     )
 
     def __init__(
@@ -211,6 +218,7 @@ class Response:
         self._reason = reason or ""
         self._cookies = cookies or {}
         self._meta_refresh = meta_refresh
+        self.network: Optional[Dict[str, Any]] = None
         self._root: Any = None  # lazy lxml tree
         self._content_cached: Optional[str] = None
 

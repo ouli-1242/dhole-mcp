@@ -282,3 +282,102 @@ async def run_locked(checker: Callable[[str], Awaitable[dict]], *,
                      on_row: Optional[Callable[[dict], None]] = None) -> dict:
     with _Lock(path):
         return await run(checker, path=path, only=only, on_row=on_row)
+
+
+# ─── 桌面通知出口（提升清单 3）────────────────────────────────────────────
+#
+# watch run 的合同是**退出码**（0/1/2，cron 靠它分岔），而 cron 的盲区是「人不在
+# 终端前」：半夜 changed=true 只落进一行日志，早上才被看见。桌面通知补的正是这个
+# 消费者——不盯终端的人。**webhook 拒绝**，理由住在这一段的形状里：dhole 的身份是
+# 只读的本地工具层，一个服务端 webhook 会把它变成「拿着页面内容往外 POST 的进程」
+# ——新的外送面、新的凭据存储、新的 SSRF 审计，而「changed=true 已经交回给调用方」
+# 那一半，agent 宿主本来就看得见。缺的只有「不盯终端的人」，桌面通知就是全部。
+#
+# 三个平台各走自己的无依赖通道（实测 2026-10-24 本机 toast 可弹）：
+#   * Windows：WinRT toast 经 PowerShell（AppId 用 PowerShell 自己的，未注册的
+#     AppId 在 Win11 上会被通知中心静默丢弃）；
+#   * macOS：osascript display notification；
+#   * Linux：notify-send（缺席如实说，不装假）。
+# 通知**永远不改变退出码**：它是旁路，一次弹窗失败不能把「页面变了」说成「没变」。
+
+_NOTIFY_MAX_ROWS = 3
+
+
+def _toast_title() -> str:
+    return "dhole watch"
+
+
+def _changed_names(changed_rows: list[dict]) -> str:
+    """通知的正文：label 优先（人是给 label 起名字的），没有才退 url；3 行之后
+    折叠成计数——toast 是两行文字，不是清单。"""
+    names = [(r.get("label") or r.get("url") or "").strip()
+             for r in changed_rows]
+    names = [n for n in names if n]
+    shown = names[:_NOTIFY_MAX_ROWS]
+    text = ", ".join(shown)
+    hidden = len(names) - len(shown)
+    if hidden > 0:
+        text += f" and {hidden} more"
+    return text
+
+
+def _ps_quote(text: str) -> str:
+    """PowerShell 单引号字面量的转义：翻倍。这是唯一要过的引用关——子进程按
+    列表传参（无 shell），Windows 侧只此一处手工引号。"""
+    return "'" + text.replace("'", "''") + "'"
+
+
+def notify_changed(changed_rows: list[dict]) -> Optional[str]:
+    """changed 行弹一枚桌面通知。返回给 CLI 印的一行说明；None = 这台机器没有
+    通道（Linux 没有 notify-send）。**从不抛**：通知失败返回失败说明，一次弹窗
+    不能弄脏退出码的合同。"""
+    if not changed_rows:
+        return None
+    title, body = _toast_title(), _changed_names(changed_rows)
+    try:
+        sent = _fire(title, body)
+    except Exception as exc:  # noqa: BLE001 - 旁路的失败只配一行说明
+        return f"desktop notification failed: {exc.__class__.__name__}: {exc}"
+    if sent:
+        return f"desktop notification sent: {body}"
+    return ("no desktop notification outlet found on this machine "
+            "(Linux needs notify-send; macOS/Windows have one built in)")
+
+
+def _fire(title: str, body: str) -> bool:
+    """按平台发一枚 toast。True = 已发出；False = 这台机器没有通道。"""
+    import shutil
+    import subprocess
+    import sys
+
+    if sys.platform == "win32":
+        script = (
+            "[Windows.UI.Notifications.ToastNotificationManager, "
+            "Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null; "
+            "$t = [Windows.UI.Notifications.ToastNotificationManager]"
+            "::GetTemplateContent("
+            "[Windows.UI.Notifications.ToastTemplateType]::ToastText02); "
+            f"$null = $t.GetElementsByTagName('text').Item(0).AppendChild("
+            f"$t.CreateTextNode({_ps_quote(title)})); "
+            f"$null = $t.GetElementsByTagName('text').Item(1).AppendChild("
+            f"$t.CreateTextNode({_ps_quote(body)})); "
+            "$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}"
+            "\\WindowsPowerShell\\v1.0\\powershell.exe\'; "
+            "$null = [Windows.UI.Notifications.ToastNotificationManager]"
+            "::CreateToastNotifier($app).Show("
+            "[Windows.UI.Notifications.ToastNotification]::new($t))"
+        )
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True, timeout=30, check=True)
+        return True
+    if sys.platform == "darwin":
+        script = f'display notification {_ps_quote(body)} with title {_ps_quote(title)}'
+        subprocess.run(["osascript", "-e", script],
+                       capture_output=True, timeout=30, check=True)
+        return True
+    if shutil.which("notify-send"):
+        subprocess.run(["notify-send", title, body],
+                       capture_output=True, timeout=30, check=True)
+        return True
+    return False
