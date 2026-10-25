@@ -41,6 +41,29 @@
 | E1/E3/E8 | 三项跨轮三现 | backlog **升级标注**（R02-006，待排期）| P04/P05 |
 | 缓存回执行为澄清 | 缓存命中的回执**没有** learned-ceiling attempt 句是正确行为（没走 HTTP 档）——P5 复验曾误判为缺陷 | 行为正确（journal 在册，防复发误判）| W3 复验 |
 
+## round-03 新增/复发（P3 裁决后）
+
+| 区 | 现象 | 状态 | 来源 |
+|---|---|---|---|
+| page_type 词义 | 字段描述没说「article=散文抽取成功」——L1 把抽取形状读成页面体裁（视频频道页标 article） | **已修**（R03-004，fix-R03-F1：描述点名，词表与判定不动）| P10 |
+| 私网豁免作用域 | 首报「缓存回放不过门」→ P3 推翻：豁免是**进程级** identity store（在册），门与缓存同语义 | 无缺陷（行为澄清：进程级=会话间共享、CLI 进程不共享——R02-001 的故事） | P02 |
+| pending 信号位置 | 首报「顶层看不见确认闸」→ P3 推翻：顶层 summary 后缀+next_action 全句在场；**量具教训**：driver 100 字截断打印会藏掉信号 | 无缺陷（观测量具教训记 journal） | P08 |
+| recall 显著性 | 「我存的」无特权——语义契约下公平排序 | backlog **E12**（产品演进项） | P04 |
+| E8 since 档位词 | 「3d」四轮不收（错误句自带示例） | backlog 四现（升级标注维持） | P07 |
+| E3/E5/E10 | offset 整页口径 / 钳制句报剩余 / 404 行数字噪声——活体再现 | backlog（已建档，样本在册） | P03/P06 |
+
+## round-03 必测回归点（round-04 新画像真实回访）
+
+1. page_type 描述语义（article=散文抽取）——crawl 任意列表页行（fix-R03-F1）。
+2. R02-007 recall 变体合并（跨会话二访单行 variants=N）。
+3. R02-004 显式 timeout 不被 learned 压（带 timeout= 的重复调用）。
+4. R01-003 resume 照抄跨会话（next_resume_token + next_action 可照抄句）。
+5. R02-001 watch 私网错误行指路（真跨进程）。
+6. R02-003 401 recover_with=cred_defaults（外网墙或 fixture 对照）。
+7. R01-006/R01-010 challenge 同链取值 + drag 第一拒全形。
+8. R01-001/R01-008 feed 顶点点名坏源 + 缺省 20s 预算。
+9. per-call ignore_robots 三态（受控旁证进程，只指本地）。
+
 ## round-02 必测回归点（round-03 新画像真实回访）
 
 1. archive 档对 capture 索引页守卫：构造/重放索引页快照，content_ok 必须为 False 且 note 点名（fix-R02-F2）。

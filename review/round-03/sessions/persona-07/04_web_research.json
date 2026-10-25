@@ -1,0 +1,60 @@
+{
+ "query": "国债收益率 曲线 倒挂 2026 解读",
+ "sources": [
+  {
+   "n": 1,
+   "url": "https://www.55188.com/thread-13266335-1-1.html",
+   "title": "【原创】深度解析国债收益率曲线倒挂对股票投资的技术分析影响",
+   "chars": 645,
+   "fetcher": "stealthy",
+   "content_ok": true
+  },
+  {
+   "n": 3,
+   "url": "https://xueqiu.com/9121239035/412496544?_ugc_source=ugcbaiducard",
+   "title": "收益率曲线倒挂(利率倒挂) 一句话定义:正常情况下,债券期限越长、收益率越高(向上倾斜);倒挂就是短债收益率 > 长债收益率,曲线向下倾斜。市... - 雪球",
+   "chars": 249,
+   "fetcher": "http",
+   "content_ok": true
+  }
+ ],
+ "evidence": [
+  "[1] https://www.55188.com/thread-13266335-1-1.html\n[Focus: '国债收益率 曲线 倒挂 2026 解读'; NO block cleared the relevance cut (best score 0.986 against a cut of 1.0) - these 5 of 52 blocks are the highest-scored, not matches. 4 of the 5 words you named occur nowhere on this page ('国债收益率', '曲线', '倒挂', '解读'). Pass focus='' for the full page.]\n\n***\n2022-1-22\n金钻指标自动加密、自动发货流程\n3\n2026-8-23\n0\n1万\n\n***\n2026-8-23\n金钻权限组申请条件（必读）\n3\n2019-2-18\n22\n61万\n\n***\n昨天 23:10\n【至尊二合一】淑女一号（原版+升级版）+ 至高交易心法\n9\n...\n2\n3\n4\n5\n6\n..\n34\n2341205\n2026-7-8\n1010\n36万\n\n***\n昨天 22:40\n年卡！年卡！【竞价为王】专1进2竞价类排序●1天1支●捕捉妖龙●抓牛利器\n...\n2\n3\n4\n5\n6\n..\n57\n2658979\n2026-8-8\n1695\n9万\n\n***\n昨天 21:52\n一进二模型【突破型】【稳健型】【竞价型】【能量型】探二板！\n1\n...\n2\n3\n4\n2665270\n2026-10-8\n117\n4万",
+  "[3] https://xueqiu.com/9121239035/412496544?_ugc_source=ugcbaiducard\n[Focus: '国债收益率 曲线 倒挂 2026 解读'; NO block cleared the relevance cut (best score 0.0 against a cut of 1.0) - these 5 of 15 blocks are the highest-scored, not matches. none of the 5 words you named occurs on this page ('国债收益率', '曲线', '倒挂', '2026', '解读')"
+ ],
+ "failed": [
+  {
+   "n": 2,
+   "url": "https://www.55188.com/thread-12038506-1-1.html",
+   "why": "timeout: the 42201ms call budget ran out during the stealthy browser tier (spent 42266ms; 65ms over it is the 1500ms grace that lets an in-flight step finish, not a second budget). No content was extr"
+  }
+ ],
+ "more_hits": [
+  {
+   "url": "https://www.sohu.com/a/864351310_122066678",
+   "title": "警惕！美联储最爱衰退信号：收益率曲线倒挂来袭_经济_市场_通胀风险"
+  },
+  {
+   "url": "https://www.zhiguf.com/questions_detail/9523269",
+   "title": "国债收益率曲线倒挂现象的经济含义解析-指股网"
+  },
+  {
+   "url": "https://xueqiu.com/1678127602/407013300?_ugc_source=ugcbaiducard",
+   "title": "国债2026 $美国国债20+年ETF-iShares(TLT)$ 美国债券综合分析报告图片引用了奥地利学派经济学家路德维希·冯·米塞... - 雪球"
+  },
+  {
+   "url": "https://finance.sina.com.cn/world/2023-07-25/doc-imzcvmfi8545037.shtml",
+   "title": "收益率曲线倒挂 美债观察人士给出另类解读|美联储_新浪财经_新浪网"
+  },
+  {
+   "url": "https://www.bilibili.com/video/BV1Yk4y1G7nU/",
+   "title": "7分钟给你讲明白国债收益率倒挂原理!_哔哩哔哩_bilibili"
+  }
+ ],
+ "summary": "2 of 3 source(s) read into an evidence pack for '国债收益率 曲线 倒挂 2026 解读'; 1 failed (each row says why)",
+ "note": "each evidence block starts with [n] and its URL - cite that pair. Per-source text is focus-filtered to the query, not the whole page; web_read a source (urls= batches work) for everything it says. more_hits are the search rows not read",
+ "_wall_s": 51.42,
+ "_tool": "web_research",
+ "_tag": "p07-S4-交叉验证(急但要用研究档)#04",
+ "_ts": "2026-10-25T17:40:05.470042+00:00"
+}

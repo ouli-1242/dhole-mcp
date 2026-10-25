@@ -1,0 +1,32 @@
+[p08 谷雨·前端] session e4c2e051842f4890b0f6de46a125829c server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p08 S1-登录态全链 ----
+[p08-S1-登录态全链#01] web_act   4.1s ok=True err=- no_content chars=34
+      summary: 200 OK · 34B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+      login: {"summary": "200 OK · 34B markdown · stealthy · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dia
+      (pause 9s - throttle)
+
+---- p08 S2-checkout 该问就问(确认闸) ----
+[p08-S2-checkout 该问就问(确认闸)#02] web_act   3.2s ok=False err=- no_content chars=27
+      summary: 200 OK · 27B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+      checkout-noconfirm: {"summary": "200 OK · 27B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the brows
+      (pause 8s - throttle)
+
+---- p08 S3-挑战页同链取值(变卦后回归) ----
+[p08-S3-挑战页同链取值(变卦后回归)#03] web_act   4.3s ok=True err=- no_content chars=35
+      summary: 200 OK · 35B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+      challenge: {"summary": "200 OK · 35B markdown · stealthy · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dia
+      (pause 8s - throttle)
+
+---- p08 S4a-drag 陌生键第一拒全形(回归) ----
+[p08-S4a-drag 陌生键第一拒全形(回归)#04] web_act   0.0s ok=False err=invalid_request: action 0 'drag' must be {selector|index, to} - the element to drag plus w invalid_request chars=
+      summary: invalid request · action 0 'drag' must be {selector|index, to}
+      drag-first-refusal: {"error": "invalid_request: action 0 'drag' must be {selector|index, to} - the element to drag plus where to drop it; 'to' takes the same target shapes (a CSS selector string or {\"selector\"|\"index\", \"expect\"?}) - unexpected key(s): ['from']", "summary": "invalid request · action 0 'drag' must 
+      (回归 R01-010: 期望第一拒给全形 {selector|index, to} + unexpected keys)
+      (pause 7s - throttle)
+
+---- p08 S4b-drag 正形 ----
+[p08-S4b-drag 正形#05] web_act   5.3s ok=False err=- no_content chars=87
+      summary: 200 OK · 87B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+      drag-ok: {"summary": "200 OK · 87B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the brows
+P08 DONE

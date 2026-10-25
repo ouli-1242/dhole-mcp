@@ -1,0 +1,61 @@
+{
+ "feeds": [
+  {
+   "source_url": "http://127.0.0.1:8399/feed.xml",
+   "source_title": "dhole 靶站订阅源",
+   "fetched_at": "2026-10-25T17:38:47Z",
+   "items_older_than_since": 0,
+   "items_without_date": 2,
+   "note": "this source has 8 entries after the filters above; 5 are returned (`max_items=`) - the counts (`items_without_date`, `items_older_than_since`) are for all 8, not for the 5 shipped",
+   "items": [
+    {
+     "title": "靶站条目 1（0 天前）",
+     "url": "http://127.0.0.1:8399/article#item1",
+     "published": "2026-10-25T17:38:47+00:00",
+     "summary": "第 1 条摘要，用于 since 增量测试。"
+    },
+    {
+     "title": "靶站条目 2（1 天前）",
+     "url": "http://127.0.0.1:8399/article#item2",
+     "published": "2026-10-24T17:38:47+00:00",
+     "summary": "第 2 条摘要，用于 since 增量测试。"
+    },
+    {
+     "title": "靶站条目 3（2 天前）",
+     "url": "http://127.0.0.1:8399/article#item3",
+     "published": "2026-10-23T17:38:47+00:00",
+     "summary": "第 3 条摘要，用于 since 增量测试。"
+    },
+    {
+     "title": "靶站条目 4（3 天前）",
+     "url": "http://127.0.0.1:8399/article#item4",
+     "published": "2026-10-22T17:38:47+00:00",
+     "summary": "第 4 条摘要，用于 since 增量测试。"
+    },
+    {
+     "title": "靶站条目 5（5 天前）",
+     "url": "http://127.0.0.1:8399/article#item5",
+     "published": "2026-10-20T17:38:47+00:00",
+     "summary": "第 5 条摘要，用于 since 增量测试。"
+    }
+   ]
+  },
+  {
+   "source_url": "http://127.0.0.1:8399/no-such-feed.xml",
+   "error": "http_error_404: server returned error status",
+   "items_older_than_since": 0,
+   "items_without_date": 0,
+   "diagnosis": {
+    "code": "http_error_404",
+    "retryable": false,
+    "recover_with": ""
+   },
+   "items": []
+  }
+ ],
+ "summary": "2 URLs asked · 2 rows answered · 1 rows carried 5 items, newest first · 1 rows errored (http://127.0.0.1:8399/no-such-feed.xml - each row names its own error and diagnosis) · fetched live at 2026-10-25T17:38:47Z - this path holds no cache, so each row's `fetched_at` is when that document arrived",
+ "_wall_s": 0.01,
+ "_tool": "feed_read",
+ "_tag": "p07-S1-早盘增量(坏源混入,不带 timeout)#01",
+ "_ts": "2026-10-25T17:38:47.990221+00:00"
+}

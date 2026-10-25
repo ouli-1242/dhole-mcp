@@ -1,0 +1,112 @@
+{
+ "start_url": "http://127.0.0.1:8399/collections",
+ "pages": [
+  {
+   "url": "http://127.0.0.1:8399/collections",
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "推荐专题",
+   "fetched_at": "2026-10-25T17:33:54Z",
+   "summary": "200 OK · 1.1KB html · cache · cached copy, fetched 2.1 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/1",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "作品 1",
+   "fetched_at": "2026-10-25T17:33:54Z",
+   "summary": "200 OK · 337B html · cache · cached copy, fetched 2.1 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/2",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "作品 2",
+   "fetched_at": "2026-10-25T17:33:54Z",
+   "summary": "200 OK · 310B html · cache · cached copy, fetched 2.1 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/3",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "作品 3",
+   "fetched_at": "2026-10-25T17:33:54Z",
+   "summary": "200 OK · 310B html · cache · cached copy, fetched 2.1 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/4",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "作品 4",
+   "fetched_at": "2026-10-25T17:33:54Z",
+   "summary": "200 OK · 337B html · cache · cached copy, fetched 2.1 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/5",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "http",
+   "title": "作品 5",
+   "fetched_at": "2026-10-25T17:36:02Z",
+   "summary": "200 OK · 310B html · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/6",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "http",
+   "title": "作品 6",
+   "fetched_at": "2026-10-25T17:36:02Z",
+   "summary": "200 OK · 310B html · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/7",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "http",
+   "title": "作品 7",
+   "fetched_at": "2026-10-25T17:36:02Z",
+   "summary": "200 OK · 337B html · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/8",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "http",
+   "title": "作品 8",
+   "fetched_at": "2026-10-25T17:36:02Z",
+   "summary": "200 OK · 310B html · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/9",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "http",
+   "title": "作品 9",
+   "fetched_at": "2026-10-25T17:36:02Z",
+   "summary": "200 OK · 310B html · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  }
+ ],
+ "pages_crawled": 10,
+ "pages_discovered": 12,
+ "discover_only": true,
+ "truncated_by_max_pages": true,
+ "deadline_ms_applied": 30000,
+ "attempt_cap_ms": 30000,
+ "sitemap_used": false,
+ "duration_ms": 111,
+ "summary": "mapped 12 URL(s) at http://127.0.0.1:8399 (depth <= 2) using 10 page fetch(es); no content extracted; stopped: max_pages reached · plan 8a57b3742859 holds the whole map: 12 row(s), 10 shipped here, 2 never sent",
+ "next_action": "map stopped early (max_pages); raise max_pages= (up to 40) on this same call. 2 URL(s) were discovered but never sent. A map costs one request per page, so a deeper map is paid in requests; for a ONE-request map pass max_pages=1 (this page's own links) or sitemap=true (whole site, if it publishes one). For bodies rather than a URL list, web_crawl(url=...) from the same start is the other door. The 2 map row(s) that were never sent are held here with the 10 that shipped, under plan 8a57b3742859 (12 row(s) = the whole map, 1h): web_discover(url='http://127.0.0.1:8399/collections', resume_token='8a57b3742859:10') lists rows 11-12 and spends no request. web_discover(url='http://127.0.0.1:8399/collections', resume_token='8a57b3742859:0') re-lists the map from row 1. web_crawl(url='http://127.0.0.1:8399/collections', resume_token='8a57b3742859:10') fetches the CONTENT of those held-back rows, and raising max_pages reaches them the slow way - one request per row.",
+ "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+ "identity_applied": "allow_private",
+ "plan_id": "8a57b3742859",
+ "next_resume_token": "8a57b3742859:10",
+ "_wall_s": 0.12,
+ "_tool": "web_discover",
+ "_tag": "p05-S1-竞品站先出地图#01",
+ "_ts": "2026-10-25T17:36:02.933173+00:00"
+}

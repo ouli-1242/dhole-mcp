@@ -1,0 +1,32 @@
+[p10 荀羽·攻略作者] session a95229eb07554d889175ec9635f3e709 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p10 S1-搜攻略 ----
+[p10-S1-搜攻略#01] web_search   2.7s ok=None err=-  chars=
+      summary: Searched '鸣潮 2.3 版本 深渊 阵容 攻略' -> 5 results (5 high, 0 med, 0 low) from bing_global,sogou,yandex,baid
+      search: {"summary": "Searched '鸣潮 2.3 版本 深渊 阵容 攻略' -> 5 results (5 high, 0 med, 0 low) from bing_global,sogou,yandex,baidu; rerank=neural."}
+   - {"url": "https://shouyou.3dmgame.com/gl/574464.html", "title": "鸣潮2.3版本最强配队阵容是什么-2.3版本最强配队阵容推荐_3DM手游", "relevance_score"
+   - {"url": "https://app.ali213.net/gl/1651543.html", "title": "鸣潮2.3配队阵容推荐-鸣潮2.3版本最强配队阵容_游侠手游", "relevance_score": 0.9983}
+   - {"url": "https://www.bilibili.com/video/BV1kNNpeiEzN/?spm_id_from=333.788.recommend_more_video.14", "title": "【鸣潮】阵容推荐!最
+      (pause 8s - throttle)
+
+---- p10 S2-点进去(特殊页面:签名链/视频) ----
+[p10-S2-点进去(特殊页面:签名链/视频)#02] web_read   9.5s ok=True err=-  chars=4988
+      summary: 200 OK · 4.9KB markdown · stealthy · the markdown pass kept 404 characters of this page's 3,085 visi
+      miyoushe: {"content_ok": true, "error": "", "summary": "200 OK · 4.9KB markdown · stealthy · the markdown pass kept 404 characters of this page's 3,085 visible ones - it is an index, so this answer is its 51 links rendered as a list instead (* [title](url)), not a prose extraction", "page_type": "list"}
+      (pause 7s - throttle)
+[p10-S2-点进去(特殊页面:签名链/视频)#03] web_read   0.6s ok=True err=-  chars=999
+      summary: 200 OK · 999B markdown · http · redirected from https://www.bilibili.com/v/game/esports/ to https://
+      bilibili: {"content_ok": true, "error": "", "summary": "200 OK · 999B markdown · http · redirected from https://www.bilibili.com/v/game/esports/ to https://www.bilibili.com/c/game/", "page_type": "article"}
+      (E9 新区: 特殊页面给不给类型徽标)
+      (pause 8s - throttle)
+
+---- p10 S3-换文字版(存下来) ----
+[p10-S3-换文字版(存下来)#04] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · cache · cached copy, fetched 16.7 min ago · replayed from the cache: the fe
+      wiki: {"content_ok": true, "summary": "200 OK · 387B markdown · cache · cached copy, fetched 16.7 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. Thi
+      (pause 8s - throttle)
+
+---- p10 S4-算了+明天再说(跨会话) ----
+[p10 荀羽·明天] session 89ad8e527b534797ab4da26dc99d1d5b server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p10-misc#01] web_recall   0.0s ok=None err=-  chars=
+P10 DONE

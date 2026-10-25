@@ -1,0 +1,29 @@
+[p04 麦冬·教师] session 32eaa8eb2ffc457190e4b06d2e054777 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p04 S1-先看看说明书在哪(L1 求助) ----
+[p04-S1-先看看说明书在哪(L1 求助)#01] sys_guide   0.0s ok=None err=-  chars=
+      (回归 R01-009: 期望 13 tools 计数在场)
+      (pause 8s - throttle)
+
+---- p04 S2-存备课资料 ----
+[p04-S2-存备课资料#02] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · cache · cached copy, fetched 5.3 min ago · replayed from the cache: the fet
+      read: {"content_ok": true, "summary": "200 OK · 387B markdown · cache · cached copy, fetched 5.3 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This
+      (pause 7s - throttle)
+
+---- p04 S3-搜站内但词用错了 ----
+[p04-S3-搜站内但词用错了#03] web_crawl   0.2s ok=None err=-  chars=
+      summary: search='知识点' matched 0 of 5 crawled page(s) - the word only lives in page bodies, and search matches
+      crawl-search: {"summary": "search='知识点' matched 0 of 5 crawled page(s) - the word only lives in page bodies, and search matches URL path + title"}
+      (回归 R01-002: 期望 matched 0 of N 且解释词只活在正文)
+      (pause 8s - throttle)
+
+---- p04 S4-跨会话:上周存的页再给我 ----
+[p04 麦冬·下周] session 46beb3d2c7154458b52660dad5f72a59 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p04-misc#01] web_recall   0.4s ok=None err=-  chars=
+   - {"url": "https://www.163.com/dy/article/L90AC7MN0511D5IC.html", "title": "弗朗西斯哈伦森获2026年诺贝尔物理学奖", "is_stale": true}
+   - {"url": "https://zhuanlan.zhihu.com/p/389644512", "title": "什么是SaaS网站的最佳实践", "is_stale": false}
+      (pause 6s - throttle)
+[p04-misc#02] web_recall   0.9s ok=None err=-  chars=
+      recall-miss: {"terms_absent": ["语文", "识点"]}
+P04 DONE

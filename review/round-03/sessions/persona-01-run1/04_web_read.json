@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/article",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: URL targets internal/private IP (127.0.0.1 in 127.0.0.0/8)",
+ "summary": "invalid request · URL targets internal/private IP (127.0.0.1 in 127.0.0.0/8)",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. The URL is well-formed - what is refused is the address it points at. If you meant a public site, this one names a private range: search for the page instead. If this internal target is genuinely yours to fetch, the door is cred_defaults(set={'allow_private': true}) for loopback or {'allow_private': ['<host>']} to name one host - it never opens cloud metadata, which stays refused whatever the spelling.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.02,
+ "_tool": "web_read",
+ "_tag": "p01-S2-存两篇(变卦:先只要这几篇)#04",
+ "_ts": "2026-10-25T17:26:31.407514+00:00"
+}

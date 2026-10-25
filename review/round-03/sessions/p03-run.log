@@ -1,0 +1,39 @@
+[p03 蒲国栋·咨询] session 3a1e8d08f1a5464d98913cecdc4de0ef server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p03 S1-竞品批量(3个坏路径混入) ----
+[p03-S1-竞品批量(3个坏路径混入)#01] web_read   1.9s ok=None err=-  chars=
+      summary: 9 URLs asked · 7 answered without an HTTP error (`successful` counts exactly that, per row's status/
+      batch: {"summary": "9 URLs asked · 7 answered without an HTTP error (`successful` counts exactly that, per row's status/error) · 7 carry content you can quote (`content_ok=true` on the row). The two numbers answer different questions and are usually not equal: a row can answer 200 with a login wall, a payw
+   - {"url": "http://127.0.0.1:8399/work/1", "content_ok": true, "total_extracted_chars": 39, "error": ""}
+   - {"url": "http://127.0.0.1:8399/work/2", "content_ok": true, "total_extracted_chars": 36, "error": ""}
+   - {"url": "http://127.0.0.1:8399/work/3", "content_ok": true, "total_extracted_chars": 36, "error": ""}
+   - {"url": "http://127.0.0.1:8399/work/4", "content_ok": true, "total_extracted_chars": 39, "error": ""}
+   - {"url": "http://127.0.0.1:8399/work/5", "content_ok": true, "total_extracted_chars": 36, "error": ""}
+   - {"url": "http://127.0.0.1:8399/work/6", "content_ok": true, "total_extracted_chars": 36, "error": ""}
+   - {"url": "http://127.0.0.1:8399/work/7", "content_ok": true, "total_extracted_chars": 39, "error": ""}
+   - {"url": "http://127.0.0.1:8399/nope-a", "content_ok": false, "total_extracted_chars": 3, "error": "http_error_
+   - {"url": "http://127.0.0.1:8399/nope-b", "content_ok": false, "total_extracted_chars": 3, "error": "http_error_
+      (pause 9s - throttle)
+
+---- p03 S2-长报告只读后半(offset) ----
+[p03-S2-长报告只读后半(offset)#02] web_read   0.1s ok=True err=- truncated chars=7157
+      summary: 200 OK · 7.0KB markdown · http · truncated · the markdown extract kept 2,577 characters of this page
+      long-1: {"summary": "200 OK · 7.0KB markdown · http · truncated · the markdown extract kept 2,577 characters of this page while its markup holds 7,149 visible ones; this answer comes from the plain converter over the same bytes (markdown, page chrome included) rather than from the main-content detector · th
+      (pause 6s - throttle)
+[p03-S2-长报告只读后半(offset)#03] web_read   0.0s ok=True err=- truncated chars=7157
+      summary: 200 OK · 7.0KB markdown · cache · cached copy, fetched 0.1 min ago · truncated · replayed from the c
+      long-2: {"summary": "200 OK · 7.0KB markdown · cache · cached copy, fetched 0.1 min ago · truncated · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay
+      (pause 8s - throttle)
+
+---- p03 S3-给慢点的时间(显式 timeout) ----
+[p03-S3-给慢点的时间(显式 timeout)#04] web_read   0.1s ok=True err=-  chars=7157
+      summary: 200 OK · 7.0KB markdown · http · timeout clamped 59->30 s per attempt (this tier caps one attempt at
+      explicit-60s: {"summary": "200 OK · 7.0KB markdown · http · timeout clamped 59->30 s per attempt (this tier caps one attempt at 30s) · the markdown extract kept 2,577 characters of this page while its markup holds 7,149 visible ones; this answer comes from the plain converter over the same bytes (markdown, page c
+      (期望: summary 不出现 learned ceiling 5000ms 压制句 —— R02-004 回归)
+      (pause 8s - throttle)
+
+---- p03 S4-交叉验证一把 ----
+[p03-S4-交叉验证一把#05] web_research  23.6s ok=None err=-  chars=
+      summary: 3 of 3 source(s) read into an evidence pack for 'SaaS 定价页 最佳实践 2026'
+      research: {"summary": "3 of 3 source(s) read into an evidence pack for 'SaaS 定价页 最佳实践 2026'"}
+P03 DONE

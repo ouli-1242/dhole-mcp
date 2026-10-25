@@ -1,0 +1,73 @@
+{
+ "query": "推荐专题 选题",
+ "engine": "neural",
+ "results": [
+  {
+   "url": "http://127.0.0.1:8399/collections",
+   "title": "推荐专题",
+   "snippet": "推荐专题 推荐专题 专题 1 3 件 专题 2 6 件 专题 3 9 件 专题 4 12 件 专题 5 15 件 专题 6 18 件 专题 7 21 件 专题 8 24 件 专题 9 27 件 专题 10 30 件 专题 1（重复） 没有链接的一张",
+   "fetched_at": "2026-10-25T17:09:18Z",
+   "is_stale": false,
+   "age_days": 0.0,
+   "extraction_type": "html",
+   "relevance": 0.9889,
+   "variants": 2
+  },
+  {
+   "url": "http://127.0.0.1:8399/longaside",
+   "title": "专题长文",
+   "snippet": "专题长文 专题长文 ==== 第 0 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 1 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 2 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 3 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 4 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。",
+   "fetched_at": "2026-10-25T16:03:19Z",
+   "is_stale": false,
+   "age_days": 0.1,
+   "extraction_type": "markdown",
+   "relevance": 0.6416
+  },
+  {
+   "url": "https://www.163.com/dy/article/L90AC7MN0511D5IC.html",
+   "title": "弗朗西斯哈伦森获2026年诺贝尔物理学奖",
+   "snippet": "…碍地穿过物质，仿佛物质并不存在。因此，需要建造规模庞大的探测器，才能捕捉并研究它们与原子之间极为罕见的相互作用。",
+   "fetched_at": "2026-10-24T10:50:26Z",
+   "is_stale": true,
+   "age_days": 1.3,
+   "extraction_type": "markdown",
+   "relevance": 0.5983
+  },
+  {
+   "url": "https://www.bilibili.com/v/game/esports/",
+   "title": "游戏-哔哩哔哩 (゜-゜)つロ 干杯~-bilibili",
+   "snippet": "…瞄 sheridonk · 07-05 1.8万 3 02:48 三国杀黄金配件大合集全网保姆级开箱视频解说真实还原桌游推荐 方糖糖的桌游吧 · 05-29 1007 0 03:57 美空笔记：你的公主连结随身资料库 小明已被占用 · 08-03 1008 1 01:21 kards无限螺旋研发DIY，不笑的去保卫无限螺旋结界 吃错药的小宇 · 07-22 1259 0 00:36 你就在我面前，而我却不能亲你，这感觉，比异地还折磨人。",
+   "fetched_at": "2026-10-25T16:00:54Z",
+   "is_stale": true,
+   "age_days": 0.1,
+   "extraction_type": "markdown",
+   "relevance": 0.1506
+  },
+  {
+   "url": "http://cea.ceaj.org/CN/10.3778/j.issn.1002-8331.2105-0135",
+   "title": "卷积神经网络中的注意力机制综述",
+   "snippet": "…g and Applications, 2021, 57(20): 64-72.",
+   "fetched_at": "2026-10-24T08:11:58Z",
+   "is_stale": true,
+   "age_days": 1.4,
+   "extraction_type": "markdown",
+   "relevance": 0.0959
+  }
+ ],
+ "terms_found": [
+  "推荐",
+  "荐专",
+  "专题"
+ ],
+ "terms_absent": [
+  "选题"
+ ],
+ "scanned_rows": 93,
+ "candidates_scored": 9,
+ "dropped_low_relevance": 3,
+ "note": "pointers, not answers - web_read the URL (fresh or cached) for the page itself; stale rows are ones whose cache TTL has passed",
+ "_wall_s": 1.37,
+ "_tool": "web_recall",
+ "_tag": "p01-misc#01",
+ "_ts": "2026-10-25T17:26:41.177186+00:00"
+}

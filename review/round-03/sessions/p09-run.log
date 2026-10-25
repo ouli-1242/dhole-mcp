@@ -1,0 +1,27 @@
+[p09 迟桉·翻译] session a3ecfd5f950149fabd38cd8e32fd3406 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p09 S1-三区报表(多 sheet + 合并单元格) ----
+[p09-S1-三区报表(多 sheet + 合并单元格)#01] doc_parse   0.3s ok=True err=-  chars=541
+      summary: 200 OK · 541B markdown · parse
+      xlsx: {"summary": "200 OK · 541B markdown · parse", "total_extracted_chars": 541}
+      (pause 8s - throttle)
+
+---- p09 S2-GBK 老表格 ----
+[p09-S2-GBK 老表格#02] doc_parse   0.0s ok=True err=-  chars=117
+      summary: 200 OK · 117B markdown · parse
+      gbk: {"summary": "200 OK · 117B markdown · parse", "total_extracted_chars": 117}
+      (pause 7s - throttle)
+
+---- p09 S3-假 PDF(改扩展名的文本) ----
+[p09-S3-假 PDF(改扩展名的文本)#03] doc_parse   0.0s ok=False err=PDF extraction failed: not_a_pdf: body does not start with %PDF  chars=
+      summary: local error · 0B markdown · parse
+      fake-pdf: {"error": "PDF extraction failed: not_a_pdf: body does not start with %PDF", "summary": "local error · 0B markdown · parse"}
+      (回归: not_a_pdf 具名)
+      (pause 8s - throttle)
+
+---- p09 S4-原文站要登录(外网 401) ----
+[p09-S4-原文站要登录(外网 401)#04] web_read   0.8s ok=False err=http_error_401: server returned error status http_error_401 chars=43
+      summary: 401 ERR · 43B markdown · http · redirected from https://wsj.com/articles/tech-companies-data-privacy
+      paywall: {"status": 401, "summary": "401 ERR · 43B markdown · http · redirected from https://wsj.com/articles/tech-companies-data-privacy-11634996753 to https://www.wsj.com/articles/tech-companies-data-privacy-11634996753"}
+      (回归 R02-003: recover_with = store credentials for this host with cred_defaults (set={auth: {type:'basic',username,password} or {type:'bear
+P09 DONE

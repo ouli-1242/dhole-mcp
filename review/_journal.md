@@ -22,3 +22,11 @@
 - P5：真重启复验 W1–W5 全 FIXED，原始回执落盘 sessions/verify/；全量 pytest **7746 绿**。**教训在册**：W3 曾两度误判——①缓存命中的回执本来就没有 attempt 句（没走 HTTP 档，正确行为，不是缺陷）；②learned 句首发缺席=冷 EMA（无样本不念，正确）。复验遇「预期 note 不在」先查路径是否真走了对应档，再判缺陷。
 - P6：提交（round-02 全套）；index/backlog/common-issues/journal 更新；calls.jsonl 89 行对账说明在 verification.md。
 - 下一步：round-03 P0（主题：长任务/跨会话/多工具链；端口 9203；从 round-02 顶端切出）。
+
+## 2026-10-26T02:2x round-03 收官（P6 完成）
+- P0/P1：9203 新起 + 10 卡封存（10 职业/L3×2/L1×3）→ 60 发、13/13 工具、跨会话（新 session 二访 + resume token 跨会话 + watch 真跨进程）+ 跨进程重启的 recall 存量被真实用到。
+- P2/P3：6 候选 → **1 CONFIRM(B)**（R03-004 page_type 描述）+ **2 REJECT（审查推翻首报）**：R03-001 豁免是进程级（在册），R03-003 顶层信号在（**量具教训：driver 的 100 字截断打印会藏掉信号，判「顶层缺信号」前必须看全文**）；R03-002 降 backlog E12；R03-005/006 记 E 活体。
+- P4：唯一修复 test-first（1 新测试文件）；ruff 0 新增；**事故在册**：一次 git stash/pop 撞上 fixture 进程锁住的 .runtime 日志（Windows unlink fail），恢复=checkout stash 的单文件 + drop——fixture 持日志时不得 stash。
+- P5：真重启（9203 kill→起）复验 W1（page_type 取值零变化）+ 前两轮 11 项回归全 PASS；全量 pytest 7747 绿。
+- P6：提交（round-03 全套）；index/backlog(E12)/common-issues/journal 更新。
+- 下一步：round-04 P0（新主题自定；端口 9204；从 round-03 顶端切出；先读 common-issues 的 9 项必测回归点）。
