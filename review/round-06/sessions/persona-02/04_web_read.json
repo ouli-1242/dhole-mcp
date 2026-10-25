@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/longaside?f=auto",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: focus_mode='auto' is not a value this tool accepts. Valid values: filter, best. No request was made.",
+ "summary": "invalid request · focus_mode='auto' is not a value this tool accepts. Valid values: filter, best",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. Fix focus_mode='auto' and call again - no request was made. Argument types are checked rather than guessed at: a misread `urls` would otherwise come back looking like a successful 19-URL fetch.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.03,
+ "_tool": "web_read",
+ "_tag": "p02-focus=auto#04",
+ "_ts": "2026-10-25T19:12:02.731805+00:00"
+}

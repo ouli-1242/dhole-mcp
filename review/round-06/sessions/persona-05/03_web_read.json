@@ -1,0 +1,18 @@
+{
+ "url": "http://127.0.0.1:8399/changing?price=1",
+ "changed": true,
+ "status": 200,
+ "fetcher": "http",
+ "first_divergence_at": 111,
+ "diff_window": "\"utf-8\"><title>会变的页面</title></head><body><h1>会变的页面</h1><p>第 6 次请求。</p><p>这一段每次都在，用来给 diff 提供上下文。</p><p>仅在本次出现的行 6-0</p><p>仅在本次出现的行 6-1</p><p>仅在本次出现的行 6-2</p><p>仅在本次出现的行 6-3</p><p>仅在本次出现的行 6-4</p><p>仅在",
+ "diff": "--- baseline\n+++ fresh\n@@ -1 +1 @@\n-<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\"><title>会变的页面</title></head><body><h1>会变的页面</h1><p>第 5 次请求。</p><p>这一段每次都在，用来给 diff 提供上下文。</p><p>仅在本次出现的行 5-0</p><p>仅在本次出现的行 5-1</p><p>仅在本次出现的行 5-2</p><p>仅在本次出现的行 5-3</p><p>仅在本次出现的行 5-4</p></body></html>\n+<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\"><title>会变的页面</title></head><body><h1>会变的页面</h1><p>第 6 次请求。</p><p>这一段每次都在，用来给 diff 提供上下文。</p><p>仅在本次出现的行 6-0</p><p>仅在本次出现的行 6-1</p><p>仅在本次出现的行 6-2</p><p>仅在本次出现的行 6-3</p><p>仅在本次出现的行 6-4</p><p>仅在本次出现的行 6-5</p></body></html>",
+ "diff_hunks": 1,
+ "diff_truncated": false,
+ "baseline_chars": 260,
+ "fresh_chars": 279,
+ "note": "diff is a unified diff (baseline -> fresh); diff_window shows the fresh text around the first divergence - refetch with extraction_type='markdown' to read the page",
+ "_wall_s": 0.03,
+ "_tool": "web_read",
+ "_tag": "p05-S1-check 盯价(/changing 三连)#03",
+ "_ts": "2026-10-25T19:15:35.632228+00:00"
+}

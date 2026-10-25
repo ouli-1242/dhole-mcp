@@ -71,6 +71,24 @@
 | 边界值申报 | max_content_chars=-1 钳制申报；offset 越界 [No more content.] 哨兵；since 无日期条目放行且报数 | 良好行为确认 | P06/P07 |
 | E10 | 404 行数字噪声 | backlog（四轮样本） | P04/P10 |
 
+## round-06 新增/复发（P3 裁决后）
+
+| 区 | 现象 | 状态 | 来源 |
+|---|---|---|---|
+| css_selector 0 匹配 | 静默回全页、看起来像成功（伪类第一拒自证的旁证） | **已修**（R06-001，fix-R06-F1：0 匹配分支说「整页被返回」；回落行为不变） | P01 |
+| 命中碎片被散文尺误判 | 点名的 11 行卡片标题被判 nav_only→content_ok=false | **已修**（R06-002，fix-R06-F2：_substance_verdict 的 css_selector 豁免——extractor 侧早有同款） | P01/P08 |
+| E2 家族 | 查询串变体三行并排（五轮样本：R02/R03/R04/R05/R06） | backlog（**五现**，升级线早已过——排期项） | P06/P09/P10 |
+| focus 引擎名 / sheet 小计 | 回执不露用了哪把引擎；doc_parse 无每 sheet 小计 | backlog E 观察登记 | P02/P04 |
+
+## round-06 必测回归点（round-07 新画像真实回访）
+
+1. 0 匹配 selector 的 summary note（fix-R06-F1）。
+2. 命中碎片的 content_ok=true + substance 留空 + basis（fix-R06-F2）。
+3. 伪类/非法参数第一拒教学形状（保持）。
+4. doc_parse 真 PDF 的图片披露 + not_a_pdf 具名（保持）。
+5. check diff/provenance/headers 家产（保持）。
+6. 前五轮家产清单（common-issues 各轮必测回归点合并回访）。
+
 ## round-05 必测回归点（round-06 新画像真实回访）
 
 1. 预算分账：小预算调用拒发 stealthy 的毫秒账（P01）。

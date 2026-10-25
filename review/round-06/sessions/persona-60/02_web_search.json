@@ -1,0 +1,181 @@
+{
+ "query": "设计规范 色彩 系统",
+ "results": [
+  {
+   "title": "GB/Z35473-2017 色彩设计系统标准深度解析 | 色彩设计规范与应用指南",
+   "url": "https://m.antpedia.com/standard/1614352507-10.html",
+   "snippet": "GB/Z35473-2017《色彩设计系统》 是中国首部针对色彩设计领域的标准化指导性技术文件,旨在为色彩量化设计建立统一的沟通和评价体系。 该标准的主要制定背景包括: 推动色彩设计应用领域的普及和发展 解决色彩设计交流语言不一致的问题 规范色彩量化设计的实施方法 ...",
+   "source": "baidu",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.9997183491113396,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 8 (degraded_pool)",
+   "source_type": "unknown",
+   "published": "2026-06-05",
+   "published_precision": "day",
+   "published_basis": "2026年6月5日"
+  },
+  {
+   "title": "色彩系统 - 安卓设计规范 - UX百科网 - 学设计上UX百科",
+   "url": "https://www.uxbaike.com/post/8255/8260",
+   "snippet": "动态颜色由Material Color Utilities (MCU)提供支持,它是一组包含算法和实用程序的颜色库,可让您更轻松地在应用中开发颜色主题和方案。 有许多颜色算法,但最常见的是: 用户生成的颜色使用个人壁纸来识别颜色源。根据系统设计选择和用户偏好的组合,将特定色调(较亮或较暗)的颜色映射到方案中。 基于内容的色调会",
+   "source": "baidu",
+   "position": 2,
+   "relevance_score": 0.998,
+   "relevance_raw": 0.9989838251815132,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 8 (degraded_pool)",
+   "source_type": "blog",
+   "published": "2024-07-04",
+   "published_precision": "day",
+   "published_basis": "2024年7月4日"
+  },
+  {
+   "title": "色彩规范|如何科学的搭建UI色彩系统 - 知乎",
+   "url": "https://zhuanlan.zhihu.com/p/345649328",
+   "snippet": "Material design等设计规范中都有明确的给出自身产品的色彩体系。搭建产品的色彩系统对设计师是非常有必要的的。 Material Design 色板 Ant Design 色...",
+   "source": "sogou",
+   "position": 3,
+   "relevance_score": 0.9612,
+   "relevance_raw": 0.9988233656674549,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 8 (degraded_pool)",
+   "source_type": "forum",
+   "published": "2021-01-20",
+   "published_precision": "day",
+   "published_basis": "2021-01-20"
+  }
+ ],
+ "total_results": 3,
+ "engines_used": [
+  "sogou",
+  "baidu"
+ ],
+ "engine_blocked": [
+  "shenma",
+  "so360",
+  "brave",
+  "duckduckgo"
+ ],
+ "engine_empty": [
+  "yahoo",
+  "marginalia",
+  "seznam"
+ ],
+ "engine_preempted": [
+  "yandex",
+  "bing_global",
+  "bing"
+ ],
+ "engine_detail": [
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 58s"
+  },
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 58s"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 58s"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "empty",
+   "verdict": "upstream_empty",
+   "why": "no results"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 58s"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "11 usable rows from 11 item nodes"
+  },
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "9 usable rows from 10 item nodes"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "empty",
+   "verdict": "unknown_empty",
+   "why": "no results"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "empty",
+   "verdict": "upstream_empty",
+   "why": "no results"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  }
+ ],
+ "families_answered_of_asked": "2 of 9 (8 could answer)",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "date_coverage": {
+  "rows_total": 3,
+  "rows_with_date": 3,
+  "rows_no_date": 0,
+  "rows_verified_by_fetch": 0,
+  "rows_relative_precision": 0,
+  "rows_unverifiable_by_before": 0,
+  "rows_dropped_by_before": 0,
+  "rows_kept": 3
+ },
+ "duration_ms": 3736,
+ "error": "",
+ "fetch_hint": "3 high, 0 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. web_read what fits your need (high first, but a lower tier can be the right call). | Engines shenma, so360, brave, duckduckgo, yahoo, marginalia, seznam didn't contribute (4 blocked, 3 answered but parsed nothing usable); results are from the rest.",
+ "summary": "Searched '设计规范 色彩 系统' -> 3 results (3 high, 0 med, 0 low) from sogou,baidu; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. WARNING: 7 of the 9 engines it asked didn't contribute (4 blocked, 3 answered but parsed nothing usable) - results have LOW diversity (only from sogou, baidu). For more recall: the pool is down to 5 of the 9 engines it asked; retry after the cooldown clears (cooling right now: duckduckgo 58s, brave 58s, so360 58s, shenma 57s; the pool is whole again in 59s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use; rephrase if the query is narrow (an engine that answered with nothing may genuinely not have it in that index). yandex, bing_global, bing were cancelled once enough indexes had answered - the diversity quorum, not a failure, so waiting and retrying reaches the same stop point; raise max_results or name them in engines=[...] to ask them anyway.",
+ "same_document_groups": [],
+ "_wall_s": 3.74,
+ "_tool": "web_search",
+ "_tag": "p60-misc#02",
+ "_ts": "2026-10-25T19:20:01.339173+00:00"
+}

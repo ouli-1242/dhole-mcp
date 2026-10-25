@@ -1,0 +1,38 @@
+{
+ "status": 200,
+ "content": [
+  "专题 1\n专题 2\n专题 3\n专题 4\n专题 5\n专题 6\n专题 7\n专题 8\n专题 9\n专题 10\n专题 1（重复）"
+ ],
+ "url": "http://127.0.0.1:8399/collections?cs=1",
+ "fetcher_used": "stealthy",
+ "duration_ms": 4399,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 1182,
+ "total_extracted_chars": 59,
+ "visible_text_chars": 117,
+ "substance": "nav_only",
+ "substance_basis": "11 lines, 100% of them are short fragments without sentence punctuation, mean line 4.5 characters (page holds 117 visible characters in total)",
+ "escalation_path": "http→stealthy",
+ "summary": "200 OK · 59B markdown · stealthy · no prose (menu fragments only) · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named",
+ "content_ok": false,
+ "next_action": "the body returned is short menu-style fragments, not prose, and rendering will not change that answer (this URL was already rendered, or this tier is not one a browser helps). The only door left is the links themselves: follow them or take a different source. Do not cite this body as the article.",
+ "fetched_at": "2026-10-25T19:18:05Z",
+ "metadata": {
+  "title": "推荐专题",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "no_content",
+  "retryable": false,
+  "recover_with": "the page carried no usable text - switch source, or try extraction_type='html'"
+ },
+ "approx_tokens": 33,
+ "_wall_s": 4.41,
+ "_tool": "web_read",
+ "_tag": "p08-S1-属性选择器#02",
+ "_ts": "2026-10-25T19:18:05.366664+00:00"
+}

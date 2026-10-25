@@ -1,0 +1,34 @@
+[
+  {
+    "id": "R06-001",
+    "title": "css_selector 0 匹配静默回全页",
+    "status": "fixed",
+    "fix": "fix-R06-F1",
+    "first_reported_by": "P01",
+    "verdict": "P3 CONFIRM(B)：回落是设计，静默不是；0 匹配分支与编译失败分支同款诚实句",
+    "verified": "P5 真重启重放：note 全文在 summary"
+  },
+  {
+    "id": "R06-002",
+    "title": "命中 selector 的碎片被整页散文尺误判 content_ok=false",
+    "status": "fixed",
+    "fix": "fix-R06-F2",
+    "first_reported_by": "P01/P08",
+    "verdict": "P3 CONFIRM(B)：实质尺缺 css_selector 豁免（extractor 侧早有同款）；留空判 + basis 说清",
+    "verified": "P5 真重启重放：content_ok=True + basis 在场"
+  },
+  {
+    "id": "R06-003",
+    "title": "E2 家族：查询串变体三行并排（五轮样本）",
+    "status": "backlog",
+    "verdict": "P3 CONFIRM(E)：合并键=精确 URL 是在册契约；样本跨 P06/P09/P10",
+    "first_reported_by": "P06/P09/P10"
+  },
+  {
+    "id": "R06-004",
+    "title": "focus 引擎名未上回执 + doc_parse sheet 小计缺",
+    "status": "backlog",
+    "verdict": "P3 CONFIRM(E)：E 观察登记",
+    "first_reported_by": "P02/P04"
+  }
+]

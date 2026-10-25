@@ -887,6 +887,14 @@ def _substance_verdict(result: ResponseModel) -> tuple[str, str]:
         return "", ""
     if not result.content or not any(c.strip() for c in result.content):
         return "", ""
+    if _CSS_SELECTOR.get():
+        # R06-002：css_selector 在场 = 回执量的是**用户点名的碎片**，不是整页。
+        # 散文尺（nav_only）与塌陷尺（collapsed）都拿「整页可见字」当分母——量到
+        # 点名的 11 行卡片标题上只会说「没有散文」（round-06 P01/P08 现场）。原则
+        # 在册：extractor 侧的塌陷回收早就豁免了 css_selector（"narrowed 的调用方
+        # 要的是更少"）。留空判 + basis 说清尺子为何不适用。
+        return "", ("css_selector narrowed this answer to the requested fragment - "
+                    "the whole-page prose and collapse rulers do not apply")
     if extraction_collapsed(result):
         visible = result.visible_text_chars
         got = extracted_chars(result)

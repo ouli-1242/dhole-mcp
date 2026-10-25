@@ -1,0 +1,19 @@
+[p09 陶知遥·研究助理] session 7661befd0e254c41b49c44bcbe3b4195 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p09 S1-证据包 ----
+[p09-S1-证据包#01] web_research   5.7s ok=None err=-  chars=
+      summary: 2 of 3 source(s) read into an evidence pack for 'RAG 检索增强 幻觉 缓解 2026'; 1 failed (each row says why)
+      research: {"summary": "2 of 3 source(s) read into an evidence pack for 'RAG 检索增强 幻觉 缓解 2026'; 1 failed (each row says why)"}
+   src: https://aiho.net/wiki/rag.html | ok: True
+   src: https://huhu2k.blog.csdn.net/article/details/158156498 | ok: True
+      (pause 8s - throttle)
+
+---- p09 S2-recall 查准 ----
+[p09-S2-recall 查准#02] cred_defaults   0.0s ok=None err=-  chars=
+[p09-S2-recall 查准#03] web_read   0.0s ok=True err=-  chars=7157
+      summary: 200 OK · 7.0KB markdown · cache · cached copy, fetched 20.3 min ago · replayed from the cache: the f
+[p09-S2-recall 查准#04] web_recall   3.3s ok=None err=-  chars=
+   - {"url": "http://127.0.0.1:8399/article?t=text", "title": "本地抓取工具配置指南", "is_stale": false}
+   - {"url": "http://127.0.0.1:8399/article", "title": "本地抓取工具配置指南", "is_stale": false}
+   - {"url": "http://127.0.0.1:8399/article?r3v=1", "title": "本地抓取工具配置指南", "is_stale": true}
+P09 DONE

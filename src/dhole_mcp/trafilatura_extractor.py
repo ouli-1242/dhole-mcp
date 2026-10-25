@@ -570,6 +570,23 @@ def _fallback_extract(page, extraction_type: str, css_selector: Optional[str]) -
         return [""]
 
 
+def _note_selector_matched_nothing(selector: str) -> None:
+    """R06-001：选择器可编译、文档也读了，就是 0 个匹配——回落整页要说出去。
+
+    与 `_note_selector_not_applied` 同一句式（was NOT applied 的诚实形状）：对
+    调用方两件事一样——选择器没起作用。缩取是可选收窄、从不掏空答案，所以
+    行为不变，变的只是这一句话在不在。
+    """
+    from dhole_mcp.context import _ARG_NOTES, _note_text
+
+    head = f"css_selector '{selector}' was NOT applied"
+    notes = _ARG_NOTES.get()
+    if notes is not None and any(n.startswith(head) for n in notes):
+        return
+    _note_text(f"{head}: it matched 0 elements on this document - the whole "
+               f"document was returned (narrowing never empties the answer)")
+
+
 def _note_selector_not_applied(selector: str, err: Exception) -> None:
     """提取期真出事时给调用方留一句真话（同一个选择器一次调用只说一遍）。
 
@@ -607,6 +624,11 @@ def _narrow_html_to_selector(html: str, css_selector: str) -> Optional[str]:
         _note_selector_not_applied(css_selector, e)
         return None
     if not matches:
+        # R06-001：编译通过但 0 匹配——回落到整页是设计（缩取从不掏空答案），
+        # 但静默不说就是「看起来成功、其实参数没生效」（round-06 P01 现场：整页
+        # 269 字符 content_ok=true 出门，没有一个字提选择器没匹配）。与编译失败
+        # 分支（_note_selector_not_applied）同款诚实：把后果说出去。
+        _note_selector_matched_nothing(css_selector)
         return None
     # The fragments are re-wrapped as a document on purpose: trafilatura returns
     # nothing for a bare fragment (`_extract_type("<h1>X</h1>", ...) -> None`),

@@ -1,0 +1,38 @@
+{
+  "round": 6,
+  "branch": "review/round-06",
+  "baseline_commit": "5820f11",
+  "port": 9206,
+  "tools_expected": 13,
+  "phase": "P6_done",
+  "steps": {
+    "git_hygiene": "done",
+    "skeleton": "done",
+    "env_verify": "done",
+    "servers": "done (9206 真重启 P5)",
+    "harness_selftest": "done (13 tools)",
+    "plan_and_personas": "done",
+    "persona_sealed": true,
+    "P1_personas_done": [
+      "P01",
+      "P02",
+      "P03",
+      "P04",
+      "P05",
+      "P06",
+      "P07",
+      "P08",
+      "P09",
+      "P10"
+    ],
+    "P2_reports": "done",
+    "P3_review": "done (4 candidates: 2 B / 2 E)",
+    "P4_fixes": [
+      "fix-R06-F1",
+      "fix-R06-F2"
+    ],
+    "P5_reverify": "done (W1/W2 FIXED, pytest 7755 green ×2, ruff 16 base)",
+    "P6_wrap": "done"
+  },
+  "updated": "2026-10-26T04:55:00+08:00"
+}

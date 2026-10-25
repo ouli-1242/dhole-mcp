@@ -1,0 +1,21 @@
+[p01 阎立本·数据分析] session e2df66c3c0194ed5bc138cf2f89fc873 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p01-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p01 S1-structured 档抓卡片页 ----
+[p01-S1-structured 档抓卡片页#02] web_read   1.2s ok=True err=-  chars=576
+      summary: 200 OK · 576B structured · http · the target is loopback/private, so dhole dropped its own synthesiz
+      structured: {"content_ok": true, "total_extracted_chars": 576, "summary": "200 OK · 576B structured · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+   content head: ['{\n  "title": "\\u63a8\\u8350\\u4e13\\u9898",\n  "author": "",\n  "date": "",\n  "body": "\\u63a8\\u8350\\u4e13\\u9898\\n\\u4e13\\u9898 1\\n3 \\u4ef6\\n\\u4e13\\u9898 2\\n6 \\u4ef6\\n\\u4e13\\u9898 3\\n9 \\u4ef6\\n\\u4
+      (pause 8s - throttle)
+
+---- p01 S2-css_selector 缩取(.card 标题) ----
+[p01-S2-css_selector 缩取(.card 标题)#03] web_read   3.7s ok=False err=- no_content chars=59
+      summary: 200 OK · 59B markdown · stealthy · no prose (menu fragments only) · the target is loopback/private, 
+      selector-hits: {"content_ok": false, "total_extracted_chars": 59, "summary": "200 OK · 59B markdown · stealthy · no prose (menu fragments only) · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plu
+      (pause 7s - throttle)
+
+---- p01 S3-css_selector 0 匹配 ----
+[p01-S3-css_selector 0 匹配#04] web_read   4.2s ok=True err=-  chars=269
+      summary: 200 OK · 269B markdown · stealthy · the target is loopback/private, so dhole dropped its own synthes
+      selector-miss: {"content_ok": true, "error": "", "summary": "200 OK · 269B markdown · stealthy · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile · the target is
+P01 DONE

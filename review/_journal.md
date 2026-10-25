@@ -46,6 +46,14 @@
 - P6：提交（round-05 全套）；index/common-issues/journal 更新；观察项入册。
 - 下一步：round-06 P0（端口 9206 段；从 round-05 顶端切出）。
 
+## 2026-10-26T05:0x round-06 收官（P6 完成）
+- P0/P1：主题「读什么像什么（抽取与交付质量）」；9206；10 新职业（L3×2/L1×3）；50 发 13/13 工具。
+- P2/P3：4 候选 → **2 CONFIRM(B)**——抽取面的两处「沉默」：①css_selector 0 匹配静默回全页（伪类第一拒的 would-have-been 句是它自己的旁证）；②命中碎片被整页散文尺误判 nav_only。根因都在册原则的一半：extractor 侧早有 narrowed 豁免，实质侧没有。
+- P4：2 修复 test-first（2 新测试文件 4 测试）；复用已有 _CSS_SELECTOR ContextVar（不加新变量）；顺带清一枚基线漂移的 F401。
+- P5：真重启复验 W1/W2；pytest **7755 绿 ×2**（首轮 DNS-recheck xdist flake 2 failed，隔离+两轮重跑全绿——诚实记录）；ruff 16 基线。
+- P6：提交（round-06 全套）；index/common-issues/journal 更新。
+- 下一步：round-07 P0（端口 9207 段；从 round-06 顶端切出）。
+
 ### 观测量具教训（跨轮复用）
 - driver 的 summary 100 字截断会藏信号（round-03 R03-003）→ 判「顶层缺信号」前必须看全文。
 - 旁证进程撞主进程磁盘缓存会让「受控三态」失真（round-04 P01 态3）→ 受控测试一律 cache_ttl=0。

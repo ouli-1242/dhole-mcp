@@ -13,7 +13,6 @@ reranker 一律打桩——conftest 每用例重置单例，真模型在本机�
 就依赖「这台机器下载过 119MB」这件与代码无关的事。
 """
 
-import asyncio
 import json
 import time
 

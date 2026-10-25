@@ -1,0 +1,33 @@
+{
+ "status": 200,
+ "content": [
+  "<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\"><title>推荐专题</title></head><body><h1>推荐专题</h1><div class=\"card\"><a href=\"/work/1\">专题 1</a><span class=\"count\">3 件</span></div><div class=\"card\"><a href=\"/work/2\">专题 2</a><span class=\"count\">6 件</span></div><div class=\"card\"><a href=\"/work/3\">专题 3</a><span class=\"count\">9 件</span></div><div class=\"card\"><a href=\"/work/4\">专题 4</a><span class=\"count\">12 件</span></div><div class=\"card\"><a href=\"/work/5\">专题 5</a><span class=\"count\">15 件</span></div><div class=\"card\"><a href=\"/work/6\">专题 6</a><span class=\"count\">18 件</span></div><div class=\"card\"><a href=\"/work/7\">专题 7</a><span class=\"count\">21 件</span></div><div class=\"card\"><a href=\"/work/8\">专题 8</a><span class=\"count\">24 件</span></div><div class=\"card\"><a href=\"/work/9\">专题 9</a><span class=\"count\">27 件</span></div><div class=\"card\"><a href=\"/work/10\">专题 10</a><span class=\"count\">30 件</span></div><div class=\"card\"><a href=\"/work/1#top\">专题 1（重复）</a></div><div class=\"card\"><span>没有链接的一张</span></div><div class=\"menu\"><a href=\"/about\">关于</a></div></body></html>"
+ ],
+ "url": "http://127.0.0.1:8399/collections?cs=2",
+ "fetcher_used": "http",
+ "extracted_type": "html",
+ "duration_ms": 21,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 1182,
+ "total_extracted_chars": 1076,
+ "visible_text_chars": 117,
+ "escalation_path": "direct:http",
+ "attempt_cap_ms": 29000,
+ "summary": "200 OK · 1.1KB html · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T19:18:12Z",
+ "metadata": {
+  "title": "推荐专题",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "approx_tokens": 307,
+ "_wall_s": 0.04,
+ "_tool": "web_read",
+ "_tag": "p08-S2-html 档原始性#03",
+ "_ts": "2026-10-25T19:18:12.406096+00:00"
+}

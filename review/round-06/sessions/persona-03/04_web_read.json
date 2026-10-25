@@ -1,0 +1,34 @@
+{
+ "status": 200,
+ "content": [
+  "{\n  \"title\": \"\\u672c\\u5730\\u6293\\u53d6\\u5de5\\u5177\\u914d\\u7f6e\\u6307\\u5357\",\n  \"author\": \"\",\n  \"date\": \"\",\n  \"body\": \"\\u672c\\u5730\\u6293\\u53d6\\u5de5\\u5177\\u5728\\u9ed8\\u8ba4\\u914d\\u7f6e\\u4e0b\\u4f1a\\u628a\\u7ed3\\u679c\\u5199\\u8fdb\\u4e00\\u4e2a\\u672c\\u5730\\u7f13\\u5b58\\u5e93\\uff0c\\u907f\\u514d\\u91cd\\u590d\\u8bf7\\u6c42\\u540c\\u4e00\\u9875\\u9762\\u3002\\n\\u7f13\\u5b58\\u6761\\u76ee\\u5e26\\u6709\\u8fc7\\u671f\\u65f6\\u95f4\\uff0c\\u8fc7\\u671f\\u540e\\u518d\\u6b21\\u6293\\u53d6\\u4f1a\\u91cd\\u65b0\\u53d1\\u8d77\\u8bf7\\u6c42\\u5e76\\u8986\\u76d6\\u65e7\\u6761\\u76ee\\u3002\\n\\u6293\\u53d6\\u5668\\u5206\\u6210\\u4e24\\u5c42\\uff1a\\u4e00\\u5c42\\u662f\\u5feb\\u901f HTTP \\u5c42\\uff0c\\u4e00\\u5c42\\u662f\\u80fd\\u6267\\u884c\\u811a\\u672c\\u7684\\u53cd\\u68c0\\u6d4b\\u6d4f\\u89c8\\u5668\\u5c42\\u3002\\n\\u81ea\\u52a8\\u5347\\u7ea7\\u53ea\\u5728 HTTP \\u5c42\\u5224\\u5b9a\\u5931\\u8d25\\u65f6\\u53d1\\u751f\\uff0c\\u5224\\u5b9a\\u4f9d\\u636e\\u662f\\u72b6\\u6001\\u7801\\u3001\\u6b63\\u6587\\u957f\\u5ea6\\u4e0e\\u53cd\\u722c\\u7279\\u5f81\\u4e32\\u3002\\n\\u53cd\\u722c\\u7279\\u5f81\\u4e32\\u5305\\u62ec\\u5e38\\u89c1\\u7684\\u4eba\\u673a\\u6821\\u9a8c\\u9875\\u9762\\u6807\\u9898\\uff0c\\u547d\\u4e2d\\u540e\\u4e0d\\u4f1a\\u91cd\\u8bd5\\u800c\\u662f\\u76f4\\u63a5\\u5347\\u7ea7\\u3002\\n\\u7f13\\u5b58\\u952e\\u5305\\u542b\\u76ee\\u6807\\u5730\\u5740\\u3001\\u4f1a\\u8bdd\\u6807\\u8bc6\\u4e0e\\u51ed\\u636e\\u6307\\u7eb9\\uff0c\\u56e0\\u6b64\\u767b\\u5f55\\u6001\\u5185\\u5bb9\\u4e0d\\u4f1a\\u4e0e\\u516c\\u5f00\\u5185\\u5bb9\\u6df7\\u653e\\u3002\\n\\u5173\\u4e8e\\u7f13\\u5b58\\u4fdd\\u7559\\u65f6\\u957f\\uff1a\\u7f13\\u5b58\\u9ed8\\u8ba4\\u4fdd\\u7559 3600 \\u79d2\\uff0c\\u6539 cache_ttl \\u53ef\\u8986\\u76d6\\u3002\\n\\u6293\\u53d6\\u7ed3\\u679c\\u7684\\u6b63\\u6587\\u4f1a\\u7ecf\\u8fc7\\u62bd\\u53d6\\u5668\\u8f6c\\u6210 Markdown\\uff0c\\u8d85\\u957f\\u65f6\\u6309\\u5b57\\u7b26\\u6570\\u622a\\u65ad\\u5e76\\u7ed9\\u51fa\\u7eed\\u8bfb\\u504f\\u79fb\\u3002\\n\\u622a\\u65ad\\u70b9\\u59cb\\u7ec8\\u843d\\u5728\\u5b57\\u7b26\\u8fb9\\u754c\\u4e0a\\uff0c\\u7eed\\u8bfb\\u65f6\\u628a\\u504f\\u79fb\\u91cf\\u4f20\\u56de\\u6765\\u5373\\u53ef\\u62ff\\u5230\\u5269\\u4f59\\u90e8\\u5206\\u3002\\n\\u6240\\u6709\\u7f51\\u7edc\\u8bf7\\u6c42\\u90fd\\u53d7 robots \\u89c4\\u5219\\u7ea6\\u675f\\uff0c\\u9664\\u975e\\u663e\\u5f0f\\u58f0\\u660e\\u8c03\\u7528\\u65b9\\u5df2\\u83b7\\u5f97\\u7ad9\\u70b9\\u6388\\u6743\\u3002\",\n  \"description\": \"\",\n  \"url\": \"http://127.0.0.1:8399/article?t=article\",\n  \"categories\": [],\n  \"tags\": []\n}"
+ ],
+ "url": "http://127.0.0.1:8399/article?t=article",
+ "fetcher_used": "http",
+ "extracted_type": "article",
+ "duration_ms": 26,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 1265,
+ "total_extracted_chars": 2230,
+ "visible_text_chars": 400,
+ "substance": "ok",
+ "escalation_path": "direct:http",
+ "attempt_cap_ms": 29000,
+ "summary": "200 OK · 2.2KB article · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T19:13:19Z",
+ "metadata": {
+  "title": "本地抓取工具配置指南",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "approx_tokens": 558,
+ "_wall_s": 0.06,
+ "_tool": "web_read",
+ "_tag": "p03-extraction_type=article#04",
+ "_ts": "2026-10-25T19:13:19.464208+00:00"
+}
