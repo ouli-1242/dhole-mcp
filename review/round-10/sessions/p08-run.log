@@ -1,0 +1,26 @@
+[p08 桑无咎4·船长] session a149923863074e72bdbffad712b19cb8 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p08-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p08 S1-max_pages=2(页数停) ----
+[p08-S1-max_pages=2(页数停)#02] web_crawl   0.1s ok=None err=-  chars=
+      summary: crawled 2 page(s) at http://127.0.0.1:8399 (depth <= 2); 1 content_ok; article:1, fallback:1; stoppe
+   summary: crawled 2 page(s) at http://127.0.0.1:8399 (depth <= 2); 1 content_ok; article:1, fallback:1; stopped: max_pages reached
+      (pause 6s - throttle)
+
+---- p08 S2-max_depth=0(深度停) ----
+[p08-S2-max_depth=0(深度停)#03] web_crawl   0.1s ok=None err=-  chars=
+      summary: crawled 1 page(s) at http://127.0.0.1:8399 (depth <= 0); 0 content_ok; fallback:1
+   summary: crawled 1 page(s) at http://127.0.0.1:8399 (depth <= 0); 0 content_ok; fallback:1
+      (pause 6s - throttle)
+
+---- p08 S3-大预算(池尽停) ----
+[p08-S3-大预算(池尽停)#04] web_crawl   0.0s ok=None err=-  chars=
+      summary: crawled 1 page(s) at http://127.0.0.1:8399 (depth <= 1); 1 content_ok; fallback:1; max_pages clamped
+   summary: crawled 1 page(s) at http://127.0.0.1:8399 (depth <= 1); 1 content_ok; fallback:1; max_pages clamped 50->40 (supported range 1-40)
+      (pause 6s - throttle)
+
+---- p08 S4-边界(max_pages=0) ----
+[p08-S4-边界(max_pages=0)#05] web_crawl   0.0s ok=None err=-  chars=
+      summary: crawled 1 page(s) at http://127.0.0.1:8399 (depth <= 2); 0 content_ok; fallback:1; stopped: max_page
+   err: None
+P08 DONE

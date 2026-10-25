@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/feed.xml",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: method=GET is a read, not a request - web_request takes POST / PUT / PATCH / DELETE / HEAD",
+ "summary": "invalid request · method=GET is a read, not a request",
+ "content_ok": false,
+ "next_action": "Nothing was sent. Call web_read(url=...) for a GET: it is the door with the cache, the anti-bot escalation ladder and the archive fallback.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_request",
+ "_tag": "p80-B5-web_request(GET)#06",
+ "_ts": "2026-10-25T23:00:41.643314+00:00"
+}

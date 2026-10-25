@@ -1,0 +1,35 @@
+{
+ "start_url": "http://127.0.0.1:8399/",
+ "pages": [
+  {
+   "url": "http://127.0.0.1:8399/",
+   "status": 200,
+   "content_ok": false,
+   "fetcher_used": "http",
+   "title": "靶站索引",
+   "page_type": "fallback",
+   "content": [
+    "dhole 模拟测试靶站\n登录\n账户\n结算\n二维码\n验证码\n长文\n订阅源"
+   ],
+   "content_chars": 36,
+   "substance": "nav_only",
+   "substance_basis": "8 lines, 100% of them are short fragments without sentence punctuation, mean line 3.6 characters (page holds 41 visible characters in total)",
+   "fetched_at": "2026-10-25T22:57:03Z",
+   "summary": "200 OK · 396B html · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 30000ms - an explicit timeout= lifts it · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile · no prose in this row: 8 lines, 100% of them are short fragments without sentence punctuation, mean line 3.6 characters (page holds 41 visible characters in total) - do not cite this row as content; web_read the URL with force_fetcher='stealthy' (which renders) or follow the links it carries"
+  }
+ ],
+ "pages_crawled": 1,
+ "pages_discovered": 1,
+ "deadline_ms_applied": 25000,
+ "attempt_cap_ms": 30000,
+ "sitemap_used": false,
+ "duration_ms": 37,
+ "summary": "crawled 1 page(s) at http://127.0.0.1:8399 (depth <= 0); 0 content_ok; fallback:1",
+ "next_action": "All crawled pages returned no content. The site may be unreachable, require JavaScript, or block automated access. Try web_read on a specific URL for more diagnostics.",
+ "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+ "identity_applied": "allow_private",
+ "_wall_s": 0.06,
+ "_tool": "web_crawl",
+ "_tag": "p08-S2-max_depth=0(深度停)#03",
+ "_ts": "2026-10-25T22:57:03.305911+00:00"
+}

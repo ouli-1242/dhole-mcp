@@ -107,6 +107,24 @@
 | E2 家族 | /article 8 个查询串变体并排（六轮样本：R02-R06+R09） | backlog（六现，排期项） | P04 |
 | 引擎可用性轮间浮动 | 同 query 两轮引擎集不同（marginalia 时在时不在） | 环境注（engine_detail/families_answered_of_asked 账目在场） | P03/P04 |
 
+## round-10 新增/复发（P3 裁决后）
+
+| 区 | 现象 | 状态 | 来源 |
+|---|---|---|---|
+| crawl 代际对 read 不可见 | crawl 抓的壳页（nav-only）不进 read 缓存——store 侧质量闸 + 指纹键合（html/markdown 各一代） | **设计如此**（REJECT：_store_ttl 注释 + behavior guide 键合契约 + probe 复核） | P10 |
+| attempt_cap < 显式 timeout | 5000→4000/20000→19000——分层扣减后真实所得 | **字段合同如实**（REJECT：attempt_cap_ms 描述"what is left of the call when this tier runs"） | P01/P09 |
+| recall 0 行 | 查询词与页正文不匹配（臆测词） | **量具注**（probe：正文词命中 6 行——召回正常） | P04 |
+| E 家族 | /changing 变体族再现（E2 六现既有） | — | P04 |
+
+## round-10 必测回归点（round-11 新画像真实回访）
+
+1. 显式 timeout= 合同：learned 句让位不出现；attempt_cap_ms=分层扣减实得。
+2. 边界第一拒：timeout=0/999999、cache_ttl 类型错、max_pages=0/50 具名 clamp。
+3. TTL 四态：首灌/代内 replay/ttl=0 回源/ttl=1 过期真回源。
+4. replay 诚实形状：无 attempt 伪造、年岁递增（round-02 W3 教训保持）。
+5. research 紧预算慢源逐行具名；wait/wait_selector 步级帽申报。
+6. 前九轮家产合并回访。
+
 ## round-09 必测回归点（round-10 新画像真实回访）
 
 1. recall limit 越界的 clamped 注记；未越界安静（fix-R09-F1）。

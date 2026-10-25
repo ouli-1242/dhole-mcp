@@ -82,3 +82,10 @@
 - P5：真重启（taskkill pid 20952 → 24828）复验 V1/V2 PASS；pytest **7768 绿×2**（7757+8+3 对账平；DNS-recheck flake 本轮两连绿未发）；ruff 16 基线。
 - P6：提交（round-09 全套）；index/common-issues(E2 六现)/journal 更新。
 - 下一步：round-10 P0（端口 9210；从 round-09 顶端切出；先读 common-issues 的 round-09 必测回归点）。
+
+## 2026-10-26T11:3x round-10 收官（P6 完成）
+- P0/P1：主题「预算与时间」；9210；10 新职业（L3×3：外汇交易员/电梯检验师/同声传译）；57 发 13/13 工具 + probe ×2（p91 html 指纹/p92 正文词）。
+- P2/P3：**0 CONFIRM（第二个零修复轮，非连续——round-09 有 1 B）**——3 线索全 REJECT：crawl 代际=store 侧壳页闸+指纹键合（两道在册合同）；attempt_cap 差值=字段合同如实（"what is left of the call"）；recall 0 行=量具查错词（probe 用正文词命中 6 行）。§8 自查：四账面字段全读 + 源码对照 + 双 probe，非漏报。
+- P4：零修复。P5：真重启（pid 14648）13 tools PASS；pytest 7768 绿（对账平）；ruff 16。
+- P6：提交（round-10 全套）；index/common-issues/journal 更新。
+- 下一步：round-11 P0（端口 9211；从 round-10 顶端切出；先读 common-issues 的 round-10 必测回归点）。

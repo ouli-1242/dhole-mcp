@@ -4,3 +4,10 @@ INFO:     Started server process [24828]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:9209 (Press CTRL+C to quit)
+INFO:     127.0.0.1:63009 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63009 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:63009 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63009 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63009 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63009 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63009 - "POST /mcp HTTP/1.1" 200 OK

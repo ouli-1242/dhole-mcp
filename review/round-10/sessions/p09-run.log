@@ -1,0 +1,26 @@
+[p09 库尔班4·兽医师] session 7a05b8cccd5f4a7bb1f0457535552c3d server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p09-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p09 S1-cache_ttl=-1 ----
+[p09-S1-cache_ttl=-1#02] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · cache_ttl=-1 is not a duration; using 0 - this call reads no cache, 
+   err: (收下?)
+      (pause 5s - throttle)
+
+---- p09 S2-cache_ttl 字符串 ----
+[p09-S2-cache_ttl 字符串#03] web_read   0.0s ok=False err=invalid_request: cache_ttl must be an integer, got 'soon'. Pass a number (or omit cache_tt invalid_request chars=
+      summary: invalid request · cache_ttl must be an integer, got 'soon'
+   err: invalid_request: cache_ttl must be an integer, got 'soon'. Pass a number (or omit cache_ttl to use the tool default).
+      (pause 5s - throttle)
+
+---- p09 S3-timeout 负数 ----
+[p09-S3-timeout 负数#04] web_read   0.0s ok=False err=invalid_request: Timeout must be positive invalid_request chars=
+      summary: invalid request · Timeout must be positive
+   err: invalid_request: Timeout must be positive
+      (pause 5s - throttle)
+
+---- p09 S4-改正形自救 ----
+[p09-S4-改正形自救#05] web_read   0.1s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · the target is loopback/private, so dhole dropped its own synthesized
+   自救: ok=True | cap=19000
+P09 DONE

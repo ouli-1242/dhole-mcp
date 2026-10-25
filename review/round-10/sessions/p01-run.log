@@ -1,0 +1,20 @@
+[p01 阮鸿飞4·无人机飞手] session 79b1e7c80e544234a52f8b1825e13f4f server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p01-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p01 S1-读 call 篇(timeout 合同) ----
+[p01-S1-读 call 篇(timeout 合同)#02] sys_guide   0.0s ok=None err=-  chars=
+      (pause 6s - throttle)
+
+---- p01 S2-显式 timeout=5000( learned 让位) ----
+[p01-S2-显式 timeout=5000( learned 让位)#03] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · the target is loopback/private, so dhole dropped its own synthesized
+   attempt_cap_ms: 4000 | learned 句在场: False
+   summary: 200 OK · 387B markdown · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google 
+      (pause 6s - throttle)
+
+---- p01 S3-缺省(learned 接管) ----
+[p01-S3-缺省(learned 接管)#04] web_read   0.1s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+   attempt_cap_ms: 5000 | learned 句在场: True
+   summary: 200 OK · 387B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 30000ms - an explici
+P01 DONE

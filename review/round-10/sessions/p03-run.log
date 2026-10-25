@@ -1,0 +1,19 @@
+[p03 阮鸿飞4b·咖啡师] session 60e840122a9a42a2b5ffa894d52e8280 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p03-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p03 S1-start 篇照读 ----
+[p03-S1-start 篇照读#02] sys_guide   0.0s ok=None err=-  chars=
+      (pause 6s - throttle)
+
+---- p03 S2-慢页长文(缺省预算) ----
+[p03-S2-慢页长文(缺省预算)#03] web_read   0.1s ok=True err=-  chars=7157
+      summary: 200 OK · 7.0KB markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 500
+   ok: True | chars: None | cap: 5000
+   summary: 200 OK · 7.0KB markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 30000ms - an explic
+      (pause 6s - throttle)
+
+---- p03 S3-feed(缺省) ----
+[p03-S3-feed(缺省)#04] feed_read   0.0s ok=None err=-  chars=
+      summary: 1 URLs asked · 1 rows answered · 1 rows carried 3 items, newest first · fetched live at 2026-10-25T2
+   summary: 1 URLs asked · 1 rows answered · 1 rows carried 3 items, newest first · fetched live at 2026-10-25T22:53:45Z - this path
+P03 DONE

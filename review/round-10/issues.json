@@ -1,0 +1,23 @@
+[
+  {
+    "id": "R10-001",
+    "title": "crawl 抓过的页对 web_read 不可见（首报）",
+    "status": "rejected",
+    "verdict": "P3 REJECT：设计如此——store 侧质量闸不存壳页（_store_ttl 注释在册：否则整个 TTL 端出坏页）+ cache 键=URL+请求指纹（html/markdown 各一代）；probe 复核 html 同参仍回源",
+    "first_reported_by": "P10"
+  },
+  {
+    "id": "R10-002",
+    "title": "attempt_cap_ms=4000 < 显式 timeout=5000（首报）",
+    "status": "rejected",
+    "verdict": "P3 REJECT：attempt_cap_ms 字段合同「what is left of the call when this tier runs」——分层扣减后真实所得，P09 20000→19000 同款一致",
+    "first_reported_by": "P01"
+  },
+  {
+    "id": "R10-003",
+    "title": "recall '轮换' 0 行疑似召回缺口（首报）",
+    "status": "rejected",
+    "verdict": "P3 REJECT：量具查错词——probe 实证正文无 '轮换'，用正文词 '每次请求' 召回 6 changing 行命中",
+    "first_reported_by": "P04"
+  }
+]

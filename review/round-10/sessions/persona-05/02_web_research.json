@@ -1,0 +1,51 @@
+{
+ "query": "web_act 组合语义 动作链",
+ "sources": [
+  {
+   "n": 2,
+   "url": "https://www.cnblogs.com/pywjh/p/9787605.html",
+   "title": "selenium动作链 - pywjh - 博客园",
+   "chars": 342,
+   "fetcher": "cache",
+   "content_ok": true
+  }
+ ],
+ "evidence": [
+  "[2] https://www.cnblogs.com/pywjh/p/9787605.html\n[Focus: 'web_act 组合语义 动作链'; showing 5 of 14 blocks by BM25 relevance. 3 of the 4 words you named occur nowhere on this page ('web', 'act', '组合语义'). Pass focus='' for the full page.]\n\n# \n\n    [selenium动作链](https://www.cnblogs.com/pywjh/p/9787605.html)\n\n这时候就需要用到我们的`Action Chains`（动作链）了。\n\n在导入动作链模块以后，需要声明一个动作链对象，在声明时将webdriver当作参数传入，\n\n## 常用动作方法"
+ ],
+ "failed": [
+  {
+   "n": 1,
+   "url": "https://blog.csdn.net/exlink2012/article/details/147380401",
+   "why": "http_error_521: server returned error status"
+  }
+ ],
+ "more_hits": [
+  {
+   "url": "https://blog.csdn.net/weixin_45993836/article/details/138192335",
+   "title": "【学习笔记】ActionChains 动作链-CSDN博客"
+  },
+  {
+   "url": "https://max.book118.com/html/2015/0904/24643505.shtm",
+   "title": "基于动态描述逻辑的语义Web服务组合.pdf"
+  },
+  {
+   "url": "https://www.163.com/dy/article/JJNGVTG205380EIV.html",
+   "title": "一文通透动作分块算法ACT：斯坦福Moblie Aloha所用的动作序列预测..."
+  },
+  {
+   "url": "https://www.jos.org.cn/jos/article/pdf/3902",
+   "title": "Web 服务组合功能与 QoS 的形式化统一建模和分析∗"
+  },
+  {
+   "url": "https://zy.21cnjy.com/19226723",
+   "title": "...“动作链”-课件（共23张PPT）_21世纪教育网-二一教育"
+  }
+ ],
+ "summary": "1 of 2 source(s) read into an evidence pack for 'web_act 组合语义 动作链'; 1 failed (each row says why)",
+ "note": "each evidence block starts with [n] and its URL - cite that pair. Per-source text is focus-filtered to the query, not the whole page; web_read a source (urls= batches work) for everything it says. more_hits are the search rows not read",
+ "_wall_s": 3.14,
+ "_tool": "web_research",
+ "_tag": "p05-S1-research timeout=30000(分摊账)#02",
+ "_ts": "2026-10-25T22:54:53.849316+00:00"
+}

@@ -1,0 +1,32 @@
+{
+ "status": 200,
+ "content": [
+  "推荐专题\n\n# 推荐专题\n\n[专题 1](/work/1)3 件\n\n[专题 2](/work/2)6 件\n\n[专题 3](/work/3)9 件\n\n[专题 4](/work/4)12 件\n\n[专题 5](/work/5)15 件\n\n[专题 6](/work/6)18 件\n\n[专题 7](/work/7)21 件\n\n[专题 8](/work/8)24 件\n\n[专题 9](/work/9)27 件\n\n[专题 10](/work/10)30 件\n\n[专题 1（重复）](/work/1#top)\n\n没有链接的一张\n\n[关于](/about)"
+ ],
+ "url": "http://127.0.0.1:8399/collections",
+ "fetcher_used": "stealthy",
+ "duration_ms": 2899,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 1182,
+ "total_extracted_chars": 269,
+ "visible_text_chars": 117,
+ "substance": "ok",
+ "escalation_path": "http→stealthy",
+ "summary": "200 OK · 269B markdown · stealthy · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 30000ms - an explicit timeout= lifts it · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T22:56:29Z",
+ "metadata": {
+  "title": "推荐专题",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "approx_tokens": 105,
+ "_wall_s": 2.92,
+ "_tool": "web_read",
+ "_tag": "p07-S1-首灌(真回源)#02",
+ "_ts": "2026-10-25T22:56:29.098186+00:00"
+}

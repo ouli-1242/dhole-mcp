@@ -1,0 +1,33 @@
+{
+ "start_url": "http://127.0.0.1:8399/about",
+ "pages": [
+  {
+   "url": "http://127.0.0.1:8399/about",
+   "status": 200,
+   "content_ok": true,
+   "fetcher_used": "http",
+   "title": "关于",
+   "page_type": "fallback",
+   "content": [
+    "关于\n靶站的孤链接去处。"
+   ],
+   "content_chars": 12,
+   "fetched_at": "2026-10-25T22:57:09Z",
+   "summary": "200 OK · 130B html · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 30000ms - an explicit timeout= lifts it · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  }
+ ],
+ "pages_crawled": 1,
+ "pages_discovered": 1,
+ "deadline_ms_applied": 25000,
+ "attempt_cap_ms": 30000,
+ "sitemap_used": false,
+ "duration_ms": 43,
+ "summary": "crawled 1 page(s) at http://127.0.0.1:8399 (depth <= 1); 1 content_ok; fallback:1; max_pages clamped 50->40 (supported range 1-40)",
+ "next_action": "",
+ "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+ "identity_applied": "allow_private",
+ "_wall_s": 0.05,
+ "_tool": "web_crawl",
+ "_tag": "p08-S3-大预算(池尽停)#04",
+ "_ts": "2026-10-25T22:57:09.355035+00:00"
+}

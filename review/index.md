@@ -21,6 +21,7 @@
 | round-07 | review/round-07 | 0702edf | 10 | 57（画像+旁支）+ 5（P3 probe/P5 复验） | 1 fixed（R07-001 寄存器拒绝补 pin 出路）+ 手册对账 PASS（19=19 双向零差/urls=11 如实/绝对句×2 实证）| 完成（手册与实况轮：P5 复验 W1+W2，pytest 7757 绿×2）|
 | round-08 | review/round-08 | ba4e008 | 10 | 93（画像 57+补全 14+旁支 22）| 3 fixed（R08-001/005 frame 落空具名 · R08-003 重铸出声 · R08-002 上传寿命句）+ **2 REJECT（R08-004/006——审查推翻首报，同根=量具截断）**| 完成（web_act 深水轮：P5 复验 V1-V3，7765 测试，xdist flake 在册）|
 | round-09 | review/round-09 | 190be29 | 10 | 74（画像 65+旁支 9+probe 3）| 1 fixed（R09-002 recall clamp 具名）+ **3 REJECT（R09-001 fetch_hint 账在场 / R09-003 双形状 test 立规 / R09-004 location 门在）**+ E2 六现顺延 | 完成（检索质量轮：P5 复验 V1/V2，pytest 7768 绿×2）|
+| round-10 | review/round-10 | 5ad954f | 10 | 57（画像 48+旁支 9）+ probe 2 | **0 CONFIRM（第二个零修复轮，非连续）**——3 线索全 REJECT（crawl 代际=壳页闸+指纹键合 / attempt_cap=字段合同 / recall 0 行=查错词 probe 实证）| 完成（预算与时间轮：P5 真重启 13 tools，pytest 7768 绿）|
 
 ## 跨轮资产
 
