@@ -80,6 +80,22 @@
 | E2 家族 | 查询串变体三行并排（五轮样本：R02/R03/R04/R05/R06） | backlog（**五现**，升级线早已过——排期项） | P06/P09/P10 |
 | focus 引擎名 / sheet 小计 | 回执不露用了哪把引擎；doc_parse 无每 sheet 小计 | backlog E 观察登记 | P02/P04 |
 
+## round-07 新增/复发（P3 裁决后）
+
+| 区 | 现象 | 状态 | 来源 |
+|---|---|---|---|
+| 拒绝句落后于手册 | 寄存器拒绝只说 no earlier action，不教「一条链 + pin 保页 + 重读同值」出路（手册先长出 pin 章，错误句没跟上） | **已修**（R07-001，fix-R07-F1：no-store 分支补出路句；available 分支不加；行为零变化） | P02 |
+| 共享缓存躲门 | P09「先撞门」腿吃了 7 分钟前的 cache replay，私网门未被真撞（回执如实申报 cached copy，非伪造成功） | 环境/量具注（受控场景 cache_ttl=0 已在册——round-04 教训家族） | P09 |
+| E 家族 | 无新样本（E2 本轮未触发） | — | — |
+
+## round-07 必测回归点（round-08 新画像真实回访）
+
+1. 寄存器拒绝补句（one call / this chain / read as= / pin=true 重读同值）全文在场；有可用寄存器时仍列 available（fix-R07-F1）。
+2. 手册四篇抽查：start 三路线照做通、configuration env 清单=代码注册表（现 19 名）、behavior 交互示例照抄可跑。
+3. 名单句完整谱：force_fetcher/focus_mode/extraction_type/sys_state show tokens——名单内真收、名单外真拒，多一个少一个都是候选。
+4. 绝对句×2：cloud metadata 具名拒绝（豁免在力下 fetch 层）；archive 不可关（错误行带 archive.org asked/429）。
+5. 前六轮家产清单（common-issues 各轮必测回归点合并回访）。
+
 ## round-06 必测回归点（round-07 新画像真实回访）
 
 1. 0 匹配 selector 的 summary note（fix-R06-F1）。

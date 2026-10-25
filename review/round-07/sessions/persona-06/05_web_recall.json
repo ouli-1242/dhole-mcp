@@ -1,0 +1,30 @@
+{
+ "query": "短视频",
+ "engine": "neural",
+ "results": [
+  {
+   "url": "https://www.bilibili.com/v/game/esports/",
+   "title": "游戏-哔哩哔哩 (゜-゜)つロ 干杯~-bilibili",
+   "snippet": "…g 绘画 人工智能 家装房产 户外潮流 健身 手工 旅游出行 三农 亲子 健康 情感 生活兴趣 生活经验 公益 超高清 视频播客 更多 专栏 直播 活动 课堂 社区中心 新歌热榜 游戏 3772 6 02:25 【地平线6】你们别骂鱼雷了，少了他们我的线上快乐源泉起码得少一半！",
+   "fetched_at": "2026-10-25T17:45:04Z",
+   "is_stale": false,
+   "age_days": 0.1,
+   "extraction_type": "markdown",
+   "relevance": 0.1187
+  }
+ ],
+ "terms_found": [
+  "视频"
+ ],
+ "terms_absent": [
+  "短视"
+ ],
+ "scanned_rows": 129,
+ "candidates_scored": 7,
+ "dropped_low_relevance": 6,
+ "note": "pointers, not answers - web_read the URL (fresh or cached) for the page itself; stale rows are ones whose cache TTL has passed",
+ "_wall_s": 1.08,
+ "_tool": "web_recall",
+ "_tag": "p06-S2-浅用两颗#05",
+ "_ts": "2026-10-25T19:53:52.815444+00:00"
+}

@@ -58,3 +58,11 @@
 - driver 的 summary 100 字截断会藏信号（round-03 R03-003）→ 判「顶层缺信号」前必须看全文。
 - 旁证进程撞主进程磁盘缓存会让「受控三态」失真（round-04 P01 态3）→ 受控测试一律 cache_ttl=0。
 - 脚本不读返回值会把 fail-closed 拒绝误判成功能损坏（round-04 P03）→ 诊断脚本必须打印全回执。
+
+## 2026-10-26T06:0x round-07 收官（P6 完成）
+- P0/P1：主题「手册与实况（文档诚实轮）」；9207；10 新职业（L3×3/P02·P07·P10，L1×3/P03·P06·P09）；57 发 13/13 工具（p80/p81 旁支补 discover/research/doc_parse/request）。
+- P2/P3：1 候选 → **1 CONFIRM(B)**（R07-001 寄存器拒绝缺 pin 出路——手册对，拒绝句没跟上，话术层修）；手册对账 8 项 PASS：19=19（代码 env_registry 双向零差，不信 P1 脚本重 derive）、urls=11 描述如实、绝对句×2 fetch 层实证；**0 REJECT 需立档**（无首报被推翻）；**两处 P1 证据缺口由 P3 probe 当轮补测**（probe A cloud metadata fetch 层 / probe B watch 错误行原文）——量具薄点不靠脑补入档；量具教训+1：p09 撞门腿被共享缓存中和（受控场景 cache_ttl=0 家族）。
+- P4：唯一修复 test-first（1 新测试文件 2 测试，先红后绿）；ruff 16 基线。
+- P5：真重启（pid 29048，dhole-9207.log 唯一横幅可查）复验 W1 补句全文在场 + W2 手册对账；pytest **7757 绿 ×2**（首轮 DNS-recheck xdist flake 2 failed，隔离+两轮重跑全绿——诚实记录）。
+- P6：提交（round-07 全套）；index/common-issues/journal 更新；issues.json 单条。
+- 下一步：round-08 P0（端口 9208；从 round-07 顶端切出；先读 common-issues 的 round-07 必测回归点 + 各轮家产合并回访）。

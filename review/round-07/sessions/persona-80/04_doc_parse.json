@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "file://<server cwd>\\review\\tests\\dummy.pdf",
+ "fetcher_used": "parse",
+ "duration_ms": 0,
+ "error": "File not found: <server cwd>\\review\\tests\\dummy.pdf. `cwd=<working directory>` does nothing for a path that is already absolute (that argument's own schema says it is ignored for one), so re-sending this string cannot change the answer - what can is the NAME (spelling, extension, is it really a file?) and the PLACE (name the directory plus the file inside it).",
+ "summary": "local error · 0B markdown · parse",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. The name you gave is not where this call looked. `error` lists the places it tried and, for the shape of the path you passed, what could still change the answer; re-sending the same string unchanged reaches the same stop.",
+ "fetched_at": "2026-10-25T19:56:15Z",
+ "diagnosis": {
+  "code": "file_not_found",
+  "retryable": false,
+  "recover_with": "name a file that exists - `error` says where this call looked and what could still change the answer"
+ },
+ "_wall_s": 0.01,
+ "_tool": "doc_parse",
+ "_tag": "p80-misc#04",
+ "_ts": "2026-10-25T19:56:15.703253+00:00"
+}

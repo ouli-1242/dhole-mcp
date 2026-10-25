@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/collections?n=1",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: force_fetcher='curl' is not a fetcher tier. Valid values: 'http', 'stealthy'.",
+ "summary": "invalid request · force_fetcher='curl' is not a fetcher tier. Valid values: 'http', 'stealthy'.",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. Fix force_fetcher='curl' and call again - no request was made. Argument types are checked rather than guessed at: a misread `urls` would otherwise come back looking like a successful 19-URL fetch.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_read",
+ "_tag": "p07-S1-名单内真收/名单外真拒#04",
+ "_ts": "2026-10-25T19:54:18.281503+00:00"
+}

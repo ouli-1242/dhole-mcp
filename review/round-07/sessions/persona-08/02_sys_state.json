@@ -1,0 +1,46 @@
+{
+ "message": "Reported cache: cache 175 entr(ies). Nothing erased.",
+ "sessions": [
+  {
+   "session_id": "e5ab1377a78d",
+   "browser_open": true,
+   "browser_type": "stealthy",
+   "browser_created": "2026-10-25T19:54:09.856766+00:00"
+  },
+  {
+   "session_id": "p02-pin-1",
+   "browser_open": true,
+   "browser_type": "stealthy",
+   "browser_created": "2026-10-25T19:47:38.884717+00:00",
+   "pinned_url": "http://127.0.0.1:8399/challenge/text",
+   "pinned_left_s": 0
+  },
+  {
+   "session_id": "p02-sess-1",
+   "hosts": {
+    "127.0.0.1": [
+     "sid"
+    ]
+   },
+   "cookies": 1,
+   "expires_in_s": 85986,
+   "browser_open": true,
+   "browser_type": "stealthy",
+   "browser_created": "2026-10-25T19:47:57.310525+00:00"
+  }
+ ],
+ "open_count": 3,
+ "cache": {
+  "entries": 175,
+  "expired": 105,
+  "oldest_age_s": 136628,
+  "cap": 10000,
+  "hits": 6,
+  "misses": 9
+ },
+ "next_action": "sys_state(clear=['<session id>']) forgets one; clear=['sessions'] with confirm=true forgets every one. A session with cookies is a live credential for that host until it expires on its own.",
+ "_wall_s": 0.02,
+ "_tool": "sys_state",
+ "_tag": "p08-show=cache#02",
+ "_ts": "2026-10-25T19:54:56.101291+00:00"
+}

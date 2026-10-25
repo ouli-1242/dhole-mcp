@@ -1,0 +1,18 @@
+[p04 黎照·合规] session 85a6aff02de94f3d86d3a0cb64914476 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p04 S1-configuration 篇 ----
+[p04-S1-configuration 篇#01] sys_guide   0.0s ok=None err=-  chars=
+   手册提到的 env 数: 0
+   样本: []
+      (pause 7s - throttle)
+
+---- p04 S2-sys_state 对照 ----
+[p04-S2-sys_state 对照#02] sys_state   0.0s ok=None err=-  chars=
+[p04-S2-sys_state 对照#03] sys_state   0.0s ok=None err=Nothing matches 'env_registry': a token is one of cache, engine_state, sessions, cred_defa unknown_state_token chars=
+P04 DONE
+[p44 黎照·全文对照] session 18b705b69b00482cb4c42d452df30378 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+Traceback (most recent call last):
+  File "<stdin>", line 7, in <module>
+AttributeError: 'Client' object has no attribute 'initialize'
+configuration 篇 env 数: 19
+清单: ['DHOLE_ALLOW_PRIVATE_HOSTS', 'DHOLE_BOCHA_API_KEY', 'DHOLE_BRAVE_API_KEY', 'DHOLE_DEEPSEEK_API_KEY', 'DHOLE_DEFAULT_CONTENT_CHARS', 'DHOLE_DEFAULT_ENGINES', 'DHOLE_EXA_API_KEY', 'DHOLE_FIRECRAWL_API_KEY', 'DHOLE_HF_ENDPOINT', 'DHOLE_HOME', 'DHOLE_HTTP_TOKEN', 'DHOLE_IGNORE_ROBOTS', 'DHOLE_PERSIST_CREDENTIALS', 'DHOLE_RERANK_MODEL', 'DHOLE_SEARCH_PROXY', 'DHOLE_SEARCH_ROW_FILTER', 'DHOLE_TAVILY_API_KEY', 'DHOLE_TOOLS', 'DHOLE_USAGE_LOG']

@@ -1,0 +1,40 @@
+{
+ "status": 200,
+ "content": [
+  "[Focus: '缓存'; NO block cleared the relevance cut (best score 0.0 against a cut of 1.0) - these 5 of 15 blocks are the highest-scored, not matches. none of the 1 words you named occurs on this page ('缓存'). Pass focus='' for the full page.]\n\n推荐专题\n\n# 推荐专题\n\n[专题 1](/work/1)3 件\n\n[专题 2](/work/2)6 件\n\n[专题 3](/work/3)9 件"
+ ],
+ "url": "http://127.0.0.1:8399/collections?n=2",
+ "fetcher_used": "stealthy",
+ "duration_ms": 4104,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 1182,
+ "total_extracted_chars": 312,
+ "pagination_stream": "focused",
+ "page_total_chars": 269,
+ "pagination_basis": "pagination counts the focus-filtered text: 312 of 269 chars this page holds. Change focus= and these offsets move - re-read from offset=0 (or drop focus=) for the whole page",
+ "focus_blocks_total": 15,
+ "focus_blocks_kept": 5,
+ "focus_terms_total": 1,
+ "focus_terms_absent": 1,
+ "focus_selection": "closest",
+ "visible_text_chars": 117,
+ "substance": "ok",
+ "escalation_path": "http→stealthy",
+ "summary": "200 OK · 312B markdown · stealthy · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named",
+ "content_ok": true,
+ "next_action": "focus found nothing that answers the query: none of the 1 words you named occurs on this page. What is in `content` is the closest the page has, NOT a match - do not cite this page for that claim. Two moves: focus='' to read the whole page (the phrase can sit in a block the splitter cut away), or take the claim to a source that carries those words.",
+ "fetched_at": "2026-10-25T19:54:26Z",
+ "metadata": {
+  "title": "推荐专题",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "approx_tokens": 94,
+ "_wall_s": 4.12,
+ "_tool": "web_read",
+ "_tag": "p07-S1-名单内真收/名单外真拒#05",
+ "_ts": "2026-10-25T19:54:26.404615+00:00"
+}

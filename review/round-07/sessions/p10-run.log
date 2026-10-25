@@ -1,0 +1,19 @@
+[p10 桑无咎·架构师] session ec3ff34793d3411ca6bcf59e024701fb server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p10 S1-『never opens cloud metadata』 ----
+[p10-S1-『never opens cloud metadata』#01] cred_defaults   0.0s ok=None err=-  chars=
+   allow_private=True: stored allow_private. 1 key(s) in force.
+[p10-S1-『never opens cloud metadata』#02] cred_defaults   0.0s ok=None err=-  chars=
+[p10-S1-『never opens cloud metadata』#03] cred_defaults   0.0s ok=None err=-  chars=
+   allow_private=['169.254.169.254']: stored allow_private. 1 key(s) in force.
+[p10-S1-『never opens cloud metadata』#04] cred_defaults   0.0s ok=None err=-  chars=
+[p10-S1-『never opens cloud metadata』#05] cred_defaults   0.0s ok=None err=-  chars=
+   allow_private='169.254.169.254': stored allow_private. 1 key(s) in force.
+[p10-S1-『never opens cloud metadata』#06] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p10 S2-『No parameter disables it』(archive 档) ----
+[p10-S2-『No parameter disables it』(archive 档)#07] cred_defaults   0.0s ok=None err=-  chars=
+[p10-S2-『No parameter disables it』(archive 档)#08] web_read   0.7s ok=False err=http_error_404: server returned error status http_error_404 chars=3
+      summary: 404 ERR · 3B markdown · http · the target is loopback/private, so dhole dropped its own synthesized 
+   archive 被问: True | 404 行: http_error_404: server returned error status
+P10 DONE

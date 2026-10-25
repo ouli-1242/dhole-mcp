@@ -225,3 +225,36 @@ Ctrl-C 鍋滄
 [03:35:57] GET /collections?v=1 -> 200
 [03:36:01] GET /collections?v=2 -> 200
 [03:36:01] GET /collections?v=2 -> 200
+[03:45:44] client gone (ConnectionResetError) from 127.0.0.1:58679
+[03:46:48] GET /article -> 200
+[03:47:04] GET /collections -> 200
+[03:47:04] GET /work/1 -> 200
+[03:47:38] GET /challenge/text -> 200
+[03:47:39] GET /challenge/text -> 200
+[03:47:57] GET /login -> 200
+[03:47:58] GET /login -> 200
+[03:47:58] POST /login -> 302
+[03:47:58] GET /account -> 200
+[03:49:59] GET /feed.xml -> 200
+[03:51:15] GET /work/8 -> 200
+[03:51:15] GET /work/7 -> 200
+[03:51:15] GET /work/6 -> 200
+[03:51:15] GET /work/10 -> 200
+[03:51:15] GET /work/9 -> 200
+[03:51:16] GET /work/11 -> 200
+[03:51:23] GET /longaside?mb=1 -> 200
+[03:54:05] GET /collections?n=1 -> 200
+[03:54:09] GET /collections?n=1 -> 200
+[03:54:10] GET /collections?n=1 -> 200
+[03:54:22] GET /collections?n=2 -> 200
+[03:54:22] GET /collections?n=2 -> 200
+[03:55:25] GET /article?r=1 -> 200
+[03:55:31] GET /checkout -> 200
+[03:55:31] GET /checkout -> 200
+[03:55:35] GET /checkout -> 200
+[03:55:35] GET /checkout -> 200
+    !! ORDER WRITTEN: {'ts': '2026-10-25T19:55:36.151543+00:00', 'item': '鏈烘閿洏', 'qty': '1', 'sid': '', 'remote': '127.0.0.1'}
+[03:55:36] POST /checkout -> 200
+[03:55:53] GET /no-such-page?abs=1 -> 404
+[03:56:31] POST /login -> 400
+[04:05:03] client gone (ConnectionResetError) from 127.0.0.1:55273

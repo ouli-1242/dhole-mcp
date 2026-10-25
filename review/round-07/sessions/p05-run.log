@@ -1,0 +1,19 @@
+[p05 云苏·全栈] session bf1d7189f6624653a29501ad089ad8f9 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p05-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p05 S1-urls 上限 10 ----
+[p05-S1-urls 上限 10#02] web_read   0.7s ok=None err=-  chars=
+      summary: 11 URLs asked · 11 answered without an HTTP error (`successful` counts exactly that, per row's statu
+      (pause 7s - throttle)
+
+---- p05 S2-max_content_chars 边界 499 ----
+[p05-S2-max_content_chars 边界 499#03] web_read   0.1s ok=True err=- truncated chars=7157
+      summary: 200 OK · 7.0KB markdown · http · truncated · max_content_chars clamped 499->500 (supported range 500
+      cap-499: {"error": "", "summary": "200 OK · 7.0KB markdown · http · truncated · max_content_chars clamped 499->500 (supported range 500-200000) · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 30000ms - an explicit timeout= lifts it · the markdown extract kept 2,577 c
+      (pause 7s - throttle)
+
+---- p05 S3-extraction_type 非法值 ----
+[p05-S3-extraction_type 非法值#04] web_read   0.0s ok=False err=invalid_request: extraction_type='pdf' is not a value this tool accepts. Valid values: mar invalid_request chars=
+      summary: invalid request · extraction_type='pdf' is not a value this tool accepts
+      bad-type: {"error": "invalid_request: extraction_type='pdf' is not a value this tool accepts. Valid values: markdown, html, text, article, structured, check. No request was made."}
+P05 DONE

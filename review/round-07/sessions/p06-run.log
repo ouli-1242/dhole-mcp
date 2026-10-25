@@ -1,0 +1,18 @@
+[p06 慕容雪·自媒体] session 4740cdfa4f334a9e9f5871c176207402 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p06 S1-start 清单 ----
+[p06-S1-start 清单#01] sys_guide   0.0s ok=None err=-  chars=
+   13 tools 在: True | eleven/ten 残留: False
+      (pause 6s - throttle)
+
+---- p06 S2-浅用两颗 ----
+[p06-S2-浅用两颗#02] cred_defaults   0.0s ok=None err=-  chars=
+[p06-S2-浅用两颗#03] web_search   2.6s ok=None err=-  chars=
+      summary: Searched '短视频 运营 技巧' -> 3 results (3 high, 0 med, 0 low) from sogou,yahoo,yandex,baidu; rerank=neura
+      search: {"summary": "Searched '短视频 运营 技巧' -> 3 results (3 high, 0 med, 0 low) from sogou,yahoo,yandex,baidu; rerank=neural."}
+[p06-S2-浅用两颗#04] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · cache · cached copy, fetched 7.0 min ago · replayed from the cache: the fet
+      read: {"content_ok": true}
+[p06-S2-浅用两颗#05] web_recall   1.1s ok=None err=-  chars=
+   - {"url": "https://www.bilibili.com/v/game/esports/", "title": "游戏-哔哩哔哩 (゜-゜)つロ 干杯~-bilibili", "is_sta
+P06 DONE

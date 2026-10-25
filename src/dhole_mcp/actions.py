@@ -1232,11 +1232,17 @@ def _validate_actions(actions) -> list[dict]:
             # 那六个字符，而那一发看起来是一次成功的 fill。
             for name in _REF_RE.findall(text):
                 if name not in stored:
+                    _where = (f" (available: {sorted(stored)})" if stored else
+                              " (no {\"read\": ...} action runs before this one)")
+                    _pin_way = ("" if stored else
+                                f" - registers live for this one call: mint the name in "
+                                f"THIS chain with an earlier read step's as={name} "
+                                f"before the fill; a pinned page "
+                                f"(pin=true) holds the page open, so a re-read in the next "
+                                f"call's chain returns the same token")
                     raise ValueError(
                         f"action {i} 'fill.text' references {{={name}}} but no "
-                        f"earlier action stored that name"
-                        + (f" (available: {sorted(stored)})" if stored else
-                           " (no {\"read\": ...} action runs before this one)"))
+                        f"earlier action stored that name{_where}{_pin_way}")
             target = _act_target(
                 i, key, {k: v for k, v in val.items() if k != "text"})
             out.append({key: {**target, "text": text}})

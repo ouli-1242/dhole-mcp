@@ -1,0 +1,7 @@
+{
+ "_raw": "topic='call' from references/examples.md — writing any call: parameter placement with counterexamples, copy-ready patterns\n(22691 chars, 13 sections)\n\n# Call Pattern Handbook (copy-ready)\n\nEvery pattern below is tested against the live wire. **Read section 0 first** — misplaced parameters are the single most common way to fumble this MCP.\n\n## 0. Parameter placement rules (correct vs incorrect)\n\nEvery parameter is a **top-level argument** of the tool it belongs to. Nothing is nested: a wrapper object is rejected, not read.\n\n```json\n✅ {\"url\": \"https://example.com\", \"focus\": \"pricing\"}\n❌ {\"url\": ",
+ "_wall_s": 0.02,
+ "_tool": "sys_guide",
+ "_tag": "p01-S5-读 call 篇(placement 陷阱)#06",
+ "_ts": "2026-10-25T19:47:10.878507+00:00"
+}

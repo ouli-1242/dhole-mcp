@@ -1,0 +1,26 @@
+[p07 越千帆·QA] session 3493100672484eb093948eb7a113a940 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p07-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p07 S1-名单内真收/名单外真拒 ----
+[p07-S1-名单内真收/名单外真拒#02] web_read   0.0s ok=False err=js_shell_detected: page requires JavaScript rendering but fetcher returned placeholder js_shell chars=269
+      summary: 200 OK · 269B markdown · http · the target is loopback/private, so dhole dropped its own synthesized
+   force_fetcher=http: err=js_shell_detected: page requires JavaScript rendering but fe ok=False
+      (pause 4s - throttle)
+[p07-S1-名单内真收/名单外真拒#03] web_read   4.4s ok=True err=-  chars=269
+      summary: 200 OK · 269B markdown · stealthy · this call makes 1 extra direct request to the target before the 
+   force_fetcher=stealthy: err=NONE ok=True
+      (pause 4s - throttle)
+[p07-S1-名单内真收/名单外真拒#04] web_read   0.0s ok=False err=invalid_request: force_fetcher='curl' is not a fetcher tier. Valid values: 'http', 'stealt invalid_request chars=
+      summary: invalid request · force_fetcher='curl' is not a fetcher tier. Valid values: 'http', 'stealthy'.
+   force_fetcher=curl: err=invalid_request: force_fetcher='curl' is not a fetcher tier. ok=False
+      (pause 4s - throttle)
+[p07-S1-名单内真收/名单外真拒#05] web_read   4.1s ok=True err=-  chars=312
+      summary: 200 OK · 312B markdown · stealthy · the target is loopback/private, so dhole dropped its own synthes
+   focus_mode=filter: OK
+      (pause 6s - throttle)
+
+---- p07 S2-名单句完整性 ----
+[p07-S2-名单句完整性#06] web_read   0.0s ok=False err=invalid_request: extraction_type='bogus' is not a value this tool accepts. Valid values: m invalid_request chars=
+      summary: invalid request · extraction_type='bogus' is not a value this tool accepts
+   extraction_type 名单句: invalid_request: extraction_type='bogus' is not a value this tool accepts. Valid values: markdown, html, text, article, structured
+P07 DONE

@@ -1,0 +1,208 @@
+{
+ "message": "Reported engine_state: engine health 12 row(s). Nothing erased.",
+ "sessions": [
+  {
+   "session_id": "e5ab1377a78d",
+   "browser_open": true,
+   "browser_type": "stealthy",
+   "browser_created": "2026-10-25T19:54:09.856766+00:00"
+  },
+  {
+   "session_id": "p02-pin-1",
+   "browser_open": true,
+   "browser_type": "stealthy",
+   "browser_created": "2026-10-25T19:47:38.884717+00:00",
+   "pinned_url": "http://127.0.0.1:8399/challenge/text",
+   "pinned_left_s": 0
+  },
+  {
+   "session_id": "p02-sess-1",
+   "hosts": {
+    "127.0.0.1": [
+     "sid"
+    ]
+   },
+   "cookies": 1,
+   "expires_in_s": 85982,
+   "browser_open": true,
+   "browser_type": "stealthy",
+   "browser_created": "2026-10-25T19:47:57.310525+00:00"
+  }
+ ],
+ "open_count": 3,
+ "engine_health": {
+  "brave": {
+   "n": 75,
+   "mean": 0.0,
+   "last": -1,
+   "last_nodes": -1,
+   "last_kept": -1,
+   "zero": 0,
+   "drift": 0,
+   "status": "blocked",
+   "http": 429,
+   "ts": 1792958031.444348,
+   "verdict": "blocked",
+   "cooldown_seconds_left": 0.0
+  },
+  "bing_global": {
+   "n": 74,
+   "mean": 6.93,
+   "last": -1,
+   "last_nodes": -1,
+   "last_kept": -1,
+   "zero": 0,
+   "drift": 0,
+   "status": "preempted",
+   "http": null,
+   "ts": 1792958031.444348,
+   "verdict": "not_asked",
+   "cooldown_seconds_left": 0.0
+  },
+  "yandex": {
+   "n": 74,
+   "mean": 12.07,
+   "last": 14,
+   "last_nodes": 14,
+   "last_kept": 14,
+   "zero": 0,
+   "drift": 0,
+   "status": "ok",
+   "http": 200,
+   "ts": 1792958031.444348,
+   "verdict": "healthy",
+   "cooldown_seconds_left": 0.0
+  },
+  "duckduckgo": {
+   "n": 74,
+   "mean": 5.1,
+   "last": -1,
+   "last_nodes": -1,
+   "last_kept": -1,
+   "zero": 0,
+   "drift": 0,
+   "status": "blocked",
+   "http": 202,
+   "ts": 1792958031.444348,
+   "verdict": "blocked",
+   "cooldown_seconds_left": 0.0
+  },
+  "baidu": {
+   "n": 79,
+   "mean": 5.19,
+   "last": 4,
+   "last_nodes": 4,
+   "last_kept": 1,
+   "zero": 0,
+   "drift": 0,
+   "status": "ok",
+   "http": 200,
+   "ts": 1792958031.444348,
+   "verdict": "healthy",
+   "cooldown_seconds_left": 0.0
+  },
+  "so360": {
+   "n": 75,
+   "mean": 6.12,
+   "last": -1,
+   "last_nodes": -1,
+   "last_kept": -1,
+   "zero": 0,
+   "drift": 0,
+   "status": "blocked",
+   "http": 200,
+   "ts": 1792958031.444348,
+   "verdict": "blocked",
+   "cooldown_seconds_left": 0.0
+  },
+  "sogou": {
+   "n": 75,
+   "mean": 9.52,
+   "last": 8,
+   "last_nodes": 8,
+   "last_kept": 8,
+   "zero": 0,
+   "drift": 0,
+   "status": "ok",
+   "http": 200,
+   "ts": 1792958031.444348,
+   "verdict": "healthy",
+   "cooldown_seconds_left": 0.0
+  },
+  "bing": {
+   "n": 74,
+   "mean": 6.27,
+   "last": -1,
+   "last_nodes": -1,
+   "last_kept": -1,
+   "zero": 0,
+   "drift": 0,
+   "status": "preempted",
+   "http": null,
+   "ts": 1792958031.444348,
+   "verdict": "not_asked",
+   "cooldown_seconds_left": 0.0
+  },
+  "yahoo": {
+   "n": 51,
+   "mean": 5.88,
+   "last": 7,
+   "last_nodes": 7,
+   "last_kept": 7,
+   "zero": 0,
+   "drift": 0,
+   "status": "ok",
+   "http": 200,
+   "ts": 1792958031.444348,
+   "verdict": "healthy",
+   "cooldown_seconds_left": 0.0
+  },
+  "marginalia": {
+   "n": 49,
+   "mean": 0.0,
+   "last": -1,
+   "last_nodes": -1,
+   "last_kept": -1,
+   "zero": 8,
+   "drift": 0,
+   "status": "preempted",
+   "http": null,
+   "ts": 1792958031.444348,
+   "verdict": "not_asked",
+   "cooldown_seconds_left": 0.0
+  },
+  "shenma": {
+   "n": 30,
+   "mean": 6.4,
+   "last": -1,
+   "last_nodes": -1,
+   "last_kept": -1,
+   "zero": 0,
+   "drift": 0,
+   "status": "blocked",
+   "http": 200,
+   "ts": 1792958031.444348,
+   "verdict": "blocked",
+   "cooldown_seconds_left": 0.0
+  },
+  "seznam": {
+   "n": 30,
+   "mean": 2.6,
+   "last": -1,
+   "last_nodes": -1,
+   "last_kept": -1,
+   "zero": 3,
+   "drift": 0,
+   "status": "preempted",
+   "http": null,
+   "ts": 1792958031.444348,
+   "verdict": "not_asked",
+   "cooldown_seconds_left": 0.0
+  }
+ },
+ "next_action": "sys_state(clear=['<session id>']) forgets one; clear=['sessions'] with confirm=true forgets every one. A session with cookies is a live credential for that host until it expires on its own.",
+ "_wall_s": 0.01,
+ "_tool": "sys_state",
+ "_tag": "p08-show=engine_state#03",
+ "_ts": "2026-10-25T19:55:00.109705+00:00"
+}

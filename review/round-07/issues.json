@@ -1,0 +1,11 @@
+[
+  {
+    "id": "R07-001",
+    "title": "寄存器具名拒绝缺「一条链 + pinned 重读」出路",
+    "status": "fixed",
+    "fix": "fix-R07-F1",
+    "first_reported_by": "P02",
+    "verdict": "P3 CONFIRM(B)：手册对（registers 一条链、pin 保页、重读同值），拒绝现场只说 no earlier action stored——话术层修复，行为零变化；available 分支不加",
+    "verified": "P5 真重启重放（pid 29048）：pin 补句全文在场（sessions/verify-r7.log W1）"
+  }
+]

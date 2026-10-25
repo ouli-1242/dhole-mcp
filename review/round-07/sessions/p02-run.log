@@ -1,0 +1,23 @@
+[p02 屠维·技术作家] session 6e18e2b86ac44da0bcbe840a550b24ae server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p02-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p02 S1-读 behavior 篇 ----
+[p02-S1-读 behavior 篇#02] sys_guide   0.0s ok=None err=-  chars=
+   behavior 篇长度: 737 | pin 提及: 0 | session_id 提及: 0
+      (pause 7s - throttle)
+
+---- p02 S2-pin=true 驻留(手册示例照抄) ----
+[p02-S2-pin=true 驻留(手册示例照抄)#03] web_act   4.4s ok=False err=- no_content chars=44
+      summary: 200 OK · 44B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   第一步 read ok: True | registers: (见回执)
+      (pause 7s - throttle)
+[p02-S2-pin=true 驻留(手册示例照抄)#04] web_act   0.0s ok=False err=invalid_request: action 0 'fill.text' references {=code} but no earlier action stored that invalid_request chars=
+      summary: invalid request · action 0 'fill.text' references {=code} but no earlier action stored that name
+   跨调用 pin 链: False | 
+      (pause 7s - throttle)
+
+---- p02 S3-session_id 会话保持 ----
+[p02-S3-session_id 会话保持#05] web_act   5.5s ok=True err=- no_content chars=34
+      summary: 200 OK · 34B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+      login-with-session: {"summary": "200 OK · 34B markdown · stealthy · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dia
+P02 DONE

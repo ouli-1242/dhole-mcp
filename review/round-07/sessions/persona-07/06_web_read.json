@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/collections?n=3",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: extraction_type='bogus' is not a value this tool accepts. Valid values: markdown, html, text, article, structured, check. No request was made.",
+ "summary": "invalid request · extraction_type='bogus' is not a value this tool accepts",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. Fix extraction_type='bogus' and call again - no request was made. Argument types are checked rather than guessed at: a misread `urls` would otherwise come back looking like a successful 19-URL fetch.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.02,
+ "_tool": "web_read",
+ "_tag": "p07-S2-名单句完整性#06",
+ "_ts": "2026-10-25T19:54:32.429860+00:00"
+}
