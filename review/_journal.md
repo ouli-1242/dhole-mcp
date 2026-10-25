@@ -89,3 +89,11 @@
 - P4：零修复。P5：真重启（pid 14648）13 tools PASS；pytest 7768 绿（对账平）；ruff 16。
 - P6：提交（round-10 全套）；index/common-issues/journal 更新。
 - 下一步：round-11 P0（端口 9211；从 round-10 顶端切出；先读 common-issues 的 round-10 必测回归点）。
+
+## 2026-10-26T13:1x round-11 收官（P6 完成）
+- P0/P1：主题「冷面深水」；9211；10 新职业（L3×3：字幕组长/珠宝鉴定师/飞行签派员）；63 发 13/13 工具 + probe（POST confirm 补全/not_a_pdf 魔数）。
+- P2/P3：4 候选 → **1 CONFIRM(B) + 4 REJECT**：R11-001 feed max_items 负数静默全量（描述只许 0=all——同 R09-002 家族合同）已修；R11-002 doc_parse 两码各司其职；R11-003 POST confirm 教在 next_action（量具没读全——教训家族第四起）；R11-004 since 教日期格式；R11-005 sys_guide 内容教学非错误门。
+- P4：唯一修复 test-first（1 新测试文件 3 测试，先红后绿）：feed max_items 负数具名拒绝（0 语义不动）。
+- P5：真重启（pid 18048）复验 V1/V2 PASS；pytest **7771 绿×2**（7768+3 对账平；DNS-recheck flake 来去如前，隔离绿+两连全量绿在册）；ruff 16。
+- P6：提交（round-11 全套）；index/common-issues/journal 更新。
+- 下一步：round-12 P0（端口 9212；从 round-11 顶端切出；先读 common-issues 的 round-11 必测回归点）。

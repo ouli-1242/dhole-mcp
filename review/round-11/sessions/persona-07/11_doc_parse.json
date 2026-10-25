@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: Missing required argument(s) for doc_parse: ['file_path']. Supported here: ['cwd', 'encoding', 'file_path', 'offset', 'pages', 'password']",
+ "summary": "invalid request · Missing required argument(s) for doc_parse: ['file_path']",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. Pass file_path=... and call again - no request was made. Every argument is a top-level parameter; the tool's schema lists their types.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "doc_parse",
+ "_tag": "p07-misc#11",
+ "_ts": "2026-10-25T23:18:54.883790+00:00"
+}

@@ -1,0 +1,20 @@
+{
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "query": "x",
+ "results": [],
+ "total_results": 0,
+ "rerank_model": "",
+ "duration_ms": 0,
+ "error": "Invalid site filter: 'a b c' (must be a domain like 'docs.python.org')",
+ "summary": "invalid request · Invalid site filter: 'a b c' (must be a domain like 'docs.python.org')",
+ "next_action": "Nothing was searched - no engine was asked. site= is one bare domain ('docs.python.org'), not a URL and not a path.",
+ "same_document_groups": [],
+ "_wall_s": 0.0,
+ "_tool": "web_search",
+ "_tag": "p07-misc#04",
+ "_ts": "2026-10-25T23:18:33.832810+00:00"
+}

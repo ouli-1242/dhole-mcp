@@ -1,0 +1,8 @@
+== V1 R11-001: feed max_items=-3 → 具名拒绝 ==
+      summary: no request went out: the call was refused before any source was contacted, so nothing was fetched
+   err: invalid_request: max_items must be ≥ 0 (0 = all), got -3
+   判定: PASS
+== V2 0 = all 语义保持 ==
+      summary: 1 URLs asked · 1 rows answered · 1 rows carried 8 items, newest first · fetched live at 2026-10-25T2
+   max_items=0 → 8 items (期望 8=全部) | 判定: PASS
+VERIFY DONE

@@ -1,0 +1,27 @@
+[p02 白景舟3·珠宝鉴定师] session f8832429fdcc4b9c916ea3345a37dce0 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p02-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p02 S1-/collections 地图 ----
+[p02-S1-/collections 地图#02] web_discover   0.1s ok=None err=-  chars=
+      summary: mapped 12 URL(s) at http://127.0.0.1:8399 (depth <= 2) using 10 page fetch(es); no content extracted
+   summary: mapped 12 URL(s) at http://127.0.0.1:8399 (depth <= 2) using 10 page fetch(es); no content extracted; stopped: max_pages reached ·
+   行数: 10 | 采样: ['http://127.0.0.1:8399/collections', 'http://127.0.0.1:8399/work/1', 'http://127.0.0.1:8399/work/2', 'http://127.0.0.1:8399/work/3']
+      (pause 6s - throttle)
+
+---- p02 S2-行可点性(discover→read) ----
+[p02-S2-行可点性(discover→read)#03] web_read   4.5s ok=True err=-  chars=269
+      summary: 200 OK · 269B markdown · stealthy · the target is loopback/private, so dhole dropped its own synthes
+   top 行 read: ok=True | 200 OK · 269B markdown · stealthy · the target is loopback/private, so dhole dropped its o
+      (pause 6s - throttle)
+
+---- p02 S3-depth 参数语义 ----
+[p02-S3-depth 参数语义#04] web_discover   0.0s ok=False err=invalid_request: Unsupported argument(s) for web_discover: ['max_depth']. Supported: ['max invalid_request chars=
+      summary: invalid request · Unsupported argument(s) for web_discover: ['max_depth']
+   depth0: invalid request · Unsupported argument(s) for web_discover: ['max_depth']
+      (pause 6s - throttle)
+
+---- p02 S4-404 页 discover(断链现场) ----
+[p02-S4-404 页 discover(断链现场)#05] web_discover   1.0s ok=None err=-  chars=
+      summary: mapped 1 URL(s) at http://127.0.0.1:8399 (depth <= 2) using 1 page fetch(es); no content extracted
+   err: None
+P02 DONE

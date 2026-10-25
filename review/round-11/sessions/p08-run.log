@@ -1,0 +1,20 @@
+[p08 屠维5·电竞教练] session c7c45ec945474c4181c820faffa82e49 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p08-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p08 S1-discover 地图 ----
+[p08-S1-discover 地图#02] web_discover   0.1s ok=None err=-  chars=
+      summary: mapped 12 URL(s) at http://127.0.0.1:8399 (depth <= 2) using 10 page fetch(es); no content extracted
+   地图行: 10 | 种子采样: ['http://127.0.0.1:8399/collections', 'http://127.0.0.1:8399/work/1', 'http://127.0.0.1:8399/work/2']
+      (pause 6s - throttle)
+
+---- p08 S2-crawl(地图数对账) ----
+[p08-S2-crawl(地图数对账)#03] web_crawl   0.1s ok=None err=-  chars=
+      summary: crawled 4 page(s) at http://127.0.0.1:8399 (depth <= 2); 1 content_ok; article:1, fallback:2, js_she
+   crawl: crawled 4 page(s) at http://127.0.0.1:8399 (depth <= 2); 1 content_ok; article:1, fallback:2, js_shell:1; stopped: max_pages reached
+      (pause 6s - throttle)
+
+---- p08 S3-read 落页(content_ok 账) ----
+[p08-S3-read 落页(content_ok 账)#04] web_read   3.1s ok=None err=-  chars=
+      summary: 1 URLs asked · 1 answered without an HTTP error (`successful` counts exactly that, per row's status/
+   - ok=True chars=?
+P08 DONE

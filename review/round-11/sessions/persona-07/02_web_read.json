@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: url must be a string, got int (123). Pass url as text.",
+ "summary": "invalid request · url must be a string, got int (123). Pass url as text.",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. Fix url and call again - no request was made. Argument types are checked rather than guessed at: a misread `urls` would otherwise come back looking like a successful 19-URL fetch.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_read",
+ "_tag": "p07-misc#02",
+ "_ts": "2026-10-25T23:18:27.820105+00:00"
+}

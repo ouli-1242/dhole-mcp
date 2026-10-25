@@ -116,6 +116,25 @@
 | recall 0 行 | 查询词与页正文不匹配（臆测词） | **量具注**（probe：正文词命中 6 行——召回正常） | P04 |
 | E 家族 | /changing 变体族再现（E2 六现既有） | — | P04 |
 
+## round-11 新增/复发（P3 裁决后）
+
+| 区 | 现象 | 状态 | 来源 |
+|---|---|---|---|
+| feed max_items 负数静默全量 | -3 被 `<=0` 分支同 0 一起放行——描述只许「default 20; 0 = all」 | **已修**（R11-001，fix-R11-F1：负数具名拒绝；0 语义不动） | P10 |
+| 修法句住在 next_action | POST 写闸的 confirm=true 教在 next_action——只读 error 会漏（R09-003 族） | 环境/量具注（probe 实证 confirm=true 全通） | P03 |
+| doc_parse 双码 | %PDF 在结构坏=pdf_open_failed；无魔数=not_a_pdf | 两码各司其职（REJECT，非缺陷） | P01 |
+| sys_guide 未知 topic | 内容教学列全部 topic——非错误门 | 设计（REJECT） | P07 |
+| E 家族 | 无新样本 | — | — |
+
+## round-11 必测回归点（round-12 新画像真实回访）
+
+1. feed max_items 负数具名拒绝；0=all 保持；正数切片+note（fix-R11-F1）。
+2. web_request 写闸 confirm 形状（next_action 教法）+ session 交叉（欢迎回来）。
+3. doc_parse 双码（pdf_open_failed / not_a_pdf）+ GBK 保真。
+4. feed 混发逐行分账（404/connection_refused 具名）+ since 教日期格式。
+5. 第一拒全集 12 发抽样：11 颗带码前缀+出路，sys_guide 内容教学。
+6. 前十轮家产合并回访。
+
 ## round-10 必测回归点（round-11 新画像真实回访）
 
 1. 显式 timeout= 合同：learned 句让位不出现；attempt_cap_ms=分层扣减实得。

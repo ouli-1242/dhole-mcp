@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/collections",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: Unsupported argument(s) for web_discover: ['max_depth']. Supported: ['max_pages', 'max_total_chars', 'path_exclude', 'path_include', 'resume_token', 'search', 'sitemap', 'timeout', 'url']",
+ "summary": "invalid request · Unsupported argument(s) for web_discover: ['max_depth']",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. The name in `error` is not one this tool takes - rename or drop it; the list in `error` is everything it does take. Every argument is a top-level parameter.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_discover",
+ "_tag": "p02-S3-depth 参数语义#04",
+ "_ts": "2026-10-25T23:15:22.861888+00:00"
+}

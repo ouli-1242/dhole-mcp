@@ -1,0 +1,26 @@
+[p10 越千帆5b·手语翻译] session ee257a91075f42e7b1ab38c80f7208f4 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p10-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p10 S1-doc_parse 路径不存在 ----
+[p10-S1-doc_parse 路径不存在#02] doc_parse   0.0s ok=False err=File not found: Z:/no/such/file.csv. `cwd=<working directory>` does nothing for a path tha file_not_found chars=
+      summary: local error · 0B markdown · parse
+   err: File not found: Z:/no/such/file.csv. `cwd=<working directory>` does nothing for a path that is already absolute (that argument's own schema says it is ignored f
+      (pause 5s - throttle)
+
+---- p10 S2-doc_parse 目录 ----
+[p10-S2-doc_parse 目录#03] doc_parse   0.0s ok=False err=File not found: Z:. Pass an absolute path, or pass cwd=<working directory> so relative pat file_not_found chars=
+      summary: local error · 0B markdown · parse
+   err: File not found: Z:. Pass an absolute path, or pass cwd=<working directory> so relative paths resolve against it.
+      (pause 5s - throttle)
+
+---- p10 S3-feed limit 越界(R09-002 家产:具名 clamp 同款?) ----
+[p10-S3-feed limit 越界(R09-002 家产:具名 clamp 同款?)#04] feed_read   0.0s ok=False err=invalid_request: Unsupported argument(s) for feed_read: ['limit']. Supported: ['max_items' invalid_request chars=
+      summary: invalid request · Unsupported argument(s) for feed_read: ['limit']
+   err: invalid_request: Unsupported argument(s) for feed_read: ['limit']. Supported: ['max_items', 'since', 'timeout', 'urls'] | clamped: None | summary: invalid request · Unsupported argument(s) for feed_read: ['limit']
+      (pause 5s - throttle)
+
+---- p10 S4-feed max_items 负数 ----
+[p10-S4-feed max_items 负数#05] feed_read   0.0s ok=None err=-  chars=
+      summary: 1 URLs asked · 1 rows answered · 1 rows carried 8 items, newest first · fetched live at 2026-10-25T2
+   err: None | clamped: None
+P10 DONE

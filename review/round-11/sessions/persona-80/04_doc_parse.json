@@ -1,0 +1,25 @@
+{
+ "status": 200,
+ "content": [
+  "| 税号 | 税率 |\n| --- | --- |\n| 8471.30 | 0% |\n| 9018.90 | 3% |"
+ ],
+ "url": "file:///<server cwd>/review/round-11/sessions/files/tariff.csv",
+ "fetcher_used": "parse",
+ "duration_ms": 3,
+ "error": "",
+ "content_type": "text/csv",
+ "total_size_bytes": 39,
+ "total_extracted_chars": 59,
+ "summary": "200 OK · 59B markdown · parse",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T23:22:43Z",
+ "metadata": {
+  "encoding": "utf-8"
+ },
+ "approx_tokens": 18,
+ "_wall_s": 0.01,
+ "_tool": "doc_parse",
+ "_tag": "p80-B3-doc_parse(本地 csv)#04",
+ "_ts": "2026-10-25T23:22:43.083543+00:00"
+}

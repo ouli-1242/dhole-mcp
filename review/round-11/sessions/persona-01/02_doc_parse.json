@@ -1,0 +1,25 @@
+{
+ "status": 200,
+ "content": [
+  "| 时间轴 | 台词 |\n| --- | --- |\n| 00:01 | 你好 |\n| 00:02 | 再见 |"
+ ],
+ "url": "file:///<server cwd>/review/round-11/sessions/files/subs_utf8.csv",
+ "fetcher_used": "parse",
+ "duration_ms": 14,
+ "error": "",
+ "content_type": "text/csv",
+ "total_size_bytes": 46,
+ "total_extracted_chars": 56,
+ "summary": "200 OK · 56B markdown · parse",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T23:14:34Z",
+ "metadata": {
+  "encoding": "utf-8"
+ },
+ "approx_tokens": 21,
+ "_wall_s": 0.02,
+ "_tool": "doc_parse",
+ "_tag": "p01-S1-UTF-8 CSV#02",
+ "_ts": "2026-10-25T23:14:34.773571+00:00"
+}

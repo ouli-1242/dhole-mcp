@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/login",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: method=POST is a write: it changes server state, and stored credentials for this host ride along automatically",
+ "summary": "invalid request · method=POST is a write: it changes server state",
+ "content_ok": false,
+ "next_action": "Nothing was sent. Ask the user, then re-send the same call with confirm=true. HEAD probes need no confirm.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.02,
+ "_tool": "web_request",
+ "_tag": "p03-S2-POST confirm(真提交)#03",
+ "_ts": "2026-10-25T23:15:54.945849+00:00"
+}

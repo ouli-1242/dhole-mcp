@@ -1,0 +1,26 @@
+{
+ "status": 200,
+ "content": [
+  "| 时间轴 | 台词 |\n| --- | --- |\n| 00:01 | 设备检查 |\n| 00:02 | 开始录制 |"
+ ],
+ "url": "file:///<server cwd>/review/round-11/sessions/files/subs_gbk.csv",
+ "fetcher_used": "parse",
+ "duration_ms": 12,
+ "error": "",
+ "content_type": "text/csv",
+ "total_size_bytes": 42,
+ "total_extracted_chars": 60,
+ "summary": "200 OK · 60B markdown · parse",
+ "content_ok": true,
+ "next_action": "the charset here is a guess, not a declaration: this file named no encoding and gb18030 decoded it cleanly - but gb18030 decodes Shift_JIS and EUC-KR bytes cleanly too, into plausible-looking wrong Chinese, and nothing cheap tells the three apart. If the text reads like the wrong language, re-call with encoding= ('shift_jis', 'euc-kr', 'big5', 'gbk') - that turns the guess into a verdict. The content is not being doubted by this note.",
+ "fetched_at": "2026-10-25T23:14:40Z",
+ "metadata": {
+  "encoding": "gb18030",
+  "encoding_basis": "guessed"
+ },
+ "approx_tokens": 25,
+ "_wall_s": 0.04,
+ "_tool": "doc_parse",
+ "_tag": "p01-S2-GBK CSV(R01 家产:不乱码)#03",
+ "_ts": "2026-10-25T23:14:40.814806+00:00"
+}

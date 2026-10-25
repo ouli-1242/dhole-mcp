@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: Unsupported argument(s) for feed_read: ['limit']. Supported: ['max_items', 'since', 'timeout', 'urls']",
+ "summary": "invalid request · Unsupported argument(s) for feed_read: ['limit']",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. The name in `error` is not one this tool takes - rename or drop it; the list in `error` is everything it does take. Every argument is a top-level parameter.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.03,
+ "_tool": "feed_read",
+ "_tag": "p10-S3-feed limit 越界(R09-002 家产:具名 clamp 同款?)#04",
+ "_ts": "2026-10-25T23:20:42.528461+00:00"
+}

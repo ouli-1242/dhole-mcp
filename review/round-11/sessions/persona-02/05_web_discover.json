@@ -1,0 +1,35 @@
+{
+ "start_url": "http://127.0.0.1:8399/no-such-page",
+ "pages": [
+  {
+   "diagnosis": {
+    "code": "http_error_404",
+    "retryable": false,
+    "recover_with": ""
+   },
+   "url": "http://127.0.0.1:8399/no-such-page",
+   "status": 404,
+   "fetcher_used": "http",
+   "title": "404",
+   "fetched_at": "2026-10-25T23:15:29Z",
+   "summary": "404 ERR · 116B html · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile · archive.org was asked and holds no snapshot of this URL - nothing else in this response came from a second source",
+   "error": "http_error_404: server returned error status"
+  }
+ ],
+ "pages_crawled": 1,
+ "pages_discovered": 1,
+ "discover_only": true,
+ "deadline_ms_applied": 25000,
+ "attempt_cap_ms": 25000,
+ "sitemap_used": false,
+ "duration_ms": 991,
+ "summary": "mapped 1 URL(s) at http://127.0.0.1:8399 (depth <= 2) using 1 page fetch(es); no content extracted",
+ "next_action": " Plan cb346ac9680e is held here for 1h: web_crawl(url=..., resume_token='cb346ac9680e:0') fetches it without re-sending URLs (add selector=/schema= to project each page); or web_read(urls=[...]) the picks directly.",
+ "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+ "identity_applied": "allow_private",
+ "plan_id": "cb346ac9680e",
+ "_wall_s": 1.0,
+ "_tool": "web_discover",
+ "_tag": "p02-S4-404 页 discover(断链现场)#05",
+ "_ts": "2026-10-25T23:15:29.861160+00:00"
+}

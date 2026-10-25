@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: url is required: the absolute http(s) URL to send this request to",
+ "summary": "invalid request · url is required: the absolute http(s) URL to send this request to",
+ "content_ok": false,
+ "next_action": "Nothing was sent. Correct the argument and call again - no request was made. web_request takes an absolute http(s) URL (e.g. https://example.com).",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_request",
+ "_tag": "p07-misc#09",
+ "_ts": "2026-10-25T23:18:48.869294+00:00"
+}

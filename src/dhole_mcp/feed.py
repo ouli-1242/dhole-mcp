@@ -477,9 +477,16 @@ def _cap_applied(result: FeedResult, max_items: int) -> None:
     `items_without_date` / `items_older_than_since` 是**整源口径**的数（不随 `max_items`
     变），而返回的是子集。从前响应里没有任何一句"共 N 条 / 交回 M 条"，于是同一条源在
     `max_items=3` 那一发读起来像"这个源没有不带日期的条目"。切过就要说；没切过不多打一句。
+
+    负数不在声明域里（描述只许「default 20; 0 = all」）：R11-001 的现场是 -3 静默
+    按「全部」处理——没有有意义的正域钳制目标，按行为指南的绝对句「clamped-and-named
+    or refused」**拒绝**。0 的在册语义（= all）不动。
     """
     total = len(result.items)
-    if max_items <= 0 or total <= max_items:
+    if max_items < 0:
+        raise ValueError(
+            f"invalid_request: max_items must be ≥ 0 (0 = all), got {max_items}")
+    if max_items == 0 or total <= max_items:
         return
     result.items = result.items[:max_items]
     said = (f"this source has {total} entries after the filters above; "
