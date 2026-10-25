@@ -264,8 +264,10 @@ def _cmd_config(argv: list[str]) -> int:
 _PRIVATE_ROW_PREFIX = "invalid_request: URL targets internal/private IP"
 _WATCH_PRIVATE_HINT = (
     " · watch runs in its own process, so the MCP-side cred_defaults waiver in "
-    "memory mode never reaches it: set DHOLE_PERSIST_CREDENTIALS=1 and store "
-    "allow_private once (cred_defaults), or watch a publicly reachable URL")
+    "memory mode never reaches it: set DHOLE_PERSIST_CREDENTIALS=1 in the watch "
+    "process's own environment too (export it where `dhole watch run` runs - the "
+    "MCP side having it is not enough), store allow_private once (cred_defaults), "
+    "or watch a publicly reachable URL")
 
 
 def _watch_row_error_hint(error: str) -> str:

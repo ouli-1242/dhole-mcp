@@ -1,0 +1,12 @@
+== 1. 起持久化旁证 9206, 存凭据 ==
+  set: None
+  sidecar killed
+== 2. 重启旁证, 凭据应还在 ==
+  重启后私网读: False | invalid request · URL targets internal/private IP (127.0.0.1 in 127.0.0.0/8)
+== 3. watch 用落盘豁免真查私网(R02-001 出路的另一半) ==
+  add: Dhole  ✓ watching  http://127.0.0.1:8399/changing
+  the first `dhole watch run` records its baseline; the next run can a
+  run exit: 2
+  row: ✗ error      http://127.0.0.1:8399/changing  HTTP 0  ✗ invalid_request: URL targets internal/private IP (127.0.0.1 in 127.0.0.0/8) · watch runs in its own process, so the MCP-side 
+  (watchlist cleaned; 注意: 本步无 MCP 侧豁免进程, watch 靠的是第 1 步落盘的 allow_private)
+P03 DONE

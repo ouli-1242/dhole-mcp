@@ -1,0 +1,38 @@
+{
+ "status": 200,
+ "content": [
+  "框架\n\nOuter page (no interactive elements here)\n========================================="
+ ],
+ "url": "http://127.0.0.1:8399/frame",
+ "fetcher_used": "stealthy",
+ "duration_ms": 13367,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 249,
+ "total_extracted_chars": 87,
+ "visible_text_chars": 44,
+ "escalation_path": "direct:stealthy",
+ "summary": "200 OK · 87B markdown · stealthy · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dialing, not the page. · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named · 1 of 1 actions did not take effect (fill '#note': the selector matched no element (or none became actionable) before the timeout: Locator.fill: Timeout 10000ms exceeded. )",
+ "content_ok": true,
+ "next_action": "these interactions never happened, so the content is the page BEFORE them - check each failed selector against a fresh copy of the page and retry just that action (metadata.actions lists one row per action)",
+ "fetched_at": "2026-10-25T18:48:37Z",
+ "metadata": {
+  "title": "框架",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+  "actions": [
+   {
+    "action": "fill '#note'",
+    "ok": false,
+    "error": "the selector matched no element (or none became actionable) before the timeout: Locator.fill: Timeout 10000ms exceeded. · this page hosts 1 <iframe> element(s) and the selector only sees the TOP document - if the element lives inside one, address it with \"frame\": (the iframe's name, a URL prefix, or a CSS selector for the <iframe>), e.g. {\"selector\": \"...\", \"frame\": \"#app\"} - sys_guide(topic='behavior') has the full shape"
+   }
+  ]
+ },
+ "identity_applied": "allow_private",
+ "approx_tokens": 23,
+ "_wall_s": 14.67,
+ "_tool": "web_act",
+ "_tag": "p40-misc#02",
+ "_ts": "2026-10-25T18:48:37.836283+00:00"
+}

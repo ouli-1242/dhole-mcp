@@ -1,0 +1,80 @@
+{
+ "query": "专题 推荐",
+ "engine": "neural",
+ "results": [
+  {
+   "url": "http://127.0.0.1:8399/collections",
+   "title": "推荐专题",
+   "snippet": "推荐专题 推荐专题 专题 1 3 件 专题 2 6 件 专题 3 9 件 专题 4 12 件 专题 5 15 件 专题 6 18 件 专题 7 21 件 专题 8 24 件 专题 9 27 件 专题 10 30 件 专题 1（重复） 没有链接的一张",
+   "fetched_at": "2026-10-25T18:09:55Z",
+   "is_stale": false,
+   "age_days": 0.0,
+   "extraction_type": "html",
+   "relevance": 0.9982,
+   "variants": 2
+  },
+  {
+   "url": "https://www.163.com/dy/article/L90AC7MN0511D5IC.html",
+   "title": "弗朗西斯哈伦森获2026年诺贝尔物理学奖",
+   "snippet": "…碍地穿过物质，仿佛物质并不存在。因此，需要建造规模庞大的探测器，才能捕捉并研究它们与原子之间极为罕见的相互作用。",
+   "fetched_at": "2026-10-24T10:50:26Z",
+   "is_stale": true,
+   "age_days": 1.3,
+   "extraction_type": "markdown",
+   "relevance": 0.7801
+  },
+  {
+   "url": "http://127.0.0.1:8399/longaside?explicit=1",
+   "title": "专题长文",
+   "snippet": "专题长文 专题长文 ==== 第 0 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 1 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 2 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 3 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 4 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。",
+   "fetched_at": "2026-10-25T17:31:54Z",
+   "is_stale": false,
+   "age_days": 0.0,
+   "extraction_type": "markdown",
+   "relevance": 0.5336
+  },
+  {
+   "url": "http://127.0.0.1:8399/longaside",
+   "title": "专题长文",
+   "snippet": "专题长文 专题长文 ==== 第 0 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 1 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 2 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 3 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 4 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。",
+   "fetched_at": "2026-10-25T17:31:40Z",
+   "is_stale": false,
+   "age_days": 0.0,
+   "extraction_type": "markdown",
+   "relevance": 0.5336
+  },
+  {
+   "url": "https://zhuanlan.zhihu.com/p/389644512",
+   "title": "什么是SaaS网站的最佳实践",
+   "snippet": "…lesforce-vs-hubspot) - **社会证明。** 当你赞美自己时，不要指望潜在客户会相信你的话—用客户的推荐和评论来支持你。例子：[Drift vs Intercom](https://link.zhihu.com/?target=https%3A//www.drift.com/drift-vs-intercom/) - **明确权衡取舍。** 每个人都知道每个解决方案都有优点和缺点(事实上，“[品牌]利弊”在大型SaaS公司中是一个相当常见的搜索词）。",
+   "fetched_at": "2026-10-25T17:32:26Z",
+   "is_stale": false,
+   "age_days": 0.0,
+   "extraction_type": "markdown",
+   "relevance": 0.3062
+  },
+  {
+   "url": "http://cea.ceaj.org/CN/10.3778/j.issn.1002-8331.2105-0135",
+   "title": "卷积神经网络中的注意力机制综述",
+   "snippet": "…g and Applications, 2021, 57(20): 64-72.",
+   "fetched_at": "2026-10-24T08:11:58Z",
+   "is_stale": true,
+   "age_days": 1.4,
+   "extraction_type": "markdown",
+   "relevance": 0.0766
+  }
+ ],
+ "terms_found": [
+  "专题",
+  "推荐"
+ ],
+ "terms_absent": [],
+ "scanned_rows": 100,
+ "candidates_scored": 10,
+ "dropped_low_relevance": 3,
+ "note": "pointers, not answers - web_read the URL (fresh or cached) for the page itself; stale rows are ones whose cache TTL has passed",
+ "_wall_s": 1.57,
+ "_tool": "web_recall",
+ "_tag": "p04-misc#01",
+ "_ts": "2026-10-25T18:26:39.203440+00:00"
+}

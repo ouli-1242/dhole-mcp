@@ -1,0 +1,31 @@
+[p08 商陆·审计] session 876678db403041aca072010438622d0f server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p08 S1-同 URL 两读:缓存 vs 真源 ----
+[p08-S1-同 URL 两读:缓存 vs 真源#01] cred_defaults   0.0s ok=None err=-  chars=
+[p08-S1-同 URL 两读:缓存 vs 真源#02] web_read   0.1s ok=True err=-  chars=7157
+      summary: 200 OK · 7.0KB markdown · http · the markdown extract kept 2,577 characters of this page while its m
+   第一发来源: ['http']
+[p08-S1-同 URL 两读:缓存 vs 真源#03] web_read   0.0s ok=True err=-  chars=7157
+      summary: 200 OK · 7.0KB markdown · cache · cached copy, fetched 0.0 min ago · replayed from the cache: the fe
+   第二发来源: ['cache'] | cached 措辞: True
+      (pause 7s - throttle)
+
+---- p08 S2-真源对账(强制 fresh) ----
+[p08-S2-真源对账(强制 fresh)#04] web_read   0.1s ok=True err=-  chars=7157
+      summary: 200 OK · 7.0KB markdown · http · the markdown extract kept 2,577 characters of this page while its m
+   第三发来源: ['http']
+      (pause 7s - throttle)
+
+---- p08 S3-/changing 必变 vs 缓存 ----
+[p08-S3-/changing 必变 vs 缓存#05] web_read   0.1s ok=True err=-  chars=90
+      summary: 200 OK · 90B markdown · http · the target is loopback/private, so dhole dropped its own synthesized 
+   fresh1 第几次: ['4']
+[p08-S3-/changing 必变 vs 缓存#06] web_read   0.0s ok=True err=-  chars=90
+      summary: 200 OK · 90B markdown · cache · cached copy, fetched 0.0 min ago · replayed from the cache: the fetc
+   缓存回放第几次: ['4'] (应同上——缓存回放不是新请求)
+      (pause 7s - throttle)
+
+---- p08 S4-sys_state census ----
+[p08-S4-sys_state census#07] sys_state   0.0s ok=None err=-  chars=
+   census keys: []
+P08 DONE

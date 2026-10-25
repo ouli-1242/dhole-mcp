@@ -1,0 +1,28 @@
+[p07 华青野·教练] session 712d8507da434e209804720eb9ad9437 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p07 S1-搜训练计划 ----
+[p07-S1-搜训练计划#01] web_search  17.0s ok=None err=-  chars=
+      summary: Searched '居家 徒手 训练计划 一周' -> 5 results (5 high, 0 med, 0 low) from yahoo,yandex; rerank=neural.
+   - {"url": "https://zhuanlan.zhihu.com/p/2049784010038064313", "title": "居家徒手一周增肌减脂训练计划 - 知乎", "relevance_score":
+   - {"url": "https://your-pt.com/zh/blog/bodyweight-workout-plan-at-home/", "title": "居家徒手训练计划：无需任何器材 | Your PT", 
+   - {"url": "https://wenku.baidu.com/view/ef1351f8a717866fb84ae45c3b3567ec102ddc9a.html", "title": "徒手健身一周训练计划表 - 
+      (pause 7s - throttle)
+
+---- p07 S2-存一篇+视频页 ----
+[p07-S2-存一篇+视频页#02] cred_defaults   0.0s ok=None err=-  chars=
+[p07-S2-存一篇+视频页#03] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · the target is loopback/private, so dhole dropped its own synthesized
+      article: {"content_ok": true}
+[p07-S2-存一篇+视频页#04] web_read   0.0s ok=True err=-  chars=999
+      summary: 200 OK · 999B markdown · cache · cached copy, fetched 45.3 min ago
+      bilibili: {"page_type": "article", "summary": "200 OK · 999B markdown · cache · cached copy, fetched 45.3 min ago"}
+      (pause 7s - throttle)
+
+---- p07 S3-跨会话找回 ----
+[p07 华青野·明天] session 694e4ec9983a47f7a3b17ae816987505 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p07-misc#01] web_recall   2.2s ok=None err=-  chars=
+   - {"url": "http://127.0.0.1:8399/article", "title": "本地抓取工具配置指南", "is_stale": false}
+   - {"url": "http://127.0.0.1:8399/article?r3v=1", "title": "本地抓取工具配置指南", "is_stale": false}
+   - {"url": "http://127.0.0.1:8399/article?w3=1792948271-3", "title": "本地抓取工具配置指南", "is_stale": true}
+[p07-misc#02] sys_guide   0.0s ok=None err=-  chars=
+P07 DONE

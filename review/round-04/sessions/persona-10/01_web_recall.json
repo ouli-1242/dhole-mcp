@@ -1,0 +1,42 @@
+{
+ "query": "二维码 扫码",
+ "engine": "neural",
+ "results": [
+  {
+   "url": "http://127.0.0.1:8399/qr",
+   "title": "二维码",
+   "snippet": "签到二维码",
+   "fetched_at": "2026-10-25T18:33:01Z",
+   "is_stale": false,
+   "age_days": 0.0,
+   "extraction_type": "markdown",
+   "relevance": 0.787,
+   "variants": 2
+  },
+  {
+   "url": "http://127.0.0.1:8399/",
+   "title": "靶站索引",
+   "snippet": "靶站索引 dhole 模拟测试靶站 登录 账户 结算 二维码 验证码 长文",
+   "fetched_at": "2026-10-25T16:23:49Z",
+   "is_stale": true,
+   "age_days": 0.1,
+   "extraction_type": "html",
+   "relevance": 0.1303,
+   "variants": 2
+  }
+ ],
+ "terms_found": [
+  "二维",
+  "维码"
+ ],
+ "terms_absent": [
+  "扫码"
+ ],
+ "scanned_rows": 105,
+ "candidates_scored": 4,
+ "note": "pointers, not answers - web_read the URL (fresh or cached) for the page itself; stale rows are ones whose cache TTL has passed",
+ "_wall_s": 0.08,
+ "_tool": "web_recall",
+ "_tag": "p10-misc#01",
+ "_ts": "2026-10-25T18:33:19.637977+00:00"
+}

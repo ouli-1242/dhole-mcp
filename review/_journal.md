@@ -30,3 +30,16 @@
 - P5：真重启（9203 kill→起）复验 W1（page_type 取值零变化）+ 前两轮 11 项回归全 PASS；全量 pytest 7747 绿。
 - P6：提交（round-03 全套）；index/backlog(E12)/common-issues/journal 更新。
 - 下一步：round-04 P0（新主题自定；端口 9204；从 round-03 顶端切出；先读 common-issues 的 9 项必测回归点）。
+
+## 2026-10-26T03:1x round-04 收官（P6 完成）
+- P0/P1：主题「状态与写路径」；9204 + 旁证 9205（robots 三态）/9206（持久化）；10 新职业（L3×2/L1×3）；55 发 + 补条 3 发 = 13/13 工具。
+- P2/P3：4 候选 → 2 CONFIRM(B) + 2 E 记录；**三条大行为澄清**：①持久化跨重启成立（重启后报 robots_disallowed 恰是私网门放行的证明）；②混 set fail-closed 整单拒零落盘（P03 首试误判成「持久化坏了」——脚本没读返回值）；③R02-001 出路真通（带 flag watch baseline 200 exit 0）。
+- P4：2 处修复 test-first（2 新测试文件 4 测试）：iframe 超时步级提示（失败现场用子 frame 数，一般机制）、watch 出路句补 watch 进程 env 前题。
+- P5：真重启复验 W1/W2；全量 pytest **7751 绿**（首轮 -x 曾 1 failed 疑 flaky，两轮完整重跑全绿——诚实记录）；ruff 0 新增。
+- P6：提交（round-04 全套）；index/backlog(E7 三现/E10 三现)/common-issues/journal 更新。
+- 下一步：round-05 P0（端口 9205 段；从 round-04 顶端切出；common-issues 的 8 项必测回归点）。
+
+### 观测量具教训（跨轮复用）
+- driver 的 summary 100 字截断会藏信号（round-03 R03-003）→ 判「顶层缺信号」前必须看全文。
+- 旁证进程撞主进程磁盘缓存会让「受控三态」失真（round-04 P01 态3）→ 受控测试一律 cache_ttl=0。
+- 脚本不读返回值会把 fail-closed 拒绝误判成功能损坏（round-04 P03）→ 诊断脚本必须打印全回执。

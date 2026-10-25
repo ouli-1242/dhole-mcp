@@ -1,0 +1,53 @@
+{
+ "status": 200,
+ "content": [
+  "订单已提交\n\n订单已提交\n=====\n\n服务端已写入订单日志。"
+ ],
+ "url": "http://127.0.0.1:8399/checkout",
+ "fetcher_used": "stealthy",
+ "duration_ms": 4030,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 183,
+ "total_extracted_chars": 31,
+ "visible_text_chars": 23,
+ "substance": "ok",
+ "escalation_path": "direct:stealthy",
+ "summary": "200 OK · 31B markdown · stealthy · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dialing, not the page. · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T18:28:46Z",
+ "metadata": {
+  "title": "订单已提交",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+  "actions": [
+   {
+    "action": "fill '#item'",
+    "ok": true
+   },
+   {
+    "action": "fill '#qty'",
+    "ok": true
+   },
+   {
+    "action": "click '#place-order'",
+    "ok": true,
+    "submitted": true,
+    "submission": "POST"
+   }
+  ]
+ },
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "no_content",
+  "retryable": false,
+  "recover_with": "the action chain ran — `metadata.actions` holds one receipt per step, and that is the answer about this call. The content verdict describes the page it left behind, not the chain. Do NOT re-issue the same chain: every step already marked ok would run again (a fill would fill twice)."
+ },
+ "approx_tokens": 23,
+ "_wall_s": 4.08,
+ "_tool": "web_act",
+ "_tag": "p06-S2-确认后真提交#02",
+ "_ts": "2026-10-25T18:28:46.170920+00:00"
+}

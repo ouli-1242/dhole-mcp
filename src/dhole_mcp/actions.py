@@ -1963,18 +1963,36 @@ def _hint_unresolved_braces(text: str, values: dict, shot: dict) -> None:
         f"earlier read step's as=. Registers this chain holds: {have}")
 
 
-def _action_failure(exc: Exception) -> str:
+def _action_failure(exc: Exception, page=None) -> str:
     """The first useful line of an action failure, in caller-facing terms.
 
     Playwright's own text is a call log; the part that matters here is which of
     the two things went wrong — nothing matched the selector, or it matched but
     never became actionable.
+
+    R04-001：selector 落空且**这页有子 frame**时，把「顶层没有、可能在 frame
+    里」这半句说出去——失败现场拿得到 page，子 frame 数是当场可知的一般事实
+    （round-04 P02 实测三步各烧 10s 而错误从头到尾没提 frame:）。页面无 frame
+    或失败与 selector 无关时，一个字不加。
     """
     text = str(exc).strip()
     first = text.splitlines()[0][:160] if text else type(exc).__name__
     if "waiting for locator" in text or "no element" in text.lower():
-        return ("the selector matched no element (or none became actionable) before "
-                f"the timeout: {first}")
+        msg = ("the selector matched no element (or none became actionable) before "
+               f"the timeout: {first}")
+        if page is not None:
+            try:
+                child_frames = [f for f in page.frames if f is not page.main_frame]
+            except Exception:
+                child_frames = []
+            if child_frames:
+                msg += (f" · this page hosts {len(child_frames)} <iframe> element(s) and "
+                        "the selector only sees the TOP document - if the element lives "
+                        'inside one, address it with "frame": (the iframe\'s name, a URL '
+                        'prefix, or a CSS selector for the <iframe>), e.g. {"selector": '
+                        '"...", "frame": "#app"} - sys_guide(topic=\'behavior\') has the '
+                        "full shape")
+        return msg
     return first
 
 
@@ -2516,7 +2534,7 @@ def build_page_action(actions) -> Optional[Callable]:
                     raise
                 except Exception as e:
                     outcomes.append({"action": label, "ok": False,
-                                     "error": _action_failure(e)})
+                                     "error": _action_failure(e, page=page)})
                     # `label`, never `a`: a fill action's dict carries its `text`,
                     # and that text can be a password (the login flow builds exactly
                     # such a chain). Logging the raw action wrote the secret to the

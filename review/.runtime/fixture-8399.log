@@ -78,3 +78,76 @@ Ctrl-C 鍋滄
 [01:42:26] POST /challenge/verify -> 200
 [01:42:44] GET /hoverdrag -> 200
 [01:42:45] GET /hoverdrag -> 200
+[02:02:08] GET /collections -> 200
+[02:02:09] GET /work/1 -> 200
+[02:02:09] GET /article?r3v=1 -> 200
+[02:09:01] client gone (ConnectionResetError) from 127.0.0.1:58320
+[02:09:55] GET /collections -> 200
+[02:09:55] GET /work/1 -> 200
+[02:09:55] GET /work/2 -> 200
+[02:09:55] GET /work/3 -> 200
+[02:10:13] GET /robots.txt -> 200
+[02:10:21] client gone (ConnectionResetError) from 127.0.0.1:61662
+[02:10:55] GET /robots.txt -> 200
+[02:10:55] client gone (ConnectionResetError) from 127.0.0.1:54969
+[02:11:28] GET /private/secret -> 200
+[02:11:29] client gone (ConnectionResetError) from 127.0.0.1:57108
+[02:11:56] GET /private/secret -> 200
+[02:11:57] client gone (ConnectionResetError) from 127.0.0.1:60592
+[02:12:53] GET /private/secret -> 200
+[02:12:54] client gone (ConnectionResetError) from 127.0.0.1:53387
+[02:13:13] GET /upload -> 200
+[02:13:13] GET /dialog -> 200
+[02:13:13] GET /frame -> 200
+[02:13:13] GET /frame/inner -> 200
+[02:13:13] GET /dropdown -> 200
+[02:14:06] GET /dialog -> 200
+[02:14:06] GET /dialog -> 200
+[02:14:20] GET /frame -> 200
+[02:14:20] GET /frame -> 200
+[02:14:20] GET /frame/inner -> 200
+[02:15:07] GET /hoverdrag -> 200
+[02:15:08] GET /hoverdrag -> 200
+[02:15:20] GET /login -> 200
+[02:15:20] GET /login -> 200
+[02:15:20] POST /login -> 302
+[02:15:20] GET /account -> 200
+[02:16:40] GET /frame -> 200
+[02:16:41] GET /frame -> 200
+[02:16:41] GET /frame/inner -> 200
+[02:18:07] GET /upload -> 200
+[02:18:07] GET /upload -> 200
+[02:18:26] GET /upload -> 200
+[02:18:26] GET /upload -> 200
+[02:18:26] POST /upload -> 200
+[02:21:04] GET /robots.txt -> 200
+[02:21:04] client gone (ConnectionResetError) from 127.0.0.1:61195
+[02:23:12] GET /robots.txt -> 200
+[02:23:12] client gone (ConnectionResetError) from 127.0.0.1:63899
+[02:24:42] GET /robots.txt -> 200
+[02:24:42] client gone (ConnectionResetError) from 127.0.0.1:55819
+[02:25:08] GET /robots.txt -> 200
+[02:25:08] GET /changing -> 200
+[02:25:09] client gone (ConnectionResetError) from 127.0.0.1:55838
+[02:26:09] GET /login -> 200
+[02:26:10] GET /login -> 200
+[02:26:11] POST /login -> 302
+[02:26:11] GET /account -> 200
+[02:26:21] GET /account -> 200
+[02:28:30] GET /checkout -> 200
+[02:28:30] GET /checkout -> 200
+[02:28:42] GET /checkout -> 200
+[02:28:42] GET /checkout -> 200
+    !! ORDER WRITTEN: {'ts': '2026-10-25T18:28:42.913272+00:00', 'item': '鐞嗚禂浠?001', 'qty': '1', 'sid': 'sess-8399-ok', 'remote': '127.0.0.1'}
+[02:28:42] POST /checkout -> 200
+[02:28:54] GET /no-such-page -> 404
+[02:29:02] GET /changing -> 200
+[02:29:07] GET /changing -> 200
+[02:30:21] GET /article -> 200
+[02:31:03] GET /longaside?audit=1 -> 200
+[02:31:10] GET /longaside?audit=1 -> 200
+[02:31:17] GET /changing?audit=1 -> 200
+[02:33:01] GET /qr -> 200
+[02:33:36] POST /login -> 302
+[02:33:36] GET /account -> 200
+[02:33:36] GET /feed.xml -> 200

@@ -1,0 +1,34 @@
+{
+ "status": 200,
+ "content": [
+  "账户\n\n欢迎回来\n====\n\n这是仅登录用户可见的内容。\n\n退出登录"
+ ],
+ "url": "http://127.0.0.1:8399/account",
+ "original_url": "http://127.0.0.1:8399/login",
+ "fetcher_used": "http",
+ "duration_ms": 29,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 223,
+ "total_extracted_chars": 34,
+ "visible_text_chars": 26,
+ "substance": "ok",
+ "escalation_path": "direct:http",
+ "attempt_cap_ms": 19000,
+ "summary": "200 OK · 34B markdown · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile · redirected from http://127.0.0.1:8399/login to http://127.0.0.1:8399/account",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T18:33:36Z",
+ "metadata": {
+  "title": "账户",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "approx_tokens": 25,
+ "_wall_s": 0.04,
+ "_tool": "web_request",
+ "_tag": "p30-misc#03",
+ "_ts": "2026-10-25T18:33:36.584366+00:00"
+}

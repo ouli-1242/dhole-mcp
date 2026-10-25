@@ -1,0 +1,22 @@
+{
+ "status": 200,
+ "content": [
+  "## 华东区\n\n| 城市 | 销售额 | 毛利 |\n| --- | --- | --- |\n| 上海 | 1200 | 300 |\n| 杭州 | 800 | 150 |\n\n## 华北区\n\n| 城市 | 销售额 | 毛利 |\n| --- | --- | --- |\n| 北京 | 1500 | 380 |\n| 天津 | 600 | 90 |\n\n## 备注（含合并单元格）\n\n| 口径说明 |  |  |\n| --- | --- | --- |\n| 含税口径 | 运费另计 | 账期30天 |\n\n... (the grid is this sheet's used range, not one table's columns: 3 column(s) wide - 1 carry a title, 2 carry no header cell: B holds data in every row - the title is missing, the column is not; C holds data in every row - the title is missing, the column is not - no cell was moved or dropped)"
+ ],
+ "url": "file:///<server cwd>/review/round-04/sessions/files/区域报表.xlsx",
+ "fetcher_used": "parse",
+ "duration_ms": 396,
+ "error": "",
+ "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+ "total_size_bytes": 6192,
+ "total_extracted_chars": 541,
+ "summary": "200 OK · 541B markdown · parse",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T18:27:29Z",
+ "approx_tokens": 173,
+ "_wall_s": 0.41,
+ "_tool": "doc_parse",
+ "_tag": "p05-S1-读配表(多sheet)#01",
+ "_ts": "2026-10-25T18:27:29.747677+00:00"
+}

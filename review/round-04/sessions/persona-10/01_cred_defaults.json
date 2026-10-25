@@ -1,0 +1,28 @@
+{
+ "message": "stored allow_private. 2 key(s) in force.",
+ "rows": [
+  {
+   "key": "allow_private",
+   "scope": "",
+   "stored_s_ago": 0,
+   "value": true
+  },
+  {
+   "key": "auth",
+   "scope": "127.0.0.1:8399",
+   "stored_s_ago": 411,
+   "value": {
+    "type": "basic",
+    "username": "hr01"
+   }
+  }
+ ],
+ "changed": [
+  "allow_private"
+ ],
+ "next_action": "web_read echoes identity_applied on every later call that uses one of these; sys_state(clear=['cred_defaults']) forgets the whole store.",
+ "_wall_s": 0.01,
+ "_tool": "cred_defaults",
+ "_tag": "p10-S1-读带 QR 的页#01",
+ "_ts": "2026-10-25T18:33:00.988719+00:00"
+}

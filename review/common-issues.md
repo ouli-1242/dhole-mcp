@@ -52,6 +52,27 @@
 | E8 since 档位词 | 「3d」四轮不收（错误句自带示例） | backlog 四现（升级标注维持） | P07 |
 | E3/E5/E10 | offset 整页口径 / 钳制句报剩余 / 404 行数字噪声——活体再现 | backlog（已建档，样本在册） | P03/P06 |
 
+## round-04 新增/复发（P3 裁决后）
+
+| 区 | 现象 | 状态 | 来源 |
+|---|---|---|---|
+| iframe 失败话术 | selector 超时不提页面有 iframe/`frame:` 寻址——三步各烧 10s | **已修**（R04-001，fix-R04-F1：失败现场用子 frame 数这一般事实，步级错误追加指引） | P02 |
+| watch 出路句前题 | `DHOLE_PERSIST_CREDENTIALS=1` 没说要在 **watch 进程**的 env 里（出路方向已验证真通：带 flag watch baseline 200 exit 0） | **已修**（R04-002，fix-R04-F2：句补半个前题） | P03 |
+| 持久化行为澄清 | cred_defaults 落盘跨重启成立（重启后报 robots_disallowed 恰是私网门放行的证明——拦它的是另一扇门）；混 set（auth 无 host）整单 fail-closed 零落盘 | 行为正确（journal 在册） | P03 |
+| E7 | 跨进程缓存回放缺存入时 env 语境 | backlog（三轮三现） | P01 |
+| E2 邻接 / E10 | 查询串变体不合并（精确 URL 契约）/ 404 行数字噪声三现 | backlog | P07/P06 |
+
+## round-04 必测回归点（round-05 新画像真实回访）
+
+1. iframe 页裸 selector 超时 → 步级错误带 frame: 指引（fix-R04-F1）。
+2. watch 私网错误行带「flag 在 watch 进程 env」前题；带 flag 的 watch 真跑通（fix-R04-F2 + P03 通路）。
+3. cred_defaults 落盘跨重启（旁证生命周期）；unset 即时生效（P09）。
+4. allow_private 点名清单边界：名单内过、名单外拒（P09）。
+5. check 附 diff（changed/first_divergence_at/diff_window）+ provenance 三读（P06/P08）。
+6. upload 确认闸三跳 + 「received <文件名>」落点（P02）。
+7. robots 受控三态（旁证 env 关，只指本地）（P01）。
+8. 前三轮家产：resume 照抄/显式 timeout/401 杠杆/challenge 同链/drag 全形/feed 点名/recall 合并/page_type 语义。
+
 ## round-03 必测回归点（round-04 新画像真实回访）
 
 1. page_type 描述语义（article=散文抽取）——crawl 任意列表页行（fix-R03-F1）。

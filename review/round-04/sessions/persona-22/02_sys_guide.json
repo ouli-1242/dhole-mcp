@@ -1,0 +1,7 @@
+{
+ "_raw": "topic='behavior' from references/tools.md — deep behavior: fetch escalation, page actions, schema extraction, engine matrix, crawl economics\n(119918 chars, 23 sections)\n\n# Tool Deep Behavior\n\nTool descriptions cover parameters; this volume covers **how the tools actually behave** — tiers, limits, and the parts most likely to be misread. Value ranges still live in `tools/list`.\n\n## web_read: the fetch chain\n\n**Three-tier escalation**: direct HTTP (~1s) → stealthy browser when blocked or facing a JS shell → archive.org snapshot on final failure. `escalation_path` records where the call actually ",
+ "_wall_s": 0.03,
+ "_tool": "sys_guide",
+ "_tag": "p22-S3b-iframe(先查说明书再上 frame 语法)#02",
+ "_ts": "2026-10-25T18:16:40.904843+00:00"
+}

@@ -1,0 +1,74 @@
+[p02 顾晚舟·QA] session 14db563af0404b3f930eacdaf5fcc056 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p02 S1-upload 全链 ----
+[p02-S1-upload 全链#01] web_act   0.0s ok=False err=invalid_request: action 0 'upload': file not found: 'D:\\Dev\\Tools\\dhole-mcp\\review\\ro invalid_request chars=
+      summary: invalid request · action 0 'upload': file not found
+      upload: {"summary": "invalid request · action 0 'upload': file not found"}
+      (pause 8s - throttle)
+
+---- p02 S2-dialog 三兄弟 ----
+[p02-S2-dialog 三兄弟#02] web_act   6.1s ok=False err=- no_content chars=45
+      summary: 200 OK · 45B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+      dialog: {"summary": "200 OK · 45B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the brows
+   step: click '#alertbtn' ok: True None
+   step: click '#namebtn' ok: True None
+   step: read '#status' as 'status' ok: True None
+   step: dialogs ok: True None
+      (pause 8s - throttle)
+
+---- p02 S3-iframe 内的表单 ----
+[p02-S3-iframe 内的表单#03] web_act  33.4s ok=True err=-  chars=87
+      summary: 200 OK · 87B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+      iframe: {"summary": "200 OK · 87B markdown · stealthy · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dia
+   step: fill '#note' ok: False the selector matched no element (or none became actionable) before the timeout: 
+   step: click '#save' ok: False the selector matched no element (or none became actionable) before the timeout: 
+   step: read '#saved' as 'mark' ok: False the selector matched no element (or none became actionable) before the timeout: 
+      (pause 8s - throttle)
+
+---- p02 S4-drag 全形(回归 R01-010)+正形 ----
+[p02-S4-drag 全形(回归 R01-010)+正形#04] web_act   0.0s ok=False err=invalid_request: action 0 'drag' must be {selector|index, to} - the element to drag plus w invalid_request chars=
+      summary: invalid request · action 0 'drag' must be {selector|index, to}
+      drag-refusal: {"error": "invalid_request: action 0 'drag' must be {selector|index, to} - the element to drag plus where to drop it; 'to' takes the same target shapes (a CSS selector string or {\"selector\"|\"index\", \"expect\"?}) - unexpected key(s): ['from']"}
+      (pause 6s - throttle)
+[p02-S4-drag 全形(回归 R01-010)+正形#05] web_act   4.0s ok=False err=- no_content chars=87
+      summary: 200 OK · 87B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   step: drag '#card-a' -> '#slot-b' ok: True
+      (pause 8s - throttle)
+
+---- p02 S5-keyboard 变卦(提交改回车) ----
+[p02-S5-keyboard 变卦(提交改回车)#06] web_act   2.8s ok=True err=- no_content chars=34
+      summary: 200 OK · 34B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+      keyboard: {"summary": "200 OK · 34B markdown · stealthy · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dia
+   step: fill '#username' ok: True None
+   step: fill '#password' ok: True None
+   step: press 'Enter' in #password ok: True None
+P02 DONE
+[p22 顾晚舟·求助后] session 0a5f599c9ea14ef6b9cf37b10e6258ad server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p22 S1b-upload 重试(修好路径) ----
+[p22-S1b-upload 重试(修好路径)#01] web_act   0.0s ok=False err=invalid_request: action 0 'upload': file not found: 'D:\\Dev\\Tools\\dhole-mcp\\review\\ro invalid_request chars=
+      summary: invalid request · action 0 'upload': file not found
+      (pause 7s - throttle)
+
+---- p22 S3b-iframe(先查说明书再上 frame 语法) ----
+[p22-S3b-iframe(先查说明书再上 frame 语法)#02] sys_guide   0.0s ok=None err=-  chars=
+   guide 提到 frame: ", "_wall_s": 0.03, "_tool": "sys_guide", "_tag": "p22-S3b-iframe(先查说明书再上 frame 语法)#02", "_ts": "2026-10-25T18:16:40.904843+00:00"}
+[p22-S3b-iframe(先查说明书再上 frame 语法)#03] web_act   5.3s ok=True err=- no_content chars=87
+      summary: 200 OK · 87B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   step: fill '#note' ok: True None
+   step: click '#save' ok: True None
+   step: read '#saved' as 'mark' ok: True None
+P02b DONE
+[p23 顾晚舟·上传再试] session 61bcd4df7d48416297964aa37bd47668 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p23-misc#01] web_act   4.1s ok=True err=- no_content chars=59
+      summary: 200 OK · 59B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   step: upload 1 file(s) into '#doc' ok: True None
+   step: click '#send' ok: False pending_approval: submitting is an irreversible step - ask the user to confirm this submission, then
+P02c DONE
+[p24 顾晚舟·确认后] session cede616457f14769bcfb8b602c64b7ea server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p24-misc#01] web_act   4.7s ok=True err=- no_content chars=69
+      summary: 200 OK · 69B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   step: upload 1 file(s) into '#doc' ok: True None
+   step: click '#send' ok: True None
+   page: ['上传\n\nUpload a file\n=============\n\nSend\n\nreceived 报价说明.pdf (1590 bytes)']
+P02d DONE

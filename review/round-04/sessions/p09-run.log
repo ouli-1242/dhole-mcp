@@ -1,0 +1,23 @@
+[p09 阮青梧·咨询师] session 26e1fa45aea24675867b3688f3e470e3 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p09 S1-点名放行一台主机 ----
+[p09-S1-点名放行一台主机#01] cred_defaults   0.0s ok=None err=-  chars=
+      set-list: {"message": "stored allow_private. 2 key(s) in force."}
+[p09-S1-点名放行一台主机#02] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · cache · cached copy, fetched 2.0 min ago · replayed from the cache: the fet
+      named-host read: {"content_ok": true}
+      (pause 7s - throttle)
+
+---- p09 S2-名单外的主机仍拒 ----
+[p09-S2-名单外的主机仍拒#03] web_read   0.0s ok=False err=invalid_request: URL targets internal/private IP (127.0.0.2 in 127.0.0.0/8) invalid_request chars=
+      summary: invalid request · URL targets internal/private IP (127.0.0.2 in 127.0.0.0/8)
+      other-host: {"error": "invalid_request: URL targets internal/private IP (127.0.0.2 in 127.0.0.0/8)"}
+      (pause 7s - throttle)
+
+---- p09 S3-撤销豁免(unset)再试 ----
+[p09-S3-撤销豁免(unset)再试#04] cred_defaults   0.0s ok=None err=-  chars=
+      unset: {"message": "forgot allow_private. 1 key(s) in force."}
+[p09-S3-撤销豁免(unset)再试#05] web_read   0.0s ok=False err=invalid_request: URL targets internal/private IP (127.0.0.1 in 127.0.0.0/8) invalid_request chars=
+      summary: invalid request · URL targets internal/private IP (127.0.0.1 in 127.0.0.0/8)
+      after-unset: {"error": "invalid_request: URL targets internal/private IP (127.0.0.1 in 127.0.0.0/8)"}
+P09 DONE

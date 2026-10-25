@@ -1,0 +1,35 @@
+[p04 贺兰珠·HR] session 082cf55cb10d446897abf54ff95012c7 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p04 S1-登录一次(凭据存库,不进参数) ----
+[p04-S1-登录一次(凭据存库,不进参数)#01] cred_defaults   0.0s ok=None err=-  chars=
+[p04-S1-登录一次(凭据存库,不进参数)#02] web_act   4.4s ok=True err=- no_content chars=34
+      summary: 200 OK · 34B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+      login: {"summary": "200 OK · 34B markdown · stealthy · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dia
+      (pause 7s - throttle)
+
+---- p04 S2-登录态里读账户页 ----
+[p04-S2-登录态里读账户页#03] web_read   0.1s ok=True err=-  chars=14
+      summary: 200 OK · 14B markdown · http · the target is loopback/private, so dhole dropped its own synthesized 
+      account: {"content_ok": true, "summary": "200 OK · 14B markdown · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"}
+      (pause 6s - throttle)
+
+---- p04 S3-存两个候选人页 ----
+[p04-S3-存两个候选人页#04] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · cache · cached copy, fetched 57.9 min ago · replayed from the cache: the fe
+      read /article: {"content_ok": true}
+      (pause 5s - throttle)
+[p04-S3-存两个候选人页#05] web_read   0.0s ok=True err=-  chars=269
+      summary: 200 OK · 269B markdown · cache · cached copy, fetched 58.2 min ago · replayed from the cache: the fe
+      read /collections: {"content_ok": true}
+      (pause 5s - throttle)
+
+---- p04 S4-跨会话找回 ----
+[p04 贺兰珠·下午] session 2da4c99e885e416bb49a1cc599ef68b8 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p04-misc#01] web_recall   1.6s ok=None err=-  chars=
+   - {"url": "http://127.0.0.1:8399/collections", "title": "推荐专题", "is_stale": false}
+   - {"url": "https://www.163.com/dy/article/L90AC7MN0511D5IC.html", "title": "弗朗西斯哈伦森获2026年诺贝尔物理学奖", "is_stale": true}
+   - {"url": "http://127.0.0.1:8399/longaside?explicit=1", "title": "专题长文", "is_stale": false}
+   - {"url": "http://127.0.0.1:8399/longaside", "title": "专题长文", "is_stale": false}
+      (pause 6s - throttle)
+[p04-misc#02] sys_guide   0.0s ok=None err=-  chars=
+P04 DONE
