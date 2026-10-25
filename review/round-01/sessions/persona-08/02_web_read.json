@@ -1,0 +1,36 @@
+{
+ "status": 200,
+ "content": [
+  "欢迎回来\n这是仅登录用户可见的内容。\n退出登录"
+ ],
+ "url": "http://127.0.0.1:8399/account",
+ "fetcher_used": "http",
+ "session_id": "devin-1",
+ "session_cookie_names": [
+  "sid"
+ ],
+ "duration_ms": 31,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 223,
+ "total_extracted_chars": 23,
+ "visible_text_chars": 26,
+ "escalation_path": "direct:http",
+ "attempt_cap_ms": 5000,
+ "summary": "200 OK · 23B markdown · http · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 30000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T14:16:07Z",
+ "metadata": {
+  "title": "账户",
+  "lang": "zh",
+  "robots": "complied",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "approx_tokens": 21,
+ "_wall_s": 0.07,
+ "_tool": "web_read",
+ "_tag": "p08-S1-登录链#02",
+ "_ts": "2026-10-25T14:16:07.949549+00:00"
+}

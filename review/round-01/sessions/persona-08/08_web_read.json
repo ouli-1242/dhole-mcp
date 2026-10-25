@@ -1,0 +1,36 @@
+{
+ "status": 400,
+ "content": [
+  "缺 token"
+ ],
+ "url": "http://127.0.0.1:8399/captcha.png",
+ "fetcher_used": "http",
+ "duration_ms": 9,
+ "error": "http_error_400: server returned error status",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 122,
+ "total_extracted_chars": 7,
+ "visible_text_chars": 11,
+ "attempt_cap_ms": 5000,
+ "summary": "400 ERR · 7B markdown · http · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 30000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile",
+ "content_ok": false,
+ "next_action": "Fetch failed. Check the error field for details; try a different source or retry with different parameters.",
+ "fetched_at": "2026-10-25T14:18:16Z",
+ "metadata": {
+  "title": "400",
+  "lang": "zh",
+  "robots": "complied",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "http_error_400",
+  "retryable": false,
+  "recover_with": ""
+ },
+ "approx_tokens": 3,
+ "_wall_s": 0.02,
+ "_tool": "web_read",
+ "_tag": "p08-S4-验证码#08",
+ "_ts": "2026-10-25T14:18:16.435631+00:00"
+}

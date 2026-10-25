@@ -1,0 +1,38 @@
+{
+ "status": 200,
+ "content": [
+  "dhole 模拟测试靶站\n登录\n账户\n结算\n二维码\n验证码\n长文\n订阅源"
+ ],
+ "url": "http://127.0.0.1:8399/",
+ "fetcher_used": "http",
+ "duration_ms": 1308,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 450,
+ "total_extracted_chars": 36,
+ "visible_text_chars": 41,
+ "substance": "nav_only",
+ "substance_basis": "8 lines, 100% of them are short fragments without sentence punctuation, mean line 3.6 characters (page holds 41 visible characters in total)",
+ "escalation_path": "direct:http",
+ "attempt_cap_ms": 29000,
+ "summary": "200 OK · 36B markdown · http · no prose (menu fragments only) · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile",
+ "content_ok": false,
+ "next_action": "the body returned is short menu-style fragments, not prose: this page's content is rendered by JavaScript or lives behind those links. Two doors: re-read with force_fetcher='stealthy' (which renders), or follow the links. Do not cite this body as the article.",
+ "fetched_at": "2026-10-25T08:01:11Z",
+ "metadata": {
+  "title": "靶站索引",
+  "lang": "zh",
+  "robots": "complied",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.100, example.org -> 198.18.1.23); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "no_content",
+  "retryable": false,
+  "recover_with": "the page carried no usable text - switch source, or try extraction_type='html'"
+ },
+ "approx_tokens": 26,
+ "_wall_s": 1.36,
+ "_seq": 6,
+ "_tool": "web_read"
+}

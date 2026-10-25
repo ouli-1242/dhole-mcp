@@ -1,0 +1,18 @@
+fixture 闈剁珯宸插惎鍔? http://127.0.0.1:8399
+璁㈠崟鏃ュ織: D:\Dev\Tools\dhole-mcp\evals\.runtime\orders.log
+浜岀淮鐮佽浇鑽? https://example.com/checkin?token=DHOLE-EVAL-8399
+Ctrl-C 鍋滄
+[23:44:20] GET /private/secret -> 200
+[23:44:22] GET /challenge/text -> 200
+[23:44:24] GET /challenge/text -> 200
+    !! CHALLENGE 530cd1f896f3 answer='GR35B' ok=True
+[23:44:24] POST /challenge/verify -> 200
+[23:45:09] GET /collections -> 200
+[23:45:09] GET /work/1 -> 200
+[23:45:09] GET /collections -> 200
+[23:45:10] GET /work/1 -> 200
+[23:45:10] GET /work/3 -> 200
+[23:45:10] GET /work/2 -> 200
+[23:45:10] GET /work/4 -> 200
+[23:45:10] GET /no-such-feed -> 404
+[23:45:10] GET /feed.xml -> 200

@@ -1,0 +1,7 @@
+{
+ "_raw": "sys_guide: topics\n\nunknown topic 'actions'.\n\nsys_guide(topic) returns one handbook volume per call. Known topics (aliases in parentheses):\n- topic='start' (3,730 chars): the one-page route map: three paths, hard constraints, where to read next\n- topic='manual' (aka 'skill') (27,359 chars): the full handbook: tool-selection tables, signal triage, config quick reference\n- topic='call' (aka 'examples') (22,691 chars): writing any call: parameter placement with counterexamples, copy-ready patterns\n- topic='fields' (79,587 chars): reading a response: what each field means and what to do when it is ",
+ "_wall_s": 0.28,
+ "_tool": "sys_guide",
+ "_tag": "p07-S3c-查手册#11",
+ "_ts": "2026-10-25T14:11:39.467207+00:00"
+}

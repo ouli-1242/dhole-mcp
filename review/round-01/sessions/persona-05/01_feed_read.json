@@ -1,0 +1,59 @@
+{
+ "feeds": [
+  {
+   "source_url": "http://127.0.0.1:8399/feed.xml",
+   "source_title": "dhole 靶站订阅源",
+   "since": "2026-10-20T00:00:00+00:00",
+   "fetched_at": "2026-10-25T14:02:07Z",
+   "items_older_than_since": 1,
+   "items_without_date": 2,
+   "items": [
+    {
+     "title": "靶站条目 1（0 天前）",
+     "url": "http://127.0.0.1:8399/article#item1",
+     "published": "2026-10-25T14:02:07+00:00",
+     "summary": "第 1 条摘要，用于 since 增量测试。"
+    },
+    {
+     "title": "靶站条目 2（1 天前）",
+     "url": "http://127.0.0.1:8399/article#item2",
+     "published": "2026-10-24T14:02:07+00:00",
+     "summary": "第 2 条摘要，用于 since 增量测试。"
+    },
+    {
+     "title": "靶站条目 3（2 天前）",
+     "url": "http://127.0.0.1:8399/article#item3",
+     "published": "2026-10-23T14:02:07+00:00",
+     "summary": "第 3 条摘要，用于 since 增量测试。"
+    },
+    {
+     "title": "靶站条目 4（3 天前）",
+     "url": "http://127.0.0.1:8399/article#item4",
+     "published": "2026-10-22T14:02:07+00:00",
+     "summary": "第 4 条摘要，用于 since 增量测试。"
+    },
+    {
+     "title": "靶站条目 5（5 天前）",
+     "url": "http://127.0.0.1:8399/article#item5",
+     "published": "2026-10-20T14:02:07+00:00",
+     "summary": "第 5 条摘要，用于 since 增量测试。"
+    },
+    {
+     "title": "靶站无日期条目 1",
+     "url": "http://127.0.0.1:8399/article#undated1",
+     "summary": "没有 pubDate，since 过滤不该把它丢掉。"
+    },
+    {
+     "title": "靶站无日期条目 2",
+     "url": "http://127.0.0.1:8399/article#undated2",
+     "summary": "没有 pubDate，since 过滤不该把它丢掉。"
+    }
+   ]
+  }
+ ],
+ "summary": "1 URLs asked · 1 rows answered · 1 rows carried 7 items, newest first · fetched live at 2026-10-25T14:02:07Z - this path holds no cache, so each row's `fetched_at` is when that document arrived",
+ "_wall_s": 0.01,
+ "_tool": "feed_read",
+ "_tag": "p05-S1-盯站增量#01",
+ "_ts": "2026-10-25T14:02:07.991539+00:00"
+}

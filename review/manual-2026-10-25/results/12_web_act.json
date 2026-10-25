@@ -1,0 +1,52 @@
+{
+ "status": 200,
+ "content": [
+  "上传\n\nUpload a file\n=============\n\nSend\n\nreceived sample.docx (63552 bytes)"
+ ],
+ "url": "http://127.0.0.1:8399/upload",
+ "fetcher_used": "stealthy",
+ "duration_ms": 4389,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 352,
+ "total_extracted_chars": 73,
+ "visible_text_chars": 56,
+ "substance": "ok",
+ "escalation_path": "direct:stealthy",
+ "summary": "200 OK · 73B markdown · stealthy · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 60000ms) — a per-host habit, not a cap you set · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dialing, not the page. · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T08:02:16Z",
+ "metadata": {
+  "title": "上传",
+  "lang": "zh",
+  "robots": "complied",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.100, example.org -> 198.18.1.23); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+  "actions": [
+   {
+    "action": "upload 1 file(s) into '#doc'",
+    "ok": true,
+    "uploaded": [
+     "sample.docx"
+    ],
+    "files": 1
+   },
+   {
+    "action": "click '#send'",
+    "ok": true,
+    "submitted": true,
+    "submission": "POST"
+   }
+  ]
+ },
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "no_content",
+  "retryable": false,
+  "recover_with": "the action chain ran — `metadata.actions` holds one receipt per step, and that is the answer about this call. The content verdict describes the page it left behind, not the chain. Do NOT re-issue the same chain: every step already marked ok would run again (a fill would fill twice)."
+ },
+ "approx_tokens": 20,
+ "_wall_s": 4.44,
+ "_seq": 12,
+ "_tool": "web_act"
+}

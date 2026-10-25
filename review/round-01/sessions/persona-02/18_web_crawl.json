@@ -1,0 +1,133 @@
+{
+ "start_url": "http://127.0.0.1:8399/collections",
+ "pages": [
+  {
+   "url": "http://127.0.0.1:8399/work/3",
+   "status": 200,
+   "content_ok": true,
+   "fetcher_used": "http",
+   "page_type": "unknown",
+   "content": [
+    "作品 3\n静物\n黑白\n第 3 篇的独有正文，用来证明这一列真的每页不同。"
+   ],
+   "content_chars": 36,
+   "substance": "ok",
+   "summary": "200 OK · 36B markdown · http · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 30000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/4",
+   "status": 200,
+   "content_ok": true,
+   "fetcher_used": "http",
+   "page_type": "unknown",
+   "content": [
+    "作品 4\n街景\n夜景\n人像\n第 4 篇的独有正文，用来证明这一列真的每页不同。"
+   ],
+   "content_chars": 39,
+   "substance": "ok",
+   "summary": "200 OK · 39B markdown · http · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 30000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/5",
+   "status": 200,
+   "content_ok": true,
+   "fetcher_used": "http",
+   "page_type": "unknown",
+   "content": [
+    "作品 5\n胶片\n扫描\n第 5 篇的独有正文，用来证明这一列真的每页不同。"
+   ],
+   "content_chars": 36,
+   "substance": "ok",
+   "summary": "200 OK · 36B markdown · http · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 30000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/6",
+   "status": 200,
+   "content_ok": true,
+   "fetcher_used": "http",
+   "page_type": "unknown",
+   "content": [
+    "作品 6\n静物\n黑白\n第 6 篇的独有正文，用来证明这一列真的每页不同。"
+   ],
+   "content_chars": 36,
+   "substance": "ok",
+   "summary": "200 OK · 36B markdown · http · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 30000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/7",
+   "status": 200,
+   "content_ok": true,
+   "fetcher_used": "http",
+   "page_type": "unknown",
+   "content": [
+    "作品 7\n街景\n夜景\n人像\n第 7 篇的独有正文，用来证明这一列真的每页不同。"
+   ],
+   "content_chars": 39,
+   "substance": "ok",
+   "summary": "200 OK · 39B markdown · http · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 30000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/8",
+   "status": 200,
+   "content_ok": true,
+   "fetcher_used": "http",
+   "page_type": "unknown",
+   "content": [
+    "作品 8\n胶片\n扫描\n第 8 篇的独有正文，用来证明这一列真的每页不同。"
+   ],
+   "content_chars": 36,
+   "substance": "ok",
+   "summary": "200 OK · 36B markdown · http · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 30000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/9",
+   "status": 200,
+   "content_ok": true,
+   "fetcher_used": "http",
+   "page_type": "unknown",
+   "content": [
+    "作品 9\n静物\n黑白\n第 9 篇的独有正文，用来证明这一列真的每页不同。"
+   ],
+   "content_chars": 36,
+   "substance": "ok",
+   "summary": "200 OK · 36B markdown · http · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 30000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/10",
+   "status": 200,
+   "content_ok": true,
+   "fetcher_used": "http",
+   "page_type": "unknown",
+   "content": [
+    "作品 10\n街景\n夜景\n人像\n第 10 篇的独有正文，用来证明这一列真的每页不同。"
+   ],
+   "content_chars": 41,
+   "substance": "ok",
+   "summary": "200 OK · 41B markdown · http · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 30000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/about",
+   "status": 200,
+   "content_ok": true,
+   "fetcher_used": "http",
+   "page_type": "unknown",
+   "content": [
+    "关于\n靶站的孤链接去处。"
+   ],
+   "content_chars": 12,
+   "summary": "200 OK · 12B markdown · http · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 30000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  }
+ ],
+ "pages_crawled": 9,
+ "pages_discovered": 9,
+ "deadline_ms_applied": 25000,
+ "sitemap_used": false,
+ "duration_ms": 196,
+ "summary": "plan resumed at 1-9 of 9: 9 ok, 0 with error",
+ "next_action": "Plan exhausted: every URL has been fetched once across these resumes.",
+ "identity_applied": "",
+ "_wall_s": 0.2,
+ "_tool": "web_crawl",
+ "_tag": "p02-S9-resume带url#18",
+ "_ts": "2026-10-25T13:54:42.450756+00:00"
+}

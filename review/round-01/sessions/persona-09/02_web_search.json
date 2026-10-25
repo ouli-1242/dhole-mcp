@@ -1,0 +1,175 @@
+{
+ "query": "中文编辑 校对 符号 GB/T 14706",
+ "results": [
+  {
+   "title": "GB/T 14706-1993 校对符号及其用法 国家标准(GB)-工标网",
+   "url": "http://www.csres.com/detail/54268.html",
+   "snippet": "校对符号及其用法. 国家标准. 标准编号：GB/T 14706-1993. 标准状态：现行.标准简介. 本标准规定了校对各种排版校样的专用符号及其用法。 本标准适用于中文(包括少数民族文字)各类校样的校对工作。",
+   "source": "yandex",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.9967314478633496,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "GB/T 14706-1993 校对符号及其用法 标准全文",
+   "url": "https://www.antpedia.com/standard/78232-1.html",
+   "snippet": "GB/T 14706-1993的标准全文信息, 本标准规定了校对各种排版校样的专用符号及其用法。 本标准适用于中文（包括少数民族文字）各类校样的校对工作。校对符号及其用法, The proofreader's marks and their application, 提供GB/T 14706-1993的发布时间、引用、",
+   "source": "yahoo",
+   "position": 2,
+   "relevance_score": 0.9964,
+   "relevance_raw": 0.993234438289484,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "GB/T 14706-1993 校对符号及其用法.pdf - 准行天下",
+   "url": "https://www.bzchaxun.com/view/6204045000000000.html",
+   "snippet": "GB/T 14706-1993 校对符号及其用法 GB/T 14706-1993 Proofreader's marks and their application 国家标准 中文简体 现行 页数：8页 | 格式：PDF 普通下载 会员免费下载",
+   "source": "yahoo",
+   "position": 3,
+   "relevance_score": 0.9913,
+   "relevance_raw": 0.9883492407494567,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "GB-T 14706-1993 校对符号及其用法 - 下载联系微信:siduwenku",
+   "url": "https://dvwa.siduanquan.com/gbdownload/466024",
+   "snippet": "中文文档 7 页 50 下载 1000 浏览 0 评论 收藏 3.0分. 赞助2元下载(无需注册). 温馨提示：本文档共7页，可预览 3 页，如浏览全部内容或当前文档出现乱码,可开通会员下载原始文档.",
+   "source": "yandex",
+   "position": 4,
+   "relevance_score": 0.9838,
+   "relevance_raw": 0.9810933322941254,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  }
+ ],
+ "total_results": 4,
+ "engines_used": [
+  "yahoo",
+  "yandex",
+  "seznam"
+ ],
+ "engine_blocked": [
+  "shenma",
+  "so360",
+  "sogou",
+  "brave",
+  "duckduckgo",
+  "bing_global",
+  "bing"
+ ],
+ "engine_empty": [
+  "baidu",
+  "marginalia"
+ ],
+ "engine_detail": [
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 584s"
+  },
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 584s"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 44s"
+  },
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "empty",
+   "verdict": "upstream_empty",
+   "why": "no results"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 45s"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 45s"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "7 usable rows from 7 item nodes"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "14 usable rows from 14 item nodes"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "empty",
+   "verdict": "unknown_empty",
+   "why": "no results"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "timeout",
+   "verdict": "timeout",
+   "why": "timed out"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "timeout",
+   "verdict": "timeout",
+   "why": "timed out"
+  }
+ ],
+ "families_answered_of_asked": "3 of 9",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "duration_ms": 16996,
+ "error": "",
+ "fetch_hint": "4 high, 0 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. web_read what fits your need (high first, but a lower tier can be the right call). | Engines shenma, so360, sogou, brave, duckduckgo, bing_global, bing, baidu, marginalia didn't contribute (7 blocked, 2 answered but parsed nothing usable); results are from the rest.",
+ "related_queries": [
+  "proofreader's marks"
+ ],
+ "summary": "Searched '中文编辑 校对 符号 GB/T 14706' -> 4 results (4 high, 0 med, 0 low) from yahoo,yandex,seznam; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. WARNING: 9 of the 12 engines it asked didn't contribute (7 blocked, 2 answered but parsed nothing usable) - results have LOW diversity (only from yahoo, yandex, seznam). For more recall: the pool is down to 5 of the 12 engines it asked; retry after the cooldown clears (cooling right now: so360 584s, duckduckgo 45s, brave 44s, sogou 44s; the pool is whole again in 584s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use; rephrase if the query is narrow (an engine that answered with nothing may genuinely not have it in that index).",
+ "same_document_groups": [],
+ "_wall_s": 17.03,
+ "_tool": "web_search",
+ "_tag": "p09-S2-查术语#02",
+ "_ts": "2026-10-25T14:21:32.898035+00:00"
+}

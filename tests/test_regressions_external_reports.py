@@ -1444,9 +1444,18 @@ class TestCrawlSearchOptionAndSummary:
         }) == "interpreter"
 
     def test_filtered_away_summary_describes_the_pages_returned(self, monkeypatch):
+        """report 的本意：summary 描述**实际交回了什么**。
+
+        R01-006 轮改判据说明（2026-10-25 review/round-01）：旧断言钉的
+        「crawled 0 page(s) … stopped: max_pages reached」正是被评的缺陷——没货
+        读起来像爬满了（P02/P05 照它去抬 max_pages 白跑）。新 summary 说的是同一
+        件事的诚实版：爬了几页、0 页带词、词长在正文里。
+        """
         result = _stub_crawl(monkeypatch, search="nomatch")
         assert result.pages == [] and result.pages_crawled == 0
-        assert f"crawled {len(result.pages)} page(s)" in result.summary
+        assert "matched 0 of" in result.summary, result.summary
+        assert "crawled page(s)" in result.summary, result.summary
+        assert "max_pages reached" not in result.summary, result.summary
         assert "nomatch" in result.next_action
 
 

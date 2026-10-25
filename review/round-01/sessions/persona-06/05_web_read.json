@@ -1,0 +1,39 @@
+{
+ "status": 200,
+ "content": [
+  "签到二维码"
+ ],
+ "url": "http://127.0.0.1:8399/qr",
+ "fetcher_used": "http",
+ "duration_ms": 31,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 198,
+ "total_extracted_chars": 5,
+ "visible_text_chars": 9,
+ "substance": "nav_only",
+ "substance_basis": "the whole page holds 9 visible characters and the body is 1 line(s) with no sentence in them",
+ "escalation_path": "direct:http",
+ "attempt_cap_ms": 5000,
+ "summary": "200 OK · 5B markdown · http · no prose (menu fragments only) · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 30000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile",
+ "content_ok": false,
+ "next_action": "the body returned is short menu-style fragments, not prose: this page's content is rendered by JavaScript or lives behind those links. Two doors: re-read with force_fetcher='stealthy' (which renders), or follow the links. Do not cite this body as the article.",
+ "fetched_at": "2026-10-25T14:08:22Z",
+ "metadata": {
+  "title": "二维码",
+  "lang": "zh",
+  "robots": "complied",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "no_content",
+  "retryable": false,
+  "recover_with": "the page carried no usable text - switch source, or try extraction_type='html'"
+ },
+ "approx_tokens": 5,
+ "_wall_s": 0.07,
+ "_tool": "web_read",
+ "_tag": "p06-S4-二维码#05",
+ "_ts": "2026-10-25T14:08:22.789464+00:00"
+}

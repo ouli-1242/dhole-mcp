@@ -1,11 +1,11 @@
 ---
 name: dhole-web
-description: Operational handbook for the dhole MCP server — how to write calls (examples volume), how to read responses (field dictionary), how to troubleshoot failures, how to tune configuration, and how to plan multi-step tasks. Use whenever the user asks to search the web, fetch/read a URL or PDF, crawl a site, track site updates via RSS, parse local documents, or screenshot pages; to act on a page (click/fill/submit), send one non-GET request to an API endpoint (POST/PUT/PATCH/DELETE/HEAD), set the proxy or credential a later call should assume; and whenever you are unsure about parameter placement, a response field, or how to handle a failure with the dhole tools (web_read / web_act / web_request / web_search / web_crawl / web_discover / doc_parse / feed_read / sys_state, plus cred_defaults / sys_guide — all registered by default). 触发词：搜索、查资料、抓取网页、读链接、读 PDF、爬整站文档、盯站点更新、解析本地文档、截图、表单提交、调接口写入、POST 请求、参数报错、结果可疑。
+description: Operational handbook for the dhole MCP server — how to write calls (examples volume), how to read responses (field dictionary), how to troubleshoot failures, how to tune configuration, and how to plan multi-step tasks. Use whenever the user asks to search the web, fetch/read a URL or PDF, crawl a site, track site updates via RSS, parse local documents, or screenshot pages; to act on a page (click/fill/submit), send one non-GET request to an API endpoint (POST/PUT/PATCH/DELETE/HEAD), set the proxy or credential a later call should assume; and whenever you are unsure about parameter placement, a response field, or how to handle a failure with the dhole tools (web_read / web_act / web_request / web_search / web_research / web_crawl / web_discover / doc_parse / feed_read / web_recall / sys_state, plus cred_defaults / sys_guide — all registered by default). 触发词：搜索、查资料、抓取网页、读链接、读 PDF、爬整站文档、盯站点更新、解析本地文档、截图、表单提交、调接口写入、POST 请求、参数报错、结果可疑。
 ---
 
 # dhole MCP Operations Handbook
 
-Companion to dhole's ten everyday tools: `web_read` / `web_act` / `web_request` / `web_search` / `web_crawl` / `web_discover` / `doc_parse` / `feed_read` / `sys_state` / `cred_defaults` — plus `sys_guide`, which serves this very corpus as a tool call for hosts that never installed the skill. All eleven are registered by default; if one is missing from `tools/list`, the operator named an explicit `DHOLE_TOOLS` subset — say so, don't route around it.
+Companion to dhole's twelve everyday tools: `web_read` / `web_act` / `web_request` / `web_search` / `web_research` / `web_crawl` / `web_discover` / `doc_parse` / `feed_read` / `web_recall` / `sys_state` / `cred_defaults` — plus `sys_guide`, which serves this very corpus as a tool call for hosts that never installed the skill. All 13 are registered by default; if one is missing from `tools/list`, the operator named an explicit `DHOLE_TOOLS` subset — say so, don't route around it.
 
 Division of labor: this file = tool selection + hard constraints + signal triage. `references/` = six on-demand volumes (index at the bottom). Parameter and field definitions ultimately live in `tools/list` — when anything conflicts, trust the tool descriptions.
 
@@ -27,6 +27,8 @@ Division of labor: this file = tool selection + hard constraints + signal triage
 | You want to... | Use |
 |---|---|
 | Web search (no URL known) | `web_search` → pick `fetch_relevance: high` hits → `web_read` for full text |
+| One question, one cited evidence pack | `web_research` — search + fetch + citations in one call; per-source failure never sinks the pack |
+| "Did I already read this?" (this machine) | `web_recall` — the local cache as pointers, stale rows marked; answers point back at URLs, not at prose |
 | Already have a URL (incl. online PDFs) | `web_read` — do **not** search for a URL you already hold |
 | Only need one block of a page | `web_read` + `focus="keywords"` (BM25 extraction); HTML can also take `css_selector` |
 | Send to an API (POST / PUT / PATCH / DELETE / HEAD) | `web_request` — never `web_read`, which refuses `method=`. One write per call, and it goes out **once**: no retry, no cache, no browser replay (`references/tools.md` "web_request") |

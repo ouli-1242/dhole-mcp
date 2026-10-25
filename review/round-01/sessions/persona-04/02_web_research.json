@@ -1,0 +1,54 @@
+{
+ "query": "attention mechanism survey 2025",
+ "sources": [
+  {
+   "n": 1,
+   "url": "https://www.ibm.com/think/topics/attention-mechanism",
+   "title": "What is an attention mechanism? | IBM",
+   "chars": 2759,
+   "fetcher": "http",
+   "content_ok": true
+  },
+  {
+   "n": 2,
+   "url": "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0358103",
+   "title": "Sentiment classification optimization based on improved... | PLOS One",
+   "chars": 2865,
+   "fetcher": "http",
+   "content_ok": true
+  }
+ ],
+ "evidence": [
+  "[1] https://www.ibm.com/think/topics/attention-mechanism\n[Focus: 'attention mechanism survey 2025'; showing 18 of 99 blocks by BM25 relevance. 2 of the 4 words you named occur nowhere on this page ('survey', '2025'). Pass focus='' for the full page.]\n\n            An attention mechanism is a [machine learning](https://www.ibm.com/think/topics/machine-learning) technique that directs [deep learning](https://www.ibm.com/think/topics/deep-learning) models to prioritize (or *attend to*) the most relevant parts of input data. Innovation in attention mechanisms enabled the transformer architecture that yielded the modern [large language models (LLMs)](https://www.ibm.com/think/topics/large-language-models) that power popular applications like ChatGPT.\n\nMathematically speaking, an attention mechanism computes *attention weights* that reflect the relative importance of each part of an input sequence to the task at hand. It then applies those attention weights to increase (or decrease) the influence of each part of the input, in accordance with its respective importance. An attention model—that is, an [artificial intelligence model](https://www.ibm.com/topics/ai-model) that employs an attention mechanism—is trained to assign accurate attention weights through [supervised learning](https://www.ibm.com/topics/supervised-learning) or [self-supervised learning](https://www.ibm.com/topics/self-supervised-learning) on a large dataset of examples.\n\nWhile attention mechanisms are primarily associated with LLMs used for [natural language processing (NLP)](https://www.ibm.com/think/topics/natural-language-processing) tasks, such as [summarization](https://www.ibm.com/think/topics/text-summarization), question answering, [text generation](https://www.ibm.com/think/topics/text-generation) and [sentiment analysis](https://www.ibm.com/think/topics/sentiment-analysis), attention-based models are also used widely in other domains. Leading [diffusion models](https://www.ibm.com/think/topics/diffusion-models) used for image generation often incorporate an attention mechanism. In the field of computer vision, vision transformers (ViTs) have achieved superior results on tasks including [object detection](https://www.ibm.com/think/topics/object-detection),<sup>1</sup> [image segmentation](https://www.ibm.com/think/topics/image-segmentation)<sup>2</sup> and visual question answering.<sup>3</sup>\n\nBahdanau *et al* proposed an attention mechanism in their 2014 paper, “Neural Machine Translation by Jointly Learning to Align and Translate,” to improve communication between the encoder and decoder and remove that information bottleneck.\n\nInstead of passing along only the *final* hidden state of the encoder—the context vector—to the decoder, their model passed *every* encoder hidden state to the decoder",
+  "[2] https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0358103\n[Focus: 'attention mechanism survey 2025'; showing 14 of 83 blocks by BM25 relevance. dropped the page's only code block (629 chars) - it shares no token with your query. 1 of the 4 words you named occur nowhere on this page ('survey'). Pass focus='' for the full page.]\n\n## Abstract\n\nThis study focuses on the problem of insufficient accuracy in sentiment classification in complex texts and multimodal scenarios. A sentiment classification optimization method is proposed, which integrates a bidirectional encoder representation Transformer model for sentiment analysis (Senti-BERT)and a bidirectional Long Short-Term Memory with Attention (BiLSTM-Attention). Firstly, the Senti-BERT layer is introduced to optimize the generation of word vectors by introducing an emotion dictionary leading mechanism, and a dynamic weighting strategy is adopted to fuse multi-modal features such as text, emoticons, and images. Subsequently, the hierarchical attention mechanism of BiLSTM-Attention structure is used to enhance contextual modeling. Finally, the stacking method is adopted to integrate the advantages of multiple models. The experimental results show that this method performs well in multiple dimensions. This optimization method achieved an F1 score of 84.6% in verb sentiment word recognition and 90.1% in adjective recognition, which is 4.8% higher than the bidirectional encoder representation Transformer. The full modal fusion results in a classification accuracy of 89.4%, and the English accuracy exceeds 90% in cross language tasks. The accuracy of emotion segment localization using dynamic weight attention mechanism reaches 90%. The quantization model maintains a low latency of 92ms under 10000QPS concurrency, and the Stacking strategy increases the AUC value to 0.943. The research provides a high-precision solution for social media sentiment analysis through innovative multi-level architecture design.\n\n**Received:** September 4, 2025; **Accepted:** August 26, 2026; **Published:**  September 15, 2026\n\nOn the other hand, most studies focus on single-text modalities and lack effective integration of multimodal information such as emojis and images, which limits the ability to accurately reflect diverse emotional expressions [[6](https://journals.plos.org#pone.0358103.ref006),[7](https://journals.plos.org#pone.0358103.ref007)]. In addition, the lack of explicit guidance for sentiment and opinion word identification further constrains model performance. To address these issues, this paper proposes an enhanced sentiment classification method that integrates an improved Senti-BERT with a BiLSTM-Attention framework. Specifically, a sentiment lexicon-guided mechanism is introduced to enhance semantic representation, while the BiLSTM-Attention structure is employed to strengthen contextual modeling and key sentiment feature extraction"
+ ],
+ "failed": [],
+ "more_hits": [
+  {
+   "url": "https://github.com/0aqz0/Attention-Mechanism-Survey",
+   "title": "GitHub - 0aqz0/Attention-Mechanism-Survey: Papers I read when..."
+  },
+  {
+   "url": "https://www.researchgate.net/publication/358995968_Attention_please_A_survey_of_neural_attention_models_in_deep_learning",
+   "title": "(PDF) Attention, please! A survey of neural attention models in deep..."
+  },
+  {
+   "url": "https://theaignostic.com/attention-mechanism-in-large-language-models/",
+   "title": "Attention Mechanism in Large Language Models - THE AIGNOSTIC"
+  },
+  {
+   "url": "https://www.baeldung.com/cs/attention-luong-vs-bahdanau",
+   "title": "Differences Between Luong Attention and Bahdanau Attention"
+  },
+  {
+   "url": "https://arxiv.org/abs/1706.03762",
+   "title": "Abstract page for arXiv paper 1706.03762: Attention Is All You Need"
+  }
+ ],
+ "summary": "2 of 2 source(s) read into an evidence pack for 'attention mechanism survey 2025'",
+ "note": "each evidence block starts with [n] and its URL - cite that pair. Per-source text is focus-filtered to the query, not the whole page; web_read a source (urls= batches work) for everything it says. more_hits are the search rows not read",
+ "_wall_s": 8.34,
+ "_tool": "web_research",
+ "_tag": "p04-S2-研究包#02",
+ "_ts": "2026-10-25T14:00:27.986832+00:00"
+}

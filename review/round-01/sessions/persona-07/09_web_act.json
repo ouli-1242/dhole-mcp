@@ -1,0 +1,67 @@
+{
+ "status": 200,
+ "content": [
+  "抄写挑战\n\n请按原样抄写下面的字符\n===========\n\nTGTQ2\n\n字符\n\n提交"
+ ],
+ "url": "http://127.0.0.1:8399/challenge/text",
+ "fetcher_used": "stealthy",
+ "duration_ms": 4063,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 473,
+ "total_extracted_chars": 44,
+ "visible_text_chars": 28,
+ "substance": "nav_only",
+ "substance_basis": "6 lines, 100% of them are short fragments without sentence punctuation, mean line 5.8 characters (page holds 28 visible characters in total)",
+ "escalation_path": "direct:stealthy",
+ "summary": "200 OK · 44B markdown · stealthy · no prose (menu fragments only) · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 60000ms) — a per-host habit, not a cap you set · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dialing, not the page. · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named",
+ "content_ok": false,
+ "next_action": "the body returned is short menu-style fragments, not prose, and rendering will not change that answer (this URL was already rendered, or this tier is not one a browser helps). The only door left is the links themselves: follow them or take a different source. Do not cite this body as the article.",
+ "fetched_at": "2026-10-25T14:11:05Z",
+ "metadata": {
+  "title": "抄写挑战",
+  "lang": "zh",
+  "robots": "complied",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+  "actions": [
+   {
+    "action": "snapshot interactive elements",
+    "ok": true,
+    "elements": [
+     {
+      "index": 0,
+      "tag": "input",
+      "role": "textbox",
+      "name": "token",
+      "input_type": "hidden"
+     },
+     {
+      "index": 1,
+      "tag": "input",
+      "role": "textbox",
+      "name": "字符",
+      "input_type": "text"
+     },
+     {
+      "index": 2,
+      "tag": "button",
+      "role": "button",
+      "name": "提交"
+     }
+    ],
+    "elements_total": 3
+   }
+  ]
+ },
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "no_content",
+  "retryable": false,
+  "recover_with": "the action chain ran — `metadata.actions` holds one receipt per step, and that is the answer about this call. The content verdict describes the page it left behind, not the chain. Do NOT re-issue the same chain: every step already marked ok would run again (a fill would fill twice)."
+ },
+ "approx_tokens": 25,
+ "_wall_s": 4.95,
+ "_tool": "web_act",
+ "_tag": "p07-S3b-驻留会话解法#09",
+ "_ts": "2026-10-25T14:11:05.886655+00:00"
+}

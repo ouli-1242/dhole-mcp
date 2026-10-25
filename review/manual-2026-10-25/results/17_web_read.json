@@ -1,0 +1,10 @@
+{
+ "url": "http://127.0.0.1:8399/checkout",
+ "changed": false,
+ "status": 200,
+ "fetcher": "http",
+ "note": "origin answered 200 and the body matches the baseline byte for byte (validators were ignored or the page is truly unchanged)",
+ "_wall_s": 0.07,
+ "_seq": 17,
+ "_tool": "web_read"
+}

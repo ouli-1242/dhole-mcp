@@ -1,0 +1,41 @@
+{
+ "status": 200,
+ "content": [
+  "。 第 30 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 31 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 32 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 33 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 34 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 35 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 36 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 37 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 38 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 39 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 40 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 41 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 42 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 43 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 44 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 45 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 46 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 47 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文"
+ ],
+ "url": "http://127.0.0.1:8399/longaside",
+ "cached": true,
+ "fetcher_used": "cache",
+ "duration_ms": 4,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 18382,
+ "total_extracted_chars": 7157,
+ "is_truncated": true,
+ "next_offset": 2069,
+ "chars_snapped_back": 26,
+ "truncation_note": "[Truncated: showing 774 of 7,157 extracted chars. 5,088 chars remaining. Next offset: 2069] (26 chars moved to the next window so this one ends at a clause, not mid-word)",
+ "visible_text_chars": 7149,
+ "summary": "200 OK · 7.0KB markdown · cache · cached copy, fetched 3.2 min ago · truncated · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above.",
+ "content_ok": true,
+ "next_action": "page truncated. Use focus='query' to extract only relevant blocks, or offset=2069 to continue paginating",
+ "fetched_at": "2026-10-25T13:51:00Z",
+ "metadata": {
+  "title": "专题长文",
+  "lang": "zh",
+  "robots": "complied",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "page_type": "article",
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "truncated",
+  "retryable": true,
+  "recover_with": "offset=2069 to continue"
+ },
+ "approx_tokens": 666,
+ "_wall_s": 0.03,
+ "_tool": "web_read",
+ "_tag": "p02-S8-offset钳制对照#17",
+ "_ts": "2026-10-25T13:54:12.555237+00:00"
+}

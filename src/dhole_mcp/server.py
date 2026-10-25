@@ -4604,7 +4604,15 @@ def _feed_batch_envelope(asked: int, rows: List[dict],
     parts = [f"{asked} URLs asked · {answered} rows answered",
              f"{answered - errored} rows carried {items} items, newest first"]
     if errored:
-        parts.append(f"{errored} rows errored (each row names its own error and diagnosis)")
+        # 哪个 URL 错了是顶层唯一被读到的入口该说的话（2026-10-25 P01：三发里一发
+        # 410，顶层只给计数，URL 要展开行才知道）。两条以内点名，多了不刷屏 ——
+        # "每行自己说"那句照旧兜底。
+        bad = [r.get("source_url", "") for r in rows
+               if r.get("error") and isinstance(r, dict)][:2]
+        named = " · ".join(b for b in bad if b)
+        parts.append(f"{errored} rows errored"
+                     + (f" ({named} - each row names its own error and diagnosis)"
+                        if named else " (each row names its own error and diagnosis)"))
     if stamps:
         when = (f"at {stamps[0]}" if len(stamps) == 1
                 else f"between {stamps[0]} and {stamps[-1]}")
@@ -12975,7 +12983,12 @@ class MasterFetchServer:
                 feeds = await self.feed_read(
                     urls=args.get("urls") or [],
                     max_items=args.get("max_items", 20),
-                    timeout=args.get("timeout", 20),
+                    # 缺参不塞数：这里塞过的 20 是换算层出生前"20 秒"的旧默认，而
+                    # 方法层把 wire 上的数字当毫秒换算 —— `_feed_timeout_s(20)` =
+                    # 1 秒，每个不带 timeout 的调用都顶着 1s 首发预算杀光慢源
+                    # （2026-10-25 P10 Helen 实测 hnrss 两发全挂）。None 让方法层
+                    # 自己的 20s 默认生效。
+                    timeout=args.get("timeout"),
                     since=args.get("since"),
                 )
             except ValueError as e:

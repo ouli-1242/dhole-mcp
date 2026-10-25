@@ -398,8 +398,16 @@ class TestTheWireTableDoesNotGainAKey:
 # 来源：test_the_same_hint_must_not_offer_two_ways_to_type_it.py
 # ============================================================================
 # 同一句出路里出现两种花括号，等于给了两个互相矛盾的抄写目标。
+#
+# R01-006（2026-10-25 review/round-01）改判据说明：SNIPPET 从写死的
+# `{"confirm": true}` 改为**从 actions 导入** `_CONFIRM_SNIPPET`。旧常量本身就是
+# 缺陷的根子——它不说 confirm 长在哪一层，顶层 confirm=true 不动闸（P07 与读着
+# 源码的审查员都先读成了顶层参数）；新常量把层说出去。测试改跟单一真源（模块
+# 常量），不再自带第二份；`}}` 的检查退役——新 JSON 例子里有合法的嵌套收尾
+# （`…"confirm": true}}`），而"有没有被 f-string 转义毁掉"由**逐字出现**这条
+# 断言覆盖（转义若发生，逐字匹配先红）；开括号 `{{` 的检查照旧留着。
 
-SNIPPET = '{"confirm": true}'
+from dhole_mcp.actions import _CONFIRM_SNIPPET as SNIPPET
 
 
 def _gate_row(monkeypatch, *, pinned: bool, answer=None):
@@ -415,8 +423,8 @@ def _gate_row(monkeypatch, *, pinned: bool, answer=None):
 
 def test_the_pinned_approval_hint_renders_the_same_shape_twice(monkeypatch):
     err = _gate_row(monkeypatch, pinned=True)
-    assert "{{" not in err and "}}" not in err, err
-    assert SNIPPET in err, err
+    assert "{{" not in err, err          # f-string 转义事故（开括号）
+    assert SNIPPET in err, err           # 逐字出现 = 没有任何转义损坏
 
 
 def test_the_plain_approval_hint_was_already_right(monkeypatch):

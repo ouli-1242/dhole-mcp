@@ -1,0 +1,20 @@
+{
+ "start_url": "http://127.0.0.1:8399/",
+ "pages": [],
+ "pages_crawled": 0,
+ "pages_discovered": 8,
+ "truncated_by_max_pages": true,
+ "deadline_ms_applied": 25000,
+ "attempt_cap_ms": 30000,
+ "sitemap_used": false,
+ "duration_ms": 106,
+ "summary": "search='登录' filtered to 0 URL(s); crawled 0 page(s) at http://127.0.0.1:8399 (depth <= 1); 0 content_ok; stopped: max_pages reached",
+ "next_action": "search='登录' matched none of the crawled pages. It matches URL path + title only - widen it, drop it, or pass focus= to prioritize relevant links instead of filtering.",
+ "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.100, example.org -> 198.18.1.23); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+ "identity_applied": "allow_private",
+ "plan_id": "850e27f25859",
+ "next_resume_token": "850e27f25859:0",
+ "_wall_s": 0.11,
+ "_seq": 8,
+ "_tool": "web_crawl"
+}

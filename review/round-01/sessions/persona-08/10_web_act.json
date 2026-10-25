@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/hoverdrag",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: action 1 'drag' must be {selector|index, to} - the element to drag plus where to drop it; 'to' takes the same target shapes (a CSS selector string or {\"selector\"|\"index\", \"expect\"?})",
+ "summary": "invalid request · action 1 'drag' must be {selector|index, to}",
+ "content_ok": false,
+ "next_action": "Nothing was run. The action named in `error` has the wrong shape; sys_guide(topic='behavior', section='Page interaction') lists every action key and what each one takes.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.03,
+ "_tool": "web_act",
+ "_tag": "p08-S3b-hoverdrag重试#10",
+ "_ts": "2026-10-25T14:19:49.882535+00:00"
+}

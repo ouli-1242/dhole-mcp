@@ -1,0 +1,23 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "https://www.w3.org/TR/html52/",
+ "duration_ms": 44421,
+ "error": "timeout: the 30000ms call budget ran out during the fetch tiers (spent 44420ms; it ran 14420ms past the budget and its 1500ms grace - the budget is not a hard kill, and something inside this call did not stop when told). No content was extracted.",
+ "escalation_path": "fetch tiers(timeout: no tier returned)",
+ "summary": "out of time · 0B markdown · the main-content detector returned 6,138 of the 563,673 characters this document holds (1%) - most of it read as boilerplate, so this answer comes from the plain converter; it includes page chrome the detector would have stripped",
+ "content_ok": false,
+ "next_action": "Budget exhausted after 44420ms at the fetch tiers. It ran 14420ms past the budget and its 1500ms grace - the budget is not a hard kill, and something inside this call did not stop when told. Raise timeout - this call already had 30000ms and dhole accepts up to 120000ms (90000ms more); raising buys more time at this stage, not a faster site, or switch source - the browser tier never ran on this call (it ran out at the fetch tiers), so there is no rendering here to skip.",
+ "fetched_at": "2026-10-25T14:22:56Z",
+ "source_type": "reference",
+ "is_official": true,
+ "diagnosis": {
+  "code": "timeout",
+  "retryable": true,
+  "recover_with": "raise timeout, or switch source"
+ },
+ "_wall_s": 45.76,
+ "_tool": "web_read",
+ "_tag": "p09-S4-算了#05",
+ "_ts": "2026-10-25T14:22:56.468571+00:00"
+}

@@ -1,0 +1,128 @@
+{
+ "start_url": "http://127.0.0.1:8399/collections",
+ "pages": [
+  {
+   "url": "http://127.0.0.1:8399/collections",
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "推荐专题",
+   "fetched_at": "2026-10-25T13:52:13Z",
+   "summary": "200 OK · 1.1KB html · cache · cached copy, fetched 10.1 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/1",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "作品 1",
+   "fetched_at": "2026-10-25T13:52:13Z",
+   "summary": "200 OK · 337B html · cache · cached copy, fetched 10.1 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/2",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "作品 2",
+   "fetched_at": "2026-10-25T13:52:13Z",
+   "summary": "200 OK · 310B html · cache · cached copy, fetched 10.1 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/3",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "作品 3",
+   "fetched_at": "2026-10-25T13:53:49Z",
+   "summary": "200 OK · 310B html · cache · cached copy, fetched 8.5 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/4",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "作品 4",
+   "fetched_at": "2026-10-25T13:53:49Z",
+   "summary": "200 OK · 337B html · cache · cached copy, fetched 8.5 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/5",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "作品 5",
+   "fetched_at": "2026-10-25T13:53:49Z",
+   "summary": "200 OK · 310B html · cache · cached copy, fetched 8.5 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/6",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "作品 6",
+   "fetched_at": "2026-10-25T13:53:49Z",
+   "summary": "200 OK · 310B html · cache · cached copy, fetched 8.5 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/7",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "作品 7",
+   "fetched_at": "2026-10-25T13:53:50Z",
+   "summary": "200 OK · 337B html · cache · cached copy, fetched 8.5 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/8",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "http",
+   "title": "作品 8",
+   "fetched_at": "2026-10-25T14:02:18Z",
+   "summary": "200 OK · 310B html · http · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 25000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/9",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "http",
+   "title": "作品 9",
+   "fetched_at": "2026-10-25T14:02:18Z",
+   "summary": "200 OK · 310B html · http · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 25000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/10",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "http",
+   "title": "作品 10",
+   "fetched_at": "2026-10-25T14:02:18Z",
+   "summary": "200 OK · 340B html · http · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 25000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/about",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "http",
+   "title": "关于",
+   "fetched_at": "2026-10-25T14:02:18Z",
+   "summary": "200 OK · 130B html · http · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 25000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  }
+ ],
+ "pages_crawled": 12,
+ "pages_discovered": 12,
+ "discover_only": true,
+ "deadline_ms_applied": 25000,
+ "attempt_cap_ms": 25000,
+ "sitemap_used": false,
+ "duration_ms": 143,
+ "summary": "mapped 12 URL(s) at http://127.0.0.1:8399 (depth <= 2) using 12 page fetch(es); no content extracted",
+ "next_action": " Plan 20838c73ae88 is held here for 1h: web_crawl(url=..., resume_token='20838c73ae88:0') fetches it without re-sending URLs (add selector=/schema= to project each page); or web_read(urls=[...]) the picks directly.",
+ "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+ "identity_applied": "allow_private",
+ "plan_id": "20838c73ae88",
+ "_wall_s": 0.16,
+ "_tool": "web_discover",
+ "_tag": "p05-S2-建图找详情#02",
+ "_ts": "2026-10-25T14:02:18.155983+00:00"
+}

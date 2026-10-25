@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: url is required: the page to act on, one URL per call",
+ "summary": "invalid request · url is required: the page to act on, one URL per call",
+ "content_ok": false,
+ "next_action": "Nothing was run. Correct the argument and call again - no request was made. web_act takes an absolute http(s) URL (e.g. https://example.com).",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.02,
+ "_tool": "web_act",
+ "_tag": "p07-S3b-驻留会话解法#10",
+ "_ts": "2026-10-25T14:11:13.910237+00:00"
+}

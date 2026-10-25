@@ -1,0 +1,50 @@
+{
+ "query": "What is the conservation status of the dhole?",
+ "sources": [
+  {
+   "n": 1,
+   "url": "https://www.bilibili.com/read/cv23574446",
+   "title": "【DHOLES.ORG】World Dhole Day！ 世界爱豺日！ - 哔哩哔哩",
+   "chars": 2742,
+   "fetcher": "http",
+   "content_ok": true
+  }
+ ],
+ "evidence": [
+  "[1] https://www.bilibili.com/read/cv23574446\n[Focus: 'What is the conservation status of the dhole?'; showing 9 of 57 blocks by BM25 relevance. 1 of the 7 words you named occur nowhere on this page ('status'). Pass focus='' for the full page.]\n\n# **前　言**\n\n　　以下信息来自dholes.org网站中的World Dhole Day模块。**World Dhole Day**，此处译作“世界爱豺日”，为每年的**5月28日**。dholes.org，一个关于豺的**护豺基金会（Dhole Conservation Fund）**和世界爱豺日（World Dhole Day）的官方网站。\n\n> When you think of India’s wildlife life you often think of tigers, leopards, elephants, maybe even the greater one-horn rhino; but rarely does a dog come to mind. Imagine a species that’s more endangered than tigers, or leopards, or even Asian elephants it's on par with the greater one-horn rhino in numbers. No, it doesn’t just live in one small corner of the forest or a single island; most of southern Asia use to be its home range. There is such a dog and its name is the Dhole. Never heard of it? Not surprised considering the literature on this elusive canine is minimal at best. For an animal with such a large range and is a habitat generalist (in other words it can survive in lots of different habitats), it's surprising to see their numbers dropping. The other surprise, no one seems to know about them. I won’t say no one cares, it's just outside their home range very few people know what a dhole is. In captivity, there are less than 50 zoos that house dholes in the world.\n\n> So what is a dhole? A dhole is a medium-sized canine, about 50lbs or so. They work in family groups of around 5 to 8 adults to hunt. Now I don’t want to call them packs like you would a wolf or African Painted Dog, but rather a family group. You see something cool about the dhole is they will allow other dhole groups in their territory and on occasion the two groups will even hunt together. During these meetings, some younger dholes might even form their own group and head off on their own. The group will all help raise a litter of pups, even though quite often it's only one female that gives birth. There does appear to be leaders of the group and a pecking order like with wolves but not as strict, it's more fluid with dholes. Their main prey is deer of all sizes (hog deer up to sambar), banteng, Gaur, and wild boar. They will go for smaller animals as well but these make up a bulk of their diet.\n\n> Conservation wise tigers have been the main reason why dholes most likely have not gone extinct in much of their home range. Land set aside for tiger conservation has helped protect dhole habitat as well. However, these areas are fragmented and are getting crowded as leopard and tiger numbers rebound. Tiger and leopards often eat the same food as dholes but they hunt at different times and utilize different food resources at different times of the year"
+ ],
+ "failed": [
+  {
+   "n": 2,
+   "url": "http://www.dict.cn/Conservation%20status",
+   "why": "invalid_request: Timeout exceeds maximum of 120000ms (2 minutes)"
+  }
+ ],
+ "more_hits": [
+  {
+   "url": "https://www.wordhippo.com/what-is/the-singular-of/dholes.html",
+   "title": "What is the singular of dholes?"
+  },
+  {
+   "url": "https://www.docin.com/p-877116826.html",
+   "title": "Conservation status of the:的保护现状- 豆丁网"
+  },
+  {
+   "url": "https://link.springer.com/article/10.1007/s10592-005-4987-x",
+   "title": "Conservation status of the White-Bellied Sea-Eagle Haliaeetus ..."
+  },
+  {
+   "url": "https://doi.org/10.1017/S0959270900002197",
+   "title": "The conservation status of birds in Laos: a review of key species | Bird ..."
+  },
+  {
+   "url": "https://education.nationalgeographic.org/resource/conservation-encyclopedic/",
+   "title": "Conservation - National Geographic Society"
+  }
+ ],
+ "summary": "1 of 2 source(s) read into an evidence pack for 'What is the conservation status of the dhole?'; 1 failed (each row says why)",
+ "note": "each evidence block starts with [n] and its URL - cite that pair. Per-source text is focus-filtered to the query, not the whole page; web_read a source (urls= batches work) for everything it says. more_hits are the search rows not read",
+ "_wall_s": 3.28,
+ "_seq": 27,
+ "_tool": "web_research"
+}

@@ -1,0 +1,22 @@
+{
+ "status": 200,
+ "content": [
+  "## Sheet1\n\n| Name | Score |\n| --- | --- |\n| Alice | 95 |\n| Bob | 87 |"
+ ],
+ "url": "file:///<server cwd>/tests/sample.xlsx",
+ "fetcher_used": "parse",
+ "duration_ms": 259,
+ "error": "",
+ "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+ "total_size_bytes": 4891,
+ "total_extracted_chars": 69,
+ "summary": "200 OK · 69B markdown · parse",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T14:07:36Z",
+ "approx_tokens": 17,
+ "_wall_s": 0.27,
+ "_tool": "doc_parse",
+ "_tag": "p06-S1-报表#01",
+ "_ts": "2026-10-25T14:07:36.663351+00:00"
+}

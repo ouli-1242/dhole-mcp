@@ -1,0 +1,24 @@
+{
+  "round": 1,
+  "branch": "review/round-01",
+  "baseline_commit": "3cf035ebb1757127290207efd3a779bfdf35f76d",
+  "port": 9201,
+  "tools_expected": 13,
+  "phase": "P0",
+  "steps": {
+    "git_hygiene": "done",
+    "skeleton": "done",
+    "env_verify": "in_progress",
+    "servers": "pending",
+    "harness_selftest": "pending",
+    "plan_and_personas": "pending",
+    "persona_sealed": false,
+    "P1_personas_done": [],
+    "P2_reports": [],
+    "P3_review": "pending",
+    "P4_fixes": [],
+    "P5_reverify": "pending",
+    "P6_wrap": "pending"
+  },
+  "updated": "2026-10-25T21:25:00+08:00"
+}

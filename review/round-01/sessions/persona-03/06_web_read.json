@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "https://www.sohu.com/a/853570744_120580522",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "robots_disallowed: https://www.sohu.com/robots.txt disallows this URL for dhole-mcp",
+ "summary": "robots.txt disallowed · no request made · https://www.sohu.com/robots.txt",
+ "content_ok": false,
+ "next_action": "robots.txt disallows this URL for dhole, so nothing was fetched - do NOT cite it. Switch source, or re-call with ignore_robots=true if you have the site's permission, or DHOLE_IGNORE_ROBOTS=1 to disable the check process-wide.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "robots_disallowed",
+  "retryable": false,
+  "recover_with": "switch source, or ignore_robots=true if you have the site's permission"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_read",
+ "_tag": "p03-S4-挑来源日期#06",
+ "_ts": "2026-10-25T13:57:39.761744+00:00"
+}

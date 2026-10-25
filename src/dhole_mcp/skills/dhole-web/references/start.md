@@ -1,7 +1,7 @@
 # Start here
 
-dhole is eleven tools. Pick the route by what you already hold; read one deeper
-volume only when this page leaves a question open.
+dhole is 13 tools. Pick the route by what you already hold - what this page
+leaves open is answered at the bottom.
 
 ## Route 1 — you have a URL
 
@@ -23,6 +23,7 @@ the sources you will actually cite.
 - a site's URL map: `web_discover(sitemap=true)`; many pages: `web_crawl`, then
   `web_read(urls=[...])` for the picks.
 - updates: `feed_read` on the homepage or feed URL; `since=` reads incrementally.
+- also: `web_research` · `web_recall` · `sys_state` · `sys_guide`.
 - "did this change?": `web_read(url=..., extraction_type="check")` answers
   changed/unchanged with a diff window; `urls=` takes up to 10. A recurring list
   is `dhole watch run` (exit 0 none / 1 changed / 2 error).

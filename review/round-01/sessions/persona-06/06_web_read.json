@@ -1,0 +1,35 @@
+{
+ "status": 200,
+ "content": [
+  "回"
+ ],
+ "url": "http://127.0.0.1:8399/qr.png",
+ "fetcher_used": "http",
+ "extracted_type": "text",
+ "duration_ms": 1723,
+ "error": "image_ocr_thin: OCR found only 1 readable character(s) in this image - a stray glyph, not a text layer. The characters are in `content`; do not cite them as this page's text.",
+ "content_type": "image/png",
+ "total_size_bytes": 5311,
+ "total_extracted_chars": 1,
+ "attempt_cap_ms": 5000,
+ "summary": "200 OK · 1B text · http · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 30000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile",
+ "content_ok": false,
+ "next_action": "this image has no text layer worth reading - the stray character(s) in `content` are OCR noise, not a quote. Read the picture with a vision-capable model, or a web_act screenshot action on the page that holds it",
+ "fetched_at": "2026-10-25T14:08:24Z",
+ "metadata": {
+  "robots": "complied",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "page_type": "image",
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "image_ocr_thin",
+  "retryable": false,
+  "recover_with": "read the image with a vision-capable model (or a web_act screenshot) - what OCR found is a stray glyph, not this image's text"
+ },
+ "approx_tokens": 1,
+ "_wall_s": 1.73,
+ "_tool": "web_read",
+ "_tag": "p06-S4-二维码#06",
+ "_ts": "2026-10-25T14:08:24.525045+00:00"
+}

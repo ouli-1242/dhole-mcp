@@ -1,0 +1,20 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/login",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: Unsupported argument(s) for web_request: ['session_id']. Supported: ['body', 'confirm', 'content_type', 'extraction_type', 'headers', 'include_headers', 'method', 'timeout', 'url']",
+ "summary": "invalid request · Unsupported argument(s) for web_request: ['session_id']",
+ "content_ok": false,
+ "next_action": "Nothing was sent. The name in `error` is not one this tool takes - rename or drop it; the list in `error` is everything it does take. Every argument is a top-level parameter.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.02,
+ "_seq": 14,
+ "_tool": "web_request"
+}

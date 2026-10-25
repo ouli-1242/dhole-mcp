@@ -1,0 +1,37 @@
+{
+ "status": 200,
+ "content": [
+  "请输入图中的字符\n验证码\n提交"
+ ],
+ "url": "http://127.0.0.1:8399/captcha",
+ "fetcher_used": "stealthy",
+ "duration_ms": 3871,
+ "error": "bot_wall_detected: page is an anti-bot/CAPTCHA challenge, not content",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 516,
+ "total_extracted_chars": 15,
+ "visible_text_chars": 19,
+ "escalation_path": "http→stealthy",
+ "summary": "200 OK · 15B markdown · stealthy · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 30000ms) — a per-host habit, not a cap you set · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named",
+ "content_ok": false,
+ "next_action": "page is an anti-bot/CAPTCHA challenge, not content - do NOT cite it. the browser tier already rendered this page and the challenge is what it got back - there is no tier left to escalate to, so another re-fetch is not an untried option. Switch source, or ask for a copy that does not gate.",
+ "fetched_at": "2026-10-25T14:18:16Z",
+ "metadata": {
+  "title": "验证码",
+  "lang": "zh",
+  "robots": "complied",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "page_type": "captcha",
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "bot_wall",
+  "retryable": true,
+  "recover_with": "the browser tier already rendered this and returned what is in `content` - no untried tier is left on this URL"
+ },
+ "approx_tokens": 13,
+ "_wall_s": 3.9,
+ "_tool": "web_read",
+ "_tag": "p08-S4-验证码#07",
+ "_ts": "2026-10-25T14:18:16.415358+00:00"
+}

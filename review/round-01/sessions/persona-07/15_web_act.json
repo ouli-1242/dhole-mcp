@@ -1,0 +1,54 @@
+{
+ "status": 403,
+ "content": [
+  "挑战失败\n\n抄写不符\n====\n\n填进来的不是这一页的字符。"
+ ],
+ "url": "http://127.0.0.1:8399/challenge/verify",
+ "original_url": "http://127.0.0.1:8399/challenge/text",
+ "fetcher_used": "stealthy",
+ "duration_ms": 14864,
+ "error": "http_error_403: server returned error status",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 180,
+ "total_extracted_chars": 30,
+ "visible_text_chars": 23,
+ "escalation_path": "direct:stealthy",
+ "summary": "403 ERR · 30B markdown · stealthy · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 60000ms) — a per-host habit, not a cap you set · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dialing, not the page. · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named · 1 of 3 actions did not take effect (read 'code, .challenge-code, [data-code]' as 'code': the selector matched no element (or none became actionable) before the timeout: Locator.inner_text: Timeout 10000ms exce) · redirected from http://127.0.0.1:8399/challenge/text to http://127.0.0.1:8399/challenge/verify",
+ "content_ok": false,
+ "next_action": "access denied (HTTP 403) - the site is refusing this client. the browser tier already made this request (fetcher_used='stealthy') and the site refused it the same way - rendering is not the untried lever here. Switch source, or re-call later if the refusal looks session-dependent.",
+ "fetched_at": "2026-10-25T14:13:35Z",
+ "metadata": {
+  "title": "挑战失败",
+  "lang": "zh",
+  "robots": "complied",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+  "actions": [
+   {
+    "action": "read 'code, .challenge-code, [data-code]' as 'code'",
+    "ok": false,
+    "error": "the selector matched no element (or none became actionable) before the timeout: Locator.inner_text: Timeout 10000ms exceeded."
+   },
+   {
+    "action": "fill '#answer'",
+    "ok": true
+   },
+   {
+    "action": "click 'button[type=submit], #challenge-submit'",
+    "ok": true,
+    "submitted": true,
+    "submission": "POST"
+   }
+  ]
+ },
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "http_error_403",
+  "retryable": false,
+  "recover_with": ""
+ },
+ "approx_tokens": 22,
+ "_wall_s": 14.91,
+ "_tool": "web_act",
+ "_tag": "p07-S3f-真实选择器#15",
+ "_ts": "2026-10-25T14:13:35.314174+00:00"
+}

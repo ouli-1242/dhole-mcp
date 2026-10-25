@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/challenge/text",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: action 1 'fill' must be {selector, text} or {index, text}",
+ "summary": "invalid request · action 1 'fill' must be {selector, text} or {index, text}",
+ "content_ok": false,
+ "next_action": "Nothing was run. The action named in `error` has the wrong shape; sys_guide(topic='behavior', section='Page interaction') lists every action key and what each one takes.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.02,
+ "_tool": "web_act",
+ "_tag": "p07-S3-抄写挑战#05",
+ "_ts": "2026-10-25T14:09:51.714618+00:00"
+}

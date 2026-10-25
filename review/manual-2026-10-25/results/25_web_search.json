@@ -1,0 +1,196 @@
+{
+ "query": "豺 dhole 动物 保护现状",
+ "results": [
+  {
+   "title": "在中昆仑拍到一大群 “四凶之首”-北京市海淀区陆桥...",
+   "url": "https://eco-bridgecontinental.org.cn/newsinfo/10928187.html",
+   "snippet": "虽然随着保护力度的加大,各地不断发现豺的踪迹,但作为一级保护动物,豺的生存状况不乐观,需要投入更大的力度对其进行研究和保护。 科研机构需要对包括数量、...",
+   "source": "baidu",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.9726839463149809,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 8 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "国家一级重点保护动物-豺",
+   "url": "https://www.meipian.cn/59o72fap",
+   "snippet": "2024年12月30日 - 豺的四肢也比狼稍短,有助于在山地峭壁间攀岩,以及林间穿行;尾较粗,毛蓬松而下垂,呈棕黑色,类似狐尾,尖端为黑色或棕色.多在晨昏活动,行动快速诡秘,善于...",
+   "source": "so360",
+   "position": 2,
+   "relevance_score": 0.9807,
+   "relevance_raw": 0.9053197232702189,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 8 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "青海德令哈首次发现国家一级保护动物豺 红外相机拍到其活动影像_腾讯新闻",
+   "url": "https://news.qq.com/rain/a/20251204V0808700",
+   "snippet": "2025年12月4日 - 青海德令哈首次发现国家一级保护动物豺 红外相机拍到其活动影像",
+   "source": "so360",
+   "position": 3,
+   "relevance_score": 0.804,
+   "relevance_raw": 0.7335245765914867,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 8 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "保护成效怎样？仍有哪些漏洞？短板如何补上？——透视执法检查报告中的野生动物保护现状-东南网新闻中心",
+   "url": "http://news.fjsen.com/wap/2020-08/12/content_30442387.htm",
+   "snippet": "东南网新闻中心 · 2020-08-12",
+   "source": "shenma",
+   "position": 4,
+   "relevance_score": 0.18,
+   "relevance_raw": 0.11065996672991868,
+   "fetch_relevance": "med",
+   "engines_consensus": "1 of 8 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "甘肃安西极旱荒漠国家级自然保护区10余只豺同框,北方豺的生存近况...",
+   "url": "https://www.bilibili.com/video/BV1Ax4y1n7gA/",
+   "snippet": "2024年3月底左右，甘肃安西极旱荒漠国家级自然保护区工作人员在保护区多个点位的红外相机上，发现了国家一级保护动物豺的活动影像，从画面中可以...",
+   "source": "sogou",
+   "position": 5,
+   "relevance_score": 0.1527,
+   "relevance_raw": 0.11645912234865091,
+   "fetch_relevance": "med",
+   "engines_consensus": "1 of 8 (degraded_pool)",
+   "source_type": "unknown",
+   "published": "2024-05-28",
+   "published_precision": "day",
+   "published_basis": "2024-05-28"
+  }
+ ],
+ "total_results": 5,
+ "engines_used": [
+  "bing_global",
+  "so360",
+  "shenma",
+  "yahoo",
+  "yandex",
+  "sogou",
+  "seznam",
+  "baidu"
+ ],
+ "engine_blocked": [
+  "brave",
+  "duckduckgo"
+ ],
+ "engine_preempted": [
+  "marginalia",
+  "bing"
+ ],
+ "engine_detail": [
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 59s"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 59s"
+  },
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "6 usable rows from 7 item nodes"
+  },
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "7 usable rows from 7 item nodes"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "7 usable rows from 7 item nodes"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "9 usable rows from 9 item nodes"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "6 usable rows from 11 item nodes"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  }
+ ],
+ "families_answered_of_asked": "7 of 9 (8 could answer)",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "date_coverage": {
+  "rows_total": 5,
+  "rows_with_date": 1,
+  "rows_no_date": 4,
+  "rows_verified_by_fetch": 0,
+  "rows_relative_precision": 0,
+  "rows_unverifiable_by_before": 0,
+  "rows_dropped_by_before": 0,
+  "rows_kept": 5
+ },
+ "duration_ms": 2663,
+ "error": "",
+ "fetch_hint": "3 high, 2 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. web_read what fits your need (high first, but a lower tier can be the right call). | Engines brave, duckduckgo didn't contribute (2 blocked); results are from the rest. | no follow-up phrases this round: this miner pairs two words that stand next to each other with only space between, and this round's rows contain no such pair - 0 whitespace-separated word(s) were found in them, but no segmenter is bundled, so rewording the query cannot change that answer",
+ "summary": "Searched '豺 dhole 动物 保护现状' -> 5 results (3 high, 2 med, 0 low) from bing_global,so360,shenma,yahoo,yandex,sogou,seznam,baidu; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. Some engines didn't contribute (2 blocked). For more recall: retry after the cooldown clears (cooling right now: duckduckgo 59s; the pool is whole again in 59s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use. marginalia, bing were cancelled once enough indexes had answered - the diversity quorum, not a failure, so waiting and retrying reaches the same stop point; raise max_results or name them in engines=[...] to ask them anyway.",
+ "same_document_groups": [],
+ "_wall_s": 3.02,
+ "_seq": 25,
+ "_tool": "web_search"
+}

@@ -1,0 +1,22 @@
+{
+ "status": 200,
+ "content": [
+  "[Word document; 4 paragraph(s), 1 table(s) read; headers/footers, footnotes, comments and images not included]\n\n# Test Document\nHello world paragraph.\n## Section 2\nSecond section content.\n\n| Name | Age |\n| --- | --- |\n| Alice | 30 |"
+ ],
+ "url": "file:///<server cwd>/tests/sample.docx",
+ "fetcher_used": "parse",
+ "duration_ms": 209,
+ "error": "",
+ "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+ "total_size_bytes": 35498,
+ "total_extracted_chars": 232,
+ "summary": "200 OK · 232B markdown · parse",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T14:21:09Z",
+ "approx_tokens": 58,
+ "_wall_s": 0.21,
+ "_tool": "doc_parse",
+ "_tag": "p09-S1-读稿#01",
+ "_ts": "2026-10-25T14:21:09.866138+00:00"
+}

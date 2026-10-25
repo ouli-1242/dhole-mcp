@@ -1,0 +1,70 @@
+{
+ "results": [
+  {
+   "status": 200,
+   "content": [
+    "This domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes."
+   ],
+   "url": "https://example.com/",
+   "fetcher_used": "http",
+   "duration_ms": 357,
+   "error": "",
+   "content_type": "text/html; charset=utf-8",
+   "total_size_bytes": 577,
+   "total_extracted_chars": 156,
+   "visible_text_chars": 171,
+   "escalation_path": "direct:http",
+   "attempt_cap_ms": 29000,
+   "summary": "200 OK · 156B markdown · http",
+   "content_ok": true,
+   "next_action": "",
+   "fetched_at": "2026-10-25T08:03:02Z",
+   "metadata": {
+    "title": "Example Domain",
+    "robots": "not checked (robots.txt unreadable)"
+   },
+   "approx_tokens": 39
+  },
+  {
+   "status": 200,
+   "content": [
+    "# Guard the Open Internet\n\nMozilla is working to put control of the internet back in the hands of the people using it.\n\n## Together, we can keep the internet easy, safe and free — for everyone.\n\n## About Mozilla\n\nThe Mozilla Project is a global community of people who believe that openness, innovation, and opportunity are key to the continued health of the internet. We have worked together since 1998 to ensure that the internet is developed in a way that benefits everyone.\n\nToday the organizations within the Mozilla Project include: the [Mozilla Foundation](https://www.mozillafoundation.org/), which champions our mission through philanthropic risk capital; [Mozilla Corporation](https://www.firefox.com/), which makes Firefox; [MZLA](https://thunderbird.net/), which makes Thunderbird; [Mozilla Ventures](https://mozilla.vc/), which invests in responsible tech startups; [Mozilla.ai](https://mozilla.ai/), which creates open source AI developer tools; [Mozilla Data Collective](https://mozilladatacollective.com/), a data sharing platform for human agency and fair value exchange.\n\n[Mozilla.org](https://mozilla.org/) coordinates this whole family of organizations as well as community initiatives that support the Mozilla mission.\n\n## Get to know Mozilla today\n\nMozilla is not only standing up for the open internet we originally helped to build, but also shaping what the internet is becoming in the AI era.\n\n### \n      \n        [Mozilla is rewiring itself for a new era. Our annual report, the State of Mozilla shares how.](https://stateof.mozilla.org/?utm_source=www.mozilla.org&utm_medium=referral&utm_campaign=about)\n      \n  \n\n  \n  Read the report\n\n### \n      \n        [A different AI future means being owners, not renters. Read our cross-portfolio open source AI strategy to learn more.](https://blog.mozilla.org/en/mozilla/mozilla-open-source-ai-strategy/?utm_source=www.mozilla.org&utm_medium=referral&utm_campaign=about)\n      \n  \n\n  \n  Read the strategy\n\n## Work for Mozilla\n\nWe're hiring across the whole Mozilla family of organizations, and looking for people who want to push the boundaries of what's possible for the internet without compromising on what matters. You'll find deep shared values and some of the best benefits in the industry.\n\n## Join our community\n\nMozilla is a global community of volunteers, fellows and contributors who have been building, protecting and shaping the internet with us since 1998. From writing code and spotting bugs to advocating for privacy and keeping the web open for everyone, here are some ways to get involved:\n\n[Donate to Mozilla Foundation](https://www.mozillafoundation.org/en/?form=Mozilla-Website-Homepage&utm_source=www.mozilla.org&utm_medium=referral&utm_campaign=home) / [Download Firefox](https://www.firefox.com/en-US/) / [Contribute to Thunderbird](https://www.thunderbird.net/en-US/participate/) / [Share Your Skills](https://community.mozilla.org/en/)/ [Download + Upload Data](https://mozilladatacollective.com/) / [Explore New Open Source Tools](https://www.mozilla.ai/open-tools/docs) / [Share Your Deck](https://mozilla.vc/contacts/) / [Get Our Newsletter](https://newsletter.ownersnotrenters.com/)"
+   ],
+   "url": "https://www.mozilla.org/en-US/about/",
+   "fetcher_used": "http",
+   "duration_ms": 903,
+   "error": "",
+   "content_type": "text/html; charset=utf-8",
+   "total_size_bytes": 69203,
+   "total_extracted_chars": 3182,
+   "visible_text_chars": 4784,
+   "substance": "ok",
+   "escalation_path": "direct:http",
+   "attempt_cap_ms": 29000,
+   "summary": "200 OK · 3.1KB markdown · http · max_content_chars=3000 was passed by 182 chars: what remained of the page is shorter than the 500-character window that would be worth a second call, so it came along with this one - nothing was dropped, there is no next offset",
+   "content_ok": true,
+   "next_action": "",
+   "fetched_at": "2026-10-25T08:03:03Z",
+   "metadata": {
+    "description": "Mozilla makes browsers, apps, code and tools that put people before profit. Our mission: Keep the internet open and accessible to all.",
+    "type": "website",
+    "site_name": "Mozilla",
+    "og_url": "https://www.mozilla.org/en-US/about/",
+    "image": "https://www.mozilla.org/media/img/m24/og.3a69dffad83e.png",
+    "title": "Learn about Mozilla",
+    "canonical": "https://www.mozilla.org/en-US/about/",
+    "lang": "en",
+    "robots": "complied"
+   },
+   "approx_tokens": 796
+  }
+ ],
+ "total": 2,
+ "successful": 2,
+ "usable": 2,
+ "summary": "2 URLs asked · 2 answered without an HTTP error (`successful` counts exactly that, per row's status/error) · 2 carry content you can quote (`content_ok=true` on the row). The two numbers answer different questions and are usually not equal: a row can answer 200 with a login wall, a paywall, an empty page, or a body cut down by the extractor.",
+ "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.100, example.org -> 198.18.1.23); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+ "_wall_s": 1.68,
+ "_seq": 19,
+ "_tool": "web_read"
+}

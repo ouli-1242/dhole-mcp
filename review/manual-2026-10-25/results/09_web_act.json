@@ -1,0 +1,101 @@
+{
+ "status": 200,
+ "content": [
+  "下拉与历史\n\n下拉靶\n===\n\nIDLE\n\n请选择\n中国\n日本\n美国\n\n红\n绿\n蓝\n\n我不是下拉框\n\n[去关于页](/about)"
+ ],
+ "url": "http://127.0.0.1:8399/dropdown",
+ "fetcher_used": "stealthy",
+ "duration_ms": 6337,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 817,
+ "total_extracted_chars": 65,
+ "visible_text_chars": 45,
+ "substance": "nav_only",
+ "substance_basis": "13 lines, 100% of them are short fragments without sentence punctuation, mean line 3.6 characters (page holds 45 visible characters in total)",
+ "escalation_path": "direct:stealthy",
+ "summary": "200 OK · 65B markdown · stealthy · no prose (menu fragments only) · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 90000ms) — a per-host habit, not a cap you set · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dialing, not the page. · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named · 1 of 8 actions did not take effect (read '#note' @value (property): read found no property 'value': a form field's live value needs {\"property\": \"value\"}; a challenge drawn as an image nee)",
+ "content_ok": false,
+ "next_action": "the body returned is short menu-style fragments, not prose, and rendering will not change that answer (this URL was already rendered, or this tier is not one a browser helps). The only door left is the links themselves: follow them or take a different source. Do not cite this body as the article.",
+ "fetched_at": "2026-10-25T08:01:41Z",
+ "metadata": {
+  "title": "下拉与历史",
+  "lang": "zh",
+  "robots": "complied",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.100, example.org -> 198.18.1.23); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+  "actions": [
+   {
+    "action": "select 'CN' in '#country'",
+    "ok": true,
+    "selected": [
+     {
+      "value": "CN",
+      "label": "中国"
+     }
+    ]
+   },
+   {
+    "action": "select '日本' in '#country'",
+    "ok": true,
+    "selected": [
+     {
+      "value": "JP",
+      "label": "日本"
+     }
+    ]
+   },
+   {
+    "action": "select 'r/绿' in '#tags'",
+    "ok": true,
+    "selected": [
+     {
+      "value": "r",
+      "label": "红"
+     },
+     {
+      "value": "g",
+      "label": "绿"
+     }
+    ]
+   },
+   {
+    "action": "pdf 'D:\\\\Dev\\\\Tools\\\\dhole-mcp\\\\review\\\\manual-2026-10-25\\\\artifacts\\\\dropdown.pdf'",
+    "ok": true,
+    "saved": "D:\\Dev\\Tools\\dhole-mcp\\review\\manual-2026-10-25\\artifacts\\dropdown.pdf",
+    "saved_bytes": 39776
+   },
+   {
+    "action": "click '#to-about'",
+    "ok": true
+   },
+   {
+    "action": "navigate back",
+    "ok": true,
+    "navigate": "back",
+    "url": "http://127.0.0.1:8399/dropdown"
+   },
+   {
+    "action": "read '#status' as 'st'",
+    "ok": true,
+    "read_via": "inner_text",
+    "read": "IDLE",
+    "read_as": "st"
+   },
+   {
+    "action": "read '#note' @value (property)",
+    "ok": false,
+    "error": "read found no property 'value': a form field's live value needs {\"property\": \"value\"}; a challenge drawn as an image needs a screenshot action"
+   }
+  ]
+ },
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "no_content",
+  "retryable": false,
+  "recover_with": "the page carried no usable text - switch source, or try extraction_type='html'"
+ },
+ "approx_tokens": 39,
+ "_wall_s": 6.36,
+ "_seq": 9,
+ "_tool": "web_act"
+}

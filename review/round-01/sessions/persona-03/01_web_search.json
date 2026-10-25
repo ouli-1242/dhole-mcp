@@ -1,0 +1,210 @@
+{
+ "query": "猫为什么踩奶",
+ "results": [
+  {
+   "title": "小猫踩奶:你知道这是为什么吗?背后竟然有这样的秘密!_猫咪_情感...",
+   "url": "https://www.sohu.com/a/853570744_120580522",
+   "snippet": "总结一下，小猫踩奶其实是一种正常且健康的行为，是它们与生俱来的本能表现，也是一种情感的延续。如果你能为猫咪提供一个舒适的环境，并用适合的...",
+   "source": "sogou",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.9997330196152919,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 6 (degraded_pool)",
+   "source_type": "unknown",
+   "published": "2025-01-26",
+   "published_precision": "day",
+   "published_basis": "2025-01-26"
+  },
+  {
+   "title": "小猫踩奶是因为什么_宠搜网",
+   "url": "https://www.chongso.com/z/sgwzbxdz/",
+   "snippet": "猫咪在主人身上踩奶是信任主人的表现。 2.踩奶是猫咪在幼年期时增加母体乳汁分泌的一种本能。奶猫吃奶的时候两个爪子会捧着母猫的乳房一按一按的...",
+   "source": "sogou",
+   "position": 2,
+   "relevance_score": 0.9928,
+   "relevance_raw": 0.9982170909609889,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 6 (degraded_pool)",
+   "source_type": "unknown",
+   "published": "2025-12-21",
+   "published_precision": "day",
+   "published_basis": "2025-12-21"
+  },
+  {
+   "title": "猫咪为什么会出现“踩奶”的行为? - 知乎",
+   "url": "https://zhuanlan.zhihu.com/p/57391217",
+   "snippet": "猫咪踩奶的行为虽然和幼时吸吮乳汁有着密不可分的联系,但对于成年猫仍然会出现踩奶行为的...",
+   "source": "baidu",
+   "position": 3,
+   "relevance_score": 0.9923,
+   "relevance_raw": 0.9981100719053114,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 6 (degraded_pool)",
+   "source_type": "forum",
+   "published": "2019-11-29",
+   "published_precision": "day",
+   "published_basis": "2019年11月29日"
+  },
+  {
+   "title": "猫咪为什么会出现“踩奶”的行为?_知乎",
+   "url": "https://zhuanlan.zhihu.com/p/57391217?utm_id=0",
+   "source": "sogou",
+   "position": 4,
+   "relevance_score": 0.9914,
+   "relevance_raw": 0.9979252535506514,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 6 (degraded_pool)",
+   "source_type": "forum",
+   "published": "2019-11-29",
+   "published_precision": "day",
+   "published_basis": "2019-11-29"
+  },
+  {
+   "title": "踩奶猫是什么原因_宠搜网",
+   "url": "https://www.chongso.com/dz/sgwzdzxzvh/",
+   "snippet": "为您提供踩奶猫是什么原因图文信息，猫咪踩奶主要有五个原因，一是出于猫咪的本能，二是怀恋和母猫相处的时光，三是渴望得到对方的关注，四是圈定自己的地盘，五是因...",
+   "source": "sogou",
+   "position": 5,
+   "relevance_score": 0.9728,
+   "relevance_raw": 0.9979630225419651,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 6 (degraded_pool)",
+   "source_type": "unknown",
+   "published": "2026-07-25",
+   "published_precision": "day",
+   "published_basis": "2026-07-25"
+  }
+ ],
+ "total_results": 5,
+ "engines_used": [
+  "shenma",
+  "sogou",
+  "baidu"
+ ],
+ "engine_blocked": [
+  "so360",
+  "brave"
+ ],
+ "engine_empty": [
+  "yahoo"
+ ],
+ "engine_preempted": [
+  "bing_global",
+  "duckduckgo",
+  "bing",
+  "seznam",
+  "marginalia",
+  "yandex"
+ ],
+ "engine_detail": [
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 59s"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 59s"
+  },
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "5 usable rows from 5 item nodes"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "empty",
+   "verdict": "upstream_empty",
+   "why": "no results"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "9 usable rows from 9 item nodes"
+  },
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "8 usable rows from 11 item nodes"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  }
+ ],
+ "families_answered_of_asked": "3 of 9 (6 could answer)",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "date_coverage": {
+  "rows_total": 5,
+  "rows_with_date": 5,
+  "rows_no_date": 0,
+  "rows_verified_by_fetch": 0,
+  "rows_relative_precision": 0,
+  "rows_unverifiable_by_before": 0,
+  "rows_dropped_by_before": 0,
+  "rows_kept": 5
+ },
+ "duration_ms": 2096,
+ "error": "",
+ "fetch_hint": "5 high, 0 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. web_read what fits your need (high first, but a lower tier can be the right call). | Engines so360, brave, yahoo didn't contribute (2 blocked, 1 answered but parsed nothing usable); results are from the rest. | no follow-up phrases this round: this miner pairs two words that stand next to each other with only space between, and this round's rows contain no such pair - 0 whitespace-separated word(s) were found in them, but no segmenter is bundled, so rewording the query cannot change that answer",
+ "summary": "Searched '猫为什么踩奶' -> 5 results (5 high, 0 med, 0 low) from shenma,sogou,baidu; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. Some engines didn't contribute (2 blocked, 1 answered but parsed nothing usable). For more recall: retry after the cooldown clears (cooling right now: brave 59s; the pool is whole again in 60s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use; rephrase if the query is narrow (an engine that answered with nothing may genuinely not have it in that index). bing_global, duckduckgo, bing, seznam, marginalia, yandex were cancelled once enough indexes had answered - the diversity quorum, not a failure, so waiting and retrying reaches the same stop point; raise max_results or name them in engines=[...] to ask them anyway.",
+ "same_document_groups": [],
+ "_wall_s": 2.47,
+ "_tool": "web_search",
+ "_tag": "p03-S1-查资料#01",
+ "_ts": "2026-10-25T13:55:54.313944+00:00"
+}

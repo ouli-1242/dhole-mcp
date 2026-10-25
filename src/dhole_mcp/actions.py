@@ -963,12 +963,20 @@ def _validate_actions(actions) -> list[dict]:
             # 不设——没有落点的 drag 不是没写完，是没意义（click 的简写是
             # 历史形状，drag 没有历史）。两端各自走同一套 _act_target 寻址，
             # 快照索引因此对被拖元素与落点都可用。
-            if not isinstance(val, dict) or "to" not in val:
-                raise ValueError(
+            def _drag_shape(why: str = "") -> ValueError:
+                return ValueError(
                     f"action {i} 'drag' must be {{selector|index, to}} - the "
                     "element to drag plus where to drop it; 'to' takes the same "
                     "target shapes (a CSS selector string or "
-                    '{"selector"|"index", "expect"?})')
+                    '{"selector"|"index", "expect"?})' + why)
+            if not isinstance(val, dict) or "to" not in val:
+                raise _drag_shape()
+            # 陌生键先于源端寻址裁决：{"from": …} 走 _act_target 只会报
+            # "selector/index 二选一"那半句（R01-010 现场：第一拒不提 to，
+            # 第二拒才见全形，三连拒才摸到正形）。第一拒就是全形。
+            foreign = sorted(set(val) - {"selector", "index", "expect", "to"})
+            if foreign:
+                raise _drag_shape(f" - unexpected key(s): {foreign}")
             src = _act_target(i, key, {k: v for k, v in val.items() if k != "to"})
             to = _act_target(i, f"{key}.to", val["to"])
             out.append({key: {**src, "to": to}})
@@ -1654,7 +1662,11 @@ async def _is_submit_control(loc) -> bool:
 #: 提交闸那一步**唯一可抄**的形状，两处出路都引用这串字（评审 R02-028）。从前一处写在
 #: f-string 里（花括号转义生效），另一处写在普通字符串拼接里（转义没人处理，双花括号原样
 #: 上线）—— 同一封响应给出两种抄法，抄哪一种都可能撞一次非法 JSON。
-_CONFIRM_SNIPPET = '{"confirm": true}'
+#: 2026-10-25 R01-006 补测：裸的 `{"confirm": true}` 不说层次，连读着源码的审查员都先
+#: 把它当顶层参数（顶层 confirm=true 不动闸）；正形长在**动作里**。提示句必须把层说出去。
+_CONFIRM_SNIPPET = ('confirm: true on the click/submit action itself '
+                    '({"click": {"selector": "...", "confirm": true}}), '
+                    'not at the top level')
 
 
 async def _submit_gate_row(label: str, confirm: bool, rerun: str,
@@ -1931,6 +1943,26 @@ def _substitute_refs(text: str, values: dict, where: str) -> str:
     return out
 
 
+def _hint_unresolved_braces(text: str, values: dict, shot: dict) -> None:
+    """fill 成功后的一句软提示：text 长得像引用、链里却没有那个名字。
+
+    `{=code}` 在验证期已被具名拒绝，而 `{CODE}` 这种**没有等号**的猜法会按字面
+    填进表单 —— 那是「plain 花括号是文本」的设计（有测试钉着），但 2026-10-25
+    P07 在挑战页上就是猜的这一个（challenge.log：answer=`{CODE}` 被原样 POST，
+    回执只说 fill ok）。不改判据，只在这 exactly 一个形状上把正确的形状教出去。
+    """
+    guessed = sorted(set(re.findall(r"\{([A-Za-z_][A-Za-z0-9_]{0,30})\}", text)))
+    guessed = [g for g in guessed if g not in values]
+    if not guessed:
+        return
+    have = (", ".join(sorted(values)) if values
+            else "none (no earlier read step named one with as=)")
+    shot["note"] = (
+        f"'{{{guessed[0]}}}' went in as literal text (no register named "
+        f"{guessed[0]}). A register reference is {{=name}} - name is minted by an "
+        f"earlier read step's as=. Registers this chain holds: {have}")
+
+
 def _action_failure(exc: Exception) -> str:
     """The first useful line of an action failure, in caller-facing terms.
 
@@ -2184,6 +2216,7 @@ def build_page_action(actions) -> Optional[Callable]:
                         loc = await _target_locator(page, f)
                         await loc.fill(_substitute_refs(f["text"], values, label),
                                        timeout=_step_deadline_ms())
+                        _hint_unresolved_braces(f["text"], values, shot)
                     elif "select" in a:
                         s = a["select"]
                         loc = await _target_locator(page, s)

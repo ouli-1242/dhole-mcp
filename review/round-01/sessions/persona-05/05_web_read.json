@@ -1,0 +1,11 @@
+{
+ "url": "http://127.0.0.1:8399/changing",
+ "changed": null,
+ "status": 200,
+ "fetcher": "http",
+ "note": "no comparable baseline for this URL (or it expired) - this call fetched and recorded one; ask again with extraction_type='check' to learn whether it changed",
+ "_wall_s": 0.07,
+ "_tool": "web_read",
+ "_tag": "p05-S3-变更监控#05",
+ "_ts": "2026-10-25T14:03:08.382209+00:00"
+}

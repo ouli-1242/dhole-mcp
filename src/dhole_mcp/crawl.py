@@ -814,7 +814,7 @@ def _shortfall_sentence(shortfall: int, dropped_after_answering: int) -> str:
             f"dropped rather than returned); {never_sent} were never sent.")
 
 
-def _resume_sentence(token: str, held: int, kept: int) -> str:
+def _resume_sentence(token: str, held: int, kept: int, url: str) -> str:
     """早停留下的那串没发出去的队列怎么**按回去**：坐标、它指着什么、它省下什么。
 
     `_shortfall_sentence` 早就数过"几条 URL 发现了却没发"，而这一发留下的出路只有
@@ -826,10 +826,14 @@ def _resume_sentence(token: str, held: int, kept: int) -> str:
     `kept` 是这一发已经交回的页数 —— 那句话要说得出"不重付"具体指哪一段，否则它只是
     一句形容词。地图那一停不走这句（见调用处那段注释：那颗 `plan_id` 另有作者、另有含义），
     所以这里只有正文爬取一种形状。
+
+    `url` 必须在句里：web_crawl 的门要求 url（resume_token 只认队列），自荐的调用
+    形状照抄就得过门 —— 2026-10-25 P02 照抄不带 url 的那一句撞了
+    `Missing required argument(s): ['url']`（R01-003）。
     """
-    return (f"Or pass resume_token='{token}' to web_crawl: it sends exactly those "
-            f"{held} queued URL(s), without re-fetching the {kept} page(s) this run "
-            "already returned.")
+    return (f"Or pass web_crawl(url='{url}', resume_token='{token}'): it sends exactly "
+            f"those {held} queued URL(s), without re-fetching the {kept} page(s) this "
+            "run already returned.")
 
 
 def path_allowed(path: str, path_include=None, path_exclude=None) -> bool:
@@ -2309,7 +2313,7 @@ async def web_crawl(
             + ". The pages you already have are the best-first ones - "
             "web_read the picks you actually need instead of re-crawling.")
         if stop_cursor:
-            next_action += " " + _resume_sentence(stop_cursor, len(stop_queue), pages_crawled)
+            next_action += " " + _resume_sentence(stop_cursor, len(stop_queue), pages_crawled, url)
     elif truncated_maxpages or truncated_time:
         why = "time deadline" if truncated_time else "max_pages"
         if discover_only:
@@ -2337,7 +2341,7 @@ async def web_crawl(
         # 连接词只在这一处装配：两支各写一遍是"同一句话两个连接词"的来路。
         next_action = lead + (f", {scope_hint}" if scope_hint else "") + tail
         if stop_cursor:
-            next_action += " " + _resume_sentence(stop_cursor, len(stop_queue), pages_crawled)
+            next_action += " " + _resume_sentence(stop_cursor, len(stop_queue), pages_crawled, url)
     elif discover_only and pages_discovered > pages_crawled:
         next_action = (
             f"{pages_discovered} URLs mapped at a cost of {pages_crawled} page "
@@ -2406,13 +2410,23 @@ async def web_crawl(
     # URL discovery on large sites (like Firecrawl's map + search).
     if search and result.pages:
         _terms = search.lower().split()
+        _pre_filter = len(result.pages)
         result.pages = [p for p in result.pages if any(
             t in p.url.lower() or t in (p.title or "").lower()
             for t in _terms
         )]
         result.pages_crawled = len(result.pages)
-        result.summary = (f"search='{search}' filtered to {len(result.pages)} URL(s); "
-                          + _summary_for(result.pages))
+        if not result.pages:
+            # 清空的那一发不许借用过滤前的停因位：「crawled 0 page(s) … stopped:
+            # max_pages reached」读起来像爬满了才停，而事实是页面都爬回来了、
+            # 词不在 URL/标题里（2026-10-25 P02/P05，'详情'/'卡片' 两轮白跑）。
+            # 账自己说：爬了几页、0 页带词；出路交给 next_action（它本来就说对了）。
+            result.summary = (f"search='{search}' matched 0 of {_pre_filter} "
+                              f"crawled page(s) - the word only lives in page "
+                              f"bodies, and search matches URL path + title")
+        else:
+            result.summary = (f"search='{search}' filtered to {len(result.pages)} URL(s); "
+                              + _summary_for(result.pages))
         if not result.pages:
             result.next_action = (
                 f"search='{search}' matched none of the crawled pages. It matches "
