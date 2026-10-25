@@ -1,0 +1,20 @@
+{
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "query": "vat rate",
+ "results": [],
+ "total_results": 0,
+ "rerank_model": "",
+ "duration_ms": 0,
+ "error": "Invalid location: 'usa' - an ISO country code ('US') or country-language ('us-en'). There is no 'worldwide' value: omit location for the global index.",
+ "summary": "invalid request · Invalid location: 'usa' - an ISO country code ('US') or country-language",
+ "next_action": "Nothing was searched - no engine was asked. location= is an ISO country code ('US') or country-language ('us-en'); there is no 'worldwide' value, so omit it for the global index.",
+ "same_document_groups": [],
+ "_wall_s": 0.0,
+ "_tool": "web_search",
+ "_tag": "p91-A-location 坏形(usa)#02",
+ "_ts": "2026-10-25T22:26:04.971012+00:00"
+}

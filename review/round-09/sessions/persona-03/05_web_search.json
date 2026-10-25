@@ -1,0 +1,190 @@
+{
+ "query": "故宫 门票",
+ "results": [
+  {
+   "title": "故宫博物院（故宫）门票预订_同程旅行",
+   "url": "https://m.ly.com/scenery_1/detail/?sceneryId=3007&refid=1867981365",
+   "snippet": "门票类型 门票价格 同程价 操作 全景手绘地图兑换券(不含门票) ￥10 ￥9 预订 故宫礼品兑换券(不含门票) ￥39 ￥39 预订 电动轮椅出租服务(不含门票) ￥150 ￥150 预订",
+   "source": "sogou",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.9990292899055058,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 7 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "北京故宫的门票是多少钱？_景点_展览_游客",
+   "url": "https://www.sohu.com/a/757365935_121493501",
+   "snippet": "北京故宫的门票价格根据不同的季节和区域确实有所差异，但一般来说，淡季门票价格为40元/人，旺季门票价格为60元/人。此外，还有一些特殊区域或景点...",
+   "source": "sogou",
+   "position": 2,
+   "relevance_score": 0.9939,
+   "relevance_raw": 0.9973574751265398,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 7 (degraded_pool)",
+   "source_type": "unknown",
+   "published": "2024-02-09",
+   "published_precision": "day",
+   "published_basis": "2024-02-09"
+  },
+  {
+   "title": "故宫博物院门票预订入口",
+   "url": "http://mp.weixin.qq.com/s?src=11&timestamp=1792966354&ver=7049&signature=V3-Ebv7SgigidH970LwNis1EoW-7ocrLN9eRcpSuZ8i87pP2bN8I5V8GcTAv*YW2rPSx1P7oHZu5PtjsvomT4CF87kLWglThSq7YqClB9KqmeSKzh7VVabDGNcQb2dqg&new=1",
+   "source": "sogou",
+   "position": 3,
+   "relevance_score": 0.9848,
+   "relevance_raw": 0.9948434501056813,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 7 (degraded_pool)",
+   "source_type": "unknown",
+   "published": "2023-10-20",
+   "published_precision": "day",
+   "published_basis": "2023-10-20"
+  },
+  {
+   "title": "故宫博物院(故宫)门票预订_故宫博物院(故宫)门票价格_故宫博物...",
+   "url": "https://www.ly.com/scenery/BookSceneryTicket_3007.html",
+   "snippet": "同程旅行网提供故宫博物院（故宫）特价门票预订、故宫门票查询服务。成功预订故宫博物馆门票，游玩过后发表紫禁城旅游评价还可获得现金红包，让您享受实实在在的优惠...",
+   "source": "sogou",
+   "position": 4,
+   "relevance_score": 0.9695,
+   "relevance_raw": 0.990637800973404,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 7 (degraded_pool)",
+   "source_type": "unknown",
+   "published": "2026-10-17",
+   "published_precision": "day",
+   "published_basis": "2026-10-17"
+  }
+ ],
+ "total_results": 4,
+ "engines_used": [
+  "sogou",
+  "yandex",
+  "yahoo"
+ ],
+ "engine_blocked": [
+  "so360",
+  "shenma",
+  "brave",
+  "baidu",
+  "duckduckgo"
+ ],
+ "engine_preempted": [
+  "bing_global",
+  "marginalia",
+  "seznam",
+  "bing"
+ ],
+ "engine_detail": [
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 502s"
+  },
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 502s"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 59s"
+  },
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 599s"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 59s"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "14 usable rows from 14 item nodes"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "7 usable rows from 7 item nodes"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  }
+ ],
+ "families_answered_of_asked": "3 of 9 (7 could answer)",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "date_coverage": {
+  "rows_total": 4,
+  "rows_with_date": 3,
+  "rows_no_date": 1,
+  "rows_verified_by_fetch": 0,
+  "rows_relative_precision": 0,
+  "rows_unverifiable_by_before": 0,
+  "rows_dropped_by_before": 0,
+  "rows_kept": 4
+ },
+ "duration_ms": 2471,
+ "error": "",
+ "fetch_hint": "4 high, 0 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. web_read what fits your need (high first, but a lower tier can be the right call). | Engines so360, shenma, brave, baidu, duckduckgo didn't contribute (5 blocked); results are from the rest. | no follow-up phrases this round: this miner pairs two words that stand next to each other with only space between, and this round's rows contain no such pair - 0 whitespace-separated word(s) were found in them, but no segmenter is bundled, so rewording the query cannot change that answer",
+ "summary": "Searched '故宫 门票' -> 4 results (4 high, 0 med, 0 low) from sogou,yandex,yahoo; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. WARNING: 5 of the 8 engines it asked didn't contribute (5 blocked) - results have LOW diversity (only from sogou, yandex, yahoo). For more recall: the pool is down to 3 of the 8 engines it asked; retry after the cooldown clears (cooling right now: baidu 599s, so360 502s, shenma 501s, duckduckgo 59s, brave 59s; the pool is whole again in 599s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use. bing_global, marginalia, seznam, bing were cancelled once enough indexes had answered - the diversity quorum, not a failure, so waiting and retrying reaches the same stop point; raise max_results or name them in engines=[...] to ask them anyway.",
+ "same_document_groups": [],
+ "_wall_s": 2.5,
+ "_tool": "web_search",
+ "_tag": "p03-S4-单行来源不冒充(逐行查)#05",
+ "_ts": "2026-10-25T22:12:35.456420+00:00"
+}

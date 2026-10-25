@@ -1,0 +1,122 @@
+{
+ "query": "quantum decoherence phonon",
+ "results": [],
+ "total_results": 0,
+ "requested": 5,
+ "delivered": 0,
+ "engine_blocked": [
+  "shenma",
+  "sogou",
+  "so360",
+  "duckduckgo",
+  "baidu",
+  "brave",
+  "marginalia",
+  "bing",
+  "bing_global"
+ ],
+ "engine_empty": [
+  "yahoo",
+  "seznam",
+  "yandex"
+ ],
+ "engine_detail": [
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 584s"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 44s"
+  },
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 584s"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 45s"
+  },
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 45s"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "empty",
+   "verdict": "upstream_empty",
+   "why": "no results"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "empty",
+   "verdict": "upstream_empty",
+   "why": "no results"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "empty",
+   "verdict": "upstream_empty",
+   "why": "no results"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 46s"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 46s"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "timeout",
+   "verdict": "timeout",
+   "why": "timed out"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "timeout",
+   "verdict": "timeout",
+   "why": "timed out"
+  }
+ ],
+ "families_answered_of_asked": "0 of 9",
+ "rerank_model": "",
+ "consensus_basis": "degraded_pool",
+ "duration_ms": 33196,
+ "error": "No results for this query inside site=no-such-domain-xkcd9.example - but shenma, sogou, so360, duckduckgo, baidu, brave, marginalia, bing, bing_global was blocked/CAPTCHA'd this round, so this is not proof the query is absent. Retry in 568s (so360 568s, shenma 568s, marginalia 29s, brave 29s, baidu 29s, duckduckgo 28s, sogou 28s cooling), or drop site= and filter the results yourself. nothing on this pool answered healthily this round, so no engine name is worth re-asking yet - `sys_state(show=[\"engine_state\"])` is the self-check for this: it says who is cooling and for how long, and which engine read 0 rows out of a page that carried result containers.",
+ "fetch_hint": "no follow-up phrases this round: this miner pairs two words that stand next to each other with only space between, and this round's rows contain no such pair - 0 whitespace-separated word(s) were found in them, but no segmenter is bundled, so rewording the query cannot change that answer",
+ "summary": "Searched 'quantum decoherence phonon' -> 0 results (0 high, 0 med, 0 low) from none; rerank=merge.",
+ "next_action": "No results (engines rate-limited/timed out). Retry in 568s (so360 568s, shenma 568s, marginalia 29s, brave 29s, baidu 29s, duckduckgo 28s, sogou 28s cooling), or set DHOLE_SEARCH_PROXY for sustained heavy use. nothing on this pool answered healthily this round, so no engine name is worth re-asking yet - `sys_state(show=[\"engine_state\"])` is the self-check for this: it says who is cooling and for how long, and which engine read 0 rows out of a page that carried result containers.",
+ "same_document_groups": [],
+ "_wall_s": 33.2,
+ "_tool": "web_search",
+ "_tag": "p02-S5-零结果现场(不存在的站点)#06",
+ "_ts": "2026-10-25T22:11:29.165108+00:00"
+}

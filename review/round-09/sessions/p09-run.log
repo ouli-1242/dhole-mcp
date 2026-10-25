@@ -1,0 +1,38 @@
+[p09 库尔班3·税务师] session 547727ba4e254d27808aea5e1d9e5ba2 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p09-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p09 S1-空查询 ----
+[p09-S1-空查询#02] web_search   0.0s ok=None err=invalid_request: web_search needs query= - the words to search for. mode='find_similar' is invalid_request chars=
+      summary: invalid request · invalid_request: web_search needs query= - the words to search for
+   err: invalid_request: web_search needs query= - the words to search for. mode='find_similar' is the only mode that runs without it, and it takes url= instead.
+      (pause 5s - throttle)
+
+---- p09 S2-超长查询(2000 字) ----
+[p09-S2-超长查询(2000 字)#03] web_search  18.4s ok=None err=-  chars=
+      summary: Searched '税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税' -> 6 results (4 high, 2 med,
+   err: (收下?) | summary: Searched '税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税税' -> 6 res
+      (pause 5s - throttle)
+
+---- p09 S3-location 非法值 ----
+[p09-S3-location 非法值#04] web_search   2.8s ok=None err=-  chars=
+      summary: Searched 'vat rate' -> 6 results (6 high, 0 med, 0 low) from yandex,yahoo; rerank=neural.
+   err: 
+      (pause 5s - throttle)
+
+---- p09 S4-page 越界 ----
+[p09-S4-page 越界#05] web_search   0.0s ok=None err=Invalid page: 99 (0-10) invalid_request chars=
+      summary: invalid request · Invalid page: 99 (0-10)
+   err: Invalid page: 99 (0-10)
+      (pause 5s - throttle)
+
+---- p09 S5-research 坏查询(空串) ----
+[p09-S5-research 坏查询(空串)#06] web_research   0.0s ok=False err=invalid_request: Missing required argument(s) for web_research: ['query']. Supported here: invalid_request chars=
+      summary: invalid request · Missing required argument(s) for web_research: ['query']
+   err: invalid_request: Missing required argument(s) for web_research: ['query']. Supported here: ['max_sources', 'per_source_chars', 'query', 'timeout']
+      (pause 5s - throttle)
+
+---- p09 S6-自救重试(改正形真通) ----
+[p09-S6-自救重试(改正形真通)#07] web_search  16.8s ok=None err=-  chars=
+      summary: Searched '增值税 留抵退税 政策' -> 3 results (3 high, 0 med, 0 low) from yandex,yahoo; rerank=neural.
+   自救: 3 行 | Searched '增值税 留抵退税 政策' -> 3 results (3 high, 0 med, 0 low) from yandex,yahoo; rerank=neural.
+P09 DONE

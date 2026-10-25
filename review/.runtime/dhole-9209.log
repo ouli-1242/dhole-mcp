@@ -1,0 +1,6 @@
+  Dhole  serving HTTP  http://127.0.0.1:9209/mcp
+[dhole] WARNING: HTTP transport bound to 127.0.0.1 with no DHOLE_HTTP_TOKEN - any process that can reach this port can call every tool, including writes and stored credentials. Every client on this port shares one credential store, one session state and one cache; the token (when set) gates the port, it does not separate principals.
+INFO:     Started server process [24828]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:9209 (Press CTRL+C to quit)

@@ -4,3 +4,12 @@ INFO:     Started server process [20768]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:9208 (Press CTRL+C to quit)
+INFO:     127.0.0.1:50540 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50540 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:50540 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50540 - "POST /mcp HTTP/1.1" 200 OK
+page action fill '#note' failed: frame '/frame/inner' is not a usable address - it is neither an iframe name, an absolute URL prefix (copy it from a snapshot frame row), nor a CSS selector for 
+INFO:     127.0.0.1:50540 - "POST /mcp HTTP/1.1" 200 OK
+page action fill '#note' failed: frame '#nosuch' matched 0 <iframe> element(s) in the top document - the iframes present: ['app -> http://127.0.0.1:8399/frame/inner']. frame= takes the iframe's
+INFO:     127.0.0.1:50540 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50540 - "POST /mcp HTTP/1.1" 200 OK

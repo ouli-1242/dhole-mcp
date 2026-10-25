@@ -1,0 +1,178 @@
+{
+ "query": "fixture site 靶站",
+ "results": [
+  {
+   "title": "对新手非常友好的12个靶场 - 知乎专栏",
+   "url": "https://zhuanlan.zhihu.com/p/497690908",
+   "snippet": "靶场由OWASP专门为 Web安全 研究者和初学者开发的一个靶场，包含了大量存在已知安全漏洞的训练实验环境和真实Web应用程序； 靶场在官网下载后是一个集成虚拟机，可以直接在vm中打开，物理机访问ip即可访问到web平台，使用root owaspbwa 登入就会返回靶场地址，直接可以访问靶场。 dvwa适合了解漏洞和简单的漏洞利用，owaspbwa则就更贴近实际的复杂的 业务环境. 下载地址： OWASP Broken Web Applications Project. 这是一个开源的漏洞环境项目，包含了很多不同的环境，是owaspbwa以后，漏洞种类多，环境丰富的一个靶场，并且收集的漏洞也比较新，适合作为一个长期的学习、实战靶场。",
+   "source": "yahoo",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.29215752192402106,
+   "fetch_relevance": "med",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "forum"
+  },
+  {
+   "title": "从0到进阶网安必通关的10个靶场，附项目地址！ | ZONE.CI 全球网",
+   "url": "https://zone.ci/secarticles/wx/534425.html",
+   "snippet": "May 16, 2026 · 通关这10个网络安全靶场，助你从入门进阶到实战，一步步成为网安大佬！ 一个用PHP/MySQL编写的、故意存在大量漏洞的Web应用程序。 它以难度分级（从低到高再到“不可能”）而闻名，非常适合新手入门，系统性地学习和练习SQL注入、XSS、文件包含等常见的Web漏洞。 官方网站： http://www.dvwa.co.uk/ 2. Pikachu. 一个专为中文用户设计的Web漏洞学习平台。 它的特点是拥有全中文的界面和详细的漏洞原理讲解，对零基础或英语不好的初学者非常友好，可以帮助你循序渐进地掌握Web安全知识。 项目地址： https://github.com/zhuifengshaonianhanlu/pikachu. 3. Webgoat.",
+   "source": "yahoo",
+   "position": 2,
+   "relevance_score": 0.2688,
+   "relevance_raw": 0.07854786831358045,
+   "fetch_relevance": "med",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "全网最全！网安靶场平台大盘点（2026版）-CSDN博客",
+   "url": "https://blog.csdn.net/logic1001/article/details/160892574",
+   "snippet": "May 8, 2026 · 本文全面盘点2026年主流网安靶场平台，按“新手入门类、漏洞演练类、 CTF 竞赛类、内网渗透类、综合实战类”五大维度分类，详细拆解每个平台的核心特点、使用场景、搭建方法及适配人群. 网安靶场是基于虚拟化和仿真技术构建的模拟真实网络环境，用于模拟各类安全漏洞、攻击场景，帮助学习者进行攻防演练、漏洞验证、安全测试和技能提升，其核心价值在于“安全、可控、可复现”——无需担心真实网络攻击带来的法律风险和损失，即可沉浸式体验真实攻防场景，快速将理论知识转化为实战能力。 对于网安学习者而言，靶场的作用至关重要： 竞赛备考：针对性练习CTF题目，熟悉竞赛题型，提升解题能力，为参赛奠定基础。",
+   "source": "yahoo",
+   "position": 3,
+   "relevance_score": 0.1317,
+   "relevance_raw": 0.03849961841290208,
+   "fetch_relevance": "low",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "blog"
+  },
+  {
+   "title": "先进辐射源及应用实验室-清华大学工程物理系",
+   "url": "https://www.ep.tsinghua.edu.cn/info/1028/1706.htm",
+   "snippet": "下，国内首台变电压四翼型RFQ输出3MeV质子束，束流峰值流强达到44mA，传输效率达到88%；7月，实现了3MeV质子打铍靶产生中子，考验了铍靶及中子靶站结.",
+   "source": "yandex",
+   "position": 4,
+   "relevance_score": 0.0404,
+   "relevance_raw": 0.011833126063618292,
+   "fetch_relevance": "low",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown",
+   "low_trust_source": {
+    "signals": [
+     "deep_subdomain"
+    ],
+    "basis": "host 'www.ep.tsinghua.edu.cn': 5 labels (threshold 5, max seen in 799 real result rows: 4), 0 hyphens (threshold 4, max there: 2), port default, punycode=no, ip-literal=no"
+   }
+  }
+ ],
+ "total_results": 4,
+ "engines_used": [
+  "yandex",
+  "seznam",
+  "yahoo"
+ ],
+ "engine_blocked": [
+  "baidu",
+  "duckduckgo",
+  "brave",
+  "sogou",
+  "so360",
+  "shenma",
+  "marginalia"
+ ],
+ "engine_preempted": [
+  "bing",
+  "bing_global"
+ ],
+ "engine_detail": [
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 456s"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 6s"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 5s"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 5s"
+  },
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 27s"
+  },
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 26s"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 7s"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "14 usable rows from 14 item nodes"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "7 usable rows from 7 item nodes"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  }
+ ],
+ "families_answered_of_asked": "3 of 9",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "duration_ms": 2657,
+ "error": "",
+ "fetch_hint": "0 high, 2 med, 2 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. Nothing cleared the worth-fetching line (raw >= 0.5) - the best agreement this round returned is 0.29, so the first row's 1.0 says only 'least off among these'. Only 1 of 3 query term(s) appear anywhere in these rows (`15 characters` on this side, nothing on the conversation this response cannot see), so every tier here rests on the model's text agreement plus that one surface hit - a single post, not two. If this query was a follow-up whose subject lives in the conversation, name the subject: agreement against a few characters is not a topic verdict. 3 of 4 rows carry no query term at all and were kept: the surface-miss gate drops a round only when NO row carries one (all of them missing is the noise signal, some is not), so this count is a reading and not a verdict on those rows. web_read what fits your need (high first, but a lower tier can be the right call). | Engines baidu, duckduckgo, brave, sogou, so360, shenma, marginalia didn't contribute (7 blocked); results are from the rest.",
+ "summary": "Searched 'fixture site 靶站' -> 4 results (0 high, 2 med, 2 low) from yandex,seznam,yahoo; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. No 'high' matches - if none of these fit, rephrase (more specific). WARNING: 7 of the 10 engines it asked didn't contribute (7 blocked) - results have LOW diversity (only from yandex, seznam, yahoo). For more recall: the pool is down to 3 of the 10 engines it asked; retry after the cooldown clears (cooling right now: baidu 455s, so360 26s, shenma 26s, marginalia 6s, duckduckgo 5s, brave 5s, sogou 4s; the pool is whole again in 456s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use. bing, bing_global were cancelled once enough indexes had answered - the diversity quorum, not a failure, so waiting and retrying reaches the same stop point; raise max_results or name them in engines=[...] to ask them anyway.",
+ "same_document_groups": [],
+ "_wall_s": 2.66,
+ "_tool": "web_search",
+ "_tag": "p10-S1-search→read→recall 交叉(同 URL 两路账)#02",
+ "_ts": "2026-10-25T22:20:30.890216+00:00"
+}

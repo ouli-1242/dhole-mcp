@@ -1,0 +1,23 @@
+[p01 桑无咎3·药师] session 82dc9f5f7684496da5b2cb25bf6b145c server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p01-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p01 S1-读 start 篇(照手册) ----
+[p01-S1-读 start 篇(照手册)#02] sys_guide   0.0s ok=None err=-  chars=
+   start 篇: 600 chars
+      (pause 6s - throttle)
+
+---- p01 S2-search(路线2) ----
+[p01-S2-search(路线2)#03] web_search   3.7s ok=None err=-  chars=
+      summary: Searched '布洛芬 说明书 用法' -> 5 results (5 high, 0 med, 0 low) from sogou,yandex,yahoo; rerank=neural.
+   summary: Searched '布洛芬 说明书 用法' -> 5 results (5 high, 0 med, 0 low) from sogou,yandex,yahoo; rerank=neural.
+   行数: 5
+   top: 布洛芬说明书用法用量_医联媒体 | https://www.yilianmeiti.com/question/2663125.html
+   top 来源: sogou | grade: None
+      (pause 6s - throttle)
+
+---- p01 S3-read 落页对账 ----
+[p01-S3-read 落页对账#04] web_read   1.4s ok=True err=-  chars=678
+      summary: 200 OK · 678B markdown · http
+   行标题 vs 页标题: '布洛芬说明书用法用量_医联媒体' vs '布洛芬说明书用法用量_医联媒体'
+   落页: 200 OK · 678B markdown · http
+P01 DONE

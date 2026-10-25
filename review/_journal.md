@@ -74,3 +74,11 @@
 - P5：真重启（kill 29048 式失败在册——**Windows 下 Git Bash kill 对该进程无效，须 taskkill //F**；新 pid 20768）复验 V1a/V1b/V2/V3 全 PASS；pytest **7765**（7757+8 对账平）——xdist 全量 5 连跑同 2 个 DNS-recheck 测试 failed（每次隔离绿，round-06/07 已在册的 flake 本轮转顽固），顺序标准跑另证（结果见 verification.md）；ruff 16。
 - P6：提交（round-08 全套）；index/common-issues/journal 更新；issues.json 6 条（4 fixed + 2 rejected）。
 - 下一步：round-09 P0（端口 9209；从 round-08 顶端切出；先读 common-issues 的 round-08 必测回归点）。
+
+## 2026-10-26T10:3x round-09 收官（P6 完成）
+- P0/P1：主题「找得到吗（检索与排序质量）」；9209；10 新职业（L3×3：图书馆员/舆情/专利代理）；74 发 13/13 工具（web_request 以具名 GET 门计入）；p91 probe 补 location 门证据。
+- P2/P3：4 候选 → **1 CONFIRM(B) + 3 REJECT（审查用回执/probe/源码推翻首报三起）**：R09-001 min_relevance 的账在 fetch_hint 全文（首报跨轮假算术+只读 300 字）；R09-003 前缀双形状是 test 立的规矩（_param_refusal docstring 在册）；R09-004 location 门形状校验 probe 实证。**量具教训第三度入册且升级**：判「无账」前必须读全 summary/error/next_action/fetch_hint 四账面字段——三起假候选全是「没读全」。
+- P4：唯一修复 test-first（1 新测试文件 3 测试，先红后绿）：recall limit 越界 clamp 具名（clamped 注记，形状同 web_research）；未越界安静。
+- P5：真重启（taskkill pid 20952 → 24828）复验 V1/V2 PASS；pytest **7768 绿×2**（7757+8+3 对账平；DNS-recheck flake 本轮两连绿未发）；ruff 16 基线。
+- P6：提交（round-09 全套）；index/common-issues(E2 六现)/journal 更新。
+- 下一步：round-10 P0（端口 9210；从 round-09 顶端切出；先读 common-issues 的 round-09 必测回归点）。

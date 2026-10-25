@@ -1,0 +1,188 @@
+{
+ "query": "insurance solvency capital",
+ "results": [
+  {
+   "title": "Insurance Solvency & Capital Requirements - Kurums | Business ...",
+   "url": "https://kurums.com/insurance-solvency-capital-requirements/",
+   "snippet": "Jun 3, 2026 · Solvency capital is the buffer of assets an insurer must hold over and above the value of its liabilities, ensuring it can absorb unexpected losses and still pay every claim. It exists because insurance promises must be honored even when claims are larger or investments perform worse than expected.",
+   "source": "yahoo",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.9995457269474216,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 8 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Understanding the Importance of Solvency Capital Requirement ...",
+   "url": "https://fastercapital.com/content/Understanding-the-Importance-of-Solvency-Capital-Requirement-in-Insurance.html",
+   "snippet": "May 15, 2026 · Summary: In the complex world of insurance , where risks and uncertainties reign supreme, ensuring the financial stability of insurance companies is of utmost importance. This is where the concept of Solvency Capital Requirement (SCR) comes into play.",
+   "source": "yahoo",
+   "position": 2,
+   "relevance_score": 0.951,
+   "relevance_raw": 0.9753901400507407,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 8 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Solvency Capital Requirements (SCR) Explained: Solvency II ...",
+   "url": "https://www.investopedia.com/terms/s/solvency-capital-requirement.asp",
+   "snippet": "May 8, 2026 · What Is a Solvency Capital Requirement (SCR)? The Solvency Capital Requirement (SCR) is a critical financial mandate for insurance and reinsurance companies in the European Union (EU),...",
+   "source": "yahoo",
+   "position": 3,
+   "relevance_score": 0.9461,
+   "relevance_raw": 0.9959377389568633,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 8 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Risk-Based Capital and Governance: Key to Insurance Solvency",
+   "url": "https://www.linkedin.com/pulse/risk-based-capital-governance-key-insurance-solvency-abdullah-hbrof",
+   "snippet": "In January 2018, the UAE fully implemented a model based on Solvency II through the Insurance Authority’s Financial Regulations. This framework includes risk-based capital...",
+   "source": "yandex",
+   "position": 4,
+   "relevance_score": 0.9323,
+   "relevance_raw": 0.9208225702194354,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 8 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "What Is Insurance Solvency? | AgentSync",
+   "url": "https://agentsync.io/blog/insurance-101/what-is-insurance-solvency",
+   "snippet": "A solvency ratio is the ticky-tacky method of calculating solvency – essentially, it’s the ratio of a company’s capital divided by its contractual obligations, sort of an assets-to-debt ratio.",
+   "source": "yandex",
+   "position": 5,
+   "relevance_score": 0.8877,
+   "relevance_raw": 0.9280834689757358,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 8 (degraded_pool)",
+   "source_type": "blog"
+  }
+ ],
+ "total_results": 5,
+ "engines_used": [
+  "yahoo",
+  "yandex",
+  "seznam"
+ ],
+ "engine_blocked": [
+  "sogou",
+  "so360",
+  "shenma",
+  "brave",
+  "baidu",
+  "duckduckgo"
+ ],
+ "engine_preempted": [
+  "bing",
+  "marginalia",
+  "bing_global"
+ ],
+ "engine_detail": [
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 36s"
+  },
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 170s"
+  },
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 170s"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 59s"
+  },
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 599s"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 59s"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "7 usable rows from 7 item nodes"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  }
+ ],
+ "families_answered_of_asked": "3 of 9 (8 could answer)",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "duration_ms": 2680,
+ "error": "",
+ "fetch_hint": "5 high, 0 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. web_read what fits your need (high first, but a lower tier can be the right call). | Engines sogou, so360, shenma, brave, baidu, duckduckgo didn't contribute (6 blocked); results are from the rest.",
+ "related_queries": [
+  "capital requirement",
+  "capital requirements"
+ ],
+ "summary": "Searched 'insurance solvency capital' -> 5 results (5 high, 0 med, 0 low) from yahoo,yandex,seznam; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. WARNING: 6 of the 9 engines it asked didn't contribute (6 blocked) - results have LOW diversity (only from yahoo, yandex, seznam). For more recall: the pool is down to 3 of the 9 engines it asked; retry after the cooldown clears (cooling right now: baidu 599s, so360 170s, shenma 169s, duckduckgo 59s, brave 58s, sogou 35s; the pool is whole again in 599s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use. bing, marginalia, bing_global were cancelled once enough indexes had answered - the diversity quorum, not a failure, so waiting and retrying reaches the same stop point; raise max_results or name them in engines=[...] to ask them anyway.",
+ "same_document_groups": [],
+ "_wall_s": 2.69,
+ "_tool": "web_search",
+ "_tag": "p08-S2-mode=neural(强rerank)#03",
+ "_ts": "2026-10-25T22:18:07.342533+00:00"
+}

@@ -1,0 +1,34 @@
+[p06 黎照3·专利代理] session 877fd0301cdc4e15991a0a9a384a20c0 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p06-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p06 S1-生僻术语 ----
+[p06-S1-生僻术语#02] web_search   2.4s ok=None err=-  chars=
+      summary: Searched '量子退相干 声子谱 退相干时间 测量' -> 6 results (6 high, 0 med, 0 low) from yahoo,yandex,sogou; rerank=ne
+   6 行 | 0 high 现场如实: Searched '量子退相干 声子谱 退相干时间 测量' -> 6 results (6 high, 0 med, 0 low) from yahoo,yandex,sogou; rerank=neural.
+      (pause 6s - throttle)
+
+---- p06 S2-中英混排 ----
+[p06-S2-中英混排#03] web_search   2.9s ok=None err=-  chars=
+      summary: Searched 'zeta potential Zeta电位 测量 标准' -> 6 results (6 high, 0 med, 0 low) from yahoo,yandex,seznam;
+   6 行 | Searched 'zeta potential Zeta电位 测量 标准' -> 6 results (6 high, 0 med, 0 low) from yahoo,yandex,seznam; rerank=neural.
+      (pause 6s - throttle)
+
+---- p06 S3-同义改写三连(行集不串) ----
+[p06-S3-同义改写三连(行集不串)#04] web_search   2.7s ok=None err=-  chars=
+      summary: Searched 'browser automation agent' -> 4 results (4 high, 0 med, 0 low) from yandex,yahoo,seznam; re
+[p06-S3-同义改写三连(行集不串)#05] web_search  16.8s ok=None err=-  chars=
+      summary: Searched '网页自动化 智能体' -> 4 results (4 high, 0 med, 0 low) from yahoo,yandex; rerank=neural.
+   q1 4 行 / q2 4 行 / 交集 0（交集如实，不夸大）
+      (pause 6s - throttle)
+
+---- p06 S4-零结果现场(乱码查询) ----
+[p06-S4-零结果现场(乱码查询)#06] web_search   2.8s ok=None err=-  chars=
+      summary: Searched 'zxqv wombatathon 0xdeadbeef 无意义' -> 5 results (0 high, 1 med, 4 low) from yandex,seznam; r
+   零/少结果: 5 行 | summary: Searched 'zxqv wombatathon 0xdeadbeef 无意义' -> 5 results (0 high, 1 med, 4 low) from yandex,seznam; rerank=neural.
+      (pause 6s - throttle)
+
+---- p06 S5-min_relevance 高门槛(行被砍而非重排) ----
+[p06-S5-min_relevance 高门槛(行被砍而非重排)#07] web_search   3.0s ok=None err=-  chars=
+      summary: Searched 'python' -> 3 results (3 high, 0 med, 0 low) from yandex,yahoo,seznam; rerank=neural.
+   0.99 门槛: 3 行 | Searched 'python' -> 3 results (3 high, 0 med, 0 low) from yandex,yahoo,seznam; rerank=neural.
+P06 DONE

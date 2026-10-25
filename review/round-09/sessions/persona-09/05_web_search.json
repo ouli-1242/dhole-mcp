@@ -1,0 +1,20 @@
+{
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "query": "vat rate",
+ "results": [],
+ "total_results": 0,
+ "rerank_model": "",
+ "duration_ms": 0,
+ "error": "Invalid page: 99 (0-10)",
+ "summary": "invalid request · Invalid page: 99 (0-10)",
+ "next_action": "Nothing was searched - no engine was asked. page= counts result pages from 0 (0-10), so page 0 IS the first page - omit it for the first page.",
+ "same_document_groups": [],
+ "_wall_s": 0.03,
+ "_tool": "web_search",
+ "_tag": "p09-S4-page 越界#05",
+ "_ts": "2026-10-25T22:19:42.325794+00:00"
+}

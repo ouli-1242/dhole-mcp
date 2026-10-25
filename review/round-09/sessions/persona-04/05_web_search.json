@@ -1,0 +1,158 @@
+{
+ "query": "舆情 cache 探针 q7",
+ "results": [
+  {
+   "title": "互联网探针系统：舆情监控与信息分析 - CSDN文库",
+   "url": "https://wenku.csdn.net/doc/39tsvf034g",
+   "snippet": "\"互联网探针系统是一种用于舆情监测和网络信息收集的高级工具，它能够从海量数据中筛选出关键信息，提供预警提示，并生成各种报告和图表，帮助用户迅速掌握舆情动态，提升应对速度。",
+   "source": "yahoo",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.568369212424475,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "blog"
+  },
+  {
+   "title": "集蜂数据 | 全球舆情监控系统",
+   "url": "https://jfdata.tech/solution/sentiment",
+   "snippet": "覆盖全球10万+信源：包括Twitter、Facebook、Telegram、主流新闻媒体、论坛、博客等 多语言支持：中、英、俄、阿、法等60+语种实时监测 暗网/小众平台：可定制化采集匿名社区、加密频道等高价值舆情",
+   "source": "yahoo",
+   "position": 2,
+   "relevance_score": 0.26,
+   "relevance_raw": 0.13897216933221865,
+   "fetch_relevance": "med",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "网察（舆情监测） - TRS",
+   "url": "https://www.trs.com.cn/cpfw/dsj/sjyy/wc_yqjc_/",
+   "snippet": "从2016年服务至今，每日定时提交全网预警风险、舆情信息，每月提交当月餐饮行业重大舆情事件分析的专业月报，已为用户预警上万起潜在舆情风险，并帮助客户多次将重大舆情危机扼杀于摇篮之中。",
+   "source": "yahoo",
+   "position": 3,
+   "relevance_score": 0.2192,
+   "relevance_raw": 0.11425777716766769,
+   "fetch_relevance": "med",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  }
+ ],
+ "total_results": 3,
+ "engines_used": [
+  "yandex",
+  "seznam",
+  "yahoo"
+ ],
+ "engine_blocked": [
+  "baidu",
+  "duckduckgo",
+  "brave",
+  "sogou",
+  "so360",
+  "shenma",
+  "marginalia",
+  "bing_global",
+  "bing"
+ ],
+ "engine_detail": [
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 532s"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped)"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped)"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 27s"
+  },
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 435s"
+  },
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 434s"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "14 usable rows from 14 item nodes"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 46s"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "7 usable rows from 7 item nodes"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "timeout",
+   "verdict": "timeout",
+   "why": "timed out"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "timeout",
+   "verdict": "timeout",
+   "why": "timed out"
+  }
+ ],
+ "families_answered_of_asked": "3 of 9",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "duration_ms": 17091,
+ "error": "",
+ "fetch_hint": "1 high, 2 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. web_read what fits your need (high first, but a lower tier can be the right call). | Engines baidu, duckduckgo, brave, sogou, so360, shenma, marginalia, bing_global, bing didn't contribute (9 blocked); results are from the rest. | no follow-up phrases this round: this miner pairs two words that stand next to each other with only space between, and this round's rows contain no such pair - 5 whitespace-separated word(s) were found in them, but no segmenter is bundled, so rewording the query cannot change that answer",
+ "summary": "Searched '舆情 cache 探针 q7' -> 3 results (1 high, 2 med, 0 low) from yandex,seznam,yahoo; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. WARNING: 9 of the 12 engines it asked didn't contribute (9 blocked) - results have LOW diversity (only from yandex, seznam, yahoo). For more recall: the pool is down to 3 of the 12 engines it asked; retry after the cooldown clears (cooling right now: baidu 532s, so360 434s, shenma 434s, marginalia 45s, sogou 27s; the pool is whole again in 532s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use.",
+ "same_document_groups": [],
+ "_wall_s": 17.1,
+ "_tool": "web_search",
+ "_tag": "p04-S3-cache 两态(default vs ttl=0)#05",
+ "_ts": "2026-10-25T22:13:42.746203+00:00"
+}

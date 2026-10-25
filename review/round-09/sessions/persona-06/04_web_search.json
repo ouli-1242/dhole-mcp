@@ -1,0 +1,173 @@
+{
+ "query": "browser automation agent",
+ "results": [
+  {
+   "title": "Nanobrowser: AI Web Agent & Automation - Chrome Web Store",
+   "url": "https://chromewebstore.google.com/detail/nanobrowser-ai-web-agent/imbddededgmcgfhfpcjmijokokekbkal",
+   "snippet": "WebDex.dev - AI Browser Agent & Automation. 4.8.AI browser agent for web automation, page summaries, form filling, research, data extraction, and reports in Chrome.",
+   "source": "seznam,yandex",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.9925873650117616,
+   "fetch_relevance": "high",
+   "engines_consensus": "2 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Use Browser Automation in Foundry Agent Service (classic ...",
+   "url": "https://learn.microsoft.com/en-us/azure/foundry-classic/agents/how-to/tools-classic/browser-automation",
+   "snippet": "Mar 6, 2026 · The Browser Automation tool enables users to perform real-world browser tasks through natural language prompts. Powered by Microsoft Playwright Workspaces, it facilitates multi-turn conversations to automate browser-based workflows such as searching, navigating, filling forms, and booking.",
+   "source": "yahoo",
+   "position": 2,
+   "relevance_score": 0.9814,
+   "relevance_raw": 0.9995601382114433,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "docs-site"
+  },
+  {
+   "title": "GitHub - vercel-labs/agent-browser: Browser automation CLI ...",
+   "url": "https://github.com/vercel-labs/agent-browser",
+   "snippet": "Browser automation CLI for AI agents. Contribute to vercel-labs/agent-browser development by creating an account on GitHub.",
+   "source": "yahoo",
+   "position": 3,
+   "relevance_score": 0.9189,
+   "relevance_raw": 0.9973239541205681,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "github",
+   "official": true
+  },
+  {
+   "title": "Best AI Browser Agents in 2026: Compared by Use... | TinyFish Blog",
+   "url": "https://www.tinyfish.ai/blog/ai-browser-agents",
+   "snippet": "MultiOn(Browser automation agent). General-purpose browser task delegation. Reliability can vary across changing websites and unsupported edge cases.",
+   "source": "yandex",
+   "position": 4,
+   "relevance_score": 0.9142,
+   "relevance_raw": 0.9985981146127618,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "blog"
+  }
+ ],
+ "total_results": 4,
+ "engines_used": [
+  "yandex",
+  "yahoo",
+  "seznam"
+ ],
+ "engine_blocked": [
+  "baidu",
+  "duckduckgo",
+  "brave",
+  "sogou",
+  "so360",
+  "shenma",
+  "marginalia"
+ ],
+ "engine_preempted": [
+  "bing_global",
+  "bing"
+ ],
+ "engine_detail": [
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 50s"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 42s"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 41s"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 50s"
+  },
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 289s"
+  },
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 289s"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "7 usable rows from 7 item nodes"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 60s"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  }
+ ],
+ "families_answered_of_asked": "3 of 9",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "duration_ms": 2676,
+ "error": "",
+ "fetch_hint": "4 high, 0 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. web_read what fits your need (high first, but a lower tier can be the right call). | Engines baidu, duckduckgo, brave, sogou, so360, shenma, marginalia didn't contribute (7 blocked); results are from the rest. | no follow-up phrases this round: 1 word pair(s) recurred across 2+ independent sources but every one was dropped - either it opens with a function word (a sentence fragment, not a query) or it restates words your own query already carries",
+ "summary": "Searched 'browser automation agent' -> 4 results (4 high, 0 med, 0 low) from yandex,yahoo,seznam; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. WARNING: 7 of the 10 engines it asked didn't contribute (7 blocked) - results have LOW diversity (only from yandex, yahoo, seznam). For more recall: the pool is down to 3 of the 10 engines it asked; retry after the cooldown clears (cooling right now: so360 289s, shenma 289s, marginalia 60s, baidu 50s, sogou 49s, duckduckgo 42s, brave 41s; the pool is whole again in 290s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use. bing_global, bing were cancelled once enough indexes had answered - the diversity quorum, not a failure, so waiting and retrying reaches the same stop point; raise max_results or name them in engines=[...] to ask them anyway.",
+ "same_document_groups": [],
+ "_wall_s": 2.7,
+ "_tool": "web_search",
+ "_tag": "p06-S3-同义改写三连(行集不串)#04",
+ "_ts": "2026-10-25T22:16:07.742674+00:00"
+}

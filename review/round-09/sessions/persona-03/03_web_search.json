@@ -1,0 +1,94 @@
+{
+ "query": "长城 旅游 攻略",
+ "results": [
+  {
+   "title": "从廊坊坐高铁到北京长城一日游攻略-抖音",
+   "url": "https://www.douyin.com/shipin/7636611308397283382",
+   "snippet": "第一次去八达岭长城 一定要知道的事#八达岭长城 #八达岭长城旅游攻略 #北京 #暑假嗨玩计划.北京旅游八达岭长城详细攻略#北京旅游攻略 #北京 #北京旅游 #八达岭长城旅游攻略 #旅行推荐官.",
+   "source": "yandex",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.9623281118895901,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 1 (no corroboration)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "天津去北京长城旅游攻略,山西旅游热线为您提供北京游最佳路线 - 酷旅行",
+   "url": "http://www.kbcool.com/yy/yywd/20.html",
+   "snippet": "天津到北京两日自助游攻略. 1、天津到北京两日自助游攻略.文章TAG：天津去北京长城旅游攻略 旅游 攻略 北京 路线 最佳.",
+   "source": "yandex",
+   "position": 2,
+   "relevance_score": 0.9929,
+   "relevance_raw": 0.9226034580752622,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 1 (no corroboration)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "2026...",
+   "url": "https://www.meet99.com/jingdian-baiyangyu.html",
+   "snippet": "迁安白羊峪长城旅游区旅游攻略（1/共11页）. 迁安白羊峪长城旅游攻略. 1.迁安白羊峪长城旅游区景点照片.",
+   "source": "yandex",
+   "position": 3,
+   "relevance_score": 0.9611,
+   "relevance_raw": 0.9878799387741876,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 1 (no corroboration)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "51uuo.com/simataichangcheng",
+   "url": "https://51uuo.com/simataichangcheng/",
+   "title_is_address": true,
+   "snippet": "目的地: 司马台长城X.出境旅游 国内旅游 周边旅游 京郊旅游 周边团建 出境攻略 国内攻略 周边攻略 京郊攻略 出境资讯.",
+   "source": "yandex",
+   "position": 4,
+   "relevance_score": 0.899,
+   "relevance_raw": 0.9248265808702705,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 1 (no corroboration)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "163.com/dy/article/KD22SUCK055697PI.html",
+   "url": "https://www.163.com/dy/article/KD22SUCK055697PI.html",
+   "title_is_address": true,
+   "snippet": "清晨，导游丹丹会带着准备好的早餐包（鸡蛋、全麦面包、牛奶、小番茄），陪你乘坐旅游大巴前往慕田峪长城。 “比起八达岭，慕田峪长城植被覆盖率更高，景色更秀丽，游客也相对较少，” 丹丹一边帮你分发登山杖，一边介绍，“咱们坐缆车到 14 号敌楼，再徒步往 24 号敌楼走，",
+   "source": "yandex",
+   "position": 5,
+   "relevance_score": 0.8432,
+   "relevance_raw": 0.8681332272378118,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 1 (no corroboration)",
+   "source_type": "unknown"
+  }
+ ],
+ "total_results": 5,
+ "engines_used": [
+  "yandex"
+ ],
+ "engine_detail": [
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "14 usable rows from 14 item nodes"
+  }
+ ],
+ "families_answered_of_asked": "1 of 1",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "single_family",
+ "duration_ms": 1556,
+ "error": "",
+ "fetch_hint": "5 high, 0 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. web_read what fits your need (high first, but a lower tier can be the right call). | no follow-up phrases this round: this miner pairs two words that stand next to each other with only space between, and this round's rows contain no such pair - 8 whitespace-separated word(s) were found in them, but no segmenter is bundled, so rewording the query cannot change that answer",
+ "summary": "Searched '长城 旅游 攻略' -> 5 results (5 high, 0 med, 0 low) from yandex; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment.",
+ "same_document_groups": [],
+ "_wall_s": 1.59,
+ "_tool": "web_search",
+ "_tag": "p03-S2-单引擎对照(yandex)#03",
+ "_ts": "2026-10-25T22:12:12.614184+00:00"
+}

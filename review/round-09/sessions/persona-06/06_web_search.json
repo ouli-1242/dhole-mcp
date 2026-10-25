@@ -1,0 +1,188 @@
+{
+ "query": "zxqv wombatathon 0xdeadbeef 无意义",
+ "results": [
+  {
+   "title": "balignl 16,0xdeadbeef浅析 - 屁屁侠 - 博客园",
+   "url": "https://www.cnblogs.com/liulipeng/p/3328506.html",
+   "snippet": "最近在分析u-boot的源代码，看到这一行： .balignl 16, 0xdeadbeef 不知道为什么要这样写，0xdeadbeef，明显是个单词组，写在这里有何意义呢？",
+   "source": "yandex",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.10269928928431164,
+   "fetch_relevance": "med",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "blog"
+  },
+  {
+   "title": "balignl 16,0xdeadbeef浅析_xiaoxinna1的博客-CSDN博客",
+   "url": "https://blog.csdn.net/xiaoxinna1/article/details/7872354",
+   "snippet": ".balignl 16,0xdeadbeef浅析 - U-BOOT - 少即是多，慢即是快！于关u-boot中的.balignl 16,0xdeadbeef的理解（摘抄）.",
+   "source": "yandex",
+   "position": 2,
+   "relevance_score": 0.0343,
+   "relevance_raw": 0.0015792729623449262,
+   "fetch_relevance": "low",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "blog"
+  },
+  {
+   "title": "tomyo.app/grammar/hsk3/4",
+   "url": "https://tomyo.app/grammar/hsk3/4",
+   "title_is_address": true,
+   "source": "yandex",
+   "position": 4,
+   "relevance_score": 0.0,
+   "relevance_raw": 3.792283326702397e-05,
+   "fetch_relevance": "low",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "安妮意大利餐厅(三里屯店)(北京市) - 餐厅/美食点评 - Tripadvisor",
+   "url": "https://cn.tripadvisor.com/Restaurant_Review-g294212-d3238920-Reviews-Annie_s-Beijing.html",
+   "snippet": "安妮意大利餐厅(三里屯店)(北京市): 读读132条条关于安妮意大利餐厅(三里屯店)客观公正的美食点评，在Tripadvisor的5分满分评等中得4.2分，在北京市的6,673家餐厅中排第91名。",
+   "source": "yandex",
+   "position": 5,
+   "relevance_score": 0.0,
+   "relevance_raw": 3.773150018756182e-05,
+   "fetch_relevance": "low",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Metal Gear Rising: Revengeance OST - Collective... - YouTube",
+   "url": "https://www.youtube.com/watch?v=2dPaVk4G1jg",
+   "snippet": "Official Lyrics:The unenlightened massesThey cannot make the judgement callGive up free will forever their voices won't be heard at allDisplay obedienceWhile...",
+   "source": "yandex",
+   "position": 6,
+   "relevance_score": 0.0,
+   "relevance_raw": 3.767002075677371e-05,
+   "fetch_relevance": "low",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  }
+ ],
+ "total_results": 5,
+ "requested": 6,
+ "delivered": 5,
+ "engines_used": [
+  "yandex",
+  "seznam"
+ ],
+ "engine_blocked": [
+  "baidu",
+  "duckduckgo",
+  "brave",
+  "sogou",
+  "so360",
+  "shenma",
+  "marginalia"
+ ],
+ "engine_empty": [
+  "yahoo"
+ ],
+ "engine_preempted": [
+  "bing",
+  "bing_global"
+ ],
+ "engine_detail": [
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 24s"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 16s"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 16s"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 24s"
+  },
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 264s"
+  },
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 264s"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 34s"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "empty",
+   "verdict": "upstream_empty",
+   "why": "no results"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "14 usable rows from 14 item nodes"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  }
+ ],
+ "families_answered_of_asked": "2 of 9",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "duration_ms": 2811,
+ "error": "",
+ "fetch_hint": "0 high, 1 med, 4 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. Nothing cleared the worth-fetching line (raw >= 0.5) - the best agreement this round returned is 0.10, so the first row's 1.0 says only 'least off among these'. 3 of 5 rows carry no query term at all and were kept: the surface-miss gate drops a round only when NO row carries one (all of them missing is the noise signal, some is not), so this count is a reading and not a verdict on those rows. web_read what fits your need (high first, but a lower tier can be the right call). | 1 engine result(s) dropped: 1 dropped as SEO-farm rows (host shape, or spam wording, under the relevance line - DHOLE_SEARCH_ROW_FILTER=off turns this off) | Engines baidu, duckduckgo, brave, sogou, so360, shenma, marginalia, yahoo didn't contribute (7 blocked, 1 answered but parsed nothing usable); results are from the rest.",
+ "summary": "Searched 'zxqv wombatathon 0xdeadbeef 无意义' -> 5 results (0 high, 1 med, 4 low) from yandex,seznam; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. No 'high' matches - if none of these fit, rephrase (more specific). WARNING: 8 of the 10 engines it asked didn't contribute (7 blocked, 1 answered but parsed nothing usable) - results have LOW diversity (only from yandex, seznam). For more recall: the pool is down to 3 of the 10 engines it asked; retry after the cooldown clears (cooling right now: so360 264s, shenma 263s, marginalia 34s, baidu 24s, sogou 24s, duckduckgo 16s, brave 16s; the pool is whole again in 264s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use; rephrase if the query is narrow (an engine that answered with nothing may genuinely not have it in that index). bing, bing_global were cancelled once enough indexes had answered - the diversity quorum, not a failure, so waiting and retrying reaches the same stop point; raise max_results or name them in engines=[...] to ask them anyway.",
+ "same_document_groups": [],
+ "_wall_s": 2.83,
+ "_tool": "web_search",
+ "_tag": "p06-S4-零结果现场(乱码查询)#06",
+ "_ts": "2026-10-25T22:16:33.370152+00:00"
+}

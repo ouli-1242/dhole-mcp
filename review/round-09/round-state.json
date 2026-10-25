@@ -1,0 +1,39 @@
+{
+  "round": 9,
+  "branch": "review/round-09",
+  "baseline_commit": "190be29",
+  "port": 9209,
+  "tools_expected": 13,
+  "phase": "P6_done",
+  "steps": {
+    "git_hygiene": "done",
+    "skeleton": "done",
+    "env_verify": "done",
+    "servers": "done (9209 + 8399; P5 真重启 pid 24828)",
+    "harness_selftest": "done (13 tools + search probe)",
+    "plan_and_personas": "done (10 sealed, theme 检索与排序质量)",
+    "persona_sealed": true,
+    "P1_personas_done": [
+      "p01",
+      "p02",
+      "p03",
+      "p04",
+      "p05",
+      "p06",
+      "p07",
+      "p08",
+      "p09",
+      "p10",
+      "p80",
+      "p91"
+    ],
+    "P2_reports": "done (10 persona + round)",
+    "P3_review": "done (1 CONFIRM(B) + 3 REJECT——审查用回执/probe/源码推翻首报三起)",
+    "P4_fixes": [
+      "fix-R09-F1"
+    ],
+    "P5_reverify": "done (V1/V2 PASS; pytest 7768 绿×2; ruff 16)",
+    "P6_wrap": "done (verification/issues/round-state/index/common-issues/journal)"
+  },
+  "updated": "2026-10-26T10:30:00+08:00"
+}

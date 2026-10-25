@@ -1,0 +1,175 @@
+{
+ "query": "python",
+ "results": [
+  {
+   "title": "Welcome to Python.org",
+   "url": "https://www.python.org/",
+   "snippet": "The mission of the Python Software Foundation is to promote, protect, and advance the Python programming language, and to support and facilitate the growth of a diverse and international community of Python programmers.",
+   "source": "seznam,yahoo",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.9883247043711988,
+   "fetch_relevance": "high",
+   "engines_consensus": "2 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "The Python Tutorial — Python 3.15.1 documentation",
+   "url": "https://docs.python.org/3/tutorial/index.html",
+   "snippet": "22 hours ago · Python is an easy to learn, powerful programming language. It has efficient high-level data structures and a simple but effective approach to object-oriented programming.",
+   "source": "yahoo",
+   "position": 2,
+   "relevance_score": 0.8507,
+   "relevance_raw": 0.9926720480897365,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "docs-site",
+   "published": "2026-10-25",
+   "published_precision": "relative",
+   "published_basis": "22 hours ago"
+  },
+  {
+   "title": "Online Python - IDE, Editor, Compiler, Interpreter",
+   "url": "https://www.online-python.com/",
+   "snippet": "Python, which was initially developed by Guido van Rossum and made available to the public in 1991, is currently one of the most widely used general-purpose programming languages.",
+   "source": "yahoo",
+   "position": 3,
+   "relevance_score": 0.8483,
+   "relevance_raw": 0.9907172461663821,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  }
+ ],
+ "total_results": 3,
+ "requested": 6,
+ "delivered": 3,
+ "engines_used": [
+  "yandex",
+  "yahoo",
+  "seznam"
+ ],
+ "engine_blocked": [
+  "baidu",
+  "duckduckgo",
+  "brave",
+  "sogou",
+  "so360",
+  "shenma",
+  "marginalia"
+ ],
+ "engine_preempted": [
+  "bing_global",
+  "bing"
+ ],
+ "engine_detail": [
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 15s"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 7s"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 7s"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 15s"
+  },
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 255s"
+  },
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 254s"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 25s"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "7 usable rows from 7 item nodes"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "8 usable rows from 8 item nodes"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  }
+ ],
+ "families_answered_of_asked": "3 of 9",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "date_coverage": {
+  "rows_total": 3,
+  "rows_with_date": 1,
+  "rows_no_date": 2,
+  "rows_verified_by_fetch": 0,
+  "rows_relative_precision": 1,
+  "rows_unverifiable_by_before": 0,
+  "rows_dropped_by_before": 0,
+  "rows_kept": 3
+ },
+ "duration_ms": 2964,
+ "error": "",
+ "fetch_hint": "3 high, 0 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. Only 1 of 1 query term(s) appear anywhere in these rows (`6 characters` on this side, nothing on the conversation this response cannot see), so every tier here rests on the model's text agreement plus that one surface hit - a single post, not two. If this query was a follow-up whose subject lives in the conversation, name the subject: agreement against a few characters is not a topic verdict. web_read what fits your need (high first, but a lower tier can be the right call). | 9 engine result(s) dropped: 9 below min_relevance=0.99 (raw scores here spanned 0.3713-0.9927) | Engines baidu, duckduckgo, brave, sogou, so360, shenma, marginalia didn't contribute (7 blocked); results are from the rest. | no follow-up phrases this round: 1 word pair(s) recurred across 2+ independent sources but every one was dropped - either it opens with a function word (a sentence fragment, not a query) or it restates words your own query already carries",
+ "summary": "Searched 'python' -> 3 results (3 high, 0 med, 0 low) from yandex,yahoo,seznam; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. WARNING: 7 of the 10 engines it asked didn't contribute (7 blocked) - results have LOW diversity (only from yandex, yahoo, seznam). For more recall: the pool is down to 3 of the 10 engines it asked; retry after the cooldown clears (cooling right now: so360 255s, shenma 254s, marginalia 25s, baidu 15s, sogou 15s, duckduckgo 7s, brave 6s; the pool is whole again in 255s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use. bing_global, bing were cancelled once enough indexes had answered - the diversity quorum, not a failure, so waiting and retrying reaches the same stop point; raise max_results or name them in engines=[...] to ask them anyway.",
+ "same_document_groups": [],
+ "_wall_s": 2.97,
+ "_tool": "web_search",
+ "_tag": "p06-S5-min_relevance 高门槛(行被砍而非重排)#07",
+ "_ts": "2026-10-25T22:16:42.343806+00:00"
+}

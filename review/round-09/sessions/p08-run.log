@@ -1,0 +1,35 @@
+[p08 屠维3·精算师] session d87511c38ba34cbb921501ae10f95a56 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p08-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p08 S1-分级账目(逐行 grade) ----
+[p08-S1-分级账目(逐行 grade)#02] web_search  16.8s ok=None err=-  chars=
+      summary: Searched '保险 精算 偿付能力' -> 6 results (6 high, 0 med, 0 low) from yandex,yahoo; rerank=neural.
+   6 行 | 分级分布: {'?': 6} | summary: Searched '保险 精算 偿付能力' -> 6 results (6 high, 0 med, 0 low) from yandex,yahoo; rerank=neural.
+      (pause 6s - throttle)
+
+---- p08 S2-mode=neural(强rerank) ----
+[p08-S2-mode=neural(强rerank)#03] web_search   2.7s ok=None err=-  chars=
+      summary: Searched 'insurance solvency capital' -> 5 results (5 high, 0 med, 0 low) from yahoo,yandex,seznam; 
+   neural: 5 行 | Searched 'insurance solvency capital' -> 5 results (5 high, 0 med, 0 low) from yahoo,yandex,seznam; rerank=neural.
+      (pause 6s - throttle)
+
+---- p08 S3-mode 非法值(第一拒) ----
+[p08-S3-mode 非法值(第一拒)#04] web_search   0.0s ok=None err=Invalid mode: 'psychic' (auto|neural|find_similar) invalid_request chars=
+      summary: invalid request · Invalid mode: 'psychic' (auto|neural|find_similar)
+   err: Invalid mode: 'psychic' (auto|neural|find_similar)
+      (pause 6s - throttle)
+
+---- p08 S4-max_results 边界(1 与 51) ----
+[p08-S4-max_results 边界(1 与 51)#05] web_search   2.7s ok=None err=-  chars=
+      summary: Searched 'python' -> 1 results (1 high, 0 med, 0 low) from yahoo,yandex,seznam; rerank=neural.
+   max=1: 1 行
+[p08-S4-max_results 边界(1 与 51)#06] web_search  17.0s ok=None err=-  chars=
+      summary: Searched 'python' -> 22 results (17 high, 5 med, 0 low) from yahoo,yandex,seznam; rerank=neural. | m
+   max=51: Searched 'python' -> 22 results (17 high, 5 med, 0 low) from yahoo,yandex,seznam; rerank=neural. | m
+      (pause 6s - throttle)
+
+---- p08 S5-page 翻页 ----
+[p08-S5-page 翻页#07] web_search   2.1s ok=None err=-  chars=
+      summary: Searched 'python' -> 3 results (3 high, 0 med, 0 low) from sogou,yahoo,yandex; rerank=neural.
+   page=1: 3 行 | Searched 'python' -> 3 results (3 high, 0 med, 0 low) from sogou,yahoo,yandex; rerank=neural.
+P08 DONE

@@ -1,0 +1,99 @@
+{
+ "query": "靶站",
+ "engine": "neural",
+ "results": [
+  {
+   "url": "http://127.0.0.1:8399",
+   "title": "靶站索引",
+   "snippet": "靶站索引 dhole 模拟测试靶站 登录 账户 结算 二维码 验证码 长文",
+   "fetched_at": "2026-10-25T20:57:52Z",
+   "is_stale": true,
+   "age_days": 0.1,
+   "extraction_type": "html",
+   "relevance": 0.9822
+  },
+  {
+   "url": "http://127.0.0.1:8399/",
+   "title": "靶站索引",
+   "snippet": "dhole 模拟测试靶站 登录 账户 结算 二维码 验证码 长文",
+   "fetched_at": "2026-10-25T20:28:25Z",
+   "is_stale": true,
+   "age_days": 0.1,
+   "extraction_type": "markdown",
+   "relevance": 0.9209,
+   "variants": 2
+  },
+  {
+   "url": "http://127.0.0.1:8399/feed.xml",
+   "title": "",
+   "snippet": "dhole 靶站订阅源 http://127.0.0.1:8399/ fixture feed 靶站条目 1（0 天前） http://127.0.0.1:8399/article#item1 fixture-item-1 Sun, 25 Oct 2026 16:23:49 +0000 第 1 条摘要，用于 since 增量测试。",
+   "fetched_at": "2026-10-25T16:23:49Z",
+   "is_stale": true,
+   "age_days": 0.2,
+   "extraction_type": "html",
+   "relevance": 0.9751
+  },
+  {
+   "url": "http://127.0.0.1:8399/about",
+   "title": "关于",
+   "snippet": "关于 靶站的孤链接去处。",
+   "fetched_at": "2026-10-25T22:17:17Z",
+   "is_stale": false,
+   "age_days": 0.0,
+   "extraction_type": "markdown",
+   "relevance": 0.9502,
+   "variants": 2
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/3",
+   "title": "作品 3",
+   "snippet": "作品 3 作品 3 静物 黑白 第 3 篇的独有正文，用来证明这一列真的每页不同。",
+   "fetched_at": "2026-10-25T20:56:14Z",
+   "is_stale": true,
+   "age_days": 0.1,
+   "extraction_type": "html",
+   "relevance": 0.2737
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/6",
+   "title": "作品 6",
+   "snippet": "作品 6 作品 6 静物 黑白 第 6 篇的独有正文，用来证明这一列真的每页不同。",
+   "fetched_at": "2026-10-25T20:56:14Z",
+   "is_stale": true,
+   "age_days": 0.1,
+   "extraction_type": "html",
+   "relevance": 0.194
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/2",
+   "title": "作品 2",
+   "snippet": "作品 2 作品 2 胶片 扫描 第 2 篇的独有正文，用来证明这一列真的每页不同。",
+   "fetched_at": "2026-10-25T20:56:14Z",
+   "is_stale": true,
+   "age_days": 0.1,
+   "extraction_type": "html",
+   "relevance": 0.1693
+  },
+  {
+   "url": "http://127.0.0.1:8399/work/8",
+   "title": "作品 8",
+   "snippet": "作品 8 作品 8 胶片 扫描 第 8 篇的独有正文，用来证明这一列真的每页不同。",
+   "fetched_at": "2026-10-25T20:56:14Z",
+   "is_stale": true,
+   "age_days": 0.1,
+   "extraction_type": "html",
+   "relevance": 0.1593
+  }
+ ],
+ "terms_found": [
+  "靶站"
+ ],
+ "terms_absent": [],
+ "scanned_rows": 147,
+ "candidates_scored": 16,
+ "note": "pointers, not answers - web_read the URL (fresh or cached) for the page itself; stale rows are ones whose cache TTL has passed",
+ "_wall_s": 1.99,
+ "_tool": "web_recall",
+ "_tag": "p10-S1-search→read→recall 交叉(同 URL 两路账)#04",
+ "_ts": "2026-10-25T22:20:46.360857+00:00"
+}

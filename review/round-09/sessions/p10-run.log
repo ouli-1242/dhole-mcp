@@ -1,0 +1,41 @@
+[p10 越千帆3b·用户研究员] session 4e2303489ed44c418139c079e0e8c00f server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p10-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p10 S1-search→read→recall 交叉(同 URL 两路账) ----
+[p10-S1-search→read→recall 交叉(同 URL 两路账)#02] web_search   2.7s ok=None err=-  chars=
+      summary: Searched 'fixture site 靶站' -> 4 results (0 high, 2 med, 2 low) from yandex,seznam,yahoo; rerank=neur
+   search 4 行 | top: https://zhuanlan.zhihu.com/p/497690908
+[p10-S1-search→read→recall 交叉(同 URL 两路账)#03] web_read   9.5s ok=True err=-  chars=7127
+      summary: 200 OK · 7.0KB markdown · stealthy
+      (pause 4s - throttle)
+[p10-S1-search→read→recall 交叉(同 URL 两路账)#04] web_recall   2.0s ok=None err=-  chars=
+   recall 8 行 | top 行在 recall: 0（交叉账目对齐）
+      (pause 6s - throttle)
+
+---- p10 S2-E2 变体采集(recall 行的 variants 账) ----
+[p10-S2-E2 变体采集(recall 行的 variants 账)#05] web_read   0.0s ok=True err=-  chars=131
+      summary: 200 OK · 131B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+[p10-S2-E2 变体采集(recall 行的 variants 账)#06] web_read   0.0s ok=True err=-  chars=145
+      summary: 200 OK · 145B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+[p10-S2-E2 变体采集(recall 行的 variants 账)#07] web_read   0.0s ok=True err=-  chars=159
+      summary: 200 OK · 159B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+      (pause 4s - throttle)
+[p10-S2-E2 变体采集(recall 行的 variants 账)#08] web_recall   0.7s ok=None err=-  chars=
+   changing 行: []
+   E2 第七轮样本: 0 行并排 or 合并 variants=N
+      (pause 6s - throttle)
+
+---- p10 S3-混合编排(research 后 recall 该源) ----
+[p10-S3-混合编排(research 后 recall 该源)#09] web_research   2.5s ok=None err=-  chars=
+      summary: 0 of 1 source(s) read into an evidence pack for '本地抓取工具配置'; 1 failed (each row says why)
+      (pause 4s - throttle)
+[p10-S3-混合编排(research 后 recall 该源)#10] web_recall   3.1s ok=None err=-  chars=
+   research 后 recall: 6 行 | None
+      (pause 6s - throttle)
+
+---- p10 S4-recall 边界(limit=1 与 21) ----
+[p10-S4-recall 边界(limit=1 与 21)#11] web_recall   0.1s ok=None err=-  chars=
+   limit=1: 1 行
+[p10-S4-recall 边界(limit=1 与 21)#12] web_recall   0.1s ok=None err=-  chars=
+   limit=21: None
+P10 DONE

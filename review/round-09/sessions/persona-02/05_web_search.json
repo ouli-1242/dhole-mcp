@@ -1,0 +1,91 @@
+{
+ "query": "fixture site",
+ "results": [
+  {
+   "title": "Matchday Central | Fixture.Site",
+   "url": "https://fixture.site/",
+   "snippet": "Real-time scores, highlights, fan forums and fixture trackers — connect with fans, share reactions, and follow every match.",
+   "source": "yandex",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.8770310312513957,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 1 (no corroboration)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Colly Field Test: Static HTML, JSON, Browser Boundary",
+   "url": "https://thunderbit.com/blog/colly",
+   "snippet": "I built a fixture site to test the part of Colly that a page-count or speed reputation does not answer: whether its callbacks extract the expected records, route an HTTP error...",
+   "source": "yandex",
+   "position": 2,
+   "relevance_score": 0.9804,
+   "relevance_raw": 0.9523113046530439,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 1 (no corroboration)",
+   "source_type": "blog"
+  },
+  {
+   "title": "HOMEPAGE – Fixtures Close Up",
+   "url": "https://www.fixturescloseup.com/",
+   "snippet": "Fixtures Close Up. Independent Retail Fixture & Point-of-Purchase Component Reviews.ChatGPT Ranks FixturesCloseUp Top Fixture Site For Retail Research.",
+   "source": "yandex",
+   "position": 3,
+   "relevance_score": 0.9378,
+   "relevance_raw": 0.8643463662225755,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 1 (no corroboration)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Men's Fixtures & Results | Fixtures Results and Tables | Official Site",
+   "url": "https://www.chelseafc.com/en/matches/mens-fixtures-and-results",
+   "source": "yandex",
+   "position": 4,
+   "relevance_score": 0.4884,
+   "relevance_raw": 0.34800873964956575,
+   "fetch_relevance": "med",
+   "engines_consensus": "1 of 1 (no corroboration)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Arsenal FC Official Website | Arsenal.com",
+   "url": "https://www.arsenal.com/fixtures/men/fixtures",
+   "snippet": "Please note, fixtures, dates, and kick-off times are subject to change. All times are shown in your local time. Fixture Links. Sync to calendar. Printable list.",
+   "source": "yandex",
+   "position": 5,
+   "relevance_score": 0.1391,
+   "relevance_raw": 0.05966391516735822,
+   "fetch_relevance": "med",
+   "engines_consensus": "1 of 1 (no corroboration)",
+   "source_type": "unknown"
+  }
+ ],
+ "total_results": 5,
+ "engines_used": [
+  "yandex"
+ ],
+ "engine_detail": [
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  }
+ ],
+ "families_answered_of_asked": "1 of 1",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "single_family",
+ "duration_ms": 1398,
+ "error": "",
+ "fetch_hint": "3 high, 2 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. web_read what fits your need (high first, but a lower tier can be the right call). | no follow-up phrases this round: 1 word pair(s) recurred across 2+ independent sources but every one was dropped - either it opens with a function word (a sentence fragment, not a query) or it restates words your own query already carries",
+ "summary": "Searched 'fixture site' -> 5 results (3 high, 2 med, 0 low) from yandex; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment.",
+ "same_document_groups": [],
+ "_wall_s": 1.42,
+ "_tool": "web_search",
+ "_tag": "p02-S4-engines= 收窄池#05",
+ "_ts": "2026-10-25T22:10:49.959491+00:00"
+}

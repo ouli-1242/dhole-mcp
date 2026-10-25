@@ -1,0 +1,214 @@
+{
+ "query": "python tutorial",
+ "results": [
+  {
+   "title": "Python Tutorial",
+   "url": "https://www.pythontutorial.net/",
+   "snippet": "Python Tutorial This Python tutorial helps you learn Python programming from scratch. If you want to master Python programming quickly, this Python tutorial is for you. The tutorial will ...",
+   "source": "sogou,yahoo",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.9994823803144375,
+   "fetch_relevance": "high",
+   "engines_consensus": "2 of 7 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Python Tutorial | Python Programming Language - Tpoint Tech",
+   "url": "https://www.tpointtech.com/python-tutorial",
+   "snippet": "Sep 23, 2026 · Our Python tutorial thoroughly explains Python basics and advanced concepts, starting with installation, conditional statements, loops, built-in data structures, Object-Oriented Programming, Generators, Exception Handling, Python RegEx and many other important concepts.",
+   "source": "yahoo",
+   "position": 2,
+   "relevance_score": 0.9079,
+   "relevance_raw": 0.9997166409519838,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 7 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "The Python Tutorial — Python 3.15.1 documentation",
+   "url": "https://docs.python.org/3/tutorial/index.html",
+   "snippet": "22 hours ago · This tutorial introduces the reader informally to the basic concepts and features of the Python language and system. Be aware that it expects you to have a basic understanding of programming in general.",
+   "source": "yahoo",
+   "position": 3,
+   "relevance_score": 0.8769,
+   "relevance_raw": 0.999444466056443,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 7 (degraded_pool)",
+   "source_type": "docs-site",
+   "published": "2026-10-25",
+   "published_precision": "relative",
+   "published_basis": "22 hours ago"
+  },
+  {
+   "title": "Python Tutorial",
+   "url": "https://www.tutorialspoint.com/python/index.htm",
+   "snippet": "Today, Python is one of the most popular programming languages. Although it is a general-purpose language, it is used in various areas of applications such as Machine Learning, Artificial Intelligence, web development, IoT, and more. This Python tutorial has been written for the beginners to help them understand the basic to advanced concepts of Py...",
+   "source": "yahoo",
+   "position": 4,
+   "relevance_score": 0.8766,
+   "relevance_raw": 0.9992039503881336,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 7 (degraded_pool)",
+   "source_type": "reference"
+  },
+  {
+   "title": "Python Basics - Python Tutorial",
+   "url": "https://www.pythontutorial.net/python-basics/",
+   "snippet": "If you’re completely new to Python programming, this Python basics section is perfect for you. After completing the tutorials, you’ll be confident in Python programming and be able to create simple programs in Python.",
+   "source": "yahoo",
+   "position": 5,
+   "relevance_score": 0.8639,
+   "relevance_raw": 0.9857038075899551,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 7 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Python Tutorial - W3Schools",
+   "url": "https://w3schools.dev/python/default.asp",
+   "snippet": "Python is a popular programming language. Python can be used on a server to create web applications. With our \"Try it Yourself\" editor, you can edit Python code and view the result. print(\"Hello, World!\") Click on the \"Try it Yourself\" button to see how it works.",
+   "source": "yahoo",
+   "position": 6,
+   "relevance_score": 0.8625,
+   "relevance_raw": 0.9841913972385571,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 7 (degraded_pool)",
+   "source_type": "unknown"
+  }
+ ],
+ "total_results": 6,
+ "engines_used": [
+  "sogou",
+  "yandex",
+  "yahoo"
+ ],
+ "engine_blocked": [
+  "baidu",
+  "duckduckgo",
+  "brave",
+  "so360",
+  "shenma"
+ ],
+ "engine_preempted": [
+  "bing_global",
+  "bing",
+  "seznam",
+  "marginalia"
+ ],
+ "engine_detail": [
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 21s"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 21s"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 21s"
+  },
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 21s"
+  },
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 20s"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "11 usable rows from 11 item nodes"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "3 usable rows from 3 item nodes"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "7 usable rows from 7 item nodes"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  }
+ ],
+ "families_answered_of_asked": "3 of 9 (7 could answer)",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "date_coverage": {
+  "rows_total": 6,
+  "rows_with_date": 1,
+  "rows_no_date": 5,
+  "rows_verified_by_fetch": 0,
+  "rows_relative_precision": 1,
+  "rows_unverifiable_by_before": 0,
+  "rows_dropped_by_before": 0,
+  "rows_kept": 6
+ },
+ "duration_ms": 2157,
+ "error": "",
+ "fetch_hint": "6 high, 0 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. web_read what fits your need (high first, but a lower tier can be the right call). | Engines baidu, duckduckgo, brave, so360, shenma didn't contribute (5 blocked); results are from the rest.",
+ "related_queries": [
+  "advanced concepts",
+  "popular programming",
+  "python basics"
+ ],
+ "summary": "Searched 'python tutorial' -> 6 results (6 high, 0 med, 0 low) from sogou,yandex,yahoo; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. WARNING: 5 of the 8 engines it asked didn't contribute (5 blocked) - results have LOW diversity (only from sogou, yandex, yahoo). For more recall: the pool is down to 3 of the 8 engines it asked; retry after the cooldown clears (cooling right now: baidu 21s, duckduckgo 21s, brave 20s, so360 20s, shenma 20s; the pool is whole again in 21s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use. bing_global, bing, seznam, marginalia were cancelled once enough indexes had answered - the diversity quorum, not a failure, so waiting and retrying reaches the same stop point; raise max_results or name them in engines=[...] to ask them anyway.",
+ "same_document_groups": [],
+ "_wall_s": 2.16,
+ "_tool": "web_search",
+ "_tag": "p02-S2-exclude_sites= 剔除#03",
+ "_ts": "2026-10-25T22:10:19.452307+00:00"
+}

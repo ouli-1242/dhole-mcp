@@ -1,0 +1,51 @@
+{
+ "query": "web_act 组合语义 动作链",
+ "sources": [
+  {
+   "n": 2,
+   "url": "https://www.cnblogs.com/pywjh/p/9787605.html",
+   "title": "selenium动作链 - pywjh - 博客园",
+   "chars": 342,
+   "fetcher": "http",
+   "content_ok": true
+  }
+ ],
+ "evidence": [
+  "[2] https://www.cnblogs.com/pywjh/p/9787605.html\n[Focus: 'web_act 组合语义 动作链'; showing 5 of 14 blocks by BM25 relevance. 3 of the 4 words you named occur nowhere on this page ('web', 'act', '组合语义'). Pass focus='' for the full page.]\n\n# \n\n    [selenium动作链](https://www.cnblogs.com/pywjh/p/9787605.html)\n\n这时候就需要用到我们的`Action Chains`（动作链）了。\n\n在导入动作链模块以后，需要声明一个动作链对象，在声明时将webdriver当作参数传入，\n\n## 常用动作方法"
+ ],
+ "failed": [
+  {
+   "n": 1,
+   "url": "https://blog.csdn.net/weixin_41943766/article/details/157358938",
+   "why": "http_error_521: server returned error status"
+  }
+ ],
+ "more_hits": [
+  {
+   "url": "https://max.book118.com/html/2015/0904/24643505.shtm",
+   "title": "基于动态描述逻辑的语义Web服务组合.pdf"
+  },
+  {
+   "url": "https://blog.csdn.net/weixin_45993836/article/details/138192335",
+   "title": "【学习笔记】ActionChains 动作链-CSDN博客"
+  },
+  {
+   "url": "https://www.163.com/dy/article/JJNGVTG205380EIV.html",
+   "title": "一文通透动作分块算法ACT：斯坦福Moblie Aloha所用的动作序列预测..."
+  },
+  {
+   "url": "https://chromewebstore.google.com/detail/webact-ai-browser-automat/jojalllhmgnmnjbnbnelpnjebkbgklih?hl=zh-CN",
+   "title": "WebAct：AI 浏览器自动化与网页数据提取 - Chrome 应用商店"
+  },
+  {
+   "url": "https://www.cnblogs.com/lxbmaomao/p/10389786.html",
+   "title": "Selenium之动作链（ActionChains） - liangxb - 博客园"
+  }
+ ],
+ "summary": "1 of 2 source(s) read into an evidence pack for 'web_act 组合语义 动作链'; 1 failed (each row says why)",
+ "note": "each evidence block starts with [n] and its URL - cite that pair. Per-source text is focus-filtered to the query, not the whole page; web_read a source (urls= batches work) for everything it says. more_hits are the search rows not read",
+ "_wall_s": 3.01,
+ "_tool": "web_research",
+ "_tag": "p05-S1-research 两源(1 败行的分账家产)#02",
+ "_ts": "2026-10-25T22:14:26.033213+00:00"
+}

@@ -203,7 +203,13 @@ async def recall_pages(query: str, limit: int = 8,
     每行从信封里捡回页面自己的标题。
     """
     q = (query or "").strip()
+    # R09-002：越界的 clamp 必须具名（行为指南在册绝对句「clamped-and-named or
+    # refused, never silently rewritten」）——对照 web_search max_results 的具名
+    # clamp 与 web_research 的 clamped 字段。未越界（含缺省 8）一个字不加。
+    _raw_limit = limit
     limit = max(1, min(20, int(limit or 8)))
+    _limit_clamp = (f"limit -> {limit} (1-20)"
+                    if _raw_limit is not None and int(_raw_limit) != limit else None)
     # 分词就一条规则（focus 的）：CJK 二元组 + 拉丁词。去重保序，8 个词是
     # LIKE 预筛的预算——每词一趟扫描，第 9 个词基本是同义重复。
     qtokens = list(dict.fromkeys(_tokens(q)))[:8]
@@ -367,6 +373,7 @@ async def recall_pages(query: str, limit: int = 8,
         "scanned_rows": scanned,
         "candidates_scored": len(keys),
         **({"dropped_low_relevance": dropped_low} if dropped_low else {}),
+        **({"clamped": [_limit_clamp]} if _limit_clamp else {}),
         "note": ("pointers, not answers - web_read the URL (fresh or cached) for "
                  "the page itself; stale rows are ones whose cache TTL has passed"),
     }

@@ -98,6 +98,24 @@
 | **量具截断假候选** | R08-004/R08-006 两起 REJECT 同根：判「summary 无一字提及」时只读了前 400/500 字——失败小计与 pin 具名拒绝**都在场且真发** | **审查推翻首报**（教训入册：判「无解释」必须读 summary 全文） | P09/P07 |
 | E 家族 | 无新样本 | — | — |
 
+## round-09 新增/复发（P3 裁决后）
+
+| 区 | 现象 | 状态 | 来源 |
+|---|---|---|---|
+| recall limit 静默 clamp | limit=21/-5 被 max(1,min(20,..)) 静默改写——违反手册「clamped-and-named or refused, never silently rewritten」 | **已修**（R09-002，fix-R09-F1：越界回执带 clamped 注记；未越界安静） | P10 |
+| **量具截断假候选（第三起族）** | R09-001 的账在 fetch_hint 全文（假算术跨轮相减）；R09-003 双形状是 test 立的规矩；R09-004 location 门 probe 实证 | **三起全 REJECT**（教训入册：判「无账」前必须读全 summary/error/next_action/fetch_hint 四账面） | P06/P08/P09 |
+| E2 家族 | /article 8 个查询串变体并排（六轮样本：R02-R06+R09） | backlog（六现，排期项） | P04 |
+| 引擎可用性轮间浮动 | 同 query 两轮引擎集不同（marginalia 时在时不在） | 环境注（engine_detail/families_answered_of_asked 账目在场） | P03/P04 |
+
+## round-09 必测回归点（round-10 新画像真实回访）
+
+1. recall limit 越界的 clamped 注记；未越界安静（fix-R09-F1）。
+2. search 过滤语义四件套：site= 0 越域 / exclude_sites= 0 漏剔 / engines= 来源单一 / 引号短语。
+3. 零结果与降档话术：不存在站点 `from none`；乱码查询分级降档不装 high。
+4. 第一拒教学谱：max_results/mode/freshness/page/location 具名；research max_sources=0 具名 clamp。
+5. min_relevance 门槛的 fetch_hint 门槛账（"N below min_relevance=…"）在场。
+6. E2 家族回访（六现线）+ 前八轮家产合并回访。
+
 ## round-08 必测回归点（round-09 新画像真实回访）
 
 1. frame 落空具名：相对前缀 → not a usable address + absolute；错名 → matched 0 <iframe> + 在场清单（fix-R08-F1）。

@@ -1,0 +1,409 @@
+{
+ "query": "python",
+ "results": [
+  {
+   "title": "Welcome to Python.org",
+   "url": "https://www.python.org/",
+   "snippet": "The mission of the Python Software Foundation is to promote, protect, and advance the Python programming language, and to support and facilitate the growth of a diverse and international community of Python programmers.",
+   "source": "seznam,yahoo",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.9848102307731921,
+   "fetch_relevance": "high",
+   "engines_consensus": "2 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Python - 1. lekce",
+   "url": "http://programujte.com/clanek/2005050901-python-1-lekce/",
+   "snippet": "Python se představuje: čísla, řetězce, seznamy, proměnné, grafika a úkol.",
+   "source": "seznam",
+   "position": 2,
+   "relevance_score": 0.906,
+   "relevance_raw": 0.9835165951500622,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Python kurzy po celé ČR - Programovací jazyk Python",
+   "url": "https://engeto.cz/online-python-akademie",
+   "snippet": "Python je považovaný za nejlepší programovací jazyk pro nováčky.Praxe i teorie jednodušeNaučíme tě vše od začátkuOnline kurzy z domovaNastartuj kariéru v IT",
+   "source": "seznam",
+   "position": 3,
+   "relevance_score": 0.9011,
+   "relevance_raw": 0.9772830633438039,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Python - Root.cz",
+   "url": "https://www.root.cz/n/python/",
+   "source": "seznam",
+   "position": 4,
+   "relevance_score": 0.8873,
+   "relevance_raw": 0.959618258410509,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Python | 达梦技术文档",
+   "url": "https://eco.dameng.com/document/dm/zh-cn/start/python-development.html",
+   "snippet": "dmPython 是 DM 提供的依据 Python DB API version 2.0 中 API 使用规定而开发的数据库访问接口。",
+   "source": "yandex",
+   "position": 5,
+   "relevance_score": 0.8863,
+   "relevance_raw": 0.958307145601316,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Introduction to Python - W3Schools",
+   "url": "https://www.w3schools.com/python/python_intro.asp",
+   "snippet": "The most recent major version of Python is Python 3, which we shall be using in this tutorial. In this tutorial Python will be written in a text editor. It is possible to write Python in an Integrated Development Environment, such as Thonny, Pycharm, Netbeans or Eclipse which are particularly useful when managing larger collections of Python files.",
+   "source": "yahoo",
+   "position": 6,
+   "relevance_score": 0.8833,
+   "relevance_raw": 0.95450720929843,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "reference"
+  },
+  {
+   "title": "The Python Tutorial — Python 3.15.1 documentation",
+   "url": "https://docs.python.org/3/tutorial/index.html",
+   "snippet": "22 hours ago · Python is an easy to learn, powerful programming language. It has efficient high-level data structures and a simple but effective approach to object-oriented programming.",
+   "source": "yahoo",
+   "position": 7,
+   "relevance_score": 0.8523,
+   "relevance_raw": 0.9940764942822751,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "docs-site",
+   "published": "2026-10-25",
+   "published_precision": "relative",
+   "published_basis": "22 hours ago"
+  },
+  {
+   "title": "Python v ČR",
+   "url": "https://python.cz/",
+   "snippet": "Python je moderní programovací jazyk. Je univerzální – pohání weby i rakety. Dobře se čte a dá se velice rychle naučit. Je skvělý pro výuku programování.Přeskočit obsahAkceOdkazy",
+   "source": "seznam",
+   "position": 8,
+   "relevance_score": 0.8511,
+   "relevance_raw": 0.9925437583672196,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Python Release Python 3.13.17 | Python.org",
+   "url": "https://www.python.org/downloads/release/python-31317/",
+   "snippet": "This is a special security release of Python 3.13. Note: The release you're looking at is Python 3.13.17, a security bugfix release for the legacy 3.13 series.",
+   "source": "yandex",
+   "position": 9,
+   "relevance_score": 0.85,
+   "relevance_raw": 0.9118723013065332,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Online Python - IDE, Editor, Compiler, Interpreter",
+   "url": "https://www.online-python.com/",
+   "snippet": "Python, which was initially developed by Guido van Rossum and made available to the public in 1991, is currently one of the most widely used general-purpose programming languages.",
+   "source": "yahoo",
+   "position": 10,
+   "relevance_score": 0.847,
+   "relevance_raw": 0.9873395095478492,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Python: co je to, jak funguje a proč ho máme rádi | COex",
+   "url": "https://www.coex.cz/blog/python-a-jeho-frameworky-pro-vyvoj-webovych-aplikaci/",
+   "snippet": "Programovací jazyk, který používáme už více než 15 let. Naši vývojáři ho mají rádi, protože je krásně čitelný a dá se s ním vytvořit téměř cokoliv – webové aplikace, e-shopy i rozsáhlé interní systémy.",
+   "source": "seznam",
+   "position": 11,
+   "relevance_score": 0.8089,
+   "relevance_raw": 0.8592510225910511,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "blog"
+  },
+  {
+   "title": "Python 注释",
+   "url": "https://www.w3school.com.cn/python/python_comments.asp",
+   "snippet": "注释可用于解释 Python 代码。 注释可用于提高代码的可读性。 在测试代码时，可以使用注释来阻止执行。",
+   "source": "yandex",
+   "position": 12,
+   "relevance_score": 0.799,
+   "relevance_raw": 0.8466161820036174,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Python-learning | 好玩儿的Python：从数据挖掘到深度学习",
+   "url": "https://wqw547243068.github.io/Python-learning/",
+   "snippet": "好玩儿的Python：从数据挖掘到深度学习-From Data Mining to Deep Learning.Python-learning is maintained by wqw547243068. This page was generated by GitHub Pages.",
+   "source": "yandex",
+   "position": 13,
+   "relevance_score": 0.7825,
+   "relevance_raw": 0.8254578887185049,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "github",
+   "official": true
+  },
+  {
+   "title": "登录 | Python123",
+   "url": "https://python123.io/index/login",
+   "snippet": "集 Python123 高等教师课题教学、日常考试、习题训练、计算生态以及计算机等级考试 Python 部分的指导模拟网站。",
+   "source": "yandex",
+   "position": 14,
+   "relevance_score": 0.6849,
+   "relevance_raw": 0.779927206467717,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Python 3.15.1 documentation",
+   "url": "https://docs.python.org/",
+   "snippet": "22 hours ago · This page is licensed under the Python Software Foundation License Version 2. Examples, recipes, and other code in the documentation are additionally licensed under the Zero Clause BSD License.",
+   "source": "yahoo",
+   "position": 15,
+   "relevance_score": 0.647,
+   "relevance_raw": 0.7315360698587333,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "docs-site",
+   "published": "2026-10-25",
+   "published_precision": "relative",
+   "published_basis": "22 hours ago"
+  },
+  {
+   "title": "PY4E - Python for Everybody",
+   "url": "https://www.py4e.com/",
+   "snippet": "This web site is building a set of free materials, lectures, book and assignments to help students learn how to program in Python. You can also take this course at:",
+   "source": "yahoo",
+   "position": 16,
+   "relevance_score": 0.5887,
+   "relevance_raw": 0.6568547661988171,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Python 教學，自學入門的 7 個學習資源和工具 - ALPHA Camp",
+   "url": "https://tw.alphacamp.co/blog/learn-python",
+   "snippet": "Python 教學，自學入門的 7 個學習資源和工具.DataCamp：側重於數據科學的Python教學。 FreeCodecamp：4小時的英文初學者教程，有中文字幕.",
+   "source": "yandex",
+   "position": 17,
+   "relevance_score": 0.5238,
+   "relevance_raw": 0.4945866569182409,
+   "fetch_relevance": "med",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "blog"
+  },
+  {
+   "title": "2026年最值得收藏的Python学习路线（建议收藏） | 二哥的Java...",
+   "url": "https://javabetter.cn/xuexiluxian/python.html",
+   "snippet": "Python 知识图谱. 1）视频篇. B 站也就是哔哩哔哩，是国内最大的二次元视频网站之一。 作为一个半吊子 up 主，我虽然看视频不多，但现在基本想看视频就直接去 B 站了。",
+   "source": "yandex",
+   "position": 18,
+   "relevance_score": 0.5142,
+   "relevance_raw": 0.48225799348909815,
+   "fetch_relevance": "med",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Python/Golang Web 入坑指南 — python-golang-web-guide 0.1 文档",
+   "url": "https://python-web-guide.readthedocs.io/",
+   "snippet": "或者用python起一个本地的server查看。 本文档托管在 ReadTheDocs，文档合并之主分支后将会自动构建，预览请访问 RTFD 。",
+   "source": "yandex",
+   "position": 19,
+   "relevance_score": 0.3824,
+   "relevance_raw": 0.39306267186712324,
+   "fetch_relevance": "med",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "docs-site"
+  },
+  {
+   "title": "Python Projects for Beginners – Master Problem-Solving!- YouTube",
+   "url": "https://www.youtube.com/watch?v=yVl_G-F7m8c",
+   "snippet": "Improve your Python programming skills with these handpicked Python projects. Want to dive deeper?",
+   "source": "yandex",
+   "position": 20,
+   "relevance_score": 0.3642,
+   "relevance_raw": 0.3697644531258198,
+   "fetch_relevance": "med",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Farma Python E-shop - Specializovaný eshop",
+   "url": "https://eshop.farmapython.cz/",
+   "snippet": "Špičková nabídka krmiv a vybavení pro domácí zvířata. Nakupujte na Farma Python!Doprava zdarmaOdborně Vám poradímeVětšina zboží skladem20 let rodinné tradiceNošovice 276Poštovné a dopravaKontaktVelkoobchodVybavení teráriíTerária a inkubátoryOsvětlení terária",
+   "source": "seznam",
+   "position": 21,
+   "relevance_score": 0.3432,
+   "relevance_raw": 0.34291180382276343,
+   "fetch_relevance": "med",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "Download Python | Python.org",
+   "url": "https://www.python.org/downloads/",
+   "snippet": "Starting with the Python 3.11.0, Python 3.10.7, and Python 3.9.14 releases, CPython release artifacts are signed with Sigstore. See our dedicated Sigstore Information page for how it works.",
+   "source": "yahoo",
+   "position": 22,
+   "relevance_score": 0.8284,
+   "relevance_raw": 0.9635131660993956,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 9 (degraded_pool)",
+   "source_type": "unknown"
+  }
+ ],
+ "total_results": 22,
+ "requested": 50,
+ "delivered": 22,
+ "engines_used": [
+  "yahoo",
+  "yandex",
+  "seznam"
+ ],
+ "engine_blocked": [
+  "baidu",
+  "duckduckgo",
+  "brave",
+  "sogou",
+  "so360",
+  "shenma",
+  "bing_global",
+  "bing"
+ ],
+ "engine_empty": [
+  "marginalia"
+ ],
+ "engine_detail": [
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 568s"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 28s"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 27s"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 4s"
+  },
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 138s"
+  },
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 138s"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "7 usable rows from 7 item nodes"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "empty",
+   "verdict": "upstream_empty",
+   "why": "no results"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "7 usable rows from 7 item nodes"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "timeout",
+   "verdict": "timeout",
+   "why": "timed out"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "timeout",
+   "verdict": "timeout",
+   "why": "timed out"
+  }
+ ],
+ "families_answered_of_asked": "3 of 9",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "date_coverage": {
+  "rows_total": 22,
+  "rows_with_date": 2,
+  "rows_no_date": 20,
+  "rows_verified_by_fetch": 0,
+  "rows_relative_precision": 2,
+  "rows_unverifiable_by_before": 0,
+  "rows_dropped_by_before": 0,
+  "rows_kept": 22
+ },
+ "duration_ms": 16955,
+ "error": "",
+ "fetch_hint": "17 high, 5 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. Only 1 of 1 query term(s) appear anywhere in these rows (`6 characters` on this side, nothing on the conversation this response cannot see), so every tier here rests on the model's text agreement plus that one surface hit - a single post, not two. If this query was a follow-up whose subject lives in the conversation, name the subject: agreement against a few characters is not a topic verdict. web_read what fits your need (high first, but a lower tier can be the right call). | 1 engine result(s) dropped: 1 labelled low (the model scored them off-topic) | Engines baidu, duckduckgo, brave, sogou, so360, shenma, bing_global, bing, marginalia didn't contribute (8 blocked, 1 answered but parsed nothing usable); results are from the rest.",
+ "related_queries": [
+  "software foundation"
+ ],
+ "summary": "Searched 'python' -> 22 results (17 high, 5 med, 0 low) from yahoo,yandex,seznam; rerank=neural. | max_results=51 is outside the supported 1-50 range; returning at most 50",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. WARNING: 9 of the 12 engines it asked didn't contribute (8 blocked, 1 answered but parsed nothing usable) - results have LOW diversity (only from yahoo, yandex, seznam). For more recall: the pool is down to 4 of the 12 engines it asked; retry after the cooldown clears (cooling right now: baidu 567s, so360 138s, shenma 138s, duckduckgo 27s, brave 27s, sogou 4s; the pool is whole again in 568s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use; rephrase if the query is narrow (an engine that answered with nothing may genuinely not have it in that index).",
+ "same_document_groups": [],
+ "_wall_s": 16.96,
+ "_tool": "web_search",
+ "_tag": "p08-S4-max_results 边界(1 与 51)#06",
+ "_ts": "2026-10-25T22:18:38.969257+00:00"
+}

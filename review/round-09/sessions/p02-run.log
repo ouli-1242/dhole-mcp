@@ -1,0 +1,32 @@
+[p02 白景舟·图书馆员] session ec1463e3e9774010a7ce7ad4331a53d1 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p02-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p02 S1-site= 限定 ----
+[p02-S1-site= 限定#02] web_search   2.2s ok=None err=-  chars=
+      summary: Searched 'python tutorial' -> 5 results (5 high, 0 med, 0 low) from sogou,yandex,seznam; rerank=neur
+   5 行 | 越域行: 0 | summary: Searched 'python tutorial' -> 5 results (5 high, 0 med, 0 low) from sogou,yandex,seznam; rerank=neur
+      (pause 6s - throttle)
+
+---- p02 S2-exclude_sites= 剔除 ----
+[p02-S2-exclude_sites= 剔除#03] web_search   2.2s ok=None err=-  chars=
+      summary: Searched 'python tutorial' -> 6 results (6 high, 0 med, 0 low) from sogou,yandex,yahoo; rerank=neura
+   6 行 | 漏剔行: 0
+      (pause 6s - throttle)
+
+---- p02 S3-引号短语 ----
+[p02-S3-引号短语#04] web_search  17.1s ok=None err=-  chars=
+      summary: Searched '"dhole mcp"' -> 6 results (6 high, 0 med, 0 low) from yahoo,yandex; rerank=neural.
+   引号短语: 6 行 | Searched '"dhole mcp"' -> 6 results (6 high, 0 med, 0 low) from yahoo,yandex; rerank=neural.
+      (pause 6s - throttle)
+
+---- p02 S4-engines= 收窄池 ----
+[p02-S4-engines= 收窄池#05] web_search   1.4s ok=None err=-  chars=
+      summary: Searched 'fixture site' -> 5 results (3 high, 2 med, 0 low) from yandex; rerank=neural.
+   5 行 | 来源集合: {'yandex'} | summary: Searched 'fixture site' -> 5 results (3 high, 2 med, 0 low) from yandex; rerank=neural.
+      (pause 6s - throttle)
+
+---- p02 S5-零结果现场(不存在的站点) ----
+[p02-S5-零结果现场(不存在的站点)#06] web_search  33.2s ok=None err=No results for this query inside site=no-such-domain-xkcd9.example - but shenma, sogou, so  chars=
+      summary: Searched 'quantum decoherence phonon' -> 0 results (0 high, 0 med, 0 low) from none; rerank=merge.
+   零结果: 0 行 | summary: Searched 'quantum decoherence phonon' -> 0 results (0 high, 0 med, 0 low) from none; rerank=merge.
+P02 DONE

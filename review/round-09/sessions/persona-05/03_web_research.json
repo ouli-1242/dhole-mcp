@@ -1,0 +1,40 @@
+{
+ "query": "本地抓取工具配置",
+ "sources": [],
+ "evidence": [],
+ "failed": [
+  {
+   "n": 1,
+   "url": "https://blog.csdn.net/weixin_26834281/article/details/161092793",
+   "why": "http_error_521: server returned error status"
+  }
+ ],
+ "more_hits": [
+  {
+   "url": "https://dicloak.com/tc/video-insights-detail/scrapling-undetectable-fast-web-scraping-install-locally",
+   "title": "Scrapling - 無法被檢測的快速網頁抓取 - 本地安裝"
+  },
+  {
+   "url": "https://blog.yrobot.top/blog/%E5%B7%A5%E5%85%B7/%E5%A6%82%E4%BD%95%E9%85%8D%E7%BD%AE%E9%AB%98%E6%95%88%E7%9A%84AI%E7%BD%91%E7%BB%9C%E6%8A%93%E5%8F%96%E5%B7%A5%E5%85%B7",
+   "title": "如何配置高效的 AI 网络抓取工具 - blog.yrobot.top"
+  },
+  {
+   "url": "https://developer.aliyun.com/article/1719298",
+   "title": "阿里云/本地部署OpenClaw +免费网页提取终极方案：Jina/Scrapling/web..."
+  },
+  {
+   "url": "https://ghtrends.dev/zh/jina-ai/reader/",
+   "title": "jina-ai/reader:加一个前缀,把任意 URL 变成 LLM 友好的 Markdown..."
+  },
+  {
+   "url": "https://blog.csdn.net/liKeQing1027520/article/details/135894250",
+   "title": "burpsuite怎么进行本地抓包？ctfer测试自搭建靶场必须学会！_burpsuit..."
+  }
+ ],
+ "summary": "0 of 1 source(s) read into an evidence pack for '本地抓取工具配置'; 1 failed (each row says why)",
+ "note": "each evidence block starts with [n] and its URL - cite that pair. Per-source text is focus-filtered to the query, not the whole page; web_read a source (urls= batches work) for everything it says. more_hits are the search rows not read",
+ "_wall_s": 17.21,
+ "_tool": "web_research",
+ "_tag": "p05-S2-research 本地靶源(可控对账)#03",
+ "_ts": "2026-10-25T22:14:49.246646+00:00"
+}
