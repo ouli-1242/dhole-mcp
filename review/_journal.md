@@ -66,3 +66,11 @@
 - P5：真重启（pid 29048，dhole-9207.log 唯一横幅可查）复验 W1 补句全文在场 + W2 手册对账；pytest **7757 绿 ×2**（首轮 DNS-recheck xdist flake 2 failed，隔离+两轮重跑全绿——诚实记录）。
 - P6：提交（round-07 全套）；index/common-issues/journal 更新；issues.json 单条。
 - 下一步：round-08 P0（端口 9208；从 round-07 顶端切出；先读 common-issues 的 round-07 必测回归点 + 各轮家产合并回访）。
+
+## 2026-10-26T08:4x round-08 收官（P6 完成）
+- P0/P1：主题「组合与长链（web_act 深水）」；9208；10 新职业（L3×3/L1×3）；93 发 13/13 工具（画像 57 + 补全 p11-p15 14 + 旁支 p80/p81 22）；靶点地图 P0 预检在册（/dialog 三弹窗、/frame+inner、/upload、/dropdown、/challenge/text、/captcha、/login→/account、/checkout）。
+- P2/P3：6 候选 → **4 CONFIRM(B) + 2 REJECT（审查推翻首报，同根=量具截断）**：R08-004 失败小计、R08-006 pin 具名拒绝**都在 summary 全文里且真发**——两起假候选都是判「无解释」时只读前 400/500 字。**量具教训重磅入册**：判「summary 无一字提及」前必须读全文（round-03 截断教训的进阶版：这次是我自己的 print 截的）。
+- P4：3 修复 test-first（3 新测试文件 8 测试 + 1 个既有 fake 补 count）：frame 落空就地具名（含 absolute 限定与在场清单）/重铸寄存器出声/upload 行教寿命（+tools.md 一句）。ruff 16 基线（新文件 F401 即清）。
+- P5：真重启（kill 29048 式失败在册——**Windows 下 Git Bash kill 对该进程无效，须 taskkill //F**；新 pid 20768）复验 V1a/V1b/V2/V3 全 PASS；pytest **7765**（7757+8 对账平）——xdist 全量 5 连跑同 2 个 DNS-recheck 测试 failed（每次隔离绿，round-06/07 已在册的 flake 本轮转顽固），顺序标准跑另证（结果见 verification.md）；ruff 16。
+- P6：提交（round-08 全套）；index/common-issues/journal 更新；issues.json 6 条（4 fixed + 2 rejected）。
+- 下一步：round-09 P0（端口 9209；从 round-08 顶端切出；先读 common-issues 的 round-08 必测回归点）。

@@ -1,0 +1,28 @@
+[p09 库尔班2·DBA] session 47ed557177e84d7a9d7298ef9b97fad1 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p09-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p09 S1-链中一 action 失败(fail-fast 语义+分账) ----
+[p09-S1-链中一 action 失败(fail-fast 语义+分账)#02] web_act  14.4s ok=False err=- no_content chars=66
+      summary: 200 OK · 66B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   err=
+   steps 分账: []
+   语义: 失败后 select 是否被跳过(账行可见)
+      (pause 6s - throttle)
+
+---- p09 S2-frame 错名 ----
+[p09-S2-frame 错名#03] web_act  14.4s ok=True err=-  chars=87
+      summary: 200 OK · 87B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   错 frame err: 
+      (pause 6s - throttle)
+
+---- p09 S3-pin 与 {=} 越界边界 ----
+[p09-S3-pin 与 {=} 越界边界#04] web_act  13.7s ok=True err=-  chars=20
+      summary: 200 OK · 20B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   pin 页引用越界(无 #note 可填) err: 
+      (pause 6s - throttle)
+
+---- p09 S4-空 actions/纯读链边界 ----
+[p09-S4-空 actions/纯读链边界#05] web_act   0.0s ok=False err=invalid_request: actions is required: a non-empty list of {action key: args} objects - cli invalid_request chars=
+      summary: invalid request · actions is required: a non-empty list of {action key: args} objects
+   空 actions: err= invalid_request: actions is required: a non-empty list of {action key: args} objects - click / fill / read / press / wai | summary: invalid request · actions is required: a non-empty list of {action key: args} objects
+P09 DONE

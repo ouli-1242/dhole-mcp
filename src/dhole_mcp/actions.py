@@ -903,7 +903,8 @@ def _act_target(i: int, key: str, val) -> dict:
         if not isinstance(frame, str) or not frame.strip() or len(frame) > 300:
             raise ValueError(
                 f"action {i} {key!r}.frame must be a short string naming the "
-                '<iframe>: its name, a URL prefix, or a CSS selector for the '
+                '<iframe>: its name, an absolute URL prefix (copy it from a '
+                'snapshot frame row), or a CSS selector for the '
                 '<iframe> element (e.g. {"selector": "#save", "frame": "#app"})')
         target["frame"] = frame.strip()
     return target
@@ -1460,9 +1461,14 @@ async def _frame_locator(page, frame: str, sel: str):
     """frame 寻址的三种拼法 → locator：name 精确匹配、URL 前缀、iframe 的 CSS。
 
     顺序即优先级：名字最具体，URL 前缀次之（快照的 frame 行交回的就是 URL，
-    抄那一行的前缀是最省事的拼法），CSS 最后——只有它走 `validate_css_selector`
+    抄那一行的前缀是最省事的拼法——**含 scheme 的绝对前缀**，相对路径进不了
+    startswith），CSS 最后——只有它走 `validate_css_selector`
     的真校验（URL 里带 ://，当 CSS 验会误杀）。跨域 iframe 照样可达：frame_locator
     / Frame.locator 都过 CDP，不受同源策略约束。
+
+    CSS 支落地前先数一遍顶层文档：0 个 <iframe> 匹配（或这串根本不是合法 CSS）
+    就地具名拒绝——R08-001/R08-005 的现场：相对前缀炸成 Playwright 的 CSS 解析
+    错、错名等到 10s 超时后被 selector-miss 句顶替，两处的矛头都指错了对象。
     """
     try:
         frames = [f for f in page.frames if f is not page.main_frame]
@@ -1476,6 +1482,21 @@ async def _frame_locator(page, frame: str, sel: str):
             return f.locator(sel).first
     from dhole_mcp.security import validate_css_selector
     validate_css_selector(frame)
+    try:
+        hits = await page.locator(frame).count()
+    except Exception as exc:
+        first = (str(exc).strip().splitlines() or [""])[0][:160]
+        raise ValueError(
+            f"frame {frame!r} is not a usable address - it is neither an iframe "
+            "name, an absolute URL prefix (copy it from a snapshot frame row), "
+            f"nor a CSS selector for the <iframe>: the CSS parse failed ({first})") from exc
+    if not hits:
+        present = [f"{f.name or '?'} -> {f.url}" for f in frames]
+        raise ValueError(
+            f"frame {frame!r} matched 0 <iframe> element(s) in the top document - "
+            f"the iframes present: {present}. frame= takes the iframe's name, an "
+            "absolute URL prefix (copy it from a snapshot frame row), or a CSS "
+            "selector for the <iframe>")
     return page.frame_locator(frame).locator(sel).first
 
 
@@ -2132,6 +2153,12 @@ def build_page_action(actions) -> Optional[Callable]:
                                                   timeout=_step_deadline_ms())
                         shot["uploaded"] = [os.path.basename(p) for p in u["files"]]
                         shot["files"] = len(u["files"])
+                        # R08-002：文件是页面态，活到这一发导航为止——跨调用提交会
+                        # 拿到一只空 input，落成 `received (0 bytes)` 还看着像成功。
+                        # 这半句在装文件的现场说，不在空结果现场猜。
+                        shot["lifetime"] = ("the files ride THIS page instance - "
+                                            "submit within the same call (a later "
+                                            "call starts a fresh page)")
                     elif "dialog" in a:
                         d = a["dialog"]
                         armed.append(d)
@@ -2466,6 +2493,13 @@ def build_page_action(actions) -> Optional[Callable]:
                         if r.get("as"):
                             # 寄存器存**全文**：帽是说给读这一行的人听的，填回表单的那一半
                             # 不该拿到一枚被砍过的答案。
+                            if r["as"] in values:
+                                # R08-003：重铸同名是合法模式（刷新型重读），last-wins 保留；
+                                # 但覆盖要出声——fill 实填的值就此换人，调用方不能靠猜。
+                                shot["register_overwritten"] = (
+                                    f"'{r['as']}' was already minted by an earlier read "
+                                    f"in this chain ({values[r['as']]!r}) - this read "
+                                    f"replaced it; later {{={r['as']}}} uses THIS value")
                             values[r["as"]] = text
                             shot["read_as"] = r["as"]
                     elif "snapshot" in a:

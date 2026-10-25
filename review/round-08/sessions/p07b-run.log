@@ -1,0 +1,24 @@
+[p14 p07b-补全] session 6b991e59e8fe4065916f054a08085de0 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p14-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p14 S2b-screenshot 形修正 + attribute 读 ----
+[p14-S2b-screenshot 形修正 + attribute 读#02] web_act   3.6s ok=None err=-  chars=
+      (pause 6s - throttle)
+
+---- p14 S2c-占位转写+confirm(403 具名) ----
+[p14-S2c-占位转写+confirm(403 具名)#03] web_act   5.0s ok=False err=- http_error_403 chars=24
+      summary: 403 ERR · 24B markdown · stealthy · this call makes 1 extra direct request to the target before the 
+   err: 
+   落页: 403 ERR · 24B markdown · stealthy · this call makes 1 extra direct request to the target before the browser runs: a liveness probe
+      (pause 6s - throttle)
+
+---- p14 S1b-text 挑战 confirm 完赛 ----
+[p14-S1b-text 挑战 confirm 完赛#04] web_act   3.3s ok=False err=- no_content chars=44
+      summary: 200 OK · 44B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+      (pause 6s - throttle)
+[p14-S1b-text 挑战 confirm 完赛#05] web_act   3.3s ok=False err=- http_error_403 chars=30
+      summary: 403 ERR · 30B markdown · stealthy · this call makes 1 extra direct request to the target before the 
+    fill '#answer' ok=True 
+    click '#challenge-btn' ok=True 
+    read 'h1' ok=True 抄写不符
+P07B DONE

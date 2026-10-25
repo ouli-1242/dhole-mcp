@@ -1,0 +1,21 @@
+[p01 阮鸿飞2·手游运营] session e869521e3fe840a0a91c9e6ad27ae4ee server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p01-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p01 S1-读 call 篇 ----
+[p01-S1-读 call 篇#02] sys_guide   0.0s ok=None err=-  chars=
+   call 篇长度: 600
+      (pause 6s - throttle)
+
+---- p01 S2-同链领取奖励(照手册 read as= → fill → click) ----
+[p01-S2-同链领取奖励(照手册 read as= → fill → click)#03] web_act   4.6s ok=False err=- no_content chars=44
+      summary: 200 OK · 44B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   同链 ok: True | steps: 0
+   落页: 200 OK · 44B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct request to 
+      (pause 6s - throttle)
+
+---- p01 S3-跨调用误用(R07-001 回归:拒绝句出路) ----
+[p01-S3-跨调用误用(R07-001 回归:拒绝句出路)#04] web_act   0.0s ok=False err=invalid_request: action 0 'fill.text' references {=code} but no earlier action stored that invalid_request chars=
+      summary: invalid request · action 0 'fill.text' references {=code} but no earlier action stored that name
+   拒绝句: invalid_request: action 0 'fill.text' references {=code} but no earlier action stored that name (no {"read": ...} action runs before this one) - registers live for this one call: mint the name in THIS
+   出路句在场: True
+P01 DONE

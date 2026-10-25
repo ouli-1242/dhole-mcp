@@ -1,0 +1,11 @@
+[p11 p01b-补全] session 3997825a2cb94c04b57c692a4582c79a server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p11-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p11 S2b-同链+confirm(完整领取) ----
+[p11-S2b-同链+confirm(完整领取)#02] web_act   3.6s ok=True err=- no_content chars=35
+      summary: 200 OK · 35B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+    {"action": "read '#challenge' as 'code'", "ok": true, "read_via": "inner_text", "read": "MV44H", "read_as": "code"}
+    {"action": "fill '#answer'", "ok": true}
+    {"action": "click '#challenge-btn'", "ok": true, "submitted": true, "submission": "POST"}
+    {"action": "read 'h1'", "ok": true, "read_via": "inner_text", "read": "抄写正确"}
+P01B DONE

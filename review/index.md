@@ -19,6 +19,7 @@
 | round-05 | review/round-05 | 959ed79 | 10 | 53（画像+补条） | **0 fixed（首个零确认轮）**+ 1 REJECT（001 preflight 错误族=环境所致，观察项）+ 1 E 记录（002=E10 样本）| 完成（故障路径轮：回归 4/4 真测 PASS，pytest 7751 绿）|
 | round-06 | review/round-06 | 5820f11 | 10 | 50（画像+补条） | 2 fixed（R06-001 0匹配 selector 说出去 / R06-002 碎片免整页尺）+ 2 E 记录（003=E2 家族五轮样本 / 004=focus 引擎名+sheet 小计）| 完成（P5 复验 W1/W2，pytest 7755 绿×2）|
 | round-07 | review/round-07 | 0702edf | 10 | 57（画像+旁支）+ 5（P3 probe/P5 复验） | 1 fixed（R07-001 寄存器拒绝补 pin 出路）+ 手册对账 PASS（19=19 双向零差/urls=11 如实/绝对句×2 实证）| 完成（手册与实况轮：P5 复验 W1+W2，pytest 7757 绿×2）|
+| round-08 | review/round-08 | ba4e008 | 10 | 93（画像 57+补全 14+旁支 22）| 3 fixed（R08-001/005 frame 落空具名 · R08-003 重铸出声 · R08-002 上传寿命句）+ **2 REJECT（R08-004/006——审查推翻首报，同根=量具截断）**| 完成（web_act 深水轮：P5 复验 V1-V3，7765 测试，xdist flake 在册）|
 
 ## 跨轮资产
 

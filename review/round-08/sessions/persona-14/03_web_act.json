@@ -1,0 +1,50 @@
+{
+ "status": 403,
+ "content": [
+  "验证码错误\n\n验证码错误\n=====\n\n请重试。"
+ ],
+ "url": "http://127.0.0.1:8399/captcha/verify",
+ "original_url": "http://127.0.0.1:8399/captcha",
+ "fetcher_used": "stealthy",
+ "duration_ms": 4917,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 159,
+ "total_extracted_chars": 24,
+ "visible_text_chars": 16,
+ "escalation_path": "direct:stealthy",
+ "summary": "403 ERR · 24B markdown · stealthy · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dialing, not the page. · pin=true could not be honored: an anonymous auto session is shared between callers and is recycled when idle, so there is no page of yours to keep open. Name a session_id= (the one you use for logins) and pass pin=true again. · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named · http_error_403: server returned error status · redirected from http://127.0.0.1:8399/captcha to http://127.0.0.1:8399/captcha/verify",
+ "content_ok": false,
+ "next_action": "access denied (HTTP 403) - the site is refusing this client. the browser tier already made this request (fetcher_used='stealthy') and the site refused it the same way - rendering is not the untried lever here. Switch source, or re-call later if the refusal looks session-dependent. the page reads as: http_error_403: server returned error status. That is about the content, not about this call: `metadata.actions` holds the receipts of the chain that ran. Do not re-issue the same chain - every step already marked ok would run again.",
+ "fetched_at": "2026-10-25T20:50:52Z",
+ "metadata": {
+  "title": "验证码错误",
+  "lang": "zh",
+  "content_issue": "http_error_403: server returned error status",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+  "actions": [
+   {
+    "action": "fill '#answer'",
+    "ok": true
+   },
+   {
+    "action": "click '#captcha-btn'",
+    "ok": true,
+    "submitted": true,
+    "submission": "POST"
+   }
+  ]
+ },
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "http_error_403",
+  "retryable": false,
+  "recover_with": "the action chain ran — `metadata.actions` holds one receipt per step, and that is the answer about this call. The content verdict describes the page it left behind, not the chain. Do NOT re-issue the same chain: every step already marked ok would run again (a fill would fill twice)."
+ },
+ "approx_tokens": 16,
+ "_wall_s": 4.97,
+ "_tool": "web_act",
+ "_tag": "p14-S2c-占位转写+confirm(403 具名)#03",
+ "_ts": "2026-10-25T20:50:52.218739+00:00"
+}

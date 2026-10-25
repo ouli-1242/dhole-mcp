@@ -1,0 +1,27 @@
+[p03 甘棠2·电商卖家] session 9da09d24a50846e48b4b4378bcc9ed4c server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p03-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p03 S1-登录(session s3) ----
+[p03-S1-登录(session s3)#02] web_act   6.0s ok=True err=- no_content chars=34
+      summary: 200 OK · 34B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   登录 err:  | 落页: 200 OK · 34B markdown · stealthy · this call makes 1 extra direct request to the
+      (pause 6s - throttle)
+
+---- p03 S2-结算(同 session)+confirm 闸 ----
+[p03-S2-结算(同 session)+confirm 闸#03] web_act   3.4s ok=False err=- no_content chars=27
+      summary: 200 OK · 27B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   填单 err: 
+[p03-S2-结算(同 session)+confirm 闸#04] web_act   3.1s ok=False err=- no_content chars=27
+      summary: 200 OK · 27B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   无 confirm 提交: err=  -> 闸: ?
+      (pause 4s - throttle)
+[p03-S2-结算(同 session)+confirm 闸#05] web_act   4.9s ok=True err=- no_content chars=31
+      summary: 200 OK · 31B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   confirm 后: ok= True | 落页: 200 OK · 31B markdown · stealthy · this call makes 1 extra direct request to the target before the browser run
+      (pause 6s - throttle)
+
+---- p03 S3-账户复查(跨调用会话保持) ----
+[p03-S3-账户复查(跨调用会话保持)#06] web_act   4.5s ok=True err=- no_content chars=34
+      summary: 200 OK · 34B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   /account h1: '' (期望 欢迎回来=会话保持)
+P03 DONE

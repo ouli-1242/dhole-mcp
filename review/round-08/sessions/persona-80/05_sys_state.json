@@ -1,0 +1,58 @@
+{
+ "message": "Reported sessions: 4 session(s). Nothing erased.",
+ "sessions": [
+  {
+   "session_id": "s3",
+   "hosts": {
+    "127.0.0.1": [
+     "sid"
+    ]
+   },
+   "cookies": 1,
+   "expires_in_s": 85200,
+   "browser_open": true,
+   "browser_type": "stealthy",
+   "browser_created": "2026-10-25T20:37:00.283581+00:00"
+  },
+  {
+   "session_id": "s7",
+   "browser_open": true,
+   "browser_type": "stealthy",
+   "browser_created": "2026-10-25T20:55:05.950276+00:00",
+   "pinned_url": "http://127.0.0.1:8399/challenge/verify",
+   "pinned_left_s": 158
+  },
+  {
+   "session_id": "sA",
+   "hosts": {
+    "127.0.0.1": [
+     "sid"
+    ]
+   },
+   "cookies": 1,
+   "expires_in_s": 85744,
+   "browser_open": true,
+   "browser_type": "stealthy",
+   "browser_created": "2026-10-25T20:46:29.048068+00:00"
+  },
+  {
+   "session_id": "sB",
+   "hosts": {
+    "127.0.0.1": [
+     "sid"
+    ]
+   },
+   "cookies": 1,
+   "expires_in_s": 85747,
+   "browser_open": true,
+   "browser_type": "stealthy",
+   "browser_created": "2026-10-25T20:46:33.738093+00:00"
+  }
+ ],
+ "open_count": 4,
+ "next_action": "sys_state(clear=['<session id>']) forgets one; clear=['sessions'] with confirm=true forgets every one. A session with cookies is a live credential for that host until it expires on its own.",
+ "_wall_s": 0.01,
+ "_tool": "sys_state",
+ "_tag": "p80-B4-sys_state(sessions)#05",
+ "_ts": "2026-10-25T20:57:37.796144+00:00"
+}

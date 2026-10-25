@@ -88,6 +88,25 @@
 | 共享缓存躲门 | P09「先撞门」腿吃了 7 分钟前的 cache replay，私网门未被真撞（回执如实申报 cached copy，非伪造成功） | 环境/量具注（受控场景 cache_ttl=0 已在册——round-04 教训家族） | P09 |
 | E 家族 | 无新样本（E2 本轮未触发） | — | — |
 
+## round-08 新增/复发（P3 裁决后）
+
+| 区 | 现象 | 状态 | 来源 |
+|---|---|---|---|
+| frame 地址落空指错对象 | 相对 URL 前缀炸 CSS 解析错（无 frame 字样）；错名等到超时被 selector-miss 句顶替 | **已修**（R08-001/005，fix-R08-F1：CSS 支预数顶层文档，解析失败/0 匹配就地具名 + 在场清单 + absolute 限定） | P04/P09 |
+| 重铸寄存器静默换值 | 同名 as= 二铸覆盖首铸，fill 实填调用方没想要的值 | **已修**（R08-003，fix-R08-F2：重铸行带 register_overwritten 注记；last-wins 语义保留） | P06 |
+| 上传寿命静默 | 跨调用提交落 `received (0 bytes)` 无说明（单发组合全通反证非损坏） | **已修**（R08-002，fix-R08-F3：upload 行带 lifetime 句 + tools.md 补句） | P05 |
+| **量具截断假候选** | R08-004/R08-006 两起 REJECT 同根：判「summary 无一字提及」时只读了前 400/500 字——失败小计与 pin 具名拒绝**都在场且真发** | **审查推翻首报**（教训入册：判「无解释」必须读 summary 全文） | P09/P07 |
+| E 家族 | 无新样本 | — | — |
+
+## round-08 必测回归点（round-09 新画像真实回访）
+
+1. frame 落空具名：相对前缀 → not a usable address + absolute；错名 → matched 0 <iframe> + 在场清单（fix-R08-F1）。
+2. 重铸同名寄存器的 register_overwritten 注记；首铸安静（fix-R08-F2）。
+3. upload 行 lifetime 句 + 单发组合 received <文件名> 真通（fix-R08-F3 + p12 通路）。
+4. 组合态家产：弹窗五形态账实符/页签四动作+最后一枚拒关/双 session 隔离/跨 frame 寄存器三件套（p02/p03/p10）。
+5. pin+session 人在中途正形（p15 抄写正确）+ R04-F1 误打提示 + R07-F1 寄存器出路句（两回归）。
+6. 前七轮家产清单（common-issues 各轮必测回归点合并回访）。
+
 ## round-07 必测回归点（round-08 新画像真实回访）
 
 1. 寄存器拒绝补句（one call / this chain / read as= / pin=true 重读同值）全文在场；有可用寄存器时仍列 available（fix-R07-F1）。

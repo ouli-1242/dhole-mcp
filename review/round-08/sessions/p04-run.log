@@ -1,0 +1,27 @@
+[p04 黎照2·移动端开发] session 1d4981c84cf74c18a2ce21911d6ca5ea server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p04-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p04 S1-frame=name 正形 ----
+[p04-S1-frame=name 正形#02] web_act   3.8s ok=True err=- no_content chars=87
+      summary: 200 OK · 87B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   name 指法: err= | #saved='' (期望 SAVED:来自外层的问候)
+      (pause 6s - throttle)
+
+---- p04 S2-frame=CSS 指法(#app) ----
+[p04-S2-frame=CSS 指法(#app)#03] web_act   4.6s ok=True err=- no_content chars=87
+      summary: 200 OK · 87B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   #app 指法: err= | #saved=''
+      (pause 6s - throttle)
+
+---- p04 S3-frame=URL 前缀指法 ----
+[p04-S3-frame=URL 前缀指法#04] web_act   3.4s ok=True err=-  chars=87
+      summary: 200 OK · 87B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   url 指法: err= | value=''
+      (pause 6s - throttle)
+
+---- p04 S4-误打内层不带 frame(R04-F1 回归) ----
+[p04-S4-误打内层不带 frame(R04-F1 回归)#05] web_act  13.9s ok=True err=-  chars=87
+      summary: 200 OK · 87B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   误打 err: 
+   iframe 出路在场: False
+P04 DONE

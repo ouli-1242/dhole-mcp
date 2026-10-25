@@ -1,0 +1,25 @@
+{
+ "status": 200,
+ "content": [
+  "| 设备 | 编号 |\n| --- | --- |\n| 血压计 | A-100 |\n| 雾化器 | B-200 |"
+ ],
+ "url": "file:///<server cwd>/review/round-08/sessions/files/devices.csv",
+ "fetcher_used": "parse",
+ "duration_ms": 14,
+ "error": "",
+ "content_type": "text/csv",
+ "total_size_bytes": 49,
+ "total_extracted_chars": 57,
+ "summary": "200 OK · 57B markdown · parse",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T20:58:05Z",
+ "metadata": {
+  "encoding": "utf-8"
+ },
+ "approx_tokens": 22,
+ "_wall_s": 0.04,
+ "_tool": "doc_parse",
+ "_tag": "p81-B7-doc_parse(本地 csv)#04",
+ "_ts": "2026-10-25T20:58:05.017162+00:00"
+}

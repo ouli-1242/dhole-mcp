@@ -1,0 +1,22 @@
+[p06 屠维2·DevRel] session a55b6e28ff964debb84fb0fce18d221c server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p06-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p06 S1-长链双寄存器 ----
+[p06-S1-长链双寄存器#02] web_act   3.6s ok=False err=- no_content chars=44
+      summary: 200 OK · 44B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   长链 err= | steps=0
+   registers 账: None
+      (pause 6s - throttle)
+
+---- p06 S2-顺序错(fill 在 read 前,同链) ----
+[p06-S2-顺序错(fill 在 read 前,同链)#03] web_act   0.0s ok=False err=invalid_request: action 0 'fill.text' references {=late} but no earlier action stored that invalid_request chars=
+      summary: invalid request · action 0 'fill.text' references {=late} but no earlier action stored that name
+   顺序错 err: invalid_request: action 0 'fill.text' references {=late} but no earlier action stored that name (no {"read": ...} action runs before this one) - registers live for this one call: mint the name in THIS chain with an earli
+   点名在册(R07-F1 句): True
+      (pause 6s - throttle)
+
+---- p06 S3-重名寄存器(同名 as= 两次) ----
+[p06-S3-重名寄存器(同名 as= 两次)#04] web_act   3.8s ok=False err=- no_content chars=44
+      summary: 200 OK · 44B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   重名 err: (收下,后者覆盖?) | ok= True
+P06 DONE

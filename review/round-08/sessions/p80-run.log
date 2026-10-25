@@ -1,0 +1,24 @@
+[p80 p80-旁支b] session 2320a711abad472596e968fde5d88ca6 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p80-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p80 B1-search ----
+[p80-B1-search#02] web_search   0.0s ok=None err=-  chars=
+      summary: Searched 'fixture site 靶站' -> 6 results (0 high, 0 med, 6 low) from shenma,baidu,yandex; rerank=neur
+    Searched 'fixture site 靶站' -> 6 results (0 high, 0 med, 6 low) from shenma,baidu,yandex; rerank=neural.
+      (pause 6s - throttle)
+
+---- p80 B2-research ----
+[p80-B2-research#03] web_research   7.0s ok=None err=-  chars=
+      summary: 1 of 2 source(s) read into an evidence pack for 'web_act 组合语义 动作链'; 1 failed (each row says why)
+    1 of 2 source(s) read into an evidence pack for 'web_act 组合语义 动作链'; 1 failed (each row says why)
+      (pause 6s - throttle)
+
+---- p80 B3-recall ----
+[p80-B3-recall#04] web_recall   0.1s ok=None err=-  chars=
+    None
+      (pause 6s - throttle)
+
+---- p80 B4-sys_state(sessions) ----
+[p80-B4-sys_state(sessions)#05] sys_state   0.0s ok=None err=-  chars=
+   ok: True | sessions 型: list | 行数: 4
+P80 DONE

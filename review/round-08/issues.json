@@ -1,0 +1,52 @@
+[
+  {
+    "id": "R08-001",
+    "title": "frame= 的「URL 前缀」指法走不通且错误指错对象",
+    "status": "fixed",
+    "fix": "fix-R08-F1",
+    "first_reported_by": "P04",
+    "verdict": "P3 CONFIRM(B)：实现只认含 scheme 的绝对前缀，相对路径落 CSS 分支炸解析错；CSS 支预数顶层文档，解析失败/0 匹配就地具名 + 教三拼法（absolute 限定）",
+    "verified": "P5 真重启重放 V1a：具名错误全文在场（verify-r8.log）"
+  },
+  {
+    "id": "R08-005",
+    "title": "frame 错名 → selector-miss 句顶替，矛头指错对象",
+    "status": "fixed",
+    "fix": "fix-R08-F1",
+    "first_reported_by": "P09",
+    "verdict": "P3 CONFIRM(B)：与 R08-001 同束——0 个 <iframe> 匹配时即刻具名 + 在场 iframe 清单",
+    "verified": "P5 真重启重放 V1b：matched 0 <iframe> + 在场清单全文在场"
+  },
+  {
+    "id": "R08-003",
+    "title": "重名寄存器静默 last-wins，fill 实填错误值",
+    "status": "fixed",
+    "fix": "fix-R08-F2",
+    "first_reported_by": "P06",
+    "verdict": "P3 CONFIRM(B)：last-wins 语义保留（刷新型重读合法），重铸行带 register_overwritten 注记点名被覆盖者",
+    "verified": "P5 真重启重放 V2：注记全文在场"
+  },
+  {
+    "id": "R08-002",
+    "title": "跨调用上传静默落 received (0 bytes)",
+    "status": "fixed",
+    "fix": "fix-R08-F3",
+    "first_reported_by": "P05",
+    "verdict": "P3 CONFIRM(B)：页面态寿命手册没教；upload 行带 lifetime 句 + tools.md upload 段补句",
+    "verified": "P5 真重启重放 V3：lifetime 句全文在场"
+  },
+  {
+    "id": "R08-004",
+    "title": "链中失败在阅读面静默（首报）",
+    "status": "rejected",
+    "verdict": "P3 REJECT：summary 全文带「1 of 3 actions did not take effect (click '#nope': …)」，机制早已存在且真发——首报量具只打印前 400 字符",
+    "first_reported_by": "P09"
+  },
+  {
+    "id": "R08-006",
+    "title": "R07-F1 补句缺 session_id 前题（首报）",
+    "status": "rejected",
+    "verdict": "P3 REJECT：两发 summary 都带具名拒绝「pin=true could not be honored: an anonymous auto session…」——tools.md:40 契约逐字兑现，量具没读全",
+    "first_reported_by": "P07"
+  }
+]

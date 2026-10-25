@@ -1,0 +1,71 @@
+{
+ "status": 200,
+ "content": [
+  "推荐专题\n\n推荐专题\n====\n\n[专题 1](/work/1)3 件\n\n[专题 2](/work/2)6 件\n\n[专题 3](/work/3)9 件\n\n[专题 4](/work/4)12 件\n\n[专题 5](/work/5)15 件\n\n[专题 6](/work/6)18 件\n\n[专题 7](/work/7)21 件\n\n[专题 8](/work/8)24 件\n\n[专题 9](/work/9)27 件\n\n[专题 10](/work/10)30 件\n\n[专题 1（重复）](/work/1#top)\n\n没有链接的一张\n\n[关于](/about)"
+ ],
+ "url": "http://127.0.0.1:8399/collections",
+ "fetcher_used": "stealthy",
+ "duration_ms": 4354,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 1182,
+ "total_extracted_chars": 272,
+ "visible_text_chars": 117,
+ "substance": "ok",
+ "escalation_path": "direct:stealthy",
+ "summary": "200 OK · 272B markdown · stealthy · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dialing, not the page. · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T20:36:37Z",
+ "metadata": {
+  "title": "推荐专题",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+  "actions": [
+   {
+    "action": "tab open 'http://127.0.0.1:8399/about'",
+    "ok": true,
+    "tab_opened": 1,
+    "url": "http://127.0.0.1:8399/about"
+   },
+   {
+    "action": "tab list",
+    "ok": true,
+    "tabs": [
+     {
+      "index": 0,
+      "url": "http://127.0.0.1:8399/collections"
+     },
+     {
+      "index": 1,
+      "url": "http://127.0.0.1:8399/about"
+     }
+    ]
+   },
+   {
+    "action": "tab switch to 0",
+    "ok": true,
+    "tab_active": 0,
+    "url": "http://127.0.0.1:8399/collections"
+   },
+   {
+    "action": "read 'h1'",
+    "ok": true,
+    "read_via": "inner_text",
+    "read": "推荐专题"
+   }
+  ]
+ },
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "no_content",
+  "retryable": false,
+  "recover_with": "the action chain ran — `metadata.actions` holds one receipt per step, and that is the answer about this call. The content verdict describes the page it left behind, not the chain. Do NOT re-issue the same chain: every step already marked ok would run again (a fill would fill twice)."
+ },
+ "approx_tokens": 106,
+ "_wall_s": 4.42,
+ "_tool": "web_act",
+ "_tag": "p02-S5-页签动作(new/list/switch/close)#07",
+ "_ts": "2026-10-25T20:36:37.610153+00:00"
+}

@@ -1,0 +1,24 @@
+[p07 越千帆2·技术招聘] session cd2752d7ce104678bb29162047d292af server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p07-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p07 S1-text 挑战 pin=true(读→人转写→下一发填) ----
+[p07-S1-text 挑战 pin=true(读→人转写→下一发填)#02] web_act   5.0s ok=False err=- no_content chars=44
+      summary: 200 OK · 44B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   第一发 err= | 读到 token='' (人在中途抄下)
+      (pause 8s - throttle)
+[p07-S1-text 挑战 pin=true(读→人转写→下一发填)#03] web_act   4.4s ok=False err=- no_content chars=44
+      summary: 200 OK · 44B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   第二发(pin 同页) err= | 落页: 200 OK · 44B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct request to 
+   期望: 抄写正确(pin 保页 → 同一枚 token)
+      (pause 6s - throttle)
+
+---- p07 S2-captcha 图形案(pin + screenshot → 占位转写提交通路) ----
+[p07-S2-captcha 图形案(pin + screenshot → 占位转写提交通路)#04] web_act   0.0s ok=False err=invalid_request: action 0 'screenshot' takes a CSS selector string, a bare snapshot row nu invalid_request chars=
+      summary: invalid request · action 0 'screenshot' takes a CSS selector string, a bare snapshot row number
+   screenshot 账行在场: True | err=invalid_request: action 0 'screenshot' takes a CSS selector 
+      (pause 8s - throttle)
+[p07-S2-captcha 图形案(pin + screenshot → 占位转写提交通路)#05] web_act   3.7s ok=False err=- bot_wall chars=77
+      summary: 200 OK · 77B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   占位转写提交: err= | 落页: 200 OK · 77B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   期望: 通路真(提交落 verify),错答 403 具名 —— 转写环节归人,脚本如实记录
+P07 DONE

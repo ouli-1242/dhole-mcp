@@ -1,0 +1,51 @@
+{
+ "status": 200,
+ "content": [
+  "验证码\n\n请输入图中的字符\n========\n\n![captcha](/captcha.png?token=308421c5da4f)\n\n\n验证码\n\n提交"
+ ],
+ "url": "http://127.0.0.1:8399/captcha",
+ "fetcher_used": "stealthy",
+ "duration_ms": 3602,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 516,
+ "total_extracted_chars": 77,
+ "visible_text_chars": 19,
+ "substance": "ok",
+ "escalation_path": "direct:stealthy",
+ "summary": "200 OK · 77B markdown · stealthy · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dialing, not the page. · pin=true could not be honored: an anonymous auto session is shared between callers and is recycled when idle, so there is no page of yours to keep open. Name a session_id= (the one you use for logins) and pass pin=true again. · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named · bot_wall_detected: page is an anti-bot/CAPTCHA challenge, not content · 1 action(s) waiting for user approval (click '#captcha-btn')",
+ "content_ok": false,
+ "next_action": "a submit action is PAUSED for user approval (pending_approval in metadata.actions) - describe the submission to the user and ask for confirmation; on a yes, re-run the same actions with {\"confirm\": true} on that submit. Nothing irreversible was done.",
+ "fetched_at": "2026-10-25T20:43:51Z",
+ "metadata": {
+  "title": "验证码",
+  "lang": "zh",
+  "content_issue": "bot_wall_detected: page is an anti-bot/CAPTCHA challenge, not content",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+  "actions": [
+   {
+    "action": "fill '#answer'",
+    "ok": true
+   },
+   {
+    "action": "click '#captcha-btn'",
+    "ok": false,
+    "pending_approval": true,
+    "error": "pending_approval: submitting is an irreversible step - ask the user to confirm this submission, then re-run the same actions with confirm: true on the click/submit action itself ({\"click\": {\"selector\": \"...\", \"confirm\": true}}), not at the top level on this click. Nothing was submitted."
+   }
+  ]
+ },
+ "page_type": "captcha",
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "bot_wall",
+  "retryable": false,
+  "recover_with": "the action chain ran — `metadata.actions` holds one receipt per step, and that is the answer about this call. The content verdict describes the page it left behind, not the chain. Do NOT re-issue the same chain: every step already marked ok would run again (a fill would fill twice)."
+ },
+ "approx_tokens": 31,
+ "_wall_s": 3.65,
+ "_tool": "web_act",
+ "_tag": "p07-S2-captcha 图形案(pin + screenshot → 占位转写提交通路)#05",
+ "_ts": "2026-10-25T20:43:51.715003+00:00"
+}

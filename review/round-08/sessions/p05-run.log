@@ -1,0 +1,25 @@
+[p05 云苏2·网络工程师] session 6898fee456404f3cac01d0e1f1e5c7a6 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p05-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p05 S1-上传(闸三跳) ----
+[p05-S1-上传(闸三跳)#02] web_act   4.0s ok=True err=- no_content chars=59
+      summary: 200 OK · 59B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   装文件 err: 
+[p05-S1-上传(闸三跳)#03] web_act   3.7s ok=True err=- no_content chars=59
+      summary: 200 OK · 59B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   无 confirm 提交: err=  -> 闸: ?
+      (pause 4s - throttle)
+[p05-S1-上传(闸三跳)#04] web_act   4.0s ok=True err=- no_content chars=57
+      summary: 200 OK · 57B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   confirm 后 receipt: '' (期望 received network-audit.txt (N bytes))
+      (pause 6s - throttle)
+
+---- p05 S2-dropdown select + select 对照组 ----
+[p05-S2-dropdown select + select 对照组#05] web_act  24.1s ok=False err=- no_content chars=66
+      summary: 200 OK · 66B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   select 链: err= | #saved=''
+      (pause 4s - throttle)
+[p05-S2-dropdown select + select 对照组#06] web_act   4.2s ok=False err=- no_content chars=65
+      summary: 200 OK · 65B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   对 fill 门指 select 候选: 
+P05 DONE

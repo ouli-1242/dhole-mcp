@@ -63,6 +63,11 @@ class _FakeLoc:
     async def evaluate(self, js):
         return "inner save button"
 
+    async def count(self):
+        # R08-F1：CSS 支落地前会数顶层文档里的 <iframe>。这里的用例都假设
+        # 「iframe 在场」——CSS 寻址的 fallthrough 本身不变，0 个时另行具名拒绝。
+        return 1
+
 
 class _FakePage:
     def __init__(self, rows, total, children=()):
