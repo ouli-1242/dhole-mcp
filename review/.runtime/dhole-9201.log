@@ -1,0 +1,47 @@
+  Dhole  serving HTTP  http://127.0.0.1:9201/mcp
+[dhole] WARNING: HTTP transport bound to 127.0.0.1 with no DHOLE_HTTP_TOKEN - any process that can reach this port can call every tool, including writes and stored credentials. Every client on this port shares one credential store, one session state and one cache; the token (when set) gates the port, it does not separate principals.
+INFO:     Started server process [9556]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:9201 (Press CTRL+C to quit)
+INFO:     127.0.0.1:56319 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56319 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:56319 - "POST /mcp HTTP/1.1" 200 OK
+HTTP fetch attempt 1 failed for https://hnrss.org/frontpage: error sending request for url (https://hnrss.org/frontpage) > tls handshake eof. Retrying in 1.0s...
+INFO:     127.0.0.1:53277 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53277 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:53277 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53301 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53301 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:53301 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53484 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53484 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:53484 - "POST /mcp HTTP/1.1" 200 OK
+D:\Dev\Tools\dhole-mcp\src\dhole_mcp\context.py:427: MCPDeprecationWarning: The logging capability is deprecated as of 2026-07-28 (SEP-2577).
+  await session.send_log_message("info", message, logger="dhole.stage")
+INFO:     127.0.0.1:57744 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57744 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:57744 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57749 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57749 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:57749 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57787 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57787 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:57787 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57795 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57795 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:57795 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58095 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58095 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:58095 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58096 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58096 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:58096 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58287 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58287 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:58288 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58288 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:58288 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58343 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58343 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:58343 - "POST /mcp HTTP/1.1" 200 OK

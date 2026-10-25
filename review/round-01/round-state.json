@@ -4,21 +4,37 @@
   "baseline_commit": "3cf035ebb1757127290207efd3a779bfdf35f76d",
   "port": 9201,
   "tools_expected": 13,
-  "phase": "P0",
+  "phase": "P6_done",
   "steps": {
     "git_hygiene": "done",
     "skeleton": "done",
-    "env_verify": "in_progress",
-    "servers": "pending",
-    "harness_selftest": "pending",
-    "plan_and_personas": "pending",
+    "env_verify": "done",
+    "servers": "done",
+    "harness_selftest": "done",
+    "plan_and_personas": "done",
     "persona_sealed": false,
-    "P1_personas_done": [],
-    "P2_reports": [],
-    "P3_review": "pending",
-    "P4_fixes": [],
-    "P5_reverify": "pending",
-    "P6_wrap": "pending"
+    "P1_personas_done": [
+      "P01",
+      "P02",
+      "P03",
+      "P04",
+      "P05",
+      "P06",
+      "P07",
+      "P08",
+      "P09",
+      "P10"
+    ],
+    "P2_reports": [
+      "report-persona-01..10.md",
+      "report-round.md"
+    ],
+    "P3_review": "done",
+    "P4_fixes": [
+      "fix-R01-F1..F5"
+    ],
+    "P5_reverify": "done",
+    "P6_wrap": "done"
   },
-  "updated": "2026-10-25T21:25:00+08:00"
+  "updated": "2026-10-25T23:55:00+08:00"
 }
