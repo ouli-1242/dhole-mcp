@@ -12,6 +12,9 @@ from dhole_mcp.models import ResponseModel
 from dhole_mcp.quality import _obfuscation_gate_applies, _annotate_quality, looks_obfuscated
 from dhole_mcp.server import _attach_dom_visible_chars
 from dhole_mcp.trafilatura_extractor import extract_content_from_html
+# fixture_site 住在 evals/：路径插入必须在导入之前（单独收集本文件时没有别的
+# 模块替本进程插过路径，裸导入会炸）。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "evals"))
 import fixture_site as fs
 import inspect
 from dhole_mcp.quality import _agent_hints, _detect_content_issue, _is_js_shell, _substance_verdict, extracted_chars, extraction_collapsed

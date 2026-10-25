@@ -120,7 +120,27 @@ def system_proxy_for(url: str) -> str:
         return ""
     if not host:
         return ""
-    if host in _LOOPBACK_NO_PROXY_ENTRIES:
+    loopback = host in _LOOPBACK_NO_PROXY_ENTRIES
+    if not loopback:
+        # G31 的豁免判据与 SSRF 门同一套判定（security 的客户端视图 + 记法归一）：
+        # 只认三个字面串的话，allow_private 放行的 127.0.0.2 / 0x7f000002 这类
+        # 写法仍被当成"该走代理"—— 代理同样 reach 不到那些回环地址，502 会被
+        # 5xx 归因误读成站点故障。env 层的 NO_PROXY 条目维持三个字面拼写不变
+        # （全 127/8 逐条写不现实，[::1] 的拆分毒化问题见上）。
+        try:
+            from dhole_mcp.security import _client_view_host, _normalize_ip_notation
+            import ipaddress as _ipaddr
+            _view = _client_view_host(host).lower()
+            try:
+                _addr = _ipaddr.ip_address(_view)
+            except ValueError:
+                _norm = _normalize_ip_notation(_view)
+                _addr = _ipaddr.ip_address(_norm) if _norm else None
+            loopback = (_view in _LOOPBACK_NO_PROXY_ENTRIES
+                        or (_addr is not None and _addr.is_loopback))
+        except Exception:
+            loopback = False
+    if loopback:
         return ""
     bypass = _no_proxy_entries()
     if "*" in bypass:

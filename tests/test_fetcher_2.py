@@ -64,9 +64,11 @@ class TestTheToolExists:
         # （`content_type` 已经是一颗头的特例，所以"够不着"是漏，不是设计）。
         # 第九颗是 R3 的 `include_headers`（一次 HEAD 探针的全部价值就是那几颗头），
         # 与 `web_read` 那颗同名同义同一只归一化 —— 两边读的必须是同一份东西。
+        # 第十颗是 2026-10-25 模拟修复轮的 `session_id`：登录 POST 的 Set-Cookie
+        # 要有落点（jar 的存取在 fetch 层每跳每方法都跑，缺的只是递参这一步）。
         assert server_mod._TOP_LEVEL_ARGS["web_request"] == frozenset({
             "url", "method", "body", "content_type", "extraction_type", "timeout",
-            "confirm", "headers", "include_headers"})
+            "confirm", "headers", "include_headers", "session_id"})
 
     def test_it_is_a_write_on_the_wire(self):
         """annotations 是客户端决定"要不要先问用户"的输入，不是装饰。"""

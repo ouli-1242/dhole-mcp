@@ -249,8 +249,9 @@ def test_tool_definitions(mcp):
     # 16.0 的另一半：搜索的日期窗口与 feed 的增量，各自是一个参数。
     ss_props = tool_map["web_search"]["inputSchema"]["properties"]
     assert "after" in ss_props and "before" in ss_props
-    assert "refused, not ignored" in ss_props["before"]["description"].lower(), \
-        "before 是拒绝而不是忽略 —— 这句才是调用方要的行为（大小写不钉，文案改过字体）"
+    before_desc = ss_props["before"]["description"].lower()
+    assert "dropped" in before_desc and "counted" in before_desc, \
+        "before 是上界过滤不是静默忽略：比它新的行被丢弃且计数（大小写不钉，文案改过字体）"
     assert "since" in tool_map["feed_read"]["inputSchema"]["properties"]
 
     # 搜索缓存：web_search 的散文不再提它，但 cache_ttl 是它的公开参数。
@@ -485,16 +486,32 @@ def test_error_response_format(mcp):
     assert "Unsupported argument" in str(bad.get("error", "")), bad
     assert "cache_ttl" in str(bad.get("error", "")), "支持集要一起给出，否则改不出正确的键"
 
+    # 未知工具同样进信封（与上面 invalid_request 同一笔账）：isError 保持 False
+    # 才能把结构化的 recover_with 交给 agent；diagnosis.code 点名 unknown_tool。
     resp2 = mcp.call_tool("nonexistent_tool_xyz", {})
-    assert resp2.get("result", {}).get("isError", False) is True
+    result2 = resp2.get("result", {})
+    assert result2.get("isError") is False, result2
+    unknown = _extract_data(result2)
+    assert (unknown.get("diagnosis") or {}).get("code") == "unknown_tool", unknown
+    assert (unknown.get("diagnosis") or {}).get("recover_with"), \
+        "未知工具的拒辞要说出去哪找合法名字"
 
 
 def test_bulk_url_limit(mcp):
     fake_urls = [f"https://example{i}.com" for i in range(101)]
     resp = mcp.call_tool("web_read", {"urls": fake_urls})
     result = resp.get("result", {})
-    assert result.get("isError", False) is True, \
-        f"101 URLs should trigger error. isError={result.get('isError')}"
+    # 超限拒绝走逐行信封（与 url+urls / bulk+actions 两个同分支拒绝同一形状）：
+    # isError 置 True 会把 next_action 降级成一段文本，所以这里按信封契约断言。
+    assert result.get("isError") is False, \
+        f"101 URLs should refuse inside the envelope. isError={result.get('isError')}"
+    data = _extract_data(result)
+    assert data.get("total") == 101 and data.get("successful") == 0, data.get("summary")
+    rows = data.get("results") or []
+    assert len(rows) == 101, len(rows)
+    assert all(str(r.get("error", "")).startswith("invalid_request: Too many URLs")
+               for r in rows), rows[0]
+    assert "Split the list" in str(rows[0].get("next_action", "")), rows[0]
 
 
 def _extract_data(result: dict) -> dict:

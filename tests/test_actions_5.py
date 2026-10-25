@@ -39,10 +39,11 @@ PROBE_VALUE = {
     "confirm": True, "steps": 5, "ms_per_step": 700, "count": 6,
     "state": "hidden", "timeout_ms": 4000, "full_page": True, "decode_qr": True,
     "image_type": "jpeg", "quality": 50, "save_to": "somewhere.png",
-    "frame": "#frame-a",
+    "frame": "#frame-a", "option": "另一个选项",
 }
 #: 载荷的起点：一颗元素动作总得有个目标，而两颗动作少了这一颗键就根本不成形。
-SEED = {"press": {"key": "Enter"}, "fill": {"text": "hi"}, "drag": {"to": "#b"}}
+SEED = {"press": {"key": "Enter"}, "fill": {"text": "hi"}, "drag": {"to": "#b"},
+        "select": {"option": "b"}, "pdf": {"save_to": "x.pdf"}}
 
 
 # ─── 1 · 覆盖面 ───────────────────────────────────────────────────
@@ -53,13 +54,14 @@ def test_every_action_key_has_a_row_in_the_table():
 
 
 def test_only_the_two_deliberately_knobless_actions_are_empty():
-    """`wait` 只有一个数、`snapshot` 没有可调的东西，这两格空是**判决**不是遗漏。
+    """`wait` 只有一个数、`snapshot` 没有可调的东西、`navigate` 的值（back/
+    forward 二选一）就是全部载荷，这三格空是**判决**不是遗漏。
 
     反过来也钉住：给它们加一颗键，这一条会红，而那是一次显式决定 —— 与 §2 一起读，
     意思是"新形状要么被 honors，要么不许出现"。
     """
     empty = {k for k, v in TABLE.items() if not v}
-    assert empty == {"wait", "snapshot"}, empty
+    assert empty == {"wait", "snapshot", "navigate"}, empty
 
 
 def test_the_table_is_still_derived_not_recopied():
@@ -104,9 +106,10 @@ def test_a_listed_payload_key_changes_the_verdict_or_the_normalized_row(action):
 
 def test_the_probe_seed_covers_every_action_in_the_table():
     """§2 不许悄悄跳过整颗动作：每一格都要被上面那条走到（skip 只许是键级的特例）。"""
-    # `wait` / `snapshot` 不传 dict，两颗都在 §1 单独钉着，这里数其余的动作。
+    # `wait` / `snapshot` / `navigate` 不传 dict（navigate 的值就是全部载荷），
+    # 三颗都在 §1 单独钉着，这里数其余的动作。
     probed = {a for a, keys in TABLE.items() if keys}
-    assert probed == set(TABLE) - {"wait", "snapshot"}, probed
+    assert probed == set(TABLE) - {"wait", "snapshot", "navigate"}, probed
 
 
 def test_an_unknown_payload_key_is_not_in_the_table():

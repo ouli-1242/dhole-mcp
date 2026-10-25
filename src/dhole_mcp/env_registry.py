@@ -109,6 +109,24 @@ ALL: tuple[EnvVar, ...] = (
         read_by=("search_metasearch",),
     ),
     EnvVar(
+        name="DHOLE_BRAVE_API_KEY",
+        kind="secret",
+        default="",
+        read_at="call",
+        scenario="poor search results / want a different pool",
+        summary="Brave official search API token; keyed backend, only runs when named.",
+        read_by=("search_metasearch",),
+    ),
+    EnvVar(
+        name="DHOLE_DEEPSEEK_API_KEY",
+        kind="secret",
+        default="",
+        read_at="call",
+        scenario="poor search results / want a different pool",
+        summary="DeepSeek search API key; keyed backend, only runs when named.",
+        read_by=("search_metasearch",),
+    ),
+    EnvVar(
         name="DHOLE_DEFAULT_CONTENT_CHARS",
         kind="int",
         default="40000",
@@ -121,12 +139,30 @@ ALL: tuple[EnvVar, ...] = (
     EnvVar(
         name="DHOLE_DEFAULT_ENGINES",
         kind="hostlist",
-        default=("baidu,bing,sogou,so360,bing_global,yahoo,yandex,brave,"
-                 "duckduckgo,marginalia"),
+        default=("baidu,bing,bing_global,duckduckgo,yahoo,brave,sogou,so360,"
+                 "shenma,yandex,seznam,marginalia"),
         read_at="call",
         scenario="poor search results / want a different pool",
         summary="Override the keyless default engine pool.",
         read_by=("search_metasearch", "updater"),
+    ),
+    EnvVar(
+        name="DHOLE_EXA_API_KEY",
+        kind="secret",
+        default="",
+        read_at="call",
+        scenario="poor search results / want a different pool",
+        summary="Exa search API key; keyed backend, only runs when named.",
+        read_by=("search_metasearch",),
+    ),
+    EnvVar(
+        name="DHOLE_FIRECRAWL_API_KEY",
+        kind="secret",
+        default="",
+        read_at="call",
+        scenario="poor search results / want a different pool",
+        summary="Firecrawl search API key; keyed backend, only runs when named.",
+        read_by=("search_metasearch",),
     ),
     EnvVar(
         name="DHOLE_HF_ENDPOINT",

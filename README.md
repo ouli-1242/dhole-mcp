@@ -16,6 +16,21 @@
 
 </div>
 
+## English
+
+**Dhole gives AI agents hands that actually reach the web.** One local [MCP](https://modelcontextprotocol.io) server: fetch · search · crawl · read PDFs · act on pages · watch for changes — 13 tools in one process, **zero API keys, zero models, zero telemetry** by default.
+
+- **Install**: `pip install dhole-mcp` (full tier: browser / PDF / OCR / parsers / reranker included; the Chromium download happens on first use, or run `python -m patchright install chromium` ahead of time). Then `dhole doctor` checks the whole setup end to end.
+- **Connect** (Claude Desktop / Cursor / Codex / Cherry Studio — field names vary, look for `command`):
+
+```json
+{"mcpServers": {"dhole": {"command": "dhole", "args": []}}}
+```
+
+- **What it does**: `web_read` fetches any URL through an anti-bot ladder (HTTP → stealth browser → archive fallback) and reads PDFs with OCR; `web_act` clicks, fills, uploads, answers dialogs, drives tabs — submissions pause for human confirmation; `web_search` runs 12 keyless engines in parallel with a local cross-encoder reranker, plus news/papers/Q&A/code/community verticals; `web_research` turns one question into a cited evidence pack; `web_crawl` / `web_discover` map and read whole sites; `doc_parse` turns local files into Markdown; `web_recall` searches pages this machine already read — and every call answers with the same honest JSON envelope (what was extracted, which tier ran, what to do next).
+- **Boundaries**: robots.txt is honoured by default; private networks and cloud metadata endpoints are refused; credentials never leave the process and never cross origins; writes are sent exactly once, behind an approval gate; content the page contains is treated as untrusted data.
+- The rest of this document is the full manual in Chinese (安装 · 配置 · 边界 · 命令 · 文档). The packaged handbook ships in both doors: `sys_guide(topic=...)` over MCP, or `dhole skill install` for hosts that load skills.
+
 ## 为什么要有它
 
 模型会思考，可它看不见今天的网。
@@ -82,7 +97,7 @@ dhole --http                                        # 127.0.0.1:8765/mcp
 | 工具 | 做什么 |
 |---|---|
 | `web_read` | 抓任意 URL：反爬阶梯、PDF / OCR、批量、聚焦提取；产出正文、**字节**（`save_to`）或**证据**（状态行 / 响应头 / 302 链）；`check` 回答「这页变了吗」并附一份 unified diff |
-| `web_act` | 在页面上动手：点击、填写、按键、拖拽、滚动、截图、**上传文件**、**应答弹窗**、**多页签**；提交默认暂停，等你点头 |
+| `web_act` | 在页面上动手：点击、填写、**选下拉框**、按键、拖拽、滚动、截图、**上传文件**、**应答弹窗**、**多页签**、**历史后退**、**打印成 PDF**；提交默认暂停，等你点头 |
 | `web_request` | 发一次非 GET（POST / PUT / PATCH / DELETE / HEAD），只发一次：不重试、不缓存、不升浏览器 |
 | `web_search` | 10 个免密引擎并行 + 本地重排，可顺带抓回前三条全文；另开五类纵向源（新闻 / 论文 / 问答 / 代码 / 社区） |
 | `web_research` | 一个问题，一次调用，一份带 `[n] URL` 引用的证据包；坏的源自己说明为什么，从不拖垮整包 |
@@ -106,7 +121,7 @@ dhole --http                                        # 127.0.0.1:8765/mcp
 
 ## 它和别的抓取器不一样在哪
 
-- **零密钥**：10 个免密搜索引擎、五类纵向源、反爬升级、重排模型，没有一项需要注册或充值。可选的 `tavily` / `bocha` 只在你自己配了 key 并且点名时才调用。
+- **零密钥**：12 个免密搜索引擎、五类纵向源、反爬升级、重排模型，没有一项需要注册或充值。可选的 `tavily` / `bocha` / `exa` / `deepseek` / `firecrawl` / `brave_api` 只在你自己配了 key 并且点名时才调用。
 - **零模型**：判断归外层 agent，dhole 只做确定的工具层。同一份页面两次抓取，同一个结果；不会有一个小模型在背后替你决定「这页大概讲什么」。
 - **全本地**：正文缓存、cookie、重排模型都在 `~/.dhole`；除了你让它抓的目标站点，进程不往外发任何数据。
 - **失败说真话**：每次调用都回同一份 JSON——抽了多少字、走的哪一档、下一步该调什么。抽空了就说空了，不会把一张反爬灰页包装成「成功正文」。
@@ -130,7 +145,7 @@ dhole --http                                        # 127.0.0.1:8765/mcp
 | `DHOLE_DEFAULT_ENGINES` | 覆盖默认搜索池 |
 | `DHOLE_SEARCH_ROW_FILTER` | `off` 关掉 SEO 农场行过滤（默认开） |
 | `DHOLE_DEFAULT_CONTENT_CHARS` | 默认正文预算，40000（500–200000） |
-| `DHOLE_TAVILY_API_KEY` / `DHOLE_BOCHA_API_KEY` | 两颗 keyed 引擎的密钥，配了才启用、点名才调用 |
+| `DHOLE_TAVILY_API_KEY` / `DHOLE_BOCHA_API_KEY` / `DHOLE_EXA_API_KEY` / `DHOLE_DEEPSEEK_API_KEY` / `DHOLE_FIRECRAWL_API_KEY` / `DHOLE_BRAVE_API_KEY` | 六颗 keyed 引擎的密钥，配了才启用、点名才调用 |
 | `DHOLE_HF_ENDPOINT` | 重排模型下载源，默认 huggingface.co，失败回退镜像 |
 | `DHOLE_RERANK_MODEL` | `bge-zh`（默认，中文更强）或 `mmarco`（快档，约 1.8×） |
 | `DHOLE_HOME` | 状态目录，默认 `~/.dhole` |
@@ -140,7 +155,7 @@ dhole --http                                        # 127.0.0.1:8765/mcp
 <details>
 <summary>搜索引擎与重排</summary>
 
-默认池 10 个免密引擎：`baidu` / `bing` / `sogou` / `so360`（`360`）/ `bing_global` / `yahoo` / `yandex` / `brave` / `duckduckgo`（`ddg`）/ `marginalia`。`engines=` 只能收窄，不能新增。索引家族是 7 个：`yahoo` 与 `bing` / `bing_global` / `duckduckgo` 同属 Bing（多入口、不多家族），`marginalia` 是独立小网索引。另有 `tavily` / `bocha` 两颗 keyed 后端。
+默认池 12 个免密引擎，**池序即可信度分层**（连通稳定的主力在前，按 IP 限流、常被反爬/地区挡的居中，小众浅索引垫底；合并序也按这张表稳定分层，主力先说话）：`baidu` / `bing` / `bing_global` / `duckduckgo`（`ddg`）/ `yahoo` / `brave` / `sogou` / `so360`（`360`）/ `shenma` / `yandex` / `seznam` / `marginalia`。`engines=` 只能收窄，不能新增。索引家族是 9 个：`yahoo` 与 `bing` / `bing_global` / `duckduckgo` 同属 Bing（多入口、不多家族），`shenma` 是阿里系移动自有索引（夸克同一套基础设施），`seznam` 是捷克门户的自有索引，`marginalia` 是独立小网索引。国内直连五席：`baidu` / `bing` / `sogou` / `so360` / `shenma`。另有 `tavily` / `bocha` / `exa` / `deepseek` / `firecrawl` / `brave_api` 六颗 keyed 后端（`brave_api` 与免密 `brave` 同索引，是付费的稳定入口）。
 
 重排用本地 cross-encoder，首次用到才下载（`bge-zh` ~279MB / `mmarco` ~119MB），换档要重启宿主。没有模型时按查询词覆盖率分桶排序，不丢行。冻结语料上的公开评测：`python evals/vertical_search_baseline.py`、`python evals/ranking_baseline.py --tiers`，方法与两次采样见 [evals/README.md](evals/README.md)。
 
@@ -151,7 +166,7 @@ dhole --http                                        # 127.0.0.1:8765/mcp
 <details>
 <summary>上下文成本</summary>
 
-全量连接期开销 36,291 字符（约 8.8k token，13 个工具，实测）。按用法裁剪时：读 / 搜 / 请求 / 爬 / 文档 / 订阅 / 状态 / 指南这 8 颗是 25,952 字符，加 `web_discover` 共 9 颗 28,274——被裁的工具连自己的路由行一起退出。别按单颗体积挑「最小的 N 颗」，那会把 `web_read` / `web_act` 这类主力排除在外。
+全量连接期开销 36,656 字符（约 8.9k token，13 个工具，实测）。按用法裁剪时：读 / 搜 / 请求 / 爬 / 文档 / 订阅 / 状态 / 指南这 8 颗是 26,289 字符，加 `web_discover` 共 9 颗 28,611——被裁的工具连自己的路由行一起退出。别按单颗体积挑「最小的 N 颗」，那会把 `web_read` / `web_act` 这类主力排除在外。
 
 </details>
 

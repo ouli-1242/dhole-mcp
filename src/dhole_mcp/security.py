@@ -11,7 +11,7 @@ import os
 import re
 import time
 from typing import Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 # Maximum URL length to prevent DoS via oversized URLs
 MAX_URL_LENGTH = 8192
@@ -516,7 +516,7 @@ def target_is_private(url: str) -> bool:
     decides those). Never raises.
     """
     try:
-        host = (urlparse(url).hostname or "").strip("[]").lower()
+        host = _client_view_host((urlparse(url).hostname or "").strip("[]")).lower()
     except Exception:
         return False
     if not host:
@@ -548,7 +548,7 @@ def allow_private_covers(value: Any, url: str) -> bool:
     if target_is_private(url):
         return True
     try:
-        host = (urlparse(url).hostname or "").strip("[]").lower()
+        host = _client_view_host((urlparse(url).hostname or "").strip("[]")).lower()
     except Exception:
         return False
     if not host:
@@ -790,6 +790,37 @@ PRIVATE_ADDRESS_REFUSAL_PREFIXES = (
     "URL targets internal/private IP",
     "URL targets internal service:",
 )
+
+
+def _client_view_host(hostname: str) -> str:
+    """拨号栈眼中的主机名：与客户端（primp/reqwest 的 WHATWG host parser）同一套
+    归一化 —— percent-decode、IDNA 点族映射（U+3002/U+FF0E/U+FF61 → '.'）、
+    非 ASCII 名转 punycode、剥一个尾点。
+
+    守卫的判据若只看 urlparse 的字面量，`http://127%2e0%2e0%2e1/` 这类写法在
+    Python 侧整块滑过（ipaddress 拒析、记法归一化看不到点、getaddrinfo 失败被
+    容忍），而客户端把它解析成 127.0.0.1 真连 —— 回环监听器端到端实测。每一步
+    失败都原样保留：后续的名单与 DNS 复查仍按能算出的视图工作。
+    """
+    view = hostname
+    if view and ":" not in view:
+        # 带 ':' 的是 IPv6 字面量 / zone id：WHATWG 不对它们做 percent-decode，
+        # 且 zone 里的 "%xx" 未必是十六进制转义。
+        try:
+            if "%" in view:
+                view = unquote(view, errors="strict")
+        except Exception:
+            pass
+    if any(ch in view for ch in "\u3002\uFF0E\uFF61"):
+        view = view.translate({0x3002: ".", 0xFF0E: ".", 0xFF61: "."})
+    try:
+        if view and not view.isascii():
+            view = view.encode("idna").decode("ascii")
+    except Exception:
+        pass
+    if len(view) > 1 and view.endswith("."):
+        view = view[:-1]
+    return view
 
 
 def url_refusal_family(msg: str) -> str:
@@ -1052,6 +1083,10 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
     if not hostname:
         raise SecurityError("URL has no valid hostname")
 
+    # 客户端视图：IP 判据、内网名单、DNS 复查一律同时跑在字面量与视图上 ——
+    # 视图与字面量不同时（percent-encoded / IDNA 点族 / 尾点），任何一个命中都拒。
+    host_view = _client_view_host(hostname)
+
     # Reject invalid or out-of-range ports (http://host:70000/ or :abc/).
     # urlparse accepts these silently; most HTTP clients refuse or misroute
     # them, so treating them as valid hides config errors and can point at
@@ -1067,11 +1102,13 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
     if not allow_internal:
         addr = None
         is_ip = False
-        try:
-            addr = ipaddress.ip_address(hostname)
-            is_ip = True
-        except ValueError:
-            pass  # Not a standard IP — try alternate notations below
+        for candidate in dict.fromkeys((hostname, host_view)):
+            try:
+                addr = ipaddress.ip_address(candidate)
+                is_ip = True
+                break
+            except ValueError:
+                pass  # Not a standard IP — try alternate notations below
 
         # Handle alternate IP notations that ipaddress rejects but curl resolves
         # (octal, hex, decimal integer, short-form). This is critical: Python's
@@ -1079,13 +1116,15 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
         # (libcurl) resolves them. An attacker could use http://0177.0.0.1 to
         # bypass SSRF protection and reach the loopback interface.
         if not is_ip:
-            normalized = _normalize_ip_notation(hostname)
-            if normalized is not None:
-                try:
-                    addr = ipaddress.ip_address(normalized)
-                    is_ip = True
-                except ValueError:
-                    pass  # Not resolvable to a valid IP after normalization
+            for candidate in dict.fromkeys((hostname, host_view)):
+                normalized = _normalize_ip_notation(candidate)
+                if normalized is not None:
+                    try:
+                        addr = ipaddress.ip_address(normalized)
+                        is_ip = True
+                        break
+                    except ValueError:
+                        pass  # Not resolvable to a valid IP after normalization
 
         if is_ip:
             # 元数据字面量按规范化地址拦，且先于 allowlist 询问：100.64.0.0/10
@@ -1129,18 +1168,21 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
                     pass  # IPv4/IPv6 type mismatch, skip
         else:
             # Block known internal hostnames (cloud metadata, localhost, DNS rebinding services)
-            hostname_lower = hostname.lower()
-            if hostname_lower in _BLOCKED_HOSTNAMES and not _private_host_allowed(hostname_lower):
-                raise SecurityError(f"URL targets internal service: {hostname}")
-            # 裸主机名 `metadata` 不在 _BLOCKED_HOSTNAMES 里，但它在 _METADATA_HOSTS
-            # 里 —— 同一道门，没有 allowlist 出口。
-            if hostname_lower in _METADATA_HOSTS:
-                raise SecurityError(f"URL targets internal cloud metadata endpoint: {hostname}")
-            # Block DNS rebinding services that resolve to internal IPs.
-            # 没有 allowlist 出口：这类服务把任意域名解析到任意 IP，放行它就等于
-            # 把整份内网判定交给了外部解析器。
-            if hostname_lower.endswith(_DNS_REBINDING_SUFFIXES):
-                raise SecurityError(f"URL uses DNS rebinding service: {hostname}")
+            # 名单与后缀在字面量与客户端视图上都比对：视图剥尾点后 `localhost.` /
+            # `metadata.google.internal.` 落回表内的名字（拨号栈眼里它们就是同名）。
+            for check_name in dict.fromkeys((hostname.lower(), host_view.lower())):
+                if check_name in _BLOCKED_HOSTNAMES and not _private_host_allowed(check_name):
+                    raise SecurityError(f"URL targets internal service: {hostname}")
+                # 裸主机名 `metadata` 不在 _BLOCKED_HOSTNAMES 里，但它在 _METADATA_HOSTS
+                # 里 —— 同一道门，没有 allowlist 出口。
+                if check_name in _METADATA_HOSTS:
+                    raise SecurityError(
+                        f"URL targets internal cloud metadata endpoint: {hostname}")
+                # Block DNS rebinding services that resolve to internal IPs.
+                # 没有 allowlist 出口：这类服务把任意域名解析到任意 IP，放行它就等于
+                # 把整份内网判定交给了外部解析器。
+                if check_name.endswith(_DNS_REBINDING_SUFFIXES):
+                    raise SecurityError(f"URL uses DNS rebinding service: {hostname}")
             # 纵深防御（报告声明 4）：域名经 DNS 解析到的内网 IP 复查。
             # 恒常开（R3刀2-B）：隧道在场时豁免的也只有 198.18.0.0/15 与 fc00::/7 这两段，
             # 其余段无论这台机器被判成什么都照拒 —— 以前一个 fake-ip 判词会让整层停摆，
@@ -1148,8 +1190,8 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
             # 只拒绝"解析成功且命中内网"；解析失败（gaierror/超时）容忍。
             # 存在 DNS rebinding TOCTOU 竞态，作为纵深防御而非唯一防线。
             # 点名放行的主机跳过这一条：它本来就该解析到内网。
-            if not _private_host_allowed(hostname_lower):
-                internal = _resolves_to_internal(hostname)
+            if not _private_host_allowed(host_view.lower()):
+                internal = _resolves_to_internal(host_view)
                 if internal and _tunnel_range_refusal(internal):
                     # 即将因为隧道段拒绝：先问一次现判 —— 会话中途才挂上的 TUN 走这里自愈。
                     internal = _reprobe_before_tunnel_refusal(hostname, internal)

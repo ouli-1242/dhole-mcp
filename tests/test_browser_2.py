@@ -501,9 +501,10 @@ def test_no_browser_knobs_survived_the_reversal():
     names = {e.name for e in env_registry.ALL}
     assert "DHOLE_BROWSER_HEADED" not in names
     assert "DHOLE_BROWSER_CHANNEL" not in names
-    assert len(env_registry.ALL) == 15, (
-        f"注册表应当是 15 颗（那两颗浏览器旋钮整体退掉之后，行级垃圾过滤补了一颗；"
-        f"多模型档位又补了 DHOLE_RERANK_MODEL），现在 {len(env_registry.ALL)} 颗：{sorted(names)}")
+    assert len(env_registry.ALL) == 19, (
+        f"注册表应当是 19 颗（那两颗浏览器旋钮整体退掉之后，行级垃圾过滤与模型档位"
+        f"各补了一颗；keyed 引擎扩员补了四颗 API key），"
+        f"现在 {len(env_registry.ALL)} 颗：{sorted(names)}")
     assert not hasattr(B, "_browser_headed") and not hasattr(B, "_forced_browser_channel"), (
         "读旋钮的那两个函数还活着 —— 名字退了、代码没退，等于留了两扇门")
 

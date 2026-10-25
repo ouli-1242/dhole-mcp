@@ -535,8 +535,8 @@ def _ruler_module():
     return mod
 
 
-def test_the_default_connect_is_the_published_36_291():
-    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：34,357。
+def test_the_default_connect_is_the_published_36_656():
+    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：36,656（2026-10-25 模拟修复轮：web_request 增 `session_id`（+244，登录 POST 的 Set-Cookie 落 jar）+ web_research 分摊预算 clamp（零 wire 成本）。
 
     这一条同时是量尺的回归锁：`tool_payload_measure._wire_for` 曾按工具数累加路由行，
     把默认连接报成 30,857（web_discover / web_crawl 共用那句被算了两遍）。修成按文本
@@ -664,6 +664,23 @@ def test_the_default_connect_is_the_published_36_291():
     这三组都含 `web_read`，所以三格同步走 +455 —— read+search 12,373 → 12,866、
     8 颗 25,497 → 25,952、9 颗 27,819 → 28,274。**同一颗数字的第四格**，
     不是四次巧合：`save_to` 住在 `web_read` 上，而这四组都留着它。
+
+    36,384 → 36,412（2026-10-25，web_act 动作面三颗 select / navigate / pdf）：
+    一次**上抬 +28**（净），全在 `web_act.actions` 那颗描述上：动作名单与
+    必填载荷 `select=option` / `pdf=save_to` 共 +51，同一颗描述里两处列表
+    的逗号后空格收掉 −23。买的是三件此前**没有一条路**的事上了
+    wire：下拉框选择（fill 对 <select> 结构性够不到）、历史 back/forward
+    （重导航清空表单）、页面打印成 PDF（字节落盘不进 transcript）。细节
+    （value/label 双匹配、wait_until=commit 的理由、print_background）
+    全部住在 references/tools.md 按需付，与 A2 那次必填键上 wire 同一裁决。
+
+    36,412 → 36,656（2026-10-25，模拟修复轮）：一次**上抬 +244**，全在
+    `web_request` 身上（2,954 → 3,198：参数壳 + 196 字描述）。买的是
+    「登录 POST 的 Set-Cookie 从此有落点」——jar 的存取在 fetch 层每跳
+    每方法都跑，缺的只是这扇门把调用方点名的 jar 递进去（P2 体验模拟：
+    POST /login 成功而后续读拿匿名 jar）。同轮的 web_research 分摊预算
+    clamp（P3）零 wire 成本，两颗的钉子在
+    tests/test_a_login_post_lands_in_the_jar.py。
     """
     ruler = _ruler_module()
     import ast
@@ -681,7 +698,7 @@ def test_the_default_connect_is_the_published_36_291():
         f"仓库量尺与 wire 的 tools/list 对不上：{ruler_compact} vs {wire['tools_compact']}")
     assert ruler_instr == len(wire["instructions"]), (
         f"仓库量尺多算了路由行：{ruler_instr} vs wire {len(wire['instructions'])}")
-    assert ruler_compact + ruler_instr == 36_291
+    assert ruler_compact + ruler_instr == 36_656
 
 
 def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():
@@ -703,13 +720,15 @@ def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():
     `web_search` 不发请求，也没有响应头可交。
     12,373 → 12,866（+455，R4 `save_to`）：同一句话的第二次 —— 落盘也是 `web_read`
     的活，`web_search` 连字节都没有。
+    12,866 → 12,959（+93，免密引擎扩员 + 分层 + shenma）：`web_search` 描述
+    换成 12 家名单与池序=分层那句，`web_read` 不付。
     """
     assert _assert_price("web_read,web_search",
-                         ["web_read", "web_search"]) == 12_866
+                         ["web_read", "web_search"]) == 12_959
 
 
 def test_the_readme_eight_tool_price_is_what_the_server_sends():
-    """README 的 8 颗价不再只是算术 —— 真机同一值，且文档印的就是它（25,952）。"""
+    """README 的 8 颗价不再只是算术 —— 真机同一值，且文档印的就是它（26,289）。"""
     _assert_price(",".join(SUB8), SUB8,
                   published=("README.md", "这 8 颗是 {total} 字符"))
 
@@ -717,7 +736,7 @@ def test_the_readme_eight_tool_price_is_what_the_server_sends():
 def test_the_ninth_tool_costs_its_own_row_and_no_routing_line():
     """加 web_discover 只多它自己那一行：路由行与 web_crawl 共用，去重后不再付第二次。
 
-    这是 F-A-J1 那把共享路由行在 wire 上的样子：README 的 9 颗 28,274，
+    这是 F-A-J1 那把共享路由行在 wire 上的样子：README 的 9 颗 28,611，
     instructions 一字不变。C3 之后 `web_discover` 自己那一行涨了
     （地图大小两颗旋钮上这门），涨的部分照旧只付一次；C5 没动它（那一扇门一次尝试都不
     走 HTTP 正文通道，所以它不欠那句上限）。D2 的 +28 全部落在 `web_read`，所以这一组
@@ -725,7 +744,7 @@ def test_the_ninth_tool_costs_its_own_row_and_no_routing_line():
     """
     nine = SUB8 + ["web_discover"]
     assert _assert_price(",".join(nine), nine,
-                         published=("README.md", "共 9 颗 {total}")) == 28_274
+                         published=("README.md", "共 9 颗 {total}")) == 28_611
     eight = _connect(",".join(SUB8))
     assert len(_connect(",".join(nine))["instructions"]) == len(eight["instructions"]), (
         "两颗共用一句路由的工具，第二颗不该再收一次路由行的钱")

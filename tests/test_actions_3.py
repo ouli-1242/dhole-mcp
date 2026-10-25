@@ -72,6 +72,14 @@ def _legal_payloads(key: str) -> list[dict]:
     if key == "drag":
         return [{"drag": {"selector": "#src", "expect": "滑块", "to": "#dst"}},
                 {"drag": {"index": 3, "to": {"index": 7, "expect": "落点"}}}]
+    if key == "select":
+        return [{"select": {"selector": "#country", "option": "CN"}},
+                {"select": {"index": 4, "expect": "国家", "option": "中国"}},
+                {"select": {"selector": "#top", "option": ["a", "b"]}}]
+    if key == "navigate":
+        return [{"navigate": "back"}, {"navigate": "forward"}]
+    if key == "pdf":
+        return [{"pdf": {"save_to": "C:/tmp/out.pdf"}}]
     if key == "upload":
         # files 必须指向这台机器上真实存在的文件——校验在浏览器起来之前就发生
         return [{"upload": {"selector": "#doc", "files": [str(Path(__file__))]}},
@@ -167,8 +175,12 @@ def test_the_probe_actually_probes():
     """
     # tab 不在这张表里：它的拒绝句把形状写在引号里（"open": "https://..."），
     # 探针的裸键名花括号抓不到它——形状由 `_legal_payloads` 与手册守卫管。
+    # navigate 同理（它的拒绝句也不在花括号里列键名，值就是全部载荷）。
+    # select / pdf 是 2026-10-25 加的两颗（对标 playwright-mcp 的
+    # select_option / pdf_save），报错各自点名 option / save_to。
     assert REQUIRED == {"drag": {"to"}, "fill": {"text"}, "press": {"key"},
-                        "upload": {"files"}, "dialog": {"answer"}}, REQUIRED
+                        "upload": {"files"}, "dialog": {"answer"},
+                        "select": {"option"}, "pdf": {"save_to"}}, REQUIRED
     for name in REQUIRED.values():
         assert name <= ALL_KEYS, f"报错点名的 {sorted(name)} 不在手抄表里 —— 表该更新了"
 

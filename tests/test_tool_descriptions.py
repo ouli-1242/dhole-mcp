@@ -118,11 +118,18 @@ def test_search_engine_list_never_names_a_retired_engine(tools):
 
     # 机制自检：整词匹配不该把 sogou_weixin 读成 sogou
     assert _engine_tokens("sogou_weixin only") & retired == {"sogou_weixin"}
-    # 结构自检：opt-in 层确实没了 —— 这条守卫的前提就是没有第二张名单
+    # 结构自检：opt-in 层确实没了 —— 池外的家族映射只许是 keyed 引擎（brave_api
+    # 与免密 brave 同索引，是它进这张表的唯一理由），不许有第二张免密名单。
+    from dhole_mcp import search_metasearch as ms
     from dhole_mcp.search_engines import _INDEX_FAMILY
 
-    assert set(_INDEX_FAMILY) == set(DEFAULT_ENGINES), (
-        "注册表与默认池又不一致了：先修池子，再回来改这条守卫")
+    pool = set(DEFAULT_ENGINES)
+    families = set(_INDEX_FAMILY)
+    assert pool <= families, f"默认池有引擎不在 _INDEX_FAMILY 里: {sorted(pool - families)}"
+    extras = families - pool
+    assert extras <= set(ms.KEYED_ENGINES), (
+        f"_INDEX_FAMILY 出现了既不在默认池也不是 keyed 的名字: {sorted(extras)} —— "
+        "那就是第二张名单回来了")
 
     t = tools["web_search"]
     locations = {

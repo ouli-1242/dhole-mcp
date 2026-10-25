@@ -448,7 +448,25 @@ def test_connect_stays_inside_the_packed_budget():
 # 于是"建图不花钱"这个前提进了 agent 的取舍。新句改成记账：0 只在 `sitemap=true`
 # 与 `resume_token=` 续页这两条不联网的路径上成立，逐跳走时一步一页。完整口径
 # （含 max_pages 只约束逐跳那一半）住 references/tools.md，wire 只留这一句。
-CONNECT_CEILING = 36_291
+CONNECT_CEILING = 36_656
+# 2026-10-25 模拟修复轮：上抬 +244（36,412 → 36,656），全在 web_request 身上
+# （2,954 → 3,198）——新增 `session_id`：登录 POST 的 Set-Cookie 落进调用方
+# 点名的 jar（jar 存取在 fetch 层每跳每方法都跑，缺的只是递参这一步；真机
+# 模拟实测 POST 登录成功而后续读拿匿名 jar）。同轮 web_research 分摊预算
+# clamp（P3，真机 dict.cn 行）零 wire 成本。钉子同文件：
+# tests/test_a_login_post_lands_in_the_jar.py。
+# 2026-10-25 web_act 动作面三颗 select / navigate / pdf：上抬 +28（36,384 → 36,412），
+# 全在 web_act.actions 那颗描述上（名单与必填载荷 select=option / pdf=save_to
+# 共 +51，两处列表逗号后空格收掉 −23）。对标 playwright-mcp 的
+# select_option / navigate_back / pdf_save：fill 对 <select> 结构性够不到、
+# 重导航清空表单而历史保得住、打印成 PDF 字节落盘不进 transcript——三件
+# 此前没有一条路的事。细节（value/label 双匹配、wait_until=commit、
+# print_background）住 tools.md 的 Page interaction 一节，按需付。
+# 2026-10-25 国内免密引擎 shenma：再上抬 +7（36,377 → 36,384），仍是 web_search
+# 描述那一行（12 家名单）。连着上一条（seznam + 分层 +86）同一次未发布批次。
+# 2026-10-25 免密引擎扩员 + 可信度分层：上抬 +86（36,291 → 36,377），全在
+# web_search 一颗身上（4,166 → 4,252）。买的是「11 家免密引擎」的新名单与一句
+# 池序=可信度分层的说明（池序/合并序同读 search_engines._PRIORITY_TIERS）。
 # 2026-10-24 提升清单 2 web_recall：上抬 +842（35,449 → 36,291），第 13 颗工具
 # （工具行 +714、路由行 +128）。买的是「本机已读页面的检索」——零网络、零新模型，
 # LIKE 预筛（json 转义翻存储层形状）+ 页级 BM25 + 在场才用的交叉编码器重排。

@@ -681,9 +681,14 @@ def test_registry_covers_all_14_env_vars():
 
     模型档位那次加了第 15 颗 `DHOLE_RERANK_MODEL`：它选的是本机加载哪一份权重，
     而模型会话是进程级单例 —— 不重启就换档，同一进程会拿两个打分器给检索计分。
+
+    keyed 引擎扩员一次加三颗（`DHOLE_EXA_API_KEY` / `DHOLE_DEEPSEEK_API_KEY` /
+    `DHOLE_FIRECRAWL_API_KEY`）到 18：它们与 tavily/bocha 同一条纪律 —— key 是
+    每账户各自的凭据，落 env 比落 config 文件少一次明文落盘，且不设就永远不花钱。
+    Brave 官方 API 的 token（`DHOLE_BRAVE_API_KEY`）随后到 19。
     """
-    assert len(env_registry.ALL) == 15, (
-        f"expected 15 env vars, found {len(env_registry.ALL)}: "
+    assert len(env_registry.ALL) == 19, (
+        f"expected 19 env vars, found {len(env_registry.ALL)}: "
         f"{sorted(e.name for e in env_registry.ALL)}"
     )
 
@@ -735,11 +740,12 @@ def test_w1_5_every_registry_name_appears_in_configuration_doc():
 # ─── registry-shape guards ───────────────────────────────────────────
 def test_secret_kind_never_default_echos_value():
     """The ``secret`` kind (17.0: Tavily + 博查；G25 评审加 HTTP 传输的
-    bearer token —— brightdata/exa 的 keyed 引擎已删). Their ``default`` is a
+    bearer token —— brightdata 的 keyed 引擎已删；exa 后来按新契约加回，
+    与 deepseek / firecrawl 一起). Their ``default`` is a
     marker string, not a value - W2's config audit depends on it.
     """
     secrets = [e for e in env_registry.ALL if e.kind == "secret"]
-    assert len(secrets) == 3
+    assert len(secrets) == 7
     for entry in secrets:
         assert entry.default == "", (
             f"{entry.name} is secret but has a non-empty default - W2 will "

@@ -33,6 +33,7 @@ import ssl
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from random import SystemRandom
 from time import time
@@ -124,6 +125,22 @@ class TavilyAuthError(MetaSearchException):
 
 class BochaAuthError(MetaSearchException):
     """博查拒绝凭据（key 无效或欠费）。"""
+
+
+class ExaAuthError(MetaSearchException):
+    """Exa rejected the credentials (bad/expired key, out of credits)."""
+
+
+class DeepSeekAuthError(MetaSearchException):
+    """DeepSeek 拒绝凭据（key 无效或余额不足，402 同样算鉴权失败）。"""
+
+
+class FirecrawlAuthError(MetaSearchException):
+    """Firecrawl rejected the credentials (bad/expired key, out of credits)."""
+
+
+class BraveApiAuthError(MetaSearchException):
+    """Brave 官方 API 拒绝凭据（token 无效或额度用尽）。"""
 
 
 class MetaBlockedException(MetaSearchException):
@@ -322,12 +339,18 @@ class TextResult:
 
 # ─── 结果可用性谓词 ──────────────────────────────────────────────────────────
 def _is_usable(row: Any) -> bool:
-    """一条结果是否真的能用：href 与 title 都得有。
+    """一条结果是否真的能用：href 与 title 都得有，且 href 是 http(s)。
 
+    scheme 白名单收在聚合入口而不是各家的后处理：ddg / bing / brave / yandex 的
+    href 从前不做 scheme 检查，敌意或损坏的 SERP 喂进 javascript:/data:/相对路径
+    的 href 时，它们会被当结果交给下游 agent（直到 web_read 才被拦，白耗一轮）。
     观测计数与聚合侧的取舍必须用同一个谓词，否则"引擎产出"和"为什么结果为空"
     会各说各话 —— 一个说引擎产出了 8 条、另一个说一条都没收下。
     """
-    return bool(getattr(row, "href", None)) and bool(getattr(row, "title", None))
+    href = getattr(row, "href", None)
+    if not href or not getattr(row, "title", None):
+        return False
+    return str(href).lower().startswith(("http://", "https://"))
 
 
 def _usable_count(rows: Any) -> int:
@@ -934,20 +957,33 @@ _DHOLE_TO_BACKEND = {
     # marginalia 是独立索引（自己的小网爬虫），英文为主、商业长尾很浅；放在池子
     # 末位，答得上时提供独立家族，答不上时由其余引擎兜住。
     "marginalia": "marginalia",
+    # seznam 是捷克门户的自有索引（服务端渲染、免密）：中欧语料深、全球查询也能答
+    # （实测 python asyncio 首条 docs.python.org）。新接入，先按小众观察位放池尾。
+    "seznam": "seznam",
+    # 神马是 UC/阿里的移动搜索自有索引（夸克同一套基础设施，一个家族一个入口）：
+    # 服务端渲染、国内直连；AliWAF 惩罚页按 IP 限流（so360 校验页同类），归国内
+    # 独立索引那一档。
+    "shenma": "shenma",
     # Paid JSON backends: selectable by name, run on their own track (see
     # KeyedApiEngine) -- absent from _TEXT_ENGINES by design. 名字必须与
     # KEYED_ENGINES 严格一致：留一个没有实现的键，点名它会通过校验却什么都不返回。
     "tavily": "tavily",
     "bocha": "bocha",
+    "exa": "exa",
+    "deepseek": "deepseek",
+    "firecrawl": "firecrawl",
+    # brave_api 是 Brave 官方付费 API（keyed）；免密抓取版另有 "brave" 一席，
+    # 两者同名不同物 —— 名字必须能各答各的，共识家族才分得清。
+    "brave_api": "brave_api",
 }
-# 默认池 = 注册表的全部 10 家 keyless（§3-22）：国内 4（baidu/bing/sogou/so360）+
-# 国际 6（bing_global/yahoo/yandex/brave/duckduckgo/marginalia）。不再有"显式点名
-# 才跑"的免密引擎。17.0 删掉的 5 家（sogou_weixin/wikipedia/grokipedia/mwmbl/
-# baidu_baike）是知识库/垂直索引/社区小型索引；yahoo 在 17.1 作为 Bing 家族的
-# 可用性冗余返回（同索引，不加家族），marginalia 是新的独立索引。
-# duckduckgo/yahoo 与 bing 同家族：池里多两个入口不多两个家族，家族数固定为 7。
-_DEFAULT_BACKENDS = ["baidu", "bing", "sogou", "so360", "bing_global",
-                     "yahoo", "yandex", "brave", "duckduckgo", "marginalia"]
+# 默认池 = 注册表的全部免密引擎（§3-22）。2026-10 起池序=可信度分层（详见
+# search_engines._PRIORITY_TIERS，那张表是唯一的作者）：直连稳定的主力在前
+# （baidu/bing），按 IP 限流的国内独立索引（sogou/so360/shenma）与常被地区墙的
+# 国际引擎（yandex/brave）居中，小众浅索引垫底（seznam 新观察位、marginalia 段末）。
+# 引擎数 12，索引家族 9（bing 家族四入口：bing/bing_global/yahoo/duckduckgo）。
+_DEFAULT_BACKENDS = ["baidu", "bing", "bing_global", "duckduckgo",
+                     "yahoo", "brave", "sogou", "so360", "shenma", "yandex",
+                     "seznam", "marginalia"]
 
 
 # ─── 360 搜索（so.com，独立索引，默认池） ────────────────────────────────────
@@ -1235,7 +1271,13 @@ class Marginalia(BaseSearchEngine):
         # Marginalia's 200 anti-bot page is ~37KB ("Wait A Moment / aggressive
         # bot activity"), above the generic shell size gate. Mark it blocked so
         # the engine cools down instead of reporting "no results".
-        if "aggressive bot activity" in html_text or "Wait A Moment" in html_text:
+        # The marker scan stays in the first 2KB: on the challenge page it sits
+        # in the early <title>/meta, while a hostile SEO result carrying the
+        # same phrase renders mid-page into the SERP — a full-document match
+        # lets one indexed page cool a healthy engine for 600s. A wider real
+        # challenge page would degrade to "no results" (the milder failure).
+        if ("aggressive bot activity" in html_text[:2048]
+                or "Wait A Moment" in html_text[:2048]):
             raise MetaBlockedException(
                 "marginalia rate limit (HTTP 200 challenge)", challenge=True)
         super()._check_challenge(html_text)
@@ -1266,10 +1308,147 @@ class Marginalia(BaseSearchEngine):
         return out
 
 
+# ─── Seznam（search.seznam.cz，自有索引，默认池） ────────────────────────────
+class Seznam(BaseSearchEngine):
+    """Seznam：捷克门户自有的网页索引，服务端渲染、免密。
+
+    2026-10 实测：全球查询回捷克站与全球站的混合（"python asyncio" 同页里有
+    docs.python.org 也有 megaknihy.cz），是自有索引的形状、不是 Bing 换皮 ——
+    按 ``seznam`` 独立家族计。结果锚点用**语义 data 属性**（``data-e-a="heading"``
+    / ``"reference"``）：整站的 class 都是构建期哈希（``bc3389ab17b`` 一类，随发版
+    轮换），当选择器必烂；href 是直链，无跳转包装。分页参数未核实，只答第 1 页
+    —— 答不上的页交空，不把第 1 页冒充第 N 页（marginalia 同款纪律）。
+    """
+
+    name = "seznam"
+    provider = "seznam"
+    search_url = "https://search.seznam.cz/"
+    search_method = "GET"
+    # 每条结果 = 标题链接（a[data-e-a=heading]）的 h3 的父 div：favicon、标题、
+    # 绿色 URL 行、摘要在同一个块里。锚 data-e-a 而不是 class，理由见 docstring。
+    items_xpath = "//a[@data-e-a='heading']/../.."
+    elements_xpath: ClassVar[Mapping[str, str]] = {
+        "title": ".//a[@data-e-a='heading']//text()",
+        "href": ".//a[@data-e-a='heading']/@href",
+        # 摘要块自带 data-e-b-n（语义锚）：绿色 URL 行的嵌套层数不稳（实测隔一层
+        # div），相对路径爬祖先层数会烂；语义锚跟着结构走。
+        "body": ".//div[@data-e-b-n]//text()",
+    }
+    headers_update: ClassVar[Mapping[str, str]] = {
+        "Accept-Language": "en;q=0.9,cs;q=0.8"}
+    _detect_challenge_shell = True
+
+    def __init__(self, proxy: str | None = None, timeout: int | None = None, *,
+                 verify: bool = True) -> None:
+        self.http_client = _PrimpClient(proxy=proxy, timeout=timeout, verify=verify,
+                                        impersonate="chrome", impersonate_os="windows")
+        self.http_client.client.headers_update(self.headers_update)
+        self.results: list[Any] = []
+
+    def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
+                      timelimit: str | None,  # noqa: ARG002 - 未接线：不知道这家
+                      # 有什么可发的日期参数，不替它编
+                      page: int = 1, **kwargs: str) -> dict[str, Any]:
+        return {"q": query}
+
+    def search(self, query: str, region: str = "us-en",
+               safesearch: str = "moderate", timelimit: str | None = None,
+               page: int = 1, **kwargs: str) -> list[Any] | None:
+        if page > 1:
+            return None  # not fetched, not "empty"
+        return super().search(query, region=region, safesearch=safesearch,
+                              timelimit=timelimit, page=page, **kwargs)
+
+    def post_extract_results(self, results: list[Any]) -> list[Any]:
+        out = []
+        for r in results:
+            href = _clean_result_href(r.href, ("seznam.cz",))
+            if not href:
+                continue
+            r.href = href
+            out.append(r)
+        return out
+
+
+# ─── 神马（m.sm.cn，阿里系自有索引，默认池） ──────────────────────────────────
+class Shenma(BaseSearchEngine):
+    """神马搜索（m.sm.cn/s?q=）：UC/阿里的移动搜索，自有索引，服务端渲染、免密。
+
+    2026-10 实测：中英文都有真结果（直链、无跳转包装，摘要自带来源与日期），
+    但 AliWAF 的 ``_____tmd_____/punish`` 惩罚页在连续 1-2 发后出现 —— 静默
+    3 分钟仍被罚、8 分钟窗口出清。画像与 so360 的校验页同类（按 IP 限流），
+    交给 ``MetaBlockedException(challenge=True)`` 的递增冷却：贡献得了就贡献，
+    贡献不了不陪跑。夸克（quark.sm.cn）与它同一套基础设施，一个家族一个入口，
+    不另开席。结果卡带全套语义锚：``data-sc``（含 pos/ads）、``data-cmp='ti'``
+    （标题）、``qk-source-content``（摘要）；只收带标题链接的卡，百科/结构卡
+    没有标题链接就不算 web 行。分页未核实，只答第 1 页。
+    """
+
+    name = "shenma"
+    provider = "shenma"
+    search_url = "https://m.sm.cn/s"
+    search_method = "GET"
+    items_xpath = ("//div[@id='results']/*[@data-sc]"
+                   "[.//div[@data-cmp='ti']//a[@href]]")
+    elements_xpath: ClassVar[Mapping[str, str]] = {
+        "title": ".//div[@data-cmp='ti']//text()",
+        "href": ".//div[@data-cmp='ti']//a/@href",
+        "body": ".//div[contains(@class,'qk-source-content')]//text()",
+    }
+    headers_update: ClassVar[Mapping[str, str]] = {
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"}
+    _detect_challenge_shell = True
+
+    def __init__(self, proxy: str | None = None, timeout: int | None = None, *,
+                 verify: bool = True) -> None:
+        self.http_client = _PrimpClient(proxy=proxy, timeout=timeout, verify=verify,
+                                        impersonate="chrome", impersonate_os="windows")
+        self.http_client.client.headers_update(self.headers_update)
+        self.results: list[Any] = []
+
+    def _check_challenge(self, html_text: str) -> None:
+        # AliWAF 惩罚页是 ~1KB 的 HTTP 200 跳转脚本（_____tmd_____/punish），
+        # 不是"这个查询没结果"。按校验页记：challenge=True 走递增冷却。
+        # 标记只在页面前 4KB 里找：惩罚页整个就 1KB、标记在前部，而 SERP 正文
+        # 里敌手 SEO 的标题/摘要可能带着同一个串 —— 全文匹配会让一页进索引的
+        # 敌意内容把健康引擎冷却 600s。窗口变宽的代价是真被拦时偶报 "no
+        # results"（较轻的失败方向），不会反向误熔断。
+        if "_____tmd_____" in html_text[:4096]:
+            raise MetaBlockedException(
+                "shenma AliWAF punish page (HTTP 200 challenge)", challenge=True)
+        super()._check_challenge(html_text)
+
+    def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
+                      timelimit: str | None,  # noqa: ARG002 - 未接线：没核实过这家
+                      # 有什么可发的日期参数，不替它编
+                      page: int = 1, **kwargs: str) -> dict[str, Any]:
+        return {"q": query}
+
+    def search(self, query: str, region: str = "us-en",
+               safesearch: str = "moderate", timelimit: str | None = None,
+               page: int = 1, **kwargs: str) -> list[Any] | None:
+        if page > 1:
+            return None  # not fetched, not "empty"
+        return super().search(query, region=region, safesearch=safesearch,
+                              timelimit=timelimit, page=page, **kwargs)
+
+    def post_extract_results(self, results: list[Any]) -> list[Any]:
+        out = []
+        for r in results:
+            href = _clean_result_href(r.href, ("sm.cn",))
+            if not href:
+                continue
+            r.href = href
+            out.append(r)
+        return out
+
+
 _TEXT_ENGINES["so360"] = So360
 _TEXT_ENGINES["sogou"] = Sogou
 _TEXT_ENGINES["yahoo"] = Yahoo
 _TEXT_ENGINES["marginalia"] = Marginalia
+_TEXT_ENGINES["seznam"] = Seznam
+_TEXT_ENGINES["shenma"] = Shenma
 
 # ─── keyed JSON search APIs (Tavily / Bocha) ────────────────────────────────
 # 这些后端不走 BaseSearchEngine 的 HTML 抓取契约：都是 POST JSON + Bearer key。
@@ -1288,6 +1467,9 @@ class KeyedApiEngine:
     endpoint: ClassVar[str]
     auth_codes: ClassVar[tuple] = (401, 403)
     timeout_floor: ClassVar[float] = 20.0
+    # POST JSON 是常态；Brave 官方 API 是 GET + query params，payload 那一格
+    # 对 GET 引擎装的就是 params（骨架里同一份字典，两种线上形状）。
+    http_method: ClassVar[str] = "POST"
 
     AuthError: ClassVar[type] = MetaSearchException
 
@@ -1318,10 +1500,16 @@ class KeyedApiEngine:
             raise self.AuthError(f"{self.name} requires {self.env_var}, which is not set")
         try:
             url, headers, payload = self.build_request(query, max_results, timelimit)
-            resp = httpx.post(
-                url, json=payload, headers=headers,
-                timeout=max(_SEARCH_DEADLINE, self.timeout_floor),
-            )
+            if self.http_method == "GET":
+                resp = httpx.get(
+                    url, params=payload, headers=headers,
+                    timeout=max(_SEARCH_DEADLINE, self.timeout_floor),
+                )
+            else:
+                resp = httpx.post(
+                    url, json=payload, headers=headers,
+                    timeout=max(_SEARCH_DEADLINE, self.timeout_floor),
+                )
             if resp.status_code in self.auth_codes:
                 raise self.AuthError(
                     f"{self.name} rejected the credentials (HTTP {resp.status_code})"
@@ -1411,10 +1599,156 @@ class _Bocha(KeyedApiEngine):
         return out
 
 
+class _Exa(KeyedApiEngine):
+    """Exa（api.exa.ai/search）：面向 agent 的神经/关键词混合索引。
+
+    日期是绝对窗口而不是词表：`startPublishedDate` 收 ISO 8601，所以短码先换算成
+    「现在减去档位宽度」。numResults 保持请求值（1-100；>10 的部分按上游价目另计，
+    dhole 不替用户放大它）。`contents` 不开 —— 正文走 web_read，搜索层只要行。
+    """
+    name = "exa"
+    env_var = "DHOLE_EXA_API_KEY"
+    AuthError = ExaAuthError
+    endpoint = "https://api.exa.ai/search"
+
+    # 短码 -> 窗口宽度（天）。month 取 30、year 取 365：与其它引擎的档位语义对齐
+    # （都是"约莫这一档"），上游按 publishedDate 过滤，不要求整月整年。
+    _WINDOW_DAYS = {"d": 1, "w": 7, "m": 30, "y": 365}
+
+    def build_request(self, query, max_results, timelimit):
+        payload = {"query": query, "numResults": max_results}
+        if timelimit in self._WINDOW_DAYS:
+            start = (datetime.now(timezone.utc)
+                     - timedelta(days=self._WINDOW_DAYS[timelimit]))
+            payload["startPublishedDate"] = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return (
+            self.endpoint,
+            {"Content-Type": "application/json", "x-api-key": self.api_key()},
+            payload,
+        )
+
+    def parse_response(self, data):
+        out = []
+        for item in data.get("results", []):
+            if item.get("title") and item.get("url"):
+                out.append(_ns(item["title"], item["url"], item.get("text", "")))
+        return out
+
+
+class _DeepSeek(KeyedApiEngine):
+    """DeepSeek Search（api.deepseek.com/v1/tools/search）：独立搜索 API，
+    OpenAI 兼容风格的鉴权与错误面（402 余额不足也算"凭据被拒"而不是空结果）。
+
+    日期过滤只有查询算子一途（`after:`/`before:`），改写 query 才能带上它 ——
+    那 128 字符的查询预算是调用方的，dhole 不动它：所以这家**不进**
+    `_DATE_AWARE_ENGINES`，报告按"dhole 没给它发日期过滤"如实说。
+    `need_content` 关着：行只要摘要（summary 是给模型读的那份），正文归 web_read。
+    """
+    name = "deepseek"
+    env_var = "DHOLE_DEEPSEEK_API_KEY"
+    AuthError = DeepSeekAuthError
+    endpoint = "https://api.deepseek.com/v1/tools/search"
+    auth_codes = (401, 402, 403)
+
+    def build_request(self, query, max_results, timelimit):  # noqa: ARG002 - 日期只有
+        # 查询算子一途，见类 docstring：payload 里没有它可发的位置
+        return (
+            self.endpoint,
+            {"Content-Type": "application/json",
+             "Authorization": f"Bearer {self.api_key()}"},
+            {"query": query, "count": max_results, "need_content": False},
+        )
+
+    def parse_response(self, data):
+        out = []
+        for item in data.get("results", []):
+            if item.get("title") and item.get("url"):
+                snippet = item.get("summary") or item.get("snippet", "")
+                out.append(_ns(item["title"], item["url"], snippet))
+        return out
+
+
+class _Firecrawl(KeyedApiEngine):
+    """Firecrawl search（api.firecrawl.dev/v2/search）：web/news 等源的聚合检索。
+
+    只取 `web` 一族行（`sources` 不设即默认 web）：news 行按上游形状走 snippet/date，
+    与 web 行不同构，而 dhole 的合并表只认一种行。`tbs` 是 Google 风格的时间档，
+    短码几乎原样映射（d/w/m/y -> qdr:d/w/m/y）。`scrapeOptions` 不开 —— 抓正文是
+    web_read 的职责，search 层开它等于按行计费买一份本要丢掉的东西。
+    """
+    name = "firecrawl"
+    env_var = "DHOLE_FIRECRAWL_API_KEY"
+    AuthError = FirecrawlAuthError
+    endpoint = "https://api.firecrawl.dev/v2/search"
+
+    _TBS = {"d": "qdr:d", "w": "qdr:w", "m": "qdr:m", "y": "qdr:y"}
+
+    def build_request(self, query, max_results, timelimit):
+        payload = {"query": query, "limit": max_results}
+        if timelimit in self._TBS:
+            payload["tbs"] = self._TBS[timelimit]
+        return (
+            self.endpoint,
+            {"Content-Type": "application/json",
+             "Authorization": f"Bearer {self.api_key()}"},
+            payload,
+        )
+
+    def parse_response(self, data):
+        rows = (data.get("data") or {}).get("web") or []
+        out = []
+        for item in rows:
+            if item.get("title") and item.get("url"):
+                out.append(_ns(item["title"], item["url"],
+                               item.get("description", "")))
+        return out
+
+
+class _BraveApi(KeyedApiEngine):
+    """Brave 官方付费 API（api.search.brave.com/res/v1/web/search）。
+
+    与默认池里那颗免密抓取的 ``brave`` 是**同一套索引的两个入口**：抓取版易被
+    反爬挡，API 版按查询计费、稳定但有额度 —— 所以索引家族同为 ``brave``
+    （同一家索引答两次不算两条共识，yahoo/bing 同理）。鉴权是自定义头
+    ``X-Subscription-Token``，不是 Bearer。``count`` 上限 20，超出的一律钳到 20。
+    """
+    name = "brave_api"
+    env_var = "DHOLE_BRAVE_API_KEY"
+    AuthError = BraveApiAuthError
+    endpoint = "https://api.search.brave.com/res/v1/web/search"
+    http_method = "GET"
+
+    _FRESHNESS = {"d": "pd", "w": "pw", "m": "pm", "y": "py"}
+
+    def build_request(self, query, max_results, timelimit):
+        payload = {"q": query, "count": min(max_results, 20)}
+        if timelimit in self._FRESHNESS:
+            payload["freshness"] = self._FRESHNESS[timelimit]
+        return (
+            self.endpoint,
+            {"Accept": "application/json",
+             "X-Subscription-Token": self.api_key()},
+            payload,
+        )
+
+    def parse_response(self, data):
+        rows = (data.get("web") or {}).get("results") or []
+        out = []
+        for item in rows:
+            if item.get("title") and item.get("url"):
+                out.append(_ns(item["title"], item["url"],
+                               item.get("description", "")))
+        return out
+
+
 # keyed 引擎注册表：engines= 按名字选择；不设 key 时选中会得到可诊断的报错
 KEYED_ENGINES: dict[str, type[KeyedApiEngine]] = {
     _Tavily.name: _Tavily,
     _Bocha.name: _Bocha,
+    _Exa.name: _Exa,
+    _DeepSeek.name: _DeepSeek,
+    _Firecrawl.name: _Firecrawl,
+    _BraveApi.name: _BraveApi,
 }
 
 
@@ -1955,6 +2289,35 @@ def _prefer_lane(order: list, lane: frozenset) -> list:
     return head + tail
 
 
+def _prefer_reliable(order: list, lane: frozenset) -> list:
+    """合并序的第二道稳定分区（可信度分层）：车道段内部，主力引擎确认过的行在前。
+
+    判级表住在 search_engines._PRIORITY_TIERS（唯一的作者，池序也读它）：直连稳定
+    的主力（baidu/bing）层 0，按 IP 限流/常被反爬挡的居中，小众浅索引垫底。行的
+    层级取 `backends` 里**最好**的那一家——一条被 baidu 与 marginalia 同时确认的
+    URL 按主力算（共识行的名头跟着最强的证据走）。与 `_prefer_lane` 同一把尺：
+    层内保持 first-seen 序，一条不丢。**只段内分层**：preferred 车道的行永远在
+    另一侧之前（答非所问语种的伤害比引擎名头大），可信度买不到跨车道的位次。
+    这不是相关性宣称：relevance 由重排器判，这张表只决定平局时谁先被看见。
+    """
+    from dhole_mcp.search_engines import priority_tier  # 惰性：与 language_lane 同一条理由
+
+    def _tiered(rows: list) -> list:
+        if len(rows) < 2:
+            return rows
+        return [e for _t, _i, e in sorted(
+            ((min(priority_tier(b) for b in e["backends"]), i, e)
+             for i, e in enumerate(rows)), key=lambda t: (t[0], t[1]))]
+
+    if not lane:
+        return _tiered(order)
+    head = [e for e in order if lane.intersection(e.get("backends") or ())]
+    tail = [e for e in order if not lane.intersection(e.get("backends") or ())]
+    if not head or not tail:
+        return _tiered(order)
+    return _tiered(head) + _tiered(tail)
+
+
 _SEARCH_TRACKING_PARAMS = {
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
     "fbclid", "gclid", "ref", "ref_src", "source", "_ga", "mc_cid", "mc_eid",
@@ -2116,7 +2479,8 @@ async def metasearch(
         raise MetaSearchException(
             f"No search engines could start{proxy_note}. "
             f"Engine status: {status}. "
-            f"Check DHOLE_SEARCH_PROXY, or pick keyed engines (tavily/bocha) "
+            f"Check DHOLE_SEARCH_PROXY, or pick keyed engines "
+            f"({'/'.join(sorted(KEYED_ENGINES))}) "
             f"via engines= and set their API key env."
         )
 
@@ -2229,8 +2593,24 @@ async def metasearch(
                 _take_answer(pt)
                 finished.add(pt)
                 continue
-            if tasks.get(pt) in ("tavily", "bocha"):
-                continue  # let keyed engines finish (they're paid APIs, don't waste credits)
+            if tasks.get(pt) in KEYED_ENGINES:
+                # keyed 不 cancel 是为了不浪费 credits，但收账必须**有帽**：慢滴/
+                # 挂起的 keyed API 从前在下面的第二段循环里被无超时 await，"整个
+                # 搜索的硬期限"被拖成无限。宽限到它自己那层 socket 帽的墙钟
+                # （start + max(16, timeout_floor)），到点弃收并取消等待 —— 任务
+                # 里 to_thread 的那根线程自己跑完（credits 已花，取消不退钱），
+                # 结果丢弃。在帽内落地的 keyed 答案照常收账，一条不丢。
+                _eng = keyed_engines.get(tasks.get(pt))
+                _cap = max(_SEARCH_DEADLINE,
+                           float(getattr(_eng, "timeout_floor", 0.0) or 0.0))
+                _left = max(0.05, start + _cap - time())
+                _done, _still = await asyncio.wait({pt}, timeout=_left)
+                if pt in _done and not pt.cancelled():
+                    _take_answer(pt)
+                    finished.add(pt)
+                else:
+                    pt.cancel()
+                continue
             pt.cancel()
         for pt in list(pend):
             nm = tasks[pt]
@@ -2264,8 +2644,10 @@ async def metasearch(
 
     # Keyed JSON engines: run ONLY when explicitly selected (each call costs
     # real money), and only when their key is present.
+    keyed_engines: dict[str, Any] = {}
     for b in keyed_ready:
         eng = KEYED_ENGINES[b]()
+        keyed_engines[b] = eng
 
         async def _run_keyed(name=b, _eng=eng):
             q = (query_map or {}).get(name, query)
@@ -2379,6 +2761,8 @@ async def metasearch(
     # 2.4 · 语言车道的最后一步：preferred 侧的行排到前面（稳定分区，一条不丢）。
     # 放在 backends 冻结之后，分区的归属判断读的就是冻结后的那份名单。
     order = _prefer_lane(order, lane_pref)
+    # 可信度分层的第二步（2026-10）：车道段内部再按引擎可信度稳定分层，主力先说话。
+    order = _prefer_reliable(order, lane_pref)
 
     # 17.0: 这里原来有一段"整池连不上就把这个代理冷却掉"的追踪。代理池删掉之后
     # 没有可冷却的对象了，而失败本身已经如实写在 status 里（error:/timeout 每家

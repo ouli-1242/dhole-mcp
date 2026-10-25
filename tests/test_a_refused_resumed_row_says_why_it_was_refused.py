@@ -31,6 +31,8 @@ substance='nav_only'）—— 理由在 substance 那一格里，抄字段时掉
 from __future__ import annotations
 
 import re
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -38,7 +40,55 @@ from dhole_mcp import identity
 from dhole_mcp.crawl import plan_store, plan_token
 from dhole_mcp.server import MasterFetchServer
 
-ROOT = "http://127.0.0.1:8399"
+ROOT = "http://127.0.0.1:0"  # _local_target 每次重绑成自己的临时端口
+
+_PAGE = ("<!doctype html><html><head><title>{title}</title></head><body>"
+         "<nav><a href='/a'>A</a><a href='/b'>B</a></nav><main>{body}</main></body></html>")
+_ROUTES = {
+    "/article": ("Article", "<p>" + "Dhole resume fixture article body. " * 12 + "</p>"),
+    "/shell": ("Shell", ""),
+    "/nav": ("Nav", ""),
+}
+
+
+class _TargetHandler(BaseHTTPRequestHandler):
+    """三张脸对应三档行：/article 有正文（ok）、/shell 与 /nav 是 nav_only 壳
+    （不绿不红的第三档）、其余路径 404（error 桶）。"""
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        if path in _ROUTES:
+            title, body = _ROUTES[path]
+            data = _PAGE.format(title=title, body=body).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        else:
+            self.send_error(404)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _local_target():
+    """真机靶站收进 fixture，suite 自包含。
+
+    从前它假设操作员手动起着一台 8399 靶站——没有它，4 条用例红，还有 2 条
+    **空转绿**（所有行都 error，判据恰好被满足，比红更会骗人）。端口用临时的，
+    不与任何常驻靶站抢 8399。
+    """
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _TargetHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    global ROOT
+    ROOT = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        yield
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 @pytest.fixture(autouse=True)
@@ -115,3 +165,52 @@ async def test_the_verdict_itself_is_unchanged():
     """这一刀只把理由抬上信封，不改判据：/shell 仍是 nav_only（不是 ok）。"""
     r = await _resume([f"{ROOT}/shell"])
     assert r.pages[0].substance == "nav_only", r.pages[0].substance
+
+
+# ─── 4 · 续传支的钳制与礼貌层（2026-10-25 全项目审查 P1）────────────────────
+# _crawl_plan_resume 从前只钳 max_pages：concurrency / max_content_chars_per 裸进
+# web_read、max_total_chars 不钳也不在批内判、负数帽变"立即停 0 行 + 游标原地
+# 打转"。这一组钉住修复后的三件事：负数=不设帽、帽在批内逐行判且游标不前进、
+# 钳位出口进 summary。
+
+
+async def _resume_args(urls, **extra):
+    pid = plan_store(list(urls))
+    return await MasterFetchServer().web_crawl(
+        url=urls[0], resume_token=plan_token(pid, 0),
+        max_pages=len(urls), cache_ttl=0, **extra)
+
+
+@pytest.mark.asyncio
+async def test_a_negative_total_chars_is_no_cap_not_a_spin():
+    """负数 max_total_chars 与爬取路同语义（"这一轮不要帽"）：行照常随行、计划
+    走完，而不是"立即停 0 行、next_resume_token 指向同一 offset"让调用方原地打转。"""
+    urls = [f"{ROOT}/article", f"{ROOT}/shell"]
+    r = await _resume_args(urls, max_total_chars=-1)
+    assert len(r.pages) == 2, (len(r.pages), r.summary)
+    assert not r.truncated_by_total_chars
+    assert not r.next_resume_token, r.next_resume_token
+
+
+@pytest.mark.asyncio
+async def test_the_char_cap_stops_inside_the_batch_and_holds_the_cursor():
+    """帽在批内逐行判（crawl.py:1971 同一形状）：越界行不随行、游标停在第一
+    未随行的行上，summary 点名"付了没返回"的行数与出路。/article 每行 ~450
+    字符、帽 1000、并发 4：第 3 行越过帽（~1350），第 4 行在批内被挡下。"""
+    urls = [f"{ROOT}/article"] * 4
+    r = await _resume_args(urls, max_total_chars=1000, concurrency=4)
+    assert r.truncated_by_total_chars is True, r.summary
+    assert len(r.pages) == 3, (len(r.pages), r.summary)
+    assert "held 1 fetched row" in r.summary, r.summary
+    assert r.next_resume_token, "被帽挡下的行必须可续传"
+    # 游标 = 第一未随行的行：下一发从那里继续（这些行会被重读，而不是丢）。
+    assert r.next_resume_token.endswith(":3"), r.next_resume_token
+
+
+@pytest.mark.asyncio
+async def test_resume_clamps_are_announced_in_the_summary():
+    """concurrency / max_content_chars_per 的钳位要出口（"静默改变"不许存在）。"""
+    urls = [f"{ROOT}/article"]
+    r = await _resume_args(urls, concurrency=99, max_content_chars_per=999999)
+    assert "concurrency clamped" in r.summary, r.summary
+    assert "max_content_chars_per clamped" in r.summary, r.summary

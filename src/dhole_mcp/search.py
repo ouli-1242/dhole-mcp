@@ -2905,13 +2905,13 @@ async def web_search(
 ) -> SearchResponseModel:
     """Local keyless web search (no API key, no account). The default pool
     (baidu, bing, sogou, so360, bing_global, yahoo, yandex, brave, duckduckgo,
-    marginalia - all HTTP, no browser, and all 10 registered engines: there is
+    marginalia - all HTTP, no browser, and all 11 registered engines: there is
     no opt-in tier) is scraped in parallel, merged, deduped, and ranked. A URL
     returned by several **independent index families** is a consensus hit
     (engines_consensus field) and gets a ranking boost - a free authority
-    signal. Note the pool has 10 engines but only 7 families (bing, bing_global,
+    signal. Note the pool has 11 engines but only 8 families (bing, bing_global,
     yahoo and duckduckgo sit on the same Bing index, just different entries),
-    so '7 of 7' is the max.
+    so '8 of 8' is the max.
     Returns URLs + ranking (NOT page content) so the agent runs its own
     web_read over the ones it wants.
 

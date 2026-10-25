@@ -81,6 +81,13 @@ CONTRACTS = [
              must_not_start=("https://r.search.yahoo.com",)),
     Contract("yahoo", "yahoo_variant_b.html", "section.Sr, section.richAlgo",
              must_not_start=("https://r.search.yahoo.com",)),
+    # 捷克自有索引：整站 class 是构建期哈希（随发版轮换），解析锚点是语义 data
+    # 属性。oracle 数的是标题链接本身：一容器一链接，与容器数同值。
+    Contract("seznam", "seznam.html", "a[data-e-a='heading']"),
+    # 阿里系移动索引：结果卡带全套语义锚（data-sc/data-cmp=ti/qk-source-content），
+    # 只收带标题链接的卡（百科/结构卡不算 web 行）。oracle 数标题链接，
+    # 与收紧后的 items_xpath 同数（夹具上 8=8 实测）。
+    Contract("shenma", "shenma.html", "#results div[data-cmp='ti'] a[href]"),
 ]
 
 JS_SHELL = ("<html><body><div id='root'></div>"

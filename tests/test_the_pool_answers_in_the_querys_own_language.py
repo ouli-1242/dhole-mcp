@@ -65,6 +65,54 @@ def test_the_partition_is_a_noop_without_a_lane_or_without_two_sides():
     assert _prefer_lane(order, _CN_LANE) is order      # 只有 preferred 一侧
 
 
+# ─── 2.5 · 可信度分层：车道段之后，段内主力先说话 ──────────────────────
+
+def test_reliable_engines_lead_the_merged_order():
+    """中间地带（不选车道）时整体分层：主力（baidu/bing，层 0）确认过的行排在
+    限流/小众引擎前面，层内保持先后。
+
+    现场形状：marginalia 网络快先落地、baidu 慢半拍 —— 从前合并序由落地时刻决定，
+    小众浅索引的意见排在主力前面。分层后主力的行在前，一条不丢。
+    """
+    from dhole_mcp.search_metasearch import _prefer_reliable
+
+    order = [_row("fast-tail", "marginalia"), _row("slow-main", "baidu"),
+             _row("mid-yandex", "yandex"), _row("mid-sogou", "sogou")]
+    out = _prefer_reliable(order, frozenset())
+    assert [r["href"] for r in out] == ["slow-main", "mid-yandex", "mid-sogou",
+                                        "fast-tail"]
+
+
+def test_a_consensus_row_takes_its_best_backend_tier():
+    """一行被 baidu 与 marginalia 同时确认：按主力算（层 0），不被垫底的那家拖下去。"""
+    from dhole_mcp.search_metasearch import _prefer_reliable
+
+    order = [_row("only-tail", "marginalia"), _row("both", "marginalia", "baidu")]
+    out = _prefer_reliable(order, frozenset())
+    assert [r["href"] for r in out] == ["both", "only-tail"]
+
+
+def test_the_tier_partition_never_crosses_a_lane_boundary():
+    """分层买不到跨车道的位次：preferred 侧的行永远在另一侧之前，段内才分层。"""
+    from dhole_mcp.search_metasearch import _prefer_reliable
+
+    # baidu（层 0）在另一侧；marginalia（层 3）在 preferred 侧 —— 车道赢，不换位。
+    order = [_row("preferred-tail", "marginalia"), _row("other-main", "baidu")]
+    out = _prefer_reliable(order, _EN_LANE)
+    assert [r["href"] for r in out] == ["preferred-tail", "other-main"]
+
+
+def test_the_tier_partition_is_a_noop_when_all_rows_are_equal():
+    from dhole_mcp.search_metasearch import _prefer_reliable
+
+    order = [_row("a", "yandex"), _row("b", "sogou")]  # 同层：逐字原样
+    assert _prefer_reliable(order, frozenset()) == order
+    # 未登记的名字（engines= 点了新引擎）给中间档，不武断抬也不武断压
+    solo = [_row("a", "marginalia"), _row("new", "brand-new-engine")]
+    out = _prefer_reliable(solo, frozenset())
+    assert [r["href"] for r in out] == ["new", "a"]
+
+
 # ─── 3 · 整轮 metasearch：等待与分区都真的发生 ─────────────────────────
 
 class _FakeEngine:

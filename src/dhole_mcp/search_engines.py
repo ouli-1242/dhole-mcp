@@ -53,27 +53,62 @@ def _get_metasearch():
 
 # Public default engine pool (order = rough preference). `engines=None` in
 # web_search uses this via the metasearch.
-# 组合：国内 4（baidu/bing/sogou/so360）+ 国际 6（bing_global/yahoo/yandex/brave/
-# duckduckgo/marginalia），10 家全部入池 —— 17.0 之后没有 opt-in 引擎，注册表就是默认池。
+# 组合：直连主力 2（baidu/bing）+ 稳定国际 3（bing_global/duckduckgo/yahoo）+
+# 常被限流/地区墙 5（brave/sogou/so360/shenma/yandex）+ 小众观察 2（seznam/marginalia），
+# 12 家全部入池 —— 17.0 之后没有 opt-in 引擎，注册表就是默认池。
+# **池序 = 可信度分层**（2026-10）：连通稳定的主力在前，按 IP 限流（sogou/so360
+# 都按 IP 限流、so360 还有校验页、shenma 有 AliWAF 惩罚页）、常被反爬/地区挡
+# （yandex/brave）的居中，小众浅索引垫底。这张序的唯一作者是对应的
+# `_PRIORITY_TIERS`（见下），合并序的稳定分区也读那张表 —— 改判级两处一起动，
+# 别只挪池子。
 # baidu 排首位：国内直连、独立索引（百度自家索引，非 bing/google 代理），实测无反爬。
-# bing 走 cn.bing.com，同样无需 VPN；sogou/so360 是另外两家国内独立索引（服务端渲染）。
+# bing 走 cn.bing.com，同样无需 VPN；sogou/so360/shenma 是另外三家国内独立索引
+# （服务端渲染；shenma 是 UC/阿里的移动索引，夸克同一套基础设施）。
 # bing_global 是 www.bing.com 那套国际索引：与 cn 版结果几乎不重合，所以它补的是**覆盖面**
 # 而不是家族数（家族按底层索引归，两者同属 bing）。yahoo 是 Bing 家族的第二个入口，
 # 补的是可用性（同一套索引，不加家族）。国内直连常需代理，被墙时由引擎冷却
 # （连续 3 次连接失败 → 冷却 10 分钟）兜住，不会每轮陪跑。
+# seznam 是捷克门户的自有索引：新接入的观察位（段末第二），seznam 家族。
 # marginalia 是独立小网索引（英文为主），放在末位：答得上时提供一个独立家族。
-# 共识家族：**10 引擎 / 7 家族**（baidu、bing+bing_global+yahoo+duckduckgo、sogou、
-# so360、yandex、brave、marginalia），渲染出来是 "x of 7"。分母跟着家族走而不是引擎走。
+# 共识家族：**12 引擎 / 9 家族**（baidu、bing+bing_global+yahoo+duckduckgo、sogou、
+# so360、shenma、yandex、brave、seznam、marginalia），渲染出来是 "x of 9"。
+# 分母跟着家族走而不是引擎走。
 # NOTE 双份定义：search_metasearch._DEFAULT_BACKENDS 是同一份列表的 backend 名
 # 版本。合成一处需要 search_engines 在模块顶层 import metasearch 链（primp/lxml），
 # 而这里的惰性导入正是为了避免拖重依赖 —— 所以留两份 + 由
 # tests/test_engine_registry.py::test_default_pool_definitions_agree 钉住一致性。
-DEFAULT_ENGINES = ("baidu", "bing", "sogou", "so360", "bing_global",
-                   "yahoo", "yandex", "brave", "duckduckgo", "marginalia")
+DEFAULT_ENGINES = ("baidu", "bing", "bing_global", "duckduckgo", "yahoo",
+                   "brave", "sogou", "so360", "shenma", "yandex",
+                   "seznam", "marginalia")
+
+# 引擎可信度分层（2026-10）：合并序按它做稳定分区（主力先说话），池序按它排。
+# 判级依据是本仓库自己的实测记录（CHANGELOG / improvement-plan / 各引擎类的
+# docstring），不是引擎的宣传：baidu/bing 直连稳定无反爬；sogou/so360 按 IP
+# 限流（so360 另有 HTTP 200 校验页）；yandex 常按地区跳转；brave 抓取版有反爬墙
+# （它的 keyed 入口 brave_api 反而稳定）；marginalia 小网浅索引；seznam 新接入
+# 未积累观察，先按小众放。keyed 引擎一并分层：点名混跑时同一张表说话。
+# 这**不是相关性宣称**：relevance 由重排器判，这张表只决定平局时谁的意见靠前、
+# 以及一行由多家引擎共同确认时展示谁的名字（backend 取 first-seen，与从前一样）。
+_PRIORITY_TIERS = {
+    "baidu": 0, "bing": 0,                                   # 直连稳定的主力
+    "bing_global": 1, "duckduckgo": 1, "yahoo": 1,           # 稳定的国际入口
+    "tavily": 1, "brave_api": 1, "exa": 1,                   # keyed 稳定入口
+    "sogou": 2, "so360": 2,                                  # 国内独立索引，按 IP 限流
+    "shenma": 2,                                             # 同上：AliWAF 惩罚页按 IP 限流
+    "brave": 2, "yandex": 2,                                 # 国际，常被反爬/地区挡
+    "bocha": 2, "deepseek": 2, "firecrawl": 2,               # keyed 其余
+    "seznam": 3, "marginalia": 3,                            # 小众/浅索引，垫底
+}
+_DEFAULT_TIER = 2  # 未登记的名字（engines= 点了新引擎）从中间起，不武断抬也不武断压
+
+
+def priority_tier(backend: str) -> int:
+    """一家引擎的可信度层级；未登记的名字给中间档。"""
+    return _PRIORITY_TIERS.get(backend, _DEFAULT_TIER)
 
 # 国内裸网可达的引擎（其余要 VPN/代理）。只用于 `dhole -v` 那行说明与文档措辞 ——
 # 网络可达性是环境问题（实测 brave 有时直连也通），所以别把它当抓取策略用。
-_CN_DIRECT = frozenset({"baidu", "bing", "so360", "sogou", "yandex"})
+_CN_DIRECT = frozenset({"baidu", "bing", "so360", "sogou", "shenma", "yandex"})
 
 # Index family per backend (by the underlying index/provider, for consensus).
 # A URL returned by duckduckgo AND bing is ONE family (both Bing's index);
@@ -91,6 +126,15 @@ _INDEX_FAMILY = {
     "yahoo": "bing",
     # marginalia 是自己的爬虫、自己的索引：独立家族。
     "marginalia": "marginalia",
+    # seznam 是捷克门户自有索引（实测全球查询里混着捷克站，自有索引的形状）：
+    # 独立家族 —— 宁可按独立计也不并进 bing（并错会把虚的共识当真的）。
+    "seznam": "seznam",
+    # 神马是 UC/阿里的移动搜索自有索引（夸克 quark.sm.cn 同一套基础设施，
+    # 一个家族一个入口，不另开席）。
+    "shenma": "shenma",
+    # brave_api 是 Brave 官方付费 API；与免密抓取版 brave 同一套索引 ——
+    # 同一 URL 两边都出现时是一个家族答的话，不是两个（yahoo 之于 bing 同理）。
+    "brave_api": "brave",
 }
 
 # 谁的索引答得出中文。与 `_CN_DIRECT` 不是一回事：那张表说的是"这台机器直连拨不拨得通"
@@ -98,7 +142,7 @@ _INDEX_FAMILY = {
 # 模拟 S3 量的正是这两者的差：混合搜索里 baidu 被"凑够数就取消"提前砍掉，两轮中文查询
 # 全 low，手动 `engines=["baidu"]` 一次就出公众号与知乎 —— 而那一刻还在飞的那几家境外
 # 索引，填满的只是英文那一半的配额。
-_CN_INDEX_ENGINES = frozenset({"baidu", "sogou", "so360"})
+_CN_INDEX_ENGINES = frozenset({"baidu", "sogou", "so360", "shenma"})
 
 # 中日韩字符，不是"中文语言检测"：一条混着术语的查询（`PCIe 7.0 规范 发布 128GT/s`）
 # 英文索引也能答一半，但它要的中文那一半只有上面那三家有。判据只问"有没有这些字符"，
@@ -120,9 +164,9 @@ _CJK_RE = re.compile(
 # `PCIe 7.0 规范 发布 128GT/s`）—— 它不选边，行为与从前逐字相同。bing 归中文车道是
 # 因为它是 cn.bing 那套境内索引（`_INDEX_FAMILY` 注释：与 bing_global 几乎不重合），
 # 与「这台机器直连拨不拨得通」的 `_CN_DIRECT` 不是一回事。
-_CN_LANE = frozenset({"baidu", "sogou", "so360", "bing"})
+_CN_LANE = frozenset({"baidu", "sogou", "so360", "shenma", "bing"})
 _EN_LANE = frozenset({"bing_global", "duckduckgo", "yahoo", "brave",
-                      "yandex", "marginalia"})
+                      "yandex", "marginalia", "seznam"})
 
 
 def language_lane(query: str) -> frozenset:
@@ -163,6 +207,9 @@ _DATE_AWARE_ENGINES = frozenset({
     "baidu",                   # gpc=stf=<起>,<止>|stf_type=2（期4.4 接线，判据是差分）
     "bocha",                   # keyed: freshness=oneWeek
     "tavily",                  # keyed: time_range=week
+    "exa",                     # keyed: startPublishedDate=<now-7d>（绝对窗口）
+    "firecrawl",               # keyed: tbs=qdr:w
+    "brave_api",               # keyed: freshness=pw（官方 API 的短码词表）
 })
 
 

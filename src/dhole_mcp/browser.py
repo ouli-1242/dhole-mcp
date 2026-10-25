@@ -549,12 +549,23 @@ class CDPUnreachableError(RuntimeError):
     """
 
 
+class BrowserDepsUnavailableError(RuntimeError):
+    """patchright / playwright 不可导入（HTTP-only 形态是被支持的服务姿态）。
+
+    从前这条以裸 RuntimeError 抛出：auto 升级路在升级前自己查过 deps 折了信封，
+    但 `force_fetcher='stealthy'` 与动作车道让它带着安装建议逃到 call_tool 兜底
+    —— is_error 裸错，[:300] 恰好剪掉安装建议的尾巴。进 TIER_REFUSALS 后，每条
+    车道按同一只 `_refusal_result` 折信封。
+    """
+
+
 #: dhole **设计过的**拒绝（不是故障）。两份读法共用这一份名单：
 #: `server._tier_error_text` 按它决定"全文过闸还是剪到 200"（句子的出路都写在结尾，
 #: 帽子吃掉结尾就等于把话说一半），`server.stealthy_fetch` 按它决定"折成信封还是照旧
 #: 抛出"。加一类拒绝只改这一行 —— 两处各列一遍是第 7、9 批反复踩的那个洞。
 TIER_REFUSALS: tuple = (CDPHostNotAllowedError, CDPNoLoggedInContextError,
-                        CDPUnreachableError, BrowserBusyError)
+                        CDPUnreachableError, BrowserBusyError,
+                        BrowserDepsUnavailableError)
 
 
 def _cdp_unreachable_text(endpoint: str, exc: BaseException) -> str:
@@ -2239,19 +2250,20 @@ class BrowserSession:
             request_headers = {h.lower(): v for h, v in actual_extra_headers.items()}
         referer = _invented_referer(url, actual_google, request_headers)
 
-        # SSRF 守卫的记录本：route handler 往里追加 (host, 是否主文档)，重试之间清空。
-        # 声明在循环外，这样 except 分支读它永远有定义（否则早失败会变成 NameError，
-        # 把真正的错误盖掉）。
-        ssrf_watch: list = []
-        # 围栏的请求边界（D-31b）同一族：`_DocumentFence` 往里追加 (host, 是否主文档)。
-        fence_watch: list = []
         # 驻留的车道：dhole 自己起的那台浏览器、没有名册围栏、不是用户自己的 attach。
         # 这三件事在一次调用的长度里都不会变，所以在循环外量一次 —— 取页与存页读同一把
         # 尺（两处各写一遍的话，一处改口就留下"取了不存"或"存到用户的标签页上"）。
         _pin_lane = bool(pin) and self._allowed_hosts is None and not self._cdp_attached
         for attempt in range(actual_retries):
-            ssrf_watch.clear()
-            fence_watch.clear()
+            # SSRF 守卫与围栏的记录本每发**新建**，不再 clear 循环外共享的那两份：
+            # 上一发悬在 `asyncio.to_thread(url_targets_internal, …)` 里的 route
+            # handler（DNS 慢可到秒级）恢复后先 append 再 abort，那笔迟到账落进
+            # 下一发的账本，`blocked_main` 就会对一个本次从未触碰的主机报
+            # BrowserSSRFBlockedError（fail-closed，但拒绝与证据皆假，且该类不重试）。
+            # fence 侧同族问题有 `_session is None` 守卫；route 账本用每发新 list
+            # 隔离。声明在 try 之前 —— except 分支读它们必须永远有定义。
+            ssrf_watch: list = []
+            fence_watch: list = []
             fence = None
             page = None
             # `keep` 只有一种方式立起来：这一发真的把页面留在了手上（成功路径存槽）。
@@ -2262,8 +2274,15 @@ class BrowserSession:
             _route: Any = None
             _listener: Any = None
             first_response: Any = None
+            # 链内 tab 交接的页签表：只有 page_action 真跑过才有值。初始化必须在
+            # try 之前 —— attach/goto 在那一行之前就能抛（CDP 名册拒绝、SSRF、
+            # 围栏），finally 的页签收尾会先于它执行。
+            _chain_tabs: Optional[List[Any]] = None
+            # 驻留槽的接管旗（finally 读它决定收不收登记表，见 no-keep 分支）。
+            # 与 `_chain_tabs` 同一道理由：在 try 内才绑定的话，绑定前的异常会让
+            # finally 读到一个不存在的名字。
+            slot: Optional[Dict[str, Any]] = None
             try:
-                slot: Optional[Dict[str, Any]] = None
                 if _pin_lane and attempt == 0:
                     slot, _why = await self._pin_take(
                         url, for_actions=bool(actual_page_action))
@@ -2440,7 +2459,6 @@ class BrowserSession:
 
                 # Page action callback
                 orig_page = page
-                _chain_tabs: Optional[List[Any]] = None
                 if actual_page_action:
                     try:
                         result = actual_page_action(page)
@@ -2575,8 +2593,16 @@ class BrowserSession:
                                  "route": _route if page is orig_page else None,
                                  "listener": (_listener
                                               if page is orig_page else None),
-                                 "response": (final_response[0] or first_response)
-                                 if page is orig_page else None,
+                                 # 链切页的槽存**这一页自己**的导航响应（tab.open
+                                 # 开页时挂在 `_dhole_nav_response` 上）：从前硬编码
+                                 # None，下一次复用这条槽 `first_response=None` 而
+                                 # 复用分支不导航 → "Failed to get response" 硬失败，
+                                 # finally 再把整份驻留产业收掉 —— pin 机制要保住的
+                                 # 那页（填了一半的表单/验证码）恰恰死在这一格上。
+                                 "response": ((final_response[0] or first_response)
+                                              if page is orig_page else
+                                              getattr(page, "_dhole_nav_response",
+                                                      None)),
                                  "stamp": time.monotonic()}
                     # 链交回来的页签表（原页之外的每一页）留进登记表，下一次钉住
                     # 的调用 `{"tab": N}` 直达；已关/已死的条目就地摘除。
@@ -2584,8 +2610,31 @@ class BrowserSession:
                     for tp in (_chain_tabs or []):
                         try:
                             if tp is not page and not tp.is_closed():
+                                if tp is orig_page and page is not orig_page:
+                                    # 原页降级进登记表：它身上的本发钩子（route 里
+                                    # 坐着本发的 ssrf_watch）随行摘掉 —— 摘不掉的
+                                    # 钩子在复用那步"按缺席跳过"的摘钩里永远活着，
+                                    # `_install_page_guards` 每轮再装一套，无上界。
+                                    if _route is not None:
+                                        await tp.unroute("**/*", _route)
+                                    if _listener is not None:
+                                        tp.remove_listener("response", _listener)
                                 kept.append({"page": tp,
                                              "stamp": time.monotonic()})
+                        except Exception:
+                            pass
+                    # 覆盖登记表前收掉没进 kept 的旧条目：不带 actions 的 pin 发
+                    # _chain_tabs 为 None → kept 为空，直接覆盖会把上一任的页签变成
+                    # 孤儿页（不在 _pin、不在 _pin_tabs、无人 close，renderer 活到
+                    # 会话关闭）——与 finally 的"提前收"恰成一对，同一份产业两种
+                    # 矛盾下场。活动页在 kept 之外但归新槽，不许收。
+                    _kept_pages = {id(e["page"]) for e in kept}
+                    for _old in self._pin_tabs:
+                        try:
+                            if (id(_old.get("page")) not in _kept_pages
+                                    and _old.get("page") is not page
+                                    and not _old["page"].is_closed()):
+                                await self._pin_close(_old, "superseded")
                         except Exception:
                             pass
                     self._pin_tabs = kept
@@ -2660,9 +2709,15 @@ class BrowserSession:
                                 await tp.close()
                         except Exception:
                             pass
-                    for s in self._pin_tabs:
-                        await self._pin_close(s, "no-keep")
-                    self._pin_tabs = []
+                    # 登记表只由真正接管了它的那一发收：slot 取走 = 接管。一个普通
+                    # fetch（_pin_lane=False）或被 "target" 拒回的 pin 发（slot 归还）
+                    # 收走别人还活着的页签，登记表与活着的槽位就互相矛盾 —— 之后
+                    # 任何 `{"tab": N}` 直达都报 "tab N does not exist"。fresh 车道
+                    # （slot=None 且本发自建）的 _pin_tabs 本就是空的，跳过无代价。
+                    if slot is not None:
+                        for s in self._pin_tabs:
+                            await self._pin_close(s, "no-keep")
+                        self._pin_tabs = []
                 # `keep` 只在这一发真的把页面存进驻留槽时才立起来。除此之外（包括
                 # 失败的那一发、包括调用方没要驻留的每一发）关页与今天逐字一致 ——
                 # 默认行为一寸不动，是这一刀的合同。

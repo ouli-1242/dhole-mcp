@@ -1,0 +1,11 @@
+{
+  "engine": "shenma",
+  "captured_at": "2026-10-25",
+  "captured_from_url": "https://m.sm.cn/s?q=python+asyncio",
+  "query": "python asyncio",
+  "sha256": "d178ed9a1ed28af3",
+  "item_nodes": 11,
+  "usable": 8,
+  "note": "真页面裁剪件：div#results 下带 data-sc 的结果卡（标题 data-cmp=ti、摘要 qk-source-content、直链无跳转包装）；data-sc/data-reco 语义锚原样保留",
+  "scrubbed": "剥掉脚本/样式/svg；data-* 语义属性保留（解析契约靠它们）；URL 里的 key= 凭据参数已替换为 REDACTED（防泄漏守卫钉住的口径）"
+}

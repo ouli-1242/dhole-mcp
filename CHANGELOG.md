@@ -6,6 +6,46 @@
 
 > 自 13.14 起本仓库为个人衍生作品，版本号是自己的序号、不承诺语义化版本，与上游版本不可比；包内的 `__version__` 是唯一权威来源。
 
+## [未发布]
+
+### 新增
+
+- **`web_request(session_id=)`：登录 POST 的 Set-Cookie 从此有落点**（2026-10-25 真实使用模拟的 P2 发现）。jar 的存取本来就在 fetch 层每跳每方法上跑（302 的 Set-Cookie 正是登录最常见的形状），缺的只是这扇门把调用方点名的 jar 递进去——不递，POST /login 成功而后续 `web_read` 永远拿匿名 jar，凡登录靠表单 POST 完成的站点，「不写密码登录流」就断链。现在写请求带着命名 jar 出发、响应 cookie 落回同一只 jar，`session_cookie_names` 是「登录真的粘住了吗」的回执检查；值照旧不出进程。真机验证：POST /login（302+Set-Cookie）→ 同 id 读 /account 拿到已登录页。钉 `tests/test_a_login_post_lands_in_the_jar.py`。
+
+- **`web_act` 动作面再补三颗：`select` / `navigate` / `pdf`**（对标 playwright-mcp 的 `browser_select_option` / `browser_navigate_back` / `browser_pdf_save`，三件此前在这个工具面上**没有一条路**的事）：
+  - `{"select": {selector|index, "option": ...}}` 选 `<select>` 下拉框——`fill` 对它结构性够不到（Playwright 的 fill 只认 input/textarea/contenteditable，对 `<select>` 直接抛错），`click` 打开的是操作系统的原生下拉、没有可点的 DOM。`option` 先按选项的 value 匹配、再按可见标签（快照名单列的是标签，value 常是 "CN"/"+86" 这类机器码，两边都得认）；失配的报错把这一框实际持有的选项清单（前 12 条，label=value）交回，不用再发一次 `read` 去数；列表只在 multiple 的 `<select>` 上合法，单选上具名拒绝；选完等 DOM 安静（级联下拉在 change 之后才填下一级）。回执 `selected` 带 value 与 label 双名。
+  - `{"navigate": "back"|"forward"}` 历史导航——每次调用链首都要重新导航，而重导航拿到的是一张**新**页面（表单清空、滚动归零）；历史回到的是浏览器已经持有的那一页。回程能带回什么由浏览器自己决定，不是承诺：表单值随表单恢复回来（实测），JS 写进的内存态与滚动位置回不回得来看 bfcache（真机两次实测，一次回来一次没回来）。`wait_until=commit`（真机实测：默认档在历史导航上挂满 30s 超时——bfcache 恢复不触发 load；且这条驱动的历史导航**即使真的动了也解析成 None**，所以回执按 URL 交观测事实：导航了交新地址，没动交 `page_unchanged: true`，不替页面作证是哪种「没动」）。
+  - `{"pdf": {"save_to": "....pdf"}}` 把**当前渲染页**打印成 PDF 落盘——截图交像素、它交矢量（文字可选中，`doc_parse` 能读回来）。路径纪律与 `screenshot` 的 `save_to` 同一套（校验期验后缀与受限目录，坏路径不值一次浏览器冷启动）；字节走盘不进 transcript；`print_background` 常开（深色主题与高亮行承载信息）；可见窗口（`headed=true`）与 CDP attach 的真 Chrome 打不了印，拒绝具名。
+  - 连接期 36,384 → 36,412（+28 全在 `web_act.actions` 那颗描述上：名单与必填载荷 `select=option` / `pdf=save_to` 共 +51，两处列表逗号后空格收掉 −23）；细节（双匹配、commit 的理由、print_background）住 `sys_guide(topic='behavior')` 按需付。钉 `tests/test_a_dropdown_history_and_a_printout.py`（37 条）。
+
+- **国内第 5 家免密引擎 `shenma`**：UC/阿里的移动搜索自有索引（m.sm.cn，夸克同一套基础设施，一个家族一个入口），服务端渲染、直链无包装，中英文都有真结果。AliWAF 的 `_____tmd_____/punish` 惩罚页在连续 1-2 发后出现（实测静默 3 分钟仍被罚、8 分钟出清），按校验页同类处理（`MetaBlockedException(challenge=True)` 递增冷却），可信度分层归"按 IP 限流"档（层 2）。裁剪夹具 + 独立 oracle 契约测试落位（`tests/engine_fixtures/shenma.html`）。同批勘测的其余国内候选皆弃：头条搜索是 JS 壳、中国搜索的结果区 JS 加载。
+
+- **第 11 家免密引擎 `seznam`**：捷克门户的自有索引，服务端渲染、零密钥，按「池子=注册表」直接进默认池（索引家族 7→8）。解析锚点用它的语义 `data-*` 属性（整站 class 是构建期哈希，随发版轮换）；全球查询回捷克站与全球站的混合，CJK 查询如实回空。裁剪夹具 + 独立 oracle 的解析契约测试同批落位（`tests/engine_fixtures/seznam.html`）。勘测过其余候选皆弃：mojeek/ecosia/yep 拒 403、swisscows/qwant 是 JS 壳、lycos 握手失败、etools 是混 Google 结果的聚合器（索引家族没法诚实记账）。
+- **引擎可信度分层**：池序与合并序现在按同一张 `_PRIORITY_TIERS` 表说话——连通稳定的主力（`baidu` / `bing`）层 0 在前，按 IP 限流的国内独立索引（`sogou` / `so360`）与常被反爬/地区挡的（`yandex` / 抓取版 `brave`）居中，小众浅索引（`seznam` / `marginalia`）垫底。合并序是**车道段内部的稳定分区**（主力先说话，一条不丢），语言车道的承诺不变：preferred 侧的行仍在另一侧之前，可信度买不到跨车道的位次；relevance 排序仍归重排器，这张表只决定平局时谁先被看见。
+- **keyed 搜索引擎扩员：`exa` / `deepseek` / `firecrawl` / `brave_api` 四颗付费后端加入 `engines=` 可点名集合**（原有 `tavily` / `bocha`，共六颗）。纪律不变：默认池仍只有 11 家免密引擎，keyed 后端只在配了 key（`DHOLE_EXA_API_KEY` / `DHOLE_DEEPSEEK_API_KEY` / `DHOLE_FIRECRAWL_API_KEY` / `DHOLE_BRAVE_API_KEY`）**并且 `engines=` 点名**时才跑，每次调用都是真金白银。各家按自己的词表收参数：exa 的日期是绝对窗口（`startPublishedDate`）、firecrawl 是 `tbs=qdr:*`、deepseek 的线路上没有日期参数位（如实报「未发日期过滤」，不改写查询去拼 `after:` 算子）；deepseek 的 402（余额不足）按鉴权失败报而不是「返回了空」。`brave_api` 是 Brave 官方 API（GET + `X-Subscription-Token`，全家唯一的 GET keyed 后端），与免密抓取版 `brave` 同一套索引——共识按家族算不变，被反爬挡住时它是同一索引的付费稳定入口，`count` 钳到上游上限 20。`web_search` 描述随池子改口（10→11 家 + 一句分层说明，+86 字符，连接期开销 36,291 → 36,377）；`engines=` 上限从 12 抬到 16（推导式 `len(DEFAULT_ENGINES) + len(KEYED_ENGINES)`，描述同步）；锁文件两半由命令重写。注：`exa` 这个名字 16.x 曾作为 keyed 后端存在、17.0 收敛时移除，本次按当前 API 契约重新接入。
+
+### 变更
+
+- **MCP 2026-07-28 无状态新时代受支持并钉上回归**（2026-10-25 核实）：同一份 wire 现在双代际服务——旧客户端照旧走 initialize 握手（2024-11-05…2025-11-25），新代际客户端不握手、不带会话，按 `Mcp-Protocol-Version: 2026-07-28` 头路由直发（`server/discover` 发现 + `_meta` 自述信封 + `Mcp-Method`/`Mcp-Name` 头），`tools/list` 与 `tools/call` 全通。真实使用模拟证实这条路已在跑；此前记录的「dhole 最高 2025-11-25」是旧 SDK 下的过期事实。SDK 下限从 `>=2.0` 收到 `>=2.2`（头路由与 server/discover 自 2.2 起）。反例锁：握手形态的 initialize 要 2026-07-28 时诚实落回 2025-11-25——把它「修」成回显才是谎报。钉 `tests/test_the_wire_speaks_both_eras.py`（4 条）。
+
+### 修复
+
+- **SSRF 守卫按拨号栈的「客户端视图」判主机名**（2026-10-25 全项目对抗性审查的 P1，回环监听器端到端实证）：`http://127%2e0%2e0%2e1/`、全角点 `http://127%E3%80%820%E3%80%821/`、尾点 `http://localhost./`、全角拉丁 `ｍetadata.google.internal` 这类写法在 Python 侧字面量上全部不命中（ipaddress 拒析、记法归一化看不到点、getaddrinfo 失败被容忍），而 primp/reqwest 按 WHATWG 规则 percent-decode + IDNA 点族映射后**解析成 127.0.0.1 真连**——所有门与每跳重定向共用 `validate_url`，全部同洞，云 VM 上 `%2E` 拼法的 IMDS 同样可达。现在守卫把字面量与客户端视图各判一遍（percent-decode + U+3002/U+FF0E/U+FF61 点映射 + 非 ASCII 转 punycode + 剥尾点），任一命中即拒；`target_is_private` / `allow_private_covers` 同步换视图。钉 `tests/test_security.py` 的 `test_rejects_client_view_host_spellings`（8 条）。
+
+- **CDP 名册拒绝不再被 `UnboundLocalError` 顶掉**（e2e 现场抓到）：`_chain_tabs` 在 try 体内才绑定，而 `finally` 无条件读它收页签——attach/goto 阶段的任何设计内拒绝（`cdp_host_not_allowed`、SSRF、围栏）穿过 finally 时被 `cannot access local variable '_chain_tabs'` 替换，agent 拿到的是 Python 内部错误而不是点名旋钮的拒绝。初始化提到 `try` 之前（每发重置，顺带修掉跨 attempt 的陈值残留）。钉 `tests/e2e_cdp_attach_wire_test.py`（手动跑）。
+
+- **驻留会话：链切页后存槽 `response=None`，下一次复用必炸并销毁整份驻留产业**：pin+动作链以页签收尾时，非活动页的槽把 `response` 硬编码 None；下一次同站 pin 复用该槽 `first_response=None` 而复用分支不导航 → `Failed to get response` 硬失败，`finally` 再把要保住的那页（填了一半的表单/验证码）连页签一起收掉。现在链切页的槽存 tab.open 挂在页上的 `_dhole_nav_response`。同批修掉驻留登记表的两种矛盾下场：普通 fetch / 被 "target" 拒回的 pin 发不再收走别人还活着的页签（`finally` 只由真正接管的那一发收），不带 actions 的 pin 发覆盖登记表前先收掉没进新表的旧条目（孤儿 renderer 页）；`ssrf_watch`/`fence_watch` 每发新建（上一发迟到的 route handler 不再污染下一发的账）；原页降级进登记表时摘掉本发钩子（长命驻留页上 handler 逐轮堆叠）。
+
+- **`web_crawl` 续传支补回整套钳制与礼貌层**：`_crawl_plan_resume` 从前只钳 `max_pages`——`concurrency` 裸进批尺寸（最多 40 路）、`max_content_chars_per` 裸进 web_read（200k 上限顶掉 web_crawl 承诺的 20k）、整轮字符帽只在批顶判（极端形状首批可超请求帽 8000 倍）、负数 `max_total_chars` 变成"立即停 0 行、游标原地打转"、也不接 Crawl-delay。现在与爬取路同一套钳（钳位出口进 summary）、批内逐行判帽（越界行不随行、游标停在第一未随行的行、summary 点名）、每发过 Crawl-delay pacing、`deadline_ms_applied`/`budget_overrun_ms` 如实上报。钉 `tests/test_a_refused_resumed_row_says_why_it_was_refused.py`（新增 3 条）。
+
+- **keyed 搜索引擎不再拖穿 16s 硬期限**：`_stop_laggards` 对 keyed 任务从不 cancel 也不设超时地 `await`——挂起/慢滴的 keyed API 把整条搜索拖成无限。现在收账有帽（宽限到该引擎自己的 socket 帽墙钟），帽内落地的答案照常收账，到点弃收并取消等待。
+
+- **命名会话的并发创建竞态**：存在性检查与注册隔着 chromium 确保与浏览器构造两段无锁区——两个并发同 `session_id` 调用一侧撞裸 `already exists`、另一侧把先到者的 entry 覆盖成孤儿进程（census / shutdown 都看不见它）。注册点锁内重查，输家弃掉尚未启动的自建浏览器后按原语义拒绝。
+
+- **三类参数拒绝回到信封里**：`urls` 超过 100 条（从前裸 ValueError 逃到兜底变 `is_error` 裸错，现在逐行信封+出路）；`force_fetcher='stealthy'` / 动作车道在 patchright 缺失时（新增 `BrowserDepsUnavailableError` 进 `TIER_REFUSALS`，每条车道按同一只 `_refusal_result` 折信封，安装建议不再被 [:300] 剪掉）；`DHOLE_TOOLS` 收窄后的恢复建议不再点名被裁的工具（`_knob_here` 同一条法）。
+
+- **`web_research` 的分摊预算 clamp 到 web_read 自己的上限**（2026-10-25 真实使用模拟的 P3 发现）：首源快时下一源拿到 >120000ms 的份额，被 web_read 的 `TIMEOUT_MAX_MS` 校验**整发拒掉**（真机 dict.cn 那一行的 why）——失败行如实进包、包没垮，但这一源本该被钳而不是被拒。预算是"至多等这么多"，减到上限丢的是余量不是语义。钉 `tests/test_a_login_post_lands_in_the_jar.py`。
+
 ## [17.2] - 2026-10-24
 
 `web_act` 补齐日常操作（上传文件、应答弹窗、iframe 寻址、多页签），新增第 13 颗工具 `web_recall`（检索本机已读过的页），`check` 变更报告附 unified diff，`dhole watch run --notify` 让变化弹上桌面；同批修掉七处内容误判。边界不变：零模型、零密钥。

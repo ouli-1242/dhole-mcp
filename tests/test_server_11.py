@@ -10,6 +10,9 @@ import sys
 import threading
 from pathlib import Path
 import pytest
+# fixture_site 住在 evals/：路径插入必须在导入之前（单独收集本文件时没有别的
+# 模块替本进程插过路径，裸导入会炸）。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "evals"))
 import fixture_site as fs
 from dhole_mcp import identity
 from dhole_mcp.server import MasterFetchServer

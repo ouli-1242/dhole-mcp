@@ -807,9 +807,21 @@ class TestTheUnknownNameStillAnswersWithAnEnvelope:
     @pytest.mark.parametrize("retired", sorted(server_mod._REMOVED_TOOL_HINTS))
     def test_a_retired_name_reaches_the_door_it_moved_to(self, retired):
         """旧名那一发把"新家怎么写"整句带到 —— 兜底那一刀剪掉的正是这一截（r338）。"""
-        hint = server_mod._REMOVED_TOOL_HINTS[retired]
+        _home, hint = server_mod._REMOVED_TOOL_HINTS[retired]
         error = _envelope(retired)["error"]
         assert hint in error, f"出路被剪短了:\n  期待: {hint}\n  到场: {error[-220:]}"
+
+    def test_the_hint_names_no_door_the_process_does_not_serve(self, monkeypatch):
+        """新家被裁时 hint 整句收起（_knob_here 同一条法）——建议不许点名一颗
+        照做就撞 ToolRosterRefusal 的工具。名册（Registered names）照旧整份在场，
+        那是另一句话；这里断的是 hint 自己的那句。"""
+        monkeypatch.setattr(server_mod, "_ENABLED_TOOLS",
+                            frozenset({"web_read", "web_search", "sys_state",
+                                       "sys_guide", "web_request", "cred_defaults"}))
+        error = _envelope("web_screenshot")["error"]
+        assert "the capture lives on web_act" not in error, error[-220:]
+        # 对照组：新家在场时 hint 照常整句带上（test_a_retired_name_... 的另一半）。
+        assert "Unknown tool" in error, error[:120]
 
     def test_no_door_runs_for_a_name_that_names_no_door(self, monkeypatch):
         ran = []

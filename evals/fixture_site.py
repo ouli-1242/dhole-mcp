@@ -412,6 +412,34 @@ document.getElementById('slot-b').addEventListener('mouseup', function () {
 </script>
 """)
 
+# select 动作靶（2026-10-25，web_act 三颗新动作的真机验收）：value 与 label 刻意
+# 不同（value=CN / label=中国）——双匹配两条路各要能单独命中；#not-a-select 是
+# 「选到非 <select> 上要说 fill 那扇门」的对照组；#note 输入框给 navigate back
+# 验证用：选完、填完、点去 /about 再 back，这页的选择与字都还在（重导航则会清空）。
+DROPDOWN_PAGE = _page("下拉与历史", """
+<h1>下拉靶</h1>
+<div id="status">IDLE</div>
+<select id="country">
+  <option value="">请选择</option>
+  <option value="CN">中国</option>
+  <option value="JP">日本</option>
+  <option value="+1">美国</option>
+</select>
+<select id="tags" multiple>
+  <option value="r">红</option>
+  <option value="g">绿</option>
+  <option value="b">蓝</option>
+</select>
+<div id="not-a-select">我不是下拉框</div>
+<input id="note" placeholder="填过之后 back 回来还在">
+<a id="to-about" href="/about">去关于页</a>
+<script>
+document.getElementById('country').addEventListener('change', function () {
+  document.getElementById('status').textContent = '选了 ' + this.value;
+});
+</script>
+""")
+
 
 def _feed() -> bytes:
     """6 条带 pubDate（0/1/2/3/5/10 天前）+ 2 条无 pubDate。
@@ -699,6 +727,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._html(CHECKOUT_PAGE)
         if path == "/hoverdrag":
             return self._html(HOVERDRAG_PAGE)
+        if path == "/dropdown":
+            return self._html(DROPDOWN_PAGE)
         if path == "/upload":
             return self._html(UPLOAD_PAGE)
         if path == "/dialog":

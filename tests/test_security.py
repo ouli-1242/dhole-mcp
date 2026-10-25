@@ -56,6 +56,26 @@ class TestSSRFBypassVectors:
         with pytest.raises(SecurityError, match="internal|private"):
             validate_url(url)
 
+    @pytest.mark.parametrize("url", [
+        "http://127%2e0%2e0%2e1:8399/",       # percent-encoded dots -> 127.0.0.1 (WHATWG host parser)
+        "http://127%2E0%2E0%2E1/",            # same, uppercase
+        "http://127%E3%80%820%E3%80%821/",    # ideographic full stop U+3002 -> '.'
+        "http://169%2E254%2E169%2E254/latest/meta-data/",  # IMDS via %2E
+        "http://localhost.:9201/",            # trailing dot -> localhost (WHATWG strips it)
+        "http://metadata.google.internal./",  # trailing dot on a blocked name
+    ])
+    def test_rejects_client_view_host_spellings(self, url):
+        """守卫的判据必须跑在拨号栈的客户端视图上（percent-decode / IDNA 点族映射 /
+        尾点剥离）：这些拼法在 Python 侧的字面量上全部不命中，客户端却解析成内网名
+        真连 —— 回环监听器端到端实测过。"""
+        with pytest.raises(SecurityError, match="internal|private"):
+            validate_url(url)
+
+    def test_rejects_fullwidth_latin_metadata_host(self):
+        # UTS-46 把全角拉丁映射回 ASCII：ｍetadata -> metadata
+        with pytest.raises(SecurityError, match="metadata|internal"):
+            validate_url("http://ｍetadata.google.internal/computeMetadata/v1/")
+
     def test_rejects_localhost_hostname(self):
         with pytest.raises(SecurityError, match="internal"):
             validate_url("http://localhost:3000/api")

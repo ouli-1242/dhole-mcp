@@ -1024,7 +1024,7 @@ PIN_NOTES: dict[str, str] = {
 # asserts _compose_instructions(<every tool>) reproduces it exactly, so the
 # parts below and this literal cannot drift.
 DHOLE_INSTRUCTIONS = (
-    "Dhole is the web toolkit: use it when a built-in fetch/search fails or is blocked, or the page needs JavaScript, PDF/OCR, or multi-URL batching. Bypasses anti-bot walls (Cloudflare), reads PDFs incl. scans (OCR), and searches 10 keyless engines.\n"
+    "Dhole is the web toolkit: use it when a built-in fetch/search fails or is blocked, or the page needs JavaScript, PDF/OCR, or multi-URL batching. Bypasses anti-bot walls (Cloudflare), reads PDFs incl. scans (OCR), and searches 12 keyless engines.\n"
     "Routing:\n"
     "- Content of a URL you already have (page or PDF): web_read. urls=[...] for a known list; focus= cuts tokens on long pages.\n"
     "- Many pages from one site, URLs unknown: web_discover maps it (sitemap=true = one request), web_crawl reads them, web_read(urls=[...]) a known list.\n"
@@ -1056,7 +1056,7 @@ _INSTRUCTIONS_INTRO = (
     "Dhole is the web toolkit: use it when a built-in fetch/search fails or is "
     "blocked, or the page needs JavaScript, PDF/OCR, or multi-URL batching. "
     "Bypasses anti-bot walls (Cloudflare), reads PDFs incl. scans (OCR), and "
-    "searches 10 keyless engines.\n"
+    "searches 12 keyless engines.\n"
 )
 _INSTRUCTIONS_ROUTING: dict[str, str] = {
     "web_read": "- Content of a URL you already have (page or PDF): web_read. "
@@ -2039,6 +2039,9 @@ async def _cdp_attach_gate(cdp_url: Optional[str], confirm: bool = False,
                  endpoint=str(cdp_url)[:120],
                  reason="target host not authorized yet")
     revoke = " or ".join(f"clear=['cdp:host={h}']" for h in missing)
+    # 收窄面上 sys_state 可能不在注册面：撤销的那句只在对的门上出现。
+    _revoke_line = (f"Revoke with sys_state({revoke}) - {_cdp_roster_hint()}."
+                    if "sys_state" in _ENABLED_TOOLS else "")
     return (
         f"cdp_authorization_required: nothing was executed - {why}. Attaching your "
         "real Chrome hands over the authenticated session of EVERY site you are "
@@ -2048,7 +2051,7 @@ async def _cdp_attach_gate(cdp_url: Optional[str], confirm: bool = False,
         "is remembered per host, and later requests to another origin are fenced - "
         "a sub-resource or page script from outside it is blocked, and a page that "
         "redirects out of the fence comes back refused rather than as an answer. "
-        f"Revoke with sys_state({revoke}) - {_cdp_roster_hint()}.",
+        + _revoke_line,
         None,
     )
 
@@ -4659,14 +4662,18 @@ CRED_DEFAULTS_DESC = """Set the identity once instead of passing it on every cal
 
 # A1/A2 下线的工具名：旧调用点撞进来时，拒绝消息直接教到新的家 —— "Unknown tool"
 # 会把人引向"这能力没了"，而真相是能力还在，门换了。
+# A1/A2 下线的工具名：旧调用点撞进来时，拒绝消息直接教到新的家 —— "Unknown tool"
+# 会把人引向"这能力没了"，而真相是能力还在，门换了。值是 (新家的名字, hint 文本)：
+# 消费处只在新家真的在注册面里（_ENABLED_TOOLS）才把 hint 拼上 —— 建议不许点名
+# 一颗调用方传不进来的工具（_knob_here 同一条法）。
 _REMOVED_TOOL_HINTS = {
-    "web_screenshot": "the capture lives on web_act now - pass it in the action "
-                      "chain, e.g. actions=[{\"screenshot\": {\"selector\": \"img\"}}]; "
-                      "full_page / save_to / image_type / quality are keys of that "
-                      "screenshot action",
-    "web_resolve": "web_read follows redirects and reports the landing URL "
-                   "(metadata.meta_refresh covers meta-refresh hops); a bare "
-                   "aliveness probe is web_request(method='HEAD')",
+    "web_screenshot": ("web_act", "the capture lives on web_act now - pass it in the "
+                       "action chain, e.g. actions=[{\"screenshot\": {\"selector\": "
+                       "\"img\"}}]; full_page / save_to / image_type / quality are "
+                       "keys of that screenshot action"),
+    "web_resolve": ("web_read", "web_read follows redirects and reports the landing "
+                    "URL (metadata.meta_refresh covers meta-refresh hops); a bare "
+                    "aliveness probe is web_request(method='HEAD')"),
 }
 
 # ─── 参数面：每个工具接受哪些名字 ──────────────────────────────────
@@ -4731,6 +4738,12 @@ _REQUEST_PARAMS = frozenset({
     "confirm",
     # R3：写请求的答复头（HEAD 探针最常用）。与 web_read 同一颗、同一份手。
     "include_headers",
+    # 2026-10-25 体验模拟（P2）：登录 POST 的 Set-Cookie 要有地方落。jar 的
+    # 存取在 fetch 层、每跳每方法都跑（fetcher.py：302 的 Set-Cookie 正是
+    # 登录最常见的形状），缺的只是这一扇门把调用方点名的 jar 递进去——
+    # 不递，POST 登录成功而后续读永远拿匿名 jar，「不写密码登录流」在
+    # 表单 POST 站点上断链。
+    "session_id",
 })
 
 # 17.0 §4 第 2 行：页面动作那颗门。施工图给它留了 7 个名字，这里落 11 个 —— 多出来
@@ -6404,6 +6417,17 @@ class MasterFetchServer:
 
         entry = _SessionEntry(session=session, session_type="stealthy")
         async with self._sessions_lock:
+            # 注册点锁内重查：存在性检查（上面那把锁）与这里隔着 chromium 确保
+            # （首用可含分钟级下载）与浏览器构造两段无锁区 —— 两个并发同 id 调用，
+            # 从前一侧撞 "already exists"、另一侧裸赋值把先到者的 entry 覆盖成
+            # 孤儿进程（census / idle monitor / shutdown 都看不见它）。输家的自建
+            # 浏览器尚未 start，弃掉零成本；语义与串行拒绝一致（并发双方参数可能
+            # 不同，静默复用会无视后到者那份）。
+            if session_id in self._sessions:
+                raise ValueError(
+                    f"Session '{session_id}' already exists. Use a different ID or close "
+                    f"the existing one."
+                )
             self._sessions[session_id] = entry
         try:
             await session.start()
@@ -6879,9 +6903,10 @@ class MasterFetchServer:
         validate_proxy(proxy)
 
         if not _browser_deps_available():
-            raise RuntimeError(
-                f"Stealthy fetch requires browser deps which are unavailable: "
-                f"{_browser_import_error or 'patchright not importable'}. "
+            from dhole_mcp.browser import BrowserDepsUnavailableError
+            raise BrowserDepsUnavailableError(
+                f"browser_unavailable: Stealthy fetch requires browser deps which "
+                f"are unavailable: {_browser_import_error or 'patchright not importable'}. "
                 + _install.browser_install_advice()
             )
 
@@ -6987,9 +7012,10 @@ class MasterFetchServer:
                          allowed_hosts=sorted(cdp_allowed) if cdp_allowed else ["*"])
 
         if not _browser_deps_available():
-            raise RuntimeError(
-                f"Stealthy fetch requires browser deps which are unavailable: "
-                f"{_browser_import_error or 'patchright not importable'}. "
+            from dhole_mcp.browser import BrowserDepsUnavailableError
+            raise BrowserDepsUnavailableError(
+                f"browser_unavailable: Stealthy fetch requires browser deps which "
+                f"are unavailable: {_browser_import_error or 'patchright not importable'}. "
                 + _install.browser_install_advice()
             )
 
@@ -7138,6 +7164,9 @@ class MasterFetchServer:
         # 够不着"从来不是设计，只是漏。同 web_read 一条路、同一份拒绝名单。
         headers: Optional[Dict[str, Any]] = None,
         include_headers: Optional[bool] = None,
+        # 2026-10-25（P2）：登录 POST 的落点。名字进 jar，值永远不出进程——
+        # 与 web_read 同一颗、同一个管家的纪律。
+        session_id: Optional[str] = None,
     ) -> ResponseModel:
         """Send one NON-GET request and read back what the server answered.
 
@@ -7169,6 +7198,13 @@ class MasterFetchServer:
         happen and the answer says what did - exactly once. HEAD is here rather
         than in web_read because it is a request shape, not a content read:
         status + declared size + type only.
+
+        `session_id` (2026-10-25, the P2 finding from live simulation) is the
+        one place a login POST's answer can go: the jar stores every hop's
+        Set-Cookie (a login that redirects is the usual shape) and the next
+        web_read with the same id rides it. It is a jar NAME, not a credential
+        - cred_defaults stays the door for static auth/cookies, and the values
+        never leave the process.
         """
         verb = _clean_method(method)
         if not (url or "").strip():
@@ -7184,12 +7220,18 @@ class MasterFetchServer:
                 next_action=(f"{_nothing_went_out()} Name the verb, or read the page with "
                              "web_read(url=...)."))
         if verb == "GET":
+            # 建议不点名被裁的门（_knob_here 同一条法）：web_read 不在注册面时
+            # 不指一条照做就撞 ToolRosterRefusal 的路。
+            _read_door = ("Call web_read(url=...) for a GET: it is the door with "
+                          "the cache, the anti-bot escalation ladder and the archive "
+                          "fallback."
+                          if "web_read" in _ENABLED_TOOLS else
+                          "web_read is not registered in this process (DHOLE_TOOLS) "
+                          "- GET has no read door here.")
             return _invalid_request_result(
                 url, "method=GET is a read, not a request - web_request takes "
                      "POST / PUT / PATCH / DELETE / HEAD",
-                next_action=(f"{_nothing_went_out()} Call web_read(url=...) for a GET: it is "
-                             "the door with the cache, the anti-bot escalation ladder and "
-                             "the archive fallback."))
+                next_action=f"{_nothing_went_out()} {_read_door}")
         if verb in _FETCH_METHODS - {"GET", "HEAD"}:
             # 先问"这一发发得出去吗"，再问人"要不要发"（评审 R02-118 · 真机
             # `r205_confirm_gate_order.json` · 4 种写 method × 5 族 URL 全 20 格都是
@@ -7239,6 +7281,7 @@ class MasterFetchServer:
             extraction_type=extraction_type,
             timeout=timeout, cache_ttl=0, headers=headers,
             include_headers=bool(include_headers),
+            session_id=session_id,
         )
 
     async def web_act(
@@ -8944,8 +8987,18 @@ class MasterFetchServer:
         (URL list + unified schema → structured results list).
         """
         if len(urls) > MAX_BULK_URLS:
-            raise ValueError(
-                f"Too many URLs ({len(urls)}). Maximum is {MAX_BULK_URLS} per call."
+            # 与同分支隔壁的两个拒绝（url+urls / bulk+actions）同一封信封：裸
+            # ValueError 会逃到 call_tool 兜底变 is_error 裸错（[:300] 还剪下文），
+            # 而逐行信封把每一行都交代清楚。wire schema 的 urls 没有 maxItems，
+            # 校验 schema 的宿主拦不住超限的合法调用，这扇必须自己接。
+            # （`invalid_request:` 前缀由 _invalid_request_result 自己加，不重复。）
+            _too_many = f"Too many URLs ({len(urls)}). Maximum is {MAX_BULK_URLS} per call."
+            return BulkResponseModel(
+                results=[_invalid_request_result(
+                    u, _too_many,
+                    next_action=("Split the list into calls of at most "
+                                 f"{MAX_BULK_URLS} urls= each.")) for u in urls],
+                total=len(urls), successful=0,
             )
 
         # 一批共用**一次**返回预算，而这一族从前没人算过这笔账：9 个 URL 各拿满默认
@@ -9274,22 +9327,28 @@ class MasterFetchServer:
                 # 而这台 profile 上已经有一台在跑）。走信封，与闸门拒答同一只。
                 return _refusal_result(url, _tier_error_text(exc))
             _login_probe: dict = {}
-            result = await self.stealthy_fetch(
-                url, extraction_type=extraction_type,
-                css_selector=css_selector,
-                headless=headless,
-                real_chrome=real_chrome, proxy=proxy,
-                timeout=timeout,
-                disable_resources=disable_resources,
-                solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
-                hide_canvas=hide_canvas, extra_headers=extra_headers,
-                useragent=useragent, cookies=_browser_cookies(cookies, url),
-                session_id=ssid,
-                page_action=page_action,
-                probe_out=_login_probe if check_login else None,
-                pin=_pin_asked, pin_out=_pin_out,
-                cdp_url=cdp_url,
-            )
+            try:
+                result = await self.stealthy_fetch(
+                    url, extraction_type=extraction_type,
+                    css_selector=css_selector,
+                    headless=headless,
+                    real_chrome=real_chrome, proxy=proxy,
+                    timeout=timeout,
+                    disable_resources=disable_resources,
+                    solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
+                    hide_canvas=hide_canvas, extra_headers=extra_headers,
+                    useragent=useragent, cookies=_browser_cookies(cookies, url),
+                    session_id=ssid,
+                    page_action=page_action,
+                    probe_out=_login_probe if check_login else None,
+                    pin=_pin_asked, pin_out=_pin_out,
+                    cdp_url=cdp_url,
+                )
+            except _tier_refusals() as exc:
+                # deps 缺失（HTTP-only 形态被支持）在这条车道同样折信封：auto 路
+                # 在升级前自己查过（browser_unavailable），这里从前让 RuntimeError
+                # 带着安装建议逃到兜底 —— [:300] 剪掉的恰是建议的尾巴。
+                return _refusal_result(url, _tier_error_text(exc))
             if (result.error or "").startswith("cdp_"):
                 # 批次 9：这条路没走成，就不能说走了。从前一条被围栏掐掉的行也带着
                 # attach 的成功字样，读者据此以为登录态到场了。
@@ -10500,13 +10559,20 @@ class MasterFetchServer:
         if changed:
             parts.append(f"stored {', '.join(sorted(changed))}"
                          + (f" for {', '.join(hosts)}" if hosts else ""))
+        # 恢复建议按注册面取词（_knob_here 同一条法）：web_read / sys_state 被裁时
+        # 不点名照做就撞 ToolRosterRefusal 的路。
+        _next_parts = []
+        if "web_read" in _ENABLED_TOOLS:
+            _next_parts.append("web_read echoes identity_applied on every later "
+                               "call that uses one of these")
+        if "sys_state" in _ENABLED_TOOLS:
+            _next_parts.append("sys_state(clear=['cred_defaults']) forgets the "
+                               "whole store")
         return CredDefaultsModel(
             message=("; ".join(parts) + f". {len(rows)} key(s) in force."
                      if parts else f"{len(rows)} key(s) in force."),
             rows=rows, changed=changed, forgotten=forgotten,
-            next_action=("web_read echoes identity_applied on every later call that "
-                         "uses one of these; sys_state(clear=['cred_defaults']) "
-                         "forgets the whole store."))
+            next_action=("; ".join(_next_parts) + "." if _next_parts else ""))
 
     def _cred_show(self) -> CredDefaultsModel:
         rows = identity.all_rows()
@@ -10949,9 +11015,15 @@ class MasterFetchServer:
                            "timeout= or web_read this URL yourself"})
                 continue
             try:
+                # P3（2026-10-25 真机模拟）：分摊把剩余预算整份交给下一源
+                # （首源快时可达 140000ms），会越过 web_read 自己那道
+                # `security.TIMEOUT_MAX_MS` 的校验被**整发拒掉**——dict.cn
+                # 那一行的 why 就是它。这里的数是"至多等这么多"，减到上限
+                # 丢的是余量不是语义，所以 clamp 而不是让下游拒绝。
+                from dhole_mcp.security import TIMEOUT_MAX_MS
                 page = await self.web_read(
                     url=row.url, focus=q, max_content_chars=int(per_source_chars),
-                    timeout=max(5_000, share_ms))
+                    timeout=max(5_000, min(share_ms, TIMEOUT_MAX_MS)))
             except Exception as exc:  # noqa: BLE001 - 一个源的崩溃不是整包的答案
                 failed.append({"n": n, "url": row.url,
                                "why": redact_api_key(str(exc)[:200])})
@@ -11654,8 +11726,11 @@ class MasterFetchServer:
         返回，一个失败页不是一次失败调用。
         """
         from dhole_mcp.crawl import (CrawlPage, MAX_PAGES_CEILING, plan_load,
-                                     plan_parse, plan_token)
+                                     plan_parse, plan_token,
+                                     PER_PAGE_CHARS_CEILING, MIN_TOTAL_CHARS,
+                                     MAX_TOTAL_CHARS_CEILING)
         from dhole_mcp.crawl import CrawlResponseModel as _CRM
+        from dhole_mcp.context import _clamp_note
         t0 = now()
 
         deadline_t = t0 + (deadline_ms / 1000.0)
@@ -11684,7 +11759,8 @@ class MasterFetchServer:
             # 这一处也是同一位作者：申报搬到 `next_action` 行首，`error` 只留理由。
             return _CRM(start_url=url, pages=[], error=(
                 f"invalid_request: resume_token: plan {plan_id} is unknown or expired "
-                "(plans live 1h server-side)."),
+                "(plans live 1h server-side, and the store keeps the 32 most "
+                "recent plans - an older one can be evicted early)."),
                 next_action=(f"{_nothing_went_out('web_crawl')} Re-run web_discover "
                              "(sitemap=true = one request) and start a fresh plan."),
                 summary="plan expired or unknown")
@@ -11720,21 +11796,75 @@ class MasterFetchServer:
             # 语义没人要 —— 所以具名拒绝，并把能兑现它们的那条路点名。
             _msg = (f"invalid_request: {' / '.join(_inert)} scope a map while it is "
                     "walked, and fetching a plan walks nothing. Nothing was fetched.")
+            # 建议不点名被裁的门（_knob_here 同一条法）：web_discover / web_read
+            # 不在注册面时，"取过滤子集"那句照做就撞 ToolRosterRefusal。
+            _subset = ("For a filtered subset of a plan: web_discover with "
+                       f"resume_token='{plan_token(plan_id, offset)}' and these "
+                       "same keys returns the map ROWS they keep (it walks no "
+                       "network), then web_read(urls=[...]) reads exactly those. "
+                       if ("web_discover" in _ENABLED_TOOLS
+                           and "web_read" in _ENABLED_TOOLS) else "")
             return _CRM(start_url=url, pages=[], error=_msg,
                         summary=f"invalid request · {_summary_label(_msg)}",
                         next_action=(
-                            "For a filtered subset of a plan: web_discover with "
-                            f"resume_token='{plan_token(plan_id, offset)}' and these "
-                            "same keys returns the map ROWS they keep (it walks no "
-                            "network), then web_read(urls=[...]) reads exactly those. "
-                            "To narrow what gets FETCHED, drop these keys and page the "
-                            "plan with max_pages."))
+                            _subset
+                            + "To narrow what gets FETCHED, drop these keys and page "
+                              "the plan with max_pages."))
 
         max_pages = max(1, min(int(max_pages), MAX_PAGES_CEILING))
+        # 与 crawl() 入口同一套钳（crawl.py 的 1702-1737 段）：这条续传支从前只钳
+        # max_pages —— concurrency 裸进批尺寸（最多 40 路）、max_content_chars_per
+        # 裸进 web_read（web_read 的 200k 上限顶掉 web_crawl 承诺的 20k）、
+        # max_total_chars 不钳也不在批内判，极端形状首批可超请求帽数千倍。负数与 0
+        # 沿用爬取路的语义："这一轮不要帽"，而不是"立即停 0 行、游标原地打转"。
+        _asked = (concurrency, max_content_chars_per)
+        concurrency = max(1, min(int(concurrency), 5))
+        max_content_chars_per = max(500, min(int(max_content_chars_per),
+                                             PER_PAGE_CHARS_CEILING))
+        _asked_total = int(max_total_chars or 0)
+        if _asked_total <= 0:
+            max_total_chars = 0
+        else:
+            max_total_chars = max(MIN_TOTAL_CHARS,
+                                  min(_asked_total, MAX_TOTAL_CHARS_CEILING))
+        _clamp_notes = [note for note in (
+            _clamp_note("concurrency", _asked[0], concurrency, lo=1, hi=5),
+            _clamp_note("max_content_chars_per", _asked[1], max_content_chars_per,
+                        lo=500, hi=PER_PAGE_CHARS_CEILING),
+            _clamp_note("max_total_chars", _asked_total, max_total_chars,
+                        lo=MIN_TOTAL_CHARS, hi=MAX_TOTAL_CHARS_CEILING)
+            if _asked_total > 0 else "",
+        ) if note]
         rows: list = []
+        dropped_after_answering = 0
         total_chars = 0
         truncated_pages = truncated_chars = truncated_time = False
         idx = 0  # index into `remaining`
+
+        # Crawl-delay 的每发账本（crawl.py:1840-1867 同款）：interval 按页查 robots
+        # 缓存，next_slot 按主机记下一发最早时刻。
+        pace_lock = asyncio.Lock()
+        next_slot: dict = {}
+
+        async def _resume_pace(u: str) -> None:
+            if ignore_robots:
+                return
+            try:
+                from dhole_mcp.robots import cached_crawl_delay
+                interval = cached_crawl_delay(u) or 0.0
+            except Exception:
+                return
+            if interval <= 0:
+                return
+            host = (urlparse(u).hostname or "?").lower()
+            loop = asyncio.get_running_loop()
+            async with pace_lock:
+                earliest = max(next_slot.get(host, 0.0), loop.time())
+                next_slot[host] = earliest + interval
+            wait_s = earliest - loop.time()
+            if wait_s > 0:
+                await asyncio.sleep(wait_s)
+
         while idx < len(remaining):
             # 与 web_crawl 同一形状：批边界报一次，等待的一方看得见"在走"。
             # `total` 用 max_pages 而不是 len(remaining)：前者是这次调用被允诺的上限，
@@ -11756,6 +11886,10 @@ class MasterFetchServer:
             # 留给下一次续传；确定性 offset 只数真抓过的行）。
             batch = remaining[idx:idx + max(1, min(concurrency,
                                                    max_pages - len(rows)))]
+            # Crawl-delay 与爬取路同一笔账（crawl.py:1840-1867 的同款局部态）：计划
+            # 几乎总是同一台主机，没有 pacing 的并发批会把爬取路守住的礼貌破掉。
+            for _u in batch:
+                await _resume_pace(_u)
             responses = await asyncio.gather(*[
                 self.web_read(
                     url=u, extraction_type="markdown",
@@ -11764,13 +11898,20 @@ class MasterFetchServer:
                     cache_ttl=cache_ttl, force_fetcher=force_fetcher,
                     timeout=timeout, ignore_robots=ignore_robots,
                 ) for u in batch], return_exceptions=True)
-            for u, resp in zip(batch, responses):
+            for _bi, (u, resp) in enumerate(zip(batch, responses)):
                 if isinstance(resp, BaseException):
                     rows.append(CrawlPage(url=u, status=-1, content_ok=False,
                                           content=[], content_chars=0,
                                           error=redact_api_key(str(resp)[:200])))
                     idx += 1
                     continue
+                # 整轮的字符帽在批内也逐行判（crawl.py:1971 同一形状）：一次 while
+                # 检查最坏多吐一整批。被挡下的行已付了请求，但游标不前进 —— 抬帽后
+                # 续传会读到它们，summary 点名。
+                if max_total_chars and total_chars >= max_total_chars:
+                    truncated_chars = True
+                    dropped_after_answering = len(batch) - _bi
+                    break
                 content = list(resp.content or [])
                 chars = sum(len(c) for c in content)
                 rows.append(CrawlPage(
@@ -11807,6 +11948,14 @@ class MasterFetchServer:
         resume_counts = (f"{ok_rows} ok, {err_rows} with error"
                          + (f", {silent_rows} refused without an error "
                             f"(read that row's `substance`)" if silent_rows else ""))
+        _summary = (f"plan resumed at {offset + 1}-{next_offset} of {len(urls)}: "
+                    f"{resume_counts}")
+        if dropped_after_answering:
+            _summary += (f"; the char budget held {dropped_after_answering} fetched "
+                         "row(s) (they were not counted into the cursor: raise "
+                         "max_total_chars and resume to read them)")
+        if _clamp_notes:
+            _summary += " · " + " · ".join(_clamp_notes)
         result = _CRM(
             start_url=url, pages=rows,
             pages_crawled=len(rows),
@@ -11814,9 +11963,11 @@ class MasterFetchServer:
             truncated_by_max_pages=truncated_pages,
             truncated_by_time=truncated_time,
             truncated_by_total_chars=truncated_chars,
+            deadline_ms_applied=int(deadline_ms) if deadline_ms and deadline_ms > 0 else 0,
+            budget_overrun_ms=max(0, int((now() - t0) * 1000.0) - int(deadline_ms))
+            if deadline_ms and deadline_ms > 0 else 0,
             duration_ms=(now() - t0) * 1000.0,
-            summary=(f"plan resumed at {offset + 1}-{next_offset} of {len(urls)}: "
-                     f"{resume_counts}"),
+            summary=_summary,
         )
         if not done:
             result.next_resume_token = plan_token(plan_id, next_offset)
@@ -11909,26 +12060,37 @@ class MasterFetchServer:
         )
         if left:
             result.next_resume_token = plan_token(plan_id, next_offset)
+            # 续图建议按注册面取词：web_read / web_crawl 被裁时只留自己那一句。
+            _picks = ("web_read(urls=[...]) takes any subset of the rows already "
+                      "in hand, and the same resume_token on web_crawl fetches "
+                      "their content. "
+                      if ("web_read" in _ENABLED_TOOLS
+                          and "web_crawl" in _ENABLED_TOOLS) else "")
             result.next_action = (
                 f"{left} map row(s) left: web_discover(url='{url}', "
                 f"resume_token='{result.next_resume_token}') returns rows "
                 f"{next_offset + 1}-{len(urls)} without re-fetching the sitemap. "
-                "web_read(urls=[...]) takes any subset of the rows already in hand, "
-                "and the same resume_token on web_crawl fetches their content. "
+                + _picks +
                 "max_pages does not bound a map page - it bounds page fetches, and "
                 "this page fetched none.")
         else:
             # "exhausted" 说的必须是**地图**走完了还是**筛选后没剩**——两句话共用一个
             # 结尾，调用方就会把"你的词不在这段里"读成"这个站就这么多页"。
+            _fetch_picks = ""
+            if "web_read" in _ENABLED_TOOLS:
+                _fetch_picks += "web_read(urls=[...]) the picks"
+                if "web_crawl" in _ENABLED_TOOLS:
+                    _fetch_picks += (f", or web_crawl(url='{url}', "
+                                     f"resume_token='{plan_token(plan_id, 0)}') to "
+                                     "fetch every planned page's content")
+                _fetch_picks += "."
             result.next_action = (
                 f"Map exhausted: all {len(urls)} row(s) have shipped across these "
                 f"pages" + (f", and the filters you passed kept none of the "
                             f"{idx} row(s) in this range"
                             if (_terms or path_include or path_exclude) and not rows
-                            else "") + f". web_read(urls=[...]) the picks, or "
-                f"web_crawl(url='{url}', "
-                f"resume_token='{plan_token(plan_id, 0)}') to fetch every planned "
-                "page's content.")
+                            else "")
+                + (f" {_fetch_picks}" if _fetch_picks else "."))
         return result
 
     # ─── Serve ─────────────────────────────────────────────────────
@@ -12006,10 +12168,11 @@ class MasterFetchServer:
     # 名单与 `actions._VALID_KEYS`、必填键与 `_validate_actions` 的报错文本，由
     # tests/test_an_agent_that_only_reads_the_wire_can_name_an_actions_payload.py 对齐。
     _ACTIONS_DESC = (
-        "ONE action key per object: [{scroll:3},{wait:1000}]. Keys: click, fill, read, "
-        "press, hover, drag, wait, scroll, wait_selector, snapshot, screenshot, submit, "
-        "upload, dialog, tab; fill=text, press=key, drag=to, "
-        "upload=files, dialog=answer; tab (new/N/close).")
+        "ONE action key per object: [{scroll:3},{wait:1000}]. Keys: "
+        "click,fill,read,press,hover,drag,wait,scroll,wait_selector,snapshot,"
+        "screenshot,submit,upload,dialog,tab,select,navigate,pdf; "
+        "fill=text,press=key,drag=to,upload=files,dialog=answer,select=option,"
+        "pdf=save_to; tab (new/N/close).")
     _TOOL_DEFS: list[dict] = [
         {
             "name": "web_read",
@@ -12130,6 +12293,10 @@ class MasterFetchServer:
                     # （一次写不带升档，也不带缓存，所以"赢在哪一层"只有一层）。
                     "headers": {"type": "object", "additionalProperties": {"type": ["string", "null"]}, "description": "Headers to send, winning key by key over what dhole synthesizes. The same three families are refused here by name and for the same reason - see web_read.headers."},
                     "include_headers": {"type": "boolean", "description": "Also return this answer's status line and headers in metadata (default false). Best on HEAD probes: Content-Length / Content-Type / cache headers, no body. Set-Cookie returns cookie NAMES only."},
+                    # 2026-10-25（P2 体验模拟）：登录 POST 的落点。这颗描述只说
+                    # 路由级的事实（jar 名、值不出境）；302 中转那一跳也存 cookie
+                    # 之类的细节住 tools.md 的 web_request 一节。
+                    "session_id": {"type": "string", "description": "Carry and store cookies under this session name (1-64: letters, digits, . _ -): a login POST's Set-Cookie lands in the jar, and the next web_read with the same id rides it. Values never come back."},
                 },
             },
             # 写操作默认不是只读；重复调用不保证同一个答案，所以不是幂等。
@@ -12188,7 +12355,7 @@ class MasterFetchServer:
         },
         {
             "name": "web_search",
-            "description": "Keyless search, all 10 default web engines: baidu,bing,sogou,so360,bing_global,yahoo,yandex,brave,duckduckgo,marginalia. Returns ranked URLs + relevance, not page content; never answer from snippets only.\n- fetch_content=true auto-fetches 3; else web_read high fetch_relevance hits with focus=. A URL you already have: web_read it, don't search.\n- sources= adds keyless vertical pools; sort='newest' = stated publish-day order.\n- relevance_score 0-1; fetch_relevance high/med/low: fetch high first. engines_consensus counts index FAMILIES (low = maybe degraded pool; see consensus_basis). Engine matrix + source details: sys_guide(topic='behavior', section='web_search').",
+            "description": "Keyless search, all 12 default web engines: baidu,bing,bing_global,duckduckgo,yahoo,brave,sogou,so360,shenma,yandex,seznam,marginalia (pool order = reliability tier: stable mains first, rate-limited/obscure last). Returns ranked URLs + relevance, not page content; never answer from snippets only.\n- fetch_content=true auto-fetches 3; else web_read high fetch_relevance hits with focus=. A URL you already have: web_read it, don't search.\n- sources= adds keyless vertical pools; sort='newest' = stated publish-day order.\n- relevance_score 0-1; fetch_relevance high/med/low: fetch high first. engines_consensus counts index FAMILIES (low = maybe degraded pool; see consensus_basis). Engine matrix + source details: sys_guide(topic='behavior', section='web_search').",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -12199,7 +12366,7 @@ class MasterFetchServer:
                     "max_results": {"type": "integer", "description": "Results to return (1-50, default 6)."},
                     "page": {"type": "integer", "description": "Result page, 0-10 (default 0)."},
                     "cache_ttl": {"type": "integer", "description": "Cache seconds (default 300). 0 = force fresh."},
-                    "engines": {"type": "array", "items": {"type": "string"}, "description": "Narrow the pool, max 12 names: the 10 above plus keyed engines that need a key (sys_guide(topic='behavior', section='web_search'))."},
+                    "engines": {"type": "array", "items": {"type": "string"}, "description": "Narrow the pool, max 18 names: the 12 above plus keyed engines that need a key (sys_guide(topic='behavior', section='web_search'))."},
                     "sources": {"type": "array", "items": {"type": "string"}, "description": "Pools (default ['web']): 'web','news','academic','qa','code','community'. Verticals are keyless; omitting 'web' searches only them and refuses engines=. Their rows never add to engines_consensus."},
                     "sort": {"type": "string", "description": "'relevance' (default) or 'newest': newest orders rows with a stated publish day newest-first; undated rows stay after."},
                     "site": {"type": "string", "description": "Restrict to one domain."},
@@ -12606,7 +12773,9 @@ class MasterFetchServer:
         from mcp.types import TextContent
 
         if name not in _TOP_LEVEL_ARGS:
-            hint = _REMOVED_TOOL_HINTS.get(name, "")
+            _hint_entry = _REMOVED_TOOL_HINTS.get(name)
+            hint = (_hint_entry[1]
+                    if _hint_entry and _hint_entry[0] in _ENABLED_TOOLS else "")
             # 这一族走信封，不交给 transport 兜底（评审 R02-130 的 unknown-tool 半边 ·
             # F123 · 现场 r337/r338）：兜底交的是裸 `{"error": str(e)[:300]}`，而 300 那一刀
             # 在旧名带 hint 的那一发上剪掉的正是"新家怎么写"那一段（`web_resolve` 355 字符 /

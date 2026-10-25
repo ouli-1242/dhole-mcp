@@ -19,8 +19,8 @@ class _OkEmpty:
         return {}
 
 
-class TestKeyedRegistryIsExactlyTwo:
-    """17.0：keyed 后端只剩 tavily + bocha。
+class TestKeyedRegistryMatchesTheRoster:
+    """keyed 后端 = KEYED_ENGINES 注册表（17.0 曾收敛到 tavily + bocha，后来加回）。
 
     ``KEYED_ENGINES`` 与 ``_DHOLE_TO_BACKEND`` 必须严格同集。多出来的名字会通过
     ``engines=`` 校验却没有任何实现（既不在 _TEXT_ENGINES 也不在 KEYED_ENGINES），
@@ -31,13 +31,14 @@ class TestKeyedRegistryIsExactlyTwo:
         from dhole_mcp.search_metasearch import KEYED_ENGINES
 
         names = sorted(KEYED_ENGINES)
-        assert names == ["bocha", "tavily"]
+        assert names == ["bocha", "brave_api", "deepseek", "exa",
+                         "firecrawl", "tavily"]
         assert _validate_engines(names) == names
 
     def test_retired_keyed_names_are_not_selectable(self):
         from dhole_mcp.search import SecurityError
 
-        for name in ("brightdata", "exa"):
+        for name in ("brightdata",):
             with pytest.raises(SecurityError):
                 _validate_engines([name])
 
@@ -132,11 +133,15 @@ class TestBochaTimeout:
 
 
 class TestNewKeyedEngines:
-    """tavily / bocha：可选、可跑、失败可诊断、默认不花钱。"""
+    """keyed 后端：可选、可跑、失败可诊断、默认不花钱。"""
 
     def test_new_names_pass_validation(self):
         assert _validate_engines(["tavily"]) == ["tavily"]
         assert _validate_engines(["bocha"]) == ["bocha"]
+        assert _validate_engines(["exa"]) == ["exa"]
+        assert _validate_engines(["deepseek"]) == ["deepseek"]
+        assert _validate_engines(["firecrawl"]) == ["firecrawl"]
+        assert _validate_engines(["brave_api"]) == ["brave_api"]
 
     @pytest.mark.asyncio
     async def test_tavily_end_to_end_and_only_tavily_called(self, monkeypatch):
@@ -188,8 +193,10 @@ class TestNewKeyedEngines:
             calls.append(url)
             return _Empty()
 
-        for var in ("DHOLE_TAVILY_API_KEY", "DHOLE_BOCHA_API_KEY"):
-            monkeypatch.setenv(var, "key-set")
+        for cls in m.KEYED_ENGINES.values():
+            # 五颗 keyed 全都配着 key 仍然不许跑：这颗守卫钉的是「没点名就不花钱」，
+            # 只给两颗设 key 时它对后加的三颗什么也没证。
+            monkeypatch.setenv(cls.env_var, "key-set")
         monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
         monkeypatch.setattr(httpx, "post", fake_post)
         # 用"没有可用的免密引擎"来制造"什么都起不来"，而不是把全体塞进冷却：
@@ -248,6 +255,174 @@ class TestNewKeyedEngines:
         assert "DHOLE_SEARCH_PROXY" not in msg
 
 
+class TestKeyedEnginesExaDeepseekFirecrawl:
+    """三颗后加的 keyed 后端：端点各自对、载荷形状对、行解析对、缺 key 怪 key。
+
+    端到端走 metasearch（与 tavily 那条同一条路），fake httpx.post 只回各自 API 的
+    真实响应形状 —— 载荷断言钉的是「发给上游的就是那家的词表」，不是 dhole 的内部
+    短码（短码原样发出去同样"能跑"，上游当无效忽略，而账已经扣了）。
+    """
+
+    # (engine, env_var, endpoint, fake_response_json, expected_rows)
+    _SHAPES = [
+        ("exa", "DHOLE_EXA_API_KEY", "https://api.exa.ai/search",
+         {"results": [{"title": "E1", "url": "https://e.com/1", "text": "exa 正文"}]},
+         [("E1", "https://e.com/1")]),
+        ("deepseek", "DHOLE_DEEPSEEK_API_KEY",
+         "https://api.deepseek.com/v1/tools/search",
+         {"results": [{"title": "D1", "url": "https://d.com/1", "snippet": "短摘要"}]},
+         [("D1", "https://d.com/1")]),
+        ("firecrawl", "DHOLE_FIRECRAWL_API_KEY",
+         "https://api.firecrawl.dev/v2/search",
+         {"data": {"web": [{"title": "F1", "url": "https://f.com/1",
+                            "description": "描述"}]}},
+         [("F1", "https://f.com/1")]),
+    ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "engine,env_var,endpoint,response,rows", _SHAPES,
+        ids=["exa", "deepseek", "firecrawl"])
+    async def test_end_to_end_hits_only_its_own_endpoint(
+            self, monkeypatch, engine, env_var, endpoint, response, rows):
+        from dhole_mcp import search_metasearch as m
+
+        calls: list = []
+        payloads: list = []
+
+        class _Ok:
+            status_code = 200
+
+            def json(self):
+                return response
+
+        def fake_post(url, json=None, *a, **k):
+            calls.append(url)
+            payloads.append(json)
+            return _Ok()
+
+        monkeypatch.setenv(env_var, "fake-key")
+        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
+        monkeypatch.setattr(httpx, "post", fake_post)
+
+        results, status = await m.metasearch("test query", 3, engines=[engine])
+
+        assert calls == [endpoint], f"只应调用 {engine} 端点"
+        assert status.get(engine) == "ok"
+        assert [(r["title"], r["href"]) for r in results] == rows
+        # 载荷里的查询行照发，max_results 以各家的字段名落地
+        assert payloads[0]["query"] == "test query"
+
+    def test_deepseek_402_is_an_auth_error_not_an_empty_page(self, monkeypatch):
+        """余额不足（402）是"凭据被拒"的兄弟，不是"这家返回了空"—— 账单问题上
+        报错方向决定用户去充值还是去改查询。"""
+        from dhole_mcp import search_metasearch as m
+
+        class _OutOfBalance:
+            status_code = 402
+            text = "Insufficient Balance"
+
+        monkeypatch.setenv("DHOLE_DEEPSEEK_API_KEY", "sk-fake")
+        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
+        monkeypatch.setattr(httpx, "post", lambda *a, **k: _OutOfBalance())
+        eng = m._DeepSeek()
+        with pytest.raises(m.DeepSeekAuthError):
+            eng.search_json("q", 3)
+
+    @pytest.mark.asyncio
+    async def test_exa_maps_timelimit_to_an_absolute_window(self, monkeypatch):
+        """exa 的日期词表是绝对时间戳：短码换算成「现在减去档位宽度」。
+        与 baidu 的 stf 同一把尺 —— 判据是窗口随档位变宽，且不带日期时一个键都不多。"""
+        from dhole_mcp import search_metasearch as m
+
+        build = m._Exa().build_request
+        _u, _h, plain = build("q", 5, None)
+        assert "startPublishedDate" not in plain
+        widths = {}
+        for short in ("d", "w", "m", "y"):
+            _u, _h, payload = build("q", 5, short)
+            widths[short] = payload["startPublishedDate"]
+        assert widths["d"] > widths["w"] > widths["m"] > widths["y"], (
+            "更宽的档位要给出更早的起点（时间戳字符串单调）")
+
+    def test_firecrawl_sends_the_tbs_code_its_api_understands(self):
+        from dhole_mcp import search_metasearch as m
+
+        build = m._Firecrawl().build_request
+        _u, _h, plain = build("q", 5, None)
+        assert "tbs" not in plain
+        for short, wanted in {"d": "qdr:d", "w": "qdr:w",
+                              "m": "qdr:m", "y": "qdr:y"}.items():
+            _u, _h, payload = build("q", 5, short)
+            assert payload["tbs"] == wanted
+
+    @pytest.mark.asyncio
+    async def test_deepseek_without_key_blames_env(self, monkeypatch):
+        from dhole_mcp import search_metasearch as m
+
+        monkeypatch.delenv("DHOLE_DEEPSEEK_API_KEY", raising=False)
+        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
+
+        with pytest.raises(m.MetaSearchException) as ei:
+            await m.metasearch("q", engines=["deepseek"])
+
+        assert "DHOLE_DEEPSEEK_API_KEY" in str(ei.value)
+
+    @pytest.mark.asyncio
+    async def test_brave_api_is_a_get_with_subscription_token(self, monkeypatch):
+        """Brave 官方 API 是全家唯一的 GET keyed 后端：token 走自定义头
+        X-Subscription-Token（不是 Bearer —— 发错头那家回 401，长得像坏 key），
+        参数在 query string 上，count 超过上游的 20 要钳到 20。"""
+        from dhole_mcp import search_metasearch as m
+
+        calls: list = []
+
+        class _Ok:
+            status_code = 200
+
+            def json(self):
+                return {"web": {"results": [
+                    {"title": "B1", "url": "https://br.com/1",
+                     "description": "描述"},
+                ]}}
+
+        def fake_get(url, params=None, headers=None, *a, **k):
+            calls.append((url, params, headers))
+            return _Ok()
+
+        monkeypatch.setenv("DHOLE_BRAVE_API_KEY", "BSA-fake")
+        monkeypatch.setattr(m, "_get_search_proxy", lambda: None)
+        monkeypatch.setattr(httpx, "get", fake_get)
+
+        results, status = await m.metasearch("test query", 3,
+                                             engines=["brave_api"])
+
+        assert status.get("brave_api") == "ok"
+        assert [(r["title"], r["href"]) for r in results] == [("B1", "https://br.com/1")]
+        url, params, headers = calls[0]
+        assert url == "https://api.search.brave.com/res/v1/web/search"
+        assert headers["X-Subscription-Token"] == "BSA-fake"
+        assert params["q"] == "test query"
+        # metasearch 向引擎要 max_results+4（重排的余量，quorum_results 那一行）；
+        # 3 进去 7 出来是生产路径的形状，不是这家引擎自己加的。
+        assert params["count"] == 7
+
+    def test_brave_api_clamps_count_to_the_upstream_ceiling(self):
+        from dhole_mcp import search_metasearch as m
+
+        _u, _h, payload = m._BraveApi().build_request("q", 30, None)
+        assert payload["count"] == 20, "count>20 上游会拒，必须先钳到 20"
+        _u, _h, payload = m._BraveApi().build_request("q", 5, "w")
+        assert payload["freshness"] == "pw"
+
+    def test_brave_api_shares_the_brave_index_family(self):
+        """brave_api 与免密抓取版 brave 同一套索引：共识按家族算，同一 URL
+        两边都给只算一个家族答的话（yahoo 之于 bing 的同一条纪律）。"""
+        from dhole_mcp.search_engines import _INDEX_FAMILY
+
+        assert _INDEX_FAMILY["brave_api"] == "brave"
+
+
 class TestDefaultPoolEnv:
     """DHOLE_DEFAULT_ENGINES：国内用户可把默认池收敛到直连可达的引擎。"""
 
@@ -270,9 +445,10 @@ class TestDefaultPoolEnv:
         assert m._resolve_backends(None) == list(m._DEFAULT_BACKENDS)
         # 这一行是默认池的快照，不是逻辑：池子换组合时跟着改（两处定义的一致性由
         # test_default_pool_definitions_agree 保证，这里只钉住"env 没设时用的是它"）。
-        assert m._DEFAULT_BACKENDS == ["baidu", "bing", "sogou", "so360",
-                                       "bing_global", "yahoo", "yandex", "brave",
-                                       "duckduckgo", "marginalia"]
+        # 池序 = 可信度分层（_PRIORITY_TIERS）：主力在前，限流/小众居后垫底。
+        assert m._DEFAULT_BACKENDS == ["baidu", "bing", "bing_global", "duckduckgo",
+                                       "yahoo", "brave", "sogou", "so360", "shenma",
+                                       "yandex", "seznam", "marginalia"]
 
 
 class TestConnectionFailureCooldown:
@@ -428,10 +604,10 @@ def test_readme_engine_roster_matches_the_registry():
     from dhole_mcp import search_metasearch as ms
     from dhole_mcp.search_engines import DEFAULT_ENGINES
 
-    # 字面钉死（G25 附注一）：默认免密池就是这 10 颗。改池子 = 显式改这里。
+    # 字面钉死：默认免密池就是这 12 颗（池序 = 可信度分层）。改池子 = 显式改这里。
     assert DEFAULT_ENGINES == (
-        "baidu", "bing", "sogou", "so360", "bing_global", "yahoo",
-        "yandex", "brave", "duckduckgo", "marginalia",
+        "baidu", "bing", "bing_global", "duckduckgo", "yahoo",
+        "brave", "sogou", "so360", "shenma", "yandex", "seznam", "marginalia",
     ), f"默认免密池变了（现值 {DEFAULT_ENGINES}）—— 改池子要同时改 README/手册/这里"
 
     readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
@@ -472,11 +648,11 @@ def test_index_family_map_covers_the_default_pool():
     missing = [n for n in DEFAULT_ENGINES
                if ms._DHOLE_TO_BACKEND.get(n, n) not in _INDEX_FAMILY]
     assert not missing, f"这些默认引擎不在 _INDEX_FAMILY 里: {missing}"
-    # 默认池 10 引擎 / 7 家族（bing、bing_global、yahoo、duckduckgo 同属 bing 索引）：
-    # 渲染出来只可能是 "x of 7"，"x of 8" 及往上不可能出现
+    # 默认池 12 引擎 / 9 家族（bing、bing_global、yahoo、duckduckgo 同属 bing 索引）：
+    # 渲染出来只可能是 "x of 9"，"x of 10" 及往上不可能出现
     families = {_INDEX_FAMILY[ms._DHOLE_TO_BACKEND.get(n, n)] for n in DEFAULT_ENGINES}
-    assert families == {"baidu", "bing", "brave", "so360", "sogou", "yandex",
-                        "marginalia"}, families
+    assert families == {"baidu", "bing", "brave", "so360", "sogou", "shenma",
+                        "yandex", "seznam", "marginalia"}, families
 
 
 class TestSoftDeadlinePreemption:

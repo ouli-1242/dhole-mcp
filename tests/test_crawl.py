@@ -19,6 +19,12 @@ import socket
 import sys
 import threading
 from pathlib import Path
+
+# fixture_site 住在 evals/，而本文件的导入（下一行）发生在下面第二段 sys.path
+# 插入之前 —— 单独收集本文件时不能指望"同进程里恰好有别的小组先插过路径"。
+EVALS_DIR = Path(__file__).resolve().parent.parent / "evals"
+if str(EVALS_DIR) not in sys.path:
+    sys.path.insert(0, str(EVALS_DIR))
 import fixture_site as fs
 from dhole_mcp import identity
 from dhole_mcp.crawl import CHROME_REPEAT_MIN, LIST_ITEMS_MIN, _chrome_rows, _classify_and_extract, _measure_note, _measure_row, _row_verdict

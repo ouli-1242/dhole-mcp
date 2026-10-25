@@ -546,7 +546,8 @@ def _install(monkeypatch, spec: dict):
     "한국어 질의입니다",                 # 谚文
 ])
 def test_a_query_written_with_cjk_characters_names_the_engines_to_wait_for(query):
-    assert cn_index_engines(query) == frozenset({"baidu", "sogou", "so360"}), query
+    assert cn_index_engines(query) == frozenset(
+        {"baidu", "sogou", "so360", "shenma"}), query
 
 
 @pytest.mark.parametrize("query", [

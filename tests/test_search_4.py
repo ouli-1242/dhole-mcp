@@ -78,6 +78,10 @@ class TestTheTableIsTheEngines:
                                       "m": "month", "y": "year"}),
             "bocha": ("freshness", {"d": "oneDay", "w": "oneWeek",
                                     "m": "oneMonth", "y": "oneYear"}),
+            "firecrawl": ("tbs", {"d": "qdr:d", "w": "qdr:w",
+                                  "m": "qdr:m", "y": "qdr:y"}),
+            "brave_api": ("freshness", {"d": "pd", "w": "pw",
+                                        "m": "pm", "y": "py"}),
         }
         for name, (param, table) in sorted(tables.items()):
             build = ms.KEYED_ENGINES[name]().build_request
@@ -119,7 +123,8 @@ class TestTheTableIsTheEngines:
         # 差分当场可验，所以它从"收不到过滤"搬进"收得到"。剩下三家仍是线路事实。
         filtered, unfiltered = date_support(POOL)
         assert filtered == ["baidu", "bing", "bing_global", "brave", "duckduckgo"]
-        assert unfiltered == ["marginalia", "so360", "sogou", "yahoo", "yandex"]
+        assert unfiltered == ["marginalia", "seznam", "shenma", "so360", "sogou",
+                              "yahoo", "yandex"]
 
     def test_an_unknown_engine_counts_as_unfiltered(self):
         assert date_support(["newengine"]) == ([], ["newengine"])
@@ -916,11 +921,19 @@ class TestTheFieldDescriptionCarriesNoHandCopiedPool:
     """自述里抄一家名单 = 第二次上线那份表，而池子会随 `engines=` 变。"""
 
     def test_the_date_filter_description_names_no_engine(self):
+        import re
+
         from dhole_mcp import search_metasearch as ms
 
-        text = SearchResponseModel.model_fields["date_filter"].description or ""
-        for name in sorted(set(ms._TEXT_ENGINES) | set(ms.KEYED_ENGINES) | _DATE_AWARE_ENGINES):
-            assert name not in text, f"字段自述又把 {name} 抄了一遍: {text[:120]}"
+        # 整词而不是子串（test_tool_descriptions._engine_tokens 同一陷阱）：
+        # `exa` 是 `exact` 的子串 —— 朴素 `in` 会把这句自述里的 "exact: true"
+        # 读成"又抄了一遍引擎名单"。
+        tokens = set(re.findall(r"[a-z][a-z0-9_]*",
+                                SearchResponseModel.model_fields["date_filter"]
+                                .description or ""))
+        for name in sorted(set(ms._TEXT_ENGINES) | set(ms.KEYED_ENGINES)
+                           | _DATE_AWARE_ENGINES):
+            assert name not in tokens, f"字段自述又把 {name} 抄了一遍"
 
 
 class TestTheCoarsestWindowIsOurs:

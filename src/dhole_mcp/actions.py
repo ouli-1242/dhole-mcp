@@ -52,6 +52,26 @@ Action schema (one key per dict):
                                             ends take the same target shapes
                                             (a CSS selector string or
                                             {"index": N, "expect"?})
+  {"select": {"selector": "#country", "option": "CN"}}
+                                             choose a <select> dropdown option.
+                                             `option` matches the option's value
+                                             first, then its visible label; a
+                                             list chooses several (multi-select
+                                             only). fill cannot reach a <select>
+                                             (Playwright fills inputs/textarea/
+                                             contenteditable only) and click
+                                             opens a native dropdown with no DOM
+                                             to click inside
+  {"navigate": "back"}                      history back / forward. A re-goto
+                                             of the same URL gets a fresh page
+                                             (form wiped, scroll reset); history
+                                             returns the page the browser
+                                             already holds
+  {"pdf": {"save_to": "out/receipt.pdf"}}   print THIS rendered page to a PDF
+                                             file - text stays selectable, so
+                                             doc_parse can read it back. Same
+                                             path discipline as screenshot's
+                                             save_to; headless browser only
   {"submit": {"selector"|"index", "confirm"?}}
                                             the irreversible one: without
                                             confirm:true it pauses for approval.
@@ -137,12 +157,17 @@ def _step_deadline_ms(own_ms: int = STEP_WAIT_MS) -> int:
 
 _VALID_KEYS = {"click", "fill", "press", "wait", "scroll", "wait_selector",
                "screenshot", "snapshot", "submit", "hover", "drag", "read",
-               "upload", "dialog", "tab"}
+               "upload", "dialog", "tab", "select", "navigate", "pdf"}
 
 #: tab 动作的帽。页签是浏览器进程里的真实页面，一枚上下文开几十个是自找内存病；
 #: 50 个对"填一半、查资料、回来提交"绰绰有余。
 MAX_TABS = 50
 _TAB_VERBS = ("new", "close", "list")
+
+#: navigate 的两个方向。历史导航是页自己的事（不新开页签）：back/forward 交回的
+#: 是浏览器已经存着的那一页 —— 填了一半的表单、滚过的位置、SPA 的内存状态都在；
+#: 重新 goto 同一个 URL 拿到的是一张新页面。playwright-mcp 的 navigate_back 同款。
+_NAVIGATE_VERBS = ("back", "forward")
 
 # upload 的两个帽。文件是**读**进浏览器的那一侧，所以路径按读侧纪律走（realpath
 # 展开链接后过系统目录名单）；大小帽是给浏览器进程留的余量——set_input_files 会把
@@ -313,6 +338,24 @@ _READ_PROPERTY_JS = """(el, name) => {
   return (el[name] === undefined || el[name] === null) ? null : el[name];
 }"""
 
+# select 的解析在页面那一侧一次做完：每一颗想选的 option 先按 value 匹配、再按
+# 可见标签匹配（快照行里那列名字是标签，而 value 常是 "CN"/"+86" 这类机器码，
+# 只认一边就等于让调用方先猜页面用的是哪一边）。match 失败的那颗回 null，连同
+# 这个 <select> 自己的 multiple 位与一份有界的选项清单一起交回 —— 失败要说清
+# "这里有哪些可以选"，而不是让调用方再发一次 read 去数。
+_SELECT_RESOLVE_JS = """(el, wants) => {
+  const opts = Array.from(el.querySelectorAll('option'));
+  const labelOf = (o) => (o.label || o.text || '').trim();
+  const pick = (w) => {
+    let hit = opts.find(o => o.value === w);
+    if (!hit) hit = opts.find(o => labelOf(o) === w);
+    return hit ? [hit.value, labelOf(hit)] : null;
+  };
+  return {tag: (el.tagName || '').toLowerCase(), multiple: !!el.multiple,
+          resolved: wants.map(pick),
+          options: opts.slice(0, 12).map(o => [labelOf(o), o.value])};
+}"""
+
 # An element capture only exists to be LOOKED at. 17.0: always available ——
 # the recognition happens agent-side (dhole ships no vision model), and a
 # text-only caller simply never asks for {"screenshot"}.
@@ -413,6 +456,35 @@ def _resolve_save_to(save_to: str, image_type: str) -> Path:
     # 读侧的房间黑名单对写侧同样生效：System32、~/.ssh、~/.dhole 不因为
     # 「后缀像图片」就变成可写的目的地。realpath 先展开链接，与读侧共用
     # 同一份清单 —— 就地 import：模块级 import server 会绕成循环。
+    from dhole_mcp.server import _blocked_path_prefix
+    blocked = _blocked_path_prefix(os.path.realpath(target))
+    if blocked:
+        raise ValueError(
+            f"refusing to write {str(target)!r} - it is in a restricted "
+            f"system directory ({blocked})")
+    return target
+
+
+def _resolve_pdf_save_to(save_to: str) -> Path:
+    """`pdf` 动作的 save_to：`_resolve_save_to` 的姊妹，同一套纪律、后缀名单换成 .pdf。
+
+    为什么不共用一个函数：那份的错误话术是图片的（"not named like an image"），
+    参数也是 image_type；PDF 有自己的话要说（"not named like a PDF"）。两条门各
+    说各的，比一个带 kind 参数、两种话术都藏着一半的门诚实。落盘复用
+    `_write_screenshot`（同一颗写原语，写坏报一句具名的 OSError）。
+    """
+    raw = (save_to or "").strip()
+    if not raw:
+        raise ValueError(
+            "pdf needs a save_to path to write the file to (e.g. "
+            "'C:/out/receipt.pdf' or './receipt.pdf')")
+    target = Path(raw).expanduser()
+    if target.is_dir():
+        raise ValueError(f"pdf save_to {str(target)!r} is a directory, not a file")
+    if target.suffix.lower() != ".pdf":
+        raise ValueError(
+            f"refusing to create {str(target)!r} - it is not named like a PDF; "
+            "pass a path ending in .pdf")
     from dhole_mcp.server import _blocked_path_prefix
     blocked = _blocked_path_prefix(os.path.realpath(target))
     if blocked:
@@ -986,6 +1058,16 @@ def _validate_actions(actions) -> list[dict]:
                 raise ValueError(
                     f"action {i} 'tab' must be \"new\"|\"close\"|\"list\", a tab "
                     "number, or {{\"open\": \"https://...\"}}")
+        elif key == "navigate":
+            # {"navigate": "back"|"forward"} — 历史导航。没有别的旋钮：等多少、
+            # 等到什么程度，链的收尾纪律（DOM 安静）已经有自己的答案。
+            if val not in _NAVIGATE_VERBS:
+                raise ValueError(
+                    f"action {i} 'navigate' must be \"back\" or \"forward\"; got "
+                    f"{val!r} - a re-goto of the URL is what web_act always does "
+                    "at chain start, and it is a FRESH page (form wiped); history "
+                    "is the way back to the one the browser already holds")
+            out.append({key: val})
         elif key == "snapshot":
             # {"snapshot": true} — 编号交互元素列表。无参数形态是刻意的：快照
             # 没有可调的东西（上限是保护，不是旋钮），多一个键就多一种拼错法。
@@ -1112,6 +1194,20 @@ def _validate_actions(actions) -> list[dict]:
                                            **({"quality": quality} if quality is not None else {}),
                                            "decode_qr": want_qr,
                                            **({"save_to": save_to} if save_to else {})}})
+        elif key == "pdf":
+            # {"pdf": {"save_to": "..."}} — 把**当前渲染页**打印成 PDF 落盘。截图
+            # 交像素、它交矢量（文字可选中，doc_parse 能读回来）；字节走盘不走
+            # transcript（与 screenshot.save_to 同一条理由）。路径在这里验
+            # （浏览器起来之前），理由与 screenshot 那句相同：拼错的路径值一次
+            # 即时拒绝，不值一次 10 秒冷启动。
+            if not isinstance(val, dict) or set(val) != {"save_to"}:
+                raise ValueError(
+                    f"action {i} 'pdf' must be {{save_to}} - the rendered page "
+                    "printed to a PDF file on disk; bytes never ride the "
+                    "transcript")
+            resolved = _resolve_pdf_save_to(val["save_to"])
+            out.append({key: {"save_to": val["save_to"].strip(),
+                              "resolved": str(resolved)}})
         elif key == "fill":
             if not isinstance(val, dict) or "text" not in val:
                 raise ValueError(f"action {i} 'fill' must be {{selector, text}} "
@@ -1136,6 +1232,27 @@ def _validate_actions(actions) -> list[dict]:
             target = _act_target(
                 i, key, {k: v for k, v in val.items() if k != "text"})
             out.append({key: {**target, "text": text}})
+        elif key == "select":
+            # {"select": {selector|index, option}} — <select> 下拉框。fill 在这里
+            # 结构性够不到（Playwright 的 fill 只认 input/textarea/contenteditable，
+            # 对 <select> 直接抛错），click 打开的是操作系统的原生下拉、没有可点的
+            # DOM。option 先按 value 匹配、再按可见标签（执行器里的 _SELECT_RESOLVE_JS），
+            # 一颗字符串选一枚；列表只在 multiple 的 <select> 上合法（校验期不知道
+            # 页面的形状，这一裁决在执行器里、拿着页面真身做）。
+            if not isinstance(val, dict) or "option" not in val:
+                raise ValueError(f"action {i} 'select' must be {{selector|index, option}} "
+                                 "- option is the option's value or its visible "
+                                 "label; a list chooses several (multi-select only)")
+            option = val["option"]
+            opts = [option] if isinstance(option, str) else option
+            if (not isinstance(opts, list) or not opts
+                    or not all(isinstance(o, str) and o.strip() for o in opts)):
+                raise ValueError(
+                    f"action {i} 'select.option' must be a non-empty option string "
+                    "or a non-empty list of them")
+            target = _act_target(
+                i, key, {k: v for k, v in val.items() if k != "option"})
+            out.append({key: {**target, "option": opts}})
         elif key == "read":
             # 链内读（A3-b）：取回**当前这个页面实例**上某一处的文本，进回执，
             # 登记成名字后供后面的 fill 用 `{=名字}` 取用。
@@ -1726,6 +1843,19 @@ def action_label(a: dict) -> str:
     if key == "drag":
         return (f"drag {_target_label(val)} -> "
                 f"{_target_label(val.get('to'))}")
+    if key == "select":
+        opts = val.get("option") if isinstance(val, dict) else None
+        if isinstance(opts, list):
+            shown = "/".join(str(o) for o in opts[:3])
+            shown += "…" if len(opts) > 3 else ""
+        else:
+            shown = str(opts)
+        return f"select {shown!r} in {_target_label(val)}"
+    if key == "navigate":
+        return f"navigate {val}"
+    if key == "pdf":
+        where = val.get("save_to") if isinstance(val, dict) else None
+        return f"pdf {str(where)[:80]!r}"
     if key == "press":
         target = val.get("selector")
         if target is None and val.get("index") is not None:
@@ -2028,11 +2158,68 @@ def build_page_action(actions) -> Optional[Callable]:
                         elif spec == "list":
                             shot["tabs"] = [{"index": i, "url": q.url}
                                             for i, q in enumerate(chain_pages)]
+                    elif "navigate" in a:
+                        nav = a["navigate"]
+                        # wait_until="commit"：back/forward 常落进 SPA 的路由
+                        # （popstate，没有真正的加载事件），等 load 会白等到超时
+                        # ——真机实测（2026-10-25，靶站双页）：默认档在历史导航上
+                        # 挂满 30s 超时，commit 两向都是落定即回。这条驱动的历史
+                        # 导航**即使真的动了也解析成 None**，所以"动没动"不问
+                        # 返回值，问 URL：变了，新地址自己说话；没变，交回
+                        # page_unchanged——是"历史里没有那一格"还是"同文档入口
+                        # 没改变什么"从这里分辨不出，不替页面作证。
+                        was = page.url
+                        await (page.go_back(wait_until="commit",
+                                            timeout=_step_deadline_ms())
+                               if nav == "back" else
+                               page.go_forward(wait_until="commit",
+                                               timeout=_step_deadline_ms()))
+                        await _settle_quiet(page)
+                        shot["navigate"] = nav
+                        shot["url"] = page.url
+                        if page.url == was:
+                            shot["page_unchanged"] = True
                     elif "fill" in a:
                         f = a["fill"]
                         loc = await _target_locator(page, f)
                         await loc.fill(_substitute_refs(f["text"], values, label),
                                        timeout=_step_deadline_ms())
+                    elif "select" in a:
+                        s = a["select"]
+                        loc = await _target_locator(page, s)
+                        got = await loc.evaluate(_SELECT_RESOLVE_JS, s["option"])
+                        if not isinstance(got, dict):
+                            got = {}
+                        tag = str(got.get("tag") or "")
+                        if tag != "select":
+                            raise ValueError(
+                                f"select found <{tag or 'unknown'}> there - "
+                                "select is for <select> dropdowns; an input or "
+                                "textarea takes {\"fill\": ...} instead")
+                        resolved = [r for r in (got.get("resolved") or [])]
+                        misses = [w for w, r in zip(s["option"], resolved)
+                                  if not r]
+                        if misses:
+                            have = "; ".join(
+                                (f"{lab}={val}" if val and val != lab else str(lab))
+                                for lab, val in (got.get("options") or [])) \
+                                or "no <option> elements at all"
+                            raise ValueError(
+                                f"no option matches {misses[0]!r} on this "
+                                f"select - what it holds: {have}")
+                        if len(resolved) > 1 and not got.get("multiple"):
+                            raise ValueError(
+                                "this <select> takes ONE option - a list is for "
+                                "a multi-select; pass option as a single string")
+                        await loc.select_option(
+                            value=[r[0] for r in resolved],
+                            timeout=_step_deadline_ms())
+                        # 级联下拉（省 → 市）在 change 之后才填下一级：与 hover/drag
+                        # 同款，等 DOM 安静，不赌站点同步渲染。
+                        await _settle_quiet(page)
+                        shot["selected"] = [
+                            {"value": r[0], "label": str(r[1] or "")[:60]}
+                            for r in resolved]
                     elif "press" in a:
                         p = a["press"]
                         if p.get("index") is not None:
@@ -2122,6 +2309,31 @@ def build_page_action(actions) -> Optional[Callable]:
                             except Exception as e:
                                 shot["qr"] = []
                                 shot["qr_error"] = f"{type(e).__name__}: {str(e)[:140]}"
+                    elif "pdf" in a:
+                        p = a["pdf"]
+                        # 打印发生在链的这一步：先前动作（登录、翻页、展开）都已
+                        # 体现在这份 DOM 上。print_background 开着——深色主题与
+                        # 高亮行承载信息，背景不是装饰。
+                        target = _resolve_pdf_save_to(p["save_to"])
+                        try:
+                            # 不传 timeout：Python 绑定的 page.pdf() 没有这颗参数
+                            # （真机实测 TypeError），打印本身由驱动自己收尾。
+                            data = await page.pdf(print_background=True)
+                        except Exception as exc:
+                            if "headless" in str(exc).lower():
+                                raise ValueError(
+                                    "printing to PDF needs the hidden browser - "
+                                    "this chain runs in a VISIBLE window "
+                                    "(headed=true) or an attached Chrome "
+                                    "(cdp_url=), neither can print; re-run the "
+                                    "capture without them") from None
+                            first = (str(exc).splitlines()[0][:160]
+                                     if str(exc).strip() else type(exc).__name__)
+                            raise RuntimeError(
+                                f"{type(exc).__name__}: {first}") from None
+                        saved = _write_screenshot(data, target)
+                        shot["saved"] = saved
+                        shot["saved_bytes"] = len(data)
                     elif "read" in a:
                         r = a["read"]
                         loc = await _target_locator(page, r)
