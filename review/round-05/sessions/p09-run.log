@@ -1,0 +1,19 @@
+[p09 宿雨·学术编辑] session d959d51eda4d4f93a742f04edf3a784d server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p09 S1-编造 DOI 的落地页 ----
+[p09-S1-编造 DOI 的落地页#01] cred_defaults   0.0s ok=None err=-  chars=
+[p09-S1-编造 DOI 的落地页#02] web_read   1.4s ok=False err=http_error_404: server returned error status http_error_404 chars=888
+      summary: 404 ERR · 888B markdown · http · timeout clamped 44->30 s per attempt (this tier caps one attempt at
+      fake-doi: {"error": "http_error_404: server returned error status", "summary": "404 ERR · 888B markdown · http · timeout clamped 44->30 s per attempt (this tier caps one attempt at 30s) · the archive.org fallback was asked and the availability API answered HTTP 429 - the second opinion got nothing, so the fai
+      (pause 8s - throttle)
+
+---- p09 S2-check 档再试 ----
+[p09-S2-check 档再试#03] web_read   0.7s ok=None err=http_error_404: server returned error status  chars=
+      check-404: {"error": "http_error_404: server returned error status"}
+      (pause 7s - throttle)
+
+---- p09 S3-recall 找旧存档 ----
+[p09-S3-recall 找旧存档#04] web_recall   1.1s ok=None err=-  chars=
+   - {"url": "https://www.163.com/dy/article/L90AC7MN0511D5IC.html", "title": "弗朗西斯哈伦森获2026年诺贝尔物理学奖", "is_stale": t
+   - {"url": "http://cea.ceaj.org/CN/10.3778/j.issn.1002-8331.2105-0135", "title": "卷积神经网络中的注意力机制综述", "is_stale": t
+P09 DONE

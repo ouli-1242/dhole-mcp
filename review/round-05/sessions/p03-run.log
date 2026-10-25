@@ -1,0 +1,20 @@
+[p03 蔺相宜·法务] session ef390b888ced48ada8ec792f3ebf2cdb server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p03 S1-外网已下线页(404/410 走 archive) ----
+[p03-S1-外网已下线页(404/410 走 archive)#01] web_read  21.4s ok=False err=all_tiers_failed: unknown (HTTP status 0)
+Attempted: HTTP -> Stealthy
+Failures: HTTP faile all_tiers_failed chars=
+      summary: network error · 0B markdown · stealthy · timeout clamped 44->30 s per attempt (this tier caps one at
+      dead-standard: {"error": "all_tiers_failed: unknown (HTTP status 0)\nAttempted: HTTP -> Stealthy\nFailures: HTTP failed (status 0): error sending request for url (https://www.specification.cn/standard/detail/404-nope) > tls handshake eof; Stealthy failed (status 0): Page.goto: net::ERR_CONNECTION_CLOSED at https:/
+      (pause 9s - throttle)
+
+---- p03 S2-fixture 404 对照 ----
+[p03-S2-fixture 404 对照#02] cred_defaults   0.0s ok=None err=-  chars=
+[p03-S2-fixture 404 对照#03] web_read   0.8s ok=False err=http_error_404: server returned error status http_error_404 chars=3
+      summary: 404 ERR · 3B markdown · http · the target is loopback/private, so dhole dropped its own synthesized 
+      fixture-404: {"error": "http_error_404: server returned error status"}
+      (pause 7s - throttle)
+
+---- p03 S3-sys_state ----
+[p03-S3-sys_state#04] sys_state   0.0s ok=None err=-  chars=
+P03 DONE

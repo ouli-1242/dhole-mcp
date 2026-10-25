@@ -1,0 +1,20 @@
+[p05 亢明玉·采购] session 00c5253385d54940a5f5e0ba782a2d28 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p05 S1-非法 force_fetcher ----
+[p05-S1-非法 force_fetcher#01] cred_defaults   0.0s ok=None err=-  chars=
+[p05-S1-非法 force_fetcher#02] web_read   0.0s ok=False err=invalid_request: force_fetcher='magic' is not a fetcher tier. Valid values: 'http', 'steal invalid_request chars=
+      summary: invalid request · force_fetcher='magic' is not a fetcher tier. Valid values: 'http', 'stealthy'.
+      bad-fetcher: {"error": "invalid_request: force_fetcher='magic' is not a fetcher tier. Valid values: 'http', 'stealthy'."}
+      (pause 7s - throttle)
+
+---- p05 S2-未知参数名 ----
+[p05-S2-未知参数名#03] web_read   0.0s ok=False err=invalid_request: Unsupported argument(s) for web_read: ['magic_param']. Supported: ['anti_ invalid_request chars=
+      summary: invalid request · Unsupported argument(s) for web_read: ['magic_param']
+      unknown-param: {"error": "invalid_request: Unsupported argument(s) for web_read: ['magic_param']. Supported: ['anti_detect', 'cache_ttl', 'cdp_url', 'check_login', 'confirm', 'css_selector', 'extraction_type', 'focus', 'focus_engine', 'focus_mode', 'force_fetcher', 'headers', 'ignore_robots', 'include_headers', 'i
+      (pause 7s - throttle)
+
+---- p05 S3-stealthy 正形 ----
+[p05-S3-stealthy 正形#04] web_read   3.4s ok=True err=-  chars=269
+      summary: 200 OK · 269B markdown · stealthy · this call makes 1 extra direct request to the target before the 
+      stealthy-ok: {"content_ok": true, "summary": "200 OK · 269B markdown · stealthy · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigat
+P05 DONE

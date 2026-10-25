@@ -1,0 +1,15 @@
+{
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "message": "",
+ "rows": [],
+ "error": "invalid_request: allow_private: pass true (loopback only) or a list of host names — cloud metadata endpoints are never allowed, by any spelling. To turn it off, use unset=[\"allow_private\"] - closed is the absence of this key, not a value it takes.",
+ "next_action": "Nothing was stored or forgotten. Fix the named key and re-call cred_defaults: a value this door refuses never reaches the store, so nothing has to be unwound.",
+ "_wall_s": 0.03,
+ "_tool": "cred_defaults",
+ "_tag": "p08-S2-怪 allow_private 值#04",
+ "_ts": "2026-10-25T19:01:11.567333+00:00"
+}

@@ -1,0 +1,36 @@
+[p01 邵岐·SRE] session 0b3c2d0a3ef2432b83dba90f8619b4f8 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p01 S1-假域名(全档都该空手) ----
+[p01-S1-假域名(全档都该空手)#01] web_read  26.7s ok=False err=all_tiers_failed: unknown (HTTP status 0)
+Attempted: HTTP -> Stealthy
+Failures: HTTP faile all_tiers_failed chars=
+      summary: network error · 0B markdown · stealthy · archive.org was asked and holds no snapshot of this URL - n
+      fake-domain: {"error": "all_tiers_failed: unknown (HTTP status 0)\nAttempted: HTTP -> Stealthy\nFailures: HTTP failed (status 0): error sending request for url (http://no-such-domain-audit-9x7.example.com/) > client error (SendRequest) > connection closed before message; Stealthy failed (status 0): Page.goto: ne
+      (pause 7s - throttle)
+
+---- p01 S2-死端口(连接拒绝) ----
+[p01-S2-死端口(连接拒绝)#02] web_read   0.0s ok=False err=invalid_request: URL targets internal/private IP (127.0.0.1 in 127.0.0.0/8) invalid_request chars=
+      summary: invalid request · URL targets internal/private IP (127.0.0.1 in 127.0.0.0/8)
+      dead-port: {"error": "invalid_request: URL targets internal/private IP (127.0.0.1 in 127.0.0.0/8)", "summary": "invalid request · URL targets internal/private IP (127.0.0.1 in 127.0.0.0/8)"}
+      (pause 7s - throttle)
+
+---- p01 S3-超时梯子(timeout=5000 的真实分账) ----
+[p01-S3-超时梯子(timeout=5000 的真实分账)#03] web_read   4.0s ok=False err=error sending request for url (http://no-such-domain-audit-9x7.example.com/) > operation t timeout chars=
+      summary: network error · 0B markdown · http
+      tight-timeout: {"error": "error sending request for url (http://no-such-domain-audit-9x7.example.com/) > operation timed out; stealthy tier skipped: only 988ms of the 5000ms call budget was left, which is not enough to launch and navigate a browser. HTTP tier returned status 0. Raise timeout, or pass force_fetcher
+      (pause 7s - throttle)
+
+---- p01 S4-降级链账目(外网真站带 archive) ----
+[p01-S4-降级链账目(外网真站带 archive)#04] web_read  15.3s ok=False err=all_tiers_failed: unknown (HTTP status 202)
+Attempted: HTTP -> Stealthy
+Failures: HTTP fai js_shell chars=
+      summary: 202 OK · 0B markdown · stealthy · timeout clamped 59->30 s per attempt (this tier caps one attempt a
+      ladder: {"error": "all_tiers_failed: unknown (HTTP status 202)\nAttempted: HTTP -> Stealthy\nFailures: HTTP failed (status 202): js_shell_detected: page requires JavaScript rendering but fetcher returned placeholder; Stealthy failed (status 202): js_shell_detected: page requires JavaScript rendering but fet
+P01 DONE
+[p41 邵岐·死端口复测] session 62a8912b02af41eeaf936fb2432af9b9 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p41-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+[p41-misc#02] web_read   2.0s ok=False err=network_error: timeout (TCP preflight) network chars=
+      summary: network error · 0B markdown · none
+error: network_error: timeout (TCP preflight)
+summary: network error · 0B markdown · none
+P01b DONE

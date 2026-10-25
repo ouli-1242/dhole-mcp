@@ -1,0 +1,156 @@
+{
+ "results": [
+  {
+   "status": 200,
+   "content": [
+    "本地抓取工具在默认配置下会把结果写进一个本地缓存库，避免重复请求同一页面。\n\n缓存条目带有过期时间，过期后再次抓取会重新发起请求并覆盖旧条目。\n\n抓取器分成两层：一层是快速 HTTP 层，一层是能执行脚本的反检测浏览器层。\n\n自动升级只在 HTTP 层判定失败时发生，判定依据是状态码、正文长度与反爬特征串。\n\n反爬特征串包括常见的人机校验页面标题，命中后不会重试而是直接升级。\n\n缓存键包含目标地址、会话标识与凭据指纹，因此登录态内容不会与公开内容混放。\n\n关于缓存保留时长：缓存默认保留 3600 秒，改 cache_ttl 可覆盖。\n\n抓取结果的正文会经过抽取器转成 Markdown，超长时按字符数截断并给出续读偏移。\n\n截断点始终落在字符边界上，续读时把偏移量传回来即可拿到剩余部分。\n\n所有网络请求都受 robots 规则约束，除非显式声明调用方已获得站点授权。"
+   ],
+   "url": "http://127.0.0.1:8399/article",
+   "cached": true,
+   "fetcher_used": "cache",
+   "duration_ms": 34,
+   "error": "",
+   "content_type": "text/html; charset=utf-8",
+   "total_size_bytes": 1265,
+   "total_extracted_chars": 387,
+   "visible_text_chars": 400,
+   "substance": "ok",
+   "summary": "200 OK · 387B markdown · cache · cached copy, fetched 31.9 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above. | this batch shares one return budget: each page is capped at 9600 content chars, because 5 x the 40000 default is 200000 - more than a host keeps, and the tail of the batch would be cut off the answer. Pass max_content_chars= to spend more per page, or read one URL alone to get the default back",
+   "content_ok": true,
+   "next_action": "",
+   "fetched_at": "2026-10-25T18:30:21Z",
+   "metadata": {
+    "title": "本地抓取工具配置指南",
+    "lang": "zh",
+    "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)"
+   },
+   "identity_applied": "allow_private",
+   "approx_tokens": 321
+  },
+  {
+   "status": 200,
+   "content": [
+    "推荐专题\n\n# 推荐专题\n\n[专题 1](/work/1)3 件\n\n[专题 2](/work/2)6 件\n\n[专题 3](/work/3)9 件\n\n[专题 4](/work/4)12 件\n\n[专题 5](/work/5)15 件\n\n[专题 6](/work/6)18 件\n\n[专题 7](/work/7)21 件\n\n[专题 8](/work/8)24 件\n\n[专题 9](/work/9)27 件\n\n[专题 10](/work/10)30 件\n\n[专题 1（重复）](/work/1#top)\n\n没有链接的一张\n\n[关于](/about)"
+   ],
+   "url": "http://127.0.0.1:8399/collections",
+   "fetcher_used": "stealthy",
+   "duration_ms": 4628,
+   "error": "",
+   "content_type": "text/html; charset=utf-8",
+   "total_size_bytes": 1182,
+   "total_extracted_chars": 269,
+   "visible_text_chars": 117,
+   "substance": "ok",
+   "escalation_path": "http→stealthy",
+   "summary": "200 OK · 269B markdown · stealthy · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named | this batch shares one return budget: each page is capped at 9600 content chars, because 5 x the 40000 default is 200000 - more than a host keeps, and the tail of the batch would be cut off the answer. Pass max_content_chars= to spend more per page, or read one URL alone to get the default back",
+   "content_ok": true,
+   "next_action": "",
+   "fetched_at": "2026-10-25T19:02:21Z",
+   "metadata": {
+    "title": "推荐专题",
+    "lang": "zh",
+    "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)"
+   },
+   "identity_applied": "allow_private",
+   "approx_tokens": 105
+  },
+  {
+   "status": 404,
+   "content": [
+    "404"
+   ],
+   "url": "http://127.0.0.1:8399/nope-3",
+   "fetcher_used": "http",
+   "duration_ms": 13,
+   "error": "http_error_404: server returned error status",
+   "content_type": "text/html; charset=utf-8",
+   "total_size_bytes": 116,
+   "total_extracted_chars": 3,
+   "visible_text_chars": 7,
+   "attempt_cap_ms": 29000,
+   "summary": "404 ERR · 3B markdown · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile · the archive.org fallback was asked and the availability API answered HTTP 429 - the second opinion got nothing, so the failure above is the origin's own",
+   "content_ok": false,
+   "next_action": "page does not exist (HTTP 404/410) - the URL is stale or misspelled. Do NOT paginate it: check the URL, or web_search for the page's current location",
+   "fetched_at": "2026-10-25T19:02:17Z",
+   "metadata": {
+    "title": "404",
+    "lang": "zh",
+    "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)"
+   },
+   "identity_applied": "allow_private",
+   "diagnosis": {
+    "code": "http_error_404",
+    "retryable": false,
+    "recover_with": ""
+   },
+   "approx_tokens": 1
+  },
+  {
+   "status": 200,
+   "content": [
+    "作品 1\n街景\n夜景\n人像\n第 1 篇的独有正文，用来证明这一列真的每页不同。"
+   ],
+   "url": "http://127.0.0.1:8399/work/1",
+   "cached": true,
+   "fetcher_used": "cache",
+   "duration_ms": 8,
+   "error": "",
+   "content_type": "text/html; charset=utf-8",
+   "total_size_bytes": 406,
+   "total_extracted_chars": 39,
+   "visible_text_chars": 58,
+   "substance": "ok",
+   "summary": "200 OK · 39B markdown · cache · cached copy, fetched 5.5 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above. | this batch shares one return budget: each page is capped at 9600 content chars, because 5 x the 40000 default is 200000 - more than a host keeps, and the tail of the batch would be cut off the answer. Pass max_content_chars= to spend more per page, or read one URL alone to get the default back",
+   "content_ok": true,
+   "next_action": "",
+   "fetched_at": "2026-10-25T18:56:46Z",
+   "metadata": {
+    "title": "作品 1",
+    "lang": "zh",
+    "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)"
+   },
+   "identity_applied": "allow_private",
+   "approx_tokens": 31
+  },
+  {
+   "status": 404,
+   "content": [
+    "404"
+   ],
+   "url": "http://127.0.0.1:8399/nope-5",
+   "fetcher_used": "http",
+   "duration_ms": 20,
+   "error": "http_error_404: server returned error status",
+   "content_type": "text/html; charset=utf-8",
+   "total_size_bytes": 116,
+   "total_extracted_chars": 3,
+   "visible_text_chars": 7,
+   "attempt_cap_ms": 29000,
+   "summary": "404 ERR · 3B markdown · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile · the archive.org fallback was asked and the availability API answered HTTP 429 - the second opinion got nothing, so the failure above is the origin's own",
+   "content_ok": false,
+   "next_action": "page does not exist (HTTP 404/410) - the URL is stale or misspelled. Do NOT paginate it: check the URL, or web_search for the page's current location",
+   "fetched_at": "2026-10-25T19:02:17Z",
+   "metadata": {
+    "title": "404",
+    "lang": "zh",
+    "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)"
+   },
+   "identity_applied": "allow_private",
+   "diagnosis": {
+    "code": "http_error_404",
+    "retryable": false,
+    "recover_with": ""
+   },
+   "approx_tokens": 1
+  }
+ ],
+ "total": 5,
+ "successful": 3,
+ "usable": 3,
+ "summary": "5 URLs asked · 3 answered without an HTTP error (`successful` counts exactly that, per row's status/error) · 3 carry content you can quote (`content_ok=true` on the row). The two numbers answer different questions and are usually not equal: a row can answer 200 with a login wall, a paywall, an empty page, or a body cut down by the extractor.",
+ "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+ "_wall_s": 4.68,
+ "_tool": "web_read",
+ "_tag": "p10-S1-客户链接批量(混 http:// 与 404)#02",
+ "_ts": "2026-10-25T19:02:21.419130+00:00"
+}

@@ -1,0 +1,12 @@
+{
+ "url": "http://127.0.0.1:8399/no-such-page",
+ "changed": null,
+ "status": 404,
+ "fetcher": "http",
+ "note": "no comparable baseline for this URL (or it expired), and this fetch failed too - nothing was recorded, so asking again would not compare anything; make the page fetchable first",
+ "error": "http_error_404: server returned error status",
+ "_wall_s": 0.74,
+ "_tool": "web_read",
+ "_tag": "p09-S2-check 档再试#03",
+ "_ts": "2026-10-25T19:01:55.689131+00:00"
+}

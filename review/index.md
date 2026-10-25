@@ -16,6 +16,7 @@
 | round-02 | review/round-02 | aeb7059 | 10 | 64（画像）+ 25（P5 复验/探针） | 5 fixed（R02-001/002/003/004/007）+ 1 wontfix（005 设计取舍）+ 1 backlog 升级（006：E1/E3/E8 三现）| 完成（P5 复验 W1–W5 全过，全量 pytest 7746 绿）|
 | round-03 | review/round-03 | 1f0d06b | 10 | 60（画像）+ 4（P5 复验/探针） | 1 fixed（R03-004 描述点名）+ 2 REJECT（001 豁免进程级在册 / 003 顶层信号在——审查推翻首报）+ 1 E 新档（002→E12）+ 2 E 记录（005/006）| 完成（P5 复验 W1 + 回归 11/11 PASS，全量 pytest 全绿）|
 | round-04 | review/round-04 | 7cd2bc0 | 10 | 55（画像）+ 3（P5 复验/补条） | 2 fixed（R04-001 iframe 提示 / R04-002 watch 出路句前题）+ 2 E 记录（003=E7 活体 / 004=E2 邻接+E10）| 完成（P5 复验 W1/W2 + 回归 PASS，全量 pytest 7751 绿）|
+| round-05 | review/round-05 | 959ed79 | 10 | 53（画像+补条） | **0 fixed（首个零确认轮）**+ 1 REJECT（001 preflight 错误族=环境所致，观察项）+ 1 E 记录（002=E10 样本）| 完成（故障路径轮：回归 4/4 真测 PASS，pytest 7751 绿）|
 
 ## 跨轮资产
 

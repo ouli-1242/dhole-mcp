@@ -1,0 +1,26 @@
+[p04 弭兵·数据工程] session 705dcf541fcb4622989cfcc670fe06b5 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p04 S1-批量 8 发混 3 坏 ----
+[p04-S1-批量 8 发混 3 坏#01] cred_defaults   0.0s ok=None err=-  chars=
+[p04-S1-批量 8 发混 3 坏#02] web_read   2.0s ok=None err=-  chars=
+      summary: 8 URLs asked · 5 answered without an HTTP error (`successful` counts exactly that, per row's status/
+      batch: {"summary": "8 URLs asked · 5 answered without an HTTP error (`successful` counts exactly that, per row's status/error) · 5 carry content you can quote (`content_ok=true` on the row). The two numbers answer different questions and are usually not equal: a row can answer 200 with a login wall, a payw
+   - {"url": "http://127.0.0.1:8399/work/1", "content_ok": true, "total_extracted_chars": 39, "error": ""}
+   - {"url": "http://127.0.0.1:8399/work/2", "content_ok": true, "total_extracted_chars": 36, "error": ""}
+   - {"url": "http://127.0.0.1:8399/work/3", "content_ok": true, "total_extracted_chars": 36, "error": ""}
+   - {"url": "http://127.0.0.1:8399/work/4", "content_ok": true, "total_extracted_chars": 39, "error": ""}
+   - {"url": "http://127.0.0.1:8399/work/5", "content_ok": true, "total_extracted_chars": 36, "error": ""}
+   - {"url": "http://127.0.0.1:9391/", "content_ok": false, "error": "network_error: timeout (TCP preflight)"}
+   - {"url": "http://127.0.0.1:8399/no-such-page", "content_ok": false, "total_extracted_chars": 3, "error": "http_error_404:
+   - {"url": "http://10.255.255.1:81/", "content_ok": false, "error": "invalid_request: URL targets internal/private IP (10.2
+      (pause 9s - throttle)
+
+---- p04 S2-显式 timeout 的批量 ----
+[p04-S2-显式 timeout 的批量#03] web_read   0.1s ok=None err=-  chars=
+      summary: 2 URLs asked · 2 answered without an HTTP error (`successful` counts exactly that, per row's status/
+      batch-explicit: {"summary": "2 URLs asked · 2 answered without an HTTP error (`successful` counts exactly that, per row's status/error) · 2 carry content you can quote (`content_ok=true` on the row). The two numbers answer different questions and are usually not equal: a row can answer 200 with a login wall, a payw
+      (pause 8s - throttle)
+
+---- p04 S3-sys_state 对账 ----
+[p04-S3-sys_state 对账#04] sys_state   0.0s ok=None err=-  chars=
+P04 DONE

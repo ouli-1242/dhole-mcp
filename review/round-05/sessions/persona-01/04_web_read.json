@@ -1,0 +1,31 @@
+{
+ "status": 202,
+ "content": [],
+ "url": "https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=CELEX:32016R0679",
+ "fetcher_used": "stealthy",
+ "duration_ms": 13334,
+ "error": "all_tiers_failed: unknown (HTTP status 202)\nAttempted: HTTP -> Stealthy\nFailures: HTTP failed (status 202): js_shell_detected: page requires JavaScript rendering but fetcher returned placeholder; Stealthy failed (status 202): js_shell_detected: page requires JavaScript rendering but fetcher returned placeholder\n- If the site uses Cloudflare Turnstile or DataDome, no free tool can bypass it.\n- Try a different URL on the same domain (some paths have lower protection).\n- Try a proxy stored with cred_defaults.",
+ "content_type": "text/html; charset=UTF-8",
+ "total_size_bytes": 2033,
+ "escalation_path": "http→stealthy(all_failed)",
+ "retry_count": 2,
+ "summary": "202 OK · 0B markdown · stealthy · timeout clamped 59->30 s per attempt (this tier caps one attempt at 30s) · archive.org listed snapshots of this URL but the snapshot itself answered with the Wayback capture index, not archived content - the origin's failure above stands; try a dated web.archive.org/web/<timestamp>/<url> URL directly",
+ "content_ok": false,
+ "next_action": "All fetch tiers failed. The site may use unbypassable protection (DataDome/Akamai/Turnstile) or is unreachable - switch sources.",
+ "fetched_at": "2026-10-25T18:54:05Z",
+ "metadata": {
+  "lang": "en",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "page_type": "js_shell",
+ "diagnosis": {
+  "code": "js_shell",
+  "retryable": true,
+  "recover_with": "the browser tier already rendered this and returned what is in `content` - no untried tier is left on this URL"
+ },
+ "_wall_s": 15.31,
+ "_tool": "web_read",
+ "_tag": "p01-S4-降级链账目(外网真站带 archive)#04",
+ "_ts": "2026-10-25T18:54:05.403639+00:00"
+}

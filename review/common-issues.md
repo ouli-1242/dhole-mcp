@@ -62,6 +62,26 @@
 | E7 | 跨进程缓存回放缺存入时 env 语境 | backlog（三轮三现） | P01 |
 | E2 邻接 / E10 | 查询串变体不合并（精确 URL 契约）/ 404 行数字噪声三现 | backlog | P07/P06 |
 
+## round-05 新增/复发（P3 裁决后）
+
+| 区 | 现象 | 状态 | 来源 |
+|---|---|---|---|
+| preflight 错误族 | 死端口报 timeout (TCP preflight) 而非 refused——OS 层 2s 延迟为本机防火墙环境所致，非稳定复现 | 观察项（不立案；需能稳定复现 refused-vs-timeout 的环境） | P01 |
+| archive 档账目 | 404→archive 被问→availability API 429 逐字申报；all_tiers_failed 逐层具名 | 良好行为确认（R02 家产在线） | P03/P01 |
+| 边界值申报 | max_content_chars=-1 钳制申报；offset 越界 [No more content.] 哨兵；since 无日期条目放行且报数 | 良好行为确认 | P06/P07 |
+| E10 | 404 行数字噪声 | backlog（四轮样本） | P04/P10 |
+
+## round-05 必测回归点（round-06 新画像真实回访）
+
+1. 预算分账：小预算调用拒发 stealthy 的毫秒账（P01）。
+2. all_tiers_failed 逐层具名（P01/P03）。
+3. archive 档真触发 + 失败原因申报（429/无快照）（P03）。
+4. 私网谱三档话术 + 怪值形状句（P08）。
+5. 非法参数第一拒教全名单（P05）。
+6. 边界值钳制申报 + offset 哨兵（P06）。
+7. feed 混坏行级分账 + since 无日期报数（P07）。
+8. 前四轮家产（iframe 提示/watch 出路句/resume/显式 timeout/401 杠杆/challenge/drag/recall 合并/page_type）。
+
 ## round-04 必测回归点（round-05 新画像真实回访）
 
 1. iframe 页裸 selector 超时 → 步级错误带 frame: 指引（fix-R04-F1）。

@@ -1,0 +1,16 @@
+[
+  {
+    "id": "R05-001",
+    "title": "preflight 失败错误族不区分 refused/timeout",
+    "status": "rejected",
+    "verdict": "P3 REJECT：OS 层 2s 延迟为本机防火墙环境所致（connect_ex 10061 但拖 2.02s），非稳定复现；观察项记 common-issues",
+    "first_reported_by": "P01"
+  },
+  {
+    "id": "R05-002",
+    "title": "E10 404 行数字噪声再现",
+    "status": "backlog",
+    "verdict": "P3 CONFIRM(E)：E10 样本累计四轮",
+    "first_reported_by": "P04/P10"
+  }
+]

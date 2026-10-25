@@ -1,0 +1,27 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://[::1]:8399/",
+ "fetcher_used": "none",
+ "duration_ms": 2004,
+ "error": "network_error: timeout (TCP preflight)",
+ "escalation_path": "preflight:timeout(skipped_http+stealthy)",
+ "summary": "network error · 0B markdown · none",
+ "content_ok": false,
+ "next_action": "this private target answered nothing - no HTTP response came back from it. Is the local service actually running, and on this port?",
+ "fetched_at": "2026-10-25T19:01:19Z",
+ "metadata": {
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "network",
+  "retryable": true,
+  "recover_with": "check network/proxy; the classifier hint in `error` names the fix"
+ },
+ "_wall_s": 2.01,
+ "_tool": "web_read",
+ "_tag": "p08-S3-豁免后 [::1] 再试#08",
+ "_ts": "2026-10-25T19:01:19.616401+00:00"
+}

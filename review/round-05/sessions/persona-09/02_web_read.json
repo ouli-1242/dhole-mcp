@@ -1,0 +1,37 @@
+{
+ "status": 404,
+ "content": [
+  "## DOI Prefix [10.9999] Not Found\n\n### 10.9999/fake.2026.99999\n\nThis DOI cannot be found in the DOI System. Possible reasons are:\n\n- The DOI is incorrect in your source. Search for the item by name, title, or other metadata using a search engine.\n- The DOI was copied incorrectly. Check to see that the string includes all the characters before and after the slash and no sentence punctuation marks.\n- The DOI has not been activated yet. Please try again later, and report the problem if the error continues.\n\n## WHAT CAN I DO NEXT?\n\n- If you believe this DOI is valid, you may **report this error** to the responsible DOI Registration Agency using the form here.\n- If your organization is the steward of this DOI prefix, please make sure you have completed registration of this DOI with your Registration Agency.\n- You can try to search again from [DOI.ORG homepage](https://www.doi.org)"
+ ],
+ "url": "https://doi.org/10.9999/fake.2026.99999",
+ "fetcher_used": "http",
+ "duration_ms": 657,
+ "error": "http_error_404: server returned error status",
+ "content_type": "text/html;charset=utf-8",
+ "total_size_bytes": 10644,
+ "total_extracted_chars": 888,
+ "visible_text_chars": 1515,
+ "timeout_applied": 30000,
+ "attempt_cap_ms": 30000,
+ "summary": "404 ERR · 888B markdown · http · timeout clamped 44->30 s per attempt (this tier caps one attempt at 30s) · the archive.org fallback was asked and the availability API answered HTTP 429 - the second opinion got nothing, so the failure above is the origin's own",
+ "content_ok": false,
+ "next_action": "page does not exist (HTTP 404/410) - the URL is stale or misspelled. Do NOT paginate it: check the URL, or web_search for the page's current location",
+ "fetched_at": "2026-10-25T19:01:46Z",
+ "metadata": {
+  "title": "Error: DOI Prefix [10.9999] Not Found",
+  "lang": "en-us",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "page_type": "article",
+ "diagnosis": {
+  "code": "http_error_404",
+  "retryable": false,
+  "recover_with": ""
+ },
+ "approx_tokens": 222,
+ "_wall_s": 1.42,
+ "_tool": "web_read",
+ "_tag": "p09-S1-编造 DOI 的落地页#02",
+ "_ts": "2026-10-25T19:01:46.949484+00:00"
+}

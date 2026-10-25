@@ -151,3 +151,7 @@ Ctrl-C 鍋滄
 [02:33:36] POST /login -> 302
 [02:33:36] GET /account -> 200
 [02:33:36] GET /feed.xml -> 200
+[02:47:58] client gone (ConnectionResetError) from 127.0.0.1:58844
+[02:48:23] GET /frame -> 200
+[02:48:24] GET /frame -> 200
+[02:48:24] GET /frame/inner -> 200

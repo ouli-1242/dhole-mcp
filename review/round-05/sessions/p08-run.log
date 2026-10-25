@@ -1,0 +1,32 @@
+[p08 傅筛·安全研究] session bfc0eef7ab8f421fa148a4aa8e51e31f server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p08 S1-私网谱(不带豁免) ----
+[p08-S1-私网谱(不带豁免)#01] web_read   0.0s ok=False err=invalid_request: URL targets internal cloud metadata endpoint (169.254.169.254) invalid_request chars=
+      summary: invalid request · URL targets internal cloud metadata endpoint (169.254.169.254)
+   link-local: invalid_request: URL targets internal cloud metadata endpoint (169.254.169.254)
+      (pause 5s - throttle)
+[p08-S1-私网谱(不带豁免)#02] web_read   0.0s ok=False err=invalid_request: URL targets internal/private IP (10.0.0.1 in 10.0.0.0/8) invalid_request chars=
+      summary: invalid request · URL targets internal/private IP (10.0.0.1 in 10.0.0.0/8)
+   ten-net: invalid_request: URL targets internal/private IP (10.0.0.1 in 10.0.0.0/8)
+      (pause 5s - throttle)
+[p08-S1-私网谱(不带豁免)#03] web_read   2.0s ok=False err=network_error: timeout (TCP preflight) network chars=
+      summary: network error · 0B markdown · none
+   ipv6-loopback: network_error: timeout (TCP preflight)
+      (pause 5s - throttle)
+
+---- p08 S2-怪 allow_private 值 ----
+[p08-S2-怪 allow_private 值#04] cred_defaults   0.0s ok=None err=invalid_request: allow_private: pass true (loopback only) or a list of host names — cloud  invalid_request chars=
+   zero: invalid_request: allow_private: pass true (loopback only) or a list of host names — cloud metadata e
+[p08-S2-怪 allow_private 值#05] cred_defaults   0.0s ok=None err=invalid_request: allow_private: pass true (loopback only) or a list of host names — cloud  invalid_request chars=
+   empty-str: invalid_request: allow_private: pass true (loopback only) or a list of host names — cloud metadata e
+[p08-S2-怪 allow_private 值#06] cred_defaults   0.0s ok=None err=invalid_request: allow_private: pass true (loopback only) or a list of host names — cloud  invalid_request chars=
+   empty-list: invalid_request: allow_private: pass true (loopback only) or a list of host names — cloud metadata e
+      (pause 6s - throttle)
+
+---- p08 S3-豁免后 [::1] 再试 ----
+[p08-S3-豁免后 [::1] 再试#07] cred_defaults   0.0s ok=None err=-  chars=
+[p08-S3-豁免后 [::1] 再试#08] web_read   2.0s ok=False err=network_error: timeout (TCP preflight) network chars=
+      summary: network error · 0B markdown · none
+      ipv6-after: {"content_ok": false, "summary": "network error · 0B markdown · none"}
+[p08-S3-豁免后 [::1] 再试#09] sys_state   0.0s ok=None err=-  chars=
+P08 DONE

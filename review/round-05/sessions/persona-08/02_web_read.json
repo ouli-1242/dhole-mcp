@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://10.0.0.1/",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: URL targets internal/private IP (10.0.0.1 in 10.0.0.0/8)",
+ "summary": "invalid request · URL targets internal/private IP (10.0.0.1 in 10.0.0.0/8)",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. The URL is well-formed - what is refused is the address it points at. If you meant a public site, this one names a private range: search for the page instead. If this internal target is genuinely yours to fetch, the door is cred_defaults(set={'allow_private': true}) for loopback or {'allow_private': ['<host>']} to name one host - it never opens cloud metadata, which stays refused whatever the spelling.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.02,
+ "_tool": "web_read",
+ "_tag": "p08-S1-私网谱(不带豁免)#02",
+ "_ts": "2026-10-25T19:00:59.492791+00:00"
+}
