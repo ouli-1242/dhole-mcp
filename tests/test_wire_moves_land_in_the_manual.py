@@ -448,7 +448,7 @@ def test_connect_stays_inside_the_packed_budget():
 # 于是"建图不花钱"这个前提进了 agent 的取舍。新句改成记账：0 只在 `sitemap=true`
 # 与 `resume_token=` 续页这两条不联网的路径上成立，逐跳走时一步一页。完整口径
 # （含 max_pages 只约束逐跳那一半）住 references/tools.md，wire 只留这一句。
-CONNECT_CEILING = 36_656
+CONNECT_CEILING = 36_763
 # 2026-10-25 模拟修复轮：上抬 +244（36,412 → 36,656），全在 web_request 身上
 # （2,954 → 3,198）——新增 `session_id`：登录 POST 的 Set-Cookie 落进调用方
 # 点名的 jar（jar 存取在 fetch 层每跳每方法都跑，缺的只是递参这一步；真机

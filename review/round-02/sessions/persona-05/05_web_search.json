@@ -1,0 +1,153 @@
+{
+ "query": "LED certification",
+ "results": [
+  {
+   "title": "LED certifications, LED lighting, RoHS, CE, LED verification",
+   "url": "https://adayoled.com/news/understanding-led-certifications-what-you-need-to-know.html",
+   "snippet": "Understanding LED certifications is essential for making informed decisions when purchasing LED lighting products. Certifications like UL, Energy Star...",
+   "source": "yandex",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.9974389488884576,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 8 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "LED Certification Guide: UL, CE, ETL Explained | Kingseng",
+   "url": "https://ksimpexp.com/led-certification-ul-ce-etl/",
+   "snippet": "Q: Which certifications are mandatory for importing LED lights into the US? nA: NRTL certification (UL or ETL) is mandatory for wired LED fixtures under the National Electrical Code (NEC).",
+   "source": "yandex",
+   "position": 2,
+   "relevance_score": 0.9915,
+   "relevance_raw": 0.9873936123664887,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 8 (degraded_pool)",
+   "source_type": "unknown"
+  },
+  {
+   "title": "ledestar.com/learn-more-about-the-led-certification",
+   "url": "https://www.ledestar.com/learn-more-about-the-led-certification/",
+   "title_is_address": true,
+   "snippet": "What Is The LED Certification? Setifikeiti sa LED ke Eng?",
+   "source": "yandex",
+   "position": 3,
+   "relevance_score": 0.9627,
+   "relevance_raw": 0.9535668995560844,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 8 (degraded_pool)",
+   "source_type": "unknown"
+  }
+ ],
+ "total_results": 3,
+ "engines_used": [
+  "sogou",
+  "yandex",
+  "seznam"
+ ],
+ "engine_blocked": [
+  "so360",
+  "duckduckgo",
+  "brave",
+  "shenma",
+  "baidu"
+ ],
+ "engine_preempted": [
+  "yahoo",
+  "bing",
+  "bing_global"
+ ],
+ "engine_detail": [
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 238s"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 27s"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 26s"
+  },
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 566s"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 59s"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "7 usable rows from 7 item nodes"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  }
+ ],
+ "families_answered_of_asked": "3 of 8",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "duration_ms": 3200,
+ "error": "",
+ "fetch_hint": "3 high, 0 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. web_read what fits your need (high first, but a lower tier can be the right call). | Engines so360, duckduckgo, brave, shenma, baidu didn't contribute (5 blocked); results are from the rest. | no follow-up phrases this round: 1 word pair(s) recurred across 2+ independent sources but every one was dropped - either it opens with a function word (a sentence fragment, not a query) or it restates words your own query already carries",
+ "summary": "Searched 'LED certification' -> 3 results (3 high, 0 med, 0 low) from sogou,yandex,seznam; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. WARNING: 5 of the 8 engines it asked didn't contribute (5 blocked) - results have LOW diversity (only from sogou, yandex, seznam). For more recall: the pool is down to 3 of the 8 engines it asked; retry after the cooldown clears (cooling right now: shenma 566s, so360 237s, baidu 58s, duckduckgo 26s, brave 26s; the pool is whole again in 566s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use. yahoo, bing, bing_global were cancelled once enough indexes had answered - the diversity quorum, not a failure, so waiting and retrying reaches the same stop point; raise max_results or name them in engines=[...] to ask them anyway.",
+ "same_document_groups": [],
+ "_wall_s": 3.21,
+ "_tool": "web_search",
+ "_tag": "p05-S4-既要又要二连#05",
+ "_ts": "2026-10-25T16:06:30.169691+00:00"
+}

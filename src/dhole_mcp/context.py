@@ -55,6 +55,10 @@ from dhole_mcp.focus import (  # noqa: F401
 # Opt-in: populate ResponseModel.media with the page's image URLs (multimodal).
 _INCLUDE_MEDIA: contextvars.ContextVar[bool] = contextvars.ContextVar("_include_media", default=False)
 _INCLUDE_LINKS: contextvars.ContextVar[bool] = contextvars.ContextVar("_include_links", default=False)
+# R02-004：wire 上**带了** timeout= 的调用（显式预算）——learned ceiling 让位。
+# 默认 False（learned 只管 dhole 自己的默认预算；显式预算是合同）。分发层置位，
+# `_http_tier_budget` 读取。
+_TIMEOUT_EXPLICIT: contextvars.ContextVar[bool] = contextvars.ContextVar("_timeout_explicit", default=False)
 # Opt-in: 回执带上状态行、响应头与重定向端点（web_read / web_request 的
 # `include_headers`）。默认关：多数调用要的是正文，头是给"这页为什么是这样"的
 # 追问用的。作者的记号在这里，读取在两处 —— `_translate_response`（头来自这一发）
@@ -689,9 +693,11 @@ _ATTEMPT_BOUND_SENTENCES = {
     # 「not your 60000msms」），所以模板里不许再补单位。
     "left": ("one HTTP attempt is bound by what is left of this call: {asked} was "
              "named, but only {given} of it remained when the HTTP tier was reached"),
-    "learned": ("one HTTP attempt is bound by the learned ceiling for this host "
-                "(it answers pages fast, so the tier gives it {given}, not your "
-                "{asked}) — a per-host habit, not a cap you set"),
+    # R02-004：learned 只在**没带显式 timeout** 时生效（显式预算是合同），所以
+    # "explicit timeout= lifts it" 是真话；句子也收紧到一句（P08 六连发六遍的长句
+    # 是噪声）。{asked} 在这一支恒为默认值，所以说 "the default {asked}"。
+    "learned": ("one HTTP attempt is bound by the learned ceiling for this host: "
+                "{given}, not the default {asked} - an explicit timeout= lifts it"),
     "slow-domain": ("one HTTP attempt is bound UP to {given} rather than down: this "
                     "host is on the known-slow list, so the tier guarantees at least "
                     "20s even though {asked} was named"),

@@ -1,0 +1,68 @@
+{
+ "query": "专题 长文",
+ "engine": "neural",
+ "results": [
+  {
+   "url": "http://127.0.0.1:8399/longaside",
+   "title": "专题长文",
+   "snippet": "专题长文 专题长文 ==== 第 0 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 1 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 2 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 3 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。 第 4 段讲的是同一个专题的进展，句式与用词都逐段不同，以便抽取器把它们认成正文。",
+   "fetched_at": "2026-10-25T16:03:19Z",
+   "is_stale": false,
+   "age_days": 0.0,
+   "extraction_type": "markdown",
+   "relevance": 0.9972
+  },
+  {
+   "url": "http://127.0.0.1:8399/collections",
+   "title": "推荐专题",
+   "snippet": "推荐专题 # 推荐专题 [专题 1](/work/1)3 件 [专题 2](/work/2)6 件 [专题 3](/work/3)9 件 [专题 4](/work/4)12 件 [专题 5](/work/5)15 件 [专题 6](/work/6)18 件 [专题 7](/work/7)21 件 [专题 8](/work/8)24 件 [专题 9](/work/9)27 件 [专题 10](/work/10)30 件 [专题",
+   "fetched_at": "2026-10-25T14:03:54Z",
+   "is_stale": true,
+   "age_days": 0.1,
+   "extraction_type": "markdown",
+   "relevance": 0.8643
+  },
+  {
+   "url": "http://127.0.0.1:8399/collections",
+   "title": "推荐专题",
+   "snippet": "推荐专题 推荐专题 专题 1 3 件 专题 2 6 件 专题 3 9 件 专题 4 12 件 专题 5 15 件 专题 6 18 件 专题 7 21 件 专题 8 24 件 专题 9 27 件 专题 10 30 件 专题 1（重复） 没有链接的一张",
+   "fetched_at": "2026-10-25T16:04:07Z",
+   "is_stale": false,
+   "age_days": 0.0,
+   "extraction_type": "html",
+   "relevance": 0.7113
+  },
+  {
+   "url": "http://127.0.0.1:8399/",
+   "title": "靶站索引",
+   "snippet": "靶站索引 dhole 模拟测试靶站 登录 账户 结算 二维码 验证码 长文",
+   "fetched_at": "2026-10-25T13:50:49Z",
+   "is_stale": true,
+   "age_days": 0.1,
+   "extraction_type": "html",
+   "relevance": 0.3727
+  },
+  {
+   "url": "http://127.0.0.1:8399/",
+   "title": "靶站索引",
+   "snippet": "dhole 模拟测试靶站 登录 账户 结算 二维码 验证码 长文",
+   "fetched_at": "2026-10-25T08:01:11Z",
+   "is_stale": true,
+   "age_days": 0.3,
+   "extraction_type": "markdown",
+   "relevance": 0.3414
+  }
+ ],
+ "terms_found": [
+  "专题",
+  "长文"
+ ],
+ "terms_absent": [],
+ "scanned_rows": 86,
+ "candidates_scored": 7,
+ "note": "pointers, not answers - web_read the URL (fresh or cached) for the page itself; stale rows are ones whose cache TTL has passed",
+ "_wall_s": 1.05,
+ "_tool": "web_recall",
+ "_tag": "p10-S1-读两页再召回#04",
+ "_ts": "2026-10-25T16:20:18.054917+00:00"
+}

@@ -1,14 +1,18 @@
 # E 类 UX 缺口（不进修复队列，按用户感知强度排序）
 
-> 种子：manual-2026-10-25。轮次列记录「已观察轮次」。
+> 种子：manual-2026-10-25。轮次列记录「已观察轮次」。**三现线**：同一现象跨三
+> 轮复现 → 升级为待排期修复项（宪章 §8），在下表显式标注，不悄悄混进当轮修复。
 
-| # | 现象 | 场景 | 感知强度 | 已观察轮次 |
-|---|---|---|---|---|
-| E1 | 批量读行键 results 与直觉 pages 不一致，调用方脚本首写即错 | 批量读 | 皱眉 | manual-2026-10-25 |
-| E2 | search/recall 同 URL 多变体不去重；recall 两行 stale 标注打架 | 搜索/召回 | 皱眉 | round-01（R01-004） |
-| E3 | offset 模式 summary/total_extracted_chars 说整页不说本片 | 长文续取 | 骂人边缘 | round-01（R01-011） |
-| E4 | crawl 升级 stealthy 浏览器时回执不点名（sys_state 里才发现） | 爬取 | 皱眉 | round-01（R01-012） |
-| E5 | timeout 钳制消息展示剩余秒数（89→30）而非请求值 | PDF/大页 | 皱眉 | round-01（R01-013） |
-| E6 | recall 低分命中（0.06 / 1/3 词）出榜，不如说「没找到」 | 召回 | 皱眉 | round-01（R01-014） |
-| E7 | robots 缓存 metadata 的 fetched-under 标注来自铸造时刻，跨进程读易误判当前进程行为 | robots | 皱眉 | round-01（R01-005 旁证） |
-| E8 | since 只收 ISO 日期不收「3d」档位词（报错有示例，自愈成本低） | feed 增量 | 无感 | manual + round-01 复现 |
+| # | 现象 | 场景 | 感知强度 | 已观察轮次 | 状态 |
+|---|---|---|---|---|---|
+| E1 | 批量读行键 results 与直觉 pages 不一致，调用方脚本首写即错 | 批量读 | 皱眉 | manual + round-01 + round-02（P04） | **三现达标**（R02-006 升级标注，待排期） |
+| E2 | search/recall 同 URL 多变体不去重；recall 两行 stale 标注打架 | 搜索/召回 | 皱眉 | round-01（R01-004）+ round-02（P10） | **已修**（R02-007，fix-R02-F5：recall 按 URL 合并取最新；search 侧仍开放） |
+| E3 | offset 模式 summary/total_extracted_chars 说整页不说本片 | 长文续取 | 骂人边缘 | manual + round-01（R01-011）+ round-02（P05） | **三现达标**（R02-006 升级标注，待排期） |
+| E4 | crawl 升级 stealthy 浏览器时回执不点名（sys_state 里才发现） | 爬取 | 皱眉 | round-01（R01-012） | 观察中 |
+| E5 | timeout 钳制消息展示剩余秒数（89→30）而非请求值 | PDF/大页 | 皱眉 | round-01（R01-013） | 观察中（R02-004 的 attempt 句已改为报 learned 值+默认值两个真数） |
+| E6 | recall 低分命中（0.06 / 1/3 词）出榜，不如说「没找到」 | 召回 | 皱眉 | round-01（R01-014） | 观察中 |
+| E7 | robots 缓存 metadata 的 fetched-under 标注来自铸造时刻，跨进程读易误判当前进程行为 | robots | 皱眉 | round-01（R01-005 旁证）+ round-02（P10 缓存 provenance 括号绕口令，活体样本） | 观察中（两轮二现） |
+| E8 | since 只收 ISO 日期不收「3d」档位词（报错有示例，自愈成本低） | feed 增量 | 无感 | manual + round-01 + round-02（P05） | **三现达标**（R02-006 升级标注，待排期） |
+| E9 | 微信签名链/视频类页面无类型徽标（返回正文但不说是嵌入流/外链跳转，L1 用户无法预判） | 特殊页面 | 皱眉 | round-02（P03） | 新增 |
+| E10 | 404 错误行仍带 total_extracted_chars=3 数字噪声（错误行无正文可言） | 错误行 | 无感 | round-02（P09） | 新增 |
+| E11 | 硬墙主机烧满整个预算（http 被墙 → stealthy 30s/attempt 烧满 90s），全程无「此站常驻墙，换源」早停提示 | 反爬硬墙 | 骂人边缘 | round-02（P07 NEJM） | **wontfix 后记观察**（R02-005：早停需 per-host 失败记忆，误拒可恢复站点的风险 > 90s 等待代价；R02-004 显式预算已是真杠杆。若后续轮次再现，重开裁决） |

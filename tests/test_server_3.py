@@ -698,7 +698,7 @@ def test_the_default_connect_is_the_published_36_656():
         f"仓库量尺与 wire 的 tools/list 对不上：{ruler_compact} vs {wire['tools_compact']}")
     assert ruler_instr == len(wire["instructions"]), (
         f"仓库量尺多算了路由行：{ruler_instr} vs wire {len(wire['instructions'])}")
-    assert ruler_compact + ruler_instr == 36_656
+    assert ruler_compact + ruler_instr == 36_763
 
 
 def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():
@@ -724,7 +724,7 @@ def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():
     换成 12 家名单与池序=分层那句，`web_read` 不付。
     """
     assert _assert_price("web_read,web_search",
-                         ["web_read", "web_search"]) == 12_959
+                         ["web_read", "web_search"]) == 13_066
 
 
 def test_the_readme_eight_tool_price_is_what_the_server_sends():
@@ -744,7 +744,7 @@ def test_the_ninth_tool_costs_its_own_row_and_no_routing_line():
     """
     nine = SUB8 + ["web_discover"]
     assert _assert_price(",".join(nine), nine,
-                         published=("README.md", "共 9 颗 {total}")) == 28_611
+                         published=("README.md", "共 9 颗 {total}")) == 28_718
     eight = _connect(",".join(SUB8))
     assert len(_connect(",".join(nine))["instructions"]) == len(eight["instructions"]), (
         "两颗共用一句路由的工具，第二颗不该再收一次路由行的钱")

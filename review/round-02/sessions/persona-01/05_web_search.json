@@ -1,0 +1,32 @@
+{
+ "query": "水泥 标号 含义",
+ "results": [],
+ "total_results": 0,
+ "requested": 3,
+ "delivered": 0,
+ "engine_blocked": [
+  "so360"
+ ],
+ "engine_detail": [
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 60s"
+  }
+ ],
+ "families_answered_of_asked": "0 of 1",
+ "rerank_model": "",
+ "consensus_basis": "degraded_pool",
+ "duration_ms": 345,
+ "error": "No results from any engine. Engines were rate-limited/CAPTCHA'd; retry in 60s (so360 60s cooling), rephrase, or set DHOLE_SEARCH_PROXY for sustained heavy use.  nothing on this pool answered healthily this round, so no engine name is worth re-asking yet - `sys_state(show=[\"engine_state\"])` is the self-check for this: it says who is cooling and for how long, and which engine read 0 rows out of a page that carried result containers.",
+ "fetch_hint": "no follow-up phrases this round: this miner pairs two words that stand next to each other with only space between, and this round's rows contain no such pair - 0 whitespace-separated word(s) were found in them, but no segmenter is bundled, so rewording the query cannot change that answer",
+ "summary": "Searched '水泥 标号 含义' -> 0 results (0 high, 0 med, 0 low) from none; rerank=merge.",
+ "next_action": "No results (engines rate-limited/timed out). Retry in 60s (so360 60s cooling), or set DHOLE_SEARCH_PROXY for sustained heavy use. nothing on this pool answered healthily this round, so no engine name is worth re-asking yet - `sys_state(show=[\"engine_state\"])` is the self-check for this: it says who is cooling and for how long, and which engine read 0 rows out of a page that carried result containers.",
+ "same_document_groups": [],
+ "_wall_s": 0.38,
+ "_tool": "web_search",
+ "_tag": "p01-S4-熔断冷却语义#05",
+ "_ts": "2026-10-25T15:56:05.388796+00:00"
+}

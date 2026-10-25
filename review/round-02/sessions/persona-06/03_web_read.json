@@ -1,0 +1,27 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "https://www.specification.cn/standard/detail/404-nope",
+ "fetcher_used": "stealthy",
+ "duration_ms": 12849,
+ "error": "all_tiers_failed: unknown (HTTP status 0)\nAttempted: HTTP -> Stealthy\nFailures: HTTP failed (status 0): error sending request for url (https://www.specification.cn/standard/detail/404-nope) > tls handshake eof; Stealthy failed (status 0): Page.goto: net::ERR_CONNECTION_CLOSED at https://www.specification.cn/standard/detail/404-nope\nCall log:\n  - navigating to \"https://www.spec\n- No HTTP response was received at all: the name may not exist or the network cannot reach it. Check the URL spelling and DNS first - an anti-bot wall is unlikely (walls answer with a status, not silence).\n- Do NOT retry the same URL; if the name is correct, switch sources.",
+ "escalation_path": "http→stealthy(all_failed)",
+ "retry_count": 2,
+ "summary": "network error · 0B markdown · stealthy · the archive.org fallback was asked and the availability API answered HTTP 429 - the second opinion got nothing, so the failure above is the origin's own",
+ "content_ok": false,
+ "next_action": "All fetch tiers failed. The site may use unbypassable protection (DataDome/Akamai/Turnstile) or is unreachable - switch sources.",
+ "fetched_at": "2026-10-25T16:08:20Z",
+ "metadata": {
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "diagnosis": {
+  "code": "all_tiers_failed",
+  "retryable": true,
+  "recover_with": "switch source, or check network/proxy - no single parameter fixes a full-tier failure"
+ },
+ "_wall_s": 13.9,
+ "_tool": "web_read",
+ "_tag": "p06-S3-一次失败就放弃#03",
+ "_ts": "2026-10-25T16:08:20.306158+00:00"
+}

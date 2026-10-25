@@ -1,0 +1,16 @@
+{
+ "query": "collections",
+ "engine": "bm25",
+ "results": [],
+ "terms_found": [],
+ "terms_absent": [
+  "collections"
+ ],
+ "scanned_rows": 90,
+ "candidates_scored": 0,
+ "note": "nothing on this disk matches - the cache only knows pages fetched through dhole on this machine",
+ "_wall_s": 0.03,
+ "_tool": "web_recall",
+ "_tag": "p95-misc#04",
+ "_ts": "2026-10-25T17:09:18.980235+00:00"
+}

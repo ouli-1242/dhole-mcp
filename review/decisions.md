@@ -27,3 +27,8 @@
 - 背景/冲突点：宪章 §5.2 指定 loop/ref/harness/dhole_cli.py；它是一发一进程（ping/tools/call 各一次 initialize）。本轮一个画像 4–6 场景 × 多发，一发一进程开销大且节流间隔难落在同一会话里。
 - 选择与理由：模拟阶段用**进程内驱动脚本**（同一 JSON-RPC 契约：trust_env=False、协议 2025-03-26、Mcp-Session-Id 复用），每场景一份 transcript JSON + 追加 calls.jsonl，字段与 harness --log 对齐（ts/tag/tool/args/wall_s/isError/text）。harness CLI 仍用于 P0 自测与 P5 复验抽查（宪章指定动作不省）。
 - 影响范围：round-01 P1/P5。
+
+## 2026-10-26T00:5x+08:00 round-02 两项设计确认（裁决不改行为，只改话术/记录）
+- 背景/冲突点：R02-003a（401/403 不触发 archive 第三档）与 R02-005（硬墙主机无早停）都被画像报为骂人级/边缘。逐条攻击后：前者 quality.py docstring 与 _ARCHIVE_FALLBACK_STATUSES=(404,410,451) 是同一决策在册（archive 不会有登录墙内容，去了白付一跳）；后者早停需 per-host 失败记忆参与升级决策——新机制，误拒可恢复站点的风险大于 90s 等待的代价。
+- 选择与理由：两处都**不改行为**。R02-003a 修工具描述至与策略一致（点名 404/410/451 vs 401/403）；R02-005 wontfix 记观察（backlog E11），R02-004 的显式预算修复给了调用方真实自救杠杆。
+- 影响范围：web_read 描述（wire 锁重锁）；后续轮次若硬墙场景再现，E11 重开裁决。

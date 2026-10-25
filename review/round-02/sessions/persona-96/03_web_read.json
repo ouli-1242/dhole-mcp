@@ -1,0 +1,37 @@
+{
+ "status": 401,
+ "content": [
+  "Please enable JS and disable any ad blocker"
+ ],
+ "url": "https://www.wsj.com/articles/tech-companies-data-privacy-11634996753",
+ "original_url": "https://wsj.com/articles/tech-companies-data-privacy-11634996753",
+ "fetcher_used": "http",
+ "duration_ms": 2915,
+ "error": "http_error_401: server returned error status",
+ "content_type": "text/html;charset=utf-8",
+ "total_size_bytes": 767,
+ "total_extracted_chars": 43,
+ "visible_text_chars": 51,
+ "attempt_cap_ms": 29000,
+ "summary": "401 ERR · 43B markdown · http · redirected from https://wsj.com/articles/tech-companies-data-privacy-11634996753 to https://www.wsj.com/articles/tech-companies-data-privacy-11634996753",
+ "content_ok": false,
+ "next_action": "HTTP 401: this URL needs credentials. Store them once with cred_defaults (set={auth: {type:'basic',username,password} / {type:'bearer',token} / {type:'header',name,value}, plus the host) - no fetcher tier can invent them, so a browser retry is wasted here.",
+ "fetched_at": "2026-10-25T17:08:44Z",
+ "metadata": {
+  "title": "wsj.com",
+  "lang": "en",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "source_type": "news",
+ "diagnosis": {
+  "code": "http_error_401",
+  "retryable": false,
+  "recover_with": "store credentials for this host with cred_defaults (set={auth: {type:'basic',username,password} or {type:'bearer',token}}), or switch source / the Internet Archive copy"
+ },
+ "approx_tokens": 11,
+ "_wall_s": 2.93,
+ "_tool": "web_read",
+ "_tag": "p96-misc#03",
+ "_ts": "2026-10-25T17:08:44.368264+00:00"
+}

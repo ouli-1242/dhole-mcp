@@ -2606,10 +2606,23 @@ def status_error_sentence(status: int) -> str:
 
 
 def status_verdict(status: int) -> tuple[bool, str]:
-    """这颗状态码对「重发同一发会不会变」的回答，加上那一格的杠杆 —— 与句子同一位作者。"""
+    """这颗状态码对「重发同一发会不会变」的回答，加上那一格的杠杆 —— 与句子同一位作者。
+
+    R02-003：401/403 不许交白卷——同封回执的 next_action 教着 cred_defaults，
+    机器可读孪生却给空串，两只手打架。杠杆措辞与 `auth_required` 那行（同一张
+    表）及 401/403 的 next_action 同源。
+    """
     if status == 429:
         return True, ("the limit is on rate, not on your arguments - wait for the window, "
                       "then re-call this exact URL")
+    if status == 401:
+        return False, ("store credentials for this host with cred_defaults (set={auth: "
+                       "{type:'basic',username,password} or {type:'bearer',token}}), or "
+                       "switch source / the Internet Archive copy")
+    if status == 403:
+        return False, ("this URL refuses this client - retry with force_fetcher='stealthy', "
+                       "store credentials with cred_defaults, or switch source / the "
+                       "Internet Archive copy")
     if status in _RETRYABLE_STATUSES or status >= 500:
         return True, ("the origin failed at the origin - re-call after a pause; if it "
                       "persists, switch source")

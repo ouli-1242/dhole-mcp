@@ -1,0 +1,26 @@
+{
+ "status": 200,
+ "content": [
+  "| 姓名 | 年龄 | 城市 | 备注 |\n| --- | --- | --- | --- |\n| 张三 | 30 | 北京 | 工程师 |\n| 李四 | 25 | 上海 | 设计师 |\n| 王五 | 41 | 广州 | 产品经理 |"
+ ],
+ "url": "file:///<server cwd>/tests/gbk_sample.csv",
+ "fetcher_used": "parse",
+ "duration_ms": 4,
+ "error": "",
+ "content_type": "text/csv",
+ "total_size_bytes": 82,
+ "total_extracted_chars": 117,
+ "summary": "200 OK · 117B markdown · parse",
+ "content_ok": true,
+ "next_action": "the charset here is a guess, not a declaration: this file named no encoding and gb18030 decoded it cleanly - but gb18030 decodes Shift_JIS and EUC-KR bytes cleanly too, into plausible-looking wrong Chinese, and nothing cheap tells the three apart. If the text reads like the wrong language, re-call with encoding= ('shift_jis', 'euc-kr', 'big5', 'gbk') - that turns the guess into a verdict. The content is not being doubted by this note.",
+ "fetched_at": "2026-10-25T16:16:38Z",
+ "metadata": {
+  "encoding": "gb18030",
+  "encoding_basis": "guessed"
+ },
+ "approx_tokens": 52,
+ "_wall_s": 0.01,
+ "_tool": "doc_parse",
+ "_tag": "p09-S1-xlsx 多 sheet + GBK csv#02",
+ "_ts": "2026-10-25T16:16:38.693996+00:00"
+}

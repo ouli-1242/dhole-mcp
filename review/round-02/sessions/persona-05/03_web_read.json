@@ -1,0 +1,42 @@
+{
+ "status": 200,
+ "content": [
+  "## Policy Focus\n\n## News Releases (in provisional translation)\n\n- Oct 23, 2026\n- [State Minister MIYAMOTO Holds Meeting with H.E. Dr. Kao Kim Hourn, Secretary-General of ASEAN](https://www.meti.go.jp/english/press/2026/10/20261023001.html)\n- Oct 20, 2026\n- [State Minister TAKAGI Attends the Fourth Japan-Romania Innovation Forum](https://www.meti.go.jp/english/press/2026/10/20261020002.html)\n- Oct 20, 2026\n- [Consultation Committee on the Japan-U.S. Strategic Investment Initiative](https://www.meti.go.jp/english/press/2026/10/20261020001.html)\n- Oct 19, 2026\n- [State Minister TAKAGI Holds Meeting with Mr. José Luis Daza, Deputy Minister of the Economy of the Argentine Republic](https://www.meti.go.jp/english/press/2026/10/20261019001.html)\n- Oct 16, 2026\n- [METI Hosts the Second Public-Private Dialogue towards Robust and Resilient Copper Supply Chains](https://www.meti.go.jp/english/press/2026/10/20261016002.html)\n- Oct 16, 2026\n- [State Minister TAKAGI Holds Meeting with Hon. Sunil Handunneththi, Minister of Industry and Entrepreneurship Development of the Democratic Socialist Republic of Sri Lanka](https://www.meti.go.jp/english/press/2026/10/20261016003.html)\n- Oct 16, 2026\n- [Minister AKAZAWA Receives a Courtesy Call from Stephen A. Schwarzman, Chairman, CEO and Co-Founder of Blackstone Inc.](https://www.meti.go.jp/english/press/2026/10/20261015003.html)\n- Oct 16, 2026\n- [Initiation of the Investigation of Anti-Dumping Duty on Pigments and Preparations Based on Rutile Titanium Dioxide Originating in the People’s Republic of China](https://www.meti.go.jp/english/press/2026/10/20261016001.html)\n- Oct 15, 2026\n- [State Minister TAKAGI Holds Meeting with David Taylor MP, UK Trade Envoy to Japan](https://www.meti.go.jp/english/press/2026/10/20261015002.html)\n- Oct 15, 2026\n- [Semiconductor Manufacturing Project to be Implemented under the Japan-U.S"
+ ],
+ "url": "https://www.meti.go.jp/english/press/index.html",
+ "fetcher_used": "http",
+ "duration_ms": 1187,
+ "error": "",
+ "content_type": "text/html",
+ "total_size_bytes": 186469,
+ "total_extracted_chars": 171946,
+ "is_truncated": true,
+ "next_offset": 1878,
+ "chars_snapped_back": 122,
+ "truncation_note": "[Truncated: showing 1,878 of 171,946 extracted chars. 170,068 chars remaining. Next offset: 1878] (122 chars moved to the next window so this one ends at a clause, not mid-word)",
+ "visible_text_chars": 114613,
+ "substance": "ok",
+ "escalation_path": "direct:http",
+ "attempt_cap_ms": 29000,
+ "summary": "200 OK · 167.9KB markdown · http · truncated",
+ "content_ok": true,
+ "next_action": "page truncated. Use focus='query' to extract only relevant blocks, or offset=1878 to continue paginating",
+ "fetched_at": "2026-10-25T16:06:10Z",
+ "metadata": {
+  "title": "News Releases/METI Ministry of Economy, Trade and Industry",
+  "lang": "en",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "page_type": "list",
+ "diagnosis": {
+  "code": "truncated",
+  "retryable": true,
+  "recover_with": "offset=1878 to continue"
+ },
+ "approx_tokens": 470,
+ "_wall_s": 1.24,
+ "_tool": "web_read",
+ "_tag": "p05-S3-日文站阅读#03",
+ "_ts": "2026-10-25T16:06:10.954034+00:00"
+}

@@ -1,0 +1,45 @@
+{
+ "status": 404,
+ "content": [
+  "404\n\n404\n==="
+ ],
+ "url": "http://127.0.0.1:8399/iframe",
+ "fetcher_used": "stealthy",
+ "duration_ms": 4040,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 116,
+ "total_extracted_chars": 12,
+ "visible_text_chars": 7,
+ "escalation_path": "direct:stealthy",
+ "summary": "404 ERR · 12B markdown · stealthy · one HTTP attempt is bound by the learned ceiling for this host (it answers pages fast, so the tier gives it 5000ms, not your 25000ms) — a per-host habit, not a cap you set · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dialing, not the page. · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named · http_error_404: server returned error status",
+ "content_ok": false,
+ "next_action": "page does not exist (HTTP 404/410) - the URL is stale or misspelled. Do NOT paginate it: check the URL, or web_search for the page's current location the page reads as: http_error_404: server returned error status. That is about the content, not about this call: `metadata.actions` holds the receipts of the chain that ran. Do not re-issue the same chain - every step already marked ok would run again.",
+ "fetched_at": "2026-10-25T16:14:37Z",
+ "metadata": {
+  "title": "404",
+  "lang": "zh",
+  "content_issue": "http_error_404: server returned error status",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+  "actions": [
+   {
+    "action": "read 'body'",
+    "ok": true,
+    "read_via": "inner_text",
+    "read": "404"
+   }
+  ]
+ },
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "http_error_404",
+  "retryable": false,
+  "recover_with": "the action chain ran — `metadata.actions` holds one receipt per step, and that is the answer about this call. The content verdict describes the page it left behind, not the chain. Do NOT re-issue the same chain: every step already marked ok would run again (a fill would fill twice)."
+ },
+ "approx_tokens": 3,
+ "_wall_s": 4.06,
+ "_tool": "web_act",
+ "_tag": "p08-S3-iframe#07",
+ "_ts": "2026-10-25T16:14:37.912985+00:00"
+}

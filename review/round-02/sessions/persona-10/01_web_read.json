@@ -1,0 +1,33 @@
+{
+ "status": 200,
+ "content": [
+  "# Individual rights - guidance and resources\n\nThe guidance on this page is suitable for large businesses in the public, private and third sectors. Small businesses should use the resources on our [small business web hub.](https://ico.org.uk/for-organisations/advice-for-small-organisations/)\n\n## Brief guidance\n\n### [A guide to individual rights](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/individual-rights/)\n\nBrief guidance covering privacy notices, subject access requests, deleting and changing information, stopping and restricting processing, moving information and making automated decisions about people.\n\n## Detailed guidance\n\n### [The right to be informed (privacy notices)](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/the-right-to-be-informed/)\n\nWhen, how and what should you tell people about how their information is used.\n\n### [The right of access (subject access requests)](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/right-of-access/)\n\nWhat is a subject access request (SAR), how to recognise them, when and how to respond to them and how to manage health, social work and education information in relation to SARs.\n\n### [Automated decision-making and profiling](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/automated-decision-making/)\n\nWhat is automated individual decision-making and profiling, what does the UK GDPR say about when and how you can carry out automated decision-making.\n\n## Resources\n\n### [Better records together - our care records standards](https://ico.org.uk/about-the-ico/campaigns/better-records-together/our-care-records-standards/)\n\nCare records standards for organisations that hold or create care records and respond to requests for access to those records\n\n### [Find Subject Access Request (SAR) resources](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/helping-you-find-subject-access-request-resources/)\n\nA quick reference guide to help you find the content you need on each subject access request topic.\n\n### [Training videos: individual rights](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/training-videos/individual-rights/) \n\nRecordings of ICO staff training on the data protection principles, available for you to reuse."
+ ],
+ "url": "https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/",
+ "cached": true,
+ "fetcher_used": "cache",
+ "duration_ms": 4,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 40271,
+ "total_extracted_chars": 2401,
+ "visible_text_chars": 2632,
+ "substance": "ok",
+ "summary": "200 OK · 2.3KB markdown · cache · cached copy, fetched 21.7 min ago · max_content_chars=2000 was passed by 401 chars: what remained of the page is shorter than the 500-character window that would be worth a second call, so it came along with this one - nothing was dropped, there is no next offset",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T15:58:12Z",
+ "metadata": {
+  "title": "Individual rights - guidance and resources",
+  "type": "website",
+  "og_url": "https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/",
+  "lang": "en",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "approx_tokens": 600,
+ "_wall_s": 0.01,
+ "_tool": "web_read",
+ "_tag": "p10-S1-读两页再召回#01",
+ "_ts": "2026-10-25T16:19:56.929914+00:00"
+}

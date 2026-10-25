@@ -66,6 +66,37 @@ _RERANK_CHARS = 1_500
 _WS_RE = re.compile(r"\s+")
 
 
+def _merge_url_variants(rows: list[dict]) -> list[dict]:
+    """R02-007：同一 URL 的多个抓取变体合并为一行——fetched_at 最新的胜出。
+
+    缓存键按抓取变体存（同一 URL 的 markdown/html、不同时刻各一行），结果组装
+    以前按键逐行出门：同一 URL 两行、is_stale 一真一假互相打架（两轮实测）。
+    胜者的行原样保留（额外键如 ``i`` 穿透），合并数 >=2 时带 ``variants=N``；
+    顺序按每个 URL 的**首次出现位**稳定输出。
+    """
+    winners: dict[str, dict] = {}
+    order: list[str] = []
+    counts: dict[str, int] = {}
+    for row in rows:
+        url = row["url"]
+        if url not in winners:
+            winners[url] = row
+            order.append(url)
+            counts[url] = 1
+        else:
+            counts[url] += 1
+            if row["fetched_at"] > winners[url]["fetched_at"]:
+                winners[url] = row
+    out = []
+    for url in order:
+        row = winners[url]
+        if counts[url] > 1:
+            row = dict(row)
+            row["variants"] = counts[url]
+        out.append(row)
+    return out
+
+
 def _json_escape(term: str) -> str:
     """把查询词翻成存储层的形状（``json.dumps(..., ensure_ascii=True)`` 那一套）。
 
@@ -275,6 +306,19 @@ async def recall_pages(query: str, limit: int = 8,
         logger.debug("recall neural rerank skipped: %s", e)
         engine = "bm25"
 
+    # R02-007（两轮同形：R01 P04 · R02 P10）：同一 URL 的多个抓取变体（markdown/html、
+    # 不同时刻）在 recall 里逐行出门，is_stale 标注互相打架——「到底信哪行」。合并
+    # 在截断**之前**做：被合并的变体不占 limit 名额，胜者是 fetched_at 最新的那枚，
+    # is_stale 自然按它算；variants=N 说明合并了几个。
+    merged = _merge_url_variants([
+        {"i": i, "key": keys[i], "url": meta[keys[i]]["url"],
+         "fetched_at": meta[keys[i]]["fetched_at"],
+         "relevance": relevance.get(i)}
+        for i in pool_order])
+    variants_by_key = {c["key"]: c["variants"] for c in merged
+                       if c.get("variants", 1) > 1}
+    pool_order = [c["i"] for c in merged]
+
     results: list[dict[str, Any]] = []
     result_keys: list[str] = []
     for i in pool_order[:limit]:
@@ -294,6 +338,8 @@ async def recall_pages(query: str, limit: int = 8,
             # 交叉编码器的 sigmoid 有大致的绝对读数（搜索路径实测：对题 0.93+，
             # 跑题 ~1e-4），BM25 没有这个性质——所以只有 neural 档给分数。
             one["relevance"] = round(relevance[i], 4)
+        if key in variants_by_key:
+            one["variants"] = variants_by_key[key]
         results.append(one)
 
     # 标题只在 finalists 上取（≤ limit 行）：信封可能比正文还大（links/TOC），

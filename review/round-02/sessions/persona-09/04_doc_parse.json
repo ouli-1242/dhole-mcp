@@ -1,0 +1,19 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "file:///D:/Cache/temp/fake_invoice.pdf",
+ "fetcher_used": "parse",
+ "duration_ms": 9,
+ "error": "PDF extraction failed: not_a_pdf: body does not start with %PDF",
+ "content_type": "application/pdf",
+ "total_size_bytes": 470,
+ "summary": "local error · 0B markdown · parse",
+ "content_ok": false,
+ "next_action": "the file was found and read; what failed is its contents, named in the error field. Nothing to fix about the path; a .pdf/.docx/.xlsx whose bytes disagree with the name is a mislabelled file, not a missing one.",
+ "fetched_at": "2026-10-25T16:16:50Z",
+ "page_type": "pdf",
+ "_wall_s": 0.03,
+ "_tool": "doc_parse",
+ "_tag": "p09-S3-后缀骗人#04",
+ "_ts": "2026-10-25T16:16:50.468429+00:00"
+}

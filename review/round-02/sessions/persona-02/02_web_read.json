@@ -1,0 +1,88 @@
+{
+ "results": [
+  {
+   "status": 200,
+   "content": [
+    "# Individual rights - guidance and resources\n\nThe guidance on this page is suitable for large businesses in the public, private and third sectors. Small businesses should use the resources on our [small business web hub.](https://ico.org.uk/for-organisations/advice-for-small-organisations/)\n\n## Brief guidance\n\n### [A guide to individual rights](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/individual-rights/)\n\nBrief guidance covering privacy notices, subject access requests, deleting and changing information, stopping and restricting processing, moving information and making automated decisions about people.\n\n## Detailed guidance\n\n### [The right to be informed (privacy notices)](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/the-right-to-be-informed/)\n\nWhen, how and what should you tell people about how their information is used.\n\n### [The right of access (subject access requests)](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/right-of-access/)\n\nWhat is a subject access request (SAR), how to recognise them, when and how to respond to them and how to manage health, social work and education information in relation to SARs.\n\n### [Automated decision-making and profiling](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/automated-decision-making/)\n\nWhat is automated individual decision-making and profiling, what does the UK GDPR say about when and how you can carry out automated decision-making.\n\n## Resources\n\n### [Better records together - our care records standards](https://ico.org.uk/about-the-ico/campaigns/better-records-together/our-care-records-standards/)\n\nCare records standards for organisations that hold or create care records and respond to requests for access to those records\n\n### [Find Subject Access Request (SAR) resources](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/helping-you-find-subject-access-request-resources/)\n\nA quick reference guide to help you find the content you need on each subject access request topic.\n\n### [Training videos: individual rights](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/training-videos/individual-rights/) \n\nRecordings of ICO staff training on the data protection principles, available for you to reuse."
+   ],
+   "url": "https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/",
+   "fetcher_used": "http",
+   "duration_ms": 908,
+   "error": "",
+   "content_type": "text/html; charset=utf-8",
+   "total_size_bytes": 40271,
+   "total_extracted_chars": 2401,
+   "visible_text_chars": 2632,
+   "substance": "ok",
+   "escalation_path": "direct:http",
+   "attempt_cap_ms": 29000,
+   "summary": "200 OK · 2.3KB markdown · http",
+   "content_ok": true,
+   "next_action": "",
+   "fetched_at": "2026-10-25T15:58:12Z",
+   "metadata": {
+    "title": "Individual rights - guidance and resources",
+    "type": "website",
+    "og_url": "https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/",
+    "lang": "en",
+    "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)"
+   },
+   "approx_tokens": 600
+  },
+  {
+   "status": 200,
+   "content": [
+    "## Data protection in the EU\n\nIn today's digital age, where information is constantly shared, collected and processed, there is a need for clear and strong data protection rules.\n\nData protection is a fundamental right under EU law. EU data protection legislation is comprised of the General Data Protection Regulation (GDPR), the Law Enforcement Directive (LED), and the Data Protection Regulation for EU institutions, bodies, offices and agencies (EUDPR). \n\nTo ensure that this legislation is applied consistently, national and European data protection authorities and bodies have been established.\n\n[Find out more about the EU's legal framework for data protection](https://commission.europa.eu/law/law-topic/data-protection/legal-framework-eu-data-protection_en)\n\n\n## Data protection: questions and answers\n\nRead about key concepts such as personal data, data processing, when and to whom the GDPR applies to, and more.\n\nRead about the rights you have over your personal data under the GDPR, how to exercise these rights, and more.\n\nRead about data protection principles and obligations, enforcement of the rules, dealing with individuals' requests, and more.\n\n\n## Disclaimer\n\nThe information and guidance in these webpages are intended to contribute to a better understanding of EU data protection rules.\n\nThis is intended purely as a guidance tool – only the text of the General Data Protection Regulation (GDPR) has legal force. As a consequence, only the GDPR is liable to create rights and obligations for individuals. This guidance does not create any enforceable right or expectation.\n\nThe binding interpretation of EU legislation is the exclusive competence of the Court of Justice of the European Union"
+   ],
+   "url": "https://commission.europa.eu/law/law-topic/data-protection_en",
+   "fetcher_used": "http",
+   "duration_ms": 1340,
+   "error": "",
+   "content_type": "text/html; charset=utf-8",
+   "total_size_bytes": 166073,
+   "total_extracted_chars": 7626,
+   "is_truncated": true,
+   "next_offset": 1715,
+   "chars_snapped_back": 1285,
+   "truncation_note": "[Truncated: showing 1,715 of 7,626 extracted chars. 5,911 chars remaining. Next offset: 1715] (1,285 chars moved to the next window so this one ends at a clause, not mid-word)",
+   "visible_text_chars": 10667,
+   "substance": "ok",
+   "escalation_path": "direct:http",
+   "attempt_cap_ms": 29000,
+   "summary": "200 OK · 7.4KB markdown · http · truncated",
+   "content_ok": true,
+   "next_action": "page truncated. Use focus='query' to extract only relevant blocks, or offset=1715 to continue paginating",
+   "fetched_at": "2026-10-25T15:58:13Z",
+   "metadata": {
+    "description": "Find out more about the rules for the protection of personal data inside and outside the EU, including the GDPR.",
+    "site_name": "European Commission",
+    "type": "website",
+    "og_url": "https://commission.europa.eu/law/law-topic/data-protection_en",
+    "title": "Data protection",
+    "image": "https://commission.europa.eu/profiles/contrib/ewcms/modules/ewcms_seo/assets/images/ec-socialmedia-fallback.png",
+    "canonical": "https://commission.europa.eu/law/law-topic/data-protection_en",
+    "lang": "en",
+    "published_time": "2022-05-25T10:21:51+02:00",
+    "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)"
+   },
+   "page_type": "article",
+   "content_age_days": 1614,
+   "is_stale": true,
+   "diagnosis": {
+    "code": "truncated",
+    "retryable": true,
+    "recover_with": "offset=1715 to continue"
+   },
+   "approx_tokens": 429
+  }
+ ],
+ "total": 2,
+ "successful": 2,
+ "usable": 2,
+ "summary": "2 URLs asked · 2 answered without an HTTP error (`successful` counts exactly that, per row's status/error) · 2 carry content you can quote (`content_ok=true` on the row). The two numbers answer different questions and are usually not equal: a row can answer 200 with a login wall, a paywall, an empty page, or a body cut down by the extractor.",
+ "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+ "_wall_s": 1.39,
+ "_tool": "web_read",
+ "_tag": "p02-S2-双源交叉#02",
+ "_ts": "2026-10-25T15:58:13.077185+00:00"
+}

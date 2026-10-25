@@ -28,6 +28,28 @@
 | 超时预算非硬杀 | 溢出过 grace 时自白「did not stop when told」 | wontfix(evidence)：设计取舍，自白+budget_advice 是设计内出路 | P09（R01-007）|
 | 同 URL 变体 / offset 语义 / 静默浏览器 / 钳制精度 / 低分召回 | E 类 | backlog E2–E6 | 多画像 |
 
+## round-02 新增/复发（P3 裁决后）
+
+| 区 | 现象 | 状态 | 来源 |
+|---|---|---|---|
+| archive 快照形状 | availability API 报有快照，抓回的是 archive 自己的 capture 索引页，仍盖 content_ok=true | **已修**（R02-002，fix-R02-F2）| P02 EUR-Lex PDF |
+| 401/403 杠杆 | diagnosis.recover_with 空白卷而 next_action 教 cred_defaults（机器孪生与散文打架）；工具描述「hard block」超承诺 | **已修**（R02-003，fix-R02-F3；401 不走 archive 属设计，描述修至一致）| P02 WSJ |
+| learned ceiling | 对见过的域无视 default_ms，显式 timeout 同样被压（注释自认 "caller's budget is the contract" 与实现不符）；教学句逐发重复 | **已修**（R02-004，fix-R02-F4：显式 timeout 经 ContextVar 让 learned 让位；句子收紧带真杠杆）| P04/P08 |
+| watch × 豁免进程边界 | watch run 在自己进程里建 fetcher，MCP 内存豁免够不着，错误行只复述安全门原话不指路 | **已修**（R02-001，fix-R02-F1：错误行带结构事实+持久化出路）| P01 |
+| recall 同 URL 变体 | 两行 stale 一真一假并排（R01 P04 跨轮第二现）| **已修**（R02-007，fix-R02-F5）| P10 |
+| 硬墙早停 | http 被墙 → stealthy 烧满预算，无「换源」早停 | wontfix(design)：per-host 失败记忆风险 > 代价；显式预算已是杠杆（R02-004）| P07 NEJM 90s |
+| E1/E3/E8 | 三项跨轮三现 | backlog **升级标注**（R02-006，待排期）| P04/P05 |
+| 缓存回执行为澄清 | 缓存命中的回执**没有** learned-ceiling attempt 句是正确行为（没走 HTTP 档）——P5 复验曾误判为缺陷 | 行为正确（journal 在册，防复发误判）| W3 复验 |
+
+## round-02 必测回归点（round-03 新画像真实回访）
+
+1. archive 档对 capture 索引页守卫：构造/重放索引页快照，content_ok 必须为 False 且 note 点名（fix-R02-F2）。
+2. 401/403 的 recover_with 与 next_action 同源点名 cred_defaults（fix-R02-F3）。
+3. 显式 timeout= 不被 learned ceiling 压（带 timeout 的重复调用，attempt 预算保持调用方值）（fix-R02-F4）。
+4. watch add 私网 URL → run 错误行带 watch 进程语境出路（fix-R02-F1）。
+5. recall 同 URL 两轮抓取后单行 variants=N 且 stale 按最新（fix-R02-F5）。
+6. per-call ignore_robots=true 三态（round-02 P10b 受控验证首次通过——保持）。
+
 ## round-01 必测回归点（新画像真实回访）
 
 1. web_request POST /login + session_id → web_read /account 登录态（manual P2 的修）。

@@ -2,17 +2,18 @@ fixture 闈剁珯宸插惎鍔? http://127.0.0.1:8399
 璁㈠崟鏃ュ織: D:\Dev\Tools\dhole-mcp\evals\.runtime\orders.log
 浜岀淮鐮佽浇鑽? https://example.com/checkin?token=DHOLE-EVAL-8399
 Ctrl-C 鍋滄
-[23:44:20] GET /private/secret -> 200
-[23:44:22] GET /challenge/text -> 200
-[23:44:24] GET /challenge/text -> 200
-    !! CHALLENGE 530cd1f896f3 answer='GR35B' ok=True
-[23:44:24] POST /challenge/verify -> 200
-[23:45:09] GET /collections -> 200
-[23:45:09] GET /work/1 -> 200
-[23:45:09] GET /collections -> 200
-[23:45:10] GET /work/1 -> 200
-[23:45:10] GET /work/3 -> 200
-[23:45:10] GET /work/2 -> 200
-[23:45:10] GET /work/4 -> 200
-[23:45:10] GET /no-such-feed -> 404
-[23:45:10] GET /feed.xml -> 200
+[01:02:19] GET /simple -> 404
+[01:05:34] GET /article?w3probe=1 -> 200
+[01:05:34] GET /article?w3probe=2 -> 200
+[01:05:35] GET /article?w3probe=3 -> 200
+[01:08:44] GET /collections -> 200
+[01:08:44] GET /work/1 -> 200
+[01:08:45] GET /collections -> 200
+[01:09:17] GET /collections -> 200
+[01:09:17] GET /work/1 -> 200
+[01:09:17] GET /work/2 -> 200
+[01:09:18] GET /collections -> 200
+[01:10:02] GET /collections -> 200
+[01:11:11] GET /article?w3=1792948271-1 -> 200
+[01:11:11] GET /article?w3=1792948271-2 -> 200
+[01:11:11] GET /article?w3=1792948271-3 -> 200

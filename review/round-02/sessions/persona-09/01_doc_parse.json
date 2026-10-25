@@ -1,0 +1,22 @@
+{
+ "status": 200,
+ "content": [
+  "## Sheet1\n\n| Name | Score |\n| --- | --- |\n| Alice | 95 |\n| Bob | 87 |"
+ ],
+ "url": "file:///<server cwd>/tests/sample.xlsx",
+ "fetcher_used": "parse",
+ "duration_ms": 322,
+ "error": "",
+ "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+ "total_size_bytes": 4891,
+ "total_extracted_chars": 69,
+ "summary": "200 OK · 69B markdown · parse",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T16:16:33Z",
+ "approx_tokens": 17,
+ "_wall_s": 0.33,
+ "_tool": "doc_parse",
+ "_tag": "p09-S1-xlsx 多 sheet + GBK csv#01",
+ "_ts": "2026-10-25T16:16:33.682184+00:00"
+}

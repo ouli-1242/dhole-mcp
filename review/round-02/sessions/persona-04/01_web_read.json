@@ -1,0 +1,28 @@
+{
+ "status": 200,
+ "content": [],
+ "url": "http://127.0.0.1:8399/collections",
+ "fetcher_used": "http",
+ "extracted_type": "structured",
+ "duration_ms": 0,
+ "error": "nested_no_match: nested_selector '.work-card a' matched 0 elements on this page - it names nothing here",
+ "summary": "no link group matched · nested_selector '.work-card a' matched 0 elements on this page",
+ "content_ok": false,
+ "next_action": "No second-layer request was sent. If this page is real (look at page_type + total_extracted_chars), widen the selector to the element that CONTAINS the link — a '.card' that holds an <a> resolves. If it is a shell (a few hundred chars, page_type=shell/unknown), the links are rendered by JS: re-call with force_fetcher='stealthy', or drop nested_* and read the markdown. Link groups actually on this page: a[href^=\"/work/\"] (10 links, e.g. “专题 1”) | .card (10 links, e.g. “专题 1”)",
+ "fetched_at": "",
+ "metadata": {
+  "title": "推荐专题",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "diagnosis": {
+  "code": "nested_no_match",
+  "retryable": false,
+  "recover_with": "widen nested_selector to the element that contains the link, or force_fetcher='stealthy' when this page is a JS shell"
+ },
+ "_wall_s": 0.04,
+ "_tool": "web_read",
+ "_tag": "p04-S1-nested 列表+详情#01",
+ "_ts": "2026-10-25T16:02:43.185963+00:00"
+}

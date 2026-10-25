@@ -257,6 +257,29 @@ def _cmd_config(argv: list[str]) -> int:
     return 2
 
 
+#: R02-001：`watch run` 在自己的 CLI 进程里建 MasterFetchServer——MCP 服务内存里的
+#: cred_defaults 豁免（默认 memory 模式，凭据不落盘）够不着它。私网 URL 在这一路
+#: 是**结构性永久拒**，错误行要把这句结构事实与真出路说出去，而不是复述安全门原话
+#: （add 时收下私网 URL 是设计：watch.py `_clean_url` 的注释在册）。
+_PRIVATE_ROW_PREFIX = "invalid_request: URL targets internal/private IP"
+_WATCH_PRIVATE_HINT = (
+    " · watch runs in its own process, so the MCP-side cred_defaults waiver in "
+    "memory mode never reaches it: set DHOLE_PERSIST_CREDENTIALS=1 and store "
+    "allow_private once (cred_defaults), or watch a publicly reachable URL")
+
+
+def _watch_row_error_hint(error: str) -> str:
+    """私网族错误行返回 watch 语境指引，其余错误原样（返回空串 = 不加话）。"""
+    if (error or "").startswith(_PRIVATE_ROW_PREFIX):
+        return _WATCH_PRIVATE_HINT
+    return ""
+
+
+def _watch_error_with_hint(error: str) -> str:
+    hint = _watch_row_error_hint(error)
+    return f"{error}{hint}" if hint else (error or "")
+
+
 def _cmd_watch(argv: list[str], checker=None) -> int:
     """`dhole watch add|list|remove|run` — a persistent change watchlist.
 
@@ -379,7 +402,8 @@ def _cmd_watch(argv: list[str], checker=None) -> int:
                 if isinstance(row, dict):
                     return row
                 return {"changed": None, "status": int(row.status or 0),
-                        "error": row.error or "check returned no verdict",
+                        "error": _watch_error_with_hint(
+                            row.error or "check returned no verdict"),
                         "note": row.next_action}
 
             async def _sweep():

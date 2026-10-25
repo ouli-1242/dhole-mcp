@@ -1,0 +1,32 @@
+{
+ "checked": 2,
+ "changed_urls": [],
+ "unchanged_urls": [],
+ "baseline_urls": [
+  "https://example.com/",
+  "https://www.rfc-editor.org/rfc/rfc9110.html"
+ ],
+ "error_urls": [],
+ "results": [
+  {
+   "url": "https://example.com/",
+   "changed": null,
+   "status": 200,
+   "fetcher": "http",
+   "note": "no comparable baseline for this URL (or it expired) - this call fetched and recorded one; ask again with extraction_type='check' to learn whether it changed"
+  },
+  {
+   "url": "https://www.rfc-editor.org/rfc/rfc9110.html",
+   "changed": null,
+   "status": 200,
+   "fetcher": "http",
+   "note": "no comparable baseline for this URL (or it expired) - this call fetched and recorded one; ask again with extraction_type='check' to learn whether it changed"
+  }
+ ],
+ "summary": "checked 2 URL(s): 0 changed, 0 unchanged, 2 baseline recorded, 0 error",
+ "note": "each row compares the live page with dhole's own html baseline; changed=null with a 2xx status means this call recorded that URL's first baseline, not that it failed",
+ "_wall_s": 2.66,
+ "_tool": "web_read",
+ "_tag": "p02-S4-check 批量基线#04",
+ "_ts": "2026-10-25T15:58:46.200244+00:00"
+}

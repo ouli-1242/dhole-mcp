@@ -372,6 +372,7 @@ from dhole_mcp.context import (
     _SAVE_MAX_BYTES,
     _SAVE_TO,
     _INCLUDE_MEDIA,
+    _TIMEOUT_EXPLICIT,
     _MAX_CHARS_NAMED,
     _MAX_LINKS,
     _METHOD,
@@ -671,12 +672,17 @@ def _http_tier_budget(url: str, budget_ms: float, left_s: float, *,
     if allowance_s < asked_s - 0.5:
         bound = "left"
     if not document:
-        _learned_s = max(1.0, _adaptive_timeout(url, int(budget_ms)) / 1000.0)
-        if _learned_s < allowance_s - 0.5:
-            allowance_s = _learned_s
-            bound = "learned"
-        else:
-            allowance_s = min(allowance_s, _learned_s)
+        # R02-004：显式 timeout 是合同——wire 上带了 timeout= 的调用不受 learned
+        # 压制（_adaptive_timeout 对见过的域无视 default_ms，显式 90000 也被压到
+        # 5s，R02-041 的 "caller's budget is the contract" 与实现不符）。默认预算
+        # 照旧让 learned 管（retry 经济学不破）。
+        if not _TIMEOUT_EXPLICIT.get():
+            _learned_s = max(1.0, _adaptive_timeout(url, int(budget_ms)) / 1000.0)
+            if _learned_s < allowance_s - 0.5:
+                allowance_s = _learned_s
+                bound = "learned"
+            else:
+                allowance_s = min(allowance_s, _learned_s)
     if slow_domain:
         # Known slow-but-plainly-HTTP sites get at least 20s, which is still never
         # more than what is left of this call.
@@ -1248,6 +1254,23 @@ def _attach_login_probe_gap(result: ResponseModel, check_login: bool) -> Respons
             seam = " " if prior.endswith((".", "!", "?", ";", ":")) else ". "
         result.next_action = prior + seam + advice
     return result
+
+
+def _wayback_capture_index_body(body: str) -> bool:
+    """R02-002：这一份快照体其实是 Wayback 的 **capture 索引页**（不是存档正文）。
+
+    现场实测（EUR-Lex PDF）：availability API 报有快照，抓回来的是 archive.org
+    自己的列表页（"Wayback Machine / 978 captures / 11 Mar 2017 - 17 Oct 2026"，
+    482B）——快照不存在/被重定向时，archive 会送回这一页。它以前一路盖着
+    content_ok=true 出门，调用方引用回来的是目录。形状三件套（自家标题 + 复数
+    captures 词 + 指向列表的链接）同时在场才算；正文里碰巧提到 Wayback 的真
+    快照不受影响。
+    """
+    if "wayback machine" not in body.lower():
+        return False
+    has_count = "captures" in body.lower()
+    has_list_link = "every capture" in body.lower() or "/web/" in body
+    return has_count and has_list_link
 
 
 def _archive_ran_out(origin: ResponseModel, archive_result: ResponseModel) -> ResponseModel:
@@ -9444,6 +9467,16 @@ class MasterFetchServer:
                            f"snapshot answered HTTP {snap_resp.status} with no readable "
                            "body - the origin's failure above stands")
                 return None
+            # R02-002：archive 在快照不可用/被重定向时送回它自己的 capture 索引页
+            # ——那不是存档正文，盖 content_ok=true 出门等于让人引用目录。
+            if _wayback_capture_index_body("\n".join(snap_resp.content)):
+                logger.info(f"Archive.org snapshot for {url} was the capture-listing "
+                            "page, not archived content")
+                _note_text("archive.org listed snapshots of this URL but the snapshot "
+                           "itself answered with the Wayback capture index, not archived "
+                           "content - the origin's failure above stands; try a dated "
+                           "web.archive.org/web/<timestamp>/<url> URL directly")
+                return None
 
             # 3. Mark as archive-sourced
             snap_resp.source = "archive.org"
@@ -12184,7 +12217,7 @@ class MasterFetchServer:
     _TOOL_DEFS: list[dict] = [
         {
             "name": "web_read",
-            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: web_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: on a hard block, content_ok can be true of a dated Wayback snapshot - check source + archived_at. No parameter disables it.\n- Touching the page is web_act, and this tool changes nothing it fetches. The deep shape of schema and the browser/session knobs is not here: sys_guide(topic='behavior') is the handbook, sys_guide(topic='call') the placement traps.",
+            "description": "Fetch one URL, or a known list via urls=[...], as markdown; PDFs too; JS pages and anti-bot walls included. Many pages of one site whose URLs you do not have yet: web_crawl.\n- A robots.txt-Disallowed URL makes NO request: error='robots_disallowed', content_ok false. Switch source, or ignore_robots=true where you have permission.\n- The third tier is archive.org: on a gone/removed page (HTTP 404/410/451 — not on 401/403, which are walls: archive won't hold login-gated content either), content_ok can be true of a dated Wayback snapshot - check source + archived_at. No parameter disables it.\n- Touching the page is web_act, and this tool changes nothing it fetches. The deep shape of schema and the browser/session knobs is not here: sys_guide(topic='behavior') is the handbook, sys_guide(topic='call') the placement traps.",
             "inputSchema": {
                 "type": "object",
                 # web_read needs one of the two; the schema said nothing at
@@ -12779,6 +12812,10 @@ class MasterFetchServer:
         - content_list for tools with mixed content (e.g. screenshot with ImageContent)
         """
         from mcp.types import TextContent
+
+        # R02-004：wire 上带了 timeout= 就是显式预算——learned ceiling 让位
+        # （_http_tier_budget 读这一位）。默认预算不置位。
+        _TIMEOUT_EXPLICIT.set(bool(args) and "timeout" in args)
 
         if name not in _TOP_LEVEL_ARGS:
             _hint_entry = _REMOVED_TOOL_HINTS.get(name)
