@@ -1,0 +1,61 @@
+{
+ "feeds": [
+  {
+   "source_url": "http://127.0.0.1:8399/feed.xml",
+   "source_title": "dhole 靶站订阅源",
+   "fetched_at": "2026-10-26T00:03:41Z",
+   "items_older_than_since": 0,
+   "items_without_date": 2,
+   "note": "this source has 8 entries after the filters above; 3 are returned (`max_items=`) - the counts (`items_without_date`, `items_older_than_since`) are for all 8, not for the 3 shipped",
+   "items": [
+    {
+     "title": "靶站条目 1（0 天前）",
+     "url": "http://127.0.0.1:8399/article#item1",
+     "published": "2026-10-26T00:03:41+00:00",
+     "summary": "第 1 条摘要，用于 since 增量测试。"
+    },
+    {
+     "title": "靶站条目 2（1 天前）",
+     "url": "http://127.0.0.1:8399/article#item2",
+     "published": "2026-10-25T00:03:41+00:00",
+     "summary": "第 2 条摘要，用于 since 增量测试。"
+    },
+    {
+     "title": "靶站条目 3（2 天前）",
+     "url": "http://127.0.0.1:8399/article#item3",
+     "published": "2026-10-24T00:03:41+00:00",
+     "summary": "第 3 条摘要，用于 since 增量测试。"
+    }
+   ]
+  },
+  {
+   "source_url": "http://127.0.0.1:8399/feed-404.xml",
+   "error": "http_error_404: server returned error status",
+   "items_older_than_since": 0,
+   "items_without_date": 0,
+   "diagnosis": {
+    "code": "http_error_404",
+    "retryable": false,
+    "recover_with": ""
+   },
+   "items": []
+  },
+  {
+   "source_url": "http://127.0.0.1:9399/feed.xml",
+   "error": "network_error: connection_refused - Target refused the connection. The site may be down, or your network environment blocks outbound connections to this host. Do NOT retry the same URL - try a different source or check network connectivity.",
+   "items_older_than_since": 0,
+   "items_without_date": 0,
+   "diagnosis": {
+    "code": "network",
+    "retryable": false,
+    "recover_with": "check network/proxy; the classifier hint in `error` names the fix"
+   },
+   "items": []
+  }
+ ],
+ "summary": "3 URLs asked · 3 rows answered · 1 rows carried 3 items, newest first · 2 rows errored (http://127.0.0.1:8399/feed-404.xml · http://127.0.0.1:9399/feed.xml - each row names its own error and diagnosis) · fetched live at 2026-10-26T00:03:41Z - this path holds no cache, so each row's `fetched_at` is when that document arrived",
+ "_wall_s": 5.09,
+ "_tool": "feed_read",
+ "_tag": "p08-S3-feed 混发分账（好源+404+拒连）#04",
+ "_ts": "2026-10-26T00:03:46.420811+00:00"
+}

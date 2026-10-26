@@ -1,0 +1,24 @@
+[p06 屠万里·高尔夫教练] session 943d3d9ac1f64992ae949c517fd406f8 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p06-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p06 S1-search ----
+[p06-S1-search#02] web_search   2.5s ok=None err=-  chars=
+      summary: Searched 'golf swing basics' -> 4 results (4 high, 0 med, 0 low) from baidu,yandex,seznam; rerank=ne
+   results=4 | first=https://www.drmolearntowin.com/blog/golf-swing-basics-mental-game
+      (pause 6s - throttle)
+
+---- p06 S2-recall limit=99（r09 fix 回归：clamp 注记在场） ----
+[p06-S2-recall limit=99（r09 fix 回归：clamp 注记在场）#03] web_recall   0.3s ok=None err=-  chars=
+   clamped: ['limit -> 20 (1-20)'] | results=1
+      (pause 6s - throttle)
+
+---- p06 S3-recall limit=5（未越界应安静） ----
+[p06-S3-recall limit=5（未越界应安静）#04] web_recall   0.3s ok=None err=-  chars=
+   clamped: None | results=1
+      (pause 6s - throttle)
+
+---- p06 S4-read search 落点 ----
+[p06-S4-read search 落点#05] web_read   2.5s ok=True err=-  chars=6727
+      summary: 200 OK · 6.6KB markdown · http
+   status=200 chars=6727 | 200 OK · 6.6KB markdown · http
+P06 DONE

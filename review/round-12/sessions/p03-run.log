@@ -1,0 +1,32 @@
+[p03 白鹭洲·潜水教练] session c8953450210e42b88b9982deb0179521 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p03-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p03 S1-sys_guide 引路 ----
+[p03-S1-sys_guide 引路#02] sys_guide   0.0s ok=None err=-  chars=
+   | None
+      (pause 6s - throttle)
+
+---- p03 S2-read 手册路线首页 ----
+[p03-S2-read 手册路线首页#03] web_read   0.1s ok=False err=- no_content chars=36
+      summary: 200 OK · 36B markdown · http · no prose (menu fragments only) · one HTTP attempt is bound by the lea
+   status=200 chars=36 | 200 OK · 36B markdown · http · no prose (menu fragments only) · one HTTP attempt is bound by the lea
+      (pause 6s - throttle)
+
+---- p03 S3-POST /login 无 confirm（写闸） ----
+[p03-S3-POST /login 无 confirm（写闸）#04] web_request   0.0s ok=False err=invalid_request: method=POST is a write: it changes server state, and stored credentials f invalid_request chars=
+      summary: invalid request · method=POST is a write: it changes server state
+   err: invalid_request: method=POST is a write: it changes server state, and stored credentials for this host ride along automatically
+   next_action: Nothing was sent. Ask the user, then re-send the same call with confirm=true. HEAD probes need no confirm.
+      (pause 6s - throttle)
+
+---- p03 S4-POST confirm 真提交 ----
+[p03-S4-POST confirm 真提交#05] web_request   0.1s ok=True err=-  chars=34
+      summary: 200 OK · 34B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   status=200 | 200 OK · 34B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 3
+      (pause 6s - throttle)
+
+---- p03 S5-/account 会话复查 ----
+[p03-S5-/account 会话复查#06] web_act   4.5s ok=True err=- no_content chars=34
+      summary: 200 OK · 34B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   /account h1: '欢迎回来'
+P03 DONE

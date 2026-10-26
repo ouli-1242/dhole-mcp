@@ -1,0 +1,22 @@
+{
+ "status": 200,
+ "content": [
+  "## 红酒\n\n| 酒名 | 产区 | 年份 |\n| --- | --- | --- |\n| 波尔多 | 法国 | 2018 |\n| 巴罗洛 | 意大利 | 2016 |\n\n## 白酒\n\n| 酒名 | 产区 | 年份 |\n| --- | --- | --- |\n| 夏布利 | 勃艮第 | 2020 |"
+ ],
+ "url": "file:///<server cwd>/review/round-12/sessions/files/wine_list.xlsx",
+ "fetcher_used": "parse",
+ "duration_ms": 334,
+ "error": "",
+ "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+ "total_size_bytes": 5547,
+ "total_extracted_chars": 150,
+ "summary": "200 OK · 150B markdown · parse",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-26T00:03:29Z",
+ "approx_tokens": 62,
+ "_wall_s": 0.34,
+ "_tool": "doc_parse",
+ "_tag": "p08-S1-parse 双 sheet 酒单#02",
+ "_ts": "2026-10-26T00:03:29.308996+00:00"
+}

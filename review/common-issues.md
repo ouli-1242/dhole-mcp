@@ -126,6 +126,29 @@
 | sys_guide 未知 topic | 内容教学列全部 topic——非错误门 | 设计（REJECT） | P07 |
 | E 家族 | 无新样本 | — | — |
 
+## round-12 观察（链条协奏轮 · 0 CONFIRM）
+
+- **auth_wall 判词首次实锤**：web_act 对 /login 判 `auth_wall_detected`（内容判词），
+  动作链照跑（actions 行 fill ok=true），判词与动作分家（R01-028 设计）；next_action
+  教两扇真门（cred_defaults / 换源）。r12-004 REJECT 转观察。
+- **recall 空白 query 按缺席**：`Missing required argument(s): ['query']`——
+  server.py:12855 通用门，3 处 test 立规；措辞可议，形状在册。r12-005 REJECT 转观察。
+- **量具三坑（脚本侧，非缺陷）**：discover 行=pages 本身（无 links 键）；doc_parse
+  content 是字符串列表（web_read 才是 dict.text）；sys_state 账在 message 键。
+- **补条纪律**：补条脚本不得复用主跑 persona 目录（p05b 覆盖了 p05 的 S1-S4 回执；
+  台账与运行日志保全）——round-13 起补条用独立 persona 号。
+- **真重启后 cred_defaults 清零**：进程内默认不落盘，私网门重新武装——复验脚本必须
+  先置 allow_private（本轮首轮 verify 三发 FAIL 即此，行为正确）。
+
+## round-12 必测回归点（round-13 新画像真实回访）
+
+1. pin 命中合同：同 url+session+pin 第二发站原页（pin hit 句）+ fill 值跨调用活（r08+p05c）。
+2. css_selector 0 匹配：summary 内 `was NOT applied: it matched 0 elements`（R06-001 家产）。
+3. 链上中环第一拒：4 裸拒带码+出路 / 3 clamp 落 summary·clamped / 3 unsupported 带名单。
+4. auth_wall 判词与动作分家：判词 content_ok=false 同时 fill 行 ok=true。
+5. feed 三连账（负数具名/0=all/正数切片 note）+ 混发逐行分账（r11+r12 合并）。
+6. 前十一轮家产合并回访。
+
 ## round-11 必测回归点（round-12 新画像真实回访）
 
 1. feed max_items 负数具名拒绝；0=all 保持；正数切片+note（fix-R11-F1）。

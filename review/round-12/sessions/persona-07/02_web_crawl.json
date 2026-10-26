@@ -1,0 +1,71 @@
+{
+ "start_url": "http://127.0.0.1:8399/",
+ "pages": [
+  {
+   "url": "http://127.0.0.1:8399/",
+   "status": 200,
+   "content_ok": false,
+   "fetcher_used": "cache",
+   "title": "靶站索引",
+   "page_type": "fallback",
+   "content": [
+    "dhole 模拟测试靶站\n登录\n账户\n结算\n二维码\n验证码\n长文\n订阅源"
+   ],
+   "content_chars": 36,
+   "substance": "nav_only",
+   "substance_basis": "8 lines, 100% of them are short fragments without sentence punctuation, mean line 3.6 characters (page holds 41 visible characters in total)",
+   "fetched_at": "2026-10-25T23:47:04Z",
+   "summary": "200 OK · 396B html · cache · cached copy, fetched 15.3 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above. · no prose in this row: 8 lines, 100% of them are short fragments without sentence punctuation, mean line 3.6 characters (page holds 41 visible characters in total) - do not cite this row as content; web_read the URL with force_fetcher='stealthy' (which renders) or follow the links it carries"
+  },
+  {
+   "url": "http://127.0.0.1:8399/article",
+   "depth": 1,
+   "status": 200,
+   "content_ok": true,
+   "fetcher_used": "cache",
+   "title": "本地抓取工具配置指南",
+   "page_type": "article",
+   "content": [
+    "本地抓取工具在默认配置下会把结果写进一个本地缓存库，避免重复请求同一页面。\n\n缓存条目带有过期时间，过期后再次抓取会重新发起请求并覆盖旧条目。\n\n抓取器分成两层：一层是快速 HTTP 层，一层是能执行脚本的反检测浏览器层。\n\n自动升级只在 HTTP 层判定失败时发生，判定依据是状态码、正文长度与反爬特征串。\n\n反爬特征串包括常见的人机校验页面标题，命中后不会重试而是直接升级。\n\n缓存键包含目标地址、会话标识与凭据指纹，因此登录态内容不会与公开内容混放。\n\n关于缓存保留时长：缓存默认保留 3600 秒，改 cache_ttl 可覆盖。\n\n抓取结果的正文会经过抽取器转成 Markdown，超长时按字符数截断并给出续读偏移。\n\n截断点始终落在字符边界上，续读时把偏移量传回来即可拿到剩余部分。\n\n所有网络请求都受 robots 规则约束，除非显式声明调用方已获得站点授权。"
+   ],
+   "content_chars": 387,
+   "substance": "ok",
+   "fetched_at": "2026-10-25T23:22:30Z",
+   "summary": "200 OK · 579B html · cache · cached copy, fetched 39.9 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8399/qr",
+   "depth": 1,
+   "status": 200,
+   "content_ok": false,
+   "fetcher_used": "cache",
+   "title": "二维码",
+   "page_type": "fallback",
+   "content": [
+    "签到二维码"
+   ],
+   "content_chars": 5,
+   "substance": "nav_only",
+   "substance_basis": "the whole page holds 9 visible characters and the body is 1 line(s) with no sentence in them",
+   "fetched_at": "2026-10-25T23:22:30Z",
+   "summary": "200 OK · 182B html · cache · cached copy, fetched 39.9 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above. · no prose in this row: the whole page holds 9 visible characters and the body is 1 line(s) with no sentence in them - do not cite this row as content; web_read the URL with force_fetcher='stealthy' (which renders) or follow the links it carries"
+  }
+ ],
+ "pages_crawled": 3,
+ "pages_discovered": 8,
+ "truncated_by_max_pages": true,
+ "deadline_ms_applied": 25000,
+ "attempt_cap_ms": 30000,
+ "sitemap_used": false,
+ "duration_ms": 39,
+ "summary": "crawled 3 page(s) at http://127.0.0.1:8399 (depth <= 2); 1 content_ok; article:1, fallback:2; stopped: max_pages reached",
+ "next_action": "crawl stopped early (max_pages); re-run web_crawl with a higher max_pages / deadline_ms. 5 URL(s) were discovered but never sent. Or pass web_crawl(url='http://127.0.0.1:8399/', resume_token='0df7c3c47dea:0'): it sends exactly those 5 queued URL(s), without re-fetching the 3 page(s) this run already returned.",
+ "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+ "identity_applied": "allow_private",
+ "plan_id": "0df7c3c47dea",
+ "next_resume_token": "0df7c3c47dea:0",
+ "_wall_s": 0.04,
+ "_tool": "web_crawl",
+ "_tag": "p07-S1-crawl 3 页#02",
+ "_ts": "2026-10-26T00:02:24.346520+00:00"
+}

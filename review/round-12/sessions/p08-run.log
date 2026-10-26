@@ -1,0 +1,28 @@
+[p08 闻岁酿·酒侍] session 909517f729794292832c1da829e7d905 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p08-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p08 S1-parse 双 sheet 酒单 ----
+[p08-S1-parse 双 sheet 酒单#02] doc_parse   0.3s ok=True err=-  chars=150
+      summary: 200 OK · 150B markdown · parse
+   | 200 OK · 150B markdown · parse
+   红酒表在场=False 白酒表在场=False
+      (pause 6s - throttle)
+
+---- p08 S2-parse GBK 酒庄表（保真） ----
+[p08-S2-parse GBK 酒庄表（保真）#03] doc_parse   0.0s ok=True err=-  chars=49
+      summary: 200 OK · 49B markdown · parse
+   张裕=False 沙城=False | 200 OK · 49B markdown · parse
+      (pause 6s - throttle)
+
+---- p08 S3-feed 混发分账（好源+404+拒连） ----
+[p08-S3-feed 混发分账（好源+404+拒连）#04] feed_read   5.1s ok=None err=-  chars=
+      summary: 3 URLs asked · 3 rows answered · 1 rows carried 3 items, newest first · 2 rows errored (http://127.0
+     - None items=3 err=-
+     - None items=0 err=http_error_404: server returned error status
+     - None items=0 err=network_error: connection_refused - Target refused the connection. The
+      (pause 6s - throttle)
+
+---- p08 S4-sys_state 盘点 ----
+[p08-S4-sys_state 盘点#05] sys_state   0.0s ok=None err=-  chars=
+   | None
+P08 DONE

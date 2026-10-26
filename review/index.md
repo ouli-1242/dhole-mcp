@@ -30,3 +30,4 @@
 - backlog.md — E 类 UX 缺口（round-02 起带三现线标注与 wontfix 后记观察）
 - decisions.md — 决策日志
 - manual-2026-10-25/ — 手动摸底轮全部产物（报告 + 29 发原始回执）
+| round-12 | review/round-12 | 120a5d7 | 10 | 68（主跑 61+补条 7）| **0 CONFIRM（第三个零修复轮，非连续）**——5 候选全 REJECT（截断陷阱×2 / clamp 字段看错 / auth_wall 分家设计 / test 立规家产）| 完成（链条协奏轮：P5 真重启 pid 3164，pytest 7771 绿）|

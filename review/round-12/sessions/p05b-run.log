@@ -1,0 +1,34 @@
+[p05 常镜秋·评估师(补)] session e9f14eb31858413c97c00d010c557d37 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p05 S6-pin 铸值（url 在场, 新页） ----
+[p05-S6-pin 铸值（url 在场, 新页）#01] web_act   3.9s ok=False err=auth_wall_detected: page is a login/sign-in wall, not content auth_wall chars=24
+      summary: 200 OK · 24B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   action=fill 'input[name=username]' read_as=None val='None'
+   action=read 'input[name=username]' as 'who' read_as=None val='None'
+   pin_state notes: None
+      (pause 6s - throttle)
+
+---- p05 S7-pin 命中回读（同 url 同 session, TTL 内） ----
+[p05-S7-pin 命中回读（同 url 同 session, TTL 内）#02] web_act   0.1s ok=False err=auth_wall_detected: page is a login/sign-in wall, not content auth_wall chars=24
+      summary: 200 OK · 24B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   回读值: ''（期待 gupiaoren）
+   metadata pin: None
+      (pause 6s - throttle)
+
+---- p05 S8-真 404 如实 ----
+[p05-S8-真 404 如实#03] web_read   0.8s ok=False err=http_error_404: server returned error status http_error_404 chars=3
+      summary: 404 ERR · 3B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   status=404 | 404 ERR · 3B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 30000ms - a
+      (pause 6s - throttle)
+
+---- p05 S9-css_selector 0 匹配（cache_ttl=0 强制真源） ----
+[p05-S9-css_selector 0 匹配（cache_ttl=0 强制真源）#04] web_read   0.1s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+   status=200 chars=387 | 200 OK · 387B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 30000ms - 
+      (pause 6s - throttle)
+
+---- p05 S10-/ 真源代际（cache_ttl=0） ----
+[p05-S10-/ 真源代际（cache_ttl=0）#05] web_read   0.1s ok=False err=- no_content chars=36
+      summary: 200 OK · 36B markdown · http · no prose (menu fragments only) · one HTTP attempt is bound by the lea
+   status=200 chars=36 | 200 OK · 36B markdown · http · no prose (menu fragments only) · one HTTP attempt is bound by the learned ceiling for this host: 50
+P05b DONE

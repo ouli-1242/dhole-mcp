@@ -1,0 +1,25 @@
+{
+ "status": 200,
+ "content": [
+  "| 项目 | 间隔 |\n| --- | --- |\n| 洗牙 | 6个月 |\n| 复查 | 3个月 |\n| 拍片 | 12个月 |"
+ ],
+ "url": "file:///<server cwd>/review/round-12/sessions/files/fu_zhen.csv",
+ "fetcher_used": "parse",
+ "duration_ms": 11,
+ "error": "",
+ "content_type": "text/csv",
+ "total_size_bytes": 64,
+ "total_extracted_chars": 65,
+ "summary": "200 OK · 65B markdown · parse",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T23:58:38Z",
+ "metadata": {
+  "encoding": "utf-8"
+ },
+ "approx_tokens": 28,
+ "_wall_s": 0.04,
+ "_tool": "doc_parse",
+ "_tag": "p04-S4-parse 附件（构造复诊须知）#05",
+ "_ts": "2026-10-25T23:58:38.937438+00:00"
+}

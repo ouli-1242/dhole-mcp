@@ -1,0 +1,47 @@
+{
+ "query": "web_act 组合语义 动作链",
+ "sources": [
+  {
+   "n": 2,
+   "url": "https://www.cnblogs.com/lxbmaomao/p/10389786.html",
+   "title": "Selenium之动作链（ActionChains） - liangxb - 博客园",
+   "chars": 270,
+   "fetcher": "http",
+   "content_ok": true
+  }
+ ],
+ "evidence": [
+  "[2] https://www.cnblogs.com/lxbmaomao/p/10389786.html\n[Focus: 'web_act 组合语义 动作链'; showing 2 of 44 blocks by BM25 relevance. 3 of the 4 words you named occur nowhere on this page ('web', 'act', '组合语义'). Pass focus='' for the full page.]\n\n# \n\n    [Selenium之动作链（ActionChains）](https://www.cnblogs.com/lxbmaomao/p/10389786.html)"
+ ],
+ "failed": [
+  {
+   "n": 1,
+   "url": "https://blog.csdn.net/weixin_41943766/article/details/157358938",
+   "why": "http_error_521: server returned error status"
+  }
+ ],
+ "more_hits": [
+  {
+   "url": "https://chromewebstore.google.com/detail/webact-ai-browser-automat/jojalllhmgnmnjbnbnelpnjebkbgklih?hl=zh-CN",
+   "title": "WebAct：AI 浏览器自动化与网页数据提取 - Chrome 应用商店"
+  },
+  {
+   "url": "https://aiknowledge.cn/article/75606-1-1-%E4%B8%89%E5%8E%9F%E8%AF%AD%E8%AF%AD%E4%B9%89actextract-%E4%B8%8E-observe",
+   "title": "1.1 三原语语义：act、extract 与 observe | 浏览器智能体实战：从动..."
+  },
+  {
+   "url": "https://blog.csdn.net/ak_bingbing/article/details/134613946",
+   "title": "深入解析Selenium动作链：精通点击、拖拽、切换等操作-CSDN博客"
+  },
+  {
+   "url": "https://zhuanlan.zhihu.com/p/1929856804248064763",
+   "title": "反向思维颠覆机器人操作：动作链（Chain-of-Action）如何重塑具身智能..."
+  }
+ ],
+ "summary": "1 of 2 source(s) read into an evidence pack for 'web_act 组合语义 动作链'; 1 failed (each row says why)",
+ "note": "each evidence block starts with [n] and its URL - cite that pair. Per-source text is focus-filtered to the query, not the whole page; web_read a source (urls= batches work) for everything it says. more_hits are the search rows not read",
+ "_wall_s": 17.54,
+ "_tool": "web_research",
+ "_tag": "p02-S2-research 来源行#03",
+ "_ts": "2026-10-25T23:56:23.481999+00:00"
+}

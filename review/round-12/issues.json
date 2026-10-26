@@ -1,0 +1,33 @@
+{
+ "round": 12,
+ "theme": "链条协奏（多工具真实链条）",
+ "calls": 68,
+ "tools_covered": 13,
+ "verdict": "0 CONFIRM（继 r05、r10 后第三个零修复轮，非连续）",
+ "issues": [
+  {"id": "R12-001", "candidate": "web_read css_selector 0 匹配静默回落整页（疑 R06-001 家产丢失）",
+   "verdict": "REJECT", "evidence": "全 summary 517ch 内含 was NOT applied: it matched 0 elements 原句；trafilatura_extractor.py:582 → _ARG_NOTES → 折进 summary",
+   "root_cause": "130ch 打印截断（同根教训第三次：r08×2、r09×1）"},
+  {"id": "R12-002", "candidate": "/ 页缓存代际倒退 1745ch→36B（疑 crawl 碎片抽取污染 read 缓存）",
+   "verdict": "REJECT", "evidence": "curl 实测 / 原始 HTML 仅 450B，36B=忠实全页抽取；1745ch=smoke 把 envelope JSON 长度当正文；total_extracted_chars 与 curl 互证",
+   "root_cause": "量具把 envelope 长度计为正文 + 未实测靶站真身"},
+  {"id": "R12-003", "candidate": "search/research/crawl 越界参数「无具名拒绝」",
+   "verdict": "REJECT", "evidence": "max_results=0→'outside the supported 1-50 range; returning at most 1'（summary）；max_sources=0→clamped 字段；max_pages=0→summary 内 0->1",
+   "root_cause": "clamp 落点在 summary/clamped 非 error——首报看错字段"},
+  {"id": "R12-004", "candidate": "web_act 对 /login 判 auth_wall 挡住合法填表",
+   "verdict": "REJECT", "evidence": "actions 行 fill ok=true（链照跑）；判词只打 content_ok；next_action 教 cred_defaults/换源两扇门；p05c 回读值在",
+   "root_cause": "判词与动作分家是 R01-028 设计；转观察项"},
+  {"id": "R12-005", "candidate": "recall 空白 query 报 Missing required 措辞不实",
+   "verdict": "REJECT", "evidence": "server.py:12855 通用门空白按缺席；3 处 test 立规；error 带参数名+名单+出路",
+   "root_cause": "test 立规家产形状；转观察项"}
+ ],
+ "observations": [
+  "auth_wall_detected 判词首次实锤：内容判词与动作收据分家，教学两扇真门",
+  "recall 空白参数按缺席（在册家产形状，措辞可议）"
+ ],
+ "process_lessons": [
+  "补条脚本不得复用 persona 主跑目录（p05b 覆盖了 p05 的 S1-S4 回执；台账+运行日志保全）",
+  "discover 行=pages 本身；doc_parse content 是字符串列表；sys_state 账在 message 键",
+  "四账面字段铁律再拦两次误判（R12-001/002）"
+ ]
+}

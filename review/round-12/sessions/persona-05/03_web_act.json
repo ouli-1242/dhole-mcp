@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: url is required: the page to act on, one URL per call",
+ "summary": "invalid request · url is required: the page to act on, one URL per call",
+ "content_ok": false,
+ "next_action": "Nothing was run. Correct the argument and call again - no request was made. web_act takes an absolute http(s) URL (e.g. https://example.com).",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_act",
+ "_tag": "p05-S2-填表 + 寄存器铸值（同页 pin）#03",
+ "_ts": "2026-10-25T23:59:28.086362+00:00"
+}

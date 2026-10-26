@@ -1,0 +1,25 @@
+{
+ "status": 200,
+ "content": [
+  "| 构件 | 规格 | 数量 |\n| --- | --- | --- |\n| 梁 | 200x100 | 12 |\n| 柱 | 300x300 | 8 |\n| 板 | 120mm | 45 |"
+ ],
+ "url": "file:///<server cwd>/review/round-12/sessions/files/material_list.csv",
+ "fetcher_used": "parse",
+ "duration_ms": 9,
+ "error": "",
+ "content_type": "text/csv",
+ "total_size_bytes": 67,
+ "total_extracted_chars": 96,
+ "summary": "200 OK · 96B markdown · parse",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-25T23:54:06Z",
+ "metadata": {
+  "encoding": "utf-8"
+ },
+ "approx_tokens": 31,
+ "_wall_s": 0.03,
+ "_tool": "doc_parse",
+ "_tag": "p01-S3-parse 构造的材料单#04",
+ "_ts": "2026-10-25T23:54:06.682612+00:00"
+}

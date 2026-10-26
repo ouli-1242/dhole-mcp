@@ -1,0 +1,63 @@
+[p09 聂怀古·文物修复师] session d414e8c17f894525b65bcf7e874a6fe9 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p09-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p09 S1-链首 read 成功 ----
+[p09-S1-链首 read 成功#02] web_read   0.0s ok=False err=- no_content chars=36
+      summary: 200 OK · 36B markdown · cache · cached copy, fetched 7.7 min ago · no prose (menu fragments only) · 
+   status=200（链首应为 200）
+
+---- p09 S2-中环拒：request GET ----
+[p09-S2-中环拒：request GET#03] web_request   0.0s ok=False err=invalid_request: method=GET is a read, not a request - web_request takes POST / PUT / PATC invalid_request chars=
+      summary: invalid request · method=GET is a read, not a request
+   err: invalid_request: method=GET is a read, not a request - web_request takes POST / PUT / PATCH / DELETE / HEAD
+
+---- p09 S3-中环拒：read 0 匹配 selector ----
+[p09-S3-中环拒：read 0 匹配 selector#04] web_read   0.1s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+   err: 
+
+---- p09 S4-中环拒：search max_results=0 ----
+[p09-S4-中环拒：search max_results=0#05] web_search   2.9s ok=None err=-  chars=
+      summary: Searched 'dhole' -> 1 results (1 high, 0 med, 0 low) from yandex,yahoo,seznam; rerank=neural. | max_
+   err: 
+
+---- p09 S5-中环拒：research max_sources=0 ----
+[p09-S5-中环拒：research max_sources=0#06] web_research   3.0s ok=None err=-  chars=
+      summary: 1 of 1 source(s) read into an evidence pack for 'dhole mcp'
+   err: None
+
+---- p09 S6-中环拒：crawl max_pages=0 ----
+[p09-S6-中环拒：crawl max_pages=0#07] web_crawl   0.0s ok=None err=-  chars=
+      summary: crawled 1 page(s) at http://127.0.0.1:8399 (depth <= 2); 0 content_ok; fallback:1; stopped: max_page
+   err: None
+
+---- p09 S7-中环拒：doc_parse 不存在 ----
+[p09-S7-中环拒：doc_parse 不存在#08] doc_parse   0.0s ok=False err=File not found: Z:/no/such/file.csv. `cwd=<working directory>` does nothing for a path tha file_not_found chars=
+      summary: local error · 0B markdown · parse
+   err: File not found: Z:/no/such/file.csv. `cwd=<working directory>` does nothing for a path that is already absolute (that argument's o
+
+---- p09 S8-中环拒：act 未知 action ----
+[p09-S8-中环拒：act 未知 action#09] web_act   0.0s ok=False err=invalid_request: Unsupported argument(s) for web_act: ['action']. Supported: ['actions', ' invalid_request chars=
+      summary: invalid request · Unsupported argument(s) for web_act: ['action']
+   err: invalid_request: Unsupported argument(s) for web_act: ['action']. Supported: ['actions', 'anti_detect', 'cdp_url', 'check_login', 
+
+---- p09 S9-中环拒：discover depth=-1 ----
+[p09-S9-中环拒：discover depth=-1#10] web_discover   0.0s ok=False err=invalid_request: Unsupported argument(s) for web_discover: ['depth']. Supported: ['max_pag invalid_request chars=
+      summary: invalid request · Unsupported argument(s) for web_discover: ['depth']
+   err: invalid_request: Unsupported argument(s) for web_discover: ['depth']. Supported: ['max_pages', 'max_total_chars', 'path_exclude',  | summary: invalid request · Unsupported argument(s) for web_discover: ['depth']
+
+---- p09 S10-中环拒：recall 空查询 ----
+[p09-S10-中环拒：recall 空查询#11] web_recall   0.0s ok=False err=invalid_request: Missing required argument(s) for web_recall: ['query']. Supported here: [ invalid_request chars=
+      summary: invalid request · Missing required argument(s) for web_recall: ['query']
+   err: invalid_request: Missing required argument(s) for web_recall: ['query']. Supported here: ['limit', 'query']
+
+---- p09 S11-中环拒：feed 错参数名 ----
+[p09-S11-中环拒：feed 错参数名#12] feed_read   0.0s ok=False err=invalid_request: Unsupported argument(s) for feed_read: ['feeds']. Supported: ['max_items' invalid_request chars=
+      summary: invalid request · Unsupported argument(s) for feed_read: ['feeds']
+   err: invalid_request: Unsupported argument(s) for feed_read: ['feeds']. Supported: ['max_items', 'since', 'timeout', 'urls']
+
+---- p09 S12-断后续链：read 成功 ----
+[p09-S12-断后续链：read 成功#13] web_read   0.1s ok=True err=-  chars=39
+      summary: 200 OK · 39B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   status=200（断后链可续=200）
+P09 DONE

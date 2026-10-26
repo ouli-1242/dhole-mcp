@@ -1,0 +1,30 @@
+[p10 岑晚舟·电网调度员] session 84d50abbb55742f8a409c510c503e1c6 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p10-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p10 S1-POST 写闸（无 confirm） ----
+[p10-S1-POST 写闸（无 confirm）#02] web_request   0.0s ok=False err=invalid_request: method=POST is a write: it changes server state, and stored credentials f invalid_request chars=
+      summary: invalid request · method=POST is a write: it changes server state
+   pending=None | next_action: Nothing was sent. Ask the user, then re-send the same call with confirm=true. HEAD probes need no confirm.
+      (pause 6s - throttle)
+
+---- p10 S2-confirm 真提交 ----
+[p10-S2-confirm 真提交#03] web_request   0.0s ok=True err=-  chars=34
+      summary: 200 OK · 34B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   status=200 | 200 OK · 34B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 3
+      (pause 6s - throttle)
+
+---- p10 S3-state 复盘 ----
+[p10-S3-state 复盘#04] sys_state   0.0s ok=None err=-  chars=
+   | None
+      (pause 6s - throttle)
+
+---- p10 S4-recall 收尾 ----
+[p10-S4-recall 收尾#05] web_recall   2.3s ok=None err=-  chars=
+   results=6 | None
+      (pause 6s - throttle)
+
+---- p10 S5-HEAD /account 体检（会话内） ----
+[p10-S5-HEAD /account 体检（会话内）#06] web_request   0.0s ok=True err=-  chars=
+      summary: 200 OK · 223B head probe (no body by definition) · http · one HTTP attempt is bound by the learned c
+   status=200 | 200 OK · 223B head probe (no body by definition) · http · one HTTP attempt is bound by the learned ceiling for
+P10 DONE

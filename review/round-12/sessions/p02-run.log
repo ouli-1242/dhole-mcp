@@ -1,0 +1,32 @@
+[p02 岑万川3·证券交易员] session 5afab8ade9bc496e967d6a7559d75b4a server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p02-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p02 S1-search 行 ----
+[p02-S1-search 行#02] web_search   3.0s ok=None err=-  chars=
+      summary: Searched 'browser automation agent' -> 4 results (4 high, 0 med, 0 low) from yandex,yahoo,seznam; re
+   results=4
+     - https://chromewebstore.google.com/detail/nanobrowser-ai-web-agent/imbd
+     - https://learn.microsoft.com/en-us/azure/foundry-classic/agents/how-to/
+     - https://github.com/vercel-labs/agent-browser
+     - https://www.tinyfish.ai/blog/ai-browser-agents
+      (pause 6s - throttle)
+
+---- p02 S2-research 来源行 ----
+[p02-S2-research 来源行#03] web_research  17.5s ok=None err=-  chars=
+      summary: 1 of 2 source(s) read into an evidence pack for 'web_act 组合语义 动作链'; 1 failed (each row says why)
+   sources=1
+     - n=2 https://www.cnblogs.com/lxbmaomao/p/10389786.html ok=None
+      (pause 6s - throttle)
+
+---- p02 S3-read search 第一行（timeout=0 边界, r10 家产） ----
+[p02-S3-read search 第一行（timeout=0 边界, r10 家产）#04] web_read   0.0s ok=False err=invalid_request: Timeout must be positive invalid_request chars=
+      summary: invalid request · Timeout must be positive
+   status=0 | invalid request · Timeout must be positive
+   next_action: Nothing was fetched. timeout= is this call's whole budget in milliseconds: 1-120000 (2 minutes). The value named in `error` is out
+      (pause 6s - throttle)
+
+---- p02 S4-read timeout=999999 边界 ----
+[p02-S4-read timeout=999999 边界#05] web_read   0.0s ok=False err=invalid_request: Timeout exceeds maximum of 120000ms (2 minutes) invalid_request chars=
+      summary: invalid request · Timeout exceeds maximum of 120000ms (2 minutes)
+   status=0 | invalid request · Timeout exceeds maximum of 120000ms (2 minutes)
+P02 DONE

@@ -1,0 +1,48 @@
+{
+ "query": "dhole mcp",
+ "sources": [
+  {
+   "n": 1,
+   "url": "https://pypi.org/project/dhole-mcp/",
+   "title": "dhole-mcp · PyPI",
+   "chars": 3040,
+   "fetcher": "cache",
+   "content_ok": true
+  }
+ ],
+ "evidence": [
+  "[1] https://pypi.org/project/dhole-mcp/\n[Focus: 'dhole mcp'; showing 12 of 46 blocks by BM25 relevance. Pass focus='' for the full page.]\n\n训练数据有截止日期。搜索 API 要密钥、要额度。抓一页，可能只回来一串 403。\nDhole 把这条断掉的路接回来：一个 [MCP](https://modelcontextprotocol.io) 服务器，装进任何宿主，AI 自己挑工具，你不用记命令。\n\n## 安装\n\n```\npip install dhole-mcp  # 完整版：浏览器 / PDF / OCR / 解析器 / 重排，一次装齐\ndhole doctor           # 体检：起服务、起浏览器、真搜一次、真抓一次\n```\n\n```\n{\"mcpServers\": {\"dhole\": {\"command\": \"dhole\", \"args\": []}}}\n```\n\n## 也可以把安装交给 agent 自己做\n\n```\n在这台机器上安装 Dhole MCP 服务器，逐步执行，失败就停下来报告。\n1. 认清你所在的宿主，读出它的 MCP 配置位置与添加本地服务器的格式（读文档，不要猜）。\n2. pip install dhole-mcp（已经是完整版）。\n3. 备份配置文件，添加名为 \"dhole\" 的服务器：command 为 \"dhole\"，无参数、无密钥、无 env。\n4. 让用户重启宿主，再跑 dhole doctor 确认体检通过；若报浏览器缺失，补一次 python -m patchright install chromium（可重复执行）。\n```\n\n```\nexport DHOLE_HTTP_TOKEN=\"$(openssl rand -hex 32)\"   # 设了即强制 Bearer 校验\ndhole --http                                        # 127.0.0.1:8765/mcp\n```\n\n| 工具 | 做什么 | \n|---|---|\n| `web_read` | 抓任意 URL：反爬阶梯、PDF / OCR、批量、聚焦提取；产出正文、 **字节** （`save_to` ）或**证据** （状态行 / 响应头 / 302 链）；`check` 回答「这页变了吗」并附一份 unified diff | \n| `web_act` | 在页面上动手：点击、填写、按键、拖拽、滚动、截图、 **上传文件** 、**应答弹窗** 、**多页签** ；提交默认暂停，等你点头 | \n| `web_request` | 发一次非 GET（POST / PUT / PATCH / DELETE / HEAD），只发一次：不重试、不缓存、不升浏览器 | \n| `web_search` | 10 个免密引擎并行 + 本地重排，可顺带抓回前三条全文；另开五类纵向源（新闻 / 论文 / 问答 / 代码 / 社区） | \n| `web_research` | 一个问题，一次调用，一份带 `[n] URL` 引用的证据包；坏的源自己说明为什么，从不拖垮整包 | \n| `web_recall` | 检索 **本机读过的页** ：零网络、零模型，回指针、摘录与过期标注 | \n| `web_crawl` | 同域爬取：sitemap、关键词过滤、路径子树 | \n| `web_discover` | 出站点的 URL 地图，先看清有什么再挑着读 | \n| `doc_parse` | 本地 docx / xlsx / pdf / pptx / odt / csv / html / json / yaml → Markdown | \n| `feed_read` | 批量 RSS / Atom， `since=` 只取增量 | \n| `cred_defaults` | 设一次的默认身份：代理、浏览器 profile、CDP 端点、cookie、auth | \n| `sys_state` | 看与清本地状态：正文缓存、会话 cookie、引擎冷却 | \n| `sys_guide` | 读 dhole 自己的说明书：选工具、写参数、字段含义、失败怎么修 | \n\n## 全部 15 个旋钮\n\n| 变量 | 什么时候设 | \n|---|---|\n| `DHOLE_SEARCH_PROXY` | 搜索引擎被限流 / 被墙时（也自动读 `HTTPS_PROXY` ） | \n| `DHOLE_IGNORE_ROBOTS` | 关掉进程级的 `robots.txt` 遵从；单次豁免用`ignore_robots=true` | \n| `DHOLE_ALLOW_PRIVATE_HOSTS` | 放行内网 / 本机地址，默认一律拒绝 | \n| `DHOLE_HTTP_TOKEN` | `--http` 传输的 bearer 门；不设则端口不设防 | \n| `DHOLE_PERSIST_CREDENTIALS` | 把会话 cookie 与凭据落盘（Windows DPAPI 加密）。默认只在内存，进程结束即清 | \n| `DHOLE_USAGE_LOG` | 本地调用与写操作日志，不记参数值、不联网 | \n| `DHOLE_TOOLS` | 只注册列出的工具， **写了就等于关掉其余** | \n| `DHOLE_DEFAULT_ENGINES` | 覆盖默认搜索池 | \n| `DHOLE_SEARCH_ROW_FILTER` | `off` 关掉 SEO 农场行过滤（默认开） | \n| `DHOLE_DEFAULT_CONTENT_CHARS` | 默认正文预算，40000（500–200000） | \n| `DHOLE_TAVILY_API_KEY` /`DHOLE_BOCHA_API_KEY` | 两颗 keyed 引擎的密钥，配了才启用、点名才调用 | \n| `DHOLE_HF_ENDPOINT` | 重排模型下载源，默认 huggingface.co，失败回退镜像 | \n| `DHOLE_RERANK_MODEL` | `bge-zh` （默认，中文更强）或`mmarco` （快档，约 1.8×） | \n| `DHOLE_HOME` | 状态目录，默认 `~/.dhole` | \n\n## 常用的几条命令\n\n| 命令 | 用途 | \n|---|---|\n| `dhole doctor` | 安装体检，逐项给修复命令 | \n| `dhole config list` /`set` /`unset` | 改旋钮，看当前值与来源 | \n| `dhole engines list` /`probe` /`reset` | 引擎冷却状态、实测健康、清空 | \n| `dhole watch add` /`list` /`run` | 页面变更清单； `run` 退出码 0 无变化 / 1 有变化 / 2 检查失败，`--notify` 弹桌面通知 | \n| `dhole skill install` | 把随包说明书装成宿主原生 skill | \n| `dhole -v` | 版本 + 能力面板 |"
+ ],
+ "failed": [],
+ "more_hits": [
+  {
+   "url": "https://github.com/ouli-1242/dhole-mcp/blob/main/README.md",
+   "title": "dhole-mcp/README.md at main · ouli-1242/dhole-mcp · GitHub"
+  },
+  {
+   "url": "https://lobehub.com/zh-TW/mcp/ouli-1242-dhole-mcp",
+   "title": "Dhole | MCP Servers · LobeHub"
+  },
+  {
+   "url": "https://lobehub.com/mcp/ouli-1242-dhole-mcp",
+   "title": "Dhole | MCP Servers · LobeHub"
+  },
+  {
+   "url": "https://github.com/ouli-1242/dhole-mcp",
+   "title": "ouli-1242/dhole-mcp: 让 AI 代理访问互联网 ... - GitHub"
+  },
+  {
+   "url": "https://ncst.ucdavis.edu/projects",
+   "title": "Projects | National Center for Sustainable Transportation"
+  }
+ ],
+ "summary": "1 of 1 source(s) read into an evidence pack for 'dhole mcp'",
+ "clamped": [
+  "max_sources -> 1 (1-5)"
+ ],
+ "note": "each evidence block starts with [n] and its URL - cite that pair. Per-source text is focus-filtered to the query, not the whole page; web_read a source (urls= batches work) for everything it says. more_hits are the search rows not read",
+ "_wall_s": 2.97,
+ "_tool": "web_research",
+ "_tag": "p09-S5-中环拒：research max_sources=0#06",
+ "_ts": "2026-10-26T00:05:19.234699+00:00"
+}
