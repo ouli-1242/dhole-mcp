@@ -1,0 +1,22 @@
+[p18 覃九鼎·拍卖师补条] session 5a95257637a548159f4d19fb1cd55247 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p18-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p18 S1-read 看单 ----
+[p18-S1-read 看单#02] web_read   0.0s ok=False err=- no_content chars=15
+      summary: 200 OK · 15B markdown · cache · cached copy, fetched 2.6 min ago · no prose (menu fragments only) · 
+   status=200 chars=15
+      (pause 6s - throttle)
+
+---- p18 S2-fill qty=2 + submit confirm→真提交 ----
+[p18-S2-fill qty=2 + submit confirm→真提交#03] web_act   4.2s ok=True err=- no_content chars=31
+      summary: 200 OK · 31B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   fill '#qty': ok=True read='None' err=None
+   submit '#place-order': ok=True read='None' err=None
+   read 'h1': ok=True read='订单已提交' err=None
+   summary 尾段: t that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named
+      (pause 6s - throttle)
+
+---- p18 S3-state 复盘 ----
+[p18-S3-state 复盘#04] sys_state   0.0s ok=None err=-  chars=
+   message: 1 session(s) open, holding 0 cookie(s); the cache and stored-task counts ride along. Nothing erased.
+P18 DONE

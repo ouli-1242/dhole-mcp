@@ -31,3 +31,4 @@
 - decisions.md — 决策日志
 - manual-2026-10-25/ — 手动摸底轮全部产物（报告 + 29 发原始回执）
 | round-12 | review/round-12 | 120a5d7 | 10 | 68（主跑 61+补条 7）| **0 CONFIRM（第三个零修复轮，非连续）**——5 候选全 REJECT（截断陷阱×2 / clamp 字段看错 / auth_wall 分家设计 / test 立规家产）| 完成（链条协奏轮：P5 真重启 pid 3164，pytest 7771 绿）|
+| round-13 | review/round-13 | 22e9f88 | 10 | 95（主跑 57 + P1 补条 17 + P3 探针 21）| 2 fixed（R13-001 显式 selector 收窄免 collapse 误判 / R13-002 缓存回放带 selector 0 匹配注记）+ 6 REJECT（3 转 E：confirm 措辞/dialog 文案/tab 寿命；1 环境 bytes 差）+ 4 E 记录 | 完成（重装链轮：P5 真重启 pid 17028，pytest 7775 绿，ruff 16；用户指示本轮收官后停止循环，不启 round-14）|

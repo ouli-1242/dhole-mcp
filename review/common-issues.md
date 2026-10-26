@@ -126,6 +126,27 @@
 | sys_guide 未知 topic | 内容教学列全部 topic——非错误门 | 设计（REJECT） | P07 |
 | E 家族 | 无新样本 | — | — |
 
+## round-13 新增/复发（重装链轮 · 2 CONFIRM）
+
+| 区 | 现象 | 状态 | 来源 |
+|---|---|---|---|
+| 收窄判决 × collapse | 显式 css_selector 取回点名碎片（10/400 字）被判 `extraction_collapsed`、content_ok=false，恢复建议也指错路 | **已修**（R13-001，fix-R13-F1：判决尺在 selector 在场时豁免；恢复尺不动） | p21 A3 / p22 C7 |
+| 缓存 × 参数注记 | 同 URL+selector 第二次读命中缓存，R06-001 的「matched 0 elements」句消失、整页照回 | **已修**（R13-002，fix-R13-F2：envelope 存同源 selector 注记、回放带出；旧行缺席不说） | p22 #02/#03 |
+| tab/iframe 寿命 | 页签/iframe 状态不跨调用；pin 是留住机制且需具名 session_id（无名字时产品主动教） | 设计（D）+ E 记录（tab/iframe 回执可补寿命句） | p09 / p21 B / p14 |
+| 表单页 read | 表单/菜单页 read 无正文（15-63B 碎片），act snapshot 是正路 | D（诚实标签在）+ E 记录 | p01/p03/p10 |
+| submit 闸 confirm | next_action 字面像顶层 `{"confirm": true}`，正形是动作内嵌套 | E 记录（R13-003；动作行 error 已给嵌套示例） | p10/p05 |
+| dialog 文案 | 错误第二形状 `{"answer": ..., "prompt_text"?: ...}` 未说死 answer 只收 accept/dismiss | E 记录（R13-004） | p03 / p21 C1 |
+| 靶站 bytes | upload 回执 63 bytes vs 磁盘 65（靶站 multipart `-2` 启发式） | 环境（C），非缺陷 | p16 |
+
+## round-13 必测回归点（下一轮若继续 · 新画像真实回访）
+
+1. 显式 css_selector 收窄：content_ok 不受整页塌陷尺影响；无 selector 的真塌陷仍报（单测+线上对照）。
+2. 缓存回放带参数注记：同 URL+selector 两读，0 匹配句 live/hit 都在；旧行缺席不编。
+3. 提交闸 confirm：上传/checkout/captcha 三处 action 级 confirm 真提交；顶层 confirm 被拒且动作行给嵌套示例。
+4. dialog prompt 正形（answer=accept + prompt_text）与误序 auto-dismissed note。
+5. tab/pin 寿命：同调用页签台账；pin+session_id 跨调用命中；无 session_id 的 pin 教学句。
+6. pin 命中 / auth_wall 分家 / feed 三连+混发 / recall clamp / frame 错名 五族家产合并回访。
+
 ## round-12 观察（链条协奏轮 · 0 CONFIRM）
 
 - **auth_wall 判词首次实锤**：web_act 对 /login 判 `auth_wall_detected`（内容判词），

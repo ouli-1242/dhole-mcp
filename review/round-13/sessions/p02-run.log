@@ -1,0 +1,28 @@
+[p02 焦挺·消防员] session 870ab933d3294912a979a5ce1980744b server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p02-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p02 S1-discover 地图（/ 为种子） ----
+[p02-S1-discover 地图（/ 为种子）#02] web_discover   0.2s ok=None err=-  chars=
+      summary: mapped 8 URL(s) at http://127.0.0.1:8399 (depth <= 2) using 8 page fetch(es); no content extracted
+   mapped 8 rows（地图诚实与首页行数对齐）
+      (pause 6s - throttle)
+
+---- p02 S2-act hover 展开 ----
+[p02-S2-act hover 展开#03] web_act   4.6s ok=False err=- no_content chars=83
+      summary: 200 OK · 83B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   hover '#nav-files': ok=True read='None'
+   read '#status': ok=True read='HOVERED'
+      (pause 6s - throttle)
+
+---- p02 S3-act drag 卡片A→落点B ----
+[p02-S3-act drag 卡片A→落点B#04] web_act   4.6s ok=True err=- no_content chars=130
+      summary: 200 OK · 130B markdown · stealthy · this call makes 1 extra direct request to the target before the 
+   drag '#card-a' -> '#slot-b': ok=True read='None'
+   read '#status': ok=True read='DROPPED'
+      (pause 6s - throttle)
+
+---- p02 S4-read 复核（页面上看得见的状态说话） ----
+[p02-S4-read 复核（页面上看得见的状态说话）#05] web_read   3.2s ok=True err=-  chars=116
+      summary: 200 OK · 116B markdown · stealthy · one HTTP attempt is bound by the learned ceiling for this host: 
+   status=200 chars=116 | 200 OK · 116B markdown · stealthy · one HTTP attempt is bound by the learned ceiling for this host: 
+P02 DONE

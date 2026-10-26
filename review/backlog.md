@@ -17,3 +17,7 @@
 | E10 | 404 错误行仍带 total_extracted_chars=3 数字噪声（错误行无正文可言） | 错误行 | 无感 | round-02（P09）+ round-03（P03/P06）+ round-04（P06） | 观察中（三现，临近升级线） |
 | E11 | 硬墙主机烧满整个预算（http 被墙 → stealthy 30s/attempt 烧满 90s），全程无「此站常驻墙，换源」早停提示 | 反爬硬墙 | 骂人边缘 | round-02（P07 NEJM） | **wontfix 后记观察**（R02-005：早停需 per-host 失败记忆，误拒可恢复站点的风险 > 90s 等待代价；R02-004 显式预算已是真杠杆。若后续轮次再现，重开裁决） |
 | E12 | recall 无「我存的」显著性：刚存的页会被语义更近的旧闻压出前排（排序契约是语义相关，recency 已在预筛）——产品演进方向：scope=mine 或本机抓过加权 | 召回 | 皱眉 | round-03（P04；P3 降级：机制无过，设计诉求） | 新增 |
+| E13 | submit 闸的 next_action 写作 `{"confirm": true}`（像顶层），正形要嵌在 click/submit 动作里——模型照字面重试会二次被闸 | 页面交互 | 皱眉 | round-13（p10 S3；R13-003） | 新增（动作行 error 已有嵌套示例，建议 next_action 直接给） |
+| E14 | dialog 错误文案第二种形状 `{"answer": ..., "prompt_text"?: ...}` 未说死 answer 只收 accept/dismiss，prompt 文本要走 prompt_text | 页面交互 | 皱眉 | round-13（p03 S3 / p21 C1；R13-004） | 新增 |
+| E15 | tab / iframe 没有像 upload 那样的 lifetime 句；跨调用状态消失要靠 pin（且需具名 session_id）才留住 | 页面交互 | 皱眉 | round-13（p09 S1→S2 / p21 B2 / p14 T2） | 新增 |
+| E16 | 表单/菜单页 read 无正文（诚实标签「no prose」），next_action 可直接给 `{"snapshot": true}` 的 act 形状 | 读取形态 | 无感 | round-13（p01/p03/p10） | 新增 |

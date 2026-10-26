@@ -1,0 +1,30 @@
+[p06 乌恒·船闸管理员] session 763da562fccc4072a91ee66f7370a173 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p06-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p06 S1-request POST 写闸（无 confirm） ----
+[p06-S1-request POST 写闸（无 confirm）#02] web_request   0.0s ok=False err=invalid_request: method=POST is a write: it changes server state, and stored credentials f invalid_request chars=
+      summary: invalid request · method=POST is a write: it changes server state
+   next_action: Nothing was sent. Ask the user, then re-send the same call with confirm=true. HEAD probes need no confirm.
+      (pause 6s - throttle)
+
+---- p06 S2-confirm 真提交 ----
+[p06-S2-confirm 真提交#03] web_request   0.0s ok=True err=-  chars=34
+      summary: 200 OK · 34B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   status=200 | 200 OK · 34B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+      (pause 6s - throttle)
+
+---- p06 S3-captcha 第一试（pin 挂页, 读题→填→交） ----
+[p06-S3-captcha 第一试（pin 挂页, 读题→填→交）#04] web_act  14.2s ok=False err=- no_content chars=44
+      summary: 200 OK · 44B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   read '#challenge' as 'code': ok=True read='2VR7A'
+   fill '#answer': ok=True read='None'
+   click '#challenge-btn': ok=False read='None'
+   read '#status': ok=False read='None'
+   summary 尾段: call answers. Released after 300s, when the host changes, or when the session closes. · 1 action(s) waiting for user approval (click '#challenge-btn')
+      (pause 6s - throttle)
+
+---- p06 S4-pin 命中回读（r12 必测1：同 url/session/pin 站原页） ----
+[p06-S4-pin 命中回读（r12 必测1：同 url/session/pin 站原页）#05] web_act   0.1s ok=False err=- no_content chars=44
+      summary: 200 OK · 44B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   pin hit 句在场=True | 页上题目: '2VR7A'
+P06 DONE

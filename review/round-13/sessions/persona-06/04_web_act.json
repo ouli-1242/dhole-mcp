@@ -1,0 +1,66 @@
+{
+ "status": 200,
+ "content": [
+  "抄写挑战\n\n请按原样抄写下面的字符\n===========\n\n2VR7A\n\n字符\n\n提交"
+ ],
+ "url": "http://127.0.0.1:8399/challenge/text",
+ "fetcher_used": "stealthy",
+ "session_id": "p06a",
+ "session_cookie_names": [
+  "sid"
+ ],
+ "duration_ms": 13326,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 473,
+ "total_extracted_chars": 44,
+ "visible_text_chars": 28,
+ "substance": "nav_only",
+ "substance_basis": "6 lines, 100% of them are short fragments without sentence punctuation, mean line 5.8 characters (page holds 28 visible characters in total)",
+ "escalation_path": "direct:stealthy",
+ "summary": "200 OK · 44B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dialing, not the page. · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named · page pinned: this one stays open on that session for the next call that passes pin=true, so the challenge, the token and the half-filled form on it are the ones that next call answers. Released after 300s, when the host changes, or when the session closes. · 1 action(s) waiting for user approval (click '#challenge-btn')",
+ "content_ok": false,
+ "next_action": "a submit action is PAUSED for user approval (pending_approval in metadata.actions) - describe the submission to the user and ask for confirmation; on a yes, re-run the same actions with {\"confirm\": true} on that submit. Nothing irreversible was done.",
+ "fetched_at": "2026-10-26T00:40:58Z",
+ "metadata": {
+  "title": "抄写挑战",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+  "actions": [
+   {
+    "action": "read '#challenge' as 'code'",
+    "ok": true,
+    "read_via": "inner_text",
+    "read": "2VR7A",
+    "read_as": "code"
+   },
+   {
+    "action": "fill '#answer'",
+    "ok": true
+   },
+   {
+    "action": "click '#challenge-btn'",
+    "ok": false,
+    "pending_approval": true,
+    "error": "pending_approval: submitting is an irreversible step - ask the user to confirm this submission, then re-run the same actions with confirm: true on the click/submit action itself ({\"click\": {\"selector\": \"...\", \"confirm\": true}}), not at the top level on this click. Nothing was submitted. · THIS PAGE IS PINNED (pin=true), so that sentence is only half right: the steps before this one already ran on the page you are standing on (a form still holds what they filled). Two honest ways: re-run just this submit step with confirm: true on the click/submit action itself ({\"click\": {\"selector\": \"...\", \"confirm\": true}}), not at the top level on the same pinned session, or drop pin=true to start from a fresh navigation (a fresh challenge, a blank form)"
+   },
+   {
+    "action": "read '#status'",
+    "ok": false,
+    "error": "the selector matched no element (or none became actionable) before the timeout: Locator.inner_text: Timeout 10000ms exceeded."
+   }
+  ]
+ },
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "no_content",
+  "retryable": false,
+  "recover_with": "the page carried no usable text - switch source, or try extraction_type='html'"
+ },
+ "approx_tokens": 25,
+ "_wall_s": 14.19,
+ "_tool": "web_act",
+ "_tag": "p06-S3-captcha 第一试（pin 挂页, 读题→填→交）#04",
+ "_ts": "2026-10-26T00:40:58.077620+00:00"
+}

@@ -1,0 +1,38 @@
+{
+ "start_url": "http://127.0.0.1:8399/",
+ "pages": [
+  {
+   "url": "http://127.0.0.1:8399/",
+   "status": 200,
+   "content_ok": false,
+   "fetcher_used": "cache",
+   "title": "靶站索引",
+   "page_type": "fallback",
+   "content": [
+    "dhole 模拟测试靶站\n登录\n账户\n结算\n二维码\n验证码\n长文\n订阅源"
+   ],
+   "content_chars": 36,
+   "substance": "nav_only",
+   "substance_basis": "8 lines, 100% of them are short fragments without sentence punctuation, mean line 3.6 characters (page holds 41 visible characters in total)",
+   "fetched_at": "2026-10-25T23:47:04Z",
+   "summary": "200 OK · 396B html · cache · cached copy, fetched 55.3 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above. · no prose in this row: 8 lines, 100% of them are short fragments without sentence punctuation, mean line 3.6 characters (page holds 41 visible characters in total) - do not cite this row as content; web_read the URL with force_fetcher='stealthy' (which renders) or follow the links it carries"
+  }
+ ],
+ "pages_crawled": 1,
+ "pages_discovered": 8,
+ "truncated_by_max_pages": true,
+ "deadline_ms_applied": 25000,
+ "attempt_cap_ms": 30000,
+ "sitemap_used": false,
+ "duration_ms": 15,
+ "summary": "crawled 1 page(s) at http://127.0.0.1:8399 (depth <= 2); 0 content_ok; fallback:1; stopped: max_pages reached; max_pages clamped 0->1 (supported range 1-40)",
+ "next_action": "crawl stopped early (max_pages); re-run web_crawl with a higher max_pages / deadline_ms. 7 URL(s) were discovered but never sent. Or pass web_crawl(url='http://127.0.0.1:8399/', resume_token='057b919deb7c:0'): it sends exactly those 7 queued URL(s), without re-fetching the 1 page(s) this run already returned.",
+ "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.106, example.org -> 198.18.0.107); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+ "identity_applied": "allow_private",
+ "plan_id": "057b919deb7c",
+ "next_resume_token": "057b919deb7c:0",
+ "_wall_s": 0.02,
+ "_tool": "web_crawl",
+ "_tag": "p07-S3-中环拒：crawl max_pages=0（clamp 落 summary）#04",
+ "_ts": "2026-10-26T00:42:19.205304+00:00"
+}

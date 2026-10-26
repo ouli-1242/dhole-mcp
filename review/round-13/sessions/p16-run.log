@@ -1,0 +1,10 @@
+[p16 米酒儿·京剧琴师补条] session 20949b71ba9840c29a75c54cd3035bc4 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p16-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p16 S1-upload→click confirm→receipt ----
+[p16-S1-upload→click confirm→receipt#02] web_act   4.5s ok=True err=- no_content chars=69
+      summary: 200 OK · 69B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   upload 1 file(s) into '#doc': ok=True read='None' err=None
+   click '#send': ok=True read='None' err=None
+   read '#receipt': ok=True read='received qinpu2.txt (63 bytes)' err=None
+P16 DONE

@@ -4201,6 +4201,17 @@ def _headers_note(caller: Optional[Dict[str, str]], synthesized: bool) -> str:
             "cred_defaults; a loopback/private target drops it here on its own")
 
 
+def _selector_notes_for_cache() -> list[str]:
+    """Only notes whose subject is part of the cache key travel with the row.
+
+    `css_selector` is in `cache._cache_key`, so a 0-match note describes the very
+    answer being stored. `focus` / `max_content_chars` are not in the key: their
+    notes belong to whichever call wrote the row, and must not be replayed onto a
+    later call that asked for different parameters.
+    """
+    return [n for n in (_ARG_NOTES.get() or []) if n.startswith("css_selector ")]
+
+
 def _headers_off_note(by: str, replay: bool = False) -> str:
     """The ONE wording for "this request carried no dhole-synthesized browser
     headers" — said by the tier that actually withheld them, because that is the
@@ -6297,6 +6308,10 @@ class MasterFetchServer:
                     # 摘头的是发包那一层，回放这一层从没摘过任何东西 —— 所以它得从信封里
                     # 读回"当初是哪只手摘的"，否则同一颗 URL 的实时回执说了、回放不说，
                     # 而被人引用去写证据的往往是没说话的那一份（R01-021）。
+                    # R01-021 同一族的漏项：注记也是"过去那一刻发生的事"，不只
+                    # 判决要随行使。只搬与缓存键同源的 selector 注记（见
+                    # `_selector_notes_for_cache`），否则旧 focus 注记会贴到新参数上。
+                    "arg_notes": _selector_notes_for_cache(),
                     "headers_off_by": _HEADERS_OFF_BY.get(),
                 },
             )
@@ -7484,6 +7499,10 @@ class MasterFetchServer:
         _off_by = env.get("headers_off_by", "") or ""
         if _off_by:
             _note_text(_headers_off_note(_off_by, replay=True))
+        # R13-002：write 侧存下的、与缓存键同源的参数注记（selector 0 匹配）。
+        # 旧缓存行没有这一颗 —— 缺席不是"选择器生效了"，也不是"没生效"，照旧一个字不说。
+        for _n in env.get("arg_notes") or []:
+            _note_text(_n)
         return _attach_login_probe_gap(
             _apply_chunking(hit, max_chars=mc, offset=offset), check_login)
 

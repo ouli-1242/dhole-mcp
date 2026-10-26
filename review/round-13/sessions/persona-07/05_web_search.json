@@ -1,0 +1,136 @@
+{
+ "query": "dhole",
+ "results": [
+  {
+   "title": "Dhole Animal Facts - Cuon alpinus - A-Z Animals",
+   "url": "https://a-z-animals.com/animals/dhole/",
+   "snippet": "Dhole (Cuon alpinus) packs are socially monogamous with one dominant breeding pair and helpers. Pregnancy lasts ~60–63 days; litter usually 4–6 pups (1–10). One seasonal litter per year.",
+   "source": "yahoo,yandex",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.9902050767986748,
+   "fetch_relevance": "high",
+   "engines_consensus": "2 of 7 (degraded_pool)",
+   "source_type": "unknown"
+  }
+ ],
+ "total_results": 1,
+ "engines_used": [
+  "baidu",
+  "yandex",
+  "yahoo"
+ ],
+ "engine_blocked": [
+  "duckduckgo",
+  "brave",
+  "so360",
+  "shenma",
+  "sogou"
+ ],
+ "engine_preempted": [
+  "marginalia",
+  "bing",
+  "bing_global",
+  "seznam"
+ ],
+ "engine_detail": [
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 39s"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 39s"
+  },
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 39s"
+  },
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "circuit_open",
+   "verdict": "blocked",
+   "why": "circuit open (recently blocked; skipped); retried in 39s"
+  },
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 59s"
+  },
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "ok",
+   "verdict": "parser_suspect",
+   "why": "11 result containers on its page, 0 usable rows parsed (its page carried result containers and the parser took 0 usable rows out of them (first round seeing this))"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "10 usable rows from 10 item nodes"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "7 usable rows from 7 item nodes"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  }
+ ],
+ "families_answered_of_asked": "3 of 9 (7 could answer)",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "duration_ms": 2180,
+ "error": "",
+ "fetch_hint": "1 high, 0 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. Only 1 of 1 query term(s) appear anywhere in these rows (`5 characters` on this side, nothing on the conversation this response cannot see), so every tier here rests on the model's text agreement plus that one surface hit - a single post, not two. If this query was a follow-up whose subject lives in the conversation, name the subject: agreement against a few characters is not a topic verdict. web_read what fits your need (high first, but a lower tier can be the right call). | Engines duckduckgo, brave, so360, shenma, sogou didn't contribute (5 blocked); results are from the rest.",
+ "summary": "Searched 'dhole' -> 1 results (1 high, 0 med, 0 low) from baidu,yandex,yahoo; rerank=neural. | max_results=0 is outside the supported 1-50 range; returning at most 1",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. WARNING: 5 of the 8 engines it asked didn't contribute (5 blocked) - results have LOW diversity (only from baidu, yandex, yahoo). For more recall: the pool is down to 3 of the 8 engines it asked; retry after the cooldown clears (cooling right now: sogou 59s, duckduckgo 39s, brave 39s, so360 38s, shenma 38s; the pool is whole again in 59s - 60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use. marginalia, bing, bing_global, seznam were cancelled once enough indexes had answered - the diversity quorum, not a failure, so waiting and retrying reaches the same stop point; raise max_results or name them in engines=[...] to ask them anyway.",
+ "same_document_groups": [],
+ "_wall_s": 2.21,
+ "_tool": "web_search",
+ "_tag": "p07-S4-中环拒：search max_results=0（r12 家产）#05",
+ "_ts": "2026-10-26T00:42:27.417285+00:00"
+}

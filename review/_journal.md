@@ -110,3 +110,23 @@
 - 教训：补条脚本复用 persona 目录覆盖主跑回执（台账保全）——补条用独立号。
 - 下一步：round-13 P0（端口 9213；从 round-12 顶端切出；先读 common-issues 的
   round-12 必测回归点；卡片继续按「链」设计）。
+
+### round-13 收官（2026-10-26）
+
+- 主题「重装链」：10 条链各嵌一颗重交互页（dropdown/hoverdrag/dialog/iframe/upload/
+  写闸+captcha+pin/crawl+research/feed+parse/tab/checkout 提交闸），**95 发 13/13 工具**
+  （主跑 57 + P1 补条 17 + P3 探针 21；交接点 48 发，本轮接手补 47 发）。
+- **2 CONFIRM(B) + 6 REJECT**：
+  - R13-001 显式 css_selector 收窄被判 extraction_collapsed（p21 A3/p22 C7）——修：
+    判决尺 selector 豁免（R06-F2 同族漏项，恢复尺不动）。
+  - R13-002 缓存回放丢 selector 0 匹配注记（p22 live/hit 对照）——修：envelope 存
+    同源注记、回放带出（R01-021 同族漏项）。
+  - REJECT：confirm 顶层措辞（E）、dialog 文案（E）、tab 寿命（D+E）、表单页无正文（D+E）、
+    iframe 保存不跨调用（D+E）、captcha #status 超时（A）、顶层 frame（A）、靶站 bytes（C）。
+- P4：2 个 test-first 修（2 新测试文件 4 测试，先 3 红→全绿）；相关族 520 绿。
+- P5：真重启 pid 16464→**17028**；V1-V4 全 PASS（V3 阴性线上不可搭——/longaside 已由
+  plain converter 接住，阴性由单测承担，如实记录）；pytest **7775 passed/23 skipped**
+  （7771+4 平账）；ruff 16 基线。
+- P6：四件资产 + backlog E13-E16 + decisions 更新后提交。
+- **循环停止**：用户明确指示「做完 r13 就停止，不要继续循环」——P7/round-14 不启动。
+  common-issues 的 round-13 必测回归点仍保留为「下一轮若继续」的输入。

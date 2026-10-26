@@ -1085,7 +1085,10 @@ def _detect_content_issue(result: ResponseModel) -> str:
     if _is_soft_failure(result):
         return "soft_failure_detected: page returned an error or placeholder view with HTTP 200, not content"
 
-    if extraction_collapsed(result):
+    # R13-001：narrowed 的调用方要的是更少 —— 与 `_substance_verdict` 的 R06-002 同一枚
+    # 豁免。分母是整页可见字，点名取 h1 会被读成「读取器丢字」。恢复尺
+    # `extraction_lost_text` 不在豁免内：它问的是值不值得再抽一次。
+    if extraction_collapsed(result) and not _CSS_SELECTOR.get():
         # 抽取塌陷与 JS 壳在"正文很少"这一条上长得一模一样，而下一步正好相反：壳靠渲染
         # 补，塌陷是 dhole 自己的读取问题 —— 起浏览器是把同一份静态标记交给同一个抽取器
         # 再说一次。所以这一支排在 `_is_js_shell` **前面**，给的也不是"再抓一次"而是
