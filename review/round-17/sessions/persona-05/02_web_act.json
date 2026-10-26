@@ -1,0 +1,53 @@
+{
+ "status": 200,
+ "content": [
+  "上传\n\nUpload a file\n=============\n\nSend\n\nnothing uploaded yet"
+ ],
+ "url": "http://127.0.0.1:8399/upload",
+ "fetcher_used": "stealthy",
+ "duration_ms": 12868,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 338,
+ "total_extracted_chars": 59,
+ "visible_text_chars": 42,
+ "substance": "ok",
+ "escalation_path": "direct:stealthy",
+ "summary": "200 OK · 59B markdown · stealthy · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dialing, not the page. · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named · 1 action(s) waiting for user approval (click 'button[type=submit]')",
+ "content_ok": true,
+ "next_action": "a submit action is PAUSED for user approval (pending_approval in metadata.actions) - describe the submission to the user and ask for confirmation; on a yes, re-run the same actions with confirm: true on the click/submit action itself (e.g. {\"click\": {\"selector\": \"...\", \"confirm\": true}} or {\"submit\": {\"selector\": \"...\", \"confirm\": true}}), not at the top level. Nothing irreversible was done.",
+ "fetched_at": "2026-10-26T06:21:24Z",
+ "metadata": {
+  "title": "上传",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "actions": [
+   {
+    "action": "upload 1 file(s) into 'input[type=file]'",
+    "ok": true,
+    "uploaded": [
+     "审计清单-中文.txt"
+    ],
+    "files": 1,
+    "lifetime": "the files ride THIS page instance - submit within the same call (a later call starts a fresh page)"
+   },
+   {
+    "action": "click 'button[type=submit]'",
+    "ok": false,
+    "pending_approval": true,
+    "error": "pending_approval: submitting is an irreversible step - ask the user to confirm this submission, then re-run the same actions with confirm: true on the click/submit action itself (e.g. {\"click\": {\"selector\": \"...\", \"confirm\": true}} or {\"submit\": {\"selector\": \"...\", \"confirm\": true}}), not at the top level on this click. Nothing was submitted."
+   },
+   {
+    "action": "read '#status'",
+    "ok": false,
+    "error": "the selector matched no element (or none became actionable) before the timeout: Locator.inner_text: Timeout 10000ms exceeded."
+   }
+  ]
+ },
+ "identity_applied": "allow_private",
+ "approx_tokens": 16,
+ "_wall_s": 12.89,
+ "_tool": "web_act",
+ "_tag": "p05-S1-上传中文名文件#02",
+ "_ts": "2026-10-26T06:21:24.190000+00:00"
+}

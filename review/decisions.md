@@ -67,3 +67,13 @@
   round-17 先查其编辑是否落地，落地即接线修复。
 - 归因：`git show HEAD` 无 sniff 代码，对方 diff 只有注释措辞——缺陷是既有的，不是其引入。
 - 这是循环首次「CONFIRM 但推迟修复」；记录在案，不把推迟读成 REJECT。
+
+## 2026-10-26T14:30+08:00 round-17：结转修复的暂存法（HEAD 基线补丁）
+- R16-001 的修复落在 `fetcher.py`；该工作树副本含对方刚做的注释翻译（未提交）。直接
+  `git add fetcher.py` 会把对方几百行注释一并提交。
+- 处置：取 `git show HEAD:src/dhole_mcp/fetcher.py` 到临时副本，在副本上重放本轮三处代码改动，
+  用 `git diff --no-index` 生成补丁，再 `git apply --cached` 只把本轮改动写进索引。
+  结果是：提交里只有修复；对方注释留在工作树，未暂存、未回滚。
+- 适用条件：我们的改动与对方改动**语义独立**、可在 HEAD 上独立重放；若同一函数被双方改，
+  此法则不适用，须等对方落地。
+- 测试文件 `tests/test_a_page_declaring_gbk_in_meta_decodes_as_gbk.py` 是本轮新建，整文件暂存。

@@ -1,0 +1,44 @@
+{
+ "message": "2 session(s) open, holding 1 cookie(s); the cache and stored-task counts ride along. Nothing erased.",
+ "sessions": [
+  {
+   "session_id": "f3bae8f03c83",
+   "browser_open": true,
+   "browser_type": "stealthy",
+   "browser_created": "2026-10-26T06:20:42.462331+00:00"
+  },
+  {
+   "session_id": "p02save",
+   "hosts": {
+    "127.0.0.1": [
+     "sid"
+    ]
+   },
+   "cookies": 1,
+   "expires_in_s": 86284
+  }
+ ],
+ "open_count": 2,
+ "cache": {
+  "entries": 375,
+  "expired": 332,
+  "oldest_age_s": 174269,
+  "cap": 10000,
+  "hits": 7,
+  "misses": 9
+ },
+ "cred_defaults": [
+  {
+   "key": "allow_private",
+   "scope": "",
+   "stored_s_ago": 9,
+   "value": true
+  }
+ ],
+ "identity_count": 1,
+ "next_action": "sys_state(clear=['<session id>']) forgets one; clear=['sessions'] with confirm=true forgets every one. A session with cookies is a live credential for that host until it expires on its own. CDP attach roster: github.com (approved before approvals carried a date), i.mooc.chaoxing.com (approved before approvals carried a date) - clear=['cdp:host=<name>'] revokes one, clear=['cdp_hosts'] all (confirm=true); an approval is re-asked after 30 days. the roster is the file `cdp_hosts.json` in dhole's home directory - run `dhole doctor` for its full path on this machine.",
+ "_wall_s": 0.02,
+ "_tool": "sys_state",
+ "_tag": "p10-S4-state 与手册#05",
+ "_ts": "2026-10-26T06:22:17.057597+00:00"
+}

@@ -349,3 +349,27 @@
 5. r14 三件（相对 since / offset 窗口 / check 两相）+ r13 三件（收窄/注记/feed -3）。
 6. emoji ZWJ/ZWSP 观察项（E）。
 7. 前十五轮家产合并回访。
+
+## round-17 新增/复发（保存与下载轮 · 0 新 CONFIRM，结转 R16-001 已修）
+
+| 区 | 现象 | 状态 | 来源 |
+|---|---|---|---|
+| meta-only 编码页（结转） | GBK/Latin-1 页被当 UTF-8：占位句/乱码/U+FFFD | **已修**（R16-001 接线：`sniff_html_charset` + `Response.encoding` + `_decode_html_bytes`；4 测试绿 + 真机 read/crawl） | P06/P10（r16）/ V1（r17） |
+| 空 save_to 点错参数 | `save_to=""` → `max_save_bytes= was given without save_to=`（调用方没给 max_save_bytes） | E（R17-001；next_action 仍指向补 save_to，可自愈） | p10 S2 |
+| save_to summary 口径 | summary 写 `82B text`（保存回执句长度）、`extracted_type=text`，像抽取过 | E（R17-002；metadata saved_to/bytes/sha256 才是真账） | p01 S2 |
+| save_to 路径语义两套 | read：拒覆盖、拒缺父目录；截图/PDF：覆盖、自动建父目录 | E（R17-003；同一参数名两种合同，建议文档点名或统一） | p01/p03/p07 |
+| 相对遍历 | `../escape17.md` 允许落盘；只拦系统目录（`C:\Windows` 写前拒） | D（R17-004；调用方自己的路径，系统目录名单是硬边界） | p02 |
+| save_to 不吃阅读缓存 | 同 URL 连续 save_to 三次都 `cached=None`（原始字节 ≠ 抽取正文） | D/E（R17-005；设计如此，回执可补一句） | p08 |
+| 上传回执 selector | 靶站 /upload 的真实 id 是 `#receipt`，不是 `#status` | A（R17-006；p12 用 #receipt 得 `received … (26 bytes)`） | p05/p12 |
+| PNG 头断言 | 脚本 bytes 字面量双层转义 → 误报 False；文件头正确 | 量具（R17-007；脚本已修） | p03/p09 |
+| **保存面正向实锤** | 覆盖门先拒后发 · 小帽具名且不落半截 · 系统目录写前拒 · sha256 一致 · 中文/emoji 文件名 · PNG/%PDF 头 · PDF→doc_parse · 二进制原样 · 上传中文名 26B 回执 | 无缺陷（R17-008 PASS） | p01-p12 |
+
+## round-17 必测回归点（round-18 新画像真实回访）
+
+1. R16-001：meta-only GBK/Latin-1 的 read 与 crawl 按 meta 解码（4 单测 + 真机）。
+2. save_to：覆盖拒 / 小帽拒 / 系统目录拒 / sha256 / 中文·emoji 文件名。
+3. 截图·PDF：PNG/%PDF 头、父目录创建、PDF→doc_parse 往返。
+4. 上传：中文名文件 + 动作级 confirm + `#receipt` 回执。
+5. r15 空框 property / r14 三件 / r13 三件。
+6. E 观察：空 save_to 话术、save_to summary 口径、路径语义两套、save_to 不吃缓存。
+7. 前十六轮家产合并回访。

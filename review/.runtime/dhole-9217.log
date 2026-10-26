@@ -1,0 +1,36 @@
+  Dhole  serving HTTP  http://127.0.0.1:9217/mcp
+[dhole] WARNING: HTTP transport bound to 127.0.0.1 with no DHOLE_HTTP_TOKEN - any process that can reach this port can call every tool, including writes and stored credentials. Every client on this port shares one credential store, one session state and one cache; the token (when set) gates the port, it does not separate principals.
+INFO:     Started server process [28600]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:9217 (Press CTRL+C to quit)
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+D:\Dev\Tools\dhole-mcp\src\dhole_mcp\context.py:422: MCPDeprecationWarning: The logging capability is deprecated as of 2026-07-28 (SEP-2577).
+  await session.send_log_message("info", message, logger="dhole.stage")
+page action read 'input[name=username]' @value (property) failed: read found no property 'value': 'value' is empty on this field - that is its current value, not a missing read
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50500 - "GET /checkAliveServer?data=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkYXRhIjp7fSwidG9rZW4iOiJleUpoYkdjaU9pSklVekkxTmlJc0luUjVjQ0k2SWtwWFZDSjkuZXlKcGMwWnliMjFSVVNJNk1Td2lhV0YwSWpveE56a3lPVGsyTURVMmZRLmowd0p4N0oxa3J5Q1BRVFNOcld0ZXVNeHJvNjRoMVBHclJZTk1NQ1FyajQiLCJpYXQiOjE3OTI5OTYwNTZ9.ZZS0Gdp0gTDusR3nZyogyeUYx6bo1VSsGSZYozAsLFA HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:50563 - "GET /checkAliveServer?data=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkYXRhIjp7fSwidG9rZW4iOiJleUpoYkdjaU9pSklVekkxTmlJc0luUjVjQ0k2SWtwWFZDSjkuZXlKcGMwWnliMjFSVVNJNk1Td2lhV0YwSWpveE56a3lPVGsyTURVMmZRLmowd0p4N0oxa3J5Q1BRVFNOcld0ZXVNeHJvNjRoMVBHclJZTk1NQ1FyajQiLCJpYXQiOjE3OTI5OTYwNTZ9.ZZS0Gdp0gTDusR3nZyogyeUYx6bo1VSsGSZYozAsLFA HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:50598 - "GET /checkAliveServer?data=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkYXRhIjp7fSwidG9rZW4iOiJleUpoYkdjaU9pSklVekkxTmlJc0luUjVjQ0k2SWtwWFZDSjkuZXlKcGMwWnliMjFSVVNJNk1Td2lhV0YwSWpveE56a3lPVGsyTURVMmZRLmowd0p4N0oxa3J5Q1BRVFNOcld0ZXVNeHJvNjRoMVBHclJZTk1NQ1FyajQiLCJpYXQiOjE3OTI5OTYwNTZ9.ZZS0Gdp0gTDusR3nZyogyeUYx6bo1VSsGSZYozAsLFA HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:54969 - "GET /checkAliveServer?data=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkYXRhIjp7fSwidG9rZW4iOiJleUpoYkdjaU9pSklVekkxTmlJc0luUjVjQ0k2SWtwWFZDSjkuZXlKcGMwWnliMjFSVVNJNk1Td2lhV0YwSWpveE56a3lPVGsyTWpJeGZRLkZydDdCdVpFRXktQlR1Z2N4bUF6SFRMTFF6WEE0ckNtbGJ5QWhyZ1ZPajgiLCJpYXQiOjE3OTI5OTYyMjF9.fiTSuaCzDQtI1Jl2og2AsoNi-kocKf9_rXS0yMgJcbc HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:55475 - "GET /checkAliveServer?data=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkYXRhIjp7fSwidG9rZW4iOiJleUpoYkdjaU9pSklVekkxTmlJc0luUjVjQ0k2SWtwWFZDSjkuZXlKcGMwWnliMjFSVVNJNk1Td2lhV0YwSWpveE56a3lPVGsyTWpNMmZRLndYLWFkWnkzSWNZcGJxMFlHenBSQ0UyeFlYMFZFTTktSE5ldGF0NDBLUWMiLCJpYXQiOjE3OTI5OTYyMzZ9.JG0bU784NXZHw9TmFfqfazajKzwk7c3iSH7EpTxrMH8 HTTP/1.1" 404 Not Found

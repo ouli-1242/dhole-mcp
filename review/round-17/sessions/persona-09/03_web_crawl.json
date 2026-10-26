@@ -1,0 +1,66 @@
+{
+ "start_url": "http://127.0.0.1:8398/",
+ "pages": [
+  {
+   "url": "http://127.0.0.1:8398/",
+   "status": 200,
+   "content_ok": true,
+   "fetcher_used": "cache",
+   "title": "Directory listing for /",
+   "page_type": "fallback",
+   "content": [
+    "Directory listing for /\nar.html\nemoji.html\ngbk.html\nja.html\nko.html\nlatin1.html\nmixed.html\nru.html"
+   ],
+   "content_chars": 98,
+   "substance": "ok",
+   "fetched_at": "2026-10-26T06:15:57Z",
+   "summary": "200 OK · 590B html · cache · cached copy, fetched 6.1 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8398/ar.html",
+   "depth": 1,
+   "status": 200,
+   "content_ok": true,
+   "fetcher_used": "cache",
+   "title": "اختبار الترميز العربي",
+   "page_type": "fallback",
+   "content": [
+    "هذا نص عربي طويل لاختبار اتجاه الكتابة من اليمين إلى اليسار. يحتوي على أرقام 12345 وكلمات إنجليزية mixed in.\n\nEnd of the اختبار الترميز العربي sample."
+   ],
+   "content_chars": 150,
+   "fetched_at": "2026-10-26T06:15:57Z",
+   "summary": "200 OK · 328B html · cache · cached copy, fetched 6.1 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8398/emoji.html",
+   "depth": 1,
+   "status": 200,
+   "content_ok": true,
+   "fetcher_used": "cache",
+   "title": "表情符号与组合字符测试",
+   "page_type": "fallback",
+   "content": [
+    "表情符号与组合字符测试\n这里有 emoji 😀🚀👩💻 与组合字符 é、全角ＡＢＣ、零宽字符，以及一段足够长的中文正文用于抽取。\nEnd of the 表情符号与组合字符测试 sample."
+   ],
+   "content_chars": 94,
+   "fetched_at": "2026-10-26T06:15:57Z",
+   "summary": "200 OK · 244B html · cache · cached copy, fetched 6.1 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  }
+ ],
+ "pages_crawled": 3,
+ "pages_discovered": 9,
+ "truncated_by_max_pages": true,
+ "deadline_ms_applied": 25000,
+ "attempt_cap_ms": 30000,
+ "sitemap_used": false,
+ "duration_ms": 38,
+ "summary": "crawled 3 page(s) at http://127.0.0.1:8398 (depth <= 2); 3 content_ok; fallback:3; stopped: max_pages reached",
+ "next_action": "crawl stopped early (max_pages); re-run web_crawl with a higher max_pages / deadline_ms. 6 URL(s) were discovered but never sent. Or pass web_crawl(url='http://127.0.0.1:8398/', resume_token='79191caf01de:0'): it sends exactly those 6 queued URL(s), without re-fetching the 3 page(s) this run already returned.",
+ "identity_applied": "allow_private",
+ "plan_id": "79191caf01de",
+ "next_resume_token": "79191caf01de:0",
+ "_wall_s": 0.04,
+ "_tool": "web_crawl",
+ "_tag": "p09-S2-crawl 多语言站三页#03",
+ "_ts": "2026-10-26T06:22:01.056399+00:00"
+}

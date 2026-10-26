@@ -1,0 +1,20 @@
+[p08 阿码·开发者] session 71e61ae4852f41a48f9978d0123f83a9 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p08-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p08 S1-emoji 文件名保存 ----
+[p08-S1-emoji 文件名保存#02] web_read   0.0s ok=True err=-  chars=81
+      summary: 200 OK · 81B text · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, n
+   ok=True saved=True bytes=1265
+      (pause 3s - throttle)
+
+---- p08 S2-命中缓存时再存（另一个文件） ----
+[p08-S2-命中缓存时再存（另一个文件）#03] web_read   0.0s ok=True err=-  chars=82
+      summary: 200 OK · 82B text · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, n
+   cached=None saved=True bytes=1265 err=
+      (pause 3s - throttle)
+
+---- p08 S3-cache_ttl=0 强制回源再存 ----
+[p08-S3-cache_ttl=0 强制回源再存#04] web_read   0.0s ok=True err=-  chars=82
+      summary: 200 OK · 82B text · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, n
+   cached=None saved=True bytes=1265
+P08 DONE

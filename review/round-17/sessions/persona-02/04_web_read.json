@@ -1,0 +1,25 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/account",
+ "fetcher_used": "none",
+ "session_id": "p02save",
+ "session_cookie_names": [
+  "sid"
+ ],
+ "duration_ms": 0,
+ "error": "invalid_request: refusing to write 'C:\\\\Windows\\\\Temp\\\\r17-should-not-exist.txt' - it is in a restricted system directory (C:\\WINDOWS)",
+ "summary": "invalid request · refusing to write 'C:\\\\Windows\\\\Temp\\\\r17-should-not-exist.txt'",
+ "content_ok": false,
+ "next_action": "Nothing was fetched and nothing was written - fix save_to and call again.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_read",
+ "_tag": "p02-S3-系统目录（应拒）#04",
+ "_ts": "2026-10-26T06:20:27.190450+00:00"
+}

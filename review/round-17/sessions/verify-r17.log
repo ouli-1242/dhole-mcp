@@ -1,0 +1,51 @@
+[p17 r17复验] session 50c5ea39b76048e69f3644488ef98833 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p17-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+[p17-misc#02] web_read   1.6s ok=True err=-  chars=63
+      summary: 200 OK · 63B markdown · http · the target is loopback/private, so dhole dropped its own synthesized 
+[p17-misc#03] web_read   0.0s ok=True err=-  chars=111
+      summary: 200 OK · 111B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+[p17-misc#04] web_crawl   0.0s ok=None err=-  chars=
+      summary: crawled 1 page(s) at http://127.0.0.1:8398 (depth <= 2); 1 content_ok; fallback:1
+[PASS] V1 R16-001：GBK/Latin-1 read 与 crawl 按 meta 解码
+      gbk='国标编码页面\n这是一个 GBK 编码的页面，正文包含中文与数字 2026。\nEn' fr='Voici un texte français avec des accents' crawl='国标编码页面\n这是一个 GBK 编码的页面，正文包含中文与数字 2026。\nEn'
+[p17-misc#05] web_read   0.0s ok=True err=-  chars=86
+      summary: 200 OK · 86B text · http · the target is loopback/private, so dhole dropped its own synthesized head
+[p17-misc#06] web_read   0.0s ok=False err=invalid_request: save_to 'D:\\Dev\\Tools\\dhole-mcp\\review\\round-17\\sessions\\files\\ve invalid_request chars=
+      summary: invalid request · save_to
+[p17-misc#07] web_read   0.0s ok=False err=Response body too large (1,265 bytes = 1.2KB, over the save_to limit of 50) - nothing was  body_too_large chars=
+      summary: 200 OK · 0B text · http · the target is loopback/private, so dhole dropped its own synthesized heade
+[PASS] V2 save_to：哈希一致 / 覆盖拒 / 小帽拒且不落盘
+      sha_ok=True over=invalid_request: save_to 'D:\\Dev\\Tools\\dhole-mc cap=Response body too large (1,265 bytes = 1.2KB, over the save_
+[p17-misc#08] web_act   3.6s ok=True err=- no_content chars=423
+      summary: 200 OK · 423B markdown · stealthy · this call makes 1 extra direct request to the target before the 
+[p17-misc#09] doc_parse   0.2s ok=True err=-  chars=553
+      summary: 200 OK · 553B markdown · parse
+[PASS] V3 截图/PDF 落盘 + doc_parse 读回
+      png=True pdf=True parse_chars=553
+[p17-misc#10] web_act   5.1s ok=False err=auth_wall_detected: page is a login/sign-in wall, not content auth_wall chars=24
+      summary: 200 OK · 24B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+[p17-misc#11] web_read   0.1s ok=True err=-  chars=10
+      summary: 200 OK · 10B markdown · http · the target is loopback/private, so dhole dropped its own synthesized 
+[p17-misc#12] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+[p17-misc#13] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · cache · cached copy, fetched 0.0 min ago · replayed from the cache: the fet
+[p17-misc#14] feed_read   0.0s ok=None err=invalid_request: max_items must be ≥ 0 (0 = all), got -3 invalid_request chars=
+      summary: no request went out: the call was refused before any source was contacted, so nothing was fetched
+[p17-misc#15] feed_read   0.0s ok=None err=-  chars=
+      summary: 1 URLs asked · 1 rows answered · 1 rows carried 3 items, newest first · fetched live at 2026-10-26T0
+[p17-misc#16] web_read   0.1s ok=True err=- truncated chars=7157
+      summary: 200 OK · 478B of 7.0KB markdown · http · truncated · one HTTP attempt is bound by the learned ceilin
+[p17-misc#17] web_read   0.0s ok=True err=- truncated chars=7157
+      summary: 200 OK · 473B of 7.0KB markdown · cache · cached copy, fetched 0.0 min ago · truncated · replayed fr
+[p17-misc#18] web_read   0.0s ok=None err=-  chars=
+      summary: checked 1 URL(s): 0 changed, 0 unchanged, 1 baseline recorded, 0 error
+[p17-misc#19] web_read   0.0s ok=None err=-  chars=
+      summary: checked 1 URL(s): 1 changed, 0 unchanged, 0 baseline recorded, 0 error
+[PASS] V4 r15/r14/r13 回归（空框/收窄/注记/负数/since/窗口/check）
+      empty="read found no property 'value': 'value' " css=True note=True since=2026-10-23T06:25:59.475356+00:00 win='200 OK · 473B of 7.0KB markdown · cache '
+[p17-misc#20] web_act   4.7s ok=True err=- no_content chars=74
+      summary: 200 OK · 74B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+[PASS] V5 上传中文名文件 + 回执点名
+      receipt='received verify17-上传.txt (12 bytes)'
+VERIFY R17 DONE

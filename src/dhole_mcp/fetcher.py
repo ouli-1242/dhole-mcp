@@ -262,7 +262,21 @@ class Response:
 
     @property
     def encoding(self) -> str:
-        return self._encoding
+        """声明的字符集；头部没说时问页面自己的 <meta>（R16-001）。
+
+        静态站常常只发一个裸 `text/html`，编码只写在 `<meta>` 里——浏览器读那里，
+        读页面的这一层也得读那里，否则 GBK 页会被当成二进制、Latin-1 重音会成
+        U+FFFD。头部**明确**声明 charset 时仍以头部为准。
+        """
+        content_type = ""
+        for key, value in self._headers.items():
+            if key.lower() == "content-type":
+                content_type = value or ""
+                break
+        if "charset=" in content_type.lower():
+            return self._encoding
+        sniffed = sniff_html_charset(self._body)
+        return sniffed or self._encoding
 
     @property
     def reason(self) -> str:
@@ -288,7 +302,7 @@ class Response:
         is what made the schema path mojibake (BUG-1).
         """
         if self._content_cached is None:
-            self._content_cached = _decode_html_bytes(self._body, self._encoding)
+            self._content_cached = _decode_html_bytes(self._body, self.encoding)
         return self._content_cached
 
     @property
@@ -505,23 +519,53 @@ def _extract_encoding(content_type: str) -> str:
 # looks like mojibake" cannot drift apart.
 
 
-def _decode_html_bytes(body: bytes, declared: str) -> str:
-    """Decode a response body, falling back to UTF-8 when the declared charset
-    is contradicted by the bytes themselves.
+_HTML_META_BYTES_RE = re.compile(rb"<meta\b[^>]*>", re.IGNORECASE)
+_CHARSET_ATTR_BYTES_RE = re.compile(
+    rb"charset\s*=\s*[\"']?\s*([A-Za-z0-9_.:-]+)", re.IGNORECASE)
 
-    Never raises. Callers get a str either way.
+
+def sniff_html_charset(body: bytes) -> str:
+    """页面自己在 <meta> 里声明的字符集，没有则返回 ""。"""
+    if not body:
+        return ""
+    for tag in _HTML_META_BYTES_RE.findall(body[:16384]):
+        match = _CHARSET_ATTR_BYTES_RE.search(tag)
+        if match:
+            return match.group(1).decode("ascii", "ignore").strip().lower()
+    return ""
+
+
+def _is_utf8_alias(enc: str) -> bool:
+    return enc.replace("-", "").replace("_", "").lower() in ("utf8", "utf8sig")
+
+
+def _decode_html_bytes(body: bytes, declared: str) -> str:
+    """解码响应体；声明的字符集被字节本身否定时退回 UTF-8。
+
+    永不抛异常。两种情况下调用方都拿到 str。
     """
     enc = (declared or "").strip() or "utf-8"
+    if _is_utf8_alias(enc):
+        try:
+            return body.decode("utf-8")
+        except UnicodeDecodeError:
+            # 字节不是 UTF-8：先问页面自己的 <meta>（R16-001）。静态站常常只在那里
+            # 声明编码，HTTP 头只有一个裸 text/html。
+            meta = sniff_html_charset(body)
+            if meta and not _is_utf8_alias(meta):
+                try:
+                    return body.decode(meta, errors="replace")
+                except (LookupError, UnicodeError):
+                    pass
+            return body.decode("utf-8", errors="replace")
     try:
         text = body.decode(enc, errors="replace")
     except (LookupError, UnicodeError):
-        # Unknown/nonsense charset name in the header.
+        # 头里写着未知/胡说的字符集名。
         return body.decode("utf-8", errors="replace")
-    if enc.replace("-", "").replace("_", "").lower() in ("utf8", "utf8sig"):
-        return text
     try:
         utf8_text = body.decode("utf-8", errors="replace")
-    except UnicodeError:  # pragma: no cover - decode with replace cannot raise
+    except UnicodeError:  # pragma: no cover - 带 replace 的解码不会抛异常
         return text
     return utf8_text if _misdecode_score(utf8_text) < _misdecode_score(text) else text
 

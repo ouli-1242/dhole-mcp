@@ -1,0 +1,32 @@
+{
+ "status": 200,
+ "content": [
+  "国标编码页面\n这是一个 GBK 编码的页面，正文包含中文与数字 2026。\nEnd of the 国标编码页面 sample."
+ ],
+ "url": "http://127.0.0.1:8398/gbk.html?cb=v17gbk",
+ "fetcher_used": "http",
+ "duration_ms": 1597,
+ "error": "",
+ "content_type": "text/html",
+ "total_size_bytes": 234,
+ "total_extracted_chars": 63,
+ "visible_text_chars": 70,
+ "escalation_path": "direct:http",
+ "attempt_cap_ms": 29000,
+ "summary": "200 OK · 63B markdown · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-26T06:25:50Z",
+ "metadata": {
+  "title": "国标编码页面",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.96, example.org -> 198.18.0.97); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "approx_tokens": 38,
+ "_wall_s": 1.63,
+ "_tool": "web_read",
+ "_tag": "p17-misc#02",
+ "_ts": "2026-10-26T06:25:50.233835+00:00"
+}

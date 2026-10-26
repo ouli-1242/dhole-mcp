@@ -28,6 +28,7 @@
 | round-14 | review/round-14 | f5f9340 | 10 | 78（主跑 63 + 补条 15）| **0 CONFIRM（第四个零修复轮，非连续）**——6 候选全 REJECT（R14-001 自推翻：offset 窗口形状命中在途契约；5 条转 E/D 文档面）；工作树含并发 agent 在途改动，只读不写 | 完成（回访与新鲜度轮：P5 真重启 pid 16212→23964，V1-V5 PASS，pytest 7844 绿，ruff 16）|
 | round-15 | review/round-15 | ea25700 | 10 | 68（画像主跑）| **1 fixed（R15-001 空表单框 property 读抛 UnboundLocalError）+ 3 E + 1 D/E + 2 A + 1 量具 + 1 D + 1 PASS**；隔离面（双 session/双 selector/登录 vs 匿名）正向全过 | 完成（并行与隔离轮：P5 真重启 pid 18560→27864，V1-V5 PASS，pytest 7845 绿，ruff 16）|
 | round-16 | review/round-16 | 6f262fa | 10 + 补条 | 70（画像 55 + probe 12 + act 补条 3）| **1 CONFIRM(B) 修复推迟（R16-001 meta-only 编码页被当 UTF-8：GBK 占位/乱码、Latin-1 U+FFFD，content_ok 仍 true）** + 2 E + 1 量具 + 1 A + 1 PASS；多语言正向全过 | 完成（编码与多语言轮：P5 真重启 pid 23108→28668，V1/V2/V4/V5 PASS + V3 已知缺陷复现，pytest 7845 绿，ruff 16；修复因并发编辑推迟）|
+| round-17 | review/round-17 | b60a90a | 10 + 补条 | 77（画像 52 + probe 22 + 补条 3）| **1 fixed（结转 R16-001：meta-only 编码页按 `<meta>` 解码，4 测试 + 真机）+ 0 新 CONFIRM**；3 E + 1 D + 1 D/E + 1 A + 1 量具 + 1 PASS（保存/覆盖/小帽/系统目录/上传面正向全过）| 完成（保存与下载轮：P5 真重启 pid 15880→28600，V1-V5 PASS，pytest 7849 绿，ruff 16；fetcher 单文件补丁暂存）|
 
 ## 跨轮资产
 

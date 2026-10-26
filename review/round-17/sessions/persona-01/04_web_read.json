@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/article?cb=p01save&again=1",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: save_to 'D:\\\\Dev\\\\Tools\\\\dhole-mcp\\\\review\\\\round-17\\\\sessions\\\\files\\\\研究笔记.md' already exists - refusing to overwrite it. Pick another name or remove the file first.",
+ "summary": "invalid request · save_to 'D:\\\\Dev\\\\Tools\\\\dhole-mcp\\\\review\\\\round-17\\\\sessions\\\\files\\\\研究笔记.md'",
+ "content_ok": false,
+ "next_action": "Nothing was fetched and nothing was written - fix save_to and call again.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.02,
+ "_tool": "web_read",
+ "_tag": "p01-S3-同路径二次保存（覆盖门）#04",
+ "_ts": "2026-10-26T06:20:17.165336+00:00"
+}

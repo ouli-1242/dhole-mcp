@@ -1,0 +1,24 @@
+{
+ "checked": 1,
+ "changed_urls": [],
+ "unchanged_urls": [],
+ "baseline_urls": [
+  "http://127.0.0.1:8399/changing?cb=v17chk"
+ ],
+ "error_urls": [],
+ "results": [
+  {
+   "url": "http://127.0.0.1:8399/changing?cb=v17chk",
+   "changed": null,
+   "status": 200,
+   "fetcher": "http",
+   "note": "no comparable baseline for this URL (or it expired) - this call fetched and recorded one; ask again with extraction_type='check' to learn whether it changed"
+  }
+ ],
+ "summary": "checked 1 URL(s): 0 changed, 0 unchanged, 1 baseline recorded, 0 error",
+ "note": "each row compares the live page with dhole's own html baseline; changed=null with a 2xx status means this call recorded that URL's first baseline, not that it failed",
+ "_wall_s": 0.03,
+ "_tool": "web_read",
+ "_tag": "p17-misc#18",
+ "_ts": "2026-10-26T06:25:59.583731+00:00"
+}

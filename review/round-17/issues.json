@@ -1,0 +1,30 @@
+{
+ "round": 17,
+ "theme": "保存与下载往返",
+ "verdict": "1 fixed (R16-001 carryover) + 0 new CONFIRM; 3 E + 1 D + 1 D/E + 1 A + 1 measurement + 1 PASS",
+ "fixed": [
+  {
+   "id": "R16-001",
+   "severity": "B (carryover)",
+   "title": "meta-only 编码页被当 UTF-8（GBK 占位/乱码、Latin-1 U+FFFD）",
+   "fix": "fetcher.py: sniff_html_charset + Response.encoding + _decode_html_bytes",
+   "test": "tests/test_a_page_declaring_gbk_in_meta_decodes_as_gbk.py (4 tests, red -> green)",
+   "verify": "live GBK/Latin-1 read + crawl correct; pytest 7849 passed",
+   "status": "fixed"
+  }
+ ],
+ "rejected": [
+  {"id": "R17-001", "level": "E", "title": "空 save_to 的拒绝句点名 max_save_bytes（调用方未给该参数）", "evidence": "p10-S2; server.py:7883-7890"},
+  {"id": "R17-002", "level": "E", "title": "save_to 的 summary 把保存回执句长度当 NB text；extracted_type=text", "evidence": "p01-S2"},
+  {"id": "R17-003", "level": "E", "title": "save_to 两套路径语义（read 拒覆盖/拒缺父目录；截图·PDF 覆盖/建父目录）", "evidence": "p01/p03/p07"},
+  {"id": "R17-004", "level": "D", "title": "相对 ../ 遍历允许；只拦系统目录（调用方自己的路径，设计）", "evidence": "p02-S2"},
+  {"id": "R17-005", "level": "D/E", "title": "save_to 永不吃阅读缓存（原始字节 ≠ 抽取正文）；回执未点明", "evidence": "p08"},
+  {"id": "R17-006", "level": "A", "title": "上传回执读了 #status（靶站真实 id 是 #receipt）", "evidence": "p05/p11/p12"},
+  {"id": "R17-007", "level": "measurement", "title": "PNG 头断言双层转义误报（文件头正确）", "evidence": "p03/p09"}
+ ],
+ "passed": [
+  {"id": "R17-008", "title": "保存/下载正向：覆盖门 / 小帽 / 系统目录 / sha256 / 中文·emoji 文件名 / PNG·PDF 头 / PDF→doc_parse / 二进制 / 上传 26B 回执"}
+ ],
+ "p1_calls": 77,
+ "tools_covered": 13
+}

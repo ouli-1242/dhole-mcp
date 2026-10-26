@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/article?cb=p07dir",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: save_to parent directory 'D:\\\\Dev\\\\Tools\\\\dhole-mcp\\\\review\\\\round-17\\\\sessions\\\\files\\\\not-yet-r17' does not exist - create it first; this call writes one file and creates no directories",
+ "summary": "invalid request · save_to parent directory",
+ "content_ok": false,
+ "next_action": "Nothing was fetched and nothing was written - fix save_to and call again.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_read",
+ "_tag": "p07-S1-web_read 存到不存在的父目录#02",
+ "_ts": "2026-10-26T06:21:39.331363+00:00"
+}

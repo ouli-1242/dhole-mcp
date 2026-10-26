@@ -1,0 +1,33 @@
+{
+ "status": 200,
+ "content": [
+  "saved 1,265 bytes to D:\\Dev\\Tools\\dhole-mcp\\review\\round-17\\sessions\\files\\笔记3😀.md"
+ ],
+ "url": "http://127.0.0.1:8399/article?cb=p08emoji",
+ "fetcher_used": "http",
+ "extracted_type": "text",
+ "duration_ms": 10,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 1265,
+ "total_extracted_chars": 82,
+ "escalation_path": "direct:http(save_to)",
+ "attempt_cap_ms": 5000,
+ "summary": "200 OK · 82B text · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 30000ms - an explicit timeout= lifts it · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-26T06:21:56Z",
+ "metadata": {
+  "saved_to": "D:\\Dev\\Tools\\dhole-mcp\\review\\round-17\\sessions\\files\\笔记3😀.md",
+  "bytes": 1265,
+  "sha256": "a8397fc4b941477859803962309842c9eec9b3ee5a34271e8278d2e38698f18e",
+  "max_save_bytes": 268435456,
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)"
+ },
+ "identity_applied": "allow_private",
+ "approx_tokens": 22,
+ "_wall_s": 0.02,
+ "_tool": "web_read",
+ "_tag": "p08-S3-cache_ttl=0 强制回源再存#04",
+ "_ts": "2026-10-26T06:21:56.752285+00:00"
+}

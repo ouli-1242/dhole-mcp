@@ -1,0 +1,20 @@
+[p04 沈括·档案员] session 02432b3582c4454aa94c01004a25b598 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p04-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p04 S1-50 字节帽（应拒） ----
+[p04-S1-50 字节帽（应拒）#02] web_read   0.0s ok=False err=Response body too large (1,265 bytes = 1.2KB, over the save_to limit of 50) - nothing was  body_too_large chars=
+      summary: 200 OK · 0B text · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, no
+   ok=False err=Response body too large (1,265 bytes = 1.2KB, over the save_to limit of 50) - nothing was written. Raise max_save_bytes (cap 1,073,741,824) or use web_request/curl for this file.
+   wrote=False
+      (pause 3s - throttle)
+
+---- p04 S2-10KB 帽（应成） ----
+[p04-S2-10KB 帽（应成）#03] web_read   0.0s ok=True err=-  chars=84
+      summary: 200 OK · 84B text · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, n
+   ok=True bytes=1265 on_disk=1265
+      (pause 4s - throttle)
+
+---- p04 S3-recall 找回归档页 ----
+[p04-S3-recall 找回归档页#04] web_recall   0.7s ok=None err=-  chars=
+   results=1 terms=['保存', '笔记']
+P04 DONE

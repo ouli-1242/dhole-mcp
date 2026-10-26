@@ -198,3 +198,18 @@
 - P6：只提交 review/round-16；src/tests 零暂存（对方在途改动未被吞）。
 - 下一步：round-17 P0（端口 9217；从本轮顶端切出；先查对方 fetcher 编辑是否落地 →
   R16-001 接线修复；再读 common-issues round-16 必测点）。
+
+### round-17 收官（2026-10-26）
+
+- 主题「保存与下载往返」：10 画像 + 3 补条，**77 发 13/13 工具**；首件事是接线 R16-001。
+- **1 fixed（结转 R16-001）**：`fetcher.py` 加 `sniff_html_charset`、`Response.encoding` 在 HTTP
+  头无 charset 时问 `<meta>`、`_decode_html_bytes` 严格 UTF-8 失败后按 meta 解；4 枚测试先红
+  后绿；真机 GBK/Latin-1 的 read 与 crawl 全部恢复。pytest 7845→**7849**。
+- **0 个新 CONFIRM**：3 E（空 save_to 点错参数 / save_to summary 口径 / 路径语义两套）+
+  D（相对遍历按设计）+ D/E（save_to 不吃缓存）+ A（上传读错 selector）+ 量具（PNG 头转义）。
+- 保存面正向全过：覆盖门先拒后发、小帽不落半截、系统目录写前拒、sha256 一致、中文/emoji
+  文件名、PNG/%PDF 头、PDF→doc_parse 往返、二进制原样、上传中文名 26B 回执。
+- P5：真重启 **pid 15880→28600**（修复时另有 7240→15880）；V1-V5 全 PASS；
+  pytest **7849 passed/23 skipped**；ruff 16。
+- P6：`fetcher.py` 用 HEAD 基线生成补丁单文件暂存（不含对方注释翻译）；测试整文件暂存。
+- 下一步：round-18 P0（端口 9218；从本轮顶端切出；读 round-17 必测点；继续并发纪律）。

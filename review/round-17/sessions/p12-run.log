@@ -1,0 +1,8 @@
+[p12 补条·上传回执] session 83a22fdb301d4430bc912b6cf91c66b7 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p12-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+[p12-misc#02] web_act   4.3s ok=True err=- no_content chars=70
+      summary: 200 OK · 70B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   upload 1 file(s) into 'input[type=file]': ok=True err=None read='None'
+   click 'button[type=submit]': ok=True err=None read='None'
+   read '#receipt': ok=True err=None read='received 审计清单-中文.txt (26 bytes)'
+P12 DONE

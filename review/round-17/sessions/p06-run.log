@@ -1,0 +1,21 @@
+[p06 杜衡·数据员] session f9f0602d52974ecea28a5235cafb1eab server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p06-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p06 S1-把当前页打印成 PDF ----
+[p06-S1-把当前页打印成 PDF#02] web_act   3.1s ok=True err=- no_content chars=423
+      summary: 200 OK · 423B markdown · stealthy · this call makes 1 extra direct request to the target before the 
+   ok=True saved=D:\Dev\Tools\dhole-mcp\review\round-17\sessions\files\article17.pdf bytes=110377 magic=b'%PDF-'
+      (pause 4s - throttle)
+
+---- p06 S2-doc_parse 读回整份 PDF ----
+[p06-S2-doc_parse 读回整份 PDF#03] doc_parse   0.2s ok=True err=-  chars=553
+      summary: 200 OK · 553B markdown · parse
+   ok=True chars=553 summary=200 OK · 553B markdown · parse
+   head="> Created: 2026-10-26 · Modified: 2026-10-26 (the file's own stamps - when this PDF was written, not"
+      (pause 3s - throttle)
+
+---- p06 S3-只读第 1 页 ----
+[p06-S3-只读第 1 页#04] doc_parse   0.0s ok=True err=-  chars=553
+      summary: 200 OK · 553B markdown · parse
+   ok=True chars=553 与整份不同=False
+P06 DONE
