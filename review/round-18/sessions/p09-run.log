@@ -1,0 +1,44 @@
+[p09 罗薇·图书管理员] session 8b3aaba82287415994fa6dcf732f942c server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p09-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p09 S1-doc_parse 不存在的文件 ----
+[p09-S1-doc_parse 不存在的文件#02] doc_parse   0.0s ok=False err=File not found: <server cwd>\review\round-18\sessions\files\nope.md. `cwd=<working directo file_not_found chars=
+      summary: local error · 0B markdown · parse
+   err: File not found: <server cwd>\review\round-18\sessions\files\nope.md. `cwd=<working directory>` does nothing for a path that is already absolute (that argument's own schema says it is ignored for one), so re-sending this 
+      (pause 2s - throttle)
+
+---- p09 S2-doc_parse 目录 ----
+[p09-S2-doc_parse 目录#03] doc_parse   0.0s ok=False err=Path is a directory, not a file: <server cwd>\review\round-18\sessions\files · doc_parse r path_is_directory chars=
+      summary: local error · 0B markdown · parse
+   err: Path is a directory, not a file: <server cwd>\review\round-18\sessions\files · doc_parse reads one file per call. Append one of these names to the directory you passed: not-a-doc.png (1 file(s) at this level, 1 listed)
+      (pause 2s - throttle)
+
+---- p09 S3-doc_parse 传 URL ----
+[p09-S3-doc_parse 传 URL#04] doc_parse   0.0s ok=False err=File not found: <server cwd>\http:\127.0.0.1:8399\article, ~\http:\127.0.0.1:8399\article. file_not_found chars=
+      summary: local error · 0B markdown · parse
+   err: File not found: <server cwd>\http:\127.0.0.1:8399\article, ~\http:\127.0.0.1:8399\article. Pass an absolute path, or pass cwd=<working directory> so relative paths resolve against it.
+      (pause 2s - throttle)
+
+---- p09 S4-doc_parse 二进制后缀 ----
+[p09-S4-doc_parse 二进制后缀#05] doc_parse   0.0s ok=False err=Unsupported file type '.png'. Supported: .csv, .docx, .htm, .html, .json, .markdown, .md,  unsupported_file_type chars=
+      summary: local error · 0B markdown · parse
+   err: Unsupported file type '.png'. Supported: .csv, .docx, .htm, .html, .json, .markdown, .md, .odt, .pdf, .pptx, .tsv, .txt, .xhtml, .xlsm, .xlsx, .yaml, .yml. If the file is plain text under another exte | summary: local error · 0B markdown · parse
+      (pause 3s - throttle)
+
+---- p09 S5-feed_read 非 feed 页 ----
+[p09-S5-feed_read 非 feed 页#06] feed_read   0.0s ok=None err=-  chars=
+      summary: 1 URLs asked · 1 rows answered · 0 rows carried 0 items, newest first · 1 rows errored (http://127.0
+   err: None | items: 0
+   summary: 1 URLs asked · 1 rows answered · 0 rows carried 0 items, newest first · 1 rows errored (http://127.0.0.1:8399/article?cb=p09 - each row names its own error and diagnosis)
+      (pause 2s - throttle)
+
+---- p09 S6-feed_read urls 是字符串 ----
+[p09-S6-feed_read urls 是字符串#07] feed_read   0.0s ok=False err=invalid_request: urls must be an array of strings, got a single string. Pass urls=["...",  invalid_request chars=
+      summary: invalid request · urls must be an array of strings, got a single string
+   err: invalid_request: urls must be an array of strings, got a single string. Pass urls=["...", "..."] instead.
+      (pause 2s - throttle)
+
+---- p09 S7-recall 空白查询 ----
+[p09-S7-recall 空白查询#08] web_recall   0.0s ok=False err=invalid_request: Missing required argument(s) for web_recall: ['query']. Supported here: [ invalid_request chars=
+      summary: invalid request · Missing required argument(s) for web_recall: ['query']
+   err: invalid_request: Missing required argument(s) for web_recall: ['query']. Supported here: ['limit', 'query']

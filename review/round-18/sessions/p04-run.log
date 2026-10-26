@@ -1,0 +1,55 @@
+[p04 老纪·运维工程师] session eab3e3ef70e04ec1bd56ba602e406b8a server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p04-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p04 S1-无协议 URL ----
+[p04-S1-无协议 URL#02] web_request   0.0s ok=False err=invalid_request: method=GET is a read, not a request - web_request takes POST / PUT / PATC invalid_request chars=
+      summary: invalid request · method=GET is a read, not a request
+   err: invalid_request: method=GET is a read, not a request - web_request takes POST / PUT / PATCH / DELETE / HEAD
+      (pause 2s - throttle)
+
+---- p04 S2-ftp 协议 ----
+[p04-S2-ftp 协议#03] web_request   0.0s ok=False err=invalid_request: method=GET is a read, not a request - web_request takes POST / PUT / PATC invalid_request chars=
+      summary: invalid request · method=GET is a read, not a request
+   err: invalid_request: method=GET is a read, not a request - web_request takes POST / PUT / PATCH / DELETE / HEAD
+      (pause 2s - throttle)
+
+---- p04 S3-file 协议 ----
+[p04-S3-file 协议#04] web_request   0.0s ok=False err=invalid_request: method=GET is a read, not a request - web_request takes POST / PUT / PATC invalid_request chars=
+      summary: invalid request · method=GET is a read, not a request
+   err: invalid_request: method=GET is a read, not a request - web_request takes POST / PUT / PATCH / DELETE / HEAD
+      (pause 2s - throttle)
+
+---- p04 S4-javascript 协议 ----
+[p04-S4-javascript 协议#05] web_read   0.0s ok=False err=invalid_request: URL scheme 'javascript' is not allowed invalid_request chars=
+      summary: invalid request · URL scheme 'javascript' is not allowed
+   err: invalid_request: URL scheme 'javascript' is not allowed
+      (pause 2s - throttle)
+
+---- p04 S5-method 拼错 ----
+[p04-S5-method 拼错#06] web_request   0.0s ok=False err=invalid_request: unsupported method 'GETT' invalid_request chars=
+      summary: invalid request · unsupported method 'GETT'
+   err: invalid_request: unsupported method 'GETT'
+      (pause 2s - throttle)
+
+---- p04 S6-method 小写 ----
+[p04-S6-method 小写#07] web_request   0.0s ok=False err=invalid_request: method=GET is a read, not a request - web_request takes POST / PUT / PATC invalid_request chars=
+      summary: invalid request · method=GET is a read, not a request
+   ok: False err: invalid_request: method=GET is a read, not a request - web_request takes POST / PUT / PATCH / DELETE / HEAD
+      (pause 2s - throttle)
+
+---- p04 S7-含空格与中文的 URL ----
+[p04-S7-含空格与中文的 URL#08] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+   ok: True err: 
+      (pause 2s - throttle)
+
+---- p04 S8-data 协议 ----
+[p04-S8-data 协议#09] web_read   0.0s ok=False err=invalid_request: URL scheme 'data' is not allowed invalid_request chars=
+      summary: invalid request · URL scheme 'data' is not allowed
+   err: invalid_request: URL scheme 'data' is not allowed
+      (pause 2s - throttle)
+
+---- p04 S9-收尾正常 request ----
+[p04-S9-收尾正常 request#10] web_request   0.0s ok=False err=invalid_request: method=GET is a read, not a request - web_request takes POST / PUT / PATC invalid_request chars=
+      summary: invalid request · method=GET is a read, not a request
+   ok: False chars: None

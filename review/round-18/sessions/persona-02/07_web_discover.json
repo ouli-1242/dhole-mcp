@@ -1,0 +1,67 @@
+{
+ "start_url": "http://127.0.0.1:8399/nav?cb=p02",
+ "pages": [
+  {
+   "url": "http://127.0.0.1:8399/nav?cb=p02",
+   "status": 200,
+   "fetcher_used": "http",
+   "title": "站点导航",
+   "fetched_at": "2026-10-26T06:53:19Z",
+   "summary": "200 OK · 509B html · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/article",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "http",
+   "title": "本地抓取工具配置指南",
+   "fetched_at": "2026-10-26T06:53:19Z",
+   "summary": "200 OK · 579B html · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "http",
+   "title": "靶站索引",
+   "fetched_at": "2026-10-26T06:53:19Z",
+   "summary": "200 OK · 396B html · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/about",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "http",
+   "title": "关于",
+   "fetched_at": "2026-10-26T06:53:19Z",
+   "summary": "200 OK · 130B html · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  },
+  {
+   "url": "http://127.0.0.1:8399/collections",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "http",
+   "title": "推荐专题",
+   "fetched_at": "2026-10-26T06:53:19Z",
+   "summary": "200 OK · 1.1KB html · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile"
+  }
+ ],
+ "pages_crawled": 5,
+ "pages_discovered": 23,
+ "discover_only": true,
+ "truncated_by_max_pages": true,
+ "deadline_ms_applied": 30000,
+ "attempt_cap_ms": 30000,
+ "sitemap_used": false,
+ "duration_ms": 150,
+ "summary": "mapped 23 URL(s) at http://127.0.0.1:8399 (depth <= 2) using 5 page fetch(es); no content extracted; stopped: max_pages reached · plan a1f8b0880867 holds the whole map: 23 row(s), 5 shipped here, 18 never sent",
+ "next_action": "map stopped early (max_pages); raise max_pages= (up to 40) on this same call, or scope it with path_include=['/work'] - that subtree holds 10 of the 18 URLs still queued (a path subtree, not a string prefix). 18 URL(s) were discovered but never sent. A map costs one request per page, so a deeper map is paid in requests; for a ONE-request map pass max_pages=1 (this page's own links) or sitemap=true (whole site, if it publishes one). For bodies rather than a URL list, web_crawl(url=...) from the same start is the other door. The 18 map row(s) that were never sent are held here with the 5 that shipped, under plan a1f8b0880867 (23 row(s) = the whole map, 1h): web_discover(url='http://127.0.0.1:8399/nav?cb=p02', resume_token='a1f8b0880867:5') lists rows 6-23 and spends no request. web_discover(url='http://127.0.0.1:8399/nav?cb=p02', resume_token='a1f8b0880867:0') re-lists the map from row 1. web_crawl(url='http://127.0.0.1:8399/nav?cb=p02', resume_token='a1f8b0880867:5') fetches the CONTENT of those held-back rows, and raising max_pages reaches them the slow way - one request per row.",
+ "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.96, example.org -> 198.18.0.97); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+ "identity_applied": "allow_private",
+ "plan_id": "a1f8b0880867",
+ "next_resume_token": "a1f8b0880867:5",
+ "_wall_s": 0.16,
+ "_tool": "web_discover",
+ "_tag": "p02-S6-discover max_pages 字符串#07",
+ "_ts": "2026-10-26T06:53:19.849118+00:00"
+}

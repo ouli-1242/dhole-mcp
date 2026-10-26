@@ -1,0 +1,15 @@
+[p01 苏晓·新手产品经理] session 68a05279753d4c1e87de86ee088bebf7 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p01 补条 ----
+[p01-补条#01] web_read   0.0s ok=False err=invalid_request: max_content_chars must be an integer, got 'abc'. Pass a number (or omit m invalid_request chars=
+      summary: invalid request · max_content_chars must be an integer, got 'abc'
+   abc err: invalid_request: max_content_chars must be an integer, got 'abc'. Pass a number (or omit max_content_chars to use the tool default).
+      (pause 2s - throttle)
+[p01-补条#02] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · max_content_chars clamped 50->500 (supported range 500-200000) · one
+   '50' err:  | chars: 387
+   summary: 200 OK · 387B markdown · http · max_content_chars clamped 50->500 (supported range 500-200000) · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 30000ms - an ex
+      (pause 2s - throttle)
+[p01-补条#03] web_act   4.1s ok=True err=- no_content chars=72
+      summary: 200 OK · 72B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   click ok: True err: None

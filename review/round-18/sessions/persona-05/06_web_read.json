@@ -1,0 +1,32 @@
+{
+ "status": 200,
+ "content": [
+  "私密内容\nrobots 靶。"
+ ],
+ "url": "http://127.0.0.1:8399/private/secret?cb=p05",
+ "fetcher_used": "http",
+ "duration_ms": 30,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 148,
+ "total_extracted_chars": 14,
+ "visible_text_chars": 17,
+ "escalation_path": "direct:http",
+ "attempt_cap_ms": 5000,
+ "summary": "200 OK · 14B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 30000ms - an explicit timeout= lifts it · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-26T06:59:32Z",
+ "metadata": {
+  "title": "私密",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.96, example.org -> 198.18.0.97); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "approx_tokens": 7,
+ "_wall_s": 0.05,
+ "_tool": "web_read",
+ "_tag": "p05-S5-带凭据读私有页#06",
+ "_ts": "2026-10-26T06:59:32.746310+00:00"
+}

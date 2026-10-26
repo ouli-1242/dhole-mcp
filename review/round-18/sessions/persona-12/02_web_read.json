@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: urls[1] must be a string, got int (123). Every element of urls has to be a URL string.",
+ "summary": "invalid request · urls[1] must be a string, got int (123)",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. Fix urls[1] and call again - no request was made. Argument types are checked rather than guessed at: a misread `urls` would otherwise come back looking like a successful 19-URL fetch.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_read",
+ "_tag": "p12-B1-urls 元素类型混杂#02",
+ "_ts": "2026-10-26T07:11:27.018809+00:00"
+}

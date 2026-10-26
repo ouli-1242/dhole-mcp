@@ -77,3 +77,11 @@
 - 适用条件：我们的改动与对方改动**语义独立**、可在 HEAD 上独立重放；若同一函数被双方改，
   此法则不适用，须等对方落地。
 - 测试文件 `tests/test_a_page_declaring_gbk_in_meta_decodes_as_gbk.py` 是本轮新建，整文件暂存。
+
+## 2026-10-26T15:33+08:00 round-18：actions.py 的 HEAD 基线单 hunk 暂存
+- R18-001 的修复落在 `actions.py` 的 `_validate_actions` press 分支；工作树副本正被另一位
+  agent 做注释翻译（558+/328-，未提交）。直接 `git add actions.py` 会整份吞下对方改动。
+- 处置：`git show HEAD:src/dhole_mcp/actions.py` 取基线，在副本上只重放 press.key 的 6 行
+  校验，`git hash-object -w` 得 blob 后用 `git update-index --cacheinfo` 写索引；
+  提交里只有 R18-001，对方注释留在工作树未暂存、未回滚。
+- 与 round-17 fetcher 法同源；判据仍是「双方改动语义独立、可在 HEAD 上独立重放」。

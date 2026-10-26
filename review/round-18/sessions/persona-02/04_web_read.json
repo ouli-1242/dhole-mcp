@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/article?cb=p02c",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: max_content_chars must be an integer, got float. Pass a number (or omit max_content_chars to use the tool default).",
+ "summary": "invalid request · max_content_chars must be an integer, got float",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. Fix max_content_chars and call again - no request was made. Argument types are checked rather than guessed at: a misread `urls` would otherwise come back looking like a successful 19-URL fetch.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_read",
+ "_tag": "p02-S3-max_content_chars 浮点#04",
+ "_ts": "2026-10-26T06:53:11.522651+00:00"
+}

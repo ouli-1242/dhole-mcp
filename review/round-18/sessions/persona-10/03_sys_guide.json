@@ -1,0 +1,7 @@
+{
+ "_raw": "sys_guide: refused\nNothing was served from the handbook. The argument named at the start of `error` is the one to rewrite, and `error` states the shape it takes. Types are checked at the door rather than guessed at: a misread `urls` would otherwise come back looking like a successful 19-URL fetch, and a string `confirm` would look like an approval.\ninvalid_request: topic must be a string, got list (['web_read']). Pass topic as text.",
+ "_wall_s": 0.0,
+ "_tool": "sys_guide",
+ "_tag": "p10-S2-guide topic 类型错#03",
+ "_ts": "2026-10-26T07:06:25.369927+00:00"
+}

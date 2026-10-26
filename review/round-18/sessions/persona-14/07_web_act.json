@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/frame/inner?cb=p14",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: session_id must be a string, got int (123). Pass session_id as text.",
+ "summary": "invalid request · session_id must be a string, got int (123). Pass session_id as text.",
+ "content_ok": false,
+ "next_action": "Nothing was run. The argument named at the start of `error` is the one to rewrite, and `error` states the shape it takes. Types are checked at the door rather than guessed at: a misread `urls` would otherwise come back looking like a successful 19-URL fetch, and a string `confirm` would look like an approval.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_act",
+ "_tag": "p14-D6-act-session_id-数字#07",
+ "_ts": "2026-10-26T07:14:21.675606+00:00"
+}

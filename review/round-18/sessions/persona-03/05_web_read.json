@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/article?cb=p03b",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: Unsupported argument(s) for web_read: ['__proto__', 'constructor']. Supported: ['anti_detect', 'cache_ttl', 'cdp_url', 'check_login', 'confirm', 'css_selector', 'extraction_type', 'focus', 'focus_engine', 'focus_mode', 'force_fetcher', 'headers', 'ignore_robots', 'include_headers', 'include_links', 'include_media', 'max_content_chars', 'max_links', 'max_save_bytes', 'nested_fields', 'nested_max', 'nested_selector', 'offset', 'pages', 'password', 'save_to', 'schema', 'session_id', 'timeout', 'url', 'urls']",
+ "summary": "invalid request · Unsupported argument(s) for web_read: ['__proto__', 'constructor']",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. The name in `error` is not one this tool takes - rename or drop it; the list in `error` is everything it does take. Every argument is a top-level parameter.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_read",
+ "_tag": "p03-S4-危险键名#05",
+ "_ts": "2026-10-26T06:55:23.965469+00:00"
+}

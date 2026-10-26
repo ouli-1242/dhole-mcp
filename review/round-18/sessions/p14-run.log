@@ -1,0 +1,52 @@
+[p14 P3 探针D] session c36e07094a3a493ea970dd4c7e567f1a server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p14-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p14 D1-click-index-字符串 ----
+[p14-D1-click-index-字符串#02] web_act   0.0s ok=False err=invalid_request: action 0 'click'.index must be an int in 0..5000 (take it from a {"snapsh invalid_request chars=
+      summary: invalid request · action 0 'click'.index must be an int in 0..5000 (take it from a {"snapshot"
+   err: invalid_request: action 0 'click'.index must be an int in 0..5000 (take it from a {"snapshot": true} row) | act0: None 
+
+---- p14 D2-click-index-布尔 ----
+[p14-D2-click-index-布尔#03] web_act   0.0s ok=False err=invalid_request: action 0 'click'.index must be an int in 0..5000 (take it from a {"snapsh invalid_request chars=
+      summary: invalid request · action 0 'click'.index must be an int in 0..5000 (take it from a {"snapshot"
+   err: invalid_request: action 0 'click'.index must be an int in 0..5000 (take it from a {"snapshot": true} row) | act0: None 
+
+---- p14 D3-screenshot-index-字符串 ----
+[p14-D3-screenshot-index-字符串#04] web_act   0.0s ok=False err=invalid_request: action 0 'screenshot'.index must be an int in 0..5000 (take it from a {"s invalid_request chars=
+      summary: invalid request · action 0 'screenshot'.index must be an int in 0..5000
+   err: invalid_request: action 0 'screenshot'.index must be an int in 0..5000 (take it from a {"snapshot": true} row) | act0: None 
+
+---- p14 D4-read-urls-空数组 ----
+[p14-D4-read-urls-空数组#05] web_read   0.0s ok=False err=invalid_request: Either 'url' or 'urls' must be provided invalid_request chars=
+      summary: invalid request · Either 'url' or 'urls' must be provided
+   err: invalid_request: Either 'url' or 'urls' must be provided | act0: None 
+
+---- p14 D5-read-url-列表 ----
+[p14-D5-read-url-列表#06] web_read   0.0s ok=False err=invalid_request: url must be a string, got list (['http://127.0.0.1:8399/frame/inner?cb=p1 invalid_request chars=
+      summary: invalid request · url must be a string, got list (['http://127.0.0.1:8399/frame/inner?cb=p14'])
+   err: invalid_request: url must be a string, got list (['http://127.0.0.1:8399/frame/inner?cb=p14']). Pass url as text. | act0: None 
+
+---- p14 D6-act-session_id-数字 ----
+[p14-D6-act-session_id-数字#07] web_act   0.0s ok=False err=invalid_request: session_id must be a string, got int (123). Pass session_id as text. invalid_request chars=
+      summary: invalid request · session_id must be a string, got int (123). Pass session_id as text.
+   err: invalid_request: session_id must be a string, got int (123). Pass session_id as text. | act0: None 
+
+---- p14 D7-act-headed-字符串 ----
+[p14-D7-act-headed-字符串#08] web_act   0.0s ok=False err=browser_busy: this call asked for a VISIBLE browser, but a browser is already running on p browser_busy chars=
+      summary: browser in use · 0B markdown · none · this call makes 1 extra direct request to the target before th
+   err: browser_busy: this call asked for a VISIBLE browser, but a browser is already running on profile (no named profile) and dhole will neither take over a hidden one nor close it - the | act0: None 
+
+---- p14 D8-read-session_id-数字 ----
+[p14-D8-read-session_id-数字#09] web_read   0.0s ok=False err=invalid_request: session_id must be a string, got int (123). Pass session_id as text. invalid_request chars=
+      summary: invalid request · session_id must be a string, got int (123). Pass session_id as text.
+   err: invalid_request: session_id must be a string, got int (123). Pass session_id as text. | act0: None 
+
+---- p14 D9-act-confirm-数字 ----
+[p14-D9-act-confirm-数字#10] web_act   5.5s ok=True err=- no_content chars=74
+      summary: 200 OK · 74B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   err:  | act0: True 
+
+---- p14 D10-read-timeout-负 ----
+[p14-D10-read-timeout-负#11] web_read   0.0s ok=False err=invalid_request: Timeout must be positive invalid_request chars=
+      summary: invalid request · Timeout must be positive
+   err: invalid_request: Timeout must be positive | act0: None 

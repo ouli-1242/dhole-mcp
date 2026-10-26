@@ -1,0 +1,53 @@
+{
+ "status": 200,
+ "content": [
+  "内层\n\nInner controls\n==============\n\nSave\n\nSAVED:ok\n\n[inner link](/about)"
+ ],
+ "url": "http://127.0.0.1:8399/frame/inner?cb=p07",
+ "fetcher_used": "stealthy",
+ "duration_ms": 4807,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 388,
+ "total_extracted_chars": 71,
+ "visible_text_chars": 42,
+ "substance": "ok",
+ "escalation_path": "direct:stealthy",
+ "summary": "200 OK · 71B markdown · stealthy · this call makes 1 extra direct request to the target before the browser runs: a liveness probe (direct, 3s, no retries, no synthetic headers, no redirect hop). Your service's own log will show that one next to the browser's navigation - it is dhole dialing, not the page. · the target is loopback/private, so the browser tier navigated without dhole's invented google referer. What that browser sends of its own (UA, `sec-ch-ua*`, `sec-fetch-*`) arrived as it always does, plus every header you named",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-26T07:03:26Z",
+ "metadata": {
+  "title": "内层",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.96, example.org -> 198.18.0.97); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+  "actions": [
+   {
+    "action": "fill '#note'",
+    "ok": true
+   },
+   {
+    "action": "click '#save'",
+    "ok": true
+   },
+   {
+    "action": "read '#saved'",
+    "ok": true,
+    "read_via": "inner_text",
+    "read": "SAVED:ok"
+   }
+  ]
+ },
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "no_content",
+  "retryable": false,
+  "recover_with": "the action chain ran — `metadata.actions` holds one receipt per step, and that is the answer about this call. The content verdict describes the page it left behind, not the chain. Do NOT re-issue the same chain: every step already marked ok would run again (a fill would fill twice)."
+ },
+ "approx_tokens": 19,
+ "_wall_s": 4.83,
+ "_tool": "web_act",
+ "_tag": "p07-S7-自愈 fill/click/read#08",
+ "_ts": "2026-10-26T07:03:26.264841+00:00"
+}

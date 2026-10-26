@@ -1,0 +1,43 @@
+[p03 白盒·测试工程师] session ef43b29cc2204a5fb6f08ec1907139b3 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p03-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p03 S1-未知字段 ----
+[p03-S1-未知字段#02] web_read   0.0s ok=False err=invalid_request: Unsupported argument(s) for web_read: ['unknown_field']. Supported: ['ant invalid_request chars=
+      summary: invalid request · Unsupported argument(s) for web_read: ['unknown_field']
+   err: invalid_request: Unsupported argument(s) for web_read: ['unknown_field']. Supported: ['anti_detect', 'cache_ttl', 'cdp_url', 'check_login', 'confirm', 'css_sele | chars: None
+      (pause 2s - throttle)
+
+---- p03 S2-url 为 null ----
+[p03-S2-url 为 null#03] web_read   0.0s ok=False err=invalid_request: Either 'url' or 'urls' must be provided invalid_request chars=
+      summary: invalid request · Either 'url' or 'urls' must be provided
+   err: invalid_request: Either 'url' or 'urls' must be provided | next: Nothing was fetched. Correct the argument and call again - no request was made. web_read takes an absolute http(s) URL (
+      (pause 2s - throttle)
+
+---- p03 S3-空对象 ----
+[p03-S3-空对象#04] web_read   0.0s ok=False err=invalid_request: Either 'url' or 'urls' must be provided invalid_request chars=
+      summary: invalid request · Either 'url' or 'urls' must be provided
+   err: invalid_request: Either 'url' or 'urls' must be provided | next: Nothing was fetched. Correct the argument and call again - no request was made. web_read takes an absolute http(s) URL (
+      (pause 2s - throttle)
+
+---- p03 S4-危险键名 ----
+[p03-S4-危险键名#05] web_read   0.0s ok=False err=invalid_request: Unsupported argument(s) for web_read: ['__proto__', 'constructor']. Suppo invalid_request chars=
+      summary: invalid request · Unsupported argument(s) for web_read: ['__proto__', 'constructor']
+   err: invalid_request: Unsupported argument(s) for web_read: ['__proto__', 'constructor']. Supported: ['anti_detect', 'cache_t | chars: None
+      (pause 3s - throttle)
+
+---- p03 S5-未知动作键 ----
+[p03-S5-未知动作键#06] web_act   0.0s ok=False err=invalid_request: action 0 has unknown key 'teleport'; valid: ['click', 'dialog', 'drag', ' invalid_request chars=
+      summary: invalid request · action 0 has unknown key 'teleport'; valid: ['click', 'dialog', 'drag'
+   err: invalid_request: action 0 has unknown key 'teleport'; valid: ['click', 'dialog', 'drag', 'evaluate', 'fill', 'hover', 'navigate', 'pdf', 'press', 'read', 'screenshot', 'scroll', 'select', 'snapshot', 'submit', 'tab', 'upload', 'wait', 'wait_selector']
+      (pause 2s - throttle)
+
+---- p03 S6-空动作对象 ----
+[p03-S6-空动作对象#07] web_act   0.0s ok=False err=invalid_request: action 0 must be a dict with exactly one key ['click', 'dialog', 'drag',  invalid_request chars=
+      summary: invalid request · action 0 must be a dict with exactly one key ['click', 'dialog', 'drag'
+   err: invalid_request: action 0 must be a dict with exactly one key ['click', 'dialog', 'drag', 'evaluate', 'fill', 'hover', 'navigate', 'pdf', 'press', 'read', 'screenshot', 'scroll', 'select', 'snapshot', 'submit', 'tab', 'upload', 'wait', 'wait_selector']; the ta
+      (pause 2s - throttle)
+
+---- p03 S7-收尾正常读 ----
+[p03-S7-收尾正常读#08] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+   ok: True chars: 387

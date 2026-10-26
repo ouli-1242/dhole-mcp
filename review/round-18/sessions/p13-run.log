@@ -1,0 +1,52 @@
+[p13 P3 探针C] session fa1aa01d7ea548b78acbed128531834f server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p13-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p13 C1-evaluate-expr-数字 ----
+[p13-C1-evaluate-expr-数字#02] web_act   0.0s ok=False err=invalid_request: action 0 'evaluate' must be a JS expression string or {expr} - e.g. {"eva invalid_request chars=
+      summary: invalid request · action 0 'evaluate' must be a JS expression string or {expr} - e.g
+   err: invalid_request: action 0 'evaluate' must be a JS expression string or {expr} - e.g. {"evaluate": {"expr": "document.title", "confirm": true}}. Arbitrary page JS is a privileged re | ok: None | act_err: None
+
+---- p13 C2-evaluate-confirm-字符串 ----
+[p13-C2-evaluate-confirm-字符串#03] web_act   0.0s ok=False err=invalid_request: action 0 'evaluate.confirm' must be a boolean invalid_request chars=
+      summary: invalid request · action 0 'evaluate.confirm' must be a boolean
+   err: invalid_request: action 0 'evaluate.confirm' must be a boolean | ok: None | act_err: None
+
+---- p13 C3-scroll-to-数字 ----
+[p13-C3-scroll-to-数字#04] web_act   5.4s ok=True err=- no_content chars=72
+      summary: 200 OK · 72B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   err:  | ok: True | act_err: None
+
+---- p13 C4-wait_selector-count-字符串 ----
+[p13-C4-wait_selector-count-字符串#05] web_act   0.0s ok=False err=invalid_request: action 0 'wait_selector.count' must be an int >= 1 invalid_request chars=
+      summary: invalid request · action 0 'wait_selector.count' must be an int >= 1
+   err: invalid_request: action 0 'wait_selector.count' must be an int >= 1 | ok: None | act_err: None
+
+---- p13 C5-click-expect-数字 ----
+[p13-C5-click-expect-数字#06] web_act   0.0s ok=False err=invalid_request: action 0 'click'.expect must be a short string (max 100 chars) naming the invalid_request chars=
+      summary: invalid request · action 0 'click'.expect must be a short string
+   err: invalid_request: action 0 'click'.expect must be a short string (max 100 chars) naming the element as the snapshot row showed it | ok: None | act_err: None
+
+---- p13 C6-dialog-answer-列表 ----
+[p13-C6-dialog-answer-列表#07] web_act   0.0s ok=False err=invalid_request: action 0 'dialog' must be {answer} - a bare "accept"/"dismiss", or {"answ invalid_request chars=
+      summary: invalid request · action 0 'dialog' must be {answer} - a bare "accept"/"dismiss", or {"answer"
+   err: invalid_request: action 0 'dialog' must be {answer} - a bare "accept"/"dismiss", or {"answer": ..., "prompt_text"?: ...}: answer only takes "accept" or "dismiss", and the text that | ok: None | act_err: None
+
+---- p13 C7-tab-列表 ----
+[p13-C7-tab-列表#08] web_act   0.0s ok=False err=invalid_request: action 0 'tab' must be "new"|"close"|"list", a tab number, or {{"open": " invalid_request chars=
+      summary: invalid request · action 0 'tab' must be "new"|"close"|"list", a tab number, or {{"open"
+   err: invalid_request: action 0 'tab' must be "new"|"close"|"list", a tab number, or {{"open": "https://..."}} | ok: None | act_err: None
+
+---- p13 C8-pin-字符串yes ----
+[p13-C8-pin-字符串yes#09] web_act   4.2s ok=True err=- no_content chars=72
+      summary: 200 OK · 72B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   err:  | ok: True | act_err: None
+
+---- p13 C9-fill-attribute-数字 ----
+[p13-C9-fill-attribute-数字#10] web_act   3.1s ok=True err=- no_content chars=72
+      summary: 200 OK · 72B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   err:  | ok: True | act_err: None
+
+---- p13 C10-select-option-空列表 ----
+[p13-C10-select-option-空列表#11] web_act   0.0s ok=False err=invalid_request: action 0 'select.option' must be a non-empty option string or a non-empty invalid_request chars=
+      summary: invalid request · action 0 'select.option' must be a non-empty option string or a non-empty list
+   err: invalid_request: action 0 'select.option' must be a non-empty option string or a non-empty list of them | ok: None | act_err: None

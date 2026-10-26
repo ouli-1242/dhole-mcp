@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: max_items must be an integer, got float. Pass a number (e.g. max_items=20).",
+ "summary": "invalid request · max_items must be an integer, got float. Pass a number (e.g. max_items=20).",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. The argument named at the start of `error` is the one to rewrite, and `error` states the shape it takes. Types are checked at the door rather than guessed at: a misread `urls` would otherwise come back looking like a successful 19-URL fetch, and a string `confirm` would look like an approval.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "feed_read",
+ "_tag": "p02-S7-feed max_items 浮点#08",
+ "_ts": "2026-10-26T06:53:22.857165+00:00"
+}

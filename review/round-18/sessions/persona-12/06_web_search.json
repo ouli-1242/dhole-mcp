@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: engines[0] must be a string, got int (123). Every element of engines has to be a URL string.",
+ "summary": "invalid request · engines[0] must be a string, got int (123)",
+ "content_ok": false,
+ "next_action": "Nothing was searched - no engine was asked. The argument named at the start of `error` is the one to rewrite, and `error` states the shape it takes. Types are checked at the door rather than guessed at: a misread `urls` would otherwise come back looking like a successful 19-URL fetch, and a string `confirm` would look like an approval.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_search",
+ "_tag": "p12-B5-search engines 是数字数组#06",
+ "_ts": "2026-10-26T07:11:35.055718+00:00"
+}

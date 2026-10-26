@@ -1,0 +1,166 @@
+{
+ "query": "机械键盘​ 👩‍💻",
+ "results": [
+  {
+   "title": "机械键盘介绍-今日头条",
+   "url": "https://www.toutiao.com/topic/7482551517892020259/",
+   "snippet": "您在查找机械键盘介绍吗？今日头条提供详尽的搜索结果聚合，每天实时更新。我们致力于连接人与信息，让优质丰富的信息得到高效精准的分发，促使信息创造价值。",
+   "source": "sogou",
+   "position": 1,
+   "relevance_score": 1.0,
+   "relevance_raw": 0.6067632104211254,
+   "fetch_relevance": "high",
+   "engines_consensus": "1 of 7 (degraded_pool)",
+   "source_type": "unknown",
+   "published": "2026-07-19",
+   "published_precision": "day",
+   "published_basis": "2026-07-19"
+  },
+  {
+   "title": "机械键盘玩家必看攻略:机械键盘五大常识_手感_的布局_游戏",
+   "url": "https://www.sohu.com/a/842242713_121764253",
+   "snippet": "机械键盘，作为键盘界的当红新星，以其独特的机械结构、清晰的手感和极高的耐用性，赢得了众多游戏玩家和打字爱好者的青睐。然而，对于初入机械...",
+   "source": "sogou",
+   "position": 2,
+   "relevance_score": 0.7364,
+   "relevance_raw": 0.43086454754670356,
+   "fetch_relevance": "med",
+   "engines_consensus": "1 of 7 (degraded_pool)",
+   "source_type": "unknown",
+   "published": "2024-12-27",
+   "published_precision": "day",
+   "published_basis": "2024-12-27"
+  }
+ ],
+ "total_results": 2,
+ "engines_used": [
+  "sogou",
+  "so360",
+  "baidu",
+  "yandex",
+  "yahoo"
+ ],
+ "engine_blocked": [
+  "duckduckgo"
+ ],
+ "engine_empty": [
+  "seznam",
+  "shenma"
+ ],
+ "engine_preempted": [
+  "marginalia",
+  "brave",
+  "bing",
+  "bing_global"
+ ],
+ "engine_detail": [
+  {
+   "name": "sogou",
+   "family": "sogou",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "8 usable rows from 8 item nodes"
+  },
+  {
+   "name": "duckduckgo",
+   "family": "bing",
+   "status": "blocked",
+   "verdict": "blocked",
+   "why": "blocked/captcha (circuit opened); retried in 58s"
+  },
+  {
+   "name": "seznam",
+   "family": "seznam",
+   "status": "empty",
+   "verdict": "upstream_empty",
+   "why": "no results"
+  },
+  {
+   "name": "so360",
+   "family": "so360",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "7 usable rows from 7 item nodes"
+  },
+  {
+   "name": "baidu",
+   "family": "baidu",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "7 usable rows from 14 item nodes"
+  },
+  {
+   "name": "yandex",
+   "family": "yandex",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "14 usable rows from 14 item nodes"
+  },
+  {
+   "name": "yahoo",
+   "family": "bing",
+   "status": "ok",
+   "verdict": "healthy",
+   "why": "7 usable rows from 7 item nodes"
+  },
+  {
+   "name": "shenma",
+   "family": "shenma",
+   "status": "empty",
+   "verdict": "upstream_empty",
+   "why": "no results"
+  },
+  {
+   "name": "marginalia",
+   "family": "marginalia",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "brave",
+   "family": "brave",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  },
+  {
+   "name": "bing_global",
+   "family": "bing",
+   "status": "preempted",
+   "verdict": "not_asked",
+   "why": "preempted - other engines met the result quota first, so this one was cancelled mid-flight (not a block, not a failure)"
+  }
+ ],
+ "families_answered_of_asked": "5 of 9 (7 could answer)",
+ "rerank_mode": "neural",
+ "rerank_model": "bge-zh",
+ "consensus_basis": "degraded_pool",
+ "date_coverage": {
+  "rows_total": 2,
+  "rows_with_date": 2,
+  "rows_no_date": 0,
+  "rows_verified_by_fetch": 0,
+  "rows_relative_precision": 0,
+  "rows_unverifiable_by_before": 0,
+  "rows_dropped_by_before": 0,
+  "rows_kept": 2
+ },
+ "duration_ms": 9034,
+ "error": "",
+ "fetch_hint": "1 high, 1 med, 0 low. Tiers are minted from `relevance_raw` (the model's own agreement), not from `relevance_score`: that one only orders these rows, and its 1.0 on the first row is a seat within this round, not a percentage of correctness. web_read what fits your need (high first, but a lower tier can be the right call). | Engines duckduckgo, seznam, shenma didn't contribute (1 blocked, 2 answered but parsed nothing usable); results are from the rest. | no follow-up phrases this round: this miner pairs two words that stand next to each other with only space between, and this round's rows contain no such pair - 0 whitespace-separated word(s) were found in them, but no segmenter is bundled, so rewording the query cannot change that answer",
+ "summary": "Searched '机械键盘\\u200b 👩\\u200d💻' -> 2 results (1 high, 1 med, 0 low) from sogou,so360,baidu,yandex,yahoo; rerank=neural.",
+ "next_action": "Results are ranked by relevance + cross-engine consensus (engines_consensus = how many independent indexes agree). web_read the ones that match what you actually need - the ranking is a hint, not a directive; a lower-ranked result can be the right one, so trust your judgment. Some engines didn't contribute (1 blocked, 2 answered but parsed nothing usable). For more recall: retry after the cooldown clears (60s after a hard block, 600s after repeated challenge pages or connection failures - `dhole engines list` names who is still cooling); set DHOLE_SEARCH_PROXY for sustained heavy use; rephrase if the query is narrow (an engine that answered with nothing may genuinely not have it in that index). marginalia, brave, bing, bing_global were cancelled once enough indexes had answered - the diversity quorum, not a failure, so waiting and retrying reaches the same stop point; raise max_results or name them in engines=[...] to ask them anyway.",
+ "same_document_groups": [],
+ "_wall_s": 9.04,
+ "_tool": "web_search",
+ "_tag": "p06-S1-查询带零宽与 emoji#02",
+ "_ts": "2026-10-26T07:02:00.535143+00:00"
+}

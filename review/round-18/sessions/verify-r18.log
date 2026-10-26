@@ -1,0 +1,73 @@
+[p17 P5 复验] session e24673600b7142be801c9f32c5a0e386 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p17-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p17 V1-R18-001-press-key ----
+[p17-V1-R18-001-press-key#02] web_act   0.0s ok=False err=invalid_request: action 0 'press.key' must be a key string (e.g. "Enter"), got list invalid_request chars=
+      summary: invalid request · action 0 'press.key' must be a key string (e.g. "Enter"), got list
+   [PASS] 非字符串 key 当场具名 ['Enter'] | invalid_request: action 0 'press.key' must be a key string (e.g. "Enter"), got list
+[p17-V1-R18-001-press-key#03] web_act   0.0s ok=False err=invalid_request: action 0 'press.key' must be a key string (e.g. "Enter"), got int invalid_request chars=
+      summary: invalid request · action 0 'press.key' must be a key string (e.g. "Enter"), got int
+   [PASS] 非字符串 key 当场具名 13 | invalid_request: action 0 'press.key' must be a key string (e.g. "Enter"), got int
+[p17-V1-R18-001-press-key#04] web_act   0.0s ok=False err=invalid_request: action 0 'press.key' must be a key string (e.g. "Enter"), got dict invalid_request chars=
+      summary: invalid request · action 0 'press.key' must be a key string (e.g. "Enter"), got dict
+   [PASS] 非字符串 key 当场具名 {'code': 13} | invalid_request: action 0 'press.key' must be a key string (e.g. "Enter"), got dict
+[p17-V1-R18-001-press-key#05] web_act   5.1s ok=True err=- no_content chars=72
+      summary: 200 OK · 72B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   [PASS] 合法 key 仍成功 
+
+---- p17 V2-R16-001-编码 ----
+[p17-V2-R16-001-编码#06] web_read   0.1s ok=True err=-  chars=63
+      summary: 200 OK · 63B markdown · http · the target is loopback/private, so dhole dropped its own synthesized 
+   [PASS] GBK meta-only 解码 | 国标编码页面
+这是一个 GBK 编码的页面，正文包含中文与数字 2026。
+End of the 国标编码页面 samp
+[p17-V2-R16-001-编码#07] web_read   0.0s ok=True err=-  chars=111
+      summary: 200 OK · 111B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+   [PASS] Latin-1 meta-only 解码 | Voici un texte français avec des accents : é è ê à ç ù. Un n
+[p17-V2-R16-001-编码#08] web_crawl   0.1s ok=None err=-  chars=
+      summary: crawled 1 page(s) at http://127.0.0.1:8398 (depth <= 2); 1 content_ok; fallback:1
+   [PASS] crawl GBK 不占位/不乱码 | 国标编码页面
+这是一个 GBK 编码的页面，正文包含中文与数字 2026。
+End of the 国标编码页面 samp
+
+---- p17 V3-r15-空框property ----
+[p17-V3-r15-空框property#09] web_act   4.5s ok=False err=- no_content chars=27
+      summary: 200 OK · 27B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   [PASS] 空框 property 读 ok=False + current value | read found no property 'value': 'value' is empty on this field - that is its current value, not a missing read
+
+---- p17 V4-save_to ----
+[p17-V4-save_to#10] web_read   0.0s ok=True err=-  chars=84
+      summary: 200 OK · 84B text · http · the target is loopback/private, so dhole dropped its own synthesized head
+   [PASS] 保存落盘 + sha256 一致 | bytes=1265
+[p17-V4-save_to#11] web_read   0.0s ok=False err=invalid_request: save_to 'D:\\Dev\\Tools\\dhole-mcp\\review\\round-18\\sessions\\files\\v1 invalid_request chars=
+      summary: invalid request · save_to
+   [PASS] 同路径二次保存被拒（覆盖门） | invalid_request: save_to 'D:\\Dev\\Tools\\dhole-mcp\\review\\round-18\\sessions\\files\\v18-笔记.md' a
+[p17-V4-save_to#12] web_read   0.0s ok=False err=Response body too large (1,265 bytes = 1.2KB, over the save_to limit of 8) - nothing was w body_too_large chars=
+      summary: 200 OK · 0B text · http · the target is loopback/private, so dhole dropped its own synthesized heade
+   [PASS] 小帽拒绝且不落半截 | Response body too large (1,265 bytes = 1.2KB, over the save_to limit of 8) - nothing was written. Ra
+
+---- p17 V5-截图PDF ----
+[p17-V5-截图PDF#13] web_act   4.3s ok=True err=- no_content chars=423
+      summary: 200 OK · 423B markdown · stealthy · this call makes 1 extra direct request to the target before the 
+   [PASS] 整页截图落盘且 PNG 头正确 | 65143 bytes
+[p17-V5-截图PDF#14] web_act   3.5s ok=True err=- no_content chars=423
+      summary: 200 OK · 423B markdown · stealthy · this call makes 1 extra direct request to the target before the 
+   [PASS] PDF 落盘且 %PDF 头正确 | 110377 bytes
+[p17-V5-截图PDF#15] doc_parse   0.2s ok=True err=-  chars=553
+      summary: 200 OK · 553B markdown · parse
+   [PASS] PDF → doc_parse 往返 | > Created: 2026-10-26 · Modified: 2026-10-26 (the file's own
+
+---- p17 V6-r13r14 ----
+[p17-V6-r13r14#16] feed_read   0.0s ok=None err=invalid_request: max_items must be ≥ 0 (0 = all), got -3 invalid_request chars=
+      summary: no request went out: the call was refused before any source was contacted, so nothing was fetched
+   [PASS] feed max_items 负数拒绝 | invalid_request: max_items must be ≥ 0 (0 = all), got -3
+[p17-V6-r13r14#17] web_read   0.1s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · css_selector '#nope-v18' was NOT applied: it matched 0 elements on t
+   [PASS] selector 0 匹配注记在 summary | 200 OK · 387B markdown · http · css_selector '#nope-v18' was NOT applied: it matched 0 elements on t
+[p17-V6-r13r14#18] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+[p17-V6-r13r14#19] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · cache · cached copy, fetched 0.0 min ago · replayed from the cache: the fet
+   [PASS] 缓存回放 fetched_at 不晚于首读 | 2026-10-26T07:29:45Z
+
+VERDICT: ALL_PASS

@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/frame/inner?cb=v18-1",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: action 0 'press.key' must be a key string (e.g. \"Enter\"), got int",
+ "summary": "invalid request · action 0 'press.key' must be a key string (e.g. \"Enter\"), got int",
+ "content_ok": false,
+ "next_action": "Nothing was run. The action named in `error` has the wrong shape; sys_guide(topic='behavior', section='Page interaction') lists every action key and what each one takes.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_act",
+ "_tag": "p17-V1-R18-001-press-key#03",
+ "_ts": "2026-10-26T07:29:27.619179+00:00"
+}

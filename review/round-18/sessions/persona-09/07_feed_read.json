@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: urls must be an array of strings, got a single string. Pass urls=[\"...\", \"...\"] instead.",
+ "summary": "invalid request · urls must be an array of strings, got a single string",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. The argument named at the start of `error` is the one to rewrite, and `error` states the shape it takes. Types are checked at the door rather than guessed at: a misread `urls` would otherwise come back looking like a successful 19-URL fetch, and a string `confirm` would look like an approval.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "feed_read",
+ "_tag": "p09-S6-feed_read urls 是字符串#07",
+ "_ts": "2026-10-26T07:05:31.822121+00:00"
+}

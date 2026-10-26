@@ -1,0 +1,19 @@
+[p04 老纪·运维工程师] session 31781cc7f2764a5b87aeb80147106353 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p04 补条 ----
+[p04-补条#01] web_request   0.0s ok=False err=invalid_request: Only http and https URLs are supported, got: no scheme in '127.0.0.1:8399 invalid_request chars=
+      summary: invalid request · Only http and https URLs are supported, got
+   no-scheme err: invalid_request: Only http and https URLs are supported, got: no scheme in '127.0.0.1:8399/checkout' | next: Nothing was sent. Correct the argument and call again - no request was made. web_request takes an absolute http(s) URL (e.g. https://example
+      (pause 2s - throttle)
+[p04-补条#02] web_request   0.0s ok=False err=invalid_request: URL scheme 'ftp' is not allowed invalid_request chars=
+      summary: invalid request · URL scheme 'ftp' is not allowed
+   ftp err: invalid_request: URL scheme 'ftp' is not allowed
+      (pause 2s - throttle)
+[p04-补条#03] web_request   0.0s ok=False err=invalid_request: URL scheme 'file' is not allowed invalid_request chars=
+      summary: invalid request · URL scheme 'file' is not allowed
+   file err: invalid_request: URL scheme 'file' is not allowed
+      (pause 2s - throttle)
+[p04-补条#04] web_request   0.0s ok=False err=invalid_request: method=POST is a write: it changes server state, and stored credentials f invalid_request chars=
+      summary: invalid request · method=POST is a write: it changes server state
+   normal ok: False status: None err: invalid_request: method=POST is a write: it changes server state, and stored credentials for this host ride along automa
+   summary: invalid request · method=POST is a write: it changes server state

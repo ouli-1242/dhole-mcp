@@ -1,0 +1,15 @@
+{
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "message": "",
+ "rows": [],
+ "error": "invalid_request: unset must be an array of strings, got a single string. Pass unset=[\"...\", \"...\"] instead.",
+ "next_action": "Nothing was stored or forgotten. The argument named at the start of `error` is the one to rewrite, and `error` states the shape it takes. Types are checked at the door rather than guessed at: a misread `urls` would otherwise come back looking like a successful 19-URL fetch, and a string `confirm` would look like an approval.",
+ "_wall_s": 0.01,
+ "_tool": "cred_defaults",
+ "_tag": "p10-S5-cred_defaults unset 是字符串#06",
+ "_ts": "2026-10-26T07:06:31.389617+00:00"
+}

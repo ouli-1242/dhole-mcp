@@ -1,0 +1,52 @@
+[p11 P3 探针A] session f692667a77094c9baaa20b7ac8444d2a server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p11-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p11 A1-click-at-字符串 ----
+[p11-A1-click-at-字符串#02] web_act   0.0s ok=False err=invalid_request: action 0 'click'.at must be [x, y] - two page-pixel integers (read them o invalid_request chars=
+      summary: invalid request · action 0 'click'.at must be [x, y] - two page-pixel integers
+   err: invalid_request: action 0 'click'.at must be [x, y] - two page-pixel integers (read them off a screenshot); floats, strings and booleans are not coordinates | ok: None | act_err: None
+
+---- p11 A2-drag-数字端点 ----
+[p11-A2-drag-数字端点#03] web_act   0.0s ok=False err=invalid_request: action 0 'drag'.selector must be a non-empty CSS selector invalid_request chars=
+      summary: invalid request · action 0 'drag'.selector must be a non-empty CSS selector
+   err: invalid_request: action 0 'drag'.selector must be a non-empty CSS selector | ok: None | act_err: None
+
+---- p11 A3-screenshot-save_to-数字 ----
+[p11-A3-screenshot-save_to-数字#04] web_act   0.0s ok=False err=invalid_request: action 0 'screenshot.save_to' must be a non-empty path when present invalid_request chars=
+      summary: invalid request · action 0 'screenshot.save_to' must be a non-empty path when present
+   err: invalid_request: action 0 'screenshot.save_to' must be a non-empty path when present | ok: None | act_err: None
+
+---- p11 A4-read-selector-数字 ----
+[p11-A4-read-selector-数字#05] web_act   0.0s ok=False err=invalid_request: action 0 'read'.selector must be a non-empty CSS selector invalid_request chars=
+      summary: invalid request · action 0 'read'.selector must be a non-empty CSS selector
+   err: invalid_request: action 0 'read'.selector must be a non-empty CSS selector | ok: None | act_err: None
+
+---- p11 A5-snapshot-字符串 ----
+[p11-A5-snapshot-字符串#06] web_act   0.0s ok=False err=invalid_request: action 0 'snapshot' must be true - usage: {"snapshot": true}. The element invalid_request chars=
+      summary: invalid request · action 0 'snapshot' must be true - usage: {"snapshot": true}
+   err: invalid_request: action 0 'snapshot' must be true - usage: {"snapshot": true}. The element list arrives in metadata.actions as a receipt row; act on it with {"click": {"index": N}} | ok: None | act_err: None
+
+---- p11 A6-wait-毫秒字符串 ----
+[p11-A6-wait-毫秒字符串#07] web_act   0.0s ok=False err=invalid_request: action 0 'wait' must be an int (ms) invalid_request chars=
+      summary: invalid request · action 0 'wait' must be an int (ms)
+   err: invalid_request: action 0 'wait' must be an int (ms) | ok: None | act_err: None
+
+---- p11 A7-upload-files-字符串 ----
+[p11-A7-upload-files-字符串#08] web_act   0.0s ok=False err=invalid_request: action 'upload' must be {selector|index, files} - a list of 1..10 file pa invalid_request chars=
+      summary: invalid request · action 'upload' must be {selector|index, files} - a list of 1..10 file paths
+   err: invalid_request: action 'upload' must be {selector|index, files} - a list of 1..10 file paths (e.g. {"upload": {"selector": "input[type=file]", "files": ["./report.pdf"]}}) | ok: None | act_err: None
+
+---- p11 A8-select-option-数字 ----
+[p11-A8-select-option-数字#09] web_act   0.0s ok=False err=invalid_request: action 0 'select.option' must be a non-empty option string or a non-empty invalid_request chars=
+      summary: invalid request · action 0 'select.option' must be a non-empty option string or a non-empty list
+   err: invalid_request: action 0 'select.option' must be a non-empty option string or a non-empty list of them | ok: None | act_err: None
+
+---- p11 A9-tab-open-数字 ----
+[p11-A9-tab-open-数字#10] web_act   0.0s ok=False err=invalid_request: action 0 'tab.open' must be a non-empty URL invalid_request chars=
+      summary: invalid request · action 0 'tab.open' must be a non-empty URL
+   err: invalid_request: action 0 'tab.open' must be a non-empty URL | ok: None | act_err: None
+
+---- p11 A10-press-key-对象 ----
+[p11-A10-press-key-对象#11] web_act   2.8s ok=True err=-  chars=72
+      summary: 200 OK · 72B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   err:  | ok: False | act_err: the selector matched no element (or none became actionable) before the timeout: Locator.press: Unknown key: "['Enter']"

@@ -1,0 +1,20 @@
+{
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "query": "机械键盘",
+ "results": [],
+ "total_results": 0,
+ "rerank_model": "",
+ "duration_ms": 0,
+ "error": "Invalid freshness: 'yesterday' (day|week|month|year)",
+ "summary": "invalid request · Invalid freshness: 'yesterday' (day|week|month|year)",
+ "next_action": "Nothing was searched - no engine was asked. freshness= is a preset window ('day', 'week', 'month', 'year'); for an exact span pass after= / before= dates instead.",
+ "same_document_groups": [],
+ "_wall_s": 0.0,
+ "_tool": "web_search",
+ "_tag": "p08-S5-search freshness 错格式#06",
+ "_ts": "2026-10-26T07:03:42.767962+00:00"
+}

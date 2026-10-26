@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/article?cb=p01c",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: max_content_chars must be an integer, got 'abc'. Pass a number (or omit max_content_chars to use the tool default).",
+ "summary": "invalid request · max_content_chars must be an integer, got 'abc'",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. Fix max_content_chars and call again - no request was made. Argument types are checked rather than guessed at: a misread `urls` would otherwise come back looking like a successful 19-URL fetch.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_read",
+ "_tag": "p01-补条#01",
+ "_ts": "2026-10-26T07:08:08.467427+00:00"
+}

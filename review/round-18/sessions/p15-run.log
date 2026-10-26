@@ -1,0 +1,25 @@
+[p15 候选复现-press] session 1c1eb59be0f2479e9655d0722feae068 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p15-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p15 press-key-列表 ----
+[p15-press-key-列表#02] web_act   4.0s ok=True err=-  chars=72
+      summary: 200 OK · 72B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   列表: top_err=''
+      act_ok=False act_err='the selector matched no element (or none became actionable) before the timeout: Locator.press: Unknown key: "[\'Enter\']"'
+
+---- p15 press-key-数字 ----
+[p15-press-key-数字#03] web_act   4.0s ok=True err=-  chars=72
+      summary: 200 OK · 72B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   数字: top_err=''
+      act_ok=False act_err='the selector matched no element (or none became actionable) before the timeout: Locator.press: Unknown key: "13"'
+
+---- p15 press-key-字典 ----
+[p15-press-key-字典#04] web_act   3.4s ok=True err=-  chars=72
+      summary: 200 OK · 72B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   字典: top_err=''
+      act_ok=False act_err='the selector matched no element (or none became actionable) before the timeout: Locator.press: Unknown key: "{\'code\': 13}"'
+
+---- p15 press-key-合法 ----
+[p15-press-key-合法#05] web_act   3.4s ok=True err=- no_content chars=72
+      summary: 200 OK · 72B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   合法: True None

@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "ftp://127.0.0.1/x",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: URL scheme 'ftp' is not allowed",
+ "summary": "invalid request · URL scheme 'ftp' is not allowed",
+ "content_ok": false,
+ "next_action": "Nothing was sent. Correct the argument and call again - no request was made. web_request takes an absolute http(s) URL (e.g. https://example.com).",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_request",
+ "_tag": "p04-补条#02",
+ "_ts": "2026-10-26T06:57:43.260839+00:00"
+}

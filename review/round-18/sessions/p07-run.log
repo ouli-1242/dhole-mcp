@@ -1,0 +1,45 @@
+[p07 阿图·分析师] session 0808c0ecb09f4904a3ce98afcbfb00cf server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p07-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p07 S1-actions 是字典 ----
+[p07-S1-actions 是字典#02] web_act   0.0s ok=False err=invalid_request: actions must be an array of objects, got dict. Pass actions=[{...}, {...} invalid_request chars=
+      summary: invalid request · actions must be an array of objects, got dict. Pass actions=[{...}, {...}].
+   err: invalid_request: actions must be an array of objects, got dict. Pass actions=[{...}, {...}].
+      (pause 2s - throttle)
+
+---- p07 S2-元素是字符串 ----
+[p07-S2-元素是字符串#03] web_act   0.0s ok=False err=invalid_request: action 0 must be a dict with exactly one key ['click', 'dialog', 'drag',  invalid_request chars=
+      summary: invalid request · action 0 must be a dict with exactly one key ['click', 'dialog', 'drag'
+   err: invalid_request: action 0 must be a dict with exactly one key ['click', 'dialog', 'drag', 'evaluate', 'fill', 'hover', 'navigate', 'pdf', 'press', 'read', 'screenshot', 'scroll', 'select', 'snapshot', 'submit', 'tab', 'upload', 'wait', 'wai
+      (pause 2s - throttle)
+
+---- p07 S3-selector 是数字 ----
+[p07-S3-selector 是数字#04] web_act   3.6s ok=True err=-  chars=72
+      summary: 200 OK · 72B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   err:  | act0: False element index 123 is beyond this page's 3 interactive elements - the page changed since the snapshot; re-run the {"snapshot": true} action
+      (pause 2s - throttle)
+
+---- p07 S4-OpenAI 风格动作 ----
+[p07-S4-OpenAI 风格动作#05] web_act   0.0s ok=False err=invalid_request: action 0 must be a dict with exactly one key ['click', 'dialog', 'drag',  invalid_request chars=
+      summary: invalid request · action 0 must be a dict with exactly one key ['click', 'dialog', 'drag'
+   err: invalid_request: action 0 must be a dict with exactly one key ['click', 'dialog', 'drag', 'evaluate', 'fill', 'hover', 'navigate', 'pdf', 'press', 'read', 'screenshot', 'scroll', 'select', 'snapshot', 'submit', 'tab', 'upload', 'wait', 'wait_selector']; the ta
+      (pause 3s - throttle)
+
+---- p07 S5-不存在的 selector ----
+[p07-S5-不存在的 selector#06] web_act  13.6s ok=True err=-  chars=72
+      summary: 200 OK · 72B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   err:  | act0: False the selector matched no element (or none became actionable) before the timeout: Locator.wait_for: Timeout 10000ms exceeded.
+      (pause 2s - throttle)
+
+---- p07 S6-空数组 ----
+[p07-S6-空数组#07] web_act   0.0s ok=False err=invalid_request: actions is required: a non-empty list of {action key: args} objects - cli invalid_request chars=
+      summary: invalid request · actions is required: a non-empty list of {action key: args} objects
+   ok: False err: invalid_request: actions is required: a non-empty list of {action key: args} objects - click / fill / read / press / wait / scroll / wait_selector / snapshot / screenshot / submit
+      (pause 2s - throttle)
+
+---- p07 S7-自愈 fill/click/read ----
+[p07-S7-自愈 fill/click/read#08] web_act   4.8s ok=True err=- no_content chars=71
+      summary: 200 OK · 71B markdown · stealthy · this call makes 1 extra direct request to the target before the b
+   act0: True  
+   act1: True  
+   act2: True  

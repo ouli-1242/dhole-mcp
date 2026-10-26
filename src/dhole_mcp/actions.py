@@ -1320,7 +1320,12 @@ def _validate_actions(actions) -> list[dict]:
             elif isinstance(val, dict) and "key" in val:
                 sel = val.get("selector")
                 idx = val.get("index")
-                k = str(val.get("key", "")).strip()
+                raw_key = val.get("key")
+                if not isinstance(raw_key, str):
+                    raise ValueError(
+                        f"action {i} 'press.key' must be a key string "
+                        f"(e.g. \"Enter\"), got {type(raw_key).__name__}")
+                k = raw_key.strip()
                 if not k:
                     raise ValueError(f"action {i} 'press.key' is empty")
                 if sel is not None and idx is not None:

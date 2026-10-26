@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "data:text/html,<h1>hi</h1>",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: URL scheme 'data' is not allowed",
+ "summary": "invalid request · URL scheme 'data' is not allowed",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. Correct the argument and call again - no request was made. web_read takes an absolute http(s) URL (e.g. https://example.com).",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_read",
+ "_tag": "p04-S8-data 协议#09",
+ "_ts": "2026-10-26T06:56:24.188199+00:00"
+}

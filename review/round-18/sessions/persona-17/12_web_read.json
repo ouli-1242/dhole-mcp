@@ -1,0 +1,30 @@
+{
+ "status": 200,
+ "content": [],
+ "url": "http://127.0.0.1:8399/article?cb=v18s3",
+ "fetcher_used": "http",
+ "extracted_type": "text",
+ "duration_ms": 31,
+ "error": "Response body too large (1,265 bytes = 1.2KB, over the save_to limit of 8) - nothing was written. Raise max_save_bytes (cap 1,073,741,824) or use web_request/curl for this file.",
+ "total_size_bytes": 1265,
+ "escalation_path": "direct:http(save_to)",
+ "attempt_cap_ms": 29000,
+ "summary": "200 OK · 0B text · http · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile",
+ "content_ok": false,
+ "next_action": "the body is over dhole's size cap - no timeout or fetcher changes that. Fetch the page that links the file instead, or download it yourself and hand it to parse",
+ "fetched_at": "2026-10-26T07:29:37Z",
+ "metadata": {
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.96, example.org -> 198.18.0.97); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "diagnosis": {
+  "code": "body_too_large",
+  "retryable": false,
+  "recover_with": "fetch the page that links the file, or download it yourself and parse it locally"
+ },
+ "_wall_s": 0.04,
+ "_tool": "web_read",
+ "_tag": "p17-V4-save_to#12",
+ "_ts": "2026-10-26T07:29:37.550833+00:00"
+}

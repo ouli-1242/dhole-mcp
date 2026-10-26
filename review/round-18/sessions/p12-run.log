@@ -1,0 +1,67 @@
+[p12 P3 探针B] session 150c6c7d8ef2440487df338cbedf0fa4 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p12-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p12 B1-urls 元素类型混杂 ----
+[p12-B1-urls 元素类型混杂#02] web_read   0.0s ok=False err=invalid_request: urls[1] must be a string, got int (123). Every element of urls has to be  invalid_request chars=
+      summary: invalid request · urls[1] must be a string, got int (123)
+   B1: err='invalid_request: urls[1] must be a string, got int (123). Every element of urls has to be a URL string.'
+      summary= invalid request · urls[1] must be a string, got int (123)
+      (pause 2s - throttle)
+
+---- p12 B2-headers 值非字符串 ----
+[p12-B2-headers 值非字符串#03] web_read   0.0s ok=False err=invalid_request: headers=: Header 'X-Test' value must be a string or None invalid_request chars=
+      summary: invalid request · headers=: Header 'X-Test' value must be a string or None
+   B2: err="invalid_request: headers=: Header 'X-Test' value must be a string or None"
+      (pause 2s - throttle)
+
+---- p12 B3-nested_fields 元素非字符串 ----
+[p12-B3-nested_fields 元素非字符串#04] web_read   0.0s ok=False err=invalid_request: invalid nested_* arguments: a nested_fields list entry is either {'name': invalid_request chars=
+      summary: invalid request · invalid nested_* arguments: a nested_fields list entry is either {'name': ...
+   B3: err="invalid_request: invalid nested_* arguments: a nested_fields list entry is either {'name': ..., 'selector': ...} or a {'<字段名>': '<选择器>'} map, got 123"
+      (pause 2s - throttle)
+
+---- p12 B4-nested_fields 字符串 ----
+[p12-B4-nested_fields 字符串#05] web_read   0.0s ok=False err=invalid_request: invalid nested_* arguments: nested_fields is not valid JSON: Expecting va invalid_request chars=
+      summary: invalid request · invalid nested_* arguments: nested_fields is not valid JSON: Expecting value
+   B4: err='invalid_request: invalid nested_* arguments: nested_fields is not valid JSON: Expecting value: line 1 column 1 (char 0)'
+      (pause 2s - throttle)
+
+---- p12 B5-search engines 是数字数组 ----
+[p12-B5-search engines 是数字数组#06] web_search   0.0s ok=False err=invalid_request: engines[0] must be a string, got int (123). Every element of engines has  invalid_request chars=
+      summary: invalid request · engines[0] must be a string, got int (123)
+   B5: err='invalid_request: engines[0] must be a string, got int (123). Every element of engines has to be a URL string.'
+      (pause 3s - throttle)
+
+---- p12 B6-crawl path_include 是字符串 ----
+[p12-B6-crawl path_include 是字符串#07] web_crawl   0.1s ok=None err=-  chars=
+      summary: crawled 2 page(s) at http://127.0.0.1:8399 (depth <= 2); 2 content_ok; article:1, fallback:1; stoppe
+   B6: err='None'
+      summary= crawled 2 page(s) at http://127.0.0.1:8399 (depth <= 2); 2 content_ok; article:1, fallback:1; stopped: max_pages reached
+      (pause 2s - throttle)
+
+---- p12 B7-doc_parse offset 负数 ----
+[p12-B7-doc_parse offset 负数#08] doc_parse   0.0s ok=False err=invalid_request: offset must be between 0 and 2147483648, got -5. invalid_request chars=
+      summary: invalid request · offset must be between 0 and 2147483648, got -5.
+   B7: err='invalid_request: offset must be between 0 and 2147483648, got -5.'
+      (pause 2s - throttle)
+
+---- p12 B8-feed since 错格式 ----
+[p12-B8-feed since 错格式#09] feed_read   0.0s ok=None err=-  chars=
+      summary: 1 URLs asked · 1 rows answered · 0 rows carried 0 items, newest first · 1 rows errored (http://127.0
+   B8: err='None'
+      (pause 2s - throttle)
+
+---- p12 B9-state clear 未知令牌 ----
+[p12-B9-state clear 未知令牌#10] sys_state   0.0s ok=None err=Nothing matches 'nope': a token is one of cache, engine_state, sessions, cred_defaults, cd unknown_state_token chars=
+   B9: err="Nothing matches 'nope': a token is one of cache, engine_state, sessions, cred_defaults, cdp_hosts, config, models, all, or the name of an open session (cb5752ee42a6)."
+      (pause 2s - throttle)
+
+---- p12 B10-cred_defaults unset 未知键 ----
+[p12-B10-cred_defaults unset 未知键#11] cred_defaults   0.0s ok=None err=invalid_request: Unknown key(s) nope: cred_defaults stores auth, cookies, proxy, profile,  invalid_request chars=
+   B10: err="invalid_request: Unknown key(s) nope: cred_defaults stores auth, cookies, proxy, profile, cdp, allow_private, anti_detect (and 'host' inside set= to say which site a credential belongs to)."
+      (pause 2s - throttle)
+
+---- p12 B11-web_request body 是列表 ----
+[p12-B11-web_request body 是列表#12] web_request   0.0s ok=True err=-  chars=31
+      summary: 200 OK · 31B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   B11: err=''

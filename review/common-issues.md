@@ -373,3 +373,24 @@
 5. r15 空框 property / r14 三件 / r13 三件。
 6. E 观察：空 save_to 话术、save_to summary 口径、路径语义两套、save_to 不吃缓存。
 7. 前十六轮家产合并回访。
+
+## round-18 新增/复发（误用与自愈轮 · 1 CONFIRM 已修）
+
+| 区 | 现象 | 状态 | 来源 |
+|---|---|---|---|
+| press.key 非字符串 | `{"press": {"selector": "#note", "key": ["Enter"]}}`（也测 int/dict）被 `str()` 吞下，失败句写「selector matched no element」——selector 命中了、元素也在，真因是 key 类型；唯一真因埋在驱动原文 `Unknown key` | **已修（R18-001）**：`_validate_actions` press 分支要求 key 为 str，否则当场 `action i 'press.key' must be a key string (e.g. "Enter"), got <type>`；7 测试红→绿 + 真机 | P11 A10 / P15 |
+| 动作失败句带驱动原文 | selector miss / press 失败的 `act_err` 末尾原样带 `Locator.wait_for: Timeout 10000ms exceeded`、`Locator.press: Unknown key` | E（R18-003；前一句为真时视为证据，话术毛刺） | P06 S3 / P07 S5 |
+| doc_parse 收 URL | `file_path="http://…"` 被当相对路径 → 文件不存在；next 只教补绝对路径，未指 `web_read` | E（R18-004；自愈指引缺口） | P09 S3 |
+| nested_fields 非法 JSON | `"a,b"` → `nested_fields is not valid JSON: Expecting value: line 1 column 1 (char 0)` | E（R18-005；Python 解码器原文） | P12 B4 |
+| web_search 参数拒绝封套 | `Invalid mode/freshness/page` 不带 `content_ok:false` 与 `invalid_request:` 前缀（schema 层拒绝则有） | A（R18-002；search.py:1427-1454 写明刻意设计，成功搜索也不带 content_ok） | P08 S1/S5/S6 |
+| 数字字符串宽松读 | `"500"`/`"50"`/`"5"` 按 int 读，浮点 3.5 拒绝；clamp 在 summary 具名 | A/量具（R18-006；params.py 顶注写明客户端会发字符串） | P01/P02 |
+| **误用面正向实锤** | 13 工具对未知字段/空对象/null/`__proto__`/`constructor`/枚举错/范围错/容器元素类型错/动作子字段类型错（20+ 种）逐颗具名；next_action 七条自愈链一步成功；basic 密码·bearer·Authorization 头零回显；明文凭据头被拒并指回 cred_defaults；误用后 allow_private/会话/缓存未污染；同会话正常读成功 | 无缺陷（R18-008 PASS） | P01-P10 / P11-P14 |
+
+## round-18 必测回归点（round-19 画像真实回访）
+
+1. R18-001：`press.key` 传 list/int/dict 当场具名（`got list/int/dict`），合法 `key="Enter"` 仍成功。
+2. R16-001：meta-only GBK/Latin-1 的 read 与 crawl 按 meta 解码。
+3. r15 空框 property：ok=False +「current value」；r14 三件 / r13 三件。
+4. save_to：覆盖拒 / 小帽拒 / sha256 / 中文文件名；截图 PNG 头、PDF→doc_parse。
+5. 误用面：未知字段点名 + Supported 表；`__proto__`/`constructor` 拒绝；秘密零回显。
+6. E 观察：动作失败句驱动原文、doc_parse 收 URL、nested_fields JSON 原文、web_search 封套。

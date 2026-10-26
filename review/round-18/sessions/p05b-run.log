@@ -1,0 +1,24 @@
+[p05 闻笛·安全审计] session 4ed37790ff474fc6898e0ac8eb7aaca4 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+
+---- p05 补条 ----
+[p05-补条#01] cred_defaults   0.0s ok=None err=-  chars=
+   stored: stored auth for 127.0.0.1. 2 key(s) in force. err: None
+   store: secret_in_receipt=False
+      (pause 2s - throttle)
+[p05-补条#02] cred_defaults   0.0s ok=None err=-  chars=
+   show: 2 default(s) in force: allow_private, auth@127.0.0.1.
+   show: secret_in_receipt=False
+      (pause 2s - throttle)
+[p05-补条#03] web_read   0.0s ok=True err=-  chars=14
+      summary: 200 OK · 14B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   read ok: True chars: 14
+   read: secret_in_receipt=False
+      (pause 3s - throttle)
+[p05-补条#04] web_request   0.0s ok=False err=invalid_request: headers= names 'authorization', and a credential is not something a call  invalid_request chars=
+      summary: invalid request · headers= names 'authorization'
+   post ok: False err: invalid_request: headers= names 'authorization', and a credential is not something a call carries: cred_defaults stores 
+   post: secret_in_receipt=False
+   post-auth: secret_in_receipt=False
+      (pause 2s - throttle)
+[p05-补条#05] cred_defaults   0.0s ok=None err=-  chars=
+   unset: forgot auth. 1 key(s) in force.

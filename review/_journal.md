@@ -213,3 +213,20 @@
   pytest **7849 passed/23 skipped**；ruff 16。
 - P6：`fetcher.py` 用 HEAD 基线生成补丁单文件暂存（不含对方注释翻译）；测试整文件暂存。
 - 下一步：round-18 P0（端口 9218；从本轮顶端切出；读 round-17 必测点；继续并发纪律）。
+
+### round-18 收官（2026-10-26）
+
+- 主题「误用与自愈」：10 画像 + 4 组 P3 探针 + 5 发候选复现，**144 发 13/13 工具**；
+  79 发是预期拒绝回执。
+- **1 fixed（R18-001）**：`press.key` 非字符串被 `str()` 吞下、失败句错怪 selector；
+  `_validate_actions` press 分支要求 key 为 str 并具名拒绝；7 枚测试红→绿 + 真机
+  `got list/int/dict`；合法 key 仍成功。
+- **3 E**（动作失败句带驱动原文 / doc_parse 收 URL 未指路 / nested_fields 暴露 Python
+  解码器原文）+ A（web_search 参数拒绝封套=设计；数字字符串宽松读=设计）+ 量具（P01
+  靶页记错）+ **PASS**（13 工具误用面、秘密零回显、误用后状态干净）。
+- P5：真重启 **PID 34796**；V1-V6 **ALL_PASS**；pytest **7854 passed/2 failed/23 skipped**
+  —— 2 失败均为非本轮（对方把 `actions_want_visual` docstring 翻成中文致旧断言落空；
+  map budget 测试单跑通过、全量 xdist 抖动在册）；ruff 16。
+- P6：`actions.py` 用 HEAD 基线单 hunk 暂存（工作树含对方 558+/328- 注释翻译，不夹带）；
+  新测试整文件暂存。
+- 用户指示：**r18 做完暂停循环**。收尾后不再起 round-19；必测点已写进 common-issues。

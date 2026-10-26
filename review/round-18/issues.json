@@ -1,0 +1,29 @@
+{
+ "round": 18,
+ "theme": "误用与自愈",
+ "verdict": "1 fixed (R18-001) + 3 E + 1 A + 2 measurement + 1 PASS",
+ "fixed": [
+  {
+   "id": "R18-001",
+   "severity": "B",
+   "title": "press.key 非字符串被 str() 吞下，失败句错怪 selector",
+   "evidence": "p11-A10 / p15: key=[\\\"Enter\\\"]、13、{code:13} 三种都在 #note 存在的页面上报 'selector matched no element ... Unknown key'",
+   "fix": "actions.py _validate_actions press 分支：dict 形状下 key 必须 isinstance(str)，否则当场具名拒绝",
+   "test": "tests/test_a_press_key_that_is_not_a_string_is_refused_by_name.py（5+2 枚，red -> green）",
+   "status": "fixed"
+  }
+ ],
+ "rejected": [
+  {"id": "R18-002", "level": "A", "title": "web_search 参数拒绝缺 content_ok:false 与前缀", "evidence": "p08-S1/S5/S6; search.py:1427-1454 写明刻意设计；成功搜索本就不带 content_ok"},
+  {"id": "R18-003", "level": "E", "title": "动作失败句原样带 Playwright 文本（Locator.wait_for / Unknown key）", "evidence": "p06-S3 / p07-S5 / p11-A10"},
+  {"id": "R18-004", "level": "E", "title": "doc_parse 收到 URL 只报文件不存在，未指 web_read", "evidence": "p09-S3"},
+  {"id": "R18-005", "level": "E", "title": "nested_fields 非法 JSON 暴露 Python 解码器原文", "evidence": "p12-B4"},
+  {"id": "R18-006", "level": "A", "title": "数字字符串接受、浮点拒绝；clamp 一律具名", "evidence": "p01-S1 / p01b / p02-S3/S6; params.py 顶注"},
+  {"id": "R18-007", "level": "measurement", "title": "P01 S7 把 #note 靶页记成 /dialog", "evidence": "p01-S7；补条在 /frame/inner 成功"}
+ ],
+ "passed": [
+  {"id": "R18-008", "title": "误用面正向：13 工具具名拒绝 / 危险键名 / 秘密零回显 / clamp 具名 / 误用后状态干净"}
+ ],
+ "p1_calls": 144,
+ "tools_covered": 13
+}

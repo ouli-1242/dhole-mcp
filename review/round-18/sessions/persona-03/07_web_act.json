@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/dialog?cb=p03",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: action 0 must be a dict with exactly one key ['click', 'dialog', 'drag', 'evaluate', 'fill', 'hover', 'navigate', 'pdf', 'press', 'read', 'screenshot', 'scroll', 'select', 'snapshot', 'submit', 'tab', 'upload', 'wait', 'wait_selector']; the target rides inside that key's value: {\"fill\": {\"index\": 0, \"text\": \"new value\"}} or {\"click\": \"#submit\"}",
+ "summary": "invalid request · action 0 must be a dict with exactly one key ['click', 'dialog', 'drag'",
+ "content_ok": false,
+ "next_action": "Nothing was run. The action named in `error` has the wrong shape; sys_guide(topic='behavior', section='Page interaction') lists every action key and what each one takes.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_act",
+ "_tag": "p03-S6-空动作对象#07",
+ "_ts": "2026-10-26T06:55:28.982983+00:00"
+}

@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "http://127.0.0.1:8399/frame/inner?cb=p11",
+ "fetcher_used": "none",
+ "duration_ms": 0,
+ "error": "invalid_request: action 0 'snapshot' must be true - usage: {\"snapshot\": true}. The element list arrives in metadata.actions as a receipt row; act on it with {\"click\": {\"index\": N}}",
+ "summary": "invalid request · action 0 'snapshot' must be true - usage: {\"snapshot\": true}",
+ "content_ok": false,
+ "next_action": "Nothing was run. The action named in `error` has the wrong shape; sys_guide(topic='behavior', section='Page interaction') lists every action key and what each one takes.",
+ "fetched_at": "",
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "_wall_s": 0.01,
+ "_tool": "web_act",
+ "_tag": "p11-A5-snapshot-字符串#06",
+ "_ts": "2026-10-26T07:09:58.281268+00:00"
+}

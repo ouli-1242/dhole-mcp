@@ -1,0 +1,46 @@
+[p01 苏晓·新手产品经理] session df4b95bb03924a5e8b020bef5df89d83 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p01-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p01 S1-数字带引号 ----
+[p01-S1-数字带引号#02] web_read   1.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · http · the target is loopback/private, so dhole dropped its own synthesized
+   err: 
+   chars: 387
+      (pause 2s - throttle)
+
+---- p01 S2-自愈整形 ----
+[p01-S2-自愈整形#03] web_read   0.0s ok=True err=-  chars=387
+      summary: 200 OK · 387B markdown · cache · cached copy, fetched 0.0 min ago · replayed from the cache: the fet
+   chars: 387 ok: True
+      (pause 2s - throttle)
+
+---- p01 S3-camelCase 字段名 ----
+[p01-S3-camelCase 字段名#04] web_read   0.0s ok=False err=invalid_request: Unsupported argument(s) for web_read: ['maxContentChars']. Supported: ['a invalid_request chars=
+      summary: invalid request · Unsupported argument(s) for web_read: ['maxContentChars']
+   chars: None err: invalid_request: Unsupported argument(s) for web_read: ['maxContentChars']. Supported: ['anti_detect', 'cache_ttl', 'cdp
+      (pause 2s - throttle)
+
+---- p01 S4-参数名记成 q ----
+[p01-S4-参数名记成 q#05] web_search   0.0s ok=False err=invalid_request: Unsupported argument(s) for web_search: ['q']. Supported: ['after', 'befo invalid_request chars=
+      summary: invalid request · Unsupported argument(s) for web_search: ['q']
+   err: invalid_request: Unsupported argument(s) for web_search: ['q']. Supported: ['after', 'before', 'cache_ttl', 'engines', 'exclude_sites', 'fetch_content', 'fetch_min_consensus', 'fet
+   next: Nothing was searched - no engine was asked. The name in `error` is not one this tool takes - rename or drop it; the list in `error` is everything it does take. 
+      (pause 3s - throttle)
+
+---- p01 S5-自愈 query ----
+[p01-S5-自愈 query#06] web_search   6.4s ok=None err=-  chars=
+      summary: Searched '机械键盘 评测' -> 2 results (2 high, 0 med, 0 low) from yandex,sogou,so360,shenma,baidu; rerank=
+   results: 2 summary: Searched '机械键盘 评测' -> 2 results (2 high, 0 med, 0 low) from yandex,sogou,so360,shenma,baidu; rerank=
+      (pause 3s - throttle)
+
+---- p01 S6-actions 写成字符串 ----
+[p01-S6-actions 写成字符串#07] web_act   0.0s ok=False err=invalid_request: actions must be an array of objects, got 'click #note'. Pass actions=[{.. invalid_request chars=
+      summary: invalid request · actions must be an array of objects, got 'click #note'
+   err: invalid_request: actions must be an array of objects, got 'click #note'. Pass actions=[{...}, {...}].
+      (pause 2s - throttle)
+
+---- p01 S7-自愈数组形状 ----
+[p01-S7-自愈数组形状#08] web_act  14.5s ok=False err=- no_content chars=45
+      summary: 200 OK · 45B markdown · stealthy · no prose (menu fragments only) · this call makes 1 extra direct r
+   ok: False err: 
+   act0: False the selector matched no element (or none became actionable) before the timeout: 

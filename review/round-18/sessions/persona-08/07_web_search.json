@@ -1,0 +1,20 @@
+{
+ "diagnosis": {
+  "code": "invalid_request",
+  "retryable": false,
+  "recover_with": "fix the named argument"
+ },
+ "query": "机械键盘",
+ "results": [],
+ "total_results": 0,
+ "rerank_model": "",
+ "duration_ms": 0,
+ "error": "Invalid page: -1 (0-10)",
+ "summary": "invalid request · Invalid page: -1 (0-10)",
+ "next_action": "Nothing was searched - no engine was asked. page= counts result pages from 0 (0-10), so page 0 IS the first page - omit it for the first page.",
+ "same_document_groups": [],
+ "_wall_s": 0.0,
+ "_tool": "web_search",
+ "_tag": "p08-S6-search 负 page#07",
+ "_ts": "2026-10-26T07:03:45.774715+00:00"
+}

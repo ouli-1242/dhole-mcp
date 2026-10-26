@@ -1,0 +1,21 @@
+{
+ "status": 0,
+ "content": [],
+ "url": "file://http://127.0.0.1:8399/article",
+ "fetcher_used": "parse",
+ "duration_ms": 0,
+ "error": "File not found: <server cwd>\\http:\\127.0.0.1:8399\\article, ~\\http:\\127.0.0.1:8399\\article. Pass an absolute path, or pass cwd=<working directory> so relative paths resolve against it.",
+ "summary": "local error · 0B markdown · parse",
+ "content_ok": false,
+ "next_action": "Nothing was fetched. The name you gave is not where this call looked. `error` lists the places it tried and, for the shape of the path you passed, what could still change the answer; re-sending the same string unchanged reaches the same stop.",
+ "fetched_at": "2026-10-26T07:05:24Z",
+ "diagnosis": {
+  "code": "file_not_found",
+  "retryable": false,
+  "recover_with": "name a file that exists - `error` says where this call looked and what could still change the answer"
+ },
+ "_wall_s": 0.01,
+ "_tool": "doc_parse",
+ "_tag": "p09-S3-doc_parse 传 URL#04",
+ "_ts": "2026-10-26T07:05:24.781765+00:00"
+}
