@@ -126,6 +126,42 @@ dhole --http                                        # 127.0.0.1:8765/mcp
 - **全本地**：正文缓存、cookie、重排模型都在 `~/.dhole`；除了你让它抓的目标站点，进程不往外发任何数据。
 - **失败说真话**：每次调用都回同一份 JSON——抽了多少字、走的哪一档、下一步该调什么。抽空了就说空了，不会把一张反爬灰页包装成「成功正文」。
 
+## 同类 MCP 成本对比（2026-10-26 同台实测）
+
+**口径先说清**：connect 成本 = `initialize` 下发的 server instructions + `tools/list` 的紧凑 JSON 字符数（没有 prompt cache 时每次模型请求都要重付，有 cache 约一折）。各家取当天 npm/PyPI 最新版；dhole 按自己实测的 4.16 字符/token 折算（统一按 4.0 则各家等比上浮，排序不变），**跨家倍数一律用字符比**。dhole 那一行随时可复跑：`python tests/tool_payload_measure.py`；对手那几行钉的是 2026-10-26 的版本号，不随发版复测。
+
+| MCP | 工具数 | connect 紧凑字符 | ≈tokens | 计费 |
+|---|---|---|---|---|
+| Brave Search | 8 | 110,719 | ~27.7k | API key，按量 |
+| Firecrawl | 28 | 94,937 | ~23.7k | credits |
+| Playwright（全开 caps） | 72 | 45,602 | ~11.4k | 免费 |
+| **dhole-mcp** | **13** | **36,758**（34,031 工具 + 2,727 说明书） | **~8.8k** | 免费 keyless |
+| Playwright（默认） | 25 | 20,286 | ~5.1k | 免费 |
+| Tavily | 5 | 7,694 | ~1.9k | API key，按量 |
+| Exa（hosted，仅测 tools/list） | 2 | 2,419 | ~0.6k | keyless 有限额 |
+| Fetch（官方参考实现） | 1 | 1,150 | ~0.3k | 免费 |
+
+- 七个产品里**第 4 便宜**（不计 Exa 则第 3；Playwright 两档分开算则第 5），比 Brave / Firecrawl 这两个热门方案便宜 **2.6~3.0 倍**（字符比 3.02 与 2.59）。
+- **工具数少不等于描述省**：Brave 8 颗吃掉 27.7k（平均每颗 ~3.5k token），dhole 13 颗平均每颗 ~0.7k，覆盖 fetch / search / crawl / act / research / feed / PDF / recall / 本地文档。
+- 那 2,727 字符（≈656 token）的说明书是连接期唯一的用法导引；深度文档不进上下文，谁问谁付（`sys_guide` 或 `dhole skill install`）。裁到 `DHOLE_TOOLS=web_read,web_search` 时，connect 口径降到约 3.1k。
+
+**变动成本**——同一个高密度文档页（`docs.python.org/3/library/asyncio-task.html`），一次调用拿回多少：
+
+| 方案 | 返回字符 | ≈tokens |
+|---|---|---|
+| dhole `web_read` @`max_content_chars=8000` | 9,839 | 2.5k |
+| dhole `web_read` + `focus=` | 23,131 | 5.8k |
+| dhole `web_read` 默认 | 41,860（截断 + `next_offset` 续读） | 10.5k |
+| Tavily `tavily_extract` 默认 | 62,523 | 15.6k |
+| Firecrawl `scrape` 默认 | 80,824 | 20.2k |
+| Playwright `browser_snapshot` | 137,246 | 34.3k |
+
+同一个搜索词（`model context protocol`）：Tavily basic 4,605 字符（最省）· dhole `web_search` 7,916（最快，3.6s；行内带 `relevance` 与 `engines_consensus`）· Firecrawl 摘要 11,201 · Tavily advanced+raw 60,486 · Firecrawl 内联正文 152,696。同一个研究问题一发调用：dhole `web_research` 10,130 字符 / 3 源证据包，Tavily `research` 10,014 字符 / 30.5s 成文答案——**单次样本打平**，形态不同（可引用的原文 vs 已成文的结论），复跑波动大，不写成稳定结论。
+
+**不粉饰的部分**：截断与分页不是 dhole 独有（官方 Fetch 有 `max_length` / `start_index`；Tavily 有 `query` 重排，Firecrawl 有 `queryOptions` 与 `includeTags`/`excludeTags`），独有的是「免费 + 无 key + 截断分页 + 词法 focus」这套组合。纯 token 口径下 Tavily basic 的搜索行确实比 dhole 省；Playwright 的 snapshot 是整棵可访问性树、每次操作后通常要重拍，但它换来的是 dhole 没有的自动化深度。
+
+**什么时候不该用 dhole**：前端 E2E、网络拦截 mock、录像取证 → Playwright；大规模托管爬取与定时监控 → Firecrawl；要 SLA 或企业级索引 → Tavily / Brave / Exa；只是抓一个 URL → 官方 Fetch。
+
 ## 配置
 
 两条门：宿主配置里的 `env` 块（改完要重启），或 `dhole config set NAME value` 写进 `~/.dhole/config.json`（下一次调用就生效）。**env 永远优先**。默认行为通常就是你要的，不确定就先别设。
