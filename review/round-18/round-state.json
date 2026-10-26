@@ -1,0 +1,24 @@
+{
+ "round": 18,
+ "branch": "review/round-18",
+ "baseline_commit": "ad352bf",
+ "port": 9218,
+ "site_port": 8398,
+ "tools_expected": 13,
+ "phase": "P6_done",
+ "theme": "误用与自愈（错误形状 / 具名拒绝 / next_action 自愈 / 状态未污染）",
+ "steps": {
+  "git_hygiene": "branch from ad352bf; 只改 actions.py 的 press 校验块; P6 用 HEAD 基线单 hunk 暂存",
+  "servers": "done (9218 PID 34796 after fix restart; 8399 fixture; 8398 multilingual site)",
+  "plan_and_personas": "done (10 sealed + 4 probe groups + 5 repro calls)",
+  "persona_sealed": true,
+  "p1_simulation": "done (144 calls: 94 persona + 44 probes + 5 repro + 19 verify; 13/13 tools)",
+  "p2_reports": "done (10 persona reports + report-round.md)",
+  "p3_review": "done (1 CONFIRM B R18-001 + 3 E + 1 A + 1 measurement + 1 PASS)",
+  "p4_fix": "done (R18-001 press.key str check; 7 tests red -> green)",
+  "p5_verify": "done (real restart PID 34796; V1-V6 ALL_PASS; pytest 7854 passed/2 failed/23 skipped - both failures external; ruff 16)",
+  "p6_assets": "done (verification.md; index/common-issues/_journal/decisions updated; backlog.md untouched due to concurrent edits)"
+ },
+ "updated": "2026-10-26T15:38:00+08:00",
+ "p1_calls_total": 144
+}
