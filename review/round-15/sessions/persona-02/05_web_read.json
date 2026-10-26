@@ -1,0 +1,31 @@
+{
+ "checked": 1,
+ "changed_urls": [
+  "http://127.0.0.1:8399/changing?cb=p02mix"
+ ],
+ "unchanged_urls": [],
+ "baseline_urls": [],
+ "error_urls": [],
+ "results": [
+  {
+   "url": "http://127.0.0.1:8399/changing?cb=p02mix",
+   "changed": true,
+   "status": 200,
+   "fetcher": "http",
+   "first_divergence_at": 111,
+   "diff_window": "\"utf-8\"><title>会变的页面</title></head><body><h1>会变的页面</h1><p>第 7 次请求。</p><p>这一段每次都在，用来给 diff 提供上下文。</p><p>仅在本次出现的行 7-0</p><p>仅在本次出现的行 7-1</p><p>仅在本次出现的行 7-2</p><p>仅在本次出现的行 7-3</p><p>仅在本次出现的行 7-4</p><p>仅在",
+   "diff": "--- baseline\n+++ fresh\n@@ -1 +1 @@\n-<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\"><title>会变的页面</title></head><body><h1>会变的页面</h1><p>第 6 次请求。</p><p>这一段每次都在，用来给 diff 提供上下文。</p><p>仅在本次出现的行 6-0</p><p>仅在本次出现的行 6-1</p><p>仅在本次出现的行 6-2</p><p>仅在本次出现的行 6-3</p><p>仅在本次出现的行 6-4</p><p>仅在本次出现的行 6-5</p></body></html>\n+<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\"><title>会变的页面</title></head><body><h1>会变的页面</h1><p>第 7 次请求。</p><p>这一段每次都在，用来给 diff 提供上下文。</p><p>仅在本次出现的行 7-0</p><p>仅在本次出现的行 7-1</p><p>仅在本次出现的行 7-2</p><p>仅在本次出现的行 7-3</p><p>仅在本次出现的行 7-4</p><p>仅在本次出现的行 7-5</p><p>仅在本次出现的行 7-6</p></body></html>",
+   "diff_hunks": 1,
+   "diff_truncated": false,
+   "baseline_chars": 279,
+   "fresh_chars": 298,
+   "note": "diff is a unified diff (baseline -> fresh); diff_window shows the fresh text around the first divergence - refetch with extraction_type='markdown' to read the page"
+  }
+ ],
+ "summary": "checked 1 URL(s): 1 changed, 0 unchanged, 0 baseline recorded, 0 error",
+ "note": "each row compares the live page with dhole's own html baseline; changed=null with a 2xx status means this call recorded that URL's first baseline, not that it failed",
+ "_wall_s": 0.03,
+ "_tool": "web_read",
+ "_tag": "p02-S4-check 第二发（应 changed）#05",
+ "_ts": "2026-10-26T03:32:36.093527+00:00"
+}

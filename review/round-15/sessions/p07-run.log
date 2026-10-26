@@ -1,0 +1,37 @@
+[p07 闻溪·博物馆策展人] session 888d813074de411d9e7f20c36ac5cda0 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p07-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p07 S1-地图：只要 /work ----
+[p07-S1-地图：只要 /work#02] web_discover   0.0s ok=None err=-  chars=
+      summary: mapped 1 URL(s) at http://127.0.0.1:8399 (depth <= 2) using 1 page fetch(es); no content extracted; 
+   rows=1 summary=mapped 1 URL(s) at http://127.0.0.1:8399 (depth <= 2) using 1 page fetch(es); no content extracted; only the start page was kept - path_include=['/wor
+   - http://127.0.0.1:8399/
+      (pause 4s - throttle)
+
+---- p07 S2-地图：只要 /article ----
+[p07-S2-地图：只要 /article#03] web_discover   0.0s ok=None err=-  chars=
+      summary: mapped 2 URL(s) at http://127.0.0.1:8399 (depth <= 2) using 2 page fetch(es); no content extracted
+   rows=2 summary=mapped 2 URL(s) at http://127.0.0.1:8399 (depth <= 2) using 2 page fetch(es); no content extracted
+   - http://127.0.0.1:8399/
+   - http://127.0.0.1:8399/article
+      (pause 4s - throttle)
+
+---- p07 S3-crawl 前三页 ----
+[p07-S3-crawl 前三页#04] web_crawl   0.0s ok=None err=-  chars=
+      summary: crawled 3 page(s) at http://127.0.0.1:8399 (depth <= 2); 1 content_ok; article:1, fallback:2; stoppe
+   crawled 3 page(s) at http://127.0.0.1:8399 (depth <= 2); 1 content_ok; article:1, fallback:2; stopped: max_pages reached
+   - {'url': 'http://127.0.0.1:8399/', 'content_ok': False, 'page_type': 'fallback'}
+   - {'url': 'http://127.0.0.1:8399/article', 'content_ok': True, 'page_type': 'article'}
+   - {'url': 'http://127.0.0.1:8399/qr', 'content_ok': False, 'page_type': 'fallback'}
+      (pause 4s - throttle)
+
+---- p07 S4-地图里的详情页转 read ----
+[p07-S4-地图里的详情页转 read#05] web_read   0.0s ok=True err=-  chars=39
+      summary: 200 OK · 39B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   ok=True chars=39 cached=None
+      (pause 4s - throttle)
+
+---- p07 S5-recall 展品页 ----
+[p07-S5-recall 展品页#06] web_recall   2.6s ok=None err=-  chars=
+   results=0
+P07 DONE

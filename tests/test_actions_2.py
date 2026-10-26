@@ -824,6 +824,16 @@ def test_an_empty_form_field_says_that_is_its_current_value_not_a_missing_read()
     assert "current value" in rows[0]["error"], rows[0]["error"]
 
 
+def test_an_empty_form_field_read_by_property_names_its_value_instead_of_crashing():
+    """property 那条路漏了同一句：空值是合法读数，不是未绑定变量。"""
+    page = _Page__the_probe_that_reads_a_f_5a80({"#qty": _El__the_probe_that_reads_a_f_5a80(tag="INPUT", attrs={"value": ""}, props={"value": ""})})
+    rows = _run__the_probe_that_reads_a_f_5a80([{"read": {"selector": "#qty", "property": "value"}}], page)
+    assert rows[0]["ok"] is False
+    err = rows[0]["error"]
+    assert "empty_hint" not in err, err
+    assert "current value" in err, err
+
+
 # ─── 4 · 那句指路的话不许再指着错的门 ───────────────────────────────
 
 

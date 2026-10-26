@@ -1,0 +1,50 @@
+{
+ "message": "3 session(s) open, holding 0 cookie(s); the cache and stored-task counts ride along. Nothing erased.",
+ "sessions": [
+  {
+   "session_id": "1253b086c7fa",
+   "browser_open": true,
+   "browser_type": "stealthy",
+   "browser_created": "2026-10-26T03:30:02.998314+00:00"
+  },
+  {
+   "session_id": "p01a",
+   "browser_open": true,
+   "browser_type": "stealthy",
+   "browser_created": "2026-10-26T03:32:07.222428+00:00",
+   "pinned_url": "http://127.0.0.1:8399/login",
+   "pinned_left_s": 295
+  },
+  {
+   "session_id": "p01b",
+   "browser_open": true,
+   "browser_type": "stealthy",
+   "browser_created": "2026-10-26T03:32:14.677814+00:00",
+   "pinned_url": "http://127.0.0.1:8399/login",
+   "pinned_left_s": 292
+  }
+ ],
+ "open_count": 3,
+ "cache": {
+  "entries": 303,
+  "expired": 245,
+  "oldest_age_s": 164077,
+  "cap": 10000,
+  "hits": 1,
+  "misses": 3
+ },
+ "cred_defaults": [
+  {
+   "key": "allow_private",
+   "scope": "",
+   "stored_s_ago": 34,
+   "value": true
+  }
+ ],
+ "identity_count": 1,
+ "next_action": "sys_state(clear=['<session id>']) forgets one; clear=['sessions'] with confirm=true forgets every one. A session with cookies is a live credential for that host until it expires on its own. CDP attach roster: github.com (approved before approvals carried a date), i.mooc.chaoxing.com (approved before approvals carried a date) - clear=['cdp:host=<name>'] revokes one, clear=['cdp_hosts'] all (confirm=true); an approval is re-asked after 30 days. the roster is the file `cdp_hosts.json` in dhole's home directory - run `dhole doctor` for its full path on this machine.",
+ "_wall_s": 0.02,
+ "_tool": "sys_state",
+ "_tag": "p01-S5-state 复盘#09",
+ "_ts": "2026-10-26T03:32:25.992579+00:00"
+}

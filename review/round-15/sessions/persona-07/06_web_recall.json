@@ -1,0 +1,20 @@
+{
+ "query": "工作 规格 展品",
+ "engine": "neural",
+ "results": [],
+ "terms_found": [
+  "工作",
+  "规格"
+ ],
+ "terms_absent": [
+  "展品"
+ ],
+ "scanned_rows": 222,
+ "candidates_scored": 14,
+ "dropped_low_relevance": 14,
+ "note": "pointers, not answers - web_read the URL (fresh or cached) for the page itself; stale rows are ones whose cache TTL has passed",
+ "_wall_s": 2.64,
+ "_tool": "web_recall",
+ "_tag": "p07-S5-recall 展品页#06",
+ "_ts": "2026-10-26T03:34:41.395057+00:00"
+}

@@ -1,0 +1,40 @@
+[p04 罗盘·供应链分析师] session 0d28a0126f034c64bb6219729043ac9f server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p04-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p04 S1-批量读三页 ----
+[p04-S1-批量读三页#02] web_read   0.0s ok=None err=-  chars=
+      summary: 3 URLs asked · 3 answered without an HTTP error (`successful` counts exactly that, per row's status/
+   - {'url': 'http://127.0.0.1:8399/work/1?cb=p04-1', 'content_ok': True, 'total_extracted_chars': 39, 'cached': True}
+   - {'url': 'http://127.0.0.1:8399/work/2?cb=p04-2', 'content_ok': True, 'total_extracted_chars': 36, 'cached': True}
+   - {'url': 'http://127.0.0.1:8399/work/3?cb=p04-3', 'content_ok': True, 'total_extracted_chars': 36, 'cached': True}
+      (pause 4s - throttle)
+
+---- p04 S2-recall 找回刚读的页 ----
+[p04-S2-recall 找回刚读的页#03] web_recall   3.2s ok=None err=-  chars=
+   results=0
+      (pause 4s - throttle)
+
+---- p04 S3-写闸（缺 confirm） ----
+[p04-S3-写闸（缺 confirm）#04] web_request   0.0s ok=False err=invalid_request: method=POST is a write: it changes server state, and stored credentials f invalid_request chars=
+      summary: invalid request · method=POST is a write: it changes server state
+   err=invalid_request: method=POST is a write: it changes server state, and stored credentials for this host ride along automatically
+   next=Nothing was sent. Ask the user, then re-send the same call with confirm=true. HEAD probes need no confirm.
+      (pause 3s - throttle)
+
+---- p04 S4-confirm 真写 ----
+[p04-S4-confirm 真写#05] web_request   0.0s ok=True err=-  chars=31
+      summary: 200 OK · 31B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   status=200 summary=200 OK · 31B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 30000ms - an explicit timeout= lifts it ·
+      (pause 4s - throttle)
+
+---- p04 S5-自有登录会话 vs 匿名 ----
+[p04-S5-自有登录会话 vs 匿名#06] web_request   0.0s ok=True err=-  chars=34
+      summary: 200 OK · 34B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   login status=200
+[p04-S5-自有登录会话 vs 匿名#07] web_read   0.0s ok=True err=-  chars=23
+      summary: 200 OK · 23B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+[p04-S5-自有登录会话 vs 匿名#08] web_read   0.0s ok=True err=-  chars=14
+      summary: 200 OK · 14B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   session=200 OK · 23B markdown · http · one HTTP attempt is bound by the learned ceiling for this h
+   anon=200 OK · 14B markdown · http · one HTTP attempt is bound by the learned ceiling for this h
+P04 DONE

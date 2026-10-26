@@ -1,0 +1,38 @@
+{
+ "start_url": "http://127.0.0.1:8399/",
+ "pages": [
+  {
+   "url": "http://127.0.0.1:8399/",
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "靶站索引",
+   "fetched_at": "2026-10-26T03:13:45Z",
+   "summary": "200 OK · 396B html · cache · cached copy, fetched 20.7 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  },
+  {
+   "url": "http://127.0.0.1:8399/article",
+   "depth": 1,
+   "status": 200,
+   "fetcher_used": "cache",
+   "title": "本地抓取工具配置指南",
+   "fetched_at": "2026-10-26T03:13:45Z",
+   "summary": "200 OK · 579B html · cache · cached copy, fetched 20.7 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above."
+  }
+ ],
+ "pages_crawled": 2,
+ "pages_discovered": 2,
+ "discover_only": true,
+ "deadline_ms_applied": 25000,
+ "attempt_cap_ms": 25000,
+ "sitemap_used": false,
+ "duration_ms": 16,
+ "summary": "mapped 2 URL(s) at http://127.0.0.1:8399 (depth <= 2) using 2 page fetch(es); no content extracted",
+ "next_action": " Plan e85cd5289d17 is held here for 1h: web_crawl(url=..., resume_token='e85cd5289d17:0') fetches it without re-sending URLs (add selector=/schema= to project each page); or web_read(urls=[...]) the picks directly.",
+ "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.112, example.org -> 198.18.0.113); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused.",
+ "identity_applied": "allow_private",
+ "plan_id": "e85cd5289d17",
+ "_wall_s": 0.02,
+ "_tool": "web_discover",
+ "_tag": "p07-S2-地图：只要 /article#03",
+ "_ts": "2026-10-26T03:34:26.670991+00:00"
+}

@@ -49,3 +49,11 @@
   本轮被测对象 = 当前工作树（editable，含对方在途改动）；P6 只暂存 review/round-14 与本轮修复 hunk，
   不整文件 `git add` 吞掉他人改动。
 - 影响：P5 全量 pytest 若因对方在途改动出现红，先按旧债/in-flight 归因（不记本轮回归），如实写入 verification。
+
+## 2026-10-26T11:43+08:00 round-15：并发工作树里的修复与单 hunk 暂存
+- R15-001 的修复必须落在 `actions.py`（对方正在改的文件，336 行在途）。处置：只改 property
+  读分支 3 行；P6 用 `git diff` 提取该 hunk + `git apply --cached` 只暂存本 hunk，
+  其余在途改动保留在工作树，不提交、不回滚。
+- 测试改动落在 `tests/test_actions_2.py`（该文件在对方改动清单之外），整文件暂存安全。
+- `review/backlog.md` 仍含对方在途状态更新：round-15 的 E 记录写进 common-issues.md，
+  待其落地后再合并回 backlog。

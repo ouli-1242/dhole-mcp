@@ -1,0 +1,26 @@
+[p06 林澄·兽医] session 654b03b2898c4d57a3e33d9d995851a2 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p06-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p06 S1-PDF 指定页 2-3 ----
+[p06-S1-PDF 指定页 2-3#02] doc_parse   0.3s ok=True err=-  chars=1304
+      summary: 200 OK · 1.3KB markdown · parse
+   ok=True chars=1304 summary=200 OK · 1.3KB markdown · parse
+      (pause 4s - throttle)
+
+---- p06 S2-本地 xlsx 剂量表 ----
+[p06-S2-本地 xlsx 剂量表#03] doc_parse   0.5s ok=True err=-  chars=86
+      summary: 200 OK · 86B markdown · parse
+   ok=True chars=86 犬=True 猫=True
+      (pause 4s - throttle)
+
+---- p06 S3-PDF 只第 1 页（与 2-3 对比） ----
+[p06-S3-PDF 只第 1 页（与 2-3 对比）#04] doc_parse   0.1s ok=True err=-  chars=1053
+      summary: 200 OK · 1.0KB markdown · parse
+   ok=True chars=1053 与前片不同=True
+      (pause 4s - throttle)
+
+---- p06 S4-网页对照读 ----
+[p06-S4-网页对照读#05] web_read   0.0s ok=True err=-  chars=12
+      summary: 200 OK · 12B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   ok=True chars=12 summary=200 OK · 12B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 3
+P06 DONE

@@ -1,0 +1,41 @@
+[p02 陆知微·专利审查员] session 95b9ce01d4384979870e363db9424d53 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
+[p02-misc#01] cred_defaults   0.0s ok=None err=-  chars=
+
+---- p02 S1-冷读（应无缓存） ----
+[p02-S1-冷读（应无缓存）#02] web_read   0.0s ok=True err=-  chars=103
+      summary: 200 OK · 103B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000
+   cached=None fetched_at=2026-10-26T03:32:27Z
+      (pause 3s - throttle)
+
+---- p02 S2-复读（应命中） ----
+[p02-S2-复读（应命中）#03] web_read   0.0s ok=True err=-  chars=103
+      summary: 200 OK · 103B markdown · cache · cached copy, fetched 0.1 min ago · replayed from the cache: the fet
+   cached=True same_ts=True
+      (pause 3s - throttle)
+
+---- p02 S3-check 第一发（基线） ----
+[p02-S3-check 第一发（基线）#04] web_read   0.0s ok=None err=-  chars=
+      summary: checked 1 URL(s): 0 changed, 0 unchanged, 1 baseline recorded, 0 error
+   checked 1 URL(s): 0 changed, 0 unchanged, 1 baseline recorded, 0 error
+   - {'url': 'http://127.0.0.1:8399/changing?cb=p02mix', 'status': 200, 'note': "no comparable baseline for this URL (or it expired) - this call fetched and recorded one; ask again with extraction_type='check' to learn whethe
+      (pause 3s - throttle)
+
+---- p02 S4-check 第二发（应 changed） ----
+[p02-S4-check 第二发（应 changed）#05] web_read   0.0s ok=None err=-  chars=
+      summary: checked 1 URL(s): 1 changed, 0 unchanged, 0 baseline recorded, 0 error
+   checked 1 URL(s): 1 changed, 0 unchanged, 0 baseline recorded, 0 error
+   - {'url': 'http://127.0.0.1:8399/changing?cb=p02mix', 'changed': True, 'status': 200, 'note': "diff is a unified diff (baseline -> fresh); diff_window shows the fresh text around the first divergence - refetch with extract
+      (pause 4s - throttle)
+
+---- p02 S5-登录会话 vs 匿名读同页 ----
+[p02-S5-登录会话 vs 匿名读同页#06] web_request   0.0s ok=True err=-  chars=34
+      summary: 200 OK · 34B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   login status=200 summary=200 OK · 34B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+      (pause 2s - throttle)
+[p02-S5-登录会话 vs 匿名读同页#07] web_read   0.0s ok=True err=-  chars=23
+      summary: 200 OK · 23B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+[p02-S5-登录会话 vs 匿名读同页#08] web_read   0.0s ok=True err=-  chars=14
+      summary: 200 OK · 14B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
+   session登录态=False session_summary=200 OK · 23B markdown · http · one HTTP attempt is bound by the learned ceiling for this h
+   anon登录态=False anon_summary=200 OK · 14B markdown · http · one HTTP attempt is bound by the learned ceiling for this h
+P02 DONE

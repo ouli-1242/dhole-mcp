@@ -1,0 +1,32 @@
+{
+ "status": 200,
+ "content": [
+  "关于\n靶站的孤链接去处。"
+ ],
+ "url": "http://127.0.0.1:8399/about",
+ "fetcher_used": "http",
+ "duration_ms": 11,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 156,
+ "total_extracted_chars": 12,
+ "visible_text_chars": 15,
+ "escalation_path": "direct:http",
+ "attempt_cap_ms": 5000,
+ "summary": "200 OK · 12B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 30000ms - an explicit timeout= lifts it · the target is loopback/private, so dhole dropped its own synthesized header template - no fabricated google referer, no generated UA. What went out is what you named plus the client's own Chrome profile",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-26T03:34:21Z",
+ "metadata": {
+  "title": "关于",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.112, example.org -> 198.18.0.113); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "approx_tokens": 10,
+ "_wall_s": 0.03,
+ "_tool": "web_read",
+ "_tag": "p06-S4-网页对照读#05",
+ "_ts": "2026-10-26T03:34:21.616450+00:00"
+}

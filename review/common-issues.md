@@ -304,3 +304,27 @@
 5. discover：`max_pages`/`path_include` 谓词 + 种子行；手册 `max_depth` 漂移是否已被并发 agent 修掉。
 6. r13 家产三件：css 收窄不判 collapse / 缓存 selector 0 匹配注记 live+hit / feed max_items=-3 具名拒绝。
 7. 前十三轮家产合并回访。
+
+## round-15 新增/复发（并行与隔离轮 · 1 CONFIRM）
+
+| 区 | 现象 | 状态 | 来源 |
+|---|---|---|---|
+| 空框 property 读崩 | `read {"property":"value"}` 命中空字符串时 `empty_hint` 未绑定 → UnboundLocalError 直接上脸（未填的框、重导航后的空框都能触发） | **已修**（R15-001，fix-R15-F1：property 分支补「that is its current value」说明；与 attribute 分支同形） | p09 S2 |
+| live/replay `fetched_at` 差 1s | live 在 `_with_agent_hints` 末尾盖 now，缓存行存更早的 set_cached 时刻，跨秒即差 1s；字段描述写「For live fetches the two coincide」 | E（R15-002；方向安全：回放不更“新”；修复需贯穿三条路，风险>收益） | p05 S3/S4 · p10 S1/S5 |
+| recall 尾斜杠变体 | `/` 与 `/` 两行并排、is_stale 一真一假 | E2 复发（R02-007 只合并完全相同 URL；精确 URL 契约在册） | p10 S4 |
+| discover 谓词根行 + max_depth | 谓词地图保留起点行（筛空时 summary 如实报 7 个候选被筛掉）；summary 仍说 `depth <= 2`、手册仍教 `max_depth` | D/E 复发（R14-004/005；docs 并发编辑中，本轮不碰） | p07 S1/S2 |
+| sys_guide topic 误用 | `topic=web_read` 不存在 → 非 JSON 原文教学列全部 topic | A（r11 已裁决非错误门） | p01 S1 |
+| recall 查错词 | 「规格 供应 工作」在 /work 正文里不存在 → 0 行且 note 如实说「nothing on this disk matches」 | A/量具（r10 同族） | p04/p07 |
+| 跨轮共享缓存 | p04 首读 `cached=True`、fetched_at 早于本轮——cb 与 r14 脚本重名，磁盘缓存跨进程共享 | 量具注（教训：**每轮 cb 带轮号**） | p04 S1 |
+| **隔离面正向实锤** | 双 selector 交错互不串味（10/387/10B，缓存键隔离）· 双 session 填名互不覆盖 + pin 命中 · 登录 23B vs 匿名 14B · check 两相与 read 缓存分家 · crawl 不播种 read 缓存 | 无缺陷（R15-009 PASS） | p01/02/04/05/07/08/09 |
+
+## round-15 必测回归点（round-16 新画像真实回访）
+
+1. 空表单框 property 读：ok=False + “current value” + 无 `empty_hint`/无 Python 异常；非空 property 读仍回活值。
+2. 双 pin session 隔离：A/B 各持其值，回 A 仍读回 A 的值且 pin hit。
+3. 同 URL 双 selector：内容不同、缓存键隔离、同 selector 复读同值。
+4. live→replay `fetched_at`：回放不晚于 live；记录实际 delta（E17 观察）。
+5. 登录 session vs 匿名同页：正文不同且不共享缓存键。
+6. r14 三件：相对 since 绝对 ISO / offset 窗口 / check 两相；r13 三件（收窄/注记/负数）。
+7. recall URL 尾斜杠变体（E2）+ discover path_include 根行与 max_depth 文档（E 复发）。
+8. 前十四轮家产合并回访。

@@ -2434,6 +2434,9 @@ def build_page_action(actions) -> Optional[Callable]:
                             text = str(raw)
                             what = f"property {prop!r}"
                             read_via = f"property:{prop}"
+                            empty_hint = (
+                                f"{prop!r} is empty on this field - that is its "
+                                "current value, not a missing read")
                         elif attr:
                             if attr in _VALUEISH_ATTRS:
                                 tag = await loc.evaluate(_TAG_JS)

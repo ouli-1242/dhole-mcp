@@ -26,6 +26,7 @@
 | round-12 | review/round-12 | 120a5d7 | 10 | 68（主跑 61+补条 7）| **0 CONFIRM（第三个零修复轮，非连续）**——5 候选全 REJECT（截断陷阱×2 / clamp 字段看错 / auth_wall 分家设计 / test 立规家产）| 完成（链条协奏轮：P5 真重启 pid 3164，pytest 7771 绿）|
 | round-13 | review/round-13 | 22e9f88 | 10 | 95（主跑 57 + P1 补条 17 + P3 探针 21）| 2 fixed（R13-001 显式 selector 收窄免 collapse 误判 / R13-002 缓存回放带 selector 0 匹配注记）+ 6 REJECT（3 转 E：confirm 措辞/dialog 文案/tab 寿命；1 环境 bytes 差）+ 4 E 记录 | 完成（重装链轮：P5 真重启 pid 17028，pytest 7775 绿，ruff 16）|
 | round-14 | review/round-14 | f5f9340 | 10 | 78（主跑 63 + 补条 15）| **0 CONFIRM（第四个零修复轮，非连续）**——6 候选全 REJECT（R14-001 自推翻：offset 窗口形状命中在途契约；5 条转 E/D 文档面）；工作树含并发 agent 在途改动，只读不写 | 完成（回访与新鲜度轮：P5 真重启 pid 16212→23964，V1-V5 PASS，pytest 7844 绿，ruff 16）|
+| round-15 | review/round-15 | ea25700 | 10 | 68（画像主跑）| **1 fixed（R15-001 空表单框 property 读抛 UnboundLocalError）+ 3 E + 1 D/E + 2 A + 1 量具 + 1 D + 1 PASS**；隔离面（双 session/双 selector/登录 vs 匿名）正向全过 | 完成（并行与隔离轮：P5 真重启 pid 18560→27864，V1-V5 PASS，pytest 7845 绿，ruff 16）|
 
 ## 跨轮资产
 

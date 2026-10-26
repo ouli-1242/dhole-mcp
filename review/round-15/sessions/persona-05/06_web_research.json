@@ -1,0 +1,37 @@
+{
+ "query": "dhole MCP web_read",
+ "sources": [
+  {
+   "n": 1,
+   "url": "https://pypi.org/project/dhole-mcp/",
+   "title": "dhole-mcp · PyPI",
+   "chars": 578,
+   "fetcher": "stealthy",
+   "content_ok": true
+  }
+ ],
+ "evidence": [
+  "[1] https://pypi.org/project/dhole-mcp/\n[Focus: 'dhole MCP web_read'; showing 15 of 46 blocks by BM25 relevance. Pass focus='' for the full page.]\n\n训练数据有截止日期。搜索 API 要密钥、要额度。抓一页，可能只回来一串 403。\nDhole 把这条断掉的路接回来：一个 [MCP](https://modelcontextprotocol.io) 服务器，装进任何宿主，AI 自己挑工具，你不用记命令。\n\n## 安装\n\n```\npip install dhole-mcp  # 完整版：浏览器 / PDF / OCR / 解析器 / 重排，一次装齐\ndhole doctor           # 体检：起服务、起浏览器、真搜一次、真抓一次\n```\n\n```\n{\"mcpServers\": {\"dhole\": {\"command\": \"dhole\", \"args\": []}}}\n```\n\n## 也可以把安装交给 agent 自己做\n\n```\n在这台机器上安装 Dhole MCP 服务器，逐步执行，失败就停下来报告。\n1. 认清你所在的宿主，读出它的 MCP 配置位置与添加本地服务器的格式（读文档，不要猜）。\n2. pip install dhole-mcp（已经是完整版）。\n3"
+ ],
+ "failed": [],
+ "more_hits": [
+  {
+   "url": "https://github.com/KyleDerZweite/dhole",
+   "title": "GitHub - KyleDerZweite/dhole: Self-hosted control plane for..."
+  },
+  {
+   "url": "https://github.com/jinruoxinchen/mcp-web-client/blob/master/README.md",
+   "title": "mcp-web-client/README.md at master · jinruoxin..."
+  },
+  {
+   "url": "https://www.mcpworld.com/zh/detail/f6a9f763053f386a2b8e3f9bbd175e68",
+   "title": "MCP Web搜索工具 - 实时网页搜索与引用-MCP服务"
+  }
+ ],
+ "summary": "1 of 1 source(s) read into an evidence pack for 'dhole MCP web_read'",
+ "note": "each evidence block starts with [n] and its URL - cite that pair. Per-source text is focus-filtered to the query, not the whole page; web_read a source (urls= batches work) for everything it says. more_hits are the search rows not read",
+ "_wall_s": 13.29,
+ "_tool": "web_research",
+ "_tag": "p05-S5-research 第二问（窄源）#06",
+ "_ts": "2026-10-26T03:33:55.312855+00:00"
+}

@@ -1,0 +1,7 @@
+server: {"name": "Dhole", "version": "17.2", "websiteUrl": "https://github.com/ouli-1242/dhole-mcp"}
+tools(13): web_read, web_act, web_request, web_crawl, web_discover, web_search, web_research, web_recall, cred_defaults, sys_state, doc_parse, feed_read, sys_guide
+search: rows=2 rerank=None err=
+  - https://pypi.org/project/dhole-mcp/
+  - https://github.com/KyleDerZweite/dhole
+fixture: ok=False chars=None err=invalid_request: URL targets internal/private IP (127.0.0.1 in 127.0.0.0/8)
+SELFTEST DONE

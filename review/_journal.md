@@ -157,3 +157,25 @@
   待其落地后下一轮同步手册。
 - 下一步：round-15 P0（端口 9215；从本轮顶端切出；先读 common-issues 的 round-14 必测回归点；
   继续只读不写对方文件）。
+
+### round-15 收官（2026-10-26）
+
+- 主题「并行与隔离」：10 新职业（L1×3/L2×4/L3×3），**68 发 13/13 工具**；
+  主线是双 session / 双 selector / 登录 vs 匿名 / 缓存冷热 / crawl 与 read 代际。
+- **1 CONFIRM(B) + 9 REJECT**：
+  - R15-001：`read {"property":"value"}` 命中空表单框 → `empty_hint` 未绑定，
+    UnboundLocalError 直接上脸（p09 S2 真机实证）。已 test-first 修（1 新测试先红后绿，
+    property 分支补「current value」说明，与 attribute 分支同形）。
+  - R15-002 E：live 与缓存回放 `fetched_at` 跨秒差 1s（live 在响应末尾盖章、缓存存更早
+    时刻），字段描述写「coincide」；方向安全，不修只记。
+  - E2 复发（recall 尾斜杠变体）、R14-004/005 复发（discover 根行/max_depth 文档）、
+    A×2（sys_guide topic、recall 查错词）、量具（跨轮共享缓存，cb 重名）。
+- 隔离面正向实锤：双 selector 缓存键隔离、双 pin session 互不覆盖、登录 23B vs 匿名 14B、
+  check 两相与 read 缓存分家、crawl 不播种 read 缓存。R15-009 PASS。
+- P4：唯一修复 test-first（1 新测试，3 行修复）。
+- P5：真重启 **pid 18560→27864**；V1-V5 全 PASS（V1 空框读可读说明 / V2 双 pin 隔离 /
+  V3 回放不晚于 live / V4 since+窗口+check / V5 r13 三件）；pytest **7845 passed/23 skipped**
+  （7844+1 平账）；ruff 16。
+- 并发纪律：修复只落 actions.py 的 property 分支 3 行；该文件含对方 336 行在途改动，
+  P6 用单 hunk 暂存；未碰其 models/server/quality/docs；backlog.md 仍不暂存。
+- 下一步：round-16 P0（端口 9216；从本轮顶端切出；先读 common-issues 的 round-15 必测点）。

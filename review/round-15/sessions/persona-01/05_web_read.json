@@ -1,0 +1,32 @@
+{
+ "status": 200,
+ "content": [
+  "本地抓取工具配置指南"
+ ],
+ "url": "http://127.0.0.1:8399/article?cb=p01sel",
+ "cached": true,
+ "fetcher_used": "cache",
+ "duration_ms": 7,
+ "error": "",
+ "content_type": "text/html; charset=utf-8",
+ "total_size_bytes": 1265,
+ "total_extracted_chars": 10,
+ "visible_text_chars": 400,
+ "substance_basis": "css_selector narrowed this answer to the requested fragment - the whole-page prose and collapse rulers do not apply",
+ "summary": "200 OK · 10B markdown · cache · cached copy, fetched 0.1 min ago · replayed from the cache: the fetch that stored this answer dropped dhole's own synthesized header template because the target is loopback/private - no fabricated google referer, no generated UA. This replay sent no request, so it says nothing about what would go out now - read that part off the fetch above.",
+ "content_ok": true,
+ "next_action": "",
+ "fetched_at": "2026-10-26T03:31:57Z",
+ "metadata": {
+  "title": "本地抓取工具配置指南",
+  "lang": "zh",
+  "robots": "bypassed (DHOLE_IGNORE_ROBOTS=1, process-wide)",
+  "ssrf_recheck": "ssrf: fake-ip tunnel on this host (example.com -> 198.18.0.112, example.org -> 198.18.0.113); only 198.18.0.0/15 + fc00::/7 are tolerated - loopback, RFC1918, link-local and cloud metadata are still refused."
+ },
+ "identity_applied": "allow_private",
+ "approx_tokens": 10,
+ "_wall_s": 0.01,
+ "_tool": "web_read",
+ "_tag": "p01-S2-同页两种 selector 交错读#05",
+ "_ts": "2026-10-26T03:32:03.193298+00:00"
+}

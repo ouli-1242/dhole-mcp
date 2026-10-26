@@ -1,0 +1,70 @@
+{
+ "query": "长文 脚本 素材",
+ "engine": "neural",
+ "results": [
+  {
+   "url": "http://127.0.0.1:8399/",
+   "title": "靶站索引",
+   "snippet": "靶站索引 dhole 模拟测试靶站 登录 账户 结算 二维码 验证码 长文",
+   "fetched_at": "2026-10-26T03:13:45Z",
+   "is_stale": false,
+   "age_days": 0.0,
+   "extraction_type": "html",
+   "relevance": 0.5525,
+   "variants": 2
+  },
+  {
+   "url": "http://127.0.0.1:8399",
+   "title": "靶站索引",
+   "snippet": "靶站索引 dhole 模拟测试靶站 登录 账户 结算 二维码 验证码 长文",
+   "fetched_at": "2026-10-25T23:22:30Z",
+   "is_stale": true,
+   "age_days": 0.2,
+   "extraction_type": "html",
+   "relevance": 0.5525
+  },
+  {
+   "url": "http://127.0.0.1:8399/article?cb=p01sel",
+   "title": "本地抓取工具配置指南",
+   "snippet": "…存条目带有过期时间，过期后再次抓取会重新发起请求并覆盖旧条目。 抓取器分成两层：一层是快速 HTTP 层，一层是能执行脚本的反检测浏览器层。 自动升级只在 HTTP 层判定失败时发生，判定依据是状态码、正文长度与反爬特征串。 反爬特征串包括常见的人机校验页面标题，命中后不会重试而是直接升级。 缓存键包含目标地址、会话标识与凭据指纹，因此登录态内容不会与公开内容混放。 关于缓存保留时长：缓存默认保留 3600 秒，改 cache_ttl 可覆盖。",
+   "fetched_at": "2026-10-26T03:32:00Z",
+   "is_stale": false,
+   "age_days": 0.0,
+   "extraction_type": "markdown",
+   "relevance": 0.176
+  },
+  {
+   "url": "http://127.0.0.1:8399/article?cb=v14note-fb66f4",
+   "title": "本地抓取工具配置指南",
+   "snippet": "…存条目带有过期时间，过期后再次抓取会重新发起请求并覆盖旧条目。 抓取器分成两层：一层是快速 HTTP 层，一层是能执行脚本的反检测浏览器层。 自动升级只在 HTTP 层判定失败时发生，判定依据是状态码、正文长度与反爬特征串。 反爬特征串包括常见的人机校验页面标题，命中后不会重试而是直接升级。 缓存键包含目标地址、会话标识与凭据指纹，因此登录态内容不会与公开内容混放。 关于缓存保留时长：缓存默认保留 3600 秒，改 cache_ttl 可覆盖。",
+   "fetched_at": "2026-10-26T03:24:38Z",
+   "is_stale": false,
+   "age_days": 0.0,
+   "extraction_type": "markdown",
+   "relevance": 0.176
+  },
+  {
+   "url": "http://127.0.0.1:8399/article?cb=v14cache-40e201",
+   "title": "本地抓取工具配置指南",
+   "snippet": "…存条目带有过期时间，过期后再次抓取会重新发起请求并覆盖旧条目。 抓取器分成两层：一层是快速 HTTP 层，一层是能执行脚本的反检测浏览器层。 自动升级只在 HTTP 层判定失败时发生，判定依据是状态码、正文长度与反爬特征串。 反爬特征串包括常见的人机校验页面标题，命中后不会重试而是直接升级。 缓存键包含目标地址、会话标识与凭据指纹，因此登录态内容不会与公开内容混放。 关于缓存保留时长：缓存默认保留 3600 秒，改 cache_ttl 可覆盖。",
+   "fetched_at": "2026-10-26T03:24:37Z",
+   "is_stale": false,
+   "age_days": 0.0,
+   "extraction_type": "markdown",
+   "relevance": 0.176
+  }
+ ],
+ "terms_found": [
+  "长文",
+  "脚本",
+  "素材"
+ ],
+ "terms_absent": [],
+ "scanned_rows": 228,
+ "candidates_scored": 58,
+ "note": "pointers, not answers - web_read the URL (fresh or cached) for the page itself; stale rows are ones whose cache TTL has passed",
+ "_wall_s": 5.54,
+ "_tool": "web_recall",
+ "_tag": "p10-S4-recall 两个上下文的素材#05",
+ "_ts": "2026-10-26T03:35:52.228206+00:00"
+}
