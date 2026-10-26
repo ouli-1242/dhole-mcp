@@ -1,8 +1,0 @@
-== V1 R09-002: recall limit=21 → clamped 具名 ==
-      summary: 200 OK · 387B markdown · http · the target is loopback/private, so dhole dropped its own synthesized
-      summary: 200 OK · 12B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
-   clamped: ['limit -> 20 (1-20)']
-   判定: PASS
-== V2 R09-003 对照: recall 未越界安静 ==
-   clamped 键: False | 判定: PASS
-VERIFY DONE

@@ -1,3 +1,0 @@
-{"ts": "2026-10-25T14:13:31.262166+00:00", "token": "4e51e4d77a10", "answer": "{CODE}", "expected": "TTUUR", "ok": false, "remote": "127.0.0.1"}
-{"ts": "2026-10-25T15:03:45.937327+00:00", "token": "12bc38c14502", "answer": "VADKC", "expected": "VADKC", "ok": true, "remote": "127.0.0.1"}
-{"ts": "2026-10-25T15:44:24.774661+00:00", "token": "530cd1f896f3", "answer": "GR35B", "expected": "GR35B", "ok": true, "remote": "127.0.0.1"}

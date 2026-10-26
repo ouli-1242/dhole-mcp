@@ -1,2 +1,0 @@
-    ✗ error      http://127.0.0.1:8399/changing  HTTP 0  ✗ invalid_request: URL targets internal/private IP (127.0.0.1 in 127.0.0.0/8) · watch runs in its own process, so the MCP-side cred_defaults waiver in memory mode never reaches it: set DHOLE_PERSIST_CREDENTIALS=1 and store allow_private once (cred_defaults), or watch a publicly reachable URL
-  1 checked · 0 changed · 0 unchanged · 0 baseline · 1 error  (exit 2)

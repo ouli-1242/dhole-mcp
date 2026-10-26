@@ -1,9 +1,0 @@
-[PASS] V1 R13-001 收窄不误判
-      content_ok=True chars=10 err=
-[PASS] V2 R13-002 回放补回 selector 0 匹配注记
-      live=True cached=True replay=True
-[PASS] V3 对照：点名收窄不报 / 无 selector 旧页由恢复尺接住
-      selector-err=(none) | no-selector content_ok=True recovered=True err=(none)
-[PASS] V4 家产：pin 命中 + feed 负数具名拒
-      pin mint='r13' back='r13' hit=True | feed=invalid_request: max_items must be ≥ 0 (0 = all), got -3
-VERIFY R13 DONE

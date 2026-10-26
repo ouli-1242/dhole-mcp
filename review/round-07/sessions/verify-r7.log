@@ -1,7 +1,0 @@
-[p90 verify-r7] session e8716ca4d4f94d19a0f29b7494774312 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
-[p90-misc#01] cred_defaults   0.0s ok=None err=-  chars=
-== W1 R07-001: 寄存器拒绝带 pin 出路 ==
-[p90-misc#02] web_act   0.0s ok=False err=invalid_request: action 0 'fill.text' references {=code} but no earlier action stored that invalid_request chars=
-      summary: invalid request · action 0 'fill.text' references {=code} but no earlier action stored that name
-  error: invalid_request: action 0 'fill.text' references {=code} but no earlier action stored that name (no {"read": ...} action runs before this one) - registers live for this one call: mint the name in THIS chain with an earlier read step's as=code before the fill; a pinned page (pin=true) holds the page open, so a re-read in the next
-VERIFY DONE

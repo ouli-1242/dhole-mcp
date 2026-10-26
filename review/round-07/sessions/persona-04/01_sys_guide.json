@@ -1,7 +1,0 @@
-{
- "_raw": "topic='config' from references/configuration.md — before touching configuration: every knob by scenario, and which ones need a restart\n(24376 chars, 4 sections)\n\n# Configuration Guide\n\n大众化一刀切：`pip install dhole-mcp` 接上宿主就能用，**能力全部默认在线**。所以可配置的东西只剩很少的一批 `DHOLE_*` 变量 —— 每一个都是\"这台机器的事实\"（代理、内网、密钥、状态目录），而不是\"要不要开某个能力\"。这里不抄总数（抄一次就会烂一次）：`dhole --doctor` 报当前注册表里有几颗、你设了几颗，`dhole config list` 连着值的来源一起列。所有变量可选；零配置即默认全量行为。\n\n## The rules of changing things\n\n- **Single-call behavior** → call parameters (`ignore_robots` / `cache_ttl` / `focus_engine` / `anti_detect` …). No config edit, no restart. Prefer this ",
- "_wall_s": 0.01,
- "_tool": "sys_guide",
- "_tag": "p04-S1-configuration 篇#01",
- "_ts": "2026-10-25T19:50:55.583294+00:00"
-}

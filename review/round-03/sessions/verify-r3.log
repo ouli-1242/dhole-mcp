@@ -1,9 +1,0 @@
-[p20 verify-r3] session 0924b17f8cd84890a42213ea8f595d88 server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
-[p20-misc#01] cred_defaults   0.0s ok=None err=-  chars=
-[p20-misc#02] web_crawl   1.3s ok=None err=-  chars=
-      summary: crawled 2 page(s) at http://127.0.0.1:8399 (depth <= 2); 2 content_ok; article:1, fallback:1; stoppe
-rows: [('0.1:8399/collections', 'article'), ('27.0.0.1:8399/work/1', 'fallback')]
-[p20-misc#03] web_read   0.0s ok=True err=-  chars=387
-      summary: 200 OK · 387B markdown · http · the target is loopback/private, so dhole dropped its own synthesized
-read content_ok: True
-VERIFY DONE

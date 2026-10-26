@@ -1,7 +1,0 @@
-[PASS] V1 R11-001 维持: max_items=-3 具名拒 / 0=all
-      err=invalid_request: max_items must be ≥ 0 (0 = all), got -3 | 0=all items=8
-[PASS] V2 pin 命中: 铸值跨调用回读一致
-      mint='verifyr12' back='verifyr12' pin-hit 句=True
-[PASS] V3 第一拒形状: GET 拒带码+出路 / css 0 匹配 summary 有账
-      err=invalid_request: method=GET is a read, not a request - web_request takes POST /  | NOT-applied 句=True
-VERIFY DONE

@@ -1,7 +1,0 @@
-{
- "_raw": "topic='start' from references/start.md — the one-page route map: three paths, hard constraints, where to read next\n(3781 chars, 7 sections)\n\n# Start here\n\ndhole is 13 tools. Pick the route by what you already hold - what this page\nleaves open is answered at the bottom.\n\n## Route 1 — you have a URL\n\n`web_read(url=...)` returns the page as markdown (HTML, PDF, JS-rendered pages\nincluded). Do not search for a URL you already hold.\n\n- several known URLs: `urls=[...]` in one call.\n- one block only: `focus=\"keywords\"`, or `css_selector=` on HTML.\n- long page: continue with `offset=next_offset` and r",
- "_wall_s": 0.01,
- "_tool": "sys_guide",
- "_tag": "p02-S3-求助#03",
- "_ts": "2026-10-25T18:55:22.473084+00:00"
-}

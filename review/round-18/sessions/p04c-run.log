@@ -1,8 +1,0 @@
-[p04 老纪·运维工程师] session 881acbb5d48e40e8a6c7ef61e40af68e server={'name': 'Dhole', 'version': '17.2', 'websiteUrl': 'https://github.com/ouli-1242/dhole-mcp'}
-
----- p04 补条-确认后写 ----
-[p04-补条-确认后写#01] web_request   0.0s ok=True err=-  chars=31
-      summary: 200 OK · 31B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000m
-   ok: True status: None err: 
-   summary: 200 OK · 31B markdown · http · one HTTP attempt is bound by the learned ceiling for this host: 5000ms, not the default 30000ms - an explicit timeout= lifts it · the target is loopb
-   content: ['订单已提交\n\n订单已提交\n=====\n\n服务端已写入订单日志。']

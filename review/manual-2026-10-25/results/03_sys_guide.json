@@ -1,6 +1,0 @@
-{
- "_raw": "topic='start' from references/start.md — the one-page route map: three paths, hard constraints, where to read next\n(3730 chars, 7 sections)\n\n# Start here\n\ndhole is eleven tools. Pick the route by what you already hold; read one deeper\nvolume only when this page leaves a question open.\n\n## Route 1 — you have a URL\n\n`web_read(url=...)` returns the page as markdown (HTML, PDF, JS-rendered pages\ninclu",
- "_wall_s": 0.0,
- "_seq": 3,
- "_tool": "sys_guide"
-}
