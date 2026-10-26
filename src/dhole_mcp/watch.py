@@ -1,18 +1,15 @@
-"""A persistent watchlist for ``web_read(extraction_type='check')``.
+"""给 ``web_read(extraction_type='check')`` 用的持久 watchlist。
 
-The MCP tool answers "did this page change" one URL at a time. An agent can call
-it repeatedly, but a person who wants a nightly/every-30-minutes signal needs a
-list that survives restarts and a command that exits 0/1/2 for cron. This module
-is that store and runner; the fetching itself is still the single check path in
-``server._check_read`` (called through ``web_read``), so a watch inherits the
-same baseline, ETag handling, diff window and robots/SSRF gates.
+MCP 工具一次只回答一颗 URL「这页变了吗」。agent 可以反复调用，但想要每晚 / 每 30
+分钟一次信号的人，需要一份能跨重启的清单，以及一个 cron 能按 0/1/2 分岔的命令。
+本模块就是这份存储与执行器；抓取本身仍走 ``server._check_read`` 那一条检查路
+（由 ``web_read`` 调进来），所以 watch 继承同一套基线、ETag 处理、diff 窗口与
+robots/SSRF 闸。
 
-State is one owner-only JSON file under ``~/.dhole`` (``DHOLE_HOME`` moves it).
-It holds URLs and verdicts, never page bodies or credentials. The first run of a
-URL records its baseline (``verdict=baseline``) and is not a change; the second
-and later runs can answer changed/unchanged. Degrading honestly matters more
-than producing an alert: a 404 or a blocked fetch is an error row, never
-"unchanged".
+状态是 ``~/.dhole`` 下一个仅属主的 JSON 文件（``DHOLE_HOME`` 可移动它）。它只存
+URL 与判词，绝不存页面正文或凭据。第一次跑一颗 URL 会记录基线
+（``verdict=baseline``），不算变化；第二次及以后才回答 changed/unchanged。
+诚实降级比制造告警重要：404 或被拦的抓取是一行 error，绝不是 "unchanged"。
 """
 
 from __future__ import annotations
@@ -30,14 +27,23 @@ from dhole_mcp import paths
 
 
 class WatchStateError(Exception):
-    """The watchlist file exists but cannot be read as a watchlist."""
+    """watchlist 文件存在，但读不成一份 watchlist。"""
 
 
 class WatchBusy(Exception):
-    """Another ``watch run`` holds the run lock."""
+    """另一个 ``watch run`` 正持着运行锁。"""
 
 
 def state_path(path: Optional[Path | str] = None) -> Path:
+    """Where the watchlist file lives.
+
+    Args:
+        path: An explicit override (tests, alternate state directories). ``None`` means
+            ``paths.file("watchlist.json")`` and moves with ``DHOLE_HOME``.
+
+    Returns:
+        The path to use; the file need not exist yet.
+    """
     return Path(path) if path is not None else paths.file("watchlist.json")
 
 
@@ -50,6 +56,21 @@ def _now() -> str:
 
 
 def load_state(path: Optional[Path | str] = None) -> dict:
+    """Read and validate the watchlist.
+
+    Args:
+        path: An override passed through to :func:`state_path`.
+
+    Returns:
+        ``{"version": int, "watches": list[dict]}``. A missing file means an empty list,
+        not an error.
+
+    Raises:
+        WatchStateError: The file exists but its JSON cannot be read, is not an object with
+            a ``watches`` list, or has a row without a non-empty URL. The error names the
+            file so the caller can fix or delete it; nothing is guessed, because a wrong
+            guess silently drops watches.
+    """
     p = state_path(path)
     if not p.exists():
         return _empty()
@@ -97,10 +118,9 @@ def _clean_url(url: str) -> str:
     from dhole_mcp.security import SecurityError, validate_url
 
     try:
-        # Syntax/scheme checks only: whether this machine may FETCH a private
-        # target is decided per call by the same SSRF gate every read uses, and
-        # a blocked target must show up as an error row in `run`, not as a
-        # different add-time rule that disagrees with it.
+        # 只做语法/scheme 检查：这台机器能不能**抓**私网目标，由每次调用时同一道
+        # SSRF 闸决定；被拦的目标必须在 `run` 里落成 error 行，而不是在 add 时另立
+        # 一条与它不一致的规则。
         url = validate_url(url, allow_internal=True)
     except SecurityError as exc:
         raise ValueError(f"not a URL dhole can watch: {exc}") from exc
@@ -110,11 +130,29 @@ def _clean_url(url: str) -> str:
             "not a URL dhole can watch: it carries user:password@ credentials, "
             "and the watchlist is a plaintext local file. Store credentials with "
             "cred_defaults and watch the bare URL")
-    # A fragment never reaches the origin and would only fork the cache baseline.
+    # fragment 到不了源站，只会把缓存基线分叉。
     return url.split("#", 1)[0]
 
 
 def add(url: str, label: str = "", path: Optional[Path | str] = None) -> dict:
+    """Add a URL to the watchlist; an existing entry only gets its label updated.
+
+    Args:
+        url: An absolute http(s) URL. The fragment is stripped (it never reaches the origin
+            and would fork the baseline); embedded ``user:password@`` credentials are
+            refused because this file is plaintext.
+        label: A human label. An empty string keeps the old label for a URL already in the
+            list, and stores an empty label for a new one.
+        path: An override passed through to :func:`state_path`.
+
+    Returns:
+        ``{"created": bool, "watch": row}`` — ``created`` is False when the URL was already
+        listed.
+
+    Raises:
+        ValueError: The URL cannot be watched, or carries embedded credentials.
+        WatchStateError: The existing state file could not be read.
+    """
     url = _clean_url(url)
     state = load_state(path)
     row = next((w for w in state["watches"] if w["url"] == url), None)
@@ -140,6 +178,15 @@ def add(url: str, label: str = "", path: Optional[Path | str] = None) -> dict:
 
 
 def remove(url: str, path: Optional[Path | str] = None) -> bool:
+    """Forget a watched URL.
+
+    Args:
+        url: The exact stored URL (the fragment was already stripped by :func:`add`).
+        path: An override passed through to :func:`state_path`.
+
+    Returns:
+        True when a row was deleted, False when the URL was not on the list.
+    """
     state = load_state(path)
     before = len(state["watches"])
     state["watches"] = [w for w in state["watches"] if w["url"] != url]
@@ -173,12 +220,11 @@ async def run(checker: Callable[[str], Awaitable[dict]], *,
               path: Optional[Path | str] = None,
               only: Optional[Iterable[str]] = None,
               on_row: Optional[Callable[[dict], None]] = None) -> dict:
-    """Check every watched URL once, persist each verdict, return a receipt.
+    """把每颗被 watch 的 URL 检查一次，逐行落盘，返回回执。
 
-    ``checker(url)`` must return the single-URL check dict (``changed``,
-    ``status``, optional ``error``/``note``). Rows are saved after each URL, so
-    an interrupted run keeps the verdicts it already earned. A URL removed while
-    the run is in flight is not written back.
+    ``checker(url)`` 必须交回单 URL 检查的 dict（``changed``、``status``，可选的
+    ``error``/``note``）。每颗 URL 之后都会保存，所以中断的扫描保留已经拿到的判词。
+    扫描途中被 remove 掉的 URL 不会被写回来。
     """
     state = load_state(path)
     watched = {w["url"]: w for w in state["watches"]}
@@ -188,7 +234,7 @@ async def run(checker: Callable[[str], Awaitable[dict]], *,
     for url in wanted:
         try:
             raw = await checker(url)
-        except Exception as exc:  # one dead URL does not end the sweep
+        except Exception as exc:  # 一颗 URL 死掉不该终止整轮扫描
             raw = {"changed": None, "status": 0,
                    "error": f"{exc.__class__.__name__}: {exc}"}
         verdict = _verdict(raw)
@@ -205,8 +251,8 @@ async def run(checker: Callable[[str], Awaitable[dict]], *,
             "diff_window": raw.get("diff_window", ""),
         }
         rows.append(row)
-        # Reload before writing: `watch add`/`remove` in another process must
-        # survive a long sweep. A removed URL is not resurrected.
+        # 写回之前重新读一次：另一个进程里的 `watch add`/`remove` 必须能熬过
+        # 一轮长扫描。已被 remove 的 URL 不会被复活。
         fresh = load_state(path)
         target = next((w for w in fresh["watches"] if w["url"] == url), None)
         if target is not None:
@@ -280,6 +326,24 @@ async def run_locked(checker: Callable[[str], Awaitable[dict]], *,
                      path: Optional[Path | str] = None,
                      only: Optional[Iterable[str]] = None,
                      on_row: Optional[Callable[[dict], None]] = None) -> dict:
+    """Run one scan round under the cross-process lock.
+
+    Same contract as :func:`run`, except two concurrent ``watch run`` processes may not
+    interleave their read-modify-write of the state file.
+
+    Args:
+        checker: The single-URL check function ``checker(url) -> dict``.
+        path: An override passed through to :func:`state_path`.
+        only: Scan only these URLs; unknown ones land in ``unknown`` instead of raising.
+        on_row: Called once per completed row, before the next URL starts.
+
+    Returns:
+        The same receipt as :func:`run`.
+
+    Raises:
+        WatchBusy: A live run holds the lock. A lock file older than six hours is treated
+            as a crash leftover and reclaimed.
+    """
     with _Lock(path):
         return await run(checker, path=path, only=only, on_row=on_row)
 

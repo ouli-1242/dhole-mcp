@@ -1,12 +1,11 @@
-"""Page metadata extraction for Dhole.
+"""Dhole 的页面元数据抽取。
 
-Enriches every HTML fetch response with structured metadata an agent can use to
-judge relevance and cite sources: title, description, site name, type, image,
-canonical URL, language, published time, and author. Pulled from OpenGraph meta
-tags, JSON-LD blocks, the canonical link, and the <title> tag.
+给每个 HTML 抓取响应补充结构化元数据，让 agent 能判断相关性并引用来源：
+标题、描述、站点名、类型、图片、canonical URL、语言、发布时间与作者。来源是
+OpenGraph meta 标签、JSON-LD 块、canonical 链接与 <title> 标签。
 
-Kept dependency-free (regex + json) so it runs cheaply on every fetch. Only
-populated for HTML pages; JSON / PDF / image responses get an empty dict.
+刻意零依赖（regex + json），所以每次抓取都能廉价运行。只对 HTML 页面填值；
+JSON / PDF / 图片响应拿到一个空 dict。
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ from urllib.parse import urljoin, urlparse
 
 logger = logging.getLogger("dhole-mcp.metadata")
 
-# Match <meta property/name="KEY" content="VAL"> in either attribute order.
+# 两种属性顺序都要匹配：<meta property/name="KEY" content="VAL">。
 _META_RE = re.compile(
     r'<meta\b[^>]*?(?:property|name)=["\']([^"\']+)["\'][^>]*?content=["\']([^"\']*)["\']',
     re.IGNORECASE,
@@ -40,18 +39,16 @@ _LD_RE = re.compile(
     r'<script\b[^>]*?type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
     re.IGNORECASE | re.DOTALL,
 )
-# Lazy-loaded pages often put a placeholder (or a tiny data: URI) in src and
-# the real image in data-src. Match whole <img> tags so both attributes can be
-# read from the same tag; src wins, data-src is the fallback.
+# 懒加载页面常把占位图（或极小的 data: URI）放在 src，真图放在 data-src。
+# 匹配整个 <img> 标签，好让两个属性从同一个标签里读出；src 优先，data-src 兜底。
 _IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
-# (?<!-) keeps \bsrc= from matching inside "data-src=" ('-' is a non-word char,
-# so a bare \b WOULD match there).
+# (?<!-) 防止 \bsrc= 匹配到 "data-src=" 里面（'-' 是非单词字符，裸 \b 会命中）。
 _IMG_SRC_RE = re.compile(r'(?<!-)\bsrc=["\']([^"\']+)["\']', re.IGNORECASE)
 _IMG_DATASRC_RE = re.compile(r'\bdata-src=["\']([^"\']+)["\']', re.IGNORECASE)
 _ASSET_SKIP = ("data:image",)
 
-# Map meta keys to our flat field names. First match wins per field (OpenGraph
-# takes priority over Twitter/Dublin Core, etc.).
+# meta 键到本模块扁平字段名的映射。每个字段先到先得（OpenGraph 优先于
+# Twitter/Dublin Core 等）。
 _KEY_MAP = {
     "og:title": "title", "twitter:title": "title",
     "og:description": "description", "description": "description", "twitter:description": "description",
@@ -66,17 +63,17 @@ _KEY_MAP = {
 
 
 def extract_metadata(html: str, url: str) -> dict[str, Any]:
-    """Extract a flat metadata dict from an HTML string. Empty if no HTML."""
+    """从 HTML 字符串抽一份扁平元数据 dict；没有 HTML 就是空 dict。"""
     meta: dict[str, Any] = {}
     if not html:
         return meta
 
-    # OpenGraph / meta tags (check both attribute orders).
+    # OpenGraph / meta 标签（两种属性顺序都查）。
     for rx in (_META_RE, _META_RE_REV):
         for m in rx.finditer(html):
             if rx is _META_RE:
                 key, val = m.group(1), m.group(2)
-            else:  # reversed: group(1)=content, group(2)=key
+            else:  # 反向：group(1)=content, group(2)=key
                 key, val = m.group(2), m.group(1)
             key = key.lower().strip()
             val = val.strip()
@@ -88,7 +85,7 @@ def extract_metadata(html: str, url: str) -> dict[str, Any]:
                 # 出引用就是两套口径。
                 meta[field] = _html_unescape(val)[:500]
 
-    # <title> fallback.
+    # <title> 兜底。
     if "title" not in meta:
         t = _TITLE_RE.search(html)
         if t:
@@ -96,7 +93,7 @@ def extract_metadata(html: str, url: str) -> dict[str, Any]:
             if title:
                 meta["title"] = title[:500]
 
-    # Canonical URL.
+    # Canonical URL。
     c = _CANONICAL_RE.search(html)
     if c:
         try:
@@ -104,13 +101,13 @@ def extract_metadata(html: str, url: str) -> dict[str, Any]:
         except Exception:
             pass
 
-    # html lang.
+    # html lang。
     if "lang" not in meta:
         lang_match = _LANG_RE.search(html)
         if lang_match:
             meta["lang"] = lang_match.group(1).strip()
 
-    # JSON-LD: datePublished / author / description / headline.
+    # JSON-LD：datePublished / author / description / headline。
     for m in _LD_RE.finditer(html):
         raw = m.group(1).strip()
         if not raw:
@@ -172,18 +169,16 @@ def _src_candidates(raw: str) -> list[str]:
 
 
 def extract_image_urls(html: str, url: str, max_n: int = 20) -> list[str]:
-    """Extract absolute image URLs from <img> tags. Deduped, order-preserving,
-    capped at max_n. Skips data: URIs. Prefers src; falls back to data-src for
-    lazy-loaded pages (placeholder in src, real image in data-src). Used by
-    web_read's opt-in include_media flag so a multimodal agent can pull the
-    page's images."""
+    """从 <img> 标签抽绝对图片 URL。去重、保序，数量上限 max_n，跳过 data: URI。
+    src 优先；懒加载页面（src 是占位图、真图在 data-src）回退到 data-src。
+    web_read 的可选 include_media 用它给多模态 agent 取页面图片。"""
     if not html:
         return []
     out: list[str] = []
     seen: set[str] = set()
 
     def _collect(src: str) -> bool:
-        """True once max_n is reached, so the caller stops scanning."""
+        """到达 max_n 时返回 True，让调用方停止扫描。"""
         for cand in _src_candidates(src):
             if cand.lower().startswith(_ASSET_SKIP):
                 continue

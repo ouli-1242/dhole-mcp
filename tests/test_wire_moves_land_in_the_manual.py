@@ -448,7 +448,13 @@ def test_connect_stays_inside_the_packed_budget():
 # 于是"建图不花钱"这个前提进了 agent 的取舍。新句改成记账：0 只在 `sitemap=true`
 # 与 `resume_token=` 续页这两条不联网的路径上成立，逐跳走时一步一页。完整口径
 # （含 max_pages 只约束逐跳那一半）住 references/tools.md，wire 只留这一句。
-CONNECT_CEILING = 36_763
+CONNECT_CEILING = 36_758
+# 2026-10-26 evaluate / 坐标点击：web_act.actions 点名 evaluate 与 evaluate=expr
+# （+4；tab 的 new/N/close 提示让位给必填键，形状仍住 tools.md）。E1/E8 的
+# −9（36,763 → 36,754）后回到 36,758，仍在 E1/E8 之前的 36,763 以内。
+# 2026-10-26 E1/E8：下移 −9（36,763 → 36,754）。E1 在 `web_read.urls` 上点名
+# 回执行数组 `results`（+10），E8 在 `feed_read.since` 上补相对窗口并把长例收短
+# （−19）。两条都是调用方写脚本/轮询前就能读到的路由信息；净额向下，棘轮跟着落。
 # 2026-10-25 模拟修复轮：上抬 +244（36,412 → 36,656），全在 web_request 身上
 # （2,954 → 3,198）——新增 `session_id`：登录 POST 的 Set-Cookie 落进调用方
 # 点名的 jar（jar 存取在 fetch 层每跳每方法都跑，缺的只是递参这一步；真机

@@ -1,17 +1,16 @@
-"""Dhole — Web research for AI agents.
+"""Dhole —— 给 AI agent 的网页研究工具。
 
-$0 forever. Fetch any page with anti-bot bypass plus web search.
+永远 $0。绕过反爬抓任意页面，外加网页搜索。
 """
 
 __version__ = "17.2"
 
-# Lazy imports — server pulls in heavy deps (patchright, playwright, etc.)
-# Other modules (cache, security) are lightweight and can be imported directly
-# for testing without the full dependency chain.
+# 惰性 import——server 会拖进重依赖（patchright、playwright 等）；其它模块
+# （cache、security）很轻，可以在没有完整依赖链的情况下直接 import 来测试。
 
 
 def __getattr__(name: str):
-    """Lazy attribute access for server-level exports."""
+    """server 级导出的惰性属性访问。"""
     _lazy_exports = {
         "MasterFetchServer",
         "ResponseModel",

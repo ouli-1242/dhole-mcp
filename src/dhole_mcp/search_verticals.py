@@ -1,22 +1,20 @@
-"""Keyless vertical search sources for ``web_search(sources=...)``.
+"""``web_search(sources=...)`` 的无密钥垂直搜索源。
 
-One adapter per public API, no key and no account:
+每个公开 API 一个适配器，不要 key、不要账号：
 
 * ``academic`` -> arXiv Atom API
-* ``news``     -> GDELT DOC 2.0 article list (real publisher URLs + dates)
-* ``qa``       -> Stack Exchange API (Stack Overflow)
-* ``code``     -> GitHub repository search (sorted by stars)
+* ``news``     -> GDELT DOC 2.0 文章列表（真实发布者 URL + 日期）
+* ``qa``       -> Stack Exchange API（Stack Overflow）
+* ``code``     -> GitHub 仓库搜索（按 star 排序）
 * ``community``-> Hacker News Algolia
 
-The rows carry the same ``published`` / ``published_precision`` /
-``published_basis`` fields as the web path, so the existing reranker, date
-ledger and ``fetch_content`` fan-out work unchanged.  A vertical source is NOT
-a web index family: its rows never contribute to ``engines_consensus`` (the
-caller sees an empty consensus string plus the backend name in ``source``).
+这些行带着与网页路相同的 ``published`` / ``published_precision`` /
+``published_basis`` 字段，所以现有重排器、日期账与 ``fetch_content`` 扇出原样
+可用。垂直源**不是**一个网页索引家族：它的行永不参与 ``engines_consensus``
+（调用方看到空 consensus 串，并在 ``source`` 里看到后端名）。
 
-Every network call is bounded by ``timeout``; failures are returned as a
-``VerticalReport`` row instead of raising, because one dead source must not
-erase the other sources' answers.
+每次网络调用都受 ``timeout`` 约束；失败交回一行 ``VerticalReport`` 而不是抛
+异常，因为一个死掉的源不能抹掉其它源的答案。
 """
 
 from __future__ import annotations
@@ -36,8 +34,8 @@ from lxml import etree
 VERTICAL_KINDS = ("news", "academic", "qa", "code", "community")
 SOURCE_KINDS = ("web",) + VERTICAL_KINDS
 
-VERTICAL_TIMEOUT = 8.0
-MAX_PER_SOURCE = 50
+VERTICAL_TIMEOUT = 8.0  # 单源预算：一个慢源不能拖住整轮
+MAX_PER_SOURCE = 50     # 单源上限：调用方的 max_results 才是它要的数量
 
 _USER_AGENT = "dhole-mcp (https://github.com/ouli-1242/dhole-mcp)"
 _ATOM = "http://www.w3.org/2005/Atom"
@@ -47,6 +45,13 @@ Fetcher = Callable[[str, dict[str, str], float], Awaitable[tuple[int, bytes]]]
 
 @dataclass
 class VerticalHit:
+    """One normalised result row from a keyless vertical source.
+
+    ``published``/``published_precision``/``published_basis`` use the same date ledger as
+    web rows; when the source gives no usable date all three stay empty — never backfilled
+    with the crawl time.
+    """
+
     kind: str
     backend: str
     rank: int
@@ -60,6 +65,12 @@ class VerticalHit:
 
 @dataclass
 class VerticalReport:
+    """One source's receipt: how it answered, and why.
+
+    Network failure, timeout, blocked and unreadable body all land here as a row with a
+    ``status`` instead of raising: one dead source must not erase the others' answers.
+    """
+
     source: str
     backend: str
     status: str = "error"       # ok | empty | blocked | timeout | error
@@ -69,6 +80,8 @@ class VerticalReport:
     duration_ms: float = 0.0
 
     def as_dict(self) -> dict:
+        """The receipt row in wire shape; ``error`` is omitted when empty.
+        """
         row = {
             "source": self.source,
             "backend": self.backend,
@@ -155,6 +168,7 @@ def _hit(kind: str, backend: str, rank: int, title: object, url: object,
     url_s = _safe_url(url)
     if not title_s or not url_s:
         return None
+    # 420 字符：够读完一条摘要，又不让单行撑爆转录。
     return VerticalHit(
         kind=kind, backend=backend, rank=rank,
         title=title_s, url=url_s, snippet=_truncate(str(snippet or ""), 420),
@@ -203,12 +217,11 @@ async def _search_arxiv(query: str, n: int, page: int, region: str,
                         language: Optional[str], timeout: float,
                         fetch: Optional[Fetcher]):
     start = max(0, page) * n
-    # arXiv's relevance sort treats an unquoted multi-word query loosely enough
-    # that the exact paper titled "Attention Is All You Need" was not in the
-    # first five for its own title (measured 2026-10-20, frozen in
-    # evals/corpus/verticals). A phrase query puts it back at #2; broad phrase
-    # queries ("transformer attention", "large language model") still return
-    # relevant work. Boolean operators keep their meaning and are not quoted.
+    # arXiv 的相关度排序对未加引号的多词查询足够宽松，以至于标题正是
+    # "Attention Is All You Need" 的那篇论文，用自己的标题都进不了前五
+    # （2026-10-20 实测，冻结在 evals/corpus/verticals）。短语查询把它放回第 2；
+    # 宽泛的短语查询（"transformer attention"、"large language model"）仍然返回
+    # 相关工作。布尔运算符保持原义，不加引号。
     phrase = query.strip()
     if not re.search(r"\b(AND|OR|ANDNOT)\b", phrase):
         phrase = f'"{phrase}"'
@@ -305,10 +318,9 @@ async def _search_stackexchange(query: str, n: int, page: int, region: str,
 async def _search_github(query: str, n: int, page: int, region: str,
                          language: Optional[str], timeout: float,
                          fetch: Optional[Fetcher]):
-    # Repositories, not issues: an issue search for a broad term is dominated by
-    # daily engineering logs and one-line notes. A repository search is the
-    # durable "where is this code / project" answer, and stars give the reader a
-    # quality signal the issue feed does not have.
+    # 搜仓库，不搜 issue：宽泛词的 issue 搜索会被日常工程日志与一句话笔记淹没。
+    # 仓库搜索才是"这段代码/这个项目在哪"的耐久答案，star 给读者的质量信号是
+    # issue 流没有的。
     url = (
         "https://api.github.com/search/repositories?q=" + quote_plus(query) +
         f"&sort=stars&order=desc&per_page={n}&page={page + 1}"
@@ -401,6 +413,26 @@ async def search_one(kind: str, query: str, max_results: int, *,
                      timeout: float = VERTICAL_TIMEOUT,
                      fetch: Optional[Fetcher] = None
                      ) -> tuple[list[VerticalHit], VerticalReport]:
+    """Ask one vertical backend once.
+
+    Args:
+        kind: One of :data:`VERTICAL_KINDS` (news/academic/qa/code/community).
+        query: The search text, handed to the backend as-is.
+        max_results: How many rows to want; clamped to ``1..MAX_PER_SOURCE``.
+        page: A 0-based page number; each adapter converts it to its own offset.
+        region: A backend region hint (not every adapter uses it).
+        language: An optional language hint.
+        timeout: The per-call network budget in seconds.
+        fetch: An injected ``(url, headers, timeout) -> (status, bytes)`` transport;
+            ``None`` uses httpx with the configured proxy.
+
+    Returns:
+        ``(hits, report)``. Timeouts, network errors, blocks and unreadable bodies become
+        an error/blocked report with empty ``hits``; those expected failures do not raise.
+
+    Raises:
+        KeyError: ``kind`` is not a registered vertical.
+    """
     backend = _BACKENDS[kind]
     started = monotonic()
     n = max(1, min(max_results, MAX_PER_SOURCE))
@@ -423,12 +455,11 @@ async def search_one(kind: str, query: str, max_results: int, *,
 
 
 def _interleave_by_backend(hits: list[VerticalHit]) -> list[VerticalHit]:
-    """Round-robin the per-backend hit lists, preserving each backend's own order.
+    """按后端轮转交错每个后端的命中列表，保留各后端自己的顺序。
 
-    The order of `sources=` is not a ranking signal. On a lean install (no
-    reranker) position is part of the score, so returning all of the first-named
-    pool before the second would turn argument order into authority. This is the
-    same merge the web pool applies across engines.
+    `sources=` 的顺序不是排名信号。轻装安装（没有 reranker）时位置参与打分，
+    所以先把第一个点名的源全部交完再交第二个，会把参数顺序变成权威。这与网页池
+    跨引擎用的是同一种合并。
     """
     buckets: dict[str, list[VerticalHit]] = {}
     for hit in hits:
@@ -449,6 +480,13 @@ async def search_many(kinds: list[str], query: str, max_results: int, *,
                       timeout: float = VERTICAL_TIMEOUT,
                       fetch: Optional[Fetcher] = None
                       ) -> tuple[list[VerticalHit], list[VerticalReport]]:
+    """Ask several vertical backends concurrently.
+
+    Returns:
+        ``(hits, reports)`` — one report per requested kind, in request order. Hit rows are
+        interleaved round-robin by backend, so their order is not a ranking signal. A
+        backend that raises contributes an error report and does not cancel the others.
+    """
     tasks = [
         asyncio.create_task(search_one(
             kind, query, max_results, page=page, region=region,
@@ -475,11 +513,10 @@ async def search_many(kinds: list[str], query: str, max_results: int, *,
 def filter_by_window(hits: list[VerticalHit], after: Optional[date] = None,
                      before: Optional[date] = None
                      ) -> tuple[list[VerticalHit], dict]:
-    """Apply an exact date window to vertical rows.
+    """对垂直行应用一个精确的日期窗口。
 
-    ``after`` drops undated rows (they cannot be proven to be inside the
-    window); ``before`` keeps them, exactly like the web path's row-by-row
-    ledger.  Returns the kept rows and the counts that disappeared.
+    ``after`` 会丢掉没有日期的行（无法证明它们在窗口内）；``before`` 保留它们，
+    与网页路的逐行账完全一致。返回保留的行与消失的计数。
     """
     kept: list[VerticalHit] = []
     dropped_after = dropped_before = undated_after = 0

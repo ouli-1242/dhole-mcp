@@ -1,13 +1,13 @@
-"""Dhole's own content extraction.
+"""Dhole 自己的正文抽取。
 
-Replaces scrapling's Convertor._extract_content with direct trafilatura +
-markdownify + lxml usage. The extraction chain:
+取代 scrapling 的 Convertor._extract_content，直接用 trafilatura + markdownify +
+lxml。抽取链：
 
-1. Trafilatura (primary, for markdown/text/article/structured)
-2. markdownify (fallback for markdown/html types)
-3. Raw text (last resort: regex tag stripping)
+1. Trafilatura（主路，用于 markdown/text/article/structured）
+2. markdownify（markdown/html 类型的兜底）
+3. 原始文本（最后手段：正则剥标签）
 
-CSS selector narrowing uses lxml directly.
+CSS 选择器收窄直接用 lxml。
 """
 
 from __future__ import annotations
@@ -33,20 +33,18 @@ _CHROME_AND_TAGS = re.compile(
 
 
 def _document_text_chars(page) -> int:
-    """Non-whitespace characters the HTML itself holds, markup and chrome removed.
+    """HTML 自身持有的非空白字符数，去掉标记与脚本/样式壳。
 
-    A crude lower-bound proxy for "how much readable text is in this document", and
-    it only ever gets compared against a ratio with a 20x margin on either side.
+    "这份文档里有多少可读文本"的粗糙下界代理值，只用来和一条两侧都有 20 倍余量的
+    比例做比较。
 
-    0 means "cannot measure", which fails closed: an unmeasurable document is left
-    as the detector returned it rather than swapped on a guess. `extract_content`
-    takes any response-shaped object, so a `.content` that is not text (a transport
-    stand-in, a raw-bytes implementation) is a calling convention that exists, not
-    an impossibility to crash on.
+    0 表示"无法测量"，按失败即保守处理：测不出的文档保持检测器交回的原样，不凭猜测
+    替换。`extract_content` 接受任何响应形状的对象，所以 `.content` 不是文本
+    （传输层替身、原始字节实现）是一种存在的调用约定，不是该崩掉的"不可能"。
     """
     try:
         raw = page.content
-    except Exception:  # noqa: BLE001 - a body that will not decode is not a loss
+    except Exception:  # noqa: BLE001 - 解不开的 body 不算丢失
         return 0
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8", errors="replace")
@@ -60,20 +58,20 @@ def extract_content(
     extraction_type: str = "markdown",
     css_selector: Optional[str] = None,
 ) -> List[str]:
-    """Extract content from a Response object.
+    """从 Response 对象抽取正文。
 
-    Args:
-        page: A Response object (dhole_mcp.fetcher.Response) or compatible
-              object with .body, .encoding, .url, .css()
-        extraction_type: 'markdown', 'html', 'text', 'article', 'structured'
-        css_selector: CSS selector to narrow extraction scope
+    参数:
+        page: 一个 Response 对象（dhole_mcp.fetcher.Response）或兼容对象，
+              带 .body、.encoding、.url、.css()
+        extraction_type: 'markdown'、'html'、'text'、'article'、'structured'
+        css_selector: 用来收窄抽取范围的 CSS 选择器
 
-    Returns:
-        List of extracted content strings (usually one element).
+    返回:
+        抽取出的正文串列表（通常一个元素）。
     """
     from dhole_mcp.trafilatura_extractor import extract_with_trafilatura, _fallback_extract
 
-    # Trafilatura is the primary extractor for all text-like types
+    # Trafilatura 是所有文本类类型的主抽取器
     result: Optional[List[str]] = None
     if extraction_type in ("markdown", "text", "article", "structured"):
         try:
@@ -83,7 +81,7 @@ def extract_content(
         except Exception as e:
             logger.debug(f"Trafilatura extraction failed: {e}")
 
-    # Fallback: use markdownify for markdown/html, or raw text
+    # 兜底：markdown/html 用 markdownify，其余用原始文本
     if result is None:
         result = _fallback_extract(page, extraction_type, css_selector)
     else:
@@ -93,19 +91,18 @@ def extract_content(
 
 def recover_a_lost_document(page, content: List[str], extraction_type: str = "markdown",
                             css_selector: Optional[str] = None) -> List[str]:
-    """A non-empty answer is not the same thing as a complete one.
+    """非空答案不等于完整答案。
 
-    Trafilatura's main-content detector can decide most of a legitimate document IS
-    boilerplate and hand back a slice; "candidate non-empty" then adopts it and the
-    caller reads a success that lost the first six sections of a spec. Measured:
-    8,357 characters out of a document holding 379,285 (2.20%), `content_ok` true.
+    Trafilatura 的主内容检测器可能判定一份正当文档的大部分都是样板，只交回一截；
+    "候选非空"于是照单全收，调用方读到的是一次成功，而一份规范的前六节都不见了。
+    实测：一份持有 379,285 字符的文档只交出 8,357 字符（2.20%），`content_ok` 仍是 true。
 
-    Returns the answer to build on (the plain converter's when the detector lost the
-    document, otherwise `content` untouched) and announces a swap into the call's
-    note bucket. Collapsing stays with the caller so neither path double-folds.
+    返回作为构建基础的答案（检测器丢了文档时用纯转换器的产出，否则原样返回
+    `content`），并把这次替换记进本次调用的注记袋。折叠留给调用方，两条路都不会
+    折叠两次。
 
-    `css_selector=` is exempt: a caller who narrowed the scope asked for less, so a
-    small answer there is not a loss.
+    `css_selector=` 予以豁免：收窄了范围的调用方本来就要得更少，那里的小答案是
+    所问非所得，不是丢失。
     """
     if css_selector or not content:
         return content
@@ -155,10 +152,10 @@ def _collapse_boilerplate(chunks: List[str], extraction_type: str) -> List[str]:
 
 
 def _is_xml_content_type(content_type: str) -> bool:
-    """True for data XML (sitemap / RSS / Atom / SOAP / +xml), False for HTML-ish XML.
+    """对数据 XML（sitemap / RSS / Atom / SOAP / +xml）为 True，对 HTML 味的 XML 为 False。
 
-    `application/xhtml+xml` is an HTML document wearing an XML media type: it must
-    keep going through the HTML extractor, not be handed back raw.
+    `application/xhtml+xml` 是穿着 XML 媒体类型的 HTML 文档：必须继续走 HTML
+    抽取器，不能原样交回。
     """
     ct = (content_type or "").split(";")[0].strip().lower()
     if not ct or ct.startswith(("application/xhtml", "image/", "text/html")):

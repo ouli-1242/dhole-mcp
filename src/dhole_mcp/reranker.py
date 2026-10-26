@@ -1,8 +1,8 @@
-"""Local neural reranker: a semantic relevance scorer for search results.
+"""本地神经重排器：搜索结果的相关性语义打分器。
 
-Runs a cross-encoder (query, title+snippet) -> relevance score, in-process via
-ONNX. It answers "does this result actually match the query?" — something the
-source engines cannot tell you, since each engine only returns its own order.
+在进程内通过 ONNX 跑一个交叉编码器 (query, title+snippet) -> 相关性分数。它回答
+"这条结果真的与查询匹配吗" —— 源引擎答不了这个问题，因为每家的引擎只交回它自己的
+顺序。
 
 两张注册表（见 MODELS）：``bge-zh`` 仍是默认（中文更强），``mmarco`` 是后加的
 快档（同一份 67 题冻结语料上整体 P@5 不降、CPU 快 1.8×、体积 119MB vs 279MB）。
@@ -14,10 +14,9 @@ source engines cannot tell you, since each engine only returns its own order.
 打分器**，只在日志里说明它不再起作用、以及现在该用哪个变量（见
 ``_legacy_selection``）。
 
-Graceful fallback: if onnxruntime/tokenizers are missing (lean install) or the
-model download fails / is offline, `get_reranker()` returns None and the caller
-falls back to cross-engine consensus + engine-position order. Neural rerank is
-an `[all]` extra; lean installs get consensus-ordered search.
+优雅回退：onnxruntime/tokenizers 缺失（精简安装）、模型下载失败或离线时，
+`get_reranker()` 交回 None，调用方回退到跨引擎共识 + 引擎位置顺序。神经重排是一个
+`[all]` 额外项；精简安装得到按共识排序的搜索。
 """
 
 from __future__ import annotations
@@ -44,20 +43,20 @@ logger = logging.getLogger("dhole-mcp.reranker")
 
 @dataclass(frozen=True)
 class RerankerModel:
-    """One downloadable cross-encoder.
+    """一个可下载的交叉编码器。
 
-    relpaths maps the LOCAL filename dhole stores to the repo-relative HF path
-    under ``<endpoint>/<repo>/resolve/<rev>/``. min_bytes is a sanity floor so
-    a truncated download is rejected, NOT trusted.
+    relpaths 把 dhole 本地保存的文件名映射到 HF 仓库内路径
+    ``<endpoint>/<repo>/resolve/<rev>/`` 下的位置。min_bytes 是完整性下限，被截断的
+    下载会被拒绝，**不**被信任。
     """
 
-    name: str                     # registry key + local dir name
-    repo: str                     # HuggingFace repo id
-    rev: str                      # pinned commit: bytes are identical everywhere
+    name: str                     # 注册表键 + 本地目录名
+    repo: str                     # HuggingFace 仓库 id
+    rev: str                      # 钉住的 commit：各处的字节完全相同
     relpaths: dict[str, str] = field(default_factory=dict)
-    approx_bytes: int = 90_000_000   # expected ONNX size, for honest UI text
-    min_bytes: int = 50_000_000   # sanity floor; smaller = truncated, not trusted
-    label: str = ""               # short human description for -v / docs
+    approx_bytes: int = 90_000_000   # 预期的 ONNX 大小，用于诚实的 UI 文案
+    min_bytes: int = 50_000_000   # 完整性下限；更小 = 被截断，不可信
+    label: str = ""               # 给 -v / 文档的简短人话描述
     # 按 CPU 架构分叉的 ONNX 文件（架构 -> 与 relpaths 同形的映射）。缺省/空 = 一份
     # 文件走所有架构。量化文件按硬件内核导出时只能这样登记；空映射在某个架构上
     # 等于"这颗模型在这台机器上没有可用的字节"，加载侧会明确拒绝而不是拿错文件。
@@ -83,11 +82,10 @@ class RerankerModel:
     wordpiece_fallback: bool = True
 
 
-# Registry (key order = display order). The default is DEFAULT_MODEL below.
+# 注册表（键序 = 展示顺序）。默认项是下面的 DEFAULT_MODEL。
 MODELS: dict[str, RerankerModel] = {
-    # Bilingual BGE reranker (BAAI), int8. Trained on zh+en pairs — better
-    # Chinese ranking than a multilingual distillation, and 38% smaller than
-    # the fp32 alternative. Standard int8 ops, runs anywhere onnxruntime does.
+    # 双语 BGE 重排器（BAAI），int8。在 zh+en 句对上训练 —— 中文排序好于多语蒸馏版，
+    # 且比 fp32 版本小 38%。标准 int8 算子，凡是 onnxruntime 能跑的地方都能跑。
     "bge-zh": RerankerModel(
         name="bge-zh",
         repo="Xenova/bge-reranker-base",
@@ -161,9 +159,8 @@ MODELS: dict[str, RerankerModel] = {
 
 DEFAULT_MODEL = "bge-zh"
 
-# Backward-compat aliases for the pre-registry constants (tests + external
-# callers may still import them). They track the DEFAULT model (registry
-# constants are import-time snapshots; the live answer is active_model()).
+# 注册表出现之前那几个常量的向后兼容别名（测试与外部调用方可能仍在导入它们）。
+# 它们跟随 DEFAULT 模型（注册表常量是导入期快照；活答案由 active_model() 给出）。
 MODEL_ID = MODELS[DEFAULT_MODEL].repo
 MODEL_REV = MODELS[DEFAULT_MODEL].rev
 MODEL_DIR = paths.models_dir() / DEFAULT_MODEL
@@ -194,7 +191,7 @@ _selected_name: Optional[str] = (
 
 
 def reset_selection_cache() -> None:
-    """Forget the startup selection (tests simulate a fresh process with this)."""
+    """忘掉启动期的选择（测试用它模拟一个全新进程）。"""
     global _selected_name
     _selected_name = None
 
@@ -208,12 +205,11 @@ def _selected_model_name() -> str:
 
 
 def active_model() -> RerankerModel:
-    """The model this process scores with: ``DHOLE_RERANK_MODEL``, else the default.
+    """这个进程用来打分的模型：``DHOLE_RERANK_MODEL``，否则默认档。
 
-    Unknown names are IGNORED with a warning, never mapped: silently scoring with
-    a different model would invalidate every ``min_raw_relevance`` calibration the
-    caller made against the named one. A legacy ``reranker.json`` no longer
-    selects anything; if present we say which variable replaced it.
+    不认识的名字只警告、**不映射**：静默换一个模型打分，会让调用方针对点名那个模型
+    做过的每一次 ``min_raw_relevance`` 标定全部失效。遗留的 ``reranker.json`` 不再
+    选任何东西；如果它还在，我们说清楚是哪个变量取代了它。
     """
     name = _selected_model_name()
     model = MODELS.get(name)
@@ -234,19 +230,19 @@ def active_model() -> RerankerModel:
 
 
 def active_model_dir() -> Path:
-    """Local directory for the active model (created on download)."""
+    """当前模型的本地目录（下载时创建）。"""
     return paths.models_dir() / active_model().name
 
 
 def _arch_key() -> str:
-    """The registry's architecture key for this CPU (x86_64 / arm64 / raw)."""
+    """这台 CPU 在注册表里的架构键（x86_64 / arm64 / raw）。"""
     machine = platform.machine().lower()
     return {"amd64": "x86_64", "x86_64": "x86_64",
             "arm64": "arm64", "aarch64": "arm64"}.get(machine, machine)
 
 
 def paths_for(model: RerankerModel) -> dict[str, str]:
-    """The local->remote file map usable on THIS CPU; {} = no variant for it."""
+    """**这台** CPU 可用的本地->远端文件映射；{} = 没有适合它的变体。"""
     variants = getattr(model, "variants", {}) or {}
     if variants:
         return dict(variants.get(_arch_key(), {}))
@@ -254,20 +250,20 @@ def paths_for(model: RerankerModel) -> dict[str, str]:
 
 
 def raw_thresholds() -> tuple[float, float]:
-    """(high, med) raw-score lines for the ACTIVE model. See RerankerModel."""
+    """**当前模型**的 (high, med) raw 分数线。见 RerankerModel。"""
     model = active_model()
     return model.raw_high, model.raw_med
 
 
 def _publisher_digest(model: RerankerModel, selected: dict[str, str]) -> str:
-    """Publisher sha256 for the model.onnx this CPU will actually load."""
+    """这台 CPU 实际会加载的那个 model.onnx 的发布方 sha256。"""
     remote = selected.get("model.onnx", "")
     return model.variant_sha256.get(remote) or model.publisher_sha256.get("model.onnx", "")
 
 
 MAX_SEQ = 512
-# Sanity floor so a truncated/failed download is rejected; each model's own
-# 'min_bytes' is the precise check (this global value is the loose outer bound).
+# 完整性下限，被截断/失败的下载会被拒绝；每颗模型自己的 'min_bytes' 才是精确判据
+# （这个全局值只是宽松的外层边界）。
 MIN_MODEL_BYTES = 50_000_000
 
 
@@ -280,13 +276,11 @@ def _hf_endpoints() -> list[str]:
 
 
 def _model_urls(model: RerankerModel, name_or_remote: str) -> list[str]:
-    """Candidate URLs for one file, in fallback order.
+    """一个文件的候选 URL，按回退顺序排列。
 
-    ``name_or_remote`` may be a LOCAL filename (mapped through ``model.relpaths``,
-    the pre-variant call shape) or a repo-relative path (how variant downloads
-    reach a file that is not the default one). The revision is pinned, so the
-    bytes are identical from any endpoint — the fallback changes where they come
-    from, never what they are.
+    ``name_or_remote`` 可以是**本地**文件名（经 ``model.relpaths`` 映射，变体出现之前
+    的调用形状），也可以是仓库内路径（变体下载用它取到非默认那份文件）。revision 是
+    钉住的，所以任何端点的字节都相同 —— 回退只改变"从哪里取"，从不改变"取到的是什么"。
     """
     remote = (getattr(model, "relpaths", {}) or {}).get(name_or_remote, name_or_remote)
     return [f"{ep}/{model.repo}/resolve/{model.rev}/{remote}"
@@ -294,7 +288,7 @@ def _model_urls(model: RerankerModel, name_or_remote: str) -> list[str]:
 
 
 def _download_model_file(name: str, dest: Path) -> bool:
-    """Download one model file for THIS CPU's variant, trying every endpoint."""
+    """为**这台** CPU 的变体下载一个模型文件，逐个端点尝试。"""
     model = active_model()
     selected = paths_for(model)
     remote = selected.get(name)
@@ -331,7 +325,7 @@ def last_attempt_ms() -> float:
 
 
 class _Reranker:
-    """Wraps a warm ONNX InferenceSession + tokenizer for query/doc scoring."""
+    """包住一个已热的 ONNX InferenceSession + 分词器，为 query/doc 打分。"""
 
     def __init__(self, model_path: Path, tokenizer):
         import numpy as np
@@ -358,7 +352,7 @@ class _Reranker:
         for name in self.input_names:
             if name in arrs:
                 feed[name] = arrs[name]
-        # Positional fallback for any oddly-named inputs.
+        # 给命名古怪的输入留的位置回退。
         canon = [input_ids, attn, type_ids]
         ci = 0
         for name in self.input_names:
@@ -369,7 +363,7 @@ class _Reranker:
         return feed
 
     def score(self, query: str, docs: list[str]) -> list[float]:
-        """Return a sigmoid relevance score (0..1) for each (query, doc) pair."""
+        """为每个 (query, doc) 对交回一个 sigmoid 相关性分数（0..1）。"""
         if not docs:
             return []
         np = self._np
@@ -399,26 +393,24 @@ class _Reranker:
         return scores
 
 
-_IDLE_TIMEOUT = 90.0  # abort a download that produced no byte for this long
+_IDLE_TIMEOUT = 90.0  # 这么久没有收到任何字节就中止下载
 
 
 def _download_file(url: str, dest: Path) -> bool:
-    """Stream a file to disk. Returns True on success.
+    """把文件流式写到磁盘。成功交回 True。
 
-    Resilient to this network's worst property: HF's CDN dribbles bytes slowly
-    and stalls. We (a) RESUME from a leftover ``.part`` (a 449MB download that
-    dies at 60% does not restart), (b) abort if no byte arrives for 60s instead
-    of hanging on a dead socket forever, and (c) KEEP the partial on a short read
-    so the next attempt resumes from it. A server that ignored our Range header
-    (status 200 with a full body) makes us truncate first — appending that body
-    to the old prefix would corrupt the file. Measured live: a 119MB model file
-    was cut at 1.7MB; deleting the partial made every retry start from zero.
+    要扛住这个网络最糟的脾气：HF 的 CDN 会慢慢滴字节，然后卡住。我们 (a) 从遗留的
+    ``.part`` **续传**（一次 449MB 的下载死在 60% 不该从头再来），(b) 60 秒没有字节
+    就中止，而不是在死 socket 上永远挂着，(c) 短读时**保留**残缺文件，下一次尝试从它
+    继续。服务器若不认我们的 Range 头（状态 200 加整份正文），我们先把残文件截掉 ——
+    把整份正文接在旧前缀后面会弄坏文件。现场实测：一个 119MB 的模型文件在 1.7MB 处
+    被切断；删掉残缺文件让每一次重试都从零开始。（无字节超时读 `_IDLE_TIMEOUT`，
+    数量只有一处定义。）
     """
     tmp = dest.with_suffix(dest.suffix + ".part")
     try:
         paths.ensure_private_dir(dest.parent)
-        # A plain python UA gets 403'd by some HF mirrors; keep dhole's identity
-        # in the string but keep it browser-shaped.
+        # 裸 python UA 会被某些 HF 镜像 403；串里保留 dhole 的身份，但保持浏览器形状。
         headers = {"User-Agent": "Mozilla/5.0 (compatible; dhole-mcp)"}
         resume_at = tmp.stat().st_size if tmp.exists() else 0
         if resume_at:
@@ -452,7 +444,7 @@ def _download_file(url: str, dest: Path) -> bool:
         tmp.replace(dest)
         return True
     except Exception as e:
-        # Leave the partial file (next attempt resumes from it) but surface why.
+        # 留着残缺文件（下一次尝试从它续传），但要说出原因。
         logger.warning(f"download failed for {url} ({tmp.stat().st_size if tmp.exists() else 0:,} bytes so far): {e}")
         return False
 
@@ -476,7 +468,7 @@ def _reject(reason: str) -> None:
 
 
 def _ensure_model() -> Optional[tuple[Path, Path]]:
-    """Ensure model.onnx + tokenizer.json are present + valid. Returns paths or None."""
+    """确保 model.onnx + tokenizer.json 都在且有效。交回路径，否则 None。"""
     model = active_model()
     selected = paths_for(model)
     if not selected:
@@ -541,9 +533,8 @@ def _ensure_model() -> Optional[tuple[Path, Path]]:
         except Exception:
             pass
 
-    # Verify the onnx still matches its recorded hash (detect corruption). When a
-    # publisher digest exists it is the standard; the self-recorded sidecar is the
-    # fallback and only proves "unchanged since we fetched it".
+    # 核对 onnx 是否仍与记录的哈希一致（发现损坏）。有发布方摘要时以它为准；
+    # 自己记录的 sidecar 是退路，只证明"自我们取回之后没变过"。
     if sha_file.exists():
         try:
             want = pub or sha_file.read_text().strip()
@@ -566,9 +557,8 @@ def _ensure_model() -> Optional[tuple[Path, Path]]:
 
 
 def _load_reranker() -> Optional[_Reranker]:
-    """Synchronous reranker load (ONNX session + tokenizer). Sets the module
-    singleton + 'tried' flag. Never raises. Called under the ensure_reranker
-    lock so concurrent callers (prewarm + first search) share ONE load."""
+    """同步加载重排器（ONNX 会话 + 分词器）。写模块单例与 'tried' 标记。从不抛异常。
+    在 ensure_reranker 的锁下调用，于是并发调用方（预热 + 首次搜索）共享**一次**加载。"""
     global _reranker, _reranker_tried, _reranker_unavailable_reason
     global _load_attempts, _last_attempt_ms
     _reranker_tried = True
@@ -582,7 +572,7 @@ def _load_reranker() -> Optional[_Reranker]:
 
 
 def _run_load() -> Optional[_Reranker]:
-    """What a load attempt actually is: import the extras, get the model, warm the session."""
+    """一次加载尝试实际做的事：导入额外依赖、取模型、预热会话。"""
     global _reranker, _reranker_unavailable_reason
     try:
         import onnxruntime  # noqa: F401
@@ -608,7 +598,7 @@ def _run_load() -> Optional[_Reranker]:
                 raise RuntimeError(
                     "tokenizer.json could not be read and this model has no "
                     "WordPiece fallback (its vocab is not WordPiece)")
-            # Fallback: build a BERT WordPiece tokenizer from vocab.txt.
+            # 回退：用 vocab.txt 建一个 BERT WordPiece 分词器。
             from tokenizers import BertWordPieceTokenizer
             tok = BertWordPieceTokenizer(str(active_model_dir() / "vocab.txt"), lowercase=True)
         _reranker = _Reranker(onnx_path, tok)
@@ -621,45 +611,41 @@ def _run_load() -> Optional[_Reranker]:
 
 
 def get_reranker() -> Optional[_Reranker]:
-    """Peek the warm singleton reranker, or None if not yet loaded / unavailable.
+    """看一眼已经热的单例重排器；尚未加载 / 不可用时交回 None。
 
-    PEEK ONLY — never triggers a load (that's ensure_reranker()'s job, called by
-    the prewarm + the search path). Callers (rerank(), search) use this to check
-    whether the neural cross-encoder is warm; if None they fall back to
-    cross-engine consensus + engine-position order. Never raises.
+    只**窥视** —— 从不触发加载（那是 ensure_reranker() 的活，由预热与搜索路径调用）。
+    调用方（rerank()、search）用它检查神经交叉编码器是否已热；是 None 就回退到跨引擎
+    共识 + 引擎位置顺序。从不抛异常。
     """
     return _reranker  # type: ignore[return-value]
 
 
 async def ensure_reranker(*, download: bool = True) -> Optional[_Reranker]:
-    """Race-safe async reranker load. Concurrent callers (the startup prewarm +
-    the first search) share ONE load via a lock; the search awaits the in-flight
-    prewarm instead of racing it (the old sync get_reranker() would either
-    double-load or, if the prewarm had set _reranker_tried mid-load, silently
-    return None so the first search lost neural rerank). Returns the warm
-    reranker or None (unavailable / model absent and download=False).
+    """竞态安全的异步重排器加载。并发调用方（启动预热 + 首次搜索）经一把锁共享
+    **一次**加载；搜索会等待正在进行的预热，而不是与它赛跑（旧的同步 get_reranker()
+    要么重复加载，要么在预热已于加载中途置上 _reranker_tried 时静默交回 None，于是
+    首次搜索失去神经重排）。交回已经热的重排器，或 None（不可用 / 模型缺失且
+    download=False）。
 
-    Caches the 'tried' state so a one-time failure doesn't retry every call.
+    缓存 'tried' 状态，于是一次性失败不会每次调用都重试。
     """
     global _reranker_lock
     if _reranker is not None:
-        return _reranker  # type: ignore[return-value]  # warm fast path (no lock)
-    # model_present() touches the filesystem (and may rename a model dir), so it
-    # stays off the event loop even though the work is now milliseconds.
+        return _reranker  # type: ignore[return-value]  # 已热的快路径（不拿锁）
+    # model_present() 会碰文件系统（还可能重命名模型目录），所以即使如今只花几毫秒，
+    # 也要留在事件循环之外。
     if not download and not await asyncio.to_thread(model_present):
         return None
     if _reranker_lock is None:
         _reranker_lock = asyncio.Lock()
-    # Acquire the lock so a concurrent in-flight load (the startup prewarm, or a
-    # parallel search) is AWAITED rather than raced: the top-level fast path only
-    # short-circuits on a warm reranker, NOT on _reranker_tried (which is set
-    # early inside _load_reranker while still holding the lock — so a mid-load
-    # caller must wait on the lock, then see the finished result).
+    # 拿锁，使并发中的加载（启动预热，或并行搜索）被**等待**而不是被赛跑：顶层快路径
+    # 只对已热的重排器短路，不对 _reranker_tried 短路（后者由 _load_reranker 在仍持锁
+    # 时提前置上 —— 于是加载中途的调用方必须等锁，然后再看已完成的结果）。
     async with _reranker_lock:
         if _reranker is not None:
             return _reranker  # type: ignore[return-value]
         if _reranker_tried:
-            return None  # a previous load FINISHED and failed; don't retry this process
+            return None  # 此前一次加载**已结束**并失败；本进程内不再重试
         if not download and not await asyncio.to_thread(model_present):
             return None
         return await asyncio.to_thread(_load_reranker)
@@ -668,59 +654,44 @@ async def ensure_reranker(*, download: bool = True) -> Optional[_Reranker]:
 def rerank(query: str, results: list, *, min_relevance: float = 0.0,
            min_raw_relevance: float = 0.0,
            stats: Optional[dict] = None) -> Optional[list[tuple]]:
-    """Rerank RawResults with the neural cross-encoder. Returns (result, score)
-    pairs sorted desc, or None if the reranker is unavailable (caller falls back
-    to consensus + engine-position order).
+    """用神经交叉编码器重排 RawResults。交回按分数降序的 (result, score) 对；
+    重排器不可用时交回 None（调用方回退到共识 + 引擎位置顺序）。
 
-    Scores are min-max normalized across this result set to 0..1. The
-    cross-encoder sigmoid saturates (~1.0 for any clearly-relevant snippet), so
-    raw scores cluster tightly and can't discriminate among good results;
-    normalizing restores meaningful spread (top=1.0, worst=0.0) for the
-    relevance_score field + tier derivation. Ranking ORDER is unchanged
-    (normalization is monotonic).
+    分数在本次结果集内做 min-max 归一化到 0..1。交叉编码器的 sigmoid 会饱和
+    （任何明显相关的片段都接近 ~1.0），所以 raw 分数挤得很紧，区分不了好结果之间的
+    差别；归一化恢复了有意义的跨度（最好=1.0，最差=0.0），供 relevance_score 字段与
+    tier 推导使用。排序**顺序**不变（归一化是单调的）。
 
-    ``min_relevance`` (G5) drops every pair scoring below it on that NORMALIZED
-    scale, so a query whose engine results are mostly off-topic does not return
-    the off-topic ones just because they were the best of a bad set. Defaults to
-    0.0 = keep everything (the pre-16.0 behaviour).
+    ``min_relevance``（G5）会把在这个**归一化**尺度上低于它的每一对都丢掉，于是一次
+    查询的引擎结果大多离题时，不会因为它们是烂苹果里最好的就交回离题货。默认 0.0 =
+    全留（16.0 之前的行为）。
 
-    Known limit of the normalized scale: because the top result is *defined* to
-    be 1.0 and the worst 0.0, a normalized floor can never reject a WHOLE set —
-    the best member of an entirely irrelevant set still normalizes to 1.0, and
-    when every raw score is identical they all normalize to 1.0. It trims the
-    tail of a set that HAS spread; it cannot certify that a set is good.
+    归一化尺度的已知局限：因为最好那条被**定义**为 1.0、最差为 0.0，归一化的地板
+    永远拒绝不了一个**整体**都无关的集合 —— 全无关集合里最好的成员仍然归一到 1.0，
+    而当所有 raw 分数相同时它们全都归一到 1.0。它修剪的是**有跨度**的集合的尾巴；
+    它无法证明一个集合是好的。
 
-    ``min_raw_relevance`` is the floor on the raw cross-encoder sigmoid instead,
-    and that is what makes "nothing in this round is relevant" expressible.
-    Measured on live search results (default bge-zh; every registered model has
-    its own `raw_high`/`raw_med` because this distribution is model-specific):
-    an off-topic document scores ~1e-4 (p90 0.0001 across 621
-    cross-topic pairs, max 0.0104) while an on-topic one sits at 0.93-0.9996,
-    so the two populations barely touch — the junk tail of engine results is the
-    ~0.0001 band, not a low percentile of the good ones. Same-topic-different-
-    aspect pairs (the hard case) land at p50 0.005 / p90 0.18, above which a
-    floor stops being safe, which is why this is opt-in with no default value
-    baked in and why 0.1 is the recommended starting point rather than 0.5.
-    Distributions are model-specific, so a number calibrated on one model is not
-    automatically right for another: ``stats`` reports what this round actually
-    spanned so a caller can calibrate instead of guessing.
+    ``min_raw_relevance`` 则是 raw 交叉编码器 sigmoid 上的地板，这才让"这一轮没有
+    任何东西相关"说得出口。在真实搜索结果上实测（默认 bge-zh；每个注册模型都有自己的
+    `raw_high`/`raw_med`，因为这个分布是模型特有的）：离题文档的分数约 1e-4（621 对
+    跨主题句对的 p90 是 0.0001，最大 0.0104），而相关文档坐在 0.93-0.9996，两堆几乎
+    不重叠 —— 引擎结果里的垃圾尾巴是 ~0.0001 那一条带，不是好结果里的低分位。同主题
+    不同侧面的句对（难的那一类）落在 p50 0.005 / p90 0.18，再往上地板就不安全了，
+    所以这是 opt-in、没有内定的默认值，而推荐的起点是 0.1 而不是 0.5。分布是模型特有
+    的，所以在一颗模型上标定出的数字不自动适用于另一颗：``stats`` 报告这一轮实际跨过
+    的范围，调用方据此标定，而不是靠猜。
 
-    ``stats`` (optional dict) is filled with ``{"raw_min", "raw_max", "kept",
-    "dropped_raw"}`` — the observed raw span of this candidate set. It is an
-    out-param rather than a richer return type so every existing caller unpacking
-    ``(result, score)`` pairs keeps working. The per-row raw goes a different way
-    for the same reason: it is stamped on the row as ``RawResult.neural_raw``
-    (None = no model measured it this round) instead of becoming a third element
-    nobody asked for.
+    ``stats``（可选 dict）会填入 ``{"raw_min", "raw_max", "kept",
+    "dropped_raw"}`` —— 这个候选集实际观测到的 raw 跨度。它做成出参而不是更丰富的
+    返回类型，是为了让每个按 ``(result, score)`` 解包的既有调用方继续工作。每行的 raw
+    走另一条路，理由相同：它被盖在行上（``RawResult.neural_raw``，None = 本轮没有模型
+    量过），而不是变成没人要的第三个元素。
 
-    **When a floor removes everything, the result is an EMPTY list, not None.**
-    The two mean different things and the caller must not conflate them: None =
-    "no reranker, fall back to consensus order" (no information was produced);
-    [] = "the reranker ran and rejected every candidate" (information was
-    produced, and the honest answer is that none of them cleared the floor).
-    Callers are expected to report the [] case rather than silently show zero
-    results - search.py folds the count into its "engines delivered N results,
-    all dropped rather than return noise" accounting.
+    **当地板把一切丢掉时，结果是空列表，不是 None。** 两者意思不同，调用方不许混为一谈：
+    None = "没有重排器，回退到共识顺序"（没有产出任何信息）；[] = "重排器跑了，拒绝了
+    每一个候选"（产出了信息，而且诚实的答案是它们都没过地板）。调用方应当报告 [] 这种
+    情况，而不是静默显示零结果 —— search.py 把这个数并入它"引擎交了 N 条、全被丢掉
+    而不是交回噪声"的账。
     """
     rer = get_reranker()
     if rer is None or not results:
@@ -739,9 +710,9 @@ def rerank(query: str, results: list, *, min_relevance: float = 0.0,
     if mx > mn:
         scores = [(s - mn) / (mx - mn) for s in raw]
     else:
-        scores = [1.0 for _ in raw]  # all equal -> no spread to normalize -> all top
-    # (result, normalized, raw) — the raw score has to travel with its pair, or a
-    # raw floor cannot be applied after the first filter without re-deriving it.
+        scores = [1.0 for _ in raw]  # 全部相等 -> 没有跨度可归一 -> 全体置顶
+    # (result, 归一分数, raw) —— raw 必须跟着它的那一对走，否则第一道过滤之后再用
+    # raw 地板就得重新推导一遍。
     rows = list(zip(results, scores, raw))
     # 原始分数另外盖在行上（`RawResult.neural_raw`）：交回二元组 `(result, score)`
     # 是这颗函数的公开契约，而 score 是集合内归一的 —— "这一轮里最好的一条"和
@@ -772,18 +743,24 @@ def rerank(query: str, results: list, *, min_relevance: float = 0.0,
 
 
 def unavailable_reason() -> str:
+    """Why the most recent reranker load failed.
+
+    Empty while the reranker is warm, and also empty before the first failed load.
+    Callers use it to explain a degradation; it is not how you answer availability (that
+    is :func:`get_reranker` or :func:`ensure_reranker`).
+    """
     return _reranker_unavailable_reason
 
 
 def _model_dir_for(model: RerankerModel) -> Path:
-    """This model's cache dir. The active model keeps the monkeypatchable author."""
+    """这颗模型的缓存目录。当前模型保留那条可被 monkeypatch 的路径来源。"""
     if model.name == active_model().name:
         return active_model_dir()
     return paths.models_dir() / model.name
 
 
 def _present_for(model: RerankerModel) -> bool:
-    """Are THIS model's files complete here? (Architecture-aware.)"""
+    """**这颗**模型的文件在这台机器上齐了吗？（认 CPU 架构。）"""
     variants = getattr(model, "variants", {}) or {}
     if variants and not paths_for(model):
         return False
@@ -795,9 +772,8 @@ def _present_for(model: RerankerModel) -> bool:
 
 
 def model_present() -> bool:
-    """True if the ACTIVE model's files are already cached locally (so
-    get_reranker() will NOT trigger a download). Used by startup prewarm to warm
-    the ONNX session only when it is free to do so.
+    """**当前**模型的文件是否已经缓存在本地（于是 get_reranker() 不会触发下载）。
+    启动预热只在可以免费预热时用它来热 ONNX 会话。
 
     这一颗是「模型在不在盘上」唯一的作者。`updater.py` 里那两行（`dhole -v` 的能力行与
     体检行）从前各自 `Path.exists()` 数文件，一份都不带 `min_bytes` 那道闸 —— 实测
@@ -810,35 +786,33 @@ def model_present() -> bool:
 
 
 def deps_present() -> bool:
-    """The neural extras are importable here (no import, no download - a lookup)."""
+    """神经重排的额外依赖在这里可导入吗（不导入、不下载 —— 只查）。"""
     import importlib.util
     return all(importlib.util.find_spec(m) is not None
                for m in ("onnxruntime", "tokenizers", "numpy"))
 
 
 def model_status() -> dict:
-    """One answer to 「这台机器的重排器现在是什么状态」— the CLI and the wire read this.
+    """对「这台机器的重排器现在是什么状态」的唯一回答 —— CLI 与线上回执都读它。
 
-    `state` is the verdict, and there is exactly one author for it:
-      `loaded`         this process holds a warm cross-encoder session
-      `on_disk`        the files are here per `model_present()`, not loaded in this process
-      `not_downloaded` (or half-here: a truncated file counts as not here — see that docstring)
-      `deps_absent`    the python extras are missing, so no model on disk would help
+    `state` 是判决，而且它只有一位作者：
+      `loaded`         本进程持有一个已热的交叉编码器会话
+      `on_disk`        文件按 `model_present()` 判据在盘上，但本进程没加载
+      `not_downloaded`（或只到一半：被截断的文件算"不在" —— 见那颗的 docstring）
+      `deps_absent`    python 额外依赖缺失，盘上有没有模型都救不了
 
-    The rest are facts, not verdicts: which model the registry points at, roughly how many
-    megabytes a missing one costs, and this process's own load ledger (`load_attempts` /
-    `last_attempt_ms` / `recorded_reason` - the same numbers `fetch_hint` quotes after R02-F33).
-    「盘上有但加载失败」与「盘上有但还没试过」是两种处方，所以账本跟判决一起交回。
+    其余是事实，不是判决：注册表指向哪颗模型、缺一颗大约要多少 MB，以及本进程自己的
+    加载账本（`load_attempts` / `last_attempt_ms` / `recorded_reason` —— 与
+    `fetch_hint` 在 R02-F33 之后引用的是同一批数）。「盘上有但加载失败」与「盘上有但
+    还没试过」是两种处方，所以账本跟判决一起交回。
 
-    No path in here: this is machine-local state and tool output lands in the transcript
-    (the same fence R02-045/048/049 hold). The model NAME is fine - it is registry content,
-    not where this box keeps it.
+    这里没有路径：这是本机本地状态，而工具输出会落进 transcript（R02-045/048/049
+    守的是同一道篱笆）。模型**名字**没关系 —— 它是注册表内容，不是这台机器把它放在哪。
 
-    `loaded` wins over the disk reading on purpose, and the two are NOT the same question:
-    a warm session is a fact about THIS process (it was loaded from files that were there
-    when it started), while `present` is the fact about the directory read right now. A
-    reader who wants "can a fresh call use it" reads `present`; one who wants "is this
-    process reranking right now" reads `state`. Neither is allowed to rewrite the other.
+    `loaded` 压过磁盘读数是有意的，而两者**不是**同一个问题：热会话是关于**本进程**的
+    事实（它加载时那些文件在），`present` 是此刻读目录的事实。想要"新来一次调用能不能
+    用它"的读者读 `present`；想要"这个进程现在在不在重排"的读者读 `state`。两者都不
+    许改写对方。
     """
     model = active_model()
     deps = deps_present()
@@ -913,10 +887,9 @@ def missing_model_phrase(st: dict) -> str:
 
 
 async def prewarm_reranker() -> None:
-    """Best-effort startup prewarm: if the reranker model is already cached, load
-    the ONNX session now (in a worker thread, race-safe via ensure_reranker's
-    lock) so the first neural search skips the ~1-2s init and doesn't race this
-    load. Does NOT download (skips when the model is absent). Never raises."""
+    """尽力而为的启动预热：重排器模型已缓存时，现在（在工作线程里，经 ensure_reranker
+    的锁保证竞态安全）加载 ONNX 会话，好让首个神经搜索跳过 ~1-2s 的初始化，也不与这次
+    加载赛跑。**不**下载（模型缺失时直接跳过）。从不抛异常。"""
     try:
         await ensure_reranker(download=False)
     except Exception:

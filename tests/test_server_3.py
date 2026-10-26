@@ -535,8 +535,8 @@ def _ruler_module():
     return mod
 
 
-def test_the_default_connect_is_the_published_36_656():
-    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：36,656（2026-10-25 模拟修复轮：web_request 增 `session_id`（+244，登录 POST 的 Set-Cookie 落 jar）+ web_research 分摊预算 clamp（零 wire 成本）。
+def test_the_default_connect_is_the_published_36_758():
+    """不设 DHOLE_TOOLS 时，wire 就是 CONNECT_CEILING 那笔账：36,758（2026-10-26 evaluate / 坐标点击：web_act.actions 点名 evaluate 与 evaluate=expr，+4；E1/E8 的 −9 后回到 36,758，仍在 36,763 以内）。
 
     这一条同时是量尺的回归锁：`tool_payload_measure._wire_for` 曾按工具数累加路由行，
     把默认连接报成 30,857（web_discover / web_crawl 共用那句被算了两遍）。修成按文本
@@ -698,7 +698,7 @@ def test_the_default_connect_is_the_published_36_656():
         f"仓库量尺与 wire 的 tools/list 对不上：{ruler_compact} vs {wire['tools_compact']}")
     assert ruler_instr == len(wire["instructions"]), (
         f"仓库量尺多算了路由行：{ruler_instr} vs wire {len(wire['instructions'])}")
-    assert ruler_compact + ruler_instr == 36_763
+    assert ruler_compact + ruler_instr == 36_758
 
 
 def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():
@@ -722,9 +722,11 @@ def test_the_two_tool_daily_driver_pays_what_its_docstring_claims():
     的活，`web_search` 连字节都没有。
     12,866 → 12,959（+93，免密引擎扩员 + 分层 + shenma）：`web_search` 描述
     换成 12 家名单与池序=分层那句，`web_read` 不付。
+    12,959 → 13,066（+107，round-13 F1）：收窄 selector 的措辞落在 `web_read`
+    描述上；13,066 → 13,076（+10，E1）：`urls` 点名回执行数组 `results`。
     """
     assert _assert_price("web_read,web_search",
-                         ["web_read", "web_search"]) == 13_066
+                         ["web_read", "web_search"]) == 13_076
 
 
 def test_the_readme_eight_tool_price_is_what_the_server_sends():
@@ -736,15 +738,15 @@ def test_the_readme_eight_tool_price_is_what_the_server_sends():
 def test_the_ninth_tool_costs_its_own_row_and_no_routing_line():
     """加 web_discover 只多它自己那一行：路由行与 web_crawl 共用，去重后不再付第二次。
 
-    这是 F-A-J1 那把共享路由行在 wire 上的样子：README 的 9 颗 28,611，
+    这是 F-A-J1 那把共享路由行在 wire 上的样子：README 的 9 颗 28,709，
     instructions 一字不变。C3 之后 `web_discover` 自己那一行涨了
     （地图大小两颗旋钮上这门），涨的部分照旧只付一次；C5 没动它（那一扇门一次尝试都不
     走 HTTP 正文通道，所以它不欠那句上限）。D2 的 +28 全部落在 `web_read`，所以这一组
-    与 8 颗那组同幅上涨。
+    与 8 颗那组同幅上涨；E1/E8 的净 −9 也同幅（共享的 `web_read`/`feed_read`）。
     """
     nine = SUB8 + ["web_discover"]
     assert _assert_price(",".join(nine), nine,
-                         published=("README.md", "共 9 颗 {total}")) == 28_718
+                         published=("README.md", "共 9 颗 {total}")) == 28_709
     eight = _connect(",".join(SUB8))
     assert len(_connect(",".join(nine))["instructions"]) == len(eight["instructions"]), (
         "两颗共用一句路由的工具，第二颗不该再收一次路由行的钱")

@@ -1,27 +1,24 @@
-"""Dhole search engine layer (v7.5: vendored ddgs metasearch backbone).
+"""Dhole 的搜索引擎层（v7.5：内置 ddgs 元搜索骨架）。
 
-No API key, no account, no third-party service at runtime. The actual multi-
-backend scraping + parsing + rotation lives in `search_metasearch.py` (vendored
-+ stripped from ddgs, MIT, attributed in NOTICE.ddgs.txt). This module is the
-thin dhole-side adapter: maps dhole's web_search params (engines, freshness,
-site, region, page) onto the metasearch, maps results back to RawResult with
-cross-backend consensus, and builds the per-engine reports.
+运行时没有 API key、没有账号、没有第三方服务。真正的多后端抓取 + 解析 + 轮转住在
+`search_metasearch.py`（从 ddgs 内置并裁剪，MIT，署名见 NOTICE.ddgs.txt）。本模块是
+dhole 这一侧的薄适配层：把 dhole 的 web_search 参数（engines、freshness、site、region、
+page）映射到元搜索上，把结果映射回带跨后端共识的 RawResult，并构造按引擎的报告。
 
-Backends (all keyless, 10 in the registry, **all 10 in the default pool**): baidu,
-bing, sogou, so360, bing_global, yahoo, yandex, brave, duckduckgo, marginalia.
-No engine is opt-in — the pool is the registry, so `engines=` only narrows it,
-never widens it past a name that exists.
-17.0 dropped 5 backends and with them two capabilities the reader may miss:
+后端（全部免密，注册表 12 家，**默认池也是全部 12 家**）：baidu、bing、sogou、so360、
+bing_global、yahoo、yandex、brave、duckduckgo、marginalia、shenma、seznam。
+没有引擎需要 opt-in —— 池就是注册表，所以 `engines=` 只能收窄它，永远不能加进一个
+不存在的名字。
+17.0 撤掉了 5 个后端，也撤掉了读者可能怀念的两项能力：
 **微信公众号文章的检索**（sogou_weixin 是唯一的公众号索引，Bing/百度都搜不全这个池子）
 和**知识库直查**（wikipedia / grokipedia / baidu_baike 的 JSON/词条入口；通用引擎仍能搜到
 这些站点，只是不再把词条当成结构化答案）。17.1 让 yahoo 作为 Bing 家族的第二个入口
 返回（可用性冗余，不加家族），并加入独立小网索引 marginalia。
-Engines run in PARALLEL; one that CAPTCHAs / rate-limits /
-has no topic-match just yields nothing and the others carry. Search is 100%
-HTTP (no browser) - the single Patchright browser stays for web_read only.
+引擎**并行**运行；一家遇到 CAPTCHA / 限流 / 没有主题匹配，就只是不交结果，其余引擎
+继续扛。搜索 100% 走 HTTP（不开浏览器）—— 唯一那个 Patchright 浏览器只为 web_read 留着。
 
-DHOLE_SEARCH_PROXY (http/https/socks5) is the one egress a caller can name for
-per-IP throttling - the one thing no scraper can escape from one IP.
+DHOLE_SEARCH_PROXY（http/https/socks5）是调用方可以点名的唯一出口，用来对付按 IP
+限流 —— 那是任何抓取器都无法从单个 IP 里逃开的一件事。
 """
 
 from __future__ import annotations
@@ -38,11 +35,11 @@ _metasearch = None
 
 
 def _get_metasearch():
-    """Load the heavy scraper backend only for live searches.
+    """只为真实搜索加载沉重的抓取后端。
 
-    Importing search_metasearch pulls in primp/httpx/lxml/fake_useragent. Keep
-    that cost off cached searches, validation failures, and server startup.
-    Tests may monkeypatch _metasearch directly; this helper respects that.
+    导入 search_metasearch 会拉进 primp/httpx/lxml/fake_useragent。把这笔开销挡在
+    缓存命中、校验失败与服务器启动之外。测试可以直接 monkeypatch `_metasearch`；
+    这个 helper 尊重那种写法。
     """
     global _metasearch
     if _metasearch is None:
@@ -51,8 +48,7 @@ def _get_metasearch():
     return _metasearch
 
 
-# Public default engine pool (order = rough preference). `engines=None` in
-# web_search uses this via the metasearch.
+# 公开的默认引擎池（顺序 = 粗略偏好）。web_search 里 `engines=None` 经元搜索走这份池子。
 # 组合：直连主力 2（baidu/bing）+ 稳定国际 3（bing_global/duckduckgo/yahoo）+
 # 常被限流/地区墙 5（brave/sogou/so360/shenma/yandex）+ 小众观察 2（seznam/marginalia），
 # 12 家全部入池 —— 17.0 之后没有 opt-in 引擎，注册表就是默认池。
@@ -110,9 +106,9 @@ def priority_tier(backend: str) -> int:
 # 网络可达性是环境问题（实测 brave 有时直连也通），所以别把它当抓取策略用。
 _CN_DIRECT = frozenset({"baidu", "bing", "so360", "sogou", "shenma", "yandex"})
 
-# Index family per backend (by the underlying index/provider, for consensus).
-# A URL returned by duckduckgo AND bing is ONE family (both Bing's index);
-# returned by duckduckgo AND brave is TWO families = a stronger authority signal.
+# 每个后端所属的索引家族（按底层索引/提供方归，用于共识）。duckduckgo 与 bing 都
+# 返回的同一个 URL 只算**一个**家族（都是 Bing 的索引）；duckduckgo 与 brave 都返回
+# 则是**两个**家族 = 更强的权威信号。
 _INDEX_FAMILY = {
     "duckduckgo": "bing", "bing": "bing",
     # bing_global 是 bing 的国际索引：同一家族的第二个入口。家族按**底层索引**归，
@@ -194,12 +190,10 @@ def cn_index_engines(query: str) -> frozenset:
 
 _FRESHNESS_TO_TIMELIMIT = {"day": "d", "week": "w", "month": "m", "year": "y"}
 
-# Which backends actually put a date constraint on the wire. Measured (16.0) by
-# diffing each engine's build_payload(timelimit=None) against
-# build_payload(timelimit='w'); a test asserts this table against those payloads so
-# it cannot drift when an engine gains or loses the parameter. Everything not
-# listed accepts `timelimit` and ignores it — which is why the response names who
-# was filtered rather than claiming the round was.
+# 哪些后端真的会把日期约束发上线。16.0 实测：逐家对
+# build_payload(timelimit=None) 与 build_payload(timelimit='w') 做差分；测试会拿这些
+# payload 钉住这张表，所以某家引擎加上或丢掉这颗参数时表不会漂。没有列在这里的都收下
+# `timelimit` 却忽略它 —— 这就是响应要点名"谁被过滤了"、而不是声称整轮都被过滤的原因。
 _DATE_AWARE_ENGINES = frozenset({
     "bing", "bing_global",     # filters=ex1:"ez{d|w|m|y}"
     "brave",                   # tf=p{d|w|m|y}
@@ -214,7 +208,7 @@ _DATE_AWARE_ENGINES = frozenset({
 
 
 def date_support(engines) -> tuple:
-    """``(can_be_filtered, cannot_be_filtered)`` for one round's pool."""
+    """一轮池子里 ``（能被日期过滤的, 不能的）`` 两份名单。"""
     pool = set(engines or ())
     return sorted(pool & _DATE_AWARE_ENGINES), sorted(pool - _DATE_AWARE_ENGINES)
 
@@ -247,13 +241,20 @@ def split_date_blindness(blind) -> tuple[list[str], list[str]]:
 
 @dataclass
 class RawResult:
+    """One merged result before wire compaction.
+
+    The field comments record provenance: ``consensus`` counts independent index
+    families, ``sources`` lists every backend that returned the URL, and ``neural_raw`` is
+    the un-normalised rerank score (``None`` = no model measured it this round).
+    """
+
     title: str
     url: str
     snippet: str
-    source: str              # backend that won the dedup (first to return the URL)
-    position: int = 0        # 1-indexed within the merged order
-    consensus: int = 1       # distinct independent index-families that returned this URL
-    sources: tuple = ()      # all backends that returned this URL (set by multi_search)
+    source: str              # 去重胜出的后端（第一个交回该 URL 的）
+    position: int = 0        # 合并序里的位置，从 1 起
+    consensus: int = 1       # 交回该 URL 的独立索引家族数
+    sources: tuple = ()      # 交回该 URL 的全部后端（由 multi_search 写入）
     # 交叉编码器的**未归一** sigmoid，由 reranker.rerank() 盖在行上；None = 这一轮
     # 没有模型量过它。它必须跟着行走完整条链，理由是那句 badge 的合法性：链上流转的
     # 分数是集合内归一的（第一名按构造恒为 1.0，min/max 相同时全体为 1.0），而一个
@@ -270,19 +271,26 @@ class RawResult:
     published: str = ""
     published_precision: str = ""
     published_basis: str = ""
-    # Rows from a vertical source (arXiv/GDELT/Stack Exchange/GitHub/HN).
-    # They share the rerank + date ledger with web rows but are NOT an index
-    # family: engines_consensus stays empty and must not be counted as one.
+    # 来自垂直源（arXiv/GDELT/Stack Exchange/GitHub/HN）的行。它们与网页行共用重排
+    # 与日期账本，但**不是**索引家族：engines_consensus 保持为空，也不许按一个家族计。
     vertical: bool = False
     vertical_kind: str = ""
 
 
 @dataclass
 class EngineReport:
+    """What became of one engine this round.
+
+    ``status`` keeps the upstream's raw token; ``ok``/``blocked``/``preempted`` are its
+    lossy view, kept for the gates that already read them. ``item_nodes``/``usable`` of
+    ``-1`` mean no parser was observed this round, which is a different fact from
+    "parser observed, produced 0 rows".
+    """
+
     name: str
-    ok: bool = False        # parsed >=1 result
-    blocked: bool = False   # rate-limited / CAPTCHA'd / refused / timed out / errored
-    preempted: bool = False # cancelled because enough backends delivered (NOT blocked)
+    ok: bool = False        # 解析出至少 1 条结果
+    blocked: bool = False   # 限流 / CAPTCHA / 被拒 / 超时 / 报错
+    preempted: bool = False # 已有足够后端交回结果而被取消（不是 blocked）
     error: str = ""
     # 上游 metasearch 的原始状态 token（ok/empty/blocked/circuit_open/timeout/
     # error:*/init_error:*/no_key:*/preempted）。三个布尔把它有损地折叠过：
@@ -313,7 +321,7 @@ def _engine_yield() -> dict:
 
 
 def _cooldowns() -> dict:
-    """Active engine cooldowns ({backend: seconds left}); no observation -> {}."""
+    """仍在冷却的引擎（{backend: 剩余秒数}）；没有观测 -> {}。"""
     try:
         from dhole_mcp import search_metasearch
         return search_metasearch.cooldowns()
@@ -340,7 +348,7 @@ def _refusal(name: str, why: str, common: dict, cooldowns: dict) -> EngineReport
 
 
 def _normalize_domain(value: str) -> str:
-    """Return a comparable hostname without a cosmetic leading ``www.``."""
+    """交回可比较的主机名，去掉只影响观感的开头 ``www.``。"""
     value = value.strip()
     if not value:
         return ""
@@ -372,9 +380,8 @@ def _passes_site_filter(url: str, site: Optional[str], exclude_sites: Optional[l
 
 async def fetch_source_for_similar(url: str, *, timeout: int = 10, max_chars: int = 4000
                                    ) -> dict:
-    """Fetch a URL for find_similar: uses a one-off impersonated HTTP fetch (primp) -
-    a single arbitrary page, not a repeated engine hit, so the metasearch's backend
-    rotation does not apply.
+    """为 find_similar 抓一个 URL：走一次性的冒充 HTTP 抓取（primp）—— 单张任意
+    页面，不是反复命中的引擎，所以元搜索的后端轮转在这里不适用。
 
     交回的是**它看见了什么**，不是两件词的省略：`{"title","body","status","reason","detail"}`，
     `reason` ∈ `"" | no-response | no-bytes | blocked | http-error | no-text`。从前这里把五种
@@ -387,7 +394,7 @@ async def fetch_source_for_similar(url: str, *, timeout: int = 10, max_chars: in
         from dhole_mcp.fetcher import HTTPSession
         from dhole_mcp.search_metasearch import _PROXY as _p
         from bs4 import BeautifulSoup
-        # rotation pool kept here (not imported from the removed SERL module)
+        # 轮转池留在这里（不从已移除的 SERL 模块导入）
         _pool = ["chrome", "safari", "firefox", "edge"]
         async with HTTPSession(impersonate=_pool, proxy=_p,
                                stealthy_headers=True, retries=1) as sess:
@@ -404,7 +411,7 @@ async def fetch_source_for_similar(url: str, *, timeout: int = 10, max_chars: in
     if not text:
         seen["reason"] = "http-error" if seen["status"] >= 400 else "no-bytes"
         return seen
-    # light blocked-page heuristic
+    # 轻量的拦截页启发式
     low = text[:4000].lower()
     if any(m in low for m in ("access denied", "are you a robot", "captcha", "403 forbidden")):
         seen["reason"] = "blocked"
@@ -439,25 +446,23 @@ async def multi_search(
     region: str = "us-en",
     freshness: Optional[str] = None,
     page: int = 0,
-    server=None,  # accepted for signature compat; search is 100% HTTP (no browser)
+    server=None,  # 为签名兼容而接受；搜索 100% 走 HTTP（不开浏览器）
     query_map: Optional[dict[str, str]] = None,
     round_stats: Optional[dict] = None,
 ) -> tuple[list[RawResult], list[EngineReport]]:
-    """Run the keyless metasearch backends in parallel; return (ranked, reports).
+    """并行跑免密元搜索后端；交回 (ranked, reports)。
 
-    `engines` selects backends (None = the full default pool). `freshness` maps
-    to the engines' time filter. `site` / `exclude_sites` are applied both as a
-    query prefix (so backends that honor site: filter upstream) and on the final
-    URL (a safety net for backends that do not). `page` is 0-indexed (dhole API)
-    -> 1-indexed for the backends. `server` is unused (kept for call-site compat;
-    search never touches the browser).
+    `engines` 选后端（None = 完整默认池）。`freshness` 映射到各引擎的时间过滤。
+    `site` / `exclude_sites` 既作查询前缀（让认 site: 的后端在上游过滤），也在最终
+    URL 上复查（给不认的后端兜底）。`page` 是 0 起（dhole API）-> 给后端时 1 起。
+    `server` 不参与（为调用点兼容保留；搜索从不碰浏览器）。
 
     `round_stats` 是一只**调用方传进来的袋子**：metasearch 把"这一轮的墙钟账"（为第二个
     家族多等的那一段）写进去。它不走返回值，因为 `(ranked, reports)` 是这个适配层的既有
     契约（五处测试桩与 `dhole engines` 探针按二元组解包）；它也绝不走模块级全局，因为
     搜索会并发，一个全局数会把上一轮的等待报进下一次响应里。
     """
-    # Build the query with site:/-site: prefixes (best-effort upstream filter).
+    # 把 site:/-site: 前缀拼进查询（尽力的上游过滤）。
     def _apply_site(q: str) -> str:
         if site:
             q = f"site:{site} {q}"
@@ -466,13 +471,13 @@ async def multi_search(
         return q
 
     q = _apply_site(query)
-    # Apply site: filters to each per-engine query in the query_map (fan-out).
+    # 对 query_map 里每个按引擎的查询同样套 site: 过滤（扇出）。
     if query_map:
         query_map = {eng: _apply_site(qq) for eng, qq in query_map.items()}
     timelimit = _FRESHNESS_TO_TIMELIMIT.get(freshness) if freshness else None
-    backend_page = page + 1  # dhole 0-indexed -> backends 1-indexed
+    backend_page = page + 1  # dhole 从 0 起 -> 后端从 1 起
 
-    # Map dhole engine names -> metasearch backends (it handles 'auto'/None/legacy).
+    # 把 dhole 的引擎名映射到元搜索后端（'auto'/None/旧名由它处理）。
     mapped = list(engines) if engines else None
 
     metasearch = _get_metasearch()
@@ -482,7 +487,7 @@ async def multi_search(
         round_stats=round_stats,
     )
 
-    # Map to RawResult with cross-backend consensus + apply the final site filter.
+    # 映射成带跨后端共识的 RawResult，并套上最终的 site 过滤。
     ranked: list[RawResult] = []
     for i, d in enumerate(results_dicts, start=1):
         url = d.get("href", "")
@@ -506,7 +511,7 @@ async def multi_search(
             published_basis=d.get("published_basis", "") or "",
         ))
 
-    # Per-backend reports from the metasearch status. 每个分支都带上原始 token：
+    # 按后端从元搜索状态生成报告。每个分支都带上原始 token：
     # 布尔是有损折叠，empty 就是被折掉的那一格。
     yield_rows = _engine_yield()
     cooldowns = _cooldowns()

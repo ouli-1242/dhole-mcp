@@ -1,19 +1,17 @@
-"""CLI entry point for dhole — and the one thing it must still do on a broken install.
+"""dhole 的 CLI 入口——也是安装坏掉时仍然必须做对的那件事。
 
-This module is the pip entry point (`dhole = dhole_mcp.cli:main`). It stays
-deliberately lightweight: NO heavy imports at module level. When dhole.exe runs,
-it does `from dhole_mcp.cli import main`, which pulls in `dhole_mcp.__init__`
-(just `__version__`) and this module (stdlib only). The heavy server import
-happens lazily inside main().
+本模块是 pip 入口（`dhole = dhole_mcp.cli:main`）。它刻意保持轻量：模块级
+**没有**重 import。dhole.exe 跑起来时执行 `from dhole_mcp.cli import main`，
+只会拖进 `dhole_mcp.__init__`（只有 `__version__`）和本模块（只用标准库）。
+重的 server import 发生在 main() 内部、惰性进行。
 
-17.0 B2-3: the self-heal became a sentence instead of a subprocess. It used to
-write ``~/.dhole/repair.py`` and run it — stop every dhole process, then
-``pip --force-reinstall`` a few hundred MB — on ANY ImportError, including one
-raised by an unrelated package sharing the environment. A repair that destroys
-the state it was meant to protect, decided by an exception nobody read, is not a
-recovery path. What remains: name the piece that is missing — the module when a module
-is gone, the SYMBOL when dhole's own files disagree — and print the command that fixes
-that one, then exit non-zero so a host cannot mistake this for a started server.
+17.0 B2-3：自愈从"跑一个子进程"变成"说一句话"。从前它会写
+``~/.dhole/repair.py`` 并执行——停掉所有 dhole 进程，然后
+``pip --force-reinstall`` 几百 MB——只要碰到**任何** ImportError，包括同一
+环境里无关包抛出的那种。一次会毁掉它本该保护的状态的修复，由一句没人读的异常
+来决定，不是恢复路径。留下的是：点名缺的那一件——模块没了就点模块，dhole 自己
+的文件不一致就点**符号**——打印修那一件的命令，然后非零退出，让宿主不能把这
+当成一个已经启动的服务器。
 """
 
 from __future__ import annotations
@@ -27,11 +25,10 @@ _FIX_DEPS = """\
   (nothing was installed and no process was touched - 17.0 removed the unattended repair.)
 """
 
-# R01-002: a missing SYMBOL is not a missing dependency. `.[all]` here sends the user
-# through a few hundred MB of installs that change nothing, because the package that
-# owns both sides of the broken import is dhole itself. Wording note: the 17.0 B2-3
-# guard (tests/test_self_heal_prints_only.py) forbids the reinstall flag anywhere in an
-# executed string, so this names the levers that actually restore the code instead.
+# R01-002：缺**符号**不是缺依赖。这里的 `.[all]` 会让用户白装几百 MB、什么也
+# 不改变，因为坏掉的 import 两端都属于 dhole 自己。措辞注意：17.0 B2-3 的守卫
+# （tests/test_self_heal_prints_only.py）禁止在任何会执行的字符串里出现 reinstall
+# 旗标，所以这里点名真正能恢复代码的杠杆。
 _FIX_CODE = """\
   dhole cannot start: {what}
   this is not a missing package - dhole's own files disagree with each other (one side
@@ -45,13 +42,12 @@ _FIX_CODE = """\
 
 
 def _startup_failure(exc: BaseException) -> str:
-    """One report per shape of "cannot import": a missing module vs a missing symbol.
+    """"无法 import"按形状各报一次：缺模块 vs 缺符号。
 
-    CPython hands `ModuleNotFoundError.name` the module, which is the whole story there.
-    For "cannot import name 'X' from 'Y'" it hands the **module Y** (measured on 3.14),
-    so reading `.name` alone drops the only actionable fact - the symbol X, which lives
-    in `str(exc)`. The remedy differs too: the first shape wants its dependencies, the
-    second wants dhole's own files brought back into agreement.
+    CPython 把模块交给 `ModuleNotFoundError.name`，那一种那里就是全部故事。
+    对 "cannot import name 'X' from 'Y'"，它交给 `name` 的是**模块 Y**（3.14
+    实测），所以只读 `.name` 会丢掉唯一可行动的事实——符号 X，它住在 `str(exc)`
+    里。解法也不同：第一种要它的依赖，第二种要 dhole 自己的文件重新一致。
     """
     text = str(exc)
     if "cannot import name" in text:
@@ -60,13 +56,13 @@ def _startup_failure(exc: BaseException) -> str:
 
 
 def main() -> int:
-    """Run the server; if it cannot even be imported, say which piece is missing."""
+    """跑服务器；连 import 都做不到时，说清缺的是哪一件。"""
     try:
         from dhole_mcp.ops import main as _server_main
         return _server_main() or 0
     except (ImportError, ModuleNotFoundError) as exc:
-        # The missing name is what makes this actionable: "No module named 'bs4'"
-        # points at one install command, while "cannot import name X from Y" points at
-        # a code mismatch that no amount of installing dependencies will repair.
+        # 缺的名字才是可行动的："No module named 'bs4'" 指向一条安装命令，
+        # 而 "cannot import name X from Y" 指向一次装多少依赖都修不好的代码
+        # 不一致。
         sys.stderr.write(_startup_failure(exc))
         return 1

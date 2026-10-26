@@ -1,15 +1,15 @@
-"""Dhole MCP Server.
+"""Dhole MCP 服务器。
 
-Forks Scrapling's built-in MCP server and adds:
-- Trafilatura article extraction (cleaner than markdownify)
-- Smart fetch routing (auto-escalate HTTP -> Stealthy). 2 tiers: HTTP first, then Patchright stealth browser.
-- SQLite content cache with TTL
-- web_read umbrella tool (single entry point that routes automatically)
-- extract_article and extract_structured modes
-- Input validation with SSRF protection
+从 Scrapling 内置的 MCP 服务器分叉而来，并在其上新增：
+- Trafilatura 文章抽取（比 markdownify 更干净）
+- 智能抓取路由（自动把 HTTP 升级到 Stealthy）。共 2 档：先 HTTP，再 Patchright 隐身浏览器。
+- 带 TTL 的 SQLite 内容缓存
+- web_read 总入口工具（唯一入口，自动路由）
+- extract_article 与 extract_structured 两种模式
+- 带 SSRF 防护的输入校验
 
-Note: the dynamic (Playwright) browser tier was removed in v3.5.0. web_read
-auto-routing only uses http -> stealthy; open_session creates a stealthy session.
+注意：动态（Playwright）浏览器档已在 v3.5.0 移除。web_read 的
+自动路由只用 http -> stealthy；open_session 创建的是 stealthy 会话。
 """
 
 from __future__ import annotations
@@ -36,29 +36,29 @@ from urllib.parse import quote as _url_quote, urlparse, urlsplit, urlunparse, ur
 import warnings as _warnings
 import traceback as _traceback
 
-# Production cleanliness: on Windows the ProactorEventLoop's stdio/subprocess
-# pipe transports can emit 'unclosed transport' ResourceWarnings from __del__
-# during interpreter teardown (after the loop is closed). These print a
-# traceback to stderr that an MCP client can mistake for a crash. The real
-# fix is closing the transports while the loop is alive (see
-# _shutdown_close_sessions); these two guards suppress any residual noise so
-# stderr stays clean. (Real __del__ exceptions still surface.)
+# 生产环境整洁性：在 Windows 上，ProactorEventLoop 的 stdio/subprocess
+# 管道传输对象会在解释器收尾阶段（事件循环已关闭之后）由 __del__ 抛出
+# 'unclosed transport' ResourceWarning。这些警告会向 stderr 打印
+# 回溯，MCP 客户端可能误判为崩溃。真正的
+# 修法是在事件循环还活着时关闭传输对象（见
+# _shutdown_close_sessions）；这两道防线只是压掉残余噪音，让
+# stderr 保持干净。（真正的 __del__ 异常仍会浮出。）
 _warnings.filterwarnings("ignore", message="unclosed .*transport", category=ResourceWarning)
 
-# CPython prints 'Exception ignored in __del__' via sys.unraisablehook. The
-# asyncio transport teardown on a closed ProactorEventLoop raises RuntimeError
-# ('Event loop is closed') and ValueError ('I/O operation on closed pipe') from
-# __del__ during GC — after the loop is gone, so they can't be caught. Override
-# the hook to swallow ONLY that benign asyncio-transport teardown noise; every
-# other unraisable exception still goes to the original hook (real bugs stay
-# visible). This is what keeps `python -m dhole_mcp` stderr clean on exit.
+# CPython 通过 sys.unraisablehook 打印 'Exception ignored in __del__'。在已关闭的
+# ProactorEventLoop 上，asyncio 传输对象的收尾会在 GC 期间由
+# __del__ 抛出 RuntimeError（'Event loop is closed'）和 ValueError
+# （'I/O operation on closed pipe'）—— 此时循环已不在，抓不住。重写
+# 该钩子，只吞掉这类无害的 asyncio 传输收尾噪音；其他
+# 所有 unraisable 异常仍交给原钩子（真正的 bug 保持
+# 可见）。这就是让 `python -m dhole_mcp` 退出时 stderr 保持干净的原因。
 _ORIG_UNRAISABLEHOOK = getattr(sys, "unraisablehook", None)
 
 def _quiet_asyncio_del_hook(args):
     etype = getattr(args, "exc_type", None)
     try:
         tb = getattr(args, "exc_traceback", None)
-        # extract_tb yields FrameSummary objects (.filename, not .f_code).
+        # extract_tb 产出 FrameSummary 对象（用 .filename，而非 .f_code）。
         filenames = " ".join(
             (getattr(fr, "filename", "") or "") for fr in _traceback.extract_tb(tb)
         ) if tb is not None else ""
@@ -69,7 +69,7 @@ def _quiet_asyncio_del_hook(args):
         and etype in (RuntimeError, ValueError, ResourceWarning)
     )
     if is_asyncio_teardown:
-        return  # benign transport teardown on a closed loop — swallow
+        return  # 已关闭循环上的无害传输收尾 —— 吞掉
     if _ORIG_UNRAISABLEHOOK is not None:
         try:
             _ORIG_UNRAISABLEHOOK(args)
@@ -91,15 +91,15 @@ from dhole_mcp import env_registry
 from dhole_mcp import identity
 from dhole_mcp import install as _install
 
-# Lazy imports: browser deps (patchright) pull in playwright (~5s load). Defer
-# until first use so the MCP server responds to initialize immediately.
-# Set when browser import fails (e.g. patchright not installable on Termux).
-# When set, dhole runs in HTTP-only mode: fetch + search + crawl work via primp
-# + httpx + trafilatura, but stealthy browser escalation and web_act are disabled.
+# 懒加载：浏览器依赖（patchright）会拉入 playwright（加载约 5 秒）。推迟到
+# 首次使用，好让 MCP 服务器立刻响应 initialize。
+# 浏览器导入失败时置位（例如 Termux 上装不了 patchright）。
+# 一旦置位，dhole 以仅 HTTP 模式运行：fetch + search + crawl 走 primp
+# + httpx + trafilatura，但隐身浏览器升级与 web_act 被禁用。
 _browser_import_error: Optional[str] = None
 
-# Module-level type placeholders — needed because FastMCP evaluates string
-# annotations at tool registration time. Set to actual types on first fetch.
+# 模块级类型占位符 —— 因为 FastMCP 在注册工具时会求值字符串
+# 注解。首次抓取时再填入真实类型。
 SetCookieParam: Any = None  # type: ignore[valid-type]
 SelectorWaitStates: Any = None
 FollowRedirects: Any = None
@@ -107,15 +107,12 @@ ImpersonateType: Any = None
 
 
 def _browser_deps_available() -> bool:
-    """True if browser deps (patchright) are importable.
+    """浏览器依赖（patchright）可导入时为 True。
 
-    Non-blocking: reads the cache populated by the prewarm thread.
-    Never triggers a synchronous import on the event loop.
+    不阻塞：只读预热线程填好的缓存，绝不在事件循环上触发同步 import。
 
-    If the cache is not yet populated (prewarm thread hasn't finished),
-    returns True (optimistic). The actual browser operation will fail
-    gracefully if patchright isn't installed, and the error is caught
-    by the tool handler.
+    缓存还没填（预热线程尚未跑完）时返回 True（乐观）。真没装 patchright 的话，
+    浏览器操作会体面地失败，错误由工具 handler 捕获。
     """
     from dhole_mcp.browser import is_browser_available_cached, browser_import_error
     global _browser_import_error
@@ -125,9 +122,9 @@ def _browser_deps_available() -> bool:
     if cached is False:
         _browser_import_error = browser_import_error()
         return False
-    # Cache not yet populated (prewarm thread still running or hasn't started).
-    # Optimistic: assume available. If wrong, the browser operation raises
-    # ImportError which the tool handler catches and reports cleanly.
+    # 缓存尚未填充（预热线程还在跑，或还没启动）。
+    # 乐观处理：先当作可用。若判断错了，浏览器操作会抛
+    # ImportError，由工具 handler 捕获并干净地报告。
     return True
 
 
@@ -140,9 +137,9 @@ async def _fallback_http_get(
     timeout: int = 30,
     verify: bool = True,
 ):
-    """HTTP fetch via primp (TLS impersonation). Used as the HTTP tier.
+    """通过 primp 发起 HTTP 抓取（TLS 指纹伪装）。作为 HTTP 档使用。
 
-    Returns a Response object from dhole_mcp.fetcher.
+    返回 dhole_mcp.fetcher 的 Response 对象。
     """
     from dhole_mcp.fetcher import http_get
     return await http_get(
@@ -163,8 +160,8 @@ from dhole_mcp.envelope import (
     answer_is_prose,
     detect_page_type,
 )
-# robots.txt compliance: one cached check per origin, consulted before any tier
-# runs (see the robots module docstring for the fail-open policy).
+# robots.txt 合规：每个 origin 缓存一次检查，任何档启动前先查
+# （fail-open 策略见 robots 模块的 docstring）。
 from dhole_mcp.robots import (
     ENV_IGNORE_ROBOTS, REFUSED_BY_POLICY as ROBOTS_REFUSED_BY_POLICY,
     UNAVAILABLE as ROBOTS_UNAVAILABLE, check as check_robots,
@@ -173,15 +170,14 @@ from dhole_mcp.robots import (
 
 
 def _robots_mode_label(ignore_robots: bool, verdict) -> str:
-    """What `metadata.robots` may honestly say about this fetch.
+    """`metadata.robots` 对这次抓取能如实说出的内容。
 
-    Four different situations used to share two strings, and one of the pair was a
-    lie: dhole refusing to dial the robots URL (its own SSRF policy) printed the
-    same "robots.txt unreadable" as a host that really would not serve the file. An
-    auditor reading the field takes "unreadable" as a fact about the site, so the
-    two must be spelled differently. `unavailable` with no recorded cause keeps the
-    old sentence — that is what an unfetchable file looks like, and
-    `test_usage_simulation_regressions.TestRobotsLabelTellsTheTruth` pins it.
+    过去四种不同情形共用两个字符串，而这对字符串里有一个是假话：dhole 拒绝
+    连接 robots URL（它自己的 SSRF 策略）时，打印的 "robots.txt unreadable" 与
+    主机确实不提供该文件时一样。审计者读到这个字段，会把 "unreadable" 当作
+    关于站点的事实，所以两者必须用不同措辞。`unavailable` 且未记录原因时保留
+    旧句子 —— 那才是文件抓不到的样子，且
+    `test_usage_simulation_regressions.TestRobotsLabelTellsTheTruth` 锁定了它。
     """
     if ignore_robots:
         return "bypassed (ignore_robots=true)"
@@ -195,8 +191,8 @@ def _robots_mode_label(ignore_robots: bool, verdict) -> str:
                     "robots.txt for this target)")
         return "not checked (robots.txt unreadable)"
     return "complied"
-# Cookie jar shared by every tier (G7). `get_robots_cache`'s sibling: one place
-# holds cross-call state, so `sys_state` can drop all of it at once.
+# 所有档共用的 cookie jar（G7）。与 `get_robots_cache` 同类：跨调用状态
+# 集中在一处，`sys_state` 可以一次性清空。
 from dhole_mcp.sessions import (
     clear as clear_cookie_jar, names_for as cookie_names_for,
     sessions as cookie_jar_census,
@@ -233,16 +229,16 @@ from dhole_mcp.security import (
     # 同一族的第三颗：`validate_proxy` 那六类拒绝（评审 R02-105）。识别针与出路都在
     # 守卫这一份里 —— 存储那一侧现在也读同一位裁判，两侧不会再各说一套。
     PROXY_REFUSAL_PREFIXES, PROXY_RECOVERY,
-    # G9: the private-host door. 17.0 removed the per-call argument and R02-141
-    # moved the reading of the stored value into the guard itself, so no door here
-    # pushes a scope any more — this module only parses a value (to refuse a bad
-    # one at set time) and asks the guard's own reader when it has to report one.
+    # G9：私网主机这道门。17.0 移除了按次传入的参数，R02-141 又把
+    # 存储值的读取搬进了守卫本身，所以这里的门不再自行
+    # 传递作用域 —— 本模块只负责解析取值（在设置时拒绝坏值），
+    # 需要上报时问守卫自己的读取器。
     parse_allow_private,
-    # The stored row behind that gate — asked here only to say "that one does
-    # nothing", never to decide a fetch.
+    # 那道门背后的存储记录 —— 这里只用来回答「那条设置不起作用」，
+    # 从不用于决定一次抓取。
     stored_allow_private,
-    # Whether that stored policy has any bearing on one target — the question
-    # `identity_applied` may answer with the key's name.
+    # 那条存储策略是否影响某个目标 —— `identity_applied` 可能用键名
+    # 回答这个问题。
     allow_private_covers,
 )
 
@@ -404,7 +400,7 @@ from dhole_mcp.context import (
     _note_clamped,
 )
 
-# Extended extraction types (beyond Scrapling's markdown/html/text)
+# 扩展的抽取类型（超出 Scrapling 的 markdown/html/text）
 ExtendedExtractionType = Literal["markdown", "html", "text", "article", "structured"]
 # G1：'check' 只归 web_read —— 它回答「这页变了吗」，对 web_request/crawl 的批量
 # 取回没有意义；tier 方法也不认识它（拦截在 handler 顶层，往下的类型面不变）。
@@ -412,56 +408,54 @@ ReadExtractionType = Literal["markdown", "html", "text", "article", "structured"
 ScreenshotType = Literal["png", "jpeg"]
 
 MAX_CONTENT_CHARS = 40000
-# web_read `schema` runs CSS selectors over the raw markup, so the document
-# fed to the extractor must NOT be capped by the caller's `max_content_chars`
-# (that cap is about what goes back to the caller). A 500-char cap used to leave
-# the extractor with nothing but <head>, so every selector missed and the call
-# still reported success. Ceiling matches the max_content_chars clamp.
+# web_read 的 `schema` 在原始标记上跑 CSS 选择器，所以喂给抽取器的
+# 文档绝不能受调用方 `max_content_chars` 的截断
+# （那个上限管的是回给调用方的内容）。从前 500 字符的上限会让
+# 抽取器只剩 <head>，于是所有选择器都落空，调用却
+# 照样报成功。这里的上限与 max_content_chars 的钳制范围一致。
 _SCHEMA_SOURCE_MAX_CHARS = 200000
-MIN_CHUNK_CHARS = 500  # if remaining < this, merge into current chunk (avoids wasteful round-trips)
-MAX_RESPONSE_BYTES = 50 * 1024 * 1024  # 50MB hard cap for response bodies
-MAX_BULK_URLS = 100  # hard cap to prevent DoS via unbounded parallel requests
+MIN_CHUNK_CHARS = 500  # 若剩余量小于此值，并入当前块（避免无谓的往返）
+MAX_RESPONSE_BYTES = 50 * 1024 * 1024  # 响应体 50MB 硬上限
+MAX_BULK_URLS = 100  # 硬上限，防止无限并行请求造成 DoS
 
-# Known slow-but-HTTP-accessible sites (Q&A, docs) that get a longer HTTP
-# timeout so they don't prematurely escalate to stealthy.
+# 已知较慢但 HTTP 可达的站点（问答、文档类）给更长的 HTTP
+# 超时，免得过早升级到 stealthy。
 _SLOW_HTTP_DOMAINS = frozenset({
     "stackoverflow.com", "stackexchange.com", "serverfault.com",
     "superuser.com", "askubuntu.com", "mathoverflow.com",
 })
 
-# Adaptive timeout: track per-domain response latency (EMA) so slow domains
-# get a longer timeout and fast domains fail sooner. In-memory only (resets on
-# restart, which is fine — it re-learns within 1-2 fetches).
+# 自适应超时：按域记录响应延迟（EMA），慢域名得到更长
+# 超时，快域名则更早失败。仅存内存（重启即重置，
+# 无妨 —— 一两次抓取内就会重新学到）。
 #
-# Pages and documents are learned SEPARATELY. One table for both is what made
-# every large PDF fail: a 0.8s fetch of a host's HTML page put that domain's
-# budget at max(5s, 3x0.8s) = 5s, and a 40MB PDF on the same host then had five
-# seconds to arrive — with `timeout=60000` unable to help, because the learned
-# term was applied through a min(). Two contaminations, one per direction: the
-# page habit capping a download (fixed in _http_tier_budget, which lets
-# documents opt out of the ceiling), and a 40s download inflating the budget for
-# the next page (fixed by recording into the table that matches what was fetched).
-_DOMAIN_LATENCY: Dict[str, float] = {}       # domain -> avg PAGE response time (ms)
-_DOMAIN_DOC_LATENCY: Dict[str, float] = {}   # domain -> avg DOCUMENT download time (ms)
+# 页面与文档分开学习。两者共用一张表，正是每个大 PDF 都失败的
+# 原因：对某主机 HTML 页面 0.8 秒的抓取把该域预算定在
+# max(5s, 3x0.8s) = 5 秒，同一主机上 40MB 的 PDF 于是只有五
+# 秒到达 —— `timeout=60000` 也救不了，因为学到的那一项是
+# 通过 min() 施加的。两个方向的污染各一：页面习惯限制了
+# 下载（已在 _http_tier_budget 修复，允许文档退出该上限），
+# 以及 40 秒的下载抬高了下一页的预算
+# （改为记入与被抓对象匹配的那张表）。
+_DOMAIN_LATENCY: Dict[str, float] = {}       # domain -> 页面平均响应时间（毫秒）
+_DOMAIN_DOC_LATENCY: Dict[str, float] = {}   # domain -> 文档平均下载时间（毫秒）
 
-# What this tool treats as a download rather than a render: the bodies it reads
-# after they are fully in memory. Deliberately only the formats it can actually
-# extract — a .zip is a download too, but there is nothing here to make of it.
+# 本工具视为"下载"而非"渲染"的东西：那些完全读进内存后才解析的
+# 响应体。刻意只包含它真正能抽取的格式 —— .zip 也算下载，
+# 但这里对它无事可做。
 _DOCUMENT_EXTENSIONS = (".pdf",)
 
 
 def _is_document_url(url: str) -> bool:
-    """True for a document download rather than a page render, from the URL alone.
+    """仅凭 URL 判断这是文档下载而非页面渲染。
 
-    One predicate for the three rules that hang off it (never escalate a PDF URL
-    to the browser, never cap it by the learned page latency, gate it on the size
-    preflight). Each used to re-derive `.pdf` by hand, with its own idea of where
-    the query string ends.
+    三条规则共用这一个判据（绝不把 PDF URL 升级到浏览器、绝不用学到的页面
+    延迟限制它、在大小预检处拦住它）。这三处从前各自手抄 `.pdf` 判据，
+    对查询串从哪儿结束也各有一套想法。
 
-    This is the only class judgement available BEFORE the request. Once there is a
-    response, use _is_document: arxiv-style URLs (`/pdf/2103.00020`) serve a PDF
-    with no extension to see, and classing those as pages is what let a 26-second
-    download set the page budget for a whole host.
+    这是请求发出前唯一可用的类别判断。拿到响应之后请改用 _is_document：
+    arxiv 风格的 URL（`/pdf/2103.00020`）提供的 PDF 看不到扩展名，
+    把它们当作页面，正是 26 秒的下载给整台主机定下页面预算的原因。
 
     3.3（提升计划）：无扩展名的 `/pdf/<id>` 路径（arxiv / openreview 一族）同样是
     文档 URL。不认它的代价量过两遍：11MB 的 arxiv PDF 按「页面」预算走 —— 学习
@@ -482,18 +476,18 @@ def _is_document_url(url: str) -> bool:
 
 
 def _is_document(result: ResponseModel) -> bool:
-    """Whether what came BACK was a document — content type, or the URL's say so."""
+    """返回的东西是不是文档 —— 看 content type，或看 URL 怎么说。"""
     return "application/pdf" in (result.content_type or "").lower() or _is_document_url(result.url or "")
 
 
 def _record_latency(url: str, elapsed_ms: float, *, document: bool = False) -> None:
-    """Record how long a domain took, in the table for the kind of thing fetched."""
+    """记录某域耗时，记入与被抓对象类型对应的那张表。"""
     try:
         domain = urlparse(url).netloc
         if not domain:
             return
         table = _DOMAIN_DOC_LATENCY if document else _DOMAIN_LATENCY
-        # Cap dict size to prevent unbounded growth (LRU-like: clear oldest half)
+        # 限制字典大小，防止无界增长（类 LRU：清掉最旧的一半）
         if len(table) > 1000:
             keys = list(table)
             for k in keys[:500]:
@@ -507,14 +501,14 @@ def _record_latency(url: str, elapsed_ms: float, *, document: bool = False) -> N
         pass
 
 
-# web_read's call budget when the caller does not pass `timeout`.
-# Whole-call wall-clock defaults, sized to the HOST, not to the page: MCP clients
-# commonly cut a call at 30s with a bare "tool execution timed out" and nothing
-# comes back (measured 2026-10-06: a 60s web_act default died exactly that way).
-# An internal budget that outlives the host's returns nothing; one that fires
-# first returns a structured timeout naming the knob to raise. Warm browser calls
-# fit in 25s (3-17s measured); a cold start that genuinely needs longer is the
-# caller's explicit `timeout=` raise, not a default the host will never honor.
+# 调用方不传 `timeout` 时 web_read 的调用预算。
+# 整次调用的墙钟默认值，按宿主而非按页面来定：MCP 客户端
+# 常在 30 秒处直接掐断，只回一句 "tool execution timed out"，什么都没有
+# （2026-10-06 实测：60 秒的 web_act 默认值就是这样死掉的）。
+# 比宿主活得更久的内部预算什么也回不来；先触发的那个则返回
+# 结构化超时，并点名该调大的旋钮。热的浏览器调用
+# 25 秒内能完成（实测 3-17 秒）；真正需要更久的冷启动应由
+# 调用方显式调大 `timeout=`，而不是宿主永远不会兑现的默认值。
 DEFAULT_CALL_TIMEOUT_MS = 30000
 ACTIONS_DEFAULT_TIMEOUT_MS = 25000
 
@@ -543,7 +537,7 @@ HOLE_REASON_CAP = 400
 
 
 def _clip_reason(text: str) -> str:
-    """Bound a hole's reason without beheading it: whole words, and say when it was cut."""
+    """给洞的 reason 设上限但不砍头：按整词截断，并说明被截过。"""
     if len(text) <= HOLE_REASON_CAP:
         return text
     return text[:HOLE_REASON_CAP].rsplit(" ", 1)[0] + " [reason clipped]"
@@ -589,15 +583,15 @@ def _inline_budget_hole(sr) -> dict:
 
 
 def _adaptive_timeout(url: str, default_ms: int = 30000) -> int:
-    """How long this domain may take for a PAGE, from what its pages took before.
+    """这个域的一个页面可以花多久，依据是它此前的页面花了多久。
 
-    Returns 3x the EMA latency, clamped to [5s, 60s]; `default_ms` for a domain
-    that has not been seen.
+    返回 EMA 延迟的 3 倍，钳制在 [5s, 60s]；没见过的域返回
+    `default_ms`。
 
-    This is a CEILING, and it is only ever consulted for pages: a host's habit of
-    answering HTML in 0.8s says nothing about how long a 40MB file takes to
-    arrive, and applying it to documents is what produced the five-second PDF that
-    `timeout=60000` could not lift (_http_tier_budget is where that is opted out).
+    这是一个上限，且只用于页面：某主机习惯在 0.8 秒内返回 HTML，
+    并不说明 40MB 的文件要多久到达，把它套到文档上，
+    正是那个 `timeout=60000` 也抬不动的五秒 PDF 的由来
+    （_http_tier_budget 是退出该上限的地方）。
     """
     try:
         domain = urlparse(url).netloc
@@ -609,17 +603,18 @@ def _adaptive_timeout(url: str, default_ms: int = 30000) -> int:
         return default_ms
 
 
-# `get()` retries by default, and its timeout is PER ATTEMPT: primp's timeout is
-# a whole-request total (not an idle timeout), and the redirect loop hands the
-# same figure to every hop. So the old HTTP tier could ask for four attempts of
-# 30s inside a 30s call, and `_with_budget` killed it mid-retry — "4 attempts"
-# was mostly a name. The rule below keeps each attempt as long as the host needs
-# (shrinking an attempt to buy more attempts would fail a slow-but-healthy site in
-# order to insure against a stalled one) and keeps only as many attempts as FIT.
-_HTTP_ATTEMPTS = 4      # get()'s default: 1 try + 3 retries
-MAX_HTTP_TIMEOUT_S = 120  # validate_timeout's own ceiling, restated as a bound here
+# `get()` 默认会重试，且其超时是每次尝试的：primp 的 timeout 是
+# 整请求总时长（不是空闲超时），重定向循环又把同一个数字交给
+# 每一跳。于是旧 HTTP 档可能在 30 秒的调用里要求四次
+# 30 秒的尝试，`_with_budget` 在重试途中就把它杀了 —— "4 attempts"
+# 基本只是名字。下面的规则让每次尝试保持宿主需要的长度
+# （为多买几次尝试而缩短单次，会让慢但健康的站点失败，
+# 只为给卡死的站点上保险），并且只保留放得下的尝试次数。
+_HTTP_ATTEMPTS = 4      # get() 的默认：1 次尝试 + 3 次重试
+MAX_HTTP_TIMEOUT_S = 120  # validate_timeout 自己的上限，这里再述为一个边界
 # 一次 HTTP 尝试的上限。**算式只有一个作者**（`bulk_get` 里那行 `min(int(timeout), 30)`，
-# 由 test_every_clamp_is_announced.py:216 钉住），这里这份是给"说话的地方"用的：建议文案
+# 由 `tests/test_context.py::test_the_per_attempt_timeout_cap_is_computed_in_one_place`
+# 钉住），这里这份是给"说话的地方"用的：建议文案
 # 要在 30s 那一道天花板处换一句话，而那句话不该自己再算一遍。三处之家（算式 / 这颗 /
 # 常驻层那两句描述）与响应字段描述里的同一个数，由
 # tests/test_a_timeout_bigger_than_the_per_attempt_cap_says_what_it_bought.py 逐一对齐。
@@ -634,7 +629,7 @@ def _feed_timeout_s(timeout_ms: Optional[int | float]) -> int:
     """`feed_read` 的 `timeout=`（毫秒）换算成 `fetch_feed` 那一层的单位（秒）。
 
     这颗参数从前**没有换算**：线上传来的数字原样下传，而 `HTTPSession` 的 timeout 单位
-    是秒（`fetcher.py:715`）。于是按 wire 的口径写的 `timeout=30000`（=30s）在 primp
+    是秒（`fetcher.HTTPSession`）。于是按 wire 的口径写的 `timeout=30000`（=30s）在 primp
     那里是 30000 秒 —— 一次挂死的取回从此没有任何时钟，而调用方以为自己点的正是最短的
     那一档。上界由 `validate_timeout` 在门口**具名拒绝**而不是静默夹住；下界是一秒，因为
     在这一层 0 不是"立刻"而是"不设超时"。
@@ -645,21 +640,21 @@ def _feed_timeout_s(timeout_ms: Optional[int | float]) -> int:
 
 def _http_tier_budget(url: str, budget_ms: float, left_s: float, *,
                       document: bool = False, slow_domain: bool = False) -> tuple[int, int]:
-    """(per-attempt seconds, retries, which lever bound them) for one HTTP tier.
+    """一次 HTTP 档的（每次尝试秒数、重试次数、是哪根杠杆限定的）。
 
     第三位是 R02-041 要的那一句的原料：这一档把点名的预算改成现在这个数时，**是谁**改的
     （"" = 没人改；"left" = 这一档只剩这么多；"learned" = 该主机此前答得多快；
     "slow-domain" = 慢站的最低保障把它抬宽）。数值一位没因这个返回值而改变 —— 判据与
     上面那几行是同一套 min/max，这里只是把"哪一颗生效"记下来。
 
-    The caller's budget is the contract, and the tier used to break it in both
-    directions: a learned 5s undercut a 60s call, and "at least 20s for a slow
-    domain" overstated a 5s one. Both are bounded by what is left here.
+    调用方的预算是合同，而这一档从前在两个方向上都违反它：学到的 5 秒
+    压低了 60 秒的调用，而"慢站至少 20 秒"又把 5 秒的调用虚报高了。
+    两者都受这里剩余的额度约束。
 
-    A document opts out of the learned page ceiling — a host's habit of answering
-    HTML in 0.8s says nothing about a 40MB file — and takes the whole remaining
-    budget in ONE attempt, because a retry restarts its download from byte zero:
-    splitting the budget across attempts would guarantee that none of them finish.
+    文档退出学到的页面上限 —— 某主机习惯在 0.8 秒内返回 HTML，并不
+    说明 40MB 的文件如何 —— 并且用一次尝试吃掉全部剩余预算，
+    因为重试会从第零字节重新下载：把预算拆给多次尝试，
+    等于保证它们一次也下不完。
     """
     left = max(1.0, min(float(left_s), MAX_HTTP_TIMEOUT_S))
     asked_s = max(1.0, float(budget_ms or 0) / 1000.0)
@@ -684,8 +679,8 @@ def _http_tier_budget(url: str, budget_ms: float, left_s: float, *,
             else:
                 allowance_s = min(allowance_s, _learned_s)
     if slow_domain:
-        # Known slow-but-plainly-HTTP sites get at least 20s, which is still never
-        # more than what is left of this call.
+        # 已知较慢但纯 HTTP 可达的站点至少得到 20 秒，仍绝不超过
+        # 本次调用的剩余额度。
         _floor_s = min(left, max(allowance_s, 20.0))
         if _floor_s > allowance_s + 0.5:
             bound = "slow-domain"
@@ -698,7 +693,7 @@ def _http_tier_budget(url: str, budget_ms: float, left_s: float, *,
 
 
 def _human_bytes(n: int) -> str:
-    """Bytes as the caller will read them: one decimal, no false precision."""
+    """按调用方阅读的方式显示字节数：保留一位小数，不假精确。"""
     for unit, div in (("GB", 1024 ** 3), ("MB", 1024 ** 2), ("KB", 1024)):
         if n >= div:
             return f"{n / div:.1f}{unit}"
@@ -710,17 +705,15 @@ async def _document_size(url: str, proxy: Optional[str],
                          cookies: Optional[Dict[str, str]] = None,
                          useragent: Optional[str] = None,
                          budget_s: float = 3.0) -> tuple[Optional[int], str]:
-    """Ask the host how big this document is, without downloading it.
+    """向主机询问这份文档有多大，而不下载它。
 
-    A one-byte range request answers that in one round trip. It exists because
-    ``MAX_RESPONSE_BYTES`` used to be checked only once the body was already in
-    memory: a 200MB PDF was DOWNLOADED for as long as the call budget allowed and
-    then reported a TIMEOUT, which is both the wrong diagnosis and the expensive
-    way to find out the answer was never going to fit.
+    一个单字节 range 请求，一次往返就能得到答案。之所以存在，是因为
+    ``MAX_RESPONSE_BYTES`` 从前要等响应体已经进了内存才检查：
+    一个 200MB 的 PDF 被下载了整整一个调用预算那么久，
+    然后报 TIMEOUT —— 这既是错误诊断，也是查明"答案根本装不下"的昂贵方式。
 
-    Returns (total_bytes or None, note). ``note`` says why a size could not be
-    learned, so the caller can be honest instead of guessing. Never raises: an
-    unknown size is the status quo, not a failure.
+    返回 (total_bytes 或 None, note)。``note`` 说明为什么没能学到大小，
+    好让调用方如实说明而不是猜。从不抛异常：大小未知是常态，不是失败。
     """
     from dhole_mcp.fetcher import http_get
 
@@ -735,14 +728,14 @@ async def _document_size(url: str, proxy: Optional[str],
     hdrs = {str(k).lower(): str(v) for k, v in (getattr(resp, "headers", None) or {}).items()}
     total: Optional[int] = None
     cr = hdrs.get("content-range", "")
-    # "bytes 0-0/118234012" — the part after the slash is the whole document.
+    # "bytes 0-0/118234012" —— 斜杠后面就是整份文档的长度。
     if "/" in cr:
         try:
             total = int(cr.rsplit("/", 1)[1].strip())
         except ValueError:
             total = None
     if total is None:
-        # No range support: a 200 carries the whole length in Content-Length.
+        # 不支持 range：200 响应把完整长度放在 Content-Length 里。
         try:
             total = int(hdrs.get("content-length", ""))
         except ValueError:
@@ -750,9 +743,9 @@ async def _document_size(url: str, proxy: Optional[str],
     if total is None:
         return None, "host reported no size (chunked or range refused)"
     if not total:
-        # A 200 that ignored the Range can describe an error page rather than the
-        # document (measured live: 243B from a host serving a bot block, and a 0
-        # from another). Nothing is refused on a size we did not really learn.
+        # 忽略 Range 的 200 响应可能是错误页而不是文档
+        # （实测：某主机返回 243B 的机器人拦截页，另一台返回 0）。
+        # 对于没有真正学到的大小，一律不据此拒绝。
         return None, "host reported an empty body for the range probe"
     return total, ""
 
@@ -774,15 +767,15 @@ def _body_ceiling() -> int:
 
 
 def _oversized_document_result(url: str, doc_size: Optional[int]) -> Optional[ResponseModel]:
-    """A refusal to download a document that cannot fit, or None when it can.
+    """装不下的文档就拒绝下载，装得下则返回 None。
 
-    Only a KNOWN oversize refuses anything: an unknown size is not evidence, and
-    treating it as one would turn every chunked-response host into a hard failure.
+    只有**已知**的超大才拒绝：大小未知不是证据，把它们当证据
+    会把所有分块响应的主机变成硬失败。
 
-    Same wording as the post-download check in _check_response_size, because the
-    caller has one fact to learn ("this body is over the cap") and should not have
-    to recognize it in two shapes depending on which side of the download dhole
-    happened to notice it.
+    措辞与 _check_response_size 里下载后的检查一致，因为
+    调用方只需知道一件事（"这个响应体超过上限"），不该
+    因为 dhole 是在下载的哪一侧发现它
+    而要去辨认两种形状。
 
     "The cap" 是 `_body_ceiling()`，不是常量 50MB：一次 `save_to` 的下载拿落盘上限
     当红线，否则"我要这个文件"会在自己的上限之前被抽取的红线挡掉。
@@ -820,16 +813,16 @@ def _document_timeout_lever(budget_ms: float) -> str:
 
 def _document_budget_advice(url: str, size_bytes: Optional[int], size_note: str,
                             budget_ms: float, stage: str) -> str:
-    """What to tell the caller about a document that did not arrive in time.
+    """文档没按时到达时，该对调用方说什么。
 
-    The generic timeout advice — "raise timeout" — is what the last report filed
-    as an unfixable server limit. It is only actionable once the caller can see
-    what the file costs: its size, this host's observed document time, and
-    whether dhole would accept the body at all (MAX_RESPONSE_BYTES).
+    通用超时建议 —— "raise timeout" —— 正是上一份报告归档为
+    "无法修复的服务器限制"的东西。只有让调用方看见文件代价，它才可执行：
+    文件大小、本主机观测到的文档耗时，以及
+    dhole 到底会不会接受这个响应体（MAX_RESPONSE_BYTES）。
 
-    The lever itself is authored once, in `_document_timeout_lever`: for a document
-    it stops being actionable earlier than `validate_timeout`'s 120000ms, because the
-    ceiling that decides whether the bytes arrive is the attempt's, not the call's.
+    这根杠杆只在一处编写，即 `_document_timeout_lever`：对文档来说，
+    它比 `validate_timeout` 的 120000ms 更早失效，因为决定字节能否到达的
+    上限是单次尝试的，不是整次调用的。
     """
     bits = [f"{stage} on a document download"]
     if size_bytes is None and size_note:
@@ -846,36 +839,36 @@ def _document_budget_advice(url: str, size_bytes: Optional[int], size_note: str,
     # 而分句是为 "; " 之后写的 —— 规矩与作者都在 `quality._as_sentence`。
     return _as_sentence("; ".join(bits))
 def _env_int(name: str, default: int) -> int:
-    """Read an integer env var, falling back to ``default`` on missing/invalid.
+    """读取整数环境变量，缺失或非法时回退到 ``default``。
 
-    W4: semantics unchanged (an unparseable value still returns ``default``),
-    but the failure is recorded in ``env_registry._warnings`` so
-    ``dhole --doctor`` (W2) can name it. Previously an env typo like
-    ``DHOLE_DEFAULT_CONTENT_CHARS=abc`` silently fell back and no output
-    anywhere told the user their setting had been ignored.
+    W4：语义不变（无法解析的值仍返回 ``default``），
+    但失败会记入 ``env_registry._warnings``，好让
+    ``dhole --doctor``（W2）能点名它。从前像
+    ``DHOLE_DEFAULT_CONTENT_CHARS=abc`` 这样的拼写错误会静默回退，
+    任何输出都不会告诉用户其设置被忽略了。
     """
     return env_registry.read_int(name, default)
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
-    """Read an on/off env var: any value except empty/0/false/no/off/none/null is on.
+    """读取开关型环境变量：除空/0/false/no/off/none/null 外，任何值都算开。
 
-    W4.1: this "anything else -> True" behaviour is kept verbatim because
-    flipping it would silently disable capabilities an operator set with
-    ``DHOLE_X=yes-please`` (or, worse, ``DHOLE_X=1please``). What is new is
-    the warning - the reader still returns the same bool, but ``doctor`` can
-    now tell the operator the value was not a recognised token.
+    W4.1：这个"其他一律 -> True"的行为原样保留，因为
+    改动它会静默关闭运维用 ``DHOLE_X=yes-please`` 设下的能力
+    （更糟的是 ``DHOLE_X=1please``）。新增的是
+    警告 —— 读取器仍返回同一个布尔值，但 ``doctor``
+    现在能告诉运维，该值不是可识别的记号。
     """
     return env_registry.read_flag(name, default=default)
 
 
 def _iso_from_ts(ts) -> str:
-    """A stored epoch float as the ISO-8601 UTC string the wire uses.
+    """把存储的 epoch 浮点数转成 wire 使用的 ISO-8601 UTC 字符串。
 
-    Same shape the responses already use for ``fetched_at`` (seconds precision,
-    trailing Z), so a stored timestamp reads like every other one on the wire
-    instead of as a raw 1.7e9. Empty in, empty out - nothing to format, nothing
-    printed.
+    与响应里 ``fetched_at`` 已有形状相同（秒级精度、
+    结尾 Z），这样存储的时间戳读起来和其他线上
+    时间戳一样，而不是一个裸的 1.7e9。空进空出 ——
+    没有可格式化的，也不打印任何东西。
     """
     try:
         t = float(ts or 0)
@@ -887,51 +880,50 @@ def _iso_from_ts(ts) -> str:
         microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-# 17.0: the wire-shape knobs are gone. Text-only CallToolResults (the
-# structuredContent double envelope was opt-in and never turned on by anyone we
-# could see), no advertised outputSchema (the derived schemas rode on
-# tools/list for no reader), and the compaction is unconditional (a client that
-# cannot read "absent = default" is a client that cannot read the tool docs
-# either; DHOLE_STRUCTURED_CONTENT / DHOLE_OUTPUT_SCHEMA / DHOLE_WIRE_FULL are
-# silently ignored if a host still sets them).
+# 17.0：wire 形状的旋钮没了。CallToolResult 只保留文本
+# （structuredContent 双信封曾是 opt-in，而我们见过的用户都没开），
+# 不再公布 outputSchema（派生的 schema 挂在 tools/list 上却无人读取），
+# 压紧处理无条件执行（读不懂"缺席 = 默认"的客户端，
+# 也读不懂工具文档；宿主若还设置
+# DHOLE_STRUCTURED_CONTENT / DHOLE_OUTPUT_SCHEMA / DHOLE_WIRE_FULL，
+# 会被静默忽略）。
 
-# Idle browser close: after this many seconds with no web_read/web_act in
-# flight, the warm Patchright Chrome is closed entirely (process exits, OS reclaims
-# all its RAM). The next fetch relaunches it (~2s cold start). 17.0 写死 300s
-# (5 min): an agent actively working (30-90s think-pauses between fetches) keeps
-# Chrome warm, while a dhole left running in the background actually frees its
-# RAM. ``DHOLE_BROWSER_IDLE_TIMEOUT`` 已注销（运行时静默忽略）。
+# 空闲浏览器关闭：连续这么多秒没有进行中的 web_read/web_act 后，
+# 热的 Patchright Chrome 会被完全关闭（进程退出，操作系统收回
+# 其全部内存）。下次抓取再重新拉起（冷启动约 2 秒）。17.0 写死 300s
+# （5 分钟）：正在干活的 agent（两次抓取间思考停顿 30-90 秒）让
+# Chrome 保持预热，而后台闲置的 dhole 则真正释放
+# 内存。``DHOLE_BROWSER_IDLE_TIMEOUT`` 已注销（运行时静默忽略）。
 AUTO_SESSION_IDLE_TIMEOUT = 300
-IDLE_CHECK_INTERVAL = 60  # How often to check for idle sessions (seconds)
+IDLE_CHECK_INTERVAL = 60  # 多久检查一次空闲会话（秒）
 
-# Content budget a fetch uses when the CALLER does not pass max_content_chars.
-# Deliberately a SEPARATE constant from MAX_CONTENT_CHARS, which is the hard
-# ceiling (the 500-200000 clamp). The two are not interchangeable: lowering the
-# ceiling removes a capability (nobody could ask for 200000 any more), while
-# lowering this default only changes how much a caller gets when it does not
-# think about size - and nothing becomes unreachable, because the rest is still
-# paginated (offset/next_offset) and every response that hit the budget says so
-# (is_truncated + next_offset + the next_action naming focus= and offset=).
-# Why it is tunable at all: ONE fetch at the 40,000 default returns more context
-# than the entire tools/list table costs on EVERY connect - measured on
-# docs.python.org/3/library/asyncio-task.html, 42,037 chars against the table's
-# 19,141 (~4.6k cl100k tokens). The per-call body, not the schemas, is where the
-# tokens go; the same page at 8,000 costs ~9,500 chars with no content lost
-# (next_offset continues).
-# Clamped to the documented range so an env typo cannot produce a 1-char budget
-# that looks like a broken server, and cannot exceed the ceiling the wire
-# documents.
+# 调用方不传 max_content_chars 时，一次抓取使用的内容预算。
+# 刻意与 MAX_CONTENT_CHARS 分开：后者是硬上限（500-200000 的钳制）。
+# 两者不可互换：降低上限会移除一项能力（再也没人要得了 200000），
+# 而降低这个默认值只改变调用方不考虑大小时拿到多少 ——
+# 并且没有任何内容变得不可达，因为其余部分仍可分页
+# （offset/next_offset），每个撞到预算的响应都会说明
+# （is_truncated + next_offset + next_action 点名 focus= 与 offset=）。
+# 为什么它可以调：默认 40,000 下**一次**抓取返回的上下文，比整个
+# tools/list 表在**每次**连接时花的还多 —— 在
+# docs.python.org/3/library/asyncio-task.html 实测 42,037 字符，对照表的
+# 19,141（约 4.6k cl100k token）。token 花在每次调用的响应体上，而不是
+# schema 上；同一页在 8,000 下只花约 9,500 字符，内容一点没丢
+# （next_offset 继续）。
+# 钳制在文档声明的范围内，这样环境变量打错也不会产生 1 字符的预算
+# 而看起来像服务器坏了，也不会超过 wire
+# 文档的上限。
 DEFAULT_MAX_CONTENT_CHARS = max(
     500, min(200000, _env_int("DHOLE_DEFAULT_CONTENT_CHARS", MAX_CONTENT_CHARS)))
 
-# What ONE batched `web_read(urls=[...])` is allowed to hand back per page, in
-# characters, when the caller named nothing. A batch shares ONE return: 9 pages x
-# the 40,000 default is 360,000 chars, and the host truncates the payload long
-# before the ninth page (measured 2026-10-11 全真模拟 S6: "怎么只回来一半" — only the
-# first 6 of 9 rows were readable, and the assistant had to re-fetch the rest).
-# Splitting the same total across the rows costs no page its head: 48,000 / 9 is
-# 5,333 chars each, which is still a full summary-length read, and every row says
-# so and can be re-read alone at the default.
+# 调用方什么都没指定时，一次批量 `web_read(urls=[...])` 每页允许交回多少
+# 字符。一次批量共用一个返回值：9 页 ×
+# 40,000 默认值 = 360,000 字符，宿主早在第九页之前就截断了
+# （2026-10-11 全真模拟 S6 实测："怎么只回来一半" —— 9 行里只有
+# 前 6 行可读，助手不得不重新抓其余的）。
+# 把同样的总量分给各行，不会让任何一页被砍头：48,000 / 9
+# 每页 5,333 字符，仍是一次完整的摘要长度阅读，而且每行都会
+# 说明，并且可以按默认值单独重读。
 BULK_TOTAL_CONTENT_CHARS = 48_000
 
 # 刀9-6b（F5）：`web_discover(search=)` 空手而归时，补一次内容级 focus 扫描的代价帽。
@@ -964,11 +956,10 @@ PIN_NOTES: dict[str, str] = {
     "reused": ("pin hit: this call ran on the page your previous pinned call left open - "
                "no navigation happened, so nothing on it was re-issued. What you read here "
                "is the same image / token the previous call showed you."),
-    # R01-027: the pinned page and the page this call named are two different
-    # documents on one host. An action's `index` counts the named page's elements,
-    # so the chain runs there and the pin is not taken away from the next call -
-    # the sentence has to say all three, with both URLs named, or the reader is
-    # back to guessing which page their click landed on.
+    # R01-027：驻留的那一页与本次调用点名的那一页，是同一主机上的**两份**文档。动作
+    # 里的 `index` 数的是被点名那一页的元素，所以链在那一页跑，而驻留也不会从下一次
+    # 调用手里夺走 —— 这句话必须把三件事都说清、两个 URL 都点名，否则读者又得猜自己
+    # 那一下点击落在哪一页。
     "target": ("pin not used for this call: the pinned page is {pinned} while this call "
                "named {named}, and an action's index is counted on the page you name - so "
                "this call navigated to what you named instead of acting on the other page. "
@@ -1013,22 +1004,22 @@ PIN_NOTES: dict[str, str] = {
                "pinned earlier on it was closed."),
 }
 
-# MCP initialize `instructions` — injected into the agent's context ONCE on
-# connect by clients that support it. This is the connect-time mastery doc:
-# the #1 workflow, the gotchas, and when to use each tool. Written as
-# imperatives with the "prefer dhole over built-ins" rule FIRST, because tool
-# selection is driven by the first lines an agent reads. Measured 2,486 chars
-# ≈ 598 tokens on 2026-10-07 (python tests/tool_payload_measure.py) at the
-# repo's own 4.16 chars/token — paid once per connect, but
-# the whole table rides the host's context for the whole session (see the
-# connect-cost note near DHOLE_TOOLS below for the multi-round arithmetic).
+# MCP initialize 的 `instructions` —— 支持的客户端会在连接时把它一次性注入
+# agent 的上下文。这是连接期的精通文档：
+# 头号工作流、坑点，以及每个工具何时用。写成
+# 祈使句，并把"优先用 dhole 而非内置工具"的规则放在最前，因为工具的
+# 选择由 agent 读到的头几行决定。2026-10-07 实测 2,486 字符
+# ≈ 598 token（python tests/tool_payload_measure.py），按仓库自己的
+# 4.16 字符/token 计 —— 每次连接付一次，
+# 但整张表会在整个会话期间占据宿主上下文（多轮算术见
+# 下方 DHOLE_TOOLS 附近的连接成本说明）。
 #
-# This literal is the FULL text (every registered tool). The wire actually sends
-# ACTIVE_INSTRUCTIONS = _compose_instructions(_ENABLED_TOOLS), which drops the
-# routing lines of the tools DHOLE_TOOLS left out. The literal stays because
-# tests/tool_payload_measure.py reads it with ast.literal_eval, and a test
-# asserts _compose_instructions(<every tool>) reproduces it exactly, so the
-# parts below and this literal cannot drift.
+# 这个字面量是**完整**文本（每个注册工具）。线上实际发送的是
+# ACTIVE_INSTRUCTIONS = _compose_instructions(_ENABLED_TOOLS)，它会去掉
+# DHOLE_TOOLS 漏掉的工具的路由行。字面量保留是因为
+# tests/tool_payload_measure.py 用 ast.literal_eval 读它，且有测试
+# 断言 _compose_instructions(<每个工具>) 能精确复现它，所以
+# 下面的分片与此字面量不能漂移。
 DHOLE_INSTRUCTIONS = (
     "Dhole is the web toolkit: use it when a built-in fetch/search fails or is blocked, or the page needs JavaScript, PDF/OCR, or multi-URL batching. Bypasses anti-bot walls (Cloudflare), reads PDFs incl. scans (OCR), and searches 12 keyless engines.\n"
     "Routing:\n"
@@ -1054,10 +1045,9 @@ DHOLE_INSTRUCTIONS = (
     "- follow next_action (empty = done); responses are cached 1h, cache_ttl=0 forces fresh; DataDome/Akamai are unbypassable - switch sources, don't retry. Field by field: sys_guide(topic='fields')."
 )
 
-# The same instructions as composable parts (see the comment on the literal
-# for why both exist). Routing lines are keyed by tool so a DHOLE_TOOLS subset
-# can be routed only to tools the server actually registered; intro and rules
-# stay in every subset - dhole's identity and the trust rules are tool-agnostic.
+# 同一份指令拆成可组合的部件（为什么要两份，见那份字面量上的注释）。路由行按工具
+# 挂键，这样 DHOLE_TOOLS 子集只会被路由到服务器真正注册过的工具；开场白与规则在每个
+# 子集里都保留 —— dhole 的身份与可信度规则与具体工具无关。
 _INSTRUCTIONS_INTRO = (
     "Dhole is the web toolkit: use it when a built-in fetch/search fails or is "
     "blocked, or the page needs JavaScript, PDF/OCR, or multi-URL batching. "
@@ -1122,15 +1112,13 @@ _INSTRUCTIONS_RULES = (
 
 
 def _compose_instructions(enabled: frozenset) -> str:
-    """Compose initialize-instructions for an enabled tool set.
+    """为已启用的工具集合拼出 initialize 阶段的指令文本。
 
-    The routing section names only ENABLED tools - routing an agent to a tool
-    the server did not register just burns a failed call. Every tool with a
-    routing line here is a destination, so a subset of tools that have none
-    gets no "Routing:" header at all. One line may route several tools
-    (web_discover / web_crawl / web_read(urls=) share theirs): the keys agree
-    on the text, and a shared line is emitted once per composition, not once
-    per key.
+    路由段只点名**已启用**的工具 —— 把 agent 路由到一个服务器没注册过的工具，只是
+    白烧一次失败的调用。这里每一条路由行都是一个目的地，所以一组都没有路由行的子集
+    干脆不输出 "Routing:" 标题。一行可以路由多个工具（web_discover / web_crawl /
+    web_read(urls=) 共用它们的那一行）：各键的文本相同，而共用行每次组合只发一遍，
+    不是每个键发一遍。
     """
     seen: set[str] = set()
     parts: list[str] = []
@@ -1216,19 +1204,18 @@ def _focus_intent_hint(finalized: ResponseModel, focus_q: Optional[str],
 
 
 def _login_probe_unavailable(reason: str) -> dict:
-    """check_login was asked; this tier cannot answer (the probe is live-only).
+    """点名了 check_login，而这一档答不了（探针只在实时页面上做）。
 
-    A bare ``login_check=None`` is wire-folded into an ABSENT field -
-    indistinguishable from "not requested". That silence sent an agent hunting
-    through the handbook for why the field never came; the marker keeps the
-    answer on the wire with the reason attached.
+    光秃秃的 ``login_check=None`` 在线上会被折成**字段缺席** —— 与"没被要求"无从
+    区分。正是那片沉默让 agent 去手册里翻这个字段为什么从来没出现过；这个标记把
+    答案留在线上，并把理由一起带上。
     """
     return {"logged_in": None, "signals": [], "cookie_names": [],
             "method": f"unavailable: {reason}"}
 
 
 def _attach_login_probe_gap(result: ResponseModel, check_login: bool) -> ResponseModel:
-    """Honesty pass: mark check_login as unanswerable on non-browser results."""
+    """诚实补一刀：非浏览器结果上把 check_login 标成"答不了"。"""
     if check_login and result.login_check is None and result.fetcher_used != "stealthy":
         # `!= "stealthy"` 认的是"这一档没跑到"，可它同样匹配"跑到了没跑完"：实测
         # `fetcher_used='http→stealthy'` + 浏览器档超时，回执却说 "this result never
@@ -1274,17 +1261,15 @@ def _wayback_capture_index_body(body: str) -> bool:
 
 
 def _archive_ran_out(origin: ResponseModel, archive_result: ResponseModel) -> ResponseModel:
-    """Keep the ORIGIN's verdict when the archive tier is the thing that failed.
+    """失败的是存档那一档时，保留**源站**的判词。
 
-    `_with_budget` returns a fresh "timeout: the Nms call budget ran out during
-    the archive.org lookup" envelope, and returning that wholesale describes our
-    own clock while deleting what the site actually said. Measured on a controlled
-    origin answering 429: the call went out as `code=timeout, retryable=true` with
-    "raise timeout" advice - the throttle fact was gone, and the one move a 429
-    forbids (retry sooner with a longer budget) was recommended.
+    `_with_budget` 会返回一份崭新的 "timeout: the Nms call budget ran out during
+    the archive.org lookup" 信封，整份照抄等于描述我们自己的时钟，同时把站点真正
+    说过的话删掉。在受控源站上实测（它回 429）：这一发以 `code=timeout,
+    retryable=true` 出门，还带着 "raise timeout" 的建议 —— 限速这个事实没了，而
+    429 唯一禁止的动作（用更长的预算更快重试）反倒被推荐了。
 
-    Three sites share this because the wrong claim is the same in all three, and
-    three copies of an apology are how the tiers drift apart.
+    三处共用这一段，因为三处的错话是同一句；而三份道歉各写一遍正是各档漂开的开始。
     """
     detail = (archive_result.error or "")[:120]
     note = f"archive.org fallback was tried and ran out of budget ({detail}) - it answered nothing"
@@ -1295,15 +1280,14 @@ def _archive_ran_out(origin: ResponseModel, archive_result: ResponseModel) -> Re
 
 
 def _all_tiers_failed_tips(category: str, status: int) -> str:
-    """Recovery tips for the all-tiers-failed receipt, keyed by classification.
+    """「所有档都失败」那张回执的补救建议，按分类给。
 
-    ``status == 0`` with an unknown category means NO tier ever received an HTTP
-    response, so anti-bot advice would be unfalsifiable from silence: a wall
-    ANSWERS (403 / challenge page). Measured: a nonexistent domain landed in the
-    generic branch and got Turnstile/proxy tips - neither can fix a name that
-    never resolved. Known categories keep their own tips even at status 0
-    (connection_refused / dns_failure already name reachability; browser_launch
-    is never the site's fault).
+    ``status == 0`` 且类别未知，意味着**没有任何一档**收到过 HTTP 响应，此时反爬
+    建议从沉默里无法证伪：一堵墙是会**回答**的（403 / 校验页）。实测：一个不存在
+    的域名落进通用分支，拿到 Turnstile/代理的建议 —— 两者都修不好一个从来没解析
+    出来的名字。已知类别即便 status 为 0 也保留自己的建议
+    （connection_refused / dns_failure 已经点名可达性；browser_launch 从来不是
+    站点的错）。
     """
     if category == "unknown" and status == 0:
         return (
@@ -1332,9 +1316,8 @@ def _all_tiers_failed_tips(category: str, status: int) -> str:
             "- If it persists, switch sources."
         )
     if category == "browser_launch":
-        # The browser never became a process, so nothing about the TARGET is
-        # implicated: the generic branch would blame Cloudflare and send the
-        # caller to "try a proxy", which cannot start a browser either.
+        # 浏览器从来没变成一个进程，所以**目标**那边没有任何嫌疑：通用分支会怪
+        # Cloudflare 并把调用方支去"试试代理"，而代理同样起不来一个浏览器。
         return (
             "- The browser process could not be started - the site is not the problem.\n"
             "- `dhole --doctor` names the three states (absent / present but never "
@@ -1346,13 +1329,11 @@ def _all_tiers_failed_tips(category: str, status: int) -> str:
             "web_search) still work while this is broken."
         )
     if category.startswith("http_"):
-        # A tier was ANSWERED with this status, so the honest sentence is about
-        # the status, and the two claims the generic branch makes are both false
-        # here: nothing is "unreachable", and a bot wall is not implicated by a
-        # 5xx the origin chose to send. Measured on a controlled origin: /429 came
-        # back "no free tool can bypass it / try a proxy" and /503 as
-        # "unknown (HTTP status 0)", each pointing the caller at work that cannot
-        # change a server's mind. A render cannot un-answer a status code.
+        # 某一档是**被回答了**这个状态码，所以诚实的那句话就该讲状态码；通用分支
+        # 声称的两件事在这里都是假的：没有什么"不可达"，而源站自己选择发出的 5xx
+        # 也扯不上反爬墙。在受控源站上实测：/429 回的是"没有免费工具能绕过 / 换代理
+        # 试试"，/503 回的是 "unknown (HTTP status 0)"，两句都把调用方指去干一件
+        # 改变不了服务器决定的活。渲染也不可能让一个已经答出的状态码消失。
         _code = int(category[5:] or 0)
         if _code == 429:
             return (
@@ -1505,10 +1486,9 @@ def _pagination_basis(focus_q: Optional[str], page_chars: int, kept_chars: int) 
 
 
 def _stamp_focus_continuation(result: ResponseModel, focus_q: Optional[str], offset: int) -> ResponseModel:
-    """The focus header lives inside the paginated text, so an offset>0 window
-    starts past it: the readback then LOOKS unfocused even though focus ran
-    (it re-scores the full text on every call, post-cache). The summary note
-    keeps that visible without touching the pagination arithmetic."""
+    """focus 的头部字样住在被分页的那段文字里，所以 offset>0 的窗口是从它**之后**
+    开始的：回读起来像是没上 focus，而 focus 其实跑了（它在每次调用里对全文重新
+    打分，位置在缓存之后）。摘要里那条注记让这件事看得见，且不动分页的算术。"""
     if focus_q and offset > 0:
         result = result.model_copy(update={
             "summary": ((result.summary + " · ") if result.summary else "")
@@ -1517,15 +1497,14 @@ def _stamp_focus_continuation(result: ResponseModel, focus_q: Optional[str], off
 
 
 def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_CHARS, offset: int = 0) -> ResponseModel:
-    """Truncate content if it exceeds max_chars, starting from offset.
+    """正文超过 max_chars 时，从 offset 起截断分页。
 
-    Smart merge: if remaining content after a chunk is less than MIN_CHUNK_CHARS,
-    include it all in the current chunk. This prevents wasteful round-trips where
-    an agent calls again just to get 55 chars.
+    智能合并：一片之后剩余内容不足 MIN_CHUNK_CHARS 就全部并进当前片，避免那种浪费
+    的往返 —— agent 再调一次只为拿 55 个字符。
 
-    Always sets total_extracted_chars so agents can gauge remaining content
-    without making a follow-up call. Stamps agent-facing hints (summary,
-    content_ok, next_action, fetched_at) on every returned result.
+    总会写下 total_extracted_chars，让 agent 不必追加调用也能估算还剩多少；每一次
+    返回的结果都会盖上面向 agent 的提示（summary、content_ok、next_action、
+    fetched_at）。
     """
     full_text = "\n".join(result.content)
     # focus 会就地改写 `full_text`，所以"这一页原本多长"必须在这里取住 —— 分页基准
@@ -1548,16 +1527,14 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
         _note_text("table_of_contents omitted on a continuation page - it came with "
                    "offset=0 for this document")
         result = result.model_copy(update={"table_of_contents": []})
-    # Query-focused filter (post-cache): if the caller passed `focus`, keep only
-    # the relevant blocks so the agent loads less context on long pages.
-    # Only applies to text-like extractions (not raw html). Runs before chunking
-    # so offset/next_offset page through the FOCUSED content.
+    # 按查询聚焦的过滤（在缓存之后）：调用方传了 `focus` 就只留下相关的块，让 agent
+    # 在长页上少载一些上下文。只作用于文本类的抽取（不含 raw html），且跑在分页
+    # 之前，所以 offset/next_offset 翻的是**聚焦后**的内容。
     # M-1: 打分器只由**本次调用**的 focus_engine= 决定（17.0 没有许可门：
     # 没点名 = BM25，点名 'neural' 才用语义分，见 focus.engine_wants_neural）——
-    # the blocks are scored by the warm local cross-encoder instead of BM25
-    # (peek only — the load happened at the web_read entry; a missing scorer
-    # falls back to BM25 inside focus_content). M-2: focus_mode='best' returns
-    # only the answer block.
+    # 点名 neural 时块由常驻的本地 cross-encoder 打分，而不是 BM25（这里只是看一眼：
+    # 加载发生在 web_read 入口；打分器缺失时 focus_content 内部回落到 BM25）。
+    # M-2: focus_mode='best' 只交回答案那一段。
     focus_q = _FOCUS.get()
     focus_stats: Optional[dict] = None
     # 每一发都重挂：上一发的删除记录如果留在同一个进程 context 里，`quality` 会给
@@ -1597,17 +1574,16 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
     pagination = _pagination_basis(focus_q, page_chars, total_len)
 
     if offset >= total_len:
-        # Two different situations reach this branch. Pagination exhausted on a
-        # page that HAD text deserves the "no more content" marker (the agent
-        # asked for a chunk past the end). A page that produced no text at all
-        # does not: the marker lands in content[0], where callers read the body,
-        # and it gets counted in total_extracted_chars as if it were page text.
-        # Empty content + the error/status fields already say what happened.
+        # 走进这一支的其实是两种情况。一页**本来有**正文、分页翻到底的情形配得上
+        # "no more content" 那个标记（agent 要的确实是尾巴之后的那一块）。整页一个字
+        # 正文都没有的就不配：标记会落进 content[0]，而调用方在那里读正文，它还会被
+        # 当成页面文字计进 total_extracted_chars。空 content + error/status 字段本来
+        # 就说清了发生了什么。
         exhausted = "[No more content.]" if total_len else ""
-        # model_copy(update=...) preserves EVERY field by construction
-        # (metadata/links/page_type/source_type/quality_score/toc/...). The
-        # old hand-written constructor dropped any field not listed, so every
-        # new envelope field silently vanished on the no-more-content branch.
+        # model_copy(update=...) 按构造保留**每一个**字段
+        # （metadata/links/page_type/source_type/quality_score/toc/...）。从前手写
+        # 的构造器会丢掉任何没列出的字段，于是每加一个新的信封字段，它都在"没有更多
+        # 内容"这一支上悄悄消失。
         return _stamp_focus_continuation(_focus_intent_hint(_with_agent_hints(result.model_copy(update={
             "content": [exhausted] if exhausted else [],
             "total_extracted_chars": total_len,
@@ -1621,8 +1597,8 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
     chunk_len = len(chunk)
     remaining = total_len - offset - chunk_len
 
-    # Smart merge: if remaining is small, include it all in this chunk.
-    # Avoids wasteful round-trip where agent calls again for 55 chars.
+    # 智能合并：剩下的很少就全部并进这一片，避免 agent 再调一次只为拿 55 个字符
+    # 那种浪费的往返。
     truncated = False
     next_off = 0
     snapped_back = 0
@@ -1658,7 +1634,7 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
                 f"{remaining_hint:,} chars remaining. Next offset: {next_off}]"
                 f"{snap_note}")
     elif remaining > 0:
-        # Remaining is small — include it all, no truncation flag.
+        # 剩下的很少 —— 全部并入，不打截断标记。
         # 并回本身留着（少一次往返，且这条地板有测试守着），走掉的是**这份沉默**：
         # 调用方点过的帽被超过时，回执必须说出超了多少、为什么、以及什么都没丢
         # （R02-007：cap 1200 交回 1,446，`is_truncated/next_offset/truncation_note`
@@ -1667,9 +1643,8 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
         chunk = full_text[offset:]
         _note_text(_over_cap_note(_MAX_CHARS_NAMED.get(), len(chunk), MIN_CHUNK_CHARS))
 
-    # model_copy(update=...) preserves every field by construction — no more
-    # hand-maintained field list that silently dropped envelope fields on
-    # truncation. Add a field to ResponseModel and it survives chunking free.
+    # model_copy(update=...) 按构造保留每一个字段 —— 再没有那份手写清单，在截断时
+    # 悄悄丢掉信封字段。往 ResponseModel 加一个字段，它就自动活过分页。
     return _stamp_focus_continuation(_focus_intent_hint(_with_agent_hints(result.model_copy(update={
         "content": [chunk],
         "total_extracted_chars": total_len,
@@ -1682,15 +1657,14 @@ def _apply_chunking(result: ResponseModel, max_chars: int = DEFAULT_MAX_CONTENT_
     })), focus_q, focus_stats), focus_q, offset)
 
 
-# First-line substrings -> the move that usually fixes it. Matched
-# case-insensitively against the headline only, never against the call log.
-# ─── HTTP transport surface (G25 评审) ──────────────────────────────────────
+# 首行子串 -> 通常能修好的那一步。只对标题做大小写不敏感匹配，绝不拿去比调用日志。
+# ─── HTTP 传输面（G25 评审）──────────────────────────────────────────────────
 # mcp SDK 的 TransportSecuritySettings 缺省显式关闭 Host/Origin 防护，而空列表的
 # settings 会把一切 Host 拒掉（421）——所以 allowlist 由 serve() 按 --host 显式
 # 构建，而不是传一个空构造。
 
 def _http_allowed_hosts(host: str) -> list[str]:
-    """Host-header allowlist for the streamable-HTTP transport's rebinding guard.
+    """streamable-HTTP 传输的重绑定防护所用的 Host 头名单。
 
     回环的三个拼法永远在名单上；使用者点名的 `--host` 也进名单（带端口通配）。
     绑 0.0.0.0 时客户端的 Host 无法预知——这正是该配置需要 `DHOLE_HTTP_TOKEN`
@@ -2080,7 +2054,7 @@ async def _cdp_attach_gate(cdp_url: Optional[str], confirm: bool = False,
 
 
 def _refusal_result(url: str, msg: str) -> "ResponseModel":
-    """A designed refusal as an ordinary envelope, not a transport error.
+    """把一次设计过的拒绝装进普通信封，而不是弄成传输错误。
 
     两条 CDP 拒绝共用这只信封：闸门的首挂拒答（批次 7），以及端点连不上 / 没有登录
     上下文（批次 8-9）。前者从前 `raise`，于是一条拒绝被交给 transport 的通用异常处理
@@ -2107,7 +2081,7 @@ def _tier_refusals() -> tuple:
 
 
 def _tier_error_text(exc: BaseException) -> str:
-    """A tier exception's text for the ``error`` field — clipped only when it is noise.
+    """给某一档的异常文本配上 ``error`` 字段的内容 —— 只在它是噪声时才裁剪。
 
     那个 200 字符的帽子是为了不让 Playwright 的 call-log 整段灌进信封。它不该吃掉 dhole
     自己写好的拒绝：`CDPHostNotAllowedError` 那句的**结尾**才是唯一存在的出路（对该主机
@@ -2196,17 +2170,15 @@ _INTENT_MISS_FLOOR = 0.05
 
 
 def _smart_fetch_request_context(func):
-    """Scope web_read request options to one invocation and its child tasks.
+    """把 web_read 的请求选项限定在本次调用及其子任务内。
 
-    Request options (pages/password/focus/include_media/include_links) flow to
-    lower-level fetchers through ContextVars. Setting them inline lets a stale
-    value from a previous call leak into the next when the dispatch reuses a
-    task; the reset in ``finally`` guarantees each invocation starts clean.
+    请求选项（pages/password/focus/include_media/include_links）经 ContextVar 流向
+    下层抓取器。就地设置它们，会在调度复用同一个任务时让上一次调用留下的陈旧值
+    漏进下一次；``finally`` 里的重置保证每次调用都从干净状态开始。
 
-    Also the single choke point where the requested URL is still known after the
-    fetch has rewritten it: every return path (and every per-URL call made by
-    the bulk path) passes through here, so ``original_url`` is stamped once
-    rather than at each of the eight returns inside ``web_read``.
+    这里也是唯一的收口点：抓取把 URL 改写之后，被请求的那个 URL 仍在这里可知。
+    每一条返回路径（以及批量路径为每个 URL 发起的那一次调用）都经过这里，所以
+    ``original_url`` 只盖一次，而不是在 ``web_read`` 内部那八处返回各盖一次。
     """
     signature = inspect.signature(func)
 
@@ -2215,8 +2187,8 @@ def _smart_fetch_request_context(func):
         values = signature.bind(*args, **kwargs)
         values.apply_defaults()
         options = values.arguments
-        # Fresh list per invocation: _note_clamped appends to it, _with_agent_hints
-        # reads it, and the reset below guarantees the next call starts empty.
+        # 每次调用换一个全新的列表：_note_clamped 往里追加，_with_agent_hints 读它，
+        # 而下面那次重置保证下一次调用从空开始。
         notes: list[str] = []
         # §3-17 的补笔：auth / cookies / proxy 自从搬进 cred_defaults 就不再是调用
         # 参数，而 _cache_context 的指纹输入是这份 options —— 17.0 把门搬了家，却把
@@ -2282,32 +2254,29 @@ def _smart_fetch_request_context(func):
             (_MAX_LINKS, _MAX_LINKS.set(
                 options["max_links"] if isinstance(options["max_links"], int)
                 and not isinstance(options["max_links"], bool) else 0)),
-            # R02-007: the body cap the CALLER pointed, raw — before the default
-            # filled it and before the 500/200000 clamp moved it. Only the chunking
-            # layer can see a tail being merged back over it, and "no cap named" is
-            # a different fact from "cap = the default", so it travels as its own
-            # value rather than being re-derived from the applied number.
+            # R02-007：调用方**点名**的那颗正文帽，原始值 —— 在默认值填上它之前、在
+            # 500/200000 的钳位挪动它之前。只有分页那一层看得见有尾巴被并回来盖过
+            # 它，而"没点名帽"与"帽 = 默认值"是两件不同的事实，所以它作为自己的值
+            # 传下去，不从最终生效的那个数反推。
             (_MAX_CHARS_NAMED, _MAX_CHARS_NAMED.set(
                 options.get("max_content_chars"))),
             (_CSS_SELECTOR, _CSS_SELECTOR.set(
                 options["css_selector"]
                 if isinstance(options["css_selector"], str)
                 and options["css_selector"].strip() else None)),
-            # G9 → §3-17 → R02-141: the private-host allowance is not this door's
-            # to deliver. The guard merges the stored value itself, so a door that
-            # never pushed a scope (web_search's find_similar leg) stopped being an
-            # exception instead of getting a fifth copy of this line.
+            # G9 → §3-17 → R02-141：私有主机的放行不该由这道门来送达。守卫自己会把
+            # 存量值并进来，所以一个从不推作用域的门（web_search 的 find_similar 那
+            # 一段）就不再是例外，而不是得到这行代码的第五份副本。
             (_SESSION_ID, _SESSION_ID.set(_clean_session_id(options.get("session_id")))),
-            # G8. .get() everywhere: these are optional and absent from most
-            # calls, and the decorator must not be the thing that raises.
+            # G8. 到处用 .get()：这些都是可选项，多数调用里根本不存在，而这个装饰器
+            # 不该是抛异常的那一方。
             (_METHOD, _METHOD.set(_clean_method(options.get("method")))),
             (_BODY, _BODY.set(_clean_body(options.get("body"), options.get("content_type")))),
             (_CONTENT_TYPE, _CONTENT_TYPE.set(
                 options["content_type"].strip()
                 if isinstance(options.get("content_type"), str) else "")),
-            # G25. Emptied here, filled by web_read once the shape is verified
-            # — a credential dict that fails validation must leave no trace for
-            # the next call to read.
+            # G25. 在这里清空，形状校验通过后由 web_read 填入 —— 一个没通过校验的
+            # 凭据 dict 不许留下任何供下一次调用读取的痕迹。
             (_AUTH_SENT, _AUTH_SENT.set(("", ()))),
             (_CACHE_CTX, _CACHE_CTX.set(_cache_context(
                 # 校验子不是参数了，但它是"这一次问的是哪个版本"的一部分，所以仍然
@@ -2329,10 +2298,9 @@ def _smart_fetch_request_context(func):
         ]
         _ap = stored_allow_private()
         if _ap not in (None, False, "") and not parse_allow_private(_ap)[0]:
-            # A security-relevant default that parses to nothing must not fail
-            # silently: the caller stored it and needs to know it did nothing.
-            # Asked of the guard's own reader, so this report and that gate can
-            # never be told two different things about the same row.
+            # 一个与安全相关的默认值解析成了空，不许静默失败：存它的人是调用方，
+            # 它需要知道自己存的什么都没做成。问的是守卫自己的读取函数，所以这句
+            # 报告与那道闸门对同一行数据永远不会被讲成两样。
             notes.append(f"the stored allow_private ({_ap!r}) does nothing: cred_defaults "
                          "takes true (loopback only) or a list of hosts")
         _sid = options.get("session_id")
@@ -2358,11 +2326,10 @@ def _smart_fetch_request_context(func):
 
 
 def _same_url(a: str, b: str) -> bool:
-    """True when two URLs address the same resource for redirect purposes.
+    """就重定向而言，两个 URL 指向同一份资源时为真。
 
-    Only scheme/host case and a trailing slash are normalized: those are what a
-    fetcher adds on its own. Anything else (path, query) counts as a change,
-    because that is exactly the case the caller needs to see.
+    只归一 scheme/主机大小写和尾斜杠：那几样是抓取器自己加上去的。其余任何不同
+    （path、query）都算变化，因为那正是调用方需要看见的情形。
     """
     def norm(u: str) -> str:
         u = (u or "").strip()
@@ -2379,10 +2346,9 @@ def _same_url(a: str, b: str) -> bool:
 
 
 def _clean_method(value) -> str:
-    """Upper-case and check the HTTP verb ('' when it is not one we speak).
+    """把 HTTP 动词转成大写并核对（不是我们认识的方法时返回 ''）。
 
-    A typo'd method must not quietly become GET: the caller asked to write, and
-    reading the page instead returns 200 and looks like success.
+    拼错的方法不许悄悄变成 GET：调用方要的是写，而读回一页会回 200，看起来像成功。
     """
     if not isinstance(value, str):
         return "GET"
@@ -2413,12 +2379,12 @@ def _body_encoding_mismatch(value, content_type) -> str:
 
 
 def _clean_body(value, content_type) -> Optional[bytes]:
-    """Normalize ``body`` into request bytes, or None when there is nothing to send.
+    """把 ``body`` 归一成请求字节；没东西可发时返回 None。
 
-    A dict is a form: urlencoded unless the caller said JSON (then it is JSON).
-    A string is sent as-is (UTF-8) under whatever content_type was named. A
-    non-serializable object yields None; the caller is told in the summary by the
-    call site that has the notes context, not here.
+    dict 就是一张表单：默认 urlencoded，除非调用方点名 JSON（那就发 JSON）。字符串
+    按原样（UTF-8）发出去，配它的是调用方声明的那个 content_type。无法序列化的对象
+    得到 None；告知调用方这件事的是带着 notes 上下文的那个调用点写的 summary，
+    不在这里。
     """
     if value is None or value == b"":
         return None
@@ -2443,15 +2409,13 @@ def _clean_body(value, content_type) -> Optional[bytes]:
 
 
 def _clean_session_id(value) -> str:
-    """Normalize ``options.session_id`` into the jar key ('' when unusable).
+    """把 ``options.session_id`` 归一成 cookie 罐的键（不可用时为 ''）。
 
-    The id is caller-chosen text and it becomes a SQLite key, so it is restricted
-    to a plain word: no path separators, no quotes, no control characters. Length
-    is capped so one client cannot fill the jar directory with junk keys.
-    An unusable value is refused at the decorator before anything is fetched:
-    "my login did not stick" is a site-shaped story for the caller to chase, and
-    the same surface that hard-refuses `location`, `anti_detect` and an auth with
-    no host cannot quietly run one identity parameter anonymously instead.
+    这个 id 是调用方自选的文本，而它会变成 SQLite 的键，所以限制成一个朴素的词：
+    不许有路径分隔符、引号或控制字符。长度设帽，免得一个客户端用垃圾键把罐目录填满。
+    不可用的值在装饰器里、任何抓取发生之前就拒掉："我的登录没生效"是让调用方去查
+    站点形状的故事，而同一个界面既然对 `location`、`anti_detect` 和没有 host 的 auth
+    都硬拒，就不能改为悄悄拿匿名身份跑一个身份参数。
     """
     if not isinstance(value, str):
         return ""
@@ -2460,12 +2424,11 @@ def _clean_session_id(value) -> str:
 
 
 def _stamp_session(result):
-    """Report the jar this call ran against, and the cookie NAMES it now holds.
+    """报出这一发跑在哪个 cookie 罐上，以及它现在装着哪些 cookie **名字**。
 
-    Names only, never values: a session cookie is a credential, and everything a
-    tool returns lands in the agent's transcript (and, for fetched bodies, in
-    ``~/.dhole/cache.db``). An agent that needs to know whether its login survived
-    is answered by the name list plus ``session_id`` echo.
+    只给名字、绝不给值：会话 cookie 就是凭据，而工具返回的一切都进 agent 的转录
+    （抓取到的正文还会进 ``~/.dhole/cache.db``）。想知道自己登录还在不在的 agent，
+    由这份名字清单加上回显的 ``session_id`` 回答。
     """
     sid = _SESSION_ID.get()
     if not sid or not isinstance(result, ResponseModel):
@@ -2476,24 +2439,21 @@ def _stamp_session(result):
 
 
 def _stamp_original_url(result, requested: str):
-    """Record the requested URL when the fetch ended somewhere else.
+    """抓取最终落在别处时，把被请求的那个 URL 记下来。
 
-    ``web_read`` rewrites ``url`` to the final address, so a redirect left no
-    trace at all — the caller's only clue was a URL it had not typed, and a
-    wrong-but-plausible one reads as "the site moved" at best and "you fetched
-    the wrong page" at worst. ``original_url`` is set ONLY when the two differ,
-    so the common path pays nothing and an empty value unambiguously means "the
-    URL you passed is the URL that answered".
+    ``web_read`` 会把 ``url`` 改写成最终地址，所以一次重定向什么痕迹都不留 ——
+    调用方唯一的线索是一个它没输入过的 URL，而一个"错但看着合理"的 URL 往好里读是
+    "站点搬家了"，往坏里读是"你抓错了页"。``original_url`` **只在**两者不同时才设，
+    所以常见路径不付任何代价，而空值明确意味着"你传进来的 URL 就是答话的那个"。
     """
     if not isinstance(result, ResponseModel) or not requested:
         return result
     if not _same_url(result.url, requested):
         result.original_url = requested
-        # R05-005 / R05-018: the field alone was not enough. A stale DailyMed
-        # setid answering index.cfm, or a recipe that redirected, still read as
-        # the page that was asked for unless the status line said the move.
-        # `summary` is built before this stamp runs, so this is the one place
-        # that knows both ends and can put them where the caller scans.
+        # R05-005 / R05-018：光有这个字段还不够。一枚过期的 DailyMed setid 答的是
+        # index.cfm，或一份食谱被重定向，只要状态行没说这次移动，读者仍以为这就是
+        # 点名的那一页。`summary` 在这枚戳记跑之前就已经拼好，所以这里是唯一同时
+        # 知道两端、并把它们放到调用方会扫的那里的地方。
         note = f"redirected from {requested} to {result.url}"
         result.summary = f"{result.summary} · {note}" if result.summary else note
     return result
@@ -2518,7 +2478,7 @@ def _pdf_only_inert_note() -> str:
 
 def _extract_pdf_response(body: bytes, raw_ct: str, total_size: int, url: str,
                           extraction_type: str, fetcher_used: str, duration_ms: float) -> ResponseModel:
-    """Build a ResponseModel from a PDF body using the flagship extractor."""
+    """用旗舰版提取器把 PDF 字节装配成一份 ResponseModel。"""
     pages = _PDF_PAGES.get()
     password = _PDF_PASSWORD.get()
     include_media = _INCLUDE_MEDIA.get()
@@ -2541,15 +2501,14 @@ def _extract_pdf_response(body: bytes, raw_ct: str, total_size: int, url: str,
             content_type=raw_ct, total_size_bytes=total_size,
             extracted_type="markdown", error=f"pdf_extract_failed: {str(e)[:200]}",
         )
-    # Preserve the structured fields from the text pass; the scanned-OCR swap
-    # below only replaces content + the scanned flag, not metadata/toc/quality.
+    # 保留文本那一路已经拿到的结构化字段；下面扫描件换 OCR 那一步只替换 content 和
+    # scanned 标记，不动 metadata/toc/quality。
     base_meta = result.metadata
     base_toc = result.table_of_contents
     base_media = result.media
-    # Scanned / image-only PDF: fall back to OCR if the OCR extras are installed.
-    # The recovery lives in pdf_extractor so the local-file path (parse) can run
-    # the same one — it used to be inlined here, and parse answered "install
-    # [all]" for the same bytes this path OCR'd successfully.
+    # 扫描件 / 只有图的 PDF：装了 OCR 附加依赖就回落过去。这套补救住在
+    # pdf_extractor 里，好让本地文件那条路（parse）跑的是同一份 —— 从前它是内联在
+    # 这里的，于是同一批字节这边 OCR 成功了，parse 那边却回答"install [all]"。
     result = recover_scanned_pdf(result, body, pages=pages, password=password)
     return ResponseModel(
         status=200, content=result.content, url=url,
@@ -2564,20 +2523,19 @@ def _extract_pdf_response(body: bytes, raw_ct: str, total_size: int, url: str,
     )
 
 
-# Values ResponseModel.extracted_type may legitimately carry (mirrors the
-# extraction_type enum in the tool schema).
+# ResponseModel.extracted_type 允许出现的取值（与工具 schema 里的
+# extraction_type 枚举一一对应）。
 _EXTRACTED_TYPES = frozenset({"markdown", "html", "text", "article", "structured"})
 
 
 def _backfill_article_json(content: list[str], meta: Dict[str, Any]) -> list[str]:
-    """Fill empty author/date/description in the article/structured JSON.
+    """把 article/structured JSON 里空着的 author/date/description 补上。
 
-    trafilatura's ``bare_extraction`` reads the byline from the markup it
-    recognises, and returns "" when the site publishes it only through
-    OpenGraph/JSON-LD — which dhole has ALREADY parsed for the same response
-    (measured: a Verge article with metadata.author="Emma Roth" and
-    published_time set came back author:"" date:""). Backfilling removes the
-    self-contradicting response and the extra fetch agents make to find an author.
+    trafilatura 的 ``bare_extraction`` 只从它认得的标记里读署名，站点仅经
+    OpenGraph/JSON-LD 发布署名时它就返回 ""（同一份响应里 dhole 其实**已经**解析过
+    它们）。实测：一篇 Verge 文章 metadata.author="Emma Roth"、published_time 也有，
+    交回来的却是 author:"" date:""。回填既消掉这份自相矛盾的响应，也省掉 agent 为了
+    找一个作者而多抓的那一次。
     """
     if not content or not content[0].lstrip().startswith("{"):
         return content
@@ -2709,12 +2667,11 @@ async def _attach_header_evidence(result: ResponseModel, requested: str) -> Resp
 
 
 def _translate_response(page: _DholeResponse, *args, **kwargs) -> ResponseModel:
-    """Extract a response into a ResponseModel, plus the header-derived fields.
+    """把一份响应抽取成 ResponseModel，并附上由响应头派生的字段。
 
-    A wrapper rather than inline code because every tier and every early return
-    (JSON, PDF, HTML) builds its own model, and revalidation (G23) has to be
-    reported for ALL of them: the pages worth polling are exactly the JSON
-    endpoints that return before the HTML path runs.
+    做成一层包装而不是内联，是因为每一档、每一条提前返回的路（JSON、PDF、HTML）
+    都自建自己的模型，而再验证（G23）必须对**所有**这些路都报出来：值得反复轮询的
+    页面，恰恰就是在 HTML 那条路跑之前就返回的 JSON 端点。
     """
     result = _translate_response_body(page, *args, **kwargs)
     # 浏览器档的网络账（`Response.network`，作者是 browser 的收集器）。HTTP 档没有
@@ -2759,21 +2716,18 @@ def _ocr_thin_read(text: str) -> int:
 
 def _ocr_failure_note(exc: Exception, fetcher_used: str, size: int,
                       handed: bytes = b"") -> str:
-    """OCR's own words, with the process internals taken out.
+    """OCR 自己的说法，但把进程内部信息摘掉。
 
-    Measured on httpbin /image/png via the browser tier: the message arrived as
-    `cannot identify image file <_io.BytesIO object at 0x0000017559546C50>`. A
-    memory address is not a diagnosis, it is a peek into this process's heap on
-    the way into a transcript that gets copied, cached and logged - the same
-    discipline that keeps cookie VALUES out of responses.
+    在 httpbin /image/png 上经浏览器档实测：消息进来是 `cannot identify image file
+    <_io.BytesIO object at 0x0000017559546C50>`。一个内存地址不是诊断，而是把这个
+    进程的堆窥了一眼，然后带进一份会被复制、缓存、记日志的转录 —— 与"响应里不许
+    出现 cookie 值"是同一条纪律。
 
-    The sentence that IS a diagnosis is **which bytes reached OCR**. A browser
-    frames an image document in its own viewer, so what arrived can be a few
-    hundred bytes of markup rather than the picture - and only then does the one
-    lever that works exist (`force_fetcher='http'`). Since D-27 the browser tier
-    takes the original bytes for images and PDFs too, so this claim is no longer
-    a property of the tier: it is a property of *these* bytes, and it is said
-    only when they are actually a shell (a failed `resp.body()` still lands here).
+    真能算诊断的那句话是**哪些字节到了 OCR**。浏览器会把图片文档套在它自己的查看器
+    里，所以到达的可能是几百字节的标记而不是那张图 —— 只有这时唯一管用的那颗旋钮
+    才存在（`force_fetcher='http'`）。D-27 起浏览器档对图片和 PDF 也取原始字节，
+    所以这句不再是"这一档的性质"，而是"**这些**字节的性质"，而且只在它们确实是
+    一层壳时才说（`resp.body()` 失败仍然会走到这里）。
     """
     detail = re.sub(r"<[A-Za-z_][\w.]* object at 0x[0-9a-fA-F]+>",
                     "an in-memory buffer", str(exc)[:160])
@@ -2955,14 +2909,13 @@ def _translate_response_body(
     fetcher_used: str = "",
     duration_ms: float = 0,
 ) -> ResponseModel:
-    """Extract content from a response and translate it to a ResponseModel.
+    """从响应里抽取内容并翻译成 ResponseModel。
 
-    Markdown / text / article / structured go through Trafilatura first. It has
-    its own robust fallback chain internally, so Scrapling is only reached when
-    Trafilatura completely fails — that ladder is not a caller's choice.
+    Markdown / text / article / structured 先走 Trafilatura。它内部自带稳健的回落链，
+    所以只有 Trafilatura 彻底失败时才轮到 Scrapling —— 那把梯子不是调用方能选的。
 
-    For JSON responses (content-type: application/json), extraction is skipped
-    and the raw JSON is returned directly to avoid mangling by HTML extractors.
+    JSON 响应（content-type: application/json）跳过抽取，直接返回原始 JSON，免得被
+    HTML 抽取器弄坏。
     """
     # `save_to`：在抽取**之前**分叉，交字节、不交正文（大文件与二进制本来就没有
     # "正文"，过一遍主内容检测只为丢掉它是白付）。路径在这里再验一次：从门口到这一发
@@ -2980,30 +2933,28 @@ def _translate_response_body(
         return _save_response_body(page, target, fetcher_used=fetcher_used,
                                    duration_ms=duration_ms)
 
-    # Enforce response size limit before any processing
+    # 在任何处理之前先执行响应体积上限
     _check_response_size(page)
 
-    # Extract metadata from raw response
+    # 从原始响应里取元数据
     resp_headers = getattr(page, 'headers', {}) or {}
     raw_ct = resp_headers.get('content-type', '') if isinstance(resp_headers, dict) else ''
     raw_body = getattr(page, 'body', None)
     total_size = len(raw_body) if isinstance(raw_body, bytes) else 0
     if total_size == 0 and _METHOD.get() == "HEAD":
-        # A HEAD has no body to measure — the declared length IS the answer the
-        # caller came for (that is what makes it a cheap liveness/size probe
-        # instead of a GET that downloads everything to report its size).
+        # HEAD 没有正文可量 —— 声明的长度**就是**调用方来要的答案（正因如此它才是
+        # 一次廉价的存活/体积探针，而不是一个把整份下完只为了报告体积的 GET）。
         try:
             total_size = int(resp_headers.get("content-length") or 0)
         except (TypeError, ValueError):
             total_size = 0
 
-    # Detect JSON responses. Return raw JSON without extraction.
+    # 识别 JSON 响应：不做抽取，直接返回原始 JSON。
     is_json = raw_ct.startswith('application/json') or raw_ct.startswith('text/json')
     if is_json and raw_body:
         try:
-            # The declared charset can contradict the bytes (see fetcher
-            # ._decode_html_bytes); a JSON body is returned as-is, so a wrong
-            # decode would reach the caller verbatim.
+            # 声明的字符集可能与字节本身矛盾（见 fetcher._decode_html_bytes）；JSON
+            # 正文是原样交回的，所以一次错解码会一字不差地到达调用方。
             from dhole_mcp.fetcher import _decode_html_bytes
             json_text = _decode_html_bytes(raw_body, getattr(page, 'encoding', None) or 'utf-8')
             return ResponseModel(
@@ -3015,13 +2966,12 @@ def _translate_response_body(
                 extracted_type="text",
             )
         except Exception:
-            pass  # Fall through to normal extraction if JSON decode fails
+            pass  # JSON 解码失败就落到常规抽取
 
-    # Detect XML responses (P2-7) and return them as-is, the way JSON is. A
-    # sitemap / RSS feed / XML API carries its data in the tag structure, and the
-    # HTML pipeline flattens that into prose: measured on
-    # https://docusaurus.dev/sitemap.xml, which came back as "xml version…lander"
-    # with every <url>/<loc> element gone.
+    # 识别 XML 响应（P2-7）并像 JSON 那样原样交回。sitemap / RSS feed / XML API 的
+    # 数据住在标签结构里，而 HTML 流水线会把它压平成一段散文：在
+    # https://docusaurus.dev/sitemap.xml 上实测，交回的是 "xml version…lander"，
+    # 每个 <url>/<loc> 元素都不见了。
     if _is_xml_content_type(raw_ct) and raw_body:
         try:
             from dhole_mcp.fetcher import _decode_html_bytes
@@ -3033,12 +2983,11 @@ def _translate_response_body(
                 extracted_type="text",
             )
         except Exception:
-            pass  # Fall through to normal extraction
+            pass  # 落到常规抽取
 
-    # Detect PDF responses. Route to the flagship PDF extractor instead of the
-    # HTML/text pipeline (which would return a useless "binary content" error).
-    # Many servers serve PDFs as application/octet-stream, so the %PDF magic-byte
-    # check is the reliable detector.
+    # 识别 PDF 响应：交给旗舰版 PDF 提取器，而不是 HTML/文本流水线（后者只会回一句
+    # 没用的 "binary content" 错误）。许多服务器把 PDF 当 application/octet-stream 发，
+    # 所以 %PDF 魔数字节检查才是可靠的识别方式。
     is_pdf = raw_ct.startswith('application/pdf') or (bool(raw_body) and raw_body[:5].startswith(b'%PDF'))
     if is_pdf and raw_body:
         return _extract_pdf_response(raw_body, raw_ct, total_size, page.url,
@@ -3048,8 +2997,8 @@ def _translate_response_body(
     # 一直开着（R02-063，活体：`web_read('http://127.0.0.1:8399/article', pages='1-2')` 的正文
     # 与不带 `pages=` 的那一发逐字节相同，而 `summary` 里说的是别的事）。
     _note_text(_pdf_only_inert_note())
-    # PDF-intent URL (.pdf) that returned HTML, not a PDF: a login/paywall/error
-    # redirect. Don't extract the login HTML as if it were content (P6/P14).
+    # 意图是 PDF 的 URL（.pdf）却回了 HTML 而不是 PDF：登录页 / 付费墙 / 错误重定向。
+    # 别把登录页的 HTML 当正文抽取（P6/P14）。
     _url_path = (page.url or '').lower().split('?')[0]
     if _url_path.endswith('.pdf') and raw_body and not raw_body[:5].startswith(b'%PDF'):
         try:
@@ -3069,15 +3018,14 @@ def _translate_response_body(
                              total_size_bytes=total_size, extracted_type="markdown",
                              error=err, content_ok=False)
 
-    # Image-only page (content-type image/*): OCR it to text if the OCR extras
-    # are installed. Many pages are just a PNG/JPEG (screenshots, scans, memes,
-    # image-of-text); without OCR the agent gets nothing useful.
+    # 只有图的页面（content-type image/*）：装了 OCR 附加依赖就把它识成文本。
+    # 很多页面就是一张 PNG/JPEG（截图、扫描件、梗图、文字图片），没有 OCR 时 agent
+    # 什么有用的东西都拿不到。
     #
-    # All three failure branches below return content=[] with the reason in
-    # `error` (14.6 BUG-5: a failed fetch must not put error/placeholder text in
-    # content - an agent reading content[0] takes it for the page's body and
-    # counts its length as page size). _never_escalate() keeps the empty content
-    # from looking like a JS shell and buying a wasted browser run.
+    # 下面三条失败分支都交 content=[] 并把原因写进 `error`（14.6 BUG-5：一次失败的
+    # 抓取不许把错误/占位文本塞进 content —— 读 content[0] 的 agent 会把它当成这页
+    # 的正文，并把它的长度算成页面大小）。_never_escalate() 让这份空 content 不被
+    # 读成 JS 壳，从而白跑一趟浏览器。
     is_image = raw_ct.startswith('image/') and bool(raw_body)
     if is_image and raw_body:
         try:
@@ -3134,12 +3082,11 @@ def _translate_response_body(
 
     content: list[str]
 
-    # The page this response describes - the metadata / media / link extraction
-    # below all resolve their URLs against it.
+    # 这份响应描述的是哪一页 —— 下面的元数据 / 媒体 / 链接抽取都以它为基准解析 URL。
     page_url = getattr(page, 'url', '') or ''
 
     def _dhole_extract():
-        """Extract content via dhole's own extractor (trafilatura + markdownify)."""
+        """用 dhole 自己的抽取器取正文（trafilatura + markdownify）。"""
         from dhole_mcp.extractor import extract_content
         return extract_content(
             page, extraction_type=extraction_type,
@@ -3147,7 +3094,7 @@ def _translate_response_body(
         )
 
     def _trafilatura_extract():
-        """Extract content via trafilatura."""
+        """用 trafilatura 取正文。"""
         from dhole_mcp.trafilatura_extractor import extract_with_trafilatura
         return extract_with_trafilatura(page, extraction_type=extraction_type, css_selector=css_selector)
 
@@ -3168,7 +3115,7 @@ def _translate_response_body(
         if (not content or content == [""] or content == ["\n"]):
             content = _dhole_extract()
     else:
-        # Non-trafilatura path: use dhole extractor (markdownify + lxml)
+        # 非 trafilatura 那条路：用 dhole 自己的抽取器（markdownify + lxml）
         content = _dhole_extract()
 
     if page.status == 503 and fetcher_used == "stealthy":
@@ -3201,13 +3148,13 @@ def _translate_response_body(
             _island_used = True
             content = [_island_text]
 
-    # Metadata enrichment (OpenGraph + JSON-LD + canonical + <title>) for HTML
-    # pages. JSON/PDF/image responses return earlier with metadata={}. Cheap
-    # regex pass over the raw body; never blocks the response.
+    # HTML 页面的元数据增强（OpenGraph + JSON-LD + canonical + <title>）。
+    # JSON/PDF/图片响应更早返回，带的是 metadata={}。这里只是对原始正文跑一趟便宜
+    # 的正则，从不阻塞响应。
     page_metadata: Dict[str, Any] = {}
     page_media: List[str] = []
     page_links: Dict[str, Any] = {}
-    page_html: str = ""  # raw HTML for page_type detection (v10 envelope)
+    page_html: str = ""  # 原始 HTML，供 page_type 判定用（v10 信封）
     if raw_body and isinstance(raw_body, (bytes, bytearray)):
         try:
             _html = raw_body.decode(getattr(page, 'encoding', None) or 'utf-8', errors='replace')
@@ -3234,30 +3181,26 @@ def _translate_response_body(
     if extraction_type in ("article", "structured") and page_metadata:
         content = _backfill_article_json(content, page_metadata)
 
-    # Report the format actually returned. Defaults left this field at "markdown"
-    # for every request, so an article call reported markdown and the summary
-    # repeated the wrong label. article/structured only count when the body really
-    # is the JSON object — the extractor falls back to prose when trafilatura
-    # found no article, and saying "article" then would be a lie in the other
-    # direction.
+    # 报告**真正**交回的是哪种格式。从前这里的默认值对每个请求都留成 "markdown"，
+    # 于是一次 article 调用报的是 markdown，摘要也跟着重复那个错标签。
+    # article/structured 只有当正文真的是那个 JSON 对象时才算数 —— trafilatura 找不到
+    # 文章时抽取器会回落到散文，那时说 "article" 就是反方向的谎。
     _etype = extraction_type if extraction_type in _EXTRACTED_TYPES else "markdown"
     if _etype in ("article", "structured") and not (
             content and content[0].lstrip().startswith("{")):
         _etype = "markdown"
 
-    # v10 page_type: structural class from raw HTML (article/list/paywall/
-    # redirect/unknown). pdf/json/image/js_shell/auth_wall are filled later in
-    # _with_agent_hints from content_type/error (definitive signals override
-    # this structural guess).
+    # v10 的 page_type：从原始 HTML 判出的结构类别（article/list/paywall/redirect/
+    # unknown）。pdf/json/image/js_shell/auth_wall 由后面的 _with_agent_hints 用
+    # content_type/error 填上（确定性信号覆盖这里基于结构的猜测）。
     _page_type = detect_page_type(
         page_html, page_url, raw_ct, sum(len(c) for c in content),
         extracted_text="\n".join(c for c in content if isinstance(c, str)),
     )
 
-    # G29 — the address the caller passed answered 200 and the DOCUMENT named
-    # another page. That reads differently from "the server redirected us", and
-    # the difference matters when deciding whether the site moved or this page is
-    # just a pointer.
+    # G29 —— 调用方传来的那个地址回了 200，而**文档**里写着另一个页面。这读起来与
+    # "服务器把我们重定向了"不一样，而这个区别在判断"站点搬家了"还是"这页只是个指针"
+    # 时是要紧的。
     _meta_hop = getattr(page, "meta_refresh", None)
     if _meta_hop and isinstance(page_metadata, dict):
         page_metadata["meta_refresh"] = _meta_hop
@@ -3391,16 +3334,14 @@ def _attach_dom_visible_chars(result: ResponseModel, page_html: str,
             return result
         result.visible_text_chars = visible_text_chars(page_html)
         _extracted = sum(len(c) for c in result.content)
-        # The content-area count costs a second parse, so it stays lazy: thin
-        # bodies need it for the substance gate, and a large body needs it only
-        # when the whole-page ratio already says "collapsed" (R04-016a: the
-        # whole-page denominator includes chrome and can call a complete article
-        # lost). A large, healthy body pays nothing.
+        # 内容区计数要多花一次解析，所以保持惰性：正文单薄时需要它来判实质内容门槛，
+        # 而大正文只在整页比例已经判定为“塌缩”时才需要它（R04-016a：整页分母包含
+        # 周边框架，会把一篇完整文章误判为丢失）。大而健康的正文不付任何代价。
         if (_extracted >= _SUBSTANCE_PROBE_MAX_CHARS
                 and not is_extraction_collapsed(_extracted, result.visible_text_chars)):
             return result
-        # The second ruler asks "how much of the page's own prose survived",
-        # with nav/header/footer removed but <aside> kept (it can be content).
+        # 第二把尺子问的是“页面自身的正文存活了多少”，去掉 nav/header/footer
+        # 但保留 <aside>（它也可能是内容）。
         result._dom_chrome_free_chars = visible_text_chars_without_chrome(page_html)
         try:
             host = urlparse(page_url or "").netloc.lower()
@@ -3418,7 +3359,7 @@ def _attach_dom_visible_chars(result: ResponseModel, page_html: str,
 
 
 def _check_response_size(page: _DholeResponse) -> None:
-    """Raise if response body exceeds safety limit.
+    """响应体超出安全上限时抛错。
 
     红线是 `_body_ceiling()`：抽取走 50MB，`save_to` 走它自己的落盘上限。这条函数
     在落盘分叉**之后**才跑到，所以正常路径上 `save_to` 根本到不了这里 —— 但
@@ -3434,7 +3375,7 @@ def _check_response_size(page: _DholeResponse) -> None:
 
 
 async def _timed(coro):
-    """Run a coroutine and return (result, elapsed_ms)."""
+    """跑一个协程并返回 (结果, 耗时毫秒)。"""
     t0 = now()
     result = await coro
     elapsed = (now() - t0) * 1000
@@ -3492,12 +3433,11 @@ def _browser_binary_ready() -> bool:
 
 
 async def _safe_prewarm(coro_fn, timeout: float = 20.0) -> None:
-    """Run a prewarm callable in the background, fully isolated.
+    """在后台跑一个预热可调用对象，完全隔离。
 
-    `coro_fn` is a zero-arg callable returning a coroutine. Catches
-    BaseException (a hung/crashing prewarm NEVER takes down the server, not even
-    CancelledError) and caps it at `timeout` so a stuck launch can't linger.
-    Prewarm is best-effort by design.
+    `coro_fn` 是无参、返回协程的可调用对象。捕获 BaseException（一个卡死或崩溃的
+    预热绝不会拖垮服务器，连 CancelledError 也不例外），并用 `timeout` 封顶，
+    让卡住的启动无法滞留。预热按设计就是尽力而为。
     """
     try:
         await asyncio.wait_for(coro_fn(), timeout=timeout)
@@ -3506,13 +3446,11 @@ async def _safe_prewarm(coro_fn, timeout: float = 20.0) -> None:
 
 
 async def _safe_imported_prewarm(module_name: str, attr: str, timeout: float = 20.0) -> None:
-    """Import and run an optional async prewarm without touching the event loop.
+    """导入并运行一个可选的异步预热，且不占用事件循环。
 
-    Startup prewarms are best-effort. Their imports can be surprisingly heavy
-    (Scrapling/Playwright/ONNX chains), so resolve the callable in a worker
-    thread first; then run the coroutine with the same isolation as
-    _safe_prewarm. Import failure, timeout, cancellation, and bad callables are
-    all non-fatal.
+    启动预热是尽力而为的。它们的导入可能出奇地重（Scrapling/Playwright/ONNX 链），
+    所以先在 worker 线程里解析出可调用对象；再用与 _safe_prewarm 相同的隔离方式
+    运行协程。导入失败、超时、取消、可调用对象有问题，全部不致命。
     """
     def _resolve():
         import importlib
@@ -3724,22 +3662,20 @@ def _apply_install_shift(deadline: float, waited_s: float) -> float:
 
 
 class _SessionBusy(RuntimeError):
-    """The auto browser session could not be acquired within the call budget.
+    """自动浏览器会话无法在本次调用的预算内取得。
 
-    Raised when another task (typically the startup pre-warm) holds the session
-    creation lock past the caller's deadline. Distinct from a launch failure:
-    the browser may come up fine a moment later, so the caller degrades to the
-    HTTP-tier result instead of reporting the site as unreachable.
+    当另一个任务（通常是启动预热）持有会话创建锁的时间超过调用方的截止时间时抛出。
+    这与启动失败不同：浏览器可能稍后就正常起来了，所以调用方降级到 HTTP 档的结果，
+    而不是把站点报成不可达。
     """
 
 
 @asynccontextmanager
 async def _lock_within(lock, timeout: Optional[float]):
-    """Hold ``lock``, waiting at most ``timeout`` seconds to acquire it.
+    """持有 ``lock``，最多等 ``timeout`` 秒来获取它。
 
-    ``timeout=None`` waits indefinitely (the historical behaviour). Only the
-    *wait* is bounded — an in-flight holder is never cancelled, so a browser
-    launch that already started is left to finish and be reused by the next call.
+    ``timeout=None`` 表示无限等待（历史行为）。只有*等待*受时限约束 —— 已在持锁的
+    一方永远不会被取消，所以已经开始的浏览器启动会跑完，并被下一次调用复用。
     """
     if timeout is None:
         await lock.acquire()
@@ -3758,10 +3694,10 @@ async def _lock_within(lock, timeout: Optional[float]):
 
 
 def _normalize_credentials(credentials: Optional[Dict[str, str]]) -> Optional[tuple]:
-    """Convert a credentials dictionary to a tuple accepted by fetchers.
+    """把凭据字典转成抓取器接受的元组。
 
-    Returns None if credentials is None or empty.
-    Validates types and lengths to prevent injection/DoS.
+    credentials 为 None 或空时返回 None。
+    校验类型与长度，防止注入/DoS。
     """
     if not credentials:
         return None
@@ -3782,19 +3718,19 @@ def _proxy_to_url(
     proxy: Optional[str | Dict[str, str]],
     proxy_auth: Optional[Dict[str, str]],
 ) -> Optional[str]:
-    """Normalize a proxy (URL string or {server, username, password} dict) plus
-    an optional proxy_auth dict into ONE credential-embedded proxy URL for the
-    HTTP tier (primp accepts user:pass@host proxies).
+    """把代理（URL 字符串或 {server, username, password} 字典）加上可选的
+    proxy_auth 字典，归一成一条内嵌凭据的代理 URL 供 HTTP 档使用（primp 接受
+    user:pass@host 形式的代理）。
 
-    Closes the audit gap where get()/bulk_get() validated auth / proxy_auth but
-    never applied them. Rules:
-    - dict proxy: username/password come from the dict itself.
-    - explicit proxy_auth param wins over credentials already embedded in a
-      proxy URL string (the explicit parameter is the caller's last word).
-    - No credentials to merge -> the proxy string is returned unchanged.
-    - proxy=None -> None.
+    补上审计缺口：get()/bulk_get() 校验了 auth / proxy_auth，却从未真正应用它们。
+    规则：
+    - 字典代理：用户名/密码取自字典本身。
+    - 显式的 proxy_auth 参数优先于代理 URL 字符串里已内嵌的凭据（显式参数是调用方
+      的最终表态）。
+    - 没有可合并的凭据 -> 原样返回代理字符串。
+    - proxy=None -> None。
     """
-    creds = _normalize_credentials(proxy_auth)  # validates type/length/newlines
+    creds = _normalize_credentials(proxy_auth)  # 校验类型/长度/换行
     username = creds[0] if creds else None
     password = creds[1] if creds else None
 
@@ -3811,11 +3747,11 @@ def _proxy_to_url(
         proxy = server
 
     parsed = urlparse(proxy)
-    # validate_proxy already enforced the scheme set; skip merging for anything
-    # unexpected rather than mangling it.
+    # validate_proxy 已经限定过 scheme 集合；对任何意料之外的形式直接跳过合并，
+    # 而不是把它揉坏。
     if parsed.scheme not in ("http", "https", "socks5", "socks5h"):
         return proxy
-    host_port = parsed.netloc.rsplit("@", 1)[-1]  # drop any embedded userinfo
+    host_port = parsed.netloc.rsplit("@", 1)[-1]  # 丢掉已内嵌的 userinfo
     if username is None or password is None:
         return proxy
     netloc = f"{_url_quote(str(username), safe='')}:{_url_quote(str(password), safe='')}@{host_port}"
@@ -3823,11 +3759,10 @@ def _proxy_to_url(
 
 
 def _proxy_endpoint_label(proxy_url: str) -> str:
-    """``host:port`` of a proxy URL, WITHOUT credentials.
+    """代理 URL 的 ``host:port``，不含凭据。
 
-    A proxy URL routinely embeds ``user:pass@``. Echoing it into ``error`` (which
-    reaches the agent, and any transcript of the call) would leak the credential —
-    the same reason the HTTP tier redacts its retry logs.
+    代理 URL 里常常内嵌 ``user:pass@``。把它回显进 ``error``（会到达 agent，也会进
+    任何调用记录）就会泄露凭据 —— 与 HTTP 档对重试日志做脱敏是同一个理由。
     """
     try:
         parsed = urlparse(proxy_url or "")
@@ -3844,10 +3779,10 @@ def _basic_auth_header(
     auth: Optional[Dict[str, str]],
     headers: Optional[Mapping[str, Optional[str]]],
 ) -> Optional[Dict[str, str]]:
-    """Build a Basic-Authorization header dict from an auth credential dict.
+    """用凭据字典构造 Basic 认证头字典。
 
-    Returns None when auth is empty or the caller already set an Authorization
-    header (an explicit header is the caller's explicit choice — never clobbered).
+    auth 为空、或调用方已经设置了 Authorization 头时返回 None（显式设置的头就是
+    调用方的明确选择 —— 绝不被覆盖）。
     """
     creds = _normalize_credentials(auth)
     if creds is None:
@@ -3859,31 +3794,28 @@ def _basic_auth_header(
 
 
 _AUTH_KINDS = ("basic", "bearer", "header")
-# RFC 7230 token: what a header name is allowed to be spelled with.
+# RFC 7230 token：头名称允许使用的字符集。
 _AUTH_HEADER_NAME_RE = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+\Z")
 
 
-# How a pinned tier reaches its proxy: `_force_fetch` returns before
-# `_auto_escalate`, so the preflight cannot live only in the escalation path.
-# One helper, both callers, so the promise the option text makes ("an
-# unreachable one returns error='proxy_unreachable' before any request") is
-# kept by every path that accepts a proxy rather than by whichever one a test
-# happened to exercise.
+# 固定档位如何走到自己的代理：`_force_fetch` 在 `_auto_escalate` 之前就返回了，
+# 所以预检不能只待在升级路径里。一个助手、两个调用方，选项文案承诺的（"不可达的
+# 代理在任何请求之前就返回 error='proxy_unreachable'"）才能被每一条接受代理的路径
+# 守住，而不是只被某条恰好被测到的路径守住。
 
 
 async def _dead_explicit_proxy(proxy, url: str,
                                started_at: Optional[float] = None
                                ) -> Optional[ResponseModel]:
-    """The ResponseModel for a named proxy that accepts no connection, or None.
+    """对指定代理不可连接时给出 ResponseModel，否则返回 None。
 
-    None means "no explicit proxy named, or it answered" - and an unparseable
-    one is None too: unknown is not the same as unreachable, and a probe that
-    cannot run must not block a fetch. Environment proxies are deliberately not
-    probed here (they are machine config, not this call's decision); see
-    `_auto_escalate` for what happens instead when only one of those is set.
+    None 表示“没有指定显式代理，或者它应答了” —— 无法解析的代理也返回 None：
+    未知不等于不可达，跑不起来的探测不能挡住一次抓取。环境变量代理有意不在这里探测
+    （它们是机器配置，不属于本次调用的决策）；只设了其中之一时代替方案是什么，
+    见 `_auto_escalate`。
 
-    `started_at` is the call's own clock start where the caller knows it; a
-    pinned tier does not, so its duration reports the probe it did wait for.
+    `started_at` 是调用方已知的本次调用时钟起点；固定档位不知道它，所以它的耗时
+    报告的是它确实等过的那次探测。
     """
     proxy_url = _proxy_to_url(proxy, None) or ""
     if not proxy_url:
@@ -3906,12 +3838,10 @@ async def _dead_explicit_proxy(proxy, url: str,
 
 
 def _stealthy_only_call(force_fetcher: Any, actions: Any) -> bool:
-    """True when this call is locked to (or forced onto) the browser tier.
+    """本次调用被锁定在（或被强制推到）浏览器档时返回 True。
 
-    ``conditional`` options have to know this BEFORE the request is built: the
-    browser is not given conditional requests, and finding that out after the fact
-    would mean either sending a header it cannot use or silently dropping one the
-    caller asked for.
+    ``conditional`` 选项必须在请求构建**之前**就知道这一点：浏览器不会拿到条件请求，
+    事后再发现，意味着要么发一个它用不上的头，要么悄悄丢掉调用方要的那一个。
     """
     if actions:
         return True
@@ -3920,28 +3850,25 @@ def _stealthy_only_call(force_fetcher: Any, actions: Any) -> bool:
 
 
 def _conditional_headers(markers: Any) -> tuple:
-    """Turn stored version markers ({etag, last_modified}) into request headers.
+    """把存储的版本标记（{etag, last_modified}）转成请求头。
 
     17.0：唯一喂它的人是进程内通道 `_REVALIDATE`，不再是 agent 能传的参数。
     翻译规则一条没改 —— 它防的是注入（换行会变成一个新请求头），以及"源站根本对不上的
     校验子被答成 200，于是 200 被读成'变了'"。
 
-    Returns ``(headers, rejection_reason)``; the reason is "" when the markers are
-    usable. Both are empty on a normal call, so this costs nothing on the common path.
+    返回 ``(headers, rejection_reason)``；标记可用时原因是 ""。正常调用下两者都为空，
+    所以常见路径上没有额外开销。
 
-    Why these are translated here rather than passed through ``extra_headers``: a 304 is not an
-    error, but it looks like one to anything that judges a response by its body. The
-    measured shape of passing ``If-None-Match`` in extra_headers before this existed
-    was ``all_tiers_failed (HTTP status 0)`` — the empty 304 body read as a JS shell,
-    so dhole launched a 40-second browser to render a response that has no body by
-    definition, and reported the site as blocked.
+    为什么在这里翻译而不直接走 ``extra_headers``：304 不是错误，但对任何按响应体
+    判断响应的东西来说它看起来就像错误。在这之前把 ``If-None-Match`` 放进
+    extra_headers 的实测形态是 ``all_tiers_failed (HTTP status 0)`` —— 空的 304 响应体
+    被当成 JS 空壳，于是 dhole 启动一个 40 秒的浏览器去渲染一个按定义没有响应体的响应，
+    然后把站点报成被封锁。
 
-    Dates are normalized, because whatever stored the marker last time cannot know
-    which of the three formats the origin wants: an RFC 7231 HTTP-date is sent as-is,
-    an ISO-8601 date or datetime is converted (a date means midnight UTC), and
-    anything that is neither is refused before the request goes out — a malformed date
-    in ``If-Modified-Since`` is ignored by servers, which would quietly turn "has it
-    changed?" into "give me the whole page again".
+    日期会被归一化，因为上次存下标记的人无法知道源站想要三种格式中的哪一种：
+    RFC 7231 HTTP-date 原样发送，ISO-8601 日期或日期时间会被转换（只给日期表示
+    UTC 零点），两者都不是则在请求发出前拒掉 —— ``If-Modified-Since`` 里格式错误的
+    日期会被服务器忽略，那就悄悄把"它变了吗？"变成了"把整页再给我一遍"。
     """
     from email.utils import format_datetime, parsedate_to_datetime
     import re as _re
@@ -4070,7 +3997,7 @@ def _nothing_went_out(door: Optional[str] = None) -> str:
 def _nothing_erased() -> str:
     """`sys_state` 的 erasure 面那半句，向 `context` 取（评审 R02-116）。
 
-    它从前焊在 `server.py:9108` 的文案里，于是这一扇的两条拒绝路各有各的写法：打错状态类
+    它从前焊在 `sys_state` 的拒绝文案里，于是这一扇的两条拒绝路各有各的写法：打错状态类
     那一条说 `Nothing was erased.`（自己写的），打错参数名那一条听表外默认支说
     `Nothing was fetched or changed.`（没人替它写的）。两句说的都是真话，也确实是两件不同的
     事 —— 收的不是句子，是**作者的归属**。
@@ -4137,13 +4064,12 @@ def _header_door(low: str) -> Optional[tuple[str, str]]:
 
 def _caller_headers(headers: Optional[dict]) -> tuple[Optional[Dict[str, str]],
                                                      Optional[str], Optional[str]]:
-    """Turn a caller-named dict into the pipeline's ``extra_headers``.
+    """把调用方命名的字典转成流水线的 ``extra_headers``。
 
-    Returns `(headers, error, way_out)`; the last two are both None when the dict is
-    usable. Validation is the same gate every other header path already goes through
-    (`validate_headers`: shape, CRLF injection, internally-managed names, caps) plus
-    the named refusals above, and it runs here rather than deeper because a header the
-    pipeline cannot honour must stop the call before a request spends it.
+    返回 `(headers, error, way_out)`；字典可用时后两者都是 None。校验走的是其他所有
+    请求头路径都已走过的同一道门（`validate_headers`：形态、CRLF 注入、内部管理的
+    头名、上限），再加上前面那些具名拒绝；它放在这里而不是更深处，因为流水线无法
+    兑现的头必须在请求花掉之前就中止本次调用。
     """
     if headers is None:
         return None, None, None
@@ -4161,16 +4087,14 @@ def _caller_headers(headers: Optional[dict]) -> tuple[Optional[Dict[str, str]],
 
 
 def _headers_note(caller: Optional[Dict[str, str]], synthesized: bool) -> str:
-    """What the caller's headers rode on, in the one field clamp notes live in.
+    """调用方的头搭在什么之上，写在 clamp 注释所栖身的那一个字段里。
 
-    Two shapes read as a promise otherwise: `headers=` does not replace dhole's own
-    template (it wins per key *over* it), and `headers={}` names nothing at all. Both
-    said only in code would leave a caller believing they had sent their own request
-    shape when the google referer went out anyway.
+    否则有两种形态会被读成一个承诺：`headers=` 并不替换 dhole 自己的模板（它是按 key
+    *压*在模板之上取胜），而 `headers={}` 什么都没指名。若只在代码里说，调用方会以为
+    自己送出了自己的请求形态，而 google referer 其实照发不误。
 
-    An empty string means "the rung already says this": with `anti_detect='off'` the
-    HTTP-tier note names the dropped synthesis itself, and saying it twice in one
-    `summary` is noise that reads like emphasis.
+    空字符串表示“档位已经说过了”：`anti_detect='off'` 时 HTTP 档的注释本身就点明了
+    被丢掉的合成，同一份 `summary` 里说两遍是读起来像强调的噪音。
 
     两版话按 `_knob_here` 分岔：`anti_detect=` 是 `web_read` / `web_act` 的参数，而
     `web_request` 收不下它（场景 9 实测：一次写在 0 秒里被送回一句它自己传不出来的
@@ -4202,35 +4126,29 @@ def _headers_note(caller: Optional[Dict[str, str]], synthesized: bool) -> str:
 
 
 def _selector_notes_for_cache() -> list[str]:
-    """Only notes whose subject is part of the cache key travel with the row.
+    """只有主题属于缓存键的注释才随行一起走。
 
-    `css_selector` is in `cache._cache_key`, so a 0-match note describes the very
-    answer being stored. `focus` / `max_content_chars` are not in the key: their
-    notes belong to whichever call wrote the row, and must not be replayed onto a
-    later call that asked for different parameters.
+    `css_selector` 在 `cache._cache_key` 里，所以一条 0 命中的注释描述的正是要被
+    存下的那个答案。`focus` / `max_content_chars` 不在键里：它们的注释属于写下这一行
+    的那次调用，不得被回放到后来一次要求不同参数的调用上。
     """
     return [n for n in (_ARG_NOTES.get() or []) if n.startswith("css_selector ")]
 
 
 def _headers_off_note(by: str, replay: bool = False) -> str:
-    """The ONE wording for "this request carried no dhole-synthesized browser
-    headers" — said by the tier that actually withheld them, because that is the
-    only layer that knows whether a packet went out at all (a cache replay reads
-    the same flag and sends nothing).
+    """“这次请求没有带任何 dhole 合成的浏览器头”的唯一一种说法 —— 由真正扣下它们的
+    那一档来说，因为只有那一层知道到底有没有包发出去（缓存回放读到同一个标志，但
+    什么也不发）。
 
-    Two hands can lower `stealthy_headers` and they must not be described by the
-    same sentence. `anti_detect='off'` is a rung the caller chose. The private
-    target is not: dhole used to ship a fabricated google referer and a
-    browserforge UA to `127.0.0.1` like everywhere else, and the report's user
-    found his own service log full of headers he never sent — for a local API
-    call those headers are pollution, not protection.
+    两双手都能压掉 `stealthy_headers`，它们不该用同一句话来描述。`anti_detect='off'`
+    是调用方选的档位。私有目标不是：dhole 以前会像对待其他目标一样，向 `127.0.0.1`
+    送一个伪造的 google referer 和 browserforge UA，而报告的用户发现自己的服务日志里
+    满是他从没发过的头 —— 对一次本地 API 调用来说，那些头是污染而不是保护。
 
-    `replay=True` is the cache's voice, and it is a different tense on purpose:
-    the page being handed back IS the page that was fetched without those headers,
-    so the disclosure has to survive the replay (a security user quotes it as
-    evidence about what the site saw) — but no packet left this process, so the
-    sentence may not claim what "went out" now. An empty `by` says nothing at all:
-    an old cache row carries no receipt, and absence is not a claim of innocence.
+    `replay=True` 是缓存的声音，时态故意不同：交还的页面**就是**当初不带那些头抓到的
+    那一页，所以这个披露必须活过回放（安全用户会引用它作为“站点看到了什么”的证据）——
+    但此刻没有任何包离开本进程，所以句子不能说“现在发出去”了什么。空的 `by` 什么
+    也不说：旧的缓存行不带凭证，而缺席并不等于无辜。
     """
     if not by:
         return ""
@@ -4280,28 +4198,26 @@ def _auth_request_headers(
     auth: Any,
     headers: Optional[Mapping[str, Optional[str]]],
 ) -> tuple:
-    """Turn an ``auth`` dict into request headers.
+    """把 ``auth`` 字典转成请求头。
 
-    Returns ``(headers_to_add, kind, credential_names, ignored_reason)``.
+    返回 ``(headers_to_add, kind, credential_names, ignored_reason)``。
 
-    Three shapes, because those are the three the web actually asks for:
+    三种形态，因为 Web 实际要求的就是这三种：
 
       ``{"type": "basic", "username": "u", "password": "p"}``  -> Authorization: Basic …
       ``{"type": "bearer", "token": "…"}``                     -> Authorization: Bearer …
-      ``{"type": "header", "name": "X-API-Key", "value": "…"}`` -> that header
+      ``{"type": "header", "name": "X-API-Key", "value": "…"}`` -> 该头
 
-    ``user``/``pass`` are accepted as shorthand for username/password (that is the
-    spelling in the gap report and in most CLI docs), and ``type`` may be omitted
-    when the shape already says what it is. ``header`` with name ``Authorization``
-    is deliberate: sites that want ``Token abc123`` in that exact header are common.
+    ``user``/``pass`` 被接受为 username/password 的简写（缺口报告和多数 CLI 文档里
+    就是这个拼法），而形态本身已说明类型时 ``type`` 可以省略。允许 ``header`` 配
+    ``Authorization`` 这个名是有意的：要求在该头里放 ``Token abc123`` 的站点很常见。
 
-    ``credential_names`` is what the HTTP tier must treat as a credential on
-    later hops. Cookie and Authorization are covered by the built-in list, but an
-    API key under a name the CALLER picked is not — and on a redirect the next
-    host is chosen by the server we left, not by us.
+    ``credential_names`` 是 HTTP 档在后续跳转中必须当作凭据的东西。Cookie 和
+    Authorization 由内置清单覆盖，但调用方自选名字的 API key 不在其中 —— 而在重定向
+    时，下一个主机是由我们离开的那台服务器选的，不是我们。
 
-    Raises ValueError/SecurityError on a shape that cannot be honoured; the caller
-    turns that into an ``invalid_request`` before any request goes out.
+    形态无法兑现时抛 ValueError/SecurityError；调用方会在任何请求发出之前把它变成
+    ``invalid_request``。
     """
     if auth is None or auth == "" or auth == {}:
         return {}, "", (), None
@@ -4316,9 +4232,8 @@ def _auth_request_headers(
     value = auth.get("value")
 
     if not kind:
-        # Infer it, but only when exactly one shape is present: guessing between
-        # two plausible readings of a credential is how a password ends up in an
-        # API-key header.
+        # 推断它，但只在恰好一种形态成立时推断：在一份凭据的两种貌似合理的读法之间
+        # 猜，就是密码跑进 API-key 头里的由来。
         if isinstance(token, str) and token.strip():
             kind = "bearer"
         elif username is not None:
@@ -4358,14 +4273,13 @@ def _auth_request_headers(
             raise ValueError("auth type 'header' needs a non-empty string 'value'")
         header_name, header_value = name.strip(), value
 
-    # validate_headers is the same gate extra_headers goes through (length, CRLF
-    # injection, internally-managed names) — a credential must not skip it.
+    # validate_headers 是 extra_headers 走的同一道门（长度、CRLF 注入、内部管理的
+    # 头名）—— 凭据不许跳过它。
     built_headers = validate_headers({header_name: header_value})
 
     existing = [k for k in (headers or {}) if (k or "").lower() == header_name.lower()]
     if existing:
-        # An explicit header the caller already set is their last word, and
-        # overwriting it in place would be a surprise worse than ignoring auth.
+        # 调用方已显式设置的头是他的最终表态；就地覆盖它带来的意外，比忽略 auth 更糟。
         return {}, kind, (), (
             f"auth type={kind} ignored: extra_headers already sets "
             f"{existing[0]!r} - drop it there, or send the credential yourself")
@@ -4374,7 +4288,7 @@ def _auth_request_headers(
 
 
 def _parse_cookie_header(raw: str) -> Optional[Dict[str, str]]:
-    """Parse a Cookie header value ("a=1; b=2") into {name: value}."""
+    """把 Cookie 头的值（"a=1; b=2"）解析成 {name: value}。"""
     out: Dict[str, str] = {}
     for part in raw.split(";"):
         name, sep, value = part.partition("=")
@@ -4385,16 +4299,14 @@ def _parse_cookie_header(raw: str) -> Optional[Dict[str, str]]:
 
 
 def _safe_cookie_dict(cookies: Any) -> Optional[Dict[str, str]]:
-    """Convert the `cookies` option to a {name: value} dict for the HTTP tier.
+    """把 `cookies` 选项转成供 HTTP 档使用的 {name: value} 字典。
 
-    Three shapes arrive in practice and all three are accepted: the documented
-    list of ``{name, value, domain}`` dicts, a plain ``{name: value}`` dict, and
-    a raw Cookie header string. A string used to be iterated as a sequence of
-    characters, so every cookie was dropped and the request went out without
-    them while the call still reported success.
+    实践中会出现三种形态，三种都接受：文档里的 ``{name, value, domain}`` 字典列表、
+    朴素的 ``{name: value}`` 字典，以及原始的 Cookie 头字符串。字符串以前会被当作字符
+    序列逐个迭代，于是每个 cookie 都被丢掉、请求在没有它们的情况下发出，而调用仍然
+    报告成功。
 
-    Returns None for empty/None input. Values are never logged - a cookie is a
-    credential.
+    空/None 输入返回 None。值永远不写日志 —— cookie 就是凭据。
     """
     if not cookies:
         return None
@@ -4416,11 +4328,10 @@ def _safe_cookie_dict(cookies: Any) -> Optional[Dict[str, str]]:
 
 
 def _browser_cookies(cookies: Any, url: str) -> Any:
-    """Cookie jar for the browser tier (playwright ``add_cookies`` shape).
+    """浏览器档的 cookie jar（playwright ``add_cookies`` 的形态）。
 
-    A caller-supplied list passes through untouched - it carries its own
-    domain/path scope. The string and plain-dict forms carry no scope, so each
-    cookie is tied to the URL being fetched.
+    调用方提供的列表原样透传 —— 它自带 domain/path 作用域。字符串和朴素字典形态不带
+    作用域，所以每个 cookie 都绑定到正在抓取的那个 URL 上。
     """
     if isinstance(cookies, (str, dict)):
         pairs = _safe_cookie_dict(cookies) or {}
@@ -4488,8 +4399,8 @@ def _identity_value_error(key: str, value: Any) -> str:
         return ""
     if key == "proxy":
         if not isinstance(value, (str, dict)):
-            # A bool/int here would reach urlparse and raise an AttributeError
-            # about `decode` — a Python traceback where a shape refusal belongs.
+            # 这里的 bool/int 会进到 urlparse 并抛出关于 `decode` 的 AttributeError
+            # —— 本该是一次形态拒绝的地方冒出 Python traceback。
             return "proxy: a URL string or a dict with server/username/password"
         if (isinstance(value, str) and not value.strip()) or (
                 isinstance(value, dict) and not value):
@@ -4666,10 +4577,10 @@ def _feed_batch_envelope(asked: int, rows: List[dict],
 
 
 def _cred_hosts_of(host_arg: Any) -> List[str]:
-    """The `host` inside `set={...}`, as a normalized list.
+    """`set={...}` 里的 `host`，归一成列表。
 
-    A string or a list, because both readings are natural and a client that sends
-    one host as a one-element list should not be told it passed the wrong shape.
+    字符串或列表都行，因为两种读法都自然，而把一台主机写成单元素列表的客户端不该被
+    告知形态传错了。
     """
     if host_arg is None:
         return []
@@ -4808,23 +4719,21 @@ _SS_PARAMS = frozenset({
     "max_results", "cache_ttl", "mode", "engines", "sources", "sort", "url",
     "site", "exclude_sites", "location", "language", "region", "page",
     "freshness", "fetch_content", "fetch_schema", "min_relevance",
-    # G24: the date window. `after` is widened to the engines' coarsest preset that
-    # covers it and reported; `before` is refused by search.py with the reason.
+    # G24：日期窗口。`after` 被放宽到引擎那边**能覆盖它的最粗**一档并如实报告；
+    # `before` 由 search.py 带着理由拒掉。
     "after", "before",
     "min_raw_relevance",
     # #8 共识感知扇出：只作用于 fetch_content 的自动取正文，是"够不够独立佐证"
     # 的地板（不是第三个相关性排序旋钮）。
     "fetch_min_consensus",
 })
-# The complete set of names each tool accepts at the top level. `url=` and
-# friends that are NOT in *_PARAMS (web_crawl's focus,
-# web_act's session_id, web_search's query) are the required-ish arguments
-# the branches read by name, so they join here.
+# 每个工具在顶层接受的**完整**名字集合。`url=` 这一类不在 *_PARAMS 里
+# （web_crawl 的 focus、web_act 的 session_id、web_search 的 query），它们是各
+# 分支按名字读的近必填参数，所以在这里并进来。
 #
-# A name listed but never read by the dispatcher used to be the quiet half of
-# the old bug (a top-level max_pages=3 crawled 10 pages with no warning). The
-# guard test_every_accepted_name_is_advertised now ties this set to the schema,
-# and the forwarding below reads nothing but this set.
+# 一个列了名却从没被派发器读过的名字，从前是那个老 bug 安静的那一半（顶层
+# max_pages=3 结果爬了 10 页且毫不警告）。守卫 test_every_accepted_name_is_advertised
+# 现在把这份集合与 schema 绑在一起，而下面的转发只读这一份集合。
 _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     "web_read": _SF_PARAMS | {"url"},
     # 17.0 §4 第 4 行：写操作那颗门。
@@ -4836,8 +4745,8 @@ _TOP_LEVEL_ARGS: dict[str, frozenset] = {
     # 是计划投影。它们与读法那几颗同住一条转发路（_forward 只认这一张表）；
     # 不进 _SC_PARAMS 是因为它们不是爬行推进旋钮 —— 计划翻页不消费 max_depth。
     | {"resume_token", "selector", "schema"},
-    # 17.0 §4: the map got its own tool, and the flag it used to be is not an
-    # argument any more -- `crawl.web_crawl` still takes it internally.
+    # 17.0 §4：地图有了自己的工具，而它从前是的那颗开关不再是参数了 ——
+    # `crawl.web_crawl` 内部仍然收它。
     # C3：一张地图的大小由站点决定，所以它的两道闸都要在这扇门上够得着 ——
     # `max_total_chars` 摊开一页，`resume_token` 从上一页的游标续下去。少了后者，
     # 被体积闸留下的那些行就只有"重付前半张地图"一条路，而游标指向空无处比没有
@@ -4905,26 +4814,22 @@ def _missing_required_args(tool: str, args: dict) -> list[str]:
     return out
 
 
-# Which tools this server registers and dispatches. Default: ALL of them.
-# DHOLE_TOOLS takes a comma-separated subset ("web_read,web_search") for
-# clients that pay the connect-time table on every conversation even when dhole
-# is never called: measured on the wire (python tests/tool_payload_measure.py)
-# on 2026-10-08: 28,231 chars of tool schemas + 2,476 of instructions = 30,707
-# on connect (≈7.4k tokens at the measured 4.16 chars/token), with web_read
-# alone accounting for 5,936 - fetch+search covers the daily-driver cases at
-# roughly a third of the cost, and the rest is one env-edit away. A name that
-# is not a real
-# tool RAISES at
-# import: a typo must never silently drop a capability the operator believes is
-# enabled - that is the same failure class as an ignored unknown argument, one
-# level up. Disabled tools stay in _TOOL_DEFS/_TOP_LEVEL_ARGS (every guard
-# keeps covering the full set); they are filtered at the wire boundary
-# (list_tools) and refused in _dispatch with an error naming DHOLE_TOOLS.
+# 这个服务器注册并派发哪些工具。默认：**全部**。
+# DHOLE_TOOLS 收一个逗号分隔的子集（"web_read,web_search"），面向那种即使从不
+# 调用 dhole 也要在每次会话里付连接期工具表的客户端：2026-10-08 在线上实测
+# （python tests/tool_payload_measure.py）——连接期 28,231 字符工具 schema +
+# 2,476 字符指令 = 30,707 字符（按实测 4.16 字符/token 约 7.4k token），其中
+# 单是 web_read 就占 5,936；fetch+search 覆盖日常主场景，成本约三分之一，其余
+# 只差改一次环境变量。
+# 一个不是真工具的名字会在 **import 期抛错**：笔误绝不该悄悄丢掉运维者以为已经
+# 启用的能力 —— 那与"陌生参数被忽略"是同一类失败，只是高一层。被关掉的工具仍留在
+# _TOOL_DEFS/_TOP_LEVEL_ARGS 里（每道守卫继续覆盖全量）；它们在连线边界（list_tools）
+# 被过滤，并在 _dispatch 里以一句点名 DHOLE_TOOLS 的错误被拒绝。
 def _parse_enabled_tools() -> frozenset:
     raw = os.environ.get("DHOLE_TOOLS")
     if raw is None or not raw.strip():
-        # 17.0: default = every tool. The opt-in groups are gone; the only way
-        # to shrink the wire set left is naming an explicit DHOLE_TOOLS subset.
+        # 17.0：默认 = 每一个工具。可选分组已经取消；想缩小线上集合，唯一的办法是
+        # 明确点名一个 DHOLE_TOOLS 子集。
         return frozenset(_TOP_LEVEL_ARGS)
     names = frozenset(part.strip() for part in raw.split(",") if part.strip())
     if not names:
@@ -4953,9 +4858,8 @@ def _browser_tier_enabled() -> bool:
     return bool(_ENABLED_TOOLS & _BROWSER_TOOLS)
 
 
-# The instructions actually sent on initialize: the routing section mentions
-# only enabled tools. With the default full set this equals DHOLE_INSTRUCTIONS
-# exactly (a test pins that, so the literal and the parts cannot drift).
+# initialize 时真正发出去的那份指令：路由段只提到已启用的工具。用默认全量时它与
+# DHOLE_TOOLS 那份字面量**完全相等**（有测试钉住这一点，所以字面量与零件漂不开）。
 ACTIVE_INSTRUCTIONS = _compose_instructions(_ENABLED_TOOLS)
 
 
@@ -5127,13 +5031,12 @@ def _url_guard_refusal(url: str, msg: str, caller: str):
 
 
 def _reject_unknown_args(tool: str, args: dict) -> None:
-    """Raise when a tool is called with a name it does not accept.
+    """工具被用它不接受的名字调用时抛错。
 
-    A key that is dropped silently lets the caller believe a cap or filter
-    applied when it did not — the same failure the option bag's own validator
-    used to cover one level down; with the bag gone this is the only check there is. None-valued keys are
-    ignored: clients that echo every schema property as null mean "not set",
-    not "unsupported".
+    一个被悄悄丢掉的键，会让调用方以为某颗上限或过滤生效了而其实没有 —— 同一类
+    失败从前由 options 袋子自己的校验器在低一层兜住；袋子删掉之后，这里是唯一
+    的检查。值为 None 的键被忽略：那些把每个 schema 属性都回显成 null 的客户端，
+    意思是"没设"，不是"不支持"。
     """
     allowed = _TOP_LEVEL_ARGS[tool]
     unknown = sorted(k for k, v in args.items() if v is not None and k not in allowed)
@@ -5172,23 +5075,21 @@ def _reject_unknown_args(tool: str, args: dict) -> None:
         next_action=_arg_refusal_way_out())
 
 
-# ─── extraction schema normalization ───────────────────────────────
-# The tool contract is "pass schema -> get structured JSON back". The old gate
-# (`if schema and isinstance(schema, dict) and (schema.get("properties") or ...)`)
-# broke that contract in two ways that BOTH returned markdown with a 200 status
-# and no warning:
-#   1. a schema that arrived as a JSON *string* (several MCP clients serialize
-#      nested objects; agents also stringify) failed `isinstance(schema, dict)`
-#   2. a schema dict with no non-empty `properties` (e.g. {"type": "object"})
-# In both cases the caller had no way to tell the schema had been dropped — the
-# worst failure mode for an agent, and the same one _reject_unknown_args
-# exists to prevent for argument names. Now a supplied-but-unusable schema raises, so the
-# agent sees the problem instead of silently getting markdown.
+# ─── 抽取 schema 的归一化 ────────────────────────────────────────────────────
+# 工具契约是"传 schema -> 拿回结构化 JSON"。老的那道闸门
+# （`if schema and isinstance(schema, dict) and (schema.get("properties") or ...)`）
+# 从两个方向破坏这个契约，而两种都只交回 markdown、状态 200、一句警告都没有：
+#   1. schema 以 JSON **字符串**送达时（多家 MCP 客户端会序列化嵌套对象，agent 也
+#      会转成字符串）过不了 `isinstance(schema, dict)`
+#   2. 一个没有非空 `properties` 的 schema dict（例如 {"type": "object"}）
+# 两种情况下调用方都没法知道 schema 被丢掉了 —— 对 agent 最坏的失败模式，也正是
+# _reject_unknown_args 为参数名存在的那件事。如今"给了却不能用的 schema"会抛错，
+# 让 agent 看见问题，而不是静默拿到一份 markdown。
 def _normalize_schema(schema: Any) -> Optional[dict]:
-    """Coerce a caller-supplied extraction schema to a usable dict.
+    """把调用方给的抽取 schema 收成可用的 dict。
 
-    Returns None when no schema was supplied (the caller wants markdown).
-    Raises ValueError when a schema WAS supplied but cannot be used.
+    返回 None 表示没给 schema（调用方要的是 markdown）。
+    给了 schema 却用不了时抛 ValueError。
     """
     if schema is None:
         return None
@@ -5268,28 +5169,25 @@ def _validate_schema_selectors(properties: Any, _depth: int = 0) -> None:
         if not isinstance(spec, dict):
             continue
         sel = spec.get("selector")
-        # Truthiness, not isinstance(str): a non-string selector is the guard's
-        # problem to reject, exactly as it was before this walk went recursive.
+        # 用真值判断而不是 isinstance(str)：非字符串的 selector 是那道守卫要拒的事，
+        # 与这段遍历变成递归之前完全一样。
         if sel:
             spec["selector"] = validate_html_css_selector(
                 sel, param=f'schema["{name}"].selector')
         child = spec.get("properties")
-        # A field that declares "array" AND carries a sub-schema promises one
-        # record per repeating container, and the container is what `selector`
-        # names. With no selector there is nothing to iterate: the walk fell back
-        # to the document root, so scalar children returned the FIRST match on the
-        # page while array children collected EVERY match site-wide. Measured on
-        # quotes.toscrape.com - one object, author "Albert Einstein", 40 tags
-        # belonging to all ten quotes. A confidently wrong grouping is worse than
-        # an empty one, and it is the exact failure the nested form exists to
-        # prevent. A nested field WITHOUT "type": "array" is something else that is
-        # valid - one record for the page itself - so that stays allowed.
+        # 一个既声明 "array" 又带着子 schema 的字段，承诺的是"每个重复容器出一条
+        # 记录"，而容器正是 `selector` 点名的东西。没有 selector 就没有可迭代的东西：
+        # 遍历会回落到文档根，于是标量子字段交回页面上**第一个**匹配，而数组子字段
+        # 收集**整站每一个**匹配。在 quotes.toscrape.com 上实测：一个对象、作者
+        # "Albert Einstein"、40 个属于十条引言的标签。一个自信地错的分组比空的更糟，
+        # 而这正是嵌套写法存在所要防的那次失败。没有 "type": "array" 的嵌套字段是
+        # 另一种合法的东西 —— 为这一页本身产一条记录 —— 所以那种继续允许。
         _has_records = isinstance(child, dict) or (
             isinstance(spec.get("items"), dict)
             and isinstance(spec["items"].get("properties"), dict))
-        # Only the plural promises iteration. `{"page": {"properties": {...}}}`
-        # with no selector is a valid, different thing - one record for the page
-        # itself - and rejecting that would break a shape the tool advertises.
+        # 只有复数形式承诺迭代。`{"page": {"properties": {...}}}` 不带 selector 是
+        # 一件合法而不同的事 —— 为这一页本身产一条记录 —— 拒掉它会破坏工具自己
+        # 声明过的形状。
         _plural = spec.get("type") == "array" or "items" in spec
         if _has_records and _plural and not sel:
             raise ValueError(
@@ -5308,9 +5206,10 @@ def _validate_schema_selectors(properties: Any, _depth: int = 0) -> None:
                 _validate_schema_selectors(inner, _depth + 1)
 
 
-# ─── local file paths (parse tool) ──────────────────────────────────# Content-type label for parsed local files. Without it a successful parse
-# reported content_type/summary/total_extracted_chars as empty, so a CSV and a
-# PDF were indistinguishable in the envelope.
+# ─── 本地文件路径（parse 工具）──────────────────────────────────────────────
+# 解析本地文件时的 content_type 标签。没有它，一次成功的解析会把
+# content_type/summary/total_extracted_chars 报成空，于是 CSV 与 PDF 在信封里
+# 无法区分。
 _PARSE_CONTENT_TYPES = {
     ".html": "text/html", ".htm": "text/html", ".xhtml": "application/xhtml+xml",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -5461,7 +5360,7 @@ def _blocked_path_prefix(real_path: str) -> str:
     交回的是**名单被作者写下的那一形**（`~/.ssh` → Windows 上 `~\\.ssh`），不是展开之后的绝对路径
     （评审 R02-126 · 真机 `r227_server_resolved_paths.json`：读侧 `error` 与写侧 `ValueError`
     都把 `c:\\users\\<user>\\.ssh` 交到了会进 transcript 的那一格，而同一封回执的 `url` 早过了作者）。
-    展开只发生在比较那一步；`server.py:1718` 那条偏好（别把绝对路径拼进句子再靠遮蔽器折回去）
+    展开只发生在比较那一步；`_cdp_roster_hint` 那条偏好（别把绝对路径拼进句子再靠遮蔽器折回去）
     在这里的落法是：**根本不拼进去**。名单一个字没动。
     """
     symbolic = (
@@ -5504,38 +5403,30 @@ def _blocked_path_prefix(real_path: str) -> str:
     return ""
 
 
-# ─── Transport: answer a frame the SDK could not parse ─────────────
+# ─── 传输层：回答一帧 SDK 解析不了的输入 ────────────────────────────────────
 
 class _ParseErrorAnsweringReadStream:
-    """A ``ReadStream`` that answers the frames the stdio reader could not parse (D7).
+    """一个 ``ReadStream``，负责回答 stdio 读取器解析不了的那些帧（D7）。
 
-    The SDK's ``stdin_reader`` validates every line with
-    ``types.jsonrpc_message_adapter.validate_json``. When that raises -- an
-    argument nested past the parser's recursion limit, a truncated line,
-    anything that is not JSON at all -- the reader forwards the exception as a
-    *stream item* (the read stream is typed ``ReadStream[SessionMessage |
-    Exception]``) and moves on to the next line, writing nothing back. JSON-RPC
-    2.0 requires ``-32700 Parse error`` for exactly that case, so a caller that
-    sent one bad line waited forever for a reply that was never coming, with no
-    stderr and no log line to explain it.
+    SDK 的 ``stdin_reader`` 用 ``types.jsonrpc_message_adapter.validate_json``
+    校验每一行。当它抛错时 —— 参数嵌套超过解析器的递归上限、一行被截断、或者根本
+    不是 JSON —— 读取器把这个异常当作一个*流元素*转发出去（读流的类型是
+    ``ReadStream[SessionMessage | Exception]``），然后继续读下一行，什么都不往回写。
+    JSON-RPC 2.0 对这种情况明确要求回 ``-32700 Parse error``，于是发了一条坏行的
+    调用方永远等一句永远不会来的答复，没有 stderr，也没有一行日志解释。
 
-    The seam is here, not in the transport: ``ReadStream`` is a ``Protocol``,
-    so wrapping the read side satisfies it structurally, and the answer goes
-    out through the SDK's **own** write stream. That keeps a single writer on
-    stdout -- no interleaving with ``stdout_writer``, so no torn frames -- and
-    reuses the very construction the SDK's HTTP transport already uses for its
-    own parse errors.
+    接缝选在这里而不是传输层内部：``ReadStream`` 是一个 ``Protocol``，所以包住读侧
+    就按结构满足它，而答复经 SDK **自己的**写流出去。这样 stdout 上始终只有一个
+    写者 —— 不与 ``stdout_writer`` 交错，因此不会有撕坏的帧 —— 且复用的正是 SDK 的
+    HTTP 传输处理自己的解析错误时已经在用的那种构造。
 
-    This is deliberately *not* a substitute for dhole's own guards: an
-    argument that parses but is malformed still reaches
-    ``_validate_schema_selectors`` and its ``MAX_SCHEMA_DEPTH`` limit. The two
-    sit at different depths of the same funnel, and only the outer one can
-    speak when the line never became a message.
+    这里刻意**不是** dhole 自己那些守卫的替身：一个能解析但形状不对的参数，仍然会
+    走到 ``_validate_schema_selectors`` 和它的 ``MAX_SCHEMA_DEPTH`` 上限。两者在同一条
+    漏斗的不同深度上，而当那行字从未成为一条消息时，只有外面那道还开得了口。
 
-    ``id`` is ``null`` because the frame failed to parse, so its id is not
-    knowable -- JSON-RPC 2.0 says a parse error carries a null id. ``data``
-    names the cause, because "Parse error" alone tells the caller nothing about
-    which of their inputs was wrong.
+    ``id`` 是 ``null``，因为这一帧解析失败、它的 id 无从得知 —— JSON-RPC 2.0 规定
+    解析错误带一个 null id。``data`` 点名原因，因为光一句 "Parse error" 不能让调用方
+    知道自己哪一个输入错了。
     """
 
     __slots__ = ("_inner", "_write")
@@ -5546,7 +5437,7 @@ class _ParseErrorAnsweringReadStream:
 
     @property
     def last_context(self):
-        # Forwarded so the runner's per-message sender context survives the wrap.
+        # 透传，好让 runner 那条"每条消息各自的 sender 上下文"活过这层包装。
         return getattr(self._inner, "last_context", None)
 
     @staticmethod
@@ -5570,8 +5461,7 @@ class _ParseErrorAnsweringReadStream:
         )))
 
     async def receive(self):
-        # A loop, not recursion: a client can send any number of bad frames in a
-        # row, and each one is owed its own answer.
+        # 用循环而不是递归：客户端可以连发任意多条坏帧，而每一条都欠它自己的答复。
         while True:
             item = await self._inner.receive()
             if isinstance(item, Exception):
@@ -5600,7 +5490,7 @@ class _ParseErrorAnsweringReadStream:
         return None
 
 
-# ─── Main server class ─────────────────────────────────────────────
+# ─── 服务器主类 ──────────────────────────────────────────────────────────────
 
 
 def _named_call(func):
@@ -5659,34 +5549,33 @@ def _store_ttl(result: ResponseModel, cache_ttl: int, *, chain_ran: bool = False
 
 
 class MasterFetchServer:
-    """Enhanced MCP server built on Scrapling with smart routing, caching, and Trafilatura."""
+    """构建在 Scrapling 之上的增强版 MCP 服务器：智能路由、缓存与 Trafilatura 正文抽取。"""
 
     def __init__(self, cache_ttl: int = DEFAULT_TTL):
         self._sessions: Dict[str, _SessionEntry] = {}
         self._sessions_lock: Lock = Lock()
         self._cache_ttl = cache_ttl
         self._auto_stealthy_id: Optional[str] = None
-        self._auto_stealthy_last_used: float = 0  # timestamp of last auto stealthy session use
-        self._idle_monitor_task: Optional[Any] = None  # asyncio.Task for idle session cleanup
-        self._auto_session_lock: Lock = Lock()  # serializes auto-session creation so the startup warm-up + a concurrent fetch never spawn a 2nd browser
+        self._auto_stealthy_last_used: float = 0  # 共享浏览器最近一次被用到的时刻
+        self._idle_monitor_task: Optional[Any] = None  # 空闲会话回收的后台 asyncio 任务
+        # 把自动会话的创建串行化：启动预热和一次并发 fetch 只会起一台浏览器，不会起第二台
+        self._auto_session_lock: Lock = Lock()
 
-    # ─── Core helpers ─────────────────────────────────────────────
+    # ─── 核心辅助 ─────────────────────────────────────────────
 
     async def _get_session(self, session_id: str, expected_type: Optional[SessionType]) -> _SessionEntry:
-        """Look up a session by ID, optionally validating its type.
+        """按 ID 取会话，并可选地校验它的类型。
 
-        Holds the session lock to prevent races with close_session.
-        Returns the entry with validation — the caller MUST NOT close
-        the session concurrently while using the returned entry.
+        取的过程中持有会话锁，避免与 close_session 抢。返回的条目已经过校验 ——
+        调用方在使用它期间不得并发关闭这个会话。
         """
         async with self._sessions_lock:
             entry = self._sessions.get(session_id)
             if entry is None:
                 raise ValueError(
-                    # It used to point at `list_sessions`, a tool that has never
-                    # existed on this server - the agent following that advice got
-                    # "Unknown tool" and no way to find the id. sys_state with no
-                    # arguments IS that listing.
+                    # 这里过去指向 `list_sessions` —— 本服务器从来没有过这个工具。照那句
+                    # 建议去做的 agent 只拿到 "Unknown tool"，照样找不到那个 id。
+                    # 不带参数的 sys_state 就是那份清单。
                     f"Session '{session_id}' not found. Call sys_state with no "
                     "arguments to see which sessions are open."
                 )
@@ -5705,36 +5594,29 @@ class MasterFetchServer:
     async def _ensure_auto_session(self, *, lock_wait: Optional[float] = None,
                                    profile_name: Optional[str] = None,
                                    headless: bool = True) -> str:
-        """Get or create an auto-persistent browser session. Avoids browser startup on every fetch.
+        """取得或创建自动持久的浏览器会话，避免每次 fetch 都付一次浏览器启动。
 
-        Race-safe: if two concurrent calls both pass the initial check,
-        the second one closes its orphaned session and reuses the first.
+        竞态安全：两个并发调用都通过了最初的检查时，后到的那个会关掉自己多起来的会话，
+        复用前一个。
 
-        Idle timeout: when AUTO_SESSION_IDLE_TIMEOUT > 0, auto sessions close
-        after that many seconds of inactivity. When it is 0 (default), the
-        browser is kept alive forever and no idle monitor is started.
+        空闲超时：AUTO_SESSION_IDLE_TIMEOUT > 0 时，自动会话闲置够那么多秒就关；
+        为 0（默认）时浏览器永久保活，空闲监视器也不会启动。
 
-        ``lock_wait`` bounds only the wait for the creation lock (seconds). The
-        startup pre-warm holds that lock across the whole browser launch, so a
-        first fetch that needs the stealthy tier can otherwise queue behind it
-        for up to 30s — past the MCP client's request timeout. Pass a budget to
-        get ``_SessionBusy`` instead of an unbounded wait; None keeps the old
-        wait-forever behaviour.
+        ``lock_wait`` 只约束"等创建锁"这一段（秒）。启动预热会在整个浏览器启动期间持有
+        那把锁，所以第一个需要 stealthy 档的 fetch 可能排在它后面等上最多 30s —— 早就越过
+        了 MCP 客户端的请求超时。给一个预算就会拿到 ``_SessionBusy`` 而不是无限期等待；
+        None 保留原来一直等的行为。
 
-        ``profile_name`` names the persistent browser context to build the shared
-        session with; None means "whatever cred_defaults stores" (§3-17 — after
-        ``DHOLE_BROWSER_PROFILE`` was retired this is the only way to name one).
-        A warm browser built with a DIFFERENT profile is not reusable: it carries
-        the other context's logins, so the default that just changed could never
-        take effect on it. The mismatch closes it and launches the right one —
-        changing the default costs one cold start, which is what it should cost.
+        ``profile_name`` 指定用哪个持久浏览器上下文来建这个共享会话；None 表示"用
+        cred_defaults 里存的那个"（§3-17 —— ``DHOLE_BROWSER_PROFILE`` 退役之后，这是唯一
+        还能点名它的入口）。用另一个 profile 起来的热浏览器不可复用：它带着那边上下文的
+        登录态，刚改掉的默认值在它身上永远生效不了。profile 不符就关掉它、起对的那台 ——
+        改一次默认的代价是一次冷启动，这也正是它应收的代价。
 
-        The same judgement applies to the anti-detect rung: canvas noise and the
-        WebRTC policy are decided when a browser starts, so the warm one is built
-        at whatever rung is in force now (``cred_defaults``, else ``auto``) and a
-        rung change rotates it. Before 17.0 B5-14a-2 this launcher passed neither,
-        which quietly meant the shared browser — the one most stealthy calls ride
-        — ran unhardened no matter what ``anti_detect`` said.
+        反检测档位也是同一套判断：画布噪声与 WebRTC 屏蔽在一台浏览器启动那一刻就定死了，
+        所以热的那台是按当下生效的档位（``cred_defaults``，否则 ``auto``）起来的，档位一变
+        就轮换它。17.0 B5-14a-2 之前这个启动器两个参数都不传，等于悄悄让共享浏览器 ——
+        多数 stealthy 调用都骑在它上面 —— 无论如何都不做硬化，``anti_detect`` 写了也白写。
 
         ``headless=False``（批次 11：只有 ``web_act(headed=true)`` 会走到这里）是一条
         **不对称**的规矩。看得见的那台能干后台的活，所以后台请求照常复用一台热的可见
@@ -5759,7 +5641,7 @@ class MasterFetchServer:
         want_launch = _launch_identity(**want_hard)
 
         def _scan() -> tuple[Optional[str], Optional[str]]:
-            """(reusable, to_close) for the warm session under this profile + rung."""
+            """按当前 profile + 档位，给出热会话的 (可复用, 待关闭)。"""
             existing_id = getattr(self, attr)
             if not (existing_id and existing_id in self._sessions
                     and self._sessions[existing_id].session._is_alive):
@@ -5772,13 +5654,12 @@ class MasterFetchServer:
                 setattr(self, ts_attr, now())
                 self._ensure_idle_monitor()
                 return existing_id, None
-            # The pointer clears either way: whoever holds this lock owns the
-            # relaunch, and a second closer would be shutting a browser that is
-            # already being replaced.
+            # 指针两条路都要清：谁拿着这把锁谁就负责重起，第二个关闭者关的会是一台已经在
+            # 被替换的浏览器。
             setattr(self, attr, None)
             return None, existing_id
 
-        # Fast path: reuse an existing alive session.
+        # 快路径：复用一台还活着的现成会话。
         async with self._sessions_lock:
             reusable, stale = _scan()
         if reusable:
@@ -5798,28 +5679,24 @@ class MasterFetchServer:
                 "confirm=true closes all), or drop headed=true and let this call ride "
                 "the browser that is already up.")
 
-        # Serialize creation: the startup warm-up and a concurrent fetch share ONE
-        # creation. A second caller waits on the lock, then reuses — never a 2nd
-        # browser instance. (The previous close-the-orphan race can no longer
-        # happen in production, but the final guard below still defends against
-        # any path that sets the attr out-of-band.)
+        # 创建串行化：启动预热和一次并发 fetch 共用同一次创建。第二个调用者在锁上排队，
+        # 排到了就复用 —— 绝不会出现第二个浏览器实例。（"关掉孤儿会话"那场竞态在生产里
+        # 已经不可能发生，但下面那道最后的防线仍然挡住任何绕过这里改这个属性的路径。）
         async with _lock_within(self._auto_session_lock, lock_wait):
-            # Re-check: another creator may have finished while we waited.
+            # 复查：等锁的这段时间里，另一个创建者可能已经完事了。
             async with self._sessions_lock:
                 reusable, other = _scan()
             if reusable:
                 return reusable
             to_close = other or stale
             if to_close:
-                # Slow (a browser shutdown), and deliberately outside the sessions
-                # lock — the pointer already cleared, so nothing can hand this id
-                # to a new caller while it closes.
+                # 这一步慢（要关一台浏览器），而且故意放在会话锁之外 —— 指针已经清了，
+                # 它关的这段时间里没人能把这个 id 交给新调用者。
                 try:
                     await self._close_one_session(to_close)
                 except Exception as e:
                     logger.debug("warm browser on the other profile did not close: %s", e)
-            # Create outside the sessions lock (expensive — browser launch) but
-            # inside the creation lock (no concurrent 2nd launch).
+            # 起浏览器放在会话锁外（很贵）、创建锁内（不会并发起第二台）。
             # 那三颗是这一档在这台浏览器上的落点：两颗启动级的定下它的指纹，
             # solve_cloudflare 作为会话默认存着 —— 捕获动作不逐次传它，
             # 读的就是这一份。
@@ -5834,7 +5711,7 @@ class MasterFetchServer:
                     try:
                         await self._close_one_session(sid.session_id)
                     except Exception:
-                        pass  # Best effort cleanup
+                        pass  # 尽力清理，关不掉也不影响大局
                     setattr(self, ts_attr, now())
                     self._ensure_idle_monitor()
                     return existing_id
@@ -5845,29 +5722,22 @@ class MasterFetchServer:
         return sid.session_id
 
     async def _prewarm_stealthy(self) -> None:
-        """Warm the single stealthy browser at startup (background, best-effort).
+        """服务器启动时把唯一那台 stealthy 浏览器预热好（后台、尽力而为）。
 
-        Scheduled when the MCP server starts so the browser is warm by the time
-        the agent first needs a stealthy fetch or screenshot, skipping the
-        ~3-5s cold start. Closes after 300s of inactivity (fixed in 17.0),
-        then relaunches on the next fetch. Idempotent: _ensure_auto_session
-        reuses any existing session. The warm-up stays best-effort: its first
-        step is a TCP preflight to 1.1.1.1:443, and an unreachable network just
-        makes it give up so the browser lazy-launches later.
+        之所以挂在 MCP 启动上：等 agent 第一次需要 stealthy fetch 或截图时浏览器已经热了，
+        省掉那 3-5s 冷启动。17.0 修好后它闲置 300s 就关，下一次 fetch 再重新起。幂等：
+        _ensure_auto_session 会复用任何已存在的会话。整个预热仍是尽力而为 —— 第一步是对
+        1.1.1.1:443 做一次 TCP 探活，网络不通就直接放弃，让浏览器之后按需懒启动。
 
-        Robustness: fully isolated — catches BaseException (so a
-        CancelledError or any launch failure can NEVER crash the server) and is
-        capped at 30s so a hung browser launch can't hold the session-creation
-        lock forever (a later real fetch can then take the lock and retry). On
-        any failure the browser simply lazy-launches on the first stealthy fetch.
+        健壮性：完全隔离 —— 捕获 BaseException（所以 CancelledError 或任何启动失败都绝不可能
+        把服务器搞崩），并且封顶 30s，这样一个卡住的浏览器启动不会永远攥着会话创建锁
+        （之后的真实 fetch 还能拿到锁重试）。任何失败的表现都只是浏览器在第一次 stealthy
+        fetch 时懒启动。
 
-        Event-loop safety: the browser availability check AND the patchright
-        import both run inside a worker thread. The old code called
-        _browser_deps_available() on the event loop first, which triggered
-        import patchright synchronously and blocked the loop for 1-3s,
-        starving server.run() so the MCP initialize handshake never got its
-        reply out (client reported -32001 REQUEST_TIMEOUT). Now the entire
-        check+import is off the event loop.
+        事件循环安全：浏览器可用性检查和 patchright 的 import 现在都在工作线程里跑。
+        老代码先在事件循环上调 _browser_deps_available()，那会同步 import patchright 并把
+        循环卡住 1-3s，server.run() 因此饿死，MCP 的 initialize 握手迟迟发不出回复（客户端
+        报 -32001 REQUEST_TIMEOUT）。现在"检查 + import"整段都不在事件循环上了。
         """
         # 17.0 B3 · 二进制不在就整个跳过预热，绝不在这儿下载（见 `_browser_binary_ready`）。
         # 顺序也因此不能再反过来：这条 30s 窗口管的是"启动一个浏览器"，而首用下载是分钟
@@ -5877,8 +5747,7 @@ class MasterFetchServer:
         if not await asyncio.to_thread(_browser_binary_ready):
             return
         async def _warm():
-            # Quick network preflight: skip browser prewarm if the network is
-            # unreachable (saves 2-5s launching a browser that can't connect).
+            # 先快速探一下网络：网络不通就别预热（省掉 2-5s 起一台连不上网的浏览器）。
             def _quick_network_check():
                 import socket
                 try:
@@ -5890,15 +5759,14 @@ class MasterFetchServer:
             if not await asyncio.to_thread(_quick_network_check):
                 logger.info("Network unreachable, skipping browser prewarm")
                 return
-            # Both the availability check AND the import run in the thread.
-            # check_browser_available() does import patchright and caches the
-            # result. After this, the cache-only reader returns instantly
-            # without touching the event loop.
+            # 可用性检查和 import 都在这条线程里跑。check_browser_available() 自己
+            # import patchright 并缓存结果；这之后只读缓存的那个函数立刻返回，完全不碰
+            # 事件循环。
             def _check_and_import():
                 from dhole_mcp.browser import check_browser_available
                 return check_browser_available()
             if not await asyncio.to_thread(_check_and_import):
-                return  # HTTP-only mode, no browser to prewarm
+                return  # 纯 HTTP 模式，没有浏览器可预热
             await self._ensure_auto_session()
         try:
             await asyncio.wait_for(_warm(), timeout=30.0)
@@ -5907,22 +5775,20 @@ class MasterFetchServer:
             logger.debug(f"Startup warm-up failed/skipped (will launch on first fetch): {e!r}")
 
     async def _start_idle_monitor(self) -> None:
-        """Background task: close auto browser sessions after AUTO_SESSION_IDLE_TIMEOUT
-        of inactivity.
+        """后台任务：自动浏览器会话闲置超过 AUTO_SESSION_IDLE_TIMEOUT 就关掉。
 
-        All reads of _auto_*_id and _auto_*_last_used happen inside the sessions lock
-        to prevent races with _ensure_auto_session.
-        Session closing happens outside the lock to avoid blocking other operations.
+        对 _auto_*_id 与 _auto_*_last_used 的所有读都放在会话锁里做，避免与
+        _ensure_auto_session 抢。关会话故意放在锁外，免得阻塞别的操作。
         """
         while True:
             await asyncio_sleep(IDLE_CHECK_INTERVAL)
             try:
-                # If AUTO_SESSION_IDLE_TIMEOUT = 0, keep browser alive forever
+                # AUTO_SESSION_IDLE_TIMEOUT = 0 时，浏览器永久保活，这一轮什么都不做
                 if AUTO_SESSION_IDLE_TIMEOUT == 0:
                     continue
                 now_ts = now()
                 async with self._sessions_lock:
-                    # Check stealthy auto session (all reads under lock)
+                    # 检查 stealthy 自动会话（读全在锁内）
                     # 批次 11：看得见的那台不归空闲回收管 —— 问的是那台浏览器自己的
                     # `_headless`，不读任何外部旋钮（批次 10 读的是 env，那是"这次想要
                     # 什么"，而这里要回答的是"屏幕上现在有没有一台"）。人在里面打字时
@@ -5938,13 +5804,13 @@ class MasterFetchServer:
                         self._auto_stealthy_id = None
                     else:
                         close_stealthy = None
-                # Close sessions outside the lock to avoid blocking
+                # 关会话放在锁外，避免阻塞
                 if close_stealthy:
                     try:
                         await self._close_one_session(close_stealthy)
                     except Exception as e:
                         logger.warning(f"Idle monitor failed to close stealthy session {close_stealthy}: {e}")
-                        # Pop from sessions dict even if close() failed — don't orphan
+                        # 就算 close() 失败也要把它从 sessions 字典里摘掉 —— 不能留下孤儿
                         async with self._sessions_lock:
                             entry = self._sessions.pop(close_stealthy, None)
                             if entry:
@@ -5970,24 +5836,20 @@ class MasterFetchServer:
             self._idle_monitor_task = asyncio.create_task(self._start_idle_monitor())
 
     async def _shutdown_close_sessions(self) -> None:
-        """Gracefully close all browser sessions when the server is stopping.
+        """服务器停止时优雅地关掉所有浏览器会话。
 
-        Called from serve()'s finally block so the single warm Chrome instance
-        is torn down cleanly when the agent harness closes the MCP server
-        (stdin closed / process exit), rather than relying on OS child reaping.
-        Best-effort: never raises.
+        由 serve() 的 finally 调用，这样当 agent harness 关掉 MCP 服务器（stdin 关闭 /
+        进程退出）时，那台唯一的预热 Chrome 会被干净地拆掉，而不是指望操作系统去收尸。
+        尽力而为：永不抛异常。
 
-        The critical detail on Windows: the patchright Chrome subprocess is an
-        asyncio BaseSubprocessTransport. Closing the session schedules
-        connection_lost via loop.call_soon; if the event loop exits before that
-        callback runs, the transport's __del__ fires during GC AFTER the loop is
-        closed and prints 'Exception ignored in __del__' tracebacks to stderr
-        (RuntimeError: Event loop is closed / ValueError: I/O operation on closed
-        pipe). An MCP client reading stderr sees a crash-like traceback even
-        though the process exited 0. So we close the sessions, then EXPLICITLY
-        flush the loop with a short sleep so pending callbacks drain while the
-        loop is alive, then close any lingering asyncio subprocess transports
-        so their __del__ is a no-op (they're already closing).
+        Windows 上最关键的一点：patchright 的 Chrome 子进程是一个 asyncio
+        BaseSubprocessTransport。关闭会话会通过 loop.call_soon 排入 connection_lost；如果
+        事件循环在这个回调跑起来之前就退出了，transport 的 __del__ 会在循环已关闭之后才被
+        GC 触发，往 stderr 打 'Exception ignored in __del__' 的 traceback（RuntimeError:
+        Event loop is closed / ValueError: I/O operation on closed pipe）。读 stderr 的 MCP
+        客户端看到的是一段像崩溃一样的栈，尽管进程其实 0 退出。所以这里先关会话，再用一次
+        短 sleep 显式地把循环 flush 一遍，让待处理回调在循环还活着的时候排干，最后关掉任何
+        残留的 asyncio 子进程 transport，让它们的 __del__ 成为空操作（此时它们已在关闭中）。
         """
         async with self._sessions_lock:
             entries = list(self._sessions.items())
@@ -5999,17 +5861,16 @@ class MasterFetchServer:
             except BaseException:
                 pass
             entry._alive = False
-        # Drain pending loop callbacks (the Chrome subprocess transport's
-        # connection_lost) so the transports fully close while the loop is
-        # alive. Without this, their __del__ warns/errors after loop close.
+        # 把待跑的事件循环回调（Chrome 子进程 transport 的 connection_lost）排干，让
+        # transport 在循环还活着的时候真正关完。不这么做，它们的 __del__ 会在循环关闭之后
+        # 才触发，然后警告/报错。
         try:
             await asyncio.sleep(0.15)
         except BaseException:
             pass
-        # Belt-and-suspenders: explicitly close any asyncio subprocess
-        # transports (the Chrome driver pipes) still holding the loop. This is
-        # the only reliable way to silence the 'unclosed transport' ResourceWarning
-        # + 'Event loop is closed' RuntimeError noise on Windows teardown.
+        # 双保险：显式关掉仍然攥着事件循环的 asyncio 子进程 transport（Chrome 驱动的那几根
+        # 管道）。这是唯一能压住 Windows 收尾时 'unclosed transport' ResourceWarning 和
+        # 'Event loop is closed' RuntimeError 噪音的办法。
         try:
             self._close_all_subprocess_transports()
         except BaseException:
@@ -6021,9 +5882,9 @@ class MasterFetchServer:
 
     @staticmethod
     def _close_all_subprocess_transports() -> None:
-        """Close every asyncio subprocess transport still alive on the current
-        loop so their __del__ is a no-op (no 'unclosed transport' / 'Event loop
-        is closed' noise on Windows teardown). Best-effort; never raises."""
+        """关掉当前循环上仍然活着的每一个 asyncio 子进程 transport，让它们的 __del__
+        变成空操作（Windows 收尾时不再有 'unclosed transport' / 'Event loop is closed'
+        噪音）。尽力而为，永不抛异常。"""
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
@@ -6082,21 +5943,18 @@ class MasterFetchServer:
     async def _check_batch(self, urls: List[str], *, css_selector: Optional[str],
                            force_fetcher: Optional[str], anti_detect: Optional[str],
                            timeout, extra_headers, ignore_robots: bool) -> dict:
-        """A batch of independent change checks, one verdict per URL.
+        """一批互相独立的变更检查，每个 URL 一条结论。
 
-        Each URL goes back through ``web_read``'s single-URL check path, so the
-        batch inherits every gate (SSRF, robots, auth translation) instead of
-        growing a second copy of them. Rows keep the caller's order; one failed
-        URL does not erase the verdicts of its neighbours. The top-level fields
-        are deliberately named ``*_urls``: a batch has no single ``changed``
-        boolean, and pretending it does is how a caller ends up reporting
-        "unchanged" for nine rows while the tenth moved.
+        每个 URL 都重新走一遍 ``web_read`` 的单 URL check 路径，所以这批 inherits 全部关卡
+        （SSRF、robots、鉴权翻译），而不是再复制出一份第二套。行序保持调用方给的样子；
+        一个 URL 失败不会抹掉它邻居的结论。顶层字段故意叫 ``*_urls``：一批没有单一的
+        ``changed`` 布尔，假装有一个，就会出现"九行报 unchanged、第十行其实变了"这种回执。
         """
         import asyncio as _asyncio
 
         rows: List[dict] = []
-        # Four at a time: enough to make a watchlist useful, few enough that one
-        # origin with ten watched pages does not receive ten simultaneous probes.
+        # 一次四个：够让一个观察清单有用，又少到不至于让同一个源上那十个被盯的页面同时
+        # 挨四次探测。
         gate = _asyncio.Semaphore(4)
 
         async def _one(u: str) -> dict:
@@ -6108,14 +5966,13 @@ class MasterFetchServer:
                         anti_detect=anti_detect, timeout=timeout,
                         headers=extra_headers, ignore_robots=ignore_robots,
                     )
-                except Exception as exc:  # one row's bug is not the batch's answer
+                except Exception as exc:  # 一行的 own 故障不等于整批的结论
                     return {"url": u, "changed": None, "status": 0,
                             "error": redact_api_key(str(exc)[:300])}
             if isinstance(row, dict):
                 return {"url": u, **row}
-            # Refused before any fetch (SSRF/robots/argument gate) comes back as a
-            # ResponseModel. Keep that row's sentence instead of inventing a
-            # verdict from its empty content.
+            # 还没真正发请求就被拒的（SSRF/robots/参数关卡）会以 ResponseModel 回来。
+            # 这种行保留它自己那句话，而不是拿它的空正文编出一个结论。
             return {"url": u, "changed": None, "status": int(row.status or 0),
                     "error": row.error or "no change verdict was produced",
                     **({"note": row.next_action} if row.next_action else {})}
@@ -6247,10 +6104,9 @@ class MasterFetchServer:
         offset: int = 0,
         max_chars: int = DEFAULT_MAX_CONTENT_CHARS,
     ) -> ResponseModel:
-        """Apply content quality annotation, cache, and chunking to a fetch result.
+        """对一份抓取结果依次做质量标注、落缓存、切块。
 
-        Centralizes the repetitive 'annotate -> cache -> chunk' pattern
-        that was duplicated 8+ times across web_read.
+        把原先在 web_read 里复制了 8 遍以上的 "标注 -> 缓存 -> 切块" 收到一处。
         """
         # 304 的读法全在这里定：`status == 304` 就是"没变"这个事实，不再另存一个
         # 布尔。曾经的 `not_modified` 有过一整类 bug（升级路径里有 304 分支而正文
@@ -6634,13 +6490,12 @@ class MasterFetchServer:
                     logger.debug("cookie harvest store failed for %s: %s", host, e)
 
     async def _close_one_session(self, sid: str) -> tuple:
-        """Close one session: its browser (if any) then its jar. Returns
-        ``(cookies_forgotten, browser_closed, was_prewarmed_auto)``.
+        """关闭一个会话：先关它的浏览器（若有），再清它的 jar。返回
+        ``(cookies_forgotten, browser_closed, was_prewarmed_auto)``。
 
-        The jar goes even when there was no browser — that is the whole point of
-        the id outliving the process — and the auto-session pointer is cleared
-        with it, or the next stealthy fetch would try to drive a browser that no
-        longer exists.
+        jar 在没有浏览器时也要清掉 —— id 比进程活得久正是为此 —— 自动会话
+        指针也随之一并清除，否则下一次 stealthy 抓取会去驱动一个已不存在的
+        浏览器。
         """
         async with self._sessions_lock:
             entry = self._sessions.pop(sid, None)
@@ -6652,14 +6507,14 @@ class MasterFetchServer:
         if entry is not None:
             try:
                 await entry.session.close()
-            except Exception as e:  # a dead browser must not make the jar unforgetable
+            except Exception as e:  # 浏览器已死，不能因此让 jar 清不掉
                 logger.debug("session '%s' close raised: %s", sid, str(e)[:120])
             return dropped, True, was_auto
         return dropped, False, was_auto
 
-    # ─── Screenshot ───────────────────────────────────────────────
+    # ─── 截图 ─────────────────────────────────────────────────────
 
-    # ─── HTTP Fetcher (curl_cffi) ─────────────────────────────────
+    # ─── HTTP 抓取器（curl_cffi）──────────────────────────────────
 
     @staticmethod
     async def get(
@@ -6683,30 +6538,30 @@ class MasterFetchServer:
         http3: Optional[bool] = False,
         stealthy_headers: Optional[bool] = True,
     ) -> ResponseModel:
-        """Make GET HTTP request with browser fingerprint impersonation.
-        Fast, but only works for low-protection sites. For protected sites, use
-        web_read or stealthy_fetch.
+        """发起带浏览器指纹伪装的 GET HTTP 请求。
+        速度快，但只适用于防护较弱的站点。受保护的站点请改用
+        web_read 或 stealthy_fetch。
 
-        :param url: The URL to request.
-        :param impersonate: Browser to impersonate (default 'chrome').
-        :param extraction_type: Content format: 'markdown', 'html', 'text', 'article', 'structured'.
-        :param css_selector: CSS selector to narrow content before extraction.
-        :param params: Query string parameters.
-        :param headers: Request headers.
-        :param cookies: Request cookies.
-        :param useragent: Override the generated User-Agent for this request.
-        :param timeout: Timeout in seconds (default 30).
-        :param follow_redirects: Redirect policy: 'safe', True, or False.
-        :param max_redirects: Max redirects (default 30).
-        :param retries: Retry attempts (default 3).
-        :param retry_delay: Seconds between retries (default 1).
-        :param proxy: Proxy URL.
-        :param proxy_auth: Proxy auth dict with 'username' and 'password'.
-        :param auth: Credential dict - one of the three shapes in `_AUTH_SHAPES`;
-            _auth_request_headers says what each one needs.
-        :param verify: Verify HTTPS certificates (default True).
-        :param http3: Use HTTP/3 (default False).
-        :param stealthy_headers: Generate real browser headers (default True).
+        :param url: 要请求的 URL。
+        :param impersonate: 要伪装的浏览器（默认 'chrome'）。
+        :param extraction_type: 内容格式：'markdown'、'html'、'text'、'article'、'structured'。
+        :param css_selector: 提取前用于缩小内容范围的 CSS 选择器。
+        :param params: 查询字符串参数。
+        :param headers: 请求头。
+        :param cookies: 请求 cookie。
+        :param useragent: 覆盖本次请求生成的 User-Agent。
+        :param timeout: 超时秒数（默认 30）。
+        :param follow_redirects: 重定向策略：'safe'、True 或 False。
+        :param max_redirects: 最大重定向次数（默认 30）。
+        :param retries: 重试次数（默认 3）。
+        :param retry_delay: 重试间隔秒数（默认 1）。
+        :param proxy: 代理 URL。
+        :param proxy_auth: 含 'username' 和 'password' 的代理认证 dict。
+        :param auth: 凭据 dict —— `_AUTH_SHAPES` 中三种形态之一；
+            _auth_request_headers 说明各自需要什么。
+        :param verify: 是否校验 HTTPS 证书（默认 True）。
+        :param http3: 是否使用 HTTP/3（默认 False）。
+        :param stealthy_headers: 是否生成真实浏览器请求头（默认 True）。
         """
         url = validate_url(url)
         validate_html_css_selector(css_selector)
@@ -6749,47 +6604,45 @@ class MasterFetchServer:
         http3: Optional[bool] = False,
         stealthy_headers: Optional[bool] = True,
     ) -> BulkResponseModel:
-        """Async parallel GET requests with browser fingerprint impersonation.
-        Fast, but only works for low-protection sites.
+        """带浏览器指纹伪装的异步并行 GET 请求。
+        速度快，但只适用于防护较弱的站点。
 
-        :param urls: List of URLs to request.
-        :param impersonate: Browser to impersonate (default 'chrome').
-        :param extraction_type: Content format: 'markdown', 'html', 'text', 'article', 'structured'.
-        :param css_selector: CSS selector to narrow content.
-        :param params: Query parameters.
-        :param headers: Request headers.
-        :param cookies: Request cookies.
-        :param useragent: Override the generated User-Agent for this request.
-        :param timeout: Timeout in seconds (default 30).
-        :param follow_redirects: Redirect policy.
-        :param max_redirects: Max redirects (default 30).
-        :param retries: Retry attempts (default 3).
-        :param retry_delay: Seconds between retries (default 1).
-        :param proxy: Proxy URL.
-        :param proxy_auth: Proxy auth dict.
-        :param auth: Credential dict (basic / bearer / header) — see get().
-        :param verify: Verify HTTPS certificates (default True).
-        :param http3: Use HTTP/3 (default False).
-        :param stealthy_headers: Generate real browser headers (default True).
+        :param urls: 要请求的 URL 列表。
+        :param impersonate: 要伪装的浏览器（默认 'chrome'）。
+        :param extraction_type: 内容格式：'markdown'、'html'、'text'、'article'、'structured'。
+        :param css_selector: 用于缩小内容范围的 CSS 选择器。
+        :param params: 查询参数。
+        :param headers: 请求头。
+        :param cookies: 请求 cookie。
+        :param useragent: 覆盖本次请求生成的 User-Agent。
+        :param timeout: 超时秒数（默认 30）。
+        :param follow_redirects: 重定向策略。
+        :param max_redirects: 最大重定向次数（默认 30）。
+        :param retries: 重试次数（默认 3）。
+        :param retry_delay: 重试间隔秒数（默认 1）。
+        :param proxy: 代理 URL。
+        :param proxy_auth: 代理认证 dict。
+        :param auth: 凭据 dict（basic / bearer / header）—— 见 get()。
+        :param verify: 是否校验 HTTPS 证书（默认 True）。
+        :param http3: 是否使用 HTTP/3（默认 False）。
+        :param stealthy_headers: 是否生成真实浏览器请求头（默认 True）。
         """
-        # Validate all URLs
+        # 校验所有 URL
         urls = [validate_url(u) for u in urls]
         if len(urls) > MAX_BULK_URLS:
             raise ValueError(f"Too many URLs ({len(urls)}). Maximum is {MAX_BULK_URLS} per call.")
         validate_html_css_selector(css_selector)
         validate_proxy(proxy)
 
-        # Credentials now actually apply (audit gap closed): auth -> an
-        # Authorization / API-key header; proxy_auth + dict-proxy credentials ->
-        # embedded in the proxy URL primp receives. Validation errors raise before
-        # any request is made, preserving the old validate-only semantics for
-        # malformed input.
+        # 凭据现在真正生效了（审计缺口已补）：auth -> 一个
+        # Authorization / API-key 头；proxy_auth 与 dict 形式的代理凭据 ->
+        # 嵌入 primp 收到的代理 URL。校验错误会在发出任何请求之前抛出，
+        # 对畸形输入保持原先“只校验”的语义。
         auth_hdr, _auth_kind, auth_names, _auth_ignored = _auth_request_headers(auth, headers)
         if auth_hdr:
             headers = {**(headers or {}), **auth_hdr}
-        # web_read translates its own auth into `headers` before it reaches
-        # here, so the names it declared are the other half of "which of these
-        # headers are credentials" — the per-hop drop off-origin needs both.
+        # web_read 在到达这里之前已把自己的凭据翻译进 `headers`，所以它声明的
+        # 头名是“这些头里哪些是凭据”的另一半 —— 跨源时逐跳丢弃需要两边都算。
         credential_names = tuple(auth_names) + tuple(_AUTH_SENT.get()[1])
         if _auth_ignored and _ARG_NOTES.get() is not None:
             _ARG_NOTES.get().append(_auth_ignored)
@@ -6804,11 +6657,11 @@ class MasterFetchServer:
             for u in urls:
                 _audit_event("write", channel="http", method=_verb,
                              url=u[:200], session_id=_SESSION_ID.get() or "")
-        # `timeout` here is this tier's own unit — seconds per attempt — and the cap
-        # is 30 no matter what the call was budgeted. A document fetch that was given
-        # the whole 120s (`_http_tier_budget`, document=True) therefore used a quarter
-        # of it and said nothing; the wire says "max 120000", so the gap has to be
-        # named in the response rather than left for the caller to time.
+        # 这里的 `timeout` 是本档自己的单位 —— 每次尝试的秒数 —— 且无论调用
+        # 被预算了多少，上限都是 30。一次被给了整整 120s 的文档抓取
+        # （`_http_tier_budget`，document=True）因此只用了四分之一，却什么也没
+        # 说；对外契约写的是 "max 120000"，这个缺口必须写进响应，而不是留给
+        # 调用方自己去计时。
         _per_attempt_s = max(1, min(int(timeout), 30))
         _capped_ms = _per_attempt_s * 1000 if _per_attempt_s != int(timeout) else 0
         if _capped_ms:
@@ -6839,11 +6692,10 @@ class MasterFetchServer:
             results = []
             for i, resp in enumerate(timed_responses):
                 if isinstance(resp, BaseException):
-                    # The failure text belongs in `error`, never in `content`:
-                    # callers read content[0] as the page body, and a body that
-                    # starts with "[Fetch error:" is a trap. See also
-                    # _apply_chunking, which keeps the same contract on the
-                    # pagination path.
+                    # 失败文案只属于 `error`，绝不放进 `content`：调用方把
+                    # content[0] 当作页面正文，而以 "[Fetch error:" 开头的
+                    # “正文”是个陷阱。另见 _apply_chunking，它在分页路径上
+                    # 维持同一约定。
                     results.append(_with_agent_hints(ResponseModel(
                         url=urls[i], status=0,
                         content=[], fetcher_used="http",
@@ -6871,7 +6723,7 @@ class MasterFetchServer:
         return BulkResponseModel(results=results, total=len(results), successful=successful)
 
 
-    # ─── Stealthy Fetcher (Patchright) ─────────────────────────────
+    # ─── 隐蔽抓取器（Patchright）───────────────────────────────────
 
     async def stealthy_fetch(
         self,
@@ -6903,45 +6755,45 @@ class MasterFetchServer:
         pin: bool = False,
         pin_out: Optional[dict] = None,
     ) -> ResponseModel:
-        """Stealthy fetcher with anti-bot bypass via Patchright (rebrowser-playwright fork).
+        """基于 Patchright（rebrowser-playwright 分支）的隐蔽抓取器，可绕过反爬检测。
 
-        Uses browser fingerprint randomization to evade detection by:
-        - Cloudflare embedded challenge pages (not Turnstile CAPTCHA)
-        - Basic bot-detection scripts that check navigator/webdriver properties
+        用浏览器指纹随机化来规避以下检测：
+        - Cloudflare 嵌入式挑战页（不是 Turnstile 验证码）
+        - 检查 navigator/webdriver 属性的基础爬虫检测脚本
 
-        Does NOT bypass:
-        - Cloudflare Turnstile (interactive CAPTCHA widget — requires human)
-        - DataDome (behavioral analysis — detects headless browsers via timing)
-        - Akamai Bot Manager (advanced fingerprinting beyond Patchright's scope)
+        不能绕过：
+        - Cloudflare Turnstile（交互式验证码组件 —— 需要人工）
+        - DataDome（行为分析 —— 通过时序识别无头浏览器）
+        - Akamai Bot Manager（超出 Patchright 能力范围的高级指纹识别）
 
-        For the auto-escalation that tries HTTP then stealthy, use web_read instead
-        (the dynamic/Playwright tier was removed in v3.5.0; old logs may still show it).
+        需要“先 HTTP 再 stealthy”的自动升级时，请改用 web_read
+        （dynamic/Playwright 档已在 v3.5.0 移除；旧日志里可能仍会出现）。
 
-        :param url: The URL to fetch.
-        :param extraction_type: Content format: 'markdown', 'html', 'text', 'article', 'structured'.
-        :param css_selector: CSS selector to narrow content.
-        :param headless: Run browser in headless mode (default True).
-        :param solve_cloudflare: Auto-solve Cloudflare embedded challenges.
-        :param block_webrtc: Prevent IP leak via WebRTC.
-        :param hide_canvas: Random canvas noise.
-        :param allow_webgl: Keep WebGL enabled (default True; WAFs check for it).
-        :param real_chrome: Use installed Chrome.
-        :param proxy: Proxy to use.
-        :param timezone_id: Browser timezone.
-        :param locale: Browser locale.
-        :param extra_headers: Extra request headers.
-        :param useragent: Custom user agent.
-        :param cdp_url: Connect via CDP URL.
-        :param timeout: Timeout in milliseconds (default 30000).
-        :param disable_resources: Drop unnecessary resource requests.
-        :param wait_selector: CSS selector to wait for.
-        :param cookies: Cookies to set.
-        :param wait_selector_state: Selector wait state.
-        :param additional_args: Extra Playwright context args.
-        :param session_id: Reuse existing browser session.
-        :param pin: Keep this page open on that session for the next pinned call
-            (刀9-7 · F9); pin_out carries back what actually happened. Only a
-            named, non-attached, single-URL lane can pin - see PIN_NOTES.
+        :param url: 要抓取的 URL。
+        :param extraction_type: 内容格式：'markdown'、'html'、'text'、'article'、'structured'。
+        :param css_selector: 用于缩小内容范围的 CSS 选择器。
+        :param headless: 以无头模式运行浏览器（默认 True）。
+        :param solve_cloudflare: 自动破解 Cloudflare 嵌入式挑战。
+        :param block_webrtc: 防止通过 WebRTC 泄露 IP。
+        :param hide_canvas: 给 canvas 加随机噪声。
+        :param allow_webgl: 保持 WebGL 开启（默认 True；WAF 会检查它）。
+        :param real_chrome: 使用本机安装的 Chrome。
+        :param proxy: 使用的代理。
+        :param timezone_id: 浏览器时区。
+        :param locale: 浏览器区域设置。
+        :param extra_headers: 额外请求头。
+        :param useragent: 自定义 user agent。
+        :param cdp_url: 通过 CDP URL 连接。
+        :param timeout: 超时毫秒数（默认 30000）。
+        :param disable_resources: 丢弃不必要的资源请求。
+        :param wait_selector: 要等待的 CSS 选择器。
+        :param cookies: 要设置的 cookie。
+        :param wait_selector_state: 选择器等待状态。
+        :param additional_args: 额外的 Playwright context 参数。
+        :param session_id: 复用已有的浏览器会话。
+        :param pin: 让该页面留在那个会话上，供下一次带 pin 的调用使用
+            （刀9-7 · F9）；pin_out 回传实际发生的结果。只有
+            具名、非 attach、单 URL 的通道可以 pin —— 见 PIN_NOTES。
         """
         url = validate_url(url)
         validate_html_css_selector(css_selector)
@@ -7012,30 +6864,30 @@ class MasterFetchServer:
         pin: bool = False,
         pin_out: Optional[dict] = None,
     ) -> BulkResponseModel:
-        """Async parallel stealthy fetch with browser fingerprint randomization.
+        """带浏览器指纹随机化的异步并行隐蔽抓取。
 
-        :param urls: List of URLs to fetch.
-        :param extraction_type: Content format: 'markdown', 'html', 'text', 'article', 'structured'.
-        :param css_selector: CSS selector to narrow content.
-        :param headless: Run browser in headless mode (default True).
-        :param solve_cloudflare: Auto-solve Cloudflare challenges.
-        :param block_webrtc: Prevent IP leak via WebRTC.
-        :param hide_canvas: Random canvas noise.
-        :param allow_webgl: Keep WebGL enabled (default True).
-        :param real_chrome: Use installed Chrome.
-        :param proxy: Proxy to use.
-        :param timezone_id: Browser timezone.
-        :param locale: Browser locale.
-        :param extra_headers: Extra request headers.
-        :param useragent: Custom user agent.
-        :param cdp_url: Connect via CDP URL.
-        :param timeout: Timeout in milliseconds (default 30000).
-        :param disable_resources: Drop unnecessary resource requests.
-        :param wait_selector: CSS selector to wait for.
-        :param cookies: Cookies to set.
-        :param wait_selector_state: Selector wait state.
-        :param additional_args: Extra Playwright context args.
-        :param session_id: Reuse existing browser session.
+        :param urls: 要抓取的 URL 列表。
+        :param extraction_type: 内容格式：'markdown'、'html'、'text'、'article'、'structured'。
+        :param css_selector: 用于缩小内容范围的 CSS 选择器。
+        :param headless: 以无头模式运行浏览器（默认 True）。
+        :param solve_cloudflare: 自动破解 Cloudflare 挑战。
+        :param block_webrtc: 防止通过 WebRTC 泄露 IP。
+        :param hide_canvas: 给 canvas 加随机噪声。
+        :param allow_webgl: 保持 WebGL 开启（默认 True）。
+        :param real_chrome: 使用本机安装的 Chrome。
+        :param proxy: 使用的代理。
+        :param timezone_id: 浏览器时区。
+        :param locale: 浏览器区域设置。
+        :param extra_headers: 额外请求头。
+        :param useragent: 自定义 user agent。
+        :param cdp_url: 通过 CDP URL 连接。
+        :param timeout: 超时毫秒数（默认 30000）。
+        :param disable_resources: 丢弃不必要的资源请求。
+        :param wait_selector: 要等待的 CSS 选择器。
+        :param cookies: 要设置的 cookie。
+        :param wait_selector_state: 选择器等待状态。
+        :param additional_args: 额外的 Playwright context 参数。
+        :param session_id: 复用已有的浏览器会话。
         """
         urls = [validate_url(u) for u in urls]
         if len(urls) > MAX_BULK_URLS:
@@ -7166,7 +7018,7 @@ class MasterFetchServer:
         results = []
         for i, resp in enumerate(timed_responses):
             if isinstance(resp, BaseException):
-                # Failure text goes in `error` only — see the HTTP tier above.
+                # 失败文案只写进 `error` —— 见上面的 HTTP 档。
                 results.append(_with_agent_hints(ResponseModel(
                     url=urls[i], status=0,
                     content=[], fetcher_used="stealthy",
@@ -7195,7 +7047,7 @@ class MasterFetchServer:
         successful = sum(1 for r in results if r.status < 400 and not r.error)
         return BulkResponseModel(results=results, total=len(results), successful=successful)
 
-    # ─── SMART FETCH (The One Tool To Rule Them All) ────────────────
+    # ─── 智能抓取（一把工具通吃）───────────────────────────────────
 
     async def web_request(
         self,
@@ -7214,43 +7066,43 @@ class MasterFetchServer:
         # 与 web_read 同一颗、同一个管家的纪律。
         session_id: Optional[str] = None,
     ) -> ResponseModel:
-        """Send one NON-GET request and read back what the server answered.
+        """发送一次非 GET 请求，并读回服务器给出的答复。
 
-        Why this is a tool and not three parameters on a read: a write is sent
-        ONCE. It is not retried (the previous call may already have committed),
-        not cached (the next call asks a different question), not escalated to the
-        browser (a replay would answer about a GET to that URL, not about your
-        POST), and not answered from archive.org (a snapshot is one GET from some
-        past day). Those four rules are this tool's whole definition, and keeping
-        them in a `method=` branch of web_read made them a special case of reading
-        rather than the thing they are.
+        为什么这是一把工具，而不是读取上的三个参数：写只发送
+        一次。它不重试（上一次调用可能已经提交），
+        不缓存（下一次调用问的是另一个问题），不升级到
+        浏览器（重放回答的是对该 URL 的 GET，而不是你的
+        POST），也不由 archive.org 作答（快照是某个过往日期的
+        一次 GET）。这四条规则就是这把工具的全部定义，把它们留在
+        web_read 的 `method=` 分支里，只会让它们变成读取的一个特例，
+        而不是它们本来的样子。
 
-        A write also sits behind the same gate as web_act's submit: without
-        confirm=true nothing is sent. The threat model is indirect injection -
-        page text the agent read earlier must never be able to spend the user's
-        stored credentials with no human in the loop.
+        写请求还和 web_act 的 submit 共用同一道门：没有
+        confirm=true 就什么都不发。威胁模型是间接注入 ——
+        agent 先前读到的页面文本，绝不能在没有人类参与的情况下
+        花掉用户存储的凭据。
 
-        Credentials are NOT a parameter here either (17.0 §3-17): `cred_defaults`
-        stores auth / cookies per host, and a write to that host carries them -
-        so the key is typed once instead of being copied into the transcript with
-        every request, and the response names what it ran on in `identity_applied`.
-        `headers` is the non-credential half of that sentence: a header you name
-        wins per key, while `cookie` / `authorization` / `proxy-authorization` are
-        refused back by name because the host scoping is what makes them safe.
+        凭据在这里同样不是参数（17.0 §3-17）：`cred_defaults`
+        按主机保存 auth / cookies，对该主机的写会随身携带它们 ——
+        于是密钥只需输入一次，而不必随每次请求抄进对话记录，
+        响应会在 `identity_applied` 里说明它用了什么身份。
+        `headers` 是这句话里非凭据的那一半：调用方点名的头
+        按键覆盖，而 `cookie` / `authorization` / `proxy-authorization` 会被
+        按名拒绝，因为正是主机作用域让它们安全。
 
-        Every verb here that changes state is one-shot by rule rather than by
-        spec: RFC calls PUT and DELETE idempotent, which is a claim about the
-        endpoint and nothing this client can check. So `method` says what will
-        happen and the answer says what did - exactly once. HEAD is here rather
-        than in web_read because it is a request shape, not a content read:
-        status + declared size + type only.
+        这里每个会改变状态的动词按规则都是一次性的，而不是按
+        规范：RFC 称 PUT 与 DELETE 幂等，那是对端点的断言，
+        本客户端无从检查。所以 `method` 说明将要发生什么，
+        答复说明实际发生了什么 —— 恰好一次。HEAD 放在这里而不是
+        web_read，是因为它是一种请求形态，不是内容读取：
+        只给状态 + 声明的大小 + 类型。
 
-        `session_id` (2026-10-25, the P2 finding from live simulation) is the
-        one place a login POST's answer can go: the jar stores every hop's
-        Set-Cookie (a login that redirects is the usual shape) and the next
-        web_read with the same id rides it. It is a jar NAME, not a credential
-        - cred_defaults stays the door for static auth/cookies, and the values
-        never leave the process.
+        `session_id`（2026-10-25，实机模拟中的 P2 发现）是
+        登录 POST 的答复唯一能去的地方：jar 会存下每一跳的
+        Set-Cookie（登录重定向是常见形态），随后同一 id 的
+        web_read 会带上它。它是 jar 的名字，不是凭据
+        —— cred_defaults 仍是静态 auth/cookies 的门，而值
+        从不离开进程。
         """
         verb = _clean_method(method)
         if not (url or "").strip():
@@ -7258,8 +7110,8 @@ class MasterFetchServer:
                 "", "url is required: the absolute http(s) URL to send this request to",
                 tool="web_request")
         if not (method or "").strip():
-            # `_clean_method` reads an absent verb as GET, so this has to be asked
-            # before the GET branch or the caller is told they asked for a read.
+            # `_clean_method` 把缺省的动词当作 GET，所以必须在 GET 分支之前
+            # 先问这一句，否则调用方会被告知他们请求的是一次读取。
             return _invalid_request_result(
                 url, "method is required and must be one of POST / PUT / PATCH / "
                      "DELETE / HEAD - this tool never sends a bare GET",
@@ -7319,9 +7171,9 @@ class MasterFetchServer:
                                  "support elicitation confirm=true does not replace "
                                  "the ask."))
             # human=True 或（无会话且 confirm=true）→ 继续发送。
-        # cache_ttl=0 is not a preference here: a write must never be answered from
-        # the cache, and the pipeline reads that rule off the verb anyway. Saying it
-        # at the door keeps the two statements from ever disagreeing.
+        # cache_ttl=0 在这里不是偏好：写绝不能被缓存作答，
+        # 管线本来也是从动词读出这条规则。在门口把它说出来，
+        # 两处表述就永远不会互相矛盾。
         return await self.web_read(
             url=url, method=verb, body=body, content_type=content_type,
             extraction_type=extraction_type,
@@ -7350,41 +7202,41 @@ class MasterFetchServer:
         # 导航。它买回来的正是"我读到的那道题就是我答的那一道"。
         pin: bool = False,
     ) -> ResponseModel:
-        """Act on a page (click / fill / read / press / scroll / wait / submit) and read it back.
+        """对页面执行操作（click / fill / read / press / scroll / wait / submit）并读回结果。
 
-        Why this is a tool and not one parameter on a read: an action chain is the
-        one call in this server that changes something. It forces the browser tier,
-        bypasses the cache, and its content is only reachable by having done the
-        actions - which is a different job from `web_read`, whose whole design (cache,
-        escalation ladder, archive fallback, bulk `urls=`) assumes nothing it touches
-        changes state. Keeping the chain as one parameter of the read made the
-        irreversible part of this server look like a rendering option.
+        为什么这是一把工具，而不是读取上的一个参数：动作链是
+        本服务器里唯一会改变东西的那次调用。它强制走浏览器档、
+        绕过缓存，而且它的内容只有先执行了这些动作才拿得到 ——
+        这和 `web_read` 是两种不同的活，后者的整套设计（缓存、
+        升级阶梯、archive 兜底、批量 `urls=`）都假定它碰的东西
+        不改变状态。把动作链塞成读取的一个参数，会让本服务器里
+        不可逆的那部分看起来像一个渲染选项。
 
-        What carried over unchanged: every action leaves a receipt in
-        `metadata.actions`; `submit` pauses before acting until the user approves that
-        exact submission; a captcha gets at most 3 attempts and then goes back to the
-        human - and by default each attempt is a fresh navigation, so a challenge read
-        on the previous call usually is not the one this call would be answering.
-        `pin=true` is what changes that: the page stays open on that session (released
-        after 300s, or when the host changes), and the next pinned call on the same
-        site acts on THAT page without navigating - so the token it reads is the token
-        it answers, and an image challenge becomes answerable across calls because the
-        image itself stops changing under the reader. `pin` needs `session_id=` (an
-        auto session is shared and recycled), and is refused on a batch (`urls=`) and
-        on a CDP attach (that is the user's own browser and the user's own tabs). A
-        refusal or a drop (expired / closed / different host) is said in `summary`,
-        never silent. A chain can already answer its OWN page: `{"read": {"selector":
-        ..., "as": "code"}}` takes this instance's text, and a later `fill` writes
-        `{=code}` into the field. That is the only shape in which a text challenge is
-        solvable here; an image challenge stays a hand-off, because a capture arrives
-        after the chain has run. `schema=` still cannot combine with a chain (that path
-        runs its own fetch, without the actions). The full shape of each action key:
-        `sys_guide(topic='behavior', section='Page interaction')`.
+        原样保留的部分：每个动作都会在
+        `metadata.actions` 留下回执；`submit` 在动手前暂停，直到用户批准那一次
+        确切的提交；验证码最多尝试 3 次，然后交回
+        人类 —— 而且默认每次尝试都是全新导航，所以上一次调用读到的挑战
+        通常不是这一次调用要作答的那一个。
+        `pin=true` 改变的正是这一点：页面会留在那个会话上（300s 后释放，
+        或主机变化时释放），同一站点上下一次带 pin 的调用
+        会直接在那个页面上操作而不导航 —— 于是它读到的 token 就是它
+        作答的 token，图像挑战也能跨调用作答，因为
+        图像本身在读者面前不再变化。`pin` 需要 `session_id=`（
+        自动会话是共享且会被回收的），并且在批量（`urls=`）和
+        CDP attach（那是用户自己的浏览器和自己的标签页）上会被拒绝。
+        拒绝或丢失（过期 / 已关闭 / 主机不同）都会写进 `summary`，
+        绝不静默。动作链已经可以回答它自己的页面：`{"read": {"selector":
+        ..., "as": "code"}}` 取本次实例的文本，之后的 `fill` 把
+        `{=code}` 写进字段。这是文本挑战在这里唯一
+        可解的形态；图像挑战仍要交给人，因为截图是在
+        动作链跑完之后才到手的。`schema=` 仍不能与动作链组合（那条路径
+        会自己发一次抓取，不带这些动作）。每个动作键的完整形态见
+        `sys_guide(topic='behavior', section='Page interaction')`。
 
-        The four identity-ish arguments (`session_id`, `cdp_url`, `confirm`,
-        `check_login`) are here because acting somewhere you are already logged in is
-        the job that needs them, and none of them is a credential: passwords and
-        cookies come from `cred_defaults`, never from a call.
+        四个带身份意味的参数（`session_id`、`cdp_url`、`confirm`、
+        `check_login`）放在这里，是因为“在你已经登录的地方操作”正是
+        需要它们的工作，而它们都不是凭据：密码和
+        cookie 来自 `cred_defaults`，从不来自某次调用。
         """
         if not (url or "").strip():
             return _invalid_request_result(
@@ -7399,9 +7251,9 @@ class MasterFetchServer:
                              "page with web_read(url=...) if nothing on it has to be "
                              "touched. The first call is usually {snapshot: true}, which "
                              "returns the numbered element list to address by index."))
-        # cache_ttl=0 says at the door what the pipeline already does with a chain:
-        # an action's content exists only after the actions, so a cached page would
-        # answer a question the chain never asked.
+        # cache_ttl=0 在门口说明了管线对动作链本来的处理：
+        # 动作的内容只在动作之后才存在，缓存页面会回答
+        # 动作链从未问过的问题。
         return await self.web_read(
             url, actions=actions, extraction_type=extraction_type,
             max_content_chars=max_content_chars, focus=focus, timeout=timeout,
@@ -7456,17 +7308,16 @@ class MasterFetchServer:
             extracted_type=extraction_type,
             content_type=cached.get("content_type", ""),
             total_size_bytes=cached.get("total_size_bytes", 0),
-            # v10: restore the envelope so cache hits keep metadata/links/
-            # quality_score/toc/page_type/source/archived_at (previously lost).
+            # v10：还原信封，让缓存命中保留 metadata/links/
+            # quality_score/toc/page_type/source/archived_at（此前会丢失）。
             metadata=env.get("metadata", {}) or {},
             media=env.get("media", []) or [],
             links=env.get("links", {}) or {},
             quality_score=env.get("quality_score"),
-            # Paired with quality_score: _agent_hints defers to this when
-            # the score is >0, so leaving it out made every cached PDF
-            # report content_ok=false next to a non-empty content array.
-            # Entries written before this key existed default to False,
-            # which is the old behaviour and self-heals on the next write.
+            # 与 quality_score 成对：分数 >0 时 _agent_hints 以此为准，
+            # 所以漏掉它会让每个缓存的 PDF 在 content 数组非空的同时
+            # 报 content_ok=false。此键出现之前写入的条目默认 False，
+            # 即旧行为，并会在下一次写入时自愈。
             content_ok=bool(env.get("content_ok", False)),
             # 与上面那颗同一次判定留下的三颗读数（作者仍是 `quality.body_substance`，
             # 这里只是搬运）。缺了它们，`_agent_hints` 从 status/content 重算 `content_ok`
@@ -7481,10 +7332,10 @@ class MasterFetchServer:
             source=env.get("source", "live") or "live",
             archived_at=env.get("archived_at", "") or "",
         )
-        # The restored metadata carries the robots receipt of the fetch that
-        # wrote it, which is a statement about a past process, not this one.
-        # This path returns without going through _finalize_result, so it
-        # needs the same reconciliation the fetch path gets there.
+        # 还原出的 metadata 带着写下它的那次抓取的 robots 回执，
+        # 那说的是过去的某个进程，不是当前这个。
+        # 这条路径不经过 _finalize_result 就返回，所以需要在那里
+        # 由抓取路径完成的同一份对账。
         hit._validators = env.get("cache_validators", {}) or {}
         _stamp_robots_mode(hit)
         # 缓存命中没起过任何浏览器。那句 "visible window" 是**上一次真抓取**
@@ -7645,31 +7496,29 @@ class MasterFetchServer:
         # 驻留必须能从这里过；dispatch 按表外名拒掉直接传给 web_read 的调用方。
         pin: bool = False,
     ) -> ResponseModel:
-        """Fetch a URL (or multiple URLs) with automatic anti-bot escalation.
+        """抓取一个 URL（或多个 URL），自动做反爬升级。
 
-        Use this when a plain HTTP fetch is not enough (it still tries HTTP
-        first). It auto-selects the best method:
-        HTTP (fast, curl_cffi) → Stealthy (anti-detect browser; handles JS
-        rendering and Cloudflare-style bot walls — the only browser tier since
-        the Playwright one was removed) → Archive.org (hard-block only; see the
-        tool description - that string is what clients actually receive).
+        普通 HTTP 抓取不够用时用它（它仍然先试 HTTP）。方法自动择优：
+        HTTP（快，curl_cffi）→ Stealthy（反检测浏览器；能处理 JS 渲染和 Cloudflare
+        式的机器人墙 —— Playwright 那一档被删掉之后，这是唯一的浏览器档）→
+        Archive.org（只在硬墙时；见工具描述，客户端实际收到的就是那份描述里那句话）。
 
-        When to use:
-        - Fetching any web page for content extraction
-        - Sites that might have anti-bot protection (Cloudflare embedded challenges, JS-required pages)
-        - Fetching multiple URLs at once (use urls parameter)
-        - When you don't know which fetcher to use. This tool decides for you.
+        什么时候用：
+        - 抓任意网页来抽取内容
+        - 可能有反爬保护的站点（Cloudflare 内嵌挑战、必须跑 JS 的页面）
+        - 一次抓多个 URL（用 urls 参数）
+        - 不知道该用哪个 fetcher 时 —— 这个工具替你决定。
 
-        When NOT to use:
-        - Taking screenshots: pass a screenshot action to web_act's chain
-        - Web search: use web_search instead
-        - You specifically need HTTP-only without escalation: set force_fetcher="http"
+        什么时候不用：
+        - 截图：把 screenshot 动作放进 web_act 的动作链里
+        - 网页搜索：用 web_search
+        - 就是要纯 HTTP、不要任何升级：设 force_fetcher="http"
 
-        Response: url, status, content (extracted text), content_type, total_size_bytes,
-        is_truncated (+ next_offset to paginate), escalation_path, duration_ms, error.
-        Signals to branch on: content_ok (real content, not a login/bot wall?), next_action
-        (suggested next call), summary, page_type (article/list/auth_wall/paywall/...),
-        content_age_days + is_stale, source_type + is_official, source + archived_at.
+        响应：url、status、content（抽取出的文本）、content_type、total_size_bytes、
+        is_truncated（+ next_offset 用来翻页）、escalation_path、duration_ms、error。
+        可用来分流的信号：content_ok（是真内容还是登录墙/机器人墙？）、next_action
+        （建议的下一步调用）、summary、page_type（article/list/auth_wall/paywall/…）、
+        content_age_days + is_stale、source_type + is_official、source + archived_at。
         """
         # check 的批量形状在**任何闸门之前**分流：它的每一行都是一个 dict（与单条
         # check 同一份判决），而下面所有按 ResponseModel 写的批量守卫都会把它当成
@@ -7738,9 +7587,8 @@ class MasterFetchServer:
                    "so a batch would fetch every URL un-attached. Call web_read "
                    "once per URL with cdp_url=.")
             if not cdp_url:
-                # The caller never typed cdp_url — a stored default is attaching
-                # every single-URL call, and saying "pass cdp_url=null" is the only
-                # honest way to say "this batch cannot attach".
+                # 调用方自己没写 cdp_url —— 是存着的默认值在挂每一次单 URL 调用，而
+                # "请传 cdp_url=null" 是唯一老实的说法，来说明"这一批没法 attach"。
                 msg += (" (No cdp_url= on this call: cred_defaults stores one, and it "
                         "attaches every single-URL call the same way. Pass cdp_url=null "
                         "for this batch, or unset the default.)")
@@ -7748,11 +7596,9 @@ class MasterFetchServer:
                 results=[_invalid_request_result(u, msg) for u in urls],
                 total=len(urls), successful=0,
             )
-        # §3-17: the identity is no longer something a call carries — cred_defaults
-        # answers it, per host, so a credential stored for api.example.com never
-        # rides along to a call elsewhere. extra_headers has no source left here at
-        # all: a credential-shaped header belongs in auth (which says its host),
-        # and everything else is the ladder's own business.
+        # §3-17：身份不再是调用随身带的东西 —— 由 cred_defaults 按主机回答，所以存给
+        # api.example.com 的凭证永远不会跟着去别处的一次调用。extra_headers 在这儿彻底
+        # 没有来源了：长得像凭证的头属于 auth（那里写明主机），剩下的都是阶梯自己的事。
         _idvals, _idnote = self._identity_for(url or "", cdp_url=cdp_url,
                                               anti_detect=anti_detect)
         auth = _idvals["auth"]
@@ -7760,10 +7606,9 @@ class MasterFetchServer:
         proxy = _idvals["proxy"]
         cdp_url = _idvals["cdp_url"]
         if extraction_type == "check" and cdp_url:
-            # check has no cdp lane. Left to fall through, the generic attach
-            # below sends the literal string "check" into _force_fetch as an
-            # extraction format, and the attach prompt fires for a call that can
-            # never use the view. Say the boundary here, before the gate.
+            # check 没有 cdp 通道。任它往下走的话，下面那段通用 attach 会把字面量
+            # "check" 当作抽取格式塞进 _force_fetch，还会为一次永远用不上那个视图的调用
+            # 弹出 attach 授权提示。边界在这儿说清，赶在闸口之前。
             return _invalid_request_result(
                 url or "",
                 "cdp_url= cannot be combined with extraction_type='check': a "
@@ -7974,8 +7819,7 @@ class MasterFetchServer:
                              "Nothing was fetched."))
         # `timeout` uses the same sentinel: an actions call always drives the
         # stealthy tier, so it gets a budget that covers a cold browser start.
-        # §3-19: the ladder is the only public spelling of these six. Resolved
-        # once here so every tier call below keeps reading them by name.
+        # §3-19：这六颗只有阶梯这一种公开写法。在这里解一次，下面每一档调用都按名字读。
         _hardening = _anti_detect(anti_detect)
         headless = _hardening["headless"] and not headed
         # `headed` 只动这一位，不动档位表：可见性不是反爬强度（`rungs.py` 每一档写死
@@ -8011,13 +7855,12 @@ class MasterFetchServer:
             # 那一份"就分不出来了。落点是 `summary` —— 每一颗钳与每一次悄悄的改变都只
             # 住在这一个字段里（test_every_clamp_is_announced 钉着）。
             _note_text(_headers_note(extra_headers, stealthy_headers))
-        # An explicit value still wins.
+        # 调用方显式给的值仍然优先。
         if timeout is None:
             timeout = ACTIONS_DEFAULT_TIMEOUT_MS if actions else DEFAULT_CALL_TIMEOUT_MS
-        # Normalize/validate the extraction schema BEFORE either path runs, so a
-        # stringified or empty schema is reported instead of silently degrading
-        # to markdown (see _normalize_schema). Rejections return a FetchResult,
-        # not an exception (see _invalid_request_result).
+        # 在两条路开跑之前先把抽取用的 schema 规范化并校验，这样被字符串化过的或空的
+        # schema 会被报出来，而不是悄悄退化成 markdown（见 _normalize_schema）。拒绝的
+        # 返回是 FetchResult，不是异常（见 _invalid_request_result）。
         try:
             schema = _normalize_schema(schema)
         except (ValueError, SecurityError) as e:
@@ -8037,7 +7880,7 @@ class MasterFetchServer:
                         return _invalid_request_result(url or "", refusal,
                                                        next_action=remedy)
 
-        # Bulk mode: fetch multiple URLs in parallel
+        # 批量模式：并行抓多个 URL
         if urls is not None:
             if url:
                 # 两个都给了，就没有"哪个是意图"可猜：实现一直让 urls 赢、url 那
@@ -8072,9 +7915,8 @@ class MasterFetchServer:
             return await self._smart_fetch_bulk(
                 urls, extraction_type, css_selector, cache_ttl, force_fetcher,
                 timeout=timeout,
-                # The rung is the one identity value a caller can still name per
-                # call, so a batch carries it to every row; credentials need no
-                # forwarding — each row resolves its own host from the store.
+                # 档位是调用方唯一还能逐次点名的身份值，所以一批要把它带给每一行；凭证
+                # 不需要转发 —— 每一行各自去存储里按自己的主机解析。
                 anti_detect=anti_detect,
                 # W1 的 `headers=` 与档位同一类：它是"这一次说的话"，不是身份，
                 # 所以一批里每一行都带着同一份。不转下去的代价是一条静默的路：
@@ -8088,7 +7930,7 @@ class MasterFetchServer:
                 method=method, body=body, content_type=content_type,
             )
 
-        # Validate all inputs
+        # 校验全部入参
         try:
             url, css_selector, extra_headers, timeout, proxy, useragent = \
                 self._validate_smart_fetch_params(
@@ -8121,10 +7963,9 @@ class MasterFetchServer:
                       "web_read")
             return _url_guard_refusal(url or "", msg, caller)
 
-        # G25: credentials. Translated to headers ONCE, here, so both tiers send
-        # them the same way (each takes a header dict), the cache fingerprint and
-        # the per-hop credential drop describe the same decision, and a shape that
-        # cannot be honoured stops the call before any request goes out.
+        # G25：凭证。只在这里翻译一次成请求头，两条档才会用同一种方式发（各自收一份
+        # header dict），缓存指纹与逐跳丢凭证描述的也是同一个决定，而那些根本兑现不了的
+        # 形状会在第一个字节出门之前就把这次调用停下来。
         try:
             auth_headers, auth_kind, auth_names, auth_ignored = \
                 _auth_request_headers(auth, extra_headers)
@@ -8142,8 +7983,7 @@ class MasterFetchServer:
 
         # 复验（17.0 §6）：标记经由进程内通道 _REVALIDATE 送来（曾由 web_watch 驱动，
         # 那颗工具已下线；机制与测试保留）。翻译仍然集中在一个位置（与 auth 同一待遇），
-        # 因为
-        # 一个决定牵动三处：HTTP 层要发、浏览器层不能发（它答不了这个问题），而一次
+        # 因为一个决定牵动三处：HTTP 层要发、浏览器层不能发（它答不了这个问题），而一次
         # 带校验子的调用不许被自己的缓存抢先 —— 问"变了吗"的人要的是站方的回答。
         _rv = _REVALIDATE.get() or {}
         conditional, cond_rejected = _conditional_headers(_rv)
@@ -8163,15 +8003,13 @@ class MasterFetchServer:
         elif conditional:
             extra_headers = {**(extra_headers or {}), **conditional}
 
-        # max_content_chars: token-spend control. Lower = less context per call,
-        # the rest is paginated via offset/next_offset.
-        # Coerced, not defaulted - a non-int used to be replaced by 40000, so a
-        # caller asking for 2000 silently received a 20x context overspend (see
-        # _coerce_int_arg). The 200000 ceiling stays a clamp (a hard cap beats an
-        # ugly parse error) and is now documented on the wire as "range 500-200000".
-        # offset: a negative value used to slice from the END (text[-5:] returns
-        # the last 5 chars) - a wrong result delivered as an ordinary 200, so it
-        # raises instead of being clamped to 0.
+        # max_content_chars 是 token 开销的旋钮：调低 = 每次调用占的上下文更少，剩下的靠
+        # offset/next_offset 翻页取。
+        # 这里是"强转"不是"取默认"：非整数过去会被换成 40000，于是只要 2000 的调用方
+        # 静默拿到 20 倍的上下文超支（见 _coerce_int_arg）。200000 这个顶仍然按钳制处理
+        # （硬钳比一个难看的解析错误好），并且现在在线上一句"range 500-200000"里写明了。
+        # offset：负值过去会从**末尾**切片（text[-5:] 返回最后 5 个字符）—— 一个错的
+        # 结果以普通 200 的身份交付，所以它现在直接抛错，而不是被钳成 0。
         try:
             mc = _coerce_int_arg(max_content_chars, "max_content_chars",
                                  lo=500, hi=200000, default=DEFAULT_MAX_CONTENT_CHARS)
@@ -8192,12 +8030,10 @@ class MasterFetchServer:
                     f"{DEFAULT_MAX_CONTENT_CHARS} default); offset takes a non-negative "
                     "character position - use next_offset from the previous response."),
             )
-        # A value outside the range is still clamped (a hard cap beats an ugly
-        # parse error), but the caller is now told which way it moved.
+        # 超出范围的值仍然只钳制（硬钳比难看的解析错误好），但会告诉调用方它被往哪边挪了。
         _note_clamped("max_content_chars", max_content_chars, mc, lo=500, hi=200000)
-        # max_links rides the same path: coerced (not defaulted), clamped to the
-        # documented 1-100 range, and the caller is told when it moved. The cap
-        # itself is applied in links.py via _MAX_LINKS (set by the decorator).
+        # max_links 走同一条路：强转（不是取默认）、钳到文档写明的 1-100，被挪动时告诉
+        # 调用方。上限本身在 links.py 里通过 _MAX_LINKS 生效（由装饰器设置）。
         try:
             ml = _coerce_int_arg(max_links, "max_links", lo=1, hi=100, default=0)
         except ValueError as e:
@@ -8210,10 +8046,9 @@ class MasterFetchServer:
             )
         _note_clamped("max_links", max_links, ml, lo=1, hi=100)
 
-        # 0.5 method / body (G8). Anything that must not leave the process is
-        #     decided here, once: an unknown verb, an oversized body, and the
-        #     three consequences of a write (no cache, no browser escalation, no
-        #     archive) are settled before the first byte is dialed.
+        # 0.5 method / body（G8）。凡是"绝不该离开本进程"的东西都在这里一次定死：不认识
+        #     的动词、过大的正文，以及一次写的三个后果（不落缓存、不升浏览器、不进归档），
+        #     全在拨出第一个字节之前定完。
         verb = _clean_method(method)
         if verb not in _FETCH_METHODS:
             return _invalid_request_result(
@@ -8255,56 +8090,48 @@ class MasterFetchServer:
         if isinstance(content_type, str) and content_type.strip():
             _CONTENT_TYPE.set(content_type.strip())
         elif request_body is not None and isinstance(body, (dict, list)):
-            # A dict/list body was encoded as a form above; a form with no
-            # Content-Type is not a form to the receiving server — measured:
-            # httpbin's /post answered with an empty "form" until the type that
-            # matches the encoding we produced was actually sent.
+            # dict/list 正文在上面已经被编码成表单了；没有 Content-Type 的表单，收到的一方
+            # 并不当它是表单 —— 实测：httpbin 的 /post 一直回一个空的 "form"，直到我们把
+            # 与自身编码相匹配的那个类型真的发出去。
             _CONTENT_TYPE.set("application/x-www-form-urlencoded")
         if verb != "GET" and cache_ttl:
-            # The cache is keyed by URL and stores a BODY. A write's answer
-            # describes that one attempt, so replaying it to a later GET would
-            # hand back a POST that never happened; a HEAD has no body at all, and
-            # caching it means the next GET of the same URL answers "empty".
+            # 缓存按 URL 做键、存的是 BODY。一次写的回执只描述那一次尝试：把它回放给后来的
+            # GET，等于交回一次根本没发生过的 POST；HEAD 根本没有正文，存了它就变成"同一个
+            # URL 的下一次 GET 答'空'"。
             cache_ttl = 0
             _ARG_NOTES.get().append(
                 f"cache bypassed for {verb}: only GET bodies are stored under a URL")
 
-        # 0. robots.txt compliance (G3). Checked BEFORE the cache lookup and
-        #    before every tier, so a disallowed URL is never fetched, never
-        #    served from cache, and never escalated. The check itself is one
-        #    cached GET per origin per hour, and fails open when robots.txt is
-        #    unreachable (see robots.py for the policy).
+        # 0. robots.txt 合规（G3）。查在缓存命中之前、也查在每一档之前，所以一个不被
+        #    允许的 URL 永远不会被抓、不会从缓存端出来、也不会被升级。这次检查本身的
+        #    代价是"每个源每小时一次可缓存的 GET"，而 robots.txt 不可达时按放行处理
+        #    （策略见 robots.py）。
         try:
             verdict = await check_robots(url, proxy=_proxy_to_url(proxy, None),
                                          ignore=bool(ignore_robots))
         except Exception as e:
             logger.debug("robots.txt check failed for %s: %s", url, e)
             verdict = None
-        # Which of the ways this fetch got permission, recorded for the response:
-        # both test rounds asked for it from opposite sides. A reader who sees only
-        # "no robots error" cannot tell "the site allows this path" from "compliance
-        # is off on this machine" — and those are different things to be true when
-        # the content gets cited. The sentence is built by `_robots_mode_label`,
-        # which is where the four causes are kept apart.
+        # 这次抓取究竟是通过哪一种方式拿到许可的，记下来供回执使用：两轮测试从相反的
+        # 两边都问过这件事。只看到 "no robots error" 的读者分不出"站点允许这个路径"和
+        # "这台机器上合规是关着的" —— 而内容被引用时，这两件事的真假是不同的。那句话由
+        # `_robots_mode_label` 生成，四种原因就在那里被区分开。
         _ROBOTS_MODE.set(_robots_mode_label(bool(ignore_robots), verdict))
         if verdict is not None and not verdict.allowed:
             return _robots_blocked_result(url, verdict)
 
-        # Request options flow to lower-level fetchers through ContextVars. The
-        # _smart_fetch_request_context decorator scopes them to this call so
-        # sequential requests cannot leak state into one another while concurrent
-        # bulk tasks remain isolated.
-        # actions produce post-interaction content unique to the action sequence;
-        # bypass the cache so a plain (pre-action) cached copy is never served.
+        # 请求选项通过 ContextVars 流向更底层的 fetcher。_smart_fetch_request_context
+        # 装饰器把它们的作用域限定在这次调用里，于是串行请求之间不会互相漏状态，并发的
+        # 批量任务也各自隔离。
+        # actions 产出的是这次动作序列独有的"交互之后"的内容；绕过缓存，才不会端出一份
+        # 交互之前的普通缓存副本。
         if actions:
             cache_ttl = 0
 
-        # actions are browser-tier by definition, so the validated page_action
-        # is built ONCE here and handed to BOTH lanes that can run it: the
-        # cdp-attach express lane below and the stealthy actions lane further
-        # down. (It used to be built only in the latter - cdp_url + actions
-        # together silently dropped every action, and a capture/click the agent
-        # believed it had queued never ran.)
+        # actions 按定义就属于浏览器档，所以校验过的 page_action 在这里只建一次，然后
+        # 交给**两条**能跑它的通道：下面那条 cdp-attach 快速通道，和更下面的 stealthy
+        # actions 通道。（过去它只在后者里建 —— cdp_url 和 actions 同时给时每个动作都被
+        # 静默丢掉，agent 以为自己排好的 capture/click 从来没跑过。）
         page_action = None
         # 必须在 `if actions` 外面初始化：CDP 那条快速通道也要读它，而没有 actions 的
         # attach 是这个功能的主要用法 —— 读一个未绑定的局部变量把整条 cdp_url 通道炸成
@@ -8329,11 +8156,10 @@ class MasterFetchServer:
                 raise ArgumentRefusal(
                     "actions must be a non-empty list of action dicts",
                     next_action=_action_refusal_way_out())
-            # A screenshot action's product is the RENDERED page, so the speed
-            # shortcut that drops image/stylesheet/font has to be off for it -
-            # under blocking, the <img> is never even requested and the crop is a
-            # broken-image placeholder (decode_qr then answers [] while the action
-            # reports ok). Everything else keeps the shortcut.
+            # screenshot 这个动作的产物是**渲染后**的页面，所以那条丢掉
+            # image/stylesheet/font 的提速捷径必须为它关掉 —— 开着屏蔽时 `<img>` 连请求
+            # 都发不出去，裁出来是一块破图占位符（于是 decode_qr 答 `[]`，而动作那边报
+            # ok）。其余情况保留这条捷径。
             actions_need_resources = actions_want_visual(actions)
             if actions_need_resources and timeout is not None:
                 floor = _min_visual_call_ms()
@@ -8383,26 +8209,23 @@ class MasterFetchServer:
                 _report_action_outcomes(cdp_result, page_action)
             return cdp_result
 
-        # 0. Schema-based structured extraction: fetch as HTML, then extract
-        # structured JSON using CSS selectors + metadata + JSON-LD (no LLM).
-        # NOTE: When schema is active, focus is IGNORED (schema extracts from raw
-        # HTML; focus filters markdown output — combining them produces inconsistent
-        # results where schema has data but focus-filtered content is empty).
-        # `schema` is already normalized above: non-None means usable.
-        # Keyword args, not positionals, and built ONCE for both whole-document
-        # readers below: this call site once dropped an extraction flag, so every
-        # slot after it shifted by one and `cookies` arrived as
-        # _SCHEMA_SOURCE_MAX_CHARS — which is the `'int' object is not iterable` the
-        # 16.0 report filed as a nested-schema bug (G14). A name that does not exist
-        # raises at once instead of landing in a neighbouring parameter, and the two
-        # paths (schema, nested fan-out) cannot drift apart because they unpack the
-        # same dict.
+        # 0. 基于 schema 的结构化抽取：先按 HTML 抓，再用 CSS 选择器 + metadata +
+        # JSON-LD 抽出结构化 JSON（不调 LLM）。
+        # 注意：schema 生效时 focus 会被忽略（schema 是从原始 HTML 里抽，focus 筛的是
+        # markdown 输出 —— 两者叠用会产出互相矛盾的结果：schema 有数据，而被 focus 筛过的
+        # 正文是空的）。
+        # `schema` 在上面已经规范化过：非 None 就代表可用。
+        # 用关键字实参、不用位置实参，而且下面两个"整篇文档"读取器共用同一份、只建一次：
+        # 这个调用点曾经漏掉一个抽取用的标志位，于是它之后的每一个槽位整体错一格，
+        # `cookies` 收到的是 _SCHEMA_SOURCE_MAX_CHARS —— 那正是 16.0 报告当成 nested-schema
+        # 缺陷登记的 `'int' object is not iterable`（G14）。不存在的名字会当场抛错，而不是
+        # 落进隔壁参数里；两条路（schema、nested 扇出）也不会各走各的，因为它们解包同一个
+        # dict。
         _tier_kwargs = dict(
             extraction_type="html",
             css_selector=css_selector,
-            # A conditional question goes to the origin, never to dhole's own
-            # memory of an answer (G23): serving a cached 200 here would report
-            # "content" for a call that asked whether the content still stands.
+            # 问的是"条件请求"就得问源站，绝不能问 dhole 自己对上一次回答的记忆（G23）：
+            # 在这儿端出一份缓存的 200，就等于替一个"问内容还站不站得住"的调用报"有内容"。
             cache_ttl=0 if conditional else cache_ttl,
             offset=0,
             headless=headless, real_chrome=real_chrome,
@@ -8410,8 +8233,8 @@ class MasterFetchServer:
             solve_cloudflare=solve_cloudflare, block_webrtc=block_webrtc,
             hide_canvas=hide_canvas, extra_headers=extra_headers,
             useragent=useragent, cookies=cookies,
-            # NOT `mc`: the selectors run over the whole document, and the caller's
-            # cap applies to the JSON that comes back (see re-chunk below).
+            # 这里不是 `mc`：选择器要跑遍整篇文档，而调用方给的上限管的是拿回来的那份
+            # JSON（见下面的重新切块）。
             max_chars=_SCHEMA_SOURCE_MAX_CHARS,
             conditional=conditional, load_everything=load_everything,
             stealthy_headers=stealthy_headers,
@@ -8462,8 +8285,7 @@ class MasterFetchServer:
                     "schema= and actions= cannot be combined yet: the schema path "
                     "runs its own fetch without the action chain. Run the actions "
                     "first, then extract from that response.")
-            # Security: validate all CSS selectors in the schema before use,
-            # including the nested ones G14 introduced.
+            # 安全：使用前先校验 schema 里的所有 CSS 选择器，包括 G14 引入的嵌套那些。
             try:
                 _validate_schema_selectors(schema.get("properties") or {})
             except (SecurityError, ValueError) as se:
@@ -8471,24 +8293,20 @@ class MasterFetchServer:
                     url=url, status=0, content=[],
                     fetcher_used="none", error=f"schema validation error: {se}",
                     summary="invalid schema · 0B · no request made",
-                    # Every other rejected-argument path says both that nothing
-                    # went out and what to change; this one answered with an empty
-                    # next_action, which reads as "no idea what to do next" on the
-                    # one error whose fix is entirely inside the caller's own JSON.
+                    # 其他每一条"参数被拒"的路都会同时说清"什么都没发出去"和"该改哪里"；
+                    # 这一条回的却是空的 next_action，而在这个错误里修法完全在调用方自己的
+                    # JSON 内 —— 空提示读起来就像"我也不知道该怎么办了"。
                     next_action=(
                         "Correct the schema and call again - no request was made, so "
                         "nothing was fetched or cached. The error names the field. "
                         "Selectors are CSS strings, and a field of records needs the "
                         "selector of the container each record comes from."),
                 )
-            # Robots.txt compliance (must check before fetching). `mc` is NOT the
-            # cap here: the selectors run over the whole document, and the
-            # caller's cap applies to the JSON that comes back (see re-chunk
-            # below).
-            # The parameters live in `_tier_kwargs` above, and the pin is handed
-            # down: this path used to call `_auto_escalate` directly, which does not
-            # read `force_fetcher` at all, so `force_fetcher='stealthy'` + `schema=`
-            # silently extracted whatever the HTTP tier returned.
+            # robots.txt 合规（抓取之前必须查）。这里的上限不是 `mc`：选择器跑遍整篇
+            # 文档，而调用方的上限管的是拿回来的那份 JSON（见下面的重新切块）。
+            # 参数都在上面的 `_tier_kwargs` 里，而 pin 会一路传下去：这条路径过去直接调
+            # `_auto_escalate`，那函数根本不读 `force_fetcher`，于是
+            # `force_fetcher='stealthy'` + `schema=` 会静默抽取 HTTP 档返回的东西。
             # M3（评审 Medium）：schema 重抽先问缓存——同一页换个 schema 重抽，
             # 不该每轮都付整页网络与延迟。HTML 以 extraction_type="html" 落缓存，
             # 同键（url + "html" + css_selector）可命中；带出去跑 select 的就是
@@ -8541,18 +8359,16 @@ class MasterFetchServer:
                 if isinstance(structured, dict) and structured and all(
                     _schema_value_empty(v) for v in structured.values()
                 ):
-                    # A schema that matched nothing is a failed extraction, not a
-                    # successful one with empty strings: content_ok must say so.
+                    # 一个什么都没匹配上的 schema 是一次失败的抽取，不是"成功了但字段为空"：
+                    # content_ok 必须照这个说。
                     html_result.error = (
                         "schema_no_match: every selector returned empty - check the "
                         "selectors against this page's markup"
                     )
-                # The chunking done upstream described the HTML - a payload the
-                # caller never sees (it left a next_offset pointing into a
-                # document we just replaced with a small JSON object). Re-chunk
-                # on the JSON. `focus` is documented as ignored while schema is
-                # active, and _apply_chunking would otherwise BM25-filter the
-                # JSON (it treats extracted_type='structured' as text).
+                # 上游那次切块描述的是 HTML —— 而那是调用方永远看不到的载荷（它留下的
+                # next_offset 指向一份我们刚刚换成小 JSON 对象的文档）。要在 JSON 上重切
+                # 一遍。schema 生效时 focus 不起作用是写在文档里的，否则 _apply_chunking 会
+                # 拿 BM25 去筛这份 JSON（它把 extracted_type='structured' 当纯文本处理）。
                 _focus_token = _FOCUS.set(None)
                 try:
                     return _apply_chunking(html_result, max_chars=mc, offset=offset)
@@ -8607,10 +8423,9 @@ class MasterFetchServer:
             if _waited_s > 0:
                 timeout = max(1000, int(timeout - _waited_s * 1000))
 
-            # 3. actions: page interactions (click/fill/press/wait/scroll) require
-            # the stealthy browser tier. Force it, bypass cache (post-action content
-            # is unique to the action sequence), and pass the page_action built and
-            # validated before the lane selection above.
+            # 3. actions：页面交互（click/fill/press/wait/scroll）必须要 stealthy 浏览器档。
+            # 所以强制走它、绕过缓存（交互之后的内容独属于这一串动作），并把上面在选道
+            # 之前就建好、校验过的 page_action 传下去。
             if actions:
                 result = await self._within_call_budget(
                     self._force_fetch(
@@ -8632,7 +8447,7 @@ class MasterFetchServer:
                 _report_action_outcomes(result, page_action)
                 return result
 
-            # 4. Force specific fetcher (explicit pin wins)
+            # 4. 指定 fetcher（调用方显式点的名最大）
             if force_fetcher:
                 return await self._within_call_budget(
                     self._force_fetch(
@@ -8650,7 +8465,7 @@ class MasterFetchServer:
                         disable_resources=not load_everything,
                     ), url, timeout, f"forced {force_fetcher} tier")
 
-            # 5. Auto-escalation (HTTP -> stealthy) for everything else
+            # 5. 其余一切走自动升级（HTTP -> stealthy）
             return _attach_login_probe_gap(await self._within_call_budget(
                 self._auto_escalate(
                     url, extraction_type,
@@ -8674,28 +8489,23 @@ class MasterFetchServer:
                 _merge_registry().pop(_flight_key, None)
 
     async def _within_call_budget(self, coro, url: str, timeout_ms, stage: str):
-        """Hard ceiling: finish a fetch tier inside the caller's own budget.
+        """硬顶：一次抓取档必须在调用方自己的预算之内结束。
 
-        ``timeout`` was applied per tier only, so the tiers that stack (HTTP
-        retries × redirect hops, then a browser launch + navigation + stability
-        waits) could run well past it. When that happened the MCP client killed
-        the request first (-32001) and the agent got no FetchResult at all. The
-        escalation path bounds each tier itself and says which one ran out; this
-        is the backstop that keeps the promise for the pinned tiers too.
+        ``timeout`` 过去只逐档施加，于是会叠起来的那些档（HTTP 重试次数 × 重定向跳数，
+        接着是浏览器启动 + 导航 + 稳定等待）能远远跑过它。真跑过时，先动手的是 MCP 客户端，
+        它直接杀掉请求（-32001），agent 一个 FetchResult 都拿不到。升级路径会约束它自己的
+        每一档并点名是哪一档用完；这里是那道后备，让被钉住的几条档也兑现同一个承诺。
 
-        It arrives LATE on purpose. ``_auto_escalate`` computes its own deadline
-        from a ``start_time`` taken after ``started`` below, so an equal budget
-        makes this backstop win the race by microseconds — and the result it
-        builds starts out knowing nothing about which tier was in flight or what
-        that tier had already found. Measured on this machine: a URL whose HTTP tier
-        diagnosed ``connection reset (os error 10054)`` in 5.0s came back at 30.0s as
-        a bare "timeout: raise your timeout", with an empty escalation_path, three
-        times running. The grace is for finalization only (model build + cache write,
-        milliseconds); the tiers' own accounting still answers first.
+        它是**故意**迟到的。``_auto_escalate`` 用自己的 ``start_time``（在下面的
+        ``started`` 之后才取）算它的截止，预算相等时这场竞速会由后备赢下几微秒 —— 而它拼出来
+        的结果一开始根本不知道当时是哪一档在跑、那一档已经查到了什么。本机实测：一个 HTTP 档
+        在 5.0s 就诊断出 ``connection reset (os error 10054)`` 的 URL，三次连续都在 30.0s
+        回来一句光秃秃的 "timeout: raise your timeout"，escalation_path 是空的。那点宽限只
+        留给收尾（建模型 + 写缓存，毫秒级）；各档自己的账仍然先答。
 
-        What the tier learned before it was cut is carried by ``_tier_facts`` (see
-        ``_cancelled_tier_advice``) — not by this scope's own knowledge, which stays
-        empty for anything the tier never published.
+        那一档被掐断之前学到的东西由 ``_tier_facts`` 带出来（见
+        ``_cancelled_tier_advice``）—— 不是靠这个作用域自己的知识，那一档没公开的东西这里
+        依然是空的。
         """
         started = now()
         asked_s = max(MIN_CALL_BUDGET_MS / 1000.0, float(timeout_ms or 30000) / 1000.0)
@@ -8721,9 +8531,8 @@ class MasterFetchServer:
             result = _with_agent_hints(_over_budget_result(
                 url, asked_s * 1000, (now() - started) * 1000, stage, "", advice,
                 diagnosis_struct=twin))
-            # No tier returned, so there is no trail to name - say that plainly
-            # instead of leaving escalation_path empty, which reads as "no tier
-            # ran" when in fact one ran and never came back.
+            # 没有任何一档返回，也就没有可以点名的足迹 —— 那就直说，而不是让
+            # escalation_path 空着：空着读起来像"没有档跑过"，而事实是有一档跑了再没回来。
             result.escalation_path = f"{stage}(timeout: no tier returned)"
             return result
         finally:
@@ -9908,25 +9717,22 @@ class MasterFetchServer:
             deadline = _apply_install_shift(deadline, install.waited_s)
             logger.info("chromium installed on first use (%.1fs) - budget restored",
                         install.waited_s)
-        # The tier's own words, kept for the browser over-budget message below.
-        # Same 140-char bound as the `errors` line, so the two exits cannot drift
-        # into different stories about what HTTP learned - and "the browser ran out
-        # of time" is worth more with HTTP's verdict attached to it (that is the
-        # whole difference between "raise your timeout" and "the origin reset the
-        # socket; skip the browser").
+        # 保留这一档自己的说法，供下面浏览器超预算的消息使用。与 `errors` 那一行
+        # 同为 140 字符上限，两个出口才不会对 HTTP 得知的情况给出互相矛盾的故事 ——
+        # 而 "the browser ran out of time" 附上 HTTP 的判决才更有价值（这正是
+        # "raise your timeout" 与 "the origin reset the socket; skip the browser"
+        # 之间的全部差别）。
         _http_verdict = (f"status {result.status}"
                          + (f": {result.error[:140]}" if result.error else ""))
-        # The status the ORIGIN actually answered. `result` is about to be
-        # replaced by the browser tier's own result, and a browser that cannot
-        # render a non-200 answers with status 0 - so reading `result.status`
-        # after the escalation reports the RENDER, not the site. Measured on
-        # httpbin /status/503: the receipt went out as "unknown (HTTP status 0)"
-        # plus "No HTTP response was received at all", about a response that had
-        # arrived carrying 503 in its status line.
+        # ORIGIN 实际应答的状态。`result` 马上会被浏览器档自己的结果替换，而渲染不了
+        # 非 200 的浏览器会以状态 0 作答 —— 所以在升级之后再读 `result.status`，报告的
+        # 是"渲染"而不是站点。在 httpbin /status/503 上实测过：回执发出去时写的是
+        # "unknown (HTTP status 0)" 加上 "No HTTP response was received at all"，
+        # 而那个响应其实已经到达、状态行里写着 503。
         http_answered = result.status
-        # What is actually left, not `timeout - elapsed` floored at 5s: the floor
-        # let the browser tier start a fresh 5s+ launch after the budget was
-        # already spent, which is how a call turned into a client-side -32001.
+        # 实际还剩多少，而不是把 `timeout - elapsed` 下限截到 5s：那个下限让浏览器档
+        # 在预算已经花完之后又启动一次 5s+ 的浏览器，一次调用就是这样变成客户端侧的
+        # -32001 的。
         remaining = int(_left_s() * 1000)
         if remaining < 1500:
             result.escalation_path = "http(stealthy_skipped_no_budget)"
@@ -10737,10 +10543,12 @@ class MasterFetchServer:
         from dhole_mcp.parse import BODY_UNREAD, parse_file_cached
 
         # 先问这颗数字合不合法，再去碰文件（评审 R02-121 · 真机 `r212_guard_sweep.json`）：
-        # `offset` 从前只过类型归一（`params.py:560`），负数原样交给 `_apply_chunking` 的切片 ——
+        # `offset` 从前只过类型归一（`params._coerce_arg_types`），负数原样交给
+        # `_apply_chunking` 的切片 ——
         # Python 的负数下标从末尾数，于是 113B 的文件交回末尾 6 个字而 summary 仍写「113B」，
         # 再狠一点（`-(len+1)`）交空正文再加一句「把同一个负数再发一遍」的续读建议。
-        # 裁判早就在（`web_read` 那一扇一直叫它：`server.py:6771`），这一扇只是没去叫它。
+        # 裁判早就在（`web_read` 那一扇一直叫它：`_coerce_int_arg(offset, ..., clamp=False)`），
+        # 这一扇只是没去叫它。
         offset = _coerce_int_arg(offset, "offset", lo=0, hi=2 ** 31,
                                  default=0, clamp=False)
 
@@ -11679,7 +11487,8 @@ class MasterFetchServer:
         # 同族另一颗预算（评审 R02-120 · 真机 `r209_deadline_radius.json`）：`deadline_ms=0`
         # 与 `=-1` 从前照收，进循环后被自己的零/负预算当场砍掉，交回「stopped: time deadline」，
         # 而申报整趟预算的那颗字段在 0 那一发**缺席**（`wire.py` 把「等于默认值」省掉，它的默认
-        # 值正是 0）—— 同一封里「进了循环」与「从没进到抓取循环」（`crawl.py:205` 那句契约）
+        # 值正是 0）—— 同一封里「进了循环」与「从没进到抓取循环」
+        # （`CrawlResponseModel.deadline_ms_applied` 的字段描述那句契约）
         # 互相反驳。拒在门外，那句契约重新成立；这颗不设帽，判据写在 `validate_deadline`。
         try:
             validate_deadline(deadline_ms)
@@ -11901,7 +11710,7 @@ class MasterFetchServer:
         truncated_pages = truncated_chars = truncated_time = False
         idx = 0  # index into `remaining`
 
-        # Crawl-delay 的每发账本（crawl.py:1840-1867 同款）：interval 按页查 robots
+        # Crawl-delay 的每发账本（`crawl._pace` 同款）：interval 按页查 robots
         # 缓存，next_slot 按主机记下一发最早时刻。
         pace_lock = asyncio.Lock()
         next_slot: dict = {}
@@ -11946,7 +11755,7 @@ class MasterFetchServer:
             # 留给下一次续传；确定性 offset 只数真抓过的行）。
             batch = remaining[idx:idx + max(1, min(concurrency,
                                                    max_pages - len(rows)))]
-            # Crawl-delay 与爬取路同一笔账（crawl.py:1840-1867 的同款局部态）：计划
+            # Crawl-delay 与爬取路同一笔账（`crawl._pace` 的同款局部态）：计划
             # 几乎总是同一台主机，没有 pacing 的并发批会把爬取路守住的礼貌破掉。
             for _u in batch:
                 await _resume_pace(_u)
@@ -11965,7 +11774,7 @@ class MasterFetchServer:
                                           error=redact_api_key(str(resp)[:200])))
                     idx += 1
                     continue
-                # 整轮的字符帽在批内也逐行判（crawl.py:1971 同一形状）：一次 while
+                # 整轮的字符帽在批内也逐行判（`web_crawl` 主循环的批内字符帽同一形状）：一次 while
                 # 检查最坏多吐一整批。被挡下的行已付了请求，但游标不前进 —— 抬帽后
                 # 续传会读到它们，summary 点名。
                 if max_total_chars and total_chars >= max_total_chars:
@@ -12155,30 +11964,25 @@ class MasterFetchServer:
 
     # ─── Serve ─────────────────────────────────────────────────────
     async def sys_guide(self, topic: str = "", section: str = "") -> str:
-        """Serve one handbook volume from the packaged skill corpus.
+        """从打包好的 skill 语料里取出一册手册来服务。
 
-        Same files ``dhole skill install`` copies to the host's skills
-        directory, and nothing here paraphrases them, so the wire and the
-        installed skill cannot tell an agent two different stories about one
-        parameter. Read-only, no network, no state: an unknown topic or an
-        unmatched section answers with what IS available rather than an error,
-        because the useful result of a wrong guess about documentation is the
-        map.
+        就是 `dhole skill install` 复制到宿主 skills 目录的那些文件，而这里不对它们做任何
+        改写，所以 wire 与装好的 skill 不可能对同一个参数讲出两个版本的故事。只读、不联网、
+        不改状态：认不出的 topic 或匹配不到的段落，回的是"这里有什么"（IS available），而不是
+        一个错误 —— 因为对文档猜错时，有用的结果就是那张地图。
         """
         from dhole_mcp import guide
         header, body = guide.read(topic, section)
         return f"{header}\n\n{body}"
 
-    # Minimal hand-crafted tool definitions — no Pydantic schema bloat.
-    # Saves ~69% tokens vs FastMCP auto-generated schemas.
-    # ─── THE WIRE CONTRACT ──────────────────────────────────────────────
-    # This list - not the tool methods' docstrings - is what MCP clients
-    # receive. Nothing in the codebase reads __doc__ (verified: zero
-    # consumers), so a docstring edit is invisible to agents and will rot
-    # silently (screenshot's :param: block described args that had moved
-    # into `options`). When the agent-facing contract changes, change it
-    # HERE; docstrings carry implementation rationale only.
-    # tests/test_tool_descriptions.py guards this split.
+    # 手写的极简工具定义 —— 不养 Pydantic schema 那堆赘肉。
+    # 相比 FastMCP 自动生成的 schema，省下约 69% 的 token。
+    # ─── 线上契约（THE WIRE CONTRACT）─────────────────────────────────
+    # MCP 客户端收到的是这张表，而不是工具方法们的 docstring。代码库里没有任何地方读
+    # __doc__（已核实：零消费者），所以改 docstring 对 agent 完全不可见，而且会烂得无声
+    # 无息（screenshot 的 :param: 块还在描述那些早已搬进 `options` 的参数）。面向 agent 的
+    # 契约变了，就改**这里**；docstring 只负责讲实现的理由。
+    # tests/test_tool_descriptions.py 守着这条分工。
     #
     # `timeout=` 的声明单位与这一档的实施单位不是一回事：那颗是**整次调用**的毫秒预算，
     # 而 HTTP 一档每一试次封顶 30s（算式只有 `bulk_get` 里那一行）。一份文档只有 1 次
@@ -12230,9 +12034,9 @@ class MasterFetchServer:
     _ACTIONS_DESC = (
         "ONE action key per object: [{scroll:3},{wait:1000}]. Keys: "
         "click,fill,read,press,hover,drag,wait,scroll,wait_selector,snapshot,"
-        "screenshot,submit,upload,dialog,tab,select,navigate,pdf; "
+        "screenshot,submit,upload,dialog,tab,select,navigate,pdf,evaluate; "
         "fill=text,press=key,drag=to,upload=files,dialog=answer,select=option,"
-        "pdf=save_to; tab (new/N/close).")
+        "pdf=save_to,evaluate=expr.")
     _TOOL_DEFS: list[dict] = [
         {
             "name": "web_read",
@@ -12255,7 +12059,7 @@ class MasterFetchServer:
                 "anyOf": [{"required": ["url"]}, {"required": ["urls"]}],
                 "properties": {
                     "url": {"type": "string", "description": "URL to fetch"},
-                    "urls": {"type": "array", "items": {"type": "string"}, "description": "URLs (parallel; one result each; check is at most 10)"},
+                    "urls": {"type": "array", "items": {"type": "string"}, "description": "URLs (parallel; one row each in `results`; check is at most 10)"},
                     "extraction_type": {"type": "string", "description": "Format: markdown (default), html (raw markup), text, article, structured, or check (changed-since-last-fetch; urls= batch, max 10)."},
                     "css_selector": {"type": "string", "description": "Narrows extracted content. HTML only - on XML/JSON/plain text the whole document comes back and the summary says so."},
                     "max_content_chars": {"type": "integer", "description": "Content cap in chars (500-200000; default from DHOLE_DEFAULT_CONTENT_CHARS). The rest stays reachable via offset/next_offset."},
@@ -12525,7 +12329,7 @@ class MasterFetchServer:
                     "urls": {"type": "array", "items": {"type": "string"}, "description": "One or more RSS/Atom feed URLs"},
                     "max_items": {"type": "integer", "description": "Max entries per feed (default 20; 0 = all)"},
                     "timeout": {"type": "integer", "description": _TIMEOUT_DESC_FEED},
-                    "since": {"type": "string", "description": "Incremental polling: keep entries published at or after this (ISO-8601 '2026-09-20' / '2026-09-20T08:00:00Z', or an RFC-822 stamp) - pass the newest published value from the previous call. items_older_than_since counts what it dropped; undated entries are kept, never dropped."},
+                    "since": {"type": "string", "description": "Incremental poll: keep entries published at or after this (ISO-8601 '2026-09-20', RFC-822, or relative '3h'/'3d'/'2w') - pass the previous call's newest published value. items_older_than_since counts what it dropped; undated entries are kept, never dropped."},
                 },
             },
             "annotations": {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},

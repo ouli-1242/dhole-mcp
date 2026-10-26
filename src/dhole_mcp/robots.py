@@ -1,28 +1,24 @@
-"""robots.txt compliance for every fetch path (v16.0, gap G3).
+"""每条抓取路径的 robots.txt 合规检查（v16.0，缺口 G3）。
 
-Until v16.0 dhole fetched any URL an agent asked for without looking at the
-site's robots.txt at all (README said so out loud). This module is the checker:
-one per-origin, TTL'd, single-flight cache of parsed rules shared by every fetch
-path, consulted by ``web_read`` before any tier runs and by ``web_crawl``
-before a discovered URL is queued.
+v16.0 之前，dhole 对 agent 点名的任何 URL 都直接抓，完全不看站点的 robots.txt
+（README 当时也这么写）。本模块就是检查器：每个源站一份、带 TTL、单飞
+（single-flight）的解析规则缓存，由每条抓取路径共享；``web_read`` 在任何档位
+开跑之前问它，``web_crawl`` 在把发现的 URL 入队之前问它。
 
-Policy (deliberately narrow, and stated here because it is a behaviour change):
+策略（刻意收窄，写在这里因为这是行为变更）：
 
-* ``200`` with a body  -> the rules are parsed and enforced for ``USER_AGENT``.
-* ``401``/``403``       -> treated as "no access": the host refuses to serve its
-  rules to this client, which RFC 9309 reads as a full disallow. Conservative.
-* any other ``4xx``     -> no robots.txt on this host = no restrictions.
-* ``5xx`` / ``429`` / network error / timeout -> FAIL OPEN (allowed) with a
-  short TTL. dhole is an on-demand fetcher for a single page a human asked for,
-  not a crawler; refusing that page because /robots.txt was momentarily
-  erroring would be reported to the agent as a site failure and blamed on the
-  wrong thing. The short TTL means the next call re-reads.
-* a non-http(s) URL, or ``ignore_robots`` / ``DHOLE_IGNORE_ROBOTS`` -> allowed.
+* ``200`` 且有正文 -> 规则被解析，并对 ``USER_AGENT`` 执行。
+* ``401``/``403`` -> 视为"无访问权"：主机拒绝把规则交给这个客户端，RFC 9309 把它
+  读成完全禁止。保守选择。
+* 其它 ``4xx`` -> 这个主机没有 robots.txt = 没有限制。
+* ``5xx`` / ``429`` / 网络错误 / 超时 -> 失败开放（允许），带短 TTL。dhole 是替人
+  抓单页的按需抓取器，不是爬虫；因为 /robots.txt 一时出错就拒绝那一页，会让 agent
+  把它报成站点故障，怪错对象。短 TTL 保证下一次调用重新读。
+* 非 http(s) URL，或 ``ignore_robots`` / ``DHOLE_IGNORE_ROBOTS`` -> 允许。
 
-The matched UA token is ``USER_AGENT`` ("dhole-mcp"): rules written for ``*``
-apply, and a site that blocks a named bot token blocks that token. The HTTP
-request that FETCHES robots.txt identifies itself with the same token, so an
-operator reading their logs can see who asked.
+匹配的 UA token 是 ``USER_AGENT``（"dhole-mcp"）：写给 ``*`` 的规则适用，屏蔽某个
+具名 bot token 的站点会屏蔽该 token。抓 robots.txt 的那一发 HTTP 也用同一个 token
+自报家门，所以看日志的运维知道是谁在问。
 """
 
 from __future__ import annotations
@@ -38,48 +34,46 @@ from dhole_mcp import env_registry
 
 logger = logging.getLogger("dhole-mcp.robots")
 
-# Set to 1/true to skip robots.txt checking entirely (the documented escape
-# hatch for a caller who has its own agreement with the site it fetches).
+# 设为 1/true 就完全跳过 robots.txt 检查（给与站点另有约定的调用方留的、
+# 写在文档里的逃生门）。
 ENV_IGNORE_ROBOTS = "DHOLE_IGNORE_ROBOTS"
-# The token matched against User-agent groups, and sent as our HTTP UA.
+# 用于匹配 User-agent 组的 token，也作为我们的 HTTP UA 发出去。
 USER_AGENT = "dhole-mcp"
 ROBOTS_PATH = "/robots.txt"
-# A host's rules are re-read at most once per hour...
+# 一个主机的规则每小时最多重读一次……
 TTL_S = 3600.0
-# ...but a failure (5xx / timeout) is retried after a minute, so a transient
-# error cannot latch "no rules" onto a host for a whole hour.
+# ……但失败（5xx / 超时）一分钟后重试，避免一次瞬时错误把"没有规则"钉在一个
+# 主机上一整小时。
 UNAVAILABLE_TTL_S = 60.0
-# Cap on the fetched rules body: real robots.txt files are kilobytes, and a
-# half-gigabyte "robots.txt" must not become a memory problem.
+# 抓回规则正文的上限：真实 robots.txt 只有几 KB，半个 GB 的"robots.txt"不能
+# 变成内存问题。
 MAX_BYTES = 512 * 1024
 FETCH_TIMEOUT_S = 8.0
-# Ceiling on an obeyed ``Crawl-delay`` (G27). The number is a request about load,
-# not a contract about waiting: a site asking for 10 minutes between requests
-# would otherwise turn a crawl into a hang that no caller can distinguish from a
-# dead server. Clamped, and the crawl summary says which value it used.
+# 遵守的 ``Crawl-delay`` 上限（G27）。这个数字是有关负载的请求，不是等待合同：
+# 站点要求每次请求间隔 10 分钟，否则爬取会变成调用方无法与死服务器区分的挂起。
+# 夹住，并在爬取 summary 里说明用了哪个值。
 MAX_CRAWL_DELAY_S = 60.0
 
-# Reasons returned in Verdict.reason. "allowed" is a real answer from the host's
-# rules; "unavailable" means no usable rules (fail-open).
+# Verdict.reason 里返回的原因。"allowed" 是主机规则给出的真实答案；
+# "unavailable" 表示没有可用规则（失败开放）。
 ALLOWED = "allowed"
 DISALLOWED = "disallowed"
 UNAVAILABLE = "unavailable"
 DISABLED = "disabled"
-# Which kind of "no answer" this is, so the receipt can say a true sentence about
-# it. Failing open is the documented policy either way; what must not be blurred is
-# the CAUSE — "that file could not be read" and "dhole refused to dial it here"
-# point at different things to fix and different things to write in an audit.
+# 这是哪一种"没有答案"，好让回执说一句真话。两种都按文档策略失败开放；不能
+# 混淆的是**原因**——"那个文件读不到"与"dhole 拒绝在这里拨号"指向不同的修复
+# 对象，也指向审计里不同的写法。
 FETCH_FAILED = "fetch_failed"
 REFUSED_BY_POLICY = "refused_by_policy"
 
 
 class Verdict(NamedTuple):
-    """Outcome of one robots.txt check.
+    """一次 robots.txt 检查的结局。
 
-    ``reason`` is ``allowed`` | ``disallowed`` | ``unavailable`` | ``disabled``;
-    ``robots_url`` is the file that was consulted (empty when unknown);
-    ``unavailable_reason`` is ``fetch_failed`` | ``refused_by_policy`` when
-    ``reason`` is ``unavailable``, and "" otherwise.
+    ``reason`` 是 ``allowed`` | ``disallowed`` | ``unavailable`` | ``disabled``；
+    ``robots_url`` 是被查的文件（未知时为空）；``unavailable_reason`` 在
+    ``reason`` 为 ``unavailable`` 时是 ``fetch_failed`` | ``refused_by_policy``，
+    其它情况为 ""。
     """
 
     allowed: bool
@@ -89,25 +83,22 @@ class Verdict(NamedTuple):
 
 
 def env_disabled() -> bool:
-    """True when ``DHOLE_IGNORE_ROBOTS`` disables compliance process-wide.
+    """``DHOLE_IGNORE_ROBOTS`` 是否在进程级关掉合规检查。
 
-    D1 (fail-safe direction): an unrecognised value - e.g. a typo like
-    ``flase`` - now reads as "do NOT ignore robots" (compliance stays ON),
-    and the failure lands in the ``env_registry`` warning list so
-    ``dhole --doctor`` shows the operator their setting did not take. Before
-    the change, a typo silently flipped the process into a non-compliant
-    state; the operator had no visible signal.
+    D1（失败安全方向）：无法识别的值——例如把 ``false`` 拼成 ``flase``——现在读成
+    "不要忽略 robots"（合规保持开启），并且失败会进 ``env_registry`` 的警告表，
+    让 ``dhole --doctor`` 告诉运维他的设置没生效。改动之前，一次拼写错误会静默
+    把进程切到不合规状态，运维看不到任何信号。
 
-    Values in ``ON_TOKENS`` (1/true/yes/on) still disable compliance, and
-    values in ``OFF_TOKENS`` plus empty string still keep it on - the
-    existing ``test_env_var_disables_the_check_process_wide`` /
-    ``test_env_var_falsey_values_keep_compliance_on`` cases remain true.
+    ``ON_TOKENS``（1/true/yes/on）仍然关闭合规；``OFF_TOKENS`` 与空串仍然保持
+    开启——既有的 ``test_env_var_disables_the_check_process_wide`` /
+    ``test_env_var_falsey_values_keep_compliance_on`` 用例仍然成立。
     """
     return env_registry.read_flag(ENV_IGNORE_ROBOTS, default=False, fail_safe=True)
 
 
 def robots_url_for(url: str) -> str:
-    """``https://host/robots.txt`` for a page URL, or "" when not http(s)."""
+    """页面 URL 对应的 ``https://host/robots.txt``；不是 http(s) 时返回 ""。"""
     try:
         parts = urlparse(url or "")
     except Exception:
@@ -118,7 +109,7 @@ def robots_url_for(url: str) -> str:
 
 
 def _origin(url: str) -> str:
-    """Cache key: scheme://netloc, lowercased. Rules are per-origin."""
+    """缓存键：scheme://netloc，转小写。规则按源站存。"""
     try:
         parts = urlparse(url or "")
     except Exception:
@@ -127,9 +118,8 @@ def _origin(url: str) -> str:
 
 
 def _parse(text: str, robots_url: str) -> RobotFileParser:
-    """Parse a robots.txt body. Never raises: an unparseable file means
-    "no rules we can enforce", which is the fail-open shape every other
-    failure path here takes."""
+    """解析一份 robots.txt 正文。从不抛：解析不了意味着"没有可执行的规则"，
+    与本模块其它失败路径一样失败开放。"""
     rp = RobotFileParser()
     try:
         rp.set_url(robots_url)
@@ -152,7 +142,7 @@ def _no_rules(robots_url: str) -> RobotFileParser:
 
 
 def _disallow_all(robots_url: str) -> RobotFileParser:
-    """A parser that refuses everything (used for 401/403 on robots.txt)."""
+    """拒绝一切的解析器（用于 robots.txt 返回 401/403 的情况）。"""
     return _parse("User-agent: *\nDisallow: /\n", robots_url)
 
 
@@ -166,20 +156,18 @@ def _ua_header() -> str:
 
 def _blocking_fetch(robots_url: str, proxy: Optional[str], timeout_s: float
                     ) -> Optional[tuple[int, bytes]]:
-    """One blocking GET of robots.txt: ``(status, body)`` or None on no answer.
+    """一次阻塞式 GET robots.txt：``(status, body)``，没有答案时返回 None。
 
-    Mirrors the sitemap fetcher's shape (primp first, stdlib as the fallback for
-    hosts that reject primp's fingerprint) so dhole's two side-channel fetches
-    behave the same way.
+    形状与 sitemap 的抓取器一致（先 primp，对拒绝 primp 指纹的主机退回 stdlib），
+    让 dhole 两条旁路抓取行为一致。
 
-    It also has to make the fetcher's own loopback rule true *here*: that rule
-    merges localhost/127.0.0.1/::1 into NO_PROXY at `fetcher` import, and the
-    robots check runs before any tier has imported the fetcher. Without this call
-    the first private-target fetch of a process hands `http://127.0.0.1:PORT
-    /robots.txt` to the system proxy — which cannot reach the caller's own
-    loopback and answers 502, so the host's rules go unenforced and the receipt
-    blames the file. Measured 2026-10-14 (round 01, R01-020): 502 with NO_PROXY
-    absent, 200 with the guard run first, same URL, same server.
+    它还必须在这里让抓取器自己的 loopback 规则成立：那条规则在 `fetcher` import
+    时把 localhost/127.0.0.1/::1 合进 NO_PROXY，而 robots 检查跑在任何档位 import
+    fetcher 之前。没有这一句，进程第一次抓私网目标时会把
+    ``http://127.0.0.1:PORT/robots.txt`` 交给系统代理——代理到不了调用方自己的
+    loopback，答 502，于是主机规则没被执行，回执却怪文件。实测 2026-10-14
+    （round 01，R01-020）：NO_PROXY 缺失时 502，先跑守卫时 200，同一 URL、
+    同一服务器。
     """
     from dhole_mcp.fetcher import _ensure_loopback_no_proxy
     _ensure_loopback_no_proxy()
@@ -199,7 +187,7 @@ def _blocking_fetch(robots_url: str, proxy: Optional[str], timeout_s: float
             resp = client.get(robots_url, headers={"User-Agent": _ua_header()})
             return int(resp.status_code), bytes(resp.content or b"")[:MAX_BYTES]
         except Exception:
-            pass  # fall through to stdlib
+            pass  # 落到 stdlib
     import urllib.request as _urllib_req
     try:
         handlers = []
@@ -217,16 +205,15 @@ def _blocking_fetch(robots_url: str, proxy: Optional[str], timeout_s: float
 
 class _Entry(NamedTuple):
     expires: float
-    parser: Optional[RobotFileParser]  # None = no rules on this origin (allow all)
+    parser: Optional[RobotFileParser]  # None = 这个源站没有规则（全部允许）
     disallow_all: bool = False
 
 
 class RobotsCache:
-    """Per-origin robots.txt rules with a TTL, single-flight and fail-open.
+    """按源站缓存 robots.txt 规则，带 TTL、单飞与失败开放。
 
-    ``fetch`` (optional) replaces the network call: ``async (url, proxy) ->
-    (status, body) | None``. Tests inject a fake; the default runs the blocking
-    fetcher in a worker thread.
+    ``fetch``（可选）替换网络调用：``async (url, proxy) -> (status, body) | None``。
+    测试注入假抓取器；默认在工作线程里跑阻塞式抓取。
     """
 
     def __init__(
@@ -241,13 +228,15 @@ class RobotsCache:
         self._fetch = fetch
         self._entries: dict[str, _Entry] = {}
         self._locks: dict[str, asyncio.Lock] = {}
-        # origin -> which kind of no-answer the cached entry stands for. Lives
-        # beside _entries because the answer itself is what got lost.
+        # origin -> 缓存项代表的是哪一种"没有答案"。住在 _entries 旁边，因为丢掉
+        # 的正是答案本身。
         self._why: dict[str, str] = {}
 
-    # ─── cache surface ───────────────────────────────────────────────
+    # ─── 缓存面 ─────────────────────────────────────────────────────
 
     def clear(self) -> None:
+        """Drop the per-origin cached rules and the "no answer" reasons.
+        """
         self._entries.clear()
         self._why.clear()
 
@@ -261,11 +250,10 @@ class RobotsCache:
         return entry
 
     def cached(self, url: str, *, user_agent: str = USER_AGENT) -> Optional[bool]:
-        """Answer from the cache only: True/False, or None when not yet read.
+        """只从缓存回答：True/False，尚未读过时返回 None。
 
-        ``web_crawl`` uses this to drop discovered URLs without a network
-        call: the seed page's rules are already cached by then, so filtering a
-        same-origin candidate is free.
+        ``web_crawl`` 用它不花网络调用就丢掉发现的 URL：到那时种子页的规则已经
+        缓存，所以过滤同源候选是免费的。
         """
         entry = self._fresh(_origin(url))
         if entry is None:
@@ -280,11 +268,10 @@ class RobotsCache:
             return None
 
     def cached_delay(self, url: str, *, user_agent: str = USER_AGENT) -> Optional[float]:
-        """``Crawl-delay`` from rules ALREADY in the cache; None = unknown/unset.
+        """``Crawl-delay``，只从**已在缓存里**的规则读；None = 未知/未设。
 
-        The crawl asks per page. Reading the cache (rather than fetching) is what
-        makes that free: the seed page's rules are in there by then, so a
-        100-page crawl still costs one robots.txt read.
+        爬取逐页问。读缓存（而非抓取）才让这件事免费：那时种子页的规则已经在
+        里面，所以 100 页的爬取仍然只读一次 robots.txt。
         """
         entry = self._fresh(_origin(url))
         if entry is None or entry.disallow_all or entry.parser is None:
@@ -293,10 +280,10 @@ class RobotsCache:
 
     async def crawl_delay(self, url: str, *, proxy: Optional[str] = None,
                           user_agent: str = USER_AGENT) -> Optional[float]:
-        """The site's own requested spacing for ``url`` (None = it asked for none).
+        """站点为 ``url`` 自己要求的请求间隔（None = 它没要求）。
 
-        Same origin/TTL/single-flight as the allowed() check, so this never costs
-        an extra robots.txt read on a path that already did one.
+        与 allowed() 检查共用源站/TTL/单飞，所以对一条已经读过一次的路，不会多花
+        一次 robots.txt 读取。
         """
         robots_url = robots_url_for(url)
         if not robots_url:
@@ -311,17 +298,16 @@ class RobotsCache:
 
     @staticmethod
     def _delay_of(parser: RobotFileParser, user_agent: str) -> Optional[float]:
-        """``Crawl-delay`` for our user-agent, clamped to something a call budget
-        can survive.
+        """我们 user-agent 的 ``Crawl-delay``，夹到调用预算能承受的范围。
 
-        urllib already prefers our group over ``*`` and returns None when neither
-        is set. It also reads only WHOLE seconds (3.14 parses behind an isdigit()
-        guard), so a host writing ``Crawl-delay: 0.5`` reads as "asked for
-        nothing". That has been the whole answer since 17.0 removed the caller's
-        ``delay=``: nothing in dhole spaces requests below a second.
+        urllib 已经优先我们的组而不是 ``*``，两者都没设时返回 None。它也只读
+        **整秒**（3.14 会卡在 isdigit() 守卫后面），所以站点写
+        ``Crawl-delay: 0.5`` 会被读成"什么也没要求"。自从 17.0 删掉调用方的
+        ``delay=`` 之后，这就是全部答案：dhole 里没有任何地方把请求间隔压到一秒
+        以下。
 
-        A site asking for hours is not obeyed to the letter: the number is a
-        request about load, and an unclamped one turns a crawl into a hang.
+        要求几小时的站点不会被逐字遵守：这个数字是有关负载的请求，不夹住会把
+        爬取变成挂起。
         """
         try:
             raw = parser.crawl_delay(user_agent)
@@ -336,7 +322,7 @@ class RobotsCache:
         return min(value, MAX_CRAWL_DELAY_S)
 
     def prime(self, url: str, text: str, *, robots_url: str = "") -> None:
-        """Seed rules from a robots.txt body (tests, or a caller that has one)."""
+        """用一份 robots.txt 正文预置规则（测试，或已经拿到文件的调用方）。"""
         target = robots_url or robots_url_for(url)
         origin = _origin(target or url)
         if not origin:
@@ -344,19 +330,19 @@ class RobotsCache:
         self._entries[origin] = _Entry(time.monotonic() + self._ttl, _parse(text, target))
 
 
-    # ─── the check ───────────────────────────────────────────────────
+    # ─── 检查 ───────────────────────────────────────────────────────
 
     async def allowed(self, url: str, *, proxy: Optional[str] = None,
                       user_agent: str = USER_AGENT) -> Verdict:
-        """Is ``url`` fetchable under its origin's robots.txt?"""
+        """``url`` 在它源站的 robots.txt 下能不能抓？"""
         robots_url = robots_url_for(url)
         if not robots_url:
             return Verdict(True, UNAVAILABLE, "")
         origin = _origin(url)
 
         def _no_answer(extra: str = "") -> Verdict:
-            # "unavailable" is one answer in four different stories; the field
-            # that says which story is what makes the receipt auditable.
+            # "unavailable" 是一个答案、四种故事；说出是哪种故事的字段，才让
+            # 回执可审计。
             return Verdict(True, UNAVAILABLE, robots_url,
                            self._why.get(origin, "") or extra or FETCH_FAILED)
 
@@ -379,34 +365,30 @@ class RobotsCache:
                     ) -> Optional[_Entry]:
         lock = self._locks.setdefault(origin, asyncio.Lock())
         async with lock:
-            entry = self._fresh(origin)  # a concurrent task may have filled it
+            entry = self._fresh(origin)  # 并发任务可能已经填好了
             if entry is not None:
                 return entry
             status, text, answered, why = await self._fetch_rules(robots_url, proxy)
             if not answered:
-                # No answer at all: allow, and retry soon instead of caching an
-                # allow for the full TTL.
+                # 完全没有答案：允许，并且很快重试，而不是把"允许"缓存满一个 TTL。
                 self._why[origin] = why
                 self._entries[origin] = _Entry(
                     time.monotonic() + self._unavailable_ttl, None)
                 return None
             if status in (401, 403):
-                # The host refuses to serve the rules to this client. RFC 9309
-                # reads that as no access; honouring it is the conservative
-                # choice, and it is reported as such.
+                # 主机拒绝把规则交给这个客户端。RFC 9309 把它读成无访问权；照做是
+                # 保守选择，回执也按这个说法报。
                 self._why.pop(origin, None)
                 entry = _Entry(time.monotonic() + self._ttl,
                                _disallow_all(robots_url))
                 self._entries[origin] = entry
                 return entry
             if status != 200:
-                # 404/410/451 -> there is no robots.txt here, and that will not
-                # change within the hour: full TTL. 5xx/429 -> the host is
-                # momentarily broken or throttling us, so the answer may differ a
-                # minute from now: short TTL, exactly like no answer at all. (The
-                # policy has always said so; the code used to cache a 5xx for the
-                # full hour, so one bad moment kept a host's rules unknown - and
-                # therefore unenforced - for as long as a real rules file.)
+                # 404/410/451 -> 这里没有 robots.txt，一小时内不会变：满 TTL。
+                # 5xx/429 -> 主机只是暂时坏了或在限流，一分钟后的答案可能不同：短
+                # TTL，与完全没有答案一样。（策略一直这么说；代码从前把 5xx 缓存满
+                # 一小时，于是一个坏瞬间就让主机规则未知——因而未执行——跟真规则
+                # 文件一样久。）
                 short = status >= 500 or status == 429
                 self._why[origin] = FETCH_FAILED if short else ""
                 self._entries[origin] = _Entry(
@@ -421,15 +403,13 @@ class RobotsCache:
 
     async def _fetch_rules(self, robots_url: str, proxy: Optional[str]
                            ) -> tuple[int, str, bool, str]:
-        """``(status, text, answered, why)``; ``answered=False`` = no usable answer.
+        """``(status, text, answered, why)``；``answered=False`` = 没有可用答案。
 
-        ``why`` says which kind of no-answer this is, and it is the only honest way
-        to fill ``Verdict.unavailable_reason`` — the receipt must not call dhole's
-        own refusal a broken file.
+        ``why`` 说明这是哪一种"没有答案"，也是填 ``Verdict.unavailable_reason``
+        时唯一诚实的做法——回执不能把 dhole 自己的拒绝说成文件坏了。
 
-        The robots URL derives from an already-validated page URL, but it is
-        re-validated here: a redirect or a hostile DNS answer must not turn this
-        side channel into an SSRF primitive.
+        robots URL 来自一颗已经校验过的页面 URL，但这里会重新校验：一次重定向或
+        恶意 DNS 答案不能把这条旁路变成 SSRF 原语。
         """
         try:
             from dhole_mcp.security import validate_url
@@ -452,17 +432,15 @@ class RobotsCache:
         try:
             status_code = int(status)
         except (TypeError, ValueError):
-            # An unusable status is "no answer", NOT "no rules". Treating it as
-            # an answer would let a broken fetcher latch allow-all onto a host
-            # for a full TTL.
+            # 不可用的状态是"没有答案"，不是"没有规则"。把它当成答案会让一个坏掉
+            # 的抓取器把"全部允许"钉在主机上满一个 TTL。
             return 0, "", False, FETCH_FAILED
         try:
             if isinstance(body, str):
-                # An injected fetcher may hand back text rather than bytes.
-                # bytes(str) raises, and the old except swallowed that into an
-                # EMPTY rules body - which parses to "no rules" and silently
-                # ALLOWS every path. A compliance check must not fail open on a
-                # type mix-up, so coerce instead of dropping the body.
+                # 注入的抓取器可能交回文本而不是字节。bytes(str) 会抛，旧的 except
+                # 把它吞成一份**空**规则正文——那会解析成"没有规则"，静默允许
+                # 每一条路径。合规检查不能在类型混淆上失败开放，所以转换而不是
+                # 丢掉正文。
                 body = body.encode("utf-8", errors="replace")
             text = bytes(body or b"")[:MAX_BYTES].decode("utf-8", errors="replace")
         except Exception:
@@ -474,8 +452,8 @@ _CACHE: Optional[RobotsCache] = None
 
 
 def get_robots_cache() -> RobotsCache:
-    """Process-wide cache: one robots.txt read per origin per TTL, shared by
-    every fetch path so a 100-page crawl reads the file once."""
+    """进程级缓存：每个源站每个 TTL 只读一次 robots.txt，由每条抓取路径共享，
+    所以 100 页的爬取只读一次文件。"""
     global _CACHE
     if _CACHE is None:
         _CACHE = RobotsCache()
@@ -483,17 +461,17 @@ def get_robots_cache() -> RobotsCache:
 
 
 def reset_robots_cache() -> None:
-    """Drop the process-wide cache (tests, and the ``sys_state`` cache wipe)."""
+    """丢掉进程级缓存（测试，以及 ``sys_state`` 的缓存清理）。"""
     global _CACHE
     _CACHE = None
 
 
 async def check(url: str, *, proxy: Optional[str] = None, ignore: bool = False
                 ) -> Verdict:
-    """One-call check used by the fetch paths.
+    """抓取路径调用的单次检查。
 
-    ``ignore`` is the per-call escape hatch (``ignore_robots=true``);
-    ``DHOLE_IGNORE_ROBOTS`` disables checking for the whole process.
+    ``ignore`` 是逐次调用的逃生门（``ignore_robots=true``）；
+    ``DHOLE_IGNORE_ROBOTS`` 在进程级关闭检查。
     """
     if ignore or env_disabled():
         return Verdict(True, DISABLED, robots_url_for(url))
@@ -502,10 +480,10 @@ async def check(url: str, *, proxy: Optional[str] = None, ignore: bool = False
 
 async def crawl_delay(url: str, *, proxy: Optional[str] = None,
                      ignore: bool = False) -> Optional[float]:
-    """The spacing this site asked for (G27); None = it asked for none.
+    """这个站点要求的请求间隔（G27）；None = 它没要求。
 
-    ``ignore`` is the same opt-out as check(): a caller who said "do not comply
-    with this host's robots.txt" should not then be quietly rate-limited by it.
+    ``ignore`` 与 check() 同一个退出开关：说了"不遵守这个主机的 robots.txt"的
+    调用方，不该反过来被它悄悄限速。
     """
     if ignore or env_disabled():
         return None
@@ -513,10 +491,9 @@ async def crawl_delay(url: str, *, proxy: Optional[str] = None,
 
 
 def cached_crawl_delay(url: str) -> Optional[float]:
-    """Read the asked-for spacing from the cache only — no request, ever.
+    """只从缓存读要求的间隔——永远不发请求。
 
-    A crawl asks this per page, so this has to be free; the seed page's rules are
-    already in the cache by the time it is asked.
+    爬取逐页问它，所以必须免费；问的时候种子页的规则已经在缓存里。
     """
     if env_disabled():
         return None

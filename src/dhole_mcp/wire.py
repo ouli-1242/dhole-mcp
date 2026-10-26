@@ -17,28 +17,24 @@ from typing import Optional
 from pydantic import BaseModel
 
 
-# ─── Wire compaction (tokens paid on EVERY call, not once) ──────────────────
+# ─── 线格式压实（每次调用都要付的 token，不是一次性的）──────────────────────
 #
-# Measured on this server: a 404 with zero content returned 927 chars, and 33%
-# of a successful fetch's bytes were fields sitting at their own default
-# (is_stale=false, page_type="unknown", links={}, retry_count=0, ...). A default
-# value carries no information once its ABSENCE says the same thing, so the wire
-# drops it. The per-call envelope tax goes from ~380 to ~40 chars.
+# 在本服务器上实测：一个零内容的 404 返回 927 字符，而一次成功抓取的字节里有
+# 33% 是停在自己默认值上的字段（is_stale=false、page_type="unknown"、links={}、
+# retry_count=0 …）。一旦"缺席"表达了同样的意思，默认值就不再携带信息，所以线
+# 格式把它丢掉。每次调用的信封税从约 380 字符降到约 40。
 #
-# Only the WIRE copy is compacted. ResponseModel keeps every field, so the cache
-# envelope, crawl's per-page aggregation and the actions tier still read a
-# complete object - a bug here cannot corrupt what gets stored.
+# 只压实**线上那一份**。ResponseModel 保留每一个字段，所以缓存信封、crawl 的
+# 逐页聚合与 actions 那一档读到的仍是完整对象 —— 这里的 bug 不会污染存储。
 #
-# The policy is per model rather than by field name, because the same name means
-# different things in different rows: `source` is "live"/"archive.org" on a fetch
-# and an engine name on a search result; `page_type` defaults to "unknown" on one
-# and "" on a crawl page. And a 0.0 is not always a default - `relevance_score`
-# 0.0 is the reranker's way of saying "off-topic", so it is in no omit set, while
-# the `quality_score` None that means "nothing was ever scored" is.
+# 政策按模型而非按字段名，因为同一个名字在不同行里含义不同：`source` 在 fetch
+# 上是 "live"/"archive.org"，在搜索结果里是引擎名；`page_type` 在一个上默认
+# "unknown"，在爬取页上默认 ""。而 0.0 不总是默认值 —— `relevance_score` 的
+# 0.0 是重排器在说"跑题"，所以它不在任何省略集里；而表示"从未打过分"的
+# `quality_score` None 在。
 #
-# A field is omitted only when it equals its own declared default (or is an empty
-# container for default_factory fields). Anything else, including every False
-# that is a verdict rather than a default (content_ok), stays.
+# 只有当字段等于它自己声明的默认值（或对于 default_factory 字段是空容器）时才
+# 省略。别的值一律留下，包括每一个作为裁决而非默认值的 False（content_ok）。
 _WIRE_OMIT: dict = {
     "ResponseModel": frozenset({
         "original_url", "cached", "session_id", "session_cookie_names",
@@ -47,7 +43,7 @@ _WIRE_OMIT: dict = {
         "content_age_days", "is_stale", "source",
         "archived_at", "quality_score", "total_size_bytes",
         "total_extracted_chars", "media", "links", "table_of_contents",
-        # 0 = not a PDF (or no page extracted); only PDF responses pay for these.
+        # 0 = 不是 PDF（或没有抽到页）；只有 PDF 响应才为这两颗付钱。
         "pages_total", "pages_returned",
         "metadata", "fetcher_used", "content_type",
         # G33/G35: 默认 False/None（无人 attach、未要求登录判定）时省略；
@@ -112,8 +108,8 @@ _WIRE_OMIT: dict = {
         # R02-012 的三颗时钟读数：0 = 这一趟没有可报的越线/帽（跑在预算内、或没走抓取
         # 循环）。手册对这三颗的承诺都是"0/absent"，所以上线的每一颗都是收据。
         "deadline_ms_applied", "budget_overrun_ms", "attempt_cap_ms",
-        # plan_id / next_resume_token are present only when a plan exists or a
-        # resumed run stopped early - absence stays the default (P11).
+        # plan_id / next_resume_token 只在有计划、或一次续跑提前停下时出现 ——
+        # 缺席仍是默认值（P11）。
         "plan_id", "next_resume_token",
         # R02-131：爬行信封的把手与 ResponseModel 同一约定 —— 一次干净的爬行（或一张
         # 没有报错的地图）不付诊断的钱，None 就是缺席。
@@ -188,10 +184,9 @@ _WIRE_OMIT: dict = {
     }),
     "FeedItem": frozenset({"title", "published", "summary", "summary_truncated",
                            "untrusted_content"}),
-    # sys_state: every field of the census row is per-session detail that
-    # sits at its default most of the time (no browser, no cookies, nothing
-    # expiring). `session_id` is NOT omittable - a row without its id says
-    # nothing about anything.
+    # sys_state：普查行里几乎每个字段都是"大多数时候停在默认值"的按会话细节
+    # （没开浏览器、没有 cookie、没有东西在过期）。`session_id` **不**可省略 ——
+    # 一行没有自己的 id，就对任何事情都没有话可说。
     "SessionCensusRow": frozenset({
         "hosts", "cookies", "expires_in_s", "browser_open",
         "browser_type", "browser_created",
@@ -232,11 +227,9 @@ _WIRE_OMIT: dict = {
 }
 
 
-# A few tools project their own dicts instead of returning models (feed_read
-# hands back one dict per feed, assembled field by field), so the policy above
-# has no class to look up. Name the model behind each such container and the
-# same pruning applies. Resolved lazily: `feed` is imported on first use, where
-# the module's import-cost split already puts it.
+# 有几个工具自己拼 dict 而不是返回模型（feed_read 每条 feed 手拼一个 dict，逐字段
+# 组装），所以上面的政策没有类可查。给每个这样的容器点名它背后的模型，同一套修剪
+# 就能适用。惰性解析：`feed` 在首次使用时导入，模块的导入成本分工本来就把放在那里。
 _WIRE_PROJECTED_ROWS = {"feeds": "FeedResult"}
 _WIRE_MODEL_CACHE: dict = {}
 
@@ -252,7 +245,7 @@ def _wire_projected_model(field_name: str):
 
 
 def _wire_default(model: type, name: str):
-    """The declared default for one field, or a sentinel for default_factory."""
+    """一个字段声明的默认值；default_factory 字段则返回哨兵。"""
     from pydantic_core import PydanticUndefined
     field = model.model_fields[name]
     if field.default is not PydanticUndefined:
@@ -264,7 +257,7 @@ _WIRE_EMPTY_SENTINEL = object()
 
 
 def _wire_omittable(model: type, name: str, value) -> bool:
-    """True when this field's value says nothing its absence would not say."""
+    """字段值不携带"缺席"表达不了的信息时为 True。"""
     if name not in _WIRE_OMIT.get(model.__name__, frozenset()):
         return False
     default = _wire_default(model, name)
@@ -274,13 +267,11 @@ def _wire_omittable(model: type, name: str, value) -> bool:
 
 
 def _wire_scalar(name: str, value):
-    """Trim the two numbers that cost more than they say.
+    """修剪两个"花的比说的多"的数字。
 
-    duration_ms came back as 1583.716630935669 (32 chars) and fetched_at as an
-    ISO string with microseconds plus offset (48 chars). Sub-millisecond timing
-    and sub-second freshness change nothing an agent acts on, so the first rounds
-    and the second loses its fraction - 80 chars per call for two fields that
-    never warranted them.
+    duration_ms 曾返回 1583.716630935669（32 字符），fetched_at 曾是带微秒和时区
+    偏移的 ISO 串（48 字符）。亚毫秒的计时与亚秒的新鲜度不改变 agent 的任何行动，
+    所以前者取整、后者丢掉小数 —— 两个从不值得这些字符的字段，每次调用省 80 字符。
     """
     if name == "duration_ms" and isinstance(value, float):
         return round(value)
@@ -290,7 +281,7 @@ def _wire_scalar(name: str, value):
 
 
 def _wire_child_model(annotation):
-    """The model class behind list[CrawlPage] / CrawlPage, if there is one."""
+    """list[CrawlPage] / CrawlPage 背后的模型类（如果有）。"""
     from typing import get_args
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
         return annotation
@@ -301,11 +292,10 @@ def _wire_child_model(annotation):
 
 
 def _wire_prune(data: dict, model: type) -> dict:
-    """Prune an ALREADY-serialized row against its own model's policy.
+    """按行自己模型的政策修剪一条**已经序列化**的行。
 
-    Working on the serialized dict rather than rebuilding from the live object is
-    the point: CrawlResponseModel's own serializer drops the per-row constants a
-    sitemap map has in common, and rebuilding would hand them all back.
+    在序列化后的 dict 上工作而不是从活对象重建，正是重点：CrawlResponseModel 自己的
+    序列化器会丢掉一份 sitemap 地图各页共有的常量，重建会把它们全部还回来。
     """
     out: dict = {}
     for name, value in data.items():
@@ -324,7 +314,7 @@ def _wire_prune(data: dict, model: type) -> dict:
 
 
 def _wire_dump(obj) -> dict:
-    """Serialize one response the way the wire wants it: no silence-filled fields."""
+    """按线格式想要的样子序列化一个响应：不付"沉默填充"字段的钱。"""
     if isinstance(obj, BaseModel):
         model = type(obj)
         fields = model.model_fields
@@ -362,12 +352,11 @@ def _wire_dump(obj) -> dict:
 
 
 def _wire_result(obj, images: Optional[list] = None) -> tuple:
-    """The (content_list, structured_dict) pair every tool call returns.
+    """每次工具调用返回的 (content_list, structured_dict) 二元组。
 
-    ``images`` (element captures from web_read {\"screenshot\"} actions) are
-    prepended as ImageContent blocks: the text channel keeps the full JSON
-    payload, and the pixels ride alongside it so a multimodal client sees them
-    without any base64 flowing through the JSON itself.
+    ``images``（web_read {\"screenshot\"} 动作的元素截图）以 ImageContent 块
+    前置：文本通道保留完整 JSON 载荷，像素并排同行，于是多模态客户端能看到它们，
+    而 base64 不必流经 JSON 本身。
     """
     from mcp.types import ImageContent, TextContent
     text, payload = _wire_json(obj)
@@ -383,11 +372,10 @@ def _wire_result(obj, images: Optional[list] = None) -> tuple:
 
 
 def _call_result(result):
-    """One _dispatch return as a CallToolResult, text-only.
+    """一次 _dispatch 返回值转成 CallToolResult，纯文本。
 
-    A tuple means the tool has a structured payload: the text channel carries it
-    in full and that IS the whole wire surface (17.0 removed the opt-in
-    structuredContent double envelope; nobody reads the same JSON twice).
+    元组表示工具有结构化载荷：文本通道完整携带它，那就是整个线上表面（17.0 删掉了
+    可选的 structuredContent 双信封；没人想读两遍同一份 JSON）。
     """
     from mcp.types import CallToolResult
     if isinstance(result, tuple):
@@ -397,7 +385,7 @@ def _call_result(result):
 
 
 def _wire_json(obj) -> tuple:
-    """(text, structured) for one response - the only place the compact form exists.
+    """一个响应的 (text, structured) —— 压实形式唯一存在的地方。
 
     17.0: 无条件压实。``DHOLE_WIRE_FULL`` 逃生口已注销 —— "字段缺席 = 默认值"
     这份契约写进了工具文档与 instructions，一个读不懂缺席语义的调用方也读不懂

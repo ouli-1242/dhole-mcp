@@ -1,11 +1,10 @@
-"""Network error classification for agent-actionable diagnostics.
+"""网络错误分类，给 agent 可行动的诊断。
 
-Maps raw network error strings (from primp, patchright/playwright, OS socket
-layer) into categories with actionable hints so AI agents know whether to
-retry, switch sources, or give up — instead of seeing opaque "fetch failed".
+把原始网络错误串（来自 primp、patchright/playwright、操作系统 socket 层）映射成
+带可行动提示的类别，让 AI agent 知道该重试、换源还是放弃 —— 而不是只看到一句
+看不懂的 "fetch failed"。
 
-Pure utility: no dependencies beyond the standard library. Safe to import
-anywhere (event loop, worker thread, module level).
+纯工具模块：除标准库外零依赖，任何地方都能安全导入（事件循环、工作线程、模块级）。
 """
 
 from __future__ import annotations
@@ -13,26 +12,25 @@ from __future__ import annotations
 import re
 from typing import Tuple
 
-# ─── Pattern table ────────────────────────────────────────────────────────────
-# Order matters: first match wins. Patterns are checked case-insensitively
-# against the raw error string.
+# ─── 模式表 ──────────────────────────────────────────────────────────────────
+# 顺序有意义：先匹配者胜。模式对原始错误串做大小写不敏感匹配。
 
 _PATTERNS: list[tuple[re.Pattern, str]] = [
-    # Proxy errors (check FIRST: "proxy connection refused" should be proxy, not conn_refused)
+    # 代理错误（**最先**检查："proxy connection refused" 该算代理，不是连接被拒）
     (re.compile(
         r"ERR_PROXY_CONNECTION_FAILED|proxy.*(?:refused|failed|error)|"
         r"tunnel connection failed|proxy_connect",
         re.IGNORECASE,
     ), "proxy_error"),
 
-    # Connection refused (target actively rejecting TCP connections)
+    # 连接被拒（目标主动拒绝 TCP 连接）
     (re.compile(
         r"ERR_CONNECTION_REFUSED|ConnectionRefusedError|os error 10061|"
         r"ECONNREFUSED|connection refused",
         re.IGNORECASE,
     ), "connection_refused"),
 
-    # Connection reset (remote host forcibly closed an established connection)
+    # 连接被重置（远端强制关闭已建立的连接）
     (re.compile(
         r"os error 10054|ERR_CONNECTION_RESET|ConnectionResetError|"
         r"ECONNRESET|远程主机强迫关闭|connection (?:was )?(?:forcibly )?(?:closed|reset)|"
@@ -40,14 +38,13 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
         re.IGNORECASE,
     ), "connection_reset"),
 
-    # Fake-IP tunnel ranges (Clash / sing-box TUN hand out 198.18.0.0/15). A
-    # failure naming such an address is the tunnel not reaching the real
-    # network: "site down or outbound blocked" is the truthful framing, the
-    # same verdict as a refused connection. Must precede `timeout`: the phrase
-    # "timed out" shows up in these errors too, and the tunnel is the cause.
+    # Fake-IP 隧道网段（Clash / sing-box TUN 会发 198.18.0.0/15）。错误里点名
+    # 这类地址，说明是隧道没到达真实网络："站点挂了或出站被挡"是诚实的定性，
+    # 与连接被拒同一裁决。必须排在 `timeout` 前面：这些错误里也常出现
+    # "timed out"，而隧道才是原因。
     (re.compile(r"\b198\.1[89]\.\d+\.\d+\b"), "connection_refused"),
 
-    # DNS resolution failure
+    # DNS 解析失败
     (re.compile(
         r"ERR_NAME_NOT_RESOLVED|NameResolutionError|getaddrinfo failed|"
         r"nodename nor servname|Name or service not known|"
@@ -55,12 +52,10 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
         re.IGNORECASE,
     ), "dns_failure"),
 
-    # Browser process could not be started. Must come BEFORE `timeout`: the real
-    # driver sentence is "Timed out while launching browser", and reading that as
-    # a site timeout sends the caller to raise `timeout=` and retry against the
-    # target — while the actual fact is that the OS refused to create the process.
-    # Narrow on purpose (`(0x5)` with its parentheses): a bare `0x5` would match
-    # the hex addresses that appear in other crash text.
+    # 浏览器进程没能启动。必须排在 `timeout` 之前：驱动的原话是
+    # "Timed out while launching browser"，把它读成站点超时会把调用方送去调大
+    # `timeout=` 再打目标 —— 而事实是操作系统拒绝创建进程。
+    # 刻意收窄（带括号的 `(0x5)`）：裸 `0x5` 会命中其他崩溃文本里的十六进制地址。
     (re.compile(
         r"browserType\.[a-zA-Z]*launch|failed to launch|could not launch|"
         r"cannot access executable|executable doesn't exist|"
@@ -71,7 +66,7 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
         re.IGNORECASE,
     ), "browser_launch"),
 
-    # Timeout
+    # 超时
     (re.compile(
         r"TimeoutError|ERR_TIMED_OUT|ERR_CONNECTION_TIMED_OUT|"
         r"ERR_NAVIGATION_TIMEOUT|timed? ?out|Navigation timeout|"
@@ -79,7 +74,7 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
         re.IGNORECASE,
     ), "timeout"),
 
-    # TLS / SSL errors
+    # TLS / SSL 错误
     (re.compile(
         r"CERTIFICATE|SSL[:\s]|TLS[:\s]|ssl_error|"
         r"handshake fail|certificate verify failed|"
@@ -88,7 +83,7 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
     ), "tls_error"),
 ]
 
-# ─── Actionable hints per category ───────────────────────────────────────────
+# ─── 各类别的可行动提示 ──────────────────────────────────────────────────────
 
 #: 回环 / 私网目标一次 HTTP 应答都没拿到时的那句出路。通用那几句（"站点可能挂了、
 #: 换个源"）对调用者自己机器上的一个端口不是答案 —— 换源换不掉一个没起的服务。
@@ -184,47 +179,43 @@ _RETRYABLE_BY_CATEGORY: dict[str, bool] = {
 
 
 def is_retryable(category: str) -> bool:
-    """retryable for a network category, from the same table that writes its prose."""
+    """某个网络类别能否重试 —— 与写它那段人话的是同一张表。"""
     return _RETRYABLE_BY_CATEGORY.get(category, False)
 
 
 def classify_network_error(error_str: str) -> Tuple[str, str]:
-    """Classify a raw network error string into (category, actionable_hint).
+    """把原始网络错误串分类成 (category, actionable_hint)。
 
-    Categories:
-    - connection_refused: target refused TCP connection (site down / env blocked)
-    - connection_reset: remote host forcibly closed connection (anti-bot / firewall)
-    - dns_failure: domain name resolution failed (a tier's own error text)
-    - dns_unresolvable: the TCP probe's two 150ms-apart attempts both failed
-    - private_target_blocked: dhole declined to dial a private target (no request
-      was sent — this is a policy verdict, not a network one)
-    - browser_launch: the browser process itself could not be started (not a site
-      problem — checked before `timeout` so "Timed out while launching browser"
-      does not get read as a slow target)
-    - timeout: request timed out (site slow / network restricted)
-    - tls_error: TLS/SSL handshake failure
-    - proxy_error: proxy connection failure
-    - unknown: cannot classify
+    类别：
+    - connection_refused：目标拒绝 TCP 连接（站点挂了 / 环境被挡）
+    - connection_reset：远端强制关闭连接（反爬 / 防火墙）
+    - dns_failure：域名解析失败（某一档自己报的错误文本）
+    - dns_unresolvable：TCP 预检两次相隔 150ms 的探测都失败
+    - private_target_blocked：dhole 拒绝拨号到私网目标（一个请求都没发出 ——
+      这是策略裁决，不是网络故障）
+    - browser_launch：浏览器进程本身起不来（不是站点问题 —— 排在 `timeout`
+      之前检查，免得 "Timed out while launching browser" 被读成慢站点）
+    - timeout：请求超时（站点慢 / 网络受限）
+    - tls_error：TLS/SSL 握手失败
+    - proxy_error：代理连接失败
+    - unknown：无法分类
 
-    The hint is an agent-friendly sentence explaining what happened and what
-    to do next (retry / switch / give up).
+    hint 是给 agent 看的句子，说明发生了什么、下一步做什么（重试 / 换源 / 放弃）。
 
-    Never raises. Returns ("unknown", generic_hint) for empty or unparseable input.
+    从不抛异常。空输入或无法解析的输入返回 ("unknown", 通用提示)。
     """
     if not error_str:
         return "unknown", _HINTS["unknown"]
 
-    # Match dhole's OWN category labels before pattern-guessing at someone else's.
-    # The regexes below are written for the spellings an OS or browser emits
-    # ("getaddrinfo failed", "ERR_NAME_NOT_RESOLVED"), and the cheap TCP probe
-    # labels a failure with the snake_case token instead - `network_error:
-    # dns_failure (TCP preflight)`. Measured: that string matched none of them, so
-    # a domain that cannot exist got the "unknown" hint, "try a different source or
-    # retry with different parameters", while the correct hint two lines below it
-    # says "do NOT retry". Retrying a dead hostname is the one action that cannot
-    # work, and the response recommended it.
+    # 先匹配 dhole **自己**的类别标签，再拿正则去猜别人家的拼法。
+    # 下面的正则写的是操作系统或浏览器吐出的写法（"getaddrinfo failed"、
+    # "ERR_NAME_NOT_RESOLVED"），而廉价的 TCP 预检用 snake_case 记号打标签 ——
+    # `network_error: dns_failure (TCP preflight)`。实测：这串一个正则都不命中，
+    # 于是不存在的域名拿到了 "unknown" 提示"try a different source or retry with
+    # different parameters"，而它下面两行正确的提示写着 "do NOT retry"。重发一个
+    # 死掉的主机名是唯一不可能奏效的动作，响应却在推荐它。
     #
-    # "timeout" is deliberately absent: `timed? ?out` already catches it.
+    # "timeout" 刻意不在名单里：`timed? ?out` 已经能接住它。
     _lc = error_str.lower()
     for _token in ("connection_refused", "connection_reset", "tls_error",
                    "proxy_error", "dns_failure", "dns_unresolvable",
@@ -240,5 +231,5 @@ def classify_network_error(error_str: str) -> Tuple[str, str]:
 
 
 def get_hint(category: str) -> str:
-    """Get the actionable hint for a category (fallback to 'unknown')."""
+    """取某个类别的可行动提示（回退到 'unknown'）。"""
     return _HINTS.get(category, _HINTS["unknown"])

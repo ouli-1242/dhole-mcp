@@ -1,55 +1,48 @@
-"""web_crawl — flagship same-domain deep crawl for Dhole, optimized for agents.
+"""web_crawl —— Dhole 面向 agent 优化的旗舰级同域深度爬取。
 
-Walks a website from a start URL and returns each page as agent-usable markdown
-with the same honest signals web_read produces (content_ok / summary / error /
-fetched_at). Designed to beat free OSS crawlers (Crawl4AI, Firecrawl free tier,
-Jina) on agent-usability: honest per-page quality signals, content-adaptive
-extraction, and next_action guidance instead of a dumb page dump.
+从起始 URL 走遍一个站点，把每一页以 agent 可用的 markdown 交回，并带上 web_read
+同款的诚实信号（content_ok / summary / error / fetched_at）。目标是在 agent 可用性上
+胜过免费 OSS 爬虫（Crawl4AI、Firecrawl 免费档、Jina）：逐页诚实的质量信号、按内容
+自适应的抽取、以及 next_action 指引，而不是把页面原样倒回去。
 
-Flagship design (v6):
-  * **Best-first priority queue** (not just BFS). Discovered URLs are scored and
-    the highest-value page is crawled next. The scorer blends: focus-query
-    relevance (anchor text + URL path tokens), content-likelihood (boost
-    docs/guide/api/reference/article/blog, penalize login/submit/register/cart/
-    admin/account), and a shallow-depth preference. With no `focus` this still
-    beats raw BFS by skipping junk URLs (login/submit) before content pages.
-  * **Content-adaptive per-page extraction.** A page is classified from its HTML
-    and extracted the right way:
-      - article/docs  -> trafilatura main content (markdown).
-      - list/index    -> a structured `* [title](url)` link list (HN, aggregators,
-                         directory pages where trafilatura's main-content filter
-                         returns nothing because the page IS a list of links).
-      - js-shell      -> the fetch already auto-escalated HTTP->stealthy render;
-                         if even the rendered HTML is empty, content_ok=false
-                         with an actionable error (use a web_act screenshot action / vision).
-      - fallback      -> cleaned visible text.
-    This fixes the "0 content_ok on Hacker News" and "JS SPA timeout" class of
-    bugs at the root: list pages now return their link list as content, and JS
-    shells are detected and reported honestly instead of silently empty.
-  * **URL normalization + dedup.** Trailing slashes, default ports, lowercase
-    host, and tracking query params (utm_*, fbclid, gclid, ref, _) are stripped
-    before dedup, so `/docs` and `/docs/` are no longer crawled twice.
-  * **Map first, then read.** `discover_only=true` returns the URL map (prefetch)
-    and `sitemap=true` returns the whole site's map in one fetch; the URLs picked
-    out of either are read with `web_read(urls=[...])`. Map mode extracts no
-    page content, but it is not free: expanding the map means fetching one page
-    per step, so it costs up to `max_pages` requests (10 by default) and
-    `pages_crawled` reports exactly how many were made. For a one-request map use
-    `max_pages=1` (the start URL's own links) or `sitemap=true` (the whole site,
-    if it has one).
-    The second phase used to live here: `crawl_urls=[...]` fetched a chosen subset
-    without re-discovering. It left in 17.0 (§3 decision 31) because a caller's
-    list had to pass normalization, same-domain checking, dedup and a cap before
-    it became a crawl, and each of those four cuts needed its own counter. Those
-    URLs never needed discovery, so `web_read(urls=[...])` was already home.
-  * **same_domain_only=true** default. External links are dropped (not crawled).
-  * **Honest status.** Network failures report status -1 (documented) so
-    downstream logic can distinguish them from a real HTTP 0 / no response.
-  * **Freshness.** Each page carries `fetched_at`; `cache_ttl=0` forces fresh.
-  * **Overall deadline.** One slow page can't hang the crawl; when the deadline
-    is hit, partial results are returned with `truncated_by_time=true`.
-  * One fetch per page (extraction_type='html'), reusing web_read's anti-bot
-    escalation + fetch cache. Links + markdown are derived from the same body.
+旗舰设计（v6）：
+  * **最佳优先优先队列**（不只是 BFS）。发现的 URL 会被打分，分值最高的一页先爬。
+    打分器混合：focus 查询相关度（锚文本 + URL 路径词段）、内容可能性（抬高
+    docs/guide/api/reference/article/blog，压低 login/submit/register/cart/
+    admin/account）、以及偏好浅层的深度项。不给 `focus` 时它仍胜过裸 BFS：在
+    内容页之前先跳过垃圾 URL（login/submit）。
+  * **按页面内容自适应抽取。** 一页按自己的 HTML 分类，再用对的方式抽取：
+      - article/docs  -> trafilatura 主内容（markdown）。
+      - list/index    -> 结构化的 `* [title](url)` 链接清单（HN、聚合站、
+                         目录页 —— trafilatura 的主内容过滤器返回空，正因为
+                         这一页本身就是一堆链接）。
+      - js-shell      -> 抓取那一步已经自动从 HTTP 升级到 stealthy 渲染；
+                         若连渲染后的 HTML 也是空的，则 content_ok=false，
+                         并给出可执行的 error（用 web_act 的截图动作 / vision）。
+      - fallback      -> 清洗过的可见文本。
+    这从根上修掉了"Hacker News 上 0 content_ok"与"JS SPA 超时"这一类 bug：
+    列表页现在把自己的链接清单当正文交回，JS 壳会被识别并诚实上报，而不是静默为空。
+  * **URL 归一化 + 去重。** 尾斜杠、默认端口、小写 host、以及跟踪类查询参数
+    （utm_*, fbclid, gclid, ref, _）都在去重之前剥掉，于是 `/docs` 与 `/docs/`
+    不会再被爬两次。
+  * **先出地图，再读页面。** `discover_only=true` 返回 URL 地图（预取），
+    `sitemap=true` 一次抓取就交回整站地图；从两者挑出的 URL 用
+    `web_read(urls=[...])` 读。地图模式不抽正文，但不是免费的：展开地图意味着
+    每一步抓一页，所以最多花 `max_pages` 次请求（默认 10），而 `pages_crawled`
+    如实报出实际发了几次。要一次请求出地图，用 `max_pages=1`（只取起始 URL
+    自己的链接）或 `sitemap=true`（整站，前提是站点有 sitemap）。
+    第二阶段曾经住在这里：`crawl_urls=[...]` 抓取调用方挑出的一部分，不再重新
+    发现。它在 17.0 移走了（§3 第 31 条裁决），因为调用方那张清单要先过归一化、
+    同域检查、去重与上限四道，而每一道都需要自己的计数。那些 URL 从来不需要发现，
+    所以 `web_read(urls=[...])` 本来就是它们的家。
+  * **same_domain_only=true** 默认。外链被丢弃（不爬）。
+  * **诚实的状态码。** 网络失败报 status -1（已文档化），下游逻辑才能把它与真实的
+    HTTP 0 / 无响应区分开。
+  * **新鲜度。** 每页带 `fetched_at`；`cache_ttl=0` 强制取新。
+  * **整趟 deadline。** 一页慢不能挂住整次爬取；撞到 deadline 时交回部分结果，并置
+    `truncated_by_time=true`。
+  * 每页一次抓取（extraction_type='html'），复用 web_read 的反爬升级 + 抓取缓存。
+    链接与 markdown 由同一份正文派生。
 """
 
 from __future__ import annotations
@@ -71,9 +64,9 @@ from dhole_mcp import injection
 # CrawlResponseModel，不是 ResponseModel），所以这里读的是那颗纯函数而不是
 # ContextVar —— 同一句话，两个通道。
 from dhole_mcp.context import _cache_ttl_note, _clamp_note, report_progress
-# robots.txt compliance (v16.0). robots.py imports nothing from dhole at module
-# level, so this is cycle-free; the seed check + the discovered-URL peek both
-# need it, and keeping one import point is what makes the cache the shared one.
+# robots.txt 合规（v16.0）。robots.py 在模块层不 import dhole 的任何东西，所以这里
+# 没有循环依赖；种子检查与"发现到的 URL 预判"都要用它，而只保留一个 import 点，才是
+# 两边共用同一份缓存的原因。
 from dhole_mcp.robots import check as check_robots, get_robots_cache
 # 量的尺要只有**一把**。`visible_text_chars` / `is_extraction_collapsed` /
 # `distinct_content_links` 是 web_read 那侧已经拿真实页面标定过的三把尺（比值带、
@@ -110,23 +103,23 @@ def _neural_for_this_call() -> bool:
     return engine_wants_neural()
 
 
-# Match <a ... href="..."> and capture the href + the anchor's visible text.
+# 匹配 <a ... href="...">，同时捕获 href 与锚文本的可见文字。
 _LINK_RE = re.compile(
     r'<a\b[^>]*\bhref=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
     re.IGNORECASE | re.DOTALL,
 )
 _TAG_RE = re.compile(r"<[^>]+>")
 _SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
-# Skip these asset extensions when discovering links (they aren't pages).
+# 发现链接时跳过这些资源扩展名（它们不是页面）。
 _ASSET_RE = re.compile(
     r"\.(png|jpe?g|gif|webp|svg|css|js|ico|pdf|zip|mp[34]|woff2?|gz|tar|exe|dmg)(\?|$)",
     re.IGNORECASE,
 )
 _SKIP_SCHEMES = ("javascript:", "mailto:", "tel:", "data:", "#")
 
-# Floor for a sitemap URL map (see _sitemap_map). A map's value is breadth, so it
-# does not track max_pages the way content does; max_pages only widens it past
-# this floor once it exceeds SITEMAP_MAP_FLOOR // 10.
+# sitemap URL 地图的下限（见 _sitemap_map）。地图的价值是覆盖广度，所以它不像正文
+# 那样跟着 max_pages 缩；只有 max_pages 超过 SITEMAP_MAP_FLOOR // 10 之后，才会把这个
+# 下限顶上去。
 SITEMAP_MAP_FLOOR = 1000
 
 # 一份站点内容在地图里最多占几个位置（见 _order_map_entries）。取 3 而不是 1：
@@ -134,17 +127,15 @@ SITEMAP_MAP_FLOOR = 1000
 # 自己的内容折没；折到 3 只吃掉"第 4 种语言开始"的重复。
 MIRROR_VARIANTS_KEPT = 3
 
-# Tracking / analytics query params that don't change page content -> stripped
-# during normalization so two URLs differing only in these don't get crawled twice.
+# 不改变页面内容的跟踪 / 统计查询参数 -> 归一化时剥掉，这样只在它们上面不同的
+# 两个 URL 不会被爬两次。
 _TRACKING_PARAMS = {
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
     "fbclid", "gclid", "ref", "ref_src", "source", "_ga", "mc_cid", "mc_eid",
 }
 
-# The ceilings a crawl answers to. Named, not inline, because the tool description
-# has to state them and a description that drifts from the clamp is exactly the bug
-# this section's tests exist to catch: they read these constants and require the same
-# numbers on the wire.
+# 一次爬取要服从的几个上限。具名而不是内联，因为工具描述必须写出它们，而描述一旦
+# 与钳位漂开，正是本节测试存在的理由：测试读这些常量，并要求线路上出现同样的数字。
 MAX_PAGES_CEILING = 40
 PER_PAGE_CHARS_CEILING = 20_000
 # 17.0 §3 第 31 条曾经裁决："整轮没有字符预算，因为一整趟多少字符要先把每页长度估
@@ -157,8 +148,8 @@ MAX_TOTAL_CHARS_DEFAULT = 60_000
 MAX_TOTAL_CHARS_CEILING = 200_000
 MIN_TOTAL_CHARS = 1_000
 
-# Content-likelihood path tokens. Boost content pages, penalize app/admin noise
-# so the priority queue crawls docs before login/submit/cart.
+# 内容可能性的路径词段。抬高内容页、压低应用/后台噪声，让优先队列先爬 docs，再爬
+# login/submit/cart。
 _CONTENT_BOOST = ("doc", "docs", "guide", "tutorial", "api", "reference",
                   "article", "blog", "post", "learn", "manual", "help", "spec")
 _JUNK_PENALTY = ("login", "signin", "sign-in", "signup", "sign-up", "register",
@@ -167,8 +158,8 @@ _JUNK_PENALTY = ("login", "signin", "sign-in", "signup", "sign-up", "register",
 
 
 def _is_transient_error(error_str: str) -> bool:
-    """True if the error is transient (worth retrying). Timeout and connection
-    reset may succeed on retry; connection refused and DNS failure will not."""
+    """错误是暂时性的（值得重试）则返回 True。timeout 与 connection reset 重试后
+    可能成功；connection refused 与 DNS 失败不会。"""
     from dhole_mcp.errors import classify_network_error
     category, _ = classify_network_error(error_str)
     return category in ("timeout", "connection_reset", "unknown")
@@ -205,6 +196,13 @@ class CrawlPage(RefusalHandle):
 
 
 class CrawlResponseModel(RefusalHandle):
+    """The receipt for ``web_crawl`` / ``web_discover``.
+
+    The field descriptions are the contract for the agent. Map mode goes through
+    ``_map_row_dict`` rather than a full page report, so a field missing on a map row
+    does not imply it is missing on a page row.
+    """
+
     start_url: str = Field(description="The URL crawl started from (normalized).")
     pages: list[CrawlPage] = Field(description="Crawled pages (one CrawlPage each). In discover_only, content is empty and pages hold the discovered URL map.")
     pages_crawled: int = Field(default=0, description="Pages actually fetched.")
@@ -232,20 +230,17 @@ class CrawlResponseModel(RefusalHandle):
 
     @model_serializer(mode="wrap")
     def _map_rows_carry_only_what_differs(self, handler):
-        """In map mode a row is the URL, not a page report (see _map_row_dict).
+        """map 模式下一行就是那个 URL，不是一份页面报告（见 _map_row_dict）。
 
-        The row shape lives in `_map_row_dict` because the budget has to price
-        the same thing the wire emits: `max_total_chars` counts serialized rows,
-        and a second copy of that shape would drift the moment one side changed.
+        行的形状住在 `_map_row_dict`，因为预算必须给线路将要发射的同一件东西定价：
+        `max_total_chars` 数的是序列化后的行，而形状的第二份副本会在任何一侧改动的
+        那一刻漂开。
 
-        Why the length bound is NOT in `wire._wire_json`, since that is where a
-        reader may look first: `wire.py`'s contract is unconditional compaction
-        - it prunes fields at their documented default and never truncates, and
-        a response that quietly got shorter is the failure this whole batch is
-        about. A serializer cannot know that dropping half a URL map is the
-        right answer for this call; the crawl does, because it owns the cursor
-        that makes held-back rows reachable again. So the byte bound is enforced
-        where the rows are made, and `_wire_json` stays a compressor.
+        为什么长度上限**不**放在 `wire._wire_json`（读者可能最先去那里找）：`wire.py`
+        的契约是无条件压缩 —— 它把字段在文档化的默认值上剪掉，且从不截断；而一份悄悄
+        变短了的响应，正是这一整批要处理的失效。序列化器无从知道"丢掉半张 URL 地图"
+        对这次调用才是对的答案；crawl 知道，因为它持有那个能让被挡下的行重新可达的
+        游标。所以字节上限在造行的地方施加，而 `_wire_json` 仍然只做压缩。
         """
         data = handler(self)
         if not self.discover_only:
@@ -256,32 +251,26 @@ class CrawlResponseModel(RefusalHandle):
 
 
 def _map_row_dict(page: CrawlPage, *, sitemap_used: bool) -> dict:
-    """The one owner of what a map row costs the caller.
+    """地图里一行要花调用方多少字节的唯一作者。
 
-    A URL map is the one output whose size is set by the site rather than by
-    what the caller asked for, and the flow the tool description recommends
-    (map once with sitemap=true, then read the picks) hit it:
-    docs.vllm.ai serialized 1000 entries to 353KB of JSON for 70KB of URLs -
-    5.0x, because every row restated status/depth/content/content_chars/
-    is_truncated/next_offset/fetched_at/error as the same default and
-    page_type/fetcher_used/summary as the same constant. ~151k tokens in one
-    call is not a map an agent can read; it is a context-window accident that
-    punishes exactly the caller who followed the documented path.
+    URL 地图是唯一一种体积由站点、而不是由调用方的请求决定的输出，而工具描述推荐的
+    那条流程（先用 sitemap=true 出一次地图，再读挑出来的页面）正好撞上了它：
+    docs.vllm.ai 把 1,000 条序列化成 353KB JSON，而 URL 本身只有 70KB —— 5.0 倍，
+    因为每一行都把 status/depth/content/content_chars/is_truncated/next_offset/
+    fetched_at/error 重复成同一个默认值、把 page_type/fetcher_used/summary 重复成
+    同一个常量。一次调用 ~151k token 不是 agent 能读的地图，是上下文窗口的一次事故，
+    而受罚的恰恰是照文档走的调用方。
 
-    So in map mode a field is emitted only when it differs from its default,
-    page_type goes in every map (the top-level discover_only flag states it),
-    and in sitemap mode the other three per-row constants go too
-    (sitemap_used already states them). Content mode is untouched: those
-    rows differ from each other, which is the whole test.
+    所以在 map 模式下，字段与默认值不同才发射；page_type 每张地图都带（顶层
+    discover_only 旗子已经说明它），sitemap 模式下另外三个逐行常量也一起去掉
+    （sitemap_used 已经说明它们）。正文模式不动：那些行彼此不同，而这正是全部判据。
 
-    page_type is constant in map mode BY CONSTRUCTION: _classify sets it to
-    "discover_only" and every other assignment sits behind `if not
-    discover_only` (crawl.py:1042), while the sitemap path reports
-    "sitemap" and is covered by the sitemap_used branch below. The
-    top-level discover_only flag already states the same thing, so the
-    column repeats one value across a map whose length is set by the site
-    rather than by the caller - 28 chars a row is 28KB on a 1000-URL map,
-    and no row was ever distinguished by it.
+    map 模式下 page_type 是**构造上**恒定的：_classify 把它设成 "discover_only"，
+    其余每处赋值都在 `if not discover_only and html:` 分支里（`_classify_and_extract`
+    里的 `page_type = kind`），而 sitemap 路径报 "sitemap"，由下面的 sitemap_used
+    分支覆盖。顶层 discover_only 旗子已经说明同一件事，所以这一列在"长度由站点而非
+    调用方决定"的地图上重复同一个值 —— 一行 28 字符，1,000 行的地图就是 28KB，而从
+    来没有哪一行靠它被区分出来。
     """
     defaults = {name: f.default for name, f in CrawlPage.model_fields.items()}
     constant = ("content_ok", "fetcher_used", "page_type", "summary") \
@@ -291,45 +280,43 @@ def _map_row_dict(page: CrawlPage, *, sitemap_used: bool) -> dict:
 
 
 def _map_row_cost(page: CrawlPage, *, sitemap_used: bool) -> int:
-    """Chars this row adds to the wire, comma included.
+    """这一行加到线路上的字符数，连逗号一起算。
 
-    Measured against the real serializer, not guessed: a 1,000-row map of
-    76-char URLs is 116,173 wire chars (1.53x the URLs alone, ~32k tokens), and
-    the budget that was supposed to bound it counted `content_md`, which is
-    empty in map mode - so the default 60,000-char budget was overdrawn 1.9x at
-    500 rows and 9.7x at 1,000 without a word said anywhere.
+    对着真正的序列化器量过，不是估的：1,000 行、URL 76 字符的地图是 116,173 个线路
+    字符（URL 本身的 1.53 倍，约 32k token），而本该约束它的预算数的是 `content_md`
+    —— 那在 map 模式下恒为空 —— 于是默认 60,000 字符的预算在 500 行时被透支 1.9 倍、
+    1,000 行时 9.7 倍，却没有任何地方提过一句。
     """
     return len(json.dumps(_map_row_dict(page, sitemap_used=sitemap_used),
                           ensure_ascii=False, separators=(",", ":"))) + 1
 
 
 def _same_root(start_url: str) -> str:
-    """Normalized root (scheme://netloc) for same-domain filtering."""
+    """同域过滤用的归一化根（scheme://netloc）。"""
     p = urlparse(start_url)
     return f"{p.scheme or 'https'}://{p.netloc}"
 
 
 def normalize_url(u: str) -> str:
-    """Canonicalize a URL for dedup: lowercase host, drop default ports, strip
-    tracking query params, drop the fragment, and collapse a trailing slash on
-    non-root paths so `/docs` and `/docs/` compare equal. Preserves real query
-    params (e.g. pagination `?page=2`)."""
+    """为去重把 URL 规范成同一个形状：小写 host、去掉默认端口、剥掉跟踪查询参数、
+    丢掉 fragment，并把非根路径的尾斜杠折掉，使 `/docs` 与 `/docs/` 比较相等。
+    真正的查询参数保留（例如分页 `?page=2`）。"""
     try:
         p = urlparse(u)
     except Exception:
         return u
     scheme = (p.scheme or "https").lower()
     host = (p.netloc or "").lower()
-    # Strip default ports.
+    # 去掉默认端口。
     if host.endswith(":80") and scheme == "http":
         host = host[:-3]
     elif host.endswith(":443") and scheme == "https":
         host = host[:-4]
     path = p.path or "/"
-    # Collapse trailing slash on non-root paths ("/docs/" -> "/docs").
+    # 非根路径的尾斜杠折掉（"/docs/" -> "/docs"）。
     if len(path) > 1 and path.endswith("/"):
         path = path.rstrip("/")
-    # Drop tracking query params; keep the rest (order preserved).
+    # 丢掉跟踪查询参数；其余保留（顺序不变）。
     if p.query:
         kept = [kv for kv in p.query.split("&")
                 if kv and kv.split("=", 1)[0].lower() not in _TRACKING_PARAMS]
@@ -340,12 +327,12 @@ def normalize_url(u: str) -> str:
 
 
 def _link_list_markdown(html: str, base_url: str, start_url: str, max_items: int = 200) -> str:
-    """Render a list/index page as a structured markdown link list.
+    """把列表/索引页渲染成结构化的 markdown 链接清单。
 
-    Used when trafilatura's main-content filter returns nothing because the page
-    IS a directory of links (Hacker News, aggregators, section index pages).
-    Returns the same-domain links as `* [anchor text](url)` so the agent gets
-    the page's actual content (the list of items) instead of an empty page.
+    用在 trafilatura 的主内容过滤器返回空的时候，因为这一页**本身就是**一份链接
+    目录（Hacker News、聚合站、栏目索引页）。把同域链接交回成
+    `* [anchor text](url)`，agent 拿到的是这一页真正的内容（那批条目），而不是
+    一个空页面。
     """
     pairs = extract_same_domain_links(html, base_url, start_url)
     if not pairs:
@@ -360,8 +347,8 @@ def _link_list_markdown(html: str, base_url: str, start_url: str, max_items: int
 
 
 def _visible_text(html: str) -> str:
-    """Cheap visible-text extraction: strip script/style blocks + tags, collapse
-    whitespace. Used as a last-resort fallback and for page-type signals."""
+    """廉价的可见文本抽取：剥掉 script/style 块与标签，折叠空白。用作最后兜底的
+    fallback，也用于页面类型信号。"""
     if not html:
         return ""
     no_ss = _SCRIPT_STYLE_RE.sub(" ", html)
@@ -370,8 +357,8 @@ def _visible_text(html: str) -> str:
 
 
 def _page_signals(html: str) -> tuple[int, int, int, bool, int]:
-    """Cheap signals for page classification: (visible_text_len, script_count,
-    link_count, has_framework_root, link_text_len)."""
+    """页面分类用的廉价信号：(visible_text_len, script_count,
+    link_count, has_framework_root, link_text_len)。"""
     if not html:
         return (0, 0, 0, False, 0)
     text_len = len(_visible_text(html))
@@ -434,9 +421,9 @@ def _measure_row(stats: dict, html: str, md: str, kind: str, url: str,
     stats["visible_chars"] = visible
     stats["extracted_chars"] = len(md)
     if kind == "article" and is_extraction_collapsed(len(md), visible):
-        # Same second ruler as web_read (R04-016a): the whole-page count includes
-        # chrome, so a complete article under a heavy nav can look collapsed.
-        # Keep <aside>: it can be substantive text (the /longaside control).
+        # 与 web_read 共用同一把第二尺（R04-016a）：整页计数把 chrome 也算在内，所以
+        # 一篇完整的文章压在厚重导航之下也可能显得像塌陷。
+        # 保留 <aside>：它可能装着实质文本（/longaside 那发对照）。
         prose = visible_text_chars_without_chrome(html)
         if prose <= 0 or is_extraction_collapsed(len(md), prose):
             stats["extraction_collapsed"] = True
@@ -543,13 +530,12 @@ def _measure_note(stats: dict) -> str:
 def _classify_and_extract(html: str, url: str, start_url: str, focus: Optional[str],
                           max_chars: int, stats: Optional[dict] = None
                           ) -> tuple[str, str, bool, bool]:
-    """Content-adaptive extraction. Returns (markdown, page_type, content_ok, cut).
+    """按内容自适应的抽取。返回 (markdown, page_type, content_ok, cut)。
 
-    page_type is one of: article / list / js_shell / fallback. cut is True when
-    the page held more than max_chars and this function returned only the first
-    max_chars of it. `content_ok` comes from `_row_verdict` — js_shell that
-    didn't render, an empty page, an extraction the page's own markup says we
-    lost, or a "list" with no group of entries behind it.
+    page_type 是 article / list / js_shell / fallback 之一。页面内容超过 max_chars
+    且本函数只交回前 max_chars 个字符时，cut 为 True。`content_ok` 来自
+    `_row_verdict` —— 没渲染出来的 js_shell、空页、页面自己的标记说明我们丢掉了的
+    抽取结果，或者背后没有一组条目撑着的 "list"。
 
     `stats` 是这一行被那两把尺量过之后的**证据**出口（照 `focus_content(..., stats=)`
     的先例）：数字与发现都从那里交给调用方，判决本身在返回值里。
@@ -566,11 +552,10 @@ def _classify_and_extract(html: str, url: str, start_url: str, focus: Optional[s
 
     text_len, script_count, link_count, has_fw, link_text_len = _page_signals(html)
 
-    # 1) List / index page: dominated by links (most visible text is anchor
-    #    text). Takes priority over 'article' because trafilatura returns the
-    #    link texts as 'content' for HN/aggregator pages, but the page IS a list.
-    #    Render the same-domain links as a structured `* [title](url)` list so
-    #    the agent gets the page's actual content (the items).
+    # 1) 列表 / 索引页：以链接为主（可见文字大半是锚文本）。优先于 'article'，因为
+    #    trafilatura 对 HN/聚合站会把链接文字当 'content' 交回来，可这一页**就是**
+    #    一份列表。把同域链接渲染成结构化的 `* [title](url)` 清单，agent 才拿到这一页
+    #    真正的内容（那批条目）。
     link_density = (link_text_len / text_len) if text_len else (1.0 if link_count else 0.0)
 
     # 与 web_read 同一刀（2026-10-23）：字在 DOM 里而 markdown 只拿回一小撮时，用**同一份
@@ -604,7 +589,7 @@ def _classify_and_extract(html: str, url: str, start_url: str, focus: Optional[s
             kind = "list"
         else:
             kind = "fallback"
-    # 2) Article / docs: trafilatura found real main content (prose, not links).
+    # 2) 文章 / 文档：trafilatura 找到了真正的主内容（正文，不是链接）。
     elif md and len(md) >= 200:
         if focus:
             try:
@@ -614,7 +599,7 @@ def _classify_and_extract(html: str, url: str, start_url: str, focus: Optional[s
             except Exception:
                 pass
         kind = "article"
-    # 3) List page with fewer/looser links but trafilatura still empty.
+    # 3) 列表页：链接更少/更松，但 trafilatura 仍然给空。
     elif link_count >= 10 and (len(md) < 200):
         list_md = _link_list_markdown(html, url, start_url)
         if list_md:
@@ -622,13 +607,12 @@ def _classify_and_extract(html: str, url: str, start_url: str, focus: Optional[s
             kind = "list"
         else:
             kind = "fallback"
-    # 4) JS shell: little visible text + heavy scripts + framework root, and
-    #    trafilatura got nothing. The fetch already tried stealthy render; if
-    #    we still see a shell, the page didn't render -> honest failure.
+    # 4) JS 壳：可见文字少 + 脚本多 + 框架根节点，而 trafilatura 什么也没拿到。
+    #    抓取那一步已经试过 stealthy 渲染；这里仍是壳，说明页面没渲染出来 -> 诚实失败。
     elif text_len < 400 and (script_count >= 5 or has_fw) and not md:
         kind = "js_shell"
         md = ""
-    # 5) Fallback: cleaned visible text (better than nothing).
+    # 5) Fallback：清洗后的可见文本（有胜于无）。
     else:
         md = md or _visible_text(html)
         kind = "fallback"
@@ -639,11 +623,10 @@ def _classify_and_extract(html: str, url: str, start_url: str, focus: Optional[s
         stats.update(measured)
     content_ok = _row_verdict(kind, md, measured)
 
-    # Truncate to the per-page budget. `cut` is the answer the caller cannot
-    # recover afterwards: once md has been sliced to max_chars, `len(md) >
-    # max_chars` is false by construction, so testing the returned string can
-    # never detect the truncation it just performed. That is why every crawl
-    # page reported is_truncated=false while its own summary said "truncated".
+    # 截到每页预算。`cut` 是调用方事后无法复原的那个答案：md 一旦被切到
+    # max_chars，`len(md) > max_chars` 按构造就是假的，所以拿交回的字符串去测
+    # 永远检测不出它刚刚做过的那次截断。这就是为什么每个爬取页都报
+    # is_truncated=false，而它自己的 summary 却写着 "truncated"。
     cut = False
     if md and len(md) > max_chars:
         md = md[:max_chars]
@@ -651,42 +634,37 @@ def _classify_and_extract(html: str, url: str, start_url: str, focus: Optional[s
     return md, kind, content_ok, cut
 
 
-# ─── Path scoping (path_include / path_exclude) ───────────────────────────────
+# ─── 路径作用域（path_include / path_exclude） ─────────────────────────────────
 #
-# Measured before this was rewritten: a raw `path.startswith(p)` against the
-# caller's string. Four failure modes, all of them silent:
+# 重写之前量过：直接拿调用方的字符串做 `path.startswith(p)`。四种失效方式，全是静默的：
 #
-#   path_include=["docs"]     -> 0 links kept. URL paths start with "/", so the
-#                                most natural spelling scoped the entire crawl
-#                                away and the call returned an empty result.
-#   path_include=["/docs/*"]  -> 0 links kept. A glob is not a startswith string.
-#   path_include=["/docs"]    -> kept "/docs-old/legacy" and "/docsomething".
-#                                A shared prefix is not a subtree.
-#   path_exclude=["docs"]     -> excluded nothing, so the caller believed it had
-#                                scoped a crawl that it had not.
+#   path_include=["docs"]     -> 0 条链接被保留。URL 路径以 "/" 开头，所以最自然的
+#                                写法把整次爬取都挡在作用域之外，调用拿回空结果。
+#   path_include=["/docs/*"]  -> 0 条链接被保留。glob 不是 startswith 字符串。
+#   path_include=["/docs"]    -> 保住了 "/docs-old/legacy" 与 "/docsomething"。
+#                                共享前缀不是子树。
+#   path_exclude=["docs"]     -> 什么也没排除，于是调用方以为自己给一次爬取划了范围，
+#                                其实没有。
 #
-# The contract is now: a pattern names a path SUBTREE. It matches the section
-# itself and everything beneath it at a segment boundary, never a sibling whose
-# name merely starts with the same characters.
+# 现在的契约是：一个模式命名一棵路径**子树**。它匹配这一节本身以及段边界之下的一切，
+# 绝不匹配只是名字开头相同的兄弟路径。
 #
-#   "docs"  "/docs"  "/docs/"  "/docs/*"   -> the /docs subtree
-#   "/"     "*"      "/*"                   -> everything
-#   "/api/*/v1"                             -> rejected, see below
+#   "docs"  "/docs"  "/docs/"  "/docs/*"   -> /docs 子树
+#   "/"     "*"      "/*"                   -> 一切
+#   "/api/*/v1"                             -> 拒绝，见下
 #
-# A trailing "/*" is accepted because it is what a caller writes when they mean
-# "everything under here"; it is stripped rather than honoured as a glob, since
-# the documented contract is a prefix scope and not a pattern language. Anything
-# still holding a wildcard after that is REJECTED instead of quietly matching
-# nothing: a crawl that returns zero pages for a reason the caller cannot see is
-# the exact failure this rewrite exists to remove.
+# 结尾的 "/*" 被接受，因为调用方想说"这底下的一切"时就是这么写的；它被剥掉而不是
+# 当成 glob 兑现，因为成文的契约是前缀作用域，不是一门模式语言。之后仍然带通配符的
+# 一律**拒绝**，而不是悄悄匹配不到：一次爬取因为调用方看不见的原因交回 0 页，正是这次
+# 重写要消灭的那种失效。
 
 _WILDCARD_CHARS = ("*", "?", "[")
 
 
 def normalize_path_pattern(pattern) -> str:
-    """Normalize one include/exclude pattern to a path prefix.
+    """把一个 include/exclude 模式归一化成路径前缀。
 
-    Raises ValueError on a non-string, an empty pattern, or an unsupported glob.
+    非字符串、空模式、不支持的 glob 都抛 ValueError。
     """
     if not isinstance(pattern, str):
         raise ValueError(
@@ -699,12 +677,12 @@ def normalize_path_pattern(pattern) -> str:
     if p in ("*", "/*"):
         return "/"
     if p.endswith("/*"):
-        p = p[:-2]  # "/docs/*" is the subtree, spelled the way a caller writes it
+        p = p[:-2]  # "/docs/*" 就是这棵子树，调用方就是这么写的
     p = p.rstrip("/")
     if not p:
         return "/"
     if not p.startswith("/"):
-        p = "/" + p  # "docs" and "/docs" are the same subtree
+        p = "/" + p  # "docs" 与 "/docs" 是同一棵子树
     bad = [c for c in _WILDCARD_CHARS if c in p]
     if bad:
         raise ValueError(
@@ -716,11 +694,10 @@ def normalize_path_pattern(pattern) -> str:
 
 
 def normalize_path_patterns(patterns) -> list[str]:
-    """Normalize a caller's include/exclude list. Raises ValueError on a bad entry.
+    """归一化调用方的 include/exclude 列表。某一项有问题就抛 ValueError。
 
-    A bare string is treated as the single pattern the caller meant - iterating
-    it character by character made every path match, which is how
-    ``path_exclude="/what/"`` used to filter the whole crawl away.
+    裸字符串按调用方本意当成**单个**模式 —— 逐字符迭代它会让每条路径都匹配，这正是
+    从前 ``path_exclude="/what/"`` 把整次爬取过滤掉的方式。
     """
     if not patterns:
         return []
@@ -730,7 +707,7 @@ def normalize_path_patterns(patterns) -> list[str]:
 
 
 def _normalize_url_path(path: str) -> str:
-    """URL path -> the comparable form: leading slash, no trailing slash."""
+    """URL 路径 -> 可比较的形式：带前导斜杠、无尾斜杠。"""
     p = (path or "/").strip()
     if not p.startswith("/"):
         p = "/" + p
@@ -739,10 +716,9 @@ def _normalize_url_path(path: str) -> str:
 
 
 def _path_in_scope(path: str, pattern: str) -> bool:
-    """True when `path` IS the pattern's subtree, at a segment boundary.
+    """`path` 就是该模式的那棵子树（在段边界上）时返回 True。
 
-    Both arguments must already be normalized (see _normalize_url_path /
-    normalize_path_pattern).
+    两个参数都必须已经归一化（见 _normalize_url_path / normalize_path_pattern）。
     """
     if pattern == "/":
         return True
@@ -837,11 +813,10 @@ def _resume_sentence(token: str, held: int, kept: int, url: str) -> str:
 
 
 def path_allowed(path: str, path_include=None, path_exclude=None) -> bool:
-    """The single decision point for BFS link discovery and the sitemap map.
+    """BFS 链接发现与 sitemap 地图共同的唯一判定点。
 
-    Patterns may be raw (they are normalized here) or pre-normalized; a bad
-    pattern raises ValueError. Keeping one implementation is the point: the two
-    call sites had drifted into carrying the same defect twice.
+    模式可以是原始的（在这里归一化）或已归一化的；坏模式抛 ValueError。只留一份实现
+    正是要点：两个调用点从前各自漂开，把同一个缺陷带了两遍。
     """
     p = _normalize_url_path(path)
     include = normalize_path_patterns(path_include)
@@ -861,21 +836,18 @@ def extract_same_domain_links(
     path_exclude: Optional[list[str]] = None,
     stats: Optional[dict] = None,
 ) -> list[tuple[str, str]]:
-    """Extract absolute same-domain (anchor URL, anchor text) pairs from HTML.
+    """从 HTML 中抽出同域的（锚 URL, 锚文本）绝对地址对。
 
-    Resolves relative URLs against base_url, keeps only links on the start URL's
-    netloc, drops fragments/assets/non-http schemes, applies path include/exclude
-    subtree scoping (see path_allowed), and dedupes by the NORMALIZED URL (so
-    `/docs` and `/docs/` collapse to one). Order-preserving.
+    相对 URL 按 base_url 解析；只保留落在起始 URL netloc 上的链接；丢掉
+    fragment/资源/非 http scheme；应用 path include/exclude 的子树作用域（见
+    path_allowed）；并按**归一化后的** URL 去重（于是 `/docs` 与 `/docs/` 折成一条）。
+    保持原序。
 
-    ``stats`` (optional, mutated in place) carries the two counts that make the
-    scope decision reportable: `links_seen` (unique same-domain candidates the
-    filters were asked about) and `links_rejected_by_scope`. A one-page crawl can
-    mean "the page held no links", "the scope ate them", "the scope kept them and
-    something else stopped the run", or "discovery never ran" — those read
-    identically in the response and have different fixes, so the sentence that
-    names the reason has to be chosen from counts, not from whether a filter
-    parameter happened to be present.
+    ``stats``（可选，原地修改）装着两个让作用域判决可上报的计数：`links_seen`
+    （过滤器被告知过的同域互异候选数）与 `links_rejected_by_scope`。一次只交回一页的
+    爬取可能意味着"这一页没有链接"、"作用域把它们吃光了"、"作用域留下了它们、是别的
+    东西停下了这一趟"，或"链接发现根本没跑" —— 这几种在响应里读起来一模一样，解药却
+    各不相同，所以说明原因的那句话必须由计数选出，而不是看某个过滤参数恰好在不在。
     """
     root_netloc = urlparse(start_url).netloc
     out: list[tuple[str, str]] = []
@@ -885,7 +857,7 @@ def extract_same_domain_links(
         stats.setdefault("links_rejected_by_scope", 0)
     if not html:
         return out
-    # Normalized once per page rather than per link.
+    # 每页归一化一次，而不是逐链接归一化。
     include = normalize_path_patterns(path_include)
     exclude = normalize_path_patterns(path_exclude)
     for m in _LINK_RE.finditer(html):
@@ -900,15 +872,14 @@ def extract_same_domain_links(
         if parsed.scheme not in ("http", "https"):
             continue
         if parsed.netloc != root_netloc:
-            continue  # external -> dropped (same_domain_only default)
+            continue  # 外链 -> 丢弃（same_domain_only 默认）
         path = _normalize_url_path(parsed.path or "/")
         if _ASSET_RE.search(path):
             continue
-        # Dedup happens BEFORE the scope test so the counters speak about unique
-        # candidates: a nav bar that repeats one out-of-scope link 40 times is one
-        # rejected candidate, not 40, and "40 of these were scoped out" would be a
-        # number no reader can use. Membership of the returned set is unchanged —
-        # these filters are ANDed, so their order cannot add or drop a URL.
+        # 去重发生在作用域判定**之前**，好让计数说的是互异候选：一根导航条把同一条
+        # 域外链接重复 40 次只算一次被拒的候选，不是 40 次，而"其中 40 条被作用域挡掉"
+        # 是读者用不上的数字。交回集合的成员不变 —— 这些过滤器是 AND 关系，顺序既不能
+        # 增加也不能减少一条 URL。
         clean = normalize_url(absu)
         if clean in seen:
             continue
@@ -924,7 +895,7 @@ def extract_same_domain_links(
                 stats["links_rejected_by_scope"] += 1
             continue
         text = _TAG_RE.sub(" ", m.group(2) or "").strip()
-        out.append((absu, text))  # original absolute URL (for fetching); dedup by `clean`
+        out.append((absu, text))  # 原始绝对 URL（用于抓取）；按 `clean` 去重
     return out
 
 
@@ -942,13 +913,12 @@ def _query_terms(query: str) -> frozenset[str]:
 
 
 def score_link(url: str, text: str, focus: str) -> float:
-    """Priority score for a discovered URL. Higher = crawl first.
+    """发现到的 URL 的优先级分数。越高越先爬。
 
-    Blends:
-      * focus relevance (anchor-text overlap * 2 + URL-path token overlap),
-      * content-likelihood (path tokens: docs/guide/api boosted,
-        login/submit/cart penalized),
-      * a shallow-depth preference is applied by the caller via a depth term.
+    混合三项：
+      * focus 相关度（锚文本重合 * 2 + URL 路径词段重合），
+      * 内容可能性（路径词段：docs/guide/api 抬高，login/submit/cart 压低），
+      * 浅层偏好由调用方通过一个深度项施加。
     """
     terms = _query_terms(focus)
     path_l = (urlparse(url).path or "").lower().replace("/", " ").replace("-", " ").replace("_", " ")
@@ -987,7 +957,7 @@ def _fold_locale_path(path: str) -> tuple[str, str]:
 
 
 def _order_map_entries(entries: list, query: str = "") -> tuple[list, dict]:
-    """Which map rows ship first, and what the reordering cost. One owner (C4).
+    """地图里哪些行先发，以及这次重排付了什么代价。唯一作者（C4）。
 
     站点自己的 sitemap 是**文档序**的索引，而文档序表达的是"站点先列了什么"，不是
     "哪一页对这次的问题有用"。现场：一份 1,011 条的 sitemap，前 1,000 条是 20 篇文档
@@ -1041,9 +1011,8 @@ def _order_map_entries(entries: list, query: str = "") -> tuple[list, dict]:
 
 
 def _error_status(resp) -> int:
-    """Honest status: -1 for network errors (no HTTP response), else the real
-    HTTP status. Lets downstream logic distinguish 'server returned 500' from
-    'connection died'."""
+    """诚实的 status：网络错误（没有 HTTP 响应）为 -1，其余为真实的 HTTP 状态码。
+    让下游逻辑能把 'server returned 500' 与 'connection died' 区分开。"""
     if resp is None:
         return -1
     status = getattr(resp, "status", 0) or 0
@@ -1054,8 +1023,8 @@ def _error_status(resp) -> int:
 
 def _sitemap_passes_filters(path: str, path_include: Optional[list[str]],
                             path_exclude: Optional[list[str]]) -> bool:
-    """Kept as a named call site for the sitemap map; the decision itself lives
-    in path_allowed so the two scoping paths cannot drift apart again."""
+    """留作 sitemap 地图的具名调用点；判定本身住在 path_allowed，好让两条作用域
+    路径不会再各自漂开。"""
     return path_allowed(path, path_include, path_exclude)
 
 
@@ -1080,41 +1049,32 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
                        diag: Optional[dict] = None,
                        search: Optional[str] = None,
                        max_total_chars: int = 0) -> Optional[CrawlResponseModel]:
-    """Try to map the site via sitemap.xml. Returns a CrawlResponseModel on
-    success (sitemap found + parsed), or None if NO sitemap was reachable so the
-    caller can fall back to BFS ('auto'). A sitemap that was found but produced no
-    rows is NOT None - it returns an empty map that says so, because reporting it
-    as "not found" is a different (and false) answer. Same-domain + path filters
-    applied BEFORE the cap, so max(1000, max_pages*10) is spent on the pages the
-    caller asked for (see discover_sitemap's `accept`).
+    """尝试经 sitemap.xml 把站点摸成一张图。成功（找到并解析了 sitemap）时返回
+    CrawlResponseModel；**没有**任何 sitemap 可达时返回 None，好让调用方退回 BFS
+    （'auto'）。找到了 sitemap 却没产出行的情形**不是** None —— 它交回一张明说这件事的
+    空地图，因为把这种情况报成 "not found" 是另一个（且为假的）答案。同域 + 路径过滤
+    在上限**之前**施加，所以 max(1000, max_pages*10) 花在调用方要的那些页上
+    （见 discover_sitemap 的 `accept`）。
 
-    `search` joins those same filters (体验修复刀3-C2). It used to be applied only
-    at the end of the BFS path, and this function returns a whole response, so
-    `sitemap=true, search="pricing"` handed back the unfiltered map and said
-    nothing - a parameter that provably did nothing, which is the one thing
-    `params.py` does not license. Pushing it in before the cap is also what makes
-    it *work*: a keyword near the end of a 4,000-entry sitemap would otherwise be
-    cut by the cap and read as "no match on this site".
+    `search` 加入同一组过滤器（体验修复刀3-C2）。它从前只在 BFS 路径的末尾生效，而本
+    函数交回的是整份响应，于是 `sitemap=true, search="pricing"` 原样交回没过滤的地图
+    且一个字不说 —— 一颗可证明什么都没做的参数，而这是 `params.py` 唯一不许可的事。
+    把它推到上限之前也是它**生效**的前提：一个靠近 4,000 条 sitemap 末尾的关键词，否则
+    会被上限切掉，然后被读成"这个站点上没有匹配"。
 
-    `max_total_chars` is priced here for the same reason (体验修复刀3-C3). The
-    whole-run budget used to accumulate `content_md`, which is empty for every
-    map row, so a map was the one output no size gate applied to - measured, the
-    default 60,000 chars was overdrawn 9.7x by a 1,000-row map without
-    `truncated_by_total_chars` ever becoming true. Rows the budget held back are
-    not discarded: they go to `held`, the plan holds them, and
-    `next_resume_token` is the cursor back into it.
+    `max_total_chars` 在这里计价出于同一理由（体验修复刀3-C3）。整轮预算从前累加的是
+    `content_md`，而它对每个 map 行都是空的，于是地图成了唯一一种没有任何体积闸作用的
+    输出 —— 实测默认 60,000 字符被一张 1,000 行的地图透支 9.7 倍，而
+    `truncated_by_total_chars` 从头到尾没变过 true。被预算挡下的行不会被丢弃：它们进
+    `held`，计划持有它们，`next_resume_token` 是指回那里的游标。
 
-    The clock each request here runs on used to be a hardcoded 15s in two places
-    (primp + the urllib fallback). Measured on a site whose /sitemap.xml answers
-    after 20s: `timeout=30000` and `timeout=120000` both returned the same 30.0s
-    wall clock (15s primp, then 15s urllib), the same empty map, and a sentence
-    blaming the site - the call overran its own 25s deadline while spending a
-    budget the caller had explicitly made larger. A request now gets what the call
-    has LEFT, and a fetch that ran out of it is recorded as `clock_cut` so the
-    report says whose number decided it. There is deliberately no 30s per-attempt
-    cap here (the one `bulk_get` enforces exists to fit four attempts into a
-    call); this path makes one attempt per client per URL and the deadline is what
-    bounds it.
+    这里每个请求跑的时钟从前是两处写死的 15s（primp + urllib 兜底）。在一个 /sitemap.xml
+    要 20s 才答的站点上实测：`timeout=30000` 与 `timeout=120000` 都交回同样的 30.0s 墙钟
+    （15s primp，再 15s urllib）、同样的空地图，以及一句责怪站点的话 —— 这次调用越过
+    了自己的 25s deadline，同时花着调用方明确调大过的预算。现在一个请求拿到的是这次
+    调用**还剩**的时间，而跑光了时间的抓取记为 `clock_cut`，报告才能说清是谁的数字决定
+    了它。这里刻意没有 30s 的逐次尝试上限（`bulk_get` 那道存在的理由是把四次尝试塞进
+    一次调用）；这条路径对每个 URL 每个客户端只尝试一次，约束它的是 deadline。
     """
     from dhole_mcp.sitemap import discover_sitemap
 
@@ -1148,11 +1108,11 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
                     return None
                 except Exception as e:
                     _note(u, e)
-                    # fall through to urllib - but only while there is time to ask
+                    # 退到 urllib —— 但只在还有时间问的时候
             if _left_s() < 1.0:
                 _clock["cut"].append(u)
                 return None
-            # stdlib fallback (some hosts reject primp fingerprints, accept urllib)
+            # stdlib 兜底（有些 host 拒绝 primp 的指纹，却接受 urllib）
             try:
                 req = _urllib_req.Request(u, headers={"User-Agent": "Dhole-Sitemap/8.0"})
                 with _urllib_req.urlopen(req, timeout=max(1.0, _left_s())) as resp:  # noqa: S310
@@ -1167,9 +1127,8 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
 
     t0 = time()
     root_netloc = urlparse(url).netloc
-    # A map is not a crawl: its value is breadth, so it does not shrink with
-    # max_pages the way content does. SITEMAP_MAP_FLOOR is that floor, and the
-    # only way past it is a caller who asks for proportionally more.
+    # 地图不是爬取：它的价值是广度，所以不像正文那样跟着 max_pages 缩。
+    # SITEMAP_MAP_FLOOR 就是那个下限，越过它的唯一办法是调用方按比例要得更多。
     cap = min(5000, max(SITEMAP_MAP_FLOOR, max_pages * 10))
 
     # `search` 在这里只兑现 URL 那一半：一条 sitemap 条目带得出来的字段就是 loc（还有
@@ -1181,20 +1140,19 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
     _counts = {"dropped_by_search": 0, "kept_by_search": 0}
 
     def _eligible(raw: str) -> bool:
-        """Same-domain + path + search filters, decided on the raw sitemap entry.
+        """同域 + 路径 + search 过滤器，对 sitemap 原始条目直接判定。
 
-        Pushed into the walk so the cap counts eligible URLs: filtering the
-        already-capped list meant `path_include=["/docs/"]` on a site whose docs
-        start at sitemap entry 2000 returned nothing - and `_sitemap_map` then
-        returns None, so the call silently fell back to BFS with no sign that the
-        scope had been applied to the wrong end of the list.
+        推进到遍历内部，好让上限数的是合格 URL：过滤已经截过上限的列表，意味着在
+        docs 从 sitemap 第 2000 条才开始的站点上 `path_include=["/docs/"]` 返回空 ——
+        而 `_sitemap_map` 随后返回 None，调用于是静默退回 BFS，毫无迹象表明作用域
+        被施加到了列表的错误一头。
         """
         try:
             parsed = urlparse(raw)
         except Exception:
             return False
         if parsed.scheme not in ("http", "https") or parsed.netloc != root_netloc:
-            return False  # sitemaps can list other hosts; keep same-domain only
+            return False  # sitemap 可以列出别的 host；只保留同域
         if not _sitemap_passes_filters(parsed.path or "/", path_include, path_exclude):
             return False
         if _terms and not any(t in raw.lower() for t in _terms):
@@ -1222,7 +1180,7 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
             diag["via"] = result.via
             diag["clock_cut"] = list(_clock["cut"])
             diag["fetch_errors"] = list(_clock["erred"])
-        return None  # nothing reachable: the caller's "no sitemap here" answer is true
+        return None  # 没有一份可达：调用方那句"这里没有 sitemap"是真的
 
     # 地图里谁先走：文档序说的是"站点先列了谁"，不是"哪一页对这次有用"（C4）。
     # `_order_map_entries` 是这条判断的唯一作者（`evals/sitemap_map_baseline.py` 量的
@@ -1275,12 +1233,11 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
     map_total = len(pages) + len(held)
     hold_plan_id = _hold_map_tail(pages, held) if held else ""
     if not pages:
-        # The sitemap WAS found and parsed; it just produced no rows. Returning
-        # None here made web_crawl report "no sitemap.xml found ... /sitemap.xml
-        # returned nothing" - false, and it sends the agent to BFS for a site
-        # whose sitemap dhole has already read. A scope filter that matches
-        # nothing is the usual cause (see `_eligible`), and the answer that helps
-        # is "the sitemap lists N URLs, none in the section you asked for".
+        # sitemap **确实**找到了、也解析了，只是没产出任何行。这里返回 None 会让
+        # web_crawl 报 "no sitemap.xml found ... /sitemap.xml returned nothing" —— 假的，
+        # 而且它把 agent 支去 BFS 找一个 dhole 已经读完 sitemap 的站点。常见原因是
+        # 某个作用域过滤器匹配不到东西（见 `_eligible`），而真正有用的答案是
+        # "the sitemap lists N URLs, none in the section you asked for"。
         scoped = [f"{k}={v}" for k, v in (("path_include", path_include),
                                           ("path_exclude", path_exclude)) if v]
         scope_desc = " or match ".join(scoped) if scoped else "on this host"
@@ -1391,45 +1348,39 @@ async def _sitemap_map(url: str, path_include: Optional[list[str]],
                         "last; they are all still in the map above, and "
                         "path_include='/<locale>/' reads one language in full.")
     if result.capped:
-        # P2-9: a sitemap with 50,000 URLs and one with exactly `cap` produce the
-        # same number here, and "mapped 5000 URL(s)" reads as "this is the site".
-        # The cap can only ever be reported as "at least" — reaching it is not
-        # evidence of where the document ends.
+        # P2-9：一份 50,000 条 URL 的 sitemap 与一份恰好 `cap` 条的，在这里给出同一个
+        # 数字，而 "mapped 5000 URL(s)" 读起来就是"这就是这个站"。上限永远只能报成
+        # "至少" —— 到达它并不证明文档在那里结束。
         summary += (f" · map capped at {cap} URLs (the sitemap holds at least this "
                     f"many - not necessarily all of it)")
-        # "raise max_pages" was the advice here, and for a caller at the default
-        # max_pages=10 it is a dead end: the map floor is 1000 URLs and max_pages
-        # only moves the cap once it passes 100. Naming a knob that cannot turn is
-        # worse than naming none, because the caller turns it and sees no change.
+        # 这里的建议从前是 "raise max_pages"，而对一个停在默认 max_pages=10 的调用方
+        # 那是死路：地图下限是 1000 条 URL，而 max_pages 要过 100 才动上限。点一颗
+        # 拧不动的旋钮比什么都不点更坏，因为调用方拧了却看不到变化。
         next_action += (f" The map stops at {cap} URLs: scope with "
                         f"path_include/path_exclude to see a subtree in full, or raise "
                         f"max_pages above {SITEMAP_MAP_FLOOR // 10} to widen the cap.")
     elif result.index_truncated:
-        # The other way to be short of the site, and the counts cannot show it:
-        # the walk reads at most _MAX_SITEMAPS files / _MAX_INDEX_DEPTH levels, so
-        # a <sitemapindex> with more (or deeper) children ends under the cap with
-        # `capped` False. A site that splits 1,200 pages across 30 small child
-        # sitemaps maps 1,000 of them and says nothing about the rest.
+        # 另一种"比站点短"的方式，而计数看不出来：这一趟最多读 _MAX_SITEMAPS 份文件 /
+        # _MAX_INDEX_DEPTH 层，所以子项更多（或更深）的 <sitemapindex> 会在上限之下
+        # 结束，而 `capped` 是 False。一个把 1,200 页拆进 30 份小子 sitemap 的站点，
+        # 只会图出其中 1,000 条，对其余的只字不提。
         summary += (" · the sitemap index is bigger than one walk reads, so this map "
                     "is a prefix of the site")
-        # No knob to name here, and that is the honest answer: neither max_pages
-        # nor the path filters reach the unread files. Saying "raise max_pages"
-        # would be the same dead end P2-9 already fixed on the cap branch.
+        # 这里没有旋钮可点，而这就是诚实的答案：max_pages 与路径过滤器都够不着那些
+        # 没读的文件。说 "raise max_pages" 会是 P2-9 已经在上限那一支修掉的同一条死路。
         next_action += (" The map covers only the sitemap files this walk reads - there "
                         "is no knob to read further, so path_include scopes within what "
                         "is here rather than revealing what is not.")
     else:
-        # "mapped 349 URL(s)" and no other wording reads as "this is the site", and
-        # the cap branch was the only one that ever said otherwise. NOT reaching the
-        # cap is not evidence of the opposite: a sitemap is an index the site
-        # chooses to publish, and plenty omit whole sections.
+        # "mapped 349 URL(s)" 加上没有别的措辞，读起来就是"这就是这个站"，而从前只有
+        # 上限那一支说过相反的话。**没**到上限不是相反的证明：sitemap 是站点选择公开
+        # 的一份索引，而不少站点整节整节地省掉。
         summary += (" · the sitemap's own list - a sitemap is an index the site "
                     "publishes, not proof it lists every page")
         if listed > ok:
-            # Both causes are knowable here, so name them rather than hedging: an
-            # entry the sitemap listed twice under two normalizations (`/a` and
-            # `/a/`), or a walk that ran out of deadline. Off-domain and filtered
-            # entries cannot appear - `_eligible` already dropped them upstream.
+            # 两种原因在这里都可知，所以点名而不是含糊其辞：要么是 sitemap 在两种归一化
+            # 之下把同一条列了两次（`/a` 与 `/a/`），要么是这一趟跑光了 deadline。
+            # 域外与被过滤的条目不可能出现在这里 —— `_eligible` 已经在上游丢掉了它们。
             summary += (f" · {listed - ok} of the sitemap's {listed} eligible entries "
                         f"did not become rows"
                         + (f" (the {stopped_by} stopped this response after {ok} "
@@ -1599,19 +1550,16 @@ async def web_crawl(
     search: Optional[str] = None,
     ignore_robots: bool = False,
 ) -> CrawlResponseModel:
-    """Best-first same-domain crawl. See module docstring.
+    """最佳优先的同域爬取。见模块 docstring。
 
-    search: filter discovered/crawled URLs by keyword match (URL path + title).
-        Use with discover_only=True for fast URL discovery on large sites.
-    sitemap: True = map the site from its sitemap.xml only (one fetch; returns
-    the full URL list + lastmod, no BFS, no content). 'auto' = use the sitemap if
-    the site has one, else fall back to BFS. False (default) = BFS only. The
-    sitemap path collapses big-site discovery (hundreds of pages) into one call.
-    ignore_robots: skip robots.txt compliance for this crawl (default False =
-    comply). Every page is fetched through web_read, which refuses a
-    disallowed URL before any request; this crawl additionally drops the
-    discovered URLs it already knows are disallowed (robots_skipped) instead of
-    spending budget on a refusal.
+    search: 按关键词匹配（URL 路径 + 标题）过滤已发现/已爬取的 URL。
+        在大站点上配合 discover_only=True 做快速 URL 发现。
+    sitemap: True = 只从站点的 sitemap.xml 出地图（一次抓取；交回完整 URL 清单 +
+    lastmod，不跑 BFS、不取正文）。'auto' = 站点有 sitemap 就用，否则退回 BFS。
+    False（默认）= 只跑 BFS。sitemap 这条路径把大站点的发现（几百页）压进一次调用。
+    ignore_robots: 这次爬取跳过 robots.txt 合规（默认 False = 遵守）。每一页都经
+    web_read 抓取，它在任何请求之前拒绝被 disallow 的 URL；这次爬取另外会把已知
+    被 disallow 的发现 URL 直接丢掉（robots_skipped），而不是把预算花在一次拒绝上。
     """
     from dhole_mcp.security import validate_url, SecurityError
     from dhole_mcp.trafilatura_extractor import extract_html_title
@@ -1673,13 +1621,12 @@ async def web_crawl(
                     refusal=True, input_refusal=True)
     except ValueError as e:
         return _err(str(e))
-    start_norm = normalize_url(url)  # canonical form for dedup + the response field
+    start_norm = normalize_url(url)  # 去重与响应字段用的规范形式
 
-    # robots.txt compliance (v16.0): the crawl's own seed check, so a site that
-    # disallows dhole is reported once, honestly, instead of as a crawl that
-    # silently collected refusals. Per-page enforcement lives in web_read
-    # (every page goes through it), and the robots cache is warm after this
-    # call, which is what makes the discovered-URL filter below free.
+    # robots.txt 合规（v16.0）：爬取自己的种子检查，这样一个 disallow dhole 的站点
+    # 会被如实上报一次，而不是变成一次"静默收集拒绝"的爬取。逐页的强制住在 web_read
+    # （每一页都过它），而这次调用之后 robots 缓存是热的，这正是下面那条"发现到的 URL
+    # 预判"免费的原因。
     if not ignore_robots:
         try:
             _seed_verdict = await check_robots(url)
@@ -1722,9 +1669,8 @@ async def web_crawl(
         max_total_chars = 0
     else:
         max_total_chars = max(MIN_TOTAL_CHARS, min(_asked_total, MAX_TOTAL_CHARS_CEILING))
-    # web_read names its clamp in the summary; a crawl that silently answered
-    # 500 chars for a request of 400 named nothing at all, so the two tools
-    # described the same event differently depending on which one was called.
+    # web_read 会把它的钳位写进 summary；而一次爬取对 400 的请求静默交回 500 字符时
+    # 什么都没说，于是两个工具会按被调的是哪一个，对同一件事给出不同的描述。
     # 那一句当初只补了 `max_content_chars_per` 一颗，另外三颗仍然静默：实测
     # max_pages=41 换来 40、max_depth=9 换来 5、concurrency=9 换来 3，信封里一个字
     # 都没有 —— 而这三颗恰恰是"这次爬了多少页为什么比我少的"唯一的答案。
@@ -1743,14 +1689,12 @@ async def web_crawl(
         _ttl_note,
     ) if note]
     focus = focus.strip() if isinstance(focus, str) and focus.strip() else None
-    # A bare string was iterated character-by-character by the prefix filters
-    # (`path.startswith(p) for p in "/what/"`), and startswith("/") holds for
-    # every path - so one string silently filtered the whole crawl away. Treat
-    # it as the single-prefix list the caller meant.
+    # 裸字符串会被前缀过滤器逐字符迭代（`path.startswith(p) for p in "/what/"`），
+    # 而 startswith("/") 对每条路径都成立 —— 于是一个字符串就静默把整次爬取过滤掉了。
+    # 把它当成调用方本意的单前缀列表。
     #
-    # Validated HERE, before any network work: a pattern the matcher cannot
-    # honour used to surface as "0 pages crawled" after a full crawl, which
-    # reads as "the site has nothing" rather than "your pattern was wrong".
+    # 在**这里**校验，早于任何网络动作：匹配器兑现不了的模式从前会在整趟爬完之后显形为
+    # "0 pages crawled"，读起来是"站点什么都没有"，而不是"你的模式写错了"。
     if isinstance(path_include, str):
         path_include = [path_include]
     if isinstance(path_exclude, str):
@@ -1759,8 +1703,8 @@ async def web_crawl(
         path_include = normalize_path_patterns(path_include)
         path_exclude = normalize_path_patterns(path_exclude)
     except ValueError as e:
-        # Not a fetch failure: nothing was fetched. The generic classify hint
-        # ("try a different source") would send the caller somewhere useless.
+        # 不是抓取失败：什么都没抓。通用的分类提示（"try a different source"）会把
+        # 调用方支到一个毫无用处的地方。
         return _err(
             f"invalid path filter: {e}",
             hint=("Fix the path_include/path_exclude pattern and retry. A pattern names a "
@@ -1768,9 +1712,8 @@ async def web_crawl(
                   "'/' or '*' keeps everything. Drop the pattern to crawl unfiltered."),
         )
 
-    # Normalize the sitemap flag: True/'auto'/False. 'auto' = use sitemap if
-    # present, else BFS. True = sitemap only (return empty if none). Strings are
-    # case-insensitive.
+    # 归一化 sitemap 旗子：True/'auto'/False。'auto' = 有 sitemap 就用，否则 BFS。
+    # True = 只用 sitemap（没有就交空）。字符串比较不区分大小写。
     sm_mode = "off"
     if isinstance(sitemap, str):
         s = sitemap.strip().lower()
@@ -1778,9 +1721,9 @@ async def web_crawl(
     elif sitemap is True:
         sm_mode = "on"
 
-    # ── Sitemap mode: map the site from sitemap.xml in one fetch ───────────
-    # Runs before BFS. 'auto' uses the sitemap if found, else falls through to
-    # BFS. 'on' returns the sitemap map (or an honest empty if none found).
+    # ── Sitemap 模式：一次抓取就从 sitemap.xml 图出整站 ──────────────────────
+    # 跑在 BFS 之前。'auto' 找到 sitemap 就用，否则落到 BFS。'on' 交回 sitemap 地图
+    # （没有就交一张诚实的空地图）。
     if sm_mode in ("on", "auto"):
         # 诊断袋：只有"一份 sitemap 都没读通"时才会被填。总结与出路都由它决定，
         # 不再是一句固定文案（D2：那句固定文案在私网站点上两半都是假的）。
@@ -1790,14 +1733,13 @@ async def web_crawl(
                                        diag=_sm_diag, search=search,
                                        max_total_chars=max_total_chars)
         if sm_result is not None:
-            # A found-but-empty map is a real answer ("the sitemap lists N URLs,
-            # none in the section you asked for"), but only for an explicit
-            # sitemap=true. Under 'auto' the caller asked for discovery, and BFS
-            # can reach pages the sitemap never listed, so an empty map falls
-            # through to BFS exactly as a missing sitemap did before.
+            # 找到但为空的地图是真答案（"the sitemap lists N URLs, none in the
+            # section you asked for"），但只对显式的 sitemap=true 成立。'auto' 下调用方
+            # 要的是发现，而 BFS 能到达 sitemap 从未列出的页面，所以空地图落到 BFS，
+            # 与从前"没有 sitemap"时完全一样。
             if sm_result.pages or sm_mode == "on":
-                return sm_result  # sitemap found + mapped (auto/on success)
-        # auto: no sitemap -> fall through to BFS. on: no sitemap -> honest empty.
+                return sm_result  # sitemap 找到 + 已出图（auto/on 成功）
+        # auto：没有 sitemap -> 落到 BFS。on：没有 sitemap -> 诚实的空。
         if sm_mode == "on":
             return CrawlResponseModel(
                 start_url=start_norm, pages=[], pages_crawled=0,
@@ -1829,11 +1771,10 @@ async def web_crawl(
 
     sem = asyncio.Semaphore(concurrency)
 
-    # G27 — politeness interval, per host. `concurrency` caps how many requests
-    # are in flight, which is a different question from how often one server is
-    # hit: 3 concurrent requests at a slow host is 3 per second, forever. Each
-    # host gets a next-allowed slot, so N concurrent lanes at one host collapse
-    # into one request per interval while different hosts stay independent.
+    # G27 — 礼貌间隔，按 host。`concurrency` 限制的是同时在飞的请求数，这与"同一台
+    # 服务器被敲得多频繁"是两个问题：对一台慢 host 发 3 个并发请求就是每秒 3 个，
+    # 永远如此。每台 host 有一个下次允许的时刻，于是同一 host 上的 N 条并发车道折成
+    # 每个间隔一次请求，而不同 host 之间互不影响。
     #
     # 17.0 §3 第 31 条：这个间隔只剩一个来源 —— 站点自己在 robots.txt 里写的 Crawl-delay。
     # 调用方的 `delay=` 删了：它不是性能参数，而是对别人服务器的礼貌问题，而这件事
@@ -1845,8 +1786,7 @@ async def web_crawl(
     interval_used = 0.0
 
     def _interval_for(u: str) -> float:
-        """How long this host asked to be left alone (0 = it did not ask, or the
-        caller waived robots)."""
+        """这台 host 要求被留多长的独处时间（0 = 它没要求，或调用方放弃了 robots）。"""
         if ignore_robots:
             return 0.0
         try:
@@ -1871,11 +1811,10 @@ async def web_crawl(
             await asyncio.sleep(wait_s)
 
     async def fetch_one(u: str) -> tuple[str, "object", str]:
-        """Fetch one page as HTML. Returns (url, ResponseModel, html_str).
+        """把一页抓成 HTML。返回 (url, ResponseModel, html_str)。
 
-        Transient errors (timeout, connection_reset) get one automatic retry
-        after a 1s delay. Deterministic errors (connection_refused, dns_failure,
-        dns_unresolvable) are not retried (they will fail again).
+        暂时性错误（timeout、connection_reset）隔 1s 自动重试一次。确定性错误
+        （connection_refused、dns_failure、dns_unresolvable）不重试（再试还会失败）。
         """
         async with sem:
             await _pace(u)
@@ -1889,7 +1828,7 @@ async def web_crawl(
                     ignore_robots=ignore_robots,
                 )
             except Exception as e:
-                # Retry once for transient errors (timeout/reset)
+                # 暂时性错误（timeout/reset）重试一次
                 if _is_transient_error(str(e)):
                     await asyncio.sleep(1.0)
                     try:
@@ -1900,11 +1839,10 @@ async def web_crawl(
                             ignore_robots=ignore_robots,
                         )
                     except Exception as e2:
-                        # Lazy import to break circular dependency:
-                        # crawl.py -> server.py (ResponseModel) and
-                        # server.py -> crawl.py (web_crawl). Both are
-                        # function-level imports so neither module needs the
-                        # other at import time.
+                        # 延迟 import 以打断循环依赖：
+                        # crawl.py -> server.py (ResponseModel) 与
+                        # server.py -> crawl.py (web_crawl)。两边都是
+                        # 函数级 import，所以谁都不需要在 import 时拿到对方。
                         from dhole_mcp.server import ResponseModel
                         resp = ResponseModel(url=u, status=-1, content=[""],
                                              fetcher_used="none", error=str(e2)[:200])
@@ -1917,24 +1855,23 @@ async def web_crawl(
         html = resp.content[0] if resp.content else ""
         return u, resp, html
 
-    # ---- Priority queue (best-first) -------------------------------------
-    # Heap entries: (score, depth, seq, url, anchor_text). `seq` breaks ties so
-    # heapq never tries to order dicts/strings on a tie. Lower score = popped
-    # first, so we negate the real score.
+    # ---- 优先队列（最佳优先） ---------------------------------------------
+    # 堆条目：(score, depth, seq, url, anchor_text)。`seq` 用来打破平局，于是 heapq
+    # 永远不会在平局时去比较 dict/字符串。分数低 = 先弹出，所以真正的分数取负。
     heap: list[tuple[float, int, int, str, str]] = []
     seq = 0
 
     def push(u: str, depth: int, text: str):
         nonlocal seq
         s = score_link(u, text, focus or "")
-        # Shallow-depth preference: prefer shallower pages (small penalty/depth).
+        # 浅层偏好：优先浅页（每层一点小惩罚）。
         s -= 0.15 * depth
         heapq.heappush(heap, (-s, depth, seq, u, text))
         seq += 1
 
     push(url, 0, "")
 
-    # Fetch a batch of up to `concurrency` best URLs from the heap concurrently.
+    # 从堆里并发抓一批，最多 `concurrency` 条最好的 URL。
     # 整轮字符帽在**发下一批之前**判，不是返回之后再砍：一版只在装配时截的预算一次
     # 网络也省不下来，只是把已经付过钱的结果藏起来。这里停下来的是"还没发的那些"。
     total_chars = 0
@@ -1981,7 +1918,7 @@ async def web_crawl(
                 dropped_after_answering = len(batch) - _bi
                 break
             u_norm = normalize_url(resp.url or u)
-            # Guard: if a redirect took us off-domain, skip it (don't crawl external).
+            # 守卫：重定向把这一页带到域外就跳过（不爬外站）。
             if urlparse(u_norm).netloc != urlparse(url).netloc:
                 continue
             if u_norm in visited:
@@ -2023,32 +1960,28 @@ async def web_crawl(
                         # crawl 行唯一的抬头（这一族没有 metadata）。
                         row_summary = f"{row_summary} · {note}" if row_summary else note
                     if md:
-                        # The extraction already holds the whole page up to the
-                        # per-page cap; `cut` says whether more exists. next_offset
-                        # is the char offset INTO THAT extraction, so it is only
-                        # meaningful with web_read on this URL - a crawl page has
-                        # no resumable cursor of its own, which is what the field
-                        # description on CrawlPage.next_offset already says.
+                        # 抽取已经握着整页、直到每页上限；`cut` 说明还有没有更多。
+                        # next_offset 是**那次抽取里的**字符偏移，所以只有拿它去
+                        # web_read 这个 URL 才有意义 —— 爬取页自己没有可续的游标，
+                        # 这正是 CrawlPage.next_offset 的字段描述已经写明的事。
                         is_trunc = cut
                         next_off = max_content_chars_per if cut else 0
                         content_md = md
                 else:
-                    # Not content_ok. Only an empty-but-served page is a rendering
-                    # problem: a 4xx/5xx is the HTTP answer and a status of 0/-1 is
-                    # no answer at all. Labeling those "js_shell" tells the caller
-                    # the site is JS-gated when the URL is simply invalid. Measured:
-                    # arxiv answered 400 "Invalid archive or category" for a bad
-                    # category and the crawl page reported page_type=js_shell.
+                    # 不是 content_ok。只有"服务了、但是空页"才是渲染问题：4xx/5xx 是
+                    # HTTP 的答案，status 0/-1 是根本没有答案。把那些标成 "js_shell"
+                    # 等于告诉调用方站点被 JS 把关了，而 URL 只是无效。实测：arxiv
+                    # 对错的分类答 400 "Invalid archive or category"，而爬取页报
+                    # page_type=js_shell。
                     _status = _error_status(resp)
                     page_type = "js_shell" if 0 < _status < 400 and resp.error else "fallback"
             elif discover_only:
-                # Map mode: nothing was extracted, so content_ok must stay False.
-                # It used to be forced True ("the URL itself is the result"), which
-                # made the summary claim "10 content_ok" about ten pages that were
-                # fetched only to expand the link map - a claim about content that
-                # does not exist. The page's URL is the crawl's OUTPUT; it is not
-                # this page's content. status/fetcher_used/error stay populated
-                # because "which of these URLs are dead" is a real answer.
+                # 地图模式：什么都没抽，所以 content_ok 必须保持 False。它从前被强置
+                # 为 True（"URL 本身就是结果"），于是 summary 对十页只为展开链接地图
+                # 而抓的页面声称 "10 content_ok" —— 一个关于并不存在的正文的断言。
+                # 页面的 URL 是这次爬取的**输出**，不是这一页的正文。
+                # status/fetcher_used/error 照旧填着，因为"这些 URL 里哪些是死的"
+                # 是一个真答案。
                 content_ok = False
 
             page = CrawlPage(
@@ -2067,9 +2000,8 @@ async def web_crawl(
             _collect_row_identity(row_identity, resp)
             total_chars += len(content_md)
 
-            # Browser auto-escalation: if the start page (depth 0) failed with
-            # js_shell or bot_challenge, upgrade force_fetcher to "stealthy" for
-            # all subsequent pages (the site likely needs a real browser).
+            # 浏览器自动升级：起始页（depth 0）以 js_shell 或 bot_challenge 失败时，
+            # 把 force_fetcher 升成 "stealthy"，用于之后所有页（站点很可能需要真浏览器）。
             if (depth == 0 and not content_ok and force_fetcher is None
                     and page.page_type in ("js_shell", "fallback")
                     and ("bot_challenge" in (page.error or "") or "js_shell" in (page.error or "")
@@ -2077,7 +2009,7 @@ async def web_crawl(
                 force_fetcher = "stealthy"
                 logger.info(f"Crawl: upgrading to stealthy browser (page_type={page.page_type})")
 
-            # Discover links for deeper layers.
+            # 为更深一层发现链接。
             if depth < max_depth and html:
                 pages_scanned_for_links += 1
                 try:
@@ -2089,13 +2021,10 @@ async def web_crawl(
                 for link_url, link_text in links:
                     link_norm = normalize_url(link_url)
                     if link_norm not in discovered and link_norm not in visited:
-                        # Known-disallowed candidates are dropped before they
-                        # take a queue slot: the origin's rules are already in
-                        # the cache (the seed check above put them there), so
-                        # this costs nothing, and spending a page of the token
-                        # budget on a refusal the next page would have skipped
-                        # anyway is pure waste. Unknown verdicts still go
-                        # through - web_read is the enforcement point.
+                        # 已知被 disallow 的候选在占用队列位之前就丢掉：源站的规则已经
+                        # 在缓存里（上面那次种子检查放进去了），所以这里不花钱；而把一页
+                        # 的 token 预算花在一次"下一页本来也会跳过"的拒绝上纯属浪费。
+                        # 判定未知的仍然放行 —— web_read 才是强制点。
                         if not ignore_robots and get_robots_cache().cached(link_url) is False:
                             robots_skipped += 1
                             continue
@@ -2108,7 +2037,7 @@ async def web_crawl(
     await report_progress(float(pages_crawled), total=float(max_pages),
                           message=f"crawl finished: {pages_crawled} pages fetched "
                                   f"on {urlparse(url).netloc}")
-    # Count any URLs still in the heap as discovered (they were found but not crawled).
+    # 堆里剩下的 URL 也算已发现（找到了但没爬）。
     for _neg, _d, _s, hu, _t in heap:
         discovered.add(normalize_url(hu))
     pages_discovered = len(discovered)
@@ -2139,12 +2068,11 @@ async def web_crawl(
             _page.summary = f"{_page.summary} · {note}" if _page.summary else note
 
     def _summary_for(pages_now: list) -> str:
-        """Stats line for ``pages_now``.
+        """``pages_now`` 的统计行。
 
-        Called once before and once after the `search` filter. The post-filter
-        call has to describe the pages actually returned: prefixing the
-        pre-filter stats produced "crawled 1 page(s); 1 content_ok" sitting next
-        to pages_crawled=0 and pages=[].
+        在 `search` 过滤器之前与之后各调一次。过滤之后那次必须描述真正交回的那些页：
+        把过滤前的统计当作前缀，会产出 "crawled 1 page(s); 1 content_ok"，而旁边站着
+        pages_crawled=0 与 pages=[]。
         """
         ok_now = sum(1 for p in pages_now if p.content_ok)
         # "N content_ok" 旁边必须站着"这几行我们知道自己没读全"。数的是**实际返回的**
@@ -2163,12 +2091,10 @@ async def web_crawl(
         if type_bits_now:
             bits_now.append(type_bits_now)
         if discover_only:
-            # Map mode extracts nothing, so "N content_ok" would be a claim about
-            # content that does not exist. Say what the mode actually COST instead:
-            # a "URL map only" call still performs one request per expanded page,
-            # and the fetch count is the number that surprises people (10 requests
-            # at the default max_pages=10). See the module docstring for how to get
-            # the same map in one request.
+            # 地图模式不抽正文，所以那边 "N content_ok" 会是关于并不存在的正文的断言。
+            # 改说这个模式实际**花了什么**：一次 "URL map only" 调用仍然对每个展开的
+            # 页面发一次请求，而抓取次数才是那个让人意外的数（默认 max_pages=10 时
+            # 10 次请求）。要一次请求拿到同一张地图，见模块 docstring。
             bits_now = [f"mapped {pages_discovered} URL(s) at {root} (depth <= {max_depth}) "
                         f"using {len(pages_now)} page fetch(es); no content extracted"]
             if type_bits_now:
@@ -2206,19 +2132,16 @@ async def web_crawl(
         bits_now.extend(_clamp_notes)
         if ((path_include or path_exclude) and len(pages_now) <= 1
                 and not truncated_total_chars and not heap):
-            # The filters run while links are discovered, so a pattern that matches
-            # nothing produces a crawl of exactly one page (the start URL is never
-            # filtered) and no count anywhere says a filter ran. Measured: a
-            # path_include the site did not use returned the start page alone,
-            # pages_discovered=1, empty next_action - it read as a successful crawl.
+            # 过滤器在发现链接的过程中生效，所以一个匹配不到东西的模式会产出一趟恰好
+            # 只含一页的爬取（起始 URL 从不被过滤），而任何计数都不会说过滤器跑过。
+            # 实测：站点没用上的 path_include 只交回起始页、pages_discovered=1、
+            # next_action 为空 —— 读起来像一次成功的爬取。
             #
-            # But the claim is only true when the queue is EMPTY. Measured the other
-            # way on 2026-10-08: `max_total_chars=1500` against a site whose pages
-            # run 4,346 chars each stopped after page one with 83 URLs still queued,
-            # and this note went out blaming path_include - about a pattern the run
-            # itself then proved right (the same scope admitted links on a second
-            # call). A character budget and a scope filter cannot both be the reason
-            # for one stop, so the budget's own bit above is what stands here.
+            # 但这个断言只在队列**空**的时候成立。2026-10-08 反过来实测：对一个每页
+            # 4,346 字符的站点用 `max_total_chars=1500`，第一页之后就停了、还有 83 条
+            # URL 在队列里，而这条提示发出去时怪的是 path_include —— 怪一个这一趟自己
+            # 随后就证明是对的模式（同一个作用域在第二次调用里放行了链接）。字符预算与
+            # 作用域过滤器不可能同时是一次停止的原因，所以立在这里的是上面预算自己那一位。
             #
             # 同一把尺子的第二次自我否定（体验修复刀1b-C1）：上面那条把"队列空"当成
             # "过滤器吃光了链接"的充分条件，其实不是。现场是 `path_include=["/docs"]`
@@ -2266,17 +2189,15 @@ async def web_crawl(
                     "why) - read that row's status and error")
 
         if interval_used > 0:
-            # Saying the interval exists is the point: a crawl that took 40
-            # seconds for 10 pages looks like a hang unless the stats line says
-            # it was spacing itself on purpose. And naming who set it: there is
-            # no caller knob for this any more, so the host's own ask is the
-            # only possible author.
+            # 说出这个间隔存在才是要点：一次 10 页却花了 40 秒的爬取看起来就是卡住了，
+            # 除非统计行说它是在故意拉开间距。也要点名是谁设的：这件事今天已没有调用方
+            # 旋钮，所以站方自己的要求是唯一可能的作者。
             bits_now.append(
                 f"{interval_used:g}s between requests per host "
                 "(the host's own robots.txt Crawl-delay)")
         return "; ".join(bits_now)
 
-    # Build a concise summary + next_action.
+    # 拼出简洁的 summary + next_action。
     ok = sum(1 for p in pages if p.content_ok)
     summary = _summary_for(pages)
 
@@ -2353,9 +2274,8 @@ async def web_crawl(
             f"sitemap=true (whole site, if it publishes one)."
         )
 
-    # Network failure aggregate diagnosis: when most/all pages failed with
-    # network errors, give the agent a clear classification + actionable hint
-    # instead of leaving next_action empty.
+    # 网络失败的汇总诊断：大部分/全部页面都以网络错误失败时，给 agent 一个清楚的分类
+    # 与可执行的提示，而不是把 next_action 留空。
     if not next_action and pages:
         network_failures = sum(1 for p in pages if p.status == -1 or p.status == 0)
         if network_failures > 0 and network_failures >= len(pages) * 0.5:
@@ -2368,8 +2288,8 @@ async def web_crawl(
                 f"Sample: {sample_errors[0][:100] if sample_errors else 'unknown'}"
             )
         elif ok == 0 and pages_crawled > 0 and not discover_only:
-            # Map mode never extracts content, so ok == 0 is the EXPECTED shape
-            # there and must not be diagnosed as "the site may be unreachable".
+            # 地图模式从不抽正文，所以那边 ok == 0 是**预期**形状，不能诊断成
+            # "站点可能不可达"。
             next_action = ("All crawled pages returned no content. The site may be "
                           "unreachable, require JavaScript, or block automated access. "
                           "Try web_read on a specific URL for more diagnostics.")
@@ -2405,9 +2325,8 @@ async def web_crawl(
         summary=summary, next_action=next_action,
     )
 
-    # Search filter: when search is set, only keep pages whose URL or title
-    # matches any of the search terms. Best with discover_only=True for fast
-    # URL discovery on large sites (like Firecrawl's map + search).
+    # Search 过滤器：设了 search 时，只留 URL 或标题命中任一搜索词的页面。在大站点上
+    # 配合 discover_only=True 做快速 URL 发现最好用（类似 Firecrawl 的 map + search）。
     if search and result.pages:
         _terms = search.lower().split()
         _pre_filter = len(result.pages)
@@ -2515,6 +2434,8 @@ def plan_load(plan_id: str) -> Optional[list[str]]:
 
 
 def plan_token(plan_id: str, offset: int) -> str:
+    """Format the server-held plan cursor as ``<plan_id>:<offset>`` (the inverse of :func:`plan_parse`).
+    """
     return f"{plan_id}:{offset}"
 
 

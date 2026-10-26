@@ -1,30 +1,27 @@
-"""OCR for Dhole — turns image-only PDFs and image pages into text an agent
-can read, using only pure-pip deps (no system binaries).
+"""Dhole 的 OCR —— 只用纯 pip 依赖（无系统二进制），把纯图片 PDF 与图片页面
+变成 agent 能读的文本。
 
-Two engines, both pip-installable with bundled native libs / models:
-  * ``pypdfium2`` — Google's PDFium bindings (BSD-3). Renders a PDF page to a
-    PIL/numpy image. No poppler / system binary.
-  * ``rapidocr`` v3 — ONNX OCR (Apache-2.0 models from PaddleOCR). Bundles its
-    detection / recognition ONNX models in the wheel and supports Python 3.13+.
-    Falls back to the legacy ``rapidocr-onnxruntime`` v1 if that's what's
-    installed. No system binary, no model download.
+两个引擎，都可用 pip 安装且自带原生库 / 模型：
+  * ``pypdfium2`` —— Google PDFium 绑定（BSD-3）。把 PDF 页渲染成 PIL/numpy
+    图像。不需要 poppler / 系统二进制。
+  * ``rapidocr`` v3 —— ONNX OCR（PaddleOCR 的 Apache-2.0 模型）。检测 / 识别
+    ONNX 模型打包在 wheel 里，支持 Python 3.13+。若装的是旧版
+    ``rapidocr-onnxruntime`` v1 则回退到它。无系统二进制、无模型下载。
 
-Why this exists: dhole's ``pdf_extractor`` returns an honest ``scanned_pdf``
-dead-end for image-only PDFs ("no extractable text"). That is correct but
-useless to the agent. When the OCR extras are installed, the PDF path falls
-back to rendering + OCR so the agent actually gets the text. Image-only web
-pages (content-type ``image/*``) are OCR'd too.
+为什么要有它：dhole 的 ``pdf_extractor`` 对纯图片 PDF 会给出诚实的
+``scanned_pdf`` 死路（"no extractable text"）。那是对的，但对 agent 没用。装上
+OCR extras 后，PDF 路径会回退到渲染 + OCR，agent 才真的拿到文本。纯图片网页
+（content-type ``image/*``）也走 OCR。
 
-Agent design:
-  * Auto-OCR: if a PDF is detected as scanned AND rapidocr is installed, OCR
-    runs automatically. No new param for the agent to learn.
-  * Page cap when no ``pages`` spec: OCR is slow (~2-4s/page). To prevent a
-    100-page scanned PDF hanging the call, OCR defaults to the first
-    ``OCR_DEFAULT_PAGES`` pages when the agent did not request a specific
-    range, and ``next_action`` tells the agent how to get the rest
-    (``pages='11-20'``). An explicit ``pages`` spec is always honored exactly.
-  * Output shape matches ``pdf_extractor``: a metadata header + ``--- Page N
-    ---`` markers, so OCR'd and text-extracted PDFs read the same to the agent.
+Agent 设计：
+  * 自动 OCR：PDF 被判定为扫描件且装了 rapidocr 时，OCR 自动运行。不给 agent
+    增加要学的新参数。
+  * 没有 ``pages`` 指定时的页数上限：OCR 很慢（约 2-4 秒/页）。为了防止一本
+    100 页的扫描 PDF 把调用挂死，agent 没指定范围时默认只 OCR 前
+    ``OCR_DEFAULT_PAGES`` 页，``next_action`` 告诉 agent 怎么取剩下的
+    （``pages='11-20'``）。显式的 ``pages`` 永远被精确执行。
+  * 输出形状与 ``pdf_extractor`` 一致：元数据头 + ``--- Page N ---`` 标记，
+    所以 OCR 过的 PDF 与文本抽取的 PDF 对 agent 读起来一样。
 """
 
 from __future__ import annotations
@@ -33,25 +30,24 @@ import io
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
-if TYPE_CHECKING:  # pragma: no cover - annotation-only import
-    # pdf_extractor is imported lazily inside ocr_pdf() to keep this module
-    # importable without the PDF extras; the annotation needs the name here.
+if TYPE_CHECKING:  # pragma: no cover - 仅注解用的导入
+    # pdf_extractor 在 ocr_pdf() 内部惰性导入，让本模块在没有 PDF extras 时也能
+    # 导入；注解需要这个名字留在作用域里。
     from dhole_mcp.pdf_extractor import PdfResult
 
 logger = logging.getLogger("dhole-mcp.ocr")
 
-# Cap OCR to this many pages when the caller did not specify a page range.
-# Prevents a huge scanned PDF from hanging the call for minutes. An explicit
-# `pages` spec always overrides this.
+# 调用方没指定页范围时，OCR 最多做这么多页。防止一本巨型扫描 PDF 把调用挂上
+# 几分钟。显式 `pages` 永远覆盖它。
 OCR_DEFAULT_PAGES = 10
 
-# Render scale for PDFium. 2.0 ≈ 144 dpi (enough for RapidOCR on typical docs);
-# bumped to 2.5 for better accuracy on small fonts without much slowdown.
+# PDFium 的渲染倍率。2.0 ≈ 144 dpi（对常见文档的 RapidOCR 够用）；提到 2.5 是
+# 为了小字号更准，而慢不了多少。
 _RENDER_SCALE = 2.5
 
 
 def _get_pdfium():
-    """Lazy import pypdfium2 (optional [all] dependency)."""
+    """惰性导入 pypdfium2（可选的 [all] 依赖）。"""
     try:
         import pypdfium2 as pdfium  # type: ignore
         return pdfium
@@ -63,16 +59,16 @@ def _get_pdfium():
 
 
 def _get_rapidocr():
-    """Lazy import RapidOCR. Prefers the unified ``rapidocr`` v3 package (supports
-    Python 3.13+, models bundled in the wheel); falls back to the legacy
-    ``rapidocr-onnxruntime`` v1 package (Python <3.13 only)."""
+    """惰性导入 RapidOCR。优先统一的 ``rapidocr`` v3 包（支持 Python 3.13+，
+    模型打包在 wheel 里）；回退到旧版 ``rapidocr-onnxruntime`` v1 包（仅
+    Python <3.13）。"""
     try:
         from rapidocr import RapidOCR  # type: ignore  # v3
         return RapidOCR()
     except ImportError:
         pass
     try:
-        from rapidocr_onnxruntime import RapidOCR  # type: ignore  # v1 fallback
+        from rapidocr_onnxruntime import RapidOCR  # type: ignore  # v1 回退
         return RapidOCR()
     except ImportError as e:
         from dhole_mcp import install as _install
@@ -82,7 +78,7 @@ def _get_rapidocr():
 
 
 def ocr_available() -> bool:
-    """True if an OCR engine + PDFium are importable. Cheap probe (no model load)."""
+    """OCR 引擎 + PDFium 都能导入时为 True。廉价探测（不加载模型）。"""
     try:
         import pypdfium2  # noqa: F401
     except Exception:
@@ -100,19 +96,19 @@ def ocr_available() -> bool:
 
 
 def _ocr_ndarray(engine: Any, arr) -> str:
-    """Run RapidOCR on a numpy/PIL image and return joined text lines.
+    """对 numpy/PIL 图像跑 RapidOCR，返回拼接后的文本行。
 
-    Handles both API shapes: v3 returns a RapidOCROutput with ``.txts``; v1
-    returns ``(list[[box, text, score]], elapse)``.
+    兼容两种 API 形状：v3 返回带 ``.txts`` 的 RapidOCROutput；v1 返回
+    ``(list[[box, text, score]], elapse)``。
     """
     out = engine(arr)
     if out is None:
         return ""
-    # v3: RapidOCROutput.txts is a tuple of strings.
+    # v3：RapidOCROutput.txts 是字符串元组。
     if hasattr(out, "txts"):
         txts = out.txts or ()
         return "\n".join(t for t in txts if t).strip()
-    # v1: (list[[box, text, score]], elapse)
+    # v1：(list[[box, text, score]], elapse)
     if isinstance(out, tuple) and len(out) >= 1:
         res = out[0]
         if not res:
@@ -122,9 +118,9 @@ def _ocr_ndarray(engine: Any, arr) -> str:
 
 
 def ocr_image_bytes(data: bytes) -> str:
-    """OCR a raw image (PNG/JPEG/etc bytes). Returns extracted text or ''.
+    """OCR 一张原始图片（PNG/JPEG 等字节）。返回抽取的文本或 ''。
 
-    Used for image-only web pages (content-type image/*).
+    用于纯图片网页（content-type image/*）。
     """
     if not data:
         return ""
@@ -143,13 +139,12 @@ def ocr_pdf(
     pages: Optional[str] = None,
     password: Optional[str] = None,
 ) -> PdfResult:
-    """OCR a scanned/image-only PDF. Returns a PdfResult.
+    """OCR 一本扫描件/纯图片 PDF。返回 PdfResult。
 
-    On success: ``content`` is a one-element markdown string with a header +
-    per-page ``--- Page N ---`` markers, ``scanned=True``, ``error=""``. When
-    the auto-cap kicked in (no ``pages`` spec + > ``OCR_DEFAULT_PAGES`` pages),
-    the header tells the agent how to fetch the next batch.
-    On failure: ``error`` is set and ``content`` is a human-readable explanation.
+    成功时：``content`` 是一个元素的 markdown 串，含页眉 + 每页
+    ``--- Page N ---`` 标记，``scanned=True``，``error=""``。自动上限生效时
+    （没给 ``pages`` 且页数 > ``OCR_DEFAULT_PAGES``），页眉会告诉 agent 怎么取
+    下一批。失败时：``error`` 有值，``content`` 是一段给人读的解释。
     """
     from dhole_mcp.pdf_extractor import PdfResult, _parse_pages  # reuse
 
@@ -163,7 +158,7 @@ def ocr_pdf(
     except ImportError as e:
         raise ImportError("OCR requires numpy (in rapidocr-onnxruntime).") from e
 
-    # pypdfium2 raises on a wrong password; surface an encrypted_pdf signal.
+    # pypdfium2 遇到错误密码会抛异常；转成 encrypted_pdf 信号。
     try:
         pdf = pdfium.PdfDocument(body, password=password or None)
     except Exception as e:
@@ -187,10 +182,9 @@ def ocr_pdf(
                              error="no_pages_in_range: the requested page range is out of bounds",
                              content=[f"[No pages in range '{pages}' (PDF has {total_pages} pages).]"])
 
-        # Auto-cap: when the agent did not pass a `pages` spec, OCR only the
-        # first OCR_DEFAULT_PAGES pages to avoid a multi-minute hang on a huge
-        # scanned PDF. Tell them (via the returned scope line + next_action) how
-        # to get the rest.
+        # 自动上限：agent 没传 `pages` 时，只 OCR 前 OCR_DEFAULT_PAGES 页，
+        # 避免一本巨型扫描 PDF 挂上几分钟。通过返回的范围行 + next_action 告诉
+        # 它怎么取剩下的。
         capped = False
         if not (pages and pages.strip()):
             if len(requested) > OCR_DEFAULT_PAGES:
@@ -199,7 +193,7 @@ def ocr_pdf(
 
         engine = _get_rapidocr()
 
-        # Best-effort metadata (title etc.) for the header.
+        # 尽力取元数据（标题等）做页眉。
         meta = {}
         try:
             meta = pdf.get_metadata_dict() or {}
@@ -217,7 +211,7 @@ def ocr_pdf(
                 if not text:
                     text = "[No text detected on this page.]"
                 rendered.append(f"--- Page {n} ---\n\n{text}")
-            except Exception as e:  # one page failing shouldn't kill the doc
+            except Exception as e:  # 单页失败不该拖垮整份文档
                 logger.debug("OCR page %d failed: %s", n, e)
                 rendered.append(f"--- Page {n} ---\n\n[OCR failed on this page: {str(e)[:120]}]")
 

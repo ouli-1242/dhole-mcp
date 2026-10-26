@@ -1,32 +1,28 @@
-"""Runtime path layout — every file dhole persists lives under ONE directory.
+"""运行期路径布局 —— dhole 持久化的每个文件都住在**一个**目录下。
 
-Everything dhole writes is regenerable state, and it lives under exactly one
-root: "what does this tool leave on my machine?" has to be answerable in one
-directory, and an uninstall instruction that names two is a lie about one.
-(``~/.dhole_mcp_cache/`` was the second root until 17.0 B2 - the migration that
-folded it in is gone, and nothing reads that path any more. A pre-14.3 install
-that still has it keeps it until the user deletes it.) This module is the single
-source of truth for those paths:
+dhole 写出的都是可再生的状态，而且只落在一个根下："这个工具在我机器上留下了
+什么？"必须能在一个目录里回答完，而一条点名两个目录的卸载说明就是在其中一个上
+撒谎。（``~/.dhole_mcp_cache/`` 在 17.0 B2 之前是第二个根 —— 把它折进来的迁移
+已经删掉，现在没有任何东西读那条路径。仍留着它的 pre-14.3 安装会一直保留，
+直到用户自己删。）本模块是这些路径的唯一真源：
 
     ~/.dhole/
-      cache.db                 content cache (SQLite; + -wal/-shm sidecars)
-      sessions.db              cookie jar (17.1+: only when DHOLE_PERSIST_CREDENTIALS=1;
-                               values DPAPI-encrypted — the default store is memory)
-      identity.db              stored cred_defaults (same switch, same encryption)
-      models/                  downloaded model files (neural reranker)
-      circuit_breaker.json     engine cooldown state
-      engine_stats.json        per-engine parse yield (who returned 0 usable results)
-      usage.jsonl              opt-in local call log
+      cache.db                 内容缓存（SQLite；外加 -wal/-shm 边车文件）
+      sessions.db              cookie 罐（17.1+：仅当 DHOLE_PERSIST_CREDENTIALS=1；
+                               值经 DPAPI 加密 —— 默认存储是内存）
+      identity.db              存下的 cred_defaults（同一个开关、同一套加密）
+      models/                  下载的模型文件（神经重排器）
+      circuit_breaker.json     引擎冷却状态
+      engine_stats.json        各引擎的解析产出（谁交回 0 条可用结果）
+      usage.jsonl              选开的本地调用日志
 
-Not in here, on purpose:
+刻意**不**在这里的东西：
 
-* the browser profile — a per-session ``tempfile.mkdtemp()`` directory that is
-  removed on close (transient scratch, not state; a crash leaves it to the OS
-  temp cleaner rather than to this directory forever);
-* ``rapidocr``'s OCR models — bundled with that package, not downloaded here.
+* 浏览器 profile —— 每次会话一个 ``tempfile.mkdtemp()`` 目录，关闭时删除
+  （瞬时草稿，不是状态；崩溃时留给操作系统临时目录清理器，而不是永远留在这个目录）；
+* ``rapidocr`` 的 OCR 模型 —— 随那个包打包，不在这里下载。
 
-Stdlib only, and imported by cache/reranker/search/updater, so it must never
-import a third-party dependency.
+只用标准库，且被 cache/reranker/search/updater 导入，所以绝不能导入第三方依赖。
 """
 
 from __future__ import annotations
@@ -39,16 +35,14 @@ _HOME_DIR_NAME = ".dhole"
 
 
 def home() -> Path:
-    """The one directory dhole owns: ``~/.dhole``, or ``DHOLE_HOME`` when set.
+    """dhole 拥有的那一个目录：``~/.dhole``，或设置时的 ``DHOLE_HOME``。
 
-    Why the override exists: this directory holds every fetched page body in
-    plaintext (cache.db), the search queries, and the reranker models. On a shared
-    machine that is content the user may not want next to their other files, and
-    the location used to be unmovable. ``DHOLE_HOME`` also lets a test or a
-    sandbox point everything at a throwaway directory.
+    为什么要有覆盖：这个目录明文装着每一份抓回的页面正文（cache.db）、搜索查询
+    与重排模型。在共享机器上，这些内容可能不该和其他文件放在一起，而位置过去是
+    不可移动的。``DHOLE_HOME`` 也让测试或沙箱能把一切指向一个随手丢弃的目录。
 
-    (17.0 B2 deleted the pre-14.3 cache migration, so a custom home is now
-    exactly what it says: nothing is folded in from ``~/.dhole_mcp_cache``.)
+    （17.0 B2 删掉了 pre-14.3 的缓存迁移，所以自定义 home 现在就是它字面的意思：
+    不会再从 ``~/.dhole_mcp_cache`` 折进任何东西。）
     """
     raw = (os.environ.get("DHOLE_HOME") or "").strip()
     if raw:
@@ -57,16 +51,16 @@ def home() -> Path:
 
 
 def ensure_private_dir(path: Path | str) -> Path:
-    """mkdir -p + best-effort owner-only mode. Never raises.
+    """mkdir -p + 尽力而为的仅属主模式。从不抛异常。
 
-    POSIX gets a real 0700. Windows largely ignores chmod (NTFS ACLs govern), so
-    there this is a no-op and ``DHOLE_HOME`` is the actual lever — said out loud
-    rather than pretending the bit was set.
+    POSIX 拿到真正的 0700。Windows 基本忽略 chmod（由 NTFS ACL 说了算），所以在
+    那里这是空操作，``DHOLE_HOME`` 才是真正的杠杆 —— 这件事明说，而不是假装位
+    已经设上了。
 
-    str callers exist (`sessions` / `identity` pass `os.path.dirname`), so the path
-    is normalized here rather than at each caller. `except` is OSError-only on
-    purpose: when this swallowed every exception, a `str.mkdir` AttributeError hid
-    inside it and the store died later as sqlite's "unable to open database file".
+    有 str 调用方（`sessions` / `identity` 传 `os.path.dirname`），所以路径在这里
+    归一化，而不是要求每个调用方归一。`except` 刻意只接 OSError：当它过去吞掉所有
+    异常时，一个 `str.mkdir` 的 AttributeError 藏在里面，存储后来才以 sqlite 的
+    "unable to open database file" 死掉。
     """
     path = Path(path)
     try:
@@ -78,10 +72,9 @@ def ensure_private_dir(path: Path | str) -> Path:
 
 
 def harden_file(path: Path | str) -> None:
-    """Best-effort 0600 on a state file we just wrote. Never raises.
+    """刚写下的状态文件尽力设为 0600。从不抛异常。
 
-    Applied after the atomic-replace so a temp file can't linger world-readable
-    with page content in it.
+    在原子替换之后调用，免得一个临时文件带着页面内容一直全世界可读。
     """
     try:
         os.chmod(str(path), 0o600)
@@ -90,11 +83,10 @@ def harden_file(path: Path | str) -> None:
 
 
 def harden_dir(path: Path | str) -> None:
-    """Best-effort 0700 on a directory dhole owns. Never raises.
+    """dhole 拥有的目录尽力设为 0700。从不抛异常。
 
-    Deliberately does NOT create the directory, unlike :func:`ensure_private_dir`:
-    callers keep their own ``mkdir`` so a failure to create it still raises the
-    way it always did, and this only tightens what already exists.
+    与 :func:`ensure_private_dir` 不同，刻意**不**创建目录：调用方保留自己的
+    ``mkdir``，创建失败仍按原来的方式抛出，这里只收紧已经存在的东西。
     """
     try:
         os.chmod(str(path), 0o700)
@@ -103,34 +95,34 @@ def harden_dir(path: Path | str) -> None:
 
 
 def cache_dir() -> Path:
-    """Directory holding the content cache DB (the dhole home itself)."""
+    """装内容缓存 DB 的目录（就是 dhole home 本身）。"""
     return home()
 
 
 def db_path() -> Path:
-    """The content cache SQLite file."""
+    """内容缓存的 SQLite 文件。"""
     return home() / "cache.db"
 
 
 def models_dir() -> Path:
-    """Directory for downloaded model files (neural reranker)."""
+    """下载的模型文件所在目录（神经重排器）。"""
     return home() / "models"
 
 
 def file(name: str) -> Path:
-    """A file directly inside the dhole home (``circuit_breaker.json``, ...)."""
+    """dhole home 直接下属的一个文件（``circuit_breaker.json`` …）。"""
     return home() / name
 
 
 def profiles_dir() -> Path:
-    """Parent of named persistent browser profiles (``~/.dhole/profiles/``).
+    """具名持久浏览器 profile 的父目录（``~/.dhole/profiles/``）。
 
-    Each profile is a full Chrome user-data-dir: cookies, localStorage, login
-    state. 17.0 没有任何调用方给它取名（按环境的 ``DHOLE_BROWSER_PROFILE`` 已
+    每个 profile 是一个完整的 Chrome user-data-dir：cookies、localStorage、登录
+    状态。17.0 没有任何调用方给它取名（按环境的 ``DHOLE_BROWSER_PROFILE`` 已
     注销，按次参数要等 B5 那颗「设一次的默认身份」工具回来才有人传），所以这个
     目录通常不存在。
-    它一旦存在就是"keep me signed in"的产物，里面每一项都是凭据级：created 0700 (owner-only on POSIX; on Windows the
-    profile ACL under the user's home directory is the real boundary).
+    它一旦存在就是 "keep me signed in" 的产物，里面每一项都是凭据级：创建时 0700
+    （POSIX 上仅属主；Windows 上真正的边界是用户主目录下的 profile ACL）。
     """
     return ensure_private_dir(home() / "profiles")
 
@@ -165,38 +157,30 @@ def _identity_names() -> tuple[str, ...]:
 
 
 def mask_machine_paths(text: str) -> str:
-    """Replace THIS machine's own roots in ``text`` with symbolic names.
+    """把 ``text`` 里**本机**自己的几个根换成符号名。
 
-    Masks the two roots the *server* owns: the process working directory (under an
-    MCP host that is the host's own install directory — the very path a caller
-    never mentioned, see ``_resolve_local_path``) and the user's home. The home is
-    masked even when the caller typed it, because the username is part of what the
-    path leaks and ``~/report.csv`` is a *better* diagnostic than the full form.
+    遮的是*服务器*拥有的两个根：进程工作目录（在 MCP 宿主下就是宿主自己的安装
+    目录 —— 调用方从未提过的那个路径，见 ``_resolve_local_path``）与用户主目录。
+    主目录即使由调用方自己打出也遮，因为用户名本身就是路径泄漏的一部分，而
+    ``~/report.csv`` 是*更好*的诊断信息，不是更差的。
 
-    A path with no machine root in it is returned unchanged: an absolute path the
-    caller invented is theirs to read back.
+    不含本机根的路径原样返回：调用方自己编造出来的绝对路径，理应让他读回去。
 
-    …except for the username, which is masked wherever it sits (:func:
-    ``_identity_names``, review R02-090). That exception is not a new root: the
-    reason the home is masked above is "the username rides along with the path",
-    and a *prefix* rule can't see a username that lives outside both roots.
-    Measured on the wire (`review/.runtime/p1/r98b_user_segment.json`): a file
-    under a temp root on another drive, in a directory named ``probe-of-<user>``
-    (pytest's own naming is exactly this shape), came back verbatim in both the
-    successful ``url`` and the ``File not found`` sentence.
+    ……用户名例外，它无论出现在哪一段都遮（:func:`_identity_names`，评审
+    R02-090）。这个例外不是新加的根：上面遮主目录的理由是"用户名跟着路径走"，
+    而**前缀**规则看不见落在两个根之外的用户名。线上实测
+    （``review/.runtime/p1/r98b_user_segment.json``）：另一个盘上临时根下的文件，
+    位于名为 ``probe-of-<user>`` 的目录里（pytest 自己的命名恰好就是这个形状），
+    在成功的 ``url`` 与 ``File not found`` 两句话里都逐字交回。
 
-    Longest root first, so a cwd nested inside home keeps its own, more specific
-    label. The boundary after a root has to be a real stopping point — anything
-    that is not a path-name character (separator, quote, bracket, space, end of
-    text): without it a shorter root would fold a longer directory that merely
-    starts with it (``C:\\Users\\mel`` read as a hit on ``C:\\Users\\me``), while
-    a stricter one (separator-or-end only) leaves the quoted form
-    (``at 'D:\\tools\\dhole-mcp'``) and the POSIX spelling of the SAME root
-    untouched, which is how a root leaks. Both spellings are masked because a
-    normalized path is the same directory wearing another hat. Matching is
-    case-insensitive because on Windows the same root
-    comes back spelled ``c:\\users\\ouli`` as often as not, and under-masking is
-    the failure that leaks.
+    长根排前面，所以嵌在 home 里的 cwd 保住自己更具体的标签。根之后的边界必须
+    是真正的收尾 —— 任何**不是**路径名字符的字符（分隔符、引号、括号、空格、
+    串尾）：没有它，一个更短的根会折掉只是以它开头的更长目录
+    （``C:\\Users\\mel`` 被读成命中 ``C:\\Users\\me``）；而更严格的边界（只认
+    分隔符或串尾）又会漏掉引号形式（``at 'D:\\tools\\dhole-mcp'``）以及同一个根
+    的 POSIX 拼法，那正是根会泄漏的途径。两种拼法都遮，因为归一化后的路径只是
+    同一个目录换了顶帽子。匹配大小写不敏感，因为 Windows 上同一个根常常写成
+    ``c:\\users\\ouli``；而遮少了才是会泄漏的那一侧。
     """
     if not text:
         return text

@@ -150,6 +150,40 @@ tests/                   unit + integration tests (no live network by default)
 - Keep tool definitions token-lean — the tool descriptions are part of the
   prompt budget for every agent session.
 
+## Comments and docstrings
+
+Comments are part of the maintenance contract: they record decisions the code
+cannot show, and they are reviewed like code.
+
+- **Language.** Comments and docstrings are written in Chinese. English is
+  reserved for language keywords, identifiers, code literals, external quotes,
+  tool directives (`# noqa`, `# type:`), and short structural labels. Public
+  docstrings use Chinese section labels (`参数:`, `返回:`, `异常:`). One comment is
+  written in one language; do not mix languages inside one sentence.
+- **Why, not what.** State the constraint, the failure that forced the choice,
+  or the rule the next editor must preserve. A comment that only restates the
+  next line is deleted. Test names and concrete observations are useful
+  citations; a bare "handle edge case" is not.
+- **Public APIs.** Every public module, class, function, and tool handler has a
+  Chinese docstring: a one-line summary, then `参数:`, `返回:`, and `异常:`
+  sections where those exist. Name boundary behaviour the caller can observe
+  (`None`/empty input, clamps, truncation, what is not raised). Private helpers
+  get a one-line purpose when the name is not enough. The agent-facing tool
+  contract stays in `server._TOOL_DEFS`; docstrings never substitute for it.
+- **Magic values, business rules, workarounds.** Give the constant a name and
+  document the reason and the bound. Temporary code is marked
+  `WORKAROUND(owner): reason; remove when <condition>` so it cannot become
+  permanent by accident.
+- **Follow-up markers.** `TODO(owner): next action` and
+  `FIXME(owner): next action` — an owner and an actionable next step are
+  mandatory. Anonymous markers are rejected, as are markers that history
+  (CHANGELOG, issue numbers, review rounds) already resolved.
+- **Never commit** commented-out code, sensitive values, stale comments, or
+  comments that narrate the diff ("added for X", "removed Y"). Update a comment
+  in the same change that makes it wrong. Test files follow the same rules; a
+  test's docstring states the bug or contract it pins, not the implementation
+  steps.
+
 ## Reporting bugs
 
 Include the `dhole -v` output, the exact tool call, and whether the browser

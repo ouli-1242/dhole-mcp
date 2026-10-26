@@ -1,27 +1,25 @@
-"""Byte-to-text decoding: one place that decides what a body's charset is.
+"""字节到文本的解码：决定一份 body 字符集的唯一地方。
 
-Two callers, two situations, one shared vocabulary for "this text looks wrong":
+两个调用方、两种情形，共享一套"这段文字看起来不对"的词汇：
 
-* HTTP (``fetcher._decode_html_bytes``) starts from a Content-Type charset -
-  but the header can lie, so the bytes get a vote.
-* Local files (``doc_parse``) have no header at all: only the bytes, an optional
-  BOM, and whatever the caller declares.
+* HTTP（``fetcher._decode_html_bytes``）从 Content-Type 的 charset 出发 ——
+  但头会说谎，所以字节也有投票权。
+* 本地文件（``doc_parse``）根本没有头：只有字节、可选的 BOM，以及调用方声明的
+  名字。
 
-Both need the same question answered - "which of these decodes is least
-damaged?" - so the markers and the scoring live here instead of in either
-caller.
+两边需要回答同一个问题 ——"这些解码里哪一个受损最轻？" —— 所以标记与打分住在
+这里，而不是任一个调用方里。
 
-Deliberately imports nothing from dhole_mcp: parse.py promises to work without
-the fetch stack (no primp), and this is the module it needs when the [all]
-extra is not installed.
+刻意不从 dhole_mcp 导入任何东西：parse.py 承诺在没有抓取栈（没有 primp）时也能
+工作，而这就是 [all] extra 未安装时它需要的模块。
 """
 
 from __future__ import annotations
 
 import codecs
 
-# Prefixes a UTF-8 multibyte sequence leaves behind when decoded as latin-1 /
-# cp1252: U+00C2/U+00C3/U+00E2 followed by more bytes, and the stray BOM.
+# UTF-8 多字节序列按 latin-1 / cp1252 解码后留下的前缀：U+00C2/U+00C3/U+00E2
+# 后面还跟着字节，以及落单的 BOM。
 _MOJIBAKE_MARKERS = ("Ã", "Â", "â€", "â\x80", "â\x9d", "ï»¿")
 
 _PUA_START = 0xE000
@@ -29,10 +27,9 @@ _PUA_END = 0xF8FF
 
 
 def misdecode_score(text: str) -> int:
-    """How damaged a decode looks, ignoring private-use characters.
+    """一次解码看起来有多受损，忽略私用区字符。
 
-    Replacement chars plus mojibake markers. Lower is better; 0 means clean.
-    This is the score the HTTP path compares two candidates with.
+    替换字符加上乱码标记。越低越好；0 表示干净。HTTP 路径就是用它比较两个候选。
     """
     if not text:
         return 0
@@ -43,14 +40,13 @@ def misdecode_score(text: str) -> int:
 
 
 def decode_damage(text: str) -> int:
-    """misdecode_score plus private-use-area characters.
+    """misdecode_score 加上私用区（PUA）字符。
 
-    The PUA term lives here and not in misdecode_score because it only carries
-    information when GB18030 is one of the candidates: GB18030 maps a large
-    number of byte pairs straight into the PUA, so a Big5 document decoded as
-    GB18030 puts 5-6 characters per 30 into it (measured on 4 samples), while a
-    genuine GBK document puts none in (measured on 7 samples, worst case 0).
-    The HTTP path never tries GB18030, so the term would only add noise there.
+    PUA 项住在这里而不在 misdecode_score，是因为它只有在候选里包含 GB18030 时
+    才携带信息：GB18030 会把大量字节对直接映射进 PUA，所以一份 Big5 文档按
+    GB18030 解码会每 30 个字符落进 5-6 个（4 个样本实测），而真正的 GBK 文档
+    一个都不落（7 个样本实测，最坏 0）。HTTP 路径从不尝试 GB18030，所以这一项
+    在那里只会加噪声。
     """
     score = misdecode_score(text)
     for ch in text:
@@ -59,30 +55,26 @@ def decode_damage(text: str) -> int:
     return score
 
 
-# How many characters per mojibake marker make the markers a real share of the
-# text rather than an example quoted inside it. Looser than any actual misdecode
-# (every non-ASCII character gets hit, and each yields 2-3 marker chars), tight
-# enough to stop a documentation file that shows one wrong charset.
+# 每个乱码标记对应多少字符，才让标记成为文本中的真实占比，而不只是正文里引用的
+# 一个例子。比任何真实误码都宽松（每个非 ASCII 字符都会中招，每个产生 2-3 个
+# 标记字符），又足够紧，能拦住一份只展示了一个错误字符集的文档文件。
 _MARKER_PER_CHAR = 50
 
 
 def charset_is_in_doubt(text: str) -> bool:
-    """Whether the damage in a decode says the CHARSET was the wrong guess.
+    """一次解码里的损伤是否说明**字符集**猜错了。
 
-    `decode_damage` is a comparison score: lower is better, and 0 is clean.
-    Turning it into a verdict was the mistake - it cannot tell a wrong charset
-    from text that QUOTES one. Measured on this repo's own CHANGELOG, which
-    documents the `â€™` failure mode: one marker in 43,559 characters that
-    decoded byte-perfect as UTF-8, reported as an undecodable file.
+    `decode_damage` 是一个比较分：越低越好，0 是干净。把它直接变成判决曾是那个
+    错误 —— 它分不清"字符集错了"和"文本**引用了**错字符集"。在本仓库自己的
+    CHANGELOG 上实测：它记录 `â€™` 这种失败模式，43,559 个字符里只有一个标记、
+    按 UTF-8 逐字节完美解码，却被报成无法解码的文件。
 
-    So the two signals are read apart:
+    所以两种信号分开读：
 
-    * a replacement char or a PUA char is anywhere damning - a lost byte and a
-      GB18030 pair that landed outside every alphabet cannot survive a correct
-      decode of the same bytes;
-    * Latin mojibake markers (`Ã©`, `â€™`) are valid characters in their own
-      right, so they only mean a wrong charset when they account for a share of
-      the document, which is exactly how a real misdecode scales.
+    * 替换字符或 PUA 字符出现在**任何地方**都足以定罪 —— 丢失的字节与落在所有
+      字母表之外的 GB18030 字节对，不可能在同一批字节的正确解码里幸存；
+    * 拉丁乱码标记（`Ã©`、`â€™`）本身就是合法字符，所以只有当它们占到文档的
+      一定比例时才说明字符集错了 —— 真实误码正是这样按比例扩张的。
     """
     if "\ufffd" in text:
         return True
@@ -95,31 +87,27 @@ def charset_is_in_doubt(text: str) -> bool:
     return markers >= 2 and markers * _MARKER_PER_CHAR >= len(text)
 
 
-# ─── Local-file decoding ──────────────────────────────────────────────────────
+# ─── 本地文件解码 ────────────────────────────────────────────────────────────
 #
-# A local file carries no header to declare its charset. Candidate order:
+# 本地文件没有头来声明字符集。候选顺序：
 #
-#   1. BOM. The file states its own encoding, and a BOM is never accidental.
-#   2. An explicit caller declaration. A hint, not a command: a name that does
-#      not decode strictly falls through to detection, and the returned
-#      encoding name says which one actually won.
-#   3. A NUL byte in the head. A UTF-16/32 body whose BOM was stripped decodes
-#      "cleanly" as GB18030 into text full of NULs - damage 0, content garbage.
-#   4. Strict UTF-8. A byte stream that decodes as UTF-8 essentially never came
-#      out of a legacy encoder, so this is a safe "is it UTF-8?" test.
-#   5. Strict GB18030, accepted only when it comes out clean. A superset of GBK
-#      and GB2312, so one candidate covers the whole family - measured clean on
-#      7/7 GBK samples.
-#   6. A scored comparison between utf-8 and gb18030, keeping whichever leaves
-#      the least damage.
+#   1. BOM。文件自己声明了编码，而 BOM 从不意外出现。
+#   2. 调用方的显式声明。是提示，不是命令：严格解不开的名字落回检测，返回的
+#      编码名说的是真正胜出的那一个。
+#   3. 头部里的 NUL 字节。BOM 被剥掉的 UTF-16/32 body 按 GB18030 会"干净地"
+#      解成满是 NUL 的文本 —— 损伤 0，内容全垃圾。
+#   4. 严格 UTF-8。能按 UTF-8 解码的字节流基本不可能出自旧式编码器，所以这是
+#      一个安全的"是不是 UTF-8？"测试。
+#   5. 严格 GB18030，只在干净解出时才接受。它是 GBK 与 GB2312 的超集，一个候选
+#      覆盖整个家族 —— 7/7 个 GBK 样本实测干净。
+#   6. utf-8 与 gb18030 之间的打分比较，保留损伤更少的那个。
 #
-# Known boundary, measured rather than assumed: GB18030 decodes the *other*
-# CJK legacy encodings strictly too, so Shift_JIS ("名前" -> "柤慜") and EUC-KR
-# come back as wrong-but-plausible Chinese with damage 0. Big5 is the
-# exception - it lands in the PUA and is flagged. Nothing cheap separates the
-# first two, so pass encoding= for them.
+# 已知边界，是量出来的不是假设的：GB18030 也能严格解码*其他* CJK 旧编码，所以
+# Shift_JIS（"名前" -> "柤慜"）与 EUC-KR 会以损伤 0 变成错但看似合理的中文。
+# Big5 是例外 —— 它落进 PUA 并被标记。没有便宜的办法区分前两者，所以请为它们
+# 传 encoding=。
 _BOM_ENCODINGS = (
-    # UTF-32-LE's BOM begins with UTF-16-LE's, so it has to be tested first.
+    # UTF-32-LE 的 BOM 以 UTF-16-LE 的 BOM 开头，所以必须先测它。
     (codecs.BOM_UTF32_LE, "utf-32"),
     (codecs.BOM_UTF32_BE, "utf-32"),
     (codecs.BOM_UTF8, "utf-8-sig"),
@@ -127,15 +115,13 @@ _BOM_ENCODINGS = (
     (codecs.BOM_UTF16_BE, "utf-16"),
 )
 
-# Tried strictly, in order, when there is no BOM and no usable declaration.
-# Deliberately short. big5/shift_jis/euc-kr would decode GBK bytes into wrong
-# characters, and cp1252 decodes *everything* into zero-damage Latin text,
-# which would make the damage signal worthless - a wrong answer that looks
-# clean is worse than a flagged one.
+# 没有 BOM、也没有可用声明时，按顺序严格尝试。刻意很短：big5/shift_jis/euc-kr
+# 会把 GBK 字节解成错字，而 cp1252 把**所有东西**解成零损伤的拉丁文本，会让损伤
+# 信号失去意义 —— 一个看起来干净的错答案比一个被标记的答案更糟。
 _AUTO_ENCODINGS = ("utf-8", "gb18030")
 
-# Scored fallback: every candidate is lossy for this file, so the least
-# damaged wins. cp1252 is absent for the reason above.
+# 打分的兜底：每个候选对这个文件都是有损的，所以损伤最少的胜出。cp1252 因上面
+# 同样的理由缺席。
 _SCORED_ENCODINGS = ("utf-8", "gb18030")
 
 
@@ -174,7 +160,7 @@ def contested_rival(body: bytes, used: str) -> str:
     """
     try:
         named = body.decode(used)
-    except (LookupError, UnicodeError):  # pragma: no cover - `used` just decoded fine
+    except (LookupError, UnicodeError):  # pragma: no cover - `used` 刚刚解码成功过
         return ""
     rival_text, rival_used, rival_damage = decode_file_bytes(body, "")
     if rival_damage or not rival_used or _canon_charset(rival_used) == used:
@@ -221,8 +207,8 @@ def encoding_basis(body: bytes, declared: str, used: str) -> str:
     if win == "gb18030":
         if any(body.startswith(bom) for bom, _ in _BOM_ENCODINGS):
             return ""
-        # A UTF-16/32 body with its BOM stripped decodes "cleanly" as GB18030 into
-        # text full of NULs; that decoder does not need a flag next to it.
+        # BOM 被剥掉的 UTF-16/32 body 按 GB18030 会"干净地"解成满是 NUL 的
+        # 文本；那个解码器不需要旁边再挂一面旗子。
         if b"\x00" in body[:64]:
             return ""
         return "guessed"
@@ -230,32 +216,29 @@ def encoding_basis(body: bytes, declared: str, used: str) -> str:
 
 
 def decode_file_bytes(body: bytes, declared: str = "") -> tuple[str, str, int]:
-    """Decode local-file bytes. Returns ``(text, encoding_used, damage)``.
+    """解码本地文件字节。返回 ``(text, encoding_used, damage)``。
 
-    ``damage`` is the count from :func:`decode_damage` for a decode that is
-    actually in doubt, and 0 for one that is not: a strict UTF-8 or GB18030
-    decode whose only blemish is a quoted mojibake example is a CORRECT read of
-    the bytes, and the caller's only use for this number is the verdict, so it
-    gets 0 and nothing else. Reaching the scored comparison means both strict
-    decodes failed, so there the damage always carries a lost byte.
+    ``damage`` 是 :func:`decode_damage` 的计数，但只在解码**确实存疑**时非零：
+    严格 UTF-8 或 GB18030 解出的文本，唯一瑕疵只是引用了一个乱码例子时，那是对
+    字节的**正确**读取，而调用方用这个数只为了判词，所以给它 0，别的什么都不给。
+    走到打分比较说明两个严格解码都失败了，那里的损伤必然带着丢失的字节。
 
-    Never raises: a caller always gets text, an encoding name and a damage
-    score, so it can report an unreliable decode instead of having to infer it
-    from the characters themselves.
+    从不抛异常：调用方总能拿到文本、编码名与损伤分，于是它可以报告一次不可靠的
+    解码，而不必从字符本身去猜。
     """
     for bom, enc in _BOM_ENCODINGS:
         if body.startswith(bom):
             try:
                 return body.decode(enc), enc, 0
-            except (LookupError, UnicodeError):  # pragma: no cover - BOM implies valid
+            except (LookupError, UnicodeError):  # pragma: no cover - 有 BOM 意味着有效
                 break
 
     if declared:
         try:
             return body.decode(declared), declared, 0
         except (LookupError, UnicodeError):
-            # Unknown or wrong name: not a usable instruction, so detect
-            # instead of returning replacement soup.
+            # 未知或错误的名字：不是可用的指令，所以去检测，
+            # 而不是交回一锅替换字符。
             pass
 
     if b"\x00" in body[:64]:
@@ -272,16 +255,15 @@ def decode_file_bytes(body: bytes, declared: str = "") -> tuple[str, str, int]:
             continue
         if not charset_is_in_doubt(text):
             return text, enc, 0
-        # Decoded strictly but came out damaged (GB18030 does this to Big5).
-        # Fall through to the scored comparison instead of returning it as a
-        # success - the caller needs the damage number either way.
+        # 严格解开了却带着损伤（GB18030 对 Big5 就是这样）。落进打分比较，
+        # 而不是把它当成功交回 —— 调用方无论哪条路都需要这个损伤数。
         break
 
     best: tuple[str, str, int] | None = None
     for enc in _SCORED_ENCODINGS:
         try:
             text = body.decode(enc, errors="replace")
-        except LookupError:  # pragma: no cover - both are stdlib codecs
+        except LookupError:  # pragma: no cover - 两者都是标准库编解码器
             continue
         damage = decode_damage(text)
         if best is None or damage < best[2]:

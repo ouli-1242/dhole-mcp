@@ -1,100 +1,94 @@
-"""Page interaction for web_read (the `actions` param).
+"""web_read 的页面交互（`actions` 参数）。
 
-When the agent passes `actions=[...]`, web_read forces the stealthy browser
-tier and runs the actions on the page after navigation, before content
-extraction. This reaches content behind a click, a search form, a "load more"
-button, or infinite scroll — cases a plain fetch can't.
+当 agent 传入 `actions=[...]` 时，web_read 强制走隐身浏览器档，并在导航之后、抽取内容
+之前于页面上执行这些动作。它能读到点击之后、搜索表单之后、"加载更多"按钮之后或无限
+滚动之后的内容 —— 这些是普通抓取到不了的。
 
-Implementation: patchright's stealthy fetch accepts a `page_action` callable that
-receives the Playwright AsyncPage after goto and is awaited. We build that
-callable from a validated list of action dicts and thread it through
-web_read -> _force_fetch -> stealthy_fetch -> session.fetch(page_action=...).
+实现：patchright 的隐身抓取接受一个 `page_action` 可调用对象，goto 之后拿到 Playwright
+AsyncPage，并会被 await。我们按一份校验过的动作字典列表构造这个可调用对象，并把它从
+web_read -> _force_fetch -> stealthy_fetch -> session.fetch(page_action=...) 一路穿下去。
 
-Action schema (one key per dict):
-  {"click": "css-selector"}                 click the first match
-  {"fill": {"selector": "css", "text": "x"}}  clear + fill an input
-  {"press": "Enter"}                        press a keyboard key on the page
-  {"press": {"selector": "css", "key": "Enter"}}  press on a specific element
-  {"wait": 500}                             wait milliseconds
-  {"scroll": 3}                             3 steps of "reach the bottom, wait for
-                                            the page to answer" (see _scroll_step)
+动作 schema（每个字典一个键）：
+  {"click": "css-selector"}                 点击第一个匹配
+  {"fill": {"selector": "css", "text": "x"}}  清空并填入一个输入框
+  {"press": "Enter"}                        在页面上按一个键
+  {"press": {"selector": "css", "key": "Enter"}}  在指定元素上按键
+  {"wait": 500}                             等待毫秒
+  {"scroll": 3}                             3 步"触底，等页面回应"（见 _scroll_step）
   {"scroll": {"steps": 5, "selector": ".feed", "ms_per_step": 3000}}
-                                            same, inside a scrollable container
-  {"wait_selector": "css"}                  wait for a selector to appear
+                                            同上，在可滚动容器内
+  {"wait_selector": "css"}                  等一个选择器出现
   {"wait_selector": {"selector": "css", "count": 40, "state": "visible"}}
-                                            wait for N matches / a visibility state
-  {"screenshot": "css"}                     crop one element to an inline image
+                                            等 N 个匹配 / 某个可见状态
+  {"screenshot": "css"}                     把一个元素裁成内联图片
   {"screenshot": {"selector": "css", "decode_qr": true}}
-                                            same, plus local QR decode of the crop
-  {"read": "css"}                           take THAT page instance's text back into
+                                            同上，外加对裁剪结果做本地 QR 解码
+  {"read": "css"}                           把**那一页实例**的文本取回链内
   {"read": {"selector": "css", "as": "code"}}
-                                            the chain; `as` names it for a later
+                                            `as` 给它起名，供后面的
   {"fill": {"index": 2, "text": "answer {=code}"}}
-                                            fill to answer what was just read — the
-                                            one shape that works for a challenge
-                                            written in the DOM (a fresh call means
-                                            a fresh challenge). Optional knobs:
-                                            `attribute` (read value/href instead of
-                                            text), `expect`.
-  {"snapshot": true}                        numbered interactive-element list
-                                            (index/tag/role/name) for the agent
-                                            to act on by index — no CSS needed
-  {"click": {"index": 17}}                  act by INDEX (from a {"snapshot"} row);
-  {"click": {"index": 17, "expect": "登录"}}  `expect` verifies the element's name
-                                            before acting (a stale index must
-                                            fail loudly, not click the wrong
-                                            thing). `expect` also works with a
-                                            selector.
-  {"hover": "css-selector"}                 hover to reveal (menus, tooltips);
-                                            the {"selector"|"index", "expect"?}
-                                            dict form works here too
-  {"drag": {"selector": "#a", "to": "#b"}}  drag one element onto another; BOTH
-                                            ends take the same target shapes
-                                            (a CSS selector string or
-                                            {"index": N, "expect"?})
+                                            填入刚读到的内容 —— 应对写在 DOM 里的
+                                            挑战只有这一种形状（新调用意味着新挑战）。
+                                            可选旋钮：`attribute`（读 value/href
+                                            而不是文本）、`expect`。
+  {"snapshot": true}                        带编号的可交互元素清单
+                                            （index/tag/role/name），让 agent 按
+                                            编号行动 —— 不需要 CSS
+  {"click": {"index": 17}}                  按**编号**行动（来自 {"snapshot"} 行）；
+  {"click": {"index": 17, "expect": "登录"}}  `expect` 在行动前核对元素名字
+                                            （过期的编号必须大声失败，而不是点错
+                                            东西）。`expect` 也适用于选择器。
+  {"click": {"at": [x, y]}}                 没有元素可寻址时（canvas、地图、绘制的
+                                            控件）按页面像素点击；落在提交控件上的
+                                            点要通过同一道提交闸
+  {"hover": "css-selector"}                 悬停以展开（菜单、提示框）；
+                                            {"selector"|"index", "expect"?}
+                                            字典形式在这里同样可用
+  {"drag": {"selector": "#a", "to": "#b"}}  把一个元素拖到另一个上；**两端**都用
+                                            同一套目标形状（CSS 选择器字符串或
+                                            {"index": N, "expect"?}）
+  {"drag": {"from_xy": [x1, y1], "to_xy": [x2, y2]}}
+                                            两点之间的同样拖动，用于没有可寻址
+                                            端点的滑块或 canvas
+  {"evaluate": {"expr": "...", "confirm": true}}
+                                            在页面里运行**一条** JavaScript 表达式
+                                            并交回它的值。它能读 cookie / 登录态，
+                                            所以没有 confirm:true（或线外同意）时
+                                            它暂停且什么都不跑
   {"select": {"selector": "#country", "option": "CN"}}
-                                             choose a <select> dropdown option.
-                                             `option` matches the option's value
-                                             first, then its visible label; a
-                                             list chooses several (multi-select
-                                             only). fill cannot reach a <select>
-                                             (Playwright fills inputs/textarea/
-                                             contenteditable only) and click
-                                             opens a native dropdown with no DOM
-                                             to click inside
-  {"navigate": "back"}                      history back / forward. A re-goto
-                                             of the same URL gets a fresh page
-                                             (form wiped, scroll reset); history
-                                             returns the page the browser
-                                             already holds
-  {"pdf": {"save_to": "out/receipt.pdf"}}   print THIS rendered page to a PDF
-                                             file - text stays selectable, so
-                                             doc_parse can read it back. Same
-                                             path discipline as screenshot's
-                                             save_to; headless browser only
+                                             选择一个 <select> 下拉项。`option` 先
+                                             匹配 option 的 value，再匹配可见标签；
+                                             列表可选多项（仅多选）。fill 够不到
+                                             <select>（Playwright 只填 input/
+                                             textarea/contenteditable），而 click
+                                             会打开一个没有 DOM 可点的原生下拉
+  {"navigate": "back"}                      历史后退 / 前进。重新 goto 同一 URL
+                                             会得到一张新页面（表单清空、滚动复位）；
+                                             历史导航回到浏览器已经持有的那一页
+  {"pdf": {"save_to": "out/receipt.pdf"}}   把**这一张已渲染的页面**打印成 PDF 文件
+                                             —— 文本仍可选中，doc_parse 能读回来。
+                                             路径纪律与 screenshot 的 save_to 相同；
+                                             仅无头浏览器
   {"submit": {"selector"|"index", "confirm"?}}
-                                            the irreversible one: without
-                                            confirm:true it pauses for approval.
-                                            `submitted` in the receipt is earned
-                                            by a request leaving that page; a
-                                            target no click submits (<form>) gets
-                                            `not_submitted` and audits nothing
-  {"click": {..., "confirm": true}}         a click that lands on a submit
-                                            control (input[type=submit|image],
-                                            a form's default button) passes the
-                                            SAME approval gate — the gate reads
-                                            what the action does, not its name
+                                             不可逆的那一个：没有 confirm:true 就
+                                             暂停等待批准。回执里的 `submitted` 由
+                                             一个离开该页的请求挣得；一个没有 click
+                                             提交的 <form> 目标得到 `not_submitted`
+                                             且不审计任何东西
+  {"click": {..., "confirm": true}}         落在提交控件上的点击（input[type=submit|
+                                             image]、表单的默认按钮）要通过**同一道**
+                                             批准闸 —— 闸读的是动作做了什么，不是
+                                             它的名字
 
-Validation is strict (CSS selectors validated, counts/ms capped) so a bad action
-fails fast instead of hanging the browser. Per-action errors are caught so one
-failing step doesn't abort the rest; the agent gets the page in whatever state
-it reached.
+校验很严（CSS 选择器要验证、计数/毫秒有上限），所以坏动作会快速失败而不是把浏览器
+挂住。按动作捕获错误，所以一步失败不会中止其余步骤；agent 拿到的是它走到的那一页。
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import re
@@ -113,18 +107,16 @@ logger = logging.getLogger("dhole-mcp.actions")
 MAX_ACTIONS = 20
 MAX_WAIT_MS = 30_000
 MAX_SCROLL = 50
-# Per-step and per-call waiting caps. The per-call one is the important number:
-# a lazy-load feed that never stops growing must not turn into a fetch that
-# never returns, so scrolling spends a bounded slice of the call budget and
-# reports what it reached.
+# 每步与每次调用的等待上限。每次调用的那颗才是关键数：一个永远长不完的懒加载
+# feed 不能变成一次永不返回的抓取，所以滚动只花调用预算里有界的一小片，并申报它
+# 到了哪里。
 SCROLL_STEP_MS_DEFAULT = 2_000
 SCROLL_STEP_MS_MAX = 10_000
 SCROLL_TOTAL_MS = 20_000
-# A click's own consequence gets this much time. The click action returned as
-# soon as the event was dispatched, so on news.ycombinator.com a click on
-# `a.more-link` extracted the OLD page and the caller read it as "the click did
-# nothing" (extended report N1). Bounded, because a click on a page that ignores
-# it must stay a fast no-op rather than a 4-second nap per action.
+# 一次点击自己的后果有这么久的处理时间。点击动作从前在事件派发后立刻返回，于是在
+# news.ycombinator.com 上点 `a.more-link` 抽到的是**旧**页面，调用方读成"点击没
+# 起作用"（扩展报告 N1）。有界，是因为点在一张无视它的页面上必须仍是快速 no-op，
+# 而不是每个动作睡 4 秒。
 CLICK_SETTLE_MS = 4_000
 CLICK_SETTLE_MIN_MS = 600
 #: 一步的等待在**没人点预算**时用的那颗数（playwright 的缺省值，沿用至今的行为）。
@@ -157,7 +149,17 @@ def _step_deadline_ms(own_ms: int = STEP_WAIT_MS) -> int:
 
 _VALID_KEYS = {"click", "fill", "press", "wait", "scroll", "wait_selector",
                "screenshot", "snapshot", "submit", "hover", "drag", "read",
-               "upload", "dialog", "tab", "select", "navigate", "pdf"}
+               "upload", "dialog", "tab", "select", "navigate", "pdf",
+               "evaluate"}
+
+#: evaluate 的表达式与结果各有一顶帽。表达式是调用方写的代码，结果会原样进
+#: transcript —— 两者都不该成为一次调用里最大的那块字节。
+MAX_EVALUATE_EXPR_CHARS = 20_000
+MAX_EVALUATE_CHARS = 20_000
+
+#: 坐标目标的上界。页面像素不会是负数；100k 只是防一个明显误写的天文数，
+#: 不是视口尺寸的声明（浏览器自己会拒越界点击）。
+MAX_POINT_COORD = 100_000
 
 #: tab 动作的帽。页签是浏览器进程里的真实页面，一枚上下文开几十个是自找内存病；
 #: 50 个对"填一半、查资料、回来提交"绰绰有余。
@@ -356,20 +358,15 @@ _SELECT_RESOLVE_JS = """(el, wants) => {
           options: opts.slice(0, 12).map(o => [labelOf(o), o.value])};
 }"""
 
-# An element capture only exists to be LOOKED at. 17.0: always available ——
-# the recognition happens agent-side (dhole ships no vision model), and a
-# text-only caller simply never asks for {"screenshot"}.
-# Element captures ride the same page instance as the surrounding fill/click
-# actions — that is the whole point over a separate screenshot call: the crop is
-# taken of the page THIS chain navigated, before anything else replaces it.
-# It is not "the captcha the next action answers": a capture reaches the caller
-# only after the chain has run, so no step of that chain can type what it shows.
-# Answering inside one navigation is what {"read"} + {"fill": "{=name}"} is for
-# (text the page holds); an image challenge has no in-chain answer at all —
-# that case is a hand-off, and this comment used to claim the capture was the
-# way around it.
-# A capture this large is a mistake (the whole page, not a cropped element), and
-# shipping it spends a multimodal client's context.
+# 元素截图存在的唯一目的就是**被看**。17.0：始终可用 —— 识别发生在 agent 那一侧
+# （dhole 不带视觉模型），纯文本调用方根本不会要 {"screenshot"}。
+# 元素截图与前后 fill/click 动作跑在**同一个页面实例**上 —— 这正是它比单独一次截图
+# 调用强的地方：裁剪的是**这条链**导航到的那一页，趁别的东西替换它之前。
+# 它不是"下一个动作要答的验证码"：截图只在链跑完之后才到达调用方，所以链中没有任何
+# 一步能把它显示的内容打进去。要在同一次导航里作答，用的是 {"read"} +
+# {"fill": "{=name}"}（页面自己持有的文本）；图片挑战根本没有链内答案 —— 那种情况是
+# 一次交接，而这段注释从前声称截图是绕过它的办法。
+# 这么大的截图是个错误（整页，而不是裁出的元素），交出去会花掉多模态客户端的上下文。
 MAX_ACTION_SHOT_BYTES = 2_000_000
 
 # ─── 捕获内核（A1：自 server.py 的 web_screenshot 方法搬入）───────────────────
@@ -380,17 +377,15 @@ MAX_ACTION_SHOT_BYTES = 2_000_000
 _IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 
 _BROWSER_ERROR_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
-    # Must come first: it is the narrow signal. A "matched no element" headline
-    # must not be read as a rendering timeout, which is the whole defect this
-    # entry exists for.
+    # 必须排在最前：它是窄信号。"matched no element"的标题不许被读成渲染超时，
+    # 而这正是这一条存在的全部理由。
     (("matched no element",),
      "the selector matched nothing on the loaded page - check it against the real "
      "DOM (extraction_type='html', or screenshot the full page first); use "
      "wait_selector only if the element appears later"),
-    # Before the timeout row, and for a reason of the same kind as that row's own:
-    # the driver says "Timed out while launching browser" when the OS refuses to
-    # create the process, and "raise timeout=" is advice for a slow page on a
-    # machine whose browser cannot start at all.
+    # 排在超时那一行之前，理由与那一行自己的理由同类：操作系统拒绝创建进程时，
+    # 驱动说的是 "Timed out while launching browser"，而"raise timeout="是对一台
+    # 浏览器根本起不来的机器上的慢页面给的建议。
     (("cannot access executable", "access is denied", "拒绝访问", "failed to launch",
       "while launching browser", "(0x5)"),
      "the browser binary is on disk but the operating system refused to start it - "
@@ -411,15 +406,13 @@ _BROWSER_ERROR_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
 
 
 async def _locator_or_raise(page, selector: str):
-    """The locator for `selector`, or LookupError when nothing on the page matches.
+    """`selector` 的 locator；页面上没有任何匹配时抛 LookupError。
 
-    Split out of the screenshot capture so the rule it enforces can be tested
-    without a browser: `.first` on a locator that will never match waits the
-    whole call budget out (30s by default) and then reports a TIMEOUT, which
-    the error mapping reads as "the page never finished rendering" - advice
-    (raise `timeout`, add `wait_selector`) that cannot conjure an element that
-    is not in the DOM. Measured: a selector matching nothing and a page that
-    genuinely never rendered produced the same sentence.
+    从截图捕获里拆出来，是为了不用浏览器也能测它守的规则：对一个永远不会匹配的
+    locator 调 `.first`，会把整个调用预算耗光（默认 30 秒），然后报一个 TIMEOUT，
+    而错误映射会把它读成"页面从未渲染完" —— 给出的建议（提高 `timeout`、加
+    `wait_selector`）变不出一个不在 DOM 里的元素。实测：一个不匹配任何东西的选择器
+    与一张真的从未渲染的页面，产出了同一句话。
     """
     loc = page.locator(selector)
     if await loc.count() == 0:
@@ -429,10 +422,10 @@ async def _locator_or_raise(page, selector: str):
 
 
 def _resolve_save_to(save_to: str, image_type: str) -> Path:
-    """Validate a save_to path BEFORE a browser is started, and return it.
+    """在校验期（浏览器启动之前）核验 save_to 路径，并返回它。
 
-    Split from the write so a typo costs an instant refusal instead of a 10-second
-    cold start followed by "could not write".
+    与真正写入拆开：路径打错就当场被拒，而不是先付十秒冷启动、再听到
+    "could not write"。
     """
     raw = (save_to or "").strip()
     if not raw:
@@ -495,7 +488,7 @@ def _resolve_pdf_save_to(save_to: str) -> Path:
 
 
 def _resolve_upload_files(files, where: str) -> list[str]:
-    """Validate the upload file list BEFORE a browser starts; return real paths.
+    """在浏览器启动之前核验上传文件清单；返回真实路径。
 
     upload 把本机文件交给页面——它是这个工具面里第一个「读本机」的动作，路径
     纪律按**读侧**走：realpath 先展开符号链接（/tmp 里一枚指向 ~/.ssh 的链接
@@ -544,12 +537,11 @@ def _resolve_upload_files(files, where: str) -> list[str]:
 
 
 def _write_screenshot(data: bytes, target: Path) -> str:
-    """Write captured bytes to a validated path; return the absolute path.
+    """把捕获到的字节写到已核验的路径；返回绝对路径。
 
-    Why this exists at all (G10): the image itself only reaches a multimodal
-    client. Every other model got "image unavailable" plus a pile of base64 it
-    cannot read, so the screenshot was effectively not a feature — a path is the
-    form that survives into a text-only transcript and out to another tool.
+    这个函数存在的理由（G10）：图片本身只能送达多模态客户端。别的模型拿到的是
+    "image unavailable" 加一堆读不了的 base64，截图等于不是功能 —— 路径才是能活
+    过纯文本转录、还能交给别的工具的那种形态。
     """
     try:
         if target.parent and not target.parent.exists():
@@ -561,15 +553,13 @@ def _write_screenshot(data: bytes, target: Path) -> str:
 
 
 def _screenshot_error_message(exc: BaseException) -> str:
-    """Turn a browser-capture exception into one actionable line for the agent.
+    """把浏览器捕获的异常收成给 agent 的一行可行动的话。
 
-    patchright/playwright raise multi-line dumps: a one-line headline followed
-    by a "Call log:" block with per-step indentation ("waiting for fonts to
-    load"). That block describes the *driver's* internals, not the caller's
-    problem - it names no argument the agent could change, so shipping it spends
-    context and buries the one line that does matter. Keep the exception type
-    and the headline, drop the log, and append the move that usually fixes it.
-    The raw exception is not lost: the caller logs it for the operator.
+    patchright/playwright 抛的是多行转储：一行标题，后面跟一个按步缩进的
+    "Call log:" 块（"waiting for fonts to load"）。那块描述的是**驱动**的内部，
+    不是调用方的问题 —— 它不点名任何 agent 能改的参数，发出去既费上下文，又埋掉
+    真正重要的那一行。保留异常类型和标题、丢掉日志、追加通常能修好的那一步。
+    原始异常不会丢：调用方会把它记进日志给运维看。
     """
     text = str(exc).strip()
     headline = text.splitlines()[0].strip() if text else ""
@@ -610,8 +600,8 @@ MAX_ELEMENT_INDEX = 5000
 
 # ─── 元素名字怎么取，只在这里写一遍 ───────────────────────────────────────────
 # 两位读者：`{"snapshot": true}` 列出的那一列（_ENUM_JS），和 `expect` 核对用的那一个
-# （_NAME_JS，`_check_expect` 与 `_target_locator` 各取一次）。`references/tools.md:29`
-# 把两者都说成 "the element's name / visible name"，所以它们**必须**是同一个字符串：
+# （_NAME_JS，`_check_expect` 与 `_target_locator` 各取一次）。`references/tools.md` 的
+# snapshot 一条把两者都说成 "the element's name / visible name"，所以它们**必须**是同一个字符串：
 # 列表里写着"手机号"，`expect:"手机号"` 就得认。从前是两份各写一遍的 JS，于是
 # snapshot 那一侧刚堵住 value（`e2e_a_snapshot_does_not_name_an_element_by_its_contents
 # .py`），expect 这一侧还留着 `el.value` —— 同一元素两套名字，正确写法当场失败，而失败
@@ -677,7 +667,7 @@ _ENUM_JS = """(sel) => {
 # 标准写法（expect 复述列表里那个名字）会在填过的字段上永远失配。
 # `expect` 要的是元素的**稳定身份**：字段此刻打着什么字会随输入变，不配当身份；要验
 # "填进去的字此刻在页面上"走的是另一扇门（`read` 的 property:"value" 与 `attribute_says`，
-# 见 references/fields.md:147）。
+# 见 `references/fields.md` 的 `metadata.actions` 一行）。
 _NAME_JS = _NAME_LADDER_JS
 
 _COUNT_JS_INTERACTIVE = "(sel) => document.querySelectorAll(sel).length"
@@ -686,7 +676,12 @@ _COUNT_JS_INTERACTIVE = "(sel) => document.querySelectorAll(sel).length"
 # input 只认显式 type=submit|image（缺省 type 的 input 是 text，从不提交）；
 # button 的缺省 type 就是 submit，但 button/reset 类型与没有 form 关联的
 # 都够不着任何表单；role=link 是"长得像按钮的链接"——链接导航，不提交。
-_SUBMIT_CONTROL_JS = """el => {
+_SUBMIT_CONTROL_BODY = """
+  if (el && typeof el.closest === 'function') {
+    /* 点在按钮里的 <span>/<svg> 上，浏览器触发的是按钮的提交行为：先找到
+       真正承接点击的控件，而不是只看最表层那个孩子。 */
+    el = el.closest('button,input') || el;
+  }
   const tag = (el.tagName || '').toLowerCase();
   if (tag !== 'input' && tag !== 'button') return null;
   if ((el.getAttribute('role') || '').toLowerCase() === 'link') return null;
@@ -694,7 +689,13 @@ _SUBMIT_CONTROL_JS = """el => {
   if (tag === 'button' && (type === 'button' || type === 'reset')) return null;
   if (tag === 'input' && type !== 'submit' && type !== 'image') return null;
   return el.form ? 'submit' : null;
-}"""
+"""
+_SUBMIT_CONTROL_JS = "el => {" + _SUBMIT_CONTROL_BODY + "}"
+#: 同一套判据，问的是"这个点上现在站着谁"——坐标点击不能绕过提交闸。
+_SUBMIT_CONTROL_AT_JS = ("([x, y]) => {\n"
+                         "  let el = document.elementFromPoint(x, y);\n"
+                         "  if (!el) return null;"
+                         + _SUBMIT_CONTROL_BODY + "}")
 
 # 那一发没出去时，回执要点名它落在什么元素上（<FORM> 不会被"点击"提交）。
 _TAG_JS = "el => (el.tagName || '').toLowerCase()"
@@ -831,19 +832,16 @@ def _screenshot_shape_error(i: int) -> ValueError:
 
 
 def _act_target(i: int, key: str, val) -> dict:
-    """Normalize a click/hover/drag/fill/submit/read/screenshot target to exactly
-    one of:
+    """把 click/hover/drag/fill/submit/read/screenshot 的目标归一到恰好一种形状：
 
-    ``{"selector": "css"}`` or ``{"index": N}``, plus the optional ``expect``
-    name-check. Both spellings address the same element set — the CSS selector
-    (the original path) and the snapshot index (MVP-2, "用户不用懂" via the
-    outer agent) — and a dict carrying both is a typo, not a combination.
-    A bare integer is the snapshot index written the way the snapshot showed it
-    (刀9-6c · F8), so the number a caller reads off a row is the number it sends.
+    ``{"selector": "css"}`` 或 ``{"index": N}``，另可带 ``expect`` 名字核对。
+    两种拼法指向同一个元素集合 —— CSS 选择器（原本的路径）和快照行号（MVP-2，
+    外层 agent 替用户"不用懂"）—— 一个 dict 同时带两者是笔误，不是组合。
+    裸整数就是快照展示的那个行号（刀9-6c · F8）：调用方从行上读到的数，就是它发
+    回来的数。
 
-    `press` is not here: its bare value is already the KEY string ("Enter"), so a
-    bare integer would read as a key name. Its target stays
-    ``{"index": N, "key": "Enter"}``.
+    `press` 不在这里：它的裸值本来就是键名字符串（"Enter"），裸整数会被读成键名。
+    它的目标保持 ``{"index": N, "key": "Enter"}``。
     """
     from dhole_mcp.security import validate_css_selector
 
@@ -910,8 +908,24 @@ def _act_target(i: int, key: str, val) -> dict:
     return target
 
 
+def _point_pair(i: int, key: str, field: str, raw) -> list[int]:
+    """坐标目标恰好是两个非负整数。"""
+    if (not isinstance(raw, (list, tuple)) or len(raw) != 2
+            or any(not isinstance(v, int) or isinstance(v, bool) for v in raw)):
+        raise ValueError(
+            f"action {i} {key!r}.{field} must be [x, y] - two page-pixel "
+            "integers (read them off a screenshot); floats, strings and "
+            "booleans are not coordinates")
+    x, y = raw
+    if x < 0 or y < 0 or x > MAX_POINT_COORD or y > MAX_POINT_COORD:
+        raise ValueError(
+            f"action {i} {key!r}.{field} must be within 0..{MAX_POINT_COORD} "
+            f"for both axes (got {raw!r})")
+    return [x, y]
+
+
 def _validate_actions(actions) -> list[dict]:
-    """Validate + normalize the actions list. Raises ValueError on bad input."""
+    """校验并归一 actions 清单；输入不合法时抛 ValueError。"""
     from dhole_mcp.security import validate_css_selector
 
     if not isinstance(actions, list) or not actions:
@@ -934,13 +948,25 @@ def _validate_actions(actions) -> list[dict]:
             raise ValueError(f"action {i} has unknown key {key!r}; valid: {sorted(_VALID_KEYS)}")
         if key == "click":
             if isinstance(val, str):
-                # The original spelling stays the original spelling: a string
-                # passes through as a string, so nothing that reads normalized
-                # actions sees a shape drift for the existing form.
+                # 原来的拼法保持原来的拼法：字符串原样穿过，于是任何读归一化
+                # 动作的消费者都不会看到既有形状漂移。
                 if not val.strip():
                     raise ValueError(f"action {i} {key!r} must be a non-empty CSS selector string")
-                validate_css_selector(val)  # raises SecurityError on bad selector
+                validate_css_selector(val)  # 选择器不合法时抛 SecurityError
                 out.append({key: val})
+            elif isinstance(val, dict) and "at" in val:
+                foreign = sorted(set(val) - {"at", "confirm"})
+                if foreign:
+                    raise ValueError(
+                        f"action {i} 'click.at' is a whole target - a point "
+                        "cannot also carry selector/index/expect "
+                        f"(unexpected key(s): {foreign})")
+                at = _point_pair(i, key, "at", val.get("at"))
+                point_confirm = val.get("confirm", False)
+                if not isinstance(point_confirm, bool):
+                    raise ValueError(f"action {i} 'click.confirm' must be a boolean")
+                out.append({key: {"at": at,
+                                  **({"confirm": True} if point_confirm else {})}})
             else:
                 target = _act_target(i, key, val)
                 # `confirm` 只长在 dict 那一支：裸行号（刀9-6c · F8）没有放它的格子，
@@ -956,14 +982,25 @@ def _validate_actions(actions) -> list[dict]:
                     target = {**target, "confirm": True}
                 out.append({key: target})
         elif key == "hover":
-            # Same target grammar as click (string shorthand or the
-            # {"selector"|"index", "expect"?} dict); no dict-only knobs exist.
+            # 与 click 相同的目标语法（字符串简写或
+            # {"selector"|"index", "expect"?} 字典）；没有 dict 专有的旋钮。
             out.append({key: _act_target(i, key, val)})
         elif key == "drag":
             # 拖拽的语义是两个端点：被拖的元素和落点，所以字符串简写在这里
             # 不设——没有落点的 drag 不是没写完，是没意义（click 的简写是
             # 历史形状，drag 没有历史）。两端各自走同一套 _act_target 寻址，
             # 快照索引因此对被拖元素与落点都可用。
+            if isinstance(val, dict) and ({"from_xy", "to_xy"} & set(val)):
+                if set(val) != {"from_xy", "to_xy"}:
+                    raise ValueError(
+                        f"action {i} 'drag' by coordinates takes exactly the "
+                        "pair from_xy and to_xy - each [x, y] page pixels for "
+                        "one end; it cannot mix with selector/index/to")
+                out.append({key: {
+                    "from_xy": _point_pair(i, key, "from_xy", val.get("from_xy")),
+                    "to_xy": _point_pair(i, key, "to_xy", val.get("to_xy")),
+                }})
+                continue
             def _drag_shape(why: str = "") -> ValueError:
                 return ValueError(
                     f"action {i} 'drag' must be {{selector|index, to}} - the "
@@ -1014,8 +1051,10 @@ def _validate_actions(actions) -> list[dict]:
                 raise ValueError(
                     f"action {i} 'dialog' must be {{answer}} - a bare "
                     "\"accept\"/\"dismiss\", or {\"answer\": ..., "
-                    '"prompt_text"?: ...} (the text that answers a prompt()) - '
-                    "arm it BEFORE the action that pops the dialog")
+                    '"prompt_text"?: ...}: answer only takes "accept" or '
+                    '"dismiss", and the text that answers a prompt() goes in '
+                    "prompt_text (not in answer) - arm it BEFORE the action "
+                    "that pops the dialog")
             if prompt_text is not None and (
                     not isinstance(prompt_text, str) or len(prompt_text) > 200):
                 raise ValueError(
@@ -1108,10 +1147,9 @@ def _validate_actions(actions) -> list[dict]:
                 raise ValueError(f"action {i} 'submit.confirm' must be a boolean")
             out.append({key: {**target, "confirm": confirm}})
         elif key == "wait_selector":
-            # A bare selector waits for the FIRST match to exist, which is the
-            # shape this action has always had. The dict adds the two things a
-            # lazy-loaded list actually needs: how many items, and whether they
-            # must be painted (an appended-but-hidden node is not content yet).
+            # 裸选择器等的是第一个匹存在，这是这个动作一直以来的形状。字典加上
+            # 懒加载列表真正需要的两件事：多少个条目，以及它们是否必须被画出来
+            # （一个已追加但隐藏的节点还不算内容）。
             if isinstance(val, str):
                 sel, count, state, tmo = val, 1, "attached", 10_000
             elif isinstance(val, dict):
@@ -1136,9 +1174,9 @@ def _validate_actions(actions) -> list[dict]:
             out.append({key: {"selector": sel, "count": min(count, 1000),
                               "state": state, "timeout": max(500, min(int(tmo), MAX_WAIT_MS))}})
         elif key == "screenshot":
-            # String shorthand = selector only; the dict adds the capture knobs.
-            # The gate is checked HERE (validation time), so a refused capture
-            # costs an instant error instead of a browser cold start.
+            # 字符串简写 = 只给选择器；字典加上捕获旋钮。
+            # 闸在这里（校验期）就查，所以被拒的截图代价是一条即时错误，而不是一次
+            # 浏览器冷启动。
             if isinstance(val, str):
                 spec: dict = {"selector": val}
             elif isinstance(val, int) and not isinstance(val, bool):
@@ -1311,6 +1349,39 @@ def _validate_actions(actions) -> list[dict]:
                     stored.add(as_name)
                     target["as"] = as_name
             out.append({key: target})
+        elif key == "evaluate":
+            # {"evaluate": "expr"} 或 {"evaluate": {"expr": ..., "confirm": true}}。
+            # 这是整条动作面上唯一能跑**任意**页面 JS 的键：它能读 document.cookie
+            # 和登录态，回执还会把读到的值带进 transcript。所以执行前有独立确认闸
+            # （_evaluate_gate_row）：没 confirm、也没 out-of-band 的人工点头时，
+            # 表达式一个字都不跑。
+            if isinstance(val, str):
+                expr, eval_confirm = val, False
+            elif isinstance(val, dict):
+                foreign = sorted(set(val) - {"expr", "confirm"})
+                if foreign:
+                    raise ValueError(
+                        f"action {i} 'evaluate' takes expr and confirm only "
+                        f"(unexpected key(s): {foreign})")
+                expr = val.get("expr")
+                eval_confirm = val.get("confirm", False)
+            else:
+                expr, eval_confirm = None, False
+            if not isinstance(expr, str) or not expr.strip():
+                raise ValueError(
+                    f"action {i} 'evaluate' must be a JS expression string or "
+                    "{expr} - e.g. {\"evaluate\": {\"expr\": "
+                    "\"document.title\", \"confirm\": true}}. Arbitrary page JS "
+                    "is a privileged read (cookies, logged-in state): it needs "
+                    "confirm: true or an out-of-band yes before it runs")
+            if len(expr) > MAX_EVALUATE_EXPR_CHARS:
+                raise ValueError(
+                    f"action {i} 'evaluate.expr' is {len(expr):,} chars "
+                    f"(cap {MAX_EVALUATE_EXPR_CHARS:,}) - split the work into "
+                    "smaller expressions")
+            if not isinstance(eval_confirm, bool):
+                raise ValueError(f"action {i} 'evaluate.confirm' must be a boolean")
+            out.append({key: {"expr": expr, "confirm": eval_confirm}})
         elif key == "press":
             if isinstance(val, str):
                 k = val.strip()
@@ -1348,12 +1419,11 @@ def _validate_actions(actions) -> list[dict]:
             else:
                 raise ValueError(f"action {i} 'press' must be a key string or {{selector, key}}")
         elif key == "wait":
-            # A digit STRING is accepted because that is how a client that
-            # serializes numbers spells {"wait": 1000} — as {"wait": "1000"} —
-            # and rejecting it failed the whole fetch over a formatting detail.
+            # 接受数字字符串：把 {"wait": 1000} 序列化成 {"wait": "1000"} 的客户端
+            # 就是这么写的。为了一处格式细节拒掉整次抓取不值得。
             out.append({key: _int_arg(val, f"action {i} 'wait'", "ms", MAX_WAIT_MS)})
         elif key == "scroll":
-            # One normalized shape, so the executor has a single path.
+            # 只归一成一种形状，执行器就只剩一条路。
             spec = val if isinstance(val, dict) else {}
             steps = spec.get("steps", 3) if isinstance(val, dict) else val
             sel = spec.get("selector")
@@ -1383,12 +1453,11 @@ _WAIT_STATES = frozenset({"attached", "visible", "hidden", "detached"})
 
 
 def _int_arg(val, where: str, unit: str, cap: int) -> int:
-    """Coerce an int-or-digit-string action argument into a clamped int.
+    """把 int 或数字字符串形态的动作参数收成夹紧后的 int。
 
-    The cap is announced (`{"wait": 120000}` became 30,000 ms and the action list
-    came back looking exactly like what was sent), because the caller is the one
-    budgeting wall-clock time for a page: a wait that is shorter than asked is a
-    fact about the result, not a detail of the implementation.
+    夹紧这件事会申报（`{"wait": 120000}` 变成 30,000 ms，动作列表回读却与发出去的
+    一模一样过），因为给页面墙钟时间做预算的是调用方：等待比要求的短是**结果**的
+    事实，不是实现的细节。
     """
     n: int | None = None
     if isinstance(val, int) and not isinstance(val, bool):
@@ -1441,19 +1510,18 @@ _SCROLL_JS = """
 
 _COUNT_JS = "(p) => document.querySelectorAll(p[0]).length >= p[1]"
 
-# (where we are, how much page there is). The three numbers answer the only
-# question a click leaves open: did something happen, and is it still happening.
+# （我们在哪，页面有多大）。这三个数回答点击留下的唯一问题：有事发生了吗，
+# 还在发生吗。
 _DOM_MARK_JS = """() => [location.href,
                         document.querySelectorAll('*').length,
                         document.body ? document.body.innerText.length : 0]"""
 
 
 async def _dom_snapshot(page):
-    """``_DOM_MARK_JS``'s three numbers, or None when there is no page to ask.
+    """``_DOM_MARK_JS`` 的那三个数；没有页面可问时给 None。
 
-    A document being replaced mid-navigation has no execution context to
-    evaluate against, and that error is itself the answer — the caller treats
-    None as "a navigation is in flight", which is the case worth waiting for.
+    导航中途被换掉的文档没有执行上下文可以求值，而这个错误本身就是答案 ——
+    调用方把 None 读作"导航正在进行"，那正是值得等的情形。
     """
     try:
         got = await page.evaluate(_DOM_MARK_JS)
@@ -1506,17 +1574,15 @@ async def _frame_locator(page, frame: str, sel: str):
 
 
 async def _target_locator(page, target):
-    """Resolve a validated action target (a bare selector string, {"selector"}
-    or {"index", "expect"?}) to a Playwright locator, running the `expect`
-    name-check first.
+    """把已校验的动作目标（裸选择器串、{"selector"} 或 {"index", "expect"?}）
+    解析成 Playwright locator；先跑 `expect` 名字核对。
 
-    The check is what makes index addressing safe across two page loads: a
-    stale index must fail LOUDLY (naming what the element reads now) instead of
-    quietly clicking something else. It costs one extra roundtrip only when
-    `expect` was passed.
+    这道核对就是行号寻址能跨两次页面加载仍安全的原因：过期行号必须**大声**失败
+    （点名该元素现在读作什么），而不是悄悄点到别的东西上。只有传了 `expect` 才
+    多花一个往返。
 
-    The bare-string form is click's original shape (`{"click": "a.more-link"}`);
-    validation passes it through unchanged, so resolution has to accept it.
+    裸字符串是 click 最早的形状（`{"click": "a.more-link"}`）；校验原样放行，
+    所以解析这一侧必须接得住。
     """
     if isinstance(target, str):
         return page.locator(target).first
@@ -1547,25 +1613,29 @@ async def _target_locator(page, target):
 
 
 async def _click_and_settle(page, selector: str) -> None:
-    """Click, then give whatever the click caused time to finish."""
+    """点击，然后给这次点击引发的后果留出收尾时间。"""
     await _settle_after_click(page, page.locator(selector).first)
 
 
-async def _settle_after_click(page, click_locator) -> None:
-    """``locator().click()`` returns once the event is dispatched, not once its
-    consequence is done, so every click that navigated raced the extraction
-    (measured on HN's ``a.more-link``: the old page came back). Two shapes to
-    wait out, and they are different questions:
+async def _settle_after_click(page, click_locator=None, *, at=None) -> None:
+    """``locator().click()`` 在事件派发后就返回，不等后果落定，所以每一次会导航
+    的点击都跟提取赛跑（HN 的 ``a.more-link`` 上实测：拿回来的是旧页面）。要等
+    的形态有两种，问的是两个不同的问题：
 
-    * the destination changed — a navigation, in flight or already swapped the
-      document out (``_dom_snapshot`` going None). Wait for the new document.
-    * the same page grew — an expander or an in-page load. Wait until it stops
-      changing.
+    * 目的地变了 —— 导航正在进行，或文档已经被换掉（``_dom_snapshot`` 返回
+      None）。等新文档。
+    * 同一页长大了 —— 展开器或页内加载。等它不再变化。
 
-    A click nothing answers gets out at ``CLICK_SETTLE_MIN_MS``.
+    点了没人应答的，到 ``CLICK_SETTLE_MIN_MS`` 就放行。
+
+    ``at=(x, y)`` 是坐标那条路：要等的后果相同，但事件经 ``page.mouse`` 派发，
+    因为没有元素可寻址。
     """
     before = await _dom_snapshot(page)
-    await click_locator.click(timeout=_step_deadline_ms())
+    if at is None:
+        await click_locator.click(timeout=_step_deadline_ms())
+    else:
+        await page.mouse.click(*at)
     started = time.monotonic()
     # 这一颗重新读一次余额：上面那发 click 已经花掉了一截，settle 拿的是**剩下的**，
     # 不是同一个 4 秒的再一遍 —— 两步各自合规、加起来越过调用方点名的预算，正是场景 10
@@ -1621,30 +1691,23 @@ async def _settle_quiet(page) -> None:
 
 
 async def _scroll(page, steps: int, selector, ms_per_step: int) -> None:
-    """Reach the bottom, wait for the page to answer, then go again.
+    """触底，等页面回应，再触一次。
 
-    The old form was ``scrollBy(0, innerHeight)`` plus a fixed 700 ms nap, and on
-    a real infinite-scroll page it produced nothing at all — measured on
-    quotes.toscrape.com/scroll: 10 of those steps left the page at its first 10
-    items with "Loading..." still up. Three reasons, all fixed here:
+    老写法是 ``scrollBy(0, innerHeight)`` 加固定 700ms 小睡，在真正的无限滚动页
+    上什么也没产出 —— 在 quotes.toscrape.com/scroll 实测：这样滚 10 步，页面停在
+    头 10 条，"Loading..." 还挂着。三个原因，这里逐一修掉：
 
-    * a lazy loader keys off the distance to the bottom, and every chunk it
-      appends moves that bottom away again — so one scroll per step stops at the
-      OLD bottom and never asks for more. Each step now re-scrolls whenever the
-      DOM grows.
-    * the loader runs on the scroll EVENT. When the document is not scrollable
-      (a tall viewport over short, stylesheet-blocked content — scrollY measured
-      0 through every step) a scrollTo changes nothing and fires nothing, so the
-      loader never wakes. The scroll now dispatches the event it was meant to
-      cause.
-    * 700 ms is a guess about a network round trip. Waiting for the DOM to stop
-      changing answers the question that actually matters, and gives up as soon
-      as the page has gone quiet.
+    * 懒加载器看的是离底部的距离，而它追加的每一块又把底部推远 —— 于是每步只滚
+      一次会停在**旧**底部，永远不再要更多。现在 DOM 一长高，这一步就再滚。
+    * 加载器跑在 scroll **事件**上。文档不可滚动时（高视口配短小的、被样式表挡住
+      的内容 —— 每一步量到的 scrollY 都是 0）scrollTo 什么也不改、什么事件也不
+      发，加载器永远不醒。现在滚动会把它本该引发的那个事件派发出去。
+    * 700ms 是对一次网络往返的猜测。等 DOM 停止变化才回答真正要紧的问题，而且页面
+      一安静就立刻收手。
 
-    The whole action spends a bounded slice of the call budget
-    (``SCROLL_TOTAL_MS``): a feed that never stops growing must not become a
-    fetch that never returns. Measured after all three: 10 items -> 100 (the
-    whole feed) on the page that used to return 10.
+    整个动作只花调用预算里有界的一片（``SCROLL_TOTAL_MS``）：一个永远长不完的 feed
+    不能变成一次永不返回的抓取。三处都修完后实测：原本只回 10 条的那一页，
+    10 条 -> 100 条（整份 feed）。
     """
     deadline = time.monotonic() + _step_deadline_ms(SCROLL_TOTAL_MS) / 1000.0
     arg = selector or ""
@@ -1662,7 +1725,7 @@ async def _scroll(page, steps: int, selector, ms_per_step: int) -> None:
             if now != before:
                 before = now
                 stable = 0
-                await page.evaluate(_SCROLL_JS, arg)  # chase the bottom it just moved
+                await page.evaluate(_SCROLL_JS, arg)  # 追它刚推远的那条底
             else:
                 stable += 1
                 if stable >= 2:
@@ -1670,7 +1733,7 @@ async def _scroll(page, steps: int, selector, ms_per_step: int) -> None:
 
 
 async def _is_submit_control(loc) -> bool:
-    """True when the click target would submit a form (评审R1刀1).
+    """点击目标会提交表单时为真（评审R1刀1）。
 
     闸认动作效果，不认动作名：input[type=submit|image] 与 form 关联的
     submit 型 button，点击的后果与 ``{"submit": ...}`` 完全相同，就该过
@@ -1691,13 +1754,29 @@ async def _is_submit_control(loc) -> bool:
     return kind == "submit"
 
 
+async def _is_submit_control_at(page, x: int, y: int) -> bool:
+    """页面上某一点下方的元素会提交表单时为真。
+
+    坐标那条路没有 locator，但闸的规则认的是动作的**效果**，不是它的寻址方式：
+    点在提交按钮上的坐标点击，必须和用选择器点它一样暂停。页面答不出来就读作
+    False，与 `_is_submit_control` 同一种"读不出就放行"的形状（点击本身仍走正常
+    路径）。
+    """
+    try:
+        kind = await page.evaluate(_SUBMIT_CONTROL_AT_JS, [x, y])
+    except Exception:
+        return False
+    return kind == "submit"
+
+
 #: 提交闸那一步**唯一可抄**的形状，两处出路都引用这串字（评审 R02-028）。从前一处写在
 #: f-string 里（花括号转义生效），另一处写在普通字符串拼接里（转义没人处理，双花括号原样
 #: 上线）—— 同一封响应给出两种抄法，抄哪一种都可能撞一次非法 JSON。
 #: 2026-10-25 R01-006 补测：裸的 `{"confirm": true}` 不说层次，连读着源码的审查员都先
 #: 把它当顶层参数（顶层 confirm=true 不动闸）；正形长在**动作里**。提示句必须把层说出去。
 _CONFIRM_SNIPPET = ('confirm: true on the click/submit action itself '
-                    '({"click": {"selector": "...", "confirm": true}}), '
+                    '(e.g. {"click": {"selector": "...", "confirm": true}} '
+                    'or {"submit": {"selector": "...", "confirm": true}}), '
                     'not at the top level')
 
 
@@ -1748,8 +1827,80 @@ async def _submit_gate_row(label: str, confirm: bool, rerun: str,
     return None
 
 
+_EVALUATE_RERUN = ('re-run with confirm: true inside the evaluate action '
+                   '({"evaluate": {"expr": "...", "confirm": true}})')
+
+
+async def _evaluate_gate_row(label: str, expr: str,
+                             confirm: bool) -> Optional[dict]:
+    """`evaluate` 的确认闸：页面 JS 能读 cookie/登录态，所以它比普通动作多一道门。
+
+    与提交闸同一条语义（elicitation 可用时问人；问不到人时 confirm 是唯一的钥匙；
+    人明确说不则 fail-closed），但**不复用提交闸的文案**——那会让调用方以为发生了
+    一次提交。暂停行带 `pending_gate: evaluate`，回应面据此写自己的 next_action。
+    """
+    # 弹窗里带代码本身：只问"批准运行 JS"而不给人看那行代码，签字的人不知道
+    # 自己签的是什么。长表达式交前 300 字符并说出全量长度（20k 帽住不放弹窗）。
+    preview_chars = 300
+    shown = expr if len(expr) <= preview_chars else expr[:preview_chars]
+    where = ("" if len(shown) == len(expr)
+             else f" (first {preview_chars} of {len(expr):,} chars)")
+    human = await out_of_band_confirm(
+        "Approve running ONE JavaScript expression on this page? It can read "
+        "everything the page can see, including cookies and logged-in data, "
+        "and it can also change the page or send requests - approve only an "
+        f"expression you have read. The expression{where}: {shown!r}. The value "
+        "it returns will be in the reply.")
+    if human is False:
+        return {
+            "action": label, "ok": False, "pending_approval": True,
+            "pending_gate": "evaluate",
+            "error": ("pending_approval: the approval ask was declined or could "
+                      "not reach a human - the expression did not run and nothing "
+                      "was read or changed. dhole asks again on any re-run; there "
+                      "is no parameter that skips the ask."),
+        }
+    if human is None and not confirm:
+        return {
+            "action": label, "ok": False, "pending_approval": True,
+            "pending_gate": "evaluate",
+            "error": ("pending_approval: evaluate runs arbitrary JavaScript in "
+                      "the page, which can read cookies and logged-in state, and "
+                      "can also change the page or send requests - tell the user "
+                      "what it would do, then " + _EVALUATE_RERUN +
+                      ". Nothing was run."),
+        }
+    return None
+
+
+def _evaluate_result_shot(value: Any) -> dict:
+    """把 `page.evaluate` 的返回值装进动作回执，并守住 transcript 的体积。
+
+    JSON 可序列化的值原样交（调用方拿到的是真结构）；否则交 repr 并标
+    `result_repr`。超过 `MAX_EVALUATE_CHARS` 交前缀 + `result_truncated` +
+    全量字数——与 read 的 `read_truncated` / `read_chars_total` 同一套账。
+    """
+    try:
+        text = json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        text = repr(value)
+        json_ok = False
+    else:
+        json_ok = True
+    total = len(text)
+    if total > MAX_EVALUATE_CHARS:
+        shot = {"result": text[:MAX_EVALUATE_CHARS],
+                "result_truncated": True, "result_chars_total": total}
+        if not json_ok:
+            shot["result_repr"] = True
+        return shot
+    if not json_ok:
+        return {"result": text, "result_repr": True}
+    return {"result": value}
+
+
 def _target_label(t) -> str:
-    """One readable token for an action target: selector, or [index] (+expect)."""
+    """动作目标的一枚可读记号：选择器，或 [行号]（+expect）。"""
     if isinstance(t, str):
         return repr(t)
     if (t or {}).get("index") is not None:
@@ -1830,25 +1981,30 @@ def _no_submission_note(tag: str) -> str:
             "page did not move, so re-run the whole chain once it does.")
 
 
-async def _no_submission_row(label: str, loc) -> dict:
+async def _no_submission_row(label: str, loc=None, *, tag: str = "") -> dict:
     """一行"这一发没出去"。`submitted` 因此**不设** —— 写审计（quality 的
     browser_submit 通道）读的就是那个键，把没发生的写操作记进去比少记一行更糟。
+
+    `loc=None` 是坐标路径：没有元素可问，`tag` 由调用方给（它知道这里没有标签）。
     """
-    tag = ""
-    with contextlib.suppress(Exception):
-        tag = str(await loc.evaluate(_TAG_JS) or "")
+    if loc is not None:
+        with contextlib.suppress(Exception):
+            tag = str(await loc.evaluate(_TAG_JS) or "")
     return {"action": label, "ok": False, "not_submitted": True,
             "error": _no_submission_note(tag.lower())}
 
 
-async def _settle_after_submit(page, loc) -> list[str]:
+async def _settle_after_submit(page, loc=None, *, at=None) -> list[str]:
     """点下去、等它落定，并把"这一发真的出去了"的证据带回来。
 
     Witness 挂在点击**之前**：request 事件在 settle 轮询观察到导航之前就走完了，事后
     补听只会听到下一发。
     """
     witness = _SubmissionWitness(page).start()
-    await _settle_after_click(page, loc)
+    if at is None:
+        await _settle_after_click(page, loc)
+    else:
+        await _settle_after_click(page, at=at)
     return witness.stop()
 
 
@@ -1864,7 +2020,7 @@ def _permitted(label: str) -> str:
 
 
 def action_label(a: dict) -> str:
-    """One short line naming an action, for the outcome receipt in the response."""
+    """给响应里的结局回执用的、点名一个动作的一行短话。"""
     (key, val), = a.items()
     if key == "upload":
         n = len(val.get("files") or []) if isinstance(val, dict) else 0
@@ -1885,6 +2041,9 @@ def action_label(a: dict) -> str:
     if key == "hover":
         return f"hover {_target_label(val)}"
     if key == "drag":
+        if isinstance(val, dict) and val.get("from_xy"):
+            frm, to = val["from_xy"], val["to_xy"]
+            return f"drag ({frm[0]}, {frm[1]}) -> ({to[0]}, {to[1]})"
         return (f"drag {_target_label(val)} -> "
                 f"{_target_label(val.get('to'))}")
     if key == "select":
@@ -1935,16 +2094,23 @@ def action_label(a: dict) -> str:
             base += f" as {val['as']!r}"
         return base
     if key == "submit":
-        # _target_label(val), not val.get("selector"): a submit addressed by
-        # snapshot index normalizes to {"index": N} with NO "selector" key, so
-        # the old .get("selector") produced "submit None (unconfirmed)" - and
-        # that string is what DHOLE_USAGE_LOG's write-audit row recorded, i.e.
-        # the audit trail lost the target of the very step it exists to record.
+        # 用 _target_label(val) 而不是 val.get("selector")：按快照行号寻址的 submit
+        # 归一到 {"index": N}，**没有** "selector" 键，旧的 .get("selector") 会产出
+        # "submit None (unconfirmed)" —— 而这串字正是 DHOLE_USAGE_LOG 写审计读到
+        # 的那一行，等于审计把这一步存在的意义（记下目标）记丢了。
         base = f"submit {_target_label(val)}"
         return base + ("" if isinstance(val, dict) and val.get("confirm")
                        else _UNCONFIRMED)
     if key == "click":
+        if isinstance(val, dict) and val.get("at"):
+            x, y = val["at"]
+            return f"click at ({x}, {y})"
         return f"click {_target_label(val)}"
+    if key == "evaluate":
+        expr = val.get("expr") if isinstance(val, dict) else str(val)
+        base = f"evaluate {str(expr)[:60]!r}"
+        return base + ("" if isinstance(val, dict) and val.get("confirm")
+                       else _UNCONFIRMED)
     if key == "wait_selector":
         sel = val if isinstance(val, str) else (val or {}).get("selector")
         return f"wait_selector {sel!r}"
@@ -1996,11 +2162,10 @@ def _hint_unresolved_braces(text: str, values: dict, shot: dict) -> None:
 
 
 def _action_failure(exc: Exception, page=None) -> str:
-    """The first useful line of an action failure, in caller-facing terms.
+    """动作失败的第一句有用的话，用调用方听得懂的说法。
 
-    Playwright's own text is a call log; the part that matters here is which of
-    the two things went wrong — nothing matched the selector, or it matched but
-    never became actionable.
+    Playwright 自己的文本是一份调用日志；这里要紧的是两件事里究竟是哪一件出了
+    问题 —— 什么也没匹配到选择器，还是匹配到了却始终不可操作。
 
     R04-001：selector 落空且**这页有子 frame**时，把「顶层没有、可能在 frame
     里」这半句说出去——失败现场拿得到 page，子 frame 数是当场可知的一般事实
@@ -2029,19 +2194,16 @@ def _action_failure(exc: Exception, page=None) -> str:
 
 
 def actions_want_visual(actions) -> bool:
-    """True when this chain contains a screenshot action.
+    """这条链里含截图动作时为真。
 
-    A screenshot is the one action whose product IS the rendered page, so the
-    resource blocking that makes a plain fetch fast has to be off for it. The
-    stealthy path disables ``image``/``stylesheet``/``font`` for speed
-    (``DISABLED_RESOURCE_TYPES``), and an element crop taken under that policy is
-    a broken-image placeholder rather than the QR code or CAPTCHA the caller
-    asked to look at — measured: with blocking on, the browser never even issued
-    ``GET`` for the page's ``<img>``, so ``decode_qr`` answered ``[]`` and the
-    action still reported ``ok: true``.
+    截图是唯一**产物就是渲染后的页面本身**的动作，所以让普通抓取变快的资源拦截
+    必须为它关掉。隐身路径为速度禁掉 ``image``/``stylesheet``/``font``
+    （``DISABLED_RESOURCE_TYPES``），在这种策略下截出的元素裁剪图是破图占位，
+    而不是调用方想看的二维码或验证码 —— 实测：拦截开着时浏览器连页面的 ``<img>``
+    都没发过 ``GET``，于是 ``decode_qr`` 答 ``[]``，动作却仍报 ``ok: true``。
 
-    Scanned on the RAW list with the same key test ``_validate_actions`` uses, so
-    it can run before validation and cannot drift from the parser.
+    在**原始**清单上扫，键判定与 ``_validate_actions`` 同一条，所以能在校验之前
+    跑，也不会和解析器漂开。
     """
     if not isinstance(actions, (list, tuple)):
         return False
@@ -2049,22 +2211,19 @@ def actions_want_visual(actions) -> bool:
 
 
 def build_page_action(actions) -> Optional[Callable]:
-    """Validate `actions` and return an async page_action(page) callable, or None
-    if `actions` is None/empty.
+    """校验 `actions` 并返回异步 page_action(page) 可调用对象；`actions` 为
+    None/空时返回 None。
 
-    The callable carries `.outcomes`: one row per action, ok or why not. The
-    fetch path publishes it into the response (`metadata.actions` + summary),
-    because an action that failed quietly used to look like an action that
-    happened and did nothing — see _report_action_outcomes in server.py.
+    这个可调用对象带着 `.outcomes`：每个动作一行，ok 或为什么不行。抓取路径把
+    它发布进响应（`metadata.actions` + 摘要），因为从前一个悄悄失败的动作看起来
+    与"发生了却什么也没做"一模一样 —— 见 server.py 的 _report_action_outcomes。
 
-    It also carries `.pin_state`, a dict the browser layer writes before running
-    the chain (刀9-7 · F9): `{"reused": bool}` = this chain stands on the page a
-    previous pinned call left open, `{"pinned": bool}` = this page will be kept
-    for the next call. The submit gate reads it: on a page that stays open,
-    "re-run the same actions with confirm=true" is not the truth any more - the
-    earlier fills already ran and the page has changed since. A dict on the
-    callable, not a global, because the browser layer and the action layer must
-    not share an invisible fact.
+    它还带着 `.pin_state`，一个由浏览器层在跑这条链之前写好的 dict
+    （刀9-7 · F9）：`{"reused": bool}` = 这条链站在上一次 pin 调用留下的页面上，
+    `{"pinned": bool}` = 这一页会被留给下一次调用。提交闸读它：在会留下的页面上，
+    "把同一串动作带上 confirm=true 重跑"不再是实话 —— 前面的 fill 已经跑过，页面
+    从那以后也变了。挂在可调用对象上的 dict，不是全局，因为浏览器层和动作层不能
+    共享一个看不见的事实。
     """
     if not actions:
         return None
@@ -2116,41 +2275,106 @@ def build_page_action(actions) -> Optional[Callable]:
                 shot: dict = {}
                 try:
                     if "click" in a:
-                        loc = await _target_locator(page, a["click"])
-                        submits = await _is_submit_control(loc)
-                        if submits:
-                            # 落在提交型控件上的 click 就是提交（评审R1刀1）：闸认
-                            # 动作效果，不认动作名。confirm 落在 click 的 dict 上
-                            # （字符串简写不带键，pending 行教它怎么改写）。
-                            click_val = a["click"]
-                            confirm = (click_val.get("confirm", False)
-                                       if isinstance(click_val, dict) else False)
-                            rerun = ("on this click" if isinstance(click_val, dict)
-                                     else 'on this click (as {"click": '
-                                          '{"selector": ..., "confirm": true}})')
-                            row = await _submit_gate_row(label, confirm, rerun,
-                                                         pinned=_pinned_now)
-                            if row is not None:
-                                outcomes.append(row)
-                                continue
-                            evidence = await _settle_after_submit(page, loc)
-                            if not evidence:
-                                outcomes.append(await _no_submission_row(label, loc))
-                                continue
-                            shot["submitted"] = True
-                            shot["submission"] = "+".join(evidence)
+                        click = a["click"]
+                        at = click.get("at") if isinstance(click, dict) else None
+                        if at is not None:
+                            # 坐标路径：没有 locator，但闸仍按"这一下会做什么"判
+                            # —— 点下的位置若站着提交型控件，与 selector click
+                            # 过同一道提交闸。
+                            x, y = at
+                            if await _is_submit_control_at(page, x, y):
+                                confirm = click.get("confirm", False)
+                                row = await _submit_gate_row(
+                                    label, confirm, "on this click",
+                                    pinned=_pinned_now)
+                                if row is not None:
+                                    outcomes.append(row)
+                                    continue
+                                label = _permitted(label)
+                                evidence = await _settle_after_submit(page, at=(x, y))
+                                if not evidence:
+                                    outcomes.append(await _no_submission_row(label))
+                                    continue
+                                shot["submitted"] = True
+                                shot["submission"] = "+".join(evidence)
+                            else:
+                                await _settle_after_click(page, at=(x, y))
                         else:
-                            await _settle_after_click(page, loc)
+                            loc = await _target_locator(page, click)
+                            submits = await _is_submit_control(loc)
+                            if submits:
+                                # 落在提交型控件上的 click 就是提交（评审R1刀1）：闸认
+                                # 动作效果，不认动作名。confirm 落在 click 的 dict 上
+                                # （字符串简写不带键，pending 行教它怎么改写）。
+                                click_val = click
+                                confirm = (click_val.get("confirm", False)
+                                           if isinstance(click_val, dict) else False)
+                                rerun = ("on this click" if isinstance(click_val, dict)
+                                         else 'on this click (as {"click": '
+                                              '{"selector": ..., "confirm": true}})')
+                                row = await _submit_gate_row(label, confirm, rerun,
+                                                             pinned=_pinned_now)
+                                if row is not None:
+                                    outcomes.append(row)
+                                    continue
+                                evidence = await _settle_after_submit(page, loc)
+                                if not evidence:
+                                    outcomes.append(await _no_submission_row(label, loc))
+                                    continue
+                                shot["submitted"] = True
+                                shot["submission"] = "+".join(evidence)
+                            else:
+                                await _settle_after_click(page, loc)
                     elif "hover" in a:
                         loc = await _target_locator(page, a["hover"])
                         await loc.hover(timeout=_step_deadline_ms())
                         await _settle_quiet(page)
                     elif "drag" in a:
                         d = a["drag"]
-                        src = await _target_locator(page, d)
-                        dst = await _target_locator(page, d["to"])
-                        await src.drag_to(dst, timeout=_step_deadline_ms())
-                        await _settle_quiet(page)
+                        if "from_xy" in d:
+                            # 坐标拖拽：两个端点都不是元素（canvas / 地图 /
+                            # 自绘滑块），所以走鼠标原语。中间带 steps=10 ——
+                            # 一次跳到落点不会触发拖拽期间的 pointermove，
+                            # 很多控件据此判定"没在拖"。
+                            x1, y1 = d["from_xy"]
+                            x2, y2 = d["to_xy"]
+                            await page.mouse.move(x1, y1)
+                            await page.mouse.down()
+                            try:
+                                await page.mouse.move(x2, y2, steps=10)
+                            finally:
+                                await page.mouse.up()
+                            await _settle_quiet(page)
+                        else:
+                            src = await _target_locator(page, d)
+                            dst = await _target_locator(page, d["to"])
+                            await src.drag_to(dst, timeout=_step_deadline_ms())
+                            await _settle_quiet(page)
+                    elif "evaluate" in a:
+                        e = a["evaluate"]
+                        row = await _evaluate_gate_row(label, e["expr"],
+                                                       e.get("confirm", False))
+                        if row is not None:
+                            outcomes.append(row)
+                            continue
+                        label = _permitted(label)
+                        # 放行之后、执行之前的这枚记号只在失败行里活下来：
+                        # 审计记的是"谁放行了一次页面 JS"，一个抛异常的表达式
+                        # 也已经跑过页面代码，不能因为没带返回值就消失。
+                        shot["evaluate_attempted"] = True
+                        try:
+                            value = await asyncio.wait_for(
+                                page.evaluate(e["expr"]),
+                                timeout=_step_deadline_ms() / 1000.0)
+                        except asyncio.TimeoutError:
+                            raise ValueError(
+                                "evaluate did not return within "
+                                f"{_step_deadline_ms():,}ms - the expression may "
+                                "loop forever or await something that never "
+                                "settles") from None
+                        shot.pop("evaluate_attempted", None)
+                        shot.update(_evaluate_result_shot(value))
+                        shot["evaluated"] = True
                     elif "upload" in a:
                         u = a["upload"]
                         loc = await _target_locator(page, u)
@@ -2327,8 +2551,8 @@ def build_page_action(actions) -> Optional[Callable]:
                     elif "wait_selector" in a:
                         w = a["wait_selector"]
                         if w["count"] > 1:
-                            # "N items exist" is the lazy-list question; the first
-                            # match has been on the page since it rendered.
+                            # "N items exist" 问的是懒加载清单；第一个匹配从渲染起
+                            # 就一直在页面上。
                             await page.wait_for_function(
                                 _COUNT_JS, arg=[w["selector"], w["count"]],
                                 timeout=_step_deadline_ms(w["timeout"]))
@@ -2389,9 +2613,8 @@ def build_page_action(actions) -> Optional[Callable]:
                             shot["image_b64"] = base64.b64encode(data).decode("ascii")
                             shot["image_mime"] = f"image/{image_type}"
                         if s["decode_qr"]:
-                            # Auxiliary to the capture: a decoder problem (missing
-                            # extra, no code in the crop) reports in the row and
-                            # never fails the action — the pixels are the product.
+                            # 捕获的附属品：解码器出问题（缺 extra、裁剪图里没有码）
+                            # 只写进这一行，绝不弄挂动作 —— 像素才是产品。
                             try:
                                 from dhole_mcp.qr import decode_qr_bytes
                                 shot["qr"] = decode_qr_bytes(data)
@@ -2581,15 +2804,17 @@ def build_page_action(actions) -> Optional[Callable]:
                     })
                     raise
                 except Exception as e:
-                    outcomes.append({"action": label, "ok": False,
-                                     "error": _action_failure(e, page=page)})
-                    # `label`, never `a`: a fill action's dict carries its `text`,
-                    # and that text can be a password (the login flow builds exactly
-                    # such a chain). Logging the raw action wrote the secret to the
-                    # log while the response, the receipt and the audit row were all
-                    # careful not to - the one channel nobody audits was the leak.
-                    # The label names the target and never the value, so it is what
-                    # every other consumer of this action already records.
+                    row = {"action": label, "ok": False,
+                           "error": _action_failure(e, page=page)}
+                    if shot.get("evaluate_attempted"):
+                        row["evaluate_attempted"] = True
+                    outcomes.append(row)
+                    # 用 `label`，绝不用 `a`：fill 动作的 dict 里带着它的 `text`，
+                    # 那段文本可能是密码（登录流程搭的正是这样一条链）。从前把原始
+                    # 动作整个写进日志，等于把秘密写进了日志，而响应、回执、审计行
+                    # 都小心避开了 —— 唯一没人审计的通道才是那个泄漏点。
+                    # 标签只点目标、从不带值，所以它正是这个动作其他所有消费者
+                    # 早已在记的东西。
                     logger.warning("page action %s failed: %s", label, str(e)[:160])
 
         # ── 对话框账本（dialog 动作的另一半）───────────────────────────

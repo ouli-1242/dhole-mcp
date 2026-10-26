@@ -1,4 +1,4 @@
-"""The one search proxy dhole uses: resolution + credential masking.
+"""dhole 唯一使用的搜索代理：解析 + 凭据遮蔽。
 
 17.0（大众化一刀切 B2）：代理**池**整体删除 —— ``~/.dhole/search_proxies.json``、
 round-robin 轮转、按失败冷却的健康检查、``dhole proxy add/remove/clear`` 那条会往

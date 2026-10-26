@@ -1,25 +1,22 @@
-"""Zero-dependency ANSI renderer for the dhole CLI.
+"""dhole CLI 的零依赖 ANSI 渲染器。
 
-Gives dhole's commands a clean, professional, cross-platform look WITHOUT
-pulling in rich (dhole stays lean  -  works in air-gapped/Docker-scratch envs).
-Handles:
+不引入 rich 也给命令一层干净、专业、跨平台的观感（dhole 保持轻量 —— 在断网 /
+Docker-scratch 环境里也能跑）。它处理：
 
-- Color support: respects ``NO_COLOR`` (any value disables) and ``FORCE_COLOR``;
-  color only when stdout is a TTY; enables Windows VT processing (Win10+).
-- Unicode box borders with an automatic ASCII fallback when stdout isn't UTF-8
-  (legacy consoles), so panels never emit mojibake on any machine.
-- A compact bordered panel with left/right-aligned rows (alignment-safe:
-  visible-length math excludes ANSI codes, content is ASCII so widths are
-  predictable  -  no emoji/wide chars inside borders).
-- Branded one-liners (wordmark + label + dim meta).
+- 颜色支持：尊重 ``NO_COLOR``（任何值都关闭）与 ``FORCE_COLOR``；只在 stdout 是
+  TTY 时着色；在 Windows 10+ 上启用 VT 处理。
+- Unicode 边框，stdout 不是 UTF-8（老终端）时自动退化为 ASCII，所以任何机器上
+  面板都不会输出乱码。
+- 紧凑的带框面板，行可左/右对齐（对齐安全：可见长度计算排除 ANSI 码；内容是
+  ASCII，宽度可预测 —— 边框内不放 emoji / 宽字符）。
+- 品牌化单行（字标 + 标签 + 暗色元信息）。
 
-Palette (per the project aesthetic): magenta + cyan-teal accents, dim gray
-secondary, red for errors. No amber/gold, no forest green. When color is off
-(piped, NO_COLOR, legacy console) every style degrades to plain text and the
-layout still reads cleanly.
+配色（按项目审美）：洋红 + 青绿点缀，次要信息暗灰，错误用红。不用琥珀金，
+不用森林绿。关闭颜色时（管道、NO_COLOR、老终端）所有样式退化为纯文本，版面
+仍然读得清楚。
 
-Stdlib only (ctypes/os/re/shutil/sys). No import cost on the server path
-(server.py lazy-imports this module inside the CLI functions only).
+只用标准库（ctypes/os/re/shutil/sys）。服务器路径没有 import 成本
+（server.py 只在 CLI 函数内部惰性 import 本模块）。
 """
 from __future__ import annotations
 
@@ -27,15 +24,15 @@ import os
 import re
 import sys
 
-# ── ANSI codes ──────────────────────────────────────────────────────
+# ── ANSI 码 ────────────────────────────────────────────────────────
 _RESET = "\033[0m"
 _DIM = "\033[2m"
 _BOLD = "\033[1m"
-_MAGENTA = "\033[95m"   # bright magenta  -  wordmark / attention
-_CYAN = "\033[96m"      # bright cyan (teal-ish)  -  version / success / links
-_RED = "\033[91m"       # bright red  -  errors
-_GREEN = "\033[92m"     # bright green  -  reserved for ✓ (not forest green)
-_UNDER = "\033[4m"      # underline  -  commands/URLs
+_MAGENTA = "\033[95m"   # 亮洋红 —— 字标 / 需要被注意
+_CYAN = "\033[96m"      # 亮青（偏青绿）—— 版本 / 成功 / 链接
+_RED = "\033[91m"       # 亮红 —— 错误
+_GREEN = "\033[92m"     # 亮绿 —— 留给 ✓（不是森林绿）
+_UNDER = "\033[4m"      # 下划线 —— 命令 / URL
 
 _ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 
@@ -44,11 +41,11 @@ _unicode_cache: bool | None = None
 
 
 def _color_ok() -> bool:
-    """True if we should emit ANSI color. Cached after first call."""
+    """是否该输出 ANSI 颜色；首次调用后缓存。"""
     global _color_cache
     if _color_cache is not None:
         return _color_cache
-    # NO_COLOR (no-color.org): any value, even empty, disables color.
+    # NO_COLOR（no-color.org）：任何值都关闭颜色，空串也算。
     if os.environ.get("NO_COLOR") is not None:
         _color_cache = False
         return False
@@ -64,10 +61,10 @@ def _color_ok() -> bool:
 
 
 def _enable_windows_vt() -> None:
-    """Enable virtual-terminal processing on Windows 10+ so ANSI codes render.
+    """在 Windows 10+ 上启用虚拟终端处理，让 ANSI 码真正渲染。
 
-    Best-effort: silently no-ops on older Windows or non-console handles. Without
-    this, ANSI escapes print literally on legacy conhost. Cached via _color_cache.
+    尽力而为：老 Windows 或非控制台句柄上静默 no-op。没有这一步，老 conhost
+    会把 ANSI 转义原样打出来。缓存结果在 ``_color_cache`` 里。
     """
     try:
         import ctypes
@@ -84,12 +81,12 @@ def _enable_windows_vt() -> None:
 
 
 def _unicode_ok() -> bool:
-    """True if stdout can render UTF-8 box-drawing chars. Cached."""
+    """stdout 能不能渲染 UTF-8 制表符；结果缓存。"""
     global _unicode_cache
     if _unicode_cache is not None:
         return _unicode_cache
-    # Try to upgrade stdout to UTF-8 (Python 3.7+ reconfigure). On success the
-    # console is expected to decode UTF-8 (Windows Terminal / modern terms do).
+    # 尝试把 stdout 升级到 UTF-8（Python 3.7+ 的 reconfigure）。成功就假定控制台
+    # 按 UTF-8 解码（Windows Terminal / 现代终端都是）。
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
     except Exception:
@@ -100,12 +97,12 @@ def _unicode_ok() -> bool:
 
 
 def _visible(s: str) -> str:
-    """Strip ANSI escape codes for visible-length math."""
+    """算可见长度前先剥掉 ANSI 转义码。"""
     return _ANSI_RE.sub("", s)
 
 
 def _sty(text: str, *codes: str) -> str:
-    """Wrap text in codes + reset, but only when color is enabled."""
+    """把文本包进 codes + reset；只在着色开启时这么做。"""
     if not _color_ok() or not codes:
         return text
     return "".join(codes) + text + _RESET
@@ -117,66 +114,81 @@ def _borders() -> tuple[str, str, str, str, str, str]:
     return "+", "+", "+", "+", "-", "|"
 
 
-# ── Styled fragments ────────────────────────────────────────────────
+# ── 带样式的片段 ───────────────────────────────────────────────────
 
 def wordmark() -> str:
+    """The styled "Dhole" wordmark in the page header.
+    """
     return _sty("Dhole", _BOLD, _MAGENTA)
 
 
 def ver(v: str) -> str:
+    """Format a version number as a cyan ``v<number>``.
+    """
     return _sty(f"v{v}", _CYAN)
 
 
 def ver_transition(a: str, b: str) -> str:
-    """v{a} → v{b} for update-progress lines: both versions styled, the arrow
-    dim with an ASCII fallback on non-UTF-8 consoles."""
+    """更新进度行里的 v{a} → v{b}：两端版本都着色，箭头变暗，非 UTF-8 终端退回 ASCII。"""
     return ver(a) + " " + dim(_glyph("→", "->")) + " " + ver(b)
 
 
 def dim(s: str) -> str:
+    """Dim ``s`` when colour is on; return it unchanged otherwise.
+    """
     return _sty(s, _DIM)
 
 
 def cyan(s: str) -> str:
+    """Turn ``s`` cyan when colour is on; return it unchanged otherwise.
+    """
     return _sty(s, _CYAN)
 
 
 def magenta(s: str) -> str:
+    """Turn ``s`` magenta when colour is on; return it unchanged otherwise.
+    """
     return _sty(s, _MAGENTA)
 
 
 def red(s: str) -> str:
+    """Turn ``s`` red when colour is on; return it unchanged otherwise.
+    """
     return _sty(s, _RED)
 
 
 def _glyph(uni: str, asc: str) -> str:
-    """A status glyph that falls back to ASCII when stdout isn't UTF-8."""
+    """状态字形；stdout 不是 UTF-8 时退化为 ASCII。"""
     return uni if _unicode_ok() else asc
 
 
 def ok(s: str) -> str:
-    """A success marker + label: check in green, label dim."""
+    """成功标记 + 标签：绿色对勾，标签变暗。"""
     return _sty(_glyph("✓", "+"), _GREEN) + " " + _sty(s, _DIM)
 
 
 def warn(s: str) -> str:
+    """Magenta arrow plus a dim message (an ASCII glyph on non-UTF-8 terminals).
+    """
     return _sty(_glyph("→", ">"), _MAGENTA) + " " + _sty(s, _DIM)
 
 
 def err(s: str) -> str:
+    """Red cross plus a red message (an ASCII glyph on non-UTF-8 terminals).
+    """
     return _sty(_glyph("✗", "x"), _RED) + " " + _sty(s, _RED)
 
 
 def cmd(s: str) -> str:
-    """A shell command, styled for copy-paste prominence."""
+    """一条 shell 命令，样式上突出到适合直接复制。"""
     return _sty(s, _UNDER, _CYAN)
 
 
-# ── Composed output ─────────────────────────────────────────────────
+# ── 组合输出 ───────────────────────────────────────────────────────
 
 def lr(left: str, right: str, inner_width: int) -> str:
-    """Compose a left-aligned + right-aligned row for a panel. The gap fills so
-    `right` sits at the right edge. Visible-length aware (ANSI excluded)."""
+    """拼一行面板内容：左对齐 + 右对齐。中间空格填满，让 ``right`` 贴右边缘；
+    计算按可见长度，ANSI 码不算。"""
     gap = inner_width - len(_visible(left)) - len(_visible(right))
     if gap < 1:
         gap = 1
@@ -184,10 +196,9 @@ def lr(left: str, right: str, inner_width: int) -> str:
 
 
 def panel(rows: list[str], width: int = 50, indent: int = 2) -> str:
-    """Render a compact bordered panel. Each row is a pre-composed inner string
-    (use ``lr`` for left/right rows, or pass a plain styled string for a
-    left-only row). Rows are padded to the inner width; overflow is not
-    truncated (rare  -  content is short by design)."""
+    """画一个紧凑的带框面板。每一行是已经拼好的内部字符串（左右两列用 ``lr``，
+    只有左列时直接传带样式的字符串）。行会补到内部宽度；超宽不截断（很少见 ——
+    内容按设计都很短）。"""
     co = _color_ok()
     d = _DIM if co else ""
     rr = _RESET if co else ""
@@ -205,7 +216,7 @@ def panel(rows: list[str], width: int = 50, indent: int = 2) -> str:
 
 
 def branded(label: str, meta: str = "") -> str:
-    """A branded one-liner: `  Dhole  <label>  <dim meta>`."""
+    """品牌化单行：``  Dhole  <标签>  <暗色元信息>``。"""
     s = f"  {wordmark()}  {label}"
     if meta:
         s += f"  {meta}"

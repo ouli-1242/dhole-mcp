@@ -1,41 +1,32 @@
-"""Local file parsing for Dhole MCP.
+"""Dhole MCP 的本地文件解析。
 
-Converts local files to Markdown so agents can read documents without a web
-fetch. Part of the [all] extra (python-docx, openpyxl). Graceful degradation: if
-deps are missing, returns a clear error.
+把本地文件转成 Markdown，让 agent 不必走网络取回也能读文档。属于 [all] 附加依赖
+（python-docx、openpyxl）。依赖缺失时优雅降级：交回一句说得清的报错。
 
-Supported formats:
-- .html / .htm / .xhtml → trafilatura + markdownify (reuses existing extraction)
-- .docx         → python-docx: headings, paragraphs and tables in DOCUMENT
-                  order; what a text reader cannot carry (headers/footers,
-                  footnotes, comments, images) is named in the first line, the
-                  same contract .pptx/.odt already follow
-- .xlsx / .xlsm → openpyxl: sheets → Markdown tables (macro-enabled .xlsm is
-                  the same OOXML zip)
-- .csv / .tsv  → stdlib csv: → Markdown table (the delimiter is sniffed)
-- .pdf          → pdf_extractor (same pipeline web_read uses for PDF URLs:
-                  layout-aware markdown, OCR fallback for scans, quality score,
-                  and the same pages= / password= knobs)
-- .md / .markdown / .txt → as-is, through the same charset detection .csv uses
-- .json / .yaml / .yml   → as-is, but validated (an unparseable file is an error)
-- .pptx / .odt  → stdlib zip + XML, no python-pptx / odfpy: the text of each
-                  slide / each paragraph, with what a text reader cannot carry
-                  named in the first line of the output. Slides come out in the
-                  deck's own PLAY order (presentation.xml's p:sldIdLst), not in
-                  filename order — the number in slideN.xml is a filename, not
-                  a position; speaker notes come out under the slide they belong
-                  to, marked `> Notes:`. `<a:fld>` layout fields (slide number,
-                  date) are not text and are dropped
+支持的格式：
+- .html / .htm / .xhtml → trafilatura + markdownify（复用既有抽取链）
+- .docx         → python-docx：按**文档顺序**读标题、段落与表格；正文读取器带不走
+                  的东西（页眉/页脚、脚注、批注、图片）写在第一行 —— 与 .pptx/.odt
+                  已经在守的同一份契约
+- .xlsx / .xlsm → openpyxl：工作表 → Markdown 表格（启用宏的 .xlsm 是同一个 OOXML zip）
+- .csv / .tsv  → stdlib csv：→ Markdown 表格（分隔符是嗅探出来的）
+- .pdf          → pdf_extractor（与 web_read 处理 PDF URL 同一条管线：版面感知的
+                  markdown、扫描件 OCR 兜底、质量分，以及同一组 pages= / password= 旋钮）
+- .md / .markdown / .txt → 原样返回，走与 .csv 相同的字符集检测
+- .json / .yaml / .yml   → 原样返回，但先校验（解析不了的文件是一句报错）
+- .pptx / .odt  → stdlib zip + XML，不要 python-pptx / odfpy：每页幻灯片/每个段落的
+                  文字，正文读取器带不走的东西写在输出第一行。幻灯片按稿件自己的
+                  **播放顺序**（presentation.xml 的 p:sldIdLst）出来，不按文件名 ——
+                  slideN.xml 里的数字是文件名，不是位置；讲者备注写在它所属那页下面，
+                  标成 `> Notes:`。`<a:fld>` 版式字段（页码、日期）不是正文，丢掉。
 
-Pre-2007 Office files (.doc / .xls / .ppt) are OLE2/CFB, not zips: they are
-refused by MAGIC BYTES rather than by extension, so a `.doc` renamed to `.docx`
-is named for what it really is instead of falling through to python-docx's
-PackageNotFoundError. The refusal says how to convert one.
+2007 之前的 Office 文件（.doc / .xls / .ppt）是 OLE2/CFB 而不是 zip：拒绝它们靠的
+是**魔数**而不是扩展名，于是一份改名成 .docx 的 .doc 会被按它真正的样子点名，而不是
+掉进 python-docx 的 PackageNotFoundError。拒绝句里教了怎么转换。
 
-Text formats used to be refused with "read it with your own file tool", which
-presupposes a caller that has one. A client that only speaks MCP reaches a local
-document through this tool or not at all, so the refusal was a rule for us rather
-than a service to the caller.
+文本格式从前用「用你自己的文件工具读」拒掉，那句话预设调用方手里有那样的工具。只会
+说 MCP 的客户端要够到本地文档，只有这颗工具这一条路，或者根本够不到 —— 所以那句拒绝
+是给我们自己定的规矩，不是给调用方的服务。
 """
 
 from __future__ import annotations
@@ -52,38 +43,34 @@ from collections import OrderedDict
 
 logger = logging.getLogger("dhole_mcp.parse")
 
-# Supported extensions. `.xlsm` (macro-enabled OOXML) and `.tsv` are here because
-# they cost nothing and were only ever missing from this list: the first is the
-# same zip openpyxl already opens, the second is the same csv reader whose
-# delimiter sniffer already lists "\t" among its candidates.
+# 支持的扩展名。`.xlsm`（启用宏的 OOXML）与 `.tsv` 在这里，是因为它们不花任何代价，
+# 只是一直没被列进来：前者是 openpyxl 本来就会打开的那个 zip，后者是同一个 csv 读取器，
+# 而它的分隔符嗅探候选里本来就有 "\t"。
 SUPPORTED_EXTENSIONS = {".html", ".htm", ".xhtml",
                         ".docx", ".xlsx", ".xlsm", ".csv", ".tsv",
                         ".pdf", ".pptx", ".odt",
                         ".md", ".markdown", ".txt", ".json", ".yaml", ".yml"}
-# Formats that need no conversion at all. They used to be refused with "read the
-# file yourself", which assumed the caller HAS a file tool: a client that only
-# speaks MCP has exactly one way to reach a local document, and it is this one.
-# Refusing it there was a rule for ourselves, not for the user.
+# 完全不需要转换的格式。它们从前被「自己读文件」拒掉，而那句话假设调用方**有**文件工具：
+# 只会说 MCP 的客户端够到本地文档只有一条路，就是这一颗。在那里拒掉它是给我们自己定的
+# 规矩，不是给用户的。
 TEXTUAL_EXTENSIONS = {".md", ".markdown", ".txt"}
-# Text the caller may want validated rather than just read.
+# 调用方可能想校验、而不只是读的文本。
 STRUCTURED_TEXT_EXTENSIONS = {".json", ".yaml", ".yml"}
 
 
-# Maximum file size for parsing (50 MB) to prevent OOM on huge files
+# 解析的最大文件大小（50 MB），防止大文件把内存打爆
 MAX_PARSE_FILE_SIZE = 50 * 1024 * 1024
 
 
-#: The OLE2 / Compound File Binary signature. Word 97-2003 `.doc`, Excel `.xls`
-#: and PowerPoint `.ppt` all begin with these eight bytes, as does anything else
-#: built on CFB (msi, msg, ...). A modern .docx/.xlsx/.pptx is a ZIP ("PK"), so
-#: this magic never appears on a file whose extension tells the truth - which is
-#: why the check runs before the extension decides anything.
+#: OLE2 / 复合文件二进制签名。Word 97-2003 的 `.doc`、Excel 的 `.xls` 与 PowerPoint 的
+#: `.ppt` 都以这八个字节开头，建立在 CFB 之上的其他东西（msi、msg……）也一样。现代的
+#: .docx/.xlsx/.pptx 是 ZIP（"PK"），所以只要扩展名说的是真话，这个魔数就永远不会出现 ——
+#: 这正是这项检查跑在扩展名决定任何事之前的原因。
 _CFB_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
-#: CFB-shaped names this reader could plausibly be handed -> (the sentence that
-#: names what the file really is, the modern format to convert to). Anything
-#: else that sniffs as CFB gets the generic line, because an `.msi` is not an
-#: Office document and must not be told to "Save As .docx".
+#: 这颗读取器**可能**被递到的 CFB 名字 ->（说清文件到底是什么的那句话，该转成的现代
+#: 格式）。嗅探成 CFB 的其他东西拿到通用那句，因为 `.msi` 不是 Office 文档，不该被教
+#: 「另存为 .docx」。
 _CFB_LEGACY = {
     ".doc": ("This file is Word 97-2003 (.doc) - OLE2/CFB, not the zip-based "
              ".docx this reader opens", "docx"),
@@ -103,7 +90,7 @@ _CFB_LEGACY = {
 
 
 def _sniff_cfb(file_path: str) -> bool:
-    """True when the file begins with the OLE2/CFB signature. Never raises."""
+    """文件以 OLE2/CFB 签名开头时返回 True。永不抛异常。"""
     try:
         with open(file_path, "rb") as fh:
             return fh.read(len(_CFB_MAGIC)) == _CFB_MAGIC
@@ -164,17 +151,16 @@ def _cfb_unknown_way_forward() -> str:
 
 
 def _cfb_refusal(ext: str) -> tuple[str, str]:
-    """The refusal for an OLE2/CFB file, named for what it actually is.
+    """OLE2/CFB 文件的拒绝句，按它真正的样子点名。
 
-    Both shapes this replaces were worse. A `.doc` was answered with "rename it
-    to .txt", which cannot work - renaming does not change the bytes - and a CFB
-    file renamed to `.docx` (a very common attempt) fell through to python-docx
-    and came back as ``Parse error (.docx): PackageNotFoundError: Package not
-    found at '...'``, an internal exception naming neither the real format nor
-    any way forward. Both measured.
+    它取代的两种形状都更糟。`.doc` 从前得到的答复是「改名成 .txt」，那不可能奏效 ——
+    改名不改字节；而一份改名成 `.docx` 的 CFB 文件（非常常见的一次尝试）会掉进
+    python-docx，交回 ``Parse error (.docx): PackageNotFoundError: Package not
+    found at '...'`` —— 一句内部异常，既不说真正是什么格式，也不给任何出路。两种都
+    实测过。
 
-    Returns ``(error, way_forward)``: the diagnosis and the one sentence telling
-    the caller what to do, so the way forward never needs a second author.
+    返回 ``(error, way_forward)``：判决与那句告诉调用方该做什么的话，于是出路永远不需要
+    第二位作者。
     """
     entry = _CFB_LEGACY.get(ext)
     if entry:
@@ -189,36 +175,32 @@ def _cfb_refusal(ext: str) -> tuple[str, str]:
             f"renaming it does not change the bytes. {way}"), way
 
 
-#: Rows a sheet may render, header included. Reading stops here on purpose (a
-#: 100k-row sheet would blow the caller's context, not help it) — but what the
-#: cap left behind is REPORTED. The note used to read "99 more rows shown" while
-#: those 99 rows were exactly the ones being dropped, on a sheet that had 400
-#: more: a truncation that reads as completeness is the worst outcome available.
+#: 一张表最多渲染的行数，含表头。读取在这里停下是刻意的（10 万行的工作表会把调用方的
+#: 上下文打爆，而不是帮到它）—— 但帽位留下的东西会被**申报**。注记从前写「99 more rows
+#: shown」，而那 99 行恰恰是被丢掉的那些，在一张还多 400 行的表上：一次读起来像完整的
+#: 截断，是这里能有的最糟结果。
 _XLSX_MAX_ROWS = 101
 
 
-# ─── Byte-level decoding ──────────────────────────────────────────────────────
+# ─── 字节级解码 ──────────────────────────────────────────────────────────────
 #
-# A local file carries no HTTP header to declare its charset, and .csv/.html
-# used to be read as UTF-8 with errors="replace". Measured live through the MCP
-# server: a 90-byte GBK CSV - what Excel's "CSV (逗号分隔)" writes on a Chinese
-# Windows box - parsed to "| ���� | ���� |" and still reported content_ok=true,
-# error="". Mojibake that looks like success is the worst outcome available.
+# 本地文件没有 HTTP 头来声明字符集，而 .csv/.html 从前按 UTF-8 加 errors="replace" 读。
+# 经 MCP 服务器实测：一份 90 字节的 GBK CSV —— Excel 的「CSV (逗号分隔)」在中文 Windows
+# 上写出来的那种 —— 解析成 "| ���� | ���� |"，却仍然报 content_ok=true、error=""。看起来
+# 像成功的乱码是这里能有的最糟结果。
 #
-# The candidate order and the damage score live in dhole_mcp.charset, next to
-# the HTTP path's version of the same decision, so the two cannot drift.
+# 候选顺序与损伤分住在 dhole_mcp.charset，紧挨着 HTTP 那条路上同一个决定的版本，于是
+# 两边不会漂。
 
 _HTML_CHARSET_RE = re.compile(rb"""charset\s*=\s*["']?\s*([A-Za-z0-9_\-]+)""", re.IGNORECASE)
 
 
 def _html_declared_charset(body: bytes) -> str:
-    """The charset the document names for itself, or '' when it names none.
+    """文档为自己点名的字符集；一个字集都没点名时返回 ''。
 
-    Only the head is scanned: browsers require <meta charset> within the first
-    1024 bytes for it to count, and scanning the whole file risks matching prose
-    that happens to contain "charset=". A declaration that contradicts the bytes
-    is harmless - charset.decode_file_bytes falls through to detection when the
-    declared name fails to decode strictly.
+    只扫头部：浏览器要求 <meta charset> 落在前 1024 字节内才算数，而扫整份文件有匹配
+    到恰好包含 "charset=" 的正文的风险。一个与字节矛盾的声明无害 —— 声明的名字严格
+    解码失败时，charset.decode_file_bytes 会落到检测上。
     """
     match = _HTML_CHARSET_RE.search(body[:2048])
     return match.group(1).decode("ascii", errors="ignore") if match else ""
@@ -226,7 +208,7 @@ def _html_declared_charset(body: bytes) -> str:
 
 def _decode_body(body: bytes, declared: str = "", asked: "str | None" = None
                  ) -> tuple[str, dict]:
-    """Decode file bytes and package the envelope fields. See charset.decode_file_bytes.
+    """解码文件字节并把信封字段装好。见 charset.decode_file_bytes。
 
     `asked` 是**调用方自己点名的那一颗**（`encoding=`），与 `declared` 分开：后者还包含
     文件里 meta 自己说的字符集，而 HTML 那条路上两个来源会撞在一起。谁点的名要单独说得
@@ -260,7 +242,7 @@ def _decode_body(body: bytes, declared: str = "", asked: "str | None" = None
 
 
 def _read_text_file(file_path: str, declared: str = "") -> tuple[str, dict]:
-    """Read a local file as bytes and decode it. See charset.decode_file_bytes."""
+    """把本地文件按字节读进来再解码。见 charset.decode_file_bytes。"""
     with open(file_path, "rb") as f:
         body = f.read()
     return _decode_body(body, declared)
@@ -307,13 +289,13 @@ def _failed_import_name(exc: BaseException) -> str:
 
 def parse_file(file_path: str, encoding: str = "", pages: str | None = None,
                password: str | None = None) -> tuple[str, str]:
-    """Parse a local file to Markdown.
+    """把本地文件解析成 Markdown。
 
-    Returns (content: str, error: str). On success error is empty.
-    On failure content is empty and error explains what went wrong.
-    Never raises.
+    返回 (content: str, error: str)。成功时 error 为空。
+    失败时 content 为空，error 说明出了什么事。
+    永不抛异常。
 
-    ``pages`` / ``password`` apply to .pdf only; see parse_file_detailed.
+    ``pages`` / ``password`` 只对 .pdf 起作用；见 parse_file_detailed。
     """
     content, error, _extras = parse_file_detailed(file_path, encoding, pages, password)
     return content, error
@@ -322,20 +304,17 @@ def parse_file(file_path: str, encoding: str = "", pages: str | None = None,
 def parse_file_detailed(file_path: str, encoding: str = "",
                         pages: str | None = None,
                         password: str | None = None) -> tuple[str, str, dict]:
-    """Parse a local file to Markdown, plus the envelope fields it can fill.
+    """把本地文件解析成 Markdown，外加它能填的信封字段。
 
-    Returns (content, error, extras). For PDFs ``extras`` carries
-    table_of_contents / metadata / quality_score / content_ok - a local PDF
-    should report the same envelope as one fetched by URL, and used to report
-    toc=[] and metadata={} while the URL path reported both. For .html/.csv it
-    carries ``encoding`` (the charset the bytes were decoded as) and, when the
-    text came out damaged, ``decode_damage``. Empty for the other formats.
-    Never raises.
+    返回 (content, error, extras)。PDF 的 ``extras`` 带着 table_of_contents /
+    metadata / quality_score / content_ok —— 本地 PDF 该报出与 URL 取回同一份信封，
+    而它从前报 toc=[]、metadata={}，URL 那条路两样都报。.html/.csv 的 extras 带着
+    ``encoding``（字节按哪个字符集解码）以及文本读坏时的 ``decode_damage``。其他格式
+    为空。永不抛异常。
 
-    ``encoding`` overrides auto-detection; leave it empty unless the caller
-    knows better than the bytes do. ``pages`` / ``password`` are .pdf only and
-    carry web_read's meaning; every other format says so in one declared line
-    instead of answering as if nothing had been asked.
+    ``encoding`` 覆盖自动检测；除非调用方比字节更清楚，否则留空。``pages`` /
+    ``password`` 只对 .pdf 有效，语义同 web_read；其他格式会用一行申报说明这一点，
+    而不是答得像什么都没问过。
     """
     content, error, extras = _parse_one_file(file_path, encoding, pages, password)
     if error or not content:
@@ -393,7 +372,7 @@ def _parse_one_file(file_path: str, encoding: str = "",
     if not file_path:
         return "", "file_path is required", {}
 
-    # Expand ~ and resolve to absolute
+    # 展开 ~ 并解析成绝对路径
     file_path = os.path.expanduser(file_path)
     if not os.path.isabs(file_path):
         file_path = os.path.abspath(file_path)
@@ -405,7 +384,7 @@ def _parse_one_file(file_path: str, encoding: str = "",
         from dhole_mcp import paths as _paths
         return "", _paths.mask_machine_paths(f"File not found: {file_path}"), {}
 
-    # Guard against OOM: reject files larger than 50 MB
+    # 防内存打爆：拒掉大于 50 MB 的文件
     file_size = os.path.getsize(file_path)
     if file_size > MAX_PARSE_FILE_SIZE:
         # 这一支此后一个字节都不读：它量的是大小。所以它既要交出下一步（那位作者就是
@@ -418,11 +397,9 @@ def _parse_one_file(file_path: str, encoding: str = "",
 
     ext = os.path.splitext(file_path)[1].lower()
 
-    # The bytes decide before the extension does. A CFB file is never a modern
-    # Office document, so one check covers both a plain `.doc` and a `.docx`
-    # that is really a renamed `.doc` - the two shapes that used to get a
-    # useless answer (a rename hint that cannot work, and python-docx's
-    # PackageNotFoundError).
+    # 字节先于扩展名作决定。CFB 文件永远不是现代 Office 文档，所以一项检查同时罩住
+    # 普通的 `.doc` 与一份其实是改名 `.doc` 的 `.docx` —— 这两种形状从前拿到的都是
+    # 没用的答复（一句不可能奏效的改名建议，以及 python-docx 的 PackageNotFoundError）。
     if _sniff_cfb(file_path):
         _err, _way = _cfb_refusal(ext)
         return "", _err, ({"way_forward": _way} if _way else {})
@@ -515,7 +492,7 @@ def _parse_one_file(file_path: str, encoding: str = "",
     return "", f"Unsupported format: {ext}", {}
 
 
-# ─── One document, parsed once ───────────────────────────────────────────────
+# ─── 一份文档，只解析一次 ────────────────────────────────────────────────────
 #
 # `doc_parse(offset=N)` 是一条响应自己的 next_action 推荐的续读动作，而每一份续页
 # 都会把**整篇文档重新解析一遍**：实测 3.9 MB 的一篇 markdown，翻 8 页要读并解码
@@ -585,7 +562,7 @@ def parse_file_cached(file_path: str, encoding: str = "",
                       password: str | None = None) -> tuple[str, str, dict]:
     """``parse_file_detailed`` 的结果按内容记账复用。返回值形状完全一致。
 
-    Never raises（和它包着的那颗一样）。
+    永不抛异常（和它包着的那颗一样）。
     """
     global _parsed_total_chars
     key = _parsed_cache_key(file_path, encoding, pages, password)
@@ -641,37 +618,35 @@ def _copy_extras(extras: dict) -> dict:
 
 
 def _parse_html(file_path: str, encoding: str = "") -> tuple[str, dict]:
-    """Parse HTML file using trafilatura + markdownify (existing chain).
+    """用 trafilatura + markdownify（既有链条）解析 HTML 文件。
 
-    Returns (content, extras); see _decode_body for the encoding fields.
+    返回 (content, extras)；编码字段见 _decode_body。
     """
     with open(file_path, "rb") as f:
         body = f.read()
-    # The document's own <meta charset> is a hint; an explicit caller encoding
-    # outranks it. decode_file_bytes falls back to detection if either fails.
+    # 文档自己的 <meta charset> 是提示；调用方显式点名的编码压过它。两者都失败时
+    # decode_file_bytes 落到检测上。
     html, extras = _decode_body(body, encoding or _html_declared_charset(body),
                                asked=encoding)
     from dhole_mcp.trafilatura_extractor import extract_content_from_html
     result = extract_content_from_html(html, file_path, "markdown")
     if result:
         return result, extras
-    # Fallback: markdownify on the raw HTML
+    # 兜底：对原始 HTML 跑 markdownify
     try:
         from markdownify import markdownify
         return markdownify(html, heading_style="ATX").strip(), extras
     except Exception:
-        return html[:50000], extras  # last resort: raw HTML truncated
+        return html[:50000], extras  # 最后手段：原始 HTML 截断
 
 
 def _parse_structured_text(file_path: str, ext: str,
                            encoding: str = "") -> tuple[str, str, dict]:
-    """Read a .json/.yaml/.yml file, and say so when it is not what it claims.
+    """读 .json/.yaml/.yml 文件，并在它不是它声称的东西时说出来。
 
-    There is no conversion to do — the text is already readable — so the only
-    thing worth adding over a file read is the check. "this .json is not valid
-    JSON, here is the parser's complaint" answers the question the caller had
-    when they handed a config file to a document tool; returning the bytes with a
-    shrug would answer nothing.
+    没有转换可做 —— 文本本来就能读 —— 所以比一次普通文件读多出来的、唯一值得做的事
+    就是校验。「这份 .json 不是合法 JSON，解析器的原话在这」回答的正是调用方把一份
+    配置文件递给文档工具时的问题；耸耸肩把字节还回去，什么也没回答。
     """
     text, extras = _read_text_file(file_path, encoding)
     if ext == ".json":
@@ -686,26 +661,25 @@ def _parse_structured_text(file_path: str, ext: str,
     try:
         import yaml
     except ImportError:
-        # PyYAML is not a declared dependency of this package. Without it the
-        # file is still returned (reading it is the caller's goal) — only the
-        # validity check is skipped, so the absence costs a check, not a file.
+        # PyYAML 不是本包声明的依赖。没有它文件照样返回（读它才是调用方的目标）——
+        # 跳过的只是校验，所以这份缺失的代价是一次检查，不是一个文件。
         return text, "", extras
     try:
-        list(yaml.safe_load_all(text))  # a generator: errors surface on iteration
+        list(yaml.safe_load_all(text))  # 生成器：错误在迭代时才浮出来
     except Exception as e:
         return "", f"{ext} file is not valid YAML: {str(e)[:180]}", extras
     return text, "", extras
 
 
 _A_T_RE = re.compile(r"<a:t(?:\s[^>]*)?>(.*?)</a:t>", re.DOTALL)
-#: A LAYOUT field — slide number, date, footer placeholder. It carries a real
-#: `<a:t>` (the number itself), so it must be removed before text is collected.
+#: 一个版式字段 —— 页码、日期、页脚占位。它带着真正的 `<a:t>`（数字本身），所以必须在
+#: 收集正文之前删掉。
 _A_FLD_RE = re.compile(r"<a:fld\b[^>]*>.*?</a:fld>|<a:fld\b[^>]*/>", re.DOTALL)
 _ENTITIES = {"&quot;": '"', "&apos;": "'"}
 
-#: A slide PART name. The number in it is a filename, not a position.
+#: 幻灯片 PART 名。里面的数字是文件名，不是位置。
 _PPTX_SLIDE_PART_RE = re.compile(r"ppt/slides/slide\d+\.xml")
-#: `<p:sldId id="256" r:id="rId2"/>` — the deck's play order, in document order.
+#: `<p:sldId id="256" r:id="rId2"/>` —— 稿件的播放顺序，按文档顺序。
 _SLD_ID_RE = re.compile(r"<p:sldId\b[^>]*\br:id=\"([^\"]+)\"")
 _REL_TAG_RE = re.compile(r"<Relationship\b[^>]*/?>")
 _REL_ID_RE = re.compile(r"\bId=\"([^\"]+)\"")
@@ -713,27 +687,23 @@ _REL_TARGET_RE = re.compile(r"\bTarget=\"([^\"]+)\"")
 
 
 def _pptx_filename_order(names: list[str]) -> list[str]:
-    """The number inside each part name — the fallback, not the answer."""
+    """每个 part 名里的数字 —— 这是退路，不是答案。"""
     return sorted(
         names, key=lambda n: int(re.search(r"(\d+)", n.rsplit("/", 1)[-1]).group(1)))
 
 
 def _pptx_declared_order(zf, available: list[str]) -> list[str]:
-    """The play order `ppt/presentation.xml` declares, or [] if it cannot be read.
+    """`ppt/presentation.xml` 声明的播放顺序；读不到时返回 []。
 
-    The number inside `slideN.xml` is a FILENAME, not a position. Dragging a
-    slide in PowerPoint rewrites the `p:sldIdLst` list in presentation.xml and
-    leaves every filename exactly where it was — so ordering by filename answers
-    a different question than "what order does this deck play in", and the wrong
-    answer looks completely normal. Measured on a hand-built deck whose id list
-    puts slide2 first: the reader emitted slide1 then slide2, with nothing in
-    the output a caller could use to notice. A wrong answer that reads as a
-    right one is the failure shape this project treats as worse than an error.
+    `slideN.xml` 里的数字是**文件名**，不是位置。在 PowerPoint 里拖动一页会重写
+    presentation.xml 的 `p:sldIdLst` 清单，而每个文件名原地不动 —— 于是按文件名排序
+    回答的是另一个问题，不是「这份稿子按什么顺序播放」，而那个错答案看起来完全正常。
+    在一份手工构造、id 清单把 slide2 排在最前的稿子上实测：读取器先吐 slide1 再吐
+    slide2，输出里没有任何东西能让调用方察觉。一个读起来像对的错答案，正是本项目视为
+    比报错更糟的失败形状。
 
-    Two parts are needed: the id list, and the rels that turn each `r:id` into a
-    part name. Either one missing (third-party exporters do write partial
-    packages) returns [] and the caller falls back to filename order rather than
-    dropping slides.
+    需要两个 part：id 清单，以及把每个 `r:id` 翻成 part 名的 rels。缺任何一个
+    （第三方导出器确实会写出残缺包）都返回 []，调用方退回文件名顺序，而不是丢掉幻灯片。
     """
     try:
         pres = zf.read("ppt/presentation.xml").decode("utf-8", "replace")
@@ -761,14 +731,12 @@ def _pptx_declared_order(zf, available: list[str]) -> list[str]:
 
 
 def _pptx_paragraphs(xml: str) -> list[str]:
-    """Text runs grouped per paragraph (`</a:p>`), entities decoded.
+    """按段落（`</a:p>`）分组的文字 run，实体已解码。
 
-    `<a:fld>` placeholders are dropped first. A slide-number or date field is
-    LAYOUT, not something the author wrote, and it wraps a real `<a:t>` — so a
-    deck with page numbers used to grow a stray number on every slide: measured,
-    a body of "第三季度营收 / 机密" came back as "第三季度营收 / 3 / 机密". The
-    same filter is what makes the speaker-notes path usable, since every notes
-    part carries the slide-number field.
+    `<a:fld>` 占位先删掉。页码或日期字段是**版式**，不是作者写的东西，而它包着真正的
+    `<a:t>` —— 于是一份带页码的稿子从前每页都长出一个多余的数字：实测正文
+    「第三季度营收 / 机密」交回来是「第三季度营收 / 3 / 机密」。同一个过滤器也是讲者
+    备注那条路能用的原因，因为每个备注 part 都带着页码字段。
     """
     from xml.sax.saxutils import unescape
 
@@ -783,14 +751,12 @@ def _pptx_paragraphs(xml: str) -> list[str]:
 
 
 def _pptx_notes_part(zf, slide_part: str) -> str:
-    """The notes part this slide points at, or "" when it has none.
+    """这一页指向的备注 part；没有时返回 ""。
 
-    Notes live in their own parts (`ppt/notesSlides/notesSlideN.xml`) and the
-    link is per-slide, through that slide's OWN rels. The pairing is therefore
-    only recoverable one slide at a time — which is why notes are emitted under
-    their slide instead of collected at the end: a note moved to the end of the
-    output loses the one thing that makes it useful, namely which slide it
-    belongs to.
+    备注住在自己的 part 里（`ppt/notesSlides/notesSlideN.xml`），链接按页走、经过那一页
+    **自己的** rels。所以配对只能一页一页地还原 —— 这就是备注写在所属幻灯片下面、而不是
+    收集到末尾的原因：一条被挪到输出末尾的备注，丢掉的正是让它有用的那件事，即它属于
+    哪一页。
     """
     base, _, leaf = slide_part.rpartition("/")
     try:
@@ -830,8 +796,7 @@ def _parse_pptx(file_path: str) -> str:
         declared = _pptx_declared_order(zf, names)
         ordered_by_list = bool(declared)
         if declared:
-            # A partial id list must not cost a slide: whatever it named comes
-            # first, in its order; anything it did not name follows by filename.
+            # 残缺的 id 清单不许让一页消失：它点到的先按它的顺序排，没点到的随后按文件名排。
             named = len(declared)
             names = declared + _pptx_filename_order(
                 [n for n in names if n not in declared])
@@ -910,20 +875,18 @@ def _parse_odt(file_path: str) -> str:
 
 # ─── .docx ────────────────────────────────────────────────────────────────────
 
-#: A header/footer PART. Matched on the part name, not on the bytes: styles.xml
-#: and numbering.xml also contain <w:t> and are not something the caller lost.
+#: 页眉/页脚 PART。按 part 名匹配，不按字节：styles.xml 与 numbering.xml 里也有
+#: <w:t>，但它们不是调用方丢掉的东西。
 _HF_PART_RE = re.compile(r"/word/(?:header|footer)\d+\.xml$")
 
 
 def _docx_blocks(doc):
-    """``(kind, block)`` for every body child, in DOCUMENT order.
+    """按**文档顺序**给出每个正文子项的 ``(kind, block)``。
 
-    ``doc.paragraphs`` and then ``doc.tables`` loses the order BETWEEN the two: a
-    table sitting mid-document was printed after the closing paragraph, so prose
-    that said "see the table below" pointed past the end of the file. Measured on
-    heading / paragraph / table / paragraph, which came back heading / paragraph
-    / paragraph / table. Word stores both kinds as ``w:body`` children, so this
-    walks them as such. ``kind`` is ``"p"`` or ``"tbl"``.
+    先 ``doc.paragraphs`` 再 ``doc.tables`` 会丢掉两类之间的顺序：夹在文档中间的表格
+    被印在收尾段落之后，于是写着「见下表」的正文指到了文件末尾之外。实测
+    标题/段落/表格/段落 交回来是 标题/段落/段落/表格。Word 把两类都存成 ``w:body``
+    的子项，所以这里就按它们本来的样子遍历。``kind`` 是 ``"p"`` 或 ``"tbl"``。
     """
     from docx.oxml.ns import qn
     from docx.table import Table
@@ -937,22 +900,20 @@ def _docx_blocks(doc):
 
 
 def _count_notes(blob: bytes, tag: str) -> int:
-    """Real notes, not Word's two separator stubs (ids -1 and 0)."""
+    """真正的批注数，不算 Word 那两颗分隔桩（id 为 -1 与 0）。"""
     ids = re.findall(rb"<w:" + tag.encode() + rb'\b[^>]*w:id="(-?\d+)"', blob)
     return sum(1 for i in ids if int(i) >= 1)
 
 
 def _docx_dropped_parts(doc) -> list[str]:
-    """Rich content this reader does NOT carry, that the file actually holds.
+    """这颗读取器**带不走**、而文件确实装着的富内容。
 
-    A .docx can carry headers, footers, footnotes, endnotes, comments and images;
-    this parser reads body paragraphs and tables. Saying so is the module's own
-    rule for .pptx/.odt ("what a text reader cannot carry is named in the first
-    line"), and .docx was the one format that broke it - measured: a footer
-    reading "机密 · 页脚里的重要声明" vanished with no note at all, so a document
-    missing its footer looked exactly like a complete one.
+    一份 .docx 可以带页眉、页脚、脚注、尾注、批注与图片；这个解析器只读正文段落与表格。
+    把这件事说出来，是本模块给 .pptx/.odt 定的规矩（「正文读取器带不走的东西写在第一
+    行」），而 .docx 是唯一破坏它的格式 —— 实测：一条写着「机密 · 页脚里的重要声明」的
+    页脚一声不响地消失了，于是一份缺了页脚的文档看起来与完整的一模一样。
 
-    Only what is PRESENT is named, so a plain document gets no noise.
+    只有**确实存在**的东西才点名，所以一份普通文档不会多出噪声。
     """
     counts = {"header/footer": 0, "footnote": 0, "endnote": 0, "comment": 0,
               "image": 0}
@@ -960,11 +921,10 @@ def _docx_dropped_parts(doc) -> list[str]:
         name = str(part.partname)
         try:
             blob = part.blob
-        except Exception:  # a part that will not load is not a claim about content
+        except Exception:  # 装不进来的 part 不是关于正文的一项声明
             continue
         if _HF_PART_RE.search(name):
-            # Most documents carry an empty header/footer part; only one with
-            # real text is something the caller lost.
+            # 大多数文档都带一个空的页眉/页脚 part；只有真装着正文的那个才是调用方丢掉的东西。
             if b"<w:t" in blob:
                 counts["header/footer"] += 1
         elif name.endswith("/footnotes.xml"):
@@ -983,7 +943,7 @@ _DOCX_DECLARED_BODY = -1
 
 
 def _docx_outline_value(el) -> int | None:
-    """The level a ``w:outlineLvl`` element claims ("" not at all)."""
+    """``w:outlineLvl`` 元素声称的层级；没有该元素时返回 None。"""
     from docx.oxml.ns import qn
 
     if el is None:
@@ -996,13 +956,12 @@ def _docx_outline_value(el) -> int | None:
 
 
 def _docx_declared_levels(doc) -> dict[str, int | None]:
-    """``styleId -> the outline level this file declares``, following ``w:basedOn``.
+    """``styleId -> 这份文件声明的 outline 层级``，顺着 ``w:basedOn`` 追。
 
-    ``w:outlineLvl`` is OOXML's own answer to "which rung is this line" - the one
-    Word's navigation pane reads. It survives what the display name does not: a
-    Chinese Word writes `标题 1` in ``w:name`` while the level stays declared, a
-    custom style built on Heading 2 inherits its level through ``w:basedOn``, and
-    some exporters declare levels 5-9 that a four-name list can never reach.
+    ``w:outlineLvl`` 是 OOXML 自己对「这一行是哪一级」的回答 —— Word 的导航窗格读的
+    就是它。它能活过显示名活不过的事：中文 Word 在 ``w:name`` 里写 `标题 1`，而层级
+    照样声明着；建在 Heading 2 上的自定义样式通过 ``w:basedOn`` 继承层级；一些导出器
+    还会声明四名单永远够不到的 5-9 级。
     """
     from docx.oxml.ns import qn
 
@@ -1034,12 +993,11 @@ def _docx_declared_levels(doc) -> dict[str, int | None]:
 
 
 def _docx_paragraph_level(paragraph, declared: dict[str, int | None]) -> int | None:
-    """The level of this paragraph, from the file - or ``None`` if it declares none.
+    """这一段的层级，由文件给出 —— 文件没声明时返回 ``None``。
 
-    A level written on the paragraph itself outranks the style's, and
-    ``w:val="9"`` on the paragraph is Word's own spelling of "this line is body
-    text": that comes back as ``_DOCX_DECLARED_BODY`` so the caller does not
-    re-heading a line the file just disclaimed.
+    写在段落自己身上的层级压过样式的；而段落上的 ``w:val="9"`` 是 Word 自己拼写
+    「这一行是正文」的方式：它回 ``_DOCX_DECLARED_BODY``，于是调用方不会把文件刚否认
+    过的一行重新变成标题。
     """
     from docx.oxml.ns import qn
 
@@ -1056,12 +1014,11 @@ def _docx_paragraph_level(paragraph, declared: dict[str, int | None]) -> int | N
 
 
 def _docx_outline_note(titles: int, level_ones: int, clamped: int) -> str:
-    """What the outline could NOT be carried as, in one clause each ("" if nothing).
+    """这份大纲**没法**按什么带出来，每条一句（没有则返回 ""）。
 
-    Both cases are collisions between the file and markdown, not mistakes: a Word
-    document title is not an outline entry but lands on the same `#` as a level-1
-    heading, and Word declares nine levels while markdown has six rungs. Silent
-    would read as "this document has no structure to tell apart".
+    两种情况都是文件与 markdown 之间的碰撞，不是错误：Word 的文档标题不是大纲条目，
+    却与一级标题落在同一个 `#` 上；Word 声明九级，而 markdown 只有六级台阶。沉默会被
+    读成「这份文档没有可分辨的结构」。
     """
     notes = []
     if titles and level_ones:
@@ -1074,13 +1031,12 @@ def _docx_outline_note(titles: int, level_ones: int, clamped: int) -> str:
 
 
 def _docx_numbering(doc) -> dict[str, dict[int, str]]:
-    """``numId -> the marker each level draws``, read from word/numbering.xml.
+    """``numId -> 每一级画出的标记``，从 word/numbering.xml 读。
 
-    `w:numPr` (on the paragraph or its style) says "this line is a list item";
-    only the numbering part says WHICH marker that level draws - `bullet`,
-    `decimal`, `lowerRoman`, or OOXML's own `none` ("this level draws nothing").
-    A numId the part cannot resolve to keeps an empty level map, which the caller
-    reads as "a list whose shape is not readable here" rather than a guess.
+    `w:numPr`（在段落或它的样式上）说「这一行是列表项」；只有编号 part 说那一级**画**
+    哪种标记 —— `bullet`、`decimal`、`lowerRoman`，或 OOXML 自己的 `none`（「这一级
+    什么都不画」）。part 解析不了的 numId 保留一张空层级表，调用方读到的是「一份形状
+    在这里读不出来的列表」，而不是一个猜测。
     """
     from docx.oxml import parse_xml
     from docx.oxml.ns import qn
@@ -1094,7 +1050,7 @@ def _docx_numbering(doc) -> dict[str, dict[int, str]]:
         return {}
     try:
         root = parse_xml(blob)
-    except Exception:  # a numbering part that will not parse says nothing about shape
+    except Exception:  # 解不开的编号 part 什么也没说，与形状无关
         return {}
 
     abstracts: dict[str, dict[int, str]] = {}
@@ -1121,10 +1077,9 @@ def _docx_numbering(doc) -> dict[str, dict[int, str]]:
 
 
 def _docx_style_numbering(doc) -> dict[str, tuple[str, int]]:
-    """``styleId -> (numId, ilvl)``, following ``w:basedOn`` when a style inherits it.
+    """``styleId -> (numId, ilvl)``，样式继承时顺着 ``w:basedOn`` 追。
 
-    Word documents put the numbering on the style, not on the paragraph, so
-    "which list does this line belong to" has to be looked up the same way.
+    Word 文档把编号挂在样式上，不是段落上，所以「这一行属于哪个列表」也得按同一条路查。
     """
     from docx.oxml.ns import qn
 
@@ -1162,14 +1117,13 @@ def _docx_style_numbering(doc) -> dict[str, tuple[str, int]]:
 
 def _docx_paragraph_list(paragraph, style_lists: dict[str, tuple[str, int]],
                          numbering: dict[str, dict[int, str]]) -> tuple[str, int] | None:
-    """``(marker, depth)`` this paragraph's file declares, or ``None`` if it declares none.
+    """这一段所属文件声明的 ``(标记, 深度)``；文件没声明时返回 ``None``。
 
-    The paragraph's own `w:numPr` outranks its style's; `w:ilvl` is the indent
-    depth (OOXML defaults it to 0); `w:numId="0"` is how Word REMOVES a line from a
-    list, and `w:numFmt="none"` is how it says "this level draws no marker" - both
-    come back as no list. Any other resolved format is an ordered item; a declared
-    list whose numbering part cannot be read keeps the bullet, because the file
-    said "list item" and only the shape is missing.
+    段落自己的 `w:numPr` 压过样式的；`w:ilvl` 是缩进深度（OOXML 缺省为 0）；
+    `w:numId="0"` 是 Word **移除**一行列表身份的方式，`w:numFmt="none"` 是它说
+    「这一级不画标记」的方式 —— 两者都回成没有列表。其他任何解析出来的格式都是有序列
+    表项；一份声明了列表、但编号 part 读不出来的，保留圆点，因为文件说了「列表项」，
+    缺的只是形状。
     """
     from docx.oxml.ns import qn
 
@@ -1200,10 +1154,9 @@ def _docx_paragraph_list(paragraph, style_lists: dict[str, tuple[str, int]],
 
 
 def _parse_docx(file_path: str) -> str:
-    """Parse .docx to Markdown: body paragraphs and tables, in document order.
+    """把 .docx 解析成 Markdown：正文段落与表格，按文档顺序。
 
-    The first line names what a text reader cannot carry, the same contract
-    .pptx and .odt follow (see _docx_dropped_parts).
+    第一行点名正文读取器带不走的东西，与 .pptx、.odt 守同一份契约（见 _docx_dropped_parts）。
     """
     from docx import Document
 
@@ -1250,9 +1203,8 @@ def _parse_docx(file_path: str) -> str:
             marker, depth = listed
             lines.append(f"{'    ' * depth}{marker}{text}")
             continue
-        # Nothing in the file declares this line's shape: the display name is all
-        # there is to go on, and it still earns the heading or bullet it used to.
-        # Losing a heading or a list item to a shape fix is the worse misread.
+        # 文件里没有任何东西声明这一行的形状：显示名是仅有的线索，它仍然挣得从前那顶
+        # 标题或那个圆点。为一次形状修复丢掉一个标题或一条列表项，是更糟的误读。
         if level == _DOCX_DECLARED_BODY:
             lines.append(text)
         elif "heading 1" in style or style == "title":
@@ -1284,14 +1236,12 @@ def _parse_docx(file_path: str) -> str:
 # ─── .xlsx ────────────────────────────────────────────────────────────────────
 
 def _xlsx_uncached_formulas(file_path: str) -> dict[tuple[str, int, int], str]:
-    """``(sheet, stream row index, column index) -> formula text``, capped rows.
+    """``(工作表, 流式行号, 列号) -> 公式文本``，行数受帽。
 
-    A second streaming pass with ``data_only=False``. openpyxl's
-    ``data_only=True`` hands back the CACHED value of a formula, and a workbook
-    written by a library (openpyxl, pandas, most exporters) has no cache to hand
-    back: the cell comes back None and renders as an empty column - measured on a
-    sheet whose third column was ``=A2*B2``, which printed ``| 3 | 100 |  |`` and
-    reads as "the total is blank" rather than "the total is computed".
+    用 ``data_only=False`` 再流式扫一遍。openpyxl 的 ``data_only=True`` 交回公式的
+    **缓存**值，而由库（openpyxl、pandas、大多数导出器）写出的工作簿没有缓存可交：
+    单元格回 None，渲染成空列 —— 在一张第三列是 ``=A2*B2`` 的表上实测，它印出
+    ``| 3 | 100 |  |``，读起来是「合计是空的」，而不是「合计是算出来的」。
     """
     from openpyxl import load_workbook
 
@@ -1312,18 +1262,15 @@ def _xlsx_uncached_formulas(file_path: str) -> dict[tuple[str, int, int], str]:
 
 def _xlsx_grid_note(header_cells: list[str], data_rows: list[list[str]],
                     sheet_rows: list[int]) -> str:
-    """The ONE wording for "this grid is the sheet's used range, not one table's columns" ("" if not).
+    """「这片网格是工作表的已用区域，不是某一张表的列」的唯一措辞（不适用时返回 ""）。
 
-    openpyxl pads every row to the widest row on the sheet, so a stray pair like
-    F2/G2 arrives as two extra columns and lands in the FIRST data row — which
-    reads as though that record had those two fields (R02-024: a 4-column table
-    came back 7 wide, three cells titled nothing). The fix is deliberately NOT
-    trimming: measured first, an all-empty column means one of two opposite things
-    — the gap in front of an off-table summary (persona), or the ONLY separator
-    between two side-by-side tables (A:C and E:F). Deleting it would glue two
-    records together, a worse misread than the silence. So no cell moves and none
-    is dropped; the receipt just says which columns carry no title and where their
-    values actually sit, in sheet row numbers (the same coordinates as F2/G2).
+    openpyxl 把每一行补齐到表上最宽的那一行，于是一对落在 F2/G2 的零散值会变成两列
+    多出来的列，并落进**第一行**数据 —— 读起来像那条记录真有这两个字段（R02-024：
+    一张 4 列的表交回来 7 列宽，三个格子的标题是空的）。修法刻意**不**做裁剪：先量过，
+    一整列全空意味着两种相反的事之一 —— 表外摘要前的空档（persona），或两张并排表
+    （A:C 与 E:F）之间**唯一**的分隔。删掉它会把两条记录粘在一起，比沉默更糟的误读。
+    所以没有格子被移动或丢弃；回执只说哪些列没有标题、它们的值实际坐在哪，用工作表
+    行号（与 F2/G2 同一套坐标）。
     """
     unheaded = [j for j, h in enumerate(header_cells) if not h.strip()]
     if not unheaded:
@@ -1356,21 +1303,19 @@ def _xlsx_grid_note(header_cells: list[str], data_rows: list[list[str]],
 
 
 def _parse_xlsx(file_path: str) -> str:
-    """Parse .xlsx to Markdown tables using openpyxl.
+    """用 openpyxl 把 .xlsx 解析成 Markdown 表格。
 
-    Three "looks like success" failures are closed here, each measured on a real
-    workbook: a formula whose value was never cached is shown as its formula
-    rather than a blank; the row cap reports what it left behind; and that note
-    says the rows are NOT shown (it used to say "more rows shown" about exactly
-    the rows it was dropping, with a count derived from the cap instead of from
-    the sheet).
+    三种「看起来像成功」的失败在这里收口，每一种都在真实工作簿上量过：值从未缓存的
+    公式显示成公式而不是空白；行帽申报它留下了什么；那条注记说这些行**没有**显示
+    （它从前对它正在丢的那些行写「more rows shown」，而数字是从帽位推出来的，不是从
+    工作表）。
     """
     from openpyxl import load_workbook
 
     try:
         formulas = _xlsx_uncached_formulas(file_path)
     except Exception:
-        # A formula pass that cannot run must not cost the caller the sheet.
+        # 一趟跑不起来的公式扫描不许让调用方失去整张表。
         formulas = {}
 
     wb = load_workbook(file_path, read_only=True, data_only=True)
@@ -1378,16 +1323,15 @@ def _parse_xlsx(file_path: str) -> str:
         sections: list[str] = []
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
-            # Stream with a cap to prevent OOM on huge sheets. The cap is on rows
-            # READ; the note below is what keeps it from reading as "that is all".
+            # 流式读并设帽，防止大表把内存打爆。帽在**读取**的行数上；下面那条注记才是
+            # 让它不会被读成「就这些了」的东西。
             raw: list[tuple[int, tuple]] = []
             for i, row in enumerate(ws.iter_rows(values_only=True)):
                 if i >= _XLSX_MAX_ROWS:
                     break
                 raw.append((i, row))
-            # A row counts as present when it has a value OR a formula whose cache
-            # is missing - the second case is invisible to a values-only read and
-            # used to be dropped as "empty".
+            # 一行有值、或有公式而缓存缺失，就算存在 —— 第二种对只读值的扫描不可见，
+            # 从前被当成“空行”丢掉。
             kept = [(i, r) for i, r in raw
                     if any(c is not None for c in r)
                     or any((sheet_name, i, j) in formulas for j in range(len(r)))]
@@ -1414,7 +1358,7 @@ def _parse_xlsx(file_path: str) -> str:
             data_rows: list[list[str]] = []
             data_sheet_rows: list[int] = []
             for row_idx, row in kept[1:]:
-                cells = list(row) + [None] * (col_count - len(row))  # pad short rows
+                cells = list(row) + [None] * (col_count - len(row))  # 补齐短行
                 data_rows.append([cell_text(row_idx, j, cells[j])
                                   for j in range(col_count)])
                 # 纸上的行号（1 基）：`kept` 会跳过空行，所以这一颗必须是原来的 row_idx，
@@ -1450,15 +1394,13 @@ def _parse_xlsx(file_path: str) -> str:
 
 
 def _sniff_delimiter(text: str) -> str:
-    """Guess the field separator, defaulting to ','.
+    """猜字段分隔符，默认 ','。
 
-    Excel in a comma-decimal locale writes ';', and a semicolon CSV parsed as
-    comma-separated puts every row in column 1 - a table that is silently wrong
-    rather than visibly empty. Measured against the stdlib sniffer on 24
-    samples (single-column, ragged, CRLF, quoted commas, and text containing
-    ; | and tab): it only ever raises on genuinely ambiguous single-column
-    input, which renders identically whatever the delimiter, so the ',' default
-    is safe. Never raises.
+    逗号小数地区的 Excel 写 ';'，而一份按逗号解析的分号 CSV 会把每一行都塞进第 1 列 ——
+    一张悄悄错的表，而不是一张看得出空的表。在 24 份样本（单列、参差、CRLF、带引号
+    逗号、含 ; | 与制表符的文本）上与 stdlib 嗅探器对量：它只在真正含糊的单列输入上
+    抛异常，而那种输入无论分隔符是什么都渲染成同一个样子，所以 ',' 这个默认是安全的。
+    永不抛异常。
     """
     sample = text[:8192]
     if not sample.strip():
@@ -1470,10 +1412,10 @@ def _sniff_delimiter(text: str) -> str:
 
 
 def _parse_csv(file_path: str, encoding: str = "") -> tuple[str, dict]:
-    """Parse .csv to a Markdown table using stdlib csv.
+    """用 stdlib csv 把 .csv 解析成 Markdown 表格。
 
-    Streams rows with a cap (101) to prevent OOM on huge CSV files.
-    Returns (content, extras); see _decode_body for the encoding fields.
+    流式读行并设帽（101），防止大 CSV 把内存打爆。
+    返回 (content, extras)；编码字段见 _decode_body。
     """
     text, extras = _read_text_file(file_path, encoding)
 
@@ -1481,7 +1423,7 @@ def _parse_csv(file_path: str, encoding: str = "") -> tuple[str, dict]:
     has_more = False
     reader = csv.reader(io.StringIO(text), delimiter=_sniff_delimiter(text))
     for i, row in enumerate(reader):
-        if i >= 101:  # header + 100 data rows
+        if i >= 101:  # 表头 + 100 行数据
             has_more = True
             break
         rows.append(row)
@@ -1506,22 +1448,19 @@ def _parse_csv(file_path: str, encoding: str = "") -> tuple[str, dict]:
 
 def _parse_pdf(file_path: str, pages: str | None = None,
                password: str | None = None) -> tuple[str, str, dict]:
-    """Parse a local .pdf to Markdown, reusing the URL path's extractor.
+    """把本地 .pdf 解析成 Markdown，复用 URL 那条路的抽取器。
 
-    Same pipeline web_read uses for PDF URLs - layout-aware markdown,
-    per-page CID-garbage OCR fallback, and the same ``pages`` / ``password``
-    knobs - so a local file behaves identically to a fetched one, envelope
-    included: the extractor's table_of_contents, metadata and quality_score are
-    handed back to the caller instead of being dropped here.
+    与 web_read 处理 PDF URL 同一条管线 —— 版面感知的 markdown、逐页 CID 乱码的 OCR
+    兜底，以及同一组 ``pages`` / ``password`` 旋钮 —— 所以本地文件与取回的一份行为一致，
+    信封也一样：抽取器的 table_of_contents、metadata 与 quality_score 交回给调用方，
+    而不是在这里丢掉。
 
-    Why not just hand it to web_read as ``file://``: that tool's URL
-    validator is an SSRF guard and rejects non-http(s) schemes by design.
-    Reading a path the caller supplied is a different trust boundary - the same
-    one this module already crosses for .docx/.xlsx/.csv/.html.
+    为什么不直接把它当 ``file://`` 交给 web_read：那颗工具的 URL 校验器是 SSRF 守卫，
+    按设计拒绝非 http(s) 协议。读调用方给的路径是另一条信任边界 —— 本模块为
+    .docx/.xlsx/.csv/.html 早就跨过的那一条。
 
-    Returns (content, error, extras) rather than just content, because a PDF
-    can fail in ways the other formats cannot (encrypted, scanned with no text
-    layer) and because it carries an envelope of its own.
+    返回 (content, error, extras) 而不只是 content，因为 PDF 会以其他格式不会的方式
+    失败（加密、扫描件没有文字层），也因为它带着自己的信封。
     """
     from dhole_mcp.pdf_extractor import extract_pdf, recover_scanned_pdf
 
@@ -1531,18 +1470,15 @@ def _parse_pdf(file_path: str, pages: str | None = None,
     result = extract_pdf(body, extraction_type="markdown",
                          pages=pages, password=password)
 
-    # All-scanned document: run the same OCR recovery the URL path runs. The
-    # docstring above promises "a local file behaves identically to a fetched
-    # one", and for this branch it did not: the same bytes came back OCR'd over
-    # HTTP and "install dhole-mcp[all] to auto-OCR" from disk, on a machine
-    # where OCR was installed and working.
+    # 整份都是扫描件：跑 URL 那条路跑的同一个 OCR 补救。上面的 docstring 承诺「本地文件
+    # 与取回的一份行为一致」，而这一支从前没有做到：同一批字节走 HTTP 回来是 OCR 过的
+    # 正文，从磁盘读却回来一句「install dhole-mcp[all] to auto-OCR」，而机器上 OCR 装了、
+    # 也在工作。
     #
-    # `pages` / `password` close the last two holes in that same promise. Before
-    # them an encrypted PDF could not be read at all, and the refusal told the
-    # caller to "pass the correct one via the 'password' option" - an option
-    # this tool did not have, so following the advice raised TypeError (measured
-    # through the server). A 40-page local PDF also came back whole alongside a
-    # 40-entry table_of_contents the caller had no way to act on.
+    # `pages` / `password` 补上同一个承诺的最后两个洞。在它们之前，一份加密 PDF 根本
+    # 读不了，而拒绝句教调用方「pass the correct one via the 'password' option」——
+    # 一颗这颗工具根本没有的参数，照着做当场 TypeError（经服务器实测）。一份 40 页的
+    # 本地 PDF 也会整份交回来，连同一条调用方无法据以行动的 40 项 table_of_contents。
     result = recover_scanned_pdf(result, body, pages=pages, password=password)
 
     if not result.content_ok:
@@ -1554,22 +1490,19 @@ def _parse_pdf(file_path: str, pages: str | None = None,
         "pages_total": result.pages_total,
         "pages_returned": len(result.pages_extracted),
         "quality_score": result.quality_score,
-        # The extractor's own verdict, not a guess: _agent_hints defers to it
-        # once quality_score is set, so a healthy PDF that reported
-        # content_ok=False here would be flagged "do not cite".
+        # 抽取器的判决，不是猜的：quality_score 一旦有值，_agent_hints 就听它的，所以
+        # 一份健康 PDF 若在这里报 content_ok=False，会被标成 "do not cite"。
         "content_ok": bool(result.content_ok),
     }
 
-    # The extractor's content already opens with `# <title>` (and the author in
-    # its metadata header) — `_format_metadata` puts them there, and `ocr_pdf`
-    # does the same. Prepending them again printed the title TWICE on every
-    # titled PDF parsed from disk, while the same bytes over HTTP printed it
-    # once: the two paths disagreed on the same document, which is the one thing
-    # this function's docstring promises they won't. Title and author are still
-    # in `extras["metadata"]` for callers that want them as fields.
+    # 抽取器的正文已经以 `# <title>` 开头（作者在它的 metadata 头里）—— `_format_metadata`
+    # 把它们放在那儿，`ocr_pdf` 也一样。再前置一遍会让每一份有标题的本地 PDF 把标题印
+    # **两遍**，而同一批字节走 HTTP 只印一遍：两条路对同一份文档各说一套，而这正是这颗
+    # 函数的 docstring 承诺不会发生的事。标题与作者仍然在 `extras["metadata"]` 里，
+    # 想要字段形式的调用方拿得到。
     parts: list[str] = ["\n\n".join(result.content)]
 
-    # Only annotate when something is off - a clean PDF gets no extra noise.
+    # 只在有东西不对时才注记 —— 干净的 PDF 不加噪声。
     notes: list[str] = []
     if result.ocr_fallback_used:
         notes.append("OCR fallback used (scanned or CID-garbled pages)")
@@ -1582,7 +1515,7 @@ def _parse_pdf(file_path: str, pages: str | None = None,
 
 
 def _table_to_markdown(table) -> str:
-    """Convert a python-docx Table to a Markdown table string."""
+    """把 python-docx 的 Table 转成 Markdown 表格字符串。"""
     rows_data: list[list[str]] = []
     for row in table.rows:
         cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
@@ -1592,7 +1525,7 @@ def _table_to_markdown(table) -> str:
         return ""
 
     col_count = max(len(r) for r in rows_data)
-    # Pad rows to same length
+    # 把各行补齐到同一长度
     for r in rows_data:
         while len(r) < col_count:
             r.append("")

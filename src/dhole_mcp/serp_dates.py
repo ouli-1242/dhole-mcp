@@ -46,6 +46,8 @@ class RowDate:
 
     @property
     def present(self) -> bool:
+        """Whether the date this row gives can enter the comparable ledger.
+        """
         return self.value is not None
 
     def as_fields(self) -> dict:

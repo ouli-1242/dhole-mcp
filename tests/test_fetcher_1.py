@@ -584,7 +584,9 @@ class TestItem12ConnectCost:
         # 长，`web_search` 一字未动 —— 另两颗不在这一组里。
         # 12,866 → 12,959：免密引擎扩员 + 分层 + shenma 的 +93 全在 `web_search`
         # 描述上（11 家名单与池序说明），`web_read` 一步未动。
-        assert "13066 chars" in row, f"收窄后的 doctor 报的不是这台进程付的账：{row}"
+        # 12,959 → 13,066：round-13 F1 的收窄 selector 措辞（web_read 描述 +107）。
+        # 13,066 → 13,076：E1 在 `urls` 参数上点名回执行数组 `results`（+10）。
+        assert "13076 chars" in row, f"收窄后的 doctor 报的不是这台进程付的账：{row}"
         assert "2 tool(s)" in row, row
         assert "ACTIVE 1501" in face and "FULL 2727" in face, (
             f"这道判据依赖两份 instructions 不同值：{face}")

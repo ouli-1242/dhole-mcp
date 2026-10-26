@@ -1,37 +1,29 @@
-"""The stored default identity behind `cred_defaults` (17.0 §3-17).
+"""`cred_defaults` 背后的已存默认身份（17.0 §3-17）。
 
-One question decides where a setting belongs: does the caller have to remember it
-on **every** call? `proxy`, `profile`, `cdp`, `allow_private`, `anti_detect` and
-the two credential shapes do — an agent that reaches the same API forty times is
-not learning the same secret forty times, and neither "pass it again" nor "edit
-the env and restart the host" is a good answer. So they get set once, live in a
-file, and every later call reads them back.
+一个问题决定设置该放哪：调用方是否**每次调用**都得记住它？`proxy`、`profile`、
+`cdp`、`allow_private`、`anti_detect` 与两种凭据形状都需要——一个四十次打到同一
+API 的 agent 不该把同一个秘密学四十遍，"再传一次"与"改环境重启宿主"也都不是好
+答案。于是它们被设置一次、住进文件，之后每次调用读回来。
 
-Two rules, both load-bearing:
+两条规则，都是承重墙：
 
-* **A credential carries a host.** `auth` and `cookies` cannot be stored without
-  one. A global stored Basic-Auth header rides along to the next site the caller
-  reads, which is a different site's request — the same mistake the per-hop
-  credential drop in `web_read` exists to prevent, made persistent. The
-  host-matched rows are the whole answer: `scope` is exact-host-or-subdomain
-  (`api.example.com` matches `example.com`, `evil-example.com` does not), and the
-  five non-credential keys are global by nature (one proxy, one profile, one
-  attached browser, one ladder, one private-host allowance).
-* **Values never go out through this module's read side.** :func:`view` returns
-  the redacted shape — cookie NAMES, an auth type plus username, a proxy host
-  with a "has credentials" boolean. The full value stays in the file. That is the
-  same boundary the cookie jar uses (`sessions.py`): tool output lands in the
-  agent's transcript, and the point of echoing "what is in force" is to let the
-  caller revoke it without reading it.
+* **凭据带着主机。** `auth` 与 `cookies` 没有主机就不能存。一条全局存储的
+  Basic-Auth 头会跟着调用方去读下一个站点，而那是另一个站点的请求——`web_read`
+  里逐跳丢弃凭据防的正是这个错误，只是这里把它变成了持久的。按主机匹配的行就是
+  全部答案：`scope` 是精确主机或子域（`api.example.com` 匹配 `example.com`，
+  `evil-example.com` 不匹配），五颗非凭据键天然是全局的（一个代理、一个 profile、
+  一台附加浏览器、一条档位梯、一份私网许可）。
+* **值绝不从本模块的读取面出去。** :func:`in_force_rows` 返回脱敏形状——cookie
+  的**名字**、认证类型加用户名、代理主机加一个"带凭据"布尔。完整值留在文件里。
+  这与 cookie 罐（`sessions.py`）是同一条边界：工具输出会进 agent 的转录，而
+  回显"当前生效的是什么"的意义，是让调用方能在不读到值的情况下撤销它。
 
-Storage is **in memory by default** (SQLite ``:memory:``): "the operator chose
-it" is not "the operator wants it on disk" — every value here can be a
-credential (``auth``, ``cookies``, a proxy URL with embedded basics), and the
-safest file is one that does not exist. ``DHOLE_PERSIST_CREDENTIALS=1`` moves
-the store to ``~/.dhole/identity.db`` (0600 dir/file per ``paths.py``), where
-every value is encrypted with Windows DPAPI (:mod:`dhole_mcp.secretbox`) before
-it touches disk. A pre-17.1 plaintext file is absorbed into the live store and
-deleted (memory mode) or re-encrypted in place (persist mode).
+存储**默认在内存里**（SQLite ``:memory:``）："运维选了这个值"不等于"运维想让它
+落盘"——这里每个值都可能是凭据（``auth``、``cookies``、带内嵌 basic 的代理 URL），
+最安全的文件是不存在的那个。``DHOLE_PERSIST_CREDENTIALS=1`` 把存储移到
+``~/.dhole/identity.db``（目录/文件 0600，见 ``paths.py``），落盘前每个值都用
+Windows DPAPI（:mod:`dhole_mcp.secretbox`）加密。pre-17.1 的明文文件会被吸进当前
+存储并删除（内存模式）或原地重新加密（持久模式）。
 """
 
 from __future__ import annotations
@@ -49,8 +41,8 @@ from dhole_mcp import env_registry, secretbox
 
 logger = logging.getLogger("dhole-mcp.identity")
 
-# Which keys need a host and which do not. Kept as data because the tool's error
-# messages and the sys_state census both have to say it.
+# 哪些键需要主机、哪些不需要。做成数据，因为工具的报错文案与 sys_state 的普查
+# 都得说出这件事。
 SCOPED_KEYS = ("auth", "cookies")
 GLOBAL_KEYS = ("proxy", "profile", "cdp", "allow_private", "anti_detect")
 KEYS = SCOPED_KEYS + GLOBAL_KEYS
@@ -59,9 +51,9 @@ CREDENTIAL_KEYS = SCOPED_KEYS
 
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
-# Frozen at import, like the jar's own switch (read_at="import" in the
-# registry): the store below is a module-level singleton connection, so a
-# mid-run flip could not move it anyway. Tests pin this attr for hermeticity.
+# import 时冻结，和 cookie 罐自己的开关一样（registry 里 read_at="import"）：
+# 下面的存储是模块级单例连接，跑到一半改开关也搬不动它。测试钉住这个属性来
+# 保持隔离。
 _PERSIST = env_registry.read_flag("DHOLE_PERSIST_CREDENTIALS", fail_safe=True)
 _file_backed = False
 
@@ -78,11 +70,10 @@ def _db_path() -> str:
 
 
 def _connect() -> sqlite3.Connection:
-    """Open (and create) the store. Caller holds :data:`_lock`.
+    """打开（必要时创建）存储。调用方持着 :data:`_lock`。
 
-    Default is ``:memory:`` — see the module docstring. Persisting additionally
-    needs an encryptor; without one (no Windows DPAPI) the flag degrades to
-    memory with a warning, never to a plaintext file.
+    默认是 ``:memory:``——见模块 docstring。持久化还需要一个加密器；没有它
+    （非 Windows DPAPI）时开关降级为内存并告警，绝不降级成明文文件。
     """
     global _conn, _file_backed
     if _conn is not None:
@@ -114,10 +105,9 @@ def _connect() -> sqlite3.Connection:
 
 
 def _absorb_legacy_file(conn: sqlite3.Connection) -> None:
-    """A pre-17.1 store lived in plaintext ``identity.db``. Memory mode reads
-    it into the live store once and deletes the file: these are the operator's
-    chosen defaults, so they keep working this run — as memory, which is what
-    the default now promises."""
+    """pre-17.1 的存储曾以明文 ``identity.db`` 存在。内存模式把它读进当前存储
+    一次，然后删掉文件：这些是运维选定的默认值，所以本次运行继续有效——以内存
+    形式，这正是现在的默认承诺。"""
     try:
         db = _db_path()
         if not os.path.exists(db):
@@ -145,8 +135,8 @@ def _absorb_legacy_file(conn: sqlite3.Connection) -> None:
 
 
 def _reencrypt_plaintext_values(conn: sqlite3.Connection) -> None:
-    """One-time migration for persist mode: rewrite every value that does not
-    carry the ``dpapi:`` marker. Idempotent by the LIKE guard."""
+    """持久模式的一次性迁移：重写每个不带 ``dpapi:`` 标记的值。靠 LIKE 守卫
+    保证幂等。"""
     rows = conn.execute(
         "SELECT rowid, value FROM defaults WHERE value NOT LIKE 'dpapi:%'"
     ).fetchall()
@@ -161,9 +151,8 @@ def _reencrypt_plaintext_values(conn: sqlite3.Connection) -> None:
 
 
 def _decode(raw: str) -> Any:
-    """The stored TEXT column to a Python value: unprotect (a no-op on legacy
-    plaintext and on memory mode) then json.loads, None on any failure — the
-    shape every reader had before encryption existed."""
+    """存储的 TEXT 列到 Python 值：先 unprotect（对旧明文与内存模式是 no-op），
+    再 json.loads；任何失败都返回 None——这是加密出现之前每个读取者的形状。"""
     if _file_backed:
         try:
             raw = secretbox.unprotect(raw)
@@ -176,7 +165,7 @@ def _decode(raw: str) -> Any:
 
 
 def close() -> None:
-    """Drop the connection (tests repoint DHOLE_HOME and must not keep writing)."""
+    """丢掉连接（测试会重指 DHOLE_HOME，不能继续往旧库写）。"""
     global _conn, _file_backed
     with _lock:
         if _conn is not None:
@@ -186,6 +175,16 @@ def close() -> None:
 
 
 def host_of(url: str) -> str:
+    """The lower-cased hostname of a URL; ``""`` when it has none.
+
+    Args:
+        url: A string of any URL shape.
+
+    Returns:
+        The hostname with scheme and port removed, lower-cased. Malformed input and
+        host-less URLs give the empty string; this helper never raises, because in a scope
+        lookup "no host" means "no match", not an error.
+    """
     try:
         return (urlparse(url).hostname or "").lower()
     except Exception:
@@ -193,10 +192,10 @@ def host_of(url: str) -> str:
 
 
 def scope_matches(scope: str, host: str) -> bool:
-    """Exact host or a subdomain of it — never a bare substring.
+    """精确主机或它的子域——绝不是裸子串。
 
-    `evil-example.com` must not inherit what `example.com` was given, which is the
-    one way this function can lose.
+    `evil-example.com` 不能继承给 `example.com` 的东西；这是本函数唯一可能
+    输掉的地方。
     """
     scope, host = (scope or "").lower().lstrip("."), (host or "").lower()
     if not scope or not host:
@@ -205,12 +204,26 @@ def scope_matches(scope: str, host: str) -> bool:
 
 
 def set_value(key: str, value: Any, scope: str = "") -> None:
+    """Store one default; an existing ``(key, scope)`` row is replaced.
+
+    Args:
+        key: One of :data:`KEYS`. Tool boundaries validate the name, so the caller is
+            trusted here.
+        value: A JSON-serialisable value. In persistent mode it is DPAPI-encrypted before
+            it reaches disk; in memory mode it never leaves the process.
+        scope: The host the value is bound to, lower-cased before storage. Global keys use
+            ``""``; credential keys should carry a non-empty scope (the tool boundary refuses
+            global credentials because they would ride along to the next site).
+
+    Side effects:
+        Written and committed immediately. Credential values never appear in plaintext on
+        this module's read surface.
+    """
     with _lock:
         cur = _connect()
         payload = json.dumps(value)
         if _file_backed:
-            # Every value here can be a credential; on disk it is only ever
-            # the encrypted form (see the module docstring for the boundary).
+            # 这里每个值都可能是凭据；落盘时只存加密形式（边界见模块 docstring）。
             payload = secretbox.protect(payload)
         cur.execute(
             "INSERT OR REPLACE INTO defaults (key, scope, value, updated_at)"
@@ -220,7 +233,7 @@ def set_value(key: str, value: Any, scope: str = "") -> None:
 
 
 def unset(keys: Iterable[str] = (), scope: Optional[str] = None) -> int:
-    """Forget these keys. `scope=None` means every scope of them; "" means global."""
+    """忘掉这些键。`scope=None` 表示它们的所有作用域；"" 表示全局。"""
     keys = [k for k in keys]
     if not keys:
         return 0
@@ -239,6 +252,11 @@ def unset(keys: Iterable[str] = (), scope: Optional[str] = None) -> int:
 
 
 def clear() -> int:
+    """Delete every default across all scopes.
+
+    Returns:
+        The number of rows deleted (0 when the store was already empty).
+    """
     with _lock:
         cur = _connect()
         n = cur.execute("DELETE FROM defaults").rowcount
@@ -247,11 +265,10 @@ def clear() -> int:
 
 
 def all_rows() -> List[dict]:
-    """Every stored row, already redacted: what a caller (or sys_state) may see.
+    """每一行存储值，已经脱敏：调用方（或 sys_state）能看的就是这些。
 
-    `stored_s_ago` is a countdown, not an epoch float: "stored 3 hours ago" is
-    the question a caller has, and a bare 1790995191.36 is the same mistake the
-    session census stopped making.
+    `stored_s_ago` 是倒计时，不是 epoch 浮点数："3 小时前存的"才是调用方的问题，
+    一个裸的 1790995191.36 与 session 普查早已不再犯的错误同形。
     """
     with _lock:
         cur = _connect()
@@ -269,11 +286,10 @@ def all_rows() -> List[dict]:
 
 
 def get(key: str, host: str = "") -> Any:
-    """The value in force for `key` on this host, or None when nothing is stored.
+    """`key` 在这台主机上生效的值；什么都没存时返回 None。
 
-    A host-scoped credential beats a global one for its own host only, and a
-    global row never answers for a credential key (that shape is refused at set
-    time — see :func:`redact`'s module docstring).
+    带主机作用域的凭据只对它自己的主机压过全局；全局行永远不为凭据键作答
+    （这种形状在设置时就被拒——见 :func:`redact` 的模块 docstring）。
     """
     with _lock:
         cur = _connect()
@@ -292,7 +308,7 @@ def get(key: str, host: str = "") -> Any:
 
 
 def in_force_rows(host: str = "") -> List[dict]:
-    """What a call to `host` would pick up, redacted, one row per key."""
+    """一次发往 `host` 的调用会取到的东西，已脱敏，每个键一行。"""
     rows = []
     for key in KEYS:
         value = get(key, host)
@@ -304,7 +320,7 @@ def in_force_rows(host: str = "") -> List[dict]:
 
 
 def in_force(host: str = "") -> Dict[str, Any]:
-    """Redacted map of what a call to `host` would actually pick up."""
+    """一次发往 `host` 的调用实际会取到的东西，已脱敏的映射。"""
     return {r["key"]: r["value"] for r in in_force_rows(host)}
 
 
@@ -318,10 +334,10 @@ def _best_scope(key: str, host: str) -> str:
 
 
 def applied_note(host: str = "") -> str:
-    """One line naming what a call to `host` was fetched with — empty when nothing was.
+    """一行点名一次发往 `host` 的调用带着什么去抓——什么都没带时为空。
 
-    Derived from :func:`in_force_rows`, so it can only ever say what the values
-    were checked to be: a response field is a place a secret could go.
+    从 :func:`in_force_rows` 派生，所以它只能说出那些值被核对成什么：响应字段
+    正是秘密可能去的地方。
     """
     rows = in_force_rows(host)
     if not rows:
@@ -345,11 +361,10 @@ def credentials_held_for(url: str) -> tuple[str, ...]:
 
 
 def redact(key: str, value: Any) -> Any:
-    """The shareable half of a stored value. Anything not listed here is not said.
+    """一颗存储值里可以分享的那一半。没列在这里的就不说。
 
-    The list is deliberately short: a password, a bearer token, a header value, a
-    cookie value and a proxy password all have no redacted form, so they appear
-    only as "present".
+    这份名单刻意很短：密码、bearer token、头值、cookie 值与代理密码都没有脱敏
+    形式，所以它们只以"存在"出现。
     """
     if value is None:
         return None

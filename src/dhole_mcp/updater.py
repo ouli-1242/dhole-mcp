@@ -1,27 +1,20 @@
-"""Diagnostics for a dhole install: the version panel, the capability panel, doctor.
+"""dhole 安装的诊断：版本面板、能力面板、doctor。
 
-Before 17.0 B2-3 this module also owned self-update and self-repair. `dhole -u`
-drove a detached Windows helper (wait for the launcher to exit, dodge the
-dhole.exe file lock by renaming it, run pip, retry with --force-reinstall) plus a
-standalone ~/.dhole/repair.py that taskkilled every dhole process and reinstalled
-a few hundred MB from the index. The trigger was ANY ImportError - including one
-raised by an unrelated package in the same environment. The cost was out of
-proportion to the benefit (§3-34), so the whole mechanism is gone: this module
-now only reads, and the most side effect it will produce is a `tasklist` that
-matches process names.
+17.0 B2-3 之前本模块还负责自更新与自修复。`dhole -u` 驱动一个分离的 Windows
+helper（等启动器退出、靠改名躲开 dhole.exe 的文件锁、跑 pip、失败再用
+--force-reinstall 重试），外加一个独立的 ~/.dhole/repair.py —— 它 taskkill 掉所有
+dhole 进程，然后从索引重装几百 MB。触发条件是**任何** ImportError，包括同一环境里
+某个无关包抛出的那种。代价与收益完全不成比例（§3-34），所以整套机制删掉了：本
+模块现在只读，能产生的最重副作用是一次匹配进程名的 `tasklist`。
 
-What stays, and why:
+什么留下了，为什么：
 
-- ``dhole -v`` - in a silent-degradation design the diagnostics command is the
-  only place a user can see which tier is actually missing (no patchright means
-  HTTP-only fetch, no onnxruntime means consensus-order search).
-- ``dhole doctor`` - whether the install is the one that loads, which file that
-  is, what the config wrote, what the resolver actually answers; every failure
-  prints a command the human can run. Printing it is the whole point: executing
-  it is the human's decision.
-- version truth - ``__version__`` is authoritative and dist-info is compared
-  against it, because an editable install makes dist-info lie (measured: 16.2
-  code, 16.1 banner).
+- ``dhole -v`` —— 在静默降级的设计里，诊断命令是用户唯一能看见哪一档真的缺席的地方
+  （没有 patchright 就是纯 HTTP 抓取，没有 onnxruntime 就是共识排序搜索）。
+- ``dhole doctor`` —— 实际加载的是哪份安装、是哪个文件、配置写了什么、解析器真正
+  回答什么；每个失败都打印一条人能跑的命令。打印出来就是全部意义：执行它是人的决定。
+- 版本真相 —— ``__version__`` 是权威，dist-info 拿来与它比对，因为 editable 安装会
+  让 dist-info 说谎（实测：16.2 的代码、16.1 的横幅）。
 """
 
 from __future__ import annotations
@@ -43,10 +36,10 @@ __all__ = ["installed_version", "print_version", "print_capabilities",
 # 这是一个个人衍生版（of dondai1234/master-fetch），14.0 从 hound-mcp 改名为
 # dhole-mcp，因为旧名在 PyPI 上撞车。17.0 写死：``DHOLE_UPDATE_PACKAGE`` /
 # ``DHOLE_UPDATE_INDEX_URL`` 已注销（运行时静默忽略）—— 本模块不再从任何索引装东西。
-_DIST_NAME = "dhole-mcp"   # the distribution this fork is installed as
+_DIST_NAME = "dhole-mcp"   # 这个 fork 以之安装的发行名
 
 
-# ─── version ──────────────────────────────────────────────────────────────
+# ─── 版本 ──────────────────────────────────────────────────────────────────
 
 def installed_version() -> str:
     """当前版本。
@@ -68,11 +61,10 @@ def installed_version() -> str:
         return "unknown"
 
 
-# ─── launcher + process helpers (只读：找到 launcher、数有几个在跑) ────
-# ─── launcher + process helpers (Windows file-lock handling) ───────────────
+# ─── 启动器 + 进程辅助（只读：找到 launcher、数有几个在跑） ────
 
 def _dhole_launcher_path() -> str | None:
-    """Locate the dhole launcher (dhole.exe on Windows, `dhole` on POSIX)."""
+    """定位 dhole 启动器（Windows 上是 dhole.exe，POSIX 上是 `dhole`）。"""
     import shutil
     candidate = shutil.which("dhole")
     if candidate and os.path.exists(candidate):
@@ -90,7 +82,7 @@ def _dhole_launcher_path() -> str | None:
 
 
 def _other_dhole_pids() -> list[int]:
-    """PIDs of OTHER running dhole launcher processes (excludes this one)."""
+    """**其他**正在运行的 dhole 启动器进程 PID（不含本进程）。"""
     import subprocess
     my_pid = os.getpid()
     pids: list[int] = []
@@ -134,10 +126,10 @@ def _other_dhole_pids() -> list[int]:
     return pids
 
 
-# ─── public commands ───────────────────────────────────────────────────────
+# ─── 公开命令 ───────────────────────────────────────────────────────────────
 
 def print_version() -> None:
-    """Render `dhole -v`: the version panel, then what this install can actually do."""
+    """渲染 `dhole -v`：先版本面板，再这台安装实际能做什么。"""
     _print_version_panel()
     print_capabilities()
 
@@ -161,18 +153,15 @@ def _print_version_panel() -> None:
           + "  " + ui.cmd('git pull && python -m pip install -e ".[all]"'))
 
 
-# ─── capability report (`dhole -v`) ─────────────────────────────────────────
+# ─── 能力报告（`dhole -v`）─────────────────────────────────────────────────
 #
-# Every optional piece below turns a headline feature OFF WITHOUT AN ERROR:
-# without patchright/playwright the fetch pipeline is HTTP-only, without
-# onnxruntime/tokenizers (or before the ~90MB model is downloaded) search falls
-# back to consensus order, and all of them live in the [all] extra only. In a
-# silent-degradation design the diagnostics command is the one place a user can
-# see which parts are actually in place - otherwise the tool just looks "fine
-# but worse" forever.
+# 下面每一件可选件都会把一个主打能力**不报错地**关掉：没有 patchright/playwright，
+# 抓取流水线就只剩 HTTP；没有 onnxruntime/tokenizers（或约 90MB 的模型还没下载），
+# 搜索就退回共识排序；而它们全都只在 [all] extra 里。在静默降级的设计里，诊断命令
+# 是用户唯一能看见哪些部分真的就位的地方 —— 否则这个工具只会永远显得"还行但差些"。
 
 def _has_module(name: str) -> bool:
-    """True if `name` is importable, without importing it."""
+    """`name` 可导入时为 True，且不真的导入它。"""
     try:
         import importlib.util
         return importlib.util.find_spec(name) is not None
@@ -266,7 +255,7 @@ def _engine_yield_row() -> tuple[str, str, bool] | None:
 
 
 def _cooldown_config() -> dict:
-    """The backoff tiers + heartbeat in force (G6).
+    """生效的退避档 + 心跳（G6）。
 
     17.0 写死：三个冷却档与心跳都是能算清的数，``DHOLE_ENGINE_*`` 旋钮已注销
     （运行时静默忽略），这里只镜像 search_metasearch 的固定值供 `dhole engines
@@ -282,10 +271,10 @@ def _cooldown_config() -> dict:
 
 
 def _engine_cooldowns() -> dict[str, float]:
-    """{engine: seconds left} from circuit_breaker.json, expired entries dropped.
+    """来自 circuit_breaker.json 的 {engine: 剩余秒数}，过期条目已丢弃。
 
-    Stdlib-only on purpose (like _engine_yield_row): the doctor has to run on a
-    half-broken install, and importing the search layer pulls primp/lxml/httpx.
+    刻意只用标准库（与 _engine_yield_row 一样）：doctor 必须能在半坏的安装上跑，
+    而导入搜索层会拉进 primp/lxml/httpx。
     """
     try:
         import json
@@ -373,7 +362,7 @@ def _browser_capability_row() -> tuple[str, str, bool]:
 
 
 def capabilities() -> list[tuple[str, str, bool]]:
-    """[(label, state, ok)] for the optional capabilities that degrade silently."""
+    """[(label, state, ok)]，针对那些会静默降级的可选能力。"""
     caps: list[tuple[str, str, bool]] = []
 
     caps.append(_browser_capability_row())
@@ -431,8 +420,8 @@ def capabilities() -> list[tuple[str, str, bool]]:
 
 
 def print_capabilities() -> None:
-    """Print one line per optional capability. Never raises - diagnostics must
-    not be the thing that crashes when an install is half-broken."""
+    """每项可选能力打印一行。从不抛异常 —— 安装半坏的时候，诊断命令绝不能是
+    那个崩掉的东西。"""
     try:
         from dhole_mcp import cli_ui as ui
         print("  " + ui.dim("capabilities (each missing row degrades silently):"))
@@ -444,20 +433,16 @@ def print_capabilities() -> None:
 
 
 def _config_effective_value(entry, raw: str) -> str:
-    """W2 · how to display a value the operator has set, WITHOUT echoing
-    the raw string for kinds where the raw itself is sensitive.
+    """W2 · 展示操作员设置的值，**不**回显那些本身就敏感的原始串。
 
-    ``secret`` - the four API keys - never appears in doctor output; only
-    ``set (len=N)``. ``hostlist / path / url / str`` also skip the echo
-    because a hostname / filesystem path / URL / package name is
-    user-specific state that doctor should not lift onto the terminal or
-    into a bug-report paste. ``int``/``float``/``flag`` show the parsed
-    effective value (a number, or ``on``/``off``) - safe, and matches
-    "生效值" in the plan's format.
+    ``secret`` —— 四把 API key —— 永不出现在 doctor 输出里；只给
+    ``set (len=N)``。``hostlist / path / url / str`` 同样跳过回显，因为主机名 /
+    文件系统路径 / URL / 包名都是用户特定状态，doctor 不该把它抬到终端上，也不该
+    让它混进 bug 报告粘贴。``int``/``float``/``flag`` 显示解析后的生效值（一个数，或
+    ``on``/``off``）—— 安全，且符合计划格式里"生效值"的要求。
 
-    A raw string is echoed only for invalid entries (see the ``fail``
-    branch in ``_append_config_audit``), because the operator needs to
-    see the typo to fix it.
+    原始串只在条目无效时回显（见 ``_append_config_audit`` 的 ``fail`` 分支），
+    因为操作员要看见那个笔误才能改。
     """
     from dhole_mcp import env_registry as _reg
     kind = entry.kind
@@ -469,7 +454,7 @@ def _config_effective_value(entry, raw: str) -> str:
             return "on"
         if v in _reg.OFF_TOKENS or v == "":
             return "off"
-        return "on"   # non-fail-safe flags still resolve to True (see _env_flag)
+        return "on"   # 非 fail-safe 的 flag 仍解析为 True（见 _env_flag）
     if kind in ("int", "float"):
         try:
             val = float(raw)
@@ -477,18 +462,18 @@ def _config_effective_value(entry, raw: str) -> str:
                 return str(int(val))
             return f"{val:g}"
         except (TypeError, ValueError):
-            return raw  # invalid path already covered; keep display stable
+            return raw  # 无效路径已在上面覆盖；保持显示稳定
     if kind == "hostlist":
         parts = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
         return f"{len(parts)} entries" if parts else "empty"
-    # str / path / url / enum: presence indicator only.
+    # str / path / url / enum：只报"设了"。
     return "set"
 
 
 def _fix_line_for(entry) -> str:
-    """Actionable repair wording for a config-audit failure.
+    """配置审计失败时的可行动修复措辞。
 
-    Mirrors the plan's W2 example verbatim:
+    逐字对齐计划 W2 的示例：
     ``fix: set DHOLE_DEFAULT_CONTENT_CHARS to an integer in 500..200000, or unset it``
     """
     kind = entry.kind
@@ -506,35 +491,31 @@ def _fix_line_for(entry) -> str:
 
 
 def _append_config_audit(checks: list[tuple[str, str, str, str]]) -> None:
-    """W2 · add one row per DHOLE_* variable the operator actually set.
+    """W2 · 操作员真正设过的每个 DHOLE_* 变量各加一行。
 
-    Unset variables are skipped - 39 rows of "unset" is noise the plan
-    explicitly wants to avoid. Rows are grouped by scenario (env name is
-    secondary sort) so someone debugging "why did my proxy setting not
-    take" reads them in a coherent order rather than in registry order.
+    未设置的变量跳过 —— 39 行"未设置"是计划明确要避免的噪声。行按场景分组
+    （env 名是次要排序键），让人排查"我的代理设置为什么没生效"时按连贯的顺序读，
+    而不是按注册表顺序。
 
-    Invalid values go into the shared ``checks`` list with state ``fail``
-    so ``doctor``'s top-line counter and its ``1 if failures else 0``
-    exit code both see them; valid values use state ``info`` (visible,
-    not alarming). A single summary line uses state ``ok`` so a fully
-    clean machine still reads green.
+    无效值以 ``fail`` 状态进入共享的 ``checks`` 列表，于是 ``doctor`` 的顶行计数与
+    它 ``1 if failures else 0`` 的退出码都能看见；有效值用 ``info``（可见，但不刺眼）。
+    另有一行总结用 ``ok``，让完全干净的机器仍然读到绿色。
     """
     from dhole_mcp import env_registry as _reg
 
     persisted = _reg.file_entries()
     set_entries: list[tuple[str, str, object, str]] = []
     for entry in _reg.ALL:
-        # Two doors, one audit: env wins over ~/.dhole/config.json, and `value_of`
-        # is exactly what the typed readers consult - so what doctor prints is the
-        # value in effect, not the value one of the two doors happens to hold.
+        # 两扇门、一次审计：env 优先于 ~/.dhole/config.json，而 `value_of` 正是
+        # 各类型读取器查询的那一个 —— 所以 doctor 打印的是生效值，不是两扇门里某
+        # 一扇碰巧持有的值。
         raw = _reg.value_of(entry.name)
         if raw is None or raw.strip() == "":
             continue
         set_entries.append((entry.scenario, entry.name, entry, raw))
 
-    # A name in the file that no code reads is the loudest kind of silence: it
-    # looks like a setting and does nothing. Nothing above can see it, so it
-    # needs its own row - and it must count as a failure, not a note.
+    # 文件里有一个没人读的名字，是最吵闹的那种沉默：它看起来像设置，却什么都不做。
+    # 上面所有检查都看不见它，所以它需要自己的一行 —— 而且必须算失败，不是注记。
     for orphan in sorted(k for k in persisted if _reg.by_name(k) is None):
         checks.append((
             orphan, "fail",
@@ -587,9 +568,8 @@ def _append_config_audit(checks: list[tuple[str, str, str, str]]) -> None:
             msg = f"{raw!r} is {why} - using default {default}"
             checks.append((name, "fail", msg, _fix_line_for(entry)))
 
-    # The one capability where "it works" and "it is safe" are different
-    # statements: attaching your real Chrome hands every request the attached
-    # browser makes the cookies of every site the user is logged into. 17.0
+    # 唯一一个"能用"与"安全"是两句不同陈述的能力：attach 你真实的 Chrome，就是
+    # 让 attach 之后的每个请求都带上用户已登录站点的 cookie。17.0
     # 先问再记（§3-16）：attach 没有总开关，围栏是落盘的已授权主机集合 —— 未授权
     # 主机第一次 attach 会被拒绝并等待 confirm，所以这里报告的是磁盘上的授权现实，
     # 而不是任何配置项。
@@ -654,16 +634,15 @@ def _append_config_audit(checks: list[tuple[str, str, str, str]]) -> None:
     ))
 
 
-_FAKE_IP_NETWORK = None  # lazily constructed to keep import cheap
+_FAKE_IP_NETWORK = None  # 惰性构造，让导入保持廉价
 
 
 def _fake_ip_network():
-    """``198.18.0.0/15`` - the RFC 2544 benchmarking block.
+    """``198.18.0.0/15`` —— RFC 2544 的基准测试网段。
 
-    Clash / mihomo / sing-box TUN with a fake-ip resolver hands every public
-    hostname an address from this range by design; a genuine public resolver
-    never does. That asymmetry makes the block a specific enough signal that
-    doctor can name the environment instead of leaving the user to guess.
+    Clash / mihomo / sing-box 的 TUN 配 fake-ip 解析器时，会按设计给每个公网主机名
+    发一个这个范围内的地址；真正的公网解析器永远不会。这个不对称让该网段成为一个
+    足够具体的信号，doctor 因此能点名环境，而不是把猜测留给用户。
     """
     global _FAKE_IP_NETWORK
     if _FAKE_IP_NETWORK is None:
@@ -673,31 +652,26 @@ def _fake_ip_network():
 
 
 def _resolve_probe() -> str:
-    """The domain doctor resolves to sniff for a fake-ip resolver.
+    """doctor 为嗅探 fake-ip 解析器而解析的域名。
 
-    Hard-coded so a change to the probe target has to go through review;
-    a machine that cannot resolve ANY name is offline, and the check falls
-    through to an ``info`` line rather than a failure.
+    写死，这样改动探针目标必须经过评审；一台连任何名字都解析不了的机器是离线的，
+    这项检查会落到 ``info`` 行而不是失败。
     """
     return "example.com"
 
 
 def _append_resolver_reality(checks: list[tuple[str, str, str, str]]) -> None:
-    """W3 · tell the operator they are behind a fake-ip proxy, in the words
-    they can act on.
+    """W3 · 用操作员能据以行动的话，告诉他正处在 fake-ip 代理后面。
 
-    This is the fix for the plan §1.5 falsified README claim ("zero-config
-    works by default"). On a Clash TUN + fake-ip resolver, the DNS recheck
-    in ``security._resolves_to_internal`` refuses every public URL because
-    the AAAA record lands in ``fc00::/7`` - the IPv4 answer in
-    ``198.18.0.0/15`` alone would NOT trip it (that block is deliberately
-    absent from ``_PRIVATE_NETWORKS``). The failure looks identical to "the
-    product is broken" from the outside; naming the resolver class and the
-    specific network turns it into a copy-pasteable setting change.
+    这是对计划 §1.5 那句被证伪的 README 声明（"默认零配置可用"）的修复。在 Clash
+    TUN + fake-ip 解析器上，``security._resolves_to_internal`` 里的 DNS 复查会拒绝
+    每一个公网 URL，因为 AAAA 记录落进 ``fc00::/7`` —— 单看 ``198.18.0.0/15`` 的
+    IPv4 答案**不会**触发它（那个网段被刻意排除在 ``_PRIVATE_NETWORKS`` 之外）。
+    从外部看，这个失败与"产品坏了"一模一样；点名解析器类别与具体网段，就把它变成
+    一次可复制粘贴的设置更改。
 
-    Never counts as a failure. A machine with no network, a machine with a
-    plain HTTP proxy, and a fake-ip machine whose auto-skip has engaged all
-    read as either ``ok`` or ``info`` here.
+    永不算作失败。没有网络的机器、普通 HTTP 代理的机器、以及自动跳过已生效的
+    fake-ip 机器，在这里都读成 ``ok`` 或 ``info``。
 
     17.0 批次 6d：这一行从前只报 doctor 自己，却用着"这台机器已经自动跳过了"那种
     说的是别人的措辞。它问的 ``security._dns_recheck_enabled()`` 是 doctor **本进程**
@@ -716,8 +690,7 @@ def _append_resolver_reality(checks: list[tuple[str, str, str, str]]) -> None:
     try:
         infos = socket.getaddrinfo(probe, None)
     except Exception as exc:  # noqa: BLE001
-        # Offline / resolver broken: report what we saw, do NOT count as a
-        # failure - "the network is down" is not an install problem.
+        # 离线 / 解析器坏了：报告看到的事实，**不**算失败 ——"网络断了"不是安装问题。
         checks.append((
             "resolver reality", "info",
             f"probe {probe} unresolved: {type(exc).__name__} (offline?)",
@@ -1476,18 +1449,16 @@ def _append_live_probe(checks) -> None:
 
 
 def doctor() -> int:
-    """Proactive health check: diagnose a half-broken install and name the fix.
+    """主动体检：诊断半坏的安装并点名修复方法。
 
-    ``-v`` says what this install *can* do. ``doctor`` additionally checks
-    install integrity - launcher on PATH, which module file actually loads,
-    metadata drift, stale launcher/processes, writable state dir - and prints a
-    copy-pasteable repair command for every failure. Returns a shell exit code
-    (0 = healthy, 1 = something needs attention) so it can gate a script.
+    ``-v`` 说这台安装**能**做什么。``doctor`` 额外检查安装完整性 —— PATH 上的
+    launcher、实际加载的是哪个模块文件、元数据漂移、陈旧的 launcher/进程、状态
+    目录可写 —— 并为每个失败打印一条可复制粘贴的修复命令。返回 shell 退出码
+    （0 = 健康，1 = 有东西要处理），所以它能给脚本当闸门。
 
-    The "module loaded from" line exists because this project's tests are the
-    thing most easily fooled: with a built wheel installed instead of an
-    editable install, pytest silently exercises site-packages while the editor
-    shows src/. Naming the resolved file makes that visible in one line.
+    "模块加载自"那一行存在，是因为这个项目的测试最容易被骗：装了构建好的 wheel
+    而不是 editable 安装时，pytest 在 site-packages 上静默跑，而编辑器里显示的是
+    src/。点名解析出的文件，让这件事一行可见。
     """
     from dhole_mcp import cli_ui as ui
     from importlib.metadata import version as _meta_version
@@ -1500,7 +1471,7 @@ def doctor() -> int:
             p = "~" + p[len(home):]
         return p if len(p) <= w else "..." + p[-(w - 3):]
 
-    # (label, state, detail, fix) - state is "ok" | "fail" | "info"
+    # (label, state, detail, fix) - state 是 "ok" | "fail" | "info"
     checks: list[tuple[str, str, str, str]] = []
 
     def _safe(fn, label: str) -> None:
@@ -1589,9 +1560,8 @@ def doctor() -> int:
                        "skipped by the test harness (it spawns a server)", ""))
 
     # ── 6+7 · 两扇门当前值、遮蔽关系，以及已被注销却被设着的旋钮 ─────────
-    # The whole section runs inside a guard because a doctor() that raises is
-    # worse than a doctor() with a missing section - the plan's W2 clause "doctor
-    # 依然绝不许抛异常" is pinned by test_never_raises_and_returns_an_exit_code.
+    # 整段都跑在守卫里，因为一个会抛异常的 doctor() 比一个缺了几节的 doctor() 更糟
+    # —— 计划 W2 的"doctor 依然绝不许抛异常"由 test_never_raises_and_returns_an_exit_code 钉着。
     _safe(_append_config_audit, "config audit")
 
     # ── 8 · robots 的三种状态 ─────────────────────────────────────────────
@@ -1639,7 +1609,7 @@ def doctor() -> int:
     # ── 12 · 这次连接付了多少 ───────────────────────────────────────────
     _safe(_append_wire_cost, "connect cost")
 
-    # ── render ───────────────────────────────────────────────────────────
+    # ── 渲染 ─────────────────────────────────────────────────────────────
     failures = [c for c in checks if c[1] == "fail"]
     head = (ui.err(f"{len(failures)} issue(s) found") if failures
             else ui.ok("all healthy"))

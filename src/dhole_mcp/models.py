@@ -19,7 +19,7 @@ SessionType = Literal["dynamic", "stealthy"]
 
 
 class ResponseModel(BaseModel):
-    """Request's response information structure."""
+    """一次请求的响应信息结构。"""
     status: int = Field(description="HTTP status (0=network error)")
     content: list[str] = Field(description="Extracted text (truncated if is_truncated)")
     url: str = Field(description="Final URL")
@@ -90,7 +90,7 @@ class ResponseModel(BaseModel):
     timeout_applied: int = Field(default=0, description="Milliseconds ONE HTTP attempt was actually given, present ONLY when this tier's own per-attempt ceiling cut it below what your timeout= implies: that ceiling is 30000ms per attempt, while timeout= is a WHOLE-CALL budget shared by the attempts. So a bigger timeout buys more ATTEMPTS, never a longer single one - a body that needs one connection of more than 30s is not fetchable at the HTTP tier by any timeout= (a document gets one attempt, because a retry restarts its download from byte zero). Absent = no ceiling bit: every attempt got the figure your budget implies, or no HTTP attempt ran at all (a cache hit, or the browser tier's own clock).")
     attempt_cap_ms: int = Field(default=0, description="Milliseconds ONE HTTP attempt was actually given on this call, whenever an HTTP attempt ran: it is what your `timeout=` became after whichever of this tier's levers bound it: that per-attempt ceiling (30,000ms), what is left of the call when this tier runs, a learned per-host ceiling, or a known-slow-domain guarantee (the summary names the lever when one moved it materially). Present with no ceiling bit — the field answers 'how much was one attempt given', not only 'how much was it cut'; when a ceiling did bite, `timeout_applied` also appears with the same number. 0/absent = no HTTP attempt ran (a cache replay, or the browser tier's own clock).")
 
-    # Agent-facing signals (set by _with_agent_hints on every finalized response).
+    # 给 agent 的信号（每一封定稿响应都由 _with_agent_hints 写）。
     summary: str = Field(default="", description="One-line status for quick reasoning, e.g. '200 OK · 12.4KB markdown · http · truncated'")
     content_ok: bool = Field(default=False, description="True = real content retrieved (status<400, no error, not a JS shell/login wall). Check this before trusting content.")
     next_action: str = Field(default="", description="Suggested next call when one is obvious (paginate/retry/switch source). Empty = nothing to do.")
@@ -102,19 +102,18 @@ class ResponseModel(BaseModel):
     table_of_contents: list = Field(default_factory=list, description="PDF section-map: outline/bookmarks as [{level, title, page, end_page}] when the PDF has a ToC; for PDFs without bookmarks, a heading-based map is built from font-size detection. page+end_page give a range per section so you can pass pages='X-Y' to grab one section. Empty for non-PDF or PDFs with no detectable headings.")
     pages_total: int = Field(default=0, description="Total pages in the PDF file. 0/absent = this response is not a PDF, or the file could not be opened. Compare with pages_returned before concluding that a page range came back empty.")
     pages_returned: int = Field(default=0, description="How many PDF pages this response actually extracted (a subset of pages_total, chosen by pages= when given). 0/absent = not a PDF, or no page was extracted. pages_total - pages_returned says how much of the file this call did not read.")
-    # ─── v10 research-grade envelope (additive; all default-valued) ───
-    # page_type: structural class of the page, computed from raw HTML. Drives
-    # next_action (list pages point to their links, auth walls suggest switching source).
+    # ─── v10 研究级信封（只增字段；全部带默认值）───
+    # page_type：页面的结构类别，从原始 HTML 算出来。它驱动 next_action
+    # （列表页指向自己的链接，登录墙建议换源）。
     page_type: str = Field(default="unknown", description="Structural class: article|list|pdf|xml|js_shell|auth_wall|paywall|captcha|redirect|image|json|unknown. Drives next_action. What kind of SITE this is lives in source_type, never here. 'list' = a page whose main content is links to other pages (fetch those or web_crawl). 'xml' = a data XML document (sitemap, RSS/Atom, XML API) returned with its tags intact. 'auth_wall'/'paywall'/'captcha' = the body is a login/payment/anti-bot challenge rather than the page's content.")
-    # source_type + is_official: domain-based authority signal so the agent can
-    # weigh trust without a separate lookup. Conservative: is_official is True
-    # only on a strong signal (the name itself cannot be bought by a third
+    # source_type + is_official：基于域名的权威信号，让 agent 不必额外查一次就能
+    # 权衡可信度。保守：只有强信号时 is_official 才为 True（那个名字本身无法被第三方
+    # 买到）。
     source_type: str = Field(default="unknown", description="Domain class from the URL: gov|edu|github|docs-site|reference|paper|news|blog|forum|qa|ecommerce|unknown. A hint, not a verdict - docs-site only means the host starts with docs./developer., and reference/paper only mean the domain is a known encyclopedia/standards/journal host (which is not the same as being right).")
     is_official: bool = Field(default=False, description="True ONLY where the name itself cannot be bought: registry-controlled namespaces (gov, edu, github) plus the bodies that RUN a namespace (IANA/ICANN/RFC Editor/IETF/W3C/Unicode, and the package registries pypi/npm/crates/rubygems/go/metacpan/packagist/nuget). Docs/developer subdomains and community-edited reference sites (Wikipedia) are NOT official - who controls a name is not the same as being right. Conservative default False; it is a hint, not a substitute for checking the source.")
-    # Freshness: content_age_days from the page's own published/modified date
-    # (OpenGraph/JSON-LD/PDF). None = no date recoverable (or a continuously
-    # edited wiki whose only date is its creation date - see envelope.py).
-    # is_stale compares the age against the horizon for THIS KIND of source.
+    # 新鲜度：content_age_days 来自页面自己的发布/修改日期（OpenGraph/JSON-LD/PDF）。
+    # None = 取不到任何日期（或一份持续被编辑的 wiki，它唯一的日期是创建日期 —— 见
+    # envelope.py）。is_stale 用**这一类**来源的时限去比这个年龄。
     content_age_days: Optional[int] = Field(default=None, description="Age in days from the page's published/modified date (OpenGraph/JSON-LD/PDF creation_date). null = the page carries no recoverable date (NOT a negative age), or it is a continuously-edited wiki whose only date is its creation date, which says nothing about currency. Pair with is_stale to judge currency.")
     is_stale: bool = Field(default=False, description="True when content_age_days is past the staleness horizon for this kind of source: 30 days for news, 730 for reference/paper/docs/repo/QA, 365 for everything else. So the same age can be stale on a news page and current on a reference page. False when there is no age to judge.")
     # 17.0 §6：条件请求不再是调用方能传的参数，`cache_validators` / `not_modified`
@@ -123,15 +122,14 @@ class ResponseModel(BaseModel):
     # PrivateAttr 因此天然不上线。
     # "没变"这个事实也不再需要一个布尔：`status == 304` 就是它，而 304 早就在响应里。
     _validators: Dict[str, str] = PrivateAttr(default_factory=dict)
-    # source + archived_at: set ONLY when this content came from the Internet
-    # Archive (auto-fallback after a live hard-block). 'live' (default) = the
-    # real page. Honest marking so the agent knows it may be a dated snapshot.
+    # source + archived_at：只有内容来自 Internet Archive（真站硬拦后的自动兜底）时
+    # 才设置。'live'（默认）= 真页面。诚实标记，让 agent 知道这可能是带日期的快照。
     source: str = Field(default="live", description="'live' (default) = fetched from the real URL. 'archive.org' = the live site hard-blocked and this content was recovered from the Internet Archive's closest snapshot (see archived_at for the snapshot date).")
     archived_at: str = Field(default="", description="ISO date of the archive.org snapshot when source='archive.org'. Empty when source='live'. The content reflects the page as it was on this date.")
     # ─── G33/G35: CDP attach 可见性 + 无模型登录判定 ───
     cdp_attached: bool = Field(default=False, description="True when this response was fetched through an attached real browser (cdp_url): every request rode the attached profile's authenticated cookies. Default false - the first attach to a host is refused with cdp_authorization_required until the user approves that host, and that approval is re-asked after 30 days rather than trusted forever. Attach attempts are recorded whenever DHOLE_USAGE_LOG is on (default off - no log target, no record). Never treat content from an attached profile like public content: it is the user's logged-in view.")
-    # 17.0 §3-17: the stored default identity that was in force for THIS call.
-    # A caller who never sees which calls ran on defaults cannot revoke them.
+    # 17.0 §3-17：本次调用生效的落盘默认身份。一个从来看不到哪些调用跑在默认值上的
+    # 调用方，没法撤销它们。
     identity_applied: str = Field(default="", description="Key names (and host scopes) from `cred_defaults` that this call was fetched with — names only, never values. Empty means nothing stored was in force and every credential on this call came from what you passed. Read it before concluding a page is public: content fetched with your stored credentials is your logged view of that host.")
     login_check: Optional[Dict[str, Any]] = Field(default=None, description="Only when check_login=true AND the fetch ran on the browser tier: {logged_in: true|false|null, signals: [...], cookie_names: [...], method: 'dom+cookie-names'}. Model-free: DOM shape (logout control / password field / login form) plus cookie NAMES - values are never returned. When check_login was asked but the tier cannot answer (HTTP-tier result, cache hit), an explicit {logged_in: null, method: 'unavailable: ...'} marks that on the wire instead of a silently absent field.")
     # G25 评审 阶段4：抓回的正文是数据，不是指令。命中注入启发式时随信封上线，
@@ -153,11 +151,10 @@ class ResponseModel(BaseModel):
     approx_tokens: int = Field(default=0, description="Rough token count of `content` as delivered, for budgeting your context: CJK/kana/Hangul chars count ~1 each, other chars ~1 per 4. An ESTIMATE (script-aware, so a Chinese page is not under-counted by a latin chars/4 rule), not a tokenizer's exact count. Absent when content is empty.")
     duplicate_lines_collapsed: int = Field(default=0, description="How many in-page duplicate lines were folded away before delivery - nav/footer/subscribe boilerplate that repeated inside one page (the first occurrence is kept). 0/absent = none folded. Only plain paragraph lines are eligible: headings, list items, table rows and code fences are left alone, and only exact repeats of >=24 chars fold.")
 
-    # Element captures from {\"screenshot\"} actions (multimodal flag): pixels
-    # ride the CONTENT list as ImageContent, never this model — a base64 blob
-    # in the JSON payload would bloat every transcript/cache copy of the
-    # response for clients that cannot render it anyway. PrivateAttr keeps it
-    # out of model_dump()/serialization by construction.
+    # {\"screenshot\"} 动作抓到的元素图（多模态旗）：像素走 CONTENT 列表、以
+    # ImageContent 交回，从不进这个模型 —— 把 base64 塞进 JSON 载荷会让每一份
+    # transcript/缓存副本都膨胀，而客户端本来也渲染不了它。PrivateAttr 从构造上就把
+    # 它挡在 model_dump()/序列化之外。
     _action_images: List[Dict[str, str]] = PrivateAttr(default_factory=list)
 
     # R01-028：这条链自己的回执，随行的第二份。`_report_action_outcomes` 把它抄上
@@ -178,7 +175,7 @@ class ResponseModel(BaseModel):
 
 
 class BulkResponseModel(BaseModel):
-    """Response from bulk fetch operations, one result per URL."""
+    """批量取回操作的响应，每个 URL 一条结果。"""
     results: list[ResponseModel] = Field(description="Per-URL results")
     total: int = Field(description="Total URLs")
     successful: int = Field(description="Fetches with status<400 + no error. This is a statement about the HTTP answer, NOT about whether the row carries usable content — count `usable` for that, and per row read `content_ok`.")
@@ -188,26 +185,22 @@ class BulkResponseModel(BaseModel):
 
     @model_serializer(mode="wrap")
     def _one_process_receipt_per_call(self, handler):
-        """Hoist an identical per-row posture note into one call-level field.
+        """把逐行相同的姿态注记提到调用级的一格。
 
-        `metadata.ssrf_recheck` describes the process, not the page, so a bulk
-        fetch stamps the same sentence on every row. Rows are where a caller reads
-        a page's own facts; a process fact repeated 20 times is not 20 facts.
+        `metadata.ssrf_recheck` 描述的是进程，不是页面，于是批量抓取会在每一行盖同一句
+        话。行是调用方读「这一页自己的事实」的地方；一个进程事实重复 20 遍不是 20 个
+        事实。
 
-        The hoist happens only when every row that carries the note carries the
-        SAME one. A batch whose rows disagree was fetched under more than one
-        posture, and collapsing that into one line would be a false statement about
-        safety - so the rows keep their own copies and the envelope stays quiet.
+        只有**每一**个带注记的行都带着**同一句**时才上提。行与行不一致，说明这一批是
+        在不止一种姿态下抓的，把它们压成一行就是一句关于安全的假话 —— 所以行保留自己的
+        副本，信封保持沉默。
         """
         data = handler(self)
         rows = data.get("results") or []
-        # R01-031. `successful` answers one question — did an HTTP answer come back
-        # without an error — and a measured 12-URL batch said 9 while exactly 4 rows
-        # carried content a caller could quote. A reader who takes that number into a
-        # report is reporting a different fact than the one the rows hold, so the
-        # second count is put next to it and derived from the rows themselves (it
-        # cannot drift from them, and it is computed before the posture-hoist branch
-        # that may return early).
+        # R01-031。`successful` 只回答一个问题 —— 有没有一个不带错误的 HTTP 答复回来
+        # —— 而实测的一批 12 个 URL 报 9，真正带回可引用正文的行只有 4。把这个数写进
+        # 报告的读者，报的是与行里事实不同的另一件事，所以第二个计数就放在它旁边，并且
+        # 从行本身推出来（它不可能与行漂开，且算在可能提前返回的姿态上提分支之前）。
         usable = sum(1 for row in rows
                      if isinstance(row, dict) and row.get("content_ok"))
         data["usable"] = usable
@@ -219,7 +212,9 @@ class BulkResponseModel(BaseModel):
                 f"{usable} carry content you can quote (`content_ok=true` on the "
                 "row). The two numbers answer different questions and are usually "
                 "not equal: a row can answer 200 with a login wall, a paywall, "
-                "an empty page, or a body cut down by the extractor.")
+                "an empty page, or a body cut down by the extractor. "
+                "The rows ride `results`, one per URL (`web_crawl` names its "
+                "rows `pages`).")
         notes = {(row.get("metadata") or {}).get("ssrf_recheck")
                  for row in rows if isinstance(row, dict)}
         notes.discard(None)
@@ -239,7 +234,7 @@ class BulkResponseModel(BaseModel):
 
 
 class SessionInfo(BaseModel):
-    """Information about an open browser session."""
+    """一个打开着的浏览器会话的信息。"""
     session_id: str = Field(description="Session ID")
     session_type: SessionType = Field(description="dynamic|stealthy")
     created_at: str = Field(description="ISO timestamp")
@@ -247,16 +242,15 @@ class SessionInfo(BaseModel):
 
 
 class SessionCreatedModel(SessionInfo):
-    """Response returned when a new session is created."""
+    """新建会话时返回的响应。"""
     message: str = Field(description="Confirmation message")
 
 
 class SessionCensusRow(BaseModel):
-    """One live session in the `sys_state` census.
+    """`sys_state` 普查里的一个活会话。
 
-    Not a `SessionInfo` subclass: a session can exist purely as a cookie jar
-    (a login done through the HTTP tier never opens a browser), so the browser
-    half is what is optional here, not the id.
+    不是 `SessionInfo` 的子类：会话可以只以一个 cookie jar 的形式存在（走 HTTP 档完成
+    的登录从不打开浏览器），所以这里可选的是浏览器那一半，不是 id。
     """
     session_id: str = Field(description="The session_id= this call was given (empty = none)")
     hosts: Dict[str, List[str]] = Field(default_factory=dict, description="host -> the cookie NAMES the jar holds for it. Names only, always: a cookie value is a credential, and everything a tool returns lands in the transcript.")
@@ -301,13 +295,12 @@ class RefusalHandle(BaseModel):
 
 
 class SysStateModel(RefusalHandle):
-    """Response from `sys_state`: what local state exists, or what one call erased.
+    """`sys_state` 的响应：有哪些本地状态，或一次调用抹掉了什么。
 
-    The field names are the ones the two tools this one merged used to answer
-    with (`purged`, `engine_state_reset`, `cookies_forgotten`, `prewarm_closed`,
-    `open_count`...). That is deliberate: an agent that learned either tool from
-    an old transcript, or from the guide, reads the same receipt for the same
-    event instead of relearning a vocabulary that describes nothing new.
+    字段名就是这颗工具合并的那两扇从前答话用的名字（`purged`、
+    `engine_state_reset`、`cookies_forgotten`、`prewarm_closed`、`open_count`……）。
+    这是刻意的：一个从旧 transcript 或手册里学会那两扇中任一扇的 agent，对同一个事件
+    读到同一份回执，而不是重新学一套并没有描述新东西的词汇。
     """
     message: str = Field(default="", description="What this call did, in one line")
     cleared: List[str] = Field(default_factory=list, description="State classes this call actually erased, in the words you passed. Absent means nothing was erased - a paused or refused call says so here too.")
@@ -333,14 +326,13 @@ class SysStateModel(RefusalHandle):
 
 
 class CredDefaultsModel(RefusalHandle):
-    """Response from `cred_defaults`: the shareable half of the stored identity.
+    """`cred_defaults` 的响应：落盘身份里可以分享的那一半。
 
-    No field here can hold a secret by shape. `rows` carries what
-    ``identity.redact`` returned — for a credential that is a type plus a
-    username, cookie NAMES, or a proxy host with a "has credentials" boolean.
-    The full values live in memory (``~/.dhole/identity.db``, DPAPI-encrypted,
-    only when ``DHOLE_PERSIST_CREDENTIALS=1``) and leave the process only
-    as request headers to the host they were stored for.
+    这里的字段按形状就装不下秘密。`rows` 装的是 ``identity.redact`` 交回的东西 ——
+    对一份凭据来说，那是类型加用户名、cookie 的**名字**，或一台代理主机加一个「有没有
+    凭据」的布尔。完整值住在内存里（``~/.dhole/identity.db``，DPAPI 加密，且只在
+    ``DHOLE_PERSIST_CREDENTIALS=1`` 时落盘），离开进程时只会作为请求头发给它们被存的
+    那台主机。
     """
     message: str = Field(default="", description="One line: what this call stored or forgot, and what is in force now.")
     rows: List[Dict[str, Any]] = Field(default_factory=list, description="The whole store, redacted: [{key, scope, stored_s_ago, value}] where scope is the host a credential was given for ('' for the five global keys) and stored_s_ago is how long ago it was set. Values are never included.")

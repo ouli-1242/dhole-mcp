@@ -1,14 +1,13 @@
-"""RSS/Atom feed fetching for Dhole.
+"""Dhole 的 RSS/Atom feed 抓取。
 
-Fetches and parses RSS 2.0 / Atom feeds so an agent can track what a source
-*has published* (fresh items), as opposed to fetching a page and reading it.
+抓取并解析 RSS 2.0 / Atom feed，让 agent 能追踪一个源**发布过什么**（新条目），
+而不是抓一页再读它。
 
-No caching: feeds are inherently fresh content; a cached feed defeats the
-purpose. Uses the existing fetcher.HTTPSession (TLS impersonation) so feeds
-behind basic bot protection still parse.
+不做缓存：feed 本身就是新鲜内容，缓存一份 feed 就抵消了它的意义。复用现有的
+fetcher.HTTPSession（TLS 指纹冒充），于是挡在基础 bot 防护后面的 feed 也能解析出来。
 
-Parser is lenient (lxml, tolerant of malformed XML): a feed that partially
-fails still returns whatever items parsed, with the error surfaced per-source.
+解析器是宽容的（lxml，容忍畸形 XML）：部分失败的 feed 仍交回已经解析出来的条目，
+错误按源分别申报。
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ import asyncio
 import html
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -26,18 +25,16 @@ from dhole_mcp import injection
 
 logger = logging.getLogger("dhole_mcp.feed")
 
-_MAX_FEED_BYTES = 2 * 1024 * 1024  # 2MB cap — feeds are small text; larger is junk
+_MAX_FEED_BYTES = 2 * 1024 * 1024  # 2MB 上限 —— feed 是小块文本，更大的就是垃圾
 
-# An item's description is a preview, not the article: full-text bodies from
-# feedburner-style feeds run to 50KB and would bury the 20-item list. The cut is
-# disclosed per item (summary_truncated) rather than silently, because a
-# truncated mid-sentence preview is otherwise indistinguishable from a feed that
-# simply wrote that little.
+# 条目的 description 是预览，不是文章：feedburner 那一类 feed 的全文能到 50KB，
+# 会把 20 条的清单埋掉。这一刀按条目申报（summary_truncated）而不是静默切掉，
+# 否则一句切在半截的预览，与一个本来就只写了这么多的 feed 长得一模一样。
 _SUMMARY_CHARS = 500
 
 
 def _preview(text: str) -> tuple[str, bool]:
-    """(the capped preview, whether anything was cut)."""
+    """（截断后的预览，以及是否有内容被切掉）。"""
     return text[:_SUMMARY_CHARS], len(text) > _SUMMARY_CHARS
 
 
@@ -52,7 +49,7 @@ def _utc_now() -> datetime:
 
 
 class FeedItem(BaseModel):
-    """A single entry from an RSS/Atom feed."""
+    """RSS/Atom feed 里的一条条目。"""
     title: str = Field(default="", description="Entry title")
     url: str = Field(default="", description="Entry link")
     published: str = Field(default="", description="ISO-8601 publish date (empty if unknown)")
@@ -66,7 +63,7 @@ class FeedItem(BaseModel):
 
 
 class FeedResult(BaseModel):
-    """Parsed feed for one source URL."""
+    """一个源 URL 解析出的 feed。"""
     source_url: str = Field(description="The feed URL requested")
     source_title: str = Field(default="", description="Feed/channel title")
     items: list[FeedItem] = Field(default=[], description="Entries, newest first")
@@ -94,9 +91,8 @@ class FeedResult(BaseModel):
                     "read like a timestamp on content that does not exist.")
     items_older_than_since: int = Field(default=0, description="Entries dropped because they were published BEFORE `since` - the 'nothing new' half of a poll. Reported rather than hidden: a bare list of items cannot tell 'the feed has 3 items total' apart from '50 were filtered out and 3 are new'.")
     items_without_date: int = Field(default=0, description="Entries KEPT despite having no usable publish date. A feed that does not date its items cannot be filtered honestly, so these are returned and counted instead of silently dropped.")
-    # `note` used to carry a second subject as well: "the origin answered our
-    # conditional with 200 + the whole feed, so nothing was compared". That half
-    # lost its subject when conditional polling came off the tool surface (17.0 §6).
+    # `note` 从前还载着第二个主题："源站对我们的条件请求回了 200 + 整份 feed，所以什么
+    # 都没比对"。条件轮询从工具面上撤掉之后（17.0 §6），那一半失去了它的主语。
     note: str = Field(
         default="",
         description="One line the caller could not otherwise infer from this result. Three "
@@ -130,11 +126,11 @@ class FeedResult(BaseModel):
 
 
 def _parse_date(value: str) -> str:
-    """Best-effort RFC822 / ISO-8601 parse to ISO-8601. Returns '' if unparseable."""
+    """尽力把 RFC822 / ISO-8601 解析成 ISO-8601；解析不出交回空串。"""
     if not value:
         return ""
     v = value.strip()
-    # RFC 822 (RSS): "Tue, 05 Aug 2026 12:00:00 +0000"
+    # RFC 822（RSS）："Tue, 05 Aug 2026 12:00:00 +0000"
     try:
         from email.utils import parsedate_to_datetime
         dt = parsedate_to_datetime(v)
@@ -142,31 +138,30 @@ def _parse_date(value: str) -> str:
             return dt.astimezone(timezone.utc).isoformat()
     except (ValueError, TypeError):
         pass
-    # ISO-8601 (Atom): "2026-08-05T12:00:00Z"
+    # ISO-8601（Atom）："2026-08-05T12:00:00Z"
     try:
         dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
     except ValueError:
         return ""
-    # A date with no offset is UTC, not "whatever clock this machine runs on".
-    # astimezone() on a naive datetime reads it as LOCAL time, so a feed that
-    # published "2026-09-26" used to land at 2026-09-25T16:00Z on a +08:00 host -
-    # eight hours of drift in a filter whose whole job is comparing dates.
+    # 不带偏移量的日期是 UTC，不是"这台机器跑在哪个时钟就是哪个时钟"。对 naive
+    # datetime 调 astimezone() 会把它读成**本地**时间，于是一条发布 "2026-09-26" 的
+    # feed 在 +08:00 的主机上会落到 2026-09-25T16:00Z —— 在一个专门比较日期的过滤器
+    # 里漂了八小时。
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).isoformat()
 
 
 def _local_name(tag: str) -> str:
-    """Strip XML namespace: '{http://www.w3.org/2005/Atom}entry' -> 'entry'."""
+    """去掉 XML 命名空间：'{http://www.w3.org/2005/Atom}entry' -> 'entry'。"""
     return tag.rsplit("}", 1)[-1] if "}" in tag else tag
 
 
 def _text(elem: Any, *tags: str) -> str:
-    """First non-empty text of the given child tags (namespace-agnostic), raw.
+    """给定子标签（不看命名空间）里第一段非空文本，原样交回。
 
-    An Atom ``type="xhtml"`` summary (and any child whose content is real markup
-    rather than an escaped string) keeps its text in the ELEMENTS below it, where
-    ``child.text`` cannot see it - the whole summary used to come back empty.
+    Atom 的 ``type="xhtml"`` 摘要（以及任何内容是真标记而非转义字符串的子元素）把文本
+    装在它**下面**的元素里，``child.text`` 看不到 —— 从前整条摘要会因此交回空串。
     """
     for child in elem:
         if _local_name(child.tag) not in tags:
@@ -188,41 +183,36 @@ _BLANK_RUNS = re.compile(r"\n{2,}")
 
 
 def _readable(text: str) -> str:
-    """Entities resolved, whitespace normalised; markup left alone.
+    """解掉实体、归一空白；标记原样留着。
 
-    The double-escape is the part that looks like a bug and isn't one: a feed that
-    writes ``&amp;#8217;`` hands the XML parser ``&#8217;`` as literal text, and
-    only a second pass reads it. Measured on theverge.com's feed - titles arrived
-    as ``Microsoft&#8217;s``.
+    双重转义是这里看着像 bug、其实不是 bug 的那一半：一条 feed 写 ``&amp;#8217;`` 时，
+    交给 XML 解析器的是字面文本 ``&#8217;``，只有再过一遍才读得出。在 theverge.com 的
+    feed 上实测过 —— 标题就是这样以 ``Microsoft&#8217;s`` 到货的。
     """
     out = html.unescape(text)
     return _BLANK_RUNS.sub("\n", _SPACES.sub(" ", out)).strip()
 
 
 def _plain(text: str) -> str:
-    """What a reader of a headline list should see: prose, not source.
+    """读标题清单的人该看到的东西：正文，不是源码。
 
-    HN's front-page ``<description>`` is markup (escaped or CDATA-wrapped), and
-    ``feed_read`` is a tool for "what has this source published" - handing back
-    ``<p>Article URL: <a href="…">`` makes the caller parse a second document per
-    item to read a title-sized fact.
+    HN 首页的 ``<description>`` 是标记（转义或 CDATA 包着），而 ``feed_read`` 是回答
+    "这个源发布过什么"的工具 —— 交回 ``<p>Article URL: <a href="…">``，等于让调用方
+    为每一条目再解析一份文档，只为读一个标题大小的事实。
     """
     return _readable(_BLOCK.sub("\n", _TAG.sub("", text)))
 
 
 def _empty_feed_note(root: Any) -> str:
-    """What the document itself says about carrying nothing.
+    """文档自己怎么解释「它什么都没带」。
 
-    ``items: []`` with an empty ``error`` is genuinely ambiguous: the site may
-    have published nothing today, or our parser may have stopped matching the
-    shape it now serves. Those two call for opposite actions (wait vs. fix the
-    parser), and before this the response could not tell them apart at all.
+    ``items: []`` 配一个空 ``error`` 是真歧义：站点可能今天什么都没发，也可能是我们的
+    解析器不再认得它现在交出的形状。这两件事要的下一步相反（等 vs 修解析器），而在这句
+    话之前，响应根本分不开它们。
 
-    A feed that is doing this on purpose usually says so in its own channel -
-    arXiv's weekend edition is the everyday case: zero ``<item>``, but
-    ``lastBuildDate`` plus ``skipDays`` (Saturday, Sunday) explain the gap. So
-    quote what is there instead of guessing; the absence of any marker is itself
-    the signal worth seeing.
+    故意为空的 feed 通常会在自己的 channel 里说明 —— arXiv 的周末版就是日常一例：零个
+    ``<item>``，但 ``lastBuildDate`` 加上 ``skipDays``（周六、周日）解释了这段空白。
+    所以引用文档里**有**的东西，而不是猜；一个标记都没有，这件事本身就值得看见。
     """
     markers: list[str] = []
     for tag in ("lastBuildDate", "pubDate", "updated", "generator"):
@@ -243,7 +233,7 @@ def _empty_feed_note(root: Any) -> str:
 
 
 def _parse_feed_xml(raw: str, source_url: str) -> FeedResult:
-    """Parse RSS 2.0 or Atom XML into a FeedResult (newest-first)."""
+    """把 RSS 2.0 或 Atom XML 解析成 FeedResult（新的在前）。"""
     from lxml import etree
     root = etree.fromstring(raw.encode("utf-8", errors="replace"))
     root_name = _local_name(root.tag)
@@ -268,7 +258,7 @@ def _parse_feed_xml(raw: str, source_url: str) -> FeedResult:
                 untrusted_content=injection.scan(summary),
                 summary_truncated=cut,
             ))
-    else:  # RSS 2.0 (channel/item), also handles rdf:RDF
+    else:  # RSS 2.0（channel/item），也认 rdf:RDF
         channel = next((c for c in root if _local_name(c.tag) == "channel"), None)
         if channel is not None:
             source_title = _readable(_text(channel, "title"))
@@ -285,10 +275,9 @@ def _parse_feed_xml(raw: str, source_url: str) -> FeedResult:
                 summary_truncated=cut,
             ))
 
-    # Newest first. The undated group is split out rather than expressed as a
-    # sort flag: sorting (has_date, date) with reverse=True also reverses the
-    # flag, which used to put every undated item at the TOP of a "newest first"
-    # list - the opposite of the comment that stood here.
+    # 新的在前。不带日期的那一组单独拎出来，而不是靠一个排序开关表达：用
+    # reverse=True 排 (has_date, date) 会把那个开关也反过来，于是每条无日期条目
+    # 都跑到"新的在前"清单的**顶部** —— 正是这里原先那句注释的反面。
     dated = [it for it in items if it.published]
     undated = [it for it in items if not it.published]
     dated.sort(key=lambda it: it.published, reverse=True)
@@ -299,10 +288,10 @@ def _parse_feed_xml(raw: str, source_url: str) -> FeedResult:
 
 async def _grab(url: str, timeout: int,
                 headers: dict | None = None) -> tuple[bytes, int, str, str, dict]:
-    """一发就走的抓取：(body, status, encoding, error, response-headers)。Never raises.
+    """一发就走的抓取：（body, status, encoding, error, 响应头）。从不抛异常。
 
-    The response headers come back too (17.0 keeps the tuple's shape; nothing in
-    this module reads them now that conditional polling is off the tool surface).
+    响应头也一并交回（17.0 保留这个元组的形状；条件轮询从工具面上撤掉之后，本模块
+    已经没有地方读它们了）。
     """
     try:
         from dhole_mcp.fetcher import HTTPSession
@@ -313,9 +302,8 @@ async def _grab(url: str, timeout: int,
                 for k, v in (getattr(resp, "headers", None) or {}).items()}
         status = int(getattr(resp, "status_code", getattr(resp, "status", 0)) or 0)
         if status == 304:
-            # The answer to "anything new?" is "no", and there is no body to
-            # parse. Reporting that as a fetch failure is the mistake this path
-            # exists to avoid.
+            # "有没有新东西"的答案是"没有"，而且没有正文可解析。把这件事报成
+            # 抓取失败，正是这条路存在要避免的错误。
             return b"", 304, "", "", hdrs
         body = getattr(resp, "body", b"") or b""
         if len(body) > _MAX_FEED_BYTES:
@@ -345,8 +333,7 @@ _CONNECT_STAGE_MASKS = frozenset({"tls_error", "connection_reset", "timeout", "u
 
 
 async def _name_resolves(url: str) -> bool:
-    """这个名字解析得出地址吗。**只查名字** —— 不拨端口，不构成可达性探测。
-    """
+    """这个名字解析得出地址吗。**只查名字** —— 不拨端口，不构成可达性探测。"""
     from urllib.parse import urlparse
     host = urlparse(url).hostname
     if not host:
@@ -374,9 +361,8 @@ async def _fetch_failure_note(url: str, exc: Exception) -> str:
     return f"network_error: {category} - {hint}"
 
 
-# A feed's own site nearly always says where the feed is; the tag is the contract.
-# Both attribute orders appear in the wild, and JSON feeds (Ghost et al.) announce
-# themselves as application/feed+json.
+# 一个 feed 自己的站点几乎总会说 feed 在哪里；那个标签就是契约。两种属性顺序在
+# 野生页面里都出现过，而 JSON feed（Ghost 一类）自称 application/feed+json。
 _FEED_TYPES = r"(?:rss|atom)\+xml|feed\+json"
 _FEED_LINK_RE = re.compile(
     r"<link\b[^>]*?(?:rel\s*=\s*[\"']?alternate[\"']?[^>]*?type\s*=\s*[\"']?application/"
@@ -390,11 +376,11 @@ _FEED_MIME = ("application/rss+xml", "application/atom+xml", "application/feed+j
 
 
 def _discover_feed_links(html: str, base_url: str) -> list[str]:
-    """Feed URLs announced by a page's <link rel=alternate type=application/…+xml>.
+    """页面用 <link rel=alternate type=application/…+xml> 声明出来的 feed URL。
 
-    Regex, not an HTML parser, on purpose: this runs on pages we already failed to
-    parse, so a parse step here could fail on exactly the input that needs it.
-    Attribute order varies in the wild, which is why both orders are matched.
+    故意用正则而不是 HTML 解析器：这段代码跑的正是我们已经解析失败的页面，这里再加
+    一步解析，可能恰好在最需要它的输入上失败。野生页面的属性顺序不固定，所以两种顺序
+    都要匹配。
     """
     from urllib.parse import urljoin
 
@@ -418,12 +404,11 @@ def _looks_like_html(body: bytes) -> bool:
 
 
 def _friendly_parse_error(exc: Exception | None, raw: str, tried_html: bool) -> str:
-    """One actionable line instead of lxml's multi-line parse dump.
+    """一句可行动的话，代替 lxml 那份多行解析转储。
 
     `XMLSyntaxError: Opening and ending tag mismatch: meta line 5 column 99, line
-    6, column 14` is a true statement about a document nobody meant to feed to an
-    XML parser: it is the site's HOME PAGE. The useful answer is what we then did
-    about it, not where the tag didn't close.
+    6, column 14` 对一份没人打算喂给 XML 解析器的文档来说是句真话：它就是站点的
+    **首页**。有用的答案是"我们随后为它做了什么"，而不是标签在哪儿没闭合。
     """
     if exc is None:
         detail = "no <rss>/<feed> root element"
@@ -446,25 +431,50 @@ def _parse_or_none(raw: str, url: str) -> tuple[FeedResult | None, Exception | N
     return result, None
 
 
-def _since_cutoff(value: Any) -> tuple:
-    """Normalize a ``since`` option to ``(aware datetime, ISO-8601, reason)``.
+#: E8：相对窗口只收这三个单位。"m" 故意不在表里 —— 它既是 month 也是 minute，
+#: 两种读数会把同一个词变成两个不同的筛选窗口。
+_RELATIVE_SINCE_RE = re.compile(r"^(\d{1,9})\s*([hdw])$", re.IGNORECASE)
+#: 相对窗口的边界（100 年）。再大不是"更早"，是 timedelta 溢出或误写大数。
+_RELATIVE_SINCE_MAX_DAYS = 36_500
 
-    ``datetime`` is None when no filter was asked for; ``reason`` is non-empty when
-    a value arrived that cannot be read as a date. A poller asking "anything since
-    last Tuesday?" needs the whole answer refused in that case, not a filter that
-    quietly keeps everything and reads like a slow news week.
+
+def _since_cutoff(value: Any) -> tuple:
+    """把 ``since`` 选项归一成 ``(aware datetime, ISO-8601, 原因)``。
+
+    没有要求过滤时 ``datetime`` 是 None；来了一颗读不成日期的值时 ``reason`` 非空。
+    轮询的人问"上周二以来有新东西吗"，这种情形下整次调用都该被拒绝，而不是给一个悄悄
+    保留全部内容、读起来像新闻淡季的过滤器。
+
+    相对窗口（``3d`` / ``12h`` / ``2w``）从**本次调用**的时钟往回量。交回的 ISO 是绝对
+    时间，所以回执仍然说得出切口落在哪里 —— 一次相对请求不会让过滤器本身变成相对的
+    （相隔一分钟的两次轮询得到两个不同、可核对的截止点）。
     """
     if value in (None, "", False):
         return None, "", ""
     if not isinstance(value, str):
         return None, "", ("invalid_request: since must be a date string "
-                          "(ISO-8601 or an RSS timestamp)")
+                          "(ISO-8601, an RSS timestamp, or a relative window)")
+    rel = _RELATIVE_SINCE_RE.match(value.strip())
+    if rel:
+        count = int(rel.group(1))
+        unit = rel.group(2).lower()
+        limit = {"h": _RELATIVE_SINCE_MAX_DAYS * 24,
+                 "d": _RELATIVE_SINCE_MAX_DAYS,
+                 "w": _RELATIVE_SINCE_MAX_DAYS // 7}[unit]
+        if 1 <= count <= limit:
+            now = _utc_now()
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=timezone.utc)
+            unit_name = {"h": "hours", "d": "days", "w": "weeks"}[unit]
+            stamp = now - timedelta(**{unit_name: count})
+            return stamp, stamp.astimezone(timezone.utc).isoformat(), ""
     iso = _parse_date(value)
     if not iso:
         return None, "", (f"invalid_request: since={value[:60]!r} is not a date - use "
-                          "ISO-8601 (2026-09-20 or 2026-09-20T08:00:00Z) or an RFC-822 "
-                          "feed timestamp (Sat, 20 Sep 2026 08:00:00 +0000)")
-    # Same rule as _parse_date: a date with no offset is UTC, not local time.
+                          "ISO-8601 (2026-09-20 or 2026-09-20T08:00:00Z), an RFC-822 "
+                          "feed timestamp (Sat, 20 Sep 2026 08:00:00 +0000), or a "
+                          "relative window ('3h', '3d', '2w')")
+    # 与 _parse_date 同一条规矩：不带偏移量的日期是 UTC，不是本地时间。
     stamp = datetime.fromisoformat(iso)
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=timezone.utc)
@@ -497,10 +507,10 @@ def _cap_applied(result: FeedResult, max_items: int) -> None:
 
 
 def _keep_newer(result: FeedResult, cutoff_iso: str, cutoff, max_items: int) -> FeedResult:
-    """Drop entries published before ``cutoff``, then apply ``max_items``.
+    """丢掉 ``cutoff`` 之前发布的条目，再套 ``max_items``。
 
-    The order matters: a feed that lists 60 old items and 2 new ones has to be
-    filtered BEFORE the cap, or the cap decides what 'new' means.
+    顺序很重要：一条列着 60 条旧条目、2 条新条目的 feed 必须先过滤再切上限，否则
+    "新"由上限来定义。
     """
     result.since = cutoff_iso
     kept: list[FeedItem] = []
@@ -514,9 +524,8 @@ def _keep_newer(result: FeedResult, cutoff_iso: str, cutoff, max_items: int) -> 
             except ValueError:
                 stamp = None
         if stamp is None:
-            # Undated is not the same as old. Dropping it would hide items the
-            # feed never dated; keeping them silently would pretend the filter
-            # covered everything. So: keep, and say how many.
+            # 不带日期不等于旧。丢掉它会藏起 feed 从没标过日期的条目；静默留着又
+            # 等于假装过滤器覆盖了一切。所以：留下，并说清楚有多少条。
             undated += 1
             kept.append(item)
             continue
@@ -537,7 +546,7 @@ _TIMEOUT_CEILING_S = 120
 
 
 def _is_timeout_failure(err: str) -> bool:
-    """`_fetch_failure_note` 交回的是 `network_error: timeout - <hint>`。"""
+    """`_fetch_failure_note` 交回的形状是 `network_error: timeout - <hint>`。"""
     return err.startswith("network_error: timeout")
 
 
@@ -586,21 +595,19 @@ def _with_retry_note(result: FeedResult, note: str) -> FeedResult:
 
 async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20,
                      since: str = "") -> FeedResult:
-    """Fetch and parse a single RSS/Atom feed. Never raises.
+    """抓取并解析单个 RSS/Atom feed。从不抛异常。
 
-    A URL that turns out to be a web page is not a dead end: the page announces
-    its own feed with ``<link rel="alternate" type="application/rss+xml">``, so
-    that is followed (up to two candidates) and reported back with
-    ``discovered_from`` set. That is the difference between "feed_read on a
-    homepage errors" and it answering the question the caller actually had.
+    一条其实是网页的 URL 不是死路：页面会用
+    ``<link rel="alternate" type="application/rss+xml">`` 声明自己的 feed，于是顺着
+    它走（最多两个候选），并带着 ``discovered_from`` 交回。这就是"对首页调 feed_read 报错"
+    与"它回答了调用方真正问的问题"之间的差别。
 
-    Returns a FeedResult with items parsed so far; on fetch failure the error
-    field carries the reason and items is empty.
+    交回一个 FeedResult，装着已经解析出来的条目；抓取失败时 error 字段带着原因、items
+    为空。
 
-    ``since`` (G23, the incremental half of monitoring) keeps only entries
-    published at or after that date and reports what the filter cost in
-    ``items_older_than_since`` / ``items_without_date`` instead of shrinking the
-    list in silence.
+    ``since``（G23，监控的增量那一半）只保留该日期及之后发布的条目，并在
+    ``items_older_than_since`` / ``items_without_date`` 里交代过滤器花掉了什么，
+    而不是静默缩短清单。
 
     17.0 撤掉了这里的条件轮询参数（``if_none_match`` / ``if_modified_since``）：
     让调用方保管版本标记，等于把"问对了没有"的责任推给存字符串的人。增量仍然有
@@ -641,7 +648,7 @@ async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20,
     if parsed is not None and parsed.items:
         return _with_retry_note(_shape(parsed), retry_note)
 
-    # Not a feed (or a feed we could not read): try what the page itself says.
+    # 不是 feed（或是一份我们读不懂的 feed）：试试页面自己说了什么。
     is_html = _looks_like_html(body)
     candidates = _discover_feed_links(raw, url) if is_html or parse_exc is not None else []
     for candidate in candidates[:2]:
@@ -665,7 +672,7 @@ async def fetch_feed(url: str, timeout: int = 20, max_items: int = 20,
             return _with_retry_note(_shape(cparsed), cnote)
 
     if parsed is not None and (parsed.items or parsed.source_title):
-        # Parsed as XML and said something, just no entries: honest, not an error.
+        # 作为 XML 解析成功了、也说了点什么，只是没有条目：这是诚实，不是错误。
         return _with_retry_note(_shape(parsed), retry_note)
 
     error = _friendly_parse_error(parse_exc, raw, is_html)
@@ -682,8 +689,7 @@ async def fetch_feeds(
     concurrency: int = 5,
     since: str = "",
 ) -> list[FeedResult]:
-    """Fetch multiple feeds with bounded concurrency. Per-source errors are
-    isolated (one bad feed never fails the batch)."""
+    """有界并发地抓取多个 feed。按源的错误彼此隔离（一个坏 feed 从不拖垮整批）。"""
     import asyncio
     sem = asyncio.Semaphore(max(1, concurrency))
 

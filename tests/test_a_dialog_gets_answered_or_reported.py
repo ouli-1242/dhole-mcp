@@ -89,6 +89,17 @@ def test_dialog_takes_only_accept_or_dismiss():
         _validate_actions([{"dialog": "maybe"}])
 
 
+def test_the_dialog_error_names_the_two_words_and_where_prompt_text_goes():
+    """E14：两种形状并列时，`answer` 只收 accept/dismiss 没被说死 ——
+    prompt 的回答文本若写进 answer 会被当成第三个词拒掉，而正确的那颗键
+    （prompt_text）就在同一句例子旁边却没说"回答文本放这里"。"""
+    with pytest.raises(ValueError) as exc:
+        _validate_actions([{"dialog": {"answer": "hello"}}])
+    msg = str(exc.value)
+    assert 'answer only takes "accept" or "dismiss"' in msg, msg
+    assert "prompt_text" in msg, msg
+
+
 def test_dialog_prompt_text_is_capped():
     with pytest.raises(ValueError, match="prompt_text"):
         _validate_actions([{"dialog": {"answer": "accept",

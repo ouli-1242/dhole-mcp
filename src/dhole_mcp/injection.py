@@ -182,17 +182,17 @@ def _mask_code(text: str) -> str:
 # 但同一个位置也能藏一个词内切口，去掉它对正常正文无损。
 _INVISIBLE_RE = re.compile(
     "["
-    "\u00ad"           # soft hyphen
-    "\u061c"           # Arabic letter mark
-    "\u180e"           # Mongolian vowel separator
-    "\u200b-\u200f"    # ZWSP / ZWNJ / ZWJ / LRM / RLM
-    "\u202a-\u202e"    # bidi embedding & override
-    "\u2060-\u2064"    # word joiner / invisible operators
-    "\u2066-\u2069"    # bidi isolates
-    "\ufeff"           # BOM / zero-width no-break space
-    "\ufff9-\ufffb"    # interlinear annotation
-    "\ufe00-\ufe0f"    # variation selectors 1-16（emoji 后缀，也能当中缝）
-    "\U000e0100-\U000e01ef"  # variation selectors 17-256
+    "\u00ad"           # 软连字符
+    "\u061c"           # 阿拉伯字母标记
+    "\u180e"           # 蒙古文元音分隔符
+    "\u200b-\u200f"    # 零宽空格 / 零宽不连字 / 零宽连字 / 左到右标记 / 右到左标记
+    "\u202a-\u202e"    # 双向文本嵌入与覆盖
+    "\u2060-\u2064"    # 词连接符 / 不可见运算符
+    "\u2066-\u2069"    # 双向文本隔离符
+    "\ufeff"           # BOM / 零宽不断行空格
+    "\ufff9-\ufffb"    # 行间注释符
+    "\ufe00-\ufe0f"    # 变体选择符 1-16（emoji 后缀，也能当中缝）
+    "\U000e0100-\U000e01ef"  # 变体选择符 17-256
     "]"
 )
 

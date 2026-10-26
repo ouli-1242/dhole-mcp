@@ -40,10 +40,12 @@ PROBE_VALUE = {
     "state": "hidden", "timeout_ms": 4000, "full_page": True, "decode_qr": True,
     "image_type": "jpeg", "quality": 50, "save_to": "somewhere.png",
     "frame": "#frame-a", "option": "另一个选项",
+    "at": [12, 34], "from_xy": [10, 20], "to_xy": [30, 40], "expr": "2+2",
 }
 #: 载荷的起点：一颗元素动作总得有个目标，而两颗动作少了这一颗键就根本不成形。
 SEED = {"press": {"key": "Enter"}, "fill": {"text": "hi"}, "drag": {"to": "#b"},
-        "select": {"option": "b"}, "pdf": {"save_to": "x.pdf"}}
+        "select": {"option": "b"}, "pdf": {"save_to": "x.pdf"},
+        "evaluate": {"expr": "1+1"}}
 
 
 # ─── 1 · 覆盖面 ───────────────────────────────────────────────────
@@ -87,7 +89,11 @@ def test_a_listed_payload_key_changes_the_verdict_or_the_normalized_row(action):
             continue   # 起点本身就是 selector，换它不改变形状，只换寻址
 
         def build(with_key: bool):
-            payload = {"selector": "#a", **SEED.get(action, {})}
+            payload = dict(SEED.get(action, {}))
+            if action != "evaluate":
+                # evaluate 没有元素目标：selector 在它那里是陌生键，预置它会先被
+                # "expr and confirm only" 拒掉，后面的键就再也量不到。
+                payload = {"selector": "#a", **payload}
             if with_key:
                 payload[key] = PROBE_VALUE[key]
             return _validate_actions([{action: payload}])

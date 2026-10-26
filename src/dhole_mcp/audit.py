@@ -18,11 +18,12 @@ from dhole_mcp.security import redact_api_key
 
 
 def _audit_event(event: str, **fields: Any) -> None:
-    """Security-relevant events (CDP attach attempts) into the opt-in local
-    audit channel. Same file as ``_log_tool_call`` (DHOLE_USAGE_LOG), same
-    discipline: opt-in, local-only, best-effort, never raises. Attach attempts
-    are recorded whether or not they succeed — a refused attach is exactly the
-    event worth seeing in the log."""
+    """把安全相关事件（CDP attach 尝试）写进选开的本地审计通道。
+
+    与 ``_log_tool_call`` 同一个文件（DHOLE_USAGE_LOG）、同一份纪律：选开、
+    只落本机、best-effort、绝不抛出。attach 尝试无论成败都记 —— 被拒绝的
+    attach 恰恰是日志里最值得看见的事件。
+    """
     target = (env_registry.value_of("DHOLE_USAGE_LOG") or "").strip()
     if not target:
         return
@@ -48,21 +49,18 @@ def _audit_event(event: str, **fields: Any) -> None:
 
 
 def _result_error(result: Any) -> str:
-    """The application-level error a tool reported, or "" when it reported none.
+    """工具自己报出的应用层错误；没报则返回 ``""``。
 
-    ``ok`` in the call log means "the call ran to completion without raising" —
-    a tool that answers with an envelope carrying ``error`` never raises, so
-    without this the log said ``ok: true`` for calls that plainly failed.
-    Measured: a ``feed_read`` refused by the SSRF guard logged
-    ``{"tool": "feed_read", "ok": true, "ms": 22.0}`` with no trace of the
-    refusal. The question this log exists to answer is "does my client actually
-    route here, and does it hold up?" — and a refusal that reads like a success
-    is the one shape that question cannot survive.
+    调用日志里的 ``ok`` 含义是"调用跑到结束没有抛异常"—— 一个用信封回
+    ``error`` 的工具从不抛异常，没有这颗函数，日志就会给明显失败的调用记上
+    ``ok: true``。实测：一次被 SSRF 守卫拒绝的 ``feed_read`` 记成了
+    ``{"tool": "feed_read", "ok": true, "ms": 22.0}``，拒绝的痕迹一丝都没有。
+    这份日志要回答的问题是"我的客户端到底有没有路由到这里、它撑不撑得住？" ——
+    而一次读起来像成功的拒绝，正是这个问题扛不住的形状。
 
-    Additive on purpose: ``ok`` keeps its meaning (a batch that answers with one
-    failed URL is still a completed call), and the reported error rides in the
-    existing ``error`` field, so ``select(.error)`` finds every call a tool
-    itself called a failure.
+    刻意做成加法：``ok`` 保持原义（批量里带一条失败 URL 仍算完成的调用），
+    工具自报的错误落在既有的 ``error`` 字段里，于是 ``select(.error)`` 能找出
+    每一次工具自己称为失败的调用。
     """
     payload: Any = result
     if isinstance(result, tuple) and len(result) == 2:
@@ -77,24 +75,20 @@ def _result_error(result: Any) -> str:
 
 
 def _log_tool_call(name: str, ok: bool, duration_ms: float, error: str = "") -> None:
-    """Append one line to the opt-in local call log (DHOLE_USAGE_LOG=1 or a path).
+    """往选开的本地调用日志追加一行（DHOLE_USAGE_LOG=1 或一个路径）。
 
-    Off by default, and it never leaves the machine - nothing is uploaded. It
-    exists because the top failure mode of a tool like this is silent: the agent
-    simply never calls it (or calls it and ignores the answer), and that question
-    - "does my client actually route here, and does it hold up?" - cannot be
-    answered without a local record. Argument VALUES are never written, only the
-    tool name and the outcome. ``ok`` means "the call ran to completion without
-    raising" — it is NOT "the tool reported success": a refused or failed call
-    answers with an envelope rather than an exception, so what the tool itself
-    called a failure is recorded in ``error`` (see ``_result_error``). A clean
-    call is ``{"tool": ..., "ok": true, "ms": ...}`` with no ``error`` key; a call
-    that completed but reported a failure carries both, so ``select(.error)``
-    finds every one of them. Best-effort: never raises, never blocks startup.
+    默认关闭，且永不离开本机 —— 不上传任何东西。它存在是因为这类工具的头号
+    失败模式是无声的：agent 根本没调用它（或调了却无视答案），而"我的客户端
+    到底有没有路由到这里、它撑不撑得住？"这个问题没有本地记录就无从回答。
+    参数**值**从不写入，只记工具名和结果。``ok`` 的含义是"调用跑到结束没有抛
+    异常"—— 不是"工具报告成功"：被拒绝或失败的调用用信封作答而非异常，所以
+    工具自己称为失败的会被记进 ``error``（见 ``_result_error``）。干净调用是
+    ``{"tool": ..., "ok": true, "ms": ...}``，没有 ``error`` 键；完成但报告了
+    失败的调用两者都有，于是 ``select(.error)`` 能找出每一次。Best-effort：
+    绝不抛出，绝不阻塞启动。
 
-    When the log lives under the dhole home (the ``=1`` form) that home and the
-    log are tightened to 0700/0600 like the other state files. A path the user
-    chose via the environment is left exactly as they set it up.
+    当日志放在 dhole home 下（``=1`` 形式）时，home 与日志像其他状态文件一样
+    收紧到 0700/0600。用户通过环境变量自选的路径则原样保留，不动他的布置。
     """
     target = (env_registry.value_of("DHOLE_USAGE_LOG") or "").strip()
     if not target:

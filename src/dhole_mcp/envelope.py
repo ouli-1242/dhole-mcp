@@ -1,22 +1,19 @@
-"""v10 research-grade envelope: page-type, freshness, and source-authority
-signals computed for every fetch so an agent gets trust + currency + the next
-step without a second call.
+"""v10 研究级信封：每次抓取都计算页面类型、新鲜度与来源权威信号，让 agent 一次拿到
+可信度 + 时效 + 下一步，不必再发一次调用。
 
-All functions use only the standard library and run on already-extracted HTML /
-the URL string, keeping the envelope self-contained and low-overhead.
+所有函数只用标准库，跑在已抽取的 HTML / URL 字符串上，让信封自包含、低开销。
 
-Design principles:
-- CONSERVATIVE over RECALL. A wrong ``is_official=True`` or a mislabelled
-  ``page_type="list"`` sends the agent on a bad path. Default to "unknown" /
-  False when the signal is weak; only assert on strong evidence.
-- page_type is split: structural signals are detected from raw HTML in
-  _translate_response; error-derived signals (js_shell/auth_wall) override
-  in _with_agent_hints since they are definitive (set by _annotate_quality
-  after extraction). It answers STRUCTURE only (article / list / a media type
-  / a wall) — 17.0 §3 第 28 条删掉了它说的 forum / qa / docs，因为那三个值说的是
+设计原则：
+- 保守优先于召回。一个错的 ``is_official=True`` 或标错的
+  ``page_type="list"`` 会把 agent 带上坏路径。信号弱时默认 "unknown" / False；
+  只在证据强时下断言。
+- page_type 是拆开的：结构信号在 _translate_response 里从原始 HTML 检测；错误派生
+  的信号（js_shell/auth_wall）在 _with_agent_hints 里覆盖，因为它们是定论（抽取后由
+  _annotate_quality 设置）。它只回答**结构**（正文 / 列表 / 某种媒体 / 一道墙）——
+  17.0 §3 第 28 条删掉了它说的 forum / qa / docs，因为那三个值说的是
   「这是个什么站」，而那句话 source_type（classify_source）本来就在说。
-- freshness prefers the MODIFIED/updated date over the published date — a page
-  updated last week is not stale even if first published in 2014.
+- 新鲜度优先看修改/更新日期而非发布日期 —— 上周更新过的页面不算陈旧，即使它首次
+  发表于 2014 年。
 """
 from __future__ import annotations
 
@@ -26,20 +23,19 @@ from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urlparse
 
-# A page older than this is flagged stale. Flat fallback for sources whose class
-# we cannot determine; domain-aware horizons below refine it (G15).
+# 页面超过这个年龄就标记为陈旧。对无法判断类别的来源的扁平兜底；下面按域感知的
+# 时限会细化它（G15）。
 STALE_DAYS = 365
-# How long a source of THIS KIND usually stays true. A flat 365 days called a
-# 14-month-old news article fresh and a 2001-created wiki article 24 years old -
-# both the wrong question. News is measured in weeks; reference material, papers,
-# docs, repos and Q&A are maintained for years and are rarely invalidated by age.
+# 这一类来源通常能保持为真多久。扁平 365 天会把一篇 14 个月前的新闻判成新鲜、
+# 把一篇 2001 年创建的 wiki 文章判成 24 岁 —— 两个都是答错了问题。新闻以周计；
+# 参考资料、论文、文档、仓库与问答维护多年，很少因年龄而失效。
 NEWS_STALE_DAYS = 30
 LONG_LIVED_STALE_DAYS = 730
 
-# ─── Source authority classification ───────────────────────────────
+# ─── 来源权威分类 ──────────────────────────────────────────────────
 
-# Known news domains (conservative set). Best-effort; "unknown" is fine for
-# anything not listed — source_type is a hint, not a verdict.
+# 已知新闻域名（保守集合）。尽力而为；不在名单里的 "unknown" 也没问题 ——
+# source_type 是提示，不是判决。
 _NEWS_DOMAINS = (
     "nytimes.com", "bbc.com", "bbc.co.uk", "reuters.com", "theguardian.com",
     "washingtonpost.com", "bloomberg.com", "apnews.com", "aljazeera.com",
@@ -49,9 +45,9 @@ _NEWS_DOMAINS = (
     "time.com", "wsj.com", "cnet.com", "zdnet.com", "independent.co.uk",
     "lemonde.fr", "spiegel.de", "elpais.com", "scmp.com",
     "36kr.com", "ithome.com", "huxiu.com", "pingwest.com", "thepaper.cn",
-    # NOTE: nature.com / science.org used to live here. They are journals, not
-    # news: putting them under a 30-day news horizon would have flagged every
-    # paper older than a month as stale. They are _PAPER_DOMAINS now.
+    # 注：nature.com / science.org 曾经住在这里。它们是期刊不是新闻：把它们放进
+    # 30 天的新闻时限，会把每一篇超过一个月的论文标记为陈旧。它们现在在
+    # _PAPER_DOMAINS 里。
 )
 
 _QA_DOMAINS = (
@@ -64,11 +60,10 @@ _GITHUB_DOMAINS = (
     "github.com", "raw.githubusercontent.com", "gist.github.com",
 )
 
-# Encyclopedia / standards / canonical-reference sites: durable pages, and the
-# staleness bucket they land in is what this list is for (730 days, not 30).
-# "reference" is deliberately the same word used for search hits, so a fetched
-# page and a search result describe the same site the same way — and since the
-# two row-types now share THIS function, they cannot drift apart again.
+# 百科全书 / 标准 / 权威参考站：耐久的页面，这份名单存在的目的就是决定它们落进
+# 哪个陈旧桶（730 天，不是 30）。"reference" 刻意与搜索命中用同一个词，让抓取的
+# 页面与搜索结果以同一种方式描述同一个站点 —— 而既然两类行现在共用**这一颗**函数，
+# 它们就不会再次漂开。
 # (体验修复刀2-S6：此前 `search._source_type` 另养了一套域名表，同一个字段名两套词表。
 #  合并的理由不是整洁，是实测：拿 777 条真实 SERP URL 直接换调这颗函数，有 191 行
 #  从"有名"掉成"unknown"（blog 88 / docs 40 / forum 33 …），净亏 121 个标签。所以
@@ -80,10 +75,9 @@ _REFERENCE_DOMAINS = (
     "mdn.io",
 )
 
-# Documentation sites by NAME rather than by subdomain shape (the `docs.` /
-# `developer.` test above cannot see kubernetes.io or pytorch.org, which are
-# documentation sites by every reasonable reading). Long-lived like docs-site,
-# and NOT official: any company can register a domain that publishes docs.
+# 按**名字**而非子域形状识别的文档站（上面的 `docs.` / `developer.` 测试看不见
+# kubernetes.io 或 pytorch.org，而按任何合理解读它们都是文档站）。与 docs-site 一样
+# 长寿命，且**不是** official：任何公司都能注册一个发布文档的域名。
 _DOCS_SITE_DOMAINS = (
     # Python / ML
     "docs.python.org", "realpython.com", "python.readthedocs.io",
@@ -94,7 +88,7 @@ _DOCS_SITE_DOMAINS = (
     "developer.mozilla.org", "developers.google.com", "web.dev",
     "react.dev", "vuejs.org", "angular.dev", "svelte.dev", "nextjs.org",
     "nodejs.org", "expressjs.com", "fastapi.tiangolo.com",
-    # Systems / cloud / vendor docs
+    # 系统 / 云 / 厂商文档
     "docs.rs", "doc.rust-lang.org", "go.dev", "docs.golang.org",
     "learn.microsoft.com", "docs.microsoft.com", "docs.github.com",
     "docs.aws.amazon.com", "cloud.google.com", "docs.docker.com",
@@ -104,19 +98,17 @@ _DOCS_SITE_DOMAINS = (
     "readthedocs.io", "gitbook.io", "docusaurus.io", "nginx.org",
 )
 
-# Source hosts that are repositories but not GitHub. Registries (pypi, npm,
-# crates, pkg.go.dev) are checked ABOVE this list and stay `reference` with
-# is_official — they decide what a name resolves to, which is a different
-# property from hosting code.
+# 是代码仓库但非 GitHub 的来源主机。注册表（pypi、npm、crates、pkg.go.dev）在这张
+# 名单**之上**检查，保持 `reference` + is_official —— 它们决定一个名字解析到什么，
+# 这是与托管代码不同的属性。
 _CODE_HOST_DOMAINS = (
     "gitlab.com", "bitbucket.org", "codeberg.org", "sourceforge.net",
     "gitee.com", "gitea.com", "sr.ht",
 )
 
-# Q&A and community sites the search-side table knew and this one did not.
-# `qa` is checked BEFORE `forum`: stackoverflow used to be reported as "forum"
-# by one side and "qa" by the other, and the more specific word is the point of
-# merging.
+# 搜索侧那份表认识、而这一份此前不认识的问答与社区站。`qa` 在 `forum` **之前**
+# 检查：stackoverflow 过去被一侧报成 "forum"、另一侧报成 "qa"，而更具体的词正是
+# 合并这两张表的重点。
 _COMMUNITY_DOMAINS = (
     "reddit.com", "zhihu.com", "v2ex.com", "segmentfault.com", "discord.com",
     "news.ycombinator.com", "discuss.python.org", "internals.rust-lang.org",
@@ -129,8 +121,8 @@ _BLOG_PLATFORM_DOMAINS = (
     "juejin.cn", "csdn.net", "cnblogs.com", "jianshu.com",
 )
 
-# Peer-reviewed / preprint literature. Same reasoning as _REFERENCE_DOMAINS:
-# durable, but the name is registrable, so NOT is_official.
+# 同行评审 / 预印本文献。与 _REFERENCE_DOMAINS 同一理由：耐久，但名字可被注册，
+# 所以**不是** is_official。
 _PAPER_DOMAINS = (
     "arxiv.org", "dl.acm.org", "ieeexplore.ieee.org", "openreview.net",
     "semanticscholar.org", "biorxiv.org", "medrxiv.org", "nature.com",
@@ -140,23 +132,18 @@ _PAPER_DOMAINS = (
     "paperswithcode.com", "scholar.google.com",
 )
 
-# Collaborative reference sites that are CONTINUOUSLY EDITED. Their "published"
-# date is when the ARTICLE was created, not when its content was last true, so
-# inferring staleness from it is a systematic false positive (see
-# _is_continuously_edited).
+# 持续被编辑的协作参考站。它们的"发布"日期是**文章创建**的时间，不是内容最后一次
+# 为真的时间，所以从它推断陈旧度是系统性假阳性（见 _is_continuously_edited）。
 _CONTINUOUSLY_EDITED_DOMAINS = (
     "wikipedia.org", "wikimedia.org", "wikiwand.com", "britannica.com",
     "fandom.com",
 )
 
-# Names whose CONTROL, not just the string, sits with one body a third party
-# cannot buy their way past: the registry operators and standards bodies
-# themselves, and the package registries that decide what a name resolves to.
-# These are the reference domains where is_official can say True without
-# weakening it — the rule stays "the authority is whoever runs this name", not
-# "the page looks authoritative". Encyclopedia sites (wikipedia.org) are NOT
-# here: the content is community-edited, and the field is about the source, not
-# about whether the page is right.
+# 名字的**控制权**（不只是字符串本身）握在第三方买不通的机构手里的域名：注册局
+# 运营者与标准机构本身，以及决定名字解析到什么的包注册表。这些是 is_official 可以
+# 说 True 而不削弱其含义的参考域 —— 规则仍是"权威是运行这个名字的人"，不是"页面
+# 看起来权威"。百科全书站（wikipedia.org）**不**在这里：内容由社区编辑，而这个字段
+# 说的是来源，不是页面对不对。
 _REGISTRY_CONTROLLED_DOMAINS = (
     "iana.org", "icann.org", "rfc-editor.org", "ietf.org", "w3.org",
     "unicode.org", "ieee.org",
@@ -164,27 +151,23 @@ _REGISTRY_CONTROLLED_DOMAINS = (
     "metacpan.org", "packagist.org", "nuget.org",
 )
 
-# Country-code government/academic forms: "<x>.gov.<cc>" / "<x>.ac.<cc>"
-# (gov.br, gov.cn, gov.uk, ac.uk). The label pair is reserved by the ccTLD
-# registry, so a third party cannot own it. The 2-letter tail is what makes the
-# match safe: "foo.gov.attacker.com" ends in ".com", not ".gov.<cc>".
+# 国别政府/学术形式："<x>.gov.<cc>" / "<x>.ac.<cc>"（gov.br、gov.cn、gov.uk、
+# ac.uk）。这对标签由 ccTLD 注册局保留，第三方无法拥有。两字母尾巴让匹配安全：
+# "foo.gov.attacker.com" 以 ".com" 结尾，不是 ".gov.<cc>"。
 _CC_GOV_RE = re.compile(r"\.gov\.[a-z]{2}$")
 _CC_AC_RE = re.compile(r"\.ac\.[a-z]{2}$")
 
 
 def classify_source(url: str) -> tuple[str, bool]:
-    """Classify a URL's domain into a source_type + is_official flag.
+    """把一个 URL 的域名归类成 source_type + is_official 旗。
 
-    Returns (source_type, is_official). is_official is True ONLY where the name
-    itself cannot be bought by a third party: the registry-controlled namespaces
-    (gov, edu, github) and the bodies that run a namespace — IANA/ICANN/RFC
-    Editor/IETF/W3C/Unicode and the package registries (see
-    _REGISTRY_CONTROLLED_DOMAINS). Subdomain shapes such as "docs.*" /
-    "developer.*" are reported as source_type="docs-site" but are NOT official:
-    they only say the site named a subdomain "docs". Community-edited reference
-    sites (wikipedia.org and friends) are NOT official either — the field is
-    about who controls the source, not about whether the page reads as right.
-    Everything else is False (conservative).
+    返回 (source_type, is_official)。只有名字本身无法被第三方买走时 is_official 才
+    为 True：注册局控制的命名空间（gov、edu、github）以及运行某个命名空间的机构 ——
+    IANA/ICANN/RFC Editor/IETF/W3C/Unicode 与包注册表（见
+    _REGISTRY_CONTROLLED_DOMAINS）。"docs.*" / "developer.*" 这类子域形状报成
+    source_type="docs-site"，但**不是** official：它们只说明站点把一个子域命名为
+    "docs"。社区编辑的参考站（wikipedia.org 之流）也不是 official —— 这个字段说的是
+    谁控制来源，不是页面读起来对不对。其余一律 False（保守）。
     """
     if not url:
         return "unknown", False
@@ -192,7 +175,7 @@ def classify_source(url: str) -> tuple[str, bool]:
         host = urlparse(url).netloc.lower()
     except Exception:
         return "unknown", False
-    # strip userinfo@ and :port
+    # 去掉 userinfo@ 与 :port
     if "@" in host:
         host = host.rsplit("@", 1)[1]
     if ":" in host:
@@ -200,12 +183,11 @@ def classify_source(url: str) -> tuple[str, bool]:
     if not host:
         return "unknown", False
 
-    # Government / education / github: the only classes where the NAME ITSELF
-    # cannot be bought by a third party (registry-controlled namespaces).
+    # 政府 / 教育 / github：仅有的几类"名字本身"无法被第三方买走的域名
+    # （注册局控制的命名空间）。
     #
-    # NOTE: this used to test ".gov." in host, which any attacker-registrable
-    # domain satisfies — "foo.gov.attacker.com" was classified gov/is_official
-    # and handed straight to the agent as an authority signal.
+    # 注：这里过去测的是 host 里的 ".gov."，任何攻击者可注册的域名都满足 ——
+    # "foo.gov.attacker.com" 被归成 gov/is_official，并作为权威信号直接交给了 agent。
     if host == "gov" or host.endswith(".gov") or _CC_GOV_RE.search(host):
         return "gov", True
     if host.endswith(".edu") or host.endswith(".ac.uk") or _CC_AC_RE.search(host):
@@ -213,75 +195,70 @@ def classify_source(url: str) -> tuple[str, bool]:
     if host in _GITHUB_DOMAINS or host.endswith(".github.io"):
         return "github", True
 
-    # The bodies that RUN a namespace (IANA/ICANN/RFC Editor/IETF/W3C/Unicode)
-    # and the package registries that decide what a name resolves to: same
-    # property as gov/edu — nobody else can acquire the name — so these do get
-    # is_official=True (G17 asked why iana.org and rfc-editor.org did not).
+    # 运行某个命名空间的机构（IANA/ICANN/RFC Editor/IETF/W3C/Unicode）以及决定
+    # 名字解析到什么的包注册表：与 gov/edu 同一属性 —— 别人拿不到这个名字 ——
+    # 所以这些确实给 is_official=True（G17 问过为什么 iana.org 与 rfc-editor.org
+    # 不是）。
     if any(host == d or host.endswith("." + d)
            for d in _REGISTRY_CONTROLLED_DOMAINS):
         return "reference", True
 
-    # Vendor docs subdomains (docs.* / developer.*). This is a SHAPE signal, not
-    # an authority one: any site can name a subdomain "docs." — including one
-    # whose whole purpose is to look authoritative. So it is NOT is_official:
-    # the agent must not treat it as the canonical source for a subject.
+    # 厂商文档子域（docs.* / developer.*）。这是一个**形状**信号，不是权威信号：
+    # 任何站点都能把一个子域命名为 "docs." —— 包括整个目的就是显得权威的那种。
+    # 所以它**不是** is_official：agent 不能把它当成某个主题的规范来源。
     if host.startswith("docs.") or host.startswith("developer.") or host.startswith("developers."):
         return "docs-site", False
 
-    # Documentation sites recognized by NAME — the shape rule above cannot see
-    # kubernetes.io, pytorch.org or learn.microsoft.com, which are documentation
-    # sites by any reasonable reading. Same NOT-official reasoning as the shape.
+    # 按**名字**识别的文档站 —— 上面的形状规则看不见 kubernetes.io、pytorch.org
+    # 或 learn.microsoft.com，而按任何合理解读它们都是文档站。与形状规则同样
+    # 不是 official。
     if any(host == d or host.endswith("." + d) for d in _DOCS_SITE_DOMAINS):
         return "docs-site", False
 
-    # Source hosts that are repositories but not GitHub (github is caught above,
-    # with is_official, because the name is registry-controlled).
+    # 是代码仓库但非 GitHub 的来源主机（github 在上面就接住了，带 is_official，
+    # 因为名字由注册局控制）。
     if any(host == d or host.endswith("." + d) for d in _CODE_HOST_DOMAINS):
         return "repo", False
 
-    # Q&A sites — BEFORE the community/forum list, because stackoverflow used to
-    # be "forum" on one side and "qa" on the other, and the more specific word is
-    # the whole reason these two lists merged.
+    # 问答站 —— 在社区/论坛名单**之前**，因为 stackoverflow 过去一侧是 "forum"、
+    # 另一侧是 "qa"，而更具体的词正是这两张表合并的全部理由。
     if host in _QA_DOMAINS or host.endswith(".stackexchange.com") or host.endswith(".stackoverflow.com"):
         return "qa", False
 
-    # Forums / community.
+    # 论坛 / 社区。
     if any(m in host for m in ("forum", "forums", "community", "discourse", "board")):
         return "forum", False
     if any(host == d or host.endswith("." + d) for d in _COMMUNITY_DOMAINS):
         return "forum", False
 
-    # Blogs.
+    # 博客。
     if host.startswith("blog.") or any(host == d or host.endswith("." + d)
                                        for d in _BLOG_PLATFORM_DOMAINS):
         return "blog", False
 
-    # Ecommerce.
+    # 电商。
     if host.startswith("shop.") or host.startswith("store.") or host in ("amazon.com", "ebay.com") or host.endswith(".shop"):
         return "ecommerce", False
 
-    # Reference / standards / encyclopedia, then peer-reviewed literature.
-    # Both are durable and authoritative-for-a-subject, and both are registrable
-    # names (so is_official stays False) - the point is to stop reporting
-    # "unknown" for iana.org / wikipedia.org / rfc-editor.org (G17).
+    # 参考 / 标准 / 百科全书，然后是同行评审文献。两者都耐久、对某主题权威，也都
+    # 是可注册的名字（所以 is_official 保持 False）—— 重点是别再给 iana.org /
+    # wikipedia.org / rfc-editor.org 报 "unknown"（G17）。
     if any(host == d or host.endswith("." + d) for d in _REFERENCE_DOMAINS):
         return "reference", False
     if any(host == d or host.endswith("." + d) for d in _PAPER_DOMAINS):
         return "paper", False
 
-    # News (known set).
+    # 新闻（已知集合）。
     if any(host == d or host.endswith("." + d) for d in _NEWS_DOMAINS):
         return "news", False
 
-    # Last, a path shape that says what the page IS with no domain knowledge: a
-    # URL under /docs/ is documentation and one under /blog/ or /post/ is a post.
-    # Folded over from the search-side table, which measured 14 of 747 real SERP
-    # URLs whose ONLY claim to a name was that path — every one of them a docs
-    # page on a site no table knew (typescriptlang.org, redis.io, an MDN mirror).
-    # `/api/` deliberately does NOT fold: an API path is a machine endpoint, not
-    # documentation, and naming it docs-site would also hand it the 730-day
-    # staleness horizon (see compute_freshness). The domain tables are checked
-    # ABOVE this rule, so a news site's "/post/" URL still says "news".
+    # 最后，一条不需要域名知识的"页面是什么"路径形状：/docs/ 下的 URL 是文档，
+    # /blog/ 或 /post/ 下的是一篇文章。这条从搜索侧那张表折进来，实测 747 条真实
+    # SERP URL 里有 14 条唯一的命名依据就是路径 —— 每一条都是某张表都不认识的站点上
+    # 的文档页（typescriptlang.org、redis.io、一个 MDN 镜像）。
+    # `/api/` 刻意**不**折进来：API 路径是机器端点，不是文档，把它叫 docs-site 还会
+    # 给它 730 天的陈旧时限（见 compute_freshness）。域名表在**这条规则之上**检查，
+    # 所以新闻站的 "/post/" URL 仍然报 "news"。
     path = (urlparse(url).path or "").lower()
     if "/docs/" in path:
         return "docs-site", False
@@ -292,7 +269,7 @@ def classify_source(url: str) -> tuple[str, bool]:
 
 
 def _host_of(url: str) -> str:
-    """Lowercased hostname with userinfo/port stripped, or ""."""
+    """小写主机名，去掉 userinfo/端口；没有则返回 ""。"""
     try:
         host = urlparse(url or "").netloc.lower()
     except Exception:
@@ -305,13 +282,12 @@ def _host_of(url: str) -> str:
 
 
 def _is_continuously_edited(url: str) -> bool:
-    """True for collaborative reference sites whose content is always being edited.
+    """内容总在被编辑的协作参考站为 True。
 
-    On these, the only date usually available is the ARTICLE CREATION date, which
-    says nothing about whether the content is still true. Measured before this
-    fix: en.wikipedia.org/wiki/HTTP reported content_age_days=9098 / is_stale=true
-    from a 2001 creation date, on a page edited continuously since. The gap report
-    asks for exactly this treatment: "或对 wiki 类站点禁用此推断".
+    这些站上通常唯一可得的日期是**文章创建**日期，它对"内容现在还是不是真的"什么都
+    不说。修复前实测：en.wikipedia.org/wiki/HTTP 从一个 2001 年的创建日期报出
+    content_age_days=9098 / is_stale=true，而那一页此后一直有人在编辑。差距报告
+    要求的正是这种处理："或对 wiki 类站点禁用此推断"。
     """
     host = _host_of(url)
     if not host:
@@ -320,17 +296,15 @@ def _is_continuously_edited(url: str) -> bool:
 
 
 def _stale_days_for(url: str) -> int:
-    """How long a source of THIS KIND usually stays true (G15).
+    """这一类来源通常能保持为真多久（G15）。
 
-    news -> 30 days; reference / paper / docs-site / github / repo / qa -> 730
-    days; everything else keeps the original flat 365. A URL-less caller therefore
-    sees exactly the pre-16.0 behaviour.
+    news -> 30 天；reference / paper / docs-site / github / repo / qa -> 730 天；
+    其余保持原来的扁平 365。因此没有 URL 的调用方看到的正是 pre-16.0 的行为。
 
-    `repo` joins `github` here on purpose: the two used to be split only because
-    GitHub sits in the registry-controlled list and got the long horizon as a
-    side effect. A gitlab or codeberg repository page is no less durable than a
-    github one, and the horizon is a claim about the KIND of page, not about who
-    owns the name (that is `is_official`'s separate job).
+    `repo` 在这里加入 `github` 是刻意的：两者过去被拆开，只是因为 GitHub 住在
+    注册局控制名单里、顺带拿到了长时限。gitlab 或 codeberg 的仓库页并不比 github
+    的短命，而时限是对**页面种类**的声明，不是对名字归属的声明（那是 is_official
+    另外的职责）。
     """
     if not url:
         return STALE_DAYS
@@ -342,7 +316,7 @@ def _stale_days_for(url: str) -> int:
     return STALE_DAYS
 
 
-# ─── Freshness ─────────────────────────────────────────────────────
+# ─── 新鲜度 ────────────────────────────────────────────────────────
 
 _DATE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%d %b %Y")
 
@@ -439,27 +413,27 @@ def parse_serp_date(text: str, now: "date | None" = None) -> tuple[date | None, 
 
 
 def _parse_date(s: str) -> date | None:
-    """Parse a date from a metadata string. Handles ISO (with offset/Z),
-    compact YYYYMMDD, and a few human formats. Returns None if unparseable."""
+    """从元数据字符串解析日期。处理 ISO（带偏移/Z）、紧凑 YYYYMMDD 与几种人类
+    格式。解析不了返回 None。"""
     if not s:
         return None
     s = s.strip()
     if not s:
         return None
-    # Compact YYYYMMDD (wayback timestamps, some metadata).
+    # 紧凑 YYYYMMDD（wayback 时间戳、部分元数据）。
     if re.fullmatch(r"\d{8}", s):
         try:
             return datetime.strptime(s, "%Y%m%d").date()
         except ValueError:
             return None
-    # ISO 8601 (fromisoformat in 3.11+ handles offsets and 'Z'). Take the date
-    # from the full timestamp; fall back to the first 10 chars.
+    # ISO 8601（3.11+ 的 fromisoformat 处理偏移与 'Z'）。从完整时间戳取日期；
+    # 兜底取前 10 个字符。
     for cand in (s, s[:10]):
         try:
             return datetime.fromisoformat(cand.replace("Z", "+00:00")).date()
         except ValueError:
             continue
-    # Human formats — try the whole string then a 32-char prefix.
+    # 人类格式 —— 先试整串，再试 32 字符前缀。
     for fmt in _DATE_FORMATS:
         for cand in (s, s[:32]):
             try:
@@ -471,27 +445,23 @@ def _parse_date(s: str) -> date | None:
 
 def compute_freshness(metadata: dict[str, Any], fetched_at_iso: str,
                       url: str = "") -> tuple[int | None, bool]:
-    """Return (content_age_days, is_stale) from the page's own dates.
+    """从页面自己的日期返回 (content_age_days, is_stale)。
 
-    Prefers the modified/updated date over the published date (a page updated
-    last week is current even if first published in 2014). Returns (None, False)
-    when no date is recoverable, when the date is in the future (bad data), or
-    when the only date on a continuously-edited site is its creation date.
+    优先修改/更新日期而非发布日期（上周更新的页面仍然新鲜，即使首次发表于 2014 年）。
+    拿不到任何日期、日期在未来（坏数据）、或持续编辑的站点上唯一日期是创建日期时，
+    返回 (None, False)。
 
-    ``url`` is optional and only sharpens the STALENESS verdict (G15): the age
-    itself is a fact about the page, but whether that age means "stale" depends
-    on how long this kind of source usually stays true - 30 days for news, 730
-    for reference/docs/repo/QA, 365 otherwise. Omit it and the flat 365-day
-    horizon applies, exactly as before.
+    ``url`` 可选，只让**陈旧**判决更准（G15）：年龄本身是关于页面的事实，但这个年龄
+    是否意味着"陈旧"取决于这类来源通常能保持为真多久 —— 新闻 30 天，reference/docs/
+    repo/QA 730 天，其余 365。省略它就用扁平的 365 天时限，与从前完全一致。
 
-    None, not -1: a negative age reads as "two days in the future", which is a
-    different claim than "the page published no date". Agents that arithmetic on
-    the value were silently comparing against a sentinel.
+    是 None 不是 -1：负年龄读起来像"未来两天"，那是与"页面没有发布任何日期"不同的
+    陈述。对它做算术的 agent 会悄悄拿一个哨兵值比较。
     """
     if not metadata:
         return None, False
-    # Prefer modified > published > created > generic 'date'. Which field the
-    # date came from is tracked, because it decides one case below.
+    # 优先 modified > published > created > 泛用 'date'。还会记录日期来自哪个字段，
+    # 因为它决定下面的一个分支。
     modified_str = (metadata.get("modified_time") or metadata.get("mod_date") or "")
     published_str = (metadata.get("published_time") or metadata.get("creation_date")
                      or metadata.get("date") or "")
@@ -499,37 +469,34 @@ def compute_freshness(metadata: dict[str, Any], fetched_at_iso: str,
     content_date = _parse_date(date_str) if date_str else None
     if content_date is None:
         return None, False
-    # A wiki's only date is normally its creation date. Reporting "this page is
-    # 9098 days old" about a page edited this morning is a wrong answer, and a
-    # wrong is_stale sends the agent to re-fetch something that is current. With
-    # no modification date there is no currency signal to report, so report none
-    # (None = "no date we can stand behind", which is not the same claim as
-    # "fresh"). Only applies to the continuously-edited class.
+    # wiki 通常唯一的日期就是创建日期。对一页今早刚编辑过的内容报"这页已经 9098 天
+    # 大了"是错答案，而错的 is_stale 会把 agent 送去重抓一份本来新鲜的东西。没有修改
+    # 日期就没有时效信号可报，所以什么都不报（None = "没有我们能背书的日期"，与
+    # "新鲜"不是同一个陈述）。只适用于持续编辑这一类。
     if not modified_str and url and _is_continuously_edited(url):
         return None, False
     fetched_date = _parse_date(fetched_at_iso) if fetched_at_iso else None
     if fetched_date is None:
-        # Fall back to today (UTC) so freshness still works if fetched_at missing.
+        # 兜底用今天（UTC），让 fetched_at 缺失时新鲜度仍然可用。
         fetched_date = datetime.now(timezone.utc).date()
     delta = (fetched_date - content_date).days
     if delta < 0:
-        # Future-dated content = bad metadata; can't trust the age signal.
+        # 未来日期 = 坏元数据；年龄信号不可信。
         return None, False
     return delta, delta > _stale_days_for(url)
 
 
-# ─── Page-type detection ────────────────────────────────────────────
+# ─── 页面类型检测 ──────────────────────────────────────────────────
 
-# Visible-text paywall phrases (matched against the parsed text, never the raw
-# HTML — see _paywall_evidence).
+# 可见文本里的付费墙短语（匹配解析后的文本，绝不匹配原始 HTML —— 见
+# _paywall_evidence）。
 _PAYWALL_MARKERS = ("subscribe to continue", "subscribe to read", "this article is for subscribers",
                     "create a free account to continue", "sign in to continue reading",
                     "you've reached your free article limit", "subscriber-only content",
                     "premium content")
-# Explicit HTML data attributes are a structural paywall signal. Deliberately do
-# not match the bare word "paywall": it can appear in ordinary README links,
-# explanatory copy, scripts, or metadata. Parse HTML so attribute names are
-# matched exactly and attribute values cannot impersonate names.
+# 明确的 HTML data 属性是结构性付费墙信号。刻意**不**匹配裸词 "paywall"：它会出现在
+# 普通 README 链接、解释性文案、脚本或元数据里。解析 HTML，好让属性名被精确匹配，
+# 属性值也无法冒充属性名。
 _PAYWALL_ATTRIBUTE_NAMES = frozenset({
     "data-paywall",
     "data-content-gate",
@@ -549,7 +516,7 @@ _PAYWALL_BLOCK_TAGS = frozenset({
 
 
 class _PaywallEvidenceParser(HTMLParser):
-    """Collect visible text and active, exact paywall attributes."""
+    """收集可见文本与生效的、精确的付费墙属性。"""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -606,13 +573,13 @@ class _PaywallEvidenceParser(HTMLParser):
 
 
 def _paywall_evidence(html: str) -> tuple[str, bool]:
-    """Return visible page text and whether an active paywall attribute exists."""
+    """返回页面可见文本，以及是否存在生效的付费墙属性。"""
     parser = _PaywallEvidenceParser()
     try:
         parser.feed(html)
         parser.close()
     except Exception:
-        # Malformed upstream HTML must not break the fetch response.
+        # 上游 HTML 畸形也不能弄坏抓取响应。
         return "", False
     return " ".join("".join(parser.visible_text).split()), parser.has_active_attribute
 
@@ -626,9 +593,8 @@ def visible_text_chars(html: str) -> int:
     return len(_paywall_evidence(html)[0])
 
 
-#: Chrome that the extractor is *supposed* to drop. Deliberately does NOT include
-#: <aside>: an aside can be the substantive text (the `/longaside` fixture is
-#: exactly that control), so removing it would hide a real extraction loss.
+#: 抽取器**本该**丢掉的站点外壳。刻意**不**含 <aside>：aside 可能是实质正文
+#: （`/longaside` fixture 正是那个对照），删掉它会掩盖一次真实的抽取丢失。
 _STRIP_CHROME_RE = re.compile(
     r"<(nav|header|footer|script|style|noscript)\b[^>]*>.*?</\1>",
     re.IGNORECASE | re.DOTALL,
@@ -636,12 +602,11 @@ _STRIP_CHROME_RE = re.compile(
 
 
 def visible_text_chars_without_chrome(html: str) -> int:
-    """Visible text after removing nav/header/footer — the pages' own prose floor.
+    """去掉 nav/header/footer 之后的可见文本 —— 页面自己的散文地板。
 
-    The collapse gate's whole-page count includes site chrome; a complete article
-    under a heavy nav can therefore look lost (R04-016a). This is the second
-    ruler, measured only when the first one already fired. It keeps <aside>:
-    dropping it would make a real aside loss invisible (the `/longaside` control).
+    塌陷闸的整页计数包含站点外壳；一篇完整文章压在厚重导航下面，因此可能看起来像
+    丢了（R04-016a）。这是第二把尺，只在第一把已经响过时才量。它保留 <aside>：
+    删掉它会让一次真实的 aside 丢失变得不可见（`/longaside` 对照）。
     """
     return len(_paywall_evidence(_STRIP_CHROME_RE.sub("", html))[0])
 
@@ -664,9 +629,8 @@ def is_extraction_collapsed(extracted_chars: int, visible_chars: int) -> bool:
     return extracted_chars < visible_chars * EXTRACT_COLLAPSE_RATIO
 
 
-# A redirect via <meta http-equiv=refresh> or a JS location.href assignment.
-# The attribute value may be unquoted (http-equiv=REFRESH) — measured on a real
-# page, and a quoted-only pattern classified it as an ordinary page.
+# 经 <meta http-equiv=refresh> 或 JS location.href 赋值实现的跳转。属性值可能不带引号
+# （http-equiv=REFRESH）—— 真页面上量到过，而只认引号的模式把它归成了普通页面。
 _META_REFRESH_RE = re.compile(
     r'<meta\b[^>]*?http-equiv\s*=\s*["\']?refresh["\']?[^>]*?content\s*=\s*["\'][^"\']*url=',
     re.IGNORECASE,
@@ -675,44 +639,34 @@ _JS_REDIRECT_RE = re.compile(
     r'(?:location\.href\s*=|location\.replace|window\.location\s*=)',
     re.IGNORECASE,
 )
-# Same-domain content links (rough): <a href="/..."> or <a href="https://host...">
+# 同域内容链接（粗略）：<a href="/..."> 或 <a href="https://host...">
 _ANCHOR_RE = re.compile(r'<a\b[^>]*?href=["\']([^"\']+)["\']', re.IGNORECASE)
-# Blocks to strip before counting links (nav/header/footer/aside/script/style).
+# 数链接之前要剥掉的块（nav/header/footer/aside/script/style）。
 _STRIP_BLOCK_RE = re.compile(
     r'<(nav|header|footer|aside|script|style|noscript)\b[^>]*>.*?</\1>',
     re.IGNORECASE | re.DOTALL,
 )
 _ARTICLE_TAG_RE = re.compile(r'<article\b', re.IGNORECASE)
 
-# Below this share of the content area's text being link labels, the page is
-# treated as prose that happens to link a lot, not as a link index.
-# 0.10 sits in the measured gap between the two: real index pages 0.16-0.43
-# (quotes.toscrape.com listing 0.26, a Python docs index 0.16), real article /
-# reference pages 0.01-0.05 (RFC 9110 0.01, GNU's free-software definition 0.05,
-# a Gentoo wiki article 0.03). Saved under tests/page_fixtures with their numbers
-# in the regression test.
+# 内容区文本里作为链接标签的占比低于此值时，页面被视为"链接很多的散文"，而非链接
+# 索引。0.10 落在实测的两簇之间：真索引页 0.16-0.43（quotes.toscrape.com 列表 0.26、
+# Python 文档索引 0.16），真文章/参考页 0.01-0.05（RFC 9110 0.01、GNU 自由软件定义
+# 0.05、Gentoo wiki 文章 0.03）。样本存于 tests/page_fixtures，数字写在回归测试里。
 LIST_LABEL_SHARE_MIN = 0.10
 
-# A page whose content area carries a long stretch of text OUTSIDE any link label
-# is prose with links in it, not an index of links — whatever its label share
-# says. This exists because the share alone misfires on exactly the kind of page
-# agents fetch most: a Wikipedia article runs 0.12 (its links are multi-word
-# article titles, and the References/Listed-elsewhere blocks are almost pure
-# link text), which is above the 0.10 line the five-page sample put there.
-# Measured longest non-label stretch: HN front page 79, quotes.toscrape.com
-# listing 148, an FSF category index 279 — versus 705 for the first 200KB of
-# en.wikipedia.org/wiki/Hypertext_Transfer_Protocol (the whole article runs
-# higher), 807 for the RFC 9110 spec page, 4k+ for GNU's free-software
-# definition. 400 leaves a full unit of margin on the index side.
+# 内容区带有一段**在任何链接标签之外**的长文字，页面就是"带链接的散文"，而不是链接
+# 索引 —— 无论标签占比说什么。它存在是因为单看占比恰好在 agent 最常抓的那类页面上
+# 误判：一篇 Wikipedia 文章跑到 0.12（它的链接是多词文章标题，References/Listed-
+# elsewhere 两块几乎是纯链接文本），高于五页样本放下的 0.10 线。
+# 实测最长非标签串：HN 首页 79、quotes.toscrape.com 列表 148、FSF 分类索引 279 ——
+# 而 en.wikipedia.org/wiki/Hypertext_Transfer_Protocol 前 200KB 是 705（整篇更高）、
+# RFC 9110 规范页 807、GNU 自由软件定义 4k+。400 在索引一侧留下整整一个单位的余量。
 LIST_PROSE_RUN_MAX = 400
 
-# The same run, read the other way, is what lets a long-form page be called an
-# ARTICLE instead of "unknown": <article> is a strong signal but far from the
-# only shape prose comes in (Wikipedia's skin, standards pages and most
-# self-hosted docs put the body in bare <div>s, and all of those used to return
-# unclassified). 600 sits above every index page measured (79 / 148 / 227 / 279)
-# and below the article pages (705 / 756 / 807), and the text floor keeps a
-# one-paragraph stub out of it.
+# 同一条串反过来读，就是让长文页面被叫作**文章**而非 "unknown" 的依据：<article> 是
+# 强信号，但远非散文唯一的形状（Wikipedia 的皮肤、标准页与大多数自托管文档把正文放在
+# 裸 <div> 里，这些从前都返回未分类）。600 高于每一个实测索引页（79 / 148 / 227 /
+# 279），低于文章页（705 / 756 / 807），文本下限则把一段话的存根挡在外面。
 ARTICLE_PROSE_RUN_MIN = 600
 ARTICLE_VISIBLE_TEXT_MIN = 4000
 
@@ -772,12 +726,11 @@ def _tech_doc_shape(html: str) -> bool:
 
 
 def _is_content_href(href: str, host: str) -> bool:
-    """Whether this ``<a href>`` is a same-domain content link (not chrome-by-kind).
+    """这个 ``<a href>`` 是不是同域内容链接（不是按种类算的外壳）。
 
-    Excludes in-page anchors (#), ``mailto:`` / ``tel:`` / ``javascript:``, and
-    off-domain links. Kept as one predicate because the link COUNT and the
-    link-LABEL text must describe the same set of links; if they disagreed, the
-    share below would be measured over links the count never counted.
+    排除页内锚点（#）、``mailto:`` / ``tel:`` / ``javascript:`` 以及站外链接。保持为
+    一个谓词，因为链接**计数**与链接**标签**文本必须描述同一组链接；两边不一致时，
+    下面的占比就会在计数从未数过的链接上被测出来。
     """
     href = (href or "").strip()
     if not href:
@@ -785,7 +738,7 @@ def _is_content_href(href: str, host: str) -> bool:
     low = href.lower()
     if low.startswith(("#", "mailto:", "tel:", "javascript:")):
         return False
-    # Relative or same-host = content link candidate.
+    # 相对路径或同主机 = 内容链接候选。
     if href.startswith("/") or href.startswith("?"):
         return True
     try:
@@ -796,17 +749,14 @@ def _is_content_href(href: str, host: str) -> bool:
 
 
 class _ListShapeParser(HTMLParser):
-    """Measure the content area's shape: link-label share and prose runs.
+    """量内容区的形状：链接标签占比与散文串。
 
-    Counts text inside anchors whose href passes _is_content_href — the same
-    predicate _count_content_links uses, so the share is measured over exactly
-    the links that get counted.
+    统计 href 通过 _is_content_href 的锚点内文本 —— 与 _count_content_links 同一个
+    谓词，所以占比恰好是在被计数的那些链接上测的。
 
-    Alongside the share it tracks the longest contiguous stretch of visible text
-    that is NOT one of those labels (``longest_run``): an index page's items are
-    label + a short piece of metadata, so its runs stay short no matter how many
-    links it carries, while an article's paragraphs run long. Reset at block tags
-    so two adjacent short items cannot merge into one long run.
+    除了占比，它还跟踪**不是**这些标签的最长连续可见文本（``longest_run``）：索引页的
+    条目是标签 + 一小段元数据，所以无论带多少链接，它的串都很短；而文章的段落很长。
+    在块标签处重置，让两个相邻短条目无法合并成一条长串。
     """
 
     def __init__(self, host: str) -> None:
@@ -864,9 +814,9 @@ class _ListShapeParser(HTMLParser):
 
 
 def _list_shape(html: str, host: str) -> tuple[float, int]:
-    """(link-label share, longest non-label prose run) of the content area.
+    """内容区的 (链接标签占比, 最长非标签散文串)。
 
-    See LIST_LABEL_SHARE_MIN and LIST_PROSE_RUN_MAX for what each one separates.
+    两者各自分辨什么，见 LIST_LABEL_SHARE_MIN 与 LIST_PROSE_RUN_MAX。
     """
     return page_content_shape(html, host)[:2]
 
@@ -899,29 +849,25 @@ def main_content_run(html: str, host: str) -> int:
 
 
 def _label_share(html: str, host: str) -> float:
-    """Share of the content area's visible text that IS a counted link's label.
+    """内容区可见文本里**作为已计数链接标签**的那部分占比。
 
-    This is what separates "the page is a list of links" from "the page links a
-    lot": an index page's prose is its link labels (0.16-0.43 on real saved
-    pages), an article's is sentences between them (0.01-0.05).
+    这就是区分"页面是一串链接"与"页面链接很多"的依据：索引页的散文就是它的链接标签
+    （真实存档页上 0.16-0.43），文章的散文是标签之间的句子（0.01-0.05）。
 
-    Runs over the nav/header/footer/aside-stripped HTML so both sides of the
-    ratio describe the main content area, and counts the same hrefs
-    _count_content_links counts, so the two cannot disagree about which links
-    are in play. One parse pass, so callers ask for it only after the cheaper
-    link-count and density gates have already suggested a list.
+    跑在剥掉 nav/header/footer/aside 的 HTML 上，让比例两侧都描述主内容区；数的 href
+    与 _count_content_links 相同，所以两者不会对"哪些链接参与"产生分歧。只解析一趟，
+    所以调用方只在更便宜的链接数与密度闸已经提示 list 之后才来要它。
 
-    Never raises: unparseable markup returns 0.0, i.e. no list verdict.
+    从不抛异常：解析不了的标记返回 0.0，即不做 list 判决。
     """
     return _list_shape(html, host)[0]
 
 
 def _count_content_links(html: str, host: str) -> int:
-    """Count same-domain, non-trivial <a> links in the main content area.
+    """数主内容区里的同域、非平凡 <a> 链接。
 
-    Strips nav/header/footer/aside/script/style first so chrome links don't
-    inflate the count. Excludes anchors (#), mailto:, javascript:, and
-    off-domain links.
+    先剥掉 nav/header/footer/aside/script/style，免得外壳链接把计数抬高。排除锚点
+    （#）、mailto:、javascript: 与站外链接。
     """
     return sum(
         1 for m in _ANCHOR_RE.finditer(_STRIP_BLOCK_RE.sub("", html))
@@ -963,20 +909,19 @@ def detect_page_type(
     extracted_text_len: int = 0,
     extracted_text: str = "",
 ) -> str:
-    """Classify a page's structure from raw HTML + content-type.
+    """按原始 HTML + content-type 分类页面结构。
 
-    Conservative: returns "unknown" when no strong signal. Error-derived
-    signals (js_shell / auth_wall) are NOT detected here — they are set later
-    by _with_agent_hints from result.error, which overrides this value.
+    保守：没有强信号时返回 "unknown"。错误派生的信号（js_shell / auth_wall）**不**在
+    这里检测 —— 它们稍后由 _with_agent_hints 从 result.error 设置，并覆盖这个值。
     """
     ct = (content_type or "").lower()
     if ct.startswith("application/pdf"):
         return "pdf"
     if ct.startswith("application/json") or ct.startswith("text/json"):
         return "json"
-    # Data XML (sitemap / RSS / Atom / +xml APIs) is returned raw by the fetch
-    # path, so the structural verdict has to name it rather than leave "unknown"
-    # next to a body full of tags. xhtml+xml is an HTML document and stays out.
+    # 数据 XML（sitemap / RSS / Atom / +xml API）由抓取路径原样返回，所以结构判决
+    # 必须点名它，而不是在一份满是标签的 body 旁边留一个 "unknown"。xhtml+xml 是
+    # HTML 文档，留在外面。
     if (ct.startswith(("application/xml", "text/xml"))
             or (ct.endswith("+xml") and not ct.startswith("application/xhtml"))):
         return "xml"
@@ -987,12 +932,12 @@ def detect_page_type(
 
     low = html.lower()
 
-    # Redirect: meta refresh or JS location assignment (and little real text).
+    # 跳转：meta refresh 或 JS location 赋值（且真实文本很少）。
     if _META_REFRESH_RE.search(low) or (_JS_REDIRECT_RE.search(low) and extracted_text_len < 500):
         return "redirect"
 
-    # Parse visible text and exact structural attributes. Raw-HTML prefilters are
-    # unsafe here because entities and inline tags can split a real signal.
+    # 解析可见文本与精确的结构属性。这里用原始 HTML 预过滤不安全，因为实体与内联
+    # 标签会把真实信号切开。
     visible_text, has_active_paywall_attribute = _paywall_evidence(html)
     if any(marker in visible_text.lower() for marker in _PAYWALL_MARKERS):
         return "paywall"
@@ -1006,35 +951,26 @@ def detect_page_type(
     # 豁免」这一行之后，Sphinx/mkdocs 手册按形状判 —— 正文页判成 article，目录页判成
     # list，而 list 的 next_action 正是「去取那些链接」。
 
-    # List page: many same-domain content links whose LABELS make up most of the
-    # text, NOT an <article> page. This catches index / search-result / category /
-    # archive pages whose main value is the links onward. Conservative: an
-    # <article> page is an article even if it has many cross-reference links
-    # (precision over recall — mislabelling an article as a list sends the agent
-    # on a wrong crawl).
+    # List 页：许多同域内容链接，其**标签**占了大部分文本，且**不是** <article> 页。
+    # 这接住索引 / 搜索结果 / 分类 / 归档页 —— 它们的主要价值是继续往前的链接。保守：
+    # 一个 <article> 页即使带很多交叉引用也仍是文章（精确优先于召回 —— 把文章标成
+    # list 会把 agent 送去错误的爬取）。
     #
-    # Two measurements this used to get wrong, both from the same habit — reading
-    # one cheap number as "how much prose does this page carry":
+    # 这里过去量错过两件事，都来自同一个习惯 —— 拿一个便宜的数字当成"这页有多少散文"：
     #
-    #   * `extracted_text_len` is what the EXTRACTOR returned, not what the page
-    #     holds. Trafilatura reports the densest block, so on a long multi-section
-    #     document it can under-count by 50x: a saved copy of the RFC 9110 spec
-    #     page has 446k chars of visible text, extraction gave 8.4k, and 8.4k over
-    #     194 links reads as "a link index". The verdict must not depend on how
-    #     well extraction happened to go, so the prose measure is the max of the
-    #     two (visible text is the whole document, so it over-reports rather than
-    #     under-reports).
-    #   * A link COUNT cannot tell an article from an index — a wiki article
-    #     cross-references hundreds of same-domain pages and stays an article. The
-    #     distinguishing property is whether the text IS the link labels, so the
-    #     share of content-area text inside counted links must be substantial.
-    #     Measured on real saved pages: index 0.16-0.43, article/reference
-    #     0.01-0.05 (tests/page_fixtures).
-    #   * ...and the SHARE is not enough either, because it is a ratio: an article
-    #     that both links densely and carries a References block of near-pure link
-    #     text clears 0.10 (en.wikipedia.org/wiki/Hypertext_Transfer_Protocol runs
-    #     0.12). The absolute shape discriminates where the ratio cannot: no index
-    #     page has a long run of text that isn't somebody's link label.
+    #   * `extracted_text_len` 是**抽取器**交回的长度，不是页面持有的长度。Trafilatura
+    #     报的是最密的块，所以在长篇多节文档上可能少算 50 倍：RFC 9110 规范页的存档
+    #     副本有 446k 字符可见文本，抽取给了 8.4k，而 8.4k / 194 条链接读起来像"一个
+    #     链接索引"。判决不能取决于抽取恰好做得多好，所以散文的度量取两者最大值
+    #     （可见文本是整份文档，宁可多报也不可少报）。
+    #   * 链接**计数**分不出文章与索引 —— 一篇 wiki 文章交叉引用几百个同域页面，仍是
+    #     文章。区分属性是文本**是不是**链接标签，所以内容区文本落在已计数链接里的
+    #     占比必须可观。真实存档页实测：索引 0.16-0.43、文章/参考 0.01-0.05
+    #     （tests/page_fixtures）。
+    #   * ……而且**占比**也不够，因为它是一个比例：一篇文章既链接密集、又带一个近乎
+    #     纯链接文本的 References 块，就清过 0.10（en.wikipedia.org/wiki/
+    #     Hypertext_Transfer_Protocol 跑到 0.12）。绝对形状在比例分不清的地方能分：
+    #     没有索引页会有一段不是任何人链接标签的长文字。
     try:
         host = urlparse(url).netloc.lower()
         if ":" in host:
@@ -1042,27 +978,22 @@ def detect_page_type(
     except Exception:
         host = ""
     n_links = _count_content_links(html, host) if host else 0
-    # `extracted_text_len` is only a prose measure when it can be one. A raw-HTML
-    # extraction reports the length of the MARKUP (tags, attributes, entities),
-    # which on a link-dense page is several times its text — measured: the same
-    # quotes index gave 2179 through the markdown path and 11021 through
-    # extraction_type="html", and only the second one cleared the list gate. Text
-    # extracted FROM a page cannot exceed the page's own visible text beyond
-    # entity decoding, so a number well above it is markup and says nothing about
-    # prose. This is the same mistake G16 fixed for under-reporting, in the other
-    # direction: the verdict must not depend on which shape the caller asked for.
+    # `extracted_text_len` 只有在能当散文度量时才是散文度量。原始 HTML 抽取报的是
+    # **标记**长度（标签、属性、实体），在链接密集的页面上是文本的好几倍 —— 实测：
+    # 同一个 quotes 索引经 markdown 路径给 2179、经 extraction_type="html" 给 11021，
+    # 只有第二个清过了 list 闸。从页面抽出的文本不可能超过页面自身可见文本（实体解码
+    # 之外），所以明显更高的数字是标记，对散文什么也没说。这与 G16 修过的少报是同一个
+    # 错误，只是方向相反：判决不能取决于调用方要的是哪种形状。
     visible_len = len(visible_text)
     if extracted_text_len > visible_len * 1.5:
         extracted_text_len = visible_len
     prose_len = max(extracted_text_len, visible_len)
-    # >=20 content links and either short text or low text-per-link ratio.
+    # >=20 条内容链接，且文本短或每链接文本量低。
     list_candidate = (n_links >= 20
                       and (prose_len < 1500 or prose_len / n_links < 200))
-    # One parse gives both verdicts' numbers: the share/longest-run for the list
-    # gate, and the longest run for the article gate below. Asking for it only
-    # when one of the two cheap gates has already fired keeps tiny pages (and
-    # error shells) off the extra pass; `_paywall_evidence` has already parsed
-    # the document once by this point.
+    # 一次解析给出两个判决要的数：list 闸的 share/longest-run，以及下面文章闸的
+    # longest run。只在两个便宜闸之一已经响起时才要它，让小页面（与错误壳）免掉这趟
+    # 额外解析；到这里 `_paywall_evidence` 已经解析过文档一次。
     share = longest_run = None
     if host and (list_candidate or prose_len >= ARTICLE_VISIBLE_TEXT_MIN):
         share, longest_run = _list_shape(html, host)
@@ -1086,20 +1017,16 @@ def detect_page_type(
                 return "article"
             return "list"
 
-    # Article: an <article> tag is a strong article signal.
+    # 文章：<article> 标签是强文章信号。
     if _ARTICLE_TAG_RE.search(low):
         return "article"
-    # ...and the tag is not the only one. Long-form pages that carry no
-    # <article> element are the common case on the sites agents fetch most:
-    # Wikipedia's skin puts the body in a div, standards pages in a <pre>-ish
-    # flow, most self-hosted docs in bare <div>s — so all of those used to come
-    # back "unknown" and the agent read that as "nothing classified this page"
-    # when the page in fact answered. The positive signal is the same
-    # non-link run the list gate rejects on: a stretch of text long enough to be
-    # a paragraph of prose, on a page with enough of it. Measured: GNU's
-    # free-software definition 756 over 25k, Wikipedia's HTTP article 705+ over
-    # 22k, RFC 9110 807 over 53k — versus HN 79, a quotes listing 148, an FSF
-    # category index 279, a Python genindex 227.
+    # ……而且标签不是唯一的依据。不带 <article> 元素的长文页，在 agent 最常抓的
+    # 站点上是常态：Wikipedia 的皮肤把正文放进 div、标准页放进 <pre> 味的流、大多数
+    # 自托管文档放进裸 <div> —— 所以这些从前都返回 "unknown"，而 agent 把它读成
+    # "没有任何东西分类了这一页"，可页面其实答上了。正面信号就是 list 闸拒绝的同一
+    # 条非链接串：一段长到足以成为散文段落的文字，且页面上这样的文字足够多。实测：
+    # GNU 自由软件定义 756 / 25k、Wikipedia HTTP 文章 705+ / 22k、RFC 9110 807 /
+    # 53k —— 对比 HN 79、一个 quotes 列表 148、FSF 分类索引 279、Python genindex 227。
     if (longest_run is not None
             and longest_run >= ARTICLE_PROSE_RUN_MIN
             and prose_len >= ARTICLE_VISIBLE_TEXT_MIN):
@@ -1109,21 +1036,19 @@ def detect_page_type(
 
 
 def page_type_from_error(error: str) -> str:
-    """Map a finalized error string to a page_type override (definitive signals).
+    """把定稿的错误串映射成 page_type 覆盖（定论信号）。
 
-    Returns "" when the error does not imply a page_type, so the structural
-    page_type from detect_page_type stands.
+    错误不蕴含 page_type 时返回 ""，让 detect_page_type 的结构 page_type 站住。
     """
     if not error:
         return ""
     e = error.lower()
     if e.startswith(("js_shell_detected", "obfuscated_payload")):
         return "js_shell"
-    # auth_wall_detected comes from _is_auth_wall on the extracted content;
-    # auth_required/not_a_pdf+auth from the PDF pipeline. Both were expected to
-    # set page_type="auth_wall" and only the second one did, so a login wall
-    # reported error="auth_wall_detected" with page_type="unknown" and agents
-    # kept citing the sign-in form.
+    # auth_wall_detected 来自对抽取内容的 _is_auth_wall；auth_required/not_a_pdf+auth
+    # 来自 PDF 管线。两者本该都设置 page_type="auth_wall"，却只有第二个做了，于是一道
+    # 登录墙报出 error="auth_wall_detected" 而 page_type="unknown"，agent 便一直引用
+    # 登录表单。
     if e.startswith(("auth_required", "auth_wall_detected")) or (e.startswith("not_a_pdf") and "auth" in e):
         return "auth_wall"
     if e.startswith(("bot_challenge_detected", "bot_wall_detected")):

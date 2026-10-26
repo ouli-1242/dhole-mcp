@@ -1,13 +1,12 @@
-"""Dhole's own HTTP fetcher and Response class.
+"""Dhole 自己的 HTTP 取回器与 Response 类。
 
-Replaces scrapling's FetcherSession (which wraps curl_cffi) with a direct
-primp-based implementation. primp provides the same TLS impersonation
-(JA3/JA4 fingerprinting, HTTP/2 settings randomization) as curl_cffi but
-with a cleaner API and no C dependency beyond what's already installed.
+用基于 primp 的直接实现取代 scrapling 的 FetcherSession（后者包着 curl_cffi）。
+primp 提供与 curl_cffi 相同的 TLS 冒充（JA3/JA4 指纹、HTTP/2 设置随机化），但
+API 更干净，除已装的依赖外不需要额外的 C 依赖。
 
-The Response class mimics scrapling's Response interface: .status, .url,
-.headers, .body (bytes), .encoding, .content (decoded HTML), .css() (CSS
-selector via lxml), .reason, .cookies.
+Response 类模仿 scrapling 的 Response 接口：.status、.url、.headers、.body（字节）、
+.encoding、.content（解码后的 HTML）、.css()（经 lxml 的 CSS 选择器）、.reason、
+.cookies。
 """
 
 from __future__ import annotations
@@ -43,7 +42,7 @@ _LOOPBACK_NO_PROXY_ENTRIES = ("localhost", "127.0.0.1", "::1")
 
 
 def _ensure_loopback_no_proxy() -> None:
-    """Merge loopback hosts into NO_PROXY so no tier proxies them. Never raises."""
+    """把回环主机并进 NO_PROXY，任何档位都不代理它们。永不抛异常。"""
     try:
         existing: list[str] = []
         for name in ("NO_PROXY", "no_proxy"):
@@ -61,7 +60,7 @@ def _ensure_loopback_no_proxy() -> None:
             # 是同一个（大小写不敏感，同值覆写无副作用）。
             os.environ["NO_PROXY"] = value
             os.environ["no_proxy"] = value
-    except Exception:  # pragma: no cover - env mutation must never break startup
+    except Exception:  # pragma: no cover - 环境变量修改永远不许弄坏启动
         pass
 
 
@@ -69,7 +68,7 @@ _ensure_loopback_no_proxy()
 
 
 def _no_proxy_entries() -> list[str]:
-    """Every NO_PROXY entry the tiers would see, both spellings merged."""
+    """各档位会看到的全部 NO_PROXY 条目，两种拼写合并后的样子。"""
     out: list[str] = []
     for name in ("NO_PROXY", "no_proxy"):
         for part in os.environ.get(name, "").split(","):
@@ -80,25 +79,21 @@ def _no_proxy_entries() -> list[str]:
 
 
 def system_proxy_for(url: str) -> str:
-    """The proxy this machine would hand ``url`` to, or "" when it dials direct.
+    """这台机器会把 ``url`` 交给哪个代理；直连时返回 ""。
 
-    Read from the same two places the tiers inherit from (`urllib.getproxies()`
-    covers the environment and, on Windows, the registry's system proxy) with the
-    same exemption the tiers honor (`NO_PROXY`, plus G31's unconditional loopback
-    exclusion). This is *geography*, not a verdict: it answers "is there an
-    intermediary between dhole and that host", which is the fact a 5xx attribution
-    is allowed to rest on. Never raises.
+    读的是各档位继承的同一处两源（`urllib.getproxies()` 覆盖环境变量，Windows 上还有
+    注册表里的系统代理），并遵守各档位认的同一套豁免（`NO_PROXY`，加上 G31 无条件的
+    回环排除）。这是**地理**，不是判决：它回答「dhole 与那台主机之间有没有中间人」，
+    而 5xx 归因只允许建立在这个事实上。永不抛异常。
     """
     try:
         import urllib.request as _urllib_req
         proxies = dict(_urllib_req.getproxies_environment())
-        # `getproxies()` is "environment if non-empty, else registry", and
-        # `no_proxy` alone counts as non-empty — it parses to a key named "no".
-        # G31 keeps NO_PROXY set in this process at all times, so that path would
-        # answer "no proxy" on a machine whose Windows registry says otherwise
-        # (measured 2026-10-14: getproxies() == {'no': 'localhost,127.0.0.1,::1'}
-        # while the registry holds http://127.0.0.1:7890). Take the real proxy from
-        # the environment when one is there, otherwise from the registry.
+        # `getproxies()` 的口径是「环境非空就用环境，否则用注册表」，而单有 `no_proxy`
+        # 也算非空 —— 它解析成一颗名叫 "no" 的键。G31 让本进程始终设着 NO_PROXY，于是
+        # 那条路会在注册表明明写着代理的机器上答「没有代理」（2026-10-14 实测：
+        # getproxies() == {'no': 'localhost,127.0.0.1,::1'}，而注册表里是
+        # http://127.0.0.1:7890）。环境里有真代理就用环境的，否则读注册表。
         if not any(v for k, v in proxies.items() if k != "no"):
             registry = getattr(_urllib_req, "getproxies_registry", None)
             if registry is not None:
@@ -159,10 +154,10 @@ def _urljoin(base: str, location: str) -> str:
 # ─── Response ────────────────────────────────────────────────────────────────
 
 class ElementWrapper:
-    """Wraps an lxml element to mimic scrapling's Selector element interface.
+    """包一颗 lxml 元素，模仿 scrapling 的 Selector 元素接口。
 
-    Exposes ._root (the lxml node) so trafilatura_extractor's
-    CSS-selector narrowing path (tostring(el._root)) keeps working.
+    暴露 ._root（lxml 节点），让 trafilatura_extractor 的 CSS 选择器收窄路径
+    （tostring(el._root)）继续可用。
     """
 
     __slots__ = ("_root", "_url")
@@ -176,7 +171,7 @@ class ElementWrapper:
         return self._url
 
     def css(self, selector: str) -> List["ElementWrapper"]:
-        """CSS selector query on this element's subtree."""
+        """在这颗元素的子树上做 CSS 选择器查询。"""
         from lxml.cssselect import CSSSelector
         try:
             sel = CSSSelector(selector)
@@ -186,25 +181,26 @@ class ElementWrapper:
             return []
 
     def text_content(self) -> str:
-        """Full text of this element AND all descendants (matches lxml's native
-        .text_content()). The previous `.text or ""` returned only the element's
-        own leading text node, silently dropping nested children."""
+        """这颗元素**连同全部后代**的文字（与 lxml 原生的 .text_content() 一致）。
+
+        从前那句 `.text or ""` 只回元素自己开头的那一个文本节点，嵌套子元素被悄悄丢掉了。
+        """
         return "".join(self._root.itertext())
 
 
 class Response:
-    """HTTP response with CSS selector support.
+    """带 CSS 选择器支持的 HTTP 响应。
 
-    Mimics scrapling's Response interface used throughout server.py:
-        .status (int)          - HTTP status code
-        .url (str)             - final URL after redirects
-        .headers (dict)        - response headers
-        .body (bytes)          - raw response body
-        .encoding (str)        - detected encoding
-        .content (str)         - decoded body (lazy)
-        .css(selector) -> list - CSS selector query
-        .reason (str)          - status text
-        .cookies (dict)        - response cookies
+    模仿 server.py 各处在用的 scrapling Response 接口：
+        .status (int)          - HTTP 状态码
+        .url (str)             - 跟随重定向后的最终 URL
+        .headers (dict)        - 响应头
+        .body (bytes)          - 原始响应体
+        .encoding (str)        - 检测到的编码
+        .content (str)         - 解码后的正文（惰性）
+        .css(selector) -> list - CSS 选择器查询
+        .reason (str)          - 状态短语
+        .cookies (dict)        - 响应里的 cookie
     """
 
     __slots__ = (
@@ -239,10 +235,10 @@ class Response:
         self._cookies = cookies or {}
         self._meta_refresh = meta_refresh
         self.network: Optional[Dict[str, Any]] = None
-        self._root: Any = None  # lazy lxml tree
+        self._root: Any = None  # 惰性构建的 lxml 树
         self._content_cached: Optional[str] = None
 
-    # ── Properties matching scrapling's interface ──────────────────
+    # ── 与 scrapling 接口对齐的属性 ────────────────────────────────
 
     @property
     def status(self) -> int:
@@ -288,18 +284,17 @@ class Response:
 
     @property
     def meta_refresh(self) -> Optional[Dict[str, Any]]:
-        """Set when a ``<meta http-equiv=refresh>`` moved us (G29): ``{from, delay_s, hops}``."""
+        """被 ``<meta http-equiv=refresh>`` 挪动过时设置（G29）：``{from, delay_s, hops}``。"""
         return self._meta_refresh
 
     @property
     def content(self) -> str:
-        """Decoded body (lazy, cached).
+        """解码后的正文（惰性、带缓存）。
 
-        One decode policy for the whole read path: the declared charset, with a
-        vote from the bytes (see _decode_html_bytes) because servers have been
-        measured declaring ISO-8859-1 or us-ascii while sending UTF-8. Consumers
-        that re-decode here would be a second judge of the same question, which
-        is what made the schema path mojibake (BUG-1).
+        整条读取路径只有一套解码口径：声明的字符集加上字节的一票（见
+        _decode_html_bytes）—— 实测有服务器声明 ISO-8859-1 或 us-ascii，实际发的是
+        UTF-8。在这里重新解码的消费者就是同一个问题的第二位裁判，而那正是 schema
+        那条路出现乱码的原因（BUG-1）。
         """
         if self._content_cached is None:
             self._content_cached = _decode_html_bytes(self._body, self.encoding)
@@ -307,13 +302,13 @@ class Response:
 
     @property
     def html_content(self) -> str:
-        """Alias for .content (scrapling compat)."""
+        """.content 的别名（兼容 scrapling）。"""
         return self.content
 
-    # ── CSS selector support ───────────────────────────────────────
+    # ── CSS 选择器支持 ─────────────────────────────────────────────
 
     def _ensure_parsed(self):
-        """Lazily parse the body into an lxml tree."""
+        """把正文惰性解析成 lxml 树。"""
         if self._root is not None:
             return
         if not self._body:
@@ -323,19 +318,16 @@ class Response:
         try:
             from io import BytesIO
             from lxml import html as lxml_html
-            # Use lxml.html.parse() from BytesIO for cross-platform
-            # consistency. lxml.html.fromstring() returns different root
-            # elements on different platforms (e.g. ubuntu CI returns the
-            # first child element, not the <html> root), which breaks
-            # CSSSelector (it only searches descendants, not the root).
-            # doc_parse() always returns a full tree with <html> as root.
+            # 用 BytesIO 走 lxml.html.parse()，换跨平台一致。lxml.html.fromstring()
+            # 在不同平台上返回不同的根元素（例如 ubuntu CI 返回第一个子元素，而不是
+            # <html> 根），这会弄坏 CSSSelector（它只搜后代，不搜根）。doc_parse()
+            # 始终返回以 <html> 为根的完整树。
             #
-            # self.content, re-encoded, with the parser pinned to that charset:
-            # handing libxml2 the raw body instead lets it pick the document's
-            # <meta charset> (or the host locale when there is none) over the
-            # header we already honoured — which is how U+2019 came back as "â"
-            # (BUG-1). lxml.html's parser specifically, not lxml.etree's: the
-            # etree one builds bare _Element nodes, which have no text_content().
+            # 喂 self.content 重新编码后的字节，并把解析器钉在那个字符集上：直接把原始
+            # body 交给 libxml2，它会用文档的 <meta charset>（没有时用宿主 locale）压过
+            # 我们已经采纳的响应头 —— U+2019 变成 "â" 就是这么来的（BUG-1）。特意用
+            # lxml.html 的解析器而不是 lxml.etree 的：etree 那个建的是裸 _Element 节点，
+            # 没有 text_content()。
             tree = lxml_html.parse(
                 BytesIO(self.content.encode("utf-8", errors="replace")),
                 parser=lxml_html.HTMLParser(encoding="utf-8"))
@@ -351,10 +343,10 @@ class Response:
                 self._root = etree.fromstring(b"<html></html>")
 
     def css(self, selector: str) -> List[ElementWrapper]:
-        """CSS selector query. Returns list of ElementWrapper objects.
+        """CSS 选择器查询。返回 ElementWrapper 列表。
 
-        Each ElementWrapper has ._root (lxml element) so callers can do
-        tostring(el._root, encoding='unicode') to get the HTML.
+        每个 ElementWrapper 都带 ._root（lxml 元素），调用方可以
+        tostring(el._root, encoding='unicode') 拿到那段 HTML。
         """
         self._ensure_parsed()
         if self._root is None:
@@ -365,7 +357,7 @@ class Response:
         return [ElementWrapper(m, self._url) for m in matches]
 
 
-# ─── Browser response builder ─────────────────────────────────────────────────
+# ─── 浏览器响应构造 ───────────────────────────────────────────────────────────
 
 _SHELL_HEADS = (b"<html", b"<!doctype", b"<iframe", b"<embed", b"<body")
 
@@ -415,15 +407,15 @@ async def response_from_browser_page(
     first_response: Any,
     final_response: Optional[Any],
 ) -> Response:
-    """Build a Response from a patchright/playwright page + response objects.
+    """从 patchright/playwright 的 page + response 对象造一份 Response。
 
-    Mirrors scrapling's ResponseFactory.from_async_playwright_response but
-    without the Selector/parser overhead. Gets the page content (with the
-    Windows page.content() retry workaround), response headers, status, etc.
+    对标 scrapling 的 ResponseFactory.from_async_playwright_response，但不带
+    Selector/解析器的开销。取出页面内容（含 Windows 上 page.content() 的重试绕法）、
+    响应头、状态码等。
     """
-    # Get page content with Windows retry workaround
-    # (Playwright has a known issue with page.content() on Windows:
-    #  https://github.com/microsoft/playwright/issues/16108)
+    # 取页面内容，带 Windows 重试绕法
+    # （Playwright 在 Windows 上 page.content() 有已知问题：
+    #  https://github.com/microsoft/playwright/issues/16108）
     page_content = b""
     for _ in range(20):
         try:
@@ -434,7 +426,7 @@ async def response_from_browser_page(
         except Exception:
             await page.wait_for_timeout(500)
 
-    # Determine the final response (fall back to first if no final)
+    # 确定最终响应（没有最终响应时退回第一个）
     resp = final_response if final_response else first_response
     if resp is None:
         return Response(
@@ -445,13 +437,13 @@ async def response_from_browser_page(
             encoding="utf-8",
         )
 
-    # Extract headers
+    # 提取响应头
     try:
         headers = await resp.all_headers()
     except Exception:
         headers = {}
 
-    # Extract encoding from content-type
+    # 从 content-type 提取编码
     ct = headers.get("content-type", "")
     encoding = _extract_encoding(ct)
 
@@ -468,10 +460,10 @@ async def response_from_browser_page(
     if page_content and _is_framed_document_content_type(ct):
         page_content = await _original_bytes(page, resp, page_content)
 
-    # Extract status
+    # 提取状态码
     status = resp.status
 
-    # Extract cookies from context
+    # 从上下文提取 cookie
     cookies: Dict[str, str] = {}
     try:
         cookie_list = await page.context.cookies()
@@ -491,7 +483,7 @@ async def response_from_browser_page(
 
 
 def _extract_encoding(content_type: str) -> str:
-    """Extract charset from a content-type header."""
+    """从 content-type 头里提取字符集。"""
     if not content_type:
         return "utf-8"
     for part in content_type.split(";"):
@@ -501,22 +493,19 @@ def _extract_encoding(content_type: str) -> str:
     return "utf-8"
 
 
-# ─── Decoding: the declared charset lies often enough to matter ────────────
+# ─── 解码：声明的字符集撒谎撒得足够频繁 ─────────────────────────────────────
 #
-# Measured on a ~60-call ceiling test: pages declared ISO-8859-1 (Apache's
-# default) while sending UTF-8, so "you’ve · café" came back as
-# "youâ€™ve Â· cafÃ©"; a us-ascii declaration turned the same bytes into
-# U+FFFD runs ("you???ve"). The page's own <meta charset="utf-8"> was ignored
-# because the header won unconditionally.
+# 在一次约 60 次调用的上限测试里实测：页面声明 ISO-8859-1（Apache 的默认值），发的却是
+# UTF-8，于是 "you’ve · café" 回来成 "youâ€™ve Â· cafÃ©"；一次 us-ascii 声明把同一批
+# 字节变成一串 U+FFFD（"you???ve"）。页面自己的 <meta charset="utf-8"> 被忽略，因为
+# 响应头无条件赢了。
 #
-# Rather than guess a charset, decode twice and keep the cleaner result: a
-# wrong single-byte decode of UTF-8 leaves either replacement chars or the
-# Â/Ã prefixes below, and a genuine non-UTF-8 body is left alone because
-# decoding *it* as UTF-8 produces far more replacement chars.
+# 不去猜字符集，而是解两遍、留更干净的那份：把 UTF-8 按单字节错误解码，留下的要么是
+# 替换字符，要么是下面这些 Â/Ã 前缀；而一份真正的非 UTF-8 正文不会被换掉，因为把**它**
+# 按 UTF-8 解会产生多得多的替换字符。
 #
-# The markers and the score live in dhole_mcp.charset (imported at the top),
-# shared with the local-file path in parse.py so the two definitions of "this
-# looks like mojibake" cannot drift apart.
+# 标记与评分住在 dhole_mcp.charset（顶部导入），与 parse.py 的本地文件那条路共用，
+# 于是「这看起来像乱码」的两份定义不会各漂各的。
 
 
 _HTML_META_BYTES_RE = re.compile(rb"<meta\b[^>]*>", re.IGNORECASE)
@@ -570,34 +559,30 @@ def _decode_html_bytes(body: bytes, declared: str) -> str:
     return utf8_text if _misdecode_score(utf8_text) < _misdecode_score(text) else text
 
 
-# ─── HTTP fetcher (primp-based) ────────────────────────────────────────────────
+# ─── HTTP 取回器（基于 primp） ─────────────────────────────────────────────────
 
-# Headers that name a principal. They travel to the origin the caller asked for
-# and to nobody else (see _hop_headers).
+# 点名一个主体的头。它们只去调用方点名的源，不去别处（见 _hop_headers）。
 _CREDENTIAL_HEADERS = ("cookie", "authorization", "proxy-authorization")
 
-# A 301/302/303 answer to a POST is followed as a GET with no body, which is what
-# browsers and curl do (303 says so out loud; 301/302 are read the same way since
-# nobody ships a spec-following client that keeps the body here). 307/308 keep
-# both method and body — and the target is still re-validated before we dial it,
-# because a redirect is chosen by the server we left, not by us.
+# 对 POST 的 301/302/303 答复按「不带 body 的 GET」跟随，浏览器与 curl 就是这么做的
+# （303 自己写着；301/302 同样读法，因为没人会发布一个在这里保留 body 的严格规范客户端）。
+# 307/308 保留方法与 body —— 目标在拨号之前仍会重新校验，因为重定向是离开的那台服务器
+# 选的，不是我们。
 _METHOD_CONVERTERS = (301, 302, 303)
 
-# Headers that describe a request body; they go when the body goes.
+# 描述请求体的头；body 走了它们也走。
 _BODY_HEADERS = ("content-type", "content-length")
 
-# Methods a timeout may be answered by asking again: resending one of these
-# cannot leave the server in a different state, so a retry is a retry rather than
-# a duplicate. RFC 9110 calls PUT and DELETE idempotent too, but that is a claim
-# about the endpoint — "the second time converges on the first" is exactly the
-# promise a badly-built form endpoint breaks — and nothing here can check it.
-# web_request tells its caller a write leaves once, so this gate asks "can this
-# verb change state", not "does the spec say this verb converges".
+# 超时后可以再问一遍的方法：重发这些不会让服务器停在不同的状态，所以重试是重试，不是
+# 重复提交。RFC 9110 也说 PUT 与 DELETE 幂等，但那是关于端点的断言 —— 「第二次会收敛到
+# 第一次」正是一个做得不好的表单端点会打破的承诺 —— 而这里没有任何东西能检查它。
+# web_request 告诉调用方写只离开一次，所以这道闸问的是「这个动词能不能改变状态」，不是
+# 「规范说这个动词会不会收敛」。
 _RETRY_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 def _host_of(url: str) -> str:
-    """Lowercased, port-free host of a URL ('' when it has none)."""
+    """URL 的小写、无端口主机名（没有时返回 ''）。"""
     try:
         host = urlparse(url).netloc.lower()
     except Exception:
@@ -606,19 +591,17 @@ def _host_of(url: str) -> str:
 
 
 def _drop_header_ci(headers: Dict[str, str], name: str) -> None:
-    """Remove a header regardless of the case it was stored under."""
+    """删掉一颗头，不管它当初按哪种大小写存进去。"""
     for key in [k for k in headers if k.lower() == name]:
         del headers[key]
 
 
-# ─── <meta http-equiv=refresh> (G29) ──────────────────────────────────────────
+# ─── <meta http-equiv=refresh>（G29） ─────────────────────────────────────────
 #
-# A redirect written into the document instead of the Location header. Real-world
-# markup is messier than the spec's example, so the parser below is tolerant in
-# the four ways the measured pages were: unquoted attribute values
-# (``http-equiv=REFRESH``), uppercase ``URL=``, single quotes, and whitespace
-# around the semicolon. An extractor that missed those left the caller with a
-# 300-character shell page and no hint that the content lived elsewhere.
+# 写进文档里、而不是 Location 头里的重定向。现实标记比规范里的例子更乱，所以下面这个
+# 解析器按实测页面出现过的四种情况放宽：属性值不加引号（``http-equiv=REFRESH``）、
+# 大写 ``URL=``、单引号、分号两侧的空白。漏掉这些的抽取器会让调用方只拿到一张 300
+# 字符的壳页，还得不到「正文在别处」的提示。
 _META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.IGNORECASE)
 _META_ATTR_RE = re.compile(
     r"([a-z_:][-\w:]*)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s\"'>`]+))",
@@ -627,11 +610,10 @@ _META_ATTR_RE = re.compile(
 
 
 def _meta_refresh_target(resp, current: str) -> tuple[str, float]:
-    """``(absolute target, delay seconds)`` from this HTML body, else ``("", 0)``.
+    """从这份 HTML 正文读出 ``(绝对目标, 延迟秒数)``；没有则 ``("", 0)``。
 
-    Only the first refresh tag counts, which is also roughly what browsers do: a
-    page that ships several is asking the visitor to make a choice it has already
-    made for them.
+    只认第一个 refresh 标签，浏览器大致也是这么做的：一份放了多个的页面，是在请访问者
+    做一个它已经替他做过的选择。
     """
     try:
         headers = dict(resp.headers) if hasattr(resp, "headers") else {}
@@ -645,8 +627,8 @@ def _meta_refresh_target(resp, current: str) -> tuple[str, float]:
         body = resp.content if hasattr(resp, "content") else b""
         if not isinstance(body, bytes) or not body:
             return "", 0.0
-        # The tag lives in <head>; decoding the first 16 KB finds it without
-        # pulling a 5 MB document through the decoder for a string match.
+        # 标签住在 <head> 里；解开前 16 KB 就能找到它，不必为一次字符串匹配把一份
+        # 5 MB 的文档整份过一遍解码器。
         head = _decode_html_bytes(body[:16384], (ct.split("charset=")[-1] if "charset=" in ct else "utf-8"))
         for tag in _META_TAG_RE.findall(head):
             attrs: Dict[str, str] = {}
@@ -662,7 +644,7 @@ def _meta_refresh_target(resp, current: str) -> tuple[str, float]:
             try:
                 delay_s = float(first.strip() or 0)
             except ValueError:
-                rest = content  # no delay part: "url=..." alone is not valid but ships anyway
+                rest = content  # 没有延迟段：光写 "url=..." 不合法，但线上确实有
             key, sep, target = rest.partition("=")
             target = target.strip().strip("\"'").strip()
             if not sep or key.strip().lower() != "url" or not target:
@@ -671,7 +653,7 @@ def _meta_refresh_target(resp, current: str) -> tuple[str, float]:
                 return "", delay_s
             absolute = _urljoin(current, target)
             if absolute.split("#")[0] == current.split("#")[0]:
-                return "", delay_s  # a self-refresh is a reload, not a redirect
+                return "", delay_s  # 自我刷新是重载，不是重定向
             return absolute, delay_s
         return "", 0.0
     except Exception:
@@ -679,19 +661,16 @@ def _meta_refresh_target(resp, current: str) -> tuple[str, float]:
 
 
 def _resp_cookies(resp) -> Dict[str, str]:
-    """Normalize a primp response's cookies into ``{name: value}``.
+    """把 primp 响应的 cookie 归一成 ``{名字: 值}``。
 
-    primp hands back a MAPPING (``{'a': '1'}``), so the pre-16.0 loop here
-    (`for c in resp.cookies`, expecting a list of dicts or cookie objects) iterated
-    the KEYS — strings, which matched neither branch — and returned {} every time.
-    That is why every response reported no cookies and why a ``Set-Cookie`` was
-    invisible to callers: nothing downstream could see what the site had just set.
-    The mapping shape is handled first now; the sequence shapes are kept because
-    the browser tier builds its own cookie list.
+    primp 交回的是一个**映射**（``{'a': '1'}``），而 16.0 之前这里的循环
+    （`for c in resp.cookies`，期待一串 dict 或 cookie 对象）遍历到的是**键** —— 字符串，
+    两个分支都不匹配 —— 于是每次都回 {}。这就是每一封响应都报「没有 cookie」、
+    ``Set-Cookie`` 对调用方不可见的原因：下游没有任何东西看得见站点刚设了什么。
+    现在映射形状先处理；序列形状保留，因为浏览器档自己会造 cookie 列表。
 
-    Only names and values survive this: the client gives us no ``Domain=`` /
-    ``Path=`` / ``Max-Age`` attributes, which is why the jar in sessions.py is
-    host-scoped and TTL-capped instead of a reimplementation of RFC 6265.
+    只有名字与值活下来：客户端不给我们 ``Domain=`` / ``Path=`` / ``Max-Age`` 属性，
+    所以 sessions.py 里的 jar 是按主机限定、带 TTL 上限的，而不是重写一遍 RFC 6265。
     """
     out: Dict[str, str] = {}
     raw = getattr(resp, "cookies", None)
@@ -714,7 +693,7 @@ def _resp_cookies(resp) -> Dict[str, str]:
 
 
 def _effective_port(parsed) -> int:
-    """Port a URL actually dials: the explicit one, or the scheme's default."""
+    """URL 实际拨的端口：显式写的那个，或协议的默认端口。"""
     return parsed.port or (443 if parsed.scheme == "https" else 80)
 
 
@@ -739,32 +718,25 @@ def _hop_headers(
     extra_credentials: Sequence[str] = (),
     origin_url: str = "",
 ) -> Dict[str, str]:
-    """Build the headers for ONE request in a redirect chain.
+    """为重定向链里的**一发**请求装配头。
 
-    Two things this fixes over resending one header dict down the chain:
+    比起把同一份头字典一路传下去，这里修了两件事：
 
-    * **Credentials no longer ride a cross-origin redirect.** The old code built
-      the ``Cookie`` header once and reused it for every hop, so a 302 to a host
-      we never agreed to talk to carried the session cookie (and an
-      ``Authorization`` set by the caller) straight to it — a site chosen by the
-      first server, not by us. Browsers and curl drop these on a cross-origin
-      redirect; so do we now.
-    * **The jar is consulted per hop**, by the host actually being dialed, so a
-      redirect into a host we have cookies for still presents them (that is what
-      makes a redirected login flow work) while the caller's explicit
-      ``cookies=`` stay bound to the origin they named — explicit wins over the
-      jar for that one host.
+    * **凭据不再搭跨源重定向的便车。** 旧代码把 ``Cookie`` 头建一次、每一跳复用，
+      于是一个指向我们从未同意交谈的主机的 302，会直接把会话 cookie（以及调用方设的
+      ``Authorization``）带过去 —— 那是第一台服务器选的站点，不是我们选的。浏览器与
+      curl 在跨源重定向时都会剥掉这些；现在我们也剥。
+    * **每一跳都按实际拨号的主机查 jar**，所以重定向进入一台我们有 cookie 的主机时
+      仍然会出示它们（这正是被重定向的登录流程能工作的原因），而调用方显式给的
+      ``cookies=`` 仍然绑在它点名的源上 —— 对那一台主机，显式压过 jar。
 
-    ``extra_credentials`` extends the drop set for one call: an API key in
-    ``X-API-Key`` is a credential too, and the built-in name list cannot know
-    what the caller chose to call theirs.
+    ``extra_credentials`` 为一次调用扩充丢弃集：放在 ``X-API-Key`` 里的 API key 也是
+    凭据，而内置名单不可能知道调用方选择把它叫什么。
 
-    ``origin_url`` tightens the same-origin test to the browser's reading:
-    equal scheme AND effective port, not just equal host. Without it the
-    pre-G25 hole stands - an https→http redirect to the SAME host kept
-    ``Authorization`` and sent it over plaintext. The production call site
-    always passes it; the empty default keeps direct callers (and the tests
-    that drive this function directly) on the host-only reading.
+    ``origin_url`` 把同源判定收紧到浏览器的读法：scheme **与**有效端口都相等，不只是
+    主机相等。没有它，G25 之前的洞就还在 —— 指向**同一主机**的 https→http 重定向会
+    保留 ``Authorization`` 并把它发上明文线。生产调用点始终传它；空默认让直接调用方
+    （以及直接驱动这颗函数的测试）停在只看主机的旧口径。
     """
     hop = dict(base)
     host = _host_of(url)
@@ -781,14 +753,13 @@ def _hop_headers(
     if same_origin and cookies:
         merged.update({k: v for k, v in cookies.items() if v != ""})
     if merged:
-        # Drop first: the base may already carry a Cookie in either case, and two
-        # cookie lines in one dict is a header the server resolves unpredictably.
+        # 先删：base 里可能已经带着某种大小写的 Cookie，而同一个 dict 里两行 cookie
+        # 是服务器会以不可预测方式解析的头。
         _drop_header_ci(hop, "cookie")
         hop["cookie"] = "; ".join(f"{k}={v}" for k, v in sorted(merged.items()))
     elif not same_origin:
-        # Nothing to send here. A cookie the caller put in `extra_headers` stays
-        # on the same-origin request (it is theirs to place); off-origin it goes,
-        # because that is the case the redirect could not be trusted for.
+        # 这里没有东西要发。调用方放进 `extra_headers` 的 cookie 留在同源请求上
+        # （那是他自己的安排）；离开源就删掉，因为那种重定向不是可以信任的。
         _drop_header_ci(hop, "cookie")
     return hop
 
@@ -986,17 +957,17 @@ def _os_from_ua(ua: str) -> str:
 
 
 class HTTPSession:
-    """Async HTTP fetch session using primp for TLS impersonation.
+    """异步 HTTP 取回会话，用 primp 做 TLS 冒充。
 
-    Replaces scrapling's FetcherSession. Provides:
-    - TLS fingerprint impersonation (Chrome, Firefox, Safari, Edge)
-    - Proxy support (http, https, socks5)
-    - Retry with backoff
-    - Stealthy headers (Google referer, realistic User-Agent) —— 一场进程一副身份，
+    取代 scrapling 的 FetcherSession。提供：
+    - TLS 指纹冒充（Chrome、Firefox、Safari、Edge）
+    - 代理支持（http、https、socks5）
+    - 带退避的重试
+    - 隐形头（Google referer、真实 User-Agent）—— 一场进程一副身份，
       跨会话跨调用都读同一份，且 primp 的 OS 跟着**这份**身份选
       （见 `_process_identity` 与 `_stealthy_baseline` 的实测理由）
 
-    Usage:
+    用法：
         async with HTTPSession(impersonate="chrome") as session:
             response = await session.get("https://example.com")
     """
@@ -1029,11 +1000,10 @@ class HTTPSession:
         await self.close()
 
     async def _init_client(self) -> None:
-        """Initialize the primp client in a worker thread (import is ~1s)."""
+        """在工作线程里初始化 primp 客户端（导入约需 1s）。"""
         impersonate = self._impersonate
         if isinstance(impersonate, list):
-            # primp doesn't support rotation pools like scrapling's curl_cffi.
-            # Pick a random one from the pool.
+            # primp 不支持 scrapling 的 curl_cffi 那种轮换池。从池里随机挑一个。
             import random
             impersonate = random.choice(impersonate)
 
@@ -1074,13 +1044,13 @@ class HTTPSession:
         self._client = await asyncio.to_thread(_create)
 
     async def close(self) -> None:
-        """Close the underlying client."""
-        # primp.Client doesn't have an explicit close, but we drop the reference
+        """关闭底层客户端。"""
+        # primp.Client 没有显式 close，丢掉引用即可
         self._client = None
 
     @staticmethod
     def _drop_header(headers: Dict[str, str], name: str) -> None:
-        """Remove every spelling of ``name`` (HTTP header names are case-insensitive)."""
+        """删掉 ``name`` 的每一种大小写写法（HTTP 头名不区分大小写）。"""
         for existing in [k for k in headers if k.lower() == name]:
             del headers[existing]
 
@@ -1089,7 +1059,7 @@ class HTTPSession:
         headers: Optional[Dict[str, str]] = None,
         useragent: Optional[str] = None,
     ) -> Dict[str, str]:
-        """Build request headers with stealthy defaults."""
+        """装配请求头，带上隐形默认值。"""
         final_headers: Dict[str, str] = {}
         if self._stealthy_headers:
             final_headers["referer"] = "https://www.google.com/"
@@ -1097,16 +1067,15 @@ class HTTPSession:
             for k, v in self._baseline.items():
                 if k != "referer":
                     final_headers.setdefault(k, v)
-        # User-supplied headers override defaults
+        # 调用方给的头压过默认值
         if headers:
             for k, v in headers.items():
                 if k.lower() == "user-agent":
-                    # browserforge already set "user-agent"; a caller's
-                    # "User-Agent" would otherwise ride along as a second header.
+                    # browserforge 已经设过 "user-agent"；调用方那颗 "User-Agent"
+                    # 否则会作为第二颗头一起发出去。
                     self._drop_header(final_headers, "user-agent")
                 final_headers[k] = v
-        # The useragent option outranks everything, including a user-agent
-        # passed through extra_headers.
+        # useragent 选项压过一切，包括经 extra_headers 传进来的 user-agent。
         if useragent:
             self._drop_header(final_headers, "user-agent")
             final_headers["user-agent"] = useragent
@@ -1140,9 +1109,9 @@ class HTTPSession:
         credential_headers: Sequence[str] = (),
         **kwargs: Any,
     ) -> Response:
-        """Fetch a URL via HTTP with TLS impersonation.
+        """经 HTTP 取回一个 URL，带 TLS 冒充。
 
-        Returns a Response object.
+        返回一个 Response 对象。
 
         ``allow_internal``: 重定向目标是否允许内网地址（默认 False，SSRF
         防护——每跳校验。仅测试/可信环境可开启）。
@@ -1161,8 +1130,8 @@ class HTTPSession:
         攻击者可选的地址，或把 body 重放到另一台主机，都是错的。
         """
         method = (method or "GET").upper()
-        # Coerce follow_redirects from scrapling-style string to bool.
-        # Scrapling accepted: "safe", "always", "never". primp expects bool.
+        # 把 scrapling 风格的字符串 follow_redirects 归一成布尔。
+        # Scrapling 接受 "safe"、"always"、"never"；primp 要的是布尔。
         if isinstance(follow_redirects, str):
             follow_redirects = follow_redirects.lower() != "never"
 
@@ -1171,7 +1140,7 @@ class HTTPSession:
 
         client = self._client
         if proxy:
-            # Override proxy for this request: create a new client
+            # 这一次请求覆盖代理：新建一个客户端
             def _create_proxy_client():
                 impersonate = self._impersonate
                 if isinstance(impersonate, list):
@@ -1195,9 +1164,9 @@ class HTTPSession:
         last_error: Optional[Exception] = None
         for attempt in range(actual_retries + 1):
             try:
-                # primp's request() is synchronous, wrap in to_thread
+                # primp 的 request() 是同步的，包进 to_thread
                 def _do_get():
-                    # Build query params
+                    # 拼查询参数
                     req_url = url
                     if params:
                         from urllib.parse import urlencode
@@ -1211,7 +1180,7 @@ class HTTPSession:
                     current = req_url
                     current_method = method
                     current_body = body
-                    meta_from = ""      # first <meta refresh> source in this chain
+                    meta_from = ""      # 这条链里第一个 <meta refresh> 的来源
                     meta_delay = 0.0
                     meta_hops = 0
                     for _hop in range(max_redirects + 1):
@@ -1232,21 +1201,17 @@ class HTTPSession:
                             timeout=actual_timeout,
                             follow_redirects=False,
                         )
-                        # A 3xx can carry the Set-Cookie that matters (a login that
-                        # redirects is the usual shape), so every hop's cookies are
-                        # kept, not just the last response's.
+                        # 3xx 也可能带着要紧的 Set-Cookie（会重定向的登录是常见形状），
+                        # 所以每一跳的 cookie 都留下，不只是最后一封的。
                         if session_id:
                             sessions.store(session_id, current, _resp_cookies(resp))
                         if not (follow_redirects and resp.status_code in (301, 302, 303, 307, 308)):
-                            # G29 — the document can redirect even when the status
-                            # line did not. Following it HERE (rather than in the
-                            # caller) is what makes a meta hop pass the same checks
-                            # as a 3xx hop: validate_url on the target, the shared
-                            # max_redirects budget, and _hop_headers' rule that
-                            # credentials do not cross an origin. HEAD is excluded:
-                            # a probe has no body to read the tag from, and
-                            # following it would download the page the caller asked
-                            # not to download.
+                            # G29 —— 状态行没有重定向时，文档也可能重定向。**在这里**
+                            # 跟随（而不是留给调用方），才让一次 meta 跳转经过与 3xx
+                            # 跳转相同的检查：目标过 validate_url、共用 max_redirects
+                            # 预算、以及 _hop_headers 那条「凭据不跨源」的规矩。HEAD
+                            # 除外：探针没有正文可读标签，跟随它会把调用方要求不要下载
+                            # 的那一页下载下来。
                             if (follow_redirects and current_method == "GET"
                                     and resp.status_code == 200):
                                 target, delay_s = _meta_refresh_target(resp, current)
@@ -1267,10 +1232,9 @@ class HTTPSession:
                                     continue
                             return resp, current, meta_from, meta_delay, meta_hops
                         if current_method == "HEAD":
-                            # A HEAD answer must not carry a body, so the redirect
-                            # header IS the useful part: Location, status, length.
-                            # Following it would turn the probe into a GET that
-                            # downloads the page the caller asked not to download.
+                            # HEAD 的答复不该带正文，所以重定向头**就是**有用的那部分：
+                            # Location、状态码、长度。跟随它会把探针变成一次 GET，下载
+                            # 调用方要求不要下载的那一页。
                             return resp, current, meta_from, meta_delay, meta_hops
                         location = ""
                         rh = resp.headers if hasattr(resp, "headers") else {}
@@ -1293,20 +1257,18 @@ class HTTPSession:
                                 and current_method not in ("GET", "HEAD")):
                             current_method, current_body = "GET", None
                         current = next_url
-                    # Budget exhausted: report where the LAST response came from,
-                    # not the hop we were about to dial. The previous return handed
-                    # back the pending target, which told the caller it had fetched
-                    # a page it never asked a server for.
+                    # 预算用尽：报**最后一封**响应来自哪里，而不是我们正要拨的那一跳。
+                    # 之前的写法交回待拨的目标，等于告诉调用方它抓到了一页 —— 而它从未
+                    # 向任何服务器要过那一页。
                     return (resp, (str(resp.url) if hasattr(resp, "url") and resp.url
                                    else current), meta_from, meta_delay, meta_hops)
 
-                # A meta hop moved the address for a different reason than a 3xx
-                # would: the server said 200 and the page said "over there". Both
-                # facts travel out to the response so the caller can tell "the site
-                # moved" apart from "this page is a pointer".
+                # 一次 meta 跳转挪动地址的理由与 3xx 不同：服务器说 200，而页面说
+                # 「在那边」。两个事实都跟着响应交出去，调用方才能把「站点搬家了」与
+                # 「这一页只是个指路牌」分开。
                 resp, final_url, meta_from, meta_delay, meta_hops = await asyncio.to_thread(_do_get)
 
-                # Parse encoding from content-type
+                # 从 content-type 解析编码
                 resp_headers = dict(resp.headers) if hasattr(resp, "headers") else {}
                 ct = ""
                 for k, v in resp_headers.items():
@@ -1330,10 +1292,8 @@ class HTTPSession:
                 )
 
             except SecurityError:
-                # A refusal from the SSRF guard cannot be fixed by asking again.
-                # Retrying re-dials the origin and re-walks the same chain to the
-                # same answer, so the only thing a retry produces is a second
-                # request to a host that was just refused.
+                # SSRF 守卫的拒绝不可能靠再问一遍解决。重试会重新拨号、重走同一条链、
+                # 得到同一个答案，所以重试唯一产出的是向刚刚被拒的主机再发一次请求。
                 raise
             except Exception as e:
                 last_error = e
@@ -1350,11 +1310,11 @@ class HTTPSession:
                 else:
                     raise
 
-        # Should not reach here, but just in case
+        # 不该走到这里，但留个保险
         raise last_error or RuntimeError(f"Failed to fetch {url}")
 
 
-# ─── Convenience function ─────────────────────────────────────────────────────
+# ─── 便捷函数 ─────────────────────────────────────────────────────────────────
 
 async def http_get(
     url: str,
@@ -1368,9 +1328,9 @@ async def http_get(
     stealthy_headers: bool = True,
     retries: int = 1,
 ) -> Response:
-    """One-off async HTTP fetch with TLS impersonation.
+    """一次性的异步 HTTP 取回，带 TLS 冒充。
 
-    Usage:
+    用法：
         response = await http_get("https://example.com")
     """
     async with HTTPSession(
@@ -1389,40 +1349,35 @@ async def http_get(
         )
 
 
-# ─── TCP preflight check ────────────────────────────────────────────────────────
+# ─── TCP 预探测 ───────────────────────────────────────────────────────────────
 
 def proxy_preflight(proxy_url: str, timeout: float = 5.0) -> tuple[bool, str]:
-    """Quick TCP connect to a PROXY endpoint, so a dead proxy fails fast (G21).
+    """对**代理**端点做一次快速 TCP 连接，让死代理快速失败（G21）。
 
-    Returns ``(reachable, error_category)``; the category is ``proxy_unreachable``
-    when the endpoint did not accept a connection, else ``""``.
+    返回 ``(可达, 错误类别)``；端点没有接受连接时类别是 ``proxy_unreachable``，否则
+    为 ``""``。
 
-    Why this exists: with a proxy configured, ``web_read`` skipped its TCP
-    preflight (probing the TARGET directly would misreport, since the HTTP tier
-    talks to the proxy). So a dead proxy had nothing to fail fast on — measured:
-    ``proxy='http://127.0.0.1:9/'`` burned the whole 30000ms budget, escalated to
-    the browser tier (which dials the SAME dead proxy), and then reported
-    "the 30000ms call budget ran out ... raise timeout for a slow host" — a wrong
-    diagnosis pointing at the wrong knob.
+    为什么要有它：配置了代理时，``web_read`` 会跳过自己的 TCP 预探测（直接探目标会
+    误报，因为 HTTP 档是在跟代理说话）。于是一个死代理没有任何东西可以快速失败 ——
+    实测：``proxy='http://127.0.0.1:9/'`` 烧掉整个 30000ms 预算，升级到浏览器档
+    （它拨的是**同一个**死代理），最后报「the 30000ms call budget ran out ... raise
+    timeout for a slow host」—— 一句指向错误旋钮的错误诊断。
 
-    One opaque category for EVERY failure mode, deliberately. Distinguishing
-    "refused" from "no route" from "timed out" for an arbitrary host:port would
-    turn this into the same port-scan oracle ``tcp_preflight`` flattens its answer
-    to avoid for internal targets. Here the caller supplied the proxy, so "your
-    proxy did not answer" tells them nothing they did not already know - but the
-    probe must not say anything finer than that.
+    对**每一种**失败模式只给一个不透明的类别，是刻意的。对任意 host:port 区分
+    「拒绝」「无路由」「超时」会把这里变成端口扫描 oracle —— 也就是 ``tcp_preflight``
+    对内部目标把答案压平所避免的那件事。这里代理是调用方给的，所以「你的代理没答」
+    没有告诉他任何他本就不知道的事 —— 但探针也不能说得比这更细。
 
-    A connect timeout counts as unreachable: no proxy takes 5s to accept a TCP
-    connection, and treating a filtered port as "maybe fine" would leave exactly
-    the silent-30s case this exists to remove. Synchronous; call via
-    ``asyncio.to_thread``. Never raises.
+    连接超时算不可达：没有代理需要 5 秒才接受一条 TCP 连接，而把一个被过滤的端口
+    当成「也许没事」恰恰会留下这颗探针要消除的静默 30 秒。同步函数；经
+    ``asyncio.to_thread`` 调用。永不抛异常。
     """
     import socket
     try:
         parsed = urlparse(proxy_url or "")
         host = parsed.hostname
         if not host:
-            return True, ""  # not a URL we can probe - let the real attempt decide
+            return True, ""  # 不是我们能探的 URL —— 让真正的尝试去决定
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         sock = socket.create_connection((host, port), timeout=timeout)
         sock.close()
@@ -1440,7 +1395,7 @@ def _preflight_category(error: Exception) -> str:
         return "dns_unresolvable"
     if isinstance(error, (socket.timeout, TimeoutError)):
         return "timeout"
-    # Windows: os error 10061 = connection refused, 10054 = reset
+    # Windows：os error 10061 = 连接被拒，10054 = 连接被重置
     err_str = str(error)
     if "10061" in err_str or "refused" in err_str.lower():
         return "connection_refused"
@@ -1450,14 +1405,13 @@ def _preflight_category(error: Exception) -> str:
 
 
 def tcp_preflight(url: str, timeout: float = 2.0) -> tuple[bool, str]:
-    """Quick TCP connect check to fail fast before a full HTTP/browser fetch.
+    """快速 TCP 连接检查，在完整的 HTTP/浏览器取回之前快速失败。
 
-    Returns (reachable: bool, error_category: str). error_category is empty
-    when reachable, otherwise one of: connection_refused, connection_reset,
-    dns_unresolvable, private_target_blocked, timeout, unknown.
+    返回 (可达: bool, 错误类别: str)。可达时错误类别为空，否则是以下之一：
+    connection_refused、connection_reset、dns_unresolvable、private_target_blocked、
+    timeout、unknown。
 
-    Synchronous — call from a worker thread via asyncio.to_thread().
-    Never raises.
+    同步函数 —— 经 asyncio.to_thread() 从工作线程调用。永不抛异常。
     """
     import socket
     try:

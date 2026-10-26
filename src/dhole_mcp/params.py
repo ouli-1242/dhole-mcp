@@ -120,48 +120,39 @@ def _coerce_int_arg(
     value: Any, name: str, *, lo: Optional[int] = None, hi: Optional[int] = None,
     default: int, clamp: bool = True, allow_float: bool = False,
 ) -> int:
-    """Normalize an integer tool argument; never silently swap in the default.
+    """归一化一个整数工具参数；绝不悄悄换成默认值。
 
-    ``max_content_chars`` did exactly that: a non-int was replaced by
-    ``MAX_CONTENT_CHARS``. Since several MCP clients stringify numbers (the same
-    JSON-stringified clients need parsed), ``max_content_chars="2000"``
-    silently became 40,000 — a 20x context overspend delivered as an ordinary
-    200. That is the "looks like it worked" family already closed one level up
-    by ``_coerce_arg_types`` and ``_normalize_schema``.
+    ``max_content_chars`` 过去正是这么干的：非整数被替换成 ``MAX_CONTENT_CHARS``。
+    由于好几个 MCP 客户端会把数字串化（同样的 JSON 串化客户端需要解析），
+    ``max_content_chars="2000"`` 悄悄变成了 40,000 —— 一次 20 倍的上下文超支，以
+    普通 200 交付。那就是"看起来成功了"这一族，上一层已由 ``_coerce_arg_types`` 与
+    ``_normalize_schema`` 堵掉。
 
-    Policy, in order:
-      * ``None`` -> ``default`` (the argument was not set)
-      * a bool -> raise (``True`` is an ``int`` subclass; nobody means 1 char)
-      * a string that parses as an int -> coerce, honouring the caller's intent
-      * anything else -> raise, naming the type it actually was
-      * out of ``[lo, hi]`` -> clamp when ``clamp`` (a resource cap, which is
-        documented on the wire so it is a known bound rather than a surprise),
-        otherwise raise (a nonsense value with no sensible reading).
+    策略，按顺序：
+      * ``None`` -> ``default``（参数没有设置）
+      * bool -> 抛异常（``True`` 是 ``int`` 子类；没人想表达 1 个字符）
+      * 能解析成整数的字符串 -> 转换，尊重调用方的意图
+      * 其余 -> 抛异常，并点名它实际是什么类型
+      * 越出 ``[lo, hi]`` -> ``clamp`` 为真时钳制（资源帽，线上有文档，所以是已知
+        边界而非意外），否则抛异常（一个没有合理解读的胡值）。
 
-    ``clamp`` is the project's reject-vs-clamp boundary, so the decision it
-    encodes is written down once, in this module's docstring ("越界：钳还是拒"):
-    clamp when the out-of-range value still has ONE sensible reading and the
-    bound is a documented resource cap; refuse when honouring a guess would
-    change what the argument MEANS (``offset=-5`` would otherwise come back as
-    "start at 0", i.e. a wrong body delivered as an ordinary 200). Whichever way
-    it goes, the caller is told - a clamp is named in ``summary``, a refusal
-    names the argument, its range and the correct spelling.
+    ``clamp`` 就是本仓"拒还是钳"的分界，所以它编码的决定只在本文档里写一次
+    （模块 docstring"越界：钳还是拒"）：越界值仍有**唯一**合理解读、且边界是文档
+    化的资源帽时钳；尊重猜测会改变参数**含义**时拒（``offset=-5`` 否则会变成
+    "从 0 开始"，即一份错的正文以普通 200 交付）。无论走哪条，都要告诉调用方 ——
+    钳制在 ``summary`` 里点名，拒绝点名参数、范围与正确写法。
 
-    ``lo``/``hi`` are optional because the wire-boundary pass
-    (:func:`_coerce_arg_types`) converts types ONLY and leaves the range to the
-    tool: every documented cap is already applied where it is enforced, with the
-    note that tells the caller it was applied. Repeating the bounds here would
-    clamp in silence one layer above that note.
+    ``lo``/``hi`` 是可选的，因为线上边界那一趟（:func:`_coerce_arg_types`）只转换
+    类型，把范围留给工具：每个文档化的帽都已经在它生效的地方应用，并带着告知调用方
+    的注记。在这里重复边界，只会在那条注记之上再加一层静默钳制。
 
-    ``allow_float`` accepts a float as well as an int, for the arguments whose
-    own annotation is ``int | float`` (timeouts, waits) — where 1500.5 ms is a
-    value the caller meant, not a type error.
+    ``allow_float`` 同时接受 float 与 int，用于自身注解就是 ``int | float`` 的参数
+    （超时、等待）—— 那里 1500.5 ms 是调用方想要的值，不是类型错误。
     """
     if value is None:
         return default
-    # Every rejection below points at a concrete correct value. For an argument
-    # whose own default is None ("not set") there is no number to suggest, so the
-    # suggestion is to omit it.
+    # 下面每一次拒绝都指向一个具体的正确值。对于自身默认值是 None（"没设置"）的
+    # 参数，没有数字可建议，所以建议就是省略它。
     example = (f"e.g. {name}={default}" if default is not None
                else f"or omit {name} to use the tool default")
     if isinstance(value, bool):
@@ -205,40 +196,35 @@ def _coerce_int_arg(
     return value
 
 
-# The strings a client can legitimately send for a boolean. Listed explicitly
-# because the defect this closes was caused by truthiness: `if all:` treats ANY
-# non-empty string as True, so cache_clear(all="false") wiped the whole cache.
-# A whitelist is the only version of this that cannot be wrong in that
-# direction — an unlisted string raises instead of guessing.
+# 客户端可以合法发来的布尔字符串。显式列出，因为这里堵的缺陷正是真值性造成的：
+# `if all:` 把**任何**非空字符串当真，于是 cache_clear(all="false") 清空了整个缓存。
+# 白名单是唯一不会在那个方向上出错的写法 —— 不在名单里的字符串抛异常，而不是猜。
 _BOOL_LITERALS: dict[str, bool] = {
     "true": True, "1": True, "yes": True, "on": True,
     "false": False, "0": False, "no": False, "off": False,
 }
 
-# Fetcher tiers accepted on the wire. 'dynamic' (the alias left over from the
-# Playwright tier removed in v3.5.0) is gone as of 17.0 B4: two names for one
-# tier is a vocabulary the reader has to reconcile on every response, and the
-# escalation_path it produced said 'stealthy' anyway.
+# 线上接受的抓取档。'dynamic'（v3.5.0 删掉的 Playwright 档留下的别名）自 17.0 B4
+# 起消失：一档两个名字是一套读者每次响应都要调和的词汇，而它产生的
+# escalation_path 本来也写着 'stealthy'。
 _FORCE_FETCHER_VALUES = frozenset({"http", "stealthy"})
 
 
 def _coerce_bool_arg(value: Any, name: str, *, default: bool = False) -> bool:
-    """Normalize a boolean tool argument; never let truthiness decide.
+    """归一化一个布尔工具参数；绝不让真值性做决定。
 
-    Same policy as ``_coerce_int_arg``: ``None`` means "not set" (-> ``default``),
-    a real ``bool`` passes through, ``0``/``1`` pass through as ``False``/``True``
-    (how a number-typed client spells them), and a string is honoured only when
-    it is one of ``_BOOL_LITERALS``. Everything else raises, naming what actually
-    arrived.
+    与 ``_coerce_int_arg`` 同一政策：``None`` 表示"没设置"（-> ``default``），真正的
+    ``bool`` 直接通过，``0``/``1`` 通过为 ``False``/``True``（数字类型客户端就是这么
+    拼的），字符串只有在属于 ``_BOOL_LITERALS`` 时才被认可。其余一律抛异常，并点名
+    实际收到了什么。
     """
     if value is None:
         return default
     if isinstance(value, bool):
         return value
-    # 0/1 are how a number-typed client says false/true. They have exactly one
-    # reading, so they are honoured; any other int is a mistake and raises
-    # (unlike _coerce_int_arg, which rejects bools outright because `True` there
-    # would silently mean "1 character").
+    # 0/1 是数字类型客户端表达 false/true 的方式。它们恰好只有一种解读，所以被认可；
+    # 其他整数都是错误并抛异常（与 _coerce_int_arg 不同，那里直接拒绝 bool，因为
+    # `True` 在那里会悄悄变成"1 个字符"）。
     if isinstance(value, int) and value in (0, 1):
         return bool(value)
     if isinstance(value, str):
@@ -259,22 +245,18 @@ def _coerce_str_list_arg(
     value: Any, name: str, *, single_hint: str = "",
     element_hint: str = "a URL string",
 ) -> Optional[List[str]]:
-    """Normalize a list-of-strings argument; a bare string is an error.
+    """归一化一个字符串列表参数；裸字符串是错误。
 
-    A string IS iterable, which is why ``web_read(urls="https://example.com")``
-    used to answer with ``total=19, successful=19`` and nineteen one-character
-    "results" — the bulk path took ``len(urls)`` and iterated it, and nothing
-    downstream could tell that apart from a real 19-URL request.
+    字符串**是**可迭代的，所以 ``web_read(urls="https://example.com")`` 曾经答回
+    ``total=19, successful=19`` 和十九条单字符"结果" —— 批量路径取了 ``len(urls)``
+    并迭代它，下游没有任何东西能把它与一次真的 19-URL 请求区分开。
 
-    Wrapping the string would be a guess (is a comma a separator? a newline?),
-    so it raises and names the argument that already means "one URL". A
-    JSON-encoded array is accepted because several clients stringify nested
-    structures (the same reason a JSON-stringified value gets parsed) and an array
-    literal has exactly one reading.
+    把字符串包起来是一种猜测（逗号是分隔符吗？换行呢？），所以抛异常并点名那个已经
+    表示"一个 URL"的参数。JSON 编码的数组被接受，因为好几个客户端会串化嵌套结构
+    （与 JSON 串化的值会被解析同一个理由），而数组字面量恰好只有一种解读。
 
-    Elements are checked too: ``urls=["https://a", 123]`` used to reach
-    ``ResponseModel(url=123)`` and come back as a bare Pydantic
-    "1 validation error for ResponseModel" with no recovery hint.
+    元素也要检查：``urls=["https://a", 123]`` 过去会走到 ``ResponseModel(url=123)``，
+    然后回一句裸的 Pydantic "1 validation error for ResponseModel"，没有任何恢复提示。
     """
     if value is None:
         return None
@@ -310,12 +292,11 @@ def _coerce_str_list_arg(
 
 
 def _coerce_anti_detect_arg(value: Any, name: str = "anti_detect") -> str:
-    """The one rung the caller named, or 'auto' - and nothing in between.
+    """调用方点名的那一档，或 'auto' —— 中间没有别的。
 
-    `Literal[...]` reaches clients as schema only; this server reads every
-    argument with `args.get()`, so an unlisted level would otherwise reach the
-    ladder table and raise a KeyError there - a Python traceback where a list of
-    the four spellings belongs.
+    `Literal[...]` 只以 schema 形式到达客户端；本服务器用 `args.get()` 读每个参数，
+    所以一个不在名单里的档位否则会进入阶梯表并在那里抛 KeyError —— 在应该列出四种
+    拼法的地方来一段 Python traceback。
     """
     if value is None:
         return "auto"
@@ -329,13 +310,12 @@ def _coerce_anti_detect_arg(value: Any, name: str = "anti_detect") -> str:
 
 
 def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Optional[str]:
-    """Validate the force_fetcher enum instead of falling through to stealthy.
+    """校验 force_fetcher 枚举，而不是掉进 stealthy 兜底。
 
-    ``Literal[...]`` on the method signature is documentation only — the
-    dispatcher reads arguments with ``args.get()``, so ``force_fetcher="magic"``
-    used to miss every ``== "http"`` branch and land in the stealthy ``else``:
-    the heaviest tier (~5s plus anti-detect overhead) with no error saying the
-    value was wrong. Returns ``None`` for "not set".
+    方法签名上的 ``Literal[...]`` 只是文档 —— 分发器用 ``args.get()`` 读参数，所以
+    ``force_fetcher="magic"`` 过去会错过每个 ``== "http"`` 分支，落进 stealthy 的
+    ``else``：最重的一档（约 5 秒加反检测开销），且没有报错指出这个值错了。"没设置"
+    返回 ``None``。
     """
     if value is None or value == "":
         return None
@@ -346,9 +326,8 @@ def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Option
         )
     key = value.strip().lower()
     if key == "dynamic":
-        # Named rather than folded into "not a fetcher tier": a caller working
-        # from old notes needs to be told where that name went, not asked to
-        # guess between the two tiers that are left.
+        # 点名，而不是折进"不是抓取档"：拿着旧笔记的调用方需要被告知那个名字去了哪，
+        # 而不是让他在剩下的两档之间猜。
         raise _refuse(
             f"{name}='dynamic' was the alias of the browser tier that left in "
             "v3.5.0, and the alias itself is gone in 17.0 - pass "
@@ -363,11 +342,10 @@ def _coerce_force_fetcher_arg(value: Any, name: str = "force_fetcher") -> Option
     return key
 
 
-# The two tools that read a fetcher tier. web_crawl took force_fetcher straight
-# to the tier ladder with no boundary check, so `force_fetcher="hpt"` on a crawl
-# was the web_read defect (`_coerce_force_fetcher_arg`'s docstring) with the
-# whole site as the blast radius: it missed the `== "http"` branch and browsered
-# every page.
+# 读抓取档的两个工具。web_crawl 过去把 force_fetcher 直接送进档位阶梯，没有边界检查，
+# 所以爬取上的 `force_fetcher="hpt"` 就是 web_read 那个缺陷（见
+# `_coerce_force_fetcher_arg` 的 docstring），只是爆炸半径变成了整个站点：它错过
+# `== "http"` 分支，把每一页都走浏览器。
 _FORCE_FETCHER_TOOLS = frozenset({"web_read", "web_crawl"})
 
 
@@ -395,13 +373,11 @@ _ENUM_ARGS: dict[str, dict[str, tuple[str, ...]]] = {
     "web_act": {"extraction_type": _EXTRACTION_TYPES},
     "web_request": {"extraction_type": _EXTRACTION_TYPES},
     "web_crawl": {"focus_engine": _FOCUS_ENGINES},
-    # web_search's `mode` and `freshness` are deliberately NOT here: search.py
-    # rejects both before its first network call (`_validate_mode`,
-    # `_validate_freshness`), and each refusal already prints the whole value set
-    # — `Invalid mode: 'bogus' (auto|neural|find_similar)`. A second table here
-    # would be a copy that can drift from `_IMPLEMENTED_MODES`, which is the
-    # "bound repeated above the note that announces it" shape this module already
-    # warns about.
+    # web_search 的 `mode` 与 `freshness` 刻意**不**在这里：search.py 在第一次网络
+    # 调用之前就把两者拒掉（`_validate_mode`、`_validate_freshness`），而且每次拒绝
+    # 都已经印出完整值集 —— `Invalid mode: 'bogus' (auto|neural|find_similar)`。
+    # 这里再加一张表就是一份会与 `_IMPLEMENTED_MODES` 漂开的副本，正是本模块已经
+    # 警告过的"边界重复声明在宣告它的注记之上"那种形状。
 }
 
 # 只有"值在别的工具里合法、在这颗工具不合法"才需要额外一句：同一份笔记从 web_read
@@ -419,20 +395,17 @@ _ENUM_NOTES: dict[tuple[str, str], str] = {
 
 def _coerce_enum_arg(value: Any, name: str, allowed: tuple[str, ...],
                      note: str = "") -> Optional[str]:
-    """One of the named values, or a refusal that prints them all.
+    """命名值之一，否则是列出全部值的拒绝。
 
-    Read raw, an unlisted spelling never raised: every consumer compares the
-    literal (`mode == "find_similar"`, `extraction_type in _EXTRACTED_TYPES`,
-    `normalize_engine`), so a typo fell through to whichever branch "not equal"
-    leads to — `mode="blurry"` searched, skipped the reranker, and reported
-    `rerank_mode=merge` as if that had been asked for. While the wire `enum`
-    existed this could not be reached; it is reachable now, which is the whole
-    reason this function does.
+    按裸值读取时，不在名单里的拼法从不报错：每个消费者都比较字面量
+    （`mode == "find_similar"`、`extraction_type in _EXTRACTED_TYPES`、
+    `normalize_engine`），所以一个笔误会滑进"不相等"通向的那一支 ——
+    `mode="blurry"` 照样搜索、跳过重排器，并报告 `rerank_mode=merge`，像是一切
+    都被要求过。线上 `enum` 存在时这走不到；现在走得到，这正是这个函数存在的全部理由。
 
-    Policy mirrors ``_coerce_force_fetcher_arg``: ``None``/``""`` mean "not set"
-    (return ``None``; ``_forward`` drops it so the method's own default applies),
-    surrounding space and capitalization are the caller's noise rather than a
-    different value, and anything else raises naming what actually arrived.
+    政策与 ``_coerce_force_fetcher_arg`` 一致：``None``/``""`` 表示"没设置"
+    （返回 ``None``；``_forward`` 会丢掉它，让自己方法的默认值生效），首尾空白与
+    大小写是调用方的噪声而非另一个值，其余一律抛异常并点名实际收到了什么。
     """
     if value is None or value == "":
         return None
@@ -452,32 +425,27 @@ def _coerce_enum_arg(value: Any, name: str, allowed: tuple[str, ...],
     return key
 
 
-# ─── wire argument types ───────────────────────────────────────────
-# web_read and cache_clear had per-argument coercers; the other six tools had
-# none, so everything the dispatcher forwarded was whatever JSON happened to
-# carry. Two client behaviors reach that gap on ordinary machines:
+# ─── 线上参数类型 ──────────────────────────────────────────────────
+# web_read 与 cache_clear 有逐参数 coercer；其余六个工具一个都没有，于是分发器转发
+# 的一切都只是 JSON 恰好带来的东西。两种客户端行为让普通机器撞上这个缺口：
 #
-#   * a client that serializes numbers ("max_results": "6"). search.py then ran
-#     `max(1, min("6", 50))`, and min() compares the SECOND operand against the
-#     first: `'<' not supported between instances of 'int' and 'str'`. The tool
-#     answered with that bare Python traceback as its `error` field, which is
-#     what an external test report filed as "web_search 完全崩溃，重启不恢复"
-#     and misdiagnosed as engine-cooldown state. The state files were innocent —
-#     the same call succeeds once the number arrives as an int.
-#   * a client that echoes every schema property as null. A null means "not
-#     set", so it is dropped before any branch reads it - but the drop has to
-#     be deliberate: `if cache_ttl > 0` on a None raises a NoneType comparison,
-#     and letting the tool's own default apply is what the caller meant.
+#   * 串化数字的客户端（"max_results": "6"）。search.py 随后跑
+#     `max(1, min("6", 50))`，而 min() 拿第二个操作数与第一个比较：
+#     `'<' not supported between instances of 'int' and 'str'`。工具把这段裸 Python
+#     traceback 当成 `error` 字段答回去，外部测试报告把它记成"web_search 完全崩溃，
+#     重启不恢复"，并误诊为引擎冷却状态。状态文件是无辜的 —— 数字以 int 到达时，
+#     同一次调用就成功。
+#   * 把每个 schema 属性都回传成 null 的客户端。null 表示"没设置"，所以在任何分支
+#     读它之前就被丢掉 —— 但丢掉必须是有意的：对 None 跑 `if cache_ttl > 0` 会抛
+#     NoneType 比较，而让工具自己的默认值生效才是调用方的本意。
 #
-# A bare string where a list was meant is the same gap with a worse outcome:
-# `path_include="/docs"` iterates character by character.
+# 该是列表的地方来了裸字符串是同一个缺口、更糟的结果：
+# `path_include="/docs"` 会逐字符迭代。
 #
-# So: convert TYPES at the boundary, for both channels, before any branch reads
-# them. Ranges deliberately are NOT checked here — every documented cap is
-# already enforced where it is applied (search clamps max_results and says so,
-# crawl clamps max_pages, _validate_filters rejects page>10), usually with a note
-# telling the caller the value moved. Clamping a second time above those notes
-# would produce the silent version of the bug this table exists to close.
+# 所以：在任何分支读取之前，为两条通道在边界处转换**类型**。范围刻意**不**在这里
+# 检查 —— 每个文档化的帽都已经在应用它的地方执行（search 钳制 max_results 并说明、
+# crawl 钳制 max_pages、_validate_filters 拒绝 page>10），通常带着一句告知调用方
+# 值被移动的注记。在这些注记之上再钳一次，产生的正是这张表存在要堵的那种静默版本。
 _ARG_TYPES: dict[str, dict[str, str]] = {
     "web_read": {
         "urls": "list",
@@ -487,18 +455,17 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         "max_links": "int",
         "focus_mode": "str",
         "focus_engine": "str",
-        # The two booleans that make a decision rather than ask for data. Read
-        # raw, a string client's `confirm: "false"` is a truthy non-empty string
-        # and authorizes a CDP attach nobody approved — the same defect
-        # sys_state's `confirm` already fell into once.
+        # 做决定而不是要数据的两个布尔。按裸值读时，字符串客户端的
+        # `confirm: "false"` 是非空真值字符串，会授权一次没人批准过的 CDP attach ——
+        # sys_state 的 `confirm` 已经掉进去过的同一个缺陷。
         "confirm": "bool", "check_login": "bool",
         "timeout": "number",
         # W1：`headers=` 是键值对，不是字符串。字符串客户端把整段 JSON 发过来是常态
         # （`_coerce_dict_arg` 收下来），其余形状当场点名 —— 一个读成 `{"a": "b"}`
         # 之外的东西的调用，宁可拒绝，不要"安静地什么头都没带"。
         "headers": "dict",
-        # A numeric PDF page request ("pages": 3) is unambiguous; reading it only
-        # as a string used to drop the range silently and return the whole file.
+        # 数字形式的 PDF 页码请求（"pages": 3）是无歧义的；只按字符串读过去会
+        # 悄悄丢掉范围并返回整个文件。
         "pages": "strnum", "password": "strnum",
         # R3：`include_headers` 决定"这一次要不要交出证据"，而字符串客户端的
         # `"false"` 按裸值传是非空字符串 = 真 —— 于是调用方说了不要，回执里却多出一
@@ -517,13 +484,11 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         "concurrency": "int", "timeout": "number", "deadline_ms": "number",
         "ignore_robots": "bool",
         "focus_engine": "str",
-        # path_include/path_exclude are NOT here: a bare string is already read
-        # as the one-prefix list it means, and crawl.py does that at the point
-        # where it can still say so before any page is fetched.
-        # sitemap is not here either: it is a tri-state (true|'auto'|false) and
-        # crawl.py already normalizes every spelling of it, including the strings
-        # a serialized client sends. Forcing it through _coerce_bool_arg here is
-        # the one spelling 'auto' would not survive.
+        # path_include/path_exclude **不**在这里：裸字符串本来就被读成它表示的
+        # "单前缀列表"，而 crawl.py 在还能说出口、且尚未抓取任何页面的地方做这件事。
+        # sitemap 也不在这里：它是三态（true|'auto'|false），crawl.py 已经归一化它的
+        # 每一种拼法，包括串化客户端发来的字符串。在这里硬塞进 _coerce_bool_arg，
+        # 正是 'auto' 活不下来的那一种拼法。
     },
     # 这一扇从前**整张表里都没有**，而 `_coerce_arg_types` 的第一行是
     # `if not spec: return args` —— "没有这一扇"与"这一扇没有要归一的参数"在运行时是同一个
@@ -585,9 +550,8 @@ _ARG_TYPES: dict[str, dict[str, str]] = {
         "max_results": "int", "cache_ttl": "int", "page": "int",
         "engines": "list", "sources": "list", "sort": "str",
         "exclude_sites": "list", "fetch_content": "bool",
-        # min_relevance arrives as a string from clients that JSON-stringify
-        # numbers ("0.3"); without this it would reach search.py as text and be
-        # coerced to 0.0 there (silently disabling the floor).
+        # min_relevance 从那些把数字 JSON 串化的客户端以字符串到达（"0.3"）；
+        # 没有这一格它会以文本到达 search.py 并在那里被强转成 0.0（悄悄关掉地板）。
         "min_relevance": "number",
         "min_raw_relevance": "number",
         # 共识地板是"做决定的那颗"：字符串客户端写 "2" 时按裸值传会进到比较里
@@ -614,13 +578,12 @@ _ARG_DEFAULTS: dict[Any, dict[str, Any]] = {}
 
 
 def _arg_defaults(tool: str) -> dict[str, Any]:
-    """Each typed argument's own default, read off the method signature.
+    """每个类型化参数自己的默认值，从方法签名上现读。
 
-    Copied defaults drift; the signature is where the tool already states them.
+    抄来的默认值会漂；签名才是工具已经写明它们的地方。
 
-    Keyed by the function it read, not by tool name: the test suite replaces
-    these methods with stubs, and a cache keyed on the tool would keep serving
-    whatever the first caller happened to see as that tool's signature.
+    键是它读取的函数对象，不是工具名：测试套件会把这些方法换成 stub，而以工具名
+    为键的缓存会一直交出第一个调用方碰巧看到的那份签名。
     """
     # 这颗回看是这一层唯一的反向依赖，所以就地 import：模块级 import server 会绕成
     # 循环，而 `crawl.py` / `install.py` 读 server 用的就是这个写法。测试把方法换成
@@ -703,7 +666,7 @@ def _wire_string_params(tool: str) -> tuple[str, ...]:
 
 
 def _coerce_one_arg(kind: str, name: str, value: Any, default: Any) -> Any:
-    """Apply one table entry to one value."""
+    """把一条表项应用到一个值上。"""
     if kind == "int":
         return _coerce_int_arg(value, name, default=default)
     if kind == "number":
@@ -717,8 +680,8 @@ def _coerce_one_arg(kind: str, name: str, value: Any, default: Any) -> Any:
     if kind == "list":
         return _coerce_str_list_arg(value, name)
     if kind == "rawlist":
-        # Elements belong to the consumer (actions._validate_actions knows the
-        # per-action shapes); the boundary only fixes the container.
+        # 元素归消费者管（actions._validate_actions 知道每种动作的形状）；
+        # 边界层只修正容器。
         if isinstance(value, str):
             text = value.strip()
             try:
@@ -738,8 +701,8 @@ def _coerce_one_arg(kind: str, name: str, value: Any, default: Any) -> Any:
             f"Pass {name}=[{{...}}, {{...}}]."
         )
     if kind == "strnum":
-        # An argument the tool only reads as a string, where an integer is the
-        # same value: PDF `pages: 3` is page 3, and `password: 1234` is "1234".
+        # 一个工具只按字符串读、而整数是同一个值的参数：PDF `pages: 3` 是第 3 页，
+        # `password: 1234` 是 "1234"。
         if isinstance(value, int) and not isinstance(value, bool):
             return str(value)
         return value
@@ -747,12 +710,10 @@ def _coerce_one_arg(kind: str, name: str, value: Any, default: Any) -> Any:
 
 
 def _coerce_arg_types(tool: str, args: dict) -> dict:
-    """Normalize one call's arguments to the types the tool reads.
+    """把一次调用的参数归一化成工具读取的类型。
 
-    One channel since 17.0 B4: parameters live at the top level, so there is no
-    second copy arriving through a bag to keep in step with. Keys the caller
-    never sent stay absent so the tool's own default applies; a key sent as null
-    takes that same default.
+    17.0 B4 起只有一条通道：参数住在顶层，所以没有第二份经包袋到达的副本要同步。
+    调用方从未发送的键保持缺席，让工具自己的默认值生效；发成 null 的键取同一个默认值。
     """
     spec = _ARG_TYPES.get(tool)
     if not spec or not any(k in args for k in spec):
@@ -765,30 +726,25 @@ def _coerce_arg_types(tool: str, args: dict) -> dict:
     return out
 
 
-# The hint travels with the error: a caller who wrote urls="https://x" is one
-# bracket away from the right call, and that is true whichever channel the value
-# arrived in.
+# 提示跟着错误走：写 urls="https://x" 的调用方离正确的调用只差一个方括号，而无论
+# 值是从哪条通道到达的，这都是真的。
 _URLS_SINGLE_HINT = ('Pass urls=["https://a", "https://b"], or use url= '
                      "for a single URL.")
 
 
 def _validate_tool_args(name: str, args: dict) -> dict:
-    """Type-check the arguments the manual dispatcher is about to read.
+    """对本地分发器即将读取的参数做类型检查。
 
-    This server runs on the low-level ``mcp.server.Server`` with a hand-written
-    ``on_call_tool``, so the ``Annotated``/``Literal`` annotations on the tool
-    methods only ever reach clients as wire schema — nothing validates at
-    runtime, and every argument is read with ``args.get()``. Three defects lived
-    in that gap, all silent and all delivered as an ordinary 200:
-    ``urls="https://x"`` iterated the string into nineteen one-character
-    results; the cache wipe's ``all="false"`` cleared the entire cache because a
-    non-empty string is truthy; ``force_fetcher="magic"`` fell through to the
-    stealthy browser tier.
+    本服务器跑在低层的 ``mcp.server.Server`` 上，``on_call_tool`` 是手写的，所以工具
+    方法上的 ``Annotated``/``Literal`` 注解只以线格式 schema 到达客户端 —— 运行时
+    什么都不校验，每个参数都用 ``args.get()`` 读取。三个缺陷住在这个缺口里，全都
+    无声，全以普通 200 交付：``urls="https://x"`` 把字符串迭代成十九条单字符结果；
+    缓存清空的 ``all="false"`` 清掉了整个缓存，因为非空字符串是真值；
+    ``force_fetcher="magic"`` 掉进 stealthy 浏览器档。
 
-    Returning a normalized copy here means every branch below reads a value that
-    already has exactly one reading. Raises ArgumentRefusal (a ValueError): the
-    web_read branch converts it to the ordinary invalid_request envelope, and
-    ``call_tool`` folds every other tool's refusal into the same one.
+    在这里返回一份归一化副本，意味着下面每个分支读到的值都只有唯一一种解读。抛出
+    ArgumentRefusal（一个 ValueError）：web_read 分支把它转成普通的 invalid_request
+    信封，``call_tool`` 把其余每个工具的拒绝折进同一个。
     """
     out = dict(args)
     # 每一颗"schema 写着 string、没人认领"的参数。这一格从前是空的：`web_read(url=7)`
@@ -811,19 +767,18 @@ def _validate_tool_args(name: str, args: dict) -> dict:
         if key in args:
             out[key] = _coerce_enum_arg(args[key], key, allowed,
                                         _ENUM_NOTES.get((name, key), ""))
-    # Absent still writes `None` rather than leaving the key out: a caller who reads
-    # the normalized dict must be able to tell "no tier" from "not looked at", and
-    # `_forward` drops the None so the tool's own default applies either way.
+    # 缺席仍然写 `None`，而不是把键完全去掉：读归一化 dict 的调用方必须能分清
+    # "没有档位"与"没看过"，而 `_forward` 会丢掉 None，让工具自己的默认值生效，
+    # 两种情况下都一样。
     if name in _FORCE_FETCHER_TOOLS:
         out["force_fetcher"] = _coerce_force_fetcher_arg(args.get("force_fetcher"))
     if name == "web_read":
         out["urls"] = _coerce_str_list_arg(
             args.get("urls"), "urls", single_hint=_URLS_SINGLE_HINT)
     elif name == "sys_state":
-        # The same trap the cache wipe fell into: read raw, `confirm="false"` is a
-        # non-empty string, and a call that meant "just look" erases every session.
-        # The elements are state classes and session ids, so the shared wording
-        # ("a URL string") would send a caller looking for a URL to put in clear=.
+        # 缓存清空掉进去过的同一个陷阱：按裸值读，`confirm="false"` 是非空字符串，
+        # 一次本意"只看一眼"的调用会抹掉每个会话。元素是状态类与会话 id，所以共用的
+        # 措辞（"a URL string"）会让调用方去找一个 URL 填进 clear=。
         token_hint = ("a state class (cache|engine_state|sessions|cred_defaults|all) "
                       "or an open session id")
         for key in ("show", "clear"):
@@ -832,10 +787,9 @@ def _validate_tool_args(name: str, args: dict) -> dict:
         out["confirm"] = _coerce_bool_arg(args.get("confirm"), "confirm",
                                           default=False)
     elif name == "cred_defaults":
-        # The same two traps, on the two shapes that carry them: `unset="proxy"`
-        # is a string, and read raw it forgets six single-letter keys none of
-        # which exist; `show="false"` is a non-empty string, so a call that meant
-        # to forget something answers as though it had only been asked to look.
+        # 带着它们的两种形状上的同样两个陷阱：`unset="proxy"` 是字符串，按裸值读
+        # 会忘掉六个单字母键，而它们一个都不存在；`show="false"` 是非空字符串，于是
+        # 一次本意要忘记点什么的调用，答起来像只是被要求看一眼。
         out["unset"] = _coerce_str_list_arg(
             args.get("unset"), "unset",
             element_hint="a key name (auth|cookies|proxy|profile|cdp|"

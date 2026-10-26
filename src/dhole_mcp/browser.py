@@ -1,13 +1,12 @@
-"""Dhole's own browser sessions using patchright directly.
+"""Dhole 自己的浏览器会话，直接使用 patchright。
 
-Replaces scrapling's AsyncStealthySession and AsyncDynamicSession with direct
-patchright async API usage. Includes the Cloudflare Turnstile solver ported
-from scrapling (it's standard Playwright page manipulation, ~80 lines).
+取代 scrapling 的 AsyncStealthySession 与 AsyncDynamicSession，改为直接使用
+patchright 的异步 API。包含从 scrapling 移植的 Cloudflare Turnstile 求解器
+（它就是标准的 Playwright 页面操作，约 80 行）。
 
-Architecture:
-- StealthyBrowser: anti-detect browser with fingerprinting, stealth args,
-  Cloudflare solver, resource blocking, page pooling
-- Async context manager (async with), .start(), .close(), .fetch()
+结构：
+- StealthyBrowser：带指纹、隐身参数、Cloudflare 求解、资源拦截与页面池的反检测浏览器
+- 异步上下文管理器（async with）、.start()、.close()、.fetch()
 """
 
 from __future__ import annotations
@@ -32,9 +31,9 @@ from dhole_mcp.install import browser_binary_command
 
 logger = logging.getLogger("dhole_mcp.browser")
 
-# ─── Browser flags (ported from scrapling's constants.py) ─────────────────────
+# ─── 浏览器启动参数（从 scrapling 的 constants.py 移植） ─────────────────────
 
-# These args make the browser faster and less detectable. Source:
+# 这些参数让浏览器更快、更难被检测。出处：
 # https://peter.sh/experiments/chromium-command-line-switches/
 DEFAULT_ARGS: Tuple[str, ...] = (
     "--no-pings",
@@ -48,15 +47,15 @@ DEFAULT_ARGS: Tuple[str, ...] = (
     "--no-default-browser-check",
     "--disable-session-crashed-bubble",
     "--disable-search-engine-choice-screen",
-    # Memory: limit renderer processes to 1 (we fetch one page at a time,
-    # saves ~100-200MB per avoided process). Not JS-detectable.
+    # 内存：渲染进程限制为 1 个（我们一次只抓一页，省下的每个进程约 100-200MB）。
+    # 这一点 JS 检测不到。
     "--renderer-process-limit=1",
-    # Memory: cap V8 old space at 512MB (default 4GB). Most pages use <100MB.
-    # Prevents unbounded heap growth across many sequential fetches.
+    # 内存：把 V8 老生代上限定在 512MB（默认 4GB）。多数页面用不到 100MB。
+    # 防止连续多次抓取时堆无限增长。
     "--js-flags=--max-old-space-size=512",
 )
 
-# Args to suppress (scrapling found these enable automation signals)
+# 要抑制的参数（scrapling 实测这些会打开自动化信号）
 HARMFUL_ARGS: Tuple[str, ...] = (
     "--enable-automation",
     "--disable-popup-blocking",
@@ -123,7 +122,7 @@ STEALTH_ARGS: Tuple[str, ...] = (
     "--disable-features=AudioServiceOutOfProcess,TranslateUI,BlinkGenPropertyTrees",
 )
 
-# Resource types to block when disable_resources=True
+# disable_resources=True 时要拦的资源类型
 DISABLED_RESOURCE_TYPES: Set[str] = {
     "font", "image", "media", "beacon", "object",
     "imageset", "texttrack", "websocket", "csp_report", "stylesheet",
@@ -219,16 +218,16 @@ def _net_payload(watch: Optional[dict], ssrf_watch: Optional[list] = None) -> Op
         out["blocked_by_guard"] = sorted(set(guard))[:5]
     return out
 
-# Cloudflare challenge iframe URL pattern
+# Cloudflare 挑战页 iframe 的 URL 形状
 __CF_PATTERN = re.compile(
     r"^https?://challenges\.cloudflare\.com/cdn-cgi/challenge-platform/.*"
 )
 
 
-# ─── Proxy helper ────────────────────────────────────────────────────────────
+# ─── 代理辅助 ────────────────────────────────────────────────────────────────
 
 def _construct_proxy_dict(proxy: str | Dict[str, str]) -> Dict[str, str]:
-    """Convert a proxy string to a Playwright proxy dict."""
+    """把代理字符串转换成 Playwright 的 proxy 字典。"""
     if isinstance(proxy, dict):
         return proxy
     parsed = urlparse(proxy)
@@ -243,7 +242,7 @@ def _construct_proxy_dict(proxy: str | Dict[str, str]) -> Dict[str, str]:
 
 
 def _is_domain_blocked(hostname: str, blocked_domains: frozenset) -> bool:
-    """Check if a hostname matches any blocked domain (including subdomains)."""
+    """主机名是否命中任一被拦域名（含子域）。"""
     if not hostname:
         return False
     for domain in blocked_domains:
@@ -425,15 +424,13 @@ async def _await_stable_or_escape(stability_coro, fence: "_DocumentFence") -> No
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
-# ─── Resource blocking handler ───────────────────────────────────────────────
+# ─── 资源拦截处理器 ──────────────────────────────────────────────────────────
 
-# Header names that ARE a credential, so they belong to one origin only. Kept in
-# step with fetcher._CREDENTIAL_HEADERS, plus the API-key spellings callers
-# actually use — those are the ones whose name is chosen by the caller, so they
-# cannot be recognised from a built-in list at the HTTP layer either.
-# `cookie` is deliberately absent: the browser's own jar is already domain-scoped,
-# and rewriting a Cookie header here would fight that model instead of protecting
-# anything (carry cookies with session_id/cookies=, which is scoped per host).
+# 这些头名**本身**就是凭据，所以只属于一个源。与 fetcher._CREDENTIAL_HEADERS 保持
+# 同步，再加上调用方实际会用的 API-key 拼法 —— 那些名字由调用方自己选，所以在 HTTP
+# 层也无法靠一张内置名单认出来。
+# `cookie` 是故意不在的：浏览器自己的 jar 本来就按域名限定，在这里改写 Cookie 头只会
+# 与那个模型打架，而不是保护什么（带 cookie 请用 session_id/cookies=，它们按主机限定）。
 _BROWSER_CREDENTIAL_HEADERS = frozenset({
     "authorization", "proxy-authorization",
     "x-api-key", "api-key", "x-goog-api-key", "x-auth-token", "x-access-token",
@@ -597,8 +594,8 @@ def _cdp_unreachable_text(endpoint: str, exc: BaseException) -> str:
 
 _PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
-# 17.0：``DHOLE_BROWSER_PROFILE`` 已注销（运行时静默忽略）。命名 profile 的
-# 能力随 B5 的 `cred_defaults` 以参数形态回来（§3-15/§3-17）；在那之前
+# 17.0：``DHOLE_BROWSER_PROFILE`` 已注销（运行时静默忽略）。命名 profile 的能力
+# 现在只从参数面来（server 的 ``open_session(profile_name=…)``）；没有点名时
 # launch 一律用一次性临时目录，storage-state 持久化经 session 桥仍可用。
 
 
@@ -696,7 +693,7 @@ def _create_route_handler(
     sent_headers: Optional[Dict[str, str]] = None,
     allowed_hosts: Optional[frozenset] = None,
 ) -> Callable[[Any], Awaitable[None]]:
-    """Create an async route handler for resource blocking + SSRF guarding.
+    """创建资源拦截 + SSRF 守卫的异步 route 处理器。
 
     ssrf_watch（传入时启用）：每个 http(s) 请求先问一次"目标是内网吗"，
     是就 abort 并把 (host, 是否主文档) 记进这个 list 交给调用方判定。
@@ -798,12 +795,12 @@ def _create_route_handler(
     return handler
 
 
-# ─── Cloudflare solver ───────────────────────────────────────────────────────
+# ─── Cloudflare 求解器 ───────────────────────────────────────────────────────
 
 async def _get_page_content(page: Any, max_retries: int = 20) -> str:
-    """Get page.content() with retry workaround for Windows Playwright bug.
+    """带重试地取 page.content()，绕开 Windows Playwright 的 bug。
 
-    See: https://github.com/microsoft/playwright/issues/16108
+    见：https://github.com/microsoft/playwright/issues/16108
     """
     for _ in range(max_retries):
         try:
@@ -814,16 +811,16 @@ async def _get_page_content(page: Any, max_retries: int = 20) -> str:
 
 
 def _detect_cloudflare(page_content: str) -> Optional[str]:
-    """Detect the type of Cloudflare challenge in the page content.
+    """识别页面内容里是哪一种 Cloudflare 挑战。
 
-    Returns: 'non-interactive', 'managed', 'interactive', 'embedded', or None.
+    交回：'non-interactive'、'managed'、'interactive'、'embedded'，或 None。
     """
     challenge_types = ("non-interactive", "managed", "interactive")
     for ctype in challenge_types:
         if f"cType: '{ctype}'" in page_content:
             return ctype
 
-    # Check for embedded turnstile captcha
+    # 检查内嵌的 turnstile 验证码
     if 'challenges.cloudflare.com/turnstile/v' in page_content:
         return "embedded"
 
@@ -831,20 +828,19 @@ def _detect_cloudflare(page_content: str) -> Optional[str]:
 
 
 async def _solve_cloudflare(page: Any) -> None:
-    """Solve Cloudflare Turnstile/Interstitial challenge on a Playwright page.
+    """在 Playwright 页面上解开 Cloudflare Turnstile/Interstitial 挑战。
 
-    Ported from scrapling's StealthySessionMixin._cloudflare_solver.
-    Handles: non-interactive, managed, interactive, and embedded challenges.
+    从 scrapling 的 StealthySessionMixin._cloudflare_solver 移植。
+    处理：non-interactive、managed、interactive、embedded。
 
-    The solver:
-    1. Waits for network idle
-    2. Detects challenge type
-    3. For non-interactive: waits for the "Just a moment" page to clear
-    4. For interactive/embedded: clicks the Turnstile checkbox at the
-       right coordinates (calculated from the iframe bounding box)
-    5. Waits for the challenge to resolve, retries if needed
+    求解流程：
+    1. 等网络空闲
+    2. 识别挑战类型
+    3. non-interactive：等 "Just a moment" 页面自行消失
+    4. interactive/embedded：按正确坐标（从 iframe 包围盒算出）点击 Turnstile 复选框
+    5. 等挑战解开，必要时重试
     """
-    # Wait for network to settle
+    # 等网络稳定下来
     try:
         await page.wait_for_load_state("networkidle", timeout=5000)
     except Exception:
@@ -858,7 +854,7 @@ async def _solve_cloudflare(page: Any) -> None:
     logger.info(f"Cloudflare challenge type: {challenge_type}")
 
     if challenge_type == "non-interactive":
-        # Just wait for the challenge to auto-resolve
+        # 等着挑战自行解开
         attempts = 0
         while "<title>Just a moment...</title>" in (await _get_page_content(page)):
             if attempts >= 30:
@@ -873,11 +869,11 @@ async def _solve_cloudflare(page: Any) -> None:
         logger.info("Cloudflare non-interactive challenge resolved")
         return
 
-    # Interactive/managed/embedded: need to click the Turnstile checkbox
+    # 交互/托管/内嵌：需要点击 Turnstile 复选框
     box_selector = "#cf_turnstile div, #cf-turnstile div, .turnstile>div>div"
     if challenge_type != "embedded":
         box_selector = ".main-content p+div>div>div"
-        # Wait for the "Verifying you are human" spinner to disappear
+        # 等"Verifying you are human"的转圈消失
         spinner_attempts = 0
         while "Verifying you are human." in (await _get_page_content(page)):
             if spinner_attempts >= 20:
@@ -885,18 +881,18 @@ async def _solve_cloudflare(page: Any) -> None:
             await page.wait_for_timeout(500)
             spinner_attempts += 1
 
-    # Find the Cloudflare iframe
+    # 找到 Cloudflare 的 iframe
     outer_box: Any = {}
     iframe = page.frame(url=__CF_PATTERN)
     if iframe is not None:
-        # Wait for iframe stability
+        # 等 iframe 稳定
         try:
             await iframe.wait_for_load_state("load")
         except Exception:
             pass
 
         if challenge_type != "embedded":
-            # Wait for iframe to be visible
+            # 等 iframe 可见
             iframe_visible_attempts = 0
             while not await (await iframe.frame_element()).is_visible():
                 if iframe_visible_attempts >= 20:
@@ -910,11 +906,11 @@ async def _solve_cloudflare(page: Any) -> None:
             outer_box = {}
 
     if not iframe or not outer_box:
-        # Check if challenge already solved
+        # 看看挑战是不是已经解了
         if "<title>Just a moment...</title>" not in (await _get_page_content(page)):
             logger.info("Cloudflare challenge resolved without clicking")
             return
-        # Try to find the box on the page directly
+        # 试着直接在页面上找到那颗复选框
         try:
             outer_box = await page.locator(box_selector).last.bounding_box()
         except Exception:
@@ -925,13 +921,13 @@ async def _solve_cloudflare(page: Any) -> None:
         logger.warning("Cloudflare checkbox bounding box is empty")
         return
 
-    # Calculate click coordinates (offset into the checkbox area)
+    # 计算点击坐标（往复选框区域里偏移一点）
     captcha_x = outer_box["x"] + randint(26, 28)
     captcha_y = outer_box["y"] + randint(25, 27)
 
-    # Click the checkbox with human-like mouse movement
+    # 用像人的鼠标移动到复选框上点击
     try:
-        # Move to the checkbox via bezier curve (not a straight line)
+        # 沿贝塞尔曲线移到复选框（不走直线）
         await _human_mouse_move(page, captcha_x, captcha_y)
         await page.wait_for_timeout(randint(100, 300))
         await page.mouse.click(captcha_x, captcha_y, delay=randint(100, 200), button="left")
@@ -939,13 +935,13 @@ async def _solve_cloudflare(page: Any) -> None:
         logger.warning(f"Cloudflare click failed: {e}")
         return
 
-    # Wait for network to settle after click
+    # 点击之后等网络稳定
     try:
         await page.wait_for_load_state("networkidle", timeout=5000)
     except Exception:
         pass
 
-    # Wait for the challenge page to clear
+    # 等挑战页消失
     if challenge_type != "embedded":
         attempts = 0
         while "<title>Just a moment...</title>" in (await _get_page_content(page)):
@@ -955,24 +951,24 @@ async def _solve_cloudflare(page: Any) -> None:
             await page.wait_for_timeout(100)
             attempts += 1
 
-    # Final stability wait
+    # 最后再等一次稳定
     try:
         await page.wait_for_load_state("load")
         await page.wait_for_load_state("domcontentloaded")
     except Exception:
         pass
 
-    # Check if solved
+    # 看看解开了没有
     if "<title>Just a moment...</title>" not in (await _get_page_content(page)):
         logger.info("Cloudflare challenge solved")
         return
 
-    # Not solved: retry
+    # 没解开：重试
     logger.info("Cloudflare challenge still present, retrying...")
     await _solve_cloudflare(page)
 
 
-# ─── Channel detection: prefer system Chrome over bundled Chromium ───────────────
+# ─── 通道探测：优先系统 Chrome 而不是内置 Chromium ─────────────────────────────
 
 def _win_local_appdata() -> Path:
     """这台机器的 Local 目录，与 driver 的 `LOCALAPPDATA || homedir()/AppData/Local` 同式。
@@ -1058,17 +1054,15 @@ _chrome_channel_cache: Optional[str] = None
 
 
 def _detect_chrome_channel() -> str:
-    """Detect an installed system Chromium-family browser. Cache the result.
+    """探测已安装的系统 Chromium 系浏览器，并缓存结果。
 
-    A system browser (channel='chrome' or 'msedge') has a real TLS
-    fingerprint (JA4) that matches what real users have. Bundled Chromium's
-    fingerprint differs and is detectable. The benchmark showed a system
-    channel is the bigger lever than patchright's own patches. Edge shares
-    Chrome's whole network stack (BoringSSL), so it carries the same lever -
-    which matters on machines that never installed Chrome (Edge ships with
-    Windows), so the order is chrome → msedge → bundled chromium.
+    系统浏览器（channel='chrome' 或 'msedge'）有真实的 TLS 指纹（JA4），与真实用户
+    一致。内置 Chromium 的指纹不同、可被检测。基准测试表明系统通道是比 patchright
+    自己的补丁更大的杠杆。Edge 与 Chrome 共用整个网络栈（BoringSSL），所以它带着同一
+    根杠杆 —— 这对从没装过 Chrome 的机器很重要（Edge 随 Windows 预装），因此顺序是
+    chrome → msedge → 内置 chromium。
 
-    Returns the patchright channel name: 'chrome', 'msedge', or 'chromium'.
+    交回 patchright 的通道名：'chrome'、'msedge' 或 'chromium'。
     """
     global _chrome_channel_cache
     if _chrome_channel_cache is not None:
@@ -1076,8 +1070,8 @@ def _detect_chrome_channel() -> str:
 
     import shutil
 
-    # (channel, win32 paths, POSIX PATH names) — Chrome first, Edge second:
-    # on a machine with both, either works, and Chrome is the tested default.
+    # （通道，win32 路径，POSIX PATH 名）—— Chrome 先、Edge 后：两者都装的机器上
+    # 哪个都能用，而 Chrome 是测过的默认。
     _SYSTEM_BROWSERS = (
         ("chrome",
          ("Google", "Chrome", "Application", "chrome.exe"),
@@ -1094,9 +1088,9 @@ def _detect_chrome_channel() -> str:
                 logger.info("System %s detected: %s", channel, path)
                 return channel
     else:
-        # POSIX: system browsers by PATH name, then bundled chromium.
-        # 'chromium' stays in the Chrome row: a distro chromium is still a
-        # system browser with a real fingerprint, just not Google-branded.
+        # POSIX：先按 PATH 名找系统浏览器，再找内置 chromium。
+        # 'chromium' 留在 Chrome 那一行：发行版 chromium 仍是带真实指纹的系统浏览器，
+        # 只是没有 Google 的品牌。
         for channel, _, names in _SYSTEM_BROWSERS:
             probes = names + (("chromium", "chromium-browser")
                               if channel == "chrome" else ())
@@ -1146,7 +1140,7 @@ def _win_version_dir_version(exe_path: str) -> Optional[str]:
 
 
 def _system_browser_path(channel: str) -> Optional[str]:
-    """Where the detected system channel's executable lives, or None."""
+    """探测到的系统通道，其可执行文件在哪里；找不到交回 None。"""
     import shutil
 
     _SYSTEM_PATHS = {
@@ -1166,17 +1160,15 @@ def _system_browser_path(channel: str) -> Optional[str]:
 
 
 def _get_chrome_ua(channel: str = "chrome") -> Optional[str]:
-    """Get a User-Agent string matching the installed system browser version.
+    """构造与已安装系统浏览器版本匹配的 User-Agent。
 
-    In headless mode, the browser reports 'HeadlessChrome' / 'HeadlessEdg'
-    in the UA which is a dead giveaway. We read the real executable version
-    and construct a UA with the normal brand instead. This UA matches the
-    TLS fingerprint from the system channel: for Edge that means the
-    'Edg/<version>' token rides along, so the UA tells the same story as
-    the browser's own Sec-CH-UA brands (a Chrome UA on an Edge TLS
-    handshake would be a self-contradicting fingerprint).
+    无头模式下，浏览器在 UA 里自称 'HeadlessChrome' / 'HeadlessEdg'，那是致命的
+    破绽。我们读取真实可执行文件的版本，改用正常品牌拼出 UA。这个 UA 与系统通道的
+    TLS 指纹一致：对 Edge 来说意味着 'Edg/<version>' 令牌一起走，于是 UA 与浏览器
+    自己的 Sec-CH-UA 品牌表讲同一个故事（在 Edge 的 TLS 握手上给一个 Chrome UA
+    就是自相矛盾的指纹）。
 
-    Returns None if the version can't be determined.
+    版本读不出来时交回 None。
     """
     global _chrome_version_cache
     cached = _chrome_version_cache.get(channel)
@@ -1194,7 +1186,7 @@ def _get_chrome_ua(channel: str = "chrome") -> Optional[str]:
             # 同级版本目录先答（纯文件系统，不起进程）；问不到才退回 PowerShell。
             version_output = _win_version_dir_version(chrome_path) or ""
             if not version_output:
-                # On Windows, the exe --version hangs (starts the browser).
+                # 在 Windows 上，exe --version 会挂住（它直接把浏览器启动起来）。
                 result = subprocess.run(
                     ["powershell", "-Command",
                      f"(Get-Item '{chrome_path}').VersionInfo.FileVersion"],
@@ -1207,11 +1199,11 @@ def _get_chrome_ua(channel: str = "chrome") -> Optional[str]:
                 capture_output=True, text=True, timeout=5,
             )
             version_output = (result.stdout or "").strip()
-        # Parse version: 'Google Chrome 150.0.0.0' -> '150.0.0.0'
+        # 解析版本：'Google Chrome 150.0.0.0' -> '150.0.0.0'
         match = re.search(r'(\d+\.\d+\.\d+\.\d+)', version_output)
         if match:
             version = match.group(1)
-            # Edge appends its own brand token; Chrome does not.
+            # Edge 会附上自己那枚品牌令牌；Chrome 不会。
             _brand = f" Edg/{version}" if channel == "msedge" else ""
             if sys.platform == "win32":
                 ua = (f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -1236,10 +1228,9 @@ def _get_chrome_ua(channel: str = "chrome") -> Optional[str]:
     return None
 
 
-# ─── Coherent fingerprint profiles ─────────────────────────────────────────────
-# Each profile is a complete, internally consistent identity. All values tell
-# the same story: platform matches WebGL renderer matches languages.
-# Detectors cross-check for contradictions, so coherence > individual values.
+# ─── 自洽的指纹档案 ───────────────────────────────────────────────────────────
+# 每份档案都是一个完整、内部一致的身份。所有值讲同一个故事：平台匹配 WebGL
+# renderer，匹配语言。检测器会交叉核对矛盾，所以**自洽**比单个值更重要。
 
 _FINGERPRINT_PROFILES: List[Dict[str, Any]] = [
     {
@@ -1306,36 +1297,34 @@ _FINGERPRINT_PROFILES: List[Dict[str, Any]] = [
 
 
 def _generate_fingerprint_profile() -> Dict[str, Any]:
-    """Pick a random coherent fingerprint profile.
+    """随机挑一份自洽的指纹档案。
 
-    Returns a dict with platform, languages, hardware_concurrency,
-    device_memory, webgl_vendor, webgl_renderer, plugins. All values
-    are internally consistent (e.g., MacIntel platform matches Apple
-    WebGL renderer).
+    交回含 platform、languages、hardware_concurrency、device_memory、webgl_vendor、
+    webgl_renderer、plugins 的字典。所有值内部一致（例如 MacIntel 平台配 Apple 的
+    WebGL renderer）。
     """
     import random
     return random.choice(_FINGERPRINT_PROFILES).copy()
 
 
 def _build_stealth_init_script(profile: Dict[str, Any], full: bool = True) -> str:
-    """Build a JavaScript init script from a fingerprint profile.
+    """按一份指纹档案构造 JavaScript 注入脚本。
 
-    Patches JS-layer signals that patchright does NOT handle:
-    - navigator.webdriver (patchright sets False, undefined is stealthier)
-    - navigator.languages (add 'en' fallback for consistency)
-    - Canvas fingerprint: per-session deterministic noise
-    - Permissions API consistency
+    修补 patchright **不处理**的 JS 层信号：
+    - navigator.webdriver（patchright 设 False，undefined 更隐蔽）
+    - navigator.languages（补一个 'en' 兜底以保持一致）
+    - Canvas 指纹：按会话确定性的噪声
+    - Permissions API 一致性
 
-    When full=True (bundled Chromium), also patches:
-    - navigator.plugins (empty in headless, populated in real Chrome)
-    - WebGL vendor/renderer (SwiftShader in headless = dead giveaway)
+    full=True（内置 Chromium）时还会修补：
+    - navigator.plugins（无头下为空，真实 Chrome 有）
+    - WebGL vendor/renderer（无头下的 SwiftShader 是致命破绽）
     - navigator.hardwareConcurrency / deviceMemory
     - navigator.platform
-    - window.chrome runtime object
+    - window.chrome runtime 对象
 
-    The script runs before any page JavaScript via CDP
-    Page.addScriptToEvaluateOnNewDocument, so detection scripts see
-    patched values from the first line.
+    脚本经 CDP Page.addScriptToEvaluateOnNewDocument 在页面任何 JavaScript 之前运行，
+    所以检测脚本从第一行起看到的就是已经修补过的值。
     """
     import json as _json
 
@@ -1347,7 +1336,7 @@ def _build_stealth_init_script(profile: Dict[str, Any], full: bool = True) -> st
     hw_concurrency = profile["hardware_concurrency"]
     device_memory = profile["device_memory"]
 
-    # Essential patches: always applied (even with system Chrome)
+    # 必需补丁：始终应用（即使使用系统 Chrome）
     essential = f"""(() => {{
   // ── navigator.webdriver (patchright sets false, undefined is stealthier) ──
   try {{ Object.defineProperty(navigator, 'webdriver', {{ get: () => undefined }}); }} catch(e) {{}}
@@ -1422,9 +1411,8 @@ def _build_stealth_init_script(profile: Dict[str, Any], full: bool = True) -> st
   }} catch(e) {{}}
 """
 
-    # Full patches: only for bundled Chromium (channel=chromium)
-    # System Chrome already has correct values; overriding them creates
-    # contradictions that detectors specifically look for.
+    # 完整补丁：只给内置 Chromium（channel=chromium）。
+    # 系统 Chrome 本来就有正确的值；覆盖它们反而制造出检测器专门在找的矛盾。
     if full:
         essential += f"""
   // ── navigator.platform (bundled Chromium may report wrong platform) ──
@@ -1486,48 +1474,47 @@ def _build_stealth_init_script(profile: Dict[str, Any], full: bool = True) -> st
     return essential
 
 
-# ─── Human behavior simulation ─────────────────────────────────────────────────
+# ─── 人类行为模拟 ─────────────────────────────────────────────────────────────
 
 def _bezier_point(t: float, p0: tuple, p1: tuple, p2: tuple) -> tuple:
-    """Quadratic Bezier curve point at parameter t."""
+    """参数 t 处二次贝塞尔曲线上的点。"""
     x = (1 - t) ** 2 * p0[0] + 2 * (1 - t) * t * p1[0] + t ** 2 * p2[0]
     y = (1 - t) ** 2 * p0[1] + 2 * (1 - t) * t * p1[1] + t ** 2 * p2[1]
     return (x, y)
 
 
 async def _human_mouse_move(page: Any, target_x: float, target_y: float) -> None:
-    """Move mouse to target via a bezier curve with human-like timing.
+    """沿贝塞尔曲线把鼠标移到目标，时间节奏像人。
 
-    Starts from a random point, curves to the target with a control point
-    slightly off the direct path, adds a small overshoot + correction.
-    This passes behavioral scoring that checks mouse trajectory entropy.
+    从随机点出发，控制点稍微偏离直线形成曲线，加一点过冲再修正。这样能通过那些
+    检查鼠标轨迹熵的行为评分。
     """
     import random
 
-    # Random start point (somewhere in the viewport)
+    # 随机起点（视口内的某个位置）
     start_x = random.uniform(50, 800)
     start_y = random.uniform(50, 600)
 
-    # Control point: off the direct path, creates a curve
+    # 控制点：偏离直线，制造弧度
     mid_x = (start_x + target_x) / 2
     mid_y = (start_y + target_y) / 2
     offset = random.uniform(-150, 150)
     ctrl_x = mid_x + offset
     ctrl_y = mid_y + offset
 
-    # Move along the bezier curve with variable speed
+    # 沿贝塞尔曲线变速移动
     steps = random.randint(15, 30)
     for i in range(steps):
         t = (i + 1) / steps
-        # Ease-in-out: slower at start and end
+        # 缓入缓出：起点和终点慢
         t_eased = t * t * (3 - 2 * t)
         x, y = _bezier_point(t_eased, (start_x, start_y), (ctrl_x, ctrl_y), (target_x, target_y))
         await page.mouse.move(x, y)
-        # Variable delay: faster in the middle, slower at edges
+        # 可变延迟：中段快，两端慢
         delay = int(random.uniform(5, 25))
         await page.wait_for_timeout(delay)
 
-    # Small overshoot + correction (mimics human hand wobble)
+    # 小幅过冲 + 修正（模仿人手的抖动）
     overshoot = random.uniform(2, 8)
     await page.mouse.move(target_x + overshoot, target_y + overshoot * 0.5)
     await page.wait_for_timeout(random.randint(30, 80))
@@ -1535,18 +1522,17 @@ async def _human_mouse_move(page: Any, target_x: float, target_y: float) -> None
 
 
 async def _simulate_human_behavior(page: Any) -> None:
-    """Simulate human-like behavior after page load, before content extraction.
+    """页面加载后、抽取内容前，模拟一点像人的行为。
 
-    Lightweight (~1.5-2.5s total): randomized dwell, one bezier mouse move,
-    one smooth scroll. Passes Cloudflare's v9 behavioral scoring that checks
-    mouse path entropy, time-on-page, and scroll velocity.
+    轻量（合计约 1.5-2.5 秒）：随机停留、一次贝塞尔鼠标移动、一次平滑滚动。用来通过
+    Cloudflare v9 那套检查鼠标路径熵、页面停留时间与滚动速度的行为评分。
     """
     import random
 
-    # 1. Dwell time: 1-2.5s before any interaction
+    # 1. 停留：任何交互之前先等 1-2.5 秒
     await page.wait_for_timeout(random.randint(1000, 2500))
 
-    # 2. Mouse movement: one bezier curve to a random point
+    # 2. 鼠标移动：一条贝塞尔曲线移到随机点
     try:
         target_x = random.uniform(200, 1200)
         target_y = random.uniform(200, 800)
@@ -1554,7 +1540,7 @@ async def _simulate_human_behavior(page: Any) -> None:
     except Exception:
         pass
 
-    # 3. Smooth scroll: variable speed, slight pauses
+    # 3. 平滑滚动：变速，带一点停顿
     try:
         scroll_amount = random.randint(100, 400)
         await page.evaluate(f"window.scrollBy({{ top: {scroll_amount}, behavior: 'smooth' }})")
@@ -1563,7 +1549,7 @@ async def _simulate_human_behavior(page: Any) -> None:
         pass
 
 
-# ─── Browser session base ─────────────────────────────────────────────────────
+# ─── 浏览器会话基座 ───────────────────────────────────────────────────────────
 
 # 一张**驻留**页能活多久（刀9-7 · F9）。时长与 `server.AUTO_SESSION_IDLE_TIMEOUT`
 # 同一个数，理由也同一个：一个人看完一张图、把答案抄进下一次调用，用的是几十秒，
@@ -1605,25 +1591,25 @@ def _invented_referer(url: str, google_search: Any,
 
 
 class BrowserSession:
-    """Base browser session using patchright's async API.
+    """基于 patchright 异步 API 的浏览器会话基座。
 
-    Manages a persistent browser context with page pooling. Supports:
-    - Headless/headful mode
-    - Proxy (static or per-request)
-    - Resource blocking (disable_resources, blocked_domains)
-    - Wait strategies (load, domcontentloaded, networkidle)
-    - Page actions (callable executed after navigation)
-    - Cookie injection
-    - Extra headers
-    - Cloudflare solving (stealthy only)
+    管理一个带页面池的持久浏览器上下文。支持：
+    - 无头/有头模式
+    - 代理（静态或按请求）
+    - 资源拦截（disable_resources、blocked_domains）
+    - 等待策略（load、domcontentloaded、networkidle）
+    - 页面动作（导航后执行的可调用对象）
+    - cookie 注入
+    - 额外头
+    - Cloudflare 求解（仅隐身档）
 
-    Lifecycle:
+    生命周期：
         session = StealthyBrowser(headless=True)
         await session.start()
         response = await session.fetch("https://example.com")
         await session.close()
 
-    Or as async context manager:
+    或作为异步上下文管理器：
         async with StealthyBrowser() as session:
             response = await session.fetch("https://example.com")
     """
@@ -1649,7 +1635,7 @@ class BrowserSession:
         wait_selector_state: str = "attached",
         retries: int = 1,
         retry_delay: float = 1.0,
-        # Stealthy-specific
+        # 隐身档专有
         hide_canvas: bool = False,
         block_webrtc: bool = False,
         allow_webgl: bool = True,
@@ -1688,22 +1674,20 @@ class BrowserSession:
         self._page_setup = page_setup
         self._humanize = humanize
 
-        # State
+        # 状态
         self._playwright: Any = None
         self._browser: Any = None
         self._context: Any = None
         self._user_data_dir: Optional[str] = None
         self._is_alive: bool = False
         self._fingerprint_profile: Optional[Dict[str, Any]] = None
-        # True when connect_over_cdp reused the endpoint's own default context
-        # (the one holding the user's login state). Gates every invasive
-        # behavior: no cookie writes into the user's profile, no stealth
-        # patches on the user's pages, no context.close() on detach.
+        # 为 True 表示 connect_over_cdp 复用了端点自己的 default context（那一个装着
+        # 用户登录态）。它给所有侵入性行为设闸：不往用户 profile 写 cookie、不在用户
+        # 页面上打隐身补丁、detach 时不调 context.close()。
         self._cdp_attached: bool = False
-        # True when the launch path runs on a named persistent profile that
-        # must survive close. 17.0: nothing names one yet (the env knob is
-        # gone), and the plumbing stays for B5's cred_defaults parameter --
-        # until then every launch is a scratch dir.
+        # 为 True 表示 launch 路径跑在具名持久 profile 上，必须活过 close。17.0：还没有
+        # 任何东西点名一个（环境旋钮已撤），这套管线留给 B5 的 cred_defaults 参数 ——
+        # 在那之前每次 launch 都是临时目录。
         self._persistent_profile: bool = False
         # 刀9-7（F9）驻留槽：`{"page", "route", "listener", "stamp"}` 或 None。
         # 默认每一次 fetch 都是 `new_page()` + `goto()`，于是"上一调用读到的那一枚
@@ -1721,7 +1705,7 @@ class BrowserSession:
         # 的 `slot.get("listener")` 天然缺席即跳过。
         self._pin_tabs: List[Dict[str, Any]] = []
 
-    # ── Lifecycle ─────────────────────────────────────────────────
+    # ── 生命周期 ─────────────────────────────────────────────────
 
     async def __aenter__(self) -> "BrowserSession":
         await self.start()
@@ -1731,7 +1715,7 @@ class BrowserSession:
         await self.close()
 
     async def start(self) -> None:
-        """Launch the browser and create a context."""
+        """启动浏览器并创建一个 context。"""
         if self._is_alive:
             raise RuntimeError("Session already started")
 
@@ -1739,7 +1723,7 @@ class BrowserSession:
 
         self._playwright = await async_playwright().start()
 
-        # Build browser launch options
+        # 构造浏览器启动选项
         browser_args = list(DEFAULT_ARGS)
         if self._is_stealthy:
             browser_args.extend(STEALTH_ARGS)
@@ -1770,7 +1754,7 @@ class BrowserSession:
             "chromium_sandbox": False,
         }
 
-        # Build context options
+        # 构造 context 选项
         context_options: Dict[str, Any] = {
             "color_scheme": "dark",
         }
@@ -1795,15 +1779,14 @@ class BrowserSession:
         if self._useragent:
             context_options["user_agent"] = self._useragent
         elif self._headless:
-            # In headless mode, the browser reports 'HeadlessChrome' /
-            # 'HeadlessEdg' in the UA. Fix: get the real executable version
-            # and construct a UA without 'Headless'.
+            # 无头模式下，浏览器在 UA 里自称 'HeadlessChrome' / 'HeadlessEdg'。
+            # 修法：取真实可执行文件的版本，拼一个不含 'Headless' 的 UA。
             if browser_options["channel"] in ("chrome", "msedge"):
                 ua = _get_chrome_ua(browser_options["channel"])
                 if ua:
                     context_options["user_agent"] = ua
             else:
-                # Bundled Chromium: use browserforge for a realistic UA
+                # 内置 Chromium：用 browserforge 造一个像真的 UA
                 try:
                     from browserforge.headers import HeaderGenerator
                     hg = HeaderGenerator()
@@ -1814,7 +1797,7 @@ class BrowserSession:
                 except Exception:
                     pass
 
-        # Merge additional args (highest priority)
+        # 合并额外参数（最高优先级）
         context_options.update(self._additional_args)
 
         try:
@@ -1837,9 +1820,9 @@ class BrowserSession:
                 self._context = await _resolve_cdp_context(self._browser)
                 self._cdp_attached = True
             else:
-                # Persistent context: temp dir by default; a named profile under
-                # ~/.dhole/profiles/<name>/ when the caller (or
-                # DHOLE_BROWSER_PROFILE) opts into storage-state persistence.
+                # 持久 context：默认用临时目录；调用方点名具名 profile 时用
+                # ~/.dhole/profiles/<name>/ 下那一份（17.0 起没有环境旋钮，只有参数面
+                # 能点名 —— 见文件上方 DHOLE_BROWSER_PROFILE 已注销那条注记）。
                 if self._profile_name:
                     from dhole_mcp import paths as _paths
                     pdir = _paths.profiles_dir() / self._profile_name
@@ -1865,17 +1848,16 @@ class BrowserSession:
             if self._cookies and not self._cdp_attached:
                 await self._context.add_cookies(self._cookies)
 
-            # Generate stealth init script (stealthy only) for JS-layer patches
-            # that patchright doesn't handle. Injected per-page via CDP
-            # Page.addScriptToEvaluateOnNewDocument (not context.add_init_script,
-            # which uses Routes and breaks DNS resolution with patchright).
+            # 生成隐身注入脚本（仅隐身档），补 patchright 不处理的 JS 层。按页经 CDP
+            # Page.addScriptToEvaluateOnNewDocument 注入（不用 context.add_init_script，
+            # 后者走 Routes，会在 patchright 下弄坏 DNS 解析）。
             self._init_script: Optional[str] = None
             # attach 模式不做 stealth 注入：补丁会落在用户自己开着的页面上，
             # 制造与真实指纹的差异（修订二⑪——attach 下 _is_stealthy 视为 False）。
             if self._is_stealthy and not self._cdp_attached:
                 self._fingerprint_profile = _generate_fingerprint_profile()
-                # Full patches only for bundled Chromium; system Chrome already
-                # has correct WebGL, plugins, platform, window.chrome.
+                # 完整补丁只给内置 Chromium；系统 Chrome 的 WebGL、plugins、platform、
+                # window.chrome 本来就对。
                 is_chrome_channel = browser_options["channel"] == "chrome"
                 self._init_script = _build_stealth_init_script(
                     self._fingerprint_profile, full=not is_chrome_channel
@@ -1905,7 +1887,7 @@ class BrowserSession:
             raise
 
     async def close(self) -> None:
-        """Close the browser and cleanup."""
+        """关闭浏览器并清理。"""
         if not self._is_alive:
             return
 
@@ -1929,7 +1911,7 @@ class BrowserSession:
             await self._cleanup_playwright()
             self._is_alive = False
 
-            # Cleanup temp dir (a named persistent profile survives close)
+            # 清理临时目录（具名持久 profile 要活过 close）
             if self._user_data_dir and not self._persistent_profile:
                 try:
                     import shutil
@@ -1939,7 +1921,7 @@ class BrowserSession:
             self._user_data_dir = None
 
     async def _cleanup_playwright(self) -> None:
-        """Stop the playwright instance."""
+        """停掉 playwright 实例。"""
         if self._playwright:
             try:
                 await self._playwright.stop()
@@ -1947,7 +1929,7 @@ class BrowserSession:
                 pass
             self._playwright = None
 
-    # ── Fetch ─────────────────────────────────────────────────────
+    # ── 抓取 ─────────────────────────────────────────────────────
 
     async def seed_cookies(self, url: str, cookies: Dict[str, str]) -> None:
         """MVP-3 cookie 双向桥（播种向）：把 HTTP jar 中该 host 的 cookie 灌进
@@ -1986,12 +1968,11 @@ class BrowserSession:
 
     @staticmethod
     def _same_document(a: str, b: str) -> bool:
-        """Are these two strings the same **page**?
+        """这两个串是同一个**页面**吗？
 
-        Only used to decide whether an action chain may stand on a pinned page.
-        Trailing slash and fragment are the same document; a different path or a
-        different query is a different one — and so is anything unparseable,
-        because "unknown" must not buy the right to act on a page nobody named.
+        只用来判定动作链能否站在一张驻留页上。末尾斜杠与 fragment 算同一个文档；
+        不同路径或不同查询串就是另一个 —— 解析不出的也算另一个，因为"不知道"不该
+        买来"在没人点名过的页面上动手"的权利。
         """
         try:
             pa, pb = urlparse(a or ""), urlparse(b or "")
@@ -2049,14 +2030,12 @@ class BrowserSession:
             await self._pin_close_tabs("host")
             return None, "host"
         if for_actions and not self._same_document(url, page.url):
-            # R01-027. Same host is not the same page: an action's `index` counts
-            # the elements of the page the caller NAMED, so running the chain on a
-            # different page of that host acts on a target nobody chose (measured:
-            # `hover index 0` on the pinned /account is the 退出登录 button, while
-            # the call named /hoverdrag). Refuse the reuse but KEEP the pin — this
-            # call navigates to what it named; the page stays in the slot for the
-            # next call that stands on it. Dropping the page here would turn a
-            # disclosure bug into the loss of H8's whole point.
+            # R01-027。同主机不等于同一个页面：动作的 `index` 数的是调用方**点名**
+            # 的那一页上的元素，所以在同主机的另一页上跑链，会对一个没人选过的目标
+            # 动手（实测：在驻留的 /account 上 `hover index 0` 是「退出登录」按钮，
+            # 而这次调用点名的是 /hoverdrag）。拒绝复用但**保留**驻留 —— 这一发导航去
+            # 它点名的地址；那一页留在槽里，给下一次站在它上面的调用。在这里丢掉页面，
+            # 就等于把一个披露 bug 变成 H8 全部意义的丧失。
             self._pin = slot
             return None, "target"
         return slot, ""
@@ -2193,10 +2172,9 @@ class BrowserSession:
         pin_out: Optional[dict] = None,
         **kwargs: Any,
     ) -> "Any":
-        """Navigate to a URL and return a Response object.
+        """导航到一个 URL 并交回 Response 对象。
 
-        Parameters override session defaults for this request only. Proxy is
-        fixed at session startup and cannot be changed here.
+        参数只覆盖本次请求的会话默认值。代理在会话启动时就固定了，不能在这里改。
 
         probe_out（G35 check_login）：传入一个 dict，导航稳定后在页面上做一次
         登录探测（DOM 形状 + cookie 名，无模型、无值出境），结果写进这个 dict。
@@ -2232,7 +2210,7 @@ class BrowserSession:
                     "revokes one host, clear=['cdp_hosts'] all)."
                 )
 
-        # Resolve per-request overrides
+        # 解析按请求的覆盖值
         actual_timeout = timeout if timeout is not None else self._timeout
         actual_google = google_search if google_search is not None else self._google_search
         actual_extra_headers = extra_headers if extra_headers is not None else self._extra_headers
@@ -2244,7 +2222,7 @@ class BrowserSession:
         actual_page_setup = page_setup or self._page_setup
         actual_retries = retries if retries is not None else self._retries
 
-        # Build referer
+        # 构造 referer
         request_headers = {}
         if actual_extra_headers:
             request_headers = {h.lower(): v for h, v in actual_extra_headers.items()}
@@ -2321,11 +2299,11 @@ class BrowserSession:
                 page.set_default_navigation_timeout(actual_timeout)
                 page.set_default_timeout(actual_timeout)
 
-                # Stealth init script injection mechanism:
-                # CDP Page.addScriptToEvaluateOnNewDocument does NOT work with
-                # patchright (it patches Runtime.enable). add_init_script uses
-                # Routes which breaks DNS. Instead, we use wait_until='commit'
-                # + page.evaluate() to inject patches before page JS runs.
+                # 隐身注入机制：
+                # CDP Page.addScriptToEvaluateOnNewDocument 在 patchright 下**不工作**
+                # （它给 Runtime.enable 打了补丁）。add_init_script 走 Routes，会弄坏
+                # DNS。所以改用 wait_until='commit' + page.evaluate()，在页面 JS 跑之前
+                # 注入补丁。
 
                 if reused:
                     # 这一发的凭据头由这一发决定：上一页留下的那份不许悄悄跟着走
@@ -2375,22 +2353,19 @@ class BrowserSession:
                         except Exception as e:
                             logger.warning(f"page_setup callback error: {e}")
 
-                    # Navigate - use 'commit' to get control as soon as HTML is
-                    # received but BEFORE page JS runs. Then immediately inject
-                    # stealth patches via page.evaluate(). This is the only
-                    # injection mechanism that works with patchright (CDP
-                    # Page.addScriptToEvaluateOnNewDocument requires Runtime.enable
-                    # which patchright patches out; add_init_script uses Routes
-                    # which breaks DNS).
+                    # 导航 —— 用 'commit'：HTML 一收到就拿到控制权，但**在页面 JS
+                    # 跑之前**。然后立刻经 page.evaluate() 注入隐身补丁。这是 patchright
+                    # 下唯一可行的注入机制（CDP Page.addScriptToEvaluateOnNewDocument
+                    # 需要 Runtime.enable，而 patchright 把它打了补丁；add_init_script
+                    # 走 Routes，会弄坏 DNS）。
                     try:
                         first_response = await page.goto(url, referer=referer,
                                                           wait_until="commit")
                     except Exception:
-                        # 'commit' may not be supported in older versions, fall back
+                        # 旧版本可能不支持 'commit'，退回默认等待。
                         first_response = await page.goto(url, referer=referer)
 
-                    # Inject stealth patches IMMEDIATELY after commit, before
-                    # the page's own scripts execute.
+                    # commit 之后**立刻**注入隐身补丁，赶在页面自己的脚本执行之前。
                     if self._init_script and first_response:
                         try:
                             await page.evaluate(self._init_script)
@@ -2457,7 +2432,7 @@ class BrowserSession:
                             self._pin = None      # 链接管了这一页
                         self._pin_tabs = []
 
-                # Page action callback
+                # 页面动作回调
                 orig_page = page
                 if actual_page_action:
                     try:
@@ -2480,7 +2455,7 @@ class BrowserSession:
                     if isinstance(_pin_state, dict):
                         _chain_tabs = _pin_state.get("tab_pages")
 
-                # Wait for selector
+                # 等选择器
                 if actual_wait_selector:
                     try:
                         waiter = page.locator(actual_wait_selector)
@@ -2489,9 +2464,9 @@ class BrowserSession:
                     except Exception as e:
                         logger.warning(f"Wait for selector '{actual_wait_selector}' failed: {e}")
 
-                # Human behavior simulation (stealthy only, if enabled)
-                # Adds ~1.5-2.5s of mouse movement + scroll + dwell.
-                # Passes Cloudflare v9 behavioral scoring.
+                # 人类行为模拟（仅隐身档，且开关打开时）
+                # 增加约 1.5-2.5 秒的鼠标移动 + 滚动 + 停留。
+                # 用来通过 Cloudflare v9 的行为评分。
                 # attach 模式不做：那是在驱动用户自己的浏览器。
                 # 驻留复用也不做：那是一段"刚到站"的动作轨迹，而这一页是上一发就来过
                 # 的那一页 —— 再滚一遍只会让下一次截图站在不同的滚动位置上。
@@ -2543,7 +2518,7 @@ class BrowserSession:
                     except Exception as e:
                         logger.debug(f"login probe failed: {e}")
 
-                # Build response
+                # 构造响应
                 from dhole_mcp.fetcher import response_from_browser_page
                 if page is orig_page:
                     response = await response_from_browser_page(
@@ -2564,12 +2539,10 @@ class BrowserSession:
                 except Exception:
                     logger.debug("could not attach the network ledger", exc_info=True)
 
-                # Memory cleanup: trigger Chrome's internal GC + cache drop
-                # via CDP Memory.simulatePressureNotification. This releases
-                # V8 heap, image caches, and discardable memory in all
-                # processes. Lightweight (~5ms), prevents RAM creep across
-                # many sequential fetches. Non-disruptive: "moderate" level
-                # does not crash tabs or affect page content.
+                # 内存清理：经 CDP Memory.simulatePressureNotification 触发 Chrome 内部
+                # 的 GC + 缓存丢弃。它释放所有进程里的 V8 堆、图像缓存与可丢弃内存。
+                # 轻量（约 5ms），防止连续多次抓取时内存爬升。无破坏性："moderate"
+                # 级别不会弄崩标签页，也不影响页面内容。
                 # 驻留的那一页不做：它下一次要被站着用，而"丢掉可回收的图像缓存"对
                 # 一张还要截图的页面是一次重取资源的机会 —— 那个机会属于站点，不属于人。
                 if not _pin_lane:
@@ -2680,9 +2653,9 @@ class BrowserSession:
                     )
                     await asyncio.sleep(self._retry_delay)
                 else:
-                    # Classify the network error for agent-actionable diagnostics.
-                    # Prepend a category tag so downstream (server.py _agent_hints)
-                    # can identify the failure type without re-parsing.
+                    # 给网络错误分类，产出对 agent 可行动诊断。
+                    # 前置一个类别标签，让下游（server.py 的 _agent_hints）不必重新
+                    # 解析就能认出失败类型。
                     from dhole_mcp.errors import classify_network_error
                     err_str = str(e)
                     category, _ = classify_network_error(err_str)
@@ -2730,12 +2703,11 @@ class BrowserSession:
         raise RuntimeError(f"Browser fetch failed for {url}")
 
     async def _wait_for_stability(self, page: Any) -> bool:
-        """load + domcontentloaded, then the idle wait ONLY for a page that
-        rendered nothing. Returns whether that 5s was paid.
+        """先等 load + domcontentloaded，再**只**给"什么都没渲染出来"的页面加等空闲。
+        交回那 5 秒有没有被付掉。
 
-        The cap and the silence are the existing implementation: 17.0 deleted the
-        caller's switch, not the bound. An idle timeout here is not a failure - the
-        page is what it is, and extraction reads whatever DOM survived.
+        上限与沉默是既有实现：17.0 删掉的是调用方的开关，不是这道边界。这里的空闲
+        超时不是失败 —— 页面就是这样，抽取读的是活下来的 DOM。
         """
         for state in ("load", "domcontentloaded"):
             try:
@@ -2761,23 +2733,24 @@ class BrowserSession:
             pass
         return True
 
-    # ── Properties ────────────────────────────────────────────────
+    # ── 属性 ──────────────────────────────────────────────────────
 
     @property
     def _is_stealthy(self) -> bool:
-        """Override in subclasses."""
+        """子类覆盖。"""
         return False
 
     @property
     def is_alive(self) -> bool:
+        """Whether the browser/context this session drives is still usable.
+        """
         return self._is_alive
 
     @property
     def cdp_attached(self) -> bool:
-        """True when this session attached to an existing CDP endpoint and is
-        driving the endpoint's own default context — the one holding the user's
-        login state. Response payloads surface this (cdp_attached=true) so every
-        attach is visible to the caller, not just to the audit log."""
+        """为 True 表示这个会话 attach 到了既有 CDP 端点，并驱动端点自己的 default
+        context —— 那个装着用户登录态的 context。响应载荷会把它交出去
+        （cdp_attached=true），于是每一次 attach 对调用方可见，而不只是进了审计日志。"""
         return self._cdp_attached
 
     @property
@@ -2804,10 +2777,10 @@ class BrowserSession:
 
 
 class StealthyBrowser(BrowserSession):
-    """Anti-detect stealthy browser session with Cloudflare solving.
+    """带 Cloudflare 求解的反检测隐身浏览器会话。
 
-    Uses stealth browser args (anti-fingerprinting, automation bypass),
-    a realistic user agent, and optionally solves Cloudflare challenges.
+    使用隐身浏览器参数（反指纹、绕过自动化检测）、像真的 UA，并可选地解开 Cloudflare
+    挑战。
     """
 
     @property
@@ -3502,14 +3475,14 @@ async def launch_probe_async(timeout_s: float = LAUNCH_PROBE_TIMEOUT_S) -> dict:
             "elapsed_s": round(time.perf_counter() - started, 2)}
 
 
-# ─── Browser availability check ───────────────────────────────────────────────
+# ─── 浏览器可用性检查 ─────────────────────────────────────────────────────────
 
 _browser_available: Optional[bool] = None
 _browser_import_error: Optional[str] = None
 
 
 def check_browser_available() -> bool:
-    """Check if browser deps (patchright) are importable. Cached."""
+    """浏览器依赖（patchright）能否导入。结果缓存。"""
     global _browser_available, _browser_import_error
     if _browser_available is not None:
         return _browser_available
@@ -3525,17 +3498,17 @@ def check_browser_available() -> bool:
 
 
 def browser_import_error() -> Optional[str]:
-    """Get the import error if browser deps are unavailable."""
+    """浏览器依赖不可用时，交回导入错误。"""
     return _browser_import_error
 
 
 def is_browser_available_cached() -> Optional[bool]:
-    """Read the cached browser availability WITHOUT triggering an import.
+    """**不触发导入**地读缓存的浏览器可用性。
 
-    Returns True/False if check_browser_available() has been called at least
-    once (by the prewarm thread). Returns None if not yet checked.
+    如果 check_browser_available() 至少被调用过一次（由预热线程），交回 True/False；
+    还没检查过则交回 None。
 
-    This is safe to call on the asyncio event loop: it never blocks.
-    Use check_browser_available() for the first check (from a worker thread).
+    在 asyncio 事件循环上调用是安全的：它从不阻塞。首次检查请用
+    check_browser_available()（在工作线程里）。
     """
     return _browser_available

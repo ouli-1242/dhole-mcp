@@ -1,14 +1,13 @@
-"""Trafilatura-based content extraction:
+"""基于 trafilatura 的正文抽取：
 
-Trafilatura excels at extracting the main article content from news/blog pages,
-stripping navigation, footers, sidebars, cookie banners, and other noise.
-It also extracts metadata (title, author, date, url).
+Trafilatura 擅长从新闻/博客页面抽出文章主体，剥掉导航、页脚、侧栏、cookie 横幅和
+其他噪声。它也能抽元数据（标题、作者、日期、url）。
 
-Extraction chain (robust fallback):
-1. Try requested format (markdown/text/article/structured)
-2. If empty, try trafilatura.extract() with markdown output (different heuristics)
-3. If still empty, try trafilatura.bare_extraction() for metadata
-4. If all Trafilatura fails, fall back to markdownify (HTML->markdown) or raw text
+抽取链（稳健兜底）：
+1. 尝试请求的格式（markdown/text/article/structured）
+2. 为空则用 markdown 输出再调一次 trafilatura.extract()（不同的启发式）
+3. 仍为空则调 trafilatura.bare_extraction() 取元数据
+4. Trafilatura 全失败时，回退 markdownify（HTML->markdown）或原始文本
 """
 import json
 import logging
@@ -27,14 +26,13 @@ logger = logging.getLogger("dhole_mcp.trafilatura_extractor")
 
 
 def _control_char_ratio(body: bytes, declared: str = "") -> float:
-    """Share of the decoded window that no text encoding would write.
+    """解码窗口里有多少字符是任何文本编码都不会写出来的。
 
-    Counting *decoded characters* is the whole point. The byte-level version of
-    this question ("how many bytes land in ASCII 32-126") measured "is this page
-    ASCII", and so answered "binary" for every page written mostly in Chinese,
-    Japanese or Korean - UTF-8 puts not one of those bytes in the printable ASCII
-    range. Measured over the repo's own real files
-    (`review/.runtime/p4/measure_binary_test.py`, 4,096-byte window):
+    数**解码后的字符**才是重点。这个问题的字节级版本（"多少字节落在 ASCII 32-126"）
+    量出来的是"这页是不是 ASCII"，于是给每一页以中文、日文或韩文为主的页面都判
+    "二进制" —— UTF-8 不会把那些字的任何一个字节放进可打印 ASCII 区间。在本仓库
+    自己的真实文件上实测（`review/.runtime/p4/measure_binary_test.py`，4,096 字节
+    窗口）：
 
         /longaside (text/html; charset=utf-8, 中文)   0.0006   <- 文本
         tests/page_fixtures/gnu_free_sw_definition    0.0000   <- 文本
@@ -42,7 +40,7 @@ def _control_char_ratio(body: bytes, declared: str = "") -> float:
         tests/sample.docx                             0.5606   <- 二进制
         tests/figure_page.pdf                         0.2782   <- 二进制
 
-    Two orders of magnitude between the sides, so the line sits at 0.05.
+    两侧差两个数量级，所以线画在 0.05。
     """
     import unicodedata
 
@@ -76,17 +74,17 @@ def _is_binary_payload(body: bytes, content_type: str = "", declared: str = "") 
 
 
 def _get_html_from_page(page) -> str | None:
-    """Extract raw HTML string from a Response object."""
+    """从 Response 对象抽出原始 HTML 字符串。"""
     if hasattr(page, 'body') and page.body:
         html_bytes = page.body
-        # Imported here, not at module scope: fetcher and this module reference
-        # each other, and a top-level import resolves to a cycle.
+        # 在这里导入，不在模块顶层：fetcher 与本模块互相引用，
+        # 顶层导入会解析成循环。
         from dhole_mcp.fetcher import _decode_html_bytes
         return _decode_html_bytes(html_bytes, getattr(page, 'encoding', None) or 'utf-8')
     elif hasattr(page, 'html_content') and page.html_content:
         return page.html_content
     else:
-        # Fallback: serialize the lxml tree
+        # 兜底：序列化 lxml 树
         root = getattr(page, '_root', None) or getattr(page, 'root', None)
         if root is not None:
             return tostring(root, encoding='unicode')
@@ -94,18 +92,18 @@ def _get_html_from_page(page) -> str | None:
 
 
 def _extract_html_title(html: str) -> str:
-    """Extract the <title> tag content from HTML as a metadata fallback."""
+    """从 HTML 抽 <title> 标签内容，作为元数据的兜底。"""
     try:
         tree = html_fromstring(html)
         title_el = tree.find(".//title")
         if title_el is not None and title_el.text:
             title = title_el.text.strip()
-            # Clean up common suffixes like " - Wikipedia", " | BBC News", etc.
-            # but only if the remaining title is still meaningful
+            # 清理常见后缀，如 " - Wikipedia"、" | BBC News" 等，
+            # 但只在剩下的标题仍有意义时才做
             return title
     except Exception:
         pass
-    # Regex fallback
+    # 正则兜底
     match = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
     if match:
         return match.group(1).strip()
@@ -113,19 +111,16 @@ def _extract_html_title(html: str) -> str:
 
 
 def _table_to_markdown_tokens(html: str) -> tuple[str, list]:
-    """Swap every ``<table>`` for a placeholder word; return (html, [(token, md)]).
+    """把每个 ``<table>`` 换成一个占位词；返回 (html, [(token, md)])。
 
-    trafilatura's markdown writer puts each cell on its own line, so a 3x3 table
-    leaves the document as nine loose lines — the shape (which value belongs to
-    which row/column) is what gets thrown away, and this same tool renders DOCX
-    and XLSX tables as real GFM tables. markdownify renders the table correctly,
-    but running it over the whole document would trade trafilatura's boilerplate
-    filtering for nav noise. So: take the tables out, let trafilatura do what it
-    is good at with the prose, and put each finished table back where it was.
+    trafilatura 的 markdown writer 把每个单元格放在单独一行，一张 3x3 的表在文档里
+    就剩九条散行 —— 被丢掉的是形状（哪个值属于哪行哪列），而同一个工具会把 DOCX
+    与 XLSX 的表格渲染成真正的 GFM 表格。markdownify 能正确渲染表格，但对整篇文档
+    跑它等于用导航噪声换掉 trafilatura 的样板过滤。所以：把表格取出来，让 trafilatura
+    干它擅长的散文，再把每张渲染好的表放回原处。
 
-    Returns the input unchanged when the swap cannot be done (no lxml / no
-    markdownify / malformed markup / no tables) — the flattened-lines behaviour
-    is the fallback, not a regression.
+    换不动时原样返回输入（没有 lxml / 没有 markdownify / 畸形标记 / 没有表格）——
+    散行行为是兜底，不是回归。
     """
     if "<table" not in html.lower():
         return html, []
@@ -151,7 +146,7 @@ def _table_to_markdown_tokens(html: str) -> tuple[str, list]:
         except Exception:
             continue
         if "|" not in rendered:
-            continue  # nothing table-shaped came out; leave the node alone
+            continue  # 没渲染出表格形状；别动这个节点
         token = f"DHOLE-TBL-{n}-{secrets.token_hex(3)}"
         holder = _lh.Element("p")
         holder.text = token
@@ -170,9 +165,8 @@ def _table_to_markdown_tokens(html: str) -> tuple[str, list]:
 
 
 def _restore_table_markdown(text: str, tokens: list) -> str | None:
-    """Put each rendered table back at its placeholder. None = a placeholder did
-    not survive extraction, so the caller must fall back rather than silently
-    lose a table it had a copy of."""
+    """把每张渲染好的表放回占位符处。None = 有占位符没活过抽取，调用方必须回退，
+    而不是悄悄丢掉一份手里已有副本的表。"""
     if not tokens:
         return text
     import re as _re
@@ -287,26 +281,24 @@ def _wants_a_wider_pass(extracted_chars: int, visible_chars: int) -> bool:
 
 
 def _trafilatura_markdown(html: str, url: str = "") -> str | None:
-    """Best-effort markdown extraction using trafilatura.extract().
+    """尽力而为的 markdown 抽取，使用 trafilatura.extract()。
 
-    Strategy: trafilatura identifies main content (filtering nav/ads), then
-    markdownify converts to markdown preserving [text](url) links. This hybrid
-    gives trafilatura's content quality + markdownify's link preservation.
+    策略：trafilatura 认出主内容（过滤导航/广告），再由 markdownify 转成保留
+    [text](url) 链接的 markdown。这个混合拿到 trafilatura 的内容质量 +
+    markdownify 的链接保留。
 
-    Tables ride a placeholder round-trip (see _table_to_markdown_tokens) because
-    trafilatura flattens them; when the placeholders do not come back, the
-    untaken route is used instead of returning text that lost a table.
+    表格走一次占位符往返（见 _table_to_markdown_tokens），因为 trafilatura 会把它们
+    拍平；占位符回不来时走未取用的那条路线，而不是交回一份丢了表格的文本。
     """
     html_for_traf, tokens = _table_to_markdown_tokens(html)
-    # First: try trafilatura's native markdown (fast, good content filtering)
+    # 先试 trafilatura 原生的 markdown（快，内容过滤好）
     result = _trafilatura_extract(html_for_traf, url)
     if result and tokens:
         restored = _restore_table_markdown(result, tokens)
         if restored is not None:
             result = restored
         else:
-            # A table would have been dropped: redo the extraction from the
-            # original markup so the page at least keeps its flattened cells.
+            # 一张表会被丢掉：从原始标记重做抽取，至少让页面保住它那些散开的单元格。
             result = _trafilatura_extract(html, url) or result
             tokens = []
     visible = _visible_text_chars(html)
@@ -331,25 +323,25 @@ def _trafilatura_markdown(html: str, url: str = "") -> str | None:
                              "own blocks - kept the recall pass (%d over %d chars)",
                              default_gone, len(recalled), len(result or ""))
                 result = recalled
-    # If trafilatura produced content WITH links, use it directly
+    # trafilatura 产出了带链接的内容，直接用
     if result and "](" in result:
         return result
-    # If trafilatura produced content but WITHOUT links, try markdownify
-    # on the main content region to preserve link references.
+    # trafilatura 产出了内容但没有链接，试着对主内容区跑 markdownify
+    # 保留链接引用。
     if result:
         try:
             from markdownify import markdownify as _md
             import re as _re
-            # Strip nav/header/footer/aside/script/style before markdownify
-            # to avoid navigation link noise.
+            # markdownify 之前剥掉 nav/header/footer/aside/script/style，
+            # 避免导航链接噪声。
             _strip_re = _re.compile(
                 r'<(nav|header|footer|aside|script|style|noscript)\b[^>]*>.*?</\1>',
                 _re.IGNORECASE | _re.DOTALL,
             )
             cleaned = _strip_re.sub('', html)
             md_with_links = _md(cleaned, heading_style="ATX", strip=['img'])
-            # Only use markdownify version if it has links and isn't too bloated
-            # (max 3x the trafilatura text length to avoid nav noise).
+            # 只有在 markdownify 版本带链接、且不算太臃肿时才用它
+            # （最多是 trafilatura 文本长的 3 倍，避免导航噪声）。
             #
             # 那个 3× 假设的是"trafilatura 的输出≈完整正文"。塌陷时这个前提**正好**不
             # 成立（实测 196 vs 恢复出的 2,406），所以比例闸会把唯一一份带书名的文本当
@@ -365,9 +357,9 @@ def _trafilatura_markdown(html: str, url: str = "") -> str | None:
 
 
 def _trafilatura_article(html: str, url: str = "") -> dict | None:
-    """Extract article as dict using bare_extraction.
-    Falls back to HTML <title> tag if Trafilatura can't find a title.
-    Returns None if extraction fails.
+    """用 bare_extraction 把文章抽成 dict。
+    Trafilatura 找不到标题时回退到 HTML <title> 标签。
+    抽取失败时返回 None。
     """
     result = trafilatura.bare_extraction(
         html, url=url,
@@ -377,7 +369,7 @@ def _trafilatura_article(html: str, url: str = "") -> dict | None:
         return None
 
     title = getattr(result, "title", "") or ""
-    # Fallback: try HTML <title> if Trafilatura couldn't find one
+    # 兜底：Trafilatura 找不到标题时试 HTML <title>
     if not title:
         title = _extract_html_title(html)
 
@@ -394,17 +386,17 @@ def _trafilatura_article(html: str, url: str = "") -> dict | None:
 
 
 def _trafilatura_structured(html: str, url: str = "") -> dict | None:
-    """Extract structured article data with metadata."""
+    """抽取带元数据的结构化文章数据。"""
     article = _trafilatura_article(html, url)
     if article is None:
         return None
 
-    # Enrich with trafilatura metadata
+    # 用 trafilatura 元数据补充
     try:
         metadata = trafilatura.metadata(html, url=url) if html else None
         if metadata:
             article["sitename"] = getattr(metadata, "sitename", "")
-            # Don't overwrite article's own categories/tags if they exist
+            # 文章自带的 categories/tags 存在时不要覆盖
             if not article["categories"]:
                 article["categories"] = getattr(metadata, "categories", []) or []
             if not article["tags"]:
@@ -416,18 +408,17 @@ def _trafilatura_structured(html: str, url: str = "") -> dict | None:
 
 
 def _extract_type(html: str, url: str, extraction_type: str) -> str | None:
-    """Extract content in the requested format with robust fallback chain.
+    """按请求的格式抽取内容，带稳健的兜底链。
 
-    For 'article' and 'structured': tries bare_extraction first, then
-    falls back to extract() markdown and wraps it in the expected format.
-    For 'markdown' and 'text': tries extract() first, then bare_extraction.
+    'article' 与 'structured'：先试 bare_extraction，再回退 extract() 的 markdown
+    并包进预期格式。'markdown' 与 'text'：先试 extract()，再试 bare_extraction。
     """
     if extraction_type == "markdown":
-        # Primary: trafilatura.extract() (best for markdown)
+        # 主路：trafilatura.extract()（markdown 最佳）
         result = _trafilatura_markdown(html, url)
         if result:
             return result
-        # Fallback: bare_extraction text wrapped in heading
+        # 兜底：bare_extraction 的文本包进标题
         article = _trafilatura_article(html, url)
         if article and article["body"]:
             title = article.get("title", "")
@@ -435,23 +426,23 @@ def _extract_type(html: str, url: str, extraction_type: str) -> str | None:
         return None
 
     elif extraction_type == "text":
-        # Primary: bare_extraction for plain text
+        # 主路：bare_extraction 取纯文本
         article = _trafilatura_article(html, url)
         if article and article["body"]:
             return article["body"]
-        # Fallback: markdown then strip
+        # 兜底：markdown，再剥标签
         md = _trafilatura_markdown(html, url)
         return md if md else None
 
     elif extraction_type == "article":
-        # Primary: bare_extraction as JSON
+        # 主路：bare_extraction 的 JSON
         article = _trafilatura_article(html, url)
         if article and article["body"]:
             return json.dumps(article, indent=2)
-        # Fallback: markdown extraction, wrap as article JSON
+        # 兜底：markdown 抽取，包成 article JSON
         md = _trafilatura_markdown(html, url)
         if md:
-            # Try to get at least a title from HTML <title> tag
+            # 至少从 HTML <title> 标签拿一个标题
             html_title = _extract_html_title(html)
             return json.dumps({
                 "title": html_title, "author": "", "date": "",
@@ -461,14 +452,14 @@ def _extract_type(html: str, url: str, extraction_type: str) -> str | None:
         return None
 
     elif extraction_type == "structured":
-        # Primary: structured extraction with metadata
+        # 主路：带元数据的结构化抽取
         data = _trafilatura_structured(html, url)
         if data and data.get("body"):
             return json.dumps(data, indent=2)
-        # Fallback: markdown extraction, wrap as structured JSON
+        # 兜底：markdown 抽取，包成 structured JSON
         md = _trafilatura_markdown(html, url)
         if md:
-            # Try to get title from bare_extraction or HTML <title>
+            # 从 bare_extraction 或 HTML <title> 取标题
             article = _trafilatura_article(html, url)
             title = article.get("title", "") if article else ""
             if not title:
@@ -480,12 +471,12 @@ def _extract_type(html: str, url: str, extraction_type: str) -> str | None:
             }, indent=2)
         return None
 
-    else:  # html or unknown: Trafilatura doesn't do HTML
+    else:  # html 或未知：Trafilatura 不做 HTML
         return None
 
 
 def plain_markdown_from_html(html: str) -> str:
-    """The plain converter: markdownify over raw markup, `data:` images stripped.
+    """纯转换器：对原始标记跑 markdownify，剥掉 `data:` 图片。
 
     Trafilatura 的主内容检测器会按"这是不是正文"删东西；当它删过头（塌陷）时，
     补救要的正是**不判断**的那条路 —— 整份标记照单转成 markdown。同一个原语有两个
@@ -506,12 +497,12 @@ def plain_markdown_from_html(html: str) -> str:
 
 
 def _fallback_extract(page, extraction_type: str, css_selector: Optional[str]) -> list[str]:
-    """Fallback extraction: markdownify for markdown/html, raw text for text type.
+    """兜底抽取：markdown/html 走 markdownify，text 类型走原始文本。
 
-    Replaces scrapling's Convertor._extract_content with direct markdownify
-    and lxml usage. No scrapling dependency.
+    用直接的 markdownify 与 lxml 取代 scrapling 的 Convertor._extract_content。
+    不依赖 scrapling。
     """
-    # Get raw HTML
+    # 取原始 HTML
     html = getattr(page, 'content', '') or ''
     if not html and getattr(page, 'body', None):
         html = page.body.decode(
@@ -520,7 +511,7 @@ def _fallback_extract(page, extraction_type: str, css_selector: Optional[str]) -
     if not html:
         return [""]
 
-    # CSS selector narrowing
+    # CSS 选择器收窄
     if css_selector:
         try:
             from lxml import html as lxml_html
@@ -537,12 +528,12 @@ def _fallback_extract(page, extraction_type: str, css_selector: Optional[str]) -
             logger.debug(f"CSS selector '{css_selector}' failed: {e}")
             _note_selector_not_applied(css_selector, e)
 
-    # Map extended types to what we can handle
+    # 把扩展类型映射到能处理的形状
     if extraction_type == "html":
         return [html]
     if extraction_type == "text":
         import re
-        # Strip tags for plain text
+        # 剥标签取纯文本
         text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
         text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
         text = re.sub(r'<noscript[^>]*>.*?</noscript>', '', text, flags=re.DOTALL | re.IGNORECASE)
@@ -557,7 +548,7 @@ def _fallback_extract(page, extraction_type: str, css_selector: Optional[str]) -
         # stealthy 档拿到的是真实榜单（11,946 字符）。空答案才是诚实的答案：它让
         # `quality._is_js_shell` 看见"200 + 无正文"，阶梯才有机会升级。
         return [text]
-    # markdown, article, structured: use markdownify
+    # markdown、article、structured：用 markdownify
     try:
         result = plain_markdown_from_html(html)
         logger.info(f"Falling back to markdownify extraction (type={extraction_type})")
@@ -606,13 +597,12 @@ def _note_selector_not_applied(selector: str, err: Exception) -> None:
 
 
 def _narrow_html_to_selector(html: str, css_selector: str) -> Optional[str]:
-    """Return the markup of every node matching ``css_selector``, else None.
+    """返回匹配 ``css_selector`` 的每个节点的标记，没有则 None。
 
-    Works on the raw HTML string with lxml + CSSSelector, because the fetchers'
-    Response objects do not expose a .css() API. The old code gated on
-    ``hasattr(page, 'css')``, silently got False, and fell through to whole-page
-    extraction — which is why css_selector appeared to work only with
-    extraction_type='html' (that path narrows separately in _fallback_extract).
+    直接在原始 HTML 字符串上用 lxml + CSSSelector，因为抓取器的 Response 对象不暴露
+    .css() API。旧代码以 ``hasattr(page, 'css')`` 为前提，静默得到 False，然后落进
+    整页抽取 —— 这就是 css_selector 看起来只在 extraction_type='html' 下生效的原因
+    （那条路径在 _fallback_extract 里单独收窄）。
     """
     try:
         from lxml import html as lxml_html
@@ -630,38 +620,37 @@ def _narrow_html_to_selector(html: str, css_selector: str) -> Optional[str]:
         # 分支（_note_selector_not_applied）同款诚实：把后果说出去。
         _note_selector_matched_nothing(css_selector)
         return None
-    # The fragments are re-wrapped as a document on purpose: trafilatura returns
-    # nothing for a bare fragment (`_extract_type("<h1>X</h1>", ...) -> None`),
-    # which made the caller fall back to the WHOLE page — the exact silent no-op
-    # this function exists to fix.
+    # 刻意把这些片段重新包成一份文档：trafilatura 对裸片段返回空
+    # （`_extract_type("<h1>X</h1>", ...) -> None`），于是调用方会回退到**整页** ——
+    # 正是这个函数存在要修的那种静默空操作。
     return "<html><body>" + "\n".join(
         tostring(m, encoding="unicode") for m in matches
     ) + "</body></html>"
 
 
 def extract_content_from_html(html: str, url: str = "", extraction_type: str = "markdown") -> str | None:
-    """Extract content from a raw HTML string (used by web_crawl, which fetches
-    pages as html once and derives both links and markdown from the same body)."""
+    """从原始 HTML 字符串抽取内容（web_crawl 用：它把页面抓成 html 一次，再
+    从同一份 body 同时派生链接与 markdown）。"""
     return _extract_type(html, url, extraction_type)
 
 
 def extract_html_title(html: str) -> str:
-    """Public wrapper for the HTML <title> fallback extractor."""
+    """HTML <title> 兜底抽取器的公开包装。"""
     return _extract_html_title(html)
 
 
 def extract_with_trafilatura(
-    page,  # Response object (dhole_mcp.fetcher.Response or compatible)
+    page,  # Response 对象（dhole_mcp.fetcher.Response 或兼容对象）
     extraction_type: str = "markdown",
     css_selector: Optional[str] = None,
 ) -> list[str]:
-    """Use Trafilatura on a Response object.
+    """对 Response 对象使用 Trafilatura。
 
-    Robust multi-stage extraction chain to maximize content quality.
-    Falls back to markdownify only if ALL Trafilatura methods fail.
+    多级稳健抽取链，最大化内容质量。只有所有 Trafilatura 方法都失败时才回退
+    markdownify。
     """
     try:
-        # Check for binary content before decoding
+        # 解码前先检查二进制内容
         raw = getattr(page, 'body', None) or getattr(page, 'content', None)
         if raw:
             raw_bytes = raw if isinstance(raw, bytes) else str(raw).encode('latin-1', errors='replace')
@@ -678,30 +667,30 @@ def extract_with_trafilatura(
 
         page_url = page.url if hasattr(page, 'url') else ""
 
-        # If css_selector specified, narrow the HTML first (all extraction
-        # types, not just html — see _narrow_html_to_selector).
+        # 指定了 css_selector 就先收窄 HTML（所有抽取类型，不只是 html ——
+        # 见 _narrow_html_to_selector）。
         if css_selector:
             narrowed = _narrow_html_to_selector(html, css_selector)
             if narrowed:
                 part = _extract_type(narrowed, page_url, extraction_type)
                 if part:
                     return [part]
-            # CSS selector found nothing usable: try full page instead
+            # CSS 选择器没找到可用内容：改试整页
             logger.info(f"CSS selector '{css_selector}' found nothing, trying full page extraction")
 
         result = _extract_type(html, page_url, extraction_type)
         if result:
             return [result]
 
-        # Even _extract_type returned None: try one more time with markdown
-        # regardless of requested type, just to get SOME clean content
+        # _extract_type 也返回 None：不管请求的类型，再用 markdown 试一次，
+        # 只为拿到**一些**干净内容
         if extraction_type != "markdown":
             md = _trafilatura_markdown(html, page_url)
             if md:
                 logger.info(f"Requested type '{extraction_type}' failed, returning markdown fallback")
                 return [md]
 
-        # Total failure: fall back to markdownify
+        # 彻底失败：回退到 markdownify
         logger.warning(f"All Trafilatura methods failed for {page_url}, falling back to markdownify")
         return _fallback_extract(page, extraction_type, css_selector)
 

@@ -1,21 +1,19 @@
-"""Machine-readable registry for every ``DHOLE_*`` environment variable, plus a
-process-wide warning list for values the readers could not make sense of.
+"""每个 ``DHOLE_*`` 环境变量的机器可读注册表，外加一张读者读不懂的值的
+进程级警告清单。
 
-Why one file does both (W1 + W4): ``security.py`` / ``robots.py`` / ``sessions.py``
-read env vars *without* going through ``server.py``. If the warning list lived in
-``server.py`` they would have to import it, and ``server.py`` already imports all
-of them - a cycle. This module imports nothing from ``dhole_mcp.*``, so any module
-can reach it.
+为什么一个文件干两件事（W1 + W4）：``security.py`` / ``robots.py`` /
+``sessions.py`` **不经过** ``server.py`` 读环境变量。如果警告清单住在
+``server.py``，它们就得 import 它，而 ``server.py`` 已经 import 了它们全部——
+循环。本模块不 import 任何 ``dhole_mcp.*``，所以任何模块都能拿到它。
 
-W1 · ``ALL`` is the single source of truth: every ``DHOLE_*`` string literal in
-``src/dhole_mcp/**.py`` must appear here (``tests/test_env_registry.py`` checks
-both directions), and ``doctor`` / ``configuration.md`` derive from it rather
-than hand-maintaining a parallel list that would drift.
+W1 · ``ALL`` 是唯一事实来源：``src/dhole_mcp/**.py`` 里每个 ``DHOLE_*`` 字符串
+字面量都必须出现在这里（``tests/test_env_registry.py`` 双向检查），
+``doctor`` / ``configuration.md`` 从它派生，而不是手工维护一份会漂移的平行
+清单。
 
-W4 · ``read_flag`` / ``read_int`` / ``read_float`` preserve existing semantics
-while recording unrecognised values into the module-level ``_warnings`` list so
-``dhole --doctor`` (W2) can surface them. A number that falls back to the
-default used to be a silent event; it is now visible in exactly one place.
+W4 · ``read_flag`` / ``read_int`` / ``read_float`` 保持既有语义，同时把无法
+识别的值记进模块级 ``_warnings`` 列表，让 ``dhole --doctor``（W2）能把它翻
+出来。一个回退到默认值的数字从前是静默事件；现在它恰好在一个地方可见。
 """
 
 from __future__ import annotations
@@ -24,25 +22,25 @@ import os
 from dataclasses import dataclass
 from typing import Iterable, Literal, Optional
 
-# ─── shared token sets (W4.3) ───────────────────────────────────────────
-# ``ON_TOKENS`` / ``OFF_TOKENS`` are exported here so ``_env_flag`` and ``robots``
-# stop maintaining near-duplicates of the same list. There used to be a third one
-# in ``security._dns_recheck_enabled`` (which additionally omitted ``"" / none /
-# null``); that knob is retired and nothing reads it, so that copy is gone too.
+# ─── 共享 token 集（W4.3） ─────────────────────────────────────────────
+# ``ON_TOKENS`` / ``OFF_TOKENS`` 在这里导出，让 ``_env_flag`` 与 ``robots``
+# 不再各自维护一份几乎重复的清单。从前 ``security._dns_recheck_enabled`` 里
+# 还有第三份（它额外漏掉了 ``"" / none / null``）；那个旋钮已退役、没人读它，
+# 所以那份副本也没了。
 ON_TOKENS = frozenset({"1", "true", "yes", "on"})
 OFF_TOKENS = frozenset({"0", "false", "no", "off", "none", "null"})
 
 
 Kind = Literal[
-    "flag",     # on/off env; see ``read_flag``
-    "int",      # integer env; see ``read_int``
-    "float",    # float env; see ``read_float``
-    "str",      # free-form string
-    "secret",   # API key - NEVER echoed by any consumer
-    "hostlist", # comma-separated list of hostnames / names
+    "flag",     # 开关型环境变量；见 ``read_flag``
+    "int",      # 整数型环境变量；见 ``read_int``
+    "float",    # 浮点型环境变量；见 ``read_float``
+    "str",      # 自由文本
+    "secret",   # API key —— 任何消费者都**绝不**回显
+    "hostlist", # 逗号分隔的主机名/名字列表
     "path",     # filesystem path
     "url",      # URL
-    "enum",     # value from a fixed set
+    "enum",     # 固定集合里的一个值
 ]
 ReadAt = Literal["import", "call"]
 FailSafe = Literal["open", "closed"]
@@ -50,17 +48,15 @@ FailSafe = Literal["open", "closed"]
 
 @dataclass(frozen=True)
 class EnvVar:
-    """One env variable, described for both humans and diagnostics.
+    """一颗环境变量，同时给人读、也给诊断读。
 
-    ``read_at`` is the field W2 needs most: "call" means editing the host's
-    env block is picked up on the next tool call; "import" means the process
-    has to restart, and getting this wrong is one of the top two reasons a
-    user thinks their configuration change "did not take".
+    ``read_at`` 是 W2 最需要的字段："call" 表示改宿主的 env 块会在下一次工具
+    调用生效；"import" 表示进程必须重启，弄错这一点是用户以为配置改了却
+    "没生效"的两大原因之一。
 
-    ``fail_safe`` marks a variable where a wrong value has an unsafe failure
-    direction (D1). Currently only 4 gates: robots / CDP attach / SSRF recheck
-    / private-host allowlist. Everything else keeps W4.1's promise that no
-    flag flips semantics.
+    ``fail_safe`` 标出一颗值出错时失败方向不安全的变量（D1）。目前只有 4 道闸：
+    robots / CDP attach / SSRF recheck / 私网白名单。其它变量保持 W4.1 的承诺：
+    没有开关会翻转语义。
     """
 
     name: str
@@ -74,11 +70,10 @@ class EnvVar:
     read_by: tuple[str, ...] = ()
 
     def display_value(self, raw: Optional[str]) -> str:
-        """How W2 should print the value of this env var.
+        """W2 打印这颗 env 值时该长什么样。
 
-        ``secret`` never shows its value - even a length read from ``len`` is
-        fine but the bytes are not. ``hostlist``/``path``/``str``/``url`` show
-        the raw value verbatim; the diagnostic never parses it.
+        ``secret`` 永不显示值——用 ``len`` 读出的长度可以，字节不行。
+        ``hostlist``/``path``/``str``/``url`` 原样显示；诊断从不解析它。
         """
         if raw is None:
             return "<unset>"
@@ -275,18 +270,19 @@ _BY_NAME: dict[str, EnvVar] = {e.name: e for e in ALL}
 
 
 def by_name(name: str) -> Optional[EnvVar]:
+    """Look up one registry record by its exact name; ``None`` for a variable dhole does not own.
+    """
     return _BY_NAME.get(name)
 
 
-# ─── process-wide warning list (W4.2) ────────────────────────────────────
+# ─── 进程级警告清单（W4.2） ─────────────────────────────────────────────
 @dataclass(frozen=True)
 class EnvWarning:
-    """A value that reached one of the readers but could not be parsed.
+    """一个到达了某个读者、却解析不了的值。
 
-    ``raw_value`` is the string as it appeared in the environment; we never
-    rewrite or normalise it. W2 prints these with the offending env name so
-    the user can see "you set X to abc and we used 40000 instead" instead of
-    living with a silent fallback.
+    ``raw_value`` 是它在环境里的原样字符串；我们从不重写或归一化它。W2 会带着
+    出问题的 env 名打印，让用户看到"你把 X 设成 abc，我们用了 40000"，而不是
+    默默接受一次回退。
     """
 
     name: str
@@ -298,48 +294,42 @@ _warnings: list[EnvWarning] = []
 
 
 def record_warning(name: str, raw_value: str, message: str) -> None:
-    """Append an unrecognised-value warning. Never raises; never echoes secrets."""
+    """追加一条无法识别值的警告。从不抛；从不回显秘密。"""
     _warnings.append(EnvWarning(name=name, raw_value=raw_value, message=message))
 
 
 def warnings_snapshot() -> tuple[EnvWarning, ...]:
-    """Read-only view of the warning list - W2 iterates this in doctor()."""
+    """警告清单的只读视图——W2 在 doctor() 里遍历它。"""
     return tuple(_warnings)
 
 
 def clear_warnings() -> None:
-    """Drop every recorded warning. Intended for tests, not for the server."""
+    """丢掉所有已记录的警告。给测试用，不是给服务器用。"""
     _warnings.clear()
 
 
-# ─── where a value comes from ────────────────────────────────────────────
+# ─── 值从哪来 ───────────────────────────────────────────────────────────
 #
-# Two doors to one knob. `env` stays the highest-precedence source because that
-# is what every existing install already configured (and what the README's
-# example block writes), but an env block in an MCP client config means editing
-# JSON and restarting the host to change one number — which is the reason the
-# knobs read per-call stop being configuration and start being infrastructure.
-# `~/.dhole/config.json` is the same knobs without the restart: it is re-read
-# when its mtime changes, so `dhole config set DHOLE_DEFAULT_CONTENT_CHARS 8000`
-# takes effect on the next call.
+# 一颗旋钮两扇门。`env` 保持最高优先级，因为每个现有安装都已经这么配（README
+# 的示例块也这么写），但 MCP 客户端配置里的 env 块意味着改一个数字都要编辑 JSON
+# 并重启宿主——这正是按次读取的旋钮不再是配置、而开始变成基础设施的原因。
+# `~/.dhole/config.json` 是同一批旋钮，不用重启：mtime 变了就重读，所以
+# `dhole config set DHOLE_DEFAULT_CONTENT_CHARS 8000` 在下一次调用生效。
 #
-# What does NOT move: DHOLE_HOME, because it locates this file (bootstrap), and
-# anything read at import time (DHOLE_TOOLS and friends) — a per-call re-read
-# cannot un-register a tool that was already left off `tools/list`. Those entries
-# stay writable here, but `dhole config` says `restart the host` on them and
-# `dhole --doctor` shows the same note.
+# 不动的是：DHOLE_HOME，因为它定位这个文件（bootstrap）；以及所有 import 时
+# 读取的东西（DHOLE_TOOLS 之类）——按次重读没法取消注册一颗已经从 `tools/list`
+# 里拿掉的工具。这些条目在这里仍可写，但 `dhole config` 会对它们说"重启宿主"，
+# `dhole --doctor` 显示同一条注记。
 
 _CONFIG_BASENAME = "config.json"
 
-#: Knobs that stay in the environment and are deliberately NOT readable from the
-#: persisted file. Each one is here for a structural reason, not taste:
+#: 留在环境里、刻意**不**从持久文件读的旋钮。每一颗在这里都是结构性原因，不是
+#: 口味：
 #:
-#:   DHOLE_HOME              locates the file, so reading it from the file is a
-#:                           circle (and would silently ignore the override that
-#:                           tests and sandboxes depend on).
-#:   DHOLE_TOOLS             a whitelist: honouring it from a file a caller cannot
-#:                           see would drop tools silently for someone who set one
-#:                           env entry. It belongs to the host's visible env block.
+#:   DHOLE_HOME              它定位这个文件，从文件里读它是循环（而且会静默忽略
+#:                           测试与沙箱依赖的覆盖）。
+#:   DHOLE_TOOLS             白名单：从调用方看不见的文件里遵守它，会让只设了一条
+#:                           env 的人静默丢掉工具。它属于宿主可见的 env 块。
 ENV_ONLY = frozenset({
     "DHOLE_HOME", "DHOLE_TOOLS",
 })
@@ -349,18 +339,17 @@ _file_stamp: tuple[float, int] | None = None
 
 
 def config_path():
-    """``~/.dhole/config.json`` (honours DHOLE_HOME). Imported lazily: this module
-    must stay importable before the state directory exists."""
+    """``~/.dhole/config.json``（尊重 DHOLE_HOME）。惰性 import：本模块在状态目录
+    存在之前就必须可 import。"""
     from dhole_mcp import paths
     return paths.home() / _CONFIG_BASENAME
 
 
 def _load_file() -> dict[str, str]:
-    """The file as a flat ``{NAME: "value"}``, re-read when it changes.
+    """文件读成扁平的 ``{NAME: "value"}``，变了就重读。
 
-    A broken file is a recorded warning, never a crash and never a silent no-op:
-    one stray brace must not disable every knob in it without saying so, and it
-    must not take the server down either.
+    坏文件是一条已记录的警告，绝不崩溃，也绝不静默 no-op：一个多余的大括号
+    不能一声不吭地关掉里面所有旋钮，也不能把服务器带下去。
     """
     global _file_cache, _file_stamp
     import json
@@ -393,12 +382,12 @@ def _load_file() -> dict[str, str]:
 
 
 def file_entries() -> dict[str, str]:
-    """Values the persisted config currently contributes (for CLI / doctor)."""
+    """持久配置当前贡献的值（给 CLI / doctor）。"""
     return dict(_load_file())
 
 
 def source_of(name: str) -> str:
-    """`env` / `file` / `unset` — which door this knob came out of."""
+    """`env` / `file` / `unset`——这颗旋钮是从哪扇门出来的。"""
     if name in os.environ:
         return "env"
     if name in _load_file():
@@ -407,7 +396,7 @@ def source_of(name: str) -> str:
 
 
 def value_of(name: str) -> Optional[str]:
-    """The one lookup every typed reader goes through: env wins, then the file."""
+    """每个带类型读者都走的唯一查值入口：env 优先，然后文件。"""
     value = os.environ.get(name)
     if value is not None:
         return value
@@ -415,11 +404,10 @@ def value_of(name: str) -> Optional[str]:
 
 
 def set_entry(name: str, value: str):
-    """Persist one knob. Raises on a name that is not a registered knob.
+    """持久化一颗旋钮。名字不在注册表里就抛。
 
-    Refusing an unknown name is the whole point: `DHOLE_DEFUALT_CONTENT_CHARS`
-    written to a file looks exactly like a working setting, and the only honest
-    moment to catch it is the moment it is written.
+    拒绝未知名字正是全部意义：写进文件的 `DHOLE_DEFUALT_CONTENT_CHARS` 看起来
+    和一个生效的设置一模一样，而唯一诚实的抓获时刻就是写入那一刻。
     """
     import difflib
     import json
@@ -439,7 +427,7 @@ def set_entry(name: str, value: str):
             loaded = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 data = loaded
-        except Exception:  # noqa: BLE001 - overwrite a broken file, said out loud
+        except Exception:  # noqa: BLE001 - 覆盖坏文件，并且说出来
             pass
     data[name] = value
     paths.ensure_private_dir(path.parent)
@@ -450,7 +438,7 @@ def set_entry(name: str, value: str):
 
 
 def unset_entry(name: str) -> bool:
-    """Remove one knob from the file. True when something was removed."""
+    """从文件里删掉一颗旋钮。删掉了东西就返回 True。"""
     import json
     path = config_path()
     if not path.is_file():
@@ -468,49 +456,47 @@ def unset_entry(name: str) -> bool:
 
 
 def invalidate_file_cache() -> None:
-    """Drop the cached file. Tests point DHOLE_HOME at a throwaway directory, and
-    a cache keyed by mtime alone can survive that on a coarse-grained clock."""
+    """丢掉缓存的文件。测试把 DHOLE_HOME 指到一次性目录，而只按 mtime 做键的
+    缓存可能在粗粒度时钟上熬过这次切换。"""
     global _file_cache, _file_stamp
     _file_cache, _file_stamp = None, None
 
 
 def config_file_keys() -> list[str]:
-    """Names (NEVER values) of the knobs set in config.json, sorted.
+    """config.json 里已设旋钮的**名字**（绝不是值），排好序。
 
     sys_state 的 `show=['config']` 只吃这一口：值里可能有 secret（对 secret 连
-    长度以外的任何东西都不显示），而工具输出会落进 transcript —— 值走操作员侧
+    长度以外的任何东西都不显示），而工具输出会落进 transcript——值走操作员侧
     的 `dhole config list`，那里有人看着。
     """
     return sorted(_load_file().keys())
 
 
-# ─── typed readers ───────────────────────────────────────────────────────
+# ─── 带类型的读者 ───────────────────────────────────────────────────────
 #
-# W4.1 keeps every existing semantic unchanged for the non-safety flags - the
-# whole point is that "an operator has been using DHOLE_MULTIMODAL=yes-please"
-# must not silently lose the capability when we add diagnostics. Only the 4
-# safety gates (D1, marked ``fail_safe="closed"``) get the direction correction.
+# W4.1 让每个非安全开关的既有语义原样不变——重点在于"某个运维一直用
+# DHOLE_MULTIMODAL=yes-please"不能因为我们加了诊断就静默失去能力。只有 4 道
+# 安全闸（D1，标了 ``fail_safe="closed"``）获得方向纠正。
 
 
 def read_flag(name: str, default: bool = False, *, fail_safe: bool = False) -> bool:
-    """Read an on/off env var. See ``EnvVar.fail_safe`` for the two directions.
+    """读一颗 on/off 环境变量。两个方向见 ``EnvVar.fail_safe``。
 
-    ``fail_safe=False`` (matches ``_env_flag``): unset -> ``default``; empty
-    or in ``OFF_TOKENS`` -> False; anything else -> True, with a warning
-    recorded for values that are neither ``ON_TOKENS`` nor ``OFF_TOKENS``.
+    ``fail_safe=False``（与 ``_env_flag`` 一致）：未设 -> ``default``；空串或
+    在 ``OFF_TOKENS`` 里 -> False；其它 -> True，并对既不在 ``ON_TOKENS`` 也不在
+    ``OFF_TOKENS`` 的值记一条警告。
 
-    ``fail_safe=True`` (safety gates): the value must be in ``ON_TOKENS`` or
-    ``OFF_TOKENS``; anything unrecognised is read as False, so a typo like
-    ``flase`` on DHOLE_IGNORE_ROBOTS keeps compliance ON instead of turning it
-    OFF silently.
+    ``fail_safe=True``（安全闸）：值必须在 ``ON_TOKENS`` 或 ``OFF_TOKENS`` 里；
+    任何无法识别的值都读成 False，所以把 ``false`` 拼成 ``flase`` 的
+    DHOLE_IGNORE_ROBOTS 会让合规保持开启，而不是静默关闭。
     """
     raw = value_of(name)
     if raw is None:
         return default
     v = raw.strip().lower()
     if v == "":
-        # Empty matches _env_flag's "in off-list" branch - False without a
-        # warning (the user did say "off", just with an empty string).
+        # 空串走 _env_flag 的"在 off 清单里"分支——False 且不告警（用户确实
+        # 说了"关"，只是用空串说的）。
         return False
     if v in ON_TOKENS:
         return True
@@ -536,11 +522,10 @@ def read_int(
     lo: Optional[int] = None,
     hi: Optional[int] = None,
 ) -> int:
-    """Read an integer env var, clamped when bounds are declared.
+    """读一颗整数环境变量；声明了 bounds 时夹取。
 
-    Preserves ``_env_int`` semantics: a value that fails ``int(float(raw))``
-    returns ``default``. What is new: the failure is recorded so ``doctor``
-    can tell the operator instead of leaving them guessing.
+    保持 ``_env_int`` 的语义：``int(float(raw))`` 失败的值返回 ``default``。
+    新增的是把失败记下来，让 ``doctor`` 告诉运维，而不是让他猜。
     """
     raw = value_of(name)
     if raw is None or raw.strip() == "":
@@ -575,7 +560,7 @@ def read_float(
     lo: Optional[float] = None,
     hi: Optional[float] = None,
 ) -> float:
-    """Float sibling of ``read_int``. Same clamping and warning rules."""
+    """``read_int`` 的浮点同胞。同样的夹取与告警规则。"""
     raw = value_of(name)
     if raw is None or raw.strip() == "":
         return default
@@ -602,13 +587,12 @@ def read_float(
     return val
 
 
-# ─── validity predicate used by W2's config audit ───────────────────────
+# ─── W2 配置审计用的有效性谓词 ─────────────────────────────────────────
 def is_valid_value(entry: EnvVar, raw: str) -> tuple[bool, str]:
-    """Decide whether ``raw`` (a string) parses under ``entry.kind``.
+    """判断 ``raw``（字符串）能不能按 ``entry.kind`` 解析。
 
-    Returns ``(ok, why)``. ``why`` is the human-readable reason on failure;
-    empty on success. W2 uses this to colour a set-but-invalid env as ✗ and
-    to build the ``fix:`` line without duplicating the parse rules here.
+    返回 ``(ok, why)``。``why`` 是失败时给人读的原因；成功时为空。W2 用它把
+    已设但非法的 env 标成 ✗，并生成 ``fix:`` 行，而不在这里复制一份解析规则。
     """
     if raw is None:
         return True, ""
@@ -637,8 +621,8 @@ def is_valid_value(entry: EnvVar, raw: str) -> tuple[bool, str]:
             if val < lo or val > hi:
                 return False, f"outside {lo:g}..{hi:g}"
         return True, ""
-    # str / secret / hostlist / path / url / enum: every non-empty string is
-    # structurally valid; enum bounds check below if set.
+    # str / secret / hostlist / path / url / enum：每个非空字符串在结构上都
+    # 合法；enum 的 bounds 在下面检查。
     if entry.kind == "enum" and entry.bounds:
         allowed = entry.bounds
         if isinstance(allowed, Iterable) and v not in {str(a).lower() for a in allowed}:

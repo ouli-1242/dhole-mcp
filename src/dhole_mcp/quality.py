@@ -7,8 +7,9 @@ agent 该读哪一句（`_agent_hints` / `_with_agent_hints`）。它们与"怎�
 是两件事，所以此前 1,141 行一直压在 11k 行文件的中间，改提示语要重读整个抓取层。
 
 依赖是查过的，不是猜的：ast 把块内定义与块外引用分开之后，这一块对 server 的
-模块级名字零需求，需要的只有 stdlib、`context` 的按次通道、`audit` / `extractor` /
-`envelope` / `errors` / `models` / `pdf_extractor` / `robots` 这几处早已独立成模块的东西。
+模块级名字零需求，需要的只有 stdlib、`actions` 的那一句可抄形状、`context` 的按次
+通道、`audit` / `extractor` / `envelope` / `errors` / `models` / `pdf_extractor` /
+`robots` 这几处早已独立成模块的东西。
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from urllib.parse import urlparse
 
 from dhole_mcp import install as _install
 from dhole_mcp import injection
+from dhole_mcp.actions import _CONFIRM_SNIPPET, _EVALUATE_RERUN
 from dhole_mcp.audit import _audit_event
 from dhole_mcp.focus import snap_to_boundary
 from dhole_mcp.context import (
@@ -55,16 +57,15 @@ from dhole_mcp.robots import (
 from dhole_mcp.security import (TIMEOUT_MAX_MS, URL_SHAPE_RECOVERY, target_is_private)
 
 
-# ─── Content quality detection (module-level, used by the class) ─────
+# ─── 内容质量判定（模块级，类里共用） ─────
 
-# Heuristic thresholds for catching JS-rendered SPAs whose HTTP shell text
-# doesn't match the known signal phrases (e.g. quotes.toscrape.com/js returns
-# a nav-only shell). Scoped to the HTTP tier so stealthy-rendered low-text
-# pages (image galleries, canvas apps) don't false-positive.
-_JS_SHELL_MIN_BODY_BYTES = 3000   # raw HTML body must be at least this large
-_JS_SHELL_MIN_TEXT_CHARS = 200    # ...while extracted text is below this
-_JS_SHELL_SMALL_FLOOR_BYTES = 500  # a small shell still has to be this heavy...
-_JS_SHELL_MARKUP_RATIO = 8         # ...and hold this many bytes per visible char
+# 用来识别 JS 渲染型 SPA 的启发式阈值：这类站点的 HTTP 空壳文本与已知信号句
+# 对不上（例如 quotes.toscrape.com/js 只交回一个纯导航壳）。只作用于 HTTP 档，
+# 免得 stealthy 渲染出来的低文字页面（图片画廊、canvas 应用）被误判。
+_JS_SHELL_MIN_BODY_BYTES = 3000   # 原始 HTML body 至少要有这么大
+_JS_SHELL_MIN_TEXT_CHARS = 200    # ……而抽出的文字要低于这个数
+_JS_SHELL_SMALL_FLOOR_BYTES = 500  # 小空壳也得有这么重……
+_JS_SHELL_MARKUP_RATIO = 8         # ……且每个可见字对应这么多字节
 
 _JS_SHELL_SIGNALS = [
     "enable javascript", "you need to enable javascript",
@@ -231,11 +232,10 @@ def _report_obfuscation(result: ResponseModel) -> None:
     result.metadata = {**(result.metadata or {}), "obfuscated_body": finding}
 
 
-# Cloudflare challenge page markers. These appear in the raw HTML of CF
-# interstitial / Turnstile challenge pages (which can return 200). Used by
-# _is_js_shell to detect CF pages that bypass the generic JS-shell signals
-# (large HTML body with CF-specific scripts). Without this, extraction_type=html
-# (used by web_crawl) gets the challenge page as "content" and never escalates.
+# Cloudflare 校验页的标记。它们出现在 CF 插页 / Turnstile 校验页的原始 HTML 里
+# （这类页面可能返回 200）。`_is_js_shell` 靠它们认出绕过了通用 JS 空壳信号
+# （大 HTML body + CF 专有脚本）的 CF 页面。没有这一条，extraction_type=html
+# （web_crawl 走的那条）会把校验页当成「正文」交回，而且永远不会升级。
 _CF_CHALLENGE_SIGNALS = [
     "challenges.cloudflare.com/turnstile",
     "cf-turnstile",
@@ -252,11 +252,9 @@ _GEO_REDIRECT_SIGNALS = [
     "country selector", "region selector",
 ]
 
-# Login/auth-wall detection. A page redirected to a sign-in endpoint whose
-# content is dominated by login prompts is a wall, not content (e.g. zhihu.com
-# -> /signin returns only the login form with HTTP 200). URL path signals are
-# combined with content signals to avoid false-positives on legit pages that
-# merely include a "Sign in" link in their nav.
+# 登录墙判定。被重定向到登录端点、正文又以登录提示为主的页面是一堵墙，不是正文
+# （例如 zhihu.com -> /signin 只返回登录表单，状态码却是 HTTP 200）。URL 路径信号
+# 与正文信号合起来判，免得把导航栏里只是带了一条 "Sign in" 链接的正常页面误报。
 _AUTH_WALL_PATH_SIGNALS = (
     "/signin", "/sign-in", "/login", "/accounts/login", "/member/login",
     "/passport/login", "/login.aspx", "/auth/login", "/logon",
@@ -269,21 +267,19 @@ _AUTH_WALL_CONTENT_SIGNALS = (
     "login to view", "you must be logged in", "please login",
 )
 
-# Looser vocabulary used only as a CONFIRMATION when the URL already points at
-# a sign-in endpoint. Not usable standalone: "sign in"/"登录" live in normal
-# navbars, so alone they prove nothing.
+# 更宽的词表，只在 URL 已经指向登录端点时用作**确认**。不能单独用："sign in"/"登录"
+# 在普通导航栏里就有，单凭它们证明不了什么。
 _AUTH_WALL_WEAK_SIGNALS = (
     "sign in", "log in", "password", "username", "忘记密码", "登录",
 )
 
 
 def _is_auth_wall(result) -> bool:
-    """True if the page is a login/sign-in wall rather than content.
+    """页面是登录墙而不是正文时返回 True。
 
-    Two paths to a hit: (a) the URL points at a sign-in endpoint AND any
-    sign-in vocabulary (strong or weak) is present, or (b) the extracted text
-    is dominated by >=3 strong sign-in prompts regardless of URL. A stray
-    "Sign in" link in a navbar on a non-login page never triggers this.
+    两条命中路径：(a) URL 指向登录端点，且出现任意一条登录词（强或弱）；或
+    (b) 无论 URL 是什么，抽出的文字里强登录提示达到 3 条以上并占主导。非登录页
+    导航栏里偶见的一条 "Sign in" 链接不会触发本判定。
     """
     try:
         path = urlparse(result.url).path.lower()
@@ -298,11 +294,10 @@ def _is_auth_wall(result) -> bool:
     return strong_hits >= 3
 
 
-# Anti-scraping walls that answer with HTTP 200 and the challenge page as the
-# body. The existing bot-challenge check only fires on 403/503, so a 200
-# challenge (sogou's /antispider link wrapper, "此验证码用于确认…" + VerifyCode)
-# came back content_ok=true and agents cited a captcha as if it were an article.
-# Length-gated on purpose: a status-200 article ABOUT captchas is not a wall.
+# 以 HTTP 200 + 校验页正文作答的反爬墙。原有的 bot-challenge 检查只在 403/503 上
+# 触发，于是一个 200 的校验页（搜狗的 /antispider 链接包装页，"此验证码用于确认…"
+# + VerifyCode）回来时 content_ok=true，agent 把验证码当成文章引用了。
+# 故意加长度闸：一篇状态 200、**讲**验证码的文章不是墙。
 _BOT_WALL_PATH_SIGNALS = (
     "/antispider", "/anti-spider", "/captcha", "/checkcaptcha", "/verifycode",
     "/__cf_chl", "/_sec/verify", "/check_account", "/risk", "/tbui",
@@ -314,13 +309,12 @@ _BOT_WALL_CONTENT_SIGNALS = (
     "unusual traffic", "access denied", "request blocked", "blocked your request",
     "captcha-delivery.com", "enter the captcha", "solve the captcha",
 )
-# A challenge page carries no real prose. Above this many characters the page is
-# treated as content that merely mentions verification, and is left alone.
+# 校验页不会有大段真正的文章。超过这个字符数就按「只是提到了验证」的正文处理，不再判墙。
 _BOT_WALL_MAX_TEXT_CHARS = 1500
 
 
 def _is_bot_wall(result: ResponseModel) -> bool:
-    """True when a 2xx response is an anti-bot/CAPTCHA challenge, not content."""
+    """2xx 响应是反爬/CAPTCHA 校验页而不是正文时返回 True。"""
     if result.status and not (200 <= result.status < 400):
         return False
     content_str = " ".join(result.content or []).lower().strip()
@@ -335,15 +329,13 @@ def _is_bot_wall(result: ResponseModel) -> bool:
     return any(s in content_str for s in _BOT_WALL_CONTENT_SIGNALS)
 
 
-# Soft-failure pages: HTTP 200 whose body is technically non-empty but carries
-# no content — a client-side error view, a stalled loader, or an interstitial.
-# Measured during a ~60-call ceiling test: x.com answered 200 with
-# "Try reloading" and douyin.com with "Please wait...", both content_ok=true.
-# These differ from a bot wall in that they carry no challenge wording at all,
-# so the phrase list alone is useless without a length gate — a real article
-# can quote "something went wrong" in passing. The gate is tighter than the bot
-# wall's (600 vs 1500) because these phrases are far more common in ordinary
-# prose, so a longer body is evidence of real content, not of a shell.
+# 软失败页：HTTP 200，body 技术上非空却没有内容 —— 客户端错误视图、卡住的加载器、
+# 或插页。一次约 60 次调用的上限测试里实测：x.com 返回 200 + "Try reloading"，
+# douyin.com 返回 200 + "Please wait..."，两者都是 content_ok=true。
+# 它们与 bot 墙的区别是完全没有校验文案，所以光有词表、没有长度闸没有用 ——
+# 真文章也可能顺口引一句 "something went wrong"。这道闸比 bot 墙的更紧
+# （600 对 1500），因为这些话在普通文章里常见得多，body 一长就是真内容的证据，
+# 不是空壳。
 _SOFT_FAILURE_SIGNALS = (
     "try reloading", "try again later", "please try again",
     "something went wrong", "this page isn't working",
@@ -351,17 +343,16 @@ _SOFT_FAILURE_SIGNALS = (
     "please wait...", "please wait…",
     "页面加载失败", "加载失败", "请稍后重试", "网络异常",
 )
-# Above this many characters the page is treated as content that merely
-# mentions a failure, and is left alone.
+# 超过这个字符数就按「只是提到了失败」的正文处理，不再判。
 _SOFT_FAILURE_MAX_TEXT_CHARS = 600
 
 
 def _is_soft_failure(result: ResponseModel) -> bool:
-    """True when a 2xx response is an error/placeholder view, not content."""
+    """2xx 响应是错误/占位视图而不是正文时返回 True。"""
     if result.status and not (200 <= result.status < 400):
         return False
-    # A PDF's extracted text is never an HTML error view; the PDF branch in
-    # _detect_content_issue owns that failure class ("pdf_no_text").
+    # PDF 抽出的文字永远不是 HTML 错误视图；那一类失败归 `_detect_content_issue`
+    # 的 PDF 分支（"pdf_no_text"）。
     if "application/pdf" in (result.content_type or "").lower():
         return False
     content_str = " ".join(result.content or []).lower().strip()
@@ -371,16 +362,15 @@ def _is_soft_failure(result: ResponseModel) -> bool:
 
 
 def _is_cloudflare_from_response(result: ResponseModel) -> bool:
-    """Check if a ResponseModel indicates a bot challenge page.
+    """判断一个 ResponseModel 是否指向 bot 校验页。
 
-    Detects common bot challenge signatures in page content including embedded
-    Cloudflare challenges, generic CAPTCHA pages, and verification prompts.
-    Does NOT distinguish DataDome/Turnstile from ordinary bot checks.
+    识别页面内容里常见的 bot 校验特征，包括内嵌的 Cloudflare 校验、通用 CAPTCHA
+    页与验证提示。不区分 DataDome/Turnstile 与普通 bot 检查。
 
-    IMPORTANT: Only meaningful on error status codes (403, 503). A status-200
-    page about web security that mentions "cloudflare" is not a bot challenge.
+    重要：只在错误状态码（403、503）上有意义。一个状态 200、讲 Web 安全的页面
+    提到 "cloudflare"，不是 bot 校验页。
     """
-    # Guard: only check on error status codes where bot challenges make sense
+    # 守卫：只在 bot 校验说得通的错误状态码上检查
     if result.status not in (403, 503):
         return False
     content_str = " ".join(result.content).lower()
@@ -392,35 +382,30 @@ def _is_cloudflare_from_response(result: ResponseModel) -> bool:
 
 
 def _never_escalate(result: ResponseModel, url: str) -> bool:
-    """True when a browser render cannot change the outcome, so don't spend one.
+    """浏览器渲染改变不了结果时返回 True —— 这一档就不必花。
 
-    Only GET escalates (G8). The browser tier NAVIGATES — it cannot resend a
-    request body, and a HEAD is answered by headers rather than a document. So a
-    rendered follow-up would show a DIFFERENT request than the one that failed and
-    report it as the answer to yours: a POST that got a 500 becoming a "success"
-    over the login form, a HEAD becoming a full page download. Say what the GET
-    said, and let the caller decide.
+    只有 GET 才升级（G8）。浏览器档是**导航**：它重发不了请求体，而 HEAD 的答案
+    在响应头里而不是文档里。所以渲染后的重放会展示一个与失败请求**不同**的请求，
+    还把它的结果当成你那一发的答案：一个吃了 500 的 POST 在登录表单上变成「成功」，
+    一个 HEAD 变成整页下载。GET 说了什么就说什么，让调用方自己决定。
 
-    .pdf URLs: the body is binary - either %PDF or a login/error redirect.
-    image/* responses: same reasoning - a stealthy render of a PNG adds no text
-    (patchright gets a synthetic HTML document, not the bytes), and the OCR
-    verdict from _translate_response is final. This guard is load bearing: the
-    image branches return content=[] on a 200 when OCR is missing, failed or
-    found nothing, and an empty 200 body is exactly the shape _is_js_shell()
-    escalates on - 30-40s for the same picture.
+    .pdf URL：body 是二进制 —— 要么是 %PDF，要么是登录/错误重定向。
+    image/* 响应：同理 —— 对 PNG 做 stealthy 渲染加不出任何文字（patchright 拿到
+    的是一份合成 HTML 文档，不是原始字节），而 `_translate_response` 给出的 OCR
+    判决是终审。这道守卫是承重的：OCR 缺失、失败或什么也没找到时，图片分支在 200
+    上返回 content=[]，而空的 200 body 正是 `_is_js_shell()` 会升级的形状 ——
+    为同一张图白花 30–40 秒。
 
-    Deliberately NOT applied to the archive fallback: a gone image URL should
-    still get a Wayback snapshot, so this only gates the browser tier.
+    故意**不**用于 archive 兜底：一个已经消失的图片 URL 仍应拿到 Wayback 快照，
+    所以这只拦浏览器档。
 
-    XML/JSON are refused for the same reason as an image, and the measurement is
-    worse: docs.vllm.ai/sitemap.xml answered 428KB of clean ``<?xml`` from the
-    HTTP tier in 0.6s, and the stealthy tier that replaced it returned 2,335,300
-    chars of Chromium's own XML viewer (``<html xmlns=...><style id=
-    "xml-viewer-style">``) at 5.4s - 5.5x the bytes, none of them the document,
-    with content_ok=true and page_type=xml so nothing looked wrong. A browser does
-    not render data documents, it frames them. The URL is checked as well as the
-    media type because the tier worth refusing is often the one that failed with
-    no Content-Type header at all.
+    XML/JSON 与图片同理拒绝，实测更糟：docs.vllm.ai/sitemap.xml 在 HTTP 档
+    0.6 秒交回 428KB 干净的 ``<?xml``，而顶替它的 stealthy 档在 5.4 秒返回
+    2,335,300 个字符的 Chromium 自带 XML 查看器（``<html xmlns=...><style id=
+    "xml-viewer-style">``）—— 字节数是 5.5 倍，没有一个是那份文档，却带着
+    content_ok=true 与 page_type=xml，看上去毫无问题。浏览器不渲染数据文档，
+    它把数据文档装进框里。URL 与媒体类型一起查，因为值得拒绝的那一档，往往正是
+    连 Content-Type 头都没有、失败掉的那一档。
     """
     if _METHOD.get() != "GET":
         return True
@@ -526,44 +511,37 @@ def _auth_wall_step(url: str) -> str:
 
 
 def _is_js_shell(result: ResponseModel) -> bool:
-    """Check if a response contains only a JS-only placeholder, not real content.
+    """响应只有 JS 占位符、没有真正正文时返回 True。
 
-    Used by web_read to decide whether to escalate from HTTP to stealthy.
+    web_read 用它决定要不要从 HTTP 升级到 stealthy。
     """
-    # Data documents are not JS shells. The "large body, little text" heuristic
-    # below describes an HTML shell; a PDF is a container, and one that OCR
-    # rescued is small-text BY CONSTRUCTION (a single scanned page reads as ~100
-    # chars against a ~10 KB file). _detect_content_issue only guarded its
-    # zero-text branch, so a successfully OCR'd scan fell through to the
-    # heuristic and came back error=js_shell_detected / content_ok=false — the
-    # content was right and the verdict was wrong, on the one path that had just
-    # done the most work to earn trust.
+    # 数据文档不是 JS 空壳。下面「大 body、少文字」那条启发式描述的是 HTML 空壳；
+    # PDF 是容器，而被 OCR 救回来的那一份**天生**字就少（一页扫描件对着 ~10 KB 的
+    # 文件只会读出 ~100 个字符）。`_detect_content_issue` 只守住了零文字那一支，
+    # 于是一份 OCR 成功的扫描件落到启发式里，回来是
+    # error=js_shell_detected / content_ok=false —— 正文是对的，判词是错的，而且
+    # 出在刚刚付出最多努力去挣信任的那条路上。
     #
-    # The guard lives here rather than in _detect_content_issue because this
-    # function also answers the ESCALATION question (see the three call sites in
-    # the fetch pipeline): rendering a PDF in a browser cannot produce anything
-    # the extractor did not already have, which is what the wrong next_action
-    # was telling callers to do. One guard covers both. Early-returning "" from
-    # _detect_content_issue instead would also have swallowed the http_error_4xx
-    # checks that follow it.
+    # 这道守卫放在这里而不是 `_detect_content_issue` 里，是因为本函数还回答**升级**
+    # 那个问题（见抓取管线里的三处调用）：在浏览器里渲染 PDF 产不出抽取器手上没有的
+    # 东西，而错误的 next_action 正是在叫调用方这么做。一道守卫同时管住两件事。若改成
+    # 在 `_detect_content_issue` 里提前 return ""，反而会吞掉它后面的 http_error_4xx
+    # 检查。
     if "application/pdf" in (result.content_type or "").lower():
         return False
 
     content_str = " ".join(result.content).lower().strip()
     if not content_str:
-        # Empty content on a success status = JS shell (or a genuinely blank
-        # page). On a 4xx/5xx it is an HTTP error, not a rendering problem:
-        # httpbin /status/404 answers with an empty body, and calling that a
-        # "JS shell" told agents to burn a 40s browser escalation that cannot
-        # change the outcome. status 0 (network/local failure) keeps the old
-        # answer - 0 < 400.
+        # 成功状态码上出现空正文 = JS 空壳（或真的空白页）。4xx/5xx 上是 HTTP
+        # 错误，不是渲染问题：httpbin /status/404 返回的就是空 body，把它叫作
+        # "JS shell" 等于让 agent 白烧一次 40 秒的浏览器升级，而那次升级改变不了
+        # 结果。status 0（网络/本地失败）保留旧的答案 —— 0 < 400。
         #
-        # 204/205/304 are excluded on the same grounds as 4xx, from the other
-        # direction: these three say "no body" IN THE STATUS LINE. Rendering
-        # them cannot produce content - a browser answers a 204 with
-        # ERR_ABORTED - so calling one a shell promises a fix that does not
-        # exist. Same verdict as `_detect_content_issue`'s early return; the two
-        # must not drift, or the label and the escalation disagree.
+        # 204/205/304 与 4xx 同理排除，只是从另一头看：这三者是在状态行里**说**
+        # 了「没有 body」。渲染它们产不出内容 —— 浏览器对 204 只会回
+        # ERR_ABORTED —— 所以把其中一个叫空壳，承诺的是一个不存在的修法。判定与
+        # `_detect_content_issue` 的提前返回一致；两处不许漂移，否则标签与升级
+        # 建议会互相矛盾。
         if result.status in (204, 205, 304):
             return False
         return result.status < 400
@@ -571,21 +549,19 @@ def _is_js_shell(result: ResponseModel) -> bool:
         return True
     if len(content_str) <= _JS_SHELL_ZH_MAX_TEXT_CHARS and any(
             signal in content_str for signal in _JS_SHELL_SIGNALS_ZH):
-        # Localized walls are the same failure; the length gate is what keeps a
-        # Chinese tutorial about enabling JavaScript out of this branch.
+        # 本地化的墙是同一个失败；长度闸的作用就是把一篇讲「如何启用 JavaScript」
+        # 的中文教程挡在这个分支之外。
         return True
-    # Cloudflare challenge pages can return 200 with large HTML (Turnstile
-    # scripts, challenge-platform divs). With extraction_type=html (used by
-    # web_crawl), the raw HTML is large so the text-length heuristic below
-    # doesn't trigger. Check for CF-specific markers to catch these.
+    # Cloudflare 校验页可以带着大 HTML 返回 200（Turnstile 脚本、
+    # challenge-platform 的 div）。在 extraction_type=html（web_crawl 走的那条）
+    # 下，原始 HTML 很大，下面的文字长度启发式不会触发。查 CF 专有标记来抓这些。
     if result.fetcher_used == "http" and result.status == 200:
         if any(signal in content_str for signal in _CF_CHALLENGE_SIGNALS):
             return True
-    # Heuristic: the HTTP tier returned a 200 with a large HTML body but almost
-    # no extractable text -> the page is JS-rendered and HTTP got the empty shell
-    # (e.g. a SPA whose nav-only shell doesn't match the known signal phrases).
-    # Scoped to the HTTP tier: a stealthy result with little text from a large
-    # page is a genuinely low-text page (image gallery / canvas), not a shell.
+    # 启发式：HTTP 档返回 200 + 大 HTML body，却几乎抽不出文字 -> 页面是 JS 渲染
+    # 的，HTTP 只拿到了空壳（例如一个纯导航壳、与已知信号句对不上的 SPA）。
+    # 只作用于 HTTP 档：stealthy 结果字少但页面很大，那是真正的低文字页面
+    # （图片画廊 / canvas），不是空壳。
     if result.fetcher_used == "http" and result.status == 200 \
             and result.total_size_bytes > _JS_SHELL_MIN_BODY_BYTES:
         text_len = extracted_chars(result)
@@ -643,18 +619,16 @@ def extracted_chars(result: ResponseModel) -> int:
 
 
 def _collapsed_by_both_rulers(result: ResponseModel, extracted: int) -> bool:
-    """The extractor lost text on BOTH rulers this response carries.
+    """抽取器在这份响应自带的两把尺上都丢了字。
 
-    `visible_text_chars` counts the whole page, chrome included;
-    `_dom_chrome_free_chars` removes nav/header/footer but keeps <aside>, and is
-    measured lazily by `server._attach_dom_visible_chars` — for thin bodies
-    always, and for a large body only when the whole-page ratio already fired. A
-    complete article under a heavy nav can look collapsed on the first ruler
-    while the second says the extractor covered the prose (R04-016a: 19k
-    extracted against a 39k page, with the article running to its last section).
-    Ask both; an unmeasured second ruler (-1) keeps the old verdict. <aside> is
-    kept on purpose: the `/longaside` control loses real text there, and a
-    denominator that strips it would call that loss invisible.
+    `visible_text_chars` 数的是整页，含页头页脚导航；`_dom_chrome_free_chars`
+    去掉 nav/header/footer 但保留 <aside>，由 `server._attach_dom_visible_chars`
+    懒测量 —— 薄 body 每次都量，大 body 只在整页比值已经触发时才量。一篇完整文章
+    压在很重的导航下面，在第一把尺上看着像塌陷，而第二把尺说抽取器盖住了正文
+    （R04-016a：39k 的页面抽出 19k，文章一直排到最后一节）。
+
+    两把都问；第二把没量过（-1）就维持旧判词。<aside> 是故意留着的：`/longaside`
+    对照组在那里丢了真字，而一个把它剥掉的分母会把那次丢失说成看不见。
     """
     if not is_extraction_collapsed(extracted, result.visible_text_chars):
         return False
@@ -961,14 +935,14 @@ def body_substance(body: str, visible: int, page_bytes: int = 0) -> tuple[str, s
 
 
 def _schema_value_empty(value: Any) -> bool:
-    """True when a schema field did not answer: '', [], {}, 0, None.
+    """schema 字段没有作答时返回 True：''、[]、{}、0、None。
 
-    Used to tell "the extractor ran and matched nothing" (a failure the caller
-    must see) from "some optional field was absent" (a normal partial result).
+    用来区分「抽取器跑了、什么也没匹配到」（调用方必须看见的失败）与
+    「某个可选字段本来就没有」（正常的部分结果）。
 
-    Recursive, because a nested record (G14) hides the same failure: a row whose
-    every field came back '' is a list with one element, and treating "non-empty
-    list" as "matched" would report a page that answered nothing as a success.
+    递归，因为嵌套记录（G14）藏着同一种失败：一行里每个字段回来都是 ''，它其实是
+    只含一个元素的列表，而把「非空列表」当成「匹配到了」会把一个什么也没答的页面
+    报成成功。
     """
     if value is None:
         return True
@@ -988,11 +962,11 @@ _RASTER_IMAGE_TYPES = frozenset({
 
 
 def _is_raster_image(result: ResponseModel) -> bool:
-    """True for a bit-mapped picture (the kind OCR transcribes), not for SVG.
+    """是位图图片（OCR 转写的那种）时返回 True，SVG 不算。
 
-    The distinction is the body's own nature, not the MIME prefix: an SVG IS its
-    markup, so an empty read of one is a reader problem worth naming, while a PNG
-    has no text layer to read at all and OCR has already said what it could see.
+    区别在 body 自己的性质，不在 MIME 前缀：SVG **就是**它的标记，所以读出来是空的
+    是一个该说出来的读取器问题；而 PNG 根本没有可读的文字层，OCR 已经说了它能看见
+    什么。
     """
     ct = (result.content_type or "").lower().split(";")[0].strip()
     return ct in _RASTER_IMAGE_TYPES
@@ -1021,67 +995,57 @@ _COLLAPSE_RECOVERY = (
 
 
 def _detect_content_issue(result: ResponseModel) -> str:
-    """Detect content quality issues in a response. Returns error string or ''.
+    """检测响应里的内容质量问题，返回错误串或 ''。
 
-    Called on the final result to give the caller a signal that content may be unusable,
-    even when HTTP status is 200. Sets the error field so AI agents can detect failures
-    without having to parse content strings themselves.
+    在最终结果上调用，给调用方一个「内容可能不可用」的信号，即使 HTTP 状态是 200。
+    它把结果写进 error 字段，让 AI agent 不必自己解析正文就能发现失败。
 
-    Note: Bot challenge detection is only applied to 403/503 responses. Legitimate
-    articles about web security may contain "cloudflare" in body text with status 200.
+    注：bot 校验检测只对 403/503 响应生效。状态 200、讲 Web 安全的正常文章正文里
+    可能含有 "cloudflare"。
     """
     content_str = " ".join(result.content).lower().strip()
 
-    # A 304 has no body because the caller asked for none (G23). Every test below
-    # judges the quality of a body that does not exist, and js_shell_detected
-    # turned the correct answer to "has this changed?" into a failure the agent
-    # then retried harder (with a browser launch, in the measured case).
+    # 304 没有 body，因为调用方本来就没要（G23）。下面每一项检查都在评判一个不
+    # 存在的 body 的质量，而 js_shell_detected 把「变了吗？」这个问题的正确答案
+    # 变成一次失败，agent 于是更用力地重试（实测那一发还起了浏览器）。
     #
-    # 204/205 are the same shape from the other side: the ORIGIN declared "no
-    # content" in the status line itself. Measured on httpbin /status/204: the
-    # empty body fell through to the shell heuristic, escalated to a browser that
-    # can only produce ERR_ABORTED on a 204, and the call came back
-    # `all_tiers_failed` claiming no HTTP response had been received - about a
-    # response that had arrived with a status code in it.
+    # 204/205 是同一形状的另一面：**源站**在状态行里就声明了「没有内容」。在
+    # httpbin /status/204 上实测：空 body 落到空壳启发式里，升级到一个在 204 上
+    # 只能产出 ERR_ABORTED 的浏览器，调用回来是 `all_tiers_failed`，声称没有收到
+    # 任何 HTTP 响应 —— 而那份响应连状态码都带回来了。
     if result.status in (304, 204, 205):
         return ""
 
-    # PDFs are never JS shells. A scanned/image PDF with no text layer is a
-    # distinct failure class ("pdf_no_text"), not a JavaScript rendering issue.
-    # Previously the "large body, little text" heuristic mislabeled it as a JS
-    # shell, which misled agents trying to fix the wrong root cause.
+    # PDF 永远不是 JS 空壳。没有文字层的扫描/图片 PDF 是另一类失败
+    # （"pdf_no_text"），不是 JavaScript 渲染问题。此前「大 body、少文字」的启发式
+    # 把它误判成 JS 空壳，误导 agent 去修错误的根因。
     if "application/pdf" in (result.content_type or "").lower():
         if not content_str or "no text detected" in content_str:
             return "pdf_no_text: scanned/image PDF with no extractable text layer (OCR found nothing)"
-        # PDF with a text layer: fall through so status/error checks still apply.
+        # 有文字层的 PDF：继续往下走，status/error 检查仍然适用。
 
-    # An image's OCR result is not a web page and must not be judged by the
-    # heuristics that describe one. Measured on httpbin /image/png: OCR ran and
-    # transcribed the single glyph it could find, and because 1 char is "a big
-    # body with almost no text", the response went out labelled
-    # `js_shell_detected` with content_ok=false — the OCR answer was right, the
-    # verdict about it was wrong, and the diagnosis went on to claim the browser
-    # tier was unavailable on a machine that had just rendered a page with it.
-    # A picture carrying no text is a fact about the picture; rendering it in a
-    # browser frames it instead of transcribing it (see _never_escalate). SVG is
-    # deliberately outside this: its markup is the content, so an empty read of
-    # one stays a reader problem worth saying out loud.
+    # 图片的 OCR 结果不是网页，不许用描述网页的启发式来评判它。在
+    # httpbin /image/png 上实测：OCR 跑了，转写出它唯一能找到的那个字形，而因为
+    # 1 个字符就是「大 body、几乎没有文字」，响应被标成 `js_shell_detected`、
+    # content_ok=false —— OCR 的答案是对的，关于它的判词是错的，诊断还接着声称浏览器
+    # 档不可用，而就在这台机器上刚刚用过它渲染页面。
+    # 一张没有文字的图片是关于图片本身的事实；在浏览器里渲染它是把它装框，不是转写
+    # 它（见 `_never_escalate`）。SVG 被故意排除在外：它的标记就是内容，所以读出空
+    # 来仍然是值得说出口的读取器问题。
     if _is_raster_image(result):
         return ""
 
-    # Walls are checked BEFORE the generic JS-shell heuristic. A login form or a
-    # captcha is also "a big body with little text", so the shell heuristic used
-    # to claim these pages first and the caller was told to re-fetch for JS
-    # rendering when the actual answer is "this page is a wall, switch source".
+    # 墙在通用 JS 空壳启发式**之前**检查。登录表单或验证码同样是「大 body、少文字」，
+    # 所以空壳启发式从前会先认领这些页面，告诉调用方为 JS 渲染再抓一次，而真正的答案
+    # 是「这页是墙，换个源」。
     if _is_auth_wall(result):
         return "auth_wall_detected: page is a login/sign-in wall, not content"
 
     if _is_bot_wall(result):
         return "bot_wall_detected: page is an anti-bot/CAPTCHA challenge, not content"
 
-    # Checked before the JS-shell heuristic: "Please wait..." / "Try reloading"
-    # are also short bodies, and labelling them a shell told agents to burn a
-    # browser escalation that renders the same error view.
+    # 在 JS 空壳启发式之前检查："Please wait..." / "Try reloading" 同样是短 body，
+    # 把它们标成空壳等于让 agent 白烧一次浏览器升级，而渲染出来还是同一个错误视图。
     if _is_soft_failure(result):
         return "soft_failure_detected: page returned an error or placeholder view with HTTP 200, not content"
 
@@ -1124,20 +1088,19 @@ def _detect_content_issue(result: ResponseModel) -> str:
     if any(signal in content_str for signal in _GEO_REDIRECT_SIGNALS):
         return "geo_redirect_detected: page returned region/country selector instead of content"
 
-    # Only check for bot challenge on error status codes. Legitimate pages
-    # (status 200) that mention "cloudflare" in body text are not bot challenges.
+    # 只在错误状态码上检查 bot 校验。正文提到 "cloudflare" 的正常页面
+    # （状态 200）不是 bot 校验页。
     if result.status in (403, 503) and _is_cloudflare_from_response(result):
         return "bot_challenge_detected: page returned bot challenge/verification page"
 
-    # Universal: any 4xx/5xx is an error, even if the server returned an HTML
-    # error page as content. Without this, a 404 page gets treated as real
-    # content (error="" -> agent trusts it). Set the error field so agents,
-    # cache, and archive fallback all see it as a failure.
+    # 通用规则：任何 4xx/5xx 都是错误，即使服务器把一张 HTML 错误页当作正文交回。
+    # 没有这一条，404 页会被当成真正的内容（error="" -> agent 信了它）。把 error
+    # 字段设上，agent、缓存与档案兜底才会都把它看成失败。
     if result.status >= 400:
         return status_error_sentence(result.status)
     if result.status == 0:
-        # Preserve the original error content (from stealthy_fetch / HTTP layer)
-        # so downstream classify_network_error() can identify the failure type.
+        # 保留原始错误内容（来自 stealthy_fetch / HTTP 层），下游
+        # classify_network_error() 才能认出失败类型。
         existing = result.error or ""
         if existing and not existing.startswith("network_error"):
             return f"network_error: {existing[:150]}"
@@ -1178,18 +1141,16 @@ def _stamp_chain_receipts(result: ResponseModel, page_action: Any) -> None:
 
 
 def _chain_ran_ok(result: ResponseModel) -> bool:
-    """Did this call's own action chain run to the end?
+    """这一发自己的动作链跑到底了吗？
 
-    A receipt with `ok=false` but a deliberate stop key (`pending_approval` /
-    `not_submitted` / `cut_by_budget`) is not a failure — it is the submit gate
-    doing exactly what it was built to do, and the earlier steps really ran.
+    `ok=false` 但带着一个**故意**的停止键（`pending_approval` / `not_submitted` /
+    `cut_by_budget`）的回执不是失败 —— 那是提交闸在做它生来要做的事，前面的步骤
+    确实跑了。
 
-    This exists because a page-quality verdict and an action chain answer different
-    questions, and the top-level `error` slot can only hold one sentence (round 01,
-    R01-028): a chain that filled a form and stopped at the confirm gate came back
-    `error="auth_wall_detected…"` + `content_ok=false`, which an L1 reader took as
-    "nothing worked" — and the advice they got was to run the chain again, i.e. to
-    fill the form twice.
+    之所以需要它，是因为页面质量的判词与动作链回答的是两个不同的问题，而顶层的
+    `error` 格子只能放一句话（round 01, R01-028）：一条填完表单、停在确认闸前的链
+    回来是 `error="auth_wall_detected…"` + `content_ok=false`，L1 读者把它读成
+    「什么都没成」，而得到的建议是重跑那条链，也就是把表单填两遍。
     """
     receipts = _action_receipts(result)
     if not receipts:
@@ -1204,8 +1165,8 @@ def _chain_ran_ok(result: ResponseModel) -> bool:
 
 
 def _quality_way_out(result: ResponseModel) -> str:
-    """A failing content verdict always owes a next step (R01-028, P08: the call
-    was judged failed with `next_action=""` — the reader learned only "no")."""
+    """正文判决失败时总要欠一个下一步（R01-028, P08：那一发被判失败，而
+    `next_action=""` —— 读者只学到一句「不行」）。"""
     fired = (result.error
              or (result.metadata or {}).get("content_issue")
              or "the content check found no usable body on this page")
@@ -1218,12 +1179,11 @@ def _quality_way_out(result: ResponseModel) -> str:
 
 
 def _annotate_quality(result: ResponseModel) -> ResponseModel:
-    """Check content quality and set error field if issues detected. Returns same result.
+    """检查内容质量，发现问题就写 error 字段。返回同一个 result。
 
-    A HEAD response has no body BY DEFINITION (RFC 9110: the response to HEAD is the
-    one to GET with no content), so every "the body is empty / looks like a shell"
-    heuristic would fire on a perfectly good probe. The answer to a HEAD is the
-    status, the length and the type — all of which are populated.
+    HEAD 响应**按定义**没有 body（RFC 9110：对 HEAD 的响应就是对 GET 的响应去掉
+    内容），所以每一条「body 是空的 / 看起来像空壳」的启发式都会在一个完全正常的
+    探测上触发。HEAD 的答案是状态、长度和类型 —— 这三样都有值。
     """
     if not result.error and _METHOD.get() != "HEAD":
         # 一次 `save_to` 的回执不是一页，别拿页面判词去读它（R4）。它交出去的是
@@ -1236,18 +1196,16 @@ def _annotate_quality(result: ResponseModel) -> ResponseModel:
         issue = _detect_content_issue(result)
         if issue:
             if _chain_ran_ok(result):
-                # The chain question is answered by `metadata.actions`; this slot
-                # describes the PAGE. Putting the page's verdict here would make the
-                # call itself look failed, and the advice built on it would be
-                # "run it again" (R01-028). The finding still has to reach the
-                # reader: `metadata.content_issue` keeps it addressable, and the
-                # note bucket puts it in `summary` where nothing is silently dropped.
+                # 链的问题由 `metadata.actions` 回答；这个格子描述的是**页面**。
+                # 把页面的判词放在这里会让这次调用本身看起来失败了，而建立在它上面的
+                # 建议会是「再跑一遍」（R01-028）。发现仍然必须送达读者：
+                # `metadata.content_issue` 让它保持可寻址，note 桶把它放进 `summary`，
+                # 不让任何东西被悄悄丢掉。
                 #
-                # Idempotent by the recorded verdict, not by a counter: a browser
-                # page is annotated twice on the real path (once in
-                # `bulk_stealthy_fetch`, once in `_finalize_result`), and saying the
-                # same sentence twice in one summary line reads as two findings
-                # (measured live, R01-028 P5).
+                # 幂等靠记录在案的判词，不靠计数器：一条浏览器页面在真实路径上会被
+                # 标注两次（一次在 `bulk_stealthy_fetch`，一次在 `_finalize_result`），
+                # 而同一句话在一个 summary 行里说两遍，读起来就是两条发现
+                # （实测，R01-028 P5）。
                 already = (result.metadata or {}).get("content_issue")
                 if already == issue:
                     return result
@@ -1263,18 +1221,16 @@ def _annotate_quality(result: ResponseModel) -> ResponseModel:
 
 
 def _is_cacheable(result: ResponseModel) -> bool:
-    """True only for clean, usable content worth caching.
+    """只有干净、可用、值得缓存的内容才返回 True。
 
-    Excludes: error statuses (4xx/5xx), JS shells, bot-challenge pages, geo
-    redirects, all_tiers_failed, and blank/empty extractions. Caching any of
-    those would serve broken pages from cache for the whole TTL.
+    排除：错误状态码（4xx/5xx）、JS 空壳、bot 校验页、地区重定向、all_tiers_failed，
+    以及空白/空的抽取结果。缓存其中任何一个，都会在整个 TTL 里从缓存里交出坏页面。
 
-    A page an action chain stood on never reaches here at all: `web_act` forces
-    ``cache_ttl=0`` at the door (server.py, "an action's content exists only after
-    the actions"), so this gate is not the one holding that line — checked while
-    demoting the chain's page verdict out of `error` (R01-028), because the
-    demotion removes an *accidental* protection: that body used to be refused here
-    only since the wall verdict still sat in `error`.
+    动作链站过的页面根本到不了这里：`web_act` 在门口就强制 ``cache_ttl=0``
+    （server.py，"an action's content exists only after the actions"），所以这道闸
+    不是守那条线的那一道 —— 这是在把链的页面判词从 `error` 里降级时核对过的
+    （R01-028），因为降级拆掉了一层**意外**保护：那份 body 从前在这里被拒，只是
+    因为墙的判词还坐在 `error` 里。
     """
     if not (0 < result.status < 400):
         return False
@@ -1283,19 +1239,18 @@ def _is_cacheable(result: ResponseModel) -> bool:
     return bool(result.content) and any(c.strip() for c in result.content)
 
 
-# Statuses the HTTP tier hands straight to the archive fallback: the page is gone
-# or legally removed, and the browser tier is explicitly not tried (a browser gets
-# the same 404/410/451). A module constant rather than an inline tuple so it can't
-# drift out of sync with _should_try_archive(): 410 used to sit in the tuple while
-# the gate rejected it, which made that branch unreachable (KB-9).
+# HTTP 档直接交给档案兜底的状态码：页面已经消失或被合法移除，浏览器档明确不试
+# （浏览器拿到的也是同样的 404/410/451）。写成模块常量而不是内联元组，免得与
+# `_should_try_archive()` 失去同步：410 曾经坐在元组里，而那道闸拒绝它，让这个分支
+# 变成不可达（KB-9）。
 _ARCHIVE_FALLBACK_STATUSES = (404, 410, 451)
 
 
 def _is_api_error_body(result: ResponseModel) -> bool:
-    """True when a 4xx/5xx carries a machine-readable body (JSON/XML).
+    """4xx/5xx 带着机器可读的 body（JSON/XML）时返回 True。
 
-    Only for error statuses WITH a body: an empty body means the snapshot really
-    is the only content available, and that fallback stays.
+    只针对**有** body 的错误状态码：空 body 意味着快照真的是唯一可用的内容，
+    那条兜底保留。
     """
     if result.status < 400:
         return False
@@ -1306,46 +1261,41 @@ def _is_api_error_body(result: ResponseModel) -> bool:
 
 
 def _should_try_archive(result: ResponseModel) -> bool:
-    """True when the Internet Archive may have a usable snapshot of the URL.
+    """Internet Archive 可能持有这个 URL 的可用快照时返回 True。
 
-    Fires on hard-blocks (404/410/451), network failures (status 0), server errors
-    (5xx), bot challenges, and all_tiers_failed. Does NOT fire on auth_required
-    (archive won't have login-gated content either).
+    在硬封锁（404/410/451）、网络失败（status 0）、服务器错误（5xx）、bot 校验与
+    all_tiers_failed 上触发。auth_required 上**不**触发（档案站也不会有登录门后的
+    内容）。
     """
     if result.status == 304:
-        # The live site answered correctly (G23): "unchanged, no body". A snapshot
-        # would replace a true answer with an older one.
+        # 真站答对了（G23）：「没变，没有 body」。快照会把一个真答案换成更旧的。
         return False
     err = (result.error or "").lower()
     if _METHOD.get() != "GET":
-        # A snapshot is a GET of this URL from some past date. It cannot answer
-        # "did my POST succeed", and it did not see the site's reaction to the
-        # body we just sent - substituting one here reports a different request.
+        # 快照是对这个 URL 在某个过去日期的 GET。它回答不了「我的 POST 成功了吗」，
+        # 也没看见站点对我们刚发出的 body 的反应 —— 在这里替换掉，报的就是另一个请求。
         return False
     if _is_api_error_body(result):
-        # An API's own error payload is the answer; the Wayback Machine does not
-        # index API responses, so a snapshot can only be a stale HTML page from
-        # some other time. Measured: a 404 whose body was
-        # '{"error":"item 42 not found"}' came back as a 2019 snapshot with
-        # error="" and status 200 the moment archive.org had anything for that
-        # URL - the server's actual answer was replaced and nothing said so.
-        # An HTML "404 Not Found" body is different: a snapshot of a gone PAGE is
-        # often more useful than the error view, so that case still falls back.
+        # API 自己的错误载荷就是答案；Wayback Machine 不索引 API 响应，所以快照
+        # 只能是另一个时间的陈旧 HTML 页。实测：一个 body 为
+        # '{"error":"item 42 not found"}' 的 404，在 archive.org 手里有这个 URL 的
+        # 任何东西的那一刻，回来变成 2019 年的快照、error=""、status 200 ——
+        # 服务器真正的答案被替换了，而且没人事先说明。
+        # 一个 HTML 的 "404 Not Found" body 不一样：一个**页面**消失后的快照，往往
+        # 比错误视图更有用，所以那种情况仍然兜底。
         return False
     if err.startswith("proxy_unreachable"):
-        # The request never left this process, so we learned NOTHING about the
-        # site - it may be perfectly fine. Substituting a Wayback snapshot here
-        # would answer a question that was never asked (and the caller would read
-        # the dated snapshot as the live page), and it costs 10-30s on top of the
-        # failure the caller actually needs to fix: the proxy.
+        # 请求根本没离开本进程，所以关于站点我们什么也**没学到** —— 它可能完全正常。
+        # 在这里换成 Wayback 快照，等于回答一个没人问过的问题（调用方还会把带日期的
+        # 快照当成实时页面），而且要在调用方真正需要修的失败（代理）之上再花 10–30 秒。
         return False
-    if result.status in (404, 410):   # page gone/deleted, or gone for good
+    if result.status in (404, 410):   # 页面消失/被删，或永久消失
         return True
-    if result.status == 451:      # legal block
+    if result.status == 451:      # 法律封锁
         return True
-    if result.status == 0:        # network/DNS/timeout — archive may have it
+    if result.status == 0:        # 网络/DNS/超时 —— 档案站可能有
         return True
-    if result.status >= 500:      # server error
+    if result.status >= 500:      # 服务器错误
         return True
     if result.status in (403, 503) and "bot_challenge" in err:
         return True
@@ -1355,7 +1305,7 @@ def _should_try_archive(result: ResponseModel) -> bool:
 
 
 def _format_size(n: int) -> str:
-    """Human-readable byte size for the summary line."""
+    """summary 行用的人类可读字节大小。"""
     if not n:
         return "0B"
     if n >= 1024 * 1024:
@@ -1365,7 +1315,7 @@ def _format_size(n: int) -> str:
     return f"{n}B"
 
 
-# A list page's "top targets" are the pages it points INTO. These are not.
+# 列表页的「首要目标」是它**指向**的那些页面。下面这些不是。
 _LIST_TARGET_SKIP_RE = re.compile(
     r"(^|/)(login|signin|sign-in|signup|register|account|profile|subscribe|support|"
     r"contact|about|privacy|terms|cookie|cart|checkout|wishlist|search|rss|feed|"
@@ -1377,12 +1327,11 @@ _LIST_TARGET_ASSET_RE = re.compile(
 
 
 def _best_list_targets(citations: list, page_url: str, limit: int = 3) -> list[str]:
-    """Pick the links worth following from a list page, for next_action.
+    """从列表页里挑出值得跟进的链接，供 next_action 使用。
 
-    Measured on theverge.com/news: the hint said "Top targets: /, /auth/login,
-    /subscribe" - the first three citations in DOM order, which are the site's
-    header. The article links a few rows further down are what the caller came
-    for, and listing chrome sends the agent to a login wall instead.
+    theverge.com/news 上实测：提示写着 "Top targets: /, /auth/login, /subscribe" ——
+    按 DOM 顺序的前三条引用，正是站点的页头。调用方要的文章链接在下面几行，
+    列出这些页面外框只会把 agent 送去一堵登录墙。
     """
     try:
         base_host = (urlparse(page_url).netloc or "").lower()
@@ -1401,12 +1350,12 @@ def _best_list_targets(citations: list, page_url: str, limit: int = 3) -> list[s
         if _LIST_TARGET_SKIP_RE.search(path) or _LIST_TARGET_ASSET_RE.search(path):
             continue
         if path in ("", "/") or u.rstrip("/") == page_url.rstrip("/"):
-            continue  # from a list page, the homepage is not a target
+            continue  # 从列表页出发，首页不是目标
         score = 0
         if path.count("/") >= 2:
-            score += 2          # deep paths are articles; shallow ones are sections
+            score += 2          # 深路径是文章；浅路径是栏目
         if (c.get("text") or "").strip():
-            score += 1          # a link with anchor text describes its destination
+            score += 1          # 带锚文本的链接描述了它的目的地
         if base_host and (parsed.netloc or "").lower() == base_host:
             score += 1
         scored.append((-score, i, u))
@@ -1485,28 +1434,25 @@ def _network_clause(result: ResponseModel) -> str:
 
 
 def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
-    """Build (summary, next_action, content_ok) for a finalized fetch result.
+    """为一次定稿的抓取结果构造 (summary, next_action, content_ok)。
 
-    summary       — one-line status agents can pattern-match on at a glance.
-    next_action   — the obvious next call, if any (paginate / bypass robots /
-                    switch sources). Empty when there is nothing to do.
-    content_ok    — True only when real content was retrieved (status<400, no
-                    error, not a JS shell / login wall / empty page). Agents should
-                    check this before trusting content.
+    summary       —— 一行状态，agent 扫一眼就能按模式匹配。
+    next_action   —— 显而易见的下一发调用，如果有的话（翻页 / 绕过 robots /
+                     换源）。无事可做时为空。
+    content_ok    —— 只有真拿到内容时才为 True（status<400、无 error、不是 JS
+                     空壳 / 登录墙 / 空页）。agent 信任内容之前应先看这一位。
     """
     has_content = bool(result.content) and any(c.strip() for c in result.content)
-    # A HEAD carries no body by definition, so "usable" for a probe is the status
-    # line itself: 200 + Content-Length + Content-Type answered the question
-    # "does this URL work and how big is it". Requiring content here would report
-    # every successful probe as a failure (and then advise a retry).
+    # HEAD 按定义没有 body，所以对一次探测而言「可用」就是状态行本身：
+    # 200 + Content-Length + Content-Type 已经回答了「这个 URL 通不通、有多大」。
+    # 这里要求必须有内容，会把每一次成功的探测都报成失败（然后建议重试）。
     probe_ok = _METHOD.get() == "HEAD"
-    # A 304 answers "has this changed?" and carries no body BY DESIGN (G23). Its
-    # whole content is the status line, so every body-shaped test would otherwise
-    # read the one response that proves the site answered correctly as a failure.
+    # 304 回答「变了吗」，**按设计**没有 body（G23）。它的全部内容就是状态行，
+    # 否则每一条以 body 为形状的检查都会把这份「站点正确作答」的响应读成失败。
     unchanged = result.status == 304
-    # PDFs carry a quality-based content_ok verdict from the extractor (CID
-    # garbage / corruption -> False even on HTTP 200). Respect it instead of
-    # letting status-200 + has-content mask corruption (the P3 bug).
+    # PDF 带着抽取器给出的、基于质量的 content_ok 判决（CID 乱码 / 损坏 -> 即使
+    # HTTP 200 也是 False）。要尊重它，别让 status 200 + 有内容把损坏掩盖掉
+    # （P3 那个 bug）。
     if (result.quality_score or 0) > 0:
         content_ok = result.content_ok and result.status > 0 and not result.error and has_content
     else:
@@ -1530,14 +1476,13 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         content_ok = False
 
     size = result.total_extracted_chars or sum(len(c) for c in result.content)
+    window = sum(len(c) for c in result.content)
     parts: list[str] = []
     if result.status == 0:
-        # A local-file failure has nothing to do with the network; saying
-        # "network error" sent agents debugging proxies over a bad path.
-        # A security gate is the same mistake in the other direction: the CDP
-        # first-attach refusal came back "network error" while no request had
-        # ever been attempted (2026-10-05) - the reader then debugs the proxy
-        # instead of asking the one question that moves it.
+        # 本地文件失败与网络无关；说成 "network error" 会让人为一个坏路径去查代理。
+        # 安全闸是同一种错误反过来：CDP 首次 attach 被拒时回来是 "network error"，
+        # 而那时一个请求都还没尝试过（2026-10-05）—— 读者于是去查代理，而不是问那个
+        # 唯一能推动问题的东西。
         if (result.error or "").startswith("cdp_authorization_required"):
             parts.append("awaiting approval")
         elif (result.error or "").startswith("cdp_no_logged_in_context"):
@@ -1563,13 +1508,22 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
     else:
         parts.append(f"{int(result.status)} {'OK' if result.status < 400 else 'ERR'}")
     if probe_ok:
-        # Saying "0B markdown" about a HEAD describes an absence as if it were a
-        # format. The number that matters on a probe is the declared length.
+        # 对一次 HEAD 说 "0B markdown"，是把「没有」描述成一种格式。探测时真正
+        # 要紧的数字是声明的长度。
         parts.append(f"{_format_size(result.total_size_bytes)} head probe (no body by definition)")
     elif unchanged:
         parts.append("unchanged since your validators (no body by design)")
     else:
-        parts.append(f"{_format_size(size)} {result.extracted_type or 'markdown'}")
+        type_label = result.extracted_type or 'markdown'
+        # E3（R01-011）：这一行回答的是"这一发给了我多少"，不是"这一页总共多长"。
+        # 窗口短于总量时把两个数并排说 —— 只报总量会被读成"整页已到手"，于是
+        # 调用方不再续读。`[No more content.]` 是替身不是正文，不许被算成一窗。
+        if (window and size > window and result.status < 400
+                and not result.error
+                and result.content != ["[No more content.]"]):
+            parts.append(f"{_format_size(window)} of {_format_size(size)} {type_label}")
+        else:
+            parts.append(f"{_format_size(size)} {type_label}")
     if result.fetcher_used:
         parts.append(result.fetcher_used)
     if (result.source or "").lower() == "archive.org":
@@ -1606,11 +1560,10 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
 
     next_action = ""
     err = result.error or ""
-    # A login wall, an anti-bot challenge and a JS shell are the same mistake in
-    # a different costume: measured on github's redirect-to-login page, the
-    # truncation hint came FIRST and the wall's own advice second, in one string
-    # with no separator between them. Paginating a sign-in form cannot reach
-    # content, so that clause is not just out of order there - it is wrong.
+    # 登录墙、反爬校验与 JS 空壳是同一个错误换了一身衣服：在 github 的重定向到登录页
+    # 上实测，截断提示排在**前面**，墙自己的建议排在后面，两句拼在一个串里，中间
+    # 没有分隔。对着一张登录表单翻页到不了内容，所以那句在那里不只是顺序错了 ——
+    # 它是错的。
     _NOT_A_DOCUMENT = ("auth_wall_detected", "bot_wall_detected",
                        "js_shell_detected", "obfuscated_payload")
     if substance == "nav_only":
@@ -1650,11 +1603,9 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                 "not the page. Open the target the script names directly - the browser "
                 "tier is unavailable here, so it cannot follow it for you. "
                 "Do not cite this body.")
-    # A 404 page can still be long enough to be truncated, and the truncation
-    # hint used to win on ordering: a Wikipedia 404 was answered with
-    # "offset=... to continue paginating", sending the agent paging through an
-    # error page. The status is the more specific fact, so error statuses fall
-    # through to their own branches below.
+    # 404 页也可能长到被截断，而截断提示从前在顺序上会赢：一个 Wikipedia 404 被
+    # 答以 "offset=... to continue paginating"，让 agent 在一个错误页上翻页。状态码
+    # 是更具体的事实，所以错误状态码落到下面它们自己的分支。
     elif (result.is_truncated and result.next_offset and result.status < 400
             and not err.startswith(_NOT_A_DOCUMENT)
             and not err.startswith("extraction_collapsed")):
@@ -1684,14 +1635,12 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                  else "packed script payload")
         if _browser_cannot_help(result, result.url):
             if _never_escalate(result, result.url):
-                # The advice cannot promise what the pipeline refuses to do. A data
-                # document (.xml/.rss/.atom/.json, or any non-GET) is never handed to
-                # the browser on purpose, so "re-fetch auto-escalates" sent the caller
-                # to retry a fetch that answers identically. Measured on
-                # docs.vllm.ai/sitemap.xml: a fresh request gets a Cloudflare 429
-                # challenge, dhole correctly declines to render it, and the hint still
-                # told the caller the browser would take it next time. Asking again is
-                # not a plan; naming the origin as the one refusing is.
+                # 建议不能承诺管线自己拒绝做的事。数据文档（.xml/.rss/.atom/.json，
+                # 或任何非 GET）是故意不交给浏览器的，所以 "re-fetch auto-escalates"
+                # 把调用方送回去重抓一次、答案一模一样。在
+                # docs.vllm.ai/sitemap.xml 上实测：新请求撞上 Cloudflare 429 校验，
+                # dhole 正确地拒绝渲染它，而提示还在告诉调用方「下次浏览器会接住」。
+                # 再问一遍不是计划；点名拒绝它的是源站才是。
                 next_action = (
                     f"the origin answered this {'request' if _METHOD.get() != 'GET' else 'URL'} "
                     f"with a {_wall}, but dhole will NOT render it in a browser - a "
@@ -1725,9 +1674,9 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             next_action = (f"page is a {_wall}; re-fetch auto-escalates to the "
                            "stealthy browser")
     elif err.startswith("auth_wall_detected"):
-        # Reached from the error chain, not the page_type block below: a wall
-        # sets error, which forces content_ok false, and that block only runs
-        # when content_ok is true - so it could never advise on a wall.
+        # 从错误链到达，不是下面那个 page_type 分支：墙会设置 error，而 error 强制
+        # content_ok 为假，那个分支只在 content_ok 为真时才跑 —— 所以它永远没机会
+        # 对一堵墙给建议。
         next_action = ("page is a login/sign-in wall, not content - do NOT cite it. "
                        + _auth_wall_step(result.url))
     elif err.startswith("bot_wall_detected"):
@@ -1747,8 +1696,8 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         next_action = ("page is an anti-bot/CAPTCHA challenge, not content - do NOT cite it. "
                        + _wall_step)
     elif err.startswith("robots_disallowed"):
-        # A pre-flight refusal, not a site failure: say so without the generic
-        # "retry / switch source" wording, and name the documented override.
+        # 预检拒绝，不是站点故障：这么说，别用泛泛的 "retry / switch source" 措辞，
+        # 并点名文档里写的覆盖开关。
         next_action = (
             "robots.txt disallows this URL for dhole, so nothing was fetched - do "
             "NOT cite it. Switch source, or re-call with ignore_robots=true if you "
@@ -1756,9 +1705,8 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             "process-wide)."
         )
     elif err.startswith("proxy_unreachable"):
-        # The failure is BEFORE the request, so "retry / raise timeout" is the
-        # wrong advice - and it is exactly what the generic budget-exhausted
-        # message used to say for a dead proxy (G21).
+        # 失败发生在请求**之前**，所以 "retry / raise timeout" 是错的建议 —— 而对
+        # 一个死掉的代理，泛化的预算耗尽消息从前说的正是这句（G21）。
         next_action = (
             "the proxy did not answer, so no request was sent - do NOT retry the "
             "same way. Check the proxy host/port and that the proxy is running, or "
@@ -1842,18 +1790,16 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             "(the same skip will happen). `dhole --doctor` names the state and the "
             "directory it searched; search, plain reads, docs and feeds all still work.")
     elif err.startswith("Response body too large"):
-        # This rejection is dhole's own verdict, not the host's, and the
-        # classifier's generic "check the error field, try another source" would
-        # answer a question nobody asked: no timeout, tier or retry changes a cap
-        # on the body size.
+        # 这个拒绝是 dhole 自己的判词，不是主机的；分类器那句泛化的「查 error 字段，
+        # 换个源」回答的是一个没人问的问题：超时、档位或重试都改变不了 body 大小的
+        # 上限。
         next_action = ("the body is over dhole's size cap - no timeout or fetcher "
                        "changes that. Fetch the page that links the file instead, or "
                        "download it yourself and hand it to parse")
     elif err.startswith("scanned_pdf"):
         from dhole_mcp.pdf_extractor import ocr_advice
-        # Capability-aware: "install [all] to auto-OCR" is false on a machine
-        # that already has it. Reaching here with OCR installed means the
-        # recovery produced nothing, which is a different sentence.
+        # 看能力说话："install [all] to auto-OCR" 在一台已经装了 OCR 的机器上是假话。
+        # 装着 OCR 还走到这里，说明恢复步骤什么也没产出，那是另一句话。
         next_action = f"scanned/image-only PDF - {ocr_advice()}"
     elif err.startswith("image_ocr_thin"):
         # 上面那一支说的是"一个字都没读到"；这一支读到过东西（所以正文里真有它），
@@ -1863,11 +1809,10 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                        "the picture with a vision-capable model, or a web_act "
                        "screenshot action on the page that holds it")
     elif err.startswith("image_ocr"):
-        # The image branches return content=[] (the placeholder text they used to
-        # carry was an error message in the page body), so the recovery step has
-        # to live here. Gated on the error, not on page_type=="image": a
-        # successfully OCR'd image is also page_type image, and telling its reader
-        # "text cannot be read" would be false.
+        # 图片分支返回 content=[]（它们从前携带的占位文字是正文里的一条错误消息），
+        # 所以恢复步骤必须放在这里。门开在 error 上而不是 page_type=="image" 上：
+        # OCR 成功的图片同样还是 page_type image，而告诉它的读者「文字读不出来」
+        # 会是假话。
         next_action = ("no text could be read from this image - "
                        "use a vision-capable model or a web_act screenshot action, or switch source")
     elif (not result.content_ok) and (result.quality_score or 0) > 0 and result.quality_score < 0.7 and not err:
@@ -1898,9 +1843,9 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             next_action = ("All fetch tiers failed: DNS resolution failed. Verify the "
                           "URL is correct; do NOT retry.")
         elif category == "browser_launch":
-            # Say which of the three states this is instead of recommending the tier
-            # that just failed: "re-fetch auto-escalates to the stealthy browser" is
-            # advice for a browser that can start.
+            # 说清是三种状态中的哪一种，而不是推荐刚刚失败的那一档：
+            # "re-fetch auto-escalates to the stealthy browser" 是给一台起得来的
+            # 浏览器提的建议。
             next_action = (
                 "All fetch tiers failed: the browser process could not be started, so "
                 "the target is not implicated and another fetch will fail the same way. "
@@ -1929,16 +1874,16 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         # 「换个源」对一个本地端口不是答案：这一族的失败在私网目标上只有一个解释。
         next_action = _local_target_no_answer(category, result.url) or next_action
     elif err.startswith("encoding_undecodable"):
-        # A guess that failed, not a network or path problem - the generic parse
-        # hint below would send the caller off to check paths that are fine.
+        # 一次猜错的编码，不是网络或路径问题 —— 下面那句泛化的 parse 提示会把调用方
+        # 支去检查本来就没问题的路径。
         next_action = (
             "the file's charset was guessed wrong, so the text is mojibake - "
             "re-call parse with encoding='<charset>' (e.g. 'big5', 'shift_jis', "
             "'euc-kr', 'cp1252', 'latin-1'), or read the file with your own tool"
         )
     elif result.fetcher_used == "parse" and err:
-        # Local-file failures are never a network problem, so they must not pick
-        # up the network hints the status==0 branch below would otherwise give.
+        # 本地文件失败从来不是网络问题，所以不许捡起下面 status==0 分支本来会给的
+        # 网络提示。
         #
         # 这一族四支讲的是同一件事：**一个字节都没读过**（名字没找到 / 是目录 / 被两道门
         # 挡住）。所以它们的行首申报只许装配一次（评审 R02-123 · 真机 `r219b_doc_parse_faces.json`：
@@ -1988,11 +1933,10 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         if _refusal_way_out is not None:
             next_action = f"{nothing_went_out()} {_refusal_way_out}"
         else:
-            # The path was NOT the problem: the file was found, opened and read, and
-            # then something about its contents failed. Measured on four cases -
-            # invalid JSON, invalid YAML, a body that is not %PDF, an unsupported
-            # extension - all four were sent to the path advice above, which reads
-            # as "your route is wrong" about a route that had already resolved.
+            # 路径**不是**问题：文件找到了、打开了、读完了，然后它的内容出了错。
+            # 四种情况实测 —— 坏 JSON、坏 YAML、不是 %PDF 的 body、不支持的扩展名
+            # —— 四种全被送到上面那句路径建议，读起来就是「你的路线错了」，而那条
+            # 路线早已走通。
             #
             # 但这四种形状不该共用**同一句**下一步（评审 R02-022）：前一句还替它们所有人
             # 说「按 error 建议的那个改名去修」，而 CFB 那一发的 error 明说"改名不改字节"——
@@ -2009,20 +1953,19 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
                     "not a missing one."
                 )
     elif err.startswith("timeout: the ") and result.next_action:
-        # The budget result already names which tier ran out and what to change.
-        # The generic network hint below is blander, so keep the specific one.
+        # 预算结果已经点名是哪一档用完、该改什么。下面那句泛化的网络提示更含糊，
+        # 所以保留具体这句。
         next_action = result.next_action
     elif result.status in (404, 410):
-        # Reached only now that the truncation hint defers to error statuses:
-        # "keep paginating" is the wrong answer to a page that isn't there.
+        # 因为截断提示让位给错误状态码，现在才会走到这里：对一个不存在的页面，
+        # "keep paginating" 是错的答案。
         next_action = ("page does not exist (HTTP 404/410) - the URL is stale or "
                        "misspelled. Do NOT paginate it: check the URL, or "
                        "web_search for the page's current location")
     elif result.status in (401, 407):
-        # 401 is not "the client looks like a bot" (403's advice) and not something
-        # a browser escalation can fix — we do not escalate on 401 for exactly that
-        # reason. It is a statement about credentials, so the hint says whether we
-        # sent any: "no auth here" and "your auth was refused" need opposite fixes.
+        # 401 不是「客户端像 bot」（那是 403 的建议），也不是浏览器升级能修的东西
+        # —— 正因为如此，我们对 401 不升级。它是关于凭据的陈述，所以提示要说清我们
+        # 到底发没发凭据：「这里没有 auth」与「你的 auth 被拒了」需要相反的处理。
         _auth_kind = _AUTH_SENT.get()[0]
         if _auth_kind:
             next_action = (
@@ -2057,24 +2000,19 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
     elif result.status == 429:
         next_action = ("rate limited (HTTP 429) - wait before retrying, or switch source")
     elif result.status >= 500:
-        # Measured: httpbin /status/500 came back with the catch-all hint below,
-        # because the network classifier has nothing to match "http_error_500"
-        # against and answers "try a different source or retry with different
-        # parameters". No parameter of this call moves a server-side failure, and
-        # dhole already refuses to escalate a 5xx into a browser for exactly that
-        # reason - the hint must not imply the browser tier was the untried option.
+        # 实测：httpbin /status/500 回来时套的是下面那句兜底提示，因为网络分类器没有
+        # 东西可对 "http_error_500" 做匹配，只能答「换个源或用不同参数重试」。这次调用
+        # 的任何参数都推不动一个服务端失败，而 dhole 本来就拒绝把 5xx 升级进浏览器，
+        # 正是这个原因 —— 提示不许暗示浏览器档是那个没试过的选项。
         #
-        # One shape among 5xx is NOT the server speaking, and saying it is costs an
-        # on-call engineer the wrong ticket (round 01, R01-041): an empty 502 that
-        # comes back in tens of milliseconds on a path with an intermediary in it.
-        # `no-such-host-*.invalid` (a name RFC 6761 guarantees will not resolve)
-        # answered 502/0B/32ms here because the machine's own proxy intercepted the
-        # fake-IP lookup and answered for a target it could not reach - while the
-        # receipt said "the server failed at the server… nothing in this request
-        # caused it… the site is down". Attribution therefore needs two facts, and
-        # only fires when both hold: no bytes came back, and something upstream of
-        # the origin is configured for this host (G31's loopback exemption means a
-        # local target keeps the old, correct sentence).
+        # 5xx 里有**一种**形状不是服务器在说话，把它说成服务器说话会让值班工程师
+        # 提错单（round 01, R01-041）：一个 502，零字节，几十毫秒就回来，而路径上
+        # 有中间人。`no-such-host-*.invalid`（RFC 6761 保证解析不了的名字）在这里
+        # 答出 502/0B/32ms，是因为这台机器自己的代理截住了假 IP 查询，替一个它够不到
+        # 的目标作答 —— 而回执却说「服务器在服务端失败了……这次请求里没有任何东西
+        # 导致它……站点宕了」。所以归因需要两个事实，且只有两个都成立才触发：没有
+        # 一个字节回来，且源站上游有东西为这个主机配置了代理（G31 的 loopback 豁免
+        # 意味着本地目标保留旧的、正确的句子）。
         from dhole_mcp.fetcher import system_proxy_for
         _no_bytes = not has_content and (result.total_size_bytes or 0) == 0
         _via = system_proxy_for(result.url or "") if _no_bytes else ""
@@ -2103,11 +2041,10 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         category, hint = classify_network_error(err)
         next_action = _local_target_no_answer(category, result.url) or hint
 
-    # v10 envelope-driven next actions: fire ONLY when the fetch succeeded with
-    # real content and no error-driven next_action already fired. Turn the
-    # envelope (page_type/freshness) into a concrete next step so the
-    # agent doesn't have to re-derive it. Precedence: page structure
-    # (list/auth/paywall/redirect) > freshness.
+    # v10 由信封驱动的下一步：只在抓取成功、拿到真内容，且没有 error 驱动的
+    # next_action 已经触发时才发。把信封（page_type/freshness）变成具体的一步，
+    # agent 不必自己再推一遍。优先级：页面结构（list/auth/paywall/redirect）
+    # 高于新鲜度。
     if not next_action and content_ok:
         if result.page_type == "pdf" and result.total_extracted_chars > 20000:
             _repeat = _focus_repeat_warning(
@@ -2146,9 +2083,9 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
             # 「内容过期」这句提示只对正文说得出作用，所以只列讲结构的两个值：
             # article，以及 unknown（没认出结构，默认按正文对待）。§3 第 28 条之前
             # 这里还列着 docs —— 那个值已经并给 source_type。
-            # Name the horizon that was applied (G15): 30 days for news, 730 for
-            # reference/docs/repo/QA, 365 otherwise. "content is 400 days old"
-            # means very different things on a news article and on a wiki page.
+            # 点名实际套用的时间视界（G15）：新闻 30 天，参考/文档/仓库/问答
+            # 730 天，其余 365 天。「内容已 400 天」在一条新闻和一张 wiki 页面上
+            # 含义完全不同。
             next_action = (
                 f"content is {result.content_age_days} days old - past the "
                 f"{_stale_days_for(result.url)}-day staleness horizon for this kind "
@@ -2205,8 +2142,8 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
         next_action = f"{next_action} {hedge}" if next_action else hedge
     _issue = (result.metadata or {}).get("content_issue")
     if _issue:
-        # A demoted page verdict stays a content verdict: `content_ok` keeps saying
-        # what the body is, while `error` stops claiming the call itself failed.
+        # 被降级的页面判词仍然是内容判词：`content_ok` 继续说明 body 是什么，而
+        # `error` 不再声称这次调用本身失败了。
         content_ok = False
         _chain_note = (f"the page reads as: {_issue}. That is about the content, "
                        "not about this call: `metadata.actions` holds the receipts "
@@ -2231,30 +2168,27 @@ def _agent_hints(result: ResponseModel) -> tuple[str, str, bool]:
     return summary, next_action, content_ok
 
 
-# Cache TTL per structural page_type, applied only when the caller left the
-# default (see the write path in web_read). Module level and not inline
-# because test_envelope's vocabulary guard reads it: a key naming a page_type
-# the code can no longer produce is dead code that looks like a rule, which is
-# exactly how the "docs" row outlived the value it keyed on.
+# 按结构化 page_type 分的缓存 TTL，只在调用方留默认值时生效（见 web_read 的写入
+# 路径）。放在模块级而不内联，是因为 test_envelope 的词表守卫会读它：一个键点名了
+# 代码再也产不出的 page_type，就是一段看起来像规则、实际是死代码的东西 —— "docs"
+# 那一行正是这样活得比它对应的值还久。
 _TTL_BY_PAGE_TYPE = {"article": 21600}
 
 
 def _apply_envelope(result: ResponseModel) -> None:
-    """Compute the v10 research-grade envelope fields on a result in place.
+    """就地计算 v10 研究级信封字段。
 
-    page_type: definitive error/content_type signals override the structural
-    value set in _translate_response (js_shell/auth_wall/redirect from error;
-    pdf/json/image from content_type). source_type/is_official from the URL
-    (cheap heuristic). content_age_days/is_stale from metadata dates + fetched_at.
-    Recomputed on every return (incl. cache hits) since it is near-free and the
-    inputs (url, metadata, fetched_at) are always present.
+    page_type：确定的 error/content_type 信号覆盖 `_translate_response` 里设的结构化
+    值（js_shell/auth_wall/redirect 来自 error；pdf/json/image 来自 content_type）。
+    source_type/is_official 来自 URL（廉价的启发式）。content_age_days/is_stale
+    来自 metadata 日期 + fetched_at。每次返回都重算（包括缓存命中），因为它几乎免费，
+    而输入（url、metadata、fetched_at）总是在场。
     """
-    # page_type override: definitive signals win over the structural guess.
-    # A chain's page verdict lives in `metadata.content_issue` (its `error` slot is
-    # free because the chain itself ran — R01-028), so the shape of the PAGE is read
-    # from wherever that verdict ended up; otherwise demoting the sentence would
-    # also delete the envelope's statement of what kind of page this is (measured
-    # live: `page_type` went from "auth_wall" to absent).
+    # page_type 覆盖：确定信号赢过结构化的猜测。
+    # 链的页面判词住在 `metadata.content_issue` 里（它的 `error` 格子是空的，因为链
+    # 自己跑过了 —— R01-028），所以页面的形状要从那个判词最终落到的地方读；否则
+    # 降级这句话也会一并删掉信封里关于「这是什么页面」的陈述（实测：`page_type`
+    # 从 "auth_wall" 变成了缺席）。
     err_type = page_type_from_error(result.error
                                     or (result.metadata or {}).get("content_issue")
                                     or "")
@@ -2267,49 +2201,43 @@ def _apply_envelope(result: ResponseModel) -> None:
         elif ct.startswith("application/json") or ct.startswith("text/json"):
             result.page_type = "json"
         elif _is_xml_content_type(ct):
-            # Same media types the fetch path returns raw (P2-7); xhtml+xml is
-            # excluded by the predicate, so an HTML document keeps its structural
-            # verdict instead of being renamed.
+            # 抓取路径原样交回的同一批媒体类型（P2-7）；xhtml+xml 被谓词排除在外，
+            # 所以一份 HTML 文档保住它的结构化判词，而不是被改名。
             result.page_type = "xml"
         elif ct.startswith("image/"):
             result.page_type = "image"
-        # else: keep the structural page_type from _translate_response
-        # (article/list/paywall/redirect/unknown).
-    # Source authority: cheap URL heuristic, recomputed always (not cached).
+        # else：保住 `_translate_response` 给出的结构化 page_type
+        # （article/list/paywall/redirect/unknown）。
+    # 源权威性：廉价的 URL 启发式，每次都重算（不缓存）。
     st, off = classify_source(result.url)
     result.source_type = st
     result.is_official = off
-    # Freshness: from metadata dates vs this response's fetched_at. Recomputed
-    # always (metadata may be cache-restored; age is relative to now). The URL is
-    # passed so the staleness HORIZON matches the source class (G15) and so a
-    # continuously-edited wiki is not judged from its creation date.
+    # 新鲜度：metadata 日期对本响应的 fetched_at。每次都重算（metadata 可能来自缓存
+    # 恢复；年龄是相对现在而言的）。URL 传进去，让陈旧**视界**匹配源类别（G15），
+    # 也让一个持续被编辑的 wiki 不被按创建日期评判。
     age, stale = compute_freshness(result.metadata, result.fetched_at, result.url)
     result.content_age_days = age
     result.is_stale = stale
-    # An error page's links are the site's chrome, not the page's source chain.
-    # Measured on a Wikipedia 404 with include_links=true: 53 links came back (Main
-    # page / Contents / Donate / Cookie policy ...), links.is_truncated=true, and
-    # primary_source pointed at a Wikimedia *search* URL. The caller paid for a
-    # citation graph that describes a navigation bar on the one response whose
-    # next_action says "this page does not exist - do NOT paginate it".
+    # 错误页的链接是站点的外框，不是页面的来源链。在 Wikipedia 404 +
+    # include_links=true 上实测：回来 53 条链接（Main page / Contents / Donate /
+    # Cookie policy ...），links.is_truncated=true，而且 primary_source 指向一个
+    # Wikimedia 的**搜索** URL。调用方为一张引用图付了钱，而那图画的是导航栏，
+    # 还是在这一份 next_action 明说「此页不存在 —— 不要翻页」的响应上。
     if result.status >= 400 and result.links:
         result.links = {}
 
 
 def _ignored_selector_note(result: ResponseModel) -> str:
-    """A note when this response could not honour the caller's ``css_selector``.
+    """本响应无法兑现调用方的 ``css_selector`` 时给的一条注记。
 
-    ``css_selector`` narrows HTML. On an XML/JSON/plain-text response it matches
-    nothing, and the caller silently received the WHOLE document. Measured on
-    httpbin/xml with ``css_selector='h1'``: the entire XML came back and nothing
-    in the response said the selector had been dropped. An agent that asked for a
-    narrow slice cannot tell "there was no h1 here" from "here is the document",
-    and will cite the whole thing as if it were the slice.
+    ``css_selector`` 只收窄 HTML。在 XML/JSON/纯文本响应上它匹配不到任何东西，而
+    调用方会悄悄收到**整份**文档。在 httpbin/xml 上用 ``css_selector='h1'`` 实测：
+    整份 XML 回来了，而响应里没有一个字说选择器被丢掉了。一个要窄切片的 agent
+    分不清「这里没有 h1」与「这就是整份文档」，于是会把整份东西当成那个切片来引用。
 
-    Reported as a note rather than an error on purpose: the document itself may be
-    exactly what the caller needs (a JSON API has no h1 to find), so flipping
-    ``content_ok`` to False would tell them to distrust usable content. An empty or
-    HTML content-type means the selector had its chance - say nothing.
+    故意报成注记而不是错误：文档本身可能正好是调用方要的（一个 JSON API 里本来
+    就没有 h1 可找），所以把 ``content_ok`` 翻成 False 等于叫他们不信任可用的内容。
+    空的或 HTML 的 content-type 意味着选择器有过机会 —— 什么也别说。
     """
     selector = _CSS_SELECTOR.get()
     if not selector:
@@ -2470,10 +2398,11 @@ _DIAGNOSIS_PREFIXES: tuple[tuple[str, str, bool, str], ...] = (
      "check network/proxy; the classifier hint in `error` names the fix"),
     # find_similar 读不到源页那一面（评审 R02-137 · 现场 r276）：这句是 dhole 自己写的，
     # 从前表里没有它的格子，于是上线的 code 是小写首词兜底发明的 `could` —— 换措辞就换名字，
-    # 而手册教调用方 switch on `code`。这颗 token 只命名门里**确实知道**的事（源页没读出来），
-    # 不替它猜原因：`fetch_source_for_similar` 把「异常 / 被挡 / 空正文」三种看见的东西都
-    # 扔掉了（search_engines.py:301-308），原因归谁是另一行账（R02-138）。`retryable=true`
-    # 与同封 `next_action` 第一句「Retry, or web_read…」说的是同一件事（两只手不许互相否决）。
+    # 而手册教调用方 switch on `code`。现在 `_source_leg_refusal` 已按
+    # `fetch_source_for_similar` 记下的 `reason` 分别命名原因（blocked / http-error /
+    # no-bytes / no-text，R02-138）；这一格留给没有原因可记的那一支，所以它仍然只声称门里
+    # **确实知道**的事（源页没读出来），不替它猜原因。`retryable=true` 与同封 `next_action`
+    # 第一句「Retry, or web_read…」说的是同一件事（两只手不许互相否决）。
     ("could not fetch the source URL", "source_unreadable", True,
      "web_read that URL first - it names which cause this is (blocked / offline / an "
      "empty page), then call find_similar again on one that answers"),
@@ -2668,11 +2597,10 @@ def _diagnose(result: ResponseModel) -> Optional[Dict[str, Any]]:
     retryable = False
     recover = ""
     if _chain_ran_ok(result):
-        # R01-028: a chain that ran owns the answer to "did this call work", and the
-        # one thing the advice must never be is "issue the same chain again" — the
-        # steps already marked ok would run a second time (a fill would fill twice).
-        # `retryable=false` is what makes the two hands of this response agree
-        # instead of vetoing each other.
+        # R01-028：跑过的链拥有「这次调用成没成」这个问题的答案，而建议里绝不能
+        # 出现的一件事是「把同一条链再发一遍」—— 已经标了 ok 的步骤会跑第二遍
+        # （一次 fill 会填两次）。`retryable=false` 让这份响应的两只手意见一致，
+        # 而不是互相否决。
         _issue = (result.metadata or {}).get("content_issue") or err
         _code = (_issue.split(":")[0].split("_detected")[0] if _issue else "no_content")
         return {"code": _code, "retryable": False,
@@ -2724,9 +2652,8 @@ def _diagnose(result: ResponseModel) -> Optional[Dict[str, Any]]:
                     result.page_type, "no_content")
         retryable = code in ("bot_wall", "js_shell")
         if code == "no_content":
-            # R01-028, P09's现场: the delivered `content` WAS the quotable official
-            # text while this sentence taught the caller to change source. A verdict
-            # may not deny what the same response holds.
+            # R01-028，P09 的现场：交回的 `content` **就是**可引用的官方文字，
+            # 而这句话却在教调用方换源。一个判词不能否认同一份响应持有的事实。
             _chars = sum(len(str(c)) for c in (result.content or []))
             if _chars >= 200:
                 code = "extraction_collapsed"
@@ -2773,11 +2700,10 @@ def _approx_tokens(chunks) -> int:
 
 
 def _with_agent_hints(result: ResponseModel) -> ResponseModel:
-    """Stamp the v10 envelope + agent-facing hints on a result.
+    """把 v10 信封 + 面向 agent 的提示盖在结果上。
 
-    This is the universal final wrapper (called by _apply_chunking on every
-    return: live fetches, cache hits, robots blocks, archive fallback), so the
-    envelope appears on every response an agent ever sees.
+    这是通用的最终包装（`_apply_chunking` 在每次返回时都调用：实时抓取、缓存命中、
+    robots 拦截、档案兜底），所以信封会出现在 agent 见到的每一个响应上。
     """
     # `fetched_at` 是"这份**内容**什么时候被抓取"，不是"这封回执什么时候生成的"。
     # 一次缓存命中没有去抓任何东西：盖上当下的时刻，等于把一次回放化妆成一次新核验
@@ -2792,9 +2718,8 @@ def _with_agent_hints(result: ResponseModel) -> ResponseModel:
     _apply_envelope(result)
     _report_obfuscation(result)
     summary, next_action, content_ok = _agent_hints(result)
-    # Argument notes (a value clamped to a documented bound) belong in the
-    # one-line status: they describe THIS response, and next_action has to stay
-    # "empty = nothing to do".
+    # 参数注记（某个值被钳到文档写明的边界）属于一行状态：它们描述的是**这一份**
+    # 响应，而 next_action 必须保持「空 = 无事可做」。
     notes = _ARG_NOTES.get()
     if notes:
         summary = " · ".join([summary, *notes]) if summary else " · ".join(notes)
@@ -2850,22 +2775,19 @@ def _with_agent_hints(result: ResponseModel) -> ResponseModel:
     return result
 
 
-# How much later than the caller's own budget the _within_call_budget backstop
-# fires —— 那颗数的作者在 `context.BACKSTOP_GRACE_S`（链里每一步的截止也读它），这里
-# 只是把同一个名字留给本模块的建议句用。See its docstring: it must lose the race to
-# the tiers' own accounting.
+# _within_call_budget 兜底比调用方自己的预算晚多少才动手 —— 那颗数的作者在
+# `context.BACKSTOP_GRACE_S`（链里每一步的截止也读它），这里只是把同一个名字留给
+# 本模块的建议句用。见它的 docstring：它必须在竞争中输给各档自己的记账。
 _BACKSTOP_GRACE_S = BACKSTOP_GRACE_S
 
 
 def _as_sentence(text: str) -> str:
-    """Advice assembled from clause fragments still opens its field like a sentence.
+    """由子句碎片拼起来的建议，落到字段开头时仍然要像一句话。
 
-    These strings are built to sit after a "; " or inside a parenthesis, where a
-    lower-case start is right. Copied to the front of `next_action` the same
-    fragment opens the field with a lower-case word, which reads as a clause the
-    previous sentence never finished (measured live, R01-010: "Budget exhausted
-    after 32033ms at the fetch tiers. the fetch tiers on a document download").
-    A leading figure already looks sentence-initial, so digits pass through.
+    这些串本来是为「跟在 "; " 之后或括号里」写的，那里小写开头是对的。原样抄到
+    `next_action` 开头，同一个碎片就用小写词起头，读起来像上一句没说完的子句
+    （实测，R01-010："Budget exhausted after 32033ms at the fetch tiers. the fetch
+    tiers on a document download"）。开头的数字本来就像句首，所以数字放行。
     """
     return text[:1].upper() + text[1:] if text[:1].isalpha() else text
 
@@ -2909,29 +2831,25 @@ def _over_budget_result(url: str, budget_ms: float, elapsed_ms: float,
                         stage: str, fetcher_used: str,
                         diagnosis: str = "",
                         diagnosis_struct: Optional[Dict[str, Any]] = None) -> ResponseModel:
-    """The "call budget ran out" FetchResult - a normal response, not an exception.
+    """「调用预算用完了」的 FetchResult —— 一个正常响应，不是异常。
 
-    The caller asked for an answer inside `timeout`; this is the honest one. It
-    used to be possible only in theory: the budget was applied per tier, so a
-    slow host could run past it and the MCP client killed the request (-32001)
-    with no FetchResult at all.
+    调用方要求在 `timeout` 之内给出答案；这就是那个诚实的答案。它过去只在理论上
+    可能发生：预算按档施加，所以一个慢主机会跑过头，然后 MCP 客户端杀掉请求
+    （-32001），连一个 FetchResult 都没有。
 
-    ``diagnosis`` replaces the generic advice when the tier knows something the
-    generic sentence would get wrong — a document download that was told to
-    "pass force_fetcher='http' to skip browser rendering" when it never touched
-    a browser. ``diagnosis_struct`` is that same knowledge in the machine-readable
-    twin: without it, finalize re-normalizes the error through the prefix table
-    and the envelope's recover_with says "raise timeout" for the one timeout
-    where raising is exactly the wrong move (the browser tier knew better).
+    当某一档知道泛化建议会答错时，``diagnosis`` 会替换掉它 —— 一次文档下载被告知
+    "pass force_fetcher='http' to skip browser rendering"，而它根本没碰过浏览器。
+    ``diagnosis_struct`` 是同一份知识的机器可读孪生：没有它，finalize 会用前缀表
+    把 error 重新归一，信封的 recover_with 会对那唯一一个「抬高 timeout 恰好是错的」
+    超时说 "raise timeout"（浏览器档更清楚）。
     """
     head = f"Budget exhausted after {int(elapsed_ms)}ms at the {stage}."
-    # One response, two figures, and until now no word about their relation: the
-    # error named the asked budget while `next_action` named the time actually
-    # spent (round 01, R01-042 — measured 10000 asked / 10876 spent on the local
-    # slow server, and 10000 / 68113 in the persona's live case). The gap has two
-    # honest readings and they lead to different actions, so say which one this is:
-    # a spill inside the backstop grace (an in-flight step finishing), or a real
-    # overrun past it (something inside this call did not stop when told).
+    # 一份响应、两个数字，而在此之前没有一个字说明二者的关系：`error` 点名的是
+    # 要求的预算，`next_action` 点名的是实际花掉的时间（round 01, R01-042 —— 本地慢
+    # 服务器上实测 10000 请求 / 10876 花掉，persona 的真机案例是 10000 / 68113）。
+    # 这个差额有两种诚实的读法，导向不同的动作，所以要说清这一次是哪种：兜底宽限
+    # 期内的溢出（一个在途步骤正在收尾），还是真的越过它跑超了（这次调用里有东西
+    # 被叫停时没有停）。
     asked, spent = int(budget_ms), int(elapsed_ms)
     grace = int(_BACKSTOP_GRACE_S * 1000)
     spill = spent - asked
@@ -2961,10 +2879,10 @@ def _over_budget_result(url: str, budget_ms: float, elapsed_ms: float,
 
 
 def _is_over_budget(result) -> bool:
-    """True for the built "call budget ran out" result.
+    """针对构造出来的「调用预算用完了」结果返回 True。
 
-    Terminal by definition, so every tier checks it before spending more time:
-    the answer to "did we get the page" is already "no, and we are out of time".
+    按定义就是终态，所以每一档在继续花时间之前都先检查它：「页面拿到了吗」的答案
+    已经是「没有，而且时间用完了」。
     """
     return bool(result) and result.error.startswith("timeout: the ")
 
@@ -2972,17 +2890,15 @@ def _is_over_budget(result) -> bool:
 # 剪 summary 标签时能停的地方，按"说完一件事"的程度分两级。两级都是**带尾随分隔符的
 # 二元组**，这样 `rfind` 找到的位置就是剪口，不必再判断标点是不是落在了句尾。
 def _summary_label(msg: str, cap: int = 80) -> str:
-    """A sentence shortened for the ``summary`` slot, ending where a **clause** ends.
+    """为 ``summary`` 格子缩短的一句话，停在**子句**结束的地方。
 
-    ``msg[:80]`` produced labels like "…can compile (S" — a reader can't tell a
-    shortened sentence from a broken string. Breaking at the last *word* fixed that
-    and left a worse one behind: "…stored credentials for", "…POST / PUT / PATCH /",
-    "…Valid values:" (measured, three refusals in one session). Those are not short,
-    they are broken in a different way — a label that ends on a preposition or a
-    colon promises something the summary does not contain, and in the enumeration
-    case the thing cut off is exactly the list the caller needs. The whole sentence
-    stays in ``error`` either way, so the label owes the reader only one thing:
-    that it stops where the sentence stops.
+    ``msg[:80]`` 产出的标签像 "…can compile (S" —— 读者分不清是缩短的句子还是坏掉的
+    字符串。改在最后一个*词*处断开修好了那个，却留下更糟的："…stored credentials
+    for"、"…POST / PUT / PATCH /"、"…Valid values:"（实测，一次会话里三条拒绝），
+    这些不算短，只是坏的方式不同 —— 一个停在介词或冒号上的标签，承诺了 summary
+    里并没有的东西；而在枚举那个案例里，被切掉的恰恰是调用方需要的那份清单。
+    整句无论哪种情况都留在 ``error`` 里，所以标签只欠读者一件事：它停在句子
+    该停的地方。
 
     排序与判据现在住在 `snap_to_boundary`（分页那一路也要它，见 `server._apply_chunking`）；
     这一层只负责"短到 cap"和"收尾不留悬空空白"。
@@ -2995,21 +2911,18 @@ def _summary_label(msg: str, cap: int = 80) -> str:
 
 def _invalid_request_result(url: str, msg: str, next_action: str = "",
                             tool: str = "web_read") -> ResponseModel:
-    """A call rejected before any request went out, shaped like a FetchResult.
+    """任何请求发出之前就被拒的一次调用，形状像一个 FetchResult。
 
-    Input validation used to raise, and the generic handler turned that into an
-    ``is_error`` MCP result — a different response shape for "you passed a bad
-    argument" than for "the site failed", so every caller had to special-case
-    it. The rejection now travels the same contract: status 0, empty content,
-    content_ok False, reason in ``error``, and what to do in ``next_action``.
+    输入校验从前会抛异常，通用处理器把它变成一个 ``is_error`` 的 MCP 结果 ——
+    「你传了个坏参数」与「站点失败了」成了两种不同的响应形状，于是每个调用方都得
+    特判它。现在拒绝走同一份契约：status 0、空 content、content_ok False、原因在
+    ``error``、该做什么在 ``next_action``。
 
-    ``next_action`` defaults to the URL-shape advice, which fits the common case
-    (a malformed ``url``). A rejection about a *different* argument must pass its
-    own: telling a caller who got ``max_content_chars`` wrong to "pass an
-    absolute http(s) URL" sends them to fix the one thing that was already right.
-    ``tool`` names the tool the caller actually invoked (评审R1刀3): the URL
-    validation path is shared, and a web_request refusal quoting web_read's
-    boilerplate reads as advice about a different call.
+    ``next_action`` 默认是 URL 形状的建议，适配常见情形（一个畸形的 ``url``）。
+    关于**别的**参数的拒绝必须传自己的那一句：把一个 ``max_content_chars`` 弄错的
+    调用方叫去「传一个绝对的 http(s) URL」，等于让他去修那件本来就对的事。
+    ``tool`` 点名调用方实际调用的工具（评审R1刀3）：URL 校验路径是共用的，而
+    web_request 的拒绝如果引用 web_read 的套话，读起来就是关于另一次调用的建议。
 
     默认那一句**以本门的申报开头**（评审 R02-098 · 真机 `r119_url_shape_clauses.json`）：
     形状那一族（scheme / 空 url / 反斜杠）14 格里 13 格只有"改参数"没有"这一发没出去过"，
@@ -3037,7 +2950,8 @@ def _attach_diagnosis(result: ResponseModel) -> None:
     从前只有 `_agent_hints` 那条路问过表；`_invalid_request_result`（全部 10 扇 JSON 门的
     参数层与 URL 守卫拒绝）与 robots 那扇预检拒绝各自造完信封就收工，于是设计过的拒绝
     `diagnosis` 整格缺席，而手册写的正是「ABSENT = 干净成功 / switch on `code`」
-    （`references/fields.md:67`、`models.py:143`）。同一封回执里 `content_ok: false` 与
+    （`references/fields.md` 的 `diagnosis` 一行、`ResponseModel.diagnosis` 的字段描述）。
+    同一封回执里 `content_ok: false` 与
     「没有把手」并排，就是 D5 那条法在建议位的形状。
 
     守卫（已有则不覆盖）留着：专项路径（浏览器超时、动作链）构造时就写好了更懂的那一份。
@@ -3047,22 +2961,19 @@ def _attach_diagnosis(result: ResponseModel) -> None:
 
 
 def _report_action_outcomes(result: ResponseModel, page_action: Any) -> None:
-    """Publish what each interaction actually did, into the response.
+    """把每个交互实际做了什么，公开进响应里。
 
-    Every action's own failure used to be a `logger.warning` and nothing else, so
-    an action that never happened was indistinguishable from one that happened and
-    changed nothing. The verification round hit exactly that: `click a.more-link`
-    on HN (a selector that matches no element) came back as a normal page-1
-    success, and was read as "click doesn't wait for navigation" — the report then
-    asked for a wait, which the code already had. A receipt per action, plus a
-    line in the summary when one refused to run, sends the reader at the selector
-    instead of at the timing.
+    从前每个动作自己的失败只是一条 `logger.warning`，别的什么都没有，于是一个从未
+    发生的动作，与一个发生了却没改变任何东西的动作，无法区分。验证轮撞上的正是这个：
+    HN 上的 `click a.more-link`（一个匹配不到任何元素的选择器）回来是正常的第 1 页
+    成功，还被读成「click 不等导航」—— 报告于是要求加等待，而代码里早就有了。
+    每个动作一份回执，加上某个动作拒绝执行时在 summary 里的一行，把读者送到选择器
+    那里，而不是送到时序那里。
 
-    Element captures ({\"screenshot\"} actions) split in two here: the JSON
-    payload keeps a name-only receipt (`image: true`, plus the decoded `qr`
-    strings, which are small and useful to every client), while the pixels move
-    to ``result._action_images`` for the content list — base64 in the payload
-    would tax every text-only transcript the response lands in.
+    元素捕获（{\"screenshot\"} 动作）在这里一分为二：JSON 载荷保留一条只有名字的回执
+    （`image: true`，外加解码后的 `qr` 串，它们很小且对每个客户端都有用），而像素
+    移到 ``result._action_images`` 供 content 列表使用 —— 载荷里的 base64 会让这份
+    响应落进的每一份纯文本 transcript 都背上税。
     """
     outcomes = list(getattr(page_action, "outcomes", None) or [])
     if not outcomes:
@@ -3082,9 +2993,17 @@ def _report_action_outcomes(result: ResponseModel, page_action: Any) -> None:
     result.metadata = {**(result.metadata or {}), "actions": wire_rows}
     # 写操作审计（安全闸剩余项 2，DHOLE_USAGE_LOG 打开时落盘）：浏览器的
     # submit 是"哪个 session 对哪个站做了什么写操作"的典型——已确认的提交和
-    # 被闸拦下的尝试都值得留痕。
+    # 被闸拦下的尝试都值得留痕。evaluate 走自己的一条通道：它不写任何东西，
+    # 但它能把 cookie/登录态读进 transcript，值得单独一笔账。
     for o in outcomes:
-        if o.get("submitted") or o.get("pending_approval"):
+        if (o.get("pending_gate") == "evaluate" or o.get("evaluated")
+                or o.get("evaluate_attempted")):
+            _audit_event("evaluate", channel="browser_evaluate",
+                         url=(result.url or "")[:200],
+                         session_id=_SESSION_ID.get() or "",
+                         pending=bool(o.get("pending_approval")),
+                         action=str(o.get("action", ""))[:80])
+        elif o.get("submitted") or o.get("pending_approval"):
             _audit_event("write", channel="browser_submit",
                          url=(result.url or "")[:200],
                          session_id=_SESSION_ID.get() or "",
@@ -3092,20 +3011,37 @@ def _report_action_outcomes(result: ResponseModel, page_action: Any) -> None:
                          action=str(o.get("action", ""))[:80])
     if pending:
         # 审批闸（安全红线 3）的回应面：暂停要成为整个响应的头号信号，next_action
-        # 直接指向"去问用户"，不能淹没在普通失败提示里。
+        # 直接指向"去问用户"，不能淹没在普通失败提示里。evaluate 与 submit 是
+        # 两道不同的门——把 JS 求值的暂停写成"提交暂停"会让调用方去问一件
+        # 没有发生的事（也拿错钥匙重跑）。
+        pending_eval = [o for o in pending
+                        if o.get("pending_gate") == "evaluate"]
+        pending_submit = [o for o in pending
+                          if o.get("pending_gate") != "evaluate"]
         names = "; ".join(str(o.get("action", "submit")) for o in pending)
         result.summary = (f"{result.summary} · {len(pending)} action(s) waiting "
                           f"for user approval ({names})")
-        result.next_action = (
-            "a submit action is PAUSED for user approval (pending_approval in "
-            "metadata.actions) - describe the submission to the user and ask for "
-            "confirmation; on a yes, re-run the same actions with "
-            '{"confirm": true} on that submit. Nothing irreversible was done.')
+        asks: list[str] = []
+        if pending_eval:
+            asks.append(
+                "an evaluate action is PAUSED for user approval "
+                "(pending_approval in metadata.actions) - it runs arbitrary page "
+                "JavaScript, which can read cookies and logged-in state, and can "
+                "also change the page or send requests; describe what the "
+                "expression would do and ask the user, then "
+                f"{_EVALUATE_RERUN}. Nothing was run.")
+        if pending_submit:
+            asks.append(
+                "a submit action is PAUSED for user approval (pending_approval in "
+                "metadata.actions) - describe the submission to the user and ask "
+                "for confirmation; on a yes, re-run the same actions with "
+                f"{_CONFIRM_SNIPPET}. Nothing irreversible was done.")
+        result.next_action = " ".join(asks)
     elif failed:
         detail = "; ".join(
             f"{o['action']}: {str(o.get('error', ''))[:120]}" for o in failed)
-        # "did not take effect", not "did not run": a step whose click landed on an
-        # element no click submits DID run - what it did not do is send anything.
+        # 是「没有生效」，不是「没有运行」：某一步的 click 落在了一个 click 提交不了
+        # 的元素上，它**确实跑了** —— 它没做的是把任何东西发出去。
         result.summary = (f"{result.summary} · {len(failed)} of {len(outcomes)} "
                           f"actions did not take effect ({detail})")
         if not result.next_action:
@@ -3166,10 +3102,9 @@ def _report_action_outcomes(result: ResponseModel, page_action: Any) -> None:
               "the action that did not run. Switching source discards what is already "
               "filled in.")
     if result.page_type == "js_shell":
-        # The post-action readback of an SPA is still the shell's "enable
-        # JavaScript" text - that is what the DOM holds. Without this note the
-        # caller reads the shell as "the actions did nothing" (measured on a
-        # React login page: every fill reported ok, the body never changed).
+        # SPA 的动作后回读仍然是空壳的「启用 JavaScript」文字 —— 这就是 DOM 里有的
+        # 东西。没有这条注记，调用方会把空壳读成「动作什么都没做」（在一个 React
+        # 登录页上实测：每一次 fill 都报 ok，body 从未变过）。
         result.next_action = (
             (result.next_action + " " if result.next_action else "")
             + "this page renders by JavaScript, so the readback is the shell, "
@@ -3178,13 +3113,12 @@ def _report_action_outcomes(result: ResponseModel, page_action: Any) -> None:
 
 
 def _robots_blocked_result(url: str, verdict: RobotsVerdict) -> ResponseModel:
-    """The response shape for "robots.txt says no, so no request was made".
+    """「robots.txt 说不，所以没有发请求」的响应形状。
 
-    Shaped like ``_invalid_request_result`` (status 0, empty content, reason in
-    ``error``) because it IS a pre-flight refusal: nothing about the site
-    failed, and reporting a 4xx/5xx or a bogus 200 would send the agent off to
-    debug the wrong thing. ``next_action`` carries the two real options -
-    switch source, or re-call with the documented override.
+    形状与 ``_invalid_request_result`` 一致（status 0、空 content、原因在 ``error``），
+    因为它**就是**一次预检拒绝：站点没有任何东西失败，报一个 4xx/5xx 或一个假的 200
+    只会把 agent 支去调试错误的对象。``next_action`` 带上两个真实选项 —— 换源，或
+    用文档里写的覆盖开关重新调用。
     """
     where = verdict.robots_url or robots_url_for(url) or "robots.txt"
     override = (f"re-call with ignore_robots=true if you have the site's "

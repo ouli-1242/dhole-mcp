@@ -1,33 +1,31 @@
-"""Capability-aware install hints (W6).
+"""带能力感知的安装提示（W6）。
 
-Two rules:
+两条规则：
 
-1. The string ``pip install dhole-mcp[all]`` is a claim about what the operator
-   needs to run. W7 will make ``pip install dhole-mcp`` the full tier (with
-   ``[all]`` retained as a compatibility alias for the self-heal path), which
-   means every call site that today hard-codes the string has to change. It
-   should not: ``full_install_command`` is the single place that knows, and
-   W7 changes one function instead of 49 sites.
+1. 字符串 ``pip install dhole-mcp[all]`` 是一条关于"运维需要装什么才能跑"的
+   声明。W7 会把 ``pip install dhole-mcp`` 变成完整档（``[all]`` 保留为自愈
+   路径的兼容别名），这意味着今天硬编码这个字符串的每个调用点都得改。它不该
+   改：``full_install_command`` 是唯一知道它的地方，W7 只改一个函数，而不是
+   49 处。
 
-2. Telling someone to install what they already installed is a lie, and this
-   project has already been bitten by it (see ``pdf_extractor.ocr_advice``'s
-   docstring: "a live run lost its first hour to exactly that"). Each
-   ``*_install_advice`` helper below first checks whether the tier is
-   importable, and only emits the install string when it is genuinely absent.
+2. 让人去装他已经装好的东西是句谎话，而本项目已经被它咬过（见
+   ``pdf_extractor.ocr_advice`` 的 docstring："a live run lost its first hour
+   to exactly that"）。下面每个 ``*_install_advice`` 辅助函数都先检查该档能不能
+   import，只有真的缺了才发安装串。
 
-W6 §3.1 also requires the hint appear at the *use point* rather than at
-startup - ``print_capabilities`` keeps its line for ``-v``, but every tool
-response that hits a missing tier gets its own hint via one of these helpers.
+W6 §3.1 还要求提示出现在**使用点**而不是启动时——``print_capabilities`` 保留它
+给 ``-v`` 的那一行，但每个撞上缺失档位的工具响应都通过这里某个辅助函数拿到
+自己的提示。
 """
 
 from __future__ import annotations
 
 
 def full_install_command() -> str:
-    """The canonical "install every optional tier" command.
+    """"装齐所有可选档"的规范命令。
 
-    Currently ``pip install dhole-mcp[all]``. W7's extras flip changes this
-    line and nothing else - sites call the helper, not the string.
+    当前是 ``pip install dhole-mcp[all]``。W7 翻转 extras 时只改这一行，别的
+    都不动——各处调用的是辅助函数，不是字符串。
     """
     return "pip install dhole-mcp[all]"
 
@@ -43,17 +41,16 @@ def browser_binary_command() -> str:
 
 
 def browser_install_advice() -> str:
-    """Advice for a browser-tier failure. Only tells the user to install if
-    the browser dependencies are genuinely missing on THIS machine.
+    """浏览器档失败时的建议。只有这台机器**真的**缺浏览器依赖时才让用户装。
 
-    17.0 B3: chromium 不再需要用户自己去装 —— 第一次用到浏览器档时 dhole 同步装它。
-    所以这里只剩两种真话：Python 依赖层没装（补 pip），或者二进制那一步失败/还没跑完
-    （给出同一条命令）。
+    17.0 B3：chromium 不再需要用户自己装——第一次用到浏览器档时 dhole 会同步装。
+    所以这里只剩两种真话：Python 依赖层没装（补 pip），或者二进制那一步失败/
+    还没跑完（给出同一条命令）。
     """
     cmd = browser_binary_command()
     try:
-        # Local import to keep install.py at the bottom of the dependency
-        # graph (server imports install, install must not import server).
+        # 函数内 import，让 install.py 留在依赖图底部（server 会 import
+        # install，install 不能 import server）。
         from dhole_mcp.server import _browser_deps_available
         if _browser_deps_available():
             return ("browser tier is installed - dhole installs chromium on first "
@@ -66,9 +63,9 @@ def browser_install_advice() -> str:
 
 
 def ocr_install_advice() -> str:
-    """The single source the four OCR sites already route through (see
-    ``pdf_extractor.ocr_advice``). Kept here so W7's extras flip only touches
-    one function; ``pdf_extractor.ocr_advice`` becomes a thin wrapper.
+    """四个 OCR 站点已经统一走的那一个来源（见 ``pdf_extractor.ocr_advice``）。
+    放在这里，好让 W7 翻转 extras 时只碰一个函数；``pdf_extractor.ocr_advice``
+    变成一个薄包装。
     """
     try:
         from dhole_mcp.ocr import ocr_available
@@ -82,7 +79,7 @@ def ocr_install_advice() -> str:
 
 
 def pdf_install_advice() -> str:
-    """Advice for a PDF-extraction failure that looks like a missing dep."""
+    """PDF 抽取失败、看起来像缺依赖时给的建议。"""
     try:
         import pdfplumber  # noqa: F401
         return ("pdfplumber is installed - the extraction failed for another "
@@ -92,7 +89,7 @@ def pdf_install_advice() -> str:
 
 
 def qr_install_advice() -> str:
-    """Advice for a QR decode failure caused by OpenCV not being there."""
+    """QR 解码失败、原因是 OpenCV 不在时给的建议。"""
     try:
         import cv2  # noqa: F401
         return ("opencv is installed - the QR decode failed for another reason "
@@ -102,8 +99,8 @@ def qr_install_advice() -> str:
 
 
 def rerank_install_advice() -> str:
-    """Advice for the neural reranker tier. 17.0: 模型不是"选"来的 —— 第一次神经
-    搜索会自己把它下载完（可续传），没有 model 选择命令了。"""
+    """神经重排档的建议。17.0：模型不是"选"来的——第一次神经搜索会自己把它
+    下载完（可续传），没有 model 选择命令了。"""
     try:
         import onnxruntime  # noqa: F401
         import tokenizers  # noqa: F401

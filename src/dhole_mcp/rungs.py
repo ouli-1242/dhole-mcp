@@ -62,7 +62,7 @@ _RUNG_TOOLS = frozenset({"web_read", "web_act"})
 
 
 def _anti_detect(level: str) -> dict:
-    """One rung of the ladder, spelled the way the tiers read it."""
+    """档位表里的一档，拼成各层读者认识的那颗 dict。"""
     canvas, webrtc, challenge, everything, synth = _ANTI_DETECT[level]
     return {"hide_canvas": canvas, "block_webrtc": webrtc,
             "solve_cloudflare": challenge, "load_everything": everything,

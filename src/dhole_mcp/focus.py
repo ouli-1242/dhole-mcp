@@ -1,31 +1,25 @@
-"""Query-focused content filtering for web_read.
+"""web_read 的按查询聚焦内容过滤。
 
-When the agent passes ``focus="..."``, the extracted markdown is filtered to
-the blocks (paragraphs / headings / tables / lists) most relevant to the query,
-so the agent loads less context on long pages. Inspired by Crawl4AI's
-BM25ContentFilter, implemented locally (no extra dep).
+当 agent 传 ``focus="..."`` 时，抽取出的 markdown 被过滤成与查询最相关的块
+（段落 / 标题 / 表格 / 列表），让 agent 在长页面上少加载上下文。灵感来自
+Crawl4AI 的 BM25ContentFilter，本地实现（不加依赖）。
 
-Design choice: focus runs **post-cache**. The full extracted text is cached
-once per URL; different focus queries are just different views over the same
-cached content, so focusing never causes a re-fetch and two different focuses
-on the same URL share one cache entry. Filtering happens inside
-``_apply_chunking`` (the universal final wrapper), so it applies to live
-fetches, cache hits, and bulk results alike.
+设计选择：focus 跑在**缓存之后**。完整抽取文本每个 URL 只缓存一次；不同的 focus
+查询只是同一份缓存内容的不同视图，所以聚焦永远不会触发重抓，同一 URL 的两次不同
+聚焦共享一个缓存条目。过滤发生在 ``_apply_chunking``（通用的最后包装）里，因此
+实时抓取、缓存命中与批量结果一视同仁。
 
-BM25 (k1=1.5, b=0.75) with an always-positive IDF (the ``+1`` inside the log)
-so a block with a single query-term occurrence gets a positive score and is
-kept. Selection is ANCHORED TO THE BEST BLOCK (``relative_threshold``), not to
-the absolute score alone: with only an absolute cut, a natural-language question
-kept 55-76% of a docs page because its ubiquitous terms ("what", "is", "the")
-score positively in nearly every block — i.e. the documented usage
-(``focus='question'``) was the case that saved the least context. A heading
-immediately preceding a kept block is preserved for context. If nothing clears
-the threshold, the closest blocks are kept so the agent gets something to judge
-instead of an empty page.
+BM25（k1=1.5，b=0.75）配永远为正的 IDF（log 里的 ``+1``），所以只出现一次查询词
+的块也拿到正分并被保留。选择**锚定在最好的块上**（``relative_threshold``），而不
+只看绝对分：只做绝对切分时，一个自然语言问题会留下文档页的 55-76%，因为它的高频词
+（"what"、"is"、"the"）在几乎每个块里都拿正分 —— 也就是说，文档示例的用法
+（``focus='question'``）恰恰是省上下文最少的那一档。紧挨保留块之前的标题会为上下文
+而保留。如果没有任何块越过门槛，就保留最接近的几块，让 agent 有东西可判，而不是
+拿到一页空白。
 
-Tokenization is Unicode-aware and covers spaceless scripts (Han, kana, Thai) by
-bigramming — see ``_tokens``. It is not a language-specific segmenter: there is
-no stemming and no dictionary, so a CJK query matches on character bigrams.
+分词是 Unicode 感知的，并用二元组覆盖无空格文字（汉字、假名、泰文）—— 见
+``_tokens``。它不是语言特定的分词器：没有词干化、没有词典，所以 CJK 查询按字符
+二元组匹配。
 """
 
 from __future__ import annotations
@@ -79,14 +73,13 @@ def engine_wants_neural() -> bool:
         return choice == "neural"
     return False
 
-# A "word run": letters/digits of any script, split at underscores and
-# punctuation. Unicode-aware (\w) rather than [a-z0-9], so Cyrillic / Greek /
-# Arabic / Korean queries are tokenized at all instead of silently yielding an
-# empty term set.
+# 一条"词串"：任意文字的字母/数字，在下划线与标点处切开。用 Unicode 感知的 \w
+# 而不是 [a-z0-9]，让西里尔 / 希腊 / 阿拉伯 / 韩文查询至少能被分词，而不是静默
+# 产出空词集。
 _WORD_RUN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
-# Scripts that are written without spaces between words. A run in one of these
-# is a phrase, not a word, so it gets bigrammed (see _tokens).
+# 词与词之间不写空格的文字。这些文字里的一条串是一个短语，不是一个词，所以要做
+# 二元组（见 _tokens）。
 _SPACELESS_CHAR_RE = re.compile(
     r"[\u0e00-\u0e7f"          # Thai
     r"\u1000-\u109f"           # Myanmar
@@ -104,22 +97,19 @@ def _is_spaceless(ch: str) -> bool:
 
 
 def _tokens(text: str) -> list[str]:
-    """Tokenize for BM25: Unicode word runs, spaceless scripts bigrammed.
+    """BM25 分词：Unicode 词串，无空格文字切成二元组。
 
-    ``[a-z0-9]+`` only ever matched ASCII, so a Chinese query produced an EMPTY
-    term set and ``focus_content`` returned the page unchanged — no error, no
-    note, just the full text the caller was passing ``focus`` to avoid. Nothing
-    downstream could tell that apart from "every block is relevant".
+    ``[a-z0-9]+`` 只匹配 ASCII，于是中文查询产出**空**词集，``focus_content``
+    原样返回页面 —— 不报错、不加注，恰好是调用方传 ``focus`` 想避开的全文。下游
+    没有任何东西能把它与"每个块都相关"区分开。
 
-    Han / kana / Thai runs have no word boundaries to split on and no segmenter
-    is bundled, so each run is expanded into overlapping character bigrams
-    ("如何创建任务" -> 如何, 何创, 创建, 建任, 任务). One token per run would match
-    almost nothing (a whole sentence is not a term), and single characters would
-    match almost everything. Bigrams are the standard segmenter-free middle.
+    汉字 / 假名 / 泰文串没有词边界可切，也没有随包的分词器，所以每条串展开成重叠
+    的字符二元组（"如何创建任务" -> 如何, 何创, 创建, 建任, 任务）。每个串一个 token
+    几乎匹配不到东西（整句话不是一个词），单个字符又会匹配几乎一切。二元组是不用
+    分词器的标准折中。
 
-    Boundaries are respected per script, so a mixed run like "Python教程" yields
-    the word "python" plus the CJK bigrams instead of one unusable token.
-    ASCII behaviour is unchanged: runs shorter than 2 characters are dropped.
+    边界的判定按文字分段，所以 "Python教程" 这种混排串交出词 "python" 加上 CJK
+    二元组，而不是一个无法使用的 token。ASCII 行为不变：短于 2 个字符的串丢弃。
     """
     out: list[str] = []
     for run in _WORD_RUN_RE.findall((text or "").lower()):
@@ -212,22 +202,22 @@ def _record_match_stats(stats: dict, selection: str, total: int,
 
 
 def _is_heading(block: str) -> bool:
-    """True if the block's first non-blank line is a valid ATX markdown heading."""
+    """块的第一非空行是合法 ATX markdown 标题时为 True。"""
     return _heading_level(block) <= 6
 
 
 def _heading_level(block: str) -> int:
-    """Return heading level (1-6) or 99 if not a heading.
+    """返回标题级别（1-6），不是标题时返回 99。
 
-    ATX headings require a space (or EOL) after the # characters per CommonMark:
-    '# Title' is valid, '#Title' is NOT a heading.
+    CommonMark 要求 # 字符后跟空格（或行尾）：'# Title' 合法，'#Title' **不是**
+    标题。
     """
     for line in block.splitlines():
         stripped = line.lstrip()
         if stripped.startswith("#"):
             level = len(stripped) - len(stripped.lstrip("#"))
             rest = stripped[level:]
-            # Valid ATX: '# ' or '#' alone (empty heading); '#H' is NOT a heading
+            # 合法 ATX：'# ' 或单个 '#'（空标题）；'#H' 不是标题
             if level <= 6 and (not rest or rest[0] == " "):
                 return level
             return 99
@@ -237,7 +227,7 @@ def _heading_level(block: str) -> int:
 
 
 def _is_table(block: str) -> bool:
-    """True if the block looks like a markdown table (has | and --- separators)."""
+    """块看起来像 markdown 表格（有 | 与 --- 分隔行）时为 True。"""
     lines = [line for line in block.splitlines() if line.strip()]
     if len(lines) < 2:
         return False
@@ -245,7 +235,7 @@ def _is_table(block: str) -> bool:
 
 
 def _is_code(block: str) -> bool:
-    """Detect code blocks: fenced (```) or consistently indented."""
+    """识别代码块：围栏（```）或整体缩进。"""
     stripped = block.strip()
     if stripped.startswith("```"):
         return True
@@ -451,21 +441,19 @@ def _split_blocks(text: str) -> list[str]:
 def _bm25_scores(
     blocks: list[str], block_tokens: list[list[str]], qterms: set, k1: float, b: float
 ) -> list[float]:
-    """BM25+ block scores, including the heading-aware boost (pass 2).
+    """BM25+ 块打分，含标题感知的加权（第二遍）。
 
-    Extracted from ``focus_content`` so the neural scorer (M-1) can replace
-    exactly the scoring step and inherit the rest of the pipeline — selection,
-    table/code preservation, heading context — unchanged. The heading boost
-    stays BM25-only: it is a band-aid for lexical matching, and a
-    cross-encoder that reads the whole pair does not need heading terms
-    inflating the blocks beneath them.
+    从 ``focus_content`` 里抽出来，让神经打分器（M-1）只替换打分这一步，并继承
+    流水线其余部分 —— 选择、表格/代码保留、标题上下文 —— 不变。标题加权只留在
+    BM25 一侧：那是对词法匹配的补丁，而一个读完整 (query, doc) 对的 cross-encoder
+    不需要标题词把它下面的块抬分。
     """
     n = len(blocks)
     avgdl = (sum(len(t) for t in block_tokens) / n) if n else 0.0 or 1.0
     if avgdl == 0:
         avgdl = 1.0
 
-    # Document frequency per term (across blocks).
+    # 每个词项的文档频率（跨块）。
     df: dict[str, int] = {}
     for toks in block_tokens:
         for t in set(toks):
@@ -473,8 +461,7 @@ def _bm25_scores(
 
     def idf(term: str) -> float:
         d = df.get(term, 0)
-        # +1 inside the log keeps IDF positive (BM25+ flavor) so a single
-        # occurrence always scores > 0.
+        # log 里 +1 让 IDF 保持为正（BM25+ 风味），于是只出现一次也总能得正分。
         return math.log((n - d + 0.5) / (d + 0.5) + 1)
 
     def score(i: int) -> float:
@@ -495,8 +482,8 @@ def _bm25_scores(
 
     scores = [score(i) for i in range(n)]
 
-    # Heading-aware boosting: when a heading contains query terms, boost all
-    # blocks under it (1.5x) until the next heading at the same or higher level.
+    # 标题感知加权：当标题包含查询词时，给它下面所有块加权（1.5 倍），
+    # 直到遇到同级或更高级的下一个标题。
     for i in range(n):
         if not _is_heading(blocks[i]):
             continue
@@ -513,38 +500,30 @@ def _bm25_scores(
     return scores
 
 
-# A (query, doc) pair is truncated at the cross-encoder's MAX_SEQ=512, so a
-# block longer than the window gets scored on its opening and its tail is
-# invisible to the model. The BM25 block size was tuned for lexical overlap;
-# the encoder needs its own bound. ~300 chars is the safe ceiling: the default
-# model's worst case is Han at ~1 token/char, which still leaves the query
-# itself room inside 512.
+# 一个 (query, doc) 对在 cross-encoder 的 MAX_SEQ=512 处被截断，所以超过窗口的块
+# 只按开头打分，尾部对模型不可见。BM25 的块长是按词法重叠调的；编码器需要自己的
+# 界。约 300 字符是安全上限：默认模型的最坏情况是汉字约 1 token/字符，这样 512 的
+# 窗口里仍给查询本身留出空间。
 _NEURAL_MAX_CHARS = 300
 
-# Cost model (measured 2026-10-01 on README.md 94 blocks / CHANGELOG.md 140):
-# wall time tracks the CHUNK count, not the block count -- 202 chunks 14.0s vs
-# 214 chunks 14.8s, even though the block counts differ by 1.5x. Blocks of
-# different sizes converge once split to <=300 chars, which is why the earlier
-# "91 blocks vs 140 blocks cost about the same" reading looked like fixed
-# overhead: what matched was the chunk counts, not a constant. ~69 ms/chunk for
-# Han text (300 chars ~ 300 tokens, near MAX_SEQ).
+# 成本模型（2026-10-01 在 README.md 94 块 / CHANGELOG.md 140 块上实测）：墙钟时间
+# 跟着**分片数**走，不是块数 —— 202 个分片 14.0s vs 214 个分片 14.8s，尽管块数差
+# 1.5 倍。不同大小的块切到 <=300 字符后就收敛了，这也是早先"91 块 vs 140 块成本
+# 差不多"的读数看似固定开销的原因：真正对齐的是分片数，不是一个常数。汉字文本约
+# 69 ms/分片（300 字符 ~ 300 token，接近 MAX_SEQ）。
 #
-# Do NOT "optimize" this by batching same-length chunks together. score() pads
-# the whole batch to its longest member and the model is NOT padding invariant:
-# the same chunk scores differently in a 300-char batch than in a 71-char one
-# (measured max 2.2e-2), and a 4-way length split moved single scores by up to
-# 0.34 and swapped 2-3 blocks in and out of the top 20. Length bucketing
-# measured 37-66% faster and was REJECTED for changing the answer. Within one
-# page the batch is fixed, so scores stay reproducible; they are simply not
-# comparable ACROSS pages, and changing batch composition is a behaviour change.
+# **不要**为了优化把等长分片批在一起。score() 会把整批补齐到最长成员，而模型**不是**
+# padding 不变的：同一个分片在 300 字符批里的得分与在 71 字符批里不同（实测最大
+# 2.2e-2），一次四路长度拆分让单个得分最多移动 0.34，并把 2-3 个块换进/换出前 20。
+# 长度分桶实测快 37-66%，但因改变答案而被**否决**。一页之内批是固定的，所以得分
+# 可复现；它们只是不能**跨页**比较，而改变批的组成就是改变行为。
 
 
 def _split_for_encoder(block: str, cap: int = _NEURAL_MAX_CHARS) -> list[str]:
-    """Split a block into pieces that fit the encoder window (long-line aware).
+    """把一块切成能放进编码器窗口的小片（感知长行）。
 
-    Minified single-line documents must hard-wrap, or one piece still carries
-    the whole line. Line-based accumulation keeps normal markdown blocks
-    unsplit where they already fit.
+    压缩成单行的文档必须硬折行，否则一片仍然扛着整行。按行累积让本来就装得下的
+    普通 markdown 块保持不变。
     """
     if len(block) <= cap:
         return [block]
@@ -570,13 +549,11 @@ def _split_for_encoder(block: str, cap: int = _NEURAL_MAX_CHARS) -> list[str]:
 
 
 def _neural_block_scores(reranker, query: str, blocks: list[str]) -> Optional[list[float]]:
-    """Cross-encoder score per block; None = the scorer itself failed.
+    """每个块的 cross-encoder 得分；None = 打分器本身失败。
 
-    score() already answers an inference hiccup with all-zeros and a shape
-    mismatch with a shorter list; both read as "the model is not answering"
-    here, so they map to None and the caller falls back to BM25 instead of
-    serving a page emptied by a broken scorer. Per-block score is the MAX over
-    its chunks — a block is as relevant as its most relevant part.
+    score() 对一次推理抖动回以全零，对形状不符回以更短的列表；两者在这里都读成
+    "模型没有在作答"，所以映射为 None，调用方回退到 BM25，而不是交出一页被坏打分器
+    清空的内容。每块得分取它各分片的 MAX —— 一块的相关性等于它最相关的那部分。
     """
     try:
         chunk_map: list[tuple[int, str]] = []
@@ -618,47 +595,37 @@ def focus_content(
     mode: str = "filter",
     stats: Optional[dict] = None,
 ) -> str:
-    """Return the blocks of ``text`` most relevant to ``query``.
+    """返回 ``text`` 中最与 ``query`` 相关的那些块。
 
-    Two cuts apply to the FILTER mode, and a block must clear BOTH: an absolute
-    ``threshold`` score, and ``relative_threshold`` x the best block's score.
-    The relative cut exists because the absolute one alone cannot tell "this
-    block is about the query" from "this block contains the word 'the'": BM25+
-    keeps IDF positive for every term, so a question's stopwords accumulate a
-    small positive score in nearly every block (measured: 55-76% of a docs page
-    kept, against 9% for a keyword query). ``threshold`` therefore acts as a
-    floor — a page whose best block is itself weak keeps the old, permissive
-    behaviour.
+    FILTER 模式有两道切分，一块必须**同时**越过：绝对 ``threshold`` 分，以及
+    ``relative_threshold`` × 最佳块的分数。相对切分存在是因为绝对切分分不清
+    "这一块讲的就是查询"与"这一块包含 'the' 这个词"：BM25+ 让每个词的 IDF 恒正，
+    于是问题的停用词在几乎每个块里都累积一点正分（实测：留下文档页的 55-76%，
+    而关键词查询只留 9%）。因此 ``threshold`` 充当地板 —— 最佳块本身就很弱的页面
+    保持旧的宽松行为。
 
-    If ``query`` is empty, the text has <= 1 block, or the query yields no
-    usable terms, the original text is returned unchanged (focus is a no-op).
+    如果 ``query`` 为空、文本只有 <= 1 块，或查询产不出可用词项，原文本原样返回
+    （focus 是空操作）。
 
-    ``reranker`` (M-1, neural focus): when a warm ``_Reranker`` is passed, every
-    block is scored by the local cross-encoder instead of BM25. The scorer
-    never loads a model and never downloads — callers (``_apply_chunking``) peek
-    ``get_reranker()`` only when this call named ``focus_engine='neural'`` (17.0:
-    there is no permission flag; the load is arranged at the tool entry, and a
-    named-but-missing model is refused there rather than downgraded); a
-    None/failed scorer here falls back to BM25 with the header saying so. The
-    cross-encoder does not need the heading
-    boost (it reads the pair, not term overlap), and the absolute ``threshold``
-    does not apply — the sigmoid scale has its own geometry (on-topic ~0.9+,
-    off-topic ~0.001), so only the best-anchored relative cut is used.
+    ``reranker``（M-1，神经 focus）：传入一个已预热的 ``_Reranker`` 时，每个块由
+    本地 cross-encoder 而非 BM25 打分。打分器从不加载模型、从不下载 —— 调用方
+    （``_apply_chunking``）只在本次调用点名 ``focus_engine='neural'`` 时才探
+    ``get_reranker()``（17.0：没有许可旗；加载在工具入口安排，点名了但模型缺失
+    在那里被拒绝，而不是降级）；这里拿到 None/失败的打分器就回退 BM25，并在头部
+    说明。cross-encoder 不需要标题加权（它读的是对，不是词项重叠），绝对的
+    ``threshold`` 也不适用 —— sigmoid 标度有自己的几何（切题约 0.9+，跑题约
+    0.001），所以只用锚定最佳块的相对切分。
 
-    ``mode="best"`` (M-2): return only the single highest-scoring block plus
-    its immediately preceding heading — "which part of this page answers the
-    question" — instead of every block past the cut.
+    ``mode="best"``（M-2）：只返回得分最高的那一块加上它紧前的标题 —— "这一页的
+    哪部分回答了问题" —— 而不是越过切分的每一块。
 
-    ``stats`` (out-param, M-3): ``{"scorer": "neural"|"bm25", "best_score": ...}``
-    lets the caller report an intent-miss hint without reparsing the output.
-    ``best_score`` is filled only for the neural scorer — BM25's unbounded
-    scale has no calibrated reading. Three more keys are the caller's for the same
-    reason (no reparse): ``dropped_structural`` names the tables/code this filter
-    deleted, ``ignored`` says why no filtering happened at all when the text
-    came back untouched, and ``blocks_total`` / ``blocks_kept`` is the block
-    ledger — since 3.5 a page is cut into far more blocks than the blank-line
-    rule gave it, so "how many were dropped" no longer reads as "how much of the
-    document you got"; these are the numbers that make the loss auditable.
+    ``stats``（出参，M-3）：``{"scorer": "neural"|"bm25", "best_score": ...}``
+    让调用方无需重解析输出就能报告一次意图落空的提示。``best_score`` 只为神经打分器
+    填写 —— BM25 的无界标度没有校准过的读数。另外三个键出于同样的理由（不重解析）
+    归调用方：``dropped_structural`` 点名这次过滤删掉的表格/代码，``ignored`` 说明
+    文本原样返回时为什么根本没过滤，``blocks_total`` / ``blocks_kept`` 是块账 ——
+    自 3.5 起一页被切成远多于空行规则给出的块数，所以"丢了几块"不再读成"你拿到了
+    文档的多少"；这几个数才让丢失可审计。
     """
     stats_out = stats if isinstance(stats, dict) else None
 
@@ -698,19 +665,16 @@ def focus_content(
     if scores is None:
         scores = _bm25_scores(blocks, block_tokens, qterms, k1, b)
 
-    # Tables/code containing ANY query term are always kept (high-value) —
-    # this deterministic safety net covers both scorers.
+    # 含任何查询词的表格/代码永远保留（高价值）—— 这张确定性安全网对两个打分器都生效。
     preserved: set = set()
     for i in range(n):
         if _is_table(blocks[i]) or _is_code(blocks[i]):
             if set(block_tokens[i]) & qterms:
                 preserved.add(i)
 
-    # Selection: anchored to the best CONTENT block, not the best block overall
-    # (a heading is boosted 1.5x under BM25 and matches the query by being its
-    # title — anchoring on it can drop the answer block it introduces). The
-    # neural path skips the absolute threshold: the sigmoid scale has no
-    # BM25-style floor, and the relative cut already drops the 0.0001 tail.
+    # 选择：锚定在最好的**内容块**上，不是整体最好的块（BM25 下标题被加权 1.5 倍，
+    # 且因为它是标题而匹配查询 —— 锚在标题上可能丢掉它引出的答案块）。神经路径跳过
+    # 绝对门槛：sigmoid 标度没有 BM25 式的地板，相对切分已经丢掉 0.0001 的尾巴。
     content_scores = [s for i, s in enumerate(scores) if not _is_heading(blocks[i])]
     best = max(content_scores) if content_scores else (max(scores) if scores else 0.0)
     if stats_out is not None:
@@ -722,11 +686,10 @@ def focus_content(
     keep = [i for i in range(n) if scores[i] >= cut]
     selection = "cut"
     if not keep:
-        # Nothing cleared the threshold — keep the closest blocks so the agent
-        # has something to judge rather than an empty response. Since R01-036 this
-        # branch is *named*: the header used to say "showing 5 of 28 blocks by
-        # BM25 relevance" here, which reads as "these matched" for a page that
-        # answered nothing (measured: every block scored 0.0).
+        # 没有任何块越过门槛 —— 保留最接近的几块，让 agent 有东西可判，而不是
+        # 拿到空响应。自 R01-036 起这一支是**被点名**的：头部从前在这里写
+        # "showing 5 of 28 blocks by BM25 relevance"，对一页什么都没答上的内容
+        # 读起来像"这些匹配了"（实测：每个块都是 0.0 分）。
         keep = sorted(range(n), key=lambda i: scores[i], reverse=True)[:fallback_top]
         selection = "closest"
     runs = _query_runs(query)
@@ -734,7 +697,7 @@ def focus_content(
     presence = _presence_clause(len(runs), absent_runs)
 
     keep_set = set(keep) | preserved
-    # Preserve a heading immediately preceding a kept non-heading block.
+    # 保留紧挨某个保留的非标题块之前的标题。
     for i in keep:
         if i > 0 and _is_heading(blocks[i - 1]) and not _is_heading(blocks[i]):
             keep_set.add(i - 1)
@@ -766,9 +729,8 @@ def focus_content(
                 "Pass focus='' for the full page, or keep mode unset for the "
                 "filtered page")
         if len(blocks[top].strip()) < 200:
-            # The BM25 arm has no calibrated score to name a weak hit (unlike
-            # the neural intent floor), but a tiny best block is checkable
-            # without one: a 30-char "best answer" is usually just a heading.
+            # BM25 这一支没有校准分来点名一次弱命中（不像神经的意图地板），但一个
+            # 极小的最佳块不用校准也能核：30 字符的"最佳答案"通常只是个标题。
             header += (
                 f" The best block is only {len(blocks[top].strip())} chars - "
                 "possibly just a heading with no answer; keep mode unset "

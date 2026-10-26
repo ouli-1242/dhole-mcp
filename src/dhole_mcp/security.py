@@ -1,7 +1,6 @@
-"""Input validation and security utilities for Dhole.
+"""Dhole 的输入校验与安全工具。
 
-URL validation with SSRF protection, input sanitization,
-and safe defaults for all external-facing parameters.
+带 SSRF 防护的 URL 校验、输入清洗，以及所有对外参数的保守默认值。
 """
 
 import contextlib
@@ -13,7 +12,7 @@ import time
 from typing import Any, Optional
 from urllib.parse import unquote, urlparse
 
-# Maximum URL length to prevent DoS via oversized URLs
+# URL 长度上限，防止超长 URL 造成 DoS
 MAX_URL_LENGTH = 8192
 
 # ─── 私网 / 本机 allowlist（G9，默认关闭）─────────────────────────────
@@ -65,7 +64,7 @@ def _env_private_hosts() -> frozenset[str]:
 
 
 def parse_allow_private(value) -> tuple[frozenset, bool]:
-    """Normalize ``allow_private`` into ``(hosts, loopback_net)``.
+    """把 ``allow_private`` 归一成 ``(主机集合, 是否放开整个回环网段)``。
 
     ``true``  -> 只放开回环。**不是整个局域网**：一次布尔开关把 RFC1918 全打开，
     等于把路由器、NAS、打印机和云元数据一起打开，那是「允许我的 dev 服务」没有
@@ -96,21 +95,20 @@ def parse_allow_private(value) -> tuple[frozenset, bool]:
 
 
 def set_allow_private(value) -> Any:
-    """Push the per-call private-host policy. Returns a reset token."""
+    """推入本次调用的私网主机策略。返回一个用于复位的 token。"""
     return _ALLOW_PRIVATE.set(parse_allow_private(value))
 
 
 @contextlib.contextmanager
 def allow_private_scope(value):
-    """Run a block with one more host allowed than the standing policy names.
+    """在一个代码块里额外放行一台主机，叠加在常驻策略之上。
 
-    This layer is **additive**: the guard merges it with the environment list and
-    the stored `cred_defaults` value (see private_hosts_allowed), so a block can
-    name a target that neither of them names, and can never un-name one that
-    they do. That is the whole contract — nothing reads the stored value on
-    behalf of a tool any more, so no door has to remember to do it.
+    这一层是**只增**的：守卫把它与环境变量名单、落盘的 `cred_defaults` 值合并（见
+    private_hosts_allowed），所以一个块可以点名另外两处都没点名的目标，却永远不能让
+    它们点过名的目标失效。这就是全部契约 —— 现在没有任何东西替一颗工具去读落盘值，
+    所以也没有哪扇门需要记得读它。
 
-    ``None``/``False``/``""`` is a no-op push (empty allowlist).
+    ``None``/``False``/``""`` 是一次空推入（空白名单）。
     """
     token = set_allow_private(value)
     try:
@@ -120,14 +118,12 @@ def allow_private_scope(value):
 
 
 def stored_allow_private():
-    """The raw stored `cred_defaults` value for the private-host door, or None.
+    """私网门在 `cred_defaults` 里存的原值；没有则 None。
 
-    The one place the store is asked about this key. A caller that has to *report*
-    the stored value (web_read's "that one does nothing" note) asks here, so the
-    report and the gate can never read different rows.
+    存储里关于这颗键只有这一处被问。必须**申报**落盘值的调用方（web_read 那句
+    「那一颗没起作用」）也问这里，于是申报与门永远不会读到不同的行。
 
-    Fail-closed: a store that cannot be read widens nothing — the answer is the
-    same one a process with no stored defaults gives.
+    失败即关闭：读不出来的存储什么也不放宽 —— 答案与一个没有落盘默认值的进程相同。
     """
     try:
         from dhole_mcp import identity
@@ -153,7 +149,7 @@ def private_hosts_allowed() -> tuple[frozenset, bool]:
 
 
 def _private_host_allowed(hostname: str, addr=None) -> bool:
-    """Whether this internal target was explicitly allowed (G9).
+    """这个内网目标是否被显式放行（G9）。
 
     云元数据端点（169.254.169.254 等）**永远**不在这里返回 True：它是 SSRF 的第一
     目标，一次误判就把整机凭据交出去，不属于「我的 dev 服务」这类诉求。
@@ -179,67 +175,65 @@ def _private_host_allowed(hostname: str, addr=None) -> bool:
             return False
     return False
 
-# Blocked URL schemes (SSRF, local file access, etc.)
+# 被拦的 URL 协议（SSRF、本地文件访问等）
 _BLOCKED_SCHEMES = frozenset({
     "file", "ftp", "gopher", "data", "javascript", "vbscript",
     "about", "chrome", "chrome-extension", "jar",
 })
 
-# Hostnames that must never be targeted (bypass IP checks via name resolution)
+# 永远不许指向的主机名（它们会经名字解析绕过 IP 检查）
 _BLOCKED_HOSTNAMES = frozenset({
     "localhost", "metadata.google.internal", "169.254.169.254",
-    "0.0.0.0", "0",  # "0" from bare IPv6 without brackets (e.g. http://0:0:0:...)
+    "0.0.0.0", "0",  # 无方括号的裸 IPv6 里的 "0"（例如 http://0:0:0:...）
 })
 
-# DNS rebinding service suffixes (nip.io, sslip.io, etc.)
-# These services resolve subdomains to arbitrary IPs, enabling SSRF bypass.
+# DNS 重绑定服务的后缀（nip.io、sslip.io 等）。
+# 这些服务把子域解析到任意 IP，于是能绕过 SSRF 防护。
 _DNS_REBINDING_SUFFIXES = (
     ".nip.io", ".sslip.io", ".xip.io", ".nip.name",
-    ".1u.ms",  # resolves to loopback
+    ".1u.ms",  # 解析到回环
 )
 
-# Private/reserved IP ranges that must never be targeted
+# 永远不许指向的私有/保留 IP 段
 _PRIVATE_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),       # Loopback
-    ipaddress.ip_network("10.0.0.0/8"),        # Private
-    ipaddress.ip_network("172.16.0.0/12"),     # Private
-    ipaddress.ip_network("192.168.0.0/16"),    # Private
-    ipaddress.ip_network("169.254.0.0/16"),    # Link-local
-    ipaddress.ip_network("0.0.0.0/8"),         # Current network
-    ipaddress.ip_network("224.0.0.0/4"),       # Multicast
-    ipaddress.ip_network("240.0.0.0/4"),       # Reserved
-    ipaddress.ip_network("::1/128"),            # IPv6 loopback (compressed)
-    ipaddress.ip_network("::ffff:0:0/96"),     # IPv4-mapped IPv6 — extract mapped v4 for re-check
-    ipaddress.ip_network("fc00::/7"),           # IPv6 unique local
-    ipaddress.ip_network("fe80::/10"),          # IPv6 link-local
-    ipaddress.ip_network("::/128"),             # IPv6 unspecified
+    ipaddress.ip_network("127.0.0.0/8"),       # 回环
+    ipaddress.ip_network("10.0.0.0/8"),        # 私有
+    ipaddress.ip_network("172.16.0.0/12"),     # 私有
+    ipaddress.ip_network("192.168.0.0/16"),    # 私有
+    ipaddress.ip_network("169.254.0.0/16"),    # 链路本地
+    ipaddress.ip_network("0.0.0.0/8"),         # 当前网络
+    ipaddress.ip_network("224.0.0.0/4"),       # 组播
+    ipaddress.ip_network("240.0.0.0/4"),       # 保留
+    ipaddress.ip_network("::1/128"),            # IPv6 回环（压缩写法）
+    ipaddress.ip_network("::ffff:0:0/96"),     # IPv4-mapped IPv6 —— 取出映射的 v4 再查一次
+    ipaddress.ip_network("fc00::/7"),           # IPv6 唯一本地
+    ipaddress.ip_network("fe80::/10"),          # IPv6 链路本地
+    ipaddress.ip_network("::/128"),             # IPv6 未指定
 ]
 
-# Max CSS selector length to prevent ReDoS
+# CSS 选择器长度上限，防止 ReDoS
 MAX_CSS_SELECTOR_LENGTH = 4096
 
-# Max header count and value length
+# 头数量与头值的长度上限
 MAX_HEADER_COUNT = 50
 MAX_HEADER_VALUE_LENGTH = 8192
 
 
 class SecurityError(ValueError):
-    """Raised when input fails security validation."""
+    """输入未通过安全校验时抛出。"""
     pass
 
 
-# ─── the resolver reality of this machine ────────────────────────────────
+# ─── 这台机器上解析器的现实 ──────────────────────────────────────────────
 #
-# DNS recheck is the right default: this tool's input is a URL an agent picked up
-# somewhere untrusted, and "public hostname pointing at 169.254.169.254" is the
-# main SSRF path. But a Clash / mihomo / sing-box TUN with a fake-ip resolver
-# hands EVERY public hostname an address from a reserved block by design, so
-# fail-closed here reads to the user as "nothing works" — and the only way out
-# used to be knowing to set an env var before making the first call.
+# DNS 复验是正确的默认：这个工具的输入是 agent 从某个不可信的地方捡来的 URL，
+# 而"公网主机名指向 169.254.169.254"正是 SSRF 的主要路径。但 Clash / mihomo /
+# sing-box 的 TUN 配 fake-ip 解析器时，会**按设计**给每一个公网主机名发一个保留
+# 网段的地址，于是这里 fail-closed 在用户眼里就是"什么都用不了"—— 从前唯一的
+# 出路是知道要在第一次调用之前先设一个环境变量。
 #
-# The asymmetry makes this detectable rather than configurable: a genuine public
-# resolver never answers 198.18.0.0/15 (RFC 2544 benchmarking) or a ULA
-# fc00::/7 AAAA for example.com.
+# 这种不对称让它可以被**检测**出来，而不是做成可配置：真正的公网解析器绝不会为
+# example.com 回答 198.18.0.0/15（RFC 2544 基准测试段）或 ULA fc00::/7 的 AAAA。
 #
 # 17.0 R3刀2 把三件事改了口径，都是往**严**的方向：
 #   1. 判定不再由一个域名的答案决定 —— 两颗独立注册的域名合取（见 probe_fake_ip）。
@@ -265,24 +259,21 @@ _REPROBE_MIN_GAP_S = 60.0
 
 
 def _tunnel_exempt_engaged() -> bool:
-    """True when this host's resolver is a measured fake-ip tunnel.
+    """这台主机的解析器是否是实测出来的 fake-ip 隧道。
 
-    It no longer means "the recheck layer is off" (R3刀2): it means the two tunnel
-    ranges are tolerated, because on such a host those addresses ARE every public
-    name. 17.0 retired the ``DHOLE_SSRF_DNS_RECHECK`` knob (silently ignored), so
-    the exemption is decided by measurement alone — there is no override on purpose:
-    the historical reason to want one IS the fake-ip case, and that case is what the
-    probe detects.
+    它不再意味着「复验层关掉了」（R3刀2）：它意味着容忍隧道那两段地址，因为在这种主机上
+    那些地址**就是**每一个公网名。17.0 注销了 ``DHOLE_SSRF_DNS_RECHECK`` 旋钮（运行时
+    静默忽略），所以豁免只由实测决定 —— 刻意不留覆盖开关：历史上想要它的理由**正是**
+    fake-ip 这一种情况，而这种情况就是探针要检测的。
     """
     return probe_fake_ip()[0] == "fake-ip"
 
 
 def probe_fake_ip() -> tuple[str, str, str]:
-    """``(verdict, address, detail)`` — verdict is public / fake-ip / unprobed.
+    """``(判词, 地址, 细节)`` —— 判词是 public / fake-ip / unprobed。
 
-    Uncertainty is never a reason to relax: a resolver that cannot answer the probe
-    (offline, or one that hides the answer) returns ``unprobed`` and the recheck
-    applies in full.
+    不确定永远不是放宽的理由：答不了探针的解析器（离线，或故意藏起答案的）返回
+    ``unprobed``，复验完整生效。
 
     合取（R3刀2-A）：两颗独立注册的域名**都**答进隧道段才判 fake-ip。以前一颗
     （example.com）就决定整台机器的复验层 —— 那条路径当年记在 F-C2-J2 判决里
@@ -334,36 +325,32 @@ def probe_fake_ip() -> tuple[str, str, str]:
 
 
 def reset_fake_ip_probe() -> None:
-    """Forget the cached verdict (tests point the probe at a stubbed resolver)."""
+    """忘掉缓存的判词（测试会把探针指向打桩的解析器）。"""
     global _fake_ip_cache, _auto_note
     _fake_ip_cache, _auto_note = None, ""
 
 
-# The verdict is a process fact, and the two facts an operator can check are in
-# different processes: `dhole --doctor` resolves the name again in its own, while
-# the guard that answers a fetch uses whatever the server process measured - possibly
-# at a startup hours ago, possibly under a different env block. Recording the
-# measurement is what lets doctor say WHO answered, instead of reporting its own
-# fresh answer under wording that implies it checked the server ("the DNS-recheck
-# layer is skipped automatically on this host"). 2026-10-05, batch 6d.
+# 判词是一个进程事实，而运维能核对的两个事实在不同的进程里：`dhole --doctor` 在自己的
+# 进程里重新解析名字，而答复抓取的那个守卫用的是服务进程测到的结果 —— 可能是几小时前
+# 启动时测的，也可能处在不同的环境变量块下。把这次测量记下来，doctor 才能说清是**谁**
+# 答的，而不是在暗示「我问过服务器」的措辞下报出自己刚测的答案（「the DNS-recheck
+# layer is skipped automatically on this host」）。2026-10-05，批次 6d。
 _RESOLVER_RECORD_NAME = "resolver_probe.json"
 
 
 def _record_resolver_probe(verdict: str, address: str) -> None:
-    """Mirror this process's measurement for other processes to read.
+    """把本进程的测量结果镜像出去，供其他进程读取。
 
-    Best-effort and never raising: the verdict is already decided and applied by
-    the time this runs, so a file that cannot be written must not change, delay,
-    or accompany a security decision with an exception.
+    尽力而为、永不抛异常：跑到这里时判词已经决定并生效，所以一个写不出来的文件不许
+    改变、拖延一次安全决定，也不许伴随它抛异常。
     """
     try:
         import json
 
         from dhole_mcp import paths
-        # Resolved through paths.file() even for the WRITE, so the one seam the
-        # test harness redirects (tests/conftest.py) covers both directions: a
-        # suite whose stubbed DNS decides "public" on every call must not be able
-        # to write that conclusion into the developer's real home.
+        # 连**写**也走 paths.file() 解析，这样测试挂具重定向的那一道缝
+        # （tests/conftest.py）两个方向都盖得住：一套把 DNS 打桩成每次都判 "public"
+        # 的用例，不许把这个结论写进开发者真实的家目录。
         target = paths.file(_RESOLVER_RECORD_NAME)
         paths.ensure_private_dir(target.parent)
         with open(target, "w", encoding="utf-8") as f:
@@ -380,11 +367,11 @@ def _record_resolver_probe(verdict: str, address: str) -> None:
 
 
 def resolver_probe_record() -> dict:
-    """What the last dhole process to measure this resolver answered, or ``{}``.
+    """最近一个测过这台解析器的 dhole 进程答了什么；没有记录时返回 ``{}``。
 
-    ``{}`` means no fetch has ever probed here (a fresh home, or a process that
-    died before its first URL). Callers must say that out loud rather than read
-    it as "public": an absent record and a swallowed one look the same on disk.
+    ``{}`` 意味着这里从没有抓取探过（新家目录，或一个在第一次 URL 之前就死掉的进程）。
+    调用方必须把这件事说出来，而不是读成 "public"：在磁盘上，缺失的记录与一条被吞掉的
+    记录长得一模一样。
     """
     try:
         import json
@@ -401,12 +388,11 @@ def resolver_probe_record() -> dict:
 
 
 def recheck_posture_note() -> str:
-    """Non-empty only when this host's resolver is a measured fake-ip tunnel.
+    """只有这台主机的解析器被实测为 fake-ip 隧道时才非空。
 
-    Absent otherwise, so an ordinary host pays nothing on the wire for a note
-    that only means something on a fake-ip one. Runs the probe if nothing has
-    asked yet - a diagnostic that answers "what is this process doing?" has to
-    know the answer, not just the cached one.
+    其他情况缺席，于是一台普通主机不必为一条只在 fake-ip 主机上有意义的注记付线上成本。
+    还没人问过就跑一次探针 —— 一个回答「这个进程在做什么」的诊断，必须知道答案本身，
+    而不只是缓存。
     """
     return _auto_note if _tunnel_exempt_engaged() else ""
 
@@ -451,7 +437,7 @@ _DNS_CHECK_CACHE: dict[str, tuple[float, str | None]] = {}
 
 
 def _hosts_file_path() -> str:
-    """Path of the OS hosts file."""
+    """操作系统 hosts 文件的路径。"""
     if os.name == "nt":
         root = os.environ.get("SystemRoot") or r"C:\Windows"
         return os.path.join(root, "System32", "drivers", "etc", "hosts")
@@ -462,17 +448,14 @@ _hosts_cache: tuple[float, dict[str, str]] | None = None
 
 
 def _hosts_file_pin(hostname: str) -> str | None:
-    """Return the IP the OS hosts file pins `hostname` to, else None.
+    """返回操作系统 hosts 文件把 `hostname` 钉到的 IP；没有则 None。
 
-    A hosts-file entry is a DELIBERATE local decision — ad/tracker blockers,
-    mirrors, split-horizon overrides and (on many CN desktops) plain
-    "don't let this resolve" pins. They look exactly like an attacker's DNS
-    answer, so with the recheck on they must not be read as one: an attacker
-    cannot write your hosts file, so honoring the pin keeps the protection where
-    it matters while not breaking a machine that Google-DNS-blocks some domains
-    on purpose.
+    hosts 条目是**刻意的**本地决定 —— 广告/跟踪屏蔽、镜像、分层解析覆盖，以及（许多
+    中文桌面上的）「别让它解析」钉子。它们与攻击者的 DNS 答案长得一模一样，所以开着
+    复验时绝不能把它们读成后者：攻击者写不了你的 hosts 文件，尊重钉子既把防护留在
+    要紧的地方，又不会弄坏一台故意用 Google DNS 屏蔽某些域名的机器。
 
-    Parsed once per file change (mtime), never raises.
+    按文件变化（mtime）解析一次，永不抛异常。
     """
     global _hosts_cache
     try:
@@ -503,17 +486,16 @@ def _hosts_file_pin(hostname: str) -> str | None:
 
 
 def _hosts_cache_reset_dns() -> None:
-    """Drop DNS verdicts when the hosts file changes (it changes the answers)."""
+    """hosts 文件变化时丢掉 DNS 判词（它改变了答案）。"""
     _DNS_CHECK_CACHE.clear()
 
 
 def target_is_private(url: str) -> bool:
-    """Geography, not permission: does this URL name a loopback/private target?
+    """地理，不是许可：这个 URL 是否指向回环/私网目标？
 
-    Independent of the allowlist — "allowed" and "private" are different
-    questions, and a caller may legitimately allow what is private. Hostnames
-    answer False (geography unknown without a DNS roundtrip; the real attempt
-    decides those). Never raises.
+    与 allowlist 无关 —— 「被放行」与「是私网」是两个不同的问题，而调用方完全可以
+    合法地放行一个私网目标。主机名一律答 False（不跑一趟 DNS 就不知道它的地理；那些
+    交给真正的尝试去决定）。永不抛异常。
     """
     try:
         host = _client_view_host((urlparse(url).hostname or "").strip("[]")).lower()
@@ -531,17 +513,15 @@ def target_is_private(url: str) -> bool:
 
 
 def allow_private_covers(value: Any, url: str) -> bool:
-    """Whether a stored `allow_private` has any bearing on this target.
+    """落盘的 `allow_private` 对这个目标有没有任何关系。
 
-    Two ways it can. The URL names private/loopback geography literally, and the
-    stored value is the policy the gate reads for that class of target. Or the
-    target's host is one the value names — which is the other half of why anyone
-    lists a host: a `my-service.local` name has no known geography until DNS
-    answers, and the listing is what lets the attempt happen at all. A public name
-    matched by neither has no door standing over it.
+    两种可能有。URL 字面上就是私网/回环地理，而落盘值正是门为这一类目标读的策略。
+    或者目标主机是落盘值点名的那些 —— 这是「为什么有人要列主机」的另一半：
+    `my-service.local` 这种名字在 DNS 回答之前没有已知地理，而列进名单才让这次尝试
+    有可能发生。两种都不匹配的公网名，头顶上没有门。
 
-    Matching is the same literal match `_private_host_allowed` uses, so this can
-    never claim a broader reach than the gate really has. Never raises.
+    匹配用的就是 `_private_host_allowed` 那一种字面匹配，所以这里永远不会声称比门
+    实际覆盖得更宽。永不抛异常。
     """
     if value is None or value is False or value == "":
         return False
@@ -590,12 +570,11 @@ def _is_blackhole_pin(ip: str) -> bool:
 
 
 def _resolves_to_internal(hostname: str) -> str | None:
-    """Return a description of the internal address `hostname` resolves to, else None.
+    """返回 `hostname` 解析到的内网地址描述；解析不到内网时返回 None。
 
-    A hosts-file pin short-circuits the check (see ``_hosts_file_pin``).
-    Resolution failure (gaierror/timeout) is tolerated — treated as "not
-    internal" — so an offline or polluted resolver does not turn into a hard
-    error for every URL.
+    hosts 文件钉位会短路这项检查（见 ``_hosts_file_pin``）。解析失败
+    （gaierror/超时）被容忍 —— 当成「不是内网」—— 于是一个离线或被污染的解析器不会
+    让每一个 URL 都变成硬错误。
     """
     now = time.monotonic()
     cached = _DNS_CHECK_CACHE.get(hostname)
@@ -640,7 +619,7 @@ def _resolves_to_internal(hostname: str) -> str | None:
                     verdict = f"{info_ip} in {network}"
                     break
             except TypeError:
-                pass  # IPv4/IPv6 type mismatch, skip
+                pass  # IPv4/IPv6 类型不匹配，跳过
         if verdict:
             break
 
@@ -651,26 +630,25 @@ def _resolves_to_internal(hostname: str) -> str | None:
 
 
 def _normalize_ip_notation(host: str) -> str | None:
-    """Resolve alternate IP notations that curl/libcurl would resolve.
+    """把 curl/libcurl 会解析的另类 IP 写法归一成点分十进制。
 
-    curl_cffi uses libcurl, which accepts many IP address formats that
-    Python's ipaddress module rejects. This normalizes them so we can
-    check against private network ranges.
+    curl_cffi 用 libcurl，它接受许多 Python 的 ipaddress 模块拒绝的 IP 格式。这里把它们
+    归一，好让我们能拿去比对私网段。
 
-    Handles:
-    - Octal notation: 0177.0.0.1 → 127.0.0.1
-    - Hex notation: 0x7f000001 → 127.0.0.1, 0x7f.1 → 127.0.0.1
-    - Decimal integer: 2130706433 → 127.0.0.1
-    - Short-form: 127.1 → 127.0.0.1
+    处理：
+    - 八进制：0177.0.0.1 → 127.0.0.1
+    - 十六进制：0x7f000001 → 127.0.0.1，0x7f.1 → 127.0.0.1
+    - 十进制整数：2130706433 → 127.0.0.1
+    - 短格式：127.1 → 127.0.0.1
 
-    Returns dotted-decimal string like '127.0.0.1' or None.
+    返回形如 '127.0.0.1' 的点分十进制字符串，或 None。
     """
     cleaned = host.strip('[]')
 
-    # Case: pure decimal integer (2130706433) or packed octal (017700000001)
+    # 情况：纯十进制整数（2130706433）或打包的八进制（017700000001）
     if cleaned.isdigit():
         try:
-            # Leading zero → curl treats as octal: 017700000001 → 127.0.0.1
+            # 前导零 → curl 按八进制读：017700000001 → 127.0.0.1
             if len(cleaned) > 1 and cleaned[0] == '0' and all(c in '01234567' for c in cleaned):
                 val = int(cleaned, 8)
             else:
@@ -681,10 +659,10 @@ def _normalize_ip_notation(host: str) -> str | None:
             pass
         return None
 
-    # Case: packed hex integer in a single segment (0x7f000001 → 127.0.0.1).
-    # curl/libcurl's inet_aton accepts this form; ipaddress rejects it. Without
-    # this branch, http://0x7f000001/ bypassed SSRF checks and reached loopback
-    # (dotted hex like 0x7f.0.0.1 is handled by the parts loop below).
+    # 情况：单段打包的十六进制整数（0x7f000001 → 127.0.0.1）。
+    # curl/libcurl 的 inet_aton 接受这种写法；ipaddress 拒绝它。没有这一支，
+    # http://0x7f000001/ 会绕过 SSRF 检查直达回环（0x7f.0.0.1 这种点分十六进制由
+    # 下面的分段循环处理）。
     if cleaned.lower().startswith("0x") and len(cleaned) > 2 \
             and all(c in "0123456789abcdef" for c in cleaned[2:].lower()):
         try:
@@ -695,7 +673,7 @@ def _normalize_ip_notation(host: str) -> str | None:
             pass
         return None
 
-    # Case: dotted notation (127.0.0.1, 0177.0.0.1, 0x7f.1, 127.1)
+    # 情况：点分写法（127.0.0.1、0177.0.0.1、0x7f.1、127.1）
     parts = cleaned.split('.')
     if not (1 <= len(parts) <= 4):
         return None
@@ -705,19 +683,19 @@ def _normalize_ip_notation(host: str) -> str | None:
         for p in parts:
             if not p:
                 return None
-            # Leading zero → octal (curl behavior): '0177' → 127
+            # 前导零 → 八进制（curl 的行为）：'0177' → 127
             if len(p) > 1 and p[0] == '0' and all(c in '01234567' for c in p):
                 resolved.append(int(p, 8))
-            # Hex prefix: '0x7f' → 127
+            # 十六进制前缀：'0x7f' → 127
             elif p.lower().startswith('0x'):
                 resolved.append(int(p, 0))
             else:
                 resolved.append(int(p))
 
-        # Expand short-form to 4 octets (curl/inet_aton behavior).
-        # 2-part: a.b → a.0.0.b
-        # 3-part: a.b.c → a.b.0.c
-        # 4-part: a.b.c.d → a.b.c.d (no expansion needed)
+        # 把短格式展开成 4 段（curl/inet_aton 的行为）。
+        # 2 段：a.b → a.0.0.b
+        # 3 段：a.b.c → a.b.0.c
+        # 4 段：a.b.c.d → a.b.c.d（无需展开）
         if len(resolved) == 2:
             resolved = [resolved[0], 0, 0, resolved[1]]
         elif len(resolved) == 3:
@@ -1004,26 +982,26 @@ def _control_char_face(url: str) -> str:
 
 
 def validate_url(url: str, allow_internal: bool = False) -> str:
-    """Validate and sanitize a URL. Returns the validated URL.
+    """校验并清洗一个 URL，返回校验通过的 URL。
 
-    Protects against:
-    - SSRF attacks (internal IPs, localhost, cloud metadata endpoints)
-    - File:// and other dangerous schemes
-    - Oversized URLs (DoS)
-    - Malformed URLs
-    - URL parsing confusion attacks (backslash in authority, bracketed hosts)
-    - CVE-2024-11168: urllib.parse bracket-host SSRF bypass
-    - CVE-2025-0454-style: backslash-@ authority confusion between parsers
+    防护：
+    - SSRF 攻击（内网 IP、localhost、云元数据端点）
+    - File:// 与其他危险协议
+    - 超长 URL（DoS）
+    - 畸形 URL
+    - URL 解析混淆攻击（authority 里的反斜杠、带括号的主机）
+    - CVE-2024-11168：urllib.parse 的括号主机 SSRF 绕过
+    - CVE-2025-0454 那一类：解析器之间对反斜杠-@ authority 的读法分歧
 
-    Args:
-        url: The URL to validate.
-        allow_internal: If True, allow private/internal IPs (for testing only).
+    参数：
+        url: 要校验的 URL。
+        allow_internal: 为 True 时放行私有/内网 IP（仅供测试）。
 
-    Returns:
-        The validated URL string.
+    返回：
+        校验通过的 URL 字符串。
 
-    Raises:
-        SecurityError: If the URL fails validation.
+    异常：
+        SecurityError: URL 未通过校验时抛出。
     """
     if not url or not isinstance(url, str):
         raise SecurityError("URL must be a non-empty string")
@@ -1038,12 +1016,12 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
             f"URL exceeds maximum length of {MAX_URL_LENGTH} characters"
         )
 
-    # CRITICAL: Reject URLs containing backslash in authority section.
-    # Backslash causes parsing confusion between urlparse (treats \\ as part
-    # of userinfo/netloc) and urllib3/requests (treats \\ as path delimiter).
-    # This enables SSRF: http://evil.com\\@127.0.0.1/ passes urlparse validation
-    # (hostname=127.0.0.1) but fetches from evil.com.
-    # See: corCTF 2025 "Python URL Parsing Confusion"; CVE-2025-0454
+    # 关键：拒掉 authority 段带反斜杠的 URL。
+    # 反斜杠会让 urlparse（把 \\ 当成 userinfo/netloc 的一部分）与 urllib3/requests
+    # （把 \\ 当路径分隔符）产生解析分歧。这能开通 SSRF：
+    # http://evil.com\\@127.0.0.1/ 过得了 urlparse 的校验（hostname=127.0.0.1），
+    # 实际却从 evil.com 取回。
+    # 见：corCTF 2025 "Python URL Parsing Confusion"；CVE-2025-0454
     face = _control_char_face(url)
     if face:
         raise SecurityError(face)
@@ -1055,7 +1033,7 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
     except Exception as e:
         raise SecurityError(f"Malformed URL: {e}")
 
-    # Block dangerous schemes
+    # 拦危险协议
     scheme = (parsed.scheme or "").lower()
     if scheme in _BLOCKED_SCHEMES:
         raise SecurityError(f"URL scheme '{scheme}' is not allowed")
@@ -1063,19 +1041,19 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
     if scheme not in ("http", "https"):
         raise SecurityError(_unsupported_scheme_face(url, scheme))
 
-    # Block bracketed hosts that aren't valid IPv6 — CVE-2024-11168
-    # urlparse in Python <3.12.7 improperly validated bracketed hosts, allowing
-    # arbitrary content in brackets to be treated as valid hostnames.
+    # 拦不是合法 IPv6 的括号主机 —— CVE-2024-11168
+    # Python <3.12.7 的 urlparse 对括号主机的校验不当，会让括号里的任意内容被当成
+    # 合法主机名。
     netloc = (parsed.netloc or "").lower()
     if "[" in netloc or "]" in netloc:
         if not (netloc.startswith("[") and "]" in netloc):
             raise SecurityError("URL contains malformed bracketed host (potential SSRF bypass)")
-        # Extract the bracketed part and verify it's a valid IPv6 address
+        # 取出括号里的部分，验证它是合法的 IPv6 地址
         bracket_content = netloc[1:netloc.index("]")]
         try:
             ipaddress.IPv6Address(bracket_content)
         except ipaddress.AddressValueError:
-            # Allow IPvFuture (v[0-9]+\..+) but nothing else
+            # 放行 IPvFuture（v[0-9]+\..+），其他一概不放
             if not re.match(r'^v[0-9]+\..+$', bracket_content, re.IGNORECASE):
                 raise SecurityError("URL contains invalid bracketed host (potential SSRF bypass)")
 
@@ -1087,10 +1065,9 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
     # 视图与字面量不同时（percent-encoded / IDNA 点族 / 尾点），任何一个命中都拒。
     host_view = _client_view_host(hostname)
 
-    # Reject invalid or out-of-range ports (http://host:70000/ or :abc/).
-    # urlparse accepts these silently; most HTTP clients refuse or misroute
-    # them, so treating them as valid hides config errors and can point at
-    # an unexpected service.
+    # 拒掉非法或越界的端口（http://host:70000/ 或 :abc/）。urlparse 会默默收下；
+    # 大多数 HTTP 客户端会拒绝或错路由，把它们当成合法就是在藏配置错误，还可能指到
+    # 一个没预料到的服务。
     try:
         port = parsed.port
     except ValueError:
@@ -1098,7 +1075,7 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
     if port is not None and not (0 < port <= 65535):
         raise SecurityError(f"URL port out of range: {port}")
 
-    # Check for internal IPs (only if hostname is an IP)
+    # 检查内网 IP（只在主机名本身是 IP 时）
     if not allow_internal:
         addr = None
         is_ip = False
@@ -1108,13 +1085,12 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
                 is_ip = True
                 break
             except ValueError:
-                pass  # Not a standard IP — try alternate notations below
+                pass  # 不是标准 IP —— 下面试另类写法
 
-        # Handle alternate IP notations that ipaddress rejects but curl resolves
-        # (octal, hex, decimal integer, short-form). This is critical: Python's
-        # ipaddress module rejects leading zeros (CVE-2021-29921), but curl_cffi
-        # (libcurl) resolves them. An attacker could use http://0177.0.0.1 to
-        # bypass SSRF protection and reach the loopback interface.
+        # 处理 ipaddress 拒绝、curl 却能解析的另类 IP 写法（八进制、十六进制、
+        # 十进制整数、短格式）。这一条很关键：Python 的 ipaddress 拒绝前导零
+        # （CVE-2021-29921），而 curl_cffi（libcurl）会解析它们。攻击者可以用
+        # http://0177.0.0.1 绕过 SSRF 防护，到达回环接口。
         if not is_ip:
             for candidate in dict.fromkeys((hostname, host_view)):
                 normalized = _normalize_ip_notation(candidate)
@@ -1124,7 +1100,7 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
                         is_ip = True
                         break
                     except ValueError:
-                        pass  # Not resolvable to a valid IP after normalization
+                        pass  # 归一之后仍解析不出合法 IP
 
         if is_ip:
             # 元数据字面量按规范化地址拦，且先于 allowlist 询问：100.64.0.0/10
@@ -1142,11 +1118,10 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
                 raise SecurityError(
                     f"URL targets internal cloud metadata endpoint ({_mapped or addr})"
                 )
-            # G9: an internal target the operator named in DHOLE_ALLOW_PRIVATE_HOSTS
-            # or allow_private is fetched instead of refused. Cloud metadata
-            # is never allowed (see _private_host_allowed).
+            # G9：运维在 DHOLE_ALLOW_PRIVATE_HOSTS 或 allow_private 里点名的内网目标
+            # 照抓不拒。云元数据永远不放行（见 _private_host_allowed）。
             _allowed = _private_host_allowed(hostname, addr)
-            # Check IPv4-mapped IPv6: extract the mapped IPv4 and re-check it
+            # 检查 IPv4-mapped IPv6：取出映射的 IPv4 再查一次
             if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
                 ipv4_addr = addr.ipv4_mapped
                 for network in _PRIVATE_NETWORKS:
@@ -1165,9 +1140,9 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
                             f"URL targets internal/private IP ({hostname} in {network})"
                         )
                 except TypeError:
-                    pass  # IPv4/IPv6 type mismatch, skip
+                    pass  # IPv4/IPv6 类型不匹配，跳过
         else:
-            # Block known internal hostnames (cloud metadata, localhost, DNS rebinding services)
+            # 拦已知的内网主机名（云元数据、localhost、DNS 重绑定服务）
             # 名单与后缀在字面量与客户端视图上都比对：视图剥尾点后 `localhost.` /
             # `metadata.google.internal.` 落回表内的名字（拨号栈眼里它们就是同名）。
             for check_name in dict.fromkeys((hostname.lower(), host_view.lower())):
@@ -1178,7 +1153,7 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
                 if check_name in _METADATA_HOSTS:
                     raise SecurityError(
                         f"URL targets internal cloud metadata endpoint: {hostname}")
-                # Block DNS rebinding services that resolve to internal IPs.
+                # 拦解析到内网 IP 的 DNS 重绑定服务。
                 # 没有 allowlist 出口：这类服务把任意域名解析到任意 IP，放行它就等于
                 # 把整份内网判定交给了外部解析器。
                 if check_name.endswith(_DNS_REBINDING_SUFFIXES):
@@ -1220,16 +1195,16 @@ def validate_url(url: str, allow_internal: bool = False) -> str:
 
 
 def validate_css_selector(selector: Optional[str]) -> Optional[str]:
-    """Validate a CSS selector for injection/DoS safety.
+    """校验 CSS 选择器，防注入/DoS。
 
-    Args:
-        selector: The CSS selector string, or None.
+    参数：
+        selector: CSS 选择器字符串，或 None。
 
-    Returns:
-        The validated selector, or None.
+    返回：
+        校验通过的选择器，或 None。
 
-    Raises:
-        SecurityError: If the selector fails validation.
+    异常：
+        SecurityError: 选择器未通过校验时抛出。
     """
     if selector is None:
         return None
@@ -1240,20 +1215,19 @@ def validate_css_selector(selector: Optional[str]) -> Optional[str]:
     selector = selector.strip()
 
     if not selector:
-        return None  # Empty/whitespace-only selectors have no effect
+        return None  # 空/纯空白选择器没有任何作用
 
     if len(selector) > MAX_CSS_SELECTOR_LENGTH:
         raise SecurityError(
             f"CSS selector exceeds maximum length of {MAX_CSS_SELECTOR_LENGTH}"
         )
 
-    # Block selectors that could cause excessive backtracking (ReDoS)
-    # Nested pseudo-classes, deeply nested combinators, etc.
+    # 拦可能造成过度回溯的选择器（ReDoS）：嵌套伪类、深嵌套组合器等。
     depth = selector.count(">") + selector.count(" ") + selector.count("+") + selector.count("~")
     if depth > 100:
         raise SecurityError("CSS selector nesting depth too high")
 
-    # Block inline script/style injection attempts
+    # 拦内联脚本/样式注入尝试
     dangerous = ["<script", "<style", "javascript:", "expression("]
     lowered = selector.lower()
     for d in dangerous:
@@ -1265,31 +1239,25 @@ def validate_css_selector(selector: Optional[str]) -> Optional[str]:
 
 def validate_html_css_selector(selector: Optional[str],
                                param: str = "css_selector") -> Optional[str]:
-    """Injection guard **plus** compilability, for the selectors the extraction
-    engine (lxml + cssselect) will actually run.
+    """注入守卫**加上**可编译性，用于抽取引擎（lxml + cssselect）真正会跑的选择器。
 
-    ``validate_css_selector`` answers "is this hostile", not "does this parse".
-    The compile used to happen only inside the extractor, where
-    ``except Exception -> None`` swallowed it: a selector like ``a >> b {;}``
-    produced a 200 plus the **whole unfiltered document**, with nothing in
-    ``summary`` or ``next_action`` saying the selector never took effect. A
-    silently ignored argument is the failure this project keeps refusing, and it
-    is cheaper to refuse before the request goes out than to hand back a page the
-    caller asked to narrow.
+    ``validate_css_selector`` 回答的是「这有没有敌意」，不是「这能不能解析」。编译从前
+    只在抽取器内部发生，而那里的 ``except Exception -> None`` 把它吞了：像
+    ``a >> b {;}`` 这样的选择器会产出 200 加**整份未过滤的文档**，而 ``summary`` 或
+    ``next_action`` 里一个字都没说这个选择器从未生效。一个被静默忽略的参数，正是本项目
+    一直拒绝的失败形状；在请求发出去之前拒掉，比交回一页调用方要求收窄的全文更便宜。
 
-    The compile runs here, not in ``validate_css_selector``: the browser tier
-    (``wait_selector``, an action's ``selector``) speaks Chromium's CSS, which
-    accepts ``:visible`` and friends. Judging those selectors by lxml's scale
-    would take away a capability that works.
+    编译跑在这里，不在 ``validate_css_selector`` 里：浏览器档（``wait_selector``、
+    动作的 ``selector``）说的是 Chromium 的 CSS，它接受 ``:visible`` 之类。用 lxml 的
+    尺子去判那些选择器，会拿走一项本来能用的能力。
 
-    Args:
-        selector: The CSS selector string, or None.
-        param: Which argument to name in the error, since one guard serves
-            ``css_selector``, ``schema[...]["selector"]`` and ``nested_selector``.
+    参数：
+        selector: CSS 选择器字符串，或 None。
+        param: 错误句里要点名的参数名，因为同一道守卫同时服务
+            ``css_selector``、``schema[...]["selector"]`` 与 ``nested_selector``。
 
-    Raises:
-        SecurityError: On the injection guard's own refusals, or when lxml's
-            cssselect cannot compile the selector.
+    异常：
+        SecurityError: 注入守卫自己拒绝，或 lxml 的 cssselect 编不过这个选择器时抛出。
     """
     validated = validate_css_selector(selector)
     if validated is None:
@@ -1306,16 +1274,16 @@ def validate_html_css_selector(selector: Optional[str],
 
 
 def validate_headers(headers: Optional[dict]) -> Optional[dict]:
-    """Validate custom HTTP headers for injection/prevention.
+    """校验自定义 HTTP 头，防注入。
 
-    Args:
-        headers: Dict of header name -> value, or None.
+    参数：
+        headers: 头名 -> 头值的 dict，或 None。
 
-    Returns:
-        The validated headers dict, or None.
+    返回：
+        校验通过的头字典，或 None。
 
-    Raises:
-        SecurityError: If headers fail validation.
+    异常：
+        SecurityError: 头未通过校验时抛出。
     """
     if headers is None:
         return None
@@ -1338,21 +1306,20 @@ def validate_headers(headers: Optional[dict]) -> Optional[dict]:
                 f"Header '{name}' value exceeds max length of {MAX_HEADER_VALUE_LENGTH}"
             )
 
-        # Block header injection via newline characters in name or value
+        # 拦头名或头值里的换行字符（头注入）
         if "\n" in name or "\r" in name or "\n" in value or "\r" in value:
             raise SecurityError(
                 f"Header '{name}' contains newline characters (header injection)"
             )
 
-        # Block header names with backslashes — parsers disagree on whether a
-        # backslash separates fields (some HTTP stacks treat it as a soft fold),
-        # so a name like 'X-Foo\Bar' can be interpreted differently downstream.
+        # 拦带反斜杠的头名 —— 各解析器对反斜杠是否分隔字段意见不一（一些 HTTP 栈把它
+        # 当成软换行折叠），所以 'X-Foo\Bar' 这种名字在下游可能被读出不同含义。
         if "\\" in name:
             raise SecurityError(
                 f"Header name '{name}' contains backslash (field confusion)"
             )
 
-        # Block forbidden headers that could interfere with Scrapling
+        # 拦可能与 Scrapling 冲突的禁用头
         forbidden = {"host", "content-length", "transfer-encoding", "connection"}
         if name.lower() in forbidden:
             raise SecurityError(
@@ -1370,16 +1337,16 @@ def validate_headers(headers: Optional[dict]) -> Optional[dict]:
 
 
 def validate_proxy(proxy: Optional[str | dict]) -> Optional[str | dict]:
-    """Validate proxy configuration.
+    """校验代理配置。
 
-    Args:
-        proxy: Proxy URL string, dict with server/username/password, or None.
+    参数：
+        proxy: 代理 URL 字符串、含 server/username/password 的 dict，或 None。
 
-    Returns:
-        The validated proxy config.
+    返回：
+        校验通过的代理配置。
 
-    Raises:
-        SecurityError: If proxy config fails validation.
+    异常：
+        SecurityError: 代理配置未通过校验时抛出。
     """
     if proxy is None:
         return None
@@ -1388,7 +1355,7 @@ def validate_proxy(proxy: Optional[str | dict]) -> Optional[str | dict]:
         proxy = proxy.strip()
         if not proxy:
             return None
-        # Basic URL validation for proxy
+        # 代理的基础 URL 校验
         try:
             parsed = urlparse(proxy)
             if parsed.scheme not in ("http", "https", "socks5", "socks5h"):
@@ -1409,10 +1376,9 @@ def validate_proxy(proxy: Optional[str | dict]) -> Optional[str | dict]:
         if not server:
             raise SecurityError("Proxy dict must include 'server' key")
 
-        # Validate the server URL with the same scheme set accepted for string
-        # proxies (http/https/socks5/socks5h). Previously this called validate_url,
-        # which only permits http/https — so a dict proxy with a socks5 server was
-        # rejected even though the string form was accepted.
+        # 用字符串代理接受的同一组协议（http/https/socks5/socks5h）校验服务器 URL。
+        # 从前这里调 validate_url，而它只允许 http/https —— 于是一个 server 为 socks5
+        # 的 dict 代理会被拒，尽管字符串形式是接受的。
         try:
             parsed = urlparse(server)
             if parsed.scheme not in ("http", "https", "socks5", "socks5h"):
@@ -1435,22 +1401,22 @@ TIMEOUT_MAX_MS = 120_000
 
 
 def validate_timeout(timeout: int | float) -> int | float:
-    """Validate timeout value.
+    """校验 timeout 取值。
 
-    ``TIMEOUT_MAX_MS`` is the one author of the ceiling: the wire descriptions of
-    `timeout=` quote "max 120000" and `quality._budget_advice` names it when the
-    caller has already spent a large budget, so a number with two homes and no
-    test is where this family drifts (see the alignment guard in
-    `tests/test_a_timeout_bigger_than_the_per_attempt_cap_says_what_it_bought.py`).
+    ``TIMEOUT_MAX_MS`` 是天花板唯一的作者：`timeout=` 的线描述里印着 "max 120000"，
+    调用方已经花掉大笔预算时 `quality._budget_advice` 也点它的名，所以一个数若有两个家
+    又没测试钉着，这一族就会从那漂走（见
+    `tests/test_a_timeout_bigger_than_the_per_attempt_cap_says_what_it_bought.py`
+    里的对齐守卫）。
 
-    Args:
-        timeout: Timeout in milliseconds (browser) or seconds (HTTP).
+    参数：
+        timeout: 毫秒（浏览器档）或秒（HTTP 档）。
 
-    Returns:
-        The validated timeout.
+    返回：
+        校验通过的 timeout。
 
-    Raises:
-        SecurityError: On invalid timeout.
+    异常：
+        SecurityError: timeout 非法时抛出。
     """
     if not isinstance(timeout, (int, float)):
         raise SecurityError("Timeout must be a number")
@@ -1479,16 +1445,16 @@ def validate_deadline(deadline_ms: int | float) -> int | float:
 
 
 def validate_search_query(query: str) -> str:
-    """Validate and sanitize a search query.
+    """校验并清洗搜索查询。
 
-    Args:
-        query: The search query string.
+    参数：
+        query: 搜索查询字符串。
 
-    Returns:
-        The sanitized query.
+    返回：
+        清洗后的查询。
 
-    Raises:
-        SecurityError: On invalid query.
+    异常：
+        SecurityError: 查询非法时抛出。
     """
     if not query or not isinstance(query, str):
         raise SecurityError("Search query must be a non-empty string")
@@ -1501,24 +1467,23 @@ def validate_search_query(query: str) -> str:
     if len(query) > 2048:
         raise SecurityError("Search query exceeds maximum length of 2048 characters")
 
-    # Strip control characters (0x00-0x1F except tab) and delete (0x7F)
+    # 剥掉控制字符（0x00-0x1F，制表符除外）与删除符（0x7F）
     query = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', query)
 
     return query
 
 
 def redact_api_key(text: str) -> str:
-    """Redact API keys and proxy credentials from error messages/logs.
+    """从错误消息/日志里抹掉 API key 与代理凭据。
 
-    Detects TinyFish API key format, generic API key patterns,
-    and proxy URLs with embedded credentials.
+    识别 TinyFish API key 格式、通用 API key 形状，以及内嵌凭据的代理 URL。
     """
-    # TinyFish keys: sk-tinyfish- followed by alphanumeric
+    # TinyFish key：sk-tinyfish- 后接字母数字
     text = re.sub(r'sk-tinyfish-[a-zA-Z0-9]+', 'sk-tinyfish-[REDACTED]', text)
-    # Generic key patterns (sk-, pk-, api_)
+    # 通用 key 形状（sk-、pk-、api_）
     text = re.sub(r'(?:sk|pk|api_key)[-_][a-zA-Z0-9]{20,}', '[API_KEY_REDACTED]', text)
-    # Proxy URLs with embedded credentials: http://user:pass@host
-    # Catches the full credential portion before @
+    # 内嵌凭据的代理 URL：http://user:pass@host
+    # 连 @ 之前的整段凭据一起抓
     text = re.sub(
         r'(https?://)[^:@\s]+:[^@\s]+@',
         r'\1[CREDENTIALS_REDACTED]@',

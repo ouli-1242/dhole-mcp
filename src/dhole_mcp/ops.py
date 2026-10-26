@@ -21,7 +21,7 @@ from dhole_mcp.server import MasterFetchServer
 
 
 def _help_epilog() -> str:
-    """Styled epilog for `dhole --help`: the command cheat-sheet + docs link."""
+    """`dhole --help` 的样式化 epilog：命令速查表 + 文档链接。"""
     from dhole_mcp import cli_ui as ui
     return "\n".join([
         ui.dim("commands:"),
@@ -41,7 +41,7 @@ def _help_epilog() -> str:
 
 
 def _skill_manifest(root) -> dict:
-    """relpath -> sha256[:16] for every file under a skill directory."""
+    """技能目录下每个文件的 relpath -> sha256[:16]。"""
     import hashlib
     out = {}
     for p in sorted(root.rglob("*")):
@@ -169,19 +169,16 @@ def _flag_value(args: list[str], flag: str) -> str:
 
 
 def _cmd_config(argv: list[str]) -> int:
-    """`dhole config list | set NAME VALUE | unset NAME` — the persisted knobs.
+    """`dhole config list | set NAME VALUE | unset NAME` —— 持久化的旋钮。
 
-    Why this command exists: while env was the only door, changing one number
-    meant editing the host's MCP JSON and restarting it. That is not
-    configuration, that is infrastructure work, and it is why the knobs nobody
-    needed were also the knobs nobody could reach. Values in
-    ``~/.dhole/config.json`` are re-read when the file's mtime changes, so a
-    knob read per call takes effect on the next call.
+    为什么要有这扇命令：当环境变量是唯一的门时，改一个数意味着编辑宿主的 MCP
+    JSON 然后重启它。那不是配置，那是基建工作，也正是没人需要的旋钮同时是没人
+    够得着的旋钮的原因。``~/.dhole/config.json`` 里的值在文件 mtime 变化时重读，
+    所以按调用读取的旋钮在下一次调用就生效。
 
-    ``env`` still wins, on purpose: every existing install configured itself
-    through the host's env block, and a file must never quietly override a
-    decision someone already made. Knobs read at import are writable here too,
-    but said out loud as needing a restart - the same note `dhole doctor` gives.
+    ``env`` 仍然优先，刻意如此：每个既有安装都是经宿主 env 块配置自己的，文件
+    绝不能悄悄覆盖一个用户已经做过的决定。导入时读取的旋钮在这里也可写，但会
+    明说需要重启 —— 与 `dhole doctor` 给的是同一句注记。
     """
     from dhole_mcp import cli_ui as ui
     from dhole_mcp import env_registry as er
@@ -283,18 +280,16 @@ def _watch_error_with_hint(error: str) -> str:
 
 
 def _cmd_watch(argv: list[str], checker=None) -> int:
-    """`dhole watch add|list|remove|run` — a persistent change watchlist.
+    """`dhole watch add|list|remove|run` —— 一份持久的变更监视清单。
 
-    The MCP tool answers one URL at a time; a scheduler needs a list that
-    survives restarts and an exit code a cron job can branch on. ``run`` still
-    calls the same ``web_read(extraction_type='check')`` path (through a real
-    server instance), so the baseline, conditional request and diff window are
-    the product's, not a second implementation.
+    MCP 工具一次回答一个 URL；而调度器需要一份能跨重启存活、退出码能被 cron
+    分支的清单。``run`` 仍然调用同一条 ``web_read(extraction_type='check')``
+    路径（经一个真实服务器实例），所以基线、条件请求与 diff 窗口都是产品的，
+    不是第二套实现。
 
-    Exit codes are the contract: 0 = nothing changed, 1 = at least one page
-    changed, 2 = at least one check failed (including a corrupt watchlist or a
-    run already in progress). Errors outrank changes: a sweep that lost half its
-    URLs must not look like a quiet "nothing changed" night.
+    退出码就是契约：0 = 没有任何变化，1 = 至少一页变了，2 = 至少一次检查失败
+    （含损坏的监视清单或已有一次运行在进行）。错误压过变化：一次丢掉一半 URL
+    的扫描，绝不能看起来像一个安静的"今晚没什么变化"。
     """
     import asyncio
     import json as _json
@@ -468,13 +463,12 @@ def _cmd_watch(argv: list[str], checker=None) -> int:
 
 
 def _cmd_skill(argv: list[str], target=None) -> int:
-    """`dhole skill [status|install [--force]]` — install / inspect the bundled agent skill.
+    """`dhole skill [status|install [--force]]` —— 安装 / 检查随包发布的 agent 技能。
 
-    The skill ships inside the package (dhole_mcp/skills/dhole-web/) and teaches
-    the agent how to drive dhole: call patterns, response-field dictionary,
-    troubleshooting, configuration, recipes. Installing copies it to
-    ~/.agents/skills/dhole-web where agent hosts discover user-level skills.
-    The CLI is a convenience, not a second source of truth — the bundled copy is.
+    技能装在包内（dhole_mcp/skills/dhole-web/），教 agent 怎么驱动 dhole：调用
+    模式、响应字段词典、故障排查、配置、配方。安装就是把它复制到
+    ~/.agents/skills/dhole-web，agent 宿主在那里发现用户级技能。CLI 是便利入口，
+    不是第二个真源 —— 随包的那份才是。
     """
     from dhole_mcp import cli_ui as ui
     from pathlib import Path
@@ -541,13 +535,11 @@ def _cmd_skill(argv: list[str], target=None) -> int:
 
 
 def _cmd_engines(argv: list[str]) -> int:
-    """`dhole engines [list|reset|probe]` — look at / clear / live-test the pool.
+    """`dhole engines [list|reset|probe]` —— 查看 / 清除 / 实测引擎池。
 
-    Which engines got skipped recently, and why. Both facts live in two files
-    under the dhole home, and until now reading them meant opening JSON by hand
-    and clearing them meant deleting files plus restarting the process. `probe`
-    is the third thing those files cannot tell you: whether an engine answers
-    *right now* (list only remembers the last round someone else ran).
+    最近哪些引擎被跳过、为什么。两个事实住在 dhole home 的两个文件里，而在此之前
+    读它们意味着手工打开 JSON，清除它们意味着删文件加重启进程。`probe` 是那两个
+    文件说不出的第三件事：某家引擎**此刻**答不答（list 只记得别人上一轮跑的结果）。
     """
     from dhole_mcp import cli_ui as ui
     from dhole_mcp.updater import _engine_cooldowns, _engine_yield_row
@@ -568,7 +560,7 @@ def _cmd_engines(argv: list[str]) -> int:
                                 "clears one immediately"))
         else:
             print("    " + ui.ok("no engine is on cooldown"))
-        # G6: the timeouts themselves are part of "why is this engine missing".
+        # G6：这些超时值本身就是"这台引擎为什么不见了"的一部分。
         # 17.0 写死 —— 说出现在生效的值，而不是让人去读源码。
         from dhole_mcp.updater import _cooldown_config
         cfg = _cooldown_config()
@@ -609,7 +601,7 @@ _PROBE_QUERY_DEFAULT = "python asyncio tutorial"
 
 
 def _engines_probe(args: list[str]) -> int:
-    """`dhole engines probe` - one live query per engine, and say what each one did.
+    """`dhole engines probe` —— 每台引擎打一次实时查询，并说明各自做了什么。
 
     为什么必须一家一次：并跑时有早退配额，答得慢的引擎会被取消（preempted），于是
     "这家今天到底能不能用"在真实搜索里根本没有答案。点名单引擎才拿得到它自己的耗时、
@@ -678,7 +670,7 @@ def _engines_probe(args: list[str]) -> int:
                 print(f"    {name.ljust(14)} " + ui.err(
                     f"error        -    {str(e)[:60]}"))
                 continue
-            elapsed = (time.perf_counter() - t0)  # seconds
+            elapsed = (time.perf_counter() - t0)  # 秒
             rep = reports[0] if reports else None
             status = getattr(rep, "status", "") or "?"
             nodes = getattr(rep, "item_nodes", -1)
@@ -729,19 +721,17 @@ def _engines_probe(args: list[str]) -> int:
 
 
 def main():
-    """Entry point for the dhole CLI."""
+    """dhole CLI 的入口。"""
     from dhole_mcp import cli_ui as ui
     from dhole_mcp import updater
     import argparse
     import sys as _sys
-    # Subcommands dispatched BEFORE argparse: a bare positional would collide
-    # with the serve-by-default behaviour (no args = start the MCP server), so
-    # each management verb is matched by hand and its tail passed to a helper.
+    # 子命令在 argparse **之前**分发：一个裸位置参数会与默认服务的行径冲突
+    # （无参数 = 启动 MCP 服务器），所以每个管理动词手工匹配，尾巴交给辅助函数。
     #
-    # W5: `doctor` joins the list. Before this change `dhole doctor` fell
-    # through to argparse, which errored with "unrecognized arguments: doctor"
-    # and never mentioned --doctor. Both spellings now go through the same
-    # `updater.doctor()` call, so their stdout AND exit code are identical.
+    # W5：`doctor` 加入名单。在此以前 `dhole doctor` 落进 argparse，报
+    # "unrecognized arguments: doctor"，且从不提及 --doctor。现在两种拼法走同一个
+    # `updater.doctor()` 调用，所以它们的 stdout 与退出码完全相同。
     _SUBCOMMANDS = ("engines", "skill", "doctor", "config", "watch", "wire")
     if len(_sys.argv) > 1:
         first = _sys.argv[1].lower()
@@ -757,10 +747,9 @@ def main():
             raise SystemExit(_cmd_wire(_sys.argv[2:]))
         if first == "doctor":
             raise SystemExit(updater.doctor())
-        # Anything that is not a flag and not a known subcommand is a typo.
-        # The old behaviour (argparse "error: unrecognized arguments") gave
-        # no suggestion; "did you mean: dhole doctor?" is what turns a hung
-        # first-time user back into a working one.
+        # 既不是 flag 也不是已知子命令的东西都是笔误。旧行为（argparse 的
+        # "error: unrecognized arguments"）不给任何建议；"did you mean: dhole
+        # doctor?" 才能把一个卡住的首次用户变回能用的用户。
         if not first.startswith("-"):
             import difflib
             near = difflib.get_close_matches(first, _SUBCOMMANDS, n=1, cutoff=0.4)
@@ -795,9 +784,9 @@ def main():
     if args.doctor:
         raise SystemExit(updater.doctor())
 
-    # HTTP mode: stdout is free (not an MCP stdio pipe), so a one-line banner is
-    # safe. uvicorn follows with its own URL line. Stdio mode stays silent - any
-    # stdout/stderr noise corrupts the MCP protocol or reads as a crash.
+    # HTTP 模式：stdout 是空闲的（不是 MCP stdio 管道），所以一行横幅是安全的。
+    # uvicorn 随后会打自己的 URL 行。Stdio 模式保持沉默 —— 任何 stdout/stderr
+    # 噪声都会破坏 MCP 协议，或被读成崩溃。
     if args.http:
         print(ui.branded(ui.cyan("serving HTTP"), ui.dim(f"http://{args.host}:{args.port}/mcp")))
 

@@ -71,7 +71,11 @@ def _legal_payloads(key: str) -> list[dict]:
                           "as": "link"}}]
     if key == "drag":
         return [{"drag": {"selector": "#src", "expect": "滑块", "to": "#dst"}},
-                {"drag": {"index": 3, "to": {"index": 7, "expect": "落点"}}}]
+                {"drag": {"index": 3, "to": {"index": 7, "expect": "落点"}}},
+                {"drag": {"from_xy": [10, 20], "to_xy": [30, 40]}}]
+    if key == "evaluate":
+        return [{"evaluate": "document.title"},
+                {"evaluate": {"expr": "1+1", "confirm": True}}]
     if key == "select":
         return [{"select": {"selector": "#country", "option": "CN"}},
                 {"select": {"index": 4, "expect": "国家", "option": "中国"}},
@@ -104,6 +108,9 @@ def _legal_payloads(key: str) -> list[dict]:
         if key in ("click", "submit"):
             payload["confirm"] = True
         by.append({key: payload})
+    if key == "click":
+        by.append({"click": {"at": [12, 34]}})
+        by.append({"click": {"at": [12, 34], "confirm": True}})
     return by
 
 

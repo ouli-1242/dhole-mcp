@@ -1,19 +1,18 @@
-"""Rule-based structured data extraction for Dhole MCP.
+"""Dhole MCP 的基于规则的 structured 数据抽取。
 
-Extracts structured JSON from HTML using CSS selectors, metadata, tables,
-and repeated element patterns. No LLM required — pure rules + lxml.
+用 CSS 选择器、元数据、表格与重复元素模式从 HTML 抽结构化 JSON。不需要 LLM ——
+纯规则 + lxml。
 
-Usage:
+用法：
     schema = {
         "type": "object",
         "properties": {
             "title": {"type": "string", "selector": "h1"},
             "price": {"type": "string", "selector": ".price"},
             "features": {"type": "array", "selector": ".feature-list li"},
-            # G14: a property with its own sub-schema + a selector is one record
-            # per matched container, child selectors evaluated INSIDE it. Without
-            # this, `.tag` below answers with every tag on the page and the
-            # grouping (which tags belong to which quote) is gone.
+            # G14：带自己子 schema 又带 selector 的属性 = 每个匹配容器一条记录，
+            # 子选择器在容器**内部**求值。没有它，下面的 `.tag` 会回答页面上所有
+            # 标签，而分组（哪些标签属于哪段引用）就没了。
             "quotes": {
                 "type": "array", "selector": ".quote",
                 "properties": {
@@ -28,8 +27,7 @@ Usage:
     # {"title": "...", "price": "$29", "features": ["...", "..."],
     #  "quotes": [{"text": "...", "author": "...", "tags": ["a", "b"]}, ...]}
 
-"items": {"properties": {...}} is accepted as the JSON-Schema spelling of the
-same thing.
+"items": {"properties": {...}} 被接受为同一件事的 JSON-Schema 拼法。
 """
 
 from __future__ import annotations
@@ -48,26 +46,24 @@ def extract_structured(
     url: str = "",
     metadata: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Extract structured data from HTML according to a JSON schema.
+    """按 JSON schema 从 HTML 抽结构化数据。
 
-    Strategy per field:
-    1. If field has 'selector': use CSS selector on the DOM ('attribute' picks an
-       attribute value instead of the element's text)
-    2. If field name matches metadata keys: use page metadata (OG/JSON-LD)
-    3. If field type is 'array' without selector: detect repeated elements
-    4. Fallback: regex search in extracted text
+    每个字段的策略：
+    1. 字段有 'selector'：在 DOM 上用 CSS 选择器（'attribute' 取属性值而非元素文本）
+    2. 字段名匹配元数据键：用页面元数据（OG/JSON-LD）
+    3. 字段类型为 'array' 且没有 selector：检测重复元素
+    4. 兜底：在抽取出的文本里做正则搜索
 
-    Special mode: schema={"type": "auto"} or schema="auto" triggers automatic
-    structure detection (tables, lists, JSON-LD, OG meta) without CSS selectors,
-    and adds a ``_schema`` proposal (a reusable container + field selectors) when
-    the page has a repeated structure — see :func:`_propose_schema`.
+    特殊模式：schema={"type": "auto"} 或 schema="auto" 触发自动结构检测（表格、
+    列表、JSON-LD、OG meta），不用 CSS 选择器；页面有重复结构时还会附上一份
+    ``_schema`` 提案（可复用的容器 + 字段选择器）—— 见 :func:`_propose_schema`。
 
-    Never raises — returns partial results with empty strings for failed fields.
+    从不抛异常 —— 失败的字段以空值返回，结果可能不完整。
     """
     if not schema or not isinstance(schema, dict):
         return {}
 
-    # Auto mode: detect page structure without explicit selectors
+    # 自动模式：不用显式选择器，直接检测页面结构
     if schema.get("type") == "auto" or schema.get("mode") == "auto":
         return _extract_auto(html, metadata)
 
@@ -75,7 +71,7 @@ def extract_structured(
     if not properties:
         return {}
 
-    # Parse HTML into lxml tree
+    # 把 HTML 解析成 lxml 树
     root = _parse_html(html)
     result: Dict[str, Any] = {}
 
@@ -89,33 +85,32 @@ def extract_structured(
 
         value = None
 
-        # G14: a field carrying a sub-schema describes RECORDS, not a text value.
-        # Checked before everything else, because a nested field with a selector
-        # would otherwise be read as one flattened string.
+        # G14：带子 schema 的字段描述的是**记录**，不是一个文本值。先于一切检查，
+        # 否则一个带 selector 的嵌套字段会被读成一个被拍平的字符串。
         nested = _sub_properties(field_spec)
         if nested and root is not None:
             result[field_name] = _extract_records(root, selector, field_spec, nested)
             continue
 
-        # Strategy 1: CSS selector
+        # 策略 1：CSS 选择器
         if selector and root is not None:
             value = _extract_by_selector(root, selector, field_type, attribute)
 
-        # Strategy 2: metadata match
+        # 策略 2：元数据匹配
         if value is None and metadata:
             meta_key = _match_metadata_key(field_name, metadata)
             if meta_key:
                 value = metadata[meta_key]
 
-        # Strategy 3: JSON-LD extraction
+        # 策略 3：JSON-LD 抽取
         if value is None and root is not None:
             value = _extract_from_jsonld(root, field_name)
 
-        # Strategy 4: regex fallback in visible text
+        # 策略 4：可见文本里的正则兜底
         if value is None and root is not None:
             value = _extract_by_pattern(root, field_name, field_type)
 
-        # Default empty value
+        # 默认空值
         if value is None:
             value = [] if field_type == "array" else ""
 
@@ -124,20 +119,18 @@ def extract_structured(
     return result
 
 
-# Records per repeated field. A list page can hold 5,000 items and the response
-# must not become 5,000 objects; the cap is named in the tool description and the
-# array length is visible in the output, so a truncated answer can be noticed
-# rather than being mistaken for the whole page.
+# 每个重复字段的记录数上限。一个列表页可能有 5,000 条，而响应不能变成 5,000 个
+# 对象；这个帽在工具描述里点名，数组长度在输出里可见，所以被截断的答案能被注意到，
+# 而不是被当成整页。
 MAX_RECORDS_PER_FIELD = 200
 
 
 def _sub_properties(field_spec: dict) -> Dict[str, Any]:
-    """The nested property map of a field, from either spelling.
+    """一个字段的嵌套属性表，两种拼法都认。
 
-    ``{"selector": ".quote", "properties": {...}}`` is the short form;
-    ``{"selector": ".quote", "items": {"properties": {...}}}`` is the JSON-Schema
-    spelling a caller arrives with after writing a real schema elsewhere. Both
-    mean "one record per matched container".
+    ``{"selector": ".quote", "properties": {...}}`` 是短形式；
+    ``{"selector": ".quote", "items": {"properties": {...}}}`` 是调用方在别处写过
+    真 schema 后带来的 JSON-Schema 拼法。两者都表示"每个匹配容器一条记录"。
     """
     nested = field_spec.get("properties")
     if isinstance(nested, dict) and nested:
@@ -151,7 +144,7 @@ def _sub_properties(field_spec: dict) -> Dict[str, Any]:
 
 
 def _select_nodes(root, selector: str) -> list:
-    """Elements matching ``selector`` below ``root`` (never raises)."""
+    """``root`` 之下匹配 ``selector`` 的元素（从不抛异常）。"""
     if not selector or root is None:
         return []
     try:
@@ -168,16 +161,13 @@ def _is_repeating(field_spec: dict) -> bool:
 
 def _extract_records(root, selector: str, field_spec: dict,
                      nested: Dict[str, Any]) -> Any:
-    """Apply a sub-schema to each container the field's selector matches.
+    """把一份子 schema 应用到字段选择器匹配出的每个容器上。
 
-    Without this, a nested ``selector`` is evaluated against the WHOLE document,
-    which is exactly the flattening the 16.0 report measured: ten quotes' tags
-    came back as one 40-element array, and the grouping the caller asked for had
-    quietly become the page's aggregate.
+    没有它，嵌套 ``selector`` 会对着**整篇**文档求值，那正是 16.0 报告量到的拍平：
+    十段引用的标签被交回成一个 40 元素的数组，调用方要的分组悄悄变成了页面聚合。
     """
     if not selector:
-        # No container to iterate: the field just groups its children under a
-        # name, in the same scope as its parent.
+        # 没有可迭代的容器：字段只是把子字段归到自己名下，作用域与父级相同。
         return _extract_record(root, nested)
     nodes = _select_nodes(root, selector)
     if _is_repeating(field_spec):
@@ -187,12 +177,11 @@ def _extract_records(root, selector: str, field_spec: dict,
 
 
 def _extract_record(node, properties: Dict[str, Any]) -> Dict[str, Any]:
-    """One record: every field evaluated INSIDE ``node``, recursively.
+    """一条记录：每个字段都在 ``node`` **内部**递归求值。
 
-    Deliberately without the page-level fallbacks the top level has (metadata,
-    JSON-LD, regex-in-text): those answer "what did this field get called on the
-    page", and inside a record they would fill a missed selector with something
-    from elsewhere on the page — a value that looks found but is not this row's.
+    刻意不带顶层那几种页面级兜底（metadata、JSON-LD、文本正则）：那些回答的是
+    "这个字段在页面上被叫作什么"，在一条记录里它们会用页面别处的东西填上一个没
+    命中的选择器 —— 一个看起来找到了、却不是这一行的值。
     """
     out: Dict[str, Any] = {}
     for name, spec in properties.items():
@@ -210,8 +199,8 @@ def _extract_record(node, properties: Dict[str, Any]) -> Dict[str, Any]:
         elif field_type == "count":
             out[name] = 1 if node is not None else 0
         else:
-            # No selector inside a record: the container's own text. Predictable
-            # beats clever here — the caller pointed at this element.
+            # 记录内部没有选择器：用容器自己的文本。可预测胜过聪明 —— 调用方
+            # 指的正是这个元素。
             out[name] = _element_text(node)
         if out[name] is None:
             out[name] = [] if field_type == "array" else ""
@@ -219,21 +208,20 @@ def _extract_record(node, properties: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _parse_html(html: str):
-    """Parse HTML into an lxml tree. Returns None on failure."""
+    """把 HTML 解析成 lxml 树。失败时返回 None。"""
     if not html:
         return None
     try:
         from lxml import html as lxml_html
         from io import BytesIO
-        # encoding="utf-8" is not a default made explicit: these bytes came from
-        # `html.encode("utf-8")` two lines up, so utf-8 is the only charset that
-        # can be right. Without it libxml2 reads the document's own <meta
-        # charset> (or, when it declares none, the machine's locale) and
-        # re-decodes the body we already decoded correctly — which is how an
-        # apostrophe U+2019 turned into "â" in a schema extraction (BUG-1).
-        # It has to be lxml.html's parser, not lxml.etree's: the etree one builds
-        # bare _Element nodes, which have no .text_content() and would empty
-        # every field through the except in _element_text.
+        # encoding="utf-8" 不是把默认值写明确：这些字节就是上面两行
+        # `html.encode("utf-8")` 的产物，所以 utf-8 是唯一可能正确的字符集。
+        # 不写它，libxml2 会读文档自己的 <meta charset>（没声明时读机器 locale）
+        # 把我们已正确解码的正文重新解码一遍 —— 一个撇号 U+2019 就是这样在
+        # schema 抽取里变成 "â" 的（BUG-1）。
+        # 必须用 lxml.html 的解析器，不能是 lxml.etree 的：etree 那个建出裸
+        # _Element 节点，没有 .text_content()，会让每个字段经 _element_text 的
+        # except 变成空值。
         tree = lxml_html.parse(BytesIO(html.encode("utf-8", errors="replace")),
                                parser=lxml_html.HTMLParser(encoding="utf-8"))
         return tree.getroot()
@@ -248,12 +236,11 @@ def _parse_html(html: str):
 def _extract_by_selector(
     root, selector: str, field_type: str, attribute: str = ""
 ) -> Any:
-    """Extract text - or ``attribute`` values - using a CSS selector.
+    """用 CSS 选择器抽文本——或 ``attribute`` 的值。
 
-    A scalar field returns the first NON-EMPTY match. Returning elements[0]'s
-    text made {"selector": "a"} look broken on any page whose first anchor wraps
-    an <img> (an image-only logo has no text nodes), which read as "the schema
-    parser cannot handle this page".
+    标量字段返回第一个**非空**匹配。返回 elements[0] 的文本会让
+    {"selector": "a"} 在任何第一个锚点包着 <img> 的页面上显得坏掉（纯图片 logo
+    没有文本节点），而那会被读成"schema 解析器处理不了这个页面"。
     """
     try:
         from lxml.cssselect import CSSSelector
@@ -265,15 +252,14 @@ def _extract_by_selector(
         def _value(el) -> str:
             if attribute:
                 got = el.get(attribute)
-                # Attribute values are exact (a URL keeps its encoding); only
-                # the surrounding whitespace is noise.
+                # 属性值是精确的（URL 保留它的编码）；只有周围空白是噪声。
                 return got.strip() if isinstance(got, str) else ""
             return _element_text(el)
 
         if field_type == "array":
             return [v for el in elements if (v := _value(el))]
         elif field_type == "count":
-            # Count of matching elements, not their text.
+            # 匹配到的元素个数，不是它们的文本。
             return len(elements)
         for el in elements:
             v = _value(el)
@@ -286,14 +272,13 @@ def _extract_by_selector(
 
 
 def _element_text(el) -> str:
-    """Get clean text content from an lxml element."""
+    """从 lxml 元素取干净的文本内容。"""
     try:
         text = el.text_content()
     except AttributeError:
-        # Only lxml.html.HtmlElement has text_content(); a tree parsed by
-        # lxml.etree's HTMLParser holds bare _Element nodes. Without this the
-        # except below files that off as "this field has no text", which is how
-        # a whole extraction silently goes empty.
+        # 只有 lxml.html.HtmlElement 有 text_content()；由 lxml.etree 的
+        # HTMLParser 解析出的树持有裸 _Element 节点。没有这一支，下面的 except
+        # 会把那种情况归档成"这个字段没有文本"，一次完整抽取就这样悄悄变空。
         text = "".join(el.itertext())
     except Exception:
         return ""
@@ -301,14 +286,14 @@ def _element_text(el) -> str:
 
 
 def _match_metadata_key(field_name: str, metadata: Dict[str, str]) -> Optional[str]:
-    """Match a schema field name to a metadata key (exact or tail-segment match)."""
+    """把 schema 字段名匹配到元数据键（精确或尾段匹配）。"""
     field_lower = field_name.lower().replace("_", "").replace("-", "")
     for key in metadata:
         key_lower = key.lower().replace("_", "").replace("-", "")
-        # Exact match (normalized)
+        # 精确匹配（归一化后）
         if field_lower == key_lower:
             return key
-        # Tail-segment match: "og:title" -> "title", "article_author" -> "author"
+        # 尾段匹配："og:title" -> "title"，"article_author" -> "author"
         key_tail = key_lower.split(":")[-1].split("_")[-1]
         if field_lower == key_tail:
             return key
@@ -316,7 +301,7 @@ def _match_metadata_key(field_name: str, metadata: Dict[str, str]) -> Optional[s
 
 
 def _extract_from_jsonld(root, field_name: str) -> Any:
-    """Try to extract a field from JSON-LD structured data in the page."""
+    """尝试从页面里的 JSON-LD 结构化数据抽一个字段。"""
     try:
         scripts = root.xpath('//script[@type="application/ld+json"]')
         for script in scripts:
@@ -324,7 +309,7 @@ def _extract_from_jsonld(root, field_name: str) -> Any:
             if not text:
                 continue
             data = json.loads(text)
-            # Handle @graph arrays
+            # 处理 @graph 数组
             items = data if isinstance(data, list) else data.get("@graph", [data])
             for item in items:
                 if isinstance(item, dict) and field_name in item:
@@ -338,13 +323,13 @@ def _extract_from_jsonld(root, field_name: str) -> Any:
 
 
 def _extract_by_pattern(root, field_name: str, field_type: str) -> Any:
-    """Fallback: search visible text for common patterns by field name."""
+    """兜底：按字段名在可见文本里搜常见模式。"""
     try:
         text = root.text_content()
     except Exception:
         return None
 
-    # Common field patterns
+    # 常见字段模式
     patterns = {
         "price": r'[\$\u20ac\u00a3]\s*[\d,]+\.?\d*',
         "email": r'[\w.+-]+@[\w-]+\.[\w.]+',
@@ -444,18 +429,17 @@ def _propose_schema(root) -> Dict[str, Any]:
 
 
 def _extract_auto(html: str, metadata: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-    """Auto-detect page structure and extract without explicit CSS selectors.
+    """自动检测页面结构，不用显式 CSS 选择器就抽取。
 
-    Detection order (first that produces data wins):
-    1. JSON-LD structured data
-    2. HTML tables
-    3. Repeated list items (<li> in <ul>/<ol>)
-    4. OpenGraph meta tags
-    5. Fallback: visible text summary
+    检测顺序（第一个产出数据的胜出）：
+    1. JSON-LD 结构化数据
+    2. HTML 表格
+    3. 重复列表项（<ul>/<ol> 中的 <li>）
+    4. OpenGraph meta 标签
+    5. 兜底：可见文本摘要
 
-    Also proposes a reusable `_schema` (container + field selectors) when the page
-    has a repeated structure, so the caller can pin it for sibling pages instead of
-    hand-writing selectors.
+    页面有重复结构时还会提议一份可复用的 `_schema`（容器 + 字段选择器），让调用方
+    能为同站其他页钉住它，而不是手写选择器。
     """
     root = _parse_html(html)
     result: Dict[str, Any] = {"_mode": "auto"}
@@ -463,35 +447,35 @@ def _extract_auto(html: str, metadata: Optional[Dict[str, str]] = None) -> Dict[
     if root is None:
         return result
 
-    # 1. JSON-LD: richest structured source
+    # 1. JSON-LD：最丰富的结构化来源
     jsonld = _extract_all_jsonld(root)
     if jsonld:
         result["json_ld"] = jsonld
 
-    # 2. Tables: extract all tables as arrays of row-dicts
+    # 2. 表格：把所有表格抽成 row-dict 数组
     tables = _extract_tables(root)
     if tables:
         result["tables"] = tables
 
-    # 3. Lists: detect repeated <li> structures
+    # 3. 列表：检测重复的 <li> 结构
     lists = _extract_lists(root)
     if lists:
         result["lists"] = lists
 
-    # 3b. Proposed schema: reusable selectors for the page's repeated structure
+    # 3b. 提议 schema：页面重复结构的可复用选择器
     proposed = _propose_schema(root)
     if proposed:
         result["_schema"] = proposed
 
-    # 4. OpenGraph / meta tags
+    # 4. OpenGraph / meta 标签
     if metadata:
         og = {k: v for k, v in metadata.items()
               if k.startswith("og:") or k in ("title", "description", "author")}
         if og:
             result["metadata"] = og
 
-    # 5. Fallback: if nothing detected, extract visible text summary
-    if len(result) == 1:  # only _mode key
+    # 5. 兜底：什么都没检测到时，抽可见文本摘要
+    if len(result) == 1:  # 只有 _mode 一个键
         try:
             text = root.text_content()
             result["text_summary"] = " ".join(text.split())[:2000]
@@ -502,7 +486,7 @@ def _extract_auto(html: str, metadata: Optional[Dict[str, str]] = None) -> Dict[
 
 
 def _extract_all_jsonld(root) -> list:
-    """Extract all JSON-LD blocks from the page."""
+    """抽取页面里所有 JSON-LD 块。"""
     items = []
     try:
         scripts = root.xpath('//script[@type="application/ld+json"]')
@@ -525,7 +509,7 @@ def _extract_all_jsonld(root) -> list:
 
 
 def _extract_tables(root) -> list:
-    """Extract HTML tables as list of row-dicts (header-keyed)."""
+    """把 HTML 表格抽成 row-dict 列表（以表头为键）。"""
     tables = []
     try:
         for table_el in root.xpath('//table')[:5]:
@@ -551,7 +535,7 @@ def _extract_tables(root) -> list:
 
 
 def _extract_lists(root) -> list:
-    """Extract significant <ul>/<ol> lists (>= 3 items)."""
+    """抽取有意义的 <ul>/<ol> 列表（>= 3 项）。"""
     lists = []
     try:
         for list_el in root.xpath('//ul|//ol')[:10]:

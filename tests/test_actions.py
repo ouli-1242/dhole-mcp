@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import pytest
-from dhole_mcp.actions import INTERACTIVE_SELECTOR, MAX_ELEMENT_INDEX, SNAPSHOT_CAP, _validate_actions, build_page_action
+from dhole_mcp.actions import INTERACTIVE_SELECTOR, MAX_ELEMENT_INDEX, SNAPSHOT_CAP, _CONFIRM_SNIPPET, _validate_actions, build_page_action
 from dhole_mcp.server import MasterFetchServer, ResponseModel, _report_action_outcomes
 import base64
 from dhole_mcp.actions import MAX_ACTION_SHOT_BYTES
@@ -363,6 +363,10 @@ class TestSubmitGate:
         assert "PAUSED for user approval" in result.next_action
         assert "confirm" in result.next_action
         assert "waiting for user approval" in result.summary
+        # E13：顶层的 `{"confirm": true}` 读起来像调用参数，照着重试会二次被闸。
+        # next_action 必须给那串**唯一可抄**的嵌套形状（动作内），与动作行同一个作者。
+        assert _CONFIRM_SNIPPET in result.next_action, result.next_action
+        assert '{"confirm": true} on that submit' not in result.next_action
 
 
 # ─── 写操作审计（DHOLE_USAGE_LOG 打开时，哪个 session 对哪个站做了写操作）────

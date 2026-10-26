@@ -1,25 +1,22 @@
-"""Dhole metasearch engine layer.
+"""dhole 的元搜索层。
 
-Vendored + stripped from ddgs (https://github.com/deedy5/ddgs), MIT-licensed,
-(c) Pragmatic School / deedy5. Adapted for dhole-mcp: text search only,
-async-native parallel aggregation with early-return-on-quorum, no CLI / API
-server / MCP / images / videos / news / books / extract / cache / network bloat.
-See the ddgs LICENSE notice in NOTICE.ddgs.txt for full attribution.
+取自 ddgs（https://github.com/deedy5/ddgs），MIT 许可，(c) Pragmatic School /
+deedy5，已裁剪改写：只做文本搜索，异步并行聚合、凑够法定数就早退，不带 CLI /
+API server / MCP / 图片 / 视频 / 新闻 / 图书 / extract / cache / 网络噪音。
+完整署名见 NOTICE.ddgs.txt 里的 ddgs LICENSE 声明。
 
-Backends (all keyless, no API key, no account): the pool IS the registry - 10
-names (baidu, bing, sogou, so360, bing_global, yahoo, yandex, brave,
-duckduckgo, marginalia), all run every round. There are no opt-in keyless
-backends since §3-23.
-They run in PARALLEL; a backend that
-CAPTCHAs / rate-limits / has no topic-match simply yields
-nothing and the others carry - so search is robust without any single point of
-failure. This is the robustness dhole's hand-rolled 3-engine scraper never had.
+后端（全部免密、无 API key、无账号）：池子**就是**注册表 —— 12 个名字
+（baidu、bing、bing_global、sogou、so360、shenma、seznam、yahoo、yandex、
+brave、duckduckgo、marginalia），每一轮全跑。§3-23 起不再有需要点名的免密后端。
+它们**并行**跑；某个后端被 CAPTCHA / 限流 / 与主题不匹配就干脆不出来，其余照常
+兜住 —— 所以搜索没有任何单点故障。dhole 当年手搓的三引擎抓取器从未有过这种
+健壮性。
 
-Transport: primp (Rust HTTP client with browser TLS/header impersonation) for
-most backends; httpx (HTTP/2 + randomized cipher/SETTINGS frame) for DuckDuckGo.
-DHOLE_SEARCH_PROXY env var (http/https/socks5) is the one egress a caller can
-name for per-IP throttling - the one thing no scraper, browser or not,
-can escape from a single IP. 17.0: one proxy, no pool (see search_proxy.py).
+传输：多数后端走 primp（带浏览器 TLS/头伪装的 Rust HTTP 客户端）；DuckDuckGo
+走 httpx（HTTP/2 + 随机 cipher/SETTINGS 帧）。DHOLE_SEARCH_PROXY 环境变量
+（http/https/socks5）是调用方唯一能点名的出口，用来对付按 IP 限流 —— 这是单 IP
+下任何抓取器（带不带浏览器）都逃不掉的那件事。17.0：一个代理，无池
+（见 search_proxy.py）。
 """
 
 from __future__ import annotations
@@ -63,7 +60,7 @@ T = TypeVar("T")
 # HTTPS_PROXY / HTTP_PROXY / ALL_PROXY 是环境里已有的兜底，顺序也在那里定义。
 # _PROXY 每次搜索调用由 _get_search_proxy() 写一次，让 search_engines 的惰性
 # 导入读到同一个出口。
-_PROXY: str | None = None  # current proxy for this search call (set by metasearch)
+_PROXY: str | None = None  # 本轮搜索用的代理（由 metasearch 写入）
 
 
 def _get_search_proxy() -> str | None:
@@ -79,10 +76,9 @@ def _get_search_proxy() -> str | None:
     _PROXY = proxy
     return proxy
 
-# Per-engine + overall deadline. Engines run in parallel + we early-return on
-# quorum, so a healthy search is ~1-2s; this bounds a fully-throttled one.
-# W4: env_registry.read_float records the "not a number" case so
-# ``dhole --doctor`` can name it; the fallback value is the same 16s.
+# 单引擎与整体期限。引擎并行跑且凑够法定数就早退，所以健康的搜索约 1-2 秒；
+# 这两个数给它封顶。W4：env_registry.read_float 会把"不是数字"那种输入记下来，
+# 让 ``dhole --doctor`` 能点名；兜底值同样是 16 秒。
 _SEARCH_DEADLINE = 16.0  # 17.0 写死：整个搜索的硬期限是能算清的数，DHOLE_SEARCH_DEADLINE 已注销
 # 软截止：结果凑够就早退，不为慢/死的引擎等到硬截止。提成模块常量只为了让测试能
 # 把它压到毫秒级（否则验早退归属的测试每条都要真睡 2s）。
@@ -110,17 +106,17 @@ _MIN_CONSENSUS_FAMILIES = 2
 _ua = UserAgent()
 
 
-# ─── exceptions ──────────────────────────────────────────────────────────────
+# ─── 异常 ────────────────────────────────────────────────────────────────────
 class MetaSearchException(Exception):
-    """Base metasearch error."""
+    """元搜索错误的基类。"""
 
 
 class MetaTimeoutException(MetaSearchException):
-    """A backend or the whole search timed out."""
+    """某个后端或整次搜索超时。"""
 
 
 class TavilyAuthError(MetaSearchException):
-    """Tavily rejected the credentials (bad/expired key, out of credits)."""
+    """Tavily 拒绝凭据（key 错误/过期、额度用尽）。"""
 
 
 class BochaAuthError(MetaSearchException):
@@ -128,7 +124,7 @@ class BochaAuthError(MetaSearchException):
 
 
 class ExaAuthError(MetaSearchException):
-    """Exa rejected the credentials (bad/expired key, out of credits)."""
+    """Exa 拒绝凭据（key 错误/过期、额度用尽）。"""
 
 
 class DeepSeekAuthError(MetaSearchException):
@@ -136,7 +132,7 @@ class DeepSeekAuthError(MetaSearchException):
 
 
 class FirecrawlAuthError(MetaSearchException):
-    """Firecrawl rejected the credentials (bad/expired key, out of credits)."""
+    """Firecrawl 拒绝凭据（key 错误/过期、额度用尽）。"""
 
 
 class BraveApiAuthError(MetaSearchException):
@@ -144,9 +140,8 @@ class BraveApiAuthError(MetaSearchException):
 
 
 class MetaBlockedException(MetaSearchException):
-    """A backend refused us (CAPTCHA / 403 / rate-limit). The caller should
-    circuit-open that backend for a cooldown so we don't keep hammering a host
-    that is actively blocking our IP (which risks escalating to a longer IP ban).
+    """某个后端拒绝了我们（CAPTCHA / 403 / 限流）。调用方应把该后端熔断一个冷却
+    期，免得持续捶一台正在封我们 IP 的主机（有升级成更长 IP 封禁的风险）。
 
     ``challenge=True`` 说的是另一类拒绝：上游回的是 HTTP 200 的反爬壳（校验页），
     意思是"我们知道你是谁了"，而不是"这会儿忙"。冷却时长因此分开算 —— 见
@@ -157,9 +152,9 @@ class MetaBlockedException(MetaSearchException):
         self.challenge = challenge
 
 
-# ─── transport: primp (browser-impersonated TLS) ─────────────────────────────
+# ─── 传输：primp（伪装浏览器 TLS）─────────────────────────────────────────────
 class _PrimpResponse:
-    """Thin wrapper over a primp response (status, text, content)."""
+    """primp 响应的一层薄包装（status、text、content）。"""
 
     __slots__ = ("_resp", "content", "status_code", "text")
 
@@ -171,7 +166,7 @@ class _PrimpResponse:
 
 
 class _PrimpClient:
-    """primp-based HTTP client with random browser impersonation (anti-bot)."""
+    """基于 primp 的 HTTP 客户端，随机伪装浏览器（反爬）。"""
 
     def __init__(self, proxy: str | None = None, timeout: int | None = 10, *,
                  verify: bool = True, impersonate: str = "random",
@@ -196,8 +191,8 @@ class _PrimpClient:
         return self.request("GET", url, *args, **kwargs)
 
 
-# ─── transport: httpx (HTTP/2 + randomized fingerprint, for DuckDuckGo) ──────
-_DEFAULT_CIPHERS = [  # cloudflare-recommended + modern + compatible + legacy
+# ─── 传输：httpx（HTTP/2 + 随机指纹，给 DuckDuckGo 用）───────────────────────
+_DEFAULT_CIPHERS = [  # cloudflare 推荐 + 现代 + 兼容 + 旧版
     "TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384", "TLS_CHACHA20_POLY1305_SHA256",
     "ECDHE-ECDSA-AES128-GCM-SHA256", "ECDHE-ECDSA-CHACHA20-POLY1305", "ECDHE-RSA-AES128-GCM-SHA256",
     "ECDHE-RSA-CHACHA20-POLY1305", "ECDHE-ECDSA-AES256-GCM-SHA384", "ECDHE-RSA-AES256-GCM-SHA384",
@@ -227,9 +222,9 @@ def _random_ssl_context(verify: bool = True) -> ssl.SSLContext:
 
 
 class _H2Patch:
-    """Randomize HTTP/2 SETTINGS frame to dodge JA3/JA4 fingerprinting (DuckDuckGo).
+    """随机化 HTTP/2 SETTINGS 帧，躲开 JA3/JA4 指纹（DuckDuckGo）。
 
-    线程安全：patch 挂在 httpcore 类方法上，并发请求必须串行化
+    线程安全：补丁挂在 httpcore 类方法上，并发请求必须串行化
     （否则线程交错 patch/restore 会把补丁永久留在类上或恢复错版本）。
     """
 
@@ -272,7 +267,7 @@ class _HttpxResponse:
 
 
 class _HttpxClient:
-    """httpx client for DuckDuckGo (primp had issues with DDG upstream)."""
+    """给 DuckDuckGo 用的 httpx 客户端（上游说 primp 与 DDG 不合）。"""
 
     def __init__(self, headers: dict[str, str] | None = None, proxy: str | None = None,
                  timeout: int | None = 10, *, verify: bool = True) -> None:
@@ -318,10 +313,10 @@ class _StdHttpxClient:
             raise MetaSearchException(f"{type(ex).__name__}: {ex!r}") from ex
 
 
-# ─── result type ─────────────────────────────────────────────────────────────
+# ─── 结果类型 ────────────────────────────────────────────────────────────────
 @dataclass
 class TextResult:
-    """A single text search result from a backend."""
+    """某个后端交回的一条文本搜索结果。"""
 
     title: str = ""
     href: str = ""
@@ -392,9 +387,9 @@ def _split_region(region: str) -> tuple[str, str]:
     return "us", "en"
 
 
-# ─── base search engine (text-only, XPath-driven) ────────────────────────────
+# ─── 基础搜索引擎（纯文本、XPath 驱动）──────────────────────────────────────
 class BaseSearchEngine:
-    """Abstract base: build_payload -> fetch -> extract via XPath -> post-process."""
+    """抽象基类：build_payload -> fetch -> 用 XPath extract -> 后处理。"""
 
     name: ClassVar[str]
     category: ClassVar[str] = "text"
@@ -443,34 +438,69 @@ class BaseSearchEngine:
 
     @property
     def result_type(self) -> type:
+        """The row type this adapter yields; ``TextResult`` unless overridden.
+        """
         return TextResult
 
     def build_payload(self, query: str, region: str, safesearch: str,
                       timelimit: str | None, page: int, **kwargs: str) -> dict[str, Any]:
+        """Translate one call into this engine's query parameters.
+
+        Returns:
+            The mapping used as a GET query or POST form. Abstract: every concrete engine
+            implements it, because only it knows its own page's parameter names and encodings.
+        """
         raise NotImplementedError
 
     def request(self, *args: Any, **kwargs: Any) -> str | None:
+        """Fetch once through this engine's transport.
+
+        Returns:
+            The body on HTTP 200; ``None`` for any other non-challenge status (the caller reads
+            that as "no body", not "blocked").
+
+        Raises:
+            MetaBlockedException: A status in ``_challenge_statuses``; the pool opens this
+                backend's circuit instead of retrying further.
+            MetaTimeoutException: The transport timed out.
+            MetaSearchException: Any other transport failure.
+        """
         resp = self.http_client.request(*args, **kwargs)
         self.http_status = resp.status_code
         if resp.status_code in self._challenge_statuses:
-            # Bot challenge / access denied -> circuit-open this backend rather
-            # than treat it as a normal empty result (which would retry every call
-            # and risk escalating the block). Empty/timeout stay non-fatal.
+            # 反爬挑战 / 拒绝访问 -> 熔断这个后端，而不是当成普通的空结果
+            # （后者会每次调用都重试，有把封禁升级的风险）。空结果/超时不算致命。
             raise MetaBlockedException(f"HTTP {resp.status_code}")
         return resp.text if resp.status_code == 200 else None
 
     @cached_property
     def parser(self) -> LHTMLParser:
+        """The shared lxml parser for this engine (blank text and comments dropped).
+        """
         return LHTMLParser(remove_blank_text=True, remove_comments=True,
                            remove_pis=True, collect_ids=False)
 
     def extract_tree(self, html_text: str) -> html.Element:
+        """Parse ``html_text`` with :attr:`parser`.
+
+        Raises:
+            lxml.etree.ParserError: The document has no parseable root.
+        """
         return html.fromstring(html_text, parser=self.parser)
 
     def pre_process_html(self, html_text: str) -> str:
+        """Engine-specific markup repair before parsing; returns its input unchanged.
+        """
         return html_text
 
     def extract_results(self, html_text: str) -> list[Any]:
+        """Run this engine's XPath table, one row per result container.
+
+        Side effects:
+            Records ``last_extract=(containers, usable)`` so parser drift — containers still
+            there, usable rows zero — stays visible. Filtering is :meth:`post_extract_results`'
+            job, not this one's.
+        """
         html_text = self.pre_process_html(html_text)
         tree = self.extract_tree(html_text)
         nodes = tree.xpath(self.items_xpath)
@@ -487,6 +517,8 @@ class BaseSearchEngine:
         return results
 
     def post_extract_results(self, results: list[Any]) -> list[Any]:
+        """Engine-specific filtering after extraction; returns its input unchanged.
+        """
         return results
 
     def extract_kept(self, html_text: str) -> list[Any]:
@@ -514,6 +546,27 @@ class BaseSearchEngine:
 
     def search(self, query: str, region: str = "us-en", safesearch: str = "moderate",
                timelimit: str | None = None, page: int = 1, **kwargs: str) -> list[Any] | None:
+        """One text search end to end: build, fetch, extract, filter.
+
+        Args:
+            query: The query exactly as the caller sent it; some adapters quote it first.
+            region: A ``<country>-<language>`` hint.
+            safesearch: ``on``/``moderate``/``off``; each adapter maps it to a cookie or a
+                request field.
+            timelimit: The engine's own time-filter token, or ``None``.
+            page: The result page, 1-based.
+            **kwargs: Extra fields passed through to :meth:`build_payload`.
+
+        Returns:
+            The extracted rows after engine-specific filtering. ``None`` means the transport
+            gave back no body (not 200 and not blocked); an empty list means the page parsed
+            but nothing survived filtering.
+
+        Raises:
+            MetaBlockedException: A challenge status, or a challenge shell page detected.
+            MetaTimeoutException: The transport timed out.
+            MetaSearchException: Any other transport failure.
+        """
         payload = self.build_payload(query=query, region=region, safesearch=safesearch,
                                      timelimit=timelimit, page=page, **kwargs)
         if self.search_method == "GET":
@@ -532,8 +585,14 @@ class BaseSearchEngine:
         return kept
 
 
-# ─── DuckDuckGo (httpx transport) ────────────────────────────────────────────
+# ─── DuckDuckGo（httpx 传输）─────────────────────────────────────────────────
 class Duckduckgo(BaseSearchEngine):
+    """DuckDuckGo's HTML endpoint, over httpx.
+
+    DDG rate-limits with HTTP 202 plus a challenge page (not 403), so 202 is this class's
+    challenge status; ``y.js`` ad rows are dropped after extraction.
+    """
+
     name = "duckduckgo"
     provider = "bing"
     search_url = "https://html.duckduckgo.com/html/"
@@ -549,7 +608,7 @@ class Duckduckgo(BaseSearchEngine):
     headers: ClassVar[dict[str, str]] = {}
 
     def __init__(self, proxy: str | None = None, timeout: int | None = None, *, verify: bool = True) -> None:
-        # DDG uses the httpx transport (primp had issues upstream).
+        # DDG 走 httpx 传输（primp 在上游与 DDG 不合）。
         self.headers = {"User-Agent": _ua.random}
         self.http_client = _HttpxClient(headers=self.headers, proxy=proxy, timeout=timeout, verify=verify)  # type: ignore[assignment]
         self.results: list[Any] = []
@@ -564,7 +623,7 @@ class Duckduckgo(BaseSearchEngine):
         return payload
 
     def request(self, *args: Any, **kwargs: Any) -> str | None:
-        # httpx transport: kwargs use method= instead of positional method.
+        # httpx 传输：kwargs 用 method= 而不是位置参数 method。
         method = args[0] if args else kwargs.pop("method", "GET")
         url = args[1] if len(args) > 1 else kwargs.pop("url", "")
         resp = self.http_client.request(method=method, url=url, **kwargs)  # type: ignore[attr-defined]
@@ -581,6 +640,12 @@ class Duckduckgo(BaseSearchEngine):
 
 # ─── Brave ───────────────────────────────────────────────────────────────────
 class Brave(BaseSearchEngine):
+    """Brave's web results page.
+
+    Country and safesearch ride in the shared client's cookies; the time window goes
+    through ``tf``, and ``offset`` is a 0-based page number.
+    """
+
     name = "brave"
     provider = "brave"
     search_url = "https://search.brave.com/search"
@@ -607,9 +672,15 @@ class Brave(BaseSearchEngine):
         return payload
 
 
-# ─── Mojeek (independent index) ──────────────────────────────────────────────
 # ─── Yandex ──────────────────────────────────────────────────────────────────
 class Yandex(BaseSearchEngine):
+    """Yandex's domestic search page.
+
+    dhole sends no date filter to this adapter (see
+    ``search_engines._DATE_AWARE_ENGINES``); that is a statement about dhole's wiring, not
+    a claim that Yandex has no time filter.
+    """
+
     name = "yandex"
     provider = "yandex"
     search_url = "https://yandex.com/search/site/"
@@ -630,10 +701,10 @@ class Yandex(BaseSearchEngine):
         return payload
 
 
-# ─── Bing (CN + intl; free, keyless, reachable from mainland CN) ─────────────
+# ─── Bing（国内 + 国际；免费、免密、中国大陆可直连）──────────────────────────
 # 国内网可用：cn.bing.com 稳定可达；国际版 www.bing.com 作为回退。
 # provider 复用 "bing" 索引家族（与 DuckDuckGo 同源，共识合并）。
-# transport 用 httpx（非 primp）：primp 的浏览器 TLS 指纹与 Bing 协商
+# Bing 的传输用 httpx（非 primp）：primp 的浏览器 TLS 指纹与 Bing 协商
 # 偶发 SelectedUnofferedKxGroup 失败，httpx 稳定。
 def _bing_decode_ck_url(href: str) -> str:
     """从 Bing ck/a 跳转链接解码真实 URL。
@@ -658,6 +729,12 @@ def _bing_decode_ck_url(href: str) -> str:
 
 
 class Bing(BaseSearchEngine):
+    """Bing's domestic endpoint (cn.bing.com), over httpx.
+
+    Result links are ``ck/a`` redirects, decoded in ``post_extract_results``, which also
+    drops Bing's own pages. The international endpoint is :class:`BingGlobal`.
+    """
+
     name = "bing"
     provider = "bing"
     search_url = "https://cn.bing.com/search"
@@ -769,7 +846,7 @@ class BingGlobal(Bing):
     prefers_raw_query = False
 
 
-# ─── Baidu (CN, free, keyless, no cookies needed) ────────────────────────────
+# ─── 百度（国内、免费、免密、无需 cookie）────────────────────────────────────
 def _is_challenge_shell(html_text: str) -> bool:
     """200 拦截页：**只有几 KB 的壳** + 校验字样。
 
@@ -928,9 +1005,9 @@ class Baidu(BaseSearchEngine):
         return out
 
 
-# ─── registry ────────────────────────────────────────────────────────────────
-# All enabled text backends. Bing is enabled (free/keyless, reachable from
-# mainland CN without VPN). Order = rough preference; run all in parallel.
+# ─── 注册表 ──────────────────────────────────────────────────────────────────
+# 全部启用的文本后端。Bing 可用（免费/免密，中国大陆免 VPN 直连）。顺序 = 大致
+# 偏好；全部并行跑。
 _TEXT_ENGINES: dict[str, type[BaseSearchEngine]] = {
     "duckduckgo": Duckduckgo,
     "brave": Brave,
@@ -939,9 +1016,9 @@ _TEXT_ENGINES: dict[str, type[BaseSearchEngine]] = {
     "bing_global": BingGlobal,
     "baidu": Baidu,
 }
-# Map dhole's public engine names -> metasearch backends.
+# dhole 的公开引擎名 -> 元搜索后端名。
 _DHOLE_TO_BACKEND = {
-    "duckduckgo": "duckduckgo", "ddg": "duckduckgo",  # ddg is a common alias
+    "duckduckgo": "duckduckgo", "ddg": "duckduckgo",  # ddg 是常见别名
     "bing": "bing",
     "brave": "brave", "yandex": "yandex",
     "baidu": "baidu",
@@ -964,9 +1041,9 @@ _DHOLE_TO_BACKEND = {
     # 服务端渲染、国内直连；AliWAF 惩罚页按 IP 限流（so360 校验页同类），归国内
     # 独立索引那一档。
     "shenma": "shenma",
-    # Paid JSON backends: selectable by name, run on their own track (see
-    # KeyedApiEngine) -- absent from _TEXT_ENGINES by design. 名字必须与
-    # KEYED_ENGINES 严格一致：留一个没有实现的键，点名它会通过校验却什么都不返回。
+    # 付费 JSON 后端：可按名字点名，走自己那条轨道（见 KeyedApiEngine）—— 刻意
+    # 不在 _TEXT_ENGINES 里。名字必须与 KEYED_ENGINES 严格一致：留一个没有实现的
+    # 键，点名它会通过校验却什么都不返回。
     "tavily": "tavily",
     "bocha": "bocha",
     "exa": "exa",
@@ -1067,26 +1144,22 @@ class Sogou(BaseSearchEngine):
     search_url = "https://www.sogou.com/web"
     search_method = "GET"
     items_xpath = "//div[contains(@class,'vrwrap')][.//@data-url]"
-    # Which attribute holds **this result's** target, decided on structure and on
-    # the shape of the URL — never on a host name or a keyword.
+    # 哪个属性承载**这一条结果**的目标，由结构和 URL 的形状决定 —— 从不看主机名
+    # 或关键词。
     #
-    # Measured 2026-10-14 on a live SERP (10 cards, `review/.runtime/p4/sogou_serp.html`):
-    # every card carries its target in a `@data-url`, and 9 of those live on a
-    # `div.r-sech…[style="display:none"][data-async="1"]` slot — sogou's normal
-    # mechanism, so "hidden/async" is NOT a reason to distrust one. The card's own
-    # `<h3>` anchor is a relative `/link?url=` wrapper in those 9. The 10th card
-    # (a 公众号 result) is the one that differs: its slot holds
-    # `http://mp.weixin.qq.com/count/<sig>/<mid>/<idx>&scene=6` — a click-count
-    # wrapper whose `&` has no `?` in front of it, i.e. a URL that addresses no
-    # resource and 404s (round 01, R01-015) — while the real article link
-    # (`mp.weixin.qq.com/s?src=11&…`) sits on the title anchor.
+    # 2026-10-14 在线上 SERP 实测（10 张卡片，`review/.runtime/p4/sogou_serp.html`）：
+    # 每张卡片都在 `@data-url` 里带着目标，其中 9 个挂在
+    # `div.r-sech…[style="display:none"][data-async="1"]` 槽位上 —— 这是搜狗的正常
+    # 机制，所以"隐藏/异步"**不是**不信任它的理由。那 9 张卡片自己的 `<h3>` 锚点
+    # 是相对路径 `/link?url=` 包装。第 10 张（一条公众号结果）不同：它的槽位写着
+    # `http://mp.weixin.qq.com/count/<sig>/<mid>/<idx>&scene=6` —— 一个点击计数包装，
+    # `&` 前面没有 `?`，即一个不指向任何资源、会 404 的 URL（round 01，R01-015）——
+    # 而真正的文章链接（`mp.weixin.qq.com/s?src=11&…`）在标题锚点上。
     #
-    # So: prefer a data-url that is *formable as a URL*, and take the absolute
-    # title anchor only when the card has no such data-url. The two branches are
-    # mutually exclusive by construction, because the anchor branch's guard is the
-    # same predicate as the first branch. Exactly one node must come back:
-    # `extract_results` glues whatever an XPath returns with no separator, and two
-    # candidates would become one unusable string — a lost row, not a fixed one.
+    # 所以：优先取**能构成 URL** 的 data-url，只有卡片没有这样的 data-url 时才取绝对
+    # 标题锚点。两个分支按构造互斥，因为锚点分支的守卫与第一分支是同一个谓词。
+    # 必须只回来一个节点：`extract_results` 把 XPath 返回的东西无分隔地粘起来，两个
+    # 候选会变成一条不可用的字符串 —— 那是丢了一行，不是修好一行。
     _MALFORMED = "contains({attr},'&') and not(contains({attr},'?'))"
     _CARD = ("ancestor::div[contains(concat(' ', normalize-space(@class), ' '),"
              " 'vrwrap')][1]")
@@ -1140,21 +1213,20 @@ class Sogou(BaseSearchEngine):
         return out
 
 
-# ─── Yahoo (Bing index, second endpoint) ─────────────────────────────────────
+# ─── Yahoo（Bing 索引，第二个端点）───────────────────────────────────────────
 def _yahoo_decode_url(href: str) -> str:
-    """Unwrap Yahoo's r.search.yahoo.com/.../RU=<percent-encoded> redirect.
+    """拆开 Yahoo 的 r.search.yahoo.com/.../RU=<百分号编码> 跳转。
 
-    Yahoo serves two layouts (a ``div.algo.relsrch`` card and a
-    ``section.algo.Sr`` card); both wrap the target in the same redirect. A
-    wrapper that cannot be decoded is dropped rather than handed out as a
-    result URL - it expires and carries a session token.
+    Yahoo 有两套版面（``div.algo.relsrch`` 卡片和 ``section.algo.Sr`` 卡片）；
+    两者都把目标包在同一个跳转里。解不开的包装会被丢掉，而不是当结果 URL 发出去
+    —— 它会过期，还带着会话令牌。
     """
     from urllib.parse import unquote, urlparse
     host = (urlparse(href).netloc or "").lower()
     if not host.endswith("yahoo.com"):
         return href
-    # The target lives in the PATH (`/RU=https%3a%2f%2f...`), not the query;
-    # Yahoo rotates between r.search.yahoo.com and rd.search.yahoo.com.
+    # 目标在 PATH 里（`/RU=https%3a%2f%2f...`），不在 query 里；Yahoo 会在
+    # r.search.yahoo.com 和 rd.search.yahoo.com 之间轮换。
     match = re.search(r"/RU=([^/]+)", href)
     if match:
         target = unquote(match.group(1))
@@ -1163,36 +1235,35 @@ def _yahoo_decode_url(href: str) -> str:
         target = parse_qs(urlparse(href).query).get("RU", [""])[0]
     if target.startswith(("http://", "https://")):
         return target
-    # A redirect we cannot decode is dropped; a real yahoo.com result URL is not.
+    # 解不开的跳转丢掉；真正的 yahoo.com 结果 URL 不丢。
     return "" if host.startswith(("r.search.", "rd.search.", "search.")) else href
 
 
 class Yahoo(BaseSearchEngine):
-    """Yahoo web search: the second entry into the Bing index.
+    """Yahoo 网页搜索：进入 Bing 索引的第二个入口。
 
-    Same index family as bing / bing_global / duckduckgo, so it adds an
-    endpoint (availability under per-IP blocks) but not a consensus vote.
-    Yahoo rotates two result layouts; the union below covers both, and the
-    fixture set keeps one contract per layout so a layout change cannot go
-    unnoticed.
+    与 bing / bing_global / duckduckgo 同属一个索引家族，所以它增加的是一个
+    端点（按 IP 封禁时多一条可用路），不是一张共识票。Yahoo 会轮换两套结果
+    版面；下面的并集覆盖两者，夹具集为每套版面各钉一份契约，版面变了不会没人
+    发现。
     """
 
     name = "yahoo"
     provider = "bing"
     search_url = "https://search.yahoo.com/search"
     search_method = "GET"
-    # Variant A: one div.algo.relsrch per result. Variant B: a section.richAlgo
-    # holding the first result, then section.Sr cards nested inside one another.
-    # Sections overlap, so every element selector is scoped to the first h3 /
-    # first compText - otherwise a card's title runs into its nested siblings.
+    # A 版：每条结果一个 div.algo.relsrch。B 版：一个 section.richAlgo 装第一条
+    # 结果，后面 section.Sr 卡片互相嵌套。这些 section 会重叠，所以每个元素选择器
+    # 都限定在第一个 h3 / 第一个 compText 上 —— 否则一张卡片的标题会串进它嵌套的
+    # 兄弟节点。
     items_xpath = (
         "//div[contains(@class,'algo') and contains(@class,'relsrch') and .//h3]"
         " | //section[contains(concat(' ',normalize-space(@class),' '),' Sr ')]"
         " | //section[contains(concat(' ',normalize-space(@class),' '),' richAlgo ')]"
     )
     elements_xpath: ClassVar[Mapping[str, str]] = {
-        # Variant B's h3 prefixes the result with its site/URL breadcrumb inside
-        # span.title-url; only the text outside that span is the title.
+        # B 版的 h3 会在结果前面带上站点/URL 面包屑，装在 span.title-url 里；
+        # 只有那个 span 之外的文本才是标题。
         "title": "(.//h3)[1]//text()[not(ancestor::span[contains(@class,'title-url')])]",
         "href": "((.//h3)[1]/a/@href | .//a/@href)[1]",
         "body": "(.//div[contains(@class,'compText')])[1]//text()",
@@ -1203,15 +1274,15 @@ class Yahoo(BaseSearchEngine):
 
     def __init__(self, proxy: str | None = None, timeout: int | None = None, *,
                  verify: bool = True) -> None:
-        # A fixed Chrome fingerprint: primp's random pick occasionally hits a
-        # TLS profile Yahoo answers with a handshake EOF (observed live).
+        # 固定一套 Chrome 指纹：primp 的随机选择偶尔会撞上 Yahoo 以握手 EOF
+        # 回应的 TLS 配置（线上观测到过）。
         self.http_client = _PrimpClient(proxy=proxy, timeout=timeout, verify=verify,
                                         impersonate="chrome", impersonate_os="windows")
         self.http_client.client.headers_update(self.headers_update)
         self.results: list[Any] = []
 
     def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
-                      timelimit: str | None,  # noqa: ARG002 - not wired (see _DATE_AWARE_ENGINES)
+                      timelimit: str | None,  # noqa: ARG002 - 未接线（见 _DATE_AWARE_ENGINES）
                       page: int = 1, **kwargs: str) -> dict[str, Any]:
         payload = {"p": query}
         if page > 1:
@@ -1229,16 +1300,13 @@ class Yahoo(BaseSearchEngine):
         return out
 
 
-# ─── Marginalia (independent small-web index) ────────────────────────────────
+# ─── Marginalia（独立的小众站点索引）─────────────────────────────────────────
 class Marginalia(BaseSearchEngine):
-    """Marginalia: an independent, non-commercial index of the small web.
+    """Marginalia：独立、非商业的小众站点索引。
 
-    Server-rendered and keyless. Its corpus is English-heavy and shallow on
-    commercial long-tail queries, so it is deliberately last in the default
-    pool: it contributes diversity when it answers, and the other engines
-    carry when it does not. Pagination needs a per-session ``sst`` token, so
-    this backend answers page 1 only; later pages return nothing rather than
-    pretending page 1 is page N.
+    服务端渲染、免密。语料偏英文，对商业长尾查询很浅，所以刻意放在默认池末位：
+    答得上时提供多样性，答不上时由其余引擎兜住。分页需要每会话一个 ``sst`` 令牌，
+    所以这个后端只答第 1 页；后面的页交回空，而不是假装第 1 页就是第 N 页。
     """
 
     name = "marginalia"
@@ -1256,8 +1324,8 @@ class Marginalia(BaseSearchEngine):
     headers_update: ClassVar[Mapping[str, str]] = {
         "Accept-Language": "en-US,en;q=0.9"}
     _detect_challenge_shell = True
-    # Marginalia answers a rate-limited client with 400 as well as a 200
-    # challenge page; both mean "cool down", not "this query had no results".
+    # Marginalia 对被限流的客户端既回 400，也回 200 挑战页；两者都意味着"冷却"，
+    # 不是"这个查询没结果"。
     _challenge_statuses = (400, 403, 429, 503)
 
     def __init__(self, proxy: str | None = None, timeout: int | None = None, *,
@@ -1268,14 +1336,13 @@ class Marginalia(BaseSearchEngine):
         self.results: list[Any] = []
 
     def _check_challenge(self, html_text: str) -> None:
-        # Marginalia's 200 anti-bot page is ~37KB ("Wait A Moment / aggressive
-        # bot activity"), above the generic shell size gate. Mark it blocked so
-        # the engine cools down instead of reporting "no results".
-        # The marker scan stays in the first 2KB: on the challenge page it sits
-        # in the early <title>/meta, while a hostile SEO result carrying the
-        # same phrase renders mid-page into the SERP — a full-document match
-        # lets one indexed page cool a healthy engine for 600s. A wider real
-        # challenge page would degrade to "no results" (the milder failure).
+        # Marginalia 的 200 反爬页约 37KB（"Wait A Moment / aggressive
+        # bot activity"），高过通用的壳体积闸门。标成被拦，让引擎进入冷却，而不是
+        # 报"没有结果"。
+        # 标记扫描只在前 2KB 里做：挑战页把它放在靠前的 <title>/meta 里，而一条
+        # 带同样字样的敌意 SEO 结果渲染在 SERP 中段 —— 全文档匹配会让一个被索引的
+        # 页面把一个健康引擎冷却 600 秒。更宽的真挑战页会退化成"没有结果"（较轻的
+        # 那种失败）。
         if ("aggressive bot activity" in html_text[:2048]
                 or "Wait A Moment" in html_text[:2048]):
             raise MetaBlockedException(
@@ -1283,7 +1350,7 @@ class Marginalia(BaseSearchEngine):
         super()._check_challenge(html_text)
 
     def build_payload(self, query: str, region: str, safesearch: str,  # noqa: ARG002
-                      timelimit: str | None,  # noqa: ARG002 - not wired
+                      timelimit: str | None,  # noqa: ARG002 - 未接线
                       page: int = 1, **kwargs: str) -> dict[str, Any]:
         return {"query": query}
 
@@ -1291,7 +1358,7 @@ class Marginalia(BaseSearchEngine):
                safesearch: str = "moderate", timelimit: str | None = None,
                page: int = 1, **kwargs: str) -> list[Any] | None:
         if page > 1:
-            return None  # not fetched, not "empty"
+            return None  # 没取过，不是"空"
         return super().search(query, region=region, safesearch=safesearch,
                               timelimit=timelimit, page=page, **kwargs)
 
@@ -1355,7 +1422,7 @@ class Seznam(BaseSearchEngine):
                safesearch: str = "moderate", timelimit: str | None = None,
                page: int = 1, **kwargs: str) -> list[Any] | None:
         if page > 1:
-            return None  # not fetched, not "empty"
+            return None  # 没取过，不是"空"
         return super().search(query, region=region, safesearch=safesearch,
                               timelimit=timelimit, page=page, **kwargs)
 
@@ -1428,7 +1495,7 @@ class Shenma(BaseSearchEngine):
                safesearch: str = "moderate", timelimit: str | None = None,
                page: int = 1, **kwargs: str) -> list[Any] | None:
         if page > 1:
-            return None  # not fetched, not "empty"
+            return None  # 没取过，不是"空"
         return super().search(query, region=region, safesearch=safesearch,
                               timelimit=timelimit, page=page, **kwargs)
 
@@ -1450,7 +1517,7 @@ _TEXT_ENGINES["marginalia"] = Marginalia
 _TEXT_ENGINES["seznam"] = Seznam
 _TEXT_ENGINES["shenma"] = Shenma
 
-# ─── keyed JSON search APIs (Tavily / Bocha) ────────────────────────────────
+# ─── 带 key 的 JSON 搜索 API（Tavily / 博查）─────────────────────────────────
 # 这些后端不走 BaseSearchEngine 的 HTML 抓取契约：都是 POST JSON + Bearer key。
 # 策略：**默认不跑**，只有 engines= 显式点名才执行 —— 每次调用都是真金白银。
 
@@ -1546,9 +1613,9 @@ class _Tavily(KeyedApiEngine):
     endpoint = "https://api.tavily.com/"
     # basic=1 credit；advanced=2 credits，默认不替用户花钱
 
-    #: dhole hands the builders the short codes `_FRESHNESS_TO_TIMELIMIT`
-    #: produces ("d"/"w"/"m"/"y"); the API wants the whole word. Comparing
-    #: against the long names meant `time_range` was never set on a real call.
+    #: dhole 交给构建器的是 `_FRESHNESS_TO_TIMELIMIT` 产出的短码
+    #: （"d"/"w"/"m"/"y"）；这个 API 要的是整词。从前拿长名字去比，结果真实调用里
+    #: `time_range` 从来没被设上过。
     _TIME_RANGE = {"d": "day", "w": "week", "m": "month", "y": "year"}
 
     def build_request(self, query, max_results, timelimit):
@@ -1752,13 +1819,11 @@ KEYED_ENGINES: dict[str, type[KeyedApiEngine]] = {
 }
 
 
-# ─── circuit breaker (per-backend block cooldown) ───────────────────────────
-# A backend that CAPTCHAs / 403s / rate-limits us is skipped for a cooldown so
-# we don't keep firing requests at a host that is actively blocking our IP
-# (which risks escalating to a longer IP-level ban, and wastes quorum slots
-# waiting on a backend that will not contribute). Empty results and timeouts
-# are transient and do NOT trip the breaker. Cleared on the next success.
-_CIRCUIT_COOLDOWN = 60.0  # seconds
+# ─── 熔断器（按后端的封禁冷却）───────────────────────────────────────────────
+# 对我们 CAPTCHA / 403 / 限流的后端，会被跳过一个冷却期，免得继续向一台正在封
+# 我们 IP 的主机发请求（有升级成更长 IP 封禁的风险，还浪费法定数名额去等一个不会
+# 产出的后端）。空结果与超时是暂时性的，**不**触发熔断。下次成功即清除。
+_CIRCUIT_COOLDOWN = 60.0  # 秒
 # 校验页（HTTP 200 的反爬壳）不是瞬时限流：上游已经把这个 IP 记进观察名单。本机实测
 # so.com 在**完全零请求**静默 20 分钟后仍回同一张「访问异常页面」—— 此前那版"每 3 分钟
 # 探一次，可能是自己把惩罚续了"的混淆已被这个对照排除。所以 60 秒后再敲一次对这种窗口
@@ -1769,7 +1834,7 @@ _CIRCUIT_COOLDOWN = 60.0  # seconds
 _CHALLENGE_THRESHOLD = 3
 _CHALLENGE_COOLDOWN = 600.0
 _CHALLENGE_COUNTS: dict[str, int] = {}
-_BACKEND_HEALTH: dict[str, float] = {}  # name -> block-until timestamp
+_BACKEND_HEALTH: dict[str, float] = {}  # 名字 -> 封禁到期时间戳
 
 
 def _circuit_state_file() -> str:
@@ -1783,8 +1848,8 @@ def _circuit_state_file() -> str:
 
 
 def _load_circuit_state() -> None:
-    """Load persisted circuit breaker state from disk (survives restarts).
-    Expired entries are discarded. Called once at module load."""
+    """从磁盘读回持久化的熔断器状态（跨重启存活）。
+    过期项丢弃。模块加载时调用一次。"""
     global _BACKEND_HEALTH
     path = _circuit_state_file()
     try:
@@ -1793,7 +1858,7 @@ def _load_circuit_state() -> None:
             with open(path, "r") as f:
                 data = json.load(f)
             now_ts = time()
-            # Only restore entries that haven't expired yet
+            # 只恢复尚未过期的项
             _BACKEND_HEALTH = {k: v for k, v in data.items() if v > now_ts}
             if len(_BACKEND_HEALTH) != len(data):
                 # 磁盘上留着已经过期的熔断记录，内存里却已经不认它：用户（和任何
@@ -1805,18 +1870,17 @@ def _load_circuit_state() -> None:
 
 
 def _save_circuit_state() -> None:
-    """Persist circuit breaker state to disk. Best-effort, never raises.
-    Uses atomic write (tmpfile + os.replace) to prevent corruption from
-    concurrent processes."""
+    """把熔断器状态持久化到磁盘。尽力而为，从不抛异常。
+    用原子写（临时文件 + os.replace），防止并发进程写坏文件。"""
     try:
         path = _circuit_state_file()
         os.makedirs(os.path.dirname(path), exist_ok=True)
         import json
         import tempfile
         now_ts = time()
-        # Only save non-expired entries
+        # 只保存未过期的项
         active = {k: v for k, v in _BACKEND_HEALTH.items() if v > now_ts}
-        # Atomic write: write to temp file then rename (prevents partial writes)
+        # 原子写：先写临时文件再改名（防止写一半）
         fd, tmp_path = tempfile.mkstemp(
             dir=os.path.dirname(path), suffix=".tmp"
         )
@@ -1829,7 +1893,7 @@ def _save_circuit_state() -> None:
             paths.harden_dir(os.path.dirname(path))
             paths.harden_file(path)
         except Exception:
-            # Clean up temp file on failure
+            # 失败时清掉临时文件
             try:
                 os.unlink(tmp_path)
             except OSError:
@@ -1838,7 +1902,7 @@ def _save_circuit_state() -> None:
         pass
 
 
-# Load persisted state at module import (once per process)
+# 模块导入时加载持久化状态（每进程一次）
 _load_circuit_state()
 
 
@@ -1850,7 +1914,7 @@ def _is_circuit_open(name: str) -> bool:
 # 三个旋钮已注销（运行时静默忽略）。表仍在函数里（在 _CONN_FAIL_COOLDOWN
 # 定义之前），但只剩各档的秒数。
 def _cooldown_tiers() -> dict:
-    """The three backoff tiers (17.0: fixed seconds only)."""
+    """三档退避（17.0：只剩固定秒数）。"""
     return {
         "block": _CIRCUIT_COOLDOWN,
         "challenge": _CHALLENGE_COOLDOWN,
@@ -1865,7 +1929,7 @@ def _cooldown_seconds(kind: str) -> tuple[float, str]:
 
 
 def cooldown_settings() -> dict:
-    """The backoff tiers currently in force, for reporting (G6)."""
+    """当前生效的退避档位，供报告使用（G6）。"""
     out: dict = {}
     for kind, seconds in _cooldown_tiers().items():
         out[kind] = {"seconds": seconds}
@@ -1914,13 +1978,12 @@ def _record_success(name: str) -> None:
 
 
 def sweep_expired_cooldowns() -> int:
-    """Drop cooldowns whose time is up; returns how many were released.
+    """清掉到点的冷却；返回释放了几家。
 
-    A cooldown is already inert the moment it expires (`_is_circuit_open` compares
-    against the clock), but the record stays in memory — and, until the next
-    unrelated write, on disk — so the state file reads as "brave is blocked" long
-    after it stopped being true. Sweeping once per search round keeps the file a
-    faithful picture of pool health, which is the only place a user can look.
+    冷却一到点就已经失效（`_is_circuit_open` 对着时钟比），但记录还留在内存里
+    —— 而且在下次无关的写入之前还留在盘上 —— 于是状态文件在早就放行很久之后
+    仍写着"brave 被封"。每轮搜索清扫一次，文件才是池子健康状况的忠实画像，而
+    那是用户唯一能看的地方。
     """
     now_ts = time()
     expired = [k for k, v in _BACKEND_HEALTH.items() if v <= now_ts]
@@ -1932,21 +1995,19 @@ def sweep_expired_cooldowns() -> int:
 
 
 def cooldowns() -> dict[str, float]:
-    """Active cooldowns as {engine: seconds remaining}."""
+    """当前生效的冷却，{引擎: 剩余秒数}。"""
     now_ts = time()
     return {k: round(v - now_ts, 1) for k, v in _BACKEND_HEALTH.items() if v > now_ts}
 
 
-# ─── proactive pool heartbeat (G6) ───────────────────────────────────────────
-# The breaker above is passive: an engine comes back only when somebody happens to
-# search again after its window ends, and a wrongly-cooled main engine can stay out
-# for the full 10 minutes even on a network that stopped blocking it an hour ago.
-# `dhole engines probe` (15.2) answers that question, but only when a human
-# remembers to ask it. This is the same probe, run by the server itself, and — the
-# part that matters — it does NOT hand out new punishment: a probe that fails
-# restores the ORIGINAL expiry, so checking cannot extend it. That rule is what
-# keeps this from being the "每 3 分钟敲一次，可能是自己把惩罚续了" pattern the
-# measured so.com window showed; the interval exists for the same reason.
+# ─── 主动池心跳（G6）─────────────────────────────────────────────────────────
+# 上面的熔断器是被动的：引擎只有在冷却窗口结束后又恰好有人搜索时才回来，而一个
+# 被误冷却的主力引擎可以在一个一小时前就不再封我们的网络里继续缺席整整十分钟。
+# `dhole engines probe`（15.2）能回答这个问题，但得有人记得去问。这里就是同一个
+# 探针，由服务器自己跑，而且 —— 要紧的是这一点 —— 它**不**施加新的惩罚：探针失败
+# 会恢复**原来的**到期时间，所以检查本身无法把它延长。正是这条规则让它没有变成
+# 实测到的 so.com 窗口所显示的"每 3 分钟敲一次，可能是自己把惩罚续了"那种形态；
+# 巡检间隔存在的理由也是同一个。
 _HEARTBEAT_DEFAULT_S = 300.0
 _HEARTBEAT_PROBE_TIMEOUT_S = 12.0
 _heartbeat_running = False
@@ -1961,7 +2022,7 @@ def _heartbeat_interval() -> tuple[float, str]:
 
 
 def heartbeat_settings() -> dict:
-    """What the heartbeat is currently configured to do (for `engines list`)."""
+    """心跳当前被配置成做什么（给 `engines list` 看）。"""
     seconds, note = _heartbeat_interval()
     out = {"interval_s": seconds, "enabled": seconds > 0,
            "running": _heartbeat_running, "last_result": _heartbeat_log[-1] if _heartbeat_log else {}}
@@ -1971,11 +2032,10 @@ def heartbeat_settings() -> dict:
 
 
 async def engine_heartbeat(query: str = "python asyncio tutorial") -> dict:
-    """Ask every cooling engine, directly and once, whether it answers right now.
+    """把每个冷却中的引擎直接、各问一次：现在能答吗。
 
-    Returns ``{"checked": [...], "recovered": [...], "still_cooling": [...]}``.
-    Never raises: this runs unattended behind a search, and a broken diagnostic must
-    not become a failed search.
+    返回 ``{"checked": [...], "recovered": [...], "still_cooling": [...]}``。
+    永不抛：它无人值守地挂在搜索后面跑，坏掉的诊断不能变成一次失败的搜索。
     """
     global _heartbeat_running
     _heartbeat_running = True
@@ -1988,9 +2048,8 @@ async def engine_heartbeat(query: str = "python asyncio tutorial") -> dict:
             if cls is None or getattr(cls, "disabled", False):
                 result["still_cooling"].append(name)
                 continue
-            # Lift the breaker for the duration of THIS probe only. The engine is
-            # called directly, not through metasearch, so there is no quorum, no
-            # preemption and no second engine involved: the answer is about this one.
+            # 只在**本次**探针期间抬起熔断。引擎是直接调用的，不经过 metasearch，
+            # 所以没有法定数、没有抢占、也没有第二个引擎参与：答案只关于这一家。
             _BACKEND_HEALTH.pop(name, None)
             ok = False
             try:
@@ -2002,19 +2061,18 @@ async def engine_heartbeat(query: str = "python asyncio tutorial") -> dict:
                 ok = False
             result["checked"].append(name)
             if ok:
-                _record_success(name)  # clears the cooldown: the pool gains it back now
+                _record_success(name)  # 清掉冷却：池子现在就把它收回来
                 result["recovered"].append(name)
             else:
-                # Restore the expiry that was in force BEFORE the probe. Not a fresh
-                # one: a check that found the wall still standing must not have
-                # lengthened the wait behind it.
+                # 恢复探针**之前**生效的那个到期时间。不是新算一个：一次发现墙还
+                # 立着的检查，不该把它背后的等待时间变长。
                 _BACKEND_HEALTH[name] = until
                 result["still_cooling"].append(name)
         if result["checked"]:
             _heartbeat_log.append({"at": time(), **result})
             del _heartbeat_log[:-8]
             _save_circuit_state()
-    except Exception as e:  # a heartbeat that cannot run must stay quiet, but logged
+    except Exception as e:  # 跑不起来的心跳必须安静，但要留日志
         logger.debug("engine heartbeat skipped: %s", str(e)[:160])
         result["error"] = str(e)[:120]
     finally:
@@ -2023,19 +2081,17 @@ async def engine_heartbeat(query: str = "python asyncio tutorial") -> dict:
 
 
 def _probe_one_engine(cls, query: str) -> list:
-    """One live query through the engine's own fetch+parse path, built the same
-    way metasearch builds it (same proxy, same deadline) so the heartbeat probes
-    the engine as the pool will actually use it."""
+    """走引擎自己的 fetch+parse 路径发一次真实查询，构造方式与 metasearch 相同
+    （同一个代理、同一个期限），这样心跳探的就是池子实际会用到的那一台。"""
     eng = cls(proxy=_get_search_proxy(), timeout=int(_SEARCH_DEADLINE), verify=True)
     return eng.search(query) or []
 
 
 def schedule_engine_heartbeat() -> None:
-    """Fire the heartbeat if it is due (called after a search round, never before).
+    """到点就发心跳（在一轮搜索之后调用，从不提前）。
 
-    Three conditions, all of them cheap: the interval has elapsed, no probe is
-    already running, and at least one engine is actually cooling. With a healthy
-    pool this costs one clock comparison.
+    三个条件，都很便宜：间隔已到、没有探针正在跑、至少一家引擎确实在冷却。池子
+    健康时这只花一次时钟比较。
     """
     global _heartbeat_last_at
     interval, note = _heartbeat_interval()
@@ -2052,10 +2108,10 @@ def schedule_engine_heartbeat() -> None:
         import asyncio
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        return  # no loop (CLI / sync caller): nothing to schedule on
+        return  # 没有事件循环（CLI / 同步调用方）：没地方挂
     task = loop.create_task(engine_heartbeat())
-    # Keep a reference: a bare task can be garbage-collected mid-flight, and the
-    # failure mode is a heartbeat that silently never runs.
+    # 留住引用：裸 task 可能在飞行途中被垃圾回收，而那种失败模式是心跳静默地
+    # 再也不跑。
     _heartbeat_tasks.add(task)
     task.add_done_callback(_heartbeat_tasks.discard)
 
@@ -2064,15 +2120,13 @@ _heartbeat_tasks: set = set()
 
 
 def engine_state_reset() -> dict:
-    """Forget everything the pool remembers: cooldowns, failure counts, yield.
+    """忘掉池子记得的一切：冷却、失败计数、产出。
 
-    The two state files decide which engines get asked. When an engine was
-    cooled down on a network that has since changed (VPN switched on, host
-    unblocked), the records still shape the next several searches, and the only
-    lever a user had was finding and deleting these files by hand — which is also
-    how the "dhole ignores my VPN" misdiagnosis started. This is that lever, made
-    a call. Nothing else is touched: the content cache is `sys_state`'s
-    `cache` class.
+    两个状态文件决定哪些引擎会被问到。当一家引擎是在一个后来变了的网络上被冷却
+    （VPN 打开、主机解封），这些记录仍会影响后面好几轮搜索，而用户唯一的杠杆是
+    自己找到并删掉这些文件 —— 这也正是"dhole 无视我的 VPN"那次误诊的起点。这里
+    就是那根杠杆，做成一次调用。别的什么都不动：内容缓存归 `sys_state` 的
+    `cache` 那一类。
     """
     released = {k: round(v - time(), 1) for k, v in _BACKEND_HEALTH.items()}
     forgotten = len(_ENGINE_YIELD)
@@ -2089,18 +2143,16 @@ def engine_state_reset() -> dict:
 
 
 def engine_state_snapshot() -> dict:
-    """Read-only pool health: per-engine verdict + any active cooldown.
+    """只读的池子健康：每引擎的判定 + 当前冷却。
 
-    `cooldown_seconds_left` is on **every** row now: the live seconds when this process
-    holds a cooldown record, and 0 when it does not. Leaving the key out was the defect
-    (R01-032, merged into R01-016) — a row reading `status: circuit_open` with no such
-    key means two different things ("cooling, unknown how long" and "was refused last
-    round, not cooling now"), and the one caller who asked four times in a row concluded
-    the number did not exist and went to write their own breaker log.
+    `cooldown_seconds_left` 现在在**每一行**上：本进程持有冷却记录时是实时剩余
+    秒数，没有记录时是 0。从前缺这个键是缺陷（R01-032，并入 R01-016）—— 一行
+    写着 `status: circuit_open` 却没有这个键，意味着两种不同的事（"在冷却，不知
+    还要多久"和"上一轮被拒，此刻没冷却"），而那位连问四次的调用方据此认定这个数
+    不存在，转而去自己写熔断日志了。
 
-    0 is scoped to *this process*: the breaker table is in-memory (persisted at import,
-    written by whoever ran the last search), so "no record here" is what the field can
-    honestly claim.
+    0 的作用域是**本进程**：熔断表在内存里（导入时持久化，由最后一个跑搜索的人
+    写入），所以"这里没有记录"是这个字段能诚实声称的东西。
     """
     health = engine_health()
     cool = cooldowns()
@@ -2261,7 +2313,7 @@ def _configured_default_backends() -> list[str]:
 
 
 def _resolve_backends(engines: Optional[list[str]]) -> list[str]:
-    """Map dhole engine names (or 'auto'/None) to ddgs backend names, dropping dups/unknowns."""
+    """把 dhole 引擎名（或 'auto'/None）映射成 ddgs 后端名，去掉重复与未知项。"""
     if not engines:
         return _configured_default_backends()
     out: list[str] = []
@@ -2321,7 +2373,7 @@ def _prefer_reliable(order: list, lane: frozenset) -> list:
 _SEARCH_TRACKING_PARAMS = {
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
     "fbclid", "gclid", "ref", "ref_src", "source", "_ga", "mc_cid", "mc_eid",
-    "igshid", "si",  # YouTube/social share trackers
+    "igshid", "si",  # YouTube / 社交平台的分享跟踪参数
 }
 
 _GITHUB_REPO_HOSTS = {"github.com", "www.github.com"}
@@ -2352,21 +2404,19 @@ _GITHUB_RESERVED_ROUTES = frozenset({
 
 
 def _normalize_url(url: str) -> str:
-    """Normalize a URL for cross-backend dedup.
+    """归一 URL，供跨后端去重。
 
-    Strips tracking/analytics query params (utm_*, fbclid, gclid, ref, ...) but
-    KEEPS real query params, so two results that differ only in a tracking tag
-    collapse to one, while genuinely distinct pages (e.g. ?page=2 vs ?page=3)
-    stay distinct. Also lowercases scheme+host and strips non-root trailing slash.
-    GitHub repository owner and name are case-insensitive, so their first two
-    nonempty path segments are lowercased for github.com and www.github.com;
-    later path segments remain unchanged because branches and file paths can be
-    case-sensitive. GitHub system routes (topics, settings, explore, ...) are
-    excluded from path folding because they are not repositories and case can
-    carry meaning. Credential-bearing URLs skip GitHub-specific path folding so
-    opaque userinfo is never part of a newly introduced canonical collision.
-    www.github.com retains its distinct host rather than adding a separate
-    host-alias canonicalization policy.
+    剥掉跟踪/分析类 query 参数（utm_*、fbclid、gclid、ref 等），但**保留**真正的
+    query 参数：只差一个跟踪标记的两条结果会并成一条，而真正不同的页面
+    （例如 ?page=2 与 ?page=3）仍然区分。utm_ 家族按**前缀**匹配，不是固定名单：
+    引擎和分享面板会随时造出 utm_id / utm_reader / utm_bid，而名单写好的第二天就
+    过时了。同时把 scheme+host 转小写，并去掉非根路径的尾斜杠。
+    GitHub 的仓库所有者与仓库名大小写不敏感，所以 github.com 和 www.github.com
+    的前两段非空路径会转小写；后面的路径段保持不变，因为分支名和文件路径可能
+    大小写敏感。GitHub 的系统路由（topics、settings、explore 等）不参与路径折叠，
+    因为它们不是仓库，大小写可能承载含义。带凭据的 URL 跳过 GitHub 专属的路径
+    折叠，好让不透明的 userinfo 永远不会成为新引入的规范化碰撞的一部分。
+    www.github.com 保留它自己的主机名，而不是再加一套主机别名归一策略。
     """
     if not url:
         return ""
@@ -2388,15 +2438,21 @@ def _normalize_url(url: str) -> str:
                 segments[i] = segments[i].lower()
             path = "/".join(segments)
     if p.query:
-        kept = [kv for kv in p.query.split("&")
-                if kv and kv.split("=", 1)[0].lower() not in _SEARCH_TRACKING_PARAMS]
+        kept = []
+        for kv in p.query.split("&"):
+            if not kv:
+                continue
+            name = kv.split("=", 1)[0].lower()
+            if name in _SEARCH_TRACKING_PARAMS or name.startswith("utm_"):
+                continue
+            kept.append(kv)
         query = "&".join(kept)
     else:
         query = ""
     return f"{scheme}://{host}{path}{('?' + query) if query else ''}"
 
 
-# ─── async metasearch aggregator ─────────────────────────────────────────────
+# ─── 异步元搜索聚合器 ────────────────────────────────────────────────────────
 async def metasearch(
     query: str,
     max_results: int = 10,
@@ -2409,33 +2465,31 @@ async def metasearch(
     query_map: Optional[dict[str, str]] = None,
     round_stats: Optional[dict] = None,
 ) -> tuple[list[dict[str, str]], dict[str, str]]:
-    """Run the backends in PARALLEL and return (results, per-backend-status).
+    """并行跑各后端，返回 (结果, 每后端状态)。
 
-    results: list of {title, href, body, backend} deduped by normalized URL,
-    preserving first-seen order (the backend that delivered it is its `backend`).
-    status: {backend: "ok" | "empty" | "error:..."} for every backend tried.
+    results: {title, href, body, backend} 的列表，按归一 URL 去重，保持首次见到
+    的顺序（交出它的后端就是它的 `backend`）。
+    status: 每个试过的后端一条 {backend: "ok" | "empty" | "error:..."}。
 
-    `timelimit` is the SHORT code the caller already uses for every backend
-    ("d"/"w"/"m"/"y", from search_engines._FRESHNESS_TO_TIMELIMIT); each backend
-    maps it to whatever its own API spells. Nothing here accepts the long words —
-    a second vocabulary in this layer is how the keyed engines ended up claiming
-    a date filter they never sent.
+    `timelimit` 是调用方对所有后端已经在用的**短码**（"d"/"w"/"m"/"y"，来自
+    search_engines._FRESHNESS_TO_TIMELIMIT）；各后端自己映射成它家 API 的拼法。
+    这里不接受长词 —— 在这一层再立第二套词汇，正是带 key 的引擎当初声称发过
+    日期过滤、实际从没发出去的原因。
 
-    Early-return-on-quorum: once enough unique results have landed we cancel the
-    laggards, so a healthy search returns in ~1-2s while a throttled one still
-    finishes within the deadline from whichever backends got through.
+    凑够法定数就早退：唯一结果够数后我们取消掉队者，所以健康搜索约 1-2 秒返回，
+    被限流的搜索也会在期限之内由那些跑通的后端交差。
     """
     backends = _resolve_backends(engines)
     status: dict[str, str] = {}
-    # Released cooldowns are dropped from the state file each round, so what a
-    # user reads in ~/.dhole matches what the pool actually does.
+    # 已释放的冷却每轮从状态文件里清掉，所以用户在 ~/.dhole 读到的与池子实际做的
+    # 是同一件事。
     sweep_expired_cooldowns()
-    # Rotate proxies per search call so no single IP gets rate-limited.
+    # 每次搜索调用读一次代理（17.0 不再有池与轮转，见 search_proxy.py）。
     _search_proxy = _get_search_proxy()
-    # One engine instance per backend (cheap; primp/httpx clients are light).
-    # Circuit breaker: skip backends that recently blocked us (CAPTCHA/403/rate-
-    # limit) for a cooldown, so we don't keep firing at a host that is actively
-    # blocking our IP. They show up in status as 'circuit_open' (-> engine_blocked).
+    # 每个后端一个引擎实例（便宜；primp/httpx 客户端很轻）。
+    # 熔断器：跳过最近拒绝过我们的后端（CAPTCHA/403/限流）一个冷却期，免得继续
+    # 向一台正在封我们 IP 的主机发请求。它们会以 'circuit_open' 出现在 status 里
+    # （-> engine_blocked）。
     instances: dict[str, BaseSearchEngine] = {}
     for b in backends:
         cls = _TEXT_ENGINES.get(b)
@@ -2446,7 +2500,7 @@ async def metasearch(
             continue
         try:
             instances[b] = cls(proxy=_search_proxy, timeout=int(_SEARCH_DEADLINE), verify=True)
-        except Exception as ex:  # construction failure (e.g. primp missing) -> skip
+        except Exception as ex:  # 构造失败（例如缺 primp）-> 跳过
             logger.debug("engine %s init failed: %r", b, ex)
             status[b] = f"init_error:{type(ex).__name__}"
 
@@ -2467,7 +2521,7 @@ async def metasearch(
             return [], status
         if len(keyed_selected) == 1:
             cls = KEYED_ENGINES[keyed_selected[0]]
-            # Only a keyed engine was asked for, so the proxy is not the suspect.
+            # 点名的只有带 key 的引擎，所以代理不是嫌疑人。
             raise MetaSearchException(
                 f"Engine '{cls.name}' requires {cls.env_var}, which is not set."
             )
@@ -2486,14 +2540,13 @@ async def metasearch(
 
     seen: dict[str, dict[str, Any]] = {}
     order: list[dict[str, str]] = []
-    # Diversity quorum: wait for at least `min_engines` backends to contribute
-    # (not just enough results from one) so a single backend's bias/rate-limit
-    # can't dominate - the cross-backend diversity is the robustness. A soft
-    # fallback returns at `_SOFT_DEADLINE` once we have enough results even if
-    # some backends are dead/captcha'd (don't wait the full deadline for them).
+    # 多样性法定数：至少等 `min_engines` 个后端有贡献（不是只等一个后端凑够条数），
+    # 这样单个后端的偏好/限流无法主导 —— 跨后端的多样性才是健壮性。软兜底在
+    # `_SOFT_DEADLINE` 时只要结果够就返回，哪怕还有后端已死/被 CAPTCHA（不为它们
+    # 等满期限）。
     min_engines = min(3, len(instances))
     soft_deadline = _SOFT_DEADLINE
-    quorum_results = max_results + 4  # a little extra for the neural reranker
+    quorum_results = max_results + 4  # 给神经重排器留一点余量
     # 配额那一步按**实例**数人（`engines_ok`），而共识那一句按**家族**说话：bing /
     # bing_global / duckduckgo 坐的是同一套索引，三家同时"有贡献"仍然只是一个家族把
     # 同一句话说三遍。早退因此要另外知道自己放掉过谁 —— 下面那把家族账就是为此而记的。
@@ -2517,7 +2570,7 @@ async def metasearch(
         """
         nonlocal engines_ok
         added = 0
-        touched = False  # returned a valid result that matched an existing key (dupe)
+        touched = False  # 交出过一条与既有键相同的有效结果（重复）
         for r in res:
             if not _is_usable(r):
                 continue
@@ -2525,8 +2578,8 @@ async def metasearch(
             if not key:
                 continue
             if key in seen:
-                # another backend already returned this URL -> record the
-                # agreement (cross-backend consensus authority signal).
+                # 另一个后端已经交过这个 URL -> 记下这次一致
+                # （跨后端共识的权威信号）。
                 seen[key]["backends"].add(name)
                 touched = True
                 continue
@@ -2544,13 +2597,12 @@ async def metasearch(
             added += 1
         if added:
             engines_ok += 1
-        # 'ok' = contributed a valid result (new OR a dupe that confirms
-        # consensus). 'empty' = returned nothing usable. (A backend whose
-        # only result was a dupe still contributed - it confirmed the URL.)
+        # 'ok' = 贡献了一条有效结果（新的，或确认共识的重复）。'empty' = 什么
+        # 可用的都没交回。（唯一结果只是重复的后端仍有贡献 —— 它确认了那个 URL。）
         if added or touched:
             status[name] = "ok"
             families_answered.add(_INDEX_FAMILY.get(name, name))
-            _record_success(name)  # backend is healthy -> clear any prior block
+            _record_success(name)  # 后端健康 -> 清掉之前的封禁
         else:
             status[name] = "empty"
 
@@ -2560,12 +2612,11 @@ async def metasearch(
         try:
             _, res = pt.result()
         except MetaBlockedException as ex:
-            # Backend refused us (CAPTCHA/403/rate-limit) -> circuit-open it
-            # for the cooldown so we stop hammering it.
+            # 后端拒绝了我们（CAPTCHA/403/限流）-> 熔断它一个冷却期，别继续捶。
             _record_block(name, challenge=getattr(ex, "challenge", False))
             status[name] = "blocked"
             return
-        except BaseException as ex:  # CancelledError is BaseException in py3.11+
+        except BaseException as ex:  # py3.11+ 里 CancelledError 是 BaseException
             status[name] = f"error:{type(ex).__name__}"
             _record_conn_failure(name)
             return
@@ -2626,15 +2677,14 @@ async def metasearch(
         return {pt for pt in pend if not pt.cancelled() and pt not in finished}
 
     async def _run(name: str, eng: BaseSearchEngine) -> tuple[str, list[Any]]:
-        # Stagger delay for rate-limit-sensitive engines (DuckDuckGo's scraping
-        # interface throttles concurrent requests; a 0.3s delay avoids 429s).
+        # 对限流敏感的后端错峰（DuckDuckGo 的抓取接口会节流并发请求；延迟 0.3 秒
+        # 可以避开 429）。
         if name == "duckduckgo":
             await asyncio.sleep(0.3)
-        # Per-engine query: if a query_map is provided (multi-query fan-out),
-        # each engine searches its assigned variant. Falls back to the main
-        # query for engines not in the map (backward-compatible).
+        # 每引擎的查询：给了 query_map（多查询扇出）时，各引擎搜自己分到的变体；
+        # 不在表里的引擎回落到主查询（向后兼容）。
         q = (query_map or {}).get(name, query)
-        # engine.search is sync (blocking HTTP) -> offload to a thread.
+        # engine.search 是同步的（阻塞 HTTP）-> 丢到线程里。
         res = await asyncio.to_thread(
             eng.search, q, region, safesearch, timelimit, page,
         )
@@ -2642,8 +2692,8 @@ async def metasearch(
 
     tasks = {asyncio.ensure_future(_run(n, e)): n for n, e in instances.items()}
 
-    # Keyed JSON engines: run ONLY when explicitly selected (each call costs
-    # real money), and only when their key is present.
+    # 带 key 的 JSON 引擎：**只在**点名时才跑（每次调用都花真钱），而且只在
+    # key 在场时跑。
     keyed_engines: dict[str, Any] = {}
     for b in keyed_ready:
         eng = KEYED_ENGINES[b]()
@@ -2705,8 +2755,8 @@ async def metasearch(
             break
         for t in done:
             _take_answer(t)
-        # early-return: enough engines contributed enough results, OR enough
-        # results after the soft deadline (don't hold for dead backends).
+        # 早退：有足够多的引擎贡献了足够多的结果，或者在软截止后结果已经够多
+        # （不为死掉的后端干等）。
         elapsed = time() - start
         # 配额数的是**合并后**的结果条数；全都跑完了也放行（别陪一个已经没人跑的
         # 截止时间干等）。这里曾经额外区分"通用 vs 垂直"两条轨：垂直索引（唯一的
@@ -2738,7 +2788,7 @@ async def metasearch(
             if not pending:
                 break
 
-    # cancel + record any still-pending (timed out) backends。到这一步还在飞的，是硬期限
+    # 取消 + 记下仍在 pending（已超时）的后端。到这一步还在飞的，是硬期限
     # 没答完 —— 与上面那笔"我们决定不等了"是两件事，别并成一个 token。
     if pending:
         pending = await _stop_laggards(pending, reason="timeout")
@@ -2755,7 +2805,7 @@ async def metasearch(
     # 的引擎。这是 empty（引擎答了、解析出 0 条）唯一的可见机会。
     _record_engine_outcomes(status, instances)
 
-    # freeze backends sets to sorted lists for the caller
+    # 把 backends 集合冻结成有序列表，交给调用方
     for e in order:
         e["backends"] = sorted(e["backends"])
     # 2.4 · 语言车道的最后一步：preferred 侧的行排到前面（稳定分区，一条不丢）。

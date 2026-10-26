@@ -1,21 +1,17 @@
-"""The on-demand documentation layer behind the ``sys_guide`` tool.
+"""``sys_guide`` 工具背后的按需文档层。
 
-Division of labour, and why it is drawn here: ``tools/list`` + ``instructions``
-are paid on EVERY connect by EVERY client that registers dhole, while a tool call
-is paid once by the single caller that asks. So the always-connected text carries
-routing and hard constraints, and the explanatory prose lives in the packaged
-handbook volumes (``skills/dhole-web/``), served verbatim from this module.
+分工以及为什么这么画线：``tools/list`` + ``instructions`` 是每个注册 dhole 的
+客户端**每次连接**都要付的成本，而一次工具调用只由发问的那一个调用方付一次。
+所以常连文本承载路由与硬约束，解释性正文放进随包发布的手册卷
+（``skills/dhole-web/``），由本模块原样送出。
 
-Two doors to one corpus: ``dhole skill install`` copies these same files to
-``~/.agents/skills`` for hosts that load skills, and ``sys_guide`` is the door
-that needs no install, no configuration and no restart. That is the point — a
-capability an agent cannot discover is a capability that requires a README, and
-an agent does not read the README.
+同一份语料的两扇门：``dhole skill install`` 把同样的文件复制到
+``~/.agents/skills``，供会加载技能的宿主使用；``sys_guide`` 则是不需要安装、
+不需要配置、不需要重启的那扇门。这就是重点 —— 一个 agent 发现不了的能力等于
+一个需要 README 的能力，而 agent 不读 README。
 
-The topic registry is the only hand-written list; ``tests/test_guide.py`` keeps
-it against the files on disk in both directions, so a volume added without a
-topic (unreachable) or a topic pointing at a deleted volume (a broken promise)
-both fail loudly.
+主题注册表是唯一手写的清单；``tests/test_guide.py`` 双向核对它与磁盘上的文件，
+所以"加了卷却没加主题"（不可达）和"主题指向已删除的卷"（空头承诺）都会大声失败。
 """
 
 from __future__ import annotations
@@ -25,7 +21,7 @@ import re
 
 _ROOT = pathlib.Path(__file__).resolve().parent / "skills" / "dhole-web"
 
-#: topic -> (path relative to the skill root, when it is worth a call)
+#: topic -> (相对技能根目录的路径, 什么情况下值得一次调用)
 TOPICS: dict[str, tuple[str, str]] = {
     "start": ("references/start.md",
               "the one-page route map: three paths, hard constraints, where to read next"),
@@ -45,10 +41,10 @@ TOPICS: dict[str, tuple[str, str]] = {
                 "a multi-step task: sequences with their failure pivots"),
 }
 
-#: What an agent types when it guesses: the volume's own file name.
+#: agent 凭猜测会输入的名字：卷自身的文件名。
 ALIASES: dict[str, str] = {pathlib.Path(p).stem.lower(): t for t, (p, _) in TOPICS.items()}
 
-# topic -> the file-name spellings that resolve to it. 半张表反过来才是主题行要的：
+# topic -> 能解析到它的文件名写法。半张表反过来才是主题行要的：
 # 读的人想知道"我猜的那个名字通向哪一卷"，而 `ALIASES.get(topic)` 给的是反方向的
 # 答案 —— 对不是别名的主题它就是 None，于是列表里打出过 `(aka None)`（评审 R3刀3）。
 _ALIASES_OF: dict[str, list[str]] = {}
@@ -67,7 +63,7 @@ def _resolve(topic: str) -> str | None:
 
 
 def _volume_chars(rel: str) -> int:
-    """One volume's char count, the same measure read()'s header reports."""
+    """一卷的字符数，与 read() 页眉里报的同一个口径。"""
     try:
         return len((_ROOT / rel).read_text(encoding="utf-8").strip())
     except OSError:
@@ -75,14 +71,18 @@ def _volume_chars(rel: str) -> int:
 
 
 def index(reason: str = "") -> str:
-    """The topic list. Also the answer to a bad topic: a rejected call that does
-    not say what was available costs a second round trip for nothing.
+    """主题清单；也是坏主题的答案 —— 被拒的调用若不说清有什么可选，就白多一轮往返。
 
-    Each row carries its volume's size (G25 附注二/M2): "behavior" is larger than
-    the whole connect-time table, and the only place an agent learns that BEFORE
-    reading 36k chars into its context is here — sizes turn "read the volume"
-    into "pass section= first" on the guess that would otherwise have cost a
-    full volume.
+    参数:
+        reason: 放在清单前的说明（通常是被拒主题的原因）；空串则不加。
+
+    返回:
+        可直接作为工具输出返回的清单文本，每行带该卷的字符数。
+
+    每行都带着该卷的大小（G25 附注二/M2）："behavior" 比整张连接期清单还大，
+    而 agent 在把 3.6 万字符读进上下文之前，唯一能知道这点的地方就是这里 ——
+    大小把"读这一卷"变成"先传 section="，避免一次本会花掉整卷的猜测。
+    读不到卷时字符数按 0 计，从不抛异常。
     """
     head = (f"{reason}\n\n" if reason else "")
     lines = [head + "sys_guide(topic) returns one handbook volume per call. "
@@ -98,7 +98,7 @@ def index(reason: str = "") -> str:
 
 
 def _chunks(text: str) -> list[tuple[str, str]]:
-    """``[(heading, body)]`` split on level-2 headings; '' = the preamble."""
+    """``[(heading, body)]``，按二级标题切分；'' 表示前言部分。"""
     marks = list(_HEADING.finditer(text))
     if not marks:
         return [("", text)]
@@ -112,11 +112,16 @@ def _chunks(text: str) -> list[tuple[str, str]]:
 
 
 def read(topic: str = "", section: str = "") -> tuple[str, str]:
-    """``(header, body)`` for one request. Never raises.
+    """一次请求的 ``(header, body)``。从不抛异常。
 
-    An unknown topic, a missing file and a section that matches no heading all
-    answer with what IS available rather than an error string: the caller is
-    navigating documentation, and the useful result of a wrong guess is the map.
+    参数:
+        topic: 主题名或别名（卷文件名）；空串返回主题清单。
+        section: 二级标题的片段（大小写、引号不敏感）；空串返回整卷。
+
+    返回:
+        ``(页眉, 正文)``。未知主题、缺失文件、匹配不到任何标题的 section，
+        正文都是"实际有什么"（清单或本卷标题列表），而不是一串错误 —— 调用方
+        在导航文档，猜错时最有用的结果就是地图。
     """
     resolved = _resolve(topic)
     if resolved is None:

@@ -10,6 +10,11 @@
 
 ### 新增
 
+- **`web_act` 动作面补 `evaluate` 与坐标 click / drag**（对标 playwright-mcp 的 `browser_evaluate` 与坐标鼠标操作，补功能矩阵里 dhole 的两格）：
+  - `{"evaluate": {"expr": "...", "confirm": true}}`（或字符串简写）在页面里跑一条 JS 表达式，结果放回回执：`result`（JSON 值原样；非 JSON 交 repr 并标 `result_repr`），20,000 字符帽（超帽 `result_truncated` + `result_chars_total`），`expr` 同一顶帽。它能读 `document.cookie` / 登录态，也能改页面或发请求（包括表单提交）——这道闸放行的是**代码**，不是一次读取；所以**没有 `confirm: true` 也没有 out-of-band 人工点头时一个字都不跑**：落 `pending_approval` + `pending_gate: "evaluate"` 的暂停行，next_action 教调用方去问用户、再带嵌套 confirm 重跑；人明确拒绝则 fail-closed，没有参数能跳过。成功、暂停、以及抛异常的已放行表达式都进 `DHOLE_USAGE_LOG` 的 `browser_evaluate` 通道（不混进 submit 的写审计——它不提交任何东西）。表达式超过本步等待上限会具名报超时（可能在死循环或等一个永远不会落定的 Promise）。
+  - `{"click": {"at": [x, y]}}` 与 `{"drag": {"from_xy": [x1, y1], "to_xy": [x2, y2]}}` 用页面像素操作没有可寻址 DOM 的 canvas / 地图 / 自绘控件：坐标在浏览器启动前校验（两枚非负整数，不与 `selector` / `index` / `expect` / `to` 混写），拖拽走 move → down → 10 步 move → up（一次跳到落点不会触发拖拽期间的 pointermove）。**坐标点击落在提交型控件上过同一道提交闸**，包括点在按钮内部的 `<span>` 上——探针先向上找承接点击的 button/input；confirm 骑在 click 上（`{"click": {"at": [x, y], "confirm": true}}`）。
+  - 连接期 36,754 → 36,758（+4 全在 `web_act.actions` 描述：名单与必填载荷新增 `evaluate` / `evaluate=expr`；原 `tab (new/N/close)` 短提示让位给必填键，完整 tab 形状仍在 `sys_guide(topic='behavior')`）。钉 `tests/test_an_evaluate_that_can_read_cookies_needs_a_yes.py`（19 条）与 `tests/test_a_click_can_name_a_point_on_the_page.py`（19 条）。
+
 - **`web_request(session_id=)`：登录 POST 的 Set-Cookie 从此有落点**（2026-10-25 真实使用模拟的 P2 发现）。jar 的存取本来就在 fetch 层每跳每方法上跑（302 的 Set-Cookie 正是登录最常见的形状），缺的只是这扇门把调用方点名的 jar 递进去——不递，POST /login 成功而后续 `web_read` 永远拿匿名 jar，凡登录靠表单 POST 完成的站点，「不写密码登录流」就断链。现在写请求带着命名 jar 出发、响应 cookie 落回同一只 jar，`session_cookie_names` 是「登录真的粘住了吗」的回执检查；值照旧不出进程。真机验证：POST /login（302+Set-Cookie）→ 同 id 读 /account 拿到已登录页。钉 `tests/test_a_login_post_lands_in_the_jar.py`。
 
 - **`web_act` 动作面再补三颗：`select` / `navigate` / `pdf`**（对标 playwright-mcp 的 `browser_select_option` / `browser_navigate_back` / `browser_pdf_save`，三件此前在这个工具面上**没有一条路**的事）：

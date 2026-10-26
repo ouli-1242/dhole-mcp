@@ -166,7 +166,7 @@ Four paths, cheapest first: (1) HTTP tier — credentials stored once with `cred
 
 ### Page-action failures (snapshot / index actions / submit)
 
-- `pending_approval: true` in `metadata.actions` — not a failure: the submit PAUSED before acting, nothing was sent. Describe the submission to the user; on a clear yes re-run the **whole chain** with `confirm: true` on that submit (each call reloads the page, so prior fill/click steps must be redone)
+- `pending_approval: true` in `metadata.actions` — not a failure: the submit PAUSED before acting, nothing was sent. Describe the submission to the user; on a clear yes re-run the **whole chain** with `confirm: true` inside that submit action (`{"submit": {"selector": "...", "confirm": true}}`; each call reloads the page, so prior fill/click steps must be redone)
 - An error naming the element index ("beyond this page's N interactive elements", or an `expect` mismatch reporting what the element reads now) — the page changed under you. Re-run `{"snapshot": true}` and re-address; don't retry the stale index
 - The snapshot came back empty / `could not enumerate` — the document was still loading; add `{"wait_selector": ...}` before the snapshot
 - `element_screenshot_disabled` — retired (element captures need no permission). Seeing it means the installed dhole is too old; say so instead of editing env

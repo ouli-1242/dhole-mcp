@@ -23,16 +23,14 @@ from typing import Any, Optional
 from dhole_mcp.models import ResponseModel
 
 
-# ─── Response translation helpers ──────────────────────────────────
+# ─── 响应转换辅助 ──────────────────────────────────────────────────
 
-# PDF extraction options flow from web_read down to _translate_response via
-# contextvars (task-local, safe under concurrent bulk fetches) instead of
-# threading two new params through every fetcher signature.
+# PDF 抽取选项经 contextvars 从 web_read 流到 _translate_response（task-local，
+# 并发 bulk 下安全），而不是把两个新参数穿进每一层 fetcher 签名。
 _PDF_PAGES: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_pdf_pages", default=None)
 _PDF_PASSWORD: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_pdf_password", default=None)
-# Query-focused content filter (web_read `focus` param). Applied POST-cache
-# inside _apply_chunking: the full extracted text is cached once, and different
-# focus queries are just different BM25 views over the same cached content.
+# 按查询聚焦的内容过滤（web_read 的 `focus` 参数）。在 _apply_chunking 里于**缓存之后**
+# 应用：完整抽取文本只缓存一份，不同的 focus 查询只是同一份缓存内容上的不同 BM25 视图。
 _FOCUS: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_focus", default=None)
 # focus 的形态（M-2）：filter（默认，现有行为）| best（只回打分最高的答案块）。
 _FOCUS_MODE: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_focus_mode", default=None)
@@ -41,25 +39,25 @@ _FOCUS_MODE: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("_fo
 # 需要它的原因是那两处建议：`_agent_hints` 手上只有 `result`，而"用 focus= 再窄一点"
 # 那句话与 focus 刚刚删掉的东西之间，隔着一个模块。
 _FOCUS_OUTCOME: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar("_focus_outcome", default=None)
-# 本次调用用哪个 focus 打分器："" = 由操作者的 flag 决定（默认，行为与以前逐字节
-# 相同）；"bm25" = 这一页明确要便宜的那条路；"neural" = 明确要语义分（仅在操作者
-# 17.0：focus 打分引擎是纯按次选择（无许可门），别名只剩意愿侧判定。
-# 这个 var 定义在 focus.py：crawl 也要按同一条规则判定，而 crawl 不能在模块级
-# import server。这里只是别名，好让 reset token 与两个消费者读到同一个状态。
+# 本次调用用哪个 focus 打分器（17.0：纯按次选择，无许可门，别名只剩意愿侧判定）：
+# "" = 不点名，走 BM25（默认，行为与以前逐字节相同）；"bm25" = 明确要走便宜的那条路
+# （与 "" 同义）；"neural" = 明确要语义分。这个 var 定义在 focus.py：crawl 也要按同
+# 一条规则判定，而 crawl 不能在模块级 import server。这里只是别名，好让 reset token
+# 与两个消费者读到同一个状态。
 # 这三颗是给 server 再导出的（它按同一条规则判定 neural focus），context 自己一处不用。
 from dhole_mcp.focus import (  # noqa: F401
     FOCUS_ENGINE as _FOCUS_ENGINE,
     engine_wants_neural as _neural_focus_requested,
     normalize_engine as _normalize_focus_engine,
 )
-# Opt-in: populate ResponseModel.media with the page's image URLs (multimodal).
+# 可选：把页面的图片 URL 填进 ResponseModel.media（多模态）。
 _INCLUDE_MEDIA: contextvars.ContextVar[bool] = contextvars.ContextVar("_include_media", default=False)
 _INCLUDE_LINKS: contextvars.ContextVar[bool] = contextvars.ContextVar("_include_links", default=False)
 # R02-004：wire 上**带了** timeout= 的调用（显式预算）——learned ceiling 让位。
 # 默认 False（learned 只管 dhole 自己的默认预算；显式预算是合同）。分发层置位，
 # `_http_tier_budget` 读取。
 _TIMEOUT_EXPLICIT: contextvars.ContextVar[bool] = contextvars.ContextVar("_timeout_explicit", default=False)
-# Opt-in: 回执带上状态行、响应头与重定向端点（web_read / web_request 的
+# 可选：回执带上状态行、响应头与重定向端点（web_read / web_request 的
 # `include_headers`）。默认关：多数调用要的是正文，头是给"这页为什么是这样"的
 # 追问用的。作者的记号在这里，读取在两处 —— `_translate_response`（头来自这一发）
 # 与装饰器收尾（端点对来自 requested vs final）。
@@ -69,38 +67,32 @@ _INCLUDE_HEADERS: contextvars.ContextVar[bool] = contextvars.ContextVar("_includ
 # 0 = 没设上限，由 `_save_response_body` 用文档化的默认值填。
 _SAVE_TO: contextvars.ContextVar[str] = contextvars.ContextVar("_save_to", default="")
 _SAVE_MAX_BYTES: contextvars.ContextVar[int] = contextvars.ContextVar("_save_max_bytes", default=0)
-# Per-list cap for ResponseModel.links when include_links=true (web_read
-# `max_links`; 0 = the documented per-category defaults in links.py). Links were
-# capped silently at 30/20/20 with no way to ask for more or fewer and no signal
-# that anything had been left out; links.total_found + links.is_truncated now
-# report it, and this knob decides where the cut lands.
+# include_links=true 时 ResponseModel.links 的每个清单上限（web_read 的 `max_links`；
+# 0 = links.py 里文档化的按类别默认值）。从前链接被静默截在 30/20/20，既不能多要也
+# 不能少要，更没有任何信号说东西被落下了；现在 links.total_found + links.is_truncated
+# 会申报，而这颗旋钮决定切口落在哪里。
 _MAX_LINKS: contextvars.ContextVar[int] = contextvars.ContextVar("_max_links", default=0)
-# The body cap the CALLER NAMED (web_read `max_content_chars`), before any default
-# or clamp was applied. A context var because the one place that can see the merge
-# happen (`server._apply_chunking`) is four layers below the entry that knows
-# whether a number was pointed at all. `None` means the caller never named one and
-# ran on the documented default budget — then "over the cap" is not an event that
-# happened to anybody, and :func:`_over_cap_note` stays silent for the same reason
-# :func:`_timeout_floor_note` does.
+# **调用方点名**的正文上限（web_read 的 `max_content_chars`），在任何默认值或钳制
+# 之前。用 context var 是因为唯一能看到合并发生的地方（`server._apply_chunking`）
+# 在入口之下四层，而入口才知道调用方到底有没有点过数。`None` = 调用方从没点名、
+# 跑的是文档化的默认预算 —— 那时"超过上限"不是发生在任何人身上的事件，
+# :func:`_over_cap_note` 保持沉默，理由与 :func:`_timeout_floor_note` 相同。
 _MAX_CHARS_NAMED: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(
     "_max_chars_named", default=None)
-# Per-call css_selector (web_read). Read by _with_agent_hints rather than at the
-# extraction site, so a selector that could not apply to the response is reported on
-# EVERY return path (fresh fetch, cache hit, bulk, archive) instead of only where
-# extraction happened to run.
+# 按次调用的 css_selector（web_read）。由 _with_agent_hints 读取，而不是在抽取现场
+# 读，这样"选择器没能应用到响应上"会在**每一条**返回路径（新抓、缓存命中、bulk、
+# 存档）上申报，而不是只在抽取恰好跑过的那条路上。
 _CSS_SELECTOR: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "_css_selector", default=None)
-# Per-call cookie-jar id (web_read `session_id`, G7). "" = stateless, the
-# pre-16.0 behaviour: cookies live for the one call and the response's
-# Set-Cookie is dropped. Read by the HTTP tier (fetcher.HTTPSession.get) and by
-# _stamp_session, which puts the id and the held cookie NAMES back on the
-# result — values never go into the response (a session cookie is a credential,
-# and tool output lands in the agent's transcript).
+# 按次调用的 cookie jar id（web_read 的 `session_id`，G7）。"" = 无状态，16.0 之前
+# 的行为：cookie 只活这一次调用，响应里的 Set-Cookie 直接丢掉。HTTP 档
+# （fetcher.HTTPSession.get）与 _stamp_session 读它；后者把 id 和 jar 持有的 cookie
+# **名字**放回结果上 —— 值从不进响应（会话 cookie 是凭据，而工具输出会落进 agent 的
+# transcript）。
 _SESSION_ID: contextvars.ContextVar[str] = contextvars.ContextVar("_session_id", default="")
-# 17.0 §3-17: which cred_defaults this call was fetched with. A context var (not
-# an argument) because the answer is decided once, at the top of web_read, and
-# every return path — live fetch, cache hit, robots block, archive fallback —
-# owes it to the caller. Bulk rows run in their own task, so each gets its own.
+# 17.0 §3-17：这一次调用是用哪几颗 cred_defaults 抓的。用 context var（不是参数）
+# 是因为答案在 web_read 顶部就决定了一次，而每一条返回路径 —— 实抓、缓存命中、robots
+# 拦截、存档兜底 —— 都欠调用方这个答案。bulk 的每一行跑在自己的 task 里，所以各拿各的。
 _IDENTITY_APPLIED: contextvars.ContextVar[str] = contextvars.ContextVar("_identity_applied", default="")
 # 页内重复样板行的折叠条数（boilerplate.py）。抽取时累加、`_with_agent_hints` 读取，
 # 让"这次删了几行样板"在信封上可见 —— 静默删内容比留着样板更糟。默认 0 = 没删。
@@ -114,6 +106,8 @@ _MCP_SESSION: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(
 
 
 def set_mcp_session(session: Optional[Any]) -> None:
+    """Bind the live MCP session for this call; ``None`` clears it.
+    """
     _MCP_SESSION.set(session)
 
 
@@ -186,8 +180,8 @@ _ERASURE_CLAUSE = "Nothing was erased."
 def nothing_erased() -> str:
     """`sys_state` 的 erasure 面该在行首说的那半句（评审 R02-116）。
 
-    它与 `nothing_went_out()` 一样只许有一位作者：`server.py:9108` 从前把这句申报焊在文案里，
-    于是同一扇门的两条拒绝路各有各的写法 —— 说的都对，但其中一条没人负责。
+    它与 `nothing_went_out()` 一样只许有一位作者：`sys_state` 的拒绝文案从前把这句申报焊在
+    自己身上，于是同一扇门的两条拒绝路各有各的写法 —— 说的都对，但其中一条没人负责。
     """
     return _ERASURE_CLAUSE
 
@@ -227,24 +221,22 @@ def tool_scope(name: str):
         _TOOL.reset(token)
 
 
-# ─── The human channel's own clock ───────────────────────────────────────────
+# ─── 人机通道自己的时钟 ───────────────────────────────────────────────
 #
-# `out_of_band_confirm` waits for a person to press a button. That wait used to
-# have no ceiling of its own, so whichever ceiling the CALL had won first: with
-# the actions tier's default 25 s budget an unanswered ask ended as
-# "timeout: the 25000ms call budget ran out", the pending row was never written,
-# and the advice pointed at `timeout=` / `force_fetcher='http'` / switch source
-# —— none of which describes a button nobody pressed (measured on the real wire,
-# `.scratch/liveverify/d35_silence.py`, and recorded as D-35). These two knobs
-# give the ask a bound that is a fraction of what the call itself has left.
+# `out_of_band_confirm` 等的是一个人按下按钮。那次等待从前没有自己的上限，于是
+# **调用**的哪一道上限先到就由谁说了算：动作档默认 25 秒预算下，一次没人应答的询问
+# 以 "timeout: the 25000ms call budget ran out" 收场，pending 行从没被写过，建议还
+# 指向 `timeout=` / `force_fetcher='http'` / 换源 —— 没有一句描述的是"没人按的按钮"
+# （真机实测，`.scratch/liveverify/d35_silence.py`，记为 D-35）。这两颗旋钮给这次
+# 询问一个上限，它是调用自己所剩时间的一个分数。
 ELICIT_WAIT_MAX_S = 30.0
 ELICIT_ASK_MIN_LEFT_S = 5.0
 
 _CALL_DEADLINE: contextvars.ContextVar[Optional[float]] = contextvars.ContextVar(
     "_call_deadline", default=None)
 
-#: How much later than the caller's own budget the `_within_call_budget` backstop
-#: fires. See its docstring: it must lose the race to the tiers' own accounting.
+#: `_within_call_budget` 兜底比调用方自己的预算晚多久触发。见它的 docstring：
+#: 它必须在与各档自己记账的赛跑中输掉。
 #: 这颗数今天有**三处读者**：兜底自己（`server._within_call_budget`）、把预算说回给
 #: 调用方的那句建议（`quality._budget_advice`），以及链里每一步自算的截止
 #: （`actions._step_deadline_ms`）。作者只留一个，因为"交账要留多少"是一个事实而不是
@@ -434,35 +426,30 @@ async def report_stage(stage: str, spent_ms: Optional[float] = None,
         pass
     return sent
 
-# A jar key is a plain word, nothing else (see _clean_session_id).
+# jar 键是一个普通词，别的都不行（见 _clean_session_id）。
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
-# Per-call HTTP method / request body (G8). Read where the request is actually
-# built (bulk_get) and by the guards that follow from it — cache, escalation,
-# archive, quality heuristics — rather than threaded through six signatures.
-# Default "GET" keeps every existing path byte-identical.
+# 按次调用的 HTTP 方法 / 请求体（G8）。在读请求真正被构造的地方（bulk_get）以及由它
+# 派生的各道闸（缓存、升级、存档、质量启发式）里读，而不是穿进六层签名。默认 "GET"
+# 让每一条既有路径的字节都保持不变。
 _METHOD: contextvars.ContextVar[str] = contextvars.ContextVar("_method", default="GET")
 _BODY: contextvars.ContextVar[Optional[bytes]] = contextvars.ContextVar("_body", default=None)
 _CONTENT_TYPE: contextvars.ContextVar[str] = contextvars.ContextVar("_content_type", default="")
-# How robots was decided for THIS call, so the response can say it. Two reports
-# asked for the same thing from opposite sides: a caller who could not tell
-# "the site allows this" from "compliance is switched off process-wide", and an
-# auditor who could not tell which of the two a fetched page came from.
+# 这一次调用的 robots 是怎么判的，好让响应说得出来。两份报告从相反的两侧问同一件事：
+# 调用方分不清"站点允许这么做"与"合规在整个进程里被关掉了"，而审计者分不清抓回的
+# 这一页来自两者中的哪一种。
 _ROBOTS_MODE: contextvars.ContextVar[str] = contextvars.ContextVar("_robots_mode", default="")
 
 
 def _stamp_robots_mode(result: ResponseModel) -> None:
-    """Reconcile this response's robots receipt with the current process's mode.
+    """把本响应的 robots 回执与当前进程的模式对齐。
 
-    ``robots`` states a property of *this process* ("is compliance on here?"), so it
-    cannot be frozen at the moment a body was first fetched. Both return paths need
-    this: the fetch path stamps before the cache write, and the cache-hit path
-    restores the whole metadata dict from the stored envelope — measured, a body
-    cached under ``complied`` was served to a call that had passed
-    ``ignore_robots=true`` and still reported plain ``complied``.
+    ``robots`` 说的是**本进程**的属性（"这里合规开着吗？"），所以不能在正文第一次
+    被抓回的那一刻冻住。两条返回路径都需要这一手：抓取路径在写缓存之前盖章，而缓存
+    命中路径会从存下的信封整份还原 metadata —— 实测一份在 ``complied`` 下缓存的正文，
+    被交给了一次传了 ``ignore_robots=true`` 的调用，回执却仍是裸的 ``complied``。
 
-    When the two disagree, both are true of something, so both are said: the
-    present first (that is what an auditor is asking about), the fetch-time
-    permission named as history rather than as now.
+    两者不一致时，两句话各自都为真，所以两句都说：现在这句在前（审计者问的是它），
+    抓取当时的许可作为**历史**点名，而不是当成现在。
     """
     mode = _ROBOTS_MODE.get()
     md = result.metadata or {}
@@ -472,9 +459,8 @@ def _stamp_robots_mode(result: ResponseModel) -> None:
         md["robots"] = (f"{mode} (this body was fetched under: {prior})"
                         if prior and prior != mode else prior or mode)
         changed = True
-    # Same reasoning covers the SSRF posture: "was the DNS recheck skipped here?"
-    # is a property of this process, not of the body. It is only said when it
-    # actually happened, so an ordinary host pays nothing on the wire for it.
+    # 同一条理由也覆盖 SSRF 姿态："这里的 DNS 复查被跳过过吗？"是本进程的属性，
+    # 不是正文的属性。只有它真的发生过时才说，所以普通主机的线上回执一个字节都不多付。
     from dhole_mcp import security as _sec
     note = _sec.recheck_posture_note()
     if note:
@@ -482,28 +468,22 @@ def _stamp_robots_mode(result: ResponseModel) -> None:
         changed = True
     if changed:
         result.metadata = md
-# Per-call credential headers (G25): ``(kind, header_names)`` — "basic"/"bearer"/
-# "header" plus which header names this call treats as credentials. The names go
-# to the HTTP tier so a cross-origin redirect drops them; the kind goes to the
-# 401 hint, which has to say "the credentials you gave were refused" rather than
-# "this page needs a login" when it is the former. Values themselves are kept
-# only in the outgoing header — never in the response, never in a log.
+# 按次调用的凭据头（G25）：``(kind, header_names)`` —— "basic"/"bearer"/
+# "header" 加上这一次调用把哪些头名当作凭据。头名交给 HTTP 档，让跨源重定向丢掉它们；
+# kind 交给 401 提示，后者在确实是前者时必须说"你给的凭据被拒了"，而不是"这页需要登录"。
+# 值本身只留在出站头里 —— 从不进响应，从不进日志。
 _AUTH_SENT: contextvars.ContextVar[tuple] = contextvars.ContextVar("_auth_sent", default=("", ()))
-# The verbs web_read speaks. OPTIONS/TRACE are left out on purpose: a fetch
-# tool that proxies arbitrary methods to arbitrary hosts is a request forgery
-# primitive with a nicer name.
+# web_read 会说的动词。OPTIONS/TRACE 被故意排除：一个把任意方法代理到任意主机的抓取
+# 工具，就是换了更好听名字的请求伪造原语。
 _FETCH_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "DELETE", "PATCH"})
-# A request body is capped: this tool answers "what does this URL return", and a
-# caller who meant to upload a file needs an upload tool, not a 40 MB payload
-# riding through an MCP tool argument.
+# 请求体有上限：这颗工具回答"这个 URL 返回什么"，而一个本想上传文件的调用方需要的
+# 是上传工具，不是一份 40MB 载荷挤过 MCP 工具参数。
 MAX_REQUEST_BODY_BYTES = 262144
-# Request-context fingerprint for the content cache (see cache._cache_key).
-# The SQLite cache is shared by every session on the machine and its key used to
-# be "URL + extraction params" only, so a body fetched WITH cookies/auth was
-# replayed to a later anonymous fetch of the same URL, and a fetch with
-# include_media=false could answer a later include_media=true request. Requests
-# that carry no credentials and change no flag keep the empty fingerprint, so
-# plain fetches (and pre-existing cache entries) keep hitting as before.
+# 内容缓存的请求上下文指纹（见 cache._cache_key）。SQLite 缓存由本机所有会话共享，
+# 而它的键从前只有"URL + 抽取参数"，于是一份**带 cookie/认证**抓回的正文会被重放给
+# 之后对同一 URL 的匿名抓取，而一次 include_media=false 的抓取也可能回答之后
+# include_media=true 的请求。既不带凭据、也不改任何开关的请求保持空指纹，所以普通
+# 抓取（以及既有缓存条目）照旧命中。
 _CACHE_CTX: contextvars.ContextVar[str] = contextvars.ContextVar("_cache_ctx", default="")
 # 17.0 §6：条件请求不再是 agent 能传的参数，但 ETag 本身要继续用 —— 复验的发起者
 # 已经存着基线，下一次检查真正想问的是"变了吗"，而不是再搬一遍正文。所以校验子走
@@ -513,20 +493,18 @@ _CACHE_CTX: contextvars.ContextVar[str] = contextvars.ContextVar("_cache_ctx", d
 _REVALIDATE: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
     "_revalidate", default=None)
 
-# Notes about THIS call's arguments that the caller has to be told about — right
-# now, values that were clamped to a documented bound. Scoped per invocation by
-# _smart_fetch_request_context exactly like _FOCUS, and folded into the response
-# summary by _with_agent_hints. None (not an empty list) means "not inside a
-# web_read call", which keeps the wrapper a no-op everywhere else.
+# 关于**本次调用**参数、必须告诉调用方的事 —— 眼下是被钳到文档化边界的值。
+# 由 _smart_fetch_request_context 按调用划定作用域，与 _FOCUS 完全一样，并由
+# _with_agent_hints 折进响应 summary。None（而不是空列表）= "不在一次 web_read
+# 调用里"，这使这层包装在别处都是 no-op。
 _ARG_NOTES: contextvars.ContextVar[Optional[list]] = contextvars.ContextVar("_arg_notes", default=None)
 
-# WHO took dhole's synthesized browser headers away for this call: "" = nobody did,
-# "off" = the `anti_detect='off'` rung, "private" = dhole took them away itself
-# because the target is loopback/private. They share one slot because the place that
-# says the sentence (inside the HTTP tier) only ever sees the single boolean
-# `stealthy_headers` — and that boolean cannot tell "the rung was off all along"
-# apart from "this call is hitting your own service, so a fabricated google referer
-# would land in your logs". Scoped by _smart_fetch_request_context like _ARG_NOTES.
+# 这一次调用里，是谁把 dhole 合成的浏览器头拿走了："" = 没人拿走；"off" =
+# `anti_detect='off'` 那一档；"private" = dhole 自己拿走的，因为目标是回环/内网。
+# 共用一个槽位，是因为说那句话的地方（HTTP 档内部）只看得到那一颗布尔
+# `stealthy_headers` —— 而它分不清"这一档从头就是关的"与"这次调用打的是你自己的
+# 服务，所以编一个 google referer 只会落进你的日志"。作用域由
+# _smart_fetch_request_context 划定，与 _ARG_NOTES 一样。
 _HEADERS_OFF_BY: contextvars.ContextVar[str] = contextvars.ContextVar(
     "_headers_off_by", default="")
 
@@ -566,21 +544,19 @@ _NO_STORE: contextvars.ContextVar[bool] = contextvars.ContextVar(
 
 
 def _clamp_note(name: str, requested: Any, applied: int, *, lo: int, hi: int) -> str:
-    """The ONE wording for "this argument moved to a documented bound" ("" if not).
+    """「这颗参数被挪到了文档化的边界」唯一的措辞（没被挪过就交回空串）。
 
-    Owned here because three layers emit it: `web_read` (through the ContextVar
-    below), `web_crawl` (whose summary is assembled in crawl.py, not through
-    `_with_agent_hints`), and the action/PDF/timeout clamps that live inside the
-    tools that do the clamping. Two copies of a sentence is how the two tools
-    started describing the same event differently — which is exactly the bug the
-    crawl-side note was written to close.
+    作者留在这里，是因为三层都在发这句话：`web_read`（经下面的 ContextVar）、
+    `web_crawl`（它的 summary 在 crawl.py 里装配，不走 `_with_agent_hints`），以及住在
+    各工具内部、执行钳制的动作/PDF/timeout 钳位。同一句话抄两份，正是两颗工具开始
+    用不同说法描述同一件事的起点 —— 那正是 crawl 侧那句注记要关掉的 bug。
     """
     if requested is None:
         return ""
     try:
         asked = int(str(requested).strip())
     except (TypeError, ValueError):
-        # _coerce_int_arg already raised for anything unparseable.
+        # _coerce_int_arg 已经先拒掉了一切解析不出的值。
         return ""
     if asked == applied:
         return ""
@@ -588,22 +564,19 @@ def _clamp_note(name: str, requested: Any, applied: int, *, lo: int, hi: int) ->
 
 
 def _cache_ttl_note(requested: Any) -> str:
-    """The ONE wording for "this ``cache_ttl`` was not a duration" ("" if it was).
+    """「这个 ``cache_ttl`` 不是一段时长」唯一的措辞（是时长就交回空串）。
 
-    Three tools take ``cache_ttl`` (``web_read`` / ``web_crawl`` / ``web_search``)
-    and all three silently treated a negative value as 0. The wire documents
-    "0 = force fresh" and says nothing about negatives, so a caller who wrote -1
-    had no way to learn it had been rewritten — while the same suite clamps
-    ``max_pages`` / ``max_depth`` and *says so* in the summary. 2026-10-09 审计
-    D5/D10 量到的就是这颗唯一的静默钳位。
+    三颗工具都收 ``cache_ttl``（``web_read`` / ``web_crawl`` / ``web_search``），
+    而三颗都把负数静默当成 0。线上文档写的是 "0 = force fresh"，对负数只字未提，
+    于是写了 -1 的调用方无从知道它被改写过 —— 而同一套工具会钳 ``max_pages`` /
+    ``max_depth`` 并**在 summary 里说出来**。2026-10-09 审计 D5/D10 量到的就是这颗
+    唯一的静默钳位。
 
-    Owned here for the same reason :func:`_clamp_note` is: two copies of one
-    sentence is how two tools start describing one event differently. The
-    sentence also carries the half of ``0`` the wire never states: ``0`` is a
-    READ-side instruction (this call consults no cached body), and what it
-    fetches is stored for later calls like any other read — the exception is a
-    call that ran an action chain or wrote to the site, which stores nothing
-    regardless of ``cache_ttl`` (see ``_NO_STORE``).
+    作者留在这里的理由与 :func:`_clamp_note` 相同：同一句话抄两份，正是两颗工具开始
+    用不同说法描述同一件事的起点。这句话也带上线上文档从没说过的那半句 ``0``：
+    ``0`` 是**读侧**指令（这次调用不查任何缓存正文），而它抓回的副本会像任何其他读取
+    一样为后续调用存起来 —— 例外是跑过动作链或向站点写入的调用，它们无论
+    ``cache_ttl`` 是多少都不存（见 ``_NO_STORE``）。
     """
     if requested is None:
         return ""
@@ -618,29 +591,24 @@ def _cache_ttl_note(requested: Any) -> str:
 
 
 def _timeout_floor_note(requested: Any, applied_ms: int) -> str:
-    """The ONE wording for "the ``timeout=`` you named was RAISED to a floor" ("" if not).
+    """「你点名的 ``timeout=`` 被**抬**到了地板」唯一的措辞（没被抬过就交回空串）。
 
-    :func:`_clamp_note` speaks about a value moved to a documented *range*, and
-    `timeout_applied` speaks only when a ceiling bit — so both of them are
-    correctly silent about the other direction this parameter moves. A whole call
-    is measured in seconds and `0` there would mean "no clock at all", so a named
-    budget below the floor is widened to it (measured: `timeout=250` ran with
-    1000ms). Since R02-031 that number is visible on `attempt_cap_ms`, and a
-    caller holding `250` next to `1000` with no word between them cannot tell a
-    widened budget from an ignored parameter — the same class as the crawl
-    envelope that said "discovered but not fetched" about pages it had already
-    paid for.
+    :func:`_clamp_note` 说的是被挪到文档化**区间**的值，而 `timeout_applied` 只在
+    一道上限咬住时才说话 —— 所以这两者对这个参数另一个方向的移动都正确地保持沉默。
+    整次调用以秒计，而那里的 `0` 会意味着"根本没有时钟"，于是低于地板的点名预算会被
+    撑到地板（实测：`timeout=250` 以 1000ms 跑完）。R02-031 之后那个数在
+    `attempt_cap_ms` 上可见，而手里同时拿着 `250` 与 `1000`、中间没有一个字的调用方，
+    分不清这是被撑大的预算还是被忽略的参数 —— 与那份对已经付过费的页面说
+    "discovered but not fetched" 的 crawl 信封是同一类。
 
-    Owned here, not at the call site, because the sentence is one event: the
-    floor is what moved, the floor is what the sentence must name.
+    作者留在这里，不在调用点，因为这句话是一个事件：动的是地板，句子就必须点地板的名。
     """
     if requested is None:
         return ""
     try:
         asked = int(str(requested).strip())
     except (TypeError, ValueError):
-        # The parameter layer already refused anything unparseable; this note is
-        # not the place to invent a number for it.
+        # 参数层已经拒掉一切解析不出的值；这颗注记不是替它编一个数的地方。
         return ""
     if asked <= 0 or asked >= applied_ms:
         # 0 / 负数 = "不要时钟"那一支由参数层说；没被抬过就没有话要说。
@@ -651,32 +619,27 @@ def _timeout_floor_note(requested: Any, applied_ms: int) -> str:
 
 
 def _over_cap_note(named: Any, delivered: int, floor: int) -> str:
-    """The ONE wording for "the body you got is LONGER than the ``max_content_chars=`` you named" ("" if not).
+    """「你拿到的正文比点名的 ``max_content_chars=`` **长**」唯一的措辞（没超就交回空串）。
 
-    ``server._apply_chunking`` merges a tail back into the current window when what
-    is left is shorter than ``MIN_CHUNK_CHARS`` — a deliberate saving of one
-    round-trip, not an accident, and the behaviour is under test elsewhere (B-17
-    measured that the clause snap can eat part of that floor). What was missing is
-    the OTHER half of the same event: measured over a total×cap×offset grid, every
-    one of the 8 rows that delivered more than the caller named did it with
-    `is_truncated=false`, `next_offset=0`, an empty `truncation_note` and no
-    argument note at all — a caller budgeting its context was told nothing about a
-    body that had just gone over budget (R02-007, 1,446 chars against a named 1,200).
+    ``server._apply_chunking`` 在剩余部分短于 ``MIN_CHUNK_CHARS`` 时会把尾巴并回当前
+    窗口 —— 那是刻意省下的一次往返，不是事故，而且这一行为在别处有测试（B-17 量到
+    子句吸附会吃掉那段地板的一部分）。缺的是同一事件的**另一半**：在 total×cap×offset
+    网格上实测，交付量超过调用方点名值的 8 行，每一行都带着 `is_truncated=false`、
+    `next_offset=0`、空的 `truncation_note`，而且根本没有任何参数注记 —— 一个正在
+    给自己的上下文做预算的调用方，对一份刚刚超预算的正文一无所知（R02-007，点名
+    1,200，实际 1,446 字符）。
 
-    Owned here rather than at the chunking site because the sentence is one event
-    with two numbers: the amount that went over is `delivered - named` (what the
-    caller is actually holding), while `floor` is only the REASON and must not be
-    printed as if it were the amount. `named is None` keeps it silent for the same
-    reason :func:`_timeout_floor_note` does: with no cap pointed at, there is no
-    instruction whose execution needs explaining.
+    作者留在这里而不是切块现场，因为这句话是一个带两个数的事件：超出的量是
+    `delivered - named`（调用方真正拿到手的东西），而 `floor` 只是**原因**，不许
+    印得像是超出的量。`named is None` 时保持沉默，理由与 :func:`_timeout_floor_note`
+    相同：没有点名上限，就没有哪条指令的执行需要解释。
     """
     if named is None:
         return ""
     try:
         asked = int(str(named).strip())
     except (TypeError, ValueError):
-        # The parameter layer refuses anything unparseable; this is not where to
-        # invent a number for it.
+        # 参数层会拒掉一切解析不出的值；这里不是替它编一个数的地方。
         return ""
     over = int(delivered) - asked
     if over <= 0:
@@ -705,20 +668,18 @@ _ATTEMPT_BOUND_SENTENCES = {
 
 
 def _attempt_budget_note(requested: Any, given_s: Any, cause: str) -> str:
-    """The ONE wording for "the HTTP tier's own division moved this number" ("" if not).
+    """「HTTP 档自己的除法挪动了这个数」唯一的措辞（没挪过就交回空串）。
 
-    R02-041 measured the silence: ``timeout=5000`` came back with
-    ``attempt_cap_ms: 4000`` while that field's own sentence explained only the 30s
-    per-attempt ceiling. At least three levers move the figure (what is left of the
-    call, the learned per-host ceiling, the slow-domain guarantee) and ``server.
-    _http_tier_budget`` — the function that applies them — is the only place that
-    knows which one did. It hands the lever back as a token; this function owns the
-    sentence, the same way :func:`_timeout_floor_note` owns the floor and
-    ``bulk_get``'s note owns the ceiling. Three levers, three authors, one event
-    each — and no response gets two sentences about the same number.
+    R02-041 量到了那片沉默：``timeout=5000`` 回来时带着 ``attempt_cap_ms: 4000``，
+    而那颗字段自己的说明只解释了每次尝试 30s 的上限。至少有三根杠杆会挪动这个数
+    （调用还剩多少、学到的按主机上限、已知慢站保证），而施加它们的
+    ``server._http_tier_budget`` 是唯一知道是哪一根的地方。它把杠杆当成 token 交回来；
+    这句话由这个函数拥有，正如 :func:`_timeout_floor_note` 拥有地板、``bulk_get``
+    的注记拥有上限。三根杠杆、三位作者、各管一个事件 —— 任何响应都不会对同一个数
+    说两句话。
 
-    An unrecognized token returns "" rather than borrowing another lever's sentence:
-    a confident wrong reason is worse than the silence this file exists to end.
+    认不出的 token 交回空串，而不是借用另一根杠杆的句子：一个自信的错原因，比这份
+    文件存在要终结的那片沉默更糟。
     """
     template = _ATTEMPT_BOUND_SENTENCES.get(cause or "")
     if requested is None or not template:
@@ -739,11 +700,10 @@ def _attempt_budget_note(requested: Any, given_s: Any, cause: str) -> str:
 
 
 def _note_text(note: str) -> None:
-    """Append one already-worded argument note, when a call is listening.
+    """追加一句已经写好的参数注记，前提是本次调用有人在听。
 
-    For the bounds that are not a plain int-in-a-range: a PDF `pages='99-999'`
-    against a 12-page file is clamped by the DOCUMENT, and the honest sentence
-    names the page count rather than a 1-N range the caller could not have known.
+    给那些不是"区间里的普通整数"的边界用：PDF 的 `pages='99-999'` 对一份 12 页的
+    文件由**文档**钳制，诚实的句子点的是页数，而不是一个调用方无从知道的 1-N 区间。
     """
     notes = _ARG_NOTES.get()
     if notes is None or not note:
@@ -752,13 +712,12 @@ def _note_text(note: str) -> None:
 
 
 def _note_clamped(name: str, requested: Any, applied: int, *, lo: int, hi: int) -> None:
-    """Record that a numeric argument was clamped to its documented bound.
+    """记下"一个数值参数被钳到文档化边界"这件事。
 
-    ``max_content_chars=499`` became 500 with no signal anywhere in the response,
-    while the sibling search tool does tell the caller its ``max_results`` was
-    clamped. Both bounds are on the wire, so the clamp is a known limit rather
-    than a surprise — but "documented limit" is not the same as "you were told",
-    and the caller here was measuring its own context budget.
+    ``max_content_chars=499`` 变成 500 时，响应里任何地方都没有信号；而隔壁搜索工具
+    确实会告诉调用方它的 ``max_results`` 被钳过。两个边界都写在线上，所以钳制是已知
+    限制而不是意外 —— 但"文档写了的限制"不等于"你被告知了"，而这里的调用方正在给
+    自己的上下文算预算。
     """
     if _ARG_NOTES.get() is None:
         return
@@ -767,14 +726,13 @@ def _note_clamped(name: str, requested: Any, applied: int, *, lo: int, hi: int) 
 
 @contextlib.contextmanager
 def _arg_notes_scope():
-    """Open a call's own argument-notes bucket, and close it on the way out.
+    """打开一次调用自己的参数注记桶，并在出去时关上。
 
-    `web_read` gets this for free from `@_smart_fetch_request_context`. The other
-    tools clamp too — an action's `wait` ms, a PDF's `pages=` range, a request's
-    `timeout` — and a clamp recorded with no bucket open is a clamp that goes
-    unannounced, which is the exact silence this file exists to end. Reset is
-    explicit rather than inherited: a bucket left installed on a long-lived task
-    would let one call's notes be printed on the next call's response.
+    `web_read` 经 `@_smart_fetch_request_context` 免费得到它。别的工具也会钳 ——
+    动作的 `wait` 毫秒、PDF 的 `pages=` 区间、请求的 `timeout` —— 而在没有打开桶时
+    记下的钳制，就是一次不申报的钳制，那正是这份文件存在要终结的沉默。复位是显式的，
+    不是继承来的：一只留在长命 task 上的桶，会让上一次调用的注记印到下一次调用的
+    响应上。
     """
     token = _ARG_NOTES.set([])
     try:
@@ -784,10 +742,9 @@ def _arg_notes_scope():
 
 
 def _cache_context(options: dict) -> str:
-    """Short stable fingerprint of the request bits that change WHAT comes back.
+    """「改变回来的是什么」的那些请求位的短稳定指纹。
 
-    Pure function (unit-testable). Returns "" for a plain request so the default
-    path is byte-identical to the pre-fix cache key.
+    纯函数（可单测）。普通请求交回 ""，于是默认路径与修复前的缓存键逐字节相同。
     """
     import hashlib as _hashlib
     import json as _json
@@ -869,13 +826,11 @@ def _cache_context(options: dict) -> str:
     if options.get("include_links"):
         bits.append("il=1")
 
-    # Fetcher pin: it decides WHICH tier produced the body, so a pinned request
-    # must never replay another tier's answer. It was missing from the key, so
-    # force_fetcher="http" hit the stealthy entry written moments earlier and
-    # came back cached=true / content_ok=true — the pin silently ignored. The
-    # dangerous direction is the reverse: an http-tier JS shell (content_ok
-    # false) gets cached, then an auto/stealthy request is served that bad body
-    # from cache and never escalates.
+    # 抓取档钉位：它决定正文由**哪一档**产出，所以一颗钉住的请求绝不能回放另一档的
+    # 答案。它从前不在键里，于是 force_fetcher="http" 命中了片刻之前写下的 stealthy
+    # 条目，回来时 cached=true / content_ok=true —— 钉位被静默忽略。危险的方向是反过来：
+    # 一份 http 档的 JS 空壳（content_ok false）被缓存，之后 auto/stealthy 的请求从缓存
+    # 拿到那份坏正文，永远不升级。
     force_fetcher = options.get("force_fetcher")
     if force_fetcher:
         bits.append(f"ff={force_fetcher}")

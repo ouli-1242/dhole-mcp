@@ -1,41 +1,32 @@
-"""Per-session cookie jar (v16.0, gap G7).
+"""按会话的 cookie 罐（v16.0，gap G7）。
 
-Until now cookies existed for exactly one call: ``options.cookies`` built a
-``Cookie`` header, the call ended, and the site's ``Set-Cookie`` answer was read
-off the response and dropped. Anything needing a login (form POST then the
-pages behind it, a CSRF pair, a consent banner) was impossible: the second call
-started from zero. This module is the missing store — cookies a host gave us are
-kept under a caller-chosen ``session_id`` and sent back to that host on the next
-call.
+在此以前，cookie 只活一次调用：``options.cookies`` 构造一个 ``Cookie`` 头，调用
+结束，站点应答的 ``Set-Cookie`` 被从响应里读出来然后丢掉。任何需要登录的事情
+（表单 POST 再取后面的页面、一对 CSRF、同意横幅）都做不到：第二次调用从零开始。
+本模块就是缺的那个存储 —— host 给我们的 cookie 按调用方选定的 ``session_id``
+保存，下一次调用原样送回那个 host。
 
-Scope, and what is deliberately NOT here:
+范围，以及刻意**不**在这里的东西：
 
-* **Host-scoped, not domain-scoped.** ``Response.cookies`` carries names and
-  values only; the ``Domain=`` / ``Path=`` / ``Secure`` attributes are gone by the
-  time a fetch finishes (fetcher.py builds that dict from the client's cookie
-  list). Re-deriving them means parsing raw ``Set-Cookie`` headers per hop, and a
-  jar wider than the exact host that set the cookie is a cookie sent to a
-  subdomain that never asked for it. So a cookie set by ``example.com`` is sent
-  back to ``example.com`` only.
-* **Values never leave the jar toward the model.** Responses report the cookie
-  NAMES for the host (``session_cookie_names``), never values: a session cookie
-  is a credential, and tool output lands in the agent's transcript — and in the
-  SQLite content cache, and possibly in a log. An agent that needs to know
-  "did my login survive?" is answered by the name list.
-* **Expires after** the fixed :data:`COOKIE_TTL_S` (24h, hardcoded in 17.0).
-  Written once per ``Set-Cookie``, not
-  refreshed on send, so a forgotten session cannot accumulate credentials
-  forever. ``sys_state`` (the tool) drops the jar, one named id or every one.
+* **按 host 而非按 domain。** ``Response.cookies`` 只带名字和值；一次抓取结束时
+  ``Domain=`` / ``Path=`` / ``Secure`` 属性已经没了（fetcher.py 从客户端 cookie
+  列表构造那个 dict）。重新推导意味着逐跳解析原始 ``Set-Cookie`` 头，而一个比
+  设置 cookie 的确切 host 更宽的罐，就是把 cookie 发给一个从未索要它的子域。所以
+  ``example.com`` 设的 cookie 只送回 ``example.com``。
+* **值永不离开罐、流向模型。** 响应只报该 host 的 cookie **名字**
+  （``session_cookie_names``），从不报值：会话 cookie 是凭据，而工具输出会落进
+  agent 的 transcript —— 还会落进 SQLite 内容缓存，也可能落进日志。需要知道
+  "我的登录还活着吗？"的 agent，由名字列表回答。
+* **在固定 :data:`COOKIE_TTL_S` 后过期**（24 小时，17.0 写死）。每次
+  ``Set-Cookie`` 写入一次，发送时不刷新，所以被遗忘的会话不会永久累积凭据。
+  ``sys_state``（工具）可以丢掉整个罐、一个具名 id 或每一个。
 
-Storage is **in memory by default** (SQLite ``:memory:`` — the safest file is
-one that does not exist): the jar lives as long as the process, and a restart
-starts from zero. ``DHOLE_PERSIST_CREDENTIALS=1`` moves the jar to
-``~/.dhole/sessions.db`` (0600 dir/file per paths.py), where every cookie VALUE
-is encrypted with Windows DPAPI (:mod:`dhole_mcp.secretbox`) before it touches
-disk — the key is bound to the Windows user account, which is exactly the
-boundary a copied or synced file loses. A pre-17.1 plaintext file is read into
-the live store once and then deleted (memory mode) or re-encrypted in place
-(persist mode).
+存储**默认在内存里**（SQLite ``:memory:`` —— 最安全的文件是不存在的那个文件）：
+罐与进程同寿，重启从零开始。``DHOLE_PERSIST_CREDENTIALS=1`` 把罐移到
+``~/.dhole/sessions.db``（目录/文件 0600，见 paths.py），每个 cookie **值**在
+落盘前都用 Windows DPAPI 加密（:mod:`dhole_mcp.secretbox`）—— 密钥绑定 Windows
+用户账户，那正是被复制或被同步的文件会失去的边界。pre-17.1 的明文文件会被读进
+活存储一次，然后删除（内存模式）或原地重新加密（持久模式）。
 """
 
 from __future__ import annotations
@@ -51,7 +42,7 @@ from dhole_mcp import env_registry, secretbox
 
 logger = logging.getLogger("dhole-mcp.sessions")
 
-# A stored cookie lives this long from when the site set it.
+# 一颗存下的 cookie 从站点设置它起活这么久。
 # 17.0 写死（``DHOLE_COOKIE_TTL_S`` 已注销）：一个 cookie 该活多久是能算清的
 # （"隔天还认不认"），需要改它的频率低于发版频率。过期仍存在 —— 废弃的会话
 # 不能无限期持有凭据。
@@ -59,10 +50,9 @@ COOKIE_TTL_S = 24 * 3600.0
 
 
 def _cookie_ttl() -> float:
-    """Effective TTL in seconds. 17.0 写死为 :data:`COOKIE_TTL_S`（24 小时）。"""
+    """生效的 TTL 秒数。17.0 写死为 :data:`COOKIE_TTL_S`（24 小时）。"""
     return COOKIE_TTL_S
-# Bound on the jar, so a crawl that hops through 500 hosts cannot grow it
-# without limit. Oldest-expiring rows go first.
+# 罐的上限，让一次穿过 500 个 host 的爬取无法把它撑到无限。最接近过期的行先走。
 MAX_COOKIES = 2000
 MAX_SESSIONS = 50
 
@@ -72,10 +62,9 @@ def _db_path() -> str:
     return str(paths.file("sessions.db"))
 
 
-# The persist decision binds once per process: the jar below is a module-level
-# singleton connection, so a mid-run flip could not move an open store anyway.
-# Frozen at import — same "restart the host" tier as DHOLE_TOOLS (read_at is
-# "import" in the registry). Tests pin this attr for hermeticity.
+# 持久化决定每个进程只绑定一次：下面的罐是模块级单例连接，中途翻转也搬不动一个
+# 已经打开的存储。导入时冻结 —— 与 DHOLE_TOOLS 同一档"重启宿主"级别（注册表里
+# read_at 是 "import"）。测试为了隔离会钉住这个属性。
 _PERSIST = env_registry.read_flag("DHOLE_PERSIST_CREDENTIALS", fail_safe=True)
 
 _lock = threading.Lock()
@@ -94,12 +83,11 @@ _CREATE_SQL = (
 
 
 def _connect() -> sqlite3.Connection:
-    """Open (and create) the jar. Caller holds :data:`_lock`.
+    """打开（并创建）罐。调用方持有 :data:`_lock`。
 
-    Default is ``:memory:``: cookies are credentials and the file that never
-    exists cannot leak. Persisting additionally needs an encryptor — on a
-    platform without one (no Windows DPAPI) the flag degrades to memory with a
-    warning, never to a plaintext file.
+    默认是 ``:memory:``：cookie 是凭据，不存在的文件无法泄漏。持久化额外需要
+    加密器 —— 在没有加密器的平台（没有 Windows DPAPI）上，开关降级为内存并告警，
+    绝不降级为明文文件。
     """
     global _conn, _file_backed
     if _conn is not None:
@@ -122,8 +110,8 @@ def _connect() -> sqlite3.Connection:
         _file_backed = True
         _reencrypt_plaintext_values(_conn)
     else:
-        # check_same_thread=False: the fetch path harvests Set-Cookie on a
-        # worker thread; the jar was always shared across threads.
+        # check_same_thread=False：抓取路径在工作线程上收 Set-Cookie；
+        # 这个罐本来就跨线程共享。
         _conn = sqlite3.connect(":memory:", check_same_thread=False)
         _conn.execute(_CREATE_SQL)
         _conn.commit()
@@ -133,10 +121,9 @@ def _connect() -> sqlite3.Connection:
 
 
 def _absorb_legacy_file(conn: sqlite3.Connection) -> None:
-    """A pre-17.1 jar lived in plaintext ``sessions.db``. Memory mode reads it
-    into the live jar once and deletes the file: leaving plaintext credentials
-    on disk would defeat the point of not persisting. Live (unexpired) rows
-    only — the jar's TTL discipline applies to a resurrected jar too."""
+    """pre-17.1 的罐明文躺在 ``sessions.db`` 里。内存模式把它读进活罐一次然后删除
+    文件：把明文凭据留在磁盘上会毁掉"不持久化"的全部意义。只收活（未过期）行 ——
+    罐的 TTL 纪律同样适用于一个被复活的罐。"""
     try:
         db = _db_path()
         if not os.path.exists(db):
@@ -170,9 +157,8 @@ def _absorb_legacy_file(conn: sqlite3.Connection) -> None:
 
 
 def _reencrypt_plaintext_values(conn: sqlite3.Connection) -> None:
-    """One-time migration for persist mode: a pre-17.1 file holds cookie values
-    in plaintext; rewrite every value that does not carry the ``dpapi:``
-    marker. Idempotent by the LIKE guard."""
+    """持久模式的一次性迁移：pre-17.1 文件把 cookie 值存成明文；把每个不带
+    ``dpapi:`` 标记的值重写一遍。靠 LIKE 守卫保证幂等。"""
     rows = conn.execute(
         "SELECT rowid, value FROM cookies WHERE value NOT LIKE 'dpapi:%'"
     ).fetchall()
@@ -187,7 +173,7 @@ def _reencrypt_plaintext_values(conn: sqlite3.Connection) -> None:
 
 
 def _hosts_of(url: str) -> str:
-    """The URL's host, lowercased and port-stripped ('' when unparseable)."""
+    """URL 的 host，小写并去端口（解析失败时为 ''）。"""
     try:
         host = urlparse(url).netloc.lower()
     except Exception:
@@ -206,9 +192,8 @@ def _prune(conn: sqlite3.Connection, now: float) -> None:
             "  SELECT rowid FROM cookies ORDER BY expires_at LIMIT ?)",
             (n - MAX_COOKIES,),
         )
-    # Sessions are ranked by the newest cookie they hold, so the ones still in
-    # use are the ones that survive; an abandoned login dies as a whole instead
-    # of losing half its cookies (a half-cleared jar is a broken session).
+    # 会话按它持有的最新 cookie 排名，所以还在用的会话能活下来；一个被废弃的登录
+    # 整体死掉，而不是丢掉一半 cookie（被清了一半的罐就是一个坏掉的会话）。
     live = conn.execute(
         "SELECT session_id FROM cookies GROUP BY session_id "
         "ORDER BY MAX(expires_at) DESC"
@@ -222,10 +207,10 @@ def _prune(conn: sqlite3.Connection, now: float) -> None:
 
 
 def store(session_id: str, url: str, cookies: dict, now: float | None = None) -> int:
-    """Remember the cookies a host just set. Returns how many were stored.
+    """记住 host 刚刚设置的 cookie。返回存了多少颗。
 
-    ``cookies`` is the name->value dict ``Response.cookies`` already gives us
-    (attributes are not available there — see the module docstring).
+    ``cookies`` 就是 ``Response.cookies`` 已经给出的 name->value dict（那里拿不到
+    属性 —— 见模块 docstring）。
     """
     sid = (session_id or "").strip()
     host = _hosts_of(url)
@@ -242,9 +227,8 @@ def store(session_id: str, url: str, cookies: dict, now: float | None = None) ->
                     continue
                 stored_value = str(value)
                 if _file_backed:
-                    # Values are credentials; on disk they are only ever the
-                    # encrypted form. Memory mode stores plaintext because RAM
-                    # is what everything else in the process already is.
+                    # 值是凭据；在磁盘上只能是加密形式。内存模式存明文 --
+                    # 因为整个进程里的其他东西本来就都在 RAM 里。
                     stored_value = secretbox.protect(stored_value)
                 conn.execute(
                     "INSERT INTO cookies (session_id, host, name, value, expires_at) "
@@ -262,7 +246,7 @@ def store(session_id: str, url: str, cookies: dict, now: float | None = None) ->
 
 
 def header_for(session_id: str, url: str, now: float | None = None) -> dict:
-    """``{name: value}`` the jar holds for exactly this URL's host ('' if none)."""
+    """罐里为这个 URL 的确切 host 持有的 ``{name: value}``（没有则 ''）。"""
     sid = (session_id or "").strip()
     host = _hosts_of(url)
     if not sid or not host:
@@ -286,7 +270,7 @@ def header_for(session_id: str, url: str, now: float | None = None) -> dict:
 
 
 def names_for(session_id: str, url: str) -> list:
-    """Cookie NAMES held for this host. Values are deliberately not returned."""
+    """为这个 host 持有的 cookie **名字**。值刻意不返回。"""
     sid = (session_id or "").strip()
     host = _hosts_of(url)
     if not sid or not host:
@@ -306,17 +290,16 @@ def names_for(session_id: str, url: str) -> list:
 
 
 def sessions() -> dict:
-    """A name-only census: ``{session_id: {"hosts": {host: [names]},
-    "cookies": n, "expires_in_s": s}}``.
+    """只报名字的普查：``{session_id: {"hosts": {host: [names]},
+    "cookies": n, "expires_in_s": s}}``。
 
-    Diagnostics and the ``sys_state`` census are the consumers, and both need
-    the same answer to a different question: which ids hold credentials, for
-    which hosts, and how long before they lapse on their own. So the soonest
-    expiry is reported as a countdown rather than an epoch float — "expires in
-    21h" is actionable ("let it ride"), a raw ``1790566780.9`` is not.
+    诊断与 ``sys_state`` 普查是两个消费者，而它们对同一个问题需要同一个答案：
+    哪些 id 持有凭据、为哪些 host、还有多久自行失效。所以最早到期时间报成倒计时
+    而不是 epoch 浮点 —— "21 小时后过期"是可行动的（"随它去"），裸的
+    ``1790566780.9`` 不是。
 
-    Values are never in here. A cookie is a credential and every field of a tool
-    response ends up in the agent's transcript.
+    值永远不在这里。cookie 是凭据，而工具响应的每个字段都会落进 agent 的
+    transcript。
     """
     now = time.time()
     with _lock:
@@ -342,7 +325,7 @@ def sessions() -> dict:
 
 
 def clear(session_id: str = "", now: float | None = None) -> int:
-    """Drop one session's cookies, or the whole jar when ``session_id`` is empty."""
+    """丢掉一个会话的 cookie；``session_id`` 为空时清空整个罐。"""
     sid = (session_id or "").strip()
     with _lock:
         try:
@@ -360,10 +343,10 @@ def clear(session_id: str = "", now: float | None = None) -> int:
 
 
 def reset_for_tests() -> None:
-    """Close the module-level connection so a test can redirect ``DHOLE_HOME``.
+    """关闭模块级连接，让测试能重定向 ``DHOLE_HOME``。
 
-    The DB path is read lazily, so a fixture that sets a throwaway home after the
-    first use would otherwise keep writing to the real file.
+    DB 路径是惰性读取的，所以一个在首次使用之后才设置随手目录的 fixture，否则会
+    一直写真实文件。
     """
     global _conn, _file_backed
     with _lock:

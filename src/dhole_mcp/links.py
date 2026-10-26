@@ -1,26 +1,20 @@
-"""Outgoing-link extraction + classification for web_read (v8).
+"""web_read 的外链抽取与分类（v8）。
 
-Given a page's HTML, return its outgoing links classified by context so an
-agent can follow a page's source chain in one step instead of eyeballing
-markdown links:
+给一段页面 HTML，按上下文分类返回出链，让 agent 一步跟住页面的来源链，而不是
+肉眼扫 markdown 链接：
 
-  citations   - same-domain links that are NOT site chrome. Classification is by
-                exclusion (see _NAV_TAGS, plus role=navigation/menu/menubar),
-                not by a main-content match; no such check exists. These are the
-                page's referenced sources (papers, primary documents, related
-                reads) - the highest-value links.
-  navigation  - links inside <nav>/<header>/<footer>/<aside>/role=navigation.
-                Site chrome, rarely useful to follow.
-  external    - links to a different domain than the page (split out from the
-                above so an agent can see off-site references at a glance).
-  primary_source - one best-effort "the actual primary source for this page"
-    hint, derived from canonical/JSON-LD metadata or a citation pointing at a
-    known primary host (arxiv.org, doi.org, biorxiv.org, github.com, ...).
+  citations   - 非站点外壳的同域链接。分类靠排除法（见 _NAV_TAGS 以及
+                role=navigation/menu/menubar），不靠主内容匹配 —— 后者并不存在。
+                这些是页面引用的来源（论文、一手文档、相关阅读）——价值最高的一类。
+  navigation  - <nav>/<header>/<footer>/<aside>/role=navigation 里的链接。
+                站点外壳，值得跟的很少。
+  external    - 指向页面之外其他域的链接（从上面拆出来，让 agent 一眼看到站外引用）。
+  primary_source - 一条尽力而为的"这一页真正的一手来源"提示，来自 canonical/JSON-LD
+    元数据，或指向已知一手主机的站内引用（arxiv.org、doi.org、biorxiv.org、github.com …）。
 
-Robustness: a cheap, forgiving lxml pass. Malformed HTML, missing sections, or
-no <a> tags all yield empty lists, never raise. Classification is heuristic
-(container walk) - a link in an ambiguous container falls back to "citation"
-(main-content bias, since that is the high-value default an agent wants).
+健壮性：一次廉价、宽容的 lxml 解析。畸形 HTML、缺段、没有 <a> 标签都返回空列表，
+从不抛异常。分类是启发式的（容器上溯）—— 落在模棱两可容器里的链接归为 "citation"
+（偏主内容，因为那才是 agent 想要的高价值默认值）。
 """
 
 from __future__ import annotations
@@ -33,9 +27,9 @@ from lxml import html as lxml_html
 
 logger = logging.getLogger("dhole-mcp.links")
 
-# Containers that count as site chrome -> links inside are navigation.
+# 算作站点外壳的容器 -> 其中的链接归为 navigation。
 _NAV_TAGS = {"nav", "header", "footer", "aside"}
-# Hosts that are very often the primary source a secondary article references.
+# 二手文章最常引用的一手来源主机。
 _PRIMARY_HOSTS = (
     "arxiv.org", "doi.org", "biorxiv.org", "medrxiv.org",
     "github.com", "gitlab.com", "opencode.dev",
@@ -47,18 +41,17 @@ _PRIMARY_HOSTS = (
 _MAX_CITATIONS = 30
 _MAX_NAV = 20
 _MAX_EXTERNAL = 20
-# Bounds for the caller-facing `max_links` cap (web_read). Same numbers the
-# tool description quotes; anything outside is clamped here, at the point where
-# the cap is actually applied, so the documented range cannot drift from it.
+# 调用方 `max_links` 上限（web_read）的边界。工具描述里报的是同一组数字；
+# 超出范围的在这里夹紧 —— 就在上限真正生效的那一点，文档范围便不会与实际漂开。
 MAX_LINKS_FLOOR = 1
 MAX_LINKS_CEILING = 100
 
 
 def _norm_host(u: str) -> str:
-    """Hostname for host comparisons: lowercase, userinfo/port stripped via
-    urlparse().hostname, cosmetic leading ``www.`` removed. Uses startswith
-    (NOT lstrip — lstrip strips a CHAR SET, so 'wikipedia.org' would lose its
-    leading 'w' and 'web.example.com' would become 'eb.example.com')."""
+    """主机比较用的主机名：小写，经 urlparse().hostname 去掉 userinfo/端口，
+    再抹掉装饰性的开头 ``www.``。用 startswith（**不是** lstrip —— lstrip 剥的是
+    字符集，'wikipedia.org' 会丢掉开头的 'w'，'web.example.com' 会变成
+    'eb.example.com'）。"""
     try:
         host = (urlparse(u).hostname or "").lower()
     except Exception:
@@ -73,12 +66,11 @@ def _clean_text(s: str) -> str:
 
 
 def _caps(max_links: int | None) -> tuple[int, int, int]:
-    """(citations, navigation, external) caps for this call.
+    """本次调用的 (citations, navigation, external) 三档上限。
 
-    ``None`` = the module defaults (30/20/20). An explicit ``max_links`` sets
-    all three, clamped to the documented 1-100 range. The cap is per list: an
-    agent that asked for 5 links does not want 90 of them because the page
-    happened to have three categories.
+    ``None`` = 模块默认值（30/20/20）。显式 ``max_links`` 同时设定三者，并夹紧到
+    文档声明的 1-100 范围。上限按列表分别计：要 5 条链接的 agent 不会因为页面恰好
+    有三个类别就收到 90 条。
     """
     if max_links is None:
         return _MAX_CITATIONS, _MAX_NAV, _MAX_EXTERNAL
@@ -94,15 +86,13 @@ def _caps(max_links: int | None) -> tuple[int, int, int]:
 
 def extract_links(html_text: str, page_url: str, metadata: dict[str, Any] | None = None,
                   max_links: int | None = None) -> dict[str, Any]:
-    """Classify a page's outgoing links.
+    """分类页面的出链。
 
-    Returns {citations, navigation, external, primary_source, total_found,
-    is_truncated}. Each list item is {url, text}. ``total_found`` counts every
-    distinct http(s) link seen on the page (before the caps), and
-    ``is_truncated`` is True when the caps dropped at least one of them - the
-    agent can tell "this page links to 3 things" from "this page links to 300
-    things, here are 30", and ask for a different slice. Never raises; on any
-    error returns empty lists with zero totals.
+    返回 {citations, navigation, external, primary_source, total_found,
+    is_truncated}。列表项是 {url, text}。``total_found`` 数的是页面上见到的每个
+    不同 http(s) 链接（截断之前），``is_truncated`` 在上限至少丢掉一条时为 True ——
+    agent 因此能分清"这页只链到 3 个东西"和"这页链到 300 个东西，这里是 30 个"，
+    并换一片看。从不抛异常；任何错误都返回空列表与零计数。
     """
     out: dict[str, Any] = {
         "citations": [], "navigation": [], "external": [],
@@ -114,7 +104,7 @@ def extract_links(html_text: str, page_url: str, metadata: dict[str, Any] | None
     try:
         tree = lxml_html.fromstring(html_text)
     except Exception:
-        # lxml refuses truly broken markup sometimes; fall back to no links.
+        # lxml 有时候拒绝真正损坏的标记；退化为没有链接。
         return out
     if tree is None:
         return out
@@ -124,7 +114,7 @@ def extract_links(html_text: str, page_url: str, metadata: dict[str, Any] | None
     citations: list[dict[str, str]] = []
     navigation: list[dict[str, str]] = []
     external: list[dict[str, str]] = []
-    content_externals: list[dict[str, str]] = []  # off-domain links in main-content area (real references) - for primary_source
+    content_externals: list[dict[str, str]] = []  # 主内容区的站外链接（真引用）——给 primary_source 用
     total_found = 0
 
     try:
@@ -161,7 +151,7 @@ def extract_links(html_text: str, page_url: str, metadata: dict[str, Any] | None
             text = text[:157] + "..."
         entry = {"url": key, "text": text}
 
-        # Container classification: is this anchor inside site chrome?
+        # 容器分类：这个锚点是否位于站点外壳里？
         try:
             in_nav = next(
                 (True for anc in a.iterancestors()
@@ -177,9 +167,9 @@ def extract_links(html_text: str, page_url: str, metadata: dict[str, Any] | None
             if len(external) < cap_ext:
                 external.append(entry)
             if not in_nav:
-                content_externals.append(entry)  # off-domain reference in main content
+                content_externals.append(entry)  # 主内容里的站外引用
             continue
-        # Same-domain: nav chrome vs main-content citation.
+        # 同域：导航外壳 vs 主内容引用。
         if in_nav:
             if len(navigation) < cap_nav:
                 navigation.append(entry)
@@ -191,8 +181,7 @@ def extract_links(html_text: str, page_url: str, metadata: dict[str, Any] | None
     out["navigation"] = navigation
     out["external"] = external
     out["primary_source"] = _primary_source(page_url, metadata or {}, content_externals)
-    # Transparency (G1): the caps used to be invisible, so a page with 300
-    # in-content links looked exactly like a page with 30.
+    # 透明度（G1）：上限过去是隐形的，300 条页内链接的页面和 30 条的看起来一模一样。
     out["total_found"] = total_found
     out["is_truncated"] = total_found > (len(citations) + len(navigation) + len(external))
     return out
@@ -201,22 +190,21 @@ def extract_links(html_text: str, page_url: str, metadata: dict[str, Any] | None
 def _primary_source(page_url: str, metadata: dict[str, Any],
                     content_externals: list[dict[str, str]]
                     ) -> str:
-    """Best-effort single primary-source URL, or "".
+    """尽力而为地给出唯一一手来源 URL，没有则返回 ""。
 
-    Priority: a canonical/JSON-LD URL on a different host than the page (the
-    publisher's authoritative location); else the first OFF-DOMAIN link that sits
-    in the page's main-content area (a real in-content reference, not site
-    chrome) and points at a known primary host (arxiv/doi/github/...). Same-
-    domain links are never a primary source (they're the site itself).
+    优先级：与页面不同主机上的 canonical/JSON-LD URL（发布者的权威位置）；否则取
+    位于页面主内容区（真页内引用，非站点外壳）且指向已知一手主机
+    （arxiv/doi/github/…）的第一条站外链接。同域链接永远不是一手来源（它们就是
+    站点自己）。
     """
     page_host = _norm_host(page_url)
-    # 1) canonical / JSON-LD @id / og:url on a different host.
+    # 1) 不同主机上的 canonical / JSON-LD @id / og:url。
     for key in ("canonical", "og:url", "url"):
         val = metadata.get(key)
         if isinstance(val, str) and val.startswith("http"):
             if _norm_host(val) and _norm_host(val) != page_host:
                 return val
-    # 2) an in-content off-domain reference on a known primary host.
+    # 2) 主内容里指向已知一手主机的站外引用。
     for e in content_externals:
         host = _norm_host(e["url"])
         if any(host == p or host.endswith("." + p) for p in _PRIMARY_HOSTS):
